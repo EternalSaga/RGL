@@ -157,6 +157,7 @@ namespace RGL {
 
 			//stride:每个vbo里有多少个float，假设每个vbo有一个顶点和一个rgba颜色，那么每个顶点有3个float（zyz）+4个颜色float（rgba），那么这里写7
 			//offset：这次set相对这个vbo首地址的偏移量，假设vbo排列是float*3（顶点）+float*4（颜色），那么在设置颜色的时候，offset就是3
+			//适用于interleaved buffer，注意stride和offset
 			void set(GLuint vaoIdx, GLuint vbo, GLuint numOfFloat, GLuint stride, GLuint offset) {
 				assert(vaoIdx < mNumOfVao);
 				glCall(glBindVertexArray, vao[vaoIdx]);

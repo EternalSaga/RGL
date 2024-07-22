@@ -59,8 +59,8 @@ namespace RGL {
 
 			
 			this->glCxt = std::make_unique<glcore::GLContext>(window_, width, height);
-			auto singleBuffer = std::make_unique<glcore::SingleBuffer>();
-			this->glCxt->setRenderer(std::move(singleBuffer));
+			auto interLeavedBuffer = std::make_unique<glcore::InterLeavedBuffer>();
+			this->glCxt->setRenderer(std::move(interLeavedBuffer));
 		}
 		static std::function<resize_cbk_type> resizeCallback;
 		static std::function<keyboard_cbk_type> keyboardCallback;

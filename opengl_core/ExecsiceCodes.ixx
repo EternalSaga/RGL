@@ -41,9 +41,27 @@ namespace RGL {
 				vao->set(*positionVbo,3);
 
 				vao->set(*colorVbo, 3);
-
 			}
 			virtual ~SingleBuffer() = default;
+			void operator()() override {
+
+			}
+		};
+
+		export class InterLeavedBuffer : public GLRenderer {
+			std::unique_ptr<VBO> posColorVbo;
+			std::unique_ptr<VAO> vao;
+		public:
+			InterLeavedBuffer() :GLRenderer() {
+				posColorVbo = std::make_unique<VBO>();
+				posColorVbo->setData(pos_col_interleaved);
+
+				vao = std::make_unique<VAO>();
+				//位置3个float，总大小6，偏移0
+				vao->set(*posColorVbo, 3, 6, 0);
+				//颜色3个float，总大小6，偏移3
+				vao->set(*posColorVbo, 3, 6, 3);
+			}
 			void operator()() override {
 
 			}
