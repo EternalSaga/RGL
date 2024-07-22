@@ -40,11 +40,9 @@ namespace RGL {
 				glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
 				glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 				break;
-			case RGL::API_TYPE::VULKAN11:
+			case RGL::API_TYPE::CPU:
 				break;
 			case RGL::API_TYPE::VULKAN13:
-				break;
-			case RGL::API_TYPE::DX11:
 				break;
 			case RGL::API_TYPE::DX12:
 				break;

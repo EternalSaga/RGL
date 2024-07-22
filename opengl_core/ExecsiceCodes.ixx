@@ -38,9 +38,9 @@ namespace RGL {
 				vao = std::make_unique<VAO>();
 
 				//对应single buffer，调用两次vao的封装，把vao和vbo绑定
-				vao->set(*positionVbo,3);
+				vao->set(*positionVbo,3,BUFF_ATTRIBUTION::VERT_POSITION);
 
-				vao->set(*colorVbo, 3);
+				vao->set(*colorVbo, 3,BUFF_ATTRIBUTION::COLOR);
 			}
 			virtual ~SingleBuffer() = default;
 			void operator()() override {
@@ -58,9 +58,9 @@ namespace RGL {
 
 				vao = std::make_unique<VAO>();
 				//位置3个float，总大小6，偏移0
-				vao->set(*posColorVbo, 3, 6, 0);
+				vao->set(*posColorVbo, 3, 6, 0,BUFF_ATTRIBUTION::VERT_POSITION);
 				//颜色3个float，总大小6，偏移3
-				vao->set(*posColorVbo, 3, 6, 3);
+				vao->set(*posColorVbo, 3, 6, 3,BUFF_ATTRIBUTION::COLOR);
 			}
 			void operator()() override {
 
