@@ -82,7 +82,7 @@ namespace RGL {
 				glCall(glBindVertexArray, *vao);
 				glCall(glDrawArrays, GL_TRIANGLES, 0, 3);
 			}
-
+			virtual ~InterLeavedBuffer() = default;
 		};
 
 	}
