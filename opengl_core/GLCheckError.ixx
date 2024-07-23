@@ -3,13 +3,38 @@ module;
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/sinks/basic_file_sink.h>
-
+#include <string_view>
 export module GLCheckError;
 
 namespace RGL {
 	namespace glcore {
 		namespace lv = spdlog::level;
 
+		export class GLInitExpt : public std::runtime_error
+		{
+		public:
+			GLInitExpt() = delete;
+			GLInitExpt(const std::string msg) :std::runtime_error(msg) {
+
+			}
+			~GLInitExpt() = default;
+		};
+		export class GLLogicError : public std::runtime_error
+		{
+		public:
+			GLLogicError() = delete;
+			GLLogicError(const std::string msg) :std::runtime_error(msg) {}
+
+			~GLLogicError() = default;
+		};
+
+		export class GLShaderError : public std::runtime_error
+		{
+		public:
+			GLShaderError() = delete;
+			GLShaderError(const std::string msg) :std::runtime_error(msg) {}
+			~GLShaderError() = default;
+		};
 
 		export class Logger
 		{
@@ -34,9 +59,10 @@ namespace RGL {
 					singletonLogger = new spdlog::logger("gl_logger", { console_sink,file_sink });
 
 					singletonLogger->set_level(spdlog::level::debug);
-					singletonLogger->set_error_handler([](const std::string& errorMsg) {
-						throw std::runtime_error(errorMsg);
-						});
+					//singletonLogger->set_error_handler([](const std::string& errorMsg) {
+					//	throw std::runtime_error(errorMsg);
+					//	});
+					
 					});
 				return singletonLogger;
 			}
@@ -53,35 +79,54 @@ namespace RGL {
 		std::once_flag Logger::initOnce{};
 		spdlog::logger* Logger::singletonLogger{ nullptr };
 
-		export void glCheckError() {
-			GLenum errorCode = glGetError();
-			std::string errStr;
-			if (errorCode != GL_NO_ERROR)
+
+		constexpr std::string_view gl_error_string(GLenum const err) noexcept
+		{
+			switch (err)
 			{
-				switch (errorCode) {
-				case GL_INVALID_ENUM:
-					errStr = "GL_INVALID_ENUM";
-					break;
-				case GL_INVALID_OPERATION:
-					errStr = "GL_INVALID_OPERATION";
-					break;
-				case GL_OUT_OF_MEMORY:
-					errStr = "GL_OUT_OF_MEMORY";
-					break;
-				case GL_INVALID_VALUE:
-					errStr = "GL_INVALID_VALUE";
-					break;
-				default:
-					errStr = "UNKNOWN_ERROR";
-					break;
-				}
-				//spdlog::log(lv::err, "OpenGL api error {}", errStr);
-				auto logger = Logger::getInstance();
-				logger->error("OpenGL api error {}", errStr);
+			case GL_NO_ERROR:
+				return "GL_NO_ERROR";
+
+			case GL_INVALID_ENUM:
+				return "GL_INVALID_ENUM";
+
+			case GL_INVALID_VALUE:
+				return "GL_INVALID_VALUE";
+
+			case GL_INVALID_OPERATION:
+				return "GL_INVALID_OPERATION";
+
+			case GL_STACK_OVERFLOW:
+				return "GL_STACK_OVERFLOW";
+
+			case GL_STACK_UNDERFLOW:
+				return "GL_STACK_UNDERFLOW";
+
+			case GL_OUT_OF_MEMORY:
+				return "GL_OUT_OF_MEMORY";
+
+			case GL_INVALID_FRAMEBUFFER_OPERATION:
+				return "GL_INVALID_FRAMEBUFFER_OPERATION";
+
+				// gles 2, 3 and gl 4 error are handled by the switch above
+			default:
+				return "unknown error";
 			}
 		}
 
+		export void glCheckError() {
+			GLenum errorCode = glGetError();
+			
+			if (errorCode != GL_NO_ERROR)
+			{
+				auto errorStr = gl_error_string(errorCode);
+				//spdlog::log(lv::err, "OpenGL api error {}", errStr);
+				auto logger = Logger::getInstance();
+				logger->error("OpenGL api error {}", errorStr);
 
+
+			}
+		}
 
 	}
 }
