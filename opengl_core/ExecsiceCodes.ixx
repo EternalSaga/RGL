@@ -26,7 +26,7 @@ namespace RGL {
 		std::vector<float> pos_col_interleaved{
 			-0.5f,-0.5f,0.0f,1.f,0.f,0.f,
 			0.5f,-0.5f,0.0f,0.f,1.f,0.f,
-			0.5f,0.5f,0.0f,0.f,0.f,1.f
+			0.0f,0.5f,0.0f,0.f,0.f,1.f
 		};
 
 
@@ -75,7 +75,6 @@ namespace RGL {
 				};
 
 				loadShader = std::make_unique<LoadShader>(shaders);
-
 			}
 			void operator()() override {
 				loadShader->useProgram();

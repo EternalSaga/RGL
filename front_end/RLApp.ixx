@@ -122,13 +122,14 @@ namespace RGL {
 	std::mutex RLApp::mu;
 	void onResize( int width, int height) {
 		glcore::glCall(glViewport, 0, 0, width, height);
-		auto logger = glcore::Logger::getInstance();
-		logger->info("call glviewport {} {}", width, height);
+		//auto logger = glcore::Logger::getInstance();
+		//logger->info("call glviewport {} {}", width, height);
 	}
 	void onSetKeyboard( int key, int action, int mods) {
 		auto logger = glcore::Logger::getInstance();
 		logger->info("press key{}", key);
 	}
+
 	export void app() {
 
 		auto app = RGL::RLApp::getInstance(800, 600, "opengl_study", API_TYPE::OPENGL46);
