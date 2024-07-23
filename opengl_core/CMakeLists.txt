@@ -1,4 +1,4 @@
-add_library(GLFramework)
+﻿add_library(GLFramework)
 
 target_sources(GLFramework PUBLIC FILE_SET CXX_MODULES FILES "GLFramework.ixx" "GLCheckError.ixx" "GLObj.ixx" "ExecsiceCodes.ixx"  "LoadShader.ixx")
 

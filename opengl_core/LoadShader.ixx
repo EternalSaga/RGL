@@ -1,4 +1,4 @@
-module;
+ï»¿module;
 #include <glad/glad.h>
 #include <filesystem>
 #include <map>
@@ -12,7 +12,7 @@ namespace RGL {
 		namespace fs = std::filesystem;
 
 		/// <summary>
-		/// ÀàĞÍ°²È«µÄOpengl shaderÀàĞÍ£¬¿ÉÒÔÊ¹ÓÃstatic_castºÍºê¶¨Òå×ª»»
+		/// ç±»å‹å®‰å…¨çš„Opengl shaderç±»å‹ï¼Œå¯ä»¥ä½¿ç”¨static_castå’Œå®å®šä¹‰è½¬æ¢
 		/// </summary>
 		export enum class SHADER_TYPE
 		{
@@ -32,10 +32,10 @@ namespace RGL {
 			LoadShader() = delete;
 			~LoadShader() = default;
 			/// <summary>
-			/// ¶ÁÈ¡shaderÀàĞÍºÍËùÓĞshaderµÄÎÄ±¾ÎÄ¼ş£¬ÔÙ±àÒë
+			/// è¯»å–shaderç±»å‹å’Œæ‰€æœ‰shaderçš„æ–‡æœ¬æ–‡ä»¶ï¼Œå†ç¼–è¯‘
 			/// </summary>
 			/// <param name="shaderSrcs">
-			/// ÓÉSHADER_TYPEÃ¶¾ÙºÍÂ·¾¶vector×é³ÉµÄmapÀàĞÍ
+			/// ç”±SHADER_TYPEæšä¸¾å’Œè·¯å¾„vectorç»„æˆçš„mapç±»å‹
 			/// </param>
 			LoadShader(const ShaderSrcs& shaderSrcs) : compiled(0)
 				, linked(0) {

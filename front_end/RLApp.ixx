@@ -1,4 +1,4 @@
-module;
+锘縨odule;
 
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
@@ -64,11 +64,11 @@ namespace RGL {
 		static std::function<keyboard_cbk_type> keyboardCallback;
 
 	private:
-		//窗口相应回调
+		//绐楀彛鐩稿簲鍥炶皟
 		static void resize_cbk(GLFWwindow* window, int width, int height) {
 			resizeCallback(width, height);
 		}
-		//键盘回调
+		//閿洏鍥炶皟
 		static void keyboard_cbk(GLFWwindow* window, int key, int scancode, int action, int mods) {
 			keyboardCallback(key, action, mods);
 		}
@@ -92,10 +92,10 @@ namespace RGL {
 				glfwSetWindowSizeCallback(window_, resize_cbk);
 				glfwSetKeyCallback(window_, keyboard_cbk);
 
-				//获取输入事件
+				//鑾峰彇杈撳叆浜嬩欢
 				glfwPollEvents();
 
-				//渲染
+				//娓叉煋
 				glCxt->render();
 			}
 		}

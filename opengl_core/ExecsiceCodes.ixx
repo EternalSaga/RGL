@@ -1,7 +1,9 @@
 module;
-export module ExecsiceCodes;
+
 #include <vector>
 #include <memory>
+
+export module ExecsiceCodes;
 import GLObjWrapper;
 
 import GLFramework;
@@ -37,7 +39,7 @@ namespace RGL {
 
 				vao = std::make_unique<VAO>();
 
-				//¶ÔÓ¦single buffer£¬µ÷ÓÃÁ½´ÎvaoµÄ·â×°£¬°ÑvaoºÍvbo°ó¶¨
+				//ï¿½ï¿½Ó¦single bufferï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½vaoï¿½Ä·ï¿½×°ï¿½ï¿½ï¿½ï¿½vaoï¿½ï¿½vboï¿½ï¿½
 				vao->set(*positionVbo,3,BUFF_ATTRIBUTION::VERT_POSITION);
 
 				vao->set(*colorVbo, 3,BUFF_ATTRIBUTION::COLOR);
@@ -57,9 +59,9 @@ namespace RGL {
 				posColorVbo->setData(pos_col_interleaved);
 
 				vao = std::make_unique<VAO>();
-				//Î»ÖÃ3¸öfloat£¬×Ü´óÐ¡6£¬Æ«ÒÆ0
+				//Î»ï¿½ï¿½3ï¿½ï¿½floatï¿½ï¿½ï¿½Ü´ï¿½Ð¡6ï¿½ï¿½Æ«ï¿½ï¿½0
 				vao->set(*posColorVbo, 3, 6, 0,BUFF_ATTRIBUTION::VERT_POSITION);
-				//ÑÕÉ«3¸öfloat£¬×Ü´óÐ¡6£¬Æ«ÒÆ3
+				//ï¿½ï¿½É«3ï¿½ï¿½floatï¿½ï¿½ï¿½Ü´ï¿½Ð¡6ï¿½ï¿½Æ«ï¿½ï¿½3
 				vao->set(*posColorVbo, 3, 6, 3,BUFF_ATTRIBUTION::COLOR);
 			}
 			void operator()() override {

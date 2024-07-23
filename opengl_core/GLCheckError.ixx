@@ -1,4 +1,4 @@
-module;
+﻿module;
 #include <glad/glad.h>
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_color_sinks.h>

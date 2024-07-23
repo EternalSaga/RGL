@@ -1,4 +1,4 @@
-add_executable(rgl_main main.cpp)
+﻿add_executable(rgl_main main.cpp)
 
 target_link_libraries(rgl_main PRIVATE RLApp)
 target_include_directories(rgl_main PRIVATE ${PROJECT_SOURCE_DIR}/front_end ${PROJECT_SOURCE_DIR}/api_abstractor)

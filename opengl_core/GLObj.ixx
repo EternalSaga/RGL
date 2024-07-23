@@ -1,4 +1,4 @@
-module;
+ï»¿module;
 #include <glad/glad.h>
 #include "Helpers.hpp"
 #include <cassert>
@@ -19,15 +19,15 @@ namespace RGL {
 
 
 
-		//VBO,vertex buffer object£¬CPU´æ´¢ÔÚÄÚ´æÀï£¬¶ÔÓÚÏÔ´æÒ»¶ÎÇøÓòµÄÃèÊö
-		//class VBO{ID,GPU_ADDRESS,SIZE,etc.}£»
-		//¶ÔÓÚVBOµÄ²Ù×÷¶¼ÐèÒªÏÈ°ó¶¨£¬ÔÙ²Ù×÷
+		//VBO,vertex buffer objectï¼ŒCPUå­˜å‚¨åœ¨å†…å­˜é‡Œï¼Œå¯¹äºŽæ˜¾å­˜ä¸€æ®µåŒºåŸŸçš„æè¿°
+		//class VBO{ID,GPU_ADDRESS,SIZE,etc.}ï¼›
+		//å¯¹äºŽVBOçš„æ“ä½œéƒ½éœ€è¦å…ˆç»‘å®šï¼Œå†æ“ä½œ
 		export class VBO {
 			GLuint* vbo;
 			GLuint mNumOfVbo;
 			spdlog::logger* logger;
 			VBO(GLuint numOfVbo) :mNumOfVbo(numOfVbo) {
-				//genBufferÃ»ÓÐ·ÖÅäÏÔ´æ,½ö½öÊÇ´´½¨vbo
+				//genBufferæ²¡æœ‰åˆ†é…æ˜¾å­˜,ä»…ä»…æ˜¯åˆ›å»ºvbo
 				vbo = new GLuint[mNumOfVbo];
 				logger = Logger::getInstance();
 				glCall(glGenBuffers, mNumOfVbo, vbo);
@@ -42,10 +42,9 @@ namespace RGL {
 			}
 
 
-
 		public:
 
-			//³¤¶ÈÎª1µÄ·â×°
+			//é•¿åº¦ä¸º1çš„å°è£…
 			VBO() :VBO(1) {
 			}
 			~VBO()
@@ -53,26 +52,26 @@ namespace RGL {
 				glCall(glDeleteBuffers, mNumOfVbo, vbo);
 				delete[] vbo;
 			}
-			//¸ù¾Ýindex»ñÈ¡vbo
+			//æ ¹æ®indexèŽ·å–vbo
 			GLuint operator[](GLuint i) {
 				assert(i < mNumOfVbo);
 				return vbo[i];
 			}
-			//µ±³¤¶ÈÎª1Ê±Ö±½Ó·µ»Øvbo
+			//å½“é•¿åº¦ä¸º1æ—¶ç›´æŽ¥è¿”å›žvbo
 			GLuint operator()() {
 				assert(mNumOfVbo == 1);
 				return vbo[0];
 			}
 
-			//µ±³¤¶ÈÎª1Ê±Ò²¿ÉÒÔÖ±½ÓºÍvbo GLuintÒþÊ½×ª»»
+			//å½“é•¿åº¦ä¸º1æ—¶ä¹Ÿå¯ä»¥ç›´æŽ¥å’Œvbo GLuintéšå¼è½¬æ¢
 			operator GLuint() const {
 				assert(mNumOfVbo == 1);
 				return vbo[0];
 			}
 
-			//Ê¹ÓÃglBufferData£¬ÍùGPU·¢ËÍÊý¾Ý£¬¿ª±Ù¿Õ¼ä¡£
-			//Ã¿´Îµ÷ÓÃ¶¼»á¿ª±ÙÏÔ´æ£¬²»ÒªÆµ·±µ÷ÓÃ
-			//µ÷ÓÃÇ°ÏÈ°ó¶¨
+			//ä½¿ç”¨glBufferDataï¼Œå¾€GPUå‘é€æ•°æ®ï¼Œå¼€è¾Ÿç©ºé—´ã€‚
+			//æ¯æ¬¡è°ƒç”¨éƒ½ä¼šå¼€è¾Ÿæ˜¾å­˜ï¼Œä¸è¦é¢‘ç¹è°ƒç”¨
+			//è°ƒç”¨å‰å…ˆç»‘å®š
 			void setData(GLuint vboIdx, const std::vector<float>& data) {
 				assert(vboIdx < mNumOfVbo);
 				glCall(glBindBuffer, GL_ARRAY_BUFFER, vbo[vboIdx]);
@@ -81,10 +80,10 @@ namespace RGL {
 					logger->error("Index {} is not a valid vbo object.", vboIdx);
 				}
 
-				//×îºóÒ»¸ö²ÎÊý´ú±í´«ÈëµÄÊý¾ÝÃ»Ê²Ã´±ä»¯£¬Ìá¹©Çý¶¯ÓÅ»¯²ßÂÔ£¬»¹ÓÐÒ»¸öÊÇDYNAMIC_DRAW
+				//æœ€åŽä¸€ä¸ªå‚æ•°ä»£è¡¨ä¼ å…¥çš„æ•°æ®æ²¡ä»€ä¹ˆå˜åŒ–ï¼Œæä¾›é©±åŠ¨ä¼˜åŒ–ç­–ç•¥ï¼Œè¿˜æœ‰ä¸€ä¸ªæ˜¯DYNAMIC_DRAW
 				glCall(glBufferData, GL_ARRAY_BUFFER, data.size() * sizeof(float), data.data(), GL_STATIC_DRAW);
 			}
-			//³¤¶ÈÎª1Ê±·¢ËÍÒ»¸öÊý¾Ý¸øGPU
+			//é•¿åº¦ä¸º1æ—¶å‘é€ä¸€ä¸ªæ•°æ®ç»™GPU
 			void setData(const std::vector<float>& data) {
 				assert(mNumOfVbo == 1);
 				setData(0, data);
@@ -93,14 +92,14 @@ namespace RGL {
 
 
 
-		//VBO±¾ÖÊÉÏ¾ÍÊÇÒ»¶ÑÊý¾Ý+Êý¾ÝÇøÓòÃèÊö£¬¶ÔÕâÐ©Êý¾ÝÌí¼Ó¶îÍâµÄÃèÊö£¨¶¥µã£¬ÑÕÉ«£¬µÈµÈ£©£¬ÈÃGPUÀí½âÊý¾ÝµÄ×÷ÓÃ£¬ÐèÒªVAO
-		// ¶¨Òå£ºÓÃÓÚ´¢´æÒ»¸öMeshÍø¸ñËùÓÐµÄ¶¥µãÊôÐÔÃèÊöÐÅÏ¢
-		//ÒÔ¶¥µãÎªÀý
-		//size->Ã¿¸ö¶¥µã3¸öÊý×Ö
-		//type->¶¥µãÊý¾ÝÀàÐÍfloat
-		//stride->Æ«ÒÆÁ¿£¬Ã¿¸ö¶¥µãËùÕ¼´óÐ¡3*sizeof(float)£¬Èç¹ûÊÇinterleaved£¨¶¥µã£¬ÑÕÉ«£¬¶¥µã£¬ÑÕÉ«£¬²»¶Ï½»²æ£©Êý¾Ý£¬Õâ¸öÊý¾Ý±È½ÏÖØÒª
-		//ÆäËûÃèÊöÐÅÏ¢£º·¨Ïß£¬uv(ÎÆÀíÎ»ÖÃ)µÈµÈ
-		//VBO¿ÉÄÜÊÇÕâÐ©Êý¾Ý£¬VAOÒª¶ÔÕâÐ©Êý¾Ý½øÐÐÃèÊö
+		//VBOæœ¬è´¨ä¸Šå°±æ˜¯ä¸€å †æ•°æ®+æ•°æ®åŒºåŸŸæè¿°ï¼Œå¯¹è¿™äº›æ•°æ®æ·»åŠ é¢å¤–çš„æè¿°ï¼ˆé¡¶ç‚¹ï¼Œé¢œè‰²ï¼Œç­‰ç­‰ï¼‰ï¼Œè®©GPUç†è§£æ•°æ®çš„ä½œç”¨ï¼Œéœ€è¦VAO
+		// å®šä¹‰ï¼šç”¨äºŽå‚¨å­˜ä¸€ä¸ªMeshç½‘æ ¼æ‰€æœ‰çš„é¡¶ç‚¹å±žæ€§æè¿°ä¿¡æ¯
+		//ä»¥é¡¶ç‚¹ä¸ºä¾‹
+		//size->æ¯ä¸ªé¡¶ç‚¹3ä¸ªæ•°å­—
+		//type->é¡¶ç‚¹æ•°æ®ç±»åž‹float
+		//stride->åç§»é‡ï¼Œæ¯ä¸ªé¡¶ç‚¹æ‰€å å¤§å°3*sizeof(float)ï¼Œå¦‚æžœæ˜¯interleavedï¼ˆé¡¶ç‚¹ï¼Œé¢œè‰²ï¼Œé¡¶ç‚¹ï¼Œé¢œè‰²ï¼Œä¸æ–­äº¤å‰ï¼‰æ•°æ®ï¼Œè¿™ä¸ªæ•°æ®æ¯”è¾ƒé‡è¦
+		//å…¶ä»–æè¿°ä¿¡æ¯ï¼šæ³•çº¿ï¼Œuv(çº¹ç†ä½ç½®)ç­‰ç­‰
+		//VBOå¯èƒ½æ˜¯è¿™äº›æ•°æ®ï¼ŒVAOè¦å¯¹è¿™äº›æ•°æ®è¿›è¡Œæè¿°
 		/*
 			struct VAO_ELEMENT {
 				float position[3];
@@ -124,8 +123,8 @@ namespace RGL {
 
 		export class VAO {
 			GLuint* vao;
-			//ËùÓÐvaoµÄposition£¬³õÊ¼»¯Îª0£¬Ã¿´Îµ÷ÓÃset×ÔÔö1
-			//ÊÇÖØÒªµÄºÍshader²úÉúÁªÏµµÄÊôÐÔ£¬layout(location=n)µÄn´ú±íµÚn¸öposition
+			//æ‰€æœ‰vaoçš„positionï¼Œåˆå§‹åŒ–ä¸º0ï¼Œæ¯æ¬¡è°ƒç”¨setè‡ªå¢ž1
+			//æ˜¯é‡è¦çš„å’Œshaderäº§ç”Ÿè”ç³»çš„å±žæ€§ï¼Œlayout(location=n)çš„nä»£è¡¨ç¬¬nä¸ªposition
 			GLuint* positions;
 			GLuint mNumOfVao;
 			VAOs_Pos_Types vao_pos_types;
@@ -162,21 +161,21 @@ namespace RGL {
 
 
 			/// <summary>
-			/// ¶ÔÓ¦single buffer×´Ì¬£¨Ò»¸öVBO¶ÔÓ¦Ò»¸öÊôÐÔ£©µÄVAOÊôÐÔÉèÖÃ·â×°
+			/// å¯¹åº”single bufferçŠ¶æ€ï¼ˆä¸€ä¸ªVBOå¯¹åº”ä¸€ä¸ªå±žæ€§ï¼‰çš„VAOå±žæ€§è®¾ç½®å°è£…
 			/// </summary>
-			/// <param name="vaoIdx">ÉèÖÃvaoIdxÎ»ÖÃÉÏµÄÊôÐÔ£¬Í¬Ê±½«Æä°ó¶¨µ½ÊäÈëvbo£¬ÒòÎª¿ÉÄÜÒ»´ÎÐÔ´´½¨ÁË¶à¸övao£¬ËùÒÔÐèÒªÈ·¶¨vaoµÄÏÂ±ê</param>
-			/// <param name="vbo">ÐèÒªÉèÖÃÊôÐÔµÄvbo£¬¿ÉÒÔÊÇvbo±àºÅ£¬Ò²¿ÉÒÔÊÇVBO¶ÔÏó</param>
-			/// <param name="numOfFloat">¸ÃÊôÐÔµÄfloatÊýÁ¿£¬¶¥µã×ø±ê¿ÉÄÜÊÇ3¸ö£¬RGBAÑÕÉ«¿ÉÄÜÊÇ4¸ö£¬UVÎÆÀí×ø±ê¿ÉÄÜÊÇ2¸ö</param>
-			/// <param name="buffAttr">VAO¶ÔÓ¦VBOÊôÐÔÀàÐÍÃ¶¾Ù£¬·½±ãÍ¨¹ýÊôÐÔ²é¿´VAOµÄPosition£¬±¾ÀàÊ¹ÓÃÁËÒ»¸ömap´¢´æÁËpositionºÍÊôÐÔµÄ±í</param>
+			/// <param name="vaoIdx">è®¾ç½®vaoIdxä½ç½®ä¸Šçš„å±žæ€§ï¼ŒåŒæ—¶å°†å…¶ç»‘å®šåˆ°è¾“å…¥vboï¼Œå› ä¸ºå¯èƒ½ä¸€æ¬¡æ€§åˆ›å»ºäº†å¤šä¸ªvaoï¼Œæ‰€ä»¥éœ€è¦ç¡®å®švaoçš„ä¸‹æ ‡</param>
+			/// <param name="vbo">éœ€è¦è®¾ç½®å±žæ€§çš„vboï¼Œå¯ä»¥æ˜¯vboç¼–å·ï¼Œä¹Ÿå¯ä»¥æ˜¯VBOå¯¹è±¡</param>
+			/// <param name="numOfFloat">è¯¥å±žæ€§çš„floatæ•°é‡ï¼Œé¡¶ç‚¹åæ ‡å¯èƒ½æ˜¯3ä¸ªï¼ŒRGBAé¢œè‰²å¯èƒ½æ˜¯4ä¸ªï¼ŒUVçº¹ç†åæ ‡å¯èƒ½æ˜¯2ä¸ª</param>
+			/// <param name="buffAttr">VAOå¯¹åº”VBOå±žæ€§ç±»åž‹æžšä¸¾ï¼Œæ–¹ä¾¿é€šè¿‡å±žæ€§æŸ¥çœ‹VAOçš„Positionï¼Œæœ¬ç±»ä½¿ç”¨äº†ä¸€ä¸ªmapå‚¨å­˜äº†positionå’Œå±žæ€§çš„è¡¨</param>
 			void set(GLuint vaoIdx, GLuint vbo, GLuint numOfFloat, BUFF_ATTRIBUTION buffAttr) {
 				assert(vaoIdx < mNumOfVao);
 				if (!glIsBuffer(vbo)) {
 					logger->error("Index {} is not a valid vbo object.", vbo);
 				}
 
-				//ÒªÉèÖÃµÄÊÇvao[vaoIdx]£¬ËùÒÔ°ó¶¨Ëü
+				//è¦è®¾ç½®çš„æ˜¯vao[vaoIdx]ï¼Œæ‰€ä»¥ç»‘å®šå®ƒ
 				glCall(glBindVertexArray, vao[vaoIdx]);
-				//ÒòÎªÒªvaoÊÇvboµÄÊôÐÔ£¬ËùÒÔÏÈ°ó¶¨vbo£¬ÔÙÉèÖÃvao
+				//å› ä¸ºè¦vaoæ˜¯vboçš„å±žæ€§ï¼Œæ‰€ä»¥å…ˆç»‘å®švboï¼Œå†è®¾ç½®vao
 				glCall(glBindBuffer, GL_ARRAY_BUFFER, vbo);
 				glCall(glEnableVertexAttribArray, positions[vaoIdx]);
 
@@ -187,11 +186,11 @@ namespace RGL {
 				}
 				vao_pos_types[vaoIdx].push_back(buffAttr);
 
-				positions[vaoIdx]++;//Ã¿´Îµ÷ÓÃºóposition+1
+				positions[vaoIdx]++;//æ¯æ¬¡è°ƒç”¨åŽposition+1
 			}
 
 			/// <summary>
-			/// µ±vaoÖ»ÓÐÒ»¸öµÄÊ±ºòµÄsingle buffer¼ò»¯ÉèÖÃ
+			/// å½“vaoåªæœ‰ä¸€ä¸ªçš„æ—¶å€™çš„single bufferç®€åŒ–è®¾ç½®
 			/// </summary>
 			/// <param name="vbo"></param>
 			/// <param name="numOfFloat"></param>
@@ -204,26 +203,26 @@ namespace RGL {
 
 
 			/// <summary>
-			/// ÊÊÓÃÓÚinterleaved bufferµÄ
+			/// é€‚ç”¨äºŽinterleaved bufferçš„
 			/// </summary>
-			/// <param name="vaoIdx">ÉèÖÃvaoIdxÎ»ÖÃÉÏµÄÊôÐÔ£¬Í¬Ê±½«Æä°ó¶¨µ½ÊäÈëvbo£¬ÒòÎª¿ÉÄÜÒ»´ÎÐÔ´´½¨ÁË¶à¸övao£¬ËùÒÔÐèÒªÈ·¶¨vaoµÄÏÂ±ê</param>
-			/// <param name="vbo">ÐèÒªÉèÖÃÊôÐÔµÄvbo£¬¿ÉÒÔÊÇvbo±àºÅ£¬Ò²¿ÉÒÔÊÇVBO¶ÔÏó</param>
-			/// <param name="numOfFloat">¸ÃÊôÐÔµÄfloatÊýÁ¿£¬¶¥µã×ø±ê¿ÉÄÜÊÇ3¸ö£¬RGBAÑÕÉ«¿ÉÄÜÊÇ4¸ö£¬UVÎÆÀí×ø±ê¿ÉÄÜÊÇ2¸ö</param>
-			/// <param name="stride">Ã¿¸övboÀïÓÐ¶àÉÙ¸öfloat£¬¼ÙÉèÃ¿¸övboÓÐÒ»¸ö¶¥µãºÍÒ»¸örgbaÑÕÉ«£¬ÄÇÃ´Ã¿¸ö¶¥µãÓÐ3¸öfloat£¨zyz£©+4¸öÑÕÉ«float£¨rgba£©£¬ÄÇÃ´ÕâÀïÐ´7</param>
-			/// <param name="offset">Õâ´ÎsetÏà¶ÔÕâ¸övboÊ×µØÖ·µÄÆ«ÒÆÁ¿£¬¼ÙÉèvboÅÅÁÐÊÇfloat*3£¨¶¥µã£©+float*4£¨ÑÕÉ«£©£¬ÄÇÃ´ÔÚÉèÖÃÑÕÉ«µÄÊ±ºò£¬offset¾ÍÊÇ3</param>
-			/// <param name="buffAttr">VAO¶ÔÓ¦VBOÊôÐÔÀàÐÍÃ¶¾Ù£¬·½±ãÍ¨¹ýÊôÐÔ²é¿´VAOµÄPosition£¬±¾ÀàÊ¹ÓÃÁËÒ»¸ömap´¢´æÁËpositionºÍÊôÐÔµÄ±í</param>
+			/// <param name="vaoIdx">è®¾ç½®vaoIdxä½ç½®ä¸Šçš„å±žæ€§ï¼ŒåŒæ—¶å°†å…¶ç»‘å®šåˆ°è¾“å…¥vboï¼Œå› ä¸ºå¯èƒ½ä¸€æ¬¡æ€§åˆ›å»ºäº†å¤šä¸ªvaoï¼Œæ‰€ä»¥éœ€è¦ç¡®å®švaoçš„ä¸‹æ ‡</param>
+			/// <param name="vbo">éœ€è¦è®¾ç½®å±žæ€§çš„vboï¼Œå¯ä»¥æ˜¯vboç¼–å·ï¼Œä¹Ÿå¯ä»¥æ˜¯VBOå¯¹è±¡</param>
+			/// <param name="numOfFloat">è¯¥å±žæ€§çš„floatæ•°é‡ï¼Œé¡¶ç‚¹åæ ‡å¯èƒ½æ˜¯3ä¸ªï¼ŒRGBAé¢œè‰²å¯èƒ½æ˜¯4ä¸ªï¼ŒUVçº¹ç†åæ ‡å¯èƒ½æ˜¯2ä¸ª</param>
+			/// <param name="stride">æ¯ä¸ªvboé‡Œæœ‰å¤šå°‘ä¸ªfloatï¼Œå‡è®¾æ¯ä¸ªvboæœ‰ä¸€ä¸ªé¡¶ç‚¹å’Œä¸€ä¸ªrgbaé¢œè‰²ï¼Œé‚£ä¹ˆæ¯ä¸ªé¡¶ç‚¹æœ‰3ä¸ªfloatï¼ˆzyzï¼‰+4ä¸ªé¢œè‰²floatï¼ˆrgbaï¼‰ï¼Œé‚£ä¹ˆè¿™é‡Œå†™7</param>
+			/// <param name="offset">è¿™æ¬¡setç›¸å¯¹è¿™ä¸ªvboé¦–åœ°å€çš„åç§»é‡ï¼Œå‡è®¾vboæŽ’åˆ—æ˜¯float*3ï¼ˆé¡¶ç‚¹ï¼‰+float*4ï¼ˆé¢œè‰²ï¼‰ï¼Œé‚£ä¹ˆåœ¨è®¾ç½®é¢œè‰²çš„æ—¶å€™ï¼Œoffsetå°±æ˜¯3</param>
+			/// <param name="buffAttr">VAOå¯¹åº”VBOå±žæ€§ç±»åž‹æžšä¸¾ï¼Œæ–¹ä¾¿é€šè¿‡å±žæ€§æŸ¥çœ‹VAOçš„Positionï¼Œæœ¬ç±»ä½¿ç”¨äº†ä¸€ä¸ªmapå‚¨å­˜äº†positionå’Œå±žæ€§çš„è¡¨</param>
 			void set(GLuint vaoIdx, GLuint vbo, GLuint numOfFloat, GLuint stride, GLuint offset, BUFF_ATTRIBUTION buffAttr) {
 				assert(vaoIdx < mNumOfVao);
 				glCall(glBindVertexArray, vao[vaoIdx]);
 				glCall(glBindBuffer, GL_ARRAY_BUFFER, vbo);
 				glCall(glEnableVertexAttribArray, positions[vaoIdx]);
 
-				glCall(glVertexAttribPointer, positions[vaoIdx],	//ÉèÖÃvaoPosÎ»ÖÃÉÏµÄÊôÐÔ
-					numOfFloat,					//ÊôÐÔÓÉ¼¸¸öfloat×é³É£¬Ò»¸ö¶¥µã¿ÉÄÜÊÇ3¸öfloat£¬Ò»¸öÑÕÉ«¿ÉÄÜÊÇÈý¸ö»òÕßËÄ¸öfloat£¨RGB»òRGBA£©
-					GL_FLOAT,					//ÊôÐÔÓÉ¼¸¸öfloat×é³É
-					GL_TRUE,					//ÊôÐÔ¹éÒ»»¯ÁË
-					stride * sizeof(float),	//ÏàÁÚvboÔªËØÖ®¼äµÄ¿ç¶È£¬¾ÍÊÇµ¥¸övboµÄ´óÐ¡£¨stride£©
-					(void*)(offset * sizeof(float)));				//vboÄÚ²¿¿ç¶È£¬¸ÃÊôÐÔÊÇµ¥¸övboÆðÊ¼µØÖ·µÄÆ«ÒÆÁ¿£¨offset)
+				glCall(glVertexAttribPointer, positions[vaoIdx],	//è®¾ç½®vaoPosä½ç½®ä¸Šçš„å±žæ€§
+					numOfFloat,					//å±žæ€§ç”±å‡ ä¸ªfloatç»„æˆï¼Œä¸€ä¸ªé¡¶ç‚¹å¯èƒ½æ˜¯3ä¸ªfloatï¼Œä¸€ä¸ªé¢œè‰²å¯èƒ½æ˜¯ä¸‰ä¸ªæˆ–è€…å››ä¸ªfloatï¼ˆRGBæˆ–RGBAï¼‰
+					GL_FLOAT,					//å±žæ€§ç”±å‡ ä¸ªfloatç»„æˆ
+					GL_TRUE,					//å±žæ€§å½’ä¸€åŒ–äº†
+					stride * sizeof(float),	//ç›¸é‚»vboå…ƒç´ ä¹‹é—´çš„è·¨åº¦ï¼Œå°±æ˜¯å•ä¸ªvboçš„å¤§å°ï¼ˆstrideï¼‰
+					(void*)(offset * sizeof(float)));				//vboå†…éƒ¨è·¨åº¦ï¼Œè¯¥å±žæ€§æ˜¯å•ä¸ªvboèµ·å§‹åœ°å€çš„åç§»é‡ï¼ˆoffset)
 
 				if (checkAttributionDuplicated(vaoIdx,buffAttr))
 				{
@@ -240,10 +239,10 @@ namespace RGL {
 				set(0, vbo, numOfFloat, stride, offset, buffAttr);
 			}
 			/// <summary>
-			/// °ïÖúshaderµÄlayout(location = N)¶¨Î»²»Í¬attributionµÄlocation
+			/// å¸®åŠ©shaderçš„layout(location = N)å®šä½ä¸åŒattributionçš„location
 			/// </summary>
 			/// <param name="vaoIdx">vaoIdx</param>
-			/// <param name="attr">ÐèÒª²éÕÒlocationµÄ¶¥µãÊôÐÔ</param>
+			/// <param name="attr">éœ€è¦æŸ¥æ‰¾locationçš„é¡¶ç‚¹å±žæ€§</param>
 			/// <returns></returns>
 			GLuint getPositionByAttribution(GLuint vaoIdx, BUFF_ATTRIBUTION attr) {
 				const auto it = std::find(vao_pos_types[vaoIdx].begin(), vao_pos_types[vaoIdx].end(), attr);
@@ -256,9 +255,9 @@ namespace RGL {
 				}
 			}
 			/// <summary>
-			/// °ïÖúshaderµÄlayout(location = N)¶¨Î»²»Í¬attributionµÄlocation
+			/// å¸®åŠ©shaderçš„layout(location = N)å®šä½ä¸åŒattributionçš„location
 			/// </summary>
-			/// <param name="attr">ÐèÒª²éÕÒlocationµÄ¶¥µãÊôÐÔ</param>
+			/// <param name="attr">éœ€è¦æŸ¥æ‰¾locationçš„é¡¶ç‚¹å±žæ€§</param>
 			/// <returns></returns>
 			GLuint getPositionByAttribution(BUFF_ATTRIBUTION attr) {
 				return getPositionByAttribution(0, attr);

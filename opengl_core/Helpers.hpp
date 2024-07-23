@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include <concepts>
 #include <utility>
 #include <functional>
