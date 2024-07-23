@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <map>
 #include <fstream>
+#include <spdlog/logger.h>
 export module LoadShader;
 
 import GLCheckError;
@@ -10,6 +11,23 @@ import GLCheckError;
 namespace RGL {
 	namespace io {
 		namespace fs = std::filesystem;
+
+		/*
+		glCreateProgram->创建程序容器
+		|
+		v
+		glCompileShader->编译着色器源码
+		|
+		+----->附加着色器到程序容器(glAttachShader)
+		|
+		|
+		glLinkProgram->链接着色器
+		|
+		|
+		v
+		glUseProgram->激活程序容器
+		*/
+
 
 		/// <summary>
 		/// 类型安全的Opengl shader类型，可以使用static_cast和宏定义转换
@@ -24,10 +42,13 @@ namespace RGL {
 			TESS_EVALUATION = GL_TESS_EVALUATION_SHADER
 		};
 
-		using ShaderSrcs = std::map<SHADER_TYPE, std::vector<fs::path>>;
+		export using ShaderSrcs = std::map<SHADER_TYPE, std::vector<fs::path>>;
 
-		class LoadShader
+		export class LoadShader
 		{
+
+			spdlog::logger* logger;
+
 		public:
 			LoadShader() = delete;
 			~LoadShader() = default;
@@ -39,6 +60,9 @@ namespace RGL {
 			/// </param>
 			LoadShader(const ShaderSrcs& shaderSrcs) : compiled(0)
 				, linked(0) {
+
+				logger = glcore::Logger::getInstance();
+
 				// std::map<int, std::vector<fs::path>> -> 
 				// std::map<int, std::vector<std::string> -> //be carefull for this 
 				// std::map<int, std::vector<char*>> -> use glShaderSource 
@@ -59,8 +83,12 @@ namespace RGL {
 
 
 					glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
-					if (compiled == GL_INVALID_OPERATION)
+					if (!compiled)
 					{
+						constexpr GLuint logLength = 1024;
+						char infoLog[logLength];
+						glGetShaderInfoLog(shader, logLength, nullptr, infoLog);
+						logger->error(infoLog);
 						throw glcore::GLLogicError("The shader is compiled failed");
 					}
 
@@ -71,17 +99,38 @@ namespace RGL {
 
 
 				glGetProgramiv(shaderProgram, GL_LINK_STATUS, &linked);
-				if (linked == GL_INVALID_OPERATION)
+				if (!linked)
 				{
+					constexpr GLuint logLength = 1024;
+					char infoLog[logLength];
+					glGetProgramInfoLog(shaderProgram, logLength, nullptr, infoLog);
+					logger->error(infoLog);
 					throw glcore::GLLogicError("The shader is linked failed");
 				}
 			}
 			GLuint getShaderProgram() {
 				return shaderProgram;
 			}
+
+			void useProgram() {
+				if (compiled && linked)
+				{
+					glUseProgram(shaderProgram);
+				}
+				else {
+					throw glcore::GLInitExpt("shader program not prepared");
+				}
+			}
+
 		private:
 			std::string loadFile(const fs::path& p){
 				std::ifstream ifs(p, std::ios::in);
+
+				if (ifs.fail())
+				{
+					throw glcore::GLInitExpt("Open file failed");
+				}
+
 				std::stringstream buffer;
 				buffer << ifs.rdbuf();
 				return buffer.str();

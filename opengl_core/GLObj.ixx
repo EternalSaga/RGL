@@ -200,7 +200,10 @@ namespace RGL {
 				set(0, vbo, numOfFloat, buffAttr);
 			}
 
-
+			operator GLuint() {
+				assert(mNumOfVao == 1);
+				return vao[0];
+			}
 
 			/// <summary>
 			/// 适用于interleaved buffer的
