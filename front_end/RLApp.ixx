@@ -57,7 +57,7 @@ namespace RGL {
 
 			
 			this->glCxt = std::make_unique<glcore::GLContext>(window_, width, height);
-			auto interLeavedBuffer = std::make_unique<glcore::InterLeavedBuffer>();
+			auto interLeavedBuffer = std::make_unique<glcore::EBOExec>();
 			this->glCxt->setRenderer(std::move(interLeavedBuffer));
 		}
 		static std::function<resize_cbk_type> resizeCallback;

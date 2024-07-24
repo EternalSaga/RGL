@@ -15,22 +15,18 @@ import GLCheckError;
 namespace RGL {
 	namespace glcore {
 
-
-
-
-
-		//VBO,vertex buffer object，CPU存储在内存里，对于显存一段区域的描述
+		//VBO,vertex buffer object，CPU存储在内存里，对于显存一段区域的描述，所以描述的是内存本身，不包括内存数据的描述
 		//class VBO{ID,GPU_ADDRESS,SIZE,etc.}；
 		//对于VBO的操作都需要先绑定，再操作
 		export class VBO {
-			GLuint* vbo;
+			std::unique_ptr<GLuint[]> vbo;
 			GLuint mNumOfVbo;
 			spdlog::logger* logger;
 			VBO(GLuint numOfVbo) :mNumOfVbo(numOfVbo) {
 				//genBuffer没有分配显存,仅仅是创建vbo
-				vbo = new GLuint[mNumOfVbo];
+				vbo = std::make_unique<GLuint[]>(mNumOfVbo);
 				logger = Logger::getInstance();
-				glCall(glGenBuffers, mNumOfVbo, vbo);
+				glCall(glGenBuffers, mNumOfVbo, vbo.get());
 
 				for (size_t i = 0; i < mNumOfVbo; i++)
 				{
@@ -49,8 +45,9 @@ namespace RGL {
 			}
 			~VBO()
 			{
-				glCall(glDeleteBuffers, mNumOfVbo, vbo);
-				delete[] vbo;
+				//glCall(glDeleteBuffers, mNumOfVbo, static_cast<GLuint*>(vbo.get()));
+				glDeleteBuffers(mNumOfVbo, static_cast<GLuint*>(vbo.get()));
+
 			}
 			//根据index获取vbo
 			GLuint operator[](GLuint i) {
@@ -90,7 +87,56 @@ namespace RGL {
 			}
 		};
 
+		//glDrawArrays TRIANGLES不能复用边，但是TRIANGLE STRIP/FAN过于死板，所以需要使用顶点索引来让TRIANGLES拥有复用边的能力
+//将顶点索引进行排列之后，可以对现有顶点进行任意组合，形成多种形状
+//在单纯顶点的情况下，使用索引并不能节约空间，但是顶点除了位置以外，还有颜色，法线，UV等信息，这种情况下，顶点就又灵活又节约空间
+//EBO(Element buffer object)用于储存顶点索引编号的**显存区域**，又一个烂名字
 
+		export class EBO {
+			std::unique_ptr<GLuint[]> ebo;
+			GLuint mNumOfEbo;
+
+		public:
+			EBO(GLuint numOfEbo) :mNumOfEbo(numOfEbo) {
+				ebo = std::make_unique<GLuint[]>(mNumOfEbo);
+
+				//创建mNumOfEbo个ebo，未分配显存
+				glGenBuffers(mNumOfEbo, ebo.get());
+			}
+
+			EBO() :EBO(1) { }
+
+			/// <summary>
+			/// 给特定index上的ebo初始化数据，发送数据到显存
+			/// </summary>
+			/// <param name="eboIdx"></param>
+			/// <param name="data">int数组，存储了三角形的顶点序号</param>
+			void setData(GLuint eboIdx, const std::vector<GLint>& data) {
+				assert(eboIdx < mNumOfEbo);
+				//创建数据前先要绑定需要操作的ebo
+				glCall(glBindBuffer, GL_ELEMENT_ARRAY_BUFFER, ebo[eboIdx]);
+				glCall(glBufferData, GL_ELEMENT_ARRAY_BUFFER, data.size() * sizeof(decltype(data[0])), data.data(), GL_STATIC_DRAW);
+			}
+
+			void setData(const std::vector<GLint>& data) {
+				setData(0, data);
+			}
+
+			GLuint operator[](GLuint idx) {
+				assert(idx < mNumOfEbo);
+				return ebo[idx];
+			}
+
+			operator GLuint() {
+				assert(mNumOfEbo == 1);
+				return ebo[0];
+			}
+
+			~EBO() {
+				//glCall(glDeleteBuffers,mNumOfEbo, static_cast<GLuint*>(ebo.get()));
+				glDeleteBuffers(mNumOfEbo, static_cast<GLuint*>(ebo.get()));
+			}
+		};
 
 		//VBO本质上就是一堆数据+数据区域描述，对这些数据添加额外的描述（顶点，颜色，等等），让GPU理解数据的作用，需要VAO
 		// 定义：用于储存一个Mesh网格所有的顶点属性描述信息
@@ -109,7 +155,7 @@ namespace RGL {
 			};
 		*/
 
-		//VAO = vbo descriptor array object
+		//VAO = vbo descriptor array object，用于描述vbo内各种buffer属性的数组，每个position描述一个buffer属性，烂名字
 
 		export enum class BUFF_ATTRIBUTION
 		{
@@ -122,17 +168,17 @@ namespace RGL {
 		using VAOs_Pos_Types = std::map<GLuint, PositionBuffType>;
 
 		export class VAO {
-			GLuint* vao;
+			std::unique_ptr<GLuint[]> vao;
 			//所有vao的position，初始化为0，每次调用set自增1
 			//是重要的和shader产生联系的属性，layout(location=n)的n代表第n个position
-			GLuint* positions;
+			std::unique_ptr<GLuint[]> positions;
 			GLuint mNumOfVao;
 			VAOs_Pos_Types vao_pos_types;
 			VAO(size_t numOfVao) :mNumOfVao(numOfVao), vao_pos_types() {
-				vao = new GLuint[mNumOfVao];
-				glGenVertexArrays(mNumOfVao, vao);
+				vao = std::make_unique<GLuint[]>(mNumOfVao);
+				glGenVertexArrays(mNumOfVao, vao.get());
 				logger = Logger::getInstance();
-				positions = new GLuint[mNumOfVao];
+				positions = std::make_unique<GLuint[]>(mNumOfVao);
 				for (size_t i = 0; i < mNumOfVao; i++)
 				{
 					positions[i] = 0;
@@ -155,8 +201,7 @@ namespace RGL {
 
 			VAO() :VAO(1) {}
 			~VAO() {
-				delete[] vao;
-				delete[] positions;
+				glCall(glDeleteVertexArrays,mNumOfVao, vao.get());
 			}
 
 
@@ -179,7 +224,7 @@ namespace RGL {
 				glCall(glBindBuffer, GL_ARRAY_BUFFER, vbo);
 				glCall(glEnableVertexAttribArray, positions[vaoIdx]);
 
-				glCall(glVertexAttribPointer, positions[vaoIdx],numOfFloat,	GL_FLOAT,GL_TRUE,numOfFloat * sizeof(float),(void*)NULL);
+				glCall(glVertexAttribPointer, positions[vaoIdx], numOfFloat, GL_FLOAT, GL_TRUE, numOfFloat * sizeof(float), (void*)NULL);
 				if (checkAttributionDuplicated(vaoIdx, buffAttr))
 				{
 					this->logger->error("Input duplated attribution");
@@ -227,7 +272,7 @@ namespace RGL {
 					stride * sizeof(float),	//相邻vbo元素之间的跨度，就是单个vbo的大小（stride）
 					(void*)(offset * sizeof(float)));				//vbo内部跨度，该属性是单个vbo起始地址的偏移量（offset)
 
-				if (checkAttributionDuplicated(vaoIdx,buffAttr))
+				if (checkAttributionDuplicated(vaoIdx, buffAttr))
 				{
 					this->logger->error("Input duplated attribution");
 				}
@@ -265,6 +310,27 @@ namespace RGL {
 			GLuint getPositionByAttribution(BUFF_ATTRIBUTION attr) {
 				return getPositionByAttribution(0, attr);
 			}
+
+			/// <summary>
+			/// 先确定哪个vao需要操作（绑定）,然后把ebo绑定到这个vao上
+			/// </summary>
+			/// <param name="vaoIdx"></param>
+			/// <param name="ebo"></param>
+			void addEBO(GLuint vaoIdx, GLuint ebo) {
+				glCall(glBindVertexArray, vao[vaoIdx]);
+				glCall(glBindBuffer, GL_ELEMENT_ARRAY_BUFFER, ebo);
+			}
+			void addEBO(GLuint ebo) {
+				assert(mNumOfVao == 1);
+				addEBO(0, ebo);
+			}
+
 		};
+
+
+
+
 	}
+
+
 }

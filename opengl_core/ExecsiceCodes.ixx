@@ -13,21 +13,71 @@ import LoadShader;
 namespace RGL {
 	namespace glcore {
 		using namespace io;
-		std::vector<float> positions{
+		const std::vector<float> positions{
 			-0.5f,-0.5f,0.0f,
 			0.5f,-0.5f,0.0f,
 			0.5f,0.5f,0.0f
 		};
-		std::vector<float> colors{
+		const std::vector<float> colors{
 			1,0,0,
 			0,1,0,
 			0,0,1
 		};
-		std::vector<float> pos_col_interleaved{
+		const std::vector<float> pos_col_interleaved{
 			-0.5f,-0.5f,0.0f,1.f,0.f,0.f,
 			0.5f,-0.5f,0.0f,0.f,1.f,0.f,
 			0.0f,0.5f,0.0f,0.f,0.f,1.f
 		};
+
+		const std::vector<float> positions4{
+			-0.5f, -0.5f, 0.0f,
+			0.5f, -0.5f, 0.0f,
+			0.0f,  0.5f, 0.0f,
+			0.5f,  0.5f, 0.0f,
+		};
+
+		const std::vector<GLint> eboIndices{
+			0, 1, 2,
+			2, 1, 3
+		};
+
+		export class EBOExec :public GLRenderer
+		{
+			std::unique_ptr<EBO> ebo;
+			std::unique_ptr<VAO> vao;
+			std::unique_ptr<VBO> vbo;
+			std::unique_ptr<LoadShader> loadShader;
+		public:
+			EBOExec() {
+				vbo = std::make_unique<VBO>();
+				vbo->setData(positions4);
+				ebo = std::make_unique<EBO>();
+				ebo->setData(eboIndices);
+				vao = std::make_unique<VAO>();
+				vao->set(*vbo, 3, BUFF_ATTRIBUTION::VERT_POSITION);
+				vao->addEBO(*ebo);
+
+				ShaderSrcs shaders = {
+				{SHADER_TYPE::VERTEX,{"shaders\\beginner\\shader.vert"}},
+				{SHADER_TYPE::FRAGMENT,{"shaders\\beginner\\shader.frag"}}
+				};
+
+				loadShader = std::make_unique<LoadShader>(shaders);
+			}
+			virtual ~EBOExec() = default;
+			void operator()() override {
+				loadShader->useProgram();
+				glCall(glBindVertexArray, *vao);
+				//glCall(glDrawElements, GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+
+				glCall(glDrawElements,GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr);
+
+				glBindVertexArray(0);
+			}
+		private:
+
+		};
+
 
 
 
