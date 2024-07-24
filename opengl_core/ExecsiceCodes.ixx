@@ -41,6 +41,9 @@ namespace RGL {
 			2, 1, 3
 		};
 
+
+
+
 		export class EBOExec :public GLRenderer
 		{
 			std::unique_ptr<EBO> ebo;
@@ -78,7 +81,43 @@ namespace RGL {
 
 		};
 
+		const std::vector<GLint> eboSimple{
+	0, 1, 2
+		};
+		export class ColorfulTriangle :public GLRenderer
+		{
+			std::unique_ptr<EBO> ebo;
+			std::unique_ptr<VAO> vao;
+			std::unique_ptr<VBO> vbo;
+			std::unique_ptr<LoadShader> loadShader;
+		public:
+			ColorfulTriangle() {
+				vbo = std::make_unique<VBO>();
+				vbo->setData(pos_col_interleaved);
+				ebo = std::make_unique<EBO>();
+				ebo->setData(eboSimple);
+				vao = std::make_unique<VAO>();
+				vao->set(*vbo, 3, 6, 0, BUFF_ATTRIBUTION::VERT_POSITION);
 
+				vao->set(*vbo, 3, 6, 3, BUFF_ATTRIBUTION::COLOR);
+				vao->addEBO(*ebo);
+
+				ShaderSrcs shaders = {
+					{SHADER_TYPE::VERTEX,{"shaders\\beginner\\outColor.vert"}},
+					{SHADER_TYPE::FRAGMENT,{"shaders\\beginner\\colorful.frag"}}
+				};
+				loadShader = std::make_unique<LoadShader>(shaders);
+			}
+			virtual ~ColorfulTriangle() = default;
+			void operator()() override {
+				loadShader->useProgram();
+				glCall(glBindVertexArray, *vao);
+
+				glCall(glDrawElements, GL_TRIANGLES, 3, GL_UNSIGNED_INT, nullptr);
+
+				glBindVertexArray(0);
+			}
+		};
 
 
 		export class SingleBuffer :public GLRenderer {
