@@ -16,7 +16,7 @@ Use vcpkg to install the following libraries.
 3. glm
 4. spdlog
 5. fmt
-6. boostBuild
+6. boost
 
 ### Build
 
