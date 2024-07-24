@@ -9,7 +9,7 @@ import GLObjWrapper;
 
 import GLFramework;
 
-import LoadShader;
+import Shader;
 namespace RGL {
 	namespace glcore {
 		using namespace io;
@@ -49,7 +49,7 @@ namespace RGL {
 			std::unique_ptr<EBO> ebo;
 			std::unique_ptr<VAO> vao;
 			std::unique_ptr<VBO> vbo;
-			std::unique_ptr<LoadShader> loadShader;
+			std::unique_ptr<Shader> shader;
 		public:
 			EBOExec() {
 				vbo = std::make_unique<VBO>();
@@ -57,19 +57,22 @@ namespace RGL {
 				ebo = std::make_unique<EBO>();
 				ebo->setData(eboIndices);
 				vao = std::make_unique<VAO>();
-				vao->set(*vbo, 3, BUFF_ATTRIBUTION::VERT_POSITION);
-				vao->addEBO(*ebo);
+
 
 				ShaderSrcs shaders = {
 				{SHADER_TYPE::VERTEX,{"shaders\\beginner\\shader.vert"}},
 				{SHADER_TYPE::FRAGMENT,{"shaders\\beginner\\shader.frag"}}
 				};
 
-				loadShader = std::make_unique<LoadShader>(shaders);
+				shader = std::make_unique<Shader>(shaders);
+				vao->setShaderProgram(*shader);
+				vao->set(*vbo, 3, "aPos");
+				vao->addEBO(*ebo);
+
 			}
 			virtual ~EBOExec() = default;
 			void operator()() override {
-				loadShader->useProgram();
+				shader->useProgram();
 				glCall(glBindVertexArray, *vao);
 				//glCall(glDrawElements, GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 
@@ -89,7 +92,7 @@ namespace RGL {
 			std::unique_ptr<EBO> ebo;
 			std::unique_ptr<VAO> vao;
 			std::unique_ptr<VBO> vbo;
-			std::unique_ptr<LoadShader> loadShader;
+			std::unique_ptr<Shader> shader;
 		public:
 			ColorfulTriangle() {
 				vbo = std::make_unique<VBO>();
@@ -97,20 +100,25 @@ namespace RGL {
 				ebo = std::make_unique<EBO>();
 				ebo->setData(eboSimple);
 				vao = std::make_unique<VAO>();
-				vao->set(*vbo, 3, 6, 0, BUFF_ATTRIBUTION::VERT_POSITION);
 
-				vao->set(*vbo, 3, 6, 3, BUFF_ATTRIBUTION::COLOR);
 				vao->addEBO(*ebo);
 
 				ShaderSrcs shaders = {
 					{SHADER_TYPE::VERTEX,{"shaders\\beginner\\outColor.vert"}},
 					{SHADER_TYPE::FRAGMENT,{"shaders\\beginner\\colorful.frag"}}
 				};
-				loadShader = std::make_unique<LoadShader>(shaders);
+				shader = std::make_unique<Shader>(shaders);
+
+				vao->setShaderProgram(*shader);
+
+				vao->set(*vbo, 3, 6, 0, "inPos");
+
+				vao->set(*vbo, 3, 6, 3, "inColor");
+
 			}
 			virtual ~ColorfulTriangle() = default;
 			void operator()() override {
-				loadShader->useProgram();
+				shader->useProgram();
 				glCall(glBindVertexArray, *vao);
 
 				glCall(glDrawElements, GL_TRIANGLES, 3, GL_UNSIGNED_INT, nullptr);
@@ -120,33 +128,33 @@ namespace RGL {
 		};
 
 
-		export class SingleBuffer :public GLRenderer {
-			std::unique_ptr<VBO> positionVbo;
-			std::unique_ptr<VBO> colorVbo;
-			std::unique_ptr<VAO> vao;
-		public:
-			SingleBuffer() :GLRenderer() {
-				positionVbo = std::make_unique<VBO>();
-				positionVbo->setData(positions);
-				colorVbo = std::make_unique<VBO>();
-				colorVbo->setData(colors);
+		//export class SingleBuffer :public GLRenderer {
+		//	std::unique_ptr<VBO> positionVbo;
+		//	std::unique_ptr<VBO> colorVbo;
+		//	std::unique_ptr<VAO> vao;
+		//public:
+		//	SingleBuffer() :GLRenderer() {
+		//		positionVbo = std::make_unique<VBO>();
+		//		positionVbo->setData(positions);
+		//		colorVbo = std::make_unique<VBO>();
+		//		colorVbo->setData(colors);
 
-				vao = std::make_unique<VAO>();
+		//		vao = std::make_unique<VAO>();
 
-				vao->set(*positionVbo, 3, BUFF_ATTRIBUTION::VERT_POSITION);
+		//		vao->set(*positionVbo, 3, BUFF_ATTRIBUTION::VERT_POSITION);
 
-				vao->set(*colorVbo, 3, BUFF_ATTRIBUTION::COLOR);
-			}
-			virtual ~SingleBuffer() = default;
-			void operator()() override {
+		//		vao->set(*colorVbo, 3, BUFF_ATTRIBUTION::COLOR);
+		//	}
+		//	virtual ~SingleBuffer() = default;
+		//	void operator()() override {
 
-			}
-		};
+		//	}
+		//};
 
 		export class InterLeavedBuffer : public GLRenderer {
 			std::unique_ptr<VBO> posColorVbo;
 			std::unique_ptr<VAO> vao;
-			std::unique_ptr<LoadShader> loadShader;
+			std::unique_ptr<Shader> shader;
 		public:
 			InterLeavedBuffer() :GLRenderer() {
 				posColorVbo = std::make_unique<VBO>();
@@ -154,19 +162,23 @@ namespace RGL {
 
 				vao = std::make_unique<VAO>();
 
-				vao->set(*posColorVbo, 3, 6, 0, BUFF_ATTRIBUTION::VERT_POSITION);
-
-				vao->set(*posColorVbo, 3, 6, 3, BUFF_ATTRIBUTION::COLOR);
+				
 
 				ShaderSrcs shaders = {
 					{SHADER_TYPE::VERTEX,{"shaders\\beginner\\shader.vert"}},
 					{SHADER_TYPE::FRAGMENT,{"shaders\\beginner\\shader.frag"}}
 				};
 
-				loadShader = std::make_unique<LoadShader>(shaders);
+				shader = std::make_unique<Shader>(shaders);
+
+				vao->setShaderProgram(*shader);
+
+				vao->set(*posColorVbo, 3, 6, 0,"aPos");
+
+				vao->set(*posColorVbo, 3, 6, 3, "inColor");
 			}
 			void operator()() override {
-				loadShader->useProgram();
+				shader->useProgram();
 				glCall(glBindVertexArray, *vao);
 				glCall(glDrawArrays, GL_TRIANGLES, 0, 3);
 			}

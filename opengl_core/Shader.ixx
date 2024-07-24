@@ -4,7 +4,7 @@
 #include <map>
 #include <fstream>
 #include <spdlog/logger.h>
-export module LoadShader;
+export module Shader;
 
 import GLCheckError;
 
@@ -44,21 +44,21 @@ namespace RGL {
 
 		export using ShaderSrcs = std::map<SHADER_TYPE, std::vector<fs::path>>;
 
-		export class LoadShader
+		export class Shader
 		{
 
 			spdlog::logger* logger;
 
 		public:
-			LoadShader() = delete;
-			~LoadShader() = default;
+			Shader() = delete;
+
 			/// <summary>
 			/// 读取shader类型和所有shader的文本文件，再编译
 			/// </summary>
 			/// <param name="shaderSrcs">
 			/// 由SHADER_TYPE枚举和路径vector组成的map类型
 			/// </param>
-			LoadShader(const ShaderSrcs& shaderSrcs) : compiled(0)
+			Shader(const ShaderSrcs& shaderSrcs) : compiled(0)
 				, linked(0) {
 
 				logger = glcore::Logger::getInstance();
@@ -108,7 +108,11 @@ namespace RGL {
 					throw glcore::GLLogicError("The shader is linked failed");
 				}
 			}
-			GLuint getShaderProgram() {
+			GLuint getShaderProgram() const {
+				return shaderProgram;
+			}
+
+			operator GLuint() {
 				return shaderProgram;
 			}
 
@@ -122,6 +126,14 @@ namespace RGL {
 				}
 			}
 
+			~Shader() {
+				glUseProgram(0);
+			}
+
+
+			void endUse() {
+				glUseProgram(0);
+			}
 		private:
 			std::string loadFile(const fs::path& p){
 				std::ifstream ifs(p, std::ios::in);
