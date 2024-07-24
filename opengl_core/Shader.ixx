@@ -4,6 +4,7 @@
 #include <map>
 #include <fstream>
 #include <spdlog/logger.h>
+#include "Helpers.hpp"
 export module Shader;
 
 import GLCheckError;
@@ -130,7 +131,10 @@ namespace RGL {
 				glUseProgram(0);
 			}
 
-
+			void setUniformFloat(const std::string& uniformVarName, float value) {
+				const auto location = glcore::glCallRet(glGetUniformLocation,this->shaderProgram, uniformVarName.c_str());
+				glcore::glCall(glUniform1f,location, value);
+			}
 			void endUse() {
 				glUseProgram(0);
 			}

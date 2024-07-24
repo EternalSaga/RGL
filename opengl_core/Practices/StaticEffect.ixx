@@ -4,7 +4,7 @@
 #include <memory>
 #include <glad/glad.h>
 #include "Helpers.hpp"
-export module ExecsiceCodes;
+export module StaticEffectPractice;
 import GLObjWrapper;
 
 import GLFramework;
@@ -123,7 +123,7 @@ namespace RGL {
 
 				glCall(glDrawElements, GL_TRIANGLES, 3, GL_UNSIGNED_INT, nullptr);
 
-				glBindVertexArray(0);
+				glBindVertexArray(0);	
 			}
 		};
 
