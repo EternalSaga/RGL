@@ -46,8 +46,8 @@ namespace RGL {
 			}
 			~VBO()
 			{
-				//glCall(glDeleteBuffers, mNumOfVbo, static_cast<GLuint*>(vbo.get()));
-				glDeleteBuffers(mNumOfVbo, static_cast<GLuint*>(vbo.get()));
+				glCall(glBindBuffer, GL_ARRAY_BUFFER, 0);
+				glCall(glDeleteBuffers,mNumOfVbo, vbo.get());
 
 			}
 			//根据index获取vbo
@@ -102,7 +102,7 @@ namespace RGL {
 				ebo = std::make_unique<GLuint[]>(mNumOfEbo);
 
 				//创建mNumOfEbo个ebo，未分配显存
-				glGenBuffers(mNumOfEbo, ebo.get());
+				glCall(glGenBuffers,mNumOfEbo, ebo.get());
 			}
 
 			EBO() :EBO(1) { }
@@ -135,7 +135,7 @@ namespace RGL {
 
 			~EBO() {
 				//glCall(glDeleteBuffers,mNumOfEbo, static_cast<GLuint*>(ebo.get()));
-				glDeleteBuffers(mNumOfEbo, static_cast<GLuint*>(ebo.get()));
+				glCall(glDeleteBuffers,mNumOfEbo, static_cast<GLuint*>(ebo.get()));
 			}
 		};
 
@@ -168,7 +168,7 @@ namespace RGL {
 
 			VAO(size_t numOfVao) :mNumOfVao(numOfVao), shaderProgram{} {
 				vao = std::make_unique<GLuint[]>(mNumOfVao);
-				glGenVertexArrays(mNumOfVao, vao.get());
+				glCall(glGenVertexArrays,mNumOfVao, vao.get());
 				logger = Logger::getInstance();
 
 			}
@@ -181,6 +181,7 @@ namespace RGL {
 
 			VAO() :VAO(1) {}
 			~VAO() {
+				glCall(glBindVertexArray,0);
 				glCall(glDeleteVertexArrays,mNumOfVao, vao.get());
 			}
 

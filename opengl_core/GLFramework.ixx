@@ -20,7 +20,7 @@ namespace RGL {
 			GLRenderer() = default;
 			virtual void operator()() = 0;
 
-			~GLRenderer() = default;
+			virtual ~GLRenderer() = default;
 		};
 
 		export class GLContext
@@ -34,15 +34,13 @@ namespace RGL {
 				if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(glfwGetProcAddress))) {
 					throw std::runtime_error("Failed to initialize GLAD");
 				}
-				glViewport(0, 0, viewPortWidth, viewPortHeight);
-				glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
+				glCall(glViewport,0, 0, viewPortWidth, viewPortHeight);
+				glCall(glClearColor,0.2f, 0.3f, 0.3f, 1.0f);
 			}
 			void setRenderer(std::unique_ptr<GLRenderer> renderer) {
 				this->renderer = std::move(renderer);
 			}
-			~GLContext()
-			{
-			}
+			~GLContext()=default;
 
 			void render() {
 				

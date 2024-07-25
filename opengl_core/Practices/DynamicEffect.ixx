@@ -47,11 +47,8 @@ namespace RGL {
 				shader = std::make_unique<Shader>(shaders);
 
 				vao->setShaderProgram(*shader);
-
 				vao->set(*vbo, 3, 6, 0, "inPos");
-
 				vao->set(*vbo, 3, 6, 3, "inColor");
-
 			}
 			virtual ~ColorfulShiningTriangle() = default;
 			void operator()() override {
@@ -59,10 +56,9 @@ namespace RGL {
 				shader->setUniformFloat("time", glfwGetTime());
 
 				glCall(glBindVertexArray, *vao);
-
 				glCall(glDrawElements, GL_TRIANGLES, 3, GL_UNSIGNED_INT, nullptr);
+				glCall(glBindVertexArray,0);
 
-				glBindVertexArray(0);
 			}
 		};
 	}

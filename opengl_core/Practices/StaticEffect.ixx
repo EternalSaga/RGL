@@ -78,7 +78,7 @@ namespace RGL {
 
 				glCall(glDrawElements,GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr);
 
-				glBindVertexArray(0);
+				glCall(glBindVertexArray,0);
 			}
 		private:
 

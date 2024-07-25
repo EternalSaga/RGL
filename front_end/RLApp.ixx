@@ -26,7 +26,7 @@ namespace RGL {
 
 
 		GLFWwindow* window_;
-		std::unique_ptr<glcore::GLContext> glCxt;
+		glcore::GLContext* glCxt;
 		static std::unique_ptr<RLApp> instance;
 		static std::atomic_bool isInit;
 		static std::mutex mu;
@@ -56,7 +56,7 @@ namespace RGL {
 
 
 			
-			this->glCxt = std::make_unique<glcore::GLContext>(window_, width, height);
+			this->glCxt = new glcore::GLContext(window_, width, height);
 			auto interLeavedBuffer = std::make_unique<glcore::ColorfulShiningTriangle>();
 			this->glCxt->setRenderer(std::move(interLeavedBuffer));
 		}
@@ -109,7 +109,10 @@ namespace RGL {
 		}
 
 		~RLApp() {
-
+			//确保自己封装的OpenGL上下文对象的销毁在glfwTerminate之前
+			//不然glfw强制销毁了OpenGL之后，OpenGL的清理函数会出错
+			//考虑使用栈容器封装来确保资源的初始化和释放顺序，暂时先硬编码以下
+			delete this->glCxt;
 			glfwDestroyWindow(window_);
 			glfwTerminate();
 		}

@@ -67,7 +67,7 @@ namespace RGL {
 				// std::map<int, std::vector<fs::path>> -> 
 				// std::map<int, std::vector<std::string> -> //be carefull for this 
 				// std::map<int, std::vector<char*>> -> use glShaderSource 
-				shaderProgram = glCreateProgram();
+				shaderProgram = glcore::glCallRet(glCreateProgram);
 				for (const auto& shaderType_Src : shaderSrcs)
 				{
 					std::vector<const char*> srcs;
@@ -78,12 +78,12 @@ namespace RGL {
 
 					std::transform(srcs_strings.begin(), srcs_strings.end(), std::back_inserter(srcs), [](const std::string& str) {return str.c_str(); });
 
-					GLuint shader = glCreateShader(static_cast<GLuint>(shaderType_Src.first));
-					glShaderSource(shader, srcs.size(), srcs.data(), nullptr);
-					glCompileShader(shader);
+					GLuint shader = glcore::glCallRet(glCreateShader,static_cast<GLuint>(shaderType_Src.first));
+					glcore::glCall(glShaderSource,shader, srcs.size(), srcs.data(), nullptr);
+					glcore::glCall(glCompileShader,shader);
 
 
-					glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+					glcore::glCall(glGetShaderiv,shader, GL_COMPILE_STATUS, &compiled);
 					if (!compiled)
 					{
 						constexpr GLuint logLength = 1024;
@@ -93,13 +93,13 @@ namespace RGL {
 						throw glcore::GLLogicError("The shader is compiled failed");
 					}
 
-					glAttachShader(shaderProgram, shader);
+					glcore::glCall(glAttachShader,shaderProgram, shader);
 
 				}
-				glLinkProgram(shaderProgram);
+				glcore::glCall(glLinkProgram,shaderProgram);
 
 
-				glGetProgramiv(shaderProgram, GL_LINK_STATUS, &linked);
+				glcore::glCall(glGetProgramiv,shaderProgram, GL_LINK_STATUS, &linked);
 				if (!linked)
 				{
 					constexpr GLuint logLength = 1024;
@@ -120,7 +120,7 @@ namespace RGL {
 			void useProgram() {
 				if (compiled && linked)
 				{
-					glUseProgram(shaderProgram);
+					glcore::glCall(glUseProgram,shaderProgram);
 				}
 				else {
 					throw glcore::GLInitExpt("shader program not prepared");
@@ -128,15 +128,16 @@ namespace RGL {
 			}
 
 			~Shader() {
-				glUseProgram(0);
+				glcore::glCall(glUseProgram,0);
 			}
 
 			void setUniformFloat(const std::string& uniformVarName, float value) {
 				const auto location = glcore::glCallRet(glGetUniformLocation,this->shaderProgram, uniformVarName.c_str());
 				glcore::glCall(glUniform1f,location, value);
 			}
+
 			void endUse() {
-				glUseProgram(0);
+				glcore::glCall(glUseProgram,0);
 			}
 		private:
 			std::string loadFile(const fs::path& p){

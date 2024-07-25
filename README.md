@@ -5,7 +5,7 @@ However, NCLGL delves deeper into various mathematical and physical simulations 
 
 ## Package Management And Building
 
-This project leverages vcpkg as a package manager, making cmake the natural choice for build tools due to its seamless integration with vcpkg. Additionally, it deeply incorporates the C++20 module features in development, hence currently only supports the Microsoft Visual C++ (msvc) compiler.
+This project leverages vcpkg as a package manager, making cmake the natural choice for build tools due to its seamless integration with vcpkg. Additionally, it deeply incorporates the C++20 module features in development, hence currently only supports the Microsoft Visual C++ 2022(msvc) and clang-18 compiler (has already been tested on windows).
 
 ### Depandance
 

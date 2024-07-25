@@ -27,9 +27,4 @@ namespace RGL {
 
 	}
 
-	template<typename FunctionSignitrue>
-	decltype(auto) getFuncPtr(const std::function<FunctionSignitrue>& func)
-	{
-		return func.target<FunctionSignitrue>(func);
-	}
 }
