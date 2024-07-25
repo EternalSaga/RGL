@@ -134,15 +134,26 @@ namespace RGL {
 			}
 
 
-
+			/// <summary>
+			/// glUniformNumType的泛型封装
+			/// </summary>
+			/// <typeparam name="...Args">可变参数，多个变量的同一类型</typeparam>
+			/// <param name="uniformVarName">shader里uniform变量名称</param>
+			/// <param name="...values">需要传入shader的uniform变量数据</param>
 			template<typename... Args>
 			void setUniform(const std::string& uniformVarName, Args... values){
 				const auto location = glcore::glCallRet(glGetUniformLocation, this->shaderProgram, uniformVarName.c_str());
 				glcore::glUniform(location, std::forward<Args>(values)...);
 			}
 
-
-			//Vector指的是uniform变量的数组，如果一个uniform变量是4个float，两个uniform变量就是8个float
+			/// <summary>
+			/// glUniformNumTypev的泛型封装
+			/// Vector指的是uniform变量的数组，如果一个uniform变量是4个float，两个uniform变量就是8个float
+			/// </summary>
+			/// <typeparam name="T">float GLuint GLint三选一</typeparam>
+			/// <typeparam name="UVarLength">unform变量的长度,1234选一</typeparam>
+			/// <param name="uniformVarName">shader里uniform变量名称</param>
+			/// <param name="data">需要传入shader的uniform变量数据</param>
 			template<GLuint UVarLength,typename T>
 			void setUniformVec(const std::string& uniformVarName,std::vector<T> data) {
 				const auto location = glcore::glCallRet(glGetUniformLocation, this->shaderProgram, uniformVarName.c_str());
