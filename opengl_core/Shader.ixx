@@ -5,6 +5,7 @@
 #include <fstream>
 #include <spdlog/logger.h>
 #include "Helpers.hpp"
+#include "glUniformWrapper.hpp"
 export module Shader;
 
 import GLCheckError;
@@ -44,6 +45,7 @@ namespace RGL {
 		};
 
 		export using ShaderSrcs = std::map<SHADER_TYPE, std::vector<fs::path>>;
+
 
 		export class Shader
 		{
@@ -131,10 +133,25 @@ namespace RGL {
 				glcore::glCall(glUseProgram,0);
 			}
 
-			void setUniformFloat(const std::string& uniformVarName, float value) {
-				const auto location = glcore::glCallRet(glGetUniformLocation,this->shaderProgram, uniformVarName.c_str());
-				glcore::glCall(glUniform1f,location, value);
+
+
+			template<typename... Args>
+			void setUniform(const std::string& uniformVarName, Args... values){
+				const auto location = glcore::glCallRet(glGetUniformLocation, this->shaderProgram, uniformVarName.c_str());
+				glcore::glUniform(location, std::forward<Args>(values)...);
 			}
+
+
+			//Vector指的是uniform变量的数组，如果一个uniform变量是4个float，两个uniform变量就是8个float
+			template<GLuint UVarLength,typename T>
+			void setUniformVec(const std::string& uniformVarName,std::vector<T> data) {
+				const auto location = glcore::glCallRet(glGetUniformLocation, this->shaderProgram, uniformVarName.c_str());
+				assert(data.size() % UVarLength == 0);//数组长度=所有数据长度/uniform变量长度
+				const GLsizei uniformVarCount = data.size() / UVarLength;
+				
+				glUniformVec(location, uniformVarCount, data.data());
+			}
+
 
 			void endUse() {
 				glcore::glCall(glUseProgram,0);
@@ -145,6 +162,7 @@ namespace RGL {
 
 				if (ifs.fail())
 				{
+					
 					throw glcore::GLInitExpt("Open file failed");
 				}
 

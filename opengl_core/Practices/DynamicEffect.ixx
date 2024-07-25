@@ -53,7 +53,7 @@ namespace RGL {
 			virtual ~ColorfulShiningTriangle() = default;
 			void operator()() override {
 				shader->useProgram();
-				shader->setUniformFloat("time", glfwGetTime());
+				shader->setUniform<float>("time", glfwGetTime());
 
 				glCall(glBindVertexArray, *vao);
 				glCall(glDrawElements, GL_TRIANGLES, 3, GL_UNSIGNED_INT, nullptr);
