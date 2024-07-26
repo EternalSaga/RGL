@@ -15,7 +15,7 @@ export module RLApp;
 import GLFramework;
 import GLCheckError;
 
-import DynamicEffectPractice;
+import StaticEffectPractice;
 
 namespace RGL {
 
@@ -57,7 +57,7 @@ namespace RGL {
 
 			
 			this->glCxt = new glcore::GLContext(window_, width, height);
-			auto interLeavedBuffer = std::make_unique<glcore::MovingTriangle>();
+			auto interLeavedBuffer = std::make_unique<glcore::SetColorByUniform>();
 			this->glCxt->setRenderer(std::move(interLeavedBuffer));
 		}
 		static std::function<resize_cbk_type> resizeCallback;

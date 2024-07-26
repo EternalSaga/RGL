@@ -185,5 +185,34 @@ namespace RGL {
 			virtual ~InterLeavedBuffer() = default;
 		};
 
+		export class SetColorByUniform : public GLRenderer {
+			std::unique_ptr<VBO> vbo;
+			std::unique_ptr<VAO> vao;
+			std::unique_ptr<Shader> shader;
+
+		public:
+			SetColorByUniform() {
+				vbo = std::make_unique<VBO>();
+				vbo->setData(positions);
+
+				vao = std::make_unique<VAO>();
+				ShaderSrcs shaders = {
+					{SHADER_TYPE::VERTEX,{"shaders\\beginner\\UniformTriangle.vert"}},
+					{SHADER_TYPE::FRAGMENT,{"shaders\\beginner\\UniformTriangle.frag"}}
+				};
+				shader = std::make_unique<Shader>(shaders);
+				vao->setShaderProgram(*shader);
+
+				vao->set(*vbo, 3, 3, 0, "inPos");
+			}
+
+			void operator()() override {
+				shader->useProgram();
+				shader->setUniform("ucolor", 1.0f, 0.f, 0.f);
+				glCall(glBindVertexArray, *vao);
+				glCall(glDrawArrays, GL_TRIANGLES, 0, 3);
+			}
+		};
+
 	}
 }
