@@ -20,3 +20,22 @@
 ### 构建
 
 直接使用vs2022打开本项目目录，直接构建。在构建之前你可能需要修改CMakeSettings.json文件里的cmakeToolchain的值，以保证cmake能找到vcpkg。
+
+
+## 文件结构
+
+* api_abstractor
+
+  创建一个兼容层来同时封装OpenGL和Vulkan
+* entry
+
+  整个项目的入口函数（main.cpp）
+* front_end
+
+  实现了一个Application类和Application类的渲染器接口，可以更换不同的渲染器来实现不同的渲染效果
+* opengl_core
+
+  对于OpenGL的各种封装。
+* opengl_core-Practices
+
+  使用OpenGL封装实现的各种练习用渲染器。实现了来自于front-end的渲染器接口

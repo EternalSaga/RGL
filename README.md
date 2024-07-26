@@ -23,3 +23,24 @@ Use vcpkg to install the following libraries.
 ### Build
 
 Open the repostory folder with vs2022 then press ctrl + shift + B to build it. Perhaps you need to edit the value of "cmakeToolchain" in the CMakeSettings.json file to make sure the vcpkg has been integrated into this project.
+
+
+## Project Structure
+
+* api_abstractor
+
+  Goal: Create a compatible abstraction layer for both OpenGL and Vulkan.
+* entry
+  Contains the main entry point (main.cpp).
+  
+* front_end
+
+  Houses the main application logic.  
+  Provides a flexible renderer interface for implementing various graphical effects.  
+* opengl_core
+
+  Encapsulates OpenGL functionalities.
+* opengl_core-Practices
+
+  Demonstrates the use of OpenGL encapsulation through concrete implementations.  
+  All classes in this folder inherit from the Renderer class in the front-end.
