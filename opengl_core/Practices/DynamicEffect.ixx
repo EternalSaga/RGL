@@ -57,8 +57,43 @@ namespace RGL {
 
 				glCall(glBindVertexArray, *vao);
 				glCall(glDrawElements, GL_TRIANGLES, 3, GL_UNSIGNED_INT, nullptr);
-				glCall(glBindVertexArray,0);
+				glCall(glBindVertexArray, 0);
 
+			}
+		};
+
+		export class MovingTriangle :public GLRenderer {
+			std::unique_ptr<EBO> ebo;
+			std::unique_ptr<VAO> vao;
+			std::unique_ptr<VBO> vbo;
+			std::unique_ptr<Shader> shader;
+		public:
+			MovingTriangle() {
+				vbo = std::make_unique<VBO>();
+				vbo->setData(pos_col_interleaved);
+				ebo = std::make_unique<EBO>();
+				ebo->setData(eboSimple);
+				vao = std::make_unique<VAO>();
+
+				vao->addEBO(*ebo);
+
+				ShaderSrcs shaders = {
+					{SHADER_TYPE::VERTEX,{"shaders\\beginner\\moving.vert"}},
+					{SHADER_TYPE::FRAGMENT,{"shaders\\beginner\\moving.frag"}}
+				};
+				shader = std::make_unique<Shader>(shaders);
+
+				vao->setShaderProgram(*shader);
+				vao->set(*vbo, 3, 6, 0, "inPos");
+				vao->set(*vbo, 3, 6, 3, "inColor");
+			}
+			virtual ~MovingTriangle() = default;
+			void operator()() override {
+				shader->useProgram();
+				shader->setUniform<float>("time", glfwGetTime());
+
+				glCall(glBindVertexArray, *vao);
+				glCall(glDrawElements, GL_TRIANGLES, 3, GL_UNSIGNED_INT, nullptr);
 			}
 		};
 	}
