@@ -1,5 +1,7 @@
 ﻿# RGL
 
+[中文](./cn.md)
+
 This project is a personal learning repository for computer graphics utilizing modern C++ features. It corresponds to development goals aimed at enhancing [NCLGL](https://research.ncl.ac.uk/game/mastersdegree/graphicsforgames/introductiontonclgl/), focusing on the introduction and application of C++ in graphics for games context.
 However, NCLGL delves deeper into various mathematical and physical simulations beyond graphics, with many sections being manually coded without the use of third-party libraries. This project will not follow this approach; instead, it will judiciously utilize third-party libraries to facilitate its development.
 
