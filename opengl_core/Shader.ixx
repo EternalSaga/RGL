@@ -51,7 +51,7 @@ namespace RGL {
 		{
 
 			spdlog::logger* logger;
-
+			static constexpr GLuint MaxShaderLogLength = 1024;
 		public:
 			Shader() = delete;
 
@@ -88,9 +88,8 @@ namespace RGL {
 					glcore::glCall(glGetShaderiv,shader, GL_COMPILE_STATUS, &compiled);
 					if (!compiled)
 					{
-						constexpr GLuint logLength = 1024;
-						char infoLog[logLength];
-						glGetShaderInfoLog(shader, logLength, nullptr, infoLog);
+						char infoLog[MaxShaderLogLength];
+						glGetShaderInfoLog(shader, MaxShaderLogLength, nullptr, infoLog);
 						logger->error(infoLog);
 						throw glcore::GLLogicError("The shader is compiled failed");
 					}
@@ -104,15 +103,11 @@ namespace RGL {
 				glcore::glCall(glGetProgramiv,shaderProgram, GL_LINK_STATUS, &linked);
 				if (!linked)
 				{
-					constexpr GLuint logLength = 1024;
-					char infoLog[logLength];
-					glGetProgramInfoLog(shaderProgram, logLength, nullptr, infoLog);
+					char infoLog[MaxShaderLogLength];
+					glGetProgramInfoLog(shaderProgram, MaxShaderLogLength, nullptr, infoLog);
 					logger->error(infoLog);
 					throw glcore::GLLogicError("The shader is linked failed");
 				}
-			}
-			GLuint getShaderProgram() const {
-				return shaderProgram;
 			}
 
 			operator GLuint() {
@@ -163,10 +158,6 @@ namespace RGL {
 				glUniformVec(location, uniformVarCount, data.data());
 			}
 
-
-			void endUse() {
-				glcore::glCall(glUseProgram,0);
-			}
 		private:
 			std::string loadFile(const fs::path& p){
 				std::ifstream ifs(p, std::ios::in);

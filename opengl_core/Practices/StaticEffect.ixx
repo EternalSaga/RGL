@@ -4,12 +4,14 @@
 #include <memory>
 #include <glad/glad.h>
 #include "Helpers.hpp"
+
 export module StaticEffectPractice;
 import GLObjWrapper;
 
 import GLFramework;
 
 import Shader;
+import GLTexture;
 namespace RGL {
 	namespace glcore {
 		using namespace io;
@@ -24,9 +26,15 @@ namespace RGL {
 			0,0,1
 		};
 		const std::vector<float> pos_col_interleaved{
-			-0.5f,-0.5f,0.0f,1.f,0.f,0.f,
-			0.5f,-0.5f,0.0f,0.f,1.f,0.f,
-			0.0f,0.5f,0.0f,0.f,0.f,1.f
+			-0.5f, -0.5f, 0.0f,1,0,0,
+		0.5f, -0.5f, 0.0f,0,1,0,
+		0.0f,  0.5f, 0.0f,0,0,1
+		};
+
+		const std::vector<float> pos_uv_interleaved{
+		-0.5f,-0.5f,0.0f,0.0f, 0.0f,
+		0.5f,-0.5f,0.0f,1.0f, 0.0f,
+		0.0f,0.5f,0.0f,0.5f, 1.0f,
 		};
 
 		const std::vector<float> positions4{
@@ -189,7 +197,6 @@ namespace RGL {
 			std::unique_ptr<VBO> vbo;
 			std::unique_ptr<VAO> vao;
 			std::unique_ptr<Shader> shader;
-
 		public:
 			SetColorByUniform() {
 				vbo = std::make_unique<VBO>();
@@ -204,14 +211,62 @@ namespace RGL {
 				vao->setShaderProgram(*shader);
 
 				vao->set(*vbo, 3, 3, 0, "inPos");
+
+		
+
 			}
 
 			void operator()() override {
 				shader->useProgram();
-				shader->setUniform("ucolor", 1.0f, 0.f, 0.f);
+				shader->setUniform("ucolor", 1.0f, 1.f, 0.f);
 				glCall(glBindVertexArray, *vao);
 				glCall(glDrawArrays, GL_TRIANGLES, 0, 3);
 			}
+		};
+
+		export class TexturePractice : public GLRenderer {
+			std::unique_ptr<VBO> vbo;
+			std::unique_ptr<VAO> vao;
+			std::unique_ptr<Shader> shader;
+			std::unique_ptr<EBO> ebo;
+			std::unique_ptr<io::Texture> texture;
+
+		public:
+			TexturePractice() {
+				vbo = std::make_unique<VBO>();
+				vbo->setData(pos_uv_interleaved);
+
+				vao = std::make_unique<VAO>();
+				ShaderSrcs shaders = {
+					{SHADER_TYPE::VERTEX,{"shaders\\beginner\\uvshader.vert"}},
+					{SHADER_TYPE::FRAGMENT,{"shaders\\beginner\\uvshader.frag"}}
+				};
+				shader = std::make_unique<Shader>(shaders);
+				vao->setShaderProgram(*shader);
+
+				vao->set(*vbo, 3, 5, 0, "inPos");
+				vao->set(*vbo, 2, 5, 3, "inUV");
+
+				ebo = std::make_unique<EBO>();
+
+				ebo->setData(eboSimple);
+
+				vao->addEBO(*ebo);
+
+				texture = std::make_unique<io::Texture>();
+				{
+					io::LoadedImg img("./assest/002.jpg");
+					texture->set(img);
+				}
+			}
+
+			void operator()() override {
+				shader->useProgram();
+				shader->setUniform("sampler", 0);
+				glCall(glBindVertexArray,*vao);
+				glCall(glDrawElements, GL_TRIANGLES, 3, GL_UNSIGNED_INT, nullptr);
+			}
+			virtual ~TexturePractice() = default;
 		};
 
 	}

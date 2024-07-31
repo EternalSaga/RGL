@@ -10,6 +10,7 @@
 #include <functional>
 #include "Helpers.hpp"
 #include <iostream>
+
 export module RLApp;
 
 import GLFramework;
@@ -54,10 +55,8 @@ namespace RGL {
 				throw std::runtime_error("failed to create window");
 			}
 
-
-			
 			this->glCxt = new glcore::GLContext(window_, width, height);
-			auto interLeavedBuffer = std::make_unique<glcore::SetColorByUniform>();
+			auto interLeavedBuffer = std::make_unique<glcore::TexturePractice>();
 			this->glCxt->setRenderer(std::move(interLeavedBuffer));
 		}
 		static std::function<resize_cbk_type> resizeCallback;
