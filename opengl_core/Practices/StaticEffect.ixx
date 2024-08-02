@@ -84,9 +84,9 @@ namespace RGL {
 				glCall(glBindVertexArray, *vao);
 				//glCall(glDrawElements, GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 
-				glCall(glDrawElements,GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr);
+				glCall(glDrawElements, GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr);
 
-				glCall(glBindVertexArray,0);
+				glCall(glBindVertexArray, 0);
 			}
 		private:
 
@@ -131,33 +131,10 @@ namespace RGL {
 
 				glCall(glDrawElements, GL_TRIANGLES, 3, GL_UNSIGNED_INT, nullptr);
 
-				glBindVertexArray(0);	
+				glBindVertexArray(0);
 			}
 		};
 
-
-		//export class SingleBuffer :public GLRenderer {
-		//	std::unique_ptr<VBO> positionVbo;
-		//	std::unique_ptr<VBO> colorVbo;
-		//	std::unique_ptr<VAO> vao;
-		//public:
-		//	SingleBuffer() :GLRenderer() {
-		//		positionVbo = std::make_unique<VBO>();
-		//		positionVbo->setData(positions);
-		//		colorVbo = std::make_unique<VBO>();
-		//		colorVbo->setData(colors);
-
-		//		vao = std::make_unique<VAO>();
-
-		//		vao->set(*positionVbo, 3, BUFF_ATTRIBUTION::VERT_POSITION);
-
-		//		vao->set(*colorVbo, 3, BUFF_ATTRIBUTION::COLOR);
-		//	}
-		//	virtual ~SingleBuffer() = default;
-		//	void operator()() override {
-
-		//	}
-		//};
 
 		export class InterLeavedBuffer : public GLRenderer {
 			std::unique_ptr<VBO> posColorVbo;
@@ -169,9 +146,6 @@ namespace RGL {
 				posColorVbo->setData(pos_col_interleaved);
 
 				vao = std::make_unique<VAO>();
-
-				
-
 				ShaderSrcs shaders = {
 					{SHADER_TYPE::VERTEX,{"shaders\\beginner\\shader.vert"}},
 					{SHADER_TYPE::FRAGMENT,{"shaders\\beginner\\shader.frag"}}
@@ -181,7 +155,7 @@ namespace RGL {
 
 				vao->setShaderProgram(*shader);
 
-				vao->set(*posColorVbo, 3, 6, 0,"aPos");
+				vao->set(*posColorVbo, 3, 6, 0, "aPos");
 
 				vao->set(*posColorVbo, 3, 6, 3, "inColor");
 			}
@@ -211,8 +185,6 @@ namespace RGL {
 				vao->setShaderProgram(*shader);
 
 				vao->set(*vbo, 3, 3, 0, "inPos");
-
-		
 
 			}
 
@@ -259,20 +231,72 @@ namespace RGL {
 				ebo->setData(eboSimple);
 
 				vao->addEBO(*ebo);
-
-
 			}
 
 			void operator()() override {
 				shader->useProgram();
 
-
-
 				shader->setUniform("sampler", texture->getTextureUnitID());
-				glCall(glBindVertexArray,*vao);
+				glCall(glBindVertexArray, *vao);
 				glCall(glDrawElements, GL_TRIANGLES, 3, GL_UNSIGNED_INT, nullptr);
 			}
 			virtual ~TexturePractice() = default;
+		};
+
+
+		const std::vector<float> rectangle_pos_uv = {
+			-0.5f, -0.5f, 0.0f,0.0f, 0.0f,
+			0.5f, -0.5f, 0.0f,1.0f, 0.0f,
+			-0.5f,  0.5f, 0.0f,0.0f, 1.0f,
+			0.5f,  0.5f, 0.0f,1.0f, 1.0f,
+		};
+		const std::vector<GLint> rectangle_indeces ={
+			0, 1, 2,
+			2, 1, 3
+		};
+
+		export class RectangleTexture : public GLRenderer {
+			std::unique_ptr<VBO> vbo;
+			std::unique_ptr<VAO> vao;
+			std::unique_ptr<Shader> shader;
+			std::unique_ptr<EBO> ebo;
+			std::unique_ptr<Texture> texture;
+		public:
+			RectangleTexture() {
+				vbo = std::make_unique<VBO>();
+				vbo->setData(rectangle_pos_uv);
+
+				vao = std::make_unique<VAO>();
+				ShaderSrcs shaders = {
+					{SHADER_TYPE::VERTEX,{"shaders\\beginner\\uvshader.vert"}},
+					{SHADER_TYPE::FRAGMENT,{"shaders\\beginner\\uvshader.frag"}}
+				};
+				shader = std::make_unique<Shader>(shaders);
+
+				texture = std::make_unique<Texture>();
+				{
+					io::LoadedImg img("./assest/001.jpg");
+					texture->set(img);
+				}
+
+				vao->setShaderProgram(*shader);
+
+				vao->set(*vbo, 3, 5, 0, "inPos");
+				vao->set(*vbo, 2, 5, 3, "inUV");
+
+				ebo = std::make_unique<EBO>();
+
+				ebo->setData(rectangle_indeces);
+
+				vao->addEBO(*ebo);
+			}
+			void operator()() override {
+				shader->useProgram();
+
+				shader->setUniform("sampler", texture->getTextureUnitID());
+				glCall(glBindVertexArray, *vao);
+				glCall(glDrawElements, GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr);
+			}
 		};
 
 	}

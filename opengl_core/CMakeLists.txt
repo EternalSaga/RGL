@@ -36,3 +36,5 @@ target_compile_features(GLFramework PRIVATE cxx_std_20)
 
 find_package(Stb REQUIRED)
 target_include_directories(GLFramework PUBLIC ${Stb_INCLUDE_DIR})
+
+set_property(TARGET GLFramework PROPERTY CMAKE_COMPILE_WARNING_AS_ERROR ON)

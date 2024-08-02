@@ -56,7 +56,7 @@ namespace RGL {
 			}
 
 			this->glCxt = new glcore::GLContext(window_, width, height);
-			auto interLeavedBuffer = std::make_unique<glcore::TexturePractice>();
+			auto interLeavedBuffer = std::make_unique<glcore::RectangleTexture>();
 			this->glCxt->setRenderer(std::move(interLeavedBuffer));
 		}
 		static std::function<resize_cbk_type> resizeCallback;

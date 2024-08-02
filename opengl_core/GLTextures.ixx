@@ -15,11 +15,7 @@ export module GLTexture;
 
 namespace RGL {
 	namespace io {
-
 		namespace fs = std::filesystem;
-
-
-
 		export struct ImgRef {
 			uint8_t* imgData;
 			int width;
@@ -51,7 +47,7 @@ namespace RGL {
 			}
 		};
 	}
-	namespace glcore{
+	namespace glcore {
 		using namespace io;
 
 
@@ -71,24 +67,18 @@ namespace RGL {
 
 			size_t mNumOfTextures;
 
-			
 		public:
 
-			Texture(size_t numOfTextrues):mNumOfTextures(numOfTextrues) {
+			Texture(size_t numOfTextrues) :mNumOfTextures(numOfTextrues) {
 				textures = std::make_unique<GLuint[]>(mNumOfTextures);
 				textureUnitIdx = std::make_unique<GLint[]>(mNumOfTextures);
 				glcore::glCall(glGenTextures, mNumOfTextures, textures.get());
-				
 			}
-
-			
 
 			Texture() :Texture(1) {
-				
-
 			}
 
-			GLuint getTextureUnitID(GLuint textrueID) const {
+			GLint getTextureUnitID(GLuint textrueID) const {
 				assert(textrueID < mNumOfTextures);
 				return textureUnitIdx[textrueID];
 			}
@@ -97,7 +87,7 @@ namespace RGL {
 				return getTextureUnitID(0);
 			}
 
-			void set(const ImgRef& flippedImg,GLuint textIdx,GLuint tUnitIdx) {
+			void set(const ImgRef& flippedImg, GLuint textIdx, GLuint tUnitIdx) {
 				//激活纹理单元，纹理单元有16个（0-15）
 				//纹理单元链接了纹理和采样器的对应关系
 				//假设有samplerA,samplerB两个采样器
@@ -111,7 +101,7 @@ namespace RGL {
 				//储存下纹理和纹理单元的对应关系
 				textureUnitIdx[textIdx] = tUnitIdx;
 				glCall(glBindTexture, GL_TEXTURE_2D, textures[textIdx]);
-				
+
 				glcore::glCall(glTexImage2D, GL_TEXTURE_2D, 0,//mipmap level
 					GL_RGBA, //内部格式，显存里的图像格式
 					flippedImg.width, flippedImg.height, 0,//always zero
