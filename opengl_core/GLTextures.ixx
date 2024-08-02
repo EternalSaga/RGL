@@ -7,6 +7,7 @@ module;
 #include <filesystem>
 #include <stdexcept>
 #include "Helpers.hpp"
+#include <memory>
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 export module GLTexture;
@@ -25,20 +26,20 @@ namespace RGL {
 			int height;
 			int channels;
 		};
-		export class LoadedImg{
+		export class LoadedImg {
 			uint8_t* imgData;
 			int width;
 			int height;
 			int channels;
 		public:
 			LoadedImg(const fs::path& imagePath) {
-				
+
 				stbi_set_flip_vertically_on_load(true);
-				imgData = stbi_load(imagePath.generic_string().c_str(), &width, &height, & channels, STBI_rgb_alpha);
+				imgData = stbi_load(imagePath.generic_string().c_str(), &width, &height, &channels, STBI_rgb_alpha);
 			}
 
 			operator ImgRef() {
-				return ImgRef(imgData,width, height,channels);
+				return ImgRef(imgData, width, height, channels);
 			}
 
 			~LoadedImg() {
@@ -49,13 +50,54 @@ namespace RGL {
 				}
 			}
 		};
+	}
+	namespace glcore{
+		using namespace io;
+
+
+		constexpr GLenum TextureUnit(GLuint textUnitIndex) {
+			if (textUnitIndex > 31)
+			{
+				throw std::invalid_argument("Texture unit out of range");
+			}
+			return GL_TEXTURE0 + textUnitIndex;
+		}
+
 
 		export class Texture {
-			GLuint texture;
-			//GLuint mNumOfTextures;
+			std::unique_ptr<GLuint[]> textures;
+
+			std::unique_ptr<GLint[]> textureUnitIdx;
+
+			size_t mNumOfTextures;
+
+			
 		public:
-			Texture() {
-				glcore::glCall(glGenTextures, 1, &texture);
+
+			Texture(size_t numOfTextrues):mNumOfTextures(numOfTextrues) {
+				textures = std::make_unique<GLuint[]>(mNumOfTextures);
+				textureUnitIdx = std::make_unique<GLint[]>(mNumOfTextures);
+				glcore::glCall(glGenTextures, mNumOfTextures, textures.get());
+				
+			}
+
+			
+
+			Texture() :Texture(1) {
+				
+
+			}
+
+			GLuint getTextureUnitID(GLuint textrueID) const {
+				assert(textrueID < mNumOfTextures);
+				return textureUnitIdx[textrueID];
+			}
+
+			GLint getTextureUnitID() const {
+				return getTextureUnitID(0);
+			}
+
+			void set(const ImgRef& flippedImg,GLuint textIdx,GLuint tUnitIdx) {
 				//激活纹理单元，纹理单元有16个（0-15）
 				//纹理单元链接了纹理和采样器的对应关系
 				//假设有samplerA,samplerB两个采样器
@@ -65,13 +107,10 @@ namespace RGL {
 				//unit3:t3-A
 				//这些对应关系可以随时修改
 				//又是个辣鸡取名，应该叫做texture_sampler_mapper
-				glcore::glCall(glActiveTexture, GL_TEXTURE0);
-
-				glcore::glCall(glBindTexture, GL_TEXTURE_2D, texture);
-			}
-
-			void set(const ImgRef& flippedImg) {
-
+				glCall(glActiveTexture, TextureUnit(tUnitIdx));
+				//储存下纹理和纹理单元的对应关系
+				textureUnitIdx[textIdx] = tUnitIdx;
+				glCall(glBindTexture, GL_TEXTURE_2D, textures[textIdx]);
 				
 				glcore::glCall(glTexImage2D, GL_TEXTURE_2D, 0,//mipmap level
 					GL_RGBA, //内部格式，显存里的图像格式
@@ -94,6 +133,12 @@ namespace RGL {
 					GL_REPEAT);//重复纹理
 
 			}
+
+			void set(const ImgRef& flippedImg) {
+				assert(mNumOfTextures == 1);
+				set(flippedImg, 0, 0);
+			}
+
 			~Texture()
 			{
 

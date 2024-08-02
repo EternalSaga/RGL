@@ -229,7 +229,7 @@ namespace RGL {
 			std::unique_ptr<VAO> vao;
 			std::unique_ptr<Shader> shader;
 			std::unique_ptr<EBO> ebo;
-			std::unique_ptr<io::Texture> texture;
+			std::unique_ptr<Texture> texture;
 
 		public:
 			TexturePractice() {
@@ -242,6 +242,13 @@ namespace RGL {
 					{SHADER_TYPE::FRAGMENT,{"shaders\\beginner\\uvshader.frag"}}
 				};
 				shader = std::make_unique<Shader>(shaders);
+
+				texture = std::make_unique<Texture>();
+				{
+					io::LoadedImg img("./assest/001.jpg");
+					texture->set(img);
+				}
+
 				vao->setShaderProgram(*shader);
 
 				vao->set(*vbo, 3, 5, 0, "inPos");
@@ -253,16 +260,15 @@ namespace RGL {
 
 				vao->addEBO(*ebo);
 
-				texture = std::make_unique<io::Texture>();
-				{
-					io::LoadedImg img("./assest/002.jpg");
-					texture->set(img);
-				}
+
 			}
 
 			void operator()() override {
 				shader->useProgram();
-				shader->setUniform("sampler", 0);
+
+
+
+				shader->setUniform("sampler", texture->getTextureUnitID());
 				glCall(glBindVertexArray,*vao);
 				glCall(glDrawElements, GL_TRIANGLES, 3, GL_UNSIGNED_INT, nullptr);
 			}
