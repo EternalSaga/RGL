@@ -246,9 +246,9 @@ namespace RGL {
 
 		const std::vector<float> rectangle_pos_uv = {
 			-0.5f, -0.5f, 0.0f,0.0f, 0.0f,
-			0.5f, -0.5f, 0.0f,1.0f, 0.0f,
-			-0.5f,  0.5f, 0.0f,0.0f, 1.0f,
-			0.5f,  0.5f, 0.0f,1.0f, 1.0f,
+			0.5f, -0.5f, 0.0f,2.0f, 0.0f,
+			-0.5f,  0.5f, 0.0f,0.0f, 2.0f,
+			0.5f,  0.5f, 0.0f,2.0f, 2.0f,
 		};
 		const std::vector<GLint> rectangle_indeces ={
 			0, 1, 2,

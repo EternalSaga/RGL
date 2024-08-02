@@ -17,6 +17,7 @@ import GLFramework;
 import GLCheckError;
 
 import StaticEffectPractice;
+import DynamicEffectPractice;
 
 namespace RGL {
 
@@ -56,7 +57,7 @@ namespace RGL {
 			}
 
 			this->glCxt = new glcore::GLContext(window_, width, height);
-			auto interLeavedBuffer = std::make_unique<glcore::RectangleTexture>();
+			auto interLeavedBuffer = std::make_unique<glcore::MovingTexture>();
 			this->glCxt->setRenderer(std::move(interLeavedBuffer));
 		}
 		static std::function<resize_cbk_type> resizeCallback;
