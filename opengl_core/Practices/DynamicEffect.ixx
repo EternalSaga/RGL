@@ -129,7 +129,7 @@ namespace RGL {
 				texture = std::make_unique<Texture>();
 				{
 					io::LoadedImg img("./assest/001.jpg");
-					texture->set(img);
+					texture->set(img,0);
 				}
 
 				vao->setShaderProgram(*shader);
