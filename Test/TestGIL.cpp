@@ -1,38 +1,56 @@
-﻿#include <boost/gil.hpp>
-#include <boost/gil/extension/io/jpeg.hpp>
-#include <boost/gil/extension/io/png.hpp>
-#include <filesystem>
-namespace bg = boost::gil;
-namespace fs = std::filesystem;
-class RawImg {
-	bg::rgba8_image_t image;
-	bg::rgba8_view_t flippedView;
-public:
-	RawImg(const fs::path& imagePath) {
-		if (imagePath.extension() == ".jpg" || imagePath.extension() == ".jpeg")
-		{
-			bg::read_and_convert_image(imagePath, image, bg::jpeg_tag());
-		}
-		else if (imagePath.extension() == ".png") {
-			bg::read_and_convert_image(imagePath, image, bg::png_tag());
-		}
-		else
-		{
-			throw std::logic_error("Unsupoorted image format.");
-		}
+﻿#include <iostream>
+#include <string_view>
+#include <boost/hana/tuple.hpp>
+#include <boost/hana/for_each.hpp>
 
-		flippedView = bg::flipped_up_down_view(bg::view(image));
-
-	}
-
-	~RawImg() = default;
-	const bg::rgba8_view_t getYFlippedView() const {
-		return flippedView;
-	}
+#include <array>
+template<typename T>
+struct VertexElement
+{
+	std::string_view name;
+	consteval size_t getSize() { return sizeof(T); };
+	consteval size_t getLength() {
+		T t;
+		return std::size(t);
+	};
+	VertexElement(std::string_view n) :name(n) {}
 };
+namespace hana = boost::hana;
+using namespace hana::literals;
+
+
+
+
+template <typename T>
+concept IsVertexElementTuple = requires(T t) {
+	hana::for_each(t, [](auto t) {
+		t.name->std::convertible_to<std::string_view>;
+		t.getSize()->std::convertible_to<std::size_t>;
+		t.getLength()->std::convertible_to<std::size_t>;
+		});
+};
+
+template<IsVertexElementTuple T>
+void printOffset(const T& vertexDescription) {
+
+	// 遍历offsets元组，输出每个元素的偏移量
+	size_t current_offset = 0;
+	hana::for_each(vertexDescription, [&current_offset](auto vert) {
+		std::cout << vert.name << " offset: " << current_offset <<". Length:  "<< vert.getLength() << std::endl;
+		current_offset += vert.getSize();
+		});
+}
+
 int main() {
-	RawImg img("E:\\program\\cpp_proj\\RGL\\assest\\002.jpg");
-	bg::rgba8_view_t flipped = img.getYFlippedView();
-	std::uint8_t* data = bg::interleaved_view_get_raw_data(flipped);
+
+	auto vertexDescription = hana::make_tuple(
+		VertexElement<float[3]>("pos"),
+		VertexElement<float[2]>("uv"),
+		VertexElement<float[3]>("norm"),
+		VertexElement<float[4]>("color")
+	);
+
+	printOffset(vertexDescription);
+
 	return 0;
-};
+}

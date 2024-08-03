@@ -4,6 +4,7 @@
 #include <glad/glad.h>
 #include "Helpers.hpp"
 #include <GLFW/glfw3.h>
+#include "VertexDescriptor.hpp"
 export module DynamicEffectPractice;
 import GLObjWrapper;
 
@@ -108,6 +109,8 @@ namespace RGL {
 			2, 1, 3
 		};
 
+
+
 		export class MovingTexture : public GLRenderer {
 			std::unique_ptr<VBO> vbo;
 			std::unique_ptr<VAO> vao;
@@ -134,8 +137,12 @@ namespace RGL {
 
 				vao->setShaderProgram(*shader);
 
-				vao->set(*vbo, 3, 5, 0, "inPos");
-				vao->set(*vbo, 2, 5, 3, "inUV");
+				/*vao->set(*vbo, 3, 5, 0, "inPos");
+				vao->set(*vbo, 2, 5, 3, "inUV");*/
+
+				auto desc = hana::make_tuple(VertexElement<float[3]>("inPos"), VertexElement<float[2]>("inUV"));
+
+				vao->setDSA(0, *vbo, desc);
 
 				ebo = std::make_unique<EBO>();
 
@@ -151,6 +158,12 @@ namespace RGL {
 				glCall(glBindVertexArray, *vao);
 				glCall(glDrawElements, GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr);
 			}
+		};
+
+		struct Vetex_UV
+		{
+			GLfloat position[3];
+			GLfloat uv[2];
 		};
 
 	}

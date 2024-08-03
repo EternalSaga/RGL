@@ -11,5 +11,5 @@ target_link_libraries(TestGIL PRIVATE JPEG::JPEG)
 find_package(PNG REQUIRED)
 target_link_libraries(TestGIL PUBLIC PNG::PNG)
 
-target_compile_features(TestGIL PRIVATE cxx_std_20)
+target_compile_features(TestGIL PRIVATE cxx_std_23)
 

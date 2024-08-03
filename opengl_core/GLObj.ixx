@@ -9,6 +9,8 @@
 #include <vector>
 #include <utility>
 #include <string>
+#include "VertexDescriptor.hpp"
+#include <iostream>
 export module GLObjWrapper;
 
 import GLCheckError;
@@ -23,31 +25,22 @@ namespace RGL {
 			std::unique_ptr<GLuint[]> vbo;
 			GLuint mNumOfVbo;
 			spdlog::logger* logger;
+
+		public:
 			VBO(GLuint numOfVbo) :mNumOfVbo(numOfVbo) {
 				//genBuffer没有分配显存,仅仅是创建vbo
 				vbo = std::make_unique<GLuint[]>(mNumOfVbo);
 				logger = Logger::getInstance();
-				glCall(glGenBuffers, mNumOfVbo, vbo.get());
+				glCall(glCreateBuffers, mNumOfVbo, vbo.get());
 
-				for (size_t i = 0; i < mNumOfVbo; i++)
-				{
-					glCall(glBindBuffer, GL_ARRAY_BUFFER, vbo[i]);
-					if (!glIsBuffer(vbo[i])) {
-						logger->error("Index {} is not a valid vbo object.", vbo[i]);
-					}
-				}
 			}
-
-
-		public:
-
 			//长度为1的封装
 			VBO() :VBO(1) {
 			}
 			~VBO()
 			{
 				glCall(glBindBuffer, GL_ARRAY_BUFFER, 0);
-				glCall(glDeleteBuffers,mNumOfVbo, vbo.get());
+				glCall(glDeleteBuffers, mNumOfVbo, vbo.get());
 
 			}
 			//根据index获取vbo
@@ -72,14 +65,14 @@ namespace RGL {
 			//调用前先绑定
 			void setData(GLuint vboIdx, const std::vector<float>& data) {
 				assert(vboIdx < mNumOfVbo);
-				glCall(glBindBuffer, GL_ARRAY_BUFFER, vbo[vboIdx]);
+				//glCall(glBindBuffer, GL_ARRAY_BUFFER,);
 
 				if (!glIsBuffer(vbo[vboIdx])) {
 					logger->error("Index {} is not a valid vbo object.", vboIdx);
 				}
 
 				//最后一个参数代表传入的数据没什么变化，提供驱动优化策略，还有一个是DYNAMIC_DRAW
-				glCall(glBufferData, GL_ARRAY_BUFFER, data.size() * sizeof(float), data.data(), GL_STATIC_DRAW);
+				glCall(glNamedBufferData, vbo[vboIdx], data.size() * sizeof(float), data.data(), GL_STATIC_DRAW);
 			}
 			//长度为1时发送一个数据给GPU
 			void setData(const std::vector<float>& data) {
@@ -102,7 +95,8 @@ namespace RGL {
 				ebo = std::make_unique<GLuint[]>(mNumOfEbo);
 
 				//创建mNumOfEbo个ebo，未分配显存
-				glCall(glGenBuffers,mNumOfEbo, ebo.get());
+				//glGenBuffers,mNumOfEbo, ebo.get());
+				glCall(glCreateBuffers, mNumOfEbo, ebo.get());
 			}
 
 			EBO() :EBO(1) { }
@@ -115,8 +109,8 @@ namespace RGL {
 			void setData(GLuint eboIdx, const std::vector<GLint>& data) {
 				assert(eboIdx < mNumOfEbo);
 				//创建数据前先要绑定需要操作的ebo
-				glCall(glBindBuffer, GL_ELEMENT_ARRAY_BUFFER, ebo[eboIdx]);
-				glCall(glBufferData, GL_ELEMENT_ARRAY_BUFFER, data.size() * sizeof(decltype(data[0])), data.data(), GL_STATIC_DRAW);
+
+				glNamedBufferData(ebo[eboIdx], data.size() * sizeof(decltype(data[0])), data.data(), GL_STATIC_DRAW);
 			}
 
 			void setData(const std::vector<GLint>& data) {
@@ -135,7 +129,7 @@ namespace RGL {
 
 			~EBO() {
 				//glCall(glDeleteBuffers,mNumOfEbo, static_cast<GLuint*>(ebo.get()));
-				glCall(glDeleteBuffers,mNumOfEbo, static_cast<GLuint*>(ebo.get()));
+				glCall(glDeleteBuffers, mNumOfEbo, static_cast<GLuint*>(ebo.get()));
 			}
 		};
 
@@ -166,23 +160,24 @@ namespace RGL {
 
 			GLuint mNumOfVao;
 
-			VAO(size_t numOfVao) :mNumOfVao(numOfVao), shaderProgram{} {
-				vao = std::make_unique<GLuint[]>(mNumOfVao);
-				glCall(glGenVertexArrays,mNumOfVao, vao.get());
-				logger = Logger::getInstance();
 
-			}
 			spdlog::logger* logger;
 
 			//到时候直接从shader program里查询不同顶点属性的layout location
 			std::optional<GLuint> shaderProgram;
 
 		public:
+			VAO(size_t numOfVao) :mNumOfVao(numOfVao), shaderProgram{} {
+				vao = std::make_unique<GLuint[]>(mNumOfVao);
+				glCall(glCreateVertexArrays, mNumOfVao, vao.get());
 
+				logger = Logger::getInstance();
+
+			}
 			VAO() :VAO(1) {}
 			~VAO() {
-				glCall(glBindVertexArray,0);
-				glCall(glDeleteVertexArrays,mNumOfVao, vao.get());
+				glCall(glBindVertexArray, 0);
+				glCall(glDeleteVertexArrays, mNumOfVao, vao.get());
 			}
 
 			void setShaderProgram(GLuint shader) {
@@ -214,7 +209,7 @@ namespace RGL {
 				//因为要vao是vbo的属性，所以先绑定vbo，再设置vao
 				glCall(glBindBuffer, GL_ARRAY_BUFFER, vbo);
 
-				const auto location = glCallRet(glGetAttribLocation,shaderProgram.value(), shaderInputName.c_str());
+				const auto location = glCallRet(glGetAttribLocation, shaderProgram.value(), shaderInputName.c_str());
 				glCheckError();
 
 				glCall(glEnableVertexAttribArray, location);
@@ -230,7 +225,7 @@ namespace RGL {
 			/// <param name="vbo"></param>
 			/// <param name="numOfFloat"></param>
 			/// <param name="shaderInputName"></param>
-			void set(GLuint vbo, GLuint numOfFloat,const std::string& shaderInputName) {
+			void set(GLuint vbo, GLuint numOfFloat, const std::string& shaderInputName) {
 				assert(mNumOfVao == 1);
 				set(0, vbo, shaderInputName);
 			}
@@ -254,7 +249,7 @@ namespace RGL {
 				glCall(glBindVertexArray, vao[vaoIdx]);
 				glCall(glBindBuffer, GL_ARRAY_BUFFER, vbo);
 
-				const auto location = glCallRet(glGetAttribLocation,shaderProgram.value(), shaderInputName.c_str());
+				const auto location = glCallRet(glGetAttribLocation, shaderProgram.value(), shaderInputName.c_str());
 
 
 				glCall(glEnableVertexAttribArray, location);
@@ -266,6 +261,26 @@ namespace RGL {
 					stride * sizeof(float),	//相邻vbo元素之间的跨度，就是单个vbo的大小（stride）
 					(void*)(offset * sizeof(float)));				//vbo内部跨度，该属性是单个vbo起始地址的偏移量（offset)
 
+			}
+			template<IsVertexElementTuple VertexDescType>
+			void setDSA(const GLuint vaoIdx, const GLuint vbo, const VertexDescType& vertexDescription) {
+
+				size_t current_offset = 0;
+				size_t bindIdx = 0;
+				// 编译期遍历offsets元组，编译期计算offset，首先在相应的vertex shader的layout location上激活vao属性
+
+				hana::for_each(vertexDescription, [this,&current_offset, &bindIdx,  &vaoIdx, &vbo](auto vert) {
+					//std::cout << vert.name << " offset: " << current_offset << ". Length:  " << vert.getLength() << std::endl;
+					const std::string shaderInputName = vert.name;
+					GLuint location = glCallRet(glGetAttribLocation, shaderProgram.value(), shaderInputName.c_str());
+					const GLuint length = vert.getLength();
+					glCall(glEnableVertexArrayAttrib, vao[vaoIdx], location);
+					glCall(glVertexArrayAttribFormat, vao[vaoIdx], location, length, GL_FLOAT, GL_TRUE, current_offset);
+					glCall(glVertexArrayAttribBinding, vao[vaoIdx], location, bindIdx);
+					bindIdx++;
+					current_offset += vert.getSize();
+					});
+				
 
 			}
 
