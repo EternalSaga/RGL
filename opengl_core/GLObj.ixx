@@ -269,19 +269,16 @@ namespace RGL {
 			template<IsVertexElementTuple VertexDescType>
 			void setDSA_interleaved(const GLuint vaoIdx, const GLuint vbo, const VertexDescType& vertexDescription) {
 				size_t size = 0;
+				//累加总size
 				hana::for_each(vertexDescription, [&size](auto vert) {
 					size += vert.getSize();
 					});
-				//关联vbo和vao,设置vertex总大小
-				
+				//关联vbo和vao,设置vertex总大小，设置binding index为0，所以下面的绑定点也是0，毕竟interleaved，一个绑定点就够了。
 				glCall(glVertexArrayVertexBuffer,vao[vaoIdx], 0, vbo, 0, size);
-
 
 				size_t current_offset = 0;
 				// 编译期遍历顶点属性元组，计算offset
 				hana::for_each(vertexDescription, [this,&current_offset,  &vaoIdx, &vbo](auto vert) {
-
-					//std::cout << vert.name << " offset: " << current_offset << ". Length:  " << vert.getLength() << std::endl;
 					const std::string shaderInputName = vert.name;
 					GLuint location = glCallRet(glGetAttribLocation, shaderProgram.value(), shaderInputName.c_str());
 					const GLuint length = vert.getLength();
@@ -289,9 +286,8 @@ namespace RGL {
 					glCall(glEnableVertexArrayAttrib, vao[vaoIdx], location);
 					//设置顶点描述
 					glCall(glVertexArrayAttribFormat, vao[vaoIdx], location, length, GL_FLOAT, GL_TRUE, current_offset);
-					//绑定vao,因为交错式缓冲区所有数据公用一块内存，所以binding index都为0
+					//绑定到vao的绑定点上,对于interleaved buffer，就一个buffer，上面已经设置了绑定点为0，所以这里都是0
 					glCall(glVertexArrayAttribBinding, vao[vaoIdx], location, 0);
-
 					current_offset += vert.getSize();//累加size以更新offset
 					});
 			}

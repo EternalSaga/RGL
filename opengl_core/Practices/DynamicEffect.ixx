@@ -136,16 +136,10 @@ namespace RGL {
 				}
 
 				vao->setShaderProgram(*shader);
-
-
 				auto desc = hana::make_tuple(VertexElement<float[3]>("inPos"), VertexElement<float[2]>("inUV"));
-
 				vao->setDSA_interleaved(*vbo, desc);
-
 				ebo = std::make_unique<EBO>();
-
 				ebo->setData(rectangle_indeces);
-
 				vao->addEBO(*ebo);
 			}
 			void operator()() override {
