@@ -2,7 +2,7 @@
 #include <string_view>
 #include <boost/hana/tuple.hpp>
 #include <boost/hana/for_each.hpp>
-
+#include <boost/hana/all_of.hpp>
 #include <array>
 template<typename T>
 struct VertexElement
@@ -32,6 +32,12 @@ concept IsVertexElementTuple = requires(T t) {
 
 template<IsVertexElementTuple T>
 void printOffset(const T& vertexDescription) {
+
+	size_t size = 0;
+	hana::for_each(vertexDescription, [&size](auto vert) {
+		size += vert.getSize();
+		});
+	std::cout << "Total size:" <<size<< std::endl;
 
 	// 遍历offsets元组，输出每个元素的偏移量
 	size_t current_offset = 0;

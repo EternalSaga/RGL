@@ -10,6 +10,8 @@
 #include <utility>
 #include <string>
 #include "VertexDescriptor.hpp"
+#include <boost/hana/tuple.hpp>
+#include <boost/hana/for_each.hpp>
 #include <iostream>
 export module GLObjWrapper;
 
@@ -265,11 +267,20 @@ namespace RGL {
 			//VertexDescType是一个包含了顶点属性的元组，元组成员拥有获取属性长度，size，以及命名的能力
 			//假设有VertexDescType desc;desc可以.name，getLength()，getSize()
 			template<IsVertexElementTuple VertexDescType>
-			void setDSA(const GLuint vaoIdx, const GLuint vbo, const VertexDescType& vertexDescription) {
+			void setDSA_interleaved(const GLuint vaoIdx, const GLuint vbo, const VertexDescType& vertexDescription) {
+				size_t size = 0;
+				hana::for_each(vertexDescription, [&size](auto vert) {
+					size += vert.getSize();
+					});
+				//关联vbo和vao,设置vertex总大小
+				
+				glCall(glVertexArrayVertexBuffer,vao[vaoIdx], 0, vbo, 0, size);
+
+
 				size_t current_offset = 0;
-				size_t bindIdx = 0;
 				// 编译期遍历顶点属性元组，计算offset
-				hana::for_each(vertexDescription, [this,&current_offset, &bindIdx,  &vaoIdx, &vbo](auto vert) {
+				hana::for_each(vertexDescription, [this,&current_offset,  &vaoIdx, &vbo](auto vert) {
+
 					//std::cout << vert.name << " offset: " << current_offset << ". Length:  " << vert.getLength() << std::endl;
 					const std::string shaderInputName = vert.name;
 					GLuint location = glCallRet(glGetAttribLocation, shaderProgram.value(), shaderInputName.c_str());
@@ -278,13 +289,17 @@ namespace RGL {
 					glCall(glEnableVertexArrayAttrib, vao[vaoIdx], location);
 					//设置顶点描述
 					glCall(glVertexArrayAttribFormat, vao[vaoIdx], location, length, GL_FLOAT, GL_TRUE, current_offset);
-					//绑定vao
-					glCall(glVertexArrayAttribBinding, vao[vaoIdx], location, bindIdx);
-					bindIdx++;
+					//绑定vao,因为交错式缓冲区所有数据公用一块内存，所以binding index都为0
+					glCall(glVertexArrayAttribBinding, vao[vaoIdx], location, 0);
+
 					current_offset += vert.getSize();//累加size以更新offset
 					});
 			}
 
+			template<IsVertexElementTuple VertexDescType>
+			void setDSA_interleaved(const GLuint vbo, const VertexDescType& vertexDescription) {
+				setDSA_interleaved(0, vbo, vertexDescription);
+			}
 			/// <summary>
 			/// 当VAO长度为1的简化
 			/// </summary>

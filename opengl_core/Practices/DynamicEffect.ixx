@@ -137,12 +137,12 @@ namespace RGL {
 
 				vao->setShaderProgram(*shader);
 				//attribute pointer渲染正常
-				/*vao->set(*vbo, 3, 5, 0, "inPos");
-				vao->set(*vbo, 2, 5, 3, "inUV");*/
+				vao->set(*vbo, 3, 5, 0, "inPos");
+				vao->set(*vbo, 2, 5, 3, "inUV");
 
 				auto desc = hana::make_tuple(VertexElement<float[3]>("inPos"), VertexElement<float[2]>("inUV"));
-				//attrib format 渲染时access内存异常
-				vao->setDSA(0, *vbo, desc);
+
+				vao->setDSA_interleaved(*vbo, desc);
 
 				ebo = std::make_unique<EBO>();
 
