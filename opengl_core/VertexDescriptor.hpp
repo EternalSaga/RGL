@@ -9,13 +9,13 @@ namespace RGL {
 		template<typename T>
 		struct VertexElement
 		{
-			std::string name;
+			std::string_view name;
 			consteval size_t getSize() { return sizeof(T); };
 			consteval size_t getLength() {
 				T t;
 				return std::size(t);
 			};
-			VertexElement(std::string n) :name(n) {}
+			VertexElement(std::string_view n) :name(n) {}
 		};
 		namespace hana = boost::hana;
 		using namespace hana::literals;
@@ -23,7 +23,7 @@ namespace RGL {
 		template <typename T>
 		concept IsVertexElementTuple = requires(T t) {
 			hana::for_each(t, [](auto t) {
-				t.name->std::convertible_to<std::string>;
+				t.name->std::convertible_to<std::string_view>;
 				t.getSize()->std::convertible_to<std::size_t>;
 				t.getLength()->std::convertible_to<std::size_t>;
 				});

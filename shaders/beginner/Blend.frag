@@ -14,7 +14,7 @@ void main(){
 	vec4 noiseColor = texture(randomNoise, uv);
 	float weight = noiseColor.r;
 	//	vec4 finalColor = grassColor * (1.0 - weight) + landColor * weight;
-	vec4 finalColor = mix(grassColor, landColor,weight);
+	vec4 finalColor = mix(grassColor, landColor,weight);//weight是land权重，grass就是1-weight权重
 
 	FragColor = vec4(finalColor.rgb, 1.0);
 }

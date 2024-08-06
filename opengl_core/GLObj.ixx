@@ -268,8 +268,9 @@ namespace RGL {
 			//假设有VertexDescType desc;desc可以.name，getLength()，getSize()
 			template<IsVertexElementTuple VertexDescType>
 			void setDSA_interleaved(const GLuint vaoIdx, const GLuint vbo, const VertexDescType& vertexDescription) {
+
 				size_t size = 0;
-				//累加总size
+				////累加总size
 				hana::for_each(vertexDescription, [&size](auto vert) {
 					size += vert.getSize();
 					});
@@ -279,8 +280,8 @@ namespace RGL {
 				size_t current_offset = 0;
 				// 编译期遍历顶点属性元组，计算offset
 				hana::for_each(vertexDescription, [this,&current_offset,  &vaoIdx, &vbo](auto vert) {
-					const std::string shaderInputName = vert.name;
-					GLuint location = glCallRet(glGetAttribLocation, shaderProgram.value(), shaderInputName.c_str());
+					const std::string_view shaderInputName = vert.name;
+					GLuint location = glCallRet(glGetAttribLocation, shaderProgram.value(), std::string(shaderInputName).c_str());
 					const GLuint length = vert.getLength();
 					//首先在相应的vertex shader的layout location上激活vao属性
 					glCall(glEnableVertexArrayAttrib, vao[vaoIdx], location);

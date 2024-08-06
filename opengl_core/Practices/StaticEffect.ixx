@@ -218,7 +218,7 @@ namespace RGL {
 				texture = std::make_unique<Texture>();
 				{
 					io::LoadedImg img("./assest/001.jpg");
-					texture->set(img,0);
+					texture->set(img,false);
 				}
 
 				vao->setShaderProgram(*shader);
@@ -281,7 +281,7 @@ namespace RGL {
 				texture = std::make_unique<Texture>();
 				{
 					io::LoadedImg img("./assest/001.jpg");
-					texture->set(img,0);
+					texture->set(img,false);
 				}
 
 				vao->setShaderProgram(*shader);
@@ -324,15 +324,15 @@ namespace RGL {
 				grass_land_noise = std::make_unique<Texture>(3);
 				{
 					io::LoadedImg grassImg("./assest/grass.jpg");
-					grass_land_noise->set(grassImg, 0, 0, 0);
+					grass_land_noise->set(grassImg, 0, true);
 				}
 				{
 					io::LoadedImg landImg("./assest/land.jpg");
-					grass_land_noise->set(landImg, 1, 1, 0);
+					grass_land_noise->set(landImg, 1, true);
 				}
 				{
-					io::LoadedImg landImg("./assest/noise.jpg");
-					grass_land_noise->set(landImg, 2, 2, 0);
+					io::LoadedImg noiseImg("./assest/noise.jpg");
+					grass_land_noise->set(noiseImg, 2, true);
 				}
 				vao->setShaderProgram(*shader);
 				auto desc = hana::make_tuple(VertexElement<float[3]>("inPos"), VertexElement<float[2]>("inUV"));

@@ -58,7 +58,7 @@ namespace RGL {
 			}
 
 			this->glCxt = new glcore::GLContext(window_, width, height);
-			auto interLeavedBuffer = std::make_unique<glcore::Blend>();
+			auto interLeavedBuffer = std::make_unique<glcore::BlendMipmap>();
 			this->glCxt->setRenderer(std::move(interLeavedBuffer));
 		}
 		static std::function<resize_cbk_type> resizeCallback;
