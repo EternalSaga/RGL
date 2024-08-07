@@ -9,7 +9,7 @@ export module GLCheckError;
 namespace RGL {
 	namespace glcore {
 		namespace lv = spdlog::level;
-
+		
 		export class GLInitExpt : public std::runtime_error
 		{
 		public:

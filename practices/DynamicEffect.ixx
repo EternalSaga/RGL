@@ -5,6 +5,9 @@
 #include "Helpers.hpp"
 #include <GLFW/glfw3.h>
 #include "VertexDescriptor.hpp"
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp> 
 export module DynamicEffectPractice;
 import GLObjWrapper;
 
@@ -157,11 +160,7 @@ namespace RGL {
 	-0.5f,  0.5f, 0.0f,0.0f, 1.0f,
 	0.5f,  0.5f, 0.0f,1.0f, 1.0f,
 		};
-		struct Vetex_UV
-		{
-			GLfloat position[3];
-			GLfloat uv[2];
-		};
+
 		export class BlendMipmap : public GLRenderer {
 			std::unique_ptr<VBO> vbo;
 			std::unique_ptr<VAO> vao;

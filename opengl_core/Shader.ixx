@@ -6,12 +6,14 @@
 #include <spdlog/logger.h>
 #include "Helpers.hpp"
 #include "glUniformWrapper.hpp"
+#include <glm/glm.hpp>
+#include <glm/gtc/type_ptr.hpp>
 export module Shader;
 
 import GLCheckError;
 
 namespace RGL {
-	namespace io {
+	namespace glcore {
 		namespace fs = std::filesystem;
 
 		/*
@@ -158,13 +160,19 @@ namespace RGL {
 				glUniformVec(location, uniformVarCount, data.data());
 			}
 
+
+			template<GLuint Cols, GLuint Rows, glm::qualifier q>
+			void setUniformMat(const std::string& uniformName,const glm::mat<Cols, Rows, float, q>& m) {
+				const auto location = glcore::glCallRet(glGetUniformLocation, this->shaderProgram, uniformName.c_str());
+				glUniformMatrix(location, m);
+			}
+
 		private:
 			std::string loadFile(const fs::path& p){
 				std::ifstream ifs(p, std::ios::in);
 
 				if (ifs.fail())
 				{
-					
 					throw glcore::GLInitExpt("Open file failed");
 				}
 

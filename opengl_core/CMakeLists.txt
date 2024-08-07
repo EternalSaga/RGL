@@ -1,6 +1,6 @@
 ﻿add_library(GLFramework)
 
-target_sources(GLFramework PUBLIC FILE_SET CXX_MODULES FILES "GLFramework.ixx" "GLCheckError.ixx" "GLObj.ixx" "Practices/StaticEffect.ixx"  "Shader.ixx" "Practices/DynamicEffect.ixx" "GLTextures.ixx" )
+target_sources(GLFramework PUBLIC FILE_SET CXX_MODULES FILES "GLFramework.ixx" "GLCheckError.ixx" "GLObj.ixx" "Shader.ixx" "GLTextures.ixx" )
 
 
 
@@ -32,7 +32,7 @@ target_link_libraries(GLFramework PUBLIC JPEG::JPEG)
 find_package(PNG REQUIRED)
 target_link_libraries(GLFramework PUBLIC PNG::PNG)
 
-target_compile_features(GLFramework PRIVATE cxx_std_20)
+target_compile_features(GLFramework PRIVATE cxx_std_23)
 
 find_package(Stb REQUIRED)
 target_include_directories(GLFramework PUBLIC ${Stb_INCLUDE_DIR})

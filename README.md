@@ -40,7 +40,7 @@ Open the repostory folder with vs2022 then press ctrl + shift + B to build it. P
 * opengl_core
 
   Encapsulates OpenGL functionalities.
-* opengl_core-Practices
+* practices
 
   Demonstrates the use of OpenGL encapsulation through concrete implementations.  
   All classes in this folder inherit from the Renderer class in the front-end.

@@ -16,7 +16,7 @@ find_package(spdlog CONFIG REQUIRED)
 target_link_libraries(RLApp PUBLIC spdlog::spdlog)
 
 
-target_link_libraries(RLApp PRIVATE GLFramework)
+target_link_libraries(RLApp PRIVATE GLFramework GLPractices)
 
 target_compile_features(RLApp PRIVATE cxx_std_23)
 

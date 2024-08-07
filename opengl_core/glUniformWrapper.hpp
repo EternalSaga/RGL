@@ -2,6 +2,10 @@
 #include <glad/glad.h>
 #include <type_traits>
 #include <utility>
+#include <glm/glm.hpp>
+#include <glm/gtc/type_ptr.hpp>
+#include <tuple>
+#include "Helpers.hpp"
 namespace RGL {
 	namespace glcore {
 		template <typename T, typename... Args>
@@ -91,11 +95,11 @@ namespace RGL {
 				{
 					glUniform1fv(location, uniformVarCount, data);
 				}
-				else if (std::is_same_v<T, GLint>)
+				else if constexpr (std::is_same_v<T, GLint>)
 				{
 					glUniform1iv(location, uniformVarCount, data);
 				}
-				else if (std::is_same_v<T, GLuint>) {
+				else if constexpr (std::is_same_v<T, GLuint>) {
 					glUniform1uiv(location, uniformVarCount, data);
 				}
 			}
@@ -110,7 +114,7 @@ namespace RGL {
 					glUniform2iv(location, uniformVarCount, data);
 
 				}
-				else if (std::is_same_v<T, GLuint>) {
+				else if constexpr (std::is_same_v<T, GLuint>) {
 					glUniform2iuv(location, uniformVarCount, data);
 				}
 			}
@@ -119,11 +123,11 @@ namespace RGL {
 				{
 					glUniform3fv(location, uniformVarCount, data);
 				}
-				else if (std::is_same_v<T, GLint>)
+				else if constexpr (std::is_same_v<T, GLint>)
 				{
 					glUniform3iv(location, uniformVarCount, data);
 				}
-				else if (std::is_same_v<T, GLuint>) {
+				else if constexpr (std::is_same_v<T, GLuint>) {
 					glUniform3iuv(location, uniformVarCount, data);
 				}
 			}
@@ -132,15 +136,72 @@ namespace RGL {
 				{
 					glUniform4fv(location, uniformVarCount, data);
 				}
-				else if (std::is_same_v<T, GLint>)
+				else if constexpr (std::is_same_v<T, GLint>)
 				{
 					glUniform4iv(location, uniformVarCount, data);
 
 				}
-				else if (std::is_same_v<T, GLuint>) {
+				else if constexpr (std::is_same_v<T, GLuint>) {
 					glUniform4iuv(location, uniformVarCount, data);
 				}
 			}
+		}
+		
+
+
+		template<GLuint Cols, GLuint Rows,glm::qualifier q>
+		void glUniformMatrix(GLint location, const glm::mat<Cols, Rows,float, q>& value) {
+
+				if constexpr (Cols == 2)
+				{
+					if constexpr (Rows == 2) {
+						glCall(glUniformMatrix2fv,location, 1, GL_FALSE, glm::value_ptr(value));
+					}
+					else if constexpr (Rows == 3) {
+						glCall(glUniformMatrix2x3fv,location, 1, GL_FALSE, glm::value_ptr(value));
+					}
+					else if constexpr (Rows == 4) {
+						glCall(glUniformMatrix2x4fv,location, 1, GL_FALSE, glm::value_ptr(value));
+					}
+					else
+					{
+						static_assert(false, "Unsupport matrix type");
+					}
+				}
+				else if constexpr (Cols == 3) {
+					if constexpr (Rows == 2) {
+						glCall(glUniformMatrix3x2fv,location, 1, GL_FALSE, glm::value_ptr(value));
+					}
+					else if constexpr (Rows == 3) {
+						glCall(glUniformMatrix3fv,location, 1, GL_FALSE, glm::value_ptr(value));
+					}
+					else if constexpr (Rows == 4) {
+						glCall(glUniformMatrix3x4fv,location, 1, GL_FALSE, glm::value_ptr(value));
+					}
+					else
+					{
+						static_assert(false, "Unsupport matrix type");
+					}
+				}
+				else if constexpr (Cols == 4) {
+					if constexpr (Rows == 2) {
+						glCall(glUniformMatrix4x2fv,location, 1, GL_FALSE, glm::value_ptr(value));
+
+					}
+					else if constexpr (Rows == 3) {
+						glCall(glUniformMatrix4x3fv,location, 1, GL_FALSE, glm::value_ptr(value));
+					}
+					else if constexpr (Rows == 4) {
+
+						glCall(glUniformMatrix4fv,location, 1, GL_FALSE, glm::value_ptr(value));
+					}
+					else
+					{
+						static_assert(false, "Unsupport matrix type");
+					}
+				}
+
+
 		}
 
 	}

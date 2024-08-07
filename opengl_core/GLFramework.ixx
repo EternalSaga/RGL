@@ -14,7 +14,6 @@ import GLObjWrapper;
 namespace RGL {
 	namespace glcore {
 
-
 		export class GLRenderer {
 		public:
 			GLRenderer() = default;
