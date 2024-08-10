@@ -1,4 +1,4 @@
-﻿#version 460 core
+#version 460 core
 
 in vec2 uv;
 

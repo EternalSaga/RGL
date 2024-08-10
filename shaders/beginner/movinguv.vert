@@ -1,4 +1,4 @@
-﻿#version 460 core
+#version 460 core
 
 in vec3 inPos;
 in vec2 inUV;

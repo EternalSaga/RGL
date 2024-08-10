@@ -1,4 +1,4 @@
-﻿module;
+module;
 #include <glad/glad.h>
 #include <filesystem>
 #include <map>

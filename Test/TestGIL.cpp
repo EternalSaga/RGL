@@ -1,4 +1,4 @@
-﻿#include <iostream>
+#include <iostream>
 #include <string_view>
 #include <boost/hana/tuple.hpp>
 #include <boost/hana/for_each.hpp>

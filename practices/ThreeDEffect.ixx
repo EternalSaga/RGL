@@ -1,4 +1,4 @@
-﻿module;
+module;
 #include <vector>
 #include <memory>
 #include <glad/glad.h>
@@ -35,10 +35,15 @@ namespace RGL {
 			std::unique_ptr<EBO> ebo;
 			std::unique_ptr<Texture> grass_land_noise;
 			glm::mat4 trans;
+
+			void doTransform() {
+				trans = glm::rotate(trans, glm::radians(1.0f), glm::vec3(0, 0, 1));
+			}
+
 		public:
 			BasicTransform():trans(1.0f) {
 
-				trans = glm::rotate(glm::mat4(1.0f), glm::radians(45.0f), glm::vec3(0, 0, 1));
+				
 
 				vbo = std::make_unique<VBO>();
 				vbo->setData(rectangle_pos_uv2);
@@ -67,6 +72,7 @@ namespace RGL {
 				ebo = std::make_unique<EBO>();
 				ebo->setData(rectangle_indeces);
 				vao->addEBO(*ebo);
+				
 			}
 			void operator()() override {
 				shader->useProgram();
@@ -74,7 +80,7 @@ namespace RGL {
 				shader->setUniform("grass", grass_land_noise->getTextureUnitID(0));
 				shader->setUniform("mudLand", grass_land_noise->getTextureUnitID(1));
 				shader->setUniform("randomNoise", grass_land_noise->getTextureUnitID(2));
-
+				doTransform();
 				shader->setUniformMat("transformMat", trans);//注意保证host和device端的类型一致，别把shader类型写成vec4
 
 				glCall(glDrawElements, GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr);

@@ -1,4 +1,4 @@
-﻿module;
+module;
 
 #include <boost/gil.hpp>
 #include <boost/gil/extension/io/jpeg.hpp>

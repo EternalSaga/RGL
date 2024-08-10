@@ -1,4 +1,4 @@
-﻿#version 460 core
+#version 460 core
 in vec3 inPos;
 in vec3 inColor;
 //自定义一个传向管线下一阶段的变量

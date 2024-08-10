@@ -1,4 +1,4 @@
-﻿add_library(GLPractices)
+add_library(GLPractices)
 
 target_sources(GLPractices PUBLIC FILE_SET CXX_MODULES FILES "DynamicEffect.ixx" "StaticEffect.ixx"  "ThreeDEffect.ixx")
 

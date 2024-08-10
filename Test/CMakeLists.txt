@@ -1,4 +1,4 @@
-﻿add_executable(TestGIL "TestGIL.cpp" )
+add_executable(TestGIL "TestGIL.cpp" )
 
 
 

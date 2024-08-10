@@ -1,4 +1,4 @@
-﻿module;
+module;
 #include <glad/glad.h>
 #include "Helpers.hpp"
 #include <cassert>
@@ -19,6 +19,14 @@ import GLCheckError;
 
 namespace RGL {
 	namespace glcore {
+
+		enum class BufferType
+		{
+			VAO,
+			EBO,
+			UBO
+		};
+
 
 		//VBO,vertex buffer object，CPU存储在内存里，对于显存一段区域的描述，所以描述的是内存本身，不包括内存数据的描述
 		//class VBO{ID,GPU_ADDRESS,SIZE,etc.}；

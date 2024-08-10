@@ -1,4 +1,4 @@
-﻿# RGL
+# RGL
 
 本项目是一个个人学习计算机图形学的项目。本项目充分利用了现代C++特性。开发目标是一个对标并且加强了特性的[NCLGL](https://research.ncl.ac.uk/game/mastersdegree/graphicsforgames/introductiontonclgl/)库。NCLGL是一个以教学为目的由高校开发的图形学工具箱，它除了图形学以外，也开发了很多数学工具，对于第三方库的使用非常克制。本项目不会这样，会充分利用各种第三方库来促进开发。
 
