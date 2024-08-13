@@ -13,7 +13,7 @@ This project leverages vcpkg as a package manager, making cmake the natural choi
 
 Use vcpkg to install the following libraries.
 
-1. glfw3
+1. sdl2
 2. glad
 3. glm
 4. spdlog

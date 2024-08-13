@@ -1,7 +1,11 @@
 module;
 
+
+
 #include <glad/glad.h>
-#include <GLFW/glfw3.h>
+#include <SDL2/SDL.h>
+#include <SDL2/SDL_opengl.h>
+
 #include <string>
 
 #include <memory>
@@ -31,33 +35,43 @@ namespace RGL {
 	export class RLApp {
 
 
-		GLFWwindow* window_;
+		SDL_Window* window_;
 		RendererContext* glCxt;
-		static std::unique_ptr<RLApp> instance;
+		static std::shared_ptr<RLApp> instance;
 		static std::atomic_bool isInit;
 		static std::mutex mu;
+		
+		API_TYPE api_type;
 		RLApp(int width, int height, std::string title, API_TYPE api_type) {
-			glfwInit();
+			if (SDL_Init(SDL_INIT_VIDEO) < 0)
+			{
+				throw std::runtime_error("Init sdl failed");
+			}
 
-			switch (api_type)
+			this->api_type = api_type;
+			switch (this->api_type)
 			{
 			case RGL::API_TYPE::OPENGL46:
-				glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_API);
-				glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
-				glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
-				glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+
+				window_ = SDL_CreateWindow(title.c_str(), SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, width, height,SDL_WINDOW_OPENGL|SDL_WINDOW_RESIZABLE);
+				
+
+				if (window_ == nullptr)
+				{
+					throw std::runtime_error("Init windows failed");
+				}
+
+
 				break;
 			case RGL::API_TYPE::CPU:
-				glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+				window_ = SDL_CreateWindow(title.c_str(), SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, width, height, SDL_WINDOW_RESIZABLE);
 				break;
 			case RGL::API_TYPE::VULKAN13:
-				break;
-			case RGL::API_TYPE::DX12:
 				break;
 			default:
 				break;
 			}
-			window_ = glfwCreateWindow(width, height, title.c_str(), nullptr, nullptr);
+			
 			if (window_ == nullptr) {
 				throw std::runtime_error("failed to create window");
 			}
@@ -70,11 +84,9 @@ namespace RGL {
 			}
 			else if(api_type == API_TYPE::CPU)
 			{
-
+				
 			}
 
-			
-			
 		}
 
 
@@ -84,50 +96,72 @@ namespace RGL {
 		static std::function<cursor_cbk_type> cursorCallback;
 	
 	private:
-		//窗口相应回调
-		static void resize_cbk(GLFWwindow* window, int width, int height) {
-			resizeCallback(width, height);
-		}
-		//键盘回调
-		static void keyboard_cbk(GLFWwindow* window, int key, int scancode, int action, int mods) {
-			keyboardCallback(key, action, mods);
-		}
 
-		static void mouse_cbk(GLFWwindow* window, int button, int action, int mods) {
-			mouseCallback(button, action);
-		}
+		bool dealWithEvent() {
+			SDL_Event sdlevent;
+			bool quit = false;
+			while (SDL_PollEvent(&sdlevent)) {
+				switch (sdlevent.type)
+				{
+				case SDL_QUIT:
+					quit = true;
+					break;
+				case SDL_MOUSEBUTTONDOWN:
+					break;
+				case SDL_MOUSEBUTTONUP:
+					break;
+				default:
+					break;
+				}
 
-		static void cursor_cbk(GLFWwindow* window, double x, double y) {
-			cursorCallback(x,y);
+				//resizeCallback();
+				//keyboardCallback();
+				//mouseCallback();
+				//cursorCallback();
+				
+			}
+			return quit;
+
 		}
 
 	public:
-
-		static std::unique_ptr<RLApp> getInstance(int width, int height, std::string title, API_TYPE api) {
-
+		SDL_Window* getWindowHandler() {
+			return window_;
+		}
+		static std::shared_ptr<RLApp> getInstance(int width, int height, std::string title, API_TYPE api) {
+			
 			if (!isInit)
 			{
 				std::scoped_lock lo(mu);
 				instance.reset(new RLApp(width, height, title, api));
-				//instance= std::make_unique<RLApp>(width, height, title, api);
+				
 			}
 
-			//static RLApp app{ width, height, title,api };
-			return std::move(instance);
+			return instance;
 		}
+
+		static std::shared_ptr<RLApp> getInstance() {
+
+			if (!isInit)
+			{
+				throw std::logic_error("APP instance is not initialized");
+			}
+
+
+			return instance;
+		}
+
 		void run() {
-			//设置各种回调
-			glfwSetWindowSizeCallback(window_, resize_cbk);
-			glfwSetKeyCallback(window_, keyboard_cbk);
-			glfwSetMouseButtonCallback(window_, mouse_cbk);
-			glfwSetCursorPosCallback(window_, cursor_cbk);
-			while (!glfwWindowShouldClose(window_)) {
+			bool shoudQuit = false;
+			
 
-				//获取输入事件
-				glfwPollEvents();
+			//获取输入事件和事件循环
+			while (!shoudQuit) {
 
+				shoudQuit = dealWithEvent();
 				//渲染
 				glCxt->render();
+				SDL_GL_SwapWindow(window_);
 			}
 		}
 
@@ -150,8 +184,10 @@ namespace RGL {
 			//不然glfw强制销毁了OpenGL之后，OpenGL的清理函数会出错
 			//考虑使用栈容器封装来确保资源的初始化和释放顺序，暂时先硬编码以下
 			delete this->glCxt;
-			glfwDestroyWindow(window_);
-			glfwTerminate();
+			
+
+			SDL_DestroyWindow(window_);
+			SDL_Quit();
 		}
 	};
 
@@ -162,7 +198,7 @@ namespace RGL {
 
 
 	std::atomic_bool RLApp::isInit;
-	std::unique_ptr<RLApp> RLApp::instance;
+	std::shared_ptr<RLApp> RLApp::instance;
 	std::mutex RLApp::mu;
 	void onResize( int width, int height) {
 		glcore::glCall(glViewport, 0, 0, width, height);
@@ -188,7 +224,7 @@ namespace RGL {
 	export void app() {
 
 		auto app = RGL::RLApp::getInstance(1200, 900,"opengl_study", API_TYPE::OPENGL46);
-		app->setResizeCallback(onResize);
+		//app->setResizeCallback(onResize);
 		app->setKeyboardCallback(onSetKeyboard);
 		app->setMouseCallBack(onMouseButton);
 		app->setCursorCallBack(onCursorMove);

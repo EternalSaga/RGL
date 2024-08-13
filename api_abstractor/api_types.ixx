@@ -8,8 +8,7 @@ namespace RGL {
 	{
 		OPENGL46,
 		CPU,
-		VULKAN13,
-		DX12
+		VULKAN13
 	};
 	export class Renderer {
 	public:
@@ -22,9 +21,12 @@ namespace RGL {
 	export class RendererContext {
 	protected:
 		API_TYPE api_type;
+		
 	public:
+		RendererContext():api_type(API_TYPE::OPENGL46){}
 		virtual void render() = 0;
-		virtual void setRenderer(std::unique_ptr<Renderer>) = 0;
+		//为了保证renderer和context的生命周期，所以把renderer放到子类里
+		virtual void setRenderer(std::unique_ptr<Renderer> renderer) = 0;
 		inline API_TYPE getAPI() {
 			return api_type;
 		}

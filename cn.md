@@ -10,7 +10,7 @@
 
 使用vcpkg安装以下依赖
 
-1. glfw3
+1. sdl2
 2. glad
 3. glm
 4. spdlog
