@@ -10,7 +10,7 @@ module;
 #include <glm/gtc/type_ptr.hpp> 
 export module DynamicEffectPractice;
 import GLObjWrapper;
-
+import apiAbstractor;
 import GLFramework;
 
 import Shader;
@@ -28,7 +28,7 @@ namespace RGL {
 			0, 1, 2
 		};
 
-		export class ColorfulShiningTriangle :public GLRenderer
+		export class ColorfulShiningTriangle :public Renderer
 		{
 			std::unique_ptr<EBO> ebo;
 			std::unique_ptr<VAO> vao;
@@ -66,7 +66,7 @@ namespace RGL {
 			}
 		};
 
-		export class MovingTriangle :public GLRenderer {
+		export class MovingTriangle :public Renderer {
 			std::unique_ptr<EBO> ebo;
 			std::unique_ptr<VAO> vao;
 			std::unique_ptr<VBO> vbo;
@@ -114,7 +114,7 @@ namespace RGL {
 
 
 
-		export class MovingTexture : public GLRenderer {
+		export class MovingTexture : public Renderer {
 			std::unique_ptr<VBO> vbo;
 			std::unique_ptr<VAO> vao;
 			std::unique_ptr<Shader> shader;
@@ -161,7 +161,7 @@ namespace RGL {
 	0.5f,  0.5f, 0.0f,1.0f, 1.0f,
 		};
 
-		export class BlendMipmap : public GLRenderer {
+		export class BlendMipmap : public Renderer {
 			std::unique_ptr<VBO> vbo;
 			std::unique_ptr<VAO> vao;
 			std::unique_ptr<Shader> shader;

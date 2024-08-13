@@ -6,6 +6,8 @@ module;
 #include "Helpers.hpp"
 #include "VertexDescriptor.hpp"
 export module StaticEffectPractice;
+import apiAbstractor;
+
 import GLObjWrapper;
 
 import GLFramework;
@@ -52,7 +54,7 @@ namespace RGL {
 
 
 
-		export class EBOExec :public GLRenderer
+		export class EBOExec :public Renderer
 		{
 			std::unique_ptr<EBO> ebo;
 			std::unique_ptr<VAO> vao;
@@ -95,7 +97,7 @@ namespace RGL {
 		const std::vector<GLint> eboSimple{
 	0, 1, 2
 		};
-		export class ColorfulTriangle :public GLRenderer
+		export class ColorfulTriangle :public Renderer
 		{
 			std::unique_ptr<EBO> ebo;
 			std::unique_ptr<VAO> vao;
@@ -136,12 +138,12 @@ namespace RGL {
 		};
 
 
-		export class InterLeavedBuffer : public GLRenderer {
+		export class InterLeavedBuffer : public Renderer {
 			std::unique_ptr<VBO> posColorVbo;
 			std::unique_ptr<VAO> vao;
 			std::unique_ptr<Shader> shader;
 		public:
-			InterLeavedBuffer() :GLRenderer() {
+			InterLeavedBuffer() :Renderer() {
 				posColorVbo = std::make_unique<VBO>();
 				posColorVbo->setData(pos_col_interleaved);
 
@@ -167,7 +169,7 @@ namespace RGL {
 			virtual ~InterLeavedBuffer() = default;
 		};
 
-		export class SetColorByUniform : public GLRenderer {
+		export class SetColorByUniform : public Renderer {
 			std::unique_ptr<VBO> vbo;
 			std::unique_ptr<VAO> vao;
 			std::unique_ptr<Shader> shader;
@@ -196,7 +198,7 @@ namespace RGL {
 			}
 		};
 
-		export class TexturePractice : public GLRenderer {
+		export class TexturePractice : public Renderer {
 			std::unique_ptr<VBO> vbo;
 			std::unique_ptr<VAO> vao;
 			std::unique_ptr<Shader> shader;
@@ -260,7 +262,7 @@ namespace RGL {
 			-0.5f,  0.5f, 0.0f,0.0f, 1.0f,
 			0.5f,  0.5f, 0.0f,1.0f, 1.0f,
 		};
-		export class RectangleTexture : public GLRenderer {
+		export class RectangleTexture : public Renderer {
 			std::unique_ptr<VBO> vbo;
 			std::unique_ptr<VAO> vao;
 			std::unique_ptr<Shader> shader;
@@ -304,7 +306,7 @@ namespace RGL {
 			}
 		};
 
-		export class Blend : public GLRenderer {
+		export class Blend : public Renderer {
 			std::unique_ptr<VBO> vbo;
 			std::unique_ptr<VAO> vao;
 			std::unique_ptr<Shader> shader;

@@ -10,7 +10,7 @@ module;
 #include <glm/gtc/type_ptr.hpp> 
 export module ThreeDEffectPractice;
 import GLObjWrapper;
-
+import apiAbstractor;
 import GLFramework;
 
 import Shader;
@@ -28,7 +28,7 @@ namespace RGL {
 			0, 1, 2,
 			2, 1, 3
 		};
-		export class BasicTransform : public GLRenderer {
+		export class BasicTransform : public Renderer {
 			std::unique_ptr<VBO> vbo;
 			std::unique_ptr<VAO> vao;
 			std::unique_ptr<Shader> shader;

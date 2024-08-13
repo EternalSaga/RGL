@@ -2,7 +2,7 @@ find_package(glfw3 CONFIG REQUIRED)
 
 add_library(RLApp)
 
-target_sources(RLApp PUBLIC FILE_SET CXX_MODULES FILES "RLApp.ixx")
+target_sources(RLApp PUBLIC FILE_SET CXX_MODULES FILES "RLApp.ixx" "Camera.ixx")
 
 
 target_link_libraries(RLApp PUBLIC glfw)
@@ -16,7 +16,7 @@ find_package(spdlog CONFIG REQUIRED)
 target_link_libraries(RLApp PUBLIC spdlog::spdlog)
 
 
-target_link_libraries(RLApp PRIVATE GLFramework GLPractices)
+target_link_libraries(RLApp PRIVATE Abstractor GLFramework GLPractices)
 
 target_compile_features(RLApp PRIVATE cxx_std_23)
 
