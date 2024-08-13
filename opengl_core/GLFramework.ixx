@@ -23,9 +23,9 @@ namespace RGL {
 		export class GLContext : public RendererContext
 		{
 			SDL_GLContext glContext;
-			std::unique_ptr<Renderer> renderer;
+			
 		public:
-			GLContext(SDL_Window* windowHandler, GLint viewPortWidth, GLint viewPortHeight):renderer(nullptr) {
+			GLContext(SDL_Window* windowHandler, GLint viewPortWidth, GLint viewPortHeight) {
 				api_type = API_TYPE::OPENGL46;
 				this->window_ = windowHandler;
 				//先设置属性，再创建context
@@ -70,9 +70,7 @@ namespace RGL {
 				renderer.reset(nullptr);//手动销毁下renderer，确保opengl buffer在OpenGL context结束之前销毁
 				SDL_GL_DeleteContext(this->glContext);
 			}
-			void setRenderer(std::unique_ptr<Renderer> renderer)override{
-				this->renderer = std::move(renderer);
-			}
+			
 			void render() override {
 				
 				assert(renderer.get());
@@ -81,10 +79,7 @@ namespace RGL {
 				glCall(glClear, GL_COLOR_BUFFER_BIT);
 
 				(*renderer)();
-
 				SDL_GL_SetSwapInterval(1);
-
-
 			}
 		private:
 			SDL_Window* window_;
