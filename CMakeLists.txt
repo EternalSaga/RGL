@@ -3,12 +3,14 @@ project("RGL" LANGUAGES CXX)
 
 
 
-find_package(GLM REQUIRED)
+
+
 add_subdirectory(api_abstractor)
-add_subdirectory(front_end)
+
 add_subdirectory(opengl_core)
-add_subdirectory(software_renderer)
-add_subdirectory(practices)
+#add_subdirectory(software_renderer)
+
+add_subdirectory(front_end)
 add_subdirectory(entry)
 
 add_subdirectory(Test)

@@ -1,7 +1,5 @@
 module;
 
-
-
 #include <glad/glad.h>
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_opengl.h>
@@ -20,11 +18,15 @@ export module RLApp;
 
 
 import apiAbstractor;
+import SDLWindow;
 import GLFramework;
+
 import GLCheckError;
 
 import ThreeDEffectPractice;
 
+import CPURender;
+import SoftwareRenderPractice;
 
 namespace RGL {
 
@@ -32,62 +34,19 @@ namespace RGL {
 	using keyboard_cbk_type = void(int, int, int);
 	using mouse_cbk_type = resize_cbk_type;
 	using cursor_cbk_type = void(double, double);
+
+	
+
+
 	export class RLApp {
 
-
-		SDL_Window* window_;
 		RendererContext* glCxt;
 		static std::shared_ptr<RLApp> instance;
 		static std::atomic_bool isInit;
 		static std::mutex mu;
 		
-		API_TYPE api_type;
-		RLApp(int width, int height, std::string title, API_TYPE api_type) {
-			if (SDL_Init(SDL_INIT_VIDEO) < 0)
-			{
-				throw std::runtime_error("Init sdl failed");
-			}
-
-			this->api_type = api_type;
-			switch (this->api_type)
-			{
-			case RGL::API_TYPE::OPENGL46:
-
-				window_ = SDL_CreateWindow(title.c_str(), SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, width, height,SDL_WINDOW_OPENGL|SDL_WINDOW_RESIZABLE);
-				
-
-				if (window_ == nullptr)
-				{
-					throw std::runtime_error("Init windows failed");
-				}
-
-
-				break;
-			case RGL::API_TYPE::CPU:
-				window_ = SDL_CreateWindow(title.c_str(), SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, width, height, SDL_WINDOW_RESIZABLE);
-				break;
-			case RGL::API_TYPE::VULKAN13:
-				break;
-			default:
-				break;
-			}
-			
-			if (window_ == nullptr) {
-				throw std::runtime_error("failed to create window");
-			}
-
-			if (api_type == API_TYPE::OPENGL46)
-			{
-				this->glCxt = new glcore::GLContext(window_, width, height);
-				auto interLeavedBuffer = std::make_unique<practice::BasicTransform>();
-				this->glCxt->setRenderer(std::move(interLeavedBuffer));
-			}
-			else if(api_type == API_TYPE::CPU)
-			{
-				
-			}
-
-		}
+		std::shared_ptr<SDLWindow> sdlWindow;
+		
 
 
 		static std::function<resize_cbk_type> resizeCallback;
@@ -125,43 +84,37 @@ namespace RGL {
 		}
 
 	public:
-		SDL_Window* getWindowHandler() {
-			return window_;
-		}
-		static std::shared_ptr<RLApp> getInstance(int width, int height, std::string title, API_TYPE api) {
-			
-			if (!isInit)
+
+		RLApp(std::shared_ptr<SDLWindow> window, API_TYPE api_type):sdlWindow(window) {
+
+
+
+			if (api_type == API_TYPE::OPENGL46)
 			{
-				std::scoped_lock lo(mu);
-				instance.reset(new RLApp(width, height, title, api));
-				
+				this->glCxt = new glcore::GLContext(*sdlWindow, sdlWindow->getWidth(), sdlWindow->getHeight());
+				auto interLeavedBuffer = std::make_unique<practice::BasicTransform>();
+				this->glCxt->setRenderer(std::move(interLeavedBuffer));
+			}
+			else if (api_type == API_TYPE::CPU)
+			{
+				this->glCxt = new swr::SoftwareRenderer(sdlWindow);
+				SDL_Surface* surface = SDL_GetWindowSurface(*sdlWindow);
+				auto cpurenderer = std::make_unique< swr::TestCPURender>(surface);
+				this->glCxt->setRenderer(std::move(cpurenderer));
 			}
 
-			return instance;
 		}
 
-		static std::shared_ptr<RLApp> getInstance() {
-
-			if (!isInit)
-			{
-				throw std::logic_error("APP instance is not initialized");
-			}
-
-
-			return instance;
-		}
 
 		void run() {
 			bool shoudQuit = false;
-			
-
 			//获取输入事件和事件循环
 			while (!shoudQuit) {
 
 				shoudQuit = dealWithEvent();
 				//渲染
 				glCxt->render();
-				SDL_GL_SwapWindow(window_);
+				SDL_GL_SwapWindow(*sdlWindow);//交换缓冲区，double buffer
 			}
 		}
 
@@ -186,8 +139,7 @@ namespace RGL {
 			delete this->glCxt;
 			
 
-			SDL_DestroyWindow(window_);
-			SDL_Quit();
+			
 		}
 	};
 
@@ -222,13 +174,13 @@ namespace RGL {
 
 
 	export void app() {
-
-		auto app = RGL::RLApp::getInstance(1200, 900,"opengl_study", API_TYPE::OPENGL46);
-		//app->setResizeCallback(onResize);
-		app->setKeyboardCallback(onSetKeyboard);
-		app->setMouseCallBack(onMouseButton);
-		app->setCursorCallBack(onCursorMove);
-		app->run();
+		auto window = std::make_shared<SDLWindow>(1200, 900, "opengl_study", API_TYPE::CPU);
+		RLApp app(window, API_TYPE::CPU);
+		app.setResizeCallback(onResize);
+		app.setKeyboardCallback(onSetKeyboard);
+		app.setMouseCallBack(onMouseButton);
+		app.setCursorCallBack(onCursorMove);
+		app.run();
 	}
 
 }

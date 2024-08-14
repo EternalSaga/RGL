@@ -55,7 +55,6 @@ namespace RGL {
 					throw std::runtime_error("Failed to initialize GLAD");
 				}
 
-				SDL_GL_SetSwapInterval(1);
 
 				if (SDL_GL_LoadLibrary(NULL) != 0) {
 					throw std::runtime_error(SDL_GetError());
@@ -79,7 +78,7 @@ namespace RGL {
 				glCall(glClear, GL_COLOR_BUFFER_BIT);
 
 				(*renderer)();
-				SDL_GL_SetSwapInterval(1);
+				
 			}
 		private:
 			SDL_Window* window_;
