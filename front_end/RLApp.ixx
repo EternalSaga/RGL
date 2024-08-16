@@ -97,7 +97,7 @@ namespace RGL {
 			}
 			else if (api_type == API_TYPE::CPU)
 			{
-				this->glCxt = new swr::SoftwareRenderer(sdlWindow);
+				this->glCxt = new swr::SoftwareRenderContext(sdlWindow);
 				SDL_Surface* surface = SDL_GetWindowSurface(*sdlWindow);
 				auto cpurenderer = std::make_unique< swr::TestCPURender>(surface);
 				this->glCxt->setRenderer(std::move(cpurenderer));
@@ -114,7 +114,7 @@ namespace RGL {
 				shoudQuit = dealWithEvent();
 				//渲染
 				glCxt->render();
-				SDL_GL_SwapWindow(*sdlWindow);//交换缓冲区，double buffer
+
 			}
 		}
 

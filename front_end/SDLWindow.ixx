@@ -5,6 +5,7 @@ module;
 #include <string>
 #include <stdexcept>
 export module SDLWindow;
+import GLCheckError;
 import apiAbstractor;
 namespace RGL {
 	export class SDLWindow {
@@ -17,7 +18,7 @@ namespace RGL {
 		SDLWindow(int width, int height, std::string title, API_TYPE api_type) {
 			this->width = width;
 			this->height = height;
-			if (0 != SDL_Init(SDL_INIT_VIDEO)) {
+			if (0 != SDL_Init(SDL_INIT_EVERYTHING)) {
 				throw std::runtime_error("SDL init failed");
 			}
 
@@ -30,7 +31,7 @@ namespace RGL {
 
 				break;
 			case RGL::API_TYPE::CPU:
-				window_ = SDL_CreateWindow(title.c_str(), SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, width, height, SDL_WINDOW_RESIZABLE);
+				window_ = SDL_CreateWindow(title.c_str(), SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, width, height, SDL_WINDOW_SHOWN);
 
 				break;
 			case RGL::API_TYPE::VULKAN13:
@@ -42,6 +43,8 @@ namespace RGL {
 			{
 				throw std::runtime_error("Init windows failed");
 			}
+			const auto logger = glcore::Logger::getInstance();
+			logger->info("Create windows success");
 		}
 
 		~SDLWindow() {

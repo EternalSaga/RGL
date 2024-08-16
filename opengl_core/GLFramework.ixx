@@ -73,12 +73,11 @@ namespace RGL {
 			void render() override {
 				
 				assert(renderer.get());
-
 				
 				glCall(glClear, GL_COLOR_BUFFER_BIT);
 
 				(*renderer)();
-				
+				SDL_GL_SwapWindow(this->window_);//交换缓冲区，double buffer
 			}
 		private:
 			SDL_Window* window_;

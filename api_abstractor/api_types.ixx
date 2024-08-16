@@ -25,7 +25,7 @@ namespace RGL {
 	public:
 		RendererContext() :renderer(nullptr),api_type(API_TYPE::OPENGL46){}
 		virtual void render() = 0;
-		void setRenderer(std::unique_ptr<Renderer> renderer) {
+		virtual void setRenderer(std::unique_ptr<Renderer> renderer) {
 			this->renderer = std::move(renderer);
 		}
 		inline API_TYPE getAPI() {

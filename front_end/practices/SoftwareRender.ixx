@@ -6,37 +6,37 @@ export module SoftwareRenderPractice;
 import apiAbstractor;
 namespace RGL {
 	namespace swr {
-		void draw_rectangle(SDL_Surface* surface, int x, int y, int width, int height)
+		void set_pixel(SDL_Surface* surface, int x, int y, Uint32 pixel)
 		{
-			SDL_LockSurface(surface);
-			std::vector<uint8_t> pixels(surface->h * surface->pitch, 0);
-
-			int dy, dx;
-			int maxwidth = width * 3;
-			for (dy = y; dy < height; dy++) {
-				for (dx = x; dx < maxwidth; dx += 3) {
-					pixels[dx + (dy * surface->pitch)] = 0;
-					pixels[dx + (dy * surface->pitch) + 1] = 255;
-					pixels[dx + (dy * surface->pitch) + 2] = 0;
-				}
-			}
-			memcpy(surface->pixels, pixels.data(), surface->pitch * surface->h);
-
-			SDL_UnlockSurface(surface);
+			Uint32* const target_pixel = (Uint32*)((Uint8*)surface->pixels
+				+ y * surface->pitch
+				+ x * surface->format->BytesPerPixel);
+			*target_pixel = pixel;
 		}
 		export class TestCPURender : public Renderer {
 			SDL_Surface* surface;
 			int width;
 			int height;
-
+			SDL_Renderer* sdlRenderer;
 		public:
 			TestCPURender(SDL_Surface* surface):surface(surface) {
 				width = surface->w;
 				height = surface->h;
+				
 			}
 			void operator()() override {
-				draw_rectangle(surface, 0, 0, 500, 500);
+				auto red = SDL_MapRGBA(surface->format, 255, 0, 0,0);
+				SDL_LockSurface(surface);
+				for (size_t i = 0; i < width; i++)
+				{
+					for (size_t j = 0; j < height; j++)
+					{
+						set_pixel(surface, i, j, red);
+					}
+				}
+				SDL_UnlockSurface(surface);
 			}
+
 		};
 	}
 }
