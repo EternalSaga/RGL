@@ -1,11 +1,8 @@
-import RLApp;
 
-using namespace RGL;
+#include "RLApp.hpp"
 
+int main(int argv, char** args) {
 
-
-int main() {
-
-	app();
+	RGL::app();
 	return 0;
 }

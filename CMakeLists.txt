@@ -3,14 +3,12 @@ project("RGL" LANGUAGES CXX)
 
 
 
-
-
 add_subdirectory(api_abstractor)
 
-add_subdirectory(opengl_core)
-#add_subdirectory(software_renderer)
+add_subdirectory(render_core)
 
-add_subdirectory(front_end)
+
+
 add_subdirectory(entry)
 
 add_subdirectory(Test)

@@ -1,17 +1,11 @@
-module;
+#pragma once
 #include <SDL2/SDL.h>
-#include <memory>
-#include <vector>
 #include <cstdint>
 #include <glm/glm.hpp>
-#include <stdexcept>
-export module CPURender;
-import apiAbstractor;
-import SDLWindow;
-import GLCheckError;
+#include <vector>
+#include "rllogger.hpp"
 namespace RGL {
 	namespace swr {
-
 		template <typename T>
 		class PureElementImage {
 		public:
@@ -44,7 +38,7 @@ namespace RGL {
 				surface_ = SDL_CreateRGBSurfaceWithFormat(0, width, height, 32,
 					SDL_PIXELFORMAT_RGBA32);
 				if (!surface_) {
-					auto logger = glcore::Logger::getInstance();
+					auto logger = RGL::RLLogger::getInstance();
 					logger->error("Create Surface failed: {}", SDL_GetError());
 				}
 			}
@@ -77,7 +71,7 @@ namespace RGL {
 						color.b * 255, color.a * 255));
 			}
 
-			operator SDL_Surface*() { return surface_; }
+			operator SDL_Surface* () { return surface_; }
 		};
 
 		template <>
@@ -108,73 +102,10 @@ namespace RGL {
 			}
 		};
 
-		typedef PureElementImage<uint8_t> ColorAttachment;
-		typedef PureElementImage<float> DepthAttachment;
+		using ColorAttachment = PureElementImage<uint8_t>;
 
-
-		export class SoftwareRenderContext : public RendererContext {
-
-			void* framebuffer;
-
-			std::shared_ptr<SDLWindow> sdlWindow;
-
-			SDL_Renderer* sdlRenderer;
-			int width;
-			int height;
-			ColorAttachment colorSurface;
-			void drawpixel() {
-				for (size_t i = 0; i < colorSurface.width; i++)
-				{
-					for (size_t j = 0; j < colorSurface.height; j++) {
-						if (i%2==0 && j%2==0)
-						{
-							auto color = glm::vec4(1.0f, 1.0f, 0.0f, 0.0f);
-							colorSurface.Set(i, j, color);
-						}
-					}
-				}
-			}
-
-		public:
-			void render() override {
-				auto clearColor = glm::vec4(0.2f, 0.2f, 0.2f, 1.0f);
-				colorSurface.Clear(clearColor);
-				drawpixel();
-				SwapBuffer(colorSurface);
-				//(*renderer)();
-			}
-			void SwapBuffer(SDL_Surface* surface) {
-				SDL_Texture* texture = SDL_CreateTextureFromSurface(sdlRenderer, surface);
-				// 画面
-				if (!texture) {
-					SDL_Log("swap buffer failed");
-				}
-				else {
-					SDL_RenderCopy(sdlRenderer, texture, nullptr, nullptr);
-					SDL_DestroyTexture(texture);
-				}
-
-				SDL_RenderPresent(sdlRenderer);
-			}
-
-			SoftwareRenderContext(std::shared_ptr<SDLWindow> window):sdlWindow(window), colorSurface(window->getWidth(),window->getHeight()){
-				
-				sdlRenderer = SDL_CreateRenderer(*sdlWindow, -1, SDL_RENDERER_SOFTWARE);
-
-				if (!sdlRenderer)
-				{
-					throw std::runtime_error("cannot create renderer");
-				}
-
-				
-
-			}
-
-			~SoftwareRenderContext() {
-				SDL_DestroyRenderer(sdlRenderer);
-			}
-		};
-
+		using DepthAttachment = PureElementImage<float>;
 
 	}
 }
+

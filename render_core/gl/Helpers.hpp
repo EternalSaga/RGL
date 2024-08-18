@@ -2,8 +2,8 @@
 #include <concepts>
 #include <utility>
 #include <functional>
-import GLCheckError;
 
+#include "GLCheckError.hpp"
 namespace RGL {
 	namespace glcore {
 

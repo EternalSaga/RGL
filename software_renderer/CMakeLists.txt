@@ -1,6 +1,7 @@
+
 add_library(CPURender)
 
-target_sources(CPURender PUBLIC FILE_SET CXX_MODULES FILES "../front_end/SRFramework.ixx")
+target_sources(CPURender PUBLIC FILE_SET CXX_MODULES FILES "../front_end/SDLSurface.ixx")
 
 
 target_compile_features(CPURender PUBLIC cxx_std_23)
@@ -13,3 +14,7 @@ target_link_libraries(CPURender PRIVATE Abstractor RLApp)
         $<TARGET_NAME_IF_EXISTS:SDL2::SDL2main>
         $<IF:$<TARGET_EXISTS:SDL2::SDL2>,SDL2::SDL2,SDL2::SDL2-static>
     )
+
+find_package(glm CONFIG REQUIRED)
+
+target_link_libraries(CPURender PUBLIC glm::glm)

@@ -1,5 +1,6 @@
-#pragma once
+﻿#pragma once
 #include <glad/glad.h>
+#include <glm/fwd.hpp>
 #include <type_traits>
 #include <utility>
 #include <glm/glm.hpp>
@@ -150,7 +151,7 @@ namespace RGL {
 
 
 		template<GLuint Cols, GLuint Rows,glm::qualifier q>
-		void glUniformMatrix(GLint location, const glm::mat<Cols, Rows,float, q>& value) {
+		void glUniformMatrix(GLint location, const glm::mat<Cols, Rows,glm::f32, q>& value) {
 
 				if constexpr (Cols == 2)
 				{

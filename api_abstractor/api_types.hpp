@@ -1,16 +1,15 @@
-
-module;
+#pragma once
 #include <memory>
-export module apiAbstractor;
+
 namespace RGL {
 
-	export enum class API_TYPE
+	enum class API_TYPE
 	{
 		OPENGL46,
 		CPU,
 		VULKAN13
 	};
-	export class Renderer {
+	class Renderer {
 	public:
 		Renderer() = default;
 		virtual void operator()() = 0;
@@ -18,7 +17,7 @@ namespace RGL {
 		virtual ~Renderer() = default;
 	};
 
-	export class RendererContext {
+	class RendererContext {
 	protected:
 		API_TYPE api_type;
 		std::unique_ptr<Renderer> renderer;
