@@ -2,7 +2,7 @@
 file(GLOB_RECURSE RGLFramework_src *.cpp *.hpp)
 
 add_library(RGLFramework ${RGLFramework_src})
-
+execute_format(${RGLFramework_src})
 find_package(glad CONFIG REQUIRED)
 target_link_libraries(RGLFramework PUBLIC glad::glad)
 

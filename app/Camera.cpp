@@ -1,6 +1,6 @@
 #include "Camera.hpp"
 
-namespace RGL {
+namespace RGL
+{
 
 }
-

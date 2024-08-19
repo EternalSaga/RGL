@@ -1,7 +1,7 @@
 cmake_minimum_required (VERSION 3.29)
 project("RGL" LANGUAGES CXX)
 
-
+include(${PROJECT_SOURCE_DIR}/cmake/FindClangFormat.cmake)
 
 add_subdirectory(api_abstractor)
 add_subdirectory(app)
