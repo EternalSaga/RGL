@@ -23,9 +23,9 @@ namespace RGL {
 		template <typename T>
 		concept IsVertexElementTuple = requires(T t) {
 			hana::for_each(t, [](auto t) {
-				t.name->std::convertible_to<std::string_view>;
-				t.getSize()->std::convertible_to<std::size_t>;
-				t.getLength()->std::convertible_to<std::size_t>;
+				t.name->std::template convertible_to<std::string_view>;
+				t.getSize()->std::template convertible_to<std::size_t>;
+				t.getLength()->std::template convertible_to<std::size_t>;
 				});
 		};
 
