@@ -81,8 +81,8 @@ void
 app()
 {
     auto window =
-	std::make_shared<SDLWindow>(1200, 900, "opengl_study", API_TYPE::CPU);
-    RLApp app(window, API_TYPE::CPU);
+	std::make_shared<SDLWindow>(1200, 900, "opengl_study", API_TYPE::OPENGL46);
+    RLApp app(window, API_TYPE::OPENGL46);
     TestLogControlLogic testLogic;
     app.setControlLogic(&testLogic);
 

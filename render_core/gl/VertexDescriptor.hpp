@@ -3,46 +3,44 @@
 #include <boost/hana/tuple.hpp>
 #include <boost/hana/for_each.hpp>
 
+namespace RGL
+{
+namespace glcore
+{
+template <typename T>
+struct VertexElement {
+    std::string_view name;
+    consteval size_t getSize() { return sizeof(T); };
+    consteval size_t getLength()
+    {
+	T t;
+	return std::size(t);
+    };
+    VertexElement(std::string_view n) : name(n) {}
+};
+namespace hana = boost::hana;
+using namespace hana::literals;
 
-namespace RGL {
-	namespace glcore {
-		template<typename T>
-		struct VertexElement
-		{
-			std::string_view name;
-			consteval size_t getSize() { return sizeof(T); };
-			consteval size_t getLength() {
-				T t;
-				return std::size(t);
-			};
-			VertexElement(std::string_view n) :name(n) {}
-		};
-		namespace hana = boost::hana;
-		using namespace hana::literals;
+template <typename T>
+concept IsVertexElementTuple = requires(T t) {
+    hana::for_each(t, [](auto t) {
+	t.name->std::template convertible_to<std::string_view>;
+	t.getSize()->std::template convertible_to<std::size_t>;
+	t.getLength()->std::template convertible_to<std::size_t>;
+    });
+};
 
-		template <typename T>
-		concept IsVertexElementTuple = requires(T t) {
-			hana::for_each(t, [](auto t) {
-				t.name->std::template convertible_to<std::string_view>;
-				t.getSize()->std::template convertible_to<std::size_t>;
-				t.getLength()->std::template convertible_to<std::size_t>;
-				});
-		};
-
-		//template<IsVertexElementTuple T>
-		//void printOffset(const T& vertexDescription) {
-		//	// 使用hana::transform计算每个元素的偏移量
-		//	auto offsets = hana::transform(vertexDescription, [](auto x) {
-		//		static constexpr size_t offset = x.getSize();
-		//		return hana::make_tuple(x.name, offset);
-		//		});
-
-		//	// 遍历offsets元组，输出每个元素的偏移量
-		//	size_t current_offset = 0;
-		//	hana::for_each(offsets, [&current_offset](auto offset) {
-		//		std::cout << offset[0_c] << " offset: " << current_offset << std::endl;
-		//		current_offset += offset[1_c];
-		//		});
-		//}
-	}
+template <IsVertexElementTuple VertexDescType>
+size_t
+getVertexSize(const VertexDescType &vertexDescription)
+{
+    size_t size = 0;
+    // 累加总size
+    hana::for_each(vertexDescription,
+	[&size](auto vert) { size += vert.getSize(); });
+	return size;
 }
+
+} // namespace glcore
+
+} // namespace RGL

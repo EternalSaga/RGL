@@ -1,5 +1,6 @@
 #include "GLObj.hpp"
 
+#include <cstddef>
 #include <memory>
 #include "GLCheckError.hpp"
 #include "rllogger.hpp"
@@ -9,7 +10,15 @@ namespace RGL {
         VBO::VBO(GLuint numOfVbo) : mNumOfVbo(numOfVbo) {
           // genBuffer没有分配显存,仅仅是创建vbo
           vbo = std::make_unique<GLuint[]>(mNumOfVbo);
+          withIndices = std::make_unique<bool[]>(mNumOfVbo);
+          verticesSizes = std::make_unique<GLuint[]>(mNumOfVbo);
+          for (size_t i = 0; i < mNumOfVbo; i++) {
+            withIndices[i] = false;
+            verticesSizes[i] = 0;
+          }
+          
           logger = RGL::RLLogger::getInstance();
+
           glCall(glCreateBuffers, mNumOfVbo, vbo.get());
         }
         VBO::VBO() : VBO(1) {}
@@ -17,7 +26,7 @@ namespace RGL {
           glCall(glBindBuffer, GL_ARRAY_BUFFER, 0);
           glCall(glDeleteBuffers, mNumOfVbo, vbo.get());
         }
-        GLuint VBO::operator[](GLuint i) {
+        GLuint VBO::operator[](GLuint i) const{
           assert(i < mNumOfVbo);
           return vbo[i];
         }
@@ -31,7 +40,6 @@ namespace RGL {
         }
         void VBO::setData(GLuint vboIdx, const std::vector<float> &data) {
           assert(vboIdx < mNumOfVbo);
-          // glCall(glBindBuffer, GL_ARRAY_BUFFER,);
 
           if (!glIsBuffer(vbo[vboIdx])) {
             logger->error("Index {} is not a valid vbo object.", vboIdx);
@@ -156,12 +164,38 @@ namespace RGL {
           set(0, vbo, numOfFloat, stride, offset, shaderInputName);
         }
         void VAO::addEBO(GLuint vaoIdx, GLuint ebo) {
-          glCall(glBindVertexArray, vao[vaoIdx]);
-          glCall(glBindBuffer, GL_ELEMENT_ARRAY_BUFFER, ebo);
+          glCall(glVertexArrayElementBuffer,vao[vaoIdx], ebo);
         }
         void VAO::addEBO(GLuint ebo) {
           assert(mNumOfVao == 1);
           addEBO(0, ebo);
         }
-        } // namespace glcore
+	GLuint
+	VBO::getSize() const
+	{
+	    return mNumOfVbo;
+	}
+	void
+	VBO::setData(GLuint vboIdx, const VerticesWithIndices &verticesWithIndices)
+	{
+	    assert(vboIdx < mNumOfVbo);
+
+	    const auto indicesSize = verticesWithIndices.indices.size() * sizeof(GLint);
+	    const auto verticesSize = verticesWithIndices.vertices.size() * sizeof(float);
+
+	    // 开辟总空间（顶点+索引）
+	    glCall(glNamedBufferStorage, vbo[vboIdx], indicesSize + verticesSize, nullptr, GL_DYNAMIC_STORAGE_BIT);
+      
+
+	    glCall(glNamedBufferSubData, vbo[vboIdx],verticesSize, indicesSize, verticesWithIndices.indices.data());//glNamedBufferSubData(buffer, ind_offset, ind_len, ind_data);
+
+	    glCall(glNamedBufferSubData, vbo[vboIdx], 0, verticesSize, verticesWithIndices.vertices.data());//glNamedBufferSubData(buffer, 0, vrt_len, vrt_data);
+
+
+
+	    withIndices[vboIdx] = true;
+	    // 记录顶点buffer大小
+	    verticesSizes[vboIdx] = verticesSize;
+	}
+	} // namespace glcore
 }
