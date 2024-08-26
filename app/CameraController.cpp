@@ -77,7 +77,7 @@ CamControlTrackball::onMouseDownCbk(const SDL_MouseButtonEvent &mouseEvt)
     middleDown = mouseEvt.button == SDL_BUTTON_MIDDLE;
 
     if (leftDown) {
-	previousCursor = glm::vec2(mouseEvt.x, mouseEvt.y);
+	leftdownCursor = glm::vec2(mouseEvt.x, mouseEvt.y);
     }
 
 }
@@ -116,18 +116,32 @@ void CamControlTrackball::doYaw(float angle){
     camera->position = rotationMat * glm::vec4(camera->position, 1.0f);
 }
 
+
+//判断当前鼠标指针是否往回移动
+bool currentCursorBetween(const glm::vec2 &leftdownCursor, const glm::vec2 & lastCursor, const glm::vec2 &currentCursor){
+    //如果鼠标在左键点下时候的点和上一个更新的点的中间，那么中间点和两边点的夹角应该是钝角，点乘小于0
+    return glm::dot(currentCursor - lastCursor, currentCursor-leftdownCursor) < 0;
+}
+
+
 void
 CamControlTrackball::onCursorMoveCbk(const SDL_MouseMotionEvent &cursorEvt)
 {
     currentCursor = glm::vec2(cursorEvt.x, cursorEvt.y);
+    //如果鼠标在中间，那么把leftdownCursor更新为lastCursor
+    if (currentCursorBetween(leftdownCursor, lastCursor, currentCursor)) {
+        leftdownCursor = lastCursor;
+        return;
+    }
 
     if (leftDown) {
-	    const glm::vec2 draggingDelta = currentCursor - previousCursor;
+	    const glm::vec2 draggingDelta = currentCursor - leftdownCursor;
 
         const glm::vec2 draggingAngle = sensitivity * draggingDelta;
 
         doPitch(-draggingAngle.y);
         doYaw(-draggingAngle.x);
     }
+    lastCursor = currentCursor;
 }
 } // namespace RGL
