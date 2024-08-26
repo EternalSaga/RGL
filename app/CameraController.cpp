@@ -76,6 +76,10 @@ CamControlTrackball::onMouseDownCbk(const SDL_MouseButtonEvent &mouseEvt)
     rightDown = mouseEvt.button == SDL_BUTTON_RIGHT;
     middleDown = mouseEvt.button == SDL_BUTTON_MIDDLE;
 
+    if (leftDown) {
+	previousCursor = glm::vec2(mouseEvt.x, mouseEvt.y);
+    }
+
 }
 void
 CamControlTrackball::onMouseUpCbk(const SDL_MouseButtonEvent &mouseEvt)
@@ -116,9 +120,12 @@ void
 CamControlTrackball::onCursorMoveCbk(const SDL_MouseMotionEvent &cursorEvt)
 {
     currentCursor = glm::vec2(cursorEvt.x, cursorEvt.y);
+
     if (leftDown) {
 	    const glm::vec2 draggingDelta = currentCursor - previousCursor;
-        glm::vec2 draggingAngle = sensitivity * draggingDelta;
+
+        const glm::vec2 draggingAngle = sensitivity * draggingDelta;
+
         doPitch(-draggingAngle.y);
         doYaw(-draggingAngle.x);
     }

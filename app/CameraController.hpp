@@ -26,7 +26,7 @@ protected:
 
   public:
     CamControlInner() : leftDown(false), rightDown(false), middleDown(false),
-			currentCursor(0.0f, 0.0f),previousCursor(0.0f, 0.0f), sensitivity(0.2f), scaleSpeed(0.2f) {}
+			currentCursor(0.0f, 0.0f),previousCursor(0.0f, 0.0f), sensitivity(0.1f), scaleSpeed(0.2f) {}
     ~CamControlInner() = default;
     void setSensitivity(float sensitivity) { this->sensitivity = sensitivity; }
 };
