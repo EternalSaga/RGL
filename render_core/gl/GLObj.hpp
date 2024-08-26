@@ -198,6 +198,8 @@ class VAO
 	    [&size](auto vert) { size += vert.getSize(); });
 	// 关联vbo和vao,设置vertex总大小，设置binding
 	// index为0，所以下面的绑定点也是0，毕竟interleaved，一个绑定点就够了。
+    // 如果你有多个vbo，比如一个vbo存顶点，一个vbo存颜色，那么这里需要设置多个binding index，比如说顶点vbo是0，颜色vbo是1
+    // 那么这里调用两次binding，分别填写index为0和1
 	glCall(glVertexArrayVertexBuffer, vao[vaoIdx], 0, vbo, 0, size);
 
 	size_t current_offset = 0;
@@ -244,36 +246,6 @@ class VAO
     /// <param name="ebo"></param>
     void addEBO(GLuint vaoIdx, GLuint ebo);
     void addEBO(GLuint ebo);
-
-    // template <IsVertexElementTuple VertexDescType>
-    // void setWithIndex(const GLuint vaoIdx, const VBO& vbo,const VertexDescType &vertexDescription){
-    //     assert(vbo.getWithIndices(vaoIdx));
-    //     const auto offsetOfIndices = vbo.getVerticesSize(vaoIdx);
-    //     //顶点数据从0开始，大小是getVerticesSize，绑定vao到vbo
-    //     const size_t vertSize = getVertexSize(vertexDescription);
-    //     glCall(glVertexArrayVertexBuffer,vao[vaoIdx], 0, vbo[vaoIdx], 0, vertSize);
-    //     //该vbo有索引数据
-    //     glCall(glVertexArrayElementBuffer,vao[vaoIdx],vbo[vaoIdx]);
-    //     //继续设置顶点属性
-    //     size_t current_offset = 0;
-	//     // 编译期遍历顶点属性元组，计算offset
-	//     hana::for_each(vertexDescription, [this, &current_offset, &vaoIdx,
-	// 				      &vbo](auto vert) {
-	//     const std::string_view shaderInputName = vert.name;
-	//     GLuint location = glCallRet(glGetAttribLocation, shaderProgram.value(),
-	// 	std::string(shaderInputName).c_str());
-	//     const GLuint length = vert.getLength();
-	//     // 首先在相应的vertex shader的layout location上激活vao属性
-	//     glCall(glEnableVertexArrayAttrib, vao[vaoIdx], location);
-	//     // 设置顶点描述
-	//     glCall(glVertexArrayAttribFormat, vao[vaoIdx], location, length, GL_FLOAT,
-	// 	GL_TRUE, current_offset);
-	//     // 绑定到vao的绑定点上,对于interleaved
-	//     // buffer，就一个buffer，上面已经设置了绑定点为0，所以这里都是0
-	//     glCall(glVertexArrayAttribBinding, vao[vaoIdx], location, 0);
-	//     current_offset += vert.getSize(); // 累加size以更新offset
-	// });
-    // }
 
 };
 } // namespace glcore

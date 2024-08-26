@@ -150,7 +150,7 @@ namespace RGL {
 		
 
 
-		template<GLuint Cols, GLuint Rows,glm::qualifier q>
+		template<int Cols, int Rows,glm::qualifier q>
 		void glUniformMatrix(GLint location, const glm::mat<Cols, Rows,glm::f32, q>& value) {
 
 				if constexpr (Cols == 2)

@@ -97,7 +97,7 @@ public:
     glUniformVec(location, uniformVarCount, data.data());
   }
 
-  template <GLuint Cols, GLuint Rows, glm::qualifier q>
+  template <int Cols, int Rows, glm::qualifier q>
   void setUniformMat(const std::string &uniformName,
                      const glm::mat<Cols, Rows, glm::f32, q> &m) {
     const auto location = glcore::glCallRet(

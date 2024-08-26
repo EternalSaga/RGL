@@ -1,9 +1,14 @@
 #pragma once
-#include "ControlLogic.hpp"
+#include "Camera.hpp"
+#include "CameraController.hpp"
 #include "SDLWindow.hpp"
 #include "api_types.hpp"
 #include <glad/glad.h>
+#include <memory>
 #include <mutex>
+#include <utility>
+
+
 
 namespace RGL
 {
@@ -11,27 +16,32 @@ namespace RGL
 class RLApp
 {
 
-    RendererContext *glCxt;
+    std::unique_ptr<RendererContext> renderCtx;
     static std::shared_ptr<RLApp> instance;
     static std::atomic_bool isInit;
     static std::mutex mu;
 
     std::shared_ptr<SDLWindow> sdlWindow;
 
+
+  std::unique_ptr<Camera> camera;
+  
   private:
-    ControlLogic *controlLogic;
-    ;
+    std::unique_ptr<ControlLogic> controlLogic;
+    
 
   public:
-    RLApp(std::shared_ptr<SDLWindow> window, API_TYPE api_type);
+    RLApp(std::shared_ptr<SDLWindow> window);
 
-    inline void setControlLogic(ControlLogic *controlLogic)
+    inline void setControlLogic(std::unique_ptr<ControlLogic> controlLogic)
     {
-	this->controlLogic = controlLogic;
+	    this->controlLogic = std::move(controlLogic);
     }
     void run();
 
-    ~RLApp() { delete this->glCxt; }
+    void setRendererContext(std::unique_ptr<RendererContext> ctx);
+
+    ~RLApp() = default;
 };
 void app();
 } // namespace RGL

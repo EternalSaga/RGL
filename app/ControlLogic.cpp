@@ -77,6 +77,10 @@ TestLogControlLogic::onCursorMoveCbk(
 }
 TestLogControlLogic::TestLogControlLogic()
 {
-    logger = RGL::RLLogger::getInstance();
+}
+void
+ControlLogic::setCamera(std::shared_ptr<Camera> camera)
+{
+    this->camera = camera;
 }
 } // namespace RGL

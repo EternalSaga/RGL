@@ -1,5 +1,6 @@
 
 #pragma once
+#include "Camera.hpp"
 #include "GLObj.hpp"
 #include "GLTextures.hpp"
 #include "Helpers.hpp"
@@ -23,7 +24,6 @@ class BasicTransform : public Renderer {
   std::unique_ptr<VBO> vbo;
   std::unique_ptr<VAO> vao;
   std::unique_ptr<Shader> shader;
-  std::unique_ptr<EBO> ebo;
   std::unique_ptr<Texture> grass_land_noise;
   glm::mat4 trans;
 
@@ -35,6 +35,19 @@ public:
   BasicTransform();
   void operator()() override;
 };
+
+class CameraTransform : public Renderer {
+  std::unique_ptr<VBO> vbo;
+  std::unique_ptr<VAO> vao;
+  std::unique_ptr<Shader> shader;
+  std::unique_ptr<Texture> doraemon;
+  std::shared_ptr<Camera> cam;
+  glm::mat4 transform{1.0f};
+  public:
+    CameraTransform(std::shared_ptr<Camera> cam);
+    void operator()() override;
+};
+
 
 } // namespace practice
 } // namespace RGL

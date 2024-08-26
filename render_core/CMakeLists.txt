@@ -23,11 +23,9 @@ target_include_directories(RGLFramework PRIVATE ${Stb_INCLUDE_DIR})
 target_compile_features(RGLFramework PRIVATE cxx_std_23)
 set_property(TARGET RGLFramework PROPERTY CMAKE_COMPILE_WARNING_AS_ERROR ON)
 
-
-
 find_package(SDL2 CONFIG REQUIRED)
-    target_link_libraries(RGLFramework
+target_link_libraries(RGLFramework
     PUBLIC
         $<TARGET_NAME_IF_EXISTS:SDL2::SDL2main>
         $<IF:$<TARGET_EXISTS:SDL2::SDL2>,SDL2::SDL2,SDL2::SDL2-static>
-    )
+)

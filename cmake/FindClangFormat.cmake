@@ -67,7 +67,7 @@ function(execute_format)
     foreach(src ${srcs})
         #如果src是一个cpp文件或者hpp文件
         if(src MATCHES "\\.cpp$" OR src MATCHES "\\.hpp$")
-            execute_process(COMMAND ${CLANG_FORMAT_EXECUTABLE} -i ${src})
+            execute_process(COMMAND ${CLANG_FORMAT_EXECUTABLE} --style=file -i ${src})
         endif()
     endforeach(src ${srcs})
 endfunction()

@@ -1,5 +1,8 @@
 
 #include "RLApp.hpp"
+#include "Camera.hpp"
+#include "CameraController.hpp"
+#include "ControlLogic.hpp"
 #include "GLFramework.hpp"
 #include "Helpers.hpp"
 #include "SRFramework.hpp"
@@ -47,21 +50,11 @@ onCursorMove(double x, double y)
     logger->info("the cursor posision is ({},{})", x, y);
 }
 
-RLApp::RLApp(std::shared_ptr<SDLWindow> window, API_TYPE api_type)
+RLApp::RLApp(std::shared_ptr<SDLWindow> window)
     : sdlWindow(window)
 {
 
-    if (api_type == API_TYPE::OPENGL46) {
-	this->glCxt = new glcore::GLContext(*sdlWindow, sdlWindow->getWidth(),
-	    sdlWindow->getHeight());
-	auto interLeavedBuffer = std::make_unique<practice::BasicTransform>();
-	this->glCxt->setRenderer(std::move(interLeavedBuffer));
-    } else if (api_type == API_TYPE::CPU) {
-	this->glCxt = new swr::SoftwareRenderContext(sdlWindow);
-	SDL_Surface *surface = SDL_GetWindowSurface(*sdlWindow);
-	auto cpurenderer = std::make_unique<swr::TestCPURender>(surface);
-	this->glCxt->setRenderer(std::move(cpurenderer));
-    }
+
 }
 
 void
@@ -73,20 +66,58 @@ RLApp::run()
 
 	shoudQuit = controlLogic->dealWithEvent();
 
-	glCxt->render();
+	renderCtx->render();
     }
+}
+
+void
+RLApp::setRendererContext(std::unique_ptr<RendererContext> ctx)
+{
+    renderCtx = std::move(ctx);
+}
+
+
+std::unique_ptr<RendererContext> CreateContext(API_TYPE api_type, std::shared_ptr<SDLWindow> sdlWindow,std::shared_ptr<Camera> camera){
+
+    std::unique_ptr<RendererContext> renderCxt;
+
+    if (api_type == API_TYPE::OPENGL46) {
+	renderCxt = std::make_unique<glcore::GLContext>(*sdlWindow, sdlWindow->getWidth(),
+	    sdlWindow->getHeight());
+	auto interLeavedBuffer = std::make_unique<practice::CameraTransform>(camera);
+	renderCxt->setRenderer(std::move(interLeavedBuffer));
+    } else if (api_type == API_TYPE::CPU) {
+	renderCxt = std::make_unique<swr::SoftwareRenderContext>(sdlWindow);
+	SDL_Surface *surface = SDL_GetWindowSurface(*sdlWindow);
+	auto cpurenderer = std::make_unique<swr::TestCPURender>(surface);
+	renderCxt->setRenderer(std::move(cpurenderer));
+    }
+    return renderCxt;
 }
 
 void
 app()
 {
+    constexpr auto api = API_TYPE::OPENGL46;
+
     auto window =
-	std::make_shared<SDLWindow>(1200, 900, "opengl_study", API_TYPE::OPENGL46);
-    RLApp app(window, API_TYPE::OPENGL46);
-    TestLogControlLogic testLogic;
-    app.setControlLogic(&testLogic);
+	std::make_shared<SDLWindow>(720, 480, "opengl_study", api);
+    RLApp app(window);
+
+    std::unique_ptr<ControlLogic> testLogic = std::make_unique<CamControlTrackball>();
+
+    std::shared_ptr<Camera> camera = std::make_shared<PerspectiveCamera>(60.0f, window->getWidth() / window->getHeight(), 0.1f, 1000.0f);
+
+    testLogic->setCamera(camera);
+
+    app.setControlLogic(std::move(testLogic));
+
+    auto renderCtx = CreateContext(api, window,camera);
+
+    app.setRendererContext(std::move(renderCtx));
 
     app.run();
 }
+
 
 } // namespace RGL

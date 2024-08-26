@@ -1,7 +1,8 @@
 #pragma once
 #include "rllogger.hpp"
 #include <SDL2/SDL.h>
-
+#include <memory>
+#include "Camera.hpp"
 namespace RGL
 {
 class ControlLogic
@@ -15,17 +16,22 @@ class ControlLogic
     virtual void onMouseWheelCbk(const SDL_MouseWheelEvent &) = 0;
     virtual void onWindowResizeCbk(const SDL_WindowEvent &) = 0;
     virtual void onCursorMoveCbk(const SDL_MouseMotionEvent &) = 0;
-
+    std::shared_ptr<Camera> camera;
+    spdlog::logger *logger;
   public:
+
     bool dealWithEvent();
-    ControlLogic() = default;
-    ;
+    ControlLogic(){
+      logger = RGL::RLLogger::getInstance();
+    }
+    
     virtual ~ControlLogic() = default;
+    void setCamera(std::shared_ptr<Camera> camera);
 };
 
 class TestLogControlLogic : public ControlLogic
 {
-    spdlog::logger *logger;
+    
 
   protected:
     void onKeyboardDownCbk(const SDL_KeyboardEvent &keyboardEvt) override;
