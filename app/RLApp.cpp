@@ -104,7 +104,7 @@ app()
 	std::make_shared<SDLWindow>(720, 480, "opengl_study", api);
     RLApp app(window);
 
-    std::unique_ptr<ControlLogic> testLogic = std::make_unique<CamControlTrackball>();
+    std::unique_ptr<ControlLogic> testLogic = std::make_unique<CamControlGame>();
 
     std::shared_ptr<Camera> camera = std::make_shared<PerspectiveCamera>(60.0f, window->getWidth() / window->getHeight(), 0.1f, 1000.0f);
 

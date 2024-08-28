@@ -12,6 +12,7 @@ protected:
 
     glm::vec2 currentCursor;
     glm::vec2 leftdownCursor;
+    glm::vec2 rightdownCursor;
     glm::vec2 lastCursor;
     std::map<int, bool> keyMap;
     float sensitivity;
@@ -19,14 +20,14 @@ protected:
 
     float pitch; // 俯仰角
     float yaw;	 // 水平角度
-    float speed; // 旋转速度系数
+    float speed; // 移动速度系数
 
     virtual void doPitch(float angle) = 0;
     virtual void doYaw(float angle) = 0;
 
   public:
     CamControlInner() : leftDown(false), rightDown(false), middleDown(false),
-			currentCursor(0.0f, 0.0f),leftdownCursor(0.0f, 0.0f),lastCursor(0.0f,0.0f), sensitivity(0.1f), scaleSpeed(0.2f) {}
+			currentCursor(0.0f, 0.0f),leftdownCursor(0.0f, 0.0f),rightdownCursor(0.0f, 0.0f),lastCursor(0.0f,0.0f), sensitivity(0.1f), scaleSpeed(0.2f),speed(0.2f) {}
     ~CamControlInner() = default;
     void setSensitivity(float sensitivity) { this->sensitivity = sensitivity; }
 };
@@ -34,14 +35,13 @@ protected:
 class CamControlGame : public ControlLogic,public CamControlInner
 {
   public:
-    CamControlGame()
-    {
-	
-    }
+    CamControlGame();
     ~CamControlGame() = default;
     void setSpeed(float speed) { this->speed = speed; }
 
   private:
+
+    
     void doPitch(float angle) override;
     void doYaw(float angle) override;
     void onKeyboardDownCbk(const SDL_KeyboardEvent &keyboardEvt) override;

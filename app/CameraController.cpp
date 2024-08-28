@@ -1,10 +1,17 @@
 #include "CameraController.hpp"
+#include <SDL_scancode.h>
 #include <glm/fwd.hpp>
+#include <glm/geometric.hpp>
 #include <glm/trigonometric.hpp>
 #include <iostream>
 
 namespace RGL
 {
+//判断当前鼠标指针是否往回移动
+bool currentCursorBetween(const glm::vec2 &downCursor, const glm::vec2 & lastCursor, const glm::vec2 &currentCursor){
+    //如果鼠标在左键点下时候的点和上一个更新的点的中间，那么中间点和两边点的夹角应该是钝角，点乘小于0
+    return glm::dot(currentCursor - lastCursor, currentCursor-downCursor) < 0;
+}
 
 void
 CamControlGame::doPitch(float angle)
@@ -14,16 +21,47 @@ CamControlGame::doPitch(float angle)
 	pitch -= angle;
 	return;
     }
-    glm::mat4 rotation = glm::rotate(glm::mat4(1.0f), glm::radians(angle), glm::vec3(1.0f, 0.0f, 0.0f));
+    //在gameCameraControl的情况下，pitch不会影响mPosition
+    //以世界坐标系的x轴为中心旋转
+    const glm::mat4 rotation = glm::rotate(glm::mat4(1.0f), glm::radians(angle), glm::vec3(1.0f, 0.0f, 0.0f));
+    //改变摄像机的up向量
+    camera->up = rotation * glm::vec4(camera->up, 0.0f);
 }
 void
 CamControlGame::doYaw(float angle)
 {
+    const auto mat = glm::rotate(glm::mat4(1.0f), glm::radians(angle), glm::vec3(0.0f,1.0f,0.0f));
+	camera->up = mat * glm::vec4(camera->up, 0.0f);
+	camera->right = mat * glm::vec4(camera->right, 0.0f);
 }
 void
 CamControlGame::onKeyboardDownCbk(const SDL_KeyboardEvent &keyboardEvt)
 {
     keyMap[keyboardEvt.keysym.scancode] = true;
+    glm::vec3 direction = glm::vec3(0.0f);
+    const auto front = glm::cross(camera->up, camera->right);
+    const auto right = camera->right;
+    if (keyMap[SDL_SCANCODE_W]) {
+        direction += front;
+    }
+    if (keyMap[SDL_SCANCODE_S]) {
+        direction -= front;
+    }
+    if (keyMap[SDL_SCANCODE_A]) {
+        direction -= right;
+    }
+    if (keyMap[SDL_SCANCODE_D]) {
+        direction += right;
+    }
+
+    if (!keyMap[SDL_SCANCODE_ESCAPE]) {
+        if (glm::length(direction) != 0) {
+		    direction = glm::normalize(direction);
+		    camera->position += direction * speed;
+	    }
+    }else {
+        
+    }
 }
 void
 CamControlGame::onKeyboardUpCbk(const SDL_KeyboardEvent &keyboardEvt)
@@ -36,18 +74,28 @@ CamControlGame::onMouseDownCbk(const SDL_MouseButtonEvent &mouseEvt)
     leftDown = mouseEvt.button == SDL_BUTTON_LEFT;
     rightDown = mouseEvt.button == SDL_BUTTON_RIGHT;
     middleDown = mouseEvt.button == SDL_BUTTON_MIDDLE;
+
+    if(rightDown){
+        rightdownCursor = glm::vec2(mouseEvt.x, mouseEvt.y);
+    }
 }
 void
 CamControlGame::onMouseUpCbk(const SDL_MouseButtonEvent &mouseEvt)
 {
-    leftDown = mouseEvt.button != SDL_BUTTON_LEFT;
-    rightDown = mouseEvt.button != SDL_BUTTON_RIGHT;
-    middleDown = mouseEvt.button != SDL_BUTTON_MIDDLE;
+     if (mouseEvt.button == SDL_BUTTON_LEFT) {
+        leftDown = false;
+     }
+     if (mouseEvt.button == SDL_BUTTON_RIGHT) {
+        rightDown = false;
+     }
+     if (mouseEvt.button == SDL_BUTTON_MIDDLE) {
+        middleDown = false;
+     }
 }
 void
 CamControlGame::onMouseMoveCbk(const SDL_MouseMotionEvent &mouseEvt)
 {
-    currentCursor = glm::vec2(mouseEvt.x, mouseEvt.y);
+
 }
 void
 CamControlGame::onMouseWheelCbk(const SDL_MouseWheelEvent &wheelEvt)
@@ -60,6 +108,23 @@ CamControlGame::onWindowResizeCbk(const SDL_WindowEvent &windowEvt)
 void
 CamControlGame::onCursorMoveCbk(const SDL_MouseMotionEvent &cursorEvt)
 {
+        currentCursor = glm::vec2(cursorEvt.x, cursorEvt.y);
+
+        //如果鼠标在中间，那么把leftdownCursor更新为lastCursor
+    if (currentCursorBetween(rightdownCursor, lastCursor, currentCursor)) {
+        rightdownCursor = lastCursor;
+        return;
+    }
+
+    if (rightDown) {
+	    const glm::vec2 draggingDelta = currentCursor - rightdownCursor;
+
+        const glm::vec2 draggingAngle = sensitivity * draggingDelta;
+
+        doPitch(-draggingAngle.y);
+        doYaw(-draggingAngle.x);
+    }
+    lastCursor = currentCursor;
 }
 void
 CamControlTrackball::onKeyboardDownCbk(const SDL_KeyboardEvent &keyboardEvt)
@@ -84,9 +149,15 @@ CamControlTrackball::onMouseDownCbk(const SDL_MouseButtonEvent &mouseEvt)
 void
 CamControlTrackball::onMouseUpCbk(const SDL_MouseButtonEvent &mouseEvt)
 {
-    leftDown = mouseEvt.button != SDL_BUTTON_LEFT;
-    rightDown = mouseEvt.button != SDL_BUTTON_RIGHT;
-    middleDown = mouseEvt.button != SDL_BUTTON_MIDDLE;
+    if (mouseEvt.button == SDL_BUTTON_LEFT) {
+        leftDown = false;
+     }
+     if (mouseEvt.button == SDL_BUTTON_RIGHT) {
+        rightDown = false;
+     }
+     if (mouseEvt.button == SDL_BUTTON_MIDDLE) {
+        middleDown = false;
+     }
 }
 void
 CamControlTrackball::onMouseMoveCbk(const SDL_MouseMotionEvent &mouseEvt)
@@ -117,11 +188,7 @@ void CamControlTrackball::doYaw(float angle){
 }
 
 
-//判断当前鼠标指针是否往回移动
-bool currentCursorBetween(const glm::vec2 &leftdownCursor, const glm::vec2 & lastCursor, const glm::vec2 &currentCursor){
-    //如果鼠标在左键点下时候的点和上一个更新的点的中间，那么中间点和两边点的夹角应该是钝角，点乘小于0
-    return glm::dot(currentCursor - lastCursor, currentCursor-leftdownCursor) < 0;
-}
+
 
 
 void
@@ -143,5 +210,8 @@ CamControlTrackball::onCursorMoveCbk(const SDL_MouseMotionEvent &cursorEvt)
         doYaw(-draggingAngle.x);
     }
     lastCursor = currentCursor;
+}
+CamControlGame::CamControlGame()
+{
 }
 } // namespace RGL
