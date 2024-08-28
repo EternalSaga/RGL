@@ -26,8 +26,7 @@ protected:
     virtual void doYaw(float angle) = 0;
 
   public:
-    CamControlInner() : leftDown(false), rightDown(false), middleDown(false),
-			currentCursor(0.0f, 0.0f),leftdownCursor(0.0f, 0.0f),rightdownCursor(0.0f, 0.0f),lastCursor(0.0f,0.0f), sensitivity(0.1f), scaleSpeed(0.2f),speed(0.2f) {}
+    CamControlInner();
     ~CamControlInner() = default;
     void setSensitivity(float sensitivity) { this->sensitivity = sensitivity; }
 };

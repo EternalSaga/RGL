@@ -24,7 +24,7 @@ CamControlGame::doPitch(float angle)
     //在gameCameraControl的情况下，pitch不会影响mPosition
     //以世界坐标系的x轴为中心旋转
     const glm::mat4 rotation = glm::rotate(glm::mat4(1.0f), glm::radians(angle), glm::vec3(1.0f, 0.0f, 0.0f));
-    //改变摄像机的up向量
+    //CamControlInner
     camera->up = rotation * glm::vec4(camera->up, 0.0f);
 }
 void
@@ -214,4 +214,6 @@ CamControlTrackball::onCursorMoveCbk(const SDL_MouseMotionEvent &cursorEvt)
 CamControlGame::CamControlGame()
 {
 }
+CamControlInner::CamControlInner() : leftDown(false), rightDown(false), middleDown(false),
+				     currentCursor(0.0f, 0.0f), pitch(0.0f), yaw(0.0f), leftdownCursor(0.0f, 0.0f), rightdownCursor(0.0f, 0.0f), lastCursor(0.0f, 0.0f), sensitivity(0.1f), scaleSpeed(0.2f), speed(0.2f) {}
 } // namespace RGL
