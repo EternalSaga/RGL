@@ -49,5 +49,18 @@ class CameraTransform : public Renderer {
 };
 
 
+class DepthTestExecise : public Renderer {
+  std::unique_ptr<VBO> vbo;
+  std::unique_ptr<VAO> vao;
+  std::unique_ptr<Shader> shader;
+  std::unique_ptr<Texture> doraemon_nobita;
+
+  std::shared_ptr<Camera> cam;
+  glm::mat4 transform{1.0f};
+  public:
+    DepthTestExecise(std::shared_ptr<Camera> cam);
+    void operator()() override;
+};
+
 } // namespace practice
 } // namespace RGL

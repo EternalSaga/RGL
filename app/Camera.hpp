@@ -17,21 +17,9 @@ public:
     glm::vec3 right;	// camera本地坐标系右方
 
   public:
-    Camera() : position(0.0f, 0.0f, 1.0f),
-		    up(0.0f, 1.0f, 0.0f),
-		    right(1.0f, 0.0f, 0.0f)
-    {
-    }
+    Camera();
     virtual ~Camera() = default;
-    glm::mat4 getViewMatrix() const
-    {
-
-	const glm::vec3 front = glm::cross(up, right); // 右手法则，up×right，得出camera前方向
-
-	const glm::vec3 center = position + front; // 从摄像机位置往前看，就是center
-
-	return glm::lookAt(position, center, up);
-    }
+    glm::mat4 getViewMatrix() const;
 
     virtual glm::mat4 getProjectionMatrix() const = 0;
 };
@@ -48,17 +36,10 @@ class OrthographicCamera:public Camera
     float far;
 
   public:
-    OrthographicCamera(float l, float r, float t, float b, float n, float f) : left(l), right(r), top(t), bottom(b), near(n), far(f)
-    {
-    }
+    OrthographicCamera(float l, float r, float t, float b, float n, float f);
     ~OrthographicCamera() = default;
-    glm::mat4 getProjectionMatrix() const
-    {
-	return glm::ortho(left, right, bottom, top, near, far);
-    }
-    void scale(float deltaScale)
-    {
-    }
+    glm::mat4 getProjectionMatrix() const;
+    void scale(float deltaScale);
 };
 
 class PerspectiveCamera:public Camera
@@ -71,16 +52,9 @@ class PerspectiveCamera:public Camera
     float far;
 
   public:
-    PerspectiveCamera(float fovy, float aspect, float near, float far) : fovy(fovy), aspect(aspect), near(near), far(far)
-    {
-    }
-    glm::mat4 getProjectionMatrix() const
-    {
-	return glm::perspective(glm::radians(fovy), aspect, near, far);
-    }
-    void scale(float deltaScale)
-    {
-    }
+    PerspectiveCamera(float fovy, float aspect, float near, float far);
+    glm::mat4 getProjectionMatrix() const;
+    void scale(float deltaScale);
 };
 
 

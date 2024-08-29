@@ -11,7 +11,7 @@ namespace RGL {
           // genBuffer没有分配显存,仅仅是创建vbo
           vbo = std::make_unique<GLuint[]>(mNumOfVbo);
           withIndices = std::make_unique<bool[]>(mNumOfVbo);
-          verticesSizes = std::make_unique<GLuint[]>(mNumOfVbo);
+          verticesSizes = std::make_unique<size_t[]>(mNumOfVbo);
           for (size_t i = 0; i < mNumOfVbo; i++) {
             withIndices[i] = false;
             verticesSizes[i] = 0;
@@ -34,7 +34,8 @@ namespace RGL {
           assert(mNumOfVbo == 1);
           return vbo[0];
         }
-        VBO::operator GLuint() const {
+	VBO::operator GLuint() const
+	{
           assert(mNumOfVbo == 1);
           return vbo[0];
         }
@@ -185,13 +186,10 @@ namespace RGL {
 
 	    // 开辟总空间（顶点+索引）
 	    glCall(glNamedBufferStorage, vbo[vboIdx], indicesSize + verticesSize, nullptr, GL_DYNAMIC_STORAGE_BIT);
-      
 
 	    glCall(glNamedBufferSubData, vbo[vboIdx],verticesSize, indicesSize, verticesWithIndices.indices.data());//glNamedBufferSubData(buffer, ind_offset, ind_len, ind_data);
 
 	    glCall(glNamedBufferSubData, vbo[vboIdx], 0, verticesSize, verticesWithIndices.vertices.data());//glNamedBufferSubData(buffer, 0, vrt_len, vrt_data);
-
-
 
 	    withIndices[vboIdx] = true;
 	    // 记录顶点buffer大小

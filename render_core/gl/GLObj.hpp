@@ -33,7 +33,7 @@ class VBO
 {
     std::unique_ptr<GLuint[]> vbo;
     std::unique_ptr<bool[]> withIndices;
-    std::unique_ptr<GLuint[]> verticesSizes; // vbo的顶点的大小，即顶点数量*每个顶点的大小
+    std::unique_ptr<size_t[]> verticesSizes; // vbo的顶点的大小，即顶点数量*每个顶点的大小
 
     GLuint mNumOfVbo;
     spdlog::logger *logger;
@@ -44,7 +44,7 @@ class VBO
     bool getWithIndices(GLuint vboIdx) const {
 	    return withIndices[vboIdx];
     }
-    GLuint getVerticesSize(GLuint vboIdx) const{
+    size_t getVerticesSize(GLuint vboIdx) const{
 	    return verticesSizes[vboIdx];
     }
 
@@ -167,7 +167,9 @@ class VAO
     void set(GLuint vbo, GLuint numOfFloat, const std::string &shaderInputName);
 
     operator GLuint();
-
+	GLuint operator[](int idx) {
+	    return vao[idx];
+	}
     /// <summary>
     /// 适用于interleaved buffer的
     /// </summary>

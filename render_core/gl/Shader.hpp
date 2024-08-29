@@ -102,7 +102,7 @@ public:
                      const glm::mat<Cols, Rows, glm::f32, q> &m) {
     const auto location = glcore::glCallRet(
         glGetUniformLocation, this->shaderProgram, uniformName.c_str());
-    glUniformMatrix<Cols, Rows, q>(location, m);
+    glUniformMatrix(location, m);
   }
 
 private:

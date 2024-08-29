@@ -4,63 +4,89 @@
 #include <filesystem>
 #include <glad/glad.h>
 #include <memory>
-#include <stdexcept>
+#include <mutex>
 
-
-
-
-namespace RGL {
-namespace io {
+#include <map>
+#include <vector>
+#include <random>
+#include <ctime>
+namespace RGL
+{
+namespace io
+{
 namespace fs = std::filesystem;
 struct ImgRef {
-  uint8_t *imgData;
-  int width;
-  int height;
-  int channels;
+    uint8_t *imgData;
+    int width;
+    int height;
+    int channels;
 };
-class LoadedImg {
-  uint8_t *imgData;
-  int width;
-  int height;
-  int channels;
+class LoadedImg
+{
+    uint8_t *imgData;
+    int width;
+    int height;
+    int channels;
 
-public:
-  LoadedImg(const fs::path &imagePath);
+  public:
+    LoadedImg(const fs::path &imagePath);
 
-  operator ImgRef();
+    operator ImgRef();
 
-  ~LoadedImg();
+    ~LoadedImg();
 };
 } // namespace io
 
-namespace glcore {
+namespace glcore
+{
 using namespace io;
 
-constexpr std::vector<GLuint> initTUnitRes();
+std::vector<GLuint> initTUnitRes();
+
+class TextUnitResources 
+{
+  public:
+    ~TextUnitResources() = default;
+    
+	//如果返回0，则代表没有资源，需要push
+    GLuint popUnit();
+	void pushUnit(GLuint tunit) {
+	    textureUnitResource.push_back(tunit);
+	}
+	static std::shared_ptr<TextUnitResources> getInstance();
+
+    TextUnitResources();
+    static std::shared_ptr<TextUnitResources> instance;
+    std::vector<GLint> textureUnitResource;
+    static std::once_flag initOnce;
+};
 
 // 没有考虑到纹理单元的归还，暂时先这样
-class Texture {
-  std::unique_ptr<GLuint[]> textures;
+class Texture
+{
+	std::mt19937 mt;//随机选择一个幸运纹理单元被重新绑定
+    
 
-  std::unique_ptr<GLint[]> textureUnitIdx;
+    std::unique_ptr<GLuint[]> textures;
+    size_t currentSetIndex;
+    std::map<GLuint, GLint> texture_textureUnit;      // 纹理-纹理单元映射
+    std::map<std::string, GLuint> textrueName_texture; // 纹理名-纹理
+    size_t mNumOfTextures;
+    std::shared_ptr<TextUnitResources> unitsPool;
+  public:
+    Texture(size_t numOfTextrues);
 
-  size_t mNumOfTextures;
-  static std::vector<GLuint> textureUnitResource;
+    Texture();
+    GLint useTexture(GLuint textrueID);
+    GLuint findTextureByName(std::string textureName);
 
-public:
-  Texture(size_t numOfTextrues);
 
-  Texture();
+	GLint useTexture(std::string textureName);
 
-  GLint getTextureUnitID(GLuint textrueID) const;
+    void set(const ImgRef &flippedImg, std::string textureName, bool turnOnMipmap);
 
-  GLint getTextureUnitID() const;
-
-  void set(const ImgRef &flippedImg, GLuint textIdx, bool turnOnMipmap);
-
-  void set(const ImgRef &flippedImg, bool turnOnMipmap);
-
-  ~Texture();
+    ~Texture();
 };
 } // namespace glcore
 } // namespace RGL
+;

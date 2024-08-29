@@ -128,7 +128,7 @@ MovingTexture::MovingTexture()
     texture = std::make_unique<Texture>();
     {
 	io::LoadedImg img("./assest/001.jpg");
-	texture->set(img, false);
+	texture->set(img, "001", false);
     }
 
     vao->setShaderProgram(*shader);
@@ -144,7 +144,7 @@ MovingTexture::operator()()
 {
     shader->useProgram();
 
-    shader->setUniform("sampler", texture->getTextureUnitID());
+    shader->setUniform("sampler", texture->useTexture("001"));
     shader->setUniform<float>("timestamp", (((float)SDL_GetTicks64()) / 1000.0f));
     glCall(glBindVertexArray, *vao);
     glCall(glDrawElements, GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr);
@@ -161,15 +161,15 @@ BlendMipmap::BlendMipmap()
     grass_land_noise = std::make_unique<Texture>(3);
     {
 	io::LoadedImg grassImg("./assest/grass.jpg");
-	grass_land_noise->set(grassImg, 0, true);
+	grass_land_noise->set(grassImg, "grass", true);
     }
     {
 	io::LoadedImg landImg("./assest/land.jpg");
-	grass_land_noise->set(landImg, 1, true);
+	grass_land_noise->set(landImg, "land", true);
     }
     {
 	io::LoadedImg noiseImg("./assest/noise.jpg");
-	grass_land_noise->set(noiseImg, 2, true);
+	grass_land_noise->set(noiseImg, "noise", true);
     }
     vao->setShaderProgram(*shader);
     auto desc = hana::make_tuple(VertexElement<float[3]>("inPos"),
@@ -184,9 +184,9 @@ BlendMipmap::operator()()
 {
     shader->useProgram();
 
-    shader->setUniform("grass", grass_land_noise->getTextureUnitID(0));
-    shader->setUniform("mudLand", grass_land_noise->getTextureUnitID(1));
-    shader->setUniform("randomNoise", grass_land_noise->getTextureUnitID(2));
+     shader->setUniform("grass", grass_land_noise->useTexture("grass"));
+    shader->setUniform("mudLand", grass_land_noise->useTexture("land"));
+    shader->setUniform("randomNoise", grass_land_noise->useTexture("noise"));
 
     shader->setUniform<float>("time", (((float)SDL_GetTicks64()) / 1000.0f));
 

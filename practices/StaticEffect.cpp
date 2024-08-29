@@ -139,7 +139,7 @@ TexturePractice::TexturePractice() {
   texture = std::make_unique<Texture>();
   {
     io::LoadedImg img("./assest/001.jpg");
-    texture->set(img, false);
+      texture->set(img, "001", false);
   }
 
   vao->setShaderProgram(*shader);
@@ -156,7 +156,7 @@ TexturePractice::TexturePractice() {
 void TexturePractice::operator()() {
   shader->useProgram();
 
-  shader->setUniform("sampler", texture->getTextureUnitID());
+  shader->setUniform("sampler", texture->useTexture("001"));
   glCall(glBindVertexArray, *vao);
   glCall(glDrawElements, GL_TRIANGLES, 3, GL_UNSIGNED_INT, nullptr);
 }
@@ -173,7 +173,7 @@ RectangleTexture::RectangleTexture() {
   texture = std::make_unique<Texture>();
   {
     io::LoadedImg img("./assest/001.jpg");
-    texture->set(img, false);
+      texture->set(img, "001", false);
   }
 
   vao->setShaderProgram(*shader);
@@ -190,7 +190,7 @@ RectangleTexture::RectangleTexture() {
 void RectangleTexture::operator()() {
   shader->useProgram();
 
-  shader->setUniform("sampler", texture->getTextureUnitID());
+  shader->setUniform("sampler", texture->useTexture("001"));
   glCall(glBindVertexArray, *vao);
   glCall(glDrawElements, GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr);
 }
@@ -205,15 +205,15 @@ Blend::Blend() {
   grass_land_noise = std::make_unique<Texture>(3);
   {
     io::LoadedImg grassImg("./assest/grass.jpg");
-    grass_land_noise->set(grassImg, 0, true);
+    grass_land_noise->set(grassImg, "grass", true);
   }
   {
     io::LoadedImg landImg("./assest/land.jpg");
-    grass_land_noise->set(landImg, 1, true);
+      grass_land_noise->set(landImg, "land", true);
   }
   {
     io::LoadedImg noiseImg("./assest/noise.jpg");
-    grass_land_noise->set(noiseImg, 2, true);
+      grass_land_noise->set(noiseImg, "noise", true);
   }
   vao->setShaderProgram(*shader);
   auto desc = hana::make_tuple(VertexElement<float[3]>("inPos"),
@@ -226,9 +226,9 @@ Blend::Blend() {
 void Blend::operator()() {
   shader->useProgram();
 
-  shader->setUniform("grass", grass_land_noise->getTextureUnitID(0));
-  shader->setUniform("mudLand", grass_land_noise->getTextureUnitID(1));
-  shader->setUniform("randomNoise", grass_land_noise->getTextureUnitID(2));
+  shader->setUniform("grass", grass_land_noise->useTexture("grass"));
+  shader->setUniform("mudLand", grass_land_noise->useTexture("land"));
+  shader->setUniform("randomNoise", grass_land_noise->useTexture("noise"));
   glCall(glBindVertexArray, *vao);
   glCall(glDrawElements, GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr);
 }
