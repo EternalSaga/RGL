@@ -43,6 +43,9 @@ namespace RGL {
 
           glCall(glViewport, 0, 0, viewPortWidth, viewPortHeight);
           glCall(glClearColor, 0.2f, 0.3f, 0.3f, 1.0f);
+
+		  glEnable(GL_DEPTH_TEST);//开启深度检测
+	  glDepthFunc(GL_LESS);//设置深度检测方法
         }
         GLContext::~GLContext() {
           renderer.reset(nullptr); // 手动销毁下renderer，确保opengl
@@ -53,7 +56,7 @@ namespace RGL {
 
           assert(renderer.get());
 
-          glCall(glClear, GL_COLOR_BUFFER_BIT);
+          glCall(glClear, GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);//清空颜色缓冲，清空深度缓冲
 
           (*renderer)();
           SDL_GL_SwapWindow(this->window_); // 交换缓冲区，double buffer
