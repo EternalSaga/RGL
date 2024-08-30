@@ -41,13 +41,9 @@ class VBO
   public:
     GLuint getSize() const;
 
-    bool getWithIndices(GLuint vboIdx) const {
-	    return withIndices[vboIdx];
-    }
-    size_t getVerticesSize(GLuint vboIdx) const{
-	    return verticesSizes[vboIdx];
-    }
-
+    bool getWithIndices(GLuint vboIdx) const;
+    size_t getVerticesSize(GLuint vboIdx) const;
+    size_t getVerticesSize() const;
     VBO(GLuint numOfVbo);
     // 长度为1的封装
     VBO();
@@ -70,6 +66,7 @@ class VBO
     // 将顶点数据和顶点索引同时发送到一个VBO内
     // 顶点数据排布在顶点索引之前
     void setData(GLuint vboIdx, const VerticesWithIndices &verticesWithIndices);
+    void setData(const VerticesWithIndices &verticesWithIndices);
 };
 
 // glDrawArrays TRIANGLES不能复用边，但是TRIANGLE

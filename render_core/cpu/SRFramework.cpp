@@ -41,7 +41,8 @@ namespace RGL {
             std::shared_ptr<SDLWindow> window)
             : sdlWindow(window),
               colorSurface(window->getWidth(), window->getHeight()) {
-
+	    this->height = window->getHeight();
+	    this->width = window->getWidth();
           sdlRenderer =
               SDL_CreateRenderer(*sdlWindow, -1, SDL_RENDERER_SOFTWARE);
 

@@ -184,7 +184,7 @@ BlendMipmap::operator()()
 {
     shader->useProgram();
 
-     shader->setUniform("grass", grass_land_noise->useTexture("grass"));
+    shader->setUniform("grass", grass_land_noise->useTexture("grass"));
     shader->setUniform("mudLand", grass_land_noise->useTexture("land"));
     shader->setUniform("randomNoise", grass_land_noise->useTexture("noise"));
 

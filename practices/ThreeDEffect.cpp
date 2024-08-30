@@ -157,5 +157,38 @@ void DepthTestExecise::operator()(){
     shader->setUniform("sampler", doraemon_nobita->useTexture("nobita_nobi"));
 	glCall(glDrawElements, GL_TRIANGLES, rectangle_indeces.size(), GL_UNSIGNED_INT, reinterpret_cast<void *>(vbo->getVerticesSize(0)));
 }
+
+DrawCube::DrawCube(std::shared_ptr<Camera> cam)
+{
+    this->cam = cam;
+    
+    ShaderSrcs shaders = {
+	{SHADER_TYPE::VERTEX, {"shaders\\beginner\\ControllerTransform.vert"}},
+	{SHADER_TYPE::FRAGMENT, {"shaders\\beginner\\ControllerTransform.frag"}}};
+    this->shader = std::make_unique<Shader>(shaders);
+    this->shader = std::make_unique<Shader>(shaders);
+    doraemon = std::make_unique<Texture>();
+    {
+	io::LoadedImg doraemonImg("./assest/doraemon.jpg");
+	doraemon->set(doraemonImg, "doraemon", true);
+    }
+    std::unique_ptr<CommonGeometry> geometry = std::make_unique<Cube>(6.0f,*shader);
+	this->vao = std::move(geometry->getVAO());
+    
+    auto [ vertCount, idxOffset ] = geometry->getIdicesCountAndOffset();
+	mvertCount = vertCount;
+    midxOffset = idxOffset;
+}
+void
+DrawCube::operator()()
+{
+    glCall(glBindVertexArray, *vao);
+    shader->useProgram();
+    shader->setUniform("sampler", doraemon->useTexture("doraemon"));
+    shader->setUniformMat("transform", this->transform);
+    shader->setUniformMat("viewMatrix", cam->getViewMatrix());
+    shader->setUniformMat("projectionMatrix", cam->getProjectionMatrix());
+    glCall(glDrawElements, GL_TRIANGLES, mvertCount, GL_UNSIGNED_INT, reinterpret_cast<void *>(midxOffset));
+}
 } // namespace practice
 } // namespace RGL

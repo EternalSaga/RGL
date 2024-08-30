@@ -4,7 +4,7 @@ namespace RGL
 {
 
 SDLWindow::SDLWindow(int width, int height, std::string title,
-    API_TYPE api_type)
+    API_TYPE api_type) : window_(nullptr)
 {
     this->width = width;
     this->height = height;

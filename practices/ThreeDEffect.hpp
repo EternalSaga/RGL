@@ -15,7 +15,7 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <memory>
 #include <vector>
-
+#include "Geometry.hpp"
 namespace RGL {
 namespace practice {
 
@@ -59,6 +59,22 @@ class DepthTestExecise : public Renderer {
   glm::mat4 transform{1.0f};
   public:
     DepthTestExecise(std::shared_ptr<Camera> cam);
+    void operator()() override;
+};
+
+class DrawCube : public Renderer
+{
+    
+    std::unique_ptr<Shader> shader;
+    std::unique_ptr<Texture> doraemon;
+
+    std::shared_ptr<Camera> cam;
+    glm::mat4 transform{1.0f};
+    std::unique_ptr<VAO> vao;
+    size_t mvertCount;
+    size_t midxOffset;
+  public:
+    DrawCube(std::shared_ptr<Camera> cam);
     void operator()() override;
 };
 

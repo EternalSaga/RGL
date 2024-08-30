@@ -176,6 +176,27 @@ namespace RGL {
 	{
 	    return mNumOfVbo;
 	}
+	bool
+	VBO::getWithIndices(GLuint vboIdx) const
+	{
+	    return withIndices[vboIdx];
+	}
+	size_t
+	VBO::getVerticesSize(GLuint vboIdx) const
+	{
+
+	    if (!withIndices[vboIdx]) {
+		throw std::invalid_argument("This vbo does not contain indices.");
+	    }
+
+	    return verticesSizes[vboIdx];
+	}
+	size_t
+	VBO::getVerticesSize() const
+	{
+	    assert(mNumOfVbo == 1);
+	    return getVerticesSize(0);
+	}
 	void
 	VBO::setData(GLuint vboIdx, const VerticesWithIndices &verticesWithIndices)
 	{
@@ -194,6 +215,12 @@ namespace RGL {
 	    withIndices[vboIdx] = true;
 	    // 记录顶点buffer大小
 	    verticesSizes[vboIdx] = verticesSize;
+	}
+	void
+	VBO::setData(const VerticesWithIndices &verticesWithIndices)
+	{
+	    assert(mNumOfVbo == 1);
+	    setData(0, verticesWithIndices);
 	}
 	} // namespace glcore
 }
