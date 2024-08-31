@@ -41,6 +41,17 @@ getVertexSize(const VertexDescType &vertexDescription)
 	return size;
 }
 
+template <IsVertexElementTuple VertexDescType>
+size_t
+getVertexLength(const VertexDescType &vertexDescription)
+{
+    size_t size = 0;
+    // 累加总size
+    hana::for_each(vertexDescription,
+	[&size](auto vert) { size += vert.getLength(); });
+    return size;
+}
+
 } // namespace glcore
 
 } // namespace RGL

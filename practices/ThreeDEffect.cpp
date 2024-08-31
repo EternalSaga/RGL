@@ -161,7 +161,6 @@ void DepthTestExecise::operator()(){
 DrawCube::DrawCube(std::shared_ptr<Camera> cam)
 {
     this->cam = cam;
-    
     ShaderSrcs shaders = {
 	{SHADER_TYPE::VERTEX, {"shaders\\beginner\\ControllerTransform.vert"}},
 	{SHADER_TYPE::FRAGMENT, {"shaders\\beginner\\ControllerTransform.frag"}}};
@@ -172,9 +171,8 @@ DrawCube::DrawCube(std::shared_ptr<Camera> cam)
 	io::LoadedImg doraemonImg("./assest/doraemon.jpg");
 	doraemon->set(doraemonImg, "doraemon", true);
     }
-    std::unique_ptr<CommonGeometry> geometry = std::make_unique<Cube>(6.0f,*shader);
+    std::unique_ptr<CommonGeometry> geometry = std::make_unique<Sphere>(3.0f,*shader);
 	this->vao = std::move(geometry->getVAO());
-    
     auto [ vertCount, idxOffset ] = geometry->getIdicesCountAndOffset();
 	mvertCount = vertCount;
     midxOffset = idxOffset;
