@@ -1,4 +1,5 @@
 #include "Camera.hpp"
+#include <glm/ext/quaternion_geometric.hpp>
 
 namespace RGL
 {
@@ -29,6 +30,7 @@ OrthographicCamera::getProjectionMatrix() const
 void
 OrthographicCamera::scale(float deltaScale)
 {
+    
 }
 PerspectiveCamera::PerspectiveCamera(float fovy, float aspect, float near, float far) : fovy(fovy), aspect(aspect), near(near), far(far)
 {
@@ -41,5 +43,7 @@ PerspectiveCamera::getProjectionMatrix() const
 void
 PerspectiveCamera::scale(float deltaScale)
 {
+    const auto front = glm::cross(this->up, this->right);
+    this->position += front * deltaScale;
 }
 } // namespace RGL

@@ -3,6 +3,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <cassert>
+#include <ranges>
 
 
 namespace RGL
@@ -20,7 +21,7 @@ public:
     Camera();
     virtual ~Camera() = default;
     glm::mat4 getViewMatrix() const;
-
+    virtual void scale(float deltaScale) = 0;
     virtual glm::mat4 getProjectionMatrix() const = 0;
 };
 

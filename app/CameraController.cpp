@@ -166,6 +166,7 @@ CamControlTrackball::onMouseMoveCbk(const SDL_MouseMotionEvent &mouseEvt)
 void
 CamControlTrackball::onMouseWheelCbk(const SDL_MouseWheelEvent &wheelEvt)
 {
+    this->camera->scale(wheelEvt.y);
 }
 void
 CamControlTrackball::onWindowResizeCbk(const SDL_WindowEvent &windowEvt)
