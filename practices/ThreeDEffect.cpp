@@ -2,7 +2,7 @@
 #include "GLObj.hpp"
 #include "GLTextures.hpp"
 #include "Shader.hpp"
-
+#include "ProgrammedTexture.hpp"
 namespace RGL
 {
 namespace practice
@@ -166,12 +166,13 @@ DrawCube::DrawCube(std::shared_ptr<Camera> cam)
 	{SHADER_TYPE::FRAGMENT, {"shaders\\beginner\\ControllerTransform.frag"}}};
     this->shader = std::make_unique<Shader>(shaders);
     this->shader = std::make_unique<Shader>(shaders);
-    doraemon = std::make_unique<Texture>();
+    checkboarder = std::make_unique<Texture>();
     {
-	io::LoadedImg doraemonImg("./assest/doraemon.jpg");
-	doraemon->set(doraemonImg, "doraemon", true);
+	texture::CheckerBoard cb(8,8);
+	checkboarder->set(cb.getTexture(), "checkboarder", true);
+    checkboarder->setFilltering("checkboarder", GL_NEAREST);
     }
-    std::unique_ptr<CommonGeometry> geometry = std::make_unique<Sphere>(3.0f,*shader);
+    std::unique_ptr<CommonGeometry> geometry = std::make_unique<Cube>(6.0f,*shader);
 	this->vao = std::move(geometry->getVAO());
     auto [ vertCount, idxOffset ] = geometry->getIdicesCountAndOffset();
 	mvertCount = vertCount;
@@ -182,7 +183,7 @@ DrawCube::operator()()
 {
     glCall(glBindVertexArray, *vao);
     shader->useProgram();
-    shader->setUniform("sampler", doraemon->useTexture("doraemon"));
+    shader->setUniform("sampler", checkboarder->useTexture("checkboarder"));
     shader->setUniformMat("transform", this->transform);
     shader->setUniformMat("viewMatrix", cam->getViewMatrix());
     shader->setUniformMat("projectionMatrix", cam->getProjectionMatrix());

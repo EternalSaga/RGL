@@ -1,9 +1,7 @@
 #include "DynamicEffect.hpp"
 #include <SDL2/SDL_timer.h>
-namespace RGL
-{
-namespace glcore
-{
+namespace RGL {
+namespace glcore {
 using namespace io;
 
 const std::vector<float> pos_col_interleaved{-0.5f, -0.5f, 0.0f, 1.f, 0.f, 0.f,
@@ -56,8 +54,7 @@ const std::vector<float> rectangle_pos_uv = {
     1.0f,
 };
 const std::vector<GLint> rectangle_indeces = {0, 1, 2, 2, 1, 3};
-ColorfulShiningTriangle::ColorfulShiningTriangle()
-{
+ColorfulShiningTriangle::ColorfulShiningTriangle() {
     vbo = std::make_unique<VBO>();
     vbo->setData(pos_col_interleaved);
     ebo = std::make_unique<EBO>();
@@ -75,9 +72,7 @@ ColorfulShiningTriangle::ColorfulShiningTriangle()
     vao->set(*vbo, 3, 6, 0, "inPos");
     vao->set(*vbo, 3, 6, 3, "inColor");
 }
-void
-ColorfulShiningTriangle::operator()()
-{
+void ColorfulShiningTriangle::operator()() {
     shader->useProgram();
 
     shader->setUniform<float>("time", (((float)SDL_GetTicks64()) / 1000.0f));
@@ -86,8 +81,7 @@ ColorfulShiningTriangle::operator()()
     glCall(glDrawElements, GL_TRIANGLES, 3, GL_UNSIGNED_INT, nullptr);
     glCall(glBindVertexArray, 0);
 }
-MovingTriangle::MovingTriangle()
-{
+MovingTriangle::MovingTriangle() {
     vbo = std::make_unique<VBO>();
     vbo->setData(pos_col_interleaved);
     ebo = std::make_unique<EBO>();
@@ -105,17 +99,14 @@ MovingTriangle::MovingTriangle()
     vao->set(*vbo, 3, 6, 0, "inPos");
     vao->set(*vbo, 3, 6, 3, "inColor");
 }
-void
-MovingTriangle::operator()()
-{
+void MovingTriangle::operator()() {
     shader->useProgram();
     shader->setUniform<float>("time", (((float)SDL_GetTicks64()) / 1000.0f));
 
     glCall(glBindVertexArray, *vao);
     glCall(glDrawElements, GL_TRIANGLES, 3, GL_UNSIGNED_INT, nullptr);
 }
-MovingTexture::MovingTexture()
-{
+MovingTexture::MovingTexture() {
     vbo = std::make_unique<VBO>();
     vbo->setData(rectangle_pos_uv);
 
@@ -139,9 +130,7 @@ MovingTexture::MovingTexture()
     ebo->setData(rectangle_indeces);
     vao->addEBO(*ebo);
 }
-void
-MovingTexture::operator()()
-{
+void MovingTexture::operator()() {
     shader->useProgram();
 
     shader->setUniform("sampler", texture->useTexture("001"));
@@ -149,8 +138,7 @@ MovingTexture::operator()()
     glCall(glBindVertexArray, *vao);
     glCall(glDrawElements, GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr);
 }
-BlendMipmap::BlendMipmap()
-{
+BlendMipmap::BlendMipmap() {
     vbo = std::make_unique<VBO>();
     vbo->setData(rectangle_pos_uv2);
     vao = std::make_unique<VAO>();
@@ -179,9 +167,7 @@ BlendMipmap::BlendMipmap()
     ebo->setData(rectangle_indeces);
     vao->addEBO(*ebo);
 }
-void
-BlendMipmap::operator()()
-{
+void BlendMipmap::operator()() {
     shader->useProgram();
 
     shader->setUniform("grass", grass_land_noise->useTexture("grass"));
@@ -193,5 +179,5 @@ BlendMipmap::operator()()
     glCall(glBindVertexArray, *vao);
     glCall(glDrawElements, GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr);
 }
-} // namespace glcore
-} // namespace RGL
+}  // namespace glcore
+}  // namespace RGL

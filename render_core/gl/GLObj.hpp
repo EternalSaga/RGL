@@ -14,10 +14,8 @@
 #include <string>
 
 #include "GLCheckError.hpp"
-namespace RGL
-{
-namespace glcore
-{
+namespace RGL {
+namespace glcore {
 
 // 顶点数据和顶点索引放在同一个结构体里
 struct VerticesWithIndices {
@@ -29,16 +27,15 @@ struct VerticesWithIndices {
 // object，CPU存储在内存里，对于显存一段区域的描述，所以描述的是内存本身，不包括内存数据的描述
 // class VBO{ID,GPU_ADDRESS,SIZE,etc.}；
 // 对于VBO的操作都需要先绑定，再操作
-class VBO
-{
+class VBO {
     std::unique_ptr<GLuint[]> vbo;
     std::unique_ptr<bool[]> withIndices;
-    std::unique_ptr<size_t[]> verticesSizes; // vbo的顶点的大小，即顶点数量*每个顶点的大小
+    std::unique_ptr<size_t[]> verticesSizes;  // vbo的顶点的大小，即顶点数量*每个顶点的大小
 
     GLuint mNumOfVbo;
     spdlog::logger *logger;
 
-  public:
+   public:
     GLuint getSize() const;
 
     bool getWithIndices(GLuint vboIdx) const;
@@ -75,12 +72,11 @@ class VBO
 // 在单纯顶点的情况下，使用索引并不能节约空间，但是顶点除了位置以外，还有颜色，法线，UV等信息，这种情况下，顶点就又灵活又节约空间
 // EBO(Element buffer object)用于储存顶点索引编号的**显存区域**，又一个烂名字
 
-class EBO
-{
+class EBO {
     std::unique_ptr<GLuint[]> ebo;
     GLuint mNumOfEbo;
 
-  public:
+   public:
     EBO(GLuint numOfEbo);
 
     EBO();
@@ -121,8 +117,7 @@ class EBO
 // VAO = vbo descriptor array
 // object，用于描述vbo内各种buffer属性的数组，每个position描述一个buffer属性，烂名字
 
-class VAO
-{
+class VAO {
     std::unique_ptr<GLuint[]> vao;
     // 所有vao的position，初始化为0，每次调用set自增1
     // 是重要的和shader产生联系的属性，layout(location=n)的n代表第n个position
@@ -134,7 +129,7 @@ class VAO
     // 到时候直接从shader program里查询不同顶点属性的layout location
     std::optional<GLuint> shaderProgram;
 
-  public:
+   public:
     VAO(size_t numOfVao);
     VAO() : VAO(1) {}
     ~VAO();
@@ -164,9 +159,9 @@ class VAO
     void set(GLuint vbo, GLuint numOfFloat, const std::string &shaderInputName);
 
     operator GLuint();
-	GLuint operator[](int idx) {
-	    return vao[idx];
-	}
+    GLuint operator[](int idx) {
+	return vao[idx];
+    }
     /// <summary>
     /// 适用于interleaved buffer的
     /// </summary>
@@ -188,17 +183,15 @@ class VAO
     // desc;desc可以.name，getLength()，getSize()
     template <IsVertexElementTuple VertexDescType>
     void setDSA_interleaved(const GLuint vaoIdx, const GLuint vbo,
-	const VertexDescType &vertexDescription)
-    {
-
+	const VertexDescType &vertexDescription) {
 	size_t size = 0;
 	////累加总size
 	hana::for_each(vertexDescription,
 	    [&size](auto vert) { size += vert.getSize(); });
 	// 关联vbo和vao,设置vertex总大小，设置binding
 	// index为0，所以下面的绑定点也是0，毕竟interleaved，一个绑定点就够了。
-    // 如果你有多个vbo，比如一个vbo存顶点，一个vbo存颜色，那么这里需要设置多个binding index，比如说顶点vbo是0，颜色vbo是1
-    // 那么这里调用两次binding，分别填写index为0和1
+	// 如果你有多个vbo，比如一个vbo存顶点，一个vbo存颜色，那么这里需要设置多个binding index，比如说顶点vbo是0，颜色vbo是1
+	// 那么这里调用两次binding，分别填写index为0和1
 	glCall(glVertexArrayVertexBuffer, vao[vaoIdx], 0, vbo, 0, size);
 
 	size_t current_offset = 0;
@@ -217,14 +210,13 @@ class VAO
 	    // 绑定到vao的绑定点上,对于interleaved
 	    // buffer，就一个buffer，上面已经设置了绑定点为0，所以这里都是0
 	    glCall(glVertexArrayAttribBinding, vao[vaoIdx], location, 0);
-	    current_offset += vert.getSize(); // 累加size以更新offset
+	    current_offset += vert.getSize();  // 累加size以更新offset
 	});
     }
 
     template <IsVertexElementTuple VertexDescType>
     void setDSA_interleaved(const GLuint vbo,
-	const VertexDescType &vertexDescription)
-    {
+	const VertexDescType &vertexDescription) {
 	setDSA_interleaved(0, vbo, vertexDescription);
     }
     /// <summary>
@@ -245,7 +237,6 @@ class VAO
     /// <param name="ebo"></param>
     void addEBO(GLuint vaoIdx, GLuint ebo);
     void addEBO(GLuint ebo);
-
 };
-} // namespace glcore
-} // namespace RGL
+}  // namespace glcore
+}  // namespace RGL

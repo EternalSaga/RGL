@@ -84,7 +84,7 @@ class Texture
 	GLint useTexture(std::string textureName);
 
     void set(const ImgRef &flippedImg, std::string textureName, bool turnOnMipmap);
-
+    void setFilltering(std::string textureName, GLenum filter);
     ~Texture();
 };
 } // namespace glcore

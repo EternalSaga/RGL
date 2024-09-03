@@ -1,4 +1,4 @@
-﻿# top-most EditorConfig file
+# top-most EditorConfig file
 root = true
 
 # Unix-style newlines with a newline ending every file
@@ -9,7 +9,7 @@ insert_final_newline = true
 indent_style = tab
 
 # Tab indentation (no size specified)
-[Makefile]
+
 indent_style = tab
 
 [*.{c,h,cpp,hpp,ixx}]

@@ -66,7 +66,7 @@ class DrawCube : public Renderer
 {
     
     std::unique_ptr<Shader> shader;
-    std::unique_ptr<Texture> doraemon;
+    std::unique_ptr<Texture> checkboarder;
 
     std::shared_ptr<Camera> cam;
     glm::mat4 transform{1.0f};

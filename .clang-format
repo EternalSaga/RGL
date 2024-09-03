@@ -1,8 +1,8 @@
 Language: Cpp # Cpp is also used for C
-BasedOnStyle: LLVM
+BasedOnStyle: Google
 
 ColumnLimit: 0
-BreakBeforeBraces: Linux
+BreakBeforeBraces: Attach
 AlignAfterOpenBracket: DontAlign
 
 IndentWidth: 4
@@ -10,6 +10,6 @@ UseTab: Always
 IndentCaseLabels: false
 
 AllowShortBlocksOnASingleLine: Empty
-AlwaysBreakAfterReturnType: TopLevelDefinitions
 
+AlwaysBreakAfterDefinitionReturnType: None
 SortIncludes: false
