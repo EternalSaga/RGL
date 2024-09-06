@@ -64,6 +64,7 @@ class VBO {
     // 顶点数据排布在顶点索引之前
     void setData(GLuint vboIdx, const VerticesWithIndices &verticesWithIndices);
     void setData(const VerticesWithIndices &verticesWithIndices);
+
 };
 
 // glDrawArrays TRIANGLES不能复用边，但是TRIANGLE
@@ -127,7 +128,7 @@ class VAO {
     spdlog::logger *logger;
 
     // 到时候直接从shader program里查询不同顶点属性的layout location
-    std::optional<GLuint> shaderProgram;
+    GLuint shaderProgram;
 
    public:
     VAO(size_t numOfVao);
@@ -190,18 +191,21 @@ class VAO {
 	    [&size](auto vert) { size += vert.getSize(); });
 	// 关联vbo和vao,设置vertex总大小，设置binding
 	// index为0，所以下面的绑定点也是0，毕竟interleaved，一个绑定点就够了。
-	// 如果你有多个vbo，比如一个vbo存顶点，一个vbo存颜色，那么这里需要设置多个binding index，比如说顶点vbo是0，颜色vbo是1
-	// 那么这里调用两次binding，分别填写index为0和1
-	glCall(glVertexArrayVertexBuffer, vao[vaoIdx], 0, vbo, 0, size);
-
+	glCall(glVertexArrayVertexBuffer, vao[vaoIdx], 0 //binding index
+		, vbo, 0 //vbo数据的offset，如果vbo一开始有顶点索引或者为了保证对其的话，不是0
+		, size);//每个顶点数据的大小
+	assert(glIsProgram(this->shaderProgram));
 	size_t current_offset = 0;
 	// 编译期遍历顶点属性元组，计算offset
 	hana::for_each(vertexDescription, [this, &current_offset, &vaoIdx,
 					      &vbo](auto vert) {
-	    const std::string_view shaderInputName = vert.name;
-	    GLuint location = glCallRet(glGetAttribLocation, shaderProgram.value(),
+	    std::string_view shaderInputName = vert.name;
+	    const GLint location = glCallRet(glGetAttribLocation, shaderProgram,
 		std::string(shaderInputName).c_str());
-	    const GLuint length = vert.getLength();
+	    if (location == -1) {
+		logger->error("shader input {} not found.\nThis is an optimized value or wrong input or gl_preserved name", std::string(shaderInputName));
+	    } else{
+		constexpr GLuint length = vert.getLength();
 	    // 首先在相应的vertex shader的layout location上激活vao属性
 	    glCall(glEnableVertexArrayAttrib, vao[vaoIdx], location);
 	    // 设置顶点描述
@@ -211,6 +215,9 @@ class VAO {
 	    // buffer，就一个buffer，上面已经设置了绑定点为0，所以这里都是0
 	    glCall(glVertexArrayAttribBinding, vao[vaoIdx], location, 0);
 	    current_offset += vert.getSize();  // 累加size以更新offset
+	    }
+
+
 	});
     }
 

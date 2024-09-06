@@ -13,13 +13,13 @@ class CommonGeometry
 {
   protected:
 
-    std::vector<GLfloat> position_uvs; // 融合pos和uv，少创建一个vao
+    
     std::vector<int> indices;
     size_t indicesCount;
     std::unique_ptr<VAO> vao;
     std::unique_ptr<VBO> vbo;
 
-
+    
 
   public:
     CommonGeometry() :  indices(), indicesCount(0)
@@ -40,6 +40,8 @@ class Cube : public CommonGeometry
     float halfSize;
     std::vector<GLfloat> positions;
     std::vector<GLfloat> uvs;
+    std::vector<GLfloat> normals;
+    std::vector<GLfloat> pos_uv_norm;; // 融合pos,uv,normal，少创建两个vao
   public:
     Cube(float size,GLuint shaderProgram);
 };
@@ -53,6 +55,17 @@ class Sphere : public CommonGeometry
   private:
     std::vector<GLfloat> positions;
     std::vector<GLfloat> uvs;
+    std::vector<GLfloat> position_uvs; // 融合pos和uv，少创建一个vao
+};
+
+
+class Plane : public CommonGeometry{
+  public:
+    Plane(float width, float height, GLuint shaderProgram);
+    ~Plane() = default;
+    
+  private:
+  std::vector<GLfloat> pos_uv_norm;; // 融合pos,uv,normal，少创建两个vao
 };
 
 } // namespace glcore

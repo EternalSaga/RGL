@@ -1,6 +1,7 @@
 #include "Shader.hpp"
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <cassert>
 namespace RGL {
 namespace glcore {
 
@@ -26,6 +27,7 @@ Shader::Shader(const ShaderSrcs &shaderSrcs) : compiled(0), linked(0) {
 
 	GLuint shader = glcore::glCallRet(
 	    glCreateShader, static_cast<GLuint>(shaderType_Src.first));
+	assert(glIsShader(shader));
 	glcore::glCall(glShaderSource, shader, srcs.size(), srcs.data(),
 	    nullptr);
 	glcore::glCall(glCompileShader, shader);
@@ -34,8 +36,7 @@ Shader::Shader(const ShaderSrcs &shaderSrcs) : compiled(0), linked(0) {
 	if (!compiled) {
 	    char infoLog[MaxShaderLogLength];
 	    glGetShaderInfoLog(shader, MaxShaderLogLength, nullptr, infoLog);
-	    logger->error(infoLog);
-	    throw glcore::GLLogicError("The shader is compiled failed");
+	    logger->error(infoLog);	    throw glcore::GLLogicError("The shader is compiled failed");
 	}
 
 	glcore::glCall(glAttachShader, shaderProgram, shader);
@@ -67,6 +68,7 @@ Shader::loadFile(const fs::path &p) {
 void
 Shader::useProgram() {
     if (compiled && linked) {
+	assert(glIsProgram(shaderProgram));
 	glcore::glCall(glUseProgram, shaderProgram);
     } else {
 	throw glcore::GLInitExpt("shader program not prepared");

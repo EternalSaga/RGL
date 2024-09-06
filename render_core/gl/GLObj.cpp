@@ -97,11 +97,10 @@ VAO::~VAO() {
     glCall(glDeleteVertexArrays, mNumOfVao, vao.get());
 }
 void VAO::setShaderProgram(GLuint shader) {
-    if (!shaderProgram.has_value()) {
+    assert(glIsProgram(shader));
+
 	shaderProgram = shader;
-    } else {
-	throw GLLogicError("Shader program has already has value");
-    }
+
 }
 void VAO::set(GLuint vaoIdx, GLuint vbo, GLuint numOfFloat,
     const std::string &shaderInputName) {
@@ -116,7 +115,7 @@ void VAO::set(GLuint vaoIdx, GLuint vbo, GLuint numOfFloat,
     glCall(glBindBuffer, GL_ARRAY_BUFFER, vbo);
 
     const auto location =
-	glCallRet(glGetAttribLocation, shaderProgram.value(),
+	glCallRet(glGetAttribLocation, shaderProgram,
 	    shaderInputName.c_str());
     glCheckError();
 
@@ -142,7 +141,7 @@ void VAO::set(GLuint vaoIdx, GLuint vbo, GLuint numOfFloat,
     glCall(glBindBuffer, GL_ARRAY_BUFFER, vbo);
 
     const auto location =
-	glCallRet(glGetAttribLocation, shaderProgram.value(),
+	glCallRet(glGetAttribLocation, shaderProgram,
 	    shaderInputName.c_str());
 
     glCall(glEnableVertexAttribArray, location);
@@ -210,6 +209,7 @@ void VBO::setData(GLuint vboIdx, const VerticesWithIndices &verticesWithIndices)
     // 记录顶点buffer大小
     verticesSizes[vboIdx] = verticesSize;
 }
+
 void VBO::setData(const VerticesWithIndices &verticesWithIndices) {
     assert(mNumOfVbo == 1);
     setData(0, verticesWithIndices);

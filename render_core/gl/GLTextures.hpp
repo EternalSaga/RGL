@@ -84,6 +84,8 @@ class Texture
 	GLint useTexture(std::string textureName);
 
     void set(const ImgRef &flippedImg, std::string textureName, bool turnOnMipmap);
+    
+    //谨慎使用，用之前知道自己在干什么
     void setFilltering(std::string textureName, GLenum filter);
     ~Texture();
 };

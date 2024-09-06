@@ -7,16 +7,14 @@
 #include "Helpers.hpp"
 #include "SRFramework.hpp"
 #include "SoftwareRender.hpp"
-#include "ThreeDEffect.hpp"
+#include "LightEffect.hpp"
 #include "api_types.hpp"
 #include "rllogger.hpp"
 #include <SDL_events.h>
-#include <functional>
-#include <iostream>
+
 #include <memory>
 #include <mutex>
-#include <stdexcept>
-#include <string>
+
 
 namespace RGL
 {
@@ -84,7 +82,7 @@ std::unique_ptr<RendererContext> CreateContext(API_TYPE api_type, std::shared_pt
     if (api_type == API_TYPE::OPENGL46) {
 	renderCxt = std::make_unique<glcore::GLContext>(*sdlWindow, sdlWindow->getWidth(),
 	    sdlWindow->getHeight());
-	auto interLeavedBuffer = std::make_unique<practice::DrawCube>(camera);
+	auto interLeavedBuffer = std::make_unique<practice::GlobalLight>(camera);
 	renderCxt->setRenderer(std::move(interLeavedBuffer));
     } else if (api_type == API_TYPE::CPU) {
 	renderCxt = std::make_unique<swr::SoftwareRenderContext>(sdlWindow);
@@ -107,7 +105,7 @@ app()
     std::unique_ptr<ControlLogic> testLogic = std::make_unique<CamControlTrackball>();
 
     std::shared_ptr<Camera> camera = std::make_shared<PerspectiveCamera>(60.0f, static_cast<float>(window->getWidth()) / window->getHeight(), 0.1f, 1000.0f);
-    //std::shared_ptr<Camera> camera = std::make_shared<PerspectiveCamera>(60.0f, static_cast<float>(window->getWidth()) / window->getHeight(), 0.1f, 1000.0f);
+
 
     testLogic->setCamera(camera);
 

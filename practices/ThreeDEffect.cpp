@@ -187,6 +187,9 @@ DrawCube::operator()()
     shader->setUniformMat("transform", this->transform);
     shader->setUniformMat("viewMatrix", cam->getViewMatrix());
     shader->setUniformMat("projectionMatrix", cam->getProjectionMatrix());
+
+    shader->setUniform("cameraPos", cam->position.x, cam->position.y, cam->position.z);
+
     glCall(glDrawElements, GL_TRIANGLES, mvertCount, GL_UNSIGNED_INT, reinterpret_cast<void *>(midxOffset));
 }
 } // namespace practice

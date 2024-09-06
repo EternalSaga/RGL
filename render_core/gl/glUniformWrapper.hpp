@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include <glad/glad.h>
+#include <glm/detail/qualifier.hpp>
 #include <glm/fwd.hpp>
 #include <type_traits>
 #include <utility>
@@ -18,15 +19,16 @@ namespace RGL {
 			static_assert(numOfArgs < 5, "Size of arguments must less than 5");
 			if constexpr (numOfArgs == 1) {
 				if constexpr (all_same_type_v<float, Args...>) {
-					glUniform1f(location, std::forward<Args>(values)...);
+					glCall(glUniform1f,location, std::forward<Args>(values)...);
 				}
 				else if constexpr (all_same_type_v<GLint, Args...>)
 				{
-					glUniform1i(location, std::forward<Args>(values)...);
+
+					glCall(glUniform1i,location, std::forward<Args>(values)...);
 				}
 				else if constexpr (all_same_type_v<GLuint, Args...>)
 				{
-					glUniform1ui(location, std::forward<Args>(values)...);
+					glCall(glUniform1ui,location, std::forward<Args>(values)...);
 				}
 				else
 				{
@@ -36,15 +38,15 @@ namespace RGL {
 			else if constexpr (numOfArgs == 2) {
 
 				if constexpr (all_same_type_v<float, Args...>) {
-					glUniform2f(location, std::forward<Args>(values)...);
+					glCall(glUniform2f,location, std::forward<Args>(values)...);
 				}
 				else if constexpr (all_same_type_v<GLint, Args...>)
 				{
-					glUniform2i(location, std::forward<Args>(values)...);
+					glCall(glUniform2i,location, std::forward<Args>(values)...);
 				}
 				else if constexpr (all_same_type_v<GLuint, Args...>)
 				{
-					glUniform2ui(location, std::forward<Args>(values)...);
+					glCall(glUniform2ui,location, std::forward<Args>(values)...);
 				}
 				else
 				{
@@ -53,15 +55,15 @@ namespace RGL {
 			}
 			else if constexpr (numOfArgs == 3) {
 				if constexpr (all_same_type_v<float, Args...>) {
-					glUniform3f(location, std::forward<Args>(values)...);
+					glCall(glUniform3f,location, std::forward<Args>(values)...);
 				}
 				else if constexpr (all_same_type_v<GLint, Args...>)
 				{
-					glUniform3i(location, std::forward<Args>(values)...);
+					glCall(glUniform3i,location, std::forward<Args>(values)...);
 				}
 				else if constexpr (all_same_type_v<GLuint, Args...>)
 				{
-					glUniform3ui(location, std::forward<Args>(values)...);
+					glCall(glUniform3ui,location, std::forward<Args>(values)...);
 				}
 				else
 				{
@@ -71,15 +73,15 @@ namespace RGL {
 			else if constexpr (numOfArgs == 4)
 			{
 				if constexpr (all_same_type_v<float, Args...>) {
-					glUniform4f(location, std::forward<Args>(values)...);
+					glCall(glUniform4f,location, std::forward<Args>(values)...);
 				}
 				else if constexpr (all_same_type_v<GLint, Args...>)
 				{
-					glUniform4i(location, std::forward<Args>(values)...);
+					glCall(glUniform4i,location, std::forward<Args>(values)...);
 				}
 				else if constexpr (all_same_type_v<GLuint, Args...>)
 				{
-					glUniform4ui(location, std::forward<Args>(values)...);
+					glCall(glUniform4ui,location, std::forward<Args>(values)...);
 				}
 				else
 				{
@@ -87,6 +89,29 @@ namespace RGL {
 				}
 			}
 		}
+		
+
+
+
+		template<glm::length_t vecSize,typename T, glm::qualifier q>
+		void glUniform(GLint location,glm::vec<vecSize,T,q> vec){
+			if constexpr (vecSize == 1) {
+			    glUniform(location, vec.x);
+			}
+			else if constexpr (vecSize == 2) {
+				glUniform(location, vec.x, vec.y);
+			}
+			else if constexpr (vecSize == 3) {
+				glUniform(location, vec.x, vec.y, vec.z);
+			}
+			else if constexpr (vecSize == 4) {
+				glUniform(location, vec.x, vec.y, vec.z, vec.w);
+			}
+			else {
+				static_assert(false, "Error template type");
+			}
+		}
+
 
 		template<GLuint UVarLength, typename T>
 		void glUniformVec(GLint location, GLsizei uniformVarCount, T* data) {
