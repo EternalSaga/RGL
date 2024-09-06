@@ -12,8 +12,8 @@ namespace practice {
 GlobalLight::GlobalLight(std::shared_ptr<Camera> cam) {
     this->cam = cam;
     ShaderSrcs shaders = {
-	{SHADER_TYPE::VERTEX, {"shaders\\Light\\ambient.vert"}},
-	{SHADER_TYPE::FRAGMENT, {"shaders\\Light\\ambient.frag"}}};
+	{SHADER_TYPE::VERTEX, {"shaders\\Light\\phong.vert"}},
+	{SHADER_TYPE::FRAGMENT, {"shaders\\Light\\phong.frag"}}};
     this->shader = std::make_unique<Shader>(shaders);
     this->shader = std::make_unique<Shader>(shaders);
     checkboarder = std::make_unique<Texture>();
@@ -42,8 +42,7 @@ void GlobalLight::operator()() {
     shader->setUniform("lightColor", this->lightColor);
     shader->setUniform("globalLightDirection", this->globalLightDirection);
 
-    shader->setUniform("cameraPos",cam->position);
-
+    shader->setUniform("cameraPos", cam->position);
 
     glCall(glDrawElements, GL_TRIANGLES, mvertCount, GL_UNSIGNED_INT, reinterpret_cast<void *>(midxOffset));
 }
