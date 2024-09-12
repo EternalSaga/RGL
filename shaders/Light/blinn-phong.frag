@@ -27,7 +27,7 @@ void main()
 
 	vec3 halfVector = normalize((-lightDir - viewDir)/2.0);
 
-	float specular = pow(max(dot(halfVector, normal), 0.0), 16.0);
+	float specular = pow(max(dot(halfVector, normal), 0.0), 32.0);
 	vec3 specularColor = specular * lightColor;
 	
 	vec3 ambient = ambient * objectColor;

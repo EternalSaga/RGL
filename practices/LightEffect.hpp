@@ -12,7 +12,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <memory>
-
+#include "Light.hpp"
 namespace RGL {
 namespace practice {
 
@@ -27,10 +27,9 @@ class GlobalLight : public Renderer {
     std::unique_ptr<VAO> vao;
     size_t mvertCount;
     size_t midxOffset;
-    glm::vec3 lightColor{1.0f, 0.9f, 0.9f};
-    glm::vec3 globalLightDirection{1.0f, 1.0f, -1.0f};
-    glm::vec3 ambientLightColor{0.1f, 0.1f, 0.1f};
-    float specularIntensity = 0.5f;
+
+    DirectionalLight light;
+
    public:
     GlobalLight(std::shared_ptr<Camera> cam);
     void operator()() override;

@@ -6,7 +6,6 @@ namespace RGL {
 namespace glcore {
 
 Shader::Shader(const ShaderSrcs &shaderSrcs) : compiled(0), linked(0) {
-
     logger = RGL::RLLogger::getInstance();
 
     // std::map<int, std::vector<fs::path>> ->
@@ -36,7 +35,8 @@ Shader::Shader(const ShaderSrcs &shaderSrcs) : compiled(0), linked(0) {
 	if (!compiled) {
 	    char infoLog[MaxShaderLogLength];
 	    glGetShaderInfoLog(shader, MaxShaderLogLength, nullptr, infoLog);
-	    logger->error(infoLog);	    throw glcore::GLLogicError("The shader is compiled failed");
+	    logger->error(infoLog);
+	    throw glcore::GLLogicError("The shader is compiled failed");
 	}
 
 	glcore::glCall(glAttachShader, shaderProgram, shader);
@@ -65,8 +65,7 @@ Shader::loadFile(const fs::path &p) {
     buffer << ifs.rdbuf();
     return buffer.str();
 }
-void
-Shader::useProgram() {
+void Shader::useProgram() {
     if (compiled && linked) {
 	assert(glIsProgram(shaderProgram));
 	glcore::glCall(glUseProgram, shaderProgram);
@@ -74,5 +73,5 @@ Shader::useProgram() {
 	throw glcore::GLInitExpt("shader program not prepared");
     }
 }
-} // namespace glcore
-} // namespace RGL
+}  // namespace glcore
+}  // namespace RGL

@@ -1,5 +1,6 @@
 #include <vector>
 #include "Geometry.hpp"
+#include "Light.hpp"
 #include "VertexDescriptor.hpp"
 #include "ProgrammedTexture.hpp"
 #include "Helpers.hpp"
@@ -9,7 +10,8 @@
 namespace RGL {
 namespace practice {
 
-GlobalLight::GlobalLight(std::shared_ptr<Camera> cam) {
+GlobalLight::GlobalLight(std::shared_ptr<Camera> cam):light({1.0f, 1.0f, -1.0f}, {1.0f, 0.9f, 0.9f}, {0.1f, 0.1f, 0.1f}, 0.5f)
+ {
     this->cam = cam;
     ShaderSrcs shaders = {
 	{SHADER_TYPE::VERTEX, {"shaders\\Light\\phong.vert"}},
@@ -37,10 +39,8 @@ void GlobalLight::operator()() {
     shader->setUniformMat("viewMatrix", cam->getViewMatrix());
     shader->setUniformMat("projectionMatrix", cam->getProjectionMatrix());
 
-    shader->setUniform("ambient", ambientLightColor);
-    shader->setUniform("specularIntensity", specularIntensity);
-    shader->setUniform("lightColor", this->lightColor);
-    shader->setUniform("globalLightDirection", this->globalLightDirection);
+    light.setShaderUniforms(shader.get());
+
 
     shader->setUniform("cameraPos", cam->position);
 
