@@ -1,15 +1,22 @@
 {
     "configurations": [
-    {
-        "name": "(Windows) Launch",
-        "type": "cppvsdbg",
-        "request": "launch",
-        "program": "${command:cmake.launchTargetPath}",
-        "args": [],
-        "stopAtEntry": false,
-        "cwd": "${workspaceRoot}",
-        "environment": [],
-        "console": "externalTerminal"
-    }
+        {
+            "type": "java",
+            "name": "ReflectJavaMain",
+            "request": "launch",
+            "mainClass": "FindJavaTest.ReflectJavaMain",
+            "projectName": "RGL_a2439106"
+        },
+        {
+            "name": "(Windows) Launch",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${command:cmake.launchTargetPath}",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceRoot}",
+            "environment": [],
+            "console": "externalTerminal"
+        }
     ]
 }

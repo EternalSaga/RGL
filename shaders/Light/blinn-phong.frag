@@ -25,11 +25,11 @@ void main()
 	float dotProduct = dot(-lightDir,normal);
 	float flag = step(0.0, dotProduct);
 
-	vec3 lightReflect = normalize(reflect(lightDir, normal));
+	vec3 halfVector = normalize((-lightDir - viewDir)/2.0);
 
-	float specular = max(dot(lightReflect,-viewDir), 0.0);
-	specular = pow(specular, 32.0);
+	float specular = pow(max(dot(halfVector, normal), 0.0), 16.0);
 	vec3 specularColor = specular * lightColor;
+	
 	vec3 ambient = ambient * objectColor;
 
 

@@ -2,7 +2,7 @@ find_package(Java 21 REQUIRED)
 message(STATUS "Java_JAVA_EXECUTABLE: ${Java_JAVA_EXECUTABLE}")
 
 include(UseJava)
-add_jar(HelloWorldJar JavaMain.java)
+add_jar(HelloWorldJar JavaMain.java ReflectJavaMain.java)
 
 add_executable(CallJvm ./CallJvm.cpp ./JVMWrapper.cpp)
 

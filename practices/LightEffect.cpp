@@ -13,7 +13,7 @@ GlobalLight::GlobalLight(std::shared_ptr<Camera> cam) {
     this->cam = cam;
     ShaderSrcs shaders = {
 	{SHADER_TYPE::VERTEX, {"shaders\\Light\\phong.vert"}},
-	{SHADER_TYPE::FRAGMENT, {"shaders\\Light\\phong.frag"}}};
+	{SHADER_TYPE::FRAGMENT, {"shaders\\Light\\blinn-phong.frag"}}};
     this->shader = std::make_unique<Shader>(shaders);
     this->shader = std::make_unique<Shader>(shaders);
     checkboarder = std::make_unique<Texture>();

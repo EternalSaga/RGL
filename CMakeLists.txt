@@ -11,4 +11,4 @@ add_subdirectory(practices)
 
 add_subdirectory(entry)
 
-add_subdirectory(Test)
+add_subdirectory(FindJavaTest)
