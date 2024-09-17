@@ -50,5 +50,12 @@ std::unique_ptr<VAO> VAOCreater::createMeshVAO(const Mesh& mesh) {
 }
 VAOCreater::VAOCreater(std::shared_ptr<Shader> shader) : shader(shader) {
 }
+size_t Mesh::getVertexLength() {
+    size_t vertLength = 0;
+    for (size_t i = 0; i < descs.size(); i++) {
+	vertLength += descs[i].getLength();
+    }
+    return vertLength;
+}
 }  // namespace glcore
 }

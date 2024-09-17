@@ -10,10 +10,7 @@ vaoCreator(shader)
 {
 
     uuid = boost::uuids::random_generator()();
-    this->vao = vaoCreator.createMeshVAO(*this->mesh);
-    auto [vertCount, idxOffset] = mesh->getIdicesCountAndOffset();
-    mvertCount = vertCount;
-    midxOffset = idxOffset;
+
 }
 void Entity::rotateX(float angle) {
     angleX += angle;
@@ -41,6 +38,45 @@ glm::mat4 Entity::getModelMatrix() {
 void Entity::draw() {
     glCall(glBindVertexArray, *vao);
     glCall(glDrawElements, GL_TRIANGLES, mvertCount, GL_UNSIGNED_INT, reinterpret_cast<void*>(midxOffset));
+}
+void Entity::setMesh(std::unique_ptr<Mesh> mesh) {
+    this->mesh = std::move(mesh);
+    this->vao = vaoCreator.createMeshVAO(*this->mesh);
+    auto [vertCount, idxOffset] = this->mesh->getIdicesCountAndOffset();
+    mvertCount = vertCount;
+    midxOffset = idxOffset;
+
+}
+void Entity::setMaterial(std::unique_ptr<Material> material) {
+    this->material = std::move(material);
+}
+Mesh* Entity::getMesh() {
+    return mesh.get();
+}
+boost::uuids::uuid Entity::getUUID() {
+    return uuid;
+}
+void Entity::setPosition(const glm::vec3& position) {
+    this->position = position;
+}
+SceneManager::SceneManager(std::shared_ptr<Shader> shader) : vaoCreator(shader), shader(shader) {
+}
+void SceneManager::addEntity(std::unique_ptr<Entity> entity) {
+    entities[entity->getUUID()] = std::move(entity);
+}
+void SceneManager::removeEntity(const boost::uuids::uuid& uuid) {
+    entities.erase(uuid);
+}
+void SceneManager::addLight(std::unique_ptr<Light> light) {
+    lights[light->getUUID()] = std::move(light);
+}
+void SceneManager::drawALL() {
+    for (auto& light : lights) {
+	light.second->setShaderUniforms(shader.get());
+    }
+    for (auto& entity : entities) {
+	entity.second->draw();
+    }
 }
 }  // namespace glcore
 }  // namespace RGL

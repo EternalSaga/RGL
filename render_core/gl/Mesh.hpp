@@ -21,16 +21,10 @@ class Mesh {
     size_t vertLength = 0;
     size_t indicesOffset = 0;
 
-	size_t getVertexLength() {
-	size_t vertLength = 0;
-	    for (size_t i = 0; i < descs.size(); i++) {
-	    vertLength += descs[i].getLength();
-	    }
-	    return vertLength;
-	}
+    size_t getVertexLength();
 
    public:
-    Mesh();
+   explicit Mesh();
 
     std::tuple<size_t, size_t> getIdicesCountAndOffset();
 

@@ -43,24 +43,14 @@ class Entity {
     void rotateY(float angle);
     void rotateZ(float angle);
 
-    void setPosition(const glm::vec3& position) {
-	this->position = position;
-    }
+    void setPosition(const glm::vec3& position);
     void setScale(const glm::vec3& scale);
-    boost::uuids::uuid getUUID() {
-	return uuid;
-    }
+    boost::uuids::uuid getUUID();
 
-    void setMesh(std::unique_ptr<Mesh> mesh) {
-	this->mesh = std::move(mesh);
-    }
-    void setMaterial(std::unique_ptr<Material> material) {
-	this->material = std::move(material);
-    }
+    void setMesh(std::unique_ptr<Mesh> mesh);
+    void setMaterial(std::unique_ptr<Material> material);
 
-    Mesh* getMesh() {
-	return mesh.get();
-    }
+    Mesh* getMesh();
     // pitch yaw roll
     glm::mat4 getModelMatrix();
 
@@ -76,27 +66,13 @@ class SceneManager {
     std::shared_ptr<Shader> shader;
 
    public:
-    SceneManager(std::shared_ptr<Shader> shader) : vaoCreator(shader), shader(shader) {
-    }
-    void addEntity(std::unique_ptr<Entity> entity) {
-	entities[entity->getUUID()] = std::move(entity);
-    }
+    SceneManager(std::shared_ptr<Shader> shader);
+    void addEntity(std::unique_ptr<Entity> entity);
 
-    void removeEntity(const boost::uuids::uuid& uuid) {
-	entities.erase(uuid);
-    }
-    void addLight(std::unique_ptr<Light> light) {
-	lights[light->getUUID()] = std::move(light);
-    }
+    void removeEntity(const boost::uuids::uuid& uuid);
+    void addLight(std::unique_ptr<Light> light);
 
-    void drawALL() {
-	for (auto& light : lights) {
-	    light.second->setShaderUniforms(shader.get());
-	}
-	for (auto& entity : entities) {
-	    entity.second->draw();
-	}
-    }
+    void drawALL();
 };
 
 }  // namespace glcore

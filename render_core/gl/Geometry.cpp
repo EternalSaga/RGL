@@ -3,8 +3,7 @@
 #include <vector>
 namespace RGL {
 namespace glcore {
-Cube::Cube(float size) : positions(), uvs(), size(size), halfSize(size / 2.0f) {
-    indicesCount = 36;
+Cube::Cube(float size) : Mesh(),positions(), uvs(), size(size), halfSize(size / 2.0f){
     positions = {
 	// Front face
 	-halfSize, -halfSize, halfSize, halfSize, -halfSize, halfSize, halfSize, halfSize, halfSize, -halfSize, halfSize, halfSize,
@@ -164,7 +163,9 @@ Cube::Cube(float size) : positions(), uvs(), size(size), halfSize(size / 2.0f) {
 	FloatDesc("inPos",3),
 	FloatDesc("inUV", 2), FloatDesc("inNormal",3)};
 
-    const auto vertLength = getVertexLength();
+    Mesh::vertLength = getVertexLength();
+
+	Mesh::indicesCount = indices.size();
 
 	
 

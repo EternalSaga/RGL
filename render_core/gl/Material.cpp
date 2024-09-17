@@ -6,7 +6,7 @@ namespace glcore {
 
 
 void PhongMaterial::setShaderUniforms(Shader* shader) {
-    shader->setUniform("spotIntensity", shiness);
+    shader->setUniform("spotIntensity", static_cast<float>(shiness));
 }
 
 Material::Material(Texture* texture, const std::string& textureName) {
