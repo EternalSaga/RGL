@@ -11,6 +11,8 @@ uniform vec3 globalLightDirection;
 
 uniform vec3 cameraPos;
 in vec3 worldPosition;;
+uniform float spotIntensity;
+
 void main()
 {
 	vec3 objectColor = texture(sampler, uv).rgb;
@@ -27,7 +29,7 @@ void main()
 
 	vec3 halfVector = normalize((-lightDir - viewDir)/2.0);
 
-	float specular = pow(max(dot(halfVector, normal), 0.0), 32.0);
+	float specular = pow(max(dot(halfVector, normal), 0.0), spotIntensity);
 	vec3 specularColor = specular * lightColor;
 	
 	vec3 ambient = ambient * objectColor;

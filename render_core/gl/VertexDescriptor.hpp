@@ -1,30 +1,45 @@
 #pragma once
+#include <string>
 #include <string_view>
 #include <boost/hana/tuple.hpp>
 #include <boost/hana/for_each.hpp>
-
-namespace RGL
-{
-namespace glcore
-{
+#include <vector>
+namespace RGL {
+namespace glcore {
 template <typename T>
 struct VertexElement {
     std::string_view name;
-    consteval size_t getSize() { return sizeof(T); };
-    consteval size_t getLength()
-    {
+
+
+    constexpr size_t getSize() { return sizeof(T); };
+    constexpr size_t getLength() {
 	T t;
 	return std::size(t);
     };
     VertexElement(std::string_view n) : name(n) {}
 };
+
+
+
+struct FloatDesc {
+    std::string name;
+    size_t size;
+    size_t getSize() { return sizeof(float) * size; }
+    size_t getLength() const {
+	return size;
+    }
+    FloatDesc(std::string n, size_t size) : name(n), size(size) {}
+};
+
+using FloatDescs = std::vector<FloatDesc>;
+
 namespace hana = boost::hana;
 using namespace hana::literals;
 
 template <typename T>
 concept IsVertexElementTuple = requires(T t) {
     hana::for_each(t, [](auto t) {
-	t.name->std::template convertible_to<std::string_view>;
+	t.name->std::template convertible_to<std::string>;
 	t.getSize()->std::template convertible_to<std::size_t>;
 	t.getLength()->std::template convertible_to<std::size_t>;
     });
@@ -32,19 +47,17 @@ concept IsVertexElementTuple = requires(T t) {
 
 template <IsVertexElementTuple VertexDescType>
 size_t
-getVertexSize(const VertexDescType &vertexDescription)
-{
+getVertexSize(const VertexDescType &vertexDescription) {
     size_t size = 0;
     // 累加总size
     hana::for_each(vertexDescription,
 	[&size](auto vert) { size += vert.getSize(); });
-	return size;
+    return size;
 }
 
 template <IsVertexElementTuple VertexDescType>
 size_t
-getVertexLength(const VertexDescType &vertexDescription)
-{
+getVertexLength(const VertexDescType &vertexDescription) {
     size_t size = 0;
     // 累加总size
     hana::for_each(vertexDescription,
@@ -52,6 +65,6 @@ getVertexLength(const VertexDescType &vertexDescription)
     return size;
 }
 
-} // namespace glcore
+}  // namespace glcore
 
-} // namespace RGL
+}  // namespace RGL

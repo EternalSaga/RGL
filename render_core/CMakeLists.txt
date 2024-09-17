@@ -16,8 +16,9 @@ ${CMAKE_CURRENT_SOURCE_DIR}/cpu
 ) 
 target_include_directories(RGLFramework PUBLIC  ${PROJECT_SOURCE_DIR}/app ${PROJECT_SOURCE_DIR}/api_abstractor)
 
-find_package(Boost REQUIRED)
-target_link_libraries(RGLFramework PRIVATE Boost::headers)
+find_package(Boost REQUIRED COMPONENTS uuid)
+target_link_libraries(RGLFramework PRIVATE Boost::headers Boost::uuid)
+target_compile_definitions(RGLFramework PRIVATE BOOST_UUID_FORCE_AUTO_LINK)
 find_package(Stb REQUIRED)
 target_include_directories(RGLFramework PRIVATE ${Stb_INCLUDE_DIR})
 target_compile_features(RGLFramework PRIVATE cxx_std_23)

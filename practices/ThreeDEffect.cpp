@@ -164,16 +164,20 @@ DrawCube::DrawCube(std::shared_ptr<Camera> cam)
     ShaderSrcs shaders = {
 	{SHADER_TYPE::VERTEX, {"shaders\\beginner\\ControllerTransform.vert"}},
 	{SHADER_TYPE::FRAGMENT, {"shaders\\beginner\\ControllerTransform.frag"}}};
-    this->shader = std::make_unique<Shader>(shaders);
-    this->shader = std::make_unique<Shader>(shaders);
+    this->shader = std::make_shared<Shader>(shaders);
+
     checkboarder = std::make_unique<Texture>();
     {
 	texture::CheckerBoard cb(8,8);
 	checkboarder->set(cb.getTexture(), "checkboarder", true);
     checkboarder->setFilltering("checkboarder", GL_NEAREST);
     }
-    std::unique_ptr<CommonGeometry> geometry = std::make_unique<Cube>(6.0f,*shader);
-	this->vao = std::move(geometry->getVAO());
+    std::unique_ptr<Mesh> geometry = std::make_unique<Cube>(6.0f);
+
+	VAOCreater vaoCreator(shader);
+
+	this->vao = vaoCreator.createMeshVAO(*geometry);
+
     auto [ vertCount, idxOffset ] = geometry->getIdicesCountAndOffset();
 	mvertCount = vertCount;
     midxOffset = idxOffset;

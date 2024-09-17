@@ -13,13 +13,15 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <memory>
 #include "Light.hpp"
+
+#include "Entity.hpp"
 namespace RGL {
 namespace practice {
 
 using namespace glcore;
 
 class GlobalLight : public Renderer {
-    std::unique_ptr<Shader> shader;
+    std::shared_ptr<Shader> shader;
     std::unique_ptr<Texture> checkboarder;
 
     std::shared_ptr<Camera> cam;
@@ -32,6 +34,19 @@ class GlobalLight : public Renderer {
 
    public:
     GlobalLight(std::shared_ptr<Camera> cam);
+    void operator()() override;
+};
+
+
+class TestEntity : public Renderer {
+    
+    std::unique_ptr<SceneManager> scene;
+    std::shared_ptr<Shader> shader;
+    std::shared_ptr<Camera> cam;
+    std::unique_ptr<Texture> checkboarder;
+    
+   public:
+    TestEntity(std::shared_ptr<Camera> cam);
     void operator()() override;
 };
 

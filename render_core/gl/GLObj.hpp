@@ -17,6 +17,13 @@
 namespace RGL {
 namespace glcore {
 
+
+
+
+
+
+
+
 // 顶点数据和顶点索引放在同一个结构体里
 struct VerticesWithIndices {
     std::vector<float> vertices;
@@ -64,7 +71,6 @@ class VBO {
     // 顶点数据排布在顶点索引之前
     void setData(GLuint vboIdx, const VerticesWithIndices &verticesWithIndices);
     void setData(const VerticesWithIndices &verticesWithIndices);
-
 };
 
 // glDrawArrays TRIANGLES不能复用边，但是TRIANGLE
@@ -191,9 +197,11 @@ class VAO {
 	    [&size](auto vert) { size += vert.getSize(); });
 	// 关联vbo和vao,设置vertex总大小，设置binding
 	// index为0，所以下面的绑定点也是0，毕竟interleaved，一个绑定点就够了。
-	glCall(glVertexArrayVertexBuffer, vao[vaoIdx], 0 //binding index
-		, vbo, 0 //vbo数据的offset，如果vbo一开始有顶点索引或者为了保证对其的话，不是0
-		, size);//每个顶点数据的大小
+	glCall(glVertexArrayVertexBuffer, vao[vaoIdx], 0  // binding index
+	    ,
+	    vbo, 0  // vbo数据的offset，如果vbo一开始有顶点索引或者为了保证对其的话，不是0
+	    ,
+	    size);  // 每个顶点数据的大小
 	assert(glIsProgram(this->shaderProgram));
 	size_t current_offset = 0;
 	// 编译期遍历顶点属性元组，计算offset
@@ -204,20 +212,18 @@ class VAO {
 		std::string(shaderInputName).c_str());
 	    if (location == -1) {
 		logger->error("shader input {} not found.\nThis is an optimized value or wrong input or gl_preserved name", std::string(shaderInputName));
-	    } else{
+	    } else {
 		constexpr GLuint length = vert.getLength();
-	    // 首先在相应的vertex shader的layout location上激活vao属性
-	    glCall(glEnableVertexArrayAttrib, vao[vaoIdx], location);
-	    // 设置顶点描述
-	    glCall(glVertexArrayAttribFormat, vao[vaoIdx], location, length, GL_FLOAT,
-		GL_TRUE, current_offset);
-	    // 绑定到vao的绑定点上,对于interleaved
-	    // buffer，就一个buffer，上面已经设置了绑定点为0，所以这里都是0
-	    glCall(glVertexArrayAttribBinding, vao[vaoIdx], location, 0);
-	    current_offset += vert.getSize();  // 累加size以更新offset
+		// 首先在相应的vertex shader的layout location上激活vao属性
+		glCall(glEnableVertexArrayAttrib, vao[vaoIdx], location);
+		// 设置顶点描述
+		glCall(glVertexArrayAttribFormat, vao[vaoIdx], location, length, GL_FLOAT,
+		    GL_TRUE, current_offset);
+		// 绑定到vao的绑定点上,对于interleaved
+		// buffer，就一个buffer，上面已经设置了绑定点为0，所以这里都是0
+		glCall(glVertexArrayAttribBinding, vao[vaoIdx], location, 0);
+		current_offset += vert.getSize();  // 累加size以更新offset
 	    }
-
-
 	});
     }
 
@@ -226,6 +232,9 @@ class VAO {
 	const VertexDescType &vertexDescription) {
 	setDSA_interleaved(0, vbo, vertexDescription);
     }
+
+    void setDSA_interleaved(const GLuint vaoIdx, const GLuint vbo, FloatDescs descs);
+
     /// <summary>
     /// 当VAO长度为1的简化
     /// </summary>

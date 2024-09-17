@@ -1,7 +1,7 @@
 #pragma once
 #include "Helpers.hpp"
 #include <cstdint>
-#include <filesystem>
+
 #include <glad/glad.h>
 #include <memory>
 #include <mutex>
@@ -10,6 +10,7 @@
 #include <vector>
 #include <random>
 #include <ctime>
+#include <filesystem>
 namespace RGL
 {
 namespace io
@@ -61,7 +62,7 @@ class TextUnitResources
     static std::once_flag initOnce;
 };
 
-// 没有考虑到纹理单元的归还，暂时先这样
+
 class Texture
 {
 	std::mt19937 mt;//随机选择一个幸运纹理单元被重新绑定

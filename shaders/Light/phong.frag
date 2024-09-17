@@ -27,6 +27,7 @@ void main()
 
 	vec3 lightReflect = normalize(reflect(lightDir, normal));
 
+	//现阶段是个0-1的cosine曲线，增加指数以增加聚光光斑程度
 	float specular = max(dot(lightReflect,-viewDir), 0.0);
 	specular = pow(specular, 32.0);
 	vec3 specularColor = specular * lightColor;

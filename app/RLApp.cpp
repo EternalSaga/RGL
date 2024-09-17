@@ -15,68 +15,48 @@
 #include <memory>
 #include <mutex>
 
-
-namespace RGL
-{
+namespace RGL {
 
 std::atomic_bool RLApp::isInit;
 std::shared_ptr<RLApp> RLApp::instance;
 std::mutex RLApp::mu;
-void
-onResize(int width, int height)
-{
+void onResize(int width, int height) {
     glcore::glCall(glViewport, 0, 0, width, height);
 }
-void
-onSetKeyboard(int key, int action, int mods)
-{
+void onSetKeyboard(int key, int action, int mods) {
     auto logger = RGL::RLLogger::getInstance();
     logger->info("press key{}", key);
 }
 
-void
-onMouseButton(int button, int action)
-{
+void onMouseButton(int button, int action) {
     auto logger = RGL::RLLogger::getInstance();
     logger->info("press button{},action {}", button, action);
 }
 
-void
-onCursorMove(double x, double y)
-{
+void onCursorMove(double x, double y) {
     auto logger = RGL::RLLogger::getInstance();
     logger->info("the cursor posision is ({},{})", x, y);
 }
 
 RLApp::RLApp(std::shared_ptr<SDLWindow> window)
-    : sdlWindow(window)
-{
-
-
+    : sdlWindow(window) {
 }
 
-void
-RLApp::run()
-{
+void RLApp::run() {
     bool shoudQuit = false;
 
     while (!shoudQuit) {
-
 	shoudQuit = controlLogic->dealWithEvent();
 
 	renderCtx->render();
     }
 }
 
-void
-RLApp::setRendererContext(std::unique_ptr<RendererContext> ctx)
-{
+void RLApp::setRendererContext(std::unique_ptr<RendererContext> ctx) {
     renderCtx = std::move(ctx);
 }
 
-
-std::unique_ptr<RendererContext> CreateContext(API_TYPE api_type, std::shared_ptr<SDLWindow> sdlWindow,std::shared_ptr<Camera> camera){
-
+std::unique_ptr<RendererContext> CreateContext(API_TYPE api_type, std::shared_ptr<SDLWindow> sdlWindow, std::shared_ptr<Camera> camera) {
     std::unique_ptr<RendererContext> renderCxt;
 
     if (api_type == API_TYPE::OPENGL46) {
@@ -93,9 +73,7 @@ std::unique_ptr<RendererContext> CreateContext(API_TYPE api_type, std::shared_pt
     return renderCxt;
 }
 
-void
-app()
-{
+void app() {
     constexpr auto api = API_TYPE::OPENGL46;
 
     auto window =
@@ -106,17 +84,15 @@ app()
 
     std::shared_ptr<Camera> camera = std::make_shared<PerspectiveCamera>(60.0f, static_cast<float>(window->getWidth()) / window->getHeight(), 0.1f, 1000.0f);
 
-
     testLogic->setCamera(camera);
 
     app.setControlLogic(std::move(testLogic));
 
-    auto renderCtx = CreateContext(api, window,camera);
+    auto renderCtx = CreateContext(api, window, camera);
 
     app.setRendererContext(std::move(renderCtx));
 
     app.run();
 }
 
-
-} // namespace RGL
+}  // namespace RGL

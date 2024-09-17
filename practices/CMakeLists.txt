@@ -7,3 +7,4 @@ target_include_directories(practices PUBLIC ${PROJECT_SOURCE_DIR}/api_abstractor
  ${PROJECT_SOURCE_DIR}/render_core/cpu ${PROJECT_SOURCE_DIR}/render_core/logger
  ${PROJECT_SOURCE_DIR}/app
  )
+

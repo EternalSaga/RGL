@@ -64,7 +64,7 @@ class DepthTestExecise : public Renderer {
 class DrawCube : public Renderer
 {
     
-    std::unique_ptr<Shader> shader;
+    std::shared_ptr<Shader> shader;
     std::unique_ptr<Texture> checkboarder;
 
     std::shared_ptr<Camera> cam;
