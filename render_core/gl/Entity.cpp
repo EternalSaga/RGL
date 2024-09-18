@@ -1,6 +1,7 @@
 #include "Entity.hpp"
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/random_generator.hpp>
+#include <cassert>
 #include "Mesh.hpp"
 namespace RGL {
 namespace glcore {
@@ -26,16 +27,19 @@ void Entity::setScale(const glm::vec3& scale) {
 }
 glm::mat4 Entity::getModelMatrix() {
     auto tranform{glm::identity<glm::mat4>()};
+
+    assert(scale.x != 0.0f && scale.y != 0.0f && scale.z != 0.0f);
+
     tranform = glm::scale(tranform, scale);
     tranform = glm::rotate(tranform, glm::radians(angleX), glm::vec3(1.0f, 0.0f, 0.0f));
     tranform = glm::rotate(tranform, glm::radians(angleY), glm::vec3(0.0f, 1.0f, 0.0f));
     tranform = glm::rotate(tranform, glm::radians(angleZ), glm::vec3(0.0f, 0.0f, 1.0f));
     tranform = glm::translate(glm::identity<glm::mat4>(), position) * tranform;
 
-   
     return tranform;
 }
 void Entity::draw() {
+    shader->setUniformMat("modelMatrix", getModelMatrix());
     glCall(glBindVertexArray, *vao);
     glCall(glDrawElements, GL_TRIANGLES, mvertCount, GL_UNSIGNED_INT, reinterpret_cast<void*>(midxOffset));
 }
@@ -62,13 +66,16 @@ void Entity::setPosition(const glm::vec3& position) {
 SceneManager::SceneManager(std::shared_ptr<Shader> shader) : vaoCreator(shader), shader(shader) {
 }
 void SceneManager::addEntity(std::unique_ptr<Entity> entity) {
-    entities[entity->getUUID()] = std::move(entity);
+    const auto uuid = entity->getUUID();
+    entities[uuid] = std::move(entity);
+
 }
 void SceneManager::removeEntity(const boost::uuids::uuid& uuid) {
     entities.erase(uuid);
 }
 void SceneManager::addLight(std::unique_ptr<Light> light) {
-    lights[light->getUUID()] = std::move(light);
+    const auto uuid = light->getUUID();
+    this->lights[uuid] = std::move(light);
 }
 void SceneManager::drawALL() {
     for (auto& light : lights) {

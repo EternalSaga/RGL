@@ -14,5 +14,8 @@ void DirectionalLight::setShaderUniforms(Shader* shader) {
     shader->setUniform("globalLightDirection", lightDirection);
     
 }
+boost::uuids::uuid Light::getUUID() {
+    return uuid;
 }
+}  // namespace glcore
 }

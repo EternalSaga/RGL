@@ -16,9 +16,7 @@ class Light {
     }
     virtual void setShaderUniforms(Shader* shader)=0;
     virtual ~Light() = default;
-	boost::uuids::uuid getUUID() {
-	return uuid;
-	}
+    boost::uuids::uuid getUUID();
 };
 
 class DirectionalLight : public Light {
