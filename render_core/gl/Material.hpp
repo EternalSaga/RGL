@@ -10,11 +10,11 @@ class Material {
     Texture* texture;
     std::string textureName;
    public:
-    Material(Texture* texture, const std::string& textureName);
+    Material(Texture* texture,Shader* shader, const std::string& textureName);
     virtual ~Material() = default;
-
+    Shader* shader;
     std::map<std::string,float> uniformMap;
-    virtual void setShaderUniforms(Shader* shader) = 0;
+    virtual void setShaderUniforms() = 0;
 };
 
 class PhongMaterial : public Material {
@@ -22,9 +22,9 @@ class PhongMaterial : public Material {
     GLfloat shiness;
 
    public:
-    PhongMaterial(Texture* texture, const std::string& textureName, GLfloat shiness);
+    PhongMaterial(Texture* texture,Shader* shader, const std::string& textureName, GLfloat shiness);
     virtual ~PhongMaterial() = default;
-    void setShaderUniforms(Shader* shader) override;
+    void setShaderUniforms() override;
 };
 
 }  // namespace glcore
