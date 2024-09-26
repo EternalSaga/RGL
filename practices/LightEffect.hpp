@@ -43,7 +43,7 @@ class TestEntity : public Renderer {
     std::unique_ptr<SceneManager> scene;
     std::shared_ptr<Shader> shader;
     std::shared_ptr<Camera> cam;
-    std::unique_ptr<Texture> checkboarder;
+    std::unique_ptr<Texture> checkboarder_doraemon;
     
    public:
     TestEntity(std::shared_ptr<Camera> cam);

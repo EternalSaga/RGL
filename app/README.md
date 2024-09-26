@@ -1,0 +1,3 @@
+随便说两句，GUI框架别选择wxwidgets，虽然wxwidgets可以和sdl兼容，但是只兼容软渲染部分。不兼容OpenGL context。
+
+如果wxwidgets就应该全部用wxwidgets来写，不能用sdl
