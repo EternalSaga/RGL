@@ -40,6 +40,9 @@ glm::mat4 Entity::getModelMatrix() {
 }
 void Entity::draw() {
     shader->setUniformMat("modelMatrix", getModelMatrix());
+
+	this->material->setShaderUniforms();
+
     glCall(glBindVertexArray, *vao);
     glCall(glDrawElements, GL_TRIANGLES, mvertCount, GL_UNSIGNED_INT, reinterpret_cast<void*>(midxOffset));
 }
@@ -82,6 +85,7 @@ void SceneManager::drawALL() {
 	light.second->setShaderUniforms(shader.get());
     }
     for (auto& entity : entities) {
+
 	entity.second->draw();
     }
 }

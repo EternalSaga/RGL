@@ -7,6 +7,7 @@ namespace RGL {
 
 namespace glcore {
 class Material {
+   protected:
     Texture* texture;
     std::string textureName;
    public:
