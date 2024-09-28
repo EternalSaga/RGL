@@ -1,6 +1,8 @@
 
 #include "GLFramework.hpp"
-
+#include <imgui.h>
+#include <imgui_impl_sdl2.h>
+#include <imgui_impl_opengl3.h>
 namespace RGL
 {
 namespace glcore
@@ -46,6 +48,22 @@ GLContext::GLContext(SDL_Window *windowHandler, GLint viewPortWidth,
 
 	glCall(glViewport, 0, 0, viewPortWidth, viewPortHeight);
 	glCall(glClearColor, 0.2f, 0.3f, 0.3f, 1.0f);
+
+
+	IMGUI_CHECKVERSION();
+	ImGui::CreateContext();
+
+	ImGuiIO& io = ImGui::GetIO();
+	(void)io;
+	io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;  // Enable Keyboard Controls
+	io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;   // Enable Gamepad Controls
+							       // Setup Dear ImGui style
+	ImGui::StyleColorsDark();
+	// ImGui::StyleColorsLight();
+
+	// Setup Platform/Renderer backends
+	ImGui_ImplSDL2_InitForOpenGL(this->window_, glContext);
+	ImGui_ImplOpenGL3_Init("#version 130");
 
 	glEnable(GL_DEPTH_TEST); // 开启深度检测
 

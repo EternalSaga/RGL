@@ -26,5 +26,6 @@ void main()
 	gl_Position = projectionMatrix * viewMatrix * transformPosition;
 	
 	uv = inUV;
-	normal = inNormal;
+	//求逆变换最好在CPU端完成
+	normal = transpose(inverse(mat3(modelMatrix))) * inNormal;
 }

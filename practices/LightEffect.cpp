@@ -1,4 +1,3 @@
-#include <glm/fwd.hpp>
 #include <memory>
 #include <vector>
 #include "Entity.hpp"
@@ -10,6 +9,7 @@
 #include "Helpers.hpp"
 
 #include "LightEffect.hpp"
+
 
 namespace RGL {
 namespace practice {
@@ -55,14 +55,16 @@ void GlobalLight::operator()() {
 }
 
 TestEntity::TestEntity(std::shared_ptr<Camera> cam){
+
+
+
     this->cam = cam;
     ShaderSrcs shaders = {
 	{SHADER_TYPE::VERTEX, {"shaders\\Light\\phong.vert"}},
-	{SHADER_TYPE::FRAGMENT, {"shaders\\Light\\phong.frag"}}}; 
+	{SHADER_TYPE::FRAGMENT, {"shaders\\Light\\blinn-phong.frag"}}}; 
     this->shader = std::make_shared<Shader>(shaders);
-
+	//初始化纹理
     checkboarder_doraemon = std::make_unique<Texture>(2);
-
     {
 	texture::CheckerBoard cb(8, 8);
 	checkboarder_doraemon->set(cb.getTexture(), "checkboarder", true);
@@ -72,6 +74,7 @@ TestEntity::TestEntity(std::shared_ptr<Camera> cam){
 	checkboarder_doraemon->set(landImg, "doraemon", true);
     }
     shader->useProgram();
+	//设置第一个entity
     std::unique_ptr<Material> material = std::make_unique<PhongMaterial>(checkboarder_doraemon.get(), shader.get(), "checkboarder", 32.0f);
     material->setShaderUniforms();
     std::unique_ptr<Mesh> geometry = std::make_unique<Cube>(12.0f);
@@ -81,24 +84,24 @@ TestEntity::TestEntity(std::shared_ptr<Camera> cam){
     this->scene = std::make_unique<SceneManager>(shader);
     this->scene->addEntity(std::move(cubeEntity));
 
+	//设置第二个entity
 	std::unique_ptr<Material> doraemonMaterial = std::make_unique<PhongMaterial>(checkboarder_doraemon.get(), shader.get(), "doraemon", 32.0f);
-
 	std::unique_ptr<Mesh> cubeGeometry = std::make_unique<Cube>(12.0f);
+	//比第一个entity往x轴+偏移一些
     std::unique_ptr<Entity> cubeEntity2 = std::make_unique<Entity>(glm::vec3{13.0f, 0.0f, 0.0f}, 0.0f, 0.0f, 0.0f, glm::vec3{1.0f, 1.0f, 1.0f}, shader, "cube2");
 	cubeEntity2->setMesh(std::move(cubeGeometry));
     cubeEntity2->setMaterial(std::move(doraemonMaterial));
 	this->scene->addEntity(std::move(cubeEntity2));
-
-
+	//光源
     std::unique_ptr<Light> light = std::make_unique<DirectionalLight>(glm::vec3{1.0f, 1.0f, -1.0f}, glm::vec3{1.0f, 0.9f, 0.9f}, glm::vec3{0.1f, 0.1f, 0.1f}, 0.5f,32.0f);
     this->scene->addLight(std::move(light));
-
 }
 void TestEntity::operator()() {
     shader->useProgram();
     shader->setUniformMat("viewMatrix", cam->getViewMatrix());
     shader->setUniformMat("projectionMatrix", cam->getProjectionMatrix());
     shader->setUniform("cameraPos", cam->position);
+	//场景绘制
     this->scene->drawALL();
 }
 }  // namespace practice
