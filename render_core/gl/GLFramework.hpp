@@ -7,6 +7,7 @@
 #include <memory>
 #include <cassert>
 #include "api_types.hpp"
+#include <imgui.h>
 namespace RGL {
 namespace glcore {
 class GLContext : public RendererContext {

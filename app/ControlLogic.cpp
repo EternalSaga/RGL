@@ -1,4 +1,6 @@
 #include "ControlLogic.hpp"
+#include <imgui.h>
+#include <imgui_impl_sdl2.h>
 
 namespace RGL
 {
@@ -9,6 +11,7 @@ ControlLogic::dealWithEvent()
     SDL_Event sdlevent;
     bool quit = false;
     while (SDL_PollEvent(&sdlevent)) {
+	ImGui_ImplSDL2_ProcessEvent(&sdlevent);
 	if (sdlevent.type == SDL_QUIT) {
 	    quit = true;
 	} else if (sdlevent.type == SDL_WINDOWEVENT) {

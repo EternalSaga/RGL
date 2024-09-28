@@ -12,6 +12,7 @@
 #include "Mesh.hpp"
 #include "Material.hpp"
 #include "Shader.hpp"
+#include <bullet/btBulletDynamicsCommon.h>
 namespace RGL {
 namespace glcore {
 
@@ -64,6 +65,7 @@ class SceneManager {
 
     VAOCreater vaoCreator;
     std::shared_ptr<Shader> shader;
+    btDiscreteDynamicsWorld* dynamicWorld;
 
    public:
     SceneManager(std::shared_ptr<Shader> shader);
