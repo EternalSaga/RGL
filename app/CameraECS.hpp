@@ -3,7 +3,7 @@
 #include <glm/glm.hpp>
 
 namespace RGL {
-struct CamMovmentComponent {
+struct CameraBasicAttributes {
     float sensitivity;
     float scaleSpeed;
     float speed;  // 移动速度系数

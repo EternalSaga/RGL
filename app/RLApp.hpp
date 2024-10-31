@@ -33,10 +33,7 @@ class RLApp
   public:
     RLApp(std::shared_ptr<SDLWindow> window);
 
-    inline void setControlLogic(std::unique_ptr<ControlLogic> controlLogic)
-    {
-	    this->controlLogic = std::move(controlLogic);
-    }
+
     void run();
 
     void setRendererContext(std::unique_ptr<RendererContext> ctx);
