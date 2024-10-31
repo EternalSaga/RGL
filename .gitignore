@@ -366,3 +366,5 @@ MigrationBackup/
 FodyWeavers.xsd
 *.jpg
 /CodeGeneration/GenTextureUnit.js
+*.7z
+*.png

@@ -4,20 +4,15 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <cassert>
 
+namespace RGL {
 
+class Camera {
+   public:
+    glm::vec3 position;	 // 当前camera位置
+    glm::vec3 up;	 // camera本地坐标系的上方
+    glm::vec3 right;	 // camera本地坐标系右方
 
-namespace RGL
-{
-class Camera
-{
-
-public:
-
-    glm::vec3 position; // 当前camera位置
-    glm::vec3 up;	// camera本地坐标系的上方
-    glm::vec3 right;	// camera本地坐标系右方
-
-  public:
+   public:
     Camera();
     virtual ~Camera() = default;
     glm::mat4 getViewMatrix() const;
@@ -25,9 +20,7 @@ public:
     virtual glm::mat4 getProjectionMatrix() const = 0;
 };
 
-class OrthographicCamera:public Camera
-{
-
+class OrthographicCamera : public Camera {
     // 正交box？参数
     float left;
     float right;
@@ -36,29 +29,24 @@ class OrthographicCamera:public Camera
     float near;
     float far;
 
-  public:
+   public:
     OrthographicCamera(float l, float r, float t, float b, float n, float f);
     ~OrthographicCamera() = default;
     glm::mat4 getProjectionMatrix() const;
     void scale(float deltaScale);
 };
 
-class PerspectiveCamera:public Camera
-{
-
+class PerspectiveCamera : public Camera {
     // 视锥体参数
-    float fovy; // 传入角度
+    float fovy;	 // 传入角度
     float aspect;
     float near;
     float far;
 
-  public:
+   public:
     PerspectiveCamera(float fovy, float aspect, float near, float far);
     glm::mat4 getProjectionMatrix() const;
     void scale(float deltaScale);
 };
 
-
-
-
-} // namespace RGL
+}  // namespace RGL
