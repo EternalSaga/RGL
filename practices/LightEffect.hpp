@@ -37,7 +37,6 @@ class GlobalLight : public Renderer {
     void operator()() override;
 };
 
-
 class TestEntity : public Renderer {
     
     std::unique_ptr<SceneManager> scene;
@@ -49,6 +48,30 @@ class TestEntity : public Renderer {
     TestEntity(std::shared_ptr<Camera> cam);
     void operator()() override;
 };
+
+class PhongSPMaskExec : public Renderer {
+    std::unique_ptr<SceneManager> scene;
+    std::shared_ptr<Shader> shader;
+    std::shared_ptr<Camera> cam;
+
+	std::unique_ptr<Texture> box_spMask;
+
+   public:
+    PhongSPMaskExec(std::shared_ptr<Camera> cam);
+    void operator()() override;
+};
+
+class SpotLightExec : public Renderer {
+	std::unique_ptr<SceneManager> scene;
+    std::shared_ptr<Shader> spotLightShader;
+    std::shared_ptr<Camera> cam;
+    std::unique_ptr<Texture> box_spMask;
+
+	public:
+    SpotLightExec(std::shared_ptr<Camera> cam);
+	void operator()() override;
+};
+
 
 }  // namespace practice
 }  // namespace RGL

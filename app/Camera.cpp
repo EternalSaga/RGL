@@ -1,6 +1,6 @@
 #include "Camera.hpp"
 #include <glm/ext/quaternion_geometric.hpp>
-
+#include "EnttRegistry.hpp"
 namespace RGL {
 
 Camera::Camera() : position(0.0f, 0.0f, 1.0f),
@@ -33,4 +33,5 @@ void PerspectiveCamera::scale(float deltaScale) {
     const auto front = glm::cross(this->up, this->right);
     this->position += front * deltaScale;
 }
+
 }  // namespace RGL

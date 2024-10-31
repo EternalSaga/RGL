@@ -31,6 +31,14 @@ class DirectionalLight : public Light {
     ~DirectionalLight() = default;
     void setShaderUniforms(Shader* shader);
 };
+
+class PointLight : public Light{
+    
+    float mK2;
+    float mK1;
+    float mKC;
+};
+
 }  // namespace glcore
 
 }  // namespace RGL

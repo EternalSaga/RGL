@@ -1,14 +1,18 @@
 #pragma once
 #include "ControlLogic.hpp"
 #include <map>
-namespace RGL
-{
+
+
+
+namespace RGL {
+
+
+
 struct CamControlInner {
-protected:
+   protected:
     bool leftDown;
     bool rightDown;
     bool middleDown;
-
 
     glm::vec2 currentCursor;
     glm::vec2 leftdownCursor;
@@ -18,29 +22,26 @@ protected:
     float sensitivity;
     float scaleSpeed;
 
-    float pitch; // 俯仰角
-    float yaw;	 // 水平角度
-    float speed; // 移动速度系数
+    float pitch;  // 俯仰角
+    float yaw;	  // 水平角度
+    float speed;  // 移动速度系数
 
     virtual void doPitch(float angle) = 0;
     virtual void doYaw(float angle) = 0;
 
-  public:
+   public:
     CamControlInner();
     ~CamControlInner() = default;
     void setSensitivity(float sensitivity) { this->sensitivity = sensitivity; }
 };
 
-class CamControlGame : public ControlLogic,public CamControlInner
-{
-  public:
+class CamControlGame : public ControlLogic, public CamControlInner {
+   public:
     CamControlGame();
     ~CamControlGame() = default;
     void setSpeed(float speed) { this->speed = speed; }
 
-  private:
-
-    
+   private:
     void doPitch(float angle) override;
     void doYaw(float angle) override;
     void onKeyboardDownCbk(const SDL_KeyboardEvent &keyboardEvt) override;
@@ -53,13 +54,12 @@ class CamControlGame : public ControlLogic,public CamControlInner
     void onCursorMoveCbk(const SDL_MouseMotionEvent &cursorEvt) override;
 };
 
-class CamControlTrackball : public ControlLogic, public CamControlInner
-{
-  public:
+class CamControlTrackball : public ControlLogic, public CamControlInner {
+   public:
     CamControlTrackball() = default;
     ~CamControlTrackball() = default;
 
-  private:
+   private:
     void doPitch(float angle) override;
     void doYaw(float angle) override;
     void onKeyboardDownCbk(const SDL_KeyboardEvent &keyboardEvt) override;
@@ -71,4 +71,10 @@ class CamControlTrackball : public ControlLogic, public CamControlInner
     void onWindowResizeCbk(const SDL_WindowEvent &windowEvt) override;
     void onCursorMoveCbk(const SDL_MouseMotionEvent &cursorEvt) override;
 };
-} // namespace RGL
+
+// 判断当前鼠标指针是否往回移动
+inline bool currentCursorBetween(const glm::vec2 &downCursor, const glm::vec2 &lastCursor, const glm::vec2 &currentCursor) {
+    // 如果鼠标在左键点下时候的点和上一个更新的点的中间，那么中间点和两边点的夹角应该是钝角，点乘小于0
+    return glm::dot(currentCursor - lastCursor, currentCursor - downCursor) < 0;
+}
+}  // namespace RGL

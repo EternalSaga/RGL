@@ -32,3 +32,5 @@ target_link_libraries(RGLFramework
 )
 find_package(imgui CONFIG REQUIRED)
 target_link_libraries(RGLFramework PUBLIC imgui::imgui)
+find_package(EnTT CONFIG REQUIRED)
+target_link_libraries(RGLFramework PUBLIC EnTT::EnTT)
