@@ -11,12 +11,12 @@ TrackBallMouseKeyboardSystem::TrackBallMouseKeyboardSystem() {
     singleReg = EnttReg::getPrimaryRegistry();
 }
 void TrackBallMouseKeyboardSystem::update() {
-    auto view = singleReg->view<SDL_Event, MouseKeyboardControlComponent, const CamMovmentComponent, CameraEulerAngle>();
+    auto view = singleReg->view<SDL_Event, MouseKeyboardControlComponent, const CameraBasicAttributes, CameraEulerAngle>();
     for (auto entity : view) {
 	auto &sdlevent = view.get<SDL_Event>(entity);
 	SDL_PollEvent(&sdlevent);
 	auto &mouseKeyboard = view.get<MouseKeyboardControlComponent>(entity);
-	const auto &camMove = view.get<CamMovmentComponent>(entity);
+	const auto &camMove = view.get<CameraBasicAttributes>(entity);
 	auto &eularAngle = view.get<CameraEulerAngle>(entity);
 	if (sdlevent.type == SDL_QUIT) {
 	    mouseKeyboard.shouldQuit = true;

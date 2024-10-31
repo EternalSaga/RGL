@@ -17,16 +17,18 @@ struct MouseKeyboardControlComponent {
 
 class TrackBallMouseKeyboardSystem {
     entt::registry *singleReg;
-    TrackBallMouseKeyboardSystem();
+    
 
    public:
+    TrackBallMouseKeyboardSystem();
     void update();
 };
 class TrackballSystem {
     entt::registry *singleReg;
-    TrackballSystem();
+    
 
    public:
+    TrackballSystem();
     void update();
 };
 	}
