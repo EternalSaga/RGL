@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CameraECS.hpp"
-
+#include "ControllerECS.hpp"
 namespace RGL {
 
 class Camera {
@@ -9,22 +9,23 @@ class Camera {
     virtual void update() = 0;
 };
 
-//class OrthographicCamera : public Camera {
-//    // 正交box？参数
-//    float left;
-//    float right;
-//    float top;
-//    float bottom;
-//    float near;
-//    float far;
-//
-//   public:
-//    OrthographicCamera(float l, float r, float t, float b, float n, float f);
-//    ~OrthographicCamera() = default;
-//    glm::mat4 getProjectionMatrix() const;
-//    void scale(float deltaScale);
-//};
+class PerspectiveTrackballCamera : public Camera {
+    PerspectiveCamSystem cameraSystem;
+    TrackBallMouseKeyboardSystem trackballMouseKeyboardControl;
+    TrackballSystem trackballSystem;
+    entt::registry* singleReg;
+    entt::entity mouseKeyboardStatus;
+    entt::entity cameraBasicAttributes;
+    entt::entity cameraPose;
+    entt::entity eulerAngle;
+    entt::entity cameraProjection;
 
+   public:
+    PerspectiveTrackballCamera(float fovy, float aspect, float near, float far);
 
+    void update();
+
+    ~PerspectiveTrackballCamera();
+};
 
 }  // namespace RGL

@@ -31,8 +31,6 @@ class ControlLogic
 
 class TestLogControlLogic : public ControlLogic
 {
-    
-
   protected:
     void onKeyboardDownCbk(const SDL_KeyboardEvent &keyboardEvt) override;
     void onKeyboardUpCbk(const SDL_KeyboardEvent &keyboardEvt) override;

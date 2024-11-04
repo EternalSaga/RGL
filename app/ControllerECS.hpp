@@ -1,12 +1,16 @@
 #include "EnttRegistry.hpp"
 #include <glm/glm.hpp>
 namespace RGL {
-struct MouseKeyboardControlComponent {
+
+
+
+struct MouseKeyboardInput {
+
     bool leftDown;
     bool rightDown;
     bool middleDown;
 
-    bool shouldQuit;
+    bool shouldQuit = false;
 
     glm::vec2 currentCursor;
     glm::vec2 leftdownCursor;
@@ -15,20 +19,17 @@ struct MouseKeyboardControlComponent {
     std::map<int, bool> keyMap;
 };
 
-class TrackBallMouseKeyboardSystem {
-    entt::registry *singleReg;
-    
-
+class TrackBallMouseKeyboardSystem : public SingleReg {
    public:
-    TrackBallMouseKeyboardSystem();
     void update();
 };
-class TrackballSystem {
-    entt::registry *singleReg;
-    
-
+class TrackballSystem : public SingleReg {
    public:
-    TrackballSystem();
     void update();
 };
-	}
+
+class GameControlSystem : public SingleReg {
+	public:
+    void update();
+};
+}  // namespace RGL

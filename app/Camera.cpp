@@ -1,7 +1,7 @@
 #include "Camera.hpp"
 #include <glm/ext/quaternion_geometric.hpp>
 #include "EnttRegistry.hpp"
-#include "ControllerECS.hpp"
+
 #include "CameraECS.hpp"
 namespace RGL {
 
@@ -36,41 +36,29 @@ namespace RGL {
 //     this->position += front * deltaScale;
 // }
 
-class PerspectiveCamera : public Camera {
-    PerspectiveCamSystem system;
-    TrackBallMouseKeyboardSystem trackballMouseKeyboardControl;
+PerspectiveTrackballCamera::PerspectiveTrackballCamera(float fovy, float aspect, float near, float far) : cameraSystem(fovy, aspect, near, far), singleReg(EnttReg::getPrimaryRegistry()), mouseKeyboardStatus(singleReg->create()), cameraBasicAttributes(singleReg->create()), cameraPose(singleReg->create()), eulerAngle(singleReg->create()), cameraProjection(singleReg->create()) {
+    singleReg->emplace<MouseKeyboardInput>(mouseKeyboardStatus);
 
-    entt::registry* singleReg;
-    entt::entity mouseKeyboardStatus;
-    entt::entity cameraBasicAttributes;
-    entt::entity cameraPose;
-    entt::entity eulerAngle;
-    entt::entity cameraProjection;
+    // init sensitivity,scale,speed
+    singleReg->emplace<CameraBasicAttributes>(cameraBasicAttributes, 0.2f, 0.1f, 0.5f);
+    // init position,up vector,right vector
+    singleReg->emplace<CameraPose>(cameraPose, glm::vec3{0.0f, 0.0f, 1.0f}, glm::vec3{0.0f, 1.0f, 0.0f}, glm::vec3{1.0f, 0.0f, 0.0f});
+    singleReg->emplace<CameraEulerMoveParams>(eulerAngle);
+    singleReg->emplace<CameraProjection>(cameraProjection);
+}
 
-   public:
-    PerspectiveCamera(float fovy, float aspect, float near, float far) : system(fovy, aspect, near, far), singleReg(EnttReg::getPrimaryRegistry()), mouseKeyboardStatus(singleReg->create()), cameraBasicAttributes(singleReg->create()), cameraPose(singleReg->create()), eulerAngle(singleReg->create()), cameraProjection(singleReg->create())
-    {
-	singleReg->emplace<MouseKeyboardControlComponent>(mouseKeyboardStatus);
-	singleReg->emplace<CameraBasicAttributes>(cameraBasicAttributes);
-	//position,up vector,right vector
-	singleReg->emplace<CameraPose>(cameraPose, glm::vec3{0.0f, 0.0f, 1.0f}, glm::vec3{0.0f, 1.0f, 0.0f}, glm::vec3{1.0f, 0.0f, 0.0f});
-	singleReg->emplace<CameraEulerAngle>(eulerAngle);
-	singleReg->emplace<CameraProjection>(cameraProjection);
-	
-    }
+void PerspectiveTrackballCamera::update() {
+    trackballMouseKeyboardControl.update();
+    trackballSystem.update();
+    cameraSystem.update();
+}
 
-    void update() override{
-	trackballMouseKeyboardControl.update();
-
-    }
-
-    ~PerspectiveCamera() {
-	singleReg->destroy(cameraProjection);
-	singleReg->destroy(eulerAngle);
-	singleReg->destroy(cameraPose);
-	singleReg->destroy(cameraBasicAttributes);
-	singleReg->destroy(mouseKeyboardStatus);
-    }
-};
+PerspectiveTrackballCamera::~PerspectiveTrackballCamera() {
+    singleReg->destroy(cameraProjection);
+    singleReg->destroy(eulerAngle);
+    singleReg->destroy(cameraPose);
+    singleReg->destroy(cameraBasicAttributes);
+    singleReg->destroy(mouseKeyboardStatus);
+}
 
 }  // namespace RGL
