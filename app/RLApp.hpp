@@ -1,6 +1,6 @@
 #pragma once
 #include "Camera.hpp"
-#include "CameraController.hpp"
+
 #include "SDLWindow.hpp"
 #include "api_types.hpp"
 #include <glad/glad.h>
@@ -25,9 +25,6 @@ class RLApp
 
 
   std::unique_ptr<Camera> camera;
-  
-  private:
-    std::unique_ptr<ControlLogic> controlLogic;
     
 
   public:
