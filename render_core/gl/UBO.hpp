@@ -1,10 +1,13 @@
 #pragma once
+#include <glad/glad.h>
 namespace RGL {
 namespace glcore {
  
     class UBO {
     public:
-        UBO(const std::string &name, const std::vector<glm::mat4> &data, unsigned int bindingPoint);
+		UBO() {
+
+	}
 
     };
 }}

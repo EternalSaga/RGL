@@ -1,8 +1,8 @@
 
 #include "RLApp.hpp"
 #include "Camera.hpp"
-#include "CameraController.hpp"
-#include "ControlLogic.hpp"
+
+
 #include "GLFramework.hpp"
 #include "Helpers.hpp"
 #include "SRFramework.hpp"

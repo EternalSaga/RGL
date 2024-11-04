@@ -75,7 +75,7 @@ public:
   void setUniform(const std::string &uniformVarName, Args... values) {
     const auto location = glcore::glCallRet(
         glGetUniformLocation, this->shaderProgram, uniformVarName.c_str());
-    glcore::glUniform(location, std::forward<Args>(values)...);
+      glcore::glUniform(shaderProgram,location, std::forward<Args>(values)...);
   }
 
   /// <summary>
@@ -94,7 +94,7 @@ public:
            0); // 数组长度=所有数据长度/uniform变量长度
     const GLsizei uniformVarCount = data.size() / UVarLength;
 
-    glUniformVec(location, uniformVarCount, data.data());
+    glUniformVec(shaderProgram,location, uniformVarCount, data.data());
   }
 
   template <int Cols, int Rows, glm::qualifier q>
@@ -102,7 +102,7 @@ public:
                      const glm::mat<Cols, Rows, glm::f32, q> &m) {
     const auto location = glcore::glCallRet(
         glGetUniformLocation, this->shaderProgram, uniformName.c_str());
-    glUniformMatrix(location, m);
+      glUniformMatrix(shaderProgram,location,m);
   }
 
 private:
