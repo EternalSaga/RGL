@@ -11,4 +11,12 @@ namespace RGL {
 	 ~EnttReg();
 		
 	};
-}
+
+	class SingleReg {
+	   protected:
+	    entt::registry* singleReg;
+
+	   public:
+	    SingleReg();
+	};
+	}

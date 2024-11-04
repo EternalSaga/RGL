@@ -13,16 +13,25 @@ struct CameraPose {
     glm::vec3 position;	 // 当前camera位置
     glm::vec3 up;	 // camera本地坐标系的上方
     glm::vec3 right;	 // camera本地坐标系右方
+
+	float pitch;
+    float yaw;
 };
 
 struct CameraProjection {
     glm::mat4 viewMat;
     glm::mat4 projMat;
 };
-struct CameraEulerAngle {
+struct CameraEulerMoveParams {
     float yawAngle;
     float pitchAngle;
     float deltaScale;
+
+
+
+    //{1,0,0}→，{-1,0,0}←
+	//{0,1,0}↑，{0,-1,0}↓
+    glm::vec3 direction;
 };
 
 class PerspectiveCamSystem {

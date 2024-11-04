@@ -136,6 +136,7 @@ PhongSPMaskExec::PhongSPMaskExec(std::shared_ptr<Camera> cam) {
 }
 void PhongSPMaskExec::operator()() {
     shader->useProgram();
+    cam->update();
     shader->setUniformMat("viewMatrix", cam->getViewMatrix());
     shader->setUniformMat("projectionMatrix", cam->getProjectionMatrix());
     shader->setUniform("cameraPos", cam->position);

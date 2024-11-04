@@ -17,5 +17,7 @@ EnttReg::~EnttReg() {
 	delete enttRegistry;
     enttRegistry = nullptr;
 }
-
+SingleReg::SingleReg() {
+    singleReg = EnttReg::getPrimaryRegistry();
+}
 }  // namespace RGL
