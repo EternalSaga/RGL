@@ -49,9 +49,9 @@ PerspectiveTrackballCamera::PerspectiveTrackballCamera(float fovy, float aspect,
     singleReg->emplace<CameraProjection>(cameraProjection, glm::mat4{1.0f}, glm::mat4{1.0f});
     auto view = singleReg->view<CameraPose, CameraEulerMoveParams>();
 
-	assert(singleReg->valid(cameraPose));
+    assert(singleReg->valid(cameraPose));
     assert(singleReg->valid(eulerAngle));
-    view.each([](auto pose,auto param) {
+    view.each([](auto pose, auto param) {
 	int a = 111;
 	std::cout << a;
     });
