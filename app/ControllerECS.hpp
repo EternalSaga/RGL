@@ -1,8 +1,8 @@
+#pragma once
 #include "EnttRegistry.hpp"
 #include <glm/glm.hpp>
 namespace RGL {
-
-
+bool currentCursorBetween(const glm::vec2 &downCursor, const glm::vec2 &lastCursor, const glm::vec2 &currentCursor);
 
 struct MouseKeyboardInput {
 
@@ -32,4 +32,5 @@ class GameControlSystem : public SingleReg {
 	public:
     void update();
 };
+bool ShouldQuit();
 }  // namespace RGL
