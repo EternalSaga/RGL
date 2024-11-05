@@ -19,4 +19,6 @@ namespace RGL {
 	   public:
 	    SingleReg();
 	};
+
+
 	}

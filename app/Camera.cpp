@@ -1,8 +1,9 @@
 #include "Camera.hpp"
 #include <glm/ext/quaternion_geometric.hpp>
 #include "EnttRegistry.hpp"
-
+#include <iostream>
 #include "CameraECS.hpp"
+#include <cassert>
 namespace RGL {
 
 // Camera::Camera() : position(0.0f, 0.0f, 1.0f),
@@ -37,14 +38,23 @@ namespace RGL {
 // }
 
 PerspectiveTrackballCamera::PerspectiveTrackballCamera(float fovy, float aspect, float near, float far) : cameraSystem(fovy, aspect, near, far), singleReg(EnttReg::getPrimaryRegistry()), mouseKeyboardStatus(singleReg->create()), cameraBasicAttributes(singleReg->create()), cameraPose(singleReg->create()), eulerAngle(singleReg->create()), cameraProjection(singleReg->create()) {
-    singleReg->emplace<MouseKeyboardInput>(mouseKeyboardStatus);
+    singleReg->emplace<MouseKeyboardInput>(mouseKeyboardStatus, false, false, false, false, glm::vec2{0.0f, 0.0f}, glm::vec2{0.0f, 0.0f}, glm::vec2{0.0f, 0.0f}, glm::vec2{0.0f, 0.0f}, std::map<int, bool>{});
 
     // init sensitivity,scale,speed
     singleReg->emplace<CameraBasicAttributes>(cameraBasicAttributes, 0.2f, 0.1f, 0.5f);
     // init position,up vector,right vector
     singleReg->emplace<CameraPose>(cameraPose, glm::vec3{0.0f, 0.0f, 1.0f}, glm::vec3{0.0f, 1.0f, 0.0f}, glm::vec3{1.0f, 0.0f, 0.0f});
-    singleReg->emplace<CameraEulerMoveParams>(eulerAngle);
-    singleReg->emplace<CameraProjection>(cameraProjection);
+
+    singleReg->emplace<CameraEulerMoveParams>(eulerAngle, 0.0f, 0.0f, 0.0f, glm::vec3{0.0f, 0.0f, 0.0f});
+    singleReg->emplace<CameraProjection>(cameraProjection, glm::mat4{1.0f}, glm::mat4{1.0f});
+    auto view = singleReg->view<CameraPose, CameraEulerMoveParams>();
+
+	assert(singleReg->valid(cameraPose));
+    assert(singleReg->valid(eulerAngle));
+    view.each([](auto pose,auto param) {
+	int a = 111;
+	std::cout << a;
+    });
 }
 
 void PerspectiveTrackballCamera::update() {

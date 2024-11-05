@@ -2,7 +2,6 @@
 #include "RLApp.hpp"
 #include "Camera.hpp"
 
-
 #include "GLFramework.hpp"
 #include "Helpers.hpp"
 #include "SRFramework.hpp"
@@ -47,9 +46,8 @@ void RLApp::run() {
     bool shoudQuit = false;
 
     while (!shoudQuit) {
-	shoudQuit = controlLogic->dealWithEvent();
-
 	renderCtx->render();
+	shoudQuit = ShouldQuit();
     }
 }
 
@@ -81,11 +79,7 @@ void app() {
 	std::make_shared<SDLWindow>(720, 480, "opengl_study", api);
     RLApp app(window);
 
-
     std::shared_ptr<Camera> camera = std::make_shared<PerspectiveTrackballCamera>(60.0f, static_cast<float>(window->getWidth()) / window->getHeight(), 0.1f, 1000.0f);
-
-
-
 
     auto renderCtx = CreateContext(api, window, camera);
 

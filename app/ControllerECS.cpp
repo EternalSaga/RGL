@@ -5,7 +5,24 @@
 #include <glm/gtc/matrix_transform.hpp>
 namespace RGL {
 
+	bool currentCursorBetween(const glm::vec2 &downCursor, const glm::vec2 &lastCursor, const glm::vec2 &currentCursor) {
+    // 如果鼠标在左键点下时候的点和上一个更新的点的中间，那么中间点和两边点的夹角应该是钝角，点乘小于0
+    return glm::dot(currentCursor - lastCursor, currentCursor - downCursor) < 0;
+}
 
+	bool ShouldQuit() {
+    bool shouldQuit = false;
+    const auto singleReg = EnttReg::getPrimaryRegistry();
+	    auto view = singleReg->view<const MouseKeyboardInput>();
+    for (auto entity : view) {
+		auto &mouseKeyboard = view.get<MouseKeyboardInput>(entity);
+	if (mouseKeyboard.shouldQuit) {
+		    shouldQuit = true;
+	    break;
+	}
+    }
+    return shouldQuit;
+	}
 
 class GameMouseKeyboardSystem : public SingleReg {
    public:
@@ -99,9 +116,9 @@ class GameMouseKeyboardSystem : public SingleReg {
 
 
 void TrackBallMouseKeyboardSystem::update() {
-    auto view = singleReg->view<SDL_Event, MouseKeyboardInput, const CameraBasicAttributes, CameraEulerMoveParams>();
+    auto view = singleReg->view<MouseKeyboardInput, const CameraBasicAttributes, CameraEulerMoveParams>();
     for (auto entity : view) {
-	auto &sdlevent = view.get<SDL_Event>(entity);
+	SDL_Event sdlevent;
 	SDL_PollEvent(&sdlevent);
 	auto &mouseKeyboard = view.get<MouseKeyboardInput>(entity);
 	const auto &camMove = view.get<CameraBasicAttributes>(entity);
