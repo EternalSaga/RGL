@@ -21,12 +21,12 @@ entt::sigh<void(int, int)> on_mouse_move;
 struct PlayerComponent {
     void on_left_click() {
 	// 发射子弹
-	std::cout << "发射子弹" << std::endl;
+	std::cout << u8"shoot" << std::endl;
     }
 
     void on_mouse_move(int x, int y) {
 	// 更新瞄准方向
-	std::cout << "更新瞄准方向到: (" << x << ", " << y << ")" << std::endl;
+	std::cout << u8"aim to: (" << x << ", " << y << ")" << std::endl;
     }
 };
 
@@ -35,13 +35,20 @@ int main() {
 	PlayerComponent player;
 
     // 连接信号和玩家组件的成员函数
-    entt::sink sink(on_mouse_move);
-    sink.connect<&PlayerComponent::on_mouse_move>(player);
+    entt::sink movesink(on_mouse_move);
+	movesink.connect<&PlayerComponent::on_mouse_move>(player);
 
+    entt::sink shootSink(on_left_click);
+	shootSink.connect<&PlayerComponent::on_left_click>(player);
 
     // 模拟鼠标事件
-    on_left_click.publish();
+	on_left_click.publish();
     on_mouse_move.publish(100, 200);
 
+	movesink.disconnect<&PlayerComponent::on_mouse_move>(player);
+    shootSink.disconnect<&PlayerComponent::on_left_click>(player);
+
+	on_left_click.publish();
+    on_mouse_move.publish(200, 300);
     return 0;
 }
