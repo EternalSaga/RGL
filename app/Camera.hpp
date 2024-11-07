@@ -14,11 +14,8 @@ class PerspectiveTrackballCamera : public Camera {
     TrackBallMouseKeyboardSystem trackballMouseKeyboardControl;
     TrackballSystem trackballSystem;
     entt::registry* singleReg;
-    entt::entity mouseKeyboardStatus;
-    entt::entity cameraBasicAttributes;
-    entt::entity cameraPose;
-    entt::entity eulerAngle;
-    entt::entity cameraProjection;
+    entt::entity perspcativeCameraEntity;
+
 
    public:
     PerspectiveTrackballCamera(float fovy, float aspect, float near, float far);
