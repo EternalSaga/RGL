@@ -22,7 +22,7 @@ Use vcpkg to install the following libraries.
 
 ### Build
 
-Open the repostory folder with vs2022 then press ctrl + shift + B to build it. Perhaps you need to edit the value of "cmakeToolchain" in the CMakeSettings.json file to make sure the vcpkg has been integrated into this project.
+Open the repostory folder with vs2022 then press ctrl + shift + B to build it. Perhaps you need to edit the value of "cmakeToolchain" in the CMakeSettings.json file to make sure the vcpkg has been integrated into this project if you haven't add your vcpkg path to system environment variable "VCPKG_ROOT".
 
 ## Project Structure
 

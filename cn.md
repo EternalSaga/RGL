@@ -19,7 +19,7 @@
 
 ### 构建
 
-直接使用vs2022打开本项目目录，直接构建。在构建之前你可能需要修改CMakeSettings.json文件里的cmakeToolchain的值，以保证cmake能找到vcpkg。
+直接使用vs2022打开本项目目录，直接构建。如果你没有把vcpkg的路径添加到环境变量“VCPKG_ROOT”，在构建之前你可能需要修改CMakeSettings.json文件里的cmakeToolchain的值，以保证cmake能找到vcpkg。
 
 
 ## 文件结构
