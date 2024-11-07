@@ -37,7 +37,7 @@ namespace RGL {
 //     this->position += front * deltaScale;
 // }
 
-PerspectiveTrackballCamera::PerspectiveTrackballCamera(float fovy, float aspect, float near, float far) : cameraSystem(fovy, aspect, near, far), singleReg(EnttReg::getPrimaryRegistry()), perspcativeCameraEntity(singleReg->create()){
+PerspectiveTrackballCamera::PerspectiveTrackballCamera(float fovy, float aspect, float near, float far) : cameraSystem(fovy, aspect, near, far), singleReg(EnttReg::getPrimaryRegistry()), perspcativeCameraEntity(singleReg->create()) {
     singleReg->emplace<MouseKeyboardInput>(perspcativeCameraEntity, false, false, false, false, glm::vec2{0.0f, 0.0f}, glm::vec2{0.0f, 0.0f}, glm::vec2{0.0f, 0.0f}, glm::vec2{0.0f, 0.0f}, std::map<int, bool>{});
 
     // init sensitivity,scale,speed
@@ -47,7 +47,6 @@ PerspectiveTrackballCamera::PerspectiveTrackballCamera(float fovy, float aspect,
 
     singleReg->emplace<CameraEulerMoveParams>(perspcativeCameraEntity, 0.0f, 0.0f, 0.0f, glm::vec3{0.0f, 0.0f, 0.0f});
     singleReg->emplace<CameraProjection>(perspcativeCameraEntity, glm::mat4{1.0f}, glm::mat4{1.0f});
-
 }
 
 void PerspectiveTrackballCamera::update() {
@@ -58,7 +57,6 @@ void PerspectiveTrackballCamera::update() {
 
 PerspectiveTrackballCamera::~PerspectiveTrackballCamera() {
     singleReg->destroy(perspcativeCameraEntity);
-
 }
 
 }  // namespace RGL
