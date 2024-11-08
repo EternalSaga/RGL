@@ -10,7 +10,7 @@ PerspectiveTrackballCamera::PerspectiveTrackballCamera(float fovy, float aspect,
     singleReg->emplace<MouseKeyboardInput>(perspcativeCameraEntity, false, false, false, false, glm::vec2{0.0f, 0.0f}, glm::vec2{0.0f, 0.0f}, glm::vec2{0.0f, 0.0f}, glm::vec2{0.0f, 0.0f}, std::map<int, bool>{});
 
     // init sensitivity,scale,speed
-    singleReg->emplace<CameraBasicAttributes>(perspcativeCameraEntity, 0.2f, 0.1f, 0.5f);
+    singleReg->emplace<CameraBasicAttributes>(perspcativeCameraEntity, 0.1f, 0.2f, 0.2f);
     // init position,up vector,right vector
     singleReg->emplace<CameraPose>(perspcativeCameraEntity, glm::vec3{0.0f, 0.0f, 1.0f}, glm::vec3{0.0f, 1.0f, 0.0f}, glm::vec3{1.0f, 0.0f, 0.0f});
 
