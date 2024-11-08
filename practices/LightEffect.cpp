@@ -46,10 +46,22 @@ PhongSPMaskExec::PhongSPMaskExec(std::shared_ptr<Camera> cam) {
     // 场景添加光源
     this->scene->addLight(std::move(light));
 }
+
 void PhongSPMaskExec::operator()() {
     shader->useProgram();
     cam->update();
 
+    glm::mat4 viewMat;
+    glm::mat4 proj;
+    glm::vec3 pos;
+
+    auto& getProjMatsSigh = GetProjMatsSigh();
+
+    getProjMatsSigh.publish(viewMat, proj, pos);
+
+    shader->setUniformMat("viewMatrix", viewMat);
+    shader->setUniformMat("projectionMatrix", proj);
+    shader->setUniform("cameraPos", pos);
     // 场景绘制
     this->scene->drawALL();
 }

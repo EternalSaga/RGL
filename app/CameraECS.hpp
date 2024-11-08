@@ -22,13 +22,18 @@ struct CameraProjection {
     glm::mat4 viewMat;
     glm::mat4 projMat;
 };
+
+struct ShaderUniformCamProperties {
+    glm::mat4 viewMat;
+    glm::mat4 projMat;
+    glm::vec3 position;
+    void outPropertyies(glm::mat4& v, glm::mat4& p, glm::vec3& pos);
+};
+
 struct CameraEulerMoveParams {
     float yawAngle;
     float pitchAngle;
     float deltaScale;
-
-
-
     //{1,0,0}→，{-1,0,0}←
 	//{0,1,0}↑，{0,-1,0}↓
     glm::vec3 direction;
@@ -48,4 +53,7 @@ class PerspectiveCamSystem {
     PerspectiveCamSystem(float fovy, float aspect, float near, float far);
     void update();
 };
+
+entt::sigh<void(glm::mat4&, glm::mat4&, glm::vec3&)>& GetProjMatsSigh();
+
 }
