@@ -5,8 +5,12 @@
 namespace RGL {
 
 class Camera {
+
+
    public:
     virtual void update() = 0;
+
+	
 };
 
 class PerspectiveTrackballCamera : public Camera {
@@ -16,7 +20,7 @@ class PerspectiveTrackballCamera : public Camera {
     entt::registry* singleReg;
     entt::entity perspcativeCameraEntity;
 
-
+	
    public:
     PerspectiveTrackballCamera(float fovy, float aspect, float near, float far);
 
