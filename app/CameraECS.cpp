@@ -1,7 +1,7 @@
 #include "CameraECS.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 namespace RGL {
-PerspectiveCamSystem::PerspectiveCamSystem(float fovy, float aspect, float near, float far) : fovy(fovy), aspect(aspect), near(near), far(far)
+PerspectiveCamSystem::PerspectiveCamSystem(float fovy, float aspect, float nearplan, float farplan) : fovy(fovy), aspect(aspect), near(nearplan), far(farplan)
 
 {
     singleReg = EnttReg::getPrimaryRegistry();
@@ -18,6 +18,8 @@ entt::sigh<void(glm::mat4&, glm::mat4&, glm::vec3&)>& GetProjMatsSigh() {
     static entt::sigh<void(glm::mat4&, glm::mat4&, glm::vec3&)> sigh;
     return sigh;
 }
+
+
 
 void PerspectiveCamSystem::update() {
     auto view = singleReg->view<const CameraBasicAttributes, CameraPose, CameraProjection>();

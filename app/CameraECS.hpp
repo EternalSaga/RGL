@@ -50,7 +50,7 @@ class PerspectiveCamSystem {
     glm::mat4 proj;
 
    public:
-    PerspectiveCamSystem(float fovy, float aspect, float near, float far);
+    PerspectiveCamSystem(float fovy, float aspect, float nearplan, float farplan);
     void update();
 };
 
