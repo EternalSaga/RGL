@@ -123,6 +123,10 @@ void TrackBallMouseKeyboardSystem::update() {
 	auto &mouseKeyboard = view.get<MouseKeyboardInput>(entity);
 	const auto &camMove = view.get<CameraBasicAttributes>(entity);
 	auto &eularAngle = view.get<CameraEulerMoveParams>(entity);
+	//首先清空欧拉角参数，不然旋转缩放会持续累加
+	eularAngle.deltaScale = 0.0f;
+	eularAngle.pitchAngle = 0.0f;
+	eularAngle.yawAngle = 0.0f;
 	if (sdlevent.type == SDL_QUIT) {
 	    mouseKeyboard.shouldQuit = true;
 	} else if (sdlevent.type == SDL_WINDOWEVENT) {
