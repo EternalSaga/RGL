@@ -27,7 +27,6 @@ struct ShaderUniformCamProperties {
     glm::mat4 viewMat;
     glm::mat4 projMat;
     glm::vec3 position;
-    void outPropertyies(glm::mat4& v, glm::mat4& p, glm::vec3& pos);
 };
 
 struct CameraEulerMoveParams {
@@ -48,12 +47,12 @@ class PerspectiveCamSystem {
 
     entt::registry* singleReg;
     glm::mat4 proj;
-
+    
    public:
     PerspectiveCamSystem(float fovy, float aspect, float nearplan, float farplan);
-    void update();
+    ShaderUniformCamProperties update();
 };
 
-entt::sigh<void(glm::mat4&, glm::mat4&, glm::vec3&)>& GetProjMatsSigh();
+
 
 }

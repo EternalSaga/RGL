@@ -6,10 +6,11 @@ namespace RGL {
 
 class Camera {
 
-
+   protected:
+    entt::sigh<void(glm::mat4&, glm::mat4&, glm::vec3&)> projMatsSigh;
    public:
-    virtual void update() = 0;
-
+    virtual ShaderUniformCamProperties update() = 0;
+    Camera() = default;
 	
 };
 
@@ -24,7 +25,7 @@ class PerspectiveTrackballCamera : public Camera {
    public:
     PerspectiveTrackballCamera(float fovy, float aspect, float near, float far);
 
-    void update();
+    ShaderUniformCamProperties update();
 
     ~PerspectiveTrackballCamera();
 };

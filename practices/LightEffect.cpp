@@ -49,19 +49,19 @@ PhongSPMaskExec::PhongSPMaskExec(std::shared_ptr<Camera> cam) {
 
 void PhongSPMaskExec::operator()() {
     shader->useProgram();
-    cam->update();
+    
+    glm::vec3 pos2{0.0f, 0.0f, 100.0f};
+    glm::mat4 proj2 = glm::perspective(glm::radians(60.0f), 720.0f / 480.0f, 0.1f, 1000.0f);
+    // glm::mat4 viewMat = glm::lookAt(pos, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f});
+    auto camProps = cam->update();
+    //glm::vec3 pos;
+    //glm::mat4 proj;
+    //glm::mat4 viewMat;
 
-    glm::mat4 viewMat;
-    glm::mat4 proj;
-    glm::vec3 pos;
 
-    auto& getProjMatsSigh = GetProjMatsSigh();
-
-    getProjMatsSigh.publish(viewMat, proj, pos);
-
-    shader->setUniformMat("viewMatrix", viewMat);
-    shader->setUniformMat("projectionMatrix", proj);
-    shader->setUniform("cameraPos", pos);
+    shader->setUniformMat("viewMatrix", camProps.viewMat);
+    shader->setUniformMat("projectionMatrix", camProps.projMat);
+    shader->setUniform("cameraPos", camProps.position);
     // 场景绘制
     this->scene->drawALL();
 }
