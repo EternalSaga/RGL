@@ -1,12 +1,9 @@
 #include <memory>
-#include <vector>
+
 #include "Entity.hpp"
 #include "Geometry.hpp"
 #include "Light.hpp"
 #include "Material.hpp"
-#include "VertexDescriptor.hpp"
-#include "ProgrammedTexture.hpp"
-#include "Helpers.hpp"
 
 #include "LightEffect.hpp"
 
@@ -34,13 +31,12 @@ PhongSPMaskExec::PhongSPMaskExec(std::shared_ptr<Camera> cam) {
     std::unique_ptr<Material> material = std::make_unique<PhoneWithSPMask>(box_spMask.get(), shader.get(), "box", 32.0f);
     material->setShaderUniforms();
     std::unique_ptr<Mesh> geometry = std::make_unique<Cube>(12.0f);
-    std::unique_ptr<Entity> cubeEntity = std::make_unique<Entity>(glm::vec3{0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, 0.0f, glm::vec3{1.0f, 1.0f, 1.0f}, shader, "cube");
+    std::unique_ptr<CommonEntity> cubeEntity = std::make_unique<CommonEntity>(glm::vec3{0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, 0.0f, glm::vec3{1.0f, 1.0f, 1.0f}, shader);
     // 实体设置网格和纹理
     cubeEntity->setMesh(std::move(geometry));
     cubeEntity->setMaterial(std::move(material));
     this->scene = std::make_unique<SceneManager>(shader);
-    // 场景添加实体
-    this->scene->addEntity(std::move(cubeEntity));
+
     // 光源
     std::unique_ptr<Light> light = std::make_unique<DirectionalLight>(glm::vec3{1.0f, 1.0f, -1.0f}, glm::vec3{1.0f, 0.9f, 0.9f}, glm::vec3{0.2f, 0.2f, 0.2f}, 0.5f, 32.0f);
     // 场景添加光源
@@ -49,15 +45,8 @@ PhongSPMaskExec::PhongSPMaskExec(std::shared_ptr<Camera> cam) {
 
 void PhongSPMaskExec::operator()() {
     shader->useProgram();
-    
-    glm::vec3 pos2{0.0f, 0.0f, 100.0f};
-    glm::mat4 proj2 = glm::perspective(glm::radians(60.0f), 720.0f / 480.0f, 0.1f, 1000.0f);
-    // glm::mat4 viewMat = glm::lookAt(pos, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f});
-    auto camProps = cam->update();
-    //glm::vec3 pos;
-    //glm::mat4 proj;
-    //glm::mat4 viewMat;
 
+    auto camProps = cam->update();
 
     shader->setUniformMat("viewMatrix", camProps.viewMat);
     shader->setUniformMat("projectionMatrix", camProps.projMat);
