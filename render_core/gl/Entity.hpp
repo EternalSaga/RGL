@@ -3,7 +3,7 @@
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/fwd.hpp>
 #include <glm/glm.hpp>
-#include <boost/uuid/uuid.hpp>
+
 #include <map>
 #include <memory>
 #include <string>
@@ -12,66 +12,62 @@
 #include "Mesh.hpp"
 #include "Material.hpp"
 #include "Shader.hpp"
-#include <bullet/btBulletDynamicsCommon.h>
+
+#include "EnttRegistry.hpp"
+
 namespace RGL {
 namespace glcore {
 
-class Entity {
-    glm::vec3 position;
-
+struct PoseComponent {
     float angleX;
     float angleY;
     float angleZ;
     glm::vec3 scale;
-    boost::uuids::uuid uuid;
-    std::string name;
-    std::unique_ptr<Mesh> mesh;
+    glm::vec3 position;
+};
+
+struct MeshComponent {
+    std::unique_ptr<VAO> vao;
+    size_t vertCount;
+    size_t idxOffset;
+};
+
+struct MaterialComponent {
     std::unique_ptr<Material> material;
     std::shared_ptr<Shader> shader;
+};
+
+class CommonEntity : public SingleReg {
     VAOCreater vaoCreator;
-
-    std::unique_ptr<VAO> vao;
-    size_t mvertCount;
-    size_t midxOffset;
-
+    entt::entity entity;
+	std::shared_ptr<Shader> shader;
    protected:
     virtual void setShaderUniforms(Shader* shader) {
     }
 
    public:
-    Entity(glm::vec3 position, float angleX, float angleY, float angleZ, glm::vec3 scale, std::shared_ptr<Shader> shader, std::string name);
-    void rotateX(float angle);
-    void rotateY(float angle);
-    void rotateZ(float angle);
+    CommonEntity(glm::vec3 position, float angleX, float angleY, float angleZ, glm::vec3 scale, std::shared_ptr<Shader> shader);
 
-    void setPosition(const glm::vec3& position);
-    void setScale(const glm::vec3& scale);
-    boost::uuids::uuid getUUID();
+
+
 
     void setMesh(std::unique_ptr<Mesh> mesh);
     void setMaterial(std::unique_ptr<Material> material);
 
-    Mesh* getMesh();
-    // pitch yaw roll
-    glm::mat4 getModelMatrix();
 
-    void draw();
 };
 
-class SceneManager {
+class SceneManager : public SingleReg {
    private:
-    std::map<boost::uuids::uuid, std::unique_ptr<Entity>> entities;
+
     std::map<boost::uuids::uuid, std::unique_ptr<Light>> lights;
 
     VAOCreater vaoCreator;
     std::shared_ptr<Shader> shader;
-    btDiscreteDynamicsWorld* dynamicWorld;
 
    public:
     SceneManager(std::shared_ptr<Shader> shader);
-    void addEntity(std::unique_ptr<Entity> entity);
 
-    void removeEntity(const boost::uuids::uuid& uuid);
     void addLight(std::unique_ptr<Light> light);
 
     void drawALL();
