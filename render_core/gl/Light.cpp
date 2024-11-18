@@ -1,21 +1,13 @@
 #include "Light.hpp"
 namespace RGL{
 namespace glcore {
-DirectionalLight::DirectionalLight(const glm::vec3& lightDirection, const glm::vec3& lightColor, const glm::vec3& ambientColor, float specularIntensity,float spotIntensity):
-lightDirection(lightDirection), lightColor(lightColor), ambientColor(ambientColor), specularIntensity(specularIntensity)
-{
+DirectionalLight::DirectionalLight(const glm::vec3& lightDirection, const glm::vec3& lightColor, const glm::vec3& ambientColor, float specularIntensity, float spotIntensity, std::shared_ptr<Shader> shader) :entity(singleReg->create()) {
 
+
+	singleReg->emplace<DirectionalLightComponent>(entity, lightDirection, lightColor, ambientColor, spotIntensity);
+    singleReg->emplace<std::shared_ptr<Shader>>(entity,shader);
 }
 
-void DirectionalLight::setShaderUniforms(Shader* shader) {
-    shader->setUniform("ambient", ambientColor);
-    shader->setUniform("specularIntensity", specularIntensity);
-    shader->setUniform("lightColor", lightColor);
-    shader->setUniform("globalLightDirection", lightDirection);
-    
-}
-boost::uuids::uuid Light::getUUID() {
-    return uuid;
-}
+
 }  // namespace glcore
 }
