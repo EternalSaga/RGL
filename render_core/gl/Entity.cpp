@@ -43,17 +43,22 @@ void CommonEntity::setMaterial(std::unique_ptr<Material> material) {
     singleReg->emplace<MaterialComponent>(entity, std::move(material), shader);
 }
 
-SceneManager::SceneManager(std::shared_ptr<Shader> shader) : vaoCreator(shader), shader(shader) {
+SceneManager::SceneManager() {
 }
 
-void SceneManager::addLight(std::unique_ptr<Light> light) {
-    const auto uuid = light->getUUID();
-    this->lights[uuid] = std::move(light);
-}
+
 void SceneManager::drawALL() {
-    for (auto& light : lights) {
-	light.second->setShaderUniforms(shader.get());
-    }
+
+
+	auto directionalLightEntitis = singleReg->view<const DirectionalLightComponent, const std::shared_ptr<Shader>>();
+
+	directionalLightEntitis.each([](const DirectionalLightComponent& directLight, const std::shared_ptr<Shader>& shader) {
+	    shader->setUniform("ambient", directLight.ambientColor);
+	    shader->setUniform("specularIntensity", directLight.specularIntensity);
+	    shader->setUniform("lightColor", directLight.lightColor);
+	    shader->setUniform("globalLightDirection", directLight.lightDirection);
+		});
+
 
     auto viewForCommonEntity = singleReg->view<PoseComponent, const MeshComponent, const MaterialComponent>();
 

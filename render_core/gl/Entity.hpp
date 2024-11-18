@@ -47,28 +47,17 @@ class CommonEntity : public SingleReg {
 
    public:
     CommonEntity(glm::vec3 position, float angleX, float angleY, float angleZ, glm::vec3 scale, std::shared_ptr<Shader> shader);
-
-
-
-
     void setMesh(std::unique_ptr<Mesh> mesh);
     void setMaterial(std::unique_ptr<Material> material);
-
 
 };
 
 class SceneManager : public SingleReg {
    private:
-
-    std::map<boost::uuids::uuid, std::unique_ptr<Light>> lights;
-
-    VAOCreater vaoCreator;
-    std::shared_ptr<Shader> shader;
+    
 
    public:
-    SceneManager(std::shared_ptr<Shader> shader);
-
-    void addLight(std::unique_ptr<Light> light);
+    SceneManager();
 
     void drawALL();
 };

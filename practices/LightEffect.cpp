@@ -35,12 +35,11 @@ PhongSPMaskExec::PhongSPMaskExec(std::shared_ptr<Camera> cam) {
     // 实体设置网格和纹理
     cubeEntity->setMesh(std::move(geometry));
     cubeEntity->setMaterial(std::move(material));
-    this->scene = std::make_unique<SceneManager>(shader);
+    this->scene = std::make_unique<SceneManager>();
 
     // 光源
-    std::unique_ptr<Light> light = std::make_unique<DirectionalLight>(glm::vec3{1.0f, 1.0f, -1.0f}, glm::vec3{1.0f, 0.9f, 0.9f}, glm::vec3{0.2f, 0.2f, 0.2f}, 0.5f, 32.0f);
-    // 场景添加光源
-    this->scene->addLight(std::move(light));
+    std::unique_ptr<DirectionalLight> light = std::make_unique<DirectionalLight>(glm::vec3{1.0f, 1.0f, -1.0f}, glm::vec3{1.0f, 0.9f, 0.9f}, glm::vec3{0.2f, 0.2f, 0.2f}, 0.5f, 32.0f, shader);
+
 }
 
 void PhongSPMaskExec::operator()() {
