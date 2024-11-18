@@ -39,7 +39,6 @@ PhongSPMaskExec::PhongSPMaskExec(std::shared_ptr<Camera> cam) {
 
     // 光源
     std::unique_ptr<DirectionalLight> light = std::make_unique<DirectionalLight>(glm::vec3{1.0f, 1.0f, -1.0f}, glm::vec3{1.0f, 0.9f, 0.9f}, glm::vec3{0.2f, 0.2f, 0.2f}, 0.5f, 32.0f, shader);
-
 }
 
 void PhongSPMaskExec::operator()() {
