@@ -22,8 +22,13 @@ struct PoseComponent {
     float angleX;
     float angleY;
     float angleZ;
-    glm::vec3 scale;
+
+};
+struct PositionComponent {
     glm::vec3 position;
+};
+struct ScaleComponent {
+    glm::vec3 scale;
 };
 
 struct MeshComponent {
