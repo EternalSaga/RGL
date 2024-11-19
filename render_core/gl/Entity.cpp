@@ -1,5 +1,5 @@
 #include "Entity.hpp"
-
+#include "Light.hpp"
 #include <cassert>
 #include "Mesh.hpp"
 namespace RGL {

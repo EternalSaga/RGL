@@ -9,8 +9,8 @@
 #include "LightEffect.hpp"
 #include "api_types.hpp"
 #include "rllogger.hpp"
-#include <SDL_events.h>
-#include "CameraECS.hpp"
+
+
 #include "ControllerECS.hpp"
 #include <memory>
 #include <mutex>
