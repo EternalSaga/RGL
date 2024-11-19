@@ -42,8 +42,8 @@ class PerspectiveCamSystem {
     // 视锥体参数
     float fovy;	 // 传入角度
     float aspect;
-    float near;
-    float far;
+    float mNear;
+    float mFar;
 
     entt::registry* singleReg;
     glm::mat4 proj;

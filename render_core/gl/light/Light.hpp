@@ -3,9 +3,6 @@
 #include <glm/glm.hpp>
 #include "Shader.hpp"
 
-#include <boost/uuid/uuid.hpp>
-#include <boost/uuid/uuid_generators.hpp>
-#include <boost/uuid/random_generator.hpp>
 #include "EnttRegistry.hpp"
 namespace RGL {
 namespace glcore {
@@ -18,14 +15,12 @@ struct DirectionalLightComponent {
     float specularIntensity;
 };
 
-
 class DirectionalLight : public SingleReg {
     entt::entity entity;
 
    public:
     DirectionalLight(const glm::vec3& lightDirection, const glm::vec3& lightColor, const glm::vec3& ambientColor, float specularIntensity, float spotIntensity, std::shared_ptr<Shader> shader);
     ~DirectionalLight() = default;
-
 };
 
 class PointLight {

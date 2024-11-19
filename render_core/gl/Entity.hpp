@@ -8,7 +8,7 @@
 #include <memory>
 #include <string>
 #include "GLObj.hpp"
-#include "Light.hpp"
+
 #include "Mesh.hpp"
 #include "Material.hpp"
 #include "Shader.hpp"

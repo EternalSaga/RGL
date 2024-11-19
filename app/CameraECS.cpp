@@ -1,11 +1,11 @@
 #include "CameraECS.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 namespace RGL {
-PerspectiveCamSystem::PerspectiveCamSystem(float fovy, float aspect, float nearplan, float farplan) : fovy(fovy), aspect(aspect), near(nearplan), far(farplan)
+PerspectiveCamSystem::PerspectiveCamSystem(float fovy, float aspect, float nearplan, float farplan) : fovy(fovy), aspect(aspect), mNear(nearplan), mFar(farplan)
 
 {
     singleReg = EnttReg::getPrimaryRegistry();
-    proj = glm::perspective(glm::radians(fovy), aspect, near, far);
+    proj = glm::perspective(glm::radians(fovy), aspect, mNear, mFar);
 }
 
 

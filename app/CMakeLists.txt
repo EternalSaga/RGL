@@ -18,7 +18,7 @@ target_link_libraries(app PRIVATE Boost::headers)
 
 find_package(glm CONFIG REQUIRED)
 
-target_link_libraries(app PRIVATE glm::glm RGLFramework practices)
+target_link_libraries(app PRIVATE glm::glm cpuframework glFramework practices)
 
 target_include_directories(app PRIVATE ${PROJECT_SOURCE_DIR}/api_abstractor ${PROJECT_SOURCE_DIR}/practices)
 

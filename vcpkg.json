@@ -5,10 +5,6 @@
 			"version>=": "1.85.0#1"
 		},
 		{
-			"name": "boost-uuid",
-			"version>=": "1.85.0#1"
-		},
-		{
 			"name": "boost-hana",
 			"version>=": "1.85.0#1"
 		},
@@ -29,12 +25,7 @@
 			"version>=": "2024-07-29#1"
 		},
 		{
-			"name": "spdlog",
-			"version>=": "1.14.1"
-		},
-		{
-			"name": "fmt",
-			"version>=": "11.0.2#1"
+			"name": "spdlog"
 		},
 		{
 			"name": "bullet3",
@@ -57,15 +48,7 @@
 	],
 	"overrides": [
 		{
-			"name": "fmt",
-			"version": "11.0.2#1"
-		},
-		{
 			"name":"boost-headers",
-			"version": "1.85.0#1"
-		},
-		{
-			"name":"boost-uuid",
 			"version": "1.85.0#1"
 		},
 		{

@@ -21,12 +21,12 @@ entt::sigh<void(int, int)> on_mouse_move;
 struct PlayerComponent {
     void on_left_click() {
 	// 发射子弹
-	std::cout << u8"shoot" << std::endl;
+	std::cout << "shoot" << std::endl;
     }
 
     void on_mouse_move(int x, int y) {
 	// 更新瞄准方向
-	std::cout << u8"aim to: (" << x << ", " << y << ")" << std::endl;
+	std::cout << "aim to: (" << x << ", " << y << ")" << std::endl;
     }
 };
 
