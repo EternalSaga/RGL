@@ -17,19 +17,21 @@ namespace glcore {
 //     this->scale = scale;
 // }
 CommonEntity::CommonEntity(glm::vec3 position, float angleX, float angleY, float angleZ, glm::vec3 scale, std::shared_ptr<Shader> shader) : entity(singleReg->create()), vaoCreator(shader), shader(shader) {
-    singleReg->emplace<PoseComponent>(entity, angleX, angleY, angleZ, scale, position);
+    singleReg->emplace<PoseComponent>(entity, angleX, angleY, angleZ);
+    singleReg->emplace<ScaleComponent>(entity, scale);
+    singleReg->emplace<PositionComponent>(entity, position);
 }
 
-glm::mat4 GetModelMatrix(const PoseComponent& pose) {
+glm::mat4 GetModelMatrix(const PoseComponent& pose, const PositionComponent& position, const ScaleComponent& scale) {
     auto tranform{glm::identity<glm::mat4>()};
 
-    assert(pose.scale.x != 0.0f && pose.scale.y != 0.0f && pose.scale.z != 0.0f);
+    assert(scale.scale.x != 0.0f && scale.scale.y != 0.0f && scale.scale.z != 0.0f);
 
-    tranform = glm::scale(tranform, pose.scale);
+    tranform = glm::scale(tranform, scale.scale);
     tranform = glm::rotate(tranform, glm::radians(pose.angleX), glm::vec3(1.0f, 0.0f, 0.0f));
     tranform = glm::rotate(tranform, glm::radians(pose.angleY), glm::vec3(0.0f, 1.0f, 0.0f));
     tranform = glm::rotate(tranform, glm::radians(pose.angleZ), glm::vec3(0.0f, 0.0f, 1.0f));
-    tranform = glm::translate(glm::identity<glm::mat4>(), pose.position) * tranform;
+    tranform = glm::translate(glm::identity<glm::mat4>(), position.position) * tranform;
 
     return tranform;
 }
@@ -50,20 +52,20 @@ SceneManager::SceneManager() {
 void SceneManager::drawALL() {
 
 
-	auto directionalLightEntitis = singleReg->view<const DirectionalLightComponent, const std::shared_ptr<Shader>>();
+	auto directionalLightEntitis = singleReg->view<const CommonLightComponent, const Direction, const std::shared_ptr<Shader>>();
 
-	directionalLightEntitis.each([](const DirectionalLightComponent& directLight, const std::shared_ptr<Shader>& shader) {
+	directionalLightEntitis.each([](const CommonLightComponent& directLight,const Direction& direction, const std::shared_ptr<Shader>& shader) {
 	    shader->setUniform("ambient", directLight.ambientColor);
 	    shader->setUniform("specularIntensity", directLight.specularIntensity);
 	    shader->setUniform("lightColor", directLight.lightColor);
-	    shader->setUniform("globalLightDirection", directLight.lightDirection);
+	    shader->setUniform("globalLightDirection", direction.direction);
 		});
 
 
-    auto viewForCommonEntity = singleReg->view<PoseComponent, const MeshComponent, const MaterialComponent>();
+    auto viewForCommonEntity = singleReg->view<PoseComponent, ScaleComponent,PositionComponent, const MeshComponent, const MaterialComponent>();
 
-    viewForCommonEntity.each([](PoseComponent& pose, const MeshComponent& mesh, const MaterialComponent& material) {
-	material.shader->setUniformMat("modelMatrix", GetModelMatrix(pose));
+    viewForCommonEntity.each([](PoseComponent& pose, ScaleComponent& scale, PositionComponent& position, const MeshComponent& mesh, const MaterialComponent& material) {
+	material.shader->setUniformMat("modelMatrix", GetModelMatrix(pose, position,scale));
 
 	material.material->setShaderUniforms();
 

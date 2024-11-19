@@ -11,14 +11,7 @@ This project leverages vcpkg as a package manager, making cmake the natural choi
 
 ### Dependency
 
-Use vcpkg to install the following libraries.
-
-1. sdl2
-2. glad
-3. glm
-4. spdlog
-5. fmt
-6. boost
+This repostory use vcpkg manifest mode to manage dependencies. If you have installed vcpkg properly, vcpkg will install dependencies automatically.
 
 ### Build
 

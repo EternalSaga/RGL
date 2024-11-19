@@ -7,8 +7,12 @@
 namespace RGL {
 namespace glcore {
 
-struct DirectionalLightComponent {
-    glm::vec3 lightDirection;
+struct Direction {
+    glm::vec3 direction;
+};
+
+struct CommonLightComponent {
+    
     glm::vec3 lightColor;
     glm::vec3 ambientColor;
     // 镜面反射强度
