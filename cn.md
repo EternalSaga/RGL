@@ -8,14 +8,7 @@
 
 ### 依赖
 
-使用vcpkg安装以下依赖
-
-1. sdl2
-2. glad
-3. glm
-4. spdlog
-5. fmt
-6. boost
+本项目使用vcpkg的清单模式，如果你正确安装了vcpkg，那么如果你使用visual studio打开本项目的时候就会自动安装所需依赖
 
 ### 构建
 

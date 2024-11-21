@@ -1,8 +1,9 @@
 #include <cassert>
 #include <vector>
 #pragma once
-#include "GLTextures.hpp"
+
 #include "Shader.hpp"
+#include <GLTextures.hpp>
 namespace RGL {
 
 namespace glcore {

@@ -52,10 +52,14 @@ void PhongSPMaskExec::operator()() {
     // 场景绘制
     this->scene->drawALL();
 }
-SpotLightExec::SpotLightExec(std::shared_ptr<Camera> cam) {
+PointLightExec::PointLightExec(std::shared_ptr<Camera> cam) {
+    this->cam = cam;
+    ShaderSrcs whiteShaderSrc = {
+	{SHADER_TYPE::VERTEX, {"shaders\\Light\\white.vert"}},
+	{SHADER_TYPE::FRAGMENT, {"shaders\\Light\\white.frag"}}};
 }
 
-void SpotLightExec::operator()() {
+void PointLightExec::operator()() {
 }
 }  // namespace practice
 }  // namespace RGL

@@ -27,11 +27,7 @@ class DirectionalLight : public SingleReg {
     ~DirectionalLight() = default;
 };
 
-class PointLight {
-    float mK2;
-    float mK1;
-    float mKC;
-};
+
 
 }  // namespace glcore
 
