@@ -55,37 +55,21 @@ void VBO::setData(const std::vector<float> &data) {
     assert(mNumOfVbo == 1);
     setData(0, data);
 }
-EBO::EBO(GLuint numOfEbo) : mNumOfEbo(numOfEbo) {
-    ebo = std::make_unique<GLuint[]>(mNumOfEbo);
 
-    // 创建mNumOfEbo个ebo，未分配显存
-    // glGenBuffers,mNumOfEbo, ebo.get());
-    glCall(glCreateBuffers, mNumOfEbo, ebo.get());
-}
-EBO::EBO() : EBO(1) {}
-void EBO::setData(GLuint eboIdx, const std::vector<GLint> &data) {
-    assert(eboIdx < mNumOfEbo);
+
+void VBO::setData(GLuint eboIdx, const std::vector<GLint>& data) {
+    assert(eboIdx < mNumOfVbo);
     // 创建数据前先要绑定需要操作的ebo
 
-    glNamedBufferData(ebo[eboIdx],
+    glCall(glNamedBufferData,vbo[eboIdx],
 	data.size() * sizeof(decltype(data[0])),
 	data.data(), GL_STATIC_DRAW);
 }
-void EBO::setData(const std::vector<GLint> &data) { setData(0, data); }
-GLuint
-EBO::operator[](GLuint idx) {
-    assert(idx < mNumOfEbo);
-    return ebo[idx];
+void VBO::setData(const std::vector<GLint>& data) {
+    setData(0, data);
 }
-EBO::operator GLuint() {
-    assert(mNumOfEbo == 1);
-    return ebo[0];
-}
-EBO::~EBO() {
-    // glCall(glDeleteBuffers,mNumOfEbo,
-    // static_cast<GLuint*>(ebo.get()));
-    glCall(glDeleteBuffers, mNumOfEbo, static_cast<GLuint *>(ebo.get()));
-}
+
+
 VAO::VAO(size_t numOfVao) : mNumOfVao(numOfVao), shaderProgram{} {
     vao = std::make_unique<GLuint[]>(mNumOfVao);
     glCall(glCreateVertexArrays, mNumOfVao, vao.get());

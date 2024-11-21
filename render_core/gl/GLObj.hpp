@@ -9,20 +9,13 @@
 #include <vector>
 
 #include "VertexDescriptor.hpp"
-#include <boost/hana/for_each.hpp>
-#include <boost/hana/tuple.hpp>
+#include <boost/pfr.hpp>
 #include <string>
-
+#include <concepts>
 #include "GLCheckError.hpp"
+
 namespace RGL {
 namespace glcore {
-
-
-
-
-
-
-
 
 // 顶点数据和顶点索引放在同一个结构体里
 struct VerticesWithIndices {
@@ -71,7 +64,17 @@ class VBO {
     // 顶点数据排布在顶点索引之前
     void setData(GLuint vboIdx, const VerticesWithIndices &verticesWithIndices);
     void setData(const VerticesWithIndices &verticesWithIndices);
+
+
+	//如果数据类型是GLuint，那么VBO就是EBO
+	void setData(GLuint eboIdx, const std::vector<GLint> &data);
+    void setData(const std::vector<GLint> &data);
+
+
 };
+
+using EBO = VBO;
+
 
 // glDrawArrays TRIANGLES不能复用边，但是TRIANGLE
 // STRIP/FAN过于死板，所以需要使用顶点索引来让TRIANGLES拥有复用边的能力
@@ -79,30 +82,7 @@ class VBO {
 // 在单纯顶点的情况下，使用索引并不能节约空间，但是顶点除了位置以外，还有颜色，法线，UV等信息，这种情况下，顶点就又灵活又节约空间
 // EBO(Element buffer object)用于储存顶点索引编号的**显存区域**，又一个烂名字
 
-class EBO {
-    std::unique_ptr<GLuint[]> ebo;
-    GLuint mNumOfEbo;
 
-   public:
-    EBO(GLuint numOfEbo);
-
-    EBO();
-
-    /// <summary>
-    /// 给特定index上的ebo初始化数据，发送数据到显存
-    /// </summary>
-    /// <param name="eboIdx"></param>
-    /// <param name="data">int数组，存储了三角形的顶点序号</param>
-    void setData(GLuint eboIdx, const std::vector<GLint> &data);
-
-    void setData(const std::vector<GLint> &data);
-
-    GLuint operator[](GLuint idx);
-
-    operator GLuint();
-
-    ~EBO();
-};
 
 // VBO本质上就是一堆数据+数据区域描述，对这些数据添加额外的描述（顶点，颜色，等等），让GPU理解数据的作用，需要VAO
 //  定义：用于储存一个Mesh网格所有的顶点属性描述信息

@@ -33,14 +33,15 @@ class PhongSPMaskExec : public Renderer {
     void operator()() override;
 };
 
-class SpotLightExec : public Renderer {
+class PointLightExec : public Renderer {
 	std::unique_ptr<SceneManager> scene;
-    std::shared_ptr<Shader> spotLightShader;
+    std::shared_ptr<Shader> pointLightShader;
+    std::shared_ptr<Shader> whiteShader;
     std::shared_ptr<Camera> cam;
     std::unique_ptr<Texture> box_spMask;
 
 	public:
-    SpotLightExec(std::shared_ptr<Camera> cam);
+    PointLightExec(std::shared_ptr<Camera> cam);
 	void operator()() override;
 };
 

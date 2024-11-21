@@ -47,8 +47,7 @@ class CommonEntity : public SingleReg {
     entt::entity entity;
 	std::shared_ptr<Shader> shader;
    protected:
-    virtual void setShaderUniforms(Shader* shader) {
-    }
+
 
    public:
     CommonEntity(glm::vec3 position, float angleX, float angleY, float angleZ, glm::vec3 scale, std::shared_ptr<Shader> shader);
@@ -60,7 +59,6 @@ class CommonEntity : public SingleReg {
 class SceneManager : public SingleReg {
    private:
     
-
    public:
     SceneManager();
 
