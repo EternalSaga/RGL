@@ -368,3 +368,13 @@ FodyWeavers.xsd
 /CodeGeneration/GenTextureUnit.js
 *.7z
 *.png
+/microsoft/STL
+/rgl_main.tlog
+/vsbuild
+/rgl_main_MD.tlog
+/.d.json
+/main.cpp.ifc.dt.d.json
+/main.cpp.ifc.dt.module.json
+/main.cpp.ifc.dt.module.json.command
+/main.cpp.module.json
+/rgl_main.exe.recipe

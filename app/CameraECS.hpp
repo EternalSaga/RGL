@@ -2,6 +2,8 @@
 #include "EnttRegistry.hpp"
 #include <glm/glm.hpp>
 
+#include "Shader.hpp"
+
 namespace RGL {
 struct CameraBasicAttributes {
     float sensitivity;
@@ -23,11 +25,6 @@ struct CameraProjection {
     glm::mat4 projMat;
 };
 
-struct ShaderUniformCamProperties {
-    glm::mat4 viewMat;
-    glm::mat4 projMat;
-    glm::vec3 position;
-};
 
 struct CameraEulerMoveParams {
     float yawAngle;
@@ -50,7 +47,7 @@ class PerspectiveCamSystem {
     
    public:
     PerspectiveCamSystem(float fovy, float aspect, float nearplan, float farplan);
-    ShaderUniformCamProperties update();
+    void update();
 };
 
 

@@ -3,8 +3,8 @@
 namespace RGL {
     namespace glcore{
 
-    GLInitExpt::GLInitExpt(const std::string msg) : std::runtime_error(msg) {}
-    GLLogicError::GLLogicError(const std::string msg)
+    GLInitExpt::GLInitExpt(const std::string& msg) : std::runtime_error(msg) {}
+    GLLogicError::GLLogicError(const std::string& msg)
         : std::runtime_error(msg) {}
     void glCheckError() {
       GLenum errorCode = glGetError();
@@ -48,7 +48,7 @@ namespace RGL {
         return "unknown error";
       }
     }
-    GLShaderError::GLShaderError(const std::string msg)
+    GLShaderError::GLShaderError(const std::string& msg)
         : std::runtime_error(msg) {}
     } // namespace glcore
 }

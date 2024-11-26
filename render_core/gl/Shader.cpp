@@ -52,6 +52,19 @@ Shader::Shader(const ShaderSrcs &shaderSrcs) : compiled(0), linked(0) {
 	logger->error(infoLog);
 	throw glcore::GLLogicError("The shader is linked failed");
     }
+
+}
+Shader::Shader(Shader &&other) noexcept {
+    this->compiled = other.compiled;
+    this->linked = other.linked;
+    this->logger = other.logger;
+    this->shaderProgram = other.shaderProgram;
+
+
+    other.compiled = false;
+    other.linked = false;
+    other.logger = nullptr;
+    other.shaderProgram = -1;
 }
 std::string
 Shader::loadFile(const fs::path &p) {
@@ -73,5 +86,23 @@ void Shader::useProgram() {
 	throw glcore::GLInitExpt("shader program not prepared");
     }
 }
+void Shader::disableProgram() {
+    glCall(glUseProgram, 0);
+}
+Shader::~Shader() {
+
+	glCall(glUseProgram, 0);
+    glCall(glDeleteShader, shaderProgram);
+
+}
+ScopeShader::ScopeShader(Shader &shader) : shader(shader) {
+    shader.useProgram();
+}
+ScopeShader::~ScopeShader() {
+    shader.disableProgram();
+}
+
+
+
 }  // namespace glcore
 }  // namespace RGL

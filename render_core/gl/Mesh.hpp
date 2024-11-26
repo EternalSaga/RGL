@@ -37,7 +37,6 @@ class Mesh {
 
 class VAOCreater {
     std::shared_ptr<Shader> shader;
-    ;
 
    public:
     std::unique_ptr<VAO> createMeshVAO(const Mesh& mesh);
@@ -46,6 +45,8 @@ class VAOCreater {
     VAOCreater(std::shared_ptr<Shader> shader);
     ~VAOCreater() = default;
 };
+
+
 
 }  // namespace glcore
 }  // namespace RGL

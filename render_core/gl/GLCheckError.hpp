@@ -13,13 +13,13 @@ namespace glcore {
 class GLInitExpt : public std::runtime_error {
 public:
   GLInitExpt() = delete;
-  GLInitExpt(const std::string msg);
+  GLInitExpt(const std::string& msg);
   ~GLInitExpt() = default;
 };
 class GLLogicError : public std::runtime_error {
 public:
   GLLogicError() = delete;
-  GLLogicError(const std::string msg);
+  GLLogicError(const std::string& msg);
 
   ~GLLogicError() = default;
 };
@@ -27,7 +27,7 @@ public:
 class GLShaderError : public std::runtime_error {
 public:
   GLShaderError() = delete;
-  GLShaderError(const std::string msg);
+  GLShaderError(const std::string& msg);
   ~GLShaderError() = default;
 };
 

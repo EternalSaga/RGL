@@ -39,13 +39,12 @@ struct MeshComponent {
 
 struct MaterialComponent {
     std::unique_ptr<Material> material;
-    std::shared_ptr<Shader> shader;
 };
 
 class CommonEntity : public SingleReg {
     VAOCreater vaoCreator;
     entt::entity entity;
-	std::shared_ptr<Shader> shader;
+
    protected:
 
 
@@ -62,7 +61,7 @@ class SceneManager : public SingleReg {
    public:
     SceneManager();
 
-    void drawALL();
+    void updateAll();
 };
 
 }  // namespace glcore

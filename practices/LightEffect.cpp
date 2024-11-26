@@ -29,7 +29,7 @@ PhongSPMaskExec::PhongSPMaskExec(std::shared_ptr<Camera> cam) {
     shader->useProgram();
     // 从纹理创建材质
     std::unique_ptr<Material> material = std::make_unique<PhoneWithSPMask>(box_spMask.get(), shader.get(), "box", 32.0f);
-    material->setShaderUniforms();
+    // material->setShaderUniforms();
     std::unique_ptr<Mesh> geometry = std::make_unique<Cube>(12.0f);
     std::unique_ptr<CommonEntity> cubeEntity = std::make_unique<CommonEntity>(glm::vec3{0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, 0.0f, glm::vec3{1.0f, 1.0f, 1.0f}, shader);
     // 实体设置网格和纹理
@@ -42,15 +42,13 @@ PhongSPMaskExec::PhongSPMaskExec(std::shared_ptr<Camera> cam) {
 }
 
 void PhongSPMaskExec::operator()() {
-    shader->useProgram();
+    //auto camProps = cam->update();
 
-    auto camProps = cam->update();
-
-    shader->setUniformMat("viewMatrix", camProps.viewMat);
-    shader->setUniformMat("projectionMatrix", camProps.projMat);
-    shader->setUniform("cameraPos", camProps.position);
+    //shader->setUniformMat("viewMatrix", camProps.viewMat);
+    //shader->setUniformMat("projectionMatrix", camProps.projMat);
+    //shader->setUniform("cameraPos", camProps.position);
     // 场景绘制
-    this->scene->drawALL();
+    this->scene->updateAll();
 }
 PointLightExec::PointLightExec(std::shared_ptr<Camera> cam) {
     this->cam = cam;

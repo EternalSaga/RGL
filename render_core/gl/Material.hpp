@@ -15,7 +15,7 @@ class Material {
     Material(Texture* texture, Shader* shader, const std::string& textureName);
     virtual ~Material() = default;
     Shader* shader;
-    std::map<std::string, float> uniformMap;
+
     virtual void setShaderUniforms();
 };
 
