@@ -4,12 +4,14 @@
 #include <glm/fwd.hpp>
 #include <type_traits>
 #include <utility>
-#include <glm/glm.hpp>
-#include <glm/gtc/type_ptr.hpp>
-#include <tuple>
+
+
 #include "Helpers.hpp"
 namespace RGL {
 	namespace glcore {
+
+		
+
 		template <typename T, typename... Args>
 		constexpr bool all_same_type_v = (std::is_same_v<T, Args> && ...);
 
@@ -226,9 +228,8 @@ namespace RGL {
 						static_assert(false, "Unsupport matrix type");
 					}
 				}
-
-
 		}
+
 
 	}
 }

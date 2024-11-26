@@ -10,7 +10,7 @@ PerspectiveCamSystem::PerspectiveCamSystem(float fovy, float aspect, float nearp
 
 
 
-ShaderUniformCamProperties PerspectiveCamSystem::update() {
+void PerspectiveCamSystem::update() {
     auto view = singleReg->view<const CameraBasicAttributes, CameraPose, CameraProjection>();
 
     for (auto entity : view) {
@@ -25,12 +25,13 @@ ShaderUniformCamProperties PerspectiveCamSystem::update() {
 	proj.viewMat = glm::lookAt(camPose.position, center, camPose.up);
 
 	// 发布数据
-	ShaderUniformCamProperties camProperties;
-	camProperties.viewMat = proj.viewMat;
-	camProperties.projMat = proj.projMat;
-	camProperties.position = camPose.position;
+	//auto& uniforms = view.get<glcore::Uniforms>(entity);
+	//uniforms.push_back({"viewMatrix", proj.viewMat});
+	//uniforms.push_back({"projectionMatrix", proj.projMat});
+	//uniforms.push_back({"cameraPos", camPose.position});
 
-	return camProperties;
+
+
     }
 }
 

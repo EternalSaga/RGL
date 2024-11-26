@@ -13,8 +13,8 @@ target_compile_features(glFramework PUBLIC cxx_std_23)
 target_include_directories(glFramework PRIVATE ${PROJECT_SOURCE_DIR}/logger ${PROJECT_SOURCE_DIR}/app ${PROJECT_SOURCE_DIR}/api_abstractor ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/light)
 
 target_link_libraries(glFramework PRIVATE rllogger)
-find_package(Boost REQUIRED COMPONENTS headers pfr)
-target_link_libraries(glFramework PRIVATE Boost::headers Boost::pfr)
+find_package(Boost REQUIRED COMPONENTS headers pfr variant2)
+target_link_libraries(glFramework PRIVATE Boost::headers Boost::pfr Boost::variant2)
 
 
 find_package(Stb REQUIRED)

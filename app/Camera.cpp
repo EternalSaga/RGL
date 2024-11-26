@@ -4,6 +4,7 @@
 #include <iostream>
 #include "CameraECS.hpp"
 #include <cassert>
+
 namespace RGL {
 
 PerspectiveTrackballCamera::PerspectiveTrackballCamera(float fovy, float aspect, float near, float far) : cameraSystem(fovy, aspect, near, far), singleReg(EnttReg::getPrimaryRegistry()), perspcativeCameraEntity(singleReg->create()) {
@@ -16,13 +17,13 @@ PerspectiveTrackballCamera::PerspectiveTrackballCamera(float fovy, float aspect,
 
     singleReg->emplace<CameraEulerMoveParams>(perspcativeCameraEntity, 0.0f, 0.0f, 0.0f, glm::vec3{0.0f, 0.0f, 0.0f});
     singleReg->emplace<CameraProjection>(perspcativeCameraEntity, glm::mat4{1.0f}, glm::mat4{1.0f});
+	//singleReg->emplace<glcore::Uniforms>(perspcativeCameraEntity);
 }
 
-ShaderUniformCamProperties PerspectiveTrackballCamera::update() {
+void PerspectiveTrackballCamera::update() {
     trackballMouseKeyboardControl.update();
     trackballSystem.update();
-    const auto camProjProperties = cameraSystem.update();
-    return camProjProperties;
+	cameraSystem.update();
 }
 
 PerspectiveTrackballCamera::~PerspectiveTrackballCamera() {

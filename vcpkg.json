@@ -13,6 +13,10 @@
 			"version>=": "1.85.0#1"
 		},
 		{
+			"name": "boost-variant2",
+			"version>=": "1.85.0#1"
+		},
+		{
 			"name": "sdl2",
 			"version>=": "2.30.7#0"
 		},
