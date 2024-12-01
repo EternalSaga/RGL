@@ -1,14 +1,14 @@
 #pragma once
 #include "Helpers.hpp"
 #include "glUniformWrapper.hpp"
-#include "rllogger.hpp"
+
 #include <filesystem>
 #include <fstream>
 #include <glad/glad.h>
 
 #include <map>
-#include <entt/entt.hpp>
-#include <boost/variant2.hpp>
+
+
 namespace RGL {
 namespace glcore {
 namespace fs = std::filesystem;
@@ -95,7 +95,7 @@ class Shader {
     /// <param name="data">需要传入shader的uniform变量数据</param>
     template <GLuint UVarLength, typename T>
     void setUniformVec(const std::string &uniformVarName, std::vector<T> data) {
-	const auto location = glcore::glCallRet(
+	const auto location = glcore::glCall(
 	    glGetUniformLocation, this->shaderProgram, uniformVarName.c_str());
 	assert(data.size() % UVarLength ==
 	       0);  // 数组长度=所有数据长度/uniform变量长度
@@ -105,11 +105,11 @@ class Shader {
     }
 
     template <int Cols, int Rows, glm::qualifier q>
-    void setUniformMat(const std::string &uniformName,
+    void setUniform(const std::string &uniformName,
 	const glm::mat<Cols, Rows, glm::f32, q> &m) {
-	const auto location = glcore::glCallRet(
+	const auto location = glcore::glCall(
 	    glGetUniformLocation, this->shaderProgram, uniformName.c_str());
-	glUniformMatrix(shaderProgram, location, m);
+	glUniform(shaderProgram, location, m);
     }
 
     Shader(Shader &&other) noexcept;
@@ -132,58 +132,7 @@ class ScopeShader {
     ~ScopeShader();
 };
 
-using CommonUniformTypes = boost::variant2::variant<GLuint, float, GLint, glm::mat2, glm::mat3, glm::mat4, glm::vec2, glm::vec3, glm::vec4>;
 
-using ShaderRef = std::shared_ptr<Shader>;
-struct UniformValue {
-    CommonUniformTypes value;
-};
-
-class ShaderManager {
-    std::unordered_map<std::string, CommonUniformTypes> uniformValues;
-    std::unordered_map<size_t, std::string> bindingIdxNames;
-    std::unordered_map<ShaderRef, size_t> bindingIdxShader;
-
-    static ShaderManager *manager;
-    static std::once_flag initOnce;
-    ShaderManager() = default;
-
-   public:
-    static ShaderManager *getInstance() {
-	std::call_once(initOnce, []() {
-	    manager = new ShaderManager();
-	});
-	return manager;
-    }
-
-    void refNewShader(const ShaderRef ref,size_t bindingIdx) {
-	if (bindingIdxShader.find(ref) != bindingIdxShader.end()) {
-	    throw std::logic_error("shader has already managed");
-	}
-
-	bindingIdxShader[ref] = bindingIdx;
-    }
-    void associate(const std::string &uniformName, const ShaderRef ref) {
-	if (bindingIdxShader.find(ref) == bindingIdxShader.end()) {
-	    throw std::logic_error("shader has not been managed");
-	}
-	const int idx = bindingIdxShader[ref];
-	bindingIdxNames[idx] = uniformName;
-    }
-
-    void updateUniform(const std::string &uniformName, const CommonUniformTypes &value) {
-	uniformValues[uniformName] = value;
-    }
-
-    void updateAllUnifoms() {
-	for (auto [shaderRef, id] : bindingIdxShader) {
-	    ScopeShader scopeshader(*shaderRef);
-	    const auto uname = bindingIdxNames[id];
-	    const auto value = uniformValues[uname];
-	    shaderRef->setUniform(uname, value);
-	}
-    }
-};
 
 }  // namespace glcore
 }  // namespace RGL

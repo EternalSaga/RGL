@@ -6,9 +6,9 @@ bool currentCursorBetween(const glm::vec2 &downCursor, const glm::vec2 &lastCurs
 
 struct MouseKeyboardInput {
 
-    bool leftDown;
-    bool rightDown;
-    bool middleDown;
+    bool leftDown = false;
+    bool rightDown = false;
+    bool middleDown = false;
 
     bool shouldQuit = false;
 

@@ -19,12 +19,18 @@ struct CommonLightComponent {
     float specularIntensity;
 };
 
-class DirectionalLight : public SingleReg {
+class Light {
+   public:
+    virtual std::vector<std::string> uniforms() const = 0;
+};
+
+class DirectionalLight : public SingleReg,public Light {
     entt::entity entity;
 
    public:
-    DirectionalLight(const glm::vec3& lightDirection, const glm::vec3& lightColor, const glm::vec3& ambientColor, float specularIntensity, float spotIntensity, std::shared_ptr<Shader> shader);
+    DirectionalLight(const glm::vec3& lightDirection, const glm::vec3& lightColor, const glm::vec3& ambientColor, float specularIntensity, float spotIntensity);
     ~DirectionalLight() = default;
+    std::vector<std::string> uniforms()const override;
 };
 
 

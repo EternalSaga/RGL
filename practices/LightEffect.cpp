@@ -6,11 +6,12 @@
 #include "Material.hpp"
 
 #include "LightEffect.hpp"
-
+#include "ShaderManager.hpp"
 namespace RGL {
 namespace practice {
 
 PhongSPMaskExec::PhongSPMaskExec(std::shared_ptr<Camera> cam) {
+    shaderManager = glcore::ShaderManager::getInstance();
     this->cam = cam;
     ShaderSrcs shaders = {
 	{SHADER_TYPE::VERTEX, {"shaders\\Light\\phong.vert"}},
@@ -26,28 +27,35 @@ PhongSPMaskExec::PhongSPMaskExec(std::shared_ptr<Camera> cam) {
 	io::LoadedImg maskImg("./assest/sp_mask.png");
 	box_spMask->set(maskImg, "spMask", true);
     }
+
+    shaderManager->refNewShader(shader, 0);		   // 使用shaderManager管理第一个shader，绑定点0；
+    shaderManager->associate("viewMatrix", shader);	   // 第一个shader关联"viewMatrix"
+    shaderManager->associate("projectionMatrix", shader);  // 第一个shader关联"projectionMatrix"
+    shaderManager->associate("cameraPos", shader);	   // 第一个shader关联"viewMatrix"
+
     shader->useProgram();
     // 从纹理创建材质
-    std::unique_ptr<Material> material = std::make_unique<PhoneWithSPMask>(box_spMask.get(), shader.get(), "box", 32.0f);
-    // material->setShaderUniforms();
+    std::unique_ptr<Material> material = std::make_unique<PhoneWithSPMask>(box_spMask.get(), "box", 32.0f);
+
+    shaderManager->associate(*material, shader);
+
+    material->setShaderUniforms();
     std::unique_ptr<Mesh> geometry = std::make_unique<Cube>(12.0f);
     std::unique_ptr<CommonEntity> cubeEntity = std::make_unique<CommonEntity>(glm::vec3{0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, 0.0f, glm::vec3{1.0f, 1.0f, 1.0f}, shader);
     // 实体设置网格和纹理
     cubeEntity->setMesh(std::move(geometry));
     cubeEntity->setMaterial(std::move(material));
     this->scene = std::make_unique<SceneManager>();
-
+    shaderManager->associate("modelMatrix", shader);  // 关联mpv的modle矩阵
     // 光源
-    std::unique_ptr<DirectionalLight> light = std::make_unique<DirectionalLight>(glm::vec3{1.0f, 1.0f, -1.0f}, glm::vec3{1.0f, 0.9f, 0.9f}, glm::vec3{0.2f, 0.2f, 0.2f}, 0.5f, 32.0f, shader);
+    std::unique_ptr<Light> light = std::make_unique<DirectionalLight>(glm::vec3{1.0f, 1.0f, -1.0f}, glm::vec3{1.0f, 0.9f, 0.9f}, glm::vec3{0.2f, 0.2f, 0.2f}, 0.5f, 32.0f);
+    shaderManager->associate(*light, shader);
 }
 
 void PhongSPMaskExec::operator()() {
-    //auto camProps = cam->update();
+    cam->update();
 
-    //shader->setUniformMat("viewMatrix", camProps.viewMat);
-    //shader->setUniformMat("projectionMatrix", camProps.projMat);
-    //shader->setUniform("cameraPos", camProps.position);
-    // 场景绘制
+    //  场景绘制
     this->scene->updateAll();
 }
 PointLightExec::PointLightExec(std::shared_ptr<Camera> cam) {

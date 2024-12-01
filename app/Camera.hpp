@@ -21,7 +21,7 @@ class PerspectiveTrackballCamera : public Camera {
     entt::registry* singleReg;
     entt::entity perspcativeCameraEntity;
    public:
-    PerspectiveTrackballCamera(float fovy, float aspect, float near, float far);
+    PerspectiveTrackballCamera(float fovy, float aspect, float nearPlane, float farPlane);
 
     void update();
 

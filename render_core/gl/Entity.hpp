@@ -4,7 +4,6 @@
 #include <glm/fwd.hpp>
 #include <glm/glm.hpp>
 
-#include <map>
 #include <memory>
 #include <string>
 #include "GLObj.hpp"
@@ -12,7 +11,7 @@
 #include "Mesh.hpp"
 #include "Material.hpp"
 #include "Shader.hpp"
-
+#include "ShaderManager.hpp"
 #include "EnttRegistry.hpp"
 
 namespace RGL {
@@ -57,7 +56,7 @@ class CommonEntity : public SingleReg {
 
 class SceneManager : public SingleReg {
    private:
-    
+    ShaderManager* shaderManager;
    public:
     SceneManager();
 
