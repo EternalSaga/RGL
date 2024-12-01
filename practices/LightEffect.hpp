@@ -27,7 +27,7 @@ class PhongSPMaskExec : public Renderer {
     std::shared_ptr<Camera> cam;
 
 	std::unique_ptr<Texture> box_spMask;
-
+    glcore::ShaderManager* shaderManager;
    public:
     PhongSPMaskExec(std::shared_ptr<Camera> cam);
     void operator()() override;
@@ -39,7 +39,7 @@ class PointLightExec : public Renderer {
     std::shared_ptr<Shader> whiteShader;
     std::shared_ptr<Camera> cam;
     std::unique_ptr<Texture> box_spMask;
-
+    
 	public:
     PointLightExec(std::shared_ptr<Camera> cam);
 	void operator()() override;

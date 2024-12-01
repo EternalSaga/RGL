@@ -1,11 +1,14 @@
 #include "CameraECS.hpp"
 #include <glm/gtc/matrix_transform.hpp>
+
 namespace RGL {
 PerspectiveCamSystem::PerspectiveCamSystem(float fovy, float aspect, float nearplan, float farplan) : fovy(fovy), aspect(aspect), mNear(nearplan), mFar(farplan)
 
 {
     singleReg = EnttReg::getPrimaryRegistry();
     proj = glm::perspective(glm::radians(fovy), aspect, mNear, mFar);
+
+	shaderManager = glcore::ShaderManager::getInstance();
 }
 
 
@@ -24,13 +27,9 @@ void PerspectiveCamSystem::update() {
 	const glm::vec3 center = camPose.position + front;		// 从摄像机位置往前看，就是center
 	proj.viewMat = glm::lookAt(camPose.position, center, camPose.up);
 
-	// 发布数据
-	//auto& uniforms = view.get<glcore::Uniforms>(entity);
-	//uniforms.push_back({"viewMatrix", proj.viewMat});
-	//uniforms.push_back({"projectionMatrix", proj.projMat});
-	//uniforms.push_back({"cameraPos", camPose.position});
-
-
+	shaderManager->updateUniform("viewMatrix", proj.viewMat);
+	shaderManager->updateUniform("projectionMatrix", proj.projMat);
+	shaderManager->updateUniform("cameraPos", camPose.position);
 
     }
 }

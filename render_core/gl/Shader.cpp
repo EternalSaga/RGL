@@ -2,6 +2,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <cassert>
+#include "rllogger.hpp"
 namespace RGL {
 namespace glcore {
 
@@ -11,7 +12,7 @@ Shader::Shader(const ShaderSrcs &shaderSrcs) : compiled(0), linked(0) {
     // std::map<int, std::vector<fs::path>> ->
     // std::map<int, std::vector<std::string> -> //be carefull for this
     // std::map<int, std::vector<char*>> -> use glShaderSource
-    shaderProgram = glcore::glCallRet(glCreateProgram);
+    shaderProgram = glcore::glCall(glCreateProgram);
     for (const auto &shaderType_Src : shaderSrcs) {
 	std::vector<const char *> srcs;
 	std::vector<std::string> srcs_strings;
@@ -24,7 +25,7 @@ Shader::Shader(const ShaderSrcs &shaderSrcs) : compiled(0), linked(0) {
 	    std::back_inserter(srcs),
 	    [](const std::string &str) { return str.c_str(); });
 
-	GLuint shader = glcore::glCallRet(
+	GLuint shader = glcore::glCall(
 	    glCreateShader, static_cast<GLuint>(shaderType_Src.first));
 	assert(glIsShader(shader));
 	glcore::glCall(glShaderSource, shader, srcs.size(), srcs.data(),

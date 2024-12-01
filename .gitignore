@@ -378,3 +378,5 @@ FodyWeavers.xsd
 /main.cpp.ifc.dt.module.json.command
 /main.cpp.module.json
 /rgl_main.exe.recipe
+*.advixeproj
+*.advixeexp

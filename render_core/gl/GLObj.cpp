@@ -99,7 +99,7 @@ void VAO::set(GLuint vaoIdx, GLuint vbo, GLuint numOfFloat,
     glCall(glBindBuffer, GL_ARRAY_BUFFER, vbo);
 
     const auto location =
-	glCallRet(glGetAttribLocation, shaderProgram,
+	glCall(glGetAttribLocation, shaderProgram,
 	    shaderInputName.c_str());
     glCheckError();
 
