@@ -1,7 +1,7 @@
 #pragma once
 #include <glm/fwd.hpp>
 #include <glm/glm.hpp>
-#include "Shader.hpp"
+#include "ShaderManager.hpp"
 
 #include "EnttRegistry.hpp"
 namespace RGL {
@@ -26,11 +26,14 @@ class Light {
 
 class DirectionalLight : public SingleReg,public Light {
     entt::entity entity;
-
+    
    public:
     DirectionalLight(const glm::vec3& lightDirection, const glm::vec3& lightColor, const glm::vec3& ambientColor, float specularIntensity, float spotIntensity);
     ~DirectionalLight() = default;
     std::vector<std::string> uniforms()const override;
+
+	static void update();
+
 };
 
 
