@@ -18,7 +18,7 @@ struct PointLightComponent {
 class PointLight : public SingleReg {
     entt::entity entity;
 	public:
-    PointLight(const glm::vec3& lightColor, const glm::vec3& ambientColor, float specularIntensity, float mK2, float mK1, float mKC, glm::vec3 position,std::shared_ptr<Shader> shader);
+    PointLight(const glm::vec3& lightColor, const glm::vec3& ambientColor, float specularIntensity, float mK2, float mK1, float mKC, glm::vec3 position);
 };
 }
 }  // namespace RGL

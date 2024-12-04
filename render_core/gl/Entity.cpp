@@ -34,7 +34,6 @@ glm::mat4 GetModelMatrix(const PoseComponent& pose, const PositionComponent& pos
     tranform = glm::rotate(tranform, glm::radians(pose.angleY), glm::vec3(0.0f, 1.0f, 0.0f));
     tranform = glm::rotate(tranform, glm::radians(pose.angleZ), glm::vec3(0.0f, 0.0f, 1.0f));
     tranform = glm::translate(glm::identity<glm::mat4>(), position.position) * tranform;
-
     return tranform;
 }
 
@@ -53,16 +52,8 @@ SceneManager::SceneManager() {
 
 void SceneManager::updateAll() {
    
+	DirectionalLight::update();
 
-    auto directionalLightEntitis = singleReg->view<const CommonLightComponent, const Direction>();
-
-    directionalLightEntitis.each([this](const CommonLightComponent& directLight, const Direction& direction) {
-
-	shaderManager->updateUniform("ambient", directLight.ambientColor);
-	shaderManager->updateUniform("specularIntensity", directLight.specularIntensity);
-	shaderManager->updateUniform("lightColor", directLight.lightColor);
-	shaderManager->updateUniform("globalLightDirection", direction.direction);
-    });
 
     auto viewForCommonEntity = singleReg->view<PoseComponent, ScaleComponent, PositionComponent, const MeshComponent, const MaterialComponent>();
 
