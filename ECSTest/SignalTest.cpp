@@ -1,6 +1,6 @@
 #include <entt/entt.hpp>
 #include <iostream>
-
+#include <glm/glm.hpp>
 struct Player {
     // ... 其他玩家属性
 };
@@ -30,6 +30,18 @@ struct PlayerComponent {
     }
 };
 
+
+void announcement(std::string& msg) {
+    std::cout << "announcement" << msg << std::endl;
+}
+
+
+struct ClassRoom {
+	void receive(const std::string& msg) {
+	std::cout << "classroom" << msg << std::endl;
+	}
+};
+
 int main() {
 
 	PlayerComponent player;
@@ -50,5 +62,23 @@ int main() {
 
 	on_left_click.publish();
     on_mouse_move.publish(200, 300);
+
+
+	entt::sigh<void(std::string msg)> classroomSig;
+    entt::sink classSink(classroomSig);
+
+
+	//一个sink可以链接多个不同的函数
+	classSink.connect<&announcement>();
+
+	ClassRoom classroom;
+
+	classSink.connect<&ClassRoom::receive>(classroom);
+
+	std::string m = "Meeting at 3 pm.";
+	//这里会调用两次输出
+	classroomSig.publish(m);
+
+
     return 0;
 }

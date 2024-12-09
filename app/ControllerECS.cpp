@@ -117,7 +117,8 @@ class GameMouseKeyboardSystem : public SingleReg {
 
 void TrackBallMouseKeyboardSystem::update() {
     auto view = singleReg->view<MouseKeyboardInput, const CameraBasicAttributes, CameraEulerMoveParams>();
-    for (auto entity : view) {
+    auto entity = *view.begin();
+
 	SDL_Event sdlevent;
 	SDL_PollEvent(&sdlevent);
 	auto &mouseKeyboard = view.get<MouseKeyboardInput>(entity);
@@ -171,12 +172,12 @@ void TrackBallMouseKeyboardSystem::update() {
 		mouseKeyboard.lastCursor = mouseKeyboard.currentCursor;
 	    }
 	}
-    }
+    
 }
 
 void TrackballSystem::update() {
     auto view = singleReg->view<const CameraEulerMoveParams, CameraPose>();
-    for (auto entity : view) {
+    auto entity = *view.begin();
 	const auto &eulerAngle = view.get<CameraEulerMoveParams>(entity);
 	auto &camPose = view.get<CameraPose>(entity);
 
@@ -196,7 +197,7 @@ void TrackballSystem::update() {
 	// scale
 	const auto front = glm::cross(camPose.up, camPose.right);
 	camPose.position += front * eulerAngle.deltaScale;
-    }
+    
 }
 
 void GameControlSystem::update() {

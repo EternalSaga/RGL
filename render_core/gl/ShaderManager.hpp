@@ -17,7 +17,6 @@ using CommonUniformTypes = boost::variant2::variant<GLuint, float, GLint, glm::m
 using ShaderRef = std::shared_ptr<Shader>;
 struct UniformValue {
     CommonUniformTypes value;
-
 };
 
 class ShaderManager {
@@ -40,13 +39,13 @@ class ShaderManager {
     void refNewShader(const ShaderRef ref, size_t bindingIdx);
     void associate(const std::string &uniformName, const ShaderRef ref);
     void associate(const Light &light, const ShaderRef ref);
-    void associate(const Material& material,const ShaderRef ref);
+    void associate(const Material &material, const ShaderRef ref);
     void updateUniform(const std::string &uniformName, const CommonUniformTypes &value);
 
     void updateAllUnifoms();
 
-	void useAllProgram();
+    void useAllProgram();
     void disableAllProgram();
-
 };
-	}}
+}  // namespace glcore
+}  // namespace RGL
