@@ -32,7 +32,6 @@ PhongSPMaskExec::PhongSPMaskExec(std::shared_ptr<Camera> cam) {
     shaderManager->associate("viewMatrix", shader);	   // 第一个shader关联"viewMatrix"
     shaderManager->associate("projectionMatrix", shader);  // 第一个shader关联"projectionMatrix"
     shaderManager->associate("cameraPos", shader);	   // 第一个shader关联"viewMatrix"
-
     shader->useProgram();
     // 从纹理创建材质
     std::unique_ptr<Material> material = std::make_unique<PhoneWithSPMask>(box_spMask.get(), "box", 32.0f);
@@ -54,7 +53,6 @@ PhongSPMaskExec::PhongSPMaskExec(std::shared_ptr<Camera> cam) {
 
 void PhongSPMaskExec::operator()() {
     cam->update();
-
     //  场景绘制
     this->scene->updateAll();
 }

@@ -30,6 +30,7 @@ struct ScaleComponent {
     glm::vec3 scale;
 };
 
+
 struct MeshComponent {
     std::unique_ptr<VAO> vao;
     size_t vertCount;
@@ -39,6 +40,7 @@ struct MeshComponent {
 struct MaterialComponent {
     std::unique_ptr<Material> material;
 };
+
 
 class CommonEntity : public SingleReg {
     VAOCreater vaoCreator;
@@ -51,12 +53,12 @@ class CommonEntity : public SingleReg {
     CommonEntity(glm::vec3 position, float angleX, float angleY, float angleZ, glm::vec3 scale, std::shared_ptr<Shader> shader);
     void setMesh(std::unique_ptr<Mesh> mesh);
     void setMaterial(std::unique_ptr<Material> material);
-
+    static void update();
 };
 
 class SceneManager : public SingleReg {
    private:
-    ShaderManager* shaderManager;
+    
    public:
     SceneManager();
 

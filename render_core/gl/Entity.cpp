@@ -3,7 +3,7 @@
 #include <cassert>
 #include "Mesh.hpp"
 #include "CameraECS.hpp"
-
+#include "DataPipeline.hpp"
 namespace RGL {
 namespace glcore {
 // void CommonEntity::rotateX(float angle) {
@@ -22,6 +22,7 @@ CommonEntity::CommonEntity(glm::vec3 position, float angleX, float angleY, float
     singleReg->emplace<PoseComponent>(entity, angleX, angleY, angleZ);
     singleReg->emplace<ScaleComponent>(entity, scale);
     singleReg->emplace<PositionComponent>(entity, position);
+
 }
 
 glm::mat4 GetModelMatrix(const PoseComponent& pose, const PositionComponent& position, const ScaleComponent& scale) {
@@ -46,23 +47,23 @@ void CommonEntity::setMaterial(std::unique_ptr<Material> material) {
     singleReg->emplace<MaterialComponent>(entity, std::move(material));
 }
 
-SceneManager::SceneManager() {
-    shaderManager = ShaderManager::getInstance();
-}
-
-void SceneManager::updateAll() {
-   
-	DirectionalLight::update();
-
-
+void CommonEntity::update() {
+    auto singleReg = EnttReg::getPrimaryRegistry();
     auto viewForCommonEntity = singleReg->view<PoseComponent, ScaleComponent, PositionComponent, const MeshComponent, const MaterialComponent>();
+    ShaderManager* shaderManager = ShaderManager::getInstance();
+    viewForCommonEntity.each([&shaderManager](PoseComponent& pose, ScaleComponent& scale, PositionComponent& position, const MeshComponent& mesh, const MaterialComponent& material) {
+	// 哪里进行modelMatrix的关联比较好呢？
 
-    viewForCommonEntity.each([this](PoseComponent& pose, ScaleComponent& scale, PositionComponent& position, const MeshComponent& mesh, const MaterialComponent& material) {
-	//哪里进行modelMatrix的关联比较好呢？
-	shaderManager->updateUniform("modelMatrix", GetModelMatrix(pose, position, scale));
-	
+	const auto modelMatrix = GetModelMatrix(pose, position, scale);
+	shaderManager->updateUniform("modelMatrix", modelMatrix);
+
+
+	SharingData* sharingData = SharingData::getInstance();
+	CameraProjection proj = entt::any_cast<CameraProjection>(sharingData->getData("CameraProjection"));
+
+	glm::mat4 finalPosition = proj.projMat * proj.viewMat * modelMatrix;
+
 	material.material->setShaderUniforms();
-
 	shaderManager->updateAllUnifoms();
 	shaderManager->useAllProgram();
 	glCall(glBindVertexArray, *mesh.vao);
@@ -70,6 +71,18 @@ void SceneManager::updateAll() {
 	glCall(glBindVertexArray, 0);
 	shaderManager->disableAllProgram();
     });
+}
+
+SceneManager::SceneManager() {
+     
+}
+
+void SceneManager::updateAll() {
+   
+	DirectionalLight::update();
+
+	CommonEntity::update();
+
     
 }
 }  // namespace glcore
