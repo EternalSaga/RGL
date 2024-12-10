@@ -12,6 +12,7 @@ namespace RGL {
 namespace glcore {
 class Material;
 class Light;
+class CommonEntity;
 using CommonUniformTypes = boost::variant2::variant<GLuint, float, GLint, glm::mat2, glm::mat3, glm::mat4, glm::vec2, glm::vec3, glm::vec4>;
 
 using ShaderRef = std::shared_ptr<Shader>;
@@ -40,6 +41,7 @@ class ShaderManager {
     void associate(const std::string &uniformName, const ShaderRef ref);
     void associate(const Light &light, const ShaderRef ref);
     void associate(const Material &material, const ShaderRef ref);
+    void associate(const CommonEntity &commonEntity, const ShaderRef ref);
     void updateUniform(const std::string &uniformName, const CommonUniformTypes &value);
 
     void updateAllUnifoms();

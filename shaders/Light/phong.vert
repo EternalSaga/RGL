@@ -10,9 +10,8 @@ out vec3 normal;
 out vec3 worldPosition;
 
 uniform mat4 modelMatrix;
-uniform mat4 viewMatrix;
-uniform mat4 projectionMatrix;
 uniform mat4 MVP;
+uniform mat3 inverseModelMatrix;
 
 void main()
 {
@@ -23,9 +22,9 @@ void main()
 	worldPosition = transformPosition.xyz;
 
 	//将顶点位置从模型空间转换到裁剪空间
-	gl_Position = projectionMatrix * viewMatrix * transformPosition;
+	gl_Position = MVP *  vec4(inPos, 1.0);
 	
 	uv = inUV;
-	//求逆变换最好在CPU端完成
-	normal = transpose(inverse(mat3(modelMatrix))) * inNormal;
+	//在CPU端完成了modelmatrix的逆矩阵和转置计算，这里直接使用即可
+	normal = inverseModelMatrix * inNormal;
 }

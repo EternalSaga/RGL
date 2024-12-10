@@ -2,7 +2,7 @@
 #include "Shader.hpp"
 #include "Material.hpp"
 #include "Light.hpp"
-
+#include "Entity.hpp"
 #include <fmt/format.h>
 namespace RGL {
 namespace glcore {
@@ -32,6 +32,12 @@ void ShaderManager::associate(const Light &light, const ShaderRef ref) {
 void ShaderManager::associate(const Material& material, const ShaderRef ref) {
     const auto names = material.uniformNames();
     for (const auto& name: names) {
+	associate(name, ref);
+    }
+}
+void ShaderManager::associate(const CommonEntity &commonEntity, const ShaderRef ref) {
+    const auto names = commonEntity.uniforms();
+    for (const auto &name : names) {
 	associate(name, ref);
     }
 }
