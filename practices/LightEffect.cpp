@@ -27,17 +27,11 @@ PhongSPMaskExec::PhongSPMaskExec(std::shared_ptr<Camera> cam) {
 	io::LoadedImg maskImg("./assest/sp_mask.png");
 	box_spMask->set(maskImg, "spMask", true);
     }
-
     shaderManager->refNewShader(shader, 0);		   // 使用shaderManager管理第一个shader，绑定点0；
-    shaderManager->associate("viewMatrix", shader);	   // 第一个shader关联"viewMatrix"
-    shaderManager->associate("projectionMatrix", shader);  // 第一个shader关联"projectionMatrix"
-    shaderManager->associate("cameraPos", shader);	   // 第一个shader关联"viewMatrix"
-    shader->useProgram();
+    shaderManager->associate("cameraPos", shader);	   // 第一个shader关联"cameraPos" uniform
     // 从纹理创建材质
     std::unique_ptr<Material> material = std::make_unique<PhoneWithSPMask>(box_spMask.get(), "box", 32.0f);
-
-    shaderManager->associate(*material, shader);
-
+    shaderManager->associate(*material, shader); // 第一个shader关联材质相关uniform
     material->setShaderUniforms();
     std::unique_ptr<Mesh> geometry = std::make_unique<Cube>(12.0f);
     std::unique_ptr<CommonEntity> cubeEntity = std::make_unique<CommonEntity>(glm::vec3{0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, 0.0f, glm::vec3{1.0f, 1.0f, 1.0f}, shader);
@@ -45,10 +39,10 @@ PhongSPMaskExec::PhongSPMaskExec(std::shared_ptr<Camera> cam) {
     cubeEntity->setMesh(std::move(geometry));
     cubeEntity->setMaterial(std::move(material));
     this->scene = std::make_unique<SceneManager>();
-    shaderManager->associate("modelMatrix", shader);  // 关联mpv的modle矩阵
+    shaderManager->associate(*cubeEntity, shader);  // 关联mpv和modle矩阵
     // 光源
     std::unique_ptr<Light> light = std::make_unique<DirectionalLight>(glm::vec3{1.0f, 1.0f, -1.0f}, glm::vec3{1.0f, 0.9f, 0.9f}, glm::vec3{0.2f, 0.2f, 0.2f}, 0.5f, 32.0f);
-    shaderManager->associate(*light, shader);
+    shaderManager->associate(*light, shader); //shader关联光源相关uniform
 }
 
 void PhongSPMaskExec::operator()() {

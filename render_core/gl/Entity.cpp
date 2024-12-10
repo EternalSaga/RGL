@@ -52,16 +52,20 @@ void CommonEntity::update() {
     auto viewForCommonEntity = singleReg->view<PoseComponent, ScaleComponent, PositionComponent, const MeshComponent, const MaterialComponent>();
     ShaderManager* shaderManager = ShaderManager::getInstance();
     viewForCommonEntity.each([&shaderManager](PoseComponent& pose, ScaleComponent& scale, PositionComponent& position, const MeshComponent& mesh, const MaterialComponent& material) {
-	// 哪里进行modelMatrix的关联比较好呢？
 
 	const auto modelMatrix = GetModelMatrix(pose, position, scale);
 	shaderManager->updateUniform("modelMatrix", modelMatrix);
 
-
 	SharingData* sharingData = SharingData::getInstance();
+
 	CameraProjection proj = entt::any_cast<CameraProjection>(sharingData->getData("CameraProjection"));
 
-	glm::mat4 finalPosition = proj.projMat * proj.viewMat * modelMatrix;
+	const glm::mat4 MVP = proj.projMat * proj.viewMat * modelMatrix;
+	shaderManager->updateUniform("MVP", MVP);
+
+	const glm::mat3 inverseModelMatrix = glm::transpose(glm::inverse(modelMatrix));
+
+	shaderManager->updateUniform("inverseModelMatrix", inverseModelMatrix);
 
 	material.material->setShaderUniforms();
 	shaderManager->updateAllUnifoms();
@@ -71,6 +75,14 @@ void CommonEntity::update() {
 	glCall(glBindVertexArray, 0);
 	shaderManager->disableAllProgram();
     });
+}
+
+std::vector<std::string> CommonEntity::uniforms() const {
+    std::vector<std::string> uniforms;
+    uniforms.push_back("modelMatrix");
+    uniforms.push_back("MVP");
+    uniforms.push_back("inverseModelMatrix");
+    return uniforms;
 }
 
 SceneManager::SceneManager() {
