@@ -12,14 +12,12 @@ class Material {
    protected:
     Texture* texture;
     std::string textureName;
-    ShaderManager* shaderManager;
+
    public:
     Material(Texture* texture, const std::string& textureName);
     virtual ~Material() = default;
-    Shader* shader;
 
-    virtual void setShaderUniforms();
-    virtual std::vector<std::string> uniformNames() const = 0;
+    virtual void setShaderUniforms(UniformComponent& uniformComponent);
   
 };
 
@@ -30,8 +28,8 @@ class PhongMaterial : public Material {
    public:
     PhongMaterial(Texture* texture,const std::string& textureName, GLfloat shiness);
     virtual ~PhongMaterial() = default;
-    void setShaderUniforms() override;
-    std::vector<std::string> uniformNames() const override;
+
+    void setShaderUniforms(UniformComponent& uniformComponent) override;
 };
 
 class PhoneWithSPMask : public Material {
@@ -41,15 +39,14 @@ class PhoneWithSPMask : public Material {
     
    public:
     PhoneWithSPMask(Texture* texture, const std::string& textureName, GLfloat shiness);
-    void setShaderUniforms() override;
-    std::vector<std::string> uniformNames() const override;
-    
+
+    void setShaderUniforms(UniformComponent& uniformComponent) override;
 };
 
 class WhiteMaterial:public Material {
    public:
     WhiteMaterial();
-    std::vector<std::string> uniformNames() const override;
+
 };
 
 

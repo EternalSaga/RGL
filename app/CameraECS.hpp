@@ -44,7 +44,6 @@ class PerspectiveCamSystem {
     entt::registry* singleReg;
     glm::mat4 proj;
 
-	glcore::ShaderManager* shaderManager;
    public:
     PerspectiveCamSystem(float fovy, float aspect, float nearplan, float farplan);
     void update();

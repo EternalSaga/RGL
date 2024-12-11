@@ -15,5 +15,5 @@ add_subdirectory(practices)
 add_subdirectory(entry)
 
 #add_subdirectory(FindJavaTest)
-add_subdirectory(ECSTest)
+#add_subdirectory(ECSTest)
 

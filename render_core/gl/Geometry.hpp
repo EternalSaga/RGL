@@ -22,6 +22,7 @@ class Cube : public Mesh
     
   public:
     Cube(float size);
+   ~Cube() = default;
 };
 
 class Sphere : public Mesh
@@ -33,6 +34,7 @@ class Sphere : public Mesh
   private:
     std::vector<GLfloat> positions;
     std::vector<GLfloat> uvs;
+    std::vector<GLfloat> normals;
 };
 
 

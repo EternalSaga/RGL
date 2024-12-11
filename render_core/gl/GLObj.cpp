@@ -113,6 +113,7 @@ void VAO::set(GLuint vbo, GLuint numOfFloat,
     assert(mNumOfVao == 1);
     set(0, vbo, shaderInputName);
 }
+
 VAO::operator GLuint() {
     assert(mNumOfVao == 1);
     return vao[0];
