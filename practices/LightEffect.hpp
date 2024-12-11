@@ -22,24 +22,21 @@ using namespace glcore;
 
 
 class PhongSPMaskExec : public Renderer {
-    std::unique_ptr<SceneManager> scene;
+
     std::shared_ptr<Shader> shader;
     std::shared_ptr<Camera> cam;
-
 	std::unique_ptr<Texture> box_spMask;
-    glcore::ShaderManager* shaderManager;
    public:
     PhongSPMaskExec(std::shared_ptr<Camera> cam);
     void operator()() override;
 };
 
 class PointLightExec : public Renderer {
-	std::unique_ptr<SceneManager> scene;
-    std::shared_ptr<Shader> pointLightShader;
+
+    std::shared_ptr<Shader> pointlightShader;
     std::shared_ptr<Shader> whiteShader;
     std::shared_ptr<Camera> cam;
     std::unique_ptr<Texture> box_spMask;
-    
 	public:
     PointLightExec(std::shared_ptr<Camera> cam);
 	void operator()() override;

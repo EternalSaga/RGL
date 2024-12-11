@@ -11,7 +11,7 @@
 #include "GLObj.hpp"
 namespace RGL {
 namespace glcore {
-	
+
 class Mesh {
    protected:
     std::vector<int> indices;
@@ -24,29 +24,23 @@ class Mesh {
     size_t getVertexLength();
 
    public:
-   explicit Mesh();
+    explicit Mesh();
 
     std::tuple<size_t, size_t> getIdicesCountAndOffset();
 
-	std::vector<int> getIndices() const;
-	std::vector<GLfloat> getChanneledVertices() const;
+    std::vector<int> getIndices() const;
+    std::vector<GLfloat> getChanneledVertices() const;
     size_t getIndicesCount() const;
     virtual ~Mesh() = default;
     FloatDescs getDesc() const;
 };
 
-class VAOCreater {
-    std::shared_ptr<Shader> shader;
+namespace VAOCreater {
 
-   public:
-    std::unique_ptr<VAO> createMeshVAO(const Mesh& mesh);
-    std::unique_ptr<VAO> createMeshVAO(std::vector<Mesh> meshes);
-
-    VAOCreater(std::shared_ptr<Shader> shader);
-    ~VAOCreater() = default;
-};
-
-
+// 需要使用shader确定vao上的input attributes位置
+std::unique_ptr<VAO> createMeshVAO(const Mesh& mesh, const Shader& shader);
+std::unique_ptr<VAO> createMeshVAO(std::vector<Mesh> meshes, const Shader& shader);
+}  // namespace VAOCreater
 
 }  // namespace glcore
 }  // namespace RGL

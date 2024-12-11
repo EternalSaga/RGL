@@ -13,7 +13,7 @@
 #include "Shader.hpp"
 #include "ShaderManager.hpp"
 #include "EnttRegistry.hpp"
-
+#include "Light.hpp"
 namespace RGL {
 namespace glcore {
 
@@ -29,7 +29,7 @@ struct ScaleComponent {
     glm::vec3 scale;
 };
 
-struct MeshComponent {
+struct VertArrayComponent {
     std::unique_ptr<VAO> vao;
     size_t vertCount;
     size_t idxOffset;
@@ -39,27 +39,30 @@ struct MaterialComponent {
     std::unique_ptr<Material> material;
 };
 
-class CommonEntity : public SingleReg {
-    VAOCreater vaoCreator;
-    entt::entity entity;
 
+
+glm::mat4 GetModelMatrix(const PoseComponent& pose, const PositionComponent& position, const ScaleComponent& scale);
+
+class CommonEntity : public SingleReg {
+
+    entt::entity entity;
+    static void modelSystem();
+    static void materialSystem();
+    static void lightSystem();
+    static void renderVertexArray();
    protected:
    public:
-    CommonEntity(glm::vec3 position, float angleX, float angleY, float angleZ, glm::vec3 scale, std::shared_ptr<Shader> shader);
-    void setMesh(std::unique_ptr<Mesh> mesh);
+    CommonEntity(glm::vec3 position, float angleX, float angleY, float angleZ, glm::vec3 scale);
+    void setMesh(std::unique_ptr<Mesh> mesh, ShaderRef shader);
     void setMaterial(std::unique_ptr<Material> material);
+
+    void setLight(std::unique_ptr<Light> light);
     static void update();
 
-    std::vector<std::string> uniforms() const;
+    entt::entity getEntity() const;
+
 };
 
-class SceneManager : public SingleReg {
-   private:
-   public:
-    SceneManager();
-
-    void updateAll();
-};
 
 }  // namespace glcore
 }  // namespace RGL

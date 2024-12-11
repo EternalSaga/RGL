@@ -8,7 +8,6 @@ PerspectiveCamSystem::PerspectiveCamSystem(float fovy, float aspect, float nearp
     singleReg = EnttReg::getPrimaryRegistry();
     proj = glm::perspective(glm::radians(fovy), aspect, mNear, mFar);
 
-    shaderManager = glcore::ShaderManager::getInstance();
 }
 
 void PerspectiveCamSystem::update() {
@@ -25,11 +24,9 @@ void PerspectiveCamSystem::update() {
     const glm::vec3 center = camPose.position + front;		    // 从摄像机位置往前看，就是center
     proj.viewMat = glm::lookAt(camPose.position, center, camPose.up);
 
-    shaderManager->updateUniform("viewMatrix", proj.viewMat);
-    shaderManager->updateUniform("projectionMatrix", proj.projMat);
-    shaderManager->updateUniform("cameraPos", camPose.position);
 
 	SharingData* sharingData = SharingData::getInstance();
     sharingData->setData("CameraProjection", proj);
+	sharingData->setData("cameraPos", camPose.position);
 }
 }  // namespace RGL

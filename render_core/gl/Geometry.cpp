@@ -166,9 +166,6 @@ Cube::Cube(float size) : Mesh(),positions(), uvs(), size(size), halfSize(size / 
     Mesh::vertLength = getVertexLength();
 
 	Mesh::indicesCount = indices.size();
-
-	
-
     const auto vertNumber = positions.size()/3;
     for (size_t i = 0; i < vertNumber; i++) {
 	channeledVertices.push_back(positions[i * 3 + 0]);
@@ -183,12 +180,6 @@ Cube::Cube(float size) : Mesh(),positions(), uvs(), size(size), halfSize(size / 
 
 	this->indicesOffset = channeledVertices.size() * sizeof(decltype(channeledVertices[0]));
 
-    //this->vao = std::make_unique<VAO>();
-    //this->vbo = std::make_unique<VBO>();
-    //vao->setShaderProgram(shaderProgram);
-    //vbo->setData({channeledVertices, indices});
-    //vao->setDSA_interleaved(*vbo, desc);
-    //vao->addEBO(*vbo);
 }
 
 
@@ -216,8 +207,16 @@ Sphere::Sphere(float radius) {
 
 	    uvs.push_back(u);
 	    uvs.push_back(v);
+
+		normals.push_back(x);
+	    normals.push_back(y);
+	    normals.push_back(z);
+
 	}
     }
+
+	
+
 
     for (int i = 0; i < numLatLines; i++) {
 	for (int j = 0; j < numLongLines; j++) {
@@ -241,25 +240,26 @@ Sphere::Sphere(float radius) {
 
 	this->descs = FloatDescs{
 	FloatDesc("inPos", 3),
-	FloatDesc("inUV", 2)};
+	FloatDesc("inUV", 2),
+	FloatDesc("inNormal", 3)
+	};
 
     const auto vertLength = getVertexLength();
-    const auto vertNumber = (positions.size() + uvs.size()) / vertLength;
+    const auto vertNumber = positions.size() / 3;
     for (size_t i = 0; i < vertNumber; i++) {
 	channeledVertices.push_back(positions[i * 3 + 0]);
 	channeledVertices.push_back(positions[i * 3 + 1]);
 	channeledVertices.push_back(positions[i * 3 + 2]);
 	channeledVertices.push_back(uvs[i * 2 + 0]);
 	channeledVertices.push_back(uvs[i * 2 + 1]);
+	channeledVertices.push_back(normals[i * 3 + 0]);
+	channeledVertices.push_back(normals[i * 3 + 1]);
+	channeledVertices.push_back(normals[i * 3 + 2]);
+
     }
     this->indicesOffset = channeledVertices.size() * sizeof(decltype(channeledVertices[0]));
 
-    //this->vao = std::make_unique<VAO>();
-    //this->vbo = std::make_unique<VBO>();
-    //vbo->setData(0, {channeledVertices, indices});
-    //vao->setShaderProgram(shaderProgram);
-    //vao->setDSA_interleaved(*vbo, desc);
-    //vao->addEBO(*vbo);
+
 }
 
 Plane::Plane(float width, float height) {

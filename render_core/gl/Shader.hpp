@@ -65,7 +65,7 @@ class Shader {
     Shader(const ShaderSrcs &shaderSrcs);
 
     operator GLuint() { return shaderProgram; }
-
+    operator GLuint() const { return shaderProgram; }
     void useProgram();
 
     void disableProgram();

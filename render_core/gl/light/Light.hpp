@@ -7,32 +7,25 @@
 namespace RGL {
 namespace glcore {
 
-struct Direction {
-    glm::vec3 direction;
+
+class Light {
+   public:
+    virtual void setShaderUniforms(UniformComponent& uniforms) const = 0;
+	Light() = default;
+    virtual ~Light() = default;
 };
 
-struct CommonLightComponent {
-    
+class DirectionalLight : public SingleReg,public Light {
+    glm::vec3 direction;
     glm::vec3 lightColor;
     glm::vec3 ambientColor;
     // 镜面反射强度
     float specularIntensity;
-};
-
-class Light {
-   public:
-    virtual std::vector<std::string> uniforms() const = 0;
-};
-
-class DirectionalLight : public SingleReg,public Light {
-    entt::entity entity;
-    
    public:
     DirectionalLight(const glm::vec3& lightDirection, const glm::vec3& lightColor, const glm::vec3& ambientColor, float specularIntensity, float spotIntensity);
     ~DirectionalLight() = default;
-    std::vector<std::string> uniforms()const override;
+    void setShaderUniforms(UniformComponent& uniforms) const override;
 
-	static void update();
 
 };
 

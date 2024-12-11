@@ -26,30 +26,30 @@ size_t Mesh::getIndicesCount() const {
     }
     return indicesCount;
 }
-std::unique_ptr<VAO> VAOCreater::createMeshVAO(std::vector<Mesh> meshes) {
+std::unique_ptr<VAO> VAOCreater::createMeshVAO(std::vector<Mesh> meshes,const Shader& shader) {
     auto vao = std::make_unique<VAO>(meshes.size());
     auto vbo = std::make_unique<VBO>(meshes.size());
     for (int i = 0; i < meshes.size(); i++) {
 
 	vbo->setData(i, {meshes[i].getChanneledVertices(), meshes[i].getIndices()});
-	vao->setShaderProgram(*shader);
+	vao->setShaderProgram(shader);
 	vao->setDSA_interleaved(i, *vbo, meshes[i].getDesc());
 	vao->addEBO((*vbo)[i]);
     }
     return std::move(vao);
 }
-std::unique_ptr<VAO> VAOCreater::createMeshVAO(const Mesh& mesh) {
+
+std::unique_ptr<VAO> VAOCreater::createMeshVAO(const Mesh& mesh, const Shader& shader) {
     auto vao = std::make_unique<VAO>();
     auto vbo = std::make_unique<VBO>();
 
     vbo->setData({mesh.getChanneledVertices(), mesh.getIndices()});
-    vao->setShaderProgram(*shader);
+    vao->setShaderProgram(shader);
     vao->setDSA_interleaved(0, *vbo, mesh.getDesc());
     vao->addEBO(*vbo);
     return std::move(vao);
 }
-VAOCreater::VAOCreater(std::shared_ptr<Shader> shader) : shader(shader) {
-}
+
 size_t Mesh::getVertexLength() {
     size_t vertLength = 0;
     for (size_t i = 0; i < descs.size(); i++) {
