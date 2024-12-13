@@ -14,10 +14,8 @@ PerspectiveTrackballCamera::PerspectiveTrackballCamera(float fovy, float aspect,
     singleReg->emplace<CameraBasicAttributes>(perspcativeCameraEntity, 0.1f, 0.2f, 0.2f);
     // init position,up vector,right vector
     singleReg->emplace<CameraPose>(perspcativeCameraEntity, glm::vec3{0.0f, 0.0f, 100.0f}, glm::vec3{0.0f, 1.0f, 0.0f}, glm::vec3{1.0f, 0.0f, 0.0f});
-
     singleReg->emplace<CameraEulerMoveParams>(perspcativeCameraEntity, 0.0f, 0.0f, 0.0f, glm::vec3{0.0f, 0.0f, 0.0f});
     singleReg->emplace<CameraProjection>(perspcativeCameraEntity, glm::mat4{1.0f}, glm::mat4{1.0f});
-    // singleReg->emplace<glcore::Uniforms>(perspcativeCameraEntity);
 }
 
 void PerspectiveTrackballCamera::update() {

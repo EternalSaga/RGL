@@ -38,7 +38,8 @@ struct VertArrayComponent {
 struct MaterialComponent {
     std::unique_ptr<Material> material;
 };
-
+struct RenderTag {
+};
 
 
 glm::mat4 GetModelMatrix(const PoseComponent& pose, const PositionComponent& position, const ScaleComponent& scale);
@@ -59,8 +60,17 @@ class CommonEntity : public SingleReg {
     void setLight(std::unique_ptr<Light> light);
     static void update();
 
-    entt::entity getEntity() const;
+	template<typename T,typename... Args>
+	void attachComponent(Args... args) {
+	singleReg->emplace<T>(entity, std::forward(args)...);
+	}
 
+	inline  operator entt::entity() const{
+	    return entity;
+	}
+	inline operator entt::entity() {
+	    return entity;
+	}
 };
 
 

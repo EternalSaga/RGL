@@ -15,6 +15,8 @@ class Light {
     virtual ~Light() = default;
 };
 
+struct IsLight {};
+
 class DirectionalLight : public SingleReg,public Light {
     glm::vec3 direction;
     glm::vec3 lightColor;

@@ -15,7 +15,7 @@ target_compile_features(DelegateTest PRIVATE cxx_std_23)
 
 add_executable(FoldTest "TestPFR.cpp")
 target_compile_features(FoldTest PRIVATE cxx_std_23)
-find_package(Boost REQUIRED COMPONENTS pfr)
+find_package(Boost CONFIG REQUIRED COMPONENTS pfr)
 target_link_libraries(FoldTest PRIVATE Boost::pfr)
 
 find_package(glm CONFIG REQUIRED)

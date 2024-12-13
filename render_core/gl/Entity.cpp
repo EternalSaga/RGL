@@ -18,12 +18,6 @@ namespace glcore {
 // void CommonEntity::setScale(const glm::vec3& scale) {
 //     this->scale = scale;
 // }
-CommonEntity::CommonEntity(glm::vec3 position, float angleX, float angleY, float angleZ, glm::vec3 scale) : entity(singleReg->create()) {
-    singleReg->emplace<PoseComponent>(entity, angleX, angleY, angleZ);
-    singleReg->emplace<ScaleComponent>(entity, scale);
-    singleReg->emplace<PositionComponent>(entity, position);
-    singleReg->emplace<UniformComponent>(entity);
-}
 
 glm::mat4 GetModelMatrix(const PoseComponent& pose, const PositionComponent& position, const ScaleComponent& scale) {
     auto tranform{glm::identity<glm::mat4>()};
@@ -36,6 +30,13 @@ glm::mat4 GetModelMatrix(const PoseComponent& pose, const PositionComponent& pos
     tranform = glm::rotate(tranform, glm::radians(pose.angleZ), glm::vec3(0.0f, 0.0f, 1.0f));
     tranform = glm::translate(glm::identity<glm::mat4>(), position.position) * tranform;
     return tranform;
+}
+
+CommonEntity::CommonEntity(glm::vec3 position, float angleX, float angleY, float angleZ, glm::vec3 scale) : entity(singleReg->create()) {
+    singleReg->emplace<PoseComponent>(entity, angleX, angleY, angleZ);
+    singleReg->emplace<ScaleComponent>(entity, scale);
+    singleReg->emplace<PositionComponent>(entity, position);
+    singleReg->emplace<UniformComponent>(entity);
 }
 
 void CommonEntity::setMesh(std::unique_ptr<Mesh> mesh, ShaderRef shader) {
@@ -108,7 +109,6 @@ void CommonEntity::renderVertexArray() {
 
     viewForVertexArray.each([](const VertArrayComponent& mesh, ShaderRef shader, UniformComponent& uniforms) {
 	ScopeShader scopeshader(*shader);
-
 	updateAllUniforms(shader, uniforms);
 	glCall(glBindVertexArray, *mesh.vao);
 	glCall(glDrawElements, GL_TRIANGLES, mesh.vertCount, GL_UNSIGNED_INT, reinterpret_cast<void*>(mesh.idxOffset));
@@ -116,9 +116,7 @@ void CommonEntity::renderVertexArray() {
     });
 }
 
-entt::entity CommonEntity::getEntity() const {
-    return entity;
-}
+
 
 }  // namespace glcore
 }  // namespace RGL

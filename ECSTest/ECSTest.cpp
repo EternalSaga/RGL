@@ -1,51 +1,34 @@
 #include <entt/entt.hpp>
 #include <print>
-struct AComponent {
-    int a = 20;
+struct EntityPosition {
+	float x;
+	float y;
 };
 
-struct BComponent {
-    int a = 10;
-    void getA(int& out) {
-	out = a;
-    }
+struct LightPosition {
+	float x;
+    float y;
 };
 
-struct CComponent {
-    int a = 5;
-};
-
-entt::sigh<void(int&)> updateInt;
+void updatePostion(EntityPosition& pos) {
+	pos.x += 1;
+    pos.y += 1;
+}
 
 int main() {
     entt::registry reg;
 
-    auto ent1 = reg.create();
-    auto ent2 = reg.create();
-    // view1
-    reg.emplace<AComponent>(ent1);
-    reg.emplace<BComponent>(ent1);
+    auto normalEntity = reg.create();
+    auto lightEntity = reg.create();
 
-    // view2
-    reg.emplace<CComponent>(ent2);
+	reg.emplace<EntityPosition>(normalEntity, 0.0f, 0.0f);
 
-    auto group = reg.group<BComponent>();
-    auto view1 = reg.view<AComponent, BComponent>();
+	reg.emplace<LightPosition>(lightEntity, 0.0f, 0.0f);
 
-    auto view2 = reg.view<CComponent>();
+	reg.emplace<entt::sigh<void(EntityPosition & pos)>>(normalEntity);
 
-    entt::sink bsink(updateInt);
 
-    view1.each([&bsink](auto& a, auto& b) {
-	bsink.connect<&BComponent::getA>(b);
-	b.a = b.a + a.a;
-    });
 
-    view2.each([](auto& c) {
-	int b;
-	updateInt.publish(b);
-	c.a = b + c.a;
-	std::print("{}\n", c.a);
-    });
+   
     return 0;
 }
