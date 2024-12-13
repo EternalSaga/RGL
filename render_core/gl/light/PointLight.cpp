@@ -4,10 +4,29 @@
 namespace RGL {
 namespace glcore {
 
-PointLight::PointLight(const glm::vec3& lightColor, const glm::vec3& ambientColor, float specularIntensity, float mK2, float mK1, float mKC, glm::vec3 position) {
-    //singleReg->emplace<PointLightComponent>(entity, mK2, mK1, mKC);
-    //singleReg->emplace<PositionComponent>(entity, position);
-    //singleReg->emplace<CommonLightComponent>(entity, lightColor, ambientColor, specularIntensity);
+
+PointLight::PointLight(const glm::vec3& lightColor, const glm::vec3& ambientColor, float spotIntensity, float mK2, float mK1, float mKC) {
+
+	this->lightColor = lightColor;
+	this->ambientColor = ambientColor;
+	this->spotIntensity = spotIntensity;
+	this->mK2 = mK2;
+	this->mK1 = mK1;
+	this->mKC = mKC;
+
+
 }
+void PointLight::setShaderUniforms(UniformComponent& uniforms) const {
+	
+    uniforms["lightColor"] = lightColor;
+    uniforms["ambient"] = ambientColor;
+    uniforms["spotIntensity"] = spotIntensity;
+
+    uniforms["k1"] = mK1;
+    uniforms["k2"] = mK2;
+    uniforms["kc"] = mKC;
+
+}
+
 }  // namespace glcore
 }  // namespace RGL

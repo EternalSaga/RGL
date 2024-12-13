@@ -13,7 +13,7 @@ find_package(SDL2 CONFIG REQUIRED)
         $<IF:$<TARGET_EXISTS:SDL2::SDL2>,SDL2::SDL2,SDL2::SDL2-static>
     )
 
-find_package(Boost REQUIRED)
+find_package(Boost CONFIG REQUIRED)
 target_link_libraries(app PRIVATE Boost::headers)
 
 find_package(glm CONFIG REQUIRED)
