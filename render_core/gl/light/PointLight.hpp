@@ -16,13 +16,6 @@ class PointLight :public Light {
     float mK1;
     float mKC;
 
-
-	glm::vec3 lightColor;
-    glm::vec3 ambientColor;
-
-
-
-    float spotIntensity;
 	public:
     PointLight(const glm::vec3& lightColor, const glm::vec3& ambientColor, float spotIntensity, float mK2, float mK1, float mKC);
 

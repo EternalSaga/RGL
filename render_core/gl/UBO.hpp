@@ -8,12 +8,13 @@ namespace glcore {
 template <typename T>
 class UBO {
     GLuint ubo;
-	bool isBinded = false;
+    bool isBinded = false;
+
    public:
-	UBO() {
-	    glCreateBuffers(1, &ubo);
-	    glNamedBufferData(ubo, sizeof(T), nullptr, GL_DYNAMIC_STORAGE_BIT);   
-	}
+    UBO() {
+	glCreateBuffers(1, &ubo);
+	glNamedBufferData(ubo, sizeof(T), nullptr, GL_DYNAMIC_STORAGE_BIT);
+    }
 
     void setUniform(const T &t);
     // 绑定点可以看作shader ubo block上的插槽，需要先开辟插槽，插槽上才能链接一个ubo
@@ -24,22 +25,17 @@ class UBO {
     // 暂时先把ubo编号本身当作绑定点，遇到不能处理的情况再考虑unbind-rebind情况
     void bindToShader(std::shared_ptr<Shader> shader, const std::string &uboBlockName)(std::shared_ptr<Shader> shader, const std::string &uboBlockName) {
 	assert(!isBinded);
-	GLuint blockIndex = glCall(glGetUniformBlockIndex,*shader, uboBlockName.c_str());
+	GLuint blockIndex = glCall(glGetUniformBlockIndex, *shader, uboBlockName.c_str());
 	glCall(glUniformBlockBinding, *shader, blockIndex, ubo);  // 在shader ubo block上分配一个ubo号绑定点
 	glCall(glBindBufferBase, GL_UNIFORM_BUFFER, ubo, ubo);	  // 直接把ubo绑定到ubo号绑定点
-	isBinded = true; 
+	isBinded = true;
     }
 
-
-	void setUniform(const T &t) {
+    void setUniform(const T &t) {
 	static_assert(std::is_standard_layout_v<T>);
 	assert(isBinded);
-	size_t currentoffset = 0;
-	boost::pfr::for_each_field(t, [this, &currentoffset](const auto &field, const size_t &idx) {
-	    size_t elementSizeInByte = sizeof(field);
-	    glCall(glNamedBufferSubData, ubo, currentoffset, elementSizeInByte, &field);
-	    currentoffset += elementSizeInByte;
-	});
+
+	glCall(glNamedBufferSubData, ubo, 0, sizeof(T), &t);
     }
 
     ~UBO() {
@@ -47,9 +43,6 @@ class UBO {
 	glCall(glDeleteBuffers, 1, &ubo);
     }
 };
-
-
-
 
 }  // namespace glcore
 }  // namespace RGL
