@@ -44,6 +44,18 @@ class PointLightExec : public Renderer ,public SingleReg{
 	void operator()() override;
 };
 
+class SpotLightExec : public Renderer, public SingleReg {
+    std::shared_ptr<Shader> pointlightShader;
+    std::shared_ptr<Shader> whiteShader;
+    std::shared_ptr<Camera> cam;
+    std::unique_ptr<Texture> box_texture;
+
+	std::unique_ptr<CommonEntity> sphereEntity;
+
+   public:
+	SpotLightExec(std::shared_ptr<Camera> cam);
+    void operator()() override;
+};
 
 }  // namespace practice
 }  // namespace RGL

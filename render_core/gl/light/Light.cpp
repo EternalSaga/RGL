@@ -1,11 +1,10 @@
 #include "Light.hpp"
 namespace RGL {
 namespace glcore {
-DirectionalLight::DirectionalLight(const glm::vec3& lightDirection, const glm::vec3& lightColor, const glm::vec3& ambientColor, float specularIntensity, float spotIntensity)  {
+DirectionalLight::DirectionalLight(const glm::vec3& lightDirection, const glm::vec3& lightColor, const glm::vec3& ambientColor, float specularIntensity)
+    : Light(lightColor,ambientColor,specularIntensity) {
     this->direction = lightDirection;
-    this->lightColor = lightColor;
-    this->ambientColor = ambientColor;
-    this->specularIntensity = spotIntensity;
+
 }
 
 void DirectionalLight::setShaderUniforms(UniformComponent& uniforms) const {
@@ -16,6 +15,9 @@ void DirectionalLight::setShaderUniforms(UniformComponent& uniforms) const {
 }
 
 
+
+Light::Light(const glm::vec3& lightColor, const glm::vec3& ambientColor, float intensity) : lightColor(lightColor), ambientColor(ambientColor), specularIntensity(intensity) {
+}
 
 }  // namespace glcore
 }  // namespace RGL

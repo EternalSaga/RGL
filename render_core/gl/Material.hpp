@@ -23,22 +23,22 @@ class Material {
 
 class PhongMaterial : public Material {
     // 光斑指数
-    GLfloat shiness;
+
 
    public:
-    PhongMaterial(Texture* texture,const std::string& textureName, GLfloat shiness);
+    PhongMaterial(Texture* texture,const std::string& textureName);
     virtual ~PhongMaterial() = default;
 
     void setShaderUniforms(UniformComponent& uniformComponent) override;
 };
 
 class PhoneWithSPMask : public Material {
-    GLfloat shiness;
+
 
     const std::string maskName = "spMask";
     
    public:
-    PhoneWithSPMask(Texture* texture, const std::string& textureName, GLfloat shiness);
+    PhoneWithSPMask(Texture* texture, const std::string& textureName);
 
     void setShaderUniforms(UniformComponent& uniformComponent) override;
 };
