@@ -20,13 +20,13 @@ void main()
 	//输入顶点位置转换为齐次坐标
 	vec4 transformPosition = vec4(inPos, 1.0);
 	//计算当前顶点的worldPosition，并且向后传输给FragmentShader
-	transformPosition = Transforms.modelMatrix * transformPosition;
+	transformPosition = modelMatrix * transformPosition;
 	worldPosition = transformPosition.xyz;
 
 	//将顶点位置从模型空间转换到裁剪空间
-	gl_Position = Transforms.MVP *  vec4(inPos, 1.0);
+	gl_Position = MVP *  vec4(inPos, 1.0);
 	
 	uv = inUV;
 	//在CPU端完成了modelmatrix的逆矩阵和转置计算，这里直接使用即可
-	normal = Transforms.inverseModelMatrix * inNormal;
+	normal = inverseModelMatrix * inNormal;
 }

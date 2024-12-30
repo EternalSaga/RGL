@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "VertexDescriptor.hpp"
-#include <boost/pfr.hpp>
+
 #include <string>
 #include <concepts>
 #include "GLCheckError.hpp"
@@ -188,7 +188,7 @@ class VAO {
 	hana::for_each(vertexDescription, [this, &current_offset, &vaoIdx,
 					      &vbo](auto vert) {
 	    std::string_view shaderInputName = vert.name;
-	    const GLint location = glCallRet(glGetAttribLocation, shaderProgram,
+	    const GLint location = glCall(glGetAttribLocation, shaderProgram,
 		std::string(shaderInputName).c_str());
 	    if (location == -1) {
 		logger->error("shader input {} not found.\nThis is an optimized value or wrong input or gl_preserved name", std::string(shaderInputName));

@@ -1,6 +1,6 @@
 #pragma once
 #include <entt/entt.hpp>
-
+#include <memory>
 #include <mutex>
 namespace RGL {
 
@@ -8,12 +8,15 @@ namespace RGL {
 	class EnttReg {
 		static std::once_flag initOnce;
 		static std::once_flag initStorageOnce;
-	    static entt::registry* enttRegistry;
-		static reactive_storage* storage;
+		static std::once_flag initDispatcherOnce;
+	    static std::unique_ptr<entt::registry> enttRegistry;
+		static std::unique_ptr<reactive_storage> storage;
+	    static std::unique_ptr<entt::dispatcher> dispatcher;
 		EnttReg() = default;
 	public:
 		static entt::registry* getPrimaryRegistry();
-	 static reactive_storage* getPrimaryStorage();
+		static reactive_storage* getPrimaryStorage();
+		static entt::dispatcher& getDispatcher();
 	 ~EnttReg();
 		
 	};
@@ -22,6 +25,7 @@ namespace RGL {
 	   protected:
 	    entt::registry* singleReg;
 	    reactive_storage* singleStorage;
+	    entt::dispatcher& singleDispatcher;
 	   public:
 	    SingleReg();
 	};

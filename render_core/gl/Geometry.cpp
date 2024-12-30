@@ -308,13 +308,7 @@ Plane::Plane(float width, float height) {
 	channeledVertices.push_back(normals[i * 3 + 2]);
     }
     this->indicesOffset = channeledVertices.size() * sizeof(decltype(channeledVertices[0]));
-    //this->vao = std::make_unique<VAO>();
-    //this->vbo = std::make_unique<VBO>();
 
-    //vao->setShaderProgram(shaderProgram);
-    //vbo->setData({channeledVertices, indices});
-    //vao->setDSA_interleaved(*vbo, desc);
-    //vao->addEBO(*vbo);
 }
 
 

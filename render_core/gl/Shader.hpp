@@ -80,7 +80,7 @@ class Shader {
     /// <param name="...values">需要传入shader的uniform变量数据</param>
     template <typename... Args>
     void setUniform(const std::string &uniformVarName, Args... values) {
-	const auto location = glcore::glCallRet(
+	const auto location = glcore::glCall(
 	    glGetUniformLocation, this->shaderProgram, uniformVarName.c_str());
 	glcore::glUniform(shaderProgram, location, std::forward<Args>(values)...);
     }

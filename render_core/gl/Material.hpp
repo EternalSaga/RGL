@@ -17,7 +17,7 @@ class Material {
     Material(Texture* texture, const std::string& textureName);
     virtual ~Material() = default;
 
-    virtual void setShaderUniforms(UniformComponent& uniformComponent);
+    virtual void setShaderUniforms(DiscreteUniforms& uniformComponent);
   
 };
 
@@ -29,7 +29,7 @@ class PhongMaterial : public Material {
     PhongMaterial(Texture* texture,const std::string& textureName);
     virtual ~PhongMaterial() = default;
 
-    void setShaderUniforms(UniformComponent& uniformComponent) override;
+    void setShaderUniforms(DiscreteUniforms& uniformComponent) override;
 };
 
 class PhoneWithSPMask : public Material {
@@ -40,7 +40,7 @@ class PhoneWithSPMask : public Material {
    public:
     PhoneWithSPMask(Texture* texture, const std::string& textureName);
 
-    void setShaderUniforms(UniformComponent& uniformComponent) override;
+    void setShaderUniforms(DiscreteUniforms& uniformComponent) override;
 };
 
 class WhiteMaterial:public Material {

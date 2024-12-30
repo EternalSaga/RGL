@@ -14,6 +14,7 @@
 #include "ShaderManager.hpp"
 #include "EnttRegistry.hpp"
 #include "Light.hpp"
+#include "UBO.hpp"
 namespace RGL {
 namespace glcore {
 
@@ -42,14 +43,38 @@ struct RenderTag {
 };
 
 
+class GeneralEntity : public SingleReg {
+    entt::entity entity;
+
+   public:
+    template <typename T, typename... Args>
+    void attachComponent(Args&&... args) {
+	singleReg->emplace<T>(entity, std::forward<Args>(args)...);
+    }
+    inline operator entt::entity() const {
+	return entity;
+    }
+    inline operator entt::entity() {
+	return entity;
+    }
+    GeneralEntity() = default;
+	~GeneralEntity() {
+	singleReg->destroy(entity);
+	}
+};
+
+
 glm::mat4 GetModelMatrix(const PoseComponent& pose, const PositionComponent& position, const ScaleComponent& scale);
+
+
+
 
 class CommonEntity : public SingleReg {
 
     entt::entity entity;
     static void modelSystem();
     static void materialSystem();
-    static void lightSystem();
+
     static void renderVertexArray();
    protected:
    public:
@@ -57,7 +82,7 @@ class CommonEntity : public SingleReg {
     void setMesh(std::unique_ptr<Mesh> mesh, ShaderRef shader);
     void setMaterial(std::unique_ptr<Material> material);
 
-    void setLight(std::unique_ptr<Light> light);
+
     static void update();
 
 	template<typename T,typename... Args>
