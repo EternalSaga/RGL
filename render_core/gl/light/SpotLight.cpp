@@ -1,26 +1,30 @@
 #include "SpotLight.hpp"
-
+#include "Entity.hpp"
 namespace RGL {
 namespace glcore {
 
 
 
-SpotLight::SpotLight(const glm::vec3& lightColor, const glm::vec3& ambientColor, float intensity, float innerAngle, float outerAngle, const glm::vec3& targetDirection, const glm::vec3& lightPostion) : Light(lightColor, ambientColor, intensity) {
-    this->innerAngle = innerAngle;
-    this->outerAngle = outerAngle;
-    this->targetDirection = targetDirection;
-    this->lightPostion = lightPostion;
-    this->ambientColor = ambientColor;
-}
+using namespace entt::literals;
+void updateSpotLight(entt::registry& reg) {
+    auto view = reg.view<const CommonLight, SpotLightComponnet, PositionComponent, UBOs>();
 
-void SpotLight::setShaderUniforms(UniformComponent& uniforms) const {
-    uniforms["innerAngle"] = glm::radians( innerAngle);
-    uniforms["outerAngle"] = glm::radians( outerAngle);
-    uniforms["targetDirection"] = targetDirection;
-    //uniforms["lightPostion"] = lightPostion;
-    uniforms["lightColor"] = lightColor;
-    uniforms["ambient"] = ambientColor;
-    uniforms["spotIntensity"] = this->specularIntensity;
+	view.each(
+	[&reg](const CommonLight& common, SpotLightComponnet& spotlight, PositionComponent& pos, UBOs& ubos) {
+	    auto spotBlock = (*ubos)["SpotLight"];
+	    updateLightCommon(common, spotBlock);
+
+	    spotBlock->updateCpuUbo("innerAngle", glm::radians(spotlight.innerAngle));
+	    spotBlock->updateCpuUbo("outerAngle", glm::radians(spotlight.outerAngle));
+	    spotBlock->updateCpuUbo("targetDirection", spotlight.targetDirection);
+
+		spotBlock->updateCpuUbo("lightPosition", pos.position);
+
+	    const glm::vec3 camPosition = reg.ctx().get<glm::vec3>("cameraPos"_hs);
+	    spotBlock->updateCpuUbo("cameraPos", camPosition);
+		}
+	);
+
 }
 
 }  // namespace glcore

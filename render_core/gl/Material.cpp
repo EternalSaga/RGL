@@ -7,7 +7,7 @@ namespace glcore {
 
 
 
-void PhongMaterial::setShaderUniforms(UniformComponent& uniformComponent) {
+void PhongMaterial::setShaderUniforms(DiscreteUniforms& uniformComponent) {
 
     uniformComponent["sampler"] = this->texture->useTexture(this->textureName);
 
@@ -20,7 +20,7 @@ Material::Material(Texture* texture,const std::string& textureName) {
 }
 
 
-void Material::setShaderUniforms(UniformComponent& uniformComponent) {
+void Material::setShaderUniforms(DiscreteUniforms& uniformComponent) {
     auto logger = RLLogger::getInstance();
     logger->info("Default material setShaderUniforms do nothing.");
 }
@@ -29,7 +29,7 @@ PhongMaterial::PhongMaterial(Texture* texture,const std::string& textureName) : 
 
 }
 
-void PhoneWithSPMask::setShaderUniforms(UniformComponent& uniformComponent) {
+void PhoneWithSPMask::setShaderUniforms(DiscreteUniforms& uniformComponent) {
     uniformComponent["sampler"] = this->texture->useTexture(this->textureName);
     uniformComponent["spMask"] = this->texture->useTexture(this->maskName);
 }

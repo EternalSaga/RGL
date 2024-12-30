@@ -2,10 +2,14 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include "DataPipeline.hpp"
 namespace RGL {
-PerspectiveCamSystem::PerspectiveCamSystem(float fovy, float aspect, float nearplan, float farplan) : fovy(fovy), aspect(aspect), mNear(nearplan), mFar(farplan)
 
+
+	using namespace entt::literals;
+
+
+PerspectiveCamSystem::PerspectiveCamSystem(float fovy, float aspect, float nearplan, float farplan) : fovy(fovy), aspect(aspect), mNear(nearplan), mFar(farplan)
 {
-    singleReg = EnttReg::getPrimaryRegistry();
+
     proj = glm::perspective(glm::radians(fovy), aspect, mNear, mFar);
 
 }
@@ -23,10 +27,8 @@ void PerspectiveCamSystem::update() {
     const glm::vec3 front = glm::cross(camPose.up, camPose.right);  // 右手法则，up×right，得出camera前方向
     const glm::vec3 center = camPose.position + front;		    // 从摄像机位置往前看，就是center
     proj.viewMat = glm::lookAt(camPose.position, center, camPose.up);
-
-
-	SharingData* sharingData = SharingData::getInstance();
-    sharingData->setData("CameraProjection", proj);
-	sharingData->setData("cameraPos", camPose.position);
+   
+	singleReg->ctx().insert_or_assign("CameraProjection"_hs, proj);
+	singleReg->ctx().insert_or_assign("cameraPos"_hs, camPose.position);
 }
 }  // namespace RGL

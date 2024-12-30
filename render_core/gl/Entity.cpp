@@ -4,6 +4,7 @@
 #include "Mesh.hpp"
 #include "CameraECS.hpp"
 #include "DataPipeline.hpp"
+#include "UBO.hpp"
 namespace RGL {
 namespace glcore {
 // void CommonEntity::rotateX(float angle) {
@@ -36,7 +37,7 @@ CommonEntity::CommonEntity(glm::vec3 position, float angleX, float angleY, float
     singleReg->emplace<PoseComponent>(entity, angleX, angleY, angleZ);
     singleReg->emplace<ScaleComponent>(entity, scale);
     singleReg->emplace<PositionComponent>(entity, position);
-    singleReg->emplace<UniformComponent>(entity);
+    singleReg->emplace<DiscreteUniforms>(entity);
 }
 
 void CommonEntity::setMesh(std::unique_ptr<Mesh> mesh, ShaderRef shader) {
@@ -49,65 +50,60 @@ void CommonEntity::setMaterial(std::unique_ptr<Material> material) {
     singleReg->emplace<MaterialComponent>(entity, std::move(material));
 }
 
-void CommonEntity::setLight(std::unique_ptr<Light> light) {
-    singleReg->emplace<std::unique_ptr<Light>>(entity, std::move(light));
-}
-
 void CommonEntity::update() {
 
     modelSystem();
-    lightSystem();
+
     materialSystem();
     renderVertexArray();
 }
-
+using namespace entt::literals;
 void CommonEntity::modelSystem() {
     auto singleReg = EnttReg::getPrimaryRegistry();
-    auto viewForModel = singleReg->view<PoseComponent, ScaleComponent, PositionComponent, UniformComponent>();
+    auto viewForModel = singleReg->view<PoseComponent, ScaleComponent, PositionComponent, UBOs>();
 
-    viewForModel.each([](PoseComponent& pose, ScaleComponent& scale, PositionComponent& position, UniformComponent& uniforms) {
+    viewForModel.each([&singleReg](PoseComponent& pose, ScaleComponent& scale, PositionComponent& position, UBOs& ubos) {
 	const auto modelMatrix = GetModelMatrix(pose, position, scale);
 
-	uniforms["modelMatrix"] = modelMatrix;
-	SharingData* sharingData = SharingData::getInstance();
 
-	CameraProjection proj = entt::any_cast<CameraProjection>(sharingData->getData("CameraProjection"));
 
-	const glm::vec3 camPosition = entt::any_cast<glm::vec3>(sharingData->getData("cameraPos"));
-	uniforms["cameraPos"] = camPosition;
+	const CameraProjection proj = singleReg->ctx().get<CameraProjection>("CameraProjection"_hs);
+
+
+	 const glm::vec3 camPosition = singleReg->ctx().get<glm::vec3>("cameraPos"_hs);
+
+
 	const glm::mat4 MVP = proj.projMat * proj.viewMat * modelMatrix;
-
-	uniforms["MVP"] = MVP;
-
 	const glm::mat3 inverseModelMatrix = glm::transpose(glm::inverse(modelMatrix));
 
-	uniforms["inverseModelMatrix"] = inverseModelMatrix;
+
+	auto trans = (*ubos)["Transforms"];
+	trans->updateCpuUbo("modelMatrix", modelMatrix);
+	trans->updateCpuUbo("MVP", MVP);
+	trans->updateCpuUbo("inverseModelMatrix", inverseModelMatrix);
+
+
+
     });
 }
 
 void CommonEntity::materialSystem() {
     auto singleReg = EnttReg::getPrimaryRegistry();
 
-    auto viewForMaterial = singleReg->view<const MaterialComponent, UniformComponent>();
+    auto viewForMaterial = singleReg->view<const MaterialComponent,DiscreteUniforms>();
 
-    viewForMaterial.each([](const MaterialComponent& material, UniformComponent& uniforms) {
+    viewForMaterial.each([](const MaterialComponent& material, DiscreteUniforms& uniforms) {
 	material.material->setShaderUniforms(uniforms);
     });
 }
 
-void CommonEntity::lightSystem() {
-    auto singleReg = EnttReg::getPrimaryRegistry();
-    auto viewForLight = singleReg->view<const std::unique_ptr<Light>, UniformComponent>();
-    viewForLight.each([](const std::unique_ptr<Light>& light, UniformComponent& uniforms) {
-	light->setShaderUniforms(uniforms);
-    });
-}
+
 
 void CommonEntity::renderVertexArray() {
     auto singleReg = EnttReg::getPrimaryRegistry();
-    auto viewForVertexArray = singleReg->view<const VertArrayComponent, ShaderRef, UniformComponent>();
+    auto viewForVertexArray = singleReg->view<const VertArrayComponent, ShaderRef, DiscreteUniforms>();
 
-    viewForVertexArray.each([](const VertArrayComponent& mesh, ShaderRef shader, UniformComponent& uniforms) {
+    viewForVertexArray.each([](const VertArrayComponent& mesh, ShaderRef shader, DiscreteUniforms& uniforms) {
 	ScopeShader scopeshader(*shader);
 	updateAllUniforms(shader, uniforms);
 	glCall(glBindVertexArray, *mesh.vao);

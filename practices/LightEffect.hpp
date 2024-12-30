@@ -21,39 +21,59 @@ namespace practice {
 using namespace glcore;
 
 
-class PhongSPMaskExec : public Renderer {
+//class PhongSPMaskExec : public Renderer {
+//
+//    std::shared_ptr<Shader> shader;
+//    std::shared_ptr<Camera> cam;
+//	std::unique_ptr<Texture> box_spMask;
+//   public:
+//    PhongSPMaskExec(std::shared_ptr<Camera> cam);
+//    void operator()() override;
+//};
+//
+//class PointLightExec : public Renderer ,public SingleReg{
+//
+//    std::shared_ptr<Shader> spotlightShader;
+//    std::shared_ptr<Shader> whiteShader;
+//    std::shared_ptr<Camera> cam;
+//    std::unique_ptr<Texture> box_spMask;
+//
+//	std::unique_ptr<CommonEntity> sphereEntity;
+//	public:
+//    PointLightExec(std::shared_ptr<Camera> cam);
+//	void operator()() override;
+//};
+//
+//class SpotLightExec : public Renderer, public SingleReg {
+//    std::shared_ptr<Shader> spotlightShader;
+//    std::shared_ptr<Shader> whiteShader;
+//    std::shared_ptr<Camera> cam;
+//    std::unique_ptr<Texture> box_texture;
+//
+//	std::unique_ptr<CommonEntity> sphereEntity;
+//
+//   public:
+//	SpotLightExec(std::shared_ptr<Camera> cam);
+//    void operator()() override;
+//};
 
-    std::shared_ptr<Shader> shader;
-    std::shared_ptr<Camera> cam;
-	std::unique_ptr<Texture> box_spMask;
-   public:
-    PhongSPMaskExec(std::shared_ptr<Camera> cam);
-    void operator()() override;
-};
 
-class PointLightExec : public Renderer ,public SingleReg{
-
-    std::shared_ptr<Shader> pointlightShader;
+class UBOTest : public Renderer, public SingleReg {
+    std::shared_ptr<Shader> spotlightShader;
     std::shared_ptr<Shader> whiteShader;
     std::shared_ptr<Camera> cam;
-    std::unique_ptr<Texture> box_spMask;
+
+	std::shared_ptr<UBO> lightUBO;
+    std::shared_ptr<UBO> transformUBO;
+
+	std::unique_ptr<Texture> box_texture;
+
+	GeneralEntity spotLight;
 
 	std::unique_ptr<CommonEntity> sphereEntity;
-	public:
-    PointLightExec(std::shared_ptr<Camera> cam);
-	void operator()() override;
-};
-
-class SpotLightExec : public Renderer, public SingleReg {
-    std::shared_ptr<Shader> pointlightShader;
-    std::shared_ptr<Shader> whiteShader;
-    std::shared_ptr<Camera> cam;
-    std::unique_ptr<Texture> box_texture;
-
-	std::unique_ptr<CommonEntity> sphereEntity;
-
+	UBOs ubos;
    public:
-	SpotLightExec(std::shared_ptr<Camera> cam);
+    UBOTest(std::shared_ptr<Camera> cam);
     void operator()() override;
 };
 

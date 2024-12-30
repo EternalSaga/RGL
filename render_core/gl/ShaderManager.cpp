@@ -8,7 +8,7 @@ namespace RGL {
 namespace glcore {
 
 
-void updateAllUniforms(ShaderRef shader, const UniformComponent &uniforms) {
+void updateAllUniforms(ShaderRef shader, const DiscreteUniforms &uniforms) {
     for (const auto& [uname,value] : uniforms) {
 	boost::variant2::visit([&shader, &uname](const auto &v) {
 	    shader->setUniform(uname, v);

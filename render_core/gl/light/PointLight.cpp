@@ -5,27 +5,26 @@ namespace RGL {
 namespace glcore {
 
 
-PointLight::PointLight(const glm::vec3& lightColor, const glm::vec3& ambientColor, float spotIntensity, float mK2, float mK1, float mKC): Light(lightColor, ambientColor, spotIntensity) {
+using namespace entt::literals;
+void updatePointLight(entt::registry& reg) {
+    auto view = reg.view<const CommonLight, PointLightComponent, PositionComponent, UBOs>();
 
-	this->lightColor = lightColor;
-	this->ambientColor = ambientColor;
-	this->specularIntensity = spotIntensity;
-	this->mK2 = mK2;
-	this->mK1 = mK1;
-	this->mKC = mKC;
+    view.each([&reg](const CommonLight& common, PointLightComponent& pointLight, PositionComponent& pos, UBOs& ubos) {
+	auto pointLightBlock = (*ubos)["pointLight"];
 
+	updateLightCommon(common, pointLightBlock);
 
-}
-void PointLight::setShaderUniforms(UniformComponent& uniforms) const {
-	
-    uniforms["lightColor"] = lightColor;
-    uniforms["ambient"] = ambientColor;
-    uniforms["spotIntensity"] = this->specularIntensity;
+	pointLightBlock->updateCpuUbo("k1", pointLight.mK1);
+	pointLightBlock->updateCpuUbo("k2", pointLight.mK2);
+	pointLightBlock->updateCpuUbo("kc", pointLight.mKC);
 
-    uniforms["k1"] = mK1;
-    uniforms["k2"] = mK2;
-    uniforms["kc"] = mKC;
+	pointLightBlock->updateCpuUbo("lightPosition", pos.position);
 
+	const glm::vec3 camPosition = reg.ctx().get<glm::vec3>("cameraPos"_hs);
+	pointLightBlock->updateCpuUbo("cameraPos", camPosition);
+    }
+
+    );
 }
 
 }  // namespace glcore

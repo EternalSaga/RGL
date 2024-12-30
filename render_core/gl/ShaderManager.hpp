@@ -10,14 +10,13 @@
 
 namespace RGL {
 namespace glcore {
-
-using CommonUniformTypes = boost::variant2::variant<GLuint, float, GLint, glm::mat2, glm::mat3, glm::mat4, glm::vec2, glm::vec3, glm::vec4>;
-
 using ShaderRef = std::shared_ptr<Shader>;
 
-using UniformComponent = std::unordered_map<std::string, CommonUniformTypes>;
+using CommonUniformTypes = boost::variant2::variant<GLuint, float, GLint, glm::mat2, glm::mat3, glm::mat4, glm::vec2, glm::vec3, glm::vec4>;
+using DiscreteUniforms = std::unordered_map<std::string, CommonUniformTypes>;
 
-void updateAllUniforms(ShaderRef shader,const UniformComponent& uniforms);
+
+void updateAllUniforms(ShaderRef shader,const DiscreteUniforms& uniforms);
 
 }  // namespace glcore
 }  // namespace RGL

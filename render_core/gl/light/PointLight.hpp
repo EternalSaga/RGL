@@ -8,19 +8,14 @@
 namespace RGL {
 namespace glcore {
 
-
-
-
-class PointLight :public Light {
+	struct PointLightComponent {
     float mK2;
     float mK1;
     float mKC;
+	};
 
-	public:
-    PointLight(const glm::vec3& lightColor, const glm::vec3& ambientColor, float spotIntensity, float mK2, float mK1, float mKC);
+	void updatePointLight(entt::registry& reg);
 
-	virtual void setShaderUniforms(UniformComponent& uniforms) const;
 
-};
 }
 }  // namespace RGL
