@@ -59,18 +59,18 @@ using namespace glcore;
 
 
 class UBOTest : public Renderer, public SingleReg {
-    std::shared_ptr<Shader> spotlightShader;
-    std::shared_ptr<Shader> whiteShader;
+    ShaderRef spotlightShader;
+    ShaderRef whiteShader;
     std::shared_ptr<Camera> cam;
 
 	std::shared_ptr<UBO> lightUBO;
     std::shared_ptr<UBO> transformUBO;
 
 	std::unique_ptr<Texture> box_texture;
-
+    std::unique_ptr<CommonRenderEntity> cubeEntity;
 	GeneralEntity spotLight;
 
-	std::unique_ptr<CommonEntity> sphereEntity;
+	std::unique_ptr<CommonRenderEntity> sphereEntity;
 	UBOs ubos;
    public:
     UBOTest(std::shared_ptr<Camera> cam);
