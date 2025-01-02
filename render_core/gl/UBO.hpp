@@ -24,24 +24,7 @@ class UboBindingManager {
     ~UboBindingManager() = default;
 };
 
-	class UBOCPU {
-    std::vector<GLint> uniformOffsets;
-    std::vector<GLint> uniformTypes;
-    std::vector<GLint> uniformArrayStrides;
-    std::vector<GLint> uniformSizes;
-    std::vector<std::string> uniformNames;
-    size_t sz;
-    std::vector<std::byte> data;
 
-   public:
-    UBOCPU(size_t totalSize, const std::vector<GLint>& uniformOffsets,
-	const std::vector<GLint>& uniformTypes,
-	const std::vector<GLint>& uniformArrayStrides,
-	const std::vector<GLint>& uniformSizes,
-	const std::vector<std::string>& uniformNames);
-    void set(const std::string& uniformName, const CommonUniformTypes& value);
-    const std::byte* getData() const;
-	};
 	
 class UBO {
     GLuint ubo;
@@ -55,13 +38,12 @@ class UBO {
     std::vector<GLint> uniformArrayStrides;
     std::vector<GLint> uniformSizes;  // uniform 元素个数，用于数组
     std::vector<std::string> uniformNames;
-
+    std::vector<std::byte> data;
     GLuint shader;
     std::string uboName;
     GLint bindingPoint;
     UboBindingManager* bindingManager;
 
-    std::unique_ptr<UBOCPU> cpuUbo;
 
 
 	void prepareOffsetsAndDataType();

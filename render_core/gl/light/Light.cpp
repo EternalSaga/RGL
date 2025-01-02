@@ -5,7 +5,7 @@ namespace glcore {
 	using namespace entt::literals;
 void updateLightCommon(const CommonLight& common, std::shared_ptr<UBO> ubo) {
     ubo->updateCpuUbo("ambient", common.ambientColor);
-    ubo->updateCpuUbo("specularIntensity", common.specularIntensity);
+    ubo->updateCpuUbo("spotIntensity", common.specularIntensity);
     ubo->updateCpuUbo("lightColor", common.lightColor);
 }
 void updateDirLight(entt::registry& reg) {
