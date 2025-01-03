@@ -46,7 +46,7 @@ UBOTest::UBOTest(std::shared_ptr<Camera> cam) {
     // cube因为有光照相关shader，所以加个render tag，方便entt view筛选
     cubeEntity->attachComponent<RenderTag>();
 
-	spotLight = std::make_unique<GeneralEntity>();
+    spotLight = std::make_unique<GeneralEntity>();
     // 光源entity
     spotLight->attachComponent<CommonLight>(glm::vec3{1.0f, 0.9f, 0.9f}, glm::vec3{0.1f, 0.2f, 0.2f}, 32.0f);
     spotLight->attachComponent<SpotLightComponnet>(30.0f, 45.0f, glm::vec3{-1.0f, 0.0f, 0.0f});
@@ -78,11 +78,10 @@ UBOTest::UBOTest(std::shared_ptr<Camera> cam) {
 
 void UBOTest::operator()() {
     cam->update();
-    
+
     // 场景绘制
     CommonRenderEntity::update();
 }
-
 
 }  // namespace practice
 }  // namespace RGL

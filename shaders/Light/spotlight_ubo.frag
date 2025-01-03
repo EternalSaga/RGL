@@ -14,8 +14,8 @@ vec3 targetDirection;
 vec3 lightPosition;
 vec3 cameraPos;
 float spotIntensity;
-float innerAngle;
-float outerAngle;
+float innerAngle;//弧度
+float outerAngle;//弧度
 
 };
 
@@ -31,8 +31,12 @@ void main()
 
     vec3 targetDirectionNormal = normalize(targetDirection);
 
-    float cGamma = dot(lightDir, targetDirectionNormal);
-    float spotAttenuation =clamp( (cGamma - outerAngle) / (outerAngle-innerAngle), 0.0, 1.0);
+    float cosTheta = dot(lightDir, targetDirectionNormal); // Cosine of the angle between light direction and target direction
+    float cosInner = cos(innerAngle);
+    float cosOuter = cos(outerAngle);
+
+    // Smooth step for smoother attenuation
+    float spotAttenuation = smoothstep(cosOuter, cosInner, cosTheta);
 
 	//计算漫反射
 	float diffuse = clamp(dot(-lightDir, normal), 0.0, 1.0);

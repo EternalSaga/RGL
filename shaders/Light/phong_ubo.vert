@@ -12,7 +12,7 @@ out vec3 worldPosition;
 layout(std140) uniform Transforms{
 	mat4 modelMatrix;
 	mat4 MVP;
-	mat3 inverseModelMatrix;
+	mat4 inverseModelMatrix;
 };
 
 void main()
@@ -28,5 +28,6 @@ void main()
 	
 	uv = inUV;
 	//在CPU端完成了modelmatrix的逆矩阵和转置计算，这里直接使用即可
-	normal = inverseModelMatrix * inNormal;
+	normal = mat3(inverseModelMatrix) * inNormal;
+	//normal = transpose(inverse(mat3(modelMatrix))) * inNormal;
 }
