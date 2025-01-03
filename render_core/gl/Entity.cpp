@@ -78,12 +78,13 @@ void CommonRenderEntity::modelSystemUBO() {
 	const glm::vec3 camPosition = singleReg->ctx().get<glm::vec3>("cameraPos"_hs);
 
 	const glm::mat4 MVP = proj.projMat * proj.viewMat * modelMatrix;
-	const glm::mat3 inverseModelMatrix = glm::transpose(glm::inverse(modelMatrix));
+	const glm::mat3 inverseModelMatrix = glm::transpose(glm::inverse(glm::mat3(modelMatrix)));
 
 	auto trans = (*ubos)["Transforms"];
 	trans->updateCpuUbo("modelMatrix", modelMatrix);
 	trans->updateCpuUbo("MVP", MVP);
-	trans->updateCpuUbo("inverseModelMatrix", inverseModelMatrix);
+	trans->updateCpuUbo("inverseModelMatrix", glm::mat4(inverseModelMatrix));
+	
     });
 }
 
