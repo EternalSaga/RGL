@@ -89,7 +89,7 @@ UBO::UBO(GLuint shaderProgram, const std::string& uniformBlockName) {
     glCall(glCreateBuffers, 1, &ubo);
     glCall(glNamedBufferData, ubo, blockSize, nullptr, GL_DYNAMIC_DRAW);  // UBO是需要频繁修改的绘制数据，所以是GL_DYNAMIC_DRAW
     bindingPoint = bindingManager->accquireBindingPoint();
-    glCall(glBindBufferBase, GL_UNIFORM_BUFFER, ubo, this->bindingPoint);  // 直接把ubo绑定到绑定点上
+    glCall(glBindBufferBase, GL_UNIFORM_BUFFER, this->bindingPoint, ubo);  // 直接把ubo绑定到绑定点上
 
     assert(this->bindingPoint != -1);
     glCall(glUniformBlockBinding, shader, blockIndex, this->bindingPoint);  // 在shader ubo block上分配一个绑定点

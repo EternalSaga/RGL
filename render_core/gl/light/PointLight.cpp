@@ -6,8 +6,9 @@ namespace glcore {
 
 
 using namespace entt::literals;
-void updatePointLight(entt::registry& reg) {
-    auto view = reg.view<const CommonLight, PointLightComponent, PositionComponent, UBOs>();
+void updatePointLight() {
+    auto reg = EnttReg::getPrimaryRegistry();
+    auto view = reg->view<const CommonLight, PointLightComponent, PositionComponent, UBOs>();
 
     view.each([&reg](const CommonLight& common, PointLightComponent& pointLight, PositionComponent& pos, UBOs& ubos) {
 	auto pointLightBlock = (*ubos)["pointLight"];
@@ -20,7 +21,7 @@ void updatePointLight(entt::registry& reg) {
 
 	pointLightBlock->updateCpuUbo("lightPosition", pos.position);
 
-	const glm::vec3 camPosition = reg.ctx().get<glm::vec3>("cameraPos"_hs);
+	const glm::vec3 camPosition = reg->ctx().get<glm::vec3>("cameraPos"_hs);
 	pointLightBlock->updateCpuUbo("cameraPos", camPosition);
     }
 

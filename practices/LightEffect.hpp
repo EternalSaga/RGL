@@ -21,41 +21,7 @@ namespace practice {
 using namespace glcore;
 
 
-//class PhongSPMaskExec : public Renderer {
-//
-//    std::shared_ptr<Shader> shader;
-//    std::shared_ptr<Camera> cam;
-//	std::unique_ptr<Texture> box_spMask;
-//   public:
-//    PhongSPMaskExec(std::shared_ptr<Camera> cam);
-//    void operator()() override;
-//};
-//
-//class PointLightExec : public Renderer ,public SingleReg{
-//
-//    std::shared_ptr<Shader> spotlightShader;
-//    std::shared_ptr<Shader> whiteShader;
-//    std::shared_ptr<Camera> cam;
-//    std::unique_ptr<Texture> box_spMask;
-//
-//	std::unique_ptr<CommonEntity> sphereEntity;
-//	public:
-//    PointLightExec(std::shared_ptr<Camera> cam);
-//	void operator()() override;
-//};
-//
-//class SpotLightExec : public Renderer, public SingleReg {
-//    std::shared_ptr<Shader> spotlightShader;
-//    std::shared_ptr<Shader> whiteShader;
-//    std::shared_ptr<Camera> cam;
-//    std::unique_ptr<Texture> box_texture;
-//
-//	std::unique_ptr<CommonEntity> sphereEntity;
-//
-//   public:
-//	SpotLightExec(std::shared_ptr<Camera> cam);
-//    void operator()() override;
-//};
+
 
 
 class UBOTest : public Renderer, public SingleReg {
@@ -68,7 +34,7 @@ class UBOTest : public Renderer, public SingleReg {
 
 	std::unique_ptr<Texture> box_texture;
     std::unique_ptr<CommonRenderEntity> cubeEntity;
-	GeneralEntity spotLight;
+	std::unique_ptr<GeneralEntity> spotLight;
 
 	std::unique_ptr<CommonRenderEntity> sphereEntity;
 	UBOs ubos;
@@ -76,6 +42,9 @@ class UBOTest : public Renderer, public SingleReg {
     UBOTest(std::shared_ptr<Camera> cam);
     void operator()() override;
 };
+
+
+
 
 }  // namespace practice
 }  // namespace RGL

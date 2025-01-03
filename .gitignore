@@ -380,3 +380,4 @@ FodyWeavers.xsd
 /rgl_main.exe.recipe
 *.advixeproj
 *.advixeexp
+/package

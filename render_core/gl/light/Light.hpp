@@ -22,7 +22,7 @@ struct DirectionalCompnent {
 
 void updateLightCommon(const CommonLight& common, std::shared_ptr<UBO> ubo);
 
-void updateDirLight(entt::registry& reg);
+void updateDirLight();
 
 
 

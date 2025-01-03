@@ -10,7 +10,7 @@ struct SpotLightComponnet {
     glm::vec3 targetDirection;
 };
 
-void updateSpotLight(entt::registry& reg);
+void updateSpotLight();
 
 
 }  // namespace glcore
