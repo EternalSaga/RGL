@@ -14,7 +14,7 @@ namespace glcore {
     float mKC;
 	};
 
-	void updatePointLight(entt::registry& reg);
+	void updatePointLight();
 
 
 }

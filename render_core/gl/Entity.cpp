@@ -1,10 +1,12 @@
 #include "Entity.hpp"
-#include "Light.hpp"
+
 #include <cassert>
 #include "Mesh.hpp"
 #include "CameraECS.hpp"
 #include "DataPipeline.hpp"
 #include "UBO.hpp"
+#include "SpotLight.hpp"
+#include "PointLight.hpp"
 namespace RGL {
 namespace glcore {
 // void CommonEntity::rotateX(float angle) {
@@ -58,6 +60,9 @@ void CommonRenderEntity::update() {
     modelSystemUBO();
     modelSystemSimple();
     materialSystem();
+    updateSpotLight();
+    updatePointLight();
+    updateDirLight();
     renderVertexArray();
 }
 using namespace entt::literals;
@@ -122,6 +127,17 @@ void CommonRenderEntity::renderVertexArray() {
 	glCall(glDrawElements, GL_TRIANGLES, mesh.vertCount, GL_UNSIGNED_INT, reinterpret_cast<void*>(mesh.idxOffset));
 	glCall(glBindVertexArray, 0);
     });
+
+	auto simpleRenderView = singleReg->view<const VertArrayComponent, ShaderRef, DiscreteUniforms>(entt::exclude<UBOs>);
+	simpleRenderView.each([](const VertArrayComponent& mesh, ShaderRef shader, DiscreteUniforms& distUniform) {
+
+		ScopeShader scopeshader(*shader);
+	    updateAllUniforms(shader, distUniform);
+	    glCall(glBindVertexArray, *mesh.vao);
+	    glCall(glDrawElements, GL_TRIANGLES, mesh.vertCount, GL_UNSIGNED_INT, reinterpret_cast<void*>(mesh.idxOffset));
+	    glCall(glBindVertexArray, 0);
+	});
+
 }
 
 GeneralEntity::~GeneralEntity() {
