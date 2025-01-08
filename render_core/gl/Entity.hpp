@@ -15,20 +15,10 @@
 #include "EnttRegistry.hpp"
 #include "Light.hpp"
 #include "UBO.hpp"
+#include "EnttRelationship.hpp"
 namespace RGL {
 namespace glcore {
 
-struct PoseComponent {
-    float angleX;
-    float angleY;
-    float angleZ;
-};
-struct PositionComponent {
-    glm::vec3 position;
-};
-struct ScaleComponent {
-    glm::vec3 scale;
-};
 
 struct VertArrayComponent {
     std::unique_ptr<VAO> vao;
@@ -62,10 +52,6 @@ class GeneralEntity : public SingleReg {
 	}
     ~GeneralEntity();
 };
-
-
-glm::mat4 GetModelMatrix(const PoseComponent& pose, const PositionComponent& position, const ScaleComponent& scale);
-
 
 
 

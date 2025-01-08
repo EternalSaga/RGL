@@ -7,38 +7,17 @@
 #include "UBO.hpp"
 #include "SpotLight.hpp"
 #include "PointLight.hpp"
+#include "EnTTRelationship.hpp"
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/string_cast.hpp>
 namespace RGL {
 namespace glcore {
-// void CommonEntity::rotateX(float angle) {
-//     angleX += angle;
-// }
-// void CommonEntity::rotateY(float angle) {
-//     angleY += angle;
-// }
-// void CommonEntity::rotateZ(float angle) {
-//     angleZ += angle;
-// }
-// void CommonEntity::setScale(const glm::vec3& scale) {
-//     this->scale = scale;
-// }
 
-glm::mat4 GetModelMatrix(const PoseComponent& pose, const PositionComponent& position, const ScaleComponent& scale) {
-    auto tranform{glm::identity<glm::mat4>()};
 
-    assert(scale.scale.x != 0.0f && scale.scale.y != 0.0f && scale.scale.z != 0.0f);
-
-    tranform = glm::scale(tranform, scale.scale);
-    tranform = glm::rotate(tranform, glm::radians(pose.angleX), glm::vec3(1.0f, 0.0f, 0.0f));
-    tranform = glm::rotate(tranform, glm::radians(pose.angleY), glm::vec3(0.0f, 1.0f, 0.0f));
-    tranform = glm::rotate(tranform, glm::radians(pose.angleZ), glm::vec3(0.0f, 0.0f, 1.0f));
-    tranform = glm::translate(glm::identity<glm::mat4>(), position.position) * tranform;
-    return tranform;
-}
 
 CommonRenderEntity::CommonRenderEntity(glm::vec3 position, float angleX, float angleY, float angleZ, glm::vec3 scale) : entity(singleReg->create()) {
-    singleReg->emplace<PoseComponent>(entity, angleX, angleY, angleZ);
-    singleReg->emplace<ScaleComponent>(entity, scale);
-    singleReg->emplace<PositionComponent>(entity, position);
+    singleReg->emplace<Transform>(entity, position, glm::vec3(angleX,angleY,angleZ), scale);
+
     singleReg->emplace<DiscreteUniforms>(entity);
 }
 
@@ -57,6 +36,8 @@ void CommonRenderEntity::setMaterial(std::unique_ptr<Material> material) {
 }
 
 void CommonRenderEntity::update() {
+    
+    updateTransforms();
     modelSystemUBO();
     modelSystemSimple();
     materialSystem();
@@ -68,20 +49,21 @@ void CommonRenderEntity::update() {
 using namespace entt::literals;
 void CommonRenderEntity::modelSystemUBO() {
     auto singleReg = EnttReg::getPrimaryRegistry();
-    auto viewForModel = singleReg->view<PoseComponent, ScaleComponent, PositionComponent, UBOs>();
+    auto viewForModel = singleReg->view<const Transform, UBOs>();
 
-    viewForModel.each([&singleReg](PoseComponent& pose, ScaleComponent& scale, PositionComponent& position, UBOs& ubos) {
-	const auto modelMatrix = GetModelMatrix(pose, position, scale);
+    viewForModel.each([&singleReg](const entt::entity entity,const Transform& transform, UBOs& ubos) {
+
+
 
 	const CameraProjection proj = singleReg->ctx().get<CameraProjection>("CameraProjection"_hs);
 
 	const glm::vec3 camPosition = singleReg->ctx().get<glm::vec3>("cameraPos"_hs);
 
-	const glm::mat4 MVP = proj.projMat * proj.viewMat * modelMatrix;
-	const glm::mat3 inverseModelMatrix = glm::transpose(glm::inverse(glm::mat3(modelMatrix)));
+	const glm::mat4 MVP = proj.projMat * proj.viewMat * transform.modelMatrix;
+	const glm::mat3 inverseModelMatrix = glm::transpose(glm::inverse(glm::mat3(transform.modelMatrix)));
 
 	auto trans = (*ubos)["Transforms"];
-	trans->updateCpuUbo("modelMatrix", modelMatrix);
+	trans->updateCpuUbo("modelMatrix", transform.modelMatrix);
 	trans->updateCpuUbo("MVP", MVP);
 	trans->updateCpuUbo("inverseModelMatrix", glm::mat4(inverseModelMatrix));
 	
@@ -90,15 +72,16 @@ void CommonRenderEntity::modelSystemUBO() {
 
 void CommonRenderEntity::modelSystemSimple() {
     auto singleReg = EnttReg::getPrimaryRegistry();
-
+   
     // 对于简单模型来说，不需要UBO，所以直接排除UBO
-    auto viewForModel = singleReg->view<PoseComponent, ScaleComponent, PositionComponent, DiscreteUniforms>(entt::exclude<UBOs>);
+    auto viewForModel = singleReg->view<const Transform, DiscreteUniforms>(entt::exclude<UBOs>);
 
-    viewForModel.each([&singleReg](PoseComponent& pose, ScaleComponent& scale, PositionComponent& position, DiscreteUniforms& uniforms) {
-	const auto modelMatrix = GetModelMatrix(pose, position, scale);
+    viewForModel.each([&singleReg](const entt::entity entity, const Transform& transform, DiscreteUniforms& uniforms) {
+
+	
 	const CameraProjection proj = singleReg->ctx().get<CameraProjection>("CameraProjection"_hs);
 	const glm::vec3 camPosition = singleReg->ctx().get<glm::vec3>("cameraPos"_hs);
-	const glm::mat4 MVP = proj.projMat * proj.viewMat * modelMatrix;
+	const glm::mat4 MVP = proj.projMat * proj.viewMat * transform.modelMatrix;
 	uniforms["MVP"] = MVP;
     });
 }

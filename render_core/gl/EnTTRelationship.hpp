@@ -3,21 +3,37 @@
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
+
 #include <glm/gtc/matrix_transform.hpp>
 #include "EnttRegistry.hpp"
+#include <vector>
+#include "rllogger.hpp"
+#include <glm/glm.hpp>
 namespace RGL {
 namespace glcore {
 struct Transform {
-    glm::mat4 modelMatrix;
-    glm::vec3 position;
-    glm::quat rotation;
+   private:
+    glm::vec3 rotation;	 // 欧拉角
     glm::vec3 scale;
-    Transform();
-    void updataModelMatrix();
+    glm::vec3 position;
+
+   public:
+    glm::mat4 modelMatrix;
+
+    spdlog::logger* logger;
+    Transform(glm::vec3 position, glm::vec3 rotation, glm::vec3 scale);
+    void doLocalTransform();
+    void setRotation(glm::vec3 rotation);
+    void setScale(glm::vec3 scale);
+    void setPosition(glm::vec3 position);
+    void addPosition(glm::vec3 position);
+    void addRotation(glm::vec3 rotation);
+    void addScale(glm::vec3 scale);
+    glm::vec3 getPosition() const;
 };
 struct Relationship {
     entt::entity parent = entt::null;
-    entt::entity next = entt::null;
+    std::vector<entt::entity> children;
 };
 
 void updateTransforms();

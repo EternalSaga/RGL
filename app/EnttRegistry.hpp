@@ -2,6 +2,7 @@
 #include <entt/entt.hpp>
 #include <memory>
 #include <mutex>
+
 namespace RGL {
 
 	using reactive_storage = entt::reactive_mixin<entt::storage<void>>;
@@ -26,6 +27,7 @@ namespace RGL {
 	    entt::registry* singleReg;
 	    reactive_storage* singleStorage;
 	    entt::dispatcher& singleDispatcher;
+
 	   public:
 	    SingleReg();
 	};
