@@ -44,5 +44,6 @@ EnttReg::~EnttReg() {
 SingleReg::SingleReg(): singleDispatcher(EnttReg::getDispatcher()) {
     singleReg = EnttReg::getPrimaryRegistry();
     singleStorage = EnttReg::getPrimaryStorage();
+    
 }
 }  // namespace RGL

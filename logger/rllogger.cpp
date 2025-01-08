@@ -21,7 +21,7 @@ spdlog::logger *RLLogger::getInstance() {
     singletonLogger =
         new spdlog::logger("gl_logger", {console_sink, file_sink});
 
-    singletonLogger->set_level(spdlog::level::debug);
+    singletonLogger->set_level(spdlog::level::warn);
     singletonLogger->set_error_handler([](const std::string &errorMsg) {
       throw std::runtime_error(errorMsg);
     });
