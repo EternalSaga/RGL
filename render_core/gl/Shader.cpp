@@ -6,12 +6,10 @@
 namespace RGL {
 namespace glcore {
 
-Shader::Shader(const ShaderSrcs &shaderSrcs) : compiled(0), linked(0) {
+Shader::Shader(const ShaderSrcs &shaderSrcs) : compiled(0), linked(0) ,shader(0){
     logger = RGL::RLLogger::getInstance();
 
-    // std::map<int, std::vector<fs::path>> ->
-    // std::map<int, std::vector<std::string> -> //be carefull for this
-    // std::map<int, std::vector<char*>> -> use glShaderSource
+
     shaderProgram = glcore::glCall(glCreateProgram);
     for (const auto &shaderType_Src : shaderSrcs) {
 	std::vector<const char *> srcs;
@@ -25,7 +23,7 @@ Shader::Shader(const ShaderSrcs &shaderSrcs) : compiled(0), linked(0) {
 	    std::back_inserter(srcs),
 	    [](const std::string &str) { return str.c_str(); });
 
-	GLuint shader = glcore::glCall(
+	shader = glcore::glCall(
 	    glCreateShader, static_cast<GLuint>(shaderType_Src.first));
 	assert(glIsShader(shader));
 	glcore::glCall(glShaderSource, shader, srcs.size(), srcs.data(),
@@ -93,8 +91,16 @@ void Shader::disableProgram() {
 Shader::~Shader() {
 
 	glCall(glUseProgram, 0);
-    glCall(glDeleteShader, shaderProgram);
 
+	if (glIsShader(shader)) {
+	    glCall(glDetachShader,shaderProgram, shader);
+	    glCall(glDeleteShader, shader);
+	}
+
+    if (glIsProgram(shaderProgram)) {
+	    glCall(glDeleteProgram,shaderProgram);
+	}
+	
 }
 ScopeShader::ScopeShader(Shader &shader) : shader(shader) {
     shader.useProgram();

@@ -1,5 +1,8 @@
 #pragma once
+#include "GLTextures.hpp"
 #include "Helpers.hpp"
+#include "rllogger.hpp"
+#include <cassert>
 #include <cstdint>
 
 #include <glad/glad.h>
@@ -11,10 +14,8 @@
 #include <ctime>
 #include <filesystem>
 #include <random>
-namespace RGL
-{
-namespace io
-{
+namespace RGL {
+namespace io {
 namespace fs = std::filesystem;
 struct ImgRef {
     uint8_t *imgData;
@@ -22,39 +23,36 @@ struct ImgRef {
     int height;
     int channels;
 };
-class LoadedImg
-{
+class LoadedImg {
     uint8_t *imgData;
     int width;
     int height;
     int channels;
 
-  public:
+   public:
     LoadedImg(const fs::path &imagePath);
 
     operator ImgRef();
 
     ~LoadedImg();
 };
-} // namespace io
+}  // namespace io
 
-namespace glcore
-{
+namespace glcore {
 using namespace io;
 
 std::vector<GLuint> initTUnitRes();
 
-class TextUnitResources 
-{
-  public:
+class TextUnitResources {
+   public:
     ~TextUnitResources() = default;
-    
-	//如果返回0，则代表没有资源，需要push
+
+    // 如果返回0，则代表没有资源，需要push
     GLuint popUnit();
-	void pushUnit(GLuint tunit) {
-	    textureUnitResource.push_back(tunit);
-	}
-	static std::shared_ptr<TextUnitResources> getInstance();
+    void pushUnit(GLuint tunit) {
+	textureUnitResource.push_back(tunit);
+    }
+    static std::shared_ptr<TextUnitResources> getInstance();
 
     TextUnitResources();
     static std::shared_ptr<TextUnitResources> instance;
@@ -62,34 +60,52 @@ class TextUnitResources
     static std::once_flag initOnce;
 };
 
+enum class TextureUsageType {
+    DIFFUSE,
+    SPECULAR,
+    NORMAL,
+    AMBIENT,
 
-class Texture
-{
-	std::mt19937 mt;//随机选择一个幸运纹理单元被重新绑定
-    
+};
+
+class Texture {
+
+    friend class TextureCache;
+    std::mt19937 mt;  // 随机选择一个幸运纹理单元被重新绑定
 
     std::unique_ptr<GLuint[]> textures;
     size_t currentSetIndex;
-    std::map<GLuint, GLint> texture_textureUnit;      // 纹理-纹理单元映射
-    std::map<std::string, GLuint> textrueName_texture; // 纹理名-纹理
+    std::map<GLuint, GLint> texture_textureUnit;	// 纹理-纹理单元映射
+    std::map<std::string, GLuint> textrueName_texture;	// 纹理名-纹理
     size_t mNumOfTextures;
     std::shared_ptr<TextUnitResources> unitsPool;
-  public:
+
+    TextureUsageType usageType;
+
+   public:
     Texture(size_t numOfTextrues);
 
     Texture();
     GLint useTexture(GLuint textrueID);
     GLuint findTextureByName(std::string textureName);
-
-
-	GLint useTexture(std::string textureName);
+    GLint useTexture(std::string textureName);
 
     void set(const ImgRef &flippedImg, std::string textureName, bool turnOnMipmap);
-    
-    //谨慎使用，用之前知道自己在干什么
+
+    void setUseType(TextureUsageType type);
+    TextureUsageType getUseType();
+    // 谨慎使用，用之前知道自己在干什么
     void setFilltering(std::string textureName, GLenum filter);
     ~Texture();
 };
-} // namespace glcore
-} // namespace RGL
+
+class TextureCache {
+    std::map<fs::path, std::shared_ptr<Texture>> cache;
+
+   public:
+    std::shared_ptr<Texture> getTexture(const fs::path &imagePath,TextureUsageType type);
+};
+
+}  // namespace glcore
+}  // namespace RGL
 ;

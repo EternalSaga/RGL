@@ -1,5 +1,5 @@
 #include <cassert>
-#include <vector>
+
 #pragma once
 
 
@@ -8,46 +8,17 @@
 namespace RGL {
 
 namespace glcore {
-class Material {
-   protected:
-    Texture* texture;
-    std::string textureName;
 
-   public:
-    Material(Texture* texture, const std::string& textureName);
-    virtual ~Material() = default;
 
-    virtual void setShaderUniforms(DiscreteUniforms& uniformComponent);
-  
+class MaterialData {
+    std::map<TextureUsageType,std::vector<std::shared_ptr<Texture>>> textures;
+    public:
+    MaterialData() = default;
+    void appendTexture(std::shared_ptr<Texture> texture);
 };
 
-class PhongMaterial : public Material {
-    // 光斑指数
 
 
-   public:
-    PhongMaterial(Texture* texture,const std::string& textureName);
-    virtual ~PhongMaterial() = default;
-
-    void setShaderUniforms(DiscreteUniforms& uniformComponent) override;
-};
-
-class PhoneWithSPMask : public Material {
-
-
-    const std::string maskName = "spMask";
-    
-   public:
-    PhoneWithSPMask(Texture* texture, const std::string& textureName);
-
-    void setShaderUniforms(DiscreteUniforms& uniformComponent) override;
-};
-
-class WhiteMaterial:public Material {
-   public:
-    WhiteMaterial();
-
-};
 
 
 }  // namespace glcore

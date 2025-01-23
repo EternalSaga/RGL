@@ -41,6 +41,7 @@ class UBOTest : public Renderer, public SingleReg {
    public:
     UBOTest(std::shared_ptr<Camera> cam);
     void operator()() override;
+    ~UBOTest();
 };
 
 

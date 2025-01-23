@@ -20,3 +20,4 @@ void updateAllUniforms(ShaderRef shader,const DiscreteUniforms& uniforms);
 
 }  // namespace glcore
 }  // namespace RGL
+    

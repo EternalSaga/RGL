@@ -208,5 +208,31 @@ void Texture::setFilltering(std::string textureName, GLenum filter){
 Texture::~Texture() {
     glCall(glDeleteTextures, mNumOfTextures, textures.get());
 }
+
+void Texture::setUseType(TextureUsageType type) {
+    assert(mNumOfTextures == 1);
+    usageType = type;
+}
+std::shared_ptr<Texture> TextureCache::getTexture(const fs::path &imagePath, TextureUsageType type) {
+    if (cache.find(imagePath) == cache.end()) {
+	cache[imagePath] = std::make_shared<Texture>();
+	cache[imagePath]->set(LoadedImg(imagePath), imagePath.filename().string(), true);
+	cache[imagePath]->setUseType(type);
+    } else {
+	auto logger = RLLogger::getInstance();
+		logger->debug("texture cache hit");
+    }
+
+	if (cache[imagePath]->usageType != type) {
+		auto logger = RLLogger::getInstance();
+	    logger->warn("texture usage type changed");
+	    cache[imagePath]->setUseType(type);
+	}
+	
+    return cache[imagePath];
+}
+TextureUsageType Texture::getUseType()  {
+    return usageType;
+}
 }  // namespace glcore
 }  // namespace RGL

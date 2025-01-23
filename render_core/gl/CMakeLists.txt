@@ -34,3 +34,5 @@ find_package(EnTT CONFIG REQUIRED)
 target_link_libraries(glFramework PUBLIC EnTT::EnTT)
 
 
+find_package(assimp CONFIG REQUIRED)
+target_link_libraries(glFramework PRIVATE assimp::assimp)

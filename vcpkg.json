@@ -33,7 +33,8 @@
 			"version>=": "2024-07-29#1"
 		},
 		{
-			"name": "spdlog"
+			"name": "spdlog",
+			"version>=": "1.15.0#1"
 		},
 		{
 			"name": "bullet3",
@@ -51,6 +52,10 @@
 		{
 			"name": "entt",
 			"version>=": "3.14.0"
+		},
+		{
+			"name":"assimp",
+			"version>=": "5.4.3#0"
 		}
 
 	],
