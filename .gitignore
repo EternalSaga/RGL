@@ -381,3 +381,5 @@ FodyWeavers.xsd
 *.advixeproj
 *.advixeexp
 /package
+/.VSCodeCounter
+/vcpkg_installed

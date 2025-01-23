@@ -21,9 +21,7 @@ CommonRenderEntity::CommonRenderEntity(glm::vec3 position, float angleX, float a
     singleReg->emplace<DiscreteUniforms>(entity);
 }
 
-CommonRenderEntity::~CommonRenderEntity() {
-    singleReg->destroy(entity);
-}
+
 
 void CommonRenderEntity::setMesh(std::unique_ptr<Mesh> mesh, ShaderRef shader) {
     auto vao = VAOCreater::createMeshVAO(*mesh, *shader);
@@ -124,9 +122,7 @@ void CommonRenderEntity::renderVertexArray() {
 
 }
 
-GeneralEntity::~GeneralEntity() {
-    singleReg->destroy(entity);
-}
+
 
 }  // namespace glcore
 }  // namespace RGL

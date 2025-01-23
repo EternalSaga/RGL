@@ -5,10 +5,12 @@
 #include <stdexcept>
 #include <utility>
 #include <vector>
+#include "GLTextures.hpp"
 #include "Shader.hpp"
 #include "VertexDescriptor.hpp"
 
 #include "GLObj.hpp"
+#include "Material.hpp"
 namespace RGL {
 namespace glcore {
 
@@ -23,9 +25,12 @@ class Mesh {
 
     size_t getVertexLength();
 
+
+    std::shared_ptr<MaterialData> material;
+
    public:
     explicit Mesh();
-
+    explicit Mesh(FloatDescs descs,size_t numOfVertcies);
     std::tuple<size_t, size_t> getIdicesCountAndOffset();
 
     std::vector<int> getIndices() const;
@@ -33,6 +38,12 @@ class Mesh {
     size_t getIndicesCount() const;
     virtual ~Mesh() = default;
     FloatDescs getDesc() const;
+    void pushVertex(const std::vector<GLfloat>& vertex);    
+    void pushIndex(const int index);
+    
+    void setMaterial(std::shared_ptr<MaterialData> material){
+        this->material = material;
+    }
 };
 
 namespace VAOCreater {

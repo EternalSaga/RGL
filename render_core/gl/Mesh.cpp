@@ -6,7 +6,18 @@ namespace glcore {
 FloatDescs Mesh::getDesc() const {
     return descs;
 }
-Mesh::Mesh() : indices(), indicesCount(0) {
+void Mesh::pushVertex(const std::vector<GLfloat>& vertex) {
+    assert(vertex.size() == vertLength);
+    channeledVertices.insert(channeledVertices.end(), vertex.begin(), vertex.end());
+}
+void Mesh::pushIndex(const int index) {
+    indices.push_back(index);
+}
+Mesh::Mesh() : indices(), indicesCount(0),material() {
+}
+Mesh::Mesh(FloatDescs descs,size_t numOfVertcies) : descs(descs), indicesCount(0), indices(), channeledVertices(),material() {
+	vertLength = getVertexLength();
+    channeledVertices.resize(vertLength * numOfVertcies);
 }
 std::tuple<size_t, size_t> Mesh::getIdicesCountAndOffset() {
     if (indicesCount == 0 || indicesOffset == 0) {

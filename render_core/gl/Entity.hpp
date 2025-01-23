@@ -50,7 +50,7 @@ class GeneralEntity : public SingleReg {
     GeneralEntity() : entity(singleReg->create()) {
 	
 	}
-    ~GeneralEntity();
+    ~GeneralEntity() = default;
 };
 
 
@@ -68,7 +68,7 @@ class CommonRenderEntity : public SingleReg {
    protected:
    public:
     CommonRenderEntity(glm::vec3 position, float angleX, float angleY, float angleZ, glm::vec3 scale);
-    ~CommonRenderEntity();
+    ~CommonRenderEntity() = default;
     void setMesh(std::unique_ptr<Mesh> mesh, ShaderRef shader);
     void setMaterial(std::unique_ptr<Material> material);
     static void update();

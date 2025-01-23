@@ -47,7 +47,7 @@ class Shader {
     spdlog::logger *logger;
     static constexpr GLuint MaxShaderLogLength = 1024;
     size_t *refCount = nullptr;
-
+    GLuint shader;
    public:
     Shader() = delete;
 

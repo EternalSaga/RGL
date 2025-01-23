@@ -50,7 +50,7 @@ UBOTest::UBOTest(std::shared_ptr<Camera> cam) {
     // 光源entity
     spotLight->attachComponent<CommonLight>(glm::vec3{1.0f, 0.9f, 0.9f}, glm::vec3{0.1f, 0.2f, 0.2f}, 32.0f);
     spotLight->attachComponent<SpotLightComponnet>(30.0f, 45.0f, glm::vec3{-1.0f, 0.0f, 0.0f});
-    spotLight->attachComponent<Transform>(glm::vec3{1.5f, 0.0f, 0.0f}, glm::vec3{0.0f,0.0f,0.0f},glm::vec3{1.0f,1.0f,1.0f});
+    spotLight->attachComponent<Transform>(glm::vec3{1.5f, 0.0f, 0.0f}, glm::vec3{0.0f, 0.0f, 0.0f}, glm::vec3{1.0f, 1.0f, 1.0f});
 
     singleReg->emplace_or_replace<UBOs>(*spotLight, ubos);
 
@@ -62,7 +62,7 @@ UBOTest::UBOTest(std::shared_ptr<Camera> cam) {
     std::unique_ptr<Mesh> sphereMesh = std::make_unique<Sphere>(2.2f);
     sphereEntity = std::make_unique<CommonRenderEntity>(glm::vec3{10.0f, 0.0f, 0.0f}, 0.0f, 0.0f, 0.0f, glm::vec3{1.0f, 1.0f, 1.0f});
     sphereEntity->attachComponent<IsLight>();
-	
+
     // 设置网格和shader
     sphereEntity->setMesh(std::move(sphereMesh), whiteShader);
 
@@ -76,19 +76,26 @@ UBOTest::UBOTest(std::shared_ptr<Camera> cam) {
     }
 #endif
 
-	// 测试父子关系
-    cubeEntity->attachComponent<Relationship>(entt::null,std::vector<entt::entity>{*sphereEntity});
-    //spotLight->attachComponent<Relationship>(*cubeEntity, std::vector<entt::entity>{});	 
+    // 测试父子关系
+    cubeEntity->attachComponent<Relationship>(entt::null, std::vector<entt::entity>{*sphereEntity});
+
     sphereEntity->attachComponent<Relationship>(*cubeEntity, std::vector<entt::entity>{});  // sphere的父节点是cube
 }
 
 void UBOTest::operator()() {
     cam->update();
 
-	singleReg->get<Transform>(*cubeEntity).addRotation(glm::vec3{0.0f, 1.0f, 0.0f});
+    singleReg->get<Transform>(*cubeEntity).addRotation(glm::vec3{0.0f, 1.0f, 0.0f});
 
     // 场景绘制
     CommonRenderEntity::update();
+}
+
+UBOTest::~UBOTest() {
+    auto renderEntites = singleReg->view<Transform>();
+    for (auto entity : renderEntites) {
+	singleReg->destroy(entity);
+    }
 }
 
 }  // namespace practice
