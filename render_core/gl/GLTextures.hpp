@@ -3,6 +3,7 @@
 #include "Helpers.hpp"
 #include "rllogger.hpp"
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
 
 #include <glad/glad.h>
@@ -10,10 +11,11 @@
 #include <mutex>
 
 #include <map>
+#include <string>
 #include <vector>
 #include <ctime>
 #include <filesystem>
-#include <random>
+
 namespace RGL {
 namespace io {
 namespace fs = std::filesystem;
@@ -43,7 +45,11 @@ using namespace io;
 
 std::vector<GLuint> initTUnitRes();
 
+
+constexpr GLint GL_INVLAID_TEXTURE_UNIT = GL_TEXTURE0 - 1;
+
 class TextUnitResources {
+    
    public:
     ~TextUnitResources() = default;
 
@@ -58,6 +64,7 @@ class TextUnitResources {
     static std::shared_ptr<TextUnitResources> instance;
     std::vector<GLint> textureUnitResource;
     static std::once_flag initOnce;
+    GLint MAX_UNIT_SIZE;
 };
 
 enum class TextureUsageType {
@@ -71,41 +78,61 @@ enum class TextureUsageType {
 class Texture {
 
     friend class TextureCache;
-    std::mt19937 mt;  // 随机选择一个幸运纹理单元被重新绑定
 
-    std::unique_ptr<GLuint[]> textures;
-    size_t currentSetIndex;
-    std::map<GLuint, GLint> texture_textureUnit;	// 纹理-纹理单元映射
-    std::map<std::string, GLuint> textrueName_texture;	// 纹理名-纹理
-    size_t mNumOfTextures;
+
+    GLuint texture;
+
+    GLint textureUnit;	// 纹理单元
+    std::string textureName;	// 纹理名
+
     std::shared_ptr<TextUnitResources> unitsPool;
 
     TextureUsageType usageType;
-
+    void setTextureUnit();
    public:
-    Texture(size_t numOfTextrues);
-
     Texture();
-    GLint useTexture(GLuint textrueID);
-    GLuint findTextureByName(std::string textureName);
-    GLint useTexture(std::string textureName);
+    void useTexture();
+    inline std::string getName(){
+        if (textureName.empty()) {
+            throw std::runtime_error("Texture name is not set.");
+        }
+        return textureName;
+    }
+    void disableTexture();
+    GLint getTextureUnit();
 
-    void set(const ImgRef &flippedImg, std::string textureName, bool turnOnMipmap);
+    void set(const ImgRef &flippedImg, bool turnOnMipmap);
 
     void setUseType(TextureUsageType type);
+    void setName(std::string name){
+        textureName = name;
+    }
     TextureUsageType getUseType();
     // 谨慎使用，用之前知道自己在干什么
-    void setFilltering(std::string textureName, GLenum filter);
+    void setFilltering( GLenum filter);
+
+    GLuint operator()();
+
     ~Texture();
+};
+
+
+enum class ProgrammedTexture{
+    CHECKERBOARD,
+    NOISE,
+    WOOD,
+    MARBLE
 };
 
 class TextureCache {
     std::map<fs::path, std::shared_ptr<Texture>> cache;
-
+    std::map<ProgrammedTexture, std::shared_ptr<Texture>> programmedTexturesCache;
    public:
     std::shared_ptr<Texture> getTexture(const fs::path &imagePath,TextureUsageType type);
+
+    std::shared_ptr<Texture> getTexture(const ProgrammedTexture type,bool update = false);
 };
 
 }  // namespace glcore
 }  // namespace RGL
-;
+

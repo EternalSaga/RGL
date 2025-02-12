@@ -5,7 +5,7 @@ in vec2 uv;
 in vec3 normal;
 in vec3 worldPosition;//顶点经过插值后产生的fragment的世界坐标
 
-uniform sampler2D sampler;
+uniform sampler2D baseColorTexture;
 
 layout(std140) uniform SpotLight{
 vec3 ambient;
@@ -16,15 +16,13 @@ vec3 cameraPos;
 float spotIntensity;
 float innerAngle;//弧度
 float outerAngle;//弧度
-
 };
-
 
 
 
 void main()
 {
-	vec3 objectColor = texture(sampler, uv).rgb; 
+	vec3 objectColor = texture(baseColorTexture, uv).rgb; 
 	vec3 normal = normalize(normal);
 	vec3 lightDir = normalize(worldPosition - lightPosition); // 光线方向
 	vec3 viewDir = normalize(worldPosition-cameraPos); // 视线方向

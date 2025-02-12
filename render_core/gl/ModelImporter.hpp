@@ -24,7 +24,7 @@ class ModelImporter : public SingleReg {
 	const aiScene* scene;
 	std::map<size_t, std::shared_ptr<MaterialData>> assimpid_materials;
 	const aiScene* loadModel(const fs::path& path);
-	void processMaterial(size_t assimpID,std::unique_ptr<Mesh>& mesh);
+	void processMaterial(size_t assimpID,std::unique_ptr<Mesh> mesh);
     TextureCache textureCache;
        public:
 	ModelImporter(const fs::path &path) : importer{} ,scene(loadModel(path)){
@@ -37,4 +37,4 @@ class ModelImporter : public SingleReg {
     void processNodeBFS(const aiScene* scene);
 };
 }  // namespace io
-}  // namespace RGL
+}  // namespace RGL 

@@ -5,12 +5,15 @@
 #include <stdexcept>
 #include <utility>
 #include <vector>
+#include "GLCheckError.hpp"
 #include "GLTextures.hpp"
+#include "Helpers.hpp"
 #include "Shader.hpp"
 #include "VertexDescriptor.hpp"
 
 #include "GLObj.hpp"
 #include "Material.hpp"
+#include "rllogger.hpp"
 namespace RGL {
 namespace glcore {
 
@@ -28,6 +31,9 @@ class Mesh {
 
     std::shared_ptr<MaterialData> material;
 
+    bool materialHasSet = false;
+    
+
    public:
     explicit Mesh();
     explicit Mesh(FloatDescs descs,size_t numOfVertcies);
@@ -42,7 +48,18 @@ class Mesh {
     void pushIndex(const int index);
     
     void setMaterial(std::shared_ptr<MaterialData> material){
+        materialHasSet = true;
         this->material = material;
+    }
+    void setMaterial(){
+
+    }
+    std::shared_ptr<MaterialData> getMaterial() const{
+        if(!materialHasSet){
+            auto logger = RGL::RLLogger::getInstance();
+            logger->error("material not set, please set material first.");
+        }
+        return material;
     }
 };
 
@@ -52,6 +69,25 @@ namespace VAOCreater {
 std::unique_ptr<VAO> createMeshVAO(const Mesh& mesh, const Shader& shader);
 std::unique_ptr<VAO> createMeshVAO(std::vector<Mesh> meshes, const Shader& shader);
 }  // namespace VAOCreater
+
+namespace SamplerCreater{
+
+    enum class TextureStorageType{
+        TEXTURE2D,TEXTURE3D,TEXTURE_CUBE
+    };
+
+    struct Sampler{
+        std::string samplerName;
+        GLint textureUnit;
+        std::shared_ptr<Texture> texture;
+    };
+
+    using Samplers = std::vector<Sampler>;
+
+    Samplers createSamplers(const Mesh& mesh, const Shader& shader);
+    void UseTextures(Samplers& samplers);
+    void DisableTextures(Samplers& samplers);
+}
 
 }  // namespace glcore
 }  // namespace RGL

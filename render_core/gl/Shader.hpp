@@ -82,7 +82,12 @@ class Shader {
     void setUniform(const std::string &uniformVarName, Args... values) {
 	const auto location = glcore::glCall(
 	    glGetUniformLocation, this->shaderProgram, uniformVarName.c_str());
-	glcore::glUniform(shaderProgram, location, std::forward<Args>(values)...);
+        if (location!=-1) {
+            glcore::glUniform(shaderProgram, location, std::forward<Args>(values)...);
+        }else {
+            logger->error("uniform {} not found in shader", uniformVarName);
+        }
+	
     }
 
     /// <summary>
@@ -109,7 +114,12 @@ class Shader {
 	const glm::mat<Cols, Rows, glm::f32, q> &m) {
 	const auto location = glcore::glCall(
 	    glGetUniformLocation, this->shaderProgram, uniformName.c_str());
-	glUniform(shaderProgram, location, m);
+        if (location!=-1) {
+            glUniform(shaderProgram, location, m);
+        }else {
+           logger->error("uniform {} not found in shader", uniformName);
+        }
+	
     }
 
     Shader(Shader &&other) noexcept;

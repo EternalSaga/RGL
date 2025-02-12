@@ -13,7 +13,6 @@ std::string type2string(int gltype) {
     case GL_FLOAT_VEC3:
 	typestr = "VEC3";
 	break;
-	break;
     case GL_FLOAT_VEC4:
 	typestr = "VEC4";
 	break;

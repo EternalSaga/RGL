@@ -38,4 +38,5 @@ struct Relationship {
 
 void updateTransforms();
 
-}}
+}  // namespace glcore
+}  // namespace RGL
