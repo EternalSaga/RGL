@@ -26,9 +26,7 @@ struct VertArrayComponent {
     size_t idxOffset;
 };
 
-struct MaterialComponent {
-    std::unique_ptr<Material> material;
-};
+
 struct RenderTag {
 };
 
@@ -62,7 +60,7 @@ class CommonRenderEntity : public SingleReg {
 
 	static void modelSystemSimple();
 
-    static void materialSystem();
+    static void samplerSystem();
 
     static void renderVertexArray();
    protected:
@@ -70,7 +68,7 @@ class CommonRenderEntity : public SingleReg {
     CommonRenderEntity(glm::vec3 position, float angleX, float angleY, float angleZ, glm::vec3 scale);
     ~CommonRenderEntity() = default;
     void setMesh(std::unique_ptr<Mesh> mesh, ShaderRef shader);
-    void setMaterial(std::unique_ptr<Material> material);
+
     static void update();
 	template<typename T,typename... Args>
     void attachComponent(Args&&... args) {

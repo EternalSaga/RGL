@@ -15,6 +15,9 @@ class MaterialData {
     public:
     MaterialData() = default;
     void appendTexture(std::shared_ptr<Texture> texture);
+    inline auto getTextures()->decltype(auto){
+        return textures;
+    }
 };
 
 

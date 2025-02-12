@@ -28,19 +28,21 @@ UBOTest::UBOTest(std::shared_ptr<Camera> cam) {
     (*ubos)[transformUBO->getUboName()] = transformUBO;
 
     // 初始化纹理
-    box_texture = std::make_unique<Texture>(1);
-    {
-	// 木头底色
-	io::LoadedImg boxImg("./assest/box.png");
-	box_texture->set(boxImg, "box", true);
-    }
-    // 从纹理创建材质
-    std::unique_ptr<Material> material = std::make_unique<PhongMaterial>(box_texture.get(), "box");
+    box_texture = textureCache.getTexture("assest/box.png", TextureUsageType::DIFFUSE);
+
     std::unique_ptr<Mesh> geometry = std::make_unique<Cube>(12.0f);
+
+    material = std::make_shared<MaterialData>();
+    // 从材质创建纹理
+    material->appendTexture(box_texture);
+
+    geometry->setMaterial(material);
+
     cubeEntity = std::make_unique<CommonRenderEntity>(glm::vec3{-10.0f, 0.0f, 0.0f}, 0.0f, 0.0f, 0.0f, glm::vec3{1.0f, 1.0f, 1.0f});
-    // 实体设置网格和纹理,同时绑定下shader
+
+    // 设置网格和shader
     cubeEntity->setMesh(std::move(geometry), spotlightShader);
-    cubeEntity->setMaterial(std::move(material));
+
     // 给cube添加共享的ubos
     singleReg->emplace_or_replace<UBOs>(*cubeEntity, ubos);
     // cube因为有光照相关shader，所以加个render tag，方便entt view筛选
@@ -60,6 +62,9 @@ UBOTest::UBOTest(std::shared_ptr<Camera> cam) {
 	{SHADER_TYPE::FRAGMENT, {"shaders\\Light\\white.frag"}}};
     this->whiteShader = std::make_shared<Shader>(whiteShaderSrc);
     std::unique_ptr<Mesh> sphereMesh = std::make_unique<Sphere>(2.2f);
+    auto materialData = std::make_shared<MaterialData>();
+    materialData->appendTexture(textureCache.getTexture(ProgrammedTexture::CHECKERBOARD));
+    sphereMesh->setMaterial(materialData);
     sphereEntity = std::make_unique<CommonRenderEntity>(glm::vec3{10.0f, 0.0f, 0.0f}, 0.0f, 0.0f, 0.0f, glm::vec3{1.0f, 1.0f, 1.0f});
     sphereEntity->attachComponent<IsLight>();
 

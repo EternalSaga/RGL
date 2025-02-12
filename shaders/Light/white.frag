@@ -1,7 +1,9 @@
 #version 460 core
 out vec4 FragColor;
-
+uniform sampler2D baseColorTexture;
 void main()
 {
-	FragColor = vec4(vec3(1.0,1.0,1.0), 1.0);
+	vec4 texColor = texture(baseColorTexture, gl_FragCoord.xy); // Use the fragment's screen coordinates to sample the texture.
+
+	FragColor = texColor;
 }

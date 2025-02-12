@@ -11,7 +11,7 @@
 #include "VertexDescriptor.hpp"
 
 #include <string>
-#include <concepts>
+
 #include "GLCheckError.hpp"
 
 namespace RGL {

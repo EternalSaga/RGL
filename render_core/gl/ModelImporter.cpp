@@ -47,7 +47,7 @@ std::unique_ptr<Mesh> ModelImporter::processMesh(aiMesh* importedMesh) {
     if (importedMesh->mMaterialIndex >= 0) {
 		auto material = importedMesh->mMaterialIndex;
 
-		processMaterial(material);
+		processMaterial(material,std::move(meshObj));
     }
 
     return std::move(meshObj);
@@ -109,7 +109,7 @@ const aiScene* ModelImporter::loadModel(const fs::path& path) {
     }
     return scene;
 }
-void ModelImporter::processMaterial(size_t assimpID,std::unique_ptr<Mesh>& mesh) {
+void ModelImporter::processMaterial(size_t assimpID,std::unique_ptr<Mesh> mesh) {
 
 	aiMaterial *material = scene->mMaterials[assimpID];
 
@@ -154,5 +154,6 @@ void ModelImporter::processMaterial(size_t assimpID,std::unique_ptr<Mesh>& mesh)
 		mesh->setMaterial(materialData);
 	}
 }
+
 }  // namespace io
 }  // namespace RGL

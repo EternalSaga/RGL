@@ -1,4 +1,6 @@
 #include "Mesh.hpp"
+#include "GLCheckError.hpp"
+#include "GLTextures.hpp"
 
 namespace RGL {
 namespace glcore {
@@ -53,7 +55,6 @@ std::unique_ptr<VAO> VAOCreater::createMeshVAO(std::vector<Mesh> meshes,const Sh
 std::unique_ptr<VAO> VAOCreater::createMeshVAO(const Mesh& mesh, const Shader& shader) {
     auto vao = std::make_unique<VAO>();
     auto vbo = std::make_unique<VBO>();
-
     vbo->setData({mesh.getChanneledVertices(), mesh.getIndices()});
     vao->setShaderProgram(shader);
     vao->setDSA_interleaved(0, *vbo, mesh.getDesc());
@@ -67,6 +68,28 @@ size_t Mesh::getVertexLength() {
 	vertLength += descs[i].getLength();
     }
     return vertLength;
+}
+SamplerCreater::Samplers SamplerCreater::createSamplers(const Mesh& mesh, const Shader& shader) {
+    Samplers samplers;
+    auto material = mesh.getMaterial();
+    auto textures = material->getTextures();
+    for (auto [usage,textures] : textures) {
+        for (auto& tex : textures) {
+            samplers.emplace_back(Sampler{tex->getName(),GL_INVLAID_TEXTURE_UNIT,tex});
+        }
+    }
+    return samplers;
+}
+void SamplerCreater::UseTextures(Samplers& samplers) {
+    for (auto& sampler : samplers) {
+	    sampler.texture->useTexture();
+        sampler.textureUnit = sampler.texture->getTextureUnit();
+    }
+}
+void SamplerCreater::DisableTextures(Samplers& samplers) {
+    for (auto& sampler : samplers) {
+	sampler.texture->disableTexture();
+    }
 }
 }  // namespace glcore
 }
