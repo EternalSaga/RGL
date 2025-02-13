@@ -1,7 +1,7 @@
 #include "ControllerECS.hpp"
 #include "CameraECS.hpp"
-#include <SDL2/SDL.h>
-
+#include <SDL3/SDL.h>
+#include <SDL3/SDL_events.h>
 #include <glm/gtc/matrix_transform.hpp>
 namespace RGL {
 
@@ -34,14 +34,12 @@ class GameMouseKeyboardSystem : public SingleReg {
 	    auto &mouseKeyboard = view.get<MouseKeyboardInput>(entity);
 	    const auto &camAttributes = view.get<CameraBasicAttributes>(entity);
 	    auto &eularMove = view.get<CameraEulerMoveParams>(entity);
-
-	    if (sdlevent.type == SDL_QUIT) {
+		
+	    if (sdlevent.type == SDL_EVENT_QUIT) {
 		mouseKeyboard.shouldQuit = true;
-	    } else if (sdlevent.type == SDL_WINDOWEVENT) {
-		if (sdlevent.window.event == SDL_WINDOWEVENT_RESIZED) {
-		    // to do
-		}
-	    } else if (sdlevent.type == SDL_MOUSEBUTTONDOWN) {
+	    } else if (sdlevent.type == SDL_EVENT_WINDOW_RESIZED) {
+
+	    } else if (sdlevent.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
 		const SDL_MouseButtonEvent &mouseEvt = sdlevent.button;
 		mouseKeyboard.leftDown = mouseEvt.button == SDL_BUTTON_LEFT;
 		mouseKeyboard.rightDown = mouseEvt.button == SDL_BUTTON_RIGHT;
@@ -51,7 +49,7 @@ class GameMouseKeyboardSystem : public SingleReg {
 		    mouseKeyboard.rightdownCursor = glm::vec2(mouseEvt.x, mouseEvt.y);
 		}
 
-	    } else if (sdlevent.type == SDL_MOUSEBUTTONUP) {
+	    } else if (sdlevent.type == SDL_EVENT_MOUSE_BUTTON_UP) {
 		const SDL_MouseButtonEvent &mouseEvt = sdlevent.button;
 		if (mouseEvt.button == SDL_BUTTON_LEFT) {
 		    mouseKeyboard.leftDown = false;
@@ -61,10 +59,10 @@ class GameMouseKeyboardSystem : public SingleReg {
 		}
 		if (mouseEvt.button == SDL_BUTTON_MIDDLE) {
 		    mouseKeyboard.middleDown = false;
-		} else if (sdlevent.type == SDL_MOUSEWHEEL) {
+		} else if (sdlevent.type == SDL_EVENT_MOUSE_WHEEL) {
 		    eularMove.deltaScale = sdlevent.wheel.y;
 
-		} else if (sdlevent.type == SDL_MOUSEMOTION) {
+		} else if (sdlevent.type == SDL_EVENT_MOUSE_MOTION) {
 		    const SDL_MouseMotionEvent &cursorEvt = sdlevent.motion;
 
 		    mouseKeyboard.currentCursor = glm::vec2(cursorEvt.x, cursorEvt.y);
@@ -85,9 +83,9 @@ class GameMouseKeyboardSystem : public SingleReg {
 			mouseKeyboard.lastCursor = mouseKeyboard.currentCursor;
 		    }
 
-		} else if (sdlevent.type == SDL_KEYDOWN) {
+		} else if (sdlevent.type == SDL_EVENT_KEY_DOWN) {
 		    const SDL_KeyboardEvent &keyboardEvt = sdlevent.key;
-		    mouseKeyboard.keyMap[keyboardEvt.keysym.scancode] = true;
+		    mouseKeyboard.keyMap[keyboardEvt.key] = true;
 
 		    eularMove.direction = glm::vec3{0.0f, 0.0f, 0.0f};
 
@@ -105,9 +103,9 @@ class GameMouseKeyboardSystem : public SingleReg {
 		    }
 		    if (mouseKeyboard.keyMap[SDL_SCANCODE_ESCAPE]) {
 		    }
-		} else if (sdlevent.type == SDL_KEYUP) {
+		} else if (sdlevent.type == SDL_EVENT_KEY_UP) {
 		    const SDL_KeyboardEvent &keyboardEvt = sdlevent.key;
-		    mouseKeyboard.keyMap[keyboardEvt.keysym.scancode] = false;
+		    mouseKeyboard.keyMap[keyboardEvt.key] = false;
 		}
 	    }
 	}
@@ -128,13 +126,11 @@ void TrackBallMouseKeyboardSystem::update() {
 	eularAngle.deltaScale = 0.0f;
 	eularAngle.pitchAngle = 0.0f;
 	eularAngle.yawAngle = 0.0f;
-	if (sdlevent.type == SDL_QUIT) {
+	if (sdlevent.type == SDL_EVENT_QUIT) {
 	    mouseKeyboard.shouldQuit = true;
-	} else if (sdlevent.type == SDL_WINDOWEVENT) {
-	    if (sdlevent.window.event == SDL_WINDOWEVENT_RESIZED) {
-		// to do
-	    }
-	} else if (sdlevent.type == SDL_MOUSEBUTTONDOWN) {
+	} else if (sdlevent.type == SDL_EVENT_WINDOW_RESIZED) {
+		//to do
+	} else if (sdlevent.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
 	    const SDL_MouseButtonEvent &mouseEvt = sdlevent.button;
 	    mouseKeyboard.leftDown = mouseEvt.button == SDL_BUTTON_LEFT;
 	    mouseKeyboard.rightDown = mouseEvt.button == SDL_BUTTON_RIGHT;
@@ -142,7 +138,7 @@ void TrackBallMouseKeyboardSystem::update() {
 	    if (mouseKeyboard.leftDown) {
 		mouseKeyboard.leftdownCursor = glm::vec2(mouseEvt.x, mouseEvt.y);
 	    }
-	} else if (sdlevent.type == SDL_MOUSEBUTTONUP) {
+	} else if (sdlevent.type == SDL_EVENT_MOUSE_BUTTON_UP) {
 	    const SDL_MouseButtonEvent &mouseEvt = sdlevent.button;
 	    if (mouseEvt.button == SDL_BUTTON_LEFT) {
 		mouseKeyboard.leftDown = false;
@@ -153,10 +149,10 @@ void TrackBallMouseKeyboardSystem::update() {
 	    if (mouseEvt.button == SDL_BUTTON_MIDDLE) {
 		mouseKeyboard.middleDown = false;
 	    }
-	} else if (sdlevent.type == SDL_MOUSEWHEEL) {
+	} else if (sdlevent.type == SDL_EVENT_MOUSE_WHEEL) {
 	    // 设置camera缩放参数
 	    eularAngle.deltaScale = sdlevent.wheel.y;
-	} else if (sdlevent.type == SDL_MOUSEMOTION) {
+	} else if (sdlevent.type == SDL_EVENT_MOUSE_MOTION) {
 	    const SDL_MouseMotionEvent &cursorEvt = sdlevent.motion;
 	    mouseKeyboard.currentCursor = glm::vec2(cursorEvt.x, cursorEvt.y);
 	    // 如果鼠标在中间，那么把leftdownCursor更新为lastCursor

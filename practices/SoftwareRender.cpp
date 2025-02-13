@@ -7,9 +7,8 @@ namespace swr
 void
 set_pixel(SDL_Surface *surface, int x, int y, Uint32 pixel)
 {
-    Uint32 *const target_pixel =
-	(Uint32 *)((Uint8 *)surface->pixels + y * surface->pitch +
-		   x * surface->format->BytesPerPixel);
+    const SDL_PixelFormatDetails* format_details = SDL_GetPixelFormatDetails(surface->format);
+    Uint32 *target_pixel =  (Uint32 *)((Uint8 *)surface->pixels + y * surface->pitch + x * format_details->bytes_per_pixel); // 使用 format_details->BytesPerPixel
     *target_pixel = pixel;
 }
 TestCPURender::TestCPURender(SDL_Surface *surface) : surface(surface)
@@ -20,7 +19,7 @@ TestCPURender::TestCPURender(SDL_Surface *surface) : surface(surface)
 void
 TestCPURender::operator()()
 {
-    auto red = SDL_MapRGBA(surface->format, 255, 0, 0, 0);
+    auto red = SDL_MapSurfaceRGBA(surface, 255, 0, 0, 0);
     SDL_LockSurface(surface);
     for (size_t i = 0; i < width; i++) {
 	for (size_t j = 0; j < height; j++) {

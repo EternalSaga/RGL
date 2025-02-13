@@ -28,7 +28,7 @@ namespace RGL {
           if (!texture) {
             SDL_Log("swap buffer failed");
           } else {
-            SDL_RenderCopy(sdlRenderer, texture, nullptr, nullptr);
+            SDL_RenderTexture(sdlRenderer, texture, nullptr, nullptr);
             SDL_DestroyTexture(texture);
           }
 
@@ -44,7 +44,7 @@ namespace RGL {
 	    this->height = window->getHeight();
 	    this->width = window->getWidth();
           sdlRenderer =
-              SDL_CreateRenderer(*sdlWindow, -1, SDL_RENDERER_SOFTWARE);
+              SDL_CreateRenderer(*sdlWindow, "SDL_CreateSoftwareRenderer");
 
           if (!sdlRenderer) {
             throw std::runtime_error("cannot create renderer");

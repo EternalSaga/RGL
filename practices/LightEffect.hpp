@@ -1,6 +1,7 @@
 
 #pragma once
 #include "Camera.hpp"
+#include "EnttRegistry.hpp"
 #include "GLObj.hpp"
 #include "GLTextures.hpp"
 
@@ -48,7 +49,9 @@ class UBOTest : public Renderer, public SingleReg {
     ~UBOTest();
 };
 
+class LoadModelTest : public Renderer,public SingleReg{
 
+};
 
 
 }  // namespace practice

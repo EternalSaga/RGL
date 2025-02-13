@@ -86,15 +86,7 @@ void CommonRenderEntity::modelSystemSimple() {
 	uniforms["MVP"] = MVP;
     });
 }
-void CommonRenderEntity::samplerSystem(){
-	auto singleReg = EnttReg::getPrimaryRegistry();
-	auto viewForSampler = singleReg->view<SamplerCreater::Samplers>();
-	viewForSampler.each([](const SamplerCreater::Samplers& samplers) {
-		for (const auto& sampler : samplers) {
-			
-		}
-	});
-}
+
 
 void CommonRenderEntity::renderVertexArray() {
     auto singleReg = EnttReg::getPrimaryRegistry();

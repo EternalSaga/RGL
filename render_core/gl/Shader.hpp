@@ -90,37 +90,7 @@ class Shader {
 	
     }
 
-    /// <summary>
-    /// glUniformNumTypev的泛型封装
-    /// Vector指的是uniform变量的数组，如果一个uniform变量是4个float，两个uniform变量就是8个float
-    /// </summary>
-    /// <typeparam name="T">float GLuint GLint三选一</typeparam>
-    /// <typeparam name="UVarLength">unform变量的长度,1234选一</typeparam>
-    /// <param name="uniformVarName">shader里uniform变量名称</param>
-    /// <param name="data">需要传入shader的uniform变量数据</param>
-    template <GLuint UVarLength, typename T>
-    void setUniformVec(const std::string &uniformVarName, std::vector<T> data) {
-	const auto location = glcore::glCall(
-	    glGetUniformLocation, this->shaderProgram, uniformVarName.c_str());
-	assert(data.size() % UVarLength ==
-	       0);  // 数组长度=所有数据长度/uniform变量长度
-	const GLsizei uniformVarCount = data.size() / UVarLength;
 
-	glUniformVec(shaderProgram, location, uniformVarCount, data.data());
-    }
-
-    template <int Cols, int Rows, glm::qualifier q>
-    void setUniform(const std::string &uniformName,
-	const glm::mat<Cols, Rows, glm::f32, q> &m) {
-	const auto location = glcore::glCall(
-	    glGetUniformLocation, this->shaderProgram, uniformName.c_str());
-        if (location!=-1) {
-            glUniform(shaderProgram, location, m);
-        }else {
-           logger->error("uniform {} not found in shader", uniformName);
-        }
-	
-    }
 
     Shader(Shader &&other) noexcept;
 

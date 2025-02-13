@@ -1,5 +1,5 @@
 #pragma once
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <vector>
@@ -22,9 +22,9 @@ class PureElementImage<uint8_t> {
     SDL_Surface *surface_;
 
     Uint32 *getPixel(int x, int y) const {
-	Uint8 *ptr = (Uint8 *)surface_->pixels;
-	return (Uint32 *)(ptr + y * surface_->pitch +
-			  x * surface_->format->BytesPerPixel);
+		Uint8 *ptr = (Uint8 *)surface_->pixels;
+		return (Uint32 *)(ptr + y * surface_->pitch + x * 4); // Assuming RGBA32 format for simplicity. Adjust as needed.
+
     }
 
    public:
@@ -34,8 +34,7 @@ class PureElementImage<uint8_t> {
 
     PureElementImage(std::vector<uint8_t> data, uint32_t width, uint32_t height)
 	: data(data), width(width), height(height) {
-	surface_ = SDL_CreateRGBSurfaceWithFormat(0, width, height, 32,
-	    SDL_PIXELFORMAT_RGBA32);
+	surface_ = SDL_CreateSurface(width, height, SDL_PIXELFORMAT_RGBA32);
 	if (!surface_) {
 	    auto logger = RGL::RLLogger::getInstance();
 	    logger->error("Create Surface failed: {}", SDL_GetError());
@@ -47,7 +46,7 @@ class PureElementImage<uint8_t> {
 
     PureElementImage(const PureElementImage &) = delete;
 
-    ~PureElementImage() { SDL_FreeSurface(surface_); }
+    ~PureElementImage() { SDL_DestroySurface(surface_); }
 
     void Set(uint32_t x, uint32_t y, glm::vec4 &color) {
 	data[(x + y * width) * 4] = color.r * 255.0;
@@ -55,7 +54,7 @@ class PureElementImage<uint8_t> {
 	data[(x + y * width) * 4 + 2] = color.b * 255.0;
 	data[(x + y * width) * 4 + 3] = color.a * 255.0;
 	*getPixel(x, y) =
-	    SDL_MapRGBA(surface_->format, color.r * 255.0, color.g * 255.0,
+	SDL_MapSurfaceRGBA(surface_, color.r * 255.0, color.g * 255.0,
 		color.b * 255.0, color.a * 255.0);
     }
 
@@ -65,9 +64,9 @@ class PureElementImage<uint8_t> {
 		Set(i, j, color);
 	    }
 	}
-	SDL_FillRect(surface_, nullptr,
-	    SDL_MapRGBA(surface_->format, color.r * 255, color.g * 255,
-		color.b * 255, color.a * 255));
+	SDL_FillSurfaceRect(surface_, nullptr,
+	    SDL_MapSurfaceRGBA(surface_, color.r * 255, color.g * 255,
+			color.b * 255, color.a * 255));
     }
 
     operator SDL_Surface *() { return surface_; }

@@ -6,11 +6,10 @@ find_package(EnTT CONFIG REQUIRED)
 target_link_libraries(app PRIVATE EnTT::EnTT)
 
 execute_format(${app_src})
-find_package(SDL2 CONFIG REQUIRED)
+find_package(SDL3 CONFIG REQUIRED)
     target_link_libraries(app
     PUBLIC
-        $<TARGET_NAME_IF_EXISTS:SDL2::SDL2main>
-        $<IF:$<TARGET_EXISTS:SDL2::SDL2>,SDL2::SDL2,SDL2::SDL2-static>
+    SDL3::SDL3
     )
 
 find_package(Boost CONFIG REQUIRED)

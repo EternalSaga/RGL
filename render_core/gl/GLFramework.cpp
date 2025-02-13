@@ -1,8 +1,9 @@
 
 #include "GLFramework.hpp"
 #include <imgui.h>
-#include <imgui_impl_sdl2.h>
+
 #include <imgui_impl_opengl3.h>
+#include "ShaderManager.hpp"
 namespace RGL {
 namespace glcore {
 
@@ -34,12 +35,14 @@ GLContext::GLContext(SDL_Window* windowHandler, GLint viewPortWidth,
     // 垂直同步
     SDL_GL_SetSwapInterval(1);
     SDL_GL_MakeCurrent(windowHandler, glContext);
-    if (!gladLoadGLLoader(
-	    static_cast<GLADloadproc>(SDL_GL_GetProcAddress))) {
+
+
+    
+    if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(SDL_GL_GetProcAddress))) {
 	throw std::runtime_error("Failed to initialize GLAD");
     }
 
-    if (SDL_GL_LoadLibrary(NULL) != 0) {
+    if (!SDL_GL_LoadLibrary(NULL)) {
 	throw std::runtime_error(SDL_GetError());
     }
 
@@ -58,7 +61,7 @@ GLContext::GLContext(SDL_Window* windowHandler, GLint viewPortWidth,
     // ImGui::StyleColorsLight();
 
     // Setup Platform/Renderer backends
-    ImGui_ImplSDL2_InitForOpenGL(this->window_, glContext);
+
     ImGui_ImplOpenGL3_Init("#version 130");
 
 
@@ -70,7 +73,7 @@ GLContext::GLContext(SDL_Window* windowHandler, GLint viewPortWidth,
 GLContext::~GLContext() {
     renderer.reset(nullptr);  // 手动销毁下renderer，确保opengl
 			      // buffer在OpenGL context结束之前销毁
-    SDL_GL_DeleteContext(this->glContext);
+                  SDL_GL_DestroyContext(this->glContext);
 }
 void GLContext::render() {
     assert(renderer.get());
