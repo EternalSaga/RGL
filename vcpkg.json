@@ -1,72 +1,71 @@
 {
-	"dependencies": [
-		{
-			"name": "boost-headers",
-			"version>=": "1.85.0#1"
-		},
-		{
-			"name": "boost-hana",
-			"version>=": "1.85.0#1"
-		},
-		{
-			"name": "boost-pfr",
-			"version>=": "1.85.0#1"
-		},
-		{
-			"name": "boost-variant2",
-			"version>=": "1.85.0#1"
-		},
-		{
-			"name": "sdl2",
-			"version>=": "2.30.7#0"
-		},
-		{
-			"name": "glad",
-			"version>=": "0.1.36#0"
-		},
-		{
-			"name": "glm",
-			"version>=": "1.0.1#3"
-		},
-		{
-			"name": "stb",
-			"version>=": "2024-07-29#1"
-		},
-		{
-			"name": "spdlog",
-			"version>=": "1.15.0#1"
-		},
-		{
-			"name": "bullet3",
-			"version>=": "3.25#2"
-		},
-		{
-			"name": "imgui",
-			"version>=": "1.91.0",
-			"features": [
-				"sdl2-binding",
-				"opengl3-binding",
-				"freetype"
-			]
-		},
-		{
-			"name": "entt",
-			"version>=": "3.14.0"
-		},
-		{
-			"name":"assimp",
-			"version>=": "5.4.3#0"
-		}
+  "dependencies": [
+    {
+      "name": "boost-headers",
+      "version>=": "1.86.0"
+    },
+    {
+      "name": "boost-hana",
+      "version>=": "1.86.0"
+    },
+    {
+      "name": "boost-pfr",
+      "version>=": "1.86.0"
+    },
+    {
+      "name": "boost-variant2",
+      "version>=": "1.86.0"
+    },
+    {
+      "name": "sdl3",
+      "version>=": "3.2.4#0"
+    },
+    {
+      "name": "glad",
+      "version>=": "0.1.36#0"
+    },
+    {
+      "name": "glm",
+      "version>=": "1.0.1#3"
+    },
+    {
+      "name": "stb",
+      "version>=": "2024-07-29#1"
+    },
+    {
+      "name": "spdlog",
+      "version>=": "1.15.0#1"
+    },
+    {
+      "name": "bullet3",
+      "version>=": "3.25#2"
+    },
+    {
+      "name": "imgui",
+      "version>=": "1.91.0",
+      "features": [
 
-	],
-	"overrides": [
-		{
-			"name":"boost-headers",
-			"version": "1.85.0#1"
-		},
-		{
-			"name":"boost-hana",
-			"version": "1.85.0#1"
-		}
-	]
+        "opengl3-binding",
+        "freetype"
+      ]
+    },
+    {
+      "name": "entt",
+      "version>=": "3.14.0"
+    },
+    {
+      "name": "assimp",
+      "version>=": "5.4.3#0"
+    }
+  ],
+  "overrides": [
+    {
+      "name": "boost-headers",
+      "version": "1.86.0"
+    },
+    {
+      "name": "boost-hana",
+      "version": "1.86.0"
+    }
+  ]
 }

@@ -5,12 +5,14 @@ add_library(cpuframework ${cpuframeworkSrc})
 
 target_compile_features(cpuframework PRIVATE cxx_std_23)
 
-find_package(SDL2 CONFIG REQUIRED)
-target_link_libraries(cpuframework
+
+
+
+find_package(SDL3 CONFIG REQUIRED)
+    target_link_libraries(cpuframework
     PUBLIC
-        $<TARGET_NAME_IF_EXISTS:SDL2::SDL2main>
-        $<IF:$<TARGET_EXISTS:SDL2::SDL2>,SDL2::SDL2,SDL2::SDL2-static>
-)
+    SDL3::SDL3
+    )
 
 target_link_libraries(cpuframework PRIVATE rllogger)
 

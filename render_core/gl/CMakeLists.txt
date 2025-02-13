@@ -22,12 +22,11 @@ target_include_directories(glFramework PRIVATE ${Stb_INCLUDE_DIR})
 
 set_property(TARGET glFramework PROPERTY CMAKE_COMPILE_WARNING_AS_ERROR ON)
 
-find_package(SDL2 CONFIG REQUIRED)
-target_link_libraries(glFramework
+find_package(SDL3 CONFIG REQUIRED)
+    target_link_libraries(glFramework
     PUBLIC
-        $<TARGET_NAME_IF_EXISTS:SDL2::SDL2main>
-        $<IF:$<TARGET_EXISTS:SDL2::SDL2>,SDL2::SDL2,SDL2::SDL2-static>
-)
+    SDL3::SDL3
+    )
 find_package(imgui CONFIG REQUIRED)
 target_link_libraries(glFramework PUBLIC imgui::imgui)
 find_package(EnTT CONFIG REQUIRED)

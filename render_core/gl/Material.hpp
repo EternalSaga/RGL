@@ -19,11 +19,6 @@ class MaterialData {
         return textures;
     }
 };
-
-
-
-
-
 }  // namespace glcore
 
 }  // namespace RGL

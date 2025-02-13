@@ -3,7 +3,7 @@
 #include "SDLSurface.hpp"
 #include "SDLWindow.hpp"
 #include "api_types.hpp"
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <memory>

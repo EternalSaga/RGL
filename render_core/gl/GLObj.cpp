@@ -126,7 +126,7 @@ void VAO::set(GLuint vaoIdx, GLuint vbo, GLuint numOfFloat,
     glCall(glBindBuffer, GL_ARRAY_BUFFER, vbo);
 
     const auto location =
-	glCallRet(glGetAttribLocation, shaderProgram,
+	glCall(glGetAttribLocation, shaderProgram,
 	    shaderInputName.c_str());
 
     glCall(glEnableVertexAttribArray, location);
@@ -220,7 +220,7 @@ void VAO::setDSA_interleaved(const GLuint vaoIdx, const GLuint vbo, FloatDescs d
 
     for (auto &desc : descs) {
 	std::string_view shaderInputName = desc.name;
-	const GLint location = glCallRet(glGetAttribLocation, shaderProgram,
+	const GLint location = glCall(glGetAttribLocation, shaderProgram,
 	    std::string(shaderInputName).c_str());
 	if (location == -1) {
 	    logger->error("shader input {} not found.\nThis is an optimized value or wrong input or gl_preserved name", std::string(shaderInputName));
