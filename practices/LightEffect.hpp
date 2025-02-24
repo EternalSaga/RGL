@@ -14,7 +14,7 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <memory>
 #include "Light.hpp"
-
+#include "ModelImporter.hpp"
 #include "Entity.hpp"
 namespace RGL {
 namespace practice {
@@ -50,6 +50,20 @@ class UBOTest : public Renderer, public SingleReg {
 };
 
 class LoadModelTest : public Renderer,public SingleReg{
+
+    ShaderRef modelShader;
+	std::shared_ptr<Camera> cam;
+	std::unique_ptr<CommonRenderEntity> modelEntity;
+
+
+    std::unique_ptr<GeneralEntity> directionalLight;
+    UBOs ubos;
+
+    std::unique_ptr<ModelImporter> importer;
+public:
+    LoadModelTest(std::shared_ptr<Camera> cam);
+    void operator()() override;
+    ~LoadModelTest();
 
 };
 

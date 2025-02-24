@@ -103,5 +103,28 @@ UBOTest::~UBOTest() {
     }
 }
 
+LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) {
+    this->cam = cam;
+    ShaderSrcs modelShaderSrc = {
+	{SHADER_TYPE::VERTEX, {"shaders\\Light\\phong_ubo.vert"}},
+	{SHADER_TYPE::FRAGMENT, {"shaders\\Light\\model.frag"}}};
+    this->modelShader = std::make_shared<Shader>(modelShaderSrc);
+    directionalLight = std::make_unique<GeneralEntity>();
+    // 光源entity
+    directionalLight->attachComponent<CommonLight>(glm::vec3{1.0f, 0.9f, 0.9f}, glm::vec3{0.1f, 0.2f, 0.2f}, 32.0f);
+    directionalLight->attachComponent<Transform>(glm::vec3{-1.5f, 0.0f, -10.0f}, glm::vec3{0.0f, 0.0f, 0.0f}, glm::vec3{1.0f, 1.0f, 1.0f});
+    importer = std::make_unique<ModelImporter>("./assert/bag/backpack.obj");
+}
+
+void LoadModelTest::operator()() {
+}
+
+LoadModelTest::~LoadModelTest() {
+    auto renderEntites = singleReg->view<Transform>();
+    for (auto entity : renderEntites) {
+	singleReg->destroy(entity);
+    }
+}
+
 }  // namespace practice
 }  // namespace RGL

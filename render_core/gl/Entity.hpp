@@ -60,7 +60,6 @@ class CommonRenderEntity : public SingleReg {
 
 	static void modelSystemSimple();
 
-
     static void renderVertexArray();
    protected:
    public:
