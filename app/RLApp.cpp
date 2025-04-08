@@ -61,7 +61,7 @@ std::unique_ptr<RendererContext> CreateContext(API_TYPE api_type, std::shared_pt
     if (api_type == API_TYPE::OPENGL46) {
 	renderCxt = std::make_unique<glcore::GLContext>(*sdlWindow, sdlWindow->getWidth(),
 	    sdlWindow->getHeight());
-	auto interLeavedBuffer = std::make_unique<practice::UBOTest>(camera);
+	auto interLeavedBuffer = std::make_unique<practice::LoadModelTest>(camera);
 	renderCxt->setRenderer(std::move(interLeavedBuffer));
     } else if (api_type == API_TYPE::CPU) {
 	renderCxt = std::make_unique<swr::SoftwareRenderContext>(sdlWindow);

@@ -16,6 +16,11 @@ LoadedImg::LoadedImg(const fs::path &imagePath) {
     stbi_set_flip_vertically_on_load(true);
     imgData = stbi_load(imagePath.generic_string().c_str(), &width,
 	&height, &channels, STBI_rgb_alpha);
+	if (imgData==nullptr) {
+		auto logger = RLLogger::getInstance();
+		logger->error("Failed to load image: {}", imagePath.generic_string());
+		throw std::runtime_error("Failed to load image");
+	}
 }
 LoadedImg::operator ImgRef() {
     return ImgRef(imgData, width, height, channels);
@@ -198,7 +203,7 @@ std::shared_ptr<Texture> TextureCache::getTexture(const fs::path &imagePath, Tex
 
     } else {
 	auto logger = RLLogger::getInstance();
-	logger->debug("texture cache hit");
+	logger->trace("texture cache hit");
     }
 
     if (cache[imagePath]->usageType != type) {

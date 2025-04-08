@@ -41,6 +41,10 @@
       "version>=": "3.25#2"
     },
     {
+      "name":"nlohmann-json",
+      "version>=": "3.11.2"
+    },
+    {
       "name": "imgui",
       "version>=": "1.91.0",
       "features": [

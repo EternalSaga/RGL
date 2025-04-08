@@ -4,11 +4,12 @@
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
-
+#include <nlohmann/detail/abi_macros.hpp>
 
 namespace RGL {
 
-namespace lv = spdlog::level;
+
+
 class RLLogger {
 public:
   ~RLLogger();
