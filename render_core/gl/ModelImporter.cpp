@@ -2,6 +2,8 @@
 #include "EnTTRelationship.hpp"
 #include "GLTextures.hpp"
 #include "Material.hpp"
+#include "rllogger.hpp"
+#include <filesystem>
 #include <memory>
 #include <queue>
 #include <utility>
@@ -43,18 +45,19 @@ std::unique_ptr<Mesh> ModelImporter::processMesh(aiMesh* importedMesh) {
 	}
     }
 
-	// 处理材质
+    // 处理材质
     if (importedMesh->mMaterialIndex >= 0) {
-		auto material = importedMesh->mMaterialIndex;
+	auto material = importedMesh->mMaterialIndex;
 
-		processMaterial(material,std::move(meshObj));
+	processMaterial(material, std::move(meshObj));
     }
 
     return std::move(meshObj);
 }
-void ModelImporter::processNodeBFS(const aiScene* scene) {
+
+void ModelImporter::processNodeBFS() {
     std::queue<aiNode*> nodeQueue;
-    std::map<aiNode*, entt::entity> nodeMap;
+    std::map<aiNode*, entt::entity> nodeMap;  // 一个node对应一个entity
 
     auto rootNode = scene->mRootNode;
 
@@ -80,7 +83,7 @@ void ModelImporter::processNodeBFS(const aiScene* scene) {
 	    currentRel.parent = entt::null;
 	}
 
-	// 处理子节点，关联entity和node
+	// 处理当前节点的子节点，所有的子节点都创建一个entity，并设置成relationship的child
 	for (size_t i = 0; i < currentNode->mNumChildren; i++) {
 	    auto childNode = currentNode->mChildren[i];
 	    entt::entity childEntity = singleReg->create();
@@ -99,6 +102,16 @@ void ModelImporter::processNodeBFS(const aiScene* scene) {
 	    singleReg->emplace<std::unique_ptr<Mesh>>(currentEntity, std::move(meshObj));
 	}
     }
+
+	auto logger = RLLogger::getInstance();
+	logger->debug("Count of nodes processed: {}", nodeMap.size());
+	logger->debug("Count of meshes in root node: {}", rootNode->mNumMeshes);
+	logger->debug("Model path: {}", this->modelRootPath.string());
+
+	for (auto& [node,entity] : nodeMap) {
+		singleReg->emplace<Transform>(entity, decomposeTransform(node->mTransformation));
+	}
+
 }
 const aiScene* ModelImporter::loadModel(const fs::path& path) {
     const auto scene = importer.ReadFile(path.string(), aiProcess_Triangulate | aiProcess_GenNormals);
@@ -109,51 +122,68 @@ const aiScene* ModelImporter::loadModel(const fs::path& path) {
     }
     return scene;
 }
-void ModelImporter::processMaterial(size_t assimpID,std::unique_ptr<Mesh> mesh) {
-
-	aiMaterial *material = scene->mMaterials[assimpID];
+void ModelImporter::processMaterial(size_t assimpID, std::unique_ptr<Mesh> mesh) {
+    aiMaterial* material = scene->mMaterials[assimpID];
 
     // 确定assimpid_materials里没有这个id,
     if (assimpid_materials.find(assimpID) != assimpid_materials.end()) {
-		mesh->setMaterial(assimpid_materials[assimpID]);
-		return;
-    }else {
-	 	std::shared_ptr<MaterialData> materialData = std::make_shared<MaterialData>();
-		auto appendTexture = [this,&mesh,&materialData](TextureUsageType type,aiMaterial *material) {
-		  aiTextureType textureType = aiTextureType_NONE;
-		  switch (type) {
-		    case TextureUsageType::DIFFUSE:
-		      textureType = aiTextureType_DIFFUSE;
-		      break;
-		    case TextureUsageType::NORMAL:
-		      textureType = aiTextureType_NORMALS;
-		      break;
-			case TextureUsageType::SPECULAR:
-		      textureType = aiTextureType_SPECULAR;
-		      break;
-			case TextureUsageType::AMBIENT:
-		      textureType = aiTextureType_AMBIENT;
-		      break;
-		  }
-			const int textureCount = material->GetTextureCount(textureType);
-			for (int i = 0; i < textureCount; i++) {
-				aiString texturePath;
-				material->GetTexture(textureType, i, &texturePath);
-				fs::path texturePathStr(texturePath.C_Str());
-				auto texture = textureCache.getTexture(texturePathStr, type);
-				if (texture) {
-					materialData->appendTexture(texture);
-				}
-			}
-		};
-
-		appendTexture(TextureUsageType::DIFFUSE,material);
-		appendTexture(TextureUsageType::NORMAL,material);
-		appendTexture(TextureUsageType::SPECULAR,material);
-		appendTexture(TextureUsageType::AMBIENT,material);
-		mesh->setMaterial(materialData);
-	}
+	mesh->setMaterial(assimpid_materials[assimpID]);
+	return;
+    } else {
+	std::shared_ptr<MaterialData> materialData = std::make_shared<MaterialData>();
+	auto appendTexture = [this, &mesh, &materialData](TextureUsageType type, aiMaterial* material) {
+	    aiTextureType textureType = aiTextureType_NONE;
+	    switch (type) {
+	    case TextureUsageType::DIFFUSE:
+		textureType = aiTextureType_DIFFUSE;
+		break;
+	    case TextureUsageType::NORMAL:
+		textureType = aiTextureType_NORMALS;
+		break;
+	    case TextureUsageType::SPECULAR:
+		textureType = aiTextureType_SPECULAR;
+		break;
+	    case TextureUsageType::AMBIENT:
+		textureType = aiTextureType_AMBIENT;
+		break;
+	    }
+	    const int textureCount = material->GetTextureCount(textureType);
+	    for (int i = 0; i < textureCount; i++) {
+		aiString texturePath;
+		material->GetTexture(textureType, i, &texturePath);
+		fs::path texturePathStr = this->modelRootPath / fs::path((texturePath.C_Str()));  // 来自于assimp的texture路径很可能是相对路径。而相对路径和进程的当前路径可能往往不一样,所以需要拼接模型根路径和纹理路径。这里假设纹理文件和模型文件在同一目录下，或者在子目录中。如果不在同一目录下，可能需要额外的配置来指定纹理文件的位置。
+		auto texture = textureCache.getTexture(texturePathStr, type);
+		if (texture) {
+		    materialData->appendTexture(texture);
+		}
+	    }
+	};
+	appendTexture(TextureUsageType::DIFFUSE, material);
+	appendTexture(TextureUsageType::NORMAL, material);
+	appendTexture(TextureUsageType::SPECULAR, material);
+	appendTexture(TextureUsageType::AMBIENT, material);
+	mesh->setMaterial(materialData);
+    }
 }
+size_t ModelImporter::getNodeCount() const {
+    return scene->mRootNode->mNumChildren;
+}
+ModelImporter::ModelImporter(const fs::path& path) : importer{}, scene(loadModel(path)), modelRootPath(path.parent_path()) {
+}
+glcore::Transform decomposeTransform(const aiMatrix4x4& transform) {
+    glm::quat quaternion;
+    glm::vec3 position;
+    glm::vec3 skew;
+    glm::vec4 perspective;
+    glm::vec3 scale;
 
+    glm::decompose(glm::make_mat4(&transform.a1), scale, quaternion, position, skew, perspective);
+
+    glm::mat4 rotation = glm::toMat4(quaternion);
+    glm::vec3 eulerAngle;
+    glm::extractEulerAngleXYZ(rotation, eulerAngle.x, eulerAngle.y, eulerAngle.z);
+
+    return Transform(position, eulerAngle, scale);
+}
 }  // namespace io
 }  // namespace RGL

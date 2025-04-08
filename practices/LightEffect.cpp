@@ -107,16 +107,25 @@ LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) {
     this->cam = cam;
     ShaderSrcs modelShaderSrc = {
 	{SHADER_TYPE::VERTEX, {"shaders\\Light\\phong_ubo.vert"}},
-	{SHADER_TYPE::FRAGMENT, {"shaders\\Light\\model.frag"}}};
+	{SHADER_TYPE::FRAGMENT, {"shaders\\Light\\spotlight_ubo.frag"}}};
     this->modelShader = std::make_shared<Shader>(modelShaderSrc);
     directionalLight = std::make_unique<GeneralEntity>();
     // 光源entity
     directionalLight->attachComponent<CommonLight>(glm::vec3{1.0f, 0.9f, 0.9f}, glm::vec3{0.1f, 0.2f, 0.2f}, 32.0f);
     directionalLight->attachComponent<Transform>(glm::vec3{-1.5f, 0.0f, -10.0f}, glm::vec3{0.0f, 0.0f, 0.0f}, glm::vec3{1.0f, 1.0f, 1.0f});
-    importer = std::make_unique<ModelImporter>("./assert/bag/backpack.obj");
+    importer = std::make_unique<ModelImporter>("assest\\bag\\backpack.obj");
+    importer->processNodeBFS();
+    // 检查下CommonRenderEntity数量
+    auto commonRenderEntities = singleReg->view<Transform>();
+    assert(commonRenderEntities.size() > 0 && "No CommonRenderEntity created");
+    auto logger = RLLogger::getInstance();
+    logger->warn("CommonRenderEntity count: {}", commonRenderEntities.size());
+    logger->warn("Nodes count: {}", importer->getNodeCount());
 }
 
 void LoadModelTest::operator()() {
+    cam->update();
+    CommonRenderEntity::update();
 }
 
 LoadModelTest::~LoadModelTest() {
