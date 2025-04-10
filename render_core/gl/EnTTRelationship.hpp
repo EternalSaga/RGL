@@ -20,7 +20,7 @@ struct Transform {
    public:
     glm::mat4 modelMatrix;
 
-    spdlog::logger* logger;
+    RLLogger* logger;
     Transform(glm::vec3 position, glm::vec3 rotation, glm::vec3 scale);
     void doLocalTransform();
     void setRotation(glm::vec3 rotation);

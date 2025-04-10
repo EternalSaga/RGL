@@ -1,5 +1,5 @@
 file(GLOB_RECURSE app_src *.cpp *.hpp)
-add_library(app ${app_src})
+add_executable(app ${app_src})
 target_compile_features(app PRIVATE cxx_std_20)
 
 find_package(EnTT CONFIG REQUIRED)

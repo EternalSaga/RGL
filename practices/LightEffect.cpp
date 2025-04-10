@@ -119,8 +119,8 @@ LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) {
     auto commonRenderEntities = singleReg->view<Transform>();
     assert(commonRenderEntities.size() > 0 && "No CommonRenderEntity created");
     auto logger = RLLogger::getInstance();
-    logger->warn("CommonRenderEntity count: {}", commonRenderEntities.size());
-    logger->warn("Nodes count: {}", importer->getNodeCount());
+    logger->debug("CommonRenderEntity count: {}", commonRenderEntities.size());
+    logger->debug("Nodes count: {}", importer->getNodeCount());
 }
 
 void LoadModelTest::operator()() {
