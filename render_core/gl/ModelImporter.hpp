@@ -15,6 +15,7 @@
 #include <map>
 #include <utility>
 #include "Material.hpp"
+#define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/matrix_decompose.hpp>
 #include <glm/gtx/euler_angles.hpp>
 #include <glm/gtx/quaternion.hpp>
@@ -31,7 +32,7 @@ class ModelImporter : public SingleReg {
     const aiScene* scene;
     std::map<size_t, std::shared_ptr<MaterialData>> assimpid_materials;
     const aiScene* loadModel(const fs::path& path);
-    void processMaterial(size_t assimpID, std::unique_ptr<Mesh> mesh);
+    void processMaterial(size_t assimpID, std::unique_ptr<Mesh>& mesh);
     TextureCache textureCache;
     fs::path modelRootPath;
     std::unique_ptr<Mesh> processMesh(aiMesh* importedMesh);

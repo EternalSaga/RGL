@@ -13,6 +13,7 @@
 #include <string>
 
 #include "GLCheckError.hpp"
+#include "rllogger.hpp"
 
 namespace RGL {
 namespace glcore {
@@ -33,7 +34,7 @@ class VBO {
     std::unique_ptr<size_t[]> verticesSizes;  // vbo的顶点的大小，即顶点数量*每个顶点的大小
 
     GLuint mNumOfVbo;
-    spdlog::logger *logger;
+    RLLogger *logger;
 
    public:
     GLuint getSize() const;
@@ -111,7 +112,7 @@ class VAO {
 
     GLuint mNumOfVao;
 
-    spdlog::logger *logger;
+    RLLogger *logger;
 
     // 到时候直接从shader program里查询不同顶点属性的layout location
     GLuint shaderProgram;

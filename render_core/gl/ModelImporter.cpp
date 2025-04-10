@@ -49,7 +49,7 @@ std::unique_ptr<Mesh> ModelImporter::processMesh(aiMesh* importedMesh) {
     if (importedMesh->mMaterialIndex >= 0) {
 	auto material = importedMesh->mMaterialIndex;
 
-	processMaterial(material, std::move(meshObj));
+	processMaterial(material, meshObj);
     }
 
     return std::move(meshObj);
@@ -122,7 +122,7 @@ const aiScene* ModelImporter::loadModel(const fs::path& path) {
     }
     return scene;
 }
-void ModelImporter::processMaterial(size_t assimpID, std::unique_ptr<Mesh> mesh) {
+void ModelImporter::processMaterial(size_t assimpID, std::unique_ptr<Mesh>& mesh) {
     aiMaterial* material = scene->mMaterials[assimpID];
 
     // 确定assimpid_materials里没有这个id,
@@ -170,6 +170,7 @@ size_t ModelImporter::getNodeCount() const {
 }
 ModelImporter::ModelImporter(const fs::path& path) : importer{}, scene(loadModel(path)), modelRootPath(path.parent_path()) {
 }
+
 glcore::Transform decomposeTransform(const aiMatrix4x4& transform) {
     glm::quat quaternion;
     glm::vec3 position;

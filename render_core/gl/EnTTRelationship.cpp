@@ -1,6 +1,7 @@
 #include "EnTTRelationship.hpp"
 #include <queue>
 #include <set>
+#include "rllogger.hpp"
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/string_cast.hpp>
 namespace RGL {
@@ -30,19 +31,18 @@ void updateTransforms() {
 	auto parentModelMatrix = reg->get<Transform>(parentNode).modelMatrix;
 	auto& currentChildren = reg->get<Relationship>(parentNode).children;
 
-	logger->info("Paraent entity id {}, Parent modelMatrix after updataModelMatrix: {}", entt::to_integral(parentNode), glm::to_string(parentModelMatrix));
+	logger->log_every_n(spdlog::level::debug, 5, format_with_location("Paraent entity id {}, Parent modelMatrix after updataModelMatrix: {}"), entt::to_integral(parentNode), glm::to_string(parentModelMatrix));
 
 	for (entt::entity& child : currentChildren) {
 	    auto& childTransform = reg->get<Transform>(child);
 	    childTransform.doLocalTransform();
-	    logger->debug("ChildID {}, Child modelMatrix after updataModelMatrix: {}", entt::to_integral(child), glm::to_string(childTransform.modelMatrix));
+	    logger->trace("ChildID {}, Child modelMatrix after updataModelMatrix: {}", entt::to_integral(child), glm::to_string(childTransform.modelMatrix));
 	    // 更新子节点的modelMatrix
 	    // 只更新了model matrix，如果子节点的是探照灯，那么还需要更新探照灯方向
 	    // 当然还有更合适的做法，就是探照灯不应该作为子节点，探照灯本身应该绑定到一个模型entity上，然后模型entity作为子节点
 	    // 然后探照灯方向根据模型entity方向更新
 	    reg->get<Transform>(child).modelMatrix = parentModelMatrix * childTransform.modelMatrix;
-	    logger->debug("ChildID {}, Child modelMatrix after parentModelMatrix * childTransform.modelMatrix: {}", entt::to_integral(child), glm::to_string(reg->get<Transform>(child).modelMatrix));
-
+	    logger->trace("ChildID {}, Child modelMatrix after parentModelMatrix * childTransform.modelMatrix: {}", entt::to_integral(child), glm::to_string(reg->get<Transform>(child).modelMatrix));
 	    queue.push(child);
 	}
     }

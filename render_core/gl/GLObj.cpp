@@ -17,7 +17,7 @@ VBO::VBO(GLuint numOfVbo) : mNumOfVbo(numOfVbo) {
 	verticesSizes[i] = 0;
     }
 
-    logger = RGL::RLLogger::getInstance();
+    logger = RLLogger::getInstance();
 
     glCall(glCreateBuffers, mNumOfVbo, vbo.get());
 }
@@ -111,7 +111,7 @@ void VAO::set(GLuint vaoIdx, GLuint vbo, GLuint numOfFloat,
 void VAO::set(GLuint vbo, GLuint numOfFloat,
     const std::string &shaderInputName) {
     assert(mNumOfVao == 1);
-    set(0, vbo, shaderInputName);
+    set(0, vbo, shaderInputName);//递归栈溢出？
 }
 
 VAO::operator GLuint() {

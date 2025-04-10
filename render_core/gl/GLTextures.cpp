@@ -237,6 +237,11 @@ std::shared_ptr<Texture> TextureCache::getTexture(const ProgrammedTexture type,b
 	}
 
 	return programmedTexturesCache[type];
+}else {
+	auto logger = RLLogger::getInstance();
+	logger->trace("programmed texture cache hit");
+	return programmedTexturesCache[type];
+
 }
 }
 GLuint Texture::operator()() {

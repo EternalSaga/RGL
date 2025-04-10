@@ -1,6 +1,7 @@
 #pragma once
 #include "Helpers.hpp"
 #include "glUniformWrapper.hpp"
+#include "rllogger.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -44,7 +45,7 @@ enum class SHADER_TYPE {
 using ShaderSrcs = std::map<SHADER_TYPE, std::vector<fs::path>>;
 
 class Shader {
-    spdlog::logger *logger;
+    RLLogger *logger;
     static constexpr GLuint MaxShaderLogLength = 1024;
     size_t *refCount = nullptr;
     GLuint shader;
