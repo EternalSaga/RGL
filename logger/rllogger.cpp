@@ -26,9 +26,6 @@ RLLogger* RLLogger::getInstance() {
    return rllogger.get();
 }
 
-
-
-
 std::once_flag RLLogger::initOnce{};
 std::unique_ptr<RLLogger> RLLogger::rllogger = nullptr;
 RLLogger::RLLogger()
