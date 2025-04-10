@@ -12,15 +12,15 @@
 #include <source_location>
 #include <string_view>	// Include string_view explicitly
 #include <unordered_map>
-#include <atomic>
+
 namespace RGL {
 
-    struct SourceLocHasher {
-	std::size_t operator()(const std::source_location &loc) const noexcept;
-    };
-    struct SourceLocEqual {
-	bool operator()(const std::source_location &lhs, const std::source_location &rhs) const noexcept;
-   };
+struct SourceLocHasher {
+    std::size_t operator()(const std::source_location &loc) const noexcept;
+};
+struct SourceLocEqual {
+    bool operator()(const std::source_location &lhs, const std::source_location &rhs) const noexcept;
+};
 
 [[nodiscard]] constexpr auto
 get_log_source_location(const std::source_location &location) {
@@ -37,7 +37,7 @@ struct format_with_location {
     template <typename String>
     format_with_location(const String &s, const std::source_location &location =
 					      std::source_location::current())
-	: value{s}, loc{get_log_source_location(location)},stdloc{location} {}
+	: value{s}, loc{get_log_source_location(location)}, stdloc{location} {}
 };
 
 class RLLogger {
@@ -54,24 +54,35 @@ class RLLogger {
     }
 
     template <typename... Args>
-void log_every_n(const spdlog::level::level_enum lvl, size_t n, format_with_location fmt_, Args &&...args) {
-	if (n == 0) { // Avoid division by zero and log every time if n is 0
-		log(lvl, fmt_, std::forward<Args>(args)...);
-		return;
+    void log_every_n(const spdlog::level::level_enum lvl, size_t n, format_with_location fmt_, Args &&...args) {
+	if (n == 0) {  // Avoid division by zero and log every time if n is 0
+	    log(lvl, fmt_, std::forward<Args>(args)...);
+	    return;
 	}
 
-    {
-        std::scoped_lock<std::mutex> lo(logCountMutex);
-        // Find or insert the counter for the specific source location
-        auto it = logCount.find(fmt_.stdloc);
-        if (it == logCount.end()) {
-            it = logCount.emplace(fmt_.stdloc, 0).first;
-        }
-        if (++(it->second) % n == 0) {
+	std::scoped_lock<std::mutex> lo(logCountMutex);
+	// Find or insert the counter for the specific source location
+	auto it = logCount.find(fmt_.stdloc);
+	if (it == logCount.end()) {
+	    it = logCount.emplace(fmt_.stdloc, 0).first;
+	}
+	if (++(it->second) % n == 0) {
+	    log(lvl, fmt_, std::forward<Args>(args)...);
+	}
+    }
+    template <typename... Args>
+    void log_if(const spdlog::level::level_enum lvl,const bool condition, format_with_location fmt_, Args &&...args) {
+        if (condition) {
             log(lvl, fmt_, std::forward<Args>(args)...);
         }
     }
-}
+
+    template<typename... Args>
+    void log_if_every_n(const spdlog::level::level_enum lvl, const bool condition, size_t n, format_with_location fmt_, Args &&...args) {
+        if (condition) {
+            log_every_n(lvl, n, fmt_, std::forward<Args>(args)...);
+        }
+    }
 
     template <typename... Args>
     void trace(format_with_location fmt_, Args &&...args) {
@@ -105,8 +116,8 @@ void log_every_n(const spdlog::level::level_enum lvl, size_t n, format_with_loca
    private:
     static std::once_flag initOnce;
     static std::unique_ptr<RLLogger> rllogger;
-    std::unordered_map<std::source_location, std::size_t,SourceLocHasher,SourceLocEqual> logCount;  // To implement log_every_n
-    std::mutex logCountMutex;  // Mutex to protect access to logCount map
+    std::unordered_map<std::source_location, std::size_t, SourceLocHasher, SourceLocEqual> logCount;  // To implement log_every_n
+    std::mutex logCountMutex;									      // Mutex to protect access to logCount map
 
     spdlog::logger *singletonLogger;
 
