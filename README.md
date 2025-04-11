@@ -7,7 +7,7 @@ However, NCLGL delves deeper into various mathematical and physical simulations 
 
 ## Package Management And Building
 
-This project leverages vcpkg as a package manager, making cmake the natural choice for build tools due to its seamless integration with vcpkg. <s>Additionally, it deeply incorporates the C++20 module features in development, hence currently only supports the Microsoft Visual C++ 2022(msvc) and clang-18 compiler (has already been tested on windows).</s> Unfortunately, my experience with C++20 modules in this project has been quite frustrating. I've encountered a wide range of compiler and linker errors that have been extremely difficult to diagnose and resolve. These issues have been highly compiler-specific, making it nearly impossible to find a consistent solution. For instance, MSVC produces a "local vftable" linking error related to virtual functions, whereas clang-18 fails to correctly deduce template arguments in certain scenarios. Given these challenges, I've been forced to temporarily abandon the use of modules. Nevertheless, I remain committed to exploring other C++20 features.
+This project leverages vcpkg as a package manager, making cmake the natural choice for build tools due to its seamless integration with vcpkg. `<s>`Additionally, it deeply incorporates the C++20 module features in development, hence currently only supports the Microsoft Visual C++ 2022(msvc) and clang-18 compiler (has already been tested on windows).`</s>` Unfortunately, my experience with C++20 modules in this project has been quite frustrating. I've encountered a wide range of compiler and linker errors that have been extremely difficult to diagnose and resolve. These issues have been highly compiler-specific, making it nearly impossible to find a consistent solution. For instance, MSVC produces a "local vftable" linking error related to virtual functions, whereas clang-18 fails to correctly deduce template arguments in certain scenarios. Given these challenges, I've been forced to temporarily abandon the use of modules. Nevertheless, I remain committed to exploring other C++20 features.
 
 ### Dependency
 
@@ -22,14 +22,12 @@ Open the repostory folder with vs2022 then press ctrl + shift + B to build it. P
 * api_abstractor
 
   Goal: Create a compatible abstraction layer for both OpenGL and Vulkan.
-* entry
-  Contains the main entry point (main.cpp).
-* front_end
+* app
 
   Houses the main application logic.Provides a flexible renderer interface for implementing various graphical effects.
-* opengl_core
+* render_core
 
-  Encapsulates OpenGL functionalities.
+  Encapsulates OpenGL functionalities and unimplemented cpu softrenderer.
 * practices
 
   Demonstrates the use of OpenGL encapsulation through concrete implementations.
