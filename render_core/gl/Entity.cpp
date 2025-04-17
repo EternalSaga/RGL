@@ -1,4 +1,7 @@
 #include "Entity.hpp"
+#include <spdlog/common.h>
+
+
 
 #include <cassert>
 #include "EnttRegistry.hpp"
@@ -9,6 +12,7 @@
 #include "SpotLight.hpp"
 #include "PointLight.hpp"
 #include "EnTTRelationship.hpp"
+#include "rllogger.hpp"
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/string_cast.hpp>
 #include "Mesh.hpp"
@@ -52,7 +56,8 @@ using namespace entt::literals;
 void CommonRenderEntity::modelSystemUBO() {
     auto singleReg = EnttReg::getPrimaryRegistry();
     auto viewForModel = singleReg->view<const Transform, UBOs>();
-
+	auto logger = RLLogger::getInstance();
+	logger->log_if(spdlog::level::debug, (viewForModel.size_hint()==0), "Current model view is empty");
     viewForModel.each([&singleReg](const entt::entity entity,const Transform& transform, UBOs& ubos) {
 
 
@@ -91,6 +96,10 @@ void CommonRenderEntity::modelSystemSimple() {
 void CommonRenderEntity::renderVertexArray() {
     auto singleReg = EnttReg::getPrimaryRegistry();
     auto viewForVertexArray = singleReg->view<const VertArrayComponent, ShaderRef, DiscreteUniforms, UBOs,SamplerCreater::Samplers>();
+
+	auto logger = RLLogger::getInstance();
+
+	logger->log_if(spdlog::level::warn, viewForVertexArray.size_hint() == 0 , "View of renderer objects might be empty");
 
     viewForVertexArray.each([](const VertArrayComponent& mesh, ShaderRef shader, DiscreteUniforms& distUniform, UBOs& ubos,SamplerCreater::Samplers& samplers) {
 	ScopeShader scopeshader(*shader);
