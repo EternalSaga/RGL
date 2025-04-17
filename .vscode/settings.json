@@ -3,20 +3,16 @@
         "-DVCPKG_APPLOCAL_DEPS=ON",
         "-DX_VCPKG_APPLOCAL_DEPS_INSTALL=ON",
         "-DCMAKE_EXPORT_COMPILE_COMMANDS=1",
-        "-DVCPKG_TARGET_TRIPLET=x64-windows",
-        "-DVCPKG_MANIFEST_MODE=ON"
+        "-DVCPKG_MANIFEST_MODE=ON",
+        "-DVCPKG_TARGET_TRIPLET=arm64-windows"
     ],
-    "vcpkg.general.enable": true,
-    "vcpkg.target.hostTriplet": "x64-windows",
-    "vcpkg.target.defaultTriplet": "x64-windows",
-    "vcpkg.target.useStaticLib": false,
-    "cmake.configureSettings": {
-        "CMAKE_TOOLCHAIN_FILE": "E:\\program\\vcpkg/scripts/buildsystems/vcpkg.cmake"
-    },
-    "vcpkg.target.installDependencies": true,
-    "vcpkg.target.preferSystemLibs": false,
-    "vcpkg.target.useManifest": true,
 
-    "cmake.outputLogEncoding": "utf-8"
+    "cmake.configureSettings": {
+        "CMAKE_TOOLCHAIN_FILE": "D:\\program\\vcpkg/scripts/buildsystems/vcpkg.cmake"
+    },
+
+    "cmake.generator": "Ninja",
+    "cmake.outputLogEncoding": "utf-8",
+
 
 }

@@ -2,6 +2,7 @@
 #include "EnTTRelationship.hpp"
 #include "GLTextures.hpp"
 #include "Material.hpp"
+#include "ShaderManager.hpp"
 #include "rllogger.hpp"
 #include <filesystem>
 #include <memory>
@@ -55,7 +56,7 @@ std::unique_ptr<Mesh> ModelImporter::processMesh(aiMesh* importedMesh) {
     return std::move(meshObj);
 }
 
-void ModelImporter::processNodeBFS() {
+void ModelImporter::processNodeBFS(ShaderRef shader) {
     std::queue<aiNode*> nodeQueue;
     std::map<aiNode*, entt::entity> nodeMap;  // 一个node对应一个entity
 
@@ -93,7 +94,7 @@ void ModelImporter::processNodeBFS() {
 	}
 
 	singleReg->emplace<Relationship>(currentEntity, currentRel);
-
+	singleReg->emplace<ShaderRef>(currentEntity, shader);
 	// 处理节点自身mesh
 	for (size_t i = 0; i < currentNode->mNumMeshes; i++) {
 	    auto meshIndex = currentNode->mMeshes[i];
@@ -117,7 +118,7 @@ const aiScene* ModelImporter::loadModel(const fs::path& path) {
     const auto scene = importer.ReadFile(path.string(), aiProcess_Triangulate | aiProcess_GenNormals);
     if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
 	auto logger = RLLogger::getInstance();
-	logger->error("Failed to load model: {}", path.string());
+	logger->error("Failed to load model: {}, current work path is {}", path.string(), fs::current_path().string());
 	throw std::runtime_error("Failed to load model: " + path.string());
     }
     return scene;

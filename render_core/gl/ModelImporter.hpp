@@ -10,6 +10,7 @@
 #include <memory>
 #include <rllogger.hpp>
 #include "Entity.hpp"
+#include "ShaderManager.hpp"
 #include "VertexDescriptor.hpp"
 #include "Mesh.hpp"
 #include <map>
@@ -19,6 +20,7 @@
 #include <glm/gtx/matrix_decompose.hpp>
 #include <glm/gtx/euler_angles.hpp>
 #include <glm/gtx/quaternion.hpp>
+#include "Shader.hpp"
 namespace RGL {
 namespace io {
 using namespace glcore;
@@ -43,7 +45,9 @@ class ModelImporter : public SingleReg {
     
     size_t getNodeCount() const;
 
-    void processNodeBFS();
+    void processNodeBFS(ShaderRef shader);
+
+    
 };
 }  // namespace io
 }  // namespace RGL

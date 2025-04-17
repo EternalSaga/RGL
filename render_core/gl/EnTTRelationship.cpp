@@ -31,7 +31,7 @@ void updateTransforms() {
 	auto parentModelMatrix = reg->get<Transform>(parentNode).modelMatrix;
 	auto& currentChildren = reg->get<Relationship>(parentNode).children;
 
-	logger->log_every_n(spdlog::level::debug, 5, format_with_location("Paraent entity id {}, Parent modelMatrix after updataModelMatrix: {}"), entt::to_integral(parentNode), glm::to_string(parentModelMatrix));
+	logger->log_every_n(spdlog::level::debug, 60, format_with_location("Paraent entity id {}, Parent modelMatrix after updataModelMatrix: {}"), entt::to_integral(parentNode), glm::to_string(parentModelMatrix));
 
 	for (entt::entity& child : currentChildren) {
 	    auto& childTransform = reg->get<Transform>(child);
