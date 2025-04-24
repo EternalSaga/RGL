@@ -1,6 +1,8 @@
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
+#include <spdlog/common.h>
+#include <spdlog/spdlog.h>
 #include "EnTTRelationship.hpp"
 #include "EnttRelationship.hpp"
 #include "GLObj.hpp"
@@ -11,9 +13,11 @@
 #include <rllogger.hpp>
 #include "Entity.hpp"
 #include "ShaderManager.hpp"
+#include "UBO.hpp"
 #include "VertexDescriptor.hpp"
 #include "Mesh.hpp"
 #include <map>
+#include <stdexcept>
 #include <utility>
 #include "Material.hpp"
 #define GLM_ENABLE_EXPERIMENTAL
@@ -38,6 +42,9 @@ class ModelImporter : public SingleReg {
     TextureCache textureCache;
     fs::path modelRootPath;
     std::unique_ptr<Mesh> processMesh(aiMesh* importedMesh);
+
+    RLLogger* logger;
+    std::map<aiNode*, entt::entity> nodeMap;  // 一个node对应一个entity
    public:
     ModelImporter(const fs::path& path);
     ~ModelImporter() = default;
@@ -47,7 +54,7 @@ class ModelImporter : public SingleReg {
 
     void processNodeBFS(ShaderRef shader);
 
-    
+    void addUbos(UBOs ubos);
 };
 }  // namespace io
 }  // namespace RGL

@@ -1,9 +1,12 @@
 #include "ModelImporter.hpp"
+#include <spdlog/common.h>
 #include "EnTTRelationship.hpp"
 #include "GLTextures.hpp"
 #include "Material.hpp"
+#include "Mesh.hpp"
 #include "ShaderManager.hpp"
 #include "rllogger.hpp"
+#include <entt/entity/entity.hpp>
 #include <filesystem>
 #include <memory>
 #include <queue>
@@ -23,7 +26,7 @@ std::unique_ptr<Mesh> ModelImporter::processMesh(aiMesh* importedMesh) {
 	glm::vec3 pos{importedMesh->mVertices[j].x, importedMesh->mVertices[j].y, importedMesh->mVertices[j].z};
 	// 顶点法线
 	if (!importedMesh->HasNormals()) {
-	    auto logger = RLLogger::getInstance();
+
 	    logger->error("This mesh has no normals");
 	    throw std::invalid_argument("This mesh has no normals");
 	}
@@ -58,7 +61,7 @@ std::unique_ptr<Mesh> ModelImporter::processMesh(aiMesh* importedMesh) {
 
 void ModelImporter::processNodeBFS(ShaderRef shader) {
     std::queue<aiNode*> nodeQueue;
-    std::map<aiNode*, entt::entity> nodeMap;  // 一个node对应一个entity
+    
 
     auto rootNode = scene->mRootNode;
 
@@ -95,16 +98,28 @@ void ModelImporter::processNodeBFS(ShaderRef shader) {
 
 	singleReg->emplace<Relationship>(currentEntity, currentRel);
 	singleReg->emplace<ShaderRef>(currentEntity, shader);
+
+	singleReg->emplace<DiscreteUniforms>(currentEntity);
+
+
+
 	// 处理节点自身mesh
 	for (size_t i = 0; i < currentNode->mNumMeshes; i++) {
 	    auto meshIndex = currentNode->mMeshes[i];
 	    auto mesh = scene->mMeshes[meshIndex];
 	    auto meshObj = processMesh(mesh);
-	    singleReg->emplace<std::unique_ptr<Mesh>>(currentEntity, std::move(meshObj));
+
+		auto vertArrayComp = VAOCreater::createMeshVAO(*meshObj, *shader);
+		auto [vertCount, idxOffset] = meshObj->getIdicesCountAndOffset();
+		singleReg->emplace<VertArrayComponent>(currentEntity, std::move(vertArrayComp), vertCount, idxOffset);
+
+		const auto sampler = SamplerCreater::createSamplers(*meshObj, *shader);
+
+		singleReg->emplace<SamplerCreater::Samplers>(currentEntity, sampler);
 	}
     }
 
-	auto logger = RLLogger::getInstance();
+	
 	logger->debug("Count of nodes processed: {}", nodeMap.size());
 	logger->debug("Count of meshes in root node: {}", rootNode->mNumMeshes);
 	logger->debug("Model path: {}", this->modelRootPath.string());
@@ -112,12 +127,22 @@ void ModelImporter::processNodeBFS(ShaderRef shader) {
 	for (auto& [node,entity] : nodeMap) {
 		singleReg->emplace<Transform>(entity, decomposeTransform(node->mTransformation));
 	}
+	#ifndef NDEBUG
+	for (auto& [node,entity] : nodeMap) {
+		logger->log_if(spdlog::level::debug, nullptr == singleReg->try_get<VertArrayComponent>(entity),"Entity {} not have VertArrayComponent",entt::to_integral(entity));
+		logger->log_if(spdlog::level::debug, nullptr == singleReg->try_get<DiscreteUniforms>(entity),"Entity {} not have DiscreteUniforms,perhaps it is has no Textures",entt::to_integral(entity));
+		logger->log_if(spdlog::level::debug, nullptr == singleReg->try_get<UBOs>(entity),"Entity {} not have UBOs",entt::to_integral(entity));
+		logger->log_if(spdlog::level::debug, nullptr == singleReg->try_get<ShaderRef>(entity),"Entity {} not have ShaderRef",entt::to_integral(entity));
+		logger->log_if(spdlog::level::debug, nullptr == singleReg->try_get<Relationship>(entity),"Entity {} not have Relationship",entt::to_integral(entity));
+		logger->log_if(spdlog::level::debug, nullptr == singleReg->try_get<Transform>(entity),"Entity {} not have Transform",entt::to_integral(entity));
+	}
+	#endif
 
 }
 const aiScene* ModelImporter::loadModel(const fs::path& path) {
     const auto scene = importer.ReadFile(path.string(), aiProcess_Triangulate | aiProcess_GenNormals);
     if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
-	auto logger = RLLogger::getInstance();
+	
 	logger->error("Failed to load model: {}, current work path is {}", path.string(), fs::current_path().string());
 	throw std::runtime_error("Failed to load model: " + path.string());
     }
@@ -170,6 +195,7 @@ size_t ModelImporter::getNodeCount() const {
     return scene->mRootNode->mNumChildren;
 }
 ModelImporter::ModelImporter(const fs::path& path) : importer{}, scene(loadModel(path)), modelRootPath(path.parent_path()) {
+	this->logger = RLLogger::getInstance();
 }
 
 glcore::Transform decomposeTransform(const aiMatrix4x4& transform) {
@@ -186,6 +212,16 @@ glcore::Transform decomposeTransform(const aiMatrix4x4& transform) {
     glm::extractEulerAngleXYZ(rotation, eulerAngle.x, eulerAngle.y, eulerAngle.z);
 
     return Transform(position, eulerAngle, scale);
+}
+void ModelImporter::addUbos(UBOs ubos) {
+    if (this->nodeMap.size() == 0) {
+	logger->error("entity map is empty");
+	throw std::logic_error("entity map is empty");
+    }
+
+    for (auto [node, entity] : nodeMap) {
+	singleReg->emplace_or_replace<UBOs>(entity, ubos);
+    }
 }
 }  // namespace io
 }  // namespace RGL

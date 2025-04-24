@@ -383,3 +383,6 @@ FodyWeavers.xsd
 /package
 /.VSCodeCounter
 /vcpkg_installed
+
+!assest/**/*.obj
+!assest/**/*.jpg
