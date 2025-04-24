@@ -59,6 +59,9 @@ class LoadModelTest : public Renderer,public SingleReg{
     std::unique_ptr<GeneralEntity> directionalLight;
     UBOs ubos;
 
+    std::shared_ptr<UBO> lightUBO;
+    std::shared_ptr<UBO> transformUBO;
+
     std::unique_ptr<ModelImporter> importer;
 public:
     LoadModelTest(std::shared_ptr<Camera> cam);
