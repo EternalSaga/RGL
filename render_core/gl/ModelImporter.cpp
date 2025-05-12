@@ -18,6 +18,7 @@ namespace io {
 
 std::unique_ptr<Mesh> ModelImporter::processMesh(aiMesh* importedMesh) {
     const auto& numofVertices = importedMesh->mNumVertices;
+	
     auto meshObj = std::make_unique<Mesh>(
 	FloatDescs{FloatDesc{"inPos", 3}, FloatDesc{"inUV", 2}, FloatDesc{"inNormal", 3}}, numofVertices);
     // 处理顶点
