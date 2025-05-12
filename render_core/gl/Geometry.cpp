@@ -211,7 +211,7 @@ Sphere::Sphere(float radius) {
 		normals.push_back(x);
 	    normals.push_back(y);
 	    normals.push_back(z);
-
+ 
 	}
     }
 
@@ -235,7 +235,7 @@ Sphere::Sphere(float radius) {
 	}
     }
 
-    indicesCount = indices.size();
+    indicesCount = indices.size();	
 
 
 	this->descs = FloatDescs{

@@ -46,21 +46,11 @@ class Mesh {
     FloatDescs getDesc() const;
     void pushVertex(const std::vector<GLfloat>& vertex);    
     void pushIndex(const int index);
-    
-    void setMaterial(std::shared_ptr<MaterialData> material){
-        materialHasSet = true;
-        this->material = material;
-    }
-    void setMaterial(){
 
-    }
-    std::shared_ptr<MaterialData> getMaterial() const{
-        if(!materialHasSet){
-            auto logger = RGL::RLLogger::getInstance();
-            logger->error("material not set, please set material first.");
-        }
-        return material;
-    }
+    void setMaterial(std::shared_ptr<MaterialData> material);
+
+
+    std::shared_ptr<MaterialData> getMaterial() const;
 };
 
 namespace VAOCreater {

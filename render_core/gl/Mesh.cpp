@@ -20,12 +20,14 @@ Mesh::Mesh() : indices(), indicesCount(0),material() {
 Mesh::Mesh(FloatDescs descs,size_t numOfVertcies) : descs(descs), indicesCount(0), indices(), channeledVertices(),material() {
 	vertLength = getVertexLength();
     channeledVertices.resize(vertLength * numOfVertcies);
+    
+    this->indicesOffset = channeledVertices.size()* sizeof(decltype(channeledVertices[0]));
 }
 std::tuple<size_t, size_t> Mesh::getIdicesCountAndOffset() {
-    if (indicesCount == 0 || indicesOffset == 0) {
+    if (this->indices.size() == 0 || indicesOffset == 0) {
 	throw std::logic_error("Mesh::getIdicesCountAndOffset() called before setting indices");
     }
-    return std::make_tuple(indicesCount, indicesOffset);
+    return std::make_tuple(this->indices.size(), indicesOffset);
 }
 std::vector<int> Mesh::getIndices() const {
     return indices;
@@ -90,6 +92,17 @@ void SamplerCreater::DisableTextures(Samplers& samplers) {
     for (auto& sampler : samplers) {
 	sampler.texture->disableTexture();
     }
+}
+void Mesh::setMaterial(std::shared_ptr<MaterialData> material) {
+    materialHasSet = true;
+    this->material = material;
+}
+std::shared_ptr<MaterialData> Mesh::getMaterial() const {
+    if (!materialHasSet) {
+	auto logger = RGL::RLLogger::getInstance();
+	logger->error("material not set, please set material first.");
+    }
+    return material;
 }
 }  // namespace glcore
 }
