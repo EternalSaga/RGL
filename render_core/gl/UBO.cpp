@@ -41,6 +41,7 @@ std::string type2string(int gltype) {
 void UBO::prepareOffsetsAndDataType() {
     blockIndex = glCall(glGetUniformBlockIndex, shader, uboName.c_str());
     if (blockIndex == GL_INVALID_INDEX) {
+    logger->critical("Ubo blockname not found {} in shader program {}", uboName,shader);
 	throw std::invalid_argument("invalid block name or in activated block");
     }
     // 获取 Uniform Block 中 Uniform 的数量：
@@ -71,12 +72,13 @@ void UBO::prepareOffsetsAndDataType() {
 	glCall(glGetActiveUniformName, shader, uniformIndices[i], nameLength, nullptr, uniformNames[i].data());
     }
 
-	auto logger = RLLogger::getInstance();
+	 
     for (size_t i = 0; i < uniformCount; i++) {
 	    logger->info("uniformName:{};offset:{};type:{}\n", uniformNames[i], uniformOffsets[i], type2string(uniformTypes[i]));
     }
 }
 UBO::UBO(GLuint shaderProgram, const std::string& uniformBlockName) {
+    logger = RLLogger::getInstance();
     bindingManager = UboBindingManager::getInstance();
     assert(bindingManager != nullptr);	// 增加断言检查
     this->uboName = uniformBlockName;
