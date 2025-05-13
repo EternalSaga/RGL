@@ -4,6 +4,7 @@
 #include "GLObj.hpp"
 #include "Shader.hpp"
 #include "ShaderManager.hpp"
+#include "rllogger.hpp"
 #include <array>
 #include <unordered_map>
 namespace RGL {
@@ -44,7 +45,7 @@ class UBO {
     GLint bindingPoint;
     UboBindingManager* bindingManager;
 
-
+    RLLogger* logger = nullptr;
 
 	void prepareOffsetsAndDataType();
 

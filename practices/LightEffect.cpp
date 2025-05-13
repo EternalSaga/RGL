@@ -107,7 +107,7 @@ LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) {
     this->cam = cam;
     ShaderSrcs modelShaderSrc = {
 	{SHADER_TYPE::VERTEX, {"shaders\\Light\\phong_ubo.vert"}},
-	{SHADER_TYPE::FRAGMENT, {"shaders\\Light\\spotlight_ubo.frag"}}};
+	{SHADER_TYPE::FRAGMENT, {"shaders\\Light\\blinn-phong-mask-ubo.frag"}}};
     this->modelShader = std::make_shared<Shader>(modelShaderSrc);
     directionalLight = std::make_unique<GeneralEntity>();
     // 光源entity
@@ -116,7 +116,7 @@ LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) {
     importer = std::make_unique<ModelImporter>("assest\\bag\\backpack.obj");
     importer->processNodeBFS(modelShader);
 
-    lightUBO = std::make_shared<UBO>(*modelShader, "SpotLight");
+    lightUBO = std::make_shared<UBO>(*modelShader, "DirectionLight");
     transformUBO = std::make_shared<UBO>(*modelShader, "Transforms");
     ubos = std::make_shared<std::unordered_map<std::string, std::shared_ptr<UBO>>>();
     (*ubos)[lightUBO->getUboName()] = lightUBO;
