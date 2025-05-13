@@ -1,6 +1,7 @@
 #include "Mesh.hpp"
 #include "GLCheckError.hpp"
 #include "GLTextures.hpp"
+#include "rllogger.hpp"
 
 namespace RGL {
 namespace glcore {
@@ -19,9 +20,11 @@ Mesh::Mesh() : indices(), indicesCount(0),material() {
 }
 Mesh::Mesh(FloatDescs descs,size_t numOfVertcies) : descs(descs), indicesCount(0), indices(), channeledVertices(),material() {
 	vertLength = getVertexLength();
-    channeledVertices.resize(vertLength * numOfVertcies);
+    const auto reserveSize = vertLength * numOfVertcies;
+
+    channeledVertices.reserve(reserveSize);
     
-    this->indicesOffset = channeledVertices.size()* sizeof(decltype(channeledVertices[0]));
+    this->indicesOffset = reserveSize * sizeof(decltype(channeledVertices[0]));
 }
 std::tuple<size_t, size_t> Mesh::getIdicesCountAndOffset() {
     if (this->indices.size() == 0 || indicesOffset == 0) {
