@@ -16,6 +16,7 @@
 #include "Light.hpp"
 #include "UBO.hpp"
 #include "EnttRelationship.hpp"
+#include "rllogger.hpp"
 namespace RGL {
 namespace glcore {
 
@@ -61,6 +62,8 @@ class CommonRenderEntity : public SingleReg {
 	static void modelSystemSimple();
 
     static void renderVertexArray();
+
+
    protected:
    public:
     CommonRenderEntity(glm::vec3 position, float angleX, float angleY, float angleZ, glm::vec3 scale);

@@ -5,6 +5,8 @@
 
 #include <cassert>
 #include "EnttRegistry.hpp"
+#include "GLCheckError.hpp"
+#include "Helpers.hpp"
 #include "Mesh.hpp"
 #include "CameraECS.hpp"
 #include "DataPipeline.hpp"
@@ -25,6 +27,7 @@ CommonRenderEntity::CommonRenderEntity(glm::vec3 position, float angleX, float a
     singleReg->emplace<Transform>(entity, position, glm::vec3(angleX,angleY,angleZ), scale);
 
     singleReg->emplace<DiscreteUniforms>(entity);
+
 }
 
 
@@ -56,8 +59,8 @@ using namespace entt::literals;
 void CommonRenderEntity::modelSystemUBO() {
     auto singleReg = EnttReg::getPrimaryRegistry();
     auto viewForModel = singleReg->view<const Transform, UBOs>();
-	auto logger = RLLogger::getInstance();
-	logger->log_if(spdlog::level::debug, (viewForModel.size_hint()==0), "Current model view is empty");
+
+	RLLogger::getInstance()->log_if(spdlog::level::debug, (viewForModel.size_hint()==0), "Current model view is empty");
     viewForModel.each([&singleReg](const entt::entity entity,const Transform& transform, UBOs& ubos) {
 
 
@@ -97,9 +100,8 @@ void CommonRenderEntity::renderVertexArray() {
     auto singleReg = EnttReg::getPrimaryRegistry();
     auto viewForVertexArray = singleReg->view<const VertArrayComponent, ShaderRef, DiscreteUniforms, UBOs,SamplerCreater::Samplers>();
 
-	auto logger = RLLogger::getInstance();
 
-	logger->log_if(spdlog::level::warn, viewForVertexArray.size_hint() == 0 , "View of renderer objects might be empty");
+	RLLogger::getInstance()->log_if(spdlog::level::warn, viewForVertexArray.size_hint() == 0 , "View of renderer objects might be empty");
 
     viewForVertexArray.each([](const VertArrayComponent& mesh, ShaderRef shader, DiscreteUniforms& distUniform, UBOs& ubos,SamplerCreater::Samplers& samplers) {
 	ScopeShader scopeshader(*shader);
@@ -114,6 +116,9 @@ void CommonRenderEntity::renderVertexArray() {
 	for (const auto& sampler : samplers) {
 		shader->setUniform(sampler.samplerName,sampler.textureUnit);
 	}
+
+	RLLogger::getInstance()->log_if(spdlog::level::err, !glCall(glIsVertexArray,*(mesh.vao)), "Mesh vao is not valid");
+
 	glCall(glDrawElements, GL_TRIANGLES, mesh.vertCount, GL_UNSIGNED_INT, reinterpret_cast<void*>(mesh.idxOffset));
 	SamplerCreater::DisableTextures(samplers);
 	glCall(glBindVertexArray, 0);
@@ -129,6 +134,8 @@ void CommonRenderEntity::renderVertexArray() {
 		for (const auto& sampler : samplers) {
 			shader->setUniform(sampler.samplerName,sampler.textureUnit);
 		}
+		RLLogger::getInstance()->log_if(spdlog::level::err, !glCall(glIsVertexArray,*(mesh.vao)), "Mesh vao is not valid");
+
 	    glCall(glDrawElements, GL_TRIANGLES, mesh.vertCount, GL_UNSIGNED_INT, reinterpret_cast<void*>(mesh.idxOffset));
 		SamplerCreater::DisableTextures(samplers);
 	    glCall(glBindVertexArray, 0);
