@@ -25,9 +25,7 @@ namespace glcore {
 
 CommonRenderEntity::CommonRenderEntity(glm::vec3 position, float angleX, float angleY, float angleZ, glm::vec3 scale) : entity(singleReg->create()) {
     singleReg->emplace<Transform>(entity, position, glm::vec3(angleX,angleY,angleZ), scale);
-
     singleReg->emplace<DiscreteUniforms>(entity);
-
 }
 
 
@@ -49,7 +47,6 @@ void CommonRenderEntity::update() {
     updateTransforms();
     modelSystemUBO();
     modelSystemSimple();
-
     updateSpotLight();
     updatePointLight();
     updateDirLight();
@@ -62,8 +59,6 @@ void CommonRenderEntity::modelSystemUBO() {
 
 	RLLogger::getInstance()->log_if(spdlog::level::debug, (viewForModel.size_hint()==0), "Current model view is empty");
     viewForModel.each([&singleReg](const entt::entity entity,const Transform& transform, UBOs& ubos) {
-
-
 
 	const CameraProjection proj = singleReg->ctx().get<CameraProjection>("CameraProjection"_hs);
 

@@ -43,6 +43,7 @@ void main()
 	vec3 ambient = ambient * objectColor;
 
 	vec4 finalColor = vec4(ambient + diffuseColor + specularColor * flag, 1.0);
+	//vec4 finalColor = vec4(objectColor, 1.0);
 
 	FragColor = finalColor;
 }

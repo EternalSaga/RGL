@@ -5,7 +5,7 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <glm/gtc/matrix_transform.hpp>
-#include "EnttRegistry.hpp"
+
 #include <vector>
 #include "rllogger.hpp"
 #include <glm/glm.hpp>
