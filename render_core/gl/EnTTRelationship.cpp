@@ -1,6 +1,7 @@
 #include "EnTTRelationship.hpp"
 #include <queue>
 #include <set>
+#include "EnttRegistry.hpp"
 #include "rllogger.hpp"
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/string_cast.hpp>
