@@ -1,0 +1,16 @@
+{
+    "cmake.configureArgs": [
+        "-DVCPKG_APPLOCAL_DEPS=ON",
+        "-DX_VCPKG_APPLOCAL_DEPS_INSTALL=ON",
+        "-DCMAKE_EXPORT_COMPILE_COMMANDS=1",
+        "-DVCPKG_MANIFEST_MODE=ON",
+        "-DVCPKG_TARGET_TRIPLET=arm64-windows"
+
+    ],
+    "cmake.generator": "Ninja",
+    "cmake.configureSettings": {
+        "CMAKE_TOOLCHAIN_FILE": "${env:VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+    },
+
+    "cmake.outputLogEncoding": "utf-8",
+}
