@@ -33,4 +33,11 @@ class GameControlSystem : public SingleReg {
     void update();
 };
 bool ShouldQuit();
+
+struct WindowResizeEvent {
+    int newwidth;
+    int newheight;
+    bool handled = true;
+};
+
 }  // namespace RGL
