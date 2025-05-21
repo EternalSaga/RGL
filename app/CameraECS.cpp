@@ -1,6 +1,7 @@
 #include "CameraECS.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include "DataPipeline.hpp"
+#include "ControllerECS.hpp"
 namespace RGL {
 
 
@@ -16,7 +17,7 @@ PerspectiveCamSystem::PerspectiveCamSystem(float fovy, float aspect, float nearp
 
 void PerspectiveCamSystem::update() {
     auto view = singleReg->view<const CameraBasicAttributes, CameraPose, CameraProjection>();
-
+    resizeViewport();
     auto entity = *view.begin();
     const auto& camMove = view.get<CameraBasicAttributes>(entity);
     const auto& camPose = view.get<CameraPose>(entity);
@@ -30,5 +31,23 @@ void PerspectiveCamSystem::update() {
    
 	singleReg->ctx().insert_or_assign("CameraProjection"_hs, proj);
 	singleReg->ctx().insert_or_assign("cameraPos"_hs, camPose.position);
+}
+void PerspectiveCamSystem::resizeViewport() {
+    auto sharingData = SharingData::getInstance();
+    auto resizedWindow = sharingData->getData("resizedWindow");
+    if (!resizedWindow.data()) {
+        return;
+    }
+
+    auto windowResizeEvent = entt::any_cast<WindowResizeEvent>(resizedWindow);
+
+    if (windowResizeEvent.handled) {
+	return;
+    }
+    windowResizeEvent.handled = true;
+
+    glcore::glCall(glViewport, 0, 0, windowResizeEvent.newwidth, windowResizeEvent.newheight);
+    aspect = static_cast<float>(windowResizeEvent.newwidth) / static_cast<float>(windowResizeEvent.newheight);
+    proj = glm::perspective(glm::radians(fovy), aspect, mNear, mFar);
 }
 }  // namespace RGL

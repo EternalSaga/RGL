@@ -1,7 +1,9 @@
 #pragma once
 
+#include <entt/core/any.hpp>
 #include "CameraECS.hpp"
 #include "ControllerECS.hpp"
+#include "DataPipeline.hpp"
 namespace RGL {
 
 class Camera {

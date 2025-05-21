@@ -3,6 +3,8 @@
 #include <glm/glm.hpp>
 
 #include "ShaderManager.hpp"
+
+
 namespace RGL {
 struct CameraBasicAttributes {
     float sensitivity;
@@ -42,6 +44,8 @@ class PerspectiveCamSystem : public SingleReg {
     float mFar;
 
     glm::mat4 proj;
+
+    void resizeViewport();
 
    public:
     PerspectiveCamSystem(float fovy, float aspect, float nearplan, float farplan);

@@ -3,6 +3,8 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_events.h>
 #include <glm/gtc/matrix_transform.hpp>
+#include "DataPipeline.hpp"
+
 namespace RGL {
 
 	bool currentCursorBetween(const glm::vec2 &downCursor, const glm::vec2 &lastCursor, const glm::vec2 &currentCursor) {
@@ -38,7 +40,11 @@ class GameMouseKeyboardSystem : public SingleReg {
 	    if (sdlevent.type == SDL_EVENT_QUIT) {
 		mouseKeyboard.shouldQuit = true;
 	    } else if (sdlevent.type == SDL_EVENT_WINDOW_RESIZED) {
-
+					auto sharingData = SharingData::getInstance();
+		const WindowResizeEvent windowResizeEvent{
+		    sdlevent.window.data1,
+		    sdlevent.window.data2,false};
+		sharingData->setData("resizedWindow", windowResizeEvent);
 	    } else if (sdlevent.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
 		const SDL_MouseButtonEvent &mouseEvt = sdlevent.button;
 		mouseKeyboard.leftDown = mouseEvt.button == SDL_BUTTON_LEFT;
@@ -129,7 +135,12 @@ void TrackBallMouseKeyboardSystem::update() {
 	if (sdlevent.type == SDL_EVENT_QUIT) {
 	    mouseKeyboard.shouldQuit = true;
 	} else if (sdlevent.type == SDL_EVENT_WINDOW_RESIZED) {
-		//to do
+		auto sharingData = SharingData::getInstance();
+		const WindowResizeEvent windowResizeEvent{
+		    sdlevent.window.data1,
+		    sdlevent.window.data2,
+			false};
+		sharingData->setData("resizedWindow", windowResizeEvent);
 	} else if (sdlevent.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
 	    const SDL_MouseButtonEvent &mouseEvt = sdlevent.button;
 	    mouseKeyboard.leftDown = mouseEvt.button == SDL_BUTTON_LEFT;
