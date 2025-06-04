@@ -17,7 +17,9 @@
 #include "rllogger.hpp"
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/string_cast.hpp>
-#include "Mesh.hpp"
+
+
+#include "RenderQueue.hpp"
 namespace RGL {
 namespace glcore {
 
@@ -40,7 +42,7 @@ void CommonRenderEntity::setMesh(std::unique_ptr<Mesh> mesh, ShaderRef shader) {
 
 	singleReg->emplace<SamplerCreater::Samplers>(entity,sampler);
 }
-
+RenderQueues CommonRenderEntity::renderQueues{};
 
 void CommonRenderEntity::update() {
     
@@ -50,7 +52,10 @@ void CommonRenderEntity::update() {
     updateSpotLight();
     updatePointLight();
     updateDirLight();
-    renderVertexArray();
+    //renderVertexArray();
+
+	RenderQueueSystem::populateRenderqueues(renderQueues);
+	RenderQueueSystem::processOpaqueQueue(renderQueues.opaqueQueue);
 }
 using namespace entt::literals;
 void CommonRenderEntity::modelSystemUBO() {

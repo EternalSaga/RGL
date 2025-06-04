@@ -17,6 +17,7 @@
 #include "UBO.hpp"
 #include "EnttRelationship.hpp"
 #include "rllogger.hpp"
+#include "RenderQueue.hpp"
 namespace RGL {
 namespace glcore {
 
@@ -28,8 +29,7 @@ struct VertArrayComponent {
 };
 
 
-struct RenderTag {
-};
+
 
 
 class GeneralEntity : public SingleReg {
@@ -63,7 +63,7 @@ class CommonRenderEntity : public SingleReg {
 
     static void renderVertexArray();
 
-
+    static RenderQueues renderQueues;
    protected:
    public:
     CommonRenderEntity(glm::vec3 position, float angleX, float angleY, float angleZ, glm::vec3 scale);
@@ -71,6 +71,7 @@ class CommonRenderEntity : public SingleReg {
     void setMesh(std::unique_ptr<Mesh> mesh, ShaderRef shader);
 
     static void update();
+
 	template<typename T,typename... Args>
     void attachComponent(Args&&... args) {
 	singleReg->emplace<T>(entity, std::forward<Args>(args)...);

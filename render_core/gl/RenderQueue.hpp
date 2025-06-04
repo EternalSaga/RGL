@@ -2,11 +2,13 @@
 #include <entt/entity/fwd.hpp>
 #include <entt/entt.hpp>
 #include <vector>
-#include "EnttRegistry.hpp"
+
 namespace RGL {
 
 namespace RenderTags {
-
+struct Renderable {
+    bool visible = true;
+};
 struct Opaque {};
 struct Transparent {};
 struct Shadow {};
@@ -31,26 +33,16 @@ struct RenderQueues {
     RenderQueues(RenderQueues&&) = default;
     RenderQueues& operator=(RenderQueues&&) = default;
     ~RenderQueues() = default;
-    void clear() {
-        opaqueQueue.clear();
-        transparentQueue.clear();
-        shadowQueue.clear();
-        skyboxQueue.clear();
-        uiQueue.clear();
-        shadowCasterQueue.clear();
-        shadowReceiverQueue.clear();
-    }
+    void clear();
 };
 
 class RenderQueueSystem {
     public:
-    static void populateRenderqueues(RenderQueues& queues){
-        auto singleReg = EnttReg::getPrimaryRegistry();
-        queues.clear();
+    static void populateRenderqueues(RenderQueues& queues);
+    static void processOpaqueQueue(const std::vector<entt::entity>& queue);
+    static void processTransparentQueue(const std::vector<entt::entity>& queue);
+    static void processSkyboxQueue(const std::vector<entt::entity>& queue);
 
-        
-
-    }
 };
 
 }  // namespace RGL

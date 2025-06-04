@@ -4,6 +4,7 @@
 #include "Geometry.hpp"
 #include "Light.hpp"
 #include "PointLight.hpp"
+#include "RenderQueue.hpp"
 #include "SpotLight.hpp"
 #include "Material.hpp"
 
@@ -46,7 +47,7 @@ UBOTest::UBOTest(std::shared_ptr<Camera> cam) {
     // 给cube添加共享的ubos
     singleReg->emplace_or_replace<UBOs>(*cubeEntity, ubos);
     // cube因为有光照相关shader，所以加个render tag，方便entt view筛选
-    cubeEntity->attachComponent<RenderTag>();
+    cubeEntity->attachComponent<RenderTags::Renderable>();
 
     spotLight = std::make_unique<GeneralEntity>();
     // 光源entity
