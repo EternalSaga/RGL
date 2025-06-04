@@ -21,7 +21,7 @@ class MaterialData {
     }
 
     inline void setTransparent(bool isTransparent) {
-        isTransparent = isTransparent;
+        this->isTransparent = isTransparent;
     }
 
     inline bool getTransparent() const {
