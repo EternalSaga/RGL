@@ -12,13 +12,13 @@
 #include <queue>
 #include <utility>
 #include <vector>
-
+#include "RenderQueue.hpp"
 namespace RGL {
 namespace io {
 
 std::unique_ptr<Mesh> ModelImporter::processMesh(aiMesh* importedMesh) {
     const auto& numofVertices = importedMesh->mNumVertices;
-	
+
     auto meshObj = std::make_unique<Mesh>(
 	FloatDescs{FloatDesc{"inPos", 3}, FloatDesc{"inUV", 2}, FloatDesc{"inNormal", 3}}, numofVertices);
     // 处理顶点
@@ -27,7 +27,6 @@ std::unique_ptr<Mesh> ModelImporter::processMesh(aiMesh* importedMesh) {
 	glm::vec3 pos{importedMesh->mVertices[j].x, importedMesh->mVertices[j].y, importedMesh->mVertices[j].z};
 	// 顶点法线
 	if (!importedMesh->HasNormals()) {
-
 	    logger->error("This mesh has no normals");
 	    throw std::invalid_argument("This mesh has no normals");
 	}
@@ -62,7 +61,6 @@ std::unique_ptr<Mesh> ModelImporter::processMesh(aiMesh* importedMesh) {
 
 void ModelImporter::processNodeBFS(ShaderRef shader) {
     std::queue<aiNode*> nodeQueue;
-    
 
     auto rootNode = scene->mRootNode;
 
@@ -102,48 +100,50 @@ void ModelImporter::processNodeBFS(ShaderRef shader) {
 
 	singleReg->emplace<DiscreteUniforms>(currentEntity);
 
-
-
 	// 处理节点自身mesh
 	for (size_t i = 0; i < currentNode->mNumMeshes; i++) {
 	    auto meshIndex = currentNode->mMeshes[i];
 	    auto mesh = scene->mMeshes[meshIndex];
 	    auto meshObj = processMesh(mesh);
 
+	    // 检查mesh的material透明度
+	    if (meshObj->getMaterial()->getTransparent()) {
+		singleReg->emplace<RenderTags::Transparent>(currentEntity);
+	    }else {
+		singleReg->emplace<RenderTags::Opaque>(currentEntity);
+	    }
+		singleReg->emplace<RenderTags::Renderable>(currentEntity, true);
 		auto vertArrayComp = VAOCreater::createMeshVAO(*meshObj, *shader);
-		auto [vertCount, idxOffset] = meshObj->getIdicesCountAndOffset();
-		singleReg->emplace<VertArrayComponent>(currentEntity, std::move(vertArrayComp), vertCount, idxOffset);
+	    auto [vertCount, idxOffset] = meshObj->getIdicesCountAndOffset();
+	    singleReg->emplace<VertArrayComponent>(currentEntity, std::move(vertArrayComp), vertCount, idxOffset);
 
-		const auto sampler = SamplerCreater::createSamplers(*meshObj, *shader);
+	    const auto sampler = SamplerCreater::createSamplers(*meshObj, *shader);
 
-		singleReg->emplace<SamplerCreater::Samplers>(currentEntity, sampler);
+	    singleReg->emplace<SamplerCreater::Samplers>(currentEntity, sampler);
 	}
     }
 
-	
-	logger->debug("Count of nodes processed: {}", nodeMap.size());
-	logger->debug("Count of meshes in root node: {}", rootNode->mNumMeshes);
-	logger->debug("Model path: {}", this->modelRootPath.string());
+    logger->debug("Count of nodes processed: {}", nodeMap.size());
+    logger->debug("Count of meshes in root node: {}", rootNode->mNumMeshes);
+    logger->debug("Model path: {}", this->modelRootPath.string());
 
-	for (auto& [node,entity] : nodeMap) {
-		singleReg->emplace<Transform>(entity, decomposeTransform(node->mTransformation));
-	}
-	#ifndef NDEBUG
-	for (auto& [node,entity] : nodeMap) {
-		logger->log_if(spdlog::level::debug, nullptr == singleReg->try_get<VertArrayComponent>(entity),"Entity {} not have VertArrayComponent",entt::to_integral(entity));
-		logger->log_if(spdlog::level::debug, nullptr == singleReg->try_get<DiscreteUniforms>(entity),"Entity {} not have DiscreteUniforms,perhaps it is has no Textures",entt::to_integral(entity));
-		logger->log_if(spdlog::level::debug, nullptr == singleReg->try_get<UBOs>(entity),"Entity {} not have UBOs",entt::to_integral(entity));
-		logger->log_if(spdlog::level::debug, nullptr == singleReg->try_get<ShaderRef>(entity),"Entity {} not have ShaderRef",entt::to_integral(entity));
-		logger->log_if(spdlog::level::debug, nullptr == singleReg->try_get<Relationship>(entity),"Entity {} not have Relationship",entt::to_integral(entity));
-		logger->log_if(spdlog::level::debug, nullptr == singleReg->try_get<Transform>(entity),"Entity {} not have Transform",entt::to_integral(entity));
-	}
-	#endif
-
+    for (auto& [node, entity] : nodeMap) {
+	singleReg->emplace<Transform>(entity, decomposeTransform(node->mTransformation));
+    }
+#ifndef NDEBUG
+    for (auto& [node, entity] : nodeMap) {
+	logger->log_if(spdlog::level::debug, nullptr == singleReg->try_get<VertArrayComponent>(entity), "Entity {} not have VertArrayComponent", entt::to_integral(entity));
+	logger->log_if(spdlog::level::debug, nullptr == singleReg->try_get<DiscreteUniforms>(entity), "Entity {} not have DiscreteUniforms,perhaps it is has no Textures", entt::to_integral(entity));
+	logger->log_if(spdlog::level::debug, nullptr == singleReg->try_get<UBOs>(entity), "Entity {} not have UBOs", entt::to_integral(entity));
+	logger->log_if(spdlog::level::debug, nullptr == singleReg->try_get<ShaderRef>(entity), "Entity {} not have ShaderRef", entt::to_integral(entity));
+	logger->log_if(spdlog::level::debug, nullptr == singleReg->try_get<Relationship>(entity), "Entity {} not have Relationship", entt::to_integral(entity));
+	logger->log_if(spdlog::level::debug, nullptr == singleReg->try_get<Transform>(entity), "Entity {} not have Transform", entt::to_integral(entity));
+    }
+#endif
 }
 const aiScene* ModelImporter::loadModel(const fs::path& path) {
     const auto scene = importer.ReadFile(path.string(), aiProcess_Triangulate | aiProcess_GenNormals);
     if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
-	
 	logger->error("Failed to load model: {}, current work path is {}", path.string(), fs::current_path().string());
 	throw std::runtime_error("Failed to load model: " + path.string());
     }
@@ -158,6 +158,14 @@ void ModelImporter::processMaterial(size_t assimpID, std::unique_ptr<Mesh>& mesh
 	return;
     } else {
 	std::shared_ptr<MaterialData> materialData = std::make_shared<MaterialData>();
+	{
+	    bool isTransparent = false;
+	    if (material->Get(AI_MATKEY_OPACITY, isTransparent) != aiReturn_SUCCESS) [[unlikely]] {
+		logger->error("Failed to get opacity from material with ID: {}", assimpID);
+	    }
+	    materialData->setTransparent(isTransparent);
+	}
+
 	auto appendTexture = [this, &mesh, &materialData](TextureUsageType type, aiMaterial* material) {
 	    aiTextureType textureType = aiTextureType_NONE;
 	    switch (type) {
@@ -196,7 +204,7 @@ size_t ModelImporter::getNodeCount() const {
     return scene->mRootNode->mNumChildren;
 }
 ModelImporter::ModelImporter(const fs::path& path) : importer{}, scene(loadModel(path)), modelRootPath(path.parent_path()) {
-	this->logger = RLLogger::getInstance();
+    this->logger = RLLogger::getInstance();
 }
 
 glcore::Transform decomposeTransform(const aiMatrix4x4& transform) {
