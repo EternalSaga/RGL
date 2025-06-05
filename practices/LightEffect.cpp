@@ -115,7 +115,7 @@ LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) {
     directionalLight->attachComponent<CommonLight>(glm::vec3{1.0f, 0.9f, 0.9f}, glm::vec3{0.2f, 0.2f, 0.2f}, 32.0f);
     directionalLight->attachComponent<DirectionalCompnent>(glm::vec3{1.0f, 0.0f, -1.0f});
     directionalLight->attachComponent<Transform>(glm::vec3{-1.5f, 0.0f, -10.0f}, glm::vec3{0.0f, 0.0f, 0.0f}, glm::vec3{1.0f, 1.0f, 1.0f});
-    importer = std::make_unique<ModelImporter>("assest\\bag\\backpack.obj");
+    importer = std::make_unique<ModelImporter>("assest\\transparent.glb");
     importer->processNodeBFS(modelShader);
 
     lightUBO = std::make_shared<UBO>(*modelShader, "DirectionLight");

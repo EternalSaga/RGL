@@ -386,3 +386,5 @@ FodyWeavers.xsd
 
 !assest/**/*.obj
 !assest/**/*.jpg
+
+.vscode/settings.json

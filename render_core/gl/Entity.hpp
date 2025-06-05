@@ -5,18 +5,11 @@
 #include <glm/glm.hpp>
 
 #include <memory>
-#include <string>
 #include "GLObj.hpp"
 
 #include "Mesh.hpp"
-#include "Material.hpp"
-#include "Shader.hpp"
 #include "ShaderManager.hpp"
 #include "EnttRegistry.hpp"
-#include "Light.hpp"
-#include "UBO.hpp"
-#include "EnttRelationship.hpp"
-#include "rllogger.hpp"
 #include "RenderQueue.hpp"
 namespace RGL {
 namespace glcore {
