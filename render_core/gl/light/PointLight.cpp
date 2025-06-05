@@ -1,7 +1,7 @@
 #include "PointLight.hpp"
 #include "Light.hpp"
 #include "Entity.hpp"
-
+#include "EnTTRelationship.hpp"
 namespace RGL {
 namespace glcore {
 

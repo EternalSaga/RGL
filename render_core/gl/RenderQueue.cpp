@@ -14,6 +14,7 @@ using namespace entt::literals;
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/norm.hpp>
 #include <glm/gtx/string_cast.hpp>
+#include "UBO.hpp"
 namespace RGL {
 using namespace glcore;
 
