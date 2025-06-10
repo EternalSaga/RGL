@@ -24,6 +24,7 @@ UBOTest::UBOTest(std::shared_ptr<Camera> cam) {
 
     lightUBO = std::make_shared<UBO>(*spotlightShader, "SpotLight");
     transformUBO = std::make_shared<UBO>(*spotlightShader, "Transforms");
+    
     ubos = std::make_shared<std::unordered_map<std::string, std::shared_ptr<UBO>>>();
     (*ubos)[lightUBO->getUboName()] = lightUBO;
     (*ubos)[transformUBO->getUboName()] = transformUBO;
@@ -120,9 +121,13 @@ LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) {
 
     lightUBO = std::make_shared<UBO>(*modelShader, "DirectionLight");
     transformUBO = std::make_shared<UBO>(*modelShader, "Transforms");
+    pbrUBO = std::make_shared<UBO>(*modelShader, "pbrUniformBlock");
+
     ubos = std::make_shared<std::unordered_map<std::string, std::shared_ptr<UBO>>>();
     (*ubos)[lightUBO->getUboName()] = lightUBO;
     (*ubos)[transformUBO->getUboName()] = transformUBO;
+    (*ubos)[pbrUBO->getUboName()] = pbrUBO;
+
     singleReg->emplace_or_replace<UBOs>(*directionalLight, ubos);
     importer->addUbos(ubos);
     // 检查下CommonRenderEntity数量

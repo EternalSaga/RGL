@@ -1,5 +1,6 @@
 #include "RenderQueue.hpp"
 #include <entt/core/fwd.hpp>
+#include <entt/entity/entity.hpp>
 #include <entt/entity/fwd.hpp>
 #include "EnttRegistry.hpp"
 #include "Entity.hpp"
@@ -15,6 +16,9 @@ using namespace entt::literals;
 #include <glm/gtx/norm.hpp>
 #include <glm/gtx/string_cast.hpp>
 #include "UBO.hpp"
+
+#include "Material.hpp"
+
 namespace RGL {
 using namespace glcore;
 
@@ -22,7 +26,7 @@ using namespace glcore;
 void renderSingleEntity(entt::entity entity, entt::registry* reg, bool isSkybox = false) {
 
 
-    // 先检查实体是否同时拥有UBOs和Simple Uniforms (不应该)
+
     bool hasUBOs = reg->all_of<UBOs>(entity);
     bool hasSimpleUniforms = reg->all_of<DiscreteUniforms>(entity) && !hasUBOs; // 确保不与UBOs冲突
 
@@ -42,21 +46,38 @@ void renderSingleEntity(entt::entity entity, entt::registry* reg, bool isSkybox 
     }
     const glm::mat4 MVP = proj.projMat * viewMatrix * transform.modelMatrix;
 
+    bool hasPbrComponents = reg->all_of<PBRComponent>(entity);
 
     if (hasUBOs) {
         auto& ubos = reg->get<UBOs>(entity);
         // 更新Transform UBO
-        auto transUbo = (*ubos)["Transforms"]; // 假设你的Transform UBO叫这个名字
+        auto transUbo = (*ubos)["Transforms"]; 
         if(transUbo) {
             const glm::mat3 inverseModelMatrix = glm::transpose(glm::inverse(glm::mat3(transform.modelMatrix)));
             transUbo->updateCpuUbo("modelMatrix", transform.modelMatrix);
             transUbo->updateCpuUbo("MVP", MVP);
             transUbo->updateCpuUbo("inverseModelMatrix", glm::mat4(inverseModelMatrix));
         }
+
+        if (hasPbrComponents) {
+            const auto& pbrComponent = reg->get<PBRComponent>(entity);
+            const auto pbrUbo = (*ubos)["pbrUniformBlock"]; 
+            if (pbrUbo) {
+                pbrUbo->updateCpuUbo("baseColor", pbrComponent.baseColorFactor);
+                pbrUbo->updateCpuUbo("metallicFactor", pbrComponent.metallicFactor);
+                pbrUbo->updateCpuUbo("roughnessFactor", pbrComponent.roughnessFactor);
+                pbrUbo->updateCpuUbo("u_hasBaseColorTexture",1); 
+                pbrUbo->updateCpuUbo("u_hasSpecularTexture",  0);
+            }
+            else {
+                auto logger = RLLogger::getInstance();
+                logger->warn("UBO CPU for pbrUniformBlock not found,entity {} has no pbrUniformBlock", entt::to_integral(entity));
+            }
+
         // 设置所有UBO
         for (auto& [blockName, ubo] : *ubos) {
             ubo->setUniform();
-        }
+        }}
     } else if (hasSimpleUniforms) {
         auto& discreteUniforms = reg->get<DiscreteUniforms>(entity);
         discreteUniforms["MVP"] = MVP; // 假设简单物体也需要MVP
@@ -166,4 +187,30 @@ void RenderQueueSystem::populateRenderqueues(RenderQueues& queues) {
     auto singleReg = EnttReg::getPrimaryRegistry();
     }
 
-}  // namespace RGL
+    void RenderQueueSystem::updatePBOUniforms() {
+        auto singleReg = EnttReg::getPrimaryRegistry();
+        auto viewForPbo = singleReg->view<UBOs,ShaderRef,PBRComponent>();
+
+        viewForPbo.each([&](auto entity, UBOs& ubos, ShaderRef& shaderRef, PBRComponent& pbrComponent) {
+            auto it = ubos->find("pbrUniformBlock");
+            if (it != ubos->end()) {
+                if (!pbrComponent.isEmpty) {
+                it->second->updateCpuUbo("baseColor", pbrComponent.baseColorFactor);
+                it->second->updateCpuUbo("metallicFactor", pbrComponent.metallicFactor);
+                it->second->updateCpuUbo("roughnessFactor", pbrComponent.roughnessFactor);
+                it->second->updateCpuUbo("u_hasBaseColorTexture", 1);
+                it->second->updateCpuUbo("u_hasSpecularTexture", 0);
+
+
+                }else {
+                    auto logger = RLLogger::getInstance();
+                    logger->error("PBR component is empty for entity {}", entt::to_integral(entity));
+                }
+
+                }
+                
+            }
+        );
+
+    }
+    }  // namespace RGL

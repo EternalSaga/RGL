@@ -1,4 +1,5 @@
 #include "ModelImporter.hpp"
+#include <assimp/color4.h>
 #include <spdlog/common.h>
 #include "EnTTRelationship.hpp"
 #include "GLTextures.hpp"
@@ -56,7 +57,9 @@ std::unique_ptr<Mesh> ModelImporter::processMesh(aiMesh* importedMesh) {
     if (importedMesh->mMaterialIndex >= 0) {
 	auto material = importedMesh->mMaterialIndex;
 
-	processMaterial(material, meshObj);
+		auto [materialData,pbrComponent]  = processMaterial(material);
+		meshObj->setMaterial(materialData);
+		meshObj->setPBRComponent(pbrComponent);
     }
 
     return std::move(meshObj);
@@ -112,17 +115,22 @@ void ModelImporter::processNodeBFS(ShaderRef shader) {
 	    // 检查mesh的material透明度
 	    if (meshObj->getMaterial()->getTransparent()) {
 		singleReg->emplace<RenderTags::Transparent>(currentEntity);
-	    }else {
+	    } else {
 		singleReg->emplace<RenderTags::Opaque>(currentEntity);
 	    }
-		singleReg->emplace<RenderTags::Renderable>(currentEntity, true);
-		auto vertArrayComp = VAOCreater::createMeshVAO(*meshObj, *shader);
+	    singleReg->emplace<RenderTags::Renderable>(currentEntity, true);
+	    auto vertArrayComp = VAOCreater::createMeshVAO(*meshObj, *shader);
 	    auto [vertCount, idxOffset] = meshObj->getIdicesCountAndOffset();
 	    singleReg->emplace<VertArrayComponent>(currentEntity, std::move(vertArrayComp), vertCount, idxOffset);
 
 	    const auto sampler = SamplerCreater::createSamplers(*meshObj, *shader);
 
 	    singleReg->emplace<SamplerCreater::Samplers>(currentEntity, sampler);
+
+		const auto pbrComponent = meshObj->getPBRComponent();
+		if (!pbrComponent.isEmpty) {
+		    singleReg->emplace<PBRComponent>(currentEntity, pbrComponent);
+		}
 	}
     }
 
@@ -133,24 +141,23 @@ void ModelImporter::processNodeBFS(ShaderRef shader) {
     for (auto& [node, entity] : nodeMap) {
 	singleReg->emplace<Transform>(entity, decomposeTransform(node->mTransformation));
 	logger->trace("Model node local transform for entity {}, mat4 \na1:{},a2:{},a3:{},a4:{}\nb1:{},b2:{},b3:{}b4:{}\nc1:{},c2:{},c3:{},c4:{}\nd1:{},d2:{},d3:{},d4:{}",
-		(entt::to_integral(entity)),
-node->mTransformation.a1,
-	node->mTransformation.a2,
-	node->mTransformation.a3,
-	node->mTransformation.a4,
-	node->mTransformation.b1,
-	node->mTransformation.b2,
-	node->mTransformation.b3,
-	node->mTransformation.b4,
-		node->mTransformation.c1,
-	node->mTransformation.c2,
-	node->mTransformation.c3,
-	node->mTransformation.c4,
-		node->mTransformation.d1,
-	node->mTransformation.d2,
-	node->mTransformation.d3,
-	node->mTransformation.d4
-	);
+	    (entt::to_integral(entity)),
+	    node->mTransformation.a1,
+	    node->mTransformation.a2,
+	    node->mTransformation.a3,
+	    node->mTransformation.a4,
+	    node->mTransformation.b1,
+	    node->mTransformation.b2,
+	    node->mTransformation.b3,
+	    node->mTransformation.b4,
+	    node->mTransformation.c1,
+	    node->mTransformation.c2,
+	    node->mTransformation.c3,
+	    node->mTransformation.c4,
+	    node->mTransformation.d1,
+	    node->mTransformation.d2,
+	    node->mTransformation.d3,
+	    node->mTransformation.d4);
     }
 #ifndef NDEBUG
     for (auto& [node, entity] : nodeMap) {
@@ -172,30 +179,38 @@ const aiScene* ModelImporter::loadModel(const fs::path& path) {
     }
     return scene;
 }
-void ModelImporter::processMaterial(size_t assimpID, std::unique_ptr<Mesh>& mesh) {
+std::tuple<std::shared_ptr<MaterialData>,PBRComponent> ModelImporter::processMaterial(size_t assimpID) {
     aiMaterial* material = scene->mMaterials[assimpID];
 
-    // 确定assimpid_materials里没有这个id,
-    if (assimpid_materials.find(assimpID) != assimpid_materials.end()) {
-	mesh->setMaterial(assimpid_materials[assimpID]);
-	return;
-    } else {
 	std::shared_ptr<MaterialData> materialData = std::make_shared<MaterialData>();
 	{
 	    bool isTransparent = false;
-		float opacity = 1.0f;
+	    float opacity = 1.0f;
 	    if (material->Get(AI_MATKEY_OPACITY, opacity) != aiReturn_SUCCESS) [[unlikely]] {
 		logger->error("Failed to get opacity from material with ID: {}", assimpID);
 	    }
 
-		if( opacity < 0.999f) {
-		    isTransparent = true;
-		}
-
+	    if (opacity < 0.999f) {
+		isTransparent = true;
+	    }
 	    materialData->setTransparent(isTransparent);
 	}
 
-	auto appendTexture = [this, &mesh, &materialData](TextureUsageType type, aiMaterial* material) {
+	aiColor4D baseColorFactorAI;
+	PBRComponent pbrComponent;
+
+	if (material->Get(AI_MATKEY_BASE_COLOR, baseColorFactorAI) == AI_SUCCESS) {
+	    pbrComponent.baseColorFactor = glm::vec4(baseColorFactorAI.r, baseColorFactorAI.g, baseColorFactorAI.b, baseColorFactorAI.a);
+
+		pbrComponent.isEmpty = false;
+
+	    if (baseColorFactorAI.a < 0.999f) {
+		materialData->setTransparent(true);
+	    }
+	} 
+
+
+	auto appendTexture = [this,  &materialData](TextureUsageType type, aiMaterial* material) {
 	    aiTextureType textureType = aiTextureType_NONE;
 	    switch (type) {
 	    case TextureUsageType::DIFFUSE:
@@ -217,17 +232,15 @@ void ModelImporter::processMaterial(size_t assimpID, std::unique_ptr<Mesh>& mesh
 		material->GetTexture(textureType, i, &texturePath);
 		fs::path texturePathStr = this->modelRootPath / fs::path((texturePath.C_Str()));  // 来自于assimp的texture路径很可能是相对路径。而相对路径和进程的当前路径可能往往不一样,所以需要拼接模型根路径和纹理路径。这里假设纹理文件和模型文件在同一目录下，或者在子目录中。如果不在同一目录下，可能需要额外的配置来指定纹理文件的位置。
 		auto texture = textureCache.getTexture(texturePathStr, type);
-		if (texture) {
-		    materialData->appendTexture(texture);
-		}
 	    }
 	};
 	appendTexture(TextureUsageType::DIFFUSE, material);
 	appendTexture(TextureUsageType::NORMAL, material);
 	appendTexture(TextureUsageType::SPECULAR, material);
 	appendTexture(TextureUsageType::AMBIENT, material);
-	mesh->setMaterial(materialData);
-    }
+	
+    return std::tuple<std::shared_ptr<MaterialData>, PBRComponent>(materialData, pbrComponent);
+
 }
 size_t ModelImporter::getNodeCount() const {
     return scene->mRootNode->mNumChildren;
@@ -244,28 +257,27 @@ glcore::Transform decomposeTransform(const aiMatrix4x4& transform) {
     glm::vec3 scale;
 
     glm::mat4 glmTransform(
-        transform.a1, transform.b1, transform.c1, transform.d1, // Col 1
-        transform.a2, transform.b2, transform.c2, transform.d2, // Col 2
-        transform.a3, transform.b3, transform.c3, transform.d3, // Col 3
-        transform.a4, transform.b4, transform.c4, transform.d4  // Col 4
+	transform.a1, transform.b1, transform.c1, transform.d1,	 // Col 1
+	transform.a2, transform.b2, transform.c2, transform.d2,	 // Col 2
+	transform.a3, transform.b3, transform.c3, transform.d3,	 // Col 3
+	transform.a4, transform.b4, transform.c4, transform.d4	 // Col 4
     );
 
-	 if (!glm::decompose(glmTransform, scale, quaternion, position, skew, perspective)) {
-        // 如果分解失败 (例如，矩阵是奇异的或包含非仿射变换，如纯投影)
-        auto logger = RLLogger::getInstance();
-        logger->error("glm::decompose failed for matrix!");
-        throw std::invalid_argument("glm::decompose failed for matrix!");
+    if (!glm::decompose(glmTransform, scale, quaternion, position, skew, perspective)) {
+	// 如果分解失败 (例如，矩阵是奇异的或包含非仿射变换，如纯投影)
+	auto logger = RLLogger::getInstance();
+	logger->error("glm::decompose failed for matrix!");
+	throw std::invalid_argument("glm::decompose failed for matrix!");
     }
 
     glm::vec3 eulerAngleRad = glm::eulerAngles(quaternion);
 
     auto logger = RLLogger::getInstance();
-    logger->trace("Input aiMatrix4x4: a4={}, b4={}, c4={}", transform.a4, transform.b4, transform.c4); // 打印原始位移部分
+    logger->trace("Input aiMatrix4x4: a4={}, b4={}, c4={}", transform.a4, transform.b4, transform.c4);	// 打印原始位移部分
     logger->trace("Decomposed: Position: {}, Euler Angle (Rad): {}, Scale: {}", glm::to_string(position), glm::to_string(eulerAngleRad), glm::to_string(scale));
 
     // Transform 类期望角度
     return Transform(position, glm::degrees(eulerAngleRad), scale);
-
 }
 void ModelImporter::addUbos(UBOs ubos) {
     if (this->nodeMap.size() == 0) {

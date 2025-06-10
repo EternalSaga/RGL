@@ -7,6 +7,7 @@
 
 #include "Shader.hpp"
 
+#include "UBO.hpp"
 #include "api_types.hpp"
 #include <glad/glad.h>
 #include <glm/glm.hpp>
@@ -61,6 +62,8 @@ class LoadModelTest : public Renderer,public SingleReg{
 
     std::shared_ptr<UBO> lightUBO;
     std::shared_ptr<UBO> transformUBO;
+
+    std::shared_ptr<UBO> pbrUBO;
 
     std::unique_ptr<ModelImporter> importer;
 public:
