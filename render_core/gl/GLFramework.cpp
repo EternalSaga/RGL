@@ -4,6 +4,7 @@
 
 #include <imgui_impl_opengl3.h>
 #include "ShaderManager.hpp"
+#include "rllogger.hpp"
 namespace RGL {
 namespace glcore {
 
@@ -45,6 +46,12 @@ GLContext::GLContext(SDL_Window* windowHandler, GLint viewPortWidth,
     if (!SDL_GL_LoadLibrary(NULL)) {
 	throw std::runtime_error(SDL_GetError());
     }
+
+    GLint major, minor;
+    glGetIntegerv(GL_MAJOR_VERSION, &major);
+    glGetIntegerv(GL_MINOR_VERSION, &minor);
+    
+    RLLogger::getInstance()->info("Initialized OpenGL {}.{}", major, minor);
 
     glCall(glViewport, 0, 0, viewPortWidth, viewPortHeight);
     glCall(glClearColor, 0.2f, 0.3f, 0.3f, 1.0f);

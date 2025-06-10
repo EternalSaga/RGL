@@ -10,9 +10,12 @@
 #include <filesystem>
 #include <memory>
 #include <queue>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 #include "RenderQueue.hpp"
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/string_cast.hpp>
 namespace RGL {
 namespace io {
 
@@ -129,11 +132,31 @@ void ModelImporter::processNodeBFS(ShaderRef shader) {
 
     for (auto& [node, entity] : nodeMap) {
 	singleReg->emplace<Transform>(entity, decomposeTransform(node->mTransformation));
+	logger->trace("Model node local transform for entity {}, mat4 \na1:{},a2:{},a3:{},a4:{}\nb1:{},b2:{},b3:{}b4:{}\nc1:{},c2:{},c3:{},c4:{}\nd1:{},d2:{},d3:{},d4:{}",
+		(entt::to_integral(entity)),
+node->mTransformation.a1,
+	node->mTransformation.a2,
+	node->mTransformation.a3,
+	node->mTransformation.a4,
+	node->mTransformation.b1,
+	node->mTransformation.b2,
+	node->mTransformation.b3,
+	node->mTransformation.b4,
+		node->mTransformation.c1,
+	node->mTransformation.c2,
+	node->mTransformation.c3,
+	node->mTransformation.c4,
+		node->mTransformation.d1,
+	node->mTransformation.d2,
+	node->mTransformation.d3,
+	node->mTransformation.d4
+	);
     }
 #ifndef NDEBUG
     for (auto& [node, entity] : nodeMap) {
 	logger->log_if(spdlog::level::debug, nullptr == singleReg->try_get<VertArrayComponent>(entity), "Entity {} not have VertArrayComponent", entt::to_integral(entity));
 	logger->log_if(spdlog::level::debug, nullptr == singleReg->try_get<DiscreteUniforms>(entity), "Entity {} not have DiscreteUniforms,perhaps it is has no Textures", entt::to_integral(entity));
+	// 一般来说，在这里没有UBOs是符合预期的，因为addUbos需要手动之后调用
 	logger->log_if(spdlog::level::debug, nullptr == singleReg->try_get<UBOs>(entity), "Entity {} not have UBOs", entt::to_integral(entity));
 	logger->log_if(spdlog::level::debug, nullptr == singleReg->try_get<ShaderRef>(entity), "Entity {} not have ShaderRef", entt::to_integral(entity));
 	logger->log_if(spdlog::level::debug, nullptr == singleReg->try_get<Relationship>(entity), "Entity {} not have Relationship", entt::to_integral(entity));
@@ -220,13 +243,29 @@ glcore::Transform decomposeTransform(const aiMatrix4x4& transform) {
     glm::vec4 perspective;
     glm::vec3 scale;
 
-    glm::decompose(glm::make_mat4(&transform.a1), scale, quaternion, position, skew, perspective);
+    glm::mat4 glmTransform(
+        transform.a1, transform.b1, transform.c1, transform.d1, // Col 1
+        transform.a2, transform.b2, transform.c2, transform.d2, // Col 2
+        transform.a3, transform.b3, transform.c3, transform.d3, // Col 3
+        transform.a4, transform.b4, transform.c4, transform.d4  // Col 4
+    );
 
-    glm::mat4 rotation = glm::toMat4(quaternion);
-    glm::vec3 eulerAngle;
-    glm::extractEulerAngleXYZ(rotation, eulerAngle.x, eulerAngle.y, eulerAngle.z);
+	 if (!glm::decompose(glmTransform, scale, quaternion, position, skew, perspective)) {
+        // 如果分解失败 (例如，矩阵是奇异的或包含非仿射变换，如纯投影)
+        auto logger = RLLogger::getInstance();
+        logger->error("glm::decompose failed for matrix!");
+        throw std::invalid_argument("glm::decompose failed for matrix!");
+    }
 
-    return Transform(position, eulerAngle, scale);
+    glm::vec3 eulerAngleRad = glm::eulerAngles(quaternion);
+
+    auto logger = RLLogger::getInstance();
+    logger->trace("Input aiMatrix4x4: a4={}, b4={}, c4={}", transform.a4, transform.b4, transform.c4); // 打印原始位移部分
+    logger->trace("Decomposed: Position: {}, Euler Angle (Rad): {}, Scale: {}", glm::to_string(position), glm::to_string(eulerAngleRad), glm::to_string(scale));
+
+    // Transform 类期望角度
+    return Transform(position, glm::degrees(eulerAngleRad), scale);
+
 }
 void ModelImporter::addUbos(UBOs ubos) {
     if (this->nodeMap.size() == 0) {
