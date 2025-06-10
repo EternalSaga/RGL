@@ -160,9 +160,15 @@ void ModelImporter::processMaterial(size_t assimpID, std::unique_ptr<Mesh>& mesh
 	std::shared_ptr<MaterialData> materialData = std::make_shared<MaterialData>();
 	{
 	    bool isTransparent = false;
-	    if (material->Get(AI_MATKEY_OPACITY, isTransparent) != aiReturn_SUCCESS) [[unlikely]] {
+		float opacity = 1.0f;
+	    if (material->Get(AI_MATKEY_OPACITY, opacity) != aiReturn_SUCCESS) [[unlikely]] {
 		logger->error("Failed to get opacity from material with ID: {}", assimpID);
 	    }
+
+		if( opacity < 0.999f) {
+		    isTransparent = true;
+		}
+
 	    materialData->setTransparent(isTransparent);
 	}
 

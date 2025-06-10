@@ -6,14 +6,17 @@ in vec3 normal;
 in vec3 worldPosition;
 uniform sampler2D baseColorTexture;
 uniform sampler2D specularTexture;
+
+
+uniform vec4 u_baseColorFactor;      // 基础颜色因子 (R,G,B,A)
+uniform float u_specularFactor;      // 高光强度因子 (代替高光贴图)
+
+
 layout(std140) uniform DirectionLight{
 uniform vec3 ambient;
-
 uniform vec3 lightColor;
 uniform vec3 globalLightDirection;
-
 uniform vec3 cameraPos;
-
 uniform float spotIntensity;
 };
 
