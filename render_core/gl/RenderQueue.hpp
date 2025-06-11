@@ -42,7 +42,7 @@ class RenderQueueSystem {
     static void processOpaqueQueue(const std::vector<entt::entity>& queue);
     static void processTransparentQueue(const std::vector<entt::entity>& queue);
     static void processSkyboxQueue(const std::vector<entt::entity>& queue);
-
+    static void updatePBOUniforms();
 };
 
 }  // namespace RGL

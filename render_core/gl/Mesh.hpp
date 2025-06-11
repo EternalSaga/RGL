@@ -30,6 +30,7 @@ class Mesh {
 
 
     std::shared_ptr<MaterialData> material;
+    PBRComponent pbrComponent;
 
     bool materialHasSet = false;
     
@@ -49,6 +50,8 @@ class Mesh {
 
     void setMaterial(std::shared_ptr<MaterialData> material);
 
+    void setPBRComponent(const PBRComponent& pbrComponent);
+    PBRComponent getPBRComponent() const;
 
     std::shared_ptr<MaterialData> getMaterial() const;
 };
@@ -67,6 +70,7 @@ namespace SamplerCreater{
     };
 
     struct Sampler{
+
         std::string samplerName;
         GLint textureUnit;
         std::shared_ptr<Texture> texture;

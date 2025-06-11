@@ -6,21 +6,42 @@ in vec3 normal;
 in vec3 worldPosition;
 uniform sampler2D baseColorTexture;
 uniform sampler2D specularTexture;
+
+
 layout(std140) uniform DirectionLight{
 uniform vec3 ambient;
-
 uniform vec3 lightColor;
 uniform vec3 globalLightDirection;
-
 uniform vec3 cameraPos;
-
 uniform float spotIntensity;
 };
+
+layout(std140) uniform pbrUniformBlock{
+	
+	vec4 baseColor;
+	float metallicFactor;
+	float roughnessFactor;
+	int u_hasBaseColorTexture;
+	int u_hasSpecularTexture;
+};
+
 
 
 void main()
 {
-	vec3 objectColor = texture(baseColorTexture, uv).rgb;
+	vec3 objectColor;
+	if(bool(u_hasBaseColorTexture)){
+		objectColor = baseColor.rgb;
+	}else{
+		objectColor = texture(baseColorTexture, uv).rgb;
+		
+	}
+
+	float alpha = 1.0;
+
+	if(bool(u_hasBaseColorTexture)){
+		alpha = baseColor.a;
+	}
 
 	vec3 normal = normalize(normal);
 	vec3 lightDir = normalize(globalLightDirection);
@@ -42,8 +63,8 @@ void main()
 	
 	vec3 ambient = ambient * objectColor;
 
-	vec4 finalColor = vec4(ambient + diffuseColor + specularColor * flag, 1.0);
-	//vec4 finalColor = vec4(objectColor, 1.0);
+	vec4 finalColor = vec4(ambient + diffuseColor + specularColor * flag, alpha);
+
 
 	FragColor = finalColor;
 }

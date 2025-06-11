@@ -49,13 +49,16 @@ void CommonRenderEntity::update() {
     updateTransforms();
     modelSystemUBO();
     modelSystemSimple();
+	
     updateSpotLight();
     updatePointLight();
     updateDirLight();
-    //renderVertexArray();
+
 
 	RenderQueueSystem::populateRenderqueues(renderQueues);
 	RenderQueueSystem::processOpaqueQueue(renderQueues.opaqueQueue);
+	RenderQueueSystem::processTransparentQueue(renderQueues.transparentQueue);
+	
 }
 using namespace entt::literals;
 void CommonRenderEntity::modelSystemUBO() {

@@ -36,9 +36,9 @@ class ModelImporter : public SingleReg {
     Assimp::Importer importer;	// importer管理了所有读取数据的生命周期
 
     const aiScene* scene;
-    std::map<size_t, std::shared_ptr<MaterialData>> assimpid_materials;
+
     const aiScene* loadModel(const fs::path& path);
-    void processMaterial(size_t assimpID, std::unique_ptr<Mesh>& mesh);
+    std::tuple<std::shared_ptr<MaterialData>,PBRComponent> processMaterial(size_t assimpID);
     TextureCache textureCache;
     fs::path modelRootPath;
     std::unique_ptr<Mesh> processMesh(aiMesh* importedMesh);
