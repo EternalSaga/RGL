@@ -56,6 +56,8 @@ void CommonRenderEntity::update() {
 
 
 	RenderQueueSystem::populateRenderqueues(renderQueues);
+
+	RenderQueueSystem::processDisableCullingQueue(renderQueues.disableCullingQueue);
 	RenderQueueSystem::processOpaqueQueue(renderQueues.opaqueQueue);
 	RenderQueueSystem::processTransparentQueue(renderQueues.transparentQueue);
 	
@@ -112,7 +114,7 @@ void CommonRenderEntity::renderVertexArray() {
 	for (auto [blockName, ubo] : *ubos) {
 	    ubo->setUniform();
 	}
-
+	
 	
 	glCall(glBindVertexArray, *mesh.vao);
 	SamplerCreater::UseTextures(samplers);

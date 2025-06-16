@@ -12,6 +12,7 @@
 #include <memory>
 #include <rllogger.hpp>
 #include "Entity.hpp"
+#include "RenderQueue.hpp"
 #include "ShaderManager.hpp"
 #include "UBO.hpp"
 #include "VertexDescriptor.hpp"
@@ -55,6 +56,24 @@ class ModelImporter : public SingleReg {
     void processNodeBFS(ShaderRef shader);
 
     void addUbos(UBOs ubos);
+
+    
+    
+    //默认添加的RenderTag是Opaque，在主循环中会被加入到opaqueQueue中，使用本方法可以添加其他Tag并加入到对应的Queue中，
+    // 并移除默认的Opaque Tag
+
+    template<typename T>
+    void attachComponentAndRemoveDefaultTag(const T& component){
+        if (nodeMap.empty()){
+            this->logger->error("No nodes to attach components");
+            throw std::runtime_error("No nodes to attach components");
+        }
+        for(auto [key,value]: nodeMap) {
+            singleReg->remove<RenderTags::Opaque>(value);
+            singleReg->emplace<T>(value,component);
+        }
+    }
+
 };
 }  // namespace io
 }  // namespace RGL

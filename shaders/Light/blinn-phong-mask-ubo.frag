@@ -47,7 +47,9 @@ void main()
 		alpha = texture(baseColorTexture, uv).a;
 	}
 
-	if(alpha < 1.0){
+	// 对于草地来说，不要使用过于严格的alpha剔除。
+	// 草地的纹理为了边缘看起来自然、柔和，边缘部分通常会有半透明的像素（比如alpha值为0.8, 0.5, 0.1等）。
+	if(alpha < 0.1){
 		discard;
 	}
 

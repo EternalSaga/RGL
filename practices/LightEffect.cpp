@@ -120,9 +120,12 @@ LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) {
     importer = std::make_unique<ModelImporter>("assest\\grass_variations.glb");
     importer->processNodeBFS(modelShader);
 
+
     lightUBO = std::make_shared<UBO>(*modelShader, "DirectionLight");
     transformUBO = std::make_shared<UBO>(*modelShader, "Transforms");
     pbrUBO = std::make_shared<UBO>(*modelShader, "pbrUniformBlock");
+
+    importer->attachComponentAndRemoveDefaultTag(RenderTags::DisableCulling{});
 
     ubos = std::make_shared<std::unordered_map<std::string, std::shared_ptr<UBO>>>();
     (*ubos)[lightUBO->getUboName()] = lightUBO;

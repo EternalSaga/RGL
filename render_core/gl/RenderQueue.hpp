@@ -17,6 +17,7 @@ struct UIElement {};
 struct ShadowCaster {};
 struct ShadowReceiver {};
 struct StencilOutlined {};
+struct DisableCulling {};
 }  // namespace RenderTags
 
 struct RenderQueues {
@@ -27,6 +28,7 @@ struct RenderQueues {
     std::vector<entt::entity> uiQueue;
     std::vector<entt::entity> shadowCasterQueue;
     std::vector<entt::entity> shadowReceiverQueue;
+    std::vector<entt::entity> disableCullingQueue;
 
     RenderQueues() = default;
     RenderQueues(const RenderQueues&) = delete;
@@ -42,6 +44,7 @@ class RenderQueueSystem {
     static void populateRenderqueues(RenderQueues& queues);
     static void processOpaqueQueue(const std::vector<entt::entity>& queue);
     static void processTransparentQueue(const std::vector<entt::entity>& queue);
+    static void processDisableCullingQueue(const std::vector<entt::entity>& queue);
     static void processSkyboxQueue(const std::vector<entt::entity>& queue);
     static void updatePBOUniforms();
 };
