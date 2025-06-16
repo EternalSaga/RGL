@@ -57,9 +57,9 @@ std::unique_ptr<Mesh> ModelImporter::processMesh(aiMesh* importedMesh) {
     if (importedMesh->mMaterialIndex >= 0) {
 	auto material = importedMesh->mMaterialIndex;
 
-		auto [materialData,pbrComponent]  = processMaterial(material);
-		meshObj->setMaterial(materialData);
-		meshObj->setPBRComponent(pbrComponent);
+	auto [materialData, pbrComponent] = processMaterial(material);
+	meshObj->setMaterial(materialData);
+	meshObj->setPBRComponent(pbrComponent);
     }
 
     return std::move(meshObj);
@@ -127,10 +127,10 @@ void ModelImporter::processNodeBFS(ShaderRef shader) {
 
 	    singleReg->emplace<SamplerCreater::Samplers>(currentEntity, sampler);
 
-		const auto pbrComponent = meshObj->getPBRComponent();
-		if (!pbrComponent.isEmpty) {
-		    singleReg->emplace<PBRComponent>(currentEntity, pbrComponent);
-		}
+	    const auto pbrComponent = meshObj->getPBRComponent();
+	    if (!pbrComponent.isEmpty) {
+		singleReg->emplace<PBRComponent>(currentEntity, pbrComponent);
+	    }
 	}
     }
 
@@ -173,74 +173,81 @@ void ModelImporter::processNodeBFS(ShaderRef shader) {
 }
 const aiScene* ModelImporter::loadModel(const fs::path& path) {
     const auto scene = importer.ReadFile(path.string(), aiProcess_Triangulate | aiProcess_GenNormals);
+    this->logger = RLLogger::getInstance();
     if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
 	logger->error("Failed to load model: {}, current work path is {}", path.string(), fs::current_path().string());
 	throw std::runtime_error("Failed to load model: " + path.string());
     }
+
     return scene;
 }
-std::tuple<std::shared_ptr<MaterialData>,PBRComponent> ModelImporter::processMaterial(size_t assimpID) {
+std::tuple<std::shared_ptr<MaterialData>, PBRComponent> ModelImporter::processMaterial(size_t assimpID) {
     aiMaterial* material = scene->mMaterials[assimpID];
 
-	std::shared_ptr<MaterialData> materialData = std::make_shared<MaterialData>();
-	{
-	    bool isTransparent = false;
-	    float opacity = 1.0f;
-	    if (material->Get(AI_MATKEY_OPACITY, opacity) != aiReturn_SUCCESS) [[unlikely]] {
-		logger->error("Failed to get opacity from material with ID: {}", assimpID);
-	    }
-
-	    if (opacity < 0.999f) {
-		isTransparent = true;
-	    }
-	    materialData->setTransparent(isTransparent);
+    std::shared_ptr<MaterialData> materialData = std::make_shared<MaterialData>();
+    {
+	bool isTransparent = false;
+	float opacity = 1.0f;
+	if (material->Get(AI_MATKEY_OPACITY, opacity) != aiReturn_SUCCESS) [[unlikely]] {
+	    logger->error("Failed to get opacity from material with ID: {}", assimpID);
 	}
 
-	aiColor4D baseColorFactorAI;
-	PBRComponent pbrComponent;
+	if (opacity < 0.999f) {
+	    isTransparent = true;
+	}
+	materialData->setTransparent(isTransparent);
+    }
 
-	if (material->Get(AI_MATKEY_BASE_COLOR, baseColorFactorAI) == AI_SUCCESS) {
-	    pbrComponent.baseColorFactor = glm::vec4(baseColorFactorAI.r, baseColorFactorAI.g, baseColorFactorAI.b, baseColorFactorAI.a);
+    aiColor4D baseColorFactorAI;
+    PBRComponent pbrComponent;
 
-		pbrComponent.isEmpty = false;
+    if (material->Get(AI_MATKEY_BASE_COLOR, baseColorFactorAI) == AI_SUCCESS) {
+	pbrComponent.baseColorFactor = glm::vec4(baseColorFactorAI.r, baseColorFactorAI.g, baseColorFactorAI.b, baseColorFactorAI.a);
 
-	    if (baseColorFactorAI.a < 0.999f) {
-		materialData->setTransparent(true);
-	    }
-	} 
+	pbrComponent.isEmpty = false;
 
+	if (baseColorFactorAI.a < 0.999f) {
+	    materialData->setTransparent(true);
+	}
+    }
 
-	auto appendTexture = [this,  &materialData](TextureUsageType type, aiMaterial* material) {
-	    aiTextureType textureType = aiTextureType_NONE;
-	    switch (type) {
-	    case TextureUsageType::DIFFUSE:
-		textureType = aiTextureType_DIFFUSE;
-		break;
-	    case TextureUsageType::NORMAL:
-		textureType = aiTextureType_NORMALS;
-		break;
-	    case TextureUsageType::SPECULAR:
-		textureType = aiTextureType_SPECULAR;
-		break;
-	    case TextureUsageType::AMBIENT:
-		textureType = aiTextureType_AMBIENT;
-		break;
-	    }
-	    const int textureCount = material->GetTextureCount(textureType);
-	    for (int i = 0; i < textureCount; i++) {
+    auto appendTexture = [this,&materialData](TextureUsageType type, aiMaterial* material) {
+	aiTextureType textureType = aiTextureType_NONE;
+	switch (type) {
+	case TextureUsageType::DIFFUSE:
+	    textureType = aiTextureType_DIFFUSE;
+	    break;
+	case TextureUsageType::NORMAL:
+	    textureType = aiTextureType_NORMALS;
+	    break;
+	case TextureUsageType::SPECULAR:
+	    textureType = aiTextureType_SPECULAR;
+	    break;
+	case TextureUsageType::AMBIENT:
+	    textureType = aiTextureType_AMBIENT;
+	    break;
+	}
+	const int textureCount = material->GetTextureCount(textureType);
+	for (int i = 0; i < textureCount; i++) {
+	    if (scene->mNumTextures == 0) {
 		aiString texturePath;
 		material->GetTexture(textureType, i, &texturePath);
 		fs::path texturePathStr = this->modelRootPath / fs::path((texturePath.C_Str()));  // 来自于assimp的texture路径很可能是相对路径。而相对路径和进程的当前路径可能往往不一样,所以需要拼接模型根路径和纹理路径。这里假设纹理文件和模型文件在同一目录下，或者在子目录中。如果不在同一目录下，可能需要额外的配置来指定纹理文件的位置。
 		auto texture = textureCache.getTexture(texturePathStr, type);
+		materialData->appendTexture(texture);
+	    } else {
+		const aiTexture* embeddedTexture = scene->mTextures[i];
+		auto texture = textureCache.getTexture(embeddedTexture, type);
+		materialData->appendTexture(texture);
 	    }
-	};
-	appendTexture(TextureUsageType::DIFFUSE, material);
-	appendTexture(TextureUsageType::NORMAL, material);
-	appendTexture(TextureUsageType::SPECULAR, material);
-	appendTexture(TextureUsageType::AMBIENT, material);
-	
-    return std::tuple<std::shared_ptr<MaterialData>, PBRComponent>(materialData, pbrComponent);
+	}
+    };
+    appendTexture(TextureUsageType::DIFFUSE, material);
+    appendTexture(TextureUsageType::NORMAL, material);
+    appendTexture(TextureUsageType::SPECULAR, material);
+    appendTexture(TextureUsageType::AMBIENT, material);
 
+    return std::tuple<std::shared_ptr<MaterialData>, PBRComponent>(materialData, pbrComponent);
 }
 size_t ModelImporter::getNodeCount() const {
     return scene->mRootNode->mNumChildren;

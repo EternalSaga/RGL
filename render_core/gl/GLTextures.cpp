@@ -1,5 +1,6 @@
 
 #include "GLTextures.hpp"
+#include <cstdint>
 #include "GLCheckError.hpp"
 #include "Helpers.hpp"
 #include "rllogger.hpp"
@@ -12,16 +13,28 @@
 namespace RGL {
 namespace io {
 
-LoadedImg::LoadedImg(const fs::path &imagePath) {
+LoadedImg::LoadedImg(const fs::path& imagePath):imgData(nullptr) {
     stbi_set_flip_vertically_on_load(true);
     imgData = stbi_load(imagePath.generic_string().c_str(), &width,
 	&height, &channels, STBI_rgb_alpha);
-	if (imgData==nullptr) {
-		auto logger = RLLogger::getInstance();
-		logger->error("Failed to load image: {}", imagePath.generic_string());
-		throw std::runtime_error("Failed to load image");
-	}
+    if (imgData == nullptr) {
+	auto logger = RLLogger::getInstance();
+	logger->error("Failed to load image: {}", imagePath.generic_string());
+	throw std::runtime_error("Failed to load image");
+    }
 }
+
+LoadedImg::LoadedImg(const aiTexture* embededtexture):imgData(nullptr) {
+    const uint8_t* buffer = reinterpret_cast<uint8_t*>(embededtexture->pcData);
+    stbi_set_flip_vertically_on_load(true);
+    this->imgData = stbi_load_from_memory(buffer, embededtexture->mWidth, &this->width, &this->height, &channels, STBI_rgb_alpha);
+    if (imgData == nullptr) {
+	auto logger = RLLogger::getInstance();
+	logger->error("Failed to load embedded image");
+	throw std::runtime_error("Failed to load embedded image");
+    }
+}
+
 LoadedImg::operator ImgRef() {
     return ImgRef(imgData, width, height, channels);
 }
@@ -69,12 +82,11 @@ Texture::Texture() {
 }
 
 void Texture::useTexture() {
-
-	setTextureUnit();
+    setTextureUnit();
     glCall(glBindTextureUnit, textureUnit, texture);
 }
 
-void Texture::setTextureUnit(){
+void Texture::setTextureUnit() {
     // 检查当前texture是否有对应的纹理单元
     textureUnit = this->unitsPool->popUnit();
     if (textureUnit == GL_INVLAID_TEXTURE_UNIT) {  // 当前纹理没有纹理单元绑定
@@ -82,17 +94,16 @@ void Texture::setTextureUnit(){
 	logger->error("no texture unit for this texture {}", this->textureName);
 	throw std::runtime_error("no texture unit for this texture");
     }
-
 }
 
 void Texture::disableTexture() {
     if (textureUnit != GL_INVLAID_TEXTURE_UNIT) {  // 检查是否分配了纹理单元
 	unitsPool->pushUnit(textureUnit);
-	textureUnit = GL_INVLAID_TEXTURE_UNIT;  // 重置纹理单元
+	textureUnit = GL_INVLAID_TEXTURE_UNIT;	// 重置纹理单元
     }
 }
 
-void Texture::set(const ImgRef &flippedImg,
+void Texture::set(const ImgRef& flippedImg,
     bool turnOnMipmap) {
     // 暂时不绑定任何纹理单元，所以放个-1
     textureUnit = GL_INVLAID_TEXTURE_UNIT;
@@ -171,34 +182,34 @@ Texture::~Texture() {
 void Texture::setUseType(TextureUsageType type) {
     usageType = type;
 }
-std::shared_ptr<Texture> TextureCache::getTexture(const fs::path &imagePath, TextureUsageType type) {
+std::shared_ptr<Texture> TextureCache::getTexture(const fs::path& imagePath, TextureUsageType type) {
     if (cache.find(imagePath) == cache.end()) {
 	cache[imagePath] = std::make_shared<Texture>();
-	cache[imagePath]->set(LoadedImg(imagePath),true);
+	cache[imagePath]->set(LoadedImg(imagePath), true);
 	cache[imagePath]->setUseType(type);
 	switch (type) {
-		case TextureUsageType::DIFFUSE:{
-			cache[imagePath]->setName("baseColorTexture");
-			break;
-		}
-		case TextureUsageType::SPECULAR:{
-			cache[imagePath]->setName("specularTexture");
-			break;
-		}
-		case TextureUsageType::NORMAL:{
-			cache[imagePath]->setName("normalTexture");
-			break;
-		}
-		case TextureUsageType::AMBIENT:{
-			cache[imagePath]->setName("ambentTexture");
-			break;
-		}
-		default:{
-			auto logger = RLLogger::getInstance();
-			logger->error("texture usage type not supported");
-			throw std::runtime_error("texture usage type not supported");
-			break;	
-		}
+	case TextureUsageType::DIFFUSE: {
+	    cache[imagePath]->setName("baseColorTexture");
+	    break;
+	}
+	case TextureUsageType::SPECULAR: {
+	    cache[imagePath]->setName("specularTexture");
+	    break;
+	}
+	case TextureUsageType::NORMAL: {
+	    cache[imagePath]->setName("normalTexture");
+	    break;
+	}
+	case TextureUsageType::AMBIENT: {
+	    cache[imagePath]->setName("ambentTexture");
+	    break;
+	}
+	default: {
+	    auto logger = RLLogger::getInstance();
+	    logger->error("texture usage type not supported");
+	    throw std::runtime_error("texture usage type not supported");
+	    break;
+	}
 	}
 
     } else {
@@ -214,35 +225,73 @@ std::shared_ptr<Texture> TextureCache::getTexture(const fs::path &imagePath, Tex
 
     return cache[imagePath];
 }
+std::shared_ptr<Texture> TextureCache::getTexture(const aiTexture* texture, TextureUsageType type) {
+    auto logger = RLLogger::getInstance();
+    if (aiCache.find(texture) != aiCache.end()) {
+	logger->trace("ai texture cache hit");
+	return aiCache[texture];
+    } else {
+	logger->trace("ai texture cache miss");
+	aiCache[texture] = std::make_shared<Texture>();
+	
+	aiCache[texture]->set(LoadedImg(texture), true);
+	aiCache[texture]->setUseType(type);
+	switch (type) {
+	case TextureUsageType::DIFFUSE: {
+	    aiCache[texture]->setName("baseColorTexture");
+	    break;
+	}
+	case TextureUsageType::SPECULAR: {
+	    aiCache[texture]->setName("specularTexture");
+	    break;
+	}
+	case TextureUsageType::NORMAL: {
+	    aiCache[texture]->setName("normalTexture");
+	    break;
+	}
+	case TextureUsageType::AMBIENT: {
+	    aiCache[texture]->setName("ambentTexture");
+	    break;
+	}
+	default: {
+	    auto logger = RLLogger::getInstance();
+	    logger->error("texture usage type not supported");
+	    throw std::runtime_error("texture usage type not supported");
+	    break;
+	}
+	}
 
+	return aiCache[texture];
+
+    }
+}
 TextureUsageType Texture::getUseType() {
     return usageType;
 }
-std::shared_ptr<Texture> TextureCache::getTexture(const ProgrammedTexture type,bool update) {
+std::shared_ptr<Texture> TextureCache::getTexture(const ProgrammedTexture type, bool update) {
     if (programmedTexturesCache.find(type) == programmedTexturesCache.end() || update) {
-		switch(type){
-	    case ProgrammedTexture::CHECKERBOARD:{
-			programmedTexturesCache[type] = std::make_shared<Texture>();
-			texture::CheckerBoard checkerboard{8,8};
-			programmedTexturesCache[type]->set(checkerboard.getTexture(), true);
-			programmedTexturesCache[type]->setUseType(TextureUsageType::DIFFUSE);
-			programmedTexturesCache[type]->setName("baseColorTexture");
-			break;
-		}
-		default:
-		auto logger = RLLogger::getInstance();
-		logger->error("programmed texture type not supported");
-			throw std::runtime_error("programmed texture type not supported");
-			break;	
+	switch (type) {
+	case ProgrammedTexture::CHECKERBOARD: {
+	    programmedTexturesCache[type] = std::make_shared<Texture>();
+	    texture::CheckerBoard checkerboard{8, 8};
+	    programmedTexturesCache[type]->set(checkerboard.getTexture(), true);
+	    programmedTexturesCache[type]->setUseType(TextureUsageType::DIFFUSE);
+	    programmedTexturesCache[type]->setName("baseColorTexture");
+	    break;
+	}
+	default:
+	    auto logger = RLLogger::getInstance();
+	    logger->error("programmed texture type not supported");
+	    throw std::runtime_error("programmed texture type not supported");
+	    break;
 	}
 
 	return programmedTexturesCache[type];
-}else {
+    } else {
 	auto logger = RLLogger::getInstance();
 	logger->trace("programmed texture cache hit");
 	return programmedTexturesCache[type];
-
-}
+    }
 }
 GLuint Texture::operator()() {
     return texture;

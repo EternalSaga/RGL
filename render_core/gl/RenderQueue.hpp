@@ -16,6 +16,7 @@ struct Skybox {};
 struct UIElement {};
 struct ShadowCaster {};
 struct ShadowReceiver {};
+struct StencilOutlined {};
 }  // namespace RenderTags
 
 struct RenderQueues {

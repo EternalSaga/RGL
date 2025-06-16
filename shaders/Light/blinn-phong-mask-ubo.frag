@@ -30,17 +30,25 @@ layout(std140) uniform pbrUniformBlock{
 void main()
 {
 	vec3 objectColor;
-	if(bool(u_hasBaseColorTexture)){
+
+	const bool usePBO = bool(u_hasBaseColorTexture) && bool(u_hasSpecularTexture);
+
+	if(usePBO){
 		objectColor = baseColor.rgb;
 	}else{
 		objectColor = texture(baseColorTexture, uv).rgb;
-		
 	}
 
 	float alpha = 1.0;
 
-	if(bool(u_hasBaseColorTexture)){
+	if(usePBO){
 		alpha = baseColor.a;
+	}else{
+		alpha = texture(baseColorTexture, uv).a;
+	}
+
+	if(alpha < 1.0){
+		discard;
 	}
 
 	vec3 normal = normalize(normal);

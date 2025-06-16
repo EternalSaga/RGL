@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include <assimp/material.h>
 #include <glad/glad.h>
 #include <memory>
 #include <mutex>
@@ -15,6 +16,8 @@
 #include <vector>
 #include <ctime>
 #include <filesystem>
+#include <assimp/Importer.hpp>
+#include <assimp/scene.h>
 
 namespace RGL {
 namespace io {
@@ -33,6 +36,7 @@ class LoadedImg {
 
    public:
     LoadedImg(const fs::path &imagePath);
+    LoadedImg(const aiTexture* embededtexture);
 
     operator ImgRef();
 
@@ -127,10 +131,14 @@ enum class ProgrammedTexture{
 class TextureCache {
     std::map<fs::path, std::shared_ptr<Texture>> cache;
     std::map<ProgrammedTexture, std::shared_ptr<Texture>> programmedTexturesCache;
+    std::map<const aiTexture*, std::shared_ptr<Texture>> aiCache;
    public:
     std::shared_ptr<Texture> getTexture(const fs::path &imagePath,TextureUsageType type);
 
     std::shared_ptr<Texture> getTexture(const ProgrammedTexture type,bool update = false);
+
+    std::shared_ptr<Texture> getTexture(const aiTexture* texture,TextureUsageType type);
+
 };
 
 }  // namespace glcore

@@ -9,6 +9,7 @@
 #include "Material.hpp"
 
 #include "LightEffect.hpp"
+#include <winuser.h>
 #include "ShaderManager.hpp"
 #include "rllogger.hpp"
 #include "UBO.hpp"
@@ -24,7 +25,7 @@ UBOTest::UBOTest(std::shared_ptr<Camera> cam) {
 
     lightUBO = std::make_shared<UBO>(*spotlightShader, "SpotLight");
     transformUBO = std::make_shared<UBO>(*spotlightShader, "Transforms");
-    
+
     ubos = std::make_shared<std::unordered_map<std::string, std::shared_ptr<UBO>>>();
     (*ubos)[lightUBO->getUboName()] = lightUBO;
     (*ubos)[transformUBO->getUboName()] = transformUBO;
@@ -116,7 +117,7 @@ LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) {
     directionalLight->attachComponent<CommonLight>(glm::vec3{1.0f, 0.9f, 0.9f}, glm::vec3{0.2f, 0.2f, 0.2f}, 32.0f);
     directionalLight->attachComponent<DirectionalCompnent>(glm::vec3{1.0f, 0.0f, -1.0f});
     directionalLight->attachComponent<Transform>(glm::vec3{-1.5f, 0.0f, -10.0f}, glm::vec3{0.0f, 0.0f, 0.0f}, glm::vec3{1.0f, 1.0f, 1.0f});
-    importer = std::make_unique<ModelImporter>("assest\\transparent.glb");
+    importer = std::make_unique<ModelImporter>("assest\\grass_variations.glb");
     importer->processNodeBFS(modelShader);
 
     lightUBO = std::make_shared<UBO>(*modelShader, "DirectionLight");

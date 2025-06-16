@@ -162,7 +162,7 @@ void TrackBallMouseKeyboardSystem::update() {
 	    }
 	} else if (sdlevent.type == SDL_EVENT_MOUSE_WHEEL) {
 	    // 设置camera缩放参数
-	    eularAngle.deltaScale = sdlevent.wheel.y;
+	    eularAngle.deltaScale = sdlevent.wheel.y * 0.5f;
 	} else if (sdlevent.type == SDL_EVENT_MOUSE_MOTION) {
 	    const SDL_MouseMotionEvent &cursorEvt = sdlevent.motion;
 	    mouseKeyboard.currentCursor = glm::vec2(cursorEvt.x, cursorEvt.y);
