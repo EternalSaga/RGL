@@ -110,7 +110,7 @@ LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) {
     this->cam = cam;
     ShaderSrcs modelShaderSrc = {
 	{SHADER_TYPE::VERTEX, {"shaders\\Light\\phong_ubo.vert"}},
-	{SHADER_TYPE::FRAGMENT, {"shaders\\Light\\blinn-phong-mask-ubo.frag"}}};
+	{SHADER_TYPE::FRAGMENT, {"shaders\\Light\\grass-fragment.frag"}}};
     this->modelShader = std::make_shared<Shader>(modelShaderSrc);
     directionalLight = std::make_unique<GeneralEntity>();
     // 光源entity
@@ -119,7 +119,6 @@ LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) {
     directionalLight->attachComponent<Transform>(glm::vec3{-1.5f, 0.0f, -10.0f}, glm::vec3{0.0f, 0.0f, 0.0f}, glm::vec3{1.0f, 1.0f, 1.0f});
     importer = std::make_unique<ModelImporter>("assest\\grass_variations.glb");
     importer->processNodeBFS(modelShader);
-
 
     lightUBO = std::make_shared<UBO>(*modelShader, "DirectionLight");
     transformUBO = std::make_shared<UBO>(*modelShader, "Transforms");

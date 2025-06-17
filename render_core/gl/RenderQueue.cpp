@@ -8,6 +8,7 @@
 #include "CameraECS.hpp"
 #include "DataPipeline.hpp"
 #include "GLCheckError.hpp"
+#include "GLObj.hpp"
 #include "Helpers.hpp"
 
 #include <entt/core/hashed_string.hpp>
@@ -87,8 +88,9 @@ void renderSingleEntity(entt::entity entity, entt::registry* reg, bool isSkybox 
 	// 或者这是一个逻辑错误，需要日志记录
     }
 
-    glCall(glBindVertexArray, *vertArray.vao);
-    SamplerCreater::UseTextures(samplers);
+    VAOScope vaoScope(*vertArray.vao);
+	SamplerCreater::SamplersScope samplersScope(samplers);
+
     for (const auto& sampler : samplers) {
 	shader->setUniform(sampler.samplerName, sampler.textureUnit);
     }
@@ -96,8 +98,7 @@ void renderSingleEntity(entt::entity entity, entt::registry* reg, bool isSkybox 
     RLLogger::getInstance()->log_if(spdlog::level::err, !glCall(glIsVertexArray, *(vertArray.vao)), "Mesh vao is not valid for entity {}", entt::to_integral(entity));
     glCall(glDrawElements, GL_TRIANGLES, vertArray.vertCount, GL_UNSIGNED_INT, reinterpret_cast<void*>(vertArray.idxOffset));
 
-    SamplerCreater::DisableTextures(samplers);
-    glCall(glBindVertexArray, 0);
+
 }
 
 void RenderQueues::clear() {

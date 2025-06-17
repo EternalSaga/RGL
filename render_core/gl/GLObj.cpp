@@ -238,5 +238,11 @@ void VAO::setDSA_interleaved(const GLuint vaoIdx, const GLuint vbo, FloatDescs d
 	}
     }
 }
+VAOScope::VAOScope(const GLuint vao) {
+    glCall(glBindVertexArray, vao);
+}
+VAOScope::~VAOScope() {
+    glCall(glBindVertexArray, 0);
+}
 }  // namespace glcore
 }  // namespace RGL

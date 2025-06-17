@@ -79,8 +79,14 @@ namespace SamplerCreater{
     using Samplers = std::vector<Sampler>;
 
     Samplers createSamplers(const Mesh& mesh, const Shader& shader);
-    void UseTextures(Samplers& samplers);
-    void DisableTextures(Samplers& samplers);
+
+    class SamplersScope{
+        Samplers& samplers;
+        public:
+	 SamplersScope(Samplers& samplers);
+
+	 ~SamplersScope();
+    };
 }
 
 }  // namespace glcore

@@ -10,10 +10,13 @@
 #include "UBO.hpp"
 #include "api_types.hpp"
 #include <glad/glad.h>
+#include <cstddef>
+#include <glm/fwd.hpp>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <memory>
+#include <vector>
 #include "Light.hpp"
 #include "ModelImporter.hpp"
 #include "Entity.hpp"
@@ -52,6 +55,10 @@ class UBOTest : public Renderer, public SingleReg {
 
 class LoadModelTest : public Renderer,public SingleReg{
 
+    static constexpr size_t grass_instance_count = 100;
+
+    std::vector<glm::mat4> instanceMatrices;
+
     ShaderRef modelShader;
 	std::shared_ptr<Camera> cam;
 	std::unique_ptr<CommonRenderEntity> modelEntity;
@@ -66,6 +73,10 @@ class LoadModelTest : public Renderer,public SingleReg{
     std::shared_ptr<UBO> pbrUBO;
 
     std::unique_ptr<ModelImporter> importer;
+
+    void initInstanceMatrices();
+
+    
 public:
     LoadModelTest(std::shared_ptr<Camera> cam);
     void operator()() override;

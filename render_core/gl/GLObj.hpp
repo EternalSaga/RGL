@@ -235,5 +235,13 @@ class VAO {
     void addEBO(GLuint vaoIdx, GLuint ebo);
     void addEBO(GLuint ebo);
 };
+
+
+class VAOScope {
+    public:
+     VAOScope(const GLuint vao);
+     ~VAOScope();
+};
+
 }  // namespace glcore
 }  // namespace RGL
