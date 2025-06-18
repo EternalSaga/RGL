@@ -6,15 +6,20 @@
 namespace RGL {
 namespace glcore {
 
-struct InstanceComponent {
-    std::unique_ptr<VBO> instanceVBO;
-    std::vector<glm::mat4> instanceMatrices;
+struct InstancedRenderingComponent {
+    std::unique_ptr<VBO> instanceVBO; // 指向GPU数据的句柄
+    size_t instanceCount;             // 实例数量，用于glDraw*Instanced
 };
 
 
-namespace InstanceHelper {
-
-    InstanceComponent makeRandomInstanceComponent(size_t numInstances);
+namespace InstanceFactory {
+    std::vector<glm::mat4> generateRandomTransforms(
+    size_t numInstances, 
+    const glm::vec3& minPos, 
+    const glm::vec3& maxPos,
+    float minScale, 
+    float maxScale);
+   InstancedRenderingComponent createComponent(const std::vector<glm::mat4>& instanceMatrices);
 }
 
 }

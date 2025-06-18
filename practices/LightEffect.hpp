@@ -55,10 +55,6 @@ class UBOTest : public Renderer, public SingleReg {
 
 class LoadModelTest : public Renderer,public SingleReg{
 
-    static constexpr size_t grass_instance_count = 100;
-
-    std::vector<glm::mat4> instanceMatrices;
-
     ShaderRef modelShader;
 	std::shared_ptr<Camera> cam;
 	std::unique_ptr<CommonRenderEntity> modelEntity;
@@ -74,7 +70,6 @@ class LoadModelTest : public Renderer,public SingleReg{
 
     std::unique_ptr<ModelImporter> importer;
 
-    void initInstanceMatrices();
 
     
 public:

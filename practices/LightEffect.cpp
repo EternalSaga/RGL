@@ -3,6 +3,7 @@
 #include "Entity.hpp"
 #include "Geometry.hpp"
 #include "Light.hpp"
+#include "Mesh.hpp"
 #include "PointLight.hpp"
 #include "RenderQueue.hpp"
 #include "SpotLight.hpp"
@@ -13,6 +14,7 @@
 #include "ShaderManager.hpp"
 #include "rllogger.hpp"
 #include "UBO.hpp"
+#include "InstanceComponent.hpp"
 namespace RGL {
 namespace practice {
 
@@ -118,14 +120,25 @@ LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) {
     directionalLight->attachComponent<DirectionalCompnent>(glm::vec3{1.0f, 0.0f, -1.0f});
     directionalLight->attachComponent<Transform>(glm::vec3{-1.5f, 0.0f, -10.0f}, glm::vec3{0.0f, 0.0f, 0.0f}, glm::vec3{1.0f, 1.0f, 1.0f});
     importer = std::make_unique<ModelImporter>("assest\\grass_variations.glb");
-    importer->processNodeBFS(modelShader);
+    
+    auto singleGrassMesh = importer->importAsSingleMesh();
+
+    auto grassVAO = VAOCreater::createMeshVAO(*singleGrassMesh,*modelShader);
+
+    auto randomTransforms = InstanceFactory::generateRandomTransforms(1000,  // 实例数量
+	glm::vec3(-50.0f, 0.0f, -50.0f),				     // 最小位置
+	glm::vec3(50.0f, 0.0f, 50.0f),					     // 最大位置
+	0.5f,								     // 最小缩放
+	1.5f								     // 最大缩放
+    );
+
+    auto instancedComponent = InstanceFactory::createComponent(randomTransforms);
 
     lightUBO = std::make_shared<UBO>(*modelShader, "DirectionLight");
     transformUBO = std::make_shared<UBO>(*modelShader, "Transforms");
     pbrUBO = std::make_shared<UBO>(*modelShader, "pbrUniformBlock");
 
-    importer->attachComponentAndRemoveDefaultTag(RenderTags::DisableCulling{});
-
+   
     ubos = std::make_shared<std::unordered_map<std::string, std::shared_ptr<UBO>>>();
     (*ubos)[lightUBO->getUboName()] = lightUBO;
     (*ubos)[transformUBO->getUboName()] = transformUBO;
@@ -133,6 +146,9 @@ LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) {
 
     singleReg->emplace_or_replace<UBOs>(*directionalLight, ubos);
     importer->addUbos(ubos);
+
+
+
     // 检查下CommonRenderEntity数量
     auto commonRenderEntities = singleReg->view<Transform>();
     assert(commonRenderEntities.size() > 0 && "No CommonRenderEntity created");

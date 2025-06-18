@@ -131,5 +131,8 @@ SamplersScope::~SamplersScope() {
 
 }  // namespace SamplerCreater
 
+size_t Mesh::getVertexCount() const {
+    return channeledVertices.size() / vertLength;
+}
 }  // namespace glcore
 }  // namespace RGL

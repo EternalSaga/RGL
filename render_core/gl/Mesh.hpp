@@ -43,6 +43,9 @@ class Mesh {
     std::vector<int> getIndices() const;
     std::vector<GLfloat> getChanneledVertices() const;
     size_t getIndicesCount() const;
+
+    size_t getVertexCount() const;
+
     virtual ~Mesh() = default;
     FloatDescs getDesc() const;
     void pushVertex(const std::vector<GLfloat>& vertex);    

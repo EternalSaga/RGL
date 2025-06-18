@@ -46,6 +46,13 @@ class ModelImporter : public SingleReg {
 
     RLLogger* logger;
     std::map<aiNode*, entt::entity> nodeMap;  // 一个node对应一个entity
+
+    // 辅助函数，将aiMatrix4x4转换为glm::mat4
+    glm::mat4 aiMatrix4x4ToGlm(const aiMatrix4x4& from);
+    
+    // 递归函数，用于遍历节点树并合并网格
+    void mergeNodeDFS(Mesh& outMesh);
+
    public:
     ModelImporter(const fs::path& path);
     ~ModelImporter() = default;
@@ -57,7 +64,7 @@ class ModelImporter : public SingleReg {
 
     void addUbos(UBOs ubos);
 
-    
+    std::unique_ptr<Mesh> importAsSingleMesh();
     
     //默认添加的RenderTag是Opaque，在主循环中会被加入到opaqueQueue中，使用本方法可以添加其他Tag并加入到对应的Queue中，
     // 并移除默认的Opaque Tag
