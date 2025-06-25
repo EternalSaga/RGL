@@ -56,6 +56,8 @@ void CommonRenderEntity::update() {
 
 
 	RenderQueueSystem::populateRenderqueues(renderQueues);
+
+	RenderQueueSystem::processDisableCullingQueue(renderQueues.disableCullingQueue);
 	RenderQueueSystem::processOpaqueQueue(renderQueues.opaqueQueue);
 	RenderQueueSystem::processTransparentQueue(renderQueues.transparentQueue);
 	
@@ -112,19 +114,17 @@ void CommonRenderEntity::renderVertexArray() {
 	for (auto [blockName, ubo] : *ubos) {
 	    ubo->setUniform();
 	}
-
 	
-	glCall(glBindVertexArray, *mesh.vao);
-	SamplerCreater::UseTextures(samplers);
+	VAOScope vaoscope(*mesh.vao);
+
+	SamplerCreater::SamplersScope samplersScope(samplers);
 	for (const auto& sampler : samplers) {
 		shader->setUniform(sampler.samplerName,sampler.textureUnit);
 	}
 
 	RLLogger::getInstance()->log_if(spdlog::level::err, !glCall(glIsVertexArray,*(mesh.vao)), "Mesh vao is not valid");
-
 	glCall(glDrawElements, GL_TRIANGLES, mesh.vertCount, GL_UNSIGNED_INT, reinterpret_cast<void*>(mesh.idxOffset));
-	SamplerCreater::DisableTextures(samplers);
-	glCall(glBindVertexArray, 0);
+
     });
 
 	auto simpleRenderView = singleReg->view<const VertArrayComponent, ShaderRef, DiscreteUniforms,SamplerCreater::Samplers>(entt::exclude<UBOs>);
@@ -132,16 +132,14 @@ void CommonRenderEntity::renderVertexArray() {
 
 		ScopeShader scopeshader(*shader);
 	    updateAllUniforms(shader, distUniform);
-	    glCall(glBindVertexArray, *mesh.vao);
-		SamplerCreater::UseTextures(samplers);
+	    VAOScope vaoscope(*mesh.vao);
+	    SamplerCreater::SamplersScope samplersScope(samplers);
 		for (const auto& sampler : samplers) {
 			shader->setUniform(sampler.samplerName,sampler.textureUnit);
 		}
 		RLLogger::getInstance()->log_if(spdlog::level::err, !glCall(glIsVertexArray,*(mesh.vao)), "Mesh vao is not valid");
-
 	    glCall(glDrawElements, GL_TRIANGLES, mesh.vertCount, GL_UNSIGNED_INT, reinterpret_cast<void*>(mesh.idxOffset));
-		SamplerCreater::DisableTextures(samplers);
-	    glCall(glBindVertexArray, 0);
+
 	});
 
 }

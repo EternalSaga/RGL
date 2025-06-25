@@ -165,7 +165,6 @@ Cube::Cube(float size) : Mesh(),positions(), uvs(), size(size), halfSize(size / 
 
     Mesh::vertLength = getVertexLength();
 
-	Mesh::indicesCount = indices.size();
     const auto vertNumber = positions.size()/3;
     for (size_t i = 0; i < vertNumber; i++) {
 	channeledVertices.push_back(positions[i * 3 + 0]);
@@ -235,7 +234,6 @@ Sphere::Sphere(float radius) {
 	}
     }
 
-    indicesCount = indices.size();	
 
 
 	this->descs = FloatDescs{
@@ -263,7 +261,7 @@ Sphere::Sphere(float radius) {
 }
 
 Plane::Plane(float width, float height) {
-    indicesCount = 6;
+
 	float halfW = width / 2.0f;
 	float halfH = height / 2.0f;
 

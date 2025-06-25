@@ -20,9 +20,8 @@
 * api_abstractor
 
   创建一个兼容层来同时封装OpenGL和Vulkan
-* entry
-
-  整个项目的入口函数（main.cpp）
+* app
+  整个项目的入口函数和顶层控制逻辑
 * front_end
 
   实现了一个Application类和Application类的渲染器接口，可以更换不同的渲染器来实现不同的渲染效果

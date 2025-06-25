@@ -1,8 +1,12 @@
 #include "GLObj.hpp"
+#include <spdlog/common.h>
 
+#include <cassert>
 #include <cstddef>
 #include <memory>
+#include <stdexcept>
 #include "GLCheckError.hpp"
+#include "Helpers.hpp"
 #include "rllogger.hpp"
 namespace RGL {
 namespace glcore {
@@ -10,11 +14,15 @@ namespace glcore {
 VBO::VBO(GLuint numOfVbo) : mNumOfVbo(numOfVbo) {
     // genBuffer没有分配显存,仅仅是创建vbo
     vbo = std::make_unique<GLuint[]>(mNumOfVbo);
-    withIndices = std::make_unique<bool[]>(mNumOfVbo);
+
     verticesSizes = std::make_unique<size_t[]>(mNumOfVbo);
+    instancesSizes = std::make_unique<size_t[]>(mNumOfVbo);
+    indicesSizes = std::make_unique<size_t[]>(mNumOfVbo);
+
     for (size_t i = 0; i < mNumOfVbo; i++) {
-	withIndices[i] = false;
-	verticesSizes[i] = 0;
+	    verticesSizes[i] = 0;
+        instancesSizes[i] = 0;
+        indicesSizes[i] = 0;
     }
 
     logger = RLLogger::getInstance();
@@ -161,12 +169,10 @@ GLuint
 VBO::getSize() const {
     return mNumOfVbo;
 }
-bool VBO::getWithIndices(GLuint vboIdx) const {
-    return withIndices[vboIdx];
-}
+
 size_t
 VBO::getVerticesSize(GLuint vboIdx) const {
-    if (!withIndices[vboIdx]) {
+    if (!verticesSizes[vboIdx]) {
 	throw std::invalid_argument("This vbo does not contain indices.");
     }
 
@@ -183,6 +189,7 @@ void VBO::setData(GLuint vboIdx, const VerticesWithIndices &verticesWithIndices)
     const auto indicesSize = verticesWithIndices.indices.size() * sizeof(GLint);
     const auto verticesSize = verticesWithIndices.vertices.size() * sizeof(float);
 
+
     // 开辟总空间（顶点+索引）
     glCall(glNamedBufferStorage, vbo[vboIdx], indicesSize + verticesSize, nullptr, GL_DYNAMIC_STORAGE_BIT);
 
@@ -190,7 +197,6 @@ void VBO::setData(GLuint vboIdx, const VerticesWithIndices &verticesWithIndices)
 
     glCall(glNamedBufferSubData, vbo[vboIdx], 0, verticesSize, verticesWithIndices.vertices.data());  // glNamedBufferSubData(buffer, 0, vrt_len, vrt_data);
 
-    withIndices[vboIdx] = true;
     // 记录顶点buffer大小
     verticesSizes[vboIdx] = verticesSize;
 }
@@ -199,6 +205,37 @@ void VBO::setData(const VerticesWithIndices &verticesWithIndices) {
     assert(mNumOfVbo == 1);
     setData(0, verticesWithIndices);
 }
+
+void VBO::setData(GLuint vboIdx, const VerticesWithInstancesAndIndices &verticesWithInstancesAndIndices){
+    assert(vboIdx < mNumOfVbo);
+    const size_t verticesSize = verticesWithInstancesAndIndices.vertices.size() * sizeof(GLfloat);
+    const size_t indicesSize = verticesWithInstancesAndIndices.indices.size() * sizeof(GLint);
+    const size_t instancesSize = verticesWithInstancesAndIndices.instancesMatrices.size() * sizeof(glm::mat4);
+
+    if (verticesSize == 0 || indicesSize == 0 || instancesSize == 0)[[unlikely]] {
+
+        auto logger = RLLogger::getInstance();
+        const std::string error_message = "VBO::setData: verticesSize or indicesSize or instancesSize is 0";
+
+        logger->log(spdlog::level::err, error_message);
+
+        throw std::logic_error(error_message);
+    }
+
+    const size_t totalSize = verticesSize + indicesSize + instancesSize;
+
+    glCall(glNamedBufferStorage,vbo[vboIdx], totalSize, nullptr, GL_DYNAMIC_STORAGE_BIT);
+    glCall(glNamedBufferSubData,vbo[vboIdx], 0, verticesSize, verticesWithInstancesAndIndices.vertices.data());
+    glCall(glNamedBufferSubData,vbo[vboIdx], verticesSize, indicesSize, verticesWithInstancesAndIndices.indices.data());
+    glCall(glNamedBufferSubData,vbo[vboIdx], verticesSize + indicesSize, instancesSize, verticesWithInstancesAndIndices.instancesMatrices.data());
+
+    this->verticesSizes[vboIdx] = verticesSize;
+    this->instancesSizes[vboIdx] = instancesSize;
+    this->indicesSizes[vboIdx] = indicesSize;
+
+}
+
+
 void VAO::setDSA_interleaved(const GLuint vaoIdx, const GLuint vbo, FloatDescs descs) {
     size_t size = 0;
     ////累加总size
@@ -237,6 +274,58 @@ void VAO::setDSA_interleaved(const GLuint vaoIdx, const GLuint vbo, FloatDescs d
 	    current_offset += desc.getSize();  // 累加size以更新offset
 	}
     }
+}
+VAOScope::VAOScope(const GLuint vao) {
+    glCall(glBindVertexArray, vao);
+}
+VAOScope::~VAOScope() {
+    glCall(glBindVertexArray, 0);
+}
+void VBO::setData(const VerticesWithInstancesAndIndices &verticesWithInstancesAndIndices) {
+    setData(0, verticesWithInstancesAndIndices);
+}
+size_t VBO::getIndicesSize(GLuint vboIdx) const {
+    return indicesSizes[vboIdx];
+}
+size_t VBO::getIndicesSize() const {
+    return getIndicesSize(0);
+}
+void VAO::addInstanceBuffer(GLuint vaoIdx, const VBO &instanceVBO) {
+    constexpr GLuint vboBindIndex = 1;
+    // 关联instance buffer到vao的binding index上
+    glCall(glVertexArrayVertexBuffer,vao[vaoIdx], vboBindIndex, instanceVBO, instanceVBO.getIndicesSize() + instanceVBO.getVerticesSize(), sizeof(glm::mat4));
+
+    const GLint instanceMatrixLocation = glGetUniformLocation(shaderProgram, "aInstanceMatrix");
+    if (instanceMatrixLocation == -1) {
+	const std::string errmsg{"Could not find uniform location for aInstanceMatrix, perhaps this attribute is optimized by the compiler."};
+
+	logger->error(errmsg);
+    }
+
+    // 怎么做呢？突然不会了
+    for (int i = 0; i < 4; i++) {
+	// 计算当前列向量的属性位置
+	GLuint currentLocation = instanceMatrixLocation + i;
+
+	// 启用这个位置的顶点属性
+	glCall(glEnableVertexArrayAttrib, vao[vaoIdx], currentLocation);
+
+	// 描述这个属性的格式
+	// glVertexArrayAttribFormat(vao, attribindex, size, type, normalized, relativeoffset)
+	// - vao[vaoIdx]: 要操作的VAO
+	// - currentLocation: 当前vec4的属性位置
+	// - 4: 大小，一个vec4有4个float
+	// - GL_FLOAT: 类型
+	// - GL_FALSE: 是否需要归一化 (矩阵数据通常不需要)
+	// - relativeoffset: 这个vec4相对于一个完整mat4数据块起始位置的偏移量。
+	glCall(glVertexArrayAttribFormat, vao[vaoIdx], currentLocation, 4, GL_FLOAT, GL_FALSE, i * sizeof(glm::vec4));
+
+	// 将这个属性位置绑定到我们之前设置的 "实例数据流" 绑定点上
+	// 这告诉OpenGL：当需要这个属性的数据时，请从 instanceBindingIndex 指向的VBO中根据规则获取
+	glCall(glVertexArrayAttribBinding, vao[vaoIdx], currentLocation, instanceBindingIndex);
+    }
+
+    glCall(glVertexArrayBindingDivisor, vao[vaoIdx], vboBindIndex, 1);
 }
 }  // namespace glcore
 }  // namespace RGL

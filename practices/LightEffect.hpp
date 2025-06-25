@@ -10,13 +10,17 @@
 #include "UBO.hpp"
 #include "api_types.hpp"
 #include <glad/glad.h>
+#include <cstddef>
+#include <glm/fwd.hpp>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <memory>
+#include <vector>
 #include "Light.hpp"
 #include "ModelImporter.hpp"
 #include "Entity.hpp"
+#include "InstanceComponent.hpp"
 namespace RGL {
 namespace practice {
 
@@ -52,7 +56,7 @@ class UBOTest : public Renderer, public SingleReg {
 
 class LoadModelTest : public Renderer,public SingleReg{
 
-    ShaderRef modelShader;
+    ShaderRef grassShader;
 	std::shared_ptr<Camera> cam;
 	std::unique_ptr<CommonRenderEntity> modelEntity;
 
@@ -61,11 +65,13 @@ class LoadModelTest : public Renderer,public SingleReg{
     UBOs ubos;
 
     std::shared_ptr<UBO> lightUBO;
-    std::shared_ptr<UBO> transformUBO;
 
     std::shared_ptr<UBO> pbrUBO;
 
     std::unique_ptr<ModelImporter> importer;
+
+
+    InstancedRenderSystem m_instancedRenderSystem;
 public:
     LoadModelTest(std::shared_ptr<Camera> cam);
     void operator()() override;

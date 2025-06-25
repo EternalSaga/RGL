@@ -12,6 +12,7 @@
 #include <memory>
 #include <rllogger.hpp>
 #include "Entity.hpp"
+#include "RenderQueue.hpp"
 #include "ShaderManager.hpp"
 #include "UBO.hpp"
 #include "VertexDescriptor.hpp"
@@ -45,6 +46,13 @@ class ModelImporter : public SingleReg {
 
     RLLogger* logger;
     std::map<aiNode*, entt::entity> nodeMap;  // 一个node对应一个entity
+
+    // 辅助函数，将aiMatrix4x4转换为glm::mat4
+    glm::mat4 aiMatrix4x4ToGlm(const aiMatrix4x4& from);
+    
+    // 递归函数，用于遍历节点树并合并网格
+    void mergeNodeDFS(Mesh& outMesh);
+
    public:
     ModelImporter(const fs::path& path);
     ~ModelImporter() = default;
@@ -55,6 +63,24 @@ class ModelImporter : public SingleReg {
     void processNodeBFS(ShaderRef shader);
 
     void addUbos(UBOs ubos);
+
+    std::unique_ptr<Mesh> importAsSingleMesh();
+    
+    //默认添加的RenderTag是Opaque，在主循环中会被加入到opaqueQueue中，使用本方法可以添加其他Tag并加入到对应的Queue中，
+    // 并移除默认的Opaque Tag
+
+    template<typename T>
+    void attachComponentAndRemoveDefaultTag(const T& component){
+        if (nodeMap.empty()){
+            this->logger->error("No nodes to attach components");
+            throw std::runtime_error("No nodes to attach components");
+        }
+        for(auto [key,value]: nodeMap) {
+            singleReg->remove<RenderTags::Opaque>(value);
+            singleReg->emplace<T>(value,component);
+        }
+    }
+
 };
 }  // namespace io
 }  // namespace RGL

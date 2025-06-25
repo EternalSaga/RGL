@@ -30,17 +30,27 @@ layout(std140) uniform pbrUniformBlock{
 void main()
 {
 	vec3 objectColor;
-	if(bool(u_hasBaseColorTexture)){
+
+	const bool usePBO = bool(u_hasBaseColorTexture) && bool(u_hasSpecularTexture);
+
+	if(usePBO){
 		objectColor = baseColor.rgb;
 	}else{
 		objectColor = texture(baseColorTexture, uv).rgb;
-		
 	}
 
 	float alpha = 1.0;
 
-	if(bool(u_hasBaseColorTexture)){
+	if(usePBO){
 		alpha = baseColor.a;
+	}else{
+		alpha = texture(baseColorTexture, uv).a;
+	}
+
+	// 对于草地来说，不要使用过于严格的alpha剔除。
+	// 草地的纹理为了边缘看起来自然、柔和，边缘部分通常会有半透明的像素（比如alpha值为0.5, 0.3, 0.1等）。
+	if(alpha < 0.1){
+		discard;
 	}
 
 	vec3 normal = normalize(normal);

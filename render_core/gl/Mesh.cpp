@@ -1,6 +1,9 @@
 #include "Mesh.hpp"
 #include "GLCheckError.hpp"
+#include "GLObj.hpp"
 #include "GLTextures.hpp"
+#include "Helpers.hpp"
+#include "ShaderManager.hpp"
 #include "rllogger.hpp"
 
 namespace RGL {
@@ -16,9 +19,9 @@ void Mesh::pushVertex(const std::vector<GLfloat>& vertex) {
 void Mesh::pushIndex(const int index) {
     indices.push_back(index);
 }
-Mesh::Mesh() : indices(), indicesCount(0), material() {
+Mesh::Mesh() : indices(), material() {
 }
-Mesh::Mesh(FloatDescs descs, size_t numOfVertcies) : descs(descs), indicesCount(0), indices(), channeledVertices(), material() {
+Mesh::Mesh(FloatDescs descs, size_t numOfVertcies) : descs(descs), indices(), channeledVertices(), material() {
     vertLength = getVertexLength();
     const auto reserveSize = vertLength * numOfVertcies;
 
@@ -39,16 +42,16 @@ std::vector<GLfloat> Mesh::getChanneledVertices() const {
     return channeledVertices;
 }
 size_t Mesh::getIndicesCount() const {
-    if (indicesCount == 0) {
+    if (indices.empty()) {
 	throw std::logic_error("Mesh::getIndicesCount() called before setting indices");
     }
-    return indicesCount;
+    return indices.size();
 }
 std::unique_ptr<VAO> VAOCreater::createMeshVAO(std::vector<Mesh> meshes, const Shader& shader) {
     auto vao = std::make_unique<VAO>(meshes.size());
     auto vbo = std::make_unique<VBO>(meshes.size());
     for (int i = 0; i < meshes.size(); i++) {
-	vbo->setData(i, {meshes[i].getChanneledVertices(), meshes[i].getIndices()});
+	vbo->setData(i, VerticesWithIndices{meshes[i].getChanneledVertices(), meshes[i].getIndices()});
 	vao->setShaderProgram(shader);
 	vao->setDSA_interleaved(i, *vbo, meshes[i].getDesc());
 	vao->addEBO((*vbo)[i]);
@@ -59,10 +62,21 @@ std::unique_ptr<VAO> VAOCreater::createMeshVAO(std::vector<Mesh> meshes, const S
 std::unique_ptr<VAO> VAOCreater::createMeshVAO(const Mesh& mesh, const Shader& shader) {
     auto vao = std::make_unique<VAO>();
     auto vbo = std::make_unique<VBO>();
-    vbo->setData({mesh.getChanneledVertices(), mesh.getIndices()});
+    vbo->setData(VerticesWithIndices{mesh.getChanneledVertices(), mesh.getIndices()});
     vao->setShaderProgram(shader);
     vao->setDSA_interleaved(0, *vbo, mesh.getDesc());
     vao->addEBO(*vbo);
+    return std::move(vao);
+}
+
+std::unique_ptr<VAO> createMeshVAO(const Mesh& mesh,const std::vector<glm::mat4>& instanceMatrices, const Shader& shader){
+    auto vao = std::make_unique<VAO>();
+    auto vbo = std::make_unique<VBO>();
+    vbo->setData(VerticesWithInstancesAndIndices{mesh.getChanneledVertices(), mesh.getIndices(), instanceMatrices});
+    vao->setShaderProgram(shader);
+    vao->setDSA_interleaved(0, *vbo, mesh.getDesc());
+    vao->addEBO(*vbo);
+    vao->addInstanceBuffer(0,*vbo);
     return std::move(vao);
 }
 
@@ -73,34 +87,7 @@ size_t Mesh::getVertexLength() {
     }
     return vertLength;
 }
-SamplerCreater::Samplers SamplerCreater::createSamplers(const Mesh& mesh, const Shader& shader) {
-    Samplers samplers;
-    auto material = mesh.getMaterial();
-    if (material->ifHasTextures()) {
-	auto textures = material->getTextures();
-	for (auto [usage, textures] : textures) {
-	    for (auto& tex : textures) {
-		samplers.emplace_back(Sampler{tex->getName(), GL_INVLAID_TEXTURE_UNIT, tex});
-	    }
-	}
-    }else {
-        auto logger = RLLogger::getInstance();
-        logger->debug("Mesh has no textures");
-    }
 
-    return samplers;
-}
-void SamplerCreater::UseTextures(Samplers& samplers) {
-    for (auto& sampler : samplers) {
-	sampler.texture->useTexture();
-	sampler.textureUnit = sampler.texture->getTextureUnit();
-    }
-}
-void SamplerCreater::DisableTextures(Samplers& samplers) {
-    for (auto& sampler : samplers) {
-	sampler.texture->disableTexture();
-    }
-}
 void Mesh::setMaterial(std::shared_ptr<MaterialData> material) {
     materialHasSet = true;
     this->material = material;
@@ -118,5 +105,50 @@ void Mesh::setPBRComponent(const PBRComponent& pbrComponent) {
 PBRComponent Mesh::getPBRComponent() const {
     return pbrComponent;
 }
+
+namespace SamplerCreater {
+Samplers createSamplers(const Mesh& mesh, const Shader& shader) {
+    Samplers samplers;
+    auto material = mesh.getMaterial();
+    if (material->ifHasTextures()) {
+	auto textures = material->getTextures();
+	for (auto [usage, textures] : textures) {
+	    for (auto& tex : textures) {
+		samplers.emplace_back(Sampler{tex->getName(), GL_INVLAID_TEXTURE_UNIT, tex});
+	    }
+	}
+    } else {
+	auto logger = RLLogger::getInstance();
+	logger->debug("Mesh has no textures");
+    }
+
+    return samplers;
+}
+void UseTextures(Samplers& samplers) {
+    for (auto& sampler : samplers) {
+	sampler.texture->useTexture();
+	sampler.textureUnit = sampler.texture->getTextureUnit();
+    }
+}
+void DisableTextures(Samplers& samplers) {
+    for (auto& sampler : samplers) {
+	sampler.texture->disableTexture();
+    }
+}
+
+SamplersScope::SamplersScope(Samplers& samplers) : samplers(samplers) {
+    UseTextures(this->samplers);
+}
+SamplersScope::~SamplersScope() {
+    DisableTextures(this->samplers);
+}
+
+}  // namespace SamplerCreater
+
+size_t Mesh::getVertexCount() const {
+    return channeledVertices.size() / vertLength;
+}
+
+
 }  // namespace glcore
 }  // namespace RGL
