@@ -302,7 +302,7 @@ void VAO::addInstanceBuffer(GLuint vaoIdx, const VBO &instanceVBO) {
 	logger->error(errmsg);
     }
 
-    // 怎么做呢？突然不会了
+
     for (int i = 0; i < 4; i++) {
 	// 计算当前列向量的属性位置
 	GLuint currentLocation = instanceMatrixLocation + i;
@@ -310,14 +310,6 @@ void VAO::addInstanceBuffer(GLuint vaoIdx, const VBO &instanceVBO) {
 	// 启用这个位置的顶点属性
 	glCall(glEnableVertexArrayAttrib, vao[vaoIdx], currentLocation);
 
-	// 描述这个属性的格式
-	// glVertexArrayAttribFormat(vao, attribindex, size, type, normalized, relativeoffset)
-	// - vao[vaoIdx]: 要操作的VAO
-	// - currentLocation: 当前vec4的属性位置
-	// - 4: 大小，一个vec4有4个float
-	// - GL_FLOAT: 类型
-	// - GL_FALSE: 是否需要归一化 (矩阵数据通常不需要)
-	// - relativeoffset: 这个vec4相对于一个完整mat4数据块起始位置的偏移量。
 	glCall(glVertexArrayAttribFormat, vao[vaoIdx], currentLocation, 4, GL_FLOAT, GL_FALSE, i * sizeof(glm::vec4));
 
 	// 将这个属性位置绑定到我们之前设置的 "实例数据流" 绑定点上

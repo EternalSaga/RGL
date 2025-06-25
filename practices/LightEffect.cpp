@@ -126,7 +126,6 @@ LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) : renderQueues{} {
     // b. 加载并合并模型为一个基础网格
     importer = std::make_unique<ModelImporter>("assest\\grass_variations.glb");
     auto singleGrassMesh = importer->importAsSingleMesh();
-    size_t grassIndexCount = singleGrassMesh->getIndicesCount();
 
     auto randomTransforms = InstanceFactory::generateRandomTransforms(
 	1000,
@@ -153,7 +152,13 @@ LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) : renderQueues{} {
     auto [vertCount, idxOffset] = singleGrassMesh->getIdicesCountAndOffset();
     singleReg->emplace<VertArrayComponent>(grassFieldEntity, std::move(grassVAO), vertCount, idxOffset);
     singleReg->emplace<ShaderRef>(grassFieldEntity, grassShader);
+
+    auto samplers = SamplerCreater::createSamplers(*singleGrassMesh, *grassShader);
+
+    singleReg->emplace<SamplerCreater::Samplers>(grassFieldEntity, samplers);
+
     singleReg->emplace<RenderTags::Instanced>(grassFieldEntity, 1000ull);
+    singleReg->emplace<RenderTags::Renderable>(grassFieldEntity);
 }
 
 void LoadModelTest::operator()() {

@@ -18,6 +18,7 @@ void Mesh::pushVertex(const std::vector<GLfloat>& vertex) {
 }
 void Mesh::pushIndex(const int index) {
     indices.push_back(index);
+    
 }
 Mesh::Mesh() : indices(), material() {
 }
@@ -30,9 +31,10 @@ Mesh::Mesh(FloatDescs descs, size_t numOfVertcies) : descs(descs), indices(), ch
     this->indicesOffset = reserveSize * sizeof(decltype(channeledVertices[0]));
 }
 std::tuple<size_t, size_t> Mesh::getIdicesCountAndOffset() {
-    if (this->indices.size() == 0 || indicesOffset == 0) {
+    if (this->indices.empty() || this->channeledVertices.empty()) {
 	throw std::logic_error("Mesh::getIdicesCountAndOffset() called before setting indices");
     }
+    this->indicesOffset = this->channeledVertices.size()*sizeof(GLfloat);
     return std::make_tuple(this->indices.size(), indicesOffset);
 }
 std::vector<int> Mesh::getIndices() const {

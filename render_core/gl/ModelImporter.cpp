@@ -291,6 +291,7 @@ void ModelImporter::mergeNodeDFS(Mesh& outMesh) {
 	    nodeStack.push({currentNode->mChildren[i], currentTransform});
 	}
     }
+	
 }
 
 std::unique_ptr<Mesh> ModelImporter::importAsSingleMesh() {
@@ -311,7 +312,7 @@ std::unique_ptr<Mesh> ModelImporter::importAsSingleMesh() {
     } else {
 	logger->warn("Merged mesh has no material assigned.");
     }
-
+	
     return mergedMesh;
 }
 
