@@ -3,8 +3,10 @@
 #include <cassert>
 #include <cstddef>
 #include <glad/glad.h>
+#include <glm/fwd.hpp>
 #include <memory>
 #include <spdlog/spdlog.h>
+#include <windef.h>
 
 #include <vector>
 
@@ -14,6 +16,7 @@
 
 #include "GLCheckError.hpp"
 #include "rllogger.hpp"
+#include <glm/glm.hpp>
 
 namespace RGL {
 namespace glcore {
@@ -24,14 +27,26 @@ struct VerticesWithIndices {
     std::vector<int> indices;
 };
 
+struct VerticesWithInstancesAndIndices{
+    std::vector<float> vertices;
+
+    std::vector<int> indices;
+
+    std::vector<glm::mat4> instancesMatrices;
+};
+
 // VBO,vertex buffer
 // object，CPU存储在内存里，对于显存一段区域的描述，所以描述的是内存本身，不包括内存数据的描述
 // class VBO{ID,GPU_ADDRESS,SIZE,etc.}；
 // 对于VBO的操作都需要先绑定，再操作
 class VBO {
     std::unique_ptr<GLuint[]> vbo;
-    std::unique_ptr<bool[]> withIndices;
+
     std::unique_ptr<size_t[]> verticesSizes;  // vbo的顶点的大小，即顶点数量*每个顶点的大小
+
+    std::unique_ptr<size_t[]> indicesSizes; 
+
+    std::unique_ptr<size_t[]> instancesSizes;  // 实例化渲染数量
 
     GLuint mNumOfVbo;
     RLLogger *logger;
@@ -39,9 +54,12 @@ class VBO {
    public:
     GLuint getSize() const;
 
-    bool getWithIndices(GLuint vboIdx) const;
+
     size_t getVerticesSize(GLuint vboIdx) const;
     size_t getVerticesSize() const;
+    size_t getIndicesSize(GLuint vboIdx) const;
+    size_t getIndicesSize() const;
+
     VBO(GLuint numOfVbo);
     // 长度为1的封装
     VBO();
@@ -71,7 +89,9 @@ class VBO {
 	void setData(GLuint eboIdx, const std::vector<GLint> &data);
     void setData(const std::vector<GLint> &data);
 
-
+    //设置VerticesWithInstancesAndIndices
+    void setData(GLuint vboIdx, const VerticesWithInstancesAndIndices &verticesWithInstancesAndIndices);
+    void setData(const VerticesWithInstancesAndIndices &verticesWithInstancesAndIndices);
 };
 
 using EBO = VBO;
@@ -234,6 +254,8 @@ class VAO {
     /// <param name="ebo"></param>
     void addEBO(GLuint vaoIdx, GLuint ebo);
     void addEBO(GLuint ebo);
+
+    void addInstanceBuffer(GLuint vaoIdx, const VBO &instanceVBO);
 };
 
 

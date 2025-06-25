@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <glm/fwd.hpp>
 #include <memory>
 #include <stdexcept>
 #include <utility>
@@ -20,7 +21,6 @@ namespace glcore {
 class Mesh {
    protected:
     std::vector<int> indices;
-    size_t indicesCount;
     std::vector<GLfloat> channeledVertices;
     FloatDescs descs;
     size_t vertLength = 0;
@@ -33,7 +33,6 @@ class Mesh {
     PBRComponent pbrComponent;
 
     bool materialHasSet = false;
-    
 
    public:
     explicit Mesh();
@@ -57,6 +56,7 @@ class Mesh {
     PBRComponent getPBRComponent() const;
 
     std::shared_ptr<MaterialData> getMaterial() const;
+
 };
 
 namespace VAOCreater {
@@ -64,6 +64,10 @@ namespace VAOCreater {
 // 需要使用shader确定vao上的input attributes位置
 std::unique_ptr<VAO> createMeshVAO(const Mesh& mesh, const Shader& shader);
 std::unique_ptr<VAO> createMeshVAO(std::vector<Mesh> meshes, const Shader& shader);
+std::unique_ptr<VAO> createMeshVAO(const Mesh& mesh,const std::vector<glm::mat4>& instanceMatrices, const Shader& shader);
+
+
+
 }  // namespace VAOCreater
 
 namespace SamplerCreater{

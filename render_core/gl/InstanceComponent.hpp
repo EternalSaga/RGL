@@ -1,8 +1,12 @@
 #pragma once
 #include "GLObj.hpp"
 #include <memory>
+#include "GLObj.hpp"
+#include "ShaderManager.hpp"
 
 #include <glm/glm.hpp>
+#include "EnttRegistry.hpp"
+#include "Mesh.hpp"
 namespace RGL {
 namespace glcore {
 
@@ -21,6 +25,12 @@ namespace InstanceFactory {
     float maxScale);
    InstancedRenderingComponent createComponent(const std::vector<glm::mat4>& instanceMatrices);
 }
+
+
+class InstancedRenderSystem : public SingleReg {
+public:
+ void update(bool disableCulling = true);
+};
 
 }
 }

@@ -14,7 +14,12 @@
 #include "ShaderManager.hpp"
 #include "rllogger.hpp"
 #include "UBO.hpp"
-#include "InstanceComponent.hpp"
+
+#include "Mesh.hpp"
+#define GLM_ENABLE_EXPERIMENTAL
+
+#include <glm/gtx/string_cast.hpp>
+
 namespace RGL {
 namespace practice {
 
@@ -110,56 +115,52 @@ UBOTest::~UBOTest() {
 
 LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) {
     this->cam = cam;
+
+    // --- 1. 准备基础网格 ---
+    // a. 创建草地Shader
     ShaderSrcs modelShaderSrc = {
-	{SHADER_TYPE::VERTEX, {"shaders\\Light\\phong_ubo.vert"}},
+	{SHADER_TYPE::VERTEX, {"shaders\\Light\\phong_ubo_instanced.vert"}},
 	{SHADER_TYPE::FRAGMENT, {"shaders\\Light\\grass-fragment.frag"}}};
-    this->modelShader = std::make_shared<Shader>(modelShaderSrc);
-    directionalLight = std::make_unique<GeneralEntity>();
-    // 光源entity
-    directionalLight->attachComponent<CommonLight>(glm::vec3{1.0f, 0.9f, 0.9f}, glm::vec3{0.2f, 0.2f, 0.2f}, 32.0f);
-    directionalLight->attachComponent<DirectionalCompnent>(glm::vec3{1.0f, 0.0f, -1.0f});
-    directionalLight->attachComponent<Transform>(glm::vec3{-1.5f, 0.0f, -10.0f}, glm::vec3{0.0f, 0.0f, 0.0f}, glm::vec3{1.0f, 1.0f, 1.0f});
+    grassShader = std::make_shared<Shader>(modelShaderSrc);
+
+    // b. 加载并合并模型为一个基础网格
     importer = std::make_unique<ModelImporter>("assest\\grass_variations.glb");
-    
     auto singleGrassMesh = importer->importAsSingleMesh();
+    size_t grassIndexCount = singleGrassMesh->getIndicesCount();
 
-    auto grassVAO = VAOCreater::createMeshVAO(*singleGrassMesh,*modelShader);
+    // c. 为基础网格创建VAO
+    auto grassVAO = VAOCreater::createMeshVAO(*singleGrassMesh, *grassShader);
 
-    auto randomTransforms = InstanceFactory::generateRandomTransforms(1000,  // 实例数量
-	glm::vec3(-50.0f, 0.0f, -50.0f),				     // 最小位置
-	glm::vec3(50.0f, 0.0f, 50.0f),					     // 最大位置
-	0.5f,								     // 最小缩放
-	1.5f								     // 最大缩放
-    );
+    // --- 2. 准备实例数据 ---
+    // a. 生成随机变换矩阵
+    auto randomTransforms = InstanceFactory::generateRandomTransforms(
+	10000,	// 让我们渲染一万棵草！
+	glm::vec3(-50.0f, 0.0f, -50.0f), glm::vec3(50.0f, 0.0f, 50.0f),
+	0.5f, 1.5f);
 
-    auto instancedComponent = InstanceFactory::createComponent(randomTransforms);
+    // --- 3. 连接！配置VAO以使用实例数据 ---
 
-    lightUBO = std::make_shared<UBO>(*modelShader, "DirectionLight");
-    transformUBO = std::make_shared<UBO>(*modelShader, "Transforms");
-    pbrUBO = std::make_shared<UBO>(*modelShader, "pbrUniformBlock");
+    VAOCreater::createMeshVAO(*singleGrassMesh, randomTransforms, *grassShader);
 
-   
+    auto grassFieldEntity = singleReg->create();
+
+    // --- 5. 设置光照 (和以前一样) ---
+    directionalLight = std::make_unique<GeneralEntity>();
+    directionalLight->attachComponent<CommonLight>(glm::vec3{1.0f, 0.9f, 0.9f}, glm::vec3{0.2f, 0.2f, 0.2f}, 32.0f);
+    directionalLight->attachComponent<DirectionalCompnent>(glm::vec3{1.0f, -1.0f, -1.0f});  // 把光照方向往下调一点，效果更好
+
+    lightUBO = std::make_shared<UBO>(*grassShader, "DirectionLight");
+
     ubos = std::make_shared<std::unordered_map<std::string, std::shared_ptr<UBO>>>();
     (*ubos)[lightUBO->getUboName()] = lightUBO;
-    (*ubos)[transformUBO->getUboName()] = transformUBO;
-    (*ubos)[pbrUBO->getUboName()] = pbrUBO;
 
-    singleReg->emplace_or_replace<UBOs>(*directionalLight, ubos);
-    importer->addUbos(ubos);
-
-
-
-    // 检查下CommonRenderEntity数量
-    auto commonRenderEntities = singleReg->view<Transform>();
-    assert(commonRenderEntities.size() > 0 && "No CommonRenderEntity created");
-    auto logger = RLLogger::getInstance();
-    logger->debug("CommonRenderEntity count: {}", commonRenderEntities.size());
-    logger->debug("Nodes count: {}", importer->getNodeCount());
+    singleReg->emplace_or_replace<UBOs>(grassFieldEntity, ubos);
 }
 
 void LoadModelTest::operator()() {
     cam->update();
-    CommonRenderEntity::update();
+
+    m_instancedRenderSystem.update();
 }
 
 LoadModelTest::~LoadModelTest() {
