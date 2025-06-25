@@ -20,7 +20,7 @@ using namespace entt::literals;
 #include "UBO.hpp"
 
 #include "Material.hpp"
-
+#include "InstanceComponent.hpp"
 namespace RGL {
 using namespace glcore;
 
@@ -89,7 +89,7 @@ void renderSingleEntity(entt::entity entity, entt::registry* reg, bool isSkybox 
     }
 
     VAOScope vaoScope(*vertArray.vao);
-	SamplerCreater::SamplersScope samplersScope(samplers);
+    SamplerCreater::SamplersScope samplersScope(samplers);
 
     for (const auto& sampler : samplers) {
 	shader->setUniform(sampler.samplerName, sampler.textureUnit);
@@ -97,9 +97,9 @@ void renderSingleEntity(entt::entity entity, entt::registry* reg, bool isSkybox 
 
     RLLogger::getInstance()->log_if(spdlog::level::err, !glCall(glIsVertexArray, *(vertArray.vao)), "Mesh vao is not valid for entity {}", entt::to_integral(entity));
     glCall(glDrawElements, GL_TRIANGLES, vertArray.vertCount, GL_UNSIGNED_INT, reinterpret_cast<void*>(vertArray.idxOffset));
-
-
 }
+
+void renderInstanceEntity(entt::entity instancedEntity, entt::registry* reg);
 
 void RenderQueues::clear() {
     opaqueQueue.clear();
@@ -110,7 +110,7 @@ void RenderQueues::clear() {
     shadowCasterQueue.clear();
     shadowReceiverQueue.clear();
     disableCullingQueue.clear();
-
+    instanceQueue.clear();
 }
 void RenderQueueSystem::populateRenderqueues(RenderQueues& queues) {
     auto singleReg = EnttReg::getPrimaryRegistry();
@@ -136,9 +136,10 @@ void RenderQueueSystem::populateRenderqueues(RenderQueues& queues) {
 	    queues.shadowReceiverQueue.push_back(entity);
 	} else if (singleReg->all_of<RenderTags::DisableCulling>(entity)) {
 	    queues.disableCullingQueue.push_back(entity);
+	} else if (singleReg->all_of<RenderTags::Instanced>(entity)) {
+	    queues.instanceQueue.push_back(entity);
 	}
     });
-
     // 对透明队列进行排序，通常是根据距离摄像机的距离从远到近排序
     // Transform内的modelMatrix在执行updateTransforms()之后会更新成世界坐标系
     if (!queues.transparentQueue.empty()) {
@@ -184,35 +185,56 @@ void RenderQueueSystem::processSkyboxQueue(const std::vector<entt::entity>& queu
     auto singleReg = EnttReg::getPrimaryRegistry();
 }
 
-void RenderQueueSystem::processDisableCullingQueue(const std::vector<entt::entity>& queue){
+void RenderQueueSystem::processDisableCullingQueue(const std::vector<entt::entity>& queue) {
     auto singleReg = EnttReg::getPrimaryRegistry();
     glCall(glDisable, GL_CULL_FACE);
     for (entt::entity entity : queue) {
 	renderSingleEntity(entity, singleReg);
     }
     glCall(glEnable, GL_CULL_FACE);
+}
+
+void renderInstanceEntity(entt::entity entity, entt::registry* reg) {
+    // 不管有没有UBO，暂时先当它都有吧，写死了再说
+    // bool hasUBOs = reg->all_of<UBOs>(entity);
+    // bool hasSimpleUniforms = reg->all_of<DiscreteUniforms>(entity) && !hasUBOs;  // 没有UBOs的情况下才有简单Uniforms
+    const auto& vertArray = reg->get<VertArrayComponent>(entity);
+    auto shader = reg->get<ShaderRef>(entity);
+    auto& samplers = reg->get<SamplerCreater::Samplers>(entity);
+    const auto& transform = reg->get<Transform>(entity);
+    auto instanceComponent = reg->get<RenderTags::Instanced>(entity);
+    const CameraProjection proj = reg->ctx().get<CameraProjection>("CameraProjection"_hs);
+
+    const glm::mat4 viewMatrix = proj.viewMat;
+    const glm::mat4 modelMatrix = transform.modelMatrix;
+    
+    auto& ubos = reg->get<UBOs>(entity);
+    auto instanceTransformsUbo = (*ubos)["InstanceTransforms"];
+    if (instanceTransformsUbo) {
+        instanceTransformsUbo->updateCpuUbo("viewMatrix", viewMatrix);
+        instanceTransformsUbo->updateCpuUbo("projectionMatrix", proj.projMat);
+        instanceTransformsUbo->updateCpuUbo("instancesGroupMatrix", modelMatrix);
+    }
+    ScopeShader scopeShader(*shader);
+    VAOScope vaoScope(*vertArray.vao);
+    SamplerCreater::SamplersScope samplersScope(samplers);
+    for (const auto& sampler : samplers) {
+        shader->setUniform(sampler.samplerName, sampler.textureUnit);
+    }
+
+    glCall(glDrawElementsInstanced, GL_TRIANGLES, vertArray.vertCount, GL_UNSIGNED_INT,
+           reinterpret_cast<void*>(vertArray.idxOffset), instanceComponent.instanceCount);
 
 }
 
-void RenderQueueSystem::updatePBOUniforms() {
-    auto singleReg = EnttReg::getPrimaryRegistry();
-    auto viewForPbo = singleReg->view<UBOs, ShaderRef, PBRComponent>();
-
-    viewForPbo.each([&](auto entity, UBOs& ubos, ShaderRef& shaderRef, PBRComponent& pbrComponent) {
-	auto it = ubos->find("pbrUniformBlock");
-	if (it != ubos->end()) {
-	    if (!pbrComponent.isEmpty) {
-		it->second->updateCpuUbo("baseColor", pbrComponent.baseColorFactor);
-		it->second->updateCpuUbo("metallicFactor", pbrComponent.metallicFactor);
-		it->second->updateCpuUbo("roughnessFactor", pbrComponent.roughnessFactor);
-		it->second->updateCpuUbo("u_hasBaseColorTexture", 1);
-		it->second->updateCpuUbo("u_hasSpecularTexture", 0);
-
-	    } else {
-		auto logger = RLLogger::getInstance();
-		logger->error("PBR component is empty for entity {}", entt::to_integral(entity));
-	    }
-	}
-    });
+void RenderQueueSystem::processInstanceQueue(const std::vector<entt::entity>& queue){
+	auto singleReg = EnttReg::getPrimaryRegistry();
+    glCall(glDisable, GL_CULL_FACE);
+    for (entt::entity entity : queue) {
+	    renderInstanceEntity(entity, singleReg);
+    }
+    glCall(glEnable, GL_CULL_FACE);
 }
+
+
 }  // namespace RGL

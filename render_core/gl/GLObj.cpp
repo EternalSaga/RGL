@@ -295,7 +295,7 @@ void VAO::addInstanceBuffer(GLuint vaoIdx, const VBO &instanceVBO) {
     // 关联instance buffer到vao的binding index上
     glCall(glVertexArrayVertexBuffer,vao[vaoIdx], vboBindIndex, instanceVBO, instanceVBO.getIndicesSize() + instanceVBO.getVerticesSize(), sizeof(glm::mat4));
 
-    const GLint instanceMatrixLocation = glGetUniformLocation(shaderProgram, "aInstanceMatrix");
+    const GLint instanceMatrixLocation = glGetAttribLocation(shaderProgram, "aInstanceMatrix");
     if (instanceMatrixLocation == -1) {
 	const std::string errmsg{"Could not find uniform location for aInstanceMatrix, perhaps this attribute is optimized by the compiler."};
 
@@ -322,7 +322,7 @@ void VAO::addInstanceBuffer(GLuint vaoIdx, const VBO &instanceVBO) {
 
 	// 将这个属性位置绑定到我们之前设置的 "实例数据流" 绑定点上
 	// 这告诉OpenGL：当需要这个属性的数据时，请从 instanceBindingIndex 指向的VBO中根据规则获取
-	glCall(glVertexArrayAttribBinding, vao[vaoIdx], currentLocation, instanceBindingIndex);
+	glCall(glVertexArrayAttribBinding, vao[vaoIdx], currentLocation, vboBindIndex);
     }
 
     glCall(glVertexArrayBindingDivisor, vao[vaoIdx], vboBindIndex, 1);

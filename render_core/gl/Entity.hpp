@@ -23,8 +23,6 @@ struct VertArrayComponent {
 
 
 
-
-
 class GeneralEntity : public SingleReg {
     entt::entity entity;
 

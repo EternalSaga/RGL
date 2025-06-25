@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include <entt/entity/fwd.hpp>
 #include <entt/entt.hpp>
 #include <vector>
@@ -18,6 +19,7 @@ struct ShadowCaster {};
 struct ShadowReceiver {};
 struct StencilOutlined {};
 struct DisableCulling {};
+struct Instanced{size_t instanceCount = 0;};
 }  // namespace RenderTags
 
 struct RenderQueues {
@@ -29,7 +31,7 @@ struct RenderQueues {
     std::vector<entt::entity> shadowCasterQueue;
     std::vector<entt::entity> shadowReceiverQueue;
     std::vector<entt::entity> disableCullingQueue;
-
+    std::vector<entt::entity> instanceQueue; 
     RenderQueues() = default;
     RenderQueues(const RenderQueues&) = delete;
     RenderQueues& operator=(const RenderQueues&) = delete;
@@ -46,7 +48,9 @@ class RenderQueueSystem {
     static void processTransparentQueue(const std::vector<entt::entity>& queue);
     static void processDisableCullingQueue(const std::vector<entt::entity>& queue);
     static void processSkyboxQueue(const std::vector<entt::entity>& queue);
-    static void updatePBOUniforms();
+
+
+    static void processInstanceQueue(const std::vector<entt::entity>& queue);
 };
 
 }  // namespace RGL

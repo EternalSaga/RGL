@@ -113,7 +113,7 @@ UBOTest::~UBOTest() {
     }
 }
 
-LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) {
+LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) : renderQueues{} {
     this->cam = cam;
 
     // --- 1. 准备基础网格 ---
@@ -128,39 +128,38 @@ LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) {
     auto singleGrassMesh = importer->importAsSingleMesh();
     size_t grassIndexCount = singleGrassMesh->getIndicesCount();
 
-    // c. 为基础网格创建VAO
-    auto grassVAO = VAOCreater::createMeshVAO(*singleGrassMesh, *grassShader);
-
-    // --- 2. 准备实例数据 ---
-    // a. 生成随机变换矩阵
     auto randomTransforms = InstanceFactory::generateRandomTransforms(
-	10000,	// 让我们渲染一万棵草！
+	1000,
 	glm::vec3(-50.0f, 0.0f, -50.0f), glm::vec3(50.0f, 0.0f, 50.0f),
 	0.5f, 1.5f);
 
-    // --- 3. 连接！配置VAO以使用实例数据 ---
+    this->grassVAO = VAOCreater::createMeshVAO(*singleGrassMesh, randomTransforms, *grassShader);
 
-    VAOCreater::createMeshVAO(*singleGrassMesh, randomTransforms, *grassShader);
-
-    auto grassFieldEntity = singleReg->create();
-
-    // --- 5. 设置光照 (和以前一样) ---
     directionalLight = std::make_unique<GeneralEntity>();
     directionalLight->attachComponent<CommonLight>(glm::vec3{1.0f, 0.9f, 0.9f}, glm::vec3{0.2f, 0.2f, 0.2f}, 32.0f);
     directionalLight->attachComponent<DirectionalCompnent>(glm::vec3{1.0f, -1.0f, -1.0f});  // 把光照方向往下调一点，效果更好
 
     lightUBO = std::make_shared<UBO>(*grassShader, "DirectionLight");
 
+    cameraUBO = std::make_shared<UBO>(*grassShader, "CameraBlock");
+
     ubos = std::make_shared<std::unordered_map<std::string, std::shared_ptr<UBO>>>();
     (*ubos)[lightUBO->getUboName()] = lightUBO;
+    (*ubos)[cameraUBO->getUboName()] = cameraUBO;
 
+    auto grassFieldEntity = singleReg->create();
     singleReg->emplace_or_replace<UBOs>(grassFieldEntity, ubos);
+    singleReg->emplace<Transform>(grassFieldEntity, glm::vec3{0.0f, 0.0f, 0.0f}, glm::vec3{0.0f, 0.0f, 0.0f}, glm::vec3{1.0f, 1.0f, 1.0f});
+    auto [vertCount, idxOffset] = singleGrassMesh->getIdicesCountAndOffset();
+    singleReg->emplace<VertArrayComponent>(grassFieldEntity, std::move(grassVAO), vertCount, idxOffset);
+    singleReg->emplace<ShaderRef>(grassFieldEntity, grassShader);
+    singleReg->emplace<RenderTags::Instanced>(grassFieldEntity, 1000ull);
 }
 
 void LoadModelTest::operator()() {
     cam->update();
-
-    m_instancedRenderSystem.update();
+    RenderQueueSystem::populateRenderqueues(renderQueues);
+    RenderQueueSystem::processInstanceQueue(renderQueues.instanceQueue);
 }
 
 LoadModelTest::~LoadModelTest() {

@@ -69,7 +69,7 @@ std::unique_ptr<VAO> VAOCreater::createMeshVAO(const Mesh& mesh, const Shader& s
     return std::move(vao);
 }
 
-std::unique_ptr<VAO> createMeshVAO(const Mesh& mesh,const std::vector<glm::mat4>& instanceMatrices, const Shader& shader){
+std::unique_ptr<VAO> VAOCreater::createMeshVAO(const Mesh& mesh,const std::vector<glm::mat4>& instanceMatrices, const Shader& shader){
     auto vao = std::make_unique<VAO>();
     auto vbo = std::make_unique<VBO>();
     vbo->setData(VerticesWithInstancesAndIndices{mesh.getChanneledVertices(), mesh.getIndices(), instanceMatrices});
@@ -79,6 +79,7 @@ std::unique_ptr<VAO> createMeshVAO(const Mesh& mesh,const std::vector<glm::mat4>
     vao->addInstanceBuffer(0,*vbo);
     return std::move(vao);
 }
+
 
 size_t Mesh::getVertexLength() {
     size_t vertLength = 0;
@@ -148,6 +149,7 @@ SamplersScope::~SamplersScope() {
 size_t Mesh::getVertexCount() const {
     return channeledVertices.size() / vertLength;
 }
+
 
 
 }  // namespace glcore

@@ -66,12 +66,13 @@ class LoadModelTest : public Renderer,public SingleReg{
 
     std::shared_ptr<UBO> lightUBO;
 
-    std::shared_ptr<UBO> pbrUBO;
+    std::shared_ptr<UBO> cameraUBO;
 
     std::unique_ptr<ModelImporter> importer;
 
+    std::unique_ptr<VAO> grassVAO;
 
-    InstancedRenderSystem m_instancedRenderSystem;
+    RenderQueues renderQueues;
 public:
     LoadModelTest(std::shared_ptr<Camera> cam);
     void operator()() override;
