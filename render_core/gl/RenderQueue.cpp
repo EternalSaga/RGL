@@ -10,6 +10,7 @@
 #include "GLCheckError.hpp"
 #include "GLObj.hpp"
 #include "Helpers.hpp"
+#include "rllogger.hpp"
 
 #include <entt/core/hashed_string.hpp>
 using namespace entt::literals;
@@ -209,17 +210,22 @@ void renderInstanceEntity(entt::entity entity, entt::registry* reg) {
     const glm::mat4 modelMatrix = transform.modelMatrix;
     
     auto& ubos = reg->get<UBOs>(entity);
-    auto instanceTransformsUbo = (*ubos)["InstanceTransforms"];
+    auto instanceTransformsUbo = (*ubos)["CameraBlock"];
     if (instanceTransformsUbo) {
         instanceTransformsUbo->updateCpuUbo("viewMatrix", viewMatrix);
         instanceTransformsUbo->updateCpuUbo("projectionMatrix", proj.projMat);
-        instanceTransformsUbo->updateCpuUbo("instancesGroupMatrix", modelMatrix);
+        //instanceTransformsUbo->updateCpuUbo("instancesGroupMatrix", modelMatrix);
+    }else {
+        RLLogger::getInstance()->error("UBO InstanceTransforms not found for entity");
     }
     ScopeShader scopeShader(*shader);
     VAOScope vaoScope(*vertArray.vao);
     SamplerCreater::SamplersScope samplersScope(samplers);
     for (const auto& sampler : samplers) {
         shader->setUniform(sampler.samplerName, sampler.textureUnit);
+    }
+    for (auto ubo : *ubos) {
+        ubo.second->setUniform();
     }
 
     glCall(glDrawElementsInstanced, GL_TRIANGLES, vertArray.vertCount, GL_UNSIGNED_INT,

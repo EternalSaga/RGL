@@ -1,4 +1,5 @@
 #include "Light.hpp"
+#include <spdlog/common.h>
 #include "rllogger.hpp"
 namespace RGL {
 namespace glcore {
@@ -12,7 +13,7 @@ void updateLightCommon(const CommonLight& common, std::shared_ptr<UBO> ubo) {
 void updateDirLight() {
     auto reg = EnttReg::getPrimaryRegistry();
     auto view = reg->view<const CommonLight, const DirectionalCompnent, UBOs>();
-    RLLogger::getInstance()->log_if(spdlog::level::debug, (view.size_hint() == 0), "Current Directional light view is empty");
+    RLLogger::getInstance()->log_if(spdlog::level::warn, (view.size_hint() == 0), "Current Directional light view is empty");
     view.each([&reg](const CommonLight& commonlight, const DirectionalCompnent& dirctionalComponent, UBOs& ubos) {
 	auto directionalLight = (*ubos)["DirectionLight"];
 

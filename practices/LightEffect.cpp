@@ -128,7 +128,7 @@ LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) : renderQueues{} {
     auto singleGrassMesh = importer->importAsSingleMesh();
 
     auto randomTransforms = InstanceFactory::generateRandomTransforms(
-	1000,
+	100,
 	glm::vec3(-50.0f, 0.0f, -50.0f), glm::vec3(50.0f, 0.0f, 50.0f),
 	0.5f, 1.5f);
 
@@ -146,6 +146,8 @@ LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) : renderQueues{} {
     (*ubos)[lightUBO->getUboName()] = lightUBO;
     (*ubos)[cameraUBO->getUboName()] = cameraUBO;
 
+    directionalLight->attachComponent<UBOs>(ubos);
+
     auto grassFieldEntity = singleReg->create();
     singleReg->emplace_or_replace<UBOs>(grassFieldEntity, ubos);
     singleReg->emplace<Transform>(grassFieldEntity, glm::vec3{0.0f, 0.0f, 0.0f}, glm::vec3{0.0f, 0.0f, 0.0f}, glm::vec3{1.0f, 1.0f, 1.0f});
@@ -157,12 +159,13 @@ LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) : renderQueues{} {
 
     singleReg->emplace<SamplerCreater::Samplers>(grassFieldEntity, samplers);
 
-    singleReg->emplace<RenderTags::Instanced>(grassFieldEntity, 1000ull);
+    singleReg->emplace<RenderTags::Instanced>(grassFieldEntity, 100ull);
     singleReg->emplace<RenderTags::Renderable>(grassFieldEntity);
 }
 
 void LoadModelTest::operator()() {
     cam->update();
+    updateDirLight();
     RenderQueueSystem::populateRenderqueues(renderQueues);
     RenderQueueSystem::processInstanceQueue(renderQueues.instanceQueue);
 }
@@ -170,6 +173,10 @@ void LoadModelTest::operator()() {
 LoadModelTest::~LoadModelTest() {
     auto renderEntites = singleReg->view<Transform>();
     for (auto entity : renderEntites) {
+	singleReg->destroy(entity);
+    }
+    auto lightEntities = singleReg->view<DirectionalCompnent>();
+    for (auto entity : lightEntities) {
 	singleReg->destroy(entity);
     }
 }

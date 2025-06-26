@@ -19,14 +19,14 @@ layout(std140) uniform CameraBlock{
 void main()
 {
     // 计算世界坐标
-    worldPosition = vec3(aInstanceMatrix * vec4(inPos, 1.0));
+    worldPosition = vec3(aInstanceMatrix * vec4(inPos*0.05, 1.0));
 
     // 计算最终的裁剪空间坐标
+    
     gl_Position = projectionMatrix * viewMatrix * vec4(worldPosition, 1.0);
 
-    // 变换法线到世界空间
-    // 注意：我们用 aInstanceMatrix 的逆转置矩阵来变换法线
-    normal = mat3(transpose(inverse(aInstanceMatrix))) * inNormal;
+    normal = normalize(mat3(aInstanceMatrix) * inNormal);
+    //normal = vec3(0.0, 1.0, 0.0);
 
     uv = inUV;
 }

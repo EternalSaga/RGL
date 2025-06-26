@@ -57,4 +57,5 @@ void main()
 	vec3 finalColor = ambientColor + diffuse + translucency;
 
 	FragColor = vec4(finalColor, albedo.a);
+	//FragColor = vec4(albedo);
 }
