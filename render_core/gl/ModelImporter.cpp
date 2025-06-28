@@ -3,6 +3,7 @@
 #include <assimp/scene.h>
 #include <spdlog/common.h>
 #include <windef.h>
+#include "AABB.hpp"
 #include "EnTTRelationship.hpp"
 #include "GLCheckError.hpp"
 #include "GLTextures.hpp"
@@ -218,14 +219,16 @@ void processAndTransformVertex(
     aiMesh* mesh,
     size_t aiVertexIdx,
     const glm::mat4& transform,
-    const glm::mat3& normalTransform) {
+    const glm::mat3& normalTransform,
+	AABB& aabb //顺便给AABB扩展min max
+) {
     // 1. 获取局部坐标
     const auto& aiPos = mesh->mVertices[aiVertexIdx];
     glm::vec3 localPos(aiPos.x, aiPos.y, aiPos.z);
 
     //  应用变换，得到世界坐标
     glm::vec3 worldPos = transform * glm::vec4(localPos, 1.0f);
-
+	aabb.extend(worldPos);//扩展AABB边界
     // 2. 获取局部法线
     if (!mesh->HasNormals()) {
 	throw std::runtime_error("Mesh has no normals, cannot merge.");
@@ -252,6 +255,7 @@ void ModelImporter::mergeNodeDFS(Mesh& outMesh) {
     if (!scene || !scene->mRootNode) {
 	return;
     }
+	AABB modelAABB;
 
     std::stack<std::pair<aiNode*, glm::mat4>> nodeStack;
     nodeStack.push({scene->mRootNode, glm::mat4(1.0f)});
@@ -273,7 +277,7 @@ void ModelImporter::mergeNodeDFS(Mesh& outMesh) {
 	    // 遍历当前网格的所有顶点，进行变换并添加到 outMesh
 	    for (size_t j = 0; j < mesh->mNumVertices; ++j) {
 		std::vector<GLfloat> transformedVertex;
-		processAndTransformVertex(transformedVertex, mesh, j, currentTransform, normalTransform);
+		processAndTransformVertex(transformedVertex, mesh, j, currentTransform, normalTransform,modelAABB);
 		outMesh.pushVertex(transformedVertex);
 	    }
 
@@ -292,6 +296,7 @@ void ModelImporter::mergeNodeDFS(Mesh& outMesh) {
 	}
     }
 	
+	outMesh.setAABB(modelAABB);
 }
 
 std::unique_ptr<Mesh> ModelImporter::importAsSingleMesh() {

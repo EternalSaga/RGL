@@ -54,6 +54,12 @@ Transform::Transform(glm::vec3 position, glm::vec3 rotation, glm::vec3 scale) : 
     logger = RLLogger::getInstance();
 }
 
+Transform::Transform(glm::vec3 position)
+: position(position), rotation(glm::vec3(0.0f)), scale(glm::vec3(1.0f)), modelMatrix(glm::identity<glm::mat4>()) 
+{
+    
+}
+
 void Transform::setRotation(glm::vec3 rotation) {
     this->rotation = rotation;
 }
@@ -75,6 +81,29 @@ void Transform::addScale(glm::vec3 scale) {
 glm::vec3 Transform::getPosition() const {
     return position;
 }
+
+void Transform::formToAABB(const AABB& modelLocalAABB,const float desiredSize){
+    const float modelLongestEdge = modelLocalAABB.getLongestEdgeLength();
+
+    float scaleFactor = 1.0f;
+
+    if (modelLongestEdge > 1e-5) { //防止除零错误
+        scaleFactor = desiredSize / modelLongestEdge;
+    }else {
+        RLLogger::getInstance()->error("Model has no valid AABB");
+        throw std::runtime_error("Model has no valid AABB");
+    }
+
+    //模型相对于世界坐标系的中心偏移量
+    glm::vec3 centerOffset = -modelLocalAABB.getCenter();
+    glm::mat4 tempModelMatrix = glm::mat4(1.0f);
+    tempModelMatrix = glm::scale(modelMatrix, glm::vec3(scaleFactor));
+    tempModelMatrix = glm::translate(tempModelMatrix, centerOffset);
+    
+    modelMatrix = tempModelMatrix * modelMatrix;
+
+}
+
 void Transform::doLocalTransform() {
     auto localModelMatrix = glm::identity<glm::mat4>();	 // Reset model matrix
 

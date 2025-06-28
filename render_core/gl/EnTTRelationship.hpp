@@ -7,6 +7,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <vector>
+#include "AABB.hpp"
 #include "rllogger.hpp"
 #include <glm/glm.hpp>
 namespace RGL {
@@ -22,6 +23,9 @@ struct Transform {
 
     RLLogger* logger;
     Transform(glm::vec3 position, glm::vec3 rotation, glm::vec3 scale);
+
+    Transform(glm::vec3 position);
+
     void doLocalTransform();
     void setRotation(glm::vec3 rotation);
     void setScale(glm::vec3 scale);
@@ -29,6 +33,9 @@ struct Transform {
     void addPosition(glm::vec3 position);
     void addRotation(glm::vec3 rotation);
     void addScale(glm::vec3 scale);
+
+    void formToAABB(const AABB& modelAABB,const float desiredSize);
+
     glm::vec3 getPosition() const;
 };
 struct Relationship {

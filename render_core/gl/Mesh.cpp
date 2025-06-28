@@ -152,7 +152,11 @@ size_t Mesh::getVertexCount() const {
     return channeledVertices.size() / vertLength;
 }
 
-
-
+void Mesh::setAABB(const AABB& aabb) {
+    modelAABB = aabb;
+}
+AABB Mesh::getAABB() const {
+    return modelAABB;
+}
 }  // namespace glcore
 }  // namespace RGL

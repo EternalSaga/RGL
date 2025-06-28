@@ -1,3 +1,6 @@
+#include <glm/ext/matrix_transform.hpp>
+#include <glm/ext/vector_float3.hpp>
+#include <glm/fwd.hpp>
 #include <memory>
 
 #include "Entity.hpp"
@@ -113,6 +116,40 @@ UBOTest::~UBOTest() {
     }
 }
 
+void frameObjectInView(std::shared_ptr<Camera> cam, const RGL::glcore::AABB& worldAABB) {
+    // 你的相机是 PerspectiveTrackballCamera，我们需要修改它的ECS组件
+    auto singleReg = RGL::EnttReg::getPrimaryRegistry();
+    auto view = singleReg->view<RGL::CameraPose, RGL::CameraEulerMoveParams>(); // 假设相机只有一个实体
+    auto cameraEntity = *view.begin();
+
+    auto& camPose = view.get<RGL::CameraPose>(cameraEntity);
+    
+    float fovy = 60.0f; // 假设你的相机FOV是60度
+    float aspect = 720.0f / 480.0f; // 你的窗口宽高比
+
+    glm::vec3 objectCenter = worldAABB.getCenter();
+    float objectRadius = glm::length(worldAABB.getSize()) / 2.0f;
+
+    // 根据垂直FOV计算距离
+    float distance = objectRadius / tan(glm::radians(fovy / 2.0f));
+
+    // 如果水平方向更宽，则根据水平FOV调整距离
+    float horizontalFov = glm::degrees(2.0f * atan(tan(glm::radians(fovy / 2.0f)) * aspect));
+    float neededDistHorizontal = (objectRadius / tan(glm::radians(horizontalFov / 2.0f))) * aspect; // 粗略估算
+    
+    distance = glm::max(distance, neededDistHorizontal) * 1.5f; // 乘以一个系数，留出一些边距
+
+    // 将相机放在物体中心后面一段距离的位置
+    camPose.position = objectCenter + glm::vec3(0.0f, 0.5f, 1.0f) * distance; // 从斜上方看
+    
+    // 相机朝向物体中心 (lookAt逻辑在你的`PerspectiveCamSystem::update`中处理)
+    // 我们需要更新up和right来确保相机正确朝向
+    glm::vec3 front = glm::normalize(objectCenter - camPose.position);
+    camPose.right = glm::normalize(glm::cross(front, glm::vec3(0.0f, 1.0f, 0.0f)));
+    camPose.up = glm::normalize(glm::cross(camPose.right, front));
+}
+
+
 LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) : renderQueues{} {
     this->cam = cam;
 
@@ -126,6 +163,11 @@ LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) : renderQueues{} {
     // b. 加载并合并模型为一个基础网格
     importer = std::make_unique<ModelImporter>("assest\\grass_variations.glb");
     auto singleGrassMesh = importer->importAsSingleMesh();
+
+
+
+
+
 
     auto randomTransforms = InstanceFactory::generateRandomTransforms(
 	100,
@@ -150,7 +192,14 @@ LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) : renderQueues{} {
 
     auto grassFieldEntity = singleReg->create();
     singleReg->emplace_or_replace<UBOs>(grassFieldEntity, ubos);
-    singleReg->emplace<Transform>(grassFieldEntity, glm::vec3{0.0f, 0.0f, 0.0f}, glm::vec3{0.0f, 0.0f, 0.0f}, glm::vec3{1.0f, 1.0f, 1.0f});
+
+    Transform transform{glm::vec3{0.0f, 0.0f, 0.0f}};
+    auto modelLocalAABB = singleGrassMesh->getAABB();
+
+    const float desiredSize = 10.0f; //1.0f约等于1米，所以20.0f约等于20米的草地
+    transform.formToAABB(modelLocalAABB, desiredSize);
+
+    singleReg->emplace<Transform>(grassFieldEntity, transform);
     auto [vertCount, idxOffset] = singleGrassMesh->getIdicesCountAndOffset();
     singleReg->emplace<VertArrayComponent>(grassFieldEntity, std::move(grassVAO), vertCount, idxOffset);
     singleReg->emplace<ShaderRef>(grassFieldEntity, grassShader);
@@ -161,6 +210,8 @@ LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) : renderQueues{} {
 
     singleReg->emplace<RenderTags::Instanced>(grassFieldEntity, 100ull);
     singleReg->emplace<RenderTags::Renderable>(grassFieldEntity);
+
+    frameObjectInView(cam,modelLocalAABB);
 }
 
 void LoadModelTest::operator()() {

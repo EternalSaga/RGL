@@ -19,7 +19,7 @@ layout(std140) uniform CameraBlock{
 void main()
 {
     // 计算世界坐标
-    worldPosition = vec3(aInstanceMatrix * vec4(inPos*0.05, 1.0));
+    worldPosition = vec3(aInstanceMatrix * vec4(inPos, 1.0));
 
     // 计算最终的裁剪空间坐标
     

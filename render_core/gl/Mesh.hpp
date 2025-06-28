@@ -15,6 +15,7 @@
 #include "GLObj.hpp"
 #include "Material.hpp"
 #include "rllogger.hpp"
+#include "AABB.hpp"
 namespace RGL {
 namespace glcore {
 
@@ -33,7 +34,7 @@ class Mesh {
     PBRComponent pbrComponent;
 
     bool materialHasSet = false;
-
+    AABB modelAABB;
    public:
     explicit Mesh();
     explicit Mesh(FloatDescs descs,size_t numOfVertcies);
@@ -56,7 +57,9 @@ class Mesh {
     PBRComponent getPBRComponent() const;
 
     std::shared_ptr<MaterialData> getMaterial() const;
+    void setAABB(const AABB& aabb);
 
+    AABB getAABB() const;
 };
 
 namespace VAOCreater {

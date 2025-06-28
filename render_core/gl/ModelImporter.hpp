@@ -26,6 +26,7 @@
 #include <glm/gtx/euler_angles.hpp>
 #include <glm/gtx/quaternion.hpp>
 #include "Shader.hpp"
+
 namespace RGL {
 namespace io {
 using namespace glcore;
@@ -52,6 +53,8 @@ class ModelImporter : public SingleReg {
     
     // 递归函数，用于遍历节点树并合并网格
     void mergeNodeDFS(Mesh& outMesh);
+
+    
 
    public:
     ModelImporter(const fs::path& path);
