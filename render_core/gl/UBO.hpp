@@ -17,6 +17,8 @@ class UboBindingManager {
     static std::once_flag initOnce;
     UboBindingManager();
 
+    
+
    public:
     
     static UboBindingManager* getInstance();
@@ -25,7 +27,7 @@ class UboBindingManager {
     ~UboBindingManager() = default;
 };
 
-
+std::string type2string(int gltype);
 	
 class UBO {
     GLuint ubo;

@@ -117,7 +117,7 @@ Samplers createSamplers(const Mesh& mesh, const Shader& shader) {
 	auto textures = material->getTextures();
 	for (auto [usage, textures] : textures) {
 	    for (auto& tex : textures) {
-		samplers.emplace_back(Sampler{tex->getName(), GL_INVLAID_TEXTURE_UNIT, tex});
+		samplers.emplace_back(Sampler{tex->getName(), tex->getTextureHandler() ,tex});
 	    }
 	}
     } else {
@@ -130,7 +130,7 @@ Samplers createSamplers(const Mesh& mesh, const Shader& shader) {
 void UseTextures(Samplers& samplers) {
     for (auto& sampler : samplers) {
 	sampler.texture->useTexture();
-	sampler.textureUnit = sampler.texture->getTextureUnit();
+	sampler.textureHandler = sampler.texture->getTextureHandler();
     }
 }
 void DisableTextures(Samplers& samplers) {

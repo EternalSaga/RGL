@@ -119,7 +119,7 @@ void CommonRenderEntity::renderVertexArray() {
 
 	SamplerCreater::SamplersScope samplersScope(samplers);
 	for (const auto& sampler : samplers) {
-		shader->setUniform(sampler.samplerName,sampler.textureUnit);
+		shader->setUniform(sampler.samplerName,sampler.textureHandler);
 	}
 
 	RLLogger::getInstance()->log_if(spdlog::level::err, !glCall(glIsVertexArray,*(mesh.vao)), "Mesh vao is not valid");
@@ -135,7 +135,7 @@ void CommonRenderEntity::renderVertexArray() {
 	    VAOScope vaoscope(*mesh.vao);
 	    SamplerCreater::SamplersScope samplersScope(samplers);
 		for (const auto& sampler : samplers) {
-			shader->setUniform(sampler.samplerName,sampler.textureUnit);
+			shader->setUniform(sampler.samplerName,sampler.textureHandler);
 		}
 		RLLogger::getInstance()->log_if(spdlog::level::err, !glCall(glIsVertexArray,*(mesh.vao)), "Mesh vao is not valid");
 	    glCall(glDrawElements, GL_TRIANGLES, mesh.vertCount, GL_UNSIGNED_INT, reinterpret_cast<void*>(mesh.idxOffset));

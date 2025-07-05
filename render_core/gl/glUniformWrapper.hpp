@@ -98,7 +98,10 @@ void glUniform(GLuint program, GLint location, Args... values) {
 	    glCall(glProgramUniform1i, program, location, std::forward<Args>(values)...);
 	} else if constexpr (all_same_type_v<GLuint, Args...>) {
 	    glCall(glProgramUniform1ui, program, location, std::forward<Args>(values)...);
-	} else {
+	}else if constexpr (all_same_type_v<GLuint64, Args...>) {
+	    glCall(glProgramUniform1ui64ARB, program, location, std::forward<Args>(values)...);
+	}	
+	else {
 	    static_assert(false, "Error template type");
 	}
     } else if constexpr (numOfArgs == 2) {

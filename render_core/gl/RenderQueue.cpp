@@ -93,7 +93,7 @@ void renderSingleEntity(entt::entity entity, entt::registry* reg, bool isSkybox 
     SamplerCreater::SamplersScope samplersScope(samplers);
 
     for (const auto& sampler : samplers) {
-	shader->setUniform(sampler.samplerName, sampler.textureUnit);
+	shader->setUniform(sampler.samplerName, sampler.textureHandler);
     }
 
     RLLogger::getInstance()->log_if(spdlog::level::err, !glCall(glIsVertexArray, *(vertArray.vao)), "Mesh vao is not valid for entity {}", entt::to_integral(entity));
@@ -222,7 +222,7 @@ void renderInstanceEntity(entt::entity entity, entt::registry* reg) {
     VAOScope vaoScope(*vertArray.vao);
     SamplerCreater::SamplersScope samplersScope(samplers);
     for (const auto& sampler : samplers) {
-        shader->setUniform(sampler.samplerName, sampler.textureUnit);
+        shader->setUniform(sampler.samplerName, sampler.textureHandler);
     }
     for (auto ubo : *ubos) {
         ubo.second->setUniform();

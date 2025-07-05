@@ -50,33 +50,13 @@ using namespace io;
 std::vector<GLuint> initTUnitRes();
 
 
-constexpr GLint GL_INVLAID_TEXTURE_UNIT = GL_TEXTURE0 - 1;
 
-class TextUnitResources {
-    
-   public:
-    ~TextUnitResources() = default;
-
-    // 如果返回0，则代表没有资源，需要push
-    GLuint popUnit();
-    void pushUnit(GLuint tunit) {
-	textureUnitResource.push_back(tunit);
-    }
-    static std::shared_ptr<TextUnitResources> getInstance();
-
-    TextUnitResources();
-    static std::shared_ptr<TextUnitResources> instance;
-    std::vector<GLint> textureUnitResource;
-    static std::once_flag initOnce;
-    GLint MAX_UNIT_SIZE;
-};
 
 enum class TextureUsageType {
-    DIFFUSE,
-    SPECULAR,
-    NORMAL,
-    AMBIENT,
-
+    DIFFUSE = 1,
+    SPECULAR = 2,
+    NORMAL = 3,
+    AMBIENT = 4
 };
 
 class Texture {
@@ -86,10 +66,10 @@ class Texture {
 
     GLuint texture;
 
-    GLint textureUnit;	// 纹理单元
+    GLuint64 textureHandle;	// 纹理句柄
+
     std::string textureName;	// 纹理名
 
-    std::shared_ptr<TextUnitResources> unitsPool;
 
     TextureUsageType usageType;
     void setTextureUnit();
@@ -103,7 +83,7 @@ class Texture {
         return textureName;
     }
     void disableTexture();
-    GLint getTextureUnit();
+    inline GLuint64 getTextureHandler() const { return textureHandle; }
 
     void set(const ImgRef &flippedImg, bool turnOnMipmap);
 

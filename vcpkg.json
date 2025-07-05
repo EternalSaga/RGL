@@ -22,7 +22,9 @@
     },
     {
       "name": "glad",
-      "version>=": "0.1.36#0"
+      "version>=": "0.1.36#0",
+      "features": ["gl-api-46","extensions"]
+
     },
     {
       "name": "glm",
