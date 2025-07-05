@@ -15,6 +15,8 @@ RGL is a high-performance, modern C++ rendering framework built from the ground 
 -   **Robust Asset Pipeline:** Integrates **Assimp** to load complex 3D models and their materials. The framework includes a comprehensive texture cache and can process node hierarchies, merge meshes, and handle PBR material properties.
 -   **High-Performance Instancing:** Supports hardware-accelerated instanced rendering, making it possible to render thousands of objects (like grass or rocks) with minimal CPU overhead.
 -   **RAII-Compliant C++ Wrappers:** Provides clean, safe, and modern C++ wrappers for OpenGL objects (`VAO`, `VBO`, `Shader`, `Texture`), ensuring proper resource management.
+-   **Bindless Textures:** Transition to `glGetTextureHandleARB` to completely eliminate the cumbersome and limited `texture unit` system, allowing for a virtually unlimited number of textures in shaders.
+-   **Self Adjustable Camera:** The camera is designed to adjust dynamically based on the model size.
 
 ## 📂 Project Structure
 
@@ -49,9 +51,8 @@ This project uses vcpkg in manifest mode to manage dependencies. If you have vcp
 
 RGL is an actively evolving project. Here are the ambitious goals planned for the future:
 
-1.  **Bindless Textures:** Transition to `glGetTextureHandleARB` to completely eliminate the cumbersome and limited `texture unit` system, allowing for a virtually unlimited number of textures in shaders.
-2.  **SPIR-V Shader Pipeline:** Integrate **SPIR-V** and **SPIRV-Cross** to move away from hardcoded shader locations (`layout(location = ...)`) and uniform names. This will allow for true shader reflection and a more robust, backend-agnostic material system.
-3.  **Unified Asset Management System:** Create a comprehensive asset system using **Boost.Serialization**. This system will serialize processed models, meshes, AABBs, and SPIR-V shaders into a custom binary format for blazing-fast load times.
-4.  **Advanced Rendering Topics:** Dive deeper into **Physically-Based Rendering (PBR)**, implementing image-based lighting (IBL), shadows, and other advanced lighting and post-processing effects.
-5.  **Vulkan Backend:** Abstract the rendering API to support a **Vulkan** backend alongside OpenGL, fulfilling the original vision of a true cross-API framework.
-6.  **(Ambitious Goal) Multi-Draw Indirect (MDI):** Implement GPU-driven rendering using `glMultiDrawElementsIndirect` to offload almost all rendering logic to the GPU, achieving maximum performance for massive scenes.
+1.  **SPIR-V Shader Pipeline:** Integrate **SPIR-V** and **SPIRV-Cross** to move away from hardcoded shader locations (`layout(location = ...)`) and uniform names. This will allow for true shader reflection and a more robust, backend-agnostic material system.
+2.  **Unified Asset Management System:** Create a comprehensive asset system using **Boost.Serialization**. This system will serialize processed models, meshes, AABBs, and SPIR-V shaders into a custom binary format for blazing-fast load times.
+3.  **Advanced Rendering Topics:** Dive deeper into **Physically-Based Rendering (PBR)**, implementing image-based lighting (IBL), shadows, and other advanced lighting and post-processing effects.
+4.  **Vulkan Backend:** Abstract the rendering API to support a **Vulkan** backend alongside OpenGL, fulfilling the original vision of a true cross-API framework.
+5.  **(Ambitious Goal) Multi-Draw Indirect (MDI):** Implement GPU-driven rendering using `glMultiDrawElementsIndirect` to offload almost all rendering logic to the GPU, achieving maximum performance for massive scenes.
