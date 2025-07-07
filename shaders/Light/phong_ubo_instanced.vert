@@ -5,12 +5,13 @@ layout (location = 2) in vec3 inNormal;
 // 新增：每实例的模型矩阵，从 location 3 开始
 layout (location = 3) in mat4 aInstanceMatrix;
 
-out vec2 uv;
-out vec3 normal;
-out vec3 worldPosition;
+layout(location = 0) out vec2 uv;
+
+layout(location = 1) out vec3 normal;
+layout(location = 2) out vec3 worldPosition;
 
 
-layout(std140) uniform CameraBlock{
+layout(std140,binding = 0) uniform CameraBlock{
     mat4 viewMatrix;
     mat4 projectionMatrix;
 };

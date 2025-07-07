@@ -15,6 +15,8 @@
 #include <memory>
 #include <mutex>
 
+#include <boost/dll/runtime_symbol_info.hpp>
+
 namespace RGL {
 
 std::atomic_bool RLApp::isInit;
@@ -25,17 +27,17 @@ void onResize(int width, int height) {
 }
 void onSetKeyboard(int key, int action, int mods) {
     auto logger = RGL::RLLogger::getInstance();
-    logger->info("press key{}", key);
+    logger->trace("press key{}", key);
 }
 
 void onMouseButton(int button, int action) {
     auto logger = RGL::RLLogger::getInstance();
-    logger->info("press button{},action {}", button, action);
+    logger->trace("press button{},action {}", button, action);
 }
 
 void onCursorMove(double x, double y) {
     auto logger = RGL::RLLogger::getInstance();
-    logger->info("the cursor posision is ({},{})", x, y);
+    logger->trace("the cursor posision is ({},{})", x, y);
 }
 
 RLApp::RLApp(std::shared_ptr<SDLWindow> window)
@@ -74,7 +76,10 @@ std::unique_ptr<RendererContext> CreateContext(API_TYPE api_type, std::shared_pt
 
 void app() {
     constexpr auto api = API_TYPE::OPENGL46;
-
+    {
+        auto processPath = boost::dll::program_location();
+        RLLogger::getInstance()->info("Process path: {}", processPath.string());
+    }
     auto window =
 	std::make_shared<SDLWindow>(720, 480, "opengl_study", api);
     RLApp app(window);

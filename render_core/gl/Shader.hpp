@@ -42,13 +42,12 @@ enum class SHADER_TYPE {
     TESS_EVALUATION = GL_TESS_EVALUATION_SHADER
 };
 
-using ShaderSrcs = std::map<SHADER_TYPE, std::vector<fs::path>>;
+using ShaderBytesPath = std::map<SHADER_TYPE, fs::path>;
 
 class Shader {
     RLLogger *logger;
     static constexpr GLuint MaxShaderLogLength = 1024;
     size_t *refCount = nullptr;
-    GLuint shader;
    public:
     Shader() = delete;
 
@@ -63,7 +62,7 @@ class Shader {
     /// <param name="shaderSrcs">
     /// 由SHADER_TYPE枚举和路径vector组成的map类型
     /// </param>
-    Shader(const ShaderSrcs &shaderSrcs);
+    Shader(const ShaderBytesPath &shaderBytesPath);
 
     operator GLuint() { return shaderProgram; }
     operator GLuint() const { return shaderProgram; }
@@ -98,11 +97,10 @@ class Shader {
     Shader(const Shader &other) = delete;
 
    private:
-    std::string loadFile(const fs::path &p);
+    
     GLuint shaderProgram;
-
-    GLint compiled;
-    GLint linked;
+    GLint linked = 0;
+    
 };
 
 class ScopeShader {

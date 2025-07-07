@@ -15,6 +15,9 @@
     {
       "name": "boost-variant2",
       "version>=": "1.86.0"
+    },    {
+      "name": "boost-dll",
+      "version>=": "1.86.0"
     },
     {
       "name": "sdl3",
@@ -62,6 +65,15 @@
     {
       "name": "assimp",
       "version>=": "5.4.3#0"
+    },
+    {
+      "name":"glslang",
+      "version>=": "15.1.0#0",
+      "features": [
+        "tools",
+        "opt",
+        "rtti"
+      ]
     }
   ],
   "overrides": [

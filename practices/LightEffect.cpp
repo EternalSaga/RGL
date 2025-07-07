@@ -9,6 +9,7 @@
 #include "Mesh.hpp"
 #include "PointLight.hpp"
 #include "RenderQueue.hpp"
+#include "Shader.hpp"
 #include "SpotLight.hpp"
 #include "Material.hpp"
 
@@ -28,7 +29,7 @@ namespace practice {
 
 UBOTest::UBOTest(std::shared_ptr<Camera> cam) {
     this->cam = cam;
-    ShaderSrcs pointLightshaderSrc = {
+    ShaderBytesPath pointLightshaderSrc = {
 	{SHADER_TYPE::VERTEX, {"shaders\\Light\\phong_ubo.vert"}},
 	{SHADER_TYPE::FRAGMENT, {"shaders\\Light\\spotlight_ubo.frag"}}};
     this->spotlightShader = std::make_shared<Shader>(pointLightshaderSrc);
@@ -70,7 +71,7 @@ UBOTest::UBOTest(std::shared_ptr<Camera> cam) {
     singleReg->emplace_or_replace<UBOs>(*spotLight, ubos);
 
     // 点光源白球相关初始化
-    ShaderSrcs whiteShaderSrc = {
+    ShaderBytesPath whiteShaderSrc = {
 	{SHADER_TYPE::VERTEX, {"shaders\\Light\\white.vert"}},
 	{SHADER_TYPE::FRAGMENT, {"shaders\\Light\\white.frag"}}};
     this->whiteShader = std::make_shared<Shader>(whiteShaderSrc);
@@ -153,13 +154,13 @@ LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) : renderQueues{} {
 
     // --- 1. 准备基础网格 ---
     // a. 创建草地Shader
-    ShaderSrcs modelShaderSrc = {
-	{SHADER_TYPE::VERTEX, {"shaders\\Light\\phong_ubo_instanced.vert"}},
-	{SHADER_TYPE::FRAGMENT, {"shaders\\Light\\grass-fragment.frag"}}};
+    ShaderBytesPath modelShaderSrc = {
+	{SHADER_TYPE::VERTEX, {"shaders\\phong_ubo_instanced.spv"}},
+	{SHADER_TYPE::FRAGMENT, {"shaders\\grass-fragment.spv"}}};
     grassShader = std::make_shared<Shader>(modelShaderSrc);
 
     // b. 加载并合并模型为一个基础网格
-    importer = std::make_unique<ModelImporter>("assest\\grass_variations.glb");
+    importer = std::make_unique<ModelImporter>("assets\\grass_variations.glb");
     auto singleGrassMesh = importer->importAsSingleMesh();
 
     auto randomTransforms = InstanceFactory::generateRandomTransforms(

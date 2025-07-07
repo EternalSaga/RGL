@@ -58,4 +58,4 @@
 #*.rtf   diff=astextplain
 #*.RTF   diff=astextplain
 
-assest/**/* filter=lfs diff=lfs merge=lfs -text
+assets/**/* filter=lfs diff=lfs merge=lfs -text

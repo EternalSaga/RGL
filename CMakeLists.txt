@@ -13,8 +13,10 @@ add_subdirectory("./logger")
 add_subdirectory(render_core)
 add_subdirectory(practices)
 add_subdirectory(app)
+add_subdirectory(shaders)
 
 
-#add_subdirectory(FindJavaTest)
-# add_subdirectory(ECSTest)
+
+
+
 
