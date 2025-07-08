@@ -15,6 +15,7 @@ add_subdirectory(practices)
 add_subdirectory(app)
 add_subdirectory(shaders)
 
+add_subdirectory(ShaderReflection)
 
 
 

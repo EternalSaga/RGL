@@ -1,6 +1,18 @@
 {
     "configurations": [
         {
+            "name": "ShaderReflection",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceRoot}/build/ShaderReflection/ShaderReflection.exe",
+            "args": ["-i",".\\shaders\\grass-fragment.spv"],
+            "stopAtEntry": false,
+            "cwd": "${workspaceRoot}/build",
+            "environment": [],
+            "console": "externalTerminal"
+        },
+        
+        {
             "name": "(Windows) Launch",
             "type": "cppvsdbg",
             "request": "launch",
@@ -11,6 +23,7 @@
             "environment": [],
             "console": "externalTerminal"
         },
+        
         {
             "type": "cmake",
             "request": "launch",

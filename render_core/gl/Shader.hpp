@@ -43,7 +43,7 @@ enum class SHADER_TYPE {
 };
 
 using ShaderBytesPath = std::map<SHADER_TYPE, fs::path>;
-
+std::vector<char> loadFileBytes(const fs::path &p);
 class Shader {
     RLLogger *logger;
     static constexpr GLuint MaxShaderLogLength = 1024;

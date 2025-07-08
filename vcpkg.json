@@ -20,6 +20,10 @@
       "version>=": "1.86.0"
     },
     {
+      "name": "boost-program-options",
+      "version>=": "1.86.0"
+    },
+    {
       "name": "sdl3",
       "version>=": "3.2.4#0"
     },
@@ -74,6 +78,10 @@
         "opt",
         "rtti"
       ]
+    },
+    {
+      "name":"spirv-cross",
+      "version>=": "1.4.309.0#0"
     }
   ],
   "overrides": [
