@@ -36,9 +36,8 @@ class SSBO {
     void prepareOffsetsAndDataType();
 
    public:
-    SSBO(GLuint shader, std::string ssboName);
+    SSBO(GLuint shader, std::string ssboName,GLint bindingPoint);
 
-    void bindAnotherShader(GLuint anotherProgram);
 
     void updateBufferData(std::vector<std::byte> cpuData);
 

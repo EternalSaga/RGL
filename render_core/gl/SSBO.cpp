@@ -17,55 +17,7 @@
 namespace RGL {
 namespace glcore {
 
-class SSBOManager {
-    static constexpr GLint MAX_STORAGE_POINTS = 32;
-    std::array<bool, MAX_STORAGE_POINTS> usedBindingPoints;
-    static std::unique_ptr<SSBOManager> instance;
-    static std::once_flag initOnce;
-    SSBOManager();
 
-   public:
-    static SSBOManager* getInstance();
-    GLint accquireBindingPoint();
-    void releaseBindingPoint(GLint bindingPoint);
-    ~SSBOManager() = default;
-};
-
-std::unique_ptr<SSBOManager> SSBOManager::instance{nullptr};
-std::once_flag SSBOManager::initOnce;
-
-SSBOManager::SSBOManager() {
-    for (size_t i = 0; i < MAX_STORAGE_POINTS; ++i) {
-	usedBindingPoints[i] = false;
-    }
-}
-SSBOManager* SSBOManager::getInstance() {
-    std::call_once(initOnce, []() { instance.reset(new SSBOManager()); });
-    return instance.get();
-}
-GLint SSBOManager::accquireBindingPoint() {
-    GLint bindingPoint = -1;
-    for (size_t i = 0; i < MAX_STORAGE_POINTS; i++) {
-	if (!usedBindingPoints[i]) {
-	    bindingPoint = i;
-	    usedBindingPoints[i] = true;  // 更新状态
-	    break;
-	}
-    }
-    if (bindingPoint == -1) {
-	throw std::logic_error("no availiable binding point");
-    }
-    return bindingPoint;
-}
-
-void SSBOManager::releaseBindingPoint(GLint bindingPoint) {
-    assert(bindingPoint >= 0 && bindingPoint < MAX_STORAGE_POINTS);
-    if (usedBindingPoints[bindingPoint]) {
-	usedBindingPoints[bindingPoint] = false;
-    } else {
-	throw std::logic_error("binding point not in use");
-    }
-}
 
 
 void SSBO::prepareOffsetsAndDataType() {
@@ -125,7 +77,7 @@ void SSBO::prepareOffsetsAndDataType() {
     }
 }
 
-SSBO::SSBO(GLuint shader, std::string ssboName) {
+SSBO::SSBO(GLuint shader, std::string ssboName,GLint bindingPoint) {
     this->ssboName = ssboName;
     this->shader = shader;
 
@@ -135,20 +87,11 @@ SSBO::SSBO(GLuint shader, std::string ssboName) {
 
     glCall(glNamedBufferData, ssbo, blockSize, nullptr, GL_DYNAMIC_DRAW);
 
-    this->bindingPoint = SSBOManager::getInstance()->accquireBindingPoint();
+    this->bindingPoint = bindingPoint;
 
     glCall(glBindBufferBase, GL_SHADER_STORAGE_BUFFER, this->bindingPoint, ssbo);
 }
-void SSBO::bindAnotherShader(GLuint anotherProgram) {
-    assert(this->bindingPoint != -1);
-    assert(anotherProgram != this->shader);
-    auto anotherBlockIndex = glCall(glGetProgramResourceIndex, anotherProgram, GL_SHADER_STORAGE_BLOCK, ssboName.c_str());
-    if (anotherBlockIndex != GL_INVALID_INDEX) {
-	glCall(glShaderStorageBlockBinding, anotherProgram, anotherBlockIndex, this->bindingPoint);
-    } else {
-	logger->warn("SSBO block '{}' not found in shader program {}", ssboName, anotherProgram);
-    }
-}
+
 
 void SSBO::updateBufferData(std::vector<std::byte> cpuData){
     assert(cpuData.size() <= blockSize);

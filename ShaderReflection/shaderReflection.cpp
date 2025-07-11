@@ -8,7 +8,6 @@
 #include <vector>
 #include <fstream>
 
-
 namespace RGL {
 namespace reflection {
 
@@ -29,18 +28,61 @@ std::vector<uint32_t> read_spirv_from_file(const std::string& filename) {
     return buffer;
 }
 
-
 std::string type_to_string(const spirv_cross::Compiler& compiler, const spirv_cross::SPIRType& type) {
     switch (type.basetype) {
     case spirv_cross::SPIRType::Float:
-	if (type.columns > 1) return "mat" + std::to_string(type.vecsize);
-	return (type.vecsize > 1 ? "vec" : "") + std::to_string(type.vecsize);
+	if (type.columns > 1) {
+	    return "mat" + std::to_string(type.vecsize);
+	}
+	if (type.vecsize == 1) {
+	    return "float";
+	}
+	return "vec" + std::to_string(type.vecsize);
+
     case spirv_cross::SPIRType::Int:
-	return (type.vecsize > 1 ? "ivec" : "int") + std::to_string(type.vecsize);
+	if (type.vecsize == 1) {
+	    return "int";
+	}
+	return "ivec" + std::to_string(type.vecsize);
+
     case spirv_cross::SPIRType::UInt:
-	return (type.vecsize > 1 ? "uvec" : "uint") + std::to_string(type.vecsize);
+	if (type.vecsize == 1) {
+	    return "uint";
+	}
+	return "uvec" + std::to_string(type.vecsize);
+
     case spirv_cross::SPIRType::Struct:
 	return compiler.get_name(type.self);
+    case spirv_cross::SPIRType::SampledImage: {
+	std::string sampler_type_str = "sampler";
+	switch (type.image.dim) {
+	case spv::Dim::Dim1D:
+	    sampler_type_str += "1D";
+	    break;
+	case spv::Dim::Dim2D:
+	    sampler_type_str += "2D";
+	    break;
+	case spv::Dim::Dim3D:
+	    sampler_type_str += "3D";
+	    break;
+	case spv::Dim::DimCube:
+	    sampler_type_str += "Cube";
+	    break;
+	case spv::Dim::DimRect:
+	    sampler_type_str += "Rect";
+	    break;
+	case spv::Dim::DimBuffer:
+	    sampler_type_str += "Buffer";
+	    break;
+	default:
+	    sampler_type_str += "Unknown";
+	    break;
+	}
+	if (type.image.arrayed) {
+	    sampler_type_str += "Array";
+	}
+	return sampler_type_str;
+    }
     default:
 	return "unknown";
     }
@@ -58,7 +100,6 @@ std::string base_type_to_string(const spirv_cross::SPIRType& type) {
 	return "unknown";
     }
 }
-
 
 ShaderReflection::ShaderReflection(std::string spirv_path) : compiler(read_spirv_from_file(spirv_path)) {
     resources = compiler.get_shader_resources();
@@ -121,32 +162,67 @@ json ShaderReflection::getSamplers() {
     return samplers;
 }
 
+
 json ShaderReflection::getStorageBuffers() {
     json ssbos = json::array();
+    spirv_cross::ShaderResources resources = compiler.get_shader_resources();
+
     for (const auto& resource : resources.storage_buffers) {
-	json ssbo;
-	const auto type = compiler.get_type(resource.base_type_id);
-	ssbo["name"] = compiler.get_name(resource.base_type_id);
-	ssbo["instance_name"] = resource.name;
-	ssbo["binding"] = compiler.get_decoration(resource.id, spv::DecorationBinding);
-	spirv_cross::Bitset flags = compiler.get_buffer_block_flags(resource.id);
-	ssbo["readonly"] = flags.get(spv::DecorationNonWritable);
-	const auto& struct_type = compiler.get_type(type.member_types[0]);
-	ssbo["struct_name"] = compiler.get_name(struct_type.self);
-	ssbo["struct_members"] = json::array();
-	for (uint32_t i = 0; i < struct_type.member_types.size(); ++i) {
-	    json member;
-	    member["name"] = compiler.get_member_name(struct_type.self, i);
-	    const auto& member_type = compiler.get_type(struct_type.member_types[i]);
-	    member["type"] = type_to_string(compiler, member_type);
-	    member["offset"] = compiler.get_member_decoration(struct_type.self, i, spv::DecorationOffset);
-	    member["size"] = compiler.get_declared_struct_member_size(struct_type, i);
-	    ssbo["struct_members"].push_back(member);
-	}
-	ssbos.push_back(ssbo);
+        json ssbo;
+        const auto& block_type = compiler.get_type(resource.base_type_id);
+
+        ssbo["block_name"] = compiler.get_name(resource.base_type_id); 
+		ssbo["instance_name"] = compiler.get_name(resource.id);
+        ssbo["binding"] = compiler.get_decoration(resource.id, spv::DecorationBinding);
+        
+        spirv_cross::Bitset flags = compiler.get_buffer_block_flags(resource.id);
+        ssbo["readonly"] = flags.get(spv::DecorationNonWritable);
+
+        // 获取整个块的大小。对于包含运行时数组的块，这可能不是很有用，但可以存下来。
+        ssbo["block_size_bytes"] = compiler.get_declared_struct_size(block_type);
+        
+        ssbo["struct_members"] = json::array();
+
+        // 遍历块（顶级结构体）的所有成员
+        for (uint32_t i = 0; i < block_type.member_types.size(); ++i) {
+            json member_info;
+            auto member_type_id = block_type.member_types[i];
+            const auto& member_type = compiler.get_type(member_type_id);
+
+            member_info["name"] = compiler.get_member_name(block_type.self, i);
+            member_info["offset"] = compiler.get_member_decoration(block_type.self, i, spv::DecorationOffset);
+
+            // --- 核心修正：正确处理类型和数组 ---
+
+            // 1. 判断是否为数组
+            member_info["is_array"] = !member_type.array.empty();
+            if (member_info["is_array"]) {
+                // 2. 如果是数组，判断是否为运行时数组
+                // 运行时数组的 array_size_literal[0] 为 false
+                member_info["is_runtime_array"] = (member_type.array.size() == 1 && !member_type.array_size_literal[0]);
+
+                // 3. 获取数组元素的大小（步幅）
+                // 这对于计算 C++ 端 buffer 大小至关重要
+                member_info["array_stride"] = compiler.get_decoration(member_type_id, spv::DecorationArrayStride);
+            }
+            
+            // 4. 获取基础类型（无论是数组元素还是普通成员）
+            // type_to_string 对于数组类型，会返回其元素类型，这是我们期望的
+            member_info["type"] = type_to_string(compiler, member_type);
+            
+            // 5. 获取成员声明的大小
+            // 对于运行时数组，此API返回0。对于固定大小的数组成员，它返回整个数组的大小。
+            // 对于非数组成员，它返回成员的大小。
+            member_info["size_bytes"] = compiler.get_declared_struct_member_size(block_type, i);
+            
+            ssbo["struct_members"].push_back(member_info);
+        }
+        ssbos.push_back(ssbo);
     }
     return ssbos;
 }
+
+
 
 json ShaderReflection::getUniforms() {
     json uniforms = json::array();
@@ -167,7 +243,7 @@ json ShaderReflection::getUniforms() {
 	    member["size_bytes"] = compiler.get_declared_struct_member_size(type, i);
 	    members.push_back(member);
 	}
-    uniform["members"] = members;
+	uniform["members"] = members;
 	uniforms.push_back(uniform);
     }
     return uniforms;
@@ -175,4 +251,3 @@ json ShaderReflection::getUniforms() {
 
 }  // namespace reflection
 }  // namespace RGL
-

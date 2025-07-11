@@ -4,8 +4,7 @@
 namespace RGL {
 namespace glcore {
 
-std::unique_ptr<UboBindingManager> UboBindingManager::instance{nullptr};
-std::once_flag UboBindingManager::initOnce;
+
 
 std::string type2string(int gltype) {
     std::string typestr;
@@ -77,10 +76,8 @@ void UBO::prepareOffsetsAndDataType() {
 	    logger->info("uniformName:{};offset:{};type:{}\n", uniformNames[i], uniformOffsets[i], type2string(uniformTypes[i]));
     }
 }
-UBO::UBO(GLuint shaderProgram, const std::string& uniformBlockName) {
+UBO::UBO(GLuint shaderProgram, const std::string& uniformBlockName,GLint bindingPoint) {
     logger = RLLogger::getInstance();
-    bindingManager = UboBindingManager::getInstance();
-    assert(bindingManager != nullptr);	// 增加断言检查
     this->uboName = uniformBlockName;
     shader = shaderProgram;
 
@@ -89,19 +86,13 @@ UBO::UBO(GLuint shaderProgram, const std::string& uniformBlockName) {
 
     glCall(glCreateBuffers, 1, &ubo);
     glCall(glNamedBufferData, ubo, blockSize, nullptr, GL_DYNAMIC_DRAW);  // UBO是需要频繁修改的绘制数据，所以是GL_DYNAMIC_DRAW
-    bindingPoint = bindingManager->accquireBindingPoint();
+    this->bindingPoint = bindingPoint;
     glCall(glBindBufferBase, GL_UNIFORM_BUFFER, this->bindingPoint, ubo);  // 直接把ubo绑定到绑定点上
 
     assert(this->bindingPoint != -1);
     glCall(glUniformBlockBinding, shader, blockIndex, this->bindingPoint);  // 在shader ubo block上分配一个绑定点
 }
 
-void UBO::bindAnotherShader(GLuint anohterProgram) {
-    assert(this->bindingPoint != -1);
-    assert(anohterProgram != shader);
-    auto anotherBlockIndex = glCall(glGetUniformBlockIndex, anohterProgram, uboName.c_str());
-    glCall(glUniformBlockBinding, anohterProgram, anotherBlockIndex, this->bindingPoint);  // 在shader ubo block上分配一个绑定点
-}
 void UBO::updateCpuUbo(const std::string& uboBlockName, const CommonUniformTypes& value) {
     const auto it = std::find(uniformNames.begin(), uniformNames.end(), uboBlockName);
     if (it == uniformNames.end()) {
@@ -148,46 +139,13 @@ void UBO::setUniform() {
 }
 
 UBO::~UBO() {
-    bindingManager->releaseBindingPoint(this->bindingPoint);
-    // glCall(glUnmapNamedBuffer, ubo);
+   
     glCall(glDeleteBuffers, 1, &ubo);
 }
 
-UboBindingManager::UboBindingManager() {
-    for (size_t i = 0; i < MAX_BINDING_POINTS; i++) {
-	usedBindingPoints[i] = false;
-    }
-}
 
-UboBindingManager* UboBindingManager::getInstance() {
-    std::call_once(initOnce, []() {
-	instance.reset(new UboBindingManager());
-    });
-    return instance.get();
-}
 
-GLint UboBindingManager::accquireBindingPoint() {
-    GLint bindingPoint = -1;
-    for (size_t i = 0; i < MAX_BINDING_POINTS; i++) {
-	if (!usedBindingPoints[i]) {
-	    bindingPoint = i;
-	    usedBindingPoints[i] = true;  // 更新状态
-	    break;
-	}
-    }
-    if (bindingPoint == -1) {
-	throw std::logic_error("no availiable binding point");
-    }
-    return bindingPoint;
-}
 
-void UboBindingManager::releaseBindingPoint(const GLint& bindingPoint) {
-    assert(bindingPoint >= 0 && bindingPoint < MAX_BINDING_POINTS);  // 增加范围检查
-	if (usedBindingPoints[bindingPoint] == false) {
-	throw std::logic_error("binding point not used.");
-	}
-    usedBindingPoints[bindingPoint] = false;
-}
 
 
 

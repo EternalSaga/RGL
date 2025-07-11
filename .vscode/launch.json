@@ -1,17 +1,31 @@
 {
     "configurations": [
         {
+            "name": "Python Debugger: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "args": ["--jsons",".\\build\\reflections\\phong_ubo_instanced.json",".\\build\\reflections\\grass-fragment.json",
+            "--outdir","${workspaceFolder}\\templates\\",
+            "--templates","${workspaceFolder}\\templates\\ubo_template.hpp.jinja2"
+        ]
+        },
+        {
             "name": "ShaderReflection",
             "type": "cppvsdbg",
             "request": "launch",
             "program": "${workspaceRoot}/build/ShaderReflection/ShaderReflection.exe",
-            "args": ["-i",".\\shaders\\grass-fragment.spv"],
+            "args": [
+                "-i",
+                ".\\shaders\\grass-fragment.spv"
+            ],
             "stopAtEntry": false,
             "cwd": "${workspaceRoot}/build",
             "environment": [],
             "console": "externalTerminal"
         },
-        
         {
             "name": "(Windows) Launch",
             "type": "cppvsdbg",
@@ -23,7 +37,6 @@
             "environment": [],
             "console": "externalTerminal"
         },
-        
         {
             "type": "cmake",
             "request": "launch",

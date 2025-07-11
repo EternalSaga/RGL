@@ -2,8 +2,7 @@
 layout (location = 0) in vec3 inPos;
 layout (location = 1) in vec2 inUV;
 layout (location = 2) in vec3 inNormal;
-// 新增：每实例的模型矩阵，从 location 3 开始
-layout (location = 3) in mat4 aInstanceMatrix;
+
 
 layout(location = 0) out vec2 uv;
 
@@ -17,17 +16,24 @@ layout(std140,binding = 0) uniform CameraBlock{
 };
 
 
+layout(std430,binding = 1) buffer InstanceData{
+    mat4 instanceMatrices[];
+};
+
+
 void main()
 {
+    mat4 instanceMatrix = instanceMatrices[gl_InstanceIndex];
+
     // 计算世界坐标
-    worldPosition = vec3(aInstanceMatrix * vec4(inPos, 1.0));
+    worldPosition = vec3(instanceMatrix * vec4(inPos, 1.0));
 
     // 计算最终的裁剪空间坐标
     
     gl_Position = projectionMatrix * viewMatrix * vec4(worldPosition, 1.0);
 
-    normal = normalize(mat3(aInstanceMatrix) * inNormal);
-    //normal = vec3(0.0, 1.0, 0.0);
+    normal = normalize(mat3(instanceMatrix) * inNormal);
+
 
     uv = inUV;
 }
