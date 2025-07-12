@@ -10,7 +10,11 @@ target_link_libraries(glFramework PUBLIC glad::glad)
 
 target_compile_features(glFramework PUBLIC cxx_std_20)
 
-target_include_directories(glFramework PRIVATE ${PROJECT_SOURCE_DIR}/logger ${PROJECT_SOURCE_DIR}/app ${PROJECT_SOURCE_DIR}/api_abstractor ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/light)
+target_include_directories(glFramework PRIVATE ${PROJECT_SOURCE_DIR}/logger ${PROJECT_SOURCE_DIR}/app 
+${PROJECT_SOURCE_DIR}/api_abstractor ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/light
+
+)
+
 
 target_link_libraries(glFramework PRIVATE rllogger)
 find_package(Boost CONFIG REQUIRED COMPONENTS headers pfr variant2)

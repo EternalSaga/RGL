@@ -1,6 +1,7 @@
-#include <glad /glad.h>
-#include <cstddef> // For offsetof
-#include <cstdint> // For uint32_t
+#pragma once
+#include <glad/glad.h>
+#include <glm/glm.hpp>
+
 
 
 // Auto-generated shader metadata from JSON at
@@ -8,13 +9,67 @@
 
 namespace RGL {
 namespace shader_metadata {
-
+namespace detail {
 {% for ubo in ubos %}
 struct {{ ubo.instance_name }}Data {
     {% for member in ubo.members %}
+    {% if member.is_padding %}
+    char {{ member.name }}[{{ member.size_bytes }}];
+    {% else %}
     {{ glsl_type_to_cpp(member.type) }} {{ member.name }};
+    {% endif %}
     {% endfor %}
 };
+static_assert(sizeof({{ ubo.instance_name }}Data) == {{ ubo.size_bytes }}, "Size of C++ struct does not match shader's UBO size!");
 {% endfor %}
+}
 
-}}
+
+{% for ubo in ubos %}
+class {{ ubo.instance_name }} {
+    detail::{{ ubo.instance_name }}Data m_data;
+public:
+    // 构造函数，支持聚合初始化风格
+    {{ ubo.instance_name }}(
+        {% for member in ubo.members %}
+        {% if not member.is_padding %}
+
+        const {{ glsl_type_to_cpp(member.type) }}& _{{ member.name }}{% if not loop.last %}, {% endif %}
+        {% endif %}
+        {% endfor %}
+    ) {
+        {% for member in ubo.members %}
+        {% if not member.is_padding %}
+        m_data.{{ member.name }} = _{{ member.name }};
+        {% endif %}
+        {% endfor %}
+    }
+
+    {{ ubo.instance_name }}() = default;
+
+    // Setters
+    {% for member in ubo.members %}
+    {% if not member.is_padding %}
+    void set_{{ member.name }}(const {{ glsl_type_to_cpp(member.type) }}& value) { m_data.{{ member.name }} = value; }
+    {% endif %}
+    {% endfor %}
+
+    // Getters
+    {% for member in ubo.members %}
+    {% if not member.is_padding %}
+    const {{ glsl_type_to_cpp(member.type) }}& get_{{ member.name }}() const { return m_data.{{ member.name }}; }
+    {% endif %}
+    {% endfor %}
+
+    // 获取底层数据的指针，用于上传到 GPU
+    const void* data() const { return &m_data; }
+    size_t size() const { return sizeof(m_data); }
+
+    static constexpr unsigned int BINDING_POINT = {{ ubo.binding }};
+
+    
+};
+
+{% endfor %}
+}
+}

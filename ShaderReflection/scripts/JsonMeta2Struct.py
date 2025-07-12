@@ -18,7 +18,6 @@ GLSL_TYPE_TO_CPP = {
 def glsl_type_to_cpp(glsl_type):
     return GLSL_TYPE_TO_CPP.get(glsl_type, glsl_type)
 
-
 def process_shaders(json_file_paths):
     merged_data = {
         "inputs": [],
@@ -30,7 +29,7 @@ def process_shaders(json_file_paths):
     sampler_bindings = set()
     ubo_bindings = set()
     ssbo_bindings = set()
-
+    
     for json_path in json_file_paths:
         with open(json_path, 'r') as file:
             data = json.load(file)
@@ -45,10 +44,45 @@ def process_shaders(json_file_paths):
                     merged_data["samplers"].append(item)
                     sampler_bindings.add(item["binding"])
             # merge ubos
-            for item in data.get("uniforms", []):
-                if item["binding"] not in ubo_bindings:
-                    merged_data["ubos"].append(item)
-                    ubo_bindings.add(item["binding"])
+            for ubo in data.get("uniforms", []):
+                if ubo["binding"] not in ubo_bindings:
+                    
+                    processed_members = []
+                    current_offset = 0
+                    padding_index = 0
+                    clean_members = []
+
+                    for member in sorted(ubo["members"], key=lambda m: m["offset_bytes"]):
+                        # 检查是否需要在当前成员之前添加 padding
+                        if member["offset_bytes"] > current_offset:
+                            padding_size = member["offset_bytes"] - current_offset
+                            processed_members.append({
+                                "is_padding": True,
+                                "name": f"padding_{padding_index}",
+                                "size_bytes": padding_size
+                            })
+                            padding_index += 1
+                        
+                        # 添加原始成员
+                        # 使用 ** 语法来复制原始成员字典，并添加一个标志
+                        processed_members.append({**member, "is_padding": False})
+
+                        # 更新当前偏移量
+                        current_offset = member["offset_bytes"] + member["size_bytes"]
+                    
+                    # 检查是否需要在结构体末尾添加 padding
+                    if ubo["size_bytes"] > current_offset:
+                        padding_size = ubo["size_bytes"] - current_offset
+                        processed_members.append({
+                            "is_padding": True,
+                            "name": f"padding_{padding_index}",
+                            "size_bytes": padding_size
+                        })
+
+                    # 用处理过的新成员列表替换旧的
+                    ubo["members"] = processed_members
+                    merged_data["ubos"].append(ubo)
+                    ubo_bindings.add(ubo["binding"])
             # merge ssbos
             for item in data.get("storage_buffers", []):
                 if item["binding"] not in ssbo_bindings:
