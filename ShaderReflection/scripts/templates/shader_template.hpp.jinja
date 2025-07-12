@@ -1,8 +1,8 @@
 #pragma once
 #include <glad/glad.h>
 #include <glm/glm.hpp>
-
-
+#include <vector>
+#include <stdexcept>
 
 // Auto-generated shader metadata from JSON at
 // {{ "{:%Y-%m-%d %H:%M:%S}".format(datetime.datetime.now()) }}
@@ -21,6 +21,33 @@ struct {{ ubo.instance_name }}Data {
     {% endfor %}
 };
 static_assert(sizeof({{ ubo.instance_name }}Data) == {{ ubo.size_bytes }}, "Size of C++ struct does not match shader's UBO size!");
+{% endfor %}
+
+{% for ssbo in storage_buffers %}
+struct {{ ssbo.block_name }}FixedPart {
+    {% if not ssbo.fixed_members %}
+    // This SSBO has no members.
+    // Add a dummy member to ensure the struct is not empty.
+    char _dummy; 
+    {% else %}
+    {% for member in ssbo.fixed_members %}
+    {% if member.is_padding %}
+    char {{ member.name }}[{{ member.size_bytes }}];
+    {% elif member.is_array %}
+    // Fixed-size array
+    std::array<{{ glsl_type_to_cpp(member.type) }}, {{ member.size_bytes // member.array_stride }}> {{ member.name }};
+    {% else %}
+    {{ glsl_type_to_cpp(member.type) }} {{ member.name }};
+    {% endif %}
+    {% endfor %}
+    {% endif %}
+};
+
+{% if ssbo.fixed_members %}
+// Compile-time check for the fixed-size part of the SSBO.
+static_assert(sizeof({{ ssbo.block_name }}FixedPart) == {{ ssbo.block_size_bytes }}, 
+              "Size of C++ SSBO fixed part does not match shader reflection!");
+{% endif %}
 {% endfor %}
 }
 
@@ -66,10 +93,87 @@ public:
     size_t size() const { return sizeof(m_data); }
 
     static constexpr unsigned int BINDING_POINT = {{ ubo.binding }};
-
-    
 };
 
 {% endfor %}
+
+{% for ssbo in storage_buffers %}
+// A C++ wrapper for the '{{ ssbo.block_name }}' SSBO.
+// It handles dynamic resizing for the runtime array.
+class {{ ssbo.block_name }} {
+private:
+    std::vector<char> m_buffer;
+    {% if ssbo.runtime_member %}
+    size_t m_runtime_element_count = 0;
+    {% endif %}
+
+    // Helper to get a typed pointer to the fixed data part
+    detail::{{ ssbo.block_name }}FixedPart* get_fixed_part() {
+        return reinterpret_cast<detail::{{ ssbo.block_name }}FixedPart*>(m_buffer.data());
+    }
+    const detail::{{ ssbo.block_name }}FixedPart* get_fixed_part() const {
+        return reinterpret_cast<const detail::{{ ssbo.block_name }}FixedPart*>(m_buffer.data());
+    }
+
+    size_t get_fixed_part_size() const {
+        // Handle case where fixed part might be empty
+        {% if ssbo.fixed_members %}return sizeof(detail::{{ ssbo.block_name }}FixedPart);{% else %}return 0;{% endif %}
+    }
+
+public:
+    // Constructor
+    explicit {{ ssbo.block_name }}({% if ssbo.runtime_member %}size_t runtime_element_count = 0{% endif %}) {
+        resize({% if ssbo.runtime_member %}runtime_element_count{% endif %});
+    }
+
+    // Resize the buffer, primarily for changing the runtime array's size
+    void resize({% if ssbo.runtime_member %}size_t runtime_element_count{% endif %}) {
+        {% if ssbo.runtime_member %}
+        m_runtime_element_count = runtime_element_count;
+        size_t total_size = get_fixed_part_size() + runtime_element_count * {{ ssbo.runtime_member.array_stride }};
+        {% else %}
+        size_t total_size = get_fixed_part_size();
+        {% endif %}
+        m_buffer.resize(total_size);
+    }
+    
+    // --- Accessors for Fixed-size Members ---
+    {% for member in ssbo.fixed_members if not member.is_padding %}
+    void set_{{ member.name }}(const decltype(detail::{{ ssbo.block_name }}FixedPart::{{ member.name }})& value) { get_fixed_part()->{{ member.name }} = value; }
+    const decltype(detail::{{ ssbo.block_name }}FixedPart::{{ member.name }})& get_{{ member.name }}() const { return get_fixed_part()->{{ member.name }}; }
+    {% endfor %}
+
+    // --- Accessors for Runtime Array ---
+    {% if ssbo.runtime_member %}
+    size_t get_element_count() const { return m_runtime_element_count; }
+
+    {{ glsl_type_to_cpp(ssbo.runtime_member.type) }}& at(size_t index) {
+        if (index >= m_runtime_element_count) {
+            throw std::out_of_range("SSBO runtime array access out of range");
+        }
+        char* base_ptr = m_buffer.data() + get_fixed_part_size();
+        char* element_ptr = base_ptr + index * {{ ssbo.runtime_member.array_stride }};
+        return *reinterpret_cast<{{ glsl_type_to_cpp(ssbo.runtime_member.type) }}*>(element_ptr);
+    }
+
+    const {{ glsl_type_to_cpp(ssbo.runtime_member.type) }}& at(size_t index) const {
+        if (index >= m_runtime_element_count) {
+            throw std::out_of_range("SSBO runtime array access out of range");
+        }
+        const char* base_ptr = m_buffer.data() + get_fixed_part_size();
+        const char* element_ptr = base_ptr + index * {{ ssbo.runtime_member.array_stride }};
+        return *reinterpret_cast<const {{ glsl_type_to_cpp(ssbo.runtime_member.type) }}*>(element_ptr);
+    }
+    {% endif %}
+
+    // --- GPU Data Interface ---
+    const void* data() const { return m_buffer.data(); }
+    size_t size() const { return m_buffer.size(); }
+
+    static constexpr unsigned int BINDING_POINT = {{ ssbo.binding }};
+    static constexpr bool IS_READ_ONLY = {{ "true" if ssbo.readonly else "false" }};
+};
+{% endfor %}
+
 }
 }

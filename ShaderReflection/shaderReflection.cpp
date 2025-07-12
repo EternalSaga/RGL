@@ -178,16 +178,23 @@ json ShaderReflection::getStorageBuffers() {
         spirv_cross::Bitset flags = compiler.get_buffer_block_flags(resource.id);
         ssbo["readonly"] = flags.get(spv::DecorationNonWritable);
 
-        // 获取整个块的大小。对于包含运行时数组的块，这可能不是很有用，但可以存下来。
+
         ssbo["block_size_bytes"] = compiler.get_declared_struct_size(block_type);
         
+		auto zeroSize = compiler.get_declared_struct_size_runtime_array(block_type, 0);
+		auto oneSize = compiler.get_declared_struct_size_runtime_array(block_type, 1);
+
+		bool hasRuntimeArray = zeroSize!= oneSize;
+
+		auto memberCount = block_type.member_types.size();
+
         ssbo["struct_members"] = json::array();
 
         // 遍历块（顶级结构体）的所有成员
-        for (uint32_t i = 0; i < block_type.member_types.size(); ++i) {
+        for (uint32_t i = 0; i < memberCount; ++i) {
             json member_info;
             auto member_type_id = block_type.member_types[i];
-            const auto& member_type = compiler.get_type(member_type_id);
+            const spirv_cross::SPIRType& member_type = compiler.get_type(member_type_id);
 
             member_info["name"] = compiler.get_member_name(block_type.self, i);
             member_info["offset"] = compiler.get_member_decoration(block_type.self, i, spv::DecorationOffset);
@@ -197,13 +204,17 @@ json ShaderReflection::getStorageBuffers() {
             // 1. 判断是否为数组
             member_info["is_array"] = !member_type.array.empty();
             if (member_info["is_array"]) {
-                // 2. 如果是数组，判断是否为运行时数组
-                // 运行时数组的 array_size_literal[0] 为 false
-                member_info["is_runtime_array"] = (member_type.array.size() == 1 && !member_type.array_size_literal[0]);
+                // 2. 如果是数组，判断是否为运行时数组，判断条件：i是最后一个索引且block包含运行时数组
+				bool is_runtime_array = (i ==memberCount-1) && hasRuntimeArray;
+				member_info["is_runtime_array"]= is_runtime_array;
+
 
                 // 3. 获取数组元素的大小（步幅）
-                // 这对于计算 C++ 端 buffer 大小至关重要
-                member_info["array_stride"] = compiler.get_decoration(member_type_id, spv::DecorationArrayStride);
+				if (!is_runtime_array) {
+					member_info["array_stride"] = compiler.get_decoration(member_type_id, spv::DecorationArrayStride);
+				}else {
+					member_info["array_stride"] = oneSize - zeroSize;
+				}
             }
             
             // 4. 获取基础类型（无论是数组元素还是普通成员）

@@ -20,7 +20,7 @@
             "program": "${workspaceRoot}/build/ShaderReflection/ShaderReflection.exe",
             "args": [
                 "-i",
-                ".\\shaders\\grass-fragment.spv"
+                ".\\shaders\\phong_ubo_instanced.spv"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceRoot}/build",

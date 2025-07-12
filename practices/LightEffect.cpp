@@ -24,7 +24,7 @@
 
 #include <glm/gtx/string_cast.hpp>
 
-#include "shader_template.hpp"
+//#include "shader_template.hpp"
 namespace RGL {
 namespace practice {
 

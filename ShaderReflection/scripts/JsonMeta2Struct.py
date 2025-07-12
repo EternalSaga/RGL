@@ -50,7 +50,6 @@ def process_shaders(json_file_paths):
                     processed_members = []
                     current_offset = 0
                     padding_index = 0
-                    clean_members = []
 
                     for member in sorted(ubo["members"], key=lambda m: m["offset_bytes"]):
                         # 检查是否需要在当前成员之前添加 padding
@@ -83,9 +82,62 @@ def process_shaders(json_file_paths):
                     ubo["members"] = processed_members
                     merged_data["ubos"].append(ubo)
                     ubo_bindings.add(ubo["binding"])
-            # merge ssbos
             for item in data.get("storage_buffers", []):
                 if item["binding"] not in ssbo_bindings:
+            
+                    # 1. 分离固定成员和运行时数组成员
+                    runtime_member = None
+                    fixed_members_raw = []
+                    # 在你的 JSON 中，成员列表的键是 "struct_members"，我们统一用 "members"
+                    # 以便模板中可以重用逻辑
+                    if "struct_members" in item:
+                        item["members"] = item.pop("struct_members")
+
+                    for member in item.get("members", []):
+                        if member.get("is_runtime_array", False):
+                            runtime_member = member
+                        else:
+                            fixed_members_raw.append(member)
+            
+                    # 2. 为固定成员部分计算 padding (和之前 UBO 的逻辑一样)
+                    processed_fixed_members = []
+                    current_offset = 0
+                    padding_index = 0
+
+                    # block_size_bytes 是固定部分的总大小
+                    fixed_part_total_size = item.get("block_size_bytes", 0)
+
+                    for member in sorted(fixed_members_raw, key=lambda m: m["offset"]):
+                        if member["offset"] > current_offset:
+                            padding_size = member["offset"] - current_offset
+                            processed_fixed_members.append({
+                            "is_padding": True,
+                            "name": f"padding_{padding_index}",
+                            "size_bytes": padding_size
+                        })
+                            padding_index += 1
+                
+                        # 计算成员大小（需要考虑固定大小数组）
+                        # 你的反射 JSON 中 "size_bytes" 对于固定数组成员已经是整个数组的大小了，很方便
+                        member_size = member["size_bytes"]
+                
+                        # 添加原始成员
+                        processed_fixed_members.append({**member, "is_padding": False})
+                        current_offset = member["offset"] + member_size
+
+                    # 检查固定部分末尾是否需要 padding
+                    if fixed_part_total_size > current_offset:
+                        padding_size = fixed_part_total_size - current_offset
+                        processed_fixed_members.append({
+                    "is_padding": True,
+                    "name": f"padding_{padding_index}",
+                    "size_bytes": padding_size
+                })
+
+                    # 3. 将处理好的数据放回 item 中，供模板使用
+                    item["fixed_members"] = processed_fixed_members
+                    item["runtime_member"] = runtime_member # 可能是 None
+            
                     merged_data["storage_buffers"].append(item)
                     ssbo_bindings.add(item["binding"])
 
