@@ -390,3 +390,4 @@ FodyWeavers.xsd
 .vscode/settings.json
 
 /render_core/gl_shader_gen/
+/ShaderReflection/codegen/
