@@ -388,3 +388,5 @@ FodyWeavers.xsd
 !assest/**/*.jpg
 
 .vscode/settings.json
+
+/render_core/gl_shader_gen/

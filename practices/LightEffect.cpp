@@ -34,8 +34,8 @@ UBOTest::UBOTest(std::shared_ptr<Camera> cam) {
 	{SHADER_TYPE::FRAGMENT, {"shaders\\Light\\spotlight_ubo.frag"}}};
     this->spotlightShader = std::make_shared<Shader>(pointLightshaderSrc);
 
-    lightUBO = std::make_shared<UBO>(*spotlightShader, "SpotLight",1);
-    transformUBO = std::make_shared<UBO>(*spotlightShader, "Transforms",0);
+    lightUBO = std::make_shared<UBO>(*spotlightShader, "SpotLight", 1);
+    transformUBO = std::make_shared<UBO>(*spotlightShader, "Transforms", 0);
 
     ubos = std::make_shared<std::unordered_map<std::string, std::shared_ptr<UBO>>>();
     (*ubos)[lightUBO->getUboName()] = lightUBO;
@@ -174,9 +174,9 @@ LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) : renderQueues{} {
     directionalLight->attachComponent<CommonLight>(glm::vec3{1.0f, 0.9f, 0.9f}, glm::vec3{0.2f, 0.2f, 0.2f}, 32.0f);
     directionalLight->attachComponent<DirectionalCompnent>(glm::vec3{1.0f, -1.0f, -1.0f});  // 把光照方向往下调一点，效果更好
 
-    lightUBO = std::make_shared<UBO>(*grassShader, "DirectionLight",1);
+    lightUBO = std::make_shared<UBO>(*grassShader, "DirectionLight", 1);
 
-    cameraUBO = std::make_shared<UBO>(*grassShader, "CameraBlock",0);
+    cameraUBO = std::make_shared<UBO>(*grassShader, "CameraBlock", 0);
 
     ubos = std::make_shared<std::unordered_map<std::string, std::shared_ptr<UBO>>>();
     (*ubos)[lightUBO->getUboName()] = lightUBO;

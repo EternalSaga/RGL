@@ -1,0 +1,20 @@
+#include <glad /glad.h>
+#include <cstddef> // For offsetof
+#include <cstdint> // For uint32_t
+
+
+// Auto-generated shader metadata from JSON at
+// {{ "{:%Y-%m-%d %H:%M:%S}".format(datetime.datetime.now()) }}
+
+namespace RGL {
+namespace shader_metadata {
+
+{% for ubo in ubos %}
+struct {{ ubo.instance_name }}Data {
+    {% for member in ubo.members %}
+    {{ glsl_type_to_cpp(member.type) }} {{ member.name }};
+    {% endfor %}
+};
+{% endfor %}
+
+}}

@@ -8,8 +8,9 @@
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
             "args": ["--jsons",".\\build\\reflections\\phong_ubo_instanced.json",".\\build\\reflections\\grass-fragment.json",
-            "--outdir","${workspaceFolder}\\templates\\",
-            "--templates","${workspaceFolder}\\templates\\ubo_template.hpp.jinja2"
+            "--outdir","${workspaceFolder}\\render_core\\gl_shader_gen",
+            "--templates","${workspaceFolder}\\ShaderReflection\\scripts\\templates",
+            "--name","grass"
         ]
         },
         {
