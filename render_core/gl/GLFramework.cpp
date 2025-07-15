@@ -3,7 +3,7 @@
 #include <imgui.h>
 
 #include <imgui_impl_opengl3.h>
-#include "ShaderManager.hpp"
+
 #include "rllogger.hpp"
 namespace RGL {
 namespace glcore {

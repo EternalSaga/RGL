@@ -1,7 +1,7 @@
 #pragma once
 #include "GLTextures.hpp"
 #include "Helpers.hpp"
-#include "rllogger.hpp"
+
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -53,11 +53,14 @@ std::vector<GLuint> initTUnitRes();
 
 
 enum class TextureUsageType {
-    DIFFUSE = 1,
-    SPECULAR = 2,
-    NORMAL = 3,
-    AMBIENT = 4
+    BASE_COLOR = 0,
+    NORMAL = 1,
+    EMISSIVE = 2,
+    PACKED_ORM = 3,// Occlusion（Ambient Occlusion）, Roughness, Metalness
+    SPECULAR = 4
 };
+
+std::string TextureType2Str(const TextureUsageType &usageType);
 
 class Texture {
 

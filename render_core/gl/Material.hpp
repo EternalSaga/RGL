@@ -1,10 +1,11 @@
 #include <cassert>
-#include <glm/fwd.hpp>
+#include <glm/glm.hpp>
+
 
 #pragma once
 
 #include <GLTextures.hpp>
-#include "ShaderManager.hpp"
+
 namespace RGL {
 
 namespace glcore {
@@ -19,12 +20,12 @@ struct PBRComponent {
 	: baseColorFactor(baseColorFactor), roughnessFactor(roughnessFactor), metallicFactor(metallicFactor) {}
 };
 
-class MaterialData {
-    std::map<TextureUsageType, std::vector<std::shared_ptr<Texture>>> textures;
+class AssetMaterialData {
+    std::map<TextureUsageType, std::shared_ptr<Texture>> textures;
     bool isTransparent = false;
 
    public:
-    MaterialData() = default;
+    AssetMaterialData() = default;
     void appendTexture(std::shared_ptr<Texture> texture);
     inline auto getTextures() -> decltype(auto) {
 	return textures;

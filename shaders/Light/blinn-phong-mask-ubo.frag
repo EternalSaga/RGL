@@ -8,12 +8,15 @@ uniform sampler2D baseColorTexture;
 uniform sampler2D specularTexture;
 
 
+
+
+
 layout(std140) uniform DirectionLight{
-uniform vec3 ambient;
-uniform vec3 lightColor;
-uniform vec3 globalLightDirection;
-uniform vec3 cameraPos;
-uniform float spotIntensity;
+vec3 ambient;
+vec3 lightColor;
+vec3 globalLightDirection;
+vec3 cameraPos;
+float spotIntensity;
 };
 
 layout(std140) uniform pbrUniformBlock{

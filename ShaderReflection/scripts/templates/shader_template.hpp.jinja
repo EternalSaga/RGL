@@ -3,12 +3,14 @@
 #include <glm/glm.hpp>
 #include <vector>
 #include <stdexcept>
+#include <map>
+#include "GLTextures.hpp"
 
 // Auto-generated shader metadata from JSON at
 // {{ "{:%Y-%m-%d %H:%M:%S}".format(datetime.datetime.now()) }}
 
 namespace RGL {
-namespace shader_metadata {
+namespace {{shader_name}} {
 namespace detail {
 {% for ubo in ubos %}
 struct {{ ubo.instance_name }}Data {
@@ -174,6 +176,24 @@ public:
     static constexpr bool IS_READ_ONLY = {{ "true" if ssbo.readonly else "false" }};
 };
 {% endfor %}
+
+
+{% if samplers %}
+
+struct SamplerBindings {
+    
+
+    static constexpr std::map<glcore::TextureUsageType, unsigned int> usageBindings = {
+    {% for sampler in samplers.values() %}
+        { {{ sampler.usage }}, {{ sampler.binding }} }{% if not loop.last %},{% endif %}
+    {% endfor %}
+    };
+
+};
+
+
+
+{% endif %}
 
 }
 }

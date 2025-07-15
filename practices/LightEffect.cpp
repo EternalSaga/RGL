@@ -5,17 +5,16 @@
 
 #include "Entity.hpp"
 #include "Geometry.hpp"
-#include "Light.hpp"
+
 #include "Mesh.hpp"
-#include "PointLight.hpp"
+
 #include "RenderQueue.hpp"
 #include "Shader.hpp"
-#include "SpotLight.hpp"
+
 #include "Material.hpp"
 
 #include "LightEffect.hpp"
-#include <winuser.h>
-#include "ShaderManager.hpp"
+
 #include "rllogger.hpp"
 #include "UBO.hpp"
 
@@ -23,101 +22,11 @@
 #define GLM_ENABLE_EXPERIMENTAL
 
 #include <glm/gtx/string_cast.hpp>
-
-//#include "shader_template.hpp"
+#include "GLTextures.hpp"
+#include "grass_fragment_shader_template.hpp"
 namespace RGL {
 namespace practice {
-
-UBOTest::UBOTest(std::shared_ptr<Camera> cam) {
-    this->cam = cam;
-    ShaderBytesPath pointLightshaderSrc = {
-	{SHADER_TYPE::VERTEX, {"shaders\\Light\\phong_ubo.vert"}},
-	{SHADER_TYPE::FRAGMENT, {"shaders\\Light\\spotlight_ubo.frag"}}};
-    this->spotlightShader = std::make_shared<Shader>(pointLightshaderSrc);
-
-    lightUBO = std::make_shared<UBO>(*spotlightShader, "SpotLight", 1);
-    transformUBO = std::make_shared<UBO>(*spotlightShader, "Transforms", 0);
-
-    ubos = std::make_shared<std::unordered_map<std::string, std::shared_ptr<UBO>>>();
-    (*ubos)[lightUBO->getUboName()] = lightUBO;
-    (*ubos)[transformUBO->getUboName()] = transformUBO;
-
-    // 初始化纹理
-    box_texture = textureCache.getTexture("assest/box.png", TextureUsageType::DIFFUSE);
-
-    std::unique_ptr<Mesh> geometry = std::make_unique<Cube>(12.0f);
-
-    material = std::make_shared<MaterialData>();
-    // 从材质创建纹理
-    material->appendTexture(box_texture);
-
-    geometry->setMaterial(material);
-
-    cubeEntity = std::make_unique<CommonRenderEntity>(glm::vec3{-10.0f, 0.0f, 0.0f}, 0.0f, 0.0f, 0.0f, glm::vec3{1.0f, 1.0f, 1.0f});
-
-    // 设置网格和shader
-    cubeEntity->setMesh(std::move(geometry), spotlightShader);
-
-    // 给cube添加共享的ubos
-    singleReg->emplace_or_replace<UBOs>(*cubeEntity, ubos);
-    // cube因为有光照相关shader，所以加个render tag，方便entt view筛选
-    cubeEntity->attachComponent<RenderTags::Renderable>();
-
-    spotLight = std::make_unique<GeneralEntity>();
-    // 光源entity
-    spotLight->attachComponent<CommonLight>(glm::vec3{1.0f, 0.9f, 0.9f}, glm::vec3{0.1f, 0.2f, 0.2f}, 32.0f);
-    spotLight->attachComponent<SpotLightComponnet>(30.0f, 45.0f, glm::vec3{-1.0f, 0.0f, 0.0f});
-    spotLight->attachComponent<Transform>(glm::vec3{1.5f, 0.0f, 0.0f}, glm::vec3{0.0f, 0.0f, 0.0f}, glm::vec3{1.0f, 1.0f, 1.0f});
-
-    singleReg->emplace_or_replace<UBOs>(*spotLight, ubos);
-
-    // 点光源白球相关初始化
-    ShaderBytesPath whiteShaderSrc = {
-	{SHADER_TYPE::VERTEX, {"shaders\\Light\\white.vert"}},
-	{SHADER_TYPE::FRAGMENT, {"shaders\\Light\\white.frag"}}};
-    this->whiteShader = std::make_shared<Shader>(whiteShaderSrc);
-    std::unique_ptr<Mesh> sphereMesh = std::make_unique<Sphere>(2.2f);
-    auto materialData = std::make_shared<MaterialData>();
-    materialData->appendTexture(textureCache.getTexture(ProgrammedTexture::CHECKERBOARD));
-    sphereMesh->setMaterial(materialData);
-    sphereEntity = std::make_unique<CommonRenderEntity>(glm::vec3{10.0f, 0.0f, 0.0f}, 0.0f, 0.0f, 0.0f, glm::vec3{1.0f, 1.0f, 1.0f});
-    sphereEntity->attachComponent<IsLight>();
-
-    // 设置网格和shader
-    sphereEntity->setMesh(std::move(sphereMesh), whiteShader);
-
-#ifndef NDEBUG
-    auto spdlog = RLLogger::getInstance();
-    // 检查下是否满足render所需entity
-    if (singleReg->all_of<VertArrayComponent, DiscreteUniforms, UBOs, ShaderRef>(*cubeEntity)) {
-	spdlog->info("Cube entity has enough components");
-    } else {
-	spdlog->error("Cube entity has not enough components");
-    }
-#endif
-
-    // 测试父子关系
-    cubeEntity->attachComponent<Relationship>(entt::null, std::vector<entt::entity>{*sphereEntity});
-
-    sphereEntity->attachComponent<Relationship>(*cubeEntity, std::vector<entt::entity>{});  // sphere的父节点是cube
-}
-
-void UBOTest::operator()() {
-    cam->update();
-
-    singleReg->get<Transform>(*cubeEntity).addRotation(glm::vec3{0.0f, 1.0f, 0.0f});
-
-    // 场景绘制
-    CommonRenderEntity::update();
-}
-
-UBOTest::~UBOTest() {
-    auto renderEntites = singleReg->view<Transform>();
-    for (auto entity : renderEntites) {
-	singleReg->destroy(entity);
-    }
-}
-
+using namespace entt::literals;
 void frameObjectInView(std::shared_ptr<Camera> cam, const RGL::glcore::AABB& worldAABB) {
     auto singleReg = RGL::EnttReg::getPrimaryRegistry();
     auto view = singleReg->view<RGL::CameraPose, RGL::CameraEulerMoveParams>();	 // 假设相机只有一个实体
@@ -170,20 +79,20 @@ LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) : renderQueues{} {
 	0.5f, 1.5f);
 
     this->grassVAO = VAOCreater::createMeshVAO(*singleGrassMesh, randomTransforms, *grassShader);
+    // UBOs ubos;
 
-    directionalLight = std::make_unique<GeneralEntity>();
-    directionalLight->attachComponent<CommonLight>(glm::vec3{1.0f, 0.9f, 0.9f}, glm::vec3{0.2f, 0.2f, 0.2f}, 32.0f);
-    directionalLight->attachComponent<DirectionalCompnent>(glm::vec3{1.0f, -1.0f, -1.0f});  // 把光照方向往下调一点，效果更好
+    // grass_fragment::DirectionLight directionalLight{glm::vec3{0.2f, 0.2f, 0.2f}, glm::vec3{1.0f, 0.9f, 0.9f}, glm::vec3{1.0f, -1.0f, -1.0f}, glm::vec3{0.2f, -1.0f, -1.0f}, 32.0f};
 
-    lightUBO = std::make_shared<UBO>(*grassShader, "DirectionLight", 1);
+    // lightUBO = std::make_shared<UBO>(*grassShader, "DirectionLight", 1);
 
-    cameraUBO = std::make_shared<UBO>(*grassShader, "CameraBlock", 0);
+    // cameraUBO = std::make_shared<UBO>(*grassShader, "CameraBlock", 0);
 
-    ubos = std::make_shared<std::unordered_map<std::string, std::shared_ptr<UBO>>>();
-    (*ubos)[lightUBO->getUboName()] = lightUBO;
-    (*ubos)[cameraUBO->getUboName()] = cameraUBO;
+    // ubos = std::make_shared<std::unordered_map<std::string, std::shared_ptr<UBO>>>();
 
-    directionalLight->attachComponent<UBOs>(ubos);
+    // (*ubos)[lightUBO->getUboName()] = lightUBO;
+    // (*ubos)[cameraUBO->getUboName()] = cameraUBO;
+
+    // directionalLight->attachComponent<UBOs>(ubos);
 
     auto grassFieldEntity = singleReg->create();
     singleReg->emplace_or_replace<UBOs>(grassFieldEntity, ubos);
@@ -199,19 +108,18 @@ LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) : renderQueues{} {
     singleReg->emplace<VertArrayComponent>(grassFieldEntity, std::move(grassVAO), vertCount, idxOffset);
     singleReg->emplace<ShaderRef>(grassFieldEntity, grassShader);
 
-    auto samplers = SamplerCreater::createSamplers(*singleGrassMesh, *grassShader);
-
-    singleReg->emplace<SamplerCreater::Samplers>(grassFieldEntity, samplers);
-
     singleReg->emplace<RenderTags::Instanced>(grassFieldEntity, 100ull);
     singleReg->emplace<RenderTags::Renderable>(grassFieldEntity);
 
     frameObjectInView(cam, modelLocalAABB);
+    const CameraProjection proj = singleReg->ctx().get<CameraProjection>("CameraProjection"_hs);
+    const glm::vec3 camPosition = singleReg->ctx().get<glm::vec3>("cameraPos"_hs);
+    // directionalLight.set_cameraPos(cam->get())
 }
 
 void LoadModelTest::operator()() {
     cam->update();
-    updateDirLight();
+    // updateDirLight();
     RenderQueueSystem::populateRenderqueues(renderQueues);
     RenderQueueSystem::processInstanceQueue(renderQueues.instanceQueue);
 }
@@ -221,10 +129,10 @@ LoadModelTest::~LoadModelTest() {
     for (auto entity : renderEntites) {
 	singleReg->destroy(entity);
     }
-    auto lightEntities = singleReg->view<DirectionalCompnent>();
-    for (auto entity : lightEntities) {
-	singleReg->destroy(entity);
-    }
+
+    // for (auto entity : lightEntities) {
+    // singleReg->destroy(entity);
+    // }
 }
 
 }  // namespace practice

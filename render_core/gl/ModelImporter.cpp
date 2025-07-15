@@ -1,6 +1,9 @@
 #include "ModelImporter.hpp"
 #include <assimp/color4.h>
+#include <assimp/material.h>
 #include <assimp/scene.h>
+#include <assimp/types.h>
+#include <fmt/format.h>
 #include <spdlog/common.h>
 #include <windef.h>
 #include "AABB.hpp"
@@ -9,7 +12,6 @@
 #include "GLTextures.hpp"
 #include "Material.hpp"
 #include "Mesh.hpp"
-#include "ShaderManager.hpp"
 #include "rllogger.hpp"
 #include <cstddef>
 #include <entt/entity/entity.hpp>
@@ -117,7 +119,6 @@ void ModelImporter::processNodeBFS(ShaderRef shader) {
 	singleReg->emplace<Relationship>(currentEntity, currentRel);
 	singleReg->emplace<ShaderRef>(currentEntity, shader);
 
-	singleReg->emplace<DiscreteUniforms>(currentEntity);
 
 	// 处理节点自身mesh
 	for (size_t i = 0; i < currentNode->mNumMeshes; i++) {
@@ -136,9 +137,9 @@ void ModelImporter::processNodeBFS(ShaderRef shader) {
 	    auto [vertCount, idxOffset] = meshObj->getIdicesCountAndOffset();
 	    singleReg->emplace<VertArrayComponent>(currentEntity, std::move(vertArrayComp), vertCount, idxOffset);
 
-	    const auto sampler = SamplerCreater::createSamplers(*meshObj, *shader);
+	    const auto sampler = SamplerCreator::createSamplers(*meshObj);
 
-	    singleReg->emplace<SamplerCreater::Samplers>(currentEntity, sampler);
+	    singleReg->emplace<SamplerCreator::Samplers>(currentEntity, sampler);
 
 	    const auto pbrComponent = meshObj->getPBRComponent();
 	    if (!pbrComponent.isEmpty) {
@@ -175,8 +176,7 @@ void ModelImporter::processNodeBFS(ShaderRef shader) {
 #ifndef NDEBUG
     for (auto& [node, entity] : nodeMap) {
 	logger->log_if(spdlog::level::debug, nullptr == singleReg->try_get<VertArrayComponent>(entity), "Entity {} not have VertArrayComponent", entt::to_integral(entity));
-	logger->log_if(spdlog::level::debug, nullptr == singleReg->try_get<DiscreteUniforms>(entity), "Entity {} not have DiscreteUniforms,perhaps it is has no Textures", entt::to_integral(entity));
-	// 一般来说，在这里没有UBOs是符合预期的，因为addUbos需要手动之后调用
+
 	logger->log_if(spdlog::level::debug, nullptr == singleReg->try_get<UBOs>(entity), "Entity {} not have UBOs", entt::to_integral(entity));
 	logger->log_if(spdlog::level::debug, nullptr == singleReg->try_get<ShaderRef>(entity), "Entity {} not have ShaderRef", entt::to_integral(entity));
 	logger->log_if(spdlog::level::debug, nullptr == singleReg->try_get<Relationship>(entity), "Entity {} not have Relationship", entt::to_integral(entity));
@@ -321,10 +321,10 @@ std::unique_ptr<Mesh> ModelImporter::importAsSingleMesh() {
     return mergedMesh;
 }
 
-std::tuple<std::shared_ptr<MaterialData>, PBRComponent> ModelImporter::processMaterial(size_t assimpID) {
+std::tuple<std::shared_ptr<AssetMaterialData>, PBRComponent> ModelImporter::processMaterial(size_t assimpID) {
     aiMaterial* material = scene->mMaterials[assimpID];
 
-    std::shared_ptr<MaterialData> materialData = std::make_shared<MaterialData>();
+    std::shared_ptr<AssetMaterialData> materialData = std::make_shared<AssetMaterialData>();
     {
 	bool isTransparent = false;
 	float opacity = 1.0f;
@@ -354,7 +354,7 @@ std::tuple<std::shared_ptr<MaterialData>, PBRComponent> ModelImporter::processMa
     auto appendTexture = [this, &materialData](TextureUsageType type, aiMaterial* material) {
 	aiTextureType textureType = aiTextureType_NONE;
 	switch (type) {
-	case TextureUsageType::DIFFUSE:
+	case TextureUsageType::BASE_COLOR:
 	    textureType = aiTextureType_DIFFUSE;
 	    break;
 	case TextureUsageType::NORMAL:
@@ -363,31 +363,43 @@ std::tuple<std::shared_ptr<MaterialData>, PBRComponent> ModelImporter::processMa
 	case TextureUsageType::SPECULAR:
 	    textureType = aiTextureType_SPECULAR;
 	    break;
-	case TextureUsageType::AMBIENT:
-	    textureType = aiTextureType_AMBIENT;
+	case TextureUsageType::PACKED_ORM:
+	    textureType = aiTextureType_AMBIENT_OCCLUSION;//肯定有bug，先这么写着再说
 	    break;
+	case RGL::glcore::TextureUsageType::EMISSIVE:
+	    textureType = aiTextureType_EMISSIVE;
+		break;
+		default:
+			this->logger->error("Unknown TextureUsageType");
+
 	}
 	const int textureCount = material->GetTextureCount(textureType);
-	for (int i = 0; i < textureCount; i++) {
-	    if (scene->mNumTextures == 0) {
+	if (textureCount==0) {
+		this->logger->warn("Current mesh has no textures for type {} ",TextureType2Str(type));
+	}else if (textureCount>1) {
+		this->logger->critical("Current mesh has more than one textures for type {} is not allowed.",TextureType2Str(type));
+		throw GLLogicError(fmt::format("Current mesh has more than one textures for type {} is not allowed.",TextureType2Str(type)));
+	}else{
+		if (scene->mNumTextures == 0) {
 		aiString texturePath;
-		material->GetTexture(textureType, i, &texturePath);
+		material->GetTexture(textureType, 0, &texturePath);
 		fs::path texturePathStr = this->modelRootPath / fs::path((texturePath.C_Str()));  // 来自于assimp的texture路径很可能是相对路径。而相对路径和进程的当前路径可能往往不一样,所以需要拼接模型根路径和纹理路径。这里假设纹理文件和模型文件在同一目录下，或者在子目录中。如果不在同一目录下，可能需要额外的配置来指定纹理文件的位置。
 		auto texture = textureCache.getTexture(texturePathStr, type);
 		materialData->appendTexture(texture);
 	    } else {
-		const aiTexture* embeddedTexture = scene->mTextures[i];
+		const aiTexture* embeddedTexture = scene->mTextures[0];
 		auto texture = textureCache.getTexture(embeddedTexture, type);
 		materialData->appendTexture(texture);
 	    }
 	}
+	
     };
-    appendTexture(TextureUsageType::DIFFUSE, material);
+    appendTexture(TextureUsageType::BASE_COLOR, material);
     appendTexture(TextureUsageType::NORMAL, material);
     appendTexture(TextureUsageType::SPECULAR, material);
-    appendTexture(TextureUsageType::AMBIENT, material);
+    appendTexture(TextureUsageType::EMISSIVE, material);
 
-    return std::tuple<std::shared_ptr<MaterialData>, PBRComponent>(materialData, pbrComponent);
+    return std::tuple<std::shared_ptr<AssetMaterialData>, PBRComponent>(materialData, pbrComponent);
 }
 size_t ModelImporter::getNodeCount() const {
     return scene->mRootNode->mNumChildren;

@@ -1,12 +1,10 @@
 #pragma once
-#include "GLObj.hpp"
-#include <memory>
-#include "GLObj.hpp"
-#include "ShaderManager.hpp"
+#include <vector>
+
+
 
 #include <glm/glm.hpp>
-#include "EnttRegistry.hpp"
-#include "Mesh.hpp"
+
 namespace RGL {
 namespace glcore {
 

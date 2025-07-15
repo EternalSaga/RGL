@@ -2,6 +2,9 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include "DataPipeline.hpp"
 #include "ControllerECS.hpp"
+#include <glad/glad.h>
+#include "Helpers.hpp"
+
 namespace RGL {
 
 

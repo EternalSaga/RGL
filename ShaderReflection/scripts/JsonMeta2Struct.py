@@ -2,6 +2,7 @@ import json
 import argparse
 from pathlib import Path
 from jinja2 import Environment, FileSystemLoader
+
 import datetime
 GLSL_TYPE_TO_CPP = {
     "float": "GLfloat",
@@ -15,15 +16,26 @@ GLSL_TYPE_TO_CPP = {
     "uint": "GLuint",
 }
 
+MATERIAL_SAMPLERS = {
+   "baseColorTexture": {"usage": "TextureUsageType::BASE_COLOR", "binding": 0},
+    "normalTexture": {"usage": "TextureUsageType::NORMAL", "binding": 1},
+    "emissiveTexture": {"usage": "TextureUsageType::EMISSIVE", "binding": 2},
+    "packedOrmTexture": {"usage": "TextureUsageType::PACKED_ORM", "binding": 3},
+    "specularTexture": {"usage": "TextureUsageType::SPECULAR", "binding": 4},
+}
+
+
+
 def glsl_type_to_cpp(glsl_type):
     return GLSL_TYPE_TO_CPP.get(glsl_type, glsl_type)
 
 def process_shaders(json_file_paths):
     merged_data = {
         "inputs": [],
-        "samplers": [],
+        "samplers": {},
         "ubos": [],
         "storage_buffers": [],
+        "shader_name": ""
     }
     input_locations = set()
     sampler_bindings = set()
@@ -33,15 +45,37 @@ def process_shaders(json_file_paths):
     for json_path in json_file_paths:
         with open(json_path, 'r') as file:
             data = json.load(file)
+
+            # if shader is fragment, use fragment shader name
+            if data["shader_stage"] == "fragment":
+
+                shader_name = Path(data["spirv_path"]).stem
+                shader_name = str.replace(shader_name, '-', '_')
+
+                merged_data["shader_name"] =  shader_name
+
             # merge inputs vertex attributes
             for item in data.get("inputs", []):
                 if data["shader_stage"] == "vertex" and item["location"] not in input_locations:
                     merged_data["inputs"].append(item)
                     input_locations.add(item["location"])
             # merge samplers
+            
             for item in data.get("samplers", []):
-                if item["binding"] not in sampler_bindings:
-                    merged_data["samplers"].append(item)
+                #先处理sampler2D
+                if item["type"] == "sampler2D":
+
+                    shader_sampler_name = item["name"]
+                    shader_sampler_binding = item["binding"]
+                    
+                    if shader_sampler_name not in list(MATERIAL_SAMPLERS.keys()):
+                        raise ValueError(f"Sampler {shader_sampler_name} not found in contracted shader sampler list.")
+                    else:
+                        contract_binding = MATERIAL_SAMPLERS[shader_sampler_name]["binding"]
+                        if contract_binding != shader_sampler_binding:
+                            raise ValueError(f"UBO {shader_sampler_name} binding mismatch. Expected {contract_binding}, got {shader_sampler_binding}.")           
+
+                    merged_data["samplers"][shader_sampler_name] = MATERIAL_SAMPLERS[shader_sampler_name]
                     sampler_bindings.add(item["binding"])
             # merge ubos
             for ubo in data.get("uniforms", []):
@@ -175,9 +209,9 @@ def main():
 
         output = template.render(reflection_data)
 
-        # 获取模板文件名并替换扩展名为 .cpp 或 .hpp
-        template_name = templatePath.name
-        output_file_name = template_name.replace('.jinja','')
+        templateName = templatePath.stem
+
+        output_file_name = f'{reflection_data["shader_name"]}_{templateName}'
 
         # 确保输出目录存在
         output_dir = Path(args.outdir)

@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include <type_traits>
 #include <glad/glad.h>
 #include "Helpers.hpp"
@@ -12,45 +13,31 @@ namespace RGL {
 namespace glcore {
 class SSBO {
     GLuint ssbo;
-    GLint blockSize;
-    GLuint blockIndex;
-    GLint storagesCount;
-
-    std::vector<GLint> storageOffsets;
-    std::vector<GLint> storageTypes;
-
-    std::vector<GLint> storageArrayStrides;
-
-    std::vector<GLint> storageSizes;
-
-    std::vector<std::string> storageNames;
-
-    std::vector<std::byte> data;
-
-    GLuint shader;
-    std::string ssboName;
-
     GLint bindingPoint;
+    size_t currentSize; 
 
-    RLLogger* logger = nullptr;
-    void prepareOffsetsAndDataType();
+public:
+ SSBO(GLint bindingPoint);
 
-   public:
-    SSBO(GLuint shader, std::string ssboName,GLint bindingPoint);
+ ~SSBO();
 
+ void updateBuffer(const void* data, size_t size);
 
-    void updateBufferData(std::vector<std::byte> cpuData);
+ void updateBufferSubData(const void* data, size_t size, size_t offset);
 
-    template<IsStandardLayoutType StandardLayoutType>
-    StandardLayoutType getBlockData() {
-        assert(sizeof(StandardLayoutType) == blockSize);
+ template <typename T>
+ void readBuffer(T& out_data, size_t size_to_read, size_t offset = 0) {
+     assert(offset + size_to_read <= currentSize);
+     glCall(glMemoryBarrier, GL_SHADER_STORAGE_BARRIER_BIT);
+     glCall(glGetNamedBufferSubData, this->ssbo, offset, size_to_read, &out_data);
+ }
 
+    template<typename ElementType>
+    void readBuffer(std::vector<ElementType>& out_vector, size_t offset = 0) {
+        size_t size_to_read = out_vector.size() * sizeof(ElementType);
+        assert(offset + size_to_read <= currentSize);
         glCall(glMemoryBarrier, GL_SHADER_STORAGE_BARRIER_BIT);
-        StandardLayoutType cpuData;
-
-        glCall(glGetNamedBufferSubData,this->ssbo,0,sizeof(StandardLayoutType), &cpuData);
-        return cpuData;
+        glCall(glGetNamedBufferSubData, this->ssbo, offset, size_to_read, out_vector.data());
     }
-    
 };
 }}

@@ -1,3 +1,4 @@
+#extension VK_EXT_descriptor_indexing : require
 #version 460 core
 
 
@@ -9,7 +10,9 @@ layout(location = 0) out vec4 FragColor;
 
 
 
-layout(binding = 0)uniform sampler2D baseColorTexture;
+layout(std430, binding = 0) buffer Samplers{
+	sampler2D baseColorTexture;
+};
 // specularTexture 在这个草地光照模型中可以不用，因为草基本没有镜面反射
 // uniform sampler2D specularTexture;
 

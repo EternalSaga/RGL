@@ -30,7 +30,7 @@ class Mesh {
     size_t getVertexLength();
 
 
-    std::shared_ptr<MaterialData> material;
+    std::shared_ptr<AssetMaterialData> material;
     PBRComponent pbrComponent;
 
     bool materialHasSet = false;
@@ -51,12 +51,12 @@ class Mesh {
     void pushVertex(const std::vector<GLfloat>& vertex);    
     void pushIndex(const int index);
 
-    void setMaterial(std::shared_ptr<MaterialData> material);
+    void setMaterial(std::shared_ptr<AssetMaterialData> material);
 
     void setPBRComponent(const PBRComponent& pbrComponent);
     PBRComponent getPBRComponent() const;
 
-    std::shared_ptr<MaterialData> getMaterial() const;
+    std::shared_ptr<AssetMaterialData> getMaterial() const;
     void setAABB(const AABB& aabb);
 
     AABB getAABB() const;
@@ -73,7 +73,7 @@ std::unique_ptr<VAO> createMeshVAO(const Mesh& mesh,const std::vector<glm::mat4>
 
 }  // namespace VAOCreater
 
-namespace SamplerCreater{
+namespace SamplerCreator{
 
     enum class TextureStorageType{
         TEXTURE2D,TEXTURE3D,TEXTURE_CUBE
@@ -81,14 +81,13 @@ namespace SamplerCreater{
 
     struct Sampler{
 
-        std::string samplerName;
         GLuint64 textureHandler;
+        unsigned int bindingPoint;
         std::shared_ptr<Texture> texture;
     };
 
     using Samplers = std::vector<Sampler>;
-
-    Samplers createSamplers(const Mesh& mesh, const Shader& shader);
+    Samplers createSamplers(const Mesh& mesh);
 
     class SamplersScope{
         Samplers& samplers;

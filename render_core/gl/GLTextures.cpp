@@ -14,7 +14,7 @@
 namespace RGL {
 namespace io {
 
-LoadedImg::LoadedImg(const fs::path& imagePath):imgData(nullptr) {
+LoadedImg::LoadedImg(const fs::path& imagePath) : imgData(nullptr) {
     stbi_set_flip_vertically_on_load(true);
     imgData = stbi_load(imagePath.generic_string().c_str(), &width,
 	&height, &channels, STBI_rgb_alpha);
@@ -25,7 +25,7 @@ LoadedImg::LoadedImg(const fs::path& imagePath):imgData(nullptr) {
     }
 }
 
-LoadedImg::LoadedImg(const aiTexture* embededtexture):imgData(nullptr) {
+LoadedImg::LoadedImg(const aiTexture* embededtexture) : imgData(nullptr) {
     const uint8_t* buffer = reinterpret_cast<uint8_t*>(embededtexture->pcData);
     stbi_set_flip_vertically_on_load(true);
     this->imgData = stbi_load_from_memory(buffer, embededtexture->mWidth, &this->width, &this->height, &channels, STBI_rgb_alpha);
@@ -48,25 +48,20 @@ LoadedImg::~LoadedImg() {
 }  // namespace io
 namespace glcore {
 
-
 Texture::Texture() {
-        glcore::glCall(glCreateTextures, GL_TEXTURE_2D,
+    glcore::glCall(glCreateTextures, GL_TEXTURE_2D,
 	1, &texture);
 }
-
 
 void Texture::useTexture() {
     glCall(glMakeTextureHandleResidentARB, textureHandle);
 }
 void Texture::disableTexture() {
-	glCall(glMakeTextureHandleNonResidentARB, textureHandle);
-
+    glCall(glMakeTextureHandleNonResidentARB, textureHandle);
 }
 
 void Texture::set(const ImgRef& flippedImg,
     bool turnOnMipmap) {
-
-
     if (turnOnMipmap) {
 	glCall(glTextureParameteri, texture,
 	    GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -128,7 +123,7 @@ void Texture::set(const ImgRef& flippedImg,
 		.imgData);  // 根据mipmap等级初始化或者更新纹理数据
     }
 
-	textureHandle = glCall(glGetTextureHandleARB,texture);
+    textureHandle = glCall(glGetTextureHandleARB, texture);
 }
 
 void Texture::setFilltering(GLenum filter) {
@@ -149,7 +144,7 @@ std::shared_ptr<Texture> TextureCache::getTexture(const fs::path& imagePath, Tex
 	cache[imagePath]->set(LoadedImg(imagePath), true);
 	cache[imagePath]->setUseType(type);
 	switch (type) {
-	case TextureUsageType::DIFFUSE: {
+	case TextureUsageType::BASE_COLOR: {
 	    cache[imagePath]->setName("baseColorTexture");
 	    break;
 	}
@@ -161,8 +156,8 @@ std::shared_ptr<Texture> TextureCache::getTexture(const fs::path& imagePath, Tex
 	    cache[imagePath]->setName("normalTexture");
 	    break;
 	}
-	case TextureUsageType::AMBIENT: {
-	    cache[imagePath]->setName("ambentTexture");
+	case TextureUsageType::PACKED_ORM: {
+	    cache[imagePath]->setName("ormTexture");
 	    break;
 	}
 	default: {
@@ -194,11 +189,11 @@ std::shared_ptr<Texture> TextureCache::getTexture(const aiTexture* texture, Text
     } else {
 	logger->trace("ai texture cache miss");
 	aiCache[texture] = std::make_shared<Texture>();
-	
+
 	aiCache[texture]->set(LoadedImg(texture), true);
 	aiCache[texture]->setUseType(type);
 	switch (type) {
-	case TextureUsageType::DIFFUSE: {
+	case TextureUsageType::BASE_COLOR: {
 	    aiCache[texture]->setName("baseColorTexture");
 	    break;
 	}
@@ -210,8 +205,8 @@ std::shared_ptr<Texture> TextureCache::getTexture(const aiTexture* texture, Text
 	    aiCache[texture]->setName("normalTexture");
 	    break;
 	}
-	case TextureUsageType::AMBIENT: {
-	    aiCache[texture]->setName("ambentTexture");
+	case TextureUsageType::PACKED_ORM: {
+	    aiCache[texture]->setName("ormTexture");
 	    break;
 	}
 	default: {
@@ -223,7 +218,6 @@ std::shared_ptr<Texture> TextureCache::getTexture(const aiTexture* texture, Text
 	}
 
 	return aiCache[texture];
-
     }
 }
 TextureUsageType Texture::getUseType() {
@@ -236,7 +230,7 @@ std::shared_ptr<Texture> TextureCache::getTexture(const ProgrammedTexture type, 
 	    programmedTexturesCache[type] = std::make_shared<Texture>();
 	    texture::CheckerBoard checkerboard{8, 8};
 	    programmedTexturesCache[type]->set(checkerboard.getTexture(), true);
-	    programmedTexturesCache[type]->setUseType(TextureUsageType::DIFFUSE);
+	    programmedTexturesCache[type]->setUseType(TextureUsageType::BASE_COLOR);
 	    programmedTexturesCache[type]->setName("baseColorTexture");
 	    break;
 	}
@@ -258,5 +252,28 @@ GLuint Texture::operator()() {
     return texture;
 }
 
+std::string TextureType2Str(const TextureUsageType& usageType) {
+    std::string res;
+    switch (usageType) {
+    case TextureUsageType::BASE_COLOR:
+	res = "BASE_COLOR";
+	break;
+    case TextureUsageType::SPECULAR:
+	res = "SPECULAR";
+	break;
+    case TextureUsageType::NORMAL:
+	res = "NORMAL";
+    case TextureUsageType::PACKED_ORM:
+	res = "PACKED_ORM";
+	break;
+    case TextureUsageType::EMISSIVE:
+	res = "EMISSIVE";
+	break;
+    default:
+	res = "UNKNOWN";
+	break;
+    }
+    return res;
+}
 }  // namespace glcore
 }  // namespace RGL

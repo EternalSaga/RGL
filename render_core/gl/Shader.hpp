@@ -1,5 +1,6 @@
 #pragma once
 #include "Helpers.hpp"
+
 #include "glUniformWrapper.hpp"
 #include "rllogger.hpp"
 
@@ -8,6 +9,7 @@
 #include <glad/glad.h>
 
 #include <map>
+#include <memory>
 
 
 namespace RGL {
@@ -111,6 +113,7 @@ class ScopeShader {
     ~ScopeShader();
 };
 
+using ShaderRef = std::shared_ptr<Shader> ;
 
 
 }  // namespace glcore

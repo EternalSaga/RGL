@@ -7,8 +7,7 @@
 #include <memory>
 #include "GLObj.hpp"
 
-#include "Mesh.hpp"
-#include "ShaderManager.hpp"
+
 #include "EnttRegistry.hpp"
 #include "RenderQueue.hpp"
 namespace RGL {
@@ -48,9 +47,7 @@ class GeneralEntity : public SingleReg {
 class CommonRenderEntity : public SingleReg {
 
     entt::entity entity;
-    static void modelSystemUBO();
 
-	static void modelSystemSimple();
 
     static void renderVertexArray();
 
@@ -59,7 +56,7 @@ class CommonRenderEntity : public SingleReg {
    public:
     CommonRenderEntity(glm::vec3 position, float angleX, float angleY, float angleZ, glm::vec3 scale);
     ~CommonRenderEntity() = default;
-    void setMesh(std::unique_ptr<Mesh> mesh, ShaderRef shader);
+
 
     static void update();
 

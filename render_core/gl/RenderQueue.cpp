@@ -1,4 +1,5 @@
 #include "RenderQueue.hpp"
+#include <glad/glad.h>
 #include <entt/core/fwd.hpp>
 #include <entt/entity/entity.hpp>
 #include <entt/entity/fwd.hpp>
@@ -10,6 +11,7 @@
 #include "GLCheckError.hpp"
 #include "GLObj.hpp"
 #include "Helpers.hpp"
+#include "Shader.hpp"
 #include "rllogger.hpp"
 
 #include <entt/core/hashed_string.hpp>
@@ -24,83 +26,31 @@ using namespace entt::literals;
 #include "InstanceComponent.hpp"
 namespace RGL {
 using namespace glcore;
+void executeSingleDraw(entt::entity entity, entt::registry& reg) {
+    const auto& vertArray = reg.get<VertArrayComponent>(entity);
 
-void renderSingleEntity(entt::entity entity, entt::registry* reg, bool isSkybox = false) {
-    bool hasUBOs = reg->all_of<UBOs>(entity);
-    bool hasSimpleUniforms = reg->all_of<DiscreteUniforms>(entity) && !hasUBOs;	 // 确保不与UBOs冲突
+    const auto& shader = reg.get<ShaderRef>(entity);
+    const auto& samplers = reg.get<SamplerCreator::Samplers>(entity);
 
-    const auto& vertArray = reg->get<VertArrayComponent>(entity);
-    auto shader = reg->get<ShaderRef>(entity);
-    auto& samplers = reg->get<SamplerCreater::Samplers>(entity);
-    const auto& transform = reg->get<Transform>(entity);  // 需要 Transform 来计算 MVP
-
-    ScopeShader scopeShader(*shader);
-
-    // 更新UBO / Uniforms
-    // 这部分逻辑可能需要从之前的 modelSystemUBO/Simple 迁移并针对单个实体
-    const CameraProjection proj = reg->ctx().get<CameraProjection>("CameraProjection"_hs);
-    glm::mat4 viewMatrix = proj.viewMat;
-    if (isSkybox) {
-	viewMatrix = glm::mat4(glm::mat3(proj.viewMat));  // 移除位移
-    }
-    const glm::mat4 MVP = proj.projMat * viewMatrix * transform.modelMatrix;
-
-    bool hasPbrComponents = reg->all_of<PBRComponent>(entity);
-
-    if (hasUBOs) {
-	auto& ubos = reg->get<UBOs>(entity);
-	// 更新Transform UBO
-	auto transUbo = (*ubos)["Transforms"];
-	if (transUbo) {
-	    const glm::mat3 inverseModelMatrix = glm::transpose(glm::inverse(glm::mat3(transform.modelMatrix)));
-	    transUbo->updateCpuUbo("modelMatrix", transform.modelMatrix);
-	    transUbo->updateCpuUbo("MVP", MVP);
-	    transUbo->updateCpuUbo("inverseModelMatrix", glm::mat4(inverseModelMatrix));
-	}
-
-	if (hasPbrComponents) {
-	    const auto& pbrComponent = reg->get<PBRComponent>(entity);
-	    const auto pbrUbo = (*ubos)["pbrUniformBlock"];
-	    if (pbrUbo) {
-		pbrUbo->updateCpuUbo("baseColor", pbrComponent.baseColorFactor);
-		pbrUbo->updateCpuUbo("metallicFactor", pbrComponent.metallicFactor);
-		pbrUbo->updateCpuUbo("roughnessFactor", pbrComponent.roughnessFactor);
-		pbrUbo->updateCpuUbo("u_hasBaseColorTexture", 1);
-		pbrUbo->updateCpuUbo("u_hasSpecularTexture", 0);
-	    } else {
-		auto logger = RLLogger::getInstance();
-		logger->warn("UBO CPU for pbrUniformBlock not found,entity {} has no pbrUniformBlock", entt::to_integral(entity));
-	    }
-
-	    // 设置所有UBO
-	    for (auto& [blockName, ubo] : *ubos) {
-		ubo->setUniform();
-	    }
-	}
-    } else if (hasSimpleUniforms) {
-	auto& discreteUniforms = reg->get<DiscreteUniforms>(entity);
-	discreteUniforms["MVP"] = MVP;	// 假设简单物体也需要MVP
-	// 可能还需要像 cameraPos 这样的 uniform
-	const glm::vec3 camPosition = reg->ctx().get<glm::vec3>("cameraPos"_hs);
-	discreteUniforms["cameraPos"] = camPosition;  // 示例
-	updateAllUniforms(shader, discreteUniforms);
-    } else {
-	// 可能有些实体既没有UBOs也没有DiscreteUniforms（例如纯粹的调试物体或特殊情况）
-	// 或者这是一个逻辑错误，需要日志记录
-    }
-
+    ScopeShader shaderScope(*shader);
     VAOScope vaoScope(*vertArray.vao);
-    SamplerCreater::SamplersScope samplersScope(samplers);
-
-    for (const auto& sampler : samplers) {
-	shader->setUniform(sampler.samplerName, sampler.textureHandler);
-    }
-
-    RLLogger::getInstance()->log_if(spdlog::level::err, !glCall(glIsVertexArray, *(vertArray.vao)), "Mesh vao is not valid for entity {}", entt::to_integral(entity));
     glCall(glDrawElements, GL_TRIANGLES, vertArray.vertCount, GL_UNSIGNED_INT, reinterpret_cast<void*>(vertArray.idxOffset));
 }
+void executeDrawInstanced(entt::entity entity, entt::registry& reg) {
+    const auto& vertArray = reg.get<VertArrayComponent>(entity);
 
-void renderInstanceEntity(entt::entity instancedEntity, entt::registry* reg);
+    const auto& shader = reg.get<ShaderRef>(entity);
+
+    const auto& samplers = reg.get<SamplerCreator::Samplers>(entity);
+
+    const auto& instanceComponent = reg.get<RenderTags::Instanced>(entity);
+    ScopeShader shaderScope(*shader);
+    VAOScope vaoScope(*vertArray.vao);
+    glCall(glDrawElementsInstanced, GL_TRIANGLES, vertArray.vertCount, GL_UNSIGNED_INT,
+           reinterpret_cast<void*>(vertArray.idxOffset), instanceComponent.instanceCount);
+}
+
+
 
 void RenderQueues::clear() {
     opaqueQueue.clear();
@@ -164,7 +114,7 @@ void RenderQueueSystem::processOpaqueQueue(const std::vector<entt::entity>& queu
     glDisable(GL_BLEND);
 
     for (entt::entity entity : queue) {
-	renderSingleEntity(entity, singleReg);
+        executeSingleDraw(entity, *singleReg);
     }
 }
 void RenderQueueSystem::processTransparentQueue(const std::vector<entt::entity>& queue) {
@@ -177,7 +127,7 @@ void RenderQueueSystem::processTransparentQueue(const std::vector<entt::entity>&
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);	// 标准Alpha混合
 
     for (entt::entity entity : queue) {
-	renderSingleEntity(entity, singleReg);
+	executeSingleDraw(entity, *singleReg);
     }
     glDepthMask(GL_TRUE);  // 恢复深度写入
     glDisable(GL_BLEND);
@@ -190,57 +140,24 @@ void RenderQueueSystem::processDisableCullingQueue(const std::vector<entt::entit
     auto singleReg = EnttReg::getPrimaryRegistry();
     glCall(glDisable, GL_CULL_FACE);
     for (entt::entity entity : queue) {
-	renderSingleEntity(entity, singleReg);
+	    executeSingleDraw(entity, *singleReg);
     }
     glCall(glEnable, GL_CULL_FACE);
 }
 
-void renderInstanceEntity(entt::entity entity, entt::registry* reg) {
-    // 不管有没有UBO，暂时先当它都有吧，写死了再说
-    // bool hasUBOs = reg->all_of<UBOs>(entity);
-    // bool hasSimpleUniforms = reg->all_of<DiscreteUniforms>(entity) && !hasUBOs;  // 没有UBOs的情况下才有简单Uniforms
-    const auto& vertArray = reg->get<VertArrayComponent>(entity);
-    auto shader = reg->get<ShaderRef>(entity);
-    auto& samplers = reg->get<SamplerCreater::Samplers>(entity);
-    const auto& transform = reg->get<Transform>(entity);
-    auto instanceComponent = reg->get<RenderTags::Instanced>(entity);
-    const CameraProjection proj = reg->ctx().get<CameraProjection>("CameraProjection"_hs);
-
-    const glm::mat4 viewMatrix = proj.viewMat;
-    const glm::mat4 modelMatrix = transform.modelMatrix;
-    
-    auto& ubos = reg->get<UBOs>(entity);
-    auto instanceTransformsUbo = (*ubos)["CameraBlock"];
-    if (instanceTransformsUbo) {
-        instanceTransformsUbo->updateCpuUbo("viewMatrix", viewMatrix);
-        instanceTransformsUbo->updateCpuUbo("projectionMatrix", proj.projMat);
-        //instanceTransformsUbo->updateCpuUbo("instancesGroupMatrix", modelMatrix);
-    }else {
-        RLLogger::getInstance()->error("UBO InstanceTransforms not found for entity");
-    }
-    ScopeShader scopeShader(*shader);
-    VAOScope vaoScope(*vertArray.vao);
-    SamplerCreater::SamplersScope samplersScope(samplers);
-    for (const auto& sampler : samplers) {
-        shader->setUniform(sampler.samplerName, sampler.textureHandler);
-    }
-    for (auto ubo : *ubos) {
-        ubo.second->setUniform();
-    }
-
-    glCall(glDrawElementsInstanced, GL_TRIANGLES, vertArray.vertCount, GL_UNSIGNED_INT,
-           reinterpret_cast<void*>(vertArray.idxOffset), instanceComponent.instanceCount);
-
-}
 
 void RenderQueueSystem::processInstanceQueue(const std::vector<entt::entity>& queue){
 	auto singleReg = EnttReg::getPrimaryRegistry();
     glCall(glDisable, GL_CULL_FACE);
     for (entt::entity entity : queue) {
-	    renderInstanceEntity(entity, singleReg);
+	    executeDrawInstanced(entity, *singleReg);
     }
     glCall(glEnable, GL_CULL_FACE);
 }
+
+
+
+
 
 
 }  // namespace RGL

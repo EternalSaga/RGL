@@ -13,7 +13,7 @@
 #include <rllogger.hpp>
 #include "Entity.hpp"
 #include "RenderQueue.hpp"
-#include "ShaderManager.hpp"
+
 #include "UBO.hpp"
 #include "VertexDescriptor.hpp"
 #include "Mesh.hpp"
@@ -40,7 +40,7 @@ class ModelImporter : public SingleReg {
     const aiScene* scene;
 
     const aiScene* loadModel(const fs::path& path);
-    std::tuple<std::shared_ptr<MaterialData>,PBRComponent> processMaterial(size_t assimpID);
+    std::tuple<std::shared_ptr<AssetMaterialData>,PBRComponent> processMaterial(size_t assimpID);
     TextureCache textureCache;
     fs::path modelRootPath;
     std::unique_ptr<Mesh> processMesh(aiMesh* importedMesh);

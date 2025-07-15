@@ -1,12 +1,8 @@
 #include "InstanceComponent.hpp"
 #include <random>
 #include <glm/gtc/matrix_transform.hpp>
-#include "GLCheckError.hpp"
-#include "Helpers.hpp"
-#include "Mesh.hpp"
-#include "CameraECS.hpp"
-#include "ShaderManager.hpp"
-#include "Light.hpp"
+#include <entt/entt.hpp>
+
 using namespace entt::literals;
 namespace RGL {
 namespace glcore {

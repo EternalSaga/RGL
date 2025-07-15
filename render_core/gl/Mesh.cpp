@@ -1,9 +1,10 @@
 #include "Mesh.hpp"
+#include <glad/glad.h>
 #include "GLCheckError.hpp"
 #include "GLObj.hpp"
 #include "GLTextures.hpp"
 #include "Helpers.hpp"
-#include "ShaderManager.hpp"
+
 #include "rllogger.hpp"
 
 namespace RGL {
@@ -91,11 +92,11 @@ size_t Mesh::getVertexLength() {
     return vertLength;
 }
 
-void Mesh::setMaterial(std::shared_ptr<MaterialData> material) {
+void Mesh::setMaterial(std::shared_ptr<AssetMaterialData> material) {
     materialHasSet = true;
     this->material = material;
 }
-std::shared_ptr<MaterialData> Mesh::getMaterial() const {
+std::shared_ptr<AssetMaterialData> Mesh::getMaterial() const {
     if (!materialHasSet) {
 	auto logger = RGL::RLLogger::getInstance();
 	logger->error("material not set, please set material first.");
@@ -109,16 +110,16 @@ PBRComponent Mesh::getPBRComponent() const {
     return pbrComponent;
 }
 
-namespace SamplerCreater {
-Samplers createSamplers(const Mesh& mesh, const Shader& shader) {
+namespace SamplerCreator {
+
+
+Samplers createSamplers(const Mesh& mesh) {
     Samplers samplers;
     auto material = mesh.getMaterial();
     if (material->ifHasTextures()) {
 	auto textures = material->getTextures();
-	for (auto [usage, textures] : textures) {
-	    for (auto& tex : textures) {
-		samplers.emplace_back(Sampler{tex->getName(), tex->getTextureHandler() ,tex});
-	    }
+	for (auto [usage, tex] : textures) {
+	    samplers.emplace_back(Sampler{ tex->getTextureHandler() ,static_cast<unsigned int>(usage),tex});
 	}
     } else {
 	auto logger = RLLogger::getInstance();
@@ -127,6 +128,7 @@ Samplers createSamplers(const Mesh& mesh, const Shader& shader) {
 
     return samplers;
 }
+
 void UseTextures(Samplers& samplers) {
     for (auto& sampler : samplers) {
 	sampler.texture->useTexture();
