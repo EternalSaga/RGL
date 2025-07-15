@@ -1,7 +1,5 @@
-#extension VK_EXT_descriptor_indexing : require
 #version 460 core
-
-
+#extension GL_EXT_nonuniform_qualifier : enable
 layout(location = 0) in vec2 uv;
 layout(location = 1) in vec3 normal;
 layout(location = 2) in vec3 worldPosition;
@@ -10,26 +8,28 @@ layout(location = 0) out vec4 FragColor;
 
 
 
-layout(std430, binding = 0) buffer Samplers{
-	sampler2D baseColorTexture;
+layout(std140, binding = 1) uniform MaterialIndices {
+    int baseColorIdx;
 };
+
+layout(set = 0, binding = 2) uniform sampler2D myTextures[];
+
 // specularTexture 在这个草地光照模型中可以不用，因为草基本没有镜面反射
 // uniform sampler2D specularTexture;
 
 // --- Uniforms ---
-layout(std140,binding=1) uniform DirectionLight{
+layout(std140,binding=3) uniform DirectionLight{
     uniform vec3 ambient;
     uniform vec3 lightColor;
     uniform vec3 globalLightDirection;
     uniform vec3 cameraPos;
     uniform float spotIntensity; // 这个对于草地来说意义不大，可以忽略
-
 };
 
 void main()
 {
 	float u_translucency = 0.5; // 透光效果强度
-	vec4 albedo = texture(baseColorTexture, uv);
+	vec4 albedo = texture(myTextures[baseColorIdx], uv);
     
 	if (albedo.a < 0.1) {
 		discard;

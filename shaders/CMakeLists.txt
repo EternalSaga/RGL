@@ -15,7 +15,7 @@ function(compile_shader SHADER_SOURCE)
     add_custom_command(
         OUTPUT ${SPIRV_OUTPUT}
         # 这里使用我们找到的变量，而不是 CMake 目标名
-        COMMAND ${GLSLANG_VALIDATOR_EXECUTABLE} -V ${SHADER_SOURCE} -o ${SPIRV_OUTPUT}
+        COMMAND ${GLSLANG_VALIDATOR_EXECUTABLE} --target-env opengl -V ${SHADER_SOURCE} -o ${SPIRV_OUTPUT}
         DEPENDS ${SHADER_SOURCE}
         COMMENT "Compiling ${SHADER_SOURCE} to SPIR-V"
     )

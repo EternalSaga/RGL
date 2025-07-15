@@ -23,7 +23,7 @@
 
 #include <glm/gtx/string_cast.hpp>
 #include "GLTextures.hpp"
-#include "grass_fragment_shader_template.hpp"
+// #include "grass_fragment_shader_template.hpp"
 namespace RGL {
 namespace practice {
 using namespace entt::literals;
