@@ -16,13 +16,6 @@ GLSL_TYPE_TO_CPP = {
     "uint": "GLuint",
 }
 
-MATERIAL_SAMPLERS = {
-   "baseColorTexture": {"usage": "TextureUsageType::BASE_COLOR", "binding": 0},
-    "normalTexture": {"usage": "TextureUsageType::NORMAL", "binding": 1},
-    "emissiveTexture": {"usage": "TextureUsageType::EMISSIVE", "binding": 2},
-    "packedOrmTexture": {"usage": "TextureUsageType::PACKED_ORM", "binding": 3},
-    "specularTexture": {"usage": "TextureUsageType::SPECULAR", "binding": 4},
-}
 
 
 
@@ -59,26 +52,11 @@ def process_shaders(json_file_paths):
                 if data["shader_stage"] == "vertex" and item["location"] not in input_locations:
                     merged_data["inputs"].append(item)
                     input_locations.add(item["location"])
-            # merge samplers
             
-            for item in data.get("samplers", []):
-                #先处理sampler2D
-                if item["type"] == "sampler2D":
 
-                    shader_sampler_name = item["name"]
-                    shader_sampler_binding = item["binding"]
-                    
-                    if shader_sampler_name not in list(MATERIAL_SAMPLERS.keys()):
-                        raise ValueError(f"Sampler {shader_sampler_name} not found in contracted shader sampler list.")
-                    else:
-                        contract_binding = MATERIAL_SAMPLERS[shader_sampler_name]["binding"]
-                        if contract_binding != shader_sampler_binding:
-                            raise ValueError(f"UBO {shader_sampler_name} binding mismatch. Expected {contract_binding}, got {shader_sampler_binding}.")           
-
-                    merged_data["samplers"][shader_sampler_name] = MATERIAL_SAMPLERS[shader_sampler_name]
-                    sampler_bindings.add(item["binding"])
             # merge ubos
             for ubo in data.get("uniforms", []):
+
                 if ubo["binding"] not in ubo_bindings:
                     
                     processed_members = []
@@ -116,6 +94,29 @@ def process_shaders(json_file_paths):
                     ubo["members"] = processed_members
                     merged_data["ubos"].append(ubo)
                     ubo_bindings.add(ubo["binding"])
+            
+            if data["shader_stage"] == "fragment":
+                foundMaterialIndices = False
+                for item in merged_data["ubos"]:
+                    if item["name"] == "MaterialIndices":
+                        foundMaterialIndices = True
+                        break
+                if not foundMaterialIndices:
+                    raise ValueError("MaterialIndices UBO not found in fragment shader reflection data.")
+
+
+            # merge samplers
+            for item in data.get("samplers", []):
+                #先处理sampler2D
+                if item["type"] == "sampler2D":
+
+                    shader_sampler_name = item["name"]
+                    shader_sampler_binding = item["binding"]
+                    isArray = item["isArray"]
+                    
+
+                    merged_data["samplers"][shader_sampler_name] = MATERIAL_SAMPLERS[shader_sampler_name]
+                    sampler_bindings.add(item["binding"])
             for item in data.get("storage_buffers", []):
                 if item["binding"] not in ssbo_bindings:
             
