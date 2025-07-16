@@ -81,7 +81,7 @@ namespace SamplerCreator{
 
     struct Sampler{
 
-        GLuint64 textureHandler;
+        GLint textureUnit;
         unsigned int bindingPoint;
         std::shared_ptr<Texture> texture;
     };

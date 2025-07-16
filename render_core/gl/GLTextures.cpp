@@ -48,20 +48,67 @@ LoadedImg::~LoadedImg() {
 }  // namespace io
 namespace glcore {
 
+std::once_flag TextUnitResources::initOnce{};
+std::shared_ptr<TextUnitResources> TextUnitResources::instance;
+std::shared_ptr<TextUnitResources>
+TextUnitResources::getInstance() {
+    std::call_once(initOnce, []() {
+	instance = std::make_shared<TextUnitResources>();
+    });
+    return instance;
+}
+GLuint
+TextUnitResources::popUnit() {
+    GLuint tunit = 0;
+    if (!textureUnitResource.empty()) {
+	tunit = textureUnitResource.back();
+	textureUnitResource.pop_back();
+    } else {
+	tunit = GL_INVLAID_TEXTURE_UNIT;  // 没有可用的纹理单元，返回-1
+    }
+    return tunit;
+}
+TextUnitResources::TextUnitResources() {
+    glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &MAX_UNIT_SIZE);
+    textureUnitResource.reserve(MAX_UNIT_SIZE);
+    for (int i = 0; i < MAX_UNIT_SIZE; ++i) {
+	this->textureUnitResource.push_back(i);
+    }
+}
+
 Texture::Texture() {
+    unitsPool = TextUnitResources::getInstance();
     glcore::glCall(glCreateTextures, GL_TEXTURE_2D,
 	1, &texture);
 }
 
 void Texture::useTexture() {
-    glCall(glMakeTextureHandleResidentARB, textureHandle);
+    setTextureUnit();
+    glCall(glBindTextureUnit, textureUnit, texture);
 }
+
+void Texture::setTextureUnit() {
+    // 检查当前texture是否有对应的纹理单元
+    textureUnit = this->unitsPool->popUnit();
+    if (textureUnit == GL_INVLAID_TEXTURE_UNIT) {  // 当前纹理没有纹理单元绑定
+	auto logger = RLLogger::getInstance();
+	logger->error("no texture unit for this texture {}", this->textureName);
+	throw std::runtime_error("no texture unit for this texture");
+    }
+}
+
 void Texture::disableTexture() {
-    glCall(glMakeTextureHandleNonResidentARB, textureHandle);
+    if (textureUnit != GL_INVLAID_TEXTURE_UNIT) {  // 检查是否分配了纹理单元
+	unitsPool->pushUnit(textureUnit);
+	textureUnit = GL_INVLAID_TEXTURE_UNIT;	// 重置纹理单元
+    }
 }
 
 void Texture::set(const ImgRef& flippedImg,
     bool turnOnMipmap) {
+    // 暂时不绑定任何纹理单元，所以放个-1
+    textureUnit = GL_INVLAID_TEXTURE_UNIT;
+
     if (turnOnMipmap) {
 	glCall(glTextureParameteri, texture,
 	    GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -122,8 +169,6 @@ void Texture::set(const ImgRef& flippedImg,
 	    flippedImg
 		.imgData);  // 根据mipmap等级初始化或者更新纹理数据
     }
-
-    textureHandle = glCall(glGetTextureHandleARB, texture);
 }
 
 void Texture::setFilltering(GLenum filter) {
@@ -138,6 +183,7 @@ Texture::~Texture() {
 void Texture::setUseType(TextureUsageType type) {
     usageType = type;
 }
+
 std::shared_ptr<Texture> TextureCache::getTexture(const fs::path& imagePath, TextureUsageType type) {
     if (cache.find(imagePath) == cache.end()) {
 	cache[imagePath] = std::make_shared<Texture>();
@@ -223,6 +269,17 @@ std::shared_ptr<Texture> TextureCache::getTexture(const aiTexture* texture, Text
 TextureUsageType Texture::getUseType() {
     return usageType;
 }
+
+GLint Texture::getTextureUnit() {
+    if (textureUnit == GL_INVLAID_TEXTURE_UNIT) {
+	throw std::runtime_error("Texture unit is not set.");
+    }
+    if (textureUnit < 0 || textureUnit >= unitsPool->MAX_UNIT_SIZE) {
+	throw std::runtime_error("Invalid texture unit.");
+    }
+    return textureUnit;
+}
+
 std::shared_ptr<Texture> TextureCache::getTexture(const ProgrammedTexture type, bool update) {
     if (programmedTexturesCache.find(type) == programmedTexturesCache.end() || update) {
 	switch (type) {

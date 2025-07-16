@@ -25,7 +25,7 @@ def glsl_type_to_cpp(glsl_type):
 def process_shaders(json_file_paths):
     merged_data = {
         "inputs": [],
-        "samplers": {},
+        "samplers": [],
         "ubos": [],
         "storage_buffers": [],
         "shader_name": ""
@@ -89,7 +89,7 @@ def process_shaders(json_file_paths):
                             "name": f"padding_{padding_index}",
                             "size_bytes": padding_size
                         })
-
+                    ubo["members_count"] = len(ubo["members"])
                     # 用处理过的新成员列表替换旧的
                     ubo["members"] = processed_members
                     merged_data["ubos"].append(ubo)
@@ -110,12 +110,14 @@ def process_shaders(json_file_paths):
                 #先处理sampler2D
                 if item["type"] == "sampler2D":
 
-                    shader_sampler_name = item["name"]
-                    shader_sampler_binding = item["binding"]
-                    isArray = item["isArray"]
-                    
+                    if item["isArray"]:
+                        for ubo in data["uniforms"]:
+                            if ubo["name"] == "MaterialIndices":
+                                item["length"] = ubo["members_count"]
 
-                    merged_data["samplers"][shader_sampler_name] = MATERIAL_SAMPLERS[shader_sampler_name]
+                       
+
+                    merged_data["samplers"].append(item)
                     sampler_bindings.add(item["binding"])
             for item in data.get("storage_buffers", []):
                 if item["binding"] not in ssbo_bindings:

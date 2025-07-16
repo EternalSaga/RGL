@@ -119,7 +119,7 @@ Samplers createSamplers(const Mesh& mesh) {
     if (material->ifHasTextures()) {
 	auto textures = material->getTextures();
 	for (auto [usage, tex] : textures) {
-	    samplers.emplace_back(Sampler{ tex->getTextureHandler() ,static_cast<unsigned int>(usage),tex});
+	    samplers.emplace_back(Sampler{ tex->getTextureUnit() ,static_cast<unsigned int>(usage),tex});
 	}
     } else {
 	auto logger = RLLogger::getInstance();
@@ -132,7 +132,7 @@ Samplers createSamplers(const Mesh& mesh) {
 void UseTextures(Samplers& samplers) {
     for (auto& sampler : samplers) {
 	sampler.texture->useTexture();
-	sampler.textureHandler = sampler.texture->getTextureHandler();
+	sampler.textureUnit = sampler.texture->getTextureUnit();
     }
 }
 void DisableTextures(Samplers& samplers) {

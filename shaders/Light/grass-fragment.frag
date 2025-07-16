@@ -12,7 +12,7 @@ layout(std140, binding = 1) uniform MaterialIndices {
     int baseColorIdx;
 };
 
-layout(set = 0, binding = 2) uniform sampler2D myTextures[];
+layout(set=0,binding = 0) uniform sampler2D myTextures[];
 
 // specularTexture 在这个草地光照模型中可以不用，因为草基本没有镜面反射
 // uniform sampler2D specularTexture;

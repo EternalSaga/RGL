@@ -47,10 +47,6 @@ class LoadedImg {
 namespace glcore {
 using namespace io;
 
-std::vector<GLuint> initTUnitRes();
-
-
-
 
 enum class TextureUsageType {
     BASE_COLOR = 0,
@@ -62,6 +58,30 @@ enum class TextureUsageType {
 
 std::string TextureType2Str(const TextureUsageType &usageType);
 
+
+constexpr GLint GL_INVLAID_TEXTURE_UNIT = GL_TEXTURE0 - 1;
+
+class TextUnitResources {
+    
+   public:
+    ~TextUnitResources() = default;
+
+    // 如果返回0，则代表没有资源，需要push
+    GLuint popUnit();
+    void pushUnit(GLuint tunit) {
+	textureUnitResource.push_back(tunit);
+    }
+    static std::shared_ptr<TextUnitResources> getInstance();
+
+    TextUnitResources();
+    static std::shared_ptr<TextUnitResources> instance;
+    std::vector<GLint> textureUnitResource;
+    static std::once_flag initOnce;
+    GLint MAX_UNIT_SIZE;
+};
+
+
+
 class Texture {
 
     friend class TextureCache;
@@ -69,10 +89,10 @@ class Texture {
 
     GLuint texture;
 
-    GLuint64 textureHandle;	// 纹理句柄
-
+    GLint textureUnit;	// 纹理单元
     std::string textureName;	// 纹理名
 
+    std::shared_ptr<TextUnitResources> unitsPool;
 
     TextureUsageType usageType;
     void setTextureUnit();
@@ -86,7 +106,7 @@ class Texture {
         return textureName;
     }
     void disableTexture();
-    inline GLuint64 getTextureHandler() const { return textureHandle; }
+    GLint getTextureUnit();
 
     void set(const ImgRef &flippedImg, bool turnOnMipmap);
 

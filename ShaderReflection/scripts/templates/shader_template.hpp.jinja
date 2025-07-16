@@ -3,6 +3,7 @@
 #include <glm/glm.hpp>
 #include <vector>
 #include <stdexcept>
+#include <array>
 #include <map>
 #include "GLTextures.hpp"
 
@@ -89,6 +90,9 @@ public:
     const {{ glsl_type_to_cpp(member.type) }}& get_{{ member.name }}() const { return m_data.{{ member.name }}; }
     {% endif %}
     {% endfor %}
+
+    constexpr size_t get_membersCount() const { return {{ ubo.members_count }}; }
+
 
     // 获取底层数据的指针，用于上传到 GPU
     const void* data() const { return &m_data; }
@@ -180,18 +184,39 @@ public:
 
 {% if samplers %}
 
-struct SamplerBindings {
-    
+{% for sampler in samplers %}
 
-    static constexpr std::map<glcore::TextureUsageType, unsigned int> usageBindings = {
-    {% for sampler in samplers.values() %}
-        { {{ sampler.usage }}, {{ sampler.binding }} }{% if not loop.last %},{% endif %}
-    {% endfor %}
+{% if sampler.isArray %}
+    class SamplerArray_{{ sampler.name | title }} {
+    public:
+        /// The starting binding point (texture unit offset) for this sampler array.
+        static constexpr int BaseBinding = {{ sampler.binding }};
+
+        static void setUniform(GLuint program, const std::array<GLint, {{ sampler.length }}>& textures) {
+            glProgramUniform1iv(program, BaseBinding, textures.size(), textures.data());        
+        }
+
+    };
+    
+{% else %}
+    class Sampler_{{ sampler.name | title }} {
+    public:
+        /// The binding point (texture unit) for this sampler.
+        static constexpr int Binding = {{ sampler.binding }};
+
+        /**
+         * @brief Binds a texture to this sampler's designated texture unit.
+         * @param textureId The OpenGL ID of the texture to bind.
+         */
+        static void Bind(GLuint textureId) {
+            glActiveTexture(GL_TEXTURE0 + Binding);
+            glBindTexture(GL_TEXTURE_2D, textureId); // 假设是sampler2D
+        }
     };
 
-};
+{% endif %}
 
-
+{% endfor %}
 
 {% endif %}
 

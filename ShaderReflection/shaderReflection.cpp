@@ -155,6 +155,8 @@ json ShaderReflection::getSamplers() {
 	json sampler;
 	sampler["name"] = resource.name;
 	sampler["binding"] = compiler.get_decoration(resource.id, spv::DecorationBinding);
+	sampler["set"] = compiler.get_decoration(resource.id, spv::DecorationDescriptorSet);
+
 	const auto& type = compiler.get_type(resource.type_id);
 	sampler["type"] = type_to_string(compiler, type);  // e.g., sampler2D
 
