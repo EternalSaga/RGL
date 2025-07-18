@@ -103,52 +103,9 @@ std::shared_ptr<AssetMaterialData> Mesh::getMaterial() const {
     }
     return material;
 }
-void Mesh::setPBRComponent(const PBRComponent& pbrComponent) {
-    this->pbrComponent = pbrComponent;
-}
-PBRComponent Mesh::getPBRComponent() const {
-    return pbrComponent;
-}
-
-namespace SamplerCreator {
 
 
-Samplers createSamplers(const Mesh& mesh) {
-    Samplers samplers;
-    auto material = mesh.getMaterial();
-    if (material->ifHasTextures()) {
-	auto textures = material->getTextures();
-	for (auto [usage, tex] : textures) {
-	    samplers.emplace_back(Sampler{ tex->getTextureUnit() ,static_cast<unsigned int>(usage),tex});
-	}
-    } else {
-	auto logger = RLLogger::getInstance();
-	logger->debug("Mesh has no textures");
-    }
 
-    return samplers;
-}
-
-void UseTextures(Samplers& samplers) {
-    for (auto& sampler : samplers) {
-	sampler.texture->useTexture();
-	sampler.textureUnit = sampler.texture->getTextureUnit();
-    }
-}
-void DisableTextures(Samplers& samplers) {
-    for (auto& sampler : samplers) {
-	sampler.texture->disableTexture();
-    }
-}
-
-SamplersScope::SamplersScope(Samplers& samplers) : samplers(samplers) {
-    UseTextures(this->samplers);
-}
-SamplersScope::~SamplersScope() {
-    DisableTextures(this->samplers);
-}
-
-}  // namespace SamplerCreater
 
 size_t Mesh::getVertexCount() const {
     return channeledVertices.size() / vertLength;

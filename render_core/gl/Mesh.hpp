@@ -31,7 +31,7 @@ class Mesh {
 
 
     std::shared_ptr<AssetMaterialData> material;
-    PBRComponent pbrComponent;
+
 
     bool materialHasSet = false;
     AABB modelAABB;
@@ -53,8 +53,6 @@ class Mesh {
 
     void setMaterial(std::shared_ptr<AssetMaterialData> material);
 
-    void setPBRComponent(const PBRComponent& pbrComponent);
-    PBRComponent getPBRComponent() const;
 
     std::shared_ptr<AssetMaterialData> getMaterial() const;
     void setAABB(const AABB& aabb);
@@ -73,30 +71,6 @@ std::unique_ptr<VAO> createMeshVAO(const Mesh& mesh,const std::vector<glm::mat4>
 
 }  // namespace VAOCreater
 
-namespace SamplerCreator{
-
-    enum class TextureStorageType{
-        TEXTURE2D,TEXTURE3D,TEXTURE_CUBE
-    };
-
-    struct Sampler{
-
-        GLint textureUnit;
-        unsigned int bindingPoint;
-        std::shared_ptr<Texture> texture;
-    };
-
-    using Samplers = std::vector<Sampler>;
-    Samplers createSamplers(const Mesh& mesh);
-
-    class SamplersScope{
-        Samplers& samplers;
-        public:
-	 SamplersScope(Samplers& samplers);
-
-	 ~SamplersScope();
-    };
-}
 
 }  // namespace glcore
 }  // namespace RGL

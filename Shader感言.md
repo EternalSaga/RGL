@@ -11,6 +11,6 @@ glUniform modifies the value of a uniform variable or a uniform variable array. 
 
 哎，好歹UBO和SSBO似乎没和shader绑定的那么死，嗯，没毛病，不然也不可能能从一个shader换绑到另一个shader。
 
-我或许可以通过shader和render target来对场景里的物体分类后再进入渲染队列，扩大shader的作用域，来解决shader状态切换和shader满天飞的问题，在ecs的帮助下应该好说，给每个shader分类加tag就行，收集排序两次而已。毕竟shaderref还最终确实是每个渲染对象都必不可少的组件。但是我懒了，就这样吧。
+我或许可以通过shader和render target来对场景里的物体分类后再进入渲染队列，扩大shader的作用域，来解决shader状态切换和shader满天飞的问题，在ecs的帮助下应该好说，给每个shader分类加tag就行，顶层根据shader tag先glUseProgram一次,然后在program作用域内再走渲染队列，然后所有shader类型走一遍渲染队列。毕竟shaderref还最终确实是每个渲染对象都必不可少的组件。但是我懒了，就这样吧。
 这问题留给vulkan思考吧。
 虽然现在完全回到OpenGL，在线编译shader，可以通过彻底的bindless texture解决这个问题，但是很遗憾，损失大于收益，不值当。不能为了一点点bindless texture的收益，放弃当前工作流。

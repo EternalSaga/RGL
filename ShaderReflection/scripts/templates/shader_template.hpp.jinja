@@ -192,8 +192,8 @@ public:
         /// The starting binding point (texture unit offset) for this sampler array.
         static constexpr int BaseBinding = {{ sampler.binding }};
 
-        static void setUniform(GLuint program, const std::array<GLint, {{ sampler.length }}>& textures) {
-            glProgramUniform1iv(program, BaseBinding, textures.size(), textures.data());        
+        static void setUniform(GLuint program, const std::array<GLuint, {{ sampler.length }}>& textures) {
+            glProgramUniform1uiv(program, BaseBinding, textures.size(), textures.data());        
         }
 
     };

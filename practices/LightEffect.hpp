@@ -20,7 +20,7 @@
 
 #include "ModelImporter.hpp"
 #include "Entity.hpp"
-#include "InstanceComponent.hpp"
+#include "grass_shader_system.hpp"
 namespace RGL {
 namespace practice {
 
@@ -44,6 +44,7 @@ class LoadModelTest : public Renderer,public SingleReg{
     std::unique_ptr<VAO> grassVAO;
 
     RenderQueues renderQueues;
+    InstancedGrassShaderSystem instancedGrassShaderSystem;
 public:
     LoadModelTest(std::shared_ptr<Camera> cam);
     void operator()() override;

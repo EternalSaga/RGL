@@ -59,28 +59,6 @@ enum class TextureUsageType {
 std::string TextureType2Str(const TextureUsageType &usageType);
 
 
-constexpr GLint GL_INVLAID_TEXTURE_UNIT = GL_TEXTURE0 - 1;
-
-class TextUnitResources {
-    
-   public:
-    ~TextUnitResources() = default;
-
-    // 如果返回0，则代表没有资源，需要push
-    GLuint popUnit();
-    void pushUnit(GLuint tunit) {
-	textureUnitResource.push_back(tunit);
-    }
-    static std::shared_ptr<TextUnitResources> getInstance();
-
-    TextUnitResources();
-    static std::shared_ptr<TextUnitResources> instance;
-    std::vector<GLint> textureUnitResource;
-    static std::once_flag initOnce;
-    GLint MAX_UNIT_SIZE;
-};
-
-
 
 class Texture {
 
@@ -89,36 +67,20 @@ class Texture {
 
     GLuint texture;
 
-    GLint textureUnit;	// 纹理单元
-    std::string textureName;	// 纹理名
 
-    std::shared_ptr<TextUnitResources> unitsPool;
 
-    TextureUsageType usageType;
-    void setTextureUnit();
    public:
     Texture();
-    void useTexture();
-    inline std::string getName(){
-        if (textureName.empty()) {
-            throw std::runtime_error("Texture name is not set.");
-        }
-        return textureName;
-    }
-    void disableTexture();
-    GLint getTextureUnit();
 
     void set(const ImgRef &flippedImg, bool turnOnMipmap);
 
-    void setUseType(TextureUsageType type);
-    void setName(std::string name){
-        textureName = name;
-    }
-    TextureUsageType getUseType();
+
     // 谨慎使用，用之前知道自己在干什么
     void setFilltering( GLenum filter);
 
-    GLuint operator()();
+    inline operator GLuint() const{
+        return texture;
+    }
 
     ~Texture();
 };
@@ -136,13 +98,35 @@ class TextureCache {
     std::map<ProgrammedTexture, std::shared_ptr<Texture>> programmedTexturesCache;
     std::map<const aiTexture*, std::shared_ptr<Texture>> aiCache;
    public:
-    std::shared_ptr<Texture> getTexture(const fs::path &imagePath,TextureUsageType type);
+    std::shared_ptr<Texture> getTexture(const fs::path &imagePath);
 
     std::shared_ptr<Texture> getTexture(const ProgrammedTexture type,bool update = false);
 
-    std::shared_ptr<Texture> getTexture(const aiTexture* texture,TextureUsageType type);
+    std::shared_ptr<Texture> getTexture(const aiTexture* texture);
 
 };
+
+class PassTextureManager{
+    std::map<GLuint, GLint> textureToUnitMap;
+	std::vector<std::shared_ptr<Texture>> activeTextures;
+	GLint nextUnit = 0;
+
+	GLint maxTextureUnits;
+
+
+	public:
+	PassTextureManager(){
+		glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &maxTextureUnits);
+	}
+
+	GLint assignUnit(const std::shared_ptr<Texture>& texture);
+
+
+	std::vector<GLint> bindAll();
+};
+
+
+
 
 }  // namespace glcore
 }  // namespace RGL

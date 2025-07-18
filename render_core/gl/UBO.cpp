@@ -14,7 +14,7 @@ UBO::UBO(GLint bindingPoint,size_t blockSize) {
 
 }
 
-void UBO::setUniform(void* data) {
+void UBO::setUniform(const void* data) {
     glCall(glNamedBufferSubData, ubo, 0, blockSize, data);
 }
 

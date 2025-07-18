@@ -2,6 +2,9 @@
 #include "GLTextures.hpp"
 #include <glad/glad.h>
 #include <cstdint>
+#include <map>
+#include <memory>
+#include <vector>
 #include "GLCheckError.hpp"
 #include "Helpers.hpp"
 #include "rllogger.hpp"
@@ -48,66 +51,17 @@ LoadedImg::~LoadedImg() {
 }  // namespace io
 namespace glcore {
 
-std::once_flag TextUnitResources::initOnce{};
-std::shared_ptr<TextUnitResources> TextUnitResources::instance;
-std::shared_ptr<TextUnitResources>
-TextUnitResources::getInstance() {
-    std::call_once(initOnce, []() {
-	instance = std::make_shared<TextUnitResources>();
-    });
-    return instance;
-}
-GLuint
-TextUnitResources::popUnit() {
-    GLuint tunit = 0;
-    if (!textureUnitResource.empty()) {
-	tunit = textureUnitResource.back();
-	textureUnitResource.pop_back();
-    } else {
-	tunit = GL_INVLAID_TEXTURE_UNIT;  // 没有可用的纹理单元，返回-1
-    }
-    return tunit;
-}
-TextUnitResources::TextUnitResources() {
-    glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &MAX_UNIT_SIZE);
-    textureUnitResource.reserve(MAX_UNIT_SIZE);
-    for (int i = 0; i < MAX_UNIT_SIZE; ++i) {
-	this->textureUnitResource.push_back(i);
-    }
-}
-
 Texture::Texture() {
-    unitsPool = TextUnitResources::getInstance();
+
     glcore::glCall(glCreateTextures, GL_TEXTURE_2D,
 	1, &texture);
 }
 
-void Texture::useTexture() {
-    setTextureUnit();
-    glCall(glBindTextureUnit, textureUnit, texture);
-}
 
-void Texture::setTextureUnit() {
-    // 检查当前texture是否有对应的纹理单元
-    textureUnit = this->unitsPool->popUnit();
-    if (textureUnit == GL_INVLAID_TEXTURE_UNIT) {  // 当前纹理没有纹理单元绑定
-	auto logger = RLLogger::getInstance();
-	logger->error("no texture unit for this texture {}", this->textureName);
-	throw std::runtime_error("no texture unit for this texture");
-    }
-}
-
-void Texture::disableTexture() {
-    if (textureUnit != GL_INVLAID_TEXTURE_UNIT) {  // 检查是否分配了纹理单元
-	unitsPool->pushUnit(textureUnit);
-	textureUnit = GL_INVLAID_TEXTURE_UNIT;	// 重置纹理单元
-    }
-}
 
 void Texture::set(const ImgRef& flippedImg,
     bool turnOnMipmap) {
-    // 暂时不绑定任何纹理单元，所以放个-1
-    textureUnit = GL_INVLAID_TEXTURE_UNIT;
+
 
     if (turnOnMipmap) {
 	glCall(glTextureParameteri, texture,
@@ -180,54 +134,22 @@ Texture::~Texture() {
     glCall(glDeleteTextures, 1, &texture);
 }
 
-void Texture::setUseType(TextureUsageType type) {
-    usageType = type;
-}
 
-std::shared_ptr<Texture> TextureCache::getTexture(const fs::path& imagePath, TextureUsageType type) {
+std::shared_ptr<Texture> TextureCache::getTexture(const fs::path& imagePath) {
     if (cache.find(imagePath) == cache.end()) {
 	cache[imagePath] = std::make_shared<Texture>();
 	cache[imagePath]->set(LoadedImg(imagePath), true);
-	cache[imagePath]->setUseType(type);
-	switch (type) {
-	case TextureUsageType::BASE_COLOR: {
-	    cache[imagePath]->setName("baseColorTexture");
-	    break;
-	}
-	case TextureUsageType::SPECULAR: {
-	    cache[imagePath]->setName("specularTexture");
-	    break;
-	}
-	case TextureUsageType::NORMAL: {
-	    cache[imagePath]->setName("normalTexture");
-	    break;
-	}
-	case TextureUsageType::PACKED_ORM: {
-	    cache[imagePath]->setName("ormTexture");
-	    break;
-	}
-	default: {
-	    auto logger = RLLogger::getInstance();
-	    logger->error("texture usage type not supported");
-	    throw std::runtime_error("texture usage type not supported");
-	    break;
-	}
-	}
+	
 
     } else {
 	auto logger = RLLogger::getInstance();
 	logger->trace("texture cache hit");
     }
 
-    if (cache[imagePath]->usageType != type) {
-	auto logger = RLLogger::getInstance();
-	logger->warn("texture usage type changed");
-	cache[imagePath]->setUseType(type);
-    }
 
     return cache[imagePath];
 }
-std::shared_ptr<Texture> TextureCache::getTexture(const aiTexture* texture, TextureUsageType type) {
+std::shared_ptr<Texture> TextureCache::getTexture(const aiTexture* texture) {
     auto logger = RLLogger::getInstance();
     if (aiCache.find(texture) != aiCache.end()) {
 	logger->trace("ai texture cache hit");
@@ -237,48 +159,14 @@ std::shared_ptr<Texture> TextureCache::getTexture(const aiTexture* texture, Text
 	aiCache[texture] = std::make_shared<Texture>();
 
 	aiCache[texture]->set(LoadedImg(texture), true);
-	aiCache[texture]->setUseType(type);
-	switch (type) {
-	case TextureUsageType::BASE_COLOR: {
-	    aiCache[texture]->setName("baseColorTexture");
-	    break;
-	}
-	case TextureUsageType::SPECULAR: {
-	    aiCache[texture]->setName("specularTexture");
-	    break;
-	}
-	case TextureUsageType::NORMAL: {
-	    aiCache[texture]->setName("normalTexture");
-	    break;
-	}
-	case TextureUsageType::PACKED_ORM: {
-	    aiCache[texture]->setName("ormTexture");
-	    break;
-	}
-	default: {
-	    auto logger = RLLogger::getInstance();
-	    logger->error("texture usage type not supported");
-	    throw std::runtime_error("texture usage type not supported");
-	    break;
-	}
-	}
+
+	
 
 	return aiCache[texture];
     }
 }
-TextureUsageType Texture::getUseType() {
-    return usageType;
-}
 
-GLint Texture::getTextureUnit() {
-    if (textureUnit == GL_INVLAID_TEXTURE_UNIT) {
-	throw std::runtime_error("Texture unit is not set.");
-    }
-    if (textureUnit < 0 || textureUnit >= unitsPool->MAX_UNIT_SIZE) {
-	throw std::runtime_error("Invalid texture unit.");
-    }
-    return textureUnit;
-}
+
 
 std::shared_ptr<Texture> TextureCache::getTexture(const ProgrammedTexture type, bool update) {
     if (programmedTexturesCache.find(type) == programmedTexturesCache.end() || update) {
@@ -287,8 +175,7 @@ std::shared_ptr<Texture> TextureCache::getTexture(const ProgrammedTexture type, 
 	    programmedTexturesCache[type] = std::make_shared<Texture>();
 	    texture::CheckerBoard checkerboard{8, 8};
 	    programmedTexturesCache[type]->set(checkerboard.getTexture(), true);
-	    programmedTexturesCache[type]->setUseType(TextureUsageType::BASE_COLOR);
-	    programmedTexturesCache[type]->setName("baseColorTexture");
+
 	    break;
 	}
 	default:
@@ -305,9 +192,7 @@ std::shared_ptr<Texture> TextureCache::getTexture(const ProgrammedTexture type, 
 	return programmedTexturesCache[type];
     }
 }
-GLuint Texture::operator()() {
-    return texture;
-}
+
 
 std::string TextureType2Str(const TextureUsageType& usageType) {
     std::string res;
@@ -332,5 +217,42 @@ std::string TextureType2Str(const TextureUsageType& usageType) {
     }
     return res;
 }
+
+
+
+
+std::vector<GLint> PassTextureManager::bindAll() {
+    for (GLint i = 0; i < activeTextures.size(); ++i) {
+	glBindTextureUnit(i, *activeTextures[i]);
+    }
+    std::vector<GLint> units;
+    units.reserve(activeTextures.size());
+    for (int i = 0; i < activeTextures.size(); ++i) {
+	units.push_back(i);
+    }
+    return units;
+}
+
+GLint PassTextureManager::assignUnit(const std::shared_ptr<Texture>& texture) {
+    if (!texture) {
+	throw GLLogicError("Cannot assign unit to null texture");
+    }
+
+    auto it = textureToUnitMap.find(GLuint(*texture));
+    if (it != textureToUnitMap.end()) {
+	return it->second;
+    } else {
+	if (nextUnit >= maxTextureUnits) {
+	    throw GLLogicError("No more texture units available");
+	}
+	GLint unit = GL_TEXTURE0 + nextUnit;
+
+	textureToUnitMap[GLuint(*texture)] = unit;
+	activeTextures.emplace_back(texture);
+	nextUnit++;
+	return unit;
+    }
+}
+
 }  // namespace glcore
 }  // namespace RGL

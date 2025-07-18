@@ -25,7 +25,7 @@ class UBO {
     UBO(GLint bindingPoint, size_t blockSize);
 
 
-    void setUniform(void* data);
+    void setUniform(const void* data);
 
     ~UBO();
 };

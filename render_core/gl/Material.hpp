@@ -26,7 +26,7 @@ class AssetMaterialData {
 
    public:
     AssetMaterialData() = default;
-    void appendTexture(std::shared_ptr<Texture> texture);
+    void appendTexture(TextureUsageType usage,std::shared_ptr<Texture> texture);
     inline auto getTextures() -> decltype(auto) {
 	return textures;
     }

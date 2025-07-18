@@ -72,9 +72,9 @@ std::unique_ptr<Mesh> ModelImporter::processMesh(aiMesh* importedMesh) {
     if (importedMesh->mMaterialIndex >= 0) {
 	auto material = importedMesh->mMaterialIndex;
 
-	auto [materialData, pbrComponent] = processMaterial(material);
+	auto materialData = processMaterial(material);
 	meshObj->setMaterial(materialData);
-	meshObj->setPBRComponent(pbrComponent);
+
     }
 
     return std::move(meshObj);
@@ -137,14 +137,10 @@ void ModelImporter::processNodeBFS(ShaderRef shader) {
 	    auto [vertCount, idxOffset] = meshObj->getIdicesCountAndOffset();
 	    singleReg->emplace<VertArrayComponent>(currentEntity, std::move(vertArrayComp), vertCount, idxOffset);
 
-	    const auto sampler = SamplerCreator::createSamplers(*meshObj);
 
-	    singleReg->emplace<SamplerCreator::Samplers>(currentEntity, sampler);
+		
+	    singleReg->emplace<std::shared_ptr<AssetMaterialData>>(currentEntity, meshObj->getMaterial());
 
-	    const auto pbrComponent = meshObj->getPBRComponent();
-	    if (!pbrComponent.isEmpty) {
-		singleReg->emplace<PBRComponent>(currentEntity, pbrComponent);
-	    }
 	}
     }
 
@@ -311,9 +307,9 @@ std::unique_ptr<Mesh> ModelImporter::importAsSingleMesh() {
     // 为合并后的网格设置材质（使用第一个网格的材质作为代表）
     // 注意：这是一个设计简化，假设所有合并的网格共享相似的材质。
     if (scene->HasMeshes() && scene->mMeshes[0]->mMaterialIndex >= 0) {
-	auto [materialData, pbrComponent] = processMaterial(scene->mMeshes[0]->mMaterialIndex);
+	auto materialData = processMaterial(scene->mMeshes[0]->mMaterialIndex);
 	mergedMesh->setMaterial(materialData);
-	mergedMesh->setPBRComponent(pbrComponent);
+
     } else {
 	logger->warn("Merged mesh has no material assigned.");
     }
@@ -321,7 +317,7 @@ std::unique_ptr<Mesh> ModelImporter::importAsSingleMesh() {
     return mergedMesh;
 }
 
-std::tuple<std::shared_ptr<AssetMaterialData>, PBRComponent> ModelImporter::processMaterial(size_t assimpID) {
+std::shared_ptr<AssetMaterialData> ModelImporter::processMaterial(size_t assimpID) {
     aiMaterial* material = scene->mMaterials[assimpID];
 
     std::shared_ptr<AssetMaterialData> materialData = std::make_shared<AssetMaterialData>();
@@ -384,12 +380,12 @@ std::tuple<std::shared_ptr<AssetMaterialData>, PBRComponent> ModelImporter::proc
 		aiString texturePath;
 		material->GetTexture(textureType, 0, &texturePath);
 		fs::path texturePathStr = this->modelRootPath / fs::path((texturePath.C_Str()));  // 来自于assimp的texture路径很可能是相对路径。而相对路径和进程的当前路径可能往往不一样,所以需要拼接模型根路径和纹理路径。这里假设纹理文件和模型文件在同一目录下，或者在子目录中。如果不在同一目录下，可能需要额外的配置来指定纹理文件的位置。
-		auto texture = textureCache.getTexture(texturePathStr, type);
-		materialData->appendTexture(texture);
+		auto texture = textureCache.getTexture(texturePathStr);
+		materialData->appendTexture(type,texture);
 	    } else {
 		const aiTexture* embeddedTexture = scene->mTextures[0];
-		auto texture = textureCache.getTexture(embeddedTexture, type);
-		materialData->appendTexture(texture);
+		auto texture = textureCache.getTexture(embeddedTexture);
+		materialData->appendTexture(type,texture);
 	    }
 	}
 	
@@ -399,7 +395,7 @@ std::tuple<std::shared_ptr<AssetMaterialData>, PBRComponent> ModelImporter::proc
     appendTexture(TextureUsageType::SPECULAR, material);
     appendTexture(TextureUsageType::EMISSIVE, material);
 
-    return std::tuple<std::shared_ptr<AssetMaterialData>, PBRComponent>(materialData, pbrComponent);
+    return std::shared_ptr<AssetMaterialData> (materialData);
 }
 size_t ModelImporter::getNodeCount() const {
     return scene->mRootNode->mNumChildren;

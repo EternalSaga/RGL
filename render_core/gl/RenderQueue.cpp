@@ -30,7 +30,7 @@ void executeSingleDraw(entt::entity entity, entt::registry& reg) {
     const auto& vertArray = reg.get<VertArrayComponent>(entity);
 
     const auto& shader = reg.get<ShaderRef>(entity);
-    const auto& samplers = reg.get<SamplerCreator::Samplers>(entity);
+
 
     ScopeShader shaderScope(*shader);
     VAOScope vaoScope(*vertArray.vao);
@@ -40,9 +40,6 @@ void executeDrawInstanced(entt::entity entity, entt::registry& reg) {
     const auto& vertArray = reg.get<VertArrayComponent>(entity);
 
     const auto& shader = reg.get<ShaderRef>(entity);
-
-    const auto& samplers = reg.get<SamplerCreator::Samplers>(entity);
-
     const auto& instanceComponent = reg.get<RenderTags::Instanced>(entity);
     ScopeShader shaderScope(*shader);
     VAOScope vaoScope(*vertArray.vao);

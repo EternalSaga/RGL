@@ -4,8 +4,8 @@ namespace RGL {
 
 namespace glcore {
 
-void AssetMaterialData::appendTexture(std::shared_ptr<Texture> texture) {
-    textures[texture->getUseType()]=texture;
+void AssetMaterialData::appendTexture(TextureUsageType usage,std::shared_ptr<Texture> texture) {
+    textures[usage]=texture;
 }
 }  // namespace glcore
 }  // namespace RGL
