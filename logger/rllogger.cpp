@@ -41,7 +41,7 @@ RLLogger::RLLogger()
 	"logs/gllog.txt", true);
 	
 	file_sink->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%^%l%$] [%s:%#] %v");
-    const std::filesystem::path logLevelConfigFile = "logs/log_level.json";
+    const std::filesystem::path logLevelConfigFile = "configs/log_level.json";
     if (std::filesystem::exists(logLevelConfigFile)) {
 	std::ifstream configFile(logLevelConfigFile);
 	auto conf = json::parse(configFile);
@@ -75,7 +75,7 @@ RLLogger::RLLogger()
 
 
 
-    info("Logger initialized. Configuration loaded from logs/log_level.json if available.");
+    info("Logger initialized. Configuration loaded from configs/log_level.json if available.");
     info("Console log level: {}", spdlog::level::to_string_view(singletonLogger->sinks()[0]->level()));
     info("File log level: {}", spdlog::level::to_string_view(singletonLogger->sinks()[1]->level()));
 }

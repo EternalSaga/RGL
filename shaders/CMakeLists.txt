@@ -29,3 +29,17 @@ endfunction()
 
 compile_shader(${CMAKE_SOURCE_DIR}/shaders/Light/phong_ubo_instanced.vert)
 compile_shader(${CMAKE_SOURCE_DIR}/shaders/Light/grass-fragment.frag)
+
+
+function(add_shader_component TAEGET_NAME SHADER_SOURCE)
+    get_filename_component(FILE_NAME ${SHADER_SOURCE} NAME) # e.g. grass.vert
+    get_filename_component(FILE_NAME_WE ${SHADER_SOURCE} NAME_WE) # e.g. grass
+
+    set(OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/compiled")
+    file(MAKE_DIRECTORY ${OUT_DIR})
+
+    set(SPIRV_OUTPUT "${OUT_DIR}/${FILE_NAME}.spv")
+    set(JSON_OUTPUT "${OUT_DIR}/${FILE_NAME}.json")
+
+
+endfunction()

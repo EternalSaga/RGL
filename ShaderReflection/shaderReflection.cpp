@@ -5,8 +5,10 @@
 #include <spirv_common.hpp>
 
 #include <spirv_glsl.hpp>
+#include <string>
 #include <vector>
 #include <fstream>
+
 
 namespace RGL {
 namespace reflection {
@@ -27,6 +29,35 @@ std::vector<uint32_t> read_spirv_from_file(const std::string& filename) {
 
     return buffer;
 }
+
+std::string shaderStage2String(const spv::ExecutionModel& shaderStage){
+	std::string shaderStageStr;
+	switch(shaderStage){
+		case spv::ExecutionModelVertex:
+	shaderStageStr = "VERTEX";
+	break;
+    case spv::ExecutionModelFragment:
+	shaderStageStr = "FRAGMENT";
+	break;
+    case spv::ExecutionModelGLCompute:
+	shaderStageStr = "COMPUTE";
+	break;
+    case spv::ExecutionModelGeometry:
+	shaderStageStr = "GEOMETRY";
+	break;
+    case spv::ExecutionModelTessellationControl:
+	shaderStageStr = "TESS_CONTROL";
+	break;
+    case spv::ExecutionModelTessellationEvaluation:
+	shaderStageStr = "TESS_EVALUATION";
+	break;
+    default:
+	shaderStageStr = "UNKNOWN_SHADER_STAGE";
+	break;
+    }
+	return shaderStageStr;
+}
+
 
 std::string type_to_string(const spirv_cross::Compiler& compiler, const spirv_cross::SPIRType& type) {
     switch (type.basetype) {
@@ -100,40 +131,6 @@ std::string base_type_to_string(const spirv_cross::SPIRType& type) {
 	return "unknown";
     }
 }
-
-ShaderReflection::ShaderReflection(std::string spirv_path) : compiler(read_spirv_from_file(spirv_path)) {
-    resources = compiler.get_shader_resources();
-    j["spirv_path"] = spirv_path;
-
-    switch (compiler.get_execution_model()) {
-    case spv::ExecutionModelVertex:
-	j["shader_stage"] = "vertex";
-	break;
-    case spv::ExecutionModelFragment:
-	j["shader_stage"] = "fragment";
-	break;
-    case spv::ExecutionModelGLCompute:
-	j["shader_stage"] = "compute";
-	break;
-    case spv::ExecutionModelGeometry:
-	j["shader_stage"] = "geometry";
-	break;
-    case spv::ExecutionModelTessellationControl:
-	j["shader_stage"] = "tessellation_control";
-	break;
-    case spv::ExecutionModelTessellationEvaluation:
-	j["shader_stage"] = "tessellation_evaluation";
-	break;
-    default:
-	j["shader_stage"] = "unknown";
-	break;
-    }
-    j["inputs"] = getInputs();
-    j["uniforms"] = getUniforms();
-    j["storage_buffers"] = getStorageBuffers();
-    j["samplers"] = getSamplers();
-}
-
 json ShaderReflection::getInputs() {
     json inputs = json::array();
     for (const auto& resource : resources.stage_inputs) {
@@ -148,6 +145,19 @@ json ShaderReflection::getInputs() {
     }
     return inputs;
 }
+
+ShaderReflection::ShaderReflection(std::string spirv_path) : compiler(read_spirv_from_file(spirv_path)) {
+    resources = compiler.get_shader_resources();
+    j["spirv_path"] = spirv_path;
+	j["shader_stage"] = shaderStage2String(compiler.get_execution_model());
+    j["inputs"] = getInputs();
+    j["uniforms"] = getUniforms();
+    j["storage_buffers"] = getStorageBuffers();
+    j["samplers"] = getSamplers();
+	j["shader_name"] = std::filesystem::path(spirv_path).stem().string();
+}
+
+
 
 json ShaderReflection::getSamplers() {
     json samplers = json::array();
@@ -205,33 +215,20 @@ json ShaderReflection::getStorageBuffers() {
             member_info["name"] = compiler.get_member_name(block_type.self, i);
             member_info["offset"] = compiler.get_member_decoration(block_type.self, i, spv::DecorationOffset);
 
-            // --- 核心修正：正确处理类型和数组 ---
-
-            // 1. 判断是否为数组
             member_info["is_array"] = !member_type.array.empty();
             if (member_info["is_array"]) {
-                // 2. 如果是数组，判断是否为运行时数组，判断条件：i是最后一个索引且block包含运行时数组
+
 				bool is_runtime_array = (i ==memberCount-1) && hasRuntimeArray;
 				member_info["is_runtime_array"]= is_runtime_array;
 
-
-                // 3. 获取数组元素的大小（步幅）
 				if (!is_runtime_array) {
 					member_info["array_stride"] = compiler.get_decoration(member_type_id, spv::DecorationArrayStride);
 				}else {
 					member_info["array_stride"] = oneSize - zeroSize;
 				}
             }
-            
-            // 4. 获取基础类型（无论是数组元素还是普通成员）
-            // type_to_string 对于数组类型，会返回其元素类型，这是我们期望的
             member_info["type"] = type_to_string(compiler, member_type);
-            
-            // 5. 获取成员声明的大小
-            // 对于运行时数组，此API返回0。对于固定大小的数组成员，它返回整个数组的大小。
-            // 对于非数组成员，它返回成员的大小。
             member_info["size_bytes"] = compiler.get_declared_struct_member_size(block_type, i);
-            
             ssbo["struct_members"].push_back(member_info);
         }
         ssbos.push_back(ssbo);
@@ -265,6 +262,7 @@ json ShaderReflection::getUniforms() {
     }
     return uniforms;
 }
+
 
 }  // namespace reflection
 }  // namespace RGL

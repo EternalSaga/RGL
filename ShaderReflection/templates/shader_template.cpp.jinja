@@ -1,0 +1,70 @@
+#include "{{shader_name}}.hpp"
+namespace RGL {
+namespace {{shader_name}} {
+
+{% for ubo in ubos %}
+{{ ubo.instance_name }}::{{ ubo.instance_name }}(
+        {% for member in ubo.members %}
+        {% if not member.is_padding %}
+
+        const {{ glsl_type_to_cpp(member.type) }}& _{{ member.name }}{% if not loop.last %}, {% endif %}
+        {% endif %}
+        {% endfor %}
+    ) {
+        {% for member in ubo.members %}
+        {% if not member.is_padding %}
+        m_data.{{ member.name }} = _{{ member.name }};
+        {% endif %}
+        {% endfor %}
+    }
+
+    // Setters
+    {% for member in ubo.members %}
+    {% if not member.is_padding %}
+    void {{ ubo.instance_name }}::set_{{ member.name }}(const {{ glsl_type_to_cpp(member.type) }}& value) { m_data.{{ member.name }} = value; }
+    {% endif %}
+    {% endfor %}
+
+    // Getters
+    {% for member in ubo.members %}
+    {% if not member.is_padding %}
+    const {{ glsl_type_to_cpp(member.type) }}& {{ ubo.instance_name }}::get_{{ member.name }}() const { return m_data.{{ member.name }}; }
+    {% endif %}
+    {% endfor %}
+{% endfor %}
+
+{% for ssbo in storage_buffers %}
+{{ ssbo.block_name }}::{{ ssbo.block_name }}({% if ssbo.runtime_member %}size_t runtime_element_count = 0{% endif %}) {
+    resize({% if ssbo.runtime_member %}runtime_element_count{% endif %});
+}
+void {{ ssbo.block_name }}::resize({% if ssbo.runtime_member %}size_t runtime_element_count{% endif %}) {
+        {% if ssbo.runtime_member %}
+        m_runtime_element_count = runtime_element_count;
+        size_t total_size = get_fixed_part_size() + runtime_element_count * {{ ssbo.runtime_member.array_stride }};
+        {% else %}
+        size_t total_size = get_fixed_part_size();
+        {% endif %}
+        m_buffer.resize(total_size);
+}
+{% if ssbo.runtime_member %}
+
+{{ glsl_type_to_cpp(ssbo.runtime_member.type) }}& {{ ssbo.block_name }}::at(size_t index){
+    if (index >= m_runtime_element_count) {
+            throw std::out_of_range("SSBO runtime array access out of range");
+        }
+        char* base_ptr = m_buffer.data() + get_fixed_part_size();
+        char* element_ptr = base_ptr + index * {{ ssbo.runtime_member.array_stride }};
+        return *reinterpret_cast<{{ glsl_type_to_cpp(ssbo.runtime_member.type) }}*>(element_ptr);
+}
+const {{ glsl_type_to_cpp(ssbo.runtime_member.type) }}& {{ ssbo.block_name }}::at(size_t index) const {
+        if (index >= m_runtime_element_count) {
+            throw std::out_of_range("SSBO runtime array access out of range");
+        }
+        const char* base_ptr = m_buffer.data() + get_fixed_part_size();
+        const char* element_ptr = base_ptr + index * {{ ssbo.runtime_member.array_stride }};
+        return *reinterpret_cast<const {{ glsl_type_to_cpp(ssbo.runtime_member.type) }}*>(element_ptr);
+}
+{% endif %}
+
+{% endfor %}
+}}

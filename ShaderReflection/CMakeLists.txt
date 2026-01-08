@@ -3,15 +3,19 @@ file(GLOB_RECURSE SHADERREFLECTION_FILES "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp" "${
 
 add_executable(ShaderReflection ${SHADERREFLECTION_FILES})
 
-target_compile_features(ShaderReflection PRIVATE cxx_std_23)
+target_compile_features(ShaderReflection PRIVATE cxx_std_20)
 find_package(spirv_cross_core CONFIG REQUIRED)
 find_package(spirv_cross_glsl CONFIG REQUIRED)
 find_package(spirv_cross_cpp CONFIG REQUIRED)
-find_package(nlohmann_json CONFIG REQUIRED)
 
+find_package(inja CONFIG REQUIRED)
 find_package(Boost REQUIRED COMPONENTS program_options)
 
-target_link_libraries(ShaderReflection PRIVATE spirv-cross-core spirv-cross-glsl spirv-cross-cpp nlohmann_json::nlohmann_json Boost::program_options)
+target_link_libraries(ShaderReflection PRIVATE spirv-cross-core spirv-cross-glsl spirv-cross-cpp nlohmann_json::nlohmann_json Boost::program_options pantor::inja rllogger)
+
+target_include_directories(ShaderReflection PRIVATE 
+)
+
 
 set(ASSETS_SOURCE_DIR "${PROJECT_SOURCE_DIR}/assets")
 
@@ -45,12 +49,10 @@ foreach(asset_file IN LISTS assets_need_to_copy)
     )
 
     # 拷贝文件。使用 'copy_if_different' 可以避免不必要的拷贝，提升性能。
-    # DEPENDS 参数很重要，它告诉 CMake 如果源文件发生变化，需要重新执行此命令。
     add_custom_command(
         TARGET ShaderReflection POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${SRC_PATH}" "${DST_PATH}"
         COMMENT "Copying asset: ${asset_file}"
-        DEPENDS "${SRC_PATH}"
     )
 endforeach()
 
@@ -58,6 +60,7 @@ set (Config_Dir "${PROJECT_SOURCE_DIR}/configs")
 set (Config_Build_Dir "${CMAKE_BINARY_DIR}/configs")
 
 file(GLOB_RECURSE Config_Files "${Config_Dir}/*.json")
+
 
 
 add_custom_command(
@@ -74,3 +77,28 @@ foreach(Config_File IN LISTS Config_Files)
         COMMENT "Copying config: ${asset_file_name}"
     )
 endforeach()
+
+# 定义函数：只处理单个文件，参数位置固定
+function(compile_spirv_to_json renderer_target spirv_file json_output_dir)
+    get_filename_component(file_name ${spirv_file} NAME)
+    set(json_output "${json_output_dir}/${file_name}.json")
+    
+    add_custom_command(
+        OUTPUT ${json_output}
+        COMMAND ShaderReflection
+            --input "${spirv_file}"
+            --output "${json_output}"
+        # 依赖关系：必须先编译出 ShaderReflection 工具，且源 .spv 变化时重做
+        DEPENDS ShaderReflection "${spirv_file}"
+        COMMENT "Reflecting SPIR-V: ${file_name} -> ${file_name}.json"
+        VERBATIM
+    )
+    target_sources(${renderer_target} PRIVATE ${json_output})
+endfunction()
+
+function(rgl_reflect_batch)
+    cmake_parse_arguments(ARG "" "TARGET;OUTPUT_DIR" "SHADERS" ${ARGN})
+    foreach(s IN LISTS ARG_SHADERS)
+        _compile_single_spirv(${ARG_TARGET} ${s} ${ARG_OUTPUT_DIR})
+    endforeach()
+endfunction()

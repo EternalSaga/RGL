@@ -6,16 +6,20 @@
 #include <array>
 #include <map>
 #include "GLTextures.hpp"
-
-// Auto-generated shader metadata from JSON at
+#include "Shader.hpp"
+// Auto-generated shader metadata from ShaderReflection at
 // {{ "{:%Y-%m-%d %H:%M:%S}".format(datetime.datetime.now()) }}
 
 namespace RGL {
 namespace {{shader_name}} {
 namespace detail {
+    static constexpr std::string_view name = "{{shader_name}}";
+    static constexpr SHADER_TYPE shaderType = SHADER_TYPE::{{ shader_type }};
+
 {% for ubo in ubos %}
 struct {{ ubo.instance_name }}Data {
     {% for member in ubo.members %}
+
     {% if member.is_padding %}
     char {{ member.name }}[{{ member.size_bytes }}];
     {% else %}
@@ -28,6 +32,7 @@ static_assert(sizeof({{ ubo.instance_name }}Data) == {{ ubo.size_bytes }}, "Size
 
 {% for ssbo in storage_buffers %}
 struct {{ ssbo.block_name }}FixedPart {
+
     {% if not ssbo.fixed_members %}
     // This SSBO has no members.
     // Add a dummy member to ensure the struct is not empty.
@@ -77,17 +82,19 @@ public:
 
     {{ ubo.instance_name }}() = default;
 
+    constexpr std::string_view getUboName() { return "{{ ubo.name }}";}
+
     // Setters
     {% for member in ubo.members %}
     {% if not member.is_padding %}
-    void set_{{ member.name }}(const {{ glsl_type_to_cpp(member.type) }}& value) { m_data.{{ member.name }} = value; }
+    void set_{{ member.name }}(const {{ glsl_type_to_cpp(member.type) }}& value);
     {% endif %}
     {% endfor %}
 
     // Getters
     {% for member in ubo.members %}
     {% if not member.is_padding %}
-    const {{ glsl_type_to_cpp(member.type) }}& get_{{ member.name }}() const { return m_data.{{ member.name }}; }
+    const {{ glsl_type_to_cpp(member.type) }}& get_{{ member.name }}() const;
     {% endif %}
     {% endfor %}
 
@@ -98,7 +105,7 @@ public:
     const void* data() const { return &m_data; }
     size_t size() const { return sizeof(m_data); }
 
-    static constexpr unsigned int BINDING_POINT = {{ ubo.binding }};
+    constexpr unsigned int BINDING_POINT = {{ ubo.binding }};
 };
 
 {% endfor %}
@@ -128,20 +135,10 @@ private:
 
 public:
     // Constructor
-    explicit {{ ssbo.block_name }}({% if ssbo.runtime_member %}size_t runtime_element_count = 0{% endif %}) {
-        resize({% if ssbo.runtime_member %}runtime_element_count{% endif %});
-    }
+    explicit {{ ssbo.block_name }}({% if ssbo.runtime_member %}size_t runtime_element_count = 0{% endif %});
 
     // Resize the buffer, primarily for changing the runtime array's size
-    void resize({% if ssbo.runtime_member %}size_t runtime_element_count{% endif %}) {
-        {% if ssbo.runtime_member %}
-        m_runtime_element_count = runtime_element_count;
-        size_t total_size = get_fixed_part_size() + runtime_element_count * {{ ssbo.runtime_member.array_stride }};
-        {% else %}
-        size_t total_size = get_fixed_part_size();
-        {% endif %}
-        m_buffer.resize(total_size);
-    }
+    void resize({% if ssbo.runtime_member %}size_t runtime_element_count{% endif %});
     
     // --- Accessors for Fixed-size Members ---
     {% for member in ssbo.fixed_members if not member.is_padding %}
@@ -153,23 +150,9 @@ public:
     {% if ssbo.runtime_member %}
     size_t get_element_count() const { return m_runtime_element_count; }
 
-    {{ glsl_type_to_cpp(ssbo.runtime_member.type) }}& at(size_t index) {
-        if (index >= m_runtime_element_count) {
-            throw std::out_of_range("SSBO runtime array access out of range");
-        }
-        char* base_ptr = m_buffer.data() + get_fixed_part_size();
-        char* element_ptr = base_ptr + index * {{ ssbo.runtime_member.array_stride }};
-        return *reinterpret_cast<{{ glsl_type_to_cpp(ssbo.runtime_member.type) }}*>(element_ptr);
-    }
+    {{ glsl_type_to_cpp(ssbo.runtime_member.type) }}& at(size_t index);
 
-    const {{ glsl_type_to_cpp(ssbo.runtime_member.type) }}& at(size_t index) const {
-        if (index >= m_runtime_element_count) {
-            throw std::out_of_range("SSBO runtime array access out of range");
-        }
-        const char* base_ptr = m_buffer.data() + get_fixed_part_size();
-        const char* element_ptr = base_ptr + index * {{ ssbo.runtime_member.array_stride }};
-        return *reinterpret_cast<const {{ glsl_type_to_cpp(ssbo.runtime_member.type) }}*>(element_ptr);
-    }
+    const {{ glsl_type_to_cpp(ssbo.runtime_member.type) }}& at(size_t index) const;
     {% endif %}
 
     // --- GPU Data Interface ---

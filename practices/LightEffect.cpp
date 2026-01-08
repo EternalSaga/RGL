@@ -66,14 +66,11 @@ void frameObjectInView(std::shared_ptr<Camera> cam, const RGL::glcore::AABB& wor
 LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) : renderQueues{} {
     this->cam = cam;
 
-    // --- 1. 准备基础网格 ---
-    // a. 创建草地Shader
     ShaderBytesPath modelShaderSrc = {
 	{SHADER_TYPE::VERTEX, {"shaders\\phong_ubo_instanced.spv"}},
 	{SHADER_TYPE::FRAGMENT, {"shaders\\grass-fragment.spv"}}};
     grassShader = std::make_shared<Shader>(modelShaderSrc);
 
-    // b. 加载并合并模型为一个基础网格
     importer = std::make_unique<ModelImporter>("assets\\grass_variations.glb");
     auto singleGrassMesh = importer->importAsSingleMesh();
 

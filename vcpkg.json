@@ -15,7 +15,8 @@
     {
       "name": "boost-variant2",
       "version>=": "1.86.0"
-    },    {
+    },
+    {
       "name": "boost-dll",
       "version>=": "1.86.0"
     },
@@ -30,8 +31,10 @@
     {
       "name": "glad",
       "version>=": "0.1.36#0",
-      "features": ["gl-api-46","extensions"]
-
+      "features": [
+        "gl-api-46",
+        "extensions"
+      ]
     },
     {
       "name": "glm",
@@ -50,14 +53,13 @@
       "version>=": "3.25#2"
     },
     {
-      "name":"nlohmann-json",
+      "name": "nlohmann-json",
       "version>=": "3.11.2"
     },
     {
       "name": "imgui",
       "version>=": "1.91.0",
       "features": [
-
         "opengl3-binding",
         "freetype"
       ]
@@ -71,7 +73,7 @@
       "version>=": "5.4.3#0"
     },
     {
-      "name":"glslang",
+      "name": "glslang",
       "version>=": "15.1.0#0",
       "features": [
         "tools",
@@ -80,18 +82,14 @@
       ]
     },
     {
-      "name":"spirv-cross",
+      "name": "spirv-cross",
       "version>=": "1.4.309.0#0"
+    },
+    {
+      "name": "inja"
     }
   ],
   "overrides": [
-    {
-      "name": "boost-headers",
-      "version": "1.86.0"
-    },
-    {
-      "name": "boost-hana",
-      "version": "1.86.0"
-    }
+
   ]
 }

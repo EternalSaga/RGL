@@ -7,11 +7,17 @@
             "program": "${file}",
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
-            "args": ["--jsons",".\\build\\reflections\\phong_ubo_instanced.json",".\\build\\reflections\\grass-fragment.json",
-            "--outdir","${workspaceFolder}\\render_core\\gl_shader_gen",
-            "--templates","${workspaceFolder}\\ShaderReflection\\scripts\\templates",
-            "--name","grass"
-        ]
+            "args": [
+                "--jsons",
+                ".\\build\\reflections\\phong_ubo_instanced.json",
+                ".\\build\\reflections\\grass-fragment.json",
+                "--outdir",
+                "${workspaceFolder}\\render_core\\gl_shader_gen",
+                "--templates",
+                "${workspaceFolder}\\ShaderReflection\\scripts\\templates",
+                "--name",
+                "grass"
+            ]
         },
         {
             "name": "ShaderReflection",
@@ -20,10 +26,14 @@
             "program": "${workspaceRoot}/build/ShaderReflection/ShaderReflection.exe",
             "args": [
                 "-i",
-                ".\\shaders\\grass-fragment.spv"
+                ".\\build\\shaders\\grass-fragment.spv",
+                "--type",
+                "cpp",
+                "-o",
+                ".\\build\\ShaderReflection"
             ],
             "stopAtEntry": false,
-            "cwd": "${workspaceRoot}/build",
+            "cwd": "${workspaceRoot}",
             "environment": [],
             "console": "externalTerminal"
         },

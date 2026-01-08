@@ -153,8 +153,4 @@ void RenderQueueSystem::processInstanceQueue(const std::vector<entt::entity>& qu
 }
 
 
-
-
-
-
 }  // namespace RGL

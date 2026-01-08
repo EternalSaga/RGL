@@ -21,6 +21,8 @@ void InstancedGrassShaderSystem::update() {
 	(*ubos)["CameraBlock"]->setUniform(cameraBlock.data());
 	(*ubos)["DirectionLight"]->setUniform(directionLight.data());
 	(*ubos)["MaterialIndices"]->setUniform(materialIndices.data());
+
+
 	std::array<GLuint, 1> texture{*(material->getTextures()[TextureUsageType::BASE_COLOR])};
 	grass_fragment::SamplerArray_Mytextures::setUniform(*shaderRef, texture);
     });
