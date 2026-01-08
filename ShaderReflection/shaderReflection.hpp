@@ -12,7 +12,7 @@ class ShaderReflection {
 
     json getStorageBuffers();
 
-    json getSamplers();
+    json getSamplers(const json& processed_uniforms);
 
     json getInputs();
 

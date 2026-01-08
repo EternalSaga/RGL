@@ -2,12 +2,15 @@
 namespace RGL {
 namespace {{shader_name}} {
 
+// Auto-generated shader metadata from ShaderReflection at
+// {{ generation_time }}
+
 {% for ubo in ubos %}
 {{ ubo.instance_name }}::{{ ubo.instance_name }}(
         {% for member in ubo.members %}
         {% if not member.is_padding %}
 
-        const {{ glsl_type_to_cpp(member.type) }}& _{{ member.name }}{% if not loop.last %}, {% endif %}
+        const {{ glsl_type_to_cpp(member.type) }}& _{{ member.name }}{% if not loop.is_last %}, {% endif %}
         {% endif %}
         {% endfor %}
     ) {

@@ -127,7 +127,7 @@ def process_shaders(json_file_paths):
                     fixed_members_raw = []
                     # 在你的 JSON 中，成员列表的键是 "struct_members"，我们统一用 "members"
                     # 以便模板中可以重用逻辑
-                    if "struct_members" in item:
+                    if "struct_members" i n item:
                         item["members"] = item.pop("struct_members")
 
                     for member in item.get("members", []):
