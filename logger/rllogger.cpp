@@ -20,31 +20,33 @@ RLLogger::~RLLogger() {
 }
 RLLogger* RLLogger::getInstance() {
     std::call_once(initOnce, []() {
-		rllogger.reset(new RLLogger());
+	rllogger.reset(new RLLogger(configFilePath));
     });
 
-   return rllogger.get();
+    return rllogger.get();
 }
 
 std::once_flag RLLogger::initOnce{};
 std::unique_ptr<RLLogger> RLLogger::rllogger = nullptr;
-RLLogger::RLLogger()
-{
+std::string RLLogger::configFilePath = "configs/log_level.json";
+void RLLogger::initialize(const std::string& configPath) {
+    configFilePath = configPath;
+}
+RLLogger::RLLogger(const std::string& configPath) {
+    const std::filesystem::path logLevelConfigFile = configFilePath;
+    if (!std::filesystem::exists(configFilePath)){
+        throw std::runtime_error("Log config file not found");
+    }
 
-    auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
-
-    console_sink->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%^%l%$] [%s:%#] %v");
-
-	
-
-    auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
-	"logs/gllog.txt", true);
-	
-	file_sink->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%^%l%$] [%s:%#] %v");
-    const std::filesystem::path logLevelConfigFile = "configs/log_level.json";
-    if (std::filesystem::exists(logLevelConfigFile)) {
-	std::ifstream configFile(logLevelConfigFile);
+	std::ifstream configFile(configFilePath);
 	auto conf = json::parse(configFile);
+
+	auto log_file_path = conf["log_file"];
+	auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
+	    log_file_path, true);
+	file_sink->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%^%l%$] [%s:%#] %v");
+	auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+	console_sink->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%^%l%$] [%s:%#] %v");
 	if (conf.contains("console_level")) {
 	    auto consoleLevelStr = conf["console_level"];
 	    spdlog::level::level_enum consoleLevel =
@@ -63,24 +65,20 @@ RLLogger::RLLogger()
 	} else {
 	    file_sink->set_level(spdlog::level::info);
 	}
-    }
+    
 
     singletonLogger =
 	new spdlog::logger("gl_logger", {console_sink, file_sink});
     singletonLogger->set_level(spdlog::level::trace);
-    singletonLogger->set_error_handler([](const std::string &errorMsg) {
+    singletonLogger->set_error_handler([](const std::string& errorMsg) {
 	throw std::runtime_error(errorMsg);
-    }
-	);
-
-
+    });
 
     info("Logger initialized. Configuration loaded from configs/log_level.json if available.");
     info("Console log level: {}", spdlog::level::to_string_view(singletonLogger->sinks()[0]->level()));
     info("File log level: {}", spdlog::level::to_string_view(singletonLogger->sinks()[1]->level()));
 }
 std::size_t SourceLocHasher::operator()(const std::source_location& loc) const noexcept {
-
     std::size_t h1 = std::hash<std::string_view>{}(loc.file_name() ? loc.file_name() : "");
     std::size_t h2 = std::hash<int>{}(loc.line());
     std::size_t h3 = std::hash<std::string_view>{}(loc.function_name() ? loc.function_name() : "");
@@ -90,12 +88,10 @@ std::size_t SourceLocHasher::operator()(const std::source_location& loc) const n
     seed ^= h2 + 0x9e3779b9 + (seed << 6) + (seed >> 2);
     seed ^= h3 + 0x9e3779b9 + (seed << 6) + (seed >> 2);
     return seed;
-
 }
 bool SourceLocEqual::operator()(const std::source_location& lhs, const std::source_location& rhs) const noexcept {
-    
-     return lhs.line() == rhs.line() &&
-    (lhs.file_name() == rhs.file_name() || (lhs.file_name() && rhs.file_name() && std::string_view(lhs.file_name()) == std::string_view(rhs.file_name()))) &&
-    (lhs.function_name() == rhs.function_name() || (lhs.function_name() && rhs.function_name() && std::string_view(lhs.function_name()) == std::string_view(rhs.function_name())));
+    return lhs.line() == rhs.line() &&
+	   (lhs.file_name() == rhs.file_name() || (lhs.file_name() && rhs.file_name() && std::string_view(lhs.file_name()) == std::string_view(rhs.file_name()))) &&
+	   (lhs.function_name() == rhs.function_name() || (lhs.function_name() && rhs.function_name() && std::string_view(lhs.function_name()) == std::string_view(rhs.function_name())));
 }
 }  // namespace RGL

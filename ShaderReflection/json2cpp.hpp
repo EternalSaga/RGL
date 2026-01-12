@@ -40,11 +40,11 @@ namespace reflection {
 
         inja::Environment env;
 
-
-        const std::filesystem::path tempalteHpp = "ShaderReflection/templates/shader_template.hpp.jinja";
-        const std::filesystem::path templateCpp = "ShaderReflection/templates/shader_template.cpp.jinja";
+        const std::filesystem::path templatePath;
+        std::filesystem::path tempalteHpp;
+        std::filesystem::path templateCpp;
     public:
-        Template2Struct(const nlohmann::json& j, const std::filesystem::path& outPutFolder,const std::filesystem::path& shaderName);
+        Template2Struct(const nlohmann::json& j, const std::filesystem::path& outPutFolder,const std::filesystem::path& shaderName,const std::filesystem::path& templatePath);
         void generate();
 
     };

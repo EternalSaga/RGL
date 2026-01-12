@@ -1,24 +1,6 @@
 {
     "configurations": [
-        {
-            "name": "Python Debugger: Current File",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "${file}",
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "args": [
-                "--jsons",
-                ".\\build\\reflections\\phong_ubo_instanced.json",
-                ".\\build\\reflections\\grass-fragment.json",
-                "--outdir",
-                "${workspaceFolder}\\render_core\\gl_shader_gen",
-                "--templates",
-                "${workspaceFolder}\\ShaderReflection\\scripts\\templates",
-                "--name",
-                "grass"
-            ]
-        },
+
         {
             "name": "ShaderReflection",
             "type": "cppvsdbg",
@@ -26,11 +8,15 @@
             "program": "${workspaceRoot}/build/ShaderReflection/ShaderReflection.exe",
             "args": [
                 "-i",
-                ".\\build\\shaders\\grass-fragment.spv",
+                "D:/program/RGL/build/render_core/shader_systems/generated_shaders/grass-fragment.spv",
                 "--type",
                 "cpp",
                 "-o",
-                ".\\build\\ShaderReflection"
+                "D:/program/RGL/build/render_core/shader_systems/generated_shaders",
+                "-d",
+                "D:/program/RGL/ShaderReflection/templates",
+                "-c",
+                "D:\\program\\RGL\\configs\\shaderRefLogLevel.json"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceRoot}",

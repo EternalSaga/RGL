@@ -13,3 +13,6 @@ find_package(glad CONFIG REQUIRED)
 target_link_libraries(shader_systems PRIVATE glad::glad glm::glm)
 
 target_compile_features(shader_systems PRIVATE cxx_std_20)
+
+target_add_shader(shader_systems ${CMAKE_SOURCE_DIR}/shaders/Light/phong_ubo_instanced.vert)
+target_add_shader(shader_systems ${CMAKE_SOURCE_DIR}/shaders/Light/grass_fragment.frag)

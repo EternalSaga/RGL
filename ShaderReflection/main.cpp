@@ -19,7 +19,9 @@ int main(int argc, char* argv[]) {
 	("help,h", "produce help message")
 	("input,i", po::value<std::string>()->required(), "input SPIR-V file")
 	("type,t", po::value<std::string>()->required(), "output type, json or cpp")
-	("output,o", po::value<std::string>()->required(), "output file name, doesn't include any kind of file extension");
+	("template-dir,d",po::value<std::string>(),"template directory which contains jinja templates for cpp output, required for cpp output type, ignored for json output")
+	("output,o", po::value<std::string>()->required(), "output file name, doesn't include any kind of file extension")
+	("config-file,c", po::value<std::string>()->required(), "config file path for reflection config");
 
 	po::variables_map vm;
 	po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -32,9 +34,11 @@ int main(int argc, char* argv[]) {
 	}
 
 	po::notify(vm);
+	std::string loggerPath = vm["config-file"].as<std::string>();
 
+	RGL::RLLogger::initialize(loggerPath);
 	std::string input_path = vm["input"].as<std::string>();
-
+	
 	RGL::RLLogger::getInstance()->info("Reflecting shader: {}...", input_path);
 
 	// 创建 ShaderReflection 实例，这会触发反射过程
@@ -63,11 +67,12 @@ int main(int argc, char* argv[]) {
 		const std::filesystem::path outputfile{vm["output"].as<std::string>()};
 		const std::filesystem::path outputFolder = outputfile.parent_path();
 		const std::filesystem::path spirvPath {vm["input"].as<std::string>()};
+		const std::filesystem::path templateDir{vm["template-dir"].as<std::string>()};
 		const auto shaderName = spirvPath.filename().stem();
 
 		RGL::RLLogger::getInstance()->info("Reflecting spir-v to cpp, folder is {}.",outputFolder.generic_string());
 
-        RGL::reflection::Template2Struct tempalte2Struct(result_json,outputFolder,shaderName);
+        RGL::reflection::Template2Struct tempalte2Struct(result_json,outputFolder,shaderName,templateDir);
 
 		tempalte2Struct.generate();
 

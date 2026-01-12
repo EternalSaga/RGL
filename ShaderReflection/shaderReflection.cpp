@@ -6,6 +6,7 @@
 #include <spirv_common.hpp>
 
 #include <spirv_glsl.hpp>
+#include <stdexcept>
 #include <string>
 #include <vector>
 #include <fstream>
@@ -159,9 +160,8 @@ ShaderReflection::ShaderReflection(std::string spirv_path) : compiler(read_spirv
     // 检查文件名里的'-'，replace成'_'
     auto shaderName = std::filesystem::path(spirv_path).stem().string();
     if (shaderName.find('-') != std::string::npos) {
-	auto oldName = shaderName;
-	std::replace(shaderName.begin(), shaderName.end(), '-', '_');
-	RGL::RLLogger::getInstance()->warn("Shader name contains '-', replaced with '_' in shader name \n original name {}, current name {}", oldName, shaderName);
+	RGL::RLLogger::getInstance()->error("Shader name contains '-', replaced with '_' in shader name.");
+	throw std::runtime_error("Don't use '-' in shader name!");
     }
     j["shader_name"] = shaderName;
 }
@@ -199,10 +199,6 @@ json ShaderReflection::getSamplers(const json& processed_uniforms) {
 	    sampler["length"] = type.array[0] ? type.array[0] : 0;
 	}
 
-	// ==========================================
-	// 融合 Python 的核心逻辑
-	// ==========================================
-	// Python: if item["type"] == "sampler2D" and item["isArray"]:
 	if (type_str == "sampler2D" && is_array) {
 	    // Python: for ubo in data["uniforms"]: if ubo["name"] == "MaterialIndices":
 	    // 我们遍历传入的 processed_uniforms 寻找目标
@@ -229,57 +225,138 @@ json ShaderReflection::getStorageBuffers() {
     spirv_cross::ShaderResources resources = compiler.get_shader_resources();
 
     for (const auto& resource : resources.storage_buffers) {
-	json ssbo;
-	const auto& block_type = compiler.get_type(resource.base_type_id);
+        json ssbo;
+        const auto& block_type = compiler.get_type(resource.base_type_id);
 
-	ssbo["block_name"] = compiler.get_name(resource.base_type_id);
-	ssbo["instance_name"] = compiler.get_name(resource.id);
-	ssbo["binding"] = compiler.get_decoration(resource.id, spv::DecorationBinding);
+        ssbo["block_name"] = compiler.get_name(resource.base_type_id);
+        ssbo["instance_name"] = compiler.get_name(resource.id);
+        ssbo["binding"] = compiler.get_decoration(resource.id, spv::DecorationBinding);
 
-	spirv_cross::Bitset flags = compiler.get_buffer_block_flags(resource.id);
-	ssbo["readonly"] = flags.get(spv::DecorationNonWritable);
+        spirv_cross::Bitset flags = compiler.get_buffer_block_flags(resource.id);
+        ssbo["readonly"] = flags.get(spv::DecorationNonWritable);
 
-	ssbo["block_size_bytes"] = compiler.get_declared_struct_size(block_type);
+        // 这是不包含运行时数组变长部分的固定大小
+        size_t block_size_bytes = compiler.get_declared_struct_size(block_type);
+        ssbo["block_size_bytes"] = block_size_bytes;
 
-	auto zeroSize = compiler.get_declared_struct_size_runtime_array(block_type, 0);
-	auto oneSize = compiler.get_declared_struct_size_runtime_array(block_type, 1);
+        // 检查是否存在运行时数组 (Runtime Array)
+        auto zeroSize = compiler.get_declared_struct_size_runtime_array(block_type, 0);
+        auto oneSize = compiler.get_declared_struct_size_runtime_array(block_type, 1);
+        bool hasRuntimeArray = zeroSize != oneSize;
 
-	bool hasRuntimeArray = zeroSize != oneSize;
+        auto memberCount = block_type.member_types.size();
 
-	auto memberCount = block_type.member_types.size();
+        // --- 逻辑变更开始：不再直接写入 ssbo["struct_members"] ---
 
-	ssbo["struct_members"] = json::array();
+        std::vector<json> raw_fixed_members;
+        json runtime_member_json = nullptr; 
 
-	// 遍历块（顶级结构体）的所有成员
-	for (uint32_t i = 0; i < memberCount; ++i) {
-	    json member_info;
-	    auto member_type_id = block_type.member_types[i];
-	    const spirv_cross::SPIRType& member_type = compiler.get_type(member_type_id);
+        // 1. 遍历并分离成员
+        for (uint32_t i = 0; i < memberCount; ++i) {
+            json member_info;
+            auto member_type_id = block_type.member_types[i];
+            const spirv_cross::SPIRType& member_type = compiler.get_type(member_type_id);
 
-	    member_info["name"] = compiler.get_member_name(block_type.self, i);
-	    member_info["offset"] = compiler.get_member_decoration(block_type.self, i, spv::DecorationOffset);
+            member_info["name"] = compiler.get_member_name(block_type.self, i);
+            uint32_t offset = compiler.get_member_decoration(block_type.self, i, spv::DecorationOffset);
+            member_info["offset"] = offset;
 
-	    member_info["is_array"] = !member_type.array.empty();
-	    if (member_info["is_array"]) {
-		bool is_runtime_array = (i == memberCount - 1) && hasRuntimeArray;
-		member_info["is_runtime_array"] = is_runtime_array;
+            member_info["is_array"] = !member_type.array.empty();
+            bool is_runtime_array = false;
 
-		if (!is_runtime_array) {
-		    member_info["array_stride"] = compiler.get_decoration(member_type_id, spv::DecorationArrayStride);
-		    // 计算固定数组的元素个数
-		    if (!member_type.array.empty()) {
-			member_info["array_element_count"] = member_type.array[0];
-		    }
-		} else {
-		    member_info["array_stride"] = oneSize - zeroSize;
-		}
-	    }
-	    member_info["type"] = type_to_string(compiler, member_type);
-	    member_info["size_bytes"] = compiler.get_declared_struct_member_size(block_type, i);
-	    ssbo["struct_members"].push_back(member_info);
-	}
-	ssbos.push_back(ssbo);
+            if (member_info["is_array"]) {
+                // 只有最后一个成员且 block 本身被标记为变长才是 Runtime Array
+                is_runtime_array = (i == memberCount - 1) && hasRuntimeArray;
+                member_info["is_runtime_array"] = is_runtime_array;
+
+                if (!is_runtime_array) {
+                    member_info["array_stride"] = compiler.get_decoration(member_type_id, spv::DecorationArrayStride);
+                    if (!member_type.array.empty()) {
+                        member_info["array_element_count"] = member_type.array[0];
+                    }
+                } else {
+                    member_info["array_stride"] = oneSize - zeroSize;
+                }
+            } else {
+                 member_info["is_runtime_array"] = false;
+            }
+
+            member_info["type"] = type_to_string(compiler, member_type);
+            
+            // 获取成员大小 (spirv-cross 会正确返回固定数组的总大小)
+            size_t member_size = compiler.get_declared_struct_member_size(block_type, i);
+            member_info["size_bytes"] = member_size;
+
+            // 分离逻辑：放入不同的容器
+            if (is_runtime_array) {
+                runtime_member_json = member_info;
+            } else {
+                // 标记此时还不是 padding，后续统一处理
+                member_info["is_padding"] = false;
+                raw_fixed_members.push_back(member_info);
+            }
+        }
+
+        // 2. 对固定成员按 offset 排序 (对应 Python: sorted(fixed_members_raw))
+        std::sort(raw_fixed_members.begin(), raw_fixed_members.end(), 
+            [](const json& a, const json& b) {
+                return a["offset"] < b["offset"];
+            });
+
+        // 3. 计算 Padding 并构建最终的 fixed_members (对应 Python: Step 2)
+        json processed_fixed_members = json::array();
+        size_t current_offset = 0;
+        int padding_index = 0;
+
+        for (const auto& member : raw_fixed_members) {
+            size_t member_offset = member["offset"];
+            size_t member_size = member["size_bytes"];
+
+            // 检查成员之间是否有空隙
+            if (member_offset > current_offset) {
+                size_t padding_size = member_offset - current_offset;
+                json padding_node;
+                padding_node["is_padding"] = true;
+                padding_node["name"] = "padding_" + std::to_string(padding_index++);
+                padding_node["size_bytes"] = padding_size;
+                // 为了兼容某些模板，可能需要 offset 字段，虽然通常 padding 不需要
+                padding_node["offset"] = current_offset; 
+                
+                processed_fixed_members.push_back(padding_node);
+            }
+
+            // 添加实际成员
+            processed_fixed_members.push_back(member);
+            
+            // 更新 current_offset
+            current_offset = member_offset + member_size;
+        }
+
+        // 检查固定部分末尾是否需要 Padding (结构体总大小 vs 当前偏移量)
+        if (block_size_bytes > current_offset) {
+            size_t padding_size = block_size_bytes - current_offset;
+            json padding_node;
+            padding_node["is_padding"] = true;
+            padding_node["name"] = "padding_" + std::to_string(padding_index++);
+            padding_node["size_bytes"] = padding_size;
+            padding_node["offset"] = current_offset;
+            
+            processed_fixed_members.push_back(padding_node);
+        }
+
+        // 4. 将处理好的数据放回 item 中 (对应 Python: Step 3)
+        ssbo["fixed_members"] = processed_fixed_members;
+        
+        // 如果没有运行时成员，这里显式设为 null 或者不写，视你的模板需求而定
+        if (runtime_member_json.is_null()) {
+            ssbo["runtime_member"] = nullptr;
+        } else {
+            ssbo["runtime_member"] = runtime_member_json;
+        }
+
+        ssbos.push_back(ssbo);
     }
+
     return ssbos;
 }
 

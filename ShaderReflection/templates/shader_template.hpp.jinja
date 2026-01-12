@@ -14,7 +14,7 @@ namespace RGL {
 namespace {{shader_name}} {
 namespace detail {
     static constexpr std::string_view name = "{{shader_name}}";
-    static constexpr SHADER_TYPE shaderType = SHADER_TYPE::{{ shader_type }};
+    static constexpr glcore::SHADER_TYPE shaderType = glcore::SHADER_TYPE::{{ shader_type }};
 
 {% for ubo in ubos %}
 struct {{ ubo.instance_name }}Data {
@@ -74,13 +74,7 @@ public:
         const {{ glsl_type_to_cpp(member.type) }}& _{{ member.name }}{% if not loop.is_last %}, {% endif %}
         {% endif %}
         {% endfor %}
-    ) {
-        {% for member in ubo.members %}
-        {% if not member.is_padding %}
-        m_data.{{ member.name }} = _{{ member.name }};
-        {% endif %}
-        {% endfor %}
-    }
+    );
 
     {{ ubo.instance_name }}() = default;
 
@@ -107,7 +101,7 @@ public:
     const void* data() const { return &m_data; }
     size_t size() const { return sizeof(m_data); }
 
-    constexpr unsigned int BINDING_POINT = {{ ubo.binding }};
+    static constexpr unsigned int BINDING_POINT = {{ ubo.binding }};
 };
 
 {% endfor %}

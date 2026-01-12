@@ -26,12 +26,10 @@ namespace practice {
 
 using namespace glcore;
 
-
-class LoadModelTest : public Renderer,public SingleReg{
-
+class LoadModelTest : public Renderer, public SingleReg {
     ShaderRef grassShader;
-	std::shared_ptr<Camera> cam;
-	std::unique_ptr<CommonRenderEntity> modelEntity;
+    std::shared_ptr<Camera> cam;
+    std::unique_ptr<CommonRenderEntity> modelEntity;
 
     UBOs ubos;
 
@@ -45,13 +43,12 @@ class LoadModelTest : public Renderer,public SingleReg{
 
     RenderQueues renderQueues;
     InstancedGrassShaderSystem instancedGrassShaderSystem;
-public:
+
+   public:
     LoadModelTest(std::shared_ptr<Camera> cam);
     void operator()() override;
     ~LoadModelTest();
-
 };
-
 
 }  // namespace practice
 }  // namespace RGL

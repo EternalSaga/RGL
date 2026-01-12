@@ -37,7 +37,7 @@ namespace {{shader_name}} {
 {% endfor %}
 
 {% for ssbo in storage_buffers %}
-{{ ssbo.block_name }}::{{ ssbo.block_name }}({% if ssbo.runtime_member %}size_t runtime_element_count = 0{% endif %}) {
+{{ ssbo.block_name }}::{{ ssbo.block_name }}({% if ssbo.runtime_member %}size_t runtime_element_count{% endif %}) {
     resize({% if ssbo.runtime_member %}runtime_element_count{% endif %});
 }
 void {{ ssbo.block_name }}::resize({% if ssbo.runtime_member %}size_t runtime_element_count{% endif %}) {

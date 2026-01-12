@@ -19,7 +19,9 @@ std::string title_case(const std::string& input) {
     return result;
 }
 
-Template2Struct::Template2Struct(const nlohmann::json& j, const std::filesystem::path& outPutFolder,const std::filesystem::path& shaderName):shaderJson(j),outPutFolder(outPutFolder),shaderName(shaderName){
+Template2Struct::Template2Struct(const nlohmann::json& j, const std::filesystem::path& outPutFolder,const std::filesystem::path& shaderName,const std::filesystem::path& templatePath):shaderJson(j),outPutFolder(outPutFolder),shaderName(shaderName){
+    tempalteHpp = templatePath/"shader_template.hpp.jinja";
+    templateCpp = templatePath/"shader_template.cpp.jinja";
 
     env.add_callback("glsl_type_to_cpp", [](std::vector<const nlohmann::json*>& args) -> nlohmann::json {
         if (args.empty()) {

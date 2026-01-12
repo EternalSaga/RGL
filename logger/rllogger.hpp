@@ -43,6 +43,7 @@ struct format_with_location {
 class RLLogger {
    public:
     ~RLLogger();
+    static void initialize(const std::string& configPath = "configs/log_level.json");
     static RLLogger *getInstance();
     RLLogger(const RLLogger &) = delete;
     RLLogger &operator=(const RLLogger &) = delete;
@@ -120,8 +121,8 @@ class RLLogger {
     std::mutex logCountMutex;									      // Mutex to protect access to logCount map
 
     spdlog::logger *singletonLogger;
-
-    RLLogger();
+    static std::string configFilePath;
+    explicit RLLogger(const std::string& configPath);
 };
 
 }  // namespace RGL

@@ -4,6 +4,10 @@ file(GLOB_RECURSE SHADERREFLECTION_FILES "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp" "${
 add_executable(ShaderReflection ${SHADERREFLECTION_FILES})
 
 target_compile_features(ShaderReflection PRIVATE cxx_std_20)
+
+# 包含clang-format支持
+include(${PROJECT_SOURCE_DIR}/cmake/FindClangFormat.cmake)
+
 find_package(spirv_cross_core CONFIG REQUIRED)
 find_package(spirv_cross_glsl CONFIG REQUIRED)
 find_package(spirv_cross_cpp CONFIG REQUIRED)
@@ -78,27 +82,10 @@ foreach(Config_File IN LISTS Config_Files)
     )
 endforeach()
 
-# 定义函数：只处理单个文件，参数位置固定
-function(compile_spirv_to_json renderer_target spirv_file json_output_dir)
-    get_filename_component(file_name ${spirv_file} NAME)
-    set(json_output "${json_output_dir}/${file_name}.json")
-    
-    add_custom_command(
-        OUTPUT ${json_output}
-        COMMAND ShaderReflection
-            --input "${spirv_file}"
-            --output "${json_output}"
-        # 依赖关系：必须先编译出 ShaderReflection 工具，且源 .spv 变化时重做
-        DEPENDS ShaderReflection "${spirv_file}"
-        COMMENT "Reflecting SPIR-V: ${file_name} -> ${file_name}.json"
-        VERBATIM
-    )
-    target_sources(${renderer_target} PRIVATE ${json_output})
-endfunction()
 
 function(rgl_reflect_batch)
     cmake_parse_arguments(ARG "" "TARGET;OUTPUT_DIR" "SHADERS" ${ARGN})
     foreach(s IN LISTS ARG_SHADERS)
-        _compile_single_spirv(${ARG_TARGET} ${s} ${ARG_OUTPUT_DIR})
+        compile_spirv_to_cpp(${ARG_TARGET} ${s} ${ARG_OUTPUT_DIR})
     endforeach()
 endfunction()
