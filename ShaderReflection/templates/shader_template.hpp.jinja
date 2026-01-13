@@ -13,7 +13,7 @@
 namespace RGL {
 namespace {{shader_name}} {
 namespace detail {
-    static constexpr std::string_view name = "{{shader_name}}";
+    static const std::string name = "{{shader_name}}";
     static constexpr glcore::SHADER_TYPE shaderType = glcore::SHADER_TYPE::{{ shader_type }};
 
 {% for ubo in ubos %}
@@ -78,7 +78,7 @@ public:
 
     {{ ubo.instance_name }}() = default;
 
-    constexpr std::string_view getUboName() { return "{{ ubo.name }}";}
+    const static std::string getUboName() { return "{{ ubo.name }}";}
 
     // Setters
     {% for member in ubo.members %}

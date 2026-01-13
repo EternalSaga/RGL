@@ -6,7 +6,7 @@
 
 
 #include <array>
-#include <unordered_map>
+#include <map>
 namespace RGL {
 namespace glcore {
 
@@ -29,6 +29,6 @@ class UBO {
 
     ~UBO();
 };
-using UBOs = std::shared_ptr<std::unordered_map<std::string, std::shared_ptr<UBO>>>;
+using UBOs = std::shared_ptr<std::map<std::string, std::shared_ptr<UBO>,std::less<>>>;
 }  // namespace glcore
 }  // namespace RGL

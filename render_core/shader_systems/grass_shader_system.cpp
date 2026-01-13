@@ -18,9 +18,9 @@ void InstancedGrassShaderSystem::update() {
     auto view = singleReg->view<const phong_ubo_instanced::InstanceData, phong_ubo_instanced::CameraBlock, grass_fragment::DirectionLight, grass_fragment::MaterialIndices, UBOs, SSBO, ShaderRef, std::shared_ptr<AssetMaterialData>>();
     view.each([](entt::entity entity, const phong_ubo_instanced::InstanceData& instanceData, phong_ubo_instanced::CameraBlock& cameraBlock, grass_fragment::DirectionLight& directionLight, grass_fragment::MaterialIndices& materialIndices, UBOs& ubos, SSBO& ssbo, ShaderRef shaderRef, std::shared_ptr<AssetMaterialData> material) {
 	ssbo.updateBufferSubData(instanceData.data(), instanceData.size() * sizeof(phong_ubo_instanced::InstanceData), 0);
-	(*ubos)["CameraBlock"]->setUniform(cameraBlock.data());
-	(*ubos)["DirectionLight"]->setUniform(directionLight.data());
-	(*ubos)["MaterialIndices"]->setUniform(materialIndices.data());
+	(*ubos)[cameraBlock.getUboName()]->setUniform(cameraBlock.data());
+	(*ubos)[directionLight.getUboName()]->setUniform(directionLight.data());
+	(*ubos)[materialIndices.getUboName()]->setUniform(materialIndices.data());
 
 
 	std::array<GLuint, 1> texture{*(material->getTextures()[TextureUsageType::BASE_COLOR])};

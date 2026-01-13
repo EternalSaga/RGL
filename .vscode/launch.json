@@ -1,6 +1,5 @@
 {
     "configurations": [
-
         {
             "name": "ShaderReflection",
             "type": "cppvsdbg",
