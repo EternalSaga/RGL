@@ -156,7 +156,7 @@ public:
     // --- GPU Data Interface ---
     const void* data() const { return m_buffer.data(); }
     size_t size() const { return m_buffer.size(); }
-
+    static const std::string getName() { return "{{ ssbo.block_name }}";}
     static constexpr unsigned int BINDING_POINT = {{ ssbo.binding }};
     static constexpr bool IS_READ_ONLY = {% if ssbo.readonly %}true{% else %}false{% endif %};
 };

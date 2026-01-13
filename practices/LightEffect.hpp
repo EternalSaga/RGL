@@ -16,7 +16,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <memory>
-#include <vector>
+#include "SSBO.hpp"
 
 #include "ModelImporter.hpp"
 #include "Entity.hpp"
@@ -32,7 +32,7 @@ class LoadModelTest : public Renderer, public SingleReg {
     std::unique_ptr<CommonRenderEntity> modelEntity;
 
     UBOs ubos;
-
+    SSBOs ssbos;
     std::shared_ptr<UBO> lightUBO;
 
     std::shared_ptr<UBO> cameraUBO;

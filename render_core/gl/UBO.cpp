@@ -24,11 +24,6 @@ UBO::~UBO() {
 }
 
 
-
-
-
-
-
 }  // namespace glcore
 
 }  // namespace RGL

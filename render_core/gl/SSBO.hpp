@@ -40,4 +40,5 @@ public:
         glCall(glGetNamedBufferSubData, this->ssbo, offset, size_to_read, out_vector.data());
     }
 };
+using SSBOs = std::shared_ptr<std::map<std::string, std::shared_ptr<SSBO>, std::less<>>>;
 }}

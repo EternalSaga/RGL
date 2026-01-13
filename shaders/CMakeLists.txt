@@ -52,7 +52,7 @@ function(target_add_shader TARGET_NAME SHADER_SOURCE)
     target_sources(${TARGET_NAME} PRIVATE ${CPP_OUTPUT})
     
     # 4. 第四步：把生成目录加入 include 路径，这样你在代码里能 #include "test.hpp"
-    target_include_directories(${TARGET_NAME} PRIVATE ${GEN_DIR})
+    target_include_directories(${TARGET_NAME} PUBLIC ${GEN_DIR})
 
     message(STATUS "Shader configured: ${SHADER_NAME} -> Will generate C++ at build time.")
 endfunction()

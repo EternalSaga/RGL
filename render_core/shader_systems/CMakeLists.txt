@@ -2,7 +2,6 @@ file(GLOB shader_systems_sources "*.cpp" "*.hpp")
 add_library(shader_systems ${shader_systems_sources})
 
 target_include_directories(shader_systems PRIVATE ${PROJECT_SOURCE_DIR}/render_core/gl
-${PROJECT_SOURCE_DIR}/render_core/gl_shader_gen
 ${PROJECT_SOURCE_DIR}/app
 ${PROJECT_SOURCE_DIR}/logger
 )
