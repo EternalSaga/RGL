@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <memory>
 #include <spirv.hpp>
 #include <spirv_common.hpp>
 
@@ -148,30 +149,33 @@ json ShaderReflection::getInputs() {
     return inputs;
 }
 
-ShaderReflection::ShaderReflection(std::string spirv_path) : compiler(read_spirv_from_file(spirv_path)) {
+ShaderReflection::ShaderReflection(std::string spirv_path, const std::filesystem::path samplerRulePath) : compiler(read_spirv_from_file(spirv_path)) {
     resources = compiler.get_shader_resources();
+    checkSampler = std::make_unique<CheckSampler>(samplerRulePath,resources, compiler);
+    checkSampler->checkMaterialLayout();
     j["spirv_path"] = spirv_path;
     j["shader_type"] = shaderStage2String(compiler.get_execution_model());
     j["inputs"] = getInputs();
     j["ubos"] = getUniforms();
     j["storage_buffers"] = getStorageBuffers();
-    j["samplers"] = getSamplers(j["ubos"]);
+    j["samplers"] = getSamplers();
 
-    // 检查文件名里的'-'，replace成'_'
+
     auto shaderName = std::filesystem::path(spirv_path).stem().string();
     if (shaderName.find('-') != std::string::npos) {
 	RGL::RLLogger::getInstance()->error("Shader name contains '-', replaced with '_' in shader name.");
-	throw std::runtime_error("Don't use '-' in shader name!");
+	throw std::runtime_error("Don't use '-' in shader file name!");
     }
     j["shader_name"] = shaderName;
+
 }
 
-json ShaderReflection::getSamplers(const json& processed_uniforms) {
+json ShaderReflection::getSamplers() {
     json samplers = json::array();
     std::set<uint32_t> processed_bindings;  // 防止重复 Binding
 
     for (const auto& resource : resources.sampled_images) {
-	// 1. 获取 Binding 并去重 (对应 Python set 逻辑)
+
 	uint32_t binding = compiler.get_decoration(resource.id, spv::DecorationBinding);
 	if (processed_bindings.count(binding)) {
 	    continue;
@@ -193,27 +197,12 @@ json ShaderReflection::getSamplers(const json& processed_uniforms) {
 	bool is_array = !type.array.empty();
 	sampler["isArray"] = is_array;
 
-	// 如果是数组，根据 SPIR-V 获取声明的长度（默认情况）
-	// 如果是 Runtime Array (Unsized)，这里通常是 0
 	if (is_array) {
-	    sampler["length"] = type.array[0] ? type.array[0] : 0;
+	    uint32_t declaredSize = type.array[0];
+            
+        sampler["isDynamic"] = (declaredSize == 0); // 标记为动态
+        sampler["length"] = declaredSize;           // 如果是0，就是0
 	}
-
-	if (type_str == "sampler2D" && is_array) {
-	    // Python: for ubo in data["uniforms"]: if ubo["name"] == "MaterialIndices":
-	    // 我们遍历传入的 processed_uniforms 寻找目标
-	    for (const auto& ubo : processed_uniforms) {
-		if (ubo.value("name", "") == "MaterialIndices") {
-		    // Python: item["length"] = ubo["members_count"]
-		    // 这里的 members_count 包含了我们在上一步 C++ getUniforms 里计算的 padding
-		    if (ubo.contains("members_count")) {
-			sampler["length"] = ubo["members_count"];
-		    }
-		    break;  // 找到了就退出内层循环
-		}
-	    }
-	}
-	// ==========================================
 
 	samplers.push_back(sampler);
     }
@@ -409,7 +398,6 @@ json ShaderReflection::getUniforms() {
 	    raw_members.push_back({member, offset, size});
 	}
 
-	// 3. 对应 Python: sorted(..., key=lambda m: m["offset_bytes"])
 	// 虽然 SPIR-V 通常按 index 顺序就是 offset 顺序，但显式排序更安全
 	std::sort(raw_members.begin(), raw_members.end(), [](const MemberInfo& a, const MemberInfo& b) {
 	    return a.offset < b.offset;

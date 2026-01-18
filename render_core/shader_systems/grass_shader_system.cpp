@@ -24,9 +24,9 @@ void InstancedGrassShaderSystem::update() {
 
 
 	std::array<GLuint, 1> texture{*(material->getTextures()[TextureUsageType::BASE_COLOR])};
-	grass_fragment::SamplerArray_MyTextures::setUniform(*shaderRef, texture);
+	//grass_fragment::SamplerArray_MyTextures::setUniform(*shaderRef, texture);
     });
 }
 
 }  // namespace render_core
-}  // namespace RGL  
+}  // namespace RGL

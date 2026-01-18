@@ -1,6 +1,8 @@
 #pragma once
+#include <memory>
 #include <nlohmann/json.hpp>
 #include <spirv_cross.hpp>
+#include "samplerException.hpp"
 namespace RGL {
 namespace reflection {
     using json = nlohmann::json;
@@ -12,12 +14,14 @@ class ShaderReflection {
 
     json getStorageBuffers();
 
-    json getSamplers(const json& processed_uniforms);
+    json getSamplers();
 
     json getInputs();
 
+    std::unique_ptr<CheckSampler> checkSampler;
+
    public:
-    ShaderReflection(std::string spirv_path);
+    ShaderReflection(std::string spirv_path, const std::filesystem::path samplerRulePath);
     inline explicit operator json() const { return j; }
 };
 }}

@@ -9,6 +9,7 @@
 #include <string>
 #include "json2cpp.hpp"
 #include "rllogger.hpp"
+
 int main(int argc, char* argv[]) {
     namespace po = boost::program_options;
     using json = nlohmann::json;
@@ -21,7 +22,8 @@ int main(int argc, char* argv[]) {
 	("type,t", po::value<std::string>()->required(), "output type, json or cpp")
 	("template-dir,d",po::value<std::string>(),"template directory which contains jinja templates for cpp output, required for cpp output type, ignored for json output")
 	("output,o", po::value<std::string>()->required(), "output file name, doesn't include any kind of file extension")
-	("config-file,c", po::value<std::string>()->required(), "config file path for reflection config");
+	("config-file,c", po::value<std::string>()->required(), "config file path for reflection config")
+	("sampler_rule,s", po::value<std::string>()->required(), "sampler rules file path, which used to check shader samplers if they are valid for the given rules.");
 
 	po::variables_map vm;
 	po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -42,7 +44,7 @@ int main(int argc, char* argv[]) {
 	RGL::RLLogger::getInstance()->info("Reflecting shader: {}...", input_path);
 
 	// 创建 ShaderReflection 实例，这会触发反射过程
-	ShaderReflection reflection(input_path);
+	ShaderReflection reflection(input_path,vm["sampler_rule"].as<std::string>());
 
 	// 通过类型转换操作符获取JSON对象
 	json result_json = static_cast<json>(reflection);

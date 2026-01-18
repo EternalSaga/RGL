@@ -13,12 +13,14 @@ find_package(spirv_cross_glsl CONFIG REQUIRED)
 find_package(spirv_cross_cpp CONFIG REQUIRED)
 
 find_package(inja CONFIG REQUIRED)
-find_package(Boost REQUIRED COMPONENTS program_options)
+find_package(Boost REQUIRED COMPONENTS program_options unordered)
+find_package(sol2 REQUIRED)
+find_package(Lua REQUIRED)
 
-target_link_libraries(ShaderReflection PRIVATE spirv-cross-core spirv-cross-glsl spirv-cross-cpp nlohmann_json::nlohmann_json Boost::program_options pantor::inja rllogger)
-
-target_include_directories(ShaderReflection PRIVATE 
-)
+target_link_libraries(ShaderReflection PRIVATE spirv-cross-core spirv-cross-glsl spirv-cross-cpp nlohmann_json::nlohmann_json Boost::program_options pantor::inja sol2::sol2 rllogger)
+target_include_directories(ShaderReflection PRIVATE ${LUA_INCLUDE_DIR})
+target_link_libraries(ShaderReflection PRIVATE ${LUA_LIBRARIES})
+target_include_directories(ShaderReflection PRIVATE)
 
 
 set(ASSETS_SOURCE_DIR "${PROJECT_SOURCE_DIR}/assets")
