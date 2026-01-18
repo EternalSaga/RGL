@@ -20,6 +20,10 @@ target_link_libraries(glFramework PRIVATE rllogger)
 find_package(Boost CONFIG REQUIRED COMPONENTS headers pfr variant2)
 target_link_libraries(glFramework PRIVATE Boost::headers Boost::pfr Boost::variant2)
 
+find_package(sol2 REQUIRED)
+find_package(Lua REQUIRED)
+target_include_directories(glFramework PRIVATE ${LUA_INCLUDE_DIR})
+target_link_libraries(glFramework PRIVATE ${LUA_LIBRARIES} sol2::sol2)
 
 find_package(Stb REQUIRED)
 target_include_directories(glFramework PRIVATE ${Stb_INCLUDE_DIR})

@@ -24,5 +24,7 @@ std::shared_ptr<sol::state> LuaSandbox::getLuaState(){
     return lua;
 }
 
+LuaTableExcept::LuaTableExcept(const std::string& msg) : std::runtime_error(msg) {
+}
 }  // namespace reflection
 }  // namespace RGL

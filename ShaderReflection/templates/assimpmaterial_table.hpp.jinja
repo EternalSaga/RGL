@@ -1,0 +1,41 @@
+#pragma once
+#include <assimp/material.h>
+#include <map>
+#include <string>
+#include <vector>
+
+// Generate from SamplerRules.lua
+// Generation Time: {{ generation_time }}
+
+namespace RGL {
+namespace glcore {
+
+    struct MaterialTextureRule {
+        std::string shader_variable;     // Shader 里的 uniform 名字
+        std::string semantic;            // 语义 (base_color, normal, etc.)
+        aiTextureType assimp_type;       // Assimp 的主类型
+        aiTextureType fallback_type;     // Assimp 的备选类型 (比如 baseColor 没找到找 Diffuse)
+        std::string default_texture;     // 默认贴图颜色/资源名
+    };
+
+
+    static const std::map<std::string, MaterialTextureRule> AssimpMaterialTable {
+        {% for Parameter in Parameters %}
+        { 
+            "{{ Parameter.shader_variable }}",
+            { 
+                "{{ Parameter.shader_variable }}",
+                "{{ Parameter.semantic }}", 
+                {{ Parameter.assimp_type }}, 
+                
+                {% if existsIn(Parameter, "fallback_assimp_key") %}
+                {{ Parameter.fallback_assimp_key }},
+                {% else %}
+                aiTextureType_NONE,
+                {% endif %}
+                "{{ Parameter.default_texture }}"    // .default_texture
+            } 
+        }, 
+        {% endfor %}
+    };
+}}

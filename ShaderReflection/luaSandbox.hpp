@@ -3,6 +3,7 @@
 #include <mutex>
 #include <sol/state.hpp>
 #include <memory>
+#include <stdexcept>
 namespace RGL {
 namespace reflection {
     class LuaSandbox{
@@ -14,5 +15,9 @@ namespace reflection {
 
     };
 
+    class LuaTableExcept : public std::runtime_error{
+        public:
+	 explicit LuaTableExcept(const std::string& msg);
+    };
 }
 }
