@@ -151,10 +151,16 @@ json ShaderReflection::getInputs() {
 
 ShaderReflection::ShaderReflection(std::string spirv_path, const std::filesystem::path samplerRulePath) : compiler(read_spirv_from_file(spirv_path)) {
     resources = compiler.get_shader_resources();
-    checkSampler = std::make_unique<CheckSampler>(samplerRulePath,resources, compiler);
-    checkSampler->checkMaterialLayout();
+
     j["spirv_path"] = spirv_path;
     j["shader_type"] = shaderStage2String(compiler.get_execution_model());
+
+    if (spv::ExecutionModelFragment == compiler.get_execution_model()) {
+
+        checkSampler = std::make_unique<CheckSampler>(samplerRulePath,resources, compiler);
+        checkSampler->checkMaterialLayout();
+    }
+
     j["inputs"] = getInputs();
     j["ubos"] = getUniforms();
     j["storage_buffers"] = getStorageBuffers();

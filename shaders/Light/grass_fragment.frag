@@ -9,7 +9,7 @@ layout(location = 0) out vec4 FragColor;
 
 
 layout(std140, binding = 1) uniform MaterialIndices {
-    int baseColorIdx;
+    int base_color_texture;
 };
 
 layout(set=0,binding = 0) uniform sampler2D myTextures[];
@@ -29,7 +29,7 @@ layout(std140,binding=3) uniform DirectionLight{
 void main()
 {
 	float u_translucency = 0.5; // 透光效果强度
-	vec4 albedo = texture(myTextures[baseColorIdx], uv);
+	vec4 albedo = texture(myTextures[base_color_texture], uv);
     
 	if (albedo.a < 0.1) {
 		discard;

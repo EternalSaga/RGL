@@ -1,4 +1,5 @@
 #include <fmt/format.h>
+#include "samplerException.hpp"
 #include "shaderReflection.hpp"
 #include <boost/program_options.hpp>
 #include <boost/program_options/options_description.hpp>
@@ -24,7 +25,7 @@ int main(int argc, char* argv[]) {
 	("output,o", po::value<std::string>()->required(), "output file name, doesn't include any kind of file extension")
 	("config-file,c", po::value<std::string>()->required(), "config file path for reflection config")
 	("sampler_rule,s", po::value<std::string>()->required(), "sampler rules file path, which used to check shader samplers if they are valid for the given rules.");
-
+	// 一些碎碎念，在unix命令行解析规范中，-h 是短选项，--help 是长选项，注意不要写-help，会把elp当成参数传给-h
 	po::variables_map vm;
 	po::store(po::parse_command_line(argc, argv, desc), vm);
 
@@ -44,6 +45,7 @@ int main(int argc, char* argv[]) {
 	RGL::RLLogger::getInstance()->info("Reflecting shader: {}...", input_path);
 
 	// 创建 ShaderReflection 实例，这会触发反射过程
+
 	ShaderReflection reflection(input_path,vm["sampler_rule"].as<std::string>());
 
 	// 通过类型转换操作符获取JSON对象
@@ -88,10 +90,16 @@ int main(int argc, char* argv[]) {
 	RGL::RLLogger::getInstance()->error("Error: {}\nUse --help for a list of options.",e.what());
 
 	return 1;
-    } catch (const std::exception& e) {
+    } 
+	catch (const SamplerException& e){
+	RGL::RLLogger::getInstance()->error("Invalid Sampler: {}",e.what());
+	return 1;	
+	}
+	catch (const std::exception& e) {
 	RGL::RLLogger::getInstance()->error("An error occurred: {}",e.what());
 	return 1;
-    } catch (...) {
+    } 
+	catch (...) {
 	// 捕获所有未知异常
 	RGL::RLLogger::getInstance()->error("An unknown error occurred.");
 

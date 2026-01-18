@@ -39,7 +39,7 @@ function(target_add_shader TARGET_NAME SHADER_SOURCE)
             -t "cpp"
             -d "${PROJECT_SOURCE_DIR}/ShaderReflection/templates"
             -c "${PROJECT_SOURCE_DIR}/configs/shaderRefLogLevel.json"
-            -sampler_rule "${PROJECT_SOURCE_DIR}/configs/SamplerRules.lua"
+            -s "${PROJECT_SOURCE_DIR}/ShaderReflection/templates/SamplerRules.lua"
         COMMAND "${CMAKE_COMMAND}" -E echo "Formatting generated code..."
         COMMAND clang-format -i ${CPP_OUTPUT} ${HPP_OUTPUT}
         

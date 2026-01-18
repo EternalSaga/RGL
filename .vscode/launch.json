@@ -7,15 +7,17 @@
             "program": "${workspaceRoot}/build/ShaderReflection/ShaderReflection.exe",
             "args": [
                 "-i",
-                "D:/program/RGL/build/render_core/shader_systems/generated_shaders/grass-fragment.spv",
+                "D:/program/RGL/build/render_core/shader_systems/generated_shaders/grass_fragment.spv",
                 "--type",
                 "cpp",
                 "-o",
-                "D:/program/RGL/build/render_core/shader_systems/generated_shaders",
+                "D:/program/RGL/build/render_core/shader_systems/generated_shaders/grass_fragment.hpp",
                 "-d",
                 "D:/program/RGL/ShaderReflection/templates",
                 "-c",
-                "D:\\program\\RGL\\configs\\shaderRefLogLevel.json"
+                "D:\\program\\RGL\\configs\\shaderRefLogLevel.json",
+                "-s",
+                "D:/program/RGL/ShaderReflection/templates/SamplerRules.lua"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceRoot}",
