@@ -1,8 +1,14 @@
 #version 460 core
-layout (location = 0) in vec3 inPos;
-layout (location = 1) in vec2 inUV;
-layout (location = 2) in vec3 inNormal;
 
+struct Vertex {
+    vec3 inPos;
+    vec2 inUV;
+    vec3 inNormal;
+};
+
+layout(std430, binding = 2) readonly buffer VertexBuffer {
+    Vertex vertices[];
+};
 
 layout(location = 0) out vec2 uv;
 
@@ -23,17 +29,18 @@ layout(std430,binding = 1) buffer InstanceData{
 
 void main()
 {
+    Vertex v = vertices[gl_VertexIndex];
     mat4 instanceMatrix = instanceMatrices[gl_InstanceIndex];
 
     // 计算世界坐标
-    worldPosition = vec3(instanceMatrix * vec4(inPos, 1.0));
+    worldPosition = vec3(instanceMatrix * vec4(v.inPos, 1.0));
 
     // 计算最终的裁剪空间坐标
     
     gl_Position = projectionMatrix * viewMatrix * vec4(worldPosition, 1.0);
 
-    normal = normalize(mat3(instanceMatrix) * inNormal);
+    normal = normalize(mat3(instanceMatrix) * v.inNormal);
 
 
-    uv = inUV;
+    uv = v.inUV;
 }

@@ -20,7 +20,8 @@ return {
                 Sampler("roughness_texture",  "roughness_map",     "DIFFUSE_ROUGHNESS","white"),
                 Sampler("ao_texture",         "ambient_occlusion_map", "AMBIENT_OCCLUSION", "white"),
                 Sampler("metallic_texture",   "metallic_map",      "METALNESS",        "black"),
-            }
+            },
+            AssimpBindingName = "materialsMap.hpp",
         }
     }
 }

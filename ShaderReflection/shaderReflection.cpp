@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <spirv.hpp>
 #include <spirv_common.hpp>
@@ -149,7 +150,7 @@ json ShaderReflection::getInputs() {
     return inputs;
 }
 
-ShaderReflection::ShaderReflection(std::string spirv_path, const std::filesystem::path samplerRulePath) : compiler(read_spirv_from_file(spirv_path)) {
+ShaderReflection::ShaderReflection(std::string spirv_path, const std::filesystem::path samplerRulePath, const std::filesystem::path vertexRulePath) : compiler(read_spirv_from_file(spirv_path)) {
     resources = compiler.get_shader_resources();
 
     j["spirv_path"] = spirv_path;
@@ -159,9 +160,13 @@ ShaderReflection::ShaderReflection(std::string spirv_path, const std::filesystem
 
         checkSampler = std::make_unique<CheckSampler>(samplerRulePath,resources, compiler);
         checkSampler->checkMaterialLayout();
+    } else if (spv::ExecutionModelVertex == compiler.get_execution_model()) {
+        checkVertex = std::make_unique<CheckVertex>(vertexRulePath, resources, compiler);
+        checkVertex->check();
     }
 
     j["inputs"] = getInputs();
+    j["structs"] = getStructs();
     j["ubos"] = getUniforms();
     j["storage_buffers"] = getStorageBuffers();
     j["samplers"] = getSamplers();
@@ -353,6 +358,126 @@ json ShaderReflection::getStorageBuffers() {
     }
 
     return ssbos;
+}
+
+json ShaderReflection::getStructs() {
+    json structs = json::array();
+    std::set<uint32_t> distinct_struct_ids;
+
+    // Recursive helper to find structs
+    std::function<void(uint32_t)> find_structs;
+    find_structs = [&](uint32_t type_id) {
+        const auto& type = compiler.get_type(type_id);
+        
+        // Skip if not struct
+        if (type.basetype != spirv_cross::SPIRType::Struct) return;
+        
+        // Determine if it is a block (UBO/SSBO)
+        bool is_block = compiler.get_decoration_bitset(type.self).get(spv::DecorationBlock) ||
+                        compiler.get_decoration_bitset(type.self).get(spv::DecorationBufferBlock);
+
+        // If it's a regular struct (not a block) and not visited, add it
+        if (!is_block) {
+            if (distinct_struct_ids.count(type.self)) return;
+            distinct_struct_ids.insert(type.self);
+        } else {
+             // If it is a block, we still need to traverse its members to find nested structs
+             // We don't add the block itself to 'distinct_struct_ids' because blocks are handled by getUniforms/getStorageBuffers
+        }
+
+        // Recurse into members
+        for (auto& member_type_id : type.member_types) {
+            find_structs(member_type_id);
+        }
+    };
+
+    // Helper to scan resource lists
+    auto scan_resources = [&](const spirv_cross::SmallVector<spirv_cross::Resource>& res_list) {
+        for (const auto& resource : res_list) {
+            find_structs(resource.base_type_id);
+        }
+    };
+
+    scan_resources(resources.uniform_buffers);
+    scan_resources(resources.storage_buffers);
+    scan_resources(resources.push_constant_buffers);
+    scan_resources(resources.stage_inputs); 
+    scan_resources(resources.stage_outputs);
+
+    // Generate JSON for collected structs
+    for (uint32_t type_id : distinct_struct_ids) {
+        json struct_json;
+        const auto& type = compiler.get_type(type_id);
+        
+        struct_json["name"] = compiler.get_name(type_id);
+        size_t struct_size = compiler.get_declared_struct_size(type);
+        struct_json["size_bytes"] = struct_size;
+
+        json members = json::array();
+        size_t current_offset = 0;
+        int padding_index = 0;
+
+        struct MemberInfo {
+            json data;
+            size_t offset;
+            size_t size;
+        };
+        std::vector<MemberInfo> raw_members;
+
+        size_t member_count = type.member_types.size();
+        for (uint32_t i = 0; i < member_count; i++) {
+            json member;
+            member["name"] = compiler.get_member_name(type_id, i);
+            
+            auto member_type_id = type.member_types[i];
+            const auto& member_type = compiler.get_type(member_type_id);
+            member["type"] = type_to_string(compiler, member_type);
+            member["is_padding"] = false;
+
+            member["is_array"] = !member_type.array.empty();
+            if (member["is_array"]) {
+                 member["array_element_count"] = member_type.array[0];
+            }
+
+            size_t offset = compiler.get_member_decoration(type_id, i, spv::DecorationOffset);
+            size_t size = compiler.get_declared_struct_member_size(type, i);
+
+            member["offset_bytes"] = offset;
+            member["size_bytes"] = size;
+
+            raw_members.push_back({member, offset, size});
+        }
+
+        std::sort(raw_members.begin(), raw_members.end(), [](const MemberInfo& a, const MemberInfo& b) {
+            return a.offset < b.offset;
+        });
+
+        auto add_padding = [&](size_t needed_size) {
+            json pad;
+            pad["is_padding"] = true;
+            pad["name"] = "padding_" + std::to_string(padding_index++);
+            pad["size_bytes"] = needed_size;
+            pad["type"] = "char"; 
+            members.push_back(pad);
+        };
+
+        for (const auto& item : raw_members) {
+            if (item.offset > current_offset) {
+                add_padding(item.offset - current_offset);
+            }
+            members.push_back(item.data);
+            current_offset = item.offset + item.size;
+        }
+
+        if (struct_size > current_offset) {
+            add_padding(struct_size - current_offset);
+        }
+
+        struct_json["members"] = members;
+        structs.push_back(struct_json);
+    }
+
+    return structs;
 }
 
 json ShaderReflection::getUniforms() {

@@ -20,7 +20,7 @@ namespace glcore {
 
 
     static const std::map<std::string, MaterialTextureRule> AssimpMaterialTable {
-        {% for Parameter in Parameters %}
+        {% for Parameter in Templates.PBR_Standard.Parameters %}
         { 
             "{{ Parameter.shader_variable }}",
             { 

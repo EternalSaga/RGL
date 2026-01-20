@@ -11,8 +11,9 @@ namespace reflection {
         std::shared_ptr<sol::state> luaState;
         std::filesystem::path bindOutputPath;
         nlohmann::json lua2json(const sol::protected_function_result& samplerRule);
+        void generateMaterialBinding(const nlohmann::json& materialBinding, const std::filesystem::path& jinjaTempaltePath);
         public:
-        AssimpMaterialBinding(const std::filesystem::path& bindOutputPath, const std::filesystem::path& samplerRulePath);
+        AssimpMaterialBinding(const std::filesystem::path& bindOutputPath, const std::filesystem::path& samplerRulePath,const std::filesystem::path& jinjaTemplatePath);
         void genBinding();
     };
 }

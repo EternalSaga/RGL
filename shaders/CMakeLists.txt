@@ -15,6 +15,7 @@ function(target_add_shader TARGET_NAME SHADER_SOURCE)
     
     # 定义输出目录 (通常在 build 目录下，保持整洁)
     set(GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_shaders")
+
     file(MAKE_DIRECTORY ${GEN_DIR})
 
     # 定义中间文件 (SPIR-V) 和 最终文件 (C++/HPP) 的路径
@@ -40,6 +41,8 @@ function(target_add_shader TARGET_NAME SHADER_SOURCE)
             -d "${PROJECT_SOURCE_DIR}/ShaderReflection/templates"
             -c "${PROJECT_SOURCE_DIR}/configs/shaderRefLogLevel.json"
             -s "${PROJECT_SOURCE_DIR}/ShaderReflection/templates/SamplerRules.lua"
+            --vertex_rule "${PROJECT_SOURCE_DIR}/ShaderReflection/templates/VertextRule.lua"
+
         COMMAND "${CMAKE_COMMAND}" -E echo "Formatting generated code..."
         COMMAND clang-format -i ${CPP_OUTPUT} ${HPP_OUTPUT}
         
@@ -57,3 +60,36 @@ function(target_add_shader TARGET_NAME SHADER_SOURCE)
 
     message(STATUS "Shader configured: ${SHADER_NAME} -> Will generate C++ at build time.")
 endfunction()
+
+# =============================================================
+# 全局 Assimp Material Binding 生成 Target
+# =============================================================
+# 定义输出路径
+set(BINDING_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/material_bindings")
+file(MAKE_DIRECTORY ${BINDING_GEN_DIR})
+
+set(BINDING_OUTPUT_FILE "${BINDING_GEN_DIR}/AssimpMaterialBinding.hpp")
+
+# 定义资源路径
+set(BINDING_TEMPLATE "${PROJECT_SOURCE_DIR}/ShaderReflection/templates/assimpmaterial_table.hpp.jinja")
+set(SAMPLER_RULES "${PROJECT_SOURCE_DIR}/ShaderReflection/templates/SamplerRules.lua")
+set(CONFIG_FILE "${PROJECT_SOURCE_DIR}/configs/shaderRefLogLevel.json")
+
+# 添加生成命令
+add_custom_command(
+    OUTPUT ${BINDING_OUTPUT_FILE}
+    COMMAND ShaderReflection
+        -t "material_binding"
+        -m "${BINDING_OUTPUT_FILE}"
+        --material_binding_template "${BINDING_TEMPLATE}"
+        -s "${SAMPLER_RULES}"
+        -c "${CONFIG_FILE}"
+    COMMAND "${CMAKE_COMMAND}" -E echo "Formatting generated binding code..."
+    COMMAND clang-format -i ${BINDING_OUTPUT_FILE}
+    DEPENDS ShaderReflection ${BINDING_TEMPLATE} ${SAMPLER_RULES}
+    COMMENT "Generating Assimp Material Binding Header..."
+    VERBATIM
+)
+
+# 创建 Target 供其他库依赖
+add_custom_target(GenAssimpBinding ALL DEPENDS ${BINDING_OUTPUT_FILE})

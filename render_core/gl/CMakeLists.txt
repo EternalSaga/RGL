@@ -44,3 +44,12 @@ target_link_libraries(glFramework PUBLIC EnTT::EnTT)
 find_package(assimp CONFIG REQUIRED)
 target_link_libraries(glFramework PRIVATE assimp::assimp)
 
+# =============================================================
+# 引入 AssimpMaterialBinding 生成的头文件
+# =============================================================
+# 1. 包含生成目录 (路径对应 shaders/CMakeLists.txt 中的输出位置)
+target_include_directories(glFramework PUBLIC "${CMAKE_BINARY_DIR}/shaders/material_bindings")
+
+# 2. 添加依赖，确保编译 glFramework 前先运行 GenAssimpBinding
+add_dependencies(glFramework GenAssimpBinding)
+

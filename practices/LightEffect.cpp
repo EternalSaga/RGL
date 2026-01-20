@@ -69,6 +69,10 @@ using namespace grass_fragment;
 LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) : renderQueues{} {
     this->cam = cam;
 
+    // Initialize container pointers
+    ubos = std::make_shared<UBOs::element_type>();
+    ssbos = std::make_shared<SSBOs::element_type>();
+
     ShaderBytesPath modelShaderSrc = {
 	{SHADER_TYPE::VERTEX, {"shaders\\phong_ubo_instanced.spv"}},
 	{SHADER_TYPE::FRAGMENT, {"shaders\\grass-fragment.spv"}}};
@@ -85,12 +89,16 @@ LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) : renderQueues{} {
     this->grassVAO = VAOCreater::createMeshVAO(*singleGrassMesh, *grassShader);
 
     auto grassFieldEntity = singleReg->create();
-    singleReg->emplace_or_replace<UBOs>(grassFieldEntity, ubos);
 
+    // Setup UBOs
     ubos->emplace(CameraBlock::getUboName(), std::make_shared<UBO>(CameraBlock::BINDING_POINT, sizeof(phong_ubo_instanced::detail::CameraBlockData)));
-    ubos->emplace();
+    ubos->emplace(DirectionLight::getUboName(), std::make_shared<UBO>(DirectionLight::BINDING_POINT, sizeof(grass_fragment::detail::DirectionLightData)));
+    ubos->emplace(MaterialIndices::getUboName(), std::make_shared<UBO>(MaterialIndices::BINDING_POINT, sizeof(grass_fragment::detail::MaterialIndicesData)));
+
+    // Setup SSBOs
     ssbos->emplace(InstanceData::getName(), std::make_shared<SSBO>(InstanceData::BINDING_POINT));
 
+    // Populate SSBO initially (optional if system updates it, but good for safety)
     (*ssbos)[InstanceData::getName()]->updateBuffer(randomTransforms.data(), sizeof(decltype(randomTransforms[0])) * randomTransforms.size());
 
     Transform transform{glm::vec3{0.0f, 0.0f, 0.0f}};
@@ -98,6 +106,10 @@ LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) : renderQueues{} {
 
     const float desiredSize = 10.0f;  // 1.0f约等于1米，所以20.0f约等于20米的草地
     transform.formToAABB(modelLocalAABB, desiredSize);
+
+    // Create and Populate Data Components
+    phong_ubo_instanced::InstanceData instanceDataComp(randomTransforms.size());
+    std::memcpy(const_cast<void*>(instanceDataComp.data()), randomTransforms.data(), randomTransforms.size() * sizeof(decltype(randomTransforms[0])));
 
     singleReg->emplace<Transform>(grassFieldEntity, transform);
     auto [vertCount, idxOffset] = singleGrassMesh->getIdicesCountAndOffset();
@@ -109,6 +121,19 @@ LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) : renderQueues{} {
     singleReg->emplace<RenderTags::Instanced>(grassFieldEntity, 100ull);
     singleReg->emplace<RenderTags::Renderable>(grassFieldEntity);
 
+    // Add components required by InstancedGrassShaderSystem
+    singleReg->emplace<phong_ubo_instanced::InstanceData>(grassFieldEntity, std::move(instanceDataComp));
+    singleReg->emplace<phong_ubo_instanced::CameraBlock>(grassFieldEntity);
+    singleReg->emplace<grass_fragment::DirectionLight>(grassFieldEntity);
+
+    // Set default light
+    auto& light = singleReg->get<grass_fragment::DirectionLight>(grassFieldEntity);
+    // Assuming standard naming convention from the generator
+    light.set_direction(glm::vec3(0.5f, -1.0f, 0.5f));
+    light.set_color(glm::vec3(1.0f, 1.0f, 1.0f));
+
+    singleReg->emplace<grass_fragment::MaterialIndices>(grassFieldEntity);
+
     frameObjectInView(cam, modelLocalAABB);
     const CameraProjection proj = singleReg->ctx().get<CameraProjection>("CameraProjection"_hs);
     const glm::vec3 camPosition = singleReg->ctx().get<glm::vec3>("cameraPos"_hs);
@@ -116,10 +141,23 @@ LoadModelTest::LoadModelTest(std::shared_ptr<Camera> cam) : renderQueues{} {
 
 void LoadModelTest::operator()() {
     cam->update();
-    // updateDirLight();
+
+    // Update CameraBlock Component from Camera
+    auto view = singleReg->view<phong_ubo_instanced::CameraBlock>();
+    for (auto entity : view) {
+	auto& cb = view.get<phong_ubo_instanced::CameraBlock>(entity);
+	cb.set_view(cam->getViewMatrix());
+	cb.set_projection(cam->getProjectionMatrix());
+	cb.set_cameraPos(cam->getPos());
+    }
+
     RenderQueueSystem::populateRenderqueues(renderQueues);
-    RenderQueueSystem::processInstanceQueue(renderQueues.instanceQueue);
+
+    // Update GPU buffers from Components
     instancedGrassShaderSystem.update();
+
+    // Draw
+    RenderQueueSystem::processInstanceQueue(renderQueues.instanceQueue);
 }
 
 LoadModelTest::~LoadModelTest() {

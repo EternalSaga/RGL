@@ -18,10 +18,13 @@ class ShaderReflection {
 
     json getInputs();
 
+    json getStructs();
+
     std::unique_ptr<CheckSampler> checkSampler;
+    std::unique_ptr<CheckVertex> checkVertex;
 
    public:
-    ShaderReflection(std::string spirv_path, const std::filesystem::path samplerRulePath);
+    ShaderReflection(std::string spirv_path, const std::filesystem::path samplerRulePath, const std::filesystem::path vertexRulePath);
     inline explicit operator json() const { return j; }
 };
 }}

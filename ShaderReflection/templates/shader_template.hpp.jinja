@@ -3,8 +3,7 @@
 #include <glm/glm.hpp>
 #include <vector>
 #include <stdexcept>
-#include <span>
-#include <map>
+
 #include "GLTextures.hpp"
 #include "Shader.hpp"
 // Auto-generated shader metadata from ShaderReflection at
@@ -12,6 +11,24 @@
 
 namespace RGL {
 namespace {{shader_name}} {
+
+{% for s in structs %}
+struct {{ s.name }} {
+    {% for member in s.members %}
+    {% if member.is_padding %}
+    char {{ member.name }}[{{ member.size_bytes }}];
+    {% else %}
+    {% if member.is_array %}
+    std::array<{{ glsl_type_to_cpp(member.type) }}, {{ member.array_element_count }}> {{ member.name }};
+    {% else %}
+    {{ glsl_type_to_cpp(member.type) }} {{ member.name }};
+    {% endif %}
+    {% endif %}
+    {% endfor %}
+};
+static_assert(sizeof({{ s.name }}) == {{ s.size_bytes }}, "Size of C++ struct {{ s.name }} does not match shader's struct size!");
+{% endfor %}
+
 namespace detail {
     static const std::string name = "{{shader_name}}";
     static constexpr glcore::SHADER_TYPE shaderType = glcore::SHADER_TYPE::{{ shader_type }};
