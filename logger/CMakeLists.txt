@@ -7,7 +7,7 @@ target_include_directories(rllogger PUBLIC
     $<INSTALL_INTERFACE:include>
 )
 
-target_compile_features(rllogger PUBLIC cxx_std_20)
+target_compile_features(rllogger PRIVATE cxx_std_20)
 
 find_package(spdlog CONFIG REQUIRED)
 target_link_libraries(rllogger PUBLIC spdlog::spdlog_header_only)

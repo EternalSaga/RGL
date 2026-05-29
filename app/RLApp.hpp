@@ -8,7 +8,7 @@
 #include <mutex>
 #include <utility>
 
-
+#include <atomic>
 
 namespace RGL
 {

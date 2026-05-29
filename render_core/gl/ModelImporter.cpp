@@ -5,7 +5,7 @@
 #include <assimp/types.h>
 #include <fmt/format.h>
 #include <spdlog/common.h>
-#include <windef.h>
+
 #include "AABB.hpp"
 #include "EnTTRelationship.hpp"
 #include "GLCheckError.hpp"

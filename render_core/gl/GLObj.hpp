@@ -6,7 +6,6 @@
 #include <glm/fwd.hpp>
 #include <memory>
 #include <spdlog/spdlog.h>
-#include <windef.h>
 
 #include <vector>
 

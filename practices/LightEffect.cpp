@@ -15,20 +15,6 @@
 #include "Material.hpp"
 
 #include "LightEffect.hpp"
-
-#include "rllogger.hpp"
-#include "UBO.hpp"
-
-#include "Mesh.hpp"
-#define GLM_ENABLE_EXPERIMENTAL
-
-#include <glm/gtx/string_cast.hpp>
-#include "GLTextures.hpp"
-#include "grass_fragment.hpp"
-#include "phong_ubo_instanced.hpp"
-#include "InstanceComponent.hpp"
-
-// #include "grass_fragment_shader_template.hpp"
 namespace RGL {
 namespace practice {
 using namespace entt::literals;

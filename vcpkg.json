@@ -97,6 +97,12 @@
     },
     {
       "name": "sol2"
+    },
+    {
+      "name": "vulkan"
+    },
+    {
+      "name": "vulkan-validationlayers"
     }
   ],
   "overrides": [
