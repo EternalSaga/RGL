@@ -82,19 +82,33 @@ static VKAPI_ATTR vk::Bool32 VKAPI_CALL vulkanDebugCallback(
     return VK_FALSE;
 }
 
-export void setupDebugMessenger(vk::raii::Instance& instance) {
+export [[nodiscard]] vk::raii::DebugUtilsMessengerEXT 
+
+setupDebugMessenger(vk::raii::Instance& instance) {
+
     auto* logger = RGL::RLLogger::getInstance();
+
+    
+
     vk::DebugUtilsMessengerCreateInfoEXT createInfo;
+
     createInfo.setMessageSeverity(vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
-				  vk::DebugUtilsMessageSeverityFlagBitsEXT::eError);
+
+                                  vk::DebugUtilsMessageSeverityFlagBitsEXT::eError);
+
     createInfo.setMessageType(vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral |
-			      vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation |
-			      vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance);
-    createInfo.setPfnUserCallback(vulkanDebugCallback);	 // 👈 专门的 Setter
+
+                              vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation |
+
+                              vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance);
+
+    createInfo.setPfnUserCallback(vulkanDebugCallback);
+
     createInfo.setPUserData(logger);
-    vk::DebugUtilsMessageTypeFlagsEXT::BitsType a;
-    // RAII 自动创建，销毁时自动调用销毁逻辑
-    vk::raii::DebugUtilsMessengerEXT debugMessenger(instance, createInfo);
+
+
+    return vk::raii::DebugUtilsMessengerEXT(instance, createInfo);
+
 }
 
 
@@ -118,7 +132,7 @@ for (const auto& device : physicalDevices) {
         uint32_t coreCount = 0;
 
         // 链式结构获取 Vulkan 1.1 / 1.2 的高级属性
-        vk::PhysicalDeviceProperties2 props2;
+        vk::PhysicalDeviceProperties2 props2 = device.getProperties2();
         
         // 方案 A：针对 AMD，获取其 CU (Compute Units) 数量
         vk::PhysicalDeviceShaderCorePropertiesAMD amdShaderProps;
@@ -129,10 +143,9 @@ for (const auto& device : physicalDevices) {
         // 挂载结构体链
         props2.pNext = &subgroupProps;
         subgroupProps.pNext = &amdShaderProps;
-        
-        // 使用 RAII 风格获取扩展属性
-        device.getProperties2(&props2);
 
+
+        
         if (deviceName.find("amd") != std::string::npos && amdShaderProps.shaderEngineCount > 0) {
 
             coreCount = amdShaderProps.shaderEngineCount 
@@ -183,18 +196,13 @@ export struct Graphics_Compute_Transfer_Indices{
     std::optional<uint32_t> transferFamilyIndex;
 };
 
-export Graphics_Compute_Transfer_Indices getGraphicsComputeTransferQueueFamilyIndices(const std::vector<vk::QueueFamilyProperties>& queueFamilyProps){
-    Graphics_Compute_Transfer_Indices indices{};
-    for (uint32_t i = 0; i < queueFamilyProps.size(); i++) {
-        if (queueFamilyProps[i].queueFlags & vk::QueueFlags::BitsType::eGraphics){
-            indices.graphicsFamilyIndex = i;
-        }
-        if (queueFamilyProps[i].queueFlags & vk::QueueFlags::BitsType::eCompute){
-            indices.computeFamilyIndex = i;
-        }
-        if (queueFamilyProps[i].queueFlags & vk::QueueFlags::BitsType::eTransfer){
-            indices.transferFamilyIndex = i;
-        }
-    }
-    return indices;
+export vk::PresentModeKHR selectPresentMode(const std::vector<vk::PresentModeKHR>& presentModes){
+	vk::PresentModeKHR selectedPresentMode = vk::PresentModeKHR::eFifo;
+	for(const auto& availablePresentMode : presentModes){
+		if (availablePresentMode == vk::PresentModeKHR::eImmediate) {
+			selectedPresentMode = availablePresentMode;
+			break;
+		}
+	}
+    return selectedPresentMode;
 }

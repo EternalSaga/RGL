@@ -30,7 +30,11 @@
     },
     {
       "name": "sdl3",
-      "version>=": "3.2.4#0"
+      "version>=": "3.2.4#0",
+      "features": [
+        "wayland",
+        "vulkan"
+      ]
     },
     {
       "name": "glad",
@@ -97,12 +101,6 @@
     },
     {
       "name": "sol2"
-    },
-    {
-      "name": "vulkan"
-    },
-    {
-      "name": "vulkan-validationlayers"
     }
   ],
   "overrides": [

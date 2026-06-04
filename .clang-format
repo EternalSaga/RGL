@@ -1,4 +1,4 @@
-Language: Cpp # Cpp is also used for C
+Language: Cpp
 BasedOnStyle: Google
 
 ColumnLimit: 0
@@ -12,4 +12,18 @@ IndentCaseLabels: false
 AllowShortBlocksOnASingleLine: Empty
 
 AlwaysBreakAfterDefinitionReturnType: None
-SortIncludes: false
+SortIncludes: false # 你的全局默认配置：不排序
+
+---
+# 针对 C++20 模块文件的覆盖配置
+MatchExpressions:
+  - Path: '.*\.cppm$' # 如果你的模块后缀是 .cppm（根据实际情况修改，如 .ixx 或特定目录）
+Style:
+  SortIncludes: true # 允许模块文件排序
+  IncludeBlocks: Regroup
+  IncludeCategories:
+    # 强制让所有头文件至少排在第 1 组之后，给 module; 留出头部空间
+    - Regex:           '^<.*>'
+      Priority:        2
+    - Regex:           '^".*"'
+      Priority:        2

@@ -8,12 +8,7 @@
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceRoot}",
-            "environment": [
-                {
-                    "name": "VK_ADD_LAYER_PATH",
-                    "value": "${command:cmake.buildDirectory}/vcpkg_installed/x64-linux-native/share/vulkan/explicit_layer.d"
-                }
-            ],
+
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
