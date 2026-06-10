@@ -101,6 +101,12 @@
     },
     {
       "name": "sol2"
+    },
+    {
+      "name":"vulkan-memory-allocator"
+    },
+    {
+      "name":"shader-slang"
     }
   ],
   "overrides": [

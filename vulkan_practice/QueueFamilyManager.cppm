@@ -1,4 +1,5 @@
 module;
+#include <fmt/format.h>
 #include "rllogger.hpp"
 #include <stdexcept>
 #include <vulkan/vulkan.hpp>
@@ -20,10 +21,10 @@ struct QueueAllocation {
 
 export class QueueManager {
 public:
-    QueueManager(const vk::raii::PhysicalDevice& physicalDevice) {
+    QueueManager(const vk::raii::PhysicalDevice& physicalDevice):physicalDevice_(physicalDevice) {
         auto queueFamilies = physicalDevice.getQueueFamilyProperties();
         std::map<QueueFamilyRole, uint32_t> roleToFamilies;
-
+        logger = RGL::RLLogger::getInstance();
         // 1. 初步筛选：寻找最符合条件的 Queue Family
         for (uint32_t i = 0; i < queueFamilies.size(); ++i) {
             const auto& props = queueFamilies[i];
@@ -114,8 +115,24 @@ public:
         return allocations_.at(role).familyIndex;
     }
 
+void checkPresentAbility(const vk::raii::SurfaceKHR& surface) const {
+        // 拿到你已经分配给 Graphics 的物理队列家族索引
+        uint32_t graphicsFamilyIdx = getFamilyIndex(QueueFamilyRole::Graphics);
+
+        // 调用 Vulkan 驱动查询该家族是否支持当前的 Surface
+        if (!physicalDevice_.getSurfaceSupportKHR(graphicsFamilyIdx, *surface)) {
+            const auto errMsg = fmt::format("致命错误: 当前 Graphics 队列家族 (Index: {} ) 不支持该窗口 Surface 的 Present 操作！", graphicsFamilyIdx);
+            logger->critical(errMsg);
+            throw std::runtime_error(
+               errMsg
+            );
+        }
+    }
+
 private:
     std::vector<vk::DeviceQueueCreateInfo> queueCreateInfos_;
     std::vector<float> priorities_; 
     std::map<QueueFamilyRole, QueueAllocation> allocations_;
+    const vk::raii::PhysicalDevice& physicalDevice_;
+    RGL::RLLogger* logger;
 };

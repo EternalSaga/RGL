@@ -1,4 +1,5 @@
 module;
+#include <SDL3/SDL_stdinc.h>
 #include <SDL3/SDL_properties.h>
 #include <SDL3/SDL_video.h>
 #include <SDL3/SDL.h>
@@ -106,6 +107,42 @@ export class SDLWindow {
 	logger->warn("[Vulkan] 警告：未找到理想的 sRGB 格式，使用默认首选项。{}", vk::to_string(availableFormats[0].format));
 	return availableFormats[0];
     }
+
+	vk::Extent2D getSwapchainExtend(const vk::SurfaceCapabilitiesKHR& surfaceCapabilities){
+		vk::Extent2D swapchainExtent = surfaceCapabilities.currentExtent;
+
+
+	// 如果currentExtent不是最大值，那么使用currentExtent当前大小
+	if (surfaceCapabilities.currentExtent.width != std::numeric_limits<uint32_t>::max()) {
+		swapchainExtent = surfaceCapabilities.currentExtent;
+	}else{
+		int width,height;
+		SDL_GetWindowSize(window_,&width,&height);
+swapchainExtent.width = std::clamp(static_cast<uint32_t>(width), 
+        surfaceCapabilities.minImageExtent.width, surfaceCapabilities.maxImageExtent.width);
+    swapchainExtent.height = std::clamp(static_cast<uint32_t>(height), 
+        surfaceCapabilities.minImageExtent.height, surfaceCapabilities.maxImageExtent.height);
+	}
+	return swapchainExtent;
+	}
+
+uint32_t getImageCount(const uint32_t minImageCount, const uint32_t maxImageCount) {
+    SDL_PropertiesID props = SDL_GetWindowProperties(window_);
+    uint32_t imageCount = minImageCount;
+
+    // 1. Wayland 直接听操作系统的，绝不加 1
+    if (SDL_HasProperty(props, SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER)) {
+        return imageCount; 
+    }
+
+    imageCount = imageCount + 1;
+
+    if (maxImageCount > 0 && imageCount > maxImageCount) {
+        imageCount = maxImageCount;
+    }
+
+    return imageCount;
+}
 };
 
 }  // namespace RGL

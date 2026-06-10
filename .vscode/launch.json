@@ -8,7 +8,10 @@
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceRoot}",
-
+            "environment": [
+               { "name": "RADV_EXPERIMENTAL", "value": "heap" }
+            ],
+                
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
