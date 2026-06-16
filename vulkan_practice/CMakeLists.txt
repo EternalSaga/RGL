@@ -48,12 +48,12 @@ add_executable(vulkan_practice main.cpp vam_impl.cpp ${MESH_SPV} ${FRAG_SPV})
 
 target_sources(vulkan_practice PUBLIC 
             FILE_SET CXX_MODULES
-            FILES utils.cppm sdl3window.cppm QueueFamilyManager.cppm cube.cppm
+            FILES utils.cppm sdl3window.cppm QueueFamilyManager.cppm cube.cppm shader.cppm
 )
 
 find_package(Vulkan REQUIRED)
-
-target_link_libraries(vulkan_practice PRIVATE Vulkan::Vulkan rllogger)
+find_package(glm CONFIG REQUIRED)
+target_link_libraries(vulkan_practice PRIVATE Vulkan::Vulkan rllogger glm::glm)
 
 find_package(SDL3 CONFIG REQUIRED)
 
