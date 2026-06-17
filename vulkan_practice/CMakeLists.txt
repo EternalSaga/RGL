@@ -45,10 +45,17 @@ message(STATUS "FRAG_SPV is: ${FRAG_SPV}")
 
 add_executable(vulkan_practice main.cpp vam_impl.cpp ${MESH_SPV} ${FRAG_SPV})
 
+add_custom_command(
+    TARGET vulkan_practice POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${PROJECT_SOURCE_DIR}/configs"
+        "${CMAKE_CURRENT_BINARY_DIR}/configs"
+    COMMENT "Copying configs to build directory..."
+)
 
 target_sources(vulkan_practice PUBLIC 
             FILE_SET CXX_MODULES
-            FILES utils.cppm sdl3window.cppm QueueFamilyManager.cppm cube.cppm shader.cppm
+            FILES utils.cppm sdl3window.cppm QueueFamilyManager.cppm cube.cppm shader.cppm VmaBuffer.cppm
 )
 
 find_package(Vulkan REQUIRED)

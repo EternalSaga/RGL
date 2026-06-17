@@ -7,7 +7,7 @@
             "program": "${command:cmake.launchTargetPath}",
             "args": [],
             "stopAtEntry": false,
-            "cwd": "${workspaceRoot}",
+            "cwd": "${command:cmake.launchTargetDirectory}",
             "environment": [
                { "name": "RADV_EXPERIMENTAL", "value": "heap" }
             ],

@@ -5,6 +5,7 @@ import types;
 
 [shader("mesh")]
 [numthreads(32, 1, 1)]
+[outputtopology("triangle")]
 void main( // 改成 main，slangc 瞎子都能认出来
     uint ti : SV_GroupIndex,
     out vertices VertexOutput verts[8],

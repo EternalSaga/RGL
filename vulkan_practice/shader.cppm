@@ -29,11 +29,11 @@ export struct ShaderEffect {
 
 export class RenderPipeline {
 
-  vk::raii::PipelineLayout layout = nullptr;
-  vk::raii::ShaderEXT meshShader = nullptr ;
+  vk::raii::ShaderEXT meshShader = nullptr;
   vk::raii::ShaderEXT fragShader = nullptr;
 
 public:
+  vk::raii::PipelineLayout layout = nullptr;
   RenderPipeline(vk::raii::Device &device, const ShaderEffect &effect) {
 
     // 1. 配置 Push Constants
@@ -51,11 +51,12 @@ public:
     // 根据 VK_EXT_shader_object 规范，不再需要创建 ShaderModule，直接传递
     // SPIR-V 源码
     vk::ShaderCreateInfoEXT meshCreateInfo(
-        {},                                // flags
-        vk::ShaderStageFlagBits::eMeshEXT, // stage
+
+        {},                                 // flags
+        vk::ShaderStageFlagBits::eMeshEXT,  // stage
         vk::ShaderStageFlagBits::eFragment, // nextStage: 告知驱动下一个阶段是
                                             // Frag，利于硬件优化
-        vk::ShaderCodeTypeEXT::eSpirv,                 // codeType
+        vk::ShaderCodeTypeEXT::eSpirv,      // codeType
         effect.meshStageSpv.size() * sizeof(uint32_t), // codeSize
         effect.meshStageSpv.data(),                    // pCode
         "main",                                        // pName (入口点)
@@ -112,37 +113,47 @@ public:
 
     // 2. 动态设置以前硬编码在 Pipeline 里的所有状态
 
-    // 动态视口与裁剪
+    // --- [1] 动态视口与裁剪 ---
     vk::Viewport viewport(0.0f, 0.0f, static_cast<float>(width),
                           static_cast<float>(height), 0.0f, 1.0f);
     vk::Rect2D scissor({0, 0}, {width, height});
-    cmd.setViewportWithCountEXT(viewport);
-    cmd.setScissorWithCountEXT(scissor);
+    cmd.setViewportWithCount(viewport);
+    cmd.setScissorWithCount(scissor);
 
-    // 动态光栅化状态 (对应你原代码的 rasterizer)
+    // --- [2] 动态光栅化状态 ---
     cmd.setPolygonModeEXT(vk::PolygonMode::eFill);
     cmd.setCullMode(vk::CullModeFlagBits::eBack);
     cmd.setFrontFace(vk::FrontFace::eCounterClockwise);
     cmd.setRasterizerDiscardEnable(false);
 
-    // 动态多重采样 (对应你原代码的 multisampling)
+    // ✨【修复当前报错】显式关闭深度偏移（Depth Bias）
+    cmd.setDepthBiasEnable(false);
+    cmd.setDepthBias(0.0f, 0.0f,
+                     0.0f); // 某些严格的驱动即使关闭了也要求调用一次设值
+
+    // --- [3] 动态深度与模板测试 ---
+    cmd.setDepthTestEnable(true);                // 开启深度测试
+    cmd.setDepthWriteEnable(true);               // 允许写入深度
+    cmd.setDepthCompareOp(vk::CompareOp::eLess); // 越近越渲染
+    cmd.setDepthBoundsTestEnable(false);         // 关闭深度边界测试
+    cmd.setStencilTestEnable(false);             // 关闭模板测试
+
+    // --- [4] 动态多重采样 (Multisampling) ---
     cmd.setRasterizationSamplesEXT(vk::SampleCountFlagBits::e1);
     vk::SampleMask sampleMask = 0xFFFFFFFF;
     cmd.setSampleMaskEXT(vk::SampleCountFlagBits::e1, sampleMask);
     cmd.setAlphaToCoverageEnableEXT(false);
+    cmd.setAlphaToOneEnableEXT(
+        false); // ✨【提前防御】防止下一步报 AlphaToOne 未设置
 
-    // 动态颜色混合 (对应你原代码的 colorBlending 和 colorBlendAttachment)
-    vk::Bool32 blendEnable = VK_FALSE;
-    cmd.setColorBlendEnableEXT(0,
-                               blendEnable); // 针对 Attachment 0 关闭混合
+    // --- [5] 动态颜色混合与逻辑操作 (Color Blending & Logic Op) ---
+    cmd.setColorBlendEnableEXT(0, VK_FALSE); // 针对 Attachment 0 关闭混合
 
     vk::ColorComponentFlags colorWriteMask =
         vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
         vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
-    cmd.setColorWriteMaskEXT(0, colorWriteMask);
+    cmd.setColorWriteMaskEXT(0, colorWriteMask); // 允许写入 RGBA
 
-    // 拓扑结构 (尽管使用 Mesh Shader，规范仍要求必须设置默认拓扑以通过校验层)
-    cmd.setPrimitiveTopology(vk::PrimitiveTopology::eTriangleList);
-    cmd.setPrimitiveRestartEnable(false);
+    cmd.setLogicOpEnableEXT(false);
   }
 };
