@@ -35,6 +35,7 @@ int main() {
     std::vector<const char *> instanceExtensions = {
         VK_EXT_DEBUG_UTILS_EXTENSION_NAME,
         VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME,
+        VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME,
         VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME};
 
     for (uint32_t i = 0; i < surfaceCount; i++) {
@@ -71,7 +72,10 @@ int main() {
         vk::PhysicalDeviceMeshShaderFeaturesEXT,
         vk::PhysicalDeviceDescriptorHeapFeaturesEXT,
         vk::PhysicalDeviceSwapchainMaintenance1FeaturesKHR,
-        vk::PhysicalDeviceShaderObjectFeaturesEXT>();
+        vk::PhysicalDeviceShaderObjectFeaturesEXT,
+        vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR,
+        vk::PhysicalDeviceDescriptorBufferFeaturesEXT
+        >();
 
     featuresChain.get<vk::PhysicalDeviceFeatures2>()
         .features.robustBufferAccess = VK_TRUE;
@@ -108,9 +112,20 @@ int main() {
     fMesh.meshShader = VK_TRUE;
     fMesh.taskShader = VK_FALSE;
 
+    auto& descBufferFeatures = featuresChain.get<vk::PhysicalDeviceDescriptorBufferFeaturesEXT>();
+    descBufferFeatures.descriptorBuffer = VK_TRUE;
+
     auto &swapchainMaintenance1Features =
         featuresChain.get<vk::PhysicalDeviceSwapchainMaintenance1FeaturesKHR>();
     swapchainMaintenance1Features.swapchainMaintenance1 = VK_TRUE;
+    auto &fUntypedPointers =
+        featuresChain.get<vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR>();
+    fUntypedPointers.shaderUntypedPointers = VK_TRUE;
+
+    auto &fDescriptorHeap =
+        featuresChain.get<vk::PhysicalDeviceDescriptorHeapFeaturesEXT>();
+    fDescriptorHeap.descriptorHeap = VK_TRUE;
+    fDescriptorHeap.descriptorHeapCaptureReplay = VK_TRUE;
 
     vk::DeviceCreateInfo deviceCreateInfo{};
     deviceCreateInfo.setPNext(
@@ -122,9 +137,11 @@ int main() {
         VK_EXT_MESH_SHADER_EXTENSION_NAME,
         VK_EXT_SHADER_OBJECT_EXTENSION_NAME,
         VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME,
+        VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME,
         VK_KHR_DYNAMIC_RENDERING_LOCAL_READ_EXTENSION_NAME,
         VK_EXT_DEVICE_GENERATED_COMMANDS_EXTENSION_NAME,
-        VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME
+        VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME,
+        VK_KHR_SHADER_UNTYPED_POINTERS_EXTENSION_NAME
 
     };
 
@@ -279,6 +296,55 @@ int main() {
         allocator.createBuffer(indexBufInfo, allocCreateInfo, &indexAllocInfo);
     std::memcpy(indexAllocInfo.pMappedData, cubeIndices.data(),
                 indexBufInfo.size);
+    auto propChain =
+        bestPhysicalDevice
+            .getProperties2<vk::PhysicalDeviceProperties2,
+                            vk::PhysicalDeviceDescriptorHeapPropertiesEXT>();
+
+    auto &baseProps = propChain.get<vk::PhysicalDeviceProperties2>();
+    auto &heapProps =
+        propChain.get<vk::PhysicalDeviceDescriptorHeapPropertiesEXT>();
+
+    uint32_t resDescriptorSize =
+        std::max(static_cast<uint32_t>(heapProps.bufferDescriptorSize),
+                 static_cast<uint32_t>(heapProps.imageDescriptorSize));
+
+    vk::BufferCreateInfo descriptorHeapInfo{};
+    descriptorHeapInfo.size = resDescriptorSize * 1024;
+    descriptorHeapInfo.usage =
+        vk::BufferUsageFlagBits::eShaderDeviceAddress | 
+                           vk::BufferUsageFlagBits::eDescriptorHeapEXT;
+
+    VmaDescriptorHeap myResourceHeap = allocator.createDescriptorHeap(
+        device, 1024, resDescriptorSize,
+        vk::BufferUsageFlagBits::eDescriptorHeapEXT);
+
+    vk::DeviceAddressRangeEXT vertexBufferRange{};
+    vertexBufferRange.address =
+        vertexBuffer.getAddress(device);
+    vertexBufferRange.size =
+        cubeVertices.size() * sizeof(Vertex);
+
+    vk::ResourceDescriptorDataEXT descriptorData{};
+
+    descriptorData.pAddressRange = &vertexBufferRange;
+
+
+    vk::ResourceDescriptorInfoEXT resourceInfo{};
+    resourceInfo.type =
+        vk::DescriptorType::eStorageBuffer;
+    resourceInfo.data = descriptorData;
+
+    uint32_t myBufferSlot = 0; 
+    void *slotCpuAddress = myResourceHeap.getSlotCpuAddress(myBufferSlot);
+
+    vk::HostAddressRangeEXT destHostRange{};
+    destHostRange.address = slotCpuAddress;
+    destHostRange.size =
+        heapProps
+            .bufferDescriptorSize; 
+
+    device.writeResourceDescriptorsEXT(resourceInfo, destHostRange);
 
     ShaderEffect cubeEffect;
     cubeEffect.meshStageSpv = loadShaderSpv("generated_shaders/cube.mesh.spv");
@@ -309,18 +375,16 @@ int main() {
       presentFences.emplace_back(device, presentFenceInfo);
     }
 
-    uint32_t currentFrame = 0; // 记录当前使用的是哪一套同步对象（0 或 1）
-
-    // 2. 模拟一个极简的 MVP 矩阵 (这里先用单位矩阵，或者让它转起来)
+    uint32_t currentFrame = 0;
     PushConstants pushConstants{};
-    pushConstants.vertexBufferAddress = vertexBuffer.getAddress(device);
-    pushConstants.indexBufferAddress = indexBuffer.getAddress(device);
+    pushConstants.verticesBuffer = vertexBuffer.getAddress(device);
+    pushConstants.indicesBuffer  = indexBuffer.getAddress(device);
     pushConstants.mvp = glm::mat4(
         1.0f); // 生产环境用 glm::perspective * glm::lookAt * glm::rotate
     vk::CommandBufferAllocateInfo allocInfoCmd{
         *graphicsCommandPool, vk::CommandBufferLevel::ePrimary,
         static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT)};
-    // raii 会自动返回一个包含 2 个 CommandBuffer 的 std::vector
+
     std::vector<vk::raii::CommandBuffer> commandBuffers =
         device.allocateCommandBuffers(allocInfoCmd);
 
@@ -353,18 +417,16 @@ int main() {
 
     commandBuffers[currentFrame].end();
 
-    // 立即提交并等待完成，确保循环开始前布局已就绪
     vk::SubmitInfo initSubmit{};
     initSubmit.setCommandBuffers(*commandBuffers[currentFrame]);
     graphicsQueue.submit(initSubmit, nullptr);
     graphicsQueue.waitIdle();
     commandBuffers[currentFrame].reset();
 
-    // 3. 游戏/渲染主循环
     bool shouldClose = false;
     bool framebufferResized = false;
     while (!shouldClose) {
-      // 处理 SDL 事件，免得窗口卡死
+
       SDL_Event event;
       while (SDL_PollEvent(&event)) {
         if (event.type == SDL_EVENT_QUIT) {
@@ -372,30 +434,24 @@ int main() {
         }
       }
 
-      // 1. ✨ 双重等待：确保 GPU 渲染完了 (inFlight)，且 Plasma
-      // 已经把这一套的资源释放了 (present)
       auto waitResult = device.waitForFences(
           {*inFlightFences[currentFrame], *presentFences[currentFrame]},
           VK_TRUE, std::numeric_limits<uint64_t>::max());
-      // 同时重置这两个 Fence
+
       device.resetFences(
           {*inFlightFences[currentFrame], *presentFences[currentFrame]});
 
-      // 2. 获取图片，传入属于当前帧的信号量
       auto [acquireResult, imageIndex] = swapchain.acquireNextImage(
           std::numeric_limits<uint64_t>::max(),
           *imageAvailableSemaphores[currentFrame], nullptr);
 
-      // 3. 重置当前槽位的 Command Buffer 并录制
       commandBuffers[currentFrame].reset();
       vk::CommandBufferBeginInfo beginInfo{
           vk::CommandBufferUsageFlagBits::eOneTimeSubmit};
 
       commandBuffers[currentFrame].begin(beginInfo);
       vk::ImageMemoryBarrier colorPresentToDrawBarrier{};
-      colorPresentToDrawBarrier.oldLayout =
-          vk::ImageLayout::eUndefined; // 使用 Undefined
-                                       // 可以让硬件直接擦除旧数据，提升效率
+      colorPresentToDrawBarrier.oldLayout = vk::ImageLayout::eUndefined;
       colorPresentToDrawBarrier.newLayout =
           vk::ImageLayout::eColorAttachmentOptimal;
       colorPresentToDrawBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -416,7 +472,6 @@ int main() {
           vk::PipelineStageFlagBits::eColorAttachmentOutput, {}, nullptr,
           nullptr, colorPresentToDrawBarrier);
 
-      // 现代 Vulkan 核心：使用 Dynamic Rendering (动态渲染) 代替 RenderPass
       vk::RenderingAttachmentInfo colorAttachment{};
       colorAttachment.imageView = *swapchainImageViews[imageIndex];
       colorAttachment.imageLayout = vk::ImageLayout::eColorAttachmentOptimal;
@@ -440,26 +495,25 @@ int main() {
       renderingInfo.setColorAttachments(colorAttachment);
       renderingInfo.setPDepthAttachment(&depthAttachment);
 
-      // 开始动态渲染
       commandBuffers[currentFrame].beginRendering(renderingInfo);
 
-      // 绑定你写在 shader.cppm 里的那堆动态状态
       cubePipeline.recordRenderCommands(commandBuffers[currentFrame],
                                         swapchainExtent.width,
                                         swapchainExtent.height);
+      uint64_t heapBaseGpuAddress = myResourceHeap.getGpuAddress(); // 获取大堆的真实物理首地址
+uint32_t heapTotalSize      = resDescriptorSize * 1024;       // 大堆总字节大小
+      vk::DeviceAddressRangeEXT heapRange{};
+      heapRange.address = heapBaseGpuAddress; // 大堆的 GPU 显存首地址
+    heapRange.size    = heapTotalSize;       // 整个大堆的总字节大小
+        vk::BindHeapInfoEXT bindHeapInfo{};
+        bindHeapInfo.heapRange           = heapRange;
+        bindHeapInfo.reservedRangeSize   = 0;
+        bindHeapInfo.reservedRangeOffset = heapProps.minResourceHeapReservedRange;
+      commandBuffers[currentFrame].bindResourceHeapEXT(bindHeapInfo);
+      commandBuffers[currentFrame].pushDataEXT(vk::PushDataInfoEXT(
+          0,
+          vk::HostAddressRangeConstEXT(&pushConstants, sizeof(PushConstants))));
 
-      commandBuffers[currentFrame].pushConstants(
-          cubePipeline.layout, // 1. PipelineLayout
-          vk::ShaderStageFlagBits::eMeshEXT |
-              vk::ShaderStageFlagBits::eFragment, // 2. Shader Stage
-          0,                                      // 3. Offset
-          vk::ArrayProxy<const PushConstants>(
-              1, &pushConstants) // 4. Data (ArrayProxy)
-      );
-
-      // 【最核心的临门一脚】：调用 Mesh Shader 的绘制命令！
-      // 你的立方体有 12 个三角形，每个工作组处理 1 个（或者你在 Slang 里写了 ti
-      // < totalPrimitives） 对应着执行 1 个工作组就够拉取 12 个面了
       commandBuffers[currentFrame].drawMeshTasksEXT(1, 1, 1);
 
       commandBuffers[currentFrame].endRendering();
@@ -488,7 +542,6 @@ int main() {
 
       commandBuffers[currentFrame].end();
 
-      // 提交到 Graphics 队列
       vk::PipelineStageFlags waitStages[] = {
           vk::PipelineStageFlagBits::eColorAttachmentOutput};
       vk::SubmitInfo submitInfo{};
@@ -497,28 +550,21 @@ int main() {
       submitInfo.setCommandBuffers(*commandBuffers[currentFrame]);
       submitInfo.setSignalSemaphores(*renderFinishedSemaphores[currentFrame]);
 
-      // 压入当前帧的 Fence
       graphicsQueue.submit(submitInfo, *inFlightFences[currentFrame]);
 
-      // 5. ✨【现代 Vulkan 的绝活】：利用 pNext 挂载 Present Fence
       vk::SwapchainPresentFenceInfoEXT presentFenceInfoEXT{};
-      presentFenceInfoEXT.setFences(
-          *presentFences[currentFrame]); // 把当前槽位的 presentFence 拴上去
-
+      presentFenceInfoEXT.setFences(*presentFences[currentFrame]);
       vk::PresentInfoKHR presentInfo{};
-      presentInfo.setPNext(&presentFenceInfoEXT); // 🌟 极其干净的扩展绑定
-      presentInfo.setWaitSemaphores(
-          *renderFinishedSemaphores[currentFrame]); // ✨ 回归 currentFrame
+      presentInfo.setPNext(&presentFenceInfoEXT);
+      presentInfo.setWaitSemaphores(*renderFinishedSemaphores[currentFrame]);
       presentInfo.setSwapchains(*swapchain);
       presentInfo.setImageIndices(imageIndex);
 
       auto presentResult = graphicsQueue.presentKHR(presentInfo);
 
-      // 完美的帧交替
       currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
     }
 
-    // 退出前等 GPU 忙完
     device.waitIdle();
 
   } catch (const std::exception &e) {

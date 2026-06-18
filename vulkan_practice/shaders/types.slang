@@ -1,6 +1,4 @@
-// ==========================================
-// 1. 基础结构体定义 (干净的 C++ 风格)
-// ==========================================
+
 struct Vertex
 {
     float3 position;
@@ -16,10 +14,8 @@ struct VertexOutput
 struct PushConstants
 {
     float4x4 mvp;
-    Vertex* vertices; // 真正的 BDA 顶点指针
-    uint* indices;  // 真正的 BDA 索引指针
+    StructuredBuffer<Vertex>.Handle verticesHandle; // 顶点缓冲在堆里的句柄
+    StructuredBuffer<uint>.Handle   indicesHandle;  // 索引缓冲在堆里的句柄
 };
 
-// 完美的零 Descriptor 绑定，直接挂载到 Vulkan Push Constant
-[vk::push_constant]
-PushConstants push;
+[[vk::push_constant]] PushConstants push;

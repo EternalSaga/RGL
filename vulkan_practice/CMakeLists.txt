@@ -1,13 +1,16 @@
+set(SLANG_INSTALL_DIR "$ENV{HOME}/program/slang/build/Release")
+
 find_program(SLANGC_EXECUTABLE slangc
-    PATHS "${CMAKE_CURRENT_BINARY_DIR}/vulkan_practice/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/tools/slang"
-          "${CMAKE_SOURCE_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/tools/slang"
+    PATHS "${SLANG_INSTALL_DIR}"
+          "${SLANG_INSTALL_DIR}/bin"
+    HINTS "${SLANG_INSTALL_DIR}/bin"
 )
 
-if(NOT SLANG_COMPILER)
-    message(FATAL_ERROR "找不到 slangc 编译器！请检查 vcpkg 是否成功安装了 shader-slang")
+if(NOT SLANGC_EXECUTABLE)
+    message(FATAL_ERROR "找不到 slangc 编译器！请检查是否成功安装了 shader-slang")
 endif()
 
-message(STATUS "找到 Slang 编译器: ${SLANG_COMPILER}")
+message(STATUS "找到 Slang 编译器: ${SLANGC_EXECUTABLE}")
 
 
 function(compile_slang SHADER_SOURCE OUT_SPV_PATH)
@@ -28,7 +31,8 @@ function(compile_slang SHADER_SOURCE OUT_SPV_PATH)
         OUTPUT ${OUTPUT_SPV}
         COMMAND ${SLANGC_EXECUTABLE} ${SHADER_ABS}
                 -target spirv
-                -profile sm_6_5
+                -capability spvDescriptorHeapEXT
+                -profile sm_6_6+spirv_1_6
                 -I "${SHADER_DIR}"
                 -o ${OUTPUT_SPV}
         DEPENDS ${SHADER_ABS}

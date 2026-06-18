@@ -2,6 +2,7 @@ module;
 #include <vector>
 #include <cstdint>
 #include <glm/glm.hpp>
+#include <vulkan/vulkan_raii.hpp>
 export module cube;
 export struct Vertex {
     float position[3];
@@ -32,6 +33,6 @@ export const std::vector<uint32_t> cubeIndices = {
 
 export struct PushConstants {
     glm::mat4 mvp;
-    uint64_t vertexBufferAddress;
-    uint64_t indexBufferAddress; // 新增：索引缓冲地址
+    vk::DeviceAddress verticesBuffer;
+    vk::DeviceAddress indicesBuffer;
 };

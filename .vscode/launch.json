@@ -9,7 +9,8 @@
             "stopAtEntry": false,
             "cwd": "${command:cmake.launchTargetDirectory}",
             "environment": [
-               { "name": "RADV_EXPERIMENTAL", "value": "heap" }
+               { "name": "RADV_EXPERIMENTAL", "value": "heap" },
+               //{ "name": "RADV_DEBUG", "value": "hang,syncshaders,allbos" },
             ],
                 
             "externalConsole": false,
