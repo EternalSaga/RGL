@@ -36,47 +36,37 @@ public:
   vk::raii::PipelineLayout layout = nullptr;
   RenderPipeline(vk::raii::Device &device, const ShaderEffect &effect) {
 
-    // 1. 配置 Push Constants
-    // 虽然 Shader Object 可以独立指定布局，但为了后续 vkCmdPushConstants
-    // 的兼容性， 依然建议创建一个 PipelineLayout。
-    // vk::PushConstantRange pushConstantRange(
-    //     vk::ShaderStageFlagBits::eMeshEXT | vk::ShaderStageFlagBits::eFragment,
-    //     0, effect.pushConstantSize);
-
-    // vk::PipelineLayoutCreateInfo layoutCreateInfo({}, 0, nullptr, 1,
-    //                                               &pushConstantRange, nullptr);
-    // layout = vk::raii::PipelineLayout(device, layoutCreateInfo);
+    // 1. 配置 Push Constants 范围 (与 Slang 同步: 80 字节)
+    vk::PushConstantRange pushConstantRange(
+        vk::ShaderStageFlagBits::eMeshEXT | vk::ShaderStageFlagBits::eFragment,
+        0, 80);
 
     // 2. 创建 Mesh Shader Object 配置
-    // 根据 VK_EXT_shader_object 规范，不再需要创建 ShaderModule，直接传递
-    // SPIR-V 源码
     vk::ShaderCreateInfoEXT meshCreateInfo(
-
         {vk::ShaderCreateFlagBitsEXT::eDescriptorHeap},                                 // flags
         vk::ShaderStageFlagBits::eMeshEXT,  // stage
-        vk::ShaderStageFlagBits::eFragment, // nextStage: 告知驱动下一个阶段是
-                                            // Frag，利于硬件优化
+        vk::ShaderStageFlagBits::eFragment, // nextStage
         vk::ShaderCodeTypeEXT::eSpirv,      // codeType
         effect.meshStageSpv.size() * sizeof(uint32_t), // codeSize
         effect.meshStageSpv.data(),                    // pCode
-        "main",                                        // pName (入口点)
-        0, nullptr,            // setLayoutCount, pSetLayouts
-        0, nullptr, // pushConstantRangeCount, pPushConstantRanges
-        nullptr                // pSpecializationInfo
+        "main",                                        // pName
+        0, nullptr,                                    // setLayoutCount
+        0, nullptr,                                    // pushConstantRangeCount (Must be 0 when using eDescriptorHeap)
+        nullptr                                        // pSpecializationInfo
     );
 
     // 3. 创建 Fragment Shader Object 配置
     vk::ShaderCreateInfoEXT fragCreateInfo(
         {vk::ShaderCreateFlagBitsEXT::eDescriptorHeap},                                 // flags
         vk::ShaderStageFlagBits::eFragment, // stage
-        {},                                 // nextStage: 已经是最后一阶段，填空
+        {},                                 // nextStage
         vk::ShaderCodeTypeEXT::eSpirv,      // codeType
         effect.fragStageSpv.size() * sizeof(uint32_t), // codeSize
         effect.fragStageSpv.data(),                    // pCode
         "main",                                        // pName
-        0, nullptr,            // setLayoutCount, pSetLayouts
-        0, nullptr, // pushConstantRangeCount, pPushConstantRanges
-        nullptr                // pSpecializationInfo
+        0, nullptr,                                    // setLayoutCount
+        0, nullptr,                                    // pushConstantRangeCount (Must be 0 when using eDescriptorHeap)
+        nullptr                                        // pSpecializationInfo
     );
 
     // 4. 使用 vkCreateShadersEXT 批量创建着色器对象

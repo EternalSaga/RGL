@@ -33,6 +33,6 @@ export const std::vector<uint32_t> cubeIndices = {
 
 export struct PushConstants {
     glm::mat4 mvp;
-    vk::DeviceAddress verticesBuffer;
-    vk::DeviceAddress indicesBuffer;
+    uint64_t verticesHandle;
+    uint64_t indicesHandle;
 };
