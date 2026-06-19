@@ -65,7 +65,7 @@ target_sources(vulkan_practice PUBLIC
 find_package(Vulkan REQUIRED)
 find_package(glm CONFIG REQUIRED)
 target_link_libraries(vulkan_practice PRIVATE Vulkan::Vulkan rllogger glm::glm)
-
+target_compile_definitions(vulkan_practice PRIVATE GLM_FORCE_DEPTH_ZERO_TO_ONE GLM_FORCE_RADIANS)
 find_package(SDL3 CONFIG REQUIRED)
 
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)

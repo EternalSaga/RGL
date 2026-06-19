@@ -104,8 +104,14 @@ public:
     // 2. 动态设置以前硬编码在 Pipeline 里的所有状态
 
     // --- [1] 动态视口与裁剪 ---
-    vk::Viewport viewport(0.0f, 0.0f, static_cast<float>(width),
-                          static_cast<float>(height), 0.0f, 1.0f);
+vk::Viewport viewport(
+    0.0f, 
+    static_cast<float>(height), 
+    static_cast<float>(width), 
+    -static_cast<float>(height), 
+    0.0f, 
+    1.0f
+);
     vk::Rect2D scissor({0, 0}, {width, height});
     cmd.setViewportWithCount(viewport);
     cmd.setScissorWithCount(scissor);
@@ -113,7 +119,7 @@ public:
     // --- [2] 动态光栅化状态 ---
     cmd.setPolygonModeEXT(vk::PolygonMode::eFill);
     cmd.setCullMode(vk::CullModeFlagBits::eBack);
-    cmd.setFrontFace(vk::FrontFace::eCounterClockwise);
+    cmd.setFrontFace(vk::FrontFace::eClockwise);
     cmd.setRasterizerDiscardEnable(false);
 
     // ✨【修复当前报错】显式关闭深度偏移（Depth Bias）

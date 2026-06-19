@@ -451,7 +451,15 @@ int main() {
           shouldClose = true;
         }
       }
+      float time = SDL_GetTicks() / 1000.0f; // 获取秒数
 
+
+glm::mat4 model = glm::rotate(glm::mat4(1.0f), time, glm::vec3(0.5f, 1.0f, 0.0f));
+glm::mat4 view  = glm::lookAt(glm::vec3(0.0f, 0.0f, 3.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+glm::mat4 proj  = glm::perspective(glm::radians(45.0f), (float)swapchainExtent.width / (float)swapchainExtent.height, 0.1f, 10.0f);
+
+
+pushConstants.mvp = proj * view * model;
       auto waitResult = device.waitForFences(
           {*inFlightFences[currentFrame], *presentFences[currentFrame]},
           VK_TRUE, std::numeric_limits<uint64_t>::max());
