@@ -1,4 +1,3 @@
-
 struct Vertex
 {
     float3 position;
@@ -14,8 +13,6 @@ struct VertexOutput
 struct PushConstants
 {
     float4x4 mvp;
-    StructuredBuffer<Vertex>.Handle verticesHandle; // 顶点缓冲在堆里的句柄
-    StructuredBuffer<uint>.Handle   indicesHandle;  // 索引缓冲在堆里的句柄
 };
 
 [[vk::push_constant]] PushConstants push;

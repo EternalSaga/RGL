@@ -74,8 +74,7 @@ int main() {
         vk::PhysicalDeviceSwapchainMaintenance1FeaturesKHR,
         vk::PhysicalDeviceShaderObjectFeaturesEXT,
         vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR,
-        vk::PhysicalDeviceDescriptorBufferFeaturesEXT
-        >();
+        vk::PhysicalDeviceDescriptorBufferFeaturesEXT>();
 
     featuresChain.get<vk::PhysicalDeviceFeatures2>()
         .features.robustBufferAccess = VK_TRUE;
@@ -105,6 +104,10 @@ int main() {
     f14.maintenance5 = VK_TRUE;
     f14.maintenance6 = VK_TRUE;
 
+    auto &fDescriptorBuffer =
+        featuresChain.get<vk::PhysicalDeviceDescriptorBufferFeaturesEXT>();
+    fDescriptorBuffer.descriptorBuffer = VK_TRUE;
+
     auto &fShaderOjbect =
         featuresChain.get<vk::PhysicalDeviceShaderObjectFeaturesEXT>();
     fShaderOjbect.shaderObject = VK_TRUE;
@@ -112,7 +115,8 @@ int main() {
     fMesh.meshShader = VK_TRUE;
     fMesh.taskShader = VK_FALSE;
 
-    auto& descBufferFeatures = featuresChain.get<vk::PhysicalDeviceDescriptorBufferFeaturesEXT>();
+    auto &descBufferFeatures =
+        featuresChain.get<vk::PhysicalDeviceDescriptorBufferFeaturesEXT>();
     descBufferFeatures.descriptorBuffer = VK_TRUE;
 
     auto &swapchainMaintenance1Features =
@@ -278,7 +282,8 @@ int main() {
     vk::BufferCreateInfo indexBufInfo{};
     indexBufInfo.size = cubeIndices.size() * sizeof(uint32_t);
     indexBufInfo.usage = vk::BufferUsageFlagBits::eStorageBuffer |
-                         vk::BufferUsageFlagBits::eShaderDeviceAddress;
+                         vk::BufferUsageFlagBits::eShaderDeviceAddress |
+                         vk::BufferUsageFlagBits::eResourceDescriptorBufferEXT;
 
     VmaAllocationCreateInfo allocCreateInfo{
         .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
@@ -309,21 +314,13 @@ int main() {
         std::max(static_cast<uint32_t>(heapProps.bufferDescriptorSize),
                  static_cast<uint32_t>(heapProps.imageDescriptorSize));
 
-    vk::BufferCreateInfo descriptorHeapInfo{};
-    descriptorHeapInfo.size = resDescriptorSize * 1024;
-    descriptorHeapInfo.usage =
-        vk::BufferUsageFlagBits::eShaderDeviceAddress | 
-                           vk::BufferUsageFlagBits::eDescriptorHeapEXT;
-
     VmaDescriptorHeap myResourceHeap = allocator.createDescriptorHeap(
         device, 1024, resDescriptorSize,
         vk::BufferUsageFlagBits::eDescriptorHeapEXT);
 
-    // --- [写入描述符堆] ---
-    // 1. 准备顶点缓冲描述符 (Slot 0)
     vk::DeviceAddressRangeEXT vertexBufferRange{};
     vertexBufferRange.address = vertexBuffer.getAddress(device);
-    vertexBufferRange.size    = cubeVertices.size() * sizeof(Vertex);
+    vertexBufferRange.size = cubeVertices.size() * sizeof(Vertex);
 
     vk::ResourceDescriptorDataEXT vertexDescData{};
     vertexDescData.pAddressRange = &vertexBufferRange;
@@ -332,10 +329,9 @@ int main() {
     vertexResourceInfo.type = vk::DescriptorType::eStorageBuffer;
     vertexResourceInfo.data = vertexDescData;
 
-    // 2. 准备索引缓冲描述符 (Slot 1)
     vk::DeviceAddressRangeEXT indexBufferRange{};
     indexBufferRange.address = indexBuffer.getAddress(device);
-    indexBufferRange.size    = cubeIndices.size() * sizeof(uint32_t);
+    indexBufferRange.size = cubeIndices.size() * sizeof(uint32_t);
 
     vk::ResourceDescriptorDataEXT indexDescData{};
     indexDescData.pAddressRange = &indexBufferRange;
@@ -344,15 +340,18 @@ int main() {
     indexResourceInfo.type = vk::DescriptorType::eStorageBuffer;
     indexResourceInfo.data = indexDescData;
 
-    // 3. 执行物理烧录
     uint32_t vertexSlot = 0;
-    uint32_t indexSlot  = 1;
+    uint32_t indexSlot = 1;
 
-    device.writeResourceDescriptorsEXT(vertexResourceInfo, 
-        vk::HostAddressRangeEXT(myResourceHeap.getSlotCpuAddress(vertexSlot), heapProps.bufferDescriptorSize));
-    
-    device.writeResourceDescriptorsEXT(indexResourceInfo, 
-        vk::HostAddressRangeEXT(myResourceHeap.getSlotCpuAddress(indexSlot), heapProps.bufferDescriptorSize));
+    device.writeResourceDescriptorsEXT(
+        vertexResourceInfo,
+        vk::HostAddressRangeEXT(myResourceHeap.getSlotCpuAddress(vertexSlot),
+                                heapProps.bufferDescriptorSize));
+
+    device.writeResourceDescriptorsEXT(
+        indexResourceInfo,
+        vk::HostAddressRangeEXT(myResourceHeap.getSlotCpuAddress(indexSlot),
+                                heapProps.bufferDescriptorSize));
 
     ShaderEffect cubeEffect;
     cubeEffect.meshStageSpv = loadShaderSpv("generated_shaders/cube.mesh.spv");
@@ -385,13 +384,19 @@ int main() {
 
     uint32_t currentFrame = 0;
     PushConstants pushConstants{};
-    pushConstants.verticesHandle = vertexSlot; // 传入堆索引 0
-    pushConstants.indicesHandle  = indexSlot;  // 传入堆索引 1
-    
+    pushConstants.verticesHandle = vertexSlot;
+    pushConstants.indicesHandle = indexSlot;
+
     // --- [设置一个真正的 MVP 矩阵] ---
-    glm::mat4 model = glm::rotate(glm::mat4(1.0f), glm::radians(45.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-    glm::mat4 view  = glm::lookAt(glm::vec3(0.0f, 0.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-    glm::mat4 proj  = glm::perspective(glm::radians(45.0f), (float)swapchainExtent.width / (float)swapchainExtent.height, 0.1f, 10.0f);
+    glm::mat4 model = glm::rotate(glm::mat4(1.0f), glm::radians(45.0f),
+                                  glm::vec3(0.0f, 1.0f, 0.0f));
+    glm::mat4 view =
+        glm::lookAt(glm::vec3(0.0f, 0.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f),
+                    glm::vec3(0.0f, 1.0f, 0.0f));
+    glm::mat4 proj = glm::perspective(glm::radians(45.0f),
+                                      (float)swapchainExtent.width /
+                                          (float)swapchainExtent.height,
+                                      0.1f, 10.0f);
     proj[1][1] *= -1; // Vulkan Y-axis flip
     pushConstants.mvp = proj * view * model;
     vk::CommandBufferAllocateInfo allocInfoCmd{
@@ -513,15 +518,15 @@ int main() {
       cubePipeline.recordRenderCommands(commandBuffers[currentFrame],
                                         swapchainExtent.width,
                                         swapchainExtent.height);
-      uint64_t heapBaseGpuAddress = myResourceHeap.getGpuAddress(); // 获取大堆的真实物理首地址
-uint32_t heapTotalSize      = resDescriptorSize * 1024;       // 大堆总字节大小
+      uint64_t heapBaseGpuAddress = myResourceHeap.getGpuAddress();
+      uint32_t heapTotalSize = resDescriptorSize * 1024;
       vk::DeviceAddressRangeEXT heapRange{};
-      heapRange.address = heapBaseGpuAddress; // 大堆的 GPU 显存首地址
-    heapRange.size    = heapTotalSize;       // 整个大堆的总字节大小
-        vk::BindHeapInfoEXT bindHeapInfo{};
-        bindHeapInfo.heapRange           = heapRange;
-        bindHeapInfo.reservedRangeSize   = 0;
-        bindHeapInfo.reservedRangeOffset = heapProps.minResourceHeapReservedRange;
+      heapRange.address = heapBaseGpuAddress;
+      heapRange.size = heapTotalSize;
+      vk::BindHeapInfoEXT bindHeapInfo{};
+      bindHeapInfo.heapRange = heapRange;
+      bindHeapInfo.reservedRangeSize = 0;
+      bindHeapInfo.reservedRangeOffset = heapProps.minResourceHeapReservedRange;
       commandBuffers[currentFrame].bindResourceHeapEXT(bindHeapInfo);
       commandBuffers[currentFrame].pushDataEXT(vk::PushDataInfoEXT(
           0,
