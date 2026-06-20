@@ -13,6 +13,8 @@ struct VertexOutput
 struct PushConstants
 {
     float4x4 mvp;
+    uint64_t vertexBufferAddress;
+    uint64_t indexBufferAddress;
 };
 
 [[vk::push_constant]] PushConstants push;
