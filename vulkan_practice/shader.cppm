@@ -21,10 +21,6 @@ export std::vector<uint32_t> loadShaderSpv(const std::string &filename) {
 export struct ShaderEffect {
   std::vector<uint32_t> meshStageSpv;
   std::vector<uint32_t> fragStageSpv;
-
-  // 未来扩展：在这里存放由 Slang 反射提取出来的元数据 (Reflect Data)
-  // 例如：Push Constant 的大小、反射出的线程组大小等
-  uint32_t pushConstantSize = 0;
 };
 
 export class RenderPipeline {
@@ -35,45 +31,34 @@ export class RenderPipeline {
 public:
   vk::raii::PipelineLayout layout = nullptr;
   RenderPipeline(vk::raii::Device &device, const ShaderEffect &effect) {
-
-    // 1. 配置 Push Constants 范围 (与 Slang 同步: 80 字节)
-    vk::PushConstantRange pushConstantRange(
-        vk::ShaderStageFlagBits::eMeshEXT | vk::ShaderStageFlagBits::eFragment,
-        0, 80);
-
-    // 2. 创建 Mesh Shader Object 配置
     vk::ShaderCreateInfoEXT meshCreateInfo(
-        {vk::ShaderCreateFlagBitsEXT::eDescriptorHeap},                                 // flags
-        vk::ShaderStageFlagBits::eMeshEXT,  // stage
-        vk::ShaderStageFlagBits::eFragment, // nextStage
-        vk::ShaderCodeTypeEXT::eSpirv,      // codeType
-        effect.meshStageSpv.size() * sizeof(uint32_t), // codeSize
-        effect.meshStageSpv.data(),                    // pCode
-        "main",                                        // pName
-        0, nullptr,                                    // setLayoutCount
-        0, nullptr,                                    // pushConstantRangeCount (Must be 0 when using eDescriptorHeap)
-        nullptr                                        // pSpecializationInfo
+        {vk::ShaderCreateFlagBitsEXT::eDescriptorHeap},
+        vk::ShaderStageFlagBits::eMeshEXT,
+        vk::ShaderStageFlagBits::eFragment,
+        vk::ShaderCodeTypeEXT::eSpirv,
+        effect.meshStageSpv.size() * sizeof(uint32_t),
+        effect.meshStageSpv.data(),
+        "main",
+        0, nullptr,
+        0, nullptr,
+        nullptr
     );
 
-    // 3. 创建 Fragment Shader Object 配置
     vk::ShaderCreateInfoEXT fragCreateInfo(
-        {vk::ShaderCreateFlagBitsEXT::eDescriptorHeap},                                 // flags
-        vk::ShaderStageFlagBits::eFragment, // stage
-        {},                                 // nextStage
-        vk::ShaderCodeTypeEXT::eSpirv,      // codeType
-        effect.fragStageSpv.size() * sizeof(uint32_t), // codeSize
-        effect.fragStageSpv.data(),                    // pCode
-        "main",                                        // pName
-        0, nullptr,                                    // setLayoutCount
-        0, nullptr,                                    // pushConstantRangeCount (Must be 0 when using eDescriptorHeap)
-        nullptr                                        // pSpecializationInfo
+        {vk::ShaderCreateFlagBitsEXT::eDescriptorHeap},
+        vk::ShaderStageFlagBits::eFragment,
+        {},
+        vk::ShaderCodeTypeEXT::eSpirv,
+        effect.fragStageSpv.size() * sizeof(uint32_t),
+        effect.fragStageSpv.data(),
+        "main",
+        0, nullptr,
+        0, nullptr,
+        nullptr
     );
 
-    // 4. 使用 vkCreateShadersEXT 批量创建着色器对象
-    // 在 vk::raii 中，createShadersEXT 会返回一个
-    // std::vector<vk::raii::ShaderEXT>
-    std::vector<vk::ShaderCreateInfoEXT> createInfos = {meshCreateInfo,
-                                                        fragCreateInfo};
+   std::vector<vk::ShaderCreateInfoEXT> createInfos = {meshCreateInfo,
+                                                         fragCreateInfo};
     auto shaders = device.createShadersEXT(createInfos);
     meshShader = std::move(shaders[0]);
     fragShader = std::move(shaders[1]);

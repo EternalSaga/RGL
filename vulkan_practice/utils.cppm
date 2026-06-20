@@ -206,3 +206,35 @@ export vk::PresentModeKHR selectPresentMode(const std::vector<vk::PresentModeKHR
 	}
     return selectedPresentMode;
 }
+
+export vk::ImageMemoryBarrier2 createImageBarrier(
+    VkImage image,
+    vk::ImageLayout oldLayout,
+    vk::ImageLayout newLayout,
+    vk::ImageAspectFlags aspectMask,
+    vk::PipelineStageFlags2 srcStage,
+    vk::PipelineStageFlags2 dstStage,
+    vk::AccessFlags2 srcAccess,
+    vk::AccessFlags2 dstAccess,
+    uint32_t baseMipLevel = 0,
+    uint32_t levelCount = 1,
+    uint32_t baseArrayLayer = 0,
+    uint32_t layerCount = 1
+) {
+    vk::ImageMemoryBarrier2 barrier{};
+    barrier.image = image;
+    barrier.oldLayout = oldLayout;
+    barrier.newLayout = newLayout;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.subresourceRange.aspectMask = aspectMask;
+    barrier.subresourceRange.baseMipLevel = baseMipLevel;
+    barrier.subresourceRange.levelCount = levelCount;
+    barrier.subresourceRange.baseArrayLayer = baseArrayLayer;
+    barrier.subresourceRange.layerCount = layerCount;
+    barrier.srcAccessMask = srcAccess;
+    barrier.dstAccessMask = dstAccess;
+    barrier.srcStageMask = srcStage;
+    barrier.dstStageMask = dstStage;
+    return barrier;
+}

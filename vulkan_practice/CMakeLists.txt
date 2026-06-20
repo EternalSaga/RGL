@@ -57,9 +57,9 @@ add_custom_command(
     COMMENT "Copying configs to build directory..."
 )
 
-target_sources(vulkan_practice PUBLIC 
+target_sources(vulkan_practice PUBLIC
             FILE_SET CXX_MODULES
-            FILES utils.cppm sdl3window.cppm QueueFamilyManager.cppm cube.cppm shader.cppm VmaBuffer.cppm
+            FILES utils.cppm sdl3window.cppm QueueFamilyManager.cppm cube.cppm shader.cppm VmaBuffer.cppm features.cppm
 )
 
 find_package(Vulkan REQUIRED)

@@ -11,6 +11,7 @@
 import vulkan_utils;
 import vulkan_window;
 import queue_family_manager;
+import features;
 import cube;
 import shader;
 import VmaRaii;
@@ -64,94 +65,17 @@ int main() {
         pickPhysicalDevice(physicalDevices);
 
     QueueManager queueManager(bestPhysicalDevice);
+    checkDeviceExtensions(bestPhysicalDevice);
 
-    auto featuresChain = vk::StructureChain<
-        vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features,
-        vk::PhysicalDeviceVulkan12Features, vk::PhysicalDeviceVulkan13Features,
-        vk::PhysicalDeviceVulkan14Features,
-        vk::PhysicalDeviceMeshShaderFeaturesEXT,
-        vk::PhysicalDeviceDescriptorHeapFeaturesEXT,
-        vk::PhysicalDeviceSwapchainMaintenance1FeaturesKHR,
-        vk::PhysicalDeviceShaderObjectFeaturesEXT,
-        vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR,
-        vk::PhysicalDeviceDescriptorBufferFeaturesEXT>();
-
-    featuresChain.get<vk::PhysicalDeviceFeatures2>()
-        .features.robustBufferAccess = VK_TRUE;
-    featuresChain.get<vk::PhysicalDeviceFeatures2>()
-        .features.shaderInt64 = VK_TRUE;
-
-    auto &f11 = featuresChain.get<vk::PhysicalDeviceVulkan11Features>();
-    f11.shaderDrawParameters = VK_TRUE;
-    f11.multiview = VK_TRUE;
-    f11.storageBuffer16BitAccess = VK_TRUE;
-
-    auto &f12 = featuresChain.get<vk::PhysicalDeviceVulkan12Features>();
-    f12.descriptorIndexing = VK_TRUE;
-    f12.shaderUniformBufferArrayNonUniformIndexing = VK_TRUE;
-    f12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
-    f12.descriptorBindingPartiallyBound = VK_TRUE;
-    f12.scalarBlockLayout = VK_TRUE;
-    f12.timelineSemaphore = VK_TRUE;
-    f12.bufferDeviceAddress = VK_TRUE;
-
-    auto &f13 = featuresChain.get<vk::PhysicalDeviceVulkan13Features>();
-    f13.dynamicRendering = VK_TRUE;
-    f13.synchronization2 = VK_TRUE;
-    f13.shaderZeroInitializeWorkgroupMemory = VK_TRUE;
-
-    auto &f14 = featuresChain.get<vk::PhysicalDeviceVulkan14Features>();
-    f14.pushDescriptor = VK_TRUE;
-    f14.dynamicRenderingLocalRead = VK_TRUE;
-    f14.maintenance5 = VK_TRUE;
-    f14.maintenance6 = VK_TRUE;
-
-    auto &fDescriptorBuffer =
-        featuresChain.get<vk::PhysicalDeviceDescriptorBufferFeaturesEXT>();
-    fDescriptorBuffer.descriptorBuffer = VK_TRUE;
-
-    auto &fShaderOjbect =
-        featuresChain.get<vk::PhysicalDeviceShaderObjectFeaturesEXT>();
-    fShaderOjbect.shaderObject = VK_TRUE;
-    auto &fMesh = featuresChain.get<vk::PhysicalDeviceMeshShaderFeaturesEXT>();
-    fMesh.meshShader = VK_TRUE;
-    fMesh.taskShader = VK_FALSE;
-
-    auto &descBufferFeatures =
-        featuresChain.get<vk::PhysicalDeviceDescriptorBufferFeaturesEXT>();
-    descBufferFeatures.descriptorBuffer = VK_TRUE;
-
-    auto &swapchainMaintenance1Features =
-        featuresChain.get<vk::PhysicalDeviceSwapchainMaintenance1FeaturesKHR>();
-    swapchainMaintenance1Features.swapchainMaintenance1 = VK_TRUE;
-    auto &fUntypedPointers =
-        featuresChain.get<vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR>();
-    fUntypedPointers.shaderUntypedPointers = VK_TRUE;
-
-    auto &fDescriptorHeap =
-        featuresChain.get<vk::PhysicalDeviceDescriptorHeapFeaturesEXT>();
-    fDescriptorHeap.descriptorHeap = VK_TRUE;
-    fDescriptorHeap.descriptorHeapCaptureReplay = VK_TRUE;
+    auto featuresChain = buildRequestedFeatures();
+    validateFeatures(bestPhysicalDevice, featuresChain);
 
     vk::DeviceCreateInfo deviceCreateInfo{};
     deviceCreateInfo.setPNext(
         &featuresChain.get<vk::PhysicalDeviceFeatures2>());
 
     deviceCreateInfo.setQueueCreateInfos(queueManager.getQueueCreateInfos());
-    std::vector<const char *> deviceExtensions = {
-        VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-        VK_EXT_MESH_SHADER_EXTENSION_NAME,
-        VK_EXT_SHADER_OBJECT_EXTENSION_NAME,
-        VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME,
-        VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME,
-        VK_KHR_DYNAMIC_RENDERING_LOCAL_READ_EXTENSION_NAME,
-        VK_EXT_DEVICE_GENERATED_COMMANDS_EXTENSION_NAME,
-        VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME,
-        VK_KHR_SHADER_UNTYPED_POINTERS_EXTENSION_NAME
-
-    };
-
-    deviceCreateInfo.setPEnabledExtensionNames(deviceExtensions);
+    deviceCreateInfo.setPEnabledExtensionNames(getDeviceExtensions());
 
     vk::raii::Device device(bestPhysicalDevice, deviceCreateInfo);
     vk::Queue graphicsQueue =
@@ -283,8 +207,8 @@ int main() {
 
     vk::BufferCreateInfo indexBufInfo{};
     indexBufInfo.size = cubeIndices.size() * sizeof(uint32_t);
-   indexBufInfo.usage = vk::BufferUsageFlagBits::eStorageBuffer |
-                          vk::BufferUsageFlagBits::eShaderDeviceAddress;
+    indexBufInfo.usage = vk::BufferUsageFlagBits::eStorageBuffer |
+                         vk::BufferUsageFlagBits::eShaderDeviceAddress;
 
     VmaAllocationCreateInfo allocCreateInfo{
         .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
@@ -305,7 +229,6 @@ int main() {
     ShaderEffect cubeEffect;
     cubeEffect.meshStageSpv = loadShaderSpv("generated_shaders/cube.mesh.spv");
     cubeEffect.fragStageSpv = loadShaderSpv("generated_shaders/cube.frag.spv");
-    cubeEffect.pushConstantSize = sizeof(PushConstants);
 
     RenderPipeline cubePipeline(device, cubeEffect);
     vk::SemaphoreCreateInfo semaphoreInfo{};
@@ -358,29 +281,18 @@ int main() {
     commandBuffers[0].begin(vk::CommandBufferBeginInfo{
         vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
 
-    vk::ImageMemoryBarrier depthTransitionBarrier{};
-    depthTransitionBarrier.oldLayout = vk::ImageLayout::eUndefined;
-    depthTransitionBarrier.newLayout =
-        vk::ImageLayout::eDepthStencilAttachmentOptimal;
-    depthTransitionBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    depthTransitionBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    depthTransitionBarrier.image =
-        *depthImage; // 填入你的 VmaImage 对应的 VkImage
-    depthTransitionBarrier.subresourceRange.aspectMask =
-        vk::ImageAspectFlagBits::eDepth;
-    depthTransitionBarrier.subresourceRange.baseMipLevel = 0;
-    depthTransitionBarrier.subresourceRange.levelCount = 1;
-    depthTransitionBarrier.subresourceRange.baseArrayLayer = 0;
-    depthTransitionBarrier.subresourceRange.layerCount = 1;
-    depthTransitionBarrier.srcAccessMask = vk::AccessFlagBits::eNone;
-    depthTransitionBarrier.dstAccessMask =
-        vk::AccessFlagBits::eDepthStencilAttachmentRead |
-        vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+    vk::ImageMemoryBarrier2 depthBarrier = createImageBarrier(
+        *depthImage, vk::ImageLayout::eUndefined,
+        vk::ImageLayout::eDepthStencilAttachmentOptimal,
+        vk::ImageAspectFlagBits::eDepth, vk::PipelineStageFlagBits2::eTopOfPipe,
+        vk::PipelineStageFlagBits2::eEarlyFragmentTests,
+        vk::AccessFlagBits2::eNone,
+        vk::AccessFlagBits2::eDepthStencilAttachmentRead |
+            vk::AccessFlagBits2::eDepthStencilAttachmentWrite);
 
-    commandBuffers[currentFrame].pipelineBarrier(
-        vk::PipelineStageFlagBits::eTopOfPipe,
-        vk::PipelineStageFlagBits::eEarlyFragmentTests, {}, nullptr, nullptr,
-        depthTransitionBarrier);
+    vk::DependencyInfo depthDepInfo;
+    depthDepInfo.setImageMemoryBarriers(depthBarrier);
+    commandBuffers[currentFrame].pipelineBarrier2(depthDepInfo);
 
     commandBuffers[currentFrame].end();
 
@@ -402,13 +314,17 @@ int main() {
       }
       float time = SDL_GetTicks() / 1000.0f; // 获取秒数
 
+      glm::mat4 model =
+          glm::rotate(glm::mat4(1.0f), time, glm::vec3(0.5f, 1.0f, 0.0f));
+      glm::mat4 view =
+          glm::lookAt(glm::vec3(0.0f, 0.0f, 3.0f), glm::vec3(0.0f, 0.0f, 0.0f),
+                      glm::vec3(0.0f, 1.0f, 0.0f));
+      glm::mat4 proj = glm::perspective(glm::radians(45.0f),
+                                        (float)swapchainExtent.width /
+                                            (float)swapchainExtent.height,
+                                        0.1f, 10.0f);
 
-glm::mat4 model = glm::rotate(glm::mat4(1.0f), time, glm::vec3(0.5f, 1.0f, 0.0f));
-glm::mat4 view  = glm::lookAt(glm::vec3(0.0f, 0.0f, 3.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-glm::mat4 proj  = glm::perspective(glm::radians(45.0f), (float)swapchainExtent.width / (float)swapchainExtent.height, 0.1f, 10.0f);
-
-
-pushConstants.mvp = proj * view * model;
+      pushConstants.mvp = proj * view * model;
       auto waitResult = device.waitForFences(
           {*inFlightFences[currentFrame], *presentFences[currentFrame]},
           VK_TRUE, std::numeric_limits<uint64_t>::max());
@@ -425,27 +341,17 @@ pushConstants.mvp = proj * view * model;
           vk::CommandBufferUsageFlagBits::eOneTimeSubmit};
 
       commandBuffers[currentFrame].begin(beginInfo);
-      vk::ImageMemoryBarrier colorPresentToDrawBarrier{};
-      colorPresentToDrawBarrier.oldLayout = vk::ImageLayout::eUndefined;
-      colorPresentToDrawBarrier.newLayout =
-          vk::ImageLayout::eColorAttachmentOptimal;
-      colorPresentToDrawBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-      colorPresentToDrawBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-      colorPresentToDrawBarrier.image = swapchainImages[imageIndex];
-      colorPresentToDrawBarrier.subresourceRange.aspectMask =
-          vk::ImageAspectFlagBits::eColor;
-      colorPresentToDrawBarrier.subresourceRange.baseMipLevel = 0;
-      colorPresentToDrawBarrier.subresourceRange.levelCount = 1;
-      colorPresentToDrawBarrier.subresourceRange.baseArrayLayer = 0;
-      colorPresentToDrawBarrier.subresourceRange.layerCount = 1;
-      colorPresentToDrawBarrier.srcAccessMask = vk::AccessFlagBits::eNone;
-      colorPresentToDrawBarrier.dstAccessMask =
-          vk::AccessFlagBits::eColorAttachmentWrite;
-
-      commandBuffers[currentFrame].pipelineBarrier(
-          vk::PipelineStageFlagBits::eColorAttachmentOutput,
-          vk::PipelineStageFlagBits::eColorAttachmentOutput, {}, nullptr,
-          nullptr, colorPresentToDrawBarrier);
+      vk::ImageMemoryBarrier2 colorToDrawBarrier = createImageBarrier(
+          swapchainImages[imageIndex], vk::ImageLayout::eUndefined,
+          vk::ImageLayout::eColorAttachmentOptimal,
+          vk::ImageAspectFlagBits::eColor,
+          vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+          vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+          vk::AccessFlagBits2::eNone,
+          vk::AccessFlagBits2::eColorAttachmentWrite);
+      vk::DependencyInfo colorToDrawDepInfo;
+      colorToDrawDepInfo.setImageMemoryBarriers(colorToDrawBarrier);
+      commandBuffers[currentFrame].pipelineBarrier2(colorToDrawDepInfo);
 
       vk::RenderingAttachmentInfo colorAttachment{};
       colorAttachment.imageView = *swapchainImageViews[imageIndex];
@@ -475,7 +381,7 @@ pushConstants.mvp = proj * view * model;
       cubePipeline.recordRenderCommands(commandBuffers[currentFrame],
                                         swapchainExtent.width,
                                         swapchainExtent.height);
-     commandBuffers[currentFrame].pushDataEXT(vk::PushDataInfoEXT(
+      commandBuffers[currentFrame].pushDataEXT(vk::PushDataInfoEXT(
           0,
           vk::HostAddressRangeConstEXT(&pushConstants, sizeof(PushConstants))));
 
@@ -483,27 +389,16 @@ pushConstants.mvp = proj * view * model;
 
       commandBuffers[currentFrame].endRendering();
 
-      vk::ImageMemoryBarrier colorDrawToPresentBarrier{};
-      colorDrawToPresentBarrier.oldLayout =
-          vk::ImageLayout::eColorAttachmentOptimal;
-      colorDrawToPresentBarrier.newLayout = vk::ImageLayout::ePresentSrcKHR;
-      colorDrawToPresentBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-      colorDrawToPresentBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-      colorDrawToPresentBarrier.image = swapchainImages[imageIndex];
-      colorDrawToPresentBarrier.subresourceRange.aspectMask =
-          vk::ImageAspectFlagBits::eColor;
-      colorDrawToPresentBarrier.subresourceRange.baseMipLevel = 0;
-      colorDrawToPresentBarrier.subresourceRange.levelCount = 1;
-      colorDrawToPresentBarrier.subresourceRange.baseArrayLayer = 0;
-      colorDrawToPresentBarrier.subresourceRange.layerCount = 1;
-      colorDrawToPresentBarrier.srcAccessMask =
-          vk::AccessFlagBits::eColorAttachmentWrite;
-      colorDrawToPresentBarrier.dstAccessMask = vk::AccessFlagBits::eNone;
-
-      commandBuffers[currentFrame].pipelineBarrier(
-          vk::PipelineStageFlagBits::eColorAttachmentOutput,
-          vk::PipelineStageFlagBits::eBottomOfPipe, {}, nullptr, nullptr,
-          colorDrawToPresentBarrier);
+      vk::ImageMemoryBarrier2 colorToPresentBarrier = createImageBarrier(
+          swapchainImages[imageIndex], vk::ImageLayout::eColorAttachmentOptimal,
+          vk::ImageLayout::ePresentSrcKHR, vk::ImageAspectFlagBits::eColor,
+          vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+          vk::PipelineStageFlagBits2::eBottomOfPipe,
+          vk::AccessFlagBits2::eColorAttachmentWrite,
+          vk::AccessFlagBits2::eNone);
+      vk::DependencyInfo colorToPresentDepInfo;
+      colorToPresentDepInfo.setImageMemoryBarriers(colorToPresentBarrier);
+      commandBuffers[currentFrame].pipelineBarrier2(colorToPresentDepInfo);
 
       commandBuffers[currentFrame].end();
 
