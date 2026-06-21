@@ -29,8 +29,9 @@ public:
           graphicsCommandPool_(vkDevice_.getGraphicsCommandPool()),
           cubePipeline(createRenderPipeline(vkDevice_.getDevice()))
     {
-        pushConstants_.vertexBufferAddress = vkResources_.getVertexBuffer().getAddress(vkDevice_.getDevice());
-        pushConstants_.indexBufferAddress = vkResources_.getIndexBuffer().getAddress(vkDevice_.getDevice());
+        drawArgs_.heapAddress = vkResources_.getDescriptorHeap().getGpuAddress();
+        drawArgs_.vertexOffset = vkResources_.getVertexOffset();
+        drawArgs_.indexOffset = vkResources_.getIndexOffset();
         createSyncObjects();
         allocateCommandBuffers();
         initDepthBarrier();
@@ -55,7 +56,7 @@ public:
             glm::mat4 proj = glm::perspective(glm::radians(45.0f),
                                                (float)vkSwapchain_.getExtent().width / (float)vkSwapchain_.getExtent().height,
                                                0.1f, 10.0f);
-            pushConstants_.mvp = proj * view * model;
+            drawArgs_.mvp = proj * view * model;
 
             drawFrame(window);
         }
@@ -179,7 +180,7 @@ private:
                                           vkSwapchain_.getExtent().width,
                                           vkSwapchain_.getExtent().height);
         commandBuffers_[currentFrame_].pushDataEXT(vk::PushDataInfoEXT(
-            0, vk::HostAddressRangeConstEXT(&pushConstants_, sizeof(RGL::PushConstants))));
+            0, vk::HostAddressRangeConstEXT(&drawArgs_, sizeof(RGL::DrawArgs))));
         commandBuffers_[currentFrame_].drawMeshTasksEXT(1, 1, 1);
         commandBuffers_[currentFrame_].endRendering();
 
@@ -221,7 +222,7 @@ private:
     vk::Queue graphicsQueue_;
     const vk::raii::CommandPool& graphicsCommandPool_;
     RGL::RenderPipeline cubePipeline;
-    RGL::PushConstants pushConstants_{};
+    RGL::DrawArgs drawArgs_{};
 
     static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
     uint32_t currentFrame_ = 0;

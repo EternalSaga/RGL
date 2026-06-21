@@ -22,15 +22,18 @@ public:
           allocator(*vkInstance.getInstance(), *vkDevice.getPhysicalDevice(), *vkDevice.getDevice(),
                     vkInstance.getApiVersion()),
           depthImage(createDepthImage(allocator, vkSwapchain.getExtent())),
-          depthImageView(vkDevice.getDevice(), buildDepthView(*depthImage))
+          depthImageView(vkDevice.getDevice(), buildDepthView(*depthImage)),
+          descriptorHeap(createDescriptorHeap()),
+          vertexOffset(allocateVertexData()),
+          indexOffset(allocateIndexData())
     {
-        createBuffers();
     }
 
     const RGL::VmaImage& getDepthImage() const { return depthImage; }
     const vk::raii::ImageView& getDepthImageView() const { return depthImageView; }
-    const RGL::VmaBuffer& getVertexBuffer() const { return vertexBuffer; }
-    const RGL::VmaBuffer& getIndexBuffer() const { return indexBuffer; }
+    const RGL::VmaDescriptorHeap& getDescriptorHeap() const { return descriptorHeap; }
+    uint32_t getVertexOffset() const { return vertexOffset; }
+    uint32_t getIndexOffset() const { return indexOffset; }
     RGL::VmaAllocatorRAII& getAllocator() { return allocator; }
 
 private:
@@ -63,30 +66,30 @@ private:
         return depthViewInfo;
     }
 
-    void createBuffers() {
-        vk::BufferCreateInfo bufferCreateInfo{};
-        bufferCreateInfo.size = RGL::cubeVertices.size() * sizeof(RGL::Vertex);
-        bufferCreateInfo.usage = vk::BufferUsageFlagBits::eStorageBuffer |
-                                 vk::BufferUsageFlagBits::eShaderDeviceAddress;
+    RGL::VmaDescriptorHeap createDescriptorHeap() {
+        constexpr uint32_t descriptorSize = 256;
+        constexpr uint32_t capacity = 4;
+        return allocator.createDescriptorHeap(
+            vkDevice_.getDevice(),
+            capacity, descriptorSize,
+            vk::BufferUsageFlagBits::eStorageBuffer
+        );
+    }
 
-        vk::BufferCreateInfo indexBufInfo{};
-        indexBufInfo.size = RGL::cubeIndices.size() * sizeof(uint32_t);
-        indexBufInfo.usage = vk::BufferUsageFlagBits::eStorageBuffer |
-                             vk::BufferUsageFlagBits::eShaderDeviceAddress;
+    uint32_t allocateVertexData() {
+        uint32_t slot = 0;
+        void* cpuAddr = descriptorHeap.getSlotCpuAddress<char>(slot);
+        std::memcpy(cpuAddr, RGL::cubeVertices.data(),
+                     RGL::cubeVertices.size() * sizeof(RGL::Vertex));
+        return slot * descriptorHeap.getDescriptorSize();
+    }
 
-        VmaAllocationCreateInfo allocCreateInfo{
-            .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-                     VMA_ALLOCATION_CREATE_MAPPED_BIT,
-            .usage = VMA_MEMORY_USAGE_AUTO
-        };
-
-        VmaAllocationInfo allocInfo;
-        vertexBuffer = allocator.createBuffer(bufferCreateInfo, allocCreateInfo, &allocInfo);
-        std::memcpy(allocInfo.pMappedData, RGL::cubeVertices.data(), bufferCreateInfo.size);
-
-        VmaAllocationInfo indexAllocInfo;
-        indexBuffer = allocator.createBuffer(indexBufInfo, allocCreateInfo, &indexAllocInfo);
-        std::memcpy(indexAllocInfo.pMappedData, RGL::cubeIndices.data(), indexBufInfo.size);
+    uint32_t allocateIndexData() {
+        uint32_t slot = 1;
+        void* cpuAddr = descriptorHeap.getSlotCpuAddress<char>(slot);
+        std::memcpy(cpuAddr, RGL::cubeIndices.data(),
+                     RGL::cubeIndices.size() * sizeof(uint32_t));
+        return slot * descriptorHeap.getDescriptorSize();
     }
 
     RGL::VkInstance& vkInstance_;
@@ -95,8 +98,9 @@ private:
     RGL::VmaAllocatorRAII allocator;
     RGL::VmaImage depthImage;
     vk::raii::ImageView depthImageView;
-    RGL::VmaBuffer vertexBuffer;
-    RGL::VmaBuffer indexBuffer;
+    RGL::VmaDescriptorHeap descriptorHeap;
+    uint32_t vertexOffset;
+    uint32_t indexOffset;
 };
 
 }

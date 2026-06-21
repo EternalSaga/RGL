@@ -10,11 +10,13 @@ struct VertexOutput
     float3 color    : COLOR0;
 };
 
-struct PushConstants
+struct DrawArgs
 {
     float4x4 mvp;
-    uint64_t vertexBufferAddress;
-    uint64_t indexBufferAddress;
+    uint32_t vertexOffset;
+    uint32_t indexOffset;
+    uint64_t _padding;
+    uint64_t heapAddress;
 };
 
-[[vk::push_constant]] PushConstants push;
+[[vk::push_constant]] DrawArgs drawArgs;

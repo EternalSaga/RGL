@@ -10,12 +10,12 @@ void main(
 {
     SetMeshOutputCounts(8, 12);
 
-    Vertex* vertexBuf = Ptr<Vertex>(push.vertexBufferAddress);
-    uint* indexBuf = Ptr<uint>(push.indexBufferAddress);
+    Vertex* vertexBuf = Ptr<Vertex>(drawArgs.heapAddress + drawArgs.vertexOffset);
+    uint* indexBuf = Ptr<uint>(drawArgs.heapAddress + drawArgs.indexOffset);
 
     if (ti < 8) {
         Vertex v = vertexBuf[ti];
-        verts[ti].position = mul(push.mvp, float4(v.position, 1.0));
+        verts[ti].position = mul(drawArgs.mvp, float4(v.position, 1.0));
         verts[ti].color = v.color;
     }
 

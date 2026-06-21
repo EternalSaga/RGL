@@ -34,10 +34,12 @@ export const std::vector<uint32_t> cubeIndices = {
     4, 5, 1,  1, 0, 4  // 底
 };
 
-export struct PushConstants {
+export struct DrawArgs {
     glm::mat4 mvp;
-    uint64_t vertexBufferAddress;
-    uint64_t indexBufferAddress;
+    uint32_t vertexOffset;
+    uint32_t indexOffset;
+    uint64_t _padding;
+    uint64_t heapAddress;
 };
 
 }  // namespace RGL
