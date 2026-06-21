@@ -59,7 +59,7 @@ add_custom_command(
 
 target_sources(vulkan_practice PUBLIC
             FILE_SET CXX_MODULES
-            FILES utils.cppm sdl3window.cppm QueueFamilyManager.cppm cube.cppm shader.cppm VmaBuffer.cppm features.cppm
+            FILES utils.cppm sdl3window.cppm QueueFamilyManager.cppm cube.cppm shader.cppm VmaBuffer.cppm features.cppm vkinstance.cppm vkdevice.cppm vkswapchain.cppm vkresources.cppm vkrenderer.cppm
 )
 
 find_package(Vulkan REQUIRED)

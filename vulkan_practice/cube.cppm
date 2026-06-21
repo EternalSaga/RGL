@@ -4,6 +4,9 @@ module;
 #include <glm/glm.hpp>
 #include <vulkan/vulkan_raii.hpp>
 export module cube;
+
+namespace RGL {
+
 export struct Vertex {
     float position[3];
     float color[3];
@@ -36,3 +39,5 @@ export struct PushConstants {
     uint64_t vertexBufferAddress;
     uint64_t indexBufferAddress;
 };
+
+}  // namespace RGL

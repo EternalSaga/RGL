@@ -5,6 +5,8 @@ module;
 #include <vulkan/vulkan_raii.hpp>
 export module shader;
 
+namespace RGL {
+
 export std::vector<uint32_t> loadShaderSpv(const std::string &filename) {
   std::ifstream file(filename, std::ios::ate | std::ios::binary);
   if (!file.is_open()) {
@@ -138,3 +140,5 @@ vk::Viewport viewport(
     cmd.setLogicOpEnableEXT(false);
   }
 };
+
+}  // namespace RGL

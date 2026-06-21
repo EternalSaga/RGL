@@ -5,9 +5,8 @@ module;
 #include <vulkan/vulkan_raii.hpp>
 export module VmaRaii;
 
-// ==========================================
-// 1. 基础 Buffer RAII 包装
-// ==========================================
+namespace RGL {
+
 export struct VmaBuffer {
     VmaAllocator allocator = nullptr;
     VkBuffer buffer = VK_NULL_HANDLE;
@@ -44,9 +43,6 @@ export struct VmaBuffer {
     }
 };
 
-// ==========================================
-// 2. 基础 Image RAII 包装
-// ==========================================
 export struct VmaImage {
     VmaAllocator allocator = nullptr;
     VkImage image = VK_NULL_HANDLE;
@@ -76,9 +72,6 @@ export struct VmaImage {
     VkImage operator*() const { return image; }
 };
 
-// ==========================================
-// 3. ✨【新增】现代硬件描述符大堆（Descriptor Heap）RAII 管家
-// ==========================================
 export struct VmaDescriptorHeap {
     VmaBuffer bufferStorage;       // 组合底层的 VmaBuffer 负责生命周期
     void* pMappedData = nullptr;   // CPU 端直接写入的映射首地址
@@ -216,3 +209,5 @@ public:
 
     VmaAllocator get() const { return allocator; }
 };
+
+}  // namespace RGL

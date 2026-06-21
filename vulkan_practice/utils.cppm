@@ -9,6 +9,8 @@ module;
 #include <cstdint>
 export module vulkan_utils;
 
+namespace RGL {
+
 export std::vector<const char*> findMissingValidationLayser(
     const std::vector<vk::LayerProperties>& availableLayers,
     const std::vector<const char*>& requiredLayers)  // 采用引用传参，避免不必要的拷贝
@@ -35,7 +37,7 @@ static VKAPI_ATTR vk::Bool32 VKAPI_CALL vulkanDebugCallback(
     vk::DebugUtilsMessageTypeFlagsEXT messageType,
     const vk::DebugUtilsMessengerCallbackDataEXT* pCallbackData,
     void* pUserData) {
-    auto* logger = RGL::RLLogger::getInstance();
+    auto* logger = RLLogger::getInstance();
     if (!logger) return VK_FALSE;
 
     // 1. 映射 Vulkan 的严重程度到 spdlog 的级别
@@ -56,7 +58,7 @@ static VKAPI_ATTR vk::Bool32 VKAPI_CALL vulkanDebugCallback(
 
     // 2. 💡 避坑核心：因为 Vulkan 报错是运行时动态生成的，无法走 std::source_location 的编译期隐式构造
     // 我们必须手动构造你的 format_with_location 结构体
-    RGL::format_with_location fmtObj{
+    format_with_location fmtObj{
 	pCallbackData->pMessage,	 // 具体的报错内容
 	std::source_location::current()	 // 这里的物理位置只能拿到当前回调函数的位置
     };
@@ -86,7 +88,7 @@ export [[nodiscard]] vk::raii::DebugUtilsMessengerEXT
 
 setupDebugMessenger(vk::raii::Instance& instance) {
 
-    auto* logger = RGL::RLLogger::getInstance();
+    auto* logger = RLLogger::getInstance();
 
     
 
@@ -113,7 +115,7 @@ setupDebugMessenger(vk::raii::Instance& instance) {
 
 
 export const vk::raii::PhysicalDevice& pickPhysicalDevice(const vk::raii::PhysicalDevices& physicalDevices) {
-    auto logger = RGL::RLLogger::getInstance();
+    auto logger = RLLogger::getInstance();
     if (physicalDevices.empty()) {
         logger->error("No physical devices found");
         throw std::runtime_error("No physical devices found");
@@ -190,12 +192,6 @@ for (const auto& device : physicalDevices) {
     return *(deviceCandidates.rbegin()->second);
 }
 
-export struct Graphics_Compute_Transfer_Indices{
-    std::optional<uint32_t> graphicsFamilyIndex;
-    std::optional<uint32_t> computeFamilyIndex;
-    std::optional<uint32_t> transferFamilyIndex;
-};
-
 export vk::PresentModeKHR selectPresentMode(const std::vector<vk::PresentModeKHR>& presentModes){
 	vk::PresentModeKHR selectedPresentMode = vk::PresentModeKHR::eFifo;
 	for(const auto& availablePresentMode : presentModes){
@@ -238,3 +234,5 @@ export vk::ImageMemoryBarrier2 createImageBarrier(
     barrier.dstStageMask = dstStage;
     return barrier;
 }
+
+}  // namespace RGL

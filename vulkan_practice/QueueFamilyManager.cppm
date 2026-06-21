@@ -8,6 +8,9 @@ module;
 #include <map>
 #include <vector>
 export module queue_family_manager;
+
+namespace RGL {
+
 export enum class QueueFamilyRole {
     Graphics,
     Compute,
@@ -24,7 +27,7 @@ public:
     QueueManager(const vk::raii::PhysicalDevice& physicalDevice):physicalDevice_(physicalDevice) {
         auto queueFamilies = physicalDevice.getQueueFamilyProperties();
         std::map<QueueFamilyRole, uint32_t> roleToFamilies;
-        logger = RGL::RLLogger::getInstance();
+        logger = RLLogger::getInstance();
         // 1. 初步筛选：寻找最符合条件的 Queue Family
         for (uint32_t i = 0; i < queueFamilies.size(); ++i) {
             const auto& props = queueFamilies[i];
@@ -136,3 +139,5 @@ private:
     const vk::raii::PhysicalDevice& physicalDevice_;
     RGL::RLLogger* logger;
 };
+
+}  // namespace RGL

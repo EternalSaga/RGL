@@ -21,9 +21,7 @@ public:
         : std::runtime_error(fmt::format("Required extension not supported by device: {}", extName)) {}
 };
 
-}
-
-using FeatureChain = vk::StructureChain<
+export using FeatureChain = vk::StructureChain<
     vk::PhysicalDeviceFeatures2,
     vk::PhysicalDeviceVulkan11Features,
     vk::PhysicalDeviceVulkan12Features,
@@ -39,7 +37,7 @@ using FeatureChain = vk::StructureChain<
 
 static void checkFeature(vk::Bool32 actual, const std::string& name) {
     if (!actual) {
-        throw RGL::FeatureUnavailable(name);
+        throw FeatureUnavailable(name);
     }
 }
 
@@ -66,7 +64,7 @@ export void checkDeviceExtensions(const vk::raii::PhysicalDevice& device) {
             }
         }
         if (!found) {
-            throw RGL::ExtensionUnavailable(ext);
+            throw ExtensionUnavailable(ext);
         }
     }
 }
@@ -191,3 +189,5 @@ export void validateFeatures(const vk::raii::PhysicalDevice& device, FeatureChai
     checkFeature(supported.get<vk::PhysicalDeviceSwapchainMaintenance1FeaturesKHR>().swapchainMaintenance1, "SwapchainMaintenance1KHR::swapchainMaintenance1");
     checkFeature(supported.get<vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR>().shaderUntypedPointers, "ShaderUntypedPointersKHR::shaderUntypedPointers");
 }
+
+}  // namespace RGL
