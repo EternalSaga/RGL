@@ -3,7 +3,7 @@ module;
 #include <vector>
 #include <vulkan/vulkan_raii.hpp>
 #include <string_view>
-#include <algorithm>  // 为了 std::ranges::any_of
+#include <algorithm>
 #include "rllogger.hpp"
 #include <optional>
 #include <cstdint>
@@ -13,7 +13,7 @@ namespace RGL {
 
 export std::vector<const char*> findMissingValidationLayser(
     const std::vector<vk::LayerProperties>& availableLayers,
-    const std::vector<const char*>& requiredLayers)  // 采用引用传参，避免不必要的拷贝
+    const std::vector<const char*>& requiredLayers)
 {
     std::vector<const char*> missing;
 
@@ -40,8 +40,6 @@ static VKAPI_ATTR vk::Bool32 VKAPI_CALL vulkanDebugCallback(
     auto* logger = RLLogger::getInstance();
     if (!logger) return VK_FALSE;
 
-    // 1. 映射 Vulkan 的严重程度到 spdlog 的级别
-
     spdlog::level::level_enum lvl = spdlog::level::info;
     if (messageSeverity & vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose) {
 	lvl = spdlog::level::trace;
@@ -56,24 +54,20 @@ static VKAPI_ATTR vk::Bool32 VKAPI_CALL vulkanDebugCallback(
 	lvl = spdlog::level::err;
     }
 
-    // 2. 💡 避坑核心：因为 Vulkan 报错是运行时动态生成的，无法走 std::source_location 的编译期隐式构造
-    // 我们必须手动构造你的 format_with_location 结构体
-    format_with_location fmtObj{
-	pCallbackData->pMessage,	 // 具体的报错内容
-	std::source_location::current()	 // 这里的物理位置只能拿到当前回调函数的位置
-    };
+   // Vulkan errors are runtime-generated; source_location can only point to this callback
+     format_with_location fmtObj{
+ 	pCallbackData->pMessage,
+ 	std::source_location::current()
+     };
 
-    // 3. 手动魔改 spdlog 的位置源（让 spdlog 打印出 "[Vulkan-Validation]" 而不是当前文件名）
-    fmtObj.loc.filename = "Vulkan-Validation";
-    fmtObj.loc.funcname = pCallbackData->pMessageIdName ? pCallbackData->pMessageIdName : "UNKNOWN";
-    fmtObj.loc.line = 0;
+     fmtObj.loc.filename = "Vulkan-Validation";
+     fmtObj.loc.funcname = pCallbackData->pMessageIdName ? pCallbackData->pMessageIdName : "UNKNOWN";
+     fmtObj.loc.line = 0;
 
-    // 4. 扔进你的日志系统
-    logger->log(lvl, fmtObj);
+     logger->log(lvl, fmtObj);
 
-    // 5. 如果是硬核调试，遇到了 ERROR 级别，直接死给你看（拉起 GDB）
-    if (messageSeverity & vk::DebugUtilsMessageSeverityFlagBitsEXT::eError) {
-// Linux/Gentoo 下最干净的断点触发，不污染调用栈
+     if (messageSeverity & vk::DebugUtilsMessageSeverityFlagBitsEXT::eError) {
+     // Trigger SIGTRAP for debugger attachment on x86
 #if defined(__x86_64__) || defined(__i386__)
 	__asm__ volatile("int $3");
 #else
@@ -127,22 +121,18 @@ for (const auto& device : physicalDevices) {
         
         vk::PhysicalDeviceProperties properties = device.getProperties();
         std::string deviceName(properties.deviceName.data());
-        // 转成小写方便匹配
+        // Lowercase for vendor matching
         std::transform(deviceName.begin(), deviceName.end(), deviceName.begin(), ::tolower);
 
-        // --- 1. 获取核心/执行单元数量 (真正的算力指标) ---
+        // Estimate compute unit count
         uint32_t coreCount = 0;
 
-        // 链式结构获取 Vulkan 1.1 / 1.2 的高级属性
         vk::PhysicalDeviceProperties2 props2 = device.getProperties2();
-        
-        // 方案 A：针对 AMD，获取其 CU (Compute Units) 数量
+
         vk::PhysicalDeviceShaderCorePropertiesAMD amdShaderProps;
-        
-        // 方案 B：针对 Intel / NVIDIA，通过 Subgroup/EU 估算算力
         vk::PhysicalDeviceSubgroupSizeControlProperties subgroupProps;
 
-        // 挂载结构体链
+        // Chain properties for AMD and generic GPU detection
         props2.pNext = &subgroupProps;
         subgroupProps.pNext = &amdShaderProps;
 

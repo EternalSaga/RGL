@@ -13,10 +13,12 @@ struct VertexOutput
 struct DrawArgs
 {
     float4x4 mvp;
-    uint32_t vertexOffset;
-    uint32_t indexOffset;
-    uint64_t _padding;
-    uint64_t heapAddress;
 };
 
 [[vk::push_constant]] DrawArgs drawArgs;
+
+[[vk::binding(0, 0)]]
+StructuredBuffer<Vertex> vertexBuffer;
+
+[[vk::binding(1, 0)]]
+ByteAddressBuffer indexBuffer;

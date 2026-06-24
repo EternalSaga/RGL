@@ -28,7 +28,7 @@ public:
         auto queueFamilies = physicalDevice.getQueueFamilyProperties();
         std::map<QueueFamilyRole, uint32_t> roleToFamilies;
         logger = RLLogger::getInstance();
-        // 1. 初步筛选：寻找最符合条件的 Queue Family
+        // Find best queue family for each role
         for (uint32_t i = 0; i < queueFamilies.size(); ++i) {
             const auto& props = queueFamilies[i];
             
@@ -38,16 +38,16 @@ public:
             if (!roleToFamilies.count(QueueFamilyRole::Compute) && (props.queueFlags & vk::QueueFlagBits::eCompute)) {
                 roleToFamilies[QueueFamilyRole::Compute] = i;
             }
-            // 尽量找纯粹的 Transfer 队列
+            // Prefer dedicated transfer queue
             if (!roleToFamilies.count(QueueFamilyRole::Transfer) && (props.queueFlags & vk::QueueFlagBits::eTransfer) &&
                 !(props.queueFlags & vk::QueueFlagBits::eGraphics) && !(props.queueFlags & vk::QueueFlagBits::eCompute)) {
                 roleToFamilies[QueueFamilyRole::Transfer] = i;
             }
         }
 
-        // 2. 回退机制：如果没有独立的，就复用
+        // Fallback: reuse existing family if dedicated not available
         if (!roleToFamilies.count(QueueFamilyRole::Transfer)) {
-            // 如果连 Transfer 标志都没找到，找一个支持 Transfer 的（通常 Graphics 默认带 Transfer 能力）
+            // Transfer-capable family defaults to Graphics
             for (uint32_t i = 0; i < queueFamilies.size(); ++i) {
                 if (queueFamilies[i].queueFlags & vk::QueueFlagBits::eTransfer) {
                     roleToFamilies[QueueFamilyRole::Transfer] = i;
@@ -62,8 +62,8 @@ public:
             roleToFamilies[QueueFamilyRole::Compute] = roleToFamilies[QueueFamilyRole::Graphics];
         }
 
-        // 3. 核心修正：安全地分配物理队列索引（严格遵守硬件 queueCount 上限）
-        std::map<uint32_t, uint32_t> familyAllocatedCount; // 记录该家族实际申请了多少个物理队列
+        // Allocate physical queue indices within hardware queueCount limits
+        std::map<uint32_t, uint32_t> familyAllocatedCount;
         std::vector<QueueFamilyRole> roleOrder = {QueueFamilyRole::Graphics, QueueFamilyRole::Compute, QueueFamilyRole::Transfer};
 
         for (QueueFamilyRole role : roleOrder) {
@@ -81,8 +81,8 @@ public:
             }
         }
 
-        // 4. 正确构建 vk::DeviceQueueCreateInfo，动态生成优先级数组
-        // 因为 priorities_ 必须在 vkCreateDevice 调用期间保持存活，所以作为类成员变量存储
+        // Build vk::DeviceQueueCreateInfo with dynamic priority arrays
+        // priorities_ must outlive vkCreateDevice, so stored as class member
         priorities_.clear();
         queueCreateInfos_.clear();
 
@@ -119,13 +119,12 @@ public:
     }
 
 void checkPresentAbility(const vk::raii::SurfaceKHR& surface) const {
-        // 拿到你已经分配给 Graphics 的物理队列家族索引
-        uint32_t graphicsFamilyIdx = getFamilyIndex(QueueFamilyRole::Graphics);
+    // Verify graphics queue family supports present on this surface
+         uint32_t graphicsFamilyIdx = getFamilyIndex(QueueFamilyRole::Graphics);
 
-        // 调用 Vulkan 驱动查询该家族是否支持当前的 Surface
-        if (!physicalDevice_.getSurfaceSupportKHR(graphicsFamilyIdx, *surface)) {
-            const auto errMsg = fmt::format("致命错误: 当前 Graphics 队列家族 (Index: {} ) 不支持该窗口 Surface 的 Present 操作！", graphicsFamilyIdx);
-            logger->critical(errMsg);
+         if (!physicalDevice_.getSurfaceSupportKHR(graphicsFamilyIdx, *surface)) {
+             const auto errMsg = fmt::format("Graphics queue family (Index: {}) cannot present to surface", graphicsFamilyIdx);
+             logger->critical(errMsg);
             throw std::runtime_error(
                errMsg
             );

@@ -83,19 +83,19 @@ export class SDLWindow {
 	    {vk::Format::eR8G8B8A8Srgb, vk::ColorSpaceKHR::eSrgbNonlinear}};
 
 	if (isHdrEnabled) {
-	    logger->info("[SDL3] 检测到系统已启用 HDR 模式，正在匹配 HDR Surface 格式...");
+    logger->info("[SDL3] HDR enabled, matching HDR surface format...");
 	    for (const auto& preferred : preferredHdrFormats) {
-		for (const auto& available : availableFormats) {
+	    for (const auto& available : availableFormats) {
 		    if (available.format == preferred.format && available.colorSpace == preferred.colorSpace) {
-			logger->info("[Vulkan] 成功匹配 HDR 格式: {}",vk::to_string(available.format));
+			logger->info("[Vulkan] HDR format matched: {}", vk::to_string(available.format));
 			return available;
 		    }
 		}
 	    }
-	    logger->info("[Vulkan] 未找到匹配的 HDR 格式，降级到 SDR 匹配。");
+	    logger->info("[Vulkan] No HDR format found, falling back to SDR.");
 	}
 
-	// 6. SDR 匹配（或者 HDR 匹配失败后的降级策略）
+	// SDR fallback
 	for (const auto& preferred : preferredSdrFormats) {
 	    for (const auto& available : availableFormats) {
 		if (available.format == preferred.format && available.colorSpace == preferred.colorSpace) {
@@ -112,7 +112,7 @@ export class SDLWindow {
 		vk::Extent2D swapchainExtent = surfaceCapabilities.currentExtent;
 
 
-	// 如果currentExtent不是最大值，那么使用currentExtent当前大小
+	// Use window size when currentExtent is unspecified
 	if (surfaceCapabilities.currentExtent.width != std::numeric_limits<uint32_t>::max()) {
 		swapchainExtent = surfaceCapabilities.currentExtent;
 	}else{
@@ -130,7 +130,7 @@ uint32_t getImageCount(const uint32_t minImageCount, const uint32_t maxImageCoun
     SDL_PropertiesID props = SDL_GetWindowProperties(window_);
     uint32_t imageCount = minImageCount;
 
-    // 1. Wayland 直接听操作系统的，绝不加 1
+    // Wayland: use compositor-managed buffer count, no +1
     if (SDL_HasProperty(props, SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER)) {
         return imageCount; 
     }

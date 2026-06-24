@@ -5,6 +5,8 @@ module;
 #include <vulkan/vulkan_raii.hpp>
 export module shader;
 
+import cube;
+
 namespace RGL {
 
 export std::vector<uint32_t> loadShaderSpv(const std::string &filename) {
@@ -27,49 +29,68 @@ export struct ShaderEffect {
 
 export class RenderPipeline {
 
-  vk::raii::ShaderEXT meshShader = nullptr;
+ vk::raii::ShaderEXT meshShader = nullptr;
   vk::raii::ShaderEXT fragShader = nullptr;
 
 public:
   vk::raii::PipelineLayout layout = nullptr;
-  RenderPipeline(vk::raii::Device &device, const ShaderEffect &effect) {
-    vk::ShaderCreateInfoEXT meshCreateInfo(
-        {vk::ShaderCreateFlagBitsEXT::eDescriptorHeap},
-        vk::ShaderStageFlagBits::eMeshEXT,
-        vk::ShaderStageFlagBits::eFragment,
-        vk::ShaderCodeTypeEXT::eSpirv,
-        effect.meshStageSpv.size() * sizeof(uint32_t),
-        effect.meshStageSpv.data(),
-        "main",
-        0, nullptr,
-        0, nullptr,
-        nullptr
-    );
+  RenderPipeline(vk::raii::Device &device, const ShaderEffect &effect, uint32_t descriptorSize) {
+    VkDescriptorSetAndBindingMappingEXT mappings[2]{};
 
-    vk::ShaderCreateInfoEXT fragCreateInfo(
-        {vk::ShaderCreateFlagBitsEXT::eDescriptorHeap},
-        vk::ShaderStageFlagBits::eFragment,
-        {},
-        vk::ShaderCodeTypeEXT::eSpirv,
-        effect.fragStageSpv.size() * sizeof(uint32_t),
-        effect.fragStageSpv.data(),
-        "main",
-        0, nullptr,
-        0, nullptr,
-        nullptr
-    );
+    mappings[0].sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
+    mappings[0].descriptorSet = 0;
+    mappings[0].firstBinding = 0;
+    mappings[0].bindingCount = 1;
+    mappings[0].resourceMask = VK_SPIRV_RESOURCE_TYPE_READ_ONLY_STORAGE_BUFFER_BIT_EXT;
+    mappings[0].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
+    mappings[0].sourceData.constantOffset.heapOffset = HeapSlotVertex * descriptorSize;
+    mappings[0].sourceData.constantOffset.heapArrayStride = descriptorSize;
+
+    mappings[1].sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
+    mappings[1].descriptorSet = 0;
+    mappings[1].firstBinding = 1;
+    mappings[1].bindingCount = 1;
+    mappings[1].resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
+    mappings[1].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
+    mappings[1].sourceData.constantOffset.heapOffset = HeapSlotIndex * descriptorSize;
+    mappings[1].sourceData.constantOffset.heapArrayStride = descriptorSize;
+
+    VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{};
+    mappingInfo.sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT;
+    mappingInfo.mappingCount = 2;
+    mappingInfo.pMappings = mappings;
+
+    VkShaderCreateInfoEXT meshCreateInfoRaw{};
+    meshCreateInfoRaw.sType = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT;
+    meshCreateInfoRaw.pNext = &mappingInfo;
+    meshCreateInfoRaw.flags = VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT;
+    meshCreateInfoRaw.stage = VK_SHADER_STAGE_MESH_BIT_EXT;
+    meshCreateInfoRaw.nextStage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    meshCreateInfoRaw.codeType = VK_SHADER_CODE_TYPE_SPIRV_EXT;
+    meshCreateInfoRaw.codeSize = effect.meshStageSpv.size() * sizeof(uint32_t);
+    meshCreateInfoRaw.pCode = effect.meshStageSpv.data();
+    meshCreateInfoRaw.pName = "main";
+    vk::ShaderCreateInfoEXT meshCreateInfo(meshCreateInfoRaw);
+
+    VkShaderCreateInfoEXT fragCreateInfoRaw{};
+    fragCreateInfoRaw.sType = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT;
+    fragCreateInfoRaw.flags = VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT;
+    fragCreateInfoRaw.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    fragCreateInfoRaw.codeType = VK_SHADER_CODE_TYPE_SPIRV_EXT;
+    fragCreateInfoRaw.codeSize = effect.fragStageSpv.size() * sizeof(uint32_t);
+    fragCreateInfoRaw.pCode = effect.fragStageSpv.data();
+    fragCreateInfoRaw.pName = "main";
+    vk::ShaderCreateInfoEXT fragCreateInfo(fragCreateInfoRaw);
 
    std::vector<vk::ShaderCreateInfoEXT> createInfos = {meshCreateInfo,
-                                                         fragCreateInfo};
+                                                          fragCreateInfo};
     auto shaders = device.createShadersEXT(createInfos);
     meshShader = std::move(shaders[0]);
     fragShader = std::move(shaders[1]);
   }
-  void recordRenderCommands(vk::raii::CommandBuffer &cmd, uint32_t width,
+ void recordRenderCommands(vk::raii::CommandBuffer &cmd, uint32_t width,
                             uint32_t height) {
-    // 1. 绑定 Shader 对象的各个阶段
-    // 规范要求：未使用的传统图形阶段（如 Vertex、Geometry
-    // 等）如果不使用，必须显式绑定为 VK_NULL_HANDLE
+    // Bind shader stages; unused traditional stages must be set to VK_NULL_HANDLE
     std::vector<vk::ShaderStageFlagBits> stages = {
         vk::ShaderStageFlagBits::eVertex,
         vk::ShaderStageFlagBits::eTessellationControl,
@@ -80,63 +101,48 @@ public:
         vk::ShaderStageFlagBits::eFragment};
 
     std::vector<vk::ShaderEXT> shaderHandles = {
-        vk::ShaderEXT(nullptr),     vk::ShaderEXT(nullptr),
-        vk::ShaderEXT(nullptr),     vk::ShaderEXT(nullptr),
+        vk::ShaderEXT(nullptr), vk::ShaderEXT(nullptr),
+        vk::ShaderEXT(nullptr), vk::ShaderEXT(nullptr),
         vk::ShaderEXT(nullptr),
-        vk::ShaderEXT(*meshShader), // 解引用 RAII 对象获取 handle
+        vk::ShaderEXT(*meshShader),
         vk::ShaderEXT(*fragShader)};
 
     cmd.bindShadersEXT(stages, shaderHandles);
 
-    // 2. 动态设置以前硬编码在 Pipeline 里的所有状态
-
-    // --- [1] 动态视口与裁剪 ---
-vk::Viewport viewport(
-    0.0f, 
-    static_cast<float>(height), 
-    static_cast<float>(width), 
-    -static_cast<float>(height), 
-    0.0f, 
-    1.0f
-);
+    // Viewport & scissor
+    vk::Viewport viewport(0.0f, static_cast<float>(height),
+                          static_cast<float>(width), -static_cast<float>(height),
+                          0.0f, 1.0f);
     vk::Rect2D scissor({0, 0}, {width, height});
     cmd.setViewportWithCount(viewport);
     cmd.setScissorWithCount(scissor);
 
-    // --- [2] 动态光栅化状态 ---
+    // Rasterization
     cmd.setPolygonModeEXT(vk::PolygonMode::eFill);
-    cmd.setCullMode(vk::CullModeFlagBits::eBack);
-    cmd.setFrontFace(vk::FrontFace::eClockwise);
+    cmd.setCullMode(vk::CullModeFlagBits::eNone);
+    cmd.setFrontFace(vk::FrontFace::eCounterClockwise);
     cmd.setRasterizerDiscardEnable(false);
-
-    // ✨【修复当前报错】显式关闭深度偏移（Depth Bias）
     cmd.setDepthBiasEnable(false);
-    cmd.setDepthBias(0.0f, 0.0f,
-                     0.0f); // 某些严格的驱动即使关闭了也要求调用一次设值
+    cmd.setDepthBias(0.0f, 0.0f, 0.0f);
 
-    // --- [3] 动态深度与模板测试 ---
-    cmd.setDepthTestEnable(true);                // 开启深度测试
-    cmd.setDepthWriteEnable(true);               // 允许写入深度
-    cmd.setDepthCompareOp(vk::CompareOp::eLess); // 越近越渲染
-    cmd.setDepthBoundsTestEnable(false);         // 关闭深度边界测试
-    cmd.setStencilTestEnable(false);             // 关闭模板测试
+    // Depth & stencil
+    cmd.setDepthTestEnable(true);
+    cmd.setDepthWriteEnable(true);
+    cmd.setDepthCompareOp(vk::CompareOp::eLess);
+    cmd.setDepthBoundsTestEnable(false);
+    cmd.setStencilTestEnable(false);
 
-    // --- [4] 动态多重采样 (Multisampling) ---
+    // Multisampling
     cmd.setRasterizationSamplesEXT(vk::SampleCountFlagBits::e1);
-    vk::SampleMask sampleMask = 0xFFFFFFFF;
-    cmd.setSampleMaskEXT(vk::SampleCountFlagBits::e1, sampleMask);
+    cmd.setSampleMaskEXT(vk::SampleCountFlagBits::e1, 0xFFFFFFFF);
     cmd.setAlphaToCoverageEnableEXT(false);
-    cmd.setAlphaToOneEnableEXT(
-        false); // ✨【提前防御】防止下一步报 AlphaToOne 未设置
+    cmd.setAlphaToOneEnableEXT(false);
 
-    // --- [5] 动态颜色混合与逻辑操作 (Color Blending & Logic Op) ---
-    cmd.setColorBlendEnableEXT(0, VK_FALSE); // 针对 Attachment 0 关闭混合
-
-    vk::ColorComponentFlags colorWriteMask =
+    // Color blending
+    cmd.setColorBlendEnableEXT(0, VK_FALSE);
+    cmd.setColorWriteMaskEXT(0,
         vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
-        vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
-    cmd.setColorWriteMaskEXT(0, colorWriteMask); // 允许写入 RGBA
-
+        vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA);
     cmd.setLogicOpEnableEXT(false);
   }
 };

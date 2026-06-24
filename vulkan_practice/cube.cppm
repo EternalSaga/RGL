@@ -10,9 +10,9 @@ namespace RGL {
 export struct Vertex {
     float position[3];
     float color[3];
+    float _padding[2];
 };
 
-// 2. CPU 端硬编码一个立方体的 8 个顶点
 export const std::vector<Vertex> cubeVertices = {
     {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
     {{ 0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
@@ -34,12 +34,12 @@ export const std::vector<uint32_t> cubeIndices = {
     4, 5, 1,  1, 0, 4  // 底
 };
 
+// Descriptor heap slot assignments (indices into heap, not byte offsets)
+export constexpr uint32_t HeapSlotVertex = 8;
+export constexpr uint32_t HeapSlotIndex  = 12;
+
 export struct DrawArgs {
     glm::mat4 mvp;
-    uint32_t vertexOffset;
-    uint32_t indexOffset;
-    uint64_t _padding;
-    uint64_t heapAddress;
 };
 
 }  // namespace RGL

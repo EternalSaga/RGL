@@ -1,4 +1,5 @@
 module;
+#include <rllogger.hpp>
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_raii.hpp>
 #include <vector>
@@ -27,11 +28,9 @@ public:
           vkResources_(vkResources),
           graphicsQueue_(vkDevice_.getGraphicsQueue()),
           graphicsCommandPool_(vkDevice_.getGraphicsCommandPool()),
-          cubePipeline(createRenderPipeline(vkDevice_.getDevice()))
+          cubePipeline(createRenderPipeline(vkDevice_.getDevice(), vkResources_.getDescriptorHeap().getDescriptorSize())),
+          heapAddress_(vkResources_.getDescriptorHeap().getGpuAddress())
     {
-        drawArgs_.heapAddress = vkResources_.getDescriptorHeap().getGpuAddress();
-        drawArgs_.vertexOffset = vkResources_.getVertexOffset();
-        drawArgs_.indexOffset = vkResources_.getIndexOffset();
         createSyncObjects();
         allocateCommandBuffers();
         initDepthBarrier();
@@ -65,11 +64,11 @@ public:
     }
 
 private:
-   static RGL::RenderPipeline createRenderPipeline(vk::raii::Device& device) {
+   static RGL::RenderPipeline createRenderPipeline(vk::raii::Device& device, uint32_t descriptorSize) {
         RGL::ShaderEffect cubeEffect;
         cubeEffect.meshStageSpv = RGL::loadShaderSpv("generated_shaders/cube.mesh.spv");
         cubeEffect.fragStageSpv = RGL::loadShaderSpv("generated_shaders/cube.frag.spv");
-        return RGL::RenderPipeline(device, cubeEffect);
+        return RGL::RenderPipeline(device, cubeEffect, descriptorSize);
     }
 
     void createSyncObjects() {
@@ -174,13 +173,32 @@ private:
         renderingInfo.setColorAttachments(colorAttachment);
         renderingInfo.setPDepthAttachment(&depthAttachment);
 
+        vk::MemoryBarrier2 heapBarrier{};
+        heapBarrier.srcAccessMask = vk::AccessFlagBits2::eHostWrite;
+        heapBarrier.dstAccessMask = vk::AccessFlagBits2::eResourceHeapReadEXT;
+        heapBarrier.srcStageMask = vk::PipelineStageFlagBits2::eHost;
+        heapBarrier.dstStageMask = vk::PipelineStageFlagBits2::eAllGraphics;
+        vk::DependencyInfo heapDepInfo{};
+        heapDepInfo.setMemoryBarriers(heapBarrier);
+        commandBuffers_[currentFrame_].pipelineBarrier2(heapDepInfo);
+
+        vk::DeviceAddressRangeEXT heapRange{};
+        heapRange.address = heapAddress_;
+        heapRange.size = vkResources_.getDescriptorHeap().getDescriptorSize() * vkResources_.getDescriptorHeap().getCapacity();
+        commandBuffers_[currentFrame_].bindResourceHeapEXT(vk::BindHeapInfoEXT(
+            heapRange,
+            vkResources_.getReservedRangeOffset(),
+            vkResources_.getReservedRangeSize()
+        ));
+
+        commandBuffers_[currentFrame_].pushDataEXT(vk::PushDataInfoEXT(
+            0, vk::HostAddressRangeConstEXT(&drawArgs_, sizeof(RGL::DrawArgs))));
+
         commandBuffers_[currentFrame_].beginRendering(renderingInfo);
 
         cubePipeline.recordRenderCommands(commandBuffers_[currentFrame_],
-                                          vkSwapchain_.getExtent().width,
-                                          vkSwapchain_.getExtent().height);
-        commandBuffers_[currentFrame_].pushDataEXT(vk::PushDataInfoEXT(
-            0, vk::HostAddressRangeConstEXT(&drawArgs_, sizeof(RGL::DrawArgs))));
+                                           vkSwapchain_.getExtent().width,
+                                           vkSwapchain_.getExtent().height);
         commandBuffers_[currentFrame_].drawMeshTasksEXT(1, 1, 1);
         commandBuffers_[currentFrame_].endRendering();
 
@@ -223,6 +241,7 @@ private:
     const vk::raii::CommandPool& graphicsCommandPool_;
     RGL::RenderPipeline cubePipeline;
     RGL::DrawArgs drawArgs_{};
+    vk::DeviceAddress heapAddress_ = 0;
 
     static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
     uint32_t currentFrame_ = 0;

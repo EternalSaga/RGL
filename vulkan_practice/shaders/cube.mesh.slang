@@ -10,17 +10,14 @@ void main(
 {
     SetMeshOutputCounts(8, 12);
 
-    Vertex* vertexBuf = Ptr<Vertex>(drawArgs.heapAddress + drawArgs.vertexOffset);
-    uint* indexBuf = Ptr<uint>(drawArgs.heapAddress + drawArgs.indexOffset);
-
     if (ti < 8) {
-        Vertex v = vertexBuf[ti];
+        Vertex v = vertexBuffer[ti];
         verts[ti].position = mul(drawArgs.mvp, float4(v.position, 1.0));
         verts[ti].color = v.color;
     }
 
     if (ti < 12) {
         uint baseIdx = ti * 3;
-        triangles[ti] = uint3(indexBuf[baseIdx], indexBuf[baseIdx+1], indexBuf[baseIdx+2]);
+        triangles[ti] = uint3(indexBuffer.Load(baseIdx * 4), indexBuffer.Load((baseIdx+1) * 4), indexBuffer.Load((baseIdx+2) * 4));
     }
 }
