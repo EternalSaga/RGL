@@ -137,6 +137,8 @@ mappings[0].sourceData.constantOffset.heapArrayStride = descriptorSize;
 
 `VkShaderDescriptorSetAndBindingMappingInfoEXT` 需要分别 chain 到每个 `VkShaderCreateInfoEXT.pNext`。mesh shader 的 mapping 不会自动传播到 fragment shader。
 
+**但前提是该 shader stage 声明了 `[[vk::binding]]` 资源。** 规范原文："If the shader declares any resource variables with set and binding values, this structure must specify mappings for them." 如果 shader 没有 binding（如纯 fragment shader），不需要设置 mapping，`pNext = nullptr` 即可。
+
 ---
 
 ## 五、命令录制顺序
@@ -238,7 +240,7 @@ ByteAddressBuffer indexBuffer;
 
 ## 七、矩阵 layout 问题
 
-### 坑 12：glm column-major vs Slang row-major
+### 坑 12：矩阵 memory layout 一致性
 
 ```cpp
 // C++: glm::mat4 = column-major
@@ -246,13 +248,13 @@ drawArgs.mvp = proj * view * model;
 ```
 
 ```hlsl
-// Slang: float4x4 = row-major
-// mul(M, v) 实际计算 M^T * v → 透视失真
+// Slang: float4x4 = column-major（面向 Vulkan/SPIR-V 目标）
+// mul(M, v) 计算标准矩阵乘法 M × v（列向量）
 ```
 
-**修复方案：** 保持 C++ 端 `proj * view * model` 不变，shader 端用 `mul(matrix, vector)`。因为 `glm::mat4` 的 column-major 内存布局被 Slang 的 row-major 解释后自然互为转置，`mul(M, v)` 中的 M 实际上就是正确的矩阵。
+**原理：** Slang 面向 Vulkan/SPIR-V 编译时 `float4x4` 默认 memory layout 为 column-major，与 `glm::mat4` 的内存布局完全一致。两端二进制数据字节序相同，`mul(M, v)` 的数学语义也是 `M×v`（列向量），无需任何转换。
 
-如果不行，在 C++ 端 `glm::transpose()` 补偿。
+**结论：** C++ 端 `proj * view * model` 不变，shader 端 `mul(matrix, vector)` 不变。**绝对不要加 `glm::transpose()`**——实验验证：添加 transpose 后立方体坍缩为扁平四边形，三角形计数错误。
 
 ---
 
@@ -300,12 +302,18 @@ struct VmaDescriptorHeap {
 ### 2. slot 编号规划
 
 ```
-slots 0..reservedSlots-1 → 实现保留，不要使用
-slot 0..N  → push data 映射区域（如果需要）
-slot 8     → vertex buffer
-slot 12    → index buffer
-slot 16+   → 其他资源
+heap slots:
+  0..reservedSlots-1  → 实现保留（BindHeapInfoEXT.reservedRange），不要使用
+  8                   → vertex buffer (HeapSlotVertex)
+  12                  → index buffer (HeapSlotIndex)
+  16+                 → 其他资源
+
+push data (独立于 heap slots):
+  vkCmdPushDataEXT 写入独立的 push data 内存区域，不占用 descriptor heap slots
+  push constant 通过 [[vk::push_constant]] 直接访问 push data，不需要 binding mapping
 ```
+
+**实际代码（vkresources.cppm:110）：** `capacity = 16 + reservedSlots`。`reservedRangeOffset = 0`，reserved slots 始终从 heap 起始地址开始（slot 0..reservedSlots-1）。用户实际可用 slots 为 `reservedSlots..(capacity-1)`。当前 RADV 上 `reservedSlots` ≤ 8，所以 slot 8 和 12 是安全的。但如果驱动 reserved range 增大（例如 ≥ 13），需要调高 capacity 基数或增大 slot 编号。
 
 ### 3. 一次性分配，全程复用
 

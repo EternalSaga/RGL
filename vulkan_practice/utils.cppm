@@ -183,14 +183,12 @@ for (const auto& device : physicalDevices) {
 }
 
 export vk::PresentModeKHR selectPresentMode(const std::vector<vk::PresentModeKHR>& presentModes){
-	vk::PresentModeKHR selectedPresentMode = vk::PresentModeKHR::eFifo;
-	for(const auto& availablePresentMode : presentModes){
-		if (availablePresentMode == vk::PresentModeKHR::eImmediate) {
-			selectedPresentMode = availablePresentMode;
-			break;
-		}
-	}
-    return selectedPresentMode;
+    for(const auto& mode : presentModes){
+        if (mode == vk::PresentModeKHR::eImmediate) {
+            return mode;
+        }
+    }
+    throw std::runtime_error("eImmediate not supported — compositor or platform incompatible");
 }
 
 export vk::ImageMemoryBarrier2 createImageBarrier(

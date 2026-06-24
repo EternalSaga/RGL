@@ -75,14 +75,18 @@ Slang shaders in `shaders/` → SPV output to `build/vulkan_practice/generated_s
 
 ## Implicit extension dependencies
 
-`features.cppm` 和 `vkinstance.cppm` 中请求的 `VK_EXT_DEVICE_GENERATED_COMMANDS`、`VK_EXT_SWAPCHAIN_COLOR_SPACE` 等扩展当前无显式使用，但被其他已启用的扩展隐式依赖。移除它们可能导致驱动层面功能异常，不可随意删除。
+`features.cppm` 中请求的 `VK_EXT_DEVICE_GENERATED_COMMANDS`、`VK_EXT_DESCRIPTOR_BUFFER` 等扩展当前无显式使用，但被其他已启用的扩展隐式依赖。移除它们可能导致驱动层面功能异常，不可随意删除。
+
+`vkinstance.cppm` 中请求的 `VK_EXT_SWAPCHAIN_COLOR_SPACE` 等实例扩展同理。
+
+**KHR/EXT alias note:** `VK_KHR_swapchain_maintenance1` promotion 后，`VkSwapchainPresentFenceInfoKHR` 和 `VkSwapchainPresentFenceInfoEXT` 是同一结构（typedef alias, `vulkan_core.h:18411`），sType 值相同。代码使用 EXT 命名形式，功能等价于 KHR。
 
 ## Key Vulkan patterns used
 
 - **Synchronization2** — all barriers use `pipelineBarrier2` + `vk::DependencyInfo`, not legacy `pipelineBarrier`
 - **Dynamic rendering** — no render passes, uses `beginRendering` + `RenderingInfo`
 - **ShaderObject** — no pipeline creation, uses `bindShadersEXT` + dynamic state
-- **Push data** — uses `vkCmdPushDataEXT` to push `DrawArgs` to descriptor heap offset 0
+- **Push data** — uses `vkCmdPushDataEXT` to push `DrawArgs` (separate from descriptor heap, accessed via `[[vk::push_constant]]`)
 - **DescriptorHeap** — `VmaDescriptorHeap` manages a single VMA-allocated GPU-visible buffer; descriptors written via `vkWriteResourceDescriptorsEXT` to heap slots 8 (vertex buffer) and 12 (index buffer); `vkCmdBindResourceHeapEXT` binds heap before render pass
 
 ## Dependencies (external, linked via parent CMake)
@@ -99,7 +103,7 @@ Slang shaders in `shaders/` → SPV output to `build/vulkan_practice/generated_s
 ### Timeline of recent changes
 1. **Replaced BDA pointer arithmetic** with `[[vk::binding(N, 0)]] StructuredBuffer<T>` in Slang shaders (`types.slang:20-24`).
 2. **Created real descriptor heap** with `VK_BUFFER_USAGE_DESCRIPTOR_HEAP_BIT_EXT` (`vkresources.cppm:96-114`).
-3. **Wrote descriptors** via `vkWriteResourceDescriptorsEXT` into heap slots 8 (vertex buffer) and 12 (index buffer), avoiding push data collision at slots 0-3.
+3. **Wrote descriptors** via `vkWriteResourceDescriptorsEXT` into heap slots 8 (vertex buffer) and 12 (index buffer), avoiding reserved range at heap start.
 4. **Fixed vk-hpp wrapper types**: `writeResourceDescriptorsEXT` requires `vk::ResourceDescriptorInfoEXT` / `vk::HostAddressRangeEXT` (not raw `Vk*` types). Pass via `std::vector` to satisfy `ArrayProxy<const T>` parameter.
 5. **Aligned heapOffset** and **heapArrayStride** to 4 (multiple of `bufferDescriptorAlignment`) in `shader.cppm:44-45, 53-54`.
 6. **Added host→GPU memory barrier** (`HostWrite` → `ShaderRead`) before heap binding.
@@ -110,22 +114,35 @@ Slang shaders in `shaders/` → SPV output to `build/vulkan_practice/generated_s
 9. **Fixed MVP matrix** (`vkrenderer.cppm:58`): Changed `drawArgs_.mvp = glm::mat4(1.0f)` → `proj * view * model`. Cube now renders with rotation.
 10. **Fixed StructuredBuffer stride mismatch** (PRIMARY FIX): HLSL `StructuredBuffer<T>` requires element stride ≥ 16-byte alignment. C++ `Vertex` was 24 bytes (2×float3), GPU read stride 32 bytes → `vertexBuffer[1]` read from offset 32 but actual data at offset 24 → **completely wrong vertex data** → geometric distortion. Fixed: added `float _padding[2]` to C++ `Vertex` struct (cube.cppm:13) to pad to 32 bytes.
 11. **Fixed index buffer type** (`types.slang:24`): `StructuredBuffer<uint>` (16-byte stride) → `ByteAddressBuffer` to correctly read 4-byte `uint32_t` indices via `.Load(offset * 4)`.
+12. **Fixed colorToDrawBarrier** (`vkrenderer.cppm:143`): `srcStageMask` changed from `eColorAttachmentOutput` → `eTopOfPipe` (no prior access to sync from; acquire semaphore handles inter-frame sync). `srcAccessMask` remains `eNone`.
 
-### Current state (2026-06-24)
+### colorToDrawBarrier — `oldLayout = eUndefined` is the correct choice (verified 2026-06-24)
+尝试改为 `ePresentSrcKHR`，验证层报错 `expects ... PRESENT_SRC_KHR, instead ... UNDEFINED`。结论：
+
+- Swapchain image 第1帧 layout 是 `Undefined`（刚创建），帧2+ 是 `PresentSrcKHR`
+- `eUndefined` 作为 `oldLayout` 在 spec 中**唯一正确**——它覆盖两种状态，无需分支判断
+- 如果硬写 `ePresentSrcKHR`，第1帧必报错；如果动态切换（首次 `Undefined`、后续 `PresentSrcKHR`），增加无意义复杂度
+- `eUndefined` 的含义是"I don't care about current layout, transition to new layout"，不是"image 一定是 undefined 状态"
+
+### Current state (verified working)
 - Descriptors correctly written to heap slots 8 (vertex) and 12 (index), mapped via byte-aligned `heapOffset`.
 - MVP matrix computed and pushed via `vkCmdPushDataEXT`.
-- **Result: cube renders but is severely perspective-distorted** — geometry warps as it rotates.
+- StructuredBuffer stride mismatch fixed (C++ `Vertex` padded to 32 bytes).
+- Index buffer type fixed (`ByteAddressBuffer` with `.Load(offset * 4)`).
+- colorToDrawBarrier `srcStageMask` fixed to `eTopOfPipe`.
+- **Result: cube renders correctly with rotation.**
 
-### Remaining investigation areas
-- **StructuredBuffer<uint> stride mismatch (PRIMARY SUSPECT)**: HLSL/Slang `StructuredBuffer<T>` requires element stride ≥ 16 bytes. Our index buffer is `uint32_t[]` (4-byte stride). This causes the mesh shader to read wrong index values, producing distorted geometry. **Fix: change to `RawBuffer<uint>` in `types.slang:24`**.
-- **Matrix layout**: Slang `float4x4` is row-major; `glm::mat4` is column-major. `mul(drawArgs.mvp, ...)` may produce transposed result. If stride fix doesn't fully resolve, try `glm::transpose()`.
-- **Push data mapping**: `vkCmdPushDataEXT` writes to heap offset 0; the shader's `[[vk::push_constant]]` may need explicit mapping in `ShaderDescriptorSetAndBindingMappingInfoEXT`.
+### Resolved issues (verified by experiment)
+- ~~**Matrix layout**~~: Slang 面向 Vulkan/SPIR-V 目标时 `float4x4` 默认 memory layout 为 column-major，与 `glm::mat4` 一致。`mul(M, v)` 严格计算 `M×v`（列向量）。**Experiment: adding `glm::transpose()` produces severely distorted output** — cube collapses into a flat square with incorrect triangle count. **Do NOT use `glm::transpose()`** — 两端内存布局相同，直接透传即可。
+- ~~**Push data mapping**~~: `[[vk::push_constant]]` 在 descriptor heap 模式下**不需要**显式 mapping。Spec 3.4.1 节明确说明："Push constants in this data can be accessed in the same way as before via the `PushConstant` storage class, it is now simply unnecessary to construct a pipeline layout to do that."
 
 ### Relevant file locations
-- `vkresources.cppm:117-150` — `writeDescriptors()` with `vkWriteResourceDescriptorsEXT`
-- `vkrenderer.cppm:176-193` — heap barrier, `bindResourceHeapEXT`, `pushDataEXT` (all before `beginRendering`)
-- `shader.cppm:36-54` — `DescriptorSetAndBindingMappingEXT` for heap slots 8 and 12
-- `shaders/types.slang:20-24` — `StructuredBuffer` bindings
+- `vkresources.cppm:121-154` — `writeDescriptors()` with `vkWriteResourceDescriptorsEXT`
+- `vkrenderer.cppm:143-153` — `colorToDrawBarrier` (Undefined → ColorAttachmentOptimal, srcStage=eTopOfPipe)
+- `vkrenderer.cppm:176-197` — heap barrier, `bindResourceHeapEXT`, `pushDataEXT` (all before `beginRendering`)
+- `vkrenderer.cppm:225` — `SwapchainPresentFenceInfoEXT` (KHR alias) in `presentInfo.pNext`
+- `shader.cppm:38-56` — `DescriptorSetAndBindingMappingEXT` for heap slots 8 and 12
+- `shaders/types.slang:20-24` — `StructuredBuffer`/`ByteAddressBuffer` bindings
 - `shaders/cube.mesh.slang:15` — `mul(drawArgs.mvp, ...)` MVP transform
 
 ## Known issues to watch
@@ -144,9 +161,11 @@ Score weights: `coreCount * 1000` + `vramGB * 10` + discrete `+500` / integrated
 
 **Rationale:** Stream processor count is the dominant performance indicator, followed by VRAM, then GPU type. This prevents mis-ranking a strong iGPU behind a weak dGPU (e.g., a high-end integrated GPU paired with a basic "lights-on" discrete card).
 
-### Present mode: `eImmediate` over `eMailbox` (utils.cppm:195)
+### Present mode: `eImmediate` only (utils.cppm:186-190)
 
-**Rationale:** On Wayland, the compositor already manages triple-buffering and full-frame synchronization. Using `eImmediate` avoids redundant buffer stacking that `eMailbox` would add.
+Directly returns `eImmediate`. If unavailable, throws runtime error.
+
+**Rationale:** On Wayland, the compositor already manages triple-buffering and full-frame synchronization. `eImmediate` is the correct choice. No fallback needed.
 
 ### Swapchain image count: Wayland不加 1 (sdl3window.cppm:130)
 
@@ -175,28 +194,28 @@ Swapchain image 0 was presented but was not re-acquired, so VkSemaphore ... may 
 
 At the start of `drawFrame()`, both fences are waited and reset together, ensuring the corresponding semaphore and command buffer are safe to reuse only after submit and present have both completed.
 
-### PresentFenceInfoEXT (vkrenderer.cppm:206)
+### PresentFenceInfoKHR (vkrenderer.cppm:225)
 
-Uses `vk::SwapchainPresentFenceInfoEXT` in `presentInfo.pNext`.
+Uses `vk::SwapchainPresentFenceInfoEXT` (typedef alias of `SwapchainPresentFenceInfoKHR`) in `presentInfo.pNext`.
 
-**Rationale:** Modernized synchronization — leverages the extension for cleaner present-side fence tracking.
+**Rationale:** Modernized synchronization — leverages `VK_KHR_swapchain_maintenance1` for cleaner present-side fence tracking. The EXT name is an alias: `typedef VkSwapchainPresentFenceInfoKHR VkSwapchainPresentFenceInfoEXT` (`vulkan_core.h:18411`), and sType values are identical (`VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_EXT == VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_KHR`).
 
 ### DrawArgs over PushConstants (cube.cppm)
 
-`DrawArgs` is pushed via `vkCmdPushDataEXT`, **not** traditional Vulkan push constants. Naming matters: `PushConstants` implies the 128-byte limited `pushConstants` range, whereas `pushDataEXT` writes to the descriptor heap and is unbounded.
+`DrawArgs` is pushed via `vkCmdPushDataEXT`, **not** traditional Vulkan push constants. `vkCmdPushDataEXT` pushes data to an independent push data region (separate from descriptor heap), accessible in shader via `[[vk::push_constant]]`. The push data region is bounded by `maxPushDataSize` (≥256 bytes).
 
-**Layout rule — Slang UBO alignment:** Slang applies std140-like UBO alignment to `[[vk::push_constant]]` structs. When a `uint32_t` precedes a `uint64_t`, the `uint64_t` gets padded to 8-byte alignment. C++ and Slang layouts must match exactly:
+**Current layout** — single `glm::mat4` field (64 bytes):
 
 ```cpp
-// C++ — explicit padding
-struct DrawArgs { glm::mat4 mvp; uint32_t vertexOffset; uint32_t indexOffset; uint64_t _padding; uint64_t heapAddress; };
+// C++ (cube.cppm:41-43)
+struct DrawArgs { glm::mat4 mvp; };
 ```
 ```slang
-// Slang — must match 1:1
-struct DrawArgs { float4x4 mvp; uint32_t vertexOffset; uint32_t indexOffset; uint64_t _padding; uint64_t heapAddress; };
+// Slang (types.slang:13-16)
+struct DrawArgs { float4x4 mvp; };
 ```
 
-Omitting `_padding` causes mismatched byte ranges → Vulkan validation error `vkCmdPushDataEXT was never called for range [81, 87)`. Always keep C++ and shader struct layouts identical field-by-field.
+**Layout rule — Slang UBO alignment:** When adding fields, Slang applies std140-like UBO alignment to `[[vk::push_constant]]` structs. If a `uint32_t` precedes a `uint64_t`, the `uint64_t` gets padded to 8-byte alignment. C++ and Slang layouts must match exactly. Omitting padding causes mismatched byte ranges → Vulkan validation error `vkCmdPushDataEXT was never called for range [81, 87)`. Always keep C++ and shader struct layouts identical field-by-field.
 
 ---
 

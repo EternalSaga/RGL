@@ -144,7 +144,7 @@ private:
             swapchainImages[imageIndex], vk::ImageLayout::eUndefined,
             vk::ImageLayout::eColorAttachmentOptimal,
             vk::ImageAspectFlagBits::eColor,
-            vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+            vk::PipelineStageFlagBits2::eTopOfPipe,
             vk::PipelineStageFlagBits2::eColorAttachmentOutput,
             vk::AccessFlagBits2::eNone,
             vk::AccessFlagBits2::eColorAttachmentWrite);

@@ -74,6 +74,7 @@ public:
 
     VkShaderCreateInfoEXT fragCreateInfoRaw{};
     fragCreateInfoRaw.sType = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT;
+    fragCreateInfoRaw.pNext = &mappingInfo;
     fragCreateInfoRaw.flags = VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT;
     fragCreateInfoRaw.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
     fragCreateInfoRaw.codeType = VK_SHADER_CODE_TYPE_SPIRV_EXT;
