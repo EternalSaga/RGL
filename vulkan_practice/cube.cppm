@@ -10,7 +10,6 @@ namespace RGL {
 export struct Vertex {
     float position[3];
     float color[3];
-    float _padding[2];
 };
 
 export const std::vector<Vertex> cubeVertices = {
@@ -35,8 +34,8 @@ export const std::vector<uint32_t> cubeIndices = {
 };
 
 // Descriptor heap slot assignments (indices into heap, not byte offsets)
-export constexpr uint32_t HeapSlotVertex = 8;
-export constexpr uint32_t HeapSlotIndex  = 12;
+export constexpr uint32_t HeapSlotVertex = 8; //随便指定的
+export constexpr uint32_t HeapSlotIndex  = 12;//随便指定的
 
 export struct DrawArgs {
     glm::mat4 mvp;

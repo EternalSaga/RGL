@@ -18,7 +18,7 @@ struct DrawArgs
 [[vk::push_constant]] DrawArgs drawArgs;
 
 [[vk::binding(0, 0)]]
-StructuredBuffer<Vertex> vertexBuffer;
+ByteAddressBuffer vertexBuffer;
 
 [[vk::binding(1, 0)]]
 ByteAddressBuffer indexBuffer;

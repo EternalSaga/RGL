@@ -11,9 +11,13 @@ void main(
     SetMeshOutputCounts(8, 12);
 
     if (ti < 8) {
-        Vertex v = vertexBuffer[ti];
-        verts[ti].position = mul(drawArgs.mvp, float4(v.position, 1.0));
-        verts[ti].color = v.color;
+        uint vertexOffset = ti * 24;
+        uint3 posRaw = vertexBuffer.Load3(vertexOffset);
+        uint3 colRaw = vertexBuffer.Load3(vertexOffset + 12);
+        float3 pos = asfloat(posRaw);
+        float3 col = asfloat(colRaw);
+        verts[ti].position = mul(drawArgs.mvp, float4(pos, 1.0));
+        verts[ti].color = col;
     }
 
     if (ti < 12) {
