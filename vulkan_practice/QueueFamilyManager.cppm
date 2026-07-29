@@ -22,16 +22,16 @@ struct QueueAllocation {
     uint32_t baseQueueIndex; // 对应物理队列的索引
 };
 
-export class QueueManager {
+export class QueueFamilyManager {
 public:
-    QueueManager(const vk::raii::PhysicalDevice& physicalDevice):physicalDevice_(physicalDevice) {
+    QueueFamilyManager(const vk::raii::PhysicalDevice& physicalDevice):physicalDevice(physicalDevice) {
         auto queueFamilies = physicalDevice.getQueueFamilyProperties();
         std::map<QueueFamilyRole, uint32_t> roleToFamilies;
         logger = RLLogger::getInstance();
         // Find best queue family for each role
         for (uint32_t i = 0; i < queueFamilies.size(); ++i) {
             const auto& props = queueFamilies[i];
-            
+
             if (!roleToFamilies.count(QueueFamilyRole::Graphics) && (props.queueFlags & vk::QueueFlagBits::eGraphics)) {
                 roleToFamilies[QueueFamilyRole::Graphics] = i;
             }
@@ -73,69 +73,69 @@ public:
 
             if (currentAllocated < maxAvailable) {
                 // 硬件还有空闲的物理队列，独占一个
-                allocations_[role] = {familyIdx, currentAllocated};
+                allocations[role] = {familyIdx, currentAllocated};
                 familyAllocatedCount[familyIdx]++;
             } else {
                 // 硬件队列不够用了！只能和前面的人共享最后一个可用的物理队列
-                allocations_[role] = {familyIdx, maxAvailable - 1};
+                allocations[role] = {familyIdx, maxAvailable - 1};
             }
         }
 
         // Build vk::DeviceQueueCreateInfo with dynamic priority arrays
-        // priorities_ must outlive vkCreateDevice, so stored as class member
-        priorities_.clear();
-        queueCreateInfos_.clear();
+        // priorities must outlive vkCreateDevice, so stored as class member
+        priorities.clear();
+        queueCreateInfos.clear();
 
         for (const auto& [familyIdx, count] : familyAllocatedCount) {
             // 为当前 Family 创建独立的一组优先级数组（长度等于 count）
-            size_t startIdx = priorities_.size();
+            size_t startIdx = priorities.size();
             for (uint32_t i = 0; i < count; ++i) {
-                priorities_.push_back(1.0f); // 默认优先级
+                priorities.push_back(1.0f); // 默认优先级
             }
 
-            queueCreateInfos_.emplace_back(
-                vk::DeviceQueueCreateFlags{}, 
-                familyIdx, 
-                count, 
-                &priorities_[startIdx] // 传入对应的子数组指针
+            queueCreateInfos.emplace_back(
+                vk::DeviceQueueCreateFlags{},
+                familyIdx,
+                count,
+                &priorities[startIdx] // 传入对应的子数组指针
             );
         }
     }
 
     const std::vector<vk::DeviceQueueCreateInfo>& getQueueCreateInfos() const {
-        return queueCreateInfos_;
+        return queueCreateInfos;
     }
 
     vk::Queue getQueue(const vk::Device& device, QueueFamilyRole role) const {
-        auto it = allocations_.find(role);
-        if (it == allocations_.end()) {
+        auto it = allocations.find(role);
+        if (it == allocations.end()) {
             throw std::runtime_error("Requested queue role not allocated!");
         }
         return device.getQueue(it->second.familyIndex, it->second.baseQueueIndex);
     }
 
     uint32_t getFamilyIndex(QueueFamilyRole role) const {
-        return allocations_.at(role).familyIndex;
+        return allocations.at(role).familyIndex;
     }
 
 void checkPresentAbility(const vk::raii::SurfaceKHR& surface) const {
     // Verify graphics queue family supports present on this surface
          uint32_t graphicsFamilyIdx = getFamilyIndex(QueueFamilyRole::Graphics);
 
-         if (!physicalDevice_.getSurfaceSupportKHR(graphicsFamilyIdx, *surface)) {
+         if (!physicalDevice.getSurfaceSupportKHR(graphicsFamilyIdx, *surface)) {
              const auto errMsg = fmt::format("Graphics queue family (Index: {}) cannot present to surface", graphicsFamilyIdx);
              logger->critical(errMsg);
-            throw std::runtime_error(
-               errMsg
-            );
-        }
+             throw std::runtime_error(
+                errMsg
+             );
+         }
     }
 
 private:
-    std::vector<vk::DeviceQueueCreateInfo> queueCreateInfos_;
-    std::vector<float> priorities_; 
-    std::map<QueueFamilyRole, QueueAllocation> allocations_;
-    const vk::raii::PhysicalDevice& physicalDevice_;
+    std::vector<vk::DeviceQueueCreateInfo> queueCreateInfos;
+    std::vector<float> priorities;
+    std::map<QueueFamilyRole, QueueAllocation> allocations;
+    const vk::raii::PhysicalDevice& physicalDevice;
     RGL::RLLogger* logger;
 };
 

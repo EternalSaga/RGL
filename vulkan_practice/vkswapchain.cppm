@@ -12,80 +12,80 @@ import vk_device;
 
 namespace RGL {
 
-export class VkSwapchain {
+export class Swapchain {
 public:
-    VkSwapchain(RGL::VkDevice& vkDevice, RGL::SDLWindow& window)
-        : vkDevice_(vkDevice),
-          window_(window),
-          surface_(window_.createSurface(vkDevice_.getVkInstance().getInstance())),
-          format_(window_.selectFormat(
-              vkDevice_.getPhysicalDevice().getSurfaceFormatsKHR(*surface_))),
-          presentMode_(RGL::selectPresentMode(
-              vkDevice_.getPhysicalDevice().getSurfacePresentModesKHR(*surface_))),
-          surfaceCapabilities_(vkDevice_.getPhysicalDevice().getSurfaceCapabilitiesKHR(*surface_)),
-          extent_(window_.getSwapchainExtend(surfaceCapabilities_)),
-          imageCount_(window_.getImageCount(surfaceCapabilities_.minImageCount, surfaceCapabilities_.maxImageCount)),
-          swapchain_(vkDevice_.getDevice(), buildSwapchainCreateInfo()),
-          swapchainImages_(swapchain_.getImages()),
-          swapchainImageViews_(createImageViews(vkDevice_.getDevice(), swapchainImages_, format_.format))
+    Swapchain(RGL::DeviceContext& vkDevice, RGL::SDLWindow& window)
+        : vkDevice(vkDevice),
+          window(window),
+          surface(window.createSurface(vkDevice.getVkInstance().getInstance())),
+          format(window.selectFormat(
+              vkDevice.getPhysicalDevice().getSurfaceFormatsKHR(*surface))),
+          presentMode(RGL::selectPresentMode(
+              vkDevice.getPhysicalDevice().getSurfacePresentModesKHR(*surface))),
+          surfaceCapabilities(vkDevice.getPhysicalDevice().getSurfaceCapabilitiesKHR(*surface)),
+          extent(window.getSwapchainExtend(surfaceCapabilities)),
+          imageCount(window.getImageCount(surfaceCapabilities.minImageCount, surfaceCapabilities.maxImageCount)),
+          swapchain(vkDevice.getDevice(), buildSwapchainCreateInfo()),
+          swapchainImages(swapchain.getImages()),
+          swapchainImageViews(createImageViews(vkDevice.getDevice(), swapchainImages, format.format))
     {
-        vkDevice_.getQueueManager().checkPresentAbility(surface_);
+        vkDevice.getQueueManager().checkPresentAbility(surface);
     }
 
-    const vk::raii::SurfaceKHR& getSurface() const { return surface_; }
-    const vk::raii::SwapchainKHR& getSwapchain() const { return swapchain_; }
-    const std::vector<vk::Image>& getImages() const { return swapchainImages_; }
-    const std::vector<vk::raii::ImageView>& getImageViews() const { return swapchainImageViews_; }
-    vk::Extent2D getExtent() const { return extent_; }
-    vk::SurfaceFormatKHR getFormat() const { return format_; }
-    vk::PresentModeKHR getPresentMode() const { return presentMode_; }
+    const vk::raii::SurfaceKHR& getSurface() const { return surface; }
+    const vk::raii::SwapchainKHR& getSwapchain() const { return swapchain; }
+    const std::vector<vk::Image>& getImages() const { return swapchainImages; }
+    const std::vector<vk::raii::ImageView>& getImageViews() const { return swapchainImageViews; }
+    vk::Extent2D getExtent() const { return extent; }
+    vk::SurfaceFormatKHR getFormat() const { return format; }
+    vk::PresentModeKHR getPresentMode() const { return presentMode; }
 
     void recreate() {
         int width, height;
-        SDL_GetWindowSize(window_, &width, &height);
-        vk::Extent2D newExtent = window_.getSwapchainExtend(surfaceCapabilities_);
+        SDL_GetWindowSize(window, &width, &height);
+        vk::Extent2D newExtent = window.getSwapchainExtend(surfaceCapabilities);
 
-        if (newExtent.width == extent_.width && newExtent.height == extent_.height) {
+        if (newExtent.width == extent.width && newExtent.height == extent.height) {
             return;
         }
 
         // 等待 GPU 空闲
-        vkDevice_.getDevice().waitIdle();
+        vkDevice.getDevice().waitIdle();
 
         // 销毁旧 swapchain
-        swapchain_ = nullptr;
+        swapchain = nullptr;
 
         // 重建
-        extent_ = newExtent;
-        imageCount_ = window_.getImageCount(surfaceCapabilities_.minImageCount,
-                                            surfaceCapabilities_.maxImageCount);
-        swapchain_ = vk::raii::SwapchainKHR(vkDevice_.getDevice(), buildSwapchainCreateInfo());
-        swapchainImages_ = swapchain_.getImages();
-        swapchainImageViews_ = createImageViews(vkDevice_.getDevice(), swapchainImages_, format_.format);
+        extent = newExtent;
+        imageCount = window.getImageCount(surfaceCapabilities.minImageCount,
+                                            surfaceCapabilities.maxImageCount);
+        swapchain = vk::raii::SwapchainKHR(vkDevice.getDevice(), buildSwapchainCreateInfo());
+        swapchainImages = swapchain.getImages();
+        swapchainImageViews = createImageViews(vkDevice.getDevice(), swapchainImages, format.format);
     }
 
 private:
     vk::SwapchainCreateInfoKHR buildSwapchainCreateInfo() const {
         vk::SwapchainCreateInfoKHR swapchainCreateInfo{};
-        swapchainCreateInfo.surface = *surface_;
-        swapchainCreateInfo.minImageCount = imageCount_;
-        swapchainCreateInfo.imageFormat = format_.format;
-        swapchainCreateInfo.imageColorSpace = format_.colorSpace;
-        swapchainCreateInfo.imageExtent = extent_;
+        swapchainCreateInfo.surface = *surface;
+        swapchainCreateInfo.minImageCount = imageCount;
+        swapchainCreateInfo.imageFormat = format.format;
+        swapchainCreateInfo.imageColorSpace = format.colorSpace;
+        swapchainCreateInfo.imageExtent = extent;
         swapchainCreateInfo.imageArrayLayers = 1;
         swapchainCreateInfo.imageUsage = vk::ImageUsageFlagBits::eColorAttachment;
         swapchainCreateInfo.imageSharingMode = vk::SharingMode::eExclusive;
-        swapchainCreateInfo.preTransform = surfaceCapabilities_.currentTransform;
+        swapchainCreateInfo.preTransform = surfaceCapabilities.currentTransform;
         swapchainCreateInfo.compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque;
-        swapchainCreateInfo.presentMode = presentMode_;
+        swapchainCreateInfo.presentMode = presentMode;
         swapchainCreateInfo.clipped = VK_TRUE;
         swapchainCreateInfo.oldSwapchain = nullptr;
         return swapchainCreateInfo;
     }
 
     static std::vector<vk::raii::ImageView> createImageViews(vk::raii::Device& device,
-                                                              const std::vector<vk::Image>& images,
-                                                              vk::Format format) {
+                                                               const std::vector<vk::Image>& images,
+                                                               vk::Format format) {
         std::vector<vk::raii::ImageView> views;
         views.reserve(images.size());
         for (const auto& image : images) {
@@ -98,7 +98,6 @@ private:
             viewCreateInfo.components.b = vk::ComponentSwizzle::eIdentity;
             viewCreateInfo.components.a = vk::ComponentSwizzle::eIdentity;
             viewCreateInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-            viewCreateInfo.subresourceRange.baseMipLevel = 0;
             viewCreateInfo.subresourceRange.levelCount = 1;
             viewCreateInfo.subresourceRange.baseArrayLayer = 0;
             viewCreateInfo.subresourceRange.layerCount = 1;
@@ -107,17 +106,17 @@ private:
         return views;
     }
 
-    RGL::VkDevice& vkDevice_;
-    RGL::SDLWindow& window_;
-    vk::raii::SurfaceKHR surface_;
-    vk::SurfaceFormatKHR format_;
-    vk::PresentModeKHR presentMode_;
-    vk::SurfaceCapabilitiesKHR surfaceCapabilities_;
-    vk::Extent2D extent_;
-    uint32_t imageCount_;
-    vk::raii::SwapchainKHR swapchain_;
-    std::vector<vk::Image> swapchainImages_;
-    std::vector<vk::raii::ImageView> swapchainImageViews_;
+    RGL::DeviceContext& vkDevice;
+    RGL::SDLWindow& window;
+    vk::raii::SurfaceKHR surface;
+    vk::SurfaceFormatKHR format;
+    vk::PresentModeKHR presentMode;
+    vk::SurfaceCapabilitiesKHR surfaceCapabilities;
+    vk::Extent2D extent;
+    uint32_t imageCount;
+    vk::raii::SwapchainKHR swapchain;
+    std::vector<vk::Image> swapchainImages;
+    std::vector<vk::raii::ImageView> swapchainImageViews;
 };
 
 }

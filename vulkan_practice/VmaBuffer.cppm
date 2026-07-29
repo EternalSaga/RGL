@@ -7,6 +7,9 @@ export module VmaRaii;
 
 namespace RGL {
 
+// Stores raw VmaAllocator pointer instead of VmaAllocatorRAII to avoid lifetime issues:
+// VmaBuffer/VmaImage may outlive VmaAllocatorRAII if the allocator is destroyed first.
+// The allocator is guaranteed to outlive all allocations by design (see vkresources.cppm).
 export struct VmaBuffer {
     VmaAllocator allocator = nullptr;
     VkBuffer buffer = VK_NULL_HANDLE;
@@ -41,6 +44,7 @@ export struct VmaBuffer {
     void* getMappedData() const { return pMappedData; }
 };
 
+// Stores raw VmaAllocator pointer — see VmaBuffer comment for rationale.
 export struct VmaImage {
     VmaAllocator allocator = nullptr;
     VkImage image = VK_NULL_HANDLE;

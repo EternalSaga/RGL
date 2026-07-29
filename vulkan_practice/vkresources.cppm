@@ -13,12 +13,12 @@ import cube;
 
 namespace RGL {
 
-export class VkResources {
+export class Resources {
 public:
-    VkResources(RGL::VkInstance& vkInstance, RGL::VkDevice& vkDevice, RGL::VkSwapchain& vkSwapchain)
-        : vkInstance_(vkInstance),
-          vkDevice_(vkDevice),
-          vkSwapchain_(vkSwapchain),
+    Resources(RGL::AppContext& vkInstance, RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain)
+        : vkInstance(vkInstance),
+          vkDevice(vkDevice),
+          vkSwapchain(vkSwapchain),
           allocator(*vkInstance.getInstance(), *vkDevice.getPhysicalDevice(), *vkDevice.getDevice(),
                     vkInstance.getApiVersion()),
           depthImage(createDepthImage(allocator, vkSwapchain.getExtent())),
@@ -27,11 +27,11 @@ public:
               RGL::cubeVertices.size() * sizeof(RGL::Vertex),
               vk::BufferUsageFlagBits::eStorageBuffer,
               RGL::cubeVertices.data())),
-          indexBuffer(createGpuBuffer("index",
+        indexBuffer(createGpuBuffer("index",
               RGL::cubeIndices.size() * sizeof(uint32_t),
               vk::BufferUsageFlagBits::eStorageBuffer,
               RGL::cubeIndices.data())),
-          descriptorHeap(createDescriptorHeap())
+        descriptorHeap(createDescriptorHeap())
     {
         writeDescriptors();
     }
@@ -40,10 +40,10 @@ public:
     const vk::raii::ImageView& getDepthImageView() const { return depthImageView; }
 
     void recreateDepthImage(vk::Extent2D extent) {
-        vkDevice_.getDevice().waitIdle();
+        vkDevice.getDevice().waitIdle();
 
         depthImage = createDepthImage(allocator, extent);
-        depthImageView = vk::raii::ImageView(vkDevice_.getDevice(), buildDepthView(*depthImage));
+        depthImageView = vk::raii::ImageView(vkDevice.getDevice(), buildDepthView(*depthImage));
     }
     const RGL::VmaDescriptorHeap& getDescriptorHeap() const { return descriptorHeap; }
     vk::DeviceSize getReservedRangeOffset() const { return 0; }
@@ -93,7 +93,7 @@ private:
         allocInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
 
         VmaAllocationInfo allocData;
-        auto buf = allocator.createBufferWithAddress(vkDevice_.getDevice(), bufferInfo, allocInfo, &allocData);
+        auto buf = allocator.createBufferWithAddress(vkDevice.getDevice(), bufferInfo, allocInfo, &allocData);
 
         if (initData && size > 0) {
             std::memcpy(allocData.pMappedData, initData, size);
@@ -103,21 +103,18 @@ private:
     }
 
     RGL::VmaDescriptorHeap createDescriptorHeap() {
-        VkPhysicalDeviceDescriptorHeapPropertiesEXT heapProps{};
-        heapProps.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_PROPERTIES_EXT;
+        auto props = vkDevice.getPhysicalDevice().getProperties2<
+            vk::PhysicalDeviceProperties2,
+            vk::PhysicalDeviceDescriptorHeapPropertiesEXT>();
 
-        VkPhysicalDeviceProperties2 props2{};
-        props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
-        props2.pNext = &heapProps;
-
-        vkGetPhysicalDeviceProperties2(*vkDevice_.getPhysicalDevice(), &props2);
-
-        uint32_t descriptorSize = static_cast<uint32_t>(heapProps.bufferDescriptorSize);
+        uint32_t descriptorSize = static_cast<uint32_t>(
+            props.get<vk::PhysicalDeviceDescriptorHeapPropertiesEXT>().bufferDescriptorSize);
+        auto& heapProps = props.get<vk::PhysicalDeviceDescriptorHeapPropertiesEXT>();
         uint32_t reservedSlots = static_cast<uint32_t>(heapProps.minResourceHeapReservedRange + descriptorSize - 1) / descriptorSize;
         uint32_t capacity = 16 + reservedSlots;
 
         auto buf = allocator.createDescriptorHeap(
-            vkDevice_.getDevice(),
+            vkDevice.getDevice(),
             capacity, descriptorSize,
             vk::BufferUsageFlagBits::eDescriptorHeapEXT,
             reservedSlots
@@ -126,7 +123,7 @@ private:
     }
 
     void writeDescriptors() {
-        auto& device = vkDevice_.getDevice();
+        auto& device = vkDevice.getDevice();
 
         vk::DeviceAddressRangeEXT vertexRange{
             reinterpret_cast<VkDeviceAddress>(getVertexBufferAddress()),
@@ -160,9 +157,9 @@ private:
         );
     }
 
-    RGL::VkInstance& vkInstance_;
-    RGL::VkDevice& vkDevice_;
-    RGL::VkSwapchain& vkSwapchain_;
+    RGL::AppContext& vkInstance;
+    RGL::DeviceContext& vkDevice;
+    RGL::Swapchain& vkSwapchain;
     RGL::VmaAllocatorRAII allocator;
     RGL::VmaImage depthImage;
     vk::raii::ImageView depthImageView;

@@ -20,7 +20,7 @@ CMake 无独立构建目录 — 必须从根目录构建（`cmake -B build -S .`
 
 **所有 C++ 符号均在 `namespace RGL` 中。** 每个 `.cppm` 模块的导出均包裹在 `namespace RGL { ... }` 内。`main.cpp` 使用 `using namespace RGL;` 简化写法。
 
-初始化层类之间的跨模块引用（如 `VkDevice` → `VkInstance`）使用 `RGL::` 前缀，因为每个类本身已在命名空间内。调用工具模块的函数/类型（如 `RGL::pickPhysicalDevice()`、`RGL::QueueManager`、`RGL::FeatureChain`）同样使用 `RGL::` 前缀。
+初始化层类之间的跨模块引用（如 `DeviceContext` → `AppContext`）使用 `RGL::` 前缀，因为每个类本身已在命名空间内。调用工具模块的函数/类型（如 `RGL::pickPhysicalDevice()`、`RGL::QueueFamilyManager`、`RGL::FeatureChain`）同样使用 `RGL::` 前缀。
 
 ## 模块结构（C++20 modules, .cppm）
 
@@ -31,7 +31,7 @@ CMake 无独立构建目录 — 必须从根目录构建（`cmake -B build -S .`
 | 模块 | 文件 | 用途 |
 |---|---|---|
 | `vk_instance` | vkinstance.cppm | Context、Instance、DebugMessenger、apiVersion |
-| `vk_device` | vkdevice.cppm | PhysicalDevice 选择、QueueManager、Device、CommandPools、FeatureChain |
+| `vk_device` | vkdevice.cppm | PhysicalDevice 选择、QueueFamilyManager、Device、CommandPools、FeatureChain |
 | `vk_swapchain` | vkswapchain.cppm | Surface、Swapchain、ImageView[] format/extent/presentMode |
 | `vk_resources` | vkresources.cppm | VmaAllocatorRAII、depth image+view、顶点/索引缓冲、VmaDescriptorHeap（slot 8=顶点，slot 12=索引） |
 | `vk_renderer` | vkrenderer.cppm | 渲染管线、同步对象、命令缓冲、渲染循环 |
@@ -53,7 +53,7 @@ CMake 无独立构建目录 — 必须从根目录构建（`cmake -B build -S .`
 ### 构造依赖图
 
 ```
-SDLWindow → VkInstance → VkDevice → VkSwapchain → VkResources → VkRenderer
+SDLWindow → AppContext → DeviceContext → Swapchain → Resources → Renderer
 ```
 
 main.cpp 按逆序析构（RAII，无需手动清理）。

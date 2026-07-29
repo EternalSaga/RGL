@@ -33,9 +33,10 @@ export const std::vector<uint32_t> cubeIndices = {
     4, 5, 1,  1, 0, 4  // 底
 };
 
-// Descriptor heap slot assignments (indices into heap, not byte offsets)
-export constexpr uint32_t HeapSlotVertex = 8; //随便指定的
-export constexpr uint32_t HeapSlotIndex  = 12;//随便指定的
+// Descriptor heap slot assignments — reserved slots 0..reservedSlots-1 are managed by the driver,
+// so we start user slots at 8 and 12 to stay safely above the reserved range.
+export constexpr uint32_t HeapSlotVertex = 8;
+export constexpr uint32_t HeapSlotIndex  = 12;
 
 export struct DrawArgs {
     glm::mat4 mvp;

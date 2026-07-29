@@ -41,9 +41,9 @@ void eventSystem(entt::registry& rg, SDLWindow& window) {
 }
 
 void resizeSystem(entt::registry& rg,
-                  VkSwapchain& swapchain,
-                  VkResources& resources,
-                  VkRenderer& renderer) {
+                  Swapchain& swapchain,
+                  Resources& resources,
+                  Renderer& renderer) {
     auto& vp = rg.ctx().get<Viewport>();
     if (!vp.needsResize) {
         return;
@@ -55,7 +55,8 @@ void resizeSystem(entt::registry& rg,
     vp.needsResize = false;
 }
 
-export void renderSystem(entt::registry& rg, VkRenderer& renderer) {
+export void renderSystem(entt::registry& rg, Renderer& renderer) {
+    // Main render loop: poll events → handle resize → update MVP → submit frame
     auto& swapchain = renderer.getSwapchainRef();
     auto& resources = renderer.getResourcesRef();
     auto& vp = rg.ctx().get<Viewport>();

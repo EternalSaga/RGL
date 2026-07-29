@@ -43,6 +43,7 @@ public:
     mappings[0].bindingCount = 1;
     mappings[0].resourceMask = VK_SPIRV_RESOURCE_TYPE_READ_ONLY_STORAGE_BUFFER_BIT_EXT;
     mappings[0].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
+    // heapOffset and heapArrayStride are in bytes, not slot indices — multiply by descriptorSize
     mappings[0].sourceData.constantOffset.heapOffset = HeapSlotVertex * descriptorSize;
     mappings[0].sourceData.constantOffset.heapArrayStride = descriptorSize;
 

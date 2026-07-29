@@ -15,11 +15,11 @@ int main() {
     registry.ctx().emplace<Viewport>(800, 600, false);
 
     SDLWindow window(800, 600, "Vulkan Practice");
-    VkInstance vkInstance(window);
-    VkDevice vkDevice(vkInstance);
-    VkSwapchain vkSwapchain(vkDevice, window);
-    VkResources vkResources(vkInstance, vkDevice, vkSwapchain);
-    VkRenderer vkRenderer(vkDevice, vkSwapchain, vkResources, registry);
+    AppContext vkInstance(window);
+    DeviceContext vkDevice(vkInstance);
+    Swapchain vkSwapchain(vkDevice, window);
+    Resources vkResources(vkInstance, vkDevice, vkSwapchain);
+    Renderer vkRenderer(vkDevice, vkSwapchain, vkResources, registry);
     vkRenderer.setWindow(&window);
 
     RGL::renderSystem(registry, vkRenderer);
