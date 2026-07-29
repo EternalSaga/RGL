@@ -2,12 +2,11 @@ module;
 #include <rllogger.hpp>
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_raii.hpp>
-#include <vector>
-#include <cstdint>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/glm.hpp>
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_events.h>
+
 export module vk_renderer;
 
 import vulkan_utils;

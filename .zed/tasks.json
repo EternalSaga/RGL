@@ -1,0 +1,56 @@
+[
+  {
+    "label": "Configure (CMake)",
+    "command": "just",
+    "args": ["config"],
+    "reveal": "always",
+  },
+  {
+    "label": "Build (Release)",
+    "command": "just",
+    "args": ["build-release"],
+    "reveal": "always",
+  },
+  {
+    "label": "Build (Debug)",
+    "command": "just",
+    "args": ["build-debug"],
+    "reveal": "always",
+  },
+  {
+    "label": "Build (Default)",
+    "command": "just",
+    "args": ["build"],
+    "reveal": "always",
+  },
+  {
+    "label": "Clean (CMake)",
+    "command": "just",
+    "args": ["clean"],
+    "reveal": "always",
+  },
+  {
+    "label": "Clean All (Remove Build Dir)",
+    "command": "just",
+    "args": ["clean-all"],
+    "reveal": "always",
+  },
+  {
+    "label": "Vulkan Layer Symlink",
+    "command": "just",
+    "args": ["vulkan_layer"],
+    "reveal": "never",
+  },
+  {
+    "label": "ShaderReflection",
+    "command": "just",
+    "args": ["shader"],
+    "reveal": "always",
+  },
+  {
+    "label": "Clean All + Rebuild",
+    "command": "just",
+    "args": ["all"],
+    "reveal": "always",
+  }
+]

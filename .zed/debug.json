@@ -1,0 +1,34 @@
+[
+  {
+    "label": "GDB Launch",
+    "adapter": "GDB",
+    "configuration": {
+      "type": "gdb",
+      "request": "launch",
+      "program": "${command:cmake.launchTargetPath}",
+      "cwd": "${command:cmake.launchTargetDirectory}",
+      "environment": [
+        {
+          "name": "RADV_EXPERIMENTAL",
+          "value": "heap"
+        },
+        {
+          "name": "VK_ADD_LAYER_PATH",
+          "value": "$ZED_WORKTREE_ROOT/build/vcpkg_installed/x64-linux-native/share/vulkan/explicit_layer.d"
+        }
+      ],
+      "setupCommands": [
+        {
+          "description": "Enable pretty-printing for GDB",
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        },
+        {
+          "description": "Set Disassembly Flavor to Intel",
+          "text": "-gdb-set disassembly-flavor intel",
+          "ignoreFailures": true
+        }
+      ]
+    }
+  }
+]
