@@ -2,6 +2,7 @@ module;
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_raii.hpp>
 #include <vector>
+#include <SDL3/SDL_video.h>
 export module vk_swapchain;
 
 import vulkan_utils;
@@ -38,6 +39,30 @@ public:
     vk::Extent2D getExtent() const { return extent_; }
     vk::SurfaceFormatKHR getFormat() const { return format_; }
     vk::PresentModeKHR getPresentMode() const { return presentMode_; }
+
+    void recreate() {
+        int width, height;
+        SDL_GetWindowSize(window_, &width, &height);
+        vk::Extent2D newExtent = window_.getSwapchainExtend(surfaceCapabilities_);
+
+        if (newExtent.width == extent_.width && newExtent.height == extent_.height) {
+            return;
+        }
+
+        // 等待 GPU 空闲
+        vkDevice_.getDevice().waitIdle();
+
+        // 销毁旧 swapchain
+        swapchain_ = nullptr;
+
+        // 重建
+        extent_ = newExtent;
+        imageCount_ = window_.getImageCount(surfaceCapabilities_.minImageCount,
+                                            surfaceCapabilities_.maxImageCount);
+        swapchain_ = vk::raii::SwapchainKHR(vkDevice_.getDevice(), buildSwapchainCreateInfo());
+        swapchainImages_ = swapchain_.getImages();
+        swapchainImageViews_ = createImageViews(vkDevice_.getDevice(), swapchainImages_, format_.format);
+    }
 
 private:
     vk::SwapchainCreateInfoKHR buildSwapchainCreateInfo() const {

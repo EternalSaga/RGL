@@ -38,6 +38,13 @@ public:
 
     const RGL::VmaImage& getDepthImage() const { return depthImage; }
     const vk::raii::ImageView& getDepthImageView() const { return depthImageView; }
+
+    void recreateDepthImage(vk::Extent2D extent) {
+        vkDevice_.getDevice().waitIdle();
+
+        depthImage = createDepthImage(allocator, extent);
+        depthImageView = vk::raii::ImageView(vkDevice_.getDevice(), buildDepthView(*depthImage));
+    }
     const RGL::VmaDescriptorHeap& getDescriptorHeap() const { return descriptorHeap; }
     vk::DeviceSize getReservedRangeOffset() const { return 0; }
     vk::DeviceSize getReservedRangeSize() const { return descriptorHeap.getReservedSlots() * descriptorHeap.getDescriptorSize(); }

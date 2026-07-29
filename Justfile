@@ -6,24 +6,30 @@ WORKSPACE := `echo ${ZED_WORKTREE_ROOT:-$PWD}`
 VCPKG := "/home/robin/program/vcpkg"
 BUILD := WORKSPACE / "build"
 
-# ------------------------------------------------------------------------------
-# 1. 配置阶段 (Configure)
-# ------------------------------------------------------------------------------
-
 # 基础 CMake 配置命令
 # 用法:
 #   just config             -> clang, Release
 #   just config gcc         -> gcc, Release
+#   just config Debug       -> clang, Debug
 #   just config clang Debug -> clang, Debug
 #   just config gcc Debug   -> gcc, Debug
 config COMPILER="clang" BUILD_TYPE="Release":
-    @echo "=== CMake Configure ({{ BUILD_TYPE }}, {{ COMPILER }}) ==="
-    env "CC={{ if COMPILER == "gcc" { "gcc" } else { "clang" } }}" \
-        "CXX={{ if COMPILER == "gcc" { "g++" } else { "clang++" } }}" \
+    @COMPILER="{{ COMPILER }}"; BUILD_TYPE="{{ BUILD_TYPE }}"; \
+    if [ "$COMPILER" = "Debug" ] || [ "$COMPILER" = "Release" ] || [ "$COMPILER" = "RelWithDebInfo" ] || [ "$COMPILER" = "MinSizeRel" ]; then \
+        BUILD_TYPE="$COMPILER"; COMPILER="clang"; \
+    fi; \
+    if [ "$BUILD_TYPE" = "clang" ] || [ "$BUILD_TYPE" = "gcc" ]; then \
+        TEMP="$BUILD_TYPE"; BUILD_TYPE="$COMPILER"; COMPILER="$TEMP"; \
+    fi; \
+    echo "=== CMake Configure ($BUILD_TYPE, $COMPILER) ==="; \
+    CC="$COMPILER"; if [ "$COMPILER" = "gcc" ]; then CC="gcc"; else CC="clang"; fi; \
+    CXX="$COMPILER"; if [ "$COMPILER" = "gcc" ]; then CXX="g++"; else CXX="clang++"; fi; \
+    env \
+        "CC=$CC" "CXX=$CXX" \
         cmake -S {{ WORKSPACE }} \
               -B {{ BUILD }} \
               -G Ninja \
-              -DCMAKE_BUILD_TYPE={{ BUILD_TYPE }} \
+              -DCMAKE_BUILD_TYPE=$BUILD_TYPE \
               -DCMAKE_TOOLCHAIN_FILE={{ VCPKG }}/scripts/buildsystems/vcpkg.cmake \
               -DCMAKE_EXPORT_COMPILE_COMMANDS=1 \
               -DVCPKG_MANIFEST_MODE=ON \
@@ -34,11 +40,6 @@ config COMPILER="clang" BUILD_TYPE="Release":
               -DX_VCPKG_APPLOCAL_DEPS_INSTALL=ON \
               -DVCPKG_VERBOSE=ON
 
-# ------------------------------------------------------------------------------
-# 2. 构建阶段 (Build)
-# ------------------------------------------------------------------------------
-
-# 仅执行编译 (依赖已有的 build 目录配置)
 build:
     @if [ ! -f {{ BUILD }}/build.ninja ]; then \
         echo "Error: Build directory not configured. Run 'just config' first."; \

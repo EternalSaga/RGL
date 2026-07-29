@@ -11,10 +11,6 @@
         {
           "name": "RADV_EXPERIMENTAL",
           "value": "heap"
-        },
-        {
-          "name": "VK_ADD_LAYER_PATH",
-          "value": "$ZED_WORKTREE_ROOT/build/vcpkg_installed/x64-linux-native/share/vulkan/explicit_layer.d"
         }
       ],
       "setupCommands": [

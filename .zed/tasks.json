@@ -36,18 +36,6 @@
     "reveal": "always",
   },
   {
-    "label": "Vulkan Layer Symlink",
-    "command": "just",
-    "args": ["vulkan_layer"],
-    "reveal": "never",
-  },
-  {
-    "label": "ShaderReflection",
-    "command": "just",
-    "args": ["shader"],
-    "reveal": "always",
-  },
-  {
     "label": "Clean All + Rebuild",
     "command": "just",
     "args": ["all"],

@@ -58,13 +58,14 @@ add_custom_command(
 )
 
 target_sources(vulkan_practice PUBLIC
-            FILE_SET CXX_MODULES
-            FILES utils.cppm sdl3window.cppm QueueFamilyManager.cppm cube.cppm shader.cppm VmaBuffer.cppm features.cppm vkinstance.cppm vkdevice.cppm vkswapchain.cppm vkresources.cppm vkrenderer.cppm
+             FILE_SET CXX_MODULES
+             FILES utils.cppm sdl3window.cppm QueueFamilyManager.cppm cube.cppm shader.cppm VmaBuffer.cppm features.cppm vkinstance.cppm vkdevice.cppm vkswapchain.cppm vkresources.cppm vkrenderer.cppm ecs.cppm
 )
 
 find_package(Vulkan REQUIRED)
 find_package(glm CONFIG REQUIRED)
-target_link_libraries(vulkan_practice PRIVATE Vulkan::Vulkan rllogger glm::glm)
+find_package(EnTT CONFIG REQUIRED)
+target_link_libraries(vulkan_practice PRIVATE Vulkan::Vulkan rllogger glm::glm EnTT::EnTT)
 target_compile_definitions(vulkan_practice PRIVATE GLM_FORCE_DEPTH_ZERO_TO_ONE GLM_FORCE_RADIANS)
 find_package(SDL3 CONFIG REQUIRED)
 
