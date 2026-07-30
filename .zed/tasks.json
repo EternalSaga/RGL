@@ -19,8 +19,12 @@
   },
   {
     "label": "Build (Default)",
-    "command": "just",
-    "args": ["build"],
+    "command": "just config && just build",
+    "reveal": "always",
+  },
+  {
+    "label": "Run",
+    "command": "just run",
     "reveal": "always",
   },
   {

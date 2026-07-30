@@ -1,20 +1,34 @@
 # vulkan_practice
 
-Vulkan 现代特性学习项目。Mesh shader 渲染管线，使用 ShaderObject + DescriptorHeap + DynamicState。
+Vulkan 现代特性学习项目。Mesh shader 渲染管线，使用 ShaderObject + DescriptorHeap + DynamicState。  
+核心代码位于vulkan_practice目录下。  
+legacy目录下的代码是陈旧的OpenGL项目已经不是当前工作重点，一般不用看，但是有些思路可以进行参考。  
 
 ## 构建
 
+项目使用 `just` 管理构建流程（参见 `Justfile`）。
+
 ```bash
-# 从仓库根目录 /home/robin/program/RGL 执行
-cmake --build build --target vulkan_practice -j$(nproc)
-# 产物: build/vulkan_practice/vulkan_practice
+just config              # CMake 配置（默认 clang, Release）
+just config gcc Debug    # 指定编译器和构建类型
+just build               # 增量编译（需先 config）
+just build-release       # 一键配置 + 编译 Release
+just build-debug         # 一键配置 + 编译 Debug
+just run                 # 运行程序（自动设置 RADV_EXPERIMENTAL=heap）
+just clean               # CMake 增量清理
+just clean-all           # 删除整个 build 目录
+just all                 # clean-all + build-release
 ```
+
+CMake 无独立构建目录 — 必须从根目录构建（`cmake -B build -S .`）。
+
+产物: `build/vulkan_practice/vulkan_practice`
+
+> **运行要求：** `RADV_EXPERIMENTAL=heap` — RADV 驱动下启用 `VK_EXT_descriptor_heap` 必需。`just run` 已自动设置。
 
 ## 运行要求
 
 - `RADV_EXPERIMENTAL=heap` — RADV 驱动下启用 `VK_EXT_descriptor_heap` 必需
-
-CMake 无独立构建目录 — 必须从根目录构建（`cmake -B build -S .`）。
 
 ## 命名规范
 
@@ -67,7 +81,7 @@ main.cpp 按逆序析构（RAII，无需手动清理）。
 
 ## 着色器编译
 
-`shaders/` 下的 Slang 着色器 → SPV 输出到 `build/vulkan_practice/generated_shaders/`。
+`vulkan_practice/shaders/` 下的 Slang 着色器 → SPV 输出到 `build/vulkan_practice/generated_shaders/`。
 
 - CMake `compile_slang()` 函数在构建时处理编译
 - Profile: `sm_6_6+spirv_1_6`，capability: `spvDescriptorHeapEXT`
@@ -114,3 +128,7 @@ main.cpp 按逆序析构（RAII，无需手动清理）。
 
 - `docs/技术概念.md` — 核心 Vulkan 模式、设计决策、shader 缓冲访问规则
 - `docs/调试历史.md` — 灰屏问题修复时间线、已解决的争议
+- `docs/DESCRIPTOR_HEAP_SPEC.md` — 有关DescriptorHeap 扩展的排坑详细记录
+- `docs/next_roadmap.md` — 后续开发计划
+- `docs/shader_reflection_plans.md` — shader反射开发计划的一些技术调研
+- `docs/快捷键配置.md` — Zed 编辑器快捷键、任务和调试配置说明

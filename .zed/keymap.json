@@ -1,0 +1,10 @@
+[
+  {
+    "context": "Workspace",
+    "bindings": {
+      "ctrl-shift-b": "task::Rerun",
+      "f5": "debugger::Start",
+      "shift-f5": "debugger::Stop"
+    }
+  }
+]

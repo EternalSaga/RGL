@@ -59,6 +59,17 @@ build-debug COMPILER="clang":
     just build
 
 # ------------------------------------------------------------------------------
+# 2. 运行
+# ------------------------------------------------------------------------------
+
+run:
+    @if [ ! -f {{ BUILD }}/vulkan_practice/vulkan_practice ]; then \
+        echo "Error: Binary not found. Run 'just build' first."; \
+        exit 1; \
+    fi
+    @(cd {{ BUILD }}/vulkan_practice && RADV_EXPERIMENTAL=heap ./vulkan_practice)
+
+# ------------------------------------------------------------------------------
 # 3. 清理与辅助命令
 # ------------------------------------------------------------------------------
 

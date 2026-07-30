@@ -1,30 +1,13 @@
 [
   {
-    "label": "GDB Launch",
-    "adapter": "GDB",
-    "configuration": {
-      "type": "gdb",
-      "request": "launch",
-      "program": "${command:cmake.launchTargetPath}",
-      "cwd": "${command:cmake.launchTargetDirectory}",
-      "environment": [
-        {
-          "name": "RADV_EXPERIMENTAL",
-          "value": "heap"
-        }
-      ],
-      "setupCommands": [
-        {
-          "description": "Enable pretty-printing for GDB",
-          "text": "-enable-pretty-printing",
-          "ignoreFailures": true
-        },
-        {
-          "description": "Set Disassembly Flavor to Intel",
-          "text": "-gdb-set disassembly-flavor intel",
-          "ignoreFailures": true
-        }
-      ]
+    "label": "Debug vulkan_practice",
+    "adapter": "CodeLLDB",
+    "request": "launch",
+    "program": "$ZED_WORKTREE_ROOT/build/vulkan_practice/vulkan_practice",
+    "build": "Build (Debug)",
+    "cwd": "$ZED_WORKTREE_ROOT/build/vulkan_practice",
+    "env": {
+      "RADV_EXPERIMENTAL": "heap"
     }
   }
 ]
