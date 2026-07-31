@@ -7,6 +7,7 @@ module;
 #include <glm/glm.hpp>
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_events.h>
+#include <limits>
 
 export module vk_renderer;
 
@@ -29,34 +30,29 @@ public:
         : vkDevice(vkDevice),
           vkSwapchainPtr(&vkSwapchain),
           resourcesPtr(&vkResources),
-          windowPtr(nullptr),
-           registry(&registry),
+          registry(&registry),
           graphicsQueue(vkDevice.getGraphicsQueue()),
           graphicsCommandPool(vkDevice.getGraphicsCommandPool()),
-           cubePipeline(createRenderPipeline(vkDevice.getDevice(), vkResources.getDescriptorHeap().getDescriptorSize())),
-           heapAddress(vkResources.getDescriptorHeap().getGpuAddress())
+         cubePipeline(createRenderPipeline(vkDevice.getDevice(), vkResources.getDescriptorHeap().getDescriptorSize())),
+         heapAddress(vkResources.getDescriptorHeap().getGpuAddress())
     {
         createSyncObjects();
         allocateCommandBuffers();
-        initDepthBarrier();
     }
 
     RGL::Swapchain& getSwapchainRef() const { return *vkSwapchainPtr; }
     RGL::Resources& getResourcesRef() const { return *resourcesPtr; }
-    RGL::SDLWindow*   getWindowRef()    const { return windowPtr; }
     void              updateDrawArgs(const glm::mat4& mvp) { drawArgs.mvp = mvp; }
     void              waitForIdle() { vkDevice.getDevice().waitIdle(); }
     void drawFrame();
-    void setWindow(SDLWindow* w) { windowPtr = w; }
-    void recreateDepthBarrier();
 
 private:
    static RGL::RenderPipeline createRenderPipeline(vk::raii::Device& device, uint32_t descriptorSize) {
-        RGL::ShaderEffect cubeEffect;
-        cubeEffect.meshStageSpv = RGL::loadShaderSpv("generated_shaders/cube.mesh.spv");
-        cubeEffect.fragStageSpv = RGL::loadShaderSpv("generated_shaders/cube.frag.spv");
-        return RGL::RenderPipeline(device, cubeEffect, descriptorSize);
-    }
+         RGL::ShaderEffect cubeEffect;
+         cubeEffect.meshStageSpv = RGL::loadShaderSpv("generated_shaders/cube.mesh.spv");
+         cubeEffect.fragStageSpv = RGL::loadShaderSpv("generated_shaders/cube.frag.spv");
+         return RGL::RenderPipeline(device, cubeEffect, descriptorSize);
+     }
 
     void createSyncObjects() {
         vk::SemaphoreCreateInfo semaphoreInfo{};
@@ -77,41 +73,15 @@ private:
     }
 
     void allocateCommandBuffers() {
-        vk::CommandBufferAllocateInfo allocInfoCmd{
+         vk::CommandBufferAllocateInfo allocInfoCmd{
             *graphicsCommandPool, vk::CommandBufferLevel::ePrimary,
             static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT)};
-        commandBuffers = vkDevice.getDevice().allocateCommandBuffers(allocInfoCmd);
-    }
-
-    void initDepthBarrier() {
-        commandBuffers[0].begin(vk::CommandBufferBeginInfo{
-            vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
-
-        vk::ImageMemoryBarrier2 depthBarrier = RGL::createImageBarrier(
-            *resourcesPtr->getDepthImage(), vk::ImageLayout::eUndefined,
-            vk::ImageLayout::eDepthStencilAttachmentOptimal,
-            vk::ImageAspectFlagBits::eDepth, vk::PipelineStageFlagBits2::eTopOfPipe,
-            vk::PipelineStageFlagBits2::eEarlyFragmentTests,
-            vk::AccessFlagBits2::eNone,
-            vk::AccessFlagBits2::eDepthStencilAttachmentRead |
-                vk::AccessFlagBits2::eDepthStencilAttachmentWrite);
-
-        vk::DependencyInfo depthDepInfo;
-        depthDepInfo.setImageMemoryBarriers(depthBarrier);
-        commandBuffers[0].pipelineBarrier2(depthDepInfo);
-        commandBuffers[0].end();
-
-        vk::SubmitInfo initSubmit{};
-        initSubmit.setCommandBuffers(*commandBuffers[0]);
-        graphicsQueue.submit(initSubmit, nullptr);
-        graphicsQueue.waitIdle();
-        commandBuffers[0].reset();
+         commandBuffers = vkDevice.getDevice().allocateCommandBuffers(allocInfoCmd);
     }
 
     RGL::DeviceContext& vkDevice;
     RGL::Swapchain*  vkSwapchainPtr;
     RGL::Resources*  resourcesPtr;
-    RGL::SDLWindow*  windowPtr;
     entt::registry*  registry;
     vk::Queue graphicsQueue;
     const vk::raii::CommandPool& graphicsCommandPool;
@@ -128,36 +98,12 @@ private:
     std::vector<vk::raii::CommandBuffer> commandBuffers;
 };
 
-void Renderer::recreateDepthBarrier() {
-    commandBuffers[0].reset();
-    commandBuffers[0].begin(vk::CommandBufferBeginInfo{
-        vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
-
-    vk::ImageMemoryBarrier2 depthBarrier = RGL::createImageBarrier(
-        *resourcesPtr->getDepthImage(), vk::ImageLayout::eUndefined,
-        vk::ImageLayout::eDepthStencilAttachmentOptimal,
-        vk::ImageAspectFlagBits::eDepth, vk::PipelineStageFlagBits2::eTopOfPipe,
-        vk::PipelineStageFlagBits2::eEarlyFragmentTests,
-        vk::AccessFlagBits2::eNone,
-        vk::AccessFlagBits2::eDepthStencilAttachmentRead |
-            vk::AccessFlagBits2::eDepthStencilAttachmentWrite);
-
-    vk::DependencyInfo depthDepInfo;
-    depthDepInfo.setImageMemoryBarriers(depthBarrier);
-    commandBuffers[0].pipelineBarrier2(depthDepInfo);
-    commandBuffers[0].end();
-
-    vk::SubmitInfo initSubmit{};
-    initSubmit.setCommandBuffers(*commandBuffers[0]);
-    graphicsQueue.submit(initSubmit, nullptr);
-    graphicsQueue.waitIdle();
-    commandBuffers[0].reset();
-}
-
 void Renderer::drawFrame() {
     // Command recording order is critical:
-    // 1. Wait fences → 2. Acquire image → 3. Color barrier → 4. Heap barrier
-    // 5. bindResourceHeapEXT → 6. pushDataEXT → 7. beginRendering → 8. bind shaders → 9. draw
+    // 1. Wait fences → 2. Acquire image → 3. Layout barriers →
+    // 4. Heap barrier → 5. bindResourceHeapEXT → 6. pushDataEXT →
+    // 7. beginRendering → 8. bind shaders → 9. draw → 10. endRendering →
+    // 11. present barrier → 12. submit + present
     // Steps 4-6 must occur BEFORE beginRendering (HOST stage cannot be used inside render pass)
     auto& device = vkDevice.getDevice();
 
@@ -170,6 +116,16 @@ void Renderer::drawFrame() {
         std::numeric_limits<uint64_t>::max(),
         *imageAvailableSemaphores[currentFrame], nullptr);
 
+    if (acquireResult == vk::Result::eErrorOutOfDateKHR) {
+        vkSwapchainPtr->recreate();
+        resourcesPtr->recreateDepthImage(vkSwapchainPtr->getExtent());
+        return;
+    }
+    if (acquireResult != vk::Result::eSuccess &&
+        acquireResult != vk::Result::eSuboptimalKHR) {
+        throw std::runtime_error("Failed to acquire swapchain image!");
+    }
+
     commandBuffers[currentFrame].reset();
     commandBuffers[currentFrame].begin(
         vk::CommandBufferBeginInfo{});
@@ -177,6 +133,8 @@ void Renderer::drawFrame() {
     auto& swapchainImages = vkSwapchainPtr->getImages();
     auto& swapchainImageViews = vkSwapchainPtr->getImageViews();
 
+    // Color attachment: Undefined → ColorAttachmentOptimal (first frame) or
+    // PresentSrcKHR → ColorAttachmentOptimal (subsequent frames)
     vk::ImageMemoryBarrier2 colorToDrawBarrier = RGL::createImageBarrier(
         swapchainImages[imageIndex], vk::ImageLayout::eUndefined,
         vk::ImageLayout::eColorAttachmentOptimal,
@@ -185,9 +143,24 @@ void Renderer::drawFrame() {
         vk::PipelineStageFlagBits2::eColorAttachmentOutput,
         vk::AccessFlagBits2::eNone,
         vk::AccessFlagBits2::eColorAttachmentWrite);
-    vk::DependencyInfo colorToDrawDepInfo;
-    colorToDrawDepInfo.setImageMemoryBarriers(colorToDrawBarrier);
-    commandBuffers[currentFrame].pipelineBarrier2(colorToDrawDepInfo);
+
+    // Depth attachment: Undefined → DepthStencilAttachmentOptimal
+    // Using eUndefined as oldLayout covers both first-frame (Undefined) and
+    // subsequent frames (DepthStencilAttachmentOptimal) per Vulkan spec.
+    vk::ImageMemoryBarrier2 depthToDrawBarrier = RGL::createImageBarrier(
+        *resourcesPtr->getDepthImage(), vk::ImageLayout::eUndefined,
+        vk::ImageLayout::eDepthStencilAttachmentOptimal,
+        vk::ImageAspectFlagBits::eDepth,
+        vk::PipelineStageFlagBits2::eTopOfPipe,
+        vk::PipelineStageFlagBits2::eEarlyFragmentTests,
+        vk::AccessFlagBits2::eNone,
+        vk::AccessFlagBits2::eDepthStencilAttachmentRead |
+            vk::AccessFlagBits2::eDepthStencilAttachmentWrite);
+
+    std::vector<vk::ImageMemoryBarrier2> drawBarriers = {colorToDrawBarrier, depthToDrawBarrier};
+    vk::DependencyInfo drawDepInfo;
+    drawDepInfo.setImageMemoryBarriers(drawBarriers);
+    commandBuffers[currentFrame].pipelineBarrier2(drawDepInfo);
 
     vk::RenderingAttachmentInfo colorAttachment{};
     colorAttachment.imageView = *swapchainImageViews[imageIndex];
@@ -266,7 +239,13 @@ void Renderer::drawFrame() {
     presentInfo.setWaitSemaphores(*renderFinishedSemaphores[currentFrame]);
     presentInfo.setSwapchains(*vkSwapchainPtr->getSwapchain());
     presentInfo.setImageIndices(imageIndex);
-    (void)graphicsQueue.presentKHR(presentInfo);
+    auto presentResult = graphicsQueue.presentKHR(presentInfo);
+
+    if (presentResult == vk::Result::eErrorOutOfDateKHR ||
+        presentResult == vk::Result::eSuboptimalKHR) {
+        vkSwapchainPtr->recreate();
+        resourcesPtr->recreateDepthImage(vkSwapchainPtr->getExtent());
+    }
 
     currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 }

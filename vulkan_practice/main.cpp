@@ -20,9 +20,7 @@ int main() {
     Swapchain vkSwapchain(vkDevice, window);
     Resources vkResources(vkInstance, vkDevice, vkSwapchain);
     Renderer vkRenderer(vkDevice, vkSwapchain, vkResources, registry);
-    vkRenderer.setWindow(&window);
-
-    RGL::renderSystem(registry, vkRenderer);
+    RGL::renderSystem(registry, vkRenderer, window);
   } catch (const std::exception& e) {
     std::cerr << "错误: " << e.what() << std::endl;
     return -1;

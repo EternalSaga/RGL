@@ -29,11 +29,10 @@ export struct ShaderEffect {
 
 export class RenderPipeline {
 
- vk::raii::ShaderEXT meshShader = nullptr;
+  vk::raii::ShaderEXT meshShader = nullptr;
   vk::raii::ShaderEXT fragShader = nullptr;
 
 public:
-  vk::raii::PipelineLayout layout = nullptr;
   RenderPipeline(vk::raii::Device &device, const ShaderEffect &effect, uint32_t descriptorSize) {
     VkDescriptorSetAndBindingMappingEXT mappings[2]{};
 

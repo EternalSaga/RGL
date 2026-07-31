@@ -49,11 +49,10 @@ void resizeSystem(entt::registry &rg, Swapchain &swapchain,
 
   swapchain.recreate();
   resources.recreateDepthImage(swapchain.getExtent());
-  renderer.recreateDepthBarrier();
   vp.needsResize = false;
 }
 
-export void renderSystem(entt::registry &rg, Renderer &renderer) {
+export void renderSystem(entt::registry &rg, Renderer &renderer, SDLWindow &window) {
   // Main render loop: poll events → handle resize → update MVP → submit frame
   auto &swapchain = renderer.getSwapchainRef();
   auto &resources = renderer.getResourcesRef();
@@ -62,7 +61,7 @@ export void renderSystem(entt::registry &rg, Renderer &renderer) {
   bool shouldClose = false;
 
   while (!shouldClose) {
-    eventSystem(rg, *renderer.getWindowRef());
+    eventSystem(rg, window);
     resizeSystem(rg, swapchain, resources, renderer);
 
     if (vp.shouldClose) {
