@@ -1,6 +1,5 @@
-#include <iostream>
-#include <stdexcept>
 #include <entt/entt.hpp>
+#include <iostream>
 import vulkan_window;
 import vk_instance;
 import vk_device;
@@ -21,7 +20,7 @@ int main() {
     Resources vkResources(vkInstance, vkDevice, vkSwapchain);
     Renderer vkRenderer(vkDevice, vkSwapchain, vkResources, registry);
     RGL::renderSystem(registry, vkRenderer, window);
-  } catch (const std::exception& e) {
+  } catch (const std::exception &e) {
     std::cerr << "错误: " << e.what() << std::endl;
     return -1;
   }

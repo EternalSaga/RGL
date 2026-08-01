@@ -13,6 +13,33 @@
 
 ---
 
+## 现代 C++ 风格改造 (备忘)
+
+基于 [cppreference][cppref] 和 [C++20/23 要解](/blog/cpp-modern) 讨论，记录后续重构方向。
+
+### 错误处理：`std::expected`
+- 替代渲染循环中的 `throw std::runtime_error` + `INT $3`
+- `VkResult` → `std::expected` 转换函数，让 Vulkan 错误显式处理
+- 配合 `[[nodiscard]]` 在句柄返回上，禁止静默丢弃结果
+
+### 接口：`std::span`
+- 替代 `const void*` + `size` 参数对
+- 顶点/索引数据上传、descriptor 写入、uniform 缓冲映射
+- 配合 `std::as_bytes` / `std::as_writable_bytes` 做类型擦除
+
+### 容器：`std::flat_map`
+- descriptor set/binding 查找、material uniform 名称映射
+- 缓存友好，比 `unordered_map` 对每帧查找更合适
+
+### 性能：`consteval` / `assume_aligned`
+- Vulkan 结构体用 `consteval` 编译期构造 + `static_assert` 布局校验
+- `std::assume_aligned<N>` 优化 CPU→GPU 上传路径 SIMD
+
+### 清理：scope guard
+- RAII 之外的临时清理（`vkCmdBeginDebugUtilsLabelEXT` 配对 `End`）
+
+---
+
 ## Phase 0：Shader Reflection
 
 ### 目标
@@ -44,6 +71,18 @@ namespace RGL::Shaders::Types {
     export inline constexpr uint32_t BindIndex  = 12;
 }
 ```
+
+### 完成情况 (已完成)
+
+- [x] `tools/` 目录：`reflection_tool` CLI 工具（validate + generate 子命令），使用 **C++20 modules** 拆分为 `schema_loader.cppm`、`validator.cppm`、`generator.cppm`
+- [x] `shaders/types_schema.lua`：定义 `DrawArgs` push constant 和 `vertexBuffer`/`indexBuffer` descriptor slots（含 `heapSlot`、`cppName`）
+- [x] `shaders/types.slang`：反射目标
+- [x] `CMakeLists.txt` `compile_slang()` 增加 `-reflection-json`
+- [x] `reflection_tool generate` 使用 **inja 模板** (`tools/templates/types_cppm.inja`) 生成 `.cppm`
+- [x] `reflection_tool` 接入项目统一日志库 `rllogger`，替代 `std::cout`/`std::cerr`
+- [x] `shader.cppm`、`vkresources.cppm`、`vkrenderer.cppm` 已 `import types_generated`，硬编码常量从 `cube.cppm` 移除
+
+> **完成的改动**：原 `reflection_tool.cpp` 467 行单文件被拆分为 4 个文件（3 个 `.cppm` + 1 `.cpp`），代码生成逻辑下沉到 inja 模板，日志统一走 `rllogger`。
 
 ### 边界
 - `shader.cppm` 只 `import` 生成的模块，不 import 任何 reflection 相关代码

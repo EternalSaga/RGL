@@ -9,6 +9,7 @@ import VmaRaii;
 import vk_instance;
 import vk_device;
 import vk_swapchain;
+import types_generated;
 import cube;
 
 namespace RGL {

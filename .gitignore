@@ -392,3 +392,4 @@ FodyWeavers.xsd
 /render_core/gl_shader_gen/
 /ShaderReflection/codegen/
 /.continue/
+/vulkan_practice/generated/

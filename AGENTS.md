@@ -4,6 +4,9 @@ Vulkan 现代特性学习项目。Mesh shader 渲染管线，使用 ShaderObject
 核心代码位于vulkan_practice目录下。  
 legacy目录下的代码是陈旧的OpenGL项目已经不是当前工作重点，一般不用看，但是有些思路可以进行参考。  
 
+## 给大模型
+优先使用中文回复用户，除非用户说使用英文回复。
+
 ## 构建
 
 项目使用 `just` 管理构建流程（参见 `Justfile`）。
@@ -36,6 +39,46 @@ CMake 无独立构建目录 — 必须从根目录构建（`cmake -B build -S .`
 
 初始化层类之间的跨模块引用（如 `DeviceContext` → `AppContext`）使用 `RGL::` 前缀，因为每个类本身已在命名空间内。调用工具模块的函数/类型（如 `RGL::pickPhysicalDevice()`、`RGL::QueueFamilyManager`、`RGL::FeatureChain`）同样使用 `RGL::` 前缀。
 
+## 代码规范
+
+### 模块优先
+
+所有新代码**必须**使用 C++20 modules (`.cppm`)，而非传统的 `.hpp/.cpp` 头文件对。
+- `.cppm` 模块声明于 `namespace RGL { ... }` 内
+- `main.cpp` 等入口文件通过 `import` 导入模块
+- 不要在模块外部使用 `#include` 引入项目内部头文件
+
+### 函数式 Ranges
+
+优先使用 C++23 `std::ranges` 进行函数式编程：
+- 使用 `std::views::filter`、`std::views::transform` 等视图适配器
+- 使用 `std::ranges::for_each` 等算法替换原始循环
+- 链式组合视图操作，避免中间容器
+
+### 成员变量命名
+
+成员变量使用自然命名法，不加 `_` 或 `m_` 前缀后缀：
+```cpp
+class Foo {
+    int count;      // ✅
+    int _count;     // ❌
+    int m_count;    // ❌
+    int count_;     // ❌
+};
+```
+
+### 构建工具模块
+
+`vulkan_practice/tools/` 下的构建工具也统一使用 C++20 modules：
+
+| 模块 | 文件 | 用途 |
+|---|---|---|
+| `schema_loader` | tools/schema_loader.cppm | Schema 结构体 + Lua schema 加载 |
+| `validator` | tools/validator.cppm | 将 reflection JSON 与 schema 校验一致性 |
+| `generator` | tools/generator.cppm | 使用 inja 模板生成 `.cppm`，接入 `rllogger` |
+
+`reflection_tool` 通过 `import rllogger;` 使用项目统一日志库，替代 `std::cout`/`std::cerr`。
+
 ## 模块结构（C++20 modules, .cppm）
 
 所有导出均在 `namespace RGL` 内。
@@ -58,9 +101,10 @@ CMake 无独立构建目录 — 必须从根目录构建（`cmake -B build -S .`
 | `vulkan_window` | sdl3window.cppm | SDL3 窗口、surface、HDR/SDR 格式选择 |
 | `queue_family_manager` | QueueFamilyManager.cppm | Graphics/Compute/Transfer 队列分配 |
 | `features` | features.cppm | FeatureChain 类型定义、buildRequestedFeatures、validateFeatures、checkDeviceExtensions、自定义异常 |
-| `cube` | cube.cppm | 顶点/索引数据、DrawArgs 结构体（通过 pushDataEXT 推送） |
+| `cube` | cube.cppm | 顶点/索引数据 |
 | `shader` | shader.cppm | SPV 加载器、ShaderEffect、RenderPipeline（ShaderObject + 动态状态） |
 | `VmaRaii` | VmaBuffer.cppm | VmaBuffer、VmaImage、VmaDescriptorHeap、VmaAllocatorRAII 封装 |
+| `types_generated` | generated/types_generated.cppm | auto-generated（由 `reflection_tool` + inja 模板生成），导出 `DrawArgs`、`HeapSlotVertex`、`HeapSlotIndex` |
 
 `main.cpp` 按顺序构造 5 个初始化层类，然后调用 `vkRenderer.render(window)`。`vam_impl.cpp` 包含 `#define VMA_IMPLEMENTATION`。
 
@@ -113,6 +157,9 @@ main.cpp 按逆序析构（RAII，无需手动清理）。
 | `vkrenderer.cppm:176-197` | Heap barrier、`bindResourceHeapEXT`、`pushDataEXT`（均在 `beginRendering` 之前） |
 | `vkrenderer.cppm:225` | `SwapchainPresentFenceInfoEXT`（KHR 别名），位于 `presentInfo.pNext` |
 | `shader.cppm:38-56` | `DescriptorSetAndBindingMappingEXT`，映射 heap slots 8 和 12 |
+| `shader.cppm:8` | `import types_generated;` 提供 `HeapSlotVertex`/`HeapSlotIndex` |
+| `vkresources.cppm:10` | `import types_generated;` 提供 `HeapSlotVertex`/`HeapSlotIndex` |
+| `vkrenderer.cppm:90,206` | `import types_generated;` 提供 `DrawArgs` 结构体 |
 | `shaders/types.slang:20-24` | 两个缓冲均使用 `ByteAddressBuffer`（绝不用 `StructuredBuffer`） |
 | `shaders/cube.mesh.slang:15` | `mul(drawArgs.mvp, ...)` MVP 变换 |
 

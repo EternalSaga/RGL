@@ -1,13 +1,15 @@
 module;
-#include "rllogger.hpp"
 #include "vulkan/vulkan.hpp"
 #include <algorithm>
 #include <cstdint>
 #include <map>
+#include <source_location>
 #include <string_view>
 #include <vector>
 #include <vulkan/vulkan_raii.hpp>
 export module vulkan_utils;
+
+import rllogger;
 
 namespace RGL {
 
@@ -41,18 +43,18 @@ vulkanDebugCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
   if (!logger)
     return VK_FALSE;
 
-  spdlog::level::level_enum lvl = spdlog::level::info;
+  RGL::LogLevel lvl = RGL::LogLevelInfo;
   if (messageSeverity & vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose) {
-    lvl = spdlog::level::trace;
+    lvl = RGL::LogLevelTrace;
   }
   if (messageSeverity & vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo) {
-    lvl = spdlog::level::info;
+    lvl = RGL::LogLevelInfo;
   }
   if (messageSeverity & vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning) {
-    lvl = spdlog::level::warn;
+    lvl = RGL::LogLevelWarn;
   }
   if (messageSeverity & vk::DebugUtilsMessageSeverityFlagBitsEXT::eError) {
-    lvl = spdlog::level::err;
+    lvl = RGL::LogLevelError;
   }
 
   // Vulkan errors are runtime-generated; source_location can only point to this

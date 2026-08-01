@@ -1,5 +1,4 @@
 module;
-#include <rllogger.hpp>
 #include <entt/entt.hpp>
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_raii.hpp>
@@ -11,12 +10,14 @@ module;
 
 export module vk_renderer;
 
+import rllogger;
+
 import vulkan_utils;
 import vulkan_window;
 import vk_device;
 import vk_swapchain;
 import vk_resources;
-import cube;
+import types_generated;
 import shader;
 
 namespace RGL {

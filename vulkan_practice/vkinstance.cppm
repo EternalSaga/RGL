@@ -1,5 +1,4 @@
 module;
-#include "rllogger.hpp"
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_vulkan.h>
@@ -7,6 +6,8 @@ module;
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_raii.hpp>
 export module vk_instance;
+
+import rllogger;
 
 import vulkan_utils;
 import vulkan_window;

@@ -5,7 +5,7 @@ module;
 #include <vulkan/vulkan_raii.hpp>
 export module shader;
 
-import cube;
+import types_generated;
 
 namespace RGL {
 

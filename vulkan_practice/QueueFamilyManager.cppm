@@ -1,6 +1,5 @@
 module;
 #include <fmt/format.h>
-#include "rllogger.hpp"
 #include <stdexcept>
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_raii.hpp>
@@ -8,6 +7,8 @@ module;
 #include <map>
 #include <vector>
 export module queue_family_manager;
+
+import rllogger;
 
 namespace RGL {
 

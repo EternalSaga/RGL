@@ -6,11 +6,13 @@ module;
 #include <SDL3/SDL_version.h>
 #include <SDL3/SDL_vulkan.h>
 #include <cstdint>
-#include "rllogger.hpp"
+#include <fmt/format.h>
 #include <stdexcept>
 #include <utility>
 #include <vulkan/vulkan_raii.hpp>
 export module vulkan_window;
+
+import rllogger;
 namespace RGL {
 export class SDLWindow {
    private:
