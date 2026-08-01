@@ -8,31 +8,44 @@ import vkerror;
 
 namespace RGL {
 
+struct AllocatorControlBlock {
+    VmaAllocator handle;
+};
+
+export using SharedAllocator = std::shared_ptr<AllocatorControlBlock>;
+
 export struct VmaBuffer {
-    VmaAllocator allocator = nullptr;
+    SharedAllocator allocatorBlock;
     VkBuffer buffer = VK_NULL_HANDLE;
     VmaAllocation allocation = nullptr;
     vk::DeviceAddress deviceAddress = 0;
     void* pMappedData = nullptr;
 
     VmaBuffer() = default;
-    VmaBuffer(VmaAllocator alloc, VkBuffer buf, VmaAllocation alloctn, vk::DeviceAddress addr = 0, void* mapped = nullptr)
-        : allocator(alloc), buffer(buf), allocation(alloctn), deviceAddress(addr), pMappedData(mapped) {}
+    VmaBuffer(SharedAllocator allocBlock, VkBuffer buf, VmaAllocation alloctn, vk::DeviceAddress addr = 0, void* mapped = nullptr)
+        : allocatorBlock(std::move(allocBlock)), buffer(buf), allocation(alloctn), deviceAddress(addr), pMappedData(mapped) {}
 
-    ~VmaBuffer() { if (allocator && buffer && allocation) vmaDestroyBuffer(allocator, buffer, allocation); }
+    ~VmaBuffer() {
+        if (allocatorBlock && allocatorBlock->handle && buffer && allocation)
+            vmaDestroyBuffer(allocatorBlock->handle, buffer, allocation);
+    }
 
     VmaBuffer(const VmaBuffer&) = delete;
     VmaBuffer& operator=(const VmaBuffer&) = delete;
 
-    VmaBuffer(VmaBuffer&& o) noexcept : allocator(o.allocator), buffer(o.buffer), allocation(o.allocation), deviceAddress(o.deviceAddress), pMappedData(o.pMappedData) {
-        o.allocator = nullptr; o.buffer = VK_NULL_HANDLE; o.allocation = nullptr; o.deviceAddress = 0; o.pMappedData = nullptr;
+    VmaBuffer(VmaBuffer&& o) noexcept
+        : allocatorBlock(std::move(o.allocatorBlock)), buffer(o.buffer), allocation(o.allocation),
+          deviceAddress(o.deviceAddress), pMappedData(o.pMappedData) {
+        o.buffer = VK_NULL_HANDLE; o.allocation = nullptr; o.deviceAddress = 0; o.pMappedData = nullptr;
     }
 
     VmaBuffer& operator=(VmaBuffer&& o) noexcept {
         if (this != &o) {
-            if (allocator && buffer && allocation) vmaDestroyBuffer(allocator, buffer, allocation);
-            allocator = o.allocator; buffer = o.buffer; allocation = o.allocation; deviceAddress = o.deviceAddress; pMappedData = o.pMappedData;
-            o.allocator = nullptr; o.buffer = VK_NULL_HANDLE; o.allocation = nullptr; o.deviceAddress = 0; o.pMappedData = nullptr;
+            if (allocatorBlock && allocatorBlock->handle && buffer && allocation)
+                vmaDestroyBuffer(allocatorBlock->handle, buffer, allocation);
+            allocatorBlock = std::move(o.allocatorBlock);
+            buffer = o.buffer; allocation = o.allocation; deviceAddress = o.deviceAddress; pMappedData = o.pMappedData;
+            o.buffer = VK_NULL_HANDLE; o.allocation = nullptr; o.deviceAddress = 0; o.pMappedData = nullptr;
         }
         return *this;
     }
@@ -43,28 +56,34 @@ export struct VmaBuffer {
 };
 
 export struct VmaImage {
-    VmaAllocator allocator = nullptr;
+    SharedAllocator allocatorBlock;
     VkImage image = VK_NULL_HANDLE;
     VmaAllocation allocation = nullptr;
 
     VmaImage() = default;
-    VmaImage(VmaAllocator alloc, VkImage img, VmaAllocation alloctn)
-        : allocator(alloc), image(img), allocation(alloctn) {}
+    VmaImage(SharedAllocator allocBlock, VkImage img, VmaAllocation alloctn)
+        : allocatorBlock(std::move(allocBlock)), image(img), allocation(alloctn) {}
 
-    ~VmaImage() { if (allocator && image && allocation) vmaDestroyImage(allocator, image, allocation); }
+    ~VmaImage() {
+        if (allocatorBlock && allocatorBlock->handle && image && allocation)
+            vmaDestroyImage(allocatorBlock->handle, image, allocation);
+    }
 
     VmaImage(const VmaImage&) = delete;
     VmaImage& operator=(const VmaImage&) = delete;
 
-    VmaImage(VmaImage&& o) noexcept : allocator(o.allocator), image(o.image), allocation(o.allocation) {
-        o.allocator = nullptr; o.image = VK_NULL_HANDLE; o.allocation = nullptr;
+    VmaImage(VmaImage&& o) noexcept
+        : allocatorBlock(std::move(o.allocatorBlock)), image(o.image), allocation(o.allocation) {
+        o.image = VK_NULL_HANDLE; o.allocation = nullptr;
     }
 
     VmaImage& operator=(VmaImage&& o) noexcept {
         if (this != &o) {
-            if (allocator && image && allocation) vmaDestroyImage(allocator, image, allocation);
-            allocator = o.allocator; image = o.image; allocation = o.allocation;
-            o.allocator = nullptr; o.image = VK_NULL_HANDLE; o.allocation = nullptr;
+            if (allocatorBlock && allocatorBlock->handle && image && allocation)
+                vmaDestroyImage(allocatorBlock->handle, image, allocation);
+            allocatorBlock = std::move(o.allocatorBlock);
+            image = o.image; allocation = o.allocation;
+            o.image = VK_NULL_HANDLE; o.allocation = nullptr;
         }
         return *this;
     }
@@ -138,10 +157,11 @@ export struct VmaDescriptorHeap {
 
 export class VmaAllocatorRAII {
 private:
-    VmaAllocator allocator = nullptr;
+    SharedAllocator allocatorBlock;
 public:
     VmaAllocatorRAII(VkInstance instance, VkPhysicalDevice physicalDevice, VkDevice device, uint32_t apiVersion,
                      VmaAllocatorCreateFlags flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT) {
+        VmaAllocator raw;
         VmaAllocatorCreateInfo allocatorInfo{
             .flags = flags,
             .physicalDevice = physicalDevice,
@@ -149,49 +169,56 @@ public:
             .instance = instance,
             .vulkanApiVersion = apiVersion
         };
-        if (vmaCreateAllocator(&allocatorInfo, &allocator) != VK_SUCCESS) {
+        if (vmaCreateAllocator(&allocatorInfo, &raw) != VK_SUCCESS) {
             throw std::runtime_error("Failed to create VMA Allocator");
         }
+        allocatorBlock = SharedAllocator(new AllocatorControlBlock{raw},
+            [](AllocatorControlBlock* p) {
+                if (p) {
+                    if (p->handle) vmaDestroyAllocator(p->handle);
+                    delete p;
+                }
+            });
     }
 
-    ~VmaAllocatorRAII() { if (allocator) vmaDestroyAllocator(allocator); }
+    ~VmaAllocatorRAII() = default;
 
     VmaAllocatorRAII(const VmaAllocatorRAII&) = delete;
     VmaAllocatorRAII& operator=(const VmaAllocatorRAII&) = delete;
-    VmaAllocatorRAII(VmaAllocatorRAII&& o) noexcept : allocator(o.allocator) { o.allocator = nullptr; }
+    VmaAllocatorRAII(VmaAllocatorRAII&& o) noexcept : allocatorBlock(std::move(o.allocatorBlock)) {}
 
     [[nodiscard]] std::expected<VmaBuffer, Error> createBuffer(const vk::BufferCreateInfo& bufferInfo, const VmaAllocationCreateInfo& allocInfo, VmaAllocationInfo* pAllocInfo = nullptr) const {
         VkBuffer buffer;
         VmaAllocation allocation;
-        VkResult result = vmaCreateBuffer(allocator, reinterpret_cast<const VkBufferCreateInfo*>(&bufferInfo), &allocInfo, &buffer, &allocation, pAllocInfo);
+        VkResult result = vmaCreateBuffer(allocatorBlock->handle, reinterpret_cast<const VkBufferCreateInfo*>(&bufferInfo), &allocInfo, &buffer, &allocation, pAllocInfo);
         if (result != VK_SUCCESS) {
             return std::unexpected(Error{ErrorCode::VMASuccessFailed,
                 "VMA failed to create buffer"});
         }
-        return VmaBuffer(allocator, buffer, allocation);
+        return VmaBuffer(allocatorBlock, buffer, allocation);
     }
 
     [[nodiscard]] std::expected<VmaBuffer, Error> createBufferWithAddress(const vk::raii::Device& device, const vk::BufferCreateInfo& bufferInfo, const VmaAllocationCreateInfo& allocInfo, VmaAllocationInfo* pAllocInfo = nullptr) const {
         VkBuffer buffer;
         VmaAllocation allocation;
-        VkResult result = vmaCreateBuffer(allocator, reinterpret_cast<const VkBufferCreateInfo*>(&bufferInfo), &allocInfo, &buffer, &allocation, pAllocInfo);
+        VkResult result = vmaCreateBuffer(allocatorBlock->handle, reinterpret_cast<const VkBufferCreateInfo*>(&bufferInfo), &allocInfo, &buffer, &allocation, pAllocInfo);
         if (result != VK_SUCCESS) {
             return std::unexpected(Error{ErrorCode::VMASuccessFailed, "VMA failed to create buffer"});
         }
         vk::BufferDeviceAddressInfo addrInfo{};
         addrInfo.buffer = buffer;
         vk::DeviceAddress addr = device.getBufferAddress(addrInfo);
-        return VmaBuffer(allocator, buffer, allocation, addr, pAllocInfo ? pAllocInfo->pMappedData : nullptr);
+        return VmaBuffer(allocatorBlock, buffer, allocation, addr, pAllocInfo ? pAllocInfo->pMappedData : nullptr);
     }
 
     [[nodiscard]] std::expected<VmaImage, Error> createImage(const vk::ImageCreateInfo& imageInfo, const VmaAllocationCreateInfo& allocInfo, VmaAllocationInfo* pAllocInfo = nullptr) const {
         VkImage image;
         VmaAllocation allocation;
-        VkResult result = vmaCreateImage(allocator, reinterpret_cast<const VkImageCreateInfo*>(&imageInfo), &allocInfo, &image, &allocation, pAllocInfo);
+        VkResult result = vmaCreateImage(allocatorBlock->handle, reinterpret_cast<const VkImageCreateInfo*>(&imageInfo), &allocInfo, &image, &allocation, pAllocInfo);
         if (result != VK_SUCCESS) {
             return std::unexpected(Error{ErrorCode::VMASuccessFailed, "VMA failed to create image"});
         }
-        return VmaImage(allocator, image, allocation);
+        return VmaImage(allocatorBlock, image, allocation);
     }
 
     [[nodiscard]] std::expected<VmaDescriptorHeap, Error> createDescriptorHeap(
@@ -224,7 +251,7 @@ public:
         );
     }
 
-    VmaAllocator get() const { return allocator; }
+    VmaAllocator get() const { return allocatorBlock ? allocatorBlock->handle : nullptr; }
 };
 
 }  // namespace RGL

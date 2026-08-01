@@ -18,6 +18,7 @@ static void printUsage() {
     logger->info("Usage:");
     logger->info("  reflection_tool validate  --json <path> --schema <path>");
     logger->info("  reflection_tool generate  --json <path> --schema <path> --output <path> --module-name <name> --template <path>");
+    logger->info("  reflection_tool render     --json <path> --output <path> --template <path>");
 }
 
 int main(int argc, char *argv[]) {
@@ -112,6 +113,26 @@ int main(int argc, char *argv[]) {
             }
             out << cppm;
             logger->info("[OK] Generated {}", outputPath);
+            return 0;
+
+        } else if (command == "render") {
+            if (outputPath.empty()) {
+                logger->error("--output is required for 'render'");
+                return 1;
+            }
+            if (templatePath.empty()) {
+                logger->error("--template is required for 'render'");
+                return 1;
+            }
+
+            std::string cppm = RGL::renderTemplate(reflection, templatePath);
+            std::ofstream out(outputPath);
+            if (!out.is_open()) {
+                logger->error("Cannot open output file: {}", outputPath);
+                return 1;
+            }
+            out << cppm;
+            logger->info("[OK] Rendered {}", outputPath);
             return 0;
 
         } else {

@@ -117,12 +117,20 @@ export std::string generateCppm(const nlohmann::json &reflection,
                 }
             }
         }
-    }
+     }
 
     inja::Environment env;
     std::string result = env.render_file(templatePath, data);
     logger->debug("inja template rendered, {} bytes", result.size());
     return result;
+}
+
+export std::string renderTemplate(const nlohmann::json& data,
+                                  const std::string& templatePath) {
+    auto* logger = RLLogger::getInstance();
+    logger->debug("Rendering template '{}'", templatePath);
+    inja::Environment env;
+    return env.render_file(templatePath, data);
 }
 
 }  // namespace RGL

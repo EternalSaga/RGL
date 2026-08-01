@@ -27,6 +27,13 @@ set(TYPES_REFLECTION_JSON "${GEN_DIR}/types_reflection.json")
 set(TYPES_CPPM "${GEN_SRC_DIR}/types_generated.cppm")
 set(TYPES_TEMPLATE "${CMAKE_SOURCE_DIR}/tools/templates/types_cppm.inja")
 
+# ─── Features Codegen ────────────────────────────────────────────────────────
+# Single-source-of-truth JSON for Vulkan feature set.
+# Generated .cppm lives in source tree for CMake FILE_SET CXX_MODULES.
+set(FEATURES_CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/features_config.json")
+set(FEATURES_TEMPLATE "${CMAKE_SOURCE_DIR}/tools/templates/features_cppm.inja")
+set(FEATURES_CPPM "${GEN_SRC_DIR}/features_generated.cppm")
+
 add_custom_command(
     OUTPUT ${TYPES_REFLECTION_JSON}
     COMMAND ${SLANGC_EXECUTABLE} ${TYPES_SLANG}
@@ -58,6 +65,20 @@ add_custom_command(
 )
 
 add_custom_target(reflection_generated ALL DEPENDS ${TYPES_CPPM})
+
+# ─── Features Codegen ────────────────────────────────────────────────────────
+add_custom_command(
+    OUTPUT ${FEATURES_CPPM}
+    COMMAND reflection_tool render
+            --json ${FEATURES_CONFIG}
+            --output ${FEATURES_CPPM}
+            --template ${FEATURES_TEMPLATE}
+    DEPENDS ${FEATURES_CONFIG} ${FEATURES_TEMPLATE} reflection_tool
+    COMMENT "Generating features_generated.cppm from features_config.json"
+    VERBATIM
+)
+
+add_custom_target(features_generated ALL DEPENDS ${FEATURES_CPPM})
 
 # ─── Shader Compilation ───────────────────────────────────────────────────────
 
@@ -108,9 +129,10 @@ target_sources(vulkan_practice PUBLIC
                     shader.cppm VmaBuffer.cppm features.cppm vkinstance.cppm vkdevice.cppm
                     vkswapchain.cppm vkresources.cppm vkrenderer.cppm ecs.cppm
                     ${TYPES_CPPM}
+                    ${FEATURES_CPPM}
 )
 
-add_dependencies(vulkan_practice reflection_generated)
+add_dependencies(vulkan_practice reflection_generated features_generated)
 
 find_package(Vulkan REQUIRED)
 find_package(glm CONFIG REQUIRED)

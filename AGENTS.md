@@ -84,7 +84,7 @@ class Foo {
 |---|---|---|
 | `schema_loader` | tools/schema_loader.cppm | Schema 结构体 + Lua schema 加载 |
 | `validator` | tools/validator.cppm | 将 reflection JSON 与 schema 校验一致性 |
-| `generator` | tools/generator.cppm | 使用 inja 模板生成 `.cppm`，接入 `rllogger` |
+| `generator` | tools/generator.cppm | 使用 inja 模板生成 `.cppm`，接入 `rllogger`。新增 `renderTemplate()` 支持任意 JSON + inja 模板的渲染 |
 
 `reflection_tool` 通过 `import rllogger;` 使用项目统一日志库，替代 `std::cout`/`std::cerr`。
 
@@ -112,9 +112,10 @@ class Foo {
 | `features` | features.cppm | FeatureChain 类型定义、buildRequestedFeatures、validateFeatures、checkDeviceExtensions、自定义异常 |
 | `cube` | cube.cppm | 顶点/索引数据 |
 | `shader` | shader.cppm | SPV 加载器、ShaderEffect、RenderPipeline（ShaderObject + 动态状态） |
-| `VmaRaii` | VmaBuffer.cppm | VmaBuffer、VmaImage、VmaDescriptorHeap、VmaAllocatorRAII 封装 |
+| `VmaRaii` | VmaBuffer.cppm | VmaBuffer、VmaImage、VmaDescriptorHeap、VmaAllocatorRAII 封装。VmaBuffer/VmaImage 通过 `SharedAllocator` (`std::shared_ptr<AllocatorControlBlock>`) 共享 allocator 所有权 |
 | `rlstd` | rlstd/rlstd.cppm | C++ 标准库模块封装。libstdc++ 不支持 `import std`，因此通过 GMF `#include` 所有 STL 头文件并 `export` 常用名称。所有项目模块通过 `import rlstd;` 获取 STL 类型，而非在 GMF 中 `#include` STL 头。注意：`std::views::` 因 libstdc++ 将其定义为 namespace alias 而无法通过模块导出，仍需在 GMF 中 `#include <ranges>` |
 | `types_generated` | generated/types_generated.cppm | auto-generated（由 `reflection_tool` + inja 模板生成），导出 `DrawArgs`、`HeapSlotVertex`、`HeapSlotIndex` |
+| `features_generated` | generated/features_generated.cppm | auto-generated（由 `reflection_tool render` + `features_config.json` 生成），导出 `FeatureChain`、`buildRequestedFeatures()`、`validateFeatures()` |
 
 `main.cpp` 按顺序构造 5 个初始化层类，然后调用 `vkRenderer.render(window)`。`vam_impl.cpp` 包含 `#define VMA_IMPLEMENTATION`。
 
@@ -178,9 +179,7 @@ main.cpp 按逆序析构（RAII，无需手动清理）。
 
 - `pickPhysicalDevice` 读取 `VK_AMD_shader_core_properties` 时未启用对应扩展 — 非 AMD 上为 UB，AMD 上可能读到垃圾数据。当前在 AMD Strix Halo 上开发；未来兼容 NVIDIA Blackwell 等需要正确的扩展检查回退
 - `computeCommandPool`、`transferCommandPool`、`computeQueue`、`transferQueue` 已创建但保留给未来使用
-- `VmaBuffer`/`VmaImage` 存储原始 `VmaAllocator` 指针 — 仅在 allocator 生命周期长于所有分配时安全；可能是为避免 vk-hpp RAII double-free
 - `utils.cppm` — Vulkan ERROR 触发 `int $3`（SIGTRAP）用于调试器体验；从功能角度应改为 throw
-- `VmaDescriptorHeap` 已启用 — 实例化在 `vkresources.cppm`，管理单个 VMA buffer 存放 descriptor 数据
 
 ## 其他文档
 

@@ -57,6 +57,7 @@ export namespace std {
     using std::expected;
     using std::unexpected;
     using std::error_code;
+    using std::shared_ptr;
 
     namespace ranges {
         using std::ranges::any_of;

@@ -150,10 +150,14 @@ private:
         indexDescInfo.data.pAddressRange = &indexRange;
 
         auto vertexSlotResult = descriptorHeap.getSlotCpuAddress(RGL::HeapSlotVertex);
-        if (!vertexSlotResult) return;
+        if (!vertexSlotResult) {
+            throw std::runtime_error(vertexSlotResult.error().describe());
+        }
 
         auto indexSlotResult = descriptorHeap.getSlotCpuAddress(RGL::HeapSlotIndex);
-        if (!indexSlotResult) return;
+        if (!indexSlotResult) {
+            throw std::runtime_error(indexSlotResult.error().describe());
+        }
 
         vk::HostAddressRangeEXT vertexDst{
             *vertexSlotResult,
