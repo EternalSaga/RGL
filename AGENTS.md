@@ -48,6 +48,15 @@ CMake 无独立构建目录 — 必须从根目录构建（`cmake -B build -S .`
 - `main.cpp` 等入口文件通过 `import` 导入模块
 - 不要在模块外部使用 `#include` 引入项目内部头文件
 
+### 优先使用 rlstd 代替 #include STL
+
+**所有 `.cppm` 模块必须 `import rlstd;` 获取 STL 类型，而非在 GMF 中 `#include` STL 头文件。**
+
+- GMF 中只保留第三方库头文件（Vulkan、SDL、glm、fmt 等）
+- 所有 STL 类型（`std::vector`、`std::string`、`std::map` 等）通过 `import rlstd;` 获取
+- **例外：** `<ranges>` 的 `std::views::` 因 libstdc++ 定义为 namespace alias 无法 re-export，需保留 `#include <ranges>`；`<filesystem>` 同理
+- 新加 STL include 时，先检查是否应补入 `rlstd.cppm` 而非直接加到 GMF
+
 ### 函数式 Ranges
 
 优先使用 C++23 `std::ranges` 进行函数式编程：
@@ -69,7 +78,7 @@ class Foo {
 
 ### 构建工具模块
 
-`vulkan_practice/tools/` 下的构建工具也统一使用 C++20 modules：
+`tools/` 下的构建工具也统一使用 C++20 modules：
 
 | 模块 | 文件 | 用途 |
 |---|---|---|
@@ -104,6 +113,7 @@ class Foo {
 | `cube` | cube.cppm | 顶点/索引数据 |
 | `shader` | shader.cppm | SPV 加载器、ShaderEffect、RenderPipeline（ShaderObject + 动态状态） |
 | `VmaRaii` | VmaBuffer.cppm | VmaBuffer、VmaImage、VmaDescriptorHeap、VmaAllocatorRAII 封装 |
+| `rlstd` | rlstd/rlstd.cppm | C++ 标准库模块封装。libstdc++ 不支持 `import std`，因此通过 GMF `#include` 所有 STL 头文件并 `export` 常用名称。所有项目模块通过 `import rlstd;` 获取 STL 类型，而非在 GMF 中 `#include` STL 头。注意：`std::views::` 因 libstdc++ 将其定义为 namespace alias 而无法通过模块导出，仍需在 GMF 中 `#include <ranges>` |
 | `types_generated` | generated/types_generated.cppm | auto-generated（由 `reflection_tool` + inja 模板生成），导出 `DrawArgs`、`HeapSlotVertex`、`HeapSlotIndex` |
 
 `main.cpp` 按顺序构造 5 个初始化层类，然后调用 `vkRenderer.render(window)`。`vam_impl.cpp` 包含 `#define VMA_IMPLEMENTATION`。
@@ -141,7 +151,8 @@ main.cpp 按逆序析构（RAII，无需手动清理）。
 
 ## 外部依赖（通过父 CMake 链接）
 
-- `rllogger` — `../logger/` 同级库，`RGL::RLLogger` 单例
+- `rlstd` — `rlstd/` 根目录共享库，C++ 标准库模块封装
+- `rllogger` — `logger/` 根目录共享库，`RGL::RLLogger` 单例
 - `spdlog` — 通过 rllogger 间接使用
 - `glm` — 数学库（强制 depth zero-to-one，弧度制）
 - `SDL3` — 窗口/surface

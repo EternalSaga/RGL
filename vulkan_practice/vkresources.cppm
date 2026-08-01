@@ -2,10 +2,9 @@ module;
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_raii.hpp>
 #include <vk_mem_alloc.h>
-#include <array>
-#include <cstring>
 export module vk_resources;
 
+import rlstd;
 import VmaRaii;
 import vk_instance;
 import vk_device;

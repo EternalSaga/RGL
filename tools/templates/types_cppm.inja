@@ -3,6 +3,8 @@ module;
 #include <glm/glm.hpp>
 export module {{ module_name }};
 
+import rlstd;
+
 namespace RGL {
 
 {% for s in structs %}    export struct {{ s.name }} {

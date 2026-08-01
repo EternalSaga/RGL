@@ -45,8 +45,8 @@ build:
         echo "Error: Build directory not configured. Run 'just config' first."; \
         exit 1; \
     fi
-    @echo "=== Ninja Building (parallel) ==="
-    ninja -C {{ BUILD }} -j"$(nproc)"
+    @echo "=== CMake Building (parallel) ==="
+    cmake --build {{ BUILD }} --parallel "$(nproc)"
 
 # 一键配置并编译 Release
 build-release COMPILER="clang":

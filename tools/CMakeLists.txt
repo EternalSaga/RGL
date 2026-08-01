@@ -26,6 +26,7 @@ target_link_libraries(reflection_tool
         lua
         pantor::inja
         rllogger
+        rlstd
 )
 
 target_compile_definitions(reflection_tool PRIVATE

@@ -1,12 +1,8 @@
 module;
-#include <array>
-#include <fstream>
-#include <stdexcept>
-#include <string>
-#include <vector>
 #include <vulkan/vulkan_raii.hpp>
 export module shader;
 
+import rlstd;
 import types_generated;
 
 namespace RGL {

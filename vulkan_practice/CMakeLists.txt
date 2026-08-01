@@ -12,9 +12,6 @@ endif()
 
 message(STATUS "找到 Slang 编译器: ${SLANGC_EXECUTABLE}")
 
-# Build reflection_tool first so it's available during shader compilation
-add_subdirectory(tools)
-
 set(GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_shaders")
 file(MAKE_DIRECTORY ${GEN_DIR})
 
@@ -28,7 +25,7 @@ set(TYPES_SLANG "${CMAKE_CURRENT_SOURCE_DIR}/shaders/types.slang")
 set(TYPES_SCHEMA "${CMAKE_CURRENT_SOURCE_DIR}/shaders/types_schema.lua")
 set(TYPES_REFLECTION_JSON "${GEN_DIR}/types_reflection.json")
 set(TYPES_CPPM "${GEN_SRC_DIR}/types_generated.cppm")
-set(TYPES_TEMPLATE "${CMAKE_CURRENT_SOURCE_DIR}/tools/templates/types_cppm.inja")
+set(TYPES_TEMPLATE "${CMAKE_SOURCE_DIR}/tools/templates/types_cppm.inja")
 
 add_custom_command(
     OUTPUT ${TYPES_REFLECTION_JSON}
@@ -118,7 +115,7 @@ add_dependencies(vulkan_practice reflection_generated)
 find_package(Vulkan REQUIRED)
 find_package(glm CONFIG REQUIRED)
 find_package(EnTT CONFIG REQUIRED)
-target_link_libraries(vulkan_practice PRIVATE Vulkan::Vulkan rllogger glm::glm EnTT::EnTT)
+target_link_libraries(vulkan_practice PRIVATE Vulkan::Vulkan rllogger glm::glm EnTT::EnTT rlstd)
 target_compile_definitions(vulkan_practice PRIVATE GLM_FORCE_DEPTH_ZERO_TO_ONE GLM_FORCE_RADIANS)
 find_package(SDL3 CONFIG REQUIRED)
 

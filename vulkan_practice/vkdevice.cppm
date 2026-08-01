@@ -1,10 +1,9 @@
 module;
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_raii.hpp>
-#include <vector>
-#include <map>
 export module vk_device;
 
+import rlstd;
 import vulkan_utils;
 import queue_family_manager;
 import features;
