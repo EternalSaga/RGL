@@ -45,7 +45,7 @@ build:
         echo "Error: Build directory not configured. Run 'just config' first."; \
         exit 1; \
     fi
-    @echo "=== CMake Building (parallel) ==="
+    @echo "=== CMake Building (parallel $(nproc) ) ==="
     cmake --build {{ BUILD }} --parallel "$(nproc)"
 
 # 一键配置并编译 Release

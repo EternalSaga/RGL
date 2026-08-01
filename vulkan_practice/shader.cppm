@@ -4,13 +4,16 @@ export module shader;
 
 import rlstd;
 import types_generated;
+import vkerror;
 
 namespace RGL {
 
-export std::vector<uint32_t> loadShaderSpv(const std::string &filename) {
+export [[nodiscard]] std::expected<std::vector<uint32_t>, Error>
+loadShaderSpv(const std::string &filename) {
   std::ifstream file(filename, std::ios::ate | std::ios::binary);
   if (!file.is_open()) {
-    throw std::runtime_error("failed to open file: " + filename);
+    return std::unexpected(Error{ErrorCode::ShaderLoadFailed,
+        "failed to open file: " + filename});
   }
   size_t fileSize = (size_t)file.tellg();
   std::vector<uint32_t> buffer(fileSize / sizeof(uint32_t));
@@ -86,7 +89,7 @@ public:
     meshShader = std::move(shaders[0]);
     fragShader = std::move(shaders[1]);
   }
- void recordRenderCommands(vk::raii::CommandBuffer &cmd, uint32_t width,
+  void recordRenderCommands(vk::raii::CommandBuffer &cmd, uint32_t width,
                             uint32_t height) {
     // Bind shader stages; unused traditional stages must be set to VK_NULL_HANDLE
     std::array<vk::ShaderStageFlagBits, 7> stages = {

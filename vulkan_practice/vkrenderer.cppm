@@ -20,6 +20,7 @@ import vk_swapchain;
 import vk_resources;
 import types_generated;
 import shader;
+import vkerror;
 
 namespace RGL {
 
@@ -35,9 +36,9 @@ public:
           registry(&registry),
           graphicsQueue(vkDevice.getGraphicsQueue()),
           graphicsCommandPool(vkDevice.getGraphicsCommandPool()),
-          cubePipeline(createRenderPipeline(vkDevice.getDevice(), vkResources.getDescriptorHeap().getDescriptorSize())),
-          heapAddress(vkResources.getDescriptorHeap().getGpuAddress())
+          cubePipeline(createRenderPipeline(vkDevice.getDevice(), vkResources.getDescriptorHeap().getDescriptorSize()))
     {
+        heapAddress = vkResources.getDescriptorHeap().getGpuAddress();
         createSyncObjects();
         allocateCommandBuffers();
     }
@@ -46,13 +47,18 @@ public:
     RGL::Resources& getResourcesRef() const { return *resourcesPtr; }
     void              updateDrawArgs(const glm::mat4& mvp) { drawArgs.mvp = mvp; }
     void              waitForIdle() { vkDevice.getDevice().waitIdle(); }
-    void drawFrame();
+    [[nodiscard]] std::expected<void, Error> drawFrame();
 
 private:
     static RGL::RenderPipeline createRenderPipeline(vk::raii::Device& device, uint32_t descriptorSize) {
+        auto meshResult = RGL::loadShaderSpv("generated_shaders/cube.mesh.spv");
+        if (!meshResult) throw std::runtime_error(meshResult.error().describe());
+        auto fragResult = RGL::loadShaderSpv("generated_shaders/cube.frag.spv");
+        if (!fragResult) throw std::runtime_error(fragResult.error().describe());
+
         RGL::ShaderEffect cubeEffect;
-        cubeEffect.meshStageSpv = RGL::loadShaderSpv("generated_shaders/cube.mesh.spv");
-        cubeEffect.fragStageSpv = RGL::loadShaderSpv("generated_shaders/cube.frag.spv");
+        cubeEffect.meshStageSpv = std::move(*meshResult);
+        cubeEffect.fragStageSpv = std::move(*fragResult);
         return RGL::RenderPipeline(device, cubeEffect, descriptorSize);
     }
 
@@ -101,13 +107,7 @@ private:
     std::vector<vk::raii::CommandBuffer> commandBuffers;
 };
 
-void Renderer::drawFrame() {
-    // Command recording order is critical:
-    // 1. Wait fences → 2. Acquire image → 3. Layout barriers →
-    // 4. Heap barrier → 5. bindResourceHeapEXT → 6. pushDataEXT →
-    // 7. beginRendering → 8. bind shaders → 9. draw → 10. endRendering →
-    // 11. present barrier → 12. submit + present
-    // Steps 4-6 must occur BEFORE beginRendering (HOST stage cannot be used inside render pass)
+std::expected<void, Error> Renderer::drawFrame() {
     auto& device = vkDevice.getDevice();
 
     (void)device.waitForFences(
@@ -122,11 +122,12 @@ void Renderer::drawFrame() {
     if (acquireResult == vk::Result::eErrorOutOfDateKHR) {
         vkSwapchainPtr->recreate();
         resourcesPtr->recreateDepthImage(vkSwapchainPtr->getExtent());
-        return;
+        return {};
     }
     if (acquireResult != vk::Result::eSuccess &&
         acquireResult != vk::Result::eSuboptimalKHR) {
-        throw std::runtime_error("Failed to acquire swapchain image!");
+        return std::unexpected(Error{ErrorCode::SwapchainAcquireFailed,
+            "Failed to acquire swapchain image!"});
     }
 
     commandBuffers[currentFrame].reset();
@@ -136,8 +137,6 @@ void Renderer::drawFrame() {
     auto& swapchainImages = vkSwapchainPtr->getImages();
     auto& swapchainImageViews = vkSwapchainPtr->getImageViews();
 
-    // Color attachment: Undefined → ColorAttachmentOptimal (first frame) or
-    // PresentSrcKHR → ColorAttachmentOptimal (subsequent frames)
     vk::ImageMemoryBarrier2 colorToDrawBarrier = RGL::createImageBarrier(
         swapchainImages[imageIndex], vk::ImageLayout::eUndefined,
         vk::ImageLayout::eColorAttachmentOptimal,
@@ -147,9 +146,6 @@ void Renderer::drawFrame() {
         vk::AccessFlagBits2::eNone,
         vk::AccessFlagBits2::eColorAttachmentWrite);
 
-    // Depth attachment: Undefined → DepthStencilAttachmentOptimal
-    // Using eUndefined as oldLayout covers both first-frame (Undefined) and
-    // subsequent frames (DepthStencilAttachmentOptimal) per Vulkan spec.
     vk::ImageMemoryBarrier2 depthToDrawBarrier = RGL::createImageBarrier(
         *resourcesPtr->getDepthImage(), vk::ImageLayout::eUndefined,
         vk::ImageLayout::eDepthStencilAttachmentOptimal,
@@ -251,6 +247,8 @@ void Renderer::drawFrame() {
     }
 
     currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+    return {};
 }
 
 }
+

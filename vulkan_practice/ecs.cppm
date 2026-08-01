@@ -15,6 +15,7 @@ import vk_swapchain;
 import vk_resources;
 import vk_renderer;
 import cube;
+import rllogger;
 
 namespace RGL {
 
@@ -82,7 +83,12 @@ export void renderSystem(entt::registry &rg, RGL::Renderer &renderer, RGL::SDLWi
                              0.1f, 10.0f);
 
         renderer.updateDrawArgs(proj * view * model);
-        renderer.drawFrame();
+
+        auto result = renderer.drawFrame();
+        if (!result) {
+            std::cerr << "渲染错误: " << result.error().describe() << std::endl;
+            shouldClose = true;
+        }
     }
 
     renderer.waitForIdle();

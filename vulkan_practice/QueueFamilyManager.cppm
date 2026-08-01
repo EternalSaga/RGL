@@ -6,6 +6,7 @@ export module queue_family_manager;
 
 import rlstd;
 import rllogger;
+import vkerror;
 
 namespace RGL {
 
@@ -17,11 +18,17 @@ export enum class QueueFamilyRole {
 
 struct QueueAllocation {
     uint32_t familyIndex;
-    uint32_t baseQueueIndex; // 对应物理队列的索引
+    uint32_t baseQueueIndex;
 };
 
 export class QueueFamilyManager {
 public:
+    static std::expected<QueueFamilyManager, Error>
+    create(const vk::raii::PhysicalDevice& physicalDevice) {
+        QueueFamilyManager mgr{physicalDevice};
+        return mgr;
+    }
+
     QueueFamilyManager(const vk::raii::PhysicalDevice& physicalDevice)
         : physicalDevice(physicalDevice) {
         auto queueFamilies = physicalDevice.getQueueFamilyProperties();
@@ -106,10 +113,12 @@ public:
         return queueCreateInfos;
     }
 
-    vk::Queue getQueue(const vk::Device& device, QueueFamilyRole role) const {
+    [[nodiscard]] std::expected<vk::Queue, Error>
+    getQueue(const vk::Device& device, QueueFamilyRole role) const {
         auto it = allocations.find(role);
         if (it == allocations.end()) {
-            throw std::runtime_error("Requested queue role not allocated!");
+            return std::unexpected(Error{ErrorCode::QueueNotAllocated,
+                "Requested queue role not allocated!"});
         }
         return device.getQueue(it->second.familyIndex, it->second.baseQueueIndex);
     }
@@ -118,17 +127,19 @@ public:
         return allocations.at(role).familyIndex;
     }
 
-void checkPresentAbility(const vk::raii::SurfaceKHR& surface) const {
-    uint32_t graphicsFamilyIdx = getFamilyIndex(QueueFamilyRole::Graphics);
+    [[nodiscard]] std::expected<void, Error> checkPresentAbility(const vk::raii::SurfaceKHR& surface) const {
+        uint32_t graphicsFamilyIdx = getFamilyIndex(QueueFamilyRole::Graphics);
 
-    if (!physicalDevice.getSurfaceSupportKHR(graphicsFamilyIdx, *surface)) {
-        const auto errMsg = fmt::format(
-            "Graphics queue family (Index: {}) cannot present to surface",
-            graphicsFamilyIdx);
-        logger->critical(errMsg);
-        throw std::runtime_error(errMsg);
+        if (!physicalDevice.getSurfaceSupportKHR(graphicsFamilyIdx, *surface)) {
+            const auto errMsg = fmt::format(
+                "Graphics queue family (Index: {}) cannot present to surface",
+                graphicsFamilyIdx);
+            if (logger)
+                logger->critical(errMsg);
+            return std::unexpected(Error{ErrorCode::SurfaceNotPresentable, errMsg});
+        }
+        return {};
     }
-}
 
 private:
     std::vector<vk::DeviceQueueCreateInfo> queueCreateInfos;

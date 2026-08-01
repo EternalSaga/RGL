@@ -5,10 +5,12 @@ module;
 export module vk_swapchain;
 
 import rlstd;
+import rllogger;
 import vulkan_utils;
 import vulkan_window;
 import vk_instance;
 import vk_device;
+import vkerror;
 
 namespace RGL {
 
@@ -17,11 +19,10 @@ public:
     Swapchain(RGL::DeviceContext& vkDevice, RGL::SDLWindow& window)
         : vkDevice(vkDevice),
           window(window),
-          surface(window.createSurface(vkDevice.getVkInstance().getInstance())),
+          surface(createSurface(vkDevice.getVkInstance().getInstance(), window)),
           format(window.selectFormat(
               vkDevice.getPhysicalDevice().getSurfaceFormatsKHR(*surface))),
-          presentMode(RGL::selectPresentMode(
-              vkDevice.getPhysicalDevice().getSurfacePresentModesKHR(*surface))),
+          presentMode(createPresentMode(vkDevice, surface)),
           surfaceCapabilities(vkDevice.getPhysicalDevice().getSurfaceCapabilitiesKHR(*surface)),
           extent(window.getSwapchainExtend(surfaceCapabilities)),
           imageCount(window.getImageCount(surfaceCapabilities.minImageCount, surfaceCapabilities.maxImageCount)),
@@ -29,7 +30,10 @@ public:
           swapchainImages(swapchain.getImages()),
           swapchainImageViews(createImageViews(vkDevice.getDevice(), swapchainImages, format.format))
     {
-        vkDevice.getQueueManager().checkPresentAbility(surface);
+        auto result = vkDevice.getQueueManager().checkPresentAbility(surface);
+        if (!result) {
+            throw std::runtime_error(result.error().describe());
+        }
     }
 
     const vk::raii::SurfaceKHR& getSurface() const { return surface; }
@@ -65,6 +69,19 @@ public:
     }
 
 private:
+    static vk::raii::SurfaceKHR createSurface(vk::raii::Instance& instance, RGL::SDLWindow& window) {
+        auto result = window.createSurface(instance);
+        if (!result) throw std::runtime_error(result.error().describe());
+        return std::move(*result);
+    }
+
+    static vk::PresentModeKHR createPresentMode(RGL::DeviceContext& vkDevice, const vk::raii::SurfaceKHR& surface) {
+        auto modes = vkDevice.getPhysicalDevice().getSurfacePresentModesKHR(*surface);
+        auto modeResult = RGL::selectPresentMode(modes);
+        if (!modeResult) throw std::runtime_error(modeResult.error().describe());
+        return *modeResult;
+    }
+
     vk::SwapchainCreateInfoKHR buildSwapchainCreateInfo() const {
         vk::SwapchainCreateInfoKHR swapchainCreateInfo{};
         swapchainCreateInfo.surface = *surface;
@@ -120,3 +137,4 @@ private:
 };
 
 }
+

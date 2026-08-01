@@ -11,55 +11,101 @@ export module vulkan_window;
 
 import rlstd;
 import rllogger;
+import vkerror;
 
 namespace RGL {
 
 export class SDLWindow {
 public:
-    SDLWindow(int width, int height, std::string title)
-        : width(width), height(height), logger(RLLogger::getInstance()) {
-        if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
-            logger->critical("SDL init failed");
-            throw std::runtime_error("SDL init failed");
-        }
-
-        window = SDL_CreateWindow(title.c_str(), width, height,
-                                  SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
-
-        if (!window) {
-            std::string errMsg = std::string("Failed to create SDL Window: ") + SDL_GetError();
-            logger->critical(errMsg);
-            throw std::runtime_error(errMsg);
-        }
-    }
+    SDLWindow(SDL_Window* window, int width, int height)
+        : window(window), width(width), height(height), logger(RLLogger::getInstance()) {}
 
     ~SDLWindow() {
-        SDL_DestroyWindow(window);
-        SDL_Quit();
+        if (window) {
+            SDL_DestroyWindow(window);
+            SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
+        }
     }
 
-    vk::raii::SurfaceKHR createSurface(vk::raii::Instance& instance) {
+    SDLWindow(const SDLWindow&) = delete;
+    SDLWindow& operator=(const SDLWindow&) = delete;
+
+    SDLWindow(SDLWindow&& o) noexcept
+        : window(o.window), width(o.width), height(o.height), logger(o.logger) {
+        o.window = nullptr;
+    }
+
+    SDLWindow& operator=(SDLWindow&& o) noexcept {
+        if (this != &o) {
+            if (window) {
+                SDL_DestroyWindow(window);
+                SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
+            }
+            window = o.window;
+            width = o.width;
+            height = o.height;
+            logger = o.logger;
+            o.window = nullptr;
+        }
+        return *this;
+    }
+
+    [[nodiscard]] static std::expected<SDLWindow, Error>
+    create(int width, int height, std::string title) {
+        auto logger = RLLogger::getInstance();
+
+        if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
+            std::string errMsg = std::string("SDL init failed: ") + SDL_GetError();
+            if (logger)
+                logger->critical(errMsg);
+            return std::unexpected(Error{ErrorCode::SDLError, errMsg});
+        }
+
+        SDL_Window* wnd = SDL_CreateWindow(title.c_str(), width, height,
+                                           SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
+
+        if (!wnd) {
+            std::string errMsg = std::string("Failed to create SDL Window: ") + SDL_GetError();
+            if (logger)
+                logger->critical(errMsg);
+            SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
+            return std::unexpected(Error{ErrorCode::SDLError, errMsg});
+        }
+
+        if (logger)
+            logger->info("SDL window created ({}x{})", width, height);
+
+        return SDLWindow{ wnd, width, height };
+    }
+
+    [[nodiscard]] std::expected<vk::raii::SurfaceKHR, Error> createSurface(vk::raii::Instance& instance) {
         VkSurfaceKHR surface = VK_NULL_HANDLE;
 
         if (!SDL_Vulkan_CreateSurface(window, *instance, nullptr, &surface)) {
             const std::string errMsg = fmt::format("Failed to create Vulkan Surface: {}", SDL_GetError());
-            logger->critical(errMsg);
-            throw std::runtime_error(errMsg);
+            if (logger)
+                logger->critical(errMsg);
+            return std::unexpected(Error{ErrorCode::VulkanError, errMsg});
         }
+
+        if (logger)
+            logger->info("Vulkan surface created");
 
         return vk::raii::SurfaceKHR(instance, surface);
     }
 
-    std::pair<const char* const*, uint32_t> getSurfaceExtensions() {
+    [[nodiscard]] std::expected<std::pair<const char* const*, uint32_t>, Error> getSurfaceExtensions() {
         if (!SDL_WasInit(SDL_INIT_VIDEO)) {
-            logger->critical("SDL Video subsystem not initialized!");
-            throw std::runtime_error("SDL Video subsystem not initialized!");
+            if (logger)
+                logger->critical("SDL Video subsystem not initialized!");
+            return std::unexpected(Error{ErrorCode::SDLError, "SDL Video subsystem not initialized!"});
         }
         uint32_t extensionCount = 0;
         const char* const* sdlExtensions = SDL_Vulkan_GetInstanceExtensions(&extensionCount);
         if (!sdlExtensions) {
-            logger->critical("Failed to get SDL surface extensions");
-            throw std::runtime_error("Failed to get SDL surface extensions");
+            if (logger)
+                logger->critical("Failed to get SDL surface extensions");
+            return std::unexpected(Error{ErrorCode::SDLError, "Failed to get SDL surface extensions"});
         }
         return std::make_pair(sdlExtensions, extensionCount);
     }
@@ -100,12 +146,12 @@ public:
             }
         }
 
-        logger->warn("[Vulkan] 警告：未找到理想的 sRGB 格式，使用默认首选项。{}",
+        logger->warn("[Vulkan] Warning: no ideal sRGB format found, using default {}",
                      vk::to_string(availableFormats[0].format));
         return availableFormats[0];
     }
 
-    vk::Extent2D getSwapchainExtend(const vk::SurfaceCapabilitiesKHR& surfaceCapabilities) {
+    vk::Extent2D getSwapchainExtend(const vk::SurfaceCapabilitiesKHR& surfaceCapabilities) const {
         vk::Extent2D swapchainExtent = surfaceCapabilities.currentExtent;
 
         if (surfaceCapabilities.currentExtent.width != std::numeric_limits<uint32_t>::max()) {
@@ -123,7 +169,7 @@ public:
         return swapchainExtent;
     }
 
-    uint32_t getImageCount(uint32_t minImageCount, uint32_t maxImageCount) {
+    uint32_t getImageCount(uint32_t minImageCount, uint32_t maxImageCount) const {
         SDL_PropertiesID props = SDL_GetWindowProperties(window);
         uint32_t imageCount = minImageCount;
 

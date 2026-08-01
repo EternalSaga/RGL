@@ -5,6 +5,7 @@ export module vulkan_utils;
 
 import rlstd;
 import rllogger;
+import vkerror;
 
 namespace RGL {
 
@@ -62,14 +63,10 @@ vulkanDebugCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
 
     logger->log(lvl, fmtObj);
 
-    if (messageSeverity & vk::DebugUtilsMessageSeverityFlagBitsEXT::eError) {
-        throw std::runtime_error(std::string("Vulkan validation error: ") + pCallbackData->pMessage);
-    }
-
     return VK_FALSE;
 }
 
-export [[nodiscard]] vk::raii::DebugUtilsMessengerEXT
+export [[nodiscard]] std::expected<vk::raii::DebugUtilsMessengerEXT, Error>
 setupDebugMessenger(vk::raii::Instance &instance) {
     auto *logger = RLLogger::getInstance();
 
@@ -88,15 +85,19 @@ setupDebugMessenger(vk::raii::Instance &instance) {
 
     createInfo.setPUserData(logger);
 
+    if (logger)
+        logger->info("Debug messenger created");
+
     return vk::raii::DebugUtilsMessengerEXT(instance, createInfo);
 }
 
-export const vk::raii::PhysicalDevice &
+export [[nodiscard]] std::expected<const vk::raii::PhysicalDevice *, Error>
 pickPhysicalDevice(const vk::raii::PhysicalDevices &physicalDevices) {
     auto logger = RLLogger::getInstance();
     if (physicalDevices.empty()) {
-        logger->error("No physical devices found");
-        throw std::runtime_error("No physical devices found");
+        if (logger)
+            logger->error("No physical devices found");
+        return std::unexpected(Error{ErrorCode::NoPhysicalDevices, "No physical devices found"});
     }
     std::map<uint64_t, const vk::raii::PhysicalDevice *> deviceCandidates;
 
@@ -149,24 +150,25 @@ pickPhysicalDevice(const vk::raii::PhysicalDevices &physicalDevices) {
     }
 
     if (deviceCandidates.empty() || deviceCandidates.rbegin()->first == 0) {
-        logger->error("failed to find a suitable GPU!");
-        throw std::runtime_error("failed to find a suitable GPU!");
+        if (logger)
+            logger->error("failed to find a suitable GPU!");
+        return std::unexpected(Error{ErrorCode::NoSuitableGPU, "failed to find a suitable GPU!"});
     }
 
-    return *(deviceCandidates.rbegin()->second);
+    return deviceCandidates.rbegin()->second;
 }
 
-export vk::PresentModeKHR
+export [[nodiscard]] std::expected<vk::PresentModeKHR, Error>
 selectPresentMode(const std::vector<vk::PresentModeKHR> &presentModes) {
     auto it = std::ranges::find(presentModes, vk::PresentModeKHR::eImmediate);
     if (it != presentModes.end()) {
         return *it;
     }
-    throw std::runtime_error(
-        "eImmediate not supported -- compositor or platform incompatible");
+    return std::unexpected(Error{ErrorCode::NoPresentMode,
+        "eImmediate not supported -- compositor or platform incompatible"});
 }
 
-export vk::ImageMemoryBarrier2
+export constexpr vk::ImageMemoryBarrier2
 createImageBarrier(VkImage image, vk::ImageLayout oldLayout,
                    vk::ImageLayout newLayout, vk::ImageAspectFlags aspectMask,
                    vk::PipelineStageFlags2 srcStage,

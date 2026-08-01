@@ -104,10 +104,10 @@ add_custom_command(
 
 target_sources(vulkan_practice PUBLIC
              FILE_SET CXX_MODULES
-             FILES utils.cppm sdl3window.cppm QueueFamilyManager.cppm cube.cppm
-                   shader.cppm VmaBuffer.cppm features.cppm vkinstance.cppm vkdevice.cppm
-                   vkswapchain.cppm vkresources.cppm vkrenderer.cppm ecs.cppm
-                   ${TYPES_CPPM}
+              FILES vkerror.cppm utils.cppm sdl3window.cppm QueueFamilyManager.cppm cube.cppm
+                    shader.cppm VmaBuffer.cppm features.cppm vkinstance.cppm vkdevice.cppm
+                    vkswapchain.cppm vkresources.cppm vkrenderer.cppm ecs.cppm
+                    ${TYPES_CPPM}
 )
 
 add_dependencies(vulkan_practice reflection_generated)

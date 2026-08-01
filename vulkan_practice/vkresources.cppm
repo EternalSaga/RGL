@@ -11,6 +11,7 @@ import vk_device;
 import vk_swapchain;
 import types_generated;
 import cube;
+import vkerror;
 
 namespace RGL {
 
@@ -22,17 +23,17 @@ public:
           vkSwapchain(vkSwapchain),
           allocator(*vkInstance.getInstance(), *vkDevice.getPhysicalDevice(), *vkDevice.getDevice(),
                     vkInstance.getApiVersion()),
-          depthImage(createDepthImage(allocator, vkSwapchain.getExtent())),
+          depthImage(createDepthImage(allocator, vkSwapchain.getExtent()).value()),
           depthImageView(vkDevice.getDevice(), buildDepthView(*depthImage)),
-        vertexBuffer(createGpuBuffer("vertex",
+          vertexBuffer(createGpuBuffer(
               RGL::cubeVertices.size() * sizeof(RGL::Vertex),
               vk::BufferUsageFlagBits::eStorageBuffer,
-              RGL::cubeVertices.data())),
-        indexBuffer(createGpuBuffer("index",
+              RGL::cubeVertices.data()).value()),
+          indexBuffer(createGpuBuffer(
               RGL::cubeIndices.size() * sizeof(uint32_t),
               vk::BufferUsageFlagBits::eStorageBuffer,
-              RGL::cubeIndices.data())),
-        descriptorHeap(createDescriptorHeap())
+              RGL::cubeIndices.data()).value()),
+          descriptorHeap(createDescriptorHeap().value())
     {
         writeDescriptors();
     }
@@ -43,9 +44,12 @@ public:
     void recreateDepthImage(vk::Extent2D extent) {
         vkDevice.getDevice().waitIdle();
 
-        depthImage = createDepthImage(allocator, extent);
+        auto result = createDepthImage(allocator, extent);
+        if (!result) throw std::runtime_error(result.error().describe());
+        depthImage = std::move(*result);
         depthImageView = vk::raii::ImageView(vkDevice.getDevice(), buildDepthView(*depthImage));
     }
+
     const RGL::VmaDescriptorHeap& getDescriptorHeap() const { return descriptorHeap; }
     vk::DeviceSize getReservedRangeOffset() const { return 0; }
     vk::DeviceSize getReservedRangeSize() const { return descriptorHeap.getReservedSlots() * descriptorHeap.getDescriptorSize(); }
@@ -54,7 +58,7 @@ public:
     RGL::VmaAllocatorRAII& getAllocator() { return allocator; }
 
 private:
-    static RGL::VmaImage createDepthImage(RGL::VmaAllocatorRAII& allocator, vk::Extent2D extent) {
+    static std::expected<RGL::VmaImage, Error> createDepthImage(RGL::VmaAllocatorRAII& allocator, vk::Extent2D extent) {
         vk::ImageCreateInfo depthImageInfo{};
         depthImageInfo.imageType = vk::ImageType::e2D;
         depthImageInfo.format = vk::Format::eD32Sfloat;
@@ -83,7 +87,7 @@ private:
         return depthViewInfo;
     }
 
-    RGL::VmaBuffer createGpuBuffer(const char* label, vk::DeviceSize size, vk::BufferUsageFlags extraUsage, const void* initData = nullptr) {
+    std::expected<RGL::VmaBuffer, Error> createGpuBuffer(vk::DeviceSize size, vk::BufferUsageFlags extraUsage, const void* initData = nullptr) {
         vk::BufferCreateInfo bufferInfo{};
         bufferInfo.size = size;
         bufferInfo.usage = vk::BufferUsageFlagBits::eShaderDeviceAddress | extraUsage;
@@ -94,7 +98,10 @@ private:
         allocInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
 
         VmaAllocationInfo allocData;
-        auto buf = allocator.createBufferWithAddress(vkDevice.getDevice(), bufferInfo, allocInfo, &allocData);
+        auto result = allocator.createBufferWithAddress(vkDevice.getDevice(), bufferInfo, allocInfo, &allocData);
+        if (!result) return std::unexpected(result.error());
+
+        auto buf = std::move(*result);
 
         if (initData && size > 0) {
             std::memcpy(allocData.pMappedData, initData, size);
@@ -103,7 +110,7 @@ private:
         return buf;
     }
 
-    RGL::VmaDescriptorHeap createDescriptorHeap() {
+    std::expected<RGL::VmaDescriptorHeap, Error> createDescriptorHeap() {
         auto props = vkDevice.getPhysicalDevice().getProperties2<
             vk::PhysicalDeviceProperties2,
             vk::PhysicalDeviceDescriptorHeapPropertiesEXT>();
@@ -114,13 +121,12 @@ private:
         uint32_t reservedSlots = static_cast<uint32_t>(heapProps.minResourceHeapReservedRange + descriptorSize - 1) / descriptorSize;
         uint32_t capacity = 16 + reservedSlots;
 
-        auto buf = allocator.createDescriptorHeap(
+        return allocator.createDescriptorHeap(
             vkDevice.getDevice(),
             capacity, descriptorSize,
             vk::BufferUsageFlagBits::eDescriptorHeapEXT,
             reservedSlots
         );
-        return buf;
     }
 
     void writeDescriptors() {
@@ -143,12 +149,18 @@ private:
         indexDescInfo.type = vk::DescriptorType::eStorageBuffer;
         indexDescInfo.data.pAddressRange = &indexRange;
 
+        auto vertexSlotResult = descriptorHeap.getSlotCpuAddress(RGL::HeapSlotVertex);
+        if (!vertexSlotResult) return;
+
+        auto indexSlotResult = descriptorHeap.getSlotCpuAddress(RGL::HeapSlotIndex);
+        if (!indexSlotResult) return;
+
         vk::HostAddressRangeEXT vertexDst{
-            descriptorHeap.getSlotCpuAddress<void>(RGL::HeapSlotVertex),
+            *vertexSlotResult,
             descriptorHeap.getDescriptorSize()
         };
         vk::HostAddressRangeEXT indexDst{
-            descriptorHeap.getSlotCpuAddress<void>(RGL::HeapSlotIndex),
+            *indexSlotResult,
             descriptorHeap.getDescriptorSize()
         };
 
@@ -170,3 +182,4 @@ private:
 };
 
 }
+

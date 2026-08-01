@@ -2,23 +2,13 @@ module;
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_raii.hpp>
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 export module features;
 
 import rlstd;
+import vkerror;
 
 namespace RGL {
-
-class FeatureUnavailable : public std::runtime_error {
-public:
-    FeatureUnavailable(const std::string& featureName)
-        : std::runtime_error(fmt::format("Required feature not supported by device: {}", featureName)) {}
-};
-
-class ExtensionUnavailable : public std::runtime_error {
-public:
-    ExtensionUnavailable(const std::string& extName)
-        : std::runtime_error(fmt::format("Required extension not supported by device: {}", extName)) {}
-};
 
 export using FeatureChain = vk::StructureChain<
     vk::PhysicalDeviceFeatures2,
@@ -34,13 +24,7 @@ export using FeatureChain = vk::StructureChain<
     vk::PhysicalDeviceDescriptorBufferFeaturesEXT
 >;
 
-static void checkFeature(vk::Bool32 actual, const std::string& name) {
-    if (!actual) {
-        throw FeatureUnavailable(name);
-    }
-}
-
-export void checkDeviceExtensions(const vk::raii::PhysicalDevice& device) {
+export [[nodiscard]] std::expected<void, Error> checkDeviceExtensions(const vk::raii::PhysicalDevice& device) {
     auto available = device.enumerateDeviceExtensionProperties();
     std::vector<const char*> required = {
         VK_KHR_SWAPCHAIN_EXTENSION_NAME,
@@ -54,14 +38,22 @@ export void checkDeviceExtensions(const vk::raii::PhysicalDevice& device) {
         VK_KHR_SHADER_UNTYPED_POINTERS_EXTENSION_NAME
     };
 
+    std::vector<const char*> missing;
     for (const char* ext : required) {
         bool found = std::ranges::any_of(available, [ext](const auto& prop) {
             return std::string_view(prop.extensionName.data()) == ext;
         });
         if (!found) {
-            throw ExtensionUnavailable(ext);
+            missing.push_back(ext);
         }
     }
+
+    if (!missing.empty()) {
+        std::string msg = fmt::format("Required extension not supported by device: {}",
+                                      fmt::join(missing, ", "));
+        return std::unexpected(Error{ErrorCode::ExtensionUnavailable, msg});
+    }
+    return {};
 }
 
 export const std::vector<const char*>& getDeviceExtensions() {
@@ -133,7 +125,7 @@ export FeatureChain buildRequestedFeatures() {
     return chain;
 }
 
-export void validateFeatures(const vk::raii::PhysicalDevice& device, FeatureChain& requested) {
+export [[nodiscard]] std::expected<void, Error> validateFeatures(const vk::raii::PhysicalDevice& device, FeatureChain& requested) {
     auto supported = device.getFeatures2<
         vk::PhysicalDeviceFeatures2,
         vk::PhysicalDeviceVulkan11Features,
@@ -148,41 +140,78 @@ export void validateFeatures(const vk::raii::PhysicalDevice& device, FeatureChai
         vk::PhysicalDeviceDescriptorBufferFeaturesEXT
     >();
 
-    checkFeature(supported.get<vk::PhysicalDeviceFeatures2>().features.robustBufferAccess, "robustBufferAccess");
-    checkFeature(supported.get<vk::PhysicalDeviceFeatures2>().features.shaderInt64, "shaderInt64");
+    auto checkFeature = [](vk::Bool32 actual, const char* name) -> std::expected<void, Error> {
+        if (!actual) {
+            return std::unexpected(Error{ErrorCode::FeatureUnavailable,
+                fmt::format("Required feature not supported by device: {}", name)});
+        }
+        return {};
+    };
+
+    if (auto result = checkFeature(supported.get<vk::PhysicalDeviceFeatures2>().features.robustBufferAccess, "robustBufferAccess");
+        !result) return result;
+
+    if (auto result = checkFeature(supported.get<vk::PhysicalDeviceFeatures2>().features.shaderInt64, "shaderInt64");
+        !result) return result;
 
     auto& s11 = supported.get<vk::PhysicalDeviceVulkan11Features>();
-    checkFeature(s11.shaderDrawParameters, "Vulkan11::shaderDrawParameters");
-    checkFeature(s11.multiview, "Vulkan11::multiview");
-    checkFeature(s11.storageBuffer16BitAccess, "Vulkan11::storageBuffer16BitAccess");
+    if (auto result = checkFeature(s11.shaderDrawParameters, "Vulkan11::shaderDrawParameters");
+        !result) return result;
+    if (auto result = checkFeature(s11.multiview, "Vulkan11::multiview");
+        !result) return result;
+    if (auto result = checkFeature(s11.storageBuffer16BitAccess, "Vulkan11::storageBuffer16BitAccess");
+        !result) return result;
 
     auto& s12 = supported.get<vk::PhysicalDeviceVulkan12Features>();
-    checkFeature(s12.descriptorIndexing, "Vulkan12::descriptorIndexing");
-    checkFeature(s12.shaderUniformBufferArrayNonUniformIndexing, "Vulkan12::shaderUniformBufferArrayNonUniformIndexing");
-    checkFeature(s12.descriptorBindingSampledImageUpdateAfterBind, "Vulkan12::descriptorBindingSampledImageUpdateAfterBind");
-    checkFeature(s12.descriptorBindingPartiallyBound, "Vulkan12::descriptorBindingPartiallyBound");
-    checkFeature(s12.scalarBlockLayout, "Vulkan12::scalarBlockLayout");
-    checkFeature(s12.timelineSemaphore, "Vulkan12::timelineSemaphore");
-    checkFeature(s12.bufferDeviceAddress, "Vulkan12::bufferDeviceAddress");
+    if (auto result = checkFeature(s12.descriptorIndexing, "Vulkan12::descriptorIndexing");
+        !result) return result;
+    if (auto result = checkFeature(s12.shaderUniformBufferArrayNonUniformIndexing, "Vulkan12::shaderUniformBufferArrayNonUniformIndexing");
+        !result) return result;
+    if (auto result = checkFeature(s12.descriptorBindingSampledImageUpdateAfterBind, "Vulkan12::descriptorBindingSampledImageUpdateAfterBind");
+        !result) return result;
+    if (auto result = checkFeature(s12.descriptorBindingPartiallyBound, "Vulkan12::descriptorBindingPartiallyBound");
+        !result) return result;
+    if (auto result = checkFeature(s12.scalarBlockLayout, "Vulkan12::scalarBlockLayout");
+        !result) return result;
+    if (auto result = checkFeature(s12.timelineSemaphore, "Vulkan12::timelineSemaphore");
+        !result) return result;
+    if (auto result = checkFeature(s12.bufferDeviceAddress, "Vulkan12::bufferDeviceAddress");
+        !result) return result;
 
     auto& s13 = supported.get<vk::PhysicalDeviceVulkan13Features>();
-    checkFeature(s13.dynamicRendering, "Vulkan13::dynamicRendering");
-    checkFeature(s13.synchronization2, "Vulkan13::synchronization2");
-    checkFeature(s13.shaderZeroInitializeWorkgroupMemory, "Vulkan13::shaderZeroInitializeWorkgroupMemory");
+    if (auto result = checkFeature(s13.dynamicRendering, "Vulkan13::dynamicRendering");
+        !result) return result;
+    if (auto result = checkFeature(s13.synchronization2, "Vulkan13::synchronization2");
+        !result) return result;
+    if (auto result = checkFeature(s13.shaderZeroInitializeWorkgroupMemory, "Vulkan13::shaderZeroInitializeWorkgroupMemory");
+        !result) return result;
 
     auto& s14 = supported.get<vk::PhysicalDeviceVulkan14Features>();
-    checkFeature(s14.pushDescriptor, "Vulkan14::pushDescriptor");
-    checkFeature(s14.dynamicRenderingLocalRead, "Vulkan14::dynamicRenderingLocalRead");
-    checkFeature(s14.maintenance5, "Vulkan14::maintenance5");
-    checkFeature(s14.maintenance6, "Vulkan14::maintenance6");
+    if (auto result = checkFeature(s14.pushDescriptor, "Vulkan14::pushDescriptor");
+        !result) return result;
+    if (auto result = checkFeature(s14.dynamicRenderingLocalRead, "Vulkan14::dynamicRenderingLocalRead");
+        !result) return result;
+    if (auto result = checkFeature(s14.maintenance5, "Vulkan14::maintenance5");
+        !result) return result;
+    if (auto result = checkFeature(s14.maintenance6, "Vulkan14::maintenance6");
+        !result) return result;
 
-    checkFeature(supported.get<vk::PhysicalDeviceMeshShaderFeaturesEXT>().meshShader, "MeshShaderEXT::meshShader");
-    checkFeature(supported.get<vk::PhysicalDeviceShaderObjectFeaturesEXT>().shaderObject, "ShaderObjectEXT::shaderObject");
-    checkFeature(supported.get<vk::PhysicalDeviceDescriptorBufferFeaturesEXT>().descriptorBuffer, "DescriptorBufferEXT::descriptorBuffer");
-    checkFeature(supported.get<vk::PhysicalDeviceDescriptorHeapFeaturesEXT>().descriptorHeap, "DescriptorHeapEXT::descriptorHeap");
-    checkFeature(supported.get<vk::PhysicalDeviceDescriptorHeapFeaturesEXT>().descriptorHeapCaptureReplay, "DescriptorHeapEXT::descriptorHeapCaptureReplay");
-    checkFeature(supported.get<vk::PhysicalDeviceSwapchainMaintenance1FeaturesKHR>().swapchainMaintenance1, "SwapchainMaintenance1KHR::swapchainMaintenance1");
-    checkFeature(supported.get<vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR>().shaderUntypedPointers, "ShaderUntypedPointersKHR::shaderUntypedPointers");
+    if (auto result = checkFeature(supported.get<vk::PhysicalDeviceMeshShaderFeaturesEXT>().meshShader, "MeshShaderEXT::meshShader");
+        !result) return result;
+    if (auto result = checkFeature(supported.get<vk::PhysicalDeviceShaderObjectFeaturesEXT>().shaderObject, "ShaderObjectEXT::shaderObject");
+        !result) return result;
+    if (auto result = checkFeature(supported.get<vk::PhysicalDeviceDescriptorBufferFeaturesEXT>().descriptorBuffer, "DescriptorBufferEXT::descriptorBuffer");
+        !result) return result;
+    if (auto result = checkFeature(supported.get<vk::PhysicalDeviceDescriptorHeapFeaturesEXT>().descriptorHeap, "DescriptorHeapEXT::descriptorHeap");
+        !result) return result;
+    if (auto result = checkFeature(supported.get<vk::PhysicalDeviceDescriptorHeapFeaturesEXT>().descriptorHeapCaptureReplay, "DescriptorHeapEXT::descriptorHeapCaptureReplay");
+        !result) return result;
+    if (auto result = checkFeature(supported.get<vk::PhysicalDeviceSwapchainMaintenance1FeaturesKHR>().swapchainMaintenance1, "SwapchainMaintenance1KHR::swapchainMaintenance1");
+        !result) return result;
+    if (auto result = checkFeature(supported.get<vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR>().shaderUntypedPointers, "ShaderUntypedPointersKHR::shaderUntypedPointers");
+        !result) return result;
+
+    return {};
 }
 
 }  // namespace RGL

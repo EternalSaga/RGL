@@ -9,6 +9,7 @@ module;
 #include <cctype>
 #include <cstdint>
 #include <cstring>
+#include <expected>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -53,6 +54,9 @@ export namespace std {
     using std::cerr;
     using std::cout;
     using std::endl;
+    using std::expected;
+    using std::unexpected;
+    using std::error_code;
 
     namespace ranges {
         using std::ranges::any_of;

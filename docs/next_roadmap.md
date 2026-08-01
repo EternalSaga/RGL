@@ -18,9 +18,18 @@
 基于 [cppreference][cppref] 和 [C++20/23 要解](/blog/cpp-modern) 讨论，记录后续重构方向。
 
 ### 错误处理：`std::expected`
-- 替代渲染循环中的 `throw std::runtime_error` + `INT $3`
-- `VkResult` → `std::expected` 转换函数，让 Vulkan 错误显式处理
-- 配合 `[[nodiscard]]` 在句柄返回上，禁止静默丢弃结果
+
+> **已完成**
+
+- `vkerror.cppm`：定义 `Error` 结构体（含 `ErrorCode` 枚举） + `Error::fromVkResult()` 静态工厂
+- 初始化阶段 (constructors)：RAII 构造函数失败抛出 `std::runtime_error`，由 `main.cpp` 的 `try-catch` 统一处理
+- 运行时路径：使用 `std::expected<T, Error>` 返回，`[[nodiscard]]` 禁止静默丢弃
+- `VmaAllocatorRAII` 的创建方法（`createBufferWithAddress`、`createImage`、`createDescriptorHeap`）返回 `std::expected<T, Error>`
+- `vk::raii::*` 创建函数（如 `loadShaderSpv`、`setupDebugMessenger`、`pickPhysicalDevice`、`selectPresentMode`）返回 `std::expected<T, Error>`
+- `VmaDescriptorHeap::getSlotCpuAddress()` 返回 `std::expected<void*, Error>` 而非抛出
+- `Renderer::drawFrame()` 返回 `std::expected<void, Error>`
+- 初始化类构造函数在 init list 中用 `.value()` 展开 `expected`，失败则抛出
+- **注意**：`std::expected` 不支持引用类型，返回引用的函数改为返回指针
 
 ### 接口：`std::span`
 - 替代 `const void*` + `size` 参数对

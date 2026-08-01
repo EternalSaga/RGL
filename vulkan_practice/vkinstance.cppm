@@ -10,6 +10,7 @@ import rlstd;
 import rllogger;
 import vulkan_utils;
 import vulkan_window;
+import vkerror;
 
 namespace RGL {
 
@@ -18,7 +19,7 @@ public:
     AppContext(RGL::SDLWindow &window)
         : context(), apiVersion(context.enumerateInstanceVersion()),
           instance(context, buildInstanceCreateInfo(window)),
-          debugMessenger(RGL::setupDebugMessenger(instance)) {}
+          debugMessenger(buildDebugMessenger(instance)) {}
 
     vk::raii::Instance &getInstance() { return instance; }
     const vk::raii::Instance &getInstance() const { return instance; }
@@ -26,7 +27,12 @@ public:
 
 private:
     vk::InstanceCreateInfo buildInstanceCreateInfo(RGL::SDLWindow &window) {
-        auto [surfaceExtensions, surfaceCount] = window.getSurfaceExtensions();
+        auto extensionsResult = window.getSurfaceExtensions();
+        if (!extensionsResult) {
+            std::string msg = extensionsResult.error().describe();
+            throw std::runtime_error(msg);
+        }
+        auto [surfaceExtensions, surfaceCount] = *extensionsResult;
 
         engineInfo.applicationVersion = vk::makeVersion(0, 1, 0);
         engineInfo.apiVersion = apiVersion;
@@ -49,6 +55,14 @@ private:
         instanceCreateInfo.setPEnabledLayerNames(layers);
         instanceCreateInfo.setPEnabledExtensionNames(instanceExtensions);
         return instanceCreateInfo;
+    }
+
+    vk::raii::DebugUtilsMessengerEXT buildDebugMessenger(vk::raii::Instance &inst) {
+        auto result = RGL::setupDebugMessenger(inst);
+        if (!result) {
+            throw std::runtime_error(result.error().describe());
+        }
+        return std::move(*result);
     }
 
     vk::raii::Context context;

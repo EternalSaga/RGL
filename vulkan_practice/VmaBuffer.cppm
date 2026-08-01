@@ -4,12 +4,10 @@ module;
 export module VmaRaii;
 
 import rlstd;
+import vkerror;
 
 namespace RGL {
 
-// Stores raw VmaAllocator pointer instead of VmaAllocatorRAII to avoid lifetime issues:
-// VmaBuffer/VmaImage may outlive VmaAllocatorRAII if the allocator is destroyed first.
-// The allocator is guaranteed to outlive all allocations by design (see vkresources.cppm).
 export struct VmaBuffer {
     VmaAllocator allocator = nullptr;
     VkBuffer buffer = VK_NULL_HANDLE;
@@ -44,7 +42,6 @@ export struct VmaBuffer {
     void* getMappedData() const { return pMappedData; }
 };
 
-// Stores raw VmaAllocator pointer — see VmaBuffer comment for rationale.
 export struct VmaImage {
     VmaAllocator allocator = nullptr;
     VkImage image = VK_NULL_HANDLE;
@@ -58,11 +55,11 @@ export struct VmaImage {
 
     VmaImage(const VmaImage&) = delete;
     VmaImage& operator=(const VmaImage&) = delete;
-    
-    VmaImage(VmaImage&& o) noexcept : allocator(o.allocator), image(o.image), allocation(o.allocation) { 
-        o.allocator = nullptr; o.image = VK_NULL_HANDLE; o.allocation = nullptr; 
+
+    VmaImage(VmaImage&& o) noexcept : allocator(o.allocator), image(o.image), allocation(o.allocation) {
+        o.allocator = nullptr; o.image = VK_NULL_HANDLE; o.allocation = nullptr;
     }
-    
+
     VmaImage& operator=(VmaImage&& o) noexcept {
         if (this != &o) {
             if (allocator && image && allocation) vmaDestroyImage(allocator, image, allocation);
@@ -80,7 +77,7 @@ export struct VmaDescriptorHeap {
     uint64_t gpuAddress = 0;
     uint32_t descriptorSize = 0;
     uint32_t capacity = 0;
-    uint32_t reservedSlots = 0;    // implementation reserved slots at heap start
+    uint32_t reservedSlots = 0;
 
     VmaDescriptorHeap() = default;
     VmaDescriptorHeap(VmaBuffer&& buf, void* mapped, uint64_t gpuAddr, uint32_t descSize, uint32_t cap, uint32_t reserved = 0)
@@ -130,10 +127,12 @@ export struct VmaDescriptorHeap {
     uint32_t getCapacity() const { return capacity; }
     uint32_t getReservedSlots() const { return reservedSlots; }
 
-    template<typename T = void>
-    T* getSlotCpuAddress(uint32_t slot) const {
-        if (slot >= capacity) throw std::out_of_range("Descriptor heap slot out of bounds!");
-        return reinterpret_cast<T*>(static_cast<char*>(pMappedData) + (static_cast<size_t>(slot) * descriptorSize));
+    [[nodiscard]] std::expected<void*, Error> getSlotCpuAddress(uint32_t slot) const {
+        if (slot >= capacity) {
+            return std::unexpected(Error{ErrorCode::DescriptorSlotOutOfBounds,
+                "Descriptor heap slot out of bounds!"});
+        }
+        return static_cast<char*>(pMappedData) + (static_cast<size_t>(slot) * descriptorSize);
     }
 };
 
@@ -141,7 +140,7 @@ export class VmaAllocatorRAII {
 private:
     VmaAllocator allocator = nullptr;
 public:
-    VmaAllocatorRAII(VkInstance instance, VkPhysicalDevice physicalDevice, VkDevice device, uint32_t apiVersion, 
+    VmaAllocatorRAII(VkInstance instance, VkPhysicalDevice physicalDevice, VkDevice device, uint32_t apiVersion,
                      VmaAllocatorCreateFlags flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT) {
         VmaAllocatorCreateInfo allocatorInfo{
             .flags = flags,
@@ -161,20 +160,23 @@ public:
     VmaAllocatorRAII& operator=(const VmaAllocatorRAII&) = delete;
     VmaAllocatorRAII(VmaAllocatorRAII&& o) noexcept : allocator(o.allocator) { o.allocator = nullptr; }
 
-    VmaBuffer createBuffer(const vk::BufferCreateInfo& bufferInfo, const VmaAllocationCreateInfo& allocInfo, VmaAllocationInfo* pAllocInfo = nullptr) const {
+    [[nodiscard]] std::expected<VmaBuffer, Error> createBuffer(const vk::BufferCreateInfo& bufferInfo, const VmaAllocationCreateInfo& allocInfo, VmaAllocationInfo* pAllocInfo = nullptr) const {
         VkBuffer buffer;
         VmaAllocation allocation;
-        if (vmaCreateBuffer(allocator, reinterpret_cast<const VkBufferCreateInfo*>(&bufferInfo), &allocInfo, &buffer, &allocation, pAllocInfo) != VK_SUCCESS) {
-            throw std::runtime_error("VMA failed to create buffer");
+        VkResult result = vmaCreateBuffer(allocator, reinterpret_cast<const VkBufferCreateInfo*>(&bufferInfo), &allocInfo, &buffer, &allocation, pAllocInfo);
+        if (result != VK_SUCCESS) {
+            return std::unexpected(Error{ErrorCode::VMASuccessFailed,
+                "VMA failed to create buffer"});
         }
         return VmaBuffer(allocator, buffer, allocation);
     }
 
-    VmaBuffer createBufferWithAddress(const vk::raii::Device& device, const vk::BufferCreateInfo& bufferInfo, const VmaAllocationCreateInfo& allocInfo, VmaAllocationInfo* pAllocInfo = nullptr) const {
+    [[nodiscard]] std::expected<VmaBuffer, Error> createBufferWithAddress(const vk::raii::Device& device, const vk::BufferCreateInfo& bufferInfo, const VmaAllocationCreateInfo& allocInfo, VmaAllocationInfo* pAllocInfo = nullptr) const {
         VkBuffer buffer;
         VmaAllocation allocation;
-        if (vmaCreateBuffer(allocator, reinterpret_cast<const VkBufferCreateInfo*>(&bufferInfo), &allocInfo, &buffer, &allocation, pAllocInfo) != VK_SUCCESS) {
-            throw std::runtime_error("VMA failed to create buffer");
+        VkResult result = vmaCreateBuffer(allocator, reinterpret_cast<const VkBufferCreateInfo*>(&bufferInfo), &allocInfo, &buffer, &allocation, pAllocInfo);
+        if (result != VK_SUCCESS) {
+            return std::unexpected(Error{ErrorCode::VMASuccessFailed, "VMA failed to create buffer"});
         }
         vk::BufferDeviceAddressInfo addrInfo{};
         addrInfo.buffer = buffer;
@@ -182,16 +184,17 @@ public:
         return VmaBuffer(allocator, buffer, allocation, addr, pAllocInfo ? pAllocInfo->pMappedData : nullptr);
     }
 
-    VmaImage createImage(const vk::ImageCreateInfo& imageInfo, const VmaAllocationCreateInfo& allocInfo, VmaAllocationInfo* pAllocInfo = nullptr) const {
+    [[nodiscard]] std::expected<VmaImage, Error> createImage(const vk::ImageCreateInfo& imageInfo, const VmaAllocationCreateInfo& allocInfo, VmaAllocationInfo* pAllocInfo = nullptr) const {
         VkImage image;
         VmaAllocation allocation;
-        if (vmaCreateImage(allocator, reinterpret_cast<const VkImageCreateInfo*>(&imageInfo), &allocInfo, &image, &allocation, pAllocInfo) != VK_SUCCESS) {
-            throw std::runtime_error("VMA failed to create image");
+        VkResult result = vmaCreateImage(allocator, reinterpret_cast<const VkImageCreateInfo*>(&imageInfo), &allocInfo, &image, &allocation, pAllocInfo);
+        if (result != VK_SUCCESS) {
+            return std::unexpected(Error{ErrorCode::VMASuccessFailed, "VMA failed to create image"});
         }
         return VmaImage(allocator, image, allocation);
     }
 
-    VmaDescriptorHeap createDescriptorHeap(
+    [[nodiscard]] std::expected<VmaDescriptorHeap, Error> createDescriptorHeap(
         const vk::raii::Device& device,
         uint32_t capacity,
         uint32_t descriptorSize,
@@ -208,12 +211,13 @@ public:
         };
 
         VmaAllocationInfo allocInfo;
-        VmaBuffer storage = createBufferWithAddress(device, bufferInfo, allocCreateInfo, &allocInfo);
+        auto storageResult = createBufferWithAddress(device, bufferInfo, allocCreateInfo, &allocInfo);
+        if (!storageResult) return std::unexpected(storageResult.error());
 
         return VmaDescriptorHeap(
-            std::move(storage),
+            std::move(*storageResult),
             allocInfo.pMappedData,
-            storage.getDeviceAddress(),
+            storageResult->getDeviceAddress(),
             descriptorSize,
             capacity,
             reservedSlots

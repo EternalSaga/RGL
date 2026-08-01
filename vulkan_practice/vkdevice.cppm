@@ -4,10 +4,12 @@ module;
 export module vk_device;
 
 import rlstd;
+import rllogger;
 import vulkan_utils;
 import queue_family_manager;
 import features;
 import vk_instance;
+import vkerror;
 
 namespace RGL {
 
@@ -16,22 +18,29 @@ public:
     DeviceContext(RGL::AppContext& vkInstance)
         : vkInstance(vkInstance),
           physicalDevices(vkInstance.getInstance()),
-          physicalDevice(&RGL::pickPhysicalDevice(physicalDevices)),
-          queueManager(*physicalDevice),
+          physicalDevice([result = RGL::pickPhysicalDevice(physicalDevices)]() {
+              if (!result) throw std::runtime_error(result.error().describe());
+              return *result;
+          }()),
+          queueManager(RGL::QueueFamilyManager::create(*physicalDevice).value()),
           featuresChain(RGL::buildRequestedFeatures()),
           device(createDevice(*physicalDevice, queueManager, featuresChain)),
-          graphicsQueue(queueManager.getQueue(device, RGL::QueueFamilyRole::Graphics)),
-          computeQueue(queueManager.getQueue(device, RGL::QueueFamilyRole::Compute)),
-          transferQueue(queueManager.getQueue(device, RGL::QueueFamilyRole::Transfer)),
+          graphicsQueue(queueManager.getQueue(device, RGL::QueueFamilyRole::Graphics).value()),
+          computeQueue(queueManager.getQueue(device, RGL::QueueFamilyRole::Compute).value()),
+          transferQueue(queueManager.getQueue(device, RGL::QueueFamilyRole::Transfer).value()),
           graphicsCommandPool(createCommandPool(device, queueManager.getFamilyIndex(RGL::QueueFamilyRole::Graphics),
-                                                     vk::CommandPoolCreateFlagBits::eResetCommandBuffer)),
+                                                     vk::CommandPoolCreateFlagBits::eResetCommandBuffer).value()),
           computeCommandPool(createCommandPool(device, queueManager.getFamilyIndex(RGL::QueueFamilyRole::Compute),
-                                                    vk::CommandPoolCreateFlagBits::eResetCommandBuffer)),
+                                                     vk::CommandPoolCreateFlagBits::eResetCommandBuffer).value()),
           transferCommandPool(createCommandPool(device, queueManager.getFamilyIndex(RGL::QueueFamilyRole::Transfer),
-                                                     vk::CommandPoolCreateFlagBits::eTransient | vk::CommandPoolCreateFlagBits::eResetCommandBuffer))
+                                                     vk::CommandPoolCreateFlagBits::eTransient | vk::CommandPoolCreateFlagBits::eResetCommandBuffer).value())
     {
-        RGL::checkDeviceExtensions(*physicalDevice);
-        RGL::validateFeatures(*physicalDevice, featuresChain);
+        if (auto result = RGL::checkDeviceExtensions(*physicalDevice); !result) {
+            throw std::runtime_error(result.error().describe());
+        }
+        if (auto result = RGL::validateFeatures(*physicalDevice, featuresChain); !result) {
+            throw std::runtime_error(result.error().describe());
+        }
     }
 
     RGL::AppContext& getVkInstance() { return vkInstance; }
@@ -58,7 +67,7 @@ private:
         return vk::raii::Device(physicalDevice, deviceCreateInfo);
     }
 
-    static vk::raii::CommandPool createCommandPool(vk::raii::Device& device, uint32_t queueFamilyIndex,
+    static std::expected<vk::raii::CommandPool, Error> createCommandPool(vk::raii::Device& device, uint32_t queueFamilyIndex,
                                                        vk::CommandPoolCreateFlags flags) {
         vk::CommandPoolCreateInfo poolInfo{};
         poolInfo.flags = flags;
@@ -81,3 +90,4 @@ private:
 };
 
 }
+
