@@ -1,9 +1,12 @@
 module;
-#include <vulkan/vulkan.hpp>
-#include <vulkan/vulkan_raii.hpp>
+#include <algorithm>
+#include <ranges>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <stdexcept>
+#include <vulkan/vulkan.hpp>
+#include <vulkan/vulkan_raii.hpp>
 #include <fmt/format.h>
 export module features;
 
@@ -56,13 +59,9 @@ export void checkDeviceExtensions(const vk::raii::PhysicalDevice& device) {
     };
 
     for (const char* ext : required) {
-        bool found = false;
-        for (const auto& prop : available) {
-            if (std::string_view(prop.extensionName.data()) == ext) {
-                found = true;
-                break;
-            }
-        }
+        bool found = std::ranges::any_of(available, [ext](const auto& prop) {
+            return std::string_view(prop.extensionName.data()) == ext;
+        });
         if (!found) {
             throw ExtensionUnavailable(ext);
         }

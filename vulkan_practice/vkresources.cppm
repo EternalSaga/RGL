@@ -2,6 +2,7 @@ module;
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_raii.hpp>
 #include <vk_mem_alloc.h>
+#include <array>
 #include <cstring>
 export module vk_resources;
 
@@ -127,11 +128,11 @@ private:
         auto& device = vkDevice.getDevice();
 
         vk::DeviceAddressRangeEXT vertexRange{
-            reinterpret_cast<VkDeviceAddress>(getVertexBufferAddress()),
+            getVertexBufferAddress(),
             RGL::cubeVertices.size() * sizeof(RGL::Vertex)
         };
         vk::DeviceAddressRangeEXT indexRange{
-            reinterpret_cast<VkDeviceAddress>(getIndexBufferAddress()),
+            getIndexBufferAddress(),
             RGL::cubeIndices.size() * sizeof(uint32_t)
         };
 
@@ -153,8 +154,8 @@ private:
         };
 
         device.writeResourceDescriptorsEXT(
-            std::vector<vk::ResourceDescriptorInfoEXT>{vertexDescInfo, indexDescInfo},
-            std::vector<vk::HostAddressRangeEXT>{vertexDst, indexDst}
+            std::array<vk::ResourceDescriptorInfoEXT, 2>{vertexDescInfo, indexDescInfo},
+            std::array<vk::HostAddressRangeEXT, 2>{vertexDst, indexDst}
         );
     }
 

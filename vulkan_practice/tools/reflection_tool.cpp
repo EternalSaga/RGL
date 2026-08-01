@@ -1,8 +1,8 @@
 #include <boost/program_options.hpp>
 #include <filesystem>
 #include <fstream>
-#include <iostream>
 #include <nlohmann/json.hpp>
+#include <ranges>
 #include <unistd.h>
 
 import rllogger;
@@ -22,11 +22,11 @@ static void printUsage() {
 }
 
 int main(int argc, char *argv[]) {
-    try {
-        RGL::RLLogger::initialize(LOG_CONFIG_PATH);
-        auto *logger = RGL::RLLogger::getInstance();
-        logger->debug("reflection_tool started, pid={}", ::getpid());
+    RGL::RLLogger::initialize(LOG_CONFIG_PATH);
+    auto *logger = RGL::RLLogger::getInstance();
+    logger->debug("reflection_tool started, pid={}", ::getpid());
 
+    try {
         std::string command;
         std::string jsonPath, schemaPath, outputPath, moduleName, templatePath;
 
@@ -46,9 +46,7 @@ int main(int argc, char *argv[]) {
         command = argv[1];
         int cmdArgc = argc - 1;
         char *cmdArgv[1024];
-        for (int i = 0; i < cmdArgc && i < 1024; ++i) {
-            cmdArgv[i] = argv[i + 1];
-        }
+        std::ranges::copy_n(argv + 1, cmdArgc, cmdArgv);
 
         po::variables_map vm;
         po::store(po::command_line_parser(cmdArgc, cmdArgv).options(desc).run(), vm);
@@ -124,11 +122,11 @@ int main(int argc, char *argv[]) {
         }
 
     } catch (const po::error &e) {
-        std::cerr << "Error: " << e.what() << "\n";
+        logger->error("Error: {}", e.what());
         printUsage();
         return 1;
     } catch (const std::exception &e) {
-        std::cerr << "Error: " << e.what() << "\n";
+        logger->error("Error: {}", e.what());
         return 1;
     }
 }

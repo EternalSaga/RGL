@@ -86,7 +86,7 @@ export struct VmaDescriptorHeap {
     VmaDescriptorHeap(VmaBuffer&& buf, void* mapped, uint64_t gpuAddr, uint32_t descSize, uint32_t cap, uint32_t reserved = 0)
         : bufferStorage(std::move(buf)), pMappedData(mapped), gpuAddress(gpuAddr), descriptorSize(descSize), capacity(cap), reservedSlots(reserved) {}
 
-    ~  VmaDescriptorHeap() = default;
+    ~VmaDescriptorHeap() = default;
 
     VmaDescriptorHeap(const VmaDescriptorHeap&) = delete;
     VmaDescriptorHeap& operator=(const VmaDescriptorHeap&) = delete;

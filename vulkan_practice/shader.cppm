@@ -1,5 +1,7 @@
 module;
+#include <array>
 #include <fstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 #include <vulkan/vulkan_raii.hpp>
@@ -43,7 +45,7 @@ public:
     mappings[0].resourceMask = VK_SPIRV_RESOURCE_TYPE_READ_ONLY_STORAGE_BUFFER_BIT_EXT;
     mappings[0].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
     // heapOffset and heapArrayStride are in bytes, not slot indices — multiply by descriptorSize
-    mappings[0].sourceData.constantOffset.heapOffset = HeapSlotVertex * descriptorSize;
+    mappings[0].sourceData.constantOffset.heapOffset = RGL::HeapSlotVertex * descriptorSize;
     mappings[0].sourceData.constantOffset.heapArrayStride = descriptorSize;
 
     mappings[1].sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
@@ -52,7 +54,7 @@ public:
     mappings[1].bindingCount = 1;
     mappings[1].resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
     mappings[1].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
-    mappings[1].sourceData.constantOffset.heapOffset = HeapSlotIndex * descriptorSize;
+    mappings[1].sourceData.constantOffset.heapOffset = RGL::HeapSlotIndex * descriptorSize;
     mappings[1].sourceData.constantOffset.heapArrayStride = descriptorSize;
 
     VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{};
@@ -83,8 +85,7 @@ public:
     fragCreateInfoRaw.pName = "main";
     vk::ShaderCreateInfoEXT fragCreateInfo(fragCreateInfoRaw);
 
-   std::vector<vk::ShaderCreateInfoEXT> createInfos = {meshCreateInfo,
-                                                          fragCreateInfo};
+    std::vector<vk::ShaderCreateInfoEXT> createInfos = {meshCreateInfo, fragCreateInfo};
     auto shaders = device.createShadersEXT(createInfos);
     meshShader = std::move(shaders[0]);
     fragShader = std::move(shaders[1]);
@@ -92,7 +93,7 @@ public:
  void recordRenderCommands(vk::raii::CommandBuffer &cmd, uint32_t width,
                             uint32_t height) {
     // Bind shader stages; unused traditional stages must be set to VK_NULL_HANDLE
-    std::vector<vk::ShaderStageFlagBits> stages = {
+    std::array<vk::ShaderStageFlagBits, 7> stages = {
         vk::ShaderStageFlagBits::eVertex,
         vk::ShaderStageFlagBits::eTessellationControl,
         vk::ShaderStageFlagBits::eTessellationEvaluation,
@@ -101,7 +102,7 @@ public:
         vk::ShaderStageFlagBits::eMeshEXT,
         vk::ShaderStageFlagBits::eFragment};
 
-    std::vector<vk::ShaderEXT> shaderHandles = {
+    std::array<vk::ShaderEXT, 7> shaderHandles = {
         vk::ShaderEXT(nullptr), vk::ShaderEXT(nullptr),
         vk::ShaderEXT(nullptr), vk::ShaderEXT(nullptr),
         vk::ShaderEXT(nullptr),

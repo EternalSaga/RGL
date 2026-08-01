@@ -6,7 +6,9 @@ module;
 #include <glm/glm.hpp>
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_events.h>
+#include <array>
 #include <limits>
+#include <ranges>
 
 export module vk_renderer;
 
@@ -34,8 +36,8 @@ public:
           registry(&registry),
           graphicsQueue(vkDevice.getGraphicsQueue()),
           graphicsCommandPool(vkDevice.getGraphicsCommandPool()),
-         cubePipeline(createRenderPipeline(vkDevice.getDevice(), vkResources.getDescriptorHeap().getDescriptorSize())),
-         heapAddress(vkResources.getDescriptorHeap().getGpuAddress())
+          cubePipeline(createRenderPipeline(vkDevice.getDevice(), vkResources.getDescriptorHeap().getDescriptorSize())),
+          heapAddress(vkResources.getDescriptorHeap().getGpuAddress())
     {
         createSyncObjects();
         allocateCommandBuffers();
@@ -48,12 +50,12 @@ public:
     void drawFrame();
 
 private:
-   static RGL::RenderPipeline createRenderPipeline(vk::raii::Device& device, uint32_t descriptorSize) {
-         RGL::ShaderEffect cubeEffect;
-         cubeEffect.meshStageSpv = RGL::loadShaderSpv("generated_shaders/cube.mesh.spv");
-         cubeEffect.fragStageSpv = RGL::loadShaderSpv("generated_shaders/cube.frag.spv");
-         return RGL::RenderPipeline(device, cubeEffect, descriptorSize);
-     }
+    static RGL::RenderPipeline createRenderPipeline(vk::raii::Device& device, uint32_t descriptorSize) {
+        RGL::ShaderEffect cubeEffect;
+        cubeEffect.meshStageSpv = RGL::loadShaderSpv("generated_shaders/cube.mesh.spv");
+        cubeEffect.fragStageSpv = RGL::loadShaderSpv("generated_shaders/cube.frag.spv");
+        return RGL::RenderPipeline(device, cubeEffect, descriptorSize);
+    }
 
     void createSyncObjects() {
         vk::SemaphoreCreateInfo semaphoreInfo{};
@@ -65,19 +67,20 @@ private:
         inFlightFences.reserve(MAX_FRAMES_IN_FLIGHT);
         presentFences.reserve(MAX_FRAMES_IN_FLIGHT);
 
-        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-            imageAvailableSemaphores.emplace_back(vkDevice.getDevice(), semaphoreInfo);
-            renderFinishedSemaphores.emplace_back(vkDevice.getDevice(), semaphoreInfo);
-            inFlightFences.emplace_back(vkDevice.getDevice(), fenceInfo);
-            presentFences.emplace_back(vkDevice.getDevice(), presentFenceInfo);
-        }
+        std::ranges::for_each(std::views::iota(0, MAX_FRAMES_IN_FLIGHT),
+            [&](int) {
+                imageAvailableSemaphores.emplace_back(vkDevice.getDevice(), semaphoreInfo);
+                renderFinishedSemaphores.emplace_back(vkDevice.getDevice(), semaphoreInfo);
+                inFlightFences.emplace_back(vkDevice.getDevice(), fenceInfo);
+                presentFences.emplace_back(vkDevice.getDevice(), presentFenceInfo);
+            });
     }
 
     void allocateCommandBuffers() {
-         vk::CommandBufferAllocateInfo allocInfoCmd{
+        vk::CommandBufferAllocateInfo allocInfoCmd{
             *graphicsCommandPool, vk::CommandBufferLevel::ePrimary,
             static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT)};
-         commandBuffers = vkDevice.getDevice().allocateCommandBuffers(allocInfoCmd);
+        commandBuffers = vkDevice.getDevice().allocateCommandBuffers(allocInfoCmd);
     }
 
     RGL::DeviceContext& vkDevice;
@@ -158,7 +161,7 @@ void Renderer::drawFrame() {
         vk::AccessFlagBits2::eDepthStencilAttachmentRead |
             vk::AccessFlagBits2::eDepthStencilAttachmentWrite);
 
-    std::vector<vk::ImageMemoryBarrier2> drawBarriers = {colorToDrawBarrier, depthToDrawBarrier};
+    std::array<vk::ImageMemoryBarrier2, 2> drawBarriers = {colorToDrawBarrier, depthToDrawBarrier};
     vk::DependencyInfo drawDepInfo;
     drawDepInfo.setImageMemoryBarriers(drawBarriers);
     commandBuffers[currentFrame].pipelineBarrier2(drawDepInfo);
@@ -225,7 +228,7 @@ void Renderer::drawFrame() {
     commandBuffers[currentFrame].pipelineBarrier2(colorToPresentDepInfo);
     commandBuffers[currentFrame].end();
 
-    vk::PipelineStageFlags waitStages[] = {vk::PipelineStageFlagBits::eColorAttachmentOutput};
+    std::array<vk::PipelineStageFlags, 1> waitStages = {vk::PipelineStageFlagBits::eColorAttachmentOutput};
     vk::SubmitInfo submitInfo{};
     submitInfo.setWaitSemaphores(*imageAvailableSemaphores[currentFrame]);
     submitInfo.setWaitDstStageMask(waitStages);
