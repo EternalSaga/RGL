@@ -104,6 +104,9 @@
     },
     {
       "name": "vulkan-memory-allocator"
+    },
+    {
+      "name":"shader-slang"
     }
   ],
   "overrides": [

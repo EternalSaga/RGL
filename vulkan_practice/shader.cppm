@@ -34,17 +34,17 @@ export class RenderPipeline {
   vk::raii::ShaderEXT fragShader = nullptr;
 
 public:
-  RenderPipeline(vk::raii::Device &device, const ShaderEffect &effect, uint32_t descriptorSize) {
+  RenderPipeline(vk::raii::Device &device, const ShaderEffect &effect,
+                  uint32_t descriptorSize, uint32_t slotVertex, uint32_t slotIndex) {
     VkDescriptorSetAndBindingMappingEXT mappings[2]{};
 
     mappings[0].sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
     mappings[0].descriptorSet = 0;
     mappings[0].firstBinding = 0;
     mappings[0].bindingCount = 1;
-    mappings[0].resourceMask = VK_SPIRV_RESOURCE_TYPE_READ_ONLY_STORAGE_BUFFER_BIT_EXT;
+    mappings[0].resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
     mappings[0].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
-    // heapOffset and heapArrayStride are in bytes, not slot indices — multiply by descriptorSize
-    mappings[0].sourceData.constantOffset.heapOffset = RGL::HeapSlotVertex * descriptorSize;
+    mappings[0].sourceData.constantOffset.heapOffset = slotVertex * descriptorSize;
     mappings[0].sourceData.constantOffset.heapArrayStride = descriptorSize;
 
     mappings[1].sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
@@ -53,7 +53,7 @@ public:
     mappings[1].bindingCount = 1;
     mappings[1].resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
     mappings[1].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
-    mappings[1].sourceData.constantOffset.heapOffset = RGL::HeapSlotIndex * descriptorSize;
+    mappings[1].sourceData.constantOffset.heapOffset = slotIndex * descriptorSize;
     mappings[1].sourceData.constantOffset.heapArrayStride = descriptorSize;
 
     VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{};

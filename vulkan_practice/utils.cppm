@@ -110,19 +110,21 @@ pickPhysicalDevice(const vk::raii::PhysicalDevices &physicalDevices) {
                                [](unsigned char c) { return std::tolower(c); });
 
         uint32_t coreCount = 0;
-        vk::PhysicalDeviceProperties2 props2 = device.getProperties2();
-        vk::PhysicalDeviceShaderCorePropertiesAMD amdShaderProps;
-        vk::PhysicalDeviceSubgroupSizeControlProperties subgroupProps;
 
-        props2.pNext = &subgroupProps;
-        subgroupProps.pNext = &amdShaderProps;
+        if (deviceName.find("amd") != std::string::npos) {
+            auto props2 = device.getProperties2<
+                vk::PhysicalDeviceProperties2,
+                vk::PhysicalDeviceSubgroupSizeControlProperties,
+                vk::PhysicalDeviceShaderCorePropertiesAMD>();
+            auto& amdShaderProps = props2.get<vk::PhysicalDeviceShaderCorePropertiesAMD>();
+            if (amdShaderProps.shaderEngineCount > 0) {
+                coreCount = amdShaderProps.shaderEngineCount *
+                            amdShaderProps.shaderArraysPerEngineCount *
+                            amdShaderProps.computeUnitsPerShaderArray;
+            }
+        }
 
-        if (deviceName.find("amd") != std::string::npos &&
-            amdShaderProps.shaderEngineCount > 0) {
-            coreCount = amdShaderProps.shaderEngineCount *
-                        amdShaderProps.shaderArraysPerEngineCount *
-                        amdShaderProps.computeUnitsPerShaderArray;
-        } else {
+        if (coreCount == 0) {
             coreCount = properties.limits.maxComputeWorkGroupInvocations;
         }
 

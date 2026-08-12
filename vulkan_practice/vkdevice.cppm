@@ -4,7 +4,6 @@ module;
 export module vk_device;
 
 import rlstd;
-import rllogger;
 import vulkan_utils;
 import queue_family_manager;
 import features;
@@ -29,15 +28,16 @@ public:
           computeQueue(queueManager.getQueue(device, RGL::QueueFamilyRole::Compute).value()),
           transferQueue(queueManager.getQueue(device, RGL::QueueFamilyRole::Transfer).value()),
           graphicsCommandPool(createCommandPool(device, queueManager.getFamilyIndex(RGL::QueueFamilyRole::Graphics),
-                                                     vk::CommandPoolCreateFlagBits::eResetCommandBuffer).value()),
+                                                      vk::CommandPoolCreateFlagBits::eResetCommandBuffer).value()),
           computeCommandPool(createCommandPool(device, queueManager.getFamilyIndex(RGL::QueueFamilyRole::Compute),
-                                                     vk::CommandPoolCreateFlagBits::eResetCommandBuffer).value()),
+                                                      vk::CommandPoolCreateFlagBits::eResetCommandBuffer).value()),
           transferCommandPool(createCommandPool(device, queueManager.getFamilyIndex(RGL::QueueFamilyRole::Transfer),
-                                                     vk::CommandPoolCreateFlagBits::eTransient | vk::CommandPoolCreateFlagBits::eResetCommandBuffer).value())
+                                                      vk::CommandPoolCreateFlagBits::eTransient | vk::CommandPoolCreateFlagBits::eResetCommandBuffer).value())
     {
         if (auto result = RGL::checkDeviceExtensions(*physicalDevice); !result) {
             throw std::runtime_error(result.error().describe());
         }
+        RGL::updateDebugExtensionSupport(*physicalDevice);
         if (auto result = RGL::validateFeatures(*physicalDevice, featuresChain); !result) {
             throw std::runtime_error(result.error().describe());
         }
@@ -58,12 +58,15 @@ public:
 
 private:
     static vk::raii::Device createDevice(const vk::raii::PhysicalDevice& physicalDevice,
-                                            RGL::QueueFamilyManager& queueManager,
-                                            RGL::FeatureChain& featuresChain) {
+                                             RGL::QueueFamilyManager& queueManager,
+                                             RGL::FeatureChain& featuresChain) {
         vk::DeviceCreateInfo deviceCreateInfo{};
         deviceCreateInfo.setPNext(&featuresChain.get<vk::PhysicalDeviceFeatures2>());
         deviceCreateInfo.setQueueCreateInfos(queueManager.getQueueCreateInfos());
-        deviceCreateInfo.setPEnabledExtensionNames(RGL::getDeviceExtensions());
+
+        std::vector<const char*> extensions = RGL::getDeviceExtensions();
+        deviceCreateInfo.setPEnabledExtensionNames(extensions);
+
         return vk::raii::Device(physicalDevice, deviceCreateInfo);
     }
 

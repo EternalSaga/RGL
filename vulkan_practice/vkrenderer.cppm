@@ -36,7 +36,9 @@ public:
           registry(&registry),
           graphicsQueue(vkDevice.getGraphicsQueue()),
           graphicsCommandPool(vkDevice.getGraphicsCommandPool()),
-          cubePipeline(createRenderPipeline(vkDevice.getDevice(), vkResources.getDescriptorHeap().getDescriptorSize()))
+          cubePipeline(createRenderPipeline(vkDevice.getDevice(),
+              vkResources.getDescriptorHeap().getDescriptorSize(),
+              vkResources.getHeapSlotVertex(), vkResources.getHeapSlotIndex()))
     {
         heapAddress = vkResources.getDescriptorHeap().getGpuAddress();
         createSyncObjects();
@@ -50,7 +52,9 @@ public:
     [[nodiscard]] std::expected<void, Error> drawFrame();
 
 private:
-    static RGL::RenderPipeline createRenderPipeline(vk::raii::Device& device, uint32_t descriptorSize) {
+    static RGL::RenderPipeline createRenderPipeline(vk::raii::Device& device,
+                                                     uint32_t descriptorSize,
+                                                     uint32_t slotVertex, uint32_t slotIndex) {
         auto meshResult = RGL::loadShaderSpv("generated_shaders/cube.mesh.spv");
         if (!meshResult) throw std::runtime_error(meshResult.error().describe());
         auto fragResult = RGL::loadShaderSpv("generated_shaders/cube.frag.spv");
@@ -59,7 +63,7 @@ private:
         RGL::ShaderEffect cubeEffect;
         cubeEffect.meshStageSpv = std::move(*meshResult);
         cubeEffect.fragStageSpv = std::move(*fragResult);
-        return RGL::RenderPipeline(device, cubeEffect, descriptorSize);
+        return RGL::RenderPipeline(device, cubeEffect, descriptorSize, slotVertex, slotIndex);
     }
 
     void createSyncObjects() {

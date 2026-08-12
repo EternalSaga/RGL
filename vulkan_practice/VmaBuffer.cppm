@@ -1,6 +1,7 @@
 module;
 #include <vk_mem_alloc.h>
 #include <vulkan/vulkan_raii.hpp>
+#include <cstdint>
 export module VmaRaii;
 
 import rlstd;
@@ -94,13 +95,14 @@ export struct VmaDescriptorHeap {
     VmaBuffer bufferStorage;
     void* pMappedData = nullptr;
     uint64_t gpuAddress = 0;
+    vk::DeviceSize gpuOffset = 0;
     uint32_t descriptorSize = 0;
     uint32_t capacity = 0;
     uint32_t reservedSlots = 0;
 
     VmaDescriptorHeap() = default;
-    VmaDescriptorHeap(VmaBuffer&& buf, void* mapped, uint64_t gpuAddr, uint32_t descSize, uint32_t cap, uint32_t reserved = 0)
-        : bufferStorage(std::move(buf)), pMappedData(mapped), gpuAddress(gpuAddr), descriptorSize(descSize), capacity(cap), reservedSlots(reserved) {}
+    VmaDescriptorHeap(VmaBuffer&& buf, void* mapped, uint64_t gpuAddr, vk::DeviceSize gOffset, uint32_t descSize, uint32_t cap, uint32_t reserved = 0)
+        : bufferStorage(std::move(buf)), pMappedData(mapped), gpuAddress(gpuAddr), gpuOffset(gOffset), descriptorSize(descSize), capacity(cap), reservedSlots(reserved) {}
 
     ~VmaDescriptorHeap() = default;
 
@@ -111,12 +113,14 @@ export struct VmaDescriptorHeap {
         : bufferStorage(std::move(o.bufferStorage))
         , pMappedData(o.pMappedData)
         , gpuAddress(o.gpuAddress)
+        , gpuOffset(o.gpuOffset)
         , descriptorSize(o.descriptorSize)
         , capacity(o.capacity)
         , reservedSlots(o.reservedSlots)
     {
         o.pMappedData = nullptr;
         o.gpuAddress = 0;
+        o.gpuOffset = 0;
         o.descriptorSize = 0;
         o.capacity = 0;
         o.reservedSlots = 0;
@@ -127,12 +131,14 @@ export struct VmaDescriptorHeap {
             bufferStorage = std::move(o.bufferStorage);
             pMappedData = o.pMappedData;
             gpuAddress = o.gpuAddress;
+            gpuOffset = o.gpuOffset;
             descriptorSize = o.descriptorSize;
             capacity = o.capacity;
             reservedSlots = o.reservedSlots;
 
             o.pMappedData = nullptr;
             o.gpuAddress = 0;
+            o.gpuOffset = 0;
             o.descriptorSize = 0;
             o.capacity = 0;
             o.reservedSlots = 0;
@@ -145,6 +151,7 @@ export struct VmaDescriptorHeap {
     uint32_t getDescriptorSize() const { return descriptorSize; }
     uint32_t getCapacity() const { return capacity; }
     uint32_t getReservedSlots() const { return reservedSlots; }
+    vk::DeviceSize getHeapSize() const { return static_cast<vk::DeviceSize>(descriptorSize) * capacity - gpuOffset; }
 
     [[nodiscard]] std::expected<void*, Error> getSlotCpuAddress(uint32_t slot) const {
         if (slot >= capacity) {
@@ -226,7 +233,8 @@ public:
         uint32_t capacity,
         uint32_t descriptorSize,
         vk::BufferUsageFlags extraUsageFlags,
-        uint32_t reservedSlots = 0
+        uint32_t reservedSlots,
+        vk::DeviceSize resourceHeapAlignment
     ) const {
         vk::BufferCreateInfo bufferInfo{};
         bufferInfo.size = static_cast<vk::DeviceSize>(descriptorSize) * capacity;
@@ -241,10 +249,34 @@ public:
         auto storageResult = createBufferWithAddress(device, bufferInfo, allocCreateInfo, &allocInfo);
         if (!storageResult) return std::unexpected(storageResult.error());
 
+        vk::DeviceAddress rawAddr = storageResult->getDeviceAddress();
+        vk::DeviceSize rawMappedAddr = static_cast<vk::DeviceSize>(reinterpret_cast<uintptr_t>(allocInfo.pMappedData));
+        vk::DeviceSize gpuOffset = (resourceHeapAlignment - (rawAddr % resourceHeapAlignment)) % resourceHeapAlignment;
+
+        // 确保 CPU mapped data 也是 descriptorSize 对齐的
+        vk::DeviceSize mappedMisalign = (rawMappedAddr + gpuOffset) % descriptorSize;
+        vk::DeviceSize cpuCompensation = mappedMisalign ? (descriptorSize - mappedMisalign) : 0;
+        vk::DeviceSize offset = gpuOffset + cpuCompensation;
+        // cpuCompensation 可能破坏了 GPU 对齐，重新修正
+        vk::DeviceSize gpuMisalign = (rawAddr + offset) % resourceHeapAlignment;
+        if (gpuMisalign) {
+            offset += resourceHeapAlignment - gpuMisalign;
+            // 重新检查 CPU 对齐（resourceHeapAlignment 是 descriptorSize 的倍数，应自动满足）
+        }
+
+        fprintf(stderr, "[Heap] rawGPUAddr=0x%lx rawCPUAddr=0x%lx gpuOffset=%zu cpuComp=%zu totalOffset=%zu\n",
+            (unsigned long)rawAddr, (unsigned long)rawMappedAddr, gpuOffset, cpuCompensation, offset);
+        fprintf(stderr, "[Heap] finalGPUAddr=0x%lx finalCPUAddr=0x%lx\n",
+            (unsigned long)(rawAddr + offset), (unsigned long)(reinterpret_cast<uintptr_t>(allocInfo.pMappedData) + offset));
+        fprintf(stderr, "[Heap] alignCheck: gpuMod32=%lu cpuMod32=%lu\n",
+            (unsigned long)((rawAddr + offset) % 32),
+            (unsigned long)((reinterpret_cast<uintptr_t>(allocInfo.pMappedData) + offset) % 32));
+
         return VmaDescriptorHeap(
             std::move(*storageResult),
-            allocInfo.pMappedData,
-            storageResult->getDeviceAddress(),
+            static_cast<char*>(allocInfo.pMappedData) + offset,
+            rawAddr + offset,
+            offset,
             descriptorSize,
             capacity,
             reservedSlots

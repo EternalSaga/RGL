@@ -3,7 +3,7 @@
 # RGL Project — Gentoo build recipes
 
 WORKSPACE := `echo ${ZED_WORKTREE_ROOT:-$PWD}`
-VCPKG := "/home/robin/program/vcpkg"
+VCPKG := `(which vcpkg | xargs dirname)`
 BUILD := WORKSPACE / "build"
 
 # 基础 CMake 配置命令
@@ -67,7 +67,7 @@ run:
         echo "Error: Binary not found. Run 'just build' first."; \
         exit 1; \
     fi
-    @(cd {{ BUILD }}/vulkan_practice && RADV_EXPERIMENTAL=heap ./vulkan_practice)
+    @(cd {{ BUILD }}/vulkan_practice && if lspci 2>/dev/null | grep -qi 'vga.*amd'; then RADV_EXPERIMENTAL=heap ./vulkan_practice; else ./vulkan_practice; fi)
 
 # ------------------------------------------------------------------------------
 # 3. 清理与辅助命令

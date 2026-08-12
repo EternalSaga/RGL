@@ -37,7 +37,6 @@
         {"vk_type": "vk::PhysicalDeviceShaderObjectFeaturesEXT", "path": "shaderObject", "name": "ShaderObjectEXT::shaderObject"},
         {"vk_type": "vk::PhysicalDeviceDescriptorBufferFeaturesEXT", "path": "descriptorBuffer", "name": "DescriptorBufferEXT::descriptorBuffer"},
         {"vk_type": "vk::PhysicalDeviceDescriptorHeapFeaturesEXT", "path": "descriptorHeap", "name": "DescriptorHeapEXT::descriptorHeap"},
-        {"vk_type": "vk::PhysicalDeviceDescriptorHeapFeaturesEXT", "path": "descriptorHeapCaptureReplay", "name": "DescriptorHeapEXT::descriptorHeapCaptureReplay"},
         {"vk_type": "vk::PhysicalDeviceSwapchainMaintenance1FeaturesKHR", "path": "swapchainMaintenance1", "name": "SwapchainMaintenance1KHR::swapchainMaintenance1"},
         {"vk_type": "vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR", "path": "shaderUntypedPointers", "name": "ShaderUntypedPointersKHR::shaderUntypedPointers"}
     ]

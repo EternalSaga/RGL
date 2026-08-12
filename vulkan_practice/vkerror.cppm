@@ -23,6 +23,7 @@ export enum class ErrorCode {
     ShaderLoadFailed,
     VMASuccessFailed,
     DescriptorSlotOutOfBounds,
+    DeviceLost,
     Unknown,
 };
 

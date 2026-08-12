@@ -9,7 +9,6 @@ import VmaRaii;
 import vk_instance;
 import vk_device;
 import vk_swapchain;
-import types_generated;
 import cube;
 import vkerror;
 
@@ -33,7 +32,9 @@ public:
               RGL::cubeIndices.size() * sizeof(uint32_t),
               vk::BufferUsageFlagBits::eStorageBuffer,
               RGL::cubeIndices.data()).value()),
-          descriptorHeap(createDescriptorHeap().value())
+          descriptorHeap(createDescriptorHeap().value()),
+          heapSlotVertex(reservedSlots()),
+          heapSlotIndex(reservedSlots() + 4)
     {
         writeDescriptors();
     }
@@ -55,7 +56,12 @@ public:
     vk::DeviceSize getReservedRangeSize() const { return descriptorHeap.getReservedSlots() * descriptorHeap.getDescriptorSize(); }
     vk::DeviceAddress getVertexBufferAddress() const { return vertexBuffer.getDeviceAddress(); }
     vk::DeviceAddress getIndexBufferAddress() const { return indexBuffer.getDeviceAddress(); }
+    uint32_t getHeapSlotVertex() const { return heapSlotVertex; }
+    uint32_t getHeapSlotIndex() const { return heapSlotIndex; }
     RGL::VmaAllocatorRAII& getAllocator() { return allocator; }
+
+private:
+    uint32_t reservedSlots() const { return descriptorHeap.getReservedSlots(); }
 
 private:
     static std::expected<RGL::VmaImage, Error> createDepthImage(RGL::VmaAllocatorRAII& allocator, vk::Extent2D extent) {
@@ -115,17 +121,21 @@ private:
             vk::PhysicalDeviceProperties2,
             vk::PhysicalDeviceDescriptorHeapPropertiesEXT>();
 
-        uint32_t descriptorSize = static_cast<uint32_t>(
-            props.get<vk::PhysicalDeviceDescriptorHeapPropertiesEXT>().bufferDescriptorSize);
         auto& heapProps = props.get<vk::PhysicalDeviceDescriptorHeapPropertiesEXT>();
+        uint32_t descriptorSize = static_cast<uint32_t>(heapProps.bufferDescriptorSize);
         uint32_t reservedSlots = static_cast<uint32_t>(heapProps.minResourceHeapReservedRange + descriptorSize - 1) / descriptorSize;
+        vk::DeviceSize resourceHeapAlignment = heapProps.resourceHeapAlignment;
         uint32_t capacity = 16 + reservedSlots;
+
+        fprintf(stderr, "[Heap] descriptorSize=%u reservedSlots=%u heapAlignment=%zu capacity=%u\n",
+            descriptorSize, reservedSlots, resourceHeapAlignment, capacity);
 
         return allocator.createDescriptorHeap(
             vkDevice.getDevice(),
             capacity, descriptorSize,
             vk::BufferUsageFlagBits::eDescriptorHeapEXT,
-            reservedSlots
+            reservedSlots,
+            resourceHeapAlignment
         );
     }
 
@@ -149,15 +159,22 @@ private:
         indexDescInfo.type = vk::DescriptorType::eStorageBuffer;
         indexDescInfo.data.pAddressRange = &indexRange;
 
-        auto vertexSlotResult = descriptorHeap.getSlotCpuAddress(RGL::HeapSlotVertex);
+        auto vertexSlotResult = descriptorHeap.getSlotCpuAddress(heapSlotVertex);
         if (!vertexSlotResult) {
             throw std::runtime_error(vertexSlotResult.error().describe());
         }
 
-        auto indexSlotResult = descriptorHeap.getSlotCpuAddress(RGL::HeapSlotIndex);
+        auto indexSlotResult = descriptorHeap.getSlotCpuAddress(heapSlotIndex);
         if (!indexSlotResult) {
             throw std::runtime_error(indexSlotResult.error().describe());
         }
+
+        fprintf(stderr, "[Heap] heapGPUAddr=0x%lx vertexBufAddr=0x%lx indexBufAddr=0x%lx\n",
+            (unsigned long)descriptorHeap.getGpuAddress(),
+            (unsigned long)getVertexBufferAddress(),
+            (unsigned long)getIndexBufferAddress());
+        fprintf(stderr, "[Heap] heapSlotVertex=%u heapSlotIndex=%u heapSize=%zu\n",
+            heapSlotVertex, heapSlotIndex, descriptorHeap.getHeapSize());
 
         vk::HostAddressRangeEXT vertexDst{
             *vertexSlotResult,
@@ -183,6 +200,8 @@ private:
     RGL::VmaBuffer vertexBuffer;
     RGL::VmaBuffer indexBuffer;
     RGL::VmaDescriptorHeap descriptorHeap;
+    uint32_t heapSlotVertex;
+    uint32_t heapSlotIndex;
 };
 
 }
