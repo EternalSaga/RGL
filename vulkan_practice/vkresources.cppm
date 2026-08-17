@@ -127,9 +127,6 @@ private:
         vk::DeviceSize resourceHeapAlignment = heapProps.resourceHeapAlignment;
         uint32_t capacity = 16 + reservedSlots;
 
-        fprintf(stderr, "[Heap] descriptorSize=%u reservedSlots=%u heapAlignment=%zu capacity=%u\n",
-            descriptorSize, reservedSlots, resourceHeapAlignment, capacity);
-
         return allocator.createDescriptorHeap(
             vkDevice.getDevice(),
             capacity, descriptorSize,
@@ -168,13 +165,6 @@ private:
         if (!indexSlotResult) {
             throw std::runtime_error(indexSlotResult.error().describe());
         }
-
-        fprintf(stderr, "[Heap] heapGPUAddr=0x%lx vertexBufAddr=0x%lx indexBufAddr=0x%lx\n",
-            (unsigned long)descriptorHeap.getGpuAddress(),
-            (unsigned long)getVertexBufferAddress(),
-            (unsigned long)getIndexBufferAddress());
-        fprintf(stderr, "[Heap] heapSlotVertex=%u heapSlotIndex=%u heapSize=%zu\n",
-            heapSlotVertex, heapSlotIndex, descriptorHeap.getHeapSize());
 
         vk::HostAddressRangeEXT vertexDst{
             *vertexSlotResult,

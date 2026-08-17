@@ -20,6 +20,7 @@ import vk_swapchain;
 import vk_resources;
 import types_generated;
 import shader;
+import aftermath;
 import vkerror;
 
 namespace RGL {
@@ -197,7 +198,7 @@ std::expected<void, Error> Renderer::drawFrame() {
 
     vk::DeviceAddressRangeEXT heapRange{};
     heapRange.address = heapAddress;
-    heapRange.size = resourcesPtr->getDescriptorHeap().getDescriptorSize() * resourcesPtr->getDescriptorHeap().getCapacity();
+    heapRange.size = resourcesPtr->getDescriptorHeap().getHeapSize();
     commandBuffers[currentFrame].bindResourceHeapEXT(vk::BindHeapInfoEXT(
         heapRange,
         resourcesPtr->getReservedRangeOffset(),
@@ -227,13 +228,29 @@ std::expected<void, Error> Renderer::drawFrame() {
     commandBuffers[currentFrame].pipelineBarrier2(colorToPresentDepInfo);
     commandBuffers[currentFrame].end();
 
-    std::array<vk::PipelineStageFlags, 1> waitStages = {vk::PipelineStageFlagBits::eColorAttachmentOutput};
-    vk::SubmitInfo submitInfo{};
-    submitInfo.setWaitSemaphores(*imageAvailableSemaphores[currentFrame]);
-    submitInfo.setWaitDstStageMask(waitStages);
-    submitInfo.setCommandBuffers(*commandBuffers[currentFrame]);
-    submitInfo.setSignalSemaphores(*renderFinishedSemaphores[currentFrame]);
-    graphicsQueue.submit(submitInfo, *inFlightFences[currentFrame]);
+    VkSemaphore waitSem = *imageAvailableSemaphores[currentFrame];
+    VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    VkCommandBuffer cb = *commandBuffers[currentFrame];
+    VkSemaphore signalSem = *renderFinishedSemaphores[currentFrame];
+    VkFence rawFence = *inFlightFences[currentFrame];
+
+    VkSubmitInfo rawSubmitInfo{};
+    rawSubmitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    rawSubmitInfo.waitSemaphoreCount = 1;
+    rawSubmitInfo.pWaitSemaphores = &waitSem;
+    rawSubmitInfo.pWaitDstStageMask = &waitStage;
+    rawSubmitInfo.commandBufferCount = 1;
+    rawSubmitInfo.pCommandBuffers = &cb;
+    rawSubmitInfo.signalSemaphoreCount = 1;
+    rawSubmitInfo.pSignalSemaphores = &signalSem;
+
+    VkResult submitVkResult = ::vkQueueSubmit(graphicsQueue, 1, &rawSubmitInfo, rawFence);
+    if (submitVkResult == VK_ERROR_DEVICE_LOST) {
+        auto logger = RLLogger::getInstance();
+        if (logger) logger->error("Renderer: device lost on submit!");
+        RGL::waitForCrashDump();
+        return std::unexpected(Error{ErrorCode::DeviceLost, "VK_ERROR_DEVICE_LOST on submit"});
+    }
 
     vk::SwapchainPresentFenceInfoEXT presentFenceInfoEXT{};
     presentFenceInfoEXT.setFences(*presentFences[currentFrame]);
@@ -244,6 +261,12 @@ std::expected<void, Error> Renderer::drawFrame() {
     presentInfo.setImageIndices(imageIndex);
     auto presentResult = graphicsQueue.presentKHR(presentInfo);
 
+    if (presentResult == vk::Result::eErrorDeviceLost) {
+        auto logger = RLLogger::getInstance();
+        if (logger) logger->error("Renderer: device lost on present!");
+        RGL::waitForCrashDump();
+        return std::unexpected(Error{ErrorCode::DeviceLost, "VK_ERROR_DEVICE_LOST on present"});
+    }
     if (presentResult == vk::Result::eErrorOutOfDateKHR ||
         presentResult == vk::Result::eSuboptimalKHR) {
         vkSwapchainPtr->recreate();

@@ -4,9 +4,11 @@ module;
 export module vk_device;
 
 import rlstd;
+import rllogger;
 import vulkan_utils;
 import queue_family_manager;
 import features;
+import aftermath;
 import vk_instance;
 import vkerror;
 
@@ -37,7 +39,6 @@ public:
         if (auto result = RGL::checkDeviceExtensions(*physicalDevice); !result) {
             throw std::runtime_error(result.error().describe());
         }
-        RGL::updateDebugExtensionSupport(*physicalDevice);
         if (auto result = RGL::validateFeatures(*physicalDevice, featuresChain); !result) {
             throw std::runtime_error(result.error().describe());
         }
@@ -58,14 +59,34 @@ public:
 
 private:
     static vk::raii::Device createDevice(const vk::raii::PhysicalDevice& physicalDevice,
-                                             RGL::QueueFamilyManager& queueManager,
-                                             RGL::FeatureChain& featuresChain) {
+                                              RGL::QueueFamilyManager& queueManager,
+                                              RGL::FeatureChain& featuresChain) {
+        RGL::updateDebugExtensionSupport(physicalDevice);
+
+        vk::DeviceDiagnosticsConfigCreateInfoNV diagnosticsConfig;
+        diagnosticsConfig.flags = RGL::createDiagnosticsConfig().flags;
+
         vk::DeviceCreateInfo deviceCreateInfo{};
-        deviceCreateInfo.setPNext(&featuresChain.get<vk::PhysicalDeviceFeatures2>());
+        deviceCreateInfo.setPNext(&diagnosticsConfig);
+        diagnosticsConfig.setPNext(&featuresChain.get<vk::PhysicalDeviceFeatures2>());
         deviceCreateInfo.setQueueCreateInfos(queueManager.getQueueCreateInfos());
 
         std::vector<const char*> extensions = RGL::getDeviceExtensions();
         deviceCreateInfo.setPEnabledExtensionNames(extensions);
+
+        auto logger = RLLogger::getInstance();
+        if (logger) {
+            logger->info("Device: enabling {} extensions", extensions.size());
+            for (const char* ext : extensions) {
+                logger->info("  - {}", ext);
+            }
+            auto flags = diagnosticsConfig.flags;
+            logger->info("Aftermath diagnostics: checkpoints={}, fault={}, diagnosticsConfig={}, flags={}",
+                         RGL::supportsDiagnosticCheckpoints(),
+                         RGL::supportsDeviceFault(),
+                         RGL::supportsDiagnosticsConfig(),
+                         static_cast<uint32_t>(flags));
+        }
 
         return vk::raii::Device(physicalDevice, deviceCreateInfo);
     }

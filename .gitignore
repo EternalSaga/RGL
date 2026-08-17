@@ -393,3 +393,9 @@ FodyWeavers.xsd
 /ShaderReflection/codegen/
 /.continue/
 /vulkan_practice/generated/
+
+# Nsight Aftermath crash dumps
+aftermath_crash_dump.json
+
+# local build dirs
+build_min/

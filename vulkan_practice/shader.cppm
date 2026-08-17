@@ -64,7 +64,7 @@ public:
     VkShaderCreateInfoEXT meshCreateInfoRaw{};
     meshCreateInfoRaw.sType = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT;
     meshCreateInfoRaw.pNext = &mappingInfo;
-    meshCreateInfoRaw.flags = VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT;
+    meshCreateInfoRaw.flags = VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT | VK_SHADER_CREATE_NO_TASK_SHADER_BIT_EXT;
     meshCreateInfoRaw.stage = VK_SHADER_STAGE_MESH_BIT_EXT;
     meshCreateInfoRaw.nextStage = VK_SHADER_STAGE_FRAGMENT_BIT;
     meshCreateInfoRaw.codeType = VK_SHADER_CODE_TYPE_SPIRV_EXT;

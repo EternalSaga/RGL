@@ -69,6 +69,34 @@ run:
     fi
     @(cd {{ BUILD }}/vulkan_practice && if lspci 2>/dev/null | grep -qi 'vga.*amd'; then RADV_EXPERIMENTAL=heap ./vulkan_practice; else ./vulkan_practice; fi)
 
+# 核显运行（AMD 集显，display GPU 原生渲染，无 offload）
+# 必须用 VK_DRIVER_FILES 隐藏 NVIDIA ICD — 设备评分器默认选 dGPU（分数更高）
+# RADV_EXPERIMENTAL=heap 用于 RADV 启用 descriptor heap
+run-igpu:
+    @if [ ! -f {{ BUILD }}/vulkan_practice/vulkan_practice ]; then \
+        echo "Error: Binary not found. Run 'just build' first."; \
+        exit 1; \
+    fi
+    @RADV_ICD=$(ls /usr/share/vulkan/icd.d/radeon_icd.*.json /etc/vulkan/icd.d/radeon_icd.*.json 2>/dev/null | head -1); \
+    if [ -z "$RADV_ICD" ]; then \
+        echo "Error: radeon ICD json not found"; \
+        exit 1; \
+    fi; \
+    (cd {{ BUILD }}/vulkan_practice && VK_DRIVER_FILES="$RADV_ICD" RADV_EXPERIMENTAL=heap ./vulkan_practice)
+
+# 独显运行（NVIDIA dGPU，prime offload；PROVIDER=3 为本机 dGPU 的 offload provider 编号）
+run-dgpu:
+    @if [ ! -f {{ BUILD }}/vulkan_practice/vulkan_practice ]; then \
+        echo "Error: Binary not found. Run 'just build' first."; \
+        exit 1; \
+    fi
+    @(cd {{ BUILD }}/vulkan_practice && \
+        __NV_PRIME_RENDER_OFFLOAD=1 \
+        __NV_PRIME_RENDER_OFFLOAD_PROVIDER=3 \
+        __GLX_VENDOR_LIBRARY_NAME=zink \
+        __VK_LAYER_NV_optimus=NVIDIA_only \
+        ./vulkan_practice)
+
 # ------------------------------------------------------------------------------
 # 3. 清理与辅助命令
 # ------------------------------------------------------------------------------

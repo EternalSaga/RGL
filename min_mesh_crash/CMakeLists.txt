@@ -5,12 +5,11 @@ add_compile_options(-fpermissive)
 
 find_package(Vulkan REQUIRED)
 find_package(SDL3 CONFIG REQUIRED)
-find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 
 set(AFTERMATH_SDK_DIR "${CMAKE_SOURCE_DIR}/../../Aftermath")
 get_filename_component(AFTERMATH_SDK_DIR "${AFTERMATH_SDK_DIR}" ABSOLUTE)
 
-add_executable(min_mesh_crash main.cpp vam_impl.cpp)
+add_executable(min_mesh_crash main.cpp)
 
 target_include_directories(min_mesh_crash PRIVATE
     ${AFTERMATH_SDK_DIR}/include
@@ -20,7 +19,6 @@ target_include_directories(min_mesh_crash PRIVATE
 target_link_libraries(min_mesh_crash PRIVATE
     Vulkan::Vulkan
     SDL3::SDL3
-    GPUOpen::VulkanMemoryAllocator
     ${AFTERMATH_SDK_DIR}/lib/x64/libGFSDK_Aftermath_Lib.x64.so
 )
 
@@ -48,14 +46,17 @@ function(compile_glsl SRC STAGE OUT)
 endfunction()
 
 compile_glsl(shaders/mesh.glsl mesh MESH_SPV)
+compile_glsl(shaders/vert.glsl vert VERT_SPV)
 compile_glsl(shaders/frag.glsl frag FRAG_SPV)
 
 add_dependencies(min_mesh_crash)
-target_sources(min_mesh_crash PRIVATE ${MESH_SPV} ${FRAG_SPV})
+target_sources(min_mesh_crash PRIVATE ${MESH_SPV} ${VERT_SPV} ${FRAG_SPV})
 
 add_custom_command(TARGET min_mesh_crash POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${MESH_SPV}" "$<TARGET_FILE_DIR:min_mesh_crash>/mesh.spv"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${VERT_SPV}" "$<TARGET_FILE_DIR:min_mesh_crash>/vert.spv"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${FRAG_SPV}" "$<TARGET_FILE_DIR:min_mesh_crash>/frag.spv"
     COMMENT "Copying shaders..."

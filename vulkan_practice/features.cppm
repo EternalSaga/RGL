@@ -27,10 +27,18 @@ export inline bool hasDiagnosticCheckpoints(const vk::raii::PhysicalDevice& devi
 }
 
 export inline bool hasDeviceFault(const vk::raii::PhysicalDevice& device) {
-    if (!isNvidiaGPU(device)) return false;
+    // VK_EXT_device_fault 是中立的 Khronos 扩展（RADV 等也可支持），不做厂商限制
     auto available = device.enumerateDeviceExtensionProperties();
     return std::ranges::any_of(available, [](const auto& prop) {
         return std::string_view(prop.extensionName.data()) == VK_EXT_DEVICE_FAULT_EXTENSION_NAME;
+    });
+}
+
+export inline bool hasDiagnosticsConfig(const vk::raii::PhysicalDevice& device) {
+    if (!isNvidiaGPU(device)) return false;
+    auto available = device.enumerateDeviceExtensionProperties();
+    return std::ranges::any_of(available, [](const auto& prop) {
+        return std::string_view(prop.extensionName.data()) == VK_NV_DEVICE_DIAGNOSTICS_CONFIG_EXTENSION_NAME;
     });
 }
 
@@ -68,13 +76,16 @@ export [[nodiscard]] std::expected<void, Error> checkDeviceExtensions(const vk::
 
 inline bool supportsCheckpoints_ = false;
 inline bool supportsFault_ = false;
+inline bool supportsDiagnosticsConfig_ = false;
 
 export inline bool supportsDiagnosticCheckpoints() { return supportsCheckpoints_; }
 export inline bool supportsDeviceFault() { return supportsFault_; }
+export inline bool supportsDiagnosticsConfig() { return supportsDiagnosticsConfig_; }
 
 export void updateDebugExtensionSupport(const vk::raii::PhysicalDevice& device) {
     supportsCheckpoints_ = hasDiagnosticCheckpoints(device);
     supportsFault_ = hasDeviceFault(device);
+    supportsDiagnosticsConfig_ = hasDiagnosticsConfig(device);
 }
 
 export std::vector<const char*> getDeviceExtensions() {
@@ -94,6 +105,9 @@ export std::vector<const char*> getDeviceExtensions() {
     }
     if (supportsFault_) {
         extensions.push_back(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
+    }
+    if (supportsDiagnosticsConfig_) {
+        extensions.push_back(VK_NV_DEVICE_DIAGNOSTICS_CONFIG_EXTENSION_NAME);
     }
     return extensions;
 }

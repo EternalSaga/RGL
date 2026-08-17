@@ -17,7 +17,9 @@ just config gcc Debug    # 指定编译器和构建类型
 just build               # 增量编译（需先 config）
 just build-release       # 一键配置 + 编译 Release
 just build-debug         # 一键配置 + 编译 Debug
-just run                 # 运行程序（自动设置 RADV_EXPERIMENTAL=heap）
+just run                 # 运行程序（自动检测：AMD VGA 存在时设置 RADV_EXPERIMENTAL=heap）
+just run-igpu            # 强制核显（AMD 集显原生渲染，无 offload）
+just run-dgpu            # 强制独显（NVIDIA prime offload，PROVIDER=3）
 just clean               # CMake 增量清理
 just clean-all           # 删除整个 build 目录
 just all                 # clean-all + build-release
@@ -164,20 +166,18 @@ main.cpp 按逆序析构（RAII，无需手动清理）。
 
 | 位置 | 说明 |
 |---|---|
-| `vkresources.cppm:121-154` | `writeDescriptors()`，使用 `vkWriteResourceDescriptorsEXT` |
-| `vkrenderer.cppm:143-153` | `colorToDrawBarrier`（Undefined → ColorAttachmentOptimal, srcStage=eTopOfPipe） |
-| `vkrenderer.cppm:176-197` | Heap barrier、`bindResourceHeapEXT`、`pushDataEXT`（均在 `beginRendering` 之前） |
-| `vkrenderer.cppm:225` | `SwapchainPresentFenceInfoEXT`（KHR 别名），位于 `presentInfo.pNext` |
-| `shader.cppm:38-56` | `DescriptorSetAndBindingMappingEXT`，映射 heap slots 8 和 12 |
-| `shader.cppm:8` | `import types_generated;` 提供 `HeapSlotVertex`/`HeapSlotIndex` |
-| `vkresources.cppm:10` | `import types_generated;` 提供 `HeapSlotVertex`/`HeapSlotIndex` |
-| `vkrenderer.cppm:90,206` | `import types_generated;` 提供 `DrawArgs` 结构体 |
+| `vkresources.cppm:142` | `writeDescriptors()`，使用 `vkWriteResourceDescriptorsEXT` |
+| `vkrenderer.cppm:145` | `colorToDrawBarrier`（Undefined → ColorAttachmentOptimal, srcStage=eTopOfPipe） |
+| `vkrenderer.cppm:190-208` | Heap barrier、`bindResourceHeapEXT`、`pushDataEXT`（均在 `beginRendering` 之前） |
+| `vkrenderer.cppm:255` | `SwapchainPresentFenceInfoEXT`（KHR 别名），位于 `presentInfo.pNext` |
+| `shader.cppm:38-56` | `DescriptorSetAndBindingMappingEXT`，映射顶点/索引 heap slot（编号运行时动态，见 `vkresources.cppm` 的 `getHeapSlotVertex/Index`） |
+| `shader.cppm:6` | `import types_generated;` 提供 `HeapSlotVertex`/`HeapSlotIndex` |
+| `vkrenderer.cppm:21` | `import types_generated;` 提供 `DrawArgs` 结构体（用于 :51 `updateDrawArgs`、:103 成员） |
 | `shaders/types.slang:20-24` | 两个缓冲均使用 `ByteAddressBuffer`（绝不用 `StructuredBuffer`） |
 | `shaders/cube.mesh.slang:15` | `mul(drawArgs.mvp, ...)` MVP 变换 |
 
 ## 已知问题
 
-- `pickPhysicalDevice` 读取 `VK_AMD_shader_core_properties` 时未启用对应扩展 — 非 AMD 上为 UB，AMD 上可能读到垃圾数据。当前在 AMD Strix Halo 上开发；未来兼容 NVIDIA Blackwell 等需要正确的扩展检查回退
 - `computeCommandPool`、`transferCommandPool`、`computeQueue`、`transferQueue` 已创建但保留给未来使用
 - `utils.cppm` — Vulkan ERROR 触发 `int $3`（SIGTRAP）用于调试器体验；从功能角度应改为 throw
 
@@ -188,4 +188,14 @@ main.cpp 按逆序析构（RAII，无需手动清理）。
 - `docs/DESCRIPTOR_HEAP_SPEC.md` — 有关DescriptorHeap 扩展的排坑详细记录
 - `docs/next_roadmap.md` — 后续开发计划
 - `docs/shader_reflection_plans.md` — shader反射开发计划的一些技术调研
+- `docs/nvidia_compatibility_report.md` — NVIDIA 兼容性排查（heap 对齐、Aftermath 集成、mesh shader 崩溃根因）
 - `docs/快捷键配置.md` — Zed 编辑器快捷键、任务和调试配置说明
+
+## min_mesh_crash（最小复现子项目）
+
+独立 CMake 的单文件最小复现程序（2026-08 调查 NVIDIA mesh shader 崩溃时建立）：
+
+- `main.cpp` — vertex+fragment 与 mesh shader 的 shader object 测试（GPU 选择写死 vendor 0x10de；强制 RADV 用 `VK_DRIVER_FILES`）
+- `shaders/` — `mesh.glsl`（mesh-only，无 task）、`vert.glsl`、`frag.glsl`
+- `README.md` — 根因权威记录：mesh shader 对象**必须**带 `VK_SHADER_CREATE_NO_TASK_SHADER_BIT_EXT`（TASK stage 绑 NULL 时），否则 NVIDIA 上 Xid 13/engine reset；VVL 查不出来是 spec 漏洞（VUID 08694 需 taskShader+meshShader 双 feature）
+- 构建/运行：`cmake -B build -S . && cmake --build build`，运行需 prime offload 环境变量（见其 README）

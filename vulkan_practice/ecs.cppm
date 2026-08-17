@@ -9,6 +9,7 @@ module;
 export module ecs;
 
 import rlstd;
+import vkerror;
 
 import vulkan_window;
 import vk_swapchain;
@@ -86,12 +87,18 @@ export void renderSystem(entt::registry &rg, RGL::Renderer &renderer, RGL::SDLWi
 
         auto result = renderer.drawFrame();
         if (!result) {
-            std::cerr << "渲染错误: " << result.error().describe() << std::endl;
+            auto logger = RLLogger::getInstance();
+            if (logger) logger->error("渲染错误: {}", result.error().describe());
+            if (result.error().code == ErrorCode::DeviceLost) {
+                throw std::runtime_error(result.error().describe());
+            }
             shouldClose = true;
         }
     }
 
-    renderer.waitForIdle();
+    if (!shouldClose || vp.shouldClose) {
+        renderer.waitForIdle();
+    }
 }
 
 }  // namespace RGL

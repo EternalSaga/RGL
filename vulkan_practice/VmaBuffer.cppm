@@ -264,14 +264,6 @@ public:
             // 重新检查 CPU 对齐（resourceHeapAlignment 是 descriptorSize 的倍数，应自动满足）
         }
 
-        fprintf(stderr, "[Heap] rawGPUAddr=0x%lx rawCPUAddr=0x%lx gpuOffset=%zu cpuComp=%zu totalOffset=%zu\n",
-            (unsigned long)rawAddr, (unsigned long)rawMappedAddr, gpuOffset, cpuCompensation, offset);
-        fprintf(stderr, "[Heap] finalGPUAddr=0x%lx finalCPUAddr=0x%lx\n",
-            (unsigned long)(rawAddr + offset), (unsigned long)(reinterpret_cast<uintptr_t>(allocInfo.pMappedData) + offset));
-        fprintf(stderr, "[Heap] alignCheck: gpuMod32=%lu cpuMod32=%lu\n",
-            (unsigned long)((rawAddr + offset) % 32),
-            (unsigned long)((reinterpret_cast<uintptr_t>(allocInfo.pMappedData) + offset) % 32));
-
         return VmaDescriptorHeap(
             std::move(*storageResult),
             static_cast<char*>(allocInfo.pMappedData) + offset,

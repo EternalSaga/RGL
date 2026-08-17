@@ -3,7 +3,7 @@
 **日期**: 2026-08-12
 **环境**: Gentoo + RTX 5090 (GB202) / AMD Granite Ridge (Raphael_Mendocino)
 **驱动**: NVIDIA 595.84 → 610.57.04
-**状态**: AMD ✅ | NVIDIA ✅ (vertex shader) | NVIDIA ❌ (mesh shader + shader object 驱动 bug)
+**状态**: AMD ✅ | NVIDIA ✅ (vertex + mesh shader) — 2026-08-17 更新：原"NVIDIA 驱动 bug"结论已推翻，真实根因是应用侧缺 `VK_SHADER_CREATE_NO_TASK_SHADER_BIT_EXT` flag，见第五节
 
 ---
 
@@ -97,25 +97,43 @@ NVRM: Xid 13, Graphics Exception: ESR 0x405848=0x80000000
 | 移除 heap | mesh shader + shader object，无 heap | ❌ Xid 13 |
 | 改用 vertex shader | vertex shader + shader object + descriptor heap | ✅ 正常 |
 
-### 5.3 结论
+### 5.3 结论（2026-08-17 修订：**不是驱动 bug**）
 
-**NVIDIA Xid 13 根因**：RTX 5090 (GB202) 驱动 610.57.04 不支持 `VK_EXT_mesh_shader` + `VK_EXT_shader_object` 的组合。
+**NVIDIA Xid 13 根因**：**应用侧 spec 合规问题** — mesh shader 对象创建时缺少 `VK_SHADER_CREATE_NO_TASK_SHADER_BIT_EXT` flag，同时 TASK stage 绑定 `VK_NULL_HANDLE`。规范对该 flag 的语义：不带此 flag 的 mesh shader **只能与 task shader 一起使用**。NVIDIA 驱动遵守该契约，dispatch 时查找关联的 task shader 得到空指针 → Xid 13 (Shader Program Header error) → engine reset。
 
-- `mesh shader` + `shader object` → ❌ Xid 13（驱动 bug）
-- `vertex shader` + `shader object` + `descriptor heap` → ✅ 正常工作
-- Class 0000ce97 是 GB202 的 GPFAS 类，确认错误发生在 mesh shader 执行阶段
-- NVIDIA 官方 sample 没有 mesh shader + shader object 的组合验证了这一点
+**A/B 验证**（min_mesh_crash，RTX 5090, 610.57.04）：
+- 去掉 `NO_TASK_SHADER` flag → 复现：frame 0 提交成功、frame 1 `VK_ERROR_DEVICE_LOST`，Aftermath `engine reset occurred: true`
+- 加上 flag → 10/10 帧通过，VVL 零错误
+- vulkan_practice 同步修复后 NVIDIA 与 AMD 均正常渲染
 
-### 5.4 临时解决方案
+**为何之前误判为驱动 bug**（三层掩盖）：
+1. **VVL 静默**：本应报错的 `VUID-vkCmdDrawMeshTasksEXT-None-08694`（无 flag 时 TASK stage 必须绑定有效 task shader）**仅在 `taskShader` + `meshShader` 双 feature 启用时才生效**；本项目只启用了 `meshShader` → spec 漏洞（Vulkan-ValidationLayers issue #12886）
+2. **RADV 宽松**：AMD 上无 flag 也不崩（按 mesh-only 模式直接发射），主项目一直在 AMD 上正常，掩盖了问题
+3. vertex+fragment 路径不涉及 task/mesh 契约，正常工作
 
-将 mesh shader 替换为 vertex shader，使用 `SV_VertexID` 从 ByteAddressBuffer 加载顶点数据。
+**已推翻的旧依据**：
+- ~~驱动 610.57.04 不支持 mesh shader + shader object 组合~~ — 实际支持，flag 设对即可
+- ~~NVIDIA 官方 sample 没有该组合验证了这一点~~ — sample 缺失不是驱动不支持的证据
 
-**已验证工作**：
+（5.1 中 "Class 0000ce97 是 GB202 的 GPFAS 类，错误发生在 mesh shader 执行阶段" 的观察仍然成立。）
+
+### 5.4 解决方案
+
+~~临时方案（2026-08-12）：将 mesh shader 替换为 vertex shader~~ — **已不需要**。
+
+**最终修复**（2026-08-17）：
+
+```cpp
+// vulkan_practice/shader.cppm:67 和 min_mesh_crash/main.cpp:253
+meshCreateInfoRaw.flags |= VK_SHADER_CREATE_NO_TASK_SHADER_BIT_EXT;
+```
+
+**最终验证**：
 | 配置 | NVIDIA RTX 5090 | AMD Granite Ridge (RADV) |
 |---|---|---|
 | vertex shader + shader object + descriptor heap | ✅ | ✅ |
-| mesh shader + shader object + descriptor heap | ❌ Xid 13 | ✅ |
-| mesh shader + traditional pipeline | ⚠️ 未测试 | ✅ (NVIDIA sample) |
+| mesh shader + shader object + descriptor heap（**带 NO_TASK_SHADER**） | ✅ | ✅ |
+| mesh shader + shader object（不带 flag） | ❌ Xid 13 / engine reset | ✅（RADV 宽松） |
 
 ---
 
@@ -143,8 +161,88 @@ NVRM: Xid 13, Graphics Exception: ESR 0x405848=0x80000000
 
 ---
 
-## 七、参考
+## 七、Nsight Aftermath SDK 集成（2026-08-12）
 
+**状态**：✅ Aftermath SDK 成功集成并捕获 GPU crash dump
+
+### 7.1 集成方式
+
+| 组件 | 文件 | 说明 |
+|---|---|---|
+| SDK 封装 | `aftermath.cppm` | `initAftermath()`, `shutdownAftermath()`, `waitForCrashDump()`, crash dump 解码 |
+| 设备配置 | `vkdevice.cppm` | `VkDeviceDiagnosticsConfigCreateInfoNV` 注入 pNext 链 |
+| 扩展列表 | `features.cppm` | 添加 `VK_NV_device_diagnostics_config` 扩展探测和启用 |
+| 渲染器 | `vkrenderer.cppm` | Device lost 检测 + `waitForCrashDump()` 调用 |
+| 入口 | `main.cpp` | 创建 Vulkan 设备前调用 `initAftermath()` |
+| 构建 | `CMakeLists.txt` | 链接 `libGFSDK_Aftermath_Lib.x64.so` |
+
+### 7.2 Crash Dump 结果（全诊断模式，NVIDIA RTX 5090, driver 610.57.04）
+
+```
+Aftermath: GPU crash dump enabled (SDK v2.27)
+Device: enabling 12 extensions (含 3 个 Aftermath 扩展)
+Aftermath diagnostics: checkpoints=true, fault=true, diagnosticsConfig=true, flags=15 (全开)
+Aftermath: GPU crash dump received (60132 bytes)
+Aftermath: crash dump processing finished
+Aftermath: app=vulkan_practice, date=Wed Aug 12 23:06:39 2026, pid=427661, api=7 (Vulkan)
+Aftermath: device status=Reset, adapterReset=false, engineReset=true
+Aftermath: pageFault VA=0x0 type=0 access=0 engine=0 client=0
+Aftermath: active shader count=0
+Aftermath: event marker count=2 (1 NotStarted, 1 Executing)
+Aftermath: JSON crash dump written to aftermath_crash_dump.json (5514 bytes)
+```
+
+**对比旧版（仅 ShaderErrorReporting + ResourceTracking）：**
+| 项目 | 旧版 | 全诊断模式 |
+|---|---|---|
+| Crash dump 大小 | 58064 bytes | 60132 bytes |
+| JSON 大小 | 1089 bytes | 5514 bytes |
+| Event markers | 无 | 2 个（含 CPU call stack） |
+| 扩展数量 | 9 | 12 |
+
+### 7.3 自动 Checkpoint 调用栈分析
+
+Aftermath 的自动 checkpoint 在每个 Vulkan 命令后插入 CPU 调用栈。崩溃时捕获了 2 个事件：
+
+| 事件 | 状态 | 说明 |
+|---|---|---|
+| #1 | NotStarted | 该命令 GPU 尚未开始执行 |
+| **#2** | **Executing** | **GPU 正在执行此命令时崩溃** |
+
+**事件 #2 的 CPU 调用栈反解：**
+
+| 运行时地址 | 二进制偏移 | 符号 |
+|---|---|---|
+| 0x55837cd8cf0c | 0xa4007 | `RGL::renderSystem` (+1607) |
+| 0x55837cd86a1b | 0x9db16 | `RGL::Renderer::drawFrame` 附近 |
+| 0x55837cd219c3 | 0x38abe | `main` 内部 |
+| 0x55837cd216c5 | 0x387c0 | `main` |
+
+**分析**：GPU 在执行 `drawMeshTasksEXT` 发出的 mesh shader 时发生 engine reset。崩溃发生在 `renderSystem` 的渲染循环中，命令已通过 validation layer 和 NVIDIA 驱动提交给 GPU。
+
+### 7.6 关键发现
+
+1. **Aftermath SDK 路径有效**：即使 `vkGetDeviceProcAddr` 返回 NULL，`GFSDK_Aftermath_EnableGpuCrashDumps` 通过独立 NvAPI 通道正常工作
+2. **设备状态**：Reset (engine reset, 非 adapter reset) — GPU 引擎因 mesh shader 执行重置
+3. **VA=0**：pageFault VA=0x0 — 当时解读为"不是内存访问错误"；结合 2026-08-17 确认的根因（驱动按契约取不存在的 task shader → 空指针），VA=0x0 与之吻合
+4. **无 Active Shader**：崩溃太快，驱动来不及在 shader 执行中期捕获活跃 shader
+5. **自动 Checkpoint 定位**：CPU call stack 显示崩溃发生在 `renderSystem` 的渲染循环中，GPU 正在执行通过 `drawMeshTasksEXT` 提交的 mesh shader 命令
+6. **Fingerprint 一致性**：hash=18443650224304399981，每次运行相同 — 确认是确定性行为（当时记录为"驱动 bug"；2026-08-17 确认根因为应用侧缺 NO_TASK_SHADER flag，输入状态相同故指纹恒定）
+7. **Heap 问题已修复**：`heapRange.size` 从 `descriptorSize * capacity` 改为 `getHeapSize()`，扣除对齐偏移。验证层不再报错，GPU 能走到 mesh shader 执行阶段
+
+### 7.7 诊断配置
+
+设备级 Aftermath 功能通过 `VK_NV_device_diagnostics_config` 配置（flags=15, 全部启用）：
+- `VK_DEVICE_DIAGNOSTICS_CONFIG_ENABLE_SHADER_ERROR_REPORTING_BIT_NV` — 零开销 shader 错误报告
+- `VK_DEVICE_DIAGNOSTICS_CONFIG_ENABLE_RESOURCE_TRACKING_BIT_NV` — 资源跟踪
+- `VK_DEVICE_DIAGNOSTICS_CONFIG_ENABLE_AUTOMATIC_CHECKPOINTS_BIT_NV` — 自动 CPU call stack 标记
+- `VK_DEVICE_DIAGNOSTICS_CONFIG_ENABLE_SHADER_DEBUG_INFO_BIT_NV` — shader 调试信息
+
+---
+
+## 八、参考
+
+- `min_mesh_crash/README.md` — 最小复现 + 根因证据链（本调查的权威记录）
 - NVIDIA 官方 sample：`/home/robin/mounts/gm7000/program/vk_mini_samples/`
 - `docs/DESCRIPTOR_HEAP_SPEC.md` — descriptor heap 排坑记录
 - Vulkan spec Debugging chapter: https://docs.vulkan.org/spec/latest/chapters/debugging.html
