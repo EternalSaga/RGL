@@ -20,7 +20,6 @@ import vk_swapchain;
 import vk_resources;
 import types_generated;
 import shader;
-import aftermath;
 import vkerror;
 
 namespace RGL {
@@ -248,7 +247,6 @@ std::expected<void, Error> Renderer::drawFrame() {
     if (submitVkResult == VK_ERROR_DEVICE_LOST) {
         auto logger = RLLogger::getInstance();
         if (logger) logger->error("Renderer: device lost on submit!");
-        RGL::waitForCrashDump();
         return std::unexpected(Error{ErrorCode::DeviceLost, "VK_ERROR_DEVICE_LOST on submit"});
     }
 
@@ -264,7 +262,6 @@ std::expected<void, Error> Renderer::drawFrame() {
     if (presentResult == vk::Result::eErrorDeviceLost) {
         auto logger = RLLogger::getInstance();
         if (logger) logger->error("Renderer: device lost on present!");
-        RGL::waitForCrashDump();
         return std::unexpected(Error{ErrorCode::DeviceLost, "VK_ERROR_DEVICE_LOST on present"});
     }
     if (presentResult == vk::Result::eErrorOutOfDateKHR ||

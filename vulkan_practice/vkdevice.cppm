@@ -8,7 +8,6 @@ import rllogger;
 import vulkan_utils;
 import queue_family_manager;
 import features;
-import aftermath;
 import vk_instance;
 import vkerror;
 
@@ -61,14 +60,8 @@ private:
     static vk::raii::Device createDevice(const vk::raii::PhysicalDevice& physicalDevice,
                                               RGL::QueueFamilyManager& queueManager,
                                               RGL::FeatureChain& featuresChain) {
-        RGL::updateDebugExtensionSupport(physicalDevice);
-
-        vk::DeviceDiagnosticsConfigCreateInfoNV diagnosticsConfig;
-        diagnosticsConfig.flags = RGL::createDiagnosticsConfig().flags;
-
         vk::DeviceCreateInfo deviceCreateInfo{};
-        deviceCreateInfo.setPNext(&diagnosticsConfig);
-        diagnosticsConfig.setPNext(&featuresChain.get<vk::PhysicalDeviceFeatures2>());
+        deviceCreateInfo.setPNext(&featuresChain.get<vk::PhysicalDeviceFeatures2>());
         deviceCreateInfo.setQueueCreateInfos(queueManager.getQueueCreateInfos());
 
         std::vector<const char*> extensions = RGL::getDeviceExtensions();
@@ -80,12 +73,6 @@ private:
             for (const char* ext : extensions) {
                 logger->info("  - {}", ext);
             }
-            auto flags = diagnosticsConfig.flags;
-            logger->info("Aftermath diagnostics: checkpoints={}, fault={}, diagnosticsConfig={}, flags={}",
-                         RGL::supportsDiagnosticCheckpoints(),
-                         RGL::supportsDeviceFault(),
-                         RGL::supportsDiagnosticsConfig(),
-                         static_cast<uint32_t>(flags));
         }
 
         return vk::raii::Device(physicalDevice, deviceCreateInfo);

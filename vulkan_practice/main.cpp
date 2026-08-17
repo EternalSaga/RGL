@@ -8,7 +8,6 @@ import vk_resources;
 import vk_renderer;
 import ecs;
 import rllogger;
-import aftermath;
 import vkerror;
 using namespace RGL;
 int main() {
@@ -18,8 +17,6 @@ int main() {
         return -1;
     }
     auto window = std::move(*windowResult);
-
-    RGL::initAftermath();
 
     try {
         entt::registry registry;
@@ -33,10 +30,7 @@ int main() {
         RGL::renderSystem(registry, vkRenderer, window);
     } catch (const std::exception &e) {
         std::cerr << "错误: " << e.what() << std::endl;
-        RGL::waitForCrashDump();
-        RGL::shutdownAftermath();
         return -1;
     }
-    RGL::shutdownAftermath();
     return 0;
 }

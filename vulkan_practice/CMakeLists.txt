@@ -128,7 +128,6 @@ target_sources(vulkan_practice PUBLIC
                FILES vkerror.cppm utils.cppm sdl3window.cppm QueueFamilyManager.cppm cube.cppm
                      shader.cppm VmaBuffer.cppm features.cppm vkinstance.cppm vkdevice.cppm
                      vkswapchain.cppm vkresources.cppm vkrenderer.cppm ecs.cppm
-                     aftermath.cppm
                      ${TYPES_CPPM}
                      ${FEATURES_CPPM}
 )
@@ -139,15 +138,6 @@ find_package(Vulkan REQUIRED)
 find_package(glm CONFIG REQUIRED)
 find_package(EnTT CONFIG REQUIRED)
 target_link_libraries(vulkan_practice PRIVATE Vulkan::Vulkan rllogger glm::glm EnTT::EnTT rlstd)
-
-# Aftermath SDK
-set(AFTERMATH_SDK_DIR "${CMAKE_SOURCE_DIR}/../Aftermath")
-target_include_directories(vulkan_practice PRIVATE ${AFTERMATH_SDK_DIR}/include)
-target_link_libraries(vulkan_practice PRIVATE ${AFTERMATH_SDK_DIR}/lib/x64/libGFSDK_Aftermath_Lib.x64.so)
-set_target_properties(vulkan_practice PROPERTIES
-    BUILD_RPATH "${AFTERMATH_SDK_DIR}/lib/x64"
-    INSTALL_RPATH "${AFTERMATH_SDK_DIR}/lib/x64"
-)
 target_compile_definitions(vulkan_practice PRIVATE GLM_FORCE_DEPTH_ZERO_TO_ONE GLM_FORCE_RADIANS)
 find_package(SDL3 CONFIG REQUIRED)
 

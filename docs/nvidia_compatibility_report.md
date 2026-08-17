@@ -139,6 +139,8 @@ meshCreateInfoRaw.flags |= VK_SHADER_CREATE_NO_TASK_SHADER_BIT_EXT;
 
 ## 六、GPU 诊断工具集成
 
+> **2026-08-17**：本节及第七节的诊断代码（NV 诊断扩展 + Aftermath 集成）已作为 NVIDIA 专属调试代码从 vulkan_practice 移除，仅 min_mesh_crash 保留 Aftermath 用于崩溃复现。以下为历史记录。
+
 **已完成**：集成 `VK_NV_device_diagnostic_checkpoints` 和 `VK_EXT_device_fault` 扩展（仅限 NVIDIA GPU）。
 
 ### 6.1 Checkpoint 标记位置
