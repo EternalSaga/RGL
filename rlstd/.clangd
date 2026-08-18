@@ -1,0 +1,6 @@
+# rlstd.cppm 整个文件都是对 std 名字的 using-decl 模块 re-export，
+# 在其自身 TU 内天然"无人使用"，misc-unused-using-decls 在此全是误报
+Diagnostics:
+  ClangTidy:
+    Remove:
+      - misc-unused-using-decls

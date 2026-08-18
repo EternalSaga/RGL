@@ -30,6 +30,7 @@ config COMPILER="clang" BUILD_TYPE="Release":
               -B {{ BUILD }} \
               -G Ninja \
               -DCMAKE_BUILD_TYPE=$BUILD_TYPE \
+              -DCMAKE_CXX_FLAGS_RELEASE="-O2 -DNDEBUG" \
               -DCMAKE_TOOLCHAIN_FILE={{ VCPKG }}/scripts/buildsystems/vcpkg.cmake \
               -DCMAKE_EXPORT_COMPILE_COMMANDS=1 \
               -DVCPKG_MANIFEST_MODE=ON \
@@ -47,6 +48,22 @@ build:
     fi
     @echo "=== CMake Building (parallel $(nproc) ) ==="
     cmake --build {{ BUILD }} --parallel "$(nproc)"
+
+# 全量编译基准: clean-all + config + 计时编译（输出 wall 时间）
+# 注意: clean-all 会触发 vcpkg manifest 重装（本机约 8 分钟），大头在依赖安装而非编译
+profile:
+    just clean-all
+    just config
+    time just build
+
+# 纯编译全量基准: 只清理编译产物（保留 config + vcpkg 缓存），计时重编全部目标
+profile-fast:
+    just clean
+    time just build
+
+# 编译耗时报告: 解析 .ninja_log，输出最近一次 build 的 wall / CPU 利用率 / top15 目标耗时
+timings:
+    @python3 {{ WORKSPACE }}/tools/build_timings.py {{ BUILD }}
 
 # 一键配置并编译 Release
 build-release COMPILER="clang":

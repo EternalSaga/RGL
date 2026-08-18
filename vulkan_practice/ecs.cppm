@@ -3,8 +3,7 @@ module;
 #include <SDL3/SDL_events.h>
 #include <entt/entt.hpp>
 #include <glm/gtc/matrix_transform.hpp>
-#include <vulkan/vulkan.hpp>
-#include <vulkan/vulkan_raii.hpp>
+#include <cstdint>
 
 export module ecs;
 

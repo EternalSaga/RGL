@@ -1,5 +1,5 @@
 module;
-#include <vulkan/vulkan_raii.hpp>
+#include <cstdint>
 export module cube;
 
 import rlstd;
