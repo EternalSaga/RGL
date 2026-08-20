@@ -11,26 +11,33 @@ import rllogger;
 import vkerror;
 using namespace RGL;
 int main() {
-    auto windowResult = SDLWindow::create(800, 600, "Vulkan Practice");
-    if (!windowResult) {
-        std::cerr << "错误: " << windowResult.error().describe() << std::endl;
-        return -1;
-    }
-    auto window = std::move(*windowResult);
+	auto windowResult = SDLWindow::create(800, 600, "Vulkan Practice");
+	if (!windowResult) {
+		auto* logger = RLLogger::getInstance();
+		if (logger) logger->error("错误: {}", windowResult.error().describe());
+		return -1;
+	}
+	auto window = std::move(*windowResult);
 
-    try {
-        entt::registry registry;
-        registry.ctx().emplace<Viewport>(800, 600, false);
+	try {
+		entt::registry registry;
+		registry.ctx().emplace<Viewport>(800, 600, false);
 
-        AppContext vkInstance(window);
-        DeviceContext vkDevice(vkInstance);
-        Swapchain vkSwapchain(vkDevice, window);
-        Resources vkResources(vkInstance, vkDevice, vkSwapchain);
-        Renderer vkRenderer(vkDevice, vkSwapchain, vkResources, registry);
-        RGL::renderSystem(registry, vkRenderer, window);
-    } catch (const std::exception &e) {
-        std::cerr << "错误: " << e.what() << std::endl;
-        return -1;
-    }
-    return 0;
+		AppContext vkInstance(window);
+		DeviceContext vkDevice(vkInstance);
+		Swapchain vkSwapchain(vkDevice, window);
+		Resources vkResources(vkInstance, vkDevice, vkSwapchain);
+		Renderer vkRenderer(vkDevice, vkSwapchain, vkResources, registry);
+		auto renderResult = RGL::renderSystem(registry, vkRenderer, window);
+		if (!renderResult) {
+			auto* logger = RLLogger::getInstance();
+			if (logger) logger->error("错误: {}", renderResult.error().describe());
+			return -1;
+		}
+	} catch (const std::exception& e) {
+		auto* logger = RLLogger::getInstance();
+		if (logger) logger->error("错误: {}", e.what());
+		return -1;
+	}
+	return 0;
 }

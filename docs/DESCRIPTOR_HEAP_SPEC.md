@@ -313,7 +313,7 @@ push data (独立于 heap slots):
   push constant 通过 [[vk::push_constant]] 直接访问 push data，不需要 binding mapping
 ```
 
-**实际代码（vkresources.cppm:110）：** `capacity = 16 + reservedSlots`。`reservedRangeOffset = 0`，reserved slots 始终从 heap 起始地址开始（slot 0..reservedSlots-1）。用户实际可用 slots 为 `reservedSlots..(capacity-1)`。当前 RADV 上 `reservedSlots` ≤ 8，所以 slot 8 和 12 是安全的。但如果驱动 reserved range 增大（例如 ≥ 13），需要调高 capacity 基数或增大 slot 编号。
+**实际代码（vkresources.cppm:129）：** `capacity = 16 + reservedSlots`。`reservedRangeOffset = 0`，reserved slots 始终从 heap 起始地址开始（slot 0..reservedSlots-1）。用户实际可用 slots 为 `reservedSlots..(capacity-1)`。Slot 编号运行时动态分配 = `reservedSlots() + HeapSlotVertexOffset(0)` / `reservedSlots() + HeapSlotIndexOffset(4)`（偏移由 `types_generated` 生成），天然避开 reserved range — AMD（reservedSlots=0）与 NVIDIA（reservedSlots=6048）均已验证。
 
 ### 3. 一次性分配，全程复用
 

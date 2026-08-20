@@ -6,6 +6,7 @@ BreakBeforeBraces: Attach
 AlignAfterOpenBracket: DontAlign
 
 IndentWidth: 4
+TabWidth: 4
 UseTab: Always
 IndentCaseLabels: false
 

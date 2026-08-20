@@ -15,10 +15,10 @@ return {
 
     -- Descriptor table slot definitions
     -- index: slang binding index (validated against reflection JSON)
-    -- heapSlot: descriptor heap slot index (used for code generation)
+    -- heapSlotOffset: offset from the start of the heap reserved range (runtime slot = reservedSlots() + heapSlotOffset)
     -- cppName: C++ constant name to export in the generated .cppm
     descriptorSlots = {
-        { name = "vertexBuffer", index = 0, heapSlot = 8,  cppName = "HeapSlotVertex",  shape = "byteAddressBuffer" },
-        { name = "indexBuffer",  index = 1, heapSlot = 12, cppName = "HeapSlotIndex",   shape = "byteAddressBuffer" },
+        { name = "vertexBuffer", index = 0, heapSlotOffset = 0, cppName = "HeapSlotVertexOffset", shape = "byteAddressBuffer" },
+        { name = "indexBuffer",  index = 1, heapSlotOffset = 4, cppName = "HeapSlotIndexOffset",  shape = "byteAddressBuffer" },
     },
 }

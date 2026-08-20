@@ -30,7 +30,7 @@
 | `shader.cppm` | frag shader mappingInfo 移除 | frag shader 无 binding，`pNext = nullptr` 即可 |
 | `shader.cppm:44` | `mappings[0].resourceMask` 改为 `ALL_EXT` | NVIDIA 驱动可能更严格校验 resourceMask 与 SPIR-V 资源类型的匹配 |
 | `shader.cppm:66,78` | 添加 `VK_SHADER_CREATE_LINK_STAGE_BIT_EXT` | NVIDIA 官方 sample 使用此 flag，影响 shader 二进制生成 |
-| `CMakeLists.txt` | Slang profile 改为 `glsl_460+spirv_1_6` | 匹配 NVIDIA sample 的编译配置 |
+| `CMakeLists.txt` | Slang profile 维持 `sm_6_6+spirv_1_6` | 最终未改为 `glsl_460+spirv_1_6`（早期记录有误；profile 不是 NVIDIA 兼容性的核心问题） |
 | `vcpkg.json` + `CMakeLists.txt` | slang 依赖标准化 | vcpkg 管理 slang 编译器 |
 
 ---

@@ -86,7 +86,7 @@ namespace RGL::Shaders::Types {
 ### 完成情况 (已完成)
 
 - [x] `tools/` 目录：`reflection_tool` CLI 工具（validate + generate 子命令），使用 **C++20 modules** 拆分为 `schema_loader.cppm`、`validator.cppm`、`generator.cppm`
-- [x] `shaders/types_schema.lua`：定义 `DrawArgs` push constant 和 `vertexBuffer`/`indexBuffer` descriptor slots（含 `heapSlot`、`cppName`）
+- [x] `shaders/types_schema.lua`：定义 `DrawArgs` push constant 和 `vertexBuffer`/`indexBuffer` descriptor slots（含 `heapSlotOffset`、`cppName`）
 - [x] `shaders/types.slang`：反射目标
 - [x] `CMakeLists.txt` `compile_slang()` 增加 `-reflection-json`
 - [x] `reflection_tool generate` 使用 **inja 模板** (`tools/templates/types_cppm.inja`) 生成 `.cppm`

@@ -101,7 +101,7 @@ class Foo {
 | `vk_instance` | vkinstance.cppm | Context、Instance、DebugMessenger、apiVersion |
 | `vk_device` | vkdevice.cppm | PhysicalDevice 选择、QueueFamilyManager、Device、CommandPools、FeatureChain |
 | `vk_swapchain` | vkswapchain.cppm | Surface、Swapchain、ImageView[] format/extent/presentMode |
-| `vk_resources` | vkresources.cppm | VmaAllocatorRAII、depth image+view、顶点/索引缓冲、VmaDescriptorHeap（slot 8=顶点，slot 12=索引） |
+| `vk_resources` | vkresources.cppm | VmaAllocatorRAII、depth image+view、顶点/索引缓冲、VmaDescriptorHeap（slot 运行时动态分配：`reservedSlots() + HeapSlot*Offset`，偏移由 `types_generated` 生成） |
 | `vk_renderer` | vkrenderer.cppm | 渲染管线、同步对象、命令缓冲、渲染循环 |
 
 ### 工具模块
@@ -109,6 +109,8 @@ class Foo {
 | 模块 | 文件 | 用途 |
 |---|---|---|
 | `vulkan_utils` | utils.cppm | 层检查、debug messenger、GPU 选择器、barrier 辅助、present mode |
+| `vkerror` | vkerror.cppm | `Error`/`ErrorCode` 类型定义、`fromVkResult` |
+| `ecs` | ecs.cppm | `Viewport` context、eventSystem/resizeSystem/renderSystem 渲染循环（entt registry，返回 `std::expected`） |
 | `vulkan_window` | sdl3window.cppm | SDL3 窗口、surface、HDR/SDR 格式选择 |
 | `queue_family_manager` | QueueFamilyManager.cppm | Graphics/Compute/Transfer 队列分配 |
 | `features` | features.cppm | FeatureChain 类型定义、buildRequestedFeatures、validateFeatures、checkDeviceExtensions、自定义异常 |
@@ -116,15 +118,16 @@ class Foo {
 | `shader` | shader.cppm | SPV 加载器、ShaderEffect、RenderPipeline（ShaderObject + 动态状态） |
 | `VmaRaii` | VmaBuffer.cppm | VmaBuffer、VmaImage、VmaDescriptorHeap、VmaAllocatorRAII 封装。VmaBuffer/VmaImage 通过 `SharedAllocator` (`std::shared_ptr<AllocatorControlBlock>`) 共享 allocator 所有权 |
 | `rlstd` | rlstd/rlstd.cppm | C++ 标准库模块封装。libstdc++ 不支持 `import std`，因此通过 GMF `#include` 所有 STL 头文件并 `export` 常用名称。所有项目模块通过 `import rlstd;` 获取 STL 类型，而非在 GMF 中 `#include` STL 头。注意：`std::views::` 因 libstdc++ 将其定义为 namespace alias 而无法通过模块导出，仍需在 GMF 中 `#include <ranges>` |
-| `types_generated` | generated/types_generated.cppm | auto-generated（由 `reflection_tool` + inja 模板生成），导出 `DrawArgs`、`HeapSlotVertex`、`HeapSlotIndex` |
+| `types_generated` | generated/types_generated.cppm | auto-generated（由 `reflection_tool` + inja 模板生成），导出 `DrawArgs`、`HeapSlotVertexOffset`、`HeapSlotIndexOffset`（相对 heap reserved range 起点的偏移，运行时 slot = `reservedSlots() + offset`） |
 | `features_generated` | generated/features_generated.cppm | auto-generated（由 `reflection_tool render` + `features_config.json` 生成），导出 `FeatureChain`、`buildRequestedFeatures()`、`validateFeatures()` |
 
-`main.cpp` 按顺序构造 5 个初始化层类，然后调用 `vkRenderer.render(window)`。`vam_impl.cpp` 包含 `#define VMA_IMPLEMENTATION`。
+`main.cpp` 先创建栈上 `entt::registry`（持有 `Viewport` context），按顺序构造 5 个初始化层类，然后调用 `RGL::renderSystem(registry, vkRenderer, window)`。`vam_impl.cpp` 包含 `#define VMA_IMPLEMENTATION`。
 
 ### 构造依赖图
 
 ```
 SDLWindow → AppContext → DeviceContext → Swapchain → Resources → Renderer
+                └────────────── entt::registry（Viewport context）──────────┘
 ```
 
 main.cpp 按逆序析构（RAII，无需手动清理）。
@@ -166,20 +169,19 @@ main.cpp 按逆序析构（RAII，无需手动清理）。
 
 | 位置 | 说明 |
 |---|---|
-| `vkresources.cppm:142` | `writeDescriptors()`，使用 `vkWriteResourceDescriptorsEXT` |
-| `vkrenderer.cppm:145` | `colorToDrawBarrier`（Undefined → ColorAttachmentOptimal, srcStage=eTopOfPipe） |
-| `vkrenderer.cppm:190-208` | Heap barrier、`bindResourceHeapEXT`、`pushDataEXT`（均在 `beginRendering` 之前） |
-| `vkrenderer.cppm:255` | `SwapchainPresentFenceInfoEXT`（KHR 别名），位于 `presentInfo.pNext` |
+| `vkresources.cppm:139` | `writeDescriptors()`，使用 `vkWriteResourceDescriptorsEXT` |
+| `vkrenderer.cppm:143` | `colorToDrawBarrier`（Undefined → ColorAttachmentOptimal, srcStage=eTopOfPipe） |
+| `vkrenderer.cppm:188-206` | Heap barrier、`bindResourceHeapEXT`、`pushDataEXT`（均在 `beginRendering` 之前） |
+| `vkrenderer.cppm:251` | `SwapchainPresentFenceInfoEXT`（KHR 别名），位于 `presentInfo.pNext` |
 | `shader.cppm:38-56` | `DescriptorSetAndBindingMappingEXT`，映射顶点/索引 heap slot（编号运行时动态，见 `vkresources.cppm` 的 `getHeapSlotVertex/Index`） |
-| `shader.cppm:6` | `import types_generated;` 提供 `HeapSlotVertex`/`HeapSlotIndex` |
-| `vkrenderer.cppm:21` | `import types_generated;` 提供 `DrawArgs` 结构体（用于 :51 `updateDrawArgs`、:103 成员） |
+| `shader.cppm:6` | `import types_generated;` 提供 `HeapSlotVertexOffset`/`HeapSlotIndexOffset` |
+| `vkrenderer.cppm:21` | `import types_generated;` 提供 `DrawArgs` 结构体（用于 :49 `updateDrawArgs`、:101 成员） |
 | `shaders/types.slang:20-24` | 两个缓冲均使用 `ByteAddressBuffer`（绝不用 `StructuredBuffer`） |
-| `shaders/cube.mesh.slang:15` | `mul(drawArgs.mvp, ...)` MVP 变换 |
+| `shaders/cube.mesh.slang:19` | `mul(drawArgs.mvp, ...)` MVP 变换 |
 
 ## 已知问题
 
 - `computeCommandPool`、`transferCommandPool`、`computeQueue`、`transferQueue` 已创建但保留给未来使用
-- `utils.cppm` — Vulkan ERROR 触发 `int $3`（SIGTRAP）用于调试器体验；从功能角度应改为 throw
 
 ## 其他文档
 
@@ -187,7 +189,7 @@ main.cpp 按逆序析构（RAII，无需手动清理）。
 - `docs/调试历史.md` — 灰屏问题修复时间线、已解决的争议
 - `docs/DESCRIPTOR_HEAP_SPEC.md` — 有关DescriptorHeap 扩展的排坑详细记录
 - `docs/next_roadmap.md` — 后续开发计划
-- `docs/shader_reflection_plans.md` — shader反射开发计划的一些技术调研
+- `docs/shader_reflection_plan.md` — shader反射开发计划的一些技术调研
 - `docs/nvidia_compatibility_report.md` — NVIDIA 兼容性排查（heap 对齐、Aftermath 集成、mesh shader 崩溃根因）
 - `docs/快捷键配置.md` — Zed 编辑器快捷键、任务和调试配置说明
 

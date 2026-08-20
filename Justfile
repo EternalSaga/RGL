@@ -84,7 +84,7 @@ run:
         echo "Error: Binary not found. Run 'just build' first."; \
         exit 1; \
     fi
-    @(cd {{ BUILD }}/vulkan_practice && if lspci 2>/dev/null | grep -qi 'vga.*amd'; then RADV_EXPERIMENTAL=heap ./vulkan_practice; else ./vulkan_practice; fi)
+    @(cd {{ BUILD }}/vulkan_practice && if lspci 2>/dev/null | grep -qiE 'vga.*amd|display.*amd'; then RADV_EXPERIMENTAL=heap ./vulkan_practice; else ./vulkan_practice; fi)
 
 # 核显运行（AMD 集显，display GPU 原生渲染，无 offload）
 # 必须用 VK_DRIVER_FILES 隐藏 NVIDIA ICD — 设备评分器默认选 dGPU（分数更高）

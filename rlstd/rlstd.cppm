@@ -30,42 +30,43 @@ module;
 export module rlstd;
 
 export namespace std {
-    using std::array;
-    using std::string;
-    using std::string_view;
-    using std::to_string;
-    using std::vector;
-    using std::map;
-    using std::set;
-    using std::pair;
-    using std::move;
-    using std::clamp;
-    using std::runtime_error;
-    using std::out_of_range;
-    using std::logic_error;
-    using std::numeric_limits;
-    using std::back_inserter;
-    using std::source_location;
-    using std::memcpy;
-    using std::strlen;
-    using std::ifstream;
-    using std::ofstream;
-    using std::fstream;
-    using std::cerr;
-    using std::cout;
-    using std::endl;
-    using std::expected;
-    using std::unexpected;
-    using std::error_code;
-    using std::shared_ptr;
+using std::array;
+using std::back_inserter;
+using std::cerr;
+using std::clamp;
+using std::cout;
+using std::endl;
+using std::error_code;
+using std::expected;
+using std::fstream;
+using std::ifstream;
+using std::logic_error;
+using std::map;
+using std::memcpy;
+using std::move;
+using std::numeric_limits;
+using std::ofstream;
+using std::optional;
+using std::out_of_range;
+using std::pair;
+using std::runtime_error;
+using std::set;
+using std::shared_ptr;
+using std::source_location;
+using std::string;
+using std::string_view;
+using std::strlen;
+using std::to_string;
+using std::unexpected;
+using std::vector;
 
-    namespace ranges {
-        using std::ranges::any_of;
-        using std::ranges::copy_n;
-        using std::ranges::find;
-        using std::ranges::find_if;
-        using std::ranges::for_each;
-        using std::ranges::sort;
-        using std::ranges::transform;
-    }
-}
+namespace ranges {
+using std::ranges::any_of;
+using std::ranges::copy_n;
+using std::ranges::find;
+using std::ranges::find_if;
+using std::ranges::for_each;
+using std::ranges::sort;
+using std::ranges::transform;
+}  // namespace ranges
+}  // namespace std
