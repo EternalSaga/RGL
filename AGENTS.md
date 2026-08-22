@@ -29,11 +29,13 @@ CMake 无独立构建目录 — 必须从根目录构建（`cmake -B build -S .`
 
 产物: `build/vulkan_practice/vulkan_practice`
 
-> **运行要求：** `RADV_EXPERIMENTAL=heap` — RADV 驱动下启用 `VK_EXT_descriptor_heap` 必需。`just run` 已自动设置。
+> **运行要求：** 必须从 `build/vulkan_practice/` 目录运行（CWD），`just run` 已自动 cd 并检查资源完整性。
 
 ## 运行要求
 
-- `RADV_EXPERIMENTAL=heap` — RADV 驱动下启用 `VK_EXT_descriptor_heap` 必需
+- **CWD 必须是 `build/vulkan_practice/`**：程序按相对路径读取 `configs/`（日志 JSON、相机 Lua 配置）和 `generated_shaders/*.spv`，在其他目录启动会报 "Log config file not found"
+- 运行时资源由构建自动同步到 build 目录：`configs/` 增量拷贝（`copy_if_different`，修改 config 后下次 `just build` 即生效，无需 relink；新增 config 文件需 `just config`）、SPV 直接编译到 `build/vulkan_practice/generated_shaders/`
+- `RADV_EXPERIMENTAL=heap` — RADV 驱动下启用 `VK_EXT_descriptor_heap` 必需，`just run`/`run-igpu` 已自动设置
 
 ## 命名规范
 
@@ -110,18 +112,19 @@ class Foo {
 |---|---|---|
 | `vulkan_utils` | utils.cppm | 层检查、debug messenger、GPU 选择器、barrier 辅助、present mode |
 | `vkerror` | vkerror.cppm | `Error`/`ErrorCode` 类型定义、`fromVkResult` |
-| `ecs` | ecs.cppm | `Viewport` context、eventSystem/resizeSystem/renderSystem 渲染循环（entt registry，返回 `std::expected`） |
+| `ecs` | ecs.cppm | `Viewport` context、eventSystem（中央 SDL 事件轮询：窗口/键鼠/滚轮 → `CameraInput`）/resizeSystem/renderSystem 渲染循环（entt registry，返回 `std::expected`） |
 | `vulkan_window` | sdl3window.cppm | SDL3 窗口、surface、HDR/SDR 格式选择 |
 | `queue_family_manager` | QueueFamilyManager.cppm | Graphics/Compute/Transfer 队列分配 |
 | `features` | features.cppm | FeatureChain 类型定义、buildRequestedFeatures、validateFeatures、checkDeviceExtensions、自定义异常 |
 | `cube` | cube.cppm | 顶点/索引数据 |
+| `camera` | camera.cppm | `Camera`/`CameraInput` context、cameraView/cameraSystem（trackball 绕 target 轨道 / FPS 第一人称双模式）、loadCameraConfig（读 `configs/camera.lua`，sol2 沙箱） |
 | `shader` | shader.cppm | SPV 加载器、ShaderEffect、RenderPipeline（ShaderObject + 动态状态） |
 | `VmaRaii` | VmaBuffer.cppm | VmaBuffer、VmaImage、VmaDescriptorHeap、VmaAllocatorRAII 封装。VmaBuffer/VmaImage 通过 `SharedAllocator` (`std::shared_ptr<AllocatorControlBlock>`) 共享 allocator 所有权 |
 | `rlstd` | rlstd/rlstd.cppm | C++ 标准库模块封装。libstdc++ 不支持 `import std`，因此通过 GMF `#include` 所有 STL 头文件并 `export` 常用名称。所有项目模块通过 `import rlstd;` 获取 STL 类型，而非在 GMF 中 `#include` STL 头。注意：`std::views::` 因 libstdc++ 将其定义为 namespace alias 而无法通过模块导出，仍需在 GMF 中 `#include <ranges>` |
 | `types_generated` | generated/types_generated.cppm | auto-generated（由 `reflection_tool` + inja 模板生成），导出 `DrawArgs`、`HeapSlotVertexOffset`、`HeapSlotIndexOffset`（相对 heap reserved range 起点的偏移，运行时 slot = `reservedSlots() + offset`） |
 | `features_generated` | generated/features_generated.cppm | auto-generated（由 `reflection_tool render` + `features_config.json` 生成），导出 `FeatureChain`、`buildRequestedFeatures()`、`validateFeatures()` |
 
-`main.cpp` 先创建栈上 `entt::registry`（持有 `Viewport` context），按顺序构造 5 个初始化层类，然后调用 `RGL::renderSystem(registry, vkRenderer, window)`。`vam_impl.cpp` 包含 `#define VMA_IMPLEMENTATION`。
+`main.cpp` 先加载 `configs/camera.lua`（`loadCameraConfig`），创建栈上 `entt::registry`（持有 `Viewport`/`Camera`/`CameraInput` context），按顺序构造 5 个初始化层类，然后调用 `RGL::renderSystem(registry, vkRenderer, window)`。`vam_impl.cpp` 包含 `#define VMA_IMPLEMENTATION`。
 
 ### 构造依赖图
 
@@ -145,7 +148,7 @@ main.cpp 按逆序析构（RAII，无需手动清理）。
 
 - CMake `compile_slang()` 函数在构建时处理编译
 - Profile: `sm_6_6+spirv_1_6`，capability: `spvDescriptorHeapEXT`
-- 运行时从 `generated_shaders/` 相对路径读取 SPV — 必须从 build 目录运行或提供正确路径
+- 运行时从 `generated_shaders/` 相对路径读取 SPV（输出直接在 build 目录，从 `build/vulkan_practice/` 运行即可，见"运行要求"）
 
 ## 隐式扩展依赖
 
@@ -178,10 +181,13 @@ main.cpp 按逆序析构（RAII，无需手动清理）。
 | `vkrenderer.cppm:21` | `import types_generated;` 提供 `DrawArgs` 结构体（用于 :49 `updateDrawArgs`、:101 成员） |
 | `shaders/types.slang:20-24` | 两个缓冲均使用 `ByteAddressBuffer`（绝不用 `StructuredBuffer`） |
 | `shaders/cube.mesh.slang:19` | `mul(drawArgs.mvp, ...)` MVP 变换 |
+| `configs/camera.lua` | 相机/控制配置（mode + position/target + `trackball`/`fps` 子表），`camera.cppm:loadCameraConfig` 经 sol2 沙箱加载，改后 `just build` 生效 |
+| `ecs.cppm:eventSystem` | 中央 SDL 事件轮询（唯一 `SDL_PollEvent` 调用点）；鼠标**增量用 `motion.xrel/yrel`**（`x/y` 是窗口绝对坐标，SDL3 陷阱，见 `docs/调试历史.md`） |
 
 ## 已知问题
 
 - `computeCommandPool`、`transferCommandPool`、`computeQueue`、`transferQueue` 已创建但保留给未来使用
+- `configs/` 增量拷贝（`copy_if_different`）只认"源文件更新"：build 端副本被破坏/截断（mtime 更新）不会自动恢复，需手动拷贝或 `just clean`
 
 ## 其他文档
 

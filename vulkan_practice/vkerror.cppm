@@ -24,6 +24,7 @@ export enum class ErrorCode {
 	VMASuccessFailed,
 	DescriptorSlotOutOfBounds,
 	DeviceLost,
+	ConfigLoadFailed,
 	Unknown,
 };
 

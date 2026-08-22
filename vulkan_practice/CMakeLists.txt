@@ -115,17 +115,29 @@ message(STATUS "FRAG_SPV is: ${FRAG_SPV}")
 
 add_executable(vulkan_practice main.cpp vam_impl.cpp ${MESH_SPV} ${FRAG_SPV})
 
+# ─── Runtime config copy (configs/ → build dir) ──────────────────────────────
+# 程序运行时按相对路径读取 configs/*.json，build 目录必须完整。
+# copy_if_different 增量拷贝：修改 config 后下次 just build 即生效，无需重链接。
+# 新增 config 文件需要 just config（file GLOB 在 configure 时求值）。
+file(GLOB CONFIG_FILES "${PROJECT_SOURCE_DIR}/configs/*")
+set(COPIED_CONFIGS)
+foreach(cfg ${CONFIG_FILES})
+    get_filename_component(cfg_name ${cfg} NAME)
+    list(APPEND COPIED_CONFIGS "${CMAKE_CURRENT_BINARY_DIR}/configs/${cfg_name}")
+endforeach()
 add_custom_command(
-    TARGET vulkan_practice POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${PROJECT_SOURCE_DIR}/configs"
-        "${CMAKE_CURRENT_BINARY_DIR}/configs"
+    OUTPUT ${COPIED_CONFIGS}
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CONFIG_FILES} ${CMAKE_CURRENT_BINARY_DIR}/configs/
+    DEPENDS ${CONFIG_FILES}
     COMMENT "Copying configs to build directory..."
+    VERBATIM
 )
+add_custom_target(copy_configs ALL DEPENDS ${COPIED_CONFIGS})
 
 target_sources(vulkan_practice PUBLIC
               FILE_SET CXX_MODULES
                FILES vkerror.cppm utils.cppm sdl3window.cppm QueueFamilyManager.cppm cube.cppm
+                     camera.cppm
                      shader.cppm VmaBuffer.cppm features.cppm vkinstance.cppm vkdevice.cppm
                      vkswapchain.cppm vkresources.cppm vkrenderer.cppm ecs.cppm
                      ${TYPES_CPPM}
@@ -137,7 +149,9 @@ add_dependencies(vulkan_practice reflection_generated features_generated)
 find_package(Vulkan REQUIRED)
 find_package(glm CONFIG REQUIRED)
 find_package(EnTT CONFIG REQUIRED)
-target_link_libraries(vulkan_practice PRIVATE Vulkan::Vulkan rllogger glm::glm EnTT::EnTT rlstd)
+find_package(Sol2 CONFIG REQUIRED)
+find_package(unofficial-lua CONFIG REQUIRED)
+target_link_libraries(vulkan_practice PRIVATE Vulkan::Vulkan rllogger glm::glm EnTT::EnTT sol2::sol2 lua rlstd)
 target_compile_definitions(vulkan_practice PRIVATE GLM_FORCE_DEPTH_ZERO_TO_ONE GLM_FORCE_RADIANS)
 find_package(SDL3 CONFIG REQUIRED)
 

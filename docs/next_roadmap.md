@@ -122,6 +122,17 @@ namespace RGL::Shaders::Types {
 - `legacy/app/CameraECS.hpp`：透视相机参数
 - 只参考思路，不抄代码，适配 C++20 modules + RAII 风格
 
+### 完成情况 (已完成 2026-08-22)
+
+- [x] 新增 `camera.cppm` 模块：`Camera`/`CameraInput` context（registry ctx）、`cameraView()`、`cameraSystem(rg, dt)`
+- [x] 双模式统一 yaw/pitch 姿态表示：legacy trackball 的"矩阵左乘"（pitch 绕相机右轴 + yaw 绕世界 Y）在 `R = Ry(yaw)·Rx(pitch)` 下数学上等价于欧拉角增量，无需矩阵存储
+- [x] **模式切换从启动参数改为 Lua 配置**：`configs/camera.lua`（`return` 顶层 table：mode/position/target/fovDegrees/near/far + `trackball`/`fps` 两个子 table 各带速度灵敏度，全部可选）由 `loadCameraConfig()` 经 sol2 沙箱加载（禁用 dofile/require 等，同 tools/schema_loader）；文件缺失 → 默认值 + warn，脚本/类型错误 → 报错退出
+- [x] `ecs.cppm` `eventSystem` 保持中央轮询：WASD/鼠标按键/拖拽 delta/滚轮 → `CameraInput`，ESCAPE → 退出（legacy 多系统各自 `SDL_PollEvent` 的坑未引入）
+- [x] renderSystem 补 dt（clamp ≤0.1s，防切后台瞬移）；view/proj 从 camera 取，model 时间旋转保留
+- [x] 顺带修复 GLM_FORCE_RADIANS 陷阱：`glm::radians(45.0f)` 在该项目下是恒等函数，原 `perspective` 实际传入 45 弧度（等效 FOV ≈58.6°）；新代码手动角度→弧度换算
+- [x] pitch clamp ±89° 防万向翻转
+- [x] 运行基建：`configs/` 改为按文件 `copy_if_different` 增量拷贝（改 config 无需 relink）；`just run`/`run-igpu`/`run-dgpu` 统一 `check-run-ready` 资源检查；AGENTS.md 运行要求明确 CWD = `build/vulkan_practice/`
+
 ---
 
 ## Phase 2：glTF 加载
@@ -234,6 +245,7 @@ namespace RGL::Shaders::Types {
 ### 设计决策
 - RenderGraph 是独立模块，不耦合到 ecs.cppm
 - Lua 配置和 schema 校验是两套独立机制：schema 校验 shader 契约，Lua 描述场景意图
+- **机制模板已就位**：`configs/camera.lua`（Phase 1 落地）确立了 Lua 配置的标准做法——sol2 沙箱加载（禁用 dofile/require，同 tools/schema_loader）+ 字段可选回落默认值 + 构建期增量拷贝到 build 目录。Phase 6 的场景/渲染意图 Lua 沿用同一模式
 
 ---
 

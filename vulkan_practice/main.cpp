@@ -6,6 +6,7 @@ import vk_device;
 import vk_swapchain;
 import vk_resources;
 import vk_renderer;
+import camera;
 import ecs;
 import rllogger;
 import vkerror;
@@ -19,9 +20,18 @@ int main() {
 	}
 	auto window = std::move(*windowResult);
 
+	auto cameraResult = loadCameraConfig("configs/camera.lua");
+	if (!cameraResult) {
+		auto* logger = RLLogger::getInstance();
+		if (logger) logger->error("错误: {}", cameraResult.error().describe());
+		return -1;
+	}
+
 	try {
 		entt::registry registry;
 		registry.ctx().emplace<Viewport>(800, 600, false);
+		registry.ctx().emplace<Camera>(std::move(*cameraResult));
+		registry.ctx().emplace<CameraInput>();
 
 		AppContext vkInstance(window);
 		DeviceContext vkDevice(vkInstance);

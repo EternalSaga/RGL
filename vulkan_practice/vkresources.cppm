@@ -44,7 +44,7 @@ export class Resources {
 	const RGL::VmaImage& getDepthImage() const { return depthImage; }
 	const vk::raii::ImageView& getDepthImageView() const { return depthImageView; }
 
-	std::expected<void, Error> recreateDepthImage(vk::Extent2D extent) {
+	[[nodiscard]] std::expected<void, Error> recreateDepthImage(vk::Extent2D extent) {
 		vkDevice.getDevice().waitIdle();
 
 		auto result = createDepthImage(allocator, extent);

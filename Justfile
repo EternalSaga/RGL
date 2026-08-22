@@ -79,21 +79,31 @@ build-debug COMPILER="clang":
 # 2. 运行
 # ------------------------------------------------------------------------------
 
-run:
+# 检查二进制 + 运行时资源（configs/、generated_shaders/）在 build 目录完整
+# 注意：不能设为 private — run/run-igpu/run-dgpu 通过 `just check-run-ready` 子进程调用，
+# private recipe 拒绝主调用（just 的已知限制）
+check-run-ready:
     @if [ ! -f {{ BUILD }}/vulkan_practice/vulkan_practice ]; then \
         echo "Error: Binary not found. Run 'just build' first."; \
         exit 1; \
     fi
+    @if [ ! -f {{ BUILD }}/vulkan_practice/configs/log_level.json ] \
+        || [ ! -d {{ BUILD }}/vulkan_practice/generated_shaders ]; then \
+        echo "Error: Runtime resources missing (configs/ or generated_shaders/) in {{ BUILD }}/vulkan_practice. Run 'just build' first."; \
+        exit 1; \
+    fi
+
+# 运行入口统一 cd 到 build/vulkan_practice：程序按相对路径读取
+# configs/*.json 和 generated_shaders/*.spv，CWD 必须是该目录
+run:
+    just check-run-ready
     @(cd {{ BUILD }}/vulkan_practice && if lspci 2>/dev/null | grep -qiE 'vga.*amd|display.*amd'; then RADV_EXPERIMENTAL=heap ./vulkan_practice; else ./vulkan_practice; fi)
 
 # 核显运行（AMD 集显，display GPU 原生渲染，无 offload）
 # 必须用 VK_DRIVER_FILES 隐藏 NVIDIA ICD — 设备评分器默认选 dGPU（分数更高）
 # RADV_EXPERIMENTAL=heap 用于 RADV 启用 descriptor heap
 run-igpu:
-    @if [ ! -f {{ BUILD }}/vulkan_practice/vulkan_practice ]; then \
-        echo "Error: Binary not found. Run 'just build' first."; \
-        exit 1; \
-    fi
+    just check-run-ready
     @RADV_ICD=$(ls /usr/share/vulkan/icd.d/radeon_icd.*.json /etc/vulkan/icd.d/radeon_icd.*.json 2>/dev/null | head -1); \
     if [ -z "$RADV_ICD" ]; then \
         echo "Error: radeon ICD json not found"; \
@@ -103,10 +113,7 @@ run-igpu:
 
 # 独显运行（NVIDIA dGPU，prime offload；PROVIDER=3 为本机 dGPU 的 offload provider 编号）
 run-dgpu:
-    @if [ ! -f {{ BUILD }}/vulkan_practice/vulkan_practice ]; then \
-        echo "Error: Binary not found. Run 'just build' first."; \
-        exit 1; \
-    fi
+    just check-run-ready
     @(cd {{ BUILD }}/vulkan_practice && \
         __NV_PRIME_RENDER_OFFLOAD=1 \
         __NV_PRIME_RENDER_OFFLOAD_PROVIDER=3 \

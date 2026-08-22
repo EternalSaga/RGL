@@ -7,6 +7,7 @@ module;
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <expected>
@@ -31,9 +32,12 @@ export module rlstd;
 
 export namespace std {
 using std::array;
+using std::asin;
+using std::atan2;
 using std::back_inserter;
 using std::cerr;
 using std::clamp;
+using std::cos;
 using std::cout;
 using std::endl;
 using std::error_code;
@@ -52,6 +56,7 @@ using std::pair;
 using std::runtime_error;
 using std::set;
 using std::shared_ptr;
+using std::sin;
 using std::source_location;
 using std::string;
 using std::string_view;

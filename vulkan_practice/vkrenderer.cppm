@@ -91,6 +91,18 @@ export class Renderer {
 		commandBuffers = vkDevice.getDevice().allocateCommandBuffers(allocInfoCmd);
 	}
 
+	[[nodiscard]] std::expected<void, Error> recreateSwapchainAndDepth(const char* context) {
+		swapchain->recreate();
+		auto result = resources->recreateDepthImage(swapchain->getExtent());
+		if (!result) {
+			auto logger = RLLogger::getInstance();
+			if (logger) logger->error("Renderer: failed to recreate depth image ({}): {}",
+				context, result.error().describe());
+			return std::unexpected(std::move(result).error());
+		}
+		return {};
+	}
+
 	RGL::DeviceContext& vkDevice;
 	RGL::Swapchain* swapchain;
 	RGL::Resources* resources;
@@ -123,9 +135,7 @@ std::expected<void, Error> Renderer::drawFrame() {
 		*imageAvailableSemaphores[currentFrame], nullptr);
 
 	if (acquireResult == vk::Result::eErrorOutOfDateKHR) {
-		swapchain->recreate();
-		resources->recreateDepthImage(swapchain->getExtent());
-		return {};
+		return recreateSwapchainAndDepth("acquire out-of-date");
 	}
 	if (acquireResult != vk::Result::eSuccess &&
 		acquireResult != vk::Result::eSuboptimalKHR) {
@@ -264,8 +274,9 @@ std::expected<void, Error> Renderer::drawFrame() {
 	}
 	if (presentResult == vk::Result::eErrorOutOfDateKHR ||
 		presentResult == vk::Result::eSuboptimalKHR) {
-		swapchain->recreate();
-		resources->recreateDepthImage(swapchain->getExtent());
+		if (auto result = recreateSwapchainAndDepth("present out-of-date/suboptimal"); !result) {
+			return std::unexpected(std::move(result).error());
+		}
 	}
 
 	currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
