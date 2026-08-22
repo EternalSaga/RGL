@@ -263,10 +263,18 @@ namespace RGL::Shaders::Types {
   - Light culling（frustum + AABB）
 - **Final pass**：combining G-buffer + lighting
 - **AABB / Frustum Culling**：延迟渲染的前提优化
+- **GPU Culling 子系统（`VK_EXT_device_generated_commands`）**：
+  - culling compute（frustum + AABB）输出 per-visible-mesh sequence 数据（shader slot 索引 + `DrawArgs` + mesh task count）+ sequence count
+  - NVIDIA 路径：`vkCmdPreprocessGeneratedCommandsEXT` → `vkCmdExecuteGeneratedCommandsEXT`，layout = execution-set（shader object 模式，per-sequence 换 material shader）+ push data（per-sequence `DrawArgs`）+ `DRAW_MESH_TASKS` token
+  - RADV 回退路径：当前 RADV 仅支持 compute 侧 indirect execution set（graphics shader binding 未开），同一份 culling 输出改走 CPU 侧 `vkCmdDrawMeshTasksIndirectCountEXT`（属 `VK_EXT_mesh_shader`，双驱动可用）
+  - 基础设施：`features.cppm` 列表加回扩展（2026-08-22 已移除，A/B 实测零回归）+ `features_config.json` 增加 `deviceGeneratedCommands` feature → 重新生成 `features_generated.cppm`；`DeviceContext` 查询 `VkPhysicalDeviceDeviceGeneratedCommandsPropertiesEXT` 派生能力位（`supportsGraphicsIndirectCommands`，运行时选路）
+  - 新模块 `vk_indirect_commands.cppm`（layout + execution set + preprocess buffer RAII，sync2 barrier）
+  - 调研依据（双驱动实测对比、API 表面、驱动不对称、集成点）：`docs/device_generated_commands_research.md`
 
 ### 设计决策
 - 延迟渲染作为可选渲染路径，不破坏现有 forward 管线
 - AABB 组件在 Phase 2（glTF）时就可以开始积累
+- GPU culling 是能力门控路径：同一 culling compute 输出驱动两条提交路径（NVIDIA device-generated / RADV CPU IndirectCount），驱动能力升级后自动切换，不改 culling 逻辑
 
 ---
 

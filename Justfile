@@ -112,9 +112,16 @@ run-igpu:
     (cd {{ BUILD }}/vulkan_practice && VK_DRIVER_FILES="$RADV_ICD" RADV_EXPERIMENTAL=heap ./vulkan_practice)
 
 # 独显运行（NVIDIA dGPU，prime offload；PROVIDER=3 为本机 dGPU 的 offload provider 编号）
+# 必须用 VK_DRIVER_FILES 隐藏 radeon ICD — prime offload 环境变量对 Vulkan 设备枚举无过滤作用
+# （实测：NV_optimus 层激活后设备列表仍是 iGPU+dGPU 两个，选择完全取决于应用内打分器）
 run-dgpu:
     just check-run-ready
-    @(cd {{ BUILD }}/vulkan_practice && \
+    @NV_ICD=$(ls /usr/share/vulkan/icd.d/nvidia_icd*.json /etc/vulkan/icd.d/nvidia_icd*.json 2>/dev/null | head -1); \
+    if [ -z "$NV_ICD" ]; then \
+        echo "Error: nvidia ICD json not found"; \
+        exit 1; \
+    fi; \
+    (cd {{ BUILD }}/vulkan_practice && VK_DRIVER_FILES="$NV_ICD" \
         __NV_PRIME_RENDER_OFFLOAD=1 \
         __NV_PRIME_RENDER_OFFLOAD_PROVIDER=3 \
         __GLX_VENDOR_LIBRARY_NAME=zink \

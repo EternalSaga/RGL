@@ -100,18 +100,20 @@ pickPhysicalDevice(const vk::raii::PhysicalDevices& physicalDevices) {
 		return std::unexpected(Error{ErrorCode::NoPhysicalDevices, "No physical devices found"});
 	}
 	std::map<uint64_t, const vk::raii::PhysicalDevice*> deviceCandidates;
+	std::map<const vk::raii::PhysicalDevice*, std::string> deviceNames;
 
 	for (const auto& device : physicalDevices) {
 		uint64_t score = 0;
 
 		vk::PhysicalDeviceProperties properties = device.getProperties();
 		std::string deviceName(properties.deviceName.data());
-		std::ranges::transform(deviceName, deviceName.begin(),
+		std::string deviceNameLower = deviceName;
+		std::ranges::transform(deviceNameLower, deviceNameLower.begin(),
 			[](unsigned char c) { return std::tolower(c); });
 
 		uint32_t coreCount = 0;
 
-		if (deviceName.find("amd") != std::string::npos) {
+		if (deviceNameLower.find("amd") != std::string::npos) {
 			auto props2 = device.getProperties2<
 				vk::PhysicalDeviceProperties2,
 				vk::PhysicalDeviceSubgroupSizeControlProperties,
@@ -148,6 +150,11 @@ pickPhysicalDevice(const vk::raii::PhysicalDevices& physicalDevices) {
 
 		if (score > 0) {
 			deviceCandidates.insert({score, &device});
+			deviceNames.insert({&device, deviceName});
+			if (logger)
+				logger->debug("GPU candidate: {} (type={}, cores={}, vram={}GiB, score={})",
+					deviceName, vk::to_string(properties.deviceType),
+					coreCount, vramBytes / (1024 * 1024 * 1024), score);
 		}
 	}
 
@@ -157,7 +164,11 @@ pickPhysicalDevice(const vk::raii::PhysicalDevices& physicalDevices) {
 		return std::unexpected(Error{ErrorCode::NoSuitableGPU, "failed to find a suitable GPU!"});
 	}
 
-	return deviceCandidates.rbegin()->second;
+	auto [bestScore, selectedDevice] = *deviceCandidates.rbegin();
+	if (logger)
+		logger->info("Selected rendering GPU: {} (score={})",
+			deviceNames.at(selectedDevice), bestScore);
+	return selectedDevice;
 }
 
 export [[nodiscard]] std::expected<vk::PresentModeKHR, Error>
