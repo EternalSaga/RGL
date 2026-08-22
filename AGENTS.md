@@ -166,7 +166,7 @@ main.cpp 按逆序析构（RAII，无需手动清理）。
 - `glm` — 数学库（强制 depth zero-to-one，弧度制）
 - `SDL3` — 窗口/surface
 - `VulkanMemoryAllocator` — 内存管理
-- `slangc` — 着色器编译器（`$HOME/program/slang/build/Release/bin/slangc`）
+- `slangc` — 着色器编译器（vcpkg `shader-slang` 包提供，manifest 模式下自动进入 CMAKE_PROGRAM_PATH）
 
 ## 关键文件位置
 
