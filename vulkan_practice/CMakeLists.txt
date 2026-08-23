@@ -1,4 +1,10 @@
-find_program(SLANGC_EXECUTABLE slangc)
+set(SLANG_INSTALL_DIR "$ENV{HOME}/program/slang/build/Release")
+
+find_program(SLANGC_EXECUTABLE slangc
+    PATHS "${SLANG_INSTALL_DIR}"
+          "${SLANG_INSTALL_DIR}/bin"
+    HINTS "${SLANG_INSTALL_DIR}/bin"
+)
 
 if(NOT SLANGC_EXECUTABLE)
     message(FATAL_ERROR "找不到 slangc 编译器！请检查是否成功安装了 shader-slang")

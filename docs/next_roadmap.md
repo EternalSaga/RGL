@@ -140,6 +140,38 @@ namespace RGL::Shaders::Types {
 ### 目标
 可以加载外部 3D 模型，替代硬编码的 cube。
 
+### 前置：Shader/Renderer 解耦（2026-08-22 架构评审记录）
+
+当前架构下 shader 与 renderer **强耦合**（耦合点在 `vkrenderer.cppm` 的决策层，
+`shader.cppm` 模块本身较干净）。多 mesh 渲染会直接撞墙：多 mesh → 多组 buffer/
+descriptor slot → 每条管线一份 binding mapping，单一 `cubePipeline` 成员 + 硬编码
+SPV 路径的模式撑不住。Phase 4 的 ShaderRegistry 是最终解法，但以下两步低成本
+改动应在 Phase 2 开工前完成：
+
+- [ ] 动态状态从 `RenderPipeline` 移出：`recordRenderCommands`（shader.cppm）
+      接收状态参数或由调用点（`Renderer::drawFrame`）设置，让 RenderPipeline
+      退化为纯 shader object 包装——为 Phase 7 G-buffer 多 pass（同一 mesh
+      shader 不同状态）铺路
+- [ ] Renderer 持有管线表而非单成员：`std::vector<RenderPipeline>` 或
+      name → pipeline，SPV 路径从构造参数/Lua 配置传入（沿用 Phase 1 确立的
+      `configs/*.lua` 模式），为 Phase 4 的 ShaderRegistry 留接缝
+
+耦合点定位（评审时）：
+- SPV 文件名硬编码：`vkrenderer.cppm` 的 `createRenderPipeline`（写死
+  `cube.mesh.spv`/`cube.frag.spv`），成员名 `cubePipeline`
+- `ShaderEffect` 固定 mesh+frag 二元组（shader.cppm），无 task stage /
+  vertex+fragment 路径——结构体形状为当前 cube 定制
+- 动态状态烘焙进 `recordRenderCommands`（depth write、blend off、1x sample
+  等），实际是"cube 的 opaque pass 状态"而非 shader object 固有属性
+- Renderer 单成员 `cubePipeline`，加 shader 需改构造器 + drawFrame，
+  无注册/查找机制
+
+已解耦的部分（保持现状）：
+- `RenderPipeline` 构造器接收 `descriptorSize/slotVertex/slotIndex` 参数，
+  slot 号由 `Resources` 运行时动态传入（非硬编码），binding mapping 干净
+- SPV 数据与管线对象分离（`ShaderEffect` 传数据进构造器）；
+  `loadShaderSpv` 为可复用自由函数
+
 ### 要做的事
 - **tinygltf** 集成（替换 legacy 的 Assimp）
 - **ModelImporter 模块**：
@@ -202,6 +234,8 @@ namespace RGL::Shaders::Types {
 ### 设计决策
 - 每个 shader 风格有独立的 `schema.lua` 和生成模块
 - `shader.cppm` 支持多 pipeline，通过 shader registry 切换
+- **前置依赖**：先完成 Phase 2 的"前置：Shader/Renderer 解耦"两步
+  （动态状态外移 + 管线表），ShaderRegistry 在其接缝上注册
 - Lua 配置和 shader reflection 是两套独立机制，不要混淆
 
 ---

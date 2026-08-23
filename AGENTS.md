@@ -152,9 +152,7 @@ main.cpp 按逆序析构（RAII，无需手动清理）。
 
 ## 隐式扩展依赖
 
-`features.cppm` 中请求的 `VK_EXT_DESCRIPTOR_BUFFER` 等扩展当前无显式使用，但被其他已启用的扩展隐式依赖。移除它们可能导致驱动层面功能异常，不可随意删除。
-
-> **2026-08-22 定论（已移除）**：`VK_EXT_DEVICE_GENERATED_COMMANDS` 经调研（`docs/device_generated_commands_research.md` 4.1）确认**无任何已启用扩展依赖它**——registry（`xml/vk.xml` 扩展块 `depends` 属性）仅依赖 Vulkan 1.3 + device address 能力族，全文反向查询无其他扩展引用它；正文对 descriptor_heap/shader_object 的引用只是 ifdef 守卫个别 token。"隐式依赖"说法不成立，该条目为 NVIDIA Xid 排查期保守遗留。**A/B 实验实测确认**：从扩展列表移除后双 GPU（RADV/NVIDIA）各跑 25s 零回归（含 dmesg 无 Xid 检查）。**现已从 `features.cppm` 扩展列表移除**（`features_config.json` 是 feature chain 配置，本就没有该扩展的 feature，无需变更）。Phase 7 culling 子系统引入时显式重新启用：`features.cppm` 列表加回 + `features_config.json` 增加 `deviceGeneratedCommands` feature（`VkPhysicalDeviceDeviceGeneratedCommandsFeaturesEXT` 进 feature chain）。
+`features.cppm` 中请求的 `VK_EXT_DEVICE_GENERATED_COMMANDS`、`VK_EXT_DESCRIPTOR_BUFFER` 等扩展当前无显式使用，但被其他已启用的扩展隐式依赖。移除它们可能导致驱动层面功能异常，不可随意删除。
 
 `vkinstance.cppm` 中请求的 `VK_EXT_SWAPCHAIN_COLOR_SPACE` 等实例扩展同理。
 
@@ -168,15 +166,7 @@ main.cpp 按逆序析构（RAII，无需手动清理）。
 - `glm` — 数学库（强制 depth zero-to-one，弧度制）
 - `SDL3` — 窗口/surface
 - `VulkanMemoryAllocator` — 内存管理
-- `slangc` — 着色器编译器（vcpkg `shader-slang` 包提供，manifest 模式下自动进入 CMAKE_PROGRAM_PATH）
-
-## 离线 Vulkan 文档（调研用）
-
-`docs.vulkan.org` / `registry.khronos.org` 有 Cloudflare 拦截，**调研 Vulkan 规范/扩展时优先查本地离线文档，不要先上网**：
-- 调研任务可以优先考虑派发子agent顺序调研文档。
-- 位置：`/home/robin/program/Vulkan-Docs`（本地磁盘，`KhronosGroup/Vulkan-Docs` shallow clone，约 37MB）
-- 内容：`chapters/`（规范正文含全部扩展章节）、`xml/vk.xml`（权威 registry：扩展依赖表 `depends`、feature/limit 元数据——**"扩展 A 是否依赖扩展 B"以此为准**）、`appendices/VK_EXT_*.adoc`（494 个扩展附录）、`proposals/`（设计提案）
-- 更新：`git -C /home/robin/program/Vulkan-Docs pull`（shallow 仓库；失效则重新 `git clone --depth 1`）
+- `slangc` — 着色器编译器（`$HOME/program/slang/build/Release/bin/slangc`）
 
 ## 关键文件位置
 
@@ -207,8 +197,6 @@ main.cpp 按逆序析构（RAII，无需手动清理）。
 - `docs/next_roadmap.md` — 后续开发计划
 - `docs/shader_reflection_plan.md` — shader反射开发计划的一些技术调研
 - `docs/nvidia_compatibility_report.md` — NVIDIA 兼容性排查（heap 对齐、Aftermath 集成、mesh shader 崩溃根因）
-- `docs/present_timing_research.md` — VK_EXT_present_timing 扩展研究（API 表面、eImmediate 冲突分析、引入评估与未来步骤；结论：暂不引入）
-- `docs/device_generated_commands_research.md` — VK_EXT_device_generated_commands 研究（EXT 版 API 表面、双驱动实测对比——RADV 仅 compute 侧 / NVIDIA 全支持、"隐式依赖"条目核查、引入步骤；决策：随 Phase 7 culling 子系统引入）
 - `docs/快捷键配置.md` — Zed 编辑器快捷键、任务和调试配置说明
 
 ## min_mesh_crash（最小复现子项目）
