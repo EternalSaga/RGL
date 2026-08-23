@@ -14,6 +14,9 @@ import vulkan_window;
 import vk_swapchain;
 import vk_resources;
 import vk_renderer;
+import model_types_generated;
+import scene_config;
+import scene;
 import camera;
 import cube;
 import rllogger;
@@ -119,7 +122,7 @@ std::expected<void, Error> resizeSystem(entt::registry& rg, RGL::Swapchain& swap
 }
 
 export std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer& renderer,
-	RGL::SDLWindow& window) {
+	RGL::SDLWindow& window, const RGL::SceneConfig& sceneConfig) {
 	auto& swapchain = renderer.getSwapchainRef();
 	auto& resources = renderer.getResourcesRef();
 	auto& vp = rg.ctx().get<Viewport>();
@@ -127,6 +130,7 @@ export std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer
 
 	auto* logger = RLLogger::getInstance();
 	std::optional<Error> lastError;
+	bool adaptiveLogged = false;
 
 	float prevTicks = static_cast<float>(SDL_GetTicks());
 
@@ -152,16 +156,50 @@ export std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer
 
 		cameraSystem(rg, dt);
 
-		glm::mat4 model =
-			glm::rotate(glm::mat4(1.0f), time, glm::vec3(0.5f, 1.0f, 0.0f));
+		// 场景时间旋转（configs/scene.lua 的 spin 控制；cube 与模型共用同一 spin，
+		// 关闭后静止便于排查遮挡/深度问题）
+		glm::mat4 spin = sceneConfig.spin
+			? glm::rotate(glm::mat4(1.0f), time, glm::vec3(0.5f, 1.0f, 0.0f))
+			: glm::mat4(1.0f);
 		glm::mat4 view = cameraView(camera);
+
+		// 自适应空间范围：模型在场时按包围球推导 near/far（相机到球心的实时距离 ±
+		// 球半径），保证任意相机位置/模型尺度下整个模型都在 frustum 内，不被固定
+		// far 平面切掉；无模型时回落 configs/camera.lua 的固定 near/far。
+		float nearPlane = camera.nearPlane;
+		float farPlane = camera.farPlane;
+		if (auto* bounds = rg.ctx().find<ModelBounds>()) {
+			float dist = glm::length(camera.position - bounds->center);
+			nearPlane = std::max(0.05f, dist - bounds->radius);
+			farPlane = dist + bounds->radius;
+			if (!adaptiveLogged && logger) {
+				logger->info("adaptive frustum: near={:.2f} far={:.2f} "
+					"(camera→sphere dist={:.2f}, radius={:.2f})",
+					nearPlane, farPlane, dist, bounds->radius);
+				adaptiveLogged = true;
+			}
+		}
+
 		glm::mat4 proj =
 			glm::perspective(camera.fov,
 				static_cast<float>(swapchain.getExtent().width) /
 					static_cast<float>(swapchain.getExtent().height),
-				camera.nearPlane, camera.farPlane);
+				nearPlane, farPlane);
 
-		renderer.updateDrawArgs(proj * view * model);
+		// cube：MVP = proj * view * spin
+		renderer.updateDrawArgs(proj * view * spin);
+
+		// 模型：每 primitive 实体（Transform/MeshRef/MaterialRef）推一份 ModelDrawArgs
+		//（mvp 含场景旋转；按 primitiveIndex 对齐管线表条目 model_i / heap slot）
+		std::vector<RGL::ModelDrawArgs> modelArgs(renderer.modelDrawArgCount());
+		rg.view<RGL::Transform, RGL::MeshRef, RGL::MaterialRef>().each(
+			[&](RGL::Transform& tf, RGL::MeshRef& meshRef, RGL::MaterialRef& matRef) {
+				if (meshRef.primitiveIndex >= modelArgs.size()) return;
+				modelArgs[meshRef.primitiveIndex].mvp = proj * view * spin * tf.world;
+				modelArgs[meshRef.primitiveIndex].totalTriangles = meshRef.triangleCount;
+				modelArgs[meshRef.primitiveIndex].baseColor = matRef.baseColor;
+			});
+		renderer.updateModelDrawArgs(modelArgs);
 
 		auto result = renderer.drawFrame();
 		if (!result) {

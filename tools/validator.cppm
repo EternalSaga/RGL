@@ -126,6 +126,39 @@ export bool validateSchema(const nlohmann::json& reflection, const Schema& schem
 		}
 	}
 
+	// vertexLayouts 反射端没有对应数据（slangc 不反射顶点 buffer 结构体），
+	// 只校验内部一致性：类型已知 + 偏移 packed 连续 + stride = 属性尺寸总和。
+	for (const auto& vl : schema.vertexLayouts) {
+		if (vl.name.empty()) {
+			logger->error("[FAIL] vertexLayout missing name");
+			ok = false;
+			continue;
+		}
+		if (vl.stride == 0 || vl.attributes.empty()) {
+			logger->error("[FAIL] vertexLayout '{}' missing stride or attributes", vl.name);
+			ok = false;
+			continue;
+		}
+		uint32_t cursor = 0;
+		for (const auto& attr : vl.attributes) {
+			uint32_t size = vertexAttrSize(attr.type);
+			if (size == 0) {
+				logger->error("[FAIL] vertexLayout '{}' attribute '{}' has unknown type '{}'", vl.name, attr.name, attr.type);
+				ok = false;
+				break;
+			}
+			if (attr.offset != cursor) {
+				logger->error("[FAIL] vertexLayout '{}' attribute '{}' offset {} != expected {} (packed layout)", vl.name, attr.name, attr.offset, cursor);
+				ok = false;
+			}
+			cursor += size;
+		}
+		if (vl.stride != cursor) {
+			logger->error("[FAIL] vertexLayout '{}' stride {} != attributes total {}", vl.name, vl.stride, cursor);
+			ok = false;
+		}
+	}
+
 	return ok;
 }
 

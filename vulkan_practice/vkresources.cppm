@@ -12,12 +12,19 @@ import vk_swapchain;
 import cube;
 import vkerror;
 import types_generated;
+import model_types_generated;
 
 namespace RGL {
 
 export class Resources {
    public:
-	Resources(RGL::AppContext& vkInstance, RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain)
+	// modelPrimitiveCount：模型 primitive 数（CPU 解析 glTF 后得到，main.cpp 先于
+	// Vulkan 初始化解析），决定 descriptor heap 容量：
+	//   [reserved, reserved+8)  cube（顶点 slot 0 / 索引 slot 4）
+	//   [reserved+8, reserved+8+N)  模型顶点 slot（每 primitive 一个，
+	//   slot = reserved + HeapSlotModelVertexBase + i，见 model_importer.cppm）
+	Resources(RGL::AppContext& vkInstance, RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain,
+		uint32_t modelPrimitiveCount)
 		: vkInstance(vkInstance),
 		  vkDevice(vkDevice),
 		  vkSwapchain(vkSwapchain),
@@ -35,7 +42,7 @@ export class Resources {
 			  vk::BufferUsageFlagBits::eStorageBuffer,
 			  RGL::cubeIndices.data())
 				  .value()),
-		  descriptorHeap(createDescriptorHeap().value()),
+		  descriptorHeap(createDescriptorHeap(modelPrimitiveCount).value()),
 		  heapSlotVertex(reservedSlots() + HeapSlotVertexOffset),
 		  heapSlotIndex(reservedSlots() + HeapSlotIndexOffset) {
 		writeDescriptors();
@@ -119,14 +126,18 @@ export class Resources {
 		return buf;
 	}
 
-	std::expected<RGL::VmaDescriptorHeap, Error> createDescriptorHeap() {
+	// 容量 = reserved + 用户槽位。用户槽位布局（相对 reserved range 起点）：
+	//   cube 顶点 slot 0、索引 slot 4（types_generated 的 HeapSlotVertexOffset/HeapSlotIndexOffset）
+	//   模型顶点 slot 基址 HeapSlotModelVertexBase=8（model_types_generated），每 primitive 一个
+	std::expected<RGL::VmaDescriptorHeap, Error> createDescriptorHeap(uint32_t modelPrimitiveCount) {
 		auto props = vkDevice.getPhysicalDevice().getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDescriptorHeapPropertiesEXT>();
 
 		auto& heapProps = props.get<vk::PhysicalDeviceDescriptorHeapPropertiesEXT>();
 		uint32_t descriptorSize = static_cast<uint32_t>(heapProps.bufferDescriptorSize);
 		uint32_t reservedSlots = static_cast<uint32_t>(heapProps.minResourceHeapReservedRange + descriptorSize - 1) / descriptorSize;
 		vk::DeviceSize resourceHeapAlignment = heapProps.resourceHeapAlignment;
-		uint32_t capacity = 16 + reservedSlots;
+		uint32_t userSlots = HeapSlotModelVertexBase + modelPrimitiveCount;
+		uint32_t capacity = userSlots + reservedSlots;
 
 		return allocator.createDescriptorHeap(
 			vkDevice.getDevice(),

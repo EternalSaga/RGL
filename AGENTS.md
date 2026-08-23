@@ -198,6 +198,8 @@ main.cpp 按逆序析构（RAII，无需手动清理）。
 - `docs/shader_reflection_plan.md` — shader反射开发计划的一些技术调研
 - `docs/nvidia_compatibility_report.md` — NVIDIA 兼容性排查（heap 对齐、Aftermath 集成、mesh shader 崩溃根因）
 - `docs/快捷键配置.md` — Zed 编辑器快捷键、任务和调试配置说明
+- 离线 Vulkan 文档（优先于在线检索） - `docs.vulkan.org` / `registry.khronos.org` 有 Cloudflare 拦截，在线抓取不可靠。已在本地磁盘克隆官方 spec 源仓库：
+	**位置**：`/home/robin/program/Vulkan-Docs`（本地 NVMe，shallow clone，约 37MB；更新：`git pull` 或重新 `git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Docs.git`）
 
 ## min_mesh_crash（最小复现子项目）
 

@@ -11,6 +11,52 @@ import schema_loader;
 
 namespace RGL {
 
+// GLSL/Slang 标准内存布局（spec 42.6）的 size/alignment 查询表：
+// 用于给生成的 C++ 结构体计算字段偏移并插入 padding 字段。
+// 必要性：Slang 按标准布局排字段（float4 对齐 16），而 glm 的默认自然对齐
+// 对 vec4/mat 只有 4——不插 padding 时 C++ 侧字段偏移/总尺寸与反射不一致
+//（如 ModelDrawArgs：uint 后紧跟 float4，C++ 84B vs Slang 96B）。
+// 插入 uint32_t padding 后 C++ 偏移被钉死在标准偏移上（padding 尺寸 = 偏移差，
+// 且差值恒为 4 的倍数，uint32_t 自身对齐 4 不会再引入额外 padding）。
+static bool standardLayoutInfo(const std::string& cppType, size_t& outSize, size_t& outAlign) {
+	if (cppType == "float" || cppType == "int32_t" || cppType == "uint32_t") {
+		outSize = 4;
+		outAlign = 4;
+		return true;
+	}
+	if (cppType == "glm::vec2" || cppType == "glm::ivec2") {
+		outSize = 8;
+		outAlign = 8;
+		return true;
+	}
+	if (cppType == "glm::vec3" || cppType == "glm::ivec3") {
+		outSize = 12;
+		outAlign = 4;
+		return true;
+	}
+	if (cppType == "glm::vec4" || cppType == "glm::ivec4") {
+		outSize = 16;
+		outAlign = 16;
+		return true;
+	}
+	if (cppType == "glm::mat2") {
+		outSize = 16;
+		outAlign = 16;
+		return true;
+	}
+	if (cppType == "glm::mat3") {
+		outSize = 32;
+		outAlign = 16;
+		return true;
+	}
+	if (cppType == "glm::mat4") {
+		outSize = 64;
+		outAlign = 16;
+		return true;
+	}
+	return false;
+}
+
 static std::string toCppType(const nlohmann::json& fieldType) {
 	if (!has(fieldType, "kind")) return "void";
 	const char* kind = getString(fieldType, "kind");
@@ -93,12 +139,47 @@ export std::string generateCppm(const nlohmann::json& reflection,
 
 			if (has(*elemType, "fields")) {
 				const nlohmann::json& fields = (*elemType)["fields"];
+				// 按标准布局计算偏移，必要时插入 uint32_t padding 字段
+				size_t cursor = 0;
+				size_t structAlign = 4;
+				int padCount = 0;
 				for (const auto& f : fields) {
 					if (!has(f, "name") || !has(f, "type")) continue;
+					const std::string cppType = toCppType(f["type"]);
+					size_t fieldSize = 0, fieldAlign = 0;
+					if (!standardLayoutInfo(cppType, fieldSize, fieldAlign)) {
+						logger->error("[FAIL] {} field '{}' has unmappable type '{}'", structName, f["name"].get<std::string>(), cppType);
+						continue;
+					}
+					const size_t offset = (cursor + fieldAlign - 1) / fieldAlign * fieldAlign;
+					if (offset > cursor) {
+						// padding 用 uint8_t 数组（对齐 1，任意字节数，不会引入额外 padding）
+						nlohmann::json padObj;
+						padObj["name"] = "_pad" + std::to_string(padCount++) +
+							"[" + std::to_string(offset - cursor) + "]";
+						padObj["cpp_type"] = "uint8_t";
+						structObj["fields"].push_back(padObj);
+						cursor = offset;
+					}
 					nlohmann::json fieldObj;
 					fieldObj["name"] = f["name"].get<std::string>();
-					fieldObj["cpp_type"] = toCppType(f["type"]);
+					fieldObj["cpp_type"] = cppType;
 					structObj["fields"].push_back(fieldObj);
+					cursor += fieldSize;
+					structAlign = std::max(structAlign, fieldAlign);
+				}
+				// 总尺寸向上取整到结构体对齐（标准布局规则）
+				if (totalSize > 0) {
+					const size_t padded = (cursor + structAlign - 1) / structAlign * structAlign;
+					if (padded > cursor) {
+						nlohmann::json padObj;
+						padObj["name"] = "_pad" + std::to_string(padCount);
+						padObj["cpp_type"] = "uint32_t";
+						structObj["fields"].push_back(padObj);
+					}
+					if (padded != totalSize) {
+						logger->error("[FAIL] {} standard layout size {} != reflection size {}", structName, padded, totalSize);
+					}
 				}
 			}
 
@@ -117,6 +198,26 @@ export std::string generateCppm(const nlohmann::json& reflection,
 				}
 			}
 		}
+	}
+
+	// vertexLayouts：反射端无对应数据，直接由 schema 声明生成（契约 source of truth）。
+	// 生成的结构体按 packed 布局声明，模板中 static_assert(sizeof == stride) 兜底。
+	for (const auto& vl : schema.vertexLayouts) {
+		if (vl.name.empty()) continue;
+		nlohmann::json structObj;
+		structObj["name"] = vl.name;
+		structObj["fields"] = nlohmann::json::array();
+		structObj["size"] = vl.stride;
+		for (const auto& attr : vl.attributes) {
+			const char* cppType = vertexAttrCppType(attr.type);
+			if (!cppType) continue;
+			nlohmann::json fieldObj;
+			fieldObj["name"] = attr.name;
+			fieldObj["cpp_type"] = cppType;
+			structObj["fields"].push_back(fieldObj);
+		}
+		data["structs"].push_back(structObj);
+		logger->debug("Generated vertex struct '{}' with {} fields, stride={}", vl.name, structObj["fields"].size(), vl.stride);
 	}
 
 	inja::Environment env;

@@ -19,7 +19,9 @@ import vk_device;
 import vk_swapchain;
 import vk_resources;
 import types_generated;
+import model_types_generated;
 import shader;
+import scene_config;
 import vkerror;
 
 namespace RGL {
@@ -45,55 +47,128 @@ export class Renderer;
 
 export class Renderer {
    public:
-	// 成员初始化列表顺序必须与下方声明顺序一致（RAII 规则：vk::raii::* 成员只能在
-	// 初始化列表初始化，绝不在函数体内）。cubePipeline 依赖 Resources 的 descriptor heap
-	//（descriptorSize + 顶点/索引 slot 号），故在 resources 之后构造。
+	// 成员初始化列表顺序必须与下方声明顺序一致（RAII 规则：vk::raii::* 直接成员只能在
+	// 初始化列表初始化）。pipelines 依赖 Resources 的 descriptor heap（descriptorSize +
+	// 顶点/索引 slot 号）、SceneConfig（SPV 路径）与 modelPrimitiveCount（模型条数），
+	// 故在 resources 之后、经静态工厂 makePipelineTable 在初始化列表构造
+	//（RenderPipeline 是包装类，非直接 vk::raii 成员）。
 	Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RGL::Resources& vkResources,
-		entt::registry& registry)
+		const RGL::SceneConfig& sceneConfig, uint32_t modelPrimitiveCount, entt::registry& registry)
 		: vkDevice(vkDevice),
 		  swapchain(&vkSwapchain),
 		  resources(&vkResources),
 		  registry(&registry),
 		  graphicsQueue(vkDevice.getGraphicsQueue()),
 		  graphicsCommandPool(vkDevice.getGraphicsCommandPool()),
-		  cubePipeline(createRenderPipeline(vkDevice.getDevice(),
-			  vkResources.getDescriptorHeap().getDescriptorSize(),
-			  vkResources.getHeapSlotVertex(), vkResources.getHeapSlotIndex())) {
+		  pipelines(makePipelineTable(vkDevice.getDevice(), sceneConfig, vkResources, modelPrimitiveCount)) {
 		// descriptor heap 的 GPU 端地址，每帧传给 vkCmdBindResourceHeapEXT
 		heapAddress = vkResources.getDescriptorHeap().getGpuAddress();
+		// 模型每 primitive 一份 draw args（push constant，每帧 renderSystem 重推）
+		modelDrawArgs.resize(modelPrimitiveCount);
 		createSyncObjects();
 		allocateCommandBuffers();
 	}
 
 	RGL::Swapchain& getSwapchainRef() const { return *swapchain; }
 	RGL::Resources& getResourcesRef() const { return *resources; }
-	// 更新每帧绘制参数（MVP 矩阵）；drawFrame() 内经 vkCmdPushDataEXT 上传为
+	// 更新每帧绘制参数（cube 的 MVP 矩阵）；drawFrame() 内经 vkCmdPushDataEXT 上传为
 	// [[vk::push_constant]]（CPU 侧副本，每帧重推）
-	void updateDrawArgs(const glm::mat4& mvp) { drawArgs.mvp = mvp; }
+	void updateDrawArgs(const glm::mat4& mvp) { cubeDrawArgs.mvp = mvp; }
+	// 更新模型每 primitive 的绘制参数（mvp/totalTriangles/baseColor，按 primitiveIndex 索引）
+	void updateModelDrawArgs(const std::vector<RGL::ModelDrawArgs>& args) {
+		if (args.size() != modelDrawArgs.size())
+			throw std::runtime_error("updateModelDrawArgs: size mismatch");
+		modelDrawArgs = args;
+	}
+	// 模型 primitive 数（renderSystem 据此对齐 ModelDrawArgs 向量大小）
+	size_t modelDrawArgCount() const { return modelDrawArgs.size(); }
 	// 等待 GPU 空闲（resize / 重建 swapchain 前调用，确保旧资源不再被使用）
 	void waitForIdle() { vkDevice.getDevice().waitIdle(); }
 	// 渲染一帧：整体流程见类头注释；失败（device lost 等）时返回错误
 	[[nodiscard]] std::expected<void, Error> drawFrame();
 
    private:
-	// 构建渲染管线（ShaderObject 模式，无 PipelineLayout）：
-	// ① 加载构建期由 slangc 编译好的 mesh/fragment SPV
-	// ② 交给 RenderPipeline 构造器，其内部创建两个 VkShaderEXT 对象，并通过
-	//    VkShaderCreateInfoEXT.pNext 链上 VkDescriptorSetAndBindingMappingEXT：
-	//    binding 0 → 顶点缓冲 slot、binding 1 → 索引缓冲 slot（HEAP_WITH_CONSTANT_OFFSET，
-	//    heapOffset = slot * descriptorSize，单位是字节）。细节见 shader.cppm。
-	static RGL::RenderPipeline createRenderPipeline(vk::raii::Device& device,
-		uint32_t descriptorSize,
-		uint32_t slotVertex, uint32_t slotIndex) {
-		auto meshResult = RGL::loadShaderSpv("generated_shaders/cube.mesh.spv");
+	// 管线表的一条：shader 风格名 + 其 RenderPipeline（shader object + 烘焙的
+	// descriptor heap binding mapping）。Phase 2 按条目索引；Phase 4 升级为 name→pipeline 的 ShaderRegistry。
+	struct PipelineEntry {
+		std::string name;
+		RGL::RenderPipeline pipeline;
+	};
+
+	// 把一条 pipeline 规格对应的 mesh/fragment SPV 载入 ShaderEffect（SPV 路径来自
+	// SceneConfig，不再写死）。
+	static RGL::ShaderEffect loadShaderEffect(const RGL::PipelineSpec& spec) {
+		auto meshResult = RGL::loadShaderSpv(spec.meshSpv);
 		if (!meshResult) throw std::runtime_error(meshResult.error().describe());
-		auto fragResult = RGL::loadShaderSpv("generated_shaders/cube.frag.spv");
+		auto fragResult = RGL::loadShaderSpv(spec.fragSpv);
 		if (!fragResult) throw std::runtime_error(fragResult.error().describe());
 
-		RGL::ShaderEffect cubeEffect;
-		cubeEffect.meshStageSpv = std::move(*meshResult);
-		cubeEffect.fragStageSpv = std::move(*fragResult);
-		return RGL::RenderPipeline(device, cubeEffect, descriptorSize, slotVertex, slotIndex);
+		RGL::ShaderEffect effect;
+		effect.meshStageSpv = std::move(*meshResult);
+		effect.fragStageSpv = std::move(*fragResult);
+		return effect;
+	}
+
+	// 在 SceneConfig 中按名查找 pipeline 规格（找不到返回 nullptr）。
+	static const RGL::PipelineSpec* findPipelineSpec(const RGL::SceneConfig& cfg, const char* name) {
+		for (const auto& spec : cfg.pipelines) {
+			if (spec.name == name) return &spec;
+		}
+		return nullptr;
+	}
+
+	// 构建管线表（ShaderObject 模式，无 PipelineLayout）：每条创建两个 VkShaderEXT 对象，
+	// 并通过 VkShaderCreateInfoEXT.pNext 链上 VkDescriptorSetAndBindingMappingEXT
+	//（binding 0 → 顶点 slot、binding 1 → 索引 slot，heapOffset = slot * descriptorSize；
+	// 细节见 shader.cppm）。
+	// 条目：cube（slot 0/4）+ 模型每 primitive 一条（顶点 slot = reserved +
+	// HeapSlotModelVertexBase + i，SPV 相同、slot 映射各自烘焙——binding mapping
+	// 是 shader object 级状态，无法运行时换，故按 primitive 拆条目）。
+	static std::vector<PipelineEntry> makePipelineTable(vk::raii::Device& device,
+		const RGL::SceneConfig& cfg, RGL::Resources& res, uint32_t modelPrimitiveCount) {
+		std::vector<PipelineEntry> table;
+		const uint32_t descriptorSize = res.getDescriptorHeap().getDescriptorSize();
+
+		// cube 条目仅当 SceneConfig.showCube 时创建（configs/scene.lua 的 cube 字段；
+		// drawFrame 的 cube 绘制本就经 findPipelineEntry("cube") 守卫，缺条目即跳过）
+		if (cfg.showCube) {
+			const RGL::PipelineSpec* cubeSpec = findPipelineSpec(cfg, "cube");
+			if (!cubeSpec) {
+				static const RGL::PipelineSpec defaultCube{
+					"cube", "generated_shaders/cube.mesh.spv", "generated_shaders/cube.frag.spv"};
+				cubeSpec = &defaultCube;
+			}
+			table.emplace_back(PipelineEntry{
+				"cube",
+				RGL::RenderPipeline(device, loadShaderEffect(*cubeSpec), descriptorSize,
+					res.getHeapSlotVertex(), res.getHeapSlotIndex())});
+		}
+
+		const RGL::PipelineSpec* modelSpec = findPipelineSpec(cfg, "model");
+		if (!modelSpec) {
+			static const RGL::PipelineSpec defaultModel{
+				"model", "generated_shaders/model.mesh.spv", "generated_shaders/model.frag.spv"};
+			modelSpec = &defaultModel;
+		}
+		RGL::ShaderEffect modelEffect = loadShaderEffect(*modelSpec);
+		const uint32_t reserved = res.getDescriptorHeap().getReservedSlots();
+		for (uint32_t i = 0; i < modelPrimitiveCount; ++i) {
+			const uint32_t slotVertex = reserved + RGL::HeapSlotModelVertexBase + i;
+			// 模型无索引缓冲：binding 1 映射指向同一 slot（未被 SPIR-V 引用，无副作用）
+			table.emplace_back(PipelineEntry{
+				"model_" + std::to_string(i),
+				RGL::RenderPipeline(device, modelEffect, descriptorSize, slotVertex, slotVertex)});
+		}
+
+		return table;
+	}
+
+	// 按名查找管线表条目（找不到返回 nullptr）。
+	const PipelineEntry* findPipelineEntry(const char* name) const {
+		for (const auto& entry : pipelines) {
+			if (entry.name == name) return &entry;
+		}
+		return nullptr;
 	}
 
 	// 创建 MAX_FRAMES_IN_FLIGHT 套同步对象（每个帧 slot 一套，双缓冲）。
@@ -160,12 +235,20 @@ export class Renderer {
 	// 非 RAII 句柄（队列生命周期由 DeviceContext 的 raii Device 管理）
 	vk::Queue graphicsQueue;
 	const vk::raii::CommandPool& graphicsCommandPool;
-	// ShaderObject 管线：无 RenderPass/PipelineLayout，drawFrame() 每帧调用
-	// recordRenderCommands() 绑定着色器 + 动态状态
-	RGL::RenderPipeline cubePipeline;
-	// CPU 侧绘制参数（64B，types_generated 中 static_assert 与 shader 反射一致）；
+	// 管线表：ShaderObject 条目（Phase 2 现状仅 "cube" 条目，Part B 加模型条目）。
+	// 初始化列表构建（makePipelineTable），见构造器注释。无 RenderPass/PipelineLayout。
+	std::vector<PipelineEntry> pipelines;
+	// 动态状态：opaque pass（默认值 = cube 的 opaque 状态），drawFrame() 每帧
+	// beginRendering 后调一次 applyDynamicState（Phase 7 多 pass 时按 pass 换状态）
+	RGL::RenderState opaqueState{};
+	// CPU 侧绘制参数（cube，64B，types_generated 中 static_assert 与 shader 反射一致）；
 	// Slang 端经 [[vk::push_constant]] 访问，布局必须逐字段匹配
-	RGL::DrawArgs drawArgs{};
+	RGL::DrawArgs cubeDrawArgs{};
+	// CPU 侧模型绘制参数（每 primitive 一份，96B，model_types_generated static_assert 一致）
+	std::vector<RGL::ModelDrawArgs> modelDrawArgs;
+	// 每 mesh group 的三角形数（无 task stage 时 group 数 = ceil(triangles / N) 由 CPU 派生）。
+	// 必须与 model.mesh.slang 的 kTrianglesPerGroup 一致（契约常量，改动需同步）
+	static constexpr uint32_t kTrianglesPerGroup = 10;
 	// descriptor heap 的 GPU 地址（VmaDescriptorHeap 管理的"描述符槽位数组"，
 	// 对齐细节见 VmaBuffer.cppm）
 	vk::DeviceAddress heapAddress = 0;
@@ -308,22 +391,41 @@ std::expected<void, Error> Renderer::drawFrame() {
 		resources->getReservedRangeOffset(),
 		resources->getReservedRangeSize()));
 
-	// ⑧ 上传绘制参数（push constant，独立于 descriptor heap，不占 slot）：
-	// Slang 端经 [[vk::push_constant]] 访问，无需 binding mapping（spec 3.4.1）
-	commandBuffers[currentFrame].pushDataEXT(vk::PushDataInfoEXT(
-		0, vk::HostAddressRangeConstEXT(&drawArgs, sizeof(RGL::DrawArgs))));
-
-	// ⑨ 开始渲染（Dynamic Rendering 的 render pass 起点）
+	// ⑧ 开始渲染（Dynamic Rendering 的 render pass 起点）
 	commandBuffers[currentFrame].beginRendering(renderingInfo);
 
-	// ⑩ 绑定 ShaderObject（未使用的 stage 传 VK_NULL_HANDLE）+ 设置全部动态状态
-	//（viewport/scissor/光栅化/深度/多采样/混合，详见 shader.cppm）
-	cubePipeline.recordRenderCommands(commandBuffers[currentFrame],
-		swapchain->getExtent().width,
-		swapchain->getExtent().height);
-	// ⑪ 绘制 1 个 mesh task：mesh shader 内部生成顶点/三角形，
-	// 不需要传统顶点管线（draw/drawIndexed）
-	commandBuffers[currentFrame].drawMeshTasksEXT(1, 1, 1);
+	// ⑨ 设置动态状态（opaque pass，每帧一次；viewport/scissor 用当前 swapchain 宽高，
+	// 细节见 shader.cppm 的 applyDynamicState）。动态状态在 draw 时采样
+	//（spec chapters/shaders.adoc "Setting State"），与 bindShadersEXT 的先后无约束。
+	RGL::applyDynamicState(commandBuffers[currentFrame], swapchain->getExtent().width,
+		swapchain->getExtent().height, opaqueState);
+
+	// ⑩ 绘制 cube：推绘制参数（push constant，独立于 descriptor heap，不占 slot，
+	// Slang 端经 [[vk::push_constant]] 访问，spec 3.4.1）→ 绑定 ShaderObject →
+	// drawMeshTasksEXT（mesh shader 内部生成顶点/三角形，不需要传统顶点管线）
+	if (const auto* cubeEntry = findPipelineEntry("cube")) {
+		commandBuffers[currentFrame].pushDataEXT(vk::PushDataInfoEXT(
+			0, vk::HostAddressRangeConstEXT(&cubeDrawArgs, sizeof(RGL::DrawArgs))));
+		cubeEntry->pipeline.bindShaders(commandBuffers[currentFrame]);
+		commandBuffers[currentFrame].drawMeshTasksEXT(1, 1, 1);
+	}
+
+	// ⑪ 绘制模型：每 primitive 一份 draw args + 一条管线表条目（各自的顶点 slot 映射）。
+	// group 数 = ceil(totalTriangles / kTrianglesPerGroup)（mesh shader 无 task stage，
+	// group 序号经 SV_GroupID.x 派生，见 model.mesh.slang）
+	for (size_t i = 0; i < modelDrawArgs.size(); ++i) {
+		std::string name = "model_" + std::to_string(i);
+		const auto* entry = findPipelineEntry(name.c_str());
+		if (!entry) continue;
+		const uint32_t groupCount =
+			(modelDrawArgs[i].totalTriangles + kTrianglesPerGroup - 1) / kTrianglesPerGroup;
+		if (groupCount == 0) continue;
+		commandBuffers[currentFrame].pushDataEXT(vk::PushDataInfoEXT(
+			0, vk::HostAddressRangeConstEXT(&modelDrawArgs[i], sizeof(RGL::ModelDrawArgs))));
+		entry->pipeline.bindShaders(commandBuffers[currentFrame]);
+		commandBuffers[currentFrame].drawMeshTasksEXT(groupCount, 1, 1);
+	}
+
 	commandBuffers[currentFrame].endRendering();
 
 	// ⑫ 后缓冲：ColorAttachmentOptimal → PresentSrcKHR，使其"可 present"。

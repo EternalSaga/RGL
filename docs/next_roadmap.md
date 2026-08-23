@@ -137,8 +137,11 @@ namespace RGL::Shaders::Types {
 
 ## Phase 2：glTF 加载
 
+> **实施计划**：见 [phase2_plan.md](phase2_plan.md)（2026-08-23 规划评审，含已确认决策、
+> 事实核查、可执行分步、文件变更清单与风险）。
+
 ### 目标
-可以加载外部 3D 模型，替代硬编码的 cube。
+可以加载外部 3D 模型，替代硬编码的 cube（cube 与模型并存渲染）。
 
 ### 前置：Shader/Renderer 解耦（2026-08-22 架构评审记录）
 
@@ -148,13 +151,14 @@ descriptor slot → 每条管线一份 binding mapping，单一 `cubePipeline` �
 SPV 路径的模式撑不住。Phase 4 的 ShaderRegistry 是最终解法，但以下两步低成本
 改动应在 Phase 2 开工前完成：
 
-- [ ] 动态状态从 `RenderPipeline` 移出：`recordRenderCommands`（shader.cppm）
-      接收状态参数或由调用点（`Renderer::drawFrame`）设置，让 RenderPipeline
-      退化为纯 shader object 包装——为 Phase 7 G-buffer 多 pass（同一 mesh
-      shader 不同状态）铺路
-- [ ] Renderer 持有管线表而非单成员：`std::vector<RenderPipeline>` 或
-      name → pipeline，SPV 路径从构造参数/Lua 配置传入（沿用 Phase 1 确立的
-      `configs/*.lua` 模式），为 Phase 4 的 ShaderRegistry 留接缝
+- [x] 动态状态从 `RenderPipeline` 移出：`RenderState` + `applyDynamicState(cmd, w, h, state)`
+      由调用点（`Renderer::drawFrame`）设置，RenderPipeline 退化为纯 shader object
+      包装（`bindShaders`）——为 Phase 7 G-buffer 多 pass（同一 mesh shader 不同
+      状态）铺路
+- [x] Renderer 持有管线表而非单成员：`std::vector<PipelineEntry>`（name →
+      RenderPipeline），SPV 路径从 `configs/scene.lua` 传入（沿用 Phase 1 确立的
+      `configs/*.lua` 模式，sol2 沙箱 + 缺失回落默认），为 Phase 4 的
+      ShaderRegistry 留接缝
 
 耦合点定位（评审时）：
 - SPV 文件名硬编码：`vkrenderer.cppm` 的 `createRenderPipeline`（写死
@@ -186,6 +190,26 @@ SPV 路径的模式撑不住。Phase 4 的 ShaderRegistry 是最终解法，但�
 - glTF 的 node 层级用 ECS 的 parent-child 关系表示（entt 支持）
 - mesh data 按 primitive 分组上传，每个 mesh 一个 VmaBuffer
 - 不做 instancing（后续优化时再加）
+
+### 完成情况 (已完成 2026-08-23)
+
+> 执行细节与计划外发现（vcpkg baseline/哈希坑、tinygltf v3 非 header-only、
+> 标准布局 padding、构建内存）见 [phase2_plan.md §7](phase2_plan.md)。
+
+- [x] 前置两步完成（见上勾选项）：`shader.cppm` 的 `RenderState`/`applyDynamicState` 外移 + `vkrenderer.cppm` 管线表（`PipelineEntry`，per-primitive 条目 `model_i`，binding mapping 各自烘焙）
+- [x] **tinygltf 集成**（vcpkg，替换 legacy Assimp 思路）：`gltf_loader.cppm` CPU 解析——POSITION/NORMAL/TEXCOORD_0 严格校验 + byteStride 处理 + 去索引展开 + node translation 扁平化 + baseColorFactor/alphaMode，输出 `GltfModel`（含**包围球**）；`tinygltf_impl.cpp` 自组 impl TU（vcpkg port 只装头、实现在 `TINYGLTF_IMPLEMENTATION` 宏后，-O0）
+- [x] **ModelImporter**：`model_importer.cppm`——`uploadModelMeshes`（每 primitive 一个 BDA storage buffer + 描述符写 heap slot `reserved+8+i`，避开 cube 的 0/4）+ `registerScene`（场景根 Relationship + 每 primitive 一个 entity：`Transform`/`MeshRef`/`MaterialRef`，双向父子挂根）
+- [x] **多契约反射**（schema 为顶点契约 source of truth，slangc 不反射顶点结构体）：`model.slang` + `model_schema.lua`（pushConstants/descriptorSlots `heapSlotOffset=8`/vertexLayouts packed 32B）→ 第二条 CMake 反射管线生成 `model_types_generated`；生成器按 GLSL 42.6 标准布局为 push constant 插 `uint8_t _padN[M]`（Slang float4 align 16 vs glm vec4 align 4，static_assert 对反射总尺寸）
+- [x] **模型 shader**：`model.mesh.slang`（无 task stage，`SV_GroupID` 派生 group，每 group 10 三角形/30 顶点，显式偏移读 packed 顶点流）+ `model.frag.slang`（flat unlit baseColor，alpha 忽略）；CPU `drawMeshTasksEXT(ceil(tri/10),1,1)`
+- [x] **场景配置**：`scene_config.cppm` + `configs/scene.lua`（model/pipelines/spin/cube，sol2 沙箱同 camera 模式）；cube 改 config 开关（`cube = false`，Phase 1 遗留 cube 在原点 ±0.5 与模型互穿）
+- [x] **renderSystem 多 entity**：per-entity `ModelDrawArgs`（mvp = proj*view*spin*world，按 primitiveIndex 对齐管线表条目/heap slot）
+- [x] **自适应空间范围**：模型包围球 → `ModelBounds` context → 每帧按相机到球心实时距离推导 near/far（`max(0.05, dist-r)` / `dist+r`），无模型回落 `configs/camera.lua` 固定值——修复固定 far=10 切掉深 z 模型的问题
+- [x] CMake 全接入：第二条反射管线 + 2 个 `compile_slang` + `find_path(TINYGLTF_INCLUDE_DIRS)` + `models/` 拷贝（`assets/transparent.glb`）+ FILE_SET 新模块（`gltf_loader`/`model_importer`/`scene`/`scene_config`）
+- [x] 运行验证（`just run-igpu`，AMD iGPU）：4 primitives × 36 顶点上传 heap slot 8-11、无 warn/error；`assets/transparent.glb`（4 盒，2 OPAQUE + 2 BLEND）渲染正确，BLEND 两盒按 Phase 2 决策渲染实色（透明排序归 Phase 5）
+
+### 延后
+- `cube.cppm` 的 `Vertex` 改走反射生成契约（low priority，cube 已 config 关断）
+- 相机自动对准包围球初始化（蓝盒默认在相机背后，WASD 可移过去看）
 
 ---
 

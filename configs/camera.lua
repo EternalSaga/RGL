@@ -1,6 +1,6 @@
 -- 相机与控制配置（启动时加载，字段均可选，缺省回落默认值）
 return {
-    mode = "fps",  -- "trackball"（轨道环绕）或 "fps"（第一人称飞行）
+    mode = "trackball",  -- "trackball"（轨道环绕）或 "fps"（第一人称飞行）
 
     position = { 0.0, 0.0, 3.0 },
     target = { 0.0, 0.0, 0.0 },  -- 轨道中心（仅 trackball 用）

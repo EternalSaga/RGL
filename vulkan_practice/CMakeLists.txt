@@ -1,14 +1,8 @@
-set(SLANG_INSTALL_DIR "$ENV{HOME}/program/slang/build/Release")
-
-find_program(SLANGC_EXECUTABLE slangc
-    PATHS "${SLANG_INSTALL_DIR}"
-          "${SLANG_INSTALL_DIR}/bin"
-    HINTS "${SLANG_INSTALL_DIR}/bin"
-)
-
-if(NOT SLANGC_EXECUTABLE)
-    message(FATAL_ERROR "找不到 slangc 编译器！请检查是否成功安装了 shader-slang")
-endif()
+# slangc 由 vcpkg 的 shader-slang port 提供：vcpkg toolchain 把
+# build/vcpkg_installed/<triplet>/tools/shader-slang 注入 CMAKE_PROGRAM_PATH，
+# find_program 自动解析到 vcpkg 版本（CMAKE_PROGRAM_PATH 优先于显式 PATHS）。
+# 旧版曾硬编码 $HOME/program/slang/build/Release——那是死代码（从未生效）且误导，已移除。
+find_program(SLANGC_EXECUTABLE slangc REQUIRED)
 
 message(STATUS "找到 Slang 编译器: ${SLANGC_EXECUTABLE}")
 
@@ -66,6 +60,47 @@ add_custom_command(
 
 add_custom_target(reflection_generated ALL DEPENDS ${TYPES_CPPM})
 
+# ─── Phase 2: Model Reflection ───────────────────────────────────────────────
+# 第二条反射管线：model.slang 契约 → model_types_generated.cppm
+#（ModelDrawArgs / ModelVertex / HeapSlotModelVertexBase）。
+# 多契约靠 CMake 增加调用，reflection_tool CLI 已参数化（--module-name/--template）。
+set(MODEL_SLANG "${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.slang")
+set(MODEL_SCHEMA "${CMAKE_CURRENT_SOURCE_DIR}/shaders/model_schema.lua")
+set(MODEL_REFLECTION_JSON "${GEN_DIR}/model_reflection.json")
+set(MODEL_CPPM "${GEN_SRC_DIR}/model_types_generated.cppm")
+
+add_custom_command(
+    OUTPUT ${MODEL_REFLECTION_JSON}
+    COMMAND ${SLANGC_EXECUTABLE} ${MODEL_SLANG}
+            -target spirv
+            -capability spvDescriptorHeapEXT
+            -profile sm_6_6+spirv_1_6
+            -I "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
+            -no-codegen
+            -reflection-json ${MODEL_REFLECTION_JSON}
+    DEPENDS ${MODEL_SLANG} ${MODEL_SCHEMA}
+    COMMENT "Slangc reflection: model.slang -> model_reflection.json"
+    VERBATIM
+)
+
+add_custom_command(
+    OUTPUT ${MODEL_CPPM}
+    COMMAND reflection_tool validate
+            --json ${MODEL_REFLECTION_JSON}
+            --schema ${MODEL_SCHEMA}
+    COMMAND reflection_tool generate
+            --json ${MODEL_REFLECTION_JSON}
+            --schema ${MODEL_SCHEMA}
+            --output ${MODEL_CPPM}
+            --module-name model_types_generated
+            --template ${TYPES_TEMPLATE}
+    DEPENDS ${MODEL_REFLECTION_JSON} ${MODEL_SCHEMA} ${TYPES_TEMPLATE} reflection_tool
+    COMMENT "Reflection: validate model schema + generate model_types_generated.cppm"
+    VERBATIM
+)
+
+add_custom_target(model_reflection_generated ALL DEPENDS ${MODEL_CPPM})
+
 # ─── Features Codegen ────────────────────────────────────────────────────────
 add_custom_command(
     OUTPUT ${FEATURES_CPPM}
@@ -110,10 +145,18 @@ function(compile_slang SHADER_SOURCE OUT_SPV_PATH)
 endfunction()
 compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/cube.mesh.slang MESH_SPV)
 compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/cube.frag.slang FRAG_SPV)
+compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.mesh.slang MODEL_MESH_SPV)
+compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.frag.slang MODEL_FRAG_SPV)
 message(STATUS "MESH_SPV is: ${MESH_SPV}")
 message(STATUS "FRAG_SPV is: ${FRAG_SPV}")
+message(STATUS "MODEL_MESH_SPV is: ${MODEL_MESH_SPV}")
+message(STATUS "MODEL_FRAG_SPV is: ${MODEL_FRAG_SPV}")
 
-add_executable(vulkan_practice main.cpp vam_impl.cpp ${MESH_SPV} ${FRAG_SPV})
+# tinygltf_impl.cpp：tinygltf C++ API 实现 TU（v3 非 header-only，见该文件头注释）。
+# 单 TU 编译 8756 行实现，-O2 下 clang 又慢又吃内存（24 并发时打爆 swap）；
+# 模型加载是启动期一次性路径、非热路径，-O0 编译省内存省时间。
+set_source_files_properties(tinygltf_impl.cpp PROPERTIES COMPILE_OPTIONS "-O0")
+add_executable(vulkan_practice main.cpp vam_impl.cpp tinygltf_impl.cpp ${MESH_SPV} ${FRAG_SPV} ${MODEL_MESH_SPV} ${MODEL_FRAG_SPV})
 
 # ─── Runtime config copy (configs/ → build dir) ──────────────────────────────
 # 程序运行时按相对路径读取 configs/*.json，build 目录必须完整。
@@ -134,23 +177,42 @@ add_custom_command(
 )
 add_custom_target(copy_configs ALL DEPENDS ${COPIED_CONFIGS})
 
+# ─── Model copy (assets/*.glb → build dir, CWD 相对路径读取) ────────────────
+# glb 在 assets/（git-lfs 管理），运行时按相对路径 models/ 读取，构建期拷入 build。
+# 新增模型需在此加一行 + just config。
+file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/models)
+set(MODEL_GLB_SRC "${PROJECT_SOURCE_DIR}/assets/transparent.glb")
+add_custom_command(
+    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/models/transparent.glb
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${MODEL_GLB_SRC} ${CMAKE_CURRENT_BINARY_DIR}/models/
+    DEPENDS ${MODEL_GLB_SRC}
+    COMMENT "Copying model (transparent.glb) to build directory..."
+    VERBATIM
+)
+add_custom_target(copy_models ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/models/transparent.glb)
+
 target_sources(vulkan_practice PUBLIC
-              FILE_SET CXX_MODULES
-               FILES vkerror.cppm utils.cppm sdl3window.cppm QueueFamilyManager.cppm cube.cppm
-                     camera.cppm
-                     shader.cppm VmaBuffer.cppm features.cppm vkinstance.cppm vkdevice.cppm
-                     vkswapchain.cppm vkresources.cppm vkrenderer.cppm ecs.cppm
-                     ${TYPES_CPPM}
-                     ${FEATURES_CPPM}
+               FILE_SET CXX_MODULES
+                FILES vkerror.cppm utils.cppm sdl3window.cppm QueueFamilyManager.cppm cube.cppm
+                      camera.cppm scene_config.cppm
+                      shader.cppm VmaBuffer.cppm features.cppm vkinstance.cppm vkdevice.cppm
+                      vkswapchain.cppm vkresources.cppm vkrenderer.cppm ecs.cppm
+                      gltf_loader.cppm model_importer.cppm scene.cppm
+                      ${TYPES_CPPM}
+                      ${MODEL_CPPM}
+                      ${FEATURES_CPPM}
 )
 
-add_dependencies(vulkan_practice reflection_generated features_generated)
+add_dependencies(vulkan_practice reflection_generated model_reflection_generated features_generated)
 
 find_package(Vulkan REQUIRED)
 find_package(glm CONFIG REQUIRED)
 find_package(EnTT CONFIG REQUIRED)
 find_package(Sol2 CONFIG REQUIRED)
 find_package(unofficial-lua CONFIG REQUIRED)
+# tinygltf 是 header-only 且该 vcpkg port 不导出 CMake target：find_path 取头文件目录
+find_path(TINYGLTF_INCLUDE_DIRS tiny_gltf.h REQUIRED)
+target_include_directories(vulkan_practice PRIVATE ${TINYGLTF_INCLUDE_DIRS})
 target_link_libraries(vulkan_practice PRIVATE Vulkan::Vulkan rllogger glm::glm EnTT::EnTT sol2::sol2 lua rlstd)
 target_compile_definitions(vulkan_practice PRIVATE GLM_FORCE_DEPTH_ZERO_TO_ONE GLM_FORCE_RADIANS)
 find_package(SDL3 CONFIG REQUIRED)

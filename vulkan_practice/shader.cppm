@@ -28,6 +28,76 @@ export struct ShaderEffect {
 	std::vector<uint32_t> fragStageSpv;
 };
 
+// 动态状态（Dynamic State）：与 shader object 解耦的"pass 状态"值集合。
+// 从 RenderPipeline 移出（原 recordRenderCommands 内烘焙），由调用点（Renderer）
+// 按 pass 传入——同一 mesh shader 可在不同 pass 用不同状态（Phase 7 G-buffer 多 pass）。
+// 默认值 = 当前 cube 的 opaque pass 状态（不透明、写深度、无混合、单采样）。
+// 注意：viewport/scissor 依赖窗口宽高，不在此结构，由 applyDynamicState 的 width/height 参数设置。
+export struct RenderState {
+	vk::PolygonMode polygonMode = vk::PolygonMode::eFill;
+	vk::CullModeFlagBits cullMode = vk::CullModeFlagBits::eNone;
+	vk::FrontFace frontFace = vk::FrontFace::eCounterClockwise;
+	bool rasterizerDiscard = false;
+	bool depthBiasEnable = false;
+	float depthBiasSlope = 0.0f;
+	float depthBiasScale = 0.0f;
+	bool depthTest = true;
+	bool depthWrite = true;
+	vk::CompareOp depthCompareOp = vk::CompareOp::eLess;
+	bool depthBoundsTest = false;
+	bool stencilTest = false;
+	vk::SampleCountFlagBits rasterizationSamples = vk::SampleCountFlagBits::e1;
+	uint32_t sampleMask = 0xFFFFFFFF;
+	bool alphaToCoverage = false;
+	bool alphaToOne = false;
+	bool colorBlend = false;
+	vk::ColorComponentFlags colorWriteMask =
+		vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+		vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
+	bool logicOp = false;
+};
+
+// 设置全部动态状态（viewport/scissor 用 width/height，其余用 state）。
+// spec 要求相关 set 命令在 draw 之前调用即可（draw 时采样），与 bindShadersEXT 的先后无约束。
+export void applyDynamicState(vk::raii::CommandBuffer& cmd, uint32_t width, uint32_t height,
+	const RenderState& state) {
+	// Viewport & scissor
+	vk::Viewport viewport(0.0f, static_cast<float>(height),
+		static_cast<float>(width), -static_cast<float>(height),
+		0.0f, 1.0f);
+	vk::Rect2D scissor({0, 0}, {width, height});
+	cmd.setViewportWithCount(viewport);
+	cmd.setScissorWithCount(scissor);
+
+	// Rasterization
+	cmd.setPolygonModeEXT(state.polygonMode);
+	cmd.setCullMode(state.cullMode);
+	cmd.setFrontFace(state.frontFace);
+	cmd.setRasterizerDiscardEnable(state.rasterizerDiscard);
+	cmd.setDepthBiasEnable(state.depthBiasEnable);
+	cmd.setDepthBias(state.depthBiasScale, state.depthBiasSlope, 0.0f);
+
+	// Depth & stencil
+	cmd.setDepthTestEnable(state.depthTest);
+	cmd.setDepthWriteEnable(state.depthWrite);
+	cmd.setDepthCompareOp(state.depthCompareOp);
+	cmd.setDepthBoundsTestEnable(state.depthBoundsTest);
+	cmd.setStencilTestEnable(state.stencilTest);
+
+	// Multisampling
+	cmd.setRasterizationSamplesEXT(state.rasterizationSamples);
+	cmd.setSampleMaskEXT(state.rasterizationSamples, state.sampleMask);
+	cmd.setAlphaToCoverageEnableEXT(state.alphaToCoverage);
+	cmd.setAlphaToOneEnableEXT(state.alphaToOne);
+
+	// Color blending
+	cmd.setColorBlendEnableEXT(0, state.colorBlend);
+	cmd.setColorWriteMaskEXT(0, state.colorWriteMask);
+	cmd.setLogicOpEnableEXT(state.logicOp);
+}
+
+// RenderPipeline：纯 shader object 包装（mesh + frag 两个 VkShaderEXT + 烘焙的
+// descriptor heap binding mapping）。动态状态不再内聚于此——见 RenderState / applyDynamicState。
 export class RenderPipeline {
 	vk::raii::ShaderEXT meshShader = nullptr;
 	vk::raii::ShaderEXT fragShader = nullptr;
@@ -88,9 +158,9 @@ export class RenderPipeline {
 		meshShader = std::move(shaders[0]);
 		fragShader = std::move(shaders[1]);
 	}
-	void recordRenderCommands(vk::raii::CommandBuffer& cmd, uint32_t width,
-		uint32_t height) {
-		// Bind shader stages; unused traditional stages must be set to VK_NULL_HANDLE
+	// 绑定 mesh + frag shader object 到命令缓冲（未使用的传统 stage 传 VK_NULL_HANDLE）。
+	// 只做 bindShadersEXT——动态状态由 applyDynamicState 单独设置（调用点在 Renderer）。
+	void bindShaders(vk::raii::CommandBuffer& cmd) const {
 		std::array<vk::ShaderStageFlagBits, 7> stages = {
 			vk::ShaderStageFlagBits::eVertex,
 			vk::ShaderStageFlagBits::eTessellationControl,
@@ -108,42 +178,6 @@ export class RenderPipeline {
 			vk::ShaderEXT(*fragShader)};
 
 		cmd.bindShadersEXT(stages, shaderHandles);
-
-		// Viewport & scissor
-		vk::Viewport viewport(0.0f, static_cast<float>(height),
-			static_cast<float>(width), -static_cast<float>(height),
-			0.0f, 1.0f);
-		vk::Rect2D scissor({0, 0}, {width, height});
-		cmd.setViewportWithCount(viewport);
-		cmd.setScissorWithCount(scissor);
-
-		// Rasterization
-		cmd.setPolygonModeEXT(vk::PolygonMode::eFill);
-		cmd.setCullMode(vk::CullModeFlagBits::eNone);
-		cmd.setFrontFace(vk::FrontFace::eCounterClockwise);
-		cmd.setRasterizerDiscardEnable(false);
-		cmd.setDepthBiasEnable(false);
-		cmd.setDepthBias(0.0f, 0.0f, 0.0f);
-
-		// Depth & stencil
-		cmd.setDepthTestEnable(true);
-		cmd.setDepthWriteEnable(true);
-		cmd.setDepthCompareOp(vk::CompareOp::eLess);
-		cmd.setDepthBoundsTestEnable(false);
-		cmd.setStencilTestEnable(false);
-
-		// Multisampling
-		cmd.setRasterizationSamplesEXT(vk::SampleCountFlagBits::e1);
-		cmd.setSampleMaskEXT(vk::SampleCountFlagBits::e1, 0xFFFFFFFF);
-		cmd.setAlphaToCoverageEnableEXT(false);
-		cmd.setAlphaToOneEnableEXT(false);
-
-		// Color blending
-		cmd.setColorBlendEnableEXT(0, VK_FALSE);
-		cmd.setColorWriteMaskEXT(0,
-			vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
-				vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA);
-		cmd.setLogicOpEnableEXT(false);
 	}
 };
 

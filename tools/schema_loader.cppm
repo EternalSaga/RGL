@@ -30,10 +30,52 @@ export struct SchemaDescSlot {
 	std::string cppName;
 };
 
+// 顶点属性：name + 类型 + 字节偏移。
+// 顶点契约的 source of truth 是 schema 声明（slangc 不反射顶点 buffer 结构体，
+// 见 docs/phase2_plan.md Step 0c）：顶点数组是平铺字节流，shader 按 schema 偏移
+// 用 ByteAddressBuffer 逐字段读取，不依赖任何 Slang struct 的内存布局。
+export struct SchemaVertexAttr {
+	std::string name;
+	std::string type;  // packed C++/glm 类型名："float"/"vec2"/"vec3"/"vec4"/"ivec2"/"ivec3"/"ivec4"
+	uint32_t offset = 0;
+};
+
+export struct SchemaVertexLayout {
+	std::string name;  // 生成的 C++ 结构体名（如 "ModelVertex"）
+	uint32_t stride = 0;  // 每顶点字节数（= 所有属性 packed 尺寸之和）
+	std::vector<SchemaVertexAttr> attributes;
+};
+
 export struct Schema {
 	std::vector<SchemaPushConst> pushConstants;
 	std::vector<SchemaDescSlot> descriptorSlots;
+	std::vector<SchemaVertexLayout> vertexLayouts;
 };
+
+// 顶点属性类型的 packed 字节尺寸（C++/glm 约定：vec3=12B 等）。
+// 未知类型返回 0，由校验方报错。
+export inline uint32_t vertexAttrSize(const std::string& type) {
+	if (type == "float") return 4;
+	if (type == "vec2") return 8;
+	if (type == "vec3") return 12;
+	if (type == "vec4") return 16;
+	if (type == "ivec2") return 8;
+	if (type == "ivec3") return 12;
+	if (type == "ivec4") return 16;
+	return 0;
+}
+
+// 顶点属性类型 → 生成代码中的 C++ 类型（未知类型返回 nullptr）。
+export inline const char* vertexAttrCppType(const std::string& type) {
+	if (type == "float") return "float";
+	if (type == "vec2") return "glm::vec2";
+	if (type == "vec3") return "glm::vec3";
+	if (type == "vec4") return "glm::vec4";
+	if (type == "ivec2") return "glm::ivec2";
+	if (type == "ivec3") return "glm::ivec3";
+	if (type == "ivec4") return "glm::ivec4";
+	return nullptr;
+}
 
 export inline bool has(const nlohmann::json& obj, std::string_view key) {
 	return obj.contains(key);
@@ -105,6 +147,33 @@ export Schema loadSchema(const std::filesystem::path& luaPath) {
 			sol::optional<std::string> cppName = dsItem["cppName"];
 			if (cppName) ds.cppName = *cppName;
 			schema.descriptorSlots.push_back(std::move(ds));
+		}
+	}
+
+	sol::table vlArray = rootTable["vertexLayouts"];
+	if (vlArray.valid() && vlArray.is<sol::table>()) {
+		for (int i = 1; i <= static_cast<int>(vlArray.size()); ++i) {
+			SchemaVertexLayout vl;
+			sol::table vlItem = vlArray[i];
+			sol::optional<std::string> nameOpt = vlItem["name"];
+			if (nameOpt) vl.name = *nameOpt;
+			sol::optional<int> stride = vlItem["stride"];
+			if (stride) vl.stride = static_cast<uint32_t>(*stride);
+			sol::table attrsArray = vlItem["attributes"];
+			if (attrsArray.valid() && attrsArray.is<sol::table>()) {
+				for (int ai = 1; ai <= static_cast<int>(attrsArray.size()); ++ai) {
+					SchemaVertexAttr attr;
+					sol::table attrObj = attrsArray[ai];
+					sol::optional<std::string> aname = attrObj["name"];
+					if (aname) attr.name = *aname;
+					sol::optional<std::string> atype = attrObj["type"];
+					if (atype) attr.type = *atype;
+					sol::optional<int> aoff = attrObj["offset"];
+					if (aoff) attr.offset = static_cast<uint32_t>(*aoff);
+					vl.attributes.push_back(std::move(attr));
+				}
+			}
+			schema.vertexLayouts.push_back(std::move(vl));
 		}
 	}
 

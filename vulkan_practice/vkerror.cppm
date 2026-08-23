@@ -21,6 +21,7 @@ export enum class ErrorCode {
 	SwapchainAcquireFailed,
 	SDLError,
 	ShaderLoadFailed,
+	GltfLoadFailed,
 	VMASuccessFailed,
 	DescriptorSlotOutOfBounds,
 	DeviceLost,
