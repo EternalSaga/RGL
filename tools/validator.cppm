@@ -159,6 +159,18 @@ export bool validateSchema(const nlohmann::json& reflection, const Schema& schem
 		}
 	}
 
+	// constants 无反射端对应，只校验内部一致性：name 非空 + value 为正。
+	for (const auto& ct : schema.constants) {
+		if (ct.name.empty()) {
+			logger->error("[FAIL] constant missing name");
+			ok = false;
+		}
+		if (ct.value == 0) {
+			logger->error("[FAIL] constant '{}' has zero value", ct.name);
+			ok = false;
+		}
+	}
+
 	return ok;
 }
 

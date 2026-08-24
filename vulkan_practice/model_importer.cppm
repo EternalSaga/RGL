@@ -81,16 +81,15 @@ export [[nodiscard]] std::expected<ModelMeshAssets, Error> uploadModelMeshes(
 	return assets;
 }
 
-// 模型 → ECS：场景根（Relationship，parent = null）+ 每 primitive 一个 entity
-//（Transform/MeshRef/MaterialRef，双向 Relationship 挂到根下）。
+// 模型 → ECS：场景根（Relationship，parent = null；Bounds 组件 = 模型整体包围球）
+// + 每 primitive 一个 entity（Transform/MeshRef/MaterialRef，双向 Relationship 挂到根下）。
 // Phase 2 无层级嵌套：node 变换在 gltf_loader 里已扁平化为 translation，world = local。
+// 包围球经 Bounds 组件进 registry，由 boundsSystem 聚合进 SceneBounds（自适应 near/far，
+// 见 ecs.cppm）——cube 将来入 ECS 时挂自己的 Bounds 即自动纳入聚合。
 export entt::entity registerScene(entt::registry& rg, const RGL::GltfModel& model) {
-	// 模型在场 → 自适应空间范围（renderSystem 的 try_get<ModelBounds> 命中后
-	// 按包围球推导 near/far）
-	rg.ctx().emplace<ModelBounds>(model.bounds.center, model.bounds.radius);
-
 	auto sceneRoot = rg.create();
 	auto& rootRel = rg.emplace<Relationship>(sceneRoot);
+	rg.emplace<Bounds>(sceneRoot, model.bounds.center, model.bounds.radius);
 
 	for (size_t i = 0; i < model.primitives.size(); ++i) {
 		const auto& prim = model.primitives[i];

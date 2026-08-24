@@ -4,8 +4,9 @@ import model;
 //（CPU 端 drawMeshTasksEXT(groupCount, 1, 1) 派生），每 group 处理
 // kTrianglesPerGroup 个三角形。
 //
-// 契约常量（改动需同步）：
-//   kTrianglesPerGroup ↔ C++ 侧 kTrianglesPerGroup（vkrenderer.cppm，group 数派生）
+// 契约常量（schema 为 source of truth，改动只改 model_schema.lua 并重新生成）：
+//   kTrianglesPerGroup ↔ model_schema.lua 的 constants（C++ 侧消费生成常量
+//     model_types_generated::kTrianglesPerGroup，group 数派生；本文件字面量必须一致）
 //   kVertexStride / 字段偏移 ↔ model_schema.lua 的 vertexLayouts（ModelVertex，packed 32B）
 // 顶点数据是平铺字节流，按显式偏移读取（不用 Slang struct 布局）。
 

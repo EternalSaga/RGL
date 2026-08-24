@@ -9,6 +9,7 @@ import vk_renderer;
 import scene_config;
 import gltf_loader;
 import model_importer;
+import scene;
 import camera;
 import ecs;
 import rllogger;
@@ -53,15 +54,28 @@ int main() {
 
 	try {
 		entt::registry registry;
-		registry.ctx().emplace<Viewport>(800, 600, false);
+		// 窗口/应用状态（eventSystem 写）+ 每帧 system 的单例数据（context）：
+		// WindowExtent/AppExit（ecs.cppm）、SceneSpin/SceneBounds/ViewProjection（scene.cppm）、
+		// FrameDrawList（vkrenderer.cppm，渲染 system 产出、drawFrame 消费）
+		registry.ctx().emplace<WindowExtent>(static_cast<uint32_t>(window.getWidth()),
+			static_cast<uint32_t>(window.getHeight()));
+		registry.ctx().emplace<AppExit>();
 		registry.ctx().emplace<Camera>(std::move(*cameraResult));
 		registry.ctx().emplace<CameraInput>();
+		auto& spin = registry.ctx().emplace<SceneSpin>();
+		spin.speed = sceneConfig.spin ? 1.0f : 0.0f;  // 0 = 静止（configs/scene.lua 的 spin 开关）
+		registry.ctx().emplace<SceneBounds>();
+		registry.ctx().emplace<ViewProjection>();
+		registry.ctx().emplace<FrameDrawList>();
 
 		AppContext vkInstance(window);
 		DeviceContext vkDevice(vkInstance);
 		Swapchain vkSwapchain(vkDevice, window);
 		Resources vkResources(vkInstance, vkDevice, vkSwapchain, primitiveCount);
-		Renderer vkRenderer(vkDevice, vkSwapchain, vkResources, sceneConfig, primitiveCount, registry);
+		// 管线规格来自 configs/scene.lua；cubeEntry = showCube（cube 渲染的 gating，
+		// 决定 "cube" 管线条目是否创建 → 渲染 system 侧的 cube DrawCall 是否产生）
+		Renderer vkRenderer(vkDevice, vkSwapchain, vkResources, sceneConfig.pipelines,
+			sceneConfig.showCube, primitiveCount);
 
 		// GPU 上传 + ECS 注册（meshAssets 持有每 primitive 的顶点 buffer，须活到渲染结束）
 		ModelMeshAssets meshAssets;
@@ -76,7 +90,7 @@ int main() {
 			registerScene(registry, *model);
 		}
 
-		auto renderResult = RGL::renderSystem(registry, vkRenderer, window, sceneConfig);
+		auto renderResult = RGL::renderSystem(registry, vkRenderer);
 		if (!renderResult) {
 			auto* logger = RLLogger::getInstance();
 			if (logger) logger->error("错误: {}", renderResult.error().describe());

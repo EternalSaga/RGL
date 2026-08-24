@@ -46,10 +46,18 @@ export struct SchemaVertexLayout {
 	std::vector<SchemaVertexAttr> attributes;
 };
 
+// 契约常量（无反射端对应，schema 声明是 source of truth）：
+// 生成 .cppm 的 inline constexpr；shader 端字面量必须与 value 一致（靠 shader 头注释指向本值）。
+export struct SchemaConstant {
+	std::string name;
+	uint32_t value = 0;
+};
+
 export struct Schema {
 	std::vector<SchemaPushConst> pushConstants;
 	std::vector<SchemaDescSlot> descriptorSlots;
 	std::vector<SchemaVertexLayout> vertexLayouts;
+	std::vector<SchemaConstant> constants;
 };
 
 // 顶点属性类型的 packed 字节尺寸（C++/glm 约定：vec3=12B 等）。
@@ -174,6 +182,19 @@ export Schema loadSchema(const std::filesystem::path& luaPath) {
 				}
 			}
 			schema.vertexLayouts.push_back(std::move(vl));
+		}
+	}
+
+	sol::table ctArray = rootTable["constants"];
+	if (ctArray.valid() && ctArray.is<sol::table>()) {
+		for (int i = 1; i <= static_cast<int>(ctArray.size()); ++i) {
+			SchemaConstant ct;
+			sol::table ctItem = ctArray[i];
+			sol::optional<std::string> ctName = ctItem["name"];
+			if (ctName) ct.name = *ctName;
+			sol::optional<int> ctValue = ctItem["value"];
+			if (ctValue) ct.value = static_cast<uint32_t>(*ctValue);
+			schema.constants.push_back(std::move(ct));
 		}
 	}
 

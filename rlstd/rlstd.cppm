@@ -13,6 +13,7 @@ module;
 #include <expected>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <iterator>
 #include <limits>
@@ -22,6 +23,7 @@ module;
 #include <ranges>
 #include <set>
 #include <source_location>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -42,7 +44,10 @@ using std::cout;
 using std::endl;
 using std::error_code;
 using std::expected;
+using std::as_bytes;
+using std::byte;
 using std::fstream;
+using std::function;
 using std::ifstream;
 using std::logic_error;
 using std::map;
@@ -58,6 +63,7 @@ using std::set;
 using std::shared_ptr;
 using std::sin;
 using std::source_location;
+using std::span;
 using std::string;
 using std::string_view;
 using std::strlen;

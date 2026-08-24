@@ -100,6 +100,7 @@ export std::string generateCppm(const nlohmann::json& reflection,
 	data["module_name"] = moduleName;
 	data["structs"] = nlohmann::json::array();
 	data["slots"] = nlohmann::json::array();
+	data["constants"] = nlohmann::json::array();
 
 	auto& params = reflection["parameters"];
 	std::set<std::string> emittedStructs;
@@ -218,6 +219,16 @@ export std::string generateCppm(const nlohmann::json& reflection,
 		}
 		data["structs"].push_back(structObj);
 		logger->debug("Generated vertex struct '{}' with {} fields, stride={}", vl.name, structObj["fields"].size(), vl.stride);
+	}
+
+	// constants：反射端无对应数据，直接由 schema 声明生成（契约 source of truth）。
+	for (const auto& ct : schema.constants) {
+		if (ct.name.empty()) continue;
+		nlohmann::json constObj;
+		constObj["cpp_name"] = ct.name;
+		constObj["value"] = ct.value;
+		data["constants"].push_back(constObj);
+		logger->debug("Generated constant '{}' = {}", ct.name, ct.value);
 	}
 
 	inja::Environment env;

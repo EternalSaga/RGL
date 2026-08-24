@@ -23,6 +23,13 @@ return {
         { name = "modelVertexBuffer", index = 0, heapSlotOffset = 8, cppName = "HeapSlotModelVertexBase", shape = "byteAddressBuffer" },
     },
 
+    -- 契约常量（无反射端对应，schema 声明直接生成，同 vertexLayouts 模式）：
+    -- 生成的 .cppm 导出 C++ constexpr，shader 端字面量必须与本值一致
+    --（见 model.mesh.slang 头注释的契约指向）。
+    constants = {
+        { name = "kTrianglesPerGroup", value = 10 },
+    },
+
     -- 顶点契约：schema 声明是 source of truth（slangc 不反射顶点 buffer 结构体，
     -- 见 docs/phase2_plan.md Step 0c）。顶点数组是平铺字节流，shader 按这些
     -- 偏移用 ByteAddressBuffer 逐字段读取（见 model.mesh.slang 的注释）。
