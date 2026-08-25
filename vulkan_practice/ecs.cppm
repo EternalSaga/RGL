@@ -13,6 +13,7 @@ import vkerror;
 import vk_swapchain;
 import vk_resources;
 import vk_renderer;
+import llm_debug;
 import types_generated;
 import model_types_generated;
 import scene;
@@ -34,77 +35,72 @@ export struct AppExit {
 };
 
 // 中央事件轮询（唯一 SDL_PollEvent 调用点）：窗口状态（WindowExtent/AppExit）+
-// 相机原始输入状态（CameraInput：本 system 写入，cameraSystem 每帧消费并重置累积器）
+// 输入事件流（InputEvents：本 system 只产事件，不做键位映射——键绑定在 Camera.keys，
+// cameraSystem 消费事件时按绑定解释，E5.4；退出/窗口状态不走事件流）
 void eventSystem(entt::registry& rg) {
 	auto& extent = rg.ctx().get<WindowExtent>();
 	auto& exit = rg.ctx().get<AppExit>();
-	auto& input = rg.ctx().get<CameraInput>();
+	auto& events = rg.ctx().get<InputEvents>();
 
 	SDL_Event event;
 	while (SDL_PollEvent(&event)) {
-		if (event.type == SDL_EVENT_QUIT ||
-			event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
-			exit.requested = true;
-		} else if (event.type == SDL_EVENT_WINDOW_RESIZED) {
-			extent.width = static_cast<uint32_t>(event.window.data1);
-			extent.height = static_cast<uint32_t>(event.window.data2);
-		} else if (event.type == SDL_EVENT_KEY_DOWN) {
-			switch (event.key.key) {
-				case SDLK_ESCAPE:
-					exit.requested = true;
-					break;
-				case SDLK_W:
-					input.forward = true;
-					break;
-				case SDLK_A:
-					input.left = true;
-					break;
-				case SDLK_S:
-					input.back = true;
-					break;
-				case SDLK_D:
-					input.right = true;
-					break;
-				default:
-					break;
+		switch (event.type) {
+			case SDL_EVENT_QUIT:
+			case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+				exit.requested = true;
+				break;
+			case SDL_EVENT_WINDOW_RESIZED:
+				extent.width = static_cast<uint32_t>(event.window.data1);
+				extent.height = static_cast<uint32_t>(event.window.data2);
+				break;
+			case SDL_EVENT_KEY_DOWN: {
+				InputEvent e;
+				e.type = InputEvent::Type::KeyDown;
+				e.key = event.key.key;
+				events.events.push_back(e);
+				break;
 			}
-		} else if (event.type == SDL_EVENT_KEY_UP) {
-			switch (event.key.key) {
-				case SDLK_W:
-					input.forward = false;
-					break;
-				case SDLK_A:
-					input.left = false;
-					break;
-				case SDLK_S:
-					input.back = false;
-					break;
-				case SDLK_D:
-					input.right = false;
-					break;
-				default:
-					break;
+			case SDL_EVENT_KEY_UP: {
+				InputEvent e;
+				e.type = InputEvent::Type::KeyUp;
+				e.key = event.key.key;
+				events.events.push_back(e);
+				break;
 			}
-		} else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
-			if (event.button.button == SDL_BUTTON_LEFT) {
-				input.mouseLeftDown = true;
-			} else if (event.button.button == SDL_BUTTON_RIGHT) {
-				input.mouseRightDown = true;
+			case SDL_EVENT_MOUSE_BUTTON_DOWN: {
+				InputEvent e;
+				e.type = InputEvent::Type::MouseButton;
+				e.button = static_cast<uint8_t>(event.button.button);
+				e.pressed = true;
+				events.events.push_back(e);
+				break;
 			}
-		} else if (event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
-			if (event.button.button == SDL_BUTTON_LEFT) {
-				input.mouseLeftDown = false;
-			} else if (event.button.button == SDL_BUTTON_RIGHT) {
-				input.mouseRightDown = false;
+			case SDL_EVENT_MOUSE_BUTTON_UP: {
+				InputEvent e;
+				e.type = InputEvent::Type::MouseButton;
+				e.button = static_cast<uint8_t>(event.button.button);
+				e.pressed = false;
+				events.events.push_back(e);
+				break;
 			}
-		} else if (event.type == SDL_EVENT_MOUSE_MOTION) {
-			// 注意：SDL3 的 motion.x/y 是窗口内绝对坐标，相对增量在 xrel/yrel
-			if (input.mouseLeftDown || input.mouseRightDown) {
-				input.mouseDelta.x += event.motion.xrel;
-				input.mouseDelta.y += event.motion.yrel;
+			case SDL_EVENT_MOUSE_MOTION: {
+				// 注意：SDL3 的 motion.x/y 是窗口内绝对坐标，相对增量在 xrel/yrel
+				InputEvent e;
+				e.type = InputEvent::Type::MouseDelta;
+				e.delta = {static_cast<float>(event.motion.xrel),
+					static_cast<float>(event.motion.yrel)};
+				events.events.push_back(e);
+				break;
 			}
-		} else if (event.type == SDL_EVENT_MOUSE_WHEEL) {
-			input.wheelDelta += event.wheel.y;
+			case SDL_EVENT_MOUSE_WHEEL: {
+				InputEvent e;
+				e.type = InputEvent::Type::Wheel;
+				e.amount = static_cast<float>(event.wheel.y);
+				events.events.push_back(e);
+				break;
+			}
+			default:
+				break;
 		}
 	}
 }
@@ -192,7 +188,7 @@ void projectionSystem(entt::registry& rg) {
 // vkCmdPushDataEXT 录制时读取，只要求内存活到录制结束）
 struct RenderListState {
 	RGL::DrawArgs cubeArgs{};  // cube（64B，types_generated static_assert 与 shader 反射一致）
-	std::vector<RGL::ModelDrawArgs> modelArgs;  // 模型每 primitive 一份（96B，model_types_generated）
+	std::vector<RGL::ModelDrawArgs> modelArgs;  // 模型每资产一份（96B，model_types_generated；按资产 id 索引）
 };
 
 // ViewProjection + 场景实体 + 场景旋转 → FrameDrawList context（单一 draw 路径）。
@@ -201,14 +197,17 @@ struct RenderListState {
 // "cube" 条目），MVP = proj·view·spin（无 Transform）；Phase 4 入 ECS 后走与 model
 // 同一 view 路径（ecs_compliance_review E1.4/H1）。
 //
-// model：每 primitive 实体（Transform/MeshRef/MaterialRef）推一份 ModelDrawArgs
-//（mvp = proj·view·spin·world，按 primitiveIndex 对齐管线表条目 / heap slot）；
+// model：每 primitive 实体（Transform/MeshRef{asset}/MaterialRef）推一份 ModelDrawArgs
+//（mvp = proj·view·spin·world；资产 id → Resources 资产表记录：三角形数 / 管线条目
+// 下标，五方约定收敛为一处映射，E1.1/E5.1）；
 // group 数 = ceil(triangles / kTrianglesPerGroup)（契约常量由 model_schema.lua 生成，
 // 见 model_types_generated；mesh shader 无 task stage，group 序号经 SV_GroupID.x 派生）
-void renderListSystem(entt::registry& rg, RGL::Renderer& renderer, RenderListState& state) {
+void renderListSystem(entt::registry& rg, RGL::Renderer& renderer, RGL::Resources& resources,
+	RenderListState& state) {
 	auto& list = rg.ctx().get<FrameDrawList>();
 	const auto& viewProj = rg.ctx().get<ViewProjection>();
 	const auto& spin = rg.ctx().get<SceneSpin>();
+	const auto& assets = resources.getAssetTable();
 
 	FrameDrawList fresh;
 
@@ -220,20 +219,22 @@ void renderListSystem(entt::registry& rg, RGL::Renderer& renderer, RenderListSta
 
 	rg.view<RGL::Transform, RGL::MeshRef, RGL::MaterialRef>().each(
 		[&](RGL::Transform& tf, RGL::MeshRef& meshRef, RGL::MaterialRef& matRef) {
-			if (meshRef.primitiveIndex >= state.modelArgs.size())
-				state.modelArgs.resize(meshRef.primitiveIndex + 1);
-			auto& args = state.modelArgs[meshRef.primitiveIndex];
+			const auto& asset = assets.get(meshRef.asset);
+			if (asset.pipelineIndex == kInvalidPipelineIndex)
+				return;  // 资产无管线条目（防御：注册顺序异常，见 registerScene/addModelPipeline）
+			if (meshRef.asset >= state.modelArgs.size())
+				state.modelArgs.resize(meshRef.asset + 1);
+			auto& args = state.modelArgs[meshRef.asset];
 			args.mvp = viewProj.proj * viewProj.view * spin.matrix * tf.world;
-			args.totalTriangles = meshRef.triangleCount;
+			args.totalTriangles = asset.triangleCount;
 			args.baseColor = matRef.baseColor;
 
-			auto idx = renderer.pipelineIndex("model_" + std::to_string(meshRef.primitiveIndex));
-			if (!idx) return;
 			const uint32_t groupCount =
-				(args.totalTriangles + kTrianglesPerGroup - 1) / kTrianglesPerGroup;
+				(asset.triangleCount + kTrianglesPerGroup - 1) / kTrianglesPerGroup;
 			if (groupCount == 0) return;
 			fresh.calls.push_back(DrawCall{
-				*idx, std::as_bytes(std::span<const RGL::ModelDrawArgs>{&args, 1}), groupCount});
+				asset.pipelineIndex,
+				std::as_bytes(std::span<const RGL::ModelDrawArgs>{&args, 1}), groupCount});
 		});
 
 	list.calls = std::move(fresh.calls);
@@ -245,23 +246,28 @@ struct FrameSystem {
 	std::function<void(entt::registry&, float dt)> fn;
 };
 
-export std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer& renderer) {
+// llm（可空）：llm_debug 一次性截图配置（非空 = 启用）。批处理语义：
+// 第 llm->delayFrames 帧渲染完成后离屏重渲 + 存 PNG，然后置 AppExit 退出——
+// 无常驻状态、无 mailbox（config 即控制通道：agent 改 configs/camera.lua 后重跑）。
+export std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer& renderer,
+	const RGL::LlmDebugConfig* llm = nullptr) {
 	auto& swapchain = renderer.getSwapchainRef();
 	auto& resources = renderer.getResourcesRef();
 	auto* logger = RLLogger::getInstance();
 	std::optional<Error> lastError;
 
 	RenderListState renderListState;
+	uint32_t llmFrame = 0;
 
 	// system 顺序（数据流契约）：
-	//   camera（CameraInput→Camera）→ animation（SceneSpin）→ bounds（Bounds→SceneBounds）
+	//   camera（InputEvents→Camera，消费即清空）→ animation（SceneSpin）→ bounds（Bounds→SceneBounds）
 	//   → projection（Camera+SceneBounds+WindowExtent→ViewProjection）→ renderlist（→FrameDrawList）
 	std::vector<FrameSystem> systems{
 		{"camera",     [](entt::registry& rg, float dt) { cameraSystem(rg, dt); }},
 		{"animation",  [](entt::registry& rg, float dt) { animationSystem(rg, dt); }},
 		{"bounds",     [](entt::registry& rg, float) { boundsSystem(rg); }},
 		{"projection", [](entt::registry& rg, float) { projectionSystem(rg); }},
-		{"renderlist", [&](entt::registry& rg, float) { renderListSystem(rg, renderer, renderListState); }},
+		{"renderlist", [&](entt::registry& rg, float) { renderListSystem(rg, renderer, resources, renderListState); }},
 	};
 
 	float prevTicks = static_cast<float>(SDL_GetTicks());
@@ -293,6 +299,21 @@ export std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer
 			if (logger) logger->error("渲染错误: {}", result.error().describe());
 			lastError = result.error();
 			break;
+		}
+
+		// llm_debug：本帧渲染完成后计数；超过延迟帧数 → 用本帧 draw list 离屏
+		// 重渲截图（场景已推进 N 步），然后请求退出（下轮循环头 break）
+		if (llm) {
+			if (++llmFrame > llm->delayFrames) {
+				auto shot = captureFrame(renderer, rg.ctx().get<FrameDrawList>(), *llm);
+				if (shot) {
+					if (logger) logger->info("llm_debug: 截图已保存 ({})", *shot);
+				} else {
+					if (logger) logger->error("llm_debug: 截图失败 ({})", shot.error().describe());
+					lastError = shot.error();
+				}
+				rg.ctx().get<AppExit>().requested = true;
+			}
 		}
 	}
 

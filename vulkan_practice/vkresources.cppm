@@ -16,15 +16,47 @@ import model_types_generated;
 
 namespace RGL {
 
+// 管线表下标的"未设置"值（资产记录的 pipelineIndex 初始值；Renderer::addModelPipeline 写入真实下标）
+export inline constexpr uint32_t kInvalidPipelineIndex = std::numeric_limits<uint32_t>::max();
+
+// 资产层：每个已上传 primitive 一条记录（GPU 顶点 buffer + heap slot + 三角形数 + 管线条目引用），
+// 以稳定 id（vector 下标，上传顺序分配）索引。registry entity 经 MeshRef{asset}（scene.cppm）
+// 引用资产，五方一致性（entity ↔ primitive ↔ heap slot ↔ 管线条目 ↔ draw-args）收敛为本表
+// 一处映射（E1.1）。生命周期：Resources 成员（与 descriptor heap / cube buffer 同层），
+// buffer 随 SharedAllocator 控制块存活，不再靠 main.cpp 局部变量的隐式 RAII 保证（E1.2/L6）。
+export struct MeshAsset {
+	VmaBuffer vertexBuffer;
+	uint32_t heapSlot = 0;                            // 绝对 heap slot（= reservedSlots() + 偏移，见 uploadModelMeshes）
+	uint32_t triangleCount = 0;                       // primitive 三角形数（group 数派生用）
+	uint32_t pipelineIndex = kInvalidPipelineIndex;   // 管线表下标（Renderer::addModelPipeline 写入）
+};
+
+export class AssetTable {
+   public:
+	// 注册资产（上传顺序调用）→ 资产 id
+	uint32_t addMesh(VmaBuffer vertexBuffer, uint32_t heapSlot, uint32_t triangleCount) {
+		meshes.push_back(MeshAsset{std::move(vertexBuffer), heapSlot, triangleCount, kInvalidPipelineIndex});
+		return static_cast<uint32_t>(meshes.size() - 1);
+	}
+	[[nodiscard]] const MeshAsset& get(uint32_t id) const { return meshes[id]; }
+	// 管线条目引用（Renderer::addModelPipeline 在创建管线条目后写回）
+	void setPipelineIndex(uint32_t id, uint32_t pipelineIndex) { meshes[id].pipelineIndex = pipelineIndex; }
+	[[nodiscard]] uint32_t size() const { return static_cast<uint32_t>(meshes.size()); }
+
+   private:
+	std::vector<MeshAsset> meshes;
+};
+
 export class Resources {
    public:
-	// modelPrimitiveCount：模型 primitive 数（CPU 解析 glTF 后得到，main.cpp 先于
-	// Vulkan 初始化解析），决定 descriptor heap 容量：
-	//   [reserved, reserved+8)  cube（顶点 slot 0 / 索引 slot 4）
-	//   [reserved+8, reserved+8+N)  模型顶点 slot（每 primitive 一个，
-	//   slot = reserved + HeapSlotModelVertexBase + i，见 model_importer.cppm）
-	Resources(RGL::AppContext& vkInstance, RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain,
-		uint32_t modelPrimitiveCount)
+	// heap 容量与场景内容解耦（E1.3，批次 3）：固定裕量 kUserSlotMargin，不再按
+	// primitive 数精确预分配（原 modelPrimitiveCount 构造参数删除）。用户槽位布局
+	//（相对 reserved range 起点）：
+	//   [0, 8)   cube（顶点 slot 0 / 索引 slot 4，types_generated）
+	//   [8, 8+N) 模型顶点 slot（每 primitive 一个，slot = reserved + HeapSlotModelVertexBase + i，
+	//   见 model_importer.cppm），其余为裕量；运行时扩容 = 重建 heap + 重写全部描述符，
+	//   归 Phase 3 TexturePool 一并设计（统一 slot 分配器）
+	Resources(RGL::AppContext& vkInstance, RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain)
 		: vkInstance(vkInstance),
 		  vkDevice(vkDevice),
 		  vkSwapchain(vkSwapchain),
@@ -42,7 +74,7 @@ export class Resources {
 			  vk::BufferUsageFlagBits::eStorageBuffer,
 			  RGL::cubeIndices.data())
 				  .value()),
-		  descriptorHeap(createDescriptorHeap(modelPrimitiveCount).value()),
+		  descriptorHeap(createDescriptorHeap().value()),
 		  heapSlotVertex(reservedSlots() + HeapSlotVertexOffset),
 		  heapSlotIndex(reservedSlots() + HeapSlotIndexOffset) {
 		writeDescriptors();
@@ -62,12 +94,16 @@ export class Resources {
 	}
 
 	const RGL::VmaDescriptorHeap& getDescriptorHeap() const { return descriptorHeap; }
+	const RGL::VmaAllocatorRAII& getAllocator() const { return allocator; }
 	vk::DeviceSize getReservedRangeOffset() const { return 0; }
 	vk::DeviceSize getReservedRangeSize() const { return descriptorHeap.getReservedSlots() * descriptorHeap.getDescriptorSize(); }
 	vk::DeviceAddress getVertexBufferAddress() const { return vertexBuffer.getDeviceAddress(); }
 	vk::DeviceAddress getIndexBufferAddress() const { return indexBuffer.getDeviceAddress(); }
 	uint32_t getHeapSlotVertex() const { return heapSlotVertex; }
 	uint32_t getHeapSlotIndex() const { return heapSlotIndex; }
+	// 资产表（已上传 primitive 的 GPU 数据 + heap slot + 三角形数 + 管线条目引用；
+	// registry entity 经 MeshRef{asset} 引用，见 AssetTable 注释）
+	RGL::AssetTable& getAssetTable() { return assetTable; }
 	RGL::VmaAllocatorRAII& getAllocator() { return allocator; }
 
    private:
@@ -128,15 +164,16 @@ export class Resources {
 
 	// 容量 = reserved + 用户槽位。用户槽位布局（相对 reserved range 起点）：
 	//   cube 顶点 slot 0、索引 slot 4（types_generated 的 HeapSlotVertexOffset/HeapSlotIndexOffset）
-	//   模型顶点 slot 基址 HeapSlotModelVertexBase=8（model_types_generated），每 primitive 一个
-	std::expected<RGL::VmaDescriptorHeap, Error> createDescriptorHeap(uint32_t modelPrimitiveCount) {
+	//   模型顶点 slot 基址 HeapSlotModelVertexBase=8（model_types_generated），每 primitive 一个；
+	//   剩余裕量 kUserSlotMargin（固定，与场景内容解耦——E1.3）
+	std::expected<RGL::VmaDescriptorHeap, Error> createDescriptorHeap() {
 		auto props = vkDevice.getPhysicalDevice().getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDescriptorHeapPropertiesEXT>();
 
 		auto& heapProps = props.get<vk::PhysicalDeviceDescriptorHeapPropertiesEXT>();
 		uint32_t descriptorSize = static_cast<uint32_t>(heapProps.bufferDescriptorSize);
 		uint32_t reservedSlots = static_cast<uint32_t>(heapProps.minResourceHeapReservedRange + descriptorSize - 1) / descriptorSize;
 		vk::DeviceSize resourceHeapAlignment = heapProps.resourceHeapAlignment;
-		uint32_t userSlots = HeapSlotModelVertexBase + modelPrimitiveCount;
+		uint32_t userSlots = HeapSlotModelVertexBase + kUserSlotMargin;
 		uint32_t capacity = userSlots + reservedSlots;
 
 		return allocator.createDescriptorHeap(
@@ -198,6 +235,10 @@ export class Resources {
 	RGL::VmaDescriptorHeap descriptorHeap;
 	uint32_t heapSlotVertex;
 	uint32_t heapSlotIndex;
+	// 资产表（E1.1/E1.2：已上传 primitive 的 GPU 数据 + heap slot + 三角形数 + 管线条目引用）
+	RGL::AssetTable assetTable;
+	// 用户槽位固定裕量（与场景内容解耦；descriptorSize 通常 16-64B，1024 槽为 KB 级开销）
+	static constexpr uint32_t kUserSlotMargin = 1024;
 };
 
 }  // namespace RGL

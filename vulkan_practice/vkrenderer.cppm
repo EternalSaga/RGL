@@ -63,19 +63,23 @@ export class Renderer;
 export class Renderer {
    public:
 	// 成员初始化列表顺序必须与下方声明顺序一致（RAII 规则：vk::raii::* 直接成员只能在
-	// 初始化列表初始化）。pipelines 依赖 Resources 的 descriptor heap（descriptorSize +
-	// 顶点/索引 slot 号）、pipelineSpecs（SPV 路径，来自 configs/scene.lua）与
-	// modelPrimitiveCount（模型条数），故在 resources 之后、经静态工厂 makePipelineTable
-	// 在初始化列表构造（RenderPipeline 是包装类，非直接 vk::raii 成员）。
+	// 初始化列表初始化）。modelSpec 从 pipelineSpecs（SPV 路径，来自 configs/scene.lua）
+	// 解析并按值存一份（span 指向 main 局部数据，生命周期不够长）；pipelines 依赖
+	// Resources 的 descriptor heap（descriptorSize + 顶点/索引 slot 号）与 pipelineSpecs，
+	// 故在 resources 之后、经静态工厂 makePipelineTable 在初始化列表构造
+	//（RenderPipeline 是包装类，非直接 vk::raii 成员）。
 	// cubeEntry：是否建 "cube" 管线条目（SceneConfig.showCube，cube 渲染的 gating）。
+	// 模型管线条目不在构造期建（批次 3：管线表与场景内容解耦，E1.3）——资产上传后
+	// 每 primitive 调一次 addModelPipeline。
 	Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RGL::Resources& vkResources,
-		std::span<const RGL::PipelineSpec> pipelineSpecs, bool cubeEntry, uint32_t modelPrimitiveCount)
+		std::span<const RGL::PipelineSpec> pipelineSpecs, bool cubeEntry)
 		: vkDevice(vkDevice),
 		  swapchain(&vkSwapchain),
 		  resources(&vkResources),
 		  graphicsQueue(vkDevice.getGraphicsQueue()),
 		  graphicsCommandPool(vkDevice.getGraphicsCommandPool()),
-		  pipelines(makePipelineTable(vkDevice.getDevice(), pipelineSpecs, cubeEntry, vkResources, modelPrimitiveCount)) {
+		  modelSpec(resolveModelSpec(pipelineSpecs)),
+		  pipelines(makePipelineTable(vkDevice.getDevice(), pipelineSpecs, cubeEntry, vkResources)) {
 		// descriptor heap 的 GPU 端地址，每帧传给 vkCmdBindResourceHeapEXT
 		heapAddress = vkResources.getDescriptorHeap().getGpuAddress();
 		// 管线表 name → 下标（构造一次，供渲染 system 产出 DrawCall 时经 pipelineIndex 解析）
@@ -88,11 +92,32 @@ export class Renderer {
 
 	RGL::Swapchain& getSwapchainRef() const { return *swapchain; }
 	RGL::Resources& getResourcesRef() const { return *resources; }
+	// 离屏截图（llm_debug.cppm captureFrame）用的只读访问器
+	RGL::DeviceContext& getDeviceContextRef() const { return vkDevice; }
+	const vk::raii::CommandPool& getGraphicsCommandPoolRef() const { return graphicsCommandPool; }
+	const RGL::RenderPipeline& pipelineAt(uint32_t index) const { return pipelines[index].pipeline; }
+	const RGL::RenderState& getOpaqueState() const { return opaqueState; }
 	// 管线表条目名 → 下标（渲染 system 产出 DrawCall 用；条目不存在时 nullopt = 该 draw 跳过，
 	// 如 showCube=false 时无 "cube" 条目，cube 的 DrawCall 不产生）
 	[[nodiscard]] std::optional<uint32_t> pipelineIndex(std::string_view name) const {
 		auto it = pipelineIndexMap.find(std::string(name));
 		return it == pipelineIndexMap.end() ? std::nullopt : std::optional<uint32_t>(it->second);
+	}
+	// 模型管线条目（批次 3：从构造期移到资产上传期，每 primitive 一次）：
+	// 用构造期解析的 "model" 规格创建 RenderPipeline（binding mapping 显式烘焙传入的
+	// 顶点 slot——模型无索引缓冲，binding 1 映射指向同一 slot，未被 SPIR-V 引用，无副作用），
+	// 更新 name→下标 映射，并把条目下标写回资产记录（renderListSystem 经资产表解析管线，
+	// 无 "model_i" 字符串约定，E2.4）。失败（SPV 加载失败等）抛出（同构造期路径）。
+	void addModelPipeline(uint32_t vertexSlot, uint32_t assetId) {
+		const uint32_t descriptorSize = resources->getDescriptorHeap().getDescriptorSize();
+		auto entry = PipelineEntry{
+			"model_" + std::to_string(assetId),
+			RGL::RenderPipeline(vkDevice.getDevice(), loadShaderEffect(modelSpec), descriptorSize,
+				vertexSlot, vertexSlot)};
+		const uint32_t index = static_cast<uint32_t>(pipelines.size());
+		pipelineIndexMap[entry.name] = index;
+		pipelines.push_back(std::move(entry));
+		resources->getAssetTable().setPipelineIndex(assetId, index);
 	}
 	// 等待 GPU 空闲（resize / 重建 swapchain 前调用，确保旧资源不再被使用）
 	void waitForIdle() { vkDevice.getDevice().waitIdle(); }
@@ -130,15 +155,27 @@ export class Renderer {
 		return nullptr;
 	}
 
+	// "model" pipeline 规格（构造期从 pipelineSpecs 解析，按值存成员；
+	// 资产上传期 addModelPipeline 用）。scene.lua 缺 "model" 条目时回落默认 SPV 路径。
+	static RGL::PipelineSpec resolveModelSpec(std::span<const RGL::PipelineSpec> specs) {
+		const RGL::PipelineSpec* modelSpec = findPipelineSpec(specs, "model");
+		if (!modelSpec) {
+			static const RGL::PipelineSpec defaultModel{
+				"model", "generated_shaders/model.mesh.spv", "generated_shaders/model.frag.spv"};
+			return defaultModel;
+		}
+		return *modelSpec;
+	}
+
 	// 构建管线表（ShaderObject 模式，无 PipelineLayout）：每条创建两个 VkShaderEXT 对象，
 	// 并通过 VkShaderCreateInfoEXT.pNext 链上 VkDescriptorSetAndBindingMappingEXT
 	//（binding 0 → 顶点 slot、binding 1 → 索引 slot，heapOffset = slot * descriptorSize；
 	// 细节见 shader.cppm）。
-	// 条目：cube（slot 0/4）+ 模型每 primitive 一条（顶点 slot = reserved +
-	// HeapSlotModelVertexBase + i，SPV 相同、slot 映射各自烘焙——binding mapping
-	// 是 shader object 级状态，无法运行时换，故按 primitive 拆条目）。
+	// 条目：cube（slot 0/4，仅 cubeEntry 时）。模型条目由 addModelPipeline 在资产上传期
+	// 动态加入（顶点 slot 显式传入——binding mapping 是 shader object 级状态，无法运行时
+	// 换，故按资产拆条目；批次 3 起构造期不再按 primitive 数预 resize，E1.3）。
 	static std::vector<PipelineEntry> makePipelineTable(vk::raii::Device& device,
-		std::span<const RGL::PipelineSpec> specs, bool cubeEntry, RGL::Resources& res, uint32_t modelPrimitiveCount) {
+		std::span<const RGL::PipelineSpec> specs, bool cubeEntry, RGL::Resources& res) {
 		std::vector<PipelineEntry> table;
 		const uint32_t descriptorSize = res.getDescriptorHeap().getDescriptorSize();
 
@@ -155,22 +192,6 @@ export class Renderer {
 				"cube",
 				RGL::RenderPipeline(device, loadShaderEffect(*cubeSpec), descriptorSize,
 					res.getHeapSlotVertex(), res.getHeapSlotIndex())});
-		}
-
-		const RGL::PipelineSpec* modelSpec = findPipelineSpec(specs, "model");
-		if (!modelSpec) {
-			static const RGL::PipelineSpec defaultModel{
-				"model", "generated_shaders/model.mesh.spv", "generated_shaders/model.frag.spv"};
-			modelSpec = &defaultModel;
-		}
-		RGL::ShaderEffect modelEffect = loadShaderEffect(*modelSpec);
-		const uint32_t reserved = res.getDescriptorHeap().getReservedSlots();
-		for (uint32_t i = 0; i < modelPrimitiveCount; ++i) {
-			const uint32_t slotVertex = reserved + RGL::HeapSlotModelVertexBase + i;
-			// 模型无索引缓冲：binding 1 映射指向同一 slot（未被 SPIR-V 引用，无副作用）
-			table.emplace_back(PipelineEntry{
-				"model_" + std::to_string(i),
-				RGL::RenderPipeline(device, modelEffect, descriptorSize, slotVertex, slotVertex)});
 		}
 
 		return table;
@@ -239,11 +260,15 @@ export class Renderer {
 	// 非 RAII 句柄（队列生命周期由 DeviceContext 的 raii Device 管理）
 	vk::Queue graphicsQueue;
 	const vk::raii::CommandPool& graphicsCommandPool;
-	// 管线表：ShaderObject 条目（"cube"（cubeEntry 时）+ 每 primitive 一条 "model_i"）。
-	// 初始化列表构建（makePipelineTable），见构造器注释。无 RenderPass/PipelineLayout。
+	// "model" pipeline 规格（构造期 resolveModelSpec 解析，按值存；
+	// addModelPipeline 创建模型条目用）
+	RGL::PipelineSpec modelSpec;
+	// 管线表：ShaderObject 条目（"cube"（cubeEntry 时）+ 每 primitive 一条 "model_i"，
+	// 后者资产上传期经 addModelPipeline 加入）。cube 部分初始化列表构建
+	//（makePipelineTable），见构造器注释。无 RenderPass/PipelineLayout。
 	std::vector<PipelineEntry> pipelines;
-	// 管线表 name → 下标（构造器体内建一次；渲染 system 经 pipelineIndex 解析 DrawCall 的
-	// 管线条目，录制路径不再做字符串查找）
+	// 管线表 name → 下标（构造器体内建一次 + addModelPipeline 动态更新；
+	// 渲染 system 经 pipelineIndex 解析 DrawCall 的管线条目，录制路径不做字符串查找）
 	std::map<std::string, uint32_t> pipelineIndexMap;
 	// 动态状态：opaque pass（默认值 = cube 的 opaque 状态），drawFrame() 每帧
 	// beginRendering 后调一次 applyDynamicState（Phase 7 多 pass 时按 pass 换状态）
@@ -277,10 +302,18 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 	device.resetFences({*inFlightFences[currentFrame], *presentFences[currentFrame]});
 
 	// ② 从 swapchain 取一张后缓冲：成功时驱动信号 imageAvailableSemaphores
-	//（queueSubmit 的等待对象），imageIndex 为取到的图像下标
+	//（queueSubmit 的等待对象），imageIndex 为取到的图像下标。
+	// 100ms 超时（非无限）：compositor 停发 present（如 Wayland 息屏）时限时返回
+	// eTimeout，跳过本帧保住帧循环存活（llm_debug 离屏截图与事件轮询不依赖本帧
+	// 上屏）；正常 vsync 节奏下 acquire 在超时前返回，行为不变
 	auto [acquireResult, imageIndex] = swapchain->getSwapchain().acquireNextImage(
-		std::numeric_limits<uint64_t>::max(),
+		100'000'000,
 		*imageAvailableSemaphores[currentFrame], nullptr);
+
+	// eTimeout：无可用后缓冲——本帧不渲染，事件/system 下一轮照常
+	if (acquireResult == vk::Result::eTimeout) {
+		return {};
+	}
 
 	// eErrorOutOfDateKHR：swapchain 已失效（如 surface 尺寸变化），必须重建
 	if (acquireResult == vk::Result::eErrorOutOfDateKHR) {

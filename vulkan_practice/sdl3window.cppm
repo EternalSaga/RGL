@@ -51,7 +51,7 @@ export class SDLWindow {
 	}
 
 	[[nodiscard]] static std::expected<SDLWindow, Error>
-	create(int width, int height, std::string title) {
+	create(int width, int height, std::string title, bool hidden = false) {
 		auto logger = RLLogger::getInstance();
 
 		if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
@@ -61,8 +61,12 @@ export class SDLWindow {
 			return std::unexpected(Error{ErrorCode::SDLError, errMsg});
 		}
 
-		SDL_Window* wnd = SDL_CreateWindow(title.c_str(), width, height,
-			SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
+		// hidden（llm_debug 模式）：窗口存在但永不映射上屏——surface/instance 扩展/
+		// 队列选择全链路照常，只绕过"显示"；compositor 须存活（息屏可以，suspend 不行）
+		SDL_WindowFlags flags = SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE;
+		if (hidden)
+			flags |= SDL_WINDOW_HIDDEN;
+		SDL_Window* wnd = SDL_CreateWindow(title.c_str(), width, height, flags);
 
 		if (!wnd) {
 			std::string errMsg = std::string("Failed to create SDL Window: ") + SDL_GetError();
@@ -73,7 +77,8 @@ export class SDLWindow {
 		}
 
 		if (logger)
-			logger->info("SDL window created ({}x{})", width, height);
+			logger->info("SDL window created ({}x{}){}", width, height,
+				hidden ? " [hidden]" : "");
 
 		return SDLWindow{wnd, width, height};
 	}

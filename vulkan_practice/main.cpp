@@ -11,19 +11,13 @@ import gltf_loader;
 import model_importer;
 import scene;
 import camera;
+import llm_debug;
 import ecs;
 import rllogger;
 import vkerror;
 using namespace RGL;
 int main() {
-	auto windowResult = SDLWindow::create(800, 600, "Vulkan Practice");
-	if (!windowResult) {
-		auto* logger = RLLogger::getInstance();
-		if (logger) logger->error("错误: {}", windowResult.error().describe());
-		return -1;
-	}
-	auto window = std::move(*windowResult);
-
+	// 配置先于窗口：llm_debug 模式影响建窗（离屏隐藏窗 + 配置尺寸）
 	auto cameraResult = loadCameraConfig("configs/camera.lua");
 	if (!cameraResult) {
 		auto* logger = RLLogger::getInstance();
@@ -38,30 +32,39 @@ int main() {
 		return -1;
 	}
 	auto sceneConfig = std::move(*sceneResult);
+	auto cameraConfig = std::move(*cameraResult);
+	const bool llmEnabled = cameraConfig.llm.enabled;
 
-	// CPU 侧解析模型（先于 Vulkan 初始化：primitive 数 N 决定 descriptor heap 容量）
-	std::optional<GltfModel> model;
-	if (!sceneConfig.modelPath.empty()) {
-		auto modelResult = loadGltfModel(sceneConfig.modelPath);
-		if (!modelResult) {
-			auto* logger = RLLogger::getInstance();
-			if (logger) logger->error("错误: {}", modelResult.error().describe());
-			return -1;
-		}
-		model = std::move(*modelResult);
+	// llm_debug 模式：隐藏窗（永不显示，compositor 须存活）+ 配置尺寸；否则交互窗 800x600
+	auto windowResult = SDLWindow::create(
+		llmEnabled ? static_cast<int>(cameraConfig.llm.width) : 800,
+		llmEnabled ? static_cast<int>(cameraConfig.llm.height) : 600,
+		"Vulkan Practice", llmEnabled);
+	if (!windowResult) {
+		auto* logger = RLLogger::getInstance();
+		if (logger) logger->error("错误: {}", windowResult.error().describe());
+		return -1;
 	}
-	const uint32_t primitiveCount = model ? static_cast<uint32_t>(model->primitives.size()) : 0;
+	auto window = std::move(*windowResult);
+	if (llmEnabled) {
+		auto* logger = RLLogger::getInstance();
+		if (logger)
+			logger->info("llm_debug: 一次性截图模式（延迟 {} 帧后截图并退出）",
+				cameraConfig.llm.delayFrames);
+	}
 
 	try {
 		entt::registry registry;
 		// 窗口/应用状态（eventSystem 写）+ 每帧 system 的单例数据（context）：
 		// WindowExtent/AppExit（ecs.cppm）、SceneSpin/SceneBounds/ViewProjection（scene.cppm）、
-		// FrameDrawList（vkrenderer.cppm，渲染 system 产出、drawFrame 消费）
+		// FrameDrawList（vkrenderer.cppm，渲染 system 产出、drawFrame 消费）、
+		// InputEvents/CameraState（camera.cppm，输入事件流 + 相机自管 level 状态）
 		registry.ctx().emplace<WindowExtent>(static_cast<uint32_t>(window.getWidth()),
 			static_cast<uint32_t>(window.getHeight()));
 		registry.ctx().emplace<AppExit>();
-		registry.ctx().emplace<Camera>(std::move(*cameraResult));
-		registry.ctx().emplace<CameraInput>();
+		registry.ctx().emplace<Camera>(std::move(cameraConfig.camera));
+		registry.ctx().emplace<InputEvents>();
+		registry.ctx().emplace<CameraState>();
 		auto& spin = registry.ctx().emplace<SceneSpin>();
 		spin.speed = sceneConfig.spin ? 1.0f : 0.0f;  // 0 = 静止（configs/scene.lua 的 spin 开关）
 		registry.ctx().emplace<SceneBounds>();
@@ -71,26 +74,37 @@ int main() {
 		AppContext vkInstance(window);
 		DeviceContext vkDevice(vkInstance);
 		Swapchain vkSwapchain(vkDevice, window);
-		Resources vkResources(vkInstance, vkDevice, vkSwapchain, primitiveCount);
+		// heap 容量为固定裕量（与场景内容解耦，批次 3 E1.3）：CPU 解析模型不再需要
+		// 先于 Vulkan 初始化
+		Resources vkResources(vkInstance, vkDevice, vkSwapchain);
 		// 管线规格来自 configs/scene.lua；cubeEntry = showCube（cube 渲染的 gating，
 		// 决定 "cube" 管线条目是否创建 → 渲染 system 侧的 cube DrawCall 是否产生）
 		Renderer vkRenderer(vkDevice, vkSwapchain, vkResources, sceneConfig.pipelines,
-			sceneConfig.showCube, primitiveCount);
+			sceneConfig.showCube);
 
-		// GPU 上传 + ECS 注册（meshAssets 持有每 primitive 的顶点 buffer，须活到渲染结束）
-		ModelMeshAssets meshAssets;
-		if (model) {
-			auto uploadResult = uploadModelMeshes(vkDevice, vkResources, *model);
-			if (!uploadResult) {
+		// CPU 解析 + GPU 上传 + ECS 注册：资产数据（buffer/slot/三角形数/管线条目引用）
+		// 在 Resources 资产表，生命周期不再依赖 main 作用域（E1.2/L6）
+		if (!sceneConfig.modelPath.empty()) {
+			auto modelResult = loadGltfModel(sceneConfig.modelPath);
+			if (!modelResult) {
 				auto* logger = RLLogger::getInstance();
-				if (logger) logger->error("错误: {}", uploadResult.error().describe());
+				if (logger) logger->error("错误: {}", modelResult.error().describe());
 				return -1;
 			}
-			meshAssets = std::move(*uploadResult);
-			registerScene(registry, *model);
+			auto assetIdsResult = uploadModelMeshes(vkDevice, vkResources, *modelResult);
+			if (!assetIdsResult) {
+				auto* logger = RLLogger::getInstance();
+				if (logger) logger->error("错误: {}", assetIdsResult.error().describe());
+				return -1;
+			}
+			auto& assets = vkResources.getAssetTable();
+			for (uint32_t id : *assetIdsResult)
+				vkRenderer.addModelPipeline(assets.get(id).heapSlot, id);
+			registerScene(registry, *modelResult, std::span<const uint32_t>(*assetIdsResult));
 		}
 
-		auto renderResult = RGL::renderSystem(registry, vkRenderer);
+		auto renderResult = RGL::renderSystem(registry, vkRenderer,
+			llmEnabled ? &cameraConfig.llm : nullptr);
 		if (!renderResult) {
 			auto* logger = RLLogger::getInstance();
 			if (logger) logger->error("错误: {}", renderResult.error().describe());

@@ -17,27 +17,25 @@ import model_types_generated;
 
 namespace RGL {
 
-// 每个 primitive 一个顶点 buffer（RAII：随 SharedAllocator 控制块由 VMA 统一销毁）。
-// 描述符已写入 descriptor heap 对应槽位：slot = reservedSlots() + HeapSlotModelVertexBase + i。
-export struct ModelMeshAssets {
-	std::vector<VmaBuffer> vertexBuffers;
-	uint32_t primitiveCount = 0;
-};
-
 // GPU 上传：每 primitive 建一个 BDA storage buffer（CPU→GPU mapped 写入顶点数据），
-// 并把描述符写进 heap 槽位（vkWriteResourceDescriptorsEXT，同 cube 的写法）。
-export [[nodiscard]] std::expected<ModelMeshAssets, Error> uploadModelMeshes(
+// 描述符写进 heap 槽位（vkWriteResourceDescriptorsEXT，同 cube 的写法），并把 buffer +
+// slot + 三角形数注册进 Resources 资产表（一条 MeshAsset 记录，E1.1）。
+// 资产数据生命周期归资产表（Resources 成员），不再经返回值持有（E1.2/L6）。
+// 返回资产 id 列表（与 model.primitives 下标对齐：上传顺序 = primitive 顺序）。
+export [[nodiscard]] std::expected<std::vector<uint32_t>, Error> uploadModelMeshes(
 	RGL::DeviceContext& vkDevice, RGL::Resources& res, const RGL::GltfModel& model) {
 	auto* logger = RLLogger::getInstance();
 	auto& device = vkDevice.getDevice();
 	auto& heap = res.getDescriptorHeap();
+	auto& assets = res.getAssetTable();
 
-	ModelMeshAssets assets;
-	assets.vertexBuffers.reserve(model.primitives.size());
-	assets.primitiveCount = static_cast<uint32_t>(model.primitives.size());
+	std::vector<uint32_t> assetIds;
+	const uint32_t primitiveCount = static_cast<uint32_t>(model.primitives.size());
+	assetIds.reserve(primitiveCount);
 
-	for (uint32_t i = 0; i < assets.primitiveCount; ++i) {
-		const auto& vertices = model.primitives[i].vertices;
+	for (uint32_t i = 0; i < primitiveCount; ++i) {
+		const auto& prim = model.primitives[i];
+		const auto& vertices = prim.vertices;
 		const vk::DeviceSize size = static_cast<vk::DeviceSize>(vertices.size() * sizeof(ModelVertex));
 
 		vk::BufferCreateInfo bufferInfo{};
@@ -59,8 +57,8 @@ export [[nodiscard]] std::expected<ModelMeshAssets, Error> uploadModelMeshes(
 
 		std::memcpy(allocData.pMappedData, vertices.data(), size);
 
-		// 描述符：storage buffer → heap 槽位 i（基址 HeapSlotModelVertexBase，
-		// 避开 cube 占用的 0/4；槽位容量在 Resources 构造期按 primitive 数扩过）
+		// 描述符：storage buffer → heap 槽位（基址 HeapSlotModelVertexBase，避开 cube
+		// 占用的 0/4；slot = reserved + 基址 + i，显式记录进资产表——不再靠下标约定）
 		const uint32_t slot = heap.getReservedSlots() + HeapSlotModelVertexBase + i;
 		auto slotAddr = heap.getSlotCpuAddress(slot);
 		if (!slotAddr)
@@ -73,22 +71,25 @@ export [[nodiscard]] std::expected<ModelMeshAssets, Error> uploadModelMeshes(
 		vk::HostAddressRangeEXT dst{*slotAddr, heap.getDescriptorSize()};
 		device.writeResourceDescriptorsEXT(desc, dst);
 
+		const uint32_t id = assets.addMesh(std::move(buffer), slot, prim.triangleCount);
 		if (logger)
-			logger->debug("model primitive {}: {} vertices ({}B) → heap slot {}",
-				i, vertices.size(), size, slot);
-		assets.vertexBuffers.push_back(std::move(buffer));
+			logger->debug("model primitive {}: {} vertices ({}B) → heap slot {} / asset {}",
+				i, vertices.size(), size, slot, id);
+		assetIds.push_back(id);
 	}
-	return assets;
+	return assetIds;
 }
 
-// 模型 → ECS：场景根（Relationship，parent = null；Bounds 组件 = 模型整体包围球）
-// + 每 primitive 一个 entity（Transform/MeshRef/MaterialRef，双向 Relationship 挂到根下）。
+// 模型 → ECS：场景根（Relationship parent = null；Bounds 组件 = 模型整体包围球）
+// + 每 primitive 一个 entity（Transform/MeshRef{asset}/MaterialRef，Relationship parent 挂根）。
+// assetIds 与 model.primitives 下标对齐（uploadModelMeshes 返回，上传顺序 = primitive 顺序）。
 // Phase 2 无层级嵌套：node 变换在 gltf_loader 里已扁平化为 translation，world = local。
 // 包围球经 Bounds 组件进 registry，由 boundsSystem 聚合进 SceneBounds（自适应 near/far，
 // 见 ecs.cppm）——cube 将来入 ECS 时挂自己的 Bounds 即自动纳入聚合。
-export entt::entity registerScene(entt::registry& rg, const RGL::GltfModel& model) {
+export entt::entity registerScene(entt::registry& rg, const RGL::GltfModel& model,
+	std::span<const uint32_t> assetIds) {
 	auto sceneRoot = rg.create();
-	auto& rootRel = rg.emplace<Relationship>(sceneRoot);
+	rg.emplace<Relationship>(sceneRoot);  // parent = null（根）；children 不存储（单向，E5.2）
 	rg.emplace<Bounds>(sceneRoot, model.bounds.center, model.bounds.radius);
 
 	for (size_t i = 0; i < model.primitives.size(); ++i) {
@@ -100,13 +101,8 @@ export entt::entity registerScene(entt::registry& rg, const RGL::GltfModel& mode
 		tf.local = local;
 		tf.world = local;
 
-		auto& meshRef = rg.emplace<MeshRef>(e);
-		meshRef.primitiveIndex = static_cast<uint32_t>(i);
-		meshRef.triangleCount = prim.triangleCount;
-
+		rg.emplace<MeshRef>(e).asset = assetIds[i];
 		rg.emplace<MaterialRef>(e).baseColor = prim.baseColor;
-
-		rootRel.children.push_back(e);
 		rg.emplace<Relationship>(e).parent = sceneRoot;
 	}
 	return sceneRoot;

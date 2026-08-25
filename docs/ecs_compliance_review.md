@@ -29,11 +29,13 @@ registry 只在 Phase 2 的 model 路径上生效了一半（entity 注册 + vie
 
 | # | 规范 | 项目现状 |
 |---|------|---------|
-| 1 | registry 是场景唯一数据源，场景状态不在 registry 外平行维护 | ❌ 场景数据三处散落（E1） |
-| 2 | entity 是 ID、component 是纯数据、system 是逻辑唯一载体；system 间经数据通信，顺序显式 | ⚠️ model 路径符合；renderSystem god function 内联大量未 system 化逻辑（E3） |
-| 3 | 场景构成数据驱动："场景里有什么" = registry 里有什么 entity，而非全局变量 / config 字段 / 构造参数 | ❌ cube = config bool、model = path 有无、场景形状 = 构造参数（E1/E3/M1） |
-| 4 | 分层：底层 Vulkan 类不依赖 ECS、不认识具体资产；渲染 system 产出抽象 draw list，执行器只执行 | ❌ Renderer 硬编码 cube/model 知识与 draw 顺序（E2/L3） |
-| 5 | 资产与场景实例分离，组件引用稳定资产 ID 而非侧数组下标 | ❌ MeshRef 是下标，五方一致性靠约定（E1/E5.1） |
+| 1 | registry 是场景唯一数据源，场景状态不在 registry 外平行维护 | ⚠️ 每帧/配置状态已全部进 registry（E3/E4 已修复：`SceneSpin`/`SceneBounds`/`ViewProjection`/`WindowExtent`/`AppExit`/`FrameDrawList`）；model 资产数据收敛进 Resources 资产表（E1.1–1.3 已修复，批次 3）；cube 数据仍在 Resources 成员（E1.4，Phase 4） |
+| 2 | entity 是 ID、component 是纯数据、system 是逻辑唯一载体；system 间经数据通信，顺序显式 | ✅ 已修复（批次 2）：5 个每帧 system（camera/animation/bounds/projection/renderlist）+ 显式 system 列表（未用 entt::scheduler——process 调度器执行顺序无保证，见 §处置记录）；E1/E5 仍 Open |
+| 3 | 场景构成数据驱动："场景里有什么" = registry 里有什么 entity，而非全局变量 / config 字段 / 构造参数 | ⚠️ config 不再进每帧路径（E3 已修复）；model = 上传 → 资产表 → entity 数据驱动（E1.1–1.3 已修复，批次 3；构造参数去耦合）；cube = 构造期 gating（管线条目存在性 = 画不画，E1.4/M1，Phase 4）仍存 |
+| 4 | 分层：底层 Vulkan 类不依赖 ECS、不认识具体资产；渲染 system 产出抽象 draw list，执行器只执行 | ✅ 已修复（批次 2）：renderlist system 产出 `FrameDrawList`，`drawFrame` 盲执行单循环；Renderer 零 entt 依赖（L3 已修复） |
+| 5 | 资产与场景实例分离，组件引用稳定资产 ID 而非侧数组下标 | ✅ 已修复（批次 3）：`MeshRef.asset` 资产 ID 引用 Resources 资产表；五方一致性收敛为资产表一处映射（E1.1/E5.1） |
+
+> 正文"证据"行号基于批次 2 重构前代码（2026-08-24）；已修复条目的证据为当时快照，现状以 §处置记录 为准。
 
 ---
 
@@ -41,11 +43,11 @@ registry 只在 Phase 2 的 model 路径上生效了一半（entity 注册 + vie
 
 | ID | 问题 | 严重度 | 状态 |
 |----|------|--------|------|
-| [E1](#e1--registry-不拥有场景数据三处散落) | registry 不拥有场景：数据三处散落 + 场景形状泄漏进构造器 | High | Open（批次 3） |
+| [E1](#e1--registry-不拥有场景数据三处散落) | registry 不拥有场景：数据三处散落 + 场景形状泄漏进构造器 | High | E1.1–1.3 **已修复**（2026-08-25 批次 3：资产表 + 生命周期收敛 + 构造参数去耦合，含 L6）；E1.4（cube 一等资产）Open（批次 4/Phase 4） |
 | [~~E2~~](#e2--renderer-认识具体资产分层倒置无-draw-list) | Renderer 认识具体场景资产，分层倒置，无 draw list | High | **已修复**（2026-08-24 批次 2） |
 | [~~E3~~](#e3--rendersystem-god-function无调度器config-泄漏) | renderSystem god function：帧循环 + 未 system 化逻辑 + 无调度器 + config 泄漏 | High | **已修复**（2026-08-24 批次 2） |
 | [~~E4~~](#e4--全局状态不进-ecs) | 全局状态不进 ECS：spin / ModelBounds / Viewport | Medium | **已修复**（2026-08-24 批次 2） |
-| [E5](#e5--组件设计偏离纯数据引用约定) | 组件设计偏离"纯数据引用"约定：MeshRef 下标 / MaterialRef 值拷贝 / Relationship 双向 / CameraInput 原始状态 + 键位硬编码 | Medium | Open（批次 3/4；E5.3 已留注释） |
+| [E5](#e5--组件设计偏离纯数据引用约定) | 组件设计偏离"纯数据引用"约定：MeshRef 下标 / MaterialRef 值拷贝 / Relationship 双向 / CameraInput 原始状态 + 键位硬编码 | Medium | E5.1/E5.2/E5.4 **已修复**（2026-08-25 批次 3：MeshRef 资产 ID 化 + Relationship 单向化 + 输入事件化）；E5.3（MaterialRef → 材质资产表）Open（批次 4/Phase 4） |
 | [~~L3~~](#l3--renderer-持有未使用的-registry) | Renderer 持有未使用的 `entt::registry*`（死依赖） | Low | **已修复**（2026-08-24 批次 2 顺手） |
 
 > L4（默认 SPV 路径重复）/ L5（set-0 约定）/ L6（ModelMeshAssets 生命周期）为耦合审查条目，
@@ -304,6 +306,10 @@ system 间契约靠阅读函数体理解；config 改动的影响面无法从 re
 批次 1 部分落地：L3 已修；E5.2（Relationship 单向化）未做（便宜，可独立随时做）；
 E5.3 过渡（MaterialRef 值拷贝问题）仅在 `scene.cppm` 留注释，改名未做。
 
+**执行状态（2026-08-25）**：批次 3 已落地（E1.1–1.3 + E5.1 + E5.2 + E5.4 + L6；
+见 §处置记录 2026-08-25 批次 3 节）。批次 1 剩余（E5.2）已随批次 3 顺手完成；
+E5.3 过渡（MaterialRef 改名）仍未做（完整形态归批次 4）。
+
 ---
 
 ## 处置记录
@@ -350,3 +356,80 @@ bounds center=(0.1004, 0, -0.4999) radius=6.25 与 Phase 2 记录（phase2_plan 
 > 接缝已回写：`AGENTS.md` 模块结构（scene/scene_config/gltf_loader/model_importer/model_types_generated 行 +
 > vk_renderer/ecs 行更新）、关键文件位置（drawFrame/DrawCall/renderListSystem/schema constants）、已知问题（ECS 已知债）、
 > 其他文档（本文 + phase2_coupling_review + device_generated_commands_research + present_timing_research）。
+
+### 2026-08-25 批次 3 落地（资产表 + 输入事件化）
+
+- ~~E1.1~~ **已修复**：`AssetTable`（`vkresources.cppm`，**Resources 成员**——资产表持 GPU 资源，
+  ECS 层不引入 Vulkan 依赖；registry 侧 `MeshRef{asset}` 只存资产 id，system 经
+  `Resources&` 参数解析，同 renderListSystem 现有 renderer 参数模式）。
+  `MeshAsset{VmaBuffer, heapSlot, triangleCount, pipelineIndex}` + 稳定 id（vector 下标，上传顺序分配）。
+- ~~E1.2/L6~~ **已修复**：`ModelMeshAssets` 结构删除，buffer 所有权收敛进资产表
+  （随 `SharedAllocator` 控制块 + Resources 存活）；`main.cpp` 局部变量与
+  "须活到渲染结束"注释一并消失。
+- ~~E1.3~~ **已修复**：`Resources`/`Renderer` 构造签名删除 `modelPrimitiveCount`；
+  heap 容量 = `reserved + HeapSlotModelVertexBase + kUserSlotMargin(1024)` 固定裕量
+  （`VmaDescriptorHeap` 不支持运行时扩容，统一 slot 分配器归 Phase 3 TexturePool）。
+  `main.cpp` "先 CPU 解析模型再 Vulkan 初始化" 硬顺序约束删除（解析移到初始化之后）。
+  模型管线条目从构造期移到资产上传期：`Renderer::addModelPipeline(vertexSlot, assetId)`
+  （binding mapping 显式烘焙顶点 slot，条目下标写回资产记录——`renderListSystem`
+  不再经 `"model_i"` 字符串查管线，E2.4 残余消解）。
+- ~~E5.1~~ **已修复**：`MeshRef{primitiveIndex, triangleCount}` → `MeshRef{asset}`；
+  `triangleCount` 移入资产表（资产属性，不是场景实例属性）。
+- ~~E5.2~~ **已修复**：`Relationship` 删 `children`（单向 parent）；children 查询由
+  `rg.view<Relationship>` 按 parent 过滤派生（现状无消费点，接缝留注释）。
+- ~~E5.4~~ **已修复**：`CameraInput`（level-state 袋 + 累积器）删除 →
+  `InputEvents`（context 内 `std::deque<InputEvent>`：KeyDown/KeyUp/MouseButton/MouseDelta/Wheel）
+  + `CameraState`（cameraSystem 独占的 level 状态）。`eventSystem` 只产事件、不做键位映射；
+  `cameraSystem` 消费即清空。键位 → `Camera.keys`（`KeyBindings`，`configs/camera.lua`
+  的 `keys` 字段，sol2 沙箱 + 可选回落默认 WASD；未知键名报错退出）。
+  行为差异：mouse delta 不再按"按下时"过滤产生（eventSystem 全产，cameraSystem 按
+  自管 dragging 状态过滤应用）——帧内 click+motion 边缘情形语义等价。
+- **slot 分配器（最小版，用户决策）**：slot 值仍 `reserved + 8 + i`（反射契约不变），
+  但显式记录进资产表 + 管线 mapping 显式传 slot（隐式下标耦合消解）；
+  统一 `allocSlot` 与 Phase 3 TexturePool 并案设计（资产表为宿主）。
+
+**验证**：`just build` 通过；`just run-igpu` 双配置各 12s 无 error/warn
+（`cube=false`：仅 4 盒，cube DrawCall 不产生；`cube=true`：彩色 cube + 4 盒）；
+日志核对 slot 8-11 / asset 0-3、bounds center=(0.1004, 0, -0.4999) radius=6.25
+与 Phase 2 记录一致。相机输入（WASD/拖拽/滚轮）交互回归待人工目视确认。
+
+**接缝回写**：`AGENTS.md`（模块结构 vk_resources/vk_renderer/scene/camera/ecs/model_importer 行
++ main.cpp 描述 + 关键文件位置 addModelPipeline/renderListSystem/eventSystem + 已知问题）、
+`phase2_coupling_review.md`（L6 标已修复 + 状态更新节）。
+
+---
+
+## 下一步（2026-08-24 会话结论）
+
+> **状态（2026-08-25）**：批次 3 已落地（§处置记录 2026-08-25 批次 3 节），
+> 下一个会话 = **Phase 3（纹理管理）** 本体，预研结论见下。
+
+**原计划（Phase 3 + 批次 3 并案）顺序**：
+
+1. ~~**先批次 3**~~（**已完成 2026-08-25**）：资产表 + MeshRef 资产 ID 化 + 构造参数去耦合 + 输入事件化。
+   **理由**：Phase 2 计划里的"运行时 slot 分配器"实际未落地（现状：cube 固定 slot 0/4 走 `types_generated`，
+   model 固定 base offset 8 + i 走 `model_types_generated`，无统一分配器）；Phase 3 TexturePool 的 slot 分配
+   需要统一分配器，资产表是它的天然宿主。
+2. **再 Phase 3**：`TexturePool` 模块（`allocSlot(imageData)` + path→slot 缓存）+ 纹理契约
+   （`types.slang` `TextureSampler` 绑定 + schema 扩展 + 生成端校验）+ model 纹理采样（`model.frag` 采 baseColorTexture）。
+3. ~~E5.2（Relationship 单向化）小，可随批次 3 顺手。~~（**已完成 2026-08-25**，随批次 3）
+
+**Phase 3 预研（2026-08-25 已做 RADV 侧，权威记录 `docs/heap_texture_research.md`）**：
+- spec 条款已核实（v1.4.360 `chapters/descriptorheaps.adoc`）：heap 采样纹理**只能**
+  `VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE`（VUID 11210 不含 combined image sampler），sampler 走
+  `pEmbeddedSampler`（内嵌，替代 sampler heap）；单 resource heap 可混存 buffer+image 描述符。
+- **spike 实测（`heap_texture_spike/`，RADV，离屏像素级验证）**：Q3/Q4 **PASS**（单 heap 混存 +
+  内嵌 sampler 采样，像素精确匹配）；**Q1 关键约束**：`imageDescriptorSize=32B > bufferDescriptorSize=16B`，
+  现有 slot 寻址（`slot * bufferDescriptorSize`）不能容纳 image 描述符 → **Phase 3 slot 步长改
+  `max(bufferDescriptorSize, imageDescriptorSize)`（运行时查询，勿硬编码）**。NVIDIA 侧待 dGPU 机器补测。
+- **v341 头（本机/主工程）与 v1.4.360 spec 的 API 差异**已记录（调研文档 §二）：buffer 描述符走
+  `pAddressRange` 裸地址、写描述符 4 参、`pEmbeddedSampler` 在 `constantOffset` 内——写代码以系统头为准。
+- tinygltf 内嵌纹理解码**当前是关的**：`TINYGLTF_NO_STB_IMAGE` 在 `gltf_loader.cppm:3` 和
+  `tinygltf_impl.cpp:5` 各定义一处（glb 内嵌纹理需两处都删）。
+- 测试模型 `transparent.glb` 无纹理——Phase 3 需换/补带 baseColorTexture 的测试模型。
+- 设计决定点（已定，见调研文档 §六）：纹理与 buffer 描述符**同 heap**（Q3 PASS）；slot 统一步长 `max(buffer,image)`；
+  一律 `pEmbeddedSampler`（不建 sampler heap）；mipmaps 后补；schema 扩展纹理绑定校验。
+  Slang 变体（`Texture2D<float>`+`samplerState` = OpTypeImage+OpTypeSampler 对）spike 未覆盖（glslang 构造器限制），主工程接入时直接验证。
+
+**未排期的便宜项**：M3（两套 Lua 机制命名区隔）、L4（默认 SPV 路径，现三处：`defaultSceneConfig` +
+`scene.lua` + `makePipelineTable` 默认回落 static）、E5.2（若未随批次 3 做）。

@@ -215,6 +215,15 @@ SPV 路径的模式撑不住。Phase 4 的 ShaderRegistry 是最终解法，但�
 
 ## Phase 3：纹理管理
 
+> **状态（2026-08-25）**：前置批次 3（ECS 债）已落地——`Resources::AssetTable`（资产表，
+> GPU 数据/heap slot/三角形数/管线条目引用 + 稳定 id）成为 TexturePool slot 分配器的天然宿主；
+> `MeshRef{asset}` 资产 ID 化、构造参数去耦合（heap 容量固定裕量 1024 槽）、输入事件化。
+> 见 [ecs_compliance_review.md](ecs_compliance_review.md) §处置记录。
+> **预研已做（RADV 侧）**：`heap_texture_spike/` 离屏像素级验证 PASS（单 heap 混存
+> buffer+image 描述符、内嵌 sampler 采样）；**关键约束**：RADV `imageDescriptorSize=32B >
+> bufferDescriptorSize=16B`，Phase 3 slot 步长须改 `max(buffer, image)`（运行时查询）。
+> NVIDIA 侧 spike 待 dGPU 机器补测。完整记录见 [heap_texture_research.md](heap_texture_research.md)。
+
 ### 目标
 支持纹理贴图，为 PBR 材质做准备。
 

@@ -156,7 +156,7 @@ message(STATUS "MODEL_FRAG_SPV is: ${MODEL_FRAG_SPV}")
 # 单 TU 编译 8756 行实现，-O2 下 clang 又慢又吃内存（24 并发时打爆 swap）；
 # 模型加载是启动期一次性路径、非热路径，-O0 编译省内存省时间。
 set_source_files_properties(tinygltf_impl.cpp PROPERTIES COMPILE_OPTIONS "-O0")
-add_executable(vulkan_practice main.cpp vam_impl.cpp tinygltf_impl.cpp ${MESH_SPV} ${FRAG_SPV} ${MODEL_MESH_SPV} ${MODEL_FRAG_SPV})
+add_executable(vulkan_practice main.cpp vam_impl.cpp tinygltf_impl.cpp stb_impl.cpp ${MESH_SPV} ${FRAG_SPV} ${MODEL_MESH_SPV} ${MODEL_FRAG_SPV})
 
 # ─── Runtime config copy (configs/ → build dir) ──────────────────────────────
 # 程序运行时按相对路径读取 configs/*.json，build 目录必须完整。
@@ -197,7 +197,7 @@ target_sources(vulkan_practice PUBLIC
                       camera.cppm scene_config.cppm
                       shader.cppm VmaBuffer.cppm features.cppm vkinstance.cppm vkdevice.cppm
                       vkswapchain.cppm vkresources.cppm vkrenderer.cppm ecs.cppm
-                      gltf_loader.cppm model_importer.cppm scene.cppm
+                      gltf_loader.cppm model_importer.cppm scene.cppm llm_debug.cppm
                       ${TYPES_CPPM}
                       ${MODEL_CPPM}
                       ${FEATURES_CPPM}

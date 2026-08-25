@@ -10,6 +10,7 @@ module;
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <expected>
 #include <filesystem>
 #include <fstream>
@@ -40,6 +41,7 @@ using std::back_inserter;
 using std::cerr;
 using std::clamp;
 using std::cos;
+using std::deque;
 using std::cout;
 using std::endl;
 using std::error_code;
@@ -68,6 +70,7 @@ using std::string;
 using std::string_view;
 using std::strlen;
 using std::to_string;
+using std::toupper;
 using std::unexpected;
 using std::vector;
 

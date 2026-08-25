@@ -18,16 +18,17 @@ export struct Transform {
 
 // 父子关系：与 legacy 同款手写组件（legacy/render_core/gl/EnTTRelationship.hpp，
 // entt 3.16 无内置 Relationship 头）。parent = entt::null 表示根。
+// 单向（E5.2）：children 不存储，由 rg.view<Relationship> 按 parent 过滤派生
+//（同一关系不再存两份，一致性不靠写入方自觉）。
 export struct Relationship {
 	entt::entity parent = entt::null;
-	std::vector<entt::entity> children;
 };
 
-// 指向已上传 GPU 的 primitive（index = model 内 primitive 序号，
-// 与 heap slot / 管线表条目一一对应）
+// 引用已上传 GPU 的资产（asset id = Resources 资产表的下标，见 vkresources.cppm 的 AssetTable）：
+// GPU 数据 / heap slot / 三角形数 / 管线条目引用全部收敛在资产表记录里，
+// entity ↔ primitive ↔ heap slot ↔ 管线条目 ↔ draw-args 的五方约定收敛为一处映射（E1.1/E5.1）
 export struct MeshRef {
-	uint32_t primitiveIndex = 0;
-	uint32_t triangleCount = 0;  // 该 primitive 的三角形数（group 数派生用）
+	uint32_t asset = 0;
 };
 
 // Phase 2 材质 = baseColor（flat unlit；alpha 忽略，透明是 Phase 5）

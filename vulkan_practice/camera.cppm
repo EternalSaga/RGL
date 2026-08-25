@@ -3,17 +3,29 @@ module;
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <sol/sol.hpp>
+#include <SDL3/SDL_keyboard.h>
+#include <SDL3/SDL_mouse.h>
 export module camera;
 
 import rlstd;
 import rllogger;
 import vkerror;
+import llm_debug;
 
 namespace RGL {
 
 export enum class CameraMode {
 	Trackball,
 	Fps,
+};
+
+// 键位绑定（configs/camera.lua 的 keys 字段，sol2 沙箱 + 可选字段回落默认）：
+// 动作 → SDL 键码；默认 WASD。
+export struct KeyBindings {
+	uint32_t forward = SDLK_W;
+	uint32_t back = SDLK_S;
+	uint32_t left = SDLK_A;
+	uint32_t right = SDLK_D;
 };
 
 // 相机姿态：yaw/pitch 表示朝向（yaw=0, pitch=0 → forward=(0,0,-1)）。
@@ -34,18 +46,44 @@ export struct Camera {
 	float fpsSensitivity = 0.003f;
 	float trackballSensitivity = 0.005f;
 	float zoomSpeed = 0.03f;
+	KeyBindings keys;  // 键位绑定（configs/camera.lua 的 keys 字段，E5.4：键位是数据不是硬编码）
 };
 
-// 原始输入状态：eventSystem（中央轮询）写入，cameraSystem 每帧消费并重置累积器
-export struct CameraInput {
-	bool forward = false;
-	bool back = false;
-	bool left = false;
-	bool right = false;
+// 输入事件（eventSystem 产生，cameraSystem 消费即清空）：
+// 键事件带 SDL 键码——键位映射不在 eventSystem，消费方按 Camera.keys 解释
+//（E5.4：输入是事件流不是共享 level-state 袋）；鼠标按键事件带 button + pressed，
+// level 状态由 cameraSystem 自管（CameraState），不经输入共享。
+export struct InputEvent {
+	enum class Type {
+		KeyDown,
+		KeyUp,
+		MouseButton,
+		MouseDelta,
+		Wheel,
+	};
+	Type type = Type::KeyDown;
+	uint32_t key = 0;      // SDL 键码（KeyDown/KeyUp）
+	uint8_t button = 0;    // SDL 鼠标按键（MouseButton）
+	bool pressed = false;  // MouseButton：true = 按下
+	glm::vec2 delta{};     // MouseDelta（xrel/yrel 增量）
+	float amount = 0.0f;   // Wheel（y 增量）
+};
+
+// 输入事件流（registry context；eventSystem 只产事件，cameraSystem 消费即清空；
+// 退出/窗口状态不走事件，见 ecs.cppm 的 AppExit/WindowExtent）
+export struct InputEvents {
+	std::deque<InputEvent> events;
+};
+
+// 相机内部状态（cameraSystem 独占：键/鼠标按键 level 状态，每帧由输入事件更新；
+// 消费方显式管理，不与其他 system 共享——E5.4）
+export struct CameraState {
+	bool keyForward = false;
+	bool keyBack = false;
+	bool keyLeft = false;
+	bool keyRight = false;
 	bool mouseLeftDown = false;
 	bool mouseRightDown = false;
-	glm::vec2 mouseDelta{0.0f};
-	float wheelDelta = 0.0f;
 };
 
 export glm::vec3 cameraForward(const Camera& camera) {
@@ -85,21 +123,55 @@ constexpr float kMaxWheelPerFrame = 10.0f;
 
 export void cameraSystem(entt::registry& rg, float dt) {
 	auto& camera = rg.ctx().get<Camera>();
-	auto& input = rg.ctx().get<CameraInput>();
+	auto& state = rg.ctx().get<CameraState>();
+	auto& events = rg.ctx().get<InputEvents>();
 	auto* logger = RLLogger::getInstance();
 
-	bool dragging = (camera.mode == CameraMode::Fps && input.mouseRightDown) ||
-		(camera.mode == CameraMode::Trackball && input.mouseLeftDown);
+	// 消费即清空：键事件/鼠标按键事件 → level 状态（cameraSystem 自管），
+	// delta/wheel 事件 → 本帧累积
+	glm::vec2 mouseDelta{0.0f};
+	float wheel = 0.0f;
+	const auto& keys = camera.keys;
+	for (const auto& ev : events.events) {
+		switch (ev.type) {
+			case InputEvent::Type::KeyDown:
+				if (ev.key == keys.forward) state.keyForward = true;
+				else if (ev.key == keys.back) state.keyBack = true;
+				else if (ev.key == keys.left) state.keyLeft = true;
+				else if (ev.key == keys.right) state.keyRight = true;
+				break;
+			case InputEvent::Type::KeyUp:
+				if (ev.key == keys.forward) state.keyForward = false;
+				else if (ev.key == keys.back) state.keyBack = false;
+				else if (ev.key == keys.left) state.keyLeft = false;
+				else if (ev.key == keys.right) state.keyRight = false;
+				break;
+			case InputEvent::Type::MouseButton:
+				if (ev.button == SDL_BUTTON_LEFT) state.mouseLeftDown = ev.pressed;
+				else if (ev.button == SDL_BUTTON_RIGHT) state.mouseRightDown = ev.pressed;
+				break;
+			case InputEvent::Type::MouseDelta:
+				mouseDelta += ev.delta;
+				break;
+			case InputEvent::Type::Wheel:
+				wheel += ev.amount;
+				break;
+		}
+	}
+	events.events.clear();
+
+	bool dragging = (camera.mode == CameraMode::Fps && state.mouseRightDown) ||
+		(camera.mode == CameraMode::Trackball && state.mouseLeftDown);
 	if (dragging) {
-		float dx = std::clamp(input.mouseDelta.x, -kMaxMouseDeltaPerFrame,
+		float dx = std::clamp(mouseDelta.x, -kMaxMouseDeltaPerFrame,
 			kMaxMouseDeltaPerFrame);
-		float dy = std::clamp(input.mouseDelta.y, -kMaxMouseDeltaPerFrame,
+		float dy = std::clamp(mouseDelta.y, -kMaxMouseDeltaPerFrame,
 			kMaxMouseDeltaPerFrame);
 		if (dx == kMaxMouseDeltaPerFrame || dx == -kMaxMouseDeltaPerFrame ||
 			dy == kMaxMouseDeltaPerFrame || dy == -kMaxMouseDeltaPerFrame) {
 			if (logger)
 				logger->debug("camera: clamped huge mouse delta ({}, {}) -> ({}, {})",
-					input.mouseDelta.x, input.mouseDelta.y, dx, dy);
+					mouseDelta.x, mouseDelta.y, dx, dy);
 		}
 		if (camera.mode == CameraMode::Fps) {
 			// FPS 鼠标 look：拖右→向右看，拖上→向上看（相机原地转朝向）
@@ -128,25 +200,50 @@ export void cameraSystem(entt::registry& rg, float dt) {
 	camera.pitch = std::clamp(camera.pitch, -kPitchLimit, kPitchLimit);
 
 	if (camera.mode == CameraMode::Fps) {
-		float fwd = (input.forward ? 1.0f : 0.0f) - (input.back ? 1.0f : 0.0f);
-		float strafe = (input.right ? 1.0f : 0.0f) - (input.left ? 1.0f : 0.0f);
+		float fwd = (state.keyForward ? 1.0f : 0.0f) - (state.keyBack ? 1.0f : 0.0f);
+		float strafe = (state.keyRight ? 1.0f : 0.0f) - (state.keyLeft ? 1.0f : 0.0f);
 		if (fwd != 0.0f || strafe != 0.0f) {
 			camera.position += (cameraForward(camera) * fwd +
 					cameraRight(camera) * strafe) * (camera.fpsSpeed * dt);
 		}
-	} else if (input.wheelDelta != 0.0f) {
-		float wheel = std::clamp(input.wheelDelta, -kMaxWheelPerFrame, kMaxWheelPerFrame);
-		camera.position += cameraForward(camera) * (wheel * camera.zoomSpeed);
+	} else if (wheel != 0.0f) {
+		const float clamped = std::clamp(wheel, -kMaxWheelPerFrame, kMaxWheelPerFrame);
+		camera.position += cameraForward(camera) * (clamped * camera.zoomSpeed);
 	}
-
-	input.mouseDelta = glm::vec2(0.0f);
-	input.wheelDelta = 0.0f;
 }
 
-// 从 Lua 配置初始化相机（字段可选，缺省回落默认值；fovDegrees 为角度，加载时转弧度）
-// 文件缺失 → 返回默认 Camera + warn；脚本/类型错误 → std::unexpected
+// 键名（configs/camera.lua 的 keys 字段值）→ SDL 键码：单字母/数字不区分大小写，
+// 方向键用 Up/Down/Left/Right，另有 Space/Enter。无法识别 → nullopt（配置错误，调用方报错退出）
+[[nodiscard]] std::optional<uint32_t> keyNameToSdlKey(std::string_view name) {
+	if (name.size() == 1) {
+		const char c = static_cast<char>(std::toupper(static_cast<unsigned char>(name[0])));
+		if (c >= 'A' && c <= 'Z')
+			return static_cast<uint32_t>(SDLK_A + (c - 'A'));
+		if (c >= '0' && c <= '9')
+			return static_cast<uint32_t>(SDLK_0 + (c - '0'));
+	}
+	if (name == "Up") return static_cast<uint32_t>(SDLK_UP);
+	if (name == "Down") return static_cast<uint32_t>(SDLK_DOWN);
+	if (name == "Left") return static_cast<uint32_t>(SDLK_LEFT);
+	if (name == "Right") return static_cast<uint32_t>(SDLK_RIGHT);
+	if (name == "Space") return static_cast<uint32_t>(SDLK_SPACE);
+	if (name == "Enter" || name == "Return") return static_cast<uint32_t>(SDLK_RETURN);
+	return std::nullopt;
+}
+
+// 相机配置包（loadCameraConfig 返回值）：相机姿态 + llm_debug 一次性截图开关。
+// llm_debug 的相机位置不走额外字段：agent 直接编辑本配置的 position/target/fovDegrees
+// （顶层字段，现有解析），无 presets 层。
+export struct CameraConfig {
+	Camera camera;
+	RGL::LlmDebugConfig llm;
+};
+
+// 从 Lua 配置初始化相机（字段可选，缺省回落默认值；fovDegrees 为角度，加载时转弧度；
+// keys 字段可选，缺省 WASD，未知键名 → 报错退出；llm_debug 字段可选，false/缺省 = 关闭）
+// 文件缺失 → 返回默认 CameraConfig + warn；脚本/类型错误 → std::unexpected
 // 沙箱限制与 tools/schema_loader 一致：禁用 dofile/loadfile/package/require
-export [[nodiscard]] std::expected<Camera, Error> loadCameraConfig(std::string_view path) {
+export [[nodiscard]] std::expected<CameraConfig, Error> loadCameraConfig(std::string_view path) {
 	auto* logger = RLLogger::getInstance();
 
 	{
@@ -154,9 +251,9 @@ export [[nodiscard]] std::expected<Camera, Error> loadCameraConfig(std::string_v
 		std::ifstream probe{pathStr};
 		if (!probe.is_open()) {
 			if (logger)
-				logger->warn("Camera config not found ({}), using defaults",
-					std::string(path));
-			return Camera{};
+			logger->warn("Camera config not found ({}), using defaults",
+				std::string(path));
+		return CameraConfig{};
 		}
 	}
 
@@ -239,7 +336,78 @@ export [[nodiscard]] std::expected<Camera, Error> loadCameraConfig(std::string_v
 				camera.fpsSensitivity = *sens;
 		}
 
-		return camera;
+		// 键位绑定（可选字段回落默认 WASD；字段存在但键名无法识别 → 报错退出）
+		sol::table keysTable = root["keys"];
+		if (keysTable.valid() && keysTable.is<sol::table>()) {
+			auto readKey = [&](const char* field, uint32_t def) -> std::expected<uint32_t, std::string> {
+				sol::optional<std::string> v = keysTable[field];
+				if (!v)
+					return def;
+				auto mapped = keyNameToSdlKey(*v);
+				if (!mapped)
+					return std::unexpected(std::string("unknown key name '") + *v +
+						"' (want single letter/digit or Up/Down/Left/Right/Space/Enter)");
+				return *mapped;
+			};
+			if (auto k = readKey("forward", camera.keys.forward))
+				camera.keys.forward = *k;
+			else
+				return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
+					std::string("camera config (") + std::string(path) + "): keys.forward: " +
+						std::move(k).error()});
+			if (auto k = readKey("back", camera.keys.back))
+				camera.keys.back = *k;
+			else
+				return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
+					std::string("camera config (") + std::string(path) + "): keys.back: " +
+						std::move(k).error()});
+			if (auto k = readKey("left", camera.keys.left))
+				camera.keys.left = *k;
+			else
+				return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
+					std::string("camera config (") + std::string(path) + "): keys.left: " +
+						std::move(k).error()});
+			if (auto k = readKey("right", camera.keys.right))
+				camera.keys.right = *k;
+			else
+				return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
+					std::string("camera config (") + std::string(path) + "): keys.right: " +
+						std::move(k).error()});
+		}
+
+		// llm_debug 一次性截图（false/缺省 = 关闭；true = 启用默认值；table = 细字段，
+		// 全可选回落默认）：离屏隐藏窗渲染 → 延迟 N 帧 → 截图 → 退出
+		RGL::LlmDebugConfig llm;
+		sol::object llmObj = root["llm_debug"];
+		if (llmObj.valid()) {
+			if (llmObj.is<bool>()) {
+				llm.enabled = llmObj.as<bool>();
+			} else if (llmObj.is<sol::table>()) {
+				sol::table t = llmObj.as<sol::table>();
+				llm.enabled = true;
+				sol::optional<uint32_t> delayFrames = t["delay_frames"];
+				if (delayFrames)
+					llm.delayFrames = *delayFrames;
+				sol::optional<std::string> file = t["file"];
+				if (file)
+					llm.file = *file;
+				sol::table sizeTable = t["size"];
+				if (sizeTable.valid() && sizeTable.is<sol::table>()) {
+					sol::optional<uint32_t> w = sizeTable[1];
+					if (w)
+						llm.width = *w;
+					sol::optional<uint32_t> h = sizeTable[2];
+					if (h)
+						llm.height = *h;
+				}
+			} else {
+				return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
+					std::string("camera config (") + std::string(path) +
+						"): llm_debug: want bool or table"});
+			}
+		}
+
+		return CameraConfig{camera, llm};
 	} catch (const std::exception& e) {
 		return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
 			std::string("camera config (") + std::string(path) + "): " + e.what()});

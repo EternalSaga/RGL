@@ -1,7 +1,9 @@
 # Phase 2 耦合审查（2026-08-23）
 
 > **范围**：`vulkan_practice` 主项目（Phase 0–2，含 cube/model 并存现状）。`min_mesh_crash` 为独立最小复现，不在范围。
-> **性质**：问题清单 + 修复方向，**不含任何代码改动**。所有条目状态 = Open，供人工 review 后逐条处置。
+> **性质**：问题清单 + 修复方向（2026-08-23 时点快照）。**2026-08-24 批次 2（ECS 重构：draw call 抽象 + system 化）已处置部分条目**，
+> 见下方状态列与 §状态更新；当前代码状态与处置细节的权威记录在 [ecs_compliance_review.md](ecs_compliance_review.md) §处置记录。
+> **注意**：各条目"证据"的行号基于 2026-08-23 代码；批次 2 重写了 `ecs.cppm`/`vkrenderer.cppm`/`main.cpp`，未修复条目的行号多数已漂移。
 
 ---
 
@@ -19,19 +21,19 @@ cube 只是这个 pattern 最显眼的实例；`DrawArgs`/`ModelDrawArgs`、slot
 
 ## 问题清单
 
-| ID | 问题 | 严重度 |
-|----|------|--------|
-| [H1](#h1--cube-是绕开-ecs-的平行路径) | cube 是绕开 ECS 的平行路径 | High |
-| [H2](#h2--没有共享-draw-call-抽象) | 无共享 draw-call 抽象：2 push constant struct + 2 slot 方案 + 2 draw 块 | High |
-| [M1](#m1--showcube-开关是补丁且不一致) | `showCube` 开关是补丁：gate 渲染不 gate 资源，与 model 不对称 | Medium |
-| [M2](#m2--ktrianglespergroup-契约常量-cppshader-各写一份) | `kTrianglesPerGroup=10` 契约常量 C++/shader 各写一份（护城河缺口） | Medium |
-| [M3](#m3--两套-lua-机制易混) | 两套 Lua 机制（scene config vs schema）易混 | Medium |
-| [L1](#l1--spin-是全局特例变换) | `spin` 是全局特例变换，非 per-entity | Low |
-| [L2](#l2--自适应-frustum-不含-cube) | 自适应 frustum 只认 model，不含 cube | Low |
-| [L3](#l3--renderer-持有未使用的-registry) | Renderer 持有未使用的 `entt::registry*`（死依赖） | Low |
-| [L4](#l4--默认-spv-路径两处重复) | 默认 SPV 路径两处重复 | Low |
-| [L5](#l5--pushdataext-set-0-约定隐式共享) | `pushDataEXT` "set 0" 约定被两种不同大小 struct 隐式共享 | Low |
-| [L6](#l6--modelmeshassets-生命周期契约脆弱) | `ModelMeshAssets` 生命周期契约脆弱（隐式 RAII） | Low |
+| ID | 问题 | 严重度 | 状态 |
+|----|------|--------|------|
+| [H1](#h1--cube-是绕开-ecs-的平行路径) | cube 是绕开 ECS 的平行路径 | High | Open（draw 块已上移 system 层；cube entity 化归 Phase 4） |
+| [~~H2~~](#h2--没有共享-draw-call-抽象) | 无共享 draw-call 抽象：2 push constant struct + 2 slot 方案 + 2 draw 块 | High | **已修复**（2026-08-24 批次 2） |
+| [M1](#m1--showcube-开关是补丁且不一致) | `showCube` 开关是补丁：gate 渲染不 gate 资源，与 model 不对称 | Medium | Open（gating 语义保留：管线条目存在性 = 画不画；完整解归 Phase 4） |
+| [~~M2~~](#m2--ktrianglespergroup-契约常量-cppshader-各写一份) | `kTrianglesPerGroup=10` 契约常量 C++/shader 各写一份（护城河缺口） | Medium | **已修复**（2026-08-24 批次 2，schema `constants` 段） |
+| [M3](#m3--两套-lua-机制易混) | 两套 Lua 机制（scene config vs schema）易混 | Medium | Open |
+| [~~L1~~](#l1--spin-是全局特例变换) | `spin` 是全局特例变换，非 per-entity | Low | **已修复**（2026-08-24 批次 2，`SceneSpin` + `animationSystem`） |
+| [L2](#l2--自适应-frustum-不含-cube) | 自适应 frustum 只认 model，不含 cube | Low | Open（聚合已 system 化：`boundsSystem`；cube 挂 `Bounds` 组件即自动纳入） |
+| [~~L3~~](#l3--renderer-持有未使用的-registry) | Renderer 持有未使用的 `entt::registry*`（死依赖） | Low | **已修复**（2026-08-24 批次 2 顺手） |
+| [L4](#l4--默认-spv-路径两处重复) | 默认 SPV 路径两处重复（现三处：`defaultSceneConfig` + `scene.lua` + `makePipelineTable` 默认回落） | Low | Open |
+| [L5](#l5--pushdataext-set-0-约定隐式共享) | `pushDataEXT` "set 0" 约定被两种不同大小 struct 隐式共享 | Low | Open（draw 循环已单点化；显式化随 Phase 4 ShaderRegistry） |
+| [~~L6~~](#l6--modelmeshassets-生命周期契约脆弱) | `ModelMeshAssets` 生命周期契约脆弱（隐式 RAII） | Low | **已修复**（2026-08-25 批次 3，资产表收敛所有权） |
 
 ---
 
@@ -193,6 +195,35 @@ heap descriptor 经 device address 引用 per-primitive buffer；buffer 存活�
 
 ---
 
+## 状态更新（2026-08-24 批次 2）
+
+批次 2 落地内容（ECS 合规审查的 E2/E3/E4 + 顺手 M2/L3）：
+
+- **H2 已修**：`DrawCall`/`FrameDrawList`（`vkrenderer.cppm`）；`Renderer::drawFrame(const FrameDrawList&)`
+  单循环盲执行；两个 setter / 两个每帧数据成员 / `findPipelineEntry` 删除；`pipelineIndex(name)` 映射构造时建一次。
+  H1 的 draw 块部分随之消解（cube/model 的 draw 都经 draw list），但 cube 的"平行数据路径"（buffer/slot/无 entity）仍在。
+- **M2 已修**：`model_schema.lua` 新增 `constants` 段（schema 单一真相源）→ 生成 `model_types_generated::kTrianglesPerGroup`；
+  C++ 侧消费生成常量，shader 字面量靠头注释契约指向 schema（同 `vertexLayouts` 模式）。
+- **L1 已修**：spin → `SceneSpin` context + `animationSystem`（dt 累积，替代绝对时间手搓矩阵）。
+- **L3 已修**：Renderer 删 `registry` 参数/成员 + GMF entt include，零 entt 依赖。
+
+### 状态更新（2026-08-25 批次 3）
+
+- **L6 已修**：`ModelMeshAssets` 删除，buffer 所有权收敛进 `Resources` 资产表（`AssetTable`，
+  批次 3：E1.1–1.3 + E5.1/E5.2/E5.4 一并落地，权威记录见 [ecs_compliance_review.md](ecs_compliance_review.md) §处置记录）。
+  附带消解：`primitiveCount` 构造参数（heap 容量改固定裕量）、`"model_i"` 字符串管线约定
+  （资产表记录管线条目下标）、main 硬顺序约束（CPU 解析不再先于 Vulkan 初始化）。
+- 附带结构变化（影响 H1/M1/L2/L5 的现状描述）：renderSystem 拆出 5 个每帧 system
+  （camera/animation/bounds/projection/renderlist，显式列表）；config 不再进每帧路径；
+  `ModelBounds` context → `Bounds` 组件 + `boundsSystem` 聚合（L2 的修复路径已就位）；
+  `Viewport` → `WindowExtent` + `AppExit`。
+
+**未修复条目的当前修复路径**（详见 [ecs_compliance_review.md](ecs_compliance_review.md)）：
+H1/M1/L5 → Phase 4（cube 一等资产 + ShaderRegistry）；L2 → cube 挂 Bounds 即自动纳入（聚合已就位）；
+L6 → 批次 3 资产表；L4 → 独立便宜项，未排期；M3 → 独立便宜项，未排期。
+
+---
+
 ## 好的部分（别动，别误伤）
 
 - **VMA descriptor heap RAII + 双端对齐**（`VmaBuffer.cppm:105-314`）：GPU `resourceHeapAlignment` / CPU `descriptorSize` 对齐 + 厂商 reserved 槽位记账，理解深、封装干净。
@@ -208,7 +239,15 @@ heap descriptor 经 device address 引用 per-primitive buffer；buffer 存活�
 
 | 路线 | 做法 |
 |------|------|
-| **现在还债** | 先做 **H2 + M1**（统一 draw 路径 + 删开关）。注意会动 cube 着色模型（per-vertex color 需先决定归到哪类 material）。**L3/L4 可顺手修**（便宜）。 |
-| **等 Phase 4** | 把 **H1/M1** 记成已知债（`AGENTS.md` 已知问题），只补 **M2**（契约缺口——便宜且直接强化护城河）。 |
+| **现在还债** | ~~先做 H2 + M1（统一 draw 路径 + 删开关）。注意会动 cube 着色模型（per-vertex color 需先决定归到哪类 material）。~~ L3 顺手修（便宜）。 |
+| **等 Phase 4** | 把 H1/M1 记成已知债（`AGENTS.md` 已知问题），只补 **M2**（契约缺口——便宜且直接强化护城河）。 |
+
+> **状态（2026-08-24 批次 2 后）**：H2 已完成（批次 2，M1 的"删开关"未做——gating 语义保留，完整解随 Phase 4）；
+> L3 已修；M2 已完成（提前于 Phase 3，schema `constants` 段）；L4 未做（独立便宜项，未排期）。
+> 剩余：H1/M1/L5 → 批次 4（Phase 4）；L6 → 批次 3（资产表，建议与 Phase 3 TexturePool 并案）；M3/L4 → 独立便宜项，随需要排期。
+> 完整下一步分析见 [ecs_compliance_review.md](ecs_compliance_review.md) §修复路线。
+
+> **状态（2026-08-25 批次 3 后）**：L6 已完成（资产表收敛所有权，见 §状态更新 2026-08-25 批次 3 节）。
+> 剩余：H1/M1/L5 → 批次 4（Phase 4）；M3/L4 → 独立便宜项，随需要排期。
 
 > review 处置后，建议把已决条目回写本文件（标 `~~strikethrough~~` + 结论），并在 `AGENTS.md` 已知问题 / `next_roadmap.md` 对应 Phase 留接缝引用。
