@@ -128,6 +128,19 @@ run-dgpu:
         __VK_LAYER_NV_optimus=NVIDIA_only \
         ./vulkan_practice)
 
+# 独显运行（Intel Arc A310 dGPU，anv 驱动）
+# 必须用 VK_DRIVER_FILES 只留 intel ICD — 设备评分器默认选分数更高的 dGPU（RTX 5090）
+# 要求 mesa >= 26.2：anv 自 26.2 起默认启用 VK_EXT_descriptor_heap（本项目核心扩展）；
+# 26.1 及以下会在设备创建期抛 VK_ERROR_EXTENSION_NOT_PRESENT 后报错退出
+run-intel:
+    just check-run-ready
+    @INTEL_ICD=$(ls /usr/share/vulkan/icd.d/intel_icd.*.json /etc/vulkan/icd.d/intel_icd.*.json 2>/dev/null | head -1); \
+    if [ -z "$INTEL_ICD" ]; then \
+        echo "Error: intel ICD json not found"; \
+        exit 1; \
+    fi; \
+    (cd {{ BUILD }}/vulkan_practice && VK_DRIVER_FILES="$INTEL_ICD" ./vulkan_practice)
+
 # ------------------------------------------------------------------------------
 # 3. 清理与辅助命令
 # ------------------------------------------------------------------------------
