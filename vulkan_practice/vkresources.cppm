@@ -5,6 +5,7 @@ module;
 export module vk_resources;
 
 import rlstd;
+import rllogger;
 import VmaRaii;
 import vk_instance;
 import vk_device;
@@ -51,11 +52,12 @@ export class Resources {
    public:
 	// heap 容量与场景内容解耦（E1.3，批次 3）：固定裕量 kUserSlotMargin，不再按
 	// primitive 数精确预分配（原 modelPrimitiveCount 构造参数删除）。用户槽位布局
-	//（相对 reserved range 起点）：
-	//   [0, 8)   cube（顶点 slot 0 / 索引 slot 4，types_generated）
-	//   [8, 8+N) 模型顶点 slot（每 primitive 一个，slot = reserved + HeapSlotModelVertexBase + i，
-	//   见 model_importer.cppm），其余为裕量；运行时扩容 = 重建 heap + 重写全部描述符，
-	//   归 Phase 3 TexturePool 一并设计（统一 slot 分配器）
+	//（相对 reserved range 起点，Phase 3 统一 slot 分配器 allocSlot 连续分配）：
+	//   [0, 2)    cube（顶点 slot 0 / 索引 slot 1，types_generated）
+	//   [2, 2+N)  模型顶点 slot（每 primitive 一个，slot = reserved + HeapSlotModelVertexBase + i，
+	//   见 model_importer.cppm）
+	//   [2+N, …)  纹理 slot（TexturePool：2+N = 白 1×1 特例，其余按上传序，见 texture_pool.cppm）
+	//   其余为裕量；运行时扩容 = 重建 heap + 重写全部描述符
 	Resources(RGL::AppContext& vkInstance, RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain)
 		: vkInstance(vkInstance),
 		  vkDevice(vkDevice),
@@ -75,8 +77,21 @@ export class Resources {
 			  RGL::cubeIndices.data())
 				  .value()),
 		  descriptorHeap(createDescriptorHeap().value()),
-		  heapSlotVertex(reservedSlots() + HeapSlotVertexOffset),
-		  heapSlotIndex(reservedSlots() + HeapSlotIndexOffset) {
+		  samplerHeap(createSamplerHeap().value()),
+		  nextSlot(reservedSlots()) {
+		// cube 槽位经统一分配器（Phase 3）：布局约定由反射生成的偏移常量钉死，违例 = 契约漂移
+		auto vertexSlotResult = allocSlot("cube.vertex");
+		if (!vertexSlotResult)
+			throw std::runtime_error(vertexSlotResult.error().describe());
+		heapSlotVertex = *vertexSlotResult;
+		if (heapSlotVertex != reservedSlots() + HeapSlotVertexOffset)
+			throw std::runtime_error("heap slot layout drift: cube.vertex");
+		auto indexSlotResult = allocSlot("cube.index");
+		if (!indexSlotResult)
+			throw std::runtime_error(indexSlotResult.error().describe());
+		heapSlotIndex = *indexSlotResult;
+		if (heapSlotIndex != reservedSlots() + HeapSlotIndexOffset)
+			throw std::runtime_error("heap slot layout drift: cube.index");
 		writeDescriptors();
 	}
 
@@ -94,9 +109,25 @@ export class Resources {
 	}
 
 	const RGL::VmaDescriptorHeap& getDescriptorHeap() const { return descriptorHeap; }
+	const RGL::VmaDescriptorHeap& getSamplerHeap() const { return samplerHeap; }
 	const RGL::VmaAllocatorRAII& getAllocator() const { return allocator; }
 	vk::DeviceSize getReservedRangeOffset() const { return 0; }
 	vk::DeviceSize getReservedRangeSize() const { return descriptorHeap.getReservedSlots() * descriptorHeap.getDescriptorSize(); }
+	// sampler heap 绑定的保留区（同 resource heap 语义：reserved 槽声明为不可用）
+	vk::DeviceSize getSamplerReservedRangeSize() const { return samplerHeap.getReservedSlots() * samplerHeap.getDescriptorSize(); }
+	// 共享 sampler 描述符写入 sampler heap 首个可用槽，返回槽号（启动期一次性，TexturePool 构造调用）
+	[[nodiscard]] uint32_t writeSamplerDescriptor(const VkSamplerCreateInfo& info) {
+		uint32_t slot = samplerHeap.getReservedSlots();
+		auto slotAddr = samplerHeap.getSlotCpuAddress(slot);
+		if (!slotAddr)
+			throw std::runtime_error(slotAddr.error().describe());
+		vk::HostAddressRangeEXT dst{*slotAddr, samplerHeap.getDescriptorSize()};
+		// hpp raii 内部 resultCheck（失败抛 LogicError）
+		vkDevice.getDevice().writeSamplerDescriptorsEXT(
+			std::array<vk::SamplerCreateInfo, 1>{vk::SamplerCreateInfo(info)},
+			std::array<vk::HostAddressRangeEXT, 1>{dst});
+		return slot;
+	}
 	vk::DeviceAddress getVertexBufferAddress() const { return vertexBuffer.getDeviceAddress(); }
 	vk::DeviceAddress getIndexBufferAddress() const { return indexBuffer.getDeviceAddress(); }
 	uint32_t getHeapSlotVertex() const { return heapSlotVertex; }
@@ -105,6 +136,19 @@ export class Resources {
 	// registry entity 经 MeshRef{asset} 引用，见 AssetTable 注释）
 	RGL::AssetTable& getAssetTable() { return assetTable; }
 	RGL::VmaAllocatorRAII& getAllocator() { return allocator; }
+	// 统一 slot 分配器（Phase 3，TexturePool 并案）：从 reservedSlots 起单调分配，
+	// name→slot 记日志（slot 表排查用）；调用方以生成的偏移常量校验布局契约（见构造器 / model_importer）。
+	// 越界（≥ capacity，含 reserved）→ 错误
+	[[nodiscard]] std::expected<uint32_t, Error> allocSlot(const char* name) {
+		if (nextSlot >= descriptorHeap.getCapacity())
+			return std::unexpected(Error{ErrorCode::DescriptorSlotOutOfBounds,
+				"descriptor heap capacity exceeded (" + std::to_string(nextSlot) + " >= " +
+				std::to_string(descriptorHeap.getCapacity()) + "): " + name});
+		auto* logger = RLLogger::getInstance();
+		const uint32_t slot = nextSlot++;
+		if (logger) logger->debug("descriptor heap slot {}: {}", slot, name);
+		return slot;
+	}
 
    private:
 	uint32_t reservedSlots() const { return descriptorHeap.getReservedSlots(); }
@@ -162,19 +206,27 @@ export class Resources {
 		return buf;
 	}
 
-	// 容量 = reserved + 用户槽位。用户槽位布局（相对 reserved range 起点）：
-	//   cube 顶点 slot 0、索引 slot 4（types_generated 的 HeapSlotVertexOffset/HeapSlotIndexOffset）
-	//   模型顶点 slot 基址 HeapSlotModelVertexBase=8（model_types_generated），每 primitive 一个；
+	// 容量 = reserved + 用户槽位。用户槽位布局（相对 reserved range 起点，allocSlot 连续分配）：
+	//   cube 顶点 slot 0、索引 slot 1（types_generated 的 HeapSlotVertexOffset/HeapSlotIndexOffset）
+	//   模型顶点 slot 基址 HeapSlotModelVertexBase=2（model_types_generated），每 primitive 一个；
+	//   纹理 slot 自 2+N 起（TexturePool，见 texture_pool.cppm）；
 	//   剩余裕量 kUserSlotMargin（固定，与场景内容解耦——E1.3）
 	std::expected<RGL::VmaDescriptorHeap, Error> createDescriptorHeap() {
 		auto props = vkDevice.getPhysicalDevice().getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDescriptorHeapPropertiesEXT>();
 
 		auto& heapProps = props.get<vk::PhysicalDeviceDescriptorHeapPropertiesEXT>();
-		uint32_t descriptorSize = static_cast<uint32_t>(heapProps.bufferDescriptorSize);
+		// Phase 3 统一步长：image 描述符（SAMPLED_IMAGE）比 buffer 描述符宽
+		//（RADV 32B > 16B，docs/heap_texture_research.md Q1），slot 步长取 max（运行时查询，勿硬编码）
+		uint32_t bufferSize = static_cast<uint32_t>(heapProps.bufferDescriptorSize);
+		uint32_t imageSize = static_cast<uint32_t>(heapProps.imageDescriptorSize);
+		uint32_t descriptorSize = std::max(bufferSize, imageSize);
 		uint32_t reservedSlots = static_cast<uint32_t>(heapProps.minResourceHeapReservedRange + descriptorSize - 1) / descriptorSize;
 		vk::DeviceSize resourceHeapAlignment = heapProps.resourceHeapAlignment;
 		uint32_t userSlots = HeapSlotModelVertexBase + kUserSlotMargin;
 		uint32_t capacity = userSlots + reservedSlots;
+		if (auto* logger = RLLogger::getInstance())
+			logger->info("descriptor heap: bufferDesc={}B imageDesc={}B stride={}B reservedSlots={} alignment={}B capacity={}",
+				bufferSize, imageSize, descriptorSize, reservedSlots, resourceHeapAlignment, capacity);
 
 		return allocator.createDescriptorHeap(
 			vkDevice.getDevice(),
@@ -182,6 +234,29 @@ export class Resources {
 			vk::BufferUsageFlagBits::eDescriptorHeapEXT,
 			reservedSlots,
 			resourceHeapAlignment);
+	}
+
+	// sampler heap（Phase 3）：OpTypeSampler 的独立 heap（vkCmdBindSamplerHeapEXT 每帧绑定）。
+	// 背景：pEmbeddedSampler 对 Slang 的 OpTypeImage+OpTypeSampler 分离对未获 RADV 采纳
+	//（spec 声称同等适用，实测采样恒 0；spike 只验证了 GLSL 组合 sampler2D=OpTypeSampledImage），
+	// 回退链（docs/phase3_plan.md R1）= 真 sampler heap。容量 = reserved + 固定小裕量
+	//（共享一份 sampler 描述符，全模型管线映射指向同一槽）。
+	std::expected<RGL::VmaDescriptorHeap, Error> createSamplerHeap() {
+		auto props = vkDevice.getPhysicalDevice().getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDescriptorHeapPropertiesEXT>();
+		auto& heapProps = props.get<vk::PhysicalDeviceDescriptorHeapPropertiesEXT>();
+		uint32_t samplerSize = static_cast<uint32_t>(heapProps.samplerDescriptorSize);
+		uint32_t reservedSlots = static_cast<uint32_t>(heapProps.minSamplerHeapReservedRange + samplerSize - 1) / samplerSize;
+		uint32_t capacity = reservedSlots + 8;
+		if (auto* logger = RLLogger::getInstance())
+			logger->info("sampler heap: samplerDesc={}B reservedSlots={} alignment={}B capacity={}",
+				samplerSize, reservedSlots, heapProps.samplerHeapAlignment, capacity);
+
+		return allocator.createDescriptorHeap(
+			vkDevice.getDevice(),
+			capacity, samplerSize,
+			vk::BufferUsageFlagBits::eDescriptorHeapEXT,
+			reservedSlots,
+			heapProps.samplerHeapAlignment);
 	}
 
 	void writeDescriptors() {
@@ -233,11 +308,15 @@ export class Resources {
 	RGL::VmaBuffer vertexBuffer;
 	RGL::VmaBuffer indexBuffer;
 	RGL::VmaDescriptorHeap descriptorHeap;
+	RGL::VmaDescriptorHeap samplerHeap;  // Phase 3：OpTypeSampler 独立 heap（embedded sampler 未获 RADV 采纳）
 	uint32_t heapSlotVertex;
 	uint32_t heapSlotIndex;
+	// 统一 slot 分配器（Phase 3，TexturePool 并案）：单调分配游标，从 reservedSlots 起
+	uint32_t nextSlot;
 	// 资产表（E1.1/E1.2：已上传 primitive 的 GPU 数据 + heap slot + 三角形数 + 管线条目引用）
 	RGL::AssetTable assetTable;
-	// 用户槽位固定裕量（与场景内容解耦；descriptorSize 通常 16-64B，1024 槽为 KB 级开销）
+	// 用户槽位固定裕量（与场景内容解耦；Phase 3 统一步长 = max(buffer, image) descriptorSize，
+	// RADV 32B，1024 槽为 KB 级开销）
 	static constexpr uint32_t kUserSlotMargin = 1024;
 };
 

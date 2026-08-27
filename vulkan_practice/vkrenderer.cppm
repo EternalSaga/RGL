@@ -104,16 +104,21 @@ export class Renderer {
 		return it == pipelineIndexMap.end() ? std::nullopt : std::optional<uint32_t>(it->second);
 	}
 	// 模型管线条目（批次 3：从构造期移到资产上传期，每 primitive 一次）：
-	// 用构造期解析的 "model" 规格创建 RenderPipeline（binding mapping 显式烘焙传入的
-	// 顶点 slot——模型无索引缓冲，binding 1 映射指向同一 slot，未被 SPIR-V 引用，无副作用），
+	// 用构造期解析的 "model" 规格创建 RenderPipeline，binding mapping 显式烘焙
+	// 顶点 slot + 纹理 slot（Phase 3：binding 1 = resource heap 的 SAMPLED_IMAGE 描述符槽、
+	// binding 2 = sampler heap 槽——OpTypeSampler 映射，共享一份 sampler 描述符，
+	// 偏移 = samplerSlot * samplerHeap.getDescriptorSize()）；
 	// 更新 name→下标 映射，并把条目下标写回资产记录（renderListSystem 经资产表解析管线，
 	// 无 "model_i" 字符串约定，E2.4）。失败（SPV 加载失败等）抛出（同构造期路径）。
-	void addModelPipeline(uint32_t vertexSlot, uint32_t assetId) {
+	void addModelPipeline(uint32_t vertexSlot, uint32_t textureSlot, uint32_t samplerSlot,
+		uint32_t assetId) {
 		const uint32_t descriptorSize = resources->getDescriptorHeap().getDescriptorSize();
+		const uint32_t samplerHeapOffset =
+			samplerSlot * resources->getSamplerHeap().getDescriptorSize();
 		auto entry = PipelineEntry{
 			"model_" + std::to_string(assetId),
 			RGL::RenderPipeline(vkDevice.getDevice(), loadShaderEffect(modelSpec), descriptorSize,
-				vertexSlot, vertexSlot)};
+				vertexSlot, vertexSlot, textureSlot, samplerHeapOffset, true)};
 		const uint32_t index = static_cast<uint32_t>(pipelines.size());
 		pipelineIndexMap[entry.name] = index;
 		pipelines.push_back(std::move(entry));
@@ -402,7 +407,10 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 	// 故该 barrier 必须放在 beginRendering 之前（见 docs/DESCRIPTOR_HEAP_SPEC.md 坑 8）。
 	vk::MemoryBarrier2 heapBarrier{};
 	heapBarrier.srcAccessMask = vk::AccessFlagBits2::eHostWrite;
-	heapBarrier.dstAccessMask = vk::AccessFlagBits2::eResourceHeapReadEXT;
+	// 两个 heap 的读访问 flag 相互独立（spec：resource heap 与 sampler heap 各有专属
+	// access bit）——只设 eResourceHeapReadEXT 时 sampler 描述符的 host write 未同步到
+	// GPU，sampler 描述符读到未初始化内存 → 采样恒 garbage（Phase 3 黑屏根因）
+	heapBarrier.dstAccessMask = vk::AccessFlagBits2::eResourceHeapReadEXT | vk::AccessFlagBits2::eSamplerHeapReadEXT;
 	heapBarrier.srcStageMask = vk::PipelineStageFlagBits2::eHost;
 	heapBarrier.dstStageMask = vk::PipelineStageFlagBits2::eAllGraphics;
 	vk::DependencyInfo heapDepInfo{};
@@ -422,6 +430,15 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 		heapRange,
 		resources->getReservedRangeOffset(),
 		resources->getReservedRangeSize()));
+	// sampler heap 同法绑定（Phase 3：OpTypeSampler 的 sampler 描述符；每帧无条件，
+	// 与 resource heap 一致——未引用时绑定无副作用）
+	vk::DeviceAddressRangeEXT samplerHeapRange{};
+	samplerHeapRange.address = resources->getSamplerHeap().getGpuAddress();
+	samplerHeapRange.size = resources->getSamplerHeap().getHeapSize();
+	commandBuffers[currentFrame].bindSamplerHeapEXT(vk::BindHeapInfoEXT(
+		samplerHeapRange,
+		0,
+		resources->getSamplerReservedRangeSize()));
 
 	// ⑧ 开始渲染（Dynamic Rendering 的 render pass 起点）
 	commandBuffers[currentFrame].beginRendering(renderingInfo);

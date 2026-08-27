@@ -181,15 +181,22 @@ add_custom_target(copy_configs ALL DEPENDS ${COPIED_CONFIGS})
 # glb 在 assets/（git-lfs 管理），运行时按相对路径 models/ 读取，构建期拷入 build。
 # 新增模型需在此加一行 + just config。
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/models)
-set(MODEL_GLB_SRC "${PROJECT_SOURCE_DIR}/assets/transparent.glb")
-add_custom_command(
-    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/models/transparent.glb
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${MODEL_GLB_SRC} ${CMAKE_CURRENT_BINARY_DIR}/models/
-    DEPENDS ${MODEL_GLB_SRC}
-    COMMENT "Copying model (transparent.glb) to build directory..."
-    VERBATIM
-)
-add_custom_target(copy_models ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/models/transparent.glb)
+set(MODEL_GLB_SOURCES
+    "${PROJECT_SOURCE_DIR}/assets/transparent.glb"
+    "${PROJECT_SOURCE_DIR}/assets/realistic_wooden_cottage_garden_house_3d_model.glb")
+set(MODEL_GLB_OUTPUTS)
+foreach(MODEL_GLB_SRC ${MODEL_GLB_SOURCES})
+    get_filename_component(MODEL_GLB_NAME ${MODEL_GLB_SRC} NAME)
+    list(APPEND MODEL_GLB_OUTPUTS ${CMAKE_CURRENT_BINARY_DIR}/models/${MODEL_GLB_NAME})
+    add_custom_command(
+        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/models/${MODEL_GLB_NAME}
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${MODEL_GLB_SRC} ${CMAKE_CURRENT_BINARY_DIR}/models/
+        DEPENDS ${MODEL_GLB_SRC}
+        COMMENT "Copying model (${MODEL_GLB_NAME}) to build directory..."
+        VERBATIM
+    )
+endforeach()
+add_custom_target(copy_models ALL DEPENDS ${MODEL_GLB_OUTPUTS})
 
 target_sources(vulkan_practice PUBLIC
                FILE_SET CXX_MODULES
@@ -197,7 +204,7 @@ target_sources(vulkan_practice PUBLIC
                       camera.cppm scene_config.cppm
                       shader.cppm VmaBuffer.cppm features.cppm vkinstance.cppm vkdevice.cppm
                       vkswapchain.cppm vkresources.cppm vkrenderer.cppm ecs.cppm
-                      gltf_loader.cppm model_importer.cppm scene.cppm llm_debug.cppm
+                      gltf_loader.cppm model_importer.cppm texture_pool.cppm scene.cppm llm_debug.cppm
                       ${TYPES_CPPM}
                       ${MODEL_CPPM}
                       ${FEATURES_CPPM}

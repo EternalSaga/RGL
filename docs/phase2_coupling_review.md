@@ -1,5 +1,7 @@
 # Phase 2 耦合审查（2026-08-23）
 
+> **状态**：历史（2026-08-23 时点快照；条目处置见 §状态更新，权威记录在 [ecs_compliance_review.md](ecs_compliance_review.md) §处置记录。行号引用已漂移，勿按行号定位。）
+
 > **范围**：`vulkan_practice` 主项目（Phase 0–2，含 cube/model 并存现状）。`min_mesh_crash` 为独立最小复现，不在范围。
 > **性质**：问题清单 + 修复方向（2026-08-23 时点快照）。**2026-08-24 批次 2（ECS 重构：draw call 抽象 + system 化）已处置部分条目**，
 > 见下方状态列与 §状态更新；当前代码状态与处置细节的权威记录在 [ecs_compliance_review.md](ecs_compliance_review.md) §处置记录。

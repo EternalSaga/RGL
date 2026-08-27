@@ -1,6 +1,6 @@
 module;
-// 不解码纹理（Phase 2 flat unlit，无纹理）：关掉 stb_image 引入
-#define TINYGLTF_NO_STB_IMAGE
+// stb_image 解码启用（Phase 3 纹理）：实现体在 stb_impl.cpp（STB_IMAGE_IMPLEMENTATION）
+// NO_STB_IMAGE_WRITE 保留（tinygltf_impl.cpp 同定义，两 TU API 面一致）
 #define TINYGLTF_NO_STB_IMAGE_WRITE
 #include <tiny_gltf.h>
 #include <glm/glm.hpp>
@@ -20,8 +20,17 @@ export struct GltfPrimitive {
 	std::vector<ModelVertex> vertices;
 	uint32_t triangleCount = 0;
 	glm::vec3 translation{0.0f};  // 所属 node 的 translation（Phase 2 无层级嵌套、无旋转/缩放）
-	glm::vec4 baseColor{1.0f};    // material 的 baseColorFactor（无纹理）
-	bool alphaModeBlend = false;   // material alphaMode == "BLEND"（Phase 5 透明用，预留）
+	glm::vec4 baseColor{1.0f};    // material 的 baseColorFactor
+	int baseColorTextureIndex = -1;  // material baseColorTexture 的 image 下标（-1 = 无纹理 → 白纹理）
+	bool hasUv = true;               // TEXCOORD_0 缺失（glTF 中可选）→ uv 填 0 + 白纹理（D9）
+	bool alphaModeBlend = false;    // material alphaMode == "BLEND"（Phase 5 透明用，预留）
+};
+
+// 纹理源数据（Phase 3）：span 指向 GltfModel::bufferData（自 tinygltf buffer 0 move 而来，
+// GltfModel 存活期内有效）；外部多 buffer 的 .gltf 不支持（data 为空 span）。
+export struct GltfImage {
+	std::span<const uint8_t> data;
+	std::string mimeType;
 };
 
 export struct BoundingSphere {
@@ -32,6 +41,10 @@ export struct BoundingSphere {
 export struct GltfModel {
 	std::vector<GltfPrimitive> primitives;
 	BoundingSphere bounds;  // 自适应空间范围用（ecs.cppm 的 renderSystem）
+	// 纹理源数据（Phase 3）：buffer 0 原始数据（move 自 tinygltf，零拷贝），
+	// images 的 span 以此为宿主；几何数据已拷入 vertices，此处仅为纹理解码保留
+	std::vector<uint8_t> bufferData;
+	std::vector<GltfImage> images;
 };
 
 // 读 accessor 的 float 数据（契约要求 float32；byteStride != 0 时按元素步进读取，
@@ -101,8 +114,9 @@ static bool readIndices(const tinygltf::Model& gltf, int accessorIndex, std::vec
 }
 
 // 加载 glTF / glTF-Binary：每个 mesh 的每个 primitive 展开为一个 GltfPrimitive
-//（POSITION/NORMAL/TEXCOORD_0 齐全 + 去索引展开）。
-// 任一 primitive 缺属性/数据畸形 → 整体失败（返回错误，不带部分结果）。
+//（POSITION/NORMAL 必需 + TEXCOORD_0 可选（D9，缺失 → 白纹理）+ 去索引展开 +
+// baseColorFactor/baseColorTexture/alphaMode + 纹理源数据 bufferData/images）。
+// 任一 primitive 缺必需属性/数据畸形 → 整体失败（返回错误，不带部分结果）。
 export [[nodiscard]] std::expected<GltfModel, Error> loadGltfModel(const std::string& path) {
 	auto* logger = RLLogger::getInstance();
 
@@ -140,7 +154,7 @@ export [[nodiscard]] std::expected<GltfModel, Error> loadGltfModel(const std::st
 			if (!foundNode && logger)
 				logger->warn("glTF: mesh {} has no owning node, translation defaults to 0", mi);
 
-			// material（baseColorFactor + alphaMode；Phase 2 无纹理）
+			// material（baseColorFactor + baseColorTexture + alphaMode）
 			if (prim.material >= 0 && prim.material < static_cast<int>(gltf.materials.size())) {
 				const auto& mat = gltf.materials[prim.material];
 				const auto& f = mat.pbrMetallicRoughness.baseColorFactor;
@@ -148,6 +162,9 @@ export [[nodiscard]] std::expected<GltfModel, Error> loadGltfModel(const std::st
 					out.baseColor = glm::vec4(
 						static_cast<float>(f[0]), static_cast<float>(f[1]),
 						static_cast<float>(f[2]), static_cast<float>(f[3]));
+				const auto& tc = mat.pbrMetallicRoughness.baseColorTexture;
+				if (tc.index >= 0 && tc.index < static_cast<int>(gltf.images.size()))
+					out.baseColorTextureIndex = tc.index;
 				out.alphaModeBlend = (mat.alphaMode == "BLEND");
 			}
 
@@ -163,14 +180,21 @@ export [[nodiscard]] std::expected<GltfModel, Error> loadGltfModel(const std::st
 			if (!readAccessorFloats(gltf, accessorOf("NORMAL"), 3, nrm))
 				return std::unexpected(Error{ErrorCode::GltfLoadFailed,
 					"glTF: missing or malformed NORMAL attribute (mesh " + std::to_string(mi) + ")"});
-			if (!readAccessorFloats(gltf, accessorOf("TEXCOORD_0"), 2, uv))
+
+			// TEXCOORD_0 在 glTF 中可选（D9）：缺失 → uv 填 0 + 该 primitive 走白纹理；
+			// 存在但数据畸形 → 仍整体失败（契约违例）
+			const int uvAccessor = accessorOf("TEXCOORD_0");
+			out.hasUv = uvAccessor >= 0 && readAccessorFloats(gltf, uvAccessor, 2, uv);
+			if (uvAccessor >= 0 && !out.hasUv)
 				return std::unexpected(Error{ErrorCode::GltfLoadFailed,
-					"glTF: missing or malformed TEXCOORD_0 attribute (mesh " + std::to_string(mi) + ")"});
+					"glTF: malformed TEXCOORD_0 attribute (mesh " + std::to_string(mi) + ")"});
 
 			const uint32_t vertexCount = static_cast<uint32_t>(pos.size() / 3);
-			if (vertexCount != nrm.size() / 3 || vertexCount != uv.size() / 2)
+			if (vertexCount != nrm.size() / 3 || (out.hasUv && vertexCount != uv.size() / 2))
 				return std::unexpected(Error{ErrorCode::GltfLoadFailed,
 					"glTF: attribute vertex counts differ (mesh " + std::to_string(mi) + ")"});
+			if (!out.hasUv)
+				uv.assign(static_cast<size_t>(vertexCount) * 2, 0.0f);
 
 			// 去索引展开：三角形 i 的 3 个连续顶点 = i*3..i*3+2
 			std::vector<uint32_t> indices;
@@ -203,6 +227,25 @@ export [[nodiscard]] std::expected<GltfModel, Error> loadGltfModel(const std::st
 		}
 	}
 
+	// 纹理源数据（Phase 3）：buffer 0 原始数据 move 出（零拷贝，几何已拷入 vertices），
+	// image span 以此为宿主；仅支持单 buffer（glb / 单外部 buffer），多 buffer .gltf 的
+	// image 留空 span（不支持，调用方按无纹理处理）
+	if (!gltf.buffers.empty())
+		model.bufferData = std::move(gltf.buffers[0].data);
+	for (size_t ii = 0; ii < gltf.images.size(); ++ii) {
+		GltfImage img;
+		img.mimeType = gltf.images[ii].mimeType;
+		const int bvIndex = gltf.images[ii].bufferView;
+		if (bvIndex >= 0 && bvIndex < static_cast<int>(gltf.bufferViews.size()) &&
+			gltf.bufferViews[bvIndex].buffer == 0 && !model.bufferData.empty()) {
+			const auto& bv = gltf.bufferViews[bvIndex];
+			const size_t offset = bv.byteOffset;
+			if (offset + bv.byteLength <= model.bufferData.size())
+				img.data = std::span<const uint8_t>(model.bufferData.data() + offset, bv.byteLength);
+		}
+		model.images.push_back(std::move(img));
+	}
+
 	// 包围球（自适应空间范围）：center = 全部顶点世界坐标（含 translation）的质心，
 	// radius = 质心到最远顶点的距离（保守界，任意方向都包住）
 	uint32_t totalVertices = 0;
@@ -221,9 +264,12 @@ export [[nodiscard]] std::expected<GltfModel, Error> loadGltfModel(const std::st
 	}
 
 	if (logger) {
-		logger->info("glTF loaded ({}): {} primitives, {} vertices (de-indexed); "
+		uint32_t texturedPrims = 0;
+		for (const auto& p : model.primitives)
+			if (p.baseColorTextureIndex >= 0) texturedPrims++;
+		logger->info("glTF loaded ({}): {} primitives ({} textured), {} images, {} vertices (de-indexed); "
 			"bounds center=({}, {}, {}) radius={:.2f}",
-			path, model.primitives.size(), totalVertices,
+			path, model.primitives.size(), texturedPrims, model.images.size(), totalVertices,
 			model.bounds.center.x, model.bounds.center.y, model.bounds.center.z,
 			model.bounds.radius);
 	}

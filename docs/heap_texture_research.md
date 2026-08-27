@@ -1,7 +1,9 @@
 # Descriptor Heap 纹理采样预研（Phase 3 依据）
 
+> **状态**：调研（Phase 3 依据；RADV 侧 spike PASS，NVIDIA 侧 spike 待补测。2026-08-27：主工程 buffer 描述符路径已 NVIDIA/Intel/AMD 三平台验证通过（commit `1f43d65`），image 描述符 spike 仍待 dGPU 环境。**2026-08-27 主工程接入实测：Slang 分离绑定（OpTypeImage+OpTypeSampler）在 RADV descriptor heap 采样恒 garbage——RADV 只映射组合 OpTypeSampledImage，详见 §八；NVIDIA 侧该变体待补测**）
+
 **日期**: 2026-08-25
-**环境**: Gentoo, Vulkan 头文件 1.4.341（系统 `/usr/include/vulkan`，主工程编译环境），loader 1.4.341（旧，扩展符号不在动态符号表），RADV ICD 1.4.354（AMD Radeon 8060S, STRIX_HALO）。**NVIDIA 侧未测**（本机无 NVIDIA ICD，spike 已备，见 §五）。
+**环境**: Gentoo, Vulkan 头文件 1.4.341（系统 `/usr/include/vulkan`，主工程编译环境），loader 1.4.341（旧，扩展符号不在动态符号表），RADV ICD 1.4.354（AMD Radeon 8060S, STRIX_HALO）。**NVIDIA 侧未测**（spike 已备，见 §五；2026-08-27 起有 NVIDIA 环境可补测，当前开发机为 Strix Halo 纯核显机）。
 **结论**: 双问题均有答案——
 1. **Q1（关键设计约束）：RADV `imageDescriptorSize = 32B > bufferDescriptorSize = 16B`**，现有 slot 寻址（`slot * bufferDescriptorSize`）**不能直接容纳 image 描述符**。Phase 3 slot 布局须改为统一步长 `max(bufferDescriptorSize, imageDescriptorSize)`（运行时查询，勿硬编码）；
 2. **Q3/Q4 实测 PASS（RADV，像素级验证）**：同一个 resource heap 可混存 buffer（`pAddressRange` 裸地址）+ image（`pImage`/`VkImageDescriptorInfoEXT`）描述符；`pEmbeddedSampler`（内嵌 sampler）在 mesh+frag shader object 上工作正常，采样结果与 CPU 预期逐像素一致。
@@ -108,7 +110,7 @@ VK_DRIVER_FILES=$NV_ICD __NV_PRIME_RENDER_OFFLOAD=1 __NV_PRIME_RENDER_OFFLOAD_PR
 1. **slot 步长**：`VmaDescriptorHeap::descriptorSize` 从 `bufferDescriptorSize` 改为 `max(bufferDescriptorSize, imageDescriptorSize)`（构造期查询）；`reservedSlots = ceil(minResourceHeapReservedRange / descriptorSize)` 随之（RADV 保留 0 无影响，NVIDIA 槽数减半、保留字节数不变）；`MeshAsset::heapSlot` 槽号语义不变，`heapOffset = slot * descriptorSize` 自动兼容。
 2. **纹理描述符写入**：`vkWriteResourceDescriptorsEXT`（4 参，v341）+ `VkResourceDescriptorInfoEXT{type=SAMPLED_IMAGE, data.pImage=&VkImageDescriptorInfoEXT{pView=<image view create info>, layout=SHADER_READ_ONLY_OPTIMAL}}`；image view create info 须随 TexturePool 资产保留（不能只存 handle）。
 3. **sampler**：一律 `pEmbeddedSampler`（`sourceData.constantOffset.pEmbeddedSampler`，v341 位置），不建 sampler heap；RADV `maxDescriptorHeapEmbeddedSamplers=2048` 充裕（每管线 1 个）。
-4. **Slang 变体**：spike 用 GLSL 组合 `sampler2D`（OpTypeSampledImage）——本机 glslang 11.2 拒绝 `sampler2D(texture2D, sampler2D)` 构造器（`sampler-constructor second argument must be a scalar sampler`），Slang 直出 SPIR-V 不受限。Phase 3 `model.frag.slang` 走 `Texture2D<float>` + `samplerState`（OpTypeImage + OpTypeSampler 对），内嵌 sampler 机制 spec 对两者同等适用（§二条款表），**主工程接入时直接验证**；若 NVIDIA 对该变体有异，回退方案 = Slang 侧声明 combined-sampler 纹理类型（OpTypeSampledImage，即 spike 已验证路径）。
+4. **Slang 变体**：~~内嵌 sampler 机制 spec 对两者同等适用，主工程接入时直接验证~~——**已被主工程接入实测证伪（2026-08-27，见 §八）**：Slang `Texture2D<float>`+`SamplerState`（分离 OpTypeImage+OpTypeSampler 对）在 RADV descriptor heap 上采样恒 garbage，无论 sampler 走独立 sampler heap 还是 `pEmbeddedSampler`；RADV 只映射组合 `OpTypeSampledImage`（spike 已验证路径）。spec 层面分离绑定是合法的（sampler heap + `samplerHeapOffset` 字段专为此设），**这是 RADV 的实现缺口，非写法错误**；NVIDIA 侧待测。
 5. **feature/扩展**：纹理路径无新增 feature；device 扩展维持现状（descriptor heap 隐式依赖 maintenance4/5 已在主工程）。
 
 ## 七、已知问题
@@ -116,3 +118,35 @@ VK_DRIVER_FILES=$NV_ICD __NV_PRIME_RENDER_OFFLOAD=1 __NV_PRIME_RENDER_OFFLOAD_PR
 - **VVL 09600 跟踪伪影**（RADV + 系统 VVL）：spike 在 validation layer 下报
   `VUID-vkCmdDraw-None-09600 ... expects VkImage ... to be in layout TRANSFER_DST_OPTIMAL -- instead, current layout is UNDEFINED`，
   但同一运行**像素精确匹配**且关闭 VVL 后运行完全干净（exit 0，无其他 VVL 报错）——判定为 VVL 对 descriptor heap image 描述符的 layout 跟踪缺陷（写描述符发生在 host 侧、布局转换发生在命令缓冲内，VVL 关联失败），非真实 spec 违规。主工程未开 VVL 运行，不受影响。
+
+## 八、主工程接入实测（2026-08-27）：RADV 分离绑定缺口
+
+Phase 3 接入（`texture_pool.cppm` + `shader.cppm` 3 条目映射 + sampler heap）后，RADV 上模型纹理采样**恒返回 garbage**（`float4(1.0)+texel` 全黑 = NaN）。逐项排查后定位：
+
+**已排除（全部验证正确）**：
+
+| 环节 | 验证方法 | 结果 |
+|---|---|---|
+| GPU 纹理数据 | 临时 `vkCmdCopyImageToBuffer` 回读 texel(0,0) | ✅ 白纹理 (255,255,255,255)、真实纹理有数据 |
+| 上传 layout 转换 | staging UNDEFINED→SRC / dst UNDEFINED→DST / DST→SHADER_READ_ONLY | ✅ |
+| 纹理描述符布局 | v341 `vk::ImageDescriptorInfoEXT`/`ResourceDescriptorInfoEXT` hpp wrapper 与裸 struct 布局兼容（static_assert 确认），`pView`=image view create info | ✅ |
+| image view | `subresourceRange` 字段序 `aspectMask,baseMipLevel,levelCount,baseArrayLayer,layerCount`，`{eColor,0,1,0,1}` 正确 | ✅ |
+| slot 寻址 | CPU/GPU 均 "slot0 基址 + N×descriptorSize"，与顶点 buffer（binding0，工作正常）同机制 | ✅ |
+| 几何 + binding0 映射 | fragment 改纯常量 → 模型正常绘制 | ✅ |
+| host→heap barrier | **修了真 bug**：原只设 `eResourceHeapReadEXT`，漏 `eSamplerHeapReadEXT`（两 heap 各有独立 access bit）→ sampler 描述符 host write 未同步 | ✅ 已修 |
+| resourceMask | 具体 mask（SAMPLED_IMAGE/SAMPLER）与 ALL_EXT 均试 | ❌ 都失败（非 mask 问题） |
+
+**根因**：对比 spike（GLSL 组合 `sampler2D`=OpTypeSampledImage，PASS）与主工程（Slang 分离 OpTypeImage+OpTypeSampler，FAIL）——**RADV 的 descriptor heap 只映射组合 `OpTypeSampledImage`，不映射分离的 `OpTypeImage`（resource heap）+ `OpTypeSampler`（sampler heap）**。两个独立 binding 都映射不上 → 采样读未初始化内存 → garbage。
+
+| 组合 | RADV 结果 |
+|---|---|
+| Slang 分离 + 独立 sampler heap（主工程现状） | ❌ 采样 garbage |
+| Slang 分离 + `pEmbeddedSampler`（早先试） | ❌ 采样恒 0 |
+| GLSL 组合 + `pEmbeddedSampler`（spike） | ✅ PASS |
+
+**定性**：spec 支持分离绑定（独立 sampler heap + `VkDescriptorMappingSourceConstantOffsetEXT::samplerHeapOffset` + `VK_ACCESS_2_SAMPLER_HEAP_READ_BIT_EXT` 专为此设），主工程按 spec 正确实现；**这是 RADV 对 `VK_EXT_descriptor_heap` 分离绑定的实现缺口，非写法错误**。
+
+**对 Phase 3 的影响**：
+- 纹理数据/描述符/slot/barrier 全链路在 RADV 上就绪，**唯一缺口是采样绑定模型**。
+- NVIDIA 侧待测：若 NVIDIA 支持分离绑定，则 Slang 现状可直接用；若同样只认组合，则需 model.frag 改 GLSL 组合 `sampler2D`（spike 已验证路径）或等 RADV 修复。
+- **NVIDIA 测试方法**：主工程 `just run-dgpu`（prime offload 环境变量见 Justfile）跑 llm_debug 截图目检；或 `heap_texture_spike` 补测 Q3/Q4 + 分离变体。

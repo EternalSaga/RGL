@@ -159,7 +159,9 @@ captureFrame(RGL::Renderer& renderer, const RGL::FrameDrawList& list, const LlmD
 	// memory barrier 必须在 beginRendering 之前；heapRange 用 getHeapSize() 已扣偏移）
 	vk::MemoryBarrier2 heapBarrier{};
 	heapBarrier.srcAccessMask = vk::AccessFlagBits2::eHostWrite;
-	heapBarrier.dstAccessMask = vk::AccessFlagBits2::eResourceHeapReadEXT;
+	// 同 drawFrame ⑥：sampler heap 读访问 flag 独立于 resource heap，须一并声明
+	//（缺 eSamplerHeapReadEXT 时 sampler 描述符未同步 → 采样恒 garbage）
+	heapBarrier.dstAccessMask = vk::AccessFlagBits2::eResourceHeapReadEXT | vk::AccessFlagBits2::eSamplerHeapReadEXT;
 	heapBarrier.srcStageMask = vk::PipelineStageFlagBits2::eHost;
 	heapBarrier.dstStageMask = vk::PipelineStageFlagBits2::eAllGraphics;
 	vk::DependencyInfo heapDepInfo{};
@@ -170,6 +172,13 @@ captureFrame(RGL::Renderer& renderer, const RGL::FrameDrawList& list, const LlmD
 	heapRange.size = heap.getHeapSize();
 	cmd.bindResourceHeapEXT(vk::BindHeapInfoEXT(
 		heapRange, resources.getReservedRangeOffset(), resources.getReservedRangeSize()));
+	// sampler heap 同法绑定（Phase 3，同 drawFrame ⑦）
+	const auto& samplerHeap = resources.getSamplerHeap();
+	vk::DeviceAddressRangeEXT samplerHeapRange{};
+	samplerHeapRange.address = samplerHeap.getGpuAddress();
+	samplerHeapRange.size = samplerHeap.getHeapSize();
+	cmd.bindSamplerHeapEXT(vk::BindHeapInfoEXT(
+		samplerHeapRange, 0, resources.getSamplerReservedRangeSize()));
 
 	// ⑦ beginRendering：8-bit 颜色（Store，回读要用）+ 深度（清 1.0，DontCare）
 	vk::RenderingAttachmentInfo colorAttachment{};

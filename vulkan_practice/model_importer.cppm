@@ -57,9 +57,16 @@ export [[nodiscard]] std::expected<std::vector<uint32_t>, Error> uploadModelMesh
 
 		std::memcpy(allocData.pMappedData, vertices.data(), size);
 
-		// 描述符：storage buffer → heap 槽位（基址 HeapSlotModelVertexBase，避开 cube
-		// 占用的 0/4；slot = reserved + 基址 + i，显式记录进资产表——不再靠下标约定）
-		const uint32_t slot = heap.getReservedSlots() + HeapSlotModelVertexBase + i;
+		// 描述符：storage buffer → heap 槽位（统一 slot 分配器，Phase 3：res.allocSlot 连续分配；
+		// 布局约定 = reserved + HeapSlotModelVertexBase + i（schema 生成的基址常量），违例 = 契约漂移）
+		const uint32_t expectedSlot = heap.getReservedSlots() + HeapSlotModelVertexBase + i;
+		auto slotResult = res.allocSlot("model.vertex");
+		if (!slotResult)
+			return std::unexpected(std::move(slotResult).error());
+		const uint32_t slot = *slotResult;
+		if (slot != expectedSlot)
+			return std::unexpected(Error{ErrorCode::DescriptorSlotOutOfBounds,
+				"heap slot layout drift: model.vertex[" + std::to_string(i) + "]"});
 		auto slotAddr = heap.getSlotCpuAddress(slot);
 		if (!slotAddr)
 			return std::unexpected(std::move(slotAddr).error());

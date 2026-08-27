@@ -1,5 +1,7 @@
 # VK_EXT_device_generated_commands 扩展研究记录
 
+> **状态**：调研（Phase 7 GPU culling 依据；双驱动实测结论在 Phase 7 实现前持续有效）
+
 **日期**: 2026-08-22
 **环境**: Gentoo, Vulkan 头文件 1.4.341 (系统), loader 1.4.341, RADV ICD 1.4.354 / NVIDIA 610.57.04
 **结论**: 双驱动均支持该扩展（rev 1，feature 全真），本地头文件 + `vulkan.hpp`（RAII + Device/CommandBuffer wrapper）API 表面齐备。但存在**关键驱动不对称**：RADV 仅支持 compute 侧 indirect execution set（graphics 侧 per-sequence shader 绑定 / mesh draw 不支持），NVIDIA 全支持（含 MESH+FRAGMENT shader object 绑定）。**决策：随 Phase 7（延迟渲染）作为 culling 前置子阶段引入**，graphics 侧路径必须带 CPU 回退（`vkCmdDrawMeshTasksIndirectCountEXT`，属已启用的 `VK_EXT_mesh_shader`，双驱动可用）。

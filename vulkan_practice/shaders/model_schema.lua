@@ -18,9 +18,13 @@ return {
 
     -- Descriptor table slot definitions
     -- 模型顶点缓冲：运行时 slot = reservedSlots() + heapSlotOffset + primitiveIndex
-    -- 基址 8 避开 cube 占用的 0（顶点）与 4（索引）
+    -- 基址 2 = cube 顶点 0 / 索引 1 之后（统一 slot 分配器连续分配，见 vkresources.cppm allocSlot）
+    -- 纹理槽（Phase 3）：不带 heapSlotOffset/cppName = 运行时 allocSlot 分配（白纹理/每图一槽），
+    -- 不生成 C++ 常量（tools/validator + generator 对无 offset 条目跳过常量检查）
     descriptorSlots = {
-        { name = "modelVertexBuffer", index = 0, heapSlotOffset = 8, cppName = "HeapSlotModelVertexBase", shape = "byteAddressBuffer" },
+        { name = "modelVertexBuffer", index = 0, heapSlotOffset = 2, cppName = "HeapSlotModelVertexBase", shape = "byteAddressBuffer" },
+        { name = "baseColorTexture", index = 1, shape = "texture2D" },
+        { name = "baseColorSampler", index = 2, shape = "samplerState" },
     },
 
     -- 契约常量（无反射端对应，schema 声明直接生成，同 vertexLayouts 模式）：

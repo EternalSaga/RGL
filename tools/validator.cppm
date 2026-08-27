@@ -107,21 +107,24 @@ export bool validateSchema(const nlohmann::json& reflection, const Schema& schem
 			}
 		}
 		const nlohmann::json& type = (*p)["type"];
-		if (has(type, "baseShape")) {
-			const char* actualShape = getString(type, "baseShape");
-			if (actualShape && !ds.shape.empty() &&
-				std::strcmp(actualShape, ds.shape.c_str()) != 0) {
-				logger->error("[FAIL] descriptorTableSlot '{}' shape mismatch: expected '{}', got '{}'",
-					ds.name, ds.shape, actualShape);
-				ok = false;
-			}
-		}
-		if (ds.heapSlotOffset < 0) {
-			logger->error("[FAIL] descriptorSlot '{}' missing heapSlotOffset", ds.name);
+		// shape 校验：baseShape 优先（byteAddressBuffer/texture2D）；无 baseShape 时回落 type.kind
+		//（SamplerState 反射为 {"kind":"samplerState"}，无 baseShape 字段）
+		const char* actualShape = has(type, "baseShape") ? getString(type, "baseShape")
+			: (has(type, "kind") ? getString(type, "kind") : nullptr);
+		if (actualShape && !ds.shape.empty() &&
+			std::strcmp(actualShape, ds.shape.c_str()) != 0) {
+			logger->error("[FAIL] descriptorTableSlot '{}' shape mismatch: expected '{}', got '{}'",
+				ds.name, ds.shape, actualShape);
 			ok = false;
 		}
-		if (ds.cppName.empty()) {
-			logger->error("[FAIL] descriptorSlot '{}' missing cppName", ds.name);
+		// heapSlotOffset/cppName 成对可选（Phase 3 纹理槽：运行时 allocSlot 分配，无 C++ 常量）：
+		// 有 offset → 必须有 cppName（生成常量）；无 offset → 运行时槽，cppName 必须缺省
+		if (ds.heapSlotOffset >= 0 && ds.cppName.empty()) {
+			logger->error("[FAIL] descriptorSlot '{}' has heapSlotOffset {} but no cppName", ds.name, ds.heapSlotOffset);
+			ok = false;
+		}
+		if (ds.heapSlotOffset < 0 && !ds.cppName.empty()) {
+			logger->error("[FAIL] descriptorSlot '{}' has cppName '{}' but no heapSlotOffset（运行时槽不生成常量）", ds.name, ds.cppName);
 			ok = false;
 		}
 	}

@@ -1,4 +1,4 @@
-// Model 契约（Phase 2：flat unlit baseColor + position/normal/uv）
+// Model 契约（Phase 3：baseColor × baseColorTexture 采样 + position/normal/uv）
 //
 // 顶点缓冲是平铺字节流，字段偏移/stride 以 model_schema.lua 的 vertexLayouts
 // 声明为准（ModelVertex: position@0 normal@12 uv@24 stride=32，packed 布局）。
@@ -31,3 +31,14 @@ struct ModelDrawArgs
 
 [[vk::binding(0, 0)]]
 ByteAddressBuffer modelVertexBuffer;
+
+// 纹理采样（Phase 3）：Texture2D<float> + SamplerState（SPIR-V OpTypeImage + OpTypeSampler 对）。
+// binding 1 → descriptor heap 的 SAMPLED_IMAGE 描述符槽（vkWriteResourceDescriptorsEXT 写入）；
+// binding 2 → 内嵌 sampler（pEmbeddedSampler 替代 sampler heap 查找，spike 机制 spec 对
+// OpTypeSampler 同等适用，见 docs/heap_texture_research.md §二）。
+// 无纹理/无 uv 的 primitive 绑白 1×1 纹理（TexturePool 固定槽，shader 路径单一）。
+[[vk::binding(1, 0)]]
+Texture2D<float> baseColorTexture;
+
+[[vk::binding(2, 0)]]
+SamplerState baseColorSampler;

@@ -102,10 +102,19 @@ export class RenderPipeline {
 	vk::raii::ShaderEXT meshShader = nullptr;
 	vk::raii::ShaderEXT fragShader = nullptr;
 
-   public:
+    public:
+	// slotTexture/samplerHeapOffset/textured 缺省 = cube 形态（2 条目：binding 0/1）。
+	// textured=true = 模型形态（3 条目，Phase 3）：binding 1 → SAMPLED_IMAGE 描述符槽
+	//（resource heap，slotTexture），binding 2 → sampler heap 槽（OpTypeSampler 映射，
+	// samplerHeapOffset 字节偏移，vkCmdBindSamplerHeapEXT 每帧绑定）。
+	// 注意：不走 pEmbeddedSampler——spec 声称对 OpTypeSampler 同等适用，但 RADV 实测
+	// Slang 的 OpTypeImage+OpTypeSampler 分离对采样恒 0（spike 只验证了 GLSL 组合
+	// sampler2D=OpTypeSampledImage），故用独立 sampler heap（docs/phase3_plan.md R1 回退链）。
 	RenderPipeline(vk::raii::Device& device, const ShaderEffect& effect,
-		uint32_t descriptorSize, uint32_t slotVertex, uint32_t slotIndex) {
-		VkDescriptorSetAndBindingMappingEXT mappings[2]{};
+		uint32_t descriptorSize, uint32_t slotVertex, uint32_t slotIndex,
+		uint32_t slotTexture = 0, uint32_t samplerHeapOffset = 0, bool textured = false) {
+		VkDescriptorSetAndBindingMappingEXT mappings[3]{};
+		const uint32_t mappingCount = textured ? 3 : 2;
 
 		mappings[0].sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
 		mappings[0].descriptorSet = 0;
@@ -122,12 +131,25 @@ export class RenderPipeline {
 		mappings[1].bindingCount = 1;
 		mappings[1].resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
 		mappings[1].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
-		mappings[1].sourceData.constantOffset.heapOffset = slotIndex * descriptorSize;
+		mappings[1].sourceData.constantOffset.heapOffset = (textured ? slotTexture : slotIndex) * descriptorSize;
 		mappings[1].sourceData.constantOffset.heapArrayStride = descriptorSize;
+
+		if (textured) {
+			mappings[2].sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
+			mappings[2].descriptorSet = 0;
+			mappings[2].firstBinding = 2;
+			mappings[2].bindingCount = 1;
+			mappings[2].resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
+			mappings[2].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
+			// OpTypeSampler 映射：sampler heap 槽（字节偏移，共享一份 sampler 描述符）；
+			// resource heap 的 heapOffset 对 sampler 无效（留 0）
+			mappings[2].sourceData.constantOffset.samplerHeapOffset = samplerHeapOffset;
+			mappings[2].sourceData.constantOffset.samplerHeapArrayStride = 0;
+		}
 
 		VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{};
 		mappingInfo.sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT;
-		mappingInfo.mappingCount = 2;
+		mappingInfo.mappingCount = mappingCount;
 		mappingInfo.pMappings = mappings;
 
 		VkShaderCreateInfoEXT meshCreateInfoRaw{};

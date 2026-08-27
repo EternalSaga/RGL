@@ -1,9 +1,11 @@
 # NVIDIA 跨平台兼容性排查报告
 
+> **状态**：现行（跨驱动兼容性排坑记录，含历史排查过程；最新验证见第八节）
+
 **日期**: 2026-08-12
-**环境**: Gentoo + RTX 5090 (GB202) / AMD Granite Ridge (Raphael_Mendocino)
+**环境**: Gentoo + RTX 5090 (GB202) / AMD Granite Ridge (Raphael_Mendocino)；2026-08-27 增补：Intel（型号未记录在档）/ AMD Strix Halo (Radeon 8060S，当前开发机)
 **驱动**: NVIDIA 595.84 → 610.57.04
-**状态**: AMD ✅ | NVIDIA ✅ (vertex + mesh shader) — 2026-08-17 更新：原"NVIDIA 驱动 bug"结论已推翻，真实根因是应用侧缺 `VK_SHADER_CREATE_NO_TASK_SHADER_BIT_EXT` flag，见第五节
+**状态**: AMD ✅ | NVIDIA ✅ (vertex + mesh shader) — 2026-08-17 更新：原"NVIDIA 驱动 bug"结论已推翻，真实根因是应用侧缺 `VK_SHADER_CREATE_NO_TASK_SHADER_BIT_EXT` flag，见第五节；**2026-08-27 更新：当前代码（commit `1f43d65`）经 NVIDIA / Intel / AMD Strix Halo 三平台全流程验证通过**，见第八节
 
 ---
 
@@ -242,7 +244,23 @@ Aftermath 的自动 checkpoint 在每个 Vulkan 命令后插入 CPU 调用栈。
 
 ---
 
-## 八、参考
+## 八、2026-08-27 跨平台验证更新
+
+当前代码（commit `1f43d65`，Phase 2 完成态：glTF 加载 + flat unlit + 资产表 + llm_debug 一次性截图）在以下平台全流程验证通过（mesh shader + descriptor heap + dynamic state + 模型渲染，`just run` 无 warn/error）：
+
+| 平台 | 配置 | 结果 |
+|---|---|---|
+| NVIDIA RTX 5090 | prime offload（driver 610.57.04） | ✅ |
+| Intel | 具体型号/iGPU 与否未记录在档（见 commit `1f43d65` 测试） | ✅ |
+| AMD Strix Halo (Radeon 8060S) | RADV 单卡核显机，`RADV_EXPERIMENTAL=heap`（`just run` 自动设置） | ✅ |
+
+**当前开发机（2026-08-27 起）**：Strix Halo 纯核显单卡机器（无独显），运行依赖 RADV + `RADV_EXPERIMENTAL=heap`（`VK_EXT_descriptor_heap` 扩展在该 ICD 下需此实验开关）。
+
+**边界说明**：主工程通过的是 buffer 描述符路径（vertex/index BDA）；descriptor heap 的 **image 描述符 + 内嵌 sampler** 路径（Phase 3 纹理）spike 仅在 RADV 侧实测过（`heap_texture_spike/`，见 `docs/heap_texture_research.md`），NVIDIA 侧待有 dGPU 环境时补测。
+
+---
+
+## 九、参考
 
 - `min_mesh_crash/README.md` — 最小复现 + 根因证据链（本调查的权威记录）
 - NVIDIA 官方 sample：`/home/robin/mounts/gm7000/program/vk_mini_samples/`

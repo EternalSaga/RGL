@@ -22,6 +22,7 @@ export enum class ErrorCode {
 	SDLError,
 	ShaderLoadFailed,
 	GltfLoadFailed,
+	TextureDecodeFailed,
 	VMASuccessFailed,
 	DescriptorSlotOutOfBounds,
 	DeviceLost,

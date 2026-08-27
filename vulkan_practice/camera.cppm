@@ -303,6 +303,18 @@ export [[nodiscard]] std::expected<CameraConfig, Error> loadCameraConfig(std::st
 		if (auto tgt = readVec3("target"))
 			camera.target = *tgt;
 
+		// 初始朝向：面向 target（与 trackball 拖拽时"forward 恒指向 target"的反推约定一致）。
+		// llm_debug 工作流"编辑 position/target 即定机位"依赖此行为——此前朝向固定 yaw=0/-z，
+		// 导致只改 position/target 时相机并不看向 target。
+		{
+			glm::vec3 fwd = camera.target - camera.position;
+			if (glm::length(fwd) > 1e-6f) {
+				fwd = glm::normalize(fwd);
+				camera.pitch = std::asin(std::clamp(fwd.y, -1.0f, 1.0f));
+				camera.yaw = std::atan2(-fwd.x, -fwd.z);
+			}
+		}
+
 		sol::optional<float> fov = root["fovDegrees"];
 		if (fov)
 			camera.fov = *fov * glm::pi<float>() / 180.0f;

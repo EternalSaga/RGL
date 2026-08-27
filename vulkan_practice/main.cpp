@@ -9,6 +9,7 @@ import vk_renderer;
 import scene_config;
 import gltf_loader;
 import model_importer;
+import texture_pool;
 import scene;
 import camera;
 import llm_debug;
@@ -97,10 +98,60 @@ int main() {
 				if (logger) logger->error("错误: {}", assetIdsResult.error().describe());
 				return -1;
 			}
+			// 纹理（Phase 3）：白纹理先取（布局约定"纹理首槽 = 白"，依赖模型顶点槽已分配完），
+			// 再按 primitive 的 baseColorTexture 加载（image 下标去重）；无纹理/无 uv → 白纹理
+			auto& model = *modelResult;
+			TexturePool texturePool(vkResources.getAllocator(), vkDevice, vkResources);
+			const uint32_t whiteTextureId = texturePool.getWhite();
+			std::vector<uint32_t> primitiveTextureIds(model.primitives.size(), whiteTextureId);
+			std::map<int, uint32_t> imageTextureCache;  // image 下标 → 纹理资产 id
+			for (size_t i = 0; i < model.primitives.size(); ++i) {
+				const int imageIndex = model.primitives[i].baseColorTextureIndex;
+				if (imageIndex < 0 || !model.primitives[i].hasUv)
+					continue;
+				auto cached = imageTextureCache.find(imageIndex);
+				if (cached != imageTextureCache.end()) {
+					primitiveTextureIds[i] = cached->second;
+					continue;
+				}
+				const auto& image = model.images[imageIndex];
+				if (image.data.empty()) {
+					auto* logger = RLLogger::getInstance();
+					if (logger)
+						logger->warn("纹理: image {} 无内嵌数据（多 buffer .gltf 不支持），primitive {} 用白纹理",
+							imageIndex, i);
+					continue;
+				}
+				auto textureResult = texturePool.loadEmbedded(
+					image.data.data(), image.data.size(),
+					("texture.image." + std::to_string(imageIndex)).c_str());
+				if (!textureResult) {
+					auto* logger = RLLogger::getInstance();
+					if (logger) logger->error("错误: {}", textureResult.error().describe());
+					return -1;
+				}
+				primitiveTextureIds[i] = *textureResult;
+				imageTextureCache[imageIndex] = *textureResult;
+			}
+			{
+				auto* logger = RLLogger::getInstance();
+				uint32_t texturedPrimitives = 0;
+				for (uint32_t id : primitiveTextureIds)
+					if (id != whiteTextureId) texturedPrimitives++;
+				if (logger)
+					logger->info("textures: {} 资产（白 + {} 图片），{} / {} primitive 带纹理",
+						texturePool.size(), texturePool.size() - 1, texturedPrimitives,
+						model.primitives.size());
+			}
 			auto& assets = vkResources.getAssetTable();
-			for (uint32_t id : *assetIdsResult)
-				vkRenderer.addModelPipeline(assets.get(id).heapSlot, id);
-			registerScene(registry, *modelResult, std::span<const uint32_t>(*assetIdsResult));
+			const uint32_t samplerSlot = texturePool.samplerSlot();
+			for (size_t i = 0; i < assetIdsResult->size(); ++i) {
+				const uint32_t id = (*assetIdsResult)[i];
+				// 纹理 slot + sampler slot 烘焙进 per-primitive 管线 mapping（binding 1/2），每帧零成本
+				vkRenderer.addModelPipeline(assets.get(id).heapSlot,
+					texturePool.get(primitiveTextureIds[i]).heapSlot, samplerSlot, id);
+			}
+			registerScene(registry, model, std::span<const uint32_t>(*assetIdsResult));
 		}
 
 		auto renderResult = RGL::renderSystem(registry, vkRenderer,

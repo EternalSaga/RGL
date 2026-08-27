@@ -203,16 +203,18 @@ main.cpp 按逆序析构（RAII，无需手动清理）。
 
 ## 其他文档
 
+> **状态标记**：每篇文档头部带一行状态（`现行` / `历史` / `调研`）。历史文档为时点快照（行号已漂移），现状权威记录以本文件 + `next_roadmap.md` 完成情况为准；引用历史文档只取设计思路，勿按行号定位代码。
+
 - `docs/技术概念.md` — 核心 Vulkan 模式、设计决策、shader 缓冲访问规则
 - `docs/调试历史.md` — 灰屏问题修复时间线、已解决的争议
 - `docs/DESCRIPTOR_HEAP_SPEC.md` — 有关DescriptorHeap 扩展的排坑详细记录
 - `docs/next_roadmap.md` — 后续开发计划
-- `docs/phase2_coupling_review.md` — Phase 2 耦合审查（2026-08-23 问题清单 + 修复方向；H1/H2 等条目与 ECS 审查交叉引用）
+- `docs/phase2_coupling_review.md` — 【历史】Phase 2 耦合审查（2026-08-23 问题清单 + 修复方向；条目处置权威记录在 ecs_compliance_review §处置记录，行号已漂移）
 - `docs/ecs_compliance_review.md` — ECS 合规审查与修复方向（2026-08-24 审查；批次 2 已落地：draw list + system 化 + 契约常量 schema 化；2026-08-25 批次 3 已落地：资产表 + MeshRef 资产 ID + 构造参数去耦合 + 输入事件化；E1.4/批次 4 归 Phase 4）
-- `docs/shader_reflection_plan.md` — shader反射开发计划的一些技术调研
-- `docs/nvidia_compatibility_report.md` — NVIDIA 兼容性排查（heap 对齐、Aftermath 集成、mesh shader 崩溃根因）
+- `docs/shader_reflection_plan.md` — 【历史】shader 反射设计规划（Phase 0 实现前；实现现状以本文件模块结构表为准）
+- `docs/nvidia_compatibility_report.md` — 跨驱动兼容性排查（heap 对齐、Aftermath 集成、mesh shader 崩溃根因；2026-08-27 补 NVIDIA/Intel/AMD Strix Halo 三平台验证记录，当前开发机为 Strix Halo 纯核显机）
 - `docs/device_generated_commands_research.md` — GPU culling（VK_EXT_device_generated_commands）双驱动实测调研（Phase 7 依据）
-- `docs/heap_texture_research.md` — descriptor heap 纹理采样预研（Phase 3 依据）：spec 条款（SAMPLED_IMAGE 专用 / 内嵌 sampler / 对齐）+ **v341 头与 v1.4.360 spec 的 API 差异**（pAddressRange vs 句柄、4 参 vs 6 参写描述符、pEmbeddedSampler 位置）+ `heap_texture_spike/` RADV 实测（Q1：imageDescriptorSize 32B > bufferDescriptorSize 16B，slot 步长须改 `max(buffer,image)`；Q3/Q4 PASS）
+- `docs/heap_texture_research.md` — descriptor heap 纹理采样预研（Phase 3 依据）：spec 条款（SAMPLED_IMAGE 专用 / 内嵌 sampler / 对齐）+ **v341 头与 v1.4.360 spec 的 API 差异**（pAddressRange vs 句柄、4 参 vs 6 参写描述符、pEmbeddedSampler 位置）+ `heap_texture_spike/` RADV 实测（Q1：imageDescriptorSize 32B > bufferDescriptorSize 16B，slot 步长须改 `max(buffer,image)`；Q3/Q4 PASS；2026-08-27：主工程 buffer 描述符路径已三平台验证，image spike 的 NVIDIA 侧仍待 dGPU 环境补测）
 - `docs/present_timing_research.md` — present 时序调研（校准时间戳扩展）
 - `docs/快捷键配置.md` — Zed 编辑器快捷键、任务和调试配置说明
 - 离线 Vulkan 文档（优先于在线检索） - `docs.vulkan.org` / `registry.khronos.org` 有 Cloudflare 拦截，在线抓取不可靠。已在本地磁盘克隆官方 spec 源仓库：

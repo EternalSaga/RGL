@@ -1,5 +1,7 @@
 # VK_EXT_descriptor_heap 使用规范
 
+> **状态**：现行（descriptor heap 使用规范 + 排坑记录；代码示例以 2026-08-27 当前代码为准更新过一轮）
+
 ## 一、快速检查清单
 
 | 步骤 | 合规要求 | 文件位置 |
@@ -68,26 +70,27 @@ vk::ResourceDescriptorInfoEXT descInfo{};
 descInfo.type = vk::DescriptorType::eStorageBuffer;  // 或 eUniformBuffer
 descInfo.data.pAddressRange = &range;
 
+auto slotResult = heap->getSlotCpuAddress(slot);  // std::expected<void*, Error>
 vk::HostAddressRangeEXT dst{
-    heap->getSlotCpuAddress<void>(slot),
+    *slotResult,
     heap->getDescriptorSize()  // ⚠️ 必须 >= descriptorSize
 };
 
 device.writeResourceDescriptorsEXT(
-    std::vector<vk::ResourceDescriptorInfoEXT>{descInfo},
-    std::vector<vk::HostAddressRangeEXT>{dst}
+    std::array<vk::ResourceDescriptorInfoEXT, 1>{descInfo},
+    std::array<vk::HostAddressRangeEXT, 1>{dst}
 );
 ```
 
-### 坑 3：vk-hpp 必须传 `std::vector`
+### 坑 3：vk-hpp 需传 ArrayProxy 兼容容器
 
-vk-hpp 的 `writeResourceDescriptorsEXT` 参数类型是 `ArrayProxy<const T>`，**不能直接传裸指针或 initializer list**。必须用 `std::vector` 构造临时对象。
+vk-hpp 的 `writeResourceDescriptorsEXT` 参数类型是 `ArrayProxy<const T>`，**不能直接传裸指针或 initializer list**。`std::array` / `std::vector` 均可（当前代码用 `std::array`，见 `vkresources.cppm` `writeDescriptors`）。
 
 ### 坑 4：`pDescriptors[i].size` 必须 >= descriptor size
 
 ```cpp
 // ✅ 正确
-dst.size = heap->getDescriptorSize();  // 128 (bufferDescriptorSize)
+dst.size = heap->getDescriptorSize();  // 实测 16B（两台 GPU 的 bufferDescriptorSize，勿硬编码）
 
 // ❌ 错误：写不完整的描述符 → 几何体错乱
 dst.size = 64;
@@ -281,39 +284,27 @@ vk-hpp 的 `vk::PushDataInfoEXT` 构造函数接受 `(uint32_t offset, vk::HostA
 
 ### 1. 封装 DescriptorHeap RAII wrapper
 
-```cpp
-struct VmaDescriptorHeap {
-    VmaBuffer bufferStorage;       // 管理 buffer 生命周期
-    void* pMappedData;             // CPU 映射地址
-    uint64_t gpuAddress;           // GPU 端地址
-    uint32_t descriptorSize;       // 单个描述符字节大小
-    uint32_t capacity;             // 总容量（含 reserved）
-    uint32_t reservedSlots;        // reserved 占用的 slot 数
-
-    template<typename T = void>
-    T* getSlotCpuAddress(uint32_t slot) const {
-        return reinterpret_cast<T*>(
-            static_cast<char*>(pMappedData) + slot * descriptorSize
-        );
-    }
-};
-```
+`VmaDescriptorHeap`（`VmaBuffer.cppm`）要点：
+- `getSlotCpuAddress(slot)` 返回 `std::expected<void*, Error>`（带越界检查），CPU 写描述符用；
+- `getGpuAddress()` + `getHeapSize()` 供 `vkCmdBindResourceHeapEXT`（`getHeapSize` 必须扣对齐偏移，见 nvidia_compatibility_report.md §7.6 坑 7）；
+- 构造唯一入口 `VmaAllocatorRAII::createDescriptorHeap`（双端对齐修正：GPU `resourceHeapAlignment` + CPU `descriptorSize`）。
 
 ### 2. slot 编号规划
 
 ```
 heap slots:
   0..reservedSlots-1  → 实现保留（BindHeapInfoEXT.reservedRange），不要使用
-  8                   → vertex buffer (HeapSlotVertex)
-  12                  → index buffer (HeapSlotIndex)
-  16+                 → 其他资源
+  用户槽位（相对 reserved range 起点，偏移常量由反射生成）:
+    [0, 8)   → cube（顶点 offset 0 / 索引 offset 4，types_generated）
+    [8, 8+N) → 模型顶点（每 primitive 一个，offset = HeapSlotModelVertexBase(8) + i，model_types_generated）
+    其余     → 固定裕量 kUserSlotMargin = 1024（与场景内容解耦；统一 slot 分配器归 Phase 3 TexturePool）
 
 push data (独立于 heap slots):
   vkCmdPushDataEXT 写入独立的 push data 内存区域，不占用 descriptor heap slots
   push constant 通过 [[vk::push_constant]] 直接访问 push data，不需要 binding mapping
 ```
 
-**实际代码（vkresources.cppm:129）：** `capacity = 16 + reservedSlots`。`reservedRangeOffset = 0`，reserved slots 始终从 heap 起始地址开始（slot 0..reservedSlots-1）。用户实际可用 slots 为 `reservedSlots..(capacity-1)`。Slot 编号运行时动态分配 = `reservedSlots() + HeapSlotVertexOffset(0)` / `reservedSlots() + HeapSlotIndexOffset(4)`（偏移由 `types_generated` 生成），天然避开 reserved range — AMD（reservedSlots=0）与 NVIDIA（reservedSlots=6048）均已验证。
+**实际代码（`vkresources.cppm` `createDescriptorHeap`）：** `capacity = reservedSlots + HeapSlotModelVertexBase + kUserSlotMargin(1024)`。`reservedRangeOffset = 0`，reserved slots 始终从 heap 起始地址开始（slot 0..reservedSlots-1）。用户实际可用 slots 为 `reservedSlots..(capacity-1)`。Slot 编号运行时动态分配 = `reservedSlots() + <偏移常量>`（偏移由 `types_generated` / `model_types_generated` 生成），天然避开 reserved range — AMD（reservedSlots=0）与 NVIDIA（reservedSlots=6048）均已验证。
 
 ### 3. 一次性分配，全程复用
 
@@ -358,11 +349,11 @@ vk::AccessFlagBits2::eHostWrite             // 主机写入（写入描述符后
 
 | API | dst 类型 | data 类型 |
 |---|---|---|
-| `writeResourceDescriptorsEXT` | `std::vector<vk::HostAddressRangeEXT>` | `vk::DeviceAddressRangeEXT` |
-| `writeSamplerDescriptorsEXT` | `std::vector<vk::HostAddressRangeEXT>` | `VkSamplerCreateInfo` |
+| `writeResourceDescriptorsEXT` | `ArrayProxy<vk::HostAddressRangeEXT>`（`std::vector`/`std::array`） | `vk::DeviceAddressRangeEXT`（buffer）/ `VkImageDescriptorInfoEXT`（image，v341） |
+| `writeSamplerDescriptorsEXT` | `ArrayProxy<vk::HostAddressRangeEXT>` | `VkSamplerCreateInfo`（旧 API；新路径用 `pEmbeddedSampler` 内嵌，见 heap_texture_research.md） |
 | `pushDataEXT` | `vk::PushDataInfoEXT` | `vk::HostAddressRangeConstEXT` |
 
 注意：
 - `HostAddressRangeEXT`（可写）vs `HostAddressRangeConstEXT`（只读）
-- vk-hpp 的 `ArrayProxy` 参数必须传 `std::vector`，不能传裸指针
+- vk-hpp 的 `ArrayProxy` 参数必须传兼容容器（`std::vector`/`std::array`），不能传裸指针或 initializer list
 - `writeResourceDescriptorsEXT` 的 `ResourceDescriptorInfoEXT` 中 `sType` 字段不需要手动设置（vk-hpp 自动填充）

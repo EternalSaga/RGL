@@ -1,5 +1,7 @@
 # ECS 合规审查与修复方向（2026-08-24）
 
+> **状态**：现行（批次 2/3 处置记录为权威；后续 Phase 的 ECS 架构决策以此为基线）
+
 > **范围**：`vulkan_practice` 主项目（Phase 0–2 完成后的现状）。`min_mesh_crash` 为独立最小复现，不在范围。
 > **性质**：问题清单 + 修复方向。2026-08-24 批次 2（draw call 抽象 + system 化）已落地，已决条目见 §处置记录。
 > **与 [phase2_coupling_review.md](phase2_coupling_review.md) 的关系**：耦合审查从"耦合味道"视角诊断；

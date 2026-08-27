@@ -190,11 +190,16 @@ export std::string generateCppm(const nlohmann::json& reflection,
 		} else if (std::strcmp(kind, "descriptorTableSlot") == 0) {
 			for (const auto& ds : schema.descriptorSlots) {
 				if (ds.name == name) {
-					nlohmann::json slotObj;
-					slotObj["cpp_name"] = ds.cppName;
-					slotObj["heap_slot_offset"] = ds.heapSlotOffset;
-					data["slots"].push_back(slotObj);
-					logger->debug("Generated slot '{}' -> {} = {}", name, ds.cppName, ds.heapSlotOffset);
+					// 运行时槽（无 heapSlotOffset，如 Phase 3 纹理/采样器）不生成 C++ 常量
+					if (ds.heapSlotOffset >= 0) {
+						nlohmann::json slotObj;
+						slotObj["cpp_name"] = ds.cppName;
+						slotObj["heap_slot_offset"] = ds.heapSlotOffset;
+						data["slots"].push_back(slotObj);
+						logger->debug("Generated slot '{}' -> {} = {}", name, ds.cppName, ds.heapSlotOffset);
+					} else {
+						logger->debug("Slot '{}' is runtime-allocated (no constant generated)", name);
+					}
 					break;
 				}
 			}

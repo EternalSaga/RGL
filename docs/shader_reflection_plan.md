@@ -1,5 +1,7 @@
 # Shader Reflection & Schema Validation — Design Plan
 
+> **状态**：历史（Phase 0 设计规划，2026-08 已实现并演进——实际落地形态：`tools/` 三模块 + inja 模板 + 两条反射管线（types/model），见 AGENTS.md 模块结构表与 `next_roadmap.md` Phase 0 完成情况。本文仅作设计思路留档，正文与现状代码不一致处以后者为准。）
+
 ## 1. 背景与目标
 
 ### 当前架构
