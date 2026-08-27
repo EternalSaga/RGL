@@ -32,13 +32,16 @@ struct ModelDrawArgs
 [[vk::binding(0, 0)]]
 ByteAddressBuffer modelVertexBuffer;
 
-// 纹理采样（Phase 3）：Texture2D<float> + SamplerState（SPIR-V OpTypeImage + OpTypeSampler 对）。
+// 纹理采样（Phase 3）：Texture2D<float4> + SamplerState（SPIR-V OpTypeImage + OpTypeSampler 对）。
+// 元素类型必须 float4（RGBA 纹理）：标量 Texture2D<float> 的 Sample 按 Slang 语义返回标量
+//（SPIR-V 抽首分量），albedo 变 (R,R,R) 广播——2026-08-27 三驱动交叉测试复盘，
+// 见 docs/heap_texture_research.md §九.2。
 // binding 1 → descriptor heap 的 SAMPLED_IMAGE 描述符槽（vkWriteResourceDescriptorsEXT 写入）；
 // binding 2 → 内嵌 sampler（pEmbeddedSampler 替代 sampler heap 查找，spike 机制 spec 对
 // OpTypeSampler 同等适用，见 docs/heap_texture_research.md §二）。
 // 无纹理/无 uv 的 primitive 绑白 1×1 纹理（TexturePool 固定槽，shader 路径单一）。
 [[vk::binding(1, 0)]]
-Texture2D<float> baseColorTexture;
+Texture2D<float4> baseColorTexture;
 
 [[vk::binding(2, 0)]]
 SamplerState baseColorSampler;

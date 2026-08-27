@@ -107,9 +107,6 @@
     },
     {
       "name": "tinygltf"
-    },
-    {
-      "name":"shader-slang"
     }
   ],
   "overrides": [

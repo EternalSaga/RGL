@@ -409,7 +409,8 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 	heapBarrier.srcAccessMask = vk::AccessFlagBits2::eHostWrite;
 	// 两个 heap 的读访问 flag 相互独立（spec：resource heap 与 sampler heap 各有专属
 	// access bit）——只设 eResourceHeapReadEXT 时 sampler 描述符的 host write 未同步到
-	// GPU，sampler 描述符读到未初始化内存 → 采样恒 garbage（Phase 3 黑屏根因）
+	// GPU，sampler 描述符读到未初始化内存 → 采样恒 garbage（Phase 3 排查中修复的
+	// 真实 bug 之一，采样问题全貌见 docs/heap_texture_research.md §八/§九）
 	heapBarrier.dstAccessMask = vk::AccessFlagBits2::eResourceHeapReadEXT | vk::AccessFlagBits2::eSamplerHeapReadEXT;
 	heapBarrier.srcStageMask = vk::PipelineStageFlagBits2::eHost;
 	heapBarrier.dstStageMask = vk::PipelineStageFlagBits2::eAllGraphics;

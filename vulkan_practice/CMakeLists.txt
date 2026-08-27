@@ -1,8 +1,10 @@
-# slangc 由 vcpkg 的 shader-slang port 提供：vcpkg toolchain 把
-# build/vcpkg_installed/<triplet>/tools/shader-slang 注入 CMAKE_PROGRAM_PATH，
-# find_program 自动解析到 vcpkg 版本（CMAKE_PROGRAM_PATH 优先于显式 PATHS）。
-# 旧版曾硬编码 $HOME/program/slang/build/Release——那是死代码（从未生效）且误导，已移除。
-find_program(SLANGC_EXECUTABLE slangc REQUIRED)
+# slangc 由 Slang 官方预构建提供：FetchContent 下载（cmake/SlangFetch.cmake，
+# 根 CMakeLists 顶部已调用 rgl_fetch_slang() 设置 SLANGC_EXECUTABLE）。
+# 替代 vcpkg shader-slang port（port 停在 2026.7.1，上游 master 亦同——
+# docs/heap_texture_research.md §九.4；vcpkg.json 已移除该依赖）。
+if(NOT SLANGC_EXECUTABLE OR NOT EXISTS "${SLANGC_EXECUTABLE}")
+    message(FATAL_ERROR "SLANGC_EXECUTABLE 不可用：根 CMakeLists.txt 须在 add_subdirectory(vulkan_practice) 前 include(cmake/SlangFetch.cmake) 并调用 rgl_fetch_slang()")
+endif()
 
 message(STATUS "找到 Slang 编译器: ${SLANGC_EXECUTABLE}")
 
@@ -117,7 +119,14 @@ add_custom_target(features_generated ALL DEPENDS ${FEATURES_CPPM})
 
 # ─── Shader Compilation ───────────────────────────────────────────────────────
 
-function(compile_slang SHADER_SOURCE OUT_SPV_PATH)
+# 调用：compile_slang(SHADER_SOURCE OUT_SPV_PATH [EXTRA_DEPS...])
+# 不声明命名参数（CMake 4 对固定参数个数校验严格，可选参数/UNPARSED 行为均变化），
+# 从 ARGN 手动取参。
+function(compile_slang)
+    list(GET ARGN 0 SHADER_SOURCE)
+    list(GET ARGN 1 OUT_SPV_PATH)
+    list(REMOVE_AT ARGN 0 1)
+    set(EXTRA_DEPS ${ARGN})
     get_filename_component(SHADER_ABS ${SHADER_SOURCE} ABSOLUTE)
     get_filename_component(SHADER_FULL_NAME ${SHADER_SOURCE} NAME)
     get_filename_component(SHADER_DIR ${SHADER_ABS} DIRECTORY)
@@ -128,6 +137,8 @@ function(compile_slang SHADER_SOURCE OUT_SPV_PATH)
 
     set(OUTPUT_SPV "${GEN_DIR}/${SPV_NAME}")
 
+    # EXTRA_DEPS：本 shader import 的模块文件——只依赖自身时，改共享模块不会触发重编译
+    #（model.*.slang import model；2026-08-27 model.slang 改 float4 后 spv 未重编译踩坑）
     add_custom_command(
         OUTPUT ${OUTPUT_SPV}
         COMMAND ${SLANGC_EXECUTABLE} ${SHADER_ABS}
@@ -136,7 +147,7 @@ function(compile_slang SHADER_SOURCE OUT_SPV_PATH)
                 -profile sm_6_6+spirv_1_6
                 -I "${SHADER_DIR}"
                 -o ${OUTPUT_SPV}
-        DEPENDS ${SHADER_ABS}
+        DEPENDS ${SHADER_ABS} ${EXTRA_DEPS}
         COMMENT "Slangc automatically compiling: ${SHADER_FULL_NAME} -> ${SPV_NAME}"
         VERBATIM
     )
@@ -145,8 +156,8 @@ function(compile_slang SHADER_SOURCE OUT_SPV_PATH)
 endfunction()
 compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/cube.mesh.slang MESH_SPV)
 compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/cube.frag.slang FRAG_SPV)
-compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.mesh.slang MODEL_MESH_SPV)
-compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.frag.slang MODEL_FRAG_SPV)
+compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.mesh.slang MODEL_MESH_SPV ${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.slang)
+compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.frag.slang MODEL_FRAG_SPV ${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.slang)
 message(STATUS "MESH_SPV is: ${MESH_SPV}")
 message(STATUS "FRAG_SPV is: ${FRAG_SPV}")
 message(STATUS "MODEL_MESH_SPV is: ${MODEL_MESH_SPV}")

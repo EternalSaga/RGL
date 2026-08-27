@@ -7,7 +7,16 @@
 //   Q2. imageDescriptorAlignment vs bufferDescriptorAlignment / descriptorSize
 //       —— 统一 slot 步长是否为 image binding 的合法 offset 倍数（image 偏移对齐 VUID）？
 //   Q3. 同一个 resource heap 混存 buffer + image 描述符是否可行？
-//   Q4. pEmbeddedSampler 在 mesh+frag shader object 上是否工作（两驱动）？
+//   Q4. sampler 语义分离（heap 不允许 COMBINED_IMAGE_SAMPLER）的三种绑定形态：
+//        a) glsl 组合 sampler2D（OpTypeSampledImage）+ pEmbeddedSampler（基线）
+//        b) slang 分离 OpTypeImage + OpTypeSampler + 独立 sampler heap（主工程现态）
+//        c) slang 分离 OpTypeImage + OpTypeSampler + pEmbeddedSampler（spec 声称同等适用）
+//
+// 变体选择（环境变量）：
+//   SPIKE_SHADER=glsl|slang|slang_ctrl  （缺省 glsl；slang_ctrl = 无 sampler 纯 Load 对照）
+//   SPIKE_SAMPLER=embedded|heap（缺省 embedded；仅 slang 变体下 heap 有意义）
+//   SPIKE_SAMPLER_FIELD=heapOffset|samplerHeapOffset（缺省 heapOffset = spec 正确用法；
+//       samplerHeapOffset 复现首版/主工程现态的字段误用，做跨驱动行为对照）
 //
 // 无窗口、无 SDL：离屏 256x256 渲染 + copy 回读 + CPU 像素比对（PASS/FAIL）。
 // 驱动由 VK_DRIVER_FILES 环境变量决定（RADV: RADV_EXPERIMENTAL=heap；NVIDIA: prime offload）。
@@ -59,6 +68,21 @@ using ShaderHandle = void*;
 int main() {
 	const uint32_t W = 256, H = 256;
 	const float bufVal = 0.1f; // 存储缓冲值，fragment 加到采样结果上
+
+	// --- 0. 变体选择 ---
+	const char* shaderKind = getenv("SPIKE_SHADER") ? getenv("SPIKE_SHADER") : "glsl";
+	const char* samplerKind = getenv("SPIKE_SAMPLER") ? getenv("SPIKE_SAMPLER") : "embedded";
+	const bool useSlang = strcmp(shaderKind, "slang") == 0;
+	const bool useCtrl = strcmp(shaderKind, "slang_ctrl") == 0; // 对照：无 sampler 纯 Load（隔离 image 映射）
+	const bool useSamplerHeap = strcmp(samplerKind, "heap") == 0;
+#ifndef SPIKE_HAS_SLANG
+	if (useSlang || useCtrl) { fprintf(stderr, "SPIKE_SHADER=slang* 不可用：构建时未找到 slangc（重新 cmake 配置）\n"); return 1; }
+#endif
+	const char* variantName = useSlang
+		? (useSamplerHeap ? "slang 分离 + sampler heap（主工程现态）" : "slang 分离 + pEmbeddedSampler")
+		: (useCtrl ? "slang 对照：Load fetch + buffer（无 sampler 路径）"
+		           : "glsl 组合 sampler2D + pEmbeddedSampler（基线）");
+	fprintf(stderr, "variant: %s\n", variantName);
 
 	// --- 1. instance ---
 	bool haveValidation = false;
@@ -139,6 +163,9 @@ int main() {
 	fprintf(stderr, "maxResourceHeapSize        = %zu bytes\n", hp.maxResourceHeapSize);
 	fprintf(stderr, "resourceHeapAlignment      = %zu\n", hp.resourceHeapAlignment);
 	fprintf(stderr, "maxDescriptorHeapEmbeddedSamplers = %u\n", hp.maxDescriptorHeapEmbeddedSamplers);
+	fprintf(stderr, "minSamplerHeapReservedRange = %zu bytes\n", hp.minSamplerHeapReservedRange);
+	fprintf(stderr, "minSamplerHeapReservedRangeWithEmbedded = %zu bytes\n", hp.minSamplerHeapReservedRangeWithEmbedded);
+	fprintf(stderr, "samplerHeapAlignment       = %zu\n", hp.samplerHeapAlignment);
 
 	// Q1/Q2 预判：现有 slot 步长（bufferDescriptorSize）能否容纳 image 描述符
 	uint64_t slotSize = std::max(hp.bufferDescriptorSize, hp.imageDescriptorSize);
@@ -188,12 +215,15 @@ int main() {
 	#define GPA(name) (PFN_##name)vkGetDeviceProcAddr(dev, #name)
 	auto writeDescFn = GPA(vkWriteResourceDescriptorsEXT);
 	auto bindHeapFn = GPA(vkCmdBindResourceHeapEXT);
+	// sampler heap（仅 slang+heap 变体需要）
+	auto writeSamplerFn = GPA(vkWriteSamplerDescriptorsEXT);
+	auto bindSamplerHeapFn = GPA(vkCmdBindSamplerHeapEXT);
 	// physical-device 级函数：v341 头/loader 无 vkGetPhysicalDeviceProcAddr，GPA 可能解析不到
 	// （spec 标注该函数 "not intended for general use"）；best-effort，属性值（上方）才是 Q1 依据
 	auto descSizeFn = GPA(vkGetPhysicalDeviceDescriptorSizeEXT);
-	if (!writeDescFn || !bindHeapFn) {
-		fprintf(stderr, "FAIL: extension function resolution (writeDesc=%p bindHeap=%p)\n",
-			(void*)writeDescFn, (void*)bindHeapFn);
+	if (!writeDescFn || !bindHeapFn || (useSlang && useSamplerHeap && (!writeSamplerFn || !bindSamplerHeapFn))) {
+		fprintf(stderr, "FAIL: extension function resolution (writeDesc=%p bindHeap=%p writeSampler=%p bindSamplerHeap=%p)\n",
+			(void*)writeDescFn, (void*)bindHeapFn, (void*)writeSamplerFn, (void*)bindSamplerHeapFn);
 		return 1;
 	}
 	if (descSizeFn) {
@@ -313,7 +343,7 @@ int main() {
 
 	// --- 7. descriptor heap（buffer + image 描述符混存，Q3）---
 	uint32_t reservedSlots = (uint32_t)((hp.minResourceHeapReservedRange + slotSize - 1) / slotSize);
-	uint32_t userSlots = 2; // slot0 = storage buffer, slot1 = sampled image
+	uint32_t userSlots = 2; // 用户槽位 reservedSlots+0 = storage buffer, +1 = sampled image
 	uint32_t capacity = reservedSlots + userSlots;
 	VkDeviceSize heapBytes = slotSize * capacity + hp.resourceHeapAlignment;
 	VkBufferCreateInfo hci = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
@@ -369,16 +399,78 @@ int main() {
 	infos[1].sType = VK_STRUCTURE_TYPE_RESOURCE_DESCRIPTOR_INFO_EXT;
 	infos[1].type = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
 	infos[1].data.pImage = &imgDi;
+	// 用户槽位 = reservedSlots + i（与 binding mapping 的 heapOffset 一致；
+	// reserved range 在堆首 [0, reservedSlots*slotSize)，见 bind 段）
 	VkHostAddressRangeEXT hostRanges[2] = {
-		{heapMapped + 0 * slotSize, (size_t)slotSize},
-		{heapMapped + 1 * slotSize, (size_t)slotSize},
+		{heapMapped + (size_t)reservedSlots * slotSize, (size_t)slotSize},
+		{heapMapped + (size_t)(reservedSlots + 1) * slotSize, (size_t)slotSize},
 	};
 	CHK(writeDescFn(dev, 2, infos, hostRanges));
-	fprintf(stderr, "descriptors written: slot0=STORAGE_BUFFER slot1=SAMPLED_IMAGE (single resource heap, Q3)\n");
+	fprintf(stderr, "descriptors written: userSlot0=STORAGE_BUFFER userSlot1=SAMPLED_IMAGE (single resource heap, Q3)\n");
 
-	// --- 9. shader object（mesh+frag 链接，内嵌 sampler Q4）---
-	auto mspv = readBin("mesh.spv");
-	auto fspv = readBin("frag.spv");
+	// --- 8b. sampler heap（仅 slang+heap 变体）：OpTypeSampler 独立 heap ---
+	// v341 无 VK_BUFFER_USAGE_SAMPLER_HEAP_BIT_EXT（与主工程一致用 eDescriptorHeapEXT）；
+	// 布局同 resource heap：reserved 区堆首 [0, samplerReservedSlots*samplerDescSize)，
+	// 用户槽 = samplerReservedSlots（共享一份 sampler 描述符）
+	VkSamplerCreateInfo sci = {}; // 提前声明：embedded 变体的 mapping 与 heap 变体的描述符共用
+	sci.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+	sci.magFilter = VK_FILTER_LINEAR; sci.minFilter = VK_FILTER_LINEAR;
+	sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+	sci.addressModeU = sci.addressModeV = sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+	sci.anisotropyEnable = VK_FALSE;
+	sci.compareEnable = VK_FALSE;
+	sci.minLod = 0.0f; sci.maxLod = 0.0f;
+	sci.unnormalizedCoordinates = VK_FALSE;
+	sci.borderColor = VK_BORDER_COLOR_INT_TRANSPARENT_BLACK;
+
+	uint32_t samplerReservedSlots = 0;
+	VkBuffer samplerHeapBuf = VK_NULL_HANDLE;
+	VkDeviceMemory samplerHeapMem = VK_NULL_HANDLE;
+	uint8_t* samplerHeapMapped = nullptr;
+	uint64_t samplerHeapGpuAddr = 0;
+	uint64_t samplerHeapGpuOffset = 0;
+	uint64_t samplerHeapBytes = 0;
+	uint32_t samplerDescSize = 0;
+	if (useSlang && useSamplerHeap) {
+		samplerDescSize = (uint32_t)hp.samplerDescriptorSize;
+		samplerReservedSlots = (uint32_t)((hp.minSamplerHeapReservedRange + samplerDescSize - 1) / samplerDescSize);
+		samplerHeapBytes = (uint64_t)(samplerReservedSlots + 1) * samplerDescSize + hp.samplerHeapAlignment;
+		VkBufferCreateInfo shci = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+		shci.size = (VkDeviceSize)samplerHeapBytes;
+		shci.usage = VK_BUFFER_USAGE_DESCRIPTOR_HEAP_BIT_EXT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+		shci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+		CHK(vkCreateBuffer(dev, &shci, nullptr, &samplerHeapBuf));
+		VkMemoryRequirements req;
+		vkGetBufferMemoryRequirements(dev, samplerHeapBuf, &req);
+		VkPhysicalDeviceMemoryProperties mp;
+		vkGetPhysicalDeviceMemoryProperties(pd, &mp);
+		uint32_t mt = 0;
+		for (uint32_t i = 0; i < mp.memoryTypeCount; i++)
+			if ((req.memoryTypeBits & (1u << i)) && (mp.memoryTypes[i].propertyFlags & (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT))) { mt = i; break; }
+		VkMemoryAllocateFlagsInfo flg = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO};
+		flg.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+		VkMemoryAllocateInfo mai = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+		mai.pNext = &flg;
+		mai.allocationSize = req.size; mai.memoryTypeIndex = mt;
+		CHK(vkAllocateMemory(dev, &mai, nullptr, &samplerHeapMem));
+		CHK(vkBindBufferMemory(dev, samplerHeapBuf, samplerHeapMem, 0));
+		VkBufferDeviceAddressInfo bda = {VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
+		bda.buffer = samplerHeapBuf;
+		uint64_t rawAddr = vkGetBufferDeviceAddress(dev, &bda);
+		samplerHeapGpuOffset = (hp.samplerHeapAlignment - (rawAddr % hp.samplerHeapAlignment)) % hp.samplerHeapAlignment;
+		samplerHeapGpuAddr = rawAddr + samplerHeapGpuOffset;
+		CHK(vkMapMemory(dev, samplerHeapMem, 0, samplerHeapBytes, 0, (void**)&samplerHeapMapped));
+		samplerHeapMapped += samplerHeapGpuOffset;
+		// sampler 描述符写入首个用户槽（与 resource heap 同款 host 地址范围语义）
+		VkHostAddressRangeEXT sHostRange = {samplerHeapMapped + (size_t)samplerReservedSlots * samplerDescSize, (size_t)samplerDescSize};
+		CHK(writeSamplerFn(dev, 1, &sci, &sHostRange));
+		fprintf(stderr, "sampler heap: reservedSlots=%u samplerDescSize=%u gpuAddr=0x%llx gpuOffset=%zu\n",
+			samplerReservedSlots, samplerDescSize, (unsigned long long)samplerHeapGpuAddr, samplerHeapGpuOffset);
+	}
+
+	// --- 9. shader object（mesh+frag 链接）---
+	auto mspv = readBin(useSlang || useCtrl ? "slang_mesh.spv" : "mesh.spv");
+	auto fspv = readBin(useCtrl ? "slang_frag_ctrl.spv" : (useSlang ? "slang_frag.spv" : "frag.spv"));
 	if (mspv.empty() || fspv.empty()) { fprintf(stderr, "shader load failed\n"); return 1; }
 
 	PFN_vkCreateShadersEXT vkCreateShadersEXT = (PFN_vkCreateShadersEXT)vkGetDeviceProcAddr(dev, "vkCreateShadersEXT");
@@ -419,41 +511,67 @@ int main() {
 		return 1;
 	}
 
-	// 内嵌 sampler（Q4）：linear + clamp
-	VkSamplerCreateInfo sci = {VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-	sci.magFilter = VK_FILTER_LINEAR; sci.minFilter = VK_FILTER_LINEAR;
-	sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-	sci.addressModeU = sci.addressModeV = sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-	sci.anisotropyEnable = VK_FALSE;
-	sci.compareEnable = VK_FALSE;
-	sci.minLod = 0.0f; sci.maxLod = 0.0f;
-	sci.unnormalizedCoordinates = VK_FALSE;
-	sci.borderColor = VK_BORDER_COLOR_INT_TRANSPARENT_BLACK;
-
 	// binding mapping（v341：pEmbeddedSampler 在 sourceData.constantOffset 内）：
-	//   b0 = sampler2D (OpTypeSampledImage) -> heap slot1 (SAMPLED_IMAGE) + pEmbeddedSampler
-	//   b1 = SSBO    (OpTypeBuffer)         -> heap slot0 (STORAGE_BUFFER, pAddressRange)
-	VkDescriptorSetAndBindingMappingEXT mappings[2] = {};
+	//   glsl 组合：  b0 = sampler2D (OpTypeSampledImage) -> image slot + pEmbeddedSampler
+	//                b1 = SSBO    (OpTypeBuffer)         -> buffer slot (pAddressRange)
+	//   slang 分离： b0 = Texture2D (OpTypeImage)        -> image slot（sampler 不在此处）
+	//                b1 = SamplerState (OpTypeSampler)   -> sampler heap 槽（samplerHeapOffset）
+	//                                                           或 pEmbeddedSampler（spec 声称同等适用）
+	//                b2 = SSBO    (OpTypeBuffer)         -> buffer slot
+	VkDescriptorSetAndBindingMappingEXT mappings[3] = {};
+	const uint32_t mappingCount = useSlang ? 3 : 2;
+
 	mappings[0].sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
 	mappings[0].descriptorSet = 0; mappings[0].firstBinding = 0; mappings[0].bindingCount = 1;
 	mappings[0].resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
 	mappings[0].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
 	mappings[0].sourceData.constantOffset.heapOffset = (reservedSlots + 1) * (uint32_t)slotSize;
 	mappings[0].sourceData.constantOffset.heapArrayStride = 0;
-	mappings[0].sourceData.constantOffset.pEmbeddedSampler = &sci;
-	mappings[0].sourceData.constantOffset.samplerHeapOffset = 0;
-	mappings[0].sourceData.constantOffset.samplerHeapArrayStride = 0;
+	if (!useSlang && !useCtrl)
+		mappings[0].sourceData.constantOffset.pEmbeddedSampler = &sci; // 组合变体：sampler 走内嵌
 
 	mappings[1].sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
-	mappings[1].descriptorSet = 0; mappings[1].firstBinding = 1; mappings[1].bindingCount = 1;
+	mappings[1].descriptorSet = 0; mappings[1].firstBinding = useCtrl ? 2 : 1; mappings[1].bindingCount = 1; // ctrl 的 SSBO 在 b2
 	mappings[1].resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
 	mappings[1].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
-	mappings[1].sourceData.constantOffset.heapOffset = reservedSlots * (uint32_t)slotSize;
-	mappings[1].sourceData.constantOffset.heapArrayStride = 0;
+	if (useSlang) {
+		// OpTypeSampler 映射：spec（descriptorheaps.adoc :1664-1665 + VUID 11253）要求
+		// sampler heap 偏移写 heapOffset（"offset added to the heap address for the mapped
+		// resource or sampler"）；samplerHeapOffset 字段"used only when mapping a combined
+		// image sampler"（:1671-1674）。spike 首版与主工程现态均误用旧字段：RADV
+		//（minSamplerHeapReservedRange=0）用户槽恰在 offset 0 侥幸无害，NVIDIA 类保留区
+		// 非零驱动的 sampler 查找会落入保留区 → 垃圾 sampler（§八 NaN 全黑的头号嫌疑）。
+		if (useSamplerHeap) {
+			const char* field = getenv("SPIKE_SAMPLER_FIELD") ? getenv("SPIKE_SAMPLER_FIELD") : "heapOffset";
+			if (strcmp(field, "samplerHeapOffset") == 0)
+				mappings[1].sourceData.constantOffset.samplerHeapOffset =
+					samplerReservedSlots * samplerDescSize;
+			else {
+				mappings[1].sourceData.constantOffset.heapOffset =
+					samplerReservedSlots * samplerDescSize;
+				mappings[1].sourceData.constantOffset.heapArrayStride = 0;
+			}
+			fprintf(stderr, "OpTypeSampler mapping field: %s (offset=%u)\n",
+				field, samplerReservedSlots * samplerDescSize);
+		} else
+			mappings[1].sourceData.constantOffset.pEmbeddedSampler = &sci;
+	} else {
+		mappings[1].sourceData.constantOffset.heapOffset = reservedSlots * (uint32_t)slotSize;
+		mappings[1].sourceData.constantOffset.heapArrayStride = 0;
+	}
+
+	if (useSlang) {
+		mappings[2].sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
+		mappings[2].descriptorSet = 0; mappings[2].firstBinding = 2; mappings[2].bindingCount = 1;
+		mappings[2].resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
+		mappings[2].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
+		mappings[2].sourceData.constantOffset.heapOffset = reservedSlots * (uint32_t)slotSize;
+		mappings[2].sourceData.constantOffset.heapArrayStride = 0;
+	}
 
 	VkShaderDescriptorSetAndBindingMappingInfoEXT mi = {};
 	mi.sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT;
-	mi.mappingCount = 2;
+	mi.mappingCount = mappingCount;
 	mi.pMappings = mappings;
 
 	VkShaderCreateInfoEXT cis[2] = {};
@@ -478,7 +596,8 @@ int main() {
 
 	VkShaderEXT handles[2];
 	CHK2(vkCreateShadersEXT(dev, 2, cis, nullptr, handles));
-	fprintf(stderr, "shaders created (embedded sampler on b0, heap mappings b0+b1)\n");
+	fprintf(stderr, "shaders created (%s, %u mappings)\n",
+		useSlang ? "slang 分离 OpTypeImage+OpTypeSampler" : "glsl 组合 sampler2D", mappingCount);
 	if (g_failed) return 1;
 	ShaderHandle meshS = handles[0], fragS = handles[1];
 
@@ -599,7 +718,10 @@ int main() {
 		bb.srcStageMask = VK_PIPELINE_STAGE_2_HOST_BIT;
 		bb.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 		bb.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
-		bb.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT;
+		// resource heap / sampler heap 各有专属 read access bit（漏 eSamplerHeapReadEXT →
+		// sampler 描述符 host write 未同步，主工程 Phase 3 黑屏根因，见调研文档 §八）
+		bb.dstAccessMask = VK_ACCESS_2_RESOURCE_HEAP_READ_BIT_EXT |
+			(useSlang && useSamplerHeap ? VK_ACCESS_2_SAMPLER_HEAP_READ_BIT_EXT : 0);
 		bb.buffer = heapBuf;
 		bb.size = VK_WHOLE_SIZE;
 		VkBufferMemoryBarrier2 bb2 = bb;
@@ -619,9 +741,25 @@ int main() {
 		VkBindHeapInfoEXT bi = {};
 		bi.sType = VK_STRUCTURE_TYPE_BIND_HEAP_INFO_EXT;
 		bi.heapRange = hr;
-		bi.reservedRangeOffset = reservedSlots * (uint64_t)slotSize;
+		// reserved range 在堆首 [0, reservedSlots*slotSize)（主工程 VmaDescriptorHeap 同布局）：
+		// VUID 11232 要求 offset+size <= heapRange.size，offset=reservedSlots*slotSize 会越界
+		bi.reservedRangeOffset = 0;
 		bi.reservedRangeSize = reservedSlots * (uint64_t)slotSize;
 		bindHeapFn(cb, &bi);
+	}
+	// sampler heap（slang+heap 变体；spec "one descriptor heap of each type can be bound"）
+	if (useSlang && useSamplerHeap) {
+		VkDeviceAddressRangeEXT shr = {};
+		shr.address = samplerHeapGpuAddr;
+		shr.size = (VkDeviceSize)samplerHeapBytes - samplerHeapGpuOffset;
+		VkBindHeapInfoEXT sbi = {};
+		sbi.sType = VK_STRUCTURE_TYPE_BIND_HEAP_INFO_EXT;
+		sbi.heapRange = shr;
+		sbi.reservedRangeOffset = 0;
+		sbi.reservedRangeSize = (uint64_t)samplerReservedSlots * samplerDescSize;
+		bindSamplerHeapFn(cb, &sbi);
+		fprintf(stderr, "sampler heap bound (reservedRangeSize=%llu)\n",
+			(unsigned long long)sbi.reservedRangeSize);
 	}
 
 	// 渲染目标 UNDEFINED -> COLOR_ATTACHMENT_OPTIMAL
@@ -762,6 +900,8 @@ int main() {
 	fprintf(stderr, "\n=== pixel verification ===\n");
 	if (!g_failed) {
 		// 纹理左半 (0.25,0.5,0.75) + bufVal 0.1 = (0.35,0.6,0.85)；右半 (0.9,0.1,0.25) + 0.1 = (1.0,0.2,0.35)
+		// ctrl 变体：Load 返回完整纹素（alpha=1.0），+0.1 clamp 到 1.0——与采样变体一致
+		const float expA = 1.0f;
 		struct Check { uint32_t x, y; float r, g, b; const char* name; };
 		Check checks[] = {
 			{8, 8, 0.35f, 0.6f, 0.85f, "top-left (left half + buf)"},
@@ -771,7 +911,7 @@ int main() {
 		};
 		for (auto& c : checks) {
 			const uint8_t* px = readMapped + (c.y * W + c.x) * 4;
-			bool ok = pixelClose(px, c.r, c.g, c.b, 1.0f);
+			bool ok = pixelClose(px, c.r, c.g, c.b, expA);
 			fprintf(stderr, "  %-32s px(%u,%u)=(%u,%u,%u,%u) expected(%.2f,%.2f,%.2f,1.0) %s\n",
 				c.name, c.x, c.y, px[0], px[1], px[2], px[3], c.r, c.g, c.b, ok ? "OK" : "MISMATCH");
 			if (!ok) g_failed = true;
@@ -779,11 +919,16 @@ int main() {
 	}
 
 	// --- 13. 结论 ---
-	fprintf(stderr, "\n=== RESULT ===\n");
+	fprintf(stderr, "\n=== RESULT === (%s)\n", variantName);
 	fprintf(stderr, "Q1 imageDescSize<=bufferDescSize: %s\n", q1ok ? "PASS" : "FAIL");
 	fprintf(stderr, "Q2 slot stride alignment:        %s\n", q2ok ? "PASS" : "FAIL");
 	fprintf(stderr, "Q3 buffer+image in one heap:     %s\n", g_failed ? "FAIL" : "PASS");
-	fprintf(stderr, "Q4 embedded sampler sampling:    %s\n", g_failed ? "FAIL" : "PASS");
+	if (useSlang)
+		fprintf(stderr, "Q4b 分离 OpTypeSampler %s:       %s\n",
+			useSamplerHeap ? "via sampler heap" : "via pEmbeddedSampler",
+			g_failed ? "FAIL" : "PASS");
+	else
+		fprintf(stderr, "Q4a 组合 OpTypeSampledImage + pEmbeddedSampler: %s\n", g_failed ? "FAIL" : "PASS");
 	fprintf(stderr, "OVERALL: %s\n", g_failed ? "FAIL" : "PASS");
 
 	// --- cleanup ---
@@ -802,6 +947,9 @@ int main() {
 	vkUnmapMemory(dev, heapMem);
 	vkFreeMemory(dev, heapMem, nullptr);
 	vkDestroyBuffer(dev, heapBuf, nullptr);
+	if (samplerHeapMapped) vkUnmapMemory(dev, samplerHeapMem);
+	if (samplerHeapMem) vkFreeMemory(dev, samplerHeapMem, nullptr);
+	if (samplerHeapBuf) vkDestroyBuffer(dev, samplerHeapBuf, nullptr);
 	vkFreeMemory(dev, storeMem, nullptr);
 	vkDestroyBuffer(dev, storeBuf, nullptr);
 	// linMem 已在填图作用域内 unmap

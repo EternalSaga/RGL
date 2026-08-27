@@ -106,10 +106,11 @@ export class RenderPipeline {
 	// slotTexture/samplerHeapOffset/textured 缺省 = cube 形态（2 条目：binding 0/1）。
 	// textured=true = 模型形态（3 条目，Phase 3）：binding 1 → SAMPLED_IMAGE 描述符槽
 	//（resource heap，slotTexture），binding 2 → sampler heap 槽（OpTypeSampler 映射，
-	// samplerHeapOffset 字节偏移，vkCmdBindSamplerHeapEXT 每帧绑定）。
-	// 注意：不走 pEmbeddedSampler——spec 声称对 OpTypeSampler 同等适用，但 RADV 实测
-	// Slang 的 OpTypeImage+OpTypeSampler 分离对采样恒 0（spike 只验证了 GLSL 组合
-	// sampler2D=OpTypeSampledImage），故用独立 sampler heap（docs/phase3_plan.md R1 回退链）。
+	// heapOffset 字节偏移——独立 sampler 的 spec 正确字段，见下方注释；
+	// vkCmdBindSamplerHeapEXT 每帧绑定）。
+	// 注意：sampler 走独立 sampler heap 而非 pEmbeddedSampler——2026-08-27 spike
+	// 交叉测试两者三驱动均 PASS（docs/heap_texture_research.md §九），此处维持独立
+	// sampler heap（docs/phase3_plan.md R1 回退链的既选路径，已验证可用）。
 	RenderPipeline(vk::raii::Device& device, const ShaderEffect& effect,
 		uint32_t descriptorSize, uint32_t slotVertex, uint32_t slotIndex,
 		uint32_t slotTexture = 0, uint32_t samplerHeapOffset = 0, bool textured = false) {
@@ -141,10 +142,13 @@ export class RenderPipeline {
 			mappings[2].bindingCount = 1;
 			mappings[2].resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
 			mappings[2].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
-			// OpTypeSampler 映射：sampler heap 槽（字节偏移，共享一份 sampler 描述符）；
-			// resource heap 的 heapOffset 对 sampler 无效（留 0）
-			mappings[2].sourceData.constantOffset.samplerHeapOffset = samplerHeapOffset;
-			mappings[2].sourceData.constantOffset.samplerHeapArrayStride = 0;
+			// OpTypeSampler 映射：sampler heap 槽（字节偏移，共享一份 sampler 描述符）。
+			// spec（descriptorheaps.adoc :1664-1665 + VUID 11253）：独立 OpTypeSampler 的
+			// sampler heap 偏移写 heapOffset（"mapped resource or sampler"）；samplerHeapOffset
+			// 字段仅组合 image sampler 用（:1671-1674）——2026-08-27 交叉测试定位的字段误用
+			//（spike 首版同款，docs/heap_texture_research.md §九.2 根因 2）
+			mappings[2].sourceData.constantOffset.heapOffset = samplerHeapOffset;
+			mappings[2].sourceData.constantOffset.heapArrayStride = 0;
 		}
 
 		VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{};

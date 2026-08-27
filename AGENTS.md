@@ -172,7 +172,7 @@ main.cpp 按逆序析构（RAII，无需手动清理）。
 - `glm` — 数学库（强制 depth zero-to-one，弧度制）
 - `SDL3` — 窗口/surface
 - `VulkanMemoryAllocator` — 内存管理
-- `slangc` — 着色器编译器（`$HOME/program/slang/build/Release/bin/slangc`）
+- `slangc` — 着色器编译器：**FetchContent 拉 Slang 官方预构建**（`cmake/SlangFetch.cmake` pin v2026.16 + sha256，解压 `build/_deps/slang-prebuilt-src/bin/slangc`）；2026-08-27 起替代 vcpkg `shader-slang` port（port 停 2026.7.1，`vcpkg.json` 已移除该依赖）
 
 ## 关键文件位置
 
@@ -214,7 +214,7 @@ main.cpp 按逆序析构（RAII，无需手动清理）。
 - `docs/shader_reflection_plan.md` — 【历史】shader 反射设计规划（Phase 0 实现前；实现现状以本文件模块结构表为准）
 - `docs/nvidia_compatibility_report.md` — 跨驱动兼容性排查（heap 对齐、Aftermath 集成、mesh shader 崩溃根因；2026-08-27 补 NVIDIA/Intel/AMD Strix Halo 三平台验证记录，当前开发机为 Strix Halo 纯核显机）
 - `docs/device_generated_commands_research.md` — GPU culling（VK_EXT_device_generated_commands）双驱动实测调研（Phase 7 依据）
-- `docs/heap_texture_research.md` — descriptor heap 纹理采样预研（Phase 3 依据）：spec 条款（SAMPLED_IMAGE 专用 / 内嵌 sampler / 对齐）+ **v341 头与 v1.4.360 spec 的 API 差异**（pAddressRange vs 句柄、4 参 vs 6 参写描述符、pEmbeddedSampler 位置）+ `heap_texture_spike/` RADV 实测（Q1：imageDescriptorSize 32B > bufferDescriptorSize 16B，slot 步长须改 `max(buffer,image)`；Q3/Q4 PASS；2026-08-27：主工程 buffer 描述符路径已三平台验证，image spike 的 NVIDIA 侧仍待 dGPU 环境补测）
+- `docs/heap_texture_research.md` — descriptor heap 纹理采样预研（Phase 3 依据）：spec 条款（SAMPLED_IMAGE 专用 / 内嵌 sampler / 对齐）+ **v341 头与 v1.4.360 spec 的 API 差异**（pAddressRange vs 句柄、4 参 vs 6 参写描述符、pEmbeddedSampler 位置）+ `heap_texture_spike/` 三驱动实测（2026-08-27：RADV/Intel/NVIDIA × 5 变体全 PASS，语义分离三驱动完整实现；Q1 统一步长 `max(buffer,image)`；§九 误诊复盘：标量 `Texture2D<float>` R 通道 splat + `samplerHeapOffset` 字段误用，推翻早期"RADV 只认组合绑定"定性；主工程待改 `model.slang` float4 + `shader.cppm` 映射字段）
 - `docs/present_timing_research.md` — present 时序调研（校准时间戳扩展）
 - `docs/快捷键配置.md` — Zed 编辑器快捷键、任务和调试配置说明
 - 离线 Vulkan 文档（优先于在线检索） - `docs.vulkan.org` / `registry.khronos.org` 有 Cloudflare 拦截，在线抓取不可靠。已在本地磁盘克隆官方 spec 源仓库：
@@ -236,5 +236,5 @@ main.cpp 按逆序析构（RAII，无需手动清理）。
 
 - `main.cpp` — descriptor heap 中写 **SAMPLED_IMAGE 描述符**（`pImage`/`VkImageDescriptorInfoEXT`，pView = image view create info）+ **STORAGE_BUFFER 描述符**（`pAddressRange` 裸地址，与主工程一致）共存于同一 resource heap；mesh+frag shader object 经 `pEmbeddedSampler`（内嵌 sampler，无独立 sampler heap）采样离屏纹理，`vkCmdCopyImageToBuffer` 回读做 CPU 像素比对（PASS/FAIL 退出码）
 - **v341 API**（与主工程同一编译环境，系统头/loader）：buffer 描述符走 `data.pAddressRange`、`vkWriteResourceDescriptorsEXT` 4 参（`VkHostAddressRangeEXT`）、`pEmbeddedSampler` 在 `sourceData.constantOffset` 内、`VkBindHeapInfoEXT` 单 `heapRange`；**旧 loader 不导出扩展符号** → 全部经 `vkGetDeviceProcAddr` 运行时解析（主工程经 Vulkan-Hpp dispatcher 同理）
-- 结论：RADV `imageDescriptorSize=32B > bufferDescriptorSize=16B`（现有 slot 寻址不能容纳 image 描述符，Phase 3 步长改 `max`）；单 heap 混存 + 内嵌 sampler 采样 **PASS**。NVIDIA 待补测。权威记录见 `README.md` + `docs/heap_texture_research.md`
+- 结论（2026-08-27 三驱动交叉）：RADV/Intel/NVIDIA × 5 变体（组合 / 分离+sampler heap / 分离+内嵌 / 无 sampler 对照）**全 PASS**——descriptor heap 纹理/sampler 语义分离三驱动完整实现；`imageDescriptorSize`（RADV 64 / NVIDIA 32 / Intel 64）> `bufferDescriptorSize`（16/16/64），Phase 3 统一步长改 `max`（运行时查询）；变体 `SPIKE_SHADER=glsl|slang|slang_ctrl`、`SPIKE_SAMPLER=embedded|heap`、`SPIKE_SAMPLER_FIELD`（旧字段对照），一键矩阵 `cross_test.sh`；slangc 经 `cmake/SlangFetch.cmake` FetchContent 拉官方预构建（与主工程同源，`$ENV{SLANGC_DIR}` 可覆盖，不查系统 PATH，见调研文档 §九.4）。权威记录见 `README.md` + `docs/heap_texture_research.md`
 - 构建/运行：`cmake -B build -S . -G Ninja && cmake --build build`；RADV 用 `RADV_EXPERIMENTAL=heap`，NVIDIA 用 prime offload 环境变量（见其 README）
