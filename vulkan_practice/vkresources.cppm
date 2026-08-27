@@ -115,17 +115,19 @@ export class Resources {
 	vk::DeviceSize getReservedRangeSize() const { return descriptorHeap.getReservedSlots() * descriptorHeap.getDescriptorSize(); }
 	// sampler heap 绑定的保留区（同 resource heap 语义：reserved 槽声明为不可用）
 	vk::DeviceSize getSamplerReservedRangeSize() const { return samplerHeap.getReservedSlots() * samplerHeap.getDescriptorSize(); }
-	// 共享 sampler 描述符写入 sampler heap 首个可用槽，返回槽号（启动期一次性，TexturePool 构造调用）
+	// 共享 sampler 描述符写入 sampler heap 首个可用槽，返回槽号（启动期一次性，TexturePool 构造调用）。
+	// sampler create info 存成员（稳定存储）：与 image 描述符同款规则——RADV 对
+	// descriptor heap 的指针在采样期解引用，临时对象悬空同样导致采样 garbage
+	//（Phase 3 全黑排查 2026-08-27，见 docs/heap_texture_research.md）
 	[[nodiscard]] uint32_t writeSamplerDescriptor(const VkSamplerCreateInfo& info) {
 		uint32_t slot = samplerHeap.getReservedSlots();
 		auto slotAddr = samplerHeap.getSlotCpuAddress(slot);
 		if (!slotAddr)
 			throw std::runtime_error(slotAddr.error().describe());
 		vk::HostAddressRangeEXT dst{*slotAddr, samplerHeap.getDescriptorSize()};
+		samplerCreateInfo = vk::SamplerCreateInfo(info);
 		// hpp raii 内部 resultCheck（失败抛 LogicError）
-		vkDevice.getDevice().writeSamplerDescriptorsEXT(
-			std::array<vk::SamplerCreateInfo, 1>{vk::SamplerCreateInfo(info)},
-			std::array<vk::HostAddressRangeEXT, 1>{dst});
+		vkDevice.getDevice().writeSamplerDescriptorsEXT(samplerCreateInfo, dst);
 		return slot;
 	}
 	vk::DeviceAddress getVertexBufferAddress() const { return vertexBuffer.getDeviceAddress(); }
@@ -297,7 +299,7 @@ export class Resources {
 		device.writeResourceDescriptorsEXT(
 			std::array<vk::ResourceDescriptorInfoEXT, 2>{vertexDescInfo, indexDescInfo},
 			std::array<vk::HostAddressRangeEXT, 2>{vertexDst, indexDst});
-	}
+}
 
 	RGL::AppContext& vkInstance;
 	RGL::DeviceContext& vkDevice;
@@ -308,7 +310,10 @@ export class Resources {
 	RGL::VmaBuffer vertexBuffer;
 	RGL::VmaBuffer indexBuffer;
 	RGL::VmaDescriptorHeap descriptorHeap;
-	RGL::VmaDescriptorHeap samplerHeap;  // Phase 3：OpTypeSampler 独立 heap（embedded sampler 未获 RADV 采纳）
+	RGL::VmaDescriptorHeap samplerHeap;  // Phase 3：OpTypeSampler 独立 heap
+	// 共享 sampler 的 create info 稳定存储（writeSamplerDescriptor 写入；
+	// 驱动采样期解引用，生命周期须覆盖运行期，见其注释）
+	vk::SamplerCreateInfo samplerCreateInfo{};
 	uint32_t heapSlotVertex;
 	uint32_t heapSlotIndex;
 	// 统一 slot 分配器（Phase 3，TexturePool 并案）：单调分配游标，从 reservedSlots 起

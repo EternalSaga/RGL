@@ -50,7 +50,11 @@ export class AppContext {
 		}
 
 		instanceCreateInfo.setPApplicationInfo(&engineInfo);
-		instanceCreateInfo.setPEnabledLayerNames(layers);
+		// DIAG（4K 黑屏排查 2026-08-27）：RGL_NO_VVL=1 关闭 VVL——VVL 的
+		// descriptor heap wrapper 对同一 slot 双写（先零化后写实际描述符，
+		// lldb watchpoint 实测），疑为黑屏/TCP fault 根因；验证后恢复无条件启用
+		if (!std::getenv("RGL_NO_VVL"))
+			instanceCreateInfo.setPEnabledLayerNames(layers);
 		instanceCreateInfo.setPEnabledExtensionNames(instanceExtensions);
 		return instanceCreateInfo;
 	}

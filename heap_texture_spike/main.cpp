@@ -66,7 +66,15 @@ static bool pixelClose(const uint8_t* px, float r, float g, float b, float a, in
 using ShaderHandle = void*;
 
 int main() {
-	const uint32_t W = 256, H = 256;
+	// 4096 复现（Phase 3 主工程全黑排查：4K + 真实数据黑屏，4K 白填充正常——spike 受控环境定位）
+	const uint32_t W = 4096, H = 4096;  // 纹理尺寸
+	// SPIKE_RT_W/SPIKE_RT_H：渲染目标尺寸（默认 = 纹理尺寸）——Phase 3 4K 黑屏排查：
+	// 主工程实测"纹理(4096) > 离屏目标(1280/2048) → 全黑+TCP fault；目标 ≥ 纹理 → 正常"，
+	// 本参数用于受控复现（4K 纹理 + 小目标）
+	const uint32_t RTW = getenv("SPIKE_RT_W") ? (uint32_t)strtoul(getenv("SPIKE_RT_W"), 0, 0) : W;
+	const uint32_t RTH = getenv("SPIKE_RT_H") ? (uint32_t)strtoul(getenv("SPIKE_RT_H"), 0, 0) : H;
+	if (RTW != W || RTH != H)
+		fprintf(stderr, "render target overridden: %ux%u (texture %ux%u)\n", RTW, RTH, W, H);
 	const float bufVal = 0.1f; // 存储缓冲值，fragment 加到采样结果上
 
 	// --- 0. 变体选择 ---
@@ -186,6 +194,15 @@ int main() {
 		VK_KHR_MAINTENANCE_4_EXTENSION_NAME,   // descriptor heap 隐式依赖 maintenance5（VVL 01387），与主工程一致
 		VK_KHR_MAINTENANCE_5_EXTENSION_NAME,
 	};
+	// 4K 黑屏排查（2026-08-27）：SPIKE_SWAPCHAIN_EXT=1 追加 VK_KHR_swapchain（不建
+	// swapchain 对象）——主工程 device 比 spike 多此扩展，嫌疑改变 RADV 的 VA 段选择
+	//（4K 纹理 high VA 0xffff80... vs spike 低 VA 0xC2...）
+	uint32_t extCount = sizeof(de) / sizeof(*de);
+	if (getenv("SPIKE_SWAPCHAIN_EXT")) {
+		de[6] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+		de[7] = VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME;
+		extCount = 8;
+	}
 	VkPhysicalDeviceVulkan12Features f12 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
 	f12.bufferDeviceAddress = VK_TRUE; // BDA：描述符 pAddressRange + heap GPU 地址（与主工程一致）
 	VkPhysicalDeviceVulkan13Features f13 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
@@ -205,7 +222,7 @@ int main() {
 	dq.queueFamilyIndex = gq; dq.queueCount = 1; dq.pQueuePriorities = &pq;
 	VkDeviceCreateInfo dc = {VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
 	dc.pNext = &f12; dc.queueCreateInfoCount = 1; dc.pQueueCreateInfos = &dq;
-	dc.enabledExtensionCount = sizeof(de) / sizeof(*de); dc.ppEnabledExtensionNames = de;
+	dc.enabledExtensionCount = extCount; dc.ppEnabledExtensionNames = de;
 	VkDevice dev;
 	CHK(vkCreateDevice(pd, &dc, nullptr, &dev));
 	VkQueue q;
@@ -237,7 +254,9 @@ int main() {
 	}
 
 	// --- 5. 纹理：256x256 RGBA8，左半 (0.25,0.5,0.75,1) 右半 (0.9,0.1,0.25,1) ---
-	VkFormat fmt = VK_FORMAT_R8G8B8A8_UNORM;
+	// SPIKE_FORMAT=srgb（Phase 3 排查：主工程 sRGB 4K 黑屏 vs spike UNORM 4K PASS）
+	int useSrgb = getenv("SPIKE_FORMAT") != nullptr && !strcmp(getenv("SPIKE_FORMAT"), "srgb");
+	VkFormat fmt = useSrgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
 	VkImageCreateInfo tci = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
 	tci.imageType = VK_IMAGE_TYPE_2D; tci.format = fmt;
 	tci.extent = {W, H, 1}; tci.mipLevels = 1; tci.arrayLayers = 1;
@@ -343,7 +362,10 @@ int main() {
 
 	// --- 7. descriptor heap（buffer + image 描述符混存，Q3）---
 	uint32_t reservedSlots = (uint32_t)((hp.minResourceHeapReservedRange + slotSize - 1) / slotSize);
-	uint32_t userSlots = 2; // 用户槽位 reservedSlots+0 = storage buffer, +1 = sampled image
+	// SPIKE_HEAP_SLOTS：膨胀用户槽位数（对照主工程 capacity=1026，4K 黑屏排查 2026-08-27）
+	uint32_t userSlots = getenv("SPIKE_HEAP_SLOTS") ? (uint32_t)strtoul(getenv("SPIKE_HEAP_SLOTS"), 0, 0) : 2;
+	if (userSlots < 2) userSlots = 2;
+	(void)0; // 用户槽位 reservedSlots+0 = storage buffer, +1 = sampled image（多余槽位留空）
 	uint32_t capacity = reservedSlots + userSlots;
 	VkDeviceSize heapBytes = slotSize * capacity + hp.resourceHeapAlignment;
 	VkBufferCreateInfo hci = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
@@ -407,7 +429,6 @@ int main() {
 	};
 	CHK(writeDescFn(dev, 2, infos, hostRanges));
 	fprintf(stderr, "descriptors written: userSlot0=STORAGE_BUFFER userSlot1=SAMPLED_IMAGE (single resource heap, Q3)\n");
-
 	// --- 8b. sampler heap（仅 slang+heap 变体）：OpTypeSampler 独立 heap ---
 	// v341 无 VK_BUFFER_USAGE_SAMPLER_HEAP_BIT_EXT（与主工程一致用 eDescriptorHeapEXT）；
 	// 布局同 resource heap：reserved 区堆首 [0, samplerReservedSlots*samplerDescSize)，
@@ -602,9 +623,12 @@ int main() {
 	ShaderHandle meshS = handles[0], fragS = handles[1];
 
 	// --- 10. 渲染目标 + 回读 buffer ---
+	// 渲染目标恒 UNORM（与纹理格式 SPIKE_FORMAT 解耦）：sRGB 纹理的线性化只应发生一次
+	//（采样期硬件 sRGB→线性）；若目标也是 sRGB，store 期会再编码一次（2026-08-27
+	// Phase 3 排查实测：out = encode(linearize(texel)+0.1)，像素比对 MISMATCH 的根因）
 	VkImageCreateInfo rci = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-	rci.imageType = VK_IMAGE_TYPE_2D; rci.format = fmt;
-	rci.extent = {W, H, 1}; rci.mipLevels = 1; rci.arrayLayers = 1;
+	rci.imageType = VK_IMAGE_TYPE_2D; rci.format = VK_FORMAT_R8G8B8A8_UNORM;
+	rci.extent = {RTW, RTH, 1}; rci.mipLevels = 1; rci.arrayLayers = 1;
 	rci.samples = VK_SAMPLE_COUNT_1_BIT; rci.tiling = VK_IMAGE_TILING_OPTIMAL;
 	rci.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 	rci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -625,13 +649,15 @@ int main() {
 		CHK(vkBindImageMemory(dev, rt, rtMem, 0));
 	}
 	VkImageViewCreateInfo rvi = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-	rvi.image = rt; rvi.viewType = VK_IMAGE_VIEW_TYPE_2D; rvi.format = fmt;
+	// 与 rci 一致：渲染目标 view 恒 UNORM（动态渲染按 view format 解释附件；
+	// sRGB 纹理的硬件线性化只应在采样期发生一次）
+	rvi.image = rt; rvi.viewType = VK_IMAGE_VIEW_TYPE_2D; rvi.format = VK_FORMAT_R8G8B8A8_UNORM;
 	rvi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 	VkImageView rtView;
 	CHK(vkCreateImageView(dev, &rvi, nullptr, &rtView));
 
 	VkBufferCreateInfo rbi = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-	rbi.size = (VkDeviceSize)W * H * 4;
+	rbi.size = (VkDeviceSize)RTW * RTH * 4;
 	rbi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 	rbi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 	VkBuffer readBuf;
@@ -782,8 +808,8 @@ int main() {
 
 	// 动态状态（shader object 要求完整设置，模式同 min_mesh_crash）
 	{
-		VkViewport vp = {0.0f, (float)H, (float)W, -(float)H, 0.0f, 1.0f};
-		VkRect2D sc = {0, 0, {W, H}};
+		VkViewport vp = {0.0f, (float)RTH, (float)RTW, -(float)RTH, 0.0f, 1.0f};
+		VkRect2D sc = {0, 0, {RTW, RTH}};
 		float bcf[4] = {0, 0, 0, 0};
 		VkSampleMask sm = ~0U;
 		VkBool32 cbEn = VK_FALSE;
@@ -839,7 +865,9 @@ int main() {
 		ca.clearValue.color.float32[2] = 0.05f;
 		ca.clearValue.color.float32[3] = 1.0f;
 		VkRenderingInfo ri = {VK_STRUCTURE_TYPE_RENDERING_INFO};
-		ri.renderArea = {{0, 0}, {W, H}};
+		// renderArea = RT 实际尺寸（4K 黑屏排查 2026-08-27：此前误用 W×H（纹理尺寸），
+		// SPIKE_RT 小目标测试被污染——renderArea 越界是 UB，结论作废重测）
+		ri.renderArea = {{0, 0}, {RTW, RTH}};
 		ri.layerCount = 1;
 		ri.colorAttachmentCount = 1;
 		ri.pColorAttachments = &ca;
@@ -877,10 +905,10 @@ int main() {
 		VkBufferImageCopy bic = {};
 		bic.bufferOffset = 0;
 		bic.bufferRowLength = 0;
-		bic.bufferImageHeight = H;
+		bic.bufferImageHeight = RTH;
 		bic.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
 		bic.imageOffset = {0, 0, 0};
-		bic.imageExtent = {W, H, 1};
+		bic.imageExtent = {RTW, RTH, 1};
 		vkCmdCopyImageToBuffer(cb, rt, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readBuf, 1, &bic);
 	}
 	CHK(vkEndCommandBuffer(cb));
@@ -896,6 +924,24 @@ int main() {
 		CHK(vkWaitForFences(dev, 1, &fence, VK_TRUE, 10000000000ULL));
 	}
 
+	// SPIKE_DUMP_PPM=<path>：渲染目标 PPM dump（Phase 3 4K 黑屏排查：看实际光栅化区域）
+	if (const char* dumpPath = getenv("SPIKE_DUMP_PPM")) {
+		FILE* f = fopen(dumpPath, "wb");
+		if (f) {
+			fprintf(f, "P6\n%u %u\n255\n", RTW, RTH);
+			uint8_t* rgb = (uint8_t*)malloc((size_t)RTW * RTH * 3);
+			for (uint32_t i = 0; i < RTW * RTH; i++) {
+				rgb[i * 3 + 0] = readMapped[i * 4 + 0];
+				rgb[i * 3 + 1] = readMapped[i * 4 + 1];
+				rgb[i * 3 + 2] = readMapped[i * 4 + 2];
+			}
+			fwrite(rgb, 1, (size_t)RTW * RTH * 3, f);
+			fclose(f);
+			fprintf(stderr, "dumped %ux%u to %s\n", RTW, RTH, dumpPath);
+			free(rgb);
+		}
+	}
+
 	// --- 12. 像素验证 ---
 	fprintf(stderr, "\n=== pixel verification ===\n");
 	if (!g_failed) {
@@ -903,15 +949,29 @@ int main() {
 		// ctrl 变体：Load 返回完整纹素（alpha=1.0），+0.1 clamp 到 1.0——与采样变体一致
 		const float expA = 1.0f;
 		struct Check { uint32_t x, y; float r, g, b; const char* name; };
-		Check checks[] = {
+		// sRGB：硬件 sRGB→线性（(c+0.055)/1.055)^2.4 对纹素字节 (64,128,191)/(230,26,64)
+		// 线性化后再 +0.1（buf）：左 ≈ (0.151,0.316,0.621)、右 ≈ (0.891,0.110,0.151)
+		// 检查点按渲染目标尺寸定位（fullscreen triangle 把纹理 UV [0,1) 铺满 RT）
+		const Check checksUnorm[] = {
 			{8, 8, 0.35f, 0.6f, 0.85f, "top-left (left half + buf)"},
-			{W / 2 - 8, H / 2, 0.35f, 0.6f, 0.85f, "center-left"},
-			{W / 2 + 8, H / 2, 1.0f, 0.2f, 0.35f, "center-right (0.9+0.1 clamped to 1.0)"},
-			{W - 8, H - 8, 1.0f, 0.2f, 0.35f, "bottom-right"},
+			{RTW / 2 - 8, RTH / 2, 0.35f, 0.6f, 0.85f, "center-left"},
+			{RTW / 2 + 8, RTH / 2, 1.0f, 0.2f, 0.35f, "center-right (0.9+0.1 clamped to 1.0)"},
+			{RTW - 8, RTH - 8, 1.0f, 0.2f, 0.35f, "bottom-right"},
 		};
-		for (auto& c : checks) {
-			const uint8_t* px = readMapped + (c.y * W + c.x) * 4;
-			bool ok = pixelClose(px, c.r, c.g, c.b, expA);
+		const Check checksSrgb[] = {
+			{8, 8, 0.151f, 0.316f, 0.621f, "top-left (sRGB linear + buf)"},
+			{RTW / 2 - 8, RTH / 2, 0.151f, 0.316f, 0.621f, "center-left"},
+			{RTW / 2 + 8, RTH / 2, 0.891f, 0.110f, 0.151f, "center-right (sRGB linear + buf)"},
+			{RTW - 8, RTH - 8, 0.891f, 0.110f, 0.151f, "bottom-right"},
+		};
+		const Check* checks = useSrgb ? checksSrgb : checksUnorm;
+		const int tol = useSrgb ? 4 : 2;  // sRGB 走硬件 LUT（8/10-bit），放宽容差
+		for (int i = 0; i < 4; ++i) {
+			const auto& c = checks[i];
+			// 行距 = 渲染目标宽度（RTW），不是纹理宽度（W）——Phase 3 排查中曾误用 W
+			// 导致小 RT 用例越界读（buffer 只有 RTW*RTH*4），把正确画面误判成全黑 FAIL
+			const uint8_t* px = readMapped + (c.y * RTW + c.x) * 4;
+			bool ok = pixelClose(px, c.r, c.g, c.b, expA, tol);
 			fprintf(stderr, "  %-32s px(%u,%u)=(%u,%u,%u,%u) expected(%.2f,%.2f,%.2f,1.0) %s\n",
 				c.name, c.x, c.y, px[0], px[1], px[2], px[3], c.r, c.g, c.b, ok ? "OK" : "MISMATCH");
 			if (!ok) g_failed = true;

@@ -83,7 +83,7 @@ int main() {
 		Renderer vkRenderer(vkDevice, vkSwapchain, vkResources, sceneConfig.pipelines,
 			sceneConfig.showCube);
 
-		// CPU 解析 + GPU 上传 + ECS 注册：资产数据（buffer/slot/三角形数/管线条目引用）
+		// CPU 解析 + GPU 上传 + 纹理 + ECS 注册：资产数据（buffer/slot/三角形数/管线条目引用）
 		// 在 Resources 资产表，生命周期不再依赖 main 作用域（E1.2/L6）
 		if (!sceneConfig.modelPath.empty()) {
 			auto modelResult = loadGltfModel(sceneConfig.modelPath);

@@ -71,6 +71,30 @@ export class TexturePool {
 			return std::unexpected(Error{ErrorCode::TextureDecodeFailed,
 				std::string("stb_image decode failed: ") + name});
 		}
+		// DIAG（Phase 3 4K 黑屏排查 2026-08-27）：环境变量驱动的实验开关（免重编译跑矩阵）：
+		//   TEXTURE_FORCE_SIZE=N  近邻缩放强制 N×N（测尺寸阈值：16MB vs 64MB）
+		//   TEXTURE_FORCE_WHITE=1 全白填充（测"均匀内容不 fault"假设）
+		//   TEXTURE_FORCE_UNORM=1 upload 强制 UNORM（测 sRGB 嫌疑）
+		const char* forceSize = std::getenv("TEXTURE_FORCE_SIZE");
+		const char* forceWhite = std::getenv("TEXTURE_FORCE_WHITE");
+		const uint32_t fw = forceWhite ? static_cast<uint32_t>(w) : 0;
+		const uint32_t fh = forceWhite ? static_cast<uint32_t>(h) : 0;
+		const uint32_t target = forceSize ? static_cast<uint32_t>(std::stoul(forceSize)) : 0;
+		if (target > 0 && (static_cast<uint32_t>(w) < target || static_cast<uint32_t>(h) < target)) {
+			std::vector<uint8_t> up(static_cast<size_t>(target) * target * 4,
+				forceWhite ? 255 : 0);
+			for (uint32_t y = 0; y < target; ++y)
+				for (uint32_t x = 0; x < target; ++x) {
+					if (forceWhite) continue;
+					const uint8_t* s = rgba + (static_cast<size_t>(y * h / target) * w + x * w / target) * 4;
+					std::copy_n(s, 4, up.data() + (static_cast<size_t>(y) * target + x) * 4);
+				}
+			stbi_image_free(rgba);
+			return upload(up.data(), target, target, name);
+		}
+		if (forceWhite) {
+			std::fill(rgba, rgba + static_cast<size_t>(w) * h * 4, 255);
+		}
 		auto result = upload(rgba, static_cast<uint32_t>(w), static_cast<uint32_t>(h), name);
 		stbi_image_free(rgba);
 		return result;
@@ -119,7 +143,9 @@ export class TexturePool {
 		auto& dev = device.getDevice();
 
 		// sRGB（glTF baseColor 纹理约定，硬件完成 sRGB→线性）；不支持回落 UNORM（R4）
-		vk::Format format = vk::Format::eR8G8B8A8Srgb;
+		// DIAG（4K 黑屏排查）：TEXTURE_FORCE_UNORM=1 强制 UNORM（sRGB 嫌疑隔离）
+		vk::Format format = std::getenv("TEXTURE_FORCE_UNORM")
+			? vk::Format::eR8G8B8A8Unorm : vk::Format::eR8G8B8A8Srgb;
 		auto formatProps = device.getPhysicalDevice().getFormatProperties(format);
 		if ((formatProps.optimalTilingFeatures & vk::FormatFeatureFlagBits::eSampledImage)
 			== vk::FormatFeatureFlags{}) {
@@ -135,13 +161,27 @@ export class TexturePool {
 		imageInfo.arrayLayers = 1;
 		imageInfo.samples = vk::SampleCountFlagBits::e1;
 		imageInfo.tiling = vk::ImageTiling::eOptimal;
-		imageInfo.usage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst;
+		imageInfo.usage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst |
+			vk::ImageUsageFlagBits::eTransferSrc;  // TransferSrc：texel 回读诊断/后续校验用
 		imageInfo.initialLayout = vk::ImageLayout::eUndefined;
 		VmaAllocationCreateInfo imageAlloc{};
 		imageAlloc.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-		auto imageResult = allocator.createImage(imageInfo, imageAlloc);
+		// DIAG（Phase 3 4K 黑屏排查 2026-08-27）：强制独占 VkDeviceMemory（不走 VMA 池子
+		// 子分配），对齐 spike 的独占分配；4K 黑屏仍复现 → VMA 子分配非根因
+		//（根因 = APU high VA 段，见 docs/heap_texture_research.md）
+		imageAlloc.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+		VmaAllocationInfo imageAllocData{};
+		auto imageResult = allocator.createImage(imageInfo, imageAlloc, &imageAllocData);
 		if (!imageResult) return std::unexpected(std::move(imageResult).error());
 		auto image = std::move(*imageResult);
+		// DIAG（4K 黑屏排查 2026-08-27）：VMA 选中的内存类型（实测 4K/1×1 均 type=0 pool=0
+		// DEVICE_LOCAL，与 spike 同池 → 池选择非根因）
+		if (logger) {
+			const auto& mt = device.getPhysicalDevice().getMemoryProperties().memoryTypes[imageAllocData.memoryType];
+			logger->info("DIAG {} mem: type={} pool={} props=0x{:x}", name,
+				imageAllocData.memoryType, imageAllocData.memoryType >> 4,
+				static_cast<uint32_t>(mt.propertyFlags));
+		}
 
 		// linear staging（host-visible + 常驻映射）：CPU 填充后 GPU 拷贝
 		vk::ImageCreateInfo stagingInfo = imageInfo;
@@ -160,13 +200,24 @@ export class TexturePool {
 		sub.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
 		VkSubresourceLayout subLayout;
 		vkGetImageSubresourceLayout(*dev, *staging, &sub, &subLayout);
+		if (logger)
+			logger->info("DIAG {} linear layout: offset={} rowPitch={} size={} mapped={}",
+				name, subLayout.offset, subLayout.rowPitch, subLayout.size,
+				static_cast<const void*>(stagingAllocData.pMappedData));
 		uint8_t* rowBase = static_cast<uint8_t*>(stagingAllocData.pMappedData) + subLayout.offset;
 		const size_t rowBytes = static_cast<size_t>(w) * 4;
 		for (uint32_t y = 0; y < h; ++y)
 			std::memcpy(rowBase + y * subLayout.rowPitch, rgba + y * rowBytes, rowBytes);
 
-		// view（create info 值保留——v341 pView 契约；raii view 由 create info 构造，同 llm_debug 模式）
-		vk::ImageViewCreateInfo viewCreate{};
+		// view（create info 值保留——v341 pView 契约；raii view 由 create info 构造，同 llm_debug 模式）。
+		// pView 指向的 create info 必须**指针稳定**：RADV 在采样期（非写描述符期）解引用
+		// pView 解析 image，upload() 返回后栈上局部 create info 悬空 → 采样命中运行时
+		// 栈上复用的其他 view create info（实测 = 当前离屏渲染目标，采样恒 0.1 灰，
+		// Phase 3 全黑排查 2026-08-27，见 docs/heap_texture_research.md）。
+		// 存进 deque（push_back 不搬迁已有元素，地址永久有效）；spike 的 tvi 是
+		// main() 内全局寿命所以从未触发。
+		viewStores.push_back(vk::ImageViewCreateInfo{});
+		auto& viewCreate = viewStores.back();
 		viewCreate.image = *image;
 		viewCreate.viewType = vk::ImageViewType::e2D;
 		viewCreate.format = format;
@@ -234,21 +285,106 @@ export class TexturePool {
 		if (dev.waitForFences(std::array<vk::Fence, 1>{*fence}, true, UINT64_MAX) != vk::Result::eSuccess)
 			return std::unexpected(Error{ErrorCode::VulkanError, "TexturePool: upload fence timeout: " + std::string(name)});
 
+		// 临时诊断（Phase 3 全黑排查）：多位置 texel 回读（空间模式定位上传/采样问题）
+		{
+			VkBufferCreateInfo rbInfo{};
+			rbInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+			rbInfo.size = 64;
+			rbInfo.usage = static_cast<VkBufferUsageFlags>(VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+			VmaAllocationCreateInfo rbAlloc{};
+			rbAlloc.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+			rbAlloc.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
+			VmaAllocationInfo rbData{};
+			auto rbResult = allocator.createBuffer(rbInfo, rbAlloc, &rbData);
+			if (rbResult) {
+				auto& rb = *rbResult;
+				VkBufferImageCopy copies[4] = {};
+				const int32_t pts[4][2] = {{0, 0}, {static_cast<int32_t>(w / 2), static_cast<int32_t>(h / 2)},
+					{0, static_cast<int32_t>(h - 1)}, {static_cast<int32_t>(w - 1), 0}};
+				for (int i = 0; i < 4; ++i) {
+					copies[i].bufferOffset = static_cast<VkDeviceSize>(i) * 4;
+					copies[i].bufferImageHeight = 1;
+					copies[i].imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+					copies[i].imageOffset = {pts[i][0], pts[i][1], 0};
+					copies[i].imageExtent = {1, 1, 1};
+				}
+				// 图当前在 SHADER_READ_ONLY_OPTIMAL：回读前迁到 TRANSFER_SRC
+			auto toSrc = RGL::createImageBarrier(
+				*image, vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageLayout::eTransferSrcOptimal,
+					vk::ImageAspectFlagBits::eColor,
+					vk::PipelineStageFlagBits2::eFragmentShader, vk::PipelineStageFlagBits2::eTransfer,
+					vk::AccessFlagBits2::eShaderSampledRead, vk::AccessFlagBits2::eTransferRead);
+				VkDependencyInfo toSrcDep{};
+				toSrcDep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+				toSrcDep.imageMemoryBarrierCount = 1;
+				toSrcDep.pImageMemoryBarriers = reinterpret_cast<const VkImageMemoryBarrier2*>(&toSrc);
+				auto cmdAlloc = dev.allocateCommandBuffers(vk::CommandBufferAllocateInfo{
+					*device.getGraphicsCommandPool(), vk::CommandBufferLevel::ePrimary, 1});
+				auto cmd2 = std::move(cmdAlloc[0]);
+				cmd2.begin(vk::CommandBufferBeginInfo{});
+				::vkCmdPipelineBarrier2(*cmd2, &toSrcDep);
+				::vkCmdCopyImageToBuffer(*cmd2, *image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, *rb, 4, copies);
+				// 迁回 SHADER_READ_ONLY（描述符声明的布局；采样前必须）
+				auto toRead2 = RGL::createImageBarrier(
+					*image, vk::ImageLayout::eTransferSrcOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
+					vk::ImageAspectFlagBits::eColor,
+					vk::PipelineStageFlagBits2::eTransfer, vk::PipelineStageFlagBits2::eFragmentShader,
+					vk::AccessFlagBits2::eTransferRead, vk::AccessFlagBits2::eShaderSampledRead);
+				VkDependencyInfo toRead2Dep{};
+				toRead2Dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+				toRead2Dep.imageMemoryBarrierCount = 1;
+				toRead2Dep.pImageMemoryBarriers = reinterpret_cast<const VkImageMemoryBarrier2*>(&toRead2);
+				::vkCmdPipelineBarrier2(*cmd2, &toRead2Dep);
+				cmd2.end();
+				auto fence2 = vk::raii::Fence(dev, vk::FenceCreateInfo{});
+				VkSubmitInfo si{};
+				si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+				VkCommandBuffer cb2 = *cmd2;
+				si.commandBufferCount = 1;
+				si.pCommandBuffers = &cb2;
+				::vkQueueSubmit(device.getGraphicsQueue(), 1, &si, *fence2);
+				(void)dev.waitForFences(std::array<vk::Fence, 1>{*fence2}, true, UINT64_MAX);
+				const uint8_t* px = static_cast<const uint8_t*>(rbData.pMappedData);
+				if (logger)
+					logger->info("DIAG {} texels (0,0)={}/{}/{}/{} ({},{})={}/{}/{}/{} (0,{})={}/{}/{}/{} ({},0)={}/{}/{}/{}",
+						name,
+						px[0], px[1], px[2], px[3],
+						w / 2, h / 2, px[4], px[5], px[6], px[7],
+						h - 1, px[8], px[9], px[10], px[11],
+						w - 1, px[12], px[13], px[14], px[15]);
+			}
+		}
+
 		// slot 分配 + 描述符写入（SAMPLED_IMAGE，v341 4 参形态，spike 已验证）
 		auto slotResult = resources.allocSlot(name);
 		if (!slotResult) return std::unexpected(std::move(slotResult).error());
 		const uint32_t slot = *slotResult;
 		const auto& heap = resources.getDescriptorHeap();
 
-		vk::ImageDescriptorInfoEXT imageDesc{};
+		// 描述符结构体同样存稳定存储：RADV 对 descriptor heap 描述符的指针链
+		// （pResources → data.pImage → pView）在**采样期**解引用（非写描述符期），
+		// 栈上局部会在 upload() 返回后悬空——spike 的 infos/imgDi/tvi 全部 main()
+		// 作用域、永活，所以从未触发（Phase 3 全黑排查 2026-08-27，
+		// 见 docs/heap_texture_research.md）。deque 元素地址 push_back 后不失效。
+		imageDescStores.push_back(vk::ImageDescriptorInfoEXT{});
+		auto& imageDesc = imageDescStores.back();
 		imageDesc.pView = &viewCreate;  // hpp create info 指针（v341 契约，spike 已验证）
 		imageDesc.layout = vk::ImageLayout::eShaderReadOnlyOptimal;
-		vk::ResourceDescriptorInfoEXT desc{};
+		resourceDescStores.push_back(vk::ResourceDescriptorInfoEXT{});
+		auto& desc = resourceDescStores.back();
 		desc.type = vk::DescriptorType::eSampledImage;
 		desc.data.pImage = &imageDesc;
 		auto slotAddr = heap.getSlotCpuAddress(slot);
 		if (!slotAddr) return std::unexpected(std::move(slotAddr).error());
-		vk::HostAddressRangeEXT dst{*slotAddr, heap.getDescriptorSize()};
+		// 写入目标范围（dst）同样必须指针稳定：4K 黑屏排查（2026-08-27）实测栈上局部
+		// dst 在 upload() 返回后悬空——RADV 采样期解引用时读已释放栈槽（4K 路径栈槽
+		// 被复用 → 坏地址 → GPUVM TCP 权限 fault / 整 context 丢失；256 路径栈槽恰好
+		// 未复用 → 侥幸正常）。改存 deque + 裸 C 调用（绕开 hpp 重载/转换歧义）。
+		dstStores.push_back(vk::HostAddressRangeEXT{*slotAddr, heap.getDescriptorSize()});
+		auto& dst = dstStores.back();
+		// 2 参 ArrayProxy 重载：proxy 引用 desc/dst（deque 元素，地址稳定），内部
+		// reinterpret_cast 传地址给 driver——loader 不导出该设备级扩展符号，只能走
+		// hpp dispatcher（vkGetDeviceProcAddr），同 spike 的运行时解析结论
 		dev.writeResourceDescriptorsEXT(desc, dst);
 
 		TextureAsset asset{std::move(image), viewCreate, std::move(view), slot, w, h};
@@ -264,6 +400,12 @@ export class TexturePool {
 	RGL::DeviceContext& device;
 	RGL::Resources& resources;
 	std::vector<TextureAsset> assets;
+	// 描述符指针链的稳定存储（deque：元素地址不随 push_back 失效）——RADV 在采样期
+	// 解引用 pResources/data.pImage/pView（见 upload 内注释），生命周期须覆盖运行期
+	std::deque<vk::ResourceDescriptorInfoEXT> resourceDescStores;
+	std::deque<vk::ImageDescriptorInfoEXT> imageDescStores;
+	std::deque<vk::HostAddressRangeEXT> dstStores;
+	std::deque<vk::ImageViewCreateInfo> viewStores;
 	uint32_t whiteId = kInvalidTextureId;
 	std::map<std::string, uint32_t> fileCache;
 	VkSamplerCreateInfo samplerInfo{};

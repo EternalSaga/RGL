@@ -200,6 +200,7 @@ main.cpp 按逆序析构（RAII，无需手动清理）。
   - cube 尚非 ECS entity——DrawCall 过渡特例 + `showCube` 构造期 gating（管线条目存在性 = 画不画）；完整解（cube 一等资产 + 删 bool）归 Phase 4（material 归类决定未做）
   - `MaterialRef` 名为 Ref 实为值拷贝；Phase 4 → `MaterialRef{materialId}` + 材质资产表
   - 无统一 slot 分配器：cube 固定 0/4、model 固定 base 8+i（显式记录在资产表 + 管线 mapping 显式传 slot）；统一 `allocSlot` 归 Phase 3 TexturePool 并案（资产表为宿主）
+- **RADV 4K 大纹理黑屏（驱动限制，2026-08-27 定位，未解）**：Strix Halo APU 上 **64MB（4096²）sRGB 纹理 + 渲染目标 <2048 → 全黑 / GPUVM TCP fault**；目标 ≥2048 或纹理 ≤16MB 均正常（真实纹理 256×512 级不受影响，Phase 3 M3 可用）。根因 = 内核 gpuva 把 64MB BO 分到 high VA 段（≥`high_va_offset 0xffff800000000000`，56 位），48 位采样图像描述符编码不下（spike 同尺寸 BO 落低 VA 故全 PASS）；shadow 映射有效性状态相关、与目标尺寸的相关性未解释。已排除 VVL/分配时序（预分配仍落 high VA）/VMA 子分配/内存池/heap 容量/shader 变体/swapchain 扩展。复现：`TEXTURE_FORCE_SIZE=4096`（DIAG env）。完整记录见 `docs/heap_texture_research.md` §十；后续 = root 内核调试（dmesg）+ 上游 bug report
 
 ## 其他文档
 

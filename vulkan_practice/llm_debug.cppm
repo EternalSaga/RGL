@@ -48,9 +48,11 @@ captureFrame(RGL::Renderer& renderer, const RGL::FrameDrawList& list, const LlmD
 	vk::Queue queue = deviceCtx.getGraphicsQueue();
 	auto& resources = renderer.getResourcesRef();
 	auto& heap = resources.getDescriptorHeap();
-	vk::Extent2D extent = renderer.getSwapchainRef().getExtent();
-	const uint32_t w = extent.width;
-	const uint32_t h = extent.height;
+	// 目标尺寸 = 配置的窗口尺寸（llm 模式窗口按 cfg.width/height 创建），不用 swapchain
+	// extent——Wayland compositor 对隐藏窗的 extent 协商不稳定（实测 KWin 有时 clamp
+	// 到 1920×1080，同配置运行间漂移），截图尺寸必须确定（4K 黑屏排查 2026-08-27）
+	const uint32_t w = cfg.width;
+	const uint32_t h = cfg.height;
 	const vk::DeviceSize colorBytes = static_cast<vk::DeviceSize>(w) * h * 4;
 
 	// ① 离屏颜色目标（8-bit UNORM：4 字节/像素，直接 PNG 拷贝；VMA 自动绑内存，
@@ -195,7 +197,7 @@ captureFrame(RGL::Renderer& renderer, const RGL::FrameDrawList& list, const LlmD
 	depthAttachment.storeOp = vk::AttachmentStoreOp::eDontCare;
 	depthAttachment.clearValue = vk::ClearValue{vk::ClearDepthStencilValue{1.0f, 0}};
 	vk::RenderingInfo renderingInfo{};
-	renderingInfo.renderArea = vk::Rect2D({0, 0}, extent);
+	renderingInfo.renderArea = vk::Rect2D({0, 0}, vk::Extent2D(w, h));
 	renderingInfo.layerCount = 1;
 	renderingInfo.setColorAttachments(colorAttachment);
 	renderingInfo.setPDepthAttachment(&depthAttachment);

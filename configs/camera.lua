@@ -4,8 +4,10 @@ return {
 
     -- Phase 3 测试机位：cottage 包围球 center=(-182,546,115) r=1352，
     -- 3/4 前右上视角、距 ~3700（整栋入画）。near/far 有 SceneBounds 时由 projectionSystem 自适应（忽略）。
-    position = { -2617.0, 1343.0, 2550.0 },
-    target = { -182.0, 300.0, 115.0 },  -- 轨道中心（仅 trackball 用）
+    -- position = { -2617.0, 1343.0, 2550.0 },
+    -- target = { -182.0, 300.0, 115.0 },  -- 轨道中心（仅 trackball 用）
+    position = { 0.0, 3.0, 8.0 },  -- 原点机位（transparent / grass 回归）
+    target = { 0.0, 0.5, 0.0 },
     fovDegrees = 45.0,
     near = 0.1,
     far = 8000.0,
@@ -35,8 +37,10 @@ return {
     -- }
     -- 相机位置无额外字段：直接编辑上面的顶层 position/target/fovDegrees
     -- Phase 3 纹理验证：一次性截图（NVIDIA/RADV 跨驱动比对用）；交互运行改回 false
+    -- 4K 黑屏排查（2026-08-27）：spectacle 截屏已抓到 GPUVM fault（TCP 权限 fault），
+    -- 恢复 llm_debug 跑矩阵（fault 日志 = 判据）
     llm_debug = {
         file = "screenshots/phase3_texture.png",
-        size = { 1280, 720 },
+        size = { 2048, 2048 },  -- 4K 黑屏排查：纹理(4096) > 目标(2048) 是否仍坏
     },
 }

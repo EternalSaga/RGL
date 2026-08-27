@@ -194,6 +194,7 @@ add_custom_target(copy_configs ALL DEPENDS ${COPIED_CONFIGS})
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/models)
 set(MODEL_GLB_SOURCES
     "${PROJECT_SOURCE_DIR}/assets/transparent.glb"
+    "${PROJECT_SOURCE_DIR}/assets/grass_variations.glb"
     "${PROJECT_SOURCE_DIR}/assets/realistic_wooden_cottage_garden_house_3d_model.glb")
 set(MODEL_GLB_OUTPUTS)
 foreach(MODEL_GLB_SRC ${MODEL_GLB_SOURCES})

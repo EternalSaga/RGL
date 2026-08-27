@@ -2,7 +2,8 @@
 -- model 为空字符串 = 不加载模型，仅渲染 cube
 -- pipelines 每条: name（管线表条目名）+ mesh/frag 的 SPV 相对路径（相对 build/vulkan_practice/）
 return {
-    model = "models/realistic_wooden_cottage_garden_house_3d_model.glb",  -- glTF 模型路径（Phase 3 测试模型，392 primitive / 11 张 4K 内嵌纹理）
+    model = "models/grass_variations.glb",  -- 快速排查模型（4 primitive / 1 张内嵌 PNG，全 BLEND）
+    -- model = "models/realistic_wooden_cottage_garden_house_3d_model.glb",  -- glTF 模型路径（Phase 3 测试模型，392 primitive / 11 张 4K 内嵌纹理）
     -- model = "models/transparent.glb",  -- Phase 2 回归基线（无纹理，4 primitive）
 
     pipelines = {

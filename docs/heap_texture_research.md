@@ -1,6 +1,6 @@
 # Descriptor Heap 纹理采样预研（Phase 3 依据）
 
-> **状态**：调研（Phase 3 依据；**2026-08-27 三驱动交叉测试完成**：RADV / Intel ANV / NVIDIA × 5 变体（组合 / 分离+sampler heap / 分离+内嵌 sampler / 无 sampler 对照）全部像素级 PASS——descriptor heap 纹理/sampler 语义分离**三驱动均完整实现**。原 §八"RADV 只映射组合 OpTypeSampledImage"结论**被推翻**（根因 = spike shader 把 RGBA8 纹理误声明为标量 `Texture2D<float>`，Slang 语义下 R 通道 splat 到 4 通道，详见 §九）；主工程 buffer 描述符路径已三平台验证（commit `1f43d65`）；主工程 §八 "NaN 全黑"观察为**待重测项**（需 model.slang 改 `Texture2D<float4>` + 映射字段修正后，桌面环境 llm_debug 截图复验）。主工程接入实测历史见 §八（部分定性已被 §九 修正）。
+> **状态**：调研（Phase 3 依据；**2026-08-27 三驱动交叉测试完成**：RADV / Intel ANV / NVIDIA × 5 变体（组合 / 分离+sampler heap / 分离+内嵌 sampler / 无 sampler 对照）全部像素级 PASS——descriptor heap 纹理/sampler 语义分离**三驱动均完整实现**。原 §八"RADV 只映射组合 OpTypeSampledImage"结论**被推翻**（根因 = spike shader 把 RGBA8 纹理误声明为标量 `Texture2D<float>`，Slang 语义下 R 通道 splat 到 4 通道，详见 §九）；主工程 buffer 描述符路径已三平台验证（commit `1f43d65`）。**2026-08-27 补：§十 4K 黑屏排查**——64MB 纹理 + 渲染目标 <2048 在 RADV Strix Halo 必黑，根因定位到 APU high VA 段（56 位）+ 48 位采样描述符编码不下（内核/驱动层，未解；真实纹理尺寸正常）。主工程接入实测历史见 §八（部分定性已被 §九 修正）。
 
 **日期**: 2026-08-25（首测 RADV）；2026-08-27（三驱动交叉复测，见 §九）
 **环境**: Gentoo, Vulkan 头文件 1.4.341（系统 `/usr/include/vulkan`，主工程/spike 编译环境），loader 1.4.341（旧，扩展符号不在动态符号表）。2026-08-27 机器三卡：RADV（Ryzen 9950X iGPU，Mesa 26.2.1）/ Intel Arc A310（ANV，Mesa 26.2.1）/ NVIDIA RTX 5090（610.57.4，prime offload）。
@@ -202,3 +202,66 @@ Phase 3 接入（`texture_pool.cppm` + `shader.cppm` 3 条目映射 + sampler he
 - **现方案（2026-08-27 实施）**：`cmake/SlangFetch.cmake` 的 `rgl_fetch_slang()`——FetchContent pin **v2026.16**（2026-08-20，官方首个 Linux 预构建 release）+ sha256 校验，解压到 `build/_deps/slang-prebuilt-src/bin/slangc`。根 CMakeLists 顶部无条件调用（主工程）；spike 独立工程同文件复用（`$ENV{SLANGC_DIR}` 可显式覆盖，**刻意不查系统 PATH**——vcpkg 旧 2026.7.1 残留在 PATH 会被误拾，首接即踩中）；`vcpkg.json` 已移除 `shader-slang` 依赖（manifest sync 自动卸载）；
 - 升级：改 `SLANG_VERSION` + 从 release 页取资产 sha256 回填（资产命名 `slang-<ver>-linux-x86_64.tar.gz`，79MB；glibc 老系统换 `-glibc-2.27` 变体）；
 - **2026.16 验证**：主工程全量重编（反射 JSON ×2 + spv ×4 + 生成 cppm ×3，schema 校验 PASS，契约常量不变）；spike 三驱动 × 5 变体矩阵复跑 **15/15 PASS**（与 2026.7.1 行为等价，含 SPIR-V 采样形态——2026.16 仍对 `Texture2D<float4>` 发标量采样类型 + 4 分量结果，无 extract，与 9.2 验证的 PASS 形态一致）。v2026.11–16 的 descriptor heap 修复全在 `DescriptorHandle`/`ConstantBuffer` bindless 路径（未使用）；标量纹理 splat 是语义非版本问题（9.2）。
+
+---
+
+## 十、4K 黑屏排查（2026-08-27）：APU high VA 段 + 48 位采样描述符（根因定位到内核/驱动层，未解）
+
+### 10.1 现象与复现
+
+**触发条件（三者同时）**：RADV（Strix Halo APU 核显，Mesa 26.2.1）+ **64MB（4096×4096）sRGB 纹理** + **渲染目标 <2048**（1280×720 / 1920×1080 均必黑；2048×2048 / 4096×4096 均正常）。≤16MB（2048×2048 及以下）纹理**任意目标尺寸均正常**。交互模式下 spectacle 截屏抓到 **GPUVM TCP 权限 fault**（fault 地址 `0x80010590b000` = high VA `0xFFFF80_010590_b000` 的低 48 位）。
+
+**复现**：grass 模型内嵌纹理实际仅 **256×512**（正常渲染）；用 `TEXTURE_FORCE_SIZE=4096`（texture_pool.cppm 的 DIAG env，近邻上采样到 4096×4096）制造 64MB 纹理即复现。`RGL_NO_VVL=1 RADV_EXPERIMENTAL=heap TEXTURE_FORCE_SIZE=4096` + llm_debug 截图（非黑百分比判据）。
+
+### 10.2 根因链（lldb 实锤，debug 驱动 -O0 -g mesa 构建 + ICD json 切换）
+
+1. **APU 56 位 VA 空间**：设备属性 `high_va_offset = 0xffff800000000000`、`address32_hi = 0xffff8000`（`ws->info.*`，内核 AMDGPU_INFO ioctl 上报；内核 7.1.10 源码中 `high_va` 仅 UAPI 字段、驱动未引用——段选择在内核 gpuva allocator）。
+2. **主工程 64MB 纹理 BO 落 high VA 段**：`iview.image->bindings[0].addr = 0xffff800100200000`（56 位，高字节 0xFF）；**spike 同尺寸 64MB 纹理落低 VA**（描述符解码 `0xC20109200000`，48 位内）→ 全配置 PASS。**这是 spike PASS / 主工程黑 的关键差异**。
+3. **48 位采样描述符编码不下 high VA 地址**：GFX 纹理描述符只编码 48 位（`desc[0]` = `va>>8` 低 24 位 + swizzle，`desc[1]` `BASE_ADDRESS_HI` = `va>>40` 高 8 位，`ac_descriptors.c ac_set_mutable_tex_desc_fields`）；主工程 4K 描述符实测 `[01002000 c4200080 03ffc3ff 91b00fac | 00000000 00400000 00000000 00000000]`（地址部分 = shadow 基址 `0xC4_0000_0000` + 偏移，DCC meta 全 0 = 无 DCC）；GPU 按截断/shadow 地址读取 → 读到未映射内存 → 黑屏 / TCP fault。
+4. **shadow 映射有效性状态相关**：同纹理同 BO 偏移，渲染目标 ≥2048 时采样正常（shadow 映射有效），<2048 时失效。与目标尺寸的相关性**尚未解释**（候选：目标尺寸改变 GPU 页表/TLB 配置或 VA 布局状态）——需内核级调试（dmesg / amdgpu debugfs，须 root）。
+
+### 10.3 已排除项（用户态二分，2026-08-27）
+
+| 假设 | 实验 | 结论 |
+|---|---|---|
+| VVL 双写污染描述符 | `RGL_NO_VVL=1`（vkinstance.cppm 临时 env 门）关 VVL（/proc maps 0 映射）仍全黑；WP run 里 VVL wrapper 的"零写"实为 `pImage=NULL` 路径（`radv_descriptors.c` 外层 `else memset` 分支）+ lldb 初始状态报告伪影 | 排除 |
+| 分配时序（早分配占低 VA） | main 把 64MB 纹理**预分配到 swapchain 前**（raw Vulkan 独占，同 spike 方式）+ TexturePool 按 w/h 采纳 → BO 地址**仍 0xffff80...**（high VA 段内更早偏移 0x0100200000），仍黑 | 排除（**改动已回退**——无效） |
+| VMA 子分配 | `VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT` 强制独占 → 仍黑 | 排除（DIAG 保留） |
+| 内存池选择 | 4K 与 1×1 白纹理 VMA 均 type=0 pool=0 `DEVICE_LOCAL`（DIAG 日志），与 spike 同池 | 排除 |
+| 描述符 heap 容量 | spike `SPIKE_HEAP_SLOTS=1026`（=主工程 capacity）膨胀后仍 PASS；spike heap gpuAddr 同为 high VA（0xffff8000000c0000）但经 64 位 push constant 传递不受 48 位限制 | 排除 |
+| shader 变体 | spike 4K + 1280×720：GLSL 组合 / Slang+heap / Slang+embedded 三变体全 PASS | 排除 |
+| device swapchain 扩展 | spike `SPIKE_SWAPCHAIN_EXT=1` 追加 VK_KHR_swapchain（不建对象）仍 PASS | 排除（嫌疑收窄到主工程 features 组合 / VMA / 窗口+surface 交互） |
+
+**spike 侧重要勘误**：spike `renderArea` 此前误用 `W×H`（纹理尺寸）而非 RT 实际尺寸（`SPIKE_RT_*` 覆盖时 renderArea 越界 = UB）——"4K+小 RT PASS" 早期结论被污染，修复后（`heap_texture_spike/main.cpp` renderArea = RTW×RTH）**复测仍 PASS**（4K + 1280×720 三变体）→ spike 与主工程的差异确实在 app 结构（device 配置 / VMA / 窗口），不在渲染用法。
+
+### 10.4 实测矩阵（主工程，-O0 debug 驱动，4K 纹理；BO 偏移均为 high VA 段）
+
+| 渲染目标（离屏，llm_debug） | 纹理 | 结果 |
+|---|---|---|
+| 1280×720 | 4096（64MB） | ✗ 0% 全黑 |
+| 1920×1080 | 4096（64MB） | ✗ 全黑 |
+| 2048×2048 | 4096（64MB） | ✓ 70.8% |
+| 4096×4096 | 4096（64MB） | ✓ 45.9% |
+| 1280×720 | 2048（16MB） | ✓ 84.4% |
+| 1280×720 | 1024 | ✓ 83.3% |
+| 1280×720 | 256×512（真实） | ✓ 正常 |
+
+**KWin 干扰（已解耦）**：隐藏窗 swapchain extent 协商**不稳定**（同配置运行间漂移：有时 clamp 到 1920×1080，1:1 尺寸有时照给）——`llm_debug.cppm` 目标尺寸改用**配置的窗口尺寸**（`cfg.width/height`）而非 swapchain extent，截图尺寸确定；分离实验（LLM_TARGET env，已回退）证明**离屏渲染目标尺寸是判别变量、swapchain extent 不是**（窗口 4096 + 目标 1280 黑；窗口 1280 + 目标 4096 正常）。
+
+### 10.5 lldb 方法（可复用）
+
+- **debug 驱动**：`/tmp/opencode/mesa-build/src/amd/vulkan/libvulkan_radeon.so`（mesa 26.2.1，-O0 -g 带符号）；ICD json `/tmp/opencode/radv_debug_icd.json`（`VK_ICD_FILENAMES=` 加载，不动系统驱动）。meson：`-Dbuildtype=debug -Dvulkan-drivers=amd -Dgallium-drivers=softpipe -Dopengl=false -Dgles1=false -Dgles2=false -Dglx=disabled -Dvalgrind=disabled -Dvulkan-icd-dir=/tmp/opencode/vulkan-icd` + `ninja src/amd/vulkan/libvulkan_radeon.so`。
+- **断点**：`breakpoint set -f radv_descriptors.c -l 233`（`radv_WriteResourceDescriptorsEXT` 内 image 描述符写调用点；文件名不带路径；`breakpoint add name` 对 local 符号 batch 解析不了）；命中序：白纹理 → grass（`run` → `continue`×1）。
+- **存址技巧**：`*(unsigned long long*)&active_trays = addr`（lldb 全局变量存任意地址）；dump 必须**解引用** `((unsigned*)(*(unsigned long long*)&active_trays))[i]`（漏解引用 = 读全局变量自身，整组数据作废）；`finish` 跑完 write 函数再 dump 全量 32B。
+- **结构体路径**：`iview.image->bindings[0].addr`（BO VA）；`iview.image->vk.base.device` → `radv_device`（vk_device 首成员）→ `->ws` → `radv_amdgpu_winsys`（base 首成员）→ `->info.address32_hi / high_va_offset`。
+- **WP 伪影**：8B watchpoint 的 "hit: new value: 0x0"（无 old value、进程仍停着时）= lldb 初始状态报告，不是真写入。
+
+### 10.6 环境异常记录（Gentoo v341 头）
+
+系统 `/usr/include/vulkan/vulkan_core.h`（v341）**无 `vkFreeDeviceMemory`**，对应函数名为 **`vkFreeMemory`**（非标准命名，官方头为 `vkFreeDeviceMemory`）；hpp `vk::freeMemory` 跟随。裸 C 释放设备内存须用 `vkFreeMemory`（本环境）。另 `vk::raii::Device` 只有 `operator vk::Device()`（不直接转 `VkDevice`）——裸 C 调用须 `*raiiDev`（经 `operator*` 转 hpp Device 再隐式转）。
+
+### 10.7 现状与后续
+
+- **真实纹理尺寸（256×512 级）渲染正常，Phase 3 M3 功能可用**；64MB+ 大纹理 + 目标 <2048 记为**已知驱动限制**。
+- 无效改动已回退（预分配链：`preallocateTextureImage`/`probeImageSize`/`PreallocatedTexture`/TexturePool 采纳/main.cpp 重排/GltfImage 宽高/LLM_TARGET env）；保留的诊断设施：`TEXTURE_FORCE_*` env + DIAG 日志（texture_pool.cppm）、`RGL_NO_VVL` 门（vkinstance.cppm）、spike `SPIKE_RT_*`/`SPIKE_HEAP_SLOTS`/`SPIKE_SWAPCHAIN_EXT` env + renderArea 修复。
+- **后续**（未做）：① root 内核级调试（黑屏 run 时 `sudo dmesg -w` 抓 amdgpu VM fault / 页表错误，确认 shadow 映射缺口；内核源码 `/usr/src/linux-7.1.10-lto-sound-fix`）；② 上游 bug report（Mesa RADV + 内核 amdgpu：APU high VA BO 的 48 位采样描述符编码，附 §10.4 矩阵 + §10.2 地址证据）；③ 嫌疑收窄二分（主工程 device features 逐项加到 spike：timelineSemaphore / descriptorIndexing / vulkan11-14 / shaderUntypedPointers / VMA / 窗口+surface）。
