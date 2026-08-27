@@ -2,11 +2,13 @@
 return {
     mode = "trackball",  -- "trackball"（轨道环绕）或 "fps"（第一人称飞行）
 
-    position = { 0.0, 0.0, 3.0 },
-    target = { 0.0, 0.0, 0.0 },  -- 轨道中心（仅 trackball 用）
+    -- Phase 3 测试机位：cottage 包围球 center=(-182,546,115) r=1352，
+    -- 3/4 前右上视角、距 ~3700（整栋入画）。near/far 有 SceneBounds 时由 projectionSystem 自适应（忽略）。
+    position = { -2617.0, 1343.0, 2550.0 },
+    target = { -182.0, 300.0, 115.0 },  -- 轨道中心（仅 trackball 用）
     fovDegrees = 45.0,
     near = 0.1,
-    far = 10.0,
+    far = 8000.0,
 
     trackball = {
         sensitivity = 0.005,  -- rad/px
@@ -32,5 +34,9 @@ return {
     --     size = { 1280, 720 },           -- 离屏窗口尺寸
     -- }
     -- 相机位置无额外字段：直接编辑上面的顶层 position/target/fovDegrees
-    llm_debug = false,
+    -- Phase 3 纹理验证：一次性截图（NVIDIA/RADV 跨驱动比对用）；交互运行改回 false
+    llm_debug = {
+        file = "screenshots/phase3_texture.png",
+        size = { 1280, 720 },
+    },
 }
