@@ -142,7 +142,7 @@ class Foo {
 | `cube` | cube.cppm | 顶点/索引数据 |
 | `camera` | camera.cppm | `Camera`（含 `KeyBindings` 键位绑定）/`InputEvents`（输入事件流：key/mouse button/delta/wheel）/`CameraState`（cameraSystem 自管 level 状态）context、cameraView/cameraSystem（trackball 绕 target 轨道 / FPS 第一人称双模式，消费事件即清空）、loadCameraConfig（读 `configs/camera.lua` 含 `keys` 键位字段，sol2 沙箱 + 可选回落默认） |
  | `shader` | shader.cppm | SPV 加载器、ShaderEffect、RenderPipeline（ShaderObject + 动态状态） |
- | `llm_debug` | llm_debug.cppm | llm_debug 一次性截图（`configs/camera.lua` 的 `llm_debug` 字段，agent 自主工作用）：`LlmDebugConfig` + `captureFrame()`——离屏重渲（8-bit UNORM 目标 + D32Sfloat 深度，复用管线表/动态状态/draw list）+ 独立命令缓冲/fence + VMA 回读 + stb PNG（绝对路径打日志）；相机位置无额外字段，直接用 camera.lua 顶层 position/target/fovDegrees |
+ | `llm_debug` | llm_debug.cppm | llm_debug 一次性截图（`configs/camera.lua`，agent 自主工作用）：`LlmDebugConfig` + `captureFrame()`——离屏重渲（8-bit UNORM 目标 + D32Sfloat 深度，复用管线表/动态状态/draw list）+ 独立命令缓冲/fence + VMA 回读 + stb PNG（绝对路径打日志）；**`llm_debug` 纯开关（true/false，截图只改这一行）+ `llm_shot` 常驻截图配置**（`{file, size, delay_frames}` 全可选回落默认，改文件名/尺寸只动 llm_shot）；向后兼容 `llm_debug=table` 旧格式（启用+细字段，覆盖 llm_shot）；相机位置无额外字段，直接用 camera.lua 顶层 position/target/fovDegrees |
 | `VmaRaii` | VmaBuffer.cppm | VmaBuffer、VmaImage、VmaDescriptorHeap、VmaAllocatorRAII 封装。VmaBuffer/VmaImage 通过 `SharedAllocator` (`std::shared_ptr<AllocatorControlBlock>`) 共享 allocator 所有权 |
 | `rlstd` | rlstd/rlstd.cppm | C++ 标准库模块封装。libstdc++ 不支持 `import std`，因此通过 GMF `#include` 所有 STL 头文件并 `export` 常用名称。所有项目模块通过 `import rlstd;` 获取 STL 类型，而非在 GMF 中 `#include` STL 头。注意：`std::views::` 因 libstdc++ 将其定义为 namespace alias 而无法通过模块导出，仍需在 GMF 中 `#include <ranges>` |
 | `types_generated` | generated/types_generated.cppm | auto-generated（由 `reflection_tool` + inja 模板生成），导出 `HeapSlotVertexOffset`、`HeapSlotIndexOffset`（相对 heap reserved range 起点的偏移，运行时 slot = `reservedSlots() + offset`）。push constant 契约 Phase 4 移至 `material.slang` |
@@ -200,7 +200,7 @@ main.cpp 按逆序析构（RAII，无需手动清理）。
 | 位置 | 说明 |
 |---|---|
  | `vkrenderer.cppm` `drawFrame()` | ①~⑮ 完整流程：双 fence → acquire（**100ms 超时 + eTimeout 跳帧**：compositor 停发 present 时保帧循环存活）→ 录制（barrier/动态渲染/heap barrier+绑定/beginRendering/动态状态/**逐 draw：pushData→bind→drawMeshTasksEXT**/present barrier）→ submit → present（`SwapchainPresentFenceInfoEXT` KHR 别名挂 `presentInfo.pNext`） |
- | `llm_debug.cppm` `captureFrame()` + `configs/camera.lua` `llm_debug` | 一次性截图（agent 自主工作，批处理语义无 mailbox）：隐藏窗（`SDL_WINDOW_HIDDEN`）离屏渲染 → 延迟 N 帧 → 离屏重渲 + PNG（绝对路径打日志）→ 退出；相机位置 = camera.lua 顶层字段（无 presets）；**依赖 compositor 存活**（息屏可，suspend 不行）；agent 流程：改 camera.lua → `just run` → 多模态读 PNG |
+ | `llm_debug.cppm` `captureFrame()` + `configs/camera.lua` `llm_debug`/`llm_shot` | 一次性截图（agent 自主工作，批处理语义无 mailbox）：隐藏窗（`SDL_WINDOW_HIDDEN`）离屏渲染 → 延迟 N 帧 → 离屏重渲 + PNG（绝对路径打日志）→ 退出；相机位置 = camera.lua 顶层字段（无 presets）；**依赖 compositor 存活**（息屏可，suspend 不行）；agent 流程：改 `llm_debug=true`（一行开关，`llm_shot` 常驻 file/size）→ `just run` → 多模态读 PNG |
 | `vkrenderer.cppm` `DrawCall`/`FrameDrawList`/`pipelineIndex()` | 绘制契约（2026-08-24 批次 2）：渲染 system 产出 draw list，`drawFrame` 盲执行单循环；管线 name→下标映射构造时建一次，录制路径零字符串查找 |
  | `ecs.cppm` `renderSystem` | 帧循环 + 显式 system 列表（camera/animation/bounds/projection/renderlist，注册顺序 = 数据流契约；eventSystem/resizeSystem/drawFrame 留循环体内直调——持有控制流）+ `LlmDebugConfig*`（可空）一次性截图计数：第 N 帧后 `captureFrame` + 置 `AppExit` |
 | `vkrenderer.cppm` `addModelPipeline()` | 模型管线条目（2026-08-25 批次 3，资产上传期每 primitive 一次）：binding mapping 显式烘焙顶点 slot + 条目下标写回资产表，`renderListSystem` 经资产表解析管线（无 `"model_i"` 字符串约定） |

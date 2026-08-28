@@ -18,8 +18,10 @@ import vulkan_utils;
 
 namespace RGL {
 
-// 一次性截图配置（configs/camera.lua 的 llm_debug 字段）：
-// false = 关闭（默认，交互模式零变化）；true = 启用默认值；table = 细字段（全可选）。
+// 一次性截图配置（configs/camera.lua）：
+//   llm_debug = true/false 纯开关（缺省 false，交互模式零变化）——截图只改这一行；
+//   llm_shot  = {file, size, delay_frames} 常驻截图配置（全可选回落默认）。
+// 向后兼容：llm_debug 仍接受 table（旧格式 = 启用 + 细字段，覆盖 llm_shot）。
 // 相机位置不走额外字段——agent 直接编辑 camera.lua 顶层的
 // position/target/fovDegrees（loadCameraConfig 现有解析），无 presets 层。
 export struct LlmDebugConfig {

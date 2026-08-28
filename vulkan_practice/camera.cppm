@@ -391,14 +391,36 @@ export [[nodiscard]] std::expected<CameraConfig, Error> loadCameraConfig(std::st
 						std::move(k).error()});
 		}
 
-		// llm_debug 一次性截图（false/缺省 = 关闭；true = 启用默认值；table = 细字段，
-		// 全可选回落默认）：离屏隐藏窗渲染 → 延迟 N 帧 → 截图 → 退出
+		// llm_debug 一次性截图（离屏隐藏窗渲染 → 延迟 N 帧 → 截图 → 退出）：
+		//   llm_debug = true/false 纯开关（缺省 false）——截图只改这一行；
+		//   llm_shot  = {file, size, delay_frames} 常驻截图配置（全可选回落默认，
+		//     改文件名/尺寸只动 llm_shot，开关不变）。
+		// 向后兼容：llm_debug 仍接受 table（旧格式 = 启用 + 细字段，覆盖 llm_shot）。
 		RGL::LlmDebugConfig llm;
+		sol::table shotTable = root["llm_shot"];
+		if (shotTable.valid() && shotTable.is<sol::table>()) {
+			sol::optional<uint32_t> delayFrames = shotTable["delay_frames"];
+			if (delayFrames)
+				llm.delayFrames = *delayFrames;
+			sol::optional<std::string> file = shotTable["file"];
+			if (file)
+				llm.file = *file;
+			sol::table sizeTable = shotTable["size"];
+			if (sizeTable.valid() && sizeTable.is<sol::table>()) {
+				sol::optional<uint32_t> w = sizeTable[1];
+				if (w)
+					llm.width = *w;
+				sol::optional<uint32_t> h = sizeTable[2];
+				if (h)
+					llm.height = *h;
+			}
+		}
 		sol::object llmObj = root["llm_debug"];
 		if (llmObj.valid()) {
 			if (llmObj.is<bool>()) {
 				llm.enabled = llmObj.as<bool>();
 			} else if (llmObj.is<sol::table>()) {
+				// 旧格式（向后兼容）：llm_debug = table → 启用 + 细字段（覆盖 llm_shot）
 				sol::table t = llmObj.as<sol::table>();
 				llm.enabled = true;
 				sol::optional<uint32_t> delayFrames = t["delay_frames"];

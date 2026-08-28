@@ -29,22 +29,14 @@ return {
     },
 
     -- llm_debug 一次性截图（agent 自主工作：离屏隐藏窗渲染 → 截图 → 退出，默认关）
-    -- true = 默认（1280x720，首帧即截）；table = 细字段（file/size/delay_frames）
+    -- 截图只改 llm_debug 开关（true/false）；file/size/delay_frames 常驻 llm_shot，改动只动 llm_shot
     -- 相机位置无额外字段：直接编辑上面的顶层 position/target/fovDegrees
-    -- Phase 3 纹理验证：一次性截图（NVIDIA/RADV 跨驱动比对用）；交互运行改回 false
-    -- 4K 黑屏排查（2026-08-27）：spectacle 截屏已抓到 GPUVM fault（TCP 权限 fault），
-    -- 恢复 llm_debug 跑矩阵（fault 日志 = 判据）
-    -- 4K 黑屏 UAF 复验（2026-08-28）：真实 4K 纹理（cottage 11 张内嵌）+ 目标 1280x720 (<2048)
-    -- = §十 4K 黑屏精确配置（"64MB 纹理 + 渲染目标 <2048 → 全黑"）；llm 1280x720 已 PASS（截图 cottage_4k_uaf_check.png），交互运行改回 false
     llm_debug = false,
 
-    -- {
-    --    file = "screenshots/cottage_4k_uaf_check.png",
-    --    size = { 1280, 720 },
-    --},
-
-    -- {
-    --    file = "screenshots/phase3_texture.png",
-    --    size = { 2048, 2048 },  -- 4K 黑屏 排查：纹理(4096) > 目标(2048) 是否仍坏
-    --},
+    -- 常驻截图配置（全可选回落默认：1280x720 / 首帧 / screenshots/llm_<时间戳>.png）
+    llm_shot = {
+       file = "screenshots/llm_debug.png",
+       size = { 1280, 720 },
+       -- delay_frames = 0,  -- 第 N 帧渲染完成后截图（0 = 首帧）
+    },
 }
