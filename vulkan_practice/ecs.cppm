@@ -211,7 +211,11 @@ void renderListSystem(entt::registry& rg, RGL::Renderer& renderer, RGL::Resource
 
 	FrameDrawList fresh;
 
-	if (auto cubeIdx = renderer.pipelineIndex("cube")) {
+	// DIAG（RGL_CUBE_TEX）："cube_tex" 条目优先（cube + 纹理采样实验管线，见 main.cpp 门）
+	auto cubeIdx = renderer.pipelineIndex("cube_tex");
+	if (!cubeIdx)
+		cubeIdx = renderer.pipelineIndex("cube");
+	if (cubeIdx) {
 		state.cubeArgs.mvp = viewProj.proj * viewProj.view * spin.matrix;
 		fresh.calls.push_back(DrawCall{
 			*cubeIdx, std::as_bytes(std::span<const RGL::DrawArgs>{&state.cubeArgs, 1}), 1});
@@ -249,8 +253,11 @@ struct FrameSystem {
 // llm（可空）：llm_debug 一次性截图配置（非空 = 启用）。批处理语义：
 // 第 llm->delayFrames 帧渲染完成后离屏重渲 + 存 PNG，然后置 AppExit 退出——
 // 无常驻状态、无 mailbox（config 即控制通道：agent 改 configs/camera.lua 后重跑）。
+// onFrame（DIAG，可空）：每帧 drawFrame 完成后回调（帧号从 0 起）——
+// 可见窗 GPUVM fault 排查用（RGL_SHOW_AFTER：隐藏窗启动、第 N 帧后显示，
+// 隔离"分配期状态"与"present 期状态"）；默认空 = 无回调，正常路径零变化
 export std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer& renderer,
-	const RGL::LlmDebugConfig* llm = nullptr) {
+	const RGL::LlmDebugConfig* llm = nullptr, std::function<void(uint32_t)> onFrame = {}) {
 	auto& swapchain = renderer.getSwapchainRef();
 	auto& resources = renderer.getResourcesRef();
 	auto* logger = RLLogger::getInstance();
@@ -258,6 +265,7 @@ export std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer
 
 	RenderListState renderListState;
 	uint32_t llmFrame = 0;
+	uint32_t frame = 0;  // 每帧无条件计数（onFrame DIAG 回调用；llmFrame 仅在 llm 启用时递增）
 
 	// system 顺序（数据流契约）：
 	//   camera（InputEvents→Camera，消费即清空）→ animation（SceneSpin）→ bounds（Bounds→SceneBounds）
@@ -300,7 +308,6 @@ export std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer
 			lastError = result.error();
 			break;
 		}
-
 		// llm_debug：本帧渲染完成后计数；超过延迟帧数 → 用本帧 draw list 离屏
 		// 重渲截图（场景已推进 N 步），然后请求退出（下轮循环头 break）
 		if (llm) {
@@ -315,6 +322,9 @@ export std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer
 				rg.ctx().get<AppExit>().requested = true;
 			}
 		}
+		if (onFrame)
+			onFrame(frame);
+		++frame;
 	}
 
 	renderer.waitForIdle();

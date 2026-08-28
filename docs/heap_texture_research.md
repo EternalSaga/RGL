@@ -265,3 +265,95 @@ Phase 3 接入（`texture_pool.cppm` + `shader.cppm` 3 条目映射 + sampler he
 - **真实纹理尺寸（256×512 级）渲染正常，Phase 3 M3 功能可用**；64MB+ 大纹理 + 目标 <2048 记为**已知驱动限制**。
 - 无效改动已回退（预分配链：`preallocateTextureImage`/`probeImageSize`/`PreallocatedTexture`/TexturePool 采纳/main.cpp 重排/GltfImage 宽高/LLM_TARGET env）；保留的诊断设施：`TEXTURE_FORCE_*` env + DIAG 日志（texture_pool.cppm）、`RGL_NO_VVL` 门（vkinstance.cppm）、spike `SPIKE_RT_*`/`SPIKE_HEAP_SLOTS`/`SPIKE_SWAPCHAIN_EXT` env + renderArea 修复。
 - **后续**（未做）：① root 内核级调试（黑屏 run 时 `sudo dmesg -w` 抓 amdgpu VM fault / 页表错误，确认 shadow 映射缺口；内核源码 `/usr/src/linux-7.1.10-lto-sound-fix`）；② 上游 bug report（Mesa RADV + 内核 amdgpu：APU high VA BO 的 48 位采样描述符编码，附 §10.4 矩阵 + §10.2 地址证据）；③ 嫌疑收窄二分（主工程 device features 逐项加到 spike：timelineSemaphore / descriptorIndexing / vulkan11-14 / shaderUntypedPointers / VMA / 窗口+surface）。
+
+## 十一、2026-08-28 可见窗 GPUVM fault 排查（交互模式 device lost；状态漂移 + per-process 触发上下文，未解）
+
+### 11.1 现象与 fault 签名（dmesg 无 root 可读）
+
+交互模式（非 llm_debug）`just run` 在 `vkQueueSubmit` 崩 `VK_ERROR_DEVICE_LOST`；dmesg 每次 fault 后
+"device wedged, but no recovery needed" + "Ring reset succeeded"。fault 签名（多地址变体实测：
+fa000/fb000/e4000/e5000/10a000/10b000/114000/115000，同模式）：
+
+- 地址 `0x8001_000f_xxxx`（48 位）= **2^47 + 4GB + ~1MB**——VRAM aperture（`[2^47, 2^47+VRAM)`，
+  本机 boot 日志 `VRAM: 512M 0x800000000000-0x801FFFFFFF`（BIOS AUTO）之后的**高区 PTE 映射地址**
+- `PERMISSION_FAULTS=3, RW=0, WALKER_ERROR=0, MAPPING_ERROR=0`，client=**TCP**（纹理管线），本进程 vmid/pasid
+- fault 时机 = **frame 2**（第 3 个渲染帧，启动后 ~2s；Renderer 帧计数实测，非帧数累积）
+
+### 11.2 §十 的"48 位截断"理论修正（重要）
+
+- `amdgpu.vm_size=-1`（auto），内核 boot 日志 `vm size is 262144 GB` = **2^48**——GPU VA **实际就是 48 位**
+- §10.2 的 `high_va_offset = 0xffff800000000000` 只是固件上报的**能力值**，非激活配置；"56 位 VA"定性作废
+- fault 地址是 **48 位 VA 内的合法地址**（aperture 后高区）——**不是截断**；PERMISSION_FAULTS=3 =
+  **PTE 存在但权限错** → 根因层 = 内核 amdgpu 页表/VM 状态管理（shadow 映射状态 bug），非描述符编码
+- 支持"descriptor heap 机制无设计缺陷"的质疑：spike（同 APU 同 RADV，SAMPLED_IMAGE + 内嵌/独立
+  sampler，**4096×4096 64MB 纹理**）像素级 PASS——机制与尺寸本身都正常，问题在 app 上下文
+
+### 11.3 状态漂移 + per-process（不是全局污染）
+
+- **状态漂移**：坏/好状态分钟级翻转（同配置背靠背运行结果翻转；llm 隐藏窗 16/18 → 0/12 连续）。
+  坏状态下模型路径 **18/18 连续 FAIL（frame 2）**，持续 ~45 分钟；之后翻回好状态（7/7 PASS，交互可见窗正常）
+- **per-process**：坏状态时主工程 12/12 FAIL，**spike 同时刻 5/5 PASS**（再跑仍 PASS）→ 触发在
+  app 自身上下文（窗口/swapchain/VMA/设备配置），非全局 GPU 状态污染（ring reset 不传染 spike）
+- 复现判据：`timeout 25 just run 2>&1 | grep -E "GPUVM fault|device lost"` + `dmesg | grep "page starting at address"`
+
+### 11.4 判别矩阵（坏状态实测；PASS/FAIL = 是否 frame 2 fault）
+
+| 上下文（swapchain 均存在） | 纹理采样 | 结果 |
+|---|---|---|
+| cube only（窗口+swapchain+present+VMA+全部 device 特性） | ✗ | **PASS** 3/3 |
+| cube + 1×1 白纹理（`RGL_CUBE_TEX`，4 绑定管线） | ✓ | **PASS** 3/3 |
+| cube + 256×256 白（`TEXTURE_FORCE_WHITE=1 TEXTURE_FORCE_SIZE=256`） | ✓ | **PASS** 3/3 |
+| 模型 transparent.glb（BDA + mesh task + 1×1 白） | ✓ | **FAIL** 3/3 |
+| 模型 grass（BDA + mesh task + 256×512 真实） | ✓ | **FAIL** 12/12+ |
+| 模型 grass + `RGL_NO_PRESENT=1`（不 present，KWin 不 import dmabuf） | ✓ | **FAIL** 3/3 |
+| 模型 grass 隐藏窗（`RGL_SHOW_AFTER=999999`） | ✓ | **FAIL** 12/12 |
+| spike（mesh shader + 纹理采样，**无窗口/swapchain**） | ✓ | **PASS** 6/6（坏状态同时刻） |
+| `RGL_OFFSCREEN=1`（离屏渲 + blit 上屏） | ✓ | **FAIL** 3/3（workaround 无效） |
+
+**排除项**：present/compositor dmabuf import（no-present 仍 fault）、窗口可见性（隐藏窗 fault）、
+VMA（cube 路径全 VMA 仍 PASS）、device 特性/扩展（cube 路径全特性仍 PASS）、BIOS 显存
+（48GB 硬分配→AUTO 512MB，fault 地址模式完全相同）、VVL/HDR/窗口尺寸（§十 已排除项复验）。
+
+**结论**：触发 = **模型路径（BDA 缓冲 + mesh task）+ 纹理采样 + swapchain（dmabuf BO）共存**；
+"dmabuf + 任意纹理采样"单独不足（cube 全 PASS）。
+
+### 11.5 头号嫌疑：mesh task group 数（未验证）
+
+grass 模型 1554 三角形 ÷ `kTrianglesPerGroup=10` ≈ **155 groups**（4 个 draw 分摊）；
+cube/spike = **1 group**。坏状态下 cube（1 group）+ 纹理 PASS、模型（~155 groups）+ 纹理 FAIL。
+**注意**：2026-08-28 的"g128 PASS"是**假阳性**（config 编辑静默失败，实际跑的 model="" cube-only）——
+kTrianglesPerGroup 10→128（≈13 groups）**尚未在真模型上验证**。下次坏状态复发时的首选实验：
+`model_schema.lua` constants + `model.mesh.slang` 字面量/容量数组同步改 128（384 verts < RDNA3 512 上限），
+真模型（grass）×5 判帧 2 fault 是否消失。
+
+### 11.6 排查坑与勘误（今日踩的）
+
+- **slot 契约勘误**：实际布局 = cube 顶点 **0** / 索引 **1**（`HeapSlotVertexOffset/HeapSlotIndexOffset`）、
+  模型 base **2**（`HeapSlotModelVertexBase`，schema 生成）——AGENTS.md 的"cube 0/4、模型 base 8"
+  **已过时**。`addCubeTexPipeline` 硬编码 0/4 → 索引描述符悬空 → mesh shader 读垃圾索引**静默不发射
+  几何**（无 VVL 报错、截图全背景色）——binding mapping 错 slot 是静默故障，排查时先打 slot 日志
+- **TexturePool 提前上传白纹理 = slot 漂移**：白纹理抢 slot 2（模型 base 2 之前）→
+  `model.vertex[0]` drift 抛错。布局约定"纹理首槽 = 白"依赖**模型顶点槽先分配完**（main.cpp 已修复：
+  池本体外提、`getWhite()` 留在模型块内 upload 之后；无模型时 RGL_CUBE_TEX 门补取）
+- **llm `delay_frames=0` 的 PASS 假阳性**：首帧截图后立即退出，**够不到 frame 2 fault 窗口**——
+  判坏状态必须用交互运行（或 delay_frames ≥ 30）
+- **RAII ImageView 默认构造已删 + 构造期即调 vkCreateImageView**：null image 不能进初始化列表
+  （校验拦截 abort）；需惰性时用 `std::optional<raii::ImageView>` + emplace（vkrenderer RGL_OFFSCREEN 路径）
+- **新 shader 文件须同时改两处 CMake**：`compile_slang()` 只注册 custom command，
+  SPV 必须**列进 add_executable 源列表**才触发构建（漏 = 运行时 "failed to open file: *.spv"）
+- devcoredump（`/sys/class/drm/card0/device/devcoredump/data`）0 字节且 root 权限——无 VM 状态数据；
+  内核源码只有 Kconfig/Makefile 桩——gpuva allocator 段选择逻辑读不到
+
+### 11.7 现状与后续
+
+- **好状态下交互显示正常**（用户在场确认，草模型 + 纹理采样；贴图"黑条纹" = alphaMode 未实现的
+  Phase 5 限制，非渲染错误；glb 实测 4 primitive 全用近全 UV，无 atlas 分区）；**坏状态 frame 2 崩**
+- 实用 workaround = **重试**（状态分钟级翻转，多试几次进好状态）；`RGL_OFFSCREEN`/离屏路径无效
+- 诊断设施（全默认关）：`RGL_CUBE_TEX`（cube_debug.frag.slang + RenderPipeline 4 条目形态
+  texturedKeepIndex + addCubeTexPipeline）、`RGL_OFFSCREEN`（离屏+blit，证无效）、`RGL_NO_PRESENT`、
+  `RGL_SHOW_AFTER`（隐藏启动+N 帧后显示）、`RGL_WIN_SIZE`（交互窗尺寸）、`RGL_NO_HDR`、
+  Renderer 帧计数（device lost 打帧号）
+- **后续**：① 坏状态复发 → §11.5 group 数实验（10→128）；② 上游 bug report（内核 amdgpu：
+  APU 高区 PTE 权限状态 + 模型多 group mesh task + 纹理采样 + swapchain dmabuf 共存 → frame 2 TCP
+  权限 fault，附 §11.4 矩阵 + §11.1 签名 + "重试可恢复"状态漂移特征）；③ 若 group 数实锤 →
+  APU 上永久调大 kTrianglesPerGroup（128，≈13 groups，渲染还更快）

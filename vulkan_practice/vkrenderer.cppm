@@ -1,6 +1,7 @@
 module;
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_raii.hpp>
+#include <vk_mem_alloc.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/glm.hpp>
 #include <SDL3/SDL.h>
@@ -17,6 +18,7 @@ import vulkan_window;
 import vk_device;
 import vk_swapchain;
 import vk_resources;
+import VmaRaii;
 import model_types_generated;
 import shader;
 import scene_config;
@@ -73,10 +75,11 @@ export class Renderer {
 	// 每 primitive 调一次 addModelPipeline。
 	Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RGL::Resources& vkResources,
 		std::span<const RGL::PipelineSpec> pipelineSpecs, bool cubeEntry)
-		: vkDevice(vkDevice),
-		  swapchain(&vkSwapchain),
-		  resources(&vkResources),
-		  graphicsQueue(vkDevice.getGraphicsQueue()),
+	: vkDevice(vkDevice),
+	  swapchain(&vkSwapchain),
+	  resources(&vkResources),
+	  offscreen(std::getenv("RGL_OFFSCREEN") != nullptr),
+	  graphicsQueue(vkDevice.getGraphicsQueue()),
 		  graphicsCommandPool(vkDevice.getGraphicsCommandPool()),
 		  modelSpec(resolveModelSpec(pipelineSpecs)),
 		  pipelines(makePipelineTable(vkDevice.getDevice(), pipelineSpecs, cubeEntry, vkResources)) {
@@ -123,6 +126,25 @@ export class Renderer {
 		pipelineIndexMap[entry.name] = index;
 		pipelines.push_back(std::move(entry));
 		resources->getAssetTable().setPipelineIndex(assetId, index);
+	}
+	// DIAG（RGL_CUBE_TEX）：cube + 纹理采样管线条目——隔离"dmabuf BO 存在 + 纹理采样"
+	// 组合触发（GPUVM TCP 权限 fault，2026-08-28 排查）。main 在 TexturePool 就绪后调用
+	//（同 addModelPipeline 模式）：cube 顶点/索引固定 slot 0/4 + 任意纹理 slot + 共享
+	// sampler slot；renderListSystem 的 cube DrawCall 优先解析 "cube_tex" 条目。
+	void addCubeTexPipeline(uint32_t textureSlot, uint32_t samplerSlot) {
+		const uint32_t descriptorSize = resources->getDescriptorHeap().getDescriptorSize();
+		const uint32_t samplerHeapOffset =
+			samplerSlot * resources->getSamplerHeap().getDescriptorSize();
+		// 顶点/索引 slot 用 Resources 真实访问器（同 makePipelineTable）：布局由反射生成的
+		// 偏移常量钉死（vertex=0、index=1——非 0/4 旧约定，硬编码错 slot = 索引描述符
+		// 悬空 → mesh shader 读垃圾索引 → 不发射几何，2026-08-28 二分定位）
+		auto entry = PipelineEntry{
+			"cube_tex",
+			RGL::RenderPipeline(vkDevice.getDevice(), loadShaderEffect(cubeDebugSpec()), descriptorSize,
+				resources->getHeapSlotVertex(), resources->getHeapSlotIndex(),
+				textureSlot, samplerHeapOffset, true, true)};
+		pipelineIndexMap[entry.name] = static_cast<uint32_t>(pipelines.size());
+		pipelines.push_back(std::move(entry));
 	}
 	// 等待 GPU 空闲（resize / 重建 swapchain 前调用，确保旧资源不再被使用）
 	void waitForIdle() { vkDevice.getDevice().waitIdle(); }
@@ -172,6 +194,12 @@ export class Renderer {
 		return *modelSpec;
 	}
 
+	// DIAG（RGL_CUBE_TEX）：cube 纹理实验管线规格（cube mesh + 实验 frag，4 绑定形态）
+	static RGL::PipelineSpec cubeDebugSpec() {
+		return RGL::PipelineSpec{
+			"cube_debug", "generated_shaders/cube.mesh.spv", "generated_shaders/cube_debug.frag.spv"};
+	}
+
 	// 构建管线表（ShaderObject 模式，无 PipelineLayout）：每条创建两个 VkShaderEXT 对象，
 	// 并通过 VkShaderCreateInfoEXT.pNext 链上 VkDescriptorSetAndBindingMappingEXT
 	//（binding 0 → 顶点 slot、binding 1 → 索引 slot，heapOffset = slot * descriptorSize；
@@ -200,6 +228,35 @@ export class Renderer {
 		}
 
 		return table;
+	}
+
+	// DIAG（RGL_OFFSCREEN）：离屏颜色目标（8-bit UNORM，与后缓冲同 extent；
+	// 同 llm_debug captureFrame 的颜色图形态，VMA 自动绑内存）
+	static std::expected<RGL::VmaImage, Error> createOffscreenImage(RGL::VmaAllocatorRAII& allocator,
+		vk::Extent2D extent) {
+		vk::ImageCreateInfo info{};
+		info.imageType = vk::ImageType::e2D;
+		info.format = vk::Format::eR8G8B8A8Unorm;
+		info.extent = vk::Extent3D(extent.width, extent.height, 1);
+		info.mipLevels = 1;
+		info.arrayLayers = 1;
+		info.samples = vk::SampleCountFlagBits::e1;
+		info.tiling = vk::ImageTiling::eOptimal;
+		info.initialLayout = vk::ImageLayout::eUndefined;
+		info.usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferSrc;
+		VmaAllocationCreateInfo alloc{};
+		alloc.usage = VMA_MEMORY_USAGE_AUTO;
+		return allocator.createImage(info, alloc);
+	}
+
+	// DIAG（RGL_OFFSCREEN）：离屏目标 view 的 create info（!offscreen 时 image = null）
+	VkImageViewCreateInfo buildOffscreenView() const {
+		VkImageViewCreateInfo info{};
+		info.image = offscreenImage.image;
+		info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+		info.format = VK_FORMAT_R8G8B8A8_UNORM;
+		info.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+		return info;
 	}
 
 	// 创建 MAX_FRAMES_IN_FLIGHT 套同步对象（每个帧 slot 一套，双缓冲）。
@@ -256,12 +313,42 @@ export class Renderer {
 				context, result.error().describe());
 			return std::unexpected(std::move(result).error());
 		}
+		// DIAG（RGL_OFFSCREEN）：离屏目标随 swapchain extent 同步重建（同深度图规则）；
+		// 仅当已惰性创建（resize 只会在首帧 drawFrame 之后发生）
+		if (offscreen && offscreenImage.image) {
+			auto offscreenResult = createOffscreenImage(resources->getAllocator(), swapchain->getExtent());
+			if (!offscreenResult) {
+				auto logger = RLLogger::getInstance();
+				if (logger) logger->error("Renderer: failed to recreate offscreen image ({}): {}",
+					context, offscreenResult.error().describe());
+				return std::unexpected(std::move(offscreenResult).error());
+			}
+			offscreenImage = std::move(*offscreenResult);
+			offscreenView.emplace(vkDevice.getDevice(), buildOffscreenView());
+		}
 		return {};
 	}
 
 	RGL::DeviceContext& vkDevice;
 	RGL::Swapchain* swapchain;
 	RGL::Resources* resources;
+	// DIAG（可见窗 GPUVM fault 规避 2026-08-28）：RGL_OFFSCREEN=1 → 场景渲到离屏
+	// 8-bit UNORM 目标（纹理采样路径与 llm_debug 离屏同构——隐藏窗离屏路径实测无
+	// fault），再 blit 到后缓冲上屏；规避可见后缓冲（compositor 在读）关联的
+	// 纹理 high VA 采样 fault（现象/排查过程见 docs/heap_texture_research.md §十一）。
+	// 默认关 = 原路径零变化。
+	bool offscreen = false;
+	// DIAG（window+texture 组合触发验证）：可见窗渲染但永不 present——KWin 永不
+	// import 我们的 swapchain dmabuf。fault 在 frame 2（buffer pool 窗口内），
+	// 前几帧渲染完整，判据有效
+	bool noPresent = std::getenv("RGL_NO_PRESENT") != nullptr;
+	// DIAG（可见窗 fault 排查）：drawFrame 帧计数——DEVICE_LOST 时打帧号，
+	// 区分"帧数累积触发"（fault 帧号恒定）vs"窗口显示触发"（fault 帧号 >> showAfter）
+	uint64_t frameCount = 0;
+	VmaImage offscreenImage;
+	// 离屏目标 view（raii 默认构造已删 + 构造期即调 vkCreateImageView——null image
+	// 会被校验拦下，故不能进初始化列表；optional 惰性 emplace，默认路径零分配零调用）
+	std::optional<vk::raii::ImageView> offscreenView;
 	// 非 RAII 句柄（队列生命周期由 DeviceContext 的 raii Device 管理）
 	vk::Queue graphicsQueue;
 	const vk::raii::CommandPool& graphicsCommandPool;
@@ -294,17 +381,34 @@ export class Renderer {
 	std::vector<vk::raii::CommandBuffer> commandBuffers;
 };
 
-std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
-	auto& device = vkDevice.getDevice();
+	std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
+		const uint64_t frame = frameCount++;  // DIAG：device lost 帧号定位
+		auto& device = vkDevice.getDevice();
+
+		// DIAG（RGL_OFFSCREEN）：离屏目标惰性创建（首帧才分配——raii view 构造期即调
+		// vkCreateImageView，构造期 null image 会被校验拦下；默认路径零分配零调用）
+		if (offscreen && !offscreenImage.image) {
+			auto offscreenResult = createOffscreenImage(resources->getAllocator(), swapchain->getExtent());
+			if (!offscreenResult)
+				return std::unexpected(std::move(offscreenResult).error());
+			offscreenImage = std::move(*offscreenResult);
+			offscreenView.emplace(device, buildOffscreenView());
+		}
 
 	// ① 等待上一帧同 slot 完全结束：inFlight fence（命令缓冲执行完）与 present
 	// fence（present 完成）都信号后，本 slot 的 semaphore / command buffer 才可重用。
 	// waitAll=VK_TRUE + 无限超时（fence 保证在超时内信号，返回值忽略）
-	(void)device.waitForFences(
-		{*inFlightFences[currentFrame], *presentFences[currentFrame]},
-		VK_TRUE, std::numeric_limits<uint64_t>::max());
-	// 重置为 unsignaled，本帧 queueSubmit / presentKHR 会再次信号它们
-	device.resetFences({*inFlightFences[currentFrame], *presentFences[currentFrame]});
+	// DIAG（RGL_NO_PRESENT）：不 present → presentFence 永不 signal，只等 inFlight
+	if (noPresent) {
+		(void)device.waitForFences(
+			{*inFlightFences[currentFrame]}, VK_TRUE, std::numeric_limits<uint64_t>::max());
+		device.resetFences({*inFlightFences[currentFrame]});
+	} else {
+		(void)device.waitForFences(
+			{*inFlightFences[currentFrame], *presentFences[currentFrame]},
+			VK_TRUE, std::numeric_limits<uint64_t>::max());
+		device.resetFences({*inFlightFences[currentFrame], *presentFences[currentFrame]});
+	}
 
 	// ② 从 swapchain 取一张后缓冲：成功时驱动信号 imageAvailableSemaphores
 	//（queueSubmit 的等待对象），imageIndex 为取到的图像下标。
@@ -373,13 +477,28 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 	vk::DependencyInfo drawDepInfo;
 	drawDepInfo.setImageMemoryBarriers(drawBarriers);
 	commandBuffers[currentFrame].pipelineBarrier2(drawDepInfo);
+	// DIAG（RGL_OFFSCREEN）：离屏目标 Undefined → ColorAttachmentOptimal（同后缓冲规则）
+	if (offscreen) {
+		auto offscreenToDrawBarrier = RGL::createImageBarrier(
+			offscreenImage.image, vk::ImageLayout::eUndefined,
+			vk::ImageLayout::eColorAttachmentOptimal,
+			vk::ImageAspectFlagBits::eColor,
+			vk::PipelineStageFlagBits2::eTopOfPipe,
+			vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+			vk::AccessFlagBits2::eNone,
+			vk::AccessFlagBits2::eColorAttachmentWrite);
+		vk::DependencyInfo offscreenDepInfo;
+		offscreenDepInfo.setImageMemoryBarriers(offscreenToDrawBarrier);
+		commandBuffers[currentFrame].pipelineBarrier2(offscreenDepInfo);
+	}
 
 	// ⑤ 动态渲染附件（Dynamic Rendering：不创建 RenderPass 对象，
 	// beginRendering 时直接描述附件）
 	// 后缓冲：绘制前清深灰色 (0.1) 作为背景；Store 写回结果（后缓冲要上屏，
 	// 不能 DontCare）
 	vk::RenderingAttachmentInfo colorAttachment{};
-	colorAttachment.imageView = *swapchainImageViews[imageIndex];
+	// DIAG（RGL_OFFSCREEN）：场景渲到离屏目标（纹理采样在离屏 pass，后缓冲只做 blit 拷贝）
+	colorAttachment.imageView = offscreen ? *offscreenView : *swapchainImageViews[imageIndex];
 	colorAttachment.imageLayout = vk::ImageLayout::eColorAttachmentOptimal;
 	colorAttachment.loadOp = vk::AttachmentLoadOp::eClear;
 	colorAttachment.storeOp = vk::AttachmentStoreOp::eStore;
@@ -465,14 +584,56 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 
 	commandBuffers[currentFrame].endRendering();
 
-	// ⑫ 后缓冲：ColorAttachmentOptimal → PresentSrcKHR，使其"可 present"。
-	// 该转换必须排在颜色附件的最后一次使用之后（此处紧随 endRendering）。
+	// DIAG（RGL_OFFSCREEN）：离屏目标 → 后缓冲 blit（纹理采样已在离屏 pass 完成，
+	// 本阶段纯拷贝不触碰纹理描述符）；后缓冲 ④ 已迁 CAO，此处迁 TransferDst 作 blit 目标
+	if (offscreen) {
+		auto offscreenToBlitBarrier = RGL::createImageBarrier(
+			offscreenImage.image, vk::ImageLayout::eColorAttachmentOptimal,
+			vk::ImageLayout::eTransferSrcOptimal,
+			vk::ImageAspectFlagBits::eColor,
+			vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+			vk::PipelineStageFlagBits2::eTransfer,
+			vk::AccessFlagBits2::eColorAttachmentWrite,
+			vk::AccessFlagBits2::eTransferRead);
+		auto swapchainToBlitBarrier = RGL::createImageBarrier(
+			swapchainImages[imageIndex], vk::ImageLayout::eColorAttachmentOptimal,
+			vk::ImageLayout::eTransferDstOptimal,
+			vk::ImageAspectFlagBits::eColor,
+			vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+			vk::PipelineStageFlagBits2::eTransfer,
+			vk::AccessFlagBits2::eColorAttachmentWrite,
+			vk::AccessFlagBits2::eTransferWrite);
+		std::array<vk::ImageMemoryBarrier2, 2> blitBarriers = {offscreenToBlitBarrier, swapchainToBlitBarrier};
+		vk::DependencyInfo blitDepInfo;
+		blitDepInfo.setImageMemoryBarriers(blitBarriers);
+		commandBuffers[currentFrame].pipelineBarrier2(blitDepInfo);
+		vk::ImageBlit blitRegion{};
+		blitRegion.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+		blitRegion.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+		const int32_t w = static_cast<int32_t>(swapchain->getExtent().width);
+		const int32_t h = static_cast<int32_t>(swapchain->getExtent().height);
+		// hpp ArrayWrapper1D 不接受 brace 整体赋值，逐元素填（std::array 布局）
+		blitRegion.srcOffsets[0] = vk::Offset3D{0, 0, 0};
+		blitRegion.srcOffsets[1] = vk::Offset3D{w, h, 1};
+		blitRegion.dstOffsets[0] = vk::Offset3D{0, 0, 0};
+		blitRegion.dstOffsets[1] = vk::Offset3D{w, h, 1};
+		// 裸 C 调用（同 llm_debug 回读拷贝风格）：hpp 重载走 ArrayProxy，此处 count+指针直传
+		::vkCmdBlitImage(*commandBuffers[currentFrame], offscreenImage.image,
+			VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, swapchainImages[imageIndex],
+			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+			reinterpret_cast<const VkImageBlit*>(&blitRegion), VK_FILTER_LINEAR);
+	}
+
+	// ⑫ 后缓冲：ColorAttachmentOptimal（直渲）/ TransferDstOptimal（RGL_OFFSCREEN blit 后）
+	// → PresentSrcKHR，使其"可 present"。该转换必须排在颜色附件的最后一次使用之后
+	//（此处紧随 endRendering / blit）。
 	vk::ImageMemoryBarrier2 colorToPresentBarrier = RGL::createImageBarrier(
-		swapchainImages[imageIndex], vk::ImageLayout::eColorAttachmentOptimal,
+		swapchainImages[imageIndex],
+		offscreen ? vk::ImageLayout::eTransferDstOptimal : vk::ImageLayout::eColorAttachmentOptimal,
 		vk::ImageLayout::ePresentSrcKHR, vk::ImageAspectFlagBits::eColor,
-		vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+		offscreen ? vk::PipelineStageFlagBits2::eTransfer : vk::PipelineStageFlagBits2::eColorAttachmentOutput,
 		vk::PipelineStageFlagBits2::eBottomOfPipe,
-		vk::AccessFlagBits2::eColorAttachmentWrite,
+		offscreen ? vk::AccessFlagBits2::eTransferWrite : vk::AccessFlagBits2::eColorAttachmentWrite,
 		vk::AccessFlagBits2::eNone);
 	vk::DependencyInfo colorToPresentDepInfo;
 	colorToPresentDepInfo.setImageMemoryBarriers(colorToPresentBarrier);
@@ -506,7 +667,7 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 	// DEVICE_LOST：GPU 挂起/复位，不可恢复——记录后退出帧循环
 	if (submitVkResult == VK_ERROR_DEVICE_LOST) {
 		auto logger = RLLogger::getInstance();
-		if (logger) logger->error("Renderer: device lost on submit!");
+		if (logger) logger->error("Renderer: device lost on submit! (frame {})", frame);
 		return std::unexpected(Error{ErrorCode::DeviceLost, "VK_ERROR_DEVICE_LOST on submit"});
 	}
 
@@ -514,25 +675,28 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 	// SwapchainPresentFenceInfoEXT（KHR/EXT 为 typedef 别名，sType 相同）链到
 	// presentInfo.pNext：present 完成时信号 presentFence，实现 present 端完成
 	// 追踪（VK_KHR_swapchain_maintenance1，见 docs/技术概念.md 的"PresentFenceInfoKHR"）
-	vk::SwapchainPresentFenceInfoEXT presentFenceInfoEXT{};
-	presentFenceInfoEXT.setFences(*presentFences[currentFrame]);
-	vk::PresentInfoKHR presentInfo{};
-	presentInfo.setPNext(&presentFenceInfoEXT);
-	presentInfo.setWaitSemaphores(*renderFinishedSemaphores[currentFrame]);
-	presentInfo.setSwapchains(*swapchain->getSwapchain());
-	presentInfo.setImageIndices(imageIndex);
-	auto presentResult = graphicsQueue.presentKHR(presentInfo);
+	// DIAG（RGL_NO_PRESENT）：跳 present——buffer 不出进程，KWin 不 import dmabuf
+	if (!noPresent) {
+		vk::SwapchainPresentFenceInfoEXT presentFenceInfoEXT{};
+		presentFenceInfoEXT.setFences(*presentFences[currentFrame]);
+		vk::PresentInfoKHR presentInfo{};
+		presentInfo.setPNext(&presentFenceInfoEXT);
+		presentInfo.setWaitSemaphores(*renderFinishedSemaphores[currentFrame]);
+		presentInfo.setSwapchains(*swapchain->getSwapchain());
+		presentInfo.setImageIndices(imageIndex);
+		auto presentResult = graphicsQueue.presentKHR(presentInfo);
 
-	if (presentResult == vk::Result::eErrorDeviceLost) {
-		auto logger = RLLogger::getInstance();
-		if (logger) logger->error("Renderer: device lost on present!");
-		return std::unexpected(Error{ErrorCode::DeviceLost, "VK_ERROR_DEVICE_LOST on present"});
-	}
-	// present 时 swapchain 失效：重建后下一帧继续
-	if (presentResult == vk::Result::eErrorOutOfDateKHR ||
-		presentResult == vk::Result::eSuboptimalKHR) {
-		if (auto result = recreateSwapchainAndDepth("present out-of-date/suboptimal"); !result) {
-			return std::unexpected(std::move(result).error());
+		if (presentResult == vk::Result::eErrorDeviceLost) {
+			auto logger = RLLogger::getInstance();
+			if (logger) logger->error("Renderer: device lost on present!");
+			return std::unexpected(Error{ErrorCode::DeviceLost, "VK_ERROR_DEVICE_LOST on present"});
+		}
+		// present 时 swapchain 失效：重建后下一帧继续
+		if (presentResult == vk::Result::eErrorOutOfDateKHR ||
+			presentResult == vk::Result::eSuboptimalKHR) {
+			if (auto result = recreateSwapchainAndDepth("present out-of-date/suboptimal"); !result) {
+				return std::unexpected(std::move(result).error());
+			}
 		}
 	}
 

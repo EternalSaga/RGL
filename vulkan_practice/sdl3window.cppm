@@ -122,6 +122,13 @@ export class SDLWindow {
 	vk::SurfaceFormatKHR selectFormat(const std::vector<vk::SurfaceFormatKHR>& availableFormats) {
 		SDL_PropertiesID windowProps = SDL_GetWindowProperties(window);
 		bool isHdrEnabled = SDL_GetBooleanProperty(windowProps, SDL_PROP_WINDOW_HDR_ENABLED_BOOLEAN, false);
+		// DIAG（交互模式 GPUVM TCP fault 排查 2026-08-28）：RGL_NO_HDR=1 强制 SDR 格式
+		//（隔离 HDR R16G16B16A16Sfloat 后缓冲与纹理 high VA 落位/shadow 映射的关联，
+		// 同 RGL_NO_VVL 门模式）
+		if (isHdrEnabled && std::getenv("RGL_NO_HDR")) {
+			isHdrEnabled = false;
+			logger->info("[SDL3] RGL_NO_HDR=1: forcing SDR format");
+		}
 		std::vector<vk::SurfaceFormatKHR> preferredHdrFormats = {
 			{vk::Format::eR16G16B16A16Sfloat, vk::ColorSpaceKHR::eExtendedSrgbLinearEXT},
 			{vk::Format::eA2B10G10R10UnormPack32, vk::ColorSpaceKHR::eHdr10St2084EXT}};

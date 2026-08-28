@@ -1,4 +1,5 @@
 #include <entt/entt.hpp>
+#include <SDL3/SDL_video.h>
 import rlstd;
 import vulkan_window;
 import vk_instance;
@@ -37,10 +38,22 @@ int main() {
 	const bool llmEnabled = cameraConfig.llm.enabled;
 
 	// llm_debug 模式：隐藏窗（永不显示，compositor 须存活）+ 配置尺寸；否则交互窗 800x600
+	// DIAG（可见窗 GPUVM fault 排查 2026-08-28）：RGL_WIN_SIZE="WxH" 覆盖交互窗尺寸
+	//（免重编译二分可见窗的尺寸阈值，同 RGL_NO_HDR / TEXTURE_FORCE_* 门模式）
+	int winW = 800, winH = 600;
+	int showAfter = -1;  // DIAG：隐藏窗启动、第 N 帧后显示（可见窗 fault 排查；-1 = 立即显示）
+	if (const char* winSize = std::getenv("RGL_WIN_SIZE")) {
+		if (std::sscanf(winSize, "%dx%d", &winW, &winH) != 2) {
+			std::fprintf(stderr, "RGL_WIN_SIZE 解析失败: %s\n", winSize);
+			return -1;
+		}
+	}
+	if (const char* sa = std::getenv("RGL_SHOW_AFTER"))
+		showAfter = std::atoi(sa);
 	auto windowResult = SDLWindow::create(
-		llmEnabled ? static_cast<int>(cameraConfig.llm.width) : 800,
-		llmEnabled ? static_cast<int>(cameraConfig.llm.height) : 600,
-		"Vulkan Practice", llmEnabled);
+		llmEnabled ? static_cast<int>(cameraConfig.llm.width) : winW,
+		llmEnabled ? static_cast<int>(cameraConfig.llm.height) : winH,
+		"Vulkan Practice", llmEnabled || showAfter >= 0);
 	if (!windowResult) {
 		auto* logger = RLLogger::getInstance();
 		if (logger) logger->error("错误: {}", windowResult.error().describe());
@@ -85,26 +98,31 @@ int main() {
 
 		// CPU 解析 + GPU 上传 + 纹理 + ECS 注册：资产数据（buffer/slot/三角形数/管线条目引用）
 		// 在 Resources 资产表，生命周期不再依赖 main 作用域（E1.2/L6）
+		// 纹理池提至模型块外（池本体 + sampler slot 描述符；RGL_CUBE_TEX 的 cube 纹理实验
+		//（无模型）也要用）。白纹理**不**在此上传：布局约定"纹理首槽 = 白"依赖模型顶点槽
+		//（base 2+i，HeapSlotModelVertexBase）先分配完——提前上传 = slot 契约漂移
+		//（2026-08-28 排查踩坑：白纹理抢 slot 2 → model.vertex[0] drift）
+		TexturePool texturePool(vkResources.getAllocator(), vkDevice, vkResources);
+		uint32_t whiteTextureId = kInvalidTextureId;
+		std::map<int, uint32_t> imageTextureCache;  // image 下标 → 纹理资产 id（RGL_CUBE_TEX 用首图）
 		if (!sceneConfig.modelPath.empty()) {
 			auto modelResult = loadGltfModel(sceneConfig.modelPath);
 			if (!modelResult) {
 				auto* logger = RLLogger::getInstance();
-				if (logger) logger->error("错误: {}", modelResult.error().describe());
+				logger->error("错误: {}", modelResult.error().describe());
 				return -1;
 			}
 			auto assetIdsResult = uploadModelMeshes(vkDevice, vkResources, *modelResult);
 			if (!assetIdsResult) {
 				auto* logger = RLLogger::getInstance();
-				if (logger) logger->error("错误: {}", assetIdsResult.error().describe());
+				logger->error("错误: {}", assetIdsResult.error().describe());
 				return -1;
 			}
-			// 纹理（Phase 3）：白纹理先取（布局约定"纹理首槽 = 白"，依赖模型顶点槽已分配完），
+			// 纹理（Phase 3）：模型顶点槽分配完后再取白纹理（布局约定"纹理首槽 = 白"），
 			// 再按 primitive 的 baseColorTexture 加载（image 下标去重）；无纹理/无 uv → 白纹理
 			auto& model = *modelResult;
-			TexturePool texturePool(vkResources.getAllocator(), vkDevice, vkResources);
-			const uint32_t whiteTextureId = texturePool.getWhite();
+			whiteTextureId = texturePool.getWhite();
 			std::vector<uint32_t> primitiveTextureIds(model.primitives.size(), whiteTextureId);
-			std::map<int, uint32_t> imageTextureCache;  // image 下标 → 纹理资产 id
 			for (size_t i = 0; i < model.primitives.size(); ++i) {
 				const int imageIndex = model.primitives[i].baseColorTextureIndex;
 				if (imageIndex < 0 || !model.primitives[i].hasUv)
@@ -154,8 +172,38 @@ int main() {
 			registerScene(registry, model, std::span<const uint32_t>(*assetIdsResult));
 		}
 
+		// DIAG（RGL_CUBE_TEX）：cube + 纹理采样——隔离"dmabuf BO 存在 + 纹理采样"组合触发
+		//（GPUVM TCP 权限 fault，2026-08-28 排查）：无模型 BDA / 无模型管线，仅 cube +
+		// 纹理采样；纹理 = 模型首张内嵌图（如有，glb 已含真实 PNG 免 LFS），否则白 1×1；
+		// cube 顶点/索引固定 slot 0/4（见 addCubeTexPipeline）
+		if (std::getenv("RGL_CUBE_TEX")) {
+			// 无模型时白纹理尚未上传（契约：模型顶点槽之后才取）——此处补取
+			if (whiteTextureId == kInvalidTextureId)
+				whiteTextureId = texturePool.getWhite();
+			const uint32_t texId = imageTextureCache.empty()
+				? whiteTextureId : imageTextureCache.begin()->second;
+			const uint32_t texSlot = texturePool.get(texId).heapSlot;
+			vkRenderer.addCubeTexPipeline(texSlot, texturePool.samplerSlot());
+			if (auto logger = RLLogger::getInstance())
+				logger->info("DIAG RGL_CUBE_TEX: cube_tex 条目（纹理资产 {} slot {}，sampler slot {}）",
+					texId, texSlot, texturePool.samplerSlot());
+		}
+
+		// DIAG（可见窗 fault 排查）：隐藏窗启动、第 showAfter 帧后 SDL_ShowWindow——
+		// 若显示瞬间开始 fault = present/合成期状态触发；若全程不 fault = 可见性非根因
+		std::function<void(uint32_t)> onFrame;
+		if (showAfter >= 0) {
+			SDL_Window* sdlWindow = window;
+			onFrame = [sdlWindow, showAfter](uint32_t frame) {
+				if (static_cast<int>(frame) == showAfter) {
+					auto* logger = RLLogger::getInstance();
+					if (logger) logger->info("DIAG: frame {} → SDL_ShowWindow", frame);
+					SDL_ShowWindow(sdlWindow);
+				}
+			};
+		}
 		auto renderResult = RGL::renderSystem(registry, vkRenderer,
-			llmEnabled ? &cameraConfig.llm : nullptr);
+			llmEnabled ? &cameraConfig.llm : nullptr, onFrame);
 		if (!renderResult) {
 			auto* logger = RLLogger::getInstance();
 			if (logger) logger->error("错误: {}", renderResult.error().describe());

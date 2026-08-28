@@ -6,8 +6,8 @@ return {
     -- 3/4 前右上视角、距 ~3700（整栋入画）。near/far 有 SceneBounds 时由 projectionSystem 自适应（忽略）。
     -- position = { -2617.0, 1343.0, 2550.0 },
     -- target = { -182.0, 300.0, 115.0 },  -- 轨道中心（仅 trackball 用）
-    position = { 0.0, 3.0, 8.0 },  -- 原点机位（transparent / grass 回归）
-    target = { 0.0, 0.5, 0.0 },
+    position = { 70.0, 85.0, 65.0 },  -- 草模型机位：包围球 center=(10,24,-9) r=81.5，球外 ~110
+    target = { 10.0, 24.0, -9.0 },  -- 草模型包围球中心
     fovDegrees = 45.0,
     near = 0.1,
     far = 8000.0,
@@ -29,18 +29,15 @@ return {
     },
 
     -- llm_debug 一次性截图（agent 自主工作：离屏隐藏窗渲染 → 截图 → 退出，默认关）
-    -- true = 默认（1280x720，首帧即截）；table = 细字段：
-    -- llm_debug = {
-    --     delay_frames = 0,                -- 第 N 帧渲染完成后截图（0 = 首帧；动态场景预留）
-    --     file = "screenshots/shot.png",   -- 缺省 screenshots/llm_<时间戳>.png（绝对路径打日志）
-    --     size = { 1280, 720 },           -- 离屏窗口尺寸
-    -- }
+    -- true = 默认（1280x720，首帧即截）；table = 细字段（file/size/delay_frames）
     -- 相机位置无额外字段：直接编辑上面的顶层 position/target/fovDegrees
     -- Phase 3 纹理验证：一次性截图（NVIDIA/RADV 跨驱动比对用）；交互运行改回 false
     -- 4K 黑屏排查（2026-08-27）：spectacle 截屏已抓到 GPUVM fault（TCP 权限 fault），
     -- 恢复 llm_debug 跑矩阵（fault 日志 = 判据）
-    llm_debug = {
-        file = "screenshots/phase3_texture.png",
-        size = { 2048, 2048 },  -- 4K 黑屏排查：纹理(4096) > 目标(2048) 是否仍坏
-    },
+    llm_debug = false,
+
+    -- {
+    --    file = "screenshots/phase3_texture.png",
+    --    size = { 2048, 2048 },  -- 4K 黑屏排查：纹理(4096) > 目标(2048) 是否仍坏
+    --},
 }

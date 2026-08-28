@@ -156,6 +156,8 @@ function(compile_slang)
 endfunction()
 compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/cube.mesh.slang MESH_SPV)
 compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/cube.frag.slang FRAG_SPV)
+# DIAG（RGL_CUBE_TEX）：cube 纹理采样实验 frag（4 绑定形态，见 cube_debug.frag.slang 头注）
+compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/cube_debug.frag.slang CUBE_DEBUG_FRAG_SPV ${CMAKE_CURRENT_SOURCE_DIR}/shaders/types.slang)
 compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.mesh.slang MODEL_MESH_SPV ${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.slang)
 compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.frag.slang MODEL_FRAG_SPV ${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.slang)
 message(STATUS "MESH_SPV is: ${MESH_SPV}")
@@ -167,7 +169,7 @@ message(STATUS "MODEL_FRAG_SPV is: ${MODEL_FRAG_SPV}")
 # 单 TU 编译 8756 行实现，-O2 下 clang 又慢又吃内存（24 并发时打爆 swap）；
 # 模型加载是启动期一次性路径、非热路径，-O0 编译省内存省时间。
 set_source_files_properties(tinygltf_impl.cpp PROPERTIES COMPILE_OPTIONS "-O0")
-add_executable(vulkan_practice main.cpp vam_impl.cpp tinygltf_impl.cpp stb_impl.cpp ${MESH_SPV} ${FRAG_SPV} ${MODEL_MESH_SPV} ${MODEL_FRAG_SPV})
+add_executable(vulkan_practice main.cpp vam_impl.cpp tinygltf_impl.cpp stb_impl.cpp ${MESH_SPV} ${FRAG_SPV} ${CUBE_DEBUG_FRAG_SPV} ${MODEL_MESH_SPV} ${MODEL_FRAG_SPV})
 
 # ─── Runtime config copy (configs/ → build dir) ──────────────────────────────
 # 程序运行时按相对路径读取 configs/*.json，build 目录必须完整。
