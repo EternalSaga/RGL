@@ -2,6 +2,7 @@ module;
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_raii.hpp>
 #include <vk_mem_alloc.h>
+#include <glm/glm.hpp>
 export module vk_resources;
 
 import rlstd;
@@ -67,6 +68,19 @@ export struct TextureAsset {
 	vk::HostAddressRangeEXT dst{};                 // 描述符写入目标 slot 范围
 };
 
+// 材质资产（批次 2：MaterialRef 真引用，E5.3 解决）：glTF 材质身份（按 materialIndex 去重，
+// -1 = 无材质 → 默认材质）。纹理→primitive 映射获得数据归属——材质记录引用纹理资产 id
+//（可查询，Phase 5 透明排序 / Phase 7 culling 的材质分类数据基础）；glTF 材质身份不再
+// 导入期丢弃。注意区分：textureId = 材质**引用**的纹理（baseColorTexture，可缺省）；
+// primitive 的**有效**纹理 = 有 uv 且图有内嵌数据 ? material.textureId : 白（hasUv 是
+// per-primitive 网格属性，同材质可因缺 uv 走白——有效选择留在上传返回值，见 model_importer）。
+// GPU 侧仍走 per-primitive 管线 binding mapping 烘焙（行为不变，去重归 Phase 4 ShaderRegistry）。
+export struct MaterialAsset {
+	glm::vec4 baseColor{1.0f};
+	uint32_t textureId = kInvalidTextureId;
+	bool alphaModeBlend = false;  // glTF alphaMode == "BLEND"（Phase 5 透明用，预留）
+};
+
 export class AssetTable {
    public:
 	// mesh（模型 primitive：去索引顶点流，无索引 buffer）
@@ -98,9 +112,18 @@ export class AssetTable {
 	[[nodiscard]] const TextureAsset& getTexture(uint32_t id) const { return textures[id]; }
 	[[nodiscard]] uint32_t textureSize() const { return static_cast<uint32_t>(textures.size()); }
 
+	// 材质（批次 2：MaterialRef{material} 真引用；registerScene 按 glTF materialIndex 去重注册）
+	uint32_t addMaterial(MaterialAsset material) {
+		materials.push_back(std::move(material));
+		return static_cast<uint32_t>(materials.size() - 1);
+	}
+	[[nodiscard]] const MaterialAsset& getMaterial(uint32_t id) const { return materials[id]; }
+	[[nodiscard]] uint32_t materialSize() const { return static_cast<uint32_t>(materials.size()); }
+
    private:
 	std::vector<MeshAsset> meshes;
 	std::deque<TextureAsset> textures;
+	std::vector<MaterialAsset> materials;
 };
 
 export class Resources {

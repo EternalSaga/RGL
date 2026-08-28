@@ -131,7 +131,8 @@ int main() {
 				vkRenderer.addModelPipeline(assets.get(id).heapSlot,
 					assets.getTexture(primitiveTextureIds[i]).heapSlot, samplerSlot, id);
 			}
-			registerScene(registry, model, std::span<const uint32_t>(*assetIdsResult));
+			registerScene(registry, model, std::span<const uint32_t>(*assetIdsResult),
+				std::span<const uint32_t>(primitiveTextureIds), vkResources);
 		}
 
 		// DIAG（RGL_CUBE_TEX）：cube + 纹理采样——隔离"dmabuf BO 存在 + 纹理采样"组合触发

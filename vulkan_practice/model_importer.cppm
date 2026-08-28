@@ -88,18 +88,74 @@ export [[nodiscard]] std::expected<std::vector<uint32_t>, Error> uploadModelMesh
 }
 
 // 模型 → ECS：场景根（Relationship parent = null；Bounds 组件 = 模型整体包围球）
-// + 每 primitive 一个 entity（Transform/MeshRef{asset}/MaterialRef，Relationship parent 挂根）。
-// assetIds 与 model.primitives 下标对齐（uploadModelMeshes 返回，上传顺序 = primitive 顺序）。
+// + 每 primitive 一个 entity（Transform/MeshRef{asset}/MaterialRef{material}，Relationship parent 挂根）。
+// assetIds / primitiveTextureIds 均与 model.primitives 下标对齐（uploadModelMeshes /
+// uploadModelTextures 返回，上传顺序 = primitive 顺序）。
 // Phase 2 无层级嵌套：node 变换在 gltf_loader 里已扁平化为 translation，world = local。
 // 包围球经 Bounds 组件进 registry，由 boundsSystem 聚合进 SceneBounds（自适应 near/far，
 // 见 ecs.cppm）——cube 将来入 ECS 时挂自己的 Bounds 即自动纳入聚合。
+// 批次 2：材质资产注册（按 glTF materialIndex 去重，-1 = 无材质 → 默认材质）+ MaterialRef
+// 真引用（E5.3）——材质身份（baseColor/textureId/alphaMode）收敛进资产表，纹理→primitive
+// 映射获得数据归属；同 materialIndex 的材质字段一致性做导入期金丝雀（违例 = loader bug）。
 export entt::entity registerScene(entt::registry& rg, const RGL::GltfModel& model,
-	std::span<const uint32_t> assetIds) {
+	std::span<const uint32_t> assetIds, std::span<const uint32_t> primitiveTextureIds,
+	RGL::Resources& resources) {
 	auto sceneRoot = rg.create();
 	rg.emplace<Relationship>(sceneRoot);  // parent = null（根）；children 不存储（单向，E5.2）
 	rg.emplace<Bounds>(sceneRoot, model.bounds.center, model.bounds.radius);
 
-	for (size_t i = 0; i < model.primitives.size(); ++i) {
+	const size_t n = model.primitives.size();
+	auto& assets = resources.getAssetTable();
+
+	// 材质资产（按 materialIndex 去重；-1 = 无材质 → 默认材质 {白 baseColor, 无纹理, OPAQUE}）
+	std::map<int, uint32_t> materialOfIndex;
+	std::map<int, size_t> firstPrimOfIndex;  // 每个 materialIndex 的首个 primitive（取字段样本）
+	for (size_t i = 0; i < n; ++i)
+		firstPrimOfIndex.emplace(model.primitives[i].materialIndex, i);
+	for (const auto& [index, first] : firstPrimOfIndex) {
+		const auto& prim = model.primitives[first];
+		// 材质引用的纹理（baseColorTexture 的 image → 纹理资产 id；image 去重缓存保证
+		// 同图同资产，取任一"该图 + 有 uv"的 primitive 的有效 id 即得）；缺纹理/无内嵌
+		// 数据/全模型无 uv 可用 → kInvalidTextureId（有效选择 = 白，见 MaterialAsset 注释）
+		uint32_t textureId = kInvalidTextureId;
+		if (prim.baseColorTextureIndex >= 0 && !model.images[prim.baseColorTextureIndex].data.empty()) {
+			for (size_t j = 0; j < n; ++j)
+				if (model.primitives[j].baseColorTextureIndex == prim.baseColorTextureIndex &&
+					model.primitives[j].hasUv) {
+					textureId = primitiveTextureIds[j];
+					break;
+				}
+		}
+		materialOfIndex[index] = assets.addMaterial(
+			MaterialAsset{prim.baseColor, textureId, prim.alphaModeBlend});
+	}
+
+	// per-primitive 材质引用 + 一致性金丝雀（glTF 格式保证同 materialIndex = 同材质字段：
+	// baseColorFactor/alphaMode；违例 = loader bug，启动期直接报错，不静默带病渲染）。
+	// 不校验 textureId：材质可引用有数据的 image 但全部 primitive 无 uv（有效纹理 = 白），
+	// 该投影含 per-primitive 的 hasUv，不是材质级格式保证。
+	std::vector<uint32_t> primitiveMaterialIds(n);
+	for (size_t i = 0; i < n; ++i) {
+		const auto& prim = model.primitives[i];
+		const auto& mat = assets.getMaterial(materialOfIndex[prim.materialIndex]);
+		if (mat.baseColor != prim.baseColor || mat.alphaModeBlend != prim.alphaModeBlend) {
+			throw std::runtime_error("glTF material inconsistency: primitive " + std::to_string(i) +
+				" (materialIndex " + std::to_string(prim.materialIndex) + ")");
+		}
+		primitiveMaterialIds[i] = materialOfIndex[prim.materialIndex];
+	}
+
+	{
+		auto* logger = RLLogger::getInstance();
+		uint32_t texturedMaterials = 0;
+		for (uint32_t i = 0; i < assets.materialSize(); ++i)
+			if (assets.getMaterial(i).textureId != kInvalidTextureId) texturedMaterials++;
+		if (logger)
+			logger->info("materials: {} 资产（{} 带纹理引用），{} primitive",
+				assets.materialSize(), texturedMaterials, n);
+	}
+
+	for (size_t i = 0; i < n; ++i) {
 		const auto& prim = model.primitives[i];
 		auto e = rg.create();
 
@@ -109,7 +165,7 @@ export entt::entity registerScene(entt::registry& rg, const RGL::GltfModel& mode
 		tf.world = local;
 
 		rg.emplace<MeshRef>(e).asset = assetIds[i];
-		rg.emplace<MaterialRef>(e).baseColor = prim.baseColor;
+		rg.emplace<MaterialRef>(e).material = primitiveMaterialIds[i];  // 真引用（批次 2，E5.3）
 		rg.emplace<Relationship>(e).parent = sceneRoot;
 	}
 	return sceneRoot;

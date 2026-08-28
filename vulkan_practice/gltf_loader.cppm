@@ -24,6 +24,7 @@ export struct GltfPrimitive {
 	int baseColorTextureIndex = -1;  // material baseColorTexture 的 image 下标（-1 = 无纹理 → 白纹理）
 	bool hasUv = true;               // TEXCOORD_0 缺失（glTF 中可选）→ uv 填 0 + 白纹理（D9）
 	bool alphaModeBlend = false;    // material alphaMode == "BLEND"（Phase 5 透明用，预留）
+	int materialIndex = -1;         // glTF materials 数组下标（-1 = 无材质）——批次 2 材质资产去重键
 };
 
 // 纹理源数据（Phase 3）：span 指向 GltfModel::bufferData（自 tinygltf buffer 0 move 而来，
@@ -154,9 +155,10 @@ export [[nodiscard]] std::expected<GltfModel, Error> loadGltfModel(const std::st
 			if (!foundNode && logger)
 				logger->warn("glTF: mesh {} has no owning node, translation defaults to 0", mi);
 
-			// material（baseColorFactor + baseColorTexture + alphaMode）
+			// material（baseColorFactor + baseColorTexture + alphaMode + 材质下标——批次 2 去重键）
 			if (prim.material >= 0 && prim.material < static_cast<int>(gltf.materials.size())) {
 				const auto& mat = gltf.materials[prim.material];
+				out.materialIndex = prim.material;
 				const auto& f = mat.pbrMetallicRoughness.baseColorFactor;
 				if (f.size() == 4)
 					out.baseColor = glm::vec4(

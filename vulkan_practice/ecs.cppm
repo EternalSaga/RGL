@@ -197,9 +197,9 @@ struct RenderListState {
 // "cube" 条目），MVP = proj·view·spin（无 Transform）；Phase 4 入 ECS 后走与 model
 // 同一 view 路径（ecs_compliance_review E1.4/H1）。
 //
-// model：每 primitive 实体（Transform/MeshRef{asset}/MaterialRef）推一份 ModelDrawArgs
-//（mvp = proj·view·spin·world；资产 id → Resources 资产表记录：三角形数 / 管线条目
-// 下标，五方约定收敛为一处映射，E1.1/E5.1）；
+// model：每 primitive 实体（Transform/MeshRef{asset}/MaterialRef{material} 真引用）推一份
+// ModelDrawArgs（mvp = proj·view·spin·world；资产 id → Resources 资产表记录：三角形数 /
+// 管线条目下标（E1.1/E5.1）、baseColor 经材质资产解析（批次 2，E5.3））；
 // group 数 = ceil(triangles / kTrianglesPerGroup)（契约常量由 model_schema.lua 生成，
 // 见 model_types_generated；mesh shader 无 task stage，group 序号经 SV_GroupID.x 派生）
 void renderListSystem(entt::registry& rg, RGL::Renderer& renderer, RGL::Resources& resources,
@@ -231,7 +231,7 @@ void renderListSystem(entt::registry& rg, RGL::Renderer& renderer, RGL::Resource
 			auto& args = state.modelArgs[meshRef.asset];
 			args.mvp = viewProj.proj * viewProj.view * spin.matrix * tf.world;
 			args.totalTriangles = asset.triangleCount;
-			args.baseColor = matRef.baseColor;
+			args.baseColor = assets.getMaterial(matRef.material).baseColor;  // 批次 2：材质资产表解析
 
 			const uint32_t groupCount =
 				(asset.triangleCount + kTrianglesPerGroup - 1) / kTrianglesPerGroup;

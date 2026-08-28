@@ -31,10 +31,13 @@ export struct MeshRef {
 	uint32_t asset = 0;
 };
 
-// Phase 2 材质 = baseColor（flat unlit；alpha 忽略，透明是 Phase 5）
-// 名为 Ref 实为值拷贝（roadmap Phase 2"暂时只存引用"未兑现；Phase 4 改 MaterialRef{materialId} + 材质资产表）
+// 材质真引用（批次 2，E5.3 解决；roadmap Phase 2"暂时只存引用"兑现）：material =
+// Resources 资产表 materials 容器的下标（MaterialAsset，vkresources.cppm）——
+// baseColor / textureId / alphaMode 全部收敛进材质资产记录，组件只持纯数据引用
+//（项目"组件只存数据引用"约定）。每帧渲染经资产表解析（ecs.cppm renderListSystem）。
+// 无纹理/无 uv 的 primitive 有效纹理 = 白 1×1（有效选择不在组件，见 MaterialAsset 注释）。
 export struct MaterialRef {
-	glm::vec4 baseColor{1.0f};
+	uint32_t material = 0;
 };
 
 // 包围球（组件，挂在有包围球的 entity 上）：现状 = 模型整体球挂场景根（registerScene 写入）；
