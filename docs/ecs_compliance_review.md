@@ -442,6 +442,28 @@ bounds center=(0.1004, 0, -0.4999) radius=6.25 与 Phase 2 记录（phase2_plan 
 **验证（行为零变化，llm 1280×720 逐像素）**：三批次各自对基线 diff=0（cottage 4K 纹理 /
 grass / transparent+cube / 无模型+cube 四路），启动零 warn/error；附加实锤——批次 3 前后
 （master 态 vs cb3231e 同码重拍）截图 **diff=0 位级一致**，全部三批次渲染位级等价。
+
+### 2026-08-28 Phase 4 批次 1-4 落地（统一 push constant + 管线去重 + ShaderRegistry + pbr 占位）
+
+> 背景：Phase 4（Shader 反射扩展 + 多 Shader 支持）4 批次落地，清偿两条前置债
+>（push constant 归一 + 管线去重）+ 材质字段 + pbr 占位风格 + Lua 风格映射。
+> 详见 `docs/phase4_plan.md`。
+
+- ~~H1/L5~~ **已解（Phase 4 批次 1）**：push constant 布局归一——统一 `DrawArgs` 超集
+  （scalar 布局 96B，`material_types_generated`）+ `renderListSystem` 单一写入路径
+  零 AssetKind 分支（H1 注记解决：每管线自己的 args 布局 → 统一超集，各风格只消费自己字段）
+  + `PipelineEntry.argsSize/pushDataSet` 显式化（L5 解决：draw 循环 `pushDataEXT(entry.pushDataSet,...)`
+  替代硬编码 set 0）。scalar 布局策略见 AGENTS.md"着色器编译"节。
+- ~~E2 完整形态（cube 入 draw list）~~ **已解（重构批次 3 + Phase 4 批次 1 合流）**：
+  cube 一等资产（重构批次 3）+ `renderListSystem` 统一 view 按资产 kind 分支（重构批次 3）
+  + 统一 `DrawArgs` 超集（Phase 4 批次 1）——cube/model 共用同一路径，零特例。
+- ~~E5.3 完整形态（材质资产表）~~ **已解（重构批次 2 + Phase 4 批次 3 合流）**：
+  `MaterialAsset` 进资产表 + `MaterialRef{material}` 真引用（重构批次 2）+
+  材质风格字段（+metallic/roughness/unlit，Phase 4 批次 3）——材质身份 + 风格分类完整形态达成，
+  Phase 5 透明排序 / Phase 7 culling 的材质分类基础就位。
+- ~~管线去重~~ **已解（Phase 4 批次 2）**：`shader_registry.cppm` 组合去重
+  （按 (规格, 顶点 slot, 纹理 slot)）+ 分块拼接顶点 buffer（16MB×6 块）+ per-draw
+  `vertexOffset`——392 primitive → 12 条目 / 6 heap slot。
 注：batch 0 保存基线有 1px 捕获瞬态离群（(683,279) 纹理缝边 0→38，cb3231e 同码重拍复现），
 三基线已全部重拍替换（`build/vulkan_practice/screenshots/refactor_baseline_*.png`）。
 

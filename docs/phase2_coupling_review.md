@@ -34,7 +34,7 @@ cube 只是这个 pattern 最显眼的实例；`DrawArgs`/`ModelDrawArgs`、slot
 | [L2](#l2--自适应-frustum-不含-cube) | 自适应 frustum 只认 model，不含 cube | Low | Open（聚合已 system 化：`boundsSystem`；cube 挂 `Bounds` 组件即自动纳入） |
 | [~~L3~~](#l3--renderer-持有未使用的-registry) | Renderer 持有未使用的 `entt::registry*`（死依赖） | Low | **已修复**（2026-08-24 批次 2 顺手） |
 | [L4](#l4--默认-spv-路径两处重复) | 默认 SPV 路径两处重复（现三处：`defaultSceneConfig` + `scene.lua` + `makePipelineTable` 默认回落） | Low | Open |
-| [L5](#l5--pushdataext-set-0-约定隐式共享) | `pushDataEXT` "set 0" 约定被两种不同大小 struct 隐式共享 | Low | Open（draw 循环已单点化；显式化随 Phase 4 ShaderRegistry） |
+| [~~L5~~](#l5--pushdataext-set-0-约定隐式共享) | `pushDataEXT` "set 0" 约定被两种不同大小 struct 隐式共享 | Low | **已解**（Phase 4 批次 1，统一 `DrawArgs` 超集 + `PipelineEntry.pushDataSet` 显式化；权威记录见 ecs_compliance_review.md §处置记录） |
 | [~~L6~~](#l6--modelmeshassets-生命周期契约脆弱) | `ModelMeshAssets` 生命周期契约脆弱（隐式 RAII） | Low | **已修复**（2026-08-25 批次 3，资产表收敛所有权） |
 
 ---

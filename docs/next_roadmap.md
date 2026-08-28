@@ -267,31 +267,45 @@ SPV 路径的模式撑不住。Phase 4 的 ShaderRegistry 是最终解法，但�
 
 ## Phase 4：Shader 反射扩展 + 多 Shader 支持
 
-> **状态（2026-08-28）**：未开始。前置债已明确（Phase 3 完成后遗留，见上节偏离注记）：
-> ① 管线表 per-primitive 条目去重（392→按 (顶点 slot, 纹理 slot) 组合）；
-> ② `renderListSystem` AssetKind 分支归一（每管线自己的 push constant args 布局）。
+> **状态（2026-08-28）**：**已完成**（4 批次，详见 `docs/phase4_plan.md`）。前置债已清偿：
+> ① 管线表 per-primitive 条目去重（392→按 (规格, 顶点 slot, 纹理 slot) 组合 = 12 条）；
+> ② `renderListSystem` AssetKind 分支归一（统一 `DrawArgs` 超集，零 AssetKind 分支）。
 > ShaderRegistry 是两者的统一落点。
 
 ### 目标
 支持多种 shader 风格（unlit、pbr），通过 Lua 描述渲染意图。
 
-### 要做的事
-- **types.slang 扩展**：加入 `Material` struct（baseColor、roughness、metallic 等）
-- **generate_layout 扩展**：为 Material 生成对应的 C++ struct
-- **schema 扩展**：校验 Material struct 的字段和布局
-- **ShaderRegistry 模块**：
-  - 注册不同 shader 风格（cube_unlit、cube_pbr 等）
-  - 每个 shader 有独立的 `.cppm` 生成物
-  - 渲染时根据 material 类型选择 shader
-- **Lua 配置**（初步）：
-  - 描述场景使用的 shader、entity 列表、渲染参数
-  - 启动时读取，构建 renderer state
-- **imgui** 集成（优先级不高，后期加）：
-  - 用于调试 overlay、参数调整
-  - 不影响渲染管线
+### 完成情况 (已完成 2026-08-28，4 批次)
+- [x] **批次 1 统一 push constant 契约**：`material.slang` `DrawArgs` 超集（scalar 布局 96B
+  零 padding）+ CMake 第三条反射管线（material.slang + material_schema.lua →
+  `material_types_generated`）+ generator scalar 对齐 + `MeshAsset.groupCount`（上传期派生）
+  + `renderListSystem` 归一（单一 DrawArgs 按资产 id 索引，零 AssetKind 分支）+
+  `PipelineEntry.argsSize/pushDataSet` 显式化（L5）
+- [x] **批次 2 管线去重 + ShaderRegistry**：`shader_registry.cppm` 新模块（零 entt，
+  按 (规格, 顶点 slot, 纹理 slot) 组合去重）+ 分块拼接顶点 buffer（16MB×6 块）+
+  per-draw `vertexOffset`（392 primitive → 12 条目 / 6 heap slot）
+- [x] **批次 3 材质字段 + pbr 占位 + Lua 风格映射**：gltf_loader +metallic/roughness/unlit
+  + `MaterialAsset` 三字段 + `model_pbr.frag.slang` 占位（输出同 model.frag，光照 Phase 5）
+  + scene_config `styleMap`（风格名→管线规格名）+ scene.lua `styles` 表 + main 风格派生
+  （prim.unlit → styleMap → 管线条目）
+- [x] **批次 4 文档销账 + 总验证**：AGENTS.md/next_roadmap/ecs_compliance 销账
+
+### 偏离注记
+- **pbr 占位 frag**：`model_pbr.frag.slang` 输出与 model.frag 完全一致（material 字段已接线
+  进 `DrawArgs.roughnessMetallic`，光照留 Phase 5）——非真 PBR 光照
+- **Lua = 风格映射**（非渲染意图）：scene.lua `styles` 表只做"风格名→管线规格名"映射，
+  非 Phase 6 的渲染意图描述（entity 列表/pass 序列）
+- **Material 走 push constant 超集**（非独立 binding）：材质字段（baseColor/roughness/
+  metallic）进统一 `DrawArgs` 超集（96B scalar），非独立 descriptor binding
+- **顶点拼接 D5 超计划新增**：分块拼接 buffer（16MB×6 块）+ per-draw vertexOffset 是
+  计划外新增（为去重服务的 heap slot 收敛）
+- **cottage 偶发 artifact（已知问题）**：特定区域纹理偶发采样黑（~741px，非确定性驱动
+  竞态，复现率 1/13，非批次 2/非 frag 特有，grass 正常）——接受推进，三个待查项见
+  AGENTS.md 已知问题 + phase4_plan.md 批次 2 定案注记
 
 ### 设计决策
-- 每个 shader 风格有独立的 `schema.lua` 和生成模块
+- 每个 shader 风格有独立的 `schema.lua` 和生成模块（实际：material.slang 统一契约 +
+  各风格 frag 复用）
 - `shader.cppm` 支持多 pipeline，通过 shader registry 切换
 - **前置依赖**：先完成 Phase 2 的"前置：Shader/Renderer 解耦"两步
   （动态状态外移 + 管线表），ShaderRegistry 在其接缝上注册
