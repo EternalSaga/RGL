@@ -80,6 +80,24 @@ class Foo {
 };
 ```
 
+### ECS 设计规范
+
+场景代码（ecs/scene/model_importer + 相关 system）必须符合五条 ECS 规范
+（合规状态与逐条处置记录：`docs/ecs_compliance_review.md` §ECS 设计规范，权威记录）：
+
+1. **registry 是场景唯一数据源**——场景状态不在 registry 外平行维护
+   （每帧/配置状态进 context；资产数据进 `Resources::AssetTable`）
+2. **entity 是 ID、component 是纯数据、system 是逻辑唯一载体**——system 间经数据通信，
+   执行顺序显式（显式 system 列表；不用 entt::scheduler——本地 3.16 是 process 调度器，
+   执行顺序无保证）
+3. **场景构成数据驱动**——"场景里有什么" = registry 里有什么 entity，
+   不用全局变量 / config 字段 / 构造参数决定场景构成（画不画 = 实体有无）
+4. **分层**——底层 Vulkan 类不依赖 ECS、不认识具体资产（Renderer 零 entt 依赖）；
+   渲染 system 产出抽象 draw list（`FrameDrawList`），执行器只盲执行
+5. **资产与场景实例分离**——组件引用稳定资产 ID（`MeshRef.asset` / `MaterialRef.material`），
+   不引侧数组下标；五方一致性（entity ↔ primitive ↔ heap slot ↔ 管线条目 ↔ draw-args）
+   收敛为资产表一处映射
+
 ### 构建工具模块
 
 `tools/` 下的构建工具也统一使用 C++20 modules：
@@ -215,7 +233,7 @@ main.cpp 按逆序析构（RAII，无需手动清理）。
 - `docs/DESCRIPTOR_HEAP_SPEC.md` — 有关DescriptorHeap 扩展的排坑详细记录
 - `docs/next_roadmap.md` — 后续开发计划
 - `docs/phase2_coupling_review.md` — 【历史】Phase 2 耦合审查（2026-08-23 问题清单 + 修复方向；条目处置权威记录在 ecs_compliance_review §处置记录，行号已漂移）
-- `docs/ecs_compliance_review.md` — ECS 合规审查与修复方向（2026-08-24 审查；批次 2 已落地：draw list + system 化 + 契约常量 schema 化；2026-08-25 批次 3 已落地：资产表 + MeshRef 资产 ID + 构造参数去耦合 + 输入事件化；E1.4/批次 4 归 Phase 4）
+- `docs/ecs_compliance_review.md` — **ECS 设计规范（五条参照系，场景代码设计合规判据）** + 合规审查与修复方向（2026-08-24 审查；批次 2/3 + 2026-08-28 重构批次 1-3 已落地，见 §处置记录；规范摘要在 AGENTS.md 代码规范 §ECS 设计规范；剩余债（push constant 归一 / 管线去重）归 Phase 4）
 - `docs/shader_reflection_plan.md` — 【历史】shader 反射设计规划（Phase 0 实现前；实现现状以本文件模块结构表为准）
 - `docs/nvidia_compatibility_report.md` — 跨驱动兼容性排查（heap 对齐、Aftermath 集成、mesh shader 崩溃根因；2026-08-27 补 NVIDIA/Intel/AMD Strix Halo 三平台验证记录，当前开发机为 Strix Halo 纯核显机）
 - `docs/device_generated_commands_research.md` — GPU culling（VK_EXT_device_generated_commands）双驱动实测调研（Phase 7 依据）

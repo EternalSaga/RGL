@@ -141,6 +141,11 @@ namespace RGL::Shaders::Types {
 
 > **实施计划**：见 [phase2_plan.md](phase2_plan.md)（2026-08-23 规划评审，含已确认决策、
 > 事实核查、可执行分步、文件变更清单与风险）。
+>
+> **ECS 设计规范（参照系）**：本 Phase 起的场景代码必须符合五条 ECS 规范
+> （registry 唯一数据源 / 纯数据组件 / 数据驱动场景构成 / 分层 / 资产-实例分离）——
+> 摘要在 `AGENTS.md` 代码规范 §ECS 设计规范，合规状态与逐条处置记录权威记录在
+> [ecs_compliance_review.md](ecs_compliance_review.md) §ECS 设计规范。
 
 ### 目标
 可以加载外部 3D 模型，替代硬编码的 cube（cube 与模型并存渲染）。
