@@ -7,6 +7,7 @@ import vk_instance;
 import vk_device;
 import vk_swapchain;
 import vk_resources;
+import shader_registry;
 import vk_renderer;
 import scene_config;
 import gltf_loader;
@@ -92,9 +93,11 @@ int main() {
 		// heap 容量为固定裕量（与场景内容解耦，批次 3 E1.3）：CPU 解析模型不再需要
 		// 先于 Vulkan 初始化
 		Resources vkResources(vkInstance, vkDevice, vkSwapchain);
-		// 管线规格来自 configs/scene.lua；"cube" 管线条目恒建（批次 3：画不画 = cube
-		// entity 有无，数据驱动，下方按 showCube 决定是否注册）
-		Renderer vkRenderer(vkDevice, vkSwapchain, vkResources, sceneConfig.pipelines);
+		// 管线表（Phase 4 批次 2：ShaderRegistry，零 entt）：规格来自 configs/scene.lua；
+		// "cube" 条目恒建（批次 3：画不画 = cube entity 有无，数据驱动，下方按 showCube
+		// 决定是否注册）。先于 Renderer 构造（Renderer 持引用）
+		ShaderRegistry shaderRegistry(vkDevice, vkResources, sceneConfig.pipelines);
+		Renderer vkRenderer(vkDevice, vkSwapchain, vkResources, shaderRegistry);
 
 		// CPU 解析 + GPU 上传 + 纹理 + ECS 注册：资产数据（buffer/slot/三角形数/管线条目引用、
 		// 纹理资产、材质资产）全部在 Resources 资产表（初始化层 owner，生命周期不依赖
@@ -127,9 +130,28 @@ int main() {
 			const uint32_t samplerSlot = vkResources.ensureSharedSampler();
 			for (size_t i = 0; i < assetIdsResult->size(); ++i) {
 				const uint32_t id = (*assetIdsResult)[i];
-				// 纹理 slot + sampler slot 烘焙进 per-primitive 管线 mapping（binding 1/2），每帧零成本
-				vkRenderer.addModelPipeline(assets.get(id).heapSlot,
-					assets.getTexture(primitiveTextureIds[i]).heapSlot, samplerSlot, id);
+				// 管线条目（Phase 4 批次 2：按 (风格, 顶点 slot, 纹理 slot) 组合去重——同模型
+				// 全 primitive 共享一个拼接顶点 slot，仅纹理 slot 差异决定条目拆分；纹理/sampler
+				// slot 烘焙进 binding mapping，每帧零成本）
+				const uint32_t entryIdx = shaderRegistry.addModelEntry(
+					"model",
+					assets.get(id).heapSlot,  // = 模型拼接顶点 slot（同模型全 primitive 相同）
+					assets.getTexture(primitiveTextureIds[i]).heapSlot,
+					samplerSlot);
+				shaderRegistry.bindToAsset(id, entryIdx);
+			}
+			// DIAG（Phase 4 批次 2 纹理分布核查）：per-primitive 纹理 slot 分布（验证新旧管线用同一批纹理）
+			if (std::getenv("RGL_TEX_DIST") != nullptr) {
+				std::map<uint32_t, uint32_t> texSlotCount;
+				for (size_t i = 0; i < assetIdsResult->size(); ++i)
+					++texSlotCount[assets.getTexture(primitiveTextureIds[i]).heapSlot];
+				if (auto logger = RLLogger::getInstance()) {
+					std::string s;
+					for (const auto& [slot, cnt] : texSlotCount)
+						s += "slot" + std::to_string(slot) + "=" + std::to_string(cnt) + " ";
+					logger->info("DIAG tex dist: {} primitives → {} distinct tex slots: {}",
+						assetIdsResult->size(), texSlotCount.size(), s);
+				}
 			}
 			registerScene(registry, model, std::span<const uint32_t>(*assetIdsResult),
 				std::span<const uint32_t>(primitiveTextureIds), vkResources);
@@ -143,7 +165,7 @@ int main() {
 			const uint32_t cubeMat = assets.addMaterial(
 				MaterialAsset{glm::vec4{1.0f}, kInvalidTextureId, false});
 			registerCubeEntity(registry, vkResources.cubeAssetId(), cubeMat);
-			vkRenderer.bindPipelineToAsset("cube", vkResources.cubeAssetId());
+			shaderRegistry.bindPipelineToAsset("cube", vkResources.cubeAssetId());
 			if (auto logger = RLLogger::getInstance())
 				logger->info("cube entity: 资产 {} / 材质 {} / 管线下标 {}",
 					vkResources.cubeAssetId(), cubeMat,

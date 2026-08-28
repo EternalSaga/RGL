@@ -20,14 +20,11 @@ struct ModelVertexOutput
     float2 uv       : TEXCOORD0;
 };
 
-struct ModelDrawArgs
-{
-    float4x4 mvp;
-    uint totalTriangles;
-    float4 baseColor;
-};
-
-[[vk::push_constant]] ModelDrawArgs modelDrawArgs;
+// push constant 契约已移至 material.slang（Phase 4 统一 DrawArgs 超集，所有风格共享；
+// model 风格消费 mvp/totalTriangles/vertexOffset/baseColor，roughnessMetallic 由
+// model_pbr 占位 frag 预留、Phase 5 光照消费）——本契约只拥有 buffer slot 段 +
+// ModelVertex 顶点布局（schema 单一真相源）+ kTrianglesPerGroup 常量；
+// model.mesh.slang / model.frag.slang 同时 import model + material。
 
 [[vk::binding(0, 0)]]
 ByteAddressBuffer modelVertexBuffer;

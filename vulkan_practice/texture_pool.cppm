@@ -72,7 +72,8 @@ export [[nodiscard]] std::expected<uint32_t, Error> loadEmbedded(RGL::Resources&
 
 // 1×1 白纹理（无纹理/无 uv primitive 的共用特例，D4）。
 // 幂等（纹理首槽 = 白，调用序契约：先于任何图片纹理取）。
-// 布局契约断言（批次 1 新增）：slot = reserved + HeapSlotModelVertexBase + 模型顶点槽数
+// 布局契约断言（批次 1 新增，Phase 4 批次 2 改按模型数）：slot = reserved +
+// HeapSlotModelVertexBase + 模型顶点槽数（拼接 buffer = 每模型一个 slot，getModelSlotCount）
 //（违例 = 契约漂移报错——原靠"别提前取白"纪律，2026-08-28 排查踩坑：白纹理抢 slot 2
 // → model.vertex[0] drift 抛错）
 export uint32_t ensureWhiteTexture(RGL::Resources& resources, RGL::DeviceContext& device) {
@@ -83,8 +84,9 @@ export uint32_t ensureWhiteTexture(RGL::Resources& resources, RGL::DeviceContext
 	auto result = uploadTexture(resources, device, rgba, 1, 1, "texture.white");
 	if (!result)
 		throw std::runtime_error("white texture: " + result.error().describe());
+	// DIAG（Phase 4 批次 2 判别）：RGL_SKIP_TO_TEX394 时白纹理期望 batch1 布局（reserved+394）
 	const uint32_t expected = resources.getDescriptorHeap().getReservedSlots() +
-		HeapSlotModelVertexBase + assets.modelMeshCount();
+		HeapSlotModelVertexBase + (std::getenv("RGL_SKIP_TO_TEX394") != nullptr ? 392 : assets.getModelSlotCount());
 	const uint32_t slot = assets.getTexture(*result).heapSlot;
 	if (slot != expected)
 		throw std::runtime_error("heap slot layout drift: texture.white (slot " + std::to_string(slot) +

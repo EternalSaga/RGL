@@ -11,47 +11,45 @@ import schema_loader;
 
 namespace RGL {
 
-// GLSL/Slang 标准内存布局（spec 42.6）的 size/alignment 查询表：
-// 用于给生成的 C++ 结构体计算字段偏移并插入 padding 字段。
-// 必要性：Slang 按标准布局排字段（float4 对齐 16），而 glm 的默认自然对齐
-// 对 vec4/mat 只有 4——不插 padding 时 C++ 侧字段偏移/总尺寸与反射不一致
-//（如 ModelDrawArgs：uint 后紧跟 float4，C++ 84B vs Slang 96B）。
-// 插入 uint32_t padding 后 C++ 偏移被钉死在标准偏移上（padding 尺寸 = 偏移差，
-// 且差值恒为 4 的倍数，uint32_t 自身对齐 4 不会再引入额外 padding）。
+// Scalar block layout 的 size/alignment 查询表（C/C++ 自然布局规则）：
+// 用于给生成的 C++ 结构体计算字段偏移并校验总尺寸。
+// 本项目所有 shader 经 -fvk-use-scalar-layout 编译（CMake 统一策略，见
+// vulkan_practice/CMakeLists.txt 头注释），push constant 用 scalar 布局——
+// 与 C 自然布局一致（所有类型对齐 4），故生成的 C++ struct（glm 自然对齐 4）
+// 与 shader 逐字段偏移天然吻合，无需 padding 字段（DrawArgs = 96B，无 _padN）。
+// standardLayoutInfo 的对齐恒为 4（scalar 对齐）；offset 计算/尾 padding 逻辑保留
+// 作结构校验（scalar 下不会触发，若触发 = 布局假设被破坏，static_assert 兜底）。
+// 注意：若某日取消 scalar 策略改回 GLSL 标准布局（vec4 对齐 16 / vec2 对齐 8），
+// 本表与 padding 逻辑须同步改回（历史版本见 git：standardLayoutInfo 原为标准布局表）。
 static bool standardLayoutInfo(const std::string& cppType, size_t& outSize, size_t& outAlign) {
+	// scalar 布局：所有类型对齐 4（C 自然对齐）
+	outAlign = 4;
 	if (cppType == "float" || cppType == "int32_t" || cppType == "uint32_t") {
 		outSize = 4;
-		outAlign = 4;
 		return true;
 	}
 	if (cppType == "glm::vec2" || cppType == "glm::ivec2") {
 		outSize = 8;
-		outAlign = 8;
 		return true;
 	}
 	if (cppType == "glm::vec3" || cppType == "glm::ivec3") {
 		outSize = 12;
-		outAlign = 4;
 		return true;
 	}
 	if (cppType == "glm::vec4" || cppType == "glm::ivec4") {
 		outSize = 16;
-		outAlign = 16;
 		return true;
 	}
 	if (cppType == "glm::mat2") {
 		outSize = 16;
-		outAlign = 16;
 		return true;
 	}
 	if (cppType == "glm::mat3") {
 		outSize = 32;
-		outAlign = 16;
 		return true;
 	}
 	if (cppType == "glm::mat4") {
 		outSize = 64;
-		outAlign = 16;
 		return true;
 	}
 	return false;
@@ -169,13 +167,17 @@ export std::string generateCppm(const nlohmann::json& reflection,
 					cursor += fieldSize;
 					structAlign = std::max(structAlign, fieldAlign);
 				}
-				// 总尺寸向上取整到结构体对齐（标准布局规则）
+				// 总尺寸向上取整到结构体对齐（标准布局规则）。尾 padding 用 uint8_t 数组
+				// 填精确字节差（对齐 1，不引入额外 padding）——glm 的自然对齐是 4，
+				// 单个 uint32_t 只填 4B：C++ sizeof 按自然对齐 4 上取整，差 >4B 时
+				// 与反射总尺寸不符（如 DrawArgs 112B：cursor 104 需 8B 尾 padding）。
 				if (totalSize > 0) {
 					const size_t padded = (cursor + structAlign - 1) / structAlign * structAlign;
 					if (padded > cursor) {
 						nlohmann::json padObj;
-						padObj["name"] = "_pad" + std::to_string(padCount);
-						padObj["cpp_type"] = "uint32_t";
+						padObj["name"] = "_pad" + std::to_string(padCount++) +
+							"[" + std::to_string(padded - cursor) + "]";
+						padObj["cpp_type"] = "uint8_t";
 						structObj["fields"].push_back(padObj);
 					}
 					if (padded != totalSize) {

@@ -8,6 +8,15 @@ endif()
 
 message(STATUS "找到 Slang 编译器: ${SLANGC_EXECUTABLE}")
 
+# ─── Scalar Block Layout 项目策略（Phase 4 定案）────────────────────────────
+# 所有 slangc 编译（反射 + SPV）统一加 -fvk-use-scalar-layout：push constant 用
+# scalar（C 自然）布局而非 GLSL 标准布局。收益：C++ struct（glm 自然对齐 4）与
+# shader 逐字段偏移天然一致、零 padding、DrawArgs 96B（标准布局下需 112B + 2 段
+# padding）。前提：scalarBlockLayout feature 已启用（features_config.json，
+# VkPhysicalDeviceVulkan12Features，validateFeatures 校验）——feature 未启用时
+# scalar 布局的 push constant 行为未定义。反射与 SPV 两处 flag 必须一致（不一致 =
+# 运行时布局错配的隐蔽 bug）。generator 的 standardLayoutInfo 已同步为 scalar 对齐
+#（tools/generator.cppm）。
 set(GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_shaders")
 file(MAKE_DIRECTORY ${GEN_DIR})
 
@@ -36,6 +45,7 @@ add_custom_command(
             -target spirv
             -capability spvDescriptorHeapEXT
             -profile sm_6_6+spirv_1_6
+            -fvk-use-scalar-layout
             -I "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
             -no-codegen
             -reflection-json ${TYPES_REFLECTION_JSON}
@@ -77,6 +87,7 @@ add_custom_command(
             -target spirv
             -capability spvDescriptorHeapEXT
             -profile sm_6_6+spirv_1_6
+            -fvk-use-scalar-layout
             -I "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
             -no-codegen
             -reflection-json ${MODEL_REFLECTION_JSON}
@@ -102,6 +113,47 @@ add_custom_command(
 )
 
 add_custom_target(model_reflection_generated ALL DEPENDS ${MODEL_CPPM})
+
+# ─── Phase 4: Material Reflection（统一 push constant 契约）────────────────────
+# 第三条反射管线：material.slang（所有 shader 风格共享的 DrawArgs 超集）→
+# material_types_generated.cppm。多契约靠 CMake 增加调用（同上，CLI 已参数化）。
+set(MATERIAL_SLANG "${CMAKE_CURRENT_SOURCE_DIR}/shaders/material.slang")
+set(MATERIAL_SCHEMA "${CMAKE_CURRENT_SOURCE_DIR}/shaders/material_schema.lua")
+set(MATERIAL_REFLECTION_JSON "${GEN_DIR}/material_reflection.json")
+set(MATERIAL_CPPM "${GEN_SRC_DIR}/material_types_generated.cppm")
+
+add_custom_command(
+    OUTPUT ${MATERIAL_REFLECTION_JSON}
+    COMMAND ${SLANGC_EXECUTABLE} ${MATERIAL_SLANG}
+            -target spirv
+            -capability spvDescriptorHeapEXT
+            -profile sm_6_6+spirv_1_6
+            -fvk-use-scalar-layout
+            -I "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
+            -no-codegen
+            -reflection-json ${MATERIAL_REFLECTION_JSON}
+    DEPENDS ${MATERIAL_SLANG} ${MATERIAL_SCHEMA}
+    COMMENT "Slangc reflection: material.slang -> material_reflection.json"
+    VERBATIM
+)
+
+add_custom_command(
+    OUTPUT ${MATERIAL_CPPM}
+    COMMAND reflection_tool validate
+            --json ${MATERIAL_REFLECTION_JSON}
+            --schema ${MATERIAL_SCHEMA}
+    COMMAND reflection_tool generate
+            --json ${MATERIAL_REFLECTION_JSON}
+            --schema ${MATERIAL_SCHEMA}
+            --output ${MATERIAL_CPPM}
+            --module-name material_types_generated
+            --template ${TYPES_TEMPLATE}
+    DEPENDS ${MATERIAL_REFLECTION_JSON} ${MATERIAL_SCHEMA} ${TYPES_TEMPLATE} reflection_tool
+    COMMENT "Reflection: validate material schema + generate material_types_generated.cppm"
+    VERBATIM
+)
+
+add_custom_target(material_reflection_generated ALL DEPENDS ${MATERIAL_CPPM})
 
 # ─── Features Codegen ────────────────────────────────────────────────────────
 add_custom_command(
@@ -145,6 +197,7 @@ function(compile_slang)
                 -target spirv
                 -capability spvDescriptorHeapEXT
                 -profile sm_6_6+spirv_1_6
+                -fvk-use-scalar-layout
                 -I "${SHADER_DIR}"
                 -o ${OUTPUT_SPV}
         DEPENDS ${SHADER_ABS} ${EXTRA_DEPS}
@@ -154,10 +207,15 @@ function(compile_slang)
 
     set(${OUT_SPV_PATH} ${OUTPUT_SPV} PARENT_SCOPE)
 endfunction()
-compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/cube.mesh.slang MESH_SPV)
-compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/cube.frag.slang FRAG_SPV)
-compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.mesh.slang MODEL_MESH_SPV ${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.slang)
-compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.frag.slang MODEL_FRAG_SPV ${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.slang)
+# EXTRA_DEPS = 本 shader import 的契约文件（改契约须触发重编译，见 compile_slang 内注释的踩坑记录）
+compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/cube.mesh.slang MESH_SPV
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/types.slang ${CMAKE_CURRENT_SOURCE_DIR}/shaders/material.slang)
+compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/cube.frag.slang FRAG_SPV
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/types.slang)
+compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.mesh.slang MODEL_MESH_SPV
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.slang ${CMAKE_CURRENT_SOURCE_DIR}/shaders/material.slang)
+compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.frag.slang MODEL_FRAG_SPV
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.slang ${CMAKE_CURRENT_SOURCE_DIR}/shaders/material.slang)
 message(STATUS "MESH_SPV is: ${MESH_SPV}")
 message(STATUS "FRAG_SPV is: ${FRAG_SPV}")
 message(STATUS "MODEL_MESH_SPV is: ${MODEL_MESH_SPV}")
@@ -214,15 +272,17 @@ target_sources(vulkan_practice PUBLIC
                FILE_SET CXX_MODULES
                 FILES vkerror.cppm utils.cppm sdl3window.cppm QueueFamilyManager.cppm cube.cppm
                       camera.cppm scene_config.cppm
-                      shader.cppm VmaBuffer.cppm features.cppm vkinstance.cppm vkdevice.cppm
-                      vkswapchain.cppm vkresources.cppm vkrenderer.cppm ecs.cppm
+                       shader.cppm shader_registry.cppm VmaBuffer.cppm features.cppm vkinstance.cppm vkdevice.cppm
+                       vkswapchain.cppm vkresources.cppm vkrenderer.cppm ecs.cppm
                       gltf_loader.cppm model_importer.cppm texture_pool.cppm scene.cppm llm_debug.cppm
-                      ${TYPES_CPPM}
-                      ${MODEL_CPPM}
-                      ${FEATURES_CPPM}
+                       ${TYPES_CPPM}
+                       ${MODEL_CPPM}
+                       ${MATERIAL_CPPM}
+                       ${FEATURES_CPPM}
 )
 
-add_dependencies(vulkan_practice reflection_generated model_reflection_generated features_generated)
+add_dependencies(vulkan_practice reflection_generated model_reflection_generated
+                 material_reflection_generated features_generated)
 
 find_package(Vulkan REQUIRED)
 find_package(glm CONFIG REQUIRED)

@@ -18,7 +18,7 @@ import model_types_generated;
 
 namespace RGL {
 
-// 管线表下标的"未设置"值（资产记录的 pipelineIndex 初始值；Renderer::addModelPipeline 写入真实下标）
+// 管线表下标的"未设置"值（资产记录的 pipelineIndex 初始值；ShaderRegistry::addModelEntry / bindPipelineToAsset 写入真实下标）
 export inline constexpr uint32_t kInvalidPipelineIndex = std::numeric_limits<uint32_t>::max();
 
 // 纹理资产 id 的"未设置"值（同 kInvalidPipelineIndex 模式；批次 2 材质资产的 textureId 用它 = 无纹理 → 白）
@@ -37,12 +37,21 @@ export enum class AssetKind : uint8_t {
 // 引用资产，五方一致性（entity ↔ primitive ↔ heap slot ↔ 管线条目 ↔ draw-args）收敛为本表
 // 一处映射（E1.1）。生命周期：Resources 成员（与 descriptor heap / cube buffer 同层），
 // buffer 随 SharedAllocator 控制块存活，不再靠 main.cpp 局部变量的隐式 RAII 保证（E1.2/L6）。
+// 顶点 buffer 经 shared_ptr 共享（Phase 4 批次 2：拼接顶点 buffer——每模型一个 buffer +
+// 一个 heap slot，同模型 N 个 primitive 资产记录持同一 shared_ptr，末引用析构释放；
+// VmaBuffer 本体 move-only 不可拷贝，故经 shared_ptr 共享所有权）。
 export struct MeshAsset {
 	AssetKind kind = AssetKind::Model;
-	VmaBuffer vertexBuffer;
+	std::shared_ptr<VmaBuffer> vertexBuffer;          // 顶点 buffer（模型 = 拼接 buffer 共享；cube = 独占 shared_ptr）
 	uint32_t heapSlot = 0;                            // 绝对 heap slot（= reservedSlots() + 偏移，见 uploadModelMeshes）
-	uint32_t triangleCount = 0;                       // primitive 三角形数（group 数派生用）
-	uint32_t pipelineIndex = kInvalidPipelineIndex;   // 管线表下标（Renderer::addModelPipeline / bindPipelineToAsset 写入）
+	uint32_t triangleCount = 0;                       // primitive 三角形数
+	uint32_t groupCount = 0;                          // mesh task group 数（上传期按 shader 契约派生，D6：
+	                                                 //   model = ceil(triangleCount / kTrianglesPerGroup)，cube = 1 固定单 group——
+	                                                 //   cube mesh shader 恒输出 8 顶点/12 三角形，不套 ceil 公式（group>1 会越界读）；
+	                                                 //   0 = 不渲染。renderListSystem 每帧零推导零分支直接取）
+	uint32_t pipelineIndex = kInvalidPipelineIndex;   // 管线表下标（ShaderRegistry::addModelEntry / bindPipelineToAsset 写入）
+	uint32_t vertexOffset = 0;                        // 拼接顶点 buffer 内 per-primitive 字节偏移（Phase 4 批次 2；
+	                                                 //   进 push constant 的 DrawArgs.vertexOffset，model.mesh.slang Load 前缀；cube = 0）
 	// 索引 buffer（批次 3：cube 资产带索引；模型 primitive 去索引展开 = nullopt）
 	std::optional<VmaBuffer> indexBuffer;
 	std::optional<uint32_t> indexHeapSlot;
@@ -88,30 +97,35 @@ export class AssetTable {
    public:
 	// mesh（模型 primitive：去索引顶点流，无索引 buffer）
 	// 注册资产（上传顺序调用）→ 资产 id
-	uint32_t addMesh(VmaBuffer vertexBuffer, uint32_t heapSlot, uint32_t triangleCount) {
+	// groupCount 按 model shader 契约派生（D6：ceil(tri/kTrianglesPerGroup)，0 = 不渲染）
+	// vertexBuffer = 拼接顶点 buffer 的 shared_ptr（同模型 N 个 primitive 共享同一 buffer，
+	// Phase 4 批次 2）；vertexOffset = 本 primitive 在拼接 buffer 内的字节偏移（进 push constant）
+	uint32_t addMesh(std::shared_ptr<VmaBuffer> vertexBuffer, uint32_t heapSlot,
+		uint32_t triangleCount, uint32_t vertexOffset) {
+		const uint32_t groupCount = (triangleCount + kTrianglesPerGroup - 1) / kTrianglesPerGroup;
 		meshes.push_back(
-			MeshAsset{AssetKind::Model, std::move(vertexBuffer), heapSlot, triangleCount, kInvalidPipelineIndex});
+			MeshAsset{AssetKind::Model, std::move(vertexBuffer), heapSlot, triangleCount, groupCount,
+				kInvalidPipelineIndex, vertexOffset});
 		return static_cast<uint32_t>(meshes.size() - 1);
 	}
 	[[nodiscard]] const MeshAsset& get(uint32_t id) const { return meshes[id]; }
-	// 管线条目引用（Renderer::addModelPipeline 在创建管线条目后写回）
+	// 管线条目引用（ShaderRegistry::addModelEntry / bindPipelineToAsset 在创建管线条目后写回）
 	void setPipelineIndex(uint32_t id, uint32_t pipelineIndex) { meshes[id].pipelineIndex = pipelineIndex; }
 	// 带索引 mesh（批次 3：cube 资产——顶点 + 索引双 buffer/双 slot）
+	// groupCount = 1 固定（cube mesh shader 恒输出 8 顶点/12 三角形，单 group，不套 ceil 公式）
 	uint32_t addIndexedMesh(VmaBuffer vertexBuffer, uint32_t vertexSlot, VmaBuffer indexBuffer,
 		uint32_t indexSlot, uint32_t triangleCount) {
-		meshes.push_back(MeshAsset{AssetKind::Cube, std::move(vertexBuffer), vertexSlot, triangleCount,
-			kInvalidPipelineIndex, std::move(indexBuffer), indexSlot});
+		meshes.push_back(MeshAsset{AssetKind::Cube, std::make_shared<VmaBuffer>(std::move(vertexBuffer)),
+			vertexSlot, triangleCount, 1, kInvalidPipelineIndex, 0, std::move(indexBuffer), indexSlot});
 		return static_cast<uint32_t>(meshes.size() - 1);
 	}
 	[[nodiscard]] uint32_t meshSize() const { return static_cast<uint32_t>(meshes.size()); }
-	// 模型顶点槽计数（白纹理 slot 契约断言用："纹理首槽 = 白 = 模型顶点槽之后"；
-	// 批次 3 cube 资产与本容器共用但不占模型顶点槽，按 kind 计数）
-	[[nodiscard]] uint32_t modelMeshCount() const {
-		uint32_t n = 0;
-		for (const auto& m : meshes)
-			if (m.kind == AssetKind::Model) ++n;
-		return n;
-	}
+	// 模型顶点槽计数（Phase 4 批次 2：拼接顶点 buffer = 每模型一个 slot，白纹理 slot 契约断言用：
+	// "纹理首槽 = 白 = 模型顶点槽之后"）。按模型数（非 primitive 数）计数——uploadModelMeshes
+	// 每模型上传期递增一次；批次 3 cube 资产与本容器共用但不占模型顶点槽
+	uint32_t modelSlotCount = 0;
+	[[nodiscard]] uint32_t getModelSlotCount() const { return modelSlotCount; }
+	void incrementModelSlotCount() { ++modelSlotCount; }
 
 	// 纹理（deque：元素地址稳定 = 描述符指针链的稳定存储介质，见 TextureAsset 注释）
 	// 放置资产记录（deque）→ 调用方在返回引用上设置自/兄弟引用后写描述符 → 资产 id
@@ -142,8 +156,8 @@ export class Resources {
 	// primitive 数精确预分配（原 modelPrimitiveCount 构造参数删除）。用户槽位布局
 	//（相对 reserved range 起点，Phase 3 统一 slot 分配器 allocSlot 连续分配）：
 	//   [0, 2)    cube（顶点 slot 0 / 索引 slot 1，types_generated）
-	//   [2, 2+N)  模型顶点 slot（每 primitive 一个，slot = reserved + HeapSlotModelVertexBase + i，
-	//   见 model_importer.cppm）
+	//   [2, 2+N)  模型顶点 slot（每模型一个——拼接顶点 buffer，Phase 4 批次 2；
+	//   slot = reserved + HeapSlotModelVertexBase + 模型序，见 model_importer.cppm）
 	//   [2+N, …)  纹理 slot（texture_pool.cppm uploadModelTextures：2+N = 白 1×1 特例（契约断言），
 	//   其余按上传序，资产记录在 AssetTable，见 texture_pool.cppm）
 	//   其余为裕量；运行时扩容 = 重建 heap + 重写全部描述符
@@ -323,7 +337,7 @@ export class Resources {
 
 	// 容量 = reserved + 用户槽位。用户槽位布局（相对 reserved range 起点，allocSlot 连续分配）：
 	//   cube 顶点 slot 0、索引 slot 1（types_generated 的 HeapSlotVertexOffset/HeapSlotIndexOffset）
-	//   模型顶点 slot 基址 HeapSlotModelVertexBase=2（model_types_generated），每 primitive 一个；
+	//   模型顶点 slot 基址 HeapSlotModelVertexBase=2（model_types_generated），每模型一个（拼接顶点 buffer，Phase 4 批次 2）；
 	//   纹理 slot 自 2+N 起（texture_pool.cppm，资产记录在 AssetTable）；
 	//   剩余裕量 kUserSlotMargin（固定，与场景内容解耦——E1.3）
 	std::expected<RGL::VmaDescriptorHeap, Error> createDescriptorHeap() {

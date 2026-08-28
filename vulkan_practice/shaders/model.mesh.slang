@@ -1,4 +1,5 @@
 import model;
+import material;  // 统一 push constant（Phase 4：DrawArgs 超集，model 风格消费 mvp/totalTriangles/baseColor）
 
 // 无 task stage：一次 mesh 调用 = 一个 group，group 序号 = SV_GroupID.x
 //（CPU 端 drawMeshTasksEXT(groupCount, 1, 1) 派生），每 group 处理
@@ -24,7 +25,7 @@ void main(
 
     uint groupIndex = groupID.x;
     uint firstTriangle = groupIndex * kTrianglesPerGroup;
-    uint remaining = max(modelDrawArgs.totalTriangles - firstTriangle, 0u);
+    uint remaining = max(drawArgs.totalTriangles - firstTriangle, 0u);
     uint triangleCount = min(kTrianglesPerGroup, remaining);
     uint vertexCount = triangleCount * 3;
 
@@ -32,11 +33,13 @@ void main(
 
     if (ti < vertexCount) {
         uint vertexIndex = firstTriangle * 3 + ti;
-        uint byteOffset = vertexIndex * kVertexStride;
+        // 拼接顶点 buffer（Phase 4 批次 2）：本 primitive 在拼接 buffer 内的字节偏移
+        //（DrawArgs.vertexOffset，CPU 端 renderListSystem 经资产表 MeshAsset.vertexOffset 写入）
+        uint byteOffset = drawArgs.vertexOffset + vertexIndex * kVertexStride;
         float3 pos = asfloat(modelVertexBuffer.Load3(byteOffset));         // @0
         float3 nrm = asfloat(modelVertexBuffer.Load3(byteOffset + 12));   // @12
         float2 uv  = asfloat(modelVertexBuffer.Load2(byteOffset + 24));  // @24
-        verts[ti].position = mul(modelDrawArgs.mvp, float4(pos, 1.0));
+        verts[ti].position = mul(drawArgs.mvp, float4(pos, 1.0));
         verts[ti].normal = nrm;
         verts[ti].uv = uv;
     }

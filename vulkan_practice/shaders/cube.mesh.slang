@@ -1,4 +1,5 @@
 import types;
+import material;  // 统一 push constant（Phase 4：DrawArgs 超集，cube 只消费 mvp）
 
 [shader("mesh")]
 [numthreads(32, 1, 1)]

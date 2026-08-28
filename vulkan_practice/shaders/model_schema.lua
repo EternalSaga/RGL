@@ -1,21 +1,10 @@
 -- model_schema.lua
 -- Contract definition for model.slang（Phase 2：flat unlit + position/normal/uv）
 -- Used by reflection_tool to verify reflection JSON consistency
--- 和生成 model_types_generated.cppm（ModelDrawArgs / ModelVertex / heap slot 常量）
+-- 和生成 model_types_generated.cppm（ModelVertex / heap slot 常量 / kTrianglesPerGroup）
+-- push constant 契约归 material_schema.lua（Phase 4 统一 DrawArgs 超集，
+-- material.slang 独立反射 → material_types_generated；本契约只校验 buffer slot/顶点布局/常量段）
 return {
-    -- Push constant buffer definitions
-    -- name matches the slang variable name, not the struct name
-    pushConstants = {
-        {
-            name = "modelDrawArgs",
-            fields = {
-                { name = "mvp", type = "matrix", rowCount = 4, columnCount = 4 },
-                { name = "totalTriangles", type = "uint" },
-                { name = "baseColor", type = "vec4" },
-            },
-        },
-    },
-
     -- Descriptor table slot definitions
     -- 模型顶点缓冲：运行时 slot = reservedSlots() + heapSlotOffset + primitiveIndex
     -- 基址 2 = cube 顶点 0 / 索引 1 之后（统一 slot 分配器连续分配，见 vkresources.cppm allocSlot）

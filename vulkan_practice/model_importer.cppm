@@ -1,5 +1,6 @@
 module;
 #include <vulkan/vulkan.hpp>
+#include <vulkan/vulkan_raii.hpp>
 #include <vk_mem_alloc.h>
 #include <entt/entt.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -17,11 +18,85 @@ import model_types_generated;
 
 namespace RGL {
 
-// GPU 上传：每 primitive 建一个 BDA storage buffer（CPU→GPU mapped 写入顶点数据），
-// 描述符写进 heap 槽位（vkWriteResourceDescriptorsEXT，同 cube 的写法），并把 buffer +
-// slot + 三角形数注册进 Resources 资产表（一条 MeshAsset 记录，E1.1）。
-// 资产数据生命周期归资产表（Resources 成员），不再经返回值持有（E1.2/L6）。
-// 返回资产 id 列表（与 model.primitives 下标对齐：上传顺序 = primitive 顺序）。
+// GPU 上传：拼接顶点 buffer（每模型一个 BDA storage buffer，CPU→GPU mapped 按各 primitive
+// 偏移写入全部顶点数据）+ 一个 heap 描述符槽（整段拼接 buffer = 单一地址范围），注册进
+// Resources 资产表（每 primitive 一条 MeshAsset 记录，共享拼接 buffer 的 shared_ptr +
+// per-primitive vertexOffset，E1.1）。资产数据生命周期归资产表（Resources 成员），不再经
+// 返回值持有（E1.2/L6）。返回资产 id 列表（与 model.primitives 下标对齐：上传顺序 = primitive 顺序）。
+//
+// Phase 4 批次 2：管线去重依赖"同 (顶点 slot, 纹理 slot) 组合共享一条管线条目"——binding
+// mapping 是 shader object 级状态，per-primitive 各占 slot → 392 条；拼接后同模型全 primitive
+// 共享一个顶点 slot，仅纹理 slot 差异决定条目拆分（cottage 12 个纹理 slot → 12 条）。
+// per-primitive 偏移进 push constant DrawArgs.vertexOffset（model.mesh.slang Load 前缀）。
+struct ChunkPrim { uint32_t chunk; uint32_t offset; };
+
+// DIAG（Phase 4 批次 2 判别）：RGL_VTX_CANARY=1 读回拼接 buffer 顶点数据比对 CPU，
+// 确认 GPU 上数据是否正确（artifact 根因判别：数据错=上传/memcpy 问题；数据对=读取/
+// descriptor/shader 问题）。每块 VkBuffer 基址 32B（= 该块首个 primitive 首顶点）经
+// vkCmdCopyBuffer 拷进 staging 回读比对（独立 cmd + fence，启动期一次 GPU 停顿）。
+static void verifyVertexUpload(RGL::DeviceContext& vkDevice, RGL::Resources& res,
+	const RGL::GltfModel& model, const std::vector<std::shared_ptr<VmaBuffer>>& chunkBuffers,
+	const std::vector<ChunkPrim>& primChunk) {
+	auto* logger = RLLogger::getInstance();
+	if (!logger)
+		return;
+	auto& device = vkDevice.getDevice();
+	const uint32_t chunkCount = static_cast<uint32_t>(chunkBuffers.size());
+	const uint32_t primitiveCount = static_cast<uint32_t>(model.primitives.size());
+	// staging（32B/primitive）
+	const vk::DeviceSize total = static_cast<vk::DeviceSize>(primitiveCount) * 32;
+	vk::BufferCreateInfo si{};
+	si.size = total;
+	si.usage = vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer;
+	si.sharingMode = vk::SharingMode::eExclusive;
+	VmaAllocationCreateInfo ai{};
+	ai.usage = VMA_MEMORY_USAGE_GPU_TO_CPU;
+	ai.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
+	VmaAllocationInfo ad;
+	auto sr = res.getAllocator().createBuffer(si, ai, &ad);
+	if (!sr) {
+		logger->error("vtx canary: staging alloc FAIL");
+		return;
+	}
+	auto staging = std::move(*sr);
+	auto cmdAlloc = device.allocateCommandBuffers(vk::CommandBufferAllocateInfo{
+		*vkDevice.getGraphicsCommandPool(), vk::CommandBufferLevel::ePrimary, 1});
+	auto cmd = std::move(cmdAlloc[0]);
+	cmd.begin(vk::CommandBufferBeginInfo{});
+	// 每 primitive 读回首顶点（32B）自其块内偏移（primChunk[i].offset）——查全部非零偏移
+	for (uint32_t i = 0; i < primitiveCount; ++i) {
+		const VkBufferCopy region{primChunk[i].offset, static_cast<vk::DeviceSize>(i) * 32, 32};
+		::vkCmdCopyBuffer(*cmd, **chunkBuffers[primChunk[i].chunk], *staging, 1, &region);
+	}
+	cmd.end();
+	auto fence = vk::raii::Fence(device, vk::FenceCreateInfo{});
+	VkCommandBuffer cb = *cmd;
+	VkSubmitInfo submitInfo{};
+	submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+	submitInfo.commandBufferCount = 1;
+	submitInfo.pCommandBuffers = &cb;
+	::vkQueueSubmit(vkDevice.getGraphicsQueue(), 1, &submitInfo, *fence);
+	device.waitForFences(*fence, true, UINT64_MAX);
+	uint8_t* back = static_cast<uint8_t*>(ad.pMappedData);
+	bool allPass = true;
+	uint32_t failCount = 0;
+	for (uint32_t i = 0; i < primitiveCount; ++i) {
+		const uint8_t* cpu = reinterpret_cast<const uint8_t*>(model.primitives[i].vertices.data());
+		const bool pass = std::memcmp(back + i * 32, cpu, 32) == 0;
+		if (!pass) {
+			++failCount;
+			allPass = false;
+			if (failCount <= 8)
+				logger->info("vtx canary prim {} (chunk {} off {:x}): FAIL (cpu={:08x} gpu={:08x})",
+					i, primChunk[i].chunk, primChunk[i].offset,
+					*reinterpret_cast<const uint32_t*>(cpu),
+					*reinterpret_cast<const uint32_t*>(back + i * 32));
+		}
+	}
+	logger->info("vtx canary: {} ({}/{} primitives, {} chunks)",
+		allPass ? "ALL PASS" : "FAIL", primitiveCount - failCount, primitiveCount, chunkCount);
+}
+
 export [[nodiscard]] std::expected<std::vector<uint32_t>, Error> uploadModelMeshes(
 	RGL::DeviceContext& vkDevice, RGL::Resources& res, const RGL::GltfModel& model) {
 	auto* logger = RLLogger::getInstance();
@@ -29,61 +104,131 @@ export [[nodiscard]] std::expected<std::vector<uint32_t>, Error> uploadModelMesh
 	auto& heap = res.getDescriptorHeap();
 	auto& assets = res.getAssetTable();
 
-	std::vector<uint32_t> assetIds;
 	const uint32_t primitiveCount = static_cast<uint32_t>(model.primitives.size());
-	assetIds.reserve(primitiveCount);
 
-	for (uint32_t i = 0; i < primitiveCount; ++i) {
-		const auto& prim = model.primitives[i];
-		const auto& vertices = prim.vertices;
-		const vk::DeviceSize size = static_cast<vk::DeviceSize>(vertices.size() * sizeof(ModelVertex));
+	// Phase 4 批次 2 分块拼接（2026-08-28 判别定案）：单一 82MB 拼接 buffer 的 descriptor
+	// range（82MB）在 RADV 上导致局部渲染 artifact（740px 内容→黑，确定性，cottage 特定；
+	// grass 小 buffer 正常）。high VA 非根因（4-80MB 各尺寸 BDA buffer 均落 high VA，旧
+	// 392 小 buffer 同样 high VA 却正常）；waitIdle 亦无效（非 flush 时序）。分块（每块
+	// kVertexChunkBytes，独立 buffer + 独立 descriptor range + 独立 slot）规避大 range，
+	// 每块仍被同块内 primitive 共享 vertex slot → 管线去重部分保留（条目 = 块数 × 纹理 slot）。
+	// per-primitive：heapSlot = 所在块的 slot，vertexOffset = 块内字节偏移（进 push constant）。
+	// DIAG：RGL_CHUNK_MB 可覆盖块大小（MB），测 descriptor range 尺寸阈值（默认 16MB）
+	constexpr vk::DeviceSize kDefaultChunkBytes = 16ull * 1024 * 1024;
+	const vk::DeviceSize kVertexChunkBytes = [] {
+		if (const char* env = std::getenv("RGL_CHUNK_MB")) {
+			const unsigned mb = std::strtoul(env, nullptr, 10);
+			if (mb >= 1)
+				return static_cast<vk::DeviceSize>(mb) * 1024 * 1024;
+		}
+		return kDefaultChunkBytes;
+	}();
 
+	// ① 分块：per-primitive (块序号, 块内偏移) + 每块总字节
+	std::vector<ChunkPrim> primChunk(primitiveCount);
+	std::vector<vk::DeviceSize> chunkBytes;
+	{
+		vk::DeviceSize curOffset = 0;
+		uint32_t curChunk = 0;
+		chunkBytes.push_back(0);
+		// DIAG（Phase 4 批次 2 判别）：RGL_ONE_PRIM_PER_CHUNK=1 强制每 primitive 独占一块
+		//（等效原 per-primitive 设计但走分块路径 + vertexOffset）——测"多 primitive 共享一块
+		// descriptor（多偏移读）"是否是 artifact 根因
+		const bool onePrimPerChunk = std::getenv("RGL_ONE_PRIM_PER_CHUNK") != nullptr;
+		for (uint32_t i = 0; i < primitiveCount; ++i) {
+			const vk::DeviceSize primBytes =
+				static_cast<vk::DeviceSize>(model.primitives[i].vertices.size()) * sizeof(ModelVertex);
+			if (onePrimPerChunk ? (curOffset > 0)
+				: (curOffset > 0 && curOffset + primBytes > kVertexChunkBytes)) {
+				++curChunk;
+				curOffset = 0;
+				chunkBytes.push_back(0);
+			}
+			primChunk[i] = {curChunk, static_cast<uint32_t>(curOffset)};
+			curOffset += primBytes;
+			chunkBytes[curChunk] += primBytes;
+		}
+	}
+	const uint32_t chunkCount = static_cast<uint32_t>(chunkBytes.size());
+
+	// ② 每块一个 buffer + 一个 slot（descriptor range = 块大小）；块序连续分配，
+	// 首块首 slot 契约 = reserved + HeapSlotModelVertexBase（违例 = 契约漂移）
+	std::vector<std::shared_ptr<VmaBuffer>> chunkBuffers(chunkCount);
+	std::vector<uint32_t> chunkSlots(chunkCount);
+	for (uint32_t c = 0; c < chunkCount; ++c) {
 		vk::BufferCreateInfo bufferInfo{};
-		bufferInfo.size = size;
+		bufferInfo.size = chunkBytes[c];
 		bufferInfo.usage = vk::BufferUsageFlagBits::eShaderDeviceAddress |
 			vk::BufferUsageFlagBits::eStorageBuffer;
 		bufferInfo.sharingMode = vk::SharingMode::eExclusive;
-
 		VmaAllocationCreateInfo allocInfo{};
 		allocInfo.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
 		allocInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT |
 			VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-
 		VmaAllocationInfo allocData;
 		auto bufResult = res.getAllocator().createBufferWithAddress(device, bufferInfo, allocInfo, &allocData);
 		if (!bufResult)
 			return std::unexpected(std::move(bufResult).error());
 		auto buffer = std::move(*bufResult);
-
-		std::memcpy(allocData.pMappedData, vertices.data(), size);
-
-		// 描述符：storage buffer → heap 槽位（统一 slot 分配器，Phase 3：res.allocSlot 连续分配；
-		// 布局约定 = reserved + HeapSlotModelVertexBase + i（schema 生成的基址常量），违例 = 契约漂移）
-		const uint32_t expectedSlot = heap.getReservedSlots() + HeapSlotModelVertexBase + i;
-		auto slotResult = res.allocSlot("model.vertex");
+		char* mapped = static_cast<char*>(allocData.pMappedData);
+		// 块内 primitive 按块内偏移写入
+		for (uint32_t i = 0; i < primitiveCount; ++i) {
+			if (primChunk[i].chunk != c)
+				continue;
+			const auto& vertices = model.primitives[i].vertices;
+			std::memcpy(mapped + primChunk[i].offset, vertices.data(),
+				static_cast<vk::DeviceSize>(vertices.size()) * sizeof(ModelVertex));
+		}
+		const uint32_t expectedSlot = heap.getReservedSlots() + HeapSlotModelVertexBase + assets.getModelSlotCount();
+		auto slotResult = res.allocSlot("model.vertices.chunk");
 		if (!slotResult)
 			return std::unexpected(std::move(slotResult).error());
 		const uint32_t slot = *slotResult;
 		if (slot != expectedSlot)
 			return std::unexpected(Error{ErrorCode::DescriptorSlotOutOfBounds,
-				"heap slot layout drift: model.vertex[" + std::to_string(i) + "]"});
+				"heap slot layout drift: model.vertices.chunk[" + std::to_string(c) + "] (slot " +
+				std::to_string(slot) + " != expected " + std::to_string(expectedSlot) + ")"});
 		auto slotAddr = heap.getSlotCpuAddress(slot);
 		if (!slotAddr)
 			return std::unexpected(std::move(slotAddr).error());
-
-		vk::DeviceAddressRangeEXT range{buffer.getDeviceAddress(), size};
+		vk::DeviceAddressRangeEXT range{buffer.getDeviceAddress(), chunkBytes[c]};
 		vk::ResourceDescriptorInfoEXT desc{};
 		desc.type = vk::DescriptorType::eStorageBuffer;
 		desc.data.pAddressRange = &range;
 		vk::HostAddressRangeEXT dst{*slotAddr, heap.getDescriptorSize()};
 		device.writeResourceDescriptorsEXT(desc, dst);
+		chunkBuffers[c] = std::make_shared<VmaBuffer>(std::move(buffer));
+		chunkSlots[c] = slot;
+		assets.incrementModelSlotCount();
+	}
 
-		const uint32_t id = assets.addMesh(std::move(buffer), slot, prim.triangleCount);
-		if (logger)
-			logger->debug("model primitive {}: {} vertices ({}B) → heap slot {} / asset {}",
-				i, vertices.size(), size, slot, id);
+	// DIAG（Phase 4 批次 2 判别）：临时跳过 slot 把纹理推回 batch1 布局（394-405），
+	// 测"纹理 slot 位置（8-19 vs 394-405）"是否是 artifact 根因。配合 texture_pool 白契约临时改 394
+	if (std::getenv("RGL_SKIP_TO_TEX394") != nullptr) {
+		const uint32_t target = heap.getReservedSlots() + HeapSlotModelVertexBase + 392;  // 白应落此槽（reserved+394，batch1 布局）
+		while (true) {
+			auto r = res.allocSlot("DIAG.skip");
+			if (!r)
+				return std::unexpected(std::move(r).error());
+			if (*r == target - 1)
+				break;  // nextSlot 现为 target，白纹理将落于 target
+		}
+	}
+
+	// ③ 注册 per-primitive 资产记录（所在块的 shared_ptr + 块 slot + 块内偏移）
+	std::vector<uint32_t> assetIds;
+	assetIds.reserve(primitiveCount);
+	for (uint32_t i = 0; i < primitiveCount; ++i) {
+		const auto& prim = model.primitives[i];
+		const uint32_t id = assets.addMesh(chunkBuffers[primChunk[i].chunk], chunkSlots[primChunk[i].chunk],
+			prim.triangleCount, primChunk[i].offset);
 		assetIds.push_back(id);
 	}
+	if (logger)
+		logger->info("model: {} primitives → {} 块拼接顶点 buffer (每块 ≤{}KB) / {} heap slot",
+			primitiveCount, chunkCount, kVertexChunkBytes / 1024, chunkCount);
+	if (std::getenv("RGL_VTX_CANARY") != nullptr)
+		verifyVertexUpload(vkDevice, res, model, chunkBuffers, primChunk);
 	return assetIds;
 }
 

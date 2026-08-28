@@ -15,8 +15,7 @@ import vk_resources;
 import vk_renderer;
 import llm_debug;
 import texture_pool;
-import types_generated;
-import model_types_generated;
+import material_types_generated;  // Phase 4：统一 DrawArgs 超集（scalar 布局 96B）
 import scene;
 import camera;
 import rllogger;
@@ -187,23 +186,23 @@ void projectionSystem(entt::registry& rg) {
 
 // 每帧 push constant 存储（帧数据：活过 renderSystem 循环，DrawCall 的 span 指向其中；
 // vkCmdPushDataEXT 录制时读取，只要求内存活到录制结束）
+// Phase 4 归一（H1 解决）：单一统一 DrawArgs 超集（material_types_generated，scalar 布局 96B）
+// 按资产 id 索引——删旧 cube 单例(64B) + model 每资产(96B) 双容器与 AssetKind 分支。
 struct RenderListState {
-	RGL::DrawArgs cubeArgs{};  // cube（64B，types_generated static_assert 与 shader 反射一致）
-	std::vector<RGL::ModelDrawArgs> modelArgs;  // 模型每资产一份（96B，model_types_generated；按资产 id 索引）
+	std::vector<RGL::DrawArgs> args;  // 每资产一份（96B；资产 id 索引，cube/model 共用同一路径）
 };
 
 // ViewProjection + 场景实体 + 场景旋转 → FrameDrawList context（单一 draw 路径）。
 //
-// 统一 view 按资产 kind 分支（批次 3：cube 一等资产，删过渡态特例 + 每帧字符串查找）：
-//   cube — DrawArgs 64B（每顶点色，baseColor 未用）；mvp = proj·view·spin·world
-//          （cube 实体 Transform = identity，与旧特例 proj·view·spin 位级一致）
-//   model — ModelDrawArgs 96B：mvp = proj·view·spin·world；资产 id → Resources 资产表
-//          记录：三角形数 / 管线条目下标（E1.1/E5.1）、baseColor 经材质资产解析
-//          （批次 2，E5.3）；group 数 = ceil(triangles / kTrianglesPerGroup)（契约常量
-//          由 model_schema.lua 生成，见 model_types_generated；mesh shader 无 task stage，
-//          group 序号经 SV_GroupID.x 派生）
-// 画不画 = 实体有无（数据驱动）；两分支 push constant 布局不统一 = 留 AssetKind 分支
-//（完整归一待 Phase 4 ShaderRegistry，ecs_compliance_review H1 注记）。
+// Phase 4 归一：统一 DrawArgs 超集（所有 shader 风格共享同一布局，material.slang 单一真相源，
+// scalar 布局 96B）——单一写入路径写满字段，零 AssetKind 分支（旧 cube 64B / model 96B
+// 双 struct 分支删除，ecs_compliance_review H1 注记解决）。各风格只消费自己需要的字段
+//（未读字段无害）：cube 只读 mvp（每顶点色），model 读 mvp/totalTriangles/baseColor。
+// groupCount 经资产静态字段（MeshAsset.groupCount，上传期按 shader 契约派生，D6）：
+// model=ceil(tri/kTrianglesPerGroup)、cube=1 固定单 group、0=不渲染——每帧零推导零分支。
+// vertexOffset 经资产静态字段（MeshAsset.vertexOffset，批次 2 拼接顶点 buffer per-primitive
+// 偏移，上传期写入）；roughnessMetallic（批次 3 pbr 材质）当前写占位值，对应批次启用真实数据源。
+// 画不画 = 实体有无（数据驱动）。
 void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListState& state) {
 	auto& list = rg.ctx().get<FrameDrawList>();
 	const auto& viewProj = rg.ctx().get<ViewProjection>();
@@ -217,25 +216,22 @@ void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListS
 			const auto& asset = assets.get(meshRef.asset);
 			if (asset.pipelineIndex == kInvalidPipelineIndex)
 				return;  // 资产无管线条目（防御：注册顺序异常，见 registerScene/bindPipelineToAsset）
-			if (asset.kind == RGL::AssetKind::Cube) {
-				state.cubeArgs.mvp = viewProj.proj * viewProj.view * spin.matrix * tf.world;
-				fresh.calls.push_back(DrawCall{
-					asset.pipelineIndex, std::as_bytes(std::span<const RGL::DrawArgs>{&state.cubeArgs, 1}), 1});
-				return;
-			}
-			if (meshRef.asset >= state.modelArgs.size())
-				state.modelArgs.resize(meshRef.asset + 1);
-			auto& args = state.modelArgs[meshRef.asset];
+			if (asset.groupCount == 0)
+				return;  // 不渲染（0 三角形）
+			if (meshRef.asset >= state.args.size())
+				state.args.resize(meshRef.asset + 1);
+			auto& args = state.args[meshRef.asset];
 			args.mvp = viewProj.proj * viewProj.view * spin.matrix * tf.world;
 			args.totalTriangles = asset.triangleCount;
-			args.baseColor = assets.getMaterial(matRef.material).baseColor;  // 批次 2：材质资产表解析
-
-			const uint32_t groupCount =
-				(asset.triangleCount + kTrianglesPerGroup - 1) / kTrianglesPerGroup;
-			if (groupCount == 0) return;
+			// DIAG（Phase 4 批次 2 判别）：RGL_VTXOFF_ZERO=1 时 vertexOffset 全置 0（测
+			// "非零偏移 Load" 是否是 artifact 根因；几何会错但判别黑块来源）
+			args.vertexOffset = (std::getenv("RGL_VTXOFF_ZERO") != nullptr) ? 0u : asset.vertexOffset;
+			const auto& mat = assets.getMaterial(matRef.material);  // 批次 2：材质资产表解析
+			args.baseColor = mat.baseColor;
+			args.roughnessMetallic = {0.0f, 0.0f};  // Phase 4 批次 3：mat.roughness/metallic（pbr 风格消费）
 			fresh.calls.push_back(DrawCall{
 				asset.pipelineIndex,
-				std::as_bytes(std::span<const RGL::ModelDrawArgs>{&args, 1}), groupCount});
+				std::as_bytes(std::span<const RGL::DrawArgs>{&args, 1}), asset.groupCount});
 		});
 
 	list.calls = std::move(fresh.calls);

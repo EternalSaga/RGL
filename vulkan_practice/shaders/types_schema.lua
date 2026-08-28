@@ -2,16 +2,8 @@
 -- Contract definition for types.slang
 -- Used by schema_validator to verify reflection JSON consistency
 return {
-    -- Push constant buffer definitions
-    -- name matches the slang variable name, not the struct name
-    pushConstants = {
-        {
-            name = "drawArgs",
-            fields = {
-                { name = "mvp", type = "matrix", rowCount = 4, columnCount = 4 },
-            },
-        },
-    },
+    -- push constant 契约归 material_schema.lua（Phase 4 统一 DrawArgs 超集，
+    -- material.slang 独立反射 → material_types_generated；本契约只校验 buffer slot 段）
 
     -- Descriptor table slot definitions
     -- index: slang binding index (validated against reflection JSON)
