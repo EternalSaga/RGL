@@ -57,17 +57,18 @@ export class ShaderRegistry {
 	// 下标 → 管线（llm_debug 离屏重渲经 Renderer::pipelineAt 委托到此）
 	[[nodiscard]] const RGL::RenderPipeline& pipelineAt(uint32_t index) const { return entries[index].pipeline; }
 
-	// 模型管线条目（资产上传期）：用风格规格创建 RenderPipeline，binding mapping 显式烘焙
+	// 模型管线条目（资产上传期）：用管线规格创建 RenderPipeline，binding mapping 显式烘焙
 	// 顶点 slot + 纹理 slot（binding 1 = resource heap 的 SAMPLED_IMAGE 描述符槽、
 	// binding 2 = sampler heap 槽——OpTypeSampler 映射，共享一份 sampler 描述符，
 	// 偏移 = samplerSlot * samplerHeap.getDescriptorSize()）。
-	// 按 (风格, 顶点 slot, 纹理 slot) 组合去重：同组合返回既有条目下标（不重复建 shader
-	// object）；新组合建条目并记入 indexByName / 去重表。返回条目下标，调用方经
-	// bindToAsset 写回资产记录（renderListSystem 经资产表解析管线，无字符串约定）。
-	// 失败（SPV 加载失败等）抛出（同构造期路径）。
-	[[nodiscard]] uint32_t addModelEntry(const std::string& styleName, uint32_t vertexSlot,
+	// 首参 specName = 管线规格名（Phase 4 批次 3：风格→规格名映射在 main.cpp 经 scene.lua
+	// styles 表完成，本函数只认规格名）；按 (规格, 顶点 slot, 纹理 slot) 组合去重——
+	// 同组合返回既有条目下标（不重复建 shader object）；新组合建条目并记入 indexByName /
+	// 去重表。返回条目下标，调用方经 bindToAsset 写回资产记录（renderListSystem 经资产表
+	// 解析管线，无字符串约定）。失败（规格缺失 / SPV 加载失败等）抛出（同构造期路径）。
+	[[nodiscard]] uint32_t addModelEntry(const std::string& specName, uint32_t vertexSlot,
 		uint32_t textureSlot, uint32_t samplerSlot) {
-		const auto key = std::make_tuple(styleName, vertexSlot, textureSlot);
+		const auto key = std::make_tuple(specName, vertexSlot, textureSlot);
 		// DIAG（Phase 4 批次 2 判别）：RGL_NO_DEDUP=1 禁用去重（每 primitive 独立条目，不共享
 		// shader object）——测"共享 shader object（dedup）"是否是 artifact 根因
 		if (std::getenv("RGL_NO_DEDUP") == nullptr) {
@@ -75,14 +76,14 @@ export class ShaderRegistry {
 				return it->second;
 		}
 
-		const RGL::PipelineSpec* spec = findSpec(styleName.c_str());
+		const RGL::PipelineSpec* spec = findSpec(specName.c_str());
 		if (!spec)
-			throw std::runtime_error("pipeline spec not found: " + styleName);
+			throw std::runtime_error("pipeline spec not found: " + specName);
 		const uint32_t descriptorSize = res.getDescriptorHeap().getDescriptorSize();
 		const uint32_t samplerHeapOffset =
 			samplerSlot * res.getSamplerHeap().getDescriptorSize();
 		auto entry = PipelineEntry{
-			styleName + ".v" + std::to_string(vertexSlot) + ".t" + std::to_string(textureSlot),
+			specName + ".v" + std::to_string(vertexSlot) + ".t" + std::to_string(textureSlot),
 			RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), descriptorSize,
 				vertexSlot, vertexSlot, textureSlot, samplerHeapOffset, true)};
 		const uint32_t index = static_cast<uint32_t>(entries.size());
@@ -91,7 +92,7 @@ export class ShaderRegistry {
 		entries.push_back(std::move(entry));
 		if (auto* logger = RLLogger::getInstance())
 			logger->debug("pipeline entry: {} (vertex slot {} / texture slot {}) → 下标 {}",
-				styleName, vertexSlot, textureSlot, index);
+				specName, vertexSlot, textureSlot, index);
 		return index;
 	}
 
@@ -152,6 +153,12 @@ export class ShaderRegistry {
 			static const RGL::PipelineSpec defaultModel{
 				"model", "generated_shaders/model.mesh.spv", "generated_shaders/model.frag.spv"};
 			return &defaultModel;
+		}
+		if (std::strcmp(name, "model_pbr") == 0) {
+			static const RGL::PipelineSpec defaultModelPbr{
+				"model_pbr", "generated_shaders/model.mesh.spv",
+				"generated_shaders/model_pbr.frag.spv"};
+			return &defaultModelPbr;
 		}
 		return nullptr;
 	}

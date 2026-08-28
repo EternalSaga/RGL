@@ -19,6 +19,17 @@ return {
             mesh = "generated_shaders/model.mesh.spv",
             frag = "generated_shaders/model.frag.spv",
         },
+        {
+            name = "model_pbr",
+            mesh = "generated_shaders/model.mesh.spv",  -- mesh 复用 model.mesh.spv（Phase 4 批次 3）
+            frag = "generated_shaders/model_pbr.frag.spv",
+        },
+    },
+
+    -- Phase 4 批次 3：风格名→管线规格名映射（loader 输出 unlit 字段派生风格，缺失回落默认）
+    styles = {
+        unlit = "model",
+        pbr = "model_pbr",
     },
 
     spin = false,  -- 场景整体时间旋转（true 便于肉眼判断渲染对错；false 静止便于排查遮挡）

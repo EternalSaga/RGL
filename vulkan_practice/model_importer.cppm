@@ -272,18 +272,22 @@ export entt::entity registerScene(entt::registry& rg, const RGL::GltfModel& mode
 				}
 		}
 		materialOfIndex[index] = assets.addMaterial(
-			MaterialAsset{prim.baseColor, textureId, prim.alphaModeBlend});
+			MaterialAsset{prim.baseColor, textureId, prim.alphaModeBlend,
+				prim.metallic, prim.roughness, prim.unlit});
 	}
 
 	// per-primitive 材质引用 + 一致性金丝雀（glTF 格式保证同 materialIndex = 同材质字段：
-	// baseColorFactor/alphaMode；违例 = loader bug，启动期直接报错，不静默带病渲染）。
+	// baseColorFactor/alphaMode/metallicFactor/roughnessFactor/unlit 扩展；违例 = loader bug，
+	// 启动期直接报错，不静默带病渲染）。
 	// 不校验 textureId：材质可引用有数据的 image 但全部 primitive 无 uv（有效纹理 = 白），
 	// 该投影含 per-primitive 的 hasUv，不是材质级格式保证。
 	std::vector<uint32_t> primitiveMaterialIds(n);
 	for (size_t i = 0; i < n; ++i) {
 		const auto& prim = model.primitives[i];
 		const auto& mat = assets.getMaterial(materialOfIndex[prim.materialIndex]);
-		if (mat.baseColor != prim.baseColor || mat.alphaModeBlend != prim.alphaModeBlend) {
+		if (mat.baseColor != prim.baseColor || mat.alphaModeBlend != prim.alphaModeBlend ||
+			mat.metallic != prim.metallic || mat.roughness != prim.roughness ||
+			mat.unlit != prim.unlit) {
 			throw std::runtime_error("glTF material inconsistency: primitive " + std::to_string(i) +
 				" (materialIndex " + std::to_string(prim.materialIndex) + ")");
 		}

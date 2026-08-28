@@ -287,20 +287,22 @@ fresh.calls.push_back(DrawCall{asset.pipelineIndex,
    `bindToAsset`（批次 3 改带 styleName）；cube → `bindToAsset(registry.pipelineIndex("cube"))`。
 9. 验证（§7 行 2）。
 
-> **批次 2 定案（2026-08-28 晚）：接受 741px artifact 推进。** 实现后 cottage 截图出现
-> **741px 确定性 artifact**（特定纹理被采样为黑，区域 504-680/281-423，关 VVL 确定性；
-> grass 小模型完全正常）。大批量排查（12+ 项）排除 high VA/flush 时序/descriptor range 尺寸/
-> 纹理 slot 位置/去重/vertexOffset 读取/多 primitive 共享块/buffer 布局/顶点数据（读回
-> 392/392 全对）/纹理描述符/heap 绑定/sampler/waitIdle 同步，代码逐行核对无 bug。**回退
-> per-primitive（撤分块+去重）后 artifact 仍在**（744px）→ 根因是批次 2 的 **ShaderRegistry
-> 模块 / shared_ptr 间接层**引入（非分块/去重/vertexOffset），但具体点未定位。
-> **决策：接受 artifact 作为已知问题推进**（cottage 特定区域，非全场景；grass 正常），
-> 三个待查项记录如下，后续专项排查：
-> 1. **artifact 根因**（ShaderRegistry 模块或 shared_ptr 间接层引入，741px 特定纹理采样黑，
->    已排除 12+ 项，具体点未定位）
-> 2. **VVL descriptor heap 双写扰动**（VVL 无条件加载 vkinstance.cppm，其 wrapper 对同一
->    slot 先零化后写实际描述符，扰动 artifact 区域——开 VVL 非确定性 740/744，关 VVL 确定性
->    741；`RGL_NO_VVL=1` 可关）
+> **批次 2 定案（2026-08-28 晚）：接受 cottage 偶发 artifact 推进。** 实现后 cottage 截图
+> **偶发**出现 artifact（特定纹理被采样为黑，区域 504-680/281-423，~741px；grass 小模型
+> 完全正常）。大批量排查（12+ 项）排除 high VA/flush 时序/descriptor range 尺寸/纹理 slot
+> 位置/去重/vertexOffset 读取/多 primitive 共享块/buffer 布局/顶点数据（读回 392/392 全对）/
+> 纹理描述符/heap 绑定/sampler/waitIdle 同步，代码逐行核对无 bug。**回退 per-primitive（撤
+> 分块+去重）后 artifact 仍在**→ 一度定性"批次 2 的 ShaderRegistry 模块 / shared_ptr 间接层
+> 引入"。**2026-08-28 末修正：artifact 实为非确定性（驱动竞态），非批次 2 特有**——同一批次 2
+> 构建连拍 13 张仅 1 张出现（743px），其余 12 张全贴基线（1-5px）；批次 3 构建连拍 6 张全
+> 贴基线；且 model.frag.spv 与 model_pbr.frag.spv 字节完全相同（md5 一致）→ 非 frag 差异。
+> 之前"关 VVL 确定性 741px（3/3 全同）"是巧合。**决策：接受 artifact 作为已知问题推进**
+> （偶发、非全场景、grass 正常），三个待查项记录如下，后续专项排查：
+> 1. **artifact 根因**（非确定性驱动竞态，~741px 特定纹理采样黑，复现率低（1/13），已排除
+>    12+ 项代码因素，非批次 2 / 非 frag 特有，具体触发条件未定位）
+> 2. **VVL descriptor heap 双写扰动**（VVL 无条件加载 vkinstance.cppm:74，其 wrapper 对同一
+>    slot 先零化后写实际描述符，扰动 artifact 区域——`RGL_NO_VVL=1` 可关；VVL 开/关均见
+>    非确定性）
 > 3. **lavapipe ICD 拖累崩溃**（给 Mesa 加 lavapipe 后 loader 启动枚举所有 ICD，新编
 >    lavapipe 库加载即 segfault，交互+离屏全崩；删 lavapipe ICD 即修复，非本代码 bug）
 

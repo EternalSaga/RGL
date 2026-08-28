@@ -21,17 +21,21 @@ export struct PipelineSpec {
 export struct SceneConfig {
 	std::string modelPath;                 // glTF/glTF-Binary 路径（空 = 不加载模型，仅 cube）
 	std::vector<PipelineSpec> pipelines;   // pipeline 规格列表
+	std::map<std::string, std::string> styleMap;  // Phase 4 批次 3：风格名→管线规格名
 	bool spin = true;                      // 场景整体时间旋转（便于肉眼判断渲染对错）
 	bool showCube = true;                  // 是否渲染硬编码 cube（Phase 1 遗留；模型在场时通常关掉）
 };
 
-// 默认配置：cube + model 两条 pipeline（SPV 路径与构建产物对应），无模型，开启旋转。
+// 默认配置：cube + model + model_pbr 三条 pipeline（SPV 路径与构建产物对应），无模型，开启旋转。
+// 默认 styles：unlit→model / pbr→model_pbr（Phase 4 批次 3，styles 表可选回落）。
 export SceneConfig defaultSceneConfig() {
 	SceneConfig cfg;
 	cfg.pipelines = {
 		{"cube", "generated_shaders/cube.mesh.spv", "generated_shaders/cube.frag.spv"},
 		{"model", "generated_shaders/model.mesh.spv", "generated_shaders/model.frag.spv"},
+		{"model_pbr", "generated_shaders/model.mesh.spv", "generated_shaders/model_pbr.frag.spv"},
 	};
+	cfg.styleMap = {{"unlit", "model"}, {"pbr", "model_pbr"}};
 	cfg.spin = true;
 	return cfg;
 }
@@ -105,6 +109,17 @@ export [[nodiscard]] std::expected<SceneConfig, Error> loadSceneConfig(std::stri
 						"scene config: pipeline[" + std::to_string(i) + "] missing 'name'"});
 				}
 				cfg.pipelines.push_back(std::move(spec));
+			}
+		}
+
+		// Phase 4 批次 3：styles 表（风格名→管线规格名，可选回落默认 {unlit,pbr}）
+		sol::table styles = root["styles"];
+		if (styles.valid() && styles.is<sol::table>()) {
+			cfg.styleMap.clear();
+			for (auto [key, value] : styles) {
+				auto styleName = key.as<std::string>();
+				auto pipelineName = value.as<std::string>();
+				cfg.styleMap[styleName] = pipelineName;
 			}
 		}
 

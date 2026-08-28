@@ -25,6 +25,10 @@ export struct GltfPrimitive {
 	bool hasUv = true;               // TEXCOORD_0 缺失（glTF 中可选）→ uv 填 0 + 白纹理（D9）
 	bool alphaModeBlend = false;    // material alphaMode == "BLEND"（Phase 5 透明用，预留）
 	int materialIndex = -1;         // glTF materials 数组下标（-1 = 无材质）——批次 2 材质资产去重键
+	// Phase 4 批次 3：材质风格字段（loader 输出即数据源，风格→管线映射经 scene.lua styles）
+	float metallic = 1.0f;          // pbrMetallicRoughness.metallicFactor（缺省 1.0）
+	float roughness = 1.0f;         // pbrMetallicRoughness.roughnessFactor（缺省 1.0）
+	bool unlit = false;             // material.extensions["KHR_materials_unlit"] 存在性
 };
 
 // 纹理源数据（Phase 3）：span 指向 GltfModel::bufferData（自 tinygltf buffer 0 move 而来，
@@ -155,7 +159,8 @@ export [[nodiscard]] std::expected<GltfModel, Error> loadGltfModel(const std::st
 			if (!foundNode && logger)
 				logger->warn("glTF: mesh {} has no owning node, translation defaults to 0", mi);
 
-			// material（baseColorFactor + baseColorTexture + alphaMode + 材质下标——批次 2 去重键）
+			// material（baseColorFactor + baseColorTexture + alphaMode + 材质下标——批次 2 去重键；
+			// Phase 4 批次 3：metallic/roughness/unlit 风格字段）
 			if (prim.material >= 0 && prim.material < static_cast<int>(gltf.materials.size())) {
 				const auto& mat = gltf.materials[prim.material];
 				out.materialIndex = prim.material;
@@ -168,6 +173,9 @@ export [[nodiscard]] std::expected<GltfModel, Error> loadGltfModel(const std::st
 				if (tc.index >= 0 && tc.index < static_cast<int>(gltf.images.size()))
 					out.baseColorTextureIndex = tc.index;
 				out.alphaModeBlend = (mat.alphaMode == "BLEND");
+				out.metallic = static_cast<float>(mat.pbrMetallicRoughness.metallicFactor);
+				out.roughness = static_cast<float>(mat.pbrMetallicRoughness.roughnessFactor);
+				out.unlit = mat.extensions.count("KHR_materials_unlit") > 0;
 			}
 
 			auto accessorOf = [&](const char* name) -> int {

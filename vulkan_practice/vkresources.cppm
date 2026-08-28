@@ -91,6 +91,10 @@ export struct MaterialAsset {
 	glm::vec4 baseColor{1.0f};
 	uint32_t textureId = kInvalidTextureId;
 	bool alphaModeBlend = false;  // glTF alphaMode == "BLEND"（Phase 5 透明用，预留）
+	// Phase 4 批次 3：材质风格字段（registerScene 金丝雀保证同 materialIndex 一致）
+	float metallic = 1.0f;        // pbrMetallicRoughness.metallicFactor（缺省 1.0）
+	float roughness = 1.0f;       // pbrMetallicRoughness.roughnessFactor（缺省 1.0）
+	bool unlit = false;           // KHR_materials_unlit 扩展存在性（风格 = unlit vs pbr）
 };
 
 export class AssetTable {

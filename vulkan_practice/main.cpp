@@ -130,15 +130,34 @@ int main() {
 			const uint32_t samplerSlot = vkResources.ensureSharedSampler();
 			for (size_t i = 0; i < assetIdsResult->size(); ++i) {
 				const uint32_t id = (*assetIdsResult)[i];
-				// 管线条目（Phase 4 批次 2：按 (风格, 顶点 slot, 纹理 slot) 组合去重——同模型
+				// 管线条目（Phase 4 批次 2：按 (规格, 顶点 slot, 纹理 slot) 组合去重——同模型
 				// 全 primitive 共享一个拼接顶点 slot，仅纹理 slot 差异决定条目拆分；纹理/sampler
-				// slot 烘焙进 binding mapping，每帧零成本）
+				// slot 烘焙进 binding mapping，每帧零成本）。批次 3：风格派生（loader unlit
+				// 字段即数据源，与 MaterialAsset 一致性由 registerScene 金丝雀保证）→ scene.lua
+				// styles 表映射到管线规格名（缺失 = 启动报错，同现有 config 错误路径）。
+				const std::string style = model.primitives[i].unlit ? "unlit" : "pbr";
+				const auto styleIt = sceneConfig.styleMap.find(style);
+				if (styleIt == sceneConfig.styleMap.end())
+					throw std::runtime_error("style not in scene.lua styles: " + style);
 				const uint32_t entryIdx = shaderRegistry.addModelEntry(
-					"model",
+					styleIt->second,
 					assets.get(id).heapSlot,  // = 模型拼接顶点 slot（同模型全 primitive 相同）
 					assets.getTexture(primitiveTextureIds[i]).heapSlot,
 					samplerSlot);
 				shaderRegistry.bindToAsset(id, entryIdx);
+			}
+			// DIAG（Phase 4 批次 3 风格分布核查）：per-primitive 风格（unlit/pbr）+ 规格名分布
+			if (std::getenv("RGL_STYLE_DIST") != nullptr) {
+				std::map<std::string, uint32_t> styleCount;
+				for (size_t i = 0; i < assetIdsResult->size(); ++i)
+					++styleCount[model.primitives[i].unlit ? "unlit" : "pbr"];
+				if (auto logger = RLLogger::getInstance()) {
+					std::string s;
+					for (const auto& [style, cnt] : styleCount)
+						s += style + "=" + std::to_string(cnt) + " ";
+					logger->info("DIAG style dist: {} primitives → {} styles: {}",
+						assetIdsResult->size(), styleCount.size(), s);
+				}
 			}
 			// DIAG（Phase 4 批次 2 纹理分布核查）：per-primitive 纹理 slot 分布（验证新旧管线用同一批纹理）
 			if (std::getenv("RGL_TEX_DIST") != nullptr) {
