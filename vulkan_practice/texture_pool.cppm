@@ -210,12 +210,10 @@ export class TexturePool {
 			std::memcpy(rowBase + y * subLayout.rowPitch, rgba + y * rowBytes, rowBytes);
 
 		// view（create info 值保留——v341 pView 契约；raii view 由 create info 构造，同 llm_debug 模式）。
-		// pView 指向的 create info 必须**指针稳定**：RADV 在采样期（非写描述符期）解引用
-		// pView 解析 image，upload() 返回后栈上局部 create info 悬空 → 采样命中运行时
-		// 栈上复用的其他 view create info（实测 = 当前离屏渲染目标，采样恒 0.1 灰，
-		// Phase 3 全黑排查 2026-08-27，见 docs/heap_texture_research.md）。
-		// 存进 deque（push_back 不搬迁已有元素，地址永久有效）；spike 的 tvi 是
-		// main() 内全局寿命所以从未触发。
+		// pView 指向的 create info 须**指针稳定**（跨驱动防御）：本机 RADV 26.2.1 实测写时
+		// 即解析（radv_descriptors.c:220，heap slot 收自包含描述符拷贝，见
+		// docs/heap_texture_research.md §12.2），但 spec 允许驱动延迟解释 create info 语义，
+		// 栈局部悬空对其他驱动是 UB。deque（push_back 不搬迁已有元素，地址永久有效）。
 		viewStores.push_back(vk::ImageViewCreateInfo{});
 		auto& viewCreate = viewStores.back();
 		viewCreate.image = *image;
@@ -361,11 +359,9 @@ export class TexturePool {
 		const uint32_t slot = *slotResult;
 		const auto& heap = resources.getDescriptorHeap();
 
-		// 描述符结构体同样存稳定存储：RADV 对 descriptor heap 描述符的指针链
-		// （pResources → data.pImage → pView）在**采样期**解引用（非写描述符期），
-		// 栈上局部会在 upload() 返回后悬空——spike 的 infos/imgDi/tvi 全部 main()
-		// 作用域、永活，所以从未触发（Phase 3 全黑排查 2026-08-27，
-		// 见 docs/heap_texture_research.md）。deque 元素地址 push_back 后不失效。
+		// 描述符结构体同样存稳定存储（跨驱动防御，同 view 注释）：本机 RADV 写时即解析
+		// 指针链（docs/heap_texture_research.md §12.2，A/B 实验证伪"采样期解引用"旧归因），
+		// 但 spec 无调用后指针生命周期条款，栈局部悬空对其他驱动是 UB。
 		imageDescStores.push_back(vk::ImageDescriptorInfoEXT{});
 		auto& imageDesc = imageDescStores.back();
 		imageDesc.pView = &viewCreate;  // hpp create info 指针（v341 契约，spike 已验证）
@@ -376,10 +372,9 @@ export class TexturePool {
 		desc.data.pImage = &imageDesc;
 		auto slotAddr = heap.getSlotCpuAddress(slot);
 		if (!slotAddr) return std::unexpected(std::move(slotAddr).error());
-		// 写入目标范围（dst）同样必须指针稳定：4K 黑屏排查（2026-08-27）实测栈上局部
-		// dst 在 upload() 返回后悬空——RADV 采样期解引用时读已释放栈槽（4K 路径栈槽
-		// 被复用 → 坏地址 → GPUVM TCP 权限 fault / 整 context 丢失；256 路径栈槽恰好
-		// 未复用 → 侥幸正常）。改存 deque + 裸 C 调用（绕开 hpp 重载/转换歧义）。
+		// 写入目标范围（dst）同样存稳定存储（跨驱动防御，同 view 注释）：本机 RADV
+		// 写时即完成，栈局部实测无害（docs/heap_texture_research.md §12 A/B 实验），
+		// 但 spec 无调用后指针生命周期条款，保留 deque 卫生。
 		dstStores.push_back(vk::HostAddressRangeEXT{*slotAddr, heap.getDescriptorSize()});
 		auto& dst = dstStores.back();
 		// 2 参 ArrayProxy 重载：proxy 引用 desc/dst（deque 元素，地址稳定），内部
@@ -400,8 +395,9 @@ export class TexturePool {
 	RGL::DeviceContext& device;
 	RGL::Resources& resources;
 	std::vector<TextureAsset> assets;
-	// 描述符指针链的稳定存储（deque：元素地址不随 push_back 失效）——RADV 在采样期
-	// 解引用 pResources/data.pImage/pView（见 upload 内注释），生命周期须覆盖运行期
+	// 描述符指针链的稳定存储（deque：元素地址不随 push_back 失效）——跨驱动防御：
+	// 本机 RADV 写时即解析（§12.2），但 spec 允许驱动延迟解释 create info 语义，
+	// 生命周期须覆盖运行期（见 upload 内注释）
 	std::deque<vk::ResourceDescriptorInfoEXT> resourceDescStores;
 	std::deque<vk::ImageDescriptorInfoEXT> imageDescStores;
 	std::deque<vk::HostAddressRangeEXT> dstStores;

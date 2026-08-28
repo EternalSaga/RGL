@@ -116,9 +116,9 @@ export class Resources {
 	// sampler heap 绑定的保留区（同 resource heap 语义：reserved 槽声明为不可用）
 	vk::DeviceSize getSamplerReservedRangeSize() const { return samplerHeap.getReservedSlots() * samplerHeap.getDescriptorSize(); }
 	// 共享 sampler 描述符写入 sampler heap 首个可用槽，返回槽号（启动期一次性，TexturePool 构造调用）。
-	// sampler create info 存成员（稳定存储）：与 image 描述符同款规则——RADV 对
-	// descriptor heap 的指针在采样期解引用，临时对象悬空同样导致采样 garbage
-	//（Phase 3 全黑排查 2026-08-27，见 docs/heap_texture_research.md）
+	// sampler create info 存成员（稳定存储）：跨驱动防御——本机 RADV 写时即解析
+	// （docs/heap_texture_research.md §12.2，"采样期解引用"旧归因已证伪），
+	// 但 spec 允许驱动延迟解释，生命周期须覆盖运行期
 	[[nodiscard]] uint32_t writeSamplerDescriptor(const VkSamplerCreateInfo& info) {
 		uint32_t slot = samplerHeap.getReservedSlots();
 		auto slotAddr = samplerHeap.getSlotCpuAddress(slot);

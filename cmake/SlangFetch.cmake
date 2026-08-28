@@ -12,6 +12,19 @@
 include(FetchContent)
 
 function(rgl_fetch_slang)
+    # $ENV{SLANGC_DIR} 显式覆盖（试别版本/离线；同 spike CMakeLists 模式，刻意不查系统
+    # PATH——vcpkg 旧 shader-slang 2026.7.1 残留会被误拾，破坏 pin 意义）
+    if(DEFINED ENV{SLANGC_DIR})
+        find_program(SLANGC_DIR_EXECUTABLE slangc
+            HINTS "$ENV{SLANGC_DIR}"
+            NO_SYSTEM_ENVIRONMENT_PATH NO_CMAKE_SYSTEM_PATH)
+        if(SLANGC_DIR_EXECUTABLE)
+            message(STATUS "slangc (SLANGC_DIR 覆盖): ${SLANGC_DIR_EXECUTABLE}")
+            set(SLANGC_EXECUTABLE "${SLANGC_DIR_EXECUTABLE}" PARENT_SCOPE)
+            set(SLANG_PREBUILT_DIR "" PARENT_SCOPE)
+            return()
+        endif()
+    endif()
     set(SLANG_VERSION "2026.16")
     set(SLANG_URL "https://github.com/shader-slang/slang/releases/download/v${SLANG_VERSION}/slang-${SLANG_VERSION}-linux-x86_64.tar.gz")
     set(SLANG_SHA256 "e572e1a293f21971d8a98124c4576848ad4cd6a19b922ce5bad784fee0950648")

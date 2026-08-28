@@ -357,3 +357,64 @@ kTrianglesPerGroup 10→128（≈13 groups）**尚未在真模型上验证**。�
   APU 高区 PTE 权限状态 + 模型多 group mesh task + 纹理采样 + swapchain dmabuf 共存 → frame 2 TCP
   权限 fault，附 §11.4 矩阵 + §11.1 签名 + "重试可恢复"状态漂移特征）；③ 若 group 数实锤 →
   APU 上永久调大 kTrianglesPerGroup（128，≈13 groups，渲染还更快）
+
+## 十二、2026-08-28 A/B 上屏验证：e2015c6 "采样期解引用" 归因证伪 + 真正修复定位（afe2ff0 shader 修复）
+
+### 12.1 实验矩阵（交互可见窗 800×600，用户在场目视确认；本次会话全程好状态，A–E 均无 frame 2 fault）
+
+| # | 变体（单变量，其余保持当前代码） | 结果 |
+|---|---|---|
+| A | 当前代码（deque 稳定存储 + dedicated 位 + texel 回读） | ✓ 正常（草 + 贴图 + 已知 alpha 黑条纹，§11.7） |
+| B | 去 `VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT`（回 VMA 池子子分配） | ✓ 正常 |
+| C | 描述符结构体回退栈局部（viewCreate/imageDesc/desc/dst）+ sampler 回退栈上 array（=e2015c6 前存储方式） | ✓ 正常 |
+| D | C + 删 texel 回读块 + 删 `eTransferSrc`（upload 路径 ≈ e2015c6 前原样） | ✓ 正常 |
+| E | D + **shader 回退 afe2ff0 前**（`Texture2D<float>` 标量 + `samplerHeapOffset` 旧字段） | **几何 + 采样全正常，仅颜色变黑白灰（R 通道 splat）** |
+| F | 当前代码 + **Slang 回退 2026.7.1**（vcpkg 残留包，`SLANGC_DIR` 覆盖重编全部 SPV/反射） | ✓ 正常（版本无关，§9.4"行为等价"记录再确认） |
+| G | 当前代码 + **host→heap barrier 回退 e96f789 形态**（缺 `eSamplerHeapReadEXT`） | ✓ 正常（当前启动期 fence/waitIdle 同步掩盖缺失，spec 层面仍必须修） |
+
+**结论**：
+- A–G 中**唯一产生可见差异的回退 = E 的标量 shader**（R 通道 splat 灰化）——贴图正常显示的可见修复 = **afe2ff0 的 `Texture2D<float>` → `<float4>`**；
+- e2015c6 的 upload 路径改动（deque / dedicated / 回读 / eTransferSrc）在本机 RADV 26.2.1 上**均无行为差异**（B/C/D 逐个回退贴图照常）；
+- Slang 版本（F）与 barrier 缺位（G）在当前代码状态下均无可见影响。
+
+### 12.2 "采样期解引用描述符指针链" 归因证伪（e2015c6 commit 消息 + texture_pool/vkresources 旧注释）
+
+Mesa 26.2.1 源码（portage distfiles `mesa-26.2.1.tar.xz`，与系统 `/usr/lib64/libvulkan_radeon.so` 同源）逐行核实：
+
+- `radv_WriteResourceDescriptorsEXT`（radv_descriptors.c:196-241）：**写时**即 `radv_image_view_init(&iview, device, desc_info->pView, {.from_client=true})` 解析 pView → `radv_image_view_init` 内**立即** `radv_image_view_make_descriptor`（radv_image_view.c:792-798）从 `iview->image->bindings[].addr`（BO VA）构建 64B GFX 纹理描述符 → `radv_write_image_descriptor`（radv_descriptors.h:122-155）**memcpy** 进 heap slot → `radv_image_view_finish` 销毁临时 iview；
+- 全树搜索：`desc_info->pView` 仅 :220/:229 两处解引用，**均在写调用内部**，写后不保留任何客户端指针（`pResources`/`pImage`/`pView`/`pDescriptors`/`pSamplers` 皆然）；
+- sampler 路径（:176-194）：`radv_sampler_init` → `memcpy(sampler->state)` 写时完成；
+- `vkCmdBindResourceHeapEXT`（radv_cmd_buffer.c:17001-17037）只记 heap 地址 + dirty 标记，描述符实际拷贝在 pipeline bind 期**从 heap 内存**（自包含内容）进行；
+- spec v341 validusage.json：`vkWriteResourceDescriptorsEXT` 指针仅要求**调用时**有效，无"保持至描述符销毁"条款。
+
+即：本驱动写路径**即时解析**，heap slot 收到自包含的最终描述符；C/D 实验（栈局部结构体照常工作）与源码一致。deque 稳定存储的正确定位 = **跨驱动防御性卫生**（spec 允许驱动延迟解释 create info 语义，其他驱动/未来 RADV 可能真持有指针），非本机因果。
+
+### 12.3 排除的文档/commit 猜想
+
+| 猜想 | 出处 | 处置 |
+|---|---|---|
+| "RADV 采样期解引用描述符指针链，4 个栈临时对象悬空 = 全黑根因" | e2015c6 commit 消息 + texture_pool.cppm/vkresources.cppm 旧注释 | **证伪**（§12.2 源码 + B/C/D 实验）；旧注释已改指本节 |
+| "4K → GPUVM TCP fault = 悬空栈槽复用 → 坏地址" | e2015c6 commit 消息（4K 部分） | **证伪**（§11.2 已修正为 PTE 权限状态 bug；D 再排除：256 + 栈局部 + 无 dedicated 无 fault；4K 问题 = 尺寸/VA 段相关独立内核层问题，未解） |
+| "旧字段 `samplerHeapOffset` 用法 → 采样 garbage" | §八 根因 2 / §九.2 | **功能层面排除**（E 用旧字段采样正常；与 §9.1 三驱动宽容兼容一致）——`heapOffset` 修正定性为 spec-UB 修正（必须修，但非功能修复） |
+| "RADV 只映射组合 OpTypeSampledImage，不映射分离对" | §八（§九 已推翻） | **再确认排除**（E：分离 OpTypeImage+OpTypeSampler + sampler heap 全链路正常） |
+
+### 12.4 §八"全黑 = NaN"的最终定性（2026-08-28 A–G 后）
+
+- **最可能的根因 = M3 首接期的 host→heap barrier 缺位**：`e96f789`（7e1abce 前）drawFrame 的 heap barrier 只设
+  `eResourceHeapReadEXT`，缺 `eSamplerHeapReadEXT` → sampler 描述符（启动期 `vkWriteSamplerDescriptorsEXT`
+  host 写）未同步到 GPU → 采样器读**未初始化内存** → 恒 garbage/NaN（§八"排除"表"修了真 bug"行 +
+  7e1abce vkrenderer.cppm 当时注释"采样恒 garbage（Phase 3 黑屏根因）"）。**7e1abce 内已修**——
+  故 A–G 任何回退都复现不出全黑（全在已修复状态上做实验）；G 进一步证明当前启动期同步
+  （TexturePool fence wait / waitForIdle）已掩盖该缺位，但 spec 层面该位必须保留（跨驱动不保证有兜底）；
+- §八 的"采样恒 garbage"观察（08-27，7e1abce 之后）与 §九 的"(R+0.1)×4 splat"（08-27 交叉测试）
+  是**不同严重度的两个症状**：前者含 barrier 缺位叠加（garbage/NaN），后者是纯标量 splat（可见但色偏）。
+  §八 把叠加症状误归因为"分离绑定不被映射"，§九 已修正；
+- 残余不可复现因素（不再立项）：旧模型配置（旧 grass + 外置 land.jpg，e2015c6 已删换 grass_variations）、
+  `float4(1.0)+texel` 诊断变体、当时是否处于坏状态（§十一 状态漂移）；
+- F 实验补充：`cmake/SlangFetch.cmake` 新增 `$ENV{SLANGC_DIR}` 显式覆盖（同 spike 模式，刻意不查 PATH）——
+  试别版本/离线用，2026.7.1 vcpkg 残留包位于
+  `~/program/vcpkg/packages/shader-slang_x64-linux-native/tools/shader-slang/slangc`；
+
+### 12.5 未解项（不受本节影响）
+- **4K 黑屏**（64MB + 目标 <2048）：内核/驱动层限制，未解（§十/§11.2）；
+- **交互坏状态 frame 2 fault**（状态分钟级漂移 + per-process）：未解（§十一；本次 A–E 全程好状态，不构成对照）；§11.5 group 数实验（10→128）仍为首选后续。
