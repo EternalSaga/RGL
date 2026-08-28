@@ -2,8 +2,10 @@
 -- model 为空字符串 = 不加载模型，仅渲染 cube
 -- pipelines 每条: name（管线表条目名）+ mesh/frag 的 SPV 相对路径（相对 build/vulkan_practice/）
 return {
-    model = "models/grass_variations.glb",  -- 快速排查模型（4 primitive / 1 张内嵌 PNG，全 BLEND）
-    -- model = "models/realistic_wooden_cottage_garden_house_3d_model.glb",  -- glTF 模型路径（Phase 3 测试模型，392 primitive / 11 张 4K 内嵌纹理）
+    -- model = "models/grass_variations.glb",  -- 快速排查模型（4 primitive / 1 张内嵌 PNG，全 BLEND）
+    model = "models/realistic_wooden_cottage_garden_house_3d_model.glb",  -- glTF 模型路径（Phase 3 测试模型，392 primitive / 11 张 4K 内嵌纹理）
+    -- 4K 黑屏 UAF 复验（2026-08-28）：真实 4K 纹理（非合成 TEXTURE_FORCE_SIZE）+ 目标 <2048（llm 1280x720）
+    -- = §十 4K 黑屏的精确配置；master（TexturePool 生命周期已修）上复跑，黑 = 独立内核问题，正常 = §十 定性改写为 UAF
     -- model = "models/transparent.glb",  -- Phase 2 回归基线（无纹理，4 primitive）
 
     pipelines = {

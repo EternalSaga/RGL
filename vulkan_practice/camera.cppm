@@ -207,8 +207,12 @@ export void cameraSystem(entt::registry& rg, float dt) {
 					cameraRight(camera) * strafe) * (camera.fpsSpeed * dt);
 		}
 	} else if (wheel != 0.0f) {
+		// 相对缩放（同 three.js OrbitControls：半径 ×(1∓zoom)）——加法式（position +=
+		// forward*zoom*step）在远机位失效（cottage 机位半径 ~3535 vs zoomSpeed 0.03 =
+		// 每格 0.0009%，2026-08-28 用户反馈"滚轮缩放没用了"）；滚近（y 正）半径缩小
 		const float clamped = std::clamp(wheel, -kMaxWheelPerFrame, kMaxWheelPerFrame);
-		camera.position += cameraForward(camera) * (clamped * camera.zoomSpeed);
+		camera.position = camera.target +
+			(camera.position - camera.target) * (1.0f - clamped * camera.zoomSpeed);
 	}
 }
 

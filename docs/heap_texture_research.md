@@ -1,6 +1,6 @@
 # Descriptor Heap 纹理采样预研（Phase 3 依据）
 
-> **状态**：调研（Phase 3 依据；**2026-08-27 三驱动交叉测试完成**：RADV / Intel ANV / NVIDIA × 5 变体（组合 / 分离+sampler heap / 分离+内嵌 sampler / 无 sampler 对照）全部像素级 PASS——descriptor heap 纹理/sampler 语义分离**三驱动均完整实现**。原 §八"RADV 只映射组合 OpTypeSampledImage"结论**被推翻**（根因 = spike shader 把 RGBA8 纹理误声明为标量 `Texture2D<float>`，Slang 语义下 R 通道 splat 到 4 通道，详见 §九）；主工程 buffer 描述符路径已三平台验证（commit `1f43d65`）。**2026-08-27 补：§十 4K 黑屏排查**——64MB 纹理 + 渲染目标 <2048 在 RADV Strix Halo 必黑，根因定位到 APU high VA 段（56 位）+ 48 位采样描述符编码不下（内核/驱动层，未解；真实纹理尺寸正常）。主工程接入实测历史见 §八（部分定性已被 §九 修正）。**2026-08-28 最终定性（§十二）：§八 全黑 / §十 4K 黑屏 / §十一 状态漂移同根 = `TexturePool` 生命周期 UAF**（e2015c6 及之前声明在 main() if 块内，块尾析构释放纹理 BO → 第 0 帧采样已释放 VA；VA 未复用=读旧页"正常"（好状态），被复用=TCP fault/全黑）——2de6731 提出 if 块即修复（commit message 误标 slot 顺序）；m3-scene 分支现场复现 + 最小修复单变量实锤（§12.6）；§十 的 high VA 定性待 `TEXTURE_FORCE_SIZE=4096` 在 master 复跑后改写。
+> **状态**：调研（Phase 3 依据；**2026-08-27 三驱动交叉测试完成**：RADV / Intel ANV / NVIDIA × 5 变体（组合 / 分离+sampler heap / 分离+内嵌 sampler / 无 sampler 对照）全部像素级 PASS——descriptor heap 纹理/sampler 语义分离**三驱动均完整实现**。原 §八"RADV 只映射组合 OpTypeSampledImage"结论**被推翻**（根因 = spike shader 把 RGBA8 纹理误声明为标量 `Texture2D<float>`，Slang 语义下 R 通道 splat 到 4 通道，详见 §九）；主工程 buffer 描述符路径已三平台验证（commit `1f43d65`）。**2026-08-27 补：§十 4K 黑屏排查**——64MB 纹理 + 渲染目标 <2048 在 RADV Strix Halo 必黑，根因定位到 APU high VA 段（56 位）+ 48 位采样描述符编码不下（内核/驱动层，未解；真实纹理尺寸正常）。主工程接入实测历史见 §八（部分定性已被 §九 修正）。**2026-08-28 最终定性（§十二）：§八 全黑 / §十 4K 黑屏 / §十一 状态漂移同根 = `TexturePool` 生命周期 UAF**（e2015c6 及之前声明在 main() if 块内，块尾析构释放纹理 BO → 第 0 帧采样已释放 VA；VA 未复用=读旧页"正常"（好状态），被复用=TCP fault/全黑）——2de6731 提出 if 块即修复（commit message 误标 slot 顺序）；m3-scene 分支现场复现 + 最小修复单变量实锤（§12.6）；§十 的 high VA 定性**已改写**（master 上真实 4K 材质模型 cottage 11 张 4096² 纹理 + 目标 1280×720 <2048 两路复跑均正常零 fault → 4K 黑屏 = 同根 UAF 复用，上游 bug report 不发）；防再发教训见 §12.7（ASan 对 GPU 侧 UAF 全盲 / VVL heap 持久引用生命周期缺口待报 Khronos / 所有权规则 + texel 回读金丝雀）。
 
 **日期**: 2026-08-25（首测 RADV）；2026-08-27（三驱动交叉复测，见 §九）
 **环境**: Gentoo, Vulkan 头文件 1.4.341（系统 `/usr/include/vulkan`，主工程/spike 编译环境），loader 1.4.341（旧，扩展符号不在动态符号表）。2026-08-27 机器三卡：RADV（Ryzen 9950X iGPU，Mesa 26.2.1）/ Intel Arc A310（ANV，Mesa 26.2.1）/ NVIDIA RTX 5090（610.57.4，prime offload）。
@@ -262,11 +262,12 @@ Phase 3 接入（`texture_pool.cppm` + `shader.cppm` 3 条目映射 + sampler he
 
 ### 10.7 现状与后续
 
-> **12.6 勘误（本节定性待推翻）**：本节 lldb 观测（4K BO 落 high VA 段、"48 位描述符编码不下"）
-> 全部在 **UAF 修复前**构建上取得——纹理 BO 第 0 帧前已被释放，"high VA BO" 极可能是**已释放 VA
-> 被复用后的分配**，非原始纹理。§十二 12.6 遗留验证：master（UAF 已修）上 `TEXTURE_FORCE_SIZE=4096`
-> 复跑 §10.4 矩阵，若 4K 不再黑/fault → 本节"内核/驱动层 48 位编码"定性整体改写为 **UAF 复用**，
-> ①②③ 后续（root 内核调试 / 上游 bug report / spike 二分）全部撤回。
+> **12.6 勘误（已定性，2026-08-28 傍晚遗留验证 PASS）**：本节 lldb 观测（4K BO 落 high VA 段、
+> "48 位描述符编码不下"）全部在 **UAF 修复前**构建上取得——纹理 BO 第 0 帧前已被释放，
+> "high VA BO" 实锤为**已释放 VA 被复用后的分配**，非原始纹理。验证（12.6 末）：master（UAF 已修）
+> 上真实 4K 材质模型（cottage，11 张 4096² 64MB 内嵌纹理）在 §10.4 的精确配置（目标 1280×720
+> <2048）+ 可见窗两路复跑**均正常零 fault** → 本节"内核/驱动层 48 位编码"定性整体改写为
+> **UAF 复用**，①②③ 后续（root 内核调试 / 上游 bug report / spike 二分）**全部撤回**。
 
 - **真实纹理尺寸（256×512 级）渲染正常，Phase 3 M3 功能可用**；64MB+ 大纹理 + 目标 <2048 记为**已知驱动限制**（定性待 12.6 遗留验证改写）。
 - 无效改动已回退（预分配链：`preallocateTextureImage`/`probeImageSize`/`PreallocatedTexture`/TexturePool 采纳/main.cpp 重排/GltfImage 宽高/LLM_TARGET env）；保留的诊断设施：`TEXTURE_FORCE_*` env + DIAG 日志（texture_pool.cppm）、`RGL_NO_VVL` 门（vkinstance.cppm）、spike `SPIKE_RT_*`/`SPIKE_HEAP_SLOTS`/`SPIKE_SWAPCHAIN_EXT` env + renderArea 修复。
@@ -473,15 +474,52 @@ VMA free list 顺序 / KWin dmabuf 池 / 分配总量决定），非独立的驱
    指向的 image 存活），唯一证据是驱动层 GPUVM fault 日志——离真正的 bug（一个 C++ 析构）
    隔了 4 层抽象（C++ scope → VMA → BO/VA → 内核 PTE）。
 
-**遗留验证（未做）**：master 上 `TEXTURE_FORCE_SIZE=4096`（§十 4K 矩阵的复现开关）复跑——
-若 4K 不再黑/fault，则 §十"内核 gpuva high VA + 48 位描述符编码"定性整体改写为 UAF 复用
-（lldb 观测到的 high VA BO = 复用后的分配，非原始纹理），§10.7 的上游 bug report 不必发。
+**遗留验证（2026-08-28 傍晚已完成 → PASS）**：比合成 `TEXTURE_FORCE_SIZE=4096` 更硬的复验——
+master 上换真实 4K 材质模型（`realistic_wooden_cottage_garden_house_3d_model.glb`，
+257MB / 392 primitive / **11 张 4096×4096 64MB 内嵌 sRGB 纹理**，全部真实上传），
+§十 4K 黑屏的精确配置（llm 隐藏窗 1280×720 = 目标 <2048）+ 可见窗交互两路复跑：
+**截图木纹/屋顶/窗棂细节完整，零 fault**（`screenshots/cottage_4k_uaf_check.png`）。
+→ **4K 黑屏 = 同根 UAF**（64MB 纹理 BO 第 0 帧前释放，其 VA 被复用到 high VA 段 → TCP 权限
+fault/全黑；§十 lldb 观测的 "high VA BO" = 复用后的分配，非原始纹理）；§十"内核 gpuva
+high VA + 48 位采样描述符编码"定性整体改写为 UAF 复用，**§10.7 的上游 bug report 不发**。
 
 ### 12.5 未解项（12.6 后更新）
 - ~~**交互坏状态 frame 2 fault**（状态分钟级漂移 + per-process）~~ → **已解（12.6）**：根因 =
   TexturePool UAF（2de6731 修复）；"状态漂移" = UAF 非确定性；08-28 观测到 fault 的均为
   修复前构建（2de6731 开发过程中），修复后本日 10+ 轮运行（A–G + I/J 对照 + 现场复跑）无一次 fault；
-- **4K 黑屏**（64MB + 目标 <2048，§十）：**疑似同根（UAF 复用，12.6）**——原"内核 gpuva
-  high VA + 48 位描述符编码"定性基于 UAF 修复前构建的 lldb 观测，需 master 上
-  `TEXTURE_FORCE_SIZE=4096` 复跑定性（12.6 遗留验证）；§11.5 group 数实验（10→128）随
-  frame 2 fault 定性为 UAF 而失去意义（group 数不是触发变量）。
+- ~~**4K 黑屏**（64MB + 目标 <2048，§十）~~ → **已解（12.6 遗留验证完成）**：真实 4K 材质
+  模型（cottage，11 张 4096² 64MB 内嵌纹理）在 §十 精确配置（目标 1280×720 <2048）+ 可见窗
+  两路复跑均正常零 fault → 4K 黑屏 = 同根 UAF 复用；§十 定性整体改写，上游 bug report 不发；
+  §11.5 group 数实验（10→128）随 frame 2 fault 定性为 UAF 而失去意义（group 数不是触发变量）。
+
+### 12.7 教训：这类 GPU 侧 UAF 如何提前掐灭（2026-08-28 收尾总结）
+
+**先回答"先上 ASan？"：这个 bug ASan 是瞎的**——ASan/Valgrind 拦 CPU 内存访问、redzone 在
+CPU 地址空间；本 UAF 里 CPU 侧析构后再不碰悬空指针（RADV 写时即解析，§12.2），真正访问
+已释放 BO 的是 **GPU 走自己的页表**（VA→PTE→物理页），完全绕开 CPU 分配器。ASan 对 GPU 侧
+UAF 结构性失明——先上会得到"全干净"的假安慰（复盘第 5 条）。
+
+**VVL 才是 Vulkan 生命周期 bug 的天然第一道防线，但它也漏了** → 真实的体系性缺口：普通
+descriptor set 有"引用的 image 必须活过使用"的 VUID + VVL 跟踪；descriptor heap（新扩展）
+的 **"heap slot 描述符是持久引用，image 必须活过引用"无对应跟踪**——本 bug 的 image 在
+"帧间空隙"（无 in-flight command）析构，VVL 视角 = 合法；但 heap 描述符永远指着它。
+**值得给 Khronos 报 VVL/spec gap（系统性的"提前掐灭"答案）**。
+
+**可落地手段（按成本排）**：
+1. **所有权规则（零成本，review 时）**："凡被描述符引用的资源，owner 必须是初始化层对象
+   （Resources/AssetTable），禁止 main() 局部。"项目已有同款规则（raii 对象必须成员初始化）——
+   TexturePool 以"普通类"身份溜过去。架构正解 = `TextureAsset` 进 AssetTable（Phase 4 原计划）：
+   **模型 BDA 没死就是因为它在 AssetTable 里**，纹理没进去——这个不对称就是 bug 本身；
+2. **texel 回读金丝雀（~10 行）**：项目已有 upload 期 texel 回读 DIAG；加一条"第 N 帧重读
+   同一 texel 比对"——纹理 BO 死了，回读立即偏/fault，把"时好时坏"变成"帧 3 必炸"；
+   对本类 bug 最便宜的决定性检测；
+3. **upload 时记录每个 GPU 资源的 VMA 分配身份（地址+大小），fault 时反查**：08-27 lldb
+   手里就有 BO 地址，缺的只是问一句"这个 BO 是我传的那块，还是复用来的？"；
+4. **签名识别**："同二进制时好时坏 + 驱动层页表 fault" = UAF/竞态经典签名。
+   **驱动层 fault ≠ 驱动 bug**——fault 只是非法访问的症状，非法性可能在用户侧（freed
+   mapping）。看到 TCP permission fault，第一问应是"这个 VA 的 owner 是谁、还活着吗"，
+   而不是"内核坏了吗"。
+
+**ASan 的正确位置**：普通 C++ 内存错误（CPU 侧 crash/腐坏）仍是第一道防线（debug 构建
+`-fsanitize=address` 很便宜）；但"时好时坏 + GPU fault"签名出现时必须与上述 1–4 并用——
+GPU 侧 UAF 恰是它全盲的那一类。

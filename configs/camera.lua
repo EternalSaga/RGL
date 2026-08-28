@@ -4,17 +4,17 @@ return {
 
     -- Phase 3 测试机位：cottage 包围球 center=(-182,546,115) r=1352，
     -- 3/4 前右上视角、距 ~3700（整栋入画）。near/far 有 SceneBounds 时由 projectionSystem 自适应（忽略）。
-    -- position = { -2617.0, 1343.0, 2550.0 },
-    -- target = { -182.0, 300.0, 115.0 },  -- 轨道中心（仅 trackball 用）
-    position = { 70.0, 85.0, 65.0 },  -- 草模型机位：包围球 center=(10,24,-9) r=81.5，球外 ~110
-    target = { 10.0, 24.0, -9.0 },  -- 草模型包围球中心
+    position = { -2617.0, 1343.0, 2550.0 },  -- 4K 黑屏 UAF 复验（2026-08-28）：cottage 机位
+    target = { -182.0, 300.0, 115.0 },  -- 轨道中心（仅 trackball 用）
+    -- position = { 70.0, 85.0, 65.0 },  -- 草模型机位：包围球 center=(10,24,-9) r=81.5，球外 ~110
+    -- target = { 10.0, 24.0, -9.0 },  -- 草模型包围球中心
     fovDegrees = 45.0,
     near = 0.1,
     far = 8000.0,
 
     trackball = {
         sensitivity = 0.005,  -- rad/px
-        zoom = 0.03,          -- 每格滚轮的轨道半径变化
+        zoom = 0.03,          -- 每格滚轮的轨道半径相对缩放（半径 ×(1∓zoom)，2026-08-28 改：加法式在远机位失效）
     },
     fps = {
         speed = 3.0,          -- WASD 移动速度，单位/秒
@@ -34,10 +34,17 @@ return {
     -- Phase 3 纹理验证：一次性截图（NVIDIA/RADV 跨驱动比对用）；交互运行改回 false
     -- 4K 黑屏排查（2026-08-27）：spectacle 截屏已抓到 GPUVM fault（TCP 权限 fault），
     -- 恢复 llm_debug 跑矩阵（fault 日志 = 判据）
+    -- 4K 黑屏 UAF 复验（2026-08-28）：真实 4K 纹理（cottage 11 张内嵌）+ 目标 1280x720 (<2048)
+    -- = §十 4K 黑屏精确配置（"64MB 纹理 + 渲染目标 <2048 → 全黑"）；llm 1280x720 已 PASS（截图 cottage_4k_uaf_check.png），交互运行改回 false
     llm_debug = false,
 
     -- {
+    --    file = "screenshots/cottage_4k_uaf_check.png",
+    --    size = { 1280, 720 },
+    --},
+
+    -- {
     --    file = "screenshots/phase3_texture.png",
-    --    size = { 2048, 2048 },  -- 4K 黑屏排查：纹理(4096) > 目标(2048) 是否仍坏
+    --    size = { 2048, 2048 },  -- 4K 黑屏 排查：纹理(4096) > 目标(2048) 是否仍坏
     --},
 }
