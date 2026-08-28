@@ -93,7 +93,7 @@ export [[nodiscard]] std::expected<std::vector<uint32_t>, Error> uploadModelMesh
 // uploadModelTextures 返回，上传顺序 = primitive 顺序）。
 // Phase 2 无层级嵌套：node 变换在 gltf_loader 里已扁平化为 translation，world = local。
 // 包围球经 Bounds 组件进 registry，由 boundsSystem 聚合进 SceneBounds（自适应 near/far，
-// 见 ecs.cppm）——cube 将来入 ECS 时挂自己的 Bounds 即自动纳入聚合。
+// 见 ecs.cppm）——cube 同理（批次 3 registerCubeEntity 挂自己的 Bounds，自动纳入聚合）。
 // 批次 2：材质资产注册（按 glTF materialIndex 去重，-1 = 无材质 → 默认材质）+ MaterialRef
 // 真引用（E5.3）——材质身份（baseColor/textureId/alphaMode）收敛进资产表，纹理→primitive
 // 映射获得数据归属；同 materialIndex 的材质字段一致性做导入期金丝雀（违例 = loader bug）。

@@ -4,6 +4,7 @@ module;
 export module scene;
 
 import rlstd;
+import cube;
 
 namespace RGL {
 
@@ -72,5 +73,25 @@ export struct ViewProjection {
 	glm::mat4 view{1.0f};
 	glm::mat4 proj{1.0f};
 };
+
+// cube 一等资产注册（批次 3，E1.4/H1/M1）：cube entity = Transform(identity) +
+// Bounds（包围球由顶点半径派生，经 boundsSystem 自动纳入 SceneBounds 聚合，L2 解决）
+// + MeshRef{cube 资产 id} + MaterialRef{材质 id} + Relationship（根，parent = null）。
+// 画不画 = 实体有无（数据驱动：showCube 配置由 main 决定是否注册，无构造期 gating）。
+// 注意：cube 着色 = 每顶点色（cube.frag 从顶点读 color），MaterialRef 的 baseColor
+// 不被 cube 管线消费（renderListSystem 按资产 kind 分支，push constant 布局 64B/96B 不统一）。
+export entt::entity registerCubeEntity(entt::registry& rg, uint32_t meshAsset, uint32_t materialAsset) {
+	auto e = rg.create();
+	rg.emplace<Transform>(e);  // identity：cube 几何已在原点 ±0.5
+	glm::vec3 center{0.0f};
+	float radius = 0.0f;
+	for (const auto& v : cubeVertices)
+		radius = std::max(radius, glm::length(glm::vec3(v.position[0], v.position[1], v.position[2])));
+	rg.emplace<Bounds>(e, center, radius);
+	rg.emplace<MeshRef>(e).asset = meshAsset;
+	rg.emplace<MaterialRef>(e).material = materialAsset;
+	rg.emplace<Relationship>(e);  // parent = null（根）
+	return e;
+}
 
 }  // namespace RGL

@@ -1,5 +1,6 @@
 #include <entt/entt.hpp>
 #include <SDL3/SDL_video.h>
+#include <glm/glm.hpp>
 import rlstd;
 import vulkan_window;
 import vk_instance;
@@ -91,15 +92,14 @@ int main() {
 		// heap 容量为固定裕量（与场景内容解耦，批次 3 E1.3）：CPU 解析模型不再需要
 		// 先于 Vulkan 初始化
 		Resources vkResources(vkInstance, vkDevice, vkSwapchain);
-		// 管线规格来自 configs/scene.lua；cubeEntry = showCube（cube 渲染的 gating，
-		// 决定 "cube" 管线条目是否创建 → 渲染 system 侧的 cube DrawCall 是否产生）
-		Renderer vkRenderer(vkDevice, vkSwapchain, vkResources, sceneConfig.pipelines,
-			sceneConfig.showCube);
+		// 管线规格来自 configs/scene.lua；"cube" 管线条目恒建（批次 3：画不画 = cube
+		// entity 有无，数据驱动，下方按 showCube 决定是否注册）
+		Renderer vkRenderer(vkDevice, vkSwapchain, vkResources, sceneConfig.pipelines);
 
 		// CPU 解析 + GPU 上传 + 纹理 + ECS 注册：资产数据（buffer/slot/三角形数/管线条目引用、
 		// 纹理资产、材质资产）全部在 Resources 资产表（初始化层 owner，生命周期不依赖
 		// main 作用域——TexturePool 局部对象 UAF 教训，docs/heap_texture_research.md §12.6/§12.7）
-		std::vector<uint32_t> primitiveTextureIds;  // per-primitive 纹理资产 id（批次 2 材质注册 + RGL_CUBE_TEX 门消费）
+		std::vector<uint32_t> primitiveTextureIds;  // per-primitive 纹理资产 id（管线烘焙 + 批次 2 材质注册消费）
 		if (!sceneConfig.modelPath.empty()) {
 			auto modelResult = loadGltfModel(sceneConfig.modelPath);
 			if (!modelResult) {
@@ -135,27 +135,19 @@ int main() {
 				std::span<const uint32_t>(primitiveTextureIds), vkResources);
 		}
 
-		// DIAG（RGL_CUBE_TEX）：cube + 纹理采样——隔离"dmabuf BO 存在 + 纹理采样"组合触发
-		//（GPUVM TCP 权限 fault，2026-08-28 排查）：无模型 BDA / 无模型管线，仅 cube +
-		// 纹理采样；纹理 = 模型首个真实带纹理 primitive（如有），否则白 1×1；
-		// cube 顶点/索引固定 slot 0/1（见 addCubeTexPipeline）
-		if (std::getenv("RGL_CUBE_TEX")) {
-			// 无模型时白纹理尚未上传（契约：模型顶点槽之后才取）——此处补取
-			const uint32_t whiteId = vkResources.getAssetTable().textureSize() > 0
-				? 0
-				: ensureWhiteTexture(vkResources, vkDevice);
-			uint32_t texId = whiteId;
-			for (uint32_t id : primitiveTextureIds)
-				if (id != whiteId) {
-					texId = id;
-					break;
-				}
-			const uint32_t texSlot = vkResources.getAssetTable().getTexture(texId).heapSlot;
-			const uint32_t samplerSlot = vkResources.ensureSharedSampler();
-			vkRenderer.addCubeTexPipeline(texSlot, samplerSlot);
+		// cube 一等资产（批次 3）：showCube 配置 → 注册 entity（画不画 = 实体有无）+
+		// 管线表下标写回（启动期一次）。cube 着色 = 每顶点色，MaterialRef 指向默认
+		// 材质（baseColor 不被 cube 管线消费，见 registerCubeEntity 注释）
+		if (sceneConfig.showCube) {
+			auto& assets = vkResources.getAssetTable();
+			const uint32_t cubeMat = assets.addMaterial(
+				MaterialAsset{glm::vec4{1.0f}, kInvalidTextureId, false});
+			registerCubeEntity(registry, vkResources.cubeAssetId(), cubeMat);
+			vkRenderer.bindPipelineToAsset("cube", vkResources.cubeAssetId());
 			if (auto logger = RLLogger::getInstance())
-				logger->info("DIAG RGL_CUBE_TEX: cube_tex 条目（纹理资产 {} slot {}，sampler slot {}）",
-					texId, texSlot, samplerSlot);
+				logger->info("cube entity: 资产 {} / 材质 {} / 管线下标 {}",
+					vkResources.cubeAssetId(), cubeMat,
+					assets.get(vkResources.cubeAssetId()).pipelineIndex);
 		}
 
 		// DIAG（可见窗 fault 排查）：隐藏窗启动、第 showAfter 帧后 SDL_ShowWindow——

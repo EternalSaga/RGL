@@ -42,7 +42,10 @@ export struct MeshAsset {
 	VmaBuffer vertexBuffer;
 	uint32_t heapSlot = 0;                            // 绝对 heap slot（= reservedSlots() + 偏移，见 uploadModelMeshes）
 	uint32_t triangleCount = 0;                       // primitive 三角形数（group 数派生用）
-	uint32_t pipelineIndex = kInvalidPipelineIndex;   // 管线表下标（Renderer::addModelPipeline 写入）
+	uint32_t pipelineIndex = kInvalidPipelineIndex;   // 管线表下标（Renderer::addModelPipeline / bindPipelineToAsset 写入）
+	// 索引 buffer（批次 3：cube 资产带索引；模型 primitive 去索引展开 = nullopt）
+	std::optional<VmaBuffer> indexBuffer;
+	std::optional<uint32_t> indexHeapSlot;
 };
 
 // 纹理资产（Phase 3 → 批次 1 迁入资产表）：GPU image + view + heap 描述符槽 + 描述符指针链。
@@ -93,6 +96,13 @@ export class AssetTable {
 	[[nodiscard]] const MeshAsset& get(uint32_t id) const { return meshes[id]; }
 	// 管线条目引用（Renderer::addModelPipeline 在创建管线条目后写回）
 	void setPipelineIndex(uint32_t id, uint32_t pipelineIndex) { meshes[id].pipelineIndex = pipelineIndex; }
+	// 带索引 mesh（批次 3：cube 资产——顶点 + 索引双 buffer/双 slot）
+	uint32_t addIndexedMesh(VmaBuffer vertexBuffer, uint32_t vertexSlot, VmaBuffer indexBuffer,
+		uint32_t indexSlot, uint32_t triangleCount) {
+		meshes.push_back(MeshAsset{AssetKind::Cube, std::move(vertexBuffer), vertexSlot, triangleCount,
+			kInvalidPipelineIndex, std::move(indexBuffer), indexSlot});
+		return static_cast<uint32_t>(meshes.size() - 1);
+	}
 	[[nodiscard]] uint32_t meshSize() const { return static_cast<uint32_t>(meshes.size()); }
 	// 模型顶点槽计数（白纹理 slot 契约断言用："纹理首槽 = 白 = 模型顶点槽之后"；
 	// 批次 3 cube 资产与本容器共用但不占模型顶点槽，按 kind 计数）
@@ -172,6 +182,12 @@ export class Resources {
 		if (heapSlotIndex != reservedSlots() + HeapSlotIndexOffset)
 			throw std::runtime_error("heap slot layout drift: cube.index");
 		writeDescriptors();
+		// 批次 3：cube 一等资产——buffer 移入资产记录（kind=Cube，带索引），包装体随
+		// Resources 存活（与模型 mesh 同层）；成员 vertexBuffer/indexBuffer move 后为空，
+		// 访问一律经 cubeAssetId() → 资产表（删了直接访问器防 move 后误用）
+		cubeAsset = assetTable.addIndexedMesh(std::move(vertexBuffer), heapSlotVertex,
+			std::move(indexBuffer), heapSlotIndex,
+			static_cast<uint32_t>(RGL::cubeIndices.size() / 3));
 	}
 
 	const RGL::VmaImage& getDepthImage() const { return depthImage; }
@@ -229,10 +245,8 @@ export class Resources {
 		sharedSamplerReady = true;
 		return sharedSamplerSlot;
 	}
-	vk::DeviceAddress getVertexBufferAddress() const { return vertexBuffer.getDeviceAddress(); }
-	vk::DeviceAddress getIndexBufferAddress() const { return indexBuffer.getDeviceAddress(); }
-	uint32_t getHeapSlotVertex() const { return heapSlotVertex; }
-	uint32_t getHeapSlotIndex() const { return heapSlotIndex; }
+	// cube 一等资产（批次 3）：资产记录 = cube 顶点/索引 buffer + slot 的唯一 holder
+	uint32_t cubeAssetId() const { return cubeAsset; }
 	// 资产表（已上传 primitive 的 GPU 数据 + heap slot + 三角形数 + 管线条目引用；
 	// registry entity 经 MeshRef{asset} 引用，见 AssetTable 注释）
 	RGL::AssetTable& getAssetTable() { return assetTable; }
@@ -363,11 +377,12 @@ export class Resources {
 	void writeDescriptors() {
 		auto& device = vkDevice.getDevice();
 
+		// 构造体内调用（cube buffer 移入资产表前）：直接用成员取地址
 		vk::DeviceAddressRangeEXT vertexRange{
-			getVertexBufferAddress(),
+			vertexBuffer.getDeviceAddress(),
 			RGL::cubeVertices.size() * sizeof(RGL::Vertex)};
 		vk::DeviceAddressRangeEXT indexRange{
-			getIndexBufferAddress(),
+			indexBuffer.getDeviceAddress(),
 			RGL::cubeIndices.size() * sizeof(uint32_t)};
 
 		vk::ResourceDescriptorInfoEXT vertexDescInfo{};
@@ -406,6 +421,7 @@ export class Resources {
 	RGL::VmaAllocatorRAII allocator;
 	RGL::VmaImage depthImage;
 	vk::raii::ImageView depthImageView;
+	// cube 顶点/索引 buffer（批次 3：构造体移入 cube 资产记录后为空，访问经 cubeAssetId）
 	RGL::VmaBuffer vertexBuffer;
 	RGL::VmaBuffer indexBuffer;
 	RGL::VmaDescriptorHeap descriptorHeap;
@@ -419,6 +435,8 @@ export class Resources {
 	uint32_t heapSlotIndex;
 	// 统一 slot 分配器（Phase 3，纹理资产并案）：单调分配游标，从 reservedSlots 起
 	uint32_t nextSlot;
+	// cube 一等资产 id（批次 3：构造体写入）
+	uint32_t cubeAsset = 0;
 	// 资产表（E1.1/E1.2：已上传 primitive 的 GPU 数据 + heap slot + 三角形数 + 管线条目引用）
 	RGL::AssetTable assetTable;
 	// 用户槽位固定裕量（与场景内容解耦；Phase 3 统一步长 = max(buffer, image) descriptorSize，

@@ -113,13 +113,9 @@ export class RenderPipeline {
 	// sampler heap（docs/phase3_plan.md R1 回退链的既选路径，已验证可用）。
 	RenderPipeline(vk::raii::Device& device, const ShaderEffect& effect,
 		uint32_t descriptorSize, uint32_t slotVertex, uint32_t slotIndex,
-		uint32_t slotTexture = 0, uint32_t samplerHeapOffset = 0, bool textured = false,
-		// DIAG（RGL_CUBE_TEX）cube 带纹理形态（4 条目）：binding 1 保留索引 slot
-		//（cube 着色器有 indexBuffer 绑定，模型没有），纹理/sampler 移到 binding 2/3
-		bool texturedKeepIndex = false) {
-		VkDescriptorSetAndBindingMappingEXT mappings[4]{};
-		const bool keepIndex = textured && texturedKeepIndex;
-		const uint32_t mappingCount = keepIndex ? 4 : (textured ? 3 : 2);
+		uint32_t slotTexture = 0, uint32_t samplerHeapOffset = 0, bool textured = false) {
+		VkDescriptorSetAndBindingMappingEXT mappings[3]{};
+		const uint32_t mappingCount = textured ? 3 : 2;
 
 		mappings[0].sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
 		mappings[0].descriptorSet = 0;
@@ -136,34 +132,25 @@ export class RenderPipeline {
 		mappings[1].bindingCount = 1;
 		mappings[1].resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
 		mappings[1].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
+		// binding 1：非纹理形态 = 索引 slot；纹理形态 = SAMPLED_IMAGE 描述符槽（resource heap）
 		mappings[1].sourceData.constantOffset.heapOffset =
-			(textured && !keepIndex) ? slotTexture * descriptorSize : slotIndex * descriptorSize;
+			textured ? slotTexture * descriptorSize : slotIndex * descriptorSize;
 		mappings[1].sourceData.constantOffset.heapArrayStride = descriptorSize;
 
 		if (textured) {
-			const uint32_t texBinding = keepIndex ? 2 : 1;
-			mappings[texBinding].sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
-			mappings[texBinding].descriptorSet = 0;
-			mappings[texBinding].firstBinding = texBinding;
-			mappings[texBinding].bindingCount = 1;
-			mappings[texBinding].resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
-			mappings[texBinding].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
-			mappings[texBinding].sourceData.constantOffset.heapOffset = slotTexture * descriptorSize;
-			mappings[texBinding].sourceData.constantOffset.heapArrayStride = descriptorSize;
-
 			// OpTypeSampler 映射：sampler heap 槽（字节偏移，共享一份 sampler 描述符）。
 			// spec（descriptorheaps.adoc :1664-1665 + VUID 11253）：独立 OpTypeSampler 的
 			// sampler heap 偏移写 heapOffset（"mapped resource or sampler"）；samplerHeapOffset
 			// 字段仅组合 image sampler 用（:1671-1674）——2026-08-27 交叉测试定位的字段误用
 			//（spike 首版同款，docs/heap_texture_research.md §九.2 根因 2）
-			mappings[texBinding + 1].sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
-			mappings[texBinding + 1].descriptorSet = 0;
-			mappings[texBinding + 1].firstBinding = texBinding + 1;
-			mappings[texBinding + 1].bindingCount = 1;
-			mappings[texBinding + 1].resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
-			mappings[texBinding + 1].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
-			mappings[texBinding + 1].sourceData.constantOffset.heapOffset = samplerHeapOffset;
-			mappings[texBinding + 1].sourceData.constantOffset.heapArrayStride = 0;
+			mappings[2].sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
+			mappings[2].descriptorSet = 0;
+			mappings[2].firstBinding = 2;
+			mappings[2].bindingCount = 1;
+			mappings[2].resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
+			mappings[2].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
+			mappings[2].sourceData.constantOffset.heapOffset = samplerHeapOffset;
+			mappings[2].sourceData.constantOffset.heapArrayStride = 0;
 		}
 
 		VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{};

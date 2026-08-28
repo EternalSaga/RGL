@@ -193,17 +193,17 @@ struct RenderListState {
 
 // ViewProjection + 场景实体 + 场景旋转 → FrameDrawList context（单一 draw 路径）。
 //
-// cube（过渡态，尚未 entity 化）：管线条目存在性 = 画不画（showCube 在构造期 gating
-// "cube" 条目），MVP = proj·view·spin（无 Transform）；Phase 4 入 ECS 后走与 model
-// 同一 view 路径（ecs_compliance_review E1.4/H1）。
-//
-// model：每 primitive 实体（Transform/MeshRef{asset}/MaterialRef{material} 真引用）推一份
-// ModelDrawArgs（mvp = proj·view·spin·world；资产 id → Resources 资产表记录：三角形数 /
-// 管线条目下标（E1.1/E5.1）、baseColor 经材质资产解析（批次 2，E5.3））；
-// group 数 = ceil(triangles / kTrianglesPerGroup)（契约常量由 model_schema.lua 生成，
-// 见 model_types_generated；mesh shader 无 task stage，group 序号经 SV_GroupID.x 派生）
-void renderListSystem(entt::registry& rg, RGL::Renderer& renderer, RGL::Resources& resources,
-	RenderListState& state) {
+// 统一 view 按资产 kind 分支（批次 3：cube 一等资产，删过渡态特例 + 每帧字符串查找）：
+//   cube — DrawArgs 64B（每顶点色，baseColor 未用）；mvp = proj·view·spin·world
+//          （cube 实体 Transform = identity，与旧特例 proj·view·spin 位级一致）
+//   model — ModelDrawArgs 96B：mvp = proj·view·spin·world；资产 id → Resources 资产表
+//          记录：三角形数 / 管线条目下标（E1.1/E5.1）、baseColor 经材质资产解析
+//          （批次 2，E5.3）；group 数 = ceil(triangles / kTrianglesPerGroup)（契约常量
+//          由 model_schema.lua 生成，见 model_types_generated；mesh shader 无 task stage，
+//          group 序号经 SV_GroupID.x 派生）
+// 画不画 = 实体有无（数据驱动）；两分支 push constant 布局不统一 = 留 AssetKind 分支
+//（完整归一待 Phase 4 ShaderRegistry，ecs_compliance_review H1 注记）。
+void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListState& state) {
 	auto& list = rg.ctx().get<FrameDrawList>();
 	const auto& viewProj = rg.ctx().get<ViewProjection>();
 	const auto& spin = rg.ctx().get<SceneSpin>();
@@ -211,21 +211,17 @@ void renderListSystem(entt::registry& rg, RGL::Renderer& renderer, RGL::Resource
 
 	FrameDrawList fresh;
 
-	// DIAG（RGL_CUBE_TEX）："cube_tex" 条目优先（cube + 纹理采样实验管线，见 main.cpp 门）
-	auto cubeIdx = renderer.pipelineIndex("cube_tex");
-	if (!cubeIdx)
-		cubeIdx = renderer.pipelineIndex("cube");
-	if (cubeIdx) {
-		state.cubeArgs.mvp = viewProj.proj * viewProj.view * spin.matrix;
-		fresh.calls.push_back(DrawCall{
-			*cubeIdx, std::as_bytes(std::span<const RGL::DrawArgs>{&state.cubeArgs, 1}), 1});
-	}
-
 	rg.view<RGL::Transform, RGL::MeshRef, RGL::MaterialRef>().each(
 		[&](RGL::Transform& tf, RGL::MeshRef& meshRef, RGL::MaterialRef& matRef) {
 			const auto& asset = assets.get(meshRef.asset);
 			if (asset.pipelineIndex == kInvalidPipelineIndex)
-				return;  // 资产无管线条目（防御：注册顺序异常，见 registerScene/addModelPipeline）
+				return;  // 资产无管线条目（防御：注册顺序异常，见 registerScene/bindPipelineToAsset）
+			if (asset.kind == RGL::AssetKind::Cube) {
+				state.cubeArgs.mvp = viewProj.proj * viewProj.view * spin.matrix * tf.world;
+				fresh.calls.push_back(DrawCall{
+					asset.pipelineIndex, std::as_bytes(std::span<const RGL::DrawArgs>{&state.cubeArgs, 1}), 1});
+				return;
+			}
 			if (meshRef.asset >= state.modelArgs.size())
 				state.modelArgs.resize(meshRef.asset + 1);
 			auto& args = state.modelArgs[meshRef.asset];
@@ -275,7 +271,7 @@ export std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer
 		{"animation",  [](entt::registry& rg, float dt) { animationSystem(rg, dt); }},
 		{"bounds",     [](entt::registry& rg, float) { boundsSystem(rg); }},
 		{"projection", [](entt::registry& rg, float) { projectionSystem(rg); }},
-		{"renderlist", [&](entt::registry& rg, float) { renderListSystem(rg, renderer, resources, renderListState); }},
+		{"renderlist", [&](entt::registry& rg, float) { renderListSystem(rg, resources, renderListState); }},
 	};
 
 	float prevTicks = static_cast<float>(SDL_GetTicks());

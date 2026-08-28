@@ -70,19 +70,20 @@ export class Renderer {
 	// Resources 的 descriptor heap（descriptorSize + 顶点/索引 slot 号）与 pipelineSpecs，
 	// 故在 resources 之后、经静态工厂 makePipelineTable 在初始化列表构造
 	//（RenderPipeline 是包装类，非直接 vk::raii 成员）。
-	// cubeEntry：是否建 "cube" 管线条目（SceneConfig.showCube，cube 渲染的 gating）。
-	// 模型管线条目不在构造期建（批次 3：管线表与场景内容解耦，E1.3）——资产上传后
-	// 每 primitive 调一次 addModelPipeline。
+	// "cube" 管线条目恒建（批次 3：删构造期 gating——画不画 = cube entity 有无，
+	// 数据驱动，showCube 配置由 main 决定是否注册 entity；条目多建 2 个 shader object，
+	// 成本可忽略）。模型管线条目不在构造期建（批次 3：管线表与场景内容解耦，E1.3）——
+	// 资产上传后每 primitive 调一次 addModelPipeline。
 	Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RGL::Resources& vkResources,
-		std::span<const RGL::PipelineSpec> pipelineSpecs, bool cubeEntry)
+		std::span<const RGL::PipelineSpec> pipelineSpecs)
 	: vkDevice(vkDevice),
 	  swapchain(&vkSwapchain),
 	  resources(&vkResources),
 	  offscreen(std::getenv("RGL_OFFSCREEN") != nullptr),
 	  graphicsQueue(vkDevice.getGraphicsQueue()),
-		  graphicsCommandPool(vkDevice.getGraphicsCommandPool()),
-		  modelSpec(resolveModelSpec(pipelineSpecs)),
-		  pipelines(makePipelineTable(vkDevice.getDevice(), pipelineSpecs, cubeEntry, vkResources)) {
+	  graphicsCommandPool(vkDevice.getGraphicsCommandPool()),
+	  modelSpec(resolveModelSpec(pipelineSpecs)),
+	  pipelines(makePipelineTable(vkDevice.getDevice(), pipelineSpecs, vkResources)) {
 		// descriptor heap 的 GPU 端地址，每帧传给 vkCmdBindResourceHeapEXT
 		heapAddress = vkResources.getDescriptorHeap().getGpuAddress();
 		// 管线表 name → 下标（构造一次，供渲染 system 产出 DrawCall 时经 pipelineIndex 解析）
@@ -100,11 +101,19 @@ export class Renderer {
 	const vk::raii::CommandPool& getGraphicsCommandPoolRef() const { return graphicsCommandPool; }
 	const RGL::RenderPipeline& pipelineAt(uint32_t index) const { return pipelines[index].pipeline; }
 	const RGL::RenderState& getOpaqueState() const { return opaqueState; }
-	// 管线表条目名 → 下标（渲染 system 产出 DrawCall 用；条目不存在时 nullopt = 该 draw 跳过，
-	// 如 showCube=false 时无 "cube" 条目，cube 的 DrawCall 不产生）
+	// 管线表条目名 → 下标（启动期解析用：bindPipelineToAsset / 防御检查；
+	// 每帧路径经资产记录的 pipelineIndex 直接取，零字符串查找）
 	[[nodiscard]] std::optional<uint32_t> pipelineIndex(std::string_view name) const {
 		auto it = pipelineIndexMap.find(std::string(name));
 		return it == pipelineIndexMap.end() ? std::nullopt : std::optional<uint32_t>(it->second);
+	}
+	// 管线表下标写回资产记录（批次 3：启动期一次，cube entity 走此路径；
+	// addModelPipeline 内部同款写回）。条目缺失 = 配置/构建不一致，直接报错
+	void bindPipelineToAsset(const char* name, uint32_t assetId) {
+		auto idx = pipelineIndex(name);
+		if (!idx)
+			throw std::runtime_error(std::string("pipeline entry not found: ") + name);
+		resources->getAssetTable().setPipelineIndex(assetId, *idx);
 	}
 	// 模型管线条目（批次 3：从构造期移到资产上传期，每 primitive 一次）：
 	// 用构造期解析的 "model" 规格创建 RenderPipeline，binding mapping 显式烘焙
@@ -126,25 +135,6 @@ export class Renderer {
 		pipelineIndexMap[entry.name] = index;
 		pipelines.push_back(std::move(entry));
 		resources->getAssetTable().setPipelineIndex(assetId, index);
-	}
-	// DIAG（RGL_CUBE_TEX）：cube + 纹理采样管线条目——隔离"dmabuf BO 存在 + 纹理采样"
-	// 组合触发（GPUVM TCP 权限 fault，2026-08-28 排查）。main 在纹理上传就绪后调用
-	//（同 addModelPipeline 模式）：cube 顶点/索引固定 slot 0/4 + 任意纹理 slot + 共享
-	// sampler slot；renderListSystem 的 cube DrawCall 优先解析 "cube_tex" 条目。
-	void addCubeTexPipeline(uint32_t textureSlot, uint32_t samplerSlot) {
-		const uint32_t descriptorSize = resources->getDescriptorHeap().getDescriptorSize();
-		const uint32_t samplerHeapOffset =
-			samplerSlot * resources->getSamplerHeap().getDescriptorSize();
-		// 顶点/索引 slot 用 Resources 真实访问器（同 makePipelineTable）：布局由反射生成的
-		// 偏移常量钉死（vertex=0、index=1——非 0/4 旧约定，硬编码错 slot = 索引描述符
-		// 悬空 → mesh shader 读垃圾索引 → 不发射几何，2026-08-28 二分定位）
-		auto entry = PipelineEntry{
-			"cube_tex",
-			RGL::RenderPipeline(vkDevice.getDevice(), loadShaderEffect(cubeDebugSpec()), descriptorSize,
-				resources->getHeapSlotVertex(), resources->getHeapSlotIndex(),
-				textureSlot, samplerHeapOffset, true, true)};
-		pipelineIndexMap[entry.name] = static_cast<uint32_t>(pipelines.size());
-		pipelines.push_back(std::move(entry));
 	}
 	// 等待 GPU 空闲（resize / 重建 swapchain 前调用，确保旧资源不再被使用）
 	void waitForIdle() { vkDevice.getDevice().waitIdle(); }
@@ -194,38 +184,31 @@ export class Renderer {
 		return *modelSpec;
 	}
 
-	// DIAG（RGL_CUBE_TEX）：cube 纹理实验管线规格（cube mesh + 实验 frag，4 绑定形态）
-	static RGL::PipelineSpec cubeDebugSpec() {
-		return RGL::PipelineSpec{
-			"cube_debug", "generated_shaders/cube.mesh.spv", "generated_shaders/cube_debug.frag.spv"};
-	}
-
 	// 构建管线表（ShaderObject 模式，无 PipelineLayout）：每条创建两个 VkShaderEXT 对象，
 	// 并通过 VkShaderCreateInfoEXT.pNext 链上 VkDescriptorSetAndBindingMappingEXT
 	//（binding 0 → 顶点 slot、binding 1 → 索引 slot，heapOffset = slot * descriptorSize；
 	// 细节见 shader.cppm）。
-	// 条目：cube（slot 0/4，仅 cubeEntry 时）。模型条目由 addModelPipeline 在资产上传期
-	// 动态加入（顶点 slot 显式传入——binding mapping 是 shader object 级状态，无法运行时
-	// 换，故按资产拆条目；批次 3 起构造期不再按 primitive 数预 resize，E1.3）。
+	// 条目：cube（恒建——批次 3 删构造期 gating，画不画 = cube entity 有无；slot 经
+	// cube 资产记录取，布局由反射生成的偏移常量钉死 vertex=0/index=1）。模型条目由
+	// addModelPipeline 在资产上传期动态加入（顶点 slot 显式传入——binding mapping 是
+	// shader object 级状态，无法运行时换，故按资产拆条目；批次 3 起构造期不再按
+	// primitive 数预 resize，E1.3）。
 	static std::vector<PipelineEntry> makePipelineTable(vk::raii::Device& device,
-		std::span<const RGL::PipelineSpec> specs, bool cubeEntry, RGL::Resources& res) {
+		std::span<const RGL::PipelineSpec> specs, RGL::Resources& res) {
 		std::vector<PipelineEntry> table;
 		const uint32_t descriptorSize = res.getDescriptorHeap().getDescriptorSize();
 
-		// cube 条目仅当 cubeEntry 时创建（SceneConfig.showCube，configs/scene.lua 的 cube 字段；
-		// 渲染 system 侧的 cube DrawCall 经 pipelineIndex("cube") 守卫，缺条目即跳过）
-		if (cubeEntry) {
-			const RGL::PipelineSpec* cubeSpec = findPipelineSpec(specs, "cube");
-			if (!cubeSpec) {
-				static const RGL::PipelineSpec defaultCube{
-					"cube", "generated_shaders/cube.mesh.spv", "generated_shaders/cube.frag.spv"};
-				cubeSpec = &defaultCube;
-			}
-			table.emplace_back(PipelineEntry{
-				"cube",
-				RGL::RenderPipeline(device, loadShaderEffect(*cubeSpec), descriptorSize,
-					res.getHeapSlotVertex(), res.getHeapSlotIndex())});
+		const RGL::PipelineSpec* cubeSpec = findPipelineSpec(specs, "cube");
+		if (!cubeSpec) {
+			static const RGL::PipelineSpec defaultCube{
+				"cube", "generated_shaders/cube.mesh.spv", "generated_shaders/cube.frag.spv"};
+			cubeSpec = &defaultCube;
 		}
+		const auto& cubeAsset = res.getAssetTable().get(res.cubeAssetId());
+		table.emplace_back(PipelineEntry{
+			"cube",
+			RGL::RenderPipeline(device, loadShaderEffect(*cubeSpec), descriptorSize,
+				cubeAsset.heapSlot, *cubeAsset.indexHeapSlot)});
 
 		return table;
 	}
@@ -355,7 +338,7 @@ export class Renderer {
 	// "model" pipeline 规格（构造期 resolveModelSpec 解析，按值存；
 	// addModelPipeline 创建模型条目用）
 	RGL::PipelineSpec modelSpec;
-	// 管线表：ShaderObject 条目（"cube"（cubeEntry 时）+ 每 primitive 一条 "model_i"，
+	// 管线表：ShaderObject 条目（"cube" 恒建 + 每 primitive 一条 "model_<assetId>"，
 	// 后者资产上传期经 addModelPipeline 加入）。cube 部分初始化列表构建
 	//（makePipelineTable），见构造器注释。无 RenderPass/PipelineLayout。
 	std::vector<PipelineEntry> pipelines;
