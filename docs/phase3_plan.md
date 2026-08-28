@@ -1,6 +1,11 @@
 # Phase 3 实施计划：纹理管理
 
-> **状态**：现行（2026-08-27 规划；**M1/M2 已完成并验证**；**M3 受阻**：Slang 分离绑定在 RADV descriptor heap 采样恒 garbage——RADV 只映射组合 OpTypeSampledImage（R1 已证实，见 heap_texture_research §八），代码已就绪待 **NVIDIA 补测**定案：NVIDIA 支持分离 → M3 直接过；同样只认组合 → model.frag 改 GLSL 组合 sampler2D（spike 已验证路径）或等 RADV 修复）
+> **状态**：已完成（2026-08-28；M1-M3 全部落地——M3 的"分离绑定"定案 = spike 三驱动
+> ×5 变体全 PASS（heap_texture_research §九：§八 误诊复盘，标量 Texture2D<float> R 通道
+> splat + samplerHeapOffset 字段误用），主工程走**独立 sampler heap** 路径（shader.cppm 注释）；
+> 纹理/材质数据归属 `Resources::AssetTable`（2026-08-28 重构批次 1-2，TexturePool 类未落地——
+> 见 next_roadmap.md Phase 3 偏离注记；真实 4K 纹理模型 cottage 复验 PASS）。
+> 历史状态（2026-08-27 时点）：M1/M2 已完成；M3 受阻（当时定性"RADV 只认组合"已被 §九 推翻）
 >
 > 配套 [next_roadmap.md](next_roadmap.md) 的 Phase 3 小节。可执行粒度实施计划，
 > 含已确认决策、事实核查、分步执行、文件变更清单与风险。

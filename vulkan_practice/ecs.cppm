@@ -14,6 +14,7 @@ import vk_swapchain;
 import vk_resources;
 import vk_renderer;
 import llm_debug;
+import texture_pool;
 import types_generated;
 import model_types_generated;
 import scene;
@@ -262,6 +263,15 @@ export std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer
 	RenderListState renderListState;
 	uint32_t llmFrame = 0;
 	uint32_t frame = 0;  // 每帧无条件计数（onFrame DIAG 回调用；llmFrame 仅在 llm 启用时递增）
+	// texel 回读金丝雀（heap_texture_research.md §12.7 ②）：RGL_TEXEL_CANARY=N（帧号，
+	// 默认关）——帧 N 的 drawFrame 前重读白纹理已知 texel 比对，纹理 BO 死 = 立即报错
+	//（GPU 侧 UAF 签名，ASan 全盲；诊断路径单次 GPU 停顿，正常路径零影响）
+	const uint64_t canaryFrame = [] {
+		if (const char* env = std::getenv("RGL_TEXEL_CANARY"))
+			return static_cast<uint64_t>(std::strtoull(env, nullptr, 10));
+		return UINT64_MAX;  // 未设 = 不触发
+	}();
+	bool canaryFired = false;
 
 	// system 顺序（数据流契约）：
 	//   camera（InputEvents→Camera，消费即清空）→ animation（SceneSpin）→ bounds（Bounds→SceneBounds）
@@ -296,6 +306,13 @@ export std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer
 
 		for (auto& system : systems) {
 			system.fn(rg, dt);
+		}
+
+		// texel 金丝雀（本帧 drawFrame 前，waitForIdle 已在函数内排空 in-flight）
+		if (!canaryFired && frame >= canaryFrame) {
+			canaryFired = true;
+			texelCanaryCheck(resources, renderer.getDeviceContextRef(),
+				renderer.getGraphicsCommandPoolRef(), frame);
 		}
 
 		auto result = renderer.drawFrame(rg.ctx().get<FrameDrawList>());

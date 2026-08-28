@@ -31,9 +31,9 @@ registry 只在 Phase 2 的 model 路径上生效了一半（entity 注册 + vie
 
 | # | 规范 | 项目现状 |
 |---|------|---------|
-| 1 | registry 是场景唯一数据源，场景状态不在 registry 外平行维护 | ⚠️ 每帧/配置状态已全部进 registry（E3/E4 已修复：`SceneSpin`/`SceneBounds`/`ViewProjection`/`WindowExtent`/`AppExit`/`FrameDrawList`）；model 资产数据收敛进 Resources 资产表（E1.1–1.3 已修复，批次 3）；cube 数据仍在 Resources 成员（E1.4，Phase 4） |
+| 1 | registry 是场景唯一数据源，场景状态不在 registry 外平行维护 | ✅ 每帧/配置状态已全部进 registry（E3/E4 已修复：`SceneSpin`/`SceneBounds`/`ViewProjection`/`WindowExtent`/`AppExit`/`FrameDrawList`）；model/cube/纹理/材质资产数据全部收敛进 Resources 资产表（E1.1–1.4 已修复：批次 3 + 2026-08-28 重构批次 1-3） |
 | 2 | entity 是 ID、component 是纯数据、system 是逻辑唯一载体；system 间经数据通信，顺序显式 | ✅ 已修复（批次 2）：5 个每帧 system（camera/animation/bounds/projection/renderlist）+ 显式 system 列表（未用 entt::scheduler——process 调度器执行顺序无保证，见 §处置记录）；E1/E5 仍 Open |
-| 3 | 场景构成数据驱动："场景里有什么" = registry 里有什么 entity，而非全局变量 / config 字段 / 构造参数 | ⚠️ config 不再进每帧路径（E3 已修复）；model = 上传 → 资产表 → entity 数据驱动（E1.1–1.3 已修复，批次 3；构造参数去耦合）；cube = 构造期 gating（管线条目存在性 = 画不画，E1.4/M1，Phase 4）仍存 |
+| 3 | 场景构成数据驱动："场景里有什么" = registry 里有什么 entity，而非全局变量 / config 字段 / 构造参数 | ✅ config 不再进每帧路径（E3 已修复）；model = 上传 → 资产表 → entity 数据驱动（E1.1–1.3 已修复，批次 3；构造参数去耦合）；cube 同理（E1.4/M1 已修复，2026-08-28 重构批次 3：`showCube` → 是否注册 cube entity，画不画 = 实体有无） |
 | 4 | 分层：底层 Vulkan 类不依赖 ECS、不认识具体资产；渲染 system 产出抽象 draw list，执行器只执行 | ✅ 已修复（批次 2）：renderlist system 产出 `FrameDrawList`，`drawFrame` 盲执行单循环；Renderer 零 entt 依赖（L3 已修复） |
 | 5 | 资产与场景实例分离，组件引用稳定资产 ID 而非侧数组下标 | ✅ 已修复（批次 3）：`MeshRef.asset` 资产 ID 引用 Resources 资产表；五方一致性收敛为资产表一处映射（E1.1/E5.1） |
 
@@ -45,11 +45,11 @@ registry 只在 Phase 2 的 model 路径上生效了一半（entity 注册 + vie
 
 | ID | 问题 | 严重度 | 状态 |
 |----|------|--------|------|
-| [E1](#e1--registry-不拥有场景数据三处散落) | registry 不拥有场景：数据三处散落 + 场景形状泄漏进构造器 | High | E1.1–1.3 **已修复**（2026-08-25 批次 3：资产表 + 生命周期收敛 + 构造参数去耦合，含 L6）；E1.4（cube 一等资产）Open（批次 4/Phase 4） |
+| [E1](#e1--registry-不拥有场景数据三处散落) | registry 不拥有场景：数据三处散落 + 场景形状泄漏进构造器 | High | E1.1–1.3 **已修复**（2026-08-25 批次 3：资产表 + 生命周期收敛 + 构造参数去耦合，含 L6）；E1.4（cube 一等资产）**已修复**（2026-08-28 重构批次 3） |
 | [~~E2~~](#e2--renderer-认识具体资产分层倒置无-draw-list) | Renderer 认识具体场景资产，分层倒置，无 draw list | High | **已修复**（2026-08-24 批次 2） |
 | [~~E3~~](#e3--rendersystem-god-function无调度器config-泄漏) | renderSystem god function：帧循环 + 未 system 化逻辑 + 无调度器 + config 泄漏 | High | **已修复**（2026-08-24 批次 2） |
 | [~~E4~~](#e4--全局状态不进-ecs) | 全局状态不进 ECS：spin / ModelBounds / Viewport | Medium | **已修复**（2026-08-24 批次 2） |
-| [E5](#e5--组件设计偏离纯数据引用约定) | 组件设计偏离"纯数据引用"约定：MeshRef 下标 / MaterialRef 值拷贝 / Relationship 双向 / CameraInput 原始状态 + 键位硬编码 | Medium | E5.1/E5.2/E5.4 **已修复**（2026-08-25 批次 3：MeshRef 资产 ID 化 + Relationship 单向化 + 输入事件化）；E5.3（MaterialRef → 材质资产表）Open（批次 4/Phase 4） |
+| [E5](#e5--组件设计偏离纯数据引用约定) | 组件设计偏离"纯数据引用"约定：MeshRef 下标 / MaterialRef 值拷贝 / Relationship 双向 / CameraInput 原始状态 + 键位硬编码 | Medium | E5.1/E5.2/E5.4 **已修复**（2026-08-25 批次 3：MeshRef 资产 ID 化 + Relationship 单向化 + 输入事件化）；E5.3（MaterialRef → 材质资产表）**已修复**（2026-08-28 重构批次 2：`MaterialRef{material}` 真引用） |
 | [~~L3~~](#l3--renderer-持有未使用的-registry) | Renderer 持有未使用的 `entt::registry*`（死依赖） | Low | **已修复**（2026-08-24 批次 2 顺手） |
 
 > L4（默认 SPV 路径重复）/ L5（set-0 约定）/ L6（ModelMeshAssets 生命周期）为耦合审查条目，
@@ -399,12 +399,64 @@ bounds center=(0.1004, 0, -0.4999) radius=6.25 与 Phase 2 记录（phase2_plan 
 + main.cpp 描述 + 关键文件位置 addModelPipeline/renderListSystem/eventSystem + 已知问题）、
 `phase2_coupling_review.md`（L6 标已修复 + 状态更新节）。
 
+### 2026-08-28 重构批次 1-3 落地（纹理/材质/cube 资产化，Phase 3 收尾）
+
+> 背景：Phase 3 纹理管理实现后（cottage 4K 模型渲染 PASS），发现纹理侧旁路了资产表
+>（`TexturePool` main 局部对象——GPUVM fault 的 UAF 根因，heap_texture_research.md §12.6/§12.7）、
+> 材质身份导入期丢弃（MaterialRef 值拷贝）、cube 非 entity。三批次纯结构重构，行为零变化。
+
+- ~~纹理旁路~~ **已修复（重构批次 1）**：`TexturePool` 类删除 → 自由函数
+  （`loadEmbedded`/`ensureWhiteTexture`/`uploadModelTextures`，`texture_pool.cppm`）；
+  `TextureAsset{VmaImage, view, heapSlot, 描述符指针链}` 进 `AssetTable`（**deque 存储**——
+  元素地址稳定 = 描述符指针链稳定存储单一介质，替代原 4 个平行 deque）；
+  共享 sampler 归 `Resources::ensureSharedSampler()`（幂等，slot 归 Resources 成员）；
+  白纹理 slot 契约断言（`reserved + HeapSlotModelVertexBase + 模型顶点槽数`，按 kind 计数）。
+  **UAF 结构性消除**：纹理 BO/描述符存储随 Resources 存活，不再依赖 main 局部对象生命周期。
+- ~~E5.3~~ **已修复（重构批次 2）**：`MaterialAsset{baseColor, textureId, alphaModeBlend}` 进
+  资产表（第三容器 materials）+ `MaterialRef{material}` **真引用**（E5.3 解决）；
+  `GltfPrimitive.materialIndex`（glTF materials 下标，-1 = 无材质 → 默认材质）——
+  材质身份不再导入期丢弃；`registerScene` 按 materialIndex 去重注册 + **同 materialIndex
+  字段一致性金丝雀**（baseColor/alphaMode 漂移 = loader bug，启动期报错不静默带病渲染；
+  textureId 不校验——含 per-primitive hasUv 投影非材质级格式保证）。
+  语义区分（MaterialAsset 注释钉死）：`textureId` = 材质**引用**的纹理；
+  primitive **有效**纹理 = 有 uv 且图有数据 ? material.textureId : 白（选择留在上传返回值
+  `primitiveTextureIds`，管线烘焙消费）。Phase 5 透明排序 / Phase 7 culling 的材质分类基础。
+- ~~E1.4/H1/M1~~ **已修复（重构批次 3）**：cube 一等资产——`MeshAsset` 增可选
+  `indexBuffer`/`indexHeapSlot` + `AssetTable::addIndexedMesh(kind=Cube)`；cube buffer
+  构造体 move 进资产记录（资产 0，三角形数 = 12），四个直接访问器删除
+  （访问经 `cubeAssetId()` → 资产表）；`scene.cppm` 新增 `registerCubeEntity`
+  （Transform(identity) + Bounds(顶点半径派生) + MeshRef + MaterialRef + Relationship(根)）；
+  main 按 `showCube` 决定是否注册——**画不画 = 实体有无（数据驱动），无构造期 gating**；
+  `"cube"` 管线条目恒建（多建 2 个 shader object 成本可忽略）+ `bindPipelineToAsset`
+  （启动期一次写回）；`renderListSystem` 删 cube 过渡态特例 + 每帧
+  `pipelineIndex("cube"|"cube_tex")` 字符串查找（E2.2 面），统一 view 按资产 kind 分支；
+  RGL_CUBE_TEX 诊断链整体删除（shader/CMake/ecs/main 四处 + cube_debug.frag.slang）。
+- ~~L2~~ **消解（随 E1.4）**：cube 挂自己的 Bounds 组件，经 boundsSystem 自动纳入
+  SceneBounds 聚合（frustum/near-far 自适应含 cube）。
+- **仍 Open（归 Phase 4 ShaderRegistry）**：
+  - push constant 布局未归一：`renderListSystem` 留 `AssetKind` 分支
+    （Cube→DrawArgs 64B / Model→ModelDrawArgs 96B；H1 注记——每管线自己的 args 布局）
+  - 管线表 per-primitive 条目（392 条）未去重：binding mapping 是 shader object 级状态，
+    去重需按 (顶点 slot, 纹理 slot) 组合归并 + 资产表存条目引用（批次 3 刻意未做，行为零变化优先）
+
+**验证（行为零变化，llm 1280×720 逐像素）**：三批次各自对基线 diff=0（cottage 4K 纹理 /
+grass / transparent+cube / 无模型+cube 四路），启动零 warn/error；附加实锤——批次 3 前后
+（master 态 vs cb3231e 同码重拍）截图 **diff=0 位级一致**，全部三批次渲染位级等价。
+注：batch 0 保存基线有 1px 捕获瞬态离群（(683,279) 纹理缝边 0→38，cb3231e 同码重拍复现），
+三基线已全部重拍替换（`build/vulkan_practice/screenshots/refactor_baseline_*.png`）。
+
+**接缝回写**：`AGENTS.md`（模块结构 vk_resources/vk_renderer/scene/gltf_loader/model_importer
++ texture_pool 行 + main.cpp 描述 + 已知问题 ECS 债节）、`next_roadmap.md`（Phase 3 已完成
++ 计划-实现偏离注记 + Phase 4 前置债）、`phase3_plan.md`（状态行）、
+`heap_texture_research.md`（§12.7 手段① 标已落地）。
+
 ---
 
 ## 下一步（2026-08-24 会话结论）
 
-> **状态（2026-08-25）**：批次 3 已落地（§处置记录 2026-08-25 批次 3 节），
-> 下一个会话 = **Phase 3（纹理管理）** 本体，预研结论见下。
+> **状态（2026-08-28）**：Phase 3 已落地 + 重构批次 1-3 收尾（§处置记录 2026-08-28 节）：
+> 纹理/材质/cube 全部资产化（E1.4/E5.3/L2/M1 解决），剩余债（push constant 归一 + 管线去重）
+> 归 **Phase 4（ShaderRegistry）**，预研结论见下（历史）。
 
 **原计划（Phase 3 + 批次 3 并案）顺序**：
 

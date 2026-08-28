@@ -510,9 +510,14 @@ descriptor set 有"引用的 image 必须活过使用"的 VUID + VVL 跟踪；de
    （Resources/AssetTable），禁止 main() 局部。"项目已有同款规则（raii 对象必须成员初始化）——
    TexturePool 以"普通类"身份溜过去。架构正解 = `TextureAsset` 进 AssetTable（Phase 4 原计划）：
    **模型 BDA 没死就是因为它在 AssetTable 里**，纹理没进去——这个不对称就是 bug 本身；
+   **2026-08-28 重构批次 1 已落地**：TexturePool 类整体删除（自由函数）+ `TextureAsset`
+   进 `AssetTable`（deque 存储，元素地址稳定 = 描述符指针链稳定）+ 共享 sampler 归
+   `Resources::ensureSharedSampler()`——纹理/材质/cube buffer 全部随 Resources 存活，
+   与模型 BDA 同层（规则本身保留，AGENTS.md 构造依赖图）；
 2. **texel 回读金丝雀（~10 行）**：项目已有 upload 期 texel 回读 DIAG；加一条"第 N 帧重读
    同一 texel 比对"——纹理 BO 死了，回读立即偏/fault，把"时好时坏"变成"帧 3 必炸"；
-   对本类 bug 最便宜的决定性检测；
+   对本类 bug 最便宜的决定性检测；**2026-08-28 重构批次 4 落地**（env 门控 `RGL_TEXEL_CANARY`，
+   默认关——启动期回读采样首 texel，第 N 帧重读比对，偏 = 立即报错）；
 3. **upload 时记录每个 GPU 资源的 VMA 分配身份（地址+大小），fault 时反查**：08-27 lldb
    手里就有 BO 地址，缺的只是问一句"这个 BO 是我传的那块，还是复用来的？"；
 4. **签名识别**："同二进制时好时坏 + 驱动层页表 fault" = UAF/竞态经典签名。

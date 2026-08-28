@@ -217,14 +217,28 @@ SPV 路径的模式撑不住。Phase 4 的 ShaderRegistry 是最终解法，但�
 
 ## Phase 3：纹理管理
 
-> **状态（2026-08-25）**：前置批次 3（ECS 债）已落地——`Resources::AssetTable`（资产表，
-> GPU 数据/heap slot/三角形数/管线条目引用 + 稳定 id）成为 TexturePool slot 分配器的天然宿主；
-> `MeshRef{asset}` 资产 ID 化、构造参数去耦合（heap 容量固定裕量 1024 槽）、输入事件化。
-> 见 [ecs_compliance_review.md](ecs_compliance_review.md) §处置记录。
-> **预研已做（RADV 侧）**：`heap_texture_spike/` 离屏像素级验证 PASS（单 heap 混存
-> buffer+image 描述符、内嵌 sampler 采样）；**关键约束**：RADV `imageDescriptorSize=32B >
-> bufferDescriptorSize=16B`，Phase 3 slot 步长须改 `max(buffer, image)`（运行时查询）。
-> NVIDIA 侧 spike 待 dGPU 机器补测。完整记录见 [heap_texture_research.md](heap_texture_research.md)。
+> **状态（2026-08-28）：已完成**（内嵌纹理采样 + 材质资产 + per-primitive 管线烘焙，
+> 三驱动验证见 [heap_texture_research.md](heap_texture_research.md)；真实 4K 纹理模型
+> cottage 257MB/392 primitive/11 张 4096² 复验 PASS）。
+> 计划-实现偏离注记（实现为准，AGENTS.md 模块表为现状权威记录）：
+> - 纹理数据归属 `Resources::AssetTable`（`TextureAsset`/`MaterialAsset` 容器），
+>   **TexturePool 类未落地**——2026-08-28 重构批次 1 把 main 局部 TexturePool 对象
+>   （GPUVM fault UAF 根因，heap_texture_research.md §12.6/§12.7）整体降为自由函数
+>   （`loadEmbedded`/`ensureWhiteTexture`/`uploadModelTextures`），slot 分配统一走
+>   `Resources::allocSlot`（"TexturePool 容量动态扩展"决策作废——固定裕量 1024 槽，与场景内容解耦）
+> - 纹理采样走**独立 sampler heap**（非 pEmbeddedSampler）：spike 两路三驱动均 PASS，
+>   选已验证可用的独立 sampler heap（phase3_plan R1 回退链既选路径，shader.cppm 注释）
+> - 材质系统提前部分落地：`MaterialAsset{baseColor, textureId, alphaModeBlend}` 资产表 +
+>   `MaterialRef{material}` 真引用（重构批次 2，E5.3）——比计划"Phase 4 才做材质系统"早，
+>   Phase 4 的 ShaderRegistry 在其上扩展（per-pipeline args 布局归一）
+> - **留待 Phase 4**：管线表 per-primitive 条目（392 条）去重（binding mapping 是 shader
+>   object 级状态，按 (顶点 slot, 纹理 slot) 组合归并 + 资产表存条目引用）；
+>   `renderListSystem` 的 AssetKind 分支（push constant 布局 64B/96B 不统一）
+>
+> **预研（历史）**：`heap_texture_spike/` 三驱动实测（2026-08-27：RADV/Intel/NVIDIA ×
+> 5 变体全 PASS）；**关键约束**：`imageDescriptorSize`（RADV 64 / NVIDIA 32 / Intel 64）>
+> `bufferDescriptorSize`（16/16/64），统一步长改 `max`（运行时查询，已落地）。
+> 完整记录见 [heap_texture_research.md](heap_texture_research.md)。
 
 ### 目标
 支持纹理贴图，为 PBR 材质做准备。
@@ -247,6 +261,11 @@ SPV 路径的模式撑不住。Phase 4 的 ShaderRegistry 是最终解法，但�
 ---
 
 ## Phase 4：Shader 反射扩展 + 多 Shader 支持
+
+> **状态（2026-08-28）**：未开始。前置债已明确（Phase 3 完成后遗留，见上节偏离注记）：
+> ① 管线表 per-primitive 条目去重（392→按 (顶点 slot, 纹理 slot) 组合）；
+> ② `renderListSystem` AssetKind 分支归一（每管线自己的 push constant args 布局）。
+> ShaderRegistry 是两者的统一落点。
 
 ### 目标
 支持多种 shader 风格（unlit、pbr），通过 Lua 描述渲染意图。
