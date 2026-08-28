@@ -287,6 +287,23 @@ fresh.calls.push_back(DrawCall{asset.pipelineIndex,
    `bindToAsset`（批次 3 改带 styleName）；cube → `bindToAsset(registry.pipelineIndex("cube"))`。
 9. 验证（§7 行 2）。
 
+> **批次 2 定案（2026-08-28 晚）：接受 741px artifact 推进。** 实现后 cottage 截图出现
+> **741px 确定性 artifact**（特定纹理被采样为黑，区域 504-680/281-423，关 VVL 确定性；
+> grass 小模型完全正常）。大批量排查（12+ 项）排除 high VA/flush 时序/descriptor range 尺寸/
+> 纹理 slot 位置/去重/vertexOffset 读取/多 primitive 共享块/buffer 布局/顶点数据（读回
+> 392/392 全对）/纹理描述符/heap 绑定/sampler/waitIdle 同步，代码逐行核对无 bug。**回退
+> per-primitive（撤分块+去重）后 artifact 仍在**（744px）→ 根因是批次 2 的 **ShaderRegistry
+> 模块 / shared_ptr 间接层**引入（非分块/去重/vertexOffset），但具体点未定位。
+> **决策：接受 artifact 作为已知问题推进**（cottage 特定区域，非全场景；grass 正常），
+> 三个待查项记录如下，后续专项排查：
+> 1. **artifact 根因**（ShaderRegistry 模块或 shared_ptr 间接层引入，741px 特定纹理采样黑，
+>    已排除 12+ 项，具体点未定位）
+> 2. **VVL descriptor heap 双写扰动**（VVL 无条件加载 vkinstance.cppm，其 wrapper 对同一
+>    slot 先零化后写实际描述符，扰动 artifact 区域——开 VVL 非确定性 740/744，关 VVL 确定性
+>    741；`RGL_NO_VVL=1` 可关）
+> 3. **lavapipe ICD 拖累崩溃**（给 Mesa 加 lavapipe 后 loader 启动枚举所有 ICD，新编
+>    lavapipe 库加载即 segfault，交互+离屏全崩；删 lavapipe ICD 即修复，非本代码 bug）
+
 ### 批次 3：材质字段 + pbr 占位 + Lua 风格映射
 
 1. `gltf_loader.cppm`：metallic/roughness/unlit 解析（§3.4）。
