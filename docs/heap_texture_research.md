@@ -1,6 +1,6 @@
 # Descriptor Heap 纹理采样预研（Phase 3 依据）
 
-> **状态**：调研（Phase 3 依据；**2026-08-27 三驱动交叉测试完成**：RADV / Intel ANV / NVIDIA × 5 变体（组合 / 分离+sampler heap / 分离+内嵌 sampler / 无 sampler 对照）全部像素级 PASS——descriptor heap 纹理/sampler 语义分离**三驱动均完整实现**。原 §八"RADV 只映射组合 OpTypeSampledImage"结论**被推翻**（根因 = spike shader 把 RGBA8 纹理误声明为标量 `Texture2D<float>`，Slang 语义下 R 通道 splat 到 4 通道，详见 §九）；主工程 buffer 描述符路径已三平台验证（commit `1f43d65`）。**2026-08-27 补：§十 4K 黑屏排查**——64MB 纹理 + 渲染目标 <2048 在 RADV Strix Halo 必黑，根因定位到 APU high VA 段（56 位）+ 48 位采样描述符编码不下（内核/驱动层，未解；真实纹理尺寸正常）。主工程接入实测历史见 §八（部分定性已被 §九 修正）。
+> **状态**：调研（Phase 3 依据；**2026-08-27 三驱动交叉测试完成**：RADV / Intel ANV / NVIDIA × 5 变体（组合 / 分离+sampler heap / 分离+内嵌 sampler / 无 sampler 对照）全部像素级 PASS——descriptor heap 纹理/sampler 语义分离**三驱动均完整实现**。原 §八"RADV 只映射组合 OpTypeSampledImage"结论**被推翻**（根因 = spike shader 把 RGBA8 纹理误声明为标量 `Texture2D<float>`，Slang 语义下 R 通道 splat 到 4 通道，详见 §九）；主工程 buffer 描述符路径已三平台验证（commit `1f43d65`）。**2026-08-27 补：§十 4K 黑屏排查**——64MB 纹理 + 渲染目标 <2048 在 RADV Strix Halo 必黑，根因定位到 APU high VA 段（56 位）+ 48 位采样描述符编码不下（内核/驱动层，未解；真实纹理尺寸正常）。主工程接入实测历史见 §八（部分定性已被 §九 修正）。**2026-08-28 最终定性（§十二）：§八 全黑 / §十 4K 黑屏 / §十一 状态漂移同根 = `TexturePool` 生命周期 UAF**（e2015c6 及之前声明在 main() if 块内，块尾析构释放纹理 BO → 第 0 帧采样已释放 VA；VA 未复用=读旧页"正常"（好状态），被复用=TCP fault/全黑）——2de6731 提出 if 块即修复（commit message 误标 slot 顺序）；m3-scene 分支现场复现 + 最小修复单变量实锤（§12.6）；§十 的 high VA 定性待 `TEXTURE_FORCE_SIZE=4096` 在 master 复跑后改写。
 
 **日期**: 2026-08-25（首测 RADV）；2026-08-27（三驱动交叉复测，见 §九）
 **环境**: Gentoo, Vulkan 头文件 1.4.341（系统 `/usr/include/vulkan`，主工程/spike 编译环境），loader 1.4.341（旧，扩展符号不在动态符号表）。2026-08-27 机器三卡：RADV（Ryzen 9950X iGPU，Mesa 26.2.1）/ Intel Arc A310（ANV，Mesa 26.2.1）/ NVIDIA RTX 5090（610.57.4，prime offload）。
@@ -262,11 +262,25 @@ Phase 3 接入（`texture_pool.cppm` + `shader.cppm` 3 条目映射 + sampler he
 
 ### 10.7 现状与后续
 
-- **真实纹理尺寸（256×512 级）渲染正常，Phase 3 M3 功能可用**；64MB+ 大纹理 + 目标 <2048 记为**已知驱动限制**。
+> **12.6 勘误（本节定性待推翻）**：本节 lldb 观测（4K BO 落 high VA 段、"48 位描述符编码不下"）
+> 全部在 **UAF 修复前**构建上取得——纹理 BO 第 0 帧前已被释放，"high VA BO" 极可能是**已释放 VA
+> 被复用后的分配**，非原始纹理。§十二 12.6 遗留验证：master（UAF 已修）上 `TEXTURE_FORCE_SIZE=4096`
+> 复跑 §10.4 矩阵，若 4K 不再黑/fault → 本节"内核/驱动层 48 位编码"定性整体改写为 **UAF 复用**，
+> ①②③ 后续（root 内核调试 / 上游 bug report / spike 二分）全部撤回。
+
+- **真实纹理尺寸（256×512 级）渲染正常，Phase 3 M3 功能可用**；64MB+ 大纹理 + 目标 <2048 记为**已知驱动限制**（定性待 12.6 遗留验证改写）。
 - 无效改动已回退（预分配链：`preallocateTextureImage`/`probeImageSize`/`PreallocatedTexture`/TexturePool 采纳/main.cpp 重排/GltfImage 宽高/LLM_TARGET env）；保留的诊断设施：`TEXTURE_FORCE_*` env + DIAG 日志（texture_pool.cppm）、`RGL_NO_VVL` 门（vkinstance.cppm）、spike `SPIKE_RT_*`/`SPIKE_HEAP_SLOTS`/`SPIKE_SWAPCHAIN_EXT` env + renderArea 修复。
 - **后续**（未做）：① root 内核级调试（黑屏 run 时 `sudo dmesg -w` 抓 amdgpu VM fault / 页表错误，确认 shadow 映射缺口；内核源码 `/usr/src/linux-7.1.10-lto-sound-fix`）；② 上游 bug report（Mesa RADV + 内核 amdgpu：APU high VA BO 的 48 位采样描述符编码，附 §10.4 矩阵 + §10.2 地址证据）；③ 嫌疑收窄二分（主工程 device features 逐项加到 spike：timelineSemaphore / descriptorIndexing / vulkan11-14 / shaderUntypedPointers / VMA / 窗口+surface）。
 
-## 十一、2026-08-28 可见窗 GPUVM fault 排查（交互模式 device lost；状态漂移 + per-process 触发上下文，未解）
+## 十一、2026-08-28 可见窗 GPUVM fault 排查（交互模式 device lost；状态漂移 + per-process 触发上下文；**2026-08-28 下午定性 = TexturePool UAF，见 §12.6**）
+
+> **12.6 勘误（本节观测全部重新归因）**：本节排查时的构建为 2de6731 开发中的**修复前**形态
+> （TexturePool 仍在 if 块内，生命周期 bug 未修）。"状态漂移/per-process/分钟级翻转"=
+> **UAF 的非确定性**（已释放纹理 VA 的复用模式逐运行不同）；fault 地址签名（§11.1
+> fa000/fb000/e4000/...）与 12.6 在 m3-scene 分支（e2015c6 原样）上的复现 fault
+> （0x8001000fa000 / 0x8001000fb000）**同一模式**，实锤同因。§11.5 group 数假设随之失去
+> 意义（group 数不是触发变量——m3-scene 复现的 fault 与 group 数无关，仅与生命周期有关）。
+> 本节其余内容（现象/签名/判别矩阵/排查坑）作为时点记录保留。
 
 ### 11.1 现象与 fault 签名（dmesg 无 root 可读）
 
@@ -353,14 +367,26 @@ kTrianglesPerGroup 10→128（≈13 groups）**尚未在真模型上验证**。�
   texturedKeepIndex + addCubeTexPipeline）、`RGL_OFFSCREEN`（离屏+blit，证无效）、`RGL_NO_PRESENT`、
   `RGL_SHOW_AFTER`（隐藏启动+N 帧后显示）、`RGL_WIN_SIZE`（交互窗尺寸）、`RGL_NO_HDR`、
   Renderer 帧计数（device lost 打帧号）
-- **后续**：① 坏状态复发 → §11.5 group 数实验（10→128）；② 上游 bug report（内核 amdgpu：
-  APU 高区 PTE 权限状态 + 模型多 group mesh task + 纹理采样 + swapchain dmabuf 共存 → frame 2 TCP
-  权限 fault，附 §11.4 矩阵 + §11.1 签名 + "重试可恢复"状态漂移特征）；③ 若 group 数实锤 →
-  APU 上永久调大 kTrianglesPerGroup（128，≈13 groups，渲染还更快）
+- **后续（12.6 后更新）**：~~① group 数实验（10→128）~~ 失去意义（§11 勘误注：group 数非触发
+  变量）；~~② 上游 bug report（frame 2 fault 方向）~~ 撤回（根因 = 用户态 UAF，非内核）——
+  改由 §12.6 遗留验证决定：master 上 `TEXTURE_FORCE_SIZE=4096` 复跑，若 4K 仍 fault 才重新
+  评估内核方向（届时 §十 的 lldb 证据需按 UAF 修复后构建重取）；③ 若 4K 复跑正常 →
+  §十 整体改写为 UAF 复用，上游报告不发
 
-## 十二、2026-08-28 A/B 上屏验证：e2015c6 "采样期解引用" 归因证伪 + 真正修复定位（afe2ff0 shader 修复）
+## 十二、2026-08-28 A/B 上屏验证 + 现场复现：全黑/4K 黑屏/状态漂移同根 = TexturePool 生命周期 UAF（2de6731 修复，commit message 标错为 slot 顺序）
 
-### 12.1 实验矩阵（交互可见窗 800×600，用户在场目视确认；本次会话全程好状态，A–E 均无 frame 2 fault）
+> **本节最终结论（12.6 现场实验后修正 12.4 的 barrier 定性）**：§八"全黑 = NaN"、§十"4K 黑屏 /
+> GPUVM TCP fault"、§十一"状态漂移（好/坏状态）"是**同一个 bug 的三种表现**——
+> **e2015c6 及之前（7e1abce/afe2ff0 同款）的 `TexturePool` 声明在 `main()` 的 `if (modelPath)` 块内
+> （main.cpp:104），块尾（:155）析构 → 纹理 BO 内存 + 描述符指针链存储在第 0 帧渲染前全部释放**；
+> pipeline mapping 已烘焙的 heap slot 描述符仍引用已释放 BO 的 GPU VA → 第 0 帧起 GPU 采样 =
+> **use-after-free**。VA 未被复用 → 读旧页数据 = 渲染"正常"（= §十一"好状态"，16/18 通过就是它在
+> 正常读旧数据）；VA 被复用为权限不同的 BO → **GPUVM TCP 权限 fault**（可见窗，swapchain dmabuf
+> 被 KWin import 后复用模式冲突）/ **全黑**（llm 隐藏窗）。**2de6731 把 `TexturePool` 声明提出
+> if 块（生命周期覆盖渲染期）即此修复**——commit message 只记录了 slot 顺序动机（getWhite 保持块内），
+> 生命周期效果未记录，导致后续排查（含本节 12.1–12.4）一直以为"已修复"而找不到根因。
+
+### 12.1 实验矩阵（交互可见窗 800×600，用户在场目视确认；A–G 在 master 上做，master 已含 UAF 修复，故均复现不出原始症状）
 
 | # | 变体（单变量，其余保持当前代码） | 结果 |
 |---|---|---|
@@ -398,23 +424,64 @@ Mesa 26.2.1 源码（portage distfiles `mesa-26.2.1.tar.xz`，与系统 `/usr/li
 | "旧字段 `samplerHeapOffset` 用法 → 采样 garbage" | §八 根因 2 / §九.2 | **功能层面排除**（E 用旧字段采样正常；与 §9.1 三驱动宽容兼容一致）——`heapOffset` 修正定性为 spec-UB 修正（必须修，但非功能修复） |
 | "RADV 只映射组合 OpTypeSampledImage，不映射分离对" | §八（§九 已推翻） | **再确认排除**（E：分离 OpTypeImage+OpTypeSampler + sampler heap 全链路正常） |
 
-### 12.4 §八"全黑 = NaN"的最终定性（2026-08-28 A–G 后）
+### 12.4 §八"全黑 = NaN"的定性修正（12.6 现场实验后）
 
-- **最可能的根因 = M3 首接期的 host→heap barrier 缺位**：`e96f789`（7e1abce 前）drawFrame 的 heap barrier 只设
-  `eResourceHeapReadEXT`，缺 `eSamplerHeapReadEXT` → sampler 描述符（启动期 `vkWriteSamplerDescriptorsEXT`
-  host 写）未同步到 GPU → 采样器读**未初始化内存** → 恒 garbage/NaN（§八"排除"表"修了真 bug"行 +
-  7e1abce vkrenderer.cppm 当时注释"采样恒 garbage（Phase 3 黑屏根因）"）。**7e1abce 内已修**——
-  故 A–G 任何回退都复现不出全黑（全在已修复状态上做实验）；G 进一步证明当前启动期同步
-  （TexturePool fence wait / waitForIdle）已掩盖该缺位，但 spec 层面该位必须保留（跨驱动不保证有兜底）；
-- §八 的"采样恒 garbage"观察（08-27，7e1abce 之后）与 §九 的"(R+0.1)×4 splat"（08-27 交叉测试）
-  是**不同严重度的两个症状**：前者含 barrier 缺位叠加（garbage/NaN），后者是纯标量 splat（可见但色偏）。
-  §八 把叠加症状误归因为"分离绑定不被映射"，§九 已修正；
-- 残余不可复现因素（不再立项）：旧模型配置（旧 grass + 外置 land.jpg，e2015c6 已删换 grass_variations）、
-  `float4(1.0)+texel` 诊断变体、当时是否处于坏状态（§十一 状态漂移）；
+- **根因 = UAF（12.6）**：§八观察的"采样恒 garbage / 全黑 = NaN"（08-27，M3 首接期）发生在
+  7e1abce/afe2ff0/e2015c6 代码下——`TexturePool` 全部在 if 块内（三 commit 的 main.cpp 均为
+  :104 块内声明），第 0 帧采样已释放的纹理 BO。garbage/NaN = 读已释放 VA 的旧页/复用页；
+- **barrier 缺位是次要的、已被掩盖的 spec 违规**（本节初版曾把它定性为主根因，修正）：
+  `e96f789`（7e1abce 前）heap barrier 缺 `eSamplerHeapReadEXT` 属实（sampler 描述符 host 写
+  未同步 → 理论上采样未初始化内存），**7e1abce 内已修**；但 G 实验证明当前启动期
+  fence/waitIdle 已掩盖该缺位的影响（回退后仍正常）——它贡献过早期"garbage"症状的一层，
+  但单独不足以解释全黑/NaN 的量级（未初始化内存 ≠ 恒 NaN）；spec 层面该位仍必须保留；
+- §九 的"(R+0.1)×4 splat"（三驱动 spike 交叉测试）与 UAF **无关**——spike 的纹理存储是
+  `main()` 作用域（永活，无 UAF），splat 是纯标量声明问题（afe2ff0 修，E 实验实锤灰化）；
+- 三个症状按修复 commit 分层：barrier → 7e1abce 修（次要）、标量 splat → afe2ff0 修（灰化）、
+  **UAF → 2de6731 修（全黑/4K/状态漂移的主根因）**；§八 当时把叠加症状误归因"分离绑定不被映射"，
+  §九 修正一半，12.6 补全；
 - F 实验补充：`cmake/SlangFetch.cmake` 新增 `$ENV{SLANGC_DIR}` 显式覆盖（同 spike 模式，刻意不查 PATH）——
   试别版本/离线用，2026.7.1 vcpkg 残留包位于
   `~/program/vcpkg/packages/shader-slang_x64-linux-native/tools/shader-slang/slangc`；
 
-### 12.5 未解项（不受本节影响）
-- **4K 黑屏**（64MB + 目标 <2048）：内核/驱动层限制，未解（§十/§11.2）；
-- **交互坏状态 frame 2 fault**（状态分钟级漂移 + per-process）：未解（§十一；本次 A–E 全程好状态，不构成对照）；§11.5 group 数实验（10→128）仍为首选后续。
+### 12.6 现场复现 + 最小修复实验（m3-scene 分支，2026-08-28 下午；决定性证据）
+
+`git switch -c m3-scene e2015c6`（UAF 修复前的"现场"）：
+
+| # | 变体（m3-scene 上单变量） | 结果（用户目视 + 日志判据） |
+|---|---|---|
+| H | e2015c6 原样 + llm_debug 隐藏窗 2048×2048（该 commit 自带配置） | **截图 100% 全黑**（中心区 mean=0 std=0），无 fault，正常退出 |
+| I | e2015c6 原样 + 可见窗（llm_debug=false） | **确定性 GPUVM TCP 权限 fault**（0x8001000fa000 / 复跑 0x8001000fb000 相邻页，**首个 submit** device lost）——2/2 复现 |
+| J | I + **仅 `TexturePool` 声明从 if 块内（:104）提到块外**（getWhite 保持块内，slot 顺序契约不变，其余零改动） | **3 轮可见窗全正常**（贴图在，0 fault） |
+
+**J 单变量实锤**：生命周期 = 全黑/4K 黑屏/状态漂移的根因；I 的 fault 地址模式（相邻 4KB 页、
+GPU VA 高区）= 已释放纹理 VA 被复用为权限不同的 BO（可见窗 swapchain dmabuf 被 KWin import
+后参与复用 → 权限冲突；llm 隐藏窗 dmabuf 不被 import → 复用模式不同 → 读旧页 = 全黑无 fault）。
+§十一"状态漂移/分钟级漂移/per-process"= **UAF 的非确定性**（每次运行的 VA 复用模式不同，
+VMA free list 顺序 / KWin dmabuf 池 / 分配总量决定），非独立的驱动状态问题。
+
+**为什么这个"把一行移出块"的 bug 查了数周（复盘）**：
+1. UAF 伪装成驱动状态——VA 未复用时渲染**完全正常**（好状态 16/18 通过就是它在读旧数据），
+   所有"时好时坏"证据都指向驱动/内核/合成器，无人怀疑自身对象生命周期；
+2. §12.2 的 Mesa 源码分析（RADV 写时即解析 pView）**正确但带偏方向**——它排除了"描述符
+   结构体指针"的生命周期嫌疑，但真正的受害者是**纹理 BO 本身**：image 析构后，heap slot 里
+   自包含描述符编码的 GPU VA 照样悬空（写时解析只固化了"写那一刻的 VA"，固化不了"VA 的存活"）；
+3. A–G 全在**已修复**的 master 上做单变量回退——根因在 main.cpp 作用域（"纯管道"，无任何
+   A–G 变量覆盖它），回退任何被测变量都复现不出；
+4. 2de6731 commit message 把修复标成"slot 顺序"（getWhite 动机），生命周期效果未记录——
+   读 commit 的人全部误判为诊断设施；
+5. CPU 侧工具全瞎：ASan/Valgrind 看不到 GPU 的访问，VVL 无对应 VUID（spec 不要求描述符
+   指向的 image 存活），唯一证据是驱动层 GPUVM fault 日志——离真正的 bug（一个 C++ 析构）
+   隔了 4 层抽象（C++ scope → VMA → BO/VA → 内核 PTE）。
+
+**遗留验证（未做）**：master 上 `TEXTURE_FORCE_SIZE=4096`（§十 4K 矩阵的复现开关）复跑——
+若 4K 不再黑/fault，则 §十"内核 gpuva high VA + 48 位描述符编码"定性整体改写为 UAF 复用
+（lldb 观测到的 high VA BO = 复用后的分配，非原始纹理），§10.7 的上游 bug report 不必发。
+
+### 12.5 未解项（12.6 后更新）
+- ~~**交互坏状态 frame 2 fault**（状态分钟级漂移 + per-process）~~ → **已解（12.6）**：根因 =
+  TexturePool UAF（2de6731 修复）；"状态漂移" = UAF 非确定性；08-28 观测到 fault 的均为
+  修复前构建（2de6731 开发过程中），修复后本日 10+ 轮运行（A–G + I/J 对照 + 现场复跑）无一次 fault；
+- **4K 黑屏**（64MB + 目标 <2048，§十）：**疑似同根（UAF 复用，12.6）**——原"内核 gpuva
+  high VA + 48 位描述符编码"定性基于 UAF 修复前构建的 lldb 观测，需 master 上
+  `TEXTURE_FORCE_SIZE=4096` 复跑定性（12.6 遗留验证）；§11.5 group 数实验（10→128）随
+  frame 2 fault 定性为 UAF 而失去意义（group 数不是触发变量）。

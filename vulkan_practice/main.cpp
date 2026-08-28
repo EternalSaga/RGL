@@ -98,8 +98,12 @@ int main() {
 
 		// CPU 解析 + GPU 上传 + 纹理 + ECS 注册：资产数据（buffer/slot/三角形数/管线条目引用）
 		// 在 Resources 资产表，生命周期不再依赖 main 作用域（E1.2/L6）
-		// 纹理池提至模型块外（池本体 + sampler slot 描述符；RGL_CUBE_TEX 的 cube 纹理实验
-		//（无模型）也要用）。白纹理**不**在此上传：布局约定"纹理首槽 = 白"依赖模型顶点槽
+		// 纹理池**必须**提至模型块外——生命周期 = Phase 3 全黑/4K 黑屏/状态漂移的真根因修复
+		//（2026-08-28 m3-scene 现场实验单变量实锤，docs/heap_texture_research.md §12.6）：
+		// 原位置在 if 块内 → 块尾析构释放纹理 BO + 描述符存储，第 0 帧起 GPU 采样已释放 VA
+		// = UAF（VA 未复用读旧页 = "好状态"渲染正常，被复用 = GPUVM TCP fault/全黑 = "坏状态"）。
+		// 附带动机：RGL_CUBE_TEX 的 cube 纹理实验（无模型）也要用池本体。
+		// 白纹理**不**在此上传（getWhite 保持块内）：布局约定"纹理首槽 = 白"依赖模型顶点槽
 		//（base 2+i，HeapSlotModelVertexBase）先分配完——提前上传 = slot 契约漂移
 		//（2026-08-28 排查踩坑：白纹理抢 slot 2 → model.vertex[0] drift）
 		TexturePool texturePool(vkResources.getAllocator(), vkDevice, vkResources);
