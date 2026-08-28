@@ -128,7 +128,7 @@ export class Renderer {
 		resources->getAssetTable().setPipelineIndex(assetId, index);
 	}
 	// DIAG（RGL_CUBE_TEX）：cube + 纹理采样管线条目——隔离"dmabuf BO 存在 + 纹理采样"
-	// 组合触发（GPUVM TCP 权限 fault，2026-08-28 排查）。main 在 TexturePool 就绪后调用
+	// 组合触发（GPUVM TCP 权限 fault，2026-08-28 排查）。main 在纹理上传就绪后调用
 	//（同 addModelPipeline 模式）：cube 顶点/索引固定 slot 0/4 + 任意纹理 slot + 共享
 	// sampler slot；renderListSystem 的 cube DrawCall 优先解析 "cube_tex" 条目。
 	void addCubeTexPipeline(uint32_t textureSlot, uint32_t samplerSlot) {

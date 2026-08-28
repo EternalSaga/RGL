@@ -20,32 +20,87 @@ namespace RGL {
 // 管线表下标的"未设置"值（资产记录的 pipelineIndex 初始值；Renderer::addModelPipeline 写入真实下标）
 export inline constexpr uint32_t kInvalidPipelineIndex = std::numeric_limits<uint32_t>::max();
 
+// 纹理资产 id 的"未设置"值（同 kInvalidPipelineIndex 模式；批次 2 材质资产的 textureId 用它 = 无纹理 → 白）
+export inline constexpr uint32_t kInvalidTextureId = std::numeric_limits<uint32_t>::max();
+
+// 资产种类（批次 1 引入：白纹理 slot 契约断言只数模型顶点槽；批次 3 cube 实体化用它做
+// renderListSystem 数据分支——push constant 布局随 kind（Cube=DrawArgs 64B / Model=ModelDrawArgs 96B），
+// 完整归一待 Phase 4 ShaderRegistry）
+export enum class AssetKind : uint8_t {
+	Model,
+	Cube,
+};
+
 // 资产层：每个已上传 primitive 一条记录（GPU 顶点 buffer + heap slot + 三角形数 + 管线条目引用），
 // 以稳定 id（vector 下标，上传顺序分配）索引。registry entity 经 MeshRef{asset}（scene.cppm）
 // 引用资产，五方一致性（entity ↔ primitive ↔ heap slot ↔ 管线条目 ↔ draw-args）收敛为本表
 // 一处映射（E1.1）。生命周期：Resources 成员（与 descriptor heap / cube buffer 同层），
 // buffer 随 SharedAllocator 控制块存活，不再靠 main.cpp 局部变量的隐式 RAII 保证（E1.2/L6）。
 export struct MeshAsset {
+	AssetKind kind = AssetKind::Model;
 	VmaBuffer vertexBuffer;
 	uint32_t heapSlot = 0;                            // 绝对 heap slot（= reservedSlots() + 偏移，见 uploadModelMeshes）
 	uint32_t triangleCount = 0;                       // primitive 三角形数（group 数派生用）
 	uint32_t pipelineIndex = kInvalidPipelineIndex;   // 管线表下标（Renderer::addModelPipeline 写入）
 };
 
+// 纹理资产（Phase 3 → 批次 1 迁入资产表）：GPU image + view + heap 描述符槽 + 描述符指针链。
+// 原 owner = main 局部 TexturePool 对象（UAF 根因：块尾析构第 0 帧前释放纹理 BO，
+// docs/heap_texture_research.md §12.6）；现活在 AssetTable（Resources 成员），VmaImage
+// 包装体随 Resources 存活——所有权规则（§12.7 ①）在此首次落地。
+// viewCreate 必须保留：v341 的 VkImageDescriptorInfoEXT::pView 要 image view 的
+// create info（值拷贝），不是句柄（docs/heap_texture_research.md §二 条款表）。
+// 描述符指针链（imageDesc/resourceDesc/dst）折进记录本体：记录活在 std::deque
+//（push_back 元素地址稳定），自/兄弟引用在入表后设置——跨驱动防御稳定存储的单一介质
+//（替代原 TexturePool 的 4 个 deque；本机 RADV 写时即解析，spec 允许驱动延迟解释，
+// 见 docs/heap_texture_research.md §12.2）。
+export struct TextureAsset {
+	VmaImage image;
+	vk::ImageViewCreateInfo viewCreate{};  // hpp create info（值保留）：v341 VkImageDescriptorInfoEXT::pView 要它
+	vk::raii::ImageView view;
+	uint32_t heapSlot = 0;
+	uint32_t width = 0;
+	uint32_t height = 0;
+	// 描述符指针链（自/兄弟引用，入 deque 后设置——元素地址稳定保证指针有效）
+	vk::ImageDescriptorInfoEXT imageDesc{};        // pView = &viewCreate，layout = eShaderReadOnlyOptimal
+	vk::ResourceDescriptorInfoEXT resourceDesc{};  // type = eSampledImage，data.pImage = &imageDesc
+	vk::HostAddressRangeEXT dst{};                 // 描述符写入目标 slot 范围
+};
+
 export class AssetTable {
    public:
+	// mesh（模型 primitive：去索引顶点流，无索引 buffer）
 	// 注册资产（上传顺序调用）→ 资产 id
 	uint32_t addMesh(VmaBuffer vertexBuffer, uint32_t heapSlot, uint32_t triangleCount) {
-		meshes.push_back(MeshAsset{std::move(vertexBuffer), heapSlot, triangleCount, kInvalidPipelineIndex});
+		meshes.push_back(
+			MeshAsset{AssetKind::Model, std::move(vertexBuffer), heapSlot, triangleCount, kInvalidPipelineIndex});
 		return static_cast<uint32_t>(meshes.size() - 1);
 	}
 	[[nodiscard]] const MeshAsset& get(uint32_t id) const { return meshes[id]; }
 	// 管线条目引用（Renderer::addModelPipeline 在创建管线条目后写回）
 	void setPipelineIndex(uint32_t id, uint32_t pipelineIndex) { meshes[id].pipelineIndex = pipelineIndex; }
-	[[nodiscard]] uint32_t size() const { return static_cast<uint32_t>(meshes.size()); }
+	[[nodiscard]] uint32_t meshSize() const { return static_cast<uint32_t>(meshes.size()); }
+	// 模型顶点槽计数（白纹理 slot 契约断言用："纹理首槽 = 白 = 模型顶点槽之后"；
+	// 批次 3 cube 资产与本容器共用但不占模型顶点槽，按 kind 计数）
+	[[nodiscard]] uint32_t modelMeshCount() const {
+		uint32_t n = 0;
+		for (const auto& m : meshes)
+			if (m.kind == AssetKind::Model) ++n;
+		return n;
+	}
+
+	// 纹理（deque：元素地址稳定 = 描述符指针链的稳定存储介质，见 TextureAsset 注释）
+	// 放置资产记录（deque）→ 调用方在返回引用上设置自/兄弟引用后写描述符 → 资产 id
+	TextureAsset& emplaceTexture(TextureAsset asset) {
+		textures.push_back(std::move(asset));
+		return textures.back();
+	}
+	[[nodiscard]] const TextureAsset& getTexture(uint32_t id) const { return textures[id]; }
+	[[nodiscard]] uint32_t textureSize() const { return static_cast<uint32_t>(textures.size()); }
 
    private:
 	std::vector<MeshAsset> meshes;
+	std::deque<TextureAsset> textures;
 };
 
 export class Resources {
@@ -56,7 +111,8 @@ export class Resources {
 	//   [0, 2)    cube（顶点 slot 0 / 索引 slot 1，types_generated）
 	//   [2, 2+N)  模型顶点 slot（每 primitive 一个，slot = reserved + HeapSlotModelVertexBase + i，
 	//   见 model_importer.cppm）
-	//   [2+N, …)  纹理 slot（TexturePool：2+N = 白 1×1 特例，其余按上传序，见 texture_pool.cppm）
+	//   [2+N, …)  纹理 slot（texture_pool.cppm uploadModelTextures：2+N = 白 1×1 特例（契约断言），
+	//   其余按上传序，资产记录在 AssetTable，见 texture_pool.cppm）
 	//   其余为裕量；运行时扩容 = 重建 heap + 重写全部描述符
 	Resources(RGL::AppContext& vkInstance, RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain)
 		: vkInstance(vkInstance),
@@ -115,20 +171,40 @@ export class Resources {
 	vk::DeviceSize getReservedRangeSize() const { return descriptorHeap.getReservedSlots() * descriptorHeap.getDescriptorSize(); }
 	// sampler heap 绑定的保留区（同 resource heap 语义：reserved 槽声明为不可用）
 	vk::DeviceSize getSamplerReservedRangeSize() const { return samplerHeap.getReservedSlots() * samplerHeap.getDescriptorSize(); }
-	// 共享 sampler 描述符写入 sampler heap 首个可用槽，返回槽号（启动期一次性，TexturePool 构造调用）。
-	// sampler create info 存成员（稳定存储）：跨驱动防御——本机 RADV 写时即解析
-	// （docs/heap_texture_research.md §12.2，"采样期解引用"旧归因已证伪），
+	// 共享 sampler（批次 1：owner 从 TexturePool 构造移入 Resources——初始化层对象持有）：
+	// 一份 sampler 描述符（linear + CLAMP_TO_EDGE，无 mipmap）写 sampler heap 首个可用槽，
+	// 全模型管线映射指向同一槽。幂等（首次调用写入，之后返回既有槽号）；调用点 = 创建
+	// textured 管线前（main 启动期）。
+	// sampler create info 存成员（稳定存储）：本机 RADV 写时即解析
+	//（docs/heap_texture_research.md §12.2，"采样期解引用"旧归因已证伪），
 	// 但 spec 允许驱动延迟解释，生命周期须覆盖运行期
-	[[nodiscard]] uint32_t writeSamplerDescriptor(const VkSamplerCreateInfo& info) {
-		uint32_t slot = samplerHeap.getReservedSlots();
-		auto slotAddr = samplerHeap.getSlotCpuAddress(slot);
+	[[nodiscard]] uint32_t ensureSharedSampler() {
+		if (sharedSamplerReady)
+			return sharedSamplerSlot;
+		VkSamplerCreateInfo info{};
+		info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+		info.magFilter = VK_FILTER_LINEAR;
+		info.minFilter = VK_FILTER_LINEAR;
+		info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+		info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		info.anisotropyEnable = VK_FALSE;
+		info.compareEnable = VK_FALSE;
+		info.minLod = 0.0f;
+		info.maxLod = 0.0f;
+		info.unnormalizedCoordinates = VK_FALSE;
+		info.borderColor = VK_BORDER_COLOR_INT_TRANSPARENT_BLACK;
+		sharedSamplerSlot = samplerHeap.getReservedSlots();
+		auto slotAddr = samplerHeap.getSlotCpuAddress(sharedSamplerSlot);
 		if (!slotAddr)
 			throw std::runtime_error(slotAddr.error().describe());
 		vk::HostAddressRangeEXT dst{*slotAddr, samplerHeap.getDescriptorSize()};
 		samplerCreateInfo = vk::SamplerCreateInfo(info);
 		// hpp raii 内部 resultCheck（失败抛 LogicError）
 		vkDevice.getDevice().writeSamplerDescriptorsEXT(samplerCreateInfo, dst);
-		return slot;
+		sharedSamplerReady = true;
+		return sharedSamplerSlot;
 	}
 	vk::DeviceAddress getVertexBufferAddress() const { return vertexBuffer.getDeviceAddress(); }
 	vk::DeviceAddress getIndexBufferAddress() const { return indexBuffer.getDeviceAddress(); }
@@ -138,7 +214,7 @@ export class Resources {
 	// registry entity 经 MeshRef{asset} 引用，见 AssetTable 注释）
 	RGL::AssetTable& getAssetTable() { return assetTable; }
 	RGL::VmaAllocatorRAII& getAllocator() { return allocator; }
-	// 统一 slot 分配器（Phase 3，TexturePool 并案）：从 reservedSlots 起单调分配，
+	// 统一 slot 分配器（Phase 3，纹理资产并案）：从 reservedSlots 起单调分配，
 	// name→slot 记日志（slot 表排查用）；调用方以生成的偏移常量校验布局契约（见构造器 / model_importer）。
 	// 越界（≥ capacity，含 reserved）→ 错误
 	[[nodiscard]] std::expected<uint32_t, Error> allocSlot(const char* name) {
@@ -211,7 +287,7 @@ export class Resources {
 	// 容量 = reserved + 用户槽位。用户槽位布局（相对 reserved range 起点，allocSlot 连续分配）：
 	//   cube 顶点 slot 0、索引 slot 1（types_generated 的 HeapSlotVertexOffset/HeapSlotIndexOffset）
 	//   模型顶点 slot 基址 HeapSlotModelVertexBase=2（model_types_generated），每 primitive 一个；
-	//   纹理 slot 自 2+N 起（TexturePool，见 texture_pool.cppm）；
+	//   纹理 slot 自 2+N 起（texture_pool.cppm，资产记录在 AssetTable）；
 	//   剩余裕量 kUserSlotMargin（固定，与场景内容解耦——E1.3）
 	std::expected<RGL::VmaDescriptorHeap, Error> createDescriptorHeap() {
 		auto props = vkDevice.getPhysicalDevice().getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDescriptorHeapPropertiesEXT>();
@@ -311,12 +387,14 @@ export class Resources {
 	RGL::VmaBuffer indexBuffer;
 	RGL::VmaDescriptorHeap descriptorHeap;
 	RGL::VmaDescriptorHeap samplerHeap;  // Phase 3：OpTypeSampler 独立 heap
-	// 共享 sampler 的 create info 稳定存储（writeSamplerDescriptor 写入；
-	// 驱动采样期解引用，生命周期须覆盖运行期，见其注释）
+	// 共享 sampler 的 create info 稳定存储（ensureSharedSampler 写入；
+	// 本机 RADV 写时即解析、spec 允许驱动延迟解释，生命周期须覆盖运行期，见其注释）
 	vk::SamplerCreateInfo samplerCreateInfo{};
+	uint32_t sharedSamplerSlot = 0;   // 共享 sampler 在 sampler heap 的槽号（ensureSharedSampler 启动期写入）
+	bool sharedSamplerReady = false;
 	uint32_t heapSlotVertex;
 	uint32_t heapSlotIndex;
-	// 统一 slot 分配器（Phase 3，TexturePool 并案）：单调分配游标，从 reservedSlots 起
+	// 统一 slot 分配器（Phase 3，纹理资产并案）：单调分配游标，从 reservedSlots 起
 	uint32_t nextSlot;
 	// 资产表（E1.1/E1.2：已上传 primitive 的 GPU 数据 + heap slot + 三角形数 + 管线条目引用）
 	RGL::AssetTable assetTable;

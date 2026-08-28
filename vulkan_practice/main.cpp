@@ -96,19 +96,10 @@ int main() {
 		Renderer vkRenderer(vkDevice, vkSwapchain, vkResources, sceneConfig.pipelines,
 			sceneConfig.showCube);
 
-		// CPU 解析 + GPU 上传 + 纹理 + ECS 注册：资产数据（buffer/slot/三角形数/管线条目引用）
-		// 在 Resources 资产表，生命周期不再依赖 main 作用域（E1.2/L6）
-		// 纹理池**必须**提至模型块外——生命周期 = Phase 3 全黑/4K 黑屏/状态漂移的真根因修复
-		//（2026-08-28 m3-scene 现场实验单变量实锤，docs/heap_texture_research.md §12.6）：
-		// 原位置在 if 块内 → 块尾析构释放纹理 BO + 描述符存储，第 0 帧起 GPU 采样已释放 VA
-		// = UAF（VA 未复用读旧页 = "好状态"渲染正常，被复用 = GPUVM TCP fault/全黑 = "坏状态"）。
-		// 附带动机：RGL_CUBE_TEX 的 cube 纹理实验（无模型）也要用池本体。
-		// 白纹理**不**在此上传（getWhite 保持块内）：布局约定"纹理首槽 = 白"依赖模型顶点槽
-		//（base 2+i，HeapSlotModelVertexBase）先分配完——提前上传 = slot 契约漂移
-		//（2026-08-28 排查踩坑：白纹理抢 slot 2 → model.vertex[0] drift）
-		TexturePool texturePool(vkResources.getAllocator(), vkDevice, vkResources);
-		uint32_t whiteTextureId = kInvalidTextureId;
-		std::map<int, uint32_t> imageTextureCache;  // image 下标 → 纹理资产 id（RGL_CUBE_TEX 用首图）
+		// CPU 解析 + GPU 上传 + 纹理 + ECS 注册：资产数据（buffer/slot/三角形数/管线条目引用、
+		// 纹理资产、材质资产）全部在 Resources 资产表（初始化层 owner，生命周期不依赖
+		// main 作用域——TexturePool 局部对象 UAF 教训，docs/heap_texture_research.md §12.6/§12.7）
+		std::vector<uint32_t> primitiveTextureIds;  // per-primitive 纹理资产 id（批次 2 材质注册 + RGL_CUBE_TEX 门消费）
 		if (!sceneConfig.modelPath.empty()) {
 			auto modelResult = loadGltfModel(sceneConfig.modelPath);
 			if (!modelResult) {
@@ -116,81 +107,54 @@ int main() {
 				logger->error("错误: {}", modelResult.error().describe());
 				return -1;
 			}
-			auto assetIdsResult = uploadModelMeshes(vkDevice, vkResources, *modelResult);
+			auto& model = *modelResult;
+			auto assetIdsResult = uploadModelMeshes(vkDevice, vkResources, model);
 			if (!assetIdsResult) {
 				auto* logger = RLLogger::getInstance();
 				logger->error("错误: {}", assetIdsResult.error().describe());
 				return -1;
 			}
-			// 纹理（Phase 3）：模型顶点槽分配完后再取白纹理（布局约定"纹理首槽 = 白"），
-			// 再按 primitive 的 baseColorTexture 加载（image 下标去重）；无纹理/无 uv → 白纹理
-			auto& model = *modelResult;
-			whiteTextureId = texturePool.getWhite();
-			std::vector<uint32_t> primitiveTextureIds(model.primitives.size(), whiteTextureId);
-			for (size_t i = 0; i < model.primitives.size(); ++i) {
-				const int imageIndex = model.primitives[i].baseColorTextureIndex;
-				if (imageIndex < 0 || !model.primitives[i].hasUv)
-					continue;
-				auto cached = imageTextureCache.find(imageIndex);
-				if (cached != imageTextureCache.end()) {
-					primitiveTextureIds[i] = cached->second;
-					continue;
-				}
-				const auto& image = model.images[imageIndex];
-				if (image.data.empty()) {
-					auto* logger = RLLogger::getInstance();
-					if (logger)
-						logger->warn("纹理: image {} 无内嵌数据（多 buffer .gltf 不支持），primitive {} 用白纹理",
-							imageIndex, i);
-					continue;
-				}
-				auto textureResult = texturePool.loadEmbedded(
-					image.data.data(), image.data.size(),
-					("texture.image." + std::to_string(imageIndex)).c_str());
-				if (!textureResult) {
-					auto* logger = RLLogger::getInstance();
-					if (logger) logger->error("错误: {}", textureResult.error().describe());
-					return -1;
-				}
-				primitiveTextureIds[i] = *textureResult;
-				imageTextureCache[imageIndex] = *textureResult;
-			}
-			{
+			// 纹理（Phase 3）：模型顶点槽分配完后再上传（先取白纹理——布局契约"纹理首槽 = 白"，
+			// ensureWhiteTexture 带契约断言）；产物在资产表
+			auto textureIdsResult = uploadModelTextures(vkResources, vkDevice, model);
+			if (!textureIdsResult) {
 				auto* logger = RLLogger::getInstance();
-				uint32_t texturedPrimitives = 0;
-				for (uint32_t id : primitiveTextureIds)
-					if (id != whiteTextureId) texturedPrimitives++;
-				if (logger)
-					logger->info("textures: {} 资产（白 + {} 图片），{} / {} primitive 带纹理",
-						texturePool.size(), texturePool.size() - 1, texturedPrimitives,
-						model.primitives.size());
+				logger->error("错误: {}", textureIdsResult.error().describe());
+				return -1;
 			}
+			primitiveTextureIds = std::move(*textureIdsResult);
 			auto& assets = vkResources.getAssetTable();
-			const uint32_t samplerSlot = texturePool.samplerSlot();
+			const uint32_t samplerSlot = vkResources.ensureSharedSampler();
 			for (size_t i = 0; i < assetIdsResult->size(); ++i) {
 				const uint32_t id = (*assetIdsResult)[i];
 				// 纹理 slot + sampler slot 烘焙进 per-primitive 管线 mapping（binding 1/2），每帧零成本
 				vkRenderer.addModelPipeline(assets.get(id).heapSlot,
-					texturePool.get(primitiveTextureIds[i]).heapSlot, samplerSlot, id);
+					assets.getTexture(primitiveTextureIds[i]).heapSlot, samplerSlot, id);
 			}
 			registerScene(registry, model, std::span<const uint32_t>(*assetIdsResult));
 		}
 
 		// DIAG（RGL_CUBE_TEX）：cube + 纹理采样——隔离"dmabuf BO 存在 + 纹理采样"组合触发
 		//（GPUVM TCP 权限 fault，2026-08-28 排查）：无模型 BDA / 无模型管线，仅 cube +
-		// 纹理采样；纹理 = 模型首张内嵌图（如有，glb 已含真实 PNG 免 LFS），否则白 1×1；
-		// cube 顶点/索引固定 slot 0/4（见 addCubeTexPipeline）
+		// 纹理采样；纹理 = 模型首个真实带纹理 primitive（如有），否则白 1×1；
+		// cube 顶点/索引固定 slot 0/1（见 addCubeTexPipeline）
 		if (std::getenv("RGL_CUBE_TEX")) {
 			// 无模型时白纹理尚未上传（契约：模型顶点槽之后才取）——此处补取
-			if (whiteTextureId == kInvalidTextureId)
-				whiteTextureId = texturePool.getWhite();
-			const uint32_t texId = imageTextureCache.empty()
-				? whiteTextureId : imageTextureCache.begin()->second;
-			const uint32_t texSlot = texturePool.get(texId).heapSlot;
-			vkRenderer.addCubeTexPipeline(texSlot, texturePool.samplerSlot());
+			const uint32_t whiteId = vkResources.getAssetTable().textureSize() > 0
+				? 0
+				: ensureWhiteTexture(vkResources, vkDevice);
+			uint32_t texId = whiteId;
+			for (uint32_t id : primitiveTextureIds)
+				if (id != whiteId) {
+					texId = id;
+					break;
+				}
+			const uint32_t texSlot = vkResources.getAssetTable().getTexture(texId).heapSlot;
+			const uint32_t samplerSlot = vkResources.ensureSharedSampler();
+			vkRenderer.addCubeTexPipeline(texSlot, samplerSlot);
 			if (auto logger = RLLogger::getInstance())
 				logger->info("DIAG RGL_CUBE_TEX: cube_tex 条目（纹理资产 {} slot {}，sampler slot {}）",
-					texId, texSlot, texturePool.samplerSlot());
+					texId, texSlot, samplerSlot);
 		}
 
 		// DIAG（可见窗 fault 排查）：隐藏窗启动、第 showAfter 帧后 SDL_ShowWindow——
