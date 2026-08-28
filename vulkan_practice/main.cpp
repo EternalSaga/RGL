@@ -85,6 +85,11 @@ int main() {
 
 		// CPU 解析 + GPU 上传 + 纹理 + ECS 注册：资产数据（buffer/slot/三角形数/管线条目引用）
 		// 在 Resources 资产表，生命周期不再依赖 main 作用域（E1.2/L6）
+		// A/B 最小修复实验（2026-08-28 m3-scene 分支）：TexturePool 生命周期须覆盖渲染期——
+		// 原位置在 if 块内（块尾析构释放纹理 BO + 描述符存储）→ 第 0 帧采样已释放 BO
+		// = use-after-free（GPUVM TCP fault / 全黑非确定性）。仅提声明，getWhite 保持块内
+		//（slot 顺序契约不变），验证生命周期单变量
+		TexturePool texturePool(vkResources.getAllocator(), vkDevice, vkResources);
 		if (!sceneConfig.modelPath.empty()) {
 			auto modelResult = loadGltfModel(sceneConfig.modelPath);
 			if (!modelResult) {
@@ -101,7 +106,6 @@ int main() {
 			// 纹理（Phase 3）：白纹理先取（布局约定"纹理首槽 = 白"，依赖模型顶点槽已分配完），
 			// 再按 primitive 的 baseColorTexture 加载（image 下标去重）；无纹理/无 uv → 白纹理
 			auto& model = *modelResult;
-			TexturePool texturePool(vkResources.getAllocator(), vkDevice, vkResources);
 			const uint32_t whiteTextureId = texturePool.getWhite();
 			std::vector<uint32_t> primitiveTextureIds(model.primitives.size(), whiteTextureId);
 			std::map<int, uint32_t> imageTextureCache;  // image 下标 → 纹理资产 id

@@ -39,8 +39,6 @@ return {
     -- Phase 3 纹理验证：一次性截图（NVIDIA/RADV 跨驱动比对用）；交互运行改回 false
     -- 4K 黑屏排查（2026-08-27）：spectacle 截屏已抓到 GPUVM fault（TCP 权限 fault），
     -- 恢复 llm_debug 跑矩阵（fault 日志 = 判据）
-    llm_debug = {
-        file = "screenshots/phase3_texture.png",
-        size = { 2048, 2048 },  -- 4K 黑屏排查：纹理(4096) > 目标(2048) 是否仍坏
-    },
+    -- A/B 现场复验（2026-08-28 m3-scene 分支）：临时关 llm_debug 上屏可见窗
+    llm_debug = false,
 }
