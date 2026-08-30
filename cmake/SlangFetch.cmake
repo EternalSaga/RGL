@@ -25,6 +25,21 @@ function(rgl_fetch_slang)
             return()
         endif()
     endif()
+
+    # Windows: 优先使用 Vulkan SDK 自带的 slangc
+    if(WIN32)
+        find_program(VULKAN_SDK_SLANGC slangc
+            HINTS "$ENV{VULKAN_SDK}/Bin"
+            NO_DEFAULT_PATH)
+        if(VULKAN_SDK_SLANGC)
+            message(STATUS "slangc (Vulkan SDK): ${VULKAN_SDK_SLANGC}")
+            set(SLANGC_EXECUTABLE "${VULKAN_SDK_SLANGC}" PARENT_SCOPE)
+            set(SLANG_PREBUILT_DIR "" PARENT_SCOPE)
+            return()
+        endif()
+    endif()
+
+    # Linux: FetchContent 拉取官方预构建
     set(SLANG_VERSION "2026.16")
     set(SLANG_URL "https://github.com/shader-slang/slang/releases/download/v${SLANG_VERSION}/slang-${SLANG_VERSION}-linux-x86_64.tar.gz")
     set(SLANG_SHA256 "e572e1a293f21971d8a98124c4576848ad4cd6a19b922ce5bad784fee0950648")

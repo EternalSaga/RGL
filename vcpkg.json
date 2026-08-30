@@ -4,26 +4,7 @@
       "name": "boost-headers",
       "version>=": "1.86.0"
     },
-    {
-      "name": "boost-hana",
-      "version>=": "1.86.0"
-    },
-    {
-      "name": "boost-pfr",
-      "version>=": "1.86.0"
-    },
-    {
-      "name": "boost-variant2",
-      "version>=": "1.86.0"
-    },
-    {
-      "name": "boost-dll",
-      "version>=": "1.86.0"
-    },
-    {
-      "name": "boost-unordered",
-      "version>=": "1.86.0"
-    },
+
     {
       "name": "boost-program-options",
       "version>=": "1.86.0"
@@ -32,17 +13,18 @@
       "name": "sdl3",
       "version>=": "3.2.4#0",
       "features": [
-        "wayland",
-        "vulkan"
-      ]
+        "vulkan",
+        "wayland"
+      ],
+      "platform": "linux"
     },
     {
-      "name": "glad",
-      "version>=": "0.1.36#0",
+      "name": "sdl3",
+      "version>=": "3.2.4#0",
       "features": [
-        "gl-api-46",
-        "extensions"
-      ]
+        "vulkan"
+      ],
+      "platform": "windows"
     },
     {
       "name": "glm",
@@ -55,10 +37,6 @@
     {
       "name": "spdlog",
       "version>=": "1.15.0#1"
-    },
-    {
-      "name": "bullet3",
-      "version>=": "3.25#2"
     },
     {
       "name": "nlohmann-json",
@@ -76,23 +54,7 @@
       "name": "entt",
       "version>=": "3.14.0"
     },
-    {
-      "name": "assimp",
-      "version>=": "5.4.3#0"
-    },
-    {
-      "name": "glslang",
-      "version>=": "15.1.0#0",
-      "features": [
-        "tools",
-        "opt",
-        "rtti"
-      ]
-    },
-    {
-      "name": "spirv-cross",
-      "version>=": "1.4.309.0#0"
-    },
+
     {
       "name": "inja"
     },

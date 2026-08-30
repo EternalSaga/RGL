@@ -4,7 +4,6 @@ module;
 #include <filesystem>
 #include <fmt/format.h>
 #include <fstream>
-#include <hash_set>
 #include <memory>
 #include <mutex>
 #include <nlohmann/json.hpp>
@@ -226,6 +225,7 @@ RLLogger::RLLogger(const std::string& configPath) {
 
 	singletonLogger = new spdlog::logger("gl_logger", {console_sink, file_sink});
 	singletonLogger->set_level(spdlog::level::trace);
+	singletonLogger->flush_on(spdlog::level::warn);
 	singletonLogger->set_error_handler(
 		[](const std::string& errorMsg) { throw std::runtime_error(errorMsg); });
 

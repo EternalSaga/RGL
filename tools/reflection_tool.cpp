@@ -1,7 +1,12 @@
 #include <boost/program_options.hpp>
 #include <filesystem>
 #include <nlohmann/json.hpp>
+#ifdef _WIN32
+#include <process.h>
+#define getpid _getpid
+#else
 #include <unistd.h>
+#endif
 
 import rlstd;
 import rllogger;

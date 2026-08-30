@@ -1,77 +1,121 @@
 #!/usr/bin/env just
 
-# RGL Project — Gentoo build recipes
+# RGL Project — Cross-platform build recipes
 
-WORKSPACE := `echo ${ZED_WORKTREE_ROOT:-$PWD}`
-VCPKG := `(which vcpkg | xargs dirname)`
+# ─── 变量定义 ──────────────────────────────────────────────────────────────────
+# just 启动时急切求值所有 backtick——必须用两个平台都能执行的命令
+# 使用 cmd.exe /c 在 Windows 上执行，sh -c 在 Linux 上执行
+WORKSPACE := `python -c "import os; print(os.getcwd())"`
 BUILD := WORKSPACE / "build"
+VCPKG_DIR := `python -c "import os; print('E:/program/vcpkg' if os.name=='nt' else '')" || echo "E:/program/vcpkg"`
+LLVM_DIR := `python -c "import os; print('C:/Program Files/LLVM' if os.name=='nt' else '')"`
+NPROC := `python -c "import os; print(os.cpu_count() or 4)"`
+NINJA_EXE := `python -c "import os; p='E:/program/vcpkg/downloads/tools/ninja/1.13.1-windows/ninja.exe'; print(p if os.path.isfile(p) else 'ninja')"`
 
-# 基础 CMake 配置命令
+# ─── CMake 配置 ───────────────────────────────────────────────────────────────
 # 用法:
-#   just config             -> clang, Release
-#   just config gcc         -> gcc, Release
-#   just config Debug       -> clang, Debug
-#   just config clang Debug -> clang, Debug
-#   just config gcc Debug   -> gcc, Debug
-config COMPILER="clang" BUILD_TYPE="Release":
-    @COMPILER="{{ COMPILER }}"; BUILD_TYPE="{{ BUILD_TYPE }}"; \
-    if [ "$COMPILER" = "Debug" ] || [ "$COMPILER" = "Release" ] || [ "$COMPILER" = "RelWithDebInfo" ] || [ "$COMPILER" = "MinSizeRel" ]; then \
-        BUILD_TYPE="$COMPILER"; COMPILER="clang"; \
-    fi; \
-    if [ "$BUILD_TYPE" = "clang" ] || [ "$BUILD_TYPE" = "gcc" ]; then \
-        TEMP="$BUILD_TYPE"; BUILD_TYPE="$COMPILER"; COMPILER="$TEMP"; \
-    fi; \
-    echo "=== CMake Configure ($BUILD_TYPE, $COMPILER) ==="; \
-    CC="$COMPILER"; if [ "$COMPILER" = "gcc" ]; then CC="gcc"; else CC="clang"; fi; \
-    CXX="$COMPILER"; if [ "$COMPILER" = "gcc" ]; then CXX="g++"; else CXX="clang++"; fi; \
-    env \
-        "CC=$CC" "CXX=$CXX" \
-        cmake -S {{ WORKSPACE }} \
-              -B {{ BUILD }} \
-              -G Ninja \
-              -DCMAKE_BUILD_TYPE=$BUILD_TYPE \
-              -DCMAKE_CXX_FLAGS_RELEASE="-O2 -DNDEBUG" \
-              -DCMAKE_TOOLCHAIN_FILE={{ VCPKG }}/scripts/buildsystems/vcpkg.cmake \
-              -DCMAKE_EXPORT_COMPILE_COMMANDS=1 \
-              -DVCPKG_MANIFEST_MODE=ON \
-              -DVCPKG_OVERLAY_TRIPLETS={{ WORKSPACE }}/custom-triplets \
-              -DVCPKG_TARGET_TRIPLET=x64-linux-native \
-              -DVCPKG_HOST_TRIPLET=x64-linux-native \
-              -DVCPKG_APPLOCAL_DEPS=ON \
-              -DX_VCPKG_APPLOCAL_DEPS_INSTALL=ON \
-              -DVCPKG_VERBOSE=ON
+#   just config              → Release (Linux: clang, Windows: clang++)
+#   just config Debug        → Debug
+#   just config gcc          → gcc (Linux only)
+#   just config msvc         → MSVC / Visual Studio generator (Windows only)
+config COMPILER="default" BUILD_TYPE="Release":
+    #!/usr/bin/env python
+    import os, sys, subprocess
+    compiler = "{{ COMPILER }}"
+    build_type = "{{ BUILD_TYPE }}"
+    workspace = "{{ WORKSPACE }}"
+    build = "{{ BUILD }}"
+    vcpkg = "{{ VCPKG_DIR }}"
+    llvm = "{{ LLVM_DIR }}"
+    is_win = os.name == 'nt'
+
+    # 参数位置互换检测
+    if build_type in ("clang", "gcc", "msvc"):
+        compiler, build_type = build_type, compiler
+    if compiler in ("Debug", "Release", "RelWithDebInfo", "MinSizeRel"):
+        build_type, compiler = compiler, "default"
+
+    print("=== CMake Configure (%s, %s) ===" % (build_type, compiler))
+
+    def fwd(path):
+        """统一正斜杠，避免反斜杠被 shell 转义"""
+        return path.replace("\\", "/")
+
+    toolchain = fwd(os.path.join(vcpkg, "scripts", "buildsystems", "vcpkg.cmake"))
+    triplets = fwd(os.path.join(workspace, "custom-triplets"))
+
+    cmake_cmd = [
+        "cmake", "-S", workspace, "-B", build,
+        "-DCMAKE_TOOLCHAIN_FILE=" + toolchain,
+        "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+        "-DVCPKG_MANIFEST_MODE=ON",
+        "-DVCPKG_OVERLAY_TRIPLETS=" + triplets,
+        "-DVCPKG_APPLOCAL_DEPS=ON",
+        "-DX_VCPKG_APPLOCAL_DEPS_INSTALL=ON",
+        "-DVCPKG_VERBOSE=ON",
+    ]
+
+    if is_win:
+        if compiler == "msvc":
+            cmake_cmd += ["-G", "Visual Studio 18 2026", "-A", "x64"]
+        else:
+            cc = fwd(os.path.join(llvm, "bin", "clang.exe"))
+            cxx = fwd(os.path.join(llvm, "bin", "clang++.exe"))
+            rc = fwd(os.path.join(llvm, "bin", "llvm-rc.exe"))
+            cmake_cmd += [
+                "-G", "Ninja",
+                "-DCMAKE_MAKE_PROGRAM=" + fwd("{{ NINJA_EXE }}"),
+                "-DCMAKE_C_COMPILER=" + cc,
+                "-DCMAKE_CXX_COMPILER=" + cxx,
+                "-DCMAKE_RC_COMPILER=" + rc,
+                "-DCMAKE_BUILD_TYPE=" + build_type,
+                "-DCMAKE_CXX_FLAGS_RELEASE=-O2 -DNDEBUG",
+                "-DVCPKG_TARGET_TRIPLET=x64-windows-static",
+                "-DVCPKG_HOST_TRIPLET=x64-windows-static",
+            ]
+    else:
+        compiler_map = {
+            "default": ("clang", "clang++"),
+            "gcc": ("gcc", "g++"),
+            "clang": ("clang", "clang++"),
+        }
+        cc, cxx = compiler_map.get(compiler, (compiler, compiler + "++"))
+        cmake_cmd += [
+            "-G", "Ninja",
+            "-DCMAKE_C_COMPILER=" + cc,
+            "-DCMAKE_CXX_COMPILER=" + cxx,
+            "-DCMAKE_BUILD_TYPE=" + build_type,
+            "-DCMAKE_CXX_FLAGS_RELEASE=-O2 -DNDEBUG",
+            "-DVCPKG_TARGET_TRIPLET=x64-linux-native",
+            "-DVCPKG_HOST_TRIPLET=x64-linux-native",
+        ]
+
+    print("  cmd: %s" % " ".join(cmake_cmd))
+    result = subprocess.run(cmake_cmd)
+    sys.exit(result.returncode)
 
 build:
-    @if [ ! -f {{ BUILD }}/build.ninja ]; then \
-        echo "Error: Build directory not configured. Run 'just config' first."; \
-        exit 1; \
-    fi
-    @echo "=== CMake Building (parallel $(nproc) ) ==="
-    cmake --build {{ BUILD }} --parallel "$(nproc)"
+    @python -c "import os,sys,subprocess; b='{{ BUILD }}'; \
+        (subprocess.call(['cmake','--build',b,'--parallel','{{ NPROC }}']) if os.path.exists(os.path.join(b,'build.ninja')) else (print('Error: Run just config first.'), sys.exit(1)))"
 
-# 全量编译基准: clean-all + config + 计时编译（输出 wall 时间）
-# 注意: clean-all 会触发 vcpkg manifest 重装（本机约 8 分钟），大头在依赖安装而非编译
+# 全量编译基准: clean-all + config + 计时编译
 profile:
     just clean-all
     just config
     time just build
 
-# 纯编译全量基准: 只清理编译产物（保留 config + vcpkg 缓存），计时重编全部目标
+# 纯编译全量基准
 profile-fast:
     just clean
     time just build
 
-# 编译耗时报告: 解析 .ninja_log，输出最近一次 build 的 wall / CPU 利用率 / top15 目标耗时
-timings:
-    @python3 {{ WORKSPACE }}/tools/build_timings.py {{ BUILD }}
-
 # 一键配置并编译 Release
-build-release COMPILER="clang":
+build-release COMPILER="default":
     just config {{ COMPILER }} Release
     just build
 
 # 一键配置并编译 Debug
-build-debug COMPILER="clang":
+build-debug COMPILER="default":
     just config {{ COMPILER }} Debug
     just build
 
@@ -79,41 +123,25 @@ build-debug COMPILER="clang":
 # 2. 运行
 # ------------------------------------------------------------------------------
 
-# 检查二进制 + 运行时资源（configs/、generated_shaders/）在 build 目录完整
-# 注意：不能设为 private — run/run-igpu/run-dgpu 通过 `just check-run-ready` 子进程调用，
-# private recipe 拒绝主调用（just 的已知限制）
 check-run-ready:
-    @if [ ! -f {{ BUILD }}/vulkan_practice/vulkan_practice ]; then \
-        echo "Error: Binary not found. Run 'just build' first."; \
-        exit 1; \
-    fi
-    @if [ ! -f {{ BUILD }}/vulkan_practice/configs/log_level.json ] \
-        || [ ! -d {{ BUILD }}/vulkan_practice/generated_shaders ]; then \
-        echo "Error: Runtime resources missing (configs/ or generated_shaders/) in {{ BUILD }}/vulkan_practice. Run 'just build' first."; \
-        exit 1; \
-    fi
+    @python -c "import os,sys; \
+        b='{{ BUILD }}/vulkan_practice'; \
+        exe='vulkan_practice.exe' if os.name=='nt' else 'vulkan_practice'; \
+        path=os.path.join(b, exe); \
+        cfg=os.path.join(b,'configs','log_level.json'); \
+        shaders=os.path.join(b,'generated_shaders'); \
+        sys.exit(0) if os.path.isfile(path) else (print('Error: %s not found. Run just build first.' % exe), sys.exit(1)); \
+        sys.exit(0) if os.path.isfile(cfg) and os.path.isdir(shaders) else (print('Error: Runtime resources missing. Run just build first.'), sys.exit(1))"
 
-# 运行入口统一 cd 到 build/vulkan_practice：程序按相对路径读取
-# configs/*.json 和 generated_shaders/*.spv，CWD 必须是该目录
 run:
     just check-run-ready
-    @(cd {{ BUILD }}/vulkan_practice && if lspci 2>/dev/null | grep -qiE 'vga.*amd|display.*amd'; then RADV_EXPERIMENTAL=heap ./vulkan_practice; else ./vulkan_practice; fi)
+    @python -c "import os,subprocess; \
+        b='{{ BUILD }}/vulkan_practice'; \
+        exe='vulkan_practice.exe' if os.name=='nt' else 'vulkan_practice'; \
+        os.chdir(b); \
+        subprocess.call([os.path.join('.', exe)])"
 
-# 核显运行（AMD 集显，display GPU 原生渲染，无 offload）
-# 必须用 VK_DRIVER_FILES 隐藏 NVIDIA ICD — 设备评分器默认选 dGPU（分数更高）
-# RADV_EXPERIMENTAL=heap 用于 RADV 启用 descriptor heap
-run-igpu:
-    just check-run-ready
-    @RADV_ICD=$(ls /usr/share/vulkan/icd.d/radeon_icd.*.json /etc/vulkan/icd.d/radeon_icd.*.json 2>/dev/null | head -1); \
-    if [ -z "$RADV_ICD" ]; then \
-        echo "Error: radeon ICD json not found"; \
-        exit 1; \
-    fi; \
-    (cd {{ BUILD }}/vulkan_practice && VK_DRIVER_FILES="$RADV_ICD" RADV_EXPERIMENTAL=heap ./vulkan_practice)
-
-# 独显运行（NVIDIA dGPU，prime offload；PROVIDER=3 为本机 dGPU 的 offload provider 编号）
-# 必须用 VK_DRIVER_FILES 隐藏 radeon ICD — prime offload 环境变量对 Vulkan 设备枚举无过滤作用
-# （实测：NV_optimus 层激活后设备列表仍是 iGPU+dGPU 两个，选择完全取决于应用内打分器）
+# 独显运行（Linux NVIDIA prime offload）
 run-dgpu:
     just check-run-ready
     @NV_ICD=$(ls /usr/share/vulkan/icd.d/nvidia_icd*.json /etc/vulkan/icd.d/nvidia_icd*.json 2>/dev/null | head -1); \
@@ -128,32 +156,17 @@ run-dgpu:
         __VK_LAYER_NV_optimus=NVIDIA_only \
         ./vulkan_practice)
 
-# 独显运行（Intel Arc A310 dGPU，anv 驱动）
-# 必须用 VK_DRIVER_FILES 只留 intel ICD — 设备评分器默认选分数更高的 dGPU（RTX 5090）
-# 要求 mesa >= 26.2：anv 自 26.2 起默认启用 VK_EXT_descriptor_heap（本项目核心扩展）；
-# 26.1 及以下会在设备创建期抛 VK_ERROR_EXTENSION_NOT_PRESENT 后报错退出
-run-intel:
-    just check-run-ready
-    @INTEL_ICD=$(ls /usr/share/vulkan/icd.d/intel_icd.*.json /etc/vulkan/icd.d/intel_icd.*.json 2>/dev/null | head -1); \
-    if [ -z "$INTEL_ICD" ]; then \
-        echo "Error: intel ICD json not found"; \
-        exit 1; \
-    fi; \
-    (cd {{ BUILD }}/vulkan_practice && VK_DRIVER_FILES="$INTEL_ICD" ./vulkan_practice)
-
 # ------------------------------------------------------------------------------
-# 3. 清理与辅助命令
+# 3. 清理
 # ------------------------------------------------------------------------------
 
-# CMake 增量清理 (保留配置和 vcpkg 缓存)
 clean:
-    @if [ -d {{ BUILD }} ]; then \
-        cmake --build {{ BUILD }} --target clean; \
-    fi
+    @python -c "import os,subprocess; \
+        b='{{ BUILD }}'; \
+        subprocess.call(['cmake','--build',b,'--target','clean']) if os.path.isdir(b) else None"
 
-# 彻底删除整个 build 目录 (切编译器时推荐使用)
 clean-all:
-    rm -rf {{ BUILD }}
+    @python -c "import os,shutil; shutil.rmtree('{{ BUILD }}', ignore_errors=True)"
 
 all:
     just clean-all
