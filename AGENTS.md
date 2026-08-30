@@ -22,6 +22,7 @@ just build-debug         # 一键配置 + 编译 Debug
 just run                 # 运行程序（自动检测：AMD VGA 存在时设置 RADV_EXPERIMENTAL=heap）
 just run-igpu            # 强制核显（AMD 集显原生渲染，无 offload）
 just run-dgpu            # 强制独显（NVIDIA prime offload，PROVIDER=3）
+just run-intel           # 强制 Intel dGPU（anv 驱动，需 mesa>=26.2 默认开 descriptor heap）
 just clean               # CMake 增量清理
 just clean-all           # 删除整个 build 目录
 just all                 # clean-all + build-release
