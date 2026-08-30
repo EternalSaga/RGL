@@ -69,12 +69,9 @@ export class ShaderRegistry {
 	[[nodiscard]] uint32_t addModelEntry(const std::string& specName, uint32_t vertexSlot,
 		uint32_t textureSlot, uint32_t samplerSlot) {
 		const auto key = std::make_tuple(specName, vertexSlot, textureSlot);
-		// DIAG（Phase 4 批次 2 判别）：RGL_NO_DEDUP=1 禁用去重（每 primitive 独立条目，不共享
-		// shader object）——测"共享 shader object（dedup）"是否是 artifact 根因
-		if (std::getenv("RGL_NO_DEDUP") == nullptr) {
-			if (auto it = modelEntryBySlot.find(key); it != modelEntryBySlot.end())
-				return it->second;
-		}
+		// 按 (规格, 顶点 slot, 纹理 slot) 组合去重：同组合返回既有条目（不重复建 shader object）
+		if (auto it = modelEntryBySlot.find(key); it != modelEntryBySlot.end())
+			return it->second;
 
 		const RGL::PipelineSpec* spec = findSpec(specName.c_str());
 		if (!spec)

@@ -9,7 +9,9 @@ legacy目录下的代码是陈旧的OpenGL项目已经不是当前工作重点�
 
 ## 构建
 
-项目使用 `just` 管理构建流程（参见 `Justfile`）。
+项目使用 `just` 管理构建流程（参见 `Justfile`），支持 Linux 和 Windows 双平台。
+
+### Linux
 
 ```bash
 just config              # CMake 配置（默认 clang, Release）
@@ -25,9 +27,47 @@ just clean-all           # 删除整个 build 目录
 just all                 # clean-all + build-release
 ```
 
+### Windows (NVIDIA + LLVM 22)
+
+**前置要求：**
+- **LLVM 22**（`winget install LLVM.LLVM`，提供 `clang++`、`llvm-rc`）
+- **Vulkan SDK**（`winget install LunarG.VulkanSDK`，提供 `slangc`、Vulkan 头文件/库）
+- **just**（`winget install Caseycasey.Just`）
+- **vcpkg**（`git clone https://github.com/microsoft/vcpkg`，已 bootstrap）
+- **Git for Windows**（提供 `sh.exe`，just backtick 求值依赖）
+
+```powershell
+# just 在 Windows 上需要 sh.exe 在 PATH 中（Git Bash）
+$env:PATH = "C:\Program Files\Git\usr\bin;$env:PATH"
+
+just config              # CMake 配置（默认 clang++, Release）
+just config Debug        # Debug 构建
+just config msvc         # 使用 Visual Studio 18 2026 generator（替代 Ninja）
+just build               # 增量编译
+just build-release       # 一键配置 + 编译 Release
+just build-debug         # 一键配置 + 编译 Debug
+just run                 # 运行程序
+just clean               # CMake 增量清理
+just clean-all           # 删除整个 build 目录
+```
+
+Windows 构建使用 LLVM 22 clang++ + Ninja（默认）或 Visual Studio generator（`just config msvc`）。vcpkg triplet 为 `x64-windows-static`（静态链接 CRT）。
+
+> **注意：** Windows 上 `just run-igpu`/`run-dgpu` 不可用（Linux prime offload 专用）。Windows NVIDIA 直接 `just run` 即可。
+
+### vcpkg 跨平台依赖
+
+`vcpkg.json` 使用 [platform expressions](https://learn.microsoft.com/vcpkg/concepts/configuration#platform-expressions) 按 OS 条件启用 features：
+- **Linux**: `sdl3[vulkan,wayland]`（wayland 仅 Linux 可用）
+- **Windows**: `sdl3[vulkan]`（无 wayland）
+
+同一依赖条目可出现两次，用 `"platform"` 字段区分。vcpkg 按当前 triplet 自动选择匹配的条目。
+
+### 构建系统内部
+
 CMake 无独立构建目录 — 必须从根目录构建（`cmake -B build -S .`）。
 
-产物: `build/vulkan_practice/vulkan_practice`
+产物: `build/vulkan_practice/vulkan_practice.exe`（Windows）/ `build/vulkan_practice/vulkan_practice`（Linux）
 
 > **运行要求：** 必须从 `build/vulkan_practice/` 目录运行（CWD），`just run` 已自动 cd 并检查资源完整性。
 
@@ -194,7 +234,7 @@ main.cpp 按逆序析构（RAII，无需手动清理）。
 - `glm` — 数学库（强制 depth zero-to-one，弧度制）
 - `SDL3` — 窗口/surface
 - `VulkanMemoryAllocator` — 内存管理
-- `slangc` — 着色器编译器：**FetchContent 拉 Slang 官方预构建**（`cmake/SlangFetch.cmake` pin v2026.16 + sha256，解压 `build/_deps/slang-prebuilt-src/bin/slangc`）；2026-08-27 起替代 vcpkg `shader-slang` port（port 停 2026.7.1，`vcpkg.json` 已移除该依赖）
+- `slangc` — 着色器编译器：**FetchContent 拉 Slang 官方预构建**（`cmake/SlangFetch.cmake` pin v2026.16 + sha256，解压 `build/_deps/slang-prebuilt-src/bin/slangc`）；2026-08-27 起替代 vcpkg `shader-slang` port（port 停 2026.7.1，`vcpkg.json` 已移除该依赖）。**Windows 上优先使用 Vulkan SDK 自带的 slangc**（`C:/VulkanSDK/<ver>/Bin/slangc.exe`，由 `SlangFetch.cmake` 自动检测）
 
 ## 关键文件位置
 
@@ -210,7 +250,7 @@ main.cpp 按逆序析构（RAII，无需手动清理）。
 | `shader.cppm` `RenderPipeline`/`applyDynamicState` | ShaderObject 包装（`DescriptorSetAndBindingMappingEXT` 映射 heap slot，编号运行时动态）+ 动态状态外移（Phase 7 多 pass 接缝） |
 | `shaders/model_schema.lua` `constants` | 契约常量单一真相源（`kTrianglesPerGroup`）：schema 声明 → 生成 `model_types_generated` constexpr，`model.mesh.slang` 字面量必须一致（同 `vertexLayouts` 模式，无反射端对应） |
  | `shaders/material.slang` | **统一 push constant 契约（Phase 4）**：`DrawArgs` 超集（所有 shader 风格共享，scalar 布局 96B）单一真相源；`material_schema.lua` 校验 → `material_types_generated`。mesh shader 同时 import 本文件与自身契约（cube.mesh = import types + material） |
- | `shaders/model_pbr.frag.slang` | **pbr 占位 frag（Phase 4 批次 3）**：输出与 model.frag 完全一致（`drawArgs.baseColor.rgb × texel.rgb`），头注释"material 字段已接线、光照 Phase 5"；mesh 复用 model.mesh.spv，CMake 独立 compile_slang 行 |
+ | `shaders/model_pbr.frag.slang` | **pbr 占位 frag（Phase 4 批次 3）**：输出与 model.frag 完全一致（`drawArgs.baseColor.rgb × texel.rgb`），baseColor 已接线、`roughnessMetallic` 契约字段 CPU 侧写占位 0（mat.roughness/metallic 接线留 Phase 5 真实光照）；mesh 复用 model.mesh.spv，CMake 独立 compile_slang 行 |
  | `shaders/types.slang` | cube 契约：只拥有 buffer slot 段（vertex/index 均 `ByteAddressBuffer`，绝不用 `StructuredBuffer`）；push constant 已移至 material.slang |
  | `shaders/cube.mesh.slang:19` | `mul(drawArgs.mvp, ...)` MVP 变换 |
  | `configs/camera.lua` / `configs/scene.lua` | 运行时配置（`camera.cppm`/`scene_config.cppm` 经 sol2 沙箱加载，字段可选回落默认值；scene.lua `styles` 表 = 风格名→管线规格名映射，Phase 4 批次 3）；**与 `shaders/*_schema.lua`（build 时 shader 契约）是两套机制，勿混**；改后 `just build` 生效 |
@@ -224,7 +264,7 @@ main.cpp 按逆序析构（RAII，无需手动清理）。
   - ~~cube 尚非 ECS entity——DrawCall 过渡特例 + `showCube` 构造期 gating~~（**2026-08-28 重构批次 3 已解**：cube 一等资产 + `registerCubeEntity`，画不画 = 实体有无；"cube" 管线条目恒建）
   - ~~`MaterialRef` 名为 Ref 实为值拷贝~~（**2026-08-28 重构批次 2 已解**：`MaterialRef{material}` 真引用 + `MaterialAsset` 资产表，E5.3）
   - ~~push constant 布局未归一：`renderListSystem` 留 `AssetKind` 分支（Cube→`DrawArgs` 64B / Model→`ModelDrawArgs` 96B）~~（**Phase 4 批次 1 已解**：统一 `DrawArgs` 超集（scalar 布局 96B，`material_types_generated`）+ `renderListSystem` 单一写入路径零 AssetKind 分支 + `PipelineEntry.pushDataSet` 显式化（L5）；scalar 布局策略见"着色器编译"节，H1 注记解决，见 `docs/ecs_compliance_review.md`）
-  - ~~管线表 per-primitive 条目（392 条）未去重~~（**Phase 4 批次 2 已落地 2026-08-28**：`shader_registry.cppm` 组合去重 + 分块拼接顶点 buffer（16MB×6 块）+ per-draw `vertexOffset`，392 primitive → 12 条目 / 6 heap slot）。**cottage 偶发 artifact（接受为已知问题推进，决策 2026-08-28 晚）**：特定区域特定纹理被采样为黑（区域 504-680/281-423，~741px；grass 小模型正常）。**2026-08-28 末修正：非确定性（驱动竞态），非批次 2 特有**——同一批次 2 构建连拍 13 张仅 1 张出现，其余 12 张全贴基线（1-5px）；批次 3 构建连拍 6 张全贴基线；model.frag.spv 与 model_pbr.frag.spv 字节完全相同（md5 一致）→ 非 frag 差异；之前"关 VVL 确定性 741px（3/3 全同）"是巧合。三个待查项：① **artifact 根因**（非确定性驱动竞态，复现率低 1/13，已排除 12+ 项代码因素——high VA/flush/range 尺寸/纹理 slot 位置/去重/vertexOffset 读取/共享块/buffer 布局/顶点数据(读回 392/392 全对)/纹理描述符/heap 绑定/sampler/waitIdle 同步，非批次 2 / 非 frag 特有，具体触发条件未定位）；② **VVL descriptor heap 双写扰动**（VVL 无条件加载 vkinstance.cppm:74，wrapper 对同一 slot 先零化后写，`RGL_NO_VVL=1` 关；VVL 开/关均见非确定性）；③ **lavapipe ICD 拖累崩溃**（给 Mesa 加 lavapipe 后 loader 枚举所有 ICD，新编 lavapipe 库加载即 segfault，删 ICD 即修复，非本代码 bug）。详见 `docs/phase4_plan.md` 批次 2 定案注记
+  - ~~管线表 per-primitive 条目（392 条）未去重~~（**Phase 4 批次 2 已落地 2026-08-28**：`shader_registry.cppm` 组合去重 + 分块拼接顶点 buffer（16MB×6 块）+ per-draw `vertexOffset`，392 primitive → 12 条目 / 6 heap slot）。~~**cottage 偶发 artifact（接受为已知问题推进，决策 2026-08-28 晚）**~~（**2026-08-30 已解，根因 = 两个自 Phase 2 就存在的共享代码越界 bug，Windows/NVIDIA 移植暴露**）：先前（08-28）"非确定性驱动竞态、复现率 1/13"的定性是**误诊**。真根因两处：① **`gltf_loader.cppm` uv 越界读**——去索引展开写 `uv[idx*3+0/1]`，但 uv 是 vec2（步长应为 2，正确 `uv[idx*2+…]`），idx > 2V/3 即越界读相邻堆垃圾（非确定性）→ 特定区域纹理采样为黑 = 741px artifact 根因（"偶发"= 相邻内存内容随机）；Windows 大模型越界读跨页 = AV 崩溃（0xC0000005，"灰屏/无响应"直接原因）。② **`model.mesh.slang` triangles 索引越界**——`base=(firstTriangle+ti)*3` 是全局顶点索引，但 out indices 必须引用本组 `verts[0..vertexCount-1]`（≤29），正确 `base=ti*3`；group≥1 越界引用 → 几何崩形（拉长条）。`firstTriangle*3=30·groupIndex` 恰为每组 30 顶点的整数倍，RADV 对越界 index 做 mod 回绕恰好绕回正确值 → Linux 几何"看似正常"；NVIDIA 越界 = clamp/垃圾读 → 暴露。三个待查项重新归因：① 根因 = 上述 ①②（非驱动竞态）；② VVL heap 双写 = 排查扰动因素，非根因；③ lavapipe ICD 崩溃 = 独立环境问题，与 artifact 无关。教训记录见 `docs/phase4_plan.md` 批次 2 定案注记（2026-08-30 重写）
   - ~~无统一 slot 分配器：cube 固定 0/4、model 固定 base 8+i~~（2026-08-28 勘误：统一 `allocSlot` 已落地，布局 = cube 顶点 0/索引 1、模型 base 2+i、纹理其后，全由 schema 生成偏移常量钉死 + 构造期契约检查；`HeapSlotModelVertexBase=2` 等见 `generated/model_types_generated.cppm`，管线 mapping 显式传 slot）
 - ~~**RADV 4K 大纹理黑屏（驱动限制，2026-08-27 定位，未解）**~~：Strix Halo APU 上 **64MB（4096²）sRGB 纹理 + 渲染目标 <2048 → 全黑 / GPUVM TCP fault**；目标 ≥2048 或纹理 ≤16MB 均正常（真实纹理 256×512 级不受影响，Phase 3 M3 可用）。~~根因 = 56 位 VA 截断~~ **2026-08-28 修正**：GPU VA 实际 **48 位**（`vm_size=-1` auto，boot 日志 `vm size is 262144 GB`；`high_va_offset` 只是固件能力值），fault 地址是 48 位内合法高区地址 + **PTE 权限错**（PERMISSION_FAULTS=3）= 内核页表状态 bug，非编码问题。~~已排除 VVL/分配时序/VMA 子分配/内存池/heap 容量/shader 变体/swapchain 扩展~~ **2026-08-28 已解（定性 = 同根 UAF 复用）**：~~（驱动限制，未解）~~ §十 全部观测在 UAF 修复前构建上取得（TexturePool 块内声明，纹理 BO 第 0 帧前释放，见上条"已解"项）——"high VA BO"= 已释放 VA 复用后的分配；**2026-08-28 傍晚遗留验证 PASS**：master 上真实 4K 材质模型（cottage 257MB / 392 primitive / 11 张 4096² 64MB 内嵌纹理）+ §十 精确配置（llm 1280×720 目标 <2048）+ 可见窗两路复跑均正常零 fault → §十"内核 gpuva high VA + 48 位编码"定性整体改写为 UAF 复用，**上游 bug report 不发**。完整记录见 `docs/heap_texture_research.md` §十（12.6 勘误注）+ **§12.6/§12.7**
 - ~~**交互模式 GPUVM fault（状态漂移 + per-process，2026-08-28 定位，未解）**~~ **已解（2026-08-28 下午，根因 = TexturePool 生命周期 UAF）**：e2015c6 及之前（7e1abce/afe2ff0 同款）`TexturePool` 声明在 main() 的 if 块内，块尾析构释放**纹理 BO + 描述符存储** → 第 0 帧起 GPU 采样已释放 VA；"状态漂移/分钟级翻转/per-process" = **UAF 非确定性**（VA 未复用 = 读旧页渲染正常"好状态"，被复用为权限不同 BO = TCP fault"坏状态"）；**2de6731 把声明提出 if 块即修复**（commit message 误标 slot 顺序）。m3-scene 分支现场复现 + 最小修复单变量实锤（e2015c6 原样可见窗确定性 fault 0x8001000fa000/fb000 = §十一签名同模式；仅生命周期修复 → 3 轮正常）；group 数嫌疑失去意义。完整记录见 `docs/heap_texture_research.md` §十一（勘误注）+ **§12.6**

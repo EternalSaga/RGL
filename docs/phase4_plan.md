@@ -1,9 +1,11 @@
 # Phase 4 实施计划：Shader 反射扩展 + 多 Shader 支持
 
-> **状态**：执行中（2026-08-28 规划；批次 1 完成——统一 push constant 契约 + scalar 布局
-> 定案 D0 + 管线表 argsSize/pushDataSet 显式化 + renderListSystem 归一，cottage/cube 双场景
-> 截图对基线零差异）。配套 [next_roadmap.md](next_roadmap.md) 的 Phase 4 小节。
-> 可执行粒度实施计划，含已确认决策、事实核查、分步执行、文件变更清单与风险。
+> **状态**：已完成（2026-08-28 规划；2026-08-28 四批次完成 + 2026-08-30 收尾——
+> cottage 偶发 artifact 遗留全解，根因 = 两个自 Phase 2 就存在的共享代码越界 bug
+> （`gltf_loader` uv 步长错 + `model.mesh.slang` triangles 索引错，Windows/NVIDIA 移植
+> 暴露，见文末批次 2 定案注记 + 教训）。配套 [next_roadmap.md](next_roadmap.md) 的 Phase 4 小节。
+> 本文档为时点快照（历史归档），现状权威记录以 AGENTS.md 为准；行号可能已漂移，
+> 引用时只取设计思路与调研结论。
 >
 > 前置债来源：Phase 3 完成后遗留两项（next_roadmap.md Phase 4 状态注记）——
 > ① 管线表 per-primitive 条目（392 条）去重；② `renderListSystem` AssetKind 分支归一
@@ -287,24 +289,22 @@ fresh.calls.push_back(DrawCall{asset.pipelineIndex,
    `bindToAsset`（批次 3 改带 styleName）；cube → `bindToAsset(registry.pipelineIndex("cube"))`。
 9. 验证（§7 行 2）。
 
-> **批次 2 定案（2026-08-28 晚）：接受 cottage 偶发 artifact 推进。** 实现后 cottage 截图
-> **偶发**出现 artifact（特定纹理被采样为黑，区域 504-680/281-423，~741px；grass 小模型
-> 完全正常）。大批量排查（12+ 项）排除 high VA/flush 时序/descriptor range 尺寸/纹理 slot
-> 位置/去重/vertexOffset 读取/多 primitive 共享块/buffer 布局/顶点数据（读回 392/392 全对）/
-> 纹理描述符/heap 绑定/sampler/waitIdle 同步，代码逐行核对无 bug。**回退 per-primitive（撤
-> 分块+去重）后 artifact 仍在**→ 一度定性"批次 2 的 ShaderRegistry 模块 / shared_ptr 间接层
-> 引入"。**2026-08-28 末修正：artifact 实为非确定性（驱动竞态），非批次 2 特有**——同一批次 2
-> 构建连拍 13 张仅 1 张出现（743px），其余 12 张全贴基线（1-5px）；批次 3 构建连拍 6 张全
-> 贴基线；且 model.frag.spv 与 model_pbr.frag.spv 字节完全相同（md5 一致）→ 非 frag 差异。
-> 之前"关 VVL 确定性 741px（3/3 全同）"是巧合。**决策：接受 artifact 作为已知问题推进**
-> （偶发、非全场景、grass 正常），三个待查项记录如下，后续专项排查：
-> 1. **artifact 根因**（非确定性驱动竞态，~741px 特定纹理采样黑，复现率低（1/13），已排除
->    12+ 项代码因素，非批次 2 / 非 frag 特有，具体触发条件未定位）
-> 2. **VVL descriptor heap 双写扰动**（VVL 无条件加载 vkinstance.cppm:74，其 wrapper 对同一
->    slot 先零化后写实际描述符，扰动 artifact 区域——`RGL_NO_VVL=1` 可关；VVL 开/关均见
->    非确定性）
-> 3. **lavapipe ICD 拖累崩溃**（给 Mesa 加 lavapipe 后 loader 启动枚举所有 ICD，新编
->    lavapipe 库加载即 segfault，交互+离屏全崩；删 lavapipe ICD 即修复，非本代码 bug）
+> **批次 2 定案（2026-08-30 重写：artifact 根因定位 = 两个共享代码越界 bug，先前"驱动竞态"为误诊）。**
+>
+> **现象（当年）**：cottage 截图**偶发**特定区域（504-680/281-423，~741px）纹理采样为黑，grass 正常；同构建连拍 1/13 出现 → 定性"非确定性驱动竞态"，排除 12+ 项后接受为已知问题推进。
+>
+> **真根因（2026-08-30 Windows/NVIDIA 移植暴露，两处均为自 Phase 2 就存在的共享代码 bug）**：
+> 1. **`gltf_loader.cppm` uv 越界读**：去索引展开 `v.uv = glm::vec2(uv[idx*3+0], uv[idx*3+1])`——uv 向量是 `2V` 个 float（vec2，步长 2），却按 `idx*3` 读，idx > 2V/3 即越界读相邻堆内存垃圾。**Linux**：垃圾 uv → 对应区域采样为黑，"偶发/区域固定" = 相邻内存布局随机（正是 741px artifact）；**Windows**：大模型越界读跨页 → AV 崩溃 0xC0000005（"灰屏/无响应"直接原因）。修复：`uv[idx*2+…]`。
+> 2. **`model.mesh.slang` triangles 索引越界**：`base=(firstTriangle+ti)*3` 是**全局顶点索引**，但 Vulkan mesh out indices 必须引用**本组 verts 数组**（`0..vertexCount-1`，≤29），group≥1 的 base≥30 越界 → 引用错乱顶点 → 几何拉长条。**RADV** 对越界 index 做 mod 回绕，而 `firstTriangle*3 = 30·groupIndex` 恰为 30 的倍数 → `(30g+3ti) mod 30 = 3ti` = 正确值 → Linux 几何"看似正常"；**NVIDIA** 越界 clamp/垃圾读 → 暴露。修复：`base = ti*3`。
+>
+> **三个待查项重新归因**：① artifact 根因 = 上述 1+2（非驱动竞态）；② VVL descriptor heap 双写 = 排查扰动因素，非根因；③ lavapipe ICD 拖累崩溃 = 独立环境问题（loader 枚举所有 ICD），与 artifact 无关。
+>
+> **教训（本次）**：
+> - **"偶发 + 区域固定 + 复现率随构建时序变" = 越界读经典签名**（内容依赖相邻内存布局），而非驱动竞态。应第一时间查 OOB（步长/索引核对、ASan、页保护），别默认"驱动 bug"接受推进——当年 12+ 项排查全在找"时序"，没一项查"步长"。
+> - **驱动宽容行为 = bug 隐身衣**：RADV 的 mod 回绕 + 30 恰好是每组顶点整数倍，两个巧合叠加把 mesh 索引 bug 在 Linux 上完全隐藏。跨平台/新驱动移植是优秀 bug 探测器——但"另一平台也对"时仍须回 spec 核对 index/布局契约，不能反推"实现正确"。
+> - **几何/采样异常优先查最基础的共享路径**：用户直觉"mesh shader 写错了"直指根因。排查次序 = 顶点/索引/步长 → 布局契约 → 最后才怀疑驱动。
+> - **两独立 bug 叠加会误导归因**：uv 越界（纹理黑）与 triangles 越界（几何崩）各自单独在某一平台发作，让排查在"纹理"与"驱动竞态"间来回跳。第一步应做症状分解（纹理 vs 几何）。
+> - **既有诊断设施见效**：`verifyVertexUpload` 读回金丝雀（392/392 PASS）快速排除上传路径、锁定 shader 读取侧；llm_debug 连拍量化"偶发"为 1/13。
 
 ### 批次 3：材质字段 + pbr 占位 + Lua 风格映射
 

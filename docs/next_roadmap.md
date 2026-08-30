@@ -1,6 +1,6 @@
 # vulkan_practice 路线图
 
-> **状态**：现行（开发路线图；各 Phase 完成情况随提交更新，当前节点 = Phase 3 纹理管理）
+> **状态**：现行（开发路线图；各 Phase 完成情况随提交更新，当前节点 = Phase 4 完成 + 2026-08-30 artifact 收尾，待进入 Phase 5）
 
 基于对 legacy 代码痛点的反思和新架构讨论，整理出分阶段开发计划。
 
@@ -267,10 +267,10 @@ SPV 路径的模式撑不住。Phase 4 的 ShaderRegistry 是最终解法，但�
 
 ## Phase 4：Shader 反射扩展 + 多 Shader 支持
 
-> **状态（2026-08-28）**：**已完成**（4 批次，详见 `docs/phase4_plan.md`）。前置债已清偿：
+> **状态（2026-08-28 完成；2026-08-30 收尾）**：**已完成**（4 批次，详见 `docs/phase4_plan.md`）。前置债已清偿：
 > ① 管线表 per-primitive 条目去重（392→按 (规格, 顶点 slot, 纹理 slot) 组合 = 12 条）；
 > ② `renderListSystem` AssetKind 分支归一（统一 `DrawArgs` 超集，零 AssetKind 分支）。
-> ShaderRegistry 是两者的统一落点。
+> ShaderRegistry 是两者的统一落点。**2026-08-30**：遗留的 cottage 偶发 artifact 已解（根因 = 两个自 Phase 2 就存在的共享代码越界 bug——`gltf_loader` uv 步长 + `model.mesh.slang` triangles 索引，由 Windows/NVIDIA 移植暴露，见文末偏离注记）。
 
 ### 目标
 支持多种 shader 风格（unlit、pbr），通过 Lua 描述渲染意图。
@@ -291,17 +291,21 @@ SPV 路径的模式撑不住。Phase 4 的 ShaderRegistry 是最终解法，但�
 - [x] **批次 4 文档销账 + 总验证**：AGENTS.md/next_roadmap/ecs_compliance 销账
 
 ### 偏离注记
-- **pbr 占位 frag**：`model_pbr.frag.slang` 输出与 model.frag 完全一致（material 字段已接线
-  进 `DrawArgs.roughnessMetallic`，光照留 Phase 5）——非真 PBR 光照
+- **pbr 占位 frag**：`model_pbr.frag.slang` 输出与 model.frag 完全一致（`DrawArgs.roughnessMetallic`
+  契约字段已留，但 `renderListSystem` 当前写 CPU 占位 0，mat.roughness/metallic 接线 + 光照均留
+  Phase 5）——非真 PBR 光照
 - **Lua = 风格映射**（非渲染意图）：scene.lua `styles` 表只做"风格名→管线规格名"映射，
   非 Phase 6 的渲染意图描述（entity 列表/pass 序列）
 - **Material 走 push constant 超集**（非独立 binding）：材质字段（baseColor/roughness/
   metallic）进统一 `DrawArgs` 超集（96B scalar），非独立 descriptor binding
 - **顶点拼接 D5 超计划新增**：分块拼接 buffer（16MB×6 块）+ per-draw vertexOffset 是
   计划外新增（为去重服务的 heap slot 收敛）
-- **cottage 偶发 artifact（已知问题）**：特定区域纹理偶发采样黑（~741px，非确定性驱动
-  竞态，复现率 1/13，非批次 2/非 frag 特有，grass 正常）——接受推进，三个待查项见
-  AGENTS.md 已知问题 + phase4_plan.md 批次 2 定案注记
+- **cottage 偶发 artifact（已解 2026-08-30，根因 = 两个共享代码越界 bug）**：先前"非确定性驱动
+  竞态"为误诊。真根因两处自 Phase 2 就存在、由 Windows/NVIDIA 移植暴露：① `gltf_loader.cppm`
+  uv 步长错（`uv[idx*3]` 应为 `uv[idx*2]`，vec2 误按 vec3 读）→ 越界读采样为黑（741px artifact
+  根因）+ Windows AV 崩溃；② `model.mesh.slang` triangles 索引用全局顶点索引
+  （`(firstTriangle+ti)*3` 应为组内 `ti*3`）→ NVIDIA 几何崩形（RADV mod 回绕恰好掩盖）。详见
+  AGENTS.md 已知问题 + phase4_plan.md 批次 2 定案注记（含教训）
 
 ### 设计决策
 - 每个 shader 风格有独立的 `schema.lua` 和生成模块（实际：material.slang 统一契约 +

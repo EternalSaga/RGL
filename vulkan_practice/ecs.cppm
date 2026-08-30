@@ -223,12 +223,11 @@ void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListS
 			auto& args = state.args[meshRef.asset];
 			args.mvp = viewProj.proj * viewProj.view * spin.matrix * tf.world;
 			args.totalTriangles = asset.triangleCount;
-			// DIAG（Phase 4 批次 2 判别）：RGL_VTXOFF_ZERO=1 时 vertexOffset 全置 0（测
-			// "非零偏移 Load" 是否是 artifact 根因；几何会错但判别黑块来源）
-			args.vertexOffset = (std::getenv("RGL_VTXOFF_ZERO") != nullptr) ? 0u : asset.vertexOffset;
+			args.vertexOffset = asset.vertexOffset;  // 拼接 buffer 内块字节偏移（Phase 4 批次 2）
 			const auto& mat = assets.getMaterial(matRef.material);  // 批次 2：材质资产表解析
 			args.baseColor = mat.baseColor;
-			args.roughnessMetallic = {0.0f, 0.0f};  // Phase 4 批次 3：mat.roughness/metallic（pbr 风格消费）
+			args.roughnessMetallic = {0.0f, 0.0f};  // 占位 0：pbr 占位 frag（Phase 4 批次 3）不消费此字段；
+			                                       // 接线 mat.roughness/metallic 留待 Phase 5 真实光照（当前注释曾误标"已接线"）
 			fresh.calls.push_back(DrawCall{
 				asset.pipelineIndex,
 				std::as_bytes(std::span<const RGL::DrawArgs>{&args, 1}), asset.groupCount});

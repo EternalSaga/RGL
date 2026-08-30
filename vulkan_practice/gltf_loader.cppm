@@ -228,7 +228,7 @@ export [[nodiscard]] std::expected<GltfModel, Error> loadGltfModel(const std::st
 				ModelVertex v;
 				v.position = glm::vec3(pos[idx * 3 + 0], pos[idx * 3 + 1], pos[idx * 3 + 2]);
 				v.normal = glm::vec3(nrm[idx * 3 + 0], nrm[idx * 3 + 1], nrm[idx * 3 + 2]);
-				v.uv = glm::vec2(uv[idx * 3 + 0], uv[idx * 3 + 1]);
+				v.uv = glm::vec2(uv[idx * 2 + 0], uv[idx * 2 + 1]);
 				out.vertices.push_back(v);
 			}
 			out.triangleCount = static_cast<uint32_t>(indices.size() / 3);

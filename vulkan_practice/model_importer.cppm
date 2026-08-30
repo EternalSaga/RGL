@@ -30,10 +30,9 @@ namespace RGL {
 // per-primitive 偏移进 push constant DrawArgs.vertexOffset（model.mesh.slang Load 前缀）。
 struct ChunkPrim { uint32_t chunk; uint32_t offset; };
 
-// DIAG（Phase 4 批次 2 判别）：RGL_VTX_CANARY=1 读回拼接 buffer 顶点数据比对 CPU，
-// 确认 GPU 上数据是否正确（artifact 根因判别：数据错=上传/memcpy 问题；数据对=读取/
-// descriptor/shader 问题）。每块 VkBuffer 基址 32B（= 该块首个 primitive 首顶点）经
-// vkCmdCopyBuffer 拷进 staging 回读比对（独立 cmd + fence，启动期一次 GPU 停顿）。
+// 顶点读回金丝雀：RGL_VTX_CANARY=1 读回拼接 buffer 顶点数据比对 CPU，确认上传保真度
+//（数据错 = 上传/memcpy 问题；数据对 = 读取/shader 侧）。每块 VkBuffer 基址 32B（= 该块
+// 首个 primitive 首顶点）经 vkCmdCopyBuffer 拷进 staging 回读比对（独立 cmd + fence，启动期一次 GPU 停顿）。
 static void verifyVertexUpload(RGL::DeviceContext& vkDevice, RGL::Resources& res,
 	const RGL::GltfModel& model, const std::vector<std::shared_ptr<VmaBuffer>>& chunkBuffers,
 	const std::vector<ChunkPrim>& primChunk) {
@@ -106,23 +105,13 @@ export [[nodiscard]] std::expected<std::vector<uint32_t>, Error> uploadModelMesh
 
 	const uint32_t primitiveCount = static_cast<uint32_t>(model.primitives.size());
 
-	// Phase 4 批次 2 分块拼接（2026-08-28 判别定案）：单一 82MB 拼接 buffer 的 descriptor
-	// range（82MB）在 RADV 上导致局部渲染 artifact（740px 内容→黑，确定性，cottage 特定；
-	// grass 小 buffer 正常）。high VA 非根因（4-80MB 各尺寸 BDA buffer 均落 high VA，旧
-	// 392 小 buffer 同样 high VA 却正常）；waitIdle 亦无效（非 flush 时序）。分块（每块
-	// kVertexChunkBytes，独立 buffer + 独立 descriptor range + 独立 slot）规避大 range，
-	// 每块仍被同块内 primitive 共享 vertex slot → 管线去重部分保留（条目 = 块数 × 纹理 slot）。
-	// per-primitive：heapSlot = 所在块的 slot，vertexOffset = 块内字节偏移（进 push constant）。
-	// DIAG：RGL_CHUNK_MB 可覆盖块大小（MB），测 descriptor range 尺寸阈值（默认 16MB）
-	constexpr vk::DeviceSize kDefaultChunkBytes = 16ull * 1024 * 1024;
-	const vk::DeviceSize kVertexChunkBytes = [] {
-		if (const char* env = std::getenv("RGL_CHUNK_MB")) {
-			const unsigned mb = std::strtoul(env, nullptr, 10);
-			if (mb >= 1)
-				return static_cast<vk::DeviceSize>(mb) * 1024 * 1024;
-		}
-		return kDefaultChunkBytes;
-	}();
+	// Phase 4 批次 2 分块拼接：每模型 primitive 拼成 16MB 块，每块一个 BDA buffer +
+	// 一个 descriptor + 一个 heap slot（cottage 392 primitive 顶点 slot → 6 块）。分块的
+	// 动机是 **heap slot 收敛以服务业管线去重**（D5：条目 = 块数 × 纹理 slot），非规避
+	// cottage artifact——artifact 根因 2026-08-30 定位为 gltf_loader uv 越界读（与 range
+	// 尺寸/分块无关，见 phase4_plan.md 批次 2 定案注记）。每块仍被同块内 primitive 共享
+	// vertex slot。per-primitive：heapSlot = 所在块的 slot，vertexOffset = 块内字节偏移（进 push constant）。
+	constexpr vk::DeviceSize kVertexChunkBytes = 16ull * 1024 * 1024;  // 16MB 块
 
 	// ① 分块：per-primitive (块序号, 块内偏移) + 每块总字节
 	std::vector<ChunkPrim> primChunk(primitiveCount);
@@ -131,15 +120,10 @@ export [[nodiscard]] std::expected<std::vector<uint32_t>, Error> uploadModelMesh
 		vk::DeviceSize curOffset = 0;
 		uint32_t curChunk = 0;
 		chunkBytes.push_back(0);
-		// DIAG（Phase 4 批次 2 判别）：RGL_ONE_PRIM_PER_CHUNK=1 强制每 primitive 独占一块
-		//（等效原 per-primitive 设计但走分块路径 + vertexOffset）——测"多 primitive 共享一块
-		// descriptor（多偏移读）"是否是 artifact 根因
-		const bool onePrimPerChunk = std::getenv("RGL_ONE_PRIM_PER_CHUNK") != nullptr;
 		for (uint32_t i = 0; i < primitiveCount; ++i) {
 			const vk::DeviceSize primBytes =
 				static_cast<vk::DeviceSize>(model.primitives[i].vertices.size()) * sizeof(ModelVertex);
-			if (onePrimPerChunk ? (curOffset > 0)
-				: (curOffset > 0 && curOffset + primBytes > kVertexChunkBytes)) {
+			if (curOffset > 0 && curOffset + primBytes > kVertexChunkBytes) {
 				++curChunk;
 				curOffset = 0;
 				chunkBytes.push_back(0);
@@ -200,19 +184,6 @@ export [[nodiscard]] std::expected<std::vector<uint32_t>, Error> uploadModelMesh
 		chunkBuffers[c] = std::make_shared<VmaBuffer>(std::move(buffer));
 		chunkSlots[c] = slot;
 		assets.incrementModelSlotCount();
-	}
-
-	// DIAG（Phase 4 批次 2 判别）：临时跳过 slot 把纹理推回 batch1 布局（394-405），
-	// 测"纹理 slot 位置（8-19 vs 394-405）"是否是 artifact 根因。配合 texture_pool 白契约临时改 394
-	if (std::getenv("RGL_SKIP_TO_TEX394") != nullptr) {
-		const uint32_t target = heap.getReservedSlots() + HeapSlotModelVertexBase + 392;  // 白应落此槽（reserved+394，batch1 布局）
-		while (true) {
-			auto r = res.allocSlot("DIAG.skip");
-			if (!r)
-				return std::unexpected(std::move(r).error());
-			if (*r == target - 1)
-				break;  // nextSlot 现为 target，白纹理将落于 target
-		}
 	}
 
 	// ③ 注册 per-primitive 资产记录（所在块的 shared_ptr + 块 slot + 块内偏移）

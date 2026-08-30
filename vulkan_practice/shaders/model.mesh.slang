@@ -44,9 +44,12 @@ void main(
         verts[ti].uv = uv;
     }
 
-    // 去索引展开：三角形 i 的 3 个连续顶点 = i*3..i*3+2，索引自然连续
+    // 去索引展开：三角形 i 的 3 个连续顶点 = i*3..i*3+2，索引自然连续。
+    // 注意：out indices 引用的是本组 verts 数组下标（0..vertexCount-1），不是全局顶点索引。
+    // verts[ti] 存的已是全局顶点 firstTriangle*3+ti，故本组第 ti 个三角形 = verts[ti*3..ti*3+2]。
+    // （旧写法 (firstTriangle+ti)*3 是全局索引，越界；RADV mod 回绕 30 恰好掩盖，NVIDIA 暴露崩形）
     if (ti < triangleCount) {
-        uint base = (firstTriangle + ti) * 3;
+        uint base = ti * 3;
         triangles[ti] = uint3(base, base + 1, base + 2);
     }
 }
