@@ -1,5 +1,6 @@
 module;
 #include <vulkan/vulkan_raii.hpp>
+#include <fmt/format.h>
 export module shader;
 
 import rlstd;
@@ -13,7 +14,7 @@ loadShaderSpv(const std::string& filename) {
 	std::ifstream file(filename, std::ios::ate | std::ios::binary);
 	if (!file.is_open()) {
 		return std::unexpected(Error{ErrorCode::ShaderLoadFailed,
-			"failed to open file: " + filename});
+			fmt::format("failed to open file: {}", filename)});
 	}
 	size_t fileSize = (size_t)file.tellg();
 	std::vector<uint32_t> buffer(fileSize / sizeof(uint32_t));

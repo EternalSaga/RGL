@@ -2,6 +2,7 @@ module;
 
 #include <inja/inja.hpp>
 #include <nlohmann/json.hpp>
+#include <fmt/format.h>
 
 export module generator;
 
@@ -64,9 +65,9 @@ static std::string toCppType(const nlohmann::json& fieldType) {
 		int rc = has(fieldType, "rowCount") ? fieldType["rowCount"].get<int>() : 0;
 		int cc = has(fieldType, "columnCount") ? fieldType["columnCount"].get<int>() : 0;
 		if (rc == cc) {
-			return "glm::mat" + std::to_string(rc);
+			return fmt::format("glm::mat{}", rc);
 		}
-		return "glm::mat" + std::to_string(rc) + "x" + std::to_string(cc);
+		return fmt::format("glm::mat{}x{}", rc, cc);
 	}
 	if (std::strcmp(kind, "vector") == 0) {
 		int dim = has(fieldType, "elementCount") ? fieldType["elementCount"].get<int>() : 0;
@@ -75,7 +76,7 @@ static std::string toCppType(const nlohmann::json& fieldType) {
 		std::string prefix;
 		if (std::strcmp(st, "int32") == 0) prefix = "i";
 		if (std::strcmp(st, "uint32") == 0) prefix = "u";
-		return "glm::" + prefix + "vec" + std::to_string(dim);
+		return fmt::format("glm::{}vec{}", prefix, dim);
 	}
 	if (std::strcmp(kind, "scalar") == 0) {
 		const char* st = has(fieldType, "scalarType") ? getString(fieldType, "scalarType") : "float32";
@@ -164,8 +165,7 @@ export std::optional<std::string> generateCppm(const nlohmann::json& reflection,
 					if (offset > cursor) {
 						// padding 用 uint8_t 数组（对齐 1，任意字节数，不会引入额外 padding）
 						nlohmann::json padObj;
-						padObj["name"] = "_pad" + std::to_string(padCount++) +
-							"[" + std::to_string(offset - cursor) + "]";
+						padObj["name"] = fmt::format("_pad{}[{}]", padCount++, offset - cursor);
 						padObj["cpp_type"] = "uint8_t";
 						padObj["offset"] = nullptr;  // 模板真值判断用（无反射真值）
 						structObj["fields"].push_back(padObj);
@@ -205,8 +205,7 @@ export std::optional<std::string> generateCppm(const nlohmann::json& reflection,
 					const size_t padded = (cursor + structAlign - 1) / structAlign * structAlign;
 					if (padded > cursor) {
 						nlohmann::json padObj;
-						padObj["name"] = "_pad" + std::to_string(padCount++) +
-							"[" + std::to_string(padded - cursor) + "]";
+						padObj["name"] = fmt::format("_pad{}[{}]", padCount++, padded - cursor);
 						padObj["cpp_type"] = "uint8_t";
 						padObj["offset"] = nullptr;  // 模板真值判断用（无反射真值）
 						structObj["fields"].push_back(padObj);

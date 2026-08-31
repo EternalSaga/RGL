@@ -3,6 +3,7 @@ module;
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_raii.hpp>
 #include <vk_mem_alloc.h>
+#include <fmt/format.h>
 export module texture_pool;
 
 import rlstd;
@@ -39,7 +40,7 @@ export [[nodiscard]] std::expected<uint32_t, Error> loadEmbedded(RGL::Resources&
 	uint8_t* rgba = stbi_load_from_memory(data, static_cast<int>(size), &w, &h, &ch, 4);
 	if (!rgba) {
 		return std::unexpected(Error{ErrorCode::TextureDecodeFailed,
-			std::string("stb_image decode failed: ") + name});
+			fmt::format("stb_image decode failed: {}", name)});
 	}
 	// DIAG（Phase 3 4K 黑屏排查 2026-08-27）：环境变量驱动的实验开关（免重编译跑矩阵）：
 	//   TEXTURE_FORCE_SIZE=N  近邻缩放强制 N×N（测尺寸阈值：16MB vs 64MB）
@@ -83,13 +84,13 @@ export uint32_t ensureWhiteTexture(RGL::Resources& resources, RGL::DeviceContext
 	const uint8_t rgba[4] = {255, 255, 255, 255};
 	auto result = uploadTexture(resources, device, rgba, 1, 1, "texture.white");
 	if (!result)
-		throw std::runtime_error("white texture: " + result.error().describe());
+		throw std::runtime_error(fmt::format("white texture: {}", result.error().describe()));
 	const uint32_t expected = resources.getDescriptorHeap().getReservedSlots() +
 		HeapSlotModelVertexBase + assets.getModelSlotCount();
 	const uint32_t slot = assets.getTexture(*result).heapSlot;
 	if (slot != expected)
-		throw std::runtime_error("heap slot layout drift: texture.white (slot " + std::to_string(slot) +
-			" != expected " + std::to_string(expected) + ")");
+		throw std::runtime_error(fmt::format(
+			"heap slot layout drift: texture.white (slot {} != expected {})", slot, expected));
 	return *result;
 }
 
@@ -121,7 +122,7 @@ export [[nodiscard]] std::expected<std::vector<uint32_t>, Error> uploadModelText
 		}
 		auto textureResult = loadEmbedded(resources, device,
 			image.data.data(), image.data.size(),
-			("texture.image." + std::to_string(imageIndex)).c_str());
+			fmt::format("texture.image.{}", imageIndex).c_str());
 		if (!textureResult)
 			return std::unexpected(std::move(textureResult).error());
 		primitiveTextureIds[i] = *textureResult;
@@ -361,9 +362,9 @@ export void texelCanaryCheck(RGL::Resources& resources, RGL::DeviceContext& devi
 	if (auto result = vk::Result(::vkQueueSubmit(device.getGraphicsQueue(), 1, &submitInfo, *fence));
 		result != vk::Result::eSuccess)
 		return std::unexpected(Error{ErrorCode::VulkanError,
-			"texture: upload submit failed: " + std::string(name)});
+			fmt::format("texture: upload submit failed: {}", name)});
 	if (dev.waitForFences(std::array<vk::Fence, 1>{*fence}, true, UINT64_MAX) != vk::Result::eSuccess)
-		return std::unexpected(Error{ErrorCode::VulkanError, "texture: upload fence timeout: " + std::string(name)});
+		return std::unexpected(Error{ErrorCode::VulkanError, fmt::format("texture: upload fence timeout: {}", name)});
 
 	// 临时诊断（Phase 3 全黑排查）：多位置 texel 回读（空间模式定位上传/采样问题）
 	{

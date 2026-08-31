@@ -1,6 +1,7 @@
 #include <entt/entt.hpp>
 #include <SDL3/SDL_video.h>
 #include <glm/glm.hpp>
+#include <fmt/format.h>
 import rlstd;
 import vulkan_window;
 import vk_instance;
@@ -91,14 +92,18 @@ int main() {
 
 		AppContext vkInstance(window);
 		DeviceContext vkDevice(vkInstance);
-		// push constant 契约（Phase 5）：shader object + descriptor heap 下 push data 仍受
-		// maxPushConstantsSize 约束（DrawArgs 100B，双驱动实测 256B——超限 = 设备不支持，
-		// 启动期报错优于运行时布局错配）
-		const uint32_t maxPushConstants =
-			static_cast<uint32_t>(vkDevice.getPhysicalDevice().getProperties().limits.maxPushConstantsSize);
-		if (maxPushConstants < sizeof(DrawArgs))
-			throw std::runtime_error("maxPushConstantsSize (" + std::to_string(maxPushConstants) +
-				") < sizeof(DrawArgs) (" + std::to_string(sizeof(DrawArgs)) + ")");
+		// push data 契约（Phase 5）：shader object + descriptor heap 模式无 pipeline layout →
+		// 无 VkPushConstantRange，per-draw push data（DrawArgs 100B，vkCmdPushDataEXT，
+		// vkrenderer.cppm drawFrame）受设备硬限约束（双驱动实测 256B）：
+		// ① maxPushDataSize（descriptor heap 模式专属 limit，VUID-VkPushDataInfoEXT-offset-11243：
+		//    offset+size ≤ 本值）② maxPushConstantsSize（经典 VkPhysicalDeviceLimits，
+		//    descriptor set 模式上限）。超限 = 设备不支持，启动期报错优于运行时布局错配
+		//（shader 从 push constant 读垃圾非校验错误，是静默画面错）
+		const auto [maxPushConstants, maxPushData] = vkDevice.getPushDataLimits();
+		if (maxPushConstants < sizeof(DrawArgs) || maxPushData < sizeof(DrawArgs))
+			throw std::runtime_error(fmt::format(
+				"push data limit (maxPushConstantsSize={}, maxPushDataSize={}) < sizeof(DrawArgs) ({})",
+				maxPushConstants, maxPushData, sizeof(DrawArgs)));
 		Swapchain vkSwapchain(vkDevice, window);
 		// heap 容量为固定裕量（与场景内容解耦，批次 3 E1.3）：CPU 解析模型不再需要
 		// 先于 Vulkan 初始化
@@ -148,7 +153,7 @@ int main() {
 				const std::string style = model.primitives[i].unlit ? "unlit" : "pbr";
 				const auto styleIt = sceneConfig.styleMap.find(style);
 				if (styleIt == sceneConfig.styleMap.end())
-					throw std::runtime_error("style not in scene.lua styles: " + style);
+					throw std::runtime_error(fmt::format("style not in scene.lua styles: {}", style));
 				const uint32_t entryIdx = shaderRegistry.addModelEntry(
 					styleIt->second,
 					assets.get(id).heapSlot,  // = 模型拼接顶点 slot（同模型全 primitive 相同）
@@ -164,7 +169,7 @@ int main() {
 				if (auto logger = RLLogger::getInstance()) {
 					std::string s;
 					for (const auto& [style, cnt] : styleCount)
-						s += style + "=" + std::to_string(cnt) + " ";
+						s += fmt::format("{}={} ", style, cnt);
 					logger->info("DIAG style dist: {} primitives → {} styles: {}",
 						assetIdsResult->size(), styleCount.size(), s);
 				}
@@ -177,7 +182,7 @@ int main() {
 				if (auto logger = RLLogger::getInstance()) {
 					std::string s;
 					for (const auto& [slot, cnt] : texSlotCount)
-						s += "slot" + std::to_string(slot) + "=" + std::to_string(cnt) + " ";
+						s += fmt::format("slot{}={} ", slot, cnt);
 					logger->info("DIAG tex dist: {} primitives → {} distinct tex slots: {}",
 						assetIdsResult->size(), texSlotCount.size(), s);
 				}
@@ -188,9 +193,9 @@ int main() {
 			// 超容量 = 矩阵表越界写（staging 上传处有防御报错，此处启动期先拦截）
 			if (const uint32_t meshCount = vkResources.getAssetTable().meshSize();
 				meshCount > kSceneMatrixCapacity)
-				throw std::runtime_error("assets (" + std::to_string(meshCount) +
-					") exceed scene object matrix capacity (" +
-					std::to_string(kSceneMatrixCapacity) + ")");
+				throw std::runtime_error(fmt::format(
+					"assets ({}) exceed scene object matrix capacity ({})",
+					meshCount, kSceneMatrixCapacity));
 		}
 
 		// cube 一等资产（批次 3）：showCube 配置 → 注册 entity（画不画 = 实体有无）+

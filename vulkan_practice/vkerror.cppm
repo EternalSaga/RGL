@@ -1,6 +1,7 @@
 module;
 #include <vulkan/vulkan.hpp>
 #include <string>
+#include <fmt/format.h>
 export module vkerror;
 
 import rlstd;
@@ -44,7 +45,7 @@ inline Error Error::fromVkResult(vk::Result result, const char* context) {
 	err.code = ErrorCode::VulkanError;
 	auto str = vk::to_string(result);
 	if (context) {
-		err.message = std::string(context) + ": " + str;
+		err.message = fmt::format("{}: {}", context, str);
 	} else {
 		err.message = str;
 	}
@@ -80,7 +81,7 @@ inline const char* errorCodeName(ErrorCode code) {
 }
 
 inline std::string Error::describe() const {
-	return std::string("[") + errorCodeName(code) + "] " + message;
+	return fmt::format("[{}] {}", errorCodeName(code), message);
 }
 
 inline bool operator==(const Error& lhs, const Error& rhs) {

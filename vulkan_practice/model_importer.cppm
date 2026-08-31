@@ -4,6 +4,7 @@ module;
 #include <vk_mem_alloc.h>
 #include <entt/entt.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <fmt/format.h>
 export module model_importer;
 
 import rlstd;
@@ -170,8 +171,8 @@ export [[nodiscard]] std::expected<std::vector<uint32_t>, Error> uploadModelMesh
 		const uint32_t slot = *slotResult;
 		if (slot != expectedSlot)
 			return std::unexpected(Error{ErrorCode::DescriptorSlotOutOfBounds,
-				"heap slot layout drift: model.vertices.chunk[" + std::to_string(c) + "] (slot " +
-				std::to_string(slot) + " != expected " + std::to_string(expectedSlot) + ")"});
+				fmt::format("heap slot layout drift: model.vertices.chunk[{}] (slot {} != expected {})",
+					c, slot, expectedSlot)});
 		auto slotAddr = heap.getSlotCpuAddress(slot);
 		if (!slotAddr)
 			return std::unexpected(std::move(slotAddr).error());
@@ -259,8 +260,8 @@ export entt::entity registerScene(entt::registry& rg, const RGL::GltfModel& mode
 		if (mat.baseColor != prim.baseColor || mat.alphaModeBlend != prim.alphaModeBlend ||
 			mat.metallic != prim.metallic || mat.roughness != prim.roughness ||
 			mat.unlit != prim.unlit) {
-			throw std::runtime_error("glTF material inconsistency: primitive " + std::to_string(i) +
-				" (materialIndex " + std::to_string(prim.materialIndex) + ")");
+			throw std::runtime_error(fmt::format(
+				"glTF material inconsistency: primitive {} (materialIndex {})", i, prim.materialIndex));
 		}
 		primitiveMaterialIds[i] = materialOfIndex[prim.materialIndex];
 	}

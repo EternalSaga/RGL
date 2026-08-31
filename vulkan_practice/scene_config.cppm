@@ -1,6 +1,7 @@
 module;
 #include <sol/sol.hpp>
 #include <glm/glm.hpp>
+#include <fmt/format.h>
 export module scene_config;
 
 import rlstd;
@@ -86,7 +87,7 @@ export [[nodiscard]] std::expected<SceneConfig, Error> loadSceneConfig(std::stri
 		sol::optional<sol::error> err = result.get<sol::optional<sol::error>>();
 		std::string msg = err ? err->what() : std::string("unknown lua error");
 		return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
-			std::string("scene config (") + std::string(path) + "): " + msg});
+			fmt::format("scene config ({}): {}", path, msg)});
 	}
 
 	try {
@@ -124,7 +125,7 @@ export [[nodiscard]] std::expected<SceneConfig, Error> loadSceneConfig(std::stri
 					spec.fragSpv = *frag;
 				if (spec.name.empty()) {
 					return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
-						"scene config: pipeline[" + std::to_string(i) + "] missing 'name'"});
+						fmt::format("scene config: pipeline[{}] missing 'name'", i)});
 				}
 				cfg.pipelines.push_back(std::move(spec));
 			}
@@ -155,7 +156,7 @@ export [[nodiscard]] std::expected<SceneConfig, Error> loadSceneConfig(std::stri
 		return cfg;
 	} catch (const std::exception& e) {
 		return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
-			std::string("scene config (") + std::string(path) + "): " + e.what()});
+			fmt::format("scene config ({}): {}", path, e.what())});
 	}
 }
 

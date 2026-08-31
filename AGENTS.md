@@ -264,6 +264,7 @@ main.cpp 按逆序析构（RAII，无需手动清理）。
 
 - `computeCommandPool`、`transferCommandPool`、`computeQueue`、`transferQueue` 已创建但保留给未来使用
 - **Phase 5 光照/透明已知近似**：① MASK alphaTest 未实现（glTF `alphaMode=MASK` 暂按不透明渲染，无 discard）；② 世界法线变换取对象矩阵 mat3 直乘（假定均匀缩放，非均匀缩放会失真——glTF 节点基本满足，Phase 7 真实 normalMatrix 再议）；③ 透明排序按 primitive 中心距离² back-to-front（非 per-pixel/OIT——相交透明面会错序）；④ 透明段背面剔除（封闭网格正反面双重混合的修复，非封闭单面几何会被剔掉一面）。均留 Phase 7+ 演进
+- **`LightDataGpu` 字节布局双源、无反射**（Phase 5 批次 2 债）：`vkresources.cppm` 手写 struct（`static_assert(48)`）↔ `shaders/scene.slang` 字节字面量靠手工一致——唯一绕过反射管线的主要 CPU↔GPU struct 契约（DrawArgs/MaterialAsset/ModelVertex 均经 schema→生成）；单灯固定布局下风险可控，Phase 7 多灯改造布局重设计时并入反射管线（schema 声明→生成布局常量，同 `model_schema.lua` `constants` 段先例），灯同时从 registry context 升格为灯 entity + 组件（ECS 规范 3"画不画 = 实体有无"，见 `docs/next_roadmap.md` Phase 7 Light pass）
 - `configs/` 增量拷贝（`copy_if_different`）只认"源文件更新"：build 端副本被破坏/截断（mtime 更新）不会自动恢复，需手动拷贝或 `just clean`
 - ~~**ECS 已知债**~~（**2026-08-30 全部清偿**：5 项子债均已在重构批次 1-3 + Phase 4 批次 1-2 落地，逐条处置记录见下方已划线子项 + `docs/ecs_compliance_review.md` §处置记录）：
   - ~~cube 尚非 ECS entity——DrawCall 过渡特例 + `showCube` 构造期 gating~~（**2026-08-28 重构批次 3 已解**：cube 一等资产 + `registerCubeEntity`，画不画 = 实体有无；"cube" 管线条目恒建）

@@ -1,5 +1,6 @@
 module;
 #include <vulkan/vulkan_raii.hpp>
+#include <fmt/format.h>
 export module shader_registry;
 
 import rlstd;
@@ -73,7 +74,7 @@ export class ShaderRegistry {
 
 		const RGL::PipelineSpec* spec = findSpec(specName.c_str());
 		if (!spec)
-			throw std::runtime_error("pipeline spec not found: " + specName);
+			throw std::runtime_error(fmt::format("pipeline spec not found: {}", specName));
 		const uint32_t descriptorSize = res.getDescriptorHeap().getDescriptorSize();
 		const uint32_t samplerHeapOffset =
 			samplerSlot * res.getSamplerHeap().getDescriptorSize();
@@ -81,7 +82,7 @@ export class ShaderRegistry {
 		// = 映射空转，同 mesh 阶段对 binding 1/2 的既证行为）
 		const uint32_t sceneSlot = res.ensureSceneData();
 		auto entry = PipelineEntry{
-			specName + ".v" + std::to_string(vertexSlot) + ".t" + std::to_string(textureSlot),
+			fmt::format("{}.v{}.t{}", specName, vertexSlot, textureSlot),
 			RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), descriptorSize,
 				vertexSlot, vertexSlot, textureSlot, samplerHeapOffset, true, sceneSlot, true)};
 		const uint32_t index = static_cast<uint32_t>(entries.size());
@@ -102,7 +103,7 @@ export class ShaderRegistry {
 	void bindPipelineToAsset(const char* name, uint32_t assetId) {
 		auto idx = pipelineIndex(name);
 		if (!idx)
-			throw std::runtime_error(std::string("pipeline entry not found: ") + name);
+			throw std::runtime_error(fmt::format("pipeline entry not found: {}", name));
 		res.getAssetTable().setPipelineIndex(assetId, *idx);
 	}
 

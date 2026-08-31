@@ -3,6 +3,7 @@ module;
 #include <vulkan/vulkan_raii.hpp>
 #include <vk_mem_alloc.h>
 #include <glm/glm.hpp>
+#include <fmt/format.h>
 export module vk_resources;
 
 import rlstd;
@@ -344,8 +345,8 @@ export class Resources {
 	[[nodiscard]] std::expected<uint32_t, Error> allocSlot(const char* name) {
 		if (nextSlot >= descriptorHeap.getCapacity())
 			return std::unexpected(Error{ErrorCode::DescriptorSlotOutOfBounds,
-				"descriptor heap capacity exceeded (" + std::to_string(nextSlot) + " >= " +
-				std::to_string(descriptorHeap.getCapacity()) + "): " + name});
+				fmt::format("descriptor heap capacity exceeded ({} >= {}): {}",
+					nextSlot, descriptorHeap.getCapacity(), name)});
 		auto* logger = RLLogger::getInstance();
 		const uint32_t slot = nextSlot++;
 		if (logger) logger->debug("descriptor heap slot {}: {}", slot, name);

@@ -8,6 +8,7 @@ module;
 #include <SDL3/SDL_events.h>
 #include <ranges>
 #include <cstring>
+#include <fmt/format.h>
 
 export module vk_renderer;
 
@@ -222,8 +223,8 @@ export class Renderer {
 			auto result = vkResources.getAllocator().createBufferWithAddress(
 				vkDevice.getDevice(), info, alloc, &allocData);
 			if (!result)
-				throw std::runtime_error("Renderer: scene staging alloc failed: " +
-					result.error().describe());
+				throw std::runtime_error(fmt::format(
+					"Renderer: scene staging alloc failed: {}", result.error().describe()));
 			staging = std::move(*result);
 		}
 	}
@@ -352,7 +353,7 @@ export class Renderer {
 		if (logger) logger->error("Renderer: fence wait failed at frame start ({}): {}",
 			frame, vk::to_string(waitResult));
 		return std::unexpected(Error{ErrorCode::DeviceLost,
-			"frame fence wait failed: " + vk::to_string(waitResult)});
+			fmt::format("frame fence wait failed: {}", vk::to_string(waitResult))});
 	}
 	if (noPresent) {
 		device.resetFences({*inFlightFences[currentFrame]});

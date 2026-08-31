@@ -4,6 +4,7 @@ module;
 #include <stb_image_write.h>
 #include <filesystem>
 #include <chrono>
+#include <fmt/format.h>
 export module llm_debug;
 
 import rlstd;
@@ -269,9 +270,9 @@ captureFrame(RGL::Renderer& renderer, const RGL::FrameDrawList& list, const LlmD
 	const uint8_t* pixels = static_cast<const uint8_t*>(readbackAllocData.pMappedData);
 	std::filesystem::path relPath;
 	if (cfg.file.empty()) {
-		relPath = "screenshots/llm_" + std::to_string(std::chrono::duration_cast<std::chrono::seconds>(
-			std::chrono::system_clock::now().time_since_epoch()).count()) +
-			".png";
+		relPath = fmt::format("screenshots/llm_{}.png",
+			std::chrono::duration_cast<std::chrono::seconds>(
+				std::chrono::system_clock::now().time_since_epoch()).count());
 	} else {
 		relPath = cfg.file;
 	}
@@ -283,7 +284,7 @@ captureFrame(RGL::Renderer& renderer, const RGL::FrameDrawList& list, const LlmD
 		if (logger)
 			logger->error("llm_debug: stbi_write_png failed: {}", relPath.string());
 		return std::unexpected(Error{ErrorCode::Unknown,
-			"llm_debug: failed to write PNG: " + relPath.string()});
+			fmt::format("llm_debug: failed to write PNG: {}", relPath.string())});
 	}
 	return std::filesystem::absolute(relPath).string();
 }

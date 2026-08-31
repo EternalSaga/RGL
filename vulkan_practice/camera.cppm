@@ -5,6 +5,7 @@ module;
 #include <sol/sol.hpp>
 #include <SDL3/SDL_keyboard.h>
 #include <SDL3/SDL_mouse.h>
+#include <fmt/format.h>
 export module camera;
 
 import rlstd;
@@ -273,7 +274,7 @@ export [[nodiscard]] std::expected<CameraConfig, Error> loadCameraConfig(std::st
 		sol::optional<sol::error> err = result.get<sol::optional<sol::error>>();
 		std::string msg = err ? err->what() : std::string("unknown lua error");
 		return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
-			std::string("camera config (") + std::string(path) + "): " + msg});
+			fmt::format("camera config ({}): {}", path, msg)});
 	}
 
 	try {
@@ -287,7 +288,7 @@ export [[nodiscard]] std::expected<CameraConfig, Error> loadCameraConfig(std::st
 				camera.mode = CameraMode::Fps;
 			} else if (*mode != "trackball") {
 				return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
-					"camera config: unknown mode '" + *mode + "' (want 'trackball' or 'fps')"});
+					fmt::format("camera config: unknown mode '{}' (want 'trackball' or 'fps')", *mode)});
 			}
 		}
 
@@ -361,34 +362,30 @@ export [[nodiscard]] std::expected<CameraConfig, Error> loadCameraConfig(std::st
 					return def;
 				auto mapped = keyNameToSdlKey(*v);
 				if (!mapped)
-					return std::unexpected(std::string("unknown key name '") + *v +
-						"' (want single letter/digit or Up/Down/Left/Right/Space/Enter)");
+				return std::unexpected(fmt::format(
+					"unknown key name '{}' (want single letter/digit or Up/Down/Left/Right/Space/Enter)", *v));
 				return *mapped;
 			};
 			if (auto k = readKey("forward", camera.keys.forward))
 				camera.keys.forward = *k;
 			else
 				return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
-					std::string("camera config (") + std::string(path) + "): keys.forward: " +
-						std::move(k).error()});
+					fmt::format("camera config ({}): keys.forward: {}", path, std::move(k).error())});
 			if (auto k = readKey("back", camera.keys.back))
 				camera.keys.back = *k;
 			else
 				return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
-					std::string("camera config (") + std::string(path) + "): keys.back: " +
-						std::move(k).error()});
+					fmt::format("camera config ({}): keys.back: {}", path, std::move(k).error())});
 			if (auto k = readKey("left", camera.keys.left))
 				camera.keys.left = *k;
 			else
 				return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
-					std::string("camera config (") + std::string(path) + "): keys.left: " +
-						std::move(k).error()});
+					fmt::format("camera config ({}): keys.left: {}", path, std::move(k).error())});
 			if (auto k = readKey("right", camera.keys.right))
 				camera.keys.right = *k;
 			else
 				return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
-					std::string("camera config (") + std::string(path) + "): keys.right: " +
-						std::move(k).error()});
+					fmt::format("camera config ({}): keys.right: {}", path, std::move(k).error())});
 		}
 
 		// llm_debug 一次性截图（离屏隐藏窗渲染 → 延迟 N 帧 → 截图 → 退出）：
@@ -440,15 +437,14 @@ export [[nodiscard]] std::expected<CameraConfig, Error> loadCameraConfig(std::st
 				}
 			} else {
 				return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
-					std::string("camera config (") + std::string(path) +
-						"): llm_debug: want bool or table"});
+					fmt::format("camera config ({}): llm_debug: want bool or table", path)});
 			}
 		}
 
 		return CameraConfig{camera, llm};
 	} catch (const std::exception& e) {
 		return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
-			std::string("camera config (") + std::string(path) + "): " + e.what()});
+			fmt::format("camera config ({}): {}", path, e.what())});
 	}
 }
 

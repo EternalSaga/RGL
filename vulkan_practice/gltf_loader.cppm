@@ -4,6 +4,7 @@ module;
 #define TINYGLTF_NO_STB_IMAGE_WRITE
 #include <tiny_gltf.h>
 #include <glm/glm.hpp>
+#include <fmt/format.h>
 export module gltf_loader;
 
 import rlstd;
@@ -130,11 +131,11 @@ export [[nodiscard]] std::expected<GltfModel, Error> loadGltfModel(const std::st
 	tinygltf::TinyGLTF gltfLoader;  // v3 的类名（v2 叫 Loader）
 	if (!gltfLoader.LoadBinaryFromFile(&gltf, &err, &warn, path)) {
 		return std::unexpected(Error{ErrorCode::GltfLoadFailed,
-			"glTF load failed (" + path + "): " + err});
+			fmt::format("glTF load failed ({}): {}", path, err)});
 	}
 	if (!warn.empty() && logger) logger->warn("glTF ({})", warn);
 	if (gltf.meshes.empty()) {
-		return std::unexpected(Error{ErrorCode::GltfLoadFailed, "glTF has no meshes: " + path});
+		return std::unexpected(Error{ErrorCode::GltfLoadFailed, fmt::format("glTF has no meshes: {}", path)});
 	}
 
 	GltfModel model;
@@ -186,10 +187,10 @@ export [[nodiscard]] std::expected<GltfModel, Error> loadGltfModel(const std::st
 			std::vector<float> pos, nrm, uv;
 			if (!readAccessorFloats(gltf, accessorOf("POSITION"), 3, pos))
 				return std::unexpected(Error{ErrorCode::GltfLoadFailed,
-					"glTF: missing or malformed POSITION attribute (mesh " + std::to_string(mi) + ")"});
+					fmt::format("glTF: missing or malformed POSITION attribute (mesh {})", mi)});
 			if (!readAccessorFloats(gltf, accessorOf("NORMAL"), 3, nrm))
 				return std::unexpected(Error{ErrorCode::GltfLoadFailed,
-					"glTF: missing or malformed NORMAL attribute (mesh " + std::to_string(mi) + ")"});
+					fmt::format("glTF: missing or malformed NORMAL attribute (mesh {})", mi)});
 
 			// TEXCOORD_0 在 glTF 中可选（D9）：缺失 → uv 填 0 + 该 primitive 走白纹理；
 			// 存在但数据畸形 → 仍整体失败（契约违例）
@@ -197,12 +198,12 @@ export [[nodiscard]] std::expected<GltfModel, Error> loadGltfModel(const std::st
 			out.hasUv = uvAccessor >= 0 && readAccessorFloats(gltf, uvAccessor, 2, uv);
 			if (uvAccessor >= 0 && !out.hasUv)
 				return std::unexpected(Error{ErrorCode::GltfLoadFailed,
-					"glTF: malformed TEXCOORD_0 attribute (mesh " + std::to_string(mi) + ")"});
+					fmt::format("glTF: malformed TEXCOORD_0 attribute (mesh {})", mi)});
 
 			const uint32_t vertexCount = static_cast<uint32_t>(pos.size() / 3);
 			if (vertexCount != nrm.size() / 3 || (out.hasUv && vertexCount != uv.size() / 2))
 				return std::unexpected(Error{ErrorCode::GltfLoadFailed,
-					"glTF: attribute vertex counts differ (mesh " + std::to_string(mi) + ")"});
+					fmt::format("glTF: attribute vertex counts differ (mesh {})", mi)});
 			if (!out.hasUv)
 				uv.assign(static_cast<size_t>(vertexCount) * 2, 0.0f);
 
@@ -211,12 +212,11 @@ export [[nodiscard]] std::expected<GltfModel, Error> loadGltfModel(const std::st
 			if (prim.indices >= 0) {
 				if (!readIndices(gltf, prim.indices, indices))
 					return std::unexpected(Error{ErrorCode::GltfLoadFailed,
-						"glTF: malformed index data (mesh " + std::to_string(mi) + ")"});
+						fmt::format("glTF: malformed index data (mesh {})", mi)});
 				for (uint32_t idx : indices) {
 					if (idx >= vertexCount)
 						return std::unexpected(Error{ErrorCode::GltfLoadFailed,
-							"glTF: index " + std::to_string(idx) + " out of range (mesh " +
-								std::to_string(mi) + ")"});
+							fmt::format("glTF: index {} out of range (mesh {})", idx, mi)});
 				}
 			} else {
 				indices.resize(vertexCount);

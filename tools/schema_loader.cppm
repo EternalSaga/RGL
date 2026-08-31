@@ -3,6 +3,7 @@ module;
 #include <filesystem>
 #include <nlohmann/json.hpp>
 #include <sol/sol.hpp>
+#include <fmt/format.h>
 
 export module schema_loader;
 
@@ -104,7 +105,7 @@ export Schema loadSchema(const std::filesystem::path& luaPath) {
 
 	auto result = lua.do_file(luaPath.string().c_str());
 	if (!result.valid()) {
-		throw std::runtime_error("Failed to load schema: " + luaPath.string());
+		throw std::runtime_error(fmt::format("Failed to load schema: {}", luaPath.string()));
 	}
 
 	sol::table rootTable = result[0].as<sol::table>();

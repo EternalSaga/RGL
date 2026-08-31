@@ -393,6 +393,7 @@ Shadow、多灯、OIT/per-pixel 透明排序、MASK alphaTest；scene data 基�
 - **Light pass**：
   - 使用 compute shader 或 full-screen mesh shader
   - Light culling（frustum + AABB）
+  - **多灯 + 光数据并入反射管线**（清偿 Phase 5 债，见 AGENTS.md 已知问题）：`LightDataGpu` 字节布局现状双源手工一致（`vkresources.cppm` 手写 struct + `static_assert(48)` ↔ `scene.slang` 字面量，无 schema 生成——唯一绕过反射管线的主要 CPU↔GPU struct 契约）；多灯布局重设计时接入反射管线（schema 声明→生成布局常量，同 `model_schema.lua` `constants` 段先例）。灯从 registry context 升格为灯 entity + `LightData` 组件（ECS 规范 3：画不画 = 实体有无；单灯 context 是 Phase 5 显式范围决策，scene.cppm:63 注释）。scene data 头 16B 保留区（`kSceneDataHeaderBytes=64`，vkresources.cppm:42）即为此留的前向兼容余量
 - **Final pass**：combining G-buffer + lighting
 - **AABB / Frustum Culling**：延迟渲染的前提优化
 - **GPU Culling 子系统（`VK_EXT_device_generated_commands`）**：

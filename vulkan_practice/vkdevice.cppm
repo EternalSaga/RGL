@@ -45,6 +45,20 @@ export class DeviceContext {
 
 	RGL::AppContext& getVkInstance() { return vkInstance; }
 	const vk::raii::PhysicalDevice& getPhysicalDevice() const { return *physicalDevice; }
+	// push data 硬上限（启动期契约检查，main.cpp）：descriptor heap 模式下 per-draw push data
+	// （DrawArgs，vkCmdPushDataEXT）受设备硬限约束，两个 limit 双驱动实测均 256B：
+	// ① maxPushDataSize（VkPhysicalDeviceDescriptorHeapPropertiesEXT，heap 模式专属；
+	//    VUID-VkPushDataInfoEXT-offset-11243：vkCmdPushDataEXT 的 offset+size ≤ 本值）
+	// ② maxPushConstantsSize（VkPhysicalDeviceLimits，descriptor set 模式上限；
+	//    heap 模式下 shader push constant 块成员须落在 [0, maxPushDataSize] 内）
+	// 返回纯值：vk:: 命名空间对 main.cpp 不可见（各模块均无 export import vulkan 头，
+	// main 只用方法链）——vk 类型不泄漏到应用入口
+	[[nodiscard]] std::pair<uint32_t, uint32_t> getPushDataLimits() const {
+		const auto props = getPhysicalDevice()
+			.getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDescriptorHeapPropertiesEXT>();
+		return {static_cast<uint32_t>(props.get<vk::PhysicalDeviceProperties2>().properties.limits.maxPushConstantsSize),
+			static_cast<uint32_t>(props.get<vk::PhysicalDeviceDescriptorHeapPropertiesEXT>().maxPushDataSize)};
+	}
 	vk::raii::Device& getDevice() { return device; }
 	const vk::raii::Device& getDevice() const { return device; }
 	vk::Queue getGraphicsQueue() const { return graphicsQueue; }
