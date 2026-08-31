@@ -87,7 +87,13 @@ static std::string toCppType(const nlohmann::json& fieldType) {
 	return "void";
 }
 
-export std::string generateCppm(const nlohmann::json& reflection,
+// 返回 nullopt = 致命校验失败（布局漂移/类型不可映射），调用方必须中止（exit 1）。
+// 逐字段校验真值 = 反射 JSON 的 binding.offset/binding.size（slangc 按其实际所用
+// flag 计算的偏移——即"shader 端真实布局"）：与 standardLayoutInfo 计算值交叉比对，
+// 不等 = scalar flag 策略被破坏（如某处 slangc 调用丢 -fvk-use-scalar-layout）或
+// 布局表失同步。旧实现只用总尺寸 static_assert 兜底：SPV 侧单点丢 flag 时总尺寸
+// 恰好一致的场景（字段调换 + padding 抵消）零检测，此处逐字段堵死。
+export std::optional<std::string> generateCppm(const nlohmann::json& reflection,
 	const Schema& schema,
 	const std::string& templatePath,
 	const std::string& moduleName) {
@@ -102,6 +108,7 @@ export std::string generateCppm(const nlohmann::json& reflection,
 
 	auto& params = reflection["parameters"];
 	std::set<std::string> emittedStructs;
+	bool fatal = false;
 
 	for (const auto& p : params) {
 		if (!has(p, "name") || !has(p, "binding") || !has(p, "type")) continue;
@@ -138,7 +145,9 @@ export std::string generateCppm(const nlohmann::json& reflection,
 
 			if (has(*elemType, "fields")) {
 				const nlohmann::json& fields = (*elemType)["fields"];
-				// 按标准布局计算偏移，必要时插入 uint32_t padding 字段
+				// 逐字段双端校验：反射 binding.offset/size（slangc 按其实际 flag 算的
+				// 真值）vs standardLayoutInfo 计算值。真值缺失（老版反射 JSON）时跳过
+				// 比对仅生成（向后兼容），存在则必须一致，否则致命（flag/表漂移）。
 				size_t cursor = 0;
 				size_t structAlign = 4;
 				int padCount = 0;
@@ -148,6 +157,7 @@ export std::string generateCppm(const nlohmann::json& reflection,
 					size_t fieldSize = 0, fieldAlign = 0;
 					if (!standardLayoutInfo(cppType, fieldSize, fieldAlign)) {
 						logger->error("[FAIL] {} field '{}' has unmappable type '{}'", structName, f["name"].get<std::string>(), cppType);
+						fatal = true;
 						continue;
 					}
 					const size_t offset = (cursor + fieldAlign - 1) / fieldAlign * fieldAlign;
@@ -157,12 +167,32 @@ export std::string generateCppm(const nlohmann::json& reflection,
 						padObj["name"] = "_pad" + std::to_string(padCount++) +
 							"[" + std::to_string(offset - cursor) + "]";
 						padObj["cpp_type"] = "uint8_t";
+						padObj["offset"] = nullptr;  // 模板真值判断用（无反射真值）
 						structObj["fields"].push_back(padObj);
 						cursor = offset;
 					}
 					nlohmann::json fieldObj;
 					fieldObj["name"] = f["name"].get<std::string>();
 					fieldObj["cpp_type"] = cppType;
+					fieldObj["offset"] = nullptr;  // 恒输出（模板真值判断；老版反射 JSON 无 binding.offset）
+					// 反射真值存在则逐字段交叉校验 + 钉进生成物（offsetof static_assert）
+					if (has(f, "binding") && has(f["binding"], "offset")) {
+						const size_t reflOffset = f["binding"]["offset"].get<size_t>();
+						if (reflOffset != offset) {
+							logger->error("[FAIL] {} field '{}': computed offset {} != reflection offset {} "
+								"(scalar layout flag mismatch between reflection and layout table?)",
+								structName, f["name"].get<std::string>(), offset, reflOffset);
+							fatal = true;
+						}
+						if (has(f["binding"], "size") &&
+							f["binding"]["size"].get<size_t>() != fieldSize) {
+							logger->error("[FAIL] {} field '{}': computed size {} != reflection size {}",
+								structName, f["name"].get<std::string>(), fieldSize,
+								f["binding"]["size"].get<size_t>());
+							fatal = true;
+						}
+						fieldObj["offset"] = reflOffset;
+					}
 					structObj["fields"].push_back(fieldObj);
 					cursor += fieldSize;
 					structAlign = std::max(structAlign, fieldAlign);
@@ -178,10 +208,12 @@ export std::string generateCppm(const nlohmann::json& reflection,
 						padObj["name"] = "_pad" + std::to_string(padCount++) +
 							"[" + std::to_string(padded - cursor) + "]";
 						padObj["cpp_type"] = "uint8_t";
+						padObj["offset"] = nullptr;  // 模板真值判断用（无反射真值）
 						structObj["fields"].push_back(padObj);
 					}
 					if (padded != totalSize) {
 						logger->error("[FAIL] {} standard layout size {} != reflection size {}", structName, padded, totalSize);
+						fatal = true;
 					}
 				}
 			}
@@ -216,14 +248,15 @@ export std::string generateCppm(const nlohmann::json& reflection,
 		structObj["name"] = vl.name;
 		structObj["fields"] = nlohmann::json::array();
 		structObj["size"] = vl.stride;
-		for (const auto& attr : vl.attributes) {
-			const char* cppType = vertexAttrCppType(attr.type);
-			if (!cppType) continue;
-			nlohmann::json fieldObj;
-			fieldObj["name"] = attr.name;
-			fieldObj["cpp_type"] = cppType;
-			structObj["fields"].push_back(fieldObj);
-		}
+			for (const auto& attr : vl.attributes) {
+				const char* cppType = vertexAttrCppType(attr.type);
+				if (!cppType) continue;
+				nlohmann::json fieldObj;
+				fieldObj["name"] = attr.name;
+				fieldObj["cpp_type"] = cppType;
+				fieldObj["offset"] = nullptr;  // 顶点布局无反射端真值（schema 声明），仅总尺寸 static_assert
+				structObj["fields"].push_back(fieldObj);
+			}
 		data["structs"].push_back(structObj);
 		logger->debug("Generated vertex struct '{}' with {} fields, stride={}", vl.name, structObj["fields"].size(), vl.stride);
 	}
@@ -236,6 +269,11 @@ export std::string generateCppm(const nlohmann::json& reflection,
 		constObj["value"] = ct.value;
 		data["constants"].push_back(constObj);
 		logger->debug("Generated constant '{}' = {}", ct.name, ct.value);
+	}
+
+	if (fatal) {
+		logger->error("Generation aborted: layout validation failed (see [FAIL] entries above)");
+		return std::nullopt;
 	}
 
 	inja::Environment env;

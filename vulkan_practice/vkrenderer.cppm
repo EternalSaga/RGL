@@ -116,8 +116,10 @@ export class Renderer {
 	// 离屏截图（llm_debug.cppm captureFrame）用的只读访问器
 	RGL::DeviceContext& getDeviceContextRef() const { return vkDevice; }
 	const vk::raii::CommandPool& getGraphicsCommandPoolRef() const { return graphicsCommandPool; }
-	// 离屏截图（llm_debug.cppm captureFrame）用的只读访问器：委托管线表（ShaderRegistry）
-	const RGL::RenderPipeline& pipelineAt(uint32_t index) const { return registry.pipelineAt(index); }
+	// 离屏截图（llm_debug.cppm captureFrame）用的只读访问器：委托管线表（ShaderRegistry）。
+	// entry 访问器供截图路径取 pushDataSet（与主路径 drawCall 同一契约字段，不硬编码 0——
+	// push set 显式化契约（L5）两条路径必须同步，否则 pushDataSet 离开 0 时截图静默分歧）
+	const RGL::PipelineEntry& pipelineEntryAt(uint32_t index) const { return registry.entry(index); }
 	const RGL::RenderState& getOpaqueState() const { return opaqueState; }
 	const RGL::RenderState& getTransparentState() const { return transparentState; }
 	// 等待 GPU 空闲（resize / 重建 swapchain 前调用，确保旧资源不再被使用）
@@ -229,7 +231,18 @@ export class Renderer {
 	// 窗口尺寸变化（resize）或 acquire/present 返回 out-of-date 时重建 swapchain + 深度图。
 	// 深度图必须与 swapchain extent 同步重建，否则 renderArea 会超出图像范围。
 	[[nodiscard]] std::expected<void, Error> recreateSwapchainAndDepth(const char* context) {
-		swapchain->recreate();
+		// recreate 内部重查 caps/format/presentMode（acquire OUT_OF_DATE 的根因未必是
+		// extent，如 HDR 状态切换）。全部未变 = 重建修不好，打破静默死循环：报一次错
+		if (!swapchain->recreate()) {
+			static bool warned = false;
+			auto logger = RLLogger::getInstance();
+			if (!warned) {
+				warned = true;
+				if (logger) logger->error("Renderer: recreate requested ({}) but surface "
+					"capabilities unchanged — cannot recover, expect repeated failure", context);
+			}
+			return {};  // extent 未变 → 深度图/离屏图仍有效，跳过重建
+		}
 		auto result = resources->recreateDepthImage(swapchain->getExtent());
 		if (!result) {
 			auto logger = RLLogger::getInstance();
@@ -248,6 +261,7 @@ export class Renderer {
 				return std::unexpected(std::move(offscreenResult).error());
 			}
 			offscreenImage = std::move(*offscreenResult);
+			offscreenLayout = vk::ImageLayout::eUndefined;  // 新图创建：布局 Undefined
 			offscreenView.emplace(vkDevice.getDevice(), buildOffscreenView());
 		}
 		return {};
@@ -273,6 +287,10 @@ export class Renderer {
 	// 区分"帧数累积触发"（fault 帧号恒定）vs"窗口显示触发"（fault 帧号 >> showAfter）
 	uint64_t frameCount = 0;
 	VmaImage offscreenImage;
+	// 离屏图真实布局跟踪（DIAG RGL_OFFSCREEN）：持久图 storeOp=eStore，endRendering 后
+	// 布局保留；帧末 blit barrier 迁 TransferSrcOptimal 且不迁回 → 第 2 帧起 ④ 的
+	// oldLayout 必须用本跟踪值（非 Undefined）。新图创建/重建时重置 Undefined。
+	vk::ImageLayout offscreenLayout = vk::ImageLayout::eUndefined;
 	// 离屏目标 view（raii 默认构造已删 + 构造期即调 vkCreateImageView——null image
 	// 会被校验拦下，故不能进初始化列表；optional 惰性 emplace，默认路径零分配零调用）
 	std::optional<vk::raii::ImageView> offscreenView;
@@ -314,21 +332,31 @@ export class Renderer {
 			if (!offscreenResult)
 				return std::unexpected(std::move(offscreenResult).error());
 			offscreenImage = std::move(*offscreenResult);
+			offscreenLayout = vk::ImageLayout::eUndefined;  // 新图创建：布局 Undefined
 			offscreenView.emplace(device, buildOffscreenView());
 		}
 
 	// ① 等待上一帧同 slot 完全结束：inFlight fence（命令缓冲执行完）与 present
 	// fence（present 完成）都信号后，本 slot 的 semaphore / command buffer 才可重用。
-	// waitAll=VK_TRUE + 无限超时（fence 保证在超时内信号，返回值忽略）
+	// waitAll=VK_TRUE + 无限超时。正常时 fence 保证在超时内信号；device reset/lost 时
+	// fence 永不信号 → 返回 eErrorDeviceLost/Reset（非无限自旋，报错退出帧循环）
 	// DIAG（RGL_NO_PRESENT）：不 present → presentFence 永不 signal，只等 inFlight
-	if (noPresent) {
-		(void)device.waitForFences(
-			{*inFlightFences[currentFrame]}, VK_TRUE, std::numeric_limits<uint64_t>::max());
-		device.resetFences({*inFlightFences[currentFrame]});
-	} else {
-		(void)device.waitForFences(
+	const vk::Result waitResult = noPresent
+		? device.waitForFences(
+			{*inFlightFences[currentFrame]}, VK_TRUE, std::numeric_limits<uint64_t>::max())
+		: device.waitForFences(
 			{*inFlightFences[currentFrame], *presentFences[currentFrame]},
 			VK_TRUE, std::numeric_limits<uint64_t>::max());
+	if (waitResult != vk::Result::eSuccess) {
+		auto logger = RLLogger::getInstance();
+		if (logger) logger->error("Renderer: fence wait failed at frame start ({}): {}",
+			frame, vk::to_string(waitResult));
+		return std::unexpected(Error{ErrorCode::DeviceLost,
+			"frame fence wait failed: " + vk::to_string(waitResult)});
+	}
+	if (noPresent) {
+		device.resetFences({*inFlightFences[currentFrame]});
+	} else {
 		device.resetFences({*inFlightFences[currentFrame], *presentFences[currentFrame]});
 	}
 
@@ -413,10 +441,14 @@ export class Renderer {
 	vk::DependencyInfo drawDepInfo;
 	drawDepInfo.setImageMemoryBarriers(drawBarriers);
 	commandBuffers[currentFrame].pipelineBarrier2(drawDepInfo);
-	// DIAG（RGL_OFFSCREEN）：离屏目标 Undefined → ColorAttachmentOptimal（同后缓冲规则）
+	// DIAG（RGL_OFFSCREEN）：离屏目标 → ColorAttachmentOptimal。
+	// 与后缓冲不同：离屏图是持久图（storeOp=eStore，endRendering 后布局保留），
+	// 帧末 blit barrier 迁到 TransferSrcOptimal 且从不迁回 → 第 2 帧起真实布局是
+	// TransferSrcOptimal，声明 eUndefined 失配（非 swapchain 图无 Undefined 豁免）。
+	// 跟踪真实布局（offscreenLayout，帧末 blit 后更新）
 	if (offscreen) {
 		auto offscreenToDrawBarrier = RGL::createImageBarrier(
-			offscreenImage.image, vk::ImageLayout::eUndefined,
+			offscreenImage.image, offscreenLayout,
 			vk::ImageLayout::eColorAttachmentOptimal,
 			vk::ImageAspectFlagBits::eColor,
 			vk::PipelineStageFlagBits2::eTopOfPipe,
@@ -467,7 +499,11 @@ export class Renderer {
 	// GPU，sampler 描述符读到未初始化内存 → 采样恒 garbage（7e1abce 内修复，当时注释
 	// "Phase 3 黑屏根因"；2026-08-28 G 实验：当前启动期 fence/waitIdle 已掩盖该缺位
 	// 的影响，spec 层面仍必须保留，见 docs/heap_texture_research.md §12）
-	heapBarrier.dstAccessMask = vk::AccessFlagBits2::eResourceHeapReadEXT | vk::AccessFlagBits2::eSamplerHeapReadEXT;
+	// eTransferRead：⑥.5 的 vkCmdCopyBuffer 在 eTransfer 阶段读 host-mapped staging
+	// buffer（scene data 源），本 eHost→eAllGraphics barrier 是该读之前唯一的
+	// host write → device read 排序点，dstAccess 须覆盖具体读（VVL sync validation）
+	heapBarrier.dstAccessMask = vk::AccessFlagBits2::eResourceHeapReadEXT |
+		vk::AccessFlagBits2::eSamplerHeapReadEXT | vk::AccessFlagBits2::eTransferRead;
 	heapBarrier.srcStageMask = vk::PipelineStageFlagBits2::eHost;
 	heapBarrier.dstStageMask = vk::PipelineStageFlagBits2::eAllGraphics;
 	vk::DependencyInfo heapDepInfo{};
@@ -590,6 +626,7 @@ export class Renderer {
 			VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, swapchainImages[imageIndex],
 			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
 			reinterpret_cast<const VkImageBlit*>(&blitRegion), VK_FILTER_LINEAR);
+		offscreenLayout = vk::ImageLayout::eTransferSrcOptimal;  // 本帧末真实布局，下帧 ④ 用
 	}
 
 	// ⑫ 后缓冲：ColorAttachmentOptimal（直渲）/ TransferDstOptimal（RGL_OFFSCREEN blit 后）
@@ -611,12 +648,13 @@ export class Renderer {
 
 	// ⑬ 提交到图形队列。用裸 C API（vkQueueSubmit）而非 vk-hpp RAII：
 	// RAII 的 Queue::submit 重载不支持 fence 参数。
-	// wait：imageAvailable 信号量（acquireNextImage 信号）——wait stage 取
-	// command buffer 首次使用后缓冲的 stage（颜色附件输出）；
+	// wait：imageAvailable 信号量（acquireNextImage 信号）——wait stage 必须覆盖 command
+	// buffer 首次使用后缓冲的 stage：直渲 = 颜色附件输出；RGL_OFFSCREEN = blit（Transfer）。
 	// signal：renderFinished 信号量（presentKHR 的等待对象）；
 	// fence：inFlightFence，命令缓冲执行完时信号。
 	VkSemaphore waitSem = *imageAvailableSemaphores[currentFrame];
-	VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+	const VkPipelineStageFlags waitStage = offscreen ? VK_PIPELINE_STAGE_TRANSFER_BIT
+		: VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 	VkCommandBuffer cb = *commandBuffers[currentFrame];
 	VkSemaphore signalSem = *renderFinishedSemaphores[currentFrame];
 	VkFence rawFence = *inFlightFences[currentFrame];
@@ -637,6 +675,13 @@ export class Renderer {
 		auto logger = RLLogger::getInstance();
 		if (logger) logger->error("Renderer: device lost on submit! (frame {})", frame);
 		return std::unexpected(Error{ErrorCode::DeviceLost, "VK_ERROR_DEVICE_LOST on submit"});
+	}
+	// 其余失败（OOM/device reset 等）：fence 可能永不信号 → 下帧 ① 会报错退出，
+	// 此处先留观测（旧实现静默吞掉，排障零线索）
+	if (submitVkResult != VK_SUCCESS) {
+		auto logger = RLLogger::getInstance();
+		if (logger) logger->error("Renderer: submit failed (frame {}): {}", frame,
+			vk::to_string(vk::Result{submitVkResult}));
 	}
 
 	// ⑭ 上屏：等 renderFinished 信号量（确保绘制完成），把 imageIndex 交给合成器。
@@ -665,6 +710,16 @@ export class Renderer {
 			if (auto result = recreateSwapchainAndDepth("present out-of-date/suboptimal"); !result) {
 				return std::unexpected(std::move(result).error());
 			}
+		}
+		// 其余错误码（如 SURFACE_LOST）：spec 语义下队列操作仍入队、present fence 仍
+		// 信号（不死锁），但必须留观测——下帧 acquire 大概率持续失败
+		if (presentResult != vk::Result::eSuccess &&
+			presentResult != vk::Result::eErrorDeviceLost &&
+			presentResult != vk::Result::eErrorOutOfDateKHR &&
+			presentResult != vk::Result::eSuboptimalKHR) {
+			auto logger = RLLogger::getInstance();
+			if (logger) logger->error("Renderer: present failed (frame {}): {}", frame,
+				vk::to_string(presentResult));
 		}
 	}
 

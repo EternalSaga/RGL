@@ -65,15 +65,49 @@ export bool validateSchema(const nlohmann::json& reflection, const Schema& schem
 					found = true;
 					if (has(af, "type")) {
 						const nlohmann::json& t = af["type"];
-						if (ef.type == "matrix" && has(t, "kind") &&
-							getString(t, "kind") &&
-							std::strcmp(getString(t, "kind"), "matrix") == 0) {
-							if (ef.rowCount > 0 && ef.columnCount > 0) {
+						const char* kind = has(t, "kind") ? getString(t, "kind") : nullptr;
+						if (ef.type == "matrix") {
+							if (!kind || std::strcmp(kind, "matrix") != 0) {
+								logger->error("[FAIL] {}.{} expected matrix, got kind '{}'", pc.name, ef.name,
+									kind ? kind : "(none)");
+								ok = false;
+							} else if (ef.rowCount > 0 && ef.columnCount > 0) {
 								int rc = has(t, "rowCount") ? t["rowCount"].get<int>() : 0;
 								int cc = has(t, "columnCount") ? t["columnCount"].get<int>() : 0;
 								if (rc != ef.rowCount || cc != ef.columnCount) {
 									logger->error("[FAIL] {}.{} matrix dimensions mismatch: expected {}x{}, got {}x{}",
 										pc.name, ef.name, ef.rowCount, ef.columnCount, rc, cc);
+									ok = false;
+								}
+							}
+						} else if (ef.type.rfind("vec", 0) == 0) {
+							// vec2/vec3/vec4：kind=vector + elementCount 匹配（float32 元素）
+							const int expectedDim = std::stoi(ef.type.substr(3));
+							if (!kind || std::strcmp(kind, "vector") != 0) {
+								logger->error("[FAIL] {}.{} expected {}, got kind '{}'", pc.name, ef.name,
+									ef.type, kind ? kind : "(none)");
+								ok = false;
+							} else {
+								int dim = has(t, "elementCount") ? t["elementCount"].get<int>() : 0;
+								if (dim != expectedDim) {
+									logger->error("[FAIL] {}.{} vector dimension mismatch: expected {}, got {}",
+										pc.name, ef.name, expectedDim, dim);
+									ok = false;
+								}
+							}
+						} else {
+							// uint/float/int：kind=scalar + scalarType 匹配
+							const char* expectedScalar = ef.type == "uint" ? "uint32"
+								: (ef.type == "int" ? "int32" : "float32");
+							if (!kind || std::strcmp(kind, "scalar") != 0) {
+								logger->error("[FAIL] {}.{} expected scalar '{}', got kind '{}'", pc.name, ef.name,
+									ef.type, kind ? kind : "(none)");
+								ok = false;
+							} else if (has(t, "scalarType")) {
+								const char* actual = getString(t, "scalarType");
+								if (actual && std::strcmp(actual, expectedScalar) != 0) {
+									logger->error("[FAIL] {}.{} scalar type mismatch: expected {}, got {}",
+										pc.name, ef.name, expectedScalar, actual);
 									ok = false;
 								}
 							}
@@ -84,6 +118,21 @@ export bool validateSchema(const nlohmann::json& reflection, const Schema& schem
 			}
 			if (!found) {
 				logger->error("[FAIL] pushConstantBuffer '{}' missing expected field '{}'", pc.name, ef.name);
+				ok = false;
+			}
+		}
+
+		// 反向检查（旧实现只查 schema ⊆ reflection，shader 加字段而 schema 不更时
+		// validate PASS → 生成物带新字段、C++ 侧不写、shader 静默读 0——schema 沦为影子）
+		std::vector<std::string> schemaNames;
+		for (const auto& ef : pc.fields)
+			schemaNames.push_back(ef.name);
+		for (const auto& af : fields) {
+			if (!has(af, "name")) continue;
+			const std::string afName = af["name"].get<std::string>();
+			if (std::find(schemaNames.begin(), schemaNames.end(), afName) == schemaNames.end()) {
+				logger->error("[FAIL] pushConstantBuffer '{}' has field '{}' not declared in schema "
+					"(update schema or the generated C++ struct will not match)", pc.name, afName);
 				ok = false;
 			}
 		}
@@ -126,6 +175,21 @@ export bool validateSchema(const nlohmann::json& reflection, const Schema& schem
 		if (ds.heapSlotOffset < 0 && !ds.cppName.empty()) {
 			logger->error("[FAIL] descriptorSlot '{}' has cppName '{}' but no heapSlotOffset（运行时槽不生成常量）", ds.name, ds.cppName);
 			ok = false;
+		}
+	}
+
+	// 反向：shader 声明了 binding 但 schema 未登记 → FAIL（新增 binding 不改 schema
+	// 时 C++ 侧 mapping 数组（shader.cppm 定长）不覆盖 → 运行期 createShadersEXT 失败）
+	{
+		std::vector<std::string> dsNames;
+		for (const auto& ds : schema.descriptorSlots)
+			dsNames.push_back(ds.name);
+		for (const auto& [name, p] : descSlotMap) {
+			(void)p;
+			if (std::find(dsNames.begin(), dsNames.end(), name) == dsNames.end()) {
+				logger->error("[FAIL] descriptorTableSlot '{}' in reflection not declared in schema", name);
+				ok = false;
+			}
 		}
 	}
 

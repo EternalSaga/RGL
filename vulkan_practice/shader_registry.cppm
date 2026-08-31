@@ -17,7 +17,7 @@ namespace RGL {
 // 管线表一条（Phase 4 批次 2：从 vkrenderer.cppm 迁入，Vulkan 层零 entt）：
 // shader 风格名 + 其 RenderPipeline（shader object + 烘焙的 descriptor heap binding mapping）
 // + 显式 push constant 元数据（L5 解决：argsSize/pushDataSet 替代旧 "set 0 被两种 struct
-// 隐式共享"）。argsSize = 该管线 push constant 字节数（统一 DrawArgs 超集 = 96B scalar 布局，
+// 隐式共享"）。argsSize = 该管线 push constant 字节数（统一 DrawArgs 超集 = 100B scalar 布局，
 // material_types_generated static_assert 与 shader 反射一致）；pushDataSet = 0（显式）。
 export struct PipelineEntry {
 	std::string name;
@@ -52,10 +52,8 @@ export class ShaderRegistry {
 		auto it = indexByName.find(std::string(name));
 		return it == indexByName.end() ? std::nullopt : std::optional<uint32_t>(it->second);
 	}
-	// 下标 → 条目（Renderer draw 循环取整条目：pushDataSet + pipeline）
+	// 下标 → 条目（Renderer draw 循环 / llm_debug 截图路径取整条目：pushDataSet + pipeline）
 	[[nodiscard]] const PipelineEntry& entry(uint32_t index) const { return entries[index]; }
-	// 下标 → 管线（llm_debug 离屏重渲经 Renderer::pipelineAt 委托到此）
-	[[nodiscard]] const RGL::RenderPipeline& pipelineAt(uint32_t index) const { return entries[index].pipeline; }
 
 	// 模型管线条目（资产上传期）：用管线规格创建 RenderPipeline，binding mapping 显式烘焙
 	// 顶点 slot + 纹理 slot（binding 1 = resource heap 的 SAMPLED_IMAGE 描述符槽、

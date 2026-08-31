@@ -13,9 +13,10 @@ export import features_generated;
 
 namespace RGL {
 
-export [[nodiscard]] std::expected<void, Error> checkDeviceExtensions(const vk::raii::PhysicalDevice& device) {
-	auto available = device.enumerateDeviceExtensionProperties();
-	std::vector<const char*> required = {
+// 设备扩展单一声明点（check 与 enable 共用——旧实现两处手工重复同一组 8 个，
+// 加一处漏一处 = 校验/启用不一致）
+inline const std::vector<const char*>& kDeviceExtensions() {
+	static const std::vector<const char*> extensions = {
 		VK_KHR_SWAPCHAIN_EXTENSION_NAME,
 		VK_EXT_MESH_SHADER_EXTENSION_NAME,
 		VK_EXT_SHADER_OBJECT_EXTENSION_NAME,
@@ -24,6 +25,12 @@ export [[nodiscard]] std::expected<void, Error> checkDeviceExtensions(const vk::
 		VK_KHR_DYNAMIC_RENDERING_LOCAL_READ_EXTENSION_NAME,
 		VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME,
 		VK_KHR_SHADER_UNTYPED_POINTERS_EXTENSION_NAME};
+	return extensions;
+}
+
+export [[nodiscard]] std::expected<void, Error> checkDeviceExtensions(const vk::raii::PhysicalDevice& device) {
+	auto available = device.enumerateDeviceExtensionProperties();
+	const auto& required = kDeviceExtensions();
 
 	std::vector<const char*> missing;
 	for (const char* ext : required) {
@@ -44,16 +51,7 @@ export [[nodiscard]] std::expected<void, Error> checkDeviceExtensions(const vk::
 }
 
 export std::vector<const char*> getDeviceExtensions() {
-	std::vector<const char*> extensions = {
-		VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-		VK_EXT_MESH_SHADER_EXTENSION_NAME,
-		VK_EXT_SHADER_OBJECT_EXTENSION_NAME,
-		VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME,
-		VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME,
-		VK_KHR_DYNAMIC_RENDERING_LOCAL_READ_EXTENSION_NAME,
-		VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME,
-		VK_KHR_SHADER_UNTYPED_POINTERS_EXTENSION_NAME};
-	return extensions;
+	return kDeviceExtensions();
 }
 
 }  // namespace RGL

@@ -90,7 +90,7 @@ export struct ViewProjection {
 // + MeshRef{cube 资产 id} + MaterialRef{材质 id} + Relationship（根，parent = null）。
 // 画不画 = 实体有无（数据驱动：showCube 配置由 main 决定是否注册，无构造期 gating）。
 // 注意：cube 着色 = 每顶点色（cube.frag 从顶点读 color），MaterialRef 的 baseColor
-// 不被 cube 管线消费（renderListSystem 按资产 kind 分支，push constant 布局 64B/96B 不统一）。
+// 不被 cube 管线消费（Phase 4 归一：统一 DrawArgs 超集单一布局，各风格只消费自己字段）。
 export entt::entity registerCubeEntity(entt::registry& rg, uint32_t meshAsset, uint32_t materialAsset) {
 	auto e = rg.create();
 	rg.emplace<Transform>(e);  // identity：cube 几何已在原点 ±0.5

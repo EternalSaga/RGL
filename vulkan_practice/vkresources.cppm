@@ -40,7 +40,9 @@ export struct LightDataGpu {
 static_assert(sizeof(LightDataGpu) == 48);
 
 export inline constexpr uint32_t kSceneDataHeaderBytes = 64;    // LightData 48B + 16B 保留（64B 对齐）
-export inline constexpr uint32_t kSceneMatrixStride = 64;       // mat4 列主序
+// mat4 列主序 stride：派生自 sizeof(glm::mat4) 而非裸字面量（C++ 侧漂移即编译失败；
+// shader 端 scene.slang 的字面量 64u 须与本值一致——无反射端对应，见 scene.slang 头注释）
+export inline constexpr uint32_t kSceneMatrixStride = sizeof(glm::mat4);
 export inline constexpr uint32_t kSceneMatrixCapacity = 1024;   // 对象矩阵表容量（main 启动期契约检查）
 export inline constexpr vk::DeviceSize kSceneDataBytes =
 	kSceneDataHeaderBytes + vk::DeviceSize{kSceneMatrixCapacity} * kSceneMatrixStride;
@@ -48,9 +50,9 @@ export inline constexpr vk::DeviceSize kSceneDataBytes =
 // 纹理资产 id 的"未设置"值（同 kInvalidPipelineIndex 模式；批次 2 材质资产的 textureId 用它 = 无纹理 → 白）
 export inline constexpr uint32_t kInvalidTextureId = std::numeric_limits<uint32_t>::max();
 
-// 资产种类（批次 1 引入：白纹理 slot 契约断言只数模型顶点槽；批次 3 cube 实体化用它做
-// renderListSystem 数据分支——push constant 布局随 kind（Cube=DrawArgs 64B / Model=ModelDrawArgs 96B），
-// 完整归一待 Phase 4 ShaderRegistry）
+// 资产种类（批次 1 引入：白纹理 slot 契约断言只数模型顶点槽；批次 3 cube 实体化数据源）。
+// Phase 4 已归一 push constant（统一 DrawArgs 超集单一布局）：renderListSystem 零 AssetKind
+// 分支，kind 不再参与布局/写入路径选择（历史 64B/96B 双 struct 分支已删）
 export enum class AssetKind : uint8_t {
 	Model,
 	Cube,

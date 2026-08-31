@@ -43,13 +43,23 @@ export class Swapchain {
 	vk::SurfaceFormatKHR getFormat() const { return format; }
 	vk::PresentModeKHR getPresentMode() const { return presentMode; }
 
-	void recreate() {
-		int width, height;
-		SDL_GetWindowSize(window, &width, &height);
-		vk::Extent2D newExtent = window.getSwapchainExtend(surfaceCapabilities);
+	// 重查 caps/format/presentMode 后按需重建。仅按 extent 判断（旧实现）会漏掉
+	// format/颜色空间/transform 漂移（如 HDR 状态切换）：acquire OUT_OF_DATE 后 extent 未变
+	// 时静默 no-op → 每帧再失败的死循环。返回 false = 全部未变（重建无益），调用方
+	// 负责观测（日志）且不得重建深度图等附属资源。
+	[[nodiscard]] bool recreate() {
+		auto newCaps = vkDevice.getPhysicalDevice().getSurfaceCapabilitiesKHR(*surface);
+		auto newFormat = window.selectFormat(
+			vkDevice.getPhysicalDevice().getSurfaceFormatsKHR(*surface));
+		auto newPresentMode = createPresentMode(vkDevice, surface);
+		const vk::Extent2D newExtent = window.getSwapchainExtend(newCaps);
 
-		if (newExtent.width == extent.width && newExtent.height == extent.height) {
-			return;
+		const bool changed =
+			newExtent.width != extent.width || newExtent.height != extent.height ||
+			newFormat.format != format.format || newFormat.colorSpace != format.colorSpace ||
+			newPresentMode != presentMode || newCaps.currentTransform != surfaceCapabilities.currentTransform;
+		if (!changed) {
+			return false;
 		}
 
 		// 等待 GPU 空闲
@@ -58,13 +68,17 @@ export class Swapchain {
 		// 销毁旧 swapchain
 		swapchain = nullptr;
 
-		// 重建
+		// 重建（按重查值，非构造期缓存）
+		surfaceCapabilities = newCaps;
+		format = newFormat;
+		presentMode = newPresentMode;
 		extent = newExtent;
 		imageCount = window.getImageCount(surfaceCapabilities.minImageCount,
 			surfaceCapabilities.maxImageCount);
 		swapchain = vk::raii::SwapchainKHR(vkDevice.getDevice(), buildSwapchainCreateInfo());
 		swapchainImages = swapchain.getImages();
 		swapchainImageViews = createImageViews(vkDevice.getDevice(), swapchainImages, format.format);
+		return true;
 	}
 
    private:

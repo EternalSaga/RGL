@@ -2,7 +2,8 @@
 -- Contract definition for material.slang（Phase 4：统一 push constant 超集 DrawArgs，
 -- 所有 shader 风格共享同一布局——renderListSystem 零分支单一写入路径）
 -- Used by reflection_tool to verify reflection JSON consistency
--- 和生成 material_types_generated.cppm（DrawArgs，static_assert 96B 钉死布局，scalar 布局零 padding）
+-- 和生成 material_types_generated.cppm（DrawArgs，static_assert 100B 钉死布局 + 逐字段
+-- offsetof 校验，scalar 布局零 padding）
 return {
     -- Push constant buffer definitions
     -- name matches the slang variable name, not the struct name

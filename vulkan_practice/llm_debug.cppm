@@ -208,10 +208,11 @@ captureFrame(RGL::Renderer& renderer, const RGL::FrameDrawList& list, const LlmD
 	// ⑧ 绘制（同 drawFrame ⑨ 契约：opaque/transparent 两段各段首 applyDynamicState
 	// 一次——离屏 pass 与上屏 pass 状态同构，透明排序在截图路径同样生效）
 	auto drawCall = [&](const RGL::DrawCall& call) {
-		const auto& entry = renderer.pipelineAt(call.pipeline);
+		// 同主路径 drawCall 契约：push set 取条目字段（非硬编码 0），两路径不漂移
+		const auto& entry = renderer.pipelineEntryAt(call.pipeline);
 		cmd.pushDataEXT(vk::PushDataInfoEXT(
-			0, vk::HostAddressRangeConstEXT(call.pushData.data(), call.pushData.size())));
-		entry.bindShaders(cmd);
+			entry.pushDataSet, vk::HostAddressRangeConstEXT(call.pushData.data(), call.pushData.size())));
+		entry.pipeline.bindShaders(cmd);
 		cmd.drawMeshTasksEXT(call.groupCount, 1, 1);
 	};
 	RGL::applyDynamicState(cmd, w, h, renderer.getOpaqueState());

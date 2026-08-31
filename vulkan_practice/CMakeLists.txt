@@ -11,12 +11,20 @@ message(STATUS "找到 Slang 编译器: ${SLANGC_EXECUTABLE}")
 # ─── Scalar Block Layout 项目策略（Phase 4 定案）────────────────────────────
 # 所有 slangc 编译（反射 + SPV）统一加 -fvk-use-scalar-layout：push constant 用
 # scalar（C 自然）布局而非 GLSL 标准布局。收益：C++ struct（glm 自然对齐 4）与
-# shader 逐字段偏移天然一致、零 padding、DrawArgs 96B（标准布局下需 112B + 2 段
+# shader 逐字段偏移天然一致、零 padding、DrawArgs 100B（标准布局下需 112B + 2 段
 # padding）。前提：scalarBlockLayout feature 已启用（features_config.json，
 # VkPhysicalDeviceVulkan12Features，validateFeatures 校验）——feature 未启用时
-# scalar 布局的 push constant 行为未定义。反射与 SPV 两处 flag 必须一致（不一致 =
-# 运行时布局错配的隐蔽 bug）。generator 的 standardLayoutInfo 已同步为 scalar 对齐
-#（tools/generator.cppm）。
+# scalar 布局的 push constant 行为未定义。
+# 唯一声明点 = SLANG_FLAGS：反射与 SPV 任何一处 flag 不一致 = 运行时布局错配的隐蔽
+# bug（如仅 SPV 侧丢 flag → 反射 100B 与 SPV 标准布局 112B 错配，零报错）。
+# 新增 slangc 调用点必须引用本变量，禁止内联重复（generator 的 standardLayoutInfo
+# 同步为 scalar 对齐，tools/generator.cppm，并用反射 binding.offset 交叉校验）。
+set(SLANG_FLAGS
+    -target spirv
+    -capability spvDescriptorHeapEXT
+    -profile sm_6_6+spirv_1_6
+    -fvk-use-scalar-layout
+)
 set(GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_shaders")
 file(MAKE_DIRECTORY ${GEN_DIR})
 
@@ -41,11 +49,7 @@ set(FEATURES_CPPM "${GEN_SRC_DIR}/features_generated.cppm")
 
 add_custom_command(
     OUTPUT ${TYPES_REFLECTION_JSON}
-    COMMAND ${SLANGC_EXECUTABLE} ${TYPES_SLANG}
-            -target spirv
-            -capability spvDescriptorHeapEXT
-            -profile sm_6_6+spirv_1_6
-            -fvk-use-scalar-layout
+    COMMAND ${SLANGC_EXECUTABLE} ${TYPES_SLANG} ${SLANG_FLAGS}
             -I "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
             -no-codegen
             -reflection-json ${TYPES_REFLECTION_JSON}
@@ -83,11 +87,7 @@ set(MODEL_CPPM "${GEN_SRC_DIR}/model_types_generated.cppm")
 
 add_custom_command(
     OUTPUT ${MODEL_REFLECTION_JSON}
-    COMMAND ${SLANGC_EXECUTABLE} ${MODEL_SLANG}
-            -target spirv
-            -capability spvDescriptorHeapEXT
-            -profile sm_6_6+spirv_1_6
-            -fvk-use-scalar-layout
+    COMMAND ${SLANGC_EXECUTABLE} ${MODEL_SLANG} ${SLANG_FLAGS}
             -I "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
             -no-codegen
             -reflection-json ${MODEL_REFLECTION_JSON}
@@ -124,11 +124,7 @@ set(MATERIAL_CPPM "${GEN_SRC_DIR}/material_types_generated.cppm")
 
 add_custom_command(
     OUTPUT ${MATERIAL_REFLECTION_JSON}
-    COMMAND ${SLANGC_EXECUTABLE} ${MATERIAL_SLANG}
-            -target spirv
-            -capability spvDescriptorHeapEXT
-            -profile sm_6_6+spirv_1_6
-            -fvk-use-scalar-layout
+    COMMAND ${SLANGC_EXECUTABLE} ${MATERIAL_SLANG} ${SLANG_FLAGS}
             -I "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
             -no-codegen
             -reflection-json ${MATERIAL_REFLECTION_JSON}
@@ -193,11 +189,7 @@ function(compile_slang)
     #（model.*.slang import model；2026-08-27 model.slang 改 float4 后 spv 未重编译踩坑）
     add_custom_command(
         OUTPUT ${OUTPUT_SPV}
-        COMMAND ${SLANGC_EXECUTABLE} ${SHADER_ABS}
-                -target spirv
-                -capability spvDescriptorHeapEXT
-                -profile sm_6_6+spirv_1_6
-                -fvk-use-scalar-layout
+        COMMAND ${SLANGC_EXECUTABLE} ${SHADER_ABS} ${SLANG_FLAGS}
                 -I "${SHADER_DIR}"
                 -o ${OUTPUT_SPV}
         DEPENDS ${SHADER_ABS} ${EXTRA_DEPS}

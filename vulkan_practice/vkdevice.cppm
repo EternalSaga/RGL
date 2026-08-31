@@ -22,9 +22,13 @@ export class DeviceContext {
 			  if (!result) throw std::runtime_error(result.error().describe());
 			  return *result;
 		  }()),
-		  queueManager(RGL::QueueFamilyManager::create(*physicalDevice).value()),
-		  featuresChain(RGL::buildRequestedFeatures()),
-		  device(createDevice(*physicalDevice, queueManager, featuresChain)),
+	  queueManager(RGL::QueueFamilyManager::create(*physicalDevice).value()),
+	  featuresChain(RGL::buildRequestedFeatures()),
+	  // 校验前移：必须在 raii::Device 构造（device 成员）之前——feature/extension
+	  // 不支持时 raii 构造器先抛 vk::SystemError（不透明），自定义 Error 路径不可达
+	  //（旧实现在构造体校验 = 失败路径死代码）。本成员只为钉死初始化顺序
+	  checked(precheckDevice(*physicalDevice, featuresChain)),
+	  device(createDevice(*physicalDevice, queueManager, featuresChain)),
 		  graphicsQueue(queueManager.getQueue(device, RGL::QueueFamilyRole::Graphics).value()),
 		  computeQueue(queueManager.getQueue(device, RGL::QueueFamilyRole::Compute).value()),
 		  transferQueue(queueManager.getQueue(device, RGL::QueueFamilyRole::Transfer).value()),
@@ -37,12 +41,6 @@ export class DeviceContext {
 		  transferCommandPool(createCommandPool(device, queueManager.getFamilyIndex(RGL::QueueFamilyRole::Transfer),
 			  vk::CommandPoolCreateFlagBits::eTransient | vk::CommandPoolCreateFlagBits::eResetCommandBuffer)
 				  .value()) {
-		if (auto result = RGL::checkDeviceExtensions(*physicalDevice); !result) {
-			throw std::runtime_error(result.error().describe());
-		}
-		if (auto result = RGL::validateFeatures(*physicalDevice, featuresChain); !result) {
-			throw std::runtime_error(result.error().describe());
-		}
 	}
 
 	RGL::AppContext& getVkInstance() { return vkInstance; }
@@ -59,6 +57,20 @@ export class DeviceContext {
 	const RGL::QueueFamilyManager& getQueueManager() const { return queueManager; }
 
    private:
+	// device 创建前置校验（初始化列表经 checked 成员调用）：extension 可用性 +
+	// feature 链支持度。失败抛带 [Code] 的 runtime_error（describe()），而非 raii
+	// Device 构造器的不透明 vk::SystemError
+	static bool precheckDevice(const vk::raii::PhysicalDevice& physicalDevice,
+		RGL::FeatureChain& featuresChain) {
+		if (auto result = RGL::checkDeviceExtensions(physicalDevice); !result) {
+			throw std::runtime_error(result.error().describe());
+		}
+		if (auto result = RGL::validateFeatures(physicalDevice, featuresChain); !result) {
+			throw std::runtime_error(result.error().describe());
+		}
+		return true;
+	}
+
 	static vk::raii::Device createDevice(const vk::raii::PhysicalDevice& physicalDevice,
 		RGL::QueueFamilyManager& queueManager,
 		RGL::FeatureChain& featuresChain) {
@@ -93,6 +105,7 @@ export class DeviceContext {
 	const vk::raii::PhysicalDevice* physicalDevice;
 	RGL::QueueFamilyManager queueManager;
 	RGL::FeatureChain featuresChain;
+	bool checked;  // 仅用于钉死初始化顺序：precheckDevice 先于 device 构造（见构造器）
 	vk::raii::Device device;
 	vk::Queue graphicsQueue;
 	vk::Queue computeQueue;

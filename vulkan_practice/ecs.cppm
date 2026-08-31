@@ -16,7 +16,7 @@ import vk_resources;
 import vk_renderer;
 import llm_debug;
 import texture_pool;
-import material_types_generated;  // Phase 4：统一 DrawArgs 超集（scalar 布局 96B）
+import material_types_generated;  // Phase 4：统一 DrawArgs 超集（scalar 布局 100B，Phase 5 +objectIndex）
 import scene;
 import camera;
 import rllogger;
@@ -116,7 +116,20 @@ std::expected<void, Error> resizeSystem(entt::registry& rg, RGL::Swapchain& swap
 		return {};
 	}
 
-	swapchain.recreate();
+	// recreate 内部重查 caps/format/presentMode；窗口尺寸超出 swapchain 可达范围
+	//（maxImageExtent/compositor 钳制）时返回 false = 重建无益，不得每帧重建深度图
+	//（每帧 waitIdle + 销毁重建 = 持续 GPU 停顿）
+	if (!swapchain.recreate()) {
+		static bool warned = false;
+		if (!warned) {
+			warned = true;
+			if (auto logger = RLLogger::getInstance())
+				logger->warn("resizeSystem: window {}x{} but surface unchanged ({}x{}) — "
+					"swapchain clamped, skipping depth rebuild",
+					extent.width, extent.height, current.width, current.height);
+		}
+		return {};
+	}
 	auto result = resources.recreateDepthImage(swapchain.getExtent());
 	if (!result) {
 		return std::unexpected(std::move(result).error());
@@ -187,8 +200,8 @@ void projectionSystem(entt::registry& rg) {
 
 // 每帧 push constant 存储（帧数据：活过 renderSystem 循环，DrawCall 的 span 指向其中；
 // vkCmdPushDataEXT 录制时读取，只要求内存活到录制结束）
-// Phase 4 归一（H1 解决）：单一统一 DrawArgs 超集（material_types_generated，scalar 布局 96B）
-// 按资产 id 索引——删旧 cube 单例(64B) + model 每资产(96B) 双容器与 AssetKind 分支。
+// Phase 4 归一（H1 解决）：单一统一 DrawArgs 超集（material_types_generated，scalar 布局 100B）
+// 按资产 id 索引——删旧 cube 单例(64B) + model 每资产(96B，Phase 5 前) 双容器与 AssetKind 分支。
 struct RenderListState {
 	std::vector<RGL::DrawArgs> args;  // 每资产一份（100B；资产 id 索引，cube/model 共用同一路径）
 	// 对象矩阵表（Phase 5 批次 2，bindless）：资产 id 索引的 spin·world，DrawArgs.objectIndex
@@ -200,7 +213,7 @@ struct RenderListState {
 // ViewProjection + 场景实体 + 场景旋转 → FrameDrawList context（单一 draw 路径）。
 //
 // Phase 4 归一：统一 DrawArgs 超集（所有 shader 风格共享同一布局，material.slang 单一真相源，
-// scalar 布局 96B）——单一写入路径写满字段，零 AssetKind 分支（旧 cube 64B / model 96B
+// scalar 布局 100B）——单一写入路径写满字段，零 AssetKind 分支（旧 cube 64B / model 96B
 // 双 struct 分支删除，ecs_compliance_review H1 注记解决）。各风格只消费自己需要的字段
 //（未读字段无害）：cube 只读 mvp（每顶点色），model 读 mvp/totalTriangles/baseColor。
 // groupCount 经资产静态字段（MeshAsset.groupCount，上传期按 shader 契约派生，D6）：
@@ -231,17 +244,19 @@ void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListS
 	std::vector<Pending> opaque;
 	std::vector<Pending> transparent;
 
+	// 循环前一次性 resize（资产 id 稠密 [0, meshSize)，vkresources.cppm meshSize）：
+	// 循环内 resize 触发 realloc 会使先前存入 DrawCall 的 span 悬空（帧 0 确定性 UAF——
+	// span 活到 drawFrame 录制期读取，vkrenderer.cppm drawCall 的 pushData.data()）
+	state.args.resize(assets.meshSize());
+	state.matrices.resize(assets.meshSize(), glm::mat4(1.0f));
+
 	rg.view<RGL::Transform, RGL::MeshRef, RGL::MaterialRef>().each(
-		[&](RGL::Transform& tf, RGL::MeshRef& meshRef, RGL::MaterialRef& matRef) {
+		[&](const RGL::Transform& tf, const RGL::MeshRef& meshRef, const RGL::MaterialRef& matRef) {
 			const auto& asset = assets.get(meshRef.asset);
 			if (asset.pipelineIndex == kInvalidPipelineIndex)
 				return;  // 资产无管线条目（防御：注册顺序异常，见 registerScene/bindPipelineToAsset）
 			if (asset.groupCount == 0)
 				return;  // 不渲染（0 三角形）
-			if (meshRef.asset >= state.args.size())
-				state.args.resize(meshRef.asset + 1);
-			if (meshRef.asset >= state.matrices.size())
-				state.matrices.resize(meshRef.asset + 1, glm::mat4(1.0f));
 			auto& args = state.args[meshRef.asset];
 			const glm::mat4 modelMatrix = spin.matrix * tf.world;  // 世界矩阵（无 view/proj）
 			args.mvp = viewProj.proj * viewProj.view * modelMatrix;

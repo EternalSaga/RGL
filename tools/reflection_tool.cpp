@@ -95,23 +95,30 @@ int main(int argc, char* argv[]) {
 				return 1;
 			}
 
-			RGL::Schema schema{};
-			if (!vm["schema"].empty()) {
-				schema = RGL::loadSchema(schemaPath);
-				if (!RGL::validateSchema(reflection, schema)) {
-					logger->error("[FAIL] Schema validation failed before generation");
-					return 1;
-				}
-				logger->info("[PASS] Schema validation passed, generating .cppm");
+			// schema 必传：缺省 = 跳过校验直接生成（不安全模式，旧实现静默放行；
+			// CMake 恒传 --schema，仅 CLI 误用会踩）
+			if (vm["schema"].empty()) {
+				logger->error("--schema is required for 'generate' (skips validation otherwise)");
+				return 1;
 			}
+			RGL::Schema schema = RGL::loadSchema(schemaPath);
+			if (!RGL::validateSchema(reflection, schema)) {
+				logger->error("[FAIL] Schema validation failed before generation");
+				return 1;
+			}
+			logger->info("[PASS] Schema validation passed, generating .cppm");
 
-			std::string cppm = RGL::generateCppm(reflection, schema, templatePath, moduleName);
+			std::optional<std::string> cppm = RGL::generateCppm(reflection, schema, templatePath, moduleName);
+			if (!cppm) {
+				logger->error("[FAIL] Generation aborted by layout validation — see [FAIL] entries");
+				return 1;
+			}
 			std::ofstream out(outputPath);
 			if (!out.is_open()) {
 				logger->error("Cannot open output file: {}", outputPath);
 				return 1;
 			}
-			out << cppm;
+			out << *cppm;
 			logger->info("[OK] Generated {}", outputPath);
 			return 0;
 
