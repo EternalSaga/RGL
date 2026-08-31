@@ -1,6 +1,6 @@
 # vulkan_practice 路线图
 
-> **状态**：现行（开发路线图；各 Phase 完成情况随提交更新，当前节点 = Phase 4 完成 + 2026-08-30 artifact 收尾，待进入 Phase 5）
+> **状态**：现行（开发路线图；各 Phase 完成情况随提交更新，当前节点 = Phase 5 完成（2026-08-31），待进入 Phase 6）
 
 基于对 legacy 代码痛点的反思和新架构讨论，整理出分阶段开发计划。
 
@@ -319,22 +319,43 @@ SPV 路径的模式撑不住。Phase 4 的 ShaderRegistry 是最终解法，但�
 
 ## Phase 5：透明排序 + 简单光照
 
-### 目标
-渲染透明物体和基础光照，提升视觉效果。
+> **状态（2026-08-31）：已完成**（4 批次，实施记录见 `docs/phase5_plan.md`）。
+> 计划-实现偏离注记（实现为准）：
+> - **光照走 descriptor heap 而非 push constant**（原设计决策"push constant 传递轻量"被用户
+>   bindless 原则推翻）：DrawArgs 仅 +`objectIndex`(4B) 进 100B，光参数 + 对象矩阵表全进
+>   scene data buffer（binding 3，`Resources::ensureSceneData` + 每帧 staging ring →
+>   `vkCmdCopyBuffer`——全项目首个每帧动态 GPU 数据基建，Phase 7 shadow/culling 直接复用）
+> - **光照空间 = 世界空间**（原"CPU 转 view space"方案因 shader 只有融合 mvp、frag 无法
+>   重建 view 空间位置而改道）：对象矩阵表 bindless 索引，光方向/eyePos 世界空间直传
+> - **两条光照路线**（用户要求"简化 PBR + 基础 Phong 兼容"）：`model_pbr`（简化 GGX）+
+>   `model_phong`（Blinn），同契约同 mesh SPV，scene.lua `styles.pbr` 一行切换
+> - **透明段开背面剔除**（计划外必要修复）：关深度写后封闭网格正反面各混合一次 =
+>   有效 alpha 1-(1-a)²（实测 0.25→0.4375 像素级定位），cull 后单层混合语义正确
+> - 透明排序在 `renderListSystem` 内做（原设计决策兑现，不单独建 system）
 
-### 要做的事
-- **透明排序系统**：
-  - 每帧根据 camera 位置对透明 entity 按距离排序
-  - 排序结果暂存，renderSystem 按排序顺序渲染透明队列
-- **Directional Light**：
-  - 加入 `LightComponent`（direction、color、intensity）
-  - 至少支持 ambient + diffuse
-  - push constant 或 descriptor heap 传递 light 数据
-- **Shadow**：暂不做（属于延迟渲染或后处理范畴）
+### 完成情况 (已完成 2026-08-31，4 批次)
+- [x] **批次 0 Phase 4 文档销账**：AGENTS.md「ECS 已知债」头行划线 + ecs_compliance_review
+  陈旧 "仍 Open" 注记覆盖；顺手修 Justfile `run` 的 Python 3.12+ 兼容（裸相对名走 PATH 搜索）
+- [x] **批次 1 透明排序**：`model.frag`/`model_pbr.frag` 输出 alpha（baseColor.a×texel.a）+
+  `applyDynamicState` 接线 `setColorBlendEquationEXT`（主工程此前零调用，enable 不开 factors
+  不混合）+ `FrameDrawList.transparentStart` 双段 + drawFrame 段首两次状态 + llm_debug 同步 +
+  renderListSystem 分桶 + 距离² 降序稳定排序。**像素级验收**：重叠区实测 (65,98,53) =
+  B2F 正确序（错序 (53,89,60)），透明叠不透明 (204,52,8) 精确命中
+- [x] **批次 2 动态堆数据基建 + 光照契约**：`LightDataGpu`(48B) + 对象矩阵表（1024×64B）
+  布局契约 + `ensureSceneData()`（allocSlot 运行时槽，幂等）+ staging ring ×2（fence 后写 +
+  录制期 copy + Transfer→Graphics barrier）+ DrawArgs +`objectIndex`（96→100B，反射自动重生成）+
+  `roughnessMetallic` 接线（占位 0 退役）+ `Light` context + scene.lua light 段 +
+  `maxPushConstantsSize`/矩阵容量启动期契约检查。cottage 回归 diff=0 位级一致
+- [x] **批次 3 双光照风格**：`scene.slang`（bindless 契约 + worldPos/worldNormal 助手）+
+  `model.mesh`/`model.slang` 加 positionOS 插值器 + `model_pbr.frag` 真简化 PBR（GGX）+
+  `model_phong.frag` 基础 Phong（新管线，scene.lua/CMake/回落表三处接线）。验证：cottage
+  （392 全 pbr 风格）光照几何正确、两风格切换渲染差异实锤、transparent.glb BLEND×PBR 组合
+- [x] **批次 4 文档销账**：AGENTS.md（模块表 8 处 + shader 编译 bindless 原则 + 已知问题
+  Phase 5 近似四条）、next_roadmap 本节、phase5_plan.md 留档
 
-### 设计决策
-- 透明排序在 `ecs.cppm` 的 renderSystem 中做，不单独建 system
-- 光照数据通过 push constant 传递（轻量），后续可改为 descriptor heap
+### 明确不做 / 留接缝
+Shadow、多灯、OIT/per-pixel 透明排序、MASK alphaTest；scene data 基建与 staging+copy 模式
+留 Phase 6（rendergraph 动态数据）/ Phase 7（shadow map、culling 矩阵表）复用。
 
 ---
 

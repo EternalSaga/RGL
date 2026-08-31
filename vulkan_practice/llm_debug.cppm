@@ -205,16 +205,22 @@ captureFrame(RGL::Renderer& renderer, const RGL::FrameDrawList& list, const LlmD
 	renderingInfo.setPDepthAttachment(&depthAttachment);
 	cmd.beginRendering(renderingInfo);
 
-	// ⑧ 动态状态（复用不透明 pass 状态；viewport/scissor = 离屏尺寸）
-	RGL::applyDynamicState(cmd, w, h, renderer.getOpaqueState());
-
-	// ⑨ 绘制（同 drawFrame ⑩ 契约：pushData → bindShaders → drawMeshTasks）
-	for (const auto& call : list.calls) {
+	// ⑧ 绘制（同 drawFrame ⑨ 契约：opaque/transparent 两段各段首 applyDynamicState
+	// 一次——离屏 pass 与上屏 pass 状态同构，透明排序在截图路径同样生效）
+	auto drawCall = [&](const RGL::DrawCall& call) {
 		const auto& entry = renderer.pipelineAt(call.pipeline);
 		cmd.pushDataEXT(vk::PushDataInfoEXT(
 			0, vk::HostAddressRangeConstEXT(call.pushData.data(), call.pushData.size())));
 		entry.bindShaders(cmd);
 		cmd.drawMeshTasksEXT(call.groupCount, 1, 1);
+	};
+	RGL::applyDynamicState(cmd, w, h, renderer.getOpaqueState());
+	for (uint32_t i = 0; i < list.transparentStart; ++i)
+		drawCall(list.calls[i]);
+	if (list.transparentStart < list.calls.size()) {
+		RGL::applyDynamicState(cmd, w, h, renderer.getTransparentState());
+		for (uint32_t i = list.transparentStart; i < static_cast<uint32_t>(list.calls.size()); ++i)
+			drawCall(list.calls[i]);
 	}
 	cmd.endRendering();
 

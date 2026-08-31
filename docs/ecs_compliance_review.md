@@ -433,11 +433,11 @@ bounds center=(0.1004, 0, -0.4999) radius=6.25 与 Phase 2 记录（phase2_plan 
   RGL_CUBE_TEX 诊断链整体删除（shader/CMake/ecs/main 四处 + cube_debug.frag.slang）。
 - ~~L2~~ **消解（随 E1.4）**：cube 挂自己的 Bounds 组件，经 boundsSystem 自动纳入
   SceneBounds 聚合（frustum/near-far 自适应含 cube）。
-- **仍 Open（归 Phase 4 ShaderRegistry）**：
-  - push constant 布局未归一：`renderListSystem` 留 `AssetKind` 分支
-    （Cube→DrawArgs 64B / Model→ModelDrawArgs 96B；H1 注记——每管线自己的 args 布局）
-  - 管线表 per-primitive 条目（392 条）未去重：binding mapping 是 shader object 级状态，
-    去重需按 (顶点 slot, 纹理 slot) 组合归并 + 资产表存条目引用（批次 3 刻意未做，行为零变化优先）
+- ~~**仍 Open（归 Phase 4 ShaderRegistry）**~~（**已被下文 Phase 4 批次 1-4 节覆盖为已解**，见 H1/L5 + 管线去重条目）：
+  - ~~push constant 布局未归一：`renderListSystem` 留 `AssetKind` 分支
+    （Cube→DrawArgs 64B / Model→ModelDrawArgs 96B；H1 注记——每管线自己的 args 布局）~~
+  - ~~管线表 per-primitive 条目（392 条）未去重：binding mapping 是 shader object 级状态，
+    去重需按 (顶点 slot, 纹理 slot) 组合归并 + 资产表存条目引用（批次 3 刻意未做，行为零变化优先）~~
 
 **验证（行为零变化，llm 1280×720 逐像素）**：三批次各自对基线 diff=0（cottage 4K 纹理 /
 grass / transparent+cube / 无模型+cube 四路），启动零 warn/error；附加实锤——批次 3 前后

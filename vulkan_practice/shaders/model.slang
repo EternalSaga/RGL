@@ -18,6 +18,8 @@ struct ModelVertexOutput
     float4 position : SV_Position;
     float3 normal   : NORMAL;
     float2 uv       : TEXCOORD0;
+    float3 positionOS : TEXCOORD1;  // object-space 位置（Phase 5 光照：frag 经对象矩阵表
+                                    // 变换到世界空间求视向 V，见 scene.slang；unlit 不消费）
 };
 
 // push constant 契约已移至 material.slang（Phase 4 统一 DrawArgs 超集，所有风格共享；

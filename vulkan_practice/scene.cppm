@@ -57,6 +57,17 @@ export struct SceneBounds {
 	float radius{0.0f};
 };
 
+// 定向光（registry context，Phase 5 批次 2；main 启动期从 configs/scene.lua light 段
+// emplace，仿 SceneSpin）。renderListSystem 每帧转成 LightDataGpu 写 scene data
+//（direction 归一化、color×intensity 预乘、eyePos=相机位置，世界空间光照）。
+// 单灯是本期范围（roadmap Phase 5"Directional Light"）；多灯留 Phase 7 延迟光照。
+export struct Light {
+	glm::vec3 direction{0.35f, -1.0f, 0.25f};  // 照射方向（世界空间，消费时归一化）
+	glm::vec3 color{1.0f, 0.98f, 0.95f};
+	float intensity = 3.0f;
+	glm::vec3 ambient{0.03f, 0.03f, 0.035f};
+};
+
 // 场景整体时间旋转（registry context，main 启动期 emplace；animationSystem 每帧更新
 // angle/matrix）：speed=0 = 静止（configs/scene.lua 的 spin 开关）。
 // 现状承载"全场景同一旋转"（MVP = proj·view·matrix·world）；per-entity 旋转需求出现时

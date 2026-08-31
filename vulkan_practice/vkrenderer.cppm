@@ -7,6 +7,7 @@ module;
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_events.h>
 #include <ranges>
+#include <cstring>
 
 export module vk_renderer;
 
@@ -54,9 +55,25 @@ export struct DrawCall {
 	uint32_t groupCount;
 };
 
-// 每帧绘制列表：顺序 = 绘制顺序（Phase 5 透明排序 / Phase 7 culling 输出的落点）。
+// 场景级每帧动态数据（Phase 5 批次 2，bindless）：渲染 system 产出、drawFrame 消费——
+// CPU 写 staging[currentFrame] + 录制期 vkCmdCopyBuffer 拷进 scene data buffer
+//（布局契约见 vkresources.cppm LightDataGpu / scene.slang）。objectMatrices 按资产 id
+// 索引（DrawArgs.objectIndex），span 指向渲染 system 帧局部存储（录制期读取即完成使命，
+// 同 DrawCall.pushData 生命周期规则）。
+export struct SceneFrameData {
+	LightDataGpu light;
+	std::span<const glm::mat4> objectMatrices;
+};
+
+// 每帧绘制列表：顺序 = 绘制顺序（Phase 5 透明排序已落地：不透明段在前、透明段按
+// 相机距离 back-to-front 排；Phase 7 culling 输出的落点）。
+// transparentStart 分段：opaque = [0, transparentStart)，transparent = [transparentStart, size)
+// ——drawFrame 在段首各 applyDynamicState 一次（不透明写深度关混合 / 透明关深度写开混合），
+// 段内逐 draw 循环不变（盲执行契约保持）。
 export struct FrameDrawList {
 	std::vector<DrawCall> calls;
+	uint32_t transparentStart = 0;
+	SceneFrameData sceneData;
 };
 
 export class Renderer;
@@ -82,8 +99,16 @@ export class Renderer {
 	  graphicsCommandPool(vkDevice.getGraphicsCommandPool()) {
 		// descriptor heap 的 GPU 端地址，每帧传给 vkCmdBindResourceHeapEXT
 		heapAddress = vkResources.getDescriptorHeap().getGpuAddress();
+		// 透明段状态（Phase 5）：不透明段之外的差异三项——不写深度 + 开 alpha 混合 +
+		// 背面剔除。cull 必要：关深度写后封闭网格（如 glTF 盒）的正反两面同屏各混合
+		// 一次 = 有效 alpha 翻倍（实测 0.25 → 1-(1-0.25)²=0.4375）；剔除背面后
+		// 每像素单层混合，alpha 语义正确（opaque 段保持 eNone——硬编码 cube 绕序未验证）
+		transparentState.depthWrite = false;
+		transparentState.colorBlend = true;
+		transparentState.cullMode = vk::CullModeFlagBits::eBack;
 		createSyncObjects();
 		allocateCommandBuffers();
+		createSceneStaging(vkResources);
 	}
 
 	RGL::Swapchain& getSwapchainRef() const { return *swapchain; }
@@ -94,6 +119,7 @@ export class Renderer {
 	// 离屏截图（llm_debug.cppm captureFrame）用的只读访问器：委托管线表（ShaderRegistry）
 	const RGL::RenderPipeline& pipelineAt(uint32_t index) const { return registry.pipelineAt(index); }
 	const RGL::RenderState& getOpaqueState() const { return opaqueState; }
+	const RGL::RenderState& getTransparentState() const { return transparentState; }
 	// 等待 GPU 空闲（resize / 重建 swapchain 前调用，确保旧资源不再被使用）
 	void waitForIdle() { vkDevice.getDevice().waitIdle(); }
 	// 渲染一帧：整体流程见类头注释；绘制内容 = 渲染 system 产出的 FrameDrawList
@@ -173,6 +199,33 @@ export class Renderer {
 		commandBuffers = vkDevice.getDevice().allocateCommandBuffers(allocInfoCmd);
 	}
 
+	// scene data staging ring（Phase 5 批次 2，全项目首个每帧动态 GPU 数据）：
+	// ×MAX_FRAMES_IN_FLIGHT 常驻映射 host buffer。写安全 = 帧 slot 复用规则——
+	// drawFrame ① 已 wait 本 currentFrame slot 的 inFlight fence（f-2 帧命令跑完）
+	// 才写本 slot staging；录制期 vkCmdCopyBuffer 拷进 scene data device buffer
+	//（命令流内天然有序），描述符静态指向该 buffer 永不改动。
+	void createSceneStaging(RGL::Resources& vkResources) {
+		for (auto& staging : sceneStaging) {
+			vk::BufferCreateInfo info{};
+			info.size = kSceneDataBytes;
+			// eShaderDeviceAddress：createBufferWithAddress 无条件查询地址（staging 实际
+			// 不用，usage 缺位会被 VVL 拦下 vkGetBufferDeviceAddress 报错）
+			info.usage = vk::BufferUsageFlagBits::eTransferSrc |
+				vk::BufferUsageFlagBits::eShaderDeviceAddress;
+			VmaAllocationCreateInfo alloc{};
+			alloc.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+			alloc.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT |
+				VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+			VmaAllocationInfo allocData{};
+			auto result = vkResources.getAllocator().createBufferWithAddress(
+				vkDevice.getDevice(), info, alloc, &allocData);
+			if (!result)
+				throw std::runtime_error("Renderer: scene staging alloc failed: " +
+					result.error().describe());
+			staging = std::move(*result);
+		}
+	}
+
 	// 窗口尺寸变化（resize）或 acquire/present 返回 out-of-date 时重建 swapchain + 深度图。
 	// 深度图必须与 swapchain extent 同步重建，否则 renderArea 会超出图像范围。
 	[[nodiscard]] std::expected<void, Error> recreateSwapchainAndDepth(const char* context) {
@@ -226,9 +279,12 @@ export class Renderer {
 	// 非 RAII 句柄（队列生命周期由 DeviceContext 的 raii Device 管理）
 	vk::Queue graphicsQueue;
 	const vk::raii::CommandPool& graphicsCommandPool;
-	// 动态状态：opaque pass（默认值 = cube 的 opaque 状态），drawFrame() 每帧
-	// beginRendering 后调一次 applyDynamicState（Phase 7 多 pass 时按 pass 换状态）
+	// 动态状态：opaque pass（默认值 = cube 的 opaque 状态），drawFrame() 在 opaque 段首
+	// applyDynamicState 一次（Phase 7 多 pass 时按 pass 换状态）
 	RGL::RenderState opaqueState{};
+	// 动态状态：transparent pass（Phase 5 透明排序）——不写深度 + 开混合（factors 在
+	// applyDynamicState 内接线），drawFrame() 在 transparent 段首 applyDynamicState 一次
+	RGL::RenderState transparentState{};
 	// descriptor heap 的 GPU 地址（VmaDescriptorHeap 管理的"描述符槽位数组"，
 	// 对齐细节见 VmaBuffer.cppm）
 	vk::DeviceAddress heapAddress = 0;
@@ -238,6 +294,8 @@ export class Renderer {
 	// 见 createSyncObjects 注释）
 	static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 	uint32_t currentFrame = 0;
+	// scene data staging ring（Phase 5 批次 2，见 createSceneStaging）
+	std::array<RGL::VmaBuffer, MAX_FRAMES_IN_FLIGHT> sceneStaging;
 	std::vector<vk::raii::Semaphore> imageAvailableSemaphores;
 	std::vector<vk::raii::Semaphore> renderFinishedSemaphores;
 	std::vector<vk::raii::Fence> inFlightFences;
@@ -305,6 +363,20 @@ export class Renderer {
 	// 默认 begin flags（非 one-time、非 secondary）：可多次提交
 	commandBuffers[currentFrame].begin(
 		vk::CommandBufferBeginInfo{});
+
+	// ③.5 scene data 上传（Phase 5 批次 2）：CPU 写 staging[currentFrame]——本 slot
+	// 的 fence 已在 ① wait（f-2 帧命令跑完，staging 不再被读），写安全。
+	// 容量契约（objectMatrices ≤ kSceneMatrixCapacity）由 main 启动期检查，此处防御。
+	{
+		auto* stage = static_cast<std::byte*>(sceneStaging[currentFrame].getMappedData());
+		std::memcpy(stage, &list.sceneData.light, sizeof(LightDataGpu));
+		const auto matricesBytes = list.sceneData.objectMatrices.size() * sizeof(glm::mat4);
+		if (matricesBytes > kSceneDataBytes - kSceneDataHeaderBytes)
+			return std::unexpected(Error{ErrorCode::Unknown,
+				"scene objectMatrices exceeds capacity (Phase 5 contract, main startup check bypassed)"});
+		std::memcpy(stage + kSceneDataHeaderBytes, list.sceneData.objectMatrices.data(),
+			matricesBytes);
+	}
 
 	auto& swapchainImages = swapchain->getImages();
 	auto& swapchainImageViews = swapchain->getImageViews();
@@ -402,6 +474,29 @@ export class Renderer {
 	heapDepInfo.setMemoryBarriers(heapBarrier);
 	commandBuffers[currentFrame].pipelineBarrier2(heapDepInfo);
 
+	// ⑥.5 scene data staging → device buffer 拷贝（Phase 5 批次 2）+ Transfer 写 →
+	// 图形阶段 shader 读 barrier（storage buffer 的写/读即使同 cmd 也须显式依赖，
+	// VVL BUFFER_SYNC 检查项）。目标未创建（无模型场景 = ensureSceneData 未被调用）
+	// 则跳过——cube 管线不绑 scene data。
+	{
+		const auto& sceneBuffer = resources->getSceneDataBuffer();
+		if (sceneBuffer.buffer != VK_NULL_HANDLE) {
+			VkBufferCopy region{0, 0, static_cast<VkDeviceSize>(kSceneDataBytes)};
+			::vkCmdCopyBuffer(*commandBuffers[currentFrame], *sceneStaging[currentFrame],
+				sceneBuffer.buffer, 1, &region);
+			vk::BufferMemoryBarrier2 sceneBarrier{};
+			sceneBarrier.srcStageMask = vk::PipelineStageFlagBits2::eTransfer;
+			sceneBarrier.srcAccessMask = vk::AccessFlagBits2::eTransferWrite;
+			sceneBarrier.dstStageMask = vk::PipelineStageFlagBits2::eAllGraphics;
+			sceneBarrier.dstAccessMask = vk::AccessFlagBits2::eShaderRead;
+			sceneBarrier.buffer = sceneBuffer.buffer;
+			sceneBarrier.size = kSceneDataBytes;
+			vk::DependencyInfo sceneDepInfo;
+			sceneDepInfo.setBufferMemoryBarriers(sceneBarrier);
+			commandBuffers[currentFrame].pipelineBarrier2(sceneDepInfo);
+		}
+	}
+
 	// ⑦ 把 descriptor heap 绑定到命令缓冲（必须在 beginRendering 之前）：
 	// 此后所有描述符引用走 heap，与传统 descriptor set 状态互斥（坑 9）。
 	// heapRange.size 用 getHeapSize()（已扣除内部对齐偏移），而非
@@ -428,24 +523,31 @@ export class Renderer {
 	// ⑧ 开始渲染（Dynamic Rendering 的 render pass 起点）
 	commandBuffers[currentFrame].beginRendering(renderingInfo);
 
-	// ⑨ 设置动态状态（opaque pass，每帧一次；viewport/scissor 用当前 swapchain 宽高，
-	// 细节见 shader.cppm 的 applyDynamicState）。动态状态在 draw 时采样
-	//（spec chapters/shaders.adoc "Setting State"），与 bindShadersEXT 的先后无约束。
-	RGL::applyDynamicState(commandBuffers[currentFrame], swapchain->getExtent().width,
-		swapchain->getExtent().height, opaqueState);
-
-	// ⑩ 绘制：遍历渲染 system 产出的绘制列表（顺序 = 列表顺序；push data 布局随管线，
+	// ⑨ 绘制：遍历渲染 system 产出的绘制列表（顺序 = 列表顺序；push data 布局随管线，
 	// 见 DrawCall）。每条：推绘制参数（push constant，独立于 descriptor heap，不占 slot，
 	// Slang 端经 [[vk::push_constant]] 访问，spec 3.4.1；host 内存录制时读取；
 	// push set 经 PipelineEntry.pushDataSet 显式化，Phase 4 归一，L5 解决——替代旧硬编码 0）→
 	// 绑定 ShaderObject → drawMeshTasksEXT（mesh shader 内部生成顶点/三角形，
 	// 不需要传统顶点管线；group 数经资产静态字段 MeshAsset.groupCount，见 renderListSystem）
-	for (const auto& call : list.calls) {
+	// 动态状态在 draw 时采样（spec chapters/shaders.adoc "Setting State"），与 bindShadersEXT
+	// 的先后无约束。Phase 5 透明排序：opaque/transparent 两段各在段首 applyDynamicState 一次
+	//（不透明写深度关混合 → 透明关深度写开混合；段内循环不变）。
+	auto drawCall = [&](const DrawCall& call) {
 		const auto& entry = registry.entry(call.pipeline);
 		commandBuffers[currentFrame].pushDataEXT(vk::PushDataInfoEXT(
 			entry.pushDataSet, vk::HostAddressRangeConstEXT(call.pushData.data(), call.pushData.size())));
 		entry.pipeline.bindShaders(commandBuffers[currentFrame]);
 		commandBuffers[currentFrame].drawMeshTasksEXT(call.groupCount, 1, 1);
+	};
+	const auto extent = swapchain->getExtent();
+	RGL::applyDynamicState(commandBuffers[currentFrame], extent.width, extent.height, opaqueState);
+	for (uint32_t i = 0; i < list.transparentStart; ++i)
+		drawCall(list.calls[i]);
+	if (list.transparentStart < list.calls.size()) {
+		RGL::applyDynamicState(commandBuffers[currentFrame], extent.width, extent.height,
+			transparentState);
+		for (uint32_t i = list.transparentStart; i < static_cast<uint32_t>(list.calls.size()); ++i)
+			drawCall(list.calls[i]);
 	}
 
 	commandBuffers[currentFrame].endRendering();

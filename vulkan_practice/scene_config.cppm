@@ -1,12 +1,27 @@
 module;
 #include <sol/sol.hpp>
+#include <glm/glm.hpp>
 export module scene_config;
 
 import rlstd;
 import vkerror;
 import rllogger;
+import scene;
 
 namespace RGL {
+
+// Lua vec3 读取（可选字段回落默认值，同 camera.cppm loadCameraConfig 惯例）：{x,y,z} → glm::vec3
+inline glm::vec3 readVec3(sol::table root, const char* key, glm::vec3 fallback) {
+	sol::table t = root[key];
+	if (!t.valid() || !t.is<sol::table>())
+		return fallback;
+	sol::optional<float> x = t[1];
+	sol::optional<float> y = t[2];
+	sol::optional<float> z = t[3];
+	if (x && y && z)
+		return glm::vec3(*x, *y, *z);
+	return fallback;
+}
 
 // 一条 pipeline 规格：shader 风格的 SPV 路径（由 configs/scene.lua 传入，
 // 取代原 vkrenderer.cppm 里写死的 SPV 文件名）。
@@ -24,16 +39,19 @@ export struct SceneConfig {
 	std::map<std::string, std::string> styleMap;  // Phase 4 批次 3：风格名→管线规格名
 	bool spin = true;                      // 场景整体时间旋转（便于肉眼判断渲染对错）
 	bool showCube = true;                  // 是否渲染硬编码 cube（Phase 1 遗留；模型在场时通常关掉）
+	Light light;                           // Phase 5 批次 2：定向光（scene.lua light 段，可选回落默认）
 };
 
-// 默认配置：cube + model + model_pbr 三条 pipeline（SPV 路径与构建产物对应），无模型，开启旋转。
-// 默认 styles：unlit→model / pbr→model_pbr（Phase 4 批次 3，styles 表可选回落）。
+// 默认配置：cube + model + model_pbr + model_phong 四条 pipeline（SPV 路径与构建产物对应），
+// 无模型，开启旋转。默认 styles：unlit→model / pbr→model_pbr（Phase 4 批次 3，styles 表可选回落；
+// Phase 5 批次 3：改 pbr = "model_phong" 即切基础 Phong 路线，零 C++ 改动）。
 export SceneConfig defaultSceneConfig() {
 	SceneConfig cfg;
 	cfg.pipelines = {
 		{"cube", "generated_shaders/cube.mesh.spv", "generated_shaders/cube.frag.spv"},
 		{"model", "generated_shaders/model.mesh.spv", "generated_shaders/model.frag.spv"},
 		{"model_pbr", "generated_shaders/model.mesh.spv", "generated_shaders/model_pbr.frag.spv"},
+		{"model_phong", "generated_shaders/model.mesh.spv", "generated_shaders/model_phong.frag.spv"},
 	};
 	cfg.styleMap = {{"unlit", "model"}, {"pbr", "model_pbr"}};
 	cfg.spin = true;
@@ -110,6 +128,17 @@ export [[nodiscard]] std::expected<SceneConfig, Error> loadSceneConfig(std::stri
 				}
 				cfg.pipelines.push_back(std::move(spec));
 			}
+		}
+
+		// Phase 5 批次 2：light 段（定向光，全字段可选回落 Light 默认值）
+		sol::table light = root["light"];
+		if (light.valid() && light.is<sol::table>()) {
+			cfg.light.direction = readVec3(light, "direction", cfg.light.direction);
+			cfg.light.color = readVec3(light, "color", cfg.light.color);
+			sol::optional<float> intensity = light["intensity"];
+			if (intensity)
+				cfg.light.intensity = *intensity;
+			cfg.light.ambient = readVec3(light, "ambient", cfg.light.ambient);
 		}
 
 		// Phase 4 批次 3：styles 表（风格名→管线规格名，可选回落默认 {unlit,pbr}）

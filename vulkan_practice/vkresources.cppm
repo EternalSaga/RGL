@@ -21,6 +21,30 @@ namespace RGL {
 // 管线表下标的"未设置"值（资产记录的 pipelineIndex 初始值；ShaderRegistry::addModelEntry / bindPipelineToAsset 写入真实下标）
 export inline constexpr uint32_t kInvalidPipelineIndex = std::numeric_limits<uint32_t>::max();
 
+// ===== SceneData：场景级每帧动态数据的 bindless 契约（Phase 5 批次 2）=====
+// 单一 storage buffer（heap slot 经 allocSlot 运行时分配——纹理槽数随场景动态，
+// light 槽无法钉编译期偏移，同 slotTexture 模式），布局（字节偏移，shader 端
+// scene.slang 字面量必须一致，kTrianglesPerGroup 先例）：
+//   @0   LightDataGpu（48B：direction/eyePos/color/ambient 各 vec3）
+//   @64  对象矩阵表：mat4 列主序 × kSceneMatrixCapacity（[assetId] = spin·world，
+//        DrawArgs.objectIndex 索引；世界空间光照 + Phase 7 shadow/culling 复用）
+// 内容每帧变 = 全项目首个动态 GPU 数据：CPU 写 staging ring（×MAX_FRAMES_IN_FLIGHT，
+// drawFrame ① 已 wait 本 slot fence → 写安全）+ 录制期 vkCmdCopyBuffer 拷进本 buffer
+//（命令流内天然有序；描述符静态指向本 buffer 永不改动，见 vkrenderer.cppm）。
+export struct LightDataGpu {
+	glm::vec3 direction{0.0f, -1.0f, 0.0f};  // @0 世界空间光方向（归一化，照射方向）
+	glm::vec3 eyePos{0.0f};                    // @12 世界空间相机位置（高光视向）
+	glm::vec3 color{1.0f};                     // @24 光色 × intensity（CPU 预乘）
+	glm::vec3 ambient{0.1f};                   // @36 环境光
+};
+static_assert(sizeof(LightDataGpu) == 48);
+
+export inline constexpr uint32_t kSceneDataHeaderBytes = 64;    // LightData 48B + 16B 保留（64B 对齐）
+export inline constexpr uint32_t kSceneMatrixStride = 64;       // mat4 列主序
+export inline constexpr uint32_t kSceneMatrixCapacity = 1024;   // 对象矩阵表容量（main 启动期契约检查）
+export inline constexpr vk::DeviceSize kSceneDataBytes =
+	kSceneDataHeaderBytes + vk::DeviceSize{kSceneMatrixCapacity} * kSceneMatrixStride;
+
 // 纹理资产 id 的"未设置"值（同 kInvalidPipelineIndex 模式；批次 2 材质资产的 textureId 用它 = 无纹理 → 白）
 export inline constexpr uint32_t kInvalidTextureId = std::numeric_limits<uint32_t>::max();
 
@@ -263,6 +287,49 @@ export class Resources {
 		sharedSamplerReady = true;
 		return sharedSamplerSlot;
 	}
+	// SceneData buffer（Phase 5 批次 2）：幂等创建设备端 storage buffer（eTransferDst——
+	// 每帧内容由 staging 拷入）+ 描述符写 allocSlot 运行时槽（同 slotTexture 模式，
+	// 纹理槽数随场景动态、light 槽无编译期偏移）。调用点 = 建模型管线条目前
+	//（ShaderRegistry::addModelEntry，同 ensureSharedSampler 时序）。
+	// 返回 resource heap 绝对槽号（binding mapping 烘焙用）。
+	[[nodiscard]] uint32_t ensureSceneData() {
+		if (sceneDataReady)
+			return sceneDataSlot;
+		vk::BufferCreateInfo info{};
+		info.size = kSceneDataBytes;
+		info.usage = vk::BufferUsageFlagBits::eShaderDeviceAddress |
+			vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst;
+		VmaAllocationCreateInfo alloc{};
+		// device-local：CPU 不直接写（每帧唯一写入方 = staging copy），勿用 createGpuBuffer 的
+		// CPU_TO_GPU+MAPPED 形态
+		alloc.usage = VMA_MEMORY_USAGE_AUTO;
+		auto bufResult = allocator.createBufferWithAddress(vkDevice.getDevice(), info, alloc);
+		if (!bufResult)
+			throw std::runtime_error(bufResult.error().describe());
+		sceneDataBuffer = std::move(*bufResult);
+
+		auto slotResult = allocSlot("scene.data");
+		if (!slotResult)
+			throw std::runtime_error(slotResult.error().describe());
+		sceneDataSlot = *slotResult;
+
+		vk::DeviceAddressRangeEXT range{sceneDataBuffer.getDeviceAddress(), kSceneDataBytes};
+		vk::ResourceDescriptorInfoEXT desc{};
+		desc.type = vk::DescriptorType::eStorageBuffer;
+		desc.data.pAddressRange = &range;
+		auto slotAddr = descriptorHeap.getSlotCpuAddress(sceneDataSlot);
+		if (!slotAddr)
+			throw std::runtime_error(slotAddr.error().describe());
+		vk::HostAddressRangeEXT dst{*slotAddr, descriptorHeap.getDescriptorSize()};
+		vkDevice.getDevice().writeResourceDescriptorsEXT(
+			std::array<vk::ResourceDescriptorInfoEXT, 1>{desc},
+			std::array<vk::HostAddressRangeEXT, 1>{dst});
+		sceneDataReady = true;
+		return sceneDataSlot;
+	}
+	// scene data buffer（drawFrame 每帧 staging copy 的目标；未创建 = 空句柄，跳过拷贝）
+	const RGL::VmaBuffer& getSceneDataBuffer() const { return sceneDataBuffer; }
+
 	// cube 一等资产（批次 3）：资产记录 = cube 顶点/索引 buffer + slot 的唯一 holder
 	uint32_t cubeAssetId() const { return cubeAsset; }
 	// 资产表（已上传 primitive 的 GPU 数据 + heap slot + 三角形数 + 管线条目引用；
@@ -451,6 +518,10 @@ export class Resources {
 	bool sharedSamplerReady = false;
 	uint32_t heapSlotVertex;
 	uint32_t heapSlotIndex;
+	// SceneData（Phase 5 批次 2）：设备端动态数据 buffer + 运行时槽（ensureSceneData 幂等写入）
+	RGL::VmaBuffer sceneDataBuffer;
+	uint32_t sceneDataSlot = 0;
+	bool sceneDataReady = false;
 	// 统一 slot 分配器（Phase 3，纹理资产并案）：单调分配游标，从 reservedSlots 起
 	uint32_t nextSlot;
 	// cube 一等资产 id（批次 3：构造体写入）

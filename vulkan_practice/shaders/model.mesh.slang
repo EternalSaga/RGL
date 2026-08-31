@@ -42,6 +42,7 @@ void main(
         verts[ti].position = mul(drawArgs.mvp, float4(pos, 1.0));
         verts[ti].normal = nrm;
         verts[ti].uv = uv;
+        verts[ti].positionOS = pos;  // Phase 5 光照（object→world 变换在 frag 做，unlit 不消费）
     }
 
     // 去索引展开：三角形 i 的 3 个连续顶点 = i*3..i*3+2，索引自然连续。

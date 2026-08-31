@@ -6,6 +6,9 @@ return {
     -- 3/4 前右上视角、距 ~3700（整栋入画）。near/far 有 SceneBounds 时由 projectionSystem 自适应（忽略）。
     position = { -2617.0, 1343.0, 2550.0 },  -- 4K 黑屏 UAF 复验（2026-08-28）：cottage 机位
     target = { -182.0, 300.0, 115.0 },  -- 轨道中心（仅 trackball 用）
+    -- position = { 8.0, 6.0, 10.0 },  -- Phase 5 透明排序：transparent.glb 4 盒（原点 ±6 内）
+    -- position = { 1.69, 2.5, -19.46 },  -- 排序验证机位：绿盒(远,α0.25)与黄盒(近,α0.25)视线共线重叠
+    -- target = { 0.0, 0.0, 0.0 },  -- 轨道中心（仅 trackball 用）
     -- position = { 70.0, 85.0, 65.0 },  -- 草模型机位：包围球 center=(10,24,-9) r=81.5，球外 ~110
     -- target = { 10.0, 24.0, -9.0 },  -- 草模型包围球中心
     fovDegrees = 45.0,

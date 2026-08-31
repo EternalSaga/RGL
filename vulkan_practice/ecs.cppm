@@ -4,6 +4,7 @@ module;
 #include <entt/entt.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <cstdint>
+#include <ranges>  // std::ranges::stable_sort（libstdc++ namespace alias，无法经模块 re-export）
 
 export module ecs;
 
@@ -189,7 +190,11 @@ void projectionSystem(entt::registry& rg) {
 // Phase 4 归一（H1 解决）：单一统一 DrawArgs 超集（material_types_generated，scalar 布局 96B）
 // 按资产 id 索引——删旧 cube 单例(64B) + model 每资产(96B) 双容器与 AssetKind 分支。
 struct RenderListState {
-	std::vector<RGL::DrawArgs> args;  // 每资产一份（96B；资产 id 索引，cube/model 共用同一路径）
+	std::vector<RGL::DrawArgs> args;  // 每资产一份（100B；资产 id 索引，cube/model 共用同一路径）
+	// 对象矩阵表（Phase 5 批次 2，bindless）：资产 id 索引的 spin·world，DrawArgs.objectIndex
+	// 进 shader 索引本表（世界空间光照）。帧局部存储（FrameDrawList.sceneData 持 span，
+	// 录制期拷贝进 staging，生命周期规则同 args）
+	std::vector<glm::mat4> matrices;
 };
 
 // ViewProjection + 场景实体 + 场景旋转 → FrameDrawList context（单一 draw 路径）。
@@ -203,13 +208,28 @@ struct RenderListState {
 // vertexOffset 经资产静态字段（MeshAsset.vertexOffset，批次 2 拼接顶点 buffer per-primitive
 // 偏移，上传期写入）；roughnessMetallic（批次 3 pbr 材质）当前写占位值，对应批次启用真实数据源。
 // 画不画 = 实体有无（数据驱动）。
+//
+// Phase 5 透明排序（roadmap 决策：排序在 renderSystem 内做，不单独建 system）：
+// 经 MaterialRef → MaterialAsset.alphaModeBlend（glTF alphaMode == "BLEND"）分桶——
+// 不透明段保持实体迭代序（深度写正确），透明段按相机距离² 降序（back-to-front）稳定排序，
+// 产出 [opaque | transparent 远→近] 单列表 + transparentStart 边界（drawFrame 两段
+// 各 applyDynamicState 一次，见 vkrenderer.cppm）。MASK 材质暂按不透明处理（glTF 规范
+// 要求 alphaTest 剔除，未实现）；排序距离 = primitive 实体 world 平移列到相机位置的
+// distance2（无包围盒时的标准近似，legacy RenderQueue 同款思路）。
 void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListState& state) {
 	auto& list = rg.ctx().get<FrameDrawList>();
 	const auto& viewProj = rg.ctx().get<ViewProjection>();
 	const auto& spin = rg.ctx().get<SceneSpin>();
+	const auto& camera = rg.ctx().get<Camera>();
+	const auto& light = rg.ctx().get<Light>();
 	const auto& assets = resources.getAssetTable();
 
-	FrameDrawList fresh;
+	struct Pending {
+		RGL::DrawCall call;
+		float distanceSq = 0.0f;
+	};
+	std::vector<Pending> opaque;
+	std::vector<Pending> transparent;
 
 	rg.view<RGL::Transform, RGL::MeshRef, RGL::MaterialRef>().each(
 		[&](RGL::Transform& tf, RGL::MeshRef& meshRef, RGL::MaterialRef& matRef) {
@@ -220,20 +240,46 @@ void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListS
 				return;  // 不渲染（0 三角形）
 			if (meshRef.asset >= state.args.size())
 				state.args.resize(meshRef.asset + 1);
+			if (meshRef.asset >= state.matrices.size())
+				state.matrices.resize(meshRef.asset + 1, glm::mat4(1.0f));
 			auto& args = state.args[meshRef.asset];
-			args.mvp = viewProj.proj * viewProj.view * spin.matrix * tf.world;
+			const glm::mat4 modelMatrix = spin.matrix * tf.world;  // 世界矩阵（无 view/proj）
+			args.mvp = viewProj.proj * viewProj.view * modelMatrix;
 			args.totalTriangles = asset.triangleCount;
 			args.vertexOffset = asset.vertexOffset;  // 拼接 buffer 内块字节偏移（Phase 4 批次 2）
 			const auto& mat = assets.getMaterial(matRef.material);  // 批次 2：材质资产表解析
 			args.baseColor = mat.baseColor;
-			args.roughnessMetallic = {0.0f, 0.0f};  // 占位 0：pbr 占位 frag（Phase 4 批次 3）不消费此字段；
-			                                       // 接线 mat.roughness/metallic 留待 Phase 5 真实光照（当前注释曾误标"已接线"）
-			fresh.calls.push_back(DrawCall{
+			args.roughnessMetallic = {mat.roughness, mat.metallic};  // Phase 5 接线（pbr frag 消费）
+			args.objectIndex = meshRef.asset;  // bindless 对象矩阵表下标（Phase 5 批次 2）
+			state.matrices[meshRef.asset] = modelMatrix;
+			const RGL::DrawCall call{
 				asset.pipelineIndex,
-				std::as_bytes(std::span<const RGL::DrawArgs>{&args, 1}), asset.groupCount});
+				std::as_bytes(std::span<const RGL::DrawArgs>{&args, 1}), asset.groupCount};
+			auto& bucket = mat.alphaModeBlend ? transparent : opaque;  // MASK 暂按不透明（见函数注释）
+			const glm::vec3 d = glm::vec3(tf.world[3]) - camera.position;  // world 平移列（无 per-entity 包围盒时的排序代理）
+			bucket.push_back(Pending{call, glm::dot(d, d)});  // 距离²（免 sqrt，排序单调等价）
 		});
 
-	list.calls = std::move(fresh.calls);
+	FrameDrawList fresh;
+	for (const auto& p : opaque)
+		fresh.calls.push_back(p.call);
+	fresh.transparentStart = static_cast<uint32_t>(fresh.calls.size());
+	// 稳定排序：同距离保持实体迭代序（确定性输出，截图可复现）
+	std::ranges::stable_sort(transparent,
+		[](const Pending& a, const Pending& b) { return a.distanceSq > b.distanceSq; });
+	for (const auto& p : transparent)
+		fresh.calls.push_back(p.call);
+
+	// scene data（Phase 5 批次 2）：光方向归一化、color×intensity 预乘、eyePos=相机世界位置；
+	// 对象矩阵表 span 指向 state.matrices（帧局部存储，drawFrame 录制期拷进 staging）
+	fresh.sceneData.light = LightDataGpu{
+		glm::normalize(light.direction),
+		camera.position,
+		light.color * light.intensity,
+		light.ambient};
+	fresh.sceneData.objectMatrices = std::span<const glm::mat4>{state.matrices};
+
+	list = std::move(fresh);
 }
 
 // 每帧 system（执行顺序 = 注册顺序，即数据流契约；新增 system = 此处 push_back）

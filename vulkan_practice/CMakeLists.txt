@@ -216,20 +216,26 @@ compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.mesh.slang MODEL_MESH_SP
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.slang ${CMAKE_CURRENT_SOURCE_DIR}/shaders/material.slang)
  compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.frag.slang MODEL_FRAG_SPV
      ${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.slang ${CMAKE_CURRENT_SOURCE_DIR}/shaders/material.slang)
- # Phase 4 批次 3：pbr 占位 frag（mesh 复用 model.mesh.spv，见 compile_slang 契约依赖注释）
+ # Phase 5 批次 3：真简化 PBR frag（mesh 复用 model.mesh.spv，import scene.slang 光照数据）
  compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/model_pbr.frag.slang MODEL_PBR_FRAG_SPV
-     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.slang ${CMAKE_CURRENT_SOURCE_DIR}/shaders/material.slang)
+     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.slang ${CMAKE_CURRENT_SOURCE_DIR}/shaders/material.slang
+     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/scene.slang)
+ # Phase 5 批次 3：基础 Phong frag（第二条光照路线，同契约同 mesh SPV，scene.lua styles 一行切换）
+ compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/model_phong.frag.slang MODEL_PHONG_FRAG_SPV
+     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.slang ${CMAKE_CURRENT_SOURCE_DIR}/shaders/material.slang
+     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/scene.slang)
  message(STATUS "MESH_SPV is: ${MESH_SPV}")
  message(STATUS "FRAG_SPV is: ${FRAG_SPV}")
  message(STATUS "MODEL_MESH_SPV is: ${MODEL_MESH_SPV}")
  message(STATUS "MODEL_FRAG_SPV is: ${MODEL_FRAG_SPV}")
  message(STATUS "MODEL_PBR_FRAG_SPV is: ${MODEL_PBR_FRAG_SPV}")
+ message(STATUS "MODEL_PHONG_FRAG_SPV is: ${MODEL_PHONG_FRAG_SPV}")
 
 # tinygltf_impl.cpp：tinygltf C++ API 实现 TU（v3 非 header-only，见该文件头注释）。
 # 单 TU 编译 8756 行实现，-O2 下 clang 又慢又吃内存（24 并发时打爆 swap）；
 # 模型加载是启动期一次性路径、非热路径，-O0 编译省内存省时间。
 set_source_files_properties(tinygltf_impl.cpp PROPERTIES COMPILE_OPTIONS "-O0")
-add_executable(vulkan_practice main.cpp vam_impl.cpp tinygltf_impl.cpp stb_impl.cpp ${MESH_SPV} ${FRAG_SPV} ${MODEL_MESH_SPV} ${MODEL_FRAG_SPV} ${MODEL_PBR_FRAG_SPV})
+add_executable(vulkan_practice main.cpp vam_impl.cpp tinygltf_impl.cpp stb_impl.cpp ${MESH_SPV} ${FRAG_SPV} ${MODEL_MESH_SPV} ${MODEL_FRAG_SPV} ${MODEL_PBR_FRAG_SPV} ${MODEL_PHONG_FRAG_SPV})
 
 # ─── Runtime config copy (configs/ → build dir) ──────────────────────────────
 # 程序运行时按相对路径读取 configs/*.json，build 目录必须完整。

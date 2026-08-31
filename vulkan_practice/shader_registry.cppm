@@ -79,10 +79,13 @@ export class ShaderRegistry {
 		const uint32_t descriptorSize = res.getDescriptorHeap().getDescriptorSize();
 		const uint32_t samplerHeapOffset =
 			samplerSlot * res.getSamplerHeap().getDescriptorSize();
+		// Phase 5 批次 2：模型管线恒绑 scene data（binding 3，幂等创建；unlit frag 不声明
+		// = 映射空转，同 mesh 阶段对 binding 1/2 的既证行为）
+		const uint32_t sceneSlot = res.ensureSceneData();
 		auto entry = PipelineEntry{
 			specName + ".v" + std::to_string(vertexSlot) + ".t" + std::to_string(textureSlot),
 			RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), descriptorSize,
-				vertexSlot, vertexSlot, textureSlot, samplerHeapOffset, true)};
+				vertexSlot, vertexSlot, textureSlot, samplerHeapOffset, true, sceneSlot, true)};
 		const uint32_t index = static_cast<uint32_t>(entries.size());
 		indexByName[entry.name] = index;
 		modelEntryBySlot[key] = index;
@@ -156,6 +159,12 @@ export class ShaderRegistry {
 				"model_pbr", "generated_shaders/model.mesh.spv",
 				"generated_shaders/model_pbr.frag.spv"};
 			return &defaultModelPbr;
+		}
+		if (std::strcmp(name, "model_phong") == 0) {
+			static const RGL::PipelineSpec defaultModelPhong{
+				"model_phong", "generated_shaders/model.mesh.spv",
+				"generated_shaders/model_phong.frag.spv"};
+			return &defaultModelPhong;
 		}
 		return nullptr;
 	}

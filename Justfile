@@ -7,7 +7,7 @@
 # 使用 cmd.exe /c 在 Windows 上执行，sh -c 在 Linux 上执行
 WORKSPACE := `python -c "import os; print(os.getcwd())"`
 BUILD := WORKSPACE / "build"
-VCPKG_DIR := `python -c "import os; print('E:/program/vcpkg' if os.name=='nt' else '')" || echo "E:/program/vcpkg"`
+VCPKG_DIR := `python -c "import os,shutil; print('E:/program/vcpkg' if os.name=='nt' else (os.environ.get('VCPKG_ROOT') or (os.path.dirname(shutil.which('vcpkg')) if shutil.which('vcpkg') else '')))"`
 LLVM_DIR := `python -c "import os; print('C:/Program Files/LLVM' if os.name=='nt' else '')"`
 NPROC := `python -c "import os; print(os.cpu_count() or 4)"`
 NINJA_EXE := `python -c "import os; p='E:/program/vcpkg/downloads/tools/ninja/1.13.1-windows/ninja.exe'; print(p if os.path.isfile(p) else 'ninja')"`
@@ -42,6 +42,9 @@ config COMPILER="default" BUILD_TYPE="Release":
         return path.replace("\\", "/")
 
     toolchain = fwd(os.path.join(vcpkg, "scripts", "buildsystems", "vcpkg.cmake"))
+    if not os.path.isfile(toolchain):
+        print("Error: vcpkg toolchain not found: %s (set VCPKG_ROOT or put vcpkg on PATH)" % toolchain)
+        sys.exit(1)
     triplets = fwd(os.path.join(workspace, "custom-triplets"))
 
     cmake_cmd = [
@@ -145,7 +148,7 @@ run:
         env=dict(os.environ); \
         out=subprocess.run(['lspci'],capture_output=True,text=True).stdout if (os.name!='nt' and shutil.which('lspci')) else ''; \
         (env.update(RADV_EXPERIMENTAL='heap') if re.search(r'(?i)(vga|display).*amd',out) else None); \
-        subprocess.call([exe],env=env)"
+        subprocess.call([os.path.join('.', exe)],env=env)"  # './' 前缀：Python 3.12+ 起无路径分隔符的相对名改走 PATH 搜索（裸名 = FileNotFoundError）
 
 # 核显运行（Linux AMD 集显，原生渲染，无 offload）
 # 必须用 VK_DRIVER_FILES 隐藏 NVIDIA ICD —— 设备评分器默认选 dGPU（分数更高）

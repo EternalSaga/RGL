@@ -14,6 +14,7 @@ import gltf_loader;
 import model_importer;
 import texture_pool;
 import scene;
+import material_types_generated;  // DrawArgs（push constant 尺寸契约检查）
 import camera;
 import llm_debug;
 import ecs;
@@ -86,9 +87,18 @@ int main() {
 		registry.ctx().emplace<SceneBounds>();
 		registry.ctx().emplace<ViewProjection>();
 		registry.ctx().emplace<FrameDrawList>();
+		registry.ctx().emplace<Light>(sceneConfig.light);  // Phase 5 批次 2：定向光（scene.lua light 段）
 
 		AppContext vkInstance(window);
 		DeviceContext vkDevice(vkInstance);
+		// push constant 契约（Phase 5）：shader object + descriptor heap 下 push data 仍受
+		// maxPushConstantsSize 约束（DrawArgs 100B，双驱动实测 256B——超限 = 设备不支持，
+		// 启动期报错优于运行时布局错配）
+		const uint32_t maxPushConstants =
+			static_cast<uint32_t>(vkDevice.getPhysicalDevice().getProperties().limits.maxPushConstantsSize);
+		if (maxPushConstants < sizeof(DrawArgs))
+			throw std::runtime_error("maxPushConstantsSize (" + std::to_string(maxPushConstants) +
+				") < sizeof(DrawArgs) (" + std::to_string(sizeof(DrawArgs)) + ")");
 		Swapchain vkSwapchain(vkDevice, window);
 		// heap 容量为固定裕量（与场景内容解耦，批次 3 E1.3）：CPU 解析模型不再需要
 		// 先于 Vulkan 初始化
@@ -174,6 +184,13 @@ int main() {
 			}
 			registerScene(registry, model, std::span<const uint32_t>(*assetIdsResult),
 				std::span<const uint32_t>(primitiveTextureIds), vkResources);
+			// scene data 容量契约（Phase 5 批次 2）：对象矩阵表按资产 id 索引，
+			// 超容量 = 矩阵表越界写（staging 上传处有防御报错，此处启动期先拦截）
+			if (const uint32_t meshCount = vkResources.getAssetTable().meshSize();
+				meshCount > kSceneMatrixCapacity)
+				throw std::runtime_error("assets (" + std::to_string(meshCount) +
+					") exceed scene object matrix capacity (" +
+					std::to_string(kSceneMatrixCapacity) + ")");
 		}
 
 		// cube 一等资产（批次 3）：showCube 配置 → 注册 entity（画不画 = 实体有无）+

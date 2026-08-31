@@ -90,7 +90,21 @@ export void applyDynamicState(vk::raii::CommandBuffer& cmd, uint32_t width, uint
 	cmd.setAlphaToCoverageEnableEXT(state.alphaToCoverage);
 	cmd.setAlphaToOneEnableEXT(state.alphaToOne);
 
-	// Color blending
+	// Color blending：enable 只是开关——factors/equation 是独立的动态状态，不设置则
+	// 保持默认值（≈不混合），开了 colorBlend 也不产生混合效果（Phase 5 透明排序接线）。
+	// 标准 alpha 混合：RGB = src·srcAlpha + dst·(1-srcAlpha)，A = srcA（替换）
+	if (state.colorBlend) {
+		// hpp 包装类无聚合初始化（仅默认/拷贝/Vk* 构造）——裸 C 结构体逐字段填后包一层。
+		// 注意 v341 头：单 colorBlendOp/alphaBlendOp 字段（非 src/dst 各一，新版头才拆分）
+		VkColorBlendEquationEXT raw{};
+		raw.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+		raw.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+		raw.colorBlendOp = VK_BLEND_OP_ADD;
+		raw.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+		raw.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+		raw.alphaBlendOp = VK_BLEND_OP_ADD;
+		cmd.setColorBlendEquationEXT(0, vk::ColorBlendEquationEXT(raw));
+	}
 	cmd.setColorBlendEnableEXT(0, state.colorBlend);
 	cmd.setColorWriteMaskEXT(0, state.colorWriteMask);
 	cmd.setLogicOpEnableEXT(state.logicOp);
@@ -111,11 +125,15 @@ export class RenderPipeline {
 	// 注意：sampler 走独立 sampler heap 而非 pEmbeddedSampler——2026-08-27 spike
 	// 交叉测试两者三驱动均 PASS（docs/heap_texture_research.md §九），此处维持独立
 	// sampler heap（docs/phase3_plan.md R1 回退链的既选路径，已验证可用）。
+	// hasSceneData=true（Phase 5 批次 2，模型形态）追加 binding 3 → scene data storage
+	// buffer 槽（光照 + 对象矩阵表，Resources::ensureSceneData；模型 mesh/unlit frag 不
+	// 声明 binding 3 = 映射空转无副作用，同 mesh 阶段不声明 binding 1/2 的既证行为）。
 	RenderPipeline(vk::raii::Device& device, const ShaderEffect& effect,
 		uint32_t descriptorSize, uint32_t slotVertex, uint32_t slotIndex,
-		uint32_t slotTexture = 0, uint32_t samplerHeapOffset = 0, bool textured = false) {
-		VkDescriptorSetAndBindingMappingEXT mappings[3]{};
-		const uint32_t mappingCount = textured ? 3 : 2;
+		uint32_t slotTexture = 0, uint32_t samplerHeapOffset = 0, bool textured = false,
+		uint32_t slotSceneData = 0, bool hasSceneData = false) {
+		VkDescriptorSetAndBindingMappingEXT mappings[4]{};
+		const uint32_t mappingCount = (textured ? 3 : 2) + (hasSceneData ? 1 : 0);
 
 		mappings[0].sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
 		mappings[0].descriptorSet = 0;
@@ -151,6 +169,18 @@ export class RenderPipeline {
 			mappings[2].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
 			mappings[2].sourceData.constantOffset.heapOffset = samplerHeapOffset;
 			mappings[2].sourceData.constantOffset.heapArrayStride = 0;
+		}
+
+		if (hasSceneData) {
+			// binding 3 → scene data storage buffer（Phase 5 批次 2，resource heap 槽）
+			mappings[3].sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
+			mappings[3].descriptorSet = 0;
+			mappings[3].firstBinding = 3;
+			mappings[3].bindingCount = 1;
+			mappings[3].resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
+			mappings[3].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
+			mappings[3].sourceData.constantOffset.heapOffset = slotSceneData * descriptorSize;
+			mappings[3].sourceData.constantOffset.heapArrayStride = descriptorSize;
 		}
 
 		VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{};

@@ -15,6 +15,7 @@ return {
                 { name = "vertexOffset", type = "uint" },
                 { name = "baseColor", type = "vec4" },
                 { name = "roughnessMetallic", type = "vec2" },
+                { name = "objectIndex", type = "uint" },
             },
         },
     },
