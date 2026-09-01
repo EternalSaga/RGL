@@ -27,11 +27,23 @@ namespace RGL {
 // §12.7 ① 在此首次落地）；共享 sampler 同步移入 Resources::ensureSharedSampler。
 // 上传路径：linear staging（host-visible 填充）→ optimal 拷贝 + UNDEFINED→SHADER_READ_ONLY，
 // graphics 队列一次性命令缓冲 + fence waitIdle（D7：启动期路径，不启用闲置 transfer queue）。
-// 无 mipmap（minFilter=linear、mipmapMode=NEAREST、maxLod=0），mipmap 后续加。
+// 2D 路径无 mipmap（共享 sampler minFilter=linear、mipmapMode=NEAREST、maxLod=0）；
+// Phase 5.5 新增 cubemap 路径带 mip 链（blit 降采样 + sky sampler mipmapMode=LINEAR）。
 
 // RGBA8 像素 → GPU 纹理 + 资产记录（上传全流程，见模块头注释；module-private）
 [[nodiscard]] std::expected<uint32_t, Error> uploadTexture(RGL::Resources& resources,
 	RGL::DeviceContext& device, const uint8_t* rgba, uint32_t w, uint32_t h, const char* name);
+
+// Phase 5.5：6 份 RGBA8 面像素（已按 Vulkan 层序 0-5 = +X,−X,+Y,−Y,+Z,−Z）→ eCube image +
+// mipmap 链 + eCube view + SAMPLED_IMAGE 描述符 → Resources env 单例 + sky sampler（module-private）。
+// size 必须 2 的幂（mip 链 = 1+log2(size) 级）。启动期路径，上传模式同 uploadTexture。
+// mipmap 用 vkCmdBlitImage filter=NEAREST——sRGB 格式 blit LINEAR 违 VUID-vkCmdBlitImage-
+// filter-00239；线性空间 box 降采样需 CPU 生成 mip 链（批次 2 视 IBL 采样质量决定是否升级）。
+// 内建拷贝金丝雀：逐面回读 mip0 两 texel（角/中心）比对 CPU 源（texelCanaryCheck 模式，
+// UAF 教训——把"时好时坏"变"启动必炸"）；blit 降采样不做 CPU 比对（批次 4 目检）。
+[[nodiscard]] std::expected<void, Error> uploadCubeMap(RGL::Resources& resources,
+	RGL::DeviceContext& device, std::span<const uint8_t* const, 6> faces, uint32_t size,
+	const char* name);
 
 // glb 内嵌图（buffer view byte span）→ 纹理资产 id；解码强制 RGBA8 4 通道
 export [[nodiscard]] std::expected<uint32_t, Error> loadEmbedded(RGL::Resources& resources,
@@ -139,6 +151,12 @@ export [[nodiscard]] std::expected<std::vector<uint32_t>, Error> uploadModelText
 	}
 	return primitiveTextureIds;
 }
+
+// 环境 cubemap 加载（Phase 5.5）：6 个图片文件路径（已按 Vulkan 层序 0-5 排列）→ stb 解码
+// RGBA8 + 校验（方形/2 的幂/六面同尺寸）→ uploadCubeMap。面文件顺序权威记录 =
+// docs/phase5_5_plan.md 素材定案表（nightSky: 1,3,5,6,2,4；rainbow 方案 B: ft,bk,up,dn,rt,lf）。
+export [[nodiscard]] std::expected<void, Error> loadEnvCubeMapFiles(RGL::Resources& resources,
+	RGL::DeviceContext& device, const std::array<std::string, 6>& paths, const char* name);
 
 // texel 回读金丝雀（heap_texture_research.md §12.7 手段②，重构批次 4）：
 // 第 N 帧重读白纹理 texel (0,0) 比对已知值 255——纹理 BO 死了（freed/VA 复用）回读立即
@@ -474,6 +492,316 @@ export void texelCanaryCheck(RGL::Resources& resources, RGL::DeviceContext& devi
 			format == vk::Format::eR8G8B8A8Srgb ? "sRGB" : "UNORM", slot,
 			static_cast<double>(w) * h * 4.0 / (1024.0 * 1024.0));
 	return static_cast<uint32_t>(resources.getAssetTable().textureSize() - 1);
+}
+
+[[nodiscard]] std::expected<void, Error> uploadCubeMap(RGL::Resources& resources,
+	RGL::DeviceContext& device, std::span<const uint8_t* const, 6> faces, uint32_t size,
+	const char* name) {
+	auto* logger = RLLogger::getInstance();
+	auto& dev = device.getDevice();
+	auto& allocator = resources.getAllocator();
+
+	if (size == 0 || (size & (size - 1)) != 0)
+		return std::unexpected(Error{ErrorCode::TextureDecodeFailed,
+			fmt::format("cubemap {}: size {} 必须为 2 的幂", name, size)});
+	uint32_t mipLevels = 1;
+	for (uint32_t s = size; s > 1; s >>= 1) ++mipLevels;
+
+	// 格式策略同 2D 路径：sRGB 优先 + 不支持采样回落 UNORM（R4）+ DIAG 强制 UNORM 门
+	vk::Format format = std::getenv("TEXTURE_FORCE_UNORM")
+		? vk::Format::eR8G8B8A8Unorm : vk::Format::eR8G8B8A8Srgb;
+	auto formatProps = device.getPhysicalDevice().getFormatProperties(format);
+	if ((formatProps.optimalTilingFeatures & vk::FormatFeatureFlagBits::eSampledImage)
+		== vk::FormatFeatureFlags{}) {
+		format = vk::Format::eR8G8B8A8Unorm;
+		if (logger) logger->warn("cubemap: R8G8B8A8_SRGB 不支持采样，回落 UNORM ({})", name);
+	}
+
+	// Vulkan cubemap 无独立 imageType：e2D + arrayLayers=6 + eCubeCompatible flag
+	//（view 才用 eCube；GL/D3D 的 CUBE 类型概念在 Vulkan 不存在）
+	vk::ImageCreateInfo imageInfo{};
+	imageInfo.flags = vk::ImageCreateFlagBits::eCubeCompatible;
+	imageInfo.imageType = vk::ImageType::e2D;
+	imageInfo.format = format;
+	imageInfo.extent = vk::Extent3D(size, size, 1);
+	imageInfo.mipLevels = mipLevels;
+	imageInfo.arrayLayers = 6;
+	imageInfo.samples = vk::SampleCountFlagBits::e1;
+	imageInfo.tiling = vk::ImageTiling::eOptimal;
+	imageInfo.usage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst |
+		vk::ImageUsageFlagBits::eTransferSrc;
+	imageInfo.initialLayout = vk::ImageLayout::eUndefined;
+	VmaAllocationCreateInfo imageAlloc{};
+	imageAlloc.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+	imageAlloc.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;  // 独占分配（2D 路径现状一致）
+	auto imageResult = allocator.createImage(imageInfo, imageAlloc);
+	if (!imageResult) return std::unexpected(std::move(imageResult).error());
+	auto image = std::move(*imageResult);
+
+	// linear staging：**6 张独立 2D 图**（每面一张）。不继承 imageInfo——linear 有三条硬限
+	//（RADV 实测连踩两坑 2026-09-01）：VUID-VkImageCreateInfo-tiling-02260 linear 必须
+	// mipLevels=1；CUBE_COMPATIBLE flag linear 不支持（cube-ness 只需目标图有）；
+	// RADV linear 图 maxArrayLayers=1（arrayed linear FORMAT_NOT_SUPPORTED）→ per-face 单图
+	vk::ImageCreateInfo stagingInfo{};
+	stagingInfo.imageType = vk::ImageType::e2D;
+	stagingInfo.format = format;
+	stagingInfo.extent = vk::Extent3D(size, size, 1);
+	stagingInfo.mipLevels = 1;
+	stagingInfo.arrayLayers = 1;
+	stagingInfo.samples = vk::SampleCountFlagBits::e1;
+	stagingInfo.tiling = vk::ImageTiling::eLinear;
+	stagingInfo.usage = vk::ImageUsageFlagBits::eTransferSrc;
+	stagingInfo.initialLayout = vk::ImageLayout::eUndefined;
+	VmaAllocationCreateInfo stagingAlloc{};
+	stagingAlloc.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+	stagingAlloc.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
+	std::vector<RGL::VmaImage> stagings;
+	std::array<VmaAllocationInfo, 6> stagingData{};
+	for (uint32_t face = 0; face < 6; ++face) {
+		auto stagingResult = allocator.createImage(stagingInfo, stagingAlloc, &stagingData[face]);
+		if (!stagingResult) return std::unexpected(std::move(stagingResult).error());
+		stagings.push_back(std::move(*stagingResult));
+	}
+
+	const size_t faceRowBytes = static_cast<size_t>(size) * 4;
+	for (uint32_t face = 0; face < 6; ++face) {
+		VkImageSubresource sub{};
+		sub.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		VkSubresourceLayout layerLayout;
+		vkGetImageSubresourceLayout(*dev, *stagings[face], &sub, &layerLayout);
+		uint8_t* base = static_cast<uint8_t*>(stagingData[face].pMappedData) + layerLayout.offset;
+		for (uint32_t y = 0; y < size; ++y)
+			std::memcpy(base + static_cast<size_t>(y) * layerLayout.rowPitch,
+				faces[face] + static_cast<size_t>(y) * faceRowBytes, faceRowBytes);
+	}
+
+	// 一次性命令缓冲（graphics 队列，启动期无并发）：per-face copy + 逐 level blit 链
+	auto cmdAlloc = dev.allocateCommandBuffers(vk::CommandBufferAllocateInfo{
+		*device.getGraphicsCommandPool(), vk::CommandBufferLevel::ePrimary, 1});
+	auto cmd = std::move(cmdAlloc[0]);
+	cmd.begin(vk::CommandBufferBeginInfo{});
+	const auto emitBarrier = [&](const vk::ImageMemoryBarrier2& b) {
+		VkDependencyInfo dep{};
+		dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+		dep.imageMemoryBarrierCount = 1;
+		dep.pImageMemoryBarriers = reinterpret_cast<const VkImageMemoryBarrier2*>(&b);
+		::vkCmdPipelineBarrier2(*cmd, &dep);
+	};
+
+	std::vector<vk::ImageMemoryBarrier2> uploadBarriers;
+	uploadBarriers.reserve(7);
+	for (uint32_t face = 0; face < 6; ++face)
+		uploadBarriers.push_back(RGL::createImageBarrier(
+			*stagings[face], vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferSrcOptimal,
+			vk::ImageAspectFlagBits::eColor,
+			vk::PipelineStageFlagBits2::eBottomOfPipe, vk::PipelineStageFlagBits2::eTransfer,
+			vk::AccessFlagBits2::eMemoryWrite, vk::AccessFlagBits2::eTransferRead));
+	uploadBarriers.push_back(RGL::createImageBarrier(
+		*image, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
+		vk::ImageAspectFlagBits::eColor,
+		vk::PipelineStageFlagBits2::eBottomOfPipe, vk::PipelineStageFlagBits2::eTransfer,
+		vk::AccessFlagBits2::eMemoryWrite, vk::AccessFlagBits2::eTransferWrite,
+		0, mipLevels, 0, 6));
+	VkDependencyInfo toDstDep{};
+	toDstDep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+	toDstDep.imageMemoryBarrierCount = static_cast<uint32_t>(uploadBarriers.size());
+	toDstDep.pImageMemoryBarriers = reinterpret_cast<const VkImageMemoryBarrier2*>(uploadBarriers.data());
+	::vkCmdPipelineBarrier2(*cmd, &toDstDep);
+
+	VkImageCopy copyRegion{};
+	copyRegion.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+	copyRegion.extent = {size, size, 1};
+	for (uint32_t face = 0; face < 6; ++face) {
+		copyRegion.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, face, 1};
+		::vkCmdCopyImage(*cmd, *stagings[face], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+			*image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyRegion);
+	}
+
+	// mip 链：level i−1 先 DST→SRC，再 6 面 blit 到 level i（同图不同 subresource 不重叠，
+	// spec 允许；sRGB 格式 blit 只能 NEAREST，见函数头注释）
+	for (uint32_t level = 1; level < mipLevels; ++level) {
+		emitBarrier(RGL::createImageBarrier(
+			*image, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eTransferSrcOptimal,
+			vk::ImageAspectFlagBits::eColor,
+			vk::PipelineStageFlagBits2::eTransfer, vk::PipelineStageFlagBits2::eTransfer,
+			vk::AccessFlagBits2::eTransferWrite, vk::AccessFlagBits2::eTransferRead,
+			level - 1, 1, 0, 6));
+		const uint32_t srcSize = size >> (level - 1);
+		const uint32_t dstSize = std::max(1u, size >> level);
+		std::array<VkImageBlit, 6> blits{};
+		for (uint32_t face = 0; face < 6; ++face) {
+			blits[face].srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level - 1, face, 1};
+			blits[face].srcOffsets[0] = {0, 0, 0};
+			blits[face].srcOffsets[1] = {static_cast<int32_t>(srcSize), static_cast<int32_t>(srcSize), 1};
+			blits[face].dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, face, 1};
+			blits[face].dstOffsets[0] = {0, 0, 0};
+			blits[face].dstOffsets[1] = {static_cast<int32_t>(dstSize), static_cast<int32_t>(dstSize), 1};
+		}
+		::vkCmdBlitImage(*cmd, *image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+			*image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 6, blits.data(), VK_FILTER_NEAREST);
+	}
+	// → SHADER_READ_ONLY：level 0..L−2 停在 TRANSFER_SRC（blit 源），末级停 TRANSFER_DST
+	if (mipLevels > 1)
+		emitBarrier(RGL::createImageBarrier(*image, vk::ImageLayout::eTransferSrcOptimal,
+			vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageAspectFlagBits::eColor,
+			vk::PipelineStageFlagBits2::eTransfer, vk::PipelineStageFlagBits2::eFragmentShader,
+			vk::AccessFlagBits2::eTransferRead, vk::AccessFlagBits2::eShaderSampledRead,
+			0, mipLevels - 1, 0, 6));
+	emitBarrier(RGL::createImageBarrier(*image, vk::ImageLayout::eTransferDstOptimal,
+		vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageAspectFlagBits::eColor,
+		vk::PipelineStageFlagBits2::eTransfer, vk::PipelineStageFlagBits2::eFragmentShader,
+		vk::AccessFlagBits2::eTransferWrite, vk::AccessFlagBits2::eShaderSampledRead,
+		mipLevels - 1, 1, 0, 6));
+	cmd.end();
+
+	auto fence = vk::raii::Fence(dev, vk::FenceCreateInfo{});
+	VkSubmitInfo submitInfo{};
+	submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+	VkCommandBuffer cmdBuffer = *cmd;
+	submitInfo.commandBufferCount = 1;
+	submitInfo.pCommandBuffers = &cmdBuffer;
+	if (auto result = vk::Result(::vkQueueSubmit(device.getGraphicsQueue(), 1, &submitInfo, *fence));
+		result != vk::Result::eSuccess)
+		return std::unexpected(Error{ErrorCode::VulkanError,
+			fmt::format("cubemap: upload submit failed: {}", name)});
+	if (dev.waitForFences(std::array<vk::Fence, 1>{*fence}, true, UINT64_MAX) != vk::Result::eSuccess)
+		return std::unexpected(Error{ErrorCode::VulkanError,
+			fmt::format("cubemap: upload fence timeout: {}", name)});
+
+	// 拷贝金丝雀：逐面回读 mip0 texel (0,0) + 中心，比对 CPU 源（6×2×4B = 48B）
+	{
+		VkBufferCreateInfo rbInfo{};
+		rbInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+		rbInfo.size = 6 * 2 * 4;
+		rbInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+		VmaAllocationCreateInfo rbAlloc{};
+		rbAlloc.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+		rbAlloc.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
+		VmaAllocationInfo rbData{};
+		auto rbResult = allocator.createBuffer(rbInfo, rbAlloc, &rbData);
+		if (!rbResult) return std::unexpected(std::move(rbResult).error());
+		auto& rb = *rbResult;
+		const uint32_t mid = size / 2;
+		std::array<VkBufferImageCopy, 12> copies{};
+		for (uint32_t face = 0; face < 6; ++face)
+			for (uint32_t t = 0; t < 2; ++t) {
+				copies[face * 2 + t].bufferOffset = (face * 2 + t) * 4;
+				copies[face * 2 + t].bufferImageHeight = 1;
+				copies[face * 2 + t].imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, face, 1};
+				copies[face * 2 + t].imageOffset = t == 0
+					? VkOffset3D{0, 0, 0} : VkOffset3D{static_cast<int32_t>(mid), static_cast<int32_t>(mid), 0};
+				copies[face * 2 + t].imageExtent = {1, 1, 1};
+			}
+		auto rbCmdAlloc = dev.allocateCommandBuffers(vk::CommandBufferAllocateInfo{
+			*device.getGraphicsCommandPool(), vk::CommandBufferLevel::ePrimary, 1});
+		auto rbCmd = std::move(rbCmdAlloc[0]);
+		rbCmd.begin(vk::CommandBufferBeginInfo{});
+		const auto rbEmit = [&](const vk::ImageMemoryBarrier2& b) {
+			VkDependencyInfo dep{};
+			dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+			dep.imageMemoryBarrierCount = 1;
+			dep.pImageMemoryBarriers = reinterpret_cast<const VkImageMemoryBarrier2*>(&b);
+			::vkCmdPipelineBarrier2(*rbCmd, &dep);
+		};
+		rbEmit(RGL::createImageBarrier(*image, vk::ImageLayout::eShaderReadOnlyOptimal,
+			vk::ImageLayout::eTransferSrcOptimal, vk::ImageAspectFlagBits::eColor,
+			vk::PipelineStageFlagBits2::eFragmentShader, vk::PipelineStageFlagBits2::eTransfer,
+			vk::AccessFlagBits2::eShaderSampledRead, vk::AccessFlagBits2::eTransferRead,
+			0, 1, 0, 6));
+		::vkCmdCopyImageToBuffer(*rbCmd, *image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+			*rb, static_cast<uint32_t>(copies.size()), copies.data());
+		rbEmit(RGL::createImageBarrier(*image, vk::ImageLayout::eTransferSrcOptimal,
+			vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageAspectFlagBits::eColor,
+			vk::PipelineStageFlagBits2::eTransfer, vk::PipelineStageFlagBits2::eFragmentShader,
+			vk::AccessFlagBits2::eTransferRead, vk::AccessFlagBits2::eShaderSampledRead,
+			0, 1, 0, 6));
+		rbCmd.end();
+		auto rbFence = vk::raii::Fence(dev, vk::FenceCreateInfo{});
+		VkSubmitInfo rbSi{};
+		rbSi.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+		VkCommandBuffer rbCb = *rbCmd;
+		rbSi.commandBufferCount = 1;
+		rbSi.pCommandBuffers = &rbCb;
+		::vkQueueSubmit(device.getGraphicsQueue(), 1, &rbSi, *rbFence);
+		(void)dev.waitForFences(std::array<vk::Fence, 1>{*rbFence}, true, UINT64_MAX);
+		const uint8_t* px = static_cast<const uint8_t*>(rbData.pMappedData);
+		bool pass = true;
+		for (uint32_t face = 0; face < 6 && pass; ++face) {
+			const uint8_t* src0 = faces[face];
+			const uint8_t* srcM = faces[face] +
+				(static_cast<size_t>(mid) * size + mid) * 4;
+			for (uint32_t t = 0; t < 2; ++t) {
+				const uint8_t* expect = t == 0 ? src0 : srcM;
+				const uint8_t* got = px + (face * 2 + t) * 4;
+				if (std::memcmp(expect, got, 4) != 0) {
+					pass = false;
+					if (logger)
+						logger->error("cubemap canary {}: face {} texel {} = {}/{}/{}/{} != 源 {}/{}/{}/{}",
+							name, face, t, got[0], got[1], got[2], got[3],
+							expect[0], expect[1], expect[2], expect[3]);
+					break;
+				}
+			}
+		}
+		if (pass && logger)
+			logger->info("cubemap canary {}: 6 面 × 2 texel 回读比对 PASS", name);
+	}
+
+	// view（eCube 全 mip 链 + 6 层）+ slot 分配 + SAMPLED_IMAGE 描述符（指针链模式同 2D；
+	// 存储 = Resources env 单例 optional，非 AssetTable textures——env 绑场景不绑材质）
+	vk::ImageViewCreateInfo viewCreate{};
+	viewCreate.image = *image;
+	viewCreate.viewType = vk::ImageViewType::eCube;
+	viewCreate.format = format;
+	viewCreate.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0, 6};
+	auto view = vk::raii::ImageView(dev, viewCreate);
+
+	auto slotResult = resources.allocSlot(name);
+	if (!slotResult) return std::unexpected(std::move(slotResult).error());
+	const uint32_t slot = *slotResult;
+	const auto& heap = resources.getDescriptorHeap();
+
+	TextureAsset asset{std::move(image), viewCreate, std::move(view), slot, size, size, mipLevels};
+	auto& stored = resources.emplaceEnvTexture(std::move(asset));
+	stored.imageDesc.pView = &stored.viewCreate;
+	stored.imageDesc.layout = vk::ImageLayout::eShaderReadOnlyOptimal;
+	stored.resourceDesc.type = vk::DescriptorType::eSampledImage;
+	stored.resourceDesc.data.pImage = &stored.imageDesc;
+	auto slotAddr = heap.getSlotCpuAddress(slot);
+	if (!slotAddr) return std::unexpected(std::move(slotAddr).error());
+	stored.dst = vk::HostAddressRangeEXT{*slotAddr, heap.getDescriptorSize()};
+	dev.writeResourceDescriptorsEXT(stored.resourceDesc, stored.dst);
+
+	const uint32_t skySlot = resources.ensureSkySampler(mipLevels);
+	if (logger)
+		logger->info("cubemap: {} {}²×6 {} mips={} → res slot {} + sky sampler slot {}", name, size,
+			format == vk::Format::eR8G8B8A8Srgb ? "sRGB" : "UNORM", mipLevels, slot, skySlot);
+	return {};
+}
+
+[[nodiscard]] std::expected<void, Error> loadEnvCubeMapFiles(RGL::Resources& resources,
+	RGL::DeviceContext& device, const std::array<std::string, 6>& paths, const char* name) {
+	std::array<std::vector<uint8_t>, 6> pixels;
+	uint32_t size = 0;
+	for (uint32_t face = 0; face < 6; ++face) {
+		int w = 0, h = 0, ch = 0;
+		uint8_t* rgba = stbi_load(paths[face].c_str(), &w, &h, &ch, 4);
+		if (!rgba)
+			return std::unexpected(Error{ErrorCode::TextureDecodeFailed,
+				fmt::format("stb_image decode failed: {}", paths[face])});
+		const bool squarePow2 = w == h && w > 0 && (w & (w - 1)) == 0;
+		if (!squarePow2 || (size != 0 && w != static_cast<int>(size))) {
+			stbi_image_free(rgba);
+			return std::unexpected(Error{ErrorCode::TextureDecodeFailed,
+				fmt::format("{}: face {} ({}x{}) 须为方形 2 的幂且六面同尺寸", name, face, w, h)});
+		}
+		size = static_cast<uint32_t>(w);
+		pixels[face].assign(rgba, rgba + static_cast<size_t>(w) * static_cast<size_t>(h) * 4);
+		stbi_image_free(rgba);
+	}
+	std::array<const uint8_t*, 6> ptrs;
+	for (uint32_t face = 0; face < 6; ++face) ptrs[face] = pixels[face].data();
+	return uploadCubeMap(resources, device, ptrs, size, name);
 }
 
 }  // namespace RGL

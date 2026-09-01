@@ -1,6 +1,6 @@
 # vulkan_practice 路线图
 
-> **状态**：现行（开发路线图；各 Phase 完成情况随提交更新，当前节点 = Phase 5 完成（2026-08-31），待进入 Phase 6）
+> **状态**：现行（开发路线图；各 Phase 完成情况随提交更新，当前节点 = Phase 5.5 完成（2026-09-01），待进入 Phase 6）
 
 基于对 legacy 代码痛点的反思和新架构讨论，整理出分阶段开发计划。
 
@@ -356,6 +356,65 @@ SPV 路径的模式撑不住。Phase 4 的 ShaderRegistry 是最终解法，但�
 ### 明确不做 / 留接缝
 Shadow、多灯、OIT/per-pixel 透明排序、MASK alphaTest；scene data 基建与 staging+copy 模式
 留 Phase 6（rendergraph 动态数据）/ Phase 7（shadow map、culling 矩阵表）复用。
+常 ambient 项 → Phase 5.5 由 IBL 环境采样替换。
+
+---
+
+## Phase 5.5：IBL（简化版）+ 天空盒
+
+> **状态（2026-09-01）：已完成**（4 批次，实施记录与素材面序定案见 `docs/phase5_5_plan.md`）。
+> 计划-实现偏离注记（实现为准）：
+> - **素材是直接 6 面 cubemap**（非 equirect）→ 批次 1 砍掉 equirect→cube CPU 转换，改
+>   `uploadCubeMap` 6 面直传（equirect 转换留作可选扩展）；linear staging 三坑（RADV 实测）
+>   = linear 必须 mipLevels=1 + CUBE_COMPATIBLE 不支持 + linear maxArrayLayers=1 → 6 张
+>   独立 2D staging
+> - **mipmap blit 用 NEAREST**（sRGB 格式 blit LINEAR 违 VUID-vkCmdBlitImage-filter-00239）；
+>   线性空间 box 降采样（CPU 生成 mip）留作质量接缝，本 phase 未做
+> - **env 存储 = Resources 场景级单例**（`std::optional<TextureAsset>`，非 AssetTable
+>   textures）——env 绑场景不绑材质，不占纹理 id 空间（白纹理 id 0 契约零影响）
+> - **IBL 只接 pbr 线**：新风格 `model_pbr_ibl`（phong 线保留常 ambient）；参数走 scene data
+>   头 @48（env）+ @64（skybox invViewProj，头 64→128）手工契约（LightDataGpu 双源模式）
+> - **天空盒 = 全屏大三角 + clip→world 射线**（sky.slang，免 resolution）；三段
+>   `[opaque|skybox|transparent]` 边界与 Phase 6 pass 序列同构
+> - **`RenderPipeline` mapping 修正**：固定下标假设 textured=true，天空盒
+>   textured=false+scene+env 组合暴露 → 改顺序填充（Phase 2 遗留隐患清偿）
+> - **shadow 明确不做**（用户拍板留 Phase 7 后再议）
+
+### 目标
+环境贴图采样替换 `model_pbr` 的常 ambient 项（简化版 IBL），场景加天空盒渲染段。
+主题归属 = Phase 5"简单光照"的补全（光照内容问题），不顶替 Phase 6 的 RenderGraph 架构主题。
+
+### 范围决策（开工前用户确认）
+- **简化版**：单张环境贴图 + roughness→LOD 采样；无 HDR/tone mapping、无
+  pre-filtered/BRDF LUT（完整版留 Phase 7 延迟 light pass 时做）——不阻塞未来升级，
+  基建（cubemap 上传 + mipmap 链 + 采样入口 + skybox 段 + 参数 slot）全复用
+- **mipmap 链要补**：skybox 专用 sampler，不动 `ensureSharedSampler`
+- **shadow 暂不做**：留待 Phase 7 后再议（forward shadow = 项目第一个每帧多 pass 带
+  依赖，归 RenderGraph 用例更顺）
+- **phong 线不动**：常 ambient 保留，IBL 只接 pbr 线
+
+### 完成情况 (已完成 2026-09-01，4 批次)
+- [x] **批次 1 cubemap + mipmap 纹理基建**：`uploadCubeMap`（6 面直传 e2D+eCubeCompatible
+  目标图 + 6 张独立 2D linear staging + 6 单 region copy + 逐 level 6 面 blit NEAREST 链）
+  + `loadEnvCubeMapFiles`（stb 解码 + 方形/2 幂/同尺寸校验）+ `TextureAsset.mipLevels` +
+  `ensureSkySampler`（sampler heap 第二槽 mipmapMode=LINEAR+maxLod）+ env 单例存储 +
+  拷贝金丝雀 + CMake `copy_skybox`
+- [x] **批次 2/3 IBL 采样 + 参数 + 管线接线**：`env.slang`（binding 4/5 + readEnvParams）+
+  `model_pbr_ibl.frag.slang`（IBL 替换 ambient）+ scene data 头 @48 env 参数 +
+  `SceneEnv` context + `PipelineBindings` 聚合 + mapping 4→6 + `addModelEntry` 查 env 恒烘焙
+  + scene.lua environment 段 + 两条 main 契约（时序 + 风格）
+- [x] **批次 4 天空盒**：`sky.slang`（clip→world 射线）+ `skybox.mesh/frag.slang`（全屏大
+  三角采 env cubemap）+ scene data 头 64→128（@64 invViewProj）+ `FrameDrawList` 三段 +
+  `addSkyEntry` + skyboxState（LEQUAL 不写深度）+ drawFrame/llm_debug 三段 + **mapping
+  顺序填充修正**
+- [x] **批次 5 验收 + 文档销账**：验证矩阵 10 项全 PASS、AGENTS.md 模块表、next_roadmap 本节
+
+### 设计决策
+- 素材为直接 6 面 cubemap（equirect→cube CPU 转换砍掉，留作可选扩展）；面顺序以
+  phase5_5_plan.md 素材定案表为准（scene.lua 显式文件列表配置，方位歧义改配置零代码）
+- IBL 参数走 scene data 手工契约（延续 LightDataGpu 双源模式，Phase 7 多灯重设计时并入反射）
+- **无环境贴图**：模型管线不烘焙 binding 4/5（不建特例管线）；引用 model_pbr_ibl 风格但
+  无 environment 段 = 启动契约报错（未映射描述符采样 = 未定义，明确拦截优于静默画面错）
 
 ---
 
@@ -423,6 +482,8 @@ Phase 3 (Textures)
 Phase 4 (Multi-Shader)
     ↓
 Phase 5 (Transparency+Light)
+    ↓
+Phase 5.5 (IBL 简化版 + Skybox)
     ↓
 Phase 6 (Lua Render Intent)
     ↓

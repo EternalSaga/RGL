@@ -27,7 +27,11 @@ export inline constexpr uint32_t kInvalidPipelineIndex = std::numeric_limits<uin
 // light 槽无法钉编译期偏移，同 slotTexture 模式），布局（字节偏移，shader 端
 // scene.slang 字面量必须一致，kTrianglesPerGroup 先例）：
 //   @0   LightDataGpu（48B：direction/eyePos/color/ambient 各 vec3）
-//   @64  对象矩阵表：mat4 列主序 × kSceneMatrixCapacity（[assetId] = spin·world，
+//   @48  Phase 5.5 env 参数（原 16B 保留区启用）：envIntensity float + envMipRange
+//        float（= mipLevels−1，0 = 无环境）+ 8B 留白——scene.slang/env.slang 字面量一致
+//   @64  Phase 5.5 批次 4 skyboxInvViewProj（mat4 列主序 = inverse(proj·view)，
+//        sky.slang skyClipToWorld 消费）
+//   @128 对象矩阵表：mat4 列主序 × kSceneMatrixCapacity（[assetId] = spin·world，
 //        DrawArgs.objectIndex 索引；世界空间光照 + Phase 7 shadow/culling 复用）
 // 内容每帧变 = 全项目首个动态 GPU 数据：CPU 写 staging ring（×MAX_FRAMES_IN_FLIGHT，
 // drawFrame ① 已 wait 本 slot fence → 写安全）+ 录制期 vkCmdCopyBuffer 拷进本 buffer
@@ -40,7 +44,15 @@ export struct LightDataGpu {
 };
 static_assert(sizeof(LightDataGpu) == 48);
 
-export inline constexpr uint32_t kSceneDataHeaderBytes = 64;    // LightData 48B + 16B 保留（64B 对齐）
+// Phase 5.5：env 参数偏移（envIntensity float @48 + envMipRange float @52；
+// env.slang readEnvParams 的 Load(48)/Load(52) 字面量必须与本值一致——scene.slang 先例）
+export inline constexpr uint32_t kSceneDataEnvOffset = sizeof(LightDataGpu);
+// Phase 5.5 批次 4：skyboxInvViewProj mat4 列主序 @64（inverse(proj·view)，
+// sky.slang skyClipToWorld 的 Load4(64/80/96/112) 字面量必须与本值一致）
+export inline constexpr uint32_t kSceneDataSkyOffset = 64;
+export inline constexpr uint32_t kSceneDataHeaderBytes = 128;   // light 48 + env 16 + sky invVP 64
+static_assert(kSceneDataEnvOffset == 48 && kSceneDataSkyOffset == 64 &&
+	kSceneDataSkyOffset + sizeof(glm::mat4) == kSceneDataHeaderBytes);
 // mat4 列主序 stride：派生自 sizeof(glm::mat4) 而非裸字面量（C++ 侧漂移即编译失败；
 // shader 端 scene.slang 的字面量 64u 须与本值一致——无反射端对应，见 scene.slang 头注释）
 export inline constexpr uint32_t kSceneMatrixStride = sizeof(glm::mat4);
@@ -101,6 +113,8 @@ export struct TextureAsset {
 	uint32_t heapSlot = 0;
 	uint32_t width = 0;
 	uint32_t height = 0;
+	// Phase 5.5：mip 级数（2D 路径 = 1；cubemap = 1+log2(size)，sky sampler maxLod 由此派生）
+	uint32_t mipLevels = 1;
 	// 描述符指针链（自/兄弟引用，入 deque 后设置——元素地址稳定保证指针有效）
 	vk::ImageDescriptorInfoEXT imageDesc{};        // pView = &viewCreate，layout = eShaderReadOnlyOptimal
 	vk::ResourceDescriptorInfoEXT resourceDesc{};  // type = eSampledImage，data.pImage = &imageDesc
@@ -289,6 +303,48 @@ export class Resources {
 		vkDevice.getDevice().writeSamplerDescriptorsEXT(samplerCreateInfo, dst);
 		sharedSamplerReady = true;
 		return sharedSamplerSlot;
+	}
+	// Phase 5.5 sky/env sampler：linear mipmap（mipmapMode=LINEAR + maxLod=mipLevels−1），
+	// slot = sampler heap reserved + 1（共享 sampler 之后第二槽，capacity reserved+8 足够）。
+	// 幂等（ensureSharedSampler 同模式）。不动共享 sampler——模型纹理路径零影响。
+	// maxLod 烘焙进描述符 → 调用点须已知环境贴图 mip 级数（env 上传期）。
+	[[nodiscard]] uint32_t ensureSkySampler(uint32_t mipLevels) {
+		if (skySamplerReady)
+			return skySamplerSlot;
+		VkSamplerCreateInfo info{};
+		info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+		info.magFilter = VK_FILTER_LINEAR;
+		info.minFilter = VK_FILTER_LINEAR;
+		info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+		info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		info.anisotropyEnable = VK_FALSE;
+		info.compareEnable = VK_FALSE;
+		info.minLod = 0.0f;
+		info.maxLod = static_cast<float>(mipLevels - 1);
+		info.unnormalizedCoordinates = VK_FALSE;
+		info.borderColor = VK_BORDER_COLOR_INT_TRANSPARENT_BLACK;
+		skySamplerSlot = samplerHeap.getReservedSlots() + 1;
+		auto slotAddr = samplerHeap.getSlotCpuAddress(skySamplerSlot);
+		if (!slotAddr)
+			throw std::runtime_error(slotAddr.error().describe());
+		vk::HostAddressRangeEXT dst{*slotAddr, samplerHeap.getDescriptorSize()};
+		skySamplerCreateInfo = vk::SamplerCreateInfo(info);
+		vkDevice.getDevice().writeSamplerDescriptorsEXT(skySamplerCreateInfo, dst);
+		skySamplerReady = true;
+		return skySamplerSlot;
+	}
+	// Phase 5.5 环境 cubemap（场景级单例资产，texture_pool::uploadCubeMap 产出入库）：
+	// 与材质纹理集（AssetTable::textures）分离——env 绑定场景而非材质，不占纹理 id 空间
+	//（白纹理 id 0 / 首槽契约不受影响）。optional 内部存储地址稳定（Resources = main 栈
+	// 对象永不 move），描述符指针链自引用在 emplace 之后设置即稳定。
+	[[nodiscard]] TextureAsset& emplaceEnvTexture(TextureAsset asset) {
+		envAsset.emplace(std::move(asset));
+		return *envAsset;
+	}
+	[[nodiscard]] const TextureAsset* getEnvTexture() const {
+		return envAsset ? &*envAsset : nullptr;
 	}
 	// SceneData buffer（Phase 5 批次 2）：幂等创建设备端 storage buffer（eTransferDst——
 	// 每帧内容由 staging 拷入）+ 描述符写 allocSlot 运行时槽（同 slotTexture 模式，
@@ -519,6 +575,11 @@ export class Resources {
 	vk::SamplerCreateInfo samplerCreateInfo{};
 	uint32_t sharedSamplerSlot = 0;   // 共享 sampler 在 sampler heap 的槽号（ensureSharedSampler 启动期写入）
 	bool sharedSamplerReady = false;
+	// Phase 5.5：sky/env sampler（第二槽，ensureSkySampler 幂等写入）+ 环境 cubemap 单例
+	vk::SamplerCreateInfo skySamplerCreateInfo{};  // create info 稳定存储（同 samplerCreateInfo 规则）
+	uint32_t skySamplerSlot = 0;
+	bool skySamplerReady = false;
+	std::optional<TextureAsset> envAsset;
 	uint32_t heapSlotVertex;
 	uint32_t heapSlotIndex;
 	// SceneData（Phase 5 批次 2）：设备端动态数据 buffer + 运行时槽（ensureSceneData 幂等写入）

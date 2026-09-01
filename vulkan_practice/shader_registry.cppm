@@ -81,10 +81,26 @@ export class ShaderRegistry {
 		// Phase 5 批次 2：模型管线恒绑 scene data（binding 3，幂等创建；unlit frag 不声明
 		// = 映射空转，同 mesh 阶段对 binding 1/2 的既证行为）
 		const uint32_t sceneSlot = res.ensureSceneData();
+		RGL::PipelineBindings b{};
+		b.descriptorSize = descriptorSize;
+		b.slotVertex = vertexSlot;
+		b.slotIndex = vertexSlot;
+		b.slotTexture = textureSlot;
+		b.samplerHeapOffset = samplerHeapOffset;
+		b.slotSceneData = sceneSlot;
+		b.textured = true;
+		b.hasSceneData = true;
+		// Phase 5.5：env cubemap 已上传 → 全模型条目烘焙 binding 4/5（env 槽全局单例
+		// 恒等，不进组合去重 key；不 import env.slang 的 frag 不声明 = 映射空转，同上既证行为）
+		if (const auto* env = res.getEnvTexture()) {
+			b.hasEnv = true;
+			b.slotEnv = env->heapSlot;
+			b.envSamplerHeapOffset =
+				res.ensureSkySampler(env->mipLevels) * res.getSamplerHeap().getDescriptorSize();
+		}
 		auto entry = PipelineEntry{
 			fmt::format("{}.v{}.t{}", specName, vertexSlot, textureSlot),
-			RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), descriptorSize,
-				vertexSlot, vertexSlot, textureSlot, samplerHeapOffset, true, sceneSlot, true)};
+			RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b)};
 		const uint32_t index = static_cast<uint32_t>(entries.size());
 		indexByName[entry.name] = index;
 		modelEntryBySlot[key] = index;
@@ -92,6 +108,40 @@ export class ShaderRegistry {
 		if (auto* logger = RLLogger::getInstance())
 			logger->debug("pipeline entry: {} (vertex slot {} / texture slot {}) → 下标 {}",
 				specName, vertexSlot, textureSlot, index);
+		return index;
+	}
+
+	// 天空盒管线条目（Phase 5.5 批次 4）：单条目（env 槽全局单例，无组合去重需求）。
+	// mapping = binding 0/1 占位（skybox shader 不声明顶点/索引 = 空转，Phase 3/5 既证
+	// "映射未消费无害"方向）+ binding 3 scene data（skyClipToWorld 读 invViewProj）+
+	// binding 4/5 env（skybox.frag import env 声明——"声明未映射"才是错误，本条目恒烘焙）。
+	// 前提 = env 已上传（main 调用点保证）；幂等。
+	[[nodiscard]] uint32_t addSkyEntry() {
+		if (auto idx = pipelineIndex("skybox"))
+			return *idx;
+		const RGL::PipelineSpec* spec = findSpec("skybox");
+		if (!spec)
+			throw std::runtime_error("pipeline spec not found: skybox");
+		const auto* env = res.getEnvTexture();
+		if (!env)
+			throw std::runtime_error("skybox entry requires env cubemap uploaded");
+		RGL::PipelineBindings b{};
+		b.descriptorSize = res.getDescriptorHeap().getDescriptorSize();
+		b.slotVertex = 0;
+		b.slotIndex = 1;
+		b.slotSceneData = res.ensureSceneData();
+		b.hasSceneData = true;
+		b.hasEnv = true;
+		b.slotEnv = env->heapSlot;
+		b.envSamplerHeapOffset =
+			res.ensureSkySampler(env->mipLevels) * res.getSamplerHeap().getDescriptorSize();
+		auto entry = PipelineEntry{"skybox",
+			RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b)};
+		const uint32_t index = static_cast<uint32_t>(entries.size());
+		indexByName[entry.name] = index;
+		entries.push_back(std::move(entry));
+		if (auto* logger = RLLogger::getInstance())
+			logger->debug("pipeline entry: skybox (env slot {}) → 下标 {}", b.slotEnv, index);
 		return index;
 	}
 
@@ -115,11 +165,13 @@ export class ShaderRegistry {
 		if (!cubeSpec)
 			throw std::runtime_error("pipeline spec not found: cube");
 		const auto& cubeAsset = res.getAssetTable().get(res.cubeAssetId());
-		const uint32_t descriptorSize = res.getDescriptorHeap().getDescriptorSize();
+		RGL::PipelineBindings b{};
+		b.descriptorSize = res.getDescriptorHeap().getDescriptorSize();
+		b.slotVertex = cubeAsset.heapSlot;
+		b.slotIndex = *cubeAsset.indexHeapSlot;
 		auto entry = PipelineEntry{
 			"cube",
-			RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*cubeSpec), descriptorSize,
-				cubeAsset.heapSlot, *cubeAsset.indexHeapSlot)};
+			RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*cubeSpec), b)};
 		const uint32_t index = static_cast<uint32_t>(entries.size());
 		indexByName[entry.name] = index;
 		entries.push_back(std::move(entry));
@@ -164,6 +216,18 @@ export class ShaderRegistry {
 				"model_phong", "generated_shaders/model.mesh.spv",
 				"generated_shaders/model_phong.frag.spv"};
 			return &defaultModelPhong;
+		}
+		if (std::strcmp(name, "model_pbr_ibl") == 0) {
+			static const RGL::PipelineSpec defaultModelPbrIbl{
+				"model_pbr_ibl", "generated_shaders/model.mesh.spv",
+				"generated_shaders/model_pbr_ibl.frag.spv"};
+			return &defaultModelPbrIbl;
+		}
+		if (std::strcmp(name, "skybox") == 0) {
+			static const RGL::PipelineSpec defaultSkybox{
+				"skybox", "generated_shaders/skybox.mesh.spv",
+				"generated_shaders/skybox.frag.spv"};
+			return &defaultSkybox;
 		}
 		return nullptr;
 	}

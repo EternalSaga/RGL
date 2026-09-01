@@ -216,18 +216,29 @@ compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.mesh.slang MODEL_MESH_SP
  compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/model_phong.frag.slang MODEL_PHONG_FRAG_SPV
      ${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.slang ${CMAKE_CURRENT_SOURCE_DIR}/shaders/material.slang
      ${CMAKE_CURRENT_SOURCE_DIR}/shaders/scene.slang)
+ # Phase 5.5：IBL 路线（model_pbr + 环境 cubemap 采样替换常 ambient；env.slang 契约）
+ compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/model_pbr_ibl.frag.slang MODEL_PBR_IBL_FRAG_SPV
+     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.slang ${CMAKE_CURRENT_SOURCE_DIR}/shaders/material.slang
+     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/scene.slang ${CMAKE_CURRENT_SOURCE_DIR}/shaders/env.slang)
+ # Phase 5.5 批次 4：天空盒（全屏大三角 mesh + clip→world 射线采 env cubemap frag）
+ compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/skybox.mesh.slang SKYBOX_MESH_SPV
+     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/sky.slang ${CMAKE_CURRENT_SOURCE_DIR}/shaders/scene.slang)
+ compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/skybox.frag.slang SKYBOX_FRAG_SPV
+     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/sky.slang ${CMAKE_CURRENT_SOURCE_DIR}/shaders/scene.slang
+     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/env.slang)
  message(STATUS "MESH_SPV is: ${MESH_SPV}")
  message(STATUS "FRAG_SPV is: ${FRAG_SPV}")
  message(STATUS "MODEL_MESH_SPV is: ${MODEL_MESH_SPV}")
  message(STATUS "MODEL_FRAG_SPV is: ${MODEL_FRAG_SPV}")
  message(STATUS "MODEL_PBR_FRAG_SPV is: ${MODEL_PBR_FRAG_SPV}")
  message(STATUS "MODEL_PHONG_FRAG_SPV is: ${MODEL_PHONG_FRAG_SPV}")
+ message(STATUS "MODEL_PBR_IBL_FRAG_SPV is: ${MODEL_PBR_IBL_FRAG_SPV}")
 
 # tinygltf_impl.cpp：tinygltf C++ API 实现 TU（v3 非 header-only，见该文件头注释）。
 # 单 TU 编译 8756 行实现，-O2 下 clang 又慢又吃内存（24 并发时打爆 swap）；
 # 模型加载是启动期一次性路径、非热路径，-O0 编译省内存省时间。
 set_source_files_properties(tinygltf_impl.cpp PROPERTIES COMPILE_OPTIONS "-O0")
-add_executable(vulkan_practice main.cpp vam_impl.cpp tinygltf_impl.cpp stb_impl.cpp ${MESH_SPV} ${FRAG_SPV} ${MODEL_MESH_SPV} ${MODEL_FRAG_SPV} ${MODEL_PBR_FRAG_SPV} ${MODEL_PHONG_FRAG_SPV})
+add_executable(vulkan_practice main.cpp vam_impl.cpp tinygltf_impl.cpp stb_impl.cpp ${MESH_SPV} ${FRAG_SPV} ${MODEL_MESH_SPV} ${MODEL_FRAG_SPV} ${MODEL_PBR_FRAG_SPV} ${MODEL_PHONG_FRAG_SPV} ${MODEL_PBR_IBL_FRAG_SPV} ${SKYBOX_MESH_SPV} ${SKYBOX_FRAG_SPV})
 
 # ─── Runtime config copy (configs/ → build dir) ──────────────────────────────
 # 程序运行时按相对路径读取 configs/*.json，build 目录必须完整。
@@ -269,6 +280,29 @@ foreach(MODEL_GLB_SRC ${MODEL_GLB_SOURCES})
     )
 endforeach()
 add_custom_target(copy_models ALL DEPENDS ${MODEL_GLB_OUTPUTS})
+
+# ─── Skybox 素材拷贝 (assets/<dir>/*.png → build skybox/<dir>/, Phase 5.5) ──────
+# 6 面 cubemap 素材（nightSky/rainbow，面顺序定案见 docs/phase5_5_plan.md），运行时按
+# 相对路径 skybox/<dir>/ 读取。新增素材目录需在此加 dir 名 + just config（GLOB 于
+# configure 时求值）。
+set(SKYBOX_DIRS nightSky rainbow)
+set(SKYBOX_OUTPUTS)
+foreach(dir ${SKYBOX_DIRS})
+    file(GLOB SKYBOX_DIR_FILES "${PROJECT_SOURCE_DIR}/assets/${dir}/*")
+    file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/skybox/${dir})
+    foreach(f ${SKYBOX_DIR_FILES})
+        get_filename_component(fname ${f} NAME)
+        list(APPEND SKYBOX_OUTPUTS ${CMAKE_CURRENT_BINARY_DIR}/skybox/${dir}/${fname})
+        add_custom_command(
+            OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/skybox/${dir}/${fname}
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different ${f} ${CMAKE_CURRENT_BINARY_DIR}/skybox/${dir}/
+            DEPENDS ${f}
+            COMMENT "Copying skybox asset (${dir}/${fname}) to build directory..."
+            VERBATIM
+        )
+    endforeach()
+endforeach()
+add_custom_target(copy_skybox ALL DEPENDS ${SKYBOX_OUTPUTS})
 
 target_sources(vulkan_practice PUBLIC
                FILE_SET CXX_MODULES

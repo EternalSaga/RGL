@@ -32,6 +32,19 @@ export struct PipelineSpec {
 	std::string fragSpv; // fragment shader SPV 相对路径
 };
 
+// 环境贴图（Phase 5.5：scene.lua environment 段，可选缺省 = 不启用）。faces 按
+// **Vulkan 层序** 0-5 = (+X,−X,+Y,−Y,+Z,−Z) 排列（素材面顺序定案表 =
+// docs/phase5_5_plan.md 素材定案；nightSky 层序 1,3,5,6,2,4 / rainbow 方案 B
+// ft,bk,up,dn,rt,lf），完整路径 = dir + "/" + faces[i]。intensity 进 scene data
+// @48（env.slang readEnvParams）；skybox = 背景天穹开关（批次 4 消费）。
+export struct EnvironmentConfig {
+	bool enabled = false;
+	std::string dir;
+	std::array<std::string, 6> faces;
+	float intensity = 1.0f;
+	bool skybox = true;
+};
+
 // 场景配置：加载哪个模型 + 用哪些 pipeline + 是否场景旋转。
 // 沿用 Phase 1 确立的 configs/*.lua 模式（sol2 沙箱 + 字段可选回落默认值）。
 export struct SceneConfig {
@@ -41,6 +54,7 @@ export struct SceneConfig {
 	bool spin = true;                      // 场景整体时间旋转（便于肉眼判断渲染对错）
 	bool showCube = true;                  // 是否渲染硬编码 cube（Phase 1 遗留；模型在场时通常关掉）
 	Light light;                           // Phase 5 批次 2：定向光（scene.lua light 段，可选回落默认）
+	EnvironmentConfig environment;         // Phase 5.5：环境贴图（scene.lua environment 段，可选缺省）
 };
 
 // 默认配置：cube + model + model_pbr + model_phong 四条 pipeline（SPV 路径与构建产物对应），
@@ -53,6 +67,8 @@ export SceneConfig defaultSceneConfig() {
 		{"model", "generated_shaders/model.mesh.spv", "generated_shaders/model.frag.spv"},
 		{"model_pbr", "generated_shaders/model.mesh.spv", "generated_shaders/model_pbr.frag.spv"},
 		{"model_phong", "generated_shaders/model.mesh.spv", "generated_shaders/model_phong.frag.spv"},
+		{"model_pbr_ibl", "generated_shaders/model.mesh.spv", "generated_shaders/model_pbr_ibl.frag.spv"},
+		{"skybox", "generated_shaders/skybox.mesh.spv", "generated_shaders/skybox.frag.spv"},
 	};
 	cfg.styleMap = {{"unlit", "model"}, {"pbr", "model_pbr"}};
 	cfg.spin = true;
@@ -140,6 +156,30 @@ export [[nodiscard]] std::expected<SceneConfig, Error> loadSceneConfig(std::stri
 			if (intensity)
 				cfg.light.intensity = *intensity;
 			cfg.light.ambient = readVec3(light, "ambient", cfg.light.ambient);
+		}
+
+		// Phase 5.5：environment 段（环境 cubemap，缺段 = 不启用；faces 按 Vulkan 层序
+		// 0-5 排列，见 EnvironmentConfig 注释）
+		sol::table envTable = root["environment"];
+		if (envTable.valid() && envTable.is<sol::table>()) {
+			cfg.environment.enabled = true;
+			sol::optional<std::string> dir = envTable["dir"];
+			if (dir)
+				cfg.environment.dir = *dir;
+			sol::table faces = envTable["faces"];
+			if (faces.valid() && faces.is<sol::table>()) {
+				for (int i = 1; i <= 6; ++i) {
+					sol::optional<std::string> face = faces[i];
+					if (face)
+						cfg.environment.faces[i - 1] = *face;
+				}
+			}
+			sol::optional<float> intensity = envTable["intensity"];
+			if (intensity)
+				cfg.environment.intensity = *intensity;
+			sol::optional<bool> skybox = envTable["skybox"];
+			if (skybox)
+				cfg.environment.skybox = *skybox;
 		}
 
 		// Phase 4 批次 3：styles 表（风格名→管线规格名，可选回落默认 {unlit,pbr}）

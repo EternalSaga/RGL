@@ -3,6 +3,7 @@ module;
 #include <SDL3/SDL_events.h>
 #include <entt/entt.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/matrix_inverse.hpp>  // glm::inverse（Phase 5.5 批次 4 skyboxInvViewProj）
 #include <cstdint>
 #include <ranges>  // std::ranges::stable_sort（libstdc++ namespace alias，无法经模块 re-export）
 
@@ -208,6 +209,9 @@ struct RenderListState {
 	// 进 shader 索引本表（世界空间光照）。帧局部存储（FrameDrawList.sceneData 持 span，
 	// 录制期拷贝进 staging，生命周期规则同 args）
 	std::vector<glm::mat4> matrices;
+	// Phase 5.5 批次 4：天空盒 draw 的 push data（shader 不声明 push constants，
+	// 推默认零值 DrawArgs 占位——pushDataEXT 与 shader 声明无关，见 DrawCall 契约）
+	RGL::DrawArgs skyboxArgs{};
 };
 
 // ViewProjection + 场景实体 + 场景旋转 → FrameDrawList context（单一 draw 路径）。
@@ -235,6 +239,7 @@ void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListS
 	const auto& spin = rg.ctx().get<SceneSpin>();
 	const auto& camera = rg.ctx().get<Camera>();
 	const auto& light = rg.ctx().get<Light>();
+	const auto& env = rg.ctx().get<SceneEnv>();  // Phase 5.5（天空盒 draw 生成 + env 参数）
 	const auto& assets = resources.getAssetTable();
 
 	struct Pending {
@@ -278,6 +283,15 @@ void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListS
 	FrameDrawList fresh;
 	for (const auto& p : opaque)
 		fresh.calls.push_back(p.call);
+	// Phase 5.5 批次 4 天空盒段：opaque 之后、透明之前（天空恒最远背景，透明在其上混合）；
+	// 单 draw groupCount=1（大三角单 group）。enabled 但条目未建 = 契约漂移（main 保证同批回填）
+	fresh.skyboxStart = static_cast<uint32_t>(fresh.calls.size());
+	if (env.skybox) {
+		if (env.skyboxPipeline == 0xFFFFFFFF)
+			throw std::runtime_error("SceneEnv.skybox enabled but skybox pipeline not bound (main contract)");
+		fresh.calls.push_back(RGL::DrawCall{env.skyboxPipeline,
+			std::as_bytes(std::span<const RGL::DrawArgs>{&state.skyboxArgs, 1}), 1});
+	}
 	fresh.transparentStart = static_cast<uint32_t>(fresh.calls.size());
 	// 稳定排序：同距离保持实体迭代序（确定性输出，截图可复现）
 	std::ranges::stable_sort(transparent,
@@ -292,6 +306,10 @@ void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListS
 		camera.position,
 		light.color * light.intensity,
 		light.ambient};
+	// Phase 5.5 env 参数（scene data 头 @48）+ 天空盒 clip→world 矩阵（@64，
+	// inverse(proj·view) 每帧一次——glm 列主序，shader 端列组合读）
+	fresh.sceneData.envParams = {env.intensity, env.mipRange};
+	fresh.sceneData.skyInvViewProj = glm::inverse(viewProj.proj * viewProj.view);
 	fresh.sceneData.objectMatrices = std::span<const glm::mat4>{state.matrices};
 
 	list = std::move(fresh);

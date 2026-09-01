@@ -5,7 +5,9 @@
 // 字节布局契约的单一真相源 = vkresources.cppm（LightDataGpu / kSceneData* 常量），
 // 本文件字面量必须一致（kTrianglesPerGroup 先例，无反射端对应）：
 //   @0   direction vec3 | @12 eyePos vec3 | @24 color vec3（CPU 预乘 intensity）| @36 ambient vec3
-//   @64  对象矩阵表：mat4 列主序 × 1024，[objectIndex] = spin·world（DrawArgs.objectIndex 索引）
+//   @48  env 参数（Phase 5.5，env.slang readEnvParams 消费）| @64 skyboxInvViewProj
+//        mat4 列主序（Phase 5.5 批次 4，sky.slang skyClipToWorld 消费）
+//   @128 对象矩阵表：mat4 列主序 × 1024，[objectIndex] = spin·world（DrawArgs.objectIndex 索引）
 //
 // 世界空间光照：本文件负责 object→world 变换（位置/法线各一次矩阵读，仅光照风格消费；
 // unlit 风格不 import 本文件）。法线变换取 mat3 直接乘（假定均匀缩放——glTF 节点
@@ -40,7 +42,7 @@ struct ObjectMatrix
 
 ObjectMatrix readObjectMatrix(uint objectIndex)
 {
-    uint base = 64u + objectIndex * 64u;
+    uint base = 128u + objectIndex * 64u;
     ObjectMatrix m;
     m.c0 = asfloat(sceneData.Load4(base));
     m.c1 = asfloat(sceneData.Load4(base + 16u));

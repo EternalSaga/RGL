@@ -111,6 +111,24 @@ export void applyDynamicState(vk::raii::CommandBuffer& cmd, uint32_t width, uint
 	cmd.setLogicOpEnableEXT(state.logicOp);
 }
 
+// binding mapping 烘焙参数（Phase 5.5 聚合：env 追加后构造参数膨胀到 13 个，改 struct
+// 数据驱动表达 cube/model/IBL 形态）。heap 槽 = 绝对 slot（resource heap），sampler 走
+// **字节偏移**（sampler heap，OpTypeSampler 映射的 spec 正确字段 heapOffset，见
+// RenderPipeline 内注释）——换算（slot × descriptorSize）在调用点（ShaderRegistry）做。
+export struct PipelineBindings {
+	uint32_t descriptorSize = 0;   // resource heap 步长（max(buffer, image) 运行时查询）
+	uint32_t slotVertex = 0;       // binding 0：顶点 storage buffer 槽
+	uint32_t slotIndex = 0;        // binding 1（非 textured 形态）：索引槽
+	uint32_t slotTexture = 0;      // binding 1（textured 形态）：SAMPLED_IMAGE 槽
+	uint32_t samplerHeapOffset = 0;  // binding 2（textured）：sampler heap 字节偏移
+	uint32_t slotSceneData = 0;    // binding 3（hasSceneData）：scene data storage 槽
+	uint32_t slotEnv = 0;          // binding 4（hasEnv）：env cubemap SAMPLED_IMAGE 槽
+	uint32_t envSamplerHeapOffset = 0;  // binding 5（hasEnv）：sky sampler heap 字节偏移
+	bool textured = false;
+	bool hasSceneData = false;
+	bool hasEnv = false;
+};
+
 // RenderPipeline：纯 shader object 包装（mesh + frag 两个 VkShaderEXT + 烘焙的
 // descriptor heap binding mapping）。动态状态不再内聚于此——见 RenderState / applyDynamicState。
 export class RenderPipeline {
@@ -118,7 +136,7 @@ export class RenderPipeline {
 	vk::raii::ShaderEXT fragShader = nullptr;
 
     public:
-	// slotTexture/samplerHeapOffset/textured 缺省 = cube 形态（2 条目：binding 0/1）。
+	// bindings.textured 缺省 = cube 形态（2 条目：binding 0/1）。
 	// textured=true = 模型形态（3 条目，Phase 3）：binding 1 → SAMPLED_IMAGE 描述符槽
 	//（resource heap，slotTexture），binding 2 → sampler heap 槽（OpTypeSampler 映射，
 	// heapOffset 字节偏移——独立 sampler 的 spec 正确字段，见下方注释；
@@ -129,60 +147,51 @@ export class RenderPipeline {
 	// hasSceneData=true（Phase 5 批次 2，模型形态）追加 binding 3 → scene data storage
 	// buffer 槽（光照 + 对象矩阵表，Resources::ensureSceneData；模型 mesh/unlit frag 不
 	// 声明 binding 3 = 映射空转无副作用，同 mesh 阶段不声明 binding 1/2 的既证行为）。
+	// hasEnv=true（Phase 5.5）追加 binding 4/5 → env cubemap 槽 + sky sampler 偏移
+	//（仅 import env.slang 的风格消费——pbr/phong/unlit 不声明 = 映射空转，同上既证行为）。
 	RenderPipeline(vk::raii::Device& device, const ShaderEffect& effect,
-		uint32_t descriptorSize, uint32_t slotVertex, uint32_t slotIndex,
-		uint32_t slotTexture = 0, uint32_t samplerHeapOffset = 0, bool textured = false,
-		uint32_t slotSceneData = 0, bool hasSceneData = false) {
-		VkDescriptorSetAndBindingMappingEXT mappings[4]{};
-		const uint32_t mappingCount = (textured ? 3 : 2) + (hasSceneData ? 1 : 0);
+		const PipelineBindings& bindings) {
+		const uint32_t descriptorSize = bindings.descriptorSize;
+		VkDescriptorSetAndBindingMappingEXT mappings[6]{};
+		// 顺序填充（Phase 5.5 批次 4 修正：原固定下标 [0/1/2/3/4/5] 假设 textured=true——
+		// 天空盒首个 textured=false+hasSceneData+hasEnv 组合下 mappings[2] 留空却计入
+		// count → VVL "sType must be..." + envSampler 被挤出 count → "no mapping for
+		// binding 5"。改 running index 按实际启用的 binding 连续填，firstBinding 显式携带）
+		uint32_t n = 0;
+		const auto add = [&](uint32_t firstBinding, vk::DeviceSize heapOffset,
+			vk::DeviceSize arrayStride) {
+			auto& m = mappings[n++];
+			m.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
+			m.descriptorSet = 0;
+			m.firstBinding = firstBinding;
+			m.bindingCount = 1;
+			m.resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
+			m.source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
+			m.sourceData.constantOffset.heapOffset = heapOffset;
+			m.sourceData.constantOffset.heapArrayStride = arrayStride;
+		};
 
-		mappings[0].sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
-		mappings[0].descriptorSet = 0;
-		mappings[0].firstBinding = 0;
-		mappings[0].bindingCount = 1;
-		mappings[0].resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
-		mappings[0].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
-		mappings[0].sourceData.constantOffset.heapOffset = slotVertex * descriptorSize;
-		mappings[0].sourceData.constantOffset.heapArrayStride = descriptorSize;
-
-		mappings[1].sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
-		mappings[1].descriptorSet = 0;
-		mappings[1].firstBinding = 1;
-		mappings[1].bindingCount = 1;
-		mappings[1].resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
-		mappings[1].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
+		add(0, bindings.slotVertex * descriptorSize, descriptorSize);
 		// binding 1：非纹理形态 = 索引 slot；纹理形态 = SAMPLED_IMAGE 描述符槽（resource heap）
-		mappings[1].sourceData.constantOffset.heapOffset =
-			textured ? slotTexture * descriptorSize : slotIndex * descriptorSize;
-		mappings[1].sourceData.constantOffset.heapArrayStride = descriptorSize;
-
-		if (textured) {
+		add(1, (bindings.textured ? bindings.slotTexture : bindings.slotIndex) * descriptorSize,
+			descriptorSize);
+		if (bindings.textured) {
 			// OpTypeSampler 映射：sampler heap 槽（字节偏移，共享一份 sampler 描述符）。
 			// spec（descriptorheaps.adoc :1664-1665 + VUID 11253）：独立 OpTypeSampler 的
 			// sampler heap 偏移写 heapOffset（"mapped resource or sampler"）；samplerHeapOffset
 			// 字段仅组合 image sampler 用（:1671-1674）——2026-08-27 交叉测试定位的字段误用
 			//（spike 首版同款，docs/heap_texture_research.md §九.2 根因 2）
-			mappings[2].sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
-			mappings[2].descriptorSet = 0;
-			mappings[2].firstBinding = 2;
-			mappings[2].bindingCount = 1;
-			mappings[2].resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
-			mappings[2].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
-			mappings[2].sourceData.constantOffset.heapOffset = samplerHeapOffset;
-			mappings[2].sourceData.constantOffset.heapArrayStride = 0;
+			add(2, bindings.samplerHeapOffset, 0);
 		}
-
-		if (hasSceneData) {
-			// binding 3 → scene data storage buffer（Phase 5 批次 2，resource heap 槽）
-			mappings[3].sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
-			mappings[3].descriptorSet = 0;
-			mappings[3].firstBinding = 3;
-			mappings[3].bindingCount = 1;
-			mappings[3].resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
-			mappings[3].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
-			mappings[3].sourceData.constantOffset.heapOffset = slotSceneData * descriptorSize;
-			mappings[3].sourceData.constantOffset.heapArrayStride = descriptorSize;
+		if (bindings.hasSceneData)
+			add(3, bindings.slotSceneData * descriptorSize, descriptorSize);
+		if (bindings.hasEnv) {
+			// Phase 5.5：binding 4 → env cubemap（resource heap SAMPLED_IMAGE 槽）；
+			// binding 5 → sky sampler（sampler heap 字节偏移，OpTypeSampler 映射规则同 binding 2）
+			add(4, bindings.slotEnv * descriptorSize, descriptorSize);
+			add(5, bindings.envSamplerHeapOffset, 0);
 		}
+		const uint32_t mappingCount = n;
 
 		VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{};
 		mappingInfo.sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT;

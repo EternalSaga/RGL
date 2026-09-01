@@ -63,16 +63,25 @@ export struct DrawCall {
 // 同 DrawCall.pushData 生命周期规则）。
 export struct SceneFrameData {
 	LightDataGpu light;
+	// Phase 5.5 env 参数（scene data 头 @48/@52，原 16B 保留区启用；shader 端
+	// env.slang readEnvParams 字面量一致）：x=envIntensity y=envMipRange（=L−1，0 = 无环境）
+	glm::vec2 envParams{0.0f};
+	// Phase 5.5 批次 4：天空盒 clip→world 矩阵（scene data @64，sky.slang skyClipToWorld；
+	// = inverse(proj·view)，renderListSystem 每帧从 ViewProjection 推导）
+	glm::mat4 skyInvViewProj{1.0f};
 	std::span<const glm::mat4> objectMatrices;
 };
 
 // 每帧绘制列表：顺序 = 绘制顺序（Phase 5 透明排序已落地：不透明段在前、透明段按
 // 相机距离 back-to-front 排；Phase 7 culling 输出的落点）。
-// transparentStart 分段：opaque = [0, transparentStart)，transparent = [transparentStart, size)
-// ——drawFrame 在段首各 applyDynamicState 一次（不透明写深度关混合 / 透明关深度写开混合），
-// 段内逐 draw 循环不变（盲执行契约保持）。
+// Phase 5.5 批次 4 三段：opaque = [0, skyboxStart)，skybox = [skyboxStart,
+// transparentStart)，transparent = [transparentStart, size)——两个边界字段与段序
+// **与 Phase 6 RenderGraph pass 序列同构**（机械翻译：每段 = 一个 Pass，边界 = 依赖边）。
+// drawFrame 段首各 applyDynamicState 一次（不透明写深度关混合 / 天空盒 LEQUAL 不写深度 /
+// 透明关深度写开混合），段内逐 draw 循环不变（盲执行契约保持）。
 export struct FrameDrawList {
 	std::vector<DrawCall> calls;
+	uint32_t skyboxStart = 0;       // 无天空盒 = 与 transparentStart 重合（空段跳过）
 	uint32_t transparentStart = 0;
 	SceneFrameData sceneData;
 };
@@ -107,6 +116,10 @@ export class Renderer {
 		transparentState.depthWrite = false;
 		transparentState.colorBlend = true;
 		transparentState.cullMode = vk::CullModeFlagBits::eBack;
+		// 天空盒段状态（Phase 5.5 批次 4）：大三角 z=1（far 平面）+ LEQUAL + 不写深度——
+		// 只在未被几何占据的像素（深度 = clear 1.0）通过测试画天空；绕序不剔（cull None）
+		skyboxState.depthWrite = false;
+		skyboxState.depthCompareOp = vk::CompareOp::eLessOrEqual;
 		createSyncObjects();
 		allocateCommandBuffers();
 		createSceneStaging(vkResources);
@@ -123,6 +136,7 @@ export class Renderer {
 	const RGL::PipelineEntry& pipelineEntryAt(uint32_t index) const { return registry.entry(index); }
 	const RGL::RenderState& getOpaqueState() const { return opaqueState; }
 	const RGL::RenderState& getTransparentState() const { return transparentState; }
+	const RGL::RenderState& getSkyboxState() const { return skyboxState; }
 	// 等待 GPU 空闲（resize / 重建 swapchain 前调用，确保旧资源不再被使用）
 	void waitForIdle() { vkDevice.getDevice().waitIdle(); }
 	// 渲染一帧：整体流程见类头注释；绘制内容 = 渲染 system 产出的 FrameDrawList
@@ -304,6 +318,9 @@ export class Renderer {
 	// 动态状态：transparent pass（Phase 5 透明排序）——不写深度 + 开混合（factors 在
 	// applyDynamicState 内接线），drawFrame() 在 transparent 段首 applyDynamicState 一次
 	RGL::RenderState transparentState{};
+	// 动态状态：skybox pass（Phase 5.5 批次 4）——不写深度 + LEQUAL（大三角 z=1 只在
+	// 空像素通过），drawFrame() 在 skybox 段首 applyDynamicState 一次
+	RGL::RenderState skyboxState{};
 	// descriptor heap 的 GPU 地址（VmaDescriptorHeap 管理的"描述符槽位数组"，
 	// 对齐细节见 VmaBuffer.cppm）
 	vk::DeviceAddress heapAddress = 0;
@@ -399,6 +416,10 @@ export class Renderer {
 	{
 		auto* stage = static_cast<std::byte*>(sceneStaging[currentFrame].getMappedData());
 		std::memcpy(stage, &list.sceneData.light, sizeof(LightDataGpu));
+		// Phase 5.5：env 参数写 @48（light 48B 之后、64B 头内——与 objectMatrices 区无重叠）
+		std::memcpy(stage + kSceneDataEnvOffset, &list.sceneData.envParams, sizeof(glm::vec2));
+		// Phase 5.5 批次 4：skyboxInvViewProj 写 @64（sky.slang skyClipToWorld 消费）
+		std::memcpy(stage + kSceneDataSkyOffset, &list.sceneData.skyInvViewProj, sizeof(glm::mat4));
 		const auto matricesBytes = list.sceneData.objectMatrices.size() * sizeof(glm::mat4);
 		if (matricesBytes > kSceneDataBytes - kSceneDataHeaderBytes)
 			return std::unexpected(Error{ErrorCode::Unknown,
@@ -578,8 +599,15 @@ export class Renderer {
 	};
 	const auto extent = swapchain->getExtent();
 	RGL::applyDynamicState(commandBuffers[currentFrame], extent.width, extent.height, opaqueState);
-	for (uint32_t i = 0; i < list.transparentStart; ++i)
+	for (uint32_t i = 0; i < list.skyboxStart; ++i)
 		drawCall(list.calls[i]);
+	// Phase 5.5 批次 4 天空盒段（z=1 大三角 + LEQUAL 不写深度，空段自然跳过）
+	if (list.skyboxStart < list.transparentStart) {
+		RGL::applyDynamicState(commandBuffers[currentFrame], extent.width, extent.height,
+			skyboxState);
+		for (uint32_t i = list.skyboxStart; i < list.transparentStart; ++i)
+			drawCall(list.calls[i]);
+	}
 	if (list.transparentStart < list.calls.size()) {
 		RGL::applyDynamicState(commandBuffers[currentFrame], extent.width, extent.height,
 			transparentState);

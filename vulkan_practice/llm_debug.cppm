@@ -206,8 +206,8 @@ captureFrame(RGL::Renderer& renderer, const RGL::FrameDrawList& list, const LlmD
 	renderingInfo.setPDepthAttachment(&depthAttachment);
 	cmd.beginRendering(renderingInfo);
 
-	// ⑧ 绘制（同 drawFrame ⑨ 契约：opaque/transparent 两段各段首 applyDynamicState
-	// 一次——离屏 pass 与上屏 pass 状态同构，透明排序在截图路径同样生效）
+	// ⑧ 绘制（同 drawFrame ⑨ 契约：opaque/skybox/transparent 三段各段首 applyDynamicState
+	// 一次——离屏 pass 与上屏 pass 状态同构，天空盒/透明排序在截图路径同样生效）
 	auto drawCall = [&](const RGL::DrawCall& call) {
 		// 同主路径 drawCall 契约：push set 取条目字段（非硬编码 0），两路径不漂移
 		const auto& entry = renderer.pipelineEntryAt(call.pipeline);
@@ -217,8 +217,13 @@ captureFrame(RGL::Renderer& renderer, const RGL::FrameDrawList& list, const LlmD
 		cmd.drawMeshTasksEXT(call.groupCount, 1, 1);
 	};
 	RGL::applyDynamicState(cmd, w, h, renderer.getOpaqueState());
-	for (uint32_t i = 0; i < list.transparentStart; ++i)
+	for (uint32_t i = 0; i < list.skyboxStart; ++i)
 		drawCall(list.calls[i]);
+	if (list.skyboxStart < list.transparentStart) {
+		RGL::applyDynamicState(cmd, w, h, renderer.getSkyboxState());
+		for (uint32_t i = list.skyboxStart; i < list.transparentStart; ++i)
+			drawCall(list.calls[i]);
+	}
 	if (list.transparentStart < list.calls.size()) {
 		RGL::applyDynamicState(cmd, w, h, renderer.getTransparentState());
 		for (uint32_t i = list.transparentStart; i < static_cast<uint32_t>(list.calls.size()); ++i)

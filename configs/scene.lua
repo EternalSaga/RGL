@@ -29,13 +29,35 @@ return {
             mesh = "generated_shaders/model.mesh.spv",  -- Phase 5 批次 3：基础 Phong 路线，同 mesh
             frag = "generated_shaders/model_phong.frag.spv",
         },
+        {
+            name = "model_pbr_ibl",
+            mesh = "generated_shaders/model.mesh.spv",  -- Phase 5.5：PBR + IBL 环境光照，同 mesh
+            frag = "generated_shaders/model_pbr_ibl.frag.spv",
+        },
+        {
+            name = "skybox",
+            mesh = "generated_shaders/skybox.mesh.spv",  -- Phase 5.5 批次 4：全屏大三角采 env cubemap
+            frag = "generated_shaders/skybox.frag.spv",
+        },
     },
 
     -- Phase 4 批次 3：风格名→管线规格名映射（loader 输出 unlit 字段派生风格，缺失回落默认）
     -- Phase 5 批次 3：pbr 改 "model_phong" 即切基础 Phong 路线（两条光照并存）
+    -- Phase 5.5：pbr 改 "model_pbr_ibl" = IBL 环境光照路线（须配 environment，否则启动契约报错）
     styles = {
         unlit = "model",
-        pbr = "model_pbr",
+        pbr = "model_pbr_ibl",
+    },
+
+    -- Phase 5.5 环境 cubemap（缺段 = 不启用）。faces 按 Vulkan 层序 0-5 = (+X,−X,+Y,−Y,+Z,−Z)
+    -- 排列，素材面顺序定案表见 docs/phase5_5_plan.md（rainbow 方案 B：ft,bk,up,dn,rt,lf；
+    -- nightSky 层序 = 1,3,5,6,2,4）。intensity 进 scene data @48；skybox = 背景天穹（批次 4）。
+    environment = {
+        dir = "skybox/rainbow",
+        faces = { "rainbow_ft.png", "rainbow_bk.png", "rainbow_up.png",
+                  "rainbow_dn.png", "rainbow_rt.png", "rainbow_lf.png" },
+        intensity = 1.0,
+        skybox = true,
     },
 
     -- Phase 5 批次 2：定向光（全字段可选回落 scene.cppm Light 默认值；世界空间）

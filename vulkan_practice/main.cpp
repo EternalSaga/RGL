@@ -89,6 +89,7 @@ int main() {
 		registry.ctx().emplace<ViewProjection>();
 		registry.ctx().emplace<FrameDrawList>();
 		registry.ctx().emplace<Light>(sceneConfig.light);  // Phase 5 批次 2：定向光（scene.lua light 段）
+		registry.ctx().emplace<SceneEnv>();  // Phase 5.5：环境参数（env 上传成功后回填，见下）
 
 		AppContext vkInstance(window);
 		DeviceContext vkDevice(vkInstance);
@@ -113,6 +114,40 @@ int main() {
 		// 决定是否注册）。先于 Renderer 构造（Renderer 持引用）
 		ShaderRegistry shaderRegistry(vkDevice, vkResources, sceneConfig.pipelines);
 		Renderer vkRenderer(vkDevice, vkSwapchain, vkResources, shaderRegistry);
+
+		// Phase 5.5 契约：引用 model_pbr_ibl 风格必须配 environment——frag 声明的
+		// binding 4/5 无 mapping 烘焙 = 采样未写描述符（内容未定义；VVL 会抓
+		// "no mapping for envSampler"，但启动期明确报错优于运行时未定义）。
+		if (!sceneConfig.environment.enabled) {
+			bool iblUsed = false;
+			for (const auto& spec : sceneConfig.pipelines)
+				if (spec.name == "model_pbr_ibl" || spec.fragSpv.contains("model_pbr_ibl"))
+					iblUsed = true;
+			for (const auto& [style, specName] : sceneConfig.styleMap)
+				if (specName.contains("model_pbr_ibl"))
+					iblUsed = true;
+			if (iblUsed)
+				throw std::runtime_error(
+					"model_pbr_ibl style requires scene.lua 'environment' (env descriptor unmapped = undefined sampling)");
+		}
+		// Phase 5.5 环境 cubemap（scene.lua environment 段，faces 按 Vulkan 层序 0-5，
+		// 定案表 docs/phase5_5_plan.md）。**调用时序契约**：必须在模型顶点槽 + 纹理槽
+		// 全部按布局分配完之后（allocSlot 单调游标——插在之前会挤占白纹理契约槽
+		// "reserved + 2 + 模型顶点槽数"，断言漂移启动报错，2026-09-01 实测踩坑），
+		// 且先于 addModelEntry（其查 getEnvTexture 烘焙 binding 4/5）。
+		auto uploadEnvironment = [&] {
+			std::array<std::string, 6> paths;
+			for (uint32_t f = 0; f < 6; ++f)
+				paths[f] = fmt::format("{}/{}", sceneConfig.environment.dir,
+					sceneConfig.environment.faces[f]);
+			auto envResult = loadEnvCubeMapFiles(vkResources, vkDevice, paths, "scene.environment");
+			if (!envResult)
+				throw std::runtime_error(fmt::format("environment: {}", envResult.error().describe()));
+			const auto& envAsset = *vkResources.getEnvTexture();
+			auto& envCtx = registry.ctx().get<SceneEnv>();
+			envCtx.intensity = sceneConfig.environment.intensity;
+			envCtx.mipRange = static_cast<float>(envAsset.mipLevels - 1);
+		};
 
 		// CPU 解析 + GPU 上传 + 纹理 + ECS 注册：资产数据（buffer/slot/三角形数/管线条目引用、
 		// 纹理资产、材质资产）全部在 Resources 资产表（初始化层 owner，生命周期不依赖
@@ -141,6 +176,8 @@ int main() {
 				return -1;
 			}
 			primitiveTextureIds = std::move(*textureIdsResult);
+			if (sceneConfig.environment.enabled)
+				uploadEnvironment();  // 时序契约见定义处注释（纹理槽后、管线烘焙前）
 			auto& assets = vkResources.getAssetTable();
 			const uint32_t samplerSlot = vkResources.ensureSharedSampler();
 			for (size_t i = 0; i < assetIdsResult->size(); ++i) {
@@ -196,6 +233,16 @@ int main() {
 				throw std::runtime_error(fmt::format(
 					"assets ({}) exceed scene object matrix capacity ({})",
 					meshCount, kSceneMatrixCapacity));
+		} else if (sceneConfig.environment.enabled) {
+			uploadEnvironment();  // 无模型 + env（纯天空盒场景，Phase 5.5 批次 4）
+		}
+
+		// Phase 5.5 批次 4：天空盒管线条目（env 已上传才建——addSkyEntry 契约）+
+		// SceneEnv 回填（renderListSystem 经 ctx 生成 skybox draw，画不画 = 配置有无）
+		if (vkResources.getEnvTexture()) {
+			auto& envCtx = registry.ctx().get<SceneEnv>();
+			envCtx.skyboxPipeline = shaderRegistry.addSkyEntry();
+			envCtx.skybox = sceneConfig.environment.skybox;
 		}
 
 		// cube 一等资产（批次 3）：showCube 配置 → 注册 entity（画不画 = 实体有无）+

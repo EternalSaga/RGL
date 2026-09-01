@@ -68,6 +68,21 @@ export struct Light {
 	glm::vec3 ambient{0.03f, 0.03f, 0.035f};
 };
 
+// 环境贴图参数（registry context，Phase 5.5；main 启动期从 configs/scene.lua
+// environment 段 + env cubemap 上传结果 emplace，仿 Light）。renderListSystem 每帧
+// 写进 scene data 头 @48（SceneFrameData.envParams），env.slang readEnvParams 消费。
+// mipRange = cubemap mipLevels−1（上传期才知道，故 main 在 loadEnvCubeMapFiles 后填）；
+// 默认全 0 = 无环境（IBL 风格下环境项黑，direct light 不受影响）。
+export struct SceneEnv {
+	float intensity = 0.0f;
+	float mipRange = 0.0f;
+	// Phase 5.5 批次 4 天空盒：enabled = env 已上传且 scene.lua environment.skybox=true；
+	// pipeline = ShaderRegistry "skybox" 条目下标（main 启动期 addSkyEntry 后回填；
+	// 0xFFFFFFFF = 未建条目——renderListSystem 见 enabled 但 pipeline 无效 = 契约漂移）
+	bool skybox = false;
+	uint32_t skyboxPipeline = 0xFFFFFFFF;
+};
+
 // 场景整体时间旋转（registry context，main 启动期 emplace；animationSystem 每帧更新
 // angle/matrix）：speed=0 = 静止（configs/scene.lua 的 spin 开关）。
 // 现状承载"全场景同一旋转"（MVP = proj·view·matrix·world）；per-entity 旋转需求出现时
