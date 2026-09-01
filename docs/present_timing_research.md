@@ -201,3 +201,27 @@ VkPastPresentationTimingEXT {
 - 扩展附录（元数据/贡献者/版本历史）：同仓库 `appendices/VK_EXT_present_timing.adoc`
 - 注意：截至 2026-08，该扩展的 per-command 规范正文（VU 列表）尚未合入 Vulkan-Docs 仓库章节文件（仅在 `chapters/synchronization.adoc` 有 calibrated-timestamps 相关 ifdef 片段、`chapters/fundamentals.adoc` 有错误码描述），引用规范条文时以 registry + proposal 为准
 - 本地头文件：`/usr/include/vulkan/vulkan_core.h:17283-17410`（扩展块）、`:13458-13468`（`VkTimeDomainKHR`）、`:180`（`VK_ERROR_PRESENT_TIMING_QUEUE_FULL_EXT`）、`:8955`（swapchain flag）
+
+## 八、Wayland/KWin 下 eImmediate 与 GPU 占用实测（2026-09-01，Phase 5.5）
+
+**现象**：Phase 5.5 默认场景（cottage 392 primitive + IBL + skybox）在 **Intel Arc A310**
+（anv，Linux/Wayland/KWin）上运行时 GPU 占用 **100%**。
+
+**结论：正常，与"KWin 强制垂直同步"不矛盾**——KWin 的 vsync 只卡**显示侧**，不卡**渲染侧**：
+
+- Wayland 下 app 从不直接翻屏，只 commit buffer 给 compositor；KWin 每个 vblank 取最新
+  buffer 合成（显示帧率 = 刷新率，vsync 生效），旧 buffer 被替换后**立即 release**；
+- `selectPresentMode`（utils.cppm）优先选 `eImmediate`（mailbox）——anv 该模式下
+  **acquire 不等 frame callback**，只要 image 被 release 就能继续全速提交；
+- 于是渲染帧率无上限、KWin 丢弃多余帧：100% 占用 = GPU 在满速渲染将被丢弃的帧。
+  这正是第三节所述 "unlimited FPS 循环（ecs.cppm `while(true)` 无 pacing）" 的直接后果。
+
+**对照实验**（临时改 `selectPresentMode` 优先 `eFifo`，未提交）：占用 **100% → 72%**——
+eFifo 让驱动在 acquire 处阻塞等 vblank，渲染被压回刷新率；72% 而非更低 = 该场景对 A310
+（8 Xe core）本身不轻（392 mesh-shader draw + 11 张 4K 纹理 + IBL/skybox mipmap 采样 +
+每帧 scene data 拷贝）。
+
+**决策**：保持 `eImmediate` 现状（用户确认不加环境变量开关）。优化空间留档：
+① 帧率上限（CPU pacing）；② present mode 可配置化（第六节步骤 2 的前半）；
+③ `VK_EXT_present_timing` 的 `targetTime` 调度（需 FIFO 系，见 3.1）——与本文档
+"待真实帧 pacing 需求出现时引入"的决策衔接：**若未来做动画质量/延迟优化，本节即触发条件**。
