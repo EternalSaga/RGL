@@ -111,7 +111,7 @@ export [[nodiscard]] std::expected<std::vector<uint32_t>, Error> uploadModelMesh
 	// 一个 descriptor + 一个 heap slot（cottage 392 primitive 顶点 slot → 6 块）。分块的
 	// 动机是 **heap slot 收敛以服务业管线去重**（D5：条目 = 块数 × 纹理 slot），非规避
 	// cottage artifact——artifact 根因 2026-08-30 定位为 gltf_loader uv 越界读（与 range
-	// 尺寸/分块无关，见 phase4_plan.md 批次 2 定案注记）。每块仍被同块内 primitive 共享
+	// 尺寸/分块无关，见 docs/archive/phase4_plan.md 批次 2 定案注记）。每块仍被同块内 primitive 共享
 	// vertex slot。per-primitive：heapSlot = 所在块的 slot，vertexOffset = 块内字节偏移（进 push constant）。
 	constexpr vk::DeviceSize kVertexChunkBytes = 16ull * 1024 * 1024;  // 16MB 块
 

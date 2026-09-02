@@ -350,7 +350,7 @@ vk::AccessFlagBits2::eHostWrite             // 主机写入（写入描述符后
 | API | dst 类型 | data 类型 |
 |---|---|---|
 | `writeResourceDescriptorsEXT` | `ArrayProxy<vk::HostAddressRangeEXT>`（`std::vector`/`std::array`） | `vk::DeviceAddressRangeEXT`（buffer）/ `VkImageDescriptorInfoEXT`（image，v341） |
-| `writeSamplerDescriptorsEXT` | `ArrayProxy<vk::HostAddressRangeEXT>` | `VkSamplerCreateInfo`（旧 API；新路径用 `pEmbeddedSampler` 内嵌，见 heap_texture_research.md） |
+| `writeSamplerDescriptorsEXT` | `ArrayProxy<vk::HostAddressRangeEXT>` | `VkSamplerCreateInfo`（旧 API；新路径用 `pEmbeddedSampler` 内嵌，见 archive/heap_texture_research.md） |
 | `pushDataEXT` | `vk::PushDataInfoEXT` | `vk::HostAddressRangeConstEXT` |
 
 注意：

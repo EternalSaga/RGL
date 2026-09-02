@@ -139,13 +139,13 @@ namespace RGL::Shaders::Types {
 
 ## Phase 2：glTF 加载
 
-> **实施计划**：见 [phase2_plan.md](phase2_plan.md)（2026-08-23 规划评审，含已确认决策、
+> **实施计划**：见 [phase2_plan.md](archive/phase2_plan.md)（2026-08-23 规划评审，含已确认决策、
 > 事实核查、可执行分步、文件变更清单与风险）。
 >
 > **ECS 设计规范（参照系）**：本 Phase 起的场景代码必须符合五条 ECS 规范
 > （registry 唯一数据源 / 纯数据组件 / 数据驱动场景构成 / 分层 / 资产-实例分离）——
 > 摘要在 `AGENTS.md` 代码规范 §ECS 设计规范，合规状态与逐条处置记录权威记录在
-> [ecs_compliance_review.md](ecs_compliance_review.md) §ECS 设计规范。
+> [ecs_compliance_review.md](archive/ecs_compliance_review.md) §ECS 设计规范。
 
 ### 目标
 可以加载外部 3D 模型，替代硬编码的 cube（cube 与模型并存渲染）。
@@ -201,7 +201,7 @@ SPV 路径的模式撑不住。Phase 4 的 ShaderRegistry 是最终解法，但�
 ### 完成情况 (已完成 2026-08-23)
 
 > 执行细节与计划外发现（vcpkg baseline/哈希坑、tinygltf v3 非 header-only、
-> 标准布局 padding、构建内存）见 [phase2_plan.md §7](phase2_plan.md)。
+> 标准布局 padding、构建内存）见 [phase2_plan.md §7](archive/phase2_plan.md)。
 
 - [x] 前置两步完成（见上勾选项）：`shader.cppm` 的 `RenderState`/`applyDynamicState` 外移 + `vkrenderer.cppm` 管线表（`PipelineEntry`，per-primitive 条目 `model_i`，binding mapping 各自烘焙）
 - [x] **tinygltf 集成**（vcpkg，替换 legacy Assimp 思路）：`gltf_loader.cppm` CPU 解析——POSITION/NORMAL/TEXCOORD_0 严格校验 + byteStride 处理 + 去索引展开 + node translation 扁平化 + baseColorFactor/alphaMode，输出 `GltfModel`（含**包围球**）；`tinygltf_impl.cpp` 自组 impl TU（vcpkg port 只装头、实现在 `TINYGLTF_IMPLEMENTATION` 宏后，-O0）
@@ -223,12 +223,12 @@ SPV 路径的模式撑不住。Phase 4 的 ShaderRegistry 是最终解法，但�
 ## Phase 3：纹理管理
 
 > **状态（2026-08-28）：已完成**（内嵌纹理采样 + 材质资产 + per-primitive 管线烘焙，
-> 三驱动验证见 [heap_texture_research.md](heap_texture_research.md)；真实 4K 纹理模型
+> 三驱动验证见 [heap_texture_research.md](archive/heap_texture_research.md)；真实 4K 纹理模型
 > cottage 257MB/392 primitive/11 张 4096² 复验 PASS）。
 > 计划-实现偏离注记（实现为准，AGENTS.md 模块表为现状权威记录）：
 > - 纹理数据归属 `Resources::AssetTable`（`TextureAsset`/`MaterialAsset` 容器），
 >   **TexturePool 类未落地**——2026-08-28 重构批次 1 把 main 局部 TexturePool 对象
->   （GPUVM fault UAF 根因，heap_texture_research.md §12.6/§12.7）整体降为自由函数
+>   （GPUVM fault UAF 根因，archive/heap_texture_research.md §12.6/§12.7）整体降为自由函数
 >   （`loadEmbedded`/`ensureWhiteTexture`/`uploadModelTextures`），slot 分配统一走
 >   `Resources::allocSlot`（"TexturePool 容量动态扩展"决策作废——固定裕量 1024 槽，与场景内容解耦）
 > - 纹理采样走**独立 sampler heap**（非 pEmbeddedSampler）：spike 两路三驱动均 PASS，
@@ -243,7 +243,7 @@ SPV 路径的模式撑不住。Phase 4 的 ShaderRegistry 是最终解法，但�
 > **预研（历史）**：`heap_texture_spike/` 三驱动实测（2026-08-27：RADV/Intel/NVIDIA ×
 > 5 变体全 PASS）；**关键约束**：`imageDescriptorSize`（RADV 64 / NVIDIA 32 / Intel 64）>
 > `bufferDescriptorSize`（16/16/64），统一步长改 `max`（运行时查询，已落地）。
-> 完整记录见 [heap_texture_research.md](heap_texture_research.md)。
+> 完整记录见 [heap_texture_research.md](archive/heap_texture_research.md)。
 
 ### 目标
 支持纹理贴图，为 PBR 材质做准备。
@@ -267,7 +267,7 @@ SPV 路径的模式撑不住。Phase 4 的 ShaderRegistry 是最终解法，但�
 
 ## Phase 4：Shader 反射扩展 + 多 Shader 支持
 
-> **状态（2026-08-28 完成；2026-08-30 收尾）**：**已完成**（4 批次，详见 `docs/phase4_plan.md`）。前置债已清偿：
+> **状态（2026-08-28 完成；2026-08-30 收尾）**：**已完成**（4 批次，详见 `docs/archive/phase4_plan.md`）。前置债已清偿：
 > ① 管线表 per-primitive 条目去重（392→按 (规格, 顶点 slot, 纹理 slot) 组合 = 12 条）；
 > ② `renderListSystem` AssetKind 分支归一（统一 `DrawArgs` 超集，零 AssetKind 分支）。
 > ShaderRegistry 是两者的统一落点。**2026-08-30**：遗留的 cottage 偶发 artifact 已解（根因 = 两个自 Phase 2 就存在的共享代码越界 bug——`gltf_loader` uv 步长 + `model.mesh.slang` triangles 索引，由 Windows/NVIDIA 移植暴露，见文末偏离注记）。
@@ -305,7 +305,7 @@ SPV 路径的模式撑不住。Phase 4 的 ShaderRegistry 是最终解法，但�
   uv 步长错（`uv[idx*3]` 应为 `uv[idx*2]`，vec2 误按 vec3 读）→ 越界读采样为黑（741px artifact
   根因）+ Windows AV 崩溃；② `model.mesh.slang` triangles 索引用全局顶点索引
   （`(firstTriangle+ti)*3` 应为组内 `ti*3`）→ NVIDIA 几何崩形（RADV mod 回绕恰好掩盖）。详见
-  AGENTS.md 已知问题 + phase4_plan.md 批次 2 定案注记（含教训）
+  AGENTS.md 已知问题 + archive/phase4_plan.md 批次 2 定案注记（含教训）
 
 ### 设计决策
 - 每个 shader 风格有独立的 `schema.lua` 和生成模块（实际：material.slang 统一契约 +
@@ -319,7 +319,7 @@ SPV 路径的模式撑不住。Phase 4 的 ShaderRegistry 是最终解法，但�
 
 ## Phase 5：透明排序 + 简单光照
 
-> **状态（2026-08-31）：已完成**（4 批次，实施记录见 `docs/phase5_plan.md`）。
+> **状态（2026-08-31）：已完成**（4 批次，实施记录见 `docs/archive/phase5_plan.md`）。
 > 计划-实现偏离注记（实现为准）：
 > - **光照走 descriptor heap 而非 push constant**（原设计决策"push constant 传递轻量"被用户
 >   bindless 原则推翻）：DrawArgs 仅 +`objectIndex`(4B) 进 100B，光参数 + 对象矩阵表全进
@@ -351,7 +351,7 @@ SPV 路径的模式撑不住。Phase 4 的 ShaderRegistry 是最终解法，但�
   `model_phong.frag` 基础 Phong（新管线，scene.lua/CMake/回落表三处接线）。验证：cottage
   （392 全 pbr 风格）光照几何正确、两风格切换渲染差异实锤、transparent.glb BLEND×PBR 组合
 - [x] **批次 4 文档销账**：AGENTS.md（模块表 8 处 + shader 编译 bindless 原则 + 已知问题
-  Phase 5 近似四条）、next_roadmap 本节、phase5_plan.md 留档
+  Phase 5 近似四条）、next_roadmap 本节、archive/phase5_plan.md 留档
 
 ### 明确不做 / 留接缝
 Shadow、多灯、OIT/per-pixel 透明排序、MASK alphaTest；scene data 基建与 staging+copy 模式
@@ -362,7 +362,7 @@ Shadow、多灯、OIT/per-pixel 透明排序、MASK alphaTest；scene data 基�
 
 ## Phase 5.5：IBL（简化版）+ 天空盒
 
-> **状态（2026-09-01）：已完成**（4 批次，实施记录与素材面序定案见 `docs/phase5_5_plan.md`）。
+> **状态（2026-09-01）：已完成**（4 批次，实施记录与素材面序定案见 `docs/archive/phase5_5_plan.md`）。
 > 计划-实现偏离注记（实现为准）：
 > - **素材是直接 6 面 cubemap**（非 equirect）→ 批次 1 砍掉 equirect→cube CPU 转换，改
 >   `uploadCubeMap` 6 面直传（equirect 转换留作可选扩展）；linear staging 三坑（RADV 实测）
@@ -411,7 +411,7 @@ Shadow、多灯、OIT/per-pixel 透明排序、MASK alphaTest；scene data 基�
 
 ### 设计决策
 - 素材为直接 6 面 cubemap（equirect→cube CPU 转换砍掉，留作可选扩展）；面顺序以
-  phase5_5_plan.md 素材定案表为准（scene.lua 显式文件列表配置，方位歧义改配置零代码）
+  archive/phase5_5_plan.md 素材定案表为准（scene.lua 显式文件列表配置，方位歧义改配置零代码）
 - IBL 参数走 scene data 手工契约（延续 LightDataGpu 双源模式，Phase 7 多灯重设计时并入反射）
 - **无环境贴图**：模型管线不烘焙 binding 4/5（不建特例管线）；引用 model_pbr_ibl 风格但
   无 environment 段 = 启动契约报错（未映射描述符采样 = 未定义，明确拦截优于静默画面错）

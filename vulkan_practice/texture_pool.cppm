@@ -21,7 +21,7 @@ namespace RGL {
 // 本模块只管"解码/校验/调用序契约/去重"。
 //
 // 批次 1 重构（2026-08-28）：原 TexturePool 类持有资产 + 描述符存储（main 局部对象 = UAF
-// 根因：块尾析构第 0 帧前释放纹理 BO，docs/heap_texture_research.md §12.6）。现为无状态
+// 根因：块尾析构第 0 帧前释放纹理 BO，docs/archive/docs/archive/heap_texture_research.md §12.6）。现为无状态
 // 工具函数，注册产物（TextureAsset）落 Resources::AssetTable（初始化层 owner，所有权规则
 // §12.7 ① 在此首次落地）；共享 sampler 同步移入 Resources::ensureSharedSampler。
 
@@ -135,7 +135,7 @@ export [[nodiscard]] std::expected<std::vector<uint32_t>, Error> uploadModelText
 
 // 环境 cubemap 加载（Phase 5.5）：6 个图片文件路径（已按 Vulkan 层序 0-5 排列）→ stb 解码
 // RGBA8 + 校验（方形/2 的幂/六面同尺寸）→ uploadCubeMap。面文件顺序权威记录 =
-// docs/phase5_5_plan.md 素材定案表（nightSky: 1,3,5,6,2,4；rainbow 方案 B: ft,bk,up,dn,rt,lf）。
+// docs/archive/docs/archive/phase5_5_plan.md 素材定案表（nightSky: 1,3,5,6,2,4；rainbow 方案 B: ft,bk,up,dn,rt,lf）。
 export [[nodiscard]] std::expected<void, Error> loadEnvCubeMapFiles(RGL::Resources& resources,
 	RGL::DeviceContext& device, const std::array<std::string, 6>& paths, const char* name);
 

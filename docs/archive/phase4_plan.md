@@ -3,7 +3,7 @@
 > **状态**：已完成（2026-08-28 规划；2026-08-28 四批次完成 + 2026-08-30 收尾——
 > cottage 偶发 artifact 遗留全解，根因 = 两个自 Phase 2 就存在的共享代码越界 bug
 > （`gltf_loader` uv 步长错 + `model.mesh.slang` triangles 索引错，Windows/NVIDIA 移植
-> 暴露，见文末批次 2 定案注记 + 教训）。配套 [next_roadmap.md](next_roadmap.md) 的 Phase 4 小节。
+> 暴露，见文末批次 2 定案注记 + 教训）。配套 [next_roadmap.md](../next_roadmap.md) 的 Phase 4 小节。
 > 本文档为时点快照（历史归档），现状权威记录以 AGENTS.md 为准；行号可能已漂移，
 > 引用时只取设计思路与调研结论。
 >

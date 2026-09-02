@@ -115,7 +115,7 @@
 
 - **是什么**：`vkAllocateMemory` 期显式控制零初始化。feature `zeroInitializeDeviceMemory` + 分配标志 `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT`（经 `VkMemoryAllocateFlagsInfo`）+ 新 image layout `VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT`。
 - **解决什么**：Vulkan 默认不保证 `vkAllocateMemory` 清零，应用要确定性零值需 `vkCmdFillBuffer`/`vkCmdClearColorImage`（浪费，尤其平台本就会清零或能后台高效清零时）。`ZERO_INITIALIZED` layout 让"从已知全零内存转出"有快速路径（免 metadata clear、工具可读性更好）。
-- **与本项目关联**：本项目有 **UAF / 未初始化内存读** 的深刻历史（GPUVM TCP fault，heap_texture_research.md §11/§12.6；cottage artifact 越界读，Phase 4）。零初始化是**防御性正确性 + 调试**工具：分配即零值可把"读未初始化 = 随机垃圾"变成"读零"，让 UAF/越界 bug 的表现更可预测、更易定位。
+- **与本项目关联**：本项目有 **UAF / 未初始化内存读** 的深刻历史（GPUVM TCP fault，archive/heap_texture_research.md §11/§12.6；cottage artifact 越界读，Phase 4）。零初始化是**防御性正确性 + 调试**工具：分配即零值可把"读未初始化 = 随机垃圾"变成"读零"，让 UAF/越界 bug 的表现更可预测、更易定位。
 - **集成点定位**：`VmaBuffer.cppm`（VMA 分配路径，`vkAllocateMemory` 封装）+ `vkresources.cppm`（depth image / scene data buffer 创建）。VMA 需把 `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT` 透传到 `VkMemoryAllocateFlagsInfo`（VMA 2.x 有对应 flag/`VMA_ALLOCATE_ZERO_INITIALIZE` 支持需核实）。image 侧 `ZERO_INITIALIZED` layout 用于 depth/临时 image 初始化。
 - **工作量/风险**：低（feature 链尾追加 + VMA flag 透传 + 可选 layout 替换）。风险低——纯分配期语义，不改渲染路径；不支持驱动 = 分配不零值（行为同现状，干净降级）。
 - **驱动支持**：ratified；RADV/anv/NVIDIA 支持情况需 `vulkaninfo` 实测（本调研未跑程序）。
@@ -125,7 +125,7 @@
 
 - **是什么**：统一设备故障上报（取代 `VK_EXT_device_fault`）。`vkGetDeviceFaultReportsKHR`（**可任意时刻调用**、**支持 timeout 阻塞**、**可报未致 device-lost 的 masked fault**（`deviceFaultReportMasked` feature））。提供 fault 地址（GPU VA）解读 + vendor binary dump 分离。
 - **解决什么**：现有 `VK_EXT_device_fault` 要求 device 已 lost 才能查；**可恢复（masked）故障**（驱动隐藏、未上报 device-lost）无法诊断——这正是本项目 GPUVM fault 调试的盲区（fault 未 sticky 时应用无感）。
-- **与本项目关联**：本项目故障诊断史厚重（Aftermath 集成见 nvidia_compatibility_report.md；GPUVM TCP fault 排查见 heap_texture_research.md §11）。本扩展把"masked fault"纳入可观测范围，对**三驱动（尤其 RADV 核显 + NVIDIA offload）的偶发故障**提供统一、可阻塞、带 GPU VA 的诊断通道，是 `llm_debug`/调试基建的自然延伸。
+- **与本项目关联**：本项目故障诊断史厚重（Aftermath 集成见 nvidia_compatibility_report.md；GPUVM TCP fault 排查见 archive/heap_texture_research.md §11）。本扩展把"masked fault"纳入可观测范围，对**三驱动（尤其 RADV 核显 + NVIDIA offload）的偶发故障**提供统一、可阻塞、带 GPU VA 的诊断通道，是 `llm_debug`/调试基建的自然延伸。
 - **集成点定位**：新 `device_fault.cppm`（探测 + 轮询/阻塞 + ring 缓存 + rllogger 周期上报）；`vkdevice.cppm` feature 链尾追加（**类成员**，pNext 不悬空）；可选挂到 `llm_debug` 或独立诊断开关。
 - **工作量/风险**：中（新模块 + 探测链 + 阻塞线程或轮询点）。风险低——纯诊断旁路，不进渲染关键路径；不支持 = no-op。
 - **驱动支持**：ratified（2026-03 新，较年轻）；三家驱动实际 masked-fault 上报能力需实测，VVL 覆盖可能薄。
@@ -351,7 +351,7 @@
 | 设计文档（语义） | `/home/robin/program/Vulkan-Docs/proposals/*.adoc`（`VK_EXT_present_timing` / `VK_KHR_device_fault` / `VK_EXT_zero_initialize_device_memory` / `VK_EXT_custom_resolve` / `VK_KHR_unified_image_layouts` / `VK_KHR_copy_memory_indirect` / `VK_EXT_memory_decompression` / `VK_KHR_internally_synchronized_queues` / `VK_EXT_host_image_copy` / `VK_EXT_calibrated_timestamps` / `VK_EXT_device_generated_commands` / `VK_EXT_extended_dynamic_state3` / `VK_KHR_load_store_op_none`） |
 | 附录（版本史/元数据） | `/home/robin/program/Vulkan-Docs/appendices/*.adoc` |
 | 章节（部分扩展正文） | `/home/robin/program/Vulkan-Docs/chapters/`（`descriptorheaps.adoc` / `descriptorbuffers.adoc` / `synchronization.adoc` 等） |
-| 项目既有调研 | `docs/present_timing_research.md` · `docs/device_generated_commands_research.md` · `docs/heap_texture_research.md` · `docs/nvidia_compatibility_report.md` |
+| 项目既有调研 | `docs/present_timing_research.md` · `docs/device_generated_commands_research.md` · `docs/archive/heap_texture_research.md` · `docs/nvidia_compatibility_report.md` |
 
 > **注意**：spec clone（v1.4.360）比系统头/loader（v341）新，部分新扩展（尤其 2026 年的）系统头可能尚未包含——引入前以系统头 `/usr/include/vulkan` + `vulkaninfo` 实测为准。provisional 扩展（`AMD_gpa_interface`/`NV_present_metering` 等）API 可能变动，引入需锁版本。
 

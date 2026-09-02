@@ -15,7 +15,7 @@ import vk_resources;
 
 namespace RGL {
 
-// GPU 侧回读金丝雀：把"时好时坏"的 GPU 侧 UAF（ASan 结构性失明，heap_texture_research.md
+// GPU 侧回读金丝雀：把"时好时坏"的 GPU 侧 UAF（ASan 结构性失明，docs/archive/heap_texture_research.md
 // §12.7）变成"帧 N 必炸"。texelCanaryCheck = 白纹理已知值回读（重构批次 4 首落；
 // 2026-09-02 拆自 texture_pool——诊断逻辑与上传逻辑解耦，ecs 帧循环不再依赖整个
 // 纹理上传栈）。
@@ -106,7 +106,7 @@ export void texelCanaryCheck(RGL::Resources& resources, RGL::DeviceContext& devi
 	} else {
 		if (logger)
 			logger->error("texel canary (frame {}): 白纹理 texel (0,0) = {}/{}/{}/{} —— 纹理 BO 已死"
-				"（freed/VA 复用，heap_texture_research.md §12.6/§12.7 的 UAF 签名）",
+				"（freed/VA 复用，docs/archive/heap_texture_research.md §12.6/§12.7 的 UAF 签名）",
 				frame, px[0], px[1], px[2], px[3]);
 	}
 }

@@ -50,7 +50,7 @@ return {
     },
 
     -- Phase 5.5 环境 cubemap（缺段 = 不启用）。faces 按 Vulkan 层序 0-5 = (+X,−X,+Y,−Y,+Z,−Z)
-    -- 排列，素材面顺序定案表见 docs/phase5_5_plan.md（rainbow 方案 B：ft,bk,up,dn,rt,lf；
+    -- 排列，素材面顺序定案表见 docs/archive/phase5_5_plan.md（rainbow 方案 B：ft,bk,up,dn,rt,lf；
     -- nightSky 层序 = 1,3,5,6,2,4）。intensity 进 scene data @48；skybox = 背景天穹（批次 4）。
     environment = {
         dir = "skybox/rainbow",

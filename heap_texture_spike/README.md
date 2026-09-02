@@ -23,7 +23,7 @@ Phase 3（TexturePool + 模型纹理采样）前，验证 descriptor heap 管线
 
 **结论：descriptor heap 的 texture/sampler 语义分离（image 走 SAMPLED_IMAGE 描述符 + sampler 走 sampler heap/内嵌）三驱动完整实现。**
 Q1 跨驱动：`imageDescriptorSize`（RADV 64 / NVIDIA 32 / Intel 64）> `bufferDescriptorSize`（16/16/64）——统一步长须 `max(buffer, image)`（Intel 恰好 64=64）。
-完整记录（含误诊复盘：标量 `Texture2D<float>` 的 R 通道 splat、`samplerHeapOffset` 字段误用、reserved range 越界 bug）：[docs/heap_texture_research.md](../docs/heap_texture_research.md) §九。
+完整记录（含误诊复盘：标量 `Texture2D<float>` 的 R 通道 splat、`samplerHeapOffset` 字段误用、reserved range 越界 bug）：[docs/archive/heap_texture_research.md](../docs/archive/heap_texture_research.md) §九。
 
 ## 构建 / 运行
 

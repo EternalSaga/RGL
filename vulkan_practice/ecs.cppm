@@ -227,7 +227,7 @@ export std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer
 	RenderListState renderListState;
 	uint32_t llmFrame = 0;
 	uint32_t frame = 0;  // 每帧无条件计数（onFrame DIAG 回调用；llmFrame 仅在 llm 启用时递增）
-	// texel 回读金丝雀（heap_texture_research.md §12.7 ②）：RGL_TEXEL_CANARY=N（帧号，
+	// texel 回读金丝雀（docs/archive/heap_texture_research.md §12.7 ②）：RGL_TEXEL_CANARY=N（帧号，
 	// 默认关）——帧 N 的 drawFrame 前重读白纹理已知 texel 比对，纹理 BO 死 = 立即报错
 	//（GPU 侧 UAF 签名，ASan 全盲；诊断路径单次 GPU 停顿，正常路径零影响）
 	const uint64_t canaryFrame = [] {

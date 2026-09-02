@@ -1,7 +1,7 @@
 # slangc 由 Slang 官方预构建提供：FetchContent 下载（cmake/SlangFetch.cmake，
 # 根 CMakeLists 顶部已调用 rgl_fetch_slang() 设置 SLANGC_EXECUTABLE）。
 # 替代 vcpkg shader-slang port（port 停在 2026.7.1，上游 master 亦同——
-# docs/heap_texture_research.md §九.4；vcpkg.json 已移除该依赖）。
+# docs/archive/docs/archive/heap_texture_research.md §九.4；vcpkg.json 已移除该依赖）。
 if(NOT SLANGC_EXECUTABLE OR NOT EXISTS "${SLANGC_EXECUTABLE}")
     message(FATAL_ERROR "SLANGC_EXECUTABLE 不可用：根 CMakeLists.txt 须在 add_subdirectory(vulkan_practice) 前 include(cmake/SlangFetch.cmake) 并调用 rgl_fetch_slang()")
 endif()
@@ -290,7 +290,7 @@ endforeach()
 add_custom_target(copy_models ALL DEPENDS ${MODEL_GLB_OUTPUTS})
 
 # ─── Skybox 素材拷贝 (assets/<dir>/*.png → build skybox/<dir>/, Phase 5.5) ──────
-# 6 面 cubemap 素材（nightSky/rainbow，面顺序定案见 docs/phase5_5_plan.md），运行时按
+# 6 面 cubemap 素材（nightSky/rainbow，面顺序定案见 docs/archive/docs/archive/phase5_5_plan.md），运行时按
 # 相对路径 skybox/<dir>/ 读取。新增素材目录需在此加 dir 名 + just config（GLOB 于
 # configure 时求值）。
 set(SKYBOX_DIRS nightSky rainbow)

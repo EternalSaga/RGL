@@ -1,8 +1,8 @@
 # Phase 2 实施计划：glTF 加载
 
-> **状态**：历史（Phase 2 已于 2026-08-23 完成，执行情况与计划外发现见 [next_roadmap.md](next_roadmap.md) Phase 2 完成情况。本文仅作实施过程留档，行号引用已漂移。）
+> **状态**：历史（Phase 2 已于 2026-08-23 完成，执行情况与计划外发现见 [next_roadmap.md](../next_roadmap.md) Phase 2 完成情况。本文仅作实施过程留档，行号引用已漂移。）
 
-> 配套 [next_roadmap.md](next_roadmap.md) 的 Phase 2 小节。本文是**可执行粒度**的实施计划，
+> 配套 [next_roadmap.md](../next_roadmap.md) 的 Phase 2 小节。本文是**可执行粒度**的实施计划，
 > 含 2026-08-23 规划评审确认的决策与事实核查结论。
 
 ---

@@ -148,8 +148,8 @@ export class RenderPipeline {
 	// heapOffset 字节偏移——独立 sampler 的 spec 正确字段，见下方注释；
 	// vkCmdBindSamplerHeapEXT 每帧绑定）。
 	// 注意：sampler 走独立 sampler heap 而非 pEmbeddedSampler——2026-08-27 spike
-	// 交叉测试两者三驱动均 PASS（docs/heap_texture_research.md §九），此处维持独立
-	// sampler heap（docs/phase3_plan.md R1 回退链的既选路径，已验证可用）。
+	// 交叉测试两者三驱动均 PASS（docs/archive/docs/archive/heap_texture_research.md §九），此处维持独立
+	// sampler heap（docs/archive/docs/archive/phase3_plan.md R1 回退链的既选路径，已验证可用）。
 	// hasSceneData=true（Phase 5 批次 2，模型形态）追加 binding 3 → scene data storage
 	// buffer 槽（光照 + 对象矩阵表，Resources::ensureSceneData；模型 mesh/unlit frag 不
 	// 声明 binding 3 = 映射空转无副作用，同 mesh 阶段不声明 binding 1/2 的既证行为）。
@@ -186,7 +186,7 @@ export class RenderPipeline {
 			// spec（descriptorheaps.adoc :1664-1665 + VUID 11253）：独立 OpTypeSampler 的
 			// sampler heap 偏移写 heapOffset（"mapped resource or sampler"）；samplerHeapOffset
 			// 字段仅组合 image sampler 用（:1671-1674）——2026-08-27 交叉测试定位的字段误用
-			//（spike 首版同款，docs/heap_texture_research.md §九.2 根因 2）
+			//（spike 首版同款，docs/archive/docs/archive/heap_texture_research.md §九.2 根因 2）
 			add(2, bindings.samplerHeapOffset, 0);
 		}
 		if (bindings.hasSceneData)

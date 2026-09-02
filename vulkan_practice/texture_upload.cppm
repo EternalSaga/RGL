@@ -69,7 +69,7 @@ export [[nodiscard]] std::expected<uint32_t, Error> uploadTexture(RGL::Resources
 	imageAlloc.usage = VMA_MEMORY_USAGE_GPU_ONLY;
 	// DIAG（Phase 3 4K 黑屏排查 2026-08-27）：强制独占 VkDeviceMemory（不走 VMA 池子
 	// 子分配），对齐 spike 的独占分配；4K 黑屏仍复现 → VMA 子分配非根因
-	//（最终定性 = TexturePool 生命周期 UAF，见 docs/heap_texture_research.md §12.6）
+	//（最终定性 = TexturePool 生命周期 UAF，见 docs/archive/docs/archive/heap_texture_research.md §12.6）
 	imageAlloc.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
 	VmaAllocationInfo imageAllocData{};
 	auto imageResult = allocator.createImage(imageInfo, imageAlloc, &imageAllocData);
@@ -258,7 +258,7 @@ export [[nodiscard]] std::expected<uint32_t, Error> uploadTexture(RGL::Resources
 
 	// 资产记录（GPU 数据 + 描述符指针链）入资产表：记录在 deque（元素地址稳定），
 	// 自/兄弟引用在入表后设置有效。跨驱动防御：本机 RADV 写时即解析
-	//（docs/heap_texture_research.md §12.2，A/B 实验证伪"采样期解引用"旧归因），
+	//（docs/archive/docs/archive/heap_texture_research.md §12.2，A/B 实验证伪"采样期解引用"旧归因），
 	// 但 spec 无调用后指针生命周期条款，指针稳定性 = 对其他驱动的正确性前提
 	TextureAsset asset{std::move(image), viewCreate, std::move(view), slot, w, h};
 	auto& stored = resources.getAssetTable().emplaceTexture(std::move(asset));

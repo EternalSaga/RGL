@@ -256,7 +256,7 @@ export class Renderer {
 	// DIAG（可见窗 GPUVM fault 规避 2026-08-28）：RGL_OFFSCREEN=1 → 场景渲到离屏
 	// 8-bit UNORM 目标（纹理采样路径与 llm_debug 离屏同构——隐藏窗离屏路径实测无
 	// fault），再 blit 到后缓冲上屏；规避可见后缓冲（compositor 在读）关联的
-	// 纹理 high VA 采样 fault（现象/排查过程见 docs/heap_texture_research.md §十一）。
+	// 纹理 high VA 采样 fault（现象/排查过程见 docs/archive/docs/archive/heap_texture_research.md §十一）。
 	// 默认关 = 原路径零变化。
 	bool offscreen = false;
 	// edS3：depth clip enable 动态状态能力门（vkCmdSetDepthClipEnableEXT；启动期一次探测，
@@ -488,7 +488,7 @@ export class Renderer {
 	// access bit）——只设 eResourceHeapReadEXT 时 sampler 描述符的 host write 未同步到
 	// GPU，sampler 描述符读到未初始化内存 → 采样恒 garbage（7e1abce 内修复，当时注释
 	// "Phase 3 黑屏根因"；2026-08-28 G 实验：当前启动期 fence/waitIdle 已掩盖该缺位
-	// 的影响，spec 层面仍必须保留，见 docs/heap_texture_research.md §12）
+	// 的影响，spec 层面仍必须保留，见 docs/archive/docs/archive/heap_texture_research.md §12）
 	// eTransferRead：⑥.5 的 vkCmdCopyBuffer 在 eTransfer 阶段读 host-mapped staging
 	// buffer（scene data 源），本 eHost→eAllGraphics barrier 是该读之前唯一的
 	// host write → device read 排序点，dstAccess 须覆盖具体读（VVL sync validation）

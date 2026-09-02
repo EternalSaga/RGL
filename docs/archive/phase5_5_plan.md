@@ -1,6 +1,8 @@
 # Phase 5.5 实施计划与记录：IBL（简化版）+ 天空盒
 
-> **状态**：现行（2026-09-01 开工；实施记录与决策权威，行号以当时代码为准）
+> **状态**：历史（已归档至 `docs/archive/`，2026-09-02；Phase 5.5 于 2026-09-01 完成。
+> 实施记录与决策留档（含 nightSky/rainbow 面序定案表、linear staging 三坑），行号已漂移；
+> 现状权威记录以 [AGENTS.md](../AGENTS.md) + [next_roadmap.md](../next_roadmap.md) Phase 5.5 小节为准）
 
 ## 范围决策（开工前用户确认）
 

@@ -7,7 +7,7 @@
 > 见 next_roadmap.md Phase 3 偏离注记；真实 4K 纹理模型 cottage 复验 PASS）。
 > 历史状态（2026-08-27 时点）：M1/M2 已完成；M3 受阻（当时定性"RADV 只认组合"已被 §九 推翻）
 >
-> 配套 [next_roadmap.md](next_roadmap.md) 的 Phase 3 小节。可执行粒度实施计划，
+> 配套 [next_roadmap.md](../next_roadmap.md) 的 Phase 3 小节。可执行粒度实施计划，
 > 含已确认决策、事实核查、分步执行、文件变更清单与风险。
 
 ---

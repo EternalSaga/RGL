@@ -24,7 +24,7 @@ return {
     },
 
     -- 顶点契约：schema 声明是 source of truth（slangc 不反射顶点 buffer 结构体，
-    -- 见 docs/phase2_plan.md Step 0c）。顶点数组是平铺字节流，shader 按这些
+    -- 见 docs/archive/phase2_plan.md Step 0c）。顶点数组是平铺字节流，shader 按这些
     -- 偏移用 ByteAddressBuffer 逐字段读取（见 model.mesh.slang 的注释）。
     vertexLayouts = {
         {

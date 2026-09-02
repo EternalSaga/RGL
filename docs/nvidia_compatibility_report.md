@@ -256,7 +256,7 @@ Aftermath 的自动 checkpoint 在每个 Vulkan 命令后插入 CPU 调用栈。
 
 **当前开发机（2026-08-27 起）**：Strix Halo 纯核显单卡机器（无独显），运行依赖 RADV + `RADV_EXPERIMENTAL=heap`（`VK_EXT_descriptor_heap` 扩展在该 ICD 下需此实验开关）。
 
-**边界说明**：主工程通过的是 buffer 描述符路径（vertex/index BDA）；descriptor heap 的 **image 描述符 + 内嵌 sampler** 路径（Phase 3 纹理）spike 仅在 RADV 侧实测过（`heap_texture_spike/`，见 `docs/heap_texture_research.md`），NVIDIA 侧待有 dGPU 环境时补测。
+**边界说明**：主工程通过的是 buffer 描述符路径（vertex/index BDA）；descriptor heap 的 **image 描述符 + 内嵌 sampler** 路径（Phase 3 纹理）spike 仅在 RADV 侧实测过（`heap_texture_spike/`，见 `docs/archive/heap_texture_research.md`），NVIDIA 侧待有 dGPU 环境时补测。
 
 ---
 
