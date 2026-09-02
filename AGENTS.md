@@ -20,6 +20,7 @@ just config gcc Debug    # 指定编译器和构建类型
 just build               # 增量编译（需先 config）
 just build-release       # 一键配置 + 编译 Release
 just build-debug         # 一键配置 + 编译 Debug
+just reflect             # 重跑 4 条反射管线（改动 shader 契约/schema/模板后必须；见"着色器编译"）
 just run                 # 运行程序（自动检测：AMD VGA 存在时设置 RADV_EXPERIMENTAL=heap）
 just run-igpu            # 强制核显（AMD 集显原生渲染，无 offload）
 just run-dgpu            # 强制独显（NVIDIA prime offload，PROVIDER=3）
@@ -41,7 +42,7 @@ $env:PATH = "C:\Program Files\Git\usr\bin;$env:PATH"
 just config              # CMake 配置（默认 clang++, Release）
 just config Debug        # Debug 构建
 just config msvc         # 使用 Visual Studio generator（替代 Ninja）
-just build / just build-release / just run / just clean / just clean-all
+just build / just build-release / just reflect / just run / just clean / just clean-all
 ```
 
 Windows 构建 = LLVM 22 clang++ + Ninja（默认）或 VS generator；vcpkg triplet `x64-windows-static`
@@ -89,12 +90,33 @@ CMake 无独立构建目录 — 必须从根目录构建（`cmake -B build -S .`
 
 ### 优先使用 rlstd 代替 #include STL
 **所有 `.cppm` 模块必须 `import rlstd;` 获取 STL 类型，而非在 GMF 中 `#include` STL 头文件。**
-- GMF 中只保留第三方库头文件（Vulkan、SDL、glm、fmt 等）
+- GMF 中只保留第三方库头文件（SDL、glm、fmt、sol2 等；**Vulkan C++ 头一律走 `import rlvk;`**，
+  仅用 `VK_*` 宏/C 函数的文件可额外 `#include <vulkan/vulkan.h>`——core 量级 ~0.4s）
 - **例外：** `<ranges>`（`std::views::` 是 libstdc++ namespace alias，无法 re-export）、`<filesystem>`、
   `<chrono>` 需保留 GMF `#include`
-- 新加 STL include 时，先检查是否应补入 `rlstd.cppm` 而非直接加到 GMF
-- **GMF 要收敛**：GMF 头解析 + BMI 序列化是模块编译耗时大头（-ftime-trace 实测，codegen 仅
-  8~11%）——未用的第三方 include 一律删（2026-09-02 编译提速教训，见 CMakeLists 策略注记）
+- 新加 STL include 时，先检查是否应补入 `rlstd.cppm` 而非直接加到 GMF。
+  **rlstd 是全部 STL 名的唯一来源，且必须导出"完整可用面"**：除类型名外还包括
+  namespace 作用域自由运算符/函数（`operator==` 等重载集、`begin/end/size/swap`、
+  `make_shared`、`getenv`、`ifstream/ios` 等）与 `__gnu_cxx::operator==/<=>`
+  （libstdc++ 容器迭代器比较在 `__gnu_cxx`，C++20 重写机制使 `!=` 自动可用）——
+  BMI 只序列化被声明引用的类本体、**不带自由运算符**，缺名时症状是
+  "invalid operands to binary expression"（2026-09-02 GMF 掏空后的批量补课，勿再回退）
+- **GMF 要收敛**：GMF 头解析 + BMI 序列化（WriteAST）是模块编译耗时大头（-ftime-trace
+  实测，codegen 仅 8~11%）——未用的第三方 include 一律删（2026-09-02 编译提速教训）
+
+### 接口瘦身：大函数体放 partition implementation unit
+重模块（函数体 >100 行）不把实现写进主接口 `.cppm`，拆 `xxx_impl.cppm`
+（`module xxx:impl;`，CMake 与接口同登记 FILE_SET）：**接口 = 声明 + 轻量类型 + 文档
+注释，实现 = 叶子单元**。收益：接口 BMI 不含函数体（importer 全部受益）、实现单元
+与其他工作并行不上关键路径。已应用：llm_debug / vkrenderer / model_importer /
+texture_upload / camera_config / scene_config / render_list / gpu_canary / ecs /
+vkresources / shader_registry（函数语义注释留接口声明处）。规则与坑：
+- **实现单元必须显式 `import xxx;`**——clang 不给 partition implementation unit
+  做隐式主接口 import（标准 [cpp.import.module] 的隐式 import GCC 有、clang 无）
+- 默认实参只写接口声明，实现定义去掉；类方法改类外定义（`static`/`[[nodiscard]]`
+  只留声明侧）
+- 导出实体在实现单元定义时**不得带 `export`**（声明已在接口）
+- 新模块沿用同形态；小函数/模板/constexpr 留接口内联无妨
 
 ### 函数式 Ranges
 优先 C++23 `std::ranges`：`std::views::filter/transform` 视图适配器、`std::ranges::for_each`
@@ -124,6 +146,7 @@ CMake 无独立构建目录 — 必须从根目录构建（`cmake -B build -S .`
 `tools/` 下构建工具统一 C++20 modules：`schema_loader`（Schema 结构体 + Lua schema 加载）、
 `validator`（reflection JSON ↔ schema 一致性校验）、`generator`（inja 模板生成 `.cppm`，
 `renderTemplate()` 支持任意 JSON + 模板渲染）。`reflection_tool` 经 `import rllogger;` 统一日志。
+tools 为 `EXCLUDE_FROM_ALL`（编译提速）：日常构建不碰工具链，`just reflect` 才编译。
 
 ## 模块结构（C++20 modules, .cppm）
 
@@ -168,10 +191,11 @@ Phase 演进历史见 `docs/next_roadmap.md` 对应小节。
 | `llm_debug` | llm_debug.cppm | 一次性截图执行：`captureFrame()` 离屏重渲（8-bit UNORM + D32Sfloat，复用管线表/动态状态/draw list）+ 独立命令缓冲/fence + VMA 回读 + stb PNG（绝对路径打日志）。`llm_debug` 纯开关（true/false）+ `llm_shot` 常驻 `{file,size,delay_frames}`（全可选回落默认）；兼容 `llm_debug=table` 旧格式 |
 | `VmaRaii` | VmaBuffer.cppm | VmaBuffer/VmaImage/VmaDescriptorHeap/VmaAllocatorRAII 封装；Buffer/Image 经 `SharedAllocator`（`shared_ptr<AllocatorControlBlock>`）共享 allocator 所有权 |
 | `rlstd` | rlstd/rlstd.cppm | C++ 标准库模块封装（libstdc++ 不支持 `import std`：GMF `#include` 全部 STL 头 + `export` 常用名）。STL 名以本模块 `using` 为唯一来源；`std::views::`/`<filesystem>`/`<chrono>` 走 GMF 例外 |
-| `types_generated` | generated/types_generated.cppm | auto-generated（反射管线 1）：`HeapSlotVertexOffset`/`HeapSlotIndexOffset`（相对 reserved range 起点偏移，运行时 slot = `reservedSlots() + offset`） |
-| `model_types_generated` | generated/model_types_generated.cppm | auto-generated（反射管线 2：`model.slang`+`model_schema.lua`）：`ModelVertex`、`HeapSlotModelVertexBase`、契约常量 `kTrianglesPerGroup`（schema `constants` 段，shader 端字面量必须一致） |
-| `material_types_generated` | generated/material_types_generated.cppm | auto-generated（反射管线 3：`material.slang`+`material_schema.lua`）：统一 push constant 超集 `DrawArgs`（scalar 布局 100B：mvp/totalTriangles/vertexOffset/baseColor/roughnessMetallic/objectIndex，所有风格共享，static_assert 钉死） |
-| `features_generated` | generated/features_generated.cppm | auto-generated（`reflection_tool render` + `features_config.json`）：`FeatureChain`、`buildRequestedFeatures()`、`validateFeatures()` |
+| `rlvk` | rlvk.cppm | Vulkan C++ 头具名模块封装（rlstd 同构）：GMF include `vulkan.hpp`+`vulkan_raii.hpp` 全量编译仅此一次，导出全库实际用词（~120 vk:: + 14 raii + Flags 位运算符）；消费方 `import rlvk`（BMI load ~18ms vs 文本解析 3.1s/TU）。**新用某 vk:: 名报 "not visible" → 到 rlvk.cppm 补一行 `export using`（保持字典序）**；VK_* 宏/C 函数不随模块导出，需要者保留 `#include <vulkan/vulkan.h>` |
+| `types_generated` | generated/types_generated.cppm | auto-generated（just reflect 生成、产物已提交；反射管线 1）：`HeapSlotVertexOffset`/`HeapSlotIndexOffset`（相对 reserved range 起点偏移，运行时 slot = `reservedSlots() + offset`） |
+| `model_types_generated` | generated/model_types_generated.cppm | auto-generated（just reflect 生成、产物已提交；反射管线 2：`model.slang`+`model_schema.lua`）：`ModelVertex`、`HeapSlotModelVertexBase`、契约常量 `kTrianglesPerGroup`（schema `constants` 段，shader 端字面量必须一致） |
+| `material_types_generated` | generated/material_types_generated.cppm | auto-generated（just reflect 生成、产物已提交；反射管线 3：`material.slang`+`material_schema.lua`）：统一 push constant 超集 `DrawArgs`（scalar 布局 100B：mvp/totalTriangles/vertexOffset/baseColor/roughnessMetallic/objectIndex，所有风格共享，static_assert 钉死） |
+| `features_generated` | generated/features_generated.cppm | auto-generated（just reflect 生成、产物已提交；`reflection_tool render` + `features_config.json`）：`FeatureChain`、`buildRequestedFeatures()`、`validateFeatures()` |
 
 `main.cpp` 启动流：加载 camera/scene 配置（**先于建窗**：llm/headless 模式影响窗口）→ 栈上
 `entt::registry`（持有全部每帧 context）→ 按序构造 5 个初始化层类（Renderer 收管线规格 span，
@@ -207,6 +231,12 @@ main.cpp 按逆序析构（RAII）。依赖图原则：只允许下层 import �
 `vulkan_practice/shaders/` 下的 Slang → SPV 输出到 `build/vulkan_practice/generated_shaders/`
 （CMake `compile_slang()` 构建时编译；运行时从 `generated_shaders/` 相对路径读取）。
 
+- **反射管线显式触发（2026-09-02 编译提速）**：`*_reflection.json` 与
+  `vulkan_practice/generated/*.cppm` + `reflection_manifest.txt` 为**已提交产物**
+  （.gitignore 已放行），只在改动契约后 `just reflect` 重生成并随改动提交；
+  每次构建开头 `reflection_check` 比对输入 SHA1（`cmake/ReflectionManifest.cmake`），
+  忘跑 reflect = 构建 FATAL 指路（产物过期静默错配比构建慢危险）。
+  工具链 `EXCLUDE_FROM_ALL`，日常/全新构建不再付 ~14s 串行前缀
 - Profile: `sm_6_6+spirv_1_6`，capability: `spvDescriptorHeapEXT`
 - **Scalar Block Layout（定案）**：所有 slangc 编译（3 条反射管线 + `compile_slang` 实际 SPV）
   统一 `-fvk-use-scalar-layout`——push constant 用 scalar（C 自然）布局，C++ struct（glm 自然
