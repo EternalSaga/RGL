@@ -33,7 +33,7 @@ export struct SchemaDescSlot {
 
 // 顶点属性：name + 类型 + 字节偏移。
 // 顶点契约的 source of truth 是 schema 声明（slangc 不反射顶点 buffer 结构体，
-// 见 docs/archive/docs/archive/phase2_plan.md Step 0c）：顶点数组是平铺字节流，shader 按 schema 偏移
+// 见 docs/archive/phase2_plan.md Step 0c）：顶点数组是平铺字节流，shader 按 schema 偏移
 // 用 ByteAddressBuffer 逐字段读取，不依赖任何 Slang struct 的内存布局。
 export struct SchemaVertexAttr {
 	std::string name;

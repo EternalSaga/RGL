@@ -57,14 +57,14 @@ export struct MeshAsset {
 
 // 纹理资产（Phase 3 → 批次 1 迁入资产表）：GPU image + view + heap 描述符槽 + 描述符指针链。
 // 原 owner = main 局部 TexturePool 对象（UAF 根因：块尾析构第 0 帧前释放纹理 BO，
-// docs/archive/docs/archive/heap_texture_research.md §12.6）；现活在 AssetTable（Resources 成员），VmaImage
+// docs/archive/heap_texture_research.md §12.6）；现活在 AssetTable（Resources 成员），VmaImage
 // 包装体随 Resources 存活——所有权规则（§12.7 ①）在此首次落地。
 // viewCreate 必须保留：v341 的 VkImageDescriptorInfoEXT::pView 要 image view 的
-// create info（值拷贝），不是句柄（docs/archive/docs/archive/heap_texture_research.md §二 条款表）。
+// create info（值拷贝），不是句柄（docs/archive/heap_texture_research.md §二 条款表）。
 // 描述符指针链（imageDesc/resourceDesc/dst）折进记录本体：记录活在 std::deque
 //（push_back 元素地址稳定），自/兄弟引用在入表后设置——跨驱动防御稳定存储的单一介质
 //（替代原 TexturePool 的 4 个 deque；本机 RADV 写时即解析，spec 允许驱动延迟解释，
-// 见 docs/archive/docs/archive/heap_texture_research.md §12.2）。
+// 见 docs/archive/heap_texture_research.md §12.2）。
 export struct TextureAsset {
 	VmaImage image;
 	vk::ImageViewCreateInfo viewCreate{};  // hpp create info（值保留）：v341 VkImageDescriptorInfoEXT::pView 要它

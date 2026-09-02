@@ -144,7 +144,7 @@ export class Resources {
 	// 全模型管线映射指向同一槽。幂等（首次调用写入，之后返回既有槽号）；调用点 = 创建
 	// textured 管线前（main 启动期）。
 	// sampler create info 存成员（稳定存储）：本机 RADV 写时即解析
-	//（docs/archive/docs/archive/heap_texture_research.md §12.2，"采样期解引用"旧归因已证伪），
+	//（docs/archive/heap_texture_research.md §12.2，"采样期解引用"旧归因已证伪），
 	// 但 spec 允许驱动延迟解释，生命周期须覆盖运行期
 	[[nodiscard]] uint32_t ensureSharedSampler() {
 		if (sharedSamplerReady)
@@ -345,7 +345,7 @@ export class Resources {
 
 		auto& heapProps = props.get<vk::PhysicalDeviceDescriptorHeapPropertiesEXT>();
 		// Phase 3 统一步长：image 描述符（SAMPLED_IMAGE）比 buffer 描述符宽
-		//（RADV 32B > 16B，docs/archive/docs/archive/heap_texture_research.md Q1），slot 步长取 max（运行时查询，勿硬编码）
+		//（RADV 32B > 16B，docs/archive/heap_texture_research.md Q1），slot 步长取 max（运行时查询，勿硬编码）
 		uint32_t bufferSize = static_cast<uint32_t>(heapProps.bufferDescriptorSize);
 		uint32_t imageSize = static_cast<uint32_t>(heapProps.imageDescriptorSize);
 		uint32_t descriptorSize = std::max(bufferSize, imageSize);
@@ -368,7 +368,7 @@ export class Resources {
 	// sampler heap（Phase 3）：OpTypeSampler 的独立 heap（vkCmdBindSamplerHeapEXT 每帧绑定）。
 	// 背景：pEmbeddedSampler 对 Slang 的 OpTypeImage+OpTypeSampler 分离对未获 RADV 采纳
 	//（spec 声称同等适用，实测采样恒 0；spike 只验证了 GLSL 组合 sampler2D=OpTypeSampledImage），
-	// 回退链（docs/archive/docs/archive/phase3_plan.md R1）= 真 sampler heap。容量 = reserved + 固定小裕量
+	// 回退链（docs/archive/phase3_plan.md R1）= 真 sampler heap。容量 = reserved + 固定小裕量
 	//（共享一份 sampler 描述符，全模型管线映射指向同一槽）。
 	std::expected<RGL::VmaDescriptorHeap, Error> createSamplerHeap() {
 		auto props = vkDevice.getPhysicalDevice().getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDescriptorHeapPropertiesEXT>();

@@ -1,7 +1,7 @@
 # slangc 由 Slang 官方预构建提供：FetchContent 下载（cmake/SlangFetch.cmake，
 # 根 CMakeLists 顶部已调用 rgl_fetch_slang() 设置 SLANGC_EXECUTABLE）。
 # 替代 vcpkg shader-slang port（port 停在 2026.7.1，上游 master 亦同——
-# docs/archive/docs/archive/heap_texture_research.md §九.4；vcpkg.json 已移除该依赖）。
+# docs/archive/heap_texture_research.md §九.4；vcpkg.json 已移除该依赖）。
 if(NOT SLANGC_EXECUTABLE OR NOT EXISTS "${SLANGC_EXECUTABLE}")
     message(FATAL_ERROR "SLANGC_EXECUTABLE 不可用：根 CMakeLists.txt 须在 add_subdirectory(vulkan_practice) 前 include(cmake/SlangFetch.cmake) 并调用 rgl_fetch_slang()")
 endif()
@@ -235,17 +235,9 @@ compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.mesh.slang MODEL_MESH_SP
  message(STATUS "MODEL_PBR_IBL_FRAG_SPV is: ${MODEL_PBR_IBL_FRAG_SPV}")
 
 # tinygltf_impl.cpp：tinygltf C++ API 实现 TU（v3 非 header-only，见该文件头注释）。
-# 单 TU 编译 8756 行实现，-O2 下 clang 又慢又吃内存（24 并发时打爆 swap）；
-# 模型加载是启动期一次性路径、非热路径，-O0 编译省内存省时间。
-set_source_files_properties(tinygltf_impl.cpp PROPERTIES COMPILE_OPTIONS "-O0")
+# 曾用 -O0（-O2 下编译吃内存，24 并发时打爆 swap）；2026-09-02 用户调整内存/显存
+# 分配至 32GB 后回归目标级 -O2（启动路径代码质量优先，编译峰值内存已非瓶颈）。
 
-# 优化等级策略（2026-09-02 讨论定案）：全部项目模块保持 -O2——启动期一次性路径
-# 也不降优化（-ftime-trace 实测 codegen 仅占 8~11%，降 -O1 省的时间可忽略，
-# 不值得拿运行时性能换）。编译提速走三条路：① GMF 收敛（vkerror 去 vulkan.hpp
-# 改 vulkan_core.h：3.9s→0.6s，全链复利）② 依赖图解耦（拆模块断假边，
-# 见 gpu_canary/camera_config/frame_draw_list/asset_table/render_list/texture_upload
-# 各模块头注释）③ 未用 include 清理（SDL/fmt 等）。tinygltf 第三方大 TU 保持 -O0
-# （8756 行实现，-O2 下又慢又吃内存，非项目代码）。
 add_executable(vulkan_practice main.cpp vam_impl.cpp tinygltf_impl.cpp stb_impl.cpp ${MESH_SPV} ${FRAG_SPV} ${MODEL_MESH_SPV} ${MODEL_FRAG_SPV} ${MODEL_PBR_FRAG_SPV} ${MODEL_PHONG_FRAG_SPV} ${MODEL_PBR_IBL_FRAG_SPV} ${SKYBOX_MESH_SPV} ${SKYBOX_FRAG_SPV})
 
 # ─── Runtime config copy (configs/ → build dir) ──────────────────────────────
@@ -290,7 +282,7 @@ endforeach()
 add_custom_target(copy_models ALL DEPENDS ${MODEL_GLB_OUTPUTS})
 
 # ─── Skybox 素材拷贝 (assets/<dir>/*.png → build skybox/<dir>/, Phase 5.5) ──────
-# 6 面 cubemap 素材（nightSky/rainbow，面顺序定案见 docs/archive/docs/archive/phase5_5_plan.md），运行时按
+# 6 面 cubemap 素材（nightSky/rainbow，面顺序定案见 docs/archive/phase5_5_plan.md），运行时按
 # 相对路径 skybox/<dir>/ 读取。新增素材目录需在此加 dir 名 + just config（GLOB 于
 # configure 时求值）。
 set(SKYBOX_DIRS nightSky rainbow)
