@@ -13,6 +13,7 @@ import vkerror;
 import VmaRaii;
 import vk_device;
 import vk_resources;
+import asset_table;
 import scene;
 import gltf_loader;
 import model_types_generated;

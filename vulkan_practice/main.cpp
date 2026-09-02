@@ -8,8 +8,10 @@ import vk_instance;
 import vk_device;
 import vk_swapchain;
 import vk_resources;
+import asset_table;
 import shader_registry;
 import vk_renderer;
+import frame_draw_list;
 import scene_config;
 import gltf_loader;
 import model_importer;
@@ -17,6 +19,7 @@ import texture_pool;
 import scene;
 import material_types_generated;  // DrawArgs（push constant 尺寸契约检查）
 import camera;
+import camera_config;
 import llm_debug;
 import ecs;
 import rllogger;

@@ -307,10 +307,12 @@ add_custom_target(copy_skybox ALL DEPENDS ${SKYBOX_OUTPUTS})
 target_sources(vulkan_practice PUBLIC
                FILE_SET CXX_MODULES
                 FILES vkerror.cppm utils.cppm sdl3window.cppm QueueFamilyManager.cppm cube.cppm
-                      camera.cppm scene_config.cppm
+                      camera.cppm camera_config.cppm scene_config.cppm
                        shader.cppm shader_registry.cppm VmaBuffer.cppm features.cppm vkinstance.cppm vkdevice.cppm
-                       vkswapchain.cppm vkresources.cppm vkrenderer.cppm ecs.cppm
+                       vkswapchain.cppm vkresources.cppm vkrenderer.cppm ecs.cppm frame_draw_list.cppm
+                       asset_table.cppm render_list.cppm
                       gltf_loader.cppm model_importer.cppm texture_pool.cppm scene.cppm llm_debug.cppm
+                      gpu_canary.cppm
                        ${TYPES_CPPM}
                        ${MODEL_CPPM}
                        ${MATERIAL_CPPM}

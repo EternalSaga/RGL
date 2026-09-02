@@ -13,6 +13,7 @@ import vkerror;
 import vk_device;
 import vk_resources;
 import vk_renderer;
+import frame_draw_list;
 import VmaRaii;
 import shader;
 import vulkan_utils;
