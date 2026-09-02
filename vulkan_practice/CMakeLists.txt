@@ -311,7 +311,7 @@ target_sources(vulkan_practice PUBLIC
                        shader.cppm shader_registry.cppm VmaBuffer.cppm features.cppm vkinstance.cppm vkdevice.cppm
                        vkswapchain.cppm vkresources.cppm vkrenderer.cppm ecs.cppm frame_draw_list.cppm
                        asset_table.cppm render_list.cppm
-                      gltf_loader.cppm model_importer.cppm texture_pool.cppm scene.cppm llm_debug.cppm
+                      gltf_loader.cppm model_importer.cppm texture_pool.cppm texture_upload.cppm scene.cppm llm_debug.cppm
                       gpu_canary.cppm
                        ${TYPES_CPPM}
                        ${MODEL_CPPM}
