@@ -4,8 +4,6 @@ module;
 #include <vk_mem_alloc.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/glm.hpp>
-#include <SDL3/SDL.h>
-#include <SDL3/SDL_events.h>
 #include <ranges>
 #include <cstring>
 #include <fmt/format.h>

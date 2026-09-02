@@ -14,25 +14,12 @@ import vk_device;
 import vk_resources;
 import vk_renderer;
 import frame_draw_list;
+import camera_config;  // LlmDebugConfig（配置归 camera_config，本模块只留执行）
 import VmaRaii;
 import shader;
 import vulkan_utils;
 
 namespace RGL {
-
-// 一次性截图配置（configs/camera.lua）：
-//   llm_debug = true/false 纯开关（缺省 false，交互模式零变化）——截图只改这一行；
-//   llm_shot  = {file, size, delay_frames} 常驻截图配置（全可选回落默认）。
-// 向后兼容：llm_debug 仍接受 table（旧格式 = 启用 + 细字段，覆盖 llm_shot）。
-// 相机位置不走额外字段——agent 直接编辑 camera.lua 顶层的
-// position/target/fovDegrees（loadCameraConfig 现有解析），无 presets 层。
-export struct LlmDebugConfig {
-	bool enabled = false;
-	uint32_t delayFrames = 0;  // 第 N 帧渲染完成后截图（0 = 首帧；为动态场景预留）
-	std::string file;          // PNG 路径（相对 CWD）；空 = screenshots/llm_<时间戳>.png
-	uint32_t width = 1280;    // llm_debug 模式的离屏窗口尺寸（隐藏窗，永不显示）
-	uint32_t height = 720;
-};
 
 // 离屏一次性渲染 + 截图（llm_debug 模式，每次运行至多调用一次）：
 // 把给定帧的 draw list 重渲到临时离屏目标（8-bit UNORM 颜色 + D32Sfloat 深度，
@@ -263,10 +250,11 @@ captureFrame(RGL::Renderer& renderer, const RGL::FrameDrawList& list, const LlmD
 	submitInfo.commandBufferCount = 1;
 	submitInfo.pCommandBuffers = &cb;
 	VkFence rawFence = *fence;
-	if (auto result = vk::Result(::vkQueueSubmit(queue, 1, &submitInfo, rawFence));
-		result != vk::Result::eSuccess) {
+	// VkResult 直接用（vkerror::fromVkResult 契约；vkResultName 供日志，免 vulkan.hpp 的 to_string）
+	if (auto result = ::vkQueueSubmit(queue, 1, &submitInfo, rawFence);
+		result != VK_SUCCESS) {
 		if (logger)
-			logger->error("llm_debug: capture submit failed: {}", vk::to_string(result));
+			logger->error("llm_debug: capture submit failed: {}", vkResultName(result));
 		return std::unexpected(Error::fromVkResult(result, "llm_debug capture submit"));
 	}
 	(void)device.waitForFences(*fence, true, std::numeric_limits<uint64_t>::max());

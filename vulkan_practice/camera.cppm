@@ -4,7 +4,6 @@ module;
 #include <glm/gtc/matrix_transform.hpp>
 #include <SDL3/SDL_keyboard.h>
 #include <SDL3/SDL_mouse.h>
-#include <fmt/format.h>
 export module camera;
 
 import rlstd;

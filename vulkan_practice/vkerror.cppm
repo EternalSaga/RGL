@@ -1,5 +1,5 @@
 module;
-#include <vulkan/vulkan.hpp>
+#include <vulkan/vulkan_core.h>
 #include <string>
 #include <fmt/format.h>
 export module vkerror;
@@ -7,6 +7,12 @@ export module vkerror;
 import rlstd;
 
 namespace RGL {
+
+// Error/ErrorCode 全项目错误契约。GMF 只用 vulkan_core.h（C 头）而非 vulkan.hpp——
+// 2026-09-02 编译提速实测：vulkan.hpp 解析 ~3s，本模块只需 VkResult 枚举 + 名字映射，
+// core.h 总编译 3.9s→0.6s（-ftime-trace：Frontend 3079→415ms）；vkerror 是全依赖链
+// 第 2 个模块（每个模块都 import 它），省下的 parse 时间在全链复利。
+// fromVkResult 收 VkResult（C int）——调用点勿再包 vk::Result(...)。
 
 export enum class ErrorCode {
 	VulkanError,
@@ -35,15 +41,37 @@ export struct Error {
 	ErrorCode code;
 	std::string message;
 
-	static Error fromVkResult(vk::Result result, const char* context = nullptr);
+	static Error fromVkResult(VkResult result, const char* context = nullptr);
 
 	std::string describe() const;
 };
 
-inline Error Error::fromVkResult(vk::Result result, const char* context) {
+// VkResult → 名字（诊断用，覆盖项目实际会遇到的结果码；未列出的走 Unknown 兜底）。
+// 不用 vulkan.hpp 的 vk::to_string（那会把整个 hpp 上下文拖进本模块 GMF）
+export inline const char* vkResultName(VkResult result) {
+	switch (result) {
+		case VK_SUCCESS: return "VK_SUCCESS";
+		case VK_NOT_READY: return "VK_NOT_READY";
+		case VK_TIMEOUT: return "VK_TIMEOUT";
+		case VK_ERROR_OUT_OF_HOST_MEMORY: return "VK_ERROR_OUT_OF_HOST_MEMORY";
+		case VK_ERROR_OUT_OF_DEVICE_MEMORY: return "VK_ERROR_OUT_OF_DEVICE_MEMORY";
+		case VK_ERROR_INITIALIZATION_FAILED: return "VK_ERROR_INITIALIZATION_FAILED";
+		case VK_ERROR_DEVICE_LOST: return "VK_ERROR_DEVICE_LOST";
+		case VK_ERROR_EXTENSION_NOT_PRESENT: return "VK_ERROR_EXTENSION_NOT_PRESENT";
+		case VK_ERROR_FEATURE_NOT_PRESENT: return "VK_ERROR_FEATURE_NOT_PRESENT";
+		case VK_ERROR_LAYER_NOT_PRESENT: return "VK_ERROR_LAYER_NOT_PRESENT";
+		case VK_ERROR_SURFACE_LOST_KHR: return "VK_ERROR_SURFACE_LOST_KHR";
+		case VK_ERROR_NATIVE_WINDOW_IN_USE_KHR: return "VK_ERROR_NATIVE_WINDOW_IN_USE_KHR";
+		case VK_SUBOPTIMAL_KHR: return "VK_SUBOPTIMAL_KHR";
+		case VK_ERROR_OUT_OF_DATE_KHR: return "VK_ERROR_OUT_OF_DATE_KHR";
+		default: return "VK_ERROR_UNKNOWN";
+	}
+}
+
+inline Error Error::fromVkResult(VkResult result, const char* context) {
 	Error err;
 	err.code = ErrorCode::VulkanError;
-	auto str = vk::to_string(result);
+	auto str = std::string{vkResultName(result)};
 	if (context) {
 		err.message = fmt::format("{}: {}", context, str);
 	} else {

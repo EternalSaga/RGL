@@ -1,9 +1,5 @@
 module;
-#include <SDL3/SDL_stdinc.h>
-#include <SDL3/SDL_properties.h>
-#include <SDL3/SDL_video.h>
 #include <SDL3/SDL.h>
-#include <SDL3/SDL_version.h>
 #include <SDL3/SDL_vulkan.h>
 #include <fmt/format.h>
 #include <vulkan/vulkan_raii.hpp>

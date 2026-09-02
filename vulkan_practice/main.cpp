@@ -299,8 +299,14 @@ int main() {
 				}
 			};
 		}
+		// llm 截图执行回调（ecs 不 import llm_debug——依赖图叶子解耦，2026-09-02）：
+		// main 是唯一知道 captureFrame 的地方，config 已按值绑进 lambda
 		auto renderResult = RGL::renderSystem(registry, vkRenderer,
-			llmEnabled ? &cameraConfig.llm : nullptr, onFrame);
+			llmEnabled ? &cameraConfig.llm : nullptr,
+			[&](RGL::Renderer& r, const RGL::FrameDrawList& l) {
+				return RGL::captureFrame(r, l, cameraConfig.llm);
+			},
+			onFrame);
 		if (!renderResult) {
 			auto* logger = RLLogger::getInstance();
 			if (logger) logger->error("错误: {}", renderResult.error().describe());
