@@ -1,9 +1,10 @@
 module;
-#include <vulkan/vulkan_raii.hpp>
+#include <vulkan/vulkan.h>  // VK_* 宏/C 函数（rlvk 不含宏；C 头解析 ~0.4s）
 #include <fmt/format.h>
 export module shader;
 
 import rlstd;
+import rlvk;
 import types_generated;
 import vkerror;
 

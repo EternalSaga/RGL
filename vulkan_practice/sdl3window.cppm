@@ -1,11 +1,12 @@
 module;
+#include <vulkan/vulkan.h>  // VK_* 宏/C 函数（rlvk 不含宏；C 头解析 ~0.4s）
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 #include <fmt/format.h>
-#include <vulkan/vulkan_raii.hpp>
 export module vulkan_window;
 
 import rlstd;
+import rlvk;
 import rllogger;
 import vkerror;
 

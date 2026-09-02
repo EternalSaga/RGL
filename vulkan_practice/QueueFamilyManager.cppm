@@ -1,10 +1,9 @@
 module;
 #include <fmt/format.h>
-#include <vulkan/vulkan.hpp>
-#include <vulkan/vulkan_raii.hpp>
 export module queue_family_manager;
 
 import rlstd;
+import rlvk;
 import rllogger;
 import vkerror;
 

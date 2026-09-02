@@ -1,10 +1,9 @@
 module;
-#include <vulkan/vulkan.hpp>
-#include <vulkan/vulkan_raii.hpp>
 #include <glm/glm.hpp>
 export module asset_table;
 
 import rlstd;
+import rlvk;
 import VmaRaii;
 import model_types_generated;
 

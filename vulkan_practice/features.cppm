@@ -1,11 +1,11 @@
 module;
-#include <vulkan/vulkan.hpp>
-#include <vulkan/vulkan_raii.hpp>
+#include <vulkan/vulkan.h>  // VK_* 宏/C 函数（rlvk 不含宏；C 头解析 ~0.4s）
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 export module features;
 
 import rlstd;
+import rlvk;
 import vkerror;
 import features_generated;
 

@@ -1,9 +1,8 @@
 module;
-#include <vulkan/vulkan_raii.hpp>
-#include <fmt/format.h>
 export module shader_registry;
 
 import rlstd;
+import rlvk;
 import rllogger;
 
 import vk_device;
@@ -66,129 +65,29 @@ export class ShaderRegistry {
 	// 去重表。返回条目下标，调用方经 bindToAsset 写回资产记录（renderListSystem 经资产表
 	// 解析管线，无字符串约定）。失败（规格缺失 / SPV 加载失败等）抛出（同构造期路径）。
 	[[nodiscard]] uint32_t addModelEntry(const std::string& specName, uint32_t vertexSlot,
-		uint32_t textureSlot, uint32_t samplerSlot) {
-		const auto key = std::make_tuple(specName, vertexSlot, textureSlot);
-		// 按 (规格, 顶点 slot, 纹理 slot) 组合去重：同组合返回既有条目（不重复建 shader object）
-		if (auto it = modelEntryBySlot.find(key); it != modelEntryBySlot.end())
-			return it->second;
-
-		const RGL::PipelineSpec* spec = findSpec(specName.c_str());
-		if (!spec)
-			throw std::runtime_error(fmt::format("pipeline spec not found: {}", specName));
-		const uint32_t descriptorSize = res.getDescriptorHeap().getDescriptorSize();
-		const uint32_t samplerHeapOffset =
-			samplerSlot * res.getSamplerHeap().getDescriptorSize();
-		// Phase 5 批次 2：模型管线恒绑 scene data（binding 3，幂等创建；unlit frag 不声明
-		// = 映射空转，同 mesh 阶段对 binding 1/2 的既证行为）
-		const uint32_t sceneSlot = res.ensureSceneData();
-		RGL::PipelineBindings b{};
-		b.descriptorSize = descriptorSize;
-		b.slotVertex = vertexSlot;
-		b.slotIndex = vertexSlot;
-		b.slotTexture = textureSlot;
-		b.samplerHeapOffset = samplerHeapOffset;
-		b.slotSceneData = sceneSlot;
-		b.textured = true;
-		b.hasSceneData = true;
-		// Phase 5.5：env cubemap 已上传 → 全模型条目烘焙 binding 4/5（env 槽全局单例
-		// 恒等，不进组合去重 key；不 import env.slang 的 frag 不声明 = 映射空转，同上既证行为）
-		if (const auto* env = res.getEnvTexture()) {
-			b.hasEnv = true;
-			b.slotEnv = env->heapSlot;
-			b.envSamplerHeapOffset =
-				res.ensureSkySampler(env->mipLevels) * res.getSamplerHeap().getDescriptorSize();
-		}
-		auto entry = PipelineEntry{
-			fmt::format("{}.v{}.t{}", specName, vertexSlot, textureSlot),
-			RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b)};
-		const uint32_t index = static_cast<uint32_t>(entries.size());
-		indexByName[entry.name] = index;
-		modelEntryBySlot[key] = index;
-		entries.push_back(std::move(entry));
-		if (auto* logger = RLLogger::getInstance())
-			logger->debug("pipeline entry: {} (vertex slot {} / texture slot {}) → 下标 {}",
-				specName, vertexSlot, textureSlot, index);
-		return index;
-	}
+		uint32_t textureSlot, uint32_t samplerSlot);
 
 	// 天空盒管线条目（Phase 5.5 批次 4）：单条目（env 槽全局单例，无组合去重需求）。
 	// mapping = binding 0/1 占位（skybox shader 不声明顶点/索引 = 空转，Phase 3/5 既证
 	// "映射未消费无害"方向）+ binding 3 scene data（skyClipToWorld 读 invViewProj）+
 	// binding 4/5 env（skybox.frag import env 声明——"声明未映射"才是错误，本条目恒烘焙）。
 	// 前提 = env 已上传（main 调用点保证）；幂等。
-	[[nodiscard]] uint32_t addSkyEntry() {
-		if (auto idx = pipelineIndex("skybox"))
-			return *idx;
-		const RGL::PipelineSpec* spec = findSpec("skybox");
-		if (!spec)
-			throw std::runtime_error("pipeline spec not found: skybox");
-		const auto* env = res.getEnvTexture();
-		if (!env)
-			throw std::runtime_error("skybox entry requires env cubemap uploaded");
-		RGL::PipelineBindings b{};
-		b.descriptorSize = res.getDescriptorHeap().getDescriptorSize();
-		b.slotVertex = 0;
-		b.slotIndex = 1;
-		b.slotSceneData = res.ensureSceneData();
-		b.hasSceneData = true;
-		b.hasEnv = true;
-		b.slotEnv = env->heapSlot;
-		b.envSamplerHeapOffset =
-			res.ensureSkySampler(env->mipLevels) * res.getSamplerHeap().getDescriptorSize();
-		auto entry = PipelineEntry{"skybox",
-			RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b)};
-		const uint32_t index = static_cast<uint32_t>(entries.size());
-		indexByName[entry.name] = index;
-		entries.push_back(std::move(entry));
-		if (auto* logger = RLLogger::getInstance())
-			logger->debug("pipeline entry: skybox (env slot {}) → 下标 {}", b.slotEnv, index);
-		return index;
-	}
+	[[nodiscard]] uint32_t addSkyEntry();
 
 	// 条目下标写回资产记录（启动期一次）
 	void bindToAsset(uint32_t assetId, uint32_t entryIndex) {
 		res.getAssetTable().setPipelineIndex(assetId, entryIndex);
 	}
 	// 条目名 → 下标写回资产记录（启动期一次；条目缺失 = 配置/构建不一致，直接报错）
-	void bindPipelineToAsset(const char* name, uint32_t assetId) {
-		auto idx = pipelineIndex(name);
-		if (!idx)
-			throw std::runtime_error(fmt::format("pipeline entry not found: {}", name));
-		res.getAssetTable().setPipelineIndex(assetId, *idx);
-	}
+	void bindPipelineToAsset(const char* name, uint32_t assetId);
 
    private:
 	// "cube" 管线条目（恒建——画不画 = cube entity 有无，数据驱动；slot 经 cube 资产
 	// 记录取，布局由反射生成的偏移常量钉死 vertex=0/index=1）
-	void addCubeEntry() {
-		const RGL::PipelineSpec* cubeSpec = findSpec("cube");
-		if (!cubeSpec)
-			throw std::runtime_error("pipeline spec not found: cube");
-		const auto& cubeAsset = res.getAssetTable().get(res.cubeAssetId());
-		RGL::PipelineBindings b{};
-		b.descriptorSize = res.getDescriptorHeap().getDescriptorSize();
-		b.slotVertex = cubeAsset.heapSlot;
-		b.slotIndex = *cubeAsset.indexHeapSlot;
-		auto entry = PipelineEntry{
-			"cube",
-			RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*cubeSpec), b)};
-		const uint32_t index = static_cast<uint32_t>(entries.size());
-		indexByName[entry.name] = index;
-		entries.push_back(std::move(entry));
-	}
+	void addCubeEntry();
 
 	// 把一条 pipeline 规格对应的 mesh/fragment SPV 载入 ShaderEffect（SPV 路径来自 SceneConfig）
-	static RGL::ShaderEffect loadShaderEffect(const RGL::PipelineSpec& spec) {
-		auto meshResult = RGL::loadShaderSpv(spec.meshSpv);
-		if (!meshResult) throw std::runtime_error(meshResult.error().describe());
-		auto fragResult = RGL::loadShaderSpv(spec.fragSpv);
-		if (!fragResult) throw std::runtime_error(fragResult.error().describe());
-
-		RGL::ShaderEffect effect;
-		effect.meshStageSpv = std::move(*meshResult);
-		effect.fragStageSpv = std::move(*fragResult);
-		return effect;
-	}
+	static RGL::ShaderEffect loadShaderEffect(const RGL::PipelineSpec& spec);
 
 	// 按名查找 pipeline 规格（scene.lua 缺条目时回落默认 SPV 路径，同原 Renderer 行为）
 	const RGL::PipelineSpec* findSpec(const char* name) const {
