@@ -392,7 +392,8 @@ FodyWeavers.xsd
 /render_core/gl_shader_gen/
 /ShaderReflection/codegen/
 /.continue/
-/vulkan_practice/generated/
+# vulkan_practice/generated/*.cppm 纳入版本控制（2026-09-02 编译提速）：反射产物作为已提交代码，全新构建不再
+# 串行等待 reflection_tool 工具链（省 ~15s 前缀）；slang/schema/模板变更时才触发重生成
 
 # local build dirs
 build_min/

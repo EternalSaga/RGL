@@ -10,5 +10,9 @@ rgl_fetch_slang()
 
 add_subdirectory(rlstd)
 add_subdirectory("./logger")
-add_subdirectory(tools)
+# EXCLUDE_FROM_ALL（2026-09-02 编译提速）：反射产物（*_reflection.json +
+# generated/*.cppm）已纳入版本控制，日常/全新构建无需重跑反射管线；只有
+# slang/schema/模板真变更时，ninja 才按需构建 reflection_tool。默认 ALL
+# 构建不再付工具链 ~14s 串行前缀。
+add_subdirectory(tools EXCLUDE_FROM_ALL)
 add_subdirectory(vulkan_practice)

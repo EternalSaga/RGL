@@ -28,142 +28,104 @@ set(SLANG_FLAGS
 set(GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_shaders")
 file(MAKE_DIRECTORY ${GEN_DIR})
 
-# ─── Phase 0: Shader Reflection ───────────────────────────────────────────────
-# Generated .cppm must live in source tree for CMake FILE_SET CXX_MODULES.
-# It is git-ignored via vulkan_practice/generated/ pattern in .gitignore.
+# ─── 反射管线（显式触发，产物入版本控制）─────────────────────────────────────
+# 2026-09-02 编译提速：原 4 条 add_custom_command（OUTPUT 在源码树、DEPENDS 含
+# reflection_tool）把 ~14s 工具链变成每次 clean 构建的串行前缀（clean 后 tool 缺失
+# → 命令判过期 → 重生成 → 下游全部重编）。改为：
+#   - `just reflect`（= cmake --build --target reflect）显式重跑全部管线；
+#   - 产物（*_reflection.json + generated/*.cppm）纳入版本控制（.gitignore 已放行）；
+#   - reflection_check（ALL，毫秒级）守卫：输入比产物新 → FATAL，防忘跑 reflect
+#     的静默布局错配（见 cmake/CheckReflectionStale.cmake）。
+# 改 types/model/material/features 契约后必须 just reflect && git add generated/。
 set(GEN_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/generated")
 file(MAKE_DIRECTORY ${GEN_SRC_DIR})
 
 set(TYPES_SLANG "${CMAKE_CURRENT_SOURCE_DIR}/shaders/types.slang")
 set(TYPES_SCHEMA "${CMAKE_CURRENT_SOURCE_DIR}/shaders/types_schema.lua")
-set(TYPES_REFLECTION_JSON "${GEN_DIR}/types_reflection.json")
+set(TYPES_REFLECTION_JSON "${GEN_SRC_DIR}/types_reflection.json")
 set(TYPES_CPPM "${GEN_SRC_DIR}/types_generated.cppm")
 set(TYPES_TEMPLATE "${CMAKE_SOURCE_DIR}/tools/templates/types_cppm.inja")
 
-# ─── Features Codegen ────────────────────────────────────────────────────────
-# Single-source-of-truth JSON for Vulkan feature set.
-# Generated .cppm lives in source tree for CMake FILE_SET CXX_MODULES.
+set(MODEL_SLANG "${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.slang")
+set(MODEL_SCHEMA "${CMAKE_CURRENT_SOURCE_DIR}/shaders/model_schema.lua")
+set(MODEL_REFLECTION_JSON "${GEN_SRC_DIR}/model_reflection.json")
+set(MODEL_CPPM "${GEN_SRC_DIR}/model_types_generated.cppm")
+
+set(MATERIAL_SLANG "${CMAKE_CURRENT_SOURCE_DIR}/shaders/material.slang")
+set(MATERIAL_SCHEMA "${CMAKE_CURRENT_SOURCE_DIR}/shaders/material_schema.lua")
+set(MATERIAL_REFLECTION_JSON "${GEN_SRC_DIR}/material_reflection.json")
+set(MATERIAL_CPPM "${GEN_SRC_DIR}/material_types_generated.cppm")
+
 set(FEATURES_CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/features_config.json")
 set(FEATURES_TEMPLATE "${CMAKE_SOURCE_DIR}/tools/templates/features_cppm.inja")
 set(FEATURES_CPPM "${GEN_SRC_DIR}/features_generated.cppm")
 
-add_custom_command(
-    OUTPUT ${TYPES_REFLECTION_JSON}
+# reflect：显式重建全部反射产物（工具由 add_dependencies 先建；管线无条件重跑）。
+add_custom_target(reflect
+    COMMENT "重跑 4 条反射管线（slangc reflection + validate + generate/render）")
+add_dependencies(reflect reflection_tool)
+# types 管线
+add_custom_command(TARGET reflect PRE_BUILD
     COMMAND ${SLANGC_EXECUTABLE} ${TYPES_SLANG} ${SLANG_FLAGS}
-            -I "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
-            -no-codegen
+            -I "${CMAKE_CURRENT_SOURCE_DIR}/shaders" -no-codegen
             -reflection-json ${TYPES_REFLECTION_JSON}
-    DEPENDS ${TYPES_SLANG} ${TYPES_SCHEMA}
-    COMMENT "Slangc reflection: types.slang -> types_reflection.json"
-    VERBATIM
-)
-
-add_custom_command(
-    OUTPUT ${TYPES_CPPM}
-    COMMAND reflection_tool validate
-            --json ${TYPES_REFLECTION_JSON}
-            --schema ${TYPES_SCHEMA}
-    COMMAND reflection_tool generate
-            --json ${TYPES_REFLECTION_JSON}
-            --schema ${TYPES_SCHEMA}
-            --output ${TYPES_CPPM}
-            --module-name types_generated
-            --template ${TYPES_TEMPLATE}
-    DEPENDS ${TYPES_REFLECTION_JSON} ${TYPES_SCHEMA} ${TYPES_TEMPLATE} reflection_tool
-    COMMENT "Reflection: validate schema + generate types_generated.cppm"
-    VERBATIM
-)
-
-add_custom_target(reflection_generated ALL DEPENDS ${TYPES_CPPM})
-
-# ─── Phase 2: Model Reflection ───────────────────────────────────────────────
-# 第二条反射管线：model.slang 契约 → model_types_generated.cppm
-#（ModelDrawArgs / ModelVertex / HeapSlotModelVertexBase）。
-# 多契约靠 CMake 增加调用，reflection_tool CLI 已参数化（--module-name/--template）。
-set(MODEL_SLANG "${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.slang")
-set(MODEL_SCHEMA "${CMAKE_CURRENT_SOURCE_DIR}/shaders/model_schema.lua")
-set(MODEL_REFLECTION_JSON "${GEN_DIR}/model_reflection.json")
-set(MODEL_CPPM "${GEN_SRC_DIR}/model_types_generated.cppm")
-
-add_custom_command(
-    OUTPUT ${MODEL_REFLECTION_JSON}
+    COMMAND reflection_tool validate --json ${TYPES_REFLECTION_JSON} --schema ${TYPES_SCHEMA}
+    COMMAND reflection_tool generate --json ${TYPES_REFLECTION_JSON} --schema ${TYPES_SCHEMA}
+            --output ${TYPES_CPPM} --module-name types_generated --template ${TYPES_TEMPLATE}
+    VERBATIM)
+# model 管线（模板复用 types_cppm.inja，同既有行为）
+add_custom_command(TARGET reflect PRE_BUILD
     COMMAND ${SLANGC_EXECUTABLE} ${MODEL_SLANG} ${SLANG_FLAGS}
-            -I "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
-            -no-codegen
+            -I "${CMAKE_CURRENT_SOURCE_DIR}/shaders" -no-codegen
             -reflection-json ${MODEL_REFLECTION_JSON}
-    DEPENDS ${MODEL_SLANG} ${MODEL_SCHEMA}
-    COMMENT "Slangc reflection: model.slang -> model_reflection.json"
-    VERBATIM
-)
-
-add_custom_command(
-    OUTPUT ${MODEL_CPPM}
-    COMMAND reflection_tool validate
-            --json ${MODEL_REFLECTION_JSON}
-            --schema ${MODEL_SCHEMA}
-    COMMAND reflection_tool generate
-            --json ${MODEL_REFLECTION_JSON}
-            --schema ${MODEL_SCHEMA}
-            --output ${MODEL_CPPM}
-            --module-name model_types_generated
-            --template ${TYPES_TEMPLATE}
-    DEPENDS ${MODEL_REFLECTION_JSON} ${MODEL_SCHEMA} ${TYPES_TEMPLATE} reflection_tool
-    COMMENT "Reflection: validate model schema + generate model_types_generated.cppm"
-    VERBATIM
-)
-
-add_custom_target(model_reflection_generated ALL DEPENDS ${MODEL_CPPM})
-
-# ─── Phase 4: Material Reflection（统一 push constant 契约）────────────────────
-# 第三条反射管线：material.slang（所有 shader 风格共享的 DrawArgs 超集）→
-# material_types_generated.cppm。多契约靠 CMake 增加调用（同上，CLI 已参数化）。
-set(MATERIAL_SLANG "${CMAKE_CURRENT_SOURCE_DIR}/shaders/material.slang")
-set(MATERIAL_SCHEMA "${CMAKE_CURRENT_SOURCE_DIR}/shaders/material_schema.lua")
-set(MATERIAL_REFLECTION_JSON "${GEN_DIR}/material_reflection.json")
-set(MATERIAL_CPPM "${GEN_SRC_DIR}/material_types_generated.cppm")
-
-add_custom_command(
-    OUTPUT ${MATERIAL_REFLECTION_JSON}
+    COMMAND reflection_tool validate --json ${MODEL_REFLECTION_JSON} --schema ${MODEL_SCHEMA}
+    COMMAND reflection_tool generate --json ${MODEL_REFLECTION_JSON} --schema ${MODEL_SCHEMA}
+            --output ${MODEL_CPPM} --module-name model_types_generated --template ${TYPES_TEMPLATE}
+    VERBATIM)
+# material 管线
+add_custom_command(TARGET reflect PRE_BUILD
     COMMAND ${SLANGC_EXECUTABLE} ${MATERIAL_SLANG} ${SLANG_FLAGS}
-            -I "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
-            -no-codegen
+            -I "${CMAKE_CURRENT_SOURCE_DIR}/shaders" -no-codegen
             -reflection-json ${MATERIAL_REFLECTION_JSON}
-    DEPENDS ${MATERIAL_SLANG} ${MATERIAL_SCHEMA}
-    COMMENT "Slangc reflection: material.slang -> material_reflection.json"
-    VERBATIM
+    COMMAND reflection_tool validate --json ${MATERIAL_REFLECTION_JSON} --schema ${MATERIAL_SCHEMA}
+    COMMAND reflection_tool generate --json ${MATERIAL_REFLECTION_JSON} --schema ${MATERIAL_SCHEMA}
+            --output ${MATERIAL_CPPM} --module-name material_types_generated --template ${TYPES_TEMPLATE}
+    VERBATIM)
+# features 管线（config JSON → 模板渲染，无 slangc 步骤）
+add_custom_command(TARGET reflect PRE_BUILD
+    COMMAND reflection_tool render --json ${FEATURES_CONFIG}
+            --output ${FEATURES_CPPM} --template ${FEATURES_TEMPLATE}
+    VERBATIM)
+# 收尾：写输入哈希清单（check 守卫的比对基准；与产物一起提交）
+add_custom_command(TARGET reflect PRE_BUILD
+    COMMAND ${CMAKE_COMMAND} -DMODE=write
+            -DPAIRS_FILE=${CMAKE_CURRENT_BINARY_DIR}/reflection_pairs.cmake
+            -DROOT=${CMAKE_SOURCE_DIR}
+            -DMANIFEST=${GEN_SRC_DIR}/reflection_manifest.txt
+            -P ${CMAKE_SOURCE_DIR}/cmake/ReflectionManifest.cmake
+    VERBATIM)
+
+# 新鲜度守卫：每次构建开头跑（~30ms），输入新于产物即拦。
+# PAIRS 经文件传入（命令行 -D 参数会被 CMake 按 |/, 拆分转义，踩过）。
+# 新鲜度 = 输入 SHA1 清单（file(TIMESTAMP) 在本机 CMake 4.3.4 恒空，不可用）。
+set(REFLECTION_PAIRS
+    "${TYPES_CPPM}|${TYPES_SLANG},${TYPES_SCHEMA},${TYPES_TEMPLATE},${TYPES_REFLECTION_JSON}"
+    "${MODEL_CPPM}|${MODEL_SLANG},${MODEL_SCHEMA},${TYPES_TEMPLATE},${MODEL_REFLECTION_JSON}"
+    "${MATERIAL_CPPM}|${MATERIAL_SLANG},${MATERIAL_SCHEMA},${TYPES_TEMPLATE},${MATERIAL_REFLECTION_JSON}"
+    "${FEATURES_CPPM}|${FEATURES_CONFIG},${FEATURES_TEMPLATE}")
+string(REPLACE ";" "\n" _pairs_src "${REFLECTION_PAIRS}")
+file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/reflection_pairs.cmake CONTENT "
+set(PAIRS
+${_pairs_src}
 )
-
-add_custom_command(
-    OUTPUT ${MATERIAL_CPPM}
-    COMMAND reflection_tool validate
-            --json ${MATERIAL_REFLECTION_JSON}
-            --schema ${MATERIAL_SCHEMA}
-    COMMAND reflection_tool generate
-            --json ${MATERIAL_REFLECTION_JSON}
-            --schema ${MATERIAL_SCHEMA}
-            --output ${MATERIAL_CPPM}
-            --module-name material_types_generated
-            --template ${TYPES_TEMPLATE}
-    DEPENDS ${MATERIAL_REFLECTION_JSON} ${MATERIAL_SCHEMA} ${TYPES_TEMPLATE} reflection_tool
-    COMMENT "Reflection: validate material schema + generate material_types_generated.cppm"
-    VERBATIM
-)
-
-add_custom_target(material_reflection_generated ALL DEPENDS ${MATERIAL_CPPM})
-
-# ─── Features Codegen ────────────────────────────────────────────────────────
-add_custom_command(
-    OUTPUT ${FEATURES_CPPM}
-    COMMAND reflection_tool render
-            --json ${FEATURES_CONFIG}
-            --output ${FEATURES_CPPM}
-            --template ${FEATURES_TEMPLATE}
-    DEPENDS ${FEATURES_CONFIG} ${FEATURES_TEMPLATE} reflection_tool
-    COMMENT "Generating features_generated.cppm from features_config.json"
-    VERBATIM
-)
-
-add_custom_target(features_generated ALL DEPENDS ${FEATURES_CPPM})
+")
+add_custom_target(reflection_check ALL
+    COMMAND ${CMAKE_COMMAND} -DMODE=check
+        -DPAIRS_FILE=${CMAKE_CURRENT_BINARY_DIR}/reflection_pairs.cmake
+        -DROOT=${CMAKE_SOURCE_DIR}
+        -DMANIFEST=${GEN_SRC_DIR}/reflection_manifest.txt
+        -P ${CMAKE_SOURCE_DIR}/cmake/ReflectionManifest.cmake
+    COMMENT "检查反射输入哈希（变更时请 just reflect）")
 
 # ─── Shader Compilation ───────────────────────────────────────────────────────
 
@@ -320,8 +282,7 @@ target_sources(vulkan_practice PUBLIC
                        ${FEATURES_CPPM}
 )
 
-add_dependencies(vulkan_practice reflection_generated model_reflection_generated
-                 material_reflection_generated features_generated)
+add_dependencies(vulkan_practice reflection_check)
 
 find_package(Vulkan REQUIRED)
 find_package(glm CONFIG REQUIRED)
