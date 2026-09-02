@@ -189,7 +189,7 @@ export class VmaAllocatorRAII {
    private:
 	SharedAllocator allocatorBlock;
 
-   public:
+    public:
 	VmaAllocatorRAII(VkInstance instance, VkPhysicalDevice physicalDevice, VkDevice device, uint32_t apiVersion,
 		VmaAllocatorCreateFlags flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT) {
 		VmaAllocator raw;
@@ -231,7 +231,9 @@ export class VmaAllocatorRAII {
 	[[nodiscard]] std::expected<VmaBuffer, Error> createBufferWithAddress(const vk::raii::Device& device, const vk::BufferCreateInfo& bufferInfo, const VmaAllocationCreateInfo& allocInfo, VmaAllocationInfo* pAllocInfo = nullptr) const {
 		VkBuffer buffer;
 		VmaAllocation allocation;
-		VkResult result = vmaCreateBuffer(allocatorBlock->handle, reinterpret_cast<const VkBufferCreateInfo*>(&bufferInfo), &allocInfo, &buffer, &allocation, pAllocInfo);
+		VkResult result = vmaCreateBuffer(allocatorBlock->handle,
+			reinterpret_cast<const VkBufferCreateInfo*>(&bufferInfo), &allocInfo,
+			&buffer, &allocation, pAllocInfo);
 		if (result != VK_SUCCESS) {
 			return std::unexpected(Error{ErrorCode::VMASuccessFailed, "VMA failed to create buffer"});
 		}

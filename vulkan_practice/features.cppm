@@ -54,4 +54,14 @@ export std::vector<const char*> getDeviceExtensions() {
 	return kDeviceExtensions();
 }
 
+// 可选扩展：仅在对应 optional feature 探测可用时追加。扩展启用与 feature 置位同源
+// （queryOptionalFeatures 先查扩展可用再读 feature 字段，缺一即 false = 整体 no-op），
+// 故此处按 OptionalFeatureSupport 位逐项追加即可——跨驱动降级不破坏启动。
+export std::vector<const char*> getDeviceExtensions(const OptionalFeatureSupport& opt) {
+	auto extensions = kDeviceExtensions();
+	if (opt.depthClipEnable)
+		extensions.push_back(VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME);
+	return extensions;
+}
+
 }  // namespace RGL

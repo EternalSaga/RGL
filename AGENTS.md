@@ -6,6 +6,7 @@ legacy目录下的代码是陈旧的OpenGL项目已经不是当前工作重点�
 
 ## 给大模型
 优先使用中文回复用户，除非用户说使用英文回复。
+随时思考是否可以拆分子任务给子agent执行。主agent校验结果。困难任务主agent亲自执行。
 
 ## 构建
 
@@ -267,6 +268,7 @@ main.cpp 按逆序析构（RAII，无需手动清理）。
 ## 已知问题
 
 - `computeCommandPool`、`transferCommandPool`、`computeQueue`、`transferQueue` 已创建但保留给未来使用
+- **2025+ 扩展实施（2026-09-02：edS3 + headless 落地，zero_init 已回退）**：详见 `docs/vulkan_extensions_2025_调研.md` §十二。**主崩溃已解**——根因 = `VmaAllocatorRAII` 构造调用**实参错位**（追加 `zeroInit` 参数时把 `false` 塞进 `flags` 位，`VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT` 被清 0 → 所有 BDA buffer 创建返回 `VK_ERROR_INITIALIZATION_FAILED`），与扩展无关；**曾误诊 RADV 驱动 bug**（"启用扩展就崩"的表象），教训：归因外部前先把"自己代码与基线的 diff"逐行审干净（见 §十二.2 误诊复盘）。**① zero_init 已回退**（深挖定案，TEMP DIAG 已清）：VMA 3.4 对 BDA buffer 自动加内部 `VkMemoryAllocateFlagsInfo`（`DEVICE_ADDRESS`，子分配块 `:12150`/dedicated `:14054`），与用户 `pMemoryAllocateNext` 传的（`ZERO_INITIALIZE`）必撞 → spec 违例 UB + VVL duplicate；深挖证 本 app 无收益（RADV 新分配内存本身全零 + 描述符堆只分配一次不重分配）+ **"等 VMA 上游"不成立**（v3.4.0 最新版 2025-06，无 zero-init flag，changelog 未提）→ 回退（9 扩展，duplicate 消失）。将来真实需求走原生 `vkAllocateMemory` 单 flagsInfo 绕 VMA。**② edS3：VVL 误报 `depthClipEnable feature 未启用`**（VVL 1.4.357 gap，app 侧无 bug，保留现状）——深挖实锤 feature **确实启用**（`vkCreateDevice` 时刻 pNext 链 edS3 末位 `sType=1000455000 flag=TRUE`，hpp 原样传链给 `vkCreateDevice`，VVL 二进制认识该 feature 却未记进"已启用"集）→ 非致命 VVL 噪声。**headless（`RGL_HEADLESS=1`）** 脱 SDL/compositor 已落地（`vkCreateHeadlessSurfaceEXT`）：v357 结构体无 width/height/format 字段（尺寸由 swapchain 定）、须显式 `VK_KHR_surface`、无 `eImmediate` 用 `eFifo`（见 §十二.4）。
 - **Phase 5 光照/透明已知近似**：① MASK alphaTest 未实现（glTF `alphaMode=MASK` 暂按不透明渲染，无 discard）；② 世界法线变换取对象矩阵 mat3 直乘（假定均匀缩放，非均匀缩放会失真——glTF 节点基本满足，Phase 7 真实 normalMatrix 再议）；③ 透明排序按 primitive 中心距离² back-to-front（非 per-pixel/OIT——相交透明面会错序）；④ 透明段背面剔除（封闭网格正反面双重混合的修复，非封闭单面几何会被剔掉一面）。均留 Phase 7+ 演进
 - **Phase 5.5 IBL/天空盒已知近似**：① **简化版 IBL**——无 pre-filtered cubemap / BRDF LUT，`envDiffuse` 用最高 mip 采样近似辐照度、`envSpec` 用 roughness→LOD 近似 prefilter、能量补偿用 Schlick-F×(1−roughness) 粗替代（完整版留 Phase 7 延迟 light pass）；② **mipmap blit 用 NEAREST**（sRGB 格式 blit LINEAR 违 VUID-vkCmdBlitImage-filter-00239）——非线性空间 box 降采样，高 roughness 环境采样质量有损（CPU 生成线性 mip 链留作质量接缝）；③ **单环境贴图**（全局单例，无 per-material env / 多套 IBL）；④ 天空盒全屏大三角 z=1 依赖 depth clear=1.0 + LEQUAL（近裁剪面外无几何处才画）。scene data 头 64→128 后 @48 env / @64 skyInvViewProj 双源字面量延续 LightDataGpu 手工一致模式（见下条债）
 - **`LightDataGpu` 字节布局双源、无反射**（Phase 5 批次 2 债）：`vkresources.cppm` 手写 struct（`static_assert(48)`）↔ `shaders/scene.slang` 字节字面量靠手工一致——唯一绕过反射管线的主要 CPU↔GPU struct 契约（DrawArgs/MaterialAsset/ModelVertex 均经 schema→生成）；单灯固定布局下风险可控，Phase 7 多灯改造布局重设计时并入反射管线（schema 声明→生成布局常量，同 `model_schema.lua` `constants` 段先例），灯同时从 registry context 升格为灯 entity + 组件（ECS 规范 3"画不画 = 实体有无"，见 `docs/next_roadmap.md` Phase 7 Light pass）
@@ -297,6 +299,7 @@ main.cpp 按逆序析构（RAII，无需手动清理）。
 - `docs/device_generated_commands_research.md` — GPU culling（VK_EXT_device_generated_commands）双驱动实测调研（Phase 7 依据）
 - `docs/heap_texture_research.md` — descriptor heap 纹理采样预研（Phase 3 依据）：spec 条款（SAMPLED_IMAGE 专用 / 内嵌 sampler / 对齐）+ **v341 头与 v1.4.360 spec 的 API 差异**（pAddressRange vs 句柄、4 参 vs 6 参写描述符、pEmbeddedSampler 位置）+ `heap_texture_spike/` 三驱动实测（2026-08-27：RADV/Intel/NVIDIA × 5 变体全 PASS，语义分离三驱动完整实现；Q1 统一步长 `max(buffer,image)`；§九 误诊复盘：标量 `Texture2D<float>` R 通道 splat + `samplerHeapOffset` 字段误用，推翻早期"RADV 只认组合绑定"定性；主工程待改 `model.slang` float4 + `shader.cppm` 映射字段）
 - `docs/present_timing_research.md` — present 时序调研（校准时间戳扩展）
+- `docs/vulkan_extensions_2025_调研.md` — 2025+ 新 Vulkan 扩展调研（2026-09-02，基于本地 Vulkan-Docs v1.4.360）：2025-01→2026-08 共 87 个新扩展全景表（ratified/provisional + 首现版本）+ T1/T2 共 11 个潜力候选评估级分析（zero_init_device_memory/device_fault/depth_clamp_zero_one/present_timing 重评 + unified_image_layouts/custom_resolve/copy_memory_indirect 等 Phase6/7）+ maintenance 相关位 + 厂商特定（AMD/NV）+ 补充 Vulkan 1.1–1.3 时代有价值扩展（host_image_copy/headless_surface/shader_clock 等）+ 优先级建议矩阵；**关键元发现：核心依赖 `VK_EXT_descriptor_heap` 已于 1.4.340（2026-01）ratified 转正**；**§十二 实施记录（2026-09-02）：edS3 + headless 落地，zero_init 已回退**（主崩溃 = VMA 构造调用实参错位误诊 RADV bug 的复盘 + zero_init 回退定案 + edS3 VVL 误报 + headless 关键坑）
 - `docs/快捷键配置.md` — Zed 编辑器快捷键、任务和调试配置说明
 - 离线 Vulkan 文档（优先于在线检索） - `docs.vulkan.org` / `registry.khronos.org` 有 Cloudflare 拦截，在线抓取不可靠。已在本地磁盘克隆官方 spec 源仓库：
 	**位置**：`/home/robin/program/Vulkan-Docs`（本地 NVMe，shallow clone，约 37MB，**当前 v1.4.360**；更新：`git pull` 或重新 `git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Docs.git`）

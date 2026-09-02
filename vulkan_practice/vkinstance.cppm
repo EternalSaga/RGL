@@ -16,22 +16,21 @@ namespace RGL {
 
 export class AppContext {
    public:
-	AppContext(RGL::SDLWindow& window)
-		: context(), apiVersion(context.enumerateInstanceVersion()), instance(context, buildInstanceCreateInfo(window)), debugMessenger(buildDebugMessenger(instance)) {}
+	// headless（RGL_EXT_headless_surface）：脱离 SDL/compositor——SDL 窗口可不建，
+	// instance 扩展用 VK_EXT_headless_surface 替代 SDL surface 扩展（surface 由
+	// createHeadlessSurfaceEXT 创建，见 vkswapchain.cppm）。headless=false 时行为不变
+	AppContext(RGL::SDLWindow* window, bool headless = false)
+		: headless(headless), context(), apiVersion(context.enumerateInstanceVersion()), instance(context, buildInstanceCreateInfo(window, headless)), debugMessenger(buildDebugMessenger(instance)) {}
 
 	vk::raii::Instance& getInstance() { return instance; }
 	const vk::raii::Instance& getInstance() const { return instance; }
 	uint32_t getApiVersion() const { return apiVersion; }
+	bool isHeadless() const { return headless; }
 
    private:
-	vk::InstanceCreateInfo buildInstanceCreateInfo(RGL::SDLWindow& window) {
-		auto extensionsResult = window.getSurfaceExtensions();
-		if (!extensionsResult) {
-			std::string msg = extensionsResult.error().describe();
-			throw std::runtime_error(msg);
-		}
-		auto [surfaceExtensions, surfaceCount] = *extensionsResult;
+	bool headless;
 
+	vk::InstanceCreateInfo buildInstanceCreateInfo(RGL::SDLWindow* window, bool headless) {
 		engineInfo.applicationVersion = vk::makeVersion(0, 1, 0);
 		engineInfo.apiVersion = apiVersion;
 		engineInfo.engineVersion = vk::makeVersion(0, 0, 1);
@@ -41,8 +40,21 @@ export class AppContext {
 			VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME,
 			VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME,
 			VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME};
-		std::ranges::copy_n(surfaceExtensions, surfaceCount,
-			std::back_inserter(instanceExtensions));
+		if (headless) {
+			// headless：无 SDL surface 扩展，但 surface 族扩展（maintenance1/capabilities2/
+			// colorspace/headless）都依赖 VK_KHR_surface，须显式启用
+			instanceExtensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
+			instanceExtensions.push_back(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
+		} else {
+			auto extensionsResult = window->getSurfaceExtensions();
+			if (!extensionsResult) {
+				std::string msg = extensionsResult.error().describe();
+				throw std::runtime_error(msg);
+			}
+			auto [surfaceExtensions, surfaceCount] = *extensionsResult;
+			std::ranges::copy_n(surfaceExtensions, surfaceCount,
+				std::back_inserter(instanceExtensions));
+		}
 
 		const auto availableLayers = context.enumerateInstanceLayerProperties();
 		if (!RGL::findMissingValidationLayers(availableLayers, layers).empty()) {

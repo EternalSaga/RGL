@@ -43,6 +43,7 @@ export struct RenderState {
 	float depthBiasSlope = 0.0f;
 	float depthBiasScale = 0.0f;
 	bool depthTest = true;
+	bool depthClipEnable = true;  // edS3：深度裁剪开关（默认 true = 传统行为；per-pass 可动态关）
 	bool depthWrite = true;
 	vk::CompareOp depthCompareOp = vk::CompareOp::eLess;
 	bool depthBoundsTest = false;
@@ -60,8 +61,10 @@ export struct RenderState {
 
 // 设置全部动态状态（viewport/scissor 用 width/height，其余用 state）。
 // spec 要求相关 set 命令在 draw 之前调用即可（draw 时采样），与 bindShadersEXT 的先后无约束。
+// depthClipDynamic（edS3 能力门）：true = 设备支持 extendedDynamicState3DepthClipEnable，
+// 才 setDepthClipEnableEXT；false = 扩展缺失，保持管线默认（干净 no-op，不 set）。
 export void applyDynamicState(vk::raii::CommandBuffer& cmd, uint32_t width, uint32_t height,
-	const RenderState& state) {
+	const RenderState& state, bool depthClipDynamic = false) {
 	// Viewport & scissor
 	vk::Viewport viewport(0.0f, static_cast<float>(height),
 		static_cast<float>(width), -static_cast<float>(height),
@@ -84,6 +87,9 @@ export void applyDynamicState(vk::raii::CommandBuffer& cmd, uint32_t width, uint
 	cmd.setDepthCompareOp(state.depthCompareOp);
 	cmd.setDepthBoundsTestEnable(state.depthBoundsTest);
 	cmd.setStencilTestEnable(state.stencilTest);
+	// edS3：depth clip enable 动态化（per-pass 控制；feature 可用才 set，缺失则 no-op）
+	if (depthClipDynamic)
+		cmd.setDepthClipEnableEXT(state.depthClipEnable);
 
 	// Multisampling
 	cmd.setRasterizationSamplesEXT(state.rasterizationSamples);

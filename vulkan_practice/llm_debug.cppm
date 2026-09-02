@@ -216,16 +216,16 @@ captureFrame(RGL::Renderer& renderer, const RGL::FrameDrawList& list, const LlmD
 		entry.pipeline.bindShaders(cmd);
 		cmd.drawMeshTasksEXT(call.groupCount, 1, 1);
 	};
-	RGL::applyDynamicState(cmd, w, h, renderer.getOpaqueState());
+	RGL::applyDynamicState(cmd, w, h, renderer.getOpaqueState(), renderer.isDepthClipDynamic());
 	for (uint32_t i = 0; i < list.skyboxStart; ++i)
 		drawCall(list.calls[i]);
 	if (list.skyboxStart < list.transparentStart) {
-		RGL::applyDynamicState(cmd, w, h, renderer.getSkyboxState());
+		RGL::applyDynamicState(cmd, w, h, renderer.getSkyboxState(), renderer.isDepthClipDynamic());
 		for (uint32_t i = list.skyboxStart; i < list.transparentStart; ++i)
 			drawCall(list.calls[i]);
 	}
 	if (list.transparentStart < list.calls.size()) {
-		RGL::applyDynamicState(cmd, w, h, renderer.getTransparentState());
+		RGL::applyDynamicState(cmd, w, h, renderer.getTransparentState(), renderer.isDepthClipDynamic());
 		for (uint32_t i = list.transparentStart; i < static_cast<uint32_t>(list.calls.size()); ++i)
 			drawCall(list.calls[i]);
 	}

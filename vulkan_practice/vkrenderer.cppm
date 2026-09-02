@@ -105,6 +105,8 @@ export class Renderer {
 	  resources(&vkResources),
 	  registry(shaderRegistry),
 	  offscreen(std::getenv("RGL_OFFSCREEN") != nullptr),
+	  // edS3：depth clip 动态状态能力（feature 探测位，启动期一次；未支持 = 恒 false no-op）
+	  depthClipDynamic(vkDevice.getOptionalFeatures().depthClipEnable),
 	  graphicsQueue(vkDevice.getGraphicsQueue()),
 	  graphicsCommandPool(vkDevice.getGraphicsCommandPool()) {
 		// descriptor heap 的 GPU 端地址，每帧传给 vkCmdBindResourceHeapEXT
@@ -136,6 +138,8 @@ export class Renderer {
 	const RGL::PipelineEntry& pipelineEntryAt(uint32_t index) const { return registry.entry(index); }
 	const RGL::RenderState& getOpaqueState() const { return opaqueState; }
 	const RGL::RenderState& getTransparentState() const { return transparentState; }
+	// edS3：depth clip 动态状态能力（llm_debug 离屏重渲消费，同主路径同一门，避免两路分歧）
+	[[nodiscard]] bool isDepthClipDynamic() const { return depthClipDynamic; }
 	const RGL::RenderState& getSkyboxState() const { return skyboxState; }
 	// 等待 GPU 空闲（resize / 重建 swapchain 前调用，确保旧资源不再被使用）
 	void waitForIdle() { vkDevice.getDevice().waitIdle(); }
@@ -294,6 +298,9 @@ export class Renderer {
 	// 纹理 high VA 采样 fault（现象/排查过程见 docs/heap_texture_research.md §十一）。
 	// 默认关 = 原路径零变化。
 	bool offscreen = false;
+	// edS3：depth clip enable 动态状态能力门（vkCmdSetDepthClipEnableEXT；启动期一次探测，
+	// 未支持 = false，applyDynamicState 内 no-op 不 set——"扩展缺失干净降级"原则）
+	bool depthClipDynamic = false;
 	// DIAG（window+texture 组合触发验证）：可见窗渲染但永不 present——KWin 永不
 	// import 我们的 swapchain dmabuf。fault 在 frame 2（buffer pool 窗口内），
 	// 前几帧渲染完整，判据有效
@@ -598,19 +605,20 @@ export class Renderer {
 		commandBuffers[currentFrame].drawMeshTasksEXT(call.groupCount, 1, 1);
 	};
 	const auto extent = swapchain->getExtent();
-	RGL::applyDynamicState(commandBuffers[currentFrame], extent.width, extent.height, opaqueState);
+	RGL::applyDynamicState(commandBuffers[currentFrame], extent.width, extent.height, opaqueState,
+		depthClipDynamic);
 	for (uint32_t i = 0; i < list.skyboxStart; ++i)
 		drawCall(list.calls[i]);
 	// Phase 5.5 批次 4 天空盒段（z=1 大三角 + LEQUAL 不写深度，空段自然跳过）
 	if (list.skyboxStart < list.transparentStart) {
 		RGL::applyDynamicState(commandBuffers[currentFrame], extent.width, extent.height,
-			skyboxState);
+			skyboxState, depthClipDynamic);
 		for (uint32_t i = list.skyboxStart; i < list.transparentStart; ++i)
 			drawCall(list.calls[i]);
 	}
 	if (list.transparentStart < list.calls.size()) {
 		RGL::applyDynamicState(commandBuffers[currentFrame], extent.width, extent.height,
-			transparentState);
+			transparentState, depthClipDynamic);
 		for (uint32_t i = list.transparentStart; i < static_cast<uint32_t>(list.calls.size()); ++i)
 			drawCall(list.calls[i]);
 	}

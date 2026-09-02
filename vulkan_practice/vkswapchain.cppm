@@ -16,16 +16,24 @@ namespace RGL {
 
 export class Swapchain {
    public:
-	Swapchain(RGL::DeviceContext& vkDevice, RGL::SDLWindow& window)
+	// headless：SDL 窗口可为空，surface 经 vkCreateHeadlessSurfaceEXT 创建（脱离
+	// compositor）；extent = 指定 width/height，format 固定 B8G8R8A8Srgb，imageCount =
+	// minImageCount（无窗口属性可参考）。非 headless 时行为不变（window 必非空）
+	Swapchain(RGL::DeviceContext& vkDevice, RGL::SDLWindow* window, bool headless,
+		uint32_t headlessWidth = 0, uint32_t headlessHeight = 0)
 		: vkDevice(vkDevice),
 		  window(window),
-		  surface(createSurface(vkDevice.getVkInstance().getInstance(), window)),
-		  format(window.selectFormat(
-			  vkDevice.getPhysicalDevice().getSurfaceFormatsKHR(*surface))),
-		  presentMode(createPresentMode(vkDevice, surface)),
+		  surface(headless ? createHeadlessSurface(vkDevice.getVkInstance().getInstance())
+		                   : createSurface(vkDevice.getVkInstance().getInstance(), *window)),
+		  format(headless ? selectHeadlessFormat(vkDevice.getPhysicalDevice().getSurfaceFormatsKHR(*surface))
+		                  : window->selectFormat(vkDevice.getPhysicalDevice().getSurfaceFormatsKHR(*surface))),
+		  presentMode(headless ? selectHeadlessPresentMode(vkDevice.getPhysicalDevice().getSurfacePresentModesKHR(*surface))
+		                      : createPresentMode(vkDevice, surface)),
 		  surfaceCapabilities(vkDevice.getPhysicalDevice().getSurfaceCapabilitiesKHR(*surface)),
-		  extent(window.getSwapchainExtend(surfaceCapabilities)),
-		  imageCount(window.getImageCount(surfaceCapabilities.minImageCount, surfaceCapabilities.maxImageCount)),
+		  extent(headless ? vk::Extent2D{headlessWidth, headlessHeight}
+		                 : window->getSwapchainExtend(surfaceCapabilities)),
+		  imageCount(headless ? surfaceCapabilities.minImageCount
+		                     : window->getImageCount(surfaceCapabilities.minImageCount, surfaceCapabilities.maxImageCount)),
 		  swapchain(vkDevice.getDevice(), buildSwapchainCreateInfo()),
 		  swapchainImages(swapchain.getImages()),
 		  swapchainImageViews(createImageViews(vkDevice.getDevice(), swapchainImages, format.format)) {
@@ -49,10 +57,10 @@ export class Swapchain {
 	// 负责观测（日志）且不得重建深度图等附属资源。
 	[[nodiscard]] bool recreate() {
 		auto newCaps = vkDevice.getPhysicalDevice().getSurfaceCapabilitiesKHR(*surface);
-		auto newFormat = window.selectFormat(
+		auto newFormat = window->selectFormat(
 			vkDevice.getPhysicalDevice().getSurfaceFormatsKHR(*surface));
 		auto newPresentMode = createPresentMode(vkDevice, surface);
-		const vk::Extent2D newExtent = window.getSwapchainExtend(newCaps);
+		const vk::Extent2D newExtent = window->getSwapchainExtend(newCaps);
 
 		const bool changed =
 			newExtent.width != extent.width || newExtent.height != extent.height ||
@@ -73,7 +81,7 @@ export class Swapchain {
 		format = newFormat;
 		presentMode = newPresentMode;
 		extent = newExtent;
-		imageCount = window.getImageCount(surfaceCapabilities.minImageCount,
+		imageCount = window->getImageCount(surfaceCapabilities.minImageCount,
 			surfaceCapabilities.maxImageCount);
 		swapchain = vk::raii::SwapchainKHR(vkDevice.getDevice(), buildSwapchainCreateInfo());
 		swapchainImages = swapchain.getImages();
@@ -86,6 +94,42 @@ export class Swapchain {
 		auto result = window.createSurface(instance);
 		if (!result) throw std::runtime_error(result.error().describe());
 		return std::move(*result);
+	}
+
+	// headless surface（VK_EXT_headless_surface）：脱离 compositor 创建虚拟 surface。
+	// v357 的 VkHeadlessSurfaceCreateInfoEXT 仅 sType/pNext/flags（无尺寸/格式——尺寸由
+	// swapchain 的 imageExtent 决定，见 buildSwapchainCreateInfo 的 extent）。present 为
+	// no-op（无真实显示），swapchain image 可回读（离屏渲染/CI 截图）
+	static vk::raii::SurfaceKHR createHeadlessSurface(vk::raii::Instance& instance) {
+		VkHeadlessSurfaceCreateInfoEXT createInfo{};
+		createInfo.sType = VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT;
+		VkSurfaceKHR surface = VK_NULL_HANDLE;
+		if (vkCreateHeadlessSurfaceEXT(*instance, &createInfo, nullptr, &surface) != VK_SUCCESS) {
+			throw std::runtime_error("Failed to create headless surface (vkCreateHeadlessSurfaceEXT)");
+		}
+		if (auto* logger = RLLogger::getInstance())
+			logger->info("Headless surface created (VK_EXT_headless_surface)");
+		return vk::raii::SurfaceKHR(instance, surface);
+	}
+
+	// headless 格式选择：优先 B8G8R8A8Srgb（SDR 8-bit，离屏渲染/截图足够），回落首个可用
+	static vk::SurfaceFormatKHR selectHeadlessFormat(const std::vector<vk::SurfaceFormatKHR>& availableFormats) {
+		for (const auto& available : availableFormats) {
+			if (available.format == vk::Format::eB8G8R8A8Srgb && available.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear) {
+				return available;
+			}
+		}
+		return availableFormats[0];
+	}
+
+	// headless present mode：present 为 no-op（无真实显示），任何模式都行。优先 eFIFO
+	//（最通用），回落首个可用——不走 selectPresentMode 的 eImmediate 硬要求（headless 无此模式）
+	static vk::PresentModeKHR selectHeadlessPresentMode(const std::vector<vk::PresentModeKHR>& presentModes) {
+		auto it = std::ranges::find(presentModes, vk::PresentModeKHR::eFifo);
+		if (it != presentModes.end()) {
+			return *it;
+		}
+		return presentModes[0];
 	}
 
 	static vk::PresentModeKHR createPresentMode(RGL::DeviceContext& vkDevice, const vk::raii::SurfaceKHR& surface) {
@@ -137,7 +181,7 @@ export class Swapchain {
 	}
 
 	RGL::DeviceContext& vkDevice;
-	RGL::SDLWindow& window;
+	RGL::SDLWindow* window;  // headless 时为空（surface 经 headless 扩展创建）
 	vk::raii::SurfaceKHR surface;
 	vk::SurfaceFormatKHR format;
 	vk::PresentModeKHR presentMode;

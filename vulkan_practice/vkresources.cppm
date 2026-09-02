@@ -210,8 +210,11 @@ export class Resources {
 		: vkInstance(vkInstance),
 		  vkDevice(vkDevice),
 		  vkSwapchain(vkSwapchain),
-		  allocator(*vkInstance.getInstance(), *vkDevice.getPhysicalDevice(), *vkDevice.getDevice(),
-			  vkInstance.getApiVersion()),
+ 	  // flags 显式传 BDA（第 5 参）——VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT 不可省略，
+ 	  // 否则所有 eShaderDeviceAddress buffer 创建返回 VK_ERROR_INITIALIZATION_FAILED
+ 	  allocator(*vkInstance.getInstance(), *vkDevice.getPhysicalDevice(), *vkDevice.getDevice(),
+ 		  vkInstance.getApiVersion(),
+ 		  VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT),
 		  depthImage(createDepthImage(allocator, vkSwapchain.getExtent()).value()),
 		  depthImageView(vkDevice.getDevice(), buildDepthView(*depthImage)),
 		  vertexBuffer(createGpuBuffer(

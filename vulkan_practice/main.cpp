@@ -41,6 +41,19 @@ int main() {
 	auto cameraConfig = std::move(*cameraResult);
 	const bool llmEnabled = cameraConfig.llm.enabled;
 
+	// headless（VK_EXT_headless_surface）：脱离 SDL/compositor——RGL_HEADLESS=1 时不建
+	// SDL 窗口，surface 经 vkCreateHeadlessSurfaceEXT 创建（离屏渲染/CI 截图，无需显示）。
+	// 尺寸 RGL_HEADLESS_SIZE="WxH"（默认 1280x720）。headless 下 llm_debug 截图直接读
+	// swapchain image 回读（compositor 无关）
+	const bool headless = std::getenv("RGL_HEADLESS") != nullptr;
+	int headlessW = 1280, headlessH = 720;
+	if (const char* hs = std::getenv("RGL_HEADLESS_SIZE")) {
+		if (std::sscanf(hs, "%dx%d", &headlessW, &headlessH) != 2) {
+			std::fprintf(stderr, "RGL_HEADLESS_SIZE 解析失败: %s\n", hs);
+			return -1;
+		}
+	}
+
 	// llm_debug 模式：隐藏窗（永不显示，compositor 须存活）+ 配置尺寸；否则交互窗 800x600
 	// DIAG（可见窗 GPUVM fault 排查 2026-08-28）：RGL_WIN_SIZE="WxH" 覆盖交互窗尺寸
 	//（免重编译二分可见窗的尺寸阈值，同 RGL_NO_HDR / TEXTURE_FORCE_* 门模式）
@@ -54,17 +67,25 @@ int main() {
 	}
 	if (const char* sa = std::getenv("RGL_SHOW_AFTER"))
 		showAfter = std::atoi(sa);
-	auto windowResult = SDLWindow::create(
-		llmEnabled ? static_cast<int>(cameraConfig.llm.width) : winW,
-		llmEnabled ? static_cast<int>(cameraConfig.llm.height) : winH,
-		"Vulkan Practice", llmEnabled || showAfter >= 0);
-	if (!windowResult) {
+
+	// headless 时不建 SDL 窗口（window=nullptr）；否则照旧
+	std::unique_ptr<SDLWindow> window;
+	if (!headless) {
+		auto windowResult = SDLWindow::create(
+			llmEnabled ? static_cast<int>(cameraConfig.llm.width) : winW,
+			llmEnabled ? static_cast<int>(cameraConfig.llm.height) : winH,
+			"Vulkan Practice", llmEnabled || showAfter >= 0);
+		if (!windowResult) {
+			auto* logger = RLLogger::getInstance();
+			if (logger) logger->error("错误: {}", windowResult.error().describe());
+			return -1;
+		}
+		window = std::make_unique<SDLWindow>(std::move(*windowResult));
+	} else {
 		auto* logger = RLLogger::getInstance();
-		if (logger) logger->error("错误: {}", windowResult.error().describe());
-		return -1;
+		if (logger) logger->info("headless 模式：脱离 SDL/compositor（{}x{}）", headlessW, headlessH);
 	}
-	auto window = std::move(*windowResult);
-	if (llmEnabled) {
+	if (llmEnabled && !headless) {
 		auto* logger = RLLogger::getInstance();
 		if (logger)
 			logger->info("llm_debug: 一次性截图模式（延迟 {} 帧后截图并退出）",
@@ -77,8 +98,9 @@ int main() {
 		// WindowExtent/AppExit（ecs.cppm）、SceneSpin/SceneBounds/ViewProjection（scene.cppm）、
 		// FrameDrawList（vkrenderer.cppm，渲染 system 产出、drawFrame 消费）、
 		// InputEvents/CameraState（camera.cppm，输入事件流 + 相机自管 level 状态）
-		registry.ctx().emplace<WindowExtent>(static_cast<uint32_t>(window.getWidth()),
-			static_cast<uint32_t>(window.getHeight()));
+		registry.ctx().emplace<WindowExtent>(
+			headless ? static_cast<uint32_t>(headlessW) : static_cast<uint32_t>(window->getWidth()),
+			headless ? static_cast<uint32_t>(headlessH) : static_cast<uint32_t>(window->getHeight()));
 		registry.ctx().emplace<AppExit>();
 		registry.ctx().emplace<Camera>(std::move(cameraConfig.camera));
 		registry.ctx().emplace<InputEvents>();
@@ -91,7 +113,7 @@ int main() {
 		registry.ctx().emplace<Light>(sceneConfig.light);  // Phase 5 批次 2：定向光（scene.lua light 段）
 		registry.ctx().emplace<SceneEnv>();  // Phase 5.5：环境参数（env 上传成功后回填，见下）
 
-		AppContext vkInstance(window);
+		AppContext vkInstance(window.get(), headless);
 		DeviceContext vkDevice(vkInstance);
 		// push data 契约（Phase 5）：shader object + descriptor heap 模式无 pipeline layout →
 		// 无 VkPushConstantRange，per-draw push data（DrawArgs 100B，vkCmdPushDataEXT，
@@ -105,7 +127,8 @@ int main() {
 			throw std::runtime_error(fmt::format(
 				"push data limit (maxPushConstantsSize={}, maxPushDataSize={}) < sizeof(DrawArgs) ({})",
 				maxPushConstants, maxPushData, sizeof(DrawArgs)));
-		Swapchain vkSwapchain(vkDevice, window);
+		Swapchain vkSwapchain(vkDevice, window.get(), headless,
+			static_cast<uint32_t>(headlessW), static_cast<uint32_t>(headlessH));
 		// heap 容量为固定裕量（与场景内容解耦，批次 3 E1.3）：CPU 解析模型不再需要
 		// 先于 Vulkan 初始化
 		Resources vkResources(vkInstance, vkDevice, vkSwapchain);
@@ -263,8 +286,8 @@ int main() {
 		// DIAG（可见窗 fault 排查）：隐藏窗启动、第 showAfter 帧后 SDL_ShowWindow——
 		// 若显示瞬间开始 fault = present/合成期状态触发；若全程不 fault = 可见性非根因
 		std::function<void(uint32_t)> onFrame;
-		if (showAfter >= 0) {
-			SDL_Window* sdlWindow = window;
+		if (showAfter >= 0 && !headless) {
+			SDL_Window* sdlWindow = *window;
 			onFrame = [sdlWindow, showAfter](uint32_t frame) {
 				if (static_cast<int>(frame) == showAfter) {
 					auto* logger = RLLogger::getInstance();

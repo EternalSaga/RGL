@@ -11,7 +11,39 @@ import vkerror;
 
 namespace RGL {
 
+// required feature 链（vkCreateDevice pNext）。**optional feature 不进本链**——spec 要求
+// pNext 链只含"已启用扩展"的 feature 结构，FALSE 结构挂未启用扩展 = UB（RADV 实测启动后
+// 首次分配即崩，VMA 错误被 .value() 吞成 bad_expected_access）。optional 由 vkdevice.cppm
+// 在 createDevice 时按 queryOptionalFeatures 结果条件链接到链尾（见 FeatureChainTail）。
 export using FeatureChain = vk::StructureChain<{{ chain_types | join(", ") }}>;
+
+// required 链尾类型（vkdevice 条件链接 optional feature 结构用——自动生成，与 chain_types 末位同步）
+export using FeatureChainTail = {{ chain_types | last }};
+
+// 可选 feature 支持位：queryOptionalFeatures 探测后填（扩展可用 且 feature 置位）。
+export struct OptionalFeatureSupport {
+{% for f in optional_features %}    bool {{ f.field }} = false;
+{% endfor %}};
+
+namespace {
+    // 扩展可用性（同 features.cppm checkDeviceExtensions 的枚举比对模式）
+    bool extensionAvailable(const vk::raii::PhysicalDevice& device, const char* name) {
+        for (const auto& p : device.enumerateDeviceExtensionProperties()) {
+            if (std::string_view(p.extensionName.data()) == name) return true;
+        }
+        return false;
+    }
+}
+
+// 探测设备对各 optional feature 的支持（扩展可用 且 feature 字段置位）。
+export OptionalFeatureSupport queryOptionalFeatures(const vk::raii::PhysicalDevice& device) {
+    OptionalFeatureSupport s;
+{% for f in optional_features %}    if (extensionAvailable(device, {{ f.extension }})) {
+        auto f_{{ f.field }} = device.getFeatures2<vk::PhysicalDeviceFeatures2, {{ f.vk_type }}>();
+        s.{{ f.field }} = f_{{ f.field }}.get<{{ f.vk_type }}>().{{ f.path }} != 0;
+    }
+{% endfor %}    return s;
+}
 
 export FeatureChain buildRequestedFeatures() {
     FeatureChain chain{};
@@ -19,6 +51,7 @@ export FeatureChain buildRequestedFeatures() {
 {% endfor %}    return chain;
 }
 
+// 仅校验 required（optional 缺失 = 降级 no-op，不报错）。
 export [[nodiscard]] std::expected<void, Error> validateFeatures(
     const vk::raii::PhysicalDevice& device, FeatureChain& requested) {
     auto supported = device.getFeatures2<{{ chain_types | join(", ") }}>();
