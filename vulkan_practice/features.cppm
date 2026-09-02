@@ -61,6 +61,8 @@ export std::vector<const char*> getDeviceExtensions(const OptionalFeatureSupport
 	auto extensions = kDeviceExtensions();
 	if (opt.depthClipEnable)
 		extensions.push_back(VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME);
+	if (opt.depthClipBase)  // edS3 的 depth clip 动态化以旧扩展为底座（VUID-07451，
+		extensions.push_back(VK_EXT_DEPTH_CLIP_ENABLE_EXTENSION_NAME);  // 两者须同开）
 	return extensions;
 }
 

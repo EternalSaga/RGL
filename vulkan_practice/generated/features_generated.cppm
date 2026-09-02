@@ -23,6 +23,7 @@ export using FeatureChainTail = vk::PhysicalDeviceDescriptorBufferFeaturesEXT;
 // 可选 feature 支持位：queryOptionalFeatures 探测后填（扩展可用 且 feature 置位）。
 export struct OptionalFeatureSupport {
     bool depthClipEnable = false;
+    bool depthClipBase = false;
 };
 
 namespace {
@@ -41,6 +42,10 @@ export OptionalFeatureSupport queryOptionalFeatures(const vk::raii::PhysicalDevi
     if (extensionAvailable(device, VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME)) {
         auto f_depthClipEnable = device.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT>();
         s.depthClipEnable = f_depthClipEnable.get<vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT>().extendedDynamicState3DepthClipEnable != 0;
+    }
+    if (extensionAvailable(device, VK_EXT_DEPTH_CLIP_ENABLE_EXTENSION_NAME)) {
+        auto f_depthClipBase = device.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceDepthClipEnableFeaturesEXT>();
+        s.depthClipBase = f_depthClipBase.get<vk::PhysicalDeviceDepthClipEnableFeaturesEXT>().depthClipEnable != 0;
     }
     return s;
 }

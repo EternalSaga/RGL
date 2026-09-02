@@ -41,6 +41,7 @@
         {"vk_type": "vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR", "path": "shaderUntypedPointers", "name": "ShaderUntypedPointersKHR::shaderUntypedPointers"}
     ],
     "optional_features": [
-        {"vk_type": "vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT", "path": "extendedDynamicState3DepthClipEnable", "field": "depthClipEnable", "extension": "VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME"}
+        {"vk_type": "vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT", "path": "extendedDynamicState3DepthClipEnable", "field": "depthClipEnable", "extension": "VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME"},
+        {"vk_type": "vk::PhysicalDeviceDepthClipEnableFeaturesEXT", "path": "depthClipEnable", "field": "depthClipBase", "extension": "VK_EXT_DEPTH_CLIP_ENABLE_EXTENSION_NAME"}
     ]
 }

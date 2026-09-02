@@ -3,6 +3,30 @@
 > AGENTS.md「已知问题」节只保留**未解决**项；已解决的问题（根因、排查过程、教训）归档于此。
 > 每条指向权威全文记录（同目录或现行文档）。时间倒序。
 
+## 2026-09-02 深夜 · edS3 depthClip "VVL 误报"结论推翻：实为 app 漏启用旧扩展 feature（已修复）
+
+`vkCmdSetDepthClipEnableEXT` 每帧报 VVL `VUID-vkCmdSetDepthClipEnableEXT-depthClipEnable-07451`
+（"the depthClipEnable feature was not enabled"）。早前（§十二 初版记录）定性为
+"VVL 1.4.357 gap、app 侧无 bug、保留现状"——**该结论是误诊**。
+
+**真相**：涉及**两个不同的 feature**，都含 "depthClipEnable" 子串，名字混淆导致误诊——
+① `VK_EXT_extended_dynamic_state3` 的 `extendedDynamicState3DepthClipEnable`（app 已启用，
+VUID-09423 靠它通过）；② 旧扩展 `VK_EXT_depth_clip_enable` 的 `depthClipEnable`（VUID-07451
+检查的就是它，app **从未启用该扩展**）。edS3 只是把旧扩展的 `VkPipelineRasterizationDepthClipStateCreateInfoEXT`
+静态状态"动态化"，底座 feature 仍须同时开启（本地 spec v1.4.360 `vertexpostproc.adoc:1060` +
+VUL `device_features.cpp` 两字段分别解析自两个 sType 结构 + VVL `cc_cmd_buffer_dynamic.cpp:2361`
+无条件查 `enabled_features.depthClipEnable`，三源一致；v1.4.359/main 均未豁免）。VVL 报错
+**完全正确**，app 真违规，RADV 宽容执行才没崩。误诊根因：当初看到自己启用的 eds3 struct 名里
+有 "depthClipEnable" 就认定"已启用"，实为张冠李戴。
+
+**修复**：`features_config.json` optional 加 `VK_EXT_depth_clip_enable`（探测字段
+`depthClipBase`）；`vkdevice.cppm` 条件链接其 feature struct 进 pNext 链、`features.cppm`
+同步追加扩展名；`depthClipDynamic` 门改为 eds3 && base 双条件（缺一即不调，干净降级）；
+`rlvk` 补 `vk::PhysicalDeviceDepthClipEnableFeaturesEXT`。验证：冒烟 `was not enabled` 报错
+归零且命令仍实调（0 报错源于 base 满足而非 no-op）。
+**教训**：VVL feature 报错先核对 **VUID 引用的确切 feature 结构/sType**，别被相似命名带偏；
+"某个含该子串的 struct 在链里=TRUE" ≠ "被检查的那个 feature 启用了"。
+
 ## 2026-09-02 · VMA 构造实参错位误诊 RADV 扩展 bug（zero_init 已回退）
 
 启用 `VK_EXT_zero_initialize_device_memory` 后主崩溃。曾误诊为 RADV 驱动 bug（"启用扩展就崩"
@@ -13,7 +37,7 @@
 必撞 = spec 违例；且本 app 无收益（RADV 新分配内存本身全零 + heap 只分配一次）→ **回退**。
 教训：归因外部驱动前先把"自己代码与基线的 diff"逐行审干净。
 **全文**：[vulkan_extensions_2025_调研.md](../vulkan_extensions_2025_调研.md) §十二（现行，含
-headless 落地 + edS3 VVL 误报记录）。
+headless 落地 + edS3 误诊→勘误→修复全记录（§12.3 勘误））。
 
 ## 2026-08-30 · cottage 偶发 artifact = 两个共享代码越界 bug（非驱动竞态）
 

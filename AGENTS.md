@@ -72,7 +72,7 @@ CMake 无独立构建目录 — 必须从根目录构建（`cmake -B build -S .`
   后缓冲（免离屏重渲）。坑：v357 结构体无 width/height/format 字段（尺寸由 swapchain 定）、
   须显式 `VK_KHR_surface`、无 `eImmediate`（用 `eFifo`）
 - **agent 冒烟**：`cd build/vulkan_practice && RGL_HEADLESS=1 RADV_EXPERIMENTAL=heap timeout 8 ./vulkan_practice`
-  （VVL 对 edS3 `depthClipEnable` 的报错是已知误报噪声，见「已知问题」）
+  （正常应零 `[error]`；曾因 edS3 depthClip 误配置有 VVL 07451 噪声，已修复（2026-09-02 深夜勘误：非误报，实为漏启 VK_EXT_depth_clip_enable 真违规），见 docs/archive/issue_history.md）
 - **llm_debug 截图流程**（agent 多模态读图）：`configs/camera.lua` 改 `llm_debug=true`（一行开关）
   → `just run` → 离屏渲染延迟 N 帧后存 PNG（路径打日志）并退出 → 复原 `false`。
   相机位置 = camera.lua 顶层 position/target/fovDegrees（无 presets）
@@ -289,9 +289,6 @@ sType 值相同。代码使用 EXT 命名形式，功能等价于 KHR。
 > 只列**未解决**项。已解决问题（根因/误诊复盘）见 `docs/archive/issue_history.md`。
 
 - `computeCommandPool`/`transferCommandPool`/`computeQueue`/`transferQueue` 已创建但保留给未来使用
-- **edS3 VVL 误报**：VVL 1.4.357 报 `depthClipEnable feature 未启用`——深挖实锤 feature 确实
-  启用（`vkCreateDevice` pNext 链末位 flag=TRUE，VVL 认识却未记进"已启用"集）= 非致命噪声，
-  app 侧无 bug，保留现状（详见 `docs/vulkan_extensions_2025_调研.md` §十二）
 - **VMA + zero-init 扩展冲突（教训）**：VMA 3.4 对 BDA buffer 自动加内部
   `VkMemoryAllocateFlagsInfo(DEVICE_ADDRESS)`，与用户 `pMemoryAllocateNext(ZERO_INITIALIZE)`
   必撞 = spec 违例——`VK_EXT_zero_initialize_device_memory` 已回退；将来真实需求走原生
@@ -324,7 +321,7 @@ sType 值相同。代码使用 EXT 命名形式，功能等价于 KHR。
 - `docs/nvidia_compatibility_report.md` — 跨驱动兼容性排查（三平台验证记录；当前开发机 = Strix Halo 纯核显）
 - `docs/device_generated_commands_research.md` — GPU culling（`VK_EXT_device_generated_commands`）双驱动实测调研（Phase 7 依据）
 - `docs/present_timing_research.md` — present 时序调研（决策"暂不引入"）
-- `docs/vulkan_extensions_2025_调研.md` — 2025+ 新扩展调研 + §十二 实施记录（edS3/headless 落地、zero_init 回退）
+- `docs/vulkan_extensions_2025_调研.md` — 2025+ 新扩展调研 + §十二 实施记录（edS3/headless 落地、zero_init 回退；§12.3 含 edS3"VVL 误报"误诊的 2026-09-02 深夜勘误——实为真违规已修复）
 - `docs/快捷键配置.md` — Zed 编辑器快捷键/任务/调试配置
 - `docs/archive/` — 归档索引（phase 计划、ecs 审查、heap 纹理调研、反射规划；含 issue_history.md 总账）
 - 离线 Vulkan 文档（优先于在线检索，`docs.vulkan.org`/`registry.khronos.org` 有 Cloudflare 拦截）：
