@@ -154,8 +154,13 @@ int main() {
 		ShaderRegistry shaderRegistry(vkDevice, vkResources, sceneConfig.pipelines);
 		// Phase 6 批次 3：渲染意图图 = configs/render_graph.lua（缺文件/缺段回落默认
 		// 三段图）；compileRenderGraph 校验 + barrier 布局链推导，任何图错误启动期
-		// 报错退出（Renderer 构造校验器兜底执行器可解析性）
-		auto graphDescResult = loadRenderGraphConfig("configs/render_graph.lua");
+		// 报错退出（Renderer 构造校验器兜底执行器可解析性）。
+		// DIAG（RGL_OFFSCREEN，批次 4 转正）：env 置位 = 强制 offscreen 图变体
+		//（三段渲 scene_rt + composite blit 上屏，旧手工通路等价；覆盖 Lua 配置——
+		// 排障开关语义 = 与配置文件无关地切换渲染路线）
+		auto graphDescResult = std::getenv("RGL_OFFSCREEN")
+			? std::expected<RgGraphDesc, Error>{offscreenRenderGraphDesc()}
+			: loadRenderGraphConfig("configs/render_graph.lua");
 		if (!graphDescResult) {
 			auto* logger = RLLogger::getInstance();
 			if (logger) logger->error("错误: {}", graphDescResult.error().describe());

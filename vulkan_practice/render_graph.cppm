@@ -174,6 +174,13 @@ export [[nodiscard]] std::expected<CompiledRenderGraph, Error> compileRenderGrap
 export const CompiledRenderGraph& defaultRenderGraph();
 export const RgGraphDesc& defaultRenderGraphDesc();
 
+// RGL_OFFSCREEN 图变体（Phase 6 批次 4，旧 DIAG 手工通路转正）：三段渲入
+// offscreen 附件 scene_rt（format=inherit → 执行器解析为 swapchain 格式，blit
+// LINEAR 的 VVL 格式兼容前提）+ composite blit pass 上屏。present 转换 src 自动
+// 变 Transfer（blit 是 swapchain 最后写），submit waitStage 派生 = Transfer——
+// 与旧手工分支语义等价。
+export const RgGraphDesc& offscreenRenderGraphDesc();
+
 // 编译期自检（无 GPU）：构造合法/非法图样本跑 compileRenderGraph，返回全部
 // 失败描述（空 = 通过）。main 启动期 debug 日志通道消费。
 export std::vector<std::string> renderGraphSelfCheck();

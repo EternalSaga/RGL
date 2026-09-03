@@ -124,6 +124,26 @@ export class Resources {
 	//（ShaderRegistry::addModelEntry，同 ensureSharedSampler 时序）。
 	// 返回 resource heap 绝对槽号（binding mapping 烘焙用）。
 	[[nodiscard]] uint32_t ensureSceneData();
+
+	// Phase 6 批次 4：render_graph offscreen attachment 的 RT 缓存（key = attachment 名）。
+	// 幂等创建 / extent 失配重建（随 swapchain resize，重建前 waitIdle——双帧在飞下
+	// 旧 RT 可能仍被另一帧命令引用，同 recreateDepthImage 规则）。
+	// usage = COLOR_ATTACHMENT | TRANSFER_SRC | TRANSFER_DST | SAMPLED（blit 上屏与
+	// shader 采样两条消费路都预留）；format 由调用点解析（"inherit" = swapchain 格式，
+	// blit 到后缓冲要求同格式类，LINEAR filter 的 VVL 兼容前提）。
+	// map 节点地址稳定（view 的 raii 对象不 move）。
+	struct RtAttachment {
+		RGL::VmaImage image;
+		std::optional<vk::raii::ImageView> view;
+		vk::Extent2D extent{};
+		vk::Format format = vk::Format::eUndefined;  // v341 raii::ImageView 无 getFormat，自建记录
+		// 重建计数：extent/format 漂移换新图（真实布局回 Undefined）——消费方
+		//（Renderer 布局追踪）据此重置，旧值失配 = spec 违例
+		uint64_t generation = 0;
+	};
+	// 返回稳定指针（map 节点；std::expected 不支持引用类型，AGENTS 规范）
+	[[nodiscard]] std::expected<RtAttachment*, Error> ensureRtAttachment(const std::string& name,
+		vk::Extent2D extent, vk::Format format);
 	// scene data buffer（drawFrame 每帧 staging copy 的目标；未创建 = 空句柄，跳过拷贝）
 	const RGL::VmaBuffer& getSceneDataBuffer() const { return sceneDataBuffer; }
 
@@ -206,6 +226,8 @@ export class Resources {
 	uint32_t cubeAsset = 0;
 	// 资产表（E1.1/E1.2：已上传 primitive 的 GPU 数据 + heap slot + 三角形数 + 管线条目引用）
 	RGL::AssetTable assetTable;
+	// Phase 6 批次 4：offscreen attachment RT 缓存（ensureRtAttachment，key = 名）
+	std::map<std::string, RtAttachment> rtAttachments;
 	// 用户槽位固定裕量（与场景内容解耦；Phase 3 统一步长 = max(buffer, image) descriptorSize，
 	// RADV 32B，1024 槽为 KB 级开销）
 	static constexpr uint32_t kUserSlotMargin = 1024;

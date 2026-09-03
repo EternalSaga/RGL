@@ -164,6 +164,52 @@ uint32_t Resources::ensureSceneData() {
 		return sceneDataSlot;
 	}
 
+std::expected<Resources::RtAttachment*, Error> Resources::ensureRtAttachment(
+		const std::string& name, vk::Extent2D extent, vk::Format format) {
+		auto it = rtAttachments.find(name);
+		if (it != rtAttachments.end() && it->second.extent == extent &&
+			it->second.format == format)
+			return &it->second;
+
+		// 重建（extent 随 swapchain resize / 格式漂移）：双帧在飞下旧 RT 可能仍被
+		// 另一帧命令引用 → waitIdle 后替换（同 recreateDepthImage 规则）
+		vkDevice.getDevice().waitIdle();
+
+		vk::ImageCreateInfo info{};
+		info.imageType = vk::ImageType::e2D;
+		info.format = format;
+		info.extent = vk::Extent3D(extent.width, extent.height, 1);
+		info.mipLevels = 1;
+		info.arrayLayers = 1;
+		info.samples = vk::SampleCountFlagBits::e1;
+		info.tiling = vk::ImageTiling::eOptimal;
+		info.initialLayout = vk::ImageLayout::eUndefined;
+		// 消费面：colorWrite（渲入）+ transferRead/Write（blit 两端）+ sampleRead
+		//（shader 采样，后处理类图预留）
+		info.usage = vk::ImageUsageFlagBits::eColorAttachment |
+			vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst |
+			vk::ImageUsageFlagBits::eSampled;
+		VmaAllocationCreateInfo alloc{};
+		alloc.usage = VMA_MEMORY_USAGE_AUTO;
+		auto imageResult = allocator.createImage(info, alloc);
+		if (!imageResult)
+			return std::unexpected(std::move(imageResult).error());
+
+		RtAttachment& slot = rtAttachments[name];  // 覆盖旧值（map 节点地址稳定）
+		const uint64_t prevGeneration = slot.generation;
+		slot.image = std::move(*imageResult);
+		slot.extent = extent;
+		slot.format = format;
+		slot.generation = prevGeneration + 1;
+		vk::ImageViewCreateInfo viewInfo{};
+		viewInfo.image = slot.image.image;
+		viewInfo.viewType = vk::ImageViewType::e2D;
+		viewInfo.format = format;
+		viewInfo.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+		slot.view.emplace(vkDevice.getDevice(), viewInfo);
+		return &slot;
+	}
+
 std::expected<RGL::VmaImage, Error> Resources::createDepthImage(RGL::VmaAllocatorRAII& allocator, vk::Extent2D extent) {
 		vk::ImageCreateInfo depthImageInfo{};
 		depthImageInfo.imageType = vk::ImageType::e2D;

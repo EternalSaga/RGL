@@ -385,6 +385,45 @@ vk::ImageMemoryBarrier2 materializeBarrier(const RgBarrierPlan& plan, VkImage im
 		plan.srcStage, plan.dstStage, plan.srcAccess, plan.dstAccess);
 }
 
+const RgGraphDesc& offscreenRenderGraphDesc() {
+	// RGL_OFFSCREEN 图变体（批次 4，旧 DIAG 转正）：三段渲 scene_rt + composite blit。
+	// scene_rt format 留 "inherit"——执行器解析为 swapchain 格式（blit LINEAR 兼容前提）；
+	// 清除值与默认图一致（0.1 灰背景 / depth 1.0）
+	static const RgGraphDesc desc = [] {
+		auto sceneOut = [](std::string name, RgUsage usage, RgLoadOp load, RgStoreOp store) {
+			return RgPassAttachment{.attachment = std::move(name), .usage = usage, .loadOp = load,
+				.storeOp = store};
+		};
+		auto scenePass = [&](std::string name, const char* source, RgLoadOp colorLoad,
+		                     RgLoadOp depthLoad, RgStoreOp depthStore) {
+			return RgPassDesc{.name = std::move(name), .state = source, .drawSource = source,
+				.outputs = {sceneOut("scene_rt", RgUsage::colorWrite, colorLoad, RgStoreOp::store),
+					sceneOut("depth", RgUsage::depthWrite, depthLoad, depthStore)}};
+		};
+		return RgGraphDesc{
+			.attachments =
+				{
+					RgAttachmentDesc{.name = "swapchain", .kind = RgAttachmentKind::swapchain},
+					RgAttachmentDesc{.name = "depth", .kind = RgAttachmentKind::depth},
+					RgAttachmentDesc{.name = "scene_rt", .kind = RgAttachmentKind::offscreen},
+				},
+			.passes =
+				{
+					scenePass("opaque", "opaque", RgLoadOp::clear, RgLoadOp::clear, RgStoreOp::store),
+					scenePass("skybox", "skybox", RgLoadOp::load, RgLoadOp::load, RgStoreOp::store),
+					scenePass("transparent", "transparent", RgLoadOp::load, RgLoadOp::load,
+						RgStoreOp::dontCare),
+					RgPassDesc{.name = "composite", .kind = RgPassKind::blit,
+						.outputs = {sceneOut("swapchain", RgUsage::transferWrite, RgLoadOp::load,
+							RgStoreOp::store)},
+						.inputs = {sceneOut("scene_rt", RgUsage::transferRead, RgLoadOp::load,
+							RgStoreOp::store)}},
+				},
+		};
+	}();
+	return desc;
+}
+
 std::vector<std::string> renderGraphSelfCheck() {
 	std::vector<std::string> failures;
 	auto expectOk = [&](const char* what, const RgGraphDesc& desc) {

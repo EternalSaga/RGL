@@ -36,8 +36,8 @@ namespace RGL {
 namespace {
 
 // 执行器可解析性校验（Phase 6，构造期 fail-fast——录制期零图错误）：
-// 图必须恰好引用 swapchain/depth 各一次（批次 4 前执行器只认这两类 attachment）；
-// draw pass 的 state/drawSource 名字可解析；blit pass 暂不支持。
+// 图必须恰好引用 swapchain/depth 各一次；draw pass 的 state/drawSource 名字可解析；
+// blit pass 必须两端齐（compileRenderGraph 已保证拓扑，此处防绕过）。
 void validateRenderGraphForExecutor(const RGL::CompiledRenderGraph& graph) {
 	auto fail = [](std::string msg) { throw std::runtime_error("Renderer: " + msg); };
 	if (graph.passes.empty())
@@ -56,9 +56,11 @@ void validateRenderGraphForExecutor(const RGL::CompiledRenderGraph& graph) {
 	static constexpr std::array<const char*, 3> kKnownDrawSources{"opaque", "skybox",
 		"transparent"};
 	for (const auto& pass : graph.passes) {
-		if (pass.kind == RgPassKind::blit)
-			fail(fmt::format("blit pass '{}' not yet supported by executor "
-				"(Phase 6 batch 4 offscreen rework)", pass.name));
+		if (pass.kind == RgPassKind::blit) {
+			if (!pass.blitSource || !pass.blitTarget)
+				fail(fmt::format("blit pass '{}' missing source/target resolution", pass.name));
+			continue;
+		}
 		if (pass.state != "opaque" && pass.state != "skybox" && pass.state != "transparent")
 			fail(fmt::format("render graph pass '{}' has unknown state '{}'", pass.name,
 				pass.state));
@@ -97,14 +99,6 @@ Renderer::Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RG
 		for (const auto& warning : this->renderGraph.warnings) {
 			auto logger = RLLogger::getInstance();
 			if (logger) logger->warn("RenderGraph: {}", warning);
-		}
-		// DIAG（可见窗 GPUVM fault 规避 2026-08-28，heap_texture_research.md §十一）：
-		// 旧手工 RGL_OFFSCREEN 离屏+blit 通路已随 Phase 6 图重构移除，批次 4 以
-		// offscreen attachment + composite blit pass 的图变体恢复（见 next_roadmap）
-		if (std::getenv("RGL_OFFSCREEN")) {
-			auto logger = RLLogger::getInstance();
-			if (logger) logger->error("Renderer: RGL_OFFSCREEN temporarily unavailable during "
-				"Phase 6 graph rework (restored in batch 4) — ignored");
 		}
 		// descriptor heap 的 GPU 端地址，每帧传给 vkCmdBindResourceHeapEXT
 		heapAddress = vkResources.getDescriptorHeap().getGpuAddress();
@@ -353,8 +347,7 @@ std::expected<void, Error> Renderer::recreateSwapchainAndDepth(const char* conte
 	// ⑤ pass 循环（执行序 = 图线性序，Phase 6）：attachment barrier（布局链推导
 	// 物化）→ beginRendering（逐 pass 附件）→ applyDynamicState(pass.state)
 	// → 段内逐 draw（pass.drawSource）→ endRendering。执行器盲消费——barrier/
-	// load/store/布局全部来自编译图，手写布局转换清零（RGL_OFFSCREEN 临时通路
-	// 随旧 ⑤/⑨/⑫ 一并移除，批次 4 以 offscreen attachment + blit pass 图变体恢复）。
+	// load/store/布局全部来自编译图，手写布局转换清零。
 	auto& swapchainImages = swapchain->getImages();
 	auto& swapchainImageViews = swapchain->getImageViews();
 	const auto extent = swapchain->getExtent();
@@ -363,12 +356,37 @@ std::expected<void, Error> Renderer::recreateSwapchainAndDepth(const char* conte
 	VkImage depthImage = *resources->getDepthImage();
 	VkImageView depthView = *resources->getDepthImageView();
 
+	// offscreen attachment RT（批次 4）：幂等 ensure（extent 随 swapchain resize 重建，
+	// 重建含 waitIdle——录制期调用安全，本 CB 尚未提交）。format 暂恒 inherit =
+	// swapchain 格式（blit LINEAR 的 VVL 格式兼容前提；显式格式留后续按需解析）
+	std::vector<Resources::RtAttachment*> offscreenRt(renderGraph.attachments.size());
+	// RT 重建检测（generation 变化 = 新图布局 Undefined）：布局追踪同步重置，
+	// 否则下帧首 barrier oldLayout 失配（extent 漂移 = resize 必现）
+	std::vector<uint64_t> rtGenerations(renderGraph.attachments.size(), 0);
+	for (uint32_t s = 0; s < renderGraph.attachments.size(); ++s) {
+		const auto& att = renderGraph.attachments[s];
+		if (att.kind != RgAttachmentKind::offscreen)
+			continue;
+		if (att.format != "inherit")
+			return std::unexpected(Error{ErrorCode::Unknown,
+				fmt::format("render graph: offscreen attachment '{}' requests format '{}' "
+					"(only 'inherit' supported so far)", att.name, att.format)});
+		auto rtResult = resources->ensureRtAttachment(att.name, extent,
+			swapchain->getFormat().format);
+		if (!rtResult)
+			return std::unexpected(std::move(rtResult).error());
+		offscreenRt[s] = *rtResult;
+		if ((*rtResult)->generation != rtGenerations[s]) {
+			rtGenerations[s] = (*rtResult)->generation;
+			attachmentLayouts[s] = vk::ImageLayout::eUndefined;
+		}
+	}
+
 	auto imageForSlot = [&](RgAttachmentSlot slot) -> VkImage {
 		switch (renderGraph.attachments[slot].kind) {
 			case RgAttachmentKind::swapchain: return swapchainImage;
 			case RgAttachmentKind::depth: return depthImage;
-			case RgAttachmentKind::offscreen:
-				throw std::runtime_error("Renderer: offscreen attachment executed without support");
+			case RgAttachmentKind::offscreen: return offscreenRt[slot]->image.image;
 		}
 		return VK_NULL_HANDLE;  // 不可达（穷尽），消 warning
 	};
@@ -376,8 +394,7 @@ std::expected<void, Error> Renderer::recreateSwapchainAndDepth(const char* conte
 		switch (renderGraph.attachments[slot].kind) {
 			case RgAttachmentKind::swapchain: return swapchainView;
 			case RgAttachmentKind::depth: return depthView;
-			case RgAttachmentKind::offscreen:
-				throw std::runtime_error("Renderer: offscreen attachment executed without support");
+			case RgAttachmentKind::offscreen: return **offscreenRt[slot]->view;  /* optional 解引用 + raii handle */
 		}
 		return VK_NULL_HANDLE;
 	};
@@ -411,9 +428,29 @@ std::expected<void, Error> Renderer::recreateSwapchainAndDepth(const char* conte
 
 	for (const auto& pass : renderGraph.passes) {
 		emitBarriers(pass.barriers);
-		if (pass.kind != RgPassKind::drawMesh)
-			return std::unexpected(Error{ErrorCode::Unknown,
-				"blit pass reached executor (constructor validation bypassed)"});
+		// blit pass（批次 4，RGL_OFFSCREEN 图变体的 composite）：transferRead 源 →
+		// transferWrite 目标整幅拷贝（1:1 同尺寸同格式，LINEAR = 精确拷贝）；
+		// 两端布局转换已由 pass.barriers 完成（scene_rt CAO→TransferSrc、
+		// swapchain 帧首 Undefined→TransferDst），无绘制、无动态状态
+		if (pass.kind == RgPassKind::blit) {
+			VkImage srcImage = imageForSlot(*pass.blitSource);
+			VkImage dstImage = imageForSlot(*pass.blitTarget);
+			vk::ImageBlit blitRegion{};
+			blitRegion.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+			blitRegion.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+			const int32_t w = static_cast<int32_t>(extent.width);
+			const int32_t h = static_cast<int32_t>(extent.height);
+			// hpp ArrayWrapper1D 不接受 brace 整体赋值，逐元素填（同旧 DIAG 通路写法）
+			blitRegion.srcOffsets[0] = vk::Offset3D{0, 0, 0};
+			blitRegion.srcOffsets[1] = vk::Offset3D{w, h, 1};
+			blitRegion.dstOffsets[0] = vk::Offset3D{0, 0, 0};
+			blitRegion.dstOffsets[1] = vk::Offset3D{w, h, 1};
+			::vkCmdBlitImage(*commandBuffers[currentFrame], srcImage,
+				VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dstImage,
+				VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+				reinterpret_cast<const VkImageBlit*>(&blitRegion), VK_FILTER_LINEAR);
+			continue;
+		}
 
 		std::vector<vk::RenderingAttachmentInfo> colorInfos;
 		colorInfos.reserve(pass.colors.size());
