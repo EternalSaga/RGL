@@ -35,6 +35,10 @@ export struct Camera {
 	glm::vec3 target{0.0f, 0.0f, 0.0f};
 	float yaw = 0.0f;
 	float pitch = 0.0f;
+	// trackball 携带的 up（basis 携带，同 legacy TrackballSystem）：随拖拽与 offset
+	// 同步旋转，不反推 yaw/pitch → 极点无 atan2(0,0) 奇异、可翻过头顶。fps 模式不用它
+	//（up 由 yaw/pitch 推导）。config 加载时按 world-up 对齐初始化。
+	glm::vec3 up{0.0f, 1.0f, 0.0f};
 	float fov = 45.0f * glm::pi<float>() / 180.0f;
 	float nearPlane = 0.1f;
 	float farPlane = 10.0f;
@@ -93,13 +97,21 @@ export glm::vec3 cameraRight(const Camera& camera) {
 	return glm::vec3(std::cos(camera.yaw), 0.0f, -std::sin(camera.yaw));
 }
 
+// 必须与 cameraForward 同约定：先绕世界 Y 转 yaw，再绕相机右轴转 pitch。
+// 由该约定推得 up = (sin yaw·sin pitch, cos pitch, +cos yaw·sin pitch)——z 分量
+// 符号写反时 up 与视线会在特定 (yaw, pitch) 处反平行（yaw=0, pitch=±45° 时
+// cross(f,up)=0），lookAt 基退化 → 画面中途 180° 翻滚（2026-09-03 天旋地转根因）。
 export glm::vec3 cameraUp(const Camera& camera) {
 	return glm::vec3(std::sin(camera.yaw) * std::sin(camera.pitch),
 		std::cos(camera.pitch),
-		-std::cos(camera.yaw) * std::sin(camera.pitch));
+		std::cos(camera.yaw) * std::sin(camera.pitch));
 }
 
 export glm::mat4 cameraView(const Camera& camera) {
+	// trackball：视角恒指向 target，up 用携带状态（basis 携带，极点无奇异）；
+	// fps：自由飞行，forward/up 由 yaw/pitch 推导，target 不参与
+	if (camera.mode == CameraMode::Trackball)
+		return glm::lookAt(camera.position, camera.target, camera.up);
 	return glm::lookAt(camera.position, camera.position + cameraForward(camera),
 		cameraUp(camera));
 }
@@ -175,21 +187,24 @@ export void cameraSystem(entt::registry& rg, float dt) {
 			camera.yaw -= dx * camera.fpsSensitivity;
 			camera.pitch -= dy * camera.fpsSensitivity;
 		} else {
-			// Trackball：相机绕 target 公转，object 始终居屏中心（旋转 position-target
-			// 偏移向量，而不是原地转朝向）。手感约定（同 three.js OrbitControls）：
-			// 拖右→object 正面朝右（相机向左公转）；拖下→object 顶部朝向观察者（相机上移）
+			// Trackball：basis 携带（同 legacy TrackballSystem）——offset 与 up 随拖拽
+			// 同步旋转，不反推 yaw/pitch（避开 atan2(0,0) 极点奇异）。up 与视线同旋转
+			// 保内积，恒垂直视线 → 极点不抖、可翻过头顶（roll 连续累积，物理转球手感）。
+			// 手感约定（同 three.js OrbitControls）：拖右→object 正面朝右（相机向左公转）；
+			// 拖下→object 顶部朝向观察者（相机上移）
 			glm::vec3 offset = camera.position - camera.target;
 			if (glm::length(offset) > 1e-4f) {
-				offset = rotateAroundAxis(offset, -dx * camera.trackballSensitivity,
-					glm::vec3(0.0f, 1.0f, 0.0f));
-				offset = rotateAroundAxis(offset, -dy * camera.trackballSensitivity,
-					cameraRight(camera));
+				const float s = camera.trackballSensitivity;
+				// 竖直轴 = 屏幕右向量 forward × up（恒 ⊥ 二者，极点非零、无奇异）
+				glm::vec3 forward = glm::normalize(camera.target - camera.position);
+				glm::vec3 right = glm::normalize(glm::cross(forward, camera.up));
+				// 水平：绕世界 Y（offset 与 up 同步旋转）
+				offset = rotateAroundAxis(offset, -dx * s, glm::vec3(0.0f, 1.0f, 0.0f));
+				camera.up = rotateAroundAxis(camera.up, -dx * s, glm::vec3(0.0f, 1.0f, 0.0f));
+				// 竖直：绕屏幕右轴（offset 与 up 同步旋转）
+				offset = rotateAroundAxis(offset, -dy * s, right);
+				camera.up = rotateAroundAxis(camera.up, -dy * s, right);
 				camera.position = camera.target + offset;
-				// 由新位置反推 yaw/pitch：forward 恒指向 target
-				glm::vec3 forward =
-					glm::normalize(camera.target - camera.position);
-				camera.pitch = std::asin(std::clamp(forward.y, -1.0f, 1.0f));
-				camera.yaw = std::atan2(-forward.x, -forward.z);
 			}
 		}
 	}

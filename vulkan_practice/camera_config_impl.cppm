@@ -103,6 +103,8 @@ namespace RGL {
 				fwd = glm::normalize(fwd);
 				camera.pitch = std::asin(std::clamp(fwd.y, -1.0f, 1.0f));
 				camera.yaw = std::atan2(-fwd.x, -fwd.z);
+				// trackball 携带 up 初始化：world-up 对齐（无 roll），与旧闭式 cameraUp 一致
+				camera.up = cameraUp(camera);
 			}
 		}
 
