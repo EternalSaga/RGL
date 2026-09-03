@@ -12,6 +12,7 @@ import asset_table;
 import shader_registry;
 import vk_renderer;
 import frame_draw_list;
+import render_graph_config;
 import scene_config;
 import gltf_loader;
 import model_importer;
@@ -151,10 +152,28 @@ int main() {
 		// "cube" 条目恒建（批次 3：画不画 = cube entity 有无，数据驱动，下方按 showCube
 		// 决定是否注册）。先于 Renderer 构造（Renderer 持引用）
 		ShaderRegistry shaderRegistry(vkDevice, vkResources, sceneConfig.pipelines);
-		// Phase 6 批次 2：编译图（批次 3 前 = 默认三段图，与旧 drawFrame 硬编码语义等价；
-		// 届时换成 configs/render_graph.lua 加载 + compileRenderGraph）
+		// Phase 6 批次 3：渲染意图图 = configs/render_graph.lua（缺文件/缺段回落默认
+		// 三段图）；compileRenderGraph 校验 + barrier 布局链推导，任何图错误启动期
+		// 报错退出（Renderer 构造校验器兜底执行器可解析性）
+		auto graphDescResult = loadRenderGraphConfig("configs/render_graph.lua");
+		if (!graphDescResult) {
+			auto* logger = RLLogger::getInstance();
+			if (logger) logger->error("错误: {}", graphDescResult.error().describe());
+			return -1;
+		}
+		auto compiledGraph = compileRenderGraph(*graphDescResult);
+		if (!compiledGraph) {
+			auto* logger = RLLogger::getInstance();
+			if (logger) logger->error("错误: render graph compile failed: {}",
+				compiledGraph.error().describe());
+			return -1;
+		}
+		// 图来源/规模观测（排"配置没生效"类问题：pass 数与 configs/render_graph.lua 对账）
+		if (auto* logger = RLLogger::getInstance())
+			logger->info("RenderGraph: {} attachments / {} passes compiled",
+				compiledGraph->attachments.size(), compiledGraph->passes.size());
 		Renderer vkRenderer(vkDevice, vkSwapchain, vkResources, shaderRegistry,
-			defaultRenderGraph());
+			std::move(*compiledGraph));
 
 		// Phase 5.5 契约：引用 model_pbr_ibl 风格必须配 environment——frag 声明的
 		// binding 4/5 无 mapping 烘焙 = 采样未写描述符（内容未定义；VVL 会抓
