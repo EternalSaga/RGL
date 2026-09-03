@@ -1,3 +1,5 @@
+module;
+#include <glm/glm.hpp>  // SceneEntityDesc 成员 glm::vec3 需名可见（同 render_list.cppm 先例）
 export module scene_config;
 
 import rlstd;
@@ -31,10 +33,25 @@ export struct EnvironmentConfig {
 	bool skybox = true;
 };
 
-// 场景配置：加载哪个模型 + 用哪些 pipeline + 是否场景旋转。
+// 场景 entity 声明（Phase 6 批次 5，scene.lua entities 段）："场景里有什么"的
+// 数据驱动列表——每项注册为场景实体（画不画 = entity 有无，ECS 规范 3）。
+// type = "model"（file = glTF 路径）| "cube"（一等资产，无需 file）。
+// transform（仅 model/cube 通用）：position 世界平移 + rotation 欧拉角（度，
+// 应用序 X→Y→Z）+ scale 均匀缩放（约束同 Phase 5 已知近似②：world 法线 mat3
+// 直乘假定均匀缩放）。缺省 = identity（模型原始位姿）。
+export struct SceneEntityDesc {
+	std::string type = "model";
+	std::string file;
+	glm::vec3 position{0.0f};
+	glm::vec3 rotation{0.0f};
+	float scale = 1.0f;
+};
+
+// 场景配置：加载哪些模型 + 用哪些 pipeline + 是否场景旋转。
 // 沿用 Phase 1 确立的 configs/*.lua 模式（sol2 沙箱 + 字段可选回落默认值）。
 export struct SceneConfig {
-	std::string modelPath;                 // glTF/glTF-Binary 路径（空 = 不加载模型，仅 cube）
+	std::string modelPath;                 // 旧单模型字段（entities 缺省时的兼容合成源，空 = 无模型）
+	std::vector<SceneEntityDesc> entities; // Phase 6 批次 5：entity 列表（非空 = 权威场景构成）
 	std::vector<PipelineSpec> pipelines;   // pipeline 规格列表
 	std::map<std::string, std::string> styleMap;  // Phase 4 批次 3：风格名→管线规格名
 	bool spin = true;                      // 场景整体时间旋转（便于肉眼判断渲染对错）

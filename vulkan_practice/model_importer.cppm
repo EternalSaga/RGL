@@ -1,5 +1,6 @@
 module;
 #include <entt/entt.hpp>
+#include <glm/glm.hpp>  // registerScene rootTransform 参数 glm::mat4 名可见
 export module model_importer;
 
 import rlstd;
@@ -25,12 +26,16 @@ namespace RGL {
 export [[nodiscard]] std::expected<std::vector<uint32_t>, Error> uploadModelMeshes(
 	RGL::DeviceContext& vkDevice, RGL::Resources& res, const RGL::GltfModel& model);
 
-// 场景实体注册：场景根 entity 挂 Bounds + 每 primitive 一个 entity（MeshRef 资产 id +
-// MaterialRef 真引用（E5.3）——材质身份（baseColor/textureId/alphaMode）收敛进资产表，
-// 纹理→primitive 映射获得数据归属；同 materialIndex 的材质字段一致性做导入期金丝雀
-//（违例 = loader bug））。
+// 场景实体注册：场景根 entity 挂 Bounds + Transform + 每 primitive 一个 entity（MeshRef
+// 资产 id + MaterialRef 真引用（E5.3）——材质身份（baseColor/textureId/alphaMode）收敛进
+// 资产表，纹理→primitive 映射获得数据归属；同 materialIndex 的材质字段一致性做导入期
+// 金丝雀（违例 = loader bug））。
+// rootTransform（Phase 6 批次 5，多模型场景位姿）：场景根 local = 该矩阵，per-primitive
+// world = rootTransform · translation-local；Bounds 球心随根变换、半径乘均匀缩放分量
+//（scale 约束同 Phase 5 已知近似②：world 法线 mat3 直乘假定均匀缩放）。默认 identity =
+// 批次 5 前行为。
 export entt::entity registerScene(entt::registry& rg, const RGL::GltfModel& model,
 	std::span<const uint32_t> assetIds, std::span<const uint32_t> primitiveTextureIds,
-	RGL::Resources& resources);
+	RGL::Resources& resources, const glm::mat4& rootTransform = glm::mat4(1.0f));
 
 }  // namespace RGL

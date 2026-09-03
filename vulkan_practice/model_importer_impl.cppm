@@ -213,10 +213,18 @@ static void verifyVertexUpload(RGL::DeviceContext& vkDevice, RGL::Resources& res
 // 真引用（E5.3）——材质身份（baseColor/textureId/alphaMode）收敛进资产表，纹理→primitive
 entt::entity registerScene(entt::registry& rg, const RGL::GltfModel& model,
 	std::span<const uint32_t> assetIds, std::span<const uint32_t> primitiveTextureIds,
-	RGL::Resources& resources) {
+	RGL::Resources& resources, const glm::mat4& rootTransform) {
 	auto sceneRoot = rg.create();
 	rg.emplace<Relationship>(sceneRoot);  // parent = null（根）；children 不存储（单向，E5.2）
-	rg.emplace<Bounds>(sceneRoot, model.bounds.center, model.bounds.radius);
+	// 场景根位姿（Phase 6 批次 5：多模型场景 entity 级 transform）：根 local =
+	// rootTransform；Bounds 球心随根变换、半径乘均匀缩放分量（列 0 长度）
+	auto& rootTf = rg.emplace<Transform>(sceneRoot);
+	rootTf.local = rootTransform;
+	rootTf.world = rootTransform;
+	const float rootScale = glm::length(glm::vec3(rootTransform[0]));
+	const glm::vec3 boundsCenter = glm::vec3(rootTransform *
+		glm::vec4(model.bounds.center, 1.0f));
+	rg.emplace<Bounds>(sceneRoot, boundsCenter, model.bounds.radius * rootScale);
 
 	const size_t n = model.primitives.size();
 	auto& assets = resources.getAssetTable();
@@ -280,7 +288,7 @@ entt::entity registerScene(entt::registry& rg, const RGL::GltfModel& model,
 		glm::mat4 local = glm::translate(glm::mat4(1.0f), prim.translation);
 		auto& tf = rg.emplace<Transform>(e);
 		tf.local = local;
-		tf.world = local;
+		tf.world = rootTransform * local;  // 根位姿复合（批次 5；identity = 旧行为）
 
 		rg.emplace<MeshRef>(e).asset = assetIds[i];
 		rg.emplace<MaterialRef>(e).material = primitiveMaterialIds[i];  // 真引用（批次 2，E5.3）

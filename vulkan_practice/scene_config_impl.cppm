@@ -88,6 +88,47 @@ SceneConfig defaultSceneConfig() {
 		if (showCube)
 			cfg.showCube = *showCube;
 
+		// Phase 6 批次 5：entities 段（场景构成数据驱动列表，非空 = 权威；缺段 =
+		// 回落旧 model/cube 字段合成，既有配置零改动等价）。type "model"|"cube"，
+		// transform 全可选（position/rotation 欧拉角度/scale 均匀）
+		sol::table entities = root["entities"];
+		if (entities.valid() && entities.is<sol::table>()) {
+			cfg.entities.clear();
+			for (int i = 1; i <= static_cast<int>(entities.size()); ++i) {
+				sol::table item = entities[i];
+				SceneEntityDesc ent;
+				sol::optional<std::string> type = item["type"];
+				if (type)
+					ent.type = *type;
+				if (ent.type != "model" && ent.type != "cube")
+					return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
+						fmt::format("scene config: entities[{}] unknown type '{}' (want model|cube)",
+							i, ent.type)});
+				sol::optional<std::string> file = item["file"];
+				if (file)
+					ent.file = *file;
+				if (ent.type == "model" && ent.file.empty())
+					return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
+						fmt::format("scene config: entities[{}] type 'model' missing 'file'", i)});
+				ent.position = readVec3(item, "position", ent.position);
+				ent.rotation = readVec3(item, "rotation", ent.rotation);
+				sol::optional<float> scale = item["scale"];
+				if (scale)
+					ent.scale = *scale;
+				if (ent.scale <= 0.0f)
+					return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
+						fmt::format("scene config: entities[{}] scale must be > 0", i)});
+				cfg.entities.push_back(std::move(ent));
+			}
+		}
+		// 缺段兼容合成（entities 空 = 旧 model/cube 字段语义，行为逐位不变）
+		if (cfg.entities.empty()) {
+			if (!cfg.modelPath.empty())
+				cfg.entities.push_back(SceneEntityDesc{.type = "model", .file = cfg.modelPath});
+			if (cfg.showCube)
+				cfg.entities.push_back(SceneEntityDesc{.type = "cube"});
+		}
+
 		sol::table pipelines = root["pipelines"];
 		if (pipelines.valid() && pipelines.is<sol::table>()) {
 			cfg.pipelines.clear();

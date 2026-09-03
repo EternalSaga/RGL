@@ -100,20 +100,26 @@ export struct ViewProjection {
 	glm::mat4 proj{1.0f};
 };
 
-// cube 一等资产注册（批次 3，E1.4/H1/M1）：cube entity = Transform(identity) +
+// cube 一等资产注册（批次 3，E1.4/H1/M1）：cube entity = Transform +
 // Bounds（包围球由顶点半径派生，经 boundsSystem 自动纳入 SceneBounds 聚合，L2 解决）
 // + MeshRef{cube 资产 id} + MaterialRef{材质 id} + Relationship（根，parent = null）。
 // 画不画 = 实体有无（数据驱动：showCube 配置由 main 决定是否注册，无构造期 gating）。
+// rootTransform（Phase 6 批次 5）：cube 与模型同等 entity 位姿（local=world=根矩阵；
+// 默认 identity = 几何原点 ±0.5 旧行为）。
 // 注意：cube 着色 = 每顶点色（cube.frag 从顶点读 color），MaterialRef 的 baseColor
 // 不被 cube 管线消费（Phase 4 归一：统一 DrawArgs 超集单一布局，各风格只消费自己字段）。
-export entt::entity registerCubeEntity(entt::registry& rg, uint32_t meshAsset, uint32_t materialAsset) {
+export entt::entity registerCubeEntity(entt::registry& rg, uint32_t meshAsset, uint32_t materialAsset,
+	const glm::mat4& rootTransform = glm::mat4(1.0f)) {
 	auto e = rg.create();
-	rg.emplace<Transform>(e);  // identity：cube 几何已在原点 ±0.5
+	auto& tf = rg.emplace<Transform>(e);
+	tf.local = rootTransform;
+	tf.world = rootTransform;  // cube 几何已在原点 ±0.5
 	glm::vec3 center{0.0f};
 	float radius = 0.0f;
 	for (const auto& v : cubeVertices)
 		radius = std::max(radius, glm::length(glm::vec3(v.position[0], v.position[1], v.position[2])));
-	rg.emplace<Bounds>(e, center, radius);
+	rg.emplace<Bounds>(e, glm::vec3(rootTransform * glm::vec4(center, 1.0f)),
+		radius * glm::length(glm::vec3(rootTransform[0])));
 	rg.emplace<MeshRef>(e).asset = meshAsset;
 	rg.emplace<MaterialRef>(e).material = materialAsset;
 	rg.emplace<Relationship>(e);  // parent = null（根）

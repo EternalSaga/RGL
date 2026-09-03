@@ -3,7 +3,18 @@
 -- pipelines 每条: name（管线表条目名）+ mesh/frag 的 SPV 相对路径（相对 build/vulkan_practice/）
 return {
     -- model = "models/grass_variations.glb",  -- 快速排查模型（4 primitive / 1 张内嵌 PNG，全 BLEND）
-    model = "models/realistic_wooden_cottage_garden_house_3d_model.glb",  -- glTF 模型路径（Phase 3 测试模型，392 primitive / 11 张 4K 内嵌纹理；Phase 5 起全 pbr 风格 = 真光照）
+    -- model = "models/castle_of_loarre.glb",  -- Loarre 城堡：11 primitive / 1 纹理，包围球 center=(-3.4,0.6,17.7) r=59.7
+    model = "models/kyoto_fushimi_inari_taisha_temple.glb",  -- 伏见稻荷大社：18 primitive / 3 纹理，包围球 center≈(0,0,0) r=73.3
+
+    -- Phase 6 批次 5：entities 列表（非空 = 权威场景构成，覆盖 model/cube 旧字段；
+    -- 缺省 = 由旧字段合成，行为不变）。type = "model"（file 必填）| "cube"；
+    -- position/rotation(欧拉角度 X→Y→Z)/scale(均匀) 全可选，缺省 identity
+    -- entities = {
+    --     { type = "model", file = "models/kyoto_fushimi_inari_taisha_temple.glb" },
+    --     { type = "model", file = "models/castle_of_loarre.glb",
+    --       position = { -280, 0, -180 }, rotation = { 0, 90, 0 }, scale = 2.0 },
+    --     { type = "cube", position = { -120, 90, 0 }, scale = 40 },
+    -- }
 
     -- 4K 黑屏 UAF 复验（2026-08-28）：真实 4K 纹理（非合成 TEXTURE_FORCE_SIZE）+ 目标 <2048（llm 1280x720）
     -- = §十 4K 黑屏的精确配置；master（TexturePool 生命周期已修）上复跑，黑 = 独立内核问题，正常 = §十 定性改写为 UAF

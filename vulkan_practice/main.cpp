@@ -1,6 +1,7 @@
 #include <entt/entt.hpp>
 #include <SDL3/SDL_video.h>
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>  // entity rootTransform（translate/rotate/scale 组装）
 #include <fmt/format.h>
 import rlstd;
 import vulkan_window;
@@ -220,36 +221,70 @@ int main() {
 		// CPU 解析 + GPU 上传 + 纹理 + ECS 注册：资产数据（buffer/slot/三角形数/管线条目引用、
 		// 纹理资产、材质资产）全部在 Resources 资产表（初始化层 owner，生命周期不依赖
 		// main 作用域——TexturePool 局部对象 UAF 教训，docs/heap_texture_research.md §12.6/§12.7）
-		std::vector<uint32_t> primitiveTextureIds;  // per-primitive 纹理资产 id（管线烘焙 + 批次 2 材质注册消费）
-		if (!sceneConfig.modelPath.empty()) {
-			auto modelResult = loadGltfModel(sceneConfig.modelPath);
+		// Phase 6 批次 5：scene.lua entities 列表 = 场景构成数据源（画不画 = entity 有无，
+		// ECS 规范 3；缺段兼容合成见 scene_config loader）。三段时序：A 解析 + GPU 上传
+		// 全部模型（顶点/纹理槽 allocSlot 单调分配）→ B env 上传（**时序契约 = 全部纹理
+		// 槽后、管线烘焙前**，挤占白纹理契约槽 = 启动断言，2026-09-01 踩坑）→ C 管线烘焙
+		// + ECS 注册。CPU 解析产物（GltfModel）活到 C（unique_ptr 稳定地址）；资产数据
+		// （buffer/slot/纹理/材质）全部在 Resources 资产表（初始化层 owner——TexturePool
+		// 局部对象 UAF 教训，docs/heap_texture_research.md §12.6/§12.7）
+		auto makeRootTransform = [](const SceneEntityDesc& ent) {
+			glm::mat4 t = glm::translate(glm::mat4(1.0f), ent.position);
+			t = glm::rotate(t, glm::radians(ent.rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
+			t = glm::rotate(t, glm::radians(ent.rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
+			t = glm::rotate(t, glm::radians(ent.rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
+			return glm::scale(t, glm::vec3(ent.scale));
+		};
+		struct LoadedEntity {
+			const SceneEntityDesc* desc;
+			std::unique_ptr<GltfModel> model;
+			std::vector<uint32_t> assetIds;    // per-primitive 网格资产 id
+			std::vector<uint32_t> textureIds;  // per-primitive 纹理资产 id
+		};
+		std::vector<LoadedEntity> loaded;
+		// A1：解析 + 顶点上传（**全部模型的顶点槽先于任何纹理槽分配**——布局契约
+		// "[2, 2+N) 模型顶点槽、[2+N,…) 纹理槽"（vkresources.cppm），N = 全模型 chunk
+		// 总数；交错分配 = 第二个模型首 chunk slot 期望漂移，批次 5 多模型实测踩坑）
+		for (const auto& ent : sceneConfig.entities) {
+			if (ent.type != "model")
+				continue;
+			auto modelResult = loadGltfModel(ent.file);
 			if (!modelResult) {
 				auto* logger = RLLogger::getInstance();
 				logger->error("错误: {}", modelResult.error().describe());
 				return -1;
 			}
-			auto& model = *modelResult;
-			auto assetIdsResult = uploadModelMeshes(vkDevice, vkResources, model);
+			auto uploaded = std::make_unique<GltfModel>(std::move(*modelResult));
+			auto assetIdsResult = uploadModelMeshes(vkDevice, vkResources, *uploaded);
 			if (!assetIdsResult) {
 				auto* logger = RLLogger::getInstance();
 				logger->error("错误: {}", assetIdsResult.error().describe());
 				return -1;
 			}
-			// 纹理（Phase 3）：模型顶点槽分配完后再上传（先取白纹理——布局契约"纹理首槽 = 白"，
-			// ensureWhiteTexture 带契约断言）；产物在资产表
-			auto textureIdsResult = uploadModelTextures(vkResources, vkDevice, model);
+			loaded.push_back(LoadedEntity{.desc = &ent, .model = std::move(uploaded),
+				.assetIds = std::move(*assetIdsResult)});
+		}
+		// A2：纹理上传（Phase 3）：全部模型顶点槽分配完后再上传（先取白纹理——布局契约
+		// "纹理首槽 = 白"，ensureWhiteTexture 带契约断言）；产物在资产表
+		for (auto& le : loaded) {
+			auto textureIdsResult = uploadModelTextures(vkResources, vkDevice, *le.model);
 			if (!textureIdsResult) {
 				auto* logger = RLLogger::getInstance();
 				logger->error("错误: {}", textureIdsResult.error().describe());
 				return -1;
 			}
-			primitiveTextureIds = std::move(*textureIdsResult);
-			if (sceneConfig.environment.enabled)
-				uploadEnvironment();  // 时序契约见定义处注释（纹理槽后、管线烘焙前）
+			le.textureIds = std::move(*textureIdsResult);
+		}
+		if (sceneConfig.environment.enabled)
+			uploadEnvironment();  // 时序契约见定义处注释（全部模型纹理槽后、管线烘焙前）
+
+		for (auto& le : loaded) {
+			auto& model = *le.model;
+			const auto& primitiveTextureIds = le.textureIds;
 			auto& assets = vkResources.getAssetTable();
 			const uint32_t samplerSlot = vkResources.ensureSharedSampler();
-			for (size_t i = 0; i < assetIdsResult->size(); ++i) {
-				const uint32_t id = (*assetIdsResult)[i];
+			for (size_t i = 0; i < le.assetIds.size(); ++i) {
+				const uint32_t id = le.assetIds[i];
 				// 管线条目（Phase 4 批次 2：按 (规格, 顶点 slot, 纹理 slot) 组合去重——同模型
 				// 全 primitive 共享一个拼接顶点 slot，仅纹理 slot 差异决定条目拆分；纹理/sampler
 				// slot 烘焙进 binding mapping，每帧零成本）。批次 3：风格派生（loader unlit
@@ -269,40 +304,58 @@ int main() {
 			// DIAG（Phase 4 批次 3 风格分布核查）：per-primitive 风格（unlit/pbr）+ 规格名分布
 			if (std::getenv("RGL_STYLE_DIST") != nullptr) {
 				std::map<std::string, uint32_t> styleCount;
-				for (size_t i = 0; i < assetIdsResult->size(); ++i)
+				for (size_t i = 0; i < le.assetIds.size(); ++i)
 					++styleCount[model.primitives[i].unlit ? "unlit" : "pbr"];
 				if (auto logger = RLLogger::getInstance()) {
-					std::string s;
+					std::string t;
 					for (const auto& [style, cnt] : styleCount)
-						s += fmt::format("{}={} ", style, cnt);
-					logger->info("DIAG style dist: {} primitives → {} styles: {}",
-						assetIdsResult->size(), styleCount.size(), s);
+						t += fmt::format("{}={} ", style, cnt);
+					logger->info("DIAG style dist ({}): {} primitives → {} styles: {}",
+						le.desc->file, le.assetIds.size(), styleCount.size(), t);
 				}
 			}
 			// DIAG（Phase 4 批次 2 纹理分布核查）：per-primitive 纹理 slot 分布（验证新旧管线用同一批纹理）
 			if (std::getenv("RGL_TEX_DIST") != nullptr) {
 				std::map<uint32_t, uint32_t> texSlotCount;
-				for (size_t i = 0; i < assetIdsResult->size(); ++i)
+				for (size_t i = 0; i < le.assetIds.size(); ++i)
 					++texSlotCount[assets.getTexture(primitiveTextureIds[i]).heapSlot];
 				if (auto logger = RLLogger::getInstance()) {
-					std::string s;
+					std::string t;
 					for (const auto& [slot, cnt] : texSlotCount)
-						s += fmt::format("slot{}={} ", slot, cnt);
-					logger->info("DIAG tex dist: {} primitives → {} distinct tex slots: {}",
-						assetIdsResult->size(), texSlotCount.size(), s);
+						t += fmt::format("slot{}={} ", slot, cnt);
+					logger->info("DIAG tex dist ({}): {} primitives → {} distinct tex slots: {}",
+						le.desc->file, le.assetIds.size(), texSlotCount.size(), t);
 				}
 			}
-			registerScene(registry, model, std::span<const uint32_t>(*assetIdsResult),
-				std::span<const uint32_t>(primitiveTextureIds), vkResources);
-			// scene data 容量契约（Phase 5 批次 2）：对象矩阵表按资产 id 索引，
-			// 超容量 = 矩阵表越界写（staging 上传处有防御报错，此处启动期先拦截）
-			if (const uint32_t meshCount = vkResources.getAssetTable().meshSize();
-				meshCount > kSceneMatrixCapacity)
-				throw std::runtime_error(fmt::format(
-					"assets ({}) exceed scene object matrix capacity ({})",
-					meshCount, kSceneMatrixCapacity));
-		} else if (sceneConfig.environment.enabled) {
-			uploadEnvironment();  // 无模型 + env（纯天空盒场景，Phase 5.5 批次 4）
+			registerScene(registry, model, std::span<const uint32_t>(le.assetIds),
+				std::span<const uint32_t>(primitiveTextureIds), vkResources,
+				makeRootTransform(*le.desc));
+		}
+		// scene data 容量契约（Phase 5 批次 2，批次 5 起跨模型累计）：对象矩阵表按资产 id
+		// 索引，超容量 = 矩阵表越界写（staging 上传处有防御报错，此处启动期先拦截）
+		if (const uint32_t meshCount = vkResources.getAssetTable().meshSize();
+			meshCount > kSceneMatrixCapacity)
+			throw std::runtime_error(fmt::format(
+				"assets ({}) exceed scene object matrix capacity ({})",
+				meshCount, kSceneMatrixCapacity));
+
+		// cube 一等资产（批次 3 + Phase 6 批次 5：entities 列表驱动，可多个）：
+		// 注册 entity（画不画 = 实体有无）+ 管线表下标写回（启动期一次，幂等）。
+		// cube 着色 = 每顶点色，MaterialRef 指向默认材质（baseColor 不被 cube 管线消费，
+		// 见 registerCubeEntity 注释）
+		for (const auto& ent : sceneConfig.entities) {
+			if (ent.type != "cube")
+				continue;
+			auto& assets = vkResources.getAssetTable();
+			const uint32_t cubeMat = assets.addMaterial(
+				MaterialAsset{glm::vec4{1.0f}, kInvalidTextureId, false});
+			registerCubeEntity(registry, vkResources.cubeAssetId(), cubeMat,
+				makeRootTransform(ent));
+			shaderRegistry.bindPipelineToAsset("cube", vkResources.cubeAssetId());
+			if (auto logger = RLLogger::getInstance())
+				logger->info("cube entity: 资产 {} / 材质 {} / 管线下标 {}",
+					vkResources.cubeAssetId(), cubeMat,
+					assets.get(vkResources.cubeAssetId()).pipelineIndex);
 		}
 
 		// Phase 5.5 批次 4：天空盒管线条目（env 已上传才建——addSkyEntry 契约）+
