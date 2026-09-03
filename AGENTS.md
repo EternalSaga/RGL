@@ -110,7 +110,7 @@ CMake 无独立构建目录 — 必须从根目录构建（`cmake -B build -S .`
 注释，实现 = 叶子单元**。收益：接口 BMI 不含函数体（importer 全部受益）、实现单元
 与其他工作并行不上关键路径。已应用：llm_debug / vkrenderer / model_importer /
 texture_upload / camera_config / scene_config / render_list / gpu_canary / ecs /
-vkresources / shader_registry（函数语义注释留接口声明处）。规则与坑：
+vkresources / shader_registry / render_graph / render_graph_config（函数语义注释留接口声明处）。规则与坑：
 - **实现单元必须显式 `import xxx;`**——clang 不给 partition implementation unit
   做隐式主接口 import（标准 [cpp.import.module] 的隐式 import GCC 有、clang 无）
 - 默认实参只写接口声明，实现定义去掉；类方法改类外定义（`static`/`[[nodiscard]]`
@@ -161,7 +161,9 @@ Phase 演进历史见 `docs/next_roadmap.md` 对应小节。
 | `vk_device` | vkdevice.cppm | PhysicalDevice 选择、QueueFamilyManager、Device、CommandPools、FeatureChain |
 | `vk_swapchain` | vkswapchain.cppm | Surface、Swapchain、ImageView[] format/extent/presentMode |
 | `vk_resources` | vkresources.cppm | VmaAllocatorRAII、depth image+view、VmaDescriptorHeap（容量 = reserved + 8 + `kUserSlotMargin(1024)` 固定裕量，与场景内容解耦）；`allocSlot` 统一 slot 分配器（布局由 schema 生成偏移常量钉死 + 构造期契约断言）；`ensureSharedSampler()`（共享 sampler，幂等）/ `ensureSkySampler()`（sky 专用 mipmap sampler，第二槽）/ `ensureSceneData()`（场景级 bindless 动态 buffer：头 128B = @0 光参数 48B + @48 env 参数 + @64 skyInvViewProj mat4，@128 对象矩阵表 ×`kSceneMatrixCapacity(1024)`，描述符静态、内容每帧 staging copy）；env cubemap 场景级单例（`emplaceEnvTexture/getEnvTexture`，不占 AssetTable 纹理 id 空间）；资产层 `AssetTable` 见 `asset_table` 模块 |
-| `vk_renderer` | vkrenderer.cppm | 同步对象、命令缓冲；`drawFrame(const FrameDrawList&)` 盲执行（零 entt 依赖，逐 draw push `DrawArgs` + bind + `drawMeshTasksEXT`）：**三段** `[opaque \| skybox \| transparent]` 段首各 `applyDynamicState`（opaque 写深度关混合 / skybox depthWrite=false+LEQUAL 大三角 z=1 只在空像素通过 / transparent 关深度写+开混合+背面剔除）；staging ring（×MAX_FRAMES_IN_FLIGHT 常驻映射，fence 后 CPU 写 + 录制期 `vkCmdCopyBuffer` + Transfer→Graphics barrier = 每帧动态 GPU 数据通路）；acquire 100ms 超时 eTimeout 跳帧 |
+| `vk_renderer` | vkrenderer.cppm | 同步对象、命令缓冲；`drawFrame(const FrameDrawList&)` 盲执行（零 entt 依赖）：**Phase 6 图化**——构造收 `CompiledRenderGraph`（启动期校验可解析性），逐 pass 循环 = 编译图 barrier 计划物化（`emitBarriers`+`attachmentLayouts` 逐 slot 布局追踪）→ `beginRendering`（逐 pass 附件）→ `applyDynamicState(pass.state)` → 段内逐 draw（`pass.drawSource`→段边界映射）→ `endRendering`；blit pass（transferRead→transferWrite 整幅拷贝，offscreen 图变体消费）；present 转换/submit waitStage 均图派生；heap host-write barrier + scene staging copy = 数据通路固定段**不入图**；staging ring（×MAX_FRAMES_IN_FLIGHT 常驻映射，fence 后 CPU 写 + 录制期 `vkCmdCopyBuffer` + Transfer→Graphics barrier）；acquire 100ms 超时 eTimeout 跳帧 |
+| `render_graph` | render_graph.cppm | Phase 6 渲染意图图（纯 C++ 零 Lua 零 entt，接口=类型契约+推导规则文档）：`RgGraphDesc`（attachment kind=swapchain/depth/offscreen + pass outputs/inputs usage=colorWrite/depthWrite/sampleRead/transferRead/transferWrite + state/drawSource 名字字符串）→ `compileRenderGraph`（校验：读先于写/同pass读写冲突/DontCare后仍被使用/usage与kind不匹配/blit拓扑/swapchain永不写；**barrier 自动推导**：usage→{layout,stage,access} 查表 + 帧内跨pass identity barrier + 帧首丢弃规则(swapchain/depth=Undefined、offscreen=执行器追踪) + presentTransition + swapchainWaitStage）→ `CompiledRenderGraph`；`defaultRenderGraphDesc`（三段等价图）/`offscreenRenderGraphDesc`（scene_rt+composite blit）/`renderGraphSelfCheck`（无GPU回归守卫，main 启动期跑） |
+| `render_graph_config` | render_graph_config.cppm | `configs/render_graph.lua` → `RgGraphDesc`（sol2 沙箱同 camera/scene_config 模式：缺文件 warn 回落默认三段图、字段可选、枚举字符串错误 = ConfigLoadFailed；结构合法性归 compileRenderGraph） |
 | `shader_registry` | shader_registry.cppm | 管线表（零 entt，只认 slot/资产 id）：`PipelineEntry{name, RenderPipeline, argsSize, pushDataSet}` + `ShaderRegistry`（"cube" 条目恒建 + `addModelEntry`（资产上传期，按 (规格,顶点slot,纹理slot) 组合去重——binding mapping 是 shader object 级状态；恒烘焙 scene data binding 3，有 env 时恒烘焙 binding 4/5）+ `addSkyEntry()`（天空盒单条目）+ `bindPipelineToAsset` 条目下标写回资产表）；`pipelineIndex/entry/pipelineAt` 查询 |
 
 ### 工具模块
@@ -170,12 +172,12 @@ Phase 演进历史见 `docs/next_roadmap.md` 对应小节。
 |---|---|---|
 | `vulkan_utils` | utils.cppm | 层检查、debug messenger、GPU 选择器、barrier 辅助、present mode |
 | `vkerror` | vkerror.cppm | `Error`/`ErrorCode`、`fromVkResult(VkResult,…)`、`vkResultName(VkResult)`（GMF 只含 `vulkan_core.h`，不拖 vulkan.hpp——编译提速关键） |
-| `frame_draw_list` | frame_draw_list.cppm | 绘制契约：`DrawCall`/`SceneFrameData`/`FrameDrawList`（三段边界 `skyboxStart`/`transparentStart`）——渲染 system 产出、执行器盲执行的边界（ECS 规范 4） |
+| `frame_draw_list` | frame_draw_list.cppm | 绘制契约：`DrawCall`/`SceneFrameData`/`FrameDrawList`（三段边界 `skyboxStart`/`transparentStart`）——渲染 system 产出、执行器盲执行的边界（ECS 规范 4）；段边界经编译图 `pass.drawSource` 名字映射消费（Phase 6，段 = pass 同构兑现） |
 | `asset_table` | asset_table.cppm | 资产层纯数据：`MeshAsset`（kind=Model/Cube，共享 `shared_ptr<VmaBuffer>` 拼接顶点 buffer + 块内 `vertexOffset` + `groupCount` 上传期派生 + `pipelineIndex`）/ `TextureAsset`（deque 存储地址稳定 + 描述符指针链 + mipLevels）/ `MaterialAsset`（baseColor/textureId/alphaModeBlend/metallic/roughness/unlit，按 glTF materialIndex 去重）/ `AssetTable` 三容器 + `modelSlotCount` |
 | `ecs` | ecs.cppm | `WindowExtent`/`AppExit` context、eventSystem（唯一 `SDL_PollEvent` 调用点：输入 → `InputEvents` 事件流，只产事件不做键位映射——键绑定在 `Camera.keys`；鼠标增量用 `motion.xrel/yrel`，SDL3 陷阱见 `docs/调试历史.md`）/resizeSystem/renderSystem 帧循环（**显式 system 列表** camera→animation→bounds→projection→renderlist，注册顺序 = 数据流契约；llm 截图经 `llmCapture` 回调触发，不依赖 llm_debug 模块） |
 | `render_list` | render_list.cppm | `renderListSystem`：ViewProjection + 场景实体 → `FrameDrawList`——单一 `DrawArgs` 超集按资产 id 索引写入（零 AssetKind 分支），mvp = proj·view·spin·world，透明段按相机距离² 降序稳定排序（back-to-front），`env.skybox` 时推 skybox draw，每帧填 `SceneFrameData`（光参数/env 参数/skyInvViewProj） |
 | `scene` | scene.cppm | 场景组件（`Transform`/`Relationship` 手写单向 parent/`MeshRef`/`MaterialRef` 真引用/`Bounds`）+ `registerCubeEntity`（cube 一等资产，画不画 = 实体有无）+ 每帧 context（`SceneSpin`/`SceneBounds`/`ViewProjection`）+ `Light`（定向光，main 从 scene.lua light 段 emplace）+ `SceneEnv`（环境 intensity/mipRange/skybox/skyboxPipeline） |
-| `scene_config` | scene_config.cppm | `PipelineSpec`/`SceneConfig`（`styleMap` 风格名→管线规格名 + `Light` + `EnvironmentConfig`{dir/faces[6]/intensity/skybox}）+ `loadSceneConfig`（`configs/scene.lua`，sol2 沙箱；styles/light/environment 段可选回落默认；启动期数据，不进每帧路径） |
+| `scene_config` | scene_config.cppm | `PipelineSpec`/`SceneConfig`（`styleMap` 风格名→管线规格名 + `Light` + `EnvironmentConfig`{dir/faces[6]/intensity/skybox} + Phase 6 批次 5 `SceneEntityDesc`{type=model|cube, file, position/rotation(欧拉度)/scale(均匀)} 列表）+ `loadSceneConfig`（`configs/scene.lua`，sol2 沙箱；styles/light/environment/entities 段可选回落默认——entities 缺段由旧 model/cube 字段兼容合成；启动期数据，不进每帧路径） |
 | `gltf_loader` | gltf_loader.cppm | glTF CPU 解析（tinygltf v3：POSITION/NORMAL/TEXCOORD_0 严格校验 + 去索引展开 + node translation 扁平化 + baseColorFactor/alphaMode/materialIndex/metallic/roughness/unlit（KHR_materials_unlit）+ images 内嵌纹理，输出 `GltfModel` 含包围球） |
 | `model_importer` | model_importer.cppm | `uploadModelMeshes`（每模型顶点拼 16MB 块（≤6 块）每块一个 BDA buffer + heap slot，per-primitive 块内偏移 = `MeshAsset.vertexOffset` 进 push constant）+ `registerScene`（场景根挂 `Bounds` + 每 primitive 一个 entity；材质按 materialIndex 去重注册 + 同 materialIndex 字段一致性金丝雀） |
 | `texture_pool` | texture_pool.cppm | 纹理上传公共 API 薄壳（自由函数，数据归属资产表——main 局部对象 UAF 教训见 `docs/archive/issue_history.md`）：`loadEmbedded`（stb 解码 + 去重缓存）/ `ensureWhiteTexture`（白 1×1 首纹理槽 + slot 契约断言）/ `uploadModelTextures`（per-primitive 有效纹理选择：有 uv 且图有数据 ? material : 白）/ `loadEnvCubeMapFiles`（六面校验） |
@@ -197,13 +199,17 @@ Phase 演进历史见 `docs/next_roadmap.md` 对应小节。
 | `material_types_generated` | generated/material_types_generated.cppm | auto-generated（just reflect 生成、产物已提交；反射管线 3：`material.slang`+`material_schema.lua`）：统一 push constant 超集 `DrawArgs`（scalar 布局 100B：mvp/totalTriangles/vertexOffset/baseColor/roughnessMetallic/objectIndex，所有风格共享，static_assert 钉死） |
 | `features_generated` | generated/features_generated.cppm | auto-generated（just reflect 生成、产物已提交；`reflection_tool render` + `features_config.json`）：`FeatureChain`、`buildRequestedFeatures()`、`validateFeatures()` |
 
-`main.cpp` 启动流：加载 camera/scene 配置（**先于建窗**：llm/headless 模式影响窗口）→ 栈上
-`entt::registry`（持有全部每帧 context）→ 按序构造 5 个初始化层类（Renderer 收管线规格 span，
-"cube" 条目恒建；启动期 `maxPushConstantsSize`/资产数 ≤ `kSceneMatrixCapacity` 契约检查）→
-env 上传（**时序契约 = 模型纹理槽后、`addModelEntry` 前**；风格契约 = 引用 pbr_ibl 无 env
-启动报错）→ CPU 解析模型 + GPU 上传 + `addModelPipeline` + `registerScene` → env 已上传则
-`addSkyEntry` + 回填 `SceneEnv` → 按 `showCube` 注册 cube entity + `bindPipelineToAsset` →
-`RGL::renderSystem`。`vam_impl.cpp` = `#define VMA_IMPLEMENTATION`，`stb_impl.cpp` =
+`main.cpp` 启动流：加载 camera/scene 配置（**先于建窗**：llm/headless 模式影响窗口）+
+render_graph 配置（`configs/render_graph.lua` → `compileRenderGraph`，图错误启动期退出；
+`RGL_OFFSCREEN` env = 强制 offscreen 图变体）+ `renderGraphSelfCheck` 回归守卫 → 栈上
+`entt::registry`（持有全部每帧 context）→ 按序构造 5 个初始化层类（Renderer 收编译图 +
+管线规格 span，"cube" 条目恒建；启动期 `maxPushConstantsSize`/资产数 ≤ `kSceneMatrixCapacity`
+契约检查）→ env 上传（**时序契约 = 全部模型纹理槽后、`addModelEntry` 前**；风格契约 = 引用
+pbr_ibl 无 env 启动报错）→ **entities 循环**（Phase 6 批次 5 三段：A1 解析+顶点上传全部
+模型 → A2 纹理上传 → C 逐模型 `addModelEntry`+`registerScene`(rootTransform)；A1/A2 拆分 =
+heap 布局契约"顶点槽先于纹理槽"强制）→ env 已上传则 `addSkyEntry` + 回填 `SceneEnv` →
+type="cube" entity 注册（`registerCubeEntity`+`bindPipelineToAsset`）→ `RGL::renderSystem`。
+`vam_impl.cpp` = `#define VMA_IMPLEMENTATION`，`stb_impl.cpp` =
 `#define STB_IMAGE_WRITE_IMPLEMENTATION`。
 
 ### 构造依赖图
@@ -281,7 +287,7 @@ sType 值相同。代码使用 EXT 命名形式，功能等价于 KHR。
 | `shaders/skybox.mesh` + `skybox.frag` | 天空盒：mesh 单 group 输出全屏大三角（NDC z=1=far，不读 buffer，binding 0/1 占位空转）；frag 射线采 envMap |
 | `shaders/model_schema.lua` `constants` | 契约常量单一真相源（`kTrianglesPerGroup`）：schema 声明 → 生成 constexpr，`model.mesh.slang` 字面量必须一致（无反射端对应） |
 | `shaders/types.slang` | cube 契约：只拥有 buffer slot 段（vertex/index 均 `ByteAddressBuffer`，绝不用 `StructuredBuffer`） |
-| `configs/camera.lua` / `configs/scene.lua` | 运行时配置（sol2 沙箱加载，字段可选回落默认）；**与 `shaders/*_schema.lua`（build 时 shader 契约）是两套机制，勿混**；改后 `just build` 生效 |
+| `configs/camera.lua` / `configs/scene.lua` / `configs/render_graph.lua` | 运行时配置（sol2 沙箱加载，字段可选回落默认；render_graph.lua 描述 attachment/pass 拓扑，缺文件 = 默认三段图）；**与 `shaders/*_schema.lua`（build 时 shader 契约）是两套机制，勿混**；改后 `just build` 生效 |
 | `ecs.cppm` `eventSystem` | 中央 SDL 事件轮询（唯一 `SDL_PollEvent`）；鼠标增量用 `motion.xrel/yrel`（SDL3 陷阱，见 `docs/调试历史.md`） |
 
 ## 已知问题
@@ -301,9 +307,17 @@ sType 值相同。代码使用 EXT 命名形式，功能等价于 KHR。
   留 Phase 7）；② mipmap blit 用 NEAREST（sRGB blit LINEAR 违 VUID-00239，CPU 生成线性 mip 链
   留作质量接缝）；③ 单环境贴图（全局单例，无 per-material env）；④ 天空盒大三角 z=1 依赖
   depth clear=1.0 + LEQUAL；⑤ **两个 intensity 语义不对称**——定向光 `Light.intensity` CPU
-  预乘进 sceneData@24（最终值），env `EnvironmentConfig.intensity` 是 sceneData@48 裸标量、
+  预乘进 sceneData@24（最终值），env `EnvironmentData.intensity` 是 sceneData@48 裸标量、
   shader 端乘（env 颜色在 GPU 侧无法 CPU 预乘）：调光两条路线各只改自己 config 的一个
   intensity，亮度跨路线不可直接对比（注释见 `env.slang`/`scene.slang`）
+- **Phase 6 渲染图已知边界（雏形定位）**：① 线性 pass 序——无拓扑排序/死 pass 消除/
+  pass fusion（同附件连续 pass 各付一次 begin/endRendering + identity barrier，脚本序即
+  GPU 序）；② 无 transient aliasing（RT 常驻不回收，个位数 RT 可接受）；③ offscreen
+  附件 format 暂恒 inherit=swapchain 格式（显式格式/降采样 RT 留后续）；④ sampleRead
+  usage 编译面已支持但执行器未接采样描述符入库（后处理 shader 采样 RT 时补——blit 路
+  已通）；⑤ 执行器 state/drawSource 名字暂只认 opaque/skybox/transparent 三个（新状态
+  = 加 RenderState 成员 + 校验表一行）；⑥ 单 swapchain attachment 约束（present 语义
+  单 surface）；⑦ 多线程录制明确不做（Phase 7+ 议）
 - **`LightDataGpu` 字节布局双源、无反射**：`vkresources.cppm` 手写 struct（`static_assert`）↔
   `shaders/scene.slang` 字节字面量手工一致——唯一绕过反射管线的主要 CPU↔GPU struct 契约；
   单灯固定布局下风险可控，Phase 7 多灯布局重设计时并入反射管线（schema 声明→生成布局常量，
