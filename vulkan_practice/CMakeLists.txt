@@ -228,7 +228,9 @@ file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/models)
 set(MODEL_GLB_SOURCES
     "${PROJECT_SOURCE_DIR}/assets/transparent.glb"
     "${PROJECT_SOURCE_DIR}/assets/grass_variations.glb"
-    "${PROJECT_SOURCE_DIR}/assets/realistic_wooden_cottage_garden_house_3d_model.glb")
+    "${PROJECT_SOURCE_DIR}/assets/realistic_wooden_cottage_garden_house_3d_model.glb"
+    "${PROJECT_SOURCE_DIR}/assets/castle_of_loarre.glb"
+    "${PROJECT_SOURCE_DIR}/assets/kyoto_fushimi_inari_taisha_temple.glb")
 set(MODEL_GLB_OUTPUTS)
 foreach(MODEL_GLB_SRC ${MODEL_GLB_SOURCES})
     get_filename_component(MODEL_GLB_NAME ${MODEL_GLB_SRC} NAME)

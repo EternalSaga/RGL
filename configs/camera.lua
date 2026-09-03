@@ -2,10 +2,14 @@
 return {
     mode = "trackball",  -- "trackball"（轨道环绕）或 "fps"（第一人称飞行）
 
-    -- Phase 3 测试机位：cottage 包围球 center=(-182,546,115) r=1352，
-    -- 3/4 前右上视角、距 ~3700（整栋入画）。near/far 有 SceneBounds 时由 projectionSystem 自适应（忽略）。
-    position = { -2617.0, 1343.0, 2550.0 },  -- 4K 黑屏 UAF 复验（2026-08-28）：cottage 机位
-    target = { -182.0, 300.0, 115.0 },  -- 轨道中心（仅 trackball 用）
+    -- 机位约定：trackball 绕 target 公转，target = 模型包围球中心，position 距球心 ~1.4·(r/tan(fov/2))
+    -- 整球入画留裕量。near/far 有 SceneBounds 时由 projectionSystem 自适应（忽略）。
+    -- position = { 128.0, 73.0, 150.0 },  -- castle_of_loarre 机位：包围球 center=(-3.4,0.6,17.7) r=59.7，3/4 视角距 ~200
+    -- target = { -3.4, 0.6, 17.7 },  -- 轨道中心（仅 trackball 用）
+    position = { 165.0, 90.0, 165.0 },  -- kyoto_fushimi_inari_taisha_temple 机位：包围球 center≈(0,0,0) r=73.3，3/4 视角距 ~250
+    target = { 0.0, 0.0, 0.0 },  -- 轨道中心（仅 trackball 用）
+    -- position = { -2617.0, 1343.0, 2550.0 },  -- cottage 机位（4K 黑屏 UAF 复验，2026-08-28；包围球 center=(-182,546,115) r=1352）
+    -- target = { -182.0, 300.0, 115.0 },  -- 轨道中心（仅 trackball 用）
     -- position = { 8.0, 6.0, 10.0 },  -- Phase 5 透明排序：transparent.glb 4 盒（原点 ±6 内）
     -- position = { 1.69, 2.5, -19.46 },  -- 排序验证机位：绿盒(远,α0.25)与黄盒(近,α0.25)视线共线重叠
     -- target = { 0.0, 0.0, 0.0 },  -- 轨道中心（仅 trackball 用）
@@ -40,6 +44,6 @@ return {
     llm_shot = {
        file = "screenshots/llm_debug.png",
        size = { 1280, 720 },
-       -- delay_frames = 0,  -- 第 N 帧渲染完成后截图（0 = 首帧）
+       delay_frames = 8,  -- 第 N 帧渲染完成后截图（0 = 首帧）
     },
 }
