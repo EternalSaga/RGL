@@ -34,6 +34,7 @@ export enum class ErrorCode {
 	DescriptorSlotOutOfBounds,
 	DeviceLost,
 	ConfigLoadFailed,
+	RenderGraphInvalid,
 	Unknown,
 };
 

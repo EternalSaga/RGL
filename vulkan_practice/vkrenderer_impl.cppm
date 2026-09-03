@@ -23,26 +23,89 @@ import VmaRaii;
 import frame_draw_list;
 import model_types_generated;
 import features;
+import render_graph;
 
 namespace RGL {
 
 // Renderer 重成员函数定义（2026-09-02 编译提速 A 方案）：ctor/drawFrame/重建路径/
-// 同步对象/staging/离屏辅助全部移入本 partition implementation unit——接口 TU
+// 同步对象/staging 全部移入本 partition implementation unit——接口 TU
 // （vkrenderer.cppm）只留类声明，200+ 成员函数体的 AST 不再序列化进 BMI；
 // 本单元是叶子（无人 import），编译完全并行、不上关键路径。
 // 各函数语义/步骤注释随体迁自 vkrenderer.cppm。
 
+namespace {
+
+// 执行器可解析性校验（Phase 6，构造期 fail-fast——录制期零图错误）：
+// 图必须恰好引用 swapchain/depth 各一次（批次 4 前执行器只认这两类 attachment）；
+// draw pass 的 state/drawSource 名字可解析；blit pass 暂不支持。
+void validateRenderGraphForExecutor(const RGL::CompiledRenderGraph& graph) {
+	auto fail = [](std::string msg) { throw std::runtime_error("Renderer: " + msg); };
+	if (graph.passes.empty())
+		fail("render graph has no passes");
+	uint32_t swapchainRefs = 0, depthRefs = 0;
+	for (const auto& att : graph.attachments) {
+		if (att.kind == RgAttachmentKind::swapchain) ++swapchainRefs;
+		if (att.kind == RgAttachmentKind::depth) ++depthRefs;
+	}
+	if (swapchainRefs != 1)
+		fail(fmt::format("render graph must reference exactly one swapchain attachment (got {})",
+			swapchainRefs));
+	if (depthRefs != 1)
+		fail(fmt::format("render graph must reference exactly one depth attachment (got {})",
+			depthRefs));
+	static constexpr std::array<const char*, 3> kKnownDrawSources{"opaque", "skybox",
+		"transparent"};
+	for (const auto& pass : graph.passes) {
+		if (pass.kind == RgPassKind::blit)
+			fail(fmt::format("blit pass '{}' not yet supported by executor "
+				"(Phase 6 batch 4 offscreen rework)", pass.name));
+		if (pass.state != "opaque" && pass.state != "skybox" && pass.state != "transparent")
+			fail(fmt::format("render graph pass '{}' has unknown state '{}'", pass.name,
+				pass.state));
+		if (!std::ranges::any_of(kKnownDrawSources,
+				[&](const char* s) { return pass.drawSource == s; }))
+			fail(fmt::format("render graph pass '{}' has unknown drawSource '{}'", pass.name,
+				pass.drawSource));
+	}
+}
+
+// FrameDrawList 段边界 → [begin, end)（drawSource 名 = 段名的机械映射，
+// 段序契约 = FrameDrawList 注释：opaque | skybox | transparent）
+std::pair<uint32_t, uint32_t> segmentRange(std::string_view drawSource,
+	const FrameDrawList& list) {
+	const uint32_t size = static_cast<uint32_t>(list.calls.size());
+	if (drawSource == "opaque") return {0, list.skyboxStart};
+	if (drawSource == "skybox") return {list.skyboxStart, list.transparentStart};
+	return {list.transparentStart, size};
+}
+
+}  // namespace
+
 Renderer::Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RGL::Resources& vkResources,
-		RGL::ShaderRegistry& shaderRegistry)
+		RGL::ShaderRegistry& shaderRegistry, RGL::CompiledRenderGraph renderGraph)
 	: vkDevice(vkDevice),
 	  swapchain(&vkSwapchain),
 	  resources(&vkResources),
 	  registry(shaderRegistry),
-	  offscreen(std::getenv("RGL_OFFSCREEN") != nullptr),
+	  renderGraph(std::move(renderGraph)),
+	  attachmentLayouts(this->renderGraph.attachments.size(), vk::ImageLayout::eUndefined),
 	  // edS3：depth clip 动态状态能力（feature 探测位，启动期一次；未支持 = 恒 false no-op）
 	  depthClipDynamic(vkDevice.getOptionalFeatures().depthClipEnable),
 	  graphicsQueue(vkDevice.getGraphicsQueue()),
 	  graphicsCommandPool(vkDevice.getGraphicsCommandPool()) {
+		validateRenderGraphForExecutor(this->renderGraph);
+		for (const auto& warning : this->renderGraph.warnings) {
+			auto logger = RLLogger::getInstance();
+			if (logger) logger->warn("RenderGraph: {}", warning);
+		}
+		// DIAG（可见窗 GPUVM fault 规避 2026-08-28，heap_texture_research.md §十一）：
+		// 旧手工 RGL_OFFSCREEN 离屏+blit 通路已随 Phase 6 图重构移除，批次 4 以
+		// offscreen attachment + composite blit pass 的图变体恢复（见 next_roadmap）
+		if (std::getenv("RGL_OFFSCREEN")) {
+			auto logger = RLLogger::getInstance();
+			if (logger) logger->error("Renderer: RGL_OFFSCREEN temporarily unavailable during "
+				"Phase 6 graph rework (restored in batch 4) — ignored");
+		}
 		// descriptor heap 的 GPU 端地址，每帧传给 vkCmdBindResourceHeapEXT
 		heapAddress = vkResources.getDescriptorHeap().getGpuAddress();
 		// 透明段状态（Phase 5）：不透明段之外的差异三项——不写深度 + 开 alpha 混合 +
@@ -106,30 +169,6 @@ void Renderer::createSceneStaging(RGL::Resources& vkResources) {
 			staging = std::move(*result);
 		}
 	}
-std::expected<RGL::VmaImage, Error> Renderer::createOffscreenImage(RGL::VmaAllocatorRAII& allocator,
-		vk::Extent2D extent) {
-		vk::ImageCreateInfo info{};
-		info.imageType = vk::ImageType::e2D;
-		info.format = vk::Format::eR8G8B8A8Unorm;
-		info.extent = vk::Extent3D(extent.width, extent.height, 1);
-		info.mipLevels = 1;
-		info.arrayLayers = 1;
-		info.samples = vk::SampleCountFlagBits::e1;
-		info.tiling = vk::ImageTiling::eOptimal;
-		info.initialLayout = vk::ImageLayout::eUndefined;
-		info.usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferSrc;
-		VmaAllocationCreateInfo alloc{};
-		alloc.usage = VMA_MEMORY_USAGE_AUTO;
-		return allocator.createImage(info, alloc);
-	}
-VkImageViewCreateInfo Renderer::buildOffscreenView() const {
-		VkImageViewCreateInfo info{};
-		info.image = offscreenImage.image;
-		info.viewType = VK_IMAGE_VIEW_TYPE_2D;
-		info.format = VK_FORMAT_R8G8B8A8_UNORM;
-		info.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-		return info;
-	}
 std::expected<void, Error> Renderer::recreateSwapchainAndDepth(const char* context) {
 		// recreate 内部重查 caps/format/presentMode（acquire OUT_OF_DATE 的根因未必是
 		// extent，如 HDR 状态切换）。全部未变 = 重建修不好，打破静默死循环：报一次错
@@ -141,7 +180,7 @@ std::expected<void, Error> Renderer::recreateSwapchainAndDepth(const char* conte
 				if (logger) logger->error("Renderer: recreate requested ({}) but surface "
 					"capabilities unchanged — cannot recover, expect repeated failure", context);
 			}
-			return {};  // extent 未变 → 深度图/离屏图仍有效，跳过重建
+			return {};  // extent 未变 → 深度图仍有效，跳过重建
 		}
 		auto result = resources->recreateDepthImage(swapchain->getExtent());
 		if (!result) {
@@ -150,36 +189,19 @@ std::expected<void, Error> Renderer::recreateSwapchainAndDepth(const char* conte
 				context, result.error().describe());
 			return std::unexpected(std::move(result).error());
 		}
-		// DIAG（RGL_OFFSCREEN）：离屏目标随 swapchain extent 同步重建（同深度图规则）；
-		// 仅当已惰性创建（resize 只会在首帧 drawFrame 之后发生）
-		if (offscreen && offscreenImage.image) {
-			auto offscreenResult = createOffscreenImage(resources->getAllocator(), swapchain->getExtent());
-			if (!offscreenResult) {
-				auto logger = RLLogger::getInstance();
-				if (logger) logger->error("Renderer: failed to recreate offscreen image ({}): {}",
-					context, offscreenResult.error().describe());
-				return std::unexpected(std::move(offscreenResult).error());
-			}
-			offscreenImage = std::move(*offscreenResult);
-			offscreenLayout = vk::ImageLayout::eUndefined;  // 新图创建：布局 Undefined
-			offscreenView.emplace(vkDevice.getDevice(), buildOffscreenView());
-		}
 		return {};
+	}
+	const RGL::RenderState& Renderer::stateFor(std::string_view name) const {
+		if (name == "opaque") return opaqueState;
+		if (name == "skybox") return skyboxState;
+		if (name == "transparent") return transparentState;
+		throw std::runtime_error(
+			fmt::format("Renderer::stateFor: unknown state '{}' (constructor validation bypassed)", name));
 	}
 	std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 		const uint64_t frame = frameCount++;  // DIAG：device lost 帧号定位
 		auto& device = vkDevice.getDevice();
 
-		// DIAG（RGL_OFFSCREEN）：离屏目标惰性创建（首帧才分配——raii view 构造期即调
-		// vkCreateImageView，构造期 null image 会被校验拦下；默认路径零分配零调用）
-		if (offscreen && !offscreenImage.image) {
-			auto offscreenResult = createOffscreenImage(resources->getAllocator(), swapchain->getExtent());
-			if (!offscreenResult)
-				return std::unexpected(std::move(offscreenResult).error());
-			offscreenImage = std::move(*offscreenResult);
-			offscreenLayout = vk::ImageLayout::eUndefined;  // 新图创建：布局 Undefined
-			offscreenView.emplace(device, buildOffscreenView());
-		}
 
 	// ① 等待上一帧同 slot 完全结束：inFlight fence（命令缓冲执行完）与 present
 	// fence（present 完成）都信号后，本 slot 的 semaphore / command buffer 才可重用。
@@ -255,88 +277,10 @@ std::expected<void, Error> Renderer::recreateSwapchainAndDepth(const char* conte
 			matricesBytes);
 	}
 
-	auto& swapchainImages = swapchain->getImages();
-	auto& swapchainImageViews = swapchain->getImageViews();
-
-	// ④ 图像 barrier（Synchronization2 风格：pipelineBarrier2 + DependencyInfo，
-	// 旧 vkCmdPipelineBarrier 已弃用）
-	//
-	// 后缓冲：Undefined → ColorAttachmentOptimal。
-	// oldLayout=eUndefined 是 spec 中唯一正确的写法：首帧时图像刚创建（Undefined），
-	// 第 2 帧起是 present 返回后的布局（PresentSrcKHR），eUndefined 同时覆盖两种
-	// 状态、无需分支判断。见 docs/技术概念.md 的"colorToDrawBarrier 的 oldLayout"。
-	vk::ImageMemoryBarrier2 colorToDrawBarrier = RGL::createImageBarrier(
-		swapchainImages[imageIndex], vk::ImageLayout::eUndefined,
-		vk::ImageLayout::eColorAttachmentOptimal,
-		vk::ImageAspectFlagBits::eColor,
-		vk::PipelineStageFlagBits2::eTopOfPipe,
-		vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-		vk::AccessFlagBits2::eNone,
-		vk::AccessFlagBits2::eColorAttachmentWrite);
-
-	// 深度图：Undefined → DepthStencilAttachmentOptimal。
-	// dstAccess 需要 read（深度测试读旧值）+ write（更新深度缓冲）两者
-	vk::ImageMemoryBarrier2 depthToDrawBarrier = RGL::createImageBarrier(
-		*resources->getDepthImage(), vk::ImageLayout::eUndefined,
-		vk::ImageLayout::eDepthStencilAttachmentOptimal,
-		vk::ImageAspectFlagBits::eDepth,
-		vk::PipelineStageFlagBits2::eTopOfPipe,
-		vk::PipelineStageFlagBits2::eEarlyFragmentTests,
-		vk::AccessFlagBits2::eNone,
-		vk::AccessFlagBits2::eDepthStencilAttachmentRead |
-			vk::AccessFlagBits2::eDepthStencilAttachmentWrite);
-
-	std::array<vk::ImageMemoryBarrier2, 2> drawBarriers = {colorToDrawBarrier, depthToDrawBarrier};
-	vk::DependencyInfo drawDepInfo;
-	drawDepInfo.setImageMemoryBarriers(drawBarriers);
-	commandBuffers[currentFrame].pipelineBarrier2(drawDepInfo);
-	// DIAG（RGL_OFFSCREEN）：离屏目标 → ColorAttachmentOptimal。
-	// 与后缓冲不同：离屏图是持久图（storeOp=eStore，endRendering 后布局保留），
-	// 帧末 blit barrier 迁到 TransferSrcOptimal 且从不迁回 → 第 2 帧起真实布局是
-	// TransferSrcOptimal，声明 eUndefined 失配（非 swapchain 图无 Undefined 豁免）。
-	// 跟踪真实布局（offscreenLayout，帧末 blit 后更新）
-	if (offscreen) {
-		auto offscreenToDrawBarrier = RGL::createImageBarrier(
-			offscreenImage.image, offscreenLayout,
-			vk::ImageLayout::eColorAttachmentOptimal,
-			vk::ImageAspectFlagBits::eColor,
-			vk::PipelineStageFlagBits2::eTopOfPipe,
-			vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-			vk::AccessFlagBits2::eNone,
-			vk::AccessFlagBits2::eColorAttachmentWrite);
-		vk::DependencyInfo offscreenDepInfo;
-		offscreenDepInfo.setImageMemoryBarriers(offscreenToDrawBarrier);
-		commandBuffers[currentFrame].pipelineBarrier2(offscreenDepInfo);
-	}
-
-	// ⑤ 动态渲染附件（Dynamic Rendering：不创建 RenderPass 对象，
-	// beginRendering 时直接描述附件）
-	// 后缓冲：绘制前清深灰色 (0.1) 作为背景；Store 写回结果（后缓冲要上屏，
-	// 不能 DontCare）
-	vk::RenderingAttachmentInfo colorAttachment{};
-	// DIAG（RGL_OFFSCREEN）：场景渲到离屏目标（纹理采样在离屏 pass，后缓冲只做 blit 拷贝）
-	colorAttachment.imageView = offscreen ? *offscreenView : *swapchainImageViews[imageIndex];
-	colorAttachment.imageLayout = vk::ImageLayout::eColorAttachmentOptimal;
-	colorAttachment.loadOp = vk::AttachmentLoadOp::eClear;
-	colorAttachment.storeOp = vk::AttachmentStoreOp::eStore;
-	colorAttachment.clearValue = vk::ClearValue{
-		std::array<float, 4>{0.1f, 0.1f, 0.1f, 1.0f}};
-
-	// 深度缓冲：清到 1.0（最远处）；帧末结果不再使用，DontCare 省开销
-	vk::RenderingAttachmentInfo depthAttachment{};
-	depthAttachment.imageView = *resources->getDepthImageView();
-	depthAttachment.imageLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
-	depthAttachment.loadOp = vk::AttachmentLoadOp::eClear;
-	depthAttachment.storeOp = vk::AttachmentStoreOp::eDontCare;
-	depthAttachment.clearValue = vk::ClearValue{vk::ClearDepthStencilValue{1.0f, 0}};
-
-	// 渲染区域覆盖整张后缓冲
-	vk::RenderingInfo renderingInfo{};
-	renderingInfo.renderArea = vk::Rect2D({0, 0}, swapchain->getExtent());
-	renderingInfo.layerCount = 1;
-	renderingInfo.setColorAttachments(colorAttachment);
-	renderingInfo.setPDepthAttachment(&depthAttachment);
-
+	// ④ 数据通路固定段（Phase 6 起不入图——非 attachment 状态同步，见 render_graph.cppm
+	// 头注释）：heap barrier → scene staging 拷贝/屏障 → heap/sampler heap 绑定。
+	//（旧 ④ 的 color/depth attachment barrier 已由图 passes[0].barriers 推导发射；
+	// 与 heap barrier 相互独立，命令流中先后位置对换无语义影响）
 	// ⑥ Descriptor heap 同步：描述符此前由 vkWriteResourceDescriptorsEXT 写进
 	// CPU mapped 区域（vkresources.cppm），GPU 读取前需要 host write →
 	// resource heap read 的内存 barrier。eHost stage 不能在 render pass 内部使用，
@@ -405,113 +349,133 @@ std::expected<void, Error> Renderer::recreateSwapchainAndDepth(const char* conte
 		0,
 		resources->getSamplerReservedRangeSize()));
 
-	// ⑧ 开始渲染（Dynamic Rendering 的 render pass 起点）
-	commandBuffers[currentFrame].beginRendering(renderingInfo);
 
-	// ⑨ 绘制：遍历渲染 system 产出的绘制列表（顺序 = 列表顺序；push data 布局随管线，
-	// 见 DrawCall）。每条：推绘制参数（push constant，独立于 descriptor heap，不占 slot，
-	// Slang 端经 [[vk::push_constant]] 访问，spec 3.4.1；host 内存录制时读取；
-	// push set 经 PipelineEntry.pushDataSet 显式化，Phase 4 归一，L5 解决——替代旧硬编码 0）→
-	// 绑定 ShaderObject → drawMeshTasksEXT（mesh shader 内部生成顶点/三角形，
-	// 不需要传统顶点管线；group 数经资产静态字段 MeshAsset.groupCount，见 renderListSystem）
-	// 动态状态在 draw 时采样（spec chapters/shaders.adoc "Setting State"），与 bindShadersEXT
-	// 的先后无约束。Phase 5 透明排序：opaque/transparent 两段各在段首 applyDynamicState 一次
-	//（不透明写深度关混合 → 透明关深度写开混合；段内循环不变）。
-	auto drawCall = [&](const DrawCall& call) {
+	// ⑤ pass 循环（执行序 = 图线性序，Phase 6）：attachment barrier（布局链推导
+	// 物化）→ beginRendering（逐 pass 附件）→ applyDynamicState(pass.state)
+	// → 段内逐 draw（pass.drawSource）→ endRendering。执行器盲消费——barrier/
+	// load/store/布局全部来自编译图，手写布局转换清零（RGL_OFFSCREEN 临时通路
+	// 随旧 ⑤/⑨/⑫ 一并移除，批次 4 以 offscreen attachment + blit pass 图变体恢复）。
+	auto& swapchainImages = swapchain->getImages();
+	auto& swapchainImageViews = swapchain->getImageViews();
+	const auto extent = swapchain->getExtent();
+	VkImage swapchainImage = swapchainImages[imageIndex];
+	VkImageView swapchainView = *swapchainImageViews[imageIndex];
+	VkImage depthImage = *resources->getDepthImage();
+	VkImageView depthView = *resources->getDepthImageView();
+
+	auto imageForSlot = [&](RgAttachmentSlot slot) -> VkImage {
+		switch (renderGraph.attachments[slot].kind) {
+			case RgAttachmentKind::swapchain: return swapchainImage;
+			case RgAttachmentKind::depth: return depthImage;
+			case RgAttachmentKind::offscreen:
+				throw std::runtime_error("Renderer: offscreen attachment executed without support");
+		}
+		return VK_NULL_HANDLE;  // 不可达（穷尽），消 warning
+	};
+	auto viewForSlot = [&](RgAttachmentSlot slot) -> VkImageView {
+		switch (renderGraph.attachments[slot].kind) {
+			case RgAttachmentKind::swapchain: return swapchainView;
+			case RgAttachmentKind::depth: return depthView;
+			case RgAttachmentKind::offscreen:
+				throw std::runtime_error("Renderer: offscreen attachment executed without support");
+		}
+		return VK_NULL_HANDLE;
+	};
+
+	// 物化 + 发射一组 attachment barrier（单 DependencyInfo 批量）；oldLayout =
+	// 帧首丢弃规则（eUndefined）或跨帧/帧内追踪值，发射后推进追踪
+	auto emitBarriers = [&](std::span<const RgBarrierPlan> barriers) {
+		if (barriers.empty()) return;
+		std::vector<vk::ImageMemoryBarrier2> materialized;
+		materialized.reserve(barriers.size());
+		for (const auto& plan : barriers) {
+			const auto oldLayout = plan.oldLayoutDiscard ? vk::ImageLayout::eUndefined
+			                                              : attachmentLayouts[plan.attachment];
+			materialized.push_back(RGL::materializeBarrier(plan, imageForSlot(plan.attachment),
+				oldLayout));
+		}
+		vk::DependencyInfo depInfo;
+		depInfo.setImageMemoryBarriers(materialized);
+		commandBuffers[currentFrame].pipelineBarrier2(depInfo);
+		for (const auto& plan : barriers)
+			attachmentLayouts[plan.attachment] = plan.newLayout;
+	};
+
+	auto drawOne = [&](const DrawCall& call) {
 		const auto& entry = registry.entry(call.pipeline);
 		commandBuffers[currentFrame].pushDataEXT(vk::PushDataInfoEXT(
 			entry.pushDataSet, vk::HostAddressRangeConstEXT(call.pushData.data(), call.pushData.size())));
 		entry.pipeline.bindShaders(commandBuffers[currentFrame]);
 		commandBuffers[currentFrame].drawMeshTasksEXT(call.groupCount, 1, 1);
 	};
-	const auto extent = swapchain->getExtent();
-	RGL::applyDynamicState(commandBuffers[currentFrame], extent.width, extent.height, opaqueState,
-		depthClipDynamic);
-	for (uint32_t i = 0; i < list.skyboxStart; ++i)
-		drawCall(list.calls[i]);
-	// Phase 5.5 批次 4 天空盒段（z=1 大三角 + LEQUAL 不写深度，空段自然跳过）
-	if (list.skyboxStart < list.transparentStart) {
+
+	for (const auto& pass : renderGraph.passes) {
+		emitBarriers(pass.barriers);
+		if (pass.kind != RgPassKind::drawMesh)
+			return std::unexpected(Error{ErrorCode::Unknown,
+				"blit pass reached executor (constructor validation bypassed)"});
+
+		std::vector<vk::RenderingAttachmentInfo> colorInfos;
+		colorInfos.reserve(pass.colors.size());
+		for (const auto& cp : pass.colors) {
+			vk::RenderingAttachmentInfo info{};
+			info.imageView = viewForSlot(cp.slot);
+			info.imageLayout = cp.layout;
+			info.loadOp = cp.loadOp;
+			info.storeOp = cp.storeOp;
+			info.clearValue = cp.clearValue;
+			colorInfos.push_back(info);
+		}
+		// 背景清深灰色 (0.1) 等清除值来自图计划（默认图 = 原 ⑤ 逐位一致）；
+		// 深度清 1.0，末段 DontCare 省带宽（中间 pass store 保内容）
+		std::optional<vk::RenderingAttachmentInfo> depthInfo;
+		if (pass.depth) {
+			vk::RenderingAttachmentInfo info{};
+			info.imageView = viewForSlot(pass.depth->slot);
+			info.imageLayout = pass.depth->layout;
+			info.loadOp = pass.depth->loadOp;
+			info.storeOp = pass.depth->storeOp;
+			info.clearValue = pass.depth->clearValue;
+			depthInfo = info;
+		}
+		vk::RenderingInfo renderingInfo{};
+		renderingInfo.renderArea = vk::Rect2D({0, 0}, extent);
+		renderingInfo.layerCount = 1;
+		renderingInfo.setColorAttachments(colorInfos);
+		if (depthInfo)
+			renderingInfo.setPDepthAttachment(&*depthInfo);
+
+		commandBuffers[currentFrame].beginRendering(renderingInfo);
+		// 动态状态在 draw 时采样（spec chapters/shaders.adoc "Setting State"），与
+		// bindShadersEXT 先后无约束；段首各 applyDynamicState 一次（Phase 5 语义，
+		// 状态对象经 pass.state 名解析——opaque/skybox/transparent 三成员不变）
 		RGL::applyDynamicState(commandBuffers[currentFrame], extent.width, extent.height,
-			skyboxState, depthClipDynamic);
-		for (uint32_t i = list.skyboxStart; i < list.transparentStart; ++i)
-			drawCall(list.calls[i]);
-	}
-	if (list.transparentStart < list.calls.size()) {
-		RGL::applyDynamicState(commandBuffers[currentFrame], extent.width, extent.height,
-			transparentState, depthClipDynamic);
-		for (uint32_t i = list.transparentStart; i < static_cast<uint32_t>(list.calls.size()); ++i)
-			drawCall(list.calls[i]);
+			stateFor(pass.state), depthClipDynamic);
+		const auto [segBegin, segEnd] = segmentRange(pass.drawSource, list);
+		for (uint32_t i = segBegin; i < segEnd; ++i)
+			drawOne(list.calls[i]);
+		commandBuffers[currentFrame].endRendering();
 	}
 
-	commandBuffers[currentFrame].endRendering();
+	// ⑫ swapchain → PresentSrcKHR（图 presentTransition——src 阶段/访问由最后
+	// usage 推导：直渲 = CAO 写、blit 上屏 = Transfer 写，等价旧手工分支；
+	// 无 swapchain 写入的离屏图 = nullopt 跳过）
+	if (renderGraph.presentTransition)
+		emitBarriers(std::span<const RgBarrierPlan>{&*renderGraph.presentTransition, 1});
 
-	// DIAG（RGL_OFFSCREEN）：离屏目标 → 后缓冲 blit（纹理采样已在离屏 pass 完成，
-	// 本阶段纯拷贝不触碰纹理描述符）；后缓冲 ④ 已迁 CAO，此处迁 TransferDst 作 blit 目标
-	if (offscreen) {
-		auto offscreenToBlitBarrier = RGL::createImageBarrier(
-			offscreenImage.image, vk::ImageLayout::eColorAttachmentOptimal,
-			vk::ImageLayout::eTransferSrcOptimal,
-			vk::ImageAspectFlagBits::eColor,
-			vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-			vk::PipelineStageFlagBits2::eTransfer,
-			vk::AccessFlagBits2::eColorAttachmentWrite,
-			vk::AccessFlagBits2::eTransferRead);
-		auto swapchainToBlitBarrier = RGL::createImageBarrier(
-			swapchainImages[imageIndex], vk::ImageLayout::eColorAttachmentOptimal,
-			vk::ImageLayout::eTransferDstOptimal,
-			vk::ImageAspectFlagBits::eColor,
-			vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-			vk::PipelineStageFlagBits2::eTransfer,
-			vk::AccessFlagBits2::eColorAttachmentWrite,
-			vk::AccessFlagBits2::eTransferWrite);
-		std::array<vk::ImageMemoryBarrier2, 2> blitBarriers = {offscreenToBlitBarrier, swapchainToBlitBarrier};
-		vk::DependencyInfo blitDepInfo;
-		blitDepInfo.setImageMemoryBarriers(blitBarriers);
-		commandBuffers[currentFrame].pipelineBarrier2(blitDepInfo);
-		vk::ImageBlit blitRegion{};
-		blitRegion.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-		blitRegion.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-		const int32_t w = static_cast<int32_t>(swapchain->getExtent().width);
-		const int32_t h = static_cast<int32_t>(swapchain->getExtent().height);
-		// hpp ArrayWrapper1D 不接受 brace 整体赋值，逐元素填（std::array 布局）
-		blitRegion.srcOffsets[0] = vk::Offset3D{0, 0, 0};
-		blitRegion.srcOffsets[1] = vk::Offset3D{w, h, 1};
-		blitRegion.dstOffsets[0] = vk::Offset3D{0, 0, 0};
-		blitRegion.dstOffsets[1] = vk::Offset3D{w, h, 1};
-		// 裸 C 调用（同 llm_debug 回读拷贝风格）：hpp 重载走 ArrayProxy，此处 count+指针直传
-		::vkCmdBlitImage(*commandBuffers[currentFrame], offscreenImage.image,
-			VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, swapchainImages[imageIndex],
-			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
-			reinterpret_cast<const VkImageBlit*>(&blitRegion), VK_FILTER_LINEAR);
-		offscreenLayout = vk::ImageLayout::eTransferSrcOptimal;  // 本帧末真实布局，下帧 ④ 用
-	}
-
-	// ⑫ 后缓冲：ColorAttachmentOptimal（直渲）/ TransferDstOptimal（RGL_OFFSCREEN blit 后）
-	// → PresentSrcKHR，使其"可 present"。该转换必须排在颜色附件的最后一次使用之后
-	//（此处紧随 endRendering / blit）。
-	vk::ImageMemoryBarrier2 colorToPresentBarrier = RGL::createImageBarrier(
-		swapchainImages[imageIndex],
-		offscreen ? vk::ImageLayout::eTransferDstOptimal : vk::ImageLayout::eColorAttachmentOptimal,
-		vk::ImageLayout::ePresentSrcKHR, vk::ImageAspectFlagBits::eColor,
-		offscreen ? vk::PipelineStageFlagBits2::eTransfer : vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-		vk::PipelineStageFlagBits2::eBottomOfPipe,
-		offscreen ? vk::AccessFlagBits2::eTransferWrite : vk::AccessFlagBits2::eColorAttachmentWrite,
-		vk::AccessFlagBits2::eNone);
-	vk::DependencyInfo colorToPresentDepInfo;
-	colorToPresentDepInfo.setImageMemoryBarriers(colorToPresentBarrier);
-	commandBuffers[currentFrame].pipelineBarrier2(colorToPresentDepInfo);
 	// 录制完毕
 	commandBuffers[currentFrame].end();
 
 	// ⑬ 提交到图形队列。用裸 C API（vkQueueSubmit）而非 vk-hpp RAII：
 	// RAII 的 Queue::submit 重载不支持 fence 参数。
-	// wait：imageAvailable 信号量（acquireNextImage 信号）——wait stage 必须覆盖 command
-	// buffer 首次使用后缓冲的 stage：直渲 = 颜色附件输出；RGL_OFFSCREEN = blit（Transfer）。
+	// wait：imageAvailable 信号量（acquireNextImage 信号）——wait stage = 图派生的
+	// swapchainWaitStage（命令流首次触碰后缓冲的阶段：直渲图 = ColorAttachmentOutput、
+	// blit 上屏图 = Transfer；现值均在 stage1 32 位范围内，截断安全）。
 	// signal：renderFinished 信号量（presentKHR 的等待对象）；
 	// fence：inFlightFence，命令缓冲执行完时信号。
 	VkSemaphore waitSem = *imageAvailableSemaphores[currentFrame];
-	const VkPipelineStageFlags waitStage = offscreen ? VK_PIPELINE_STAGE_TRANSFER_BIT
-		: VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+	const VkPipelineStageFlags waitStage = static_cast<VkPipelineStageFlags>(
+		static_cast<VkPipelineStageFlags2>(renderGraph.swapchainWaitStage));
 	VkCommandBuffer cb = *commandBuffers[currentFrame];
 	VkSemaphore signalSem = *renderFinishedSemaphores[currentFrame];
 	VkFence rawFence = *inFlightFences[currentFrame];

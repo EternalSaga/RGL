@@ -20,23 +20,30 @@ import vkerror;
 // 保持 Renderer::drawFrame 接口类型对外可见（2026-09-02 拆分）
 export import frame_draw_list;
 
+// Phase 6：渲染图类型（RgGraphDesc/CompiledRenderGraph/RgBarrierPlan…）经构造参数
+// 进入本类公开接口——同 frame_draw_list 先例 export import，main 无需单独 import
+export import render_graph;
+
 namespace RGL {
 
 // Renderer：每帧"录制 → 提交 → 显示"的驱动器 + 每帧同步状态的持有者。
 //
 // 渲染流程（一次 drawFrame(list) 调用，逐步骤注释见函数体内 ①~⑮）：
-//   等待上一帧同 slot 的双 fence（submit 与 present 均完成）并重置
+//   等待上一帧同 slot 完全结束（双 fence）并重置
 //   → acquireNextImage 获取后缓冲（信号 imageAvailable 信号量）
-//   → 录制命令缓冲：图像 barrier → 动态渲染附件
-//     → descriptor heap barrier/绑定 → beginRendering
-//     → 动态状态 → 逐 draw：push data → 绑定 ShaderObject → drawMeshTasksEXT → endRendering
-//     → PresentSrc barrier
-//   → queueSubmit（等 imageAvailable / 信号 renderFinished / 挂 inFlight fence）
+//   → 录制命令缓冲：descriptor heap barrier + scene staging 拷贝/绑定（数据通路
+//     固定段，Phase 6 起不入图）→ 逐 pass 循环（编译图 CompiledRenderGraph）：
+//     attachment barrier（布局链推导产物物化）→ beginRendering（逐 pass 附件）
+//     → applyDynamicState(pass.state) → 段内逐 draw → endRendering
+//   → swapchain PresentSrc barrier（图 presentTransition）
+//   → queueSubmit（waitStage = 图派生的 swapchain 首用阶段）
 //   → presentKHR（pNext 挂 SwapchainPresentFenceInfoEXT 信号 present fence）
 //   → currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT
 //
 // 绘制内容 = 渲染 system 产出的 FrameDrawList（本类是盲执行器，不认识具体场景资产，
-// 见 DrawCall/FrameDrawList 注释）。核心现代特性：Dynamic Rendering（无 RenderPass）+
+// 见 DrawCall/FrameDrawList 注释）；帧拓扑 = 构造传入的编译图（Phase 6：barrier 与
+// 布局转换由 render_graph 编译器从 pass 声明推导，执行器不再手写；现默认图 =
+// opaque/skybox/transparent 三段直渲）。核心现代特性：Dynamic Rendering（无 RenderPass）+
 // ShaderObject（无 PipelineLayout，bindShadersEXT + 动态状态）+ DescriptorHeap
 //（vkCmdBindResourceHeapEXT 取代 descriptor set，使用规范见 docs/DESCRIPTOR_HEAP_SPEC.md）。
 
@@ -52,8 +59,11 @@ export class Renderer {
 	// 成本可忽略）。模型管线条目不在构造期建（批次 3：管线表与场景内容解耦，E1.3）——
 	// 资产上传期经 ShaderRegistry::addModelEntry 动态加入（按 (风格, 顶点 slot, 纹理 slot)
 	// 组合去重，同组合共享一条，Phase 4 验收 392 primitive → 12 条）。
+	// renderGraph（Phase 6）：编译图由 main 启动期 compileRenderGraph 产出（批次 3 前 =
+	// defaultRenderGraph()）——构造期校验执行器可解析性（attachment kind / state 与
+	// drawSource 名字 / blit 暂未支持），不可解析 = 启动 fail-fast，录制期零图错误。
 	Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RGL::Resources& vkResources,
-		RGL::ShaderRegistry& shaderRegistry);
+		RGL::ShaderRegistry& shaderRegistry, RGL::CompiledRenderGraph renderGraph);
 	RGL::Swapchain& getSwapchainRef() const { return *swapchain; }
 	RGL::Resources& getResourcesRef() const { return *resources; }
 	// 离屏截图（llm_debug.cppm captureFrame）用的只读访问器
@@ -75,12 +85,6 @@ export class Renderer {
 	[[nodiscard]] std::expected<void, Error> drawFrame(const FrameDrawList& list);
 
    private:
-	// DIAG（RGL_OFFSCREEN）：离屏颜色目标（8-bit UNORM，与后缓冲同 extent；
-	// 同 llm_debug captureFrame 的颜色图形态，VMA 自动绑内存）
-	static std::expected<RGL::VmaImage, Error> createOffscreenImage(RGL::VmaAllocatorRAII& allocator,
-		vk::Extent2D extent);
-	// DIAG（RGL_OFFSCREEN）：离屏目标 view 的 create info（!offscreen 时 image = null）
-	VkImageViewCreateInfo buildOffscreenView() const;
 	// 创建 MAX_FRAMES_IN_FLIGHT 套同步对象（每个帧 slot 一套，双缓冲）。
 	//
 	// 四个角色：
@@ -114,12 +118,13 @@ export class Renderer {
 	// 管线表（Phase 4 批次 2：迁出至 ShaderRegistry，零 entt；main 先于 Renderer 构造并持引用，
 	// 析构序 Renderer 先于 registry 安全）
 	RGL::ShaderRegistry& registry;
-	// DIAG（可见窗 GPUVM fault 规避 2026-08-28）：RGL_OFFSCREEN=1 → 场景渲到离屏
-	// 8-bit UNORM 目标（纹理采样路径与 llm_debug 离屏同构——隐藏窗离屏路径实测无
-	// fault），再 blit 到后缓冲上屏；规避可见后缓冲（compositor 在读）关联的
-	// 纹理 high VA 采样 fault（现象/排查过程见 docs/archive/heap_texture_research.md §十一）。
-	// 默认关 = 原路径零变化。
-	bool offscreen = false;
+	// Phase 6：编译渲染图（构造传入，main 启动期 compileRenderGraph 产出，之后不变）
+	RGL::CompiledRenderGraph renderGraph;
+	// attachment 真实布局追踪（按图 slot 索引，跨帧持久）：帧首 barrier 的 oldLayout
+	// 来源（plan.oldLayoutDiscard=false 者用本值；swapchain/depth 走帧首丢弃规则
+	// 不查询）；录制期随每条物化 barrier 更新为 plan.newLayout。
+	//（Phase 4 前 DIAG RGL_OFFSCREEN 的 offscreenLayout 单变量泛化为逐 slot 表）
+	std::vector<vk::ImageLayout> attachmentLayouts;
 	// edS3：depth clip enable 动态状态能力门（vkCmdSetDepthClipEnableEXT；启动期一次探测，
 	// 未支持 = false，applyDynamicState 内 no-op 不 set——"扩展缺失干净降级"原则）
 	bool depthClipDynamic = false;
@@ -130,14 +135,6 @@ export class Renderer {
 	// DIAG（可见窗 fault 排查）：drawFrame 帧计数——DEVICE_LOST 时打帧号，
 	// 区分"帧数累积触发"（fault 帧号恒定）vs"窗口显示触发"（fault 帧号 >> showAfter）
 	uint64_t frameCount = 0;
-	VmaImage offscreenImage;
-	// 离屏图真实布局跟踪（DIAG RGL_OFFSCREEN）：持久图 storeOp=eStore，endRendering 后
-	// 布局保留；帧末 blit barrier 迁 TransferSrcOptimal 且不迁回 → 第 2 帧起 ④ 的
-	// oldLayout 必须用本跟踪值（非 Undefined）。新图创建/重建时重置 Undefined。
-	vk::ImageLayout offscreenLayout = vk::ImageLayout::eUndefined;
-	// 离屏目标 view（raii 默认构造已删 + 构造期即调 vkCreateImageView——null image
-	// 会被校验拦下，故不能进初始化列表；optional 惰性 emplace，默认路径零分配零调用）
-	std::optional<vk::raii::ImageView> offscreenView;
 	// 非 RAII 句柄（队列生命周期由 DeviceContext 的 raii Device 管理）
 	vk::Queue graphicsQueue;
 	const vk::raii::CommandPool& graphicsCommandPool;
@@ -150,6 +147,9 @@ export class Renderer {
 	// 动态状态：skybox pass（Phase 5.5 批次 4）——不写深度 + LEQUAL（大三角 z=1 只在
 	// 空像素通过），drawFrame() 在 skybox 段首 applyDynamicState 一次
 	RGL::RenderState skyboxState{};
+	// 图 pass.state 名 → 动态状态（构造期校验保证图内名字全部可解析，未知名 = 校验
+	// 遗漏的编程错误，抛出）
+	const RGL::RenderState& stateFor(std::string_view name) const;
 	// descriptor heap 的 GPU 地址（VmaDescriptorHeap 管理的"描述符槽位数组"，
 	// 对齐细节见 VmaBuffer.cppm）
 	vk::DeviceAddress heapAddress = 0;

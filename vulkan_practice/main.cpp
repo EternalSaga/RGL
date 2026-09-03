@@ -44,6 +44,18 @@ int main() {
 	auto cameraConfig = std::move(*cameraResult);
 	const bool llmEnabled = cameraConfig.llm.enabled;
 
+	// Phase 6 批次 2：渲染图编译器自检（无 GPU，纯 CPU 图算法回归守卫）——失败 =
+	// 编译器/默认图被改坏，启动期报错退出（早于建窗，headless/llm 路径同样被覆盖）
+	{
+		auto failures = renderGraphSelfCheck();
+		if (!failures.empty()) {
+			auto* logger = RLLogger::getInstance();
+			for (const auto& f : failures)
+				if (logger) logger->error("RenderGraph self-check: {}", f);
+			return -1;
+		}
+	}
+
 	// headless（VK_EXT_headless_surface）：脱离 SDL/compositor——RGL_HEADLESS=1 时不建
 	// SDL 窗口，surface 经 vkCreateHeadlessSurfaceEXT 创建（离屏渲染/CI 截图，无需显示）。
 	// 尺寸 RGL_HEADLESS_SIZE="WxH"（默认 1280x720）。headless 下 llm_debug 截图直接读
@@ -139,7 +151,10 @@ int main() {
 		// "cube" 条目恒建（批次 3：画不画 = cube entity 有无，数据驱动，下方按 showCube
 		// 决定是否注册）。先于 Renderer 构造（Renderer 持引用）
 		ShaderRegistry shaderRegistry(vkDevice, vkResources, sceneConfig.pipelines);
-		Renderer vkRenderer(vkDevice, vkSwapchain, vkResources, shaderRegistry);
+		// Phase 6 批次 2：编译图（批次 3 前 = 默认三段图，与旧 drawFrame 硬编码语义等价；
+		// 届时换成 configs/render_graph.lua 加载 + compileRenderGraph）
+		Renderer vkRenderer(vkDevice, vkSwapchain, vkResources, shaderRegistry,
+			defaultRenderGraph());
 
 		// Phase 5.5 契约：引用 model_pbr_ibl 风格必须配 environment——frag 声明的
 		// binding 4/5 无 mapping 烘焙 = 采样未写描述符（内容未定义；VVL 会抓
