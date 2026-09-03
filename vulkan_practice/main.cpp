@@ -144,17 +144,20 @@ int main() {
 		// Phase 5.5 契约：引用 model_pbr_ibl 风格必须配 environment——frag 声明的
 		// binding 4/5 无 mapping 烘焙 = 采样未写描述符（内容未定义；VVL 会抓
 		// "no mapping for envSampler"，但启动期明确报错优于运行时未定义）。
+		// 检查对象只取 styleMap 的值（风格真正引用的规格）：pipelines 表里存在未被
+		// 引用的 ibl 条目是合法配置（addModelEntry 按引用建条目，无引用 = 不建，
+		// 条目永不生效）；子串 contains 匹配还会误伤 model_pbr_ibl_v2 类未来命名
+		//（2026-09-03 教程拆解 ③：教程截图配置 styles.pbr="model_pbr" 但 pipelines
+		// 保留 ibl 条目被旧检查误杀）
 		if (!sceneConfig.environment.enabled) {
-			bool iblUsed = false;
-			for (const auto& spec : sceneConfig.pipelines)
-				if (spec.name == "model_pbr_ibl" || spec.fragSpv.contains("model_pbr_ibl"))
-					iblUsed = true;
+			std::string iblStyles;
 			for (const auto& [style, specName] : sceneConfig.styleMap)
-				if (specName.contains("model_pbr_ibl"))
-					iblUsed = true;
-			if (iblUsed)
-				throw std::runtime_error(
-					"model_pbr_ibl style requires scene.lua 'environment' (env descriptor unmapped = undefined sampling)");
+				if (specName == "model_pbr_ibl")
+					iblStyles += (iblStyles.empty() ? "" : ", ") + style;
+			if (!iblStyles.empty())
+				throw std::runtime_error(fmt::format(
+					"styles [{}] reference model_pbr_ibl but scene.lua 'environment' is disabled "
+					"(env descriptor unmapped = undefined sampling)", iblStyles));
 		}
 		// Phase 5.5 环境 cubemap（scene.lua environment 段，faces 按 Vulkan 层序 0-5，
 		// 定案表 docs/phase5_5_plan.md）。**调用时序契约**：必须在模型顶点槽 + 纹理槽

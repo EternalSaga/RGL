@@ -25,7 +25,12 @@ void main(
 
     uint groupIndex = groupID.x;
     uint firstTriangle = groupIndex * kTrianglesPerGroup;
-    uint remaining = max(drawArgs.totalTriangles - firstTriangle, 0u);
+    // 条件式前置：max(uint, 0) 救不回无符号回绕——firstTriangle > totalTriangles 时
+    // 减法先回绕成巨大值，triangleCount = 10 → 越界读字节（静默垃圾而非空组）。
+    // 当前 CPU 侧 groupCount = ceil(total/10) 恒正确不可触发，但 groupCount 一旦算错
+    // （资产改动 / Phase 7 indirect 路径）症状难查（docs/教程拆解发现_20260902.md ②）
+    uint remaining = (firstTriangle >= drawArgs.totalTriangles) ? 0u
+                 : drawArgs.totalTriangles - firstTriangle;
     uint triangleCount = min(kTrianglesPerGroup, remaining);
     uint vertexCount = triangleCount * 3;
 

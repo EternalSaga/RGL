@@ -5,6 +5,8 @@
 // 字节布局契约的单一真相源 = vkresources.cppm（LightDataGpu / kSceneData* 常量），
 // 本文件字面量必须一致（kTrianglesPerGroup 先例，无反射端对应）：
 //   @0   direction vec3 | @12 eyePos vec3 | @24 color vec3（CPU 预乘 intensity）| @36 ambient vec3
+//        （两个 intensity 语义：光色在此 CPU 预乘成最终值；env intensity 是 @48 的裸标量、
+//          GPU 端乘——env 颜色在 GPU 侧无法预乘，调光两条路线各改各 config 的一个 intensity）
 //   @48  env 参数（Phase 5.5，env.slang readEnvParams 消费）| @64 skyboxInvViewProj
 //        mat4 列主序（Phase 5.5 批次 4，sky.slang skyClipToWorld 消费）
 //   @128 对象矩阵表：mat4 列主序 × 1024，[objectIndex] = spin·world（DrawArgs.objectIndex 索引）

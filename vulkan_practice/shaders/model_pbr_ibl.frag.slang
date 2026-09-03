@@ -35,11 +35,12 @@ float4 main(ModelVertexOutput input) : SV_Target
     float NdotH = saturate(dot(N, H));
     float VdotH = saturate(dot(V, H));
 
-    // GGX 法线分布
+    // GGX 法线分布（epsilon 相对化 1e-7·a2，与 model_pbr 一致：绝对 epsilon 在光滑端
+    // 淹没真实分母把高光峰值削掉 ~5000 倍且使 D(1) 非单调，见 docs/教程拆解发现_20260902.md ①）
     float a = roughness * roughness;
     float a2 = a * a;
     float d = NdotH * NdotH * (a2 - 1.0) + 1.0;
-    float D = a2 / (3.14159265 * d * d + 1e-7);
+    float D = a2 / (3.14159265 * d * d + 1e-7 * a2);
     // Schlick-Fresnel
     float3 F = F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0);
     // 简化几何项（Smith Schlick 近似，k = a/2）

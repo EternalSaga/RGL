@@ -22,7 +22,11 @@ SamplerState envSampler;
 
 struct EnvParams
 {
-    float intensity;  // 环境强度（scene.lua environment.intensity）
+    // 环境强度（scene.lua environment.intensity）。**作用点在 GPU 端**：model_pbr_ibl.frag
+    // 采样后乘（env 颜色只存在于 GPU，无法像定向光那样 CPU 预乘进 sceneData@24）。
+    // 与定向光 intensity（CPU 预乘，scene.slang @24 注释）是同一字段的两种落地形态——
+    // 调光时两条路线各只改自己 config 里的那一个 intensity（docs/教程拆解发现_20260902.md ⑤）
+    float intensity;
     float mipRange;   // 可采样 mip 跨度（L−1，roughness→LOD 的满量程）
 };
 

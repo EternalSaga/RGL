@@ -300,7 +300,10 @@ sType 值相同。代码使用 EXT 命名形式，功能等价于 KHR。
 - **Phase 5.5 IBL/天空盒已知近似**：① 简化版 IBL——无 pre-filtered cubemap/BRDF LUT（完整版
   留 Phase 7）；② mipmap blit 用 NEAREST（sRGB blit LINEAR 违 VUID-00239，CPU 生成线性 mip 链
   留作质量接缝）；③ 单环境贴图（全局单例，无 per-material env）；④ 天空盒大三角 z=1 依赖
-  depth clear=1.0 + LEQUAL
+  depth clear=1.0 + LEQUAL；⑤ **两个 intensity 语义不对称**——定向光 `Light.intensity` CPU
+  预乘进 sceneData@24（最终值），env `EnvironmentConfig.intensity` 是 sceneData@48 裸标量、
+  shader 端乘（env 颜色在 GPU 侧无法 CPU 预乘）：调光两条路线各只改自己 config 的一个
+  intensity，亮度跨路线不可直接对比（注释见 `env.slang`/`scene.slang`）
 - **`LightDataGpu` 字节布局双源、无反射**：`vkresources.cppm` 手写 struct（`static_assert`）↔
   `shaders/scene.slang` 字节字面量手工一致——唯一绕过反射管线的主要 CPU↔GPU struct 契约；
   单灯固定布局下风险可控，Phase 7 多灯布局重设计时并入反射管线（schema 声明→生成布局常量，
@@ -322,6 +325,7 @@ sType 值相同。代码使用 EXT 命名形式，功能等价于 KHR。
 - `docs/device_generated_commands_research.md` — GPU culling（`VK_EXT_device_generated_commands`）双驱动实测调研（Phase 7 依据）
 - `docs/present_timing_research.md` — present 时序调研（决策"暂不引入"）
 - `docs/vulkan_extensions_2025_调研.md` — 2025+ 新扩展调研 + §十二 实施记录（edS3/headless 落地、zero_init 回退；§12.3 含 edS3"VVL 误报"误诊的 2026-09-02 深夜勘误——实为真违规已修复）
+- `docs/教程拆解发现_20260902.md` — **已修复（2026-09-03）**：兄弟教程（modern_vulkan_tutorial）双实现对账查出的 5 项全部落地——GGX 分母 epsilon 相对化（`1e-7·a2`，两条 frag）/ mesh uint 减法改条件式前置 / env 契约检查收敛为 styleMap 精确匹配 / pbr ambient 补 (1−metallic) / intensity 双语义文档化（env.slang/scene.slang/本文件已知问题）；教程侧 verify 基线同步更新，各附证据与修复记录
 - `docs/快捷键配置.md` — Zed 编辑器快捷键/任务/调试配置
 - `docs/archive/` — 归档索引（phase 计划、ecs 审查、heap 纹理调研、反射规划；含 issue_history.md 总账）
 - 离线 Vulkan 文档（优先于在线检索，`docs.vulkan.org`/`registry.khronos.org` 有 Cloudflare 拦截）：

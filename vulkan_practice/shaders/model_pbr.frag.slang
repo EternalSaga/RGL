@@ -30,11 +30,13 @@ float4 main(ModelVertexOutput input) : SV_Target
     float NdotH = saturate(dot(N, H));
     float VdotH = saturate(dot(V, H));
 
-    // GGX 法线分布
+    // GGX 法线分布（epsilon 相对化 1e-7·a2：绝对 epsilon 在光滑端淹没真实分母
+    // π·d²（r=0.04 时仅 ~2e-11），把高光峰值削掉 ~5000 倍且使 D(1) 对 roughness
+    // 非单调——抛光金属变天鹅绒。教训见 docs/教程拆解发现_20260902.md ①）
     float a = roughness * roughness;
     float a2 = a * a;
     float d = NdotH * NdotH * (a2 - 1.0) + 1.0;
-    float D = a2 / (3.14159265 * d * d + 1e-7);
+    float D = a2 / (3.14159265 * d * d + 1e-7 * a2);
     // Schlick-Fresnel
     float3 F = F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0);
     // 简化几何项（Smith Schlick 近似，k = a/2）
@@ -43,7 +45,9 @@ float4 main(ModelVertexOutput input) : SV_Target
     float3 specular = D * G * F / (4.0 * NdotV * NdotL + 1e-4);
 
     float3 diffuse = albedo * (1.0 - metallic) / 3.14159265;
-    float3 color = light.ambient * albedo
+    // ambient 扣 metallic：金属无彩色漫反射（与 model_pbr_ibl 的 envDiffuse 项语义对齐，
+    // 否则纯金属在两条路线的 ambient 处理不一致，截图对比会被误读成算法差异）
+    float3 color = light.ambient * albedo * (1.0 - metallic)
         + light.color * NdotL * (diffuse + specular);
     return float4(color, alpha);
 }
