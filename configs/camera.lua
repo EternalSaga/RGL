@@ -6,7 +6,7 @@ return {
     -- 整球入画留裕量。near/far 有 SceneBounds 时由 projectionSystem 自适应（忽略）。
     -- position = { 128.0, 73.0, 150.0 },  -- castle_of_loarre 机位：包围球 center=(-3.4,0.6,17.7) r=59.7，3/4 视角距 ~200
     -- target = { -3.4, 0.6, 17.7 },  -- 轨道中心（仅 trackball 用）
-    position = { 165.0, 90.0, 165.0 },  -- kyoto_fushimi_inari_taisha_temple 机位：包围球 center≈(0,0,0) r=73.3，3/4 视角距 ~250
+    position = { 380.0, 320.0, 380.0 },  -- kyoto_fushimi_inari_taisha_temple 机位：包围球 center≈(0,0,0) r=73.3，3/4 视角距 ~250
     target = { 0.0, 0.0, 0.0 },  -- 轨道中心（仅 trackball 用）
     -- position = { -2617.0, 1343.0, 2550.0 },  -- cottage 机位（4K 黑屏 UAF 复验，2026-08-28；包围球 center=(-182,546,115) r=1352）
     -- target = { -182.0, 300.0, 115.0 },  -- 轨道中心（仅 trackball 用）
@@ -38,7 +38,7 @@ return {
     -- llm_debug 一次性截图（agent 自主工作：离屏隐藏窗渲染 → 截图 → 退出，默认关）
     -- 截图只改 llm_debug 开关（true/false）；file/size/delay_frames 常驻 llm_shot，改动只动 llm_shot
     -- 相机位置无额外字段：直接编辑上面的顶层 position/target/fovDegrees
-    llm_debug = false,
+    llm_debug = true,
 
     -- 常驻截图配置（全可选回落默认：1280x720 / 首帧 / screenshots/llm_<时间戳>.png）
     llm_shot = {

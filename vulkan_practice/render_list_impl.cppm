@@ -38,8 +38,12 @@ void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListS
 	// 循环前一次性 resize（资产 id 稠密 [0, meshSize)，vkresources.cppm meshSize）：
 	// 循环内 resize 触发 realloc 会使先前存入 DrawCall 的 span 悬空（帧 0 确定性 UAF——
 	// span 活到 drawFrame 录制期读取，vkrenderer.cppm drawCall 的 pushData.data()）
-	state.args.resize(assets.meshSize());
-	state.matrices.resize(assets.meshSize(), glm::mat4(1.0f));
+	// Phase 6 instancing：args/matrices 按**实例矩阵槽**（MeshRef.objectSlot）索引而非
+	// 资产 id——同 asset 多实例各持独立变换；容量 = NextObjectSlot.next（main 启动期
+	// 契约检查 ≤ kSceneMatrixCapacity）
+	const uint32_t objectSlotCount = rg.ctx().get<NextObjectSlot>().next;
+	state.args.resize(objectSlotCount);
+	state.matrices.resize(objectSlotCount, glm::mat4(1.0f));
 
 	rg.view<RGL::Transform, RGL::MeshRef, RGL::MaterialRef>().each(
 		[&](const RGL::Transform& tf, const RGL::MeshRef& meshRef, const RGL::MaterialRef& matRef) {
@@ -48,7 +52,7 @@ void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListS
 				return;  // 资产无管线条目（防御：注册顺序异常，见 registerScene/bindPipelineToAsset）
 			if (asset.groupCount == 0)
 				return;  // 不渲染（0 三角形）
-			auto& args = state.args[meshRef.asset];
+			auto& args = state.args[meshRef.objectSlot];
 			const glm::mat4 modelMatrix = spin.matrix * tf.world;  // 世界矩阵（无 view/proj）
 			args.mvp = viewProj.proj * viewProj.view * modelMatrix;
 			args.totalTriangles = asset.triangleCount;
@@ -56,8 +60,8 @@ void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListS
 			const auto& mat = assets.getMaterial(matRef.material);  // 批次 2：材质资产表解析
 			args.baseColor = mat.baseColor;
 			args.roughnessMetallic = {mat.roughness, mat.metallic};  // Phase 5 接线（pbr frag 消费）
-			args.objectIndex = meshRef.asset;  // bindless 对象矩阵表下标（Phase 5 批次 2）
-			state.matrices[meshRef.asset] = modelMatrix;
+			args.objectIndex = meshRef.objectSlot;  // bindless 对象矩阵表下标（实例级，instancing）
+			state.matrices[meshRef.objectSlot] = modelMatrix;
 			const RGL::DrawCall call{
 				asset.pipelineIndex,
 				std::as_bytes(std::span<const RGL::DrawArgs>{&args, 1}), asset.groupCount};

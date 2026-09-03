@@ -28,8 +28,19 @@ export struct Relationship {
 // 引用已上传 GPU 的资产（asset id = Resources 资产表的下标，见 vkresources.cppm 的 AssetTable）：
 // GPU 数据 / heap slot / 三角形数 / 管线条目引用全部收敛在资产表记录里，
 // entity ↔ primitive ↔ heap slot ↔ 管线条目 ↔ draw-args 的五方约定收敛为一处映射（E1.1/E5.1）
+// objectSlot（Phase 6 instancing）：**场景实例**级对象矩阵表下标（scene data @128，
+// shader readObjectMatrix 消费）。注册期从 NextObjectSlot 单调领取，同 asset 多实例
+//（同文件重复 entity = 共享上传的 instancing）各持独立槽——资产身份与实例变换分离
+//（ECS 规范 5）。
 export struct MeshRef {
 	uint32_t asset = 0;
+	uint32_t objectSlot = 0;
+};
+
+// 对象矩阵槽分配器（registry context，Phase 6 instancing；main 启动期 emplace）：
+// 容量契约 = kSceneMatrixCapacity（scene data @128 矩阵表，main 注册完成后检查）。
+export struct NextObjectSlot {
+	uint32_t next = 0;
 };
 
 // 材质真引用（批次 2，E5.3 解决；roadmap Phase 2"暂时只存引用"兑现）：material =
@@ -120,7 +131,9 @@ export entt::entity registerCubeEntity(entt::registry& rg, uint32_t meshAsset, u
 		radius = std::max(radius, glm::length(glm::vec3(v.position[0], v.position[1], v.position[2])));
 	rg.emplace<Bounds>(e, glm::vec3(rootTransform * glm::vec4(center, 1.0f)),
 		radius * glm::length(glm::vec3(rootTransform[0])));
-	rg.emplace<MeshRef>(e).asset = meshAsset;
+	auto& meshRef = rg.emplace<MeshRef>(e);
+	meshRef.asset = meshAsset;
+	meshRef.objectSlot = rg.ctx().get<NextObjectSlot>().next++;
 	rg.emplace<MaterialRef>(e).material = materialAsset;
 	rg.emplace<Relationship>(e);  // parent = null（根）
 	return e;

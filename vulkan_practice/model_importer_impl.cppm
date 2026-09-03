@@ -290,7 +290,9 @@ entt::entity registerScene(entt::registry& rg, const RGL::GltfModel& model,
 		tf.local = local;
 		tf.world = rootTransform * local;  // 根位姿复合（批次 5；identity = 旧行为）
 
-		rg.emplace<MeshRef>(e).asset = assetIds[i];
+		auto& meshRef = rg.emplace<MeshRef>(e);
+		meshRef.asset = assetIds[i];
+		meshRef.objectSlot = rg.ctx().get<NextObjectSlot>().next++;  // 实例矩阵槽（instancing）
 		rg.emplace<MaterialRef>(e).material = primitiveMaterialIds[i];  // 真引用（批次 2，E5.3）
 		rg.emplace<Relationship>(e).parent = sceneRoot;
 	}

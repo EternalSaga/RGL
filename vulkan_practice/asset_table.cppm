@@ -140,8 +140,19 @@ export class AssetTable {
 	[[nodiscard]] uint32_t textureSize() const { return static_cast<uint32_t>(textures.size()); }
 
 	// 材质（批次 2：MaterialRef{material} 真引用；registerScene 按 glTF materialIndex 去重注册）
-	uint32_t addMaterial(MaterialAsset material) {
-		materials.push_back(std::move(material));
+	// find-or-add（Phase 6 instancing）：材质是纯值数据，字段全等 = 同一资产——同文件
+	// 多 entity 重复 registerScene 时返回既有 id（纹理 id 本身经 loadEmbedded 去重，
+	// 参与比较稳定）。线性扫描，材质数量级（十~百）可忽略。
+	uint32_t addMaterial(const MaterialAsset& material) {
+		for (uint32_t i = 0; i < materials.size(); ++i)
+			if (materials[i].baseColor == material.baseColor &&
+				materials[i].textureId == material.textureId &&
+				materials[i].alphaModeBlend == material.alphaModeBlend &&
+				materials[i].metallic == material.metallic &&
+				materials[i].roughness == material.roughness &&
+				materials[i].unlit == material.unlit)
+				return i;
+		materials.push_back(material);
 		return static_cast<uint32_t>(materials.size() - 1);
 	}
 	[[nodiscard]] const MaterialAsset& getMaterial(uint32_t id) const { return materials[id]; }
