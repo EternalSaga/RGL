@@ -322,7 +322,7 @@
 | 优先级 | 扩展 | 批次 | 理由 |
 |---|---|---|---|
 | **近期评估（测量/诊断批次）** | `present_timing`(重评) · `device_fault` · `shader_clock` · `query pool reset`(maint9) | 可观测性 | 直击 GPUVM 史 + eImmediate 延迟盲区；测量先行，低风险旁路 |
-| **近期评估（内存卫生批次）** | `zero_initialize_device_memory` · `robustness2` | 正确性 | UAF/越界史防御；低成本 feature 链 |
+| **近期评估（内存卫生批次）** | `zero_initialize_device_memory` · `robustness2` | 正确性 | UAF/越界史防御；低成本 feature 链。**2026-09-04：robustness2 已引入（§13.3）；zero_init 回退维持（§12.3/§13.1）** |
 | **近期评估（小 win）** | `depth_clamp_zero_one` | depth 约定 | 替代软件 zero-to-one；验证天空盒交互 |
 | **近期评估（上传优化）** | `host_image_copy` | 纹理上传 | 4K 大纹理省 staging 峰值内存；A/B 实测 |
 | **Phase 6 前探测** | `unified_image_layouts` | RenderGraph | 驱动支持是关键；支持则简化多 pass 同步 |
@@ -391,7 +391,7 @@
 
 > **2026-09-02 深挖定案**：两项均经临时诊断实锤（TEMP DIAG 已清）。
 
-- **zero_init：**~~VMA 内部 `VkMemoryAllocateFlagsInfo` 撞车（spec 违例，UB）~~ → **已回退（2026-09-02 定案）**。原问题：VMA 3.4 对 BDA buffer 自动 `VmaPnextChainPushFront` 一个 `VkMemoryAllocateFlagsInfo`（`DEVICE_ADDRESS_BIT`，子分配块 `:12150` / dedicated `:14054`），用户经 `pMemoryAllocateNext` 传的（`ZERO_INITIALIZE_BIT`）形成 `vkAllocateMemory.pNext` 链里**两个同类结构** → VVL 报 `duplicate structure types`；VMA 无内置零初始化 flag，BDA buffer 在 VMA 3.4 下**无法干净做 zero_init**。**深挖三结论**：① **本 app 无收益**——对照实验（强制 `zeroInit=false`）显示 RADV **新分配内存本身全零**（mapped[0..4096] 两路均 `nonzero=0/4096`），描述符堆只分配一次不重分配，"读未初始化"场景不出现；② duplicate = spec 违例（UB），RADV 容忍但**不保证**应用 `ZERO_INITIALIZE`；③ **"等 VMA 上游"不成立**——v3.4.0 是最新版（2025-06，距今 ~15 月无新版），无任何版本有 zero-init flag，v3.4.0 changelog 完全未提 zero-init。**处置 = 回退 feature**：移除 `features_config.json` zero_init 条目 + codegen 重生成 + `vkdevice` ziFeature/链接 + `VmaBuffer` zeroInit 路径 + `features.cppm` 扩展 + `vkresources` allocator 实参。回退后 9 扩展（原 10）、duplicate 报错消失、无回归。将来若出现真实 zero-init 需求（频繁分配/释放场景），走原生 `vkAllocateMemory`（单 `VkMemoryAllocateFlagsInfo{DEVICE_ADDRESS|ZERO_INITIALIZE}`）绕过 VMA。
+- **zero_init：**~~VMA 内部 `VkMemoryAllocateFlagsInfo` 撞车（spec 违例，UB）~~ → **已回退（2026-09-02 定案）**。原问题：VMA 3.4 对 BDA buffer 自动 `VmaPnextChainPushFront` 一个 `VkMemoryAllocateFlagsInfo`（`DEVICE_ADDRESS_BIT`，子分配块 `:12150` / dedicated `:14054`），用户经 `pMemoryAllocateNext` 传的（`ZERO_INITIALIZE_BIT`）形成 `vkAllocateMemory.pNext` 链里**两个同类结构** → VVL 报 `duplicate structure types`；VMA 无内置零初始化 flag，BDA buffer 在 VMA 3.4 下**无法干净做 zero_init**。**深挖三结论**：① **本 app 无收益**——对照实验（强制 `zeroInit=false`）显示 RADV **新分配内存本身全零**（mapped[0..4096] 两路均 `nonzero=0/4096`），描述符堆只分配一次不重分配，"读未初始化"场景不出现；② duplicate = spec 违例（UB），RADV 容忍但**不保证**应用 `ZERO_INITIALIZE`；③ **"等 VMA 上游"不成立**——v3.4.0 是最新版（2025-06，距今 ~15 月无新版），无任何版本有 zero-init flag，v3.4.0 changelog 完全未提 zero-init。**处置 = 回退 feature**：移除 `features_config.json` zero_init 条目 + codegen 重生成 + `vkdevice` ziFeature/链接 + `VmaBuffer` zeroInit 路径 + `features.cppm` 扩展 + `vkresources` allocator 实参。回退后 9 扩展（原 10）、duplicate 报错消失、无回归。将来若出现真实 zero-init 需求（频繁分配/释放场景），走原生 `vkAllocateMemory`（单 `VkMemoryAllocateFlagsInfo{DEVICE_ADDRESS|ZERO_INITIALIZE}`）绕过 VMA。**2026-09-04 复核确认结论正确，仅一处精细化见 §13.1。**
 
 - ~~**edS3：VVL 误报 `depthClipEnable feature 未启用`（VVL 1.4.357 gap，app 侧无 bug）→ 保留现状（2026-09-02 定案）**。深挖定案：① feature **确实在设备级启用了**——临时诊断在 `vkCreateDevice` 时刻遍历 pNext 链（zero_init 回退前 13 元素，edS3 为末位 `sType=1000455000` `flag=1 (TRUE)`），回退后 12 元素、edS3 仍末位 flag=TRUE；② hpp `PhysicalDevice::createDevice`（`vulkan_funcs.hpp:478`）把 `&createInfo` **原样** `reinterpret_cast` 传给 `vkCreateDevice`，pNext 链一字不改——VVL 拦截到的链 = 诊断的链；③ VVL 二进制 `strings` 命中 `extendedDynamicState3DepthClipEnable` + 该 VUID（VVL **认识**此 feature），却仍报"未启用" → **VVL 设备级 feature 解析未把该结构体记进"已启用"集**（较新 ratified 扩展的 VVL 追踪 gap）。非致命：RADV 接受 `setDepthClipEnableEXT`，渲染正常。**处置 = 保留现状**（VVL 噪声留着，非致命；可选消噪 = DebugMessenger 过滤 `VUID-vkCmdSetDepthClipEnableEXT-depthClipEnable-07451` 误报，未做）。~~
 
@@ -403,3 +403,40 @@
 - **headless 时 instance 扩展须显式加 `VK_KHR_surface`**：其它 surface 族扩展（`maintenance1`/`get_surface_capabilities2`/`swapchain_colorspace`/`headless_surface`）都依赖它；SDL 路径由 `SDL_Vulkan_GetInstanceExtensions` 隐式带，headless 脱 SDL 后须显式，否则 `vkCreateInstance` 报 `Missing extension required ... VK_KHR_surface`。
 - **headless surface 无 `eImmediate` present mode**（`selectPresentMode` 硬要求 `eImmediate`）→ 须用 `eFifo` 回落（`selectHeadlessPresentMode`）。headless 的 present 是 no-op，任何模式皆可。
 - **`SDLWindow` 改 `unique_ptr` 可空**：`AppContext`/`Swapchain` 收 `SDLWindow*`，headless 传 nullptr 跳过建窗；`main.cpp` 的 `SDL_ShowWindow` 诊断路径按 `!headless` 门。
+
+---
+
+## 十三、复核与跟进（2026-09-04）：zero_init 结论复核 + T2 RADV 实测矩阵 + robustness2 引入
+
+> 状态：`现行`。对 §12.3 zero_init 定案的逐行源码复核、§四 T2 七扩展的 RADV 驱动支持实测（vulkaninfo），并落地"内存卫生批次"中当时唯一可引入项 `VK_KHR_robustness2`。
+
+### 13.1 zero_init ↔ VMA 冲突复核：原结论正确，一处精细化
+
+对照 VMA 3.4.0 实装源码（`build/vcpkg_installed/*/include/vk_mem_alloc.h`）逐行核实：
+
+- **撞车机制属实**：`VmaPnextChainPushFront`（`:4203`）= 盲目头插、**无同类 sType 去重**；allocator 带 `VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT` 时，子分配块路径（`:12153`）**无条件** push 只含 `DEVICE_ADDRESS` 的 `VkMemoryAllocateFlagsInfo`——用户经 `pMemoryAllocateNext` 再传 `ZERO_INITIALIZE` 版 = pNext 链重复 sType = spec 违例（VVL duplicate 报错即此）。
+- **无绕过 API 属实**：去掉 BDA allocator flag 不可行——`vmaCreateBuffer` 对 `SHADER_DEVICE_ADDRESS` usage buffer 直接 `VK_ERROR_INITIALIZATION_FAILED`（`:14441` 同源检查）；VMA 不暴露任何合并/自定义 allocateFlags 的接口。
+- **上游无计划属实**：v3.4.0（2025-06-04）仍是最新 release；全库无 `ZERO_INITIALIZE` 字样；仓库 issues/PR 无 zero-init 相关请求。
+- **精细化（原表述偏严）**：dedicated 路径（`:14056`）有 usage 判断——`dedicatedImage` 时 `canContainBufferWithDeviceAddress=false`，**不 push** flagsInfo。即"**dedicated image 干净传 `ZERO_INITIALIZE` flagsInfo 可行**，撞车只精确覆盖 BDA buffer + 一切子分配块（allocator 全局 BDA flag 使子分配无条件 push）"。本 app 目标（descriptor heap = BDA）不受此精细化影响，**回退定案维持**；若未来给 dedicated 纹理/RT 加 ZERO_INITIALIZED layout，此路径是现成的。
+
+### 13.2 T2 七扩展 RADV 实测矩阵（Strix Halo，Mesa 26.2.1，`vulkaninfo --json`）
+
+| 扩展 | 暴露 | feature | 决策 |
+|---|---|---|---|
+| `VK_KHR_robustness2` | ✅ | robustBufferAccess2/robustImageAccess2/nullDescriptor 全 TRUE | **已引入**（§13.3） |
+| `VK_KHR_unified_image_layouts` | ✅ | unifiedImageLayouts TRUE | 可引入但无收益场景——Phase 6 图已落 layout 追踪，全 GENERAL 是重构非增量；随 Phase 7 多 pass/临时 image 再议。**探测结论更新：RADV 支持** |
+| `VK_KHR_copy_memory_indirect` | ✅ | 两 feature 全 TRUE | 无消费者（scene staging 为 CPU 定参拷贝）；随 Phase 7 GPU-driven |
+| `VK_EXT_custom_resolve` | ✅（意外） | customResolve TRUE | 无 MSAA 无接缝，维持 Phase 7 决议。**探测结论更新：RADV 支持** |
+| `VK_KHR_internally_synchronized_queues` | ✅ | TRUE | 单线程提交无收益，维持观察 |
+| `VK_EXT_shader_subgroup_partitioned` | ❌ | — | **当前不可引入**（RADV 26.2 未暴露，非"待验证"） |
+| `VK_EXT_memory_decompression` | ❌ | — | **当前不可引入**（同上；资产管线改造成本结论不变） |
+
+顺带实测（同文档"近期评估"批次，均未引入）：`depth_clamp_zero_one` TRUE、`shader_clock` 双 TRUE、`device_fault` TRUE（含 `deviceFaultReportMasked`）、`present_timing` rev 3 暴露、maintenance9/10/11 全 TRUE、`host_image_copy` 扩展暴露（feature struct 未见于 vulkaninfo capabilities dump，引入前需 app 内 `getFeatures2` 实查）。
+
+### 13.3 robustness2 引入落地（optional_features 机制首个"纯卫生"用户）
+
+- 配置：`features_config.json` `optional_features` 两条（`VkPhysicalDeviceRobustness2FeaturesKHR` 的 `robustBufferAccess2` + `nullDescriptor`，同一 struct 两个探测位；**不进 chain_types**——optional 不进 required 链）。
+- 接线（§12.1 Phase B 既有模式）：`vkdevice.cppm` `initOptionalRobustness2Feature` + 任一位可用即条件链接进 `FeatureChainTail`；`features.cppm` `getDeviceExtensions(opt)` 同源追加 `VK_KHR_ROBUSTNESS_2_EXTENSION_NAME`；`rlvk.cppm` 补 `PhysicalDeviceRobustness2FeaturesKHR` 导出。
+- 设计立场：`nullDescriptor` 与 bindless 契合（未写槽采样返回零而非 UB）；不影响 gpu_canary（canary 防坏 VA 解引用，与 null 描述符正交）；`noRobustAccess` 不开（无从要求非鲁棒访问）。
+- 跨驱动：optional 化后 NV/anv 不支持 = 自动 no-op，不破坏启动。
+- 验证：`just reflect` + `just build` 干净；headless 冒烟 0 `[error]`、日志 `VK_KHR_robustness2` 进扩展表、`robustBufferAccess2=true nullDescriptor=true`。

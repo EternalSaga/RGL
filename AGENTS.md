@@ -298,7 +298,9 @@ sType 值相同。代码使用 EXT 命名形式，功能等价于 KHR。
 - **VMA + zero-init 扩展冲突（教训）**：VMA 3.4 对 BDA buffer 自动加内部
   `VkMemoryAllocateFlagsInfo(DEVICE_ADDRESS)`，与用户 `pMemoryAllocateNext(ZERO_INITIALIZE)`
   必撞 = spec 违例——`VK_EXT_zero_initialize_device_memory` 已回退；将来真实需求走原生
-  `vkAllocateMemory` 单 flagsInfo 绕 VMA（详见 `docs/vulkan_extensions_2025_调研.md` §十二）
+  `vkAllocateMemory` 单 flagsInfo 绕 VMA（详见 `docs/vulkan_extensions_2025_调研.md` §十二）。
+  2026-09-04 复核维持（撞车精确范围 = BDA buffer + 子分配块，dedicated image 路径不 push
+  可干净传 flagsInfo，见 §13.1）；`VK_KHR_robustness2` 已按 optional_features 引入（§13.3）
 - **Phase 5 光照/透明已知近似**：① MASK alphaTest 未实现（`alphaMode=MASK` 暂按不透明，无
   discard）；② 世界法线变换取对象矩阵 mat3 直乘（假定均匀缩放，Phase 7 真实 normalMatrix 再议）；
   ③ 透明排序按 primitive 中心距离² back-to-front（非 per-pixel/OIT，相交透明面会错序）；

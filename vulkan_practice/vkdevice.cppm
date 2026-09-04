@@ -35,11 +35,14 @@ export class DeviceContext {
 	  // VK_EXT_depth_clip_enable 的 depth clip 状态动态化，调用该命令仍要求旧扩展的
 	  // base feature 同时启用（2026-09-02 深挖推翻"VVL 误报"旧结论——见 调试历史）
 	  depthClipBaseFeature(initOptionalDepthClipBaseFeature(optionalFeatures)),
+	  // robustness2（越界访问规范化 + null 描述符）：两支持位共用一个 feature 结构，
+	  // 任一位可用即结构进链（字段按各自支持位置位）；不可用 = 不链接，no-op 降级
+	  robustness2Feature(initOptionalRobustness2Feature(optionalFeatures)),
 	  // 校验前移：必须在 raii::Device 构造（device 成员）之前——feature/extension
 	  // 不支持时 raii 构造器先抛 vk::SystemError（不透明），自定义 Error 路径不可达
 	  //（旧实现在构造体校验 = 失败路径死代码）。本成员只为钉死初始化顺序
 	  checked(precheckDevice(*physicalDevice, featuresChain)),
-	  device(createDevice(*physicalDevice, queueManager, featuresChain, optionalFeatures, eds3Feature, depthClipBaseFeature)),
+	  device(createDevice(*physicalDevice, queueManager, featuresChain, optionalFeatures, eds3Feature, depthClipBaseFeature, robustness2Feature)),
 		  graphicsQueue(queueManager.getQueue(device, RGL::QueueFamilyRole::Graphics).value()),
 		  computeQueue(queueManager.getQueue(device, RGL::QueueFamilyRole::Compute).value()),
 		  transferQueue(queueManager.getQueue(device, RGL::QueueFamilyRole::Transfer).value()),
@@ -114,12 +117,21 @@ export class DeviceContext {
 		return f;
 	}
 
+	static vk::PhysicalDeviceRobustness2FeaturesKHR initOptionalRobustness2Feature(const RGL::OptionalFeatureSupport& opt) {
+		vk::PhysicalDeviceRobustness2FeaturesKHR f{};
+		f.sType = vk::StructureType::ePhysicalDeviceRobustness2FeaturesKHR;
+		f.robustBufferAccess2 = opt.robustBufferAccess2 ? VK_TRUE : VK_FALSE;
+		f.nullDescriptor = opt.nullDescriptor ? VK_TRUE : VK_FALSE;
+		return f;
+	}
+
 	static vk::raii::Device createDevice(const vk::raii::PhysicalDevice& physicalDevice,
 		RGL::QueueFamilyManager& queueManager,
 		RGL::FeatureChain& featuresChain,
 		const RGL::OptionalFeatureSupport& optionalFeatures,
 		vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT& eds3Feature,
-		vk::PhysicalDeviceDepthClipEnableFeaturesEXT& depthClipBaseFeature) {
+		vk::PhysicalDeviceDepthClipEnableFeaturesEXT& depthClipBaseFeature,
+		vk::PhysicalDeviceRobustness2FeaturesKHR& robustness2Feature) {
 		// 条件链接 optional feature 结构进 required 链尾（spec：vkCreateDevice pNext 链只含
 		// "已启用扩展"的 feature 结构——FALSE 结构挂未启用扩展 = UB，RADV 实测启动后首次分配
 		// 即崩）。仅启用者链接；未启用 = 链尾保持 nullptr。扩展启用（getDeviceExtensions）
@@ -127,6 +139,9 @@ export class DeviceContext {
 		void* optHead = nullptr;
 		if (optionalFeatures.depthClipBase) { depthClipBaseFeature.pNext = optHead; optHead = &depthClipBaseFeature; }
 		if (optionalFeatures.depthClipEnable) { eds3Feature.pNext = optHead; optHead = &eds3Feature; }
+		if (optionalFeatures.robustBufferAccess2 || optionalFeatures.nullDescriptor) {
+			robustness2Feature.pNext = optHead; optHead = &robustness2Feature;
+		}
 		featuresChain.get<RGL::FeatureChainTail>().pNext = optHead;
 
 
@@ -146,6 +161,8 @@ export class DeviceContext {
 			}
 			logger->info("Device optional features: depthClipEnable={}",
 				optionalFeatures.depthClipEnable);
+			logger->info("Device optional features: robustBufferAccess2={} nullDescriptor={}",
+				optionalFeatures.robustBufferAccess2, optionalFeatures.nullDescriptor);
 		}
 
 		return vk::raii::Device(physicalDevice, deviceCreateInfo);
@@ -168,6 +185,7 @@ export class DeviceContext {
 	// optional feature 结构（createDevice 条件链接进 required 链尾；成员保活避免 pNext 悬垂）
 	vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT eds3Feature;
 	vk::PhysicalDeviceDepthClipEnableFeaturesEXT depthClipBaseFeature;
+	vk::PhysicalDeviceRobustness2FeaturesKHR robustness2Feature;
 	bool checked;  // 仅用于钉死初始化顺序：precheckDevice 先于 device 构造（见构造器）
 	vk::raii::Device device;
 	vk::Queue graphicsQueue;

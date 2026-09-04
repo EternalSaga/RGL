@@ -24,6 +24,8 @@ export using FeatureChainTail = vk::PhysicalDeviceDescriptorBufferFeaturesEXT;
 export struct OptionalFeatureSupport {
     bool depthClipEnable = false;
     bool depthClipBase = false;
+    bool robustBufferAccess2 = false;
+    bool nullDescriptor = false;
 };
 
 namespace {
@@ -46,6 +48,14 @@ export OptionalFeatureSupport queryOptionalFeatures(const vk::raii::PhysicalDevi
     if (extensionAvailable(device, VK_EXT_DEPTH_CLIP_ENABLE_EXTENSION_NAME)) {
         auto f_depthClipBase = device.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceDepthClipEnableFeaturesEXT>();
         s.depthClipBase = f_depthClipBase.get<vk::PhysicalDeviceDepthClipEnableFeaturesEXT>().depthClipEnable != 0;
+    }
+    if (extensionAvailable(device, VK_KHR_ROBUSTNESS_2_EXTENSION_NAME)) {
+        auto f_robustBufferAccess2 = device.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceRobustness2FeaturesKHR>();
+        s.robustBufferAccess2 = f_robustBufferAccess2.get<vk::PhysicalDeviceRobustness2FeaturesKHR>().robustBufferAccess2 != 0;
+    }
+    if (extensionAvailable(device, VK_KHR_ROBUSTNESS_2_EXTENSION_NAME)) {
+        auto f_nullDescriptor = device.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceRobustness2FeaturesKHR>();
+        s.nullDescriptor = f_nullDescriptor.get<vk::PhysicalDeviceRobustness2FeaturesKHR>().nullDescriptor != 0;
     }
     return s;
 }

@@ -102,6 +102,7 @@ using vk::PhysicalDeviceFeatures2;
 using vk::PhysicalDeviceMeshShaderFeaturesEXT;
 using vk::PhysicalDeviceProperties;
 using vk::PhysicalDeviceProperties2;
+using vk::PhysicalDeviceRobustness2FeaturesKHR;
 using vk::PhysicalDeviceShaderCorePropertiesAMD;
 using vk::PhysicalDeviceShaderObjectFeaturesEXT;
 using vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR;
