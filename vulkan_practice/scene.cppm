@@ -68,6 +68,52 @@ export struct SceneBounds {
 	float radius{0.0f};
 };
 
+// Phase 7 批次 4：逐图元节点局部包围球（component，registerScene 每 primitive entity 挂一个）。
+// 与 Bounds 分离：Bounds = 模型根世界聚合球（boundsSystem union 供 near/far），CullSphere = 逐 draw
+// 图元 node-local 球（render_list 每帧 modelMatrix 变换后测视锥），互不污染。数据源 = GltfPrimitive::bounds。
+export struct CullSphere {
+	glm::vec3 center{0.0f};   // node-local（不含 nodeWorld，render_list modelMatrix 再乘）
+	float radius = 0.0f;
+};
+
+// 视锥体（Gribb-Harman 6 平面提取，Vulkan clip z∈[0,1]——GLM_FORCE_DEPTH_ZERO_TO_ONE）。
+// 平面法线朝内，已按法线长度归一化，plane·(x,1) = 世界空间有符号距离。
+export struct Frustum {
+	glm::vec4 planes[6];      // left/right/bottom/top/near/far
+};
+
+// 从 clip = proj·view（列主序）提取 6 面。第 r 行 = (m[0][r],m[1][r],m[2][r],m[3][r])。
+// near = 第 2 行（z≥0，[0,1] 约定，非 [-1,1] 的 row3+row2）。
+export inline Frustum extractFrustum(const glm::mat4& m) {
+	const glm::vec4 row[4] = {
+		glm::vec4(m[0][0], m[1][0], m[2][0], m[3][0]),
+		glm::vec4(m[0][1], m[1][1], m[2][1], m[3][1]),
+		glm::vec4(m[0][2], m[1][2], m[2][2], m[3][2]),
+		glm::vec4(m[0][3], m[1][3], m[2][3], m[3][3]),
+	};
+	Frustum f;
+	f.planes[0] = row[3] + row[0];  // left
+	f.planes[1] = row[3] - row[0];  // right
+	f.planes[2] = row[3] + row[1];  // bottom
+	f.planes[3] = row[3] - row[1];  // top
+	f.planes[4] = row[2];           // near（z≥0）
+	f.planes[5] = row[3] - row[2];  // far
+	for (auto& p : f.planes) {
+		const float n = glm::length(glm::vec3(p));
+		if (n > 0.0f)
+			p /= n;
+	}
+	return f;
+}
+
+// 世界包围球 vs 视锥（保守：球心到任平面距离 < −r 才剔，跨界/含内含均判可见）。
+export inline bool sphereInFrustum(const Frustum& f, const glm::vec3& c, float r) {
+	for (const auto& p : f.planes)
+		if (p.x * c.x + p.y * c.y + p.z * c.z + p.w < -r)
+			return false;
+	return true;
+}
+
 // 光源（registry context 元素，Phase 5 批次 2 定向光 / Phase 7 D3 加点光）。
 // type=0 定向（direction 有效，世界空间，消费时归一化）；type=1 点光（position 有效，
 // range 线性衰减）。color×intensity 预乘进 GpuLight.color。forward 只读 lights[0]
@@ -146,6 +192,7 @@ export entt::entity registerCubeEntity(entt::registry& rg, uint32_t meshAsset, u
 	meshRef.asset = meshAsset;
 	meshRef.objectSlot = rg.ctx().get<NextObjectSlot>().next++;
 	rg.emplace<MaterialRef>(e).material = materialAsset;
+	rg.emplace<CullSphere>(e, center, radius);  // Phase 7 批次 4：cube node-local 剔除球（原点 ±0.5）
 	rg.emplace<Relationship>(e);  // parent = null（根）
 	return e;
 }

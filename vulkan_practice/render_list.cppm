@@ -30,6 +30,9 @@ export struct RenderListState {
 	// Phase 5.5 批次 4：天空盒 draw 的 push data（shader 不声明 push constants，
 	// 推默认零值 DrawArgs 占位——pushDataEXT 与 shader 声明无关，见 DrawCall 契约）
 	RGL::DrawArgs skyboxArgs{};
+	// Phase 7 批次 4：CPU frustum culling 可见统计（renderListSystem 每帧填；可见/剔除计数）
+	uint32_t visibleCount = 0;
+	uint32_t culledCount = 0;
 };
 
 // ViewProjection + 场景实体 + 场景旋转 → FrameDrawList context（单一 draw 路径）。

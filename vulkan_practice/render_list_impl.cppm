@@ -7,6 +7,7 @@ module render_list:impl;
 
 import render_list;  // clang 不给 partition impl unit 隐式 import 主接口——必须显式
 import rlstd;
+import rllogger;
 import material_types_generated;
 import lights_types_generated;
 import frame_draw_list;
@@ -46,8 +47,14 @@ void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListS
 	state.args.resize(objectSlotCount);
 	state.matrices.resize(objectSlotCount, glm::mat4(1.0f));
 
-	rg.view<RGL::Transform, RGL::MeshRef, RGL::MaterialRef>().each(
-		[&](const RGL::Transform& tf, const RGL::MeshRef& meshRef, const RGL::MaterialRef& matRef) {
+	// Phase 7 批次 4：CPU frustum culling——视锥 6 面从 proj·view 提取（每帧一次），逐 entity
+	// node-local 剔除球经 modelMatrix 变换到世界后测（保守：跨界判可见，绝不误剔）。
+	const Frustum frustum = extractFrustum(viewProj.proj * viewProj.view);
+	uint32_t culled = 0;
+
+	rg.view<RGL::Transform, RGL::MeshRef, RGL::MaterialRef, RGL::CullSphere>().each(
+		[&](const RGL::Transform& tf, const RGL::MeshRef& meshRef, const RGL::MaterialRef& matRef,
+			const RGL::CullSphere& cull) {
 			const auto& asset = assets.get(meshRef.asset);
 			if (asset.pipelineIndex == kInvalidPipelineIndex)
 				return;  // 资产无管线条目（防御：注册顺序异常，见 registerScene/bindPipelineToAsset）
@@ -55,6 +62,14 @@ void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListS
 				return;  // 不渲染（0 三角形）
 			auto& args = state.args[meshRef.objectSlot];
 			const glm::mat4 modelMatrix = spin.matrix * tf.world;  // 世界矩阵（无 view/proj）
+			// 剔除（groupCount 守卫后：只统计真图元）——node-local 球 × modelMatrix → 世界球测 6 面
+			const glm::vec3 wc = glm::vec3(modelMatrix * glm::vec4(cull.center, 1.0f));
+			const float scale = std::max({glm::length(glm::vec3(modelMatrix[0])),
+				glm::length(glm::vec3(modelMatrix[1])), glm::length(glm::vec3(modelMatrix[2]))});
+			if (!sphereInFrustum(frustum, wc, cull.radius * scale)) {
+				++culled;
+				return;
+			}
 			args.mvp = viewProj.proj * viewProj.view * modelMatrix;
 			args.totalTriangles = asset.triangleCount;
 			args.vertexOffset = asset.vertexOffset;  // 拼接 buffer 内块字节偏移（Phase 4 批次 2）
@@ -68,8 +83,17 @@ void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListS
 				std::as_bytes(std::span<const RGL::DrawArgs>{&args, 1}), asset.groupCount};
 			auto& bucket = mat.alphaModeBlend ? transparent : opaque;  // MASK 暂按不透明（见函数注释）
 			const glm::vec3 d = glm::vec3(tf.world[3]) - camera.position;  // world 平移列（无 per-entity 包围盒时的排序代理）
-			bucket.push_back(Pending{call, glm::dot(d, d)});  // 距离²（免 sqrt，排序单调等价）
+ 			bucket.push_back(Pending{call, glm::dot(d, d)});  // 距离²（免 sqrt，排序单调等价）
 		});
+
+	// Phase 7 批次 4：可见统计（仅计数变化时打日志——相机移动/场景变化时可见数抖动即现，静止不刷屏）
+	const uint32_t newVisible = static_cast<uint32_t>(opaque.size() + transparent.size());
+	if (newVisible != state.visibleCount || culled != state.culledCount) {
+		if (auto* logger = RLLogger::getInstance())
+			logger->info("culling: {} visible / {} culled（frustum，node-local 剔除球）", newVisible, culled);
+	}
+	state.visibleCount = newVisible;
+	state.culledCount = culled;
 
 	FrameDrawList fresh;
 	for (const auto& p : opaque)

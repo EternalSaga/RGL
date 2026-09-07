@@ -234,3 +234,39 @@ range/type）；缺段 = 旧单灯兼容合成（`lights[0]=cfg.light`）→ **f
 关键文件行、`LightDataGpu` 已知问题改"灯数组已入反射/前向头仍双源"。
 
 **下一步**：批次 4（CPU frustum + AABB culling，`AabbBounds` 组件 + 逐 entity 剔除 + 可见统计）。
+
+---
+
+## 批次 4（2026-09-07）：CPU frustum + AABB culling
+
+**包围盒数据源决策**：复用包围球（用户定）——但查现状发现 `Bounds`（包围球）**只挂在模型根 entity**
+（`model_importer_impl:227`），且 `gltf_loader` **只算一个模型级** `BoundingSphere`（over 全部顶点）；
+逐图元 entity（1591 个 draw 单位）**无任何包围数据**。逐图元剔除（有价值的粒度）需先造逐图元球。
+
+**落地四步**：
+1. `gltf_loader`：`BoundingSphere` 定义上移到 `GltfPrimitive` 之前 + 加 `GltfPrimitive::bounds`
+   成员；顶点循环里**逐图元**算 node-local 球（over raw `vertices.position`，**不含 nodeWorld**——
+   registerScene 存 `CullSphere`，render_list `modelMatrix = spin·root·nodeWorld` 每帧再乘 nodeWorld）。
+2. `scene.cppm`：新增 `CullSphere` 组件（node-local 球，与 `Bounds` 分离——Bounds 是模型根世界聚合球供
+   boundsSystem union 算 near/far，CullSphere 是逐 draw 图元局部球供剔除，互不污染聚合）+ `Frustum`
+   （Gribb-Harman 6 面提取）+ `extractFrustum` + `sphereInFrustum`（inline，scene 域无 Vulkan 依赖）。
+   **Gribb-Harman Vulkan 坑**：`GLM_FORCE_DEPTH_ZERO_TO_ONE` → clip z∈[0,1]，near 面 = **第 2 行**
+   （z≥0），**不是** [-1,1] 约定的 `row3+row2`；far = `row3−row2`；其余 4 面同标准；6 面按法线长度归一化。
+3. `registerScene` + `registerCubeEntity`：每图元/cube entity 挂 `CullSphere`（node-local）——
+   **view 用必需组件**（非 optional，本仓 entt 3.16 无 `entt::optional` 且 `.each` lambda 只收组件不传
+   entity handle → 拿不到 entity 做 try_get；cube 也补 CullSphere 保证 view 全覆盖，不丢实体）。
+4. `render_list_impl`：帧首 `extractFrustum(proj·view)` 一次；entity 循环内 `modelMatrix` 算出后
+   `worldCenter = modelMatrix·(localCenter,1)`、`worldRadius = localRadius·maxScale`（三列长度 max，
+   非均匀缩放保守不剔）测 6 面；`culled++`/`visible = opaque+transparent.size()`，**仅计数变化时**
+   `RLLogger::getInstance()->info` 打统计（相机移动才刷，静止不刷屏）；`RenderListState` 加
+   `visibleCount/culledCount` 存跨帧比较基线。
+
+**验证**（Bistro 1591 图元）：
+- 默认机位：`1571 visible / 20 culled`（背后/侧面出视锥），零 VVL error（forward + deferred）。
+- 背向场景（target 打到远处）：`0 visible / 1591 culled`（全剔，覆盖正确）。
+- **正确性金标准**：开剔除（1571 visible）默认机位截图与批次 3 全量渲染**像素一致**（建筑无缺失）
+  → 保守球测只剔出视锥者、绝不误剔可见几何。
+
+**净结果**：CPU 侧逐图元 frustum culling 跑通（球近似，够视锥剔除；真 AABB 更紧留后续）。
+数据流 ECS 合规：包围球是 entity 组件（`CullSphere`）、剔除在 render_list system、产出仍是抽象
+draw list（规范 4），无全局状态。**下一步**：批次 5 = GPU culling / DGC（归 Phase 7b）；批次 6 文档销账。

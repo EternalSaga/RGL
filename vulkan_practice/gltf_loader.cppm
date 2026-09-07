@@ -19,11 +19,17 @@ namespace RGL {
 
 // 去索引展开后的 primitive：vertices 按 ModelVertex packed 布局（32B，
 // model_schema.lua 的 vertexLayouts 是契约 source of truth），
+export struct BoundingSphere {
+	glm::vec3 center{0.0f};
+	float radius{0.0f};
+};
+
 // triangleCount = vertices.size() / 3。
 export struct GltfPrimitive {
 	std::vector<ModelVertex> vertices;
 	uint32_t triangleCount = 0;
 	glm::mat4 nodeWorld{1.0f};  // 所属 node 世界矩阵（Phase 7：TRS + 父链合成，不烘进顶点；无 node = identity）
+	BoundingSphere bounds;       // 节点局部包围球（over raw vertices.position，不含 nodeWorld；剔除时 modelMatrix 再乘）
 	glm::vec4 baseColor{1.0f};    // material 的 baseColorFactor
 	int baseColorTextureIndex = -1;  // material baseColorTexture 的 image 下标（-1 = 无纹理 → 白纹理）
 	bool hasUv = true;               // TEXCOORD_0 缺失（glTF 中可选）→ uv 填 0 + 白纹理（D9）
@@ -40,11 +46,6 @@ export struct GltfPrimitive {
 export struct GltfImage {
 	std::span<const uint8_t> data;
 	std::string mimeType;
-};
-
-export struct BoundingSphere {
-	glm::vec3 center{0.0f};
-	float radius{0.0f};
 };
 
 export struct GltfModel {
@@ -304,6 +305,21 @@ export [[nodiscard]] std::expected<GltfModel, Error> loadGltfModel(const std::st
 				img.data = std::span<const uint8_t>(model.bufferData.data() + offset, bv.byteLength);
 		}
 		model.images.push_back(std::move(img));
+	}
+
+	// 逐图元节点局部包围球（over raw vertices.position，**不含 nodeWorld**——registerScene 存
+	// CullSphere，render_list 每帧 modelMatrix（= spin·root·nodeWorld）变换后测视锥）。
+	for (auto& p : model.primitives) {
+		if (p.vertices.empty())
+			continue;
+		glm::vec3 pc{0.0f};
+		for (const auto& v : p.vertices)
+			pc += v.position;
+		pc /= static_cast<float>(p.vertices.size());
+		float pr = 0.0f;
+		for (const auto& v : p.vertices)
+			pr = std::max(pr, glm::length(v.position - pc));
+		p.bounds = {pc, pr};
 	}
 
 	// 包围球（自适应空间范围）：center = 全部顶点世界坐标（经 nodeWorld 变换）的质心，

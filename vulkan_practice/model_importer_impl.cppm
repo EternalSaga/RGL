@@ -295,6 +295,7 @@ entt::entity registerScene(entt::registry& rg, const RGL::GltfModel& model,
 		meshRef.objectSlot = rg.ctx().get<NextObjectSlot>().next++;  // 实例矩阵槽（instancing）
 		rg.emplace<MaterialRef>(e).material = primitiveMaterialIds[i];  // 真引用（批次 2，E5.3）
 		rg.emplace<Relationship>(e).parent = sceneRoot;
+		rg.emplace<CullSphere>(e, prim.bounds.center, prim.bounds.radius);  // Phase 7 批次 4：node-local 剔除球
 	}
 	return sceneRoot;
 }
