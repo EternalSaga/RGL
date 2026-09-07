@@ -183,10 +183,7 @@ captureFrame(RGL::Renderer& renderer, const RGL::FrameDrawList& list, const LlmD
 	renderingInfo.layerCount = 1;
 	renderingInfo.setColorAttachments(colorAttachment);
 	renderingInfo.setPDepthAttachment(&depthAttachment);
-	cmd.beginRendering(renderingInfo);
 
-	// ⑧ 绘制（同 drawFrame ⑨ 契约：opaque/skybox/transparent 三段各段首 applyDynamicState
-	// 一次——离屏 pass 与上屏 pass 状态同构，天空盒/透明排序在截图路径同样生效）
 	auto drawCall = [&](const RGL::DrawCall& call) {
 		// 同主路径 drawCall 契约：push set 取条目字段（非硬编码 0），两路径不漂移
 		const auto& entry = renderer.pipelineEntryAt(call.pipeline);
@@ -195,18 +192,122 @@ captureFrame(RGL::Renderer& renderer, const RGL::FrameDrawList& list, const LlmD
 		entry.pipeline.bindShaders(cmd);
 		cmd.drawMeshTasksEXT(call.groupCount, 1, 1);
 	};
-	RGL::applyDynamicState(cmd, w, h, renderer.getOpaqueState(), renderer.isDepthClipDynamic());
-	for (uint32_t i = 0; i < list.skyboxStart; ++i)
-		drawCall(list.calls[i]);
-	if (list.skyboxStart < list.transparentStart) {
-		RGL::applyDynamicState(cmd, w, h, renderer.getSkyboxState(), renderer.isDepthClipDynamic());
-		for (uint32_t i = list.skyboxStart; i < list.transparentStart; ++i)
+
+	// deferred 自包含 geometry pass：本命令缓冲内把 4-MRT deferred_geometry 渲入 G-buffer RT
+	// （capture 尺寸 == swapchain extent 命中已建 GB），再下方 light pass 同缓冲采样出光照。
+	// 不能依赖跨命令缓冲读持久 GB——实测跨独立提交读上帧 GB 返回黑（GB 内容未对该提交建立可见性）。
+	std::array<RGL::Resources::RtAttachment*, 4> gb{};
+	// RGL_DUMP_GBUF=N（0..3）：deferred 下跳过 light/捕获，geometry pass 后直接 copyImageToBuffer
+	// 读回第 N 个 G-buffer RT 出 PNG（descriptor 无关，直查 geometry 是否写进 GB）。
+	int gbDumpCh = -1;
+	if (renderer.isDeferred()) {
+		if (const char* g = std::getenv("RGL_DUMP_GBUF")) {
+			gbDumpCh = std::atoi(g);
+			if (gbDumpCh < 0 || gbDumpCh > 3) gbDumpCh = 0;
+		}
+		struct GbDesc { const char* name; vk::Format fmt; };
+		static constexpr GbDesc kGb[4] = {
+			{"gbuffer_albedo", vk::Format::eR8G8B8A8Srgb},
+			{"gbuffer_normal", vk::Format::eR16G16Snorm},
+			{"gbuffer_position", vk::Format::eR32G32B32A32Sfloat},
+			{"gbuffer_metalrough", vk::Format::eR8G8B8A8Unorm}};
+		const vk::Extent2D gbExt(w, h);
+		for (uint32_t i = 0; i < 4; ++i) {
+			auto r = resources.ensureRtAttachment(kGb[i].name, gbExt, kGb[i].fmt);
+			if (!r)
+				return std::unexpected(std::move(r).error());
+			gb[i] = *r;
+		}
+		// GB：SRO（上帧遗留）→ CAO
+		std::array<vk::ImageMemoryBarrier2, 4> gbToDraw{};
+		for (uint32_t i = 0; i < 4; ++i)
+			gbToDraw[i] = RGL::createImageBarrier(*gb[i]->image, vk::ImageLayout::eShaderReadOnlyOptimal,
+				vk::ImageLayout::eColorAttachmentOptimal, vk::ImageAspectFlagBits::eColor,
+				vk::PipelineStageFlagBits2::eFragmentShader, vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+				vk::AccessFlagBits2::eShaderRead, vk::AccessFlagBits2::eColorAttachmentWrite);
+		vk::DependencyInfo gbDrawDep{};
+		gbDrawDep.setImageMemoryBarriers(gbToDraw);
+		cmd.pipelineBarrier2(gbDrawDep);
+		std::array<vk::RenderingAttachmentInfo, 4> gbAttach{};
+		for (uint32_t i = 0; i < 4; ++i) {
+			gbAttach[i].imageView = *gb[i]->view;
+			gbAttach[i].imageLayout = vk::ImageLayout::eColorAttachmentOptimal;
+			gbAttach[i].loadOp = vk::AttachmentLoadOp::eClear;
+			gbAttach[i].storeOp = vk::AttachmentStoreOp::eStore;
+			gbAttach[i].clearValue = vk::ClearValue{std::array<float, 4>{0, 0, 0, 0}};
+		}
+		vk::RenderingInfo geoInfo{};
+		geoInfo.renderArea = vk::Rect2D({0, 0}, vk::Extent2D(w, h));
+		geoInfo.layerCount = 1;
+		geoInfo.setColorAttachments(gbAttach);
+		geoInfo.setPDepthAttachment(&depthAttachment);
+		cmd.beginRendering(geoInfo);
+		RGL::applyDynamicState(cmd, w, h, renderer.getOpaqueState(), renderer.isDepthClipDynamic(), 4);
+		for (uint32_t i = 0; i < list.skyboxStart; ++i)
 			drawCall(list.calls[i]);
+		cmd.endRendering();
+		if (gbDumpCh < 0) {
+			// GB：CAO → SRO（light 采样前）
+			std::array<vk::ImageMemoryBarrier2, 4> gbToSample{};
+			for (uint32_t i = 0; i < 4; ++i)
+				gbToSample[i] = RGL::createImageBarrier(*gb[i]->image,
+					vk::ImageLayout::eColorAttachmentOptimal,
+					vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageAspectFlagBits::eColor,
+					vk::PipelineStageFlagBits2::eColorAttachmentOutput, vk::PipelineStageFlagBits2::eFragmentShader,
+					vk::AccessFlagBits2::eColorAttachmentWrite, vk::AccessFlagBits2::eShaderRead);
+			vk::DependencyInfo gbSampleDep{};
+			gbSampleDep.setImageMemoryBarriers(gbToSample);
+			cmd.pipelineBarrier2(gbSampleDep);
+		}
 	}
-	if (list.transparentStart < list.calls.size()) {
-		RGL::applyDynamicState(cmd, w, h, renderer.getTransparentState(), renderer.isDepthClipDynamic());
-		for (uint32_t i = list.transparentStart; i < static_cast<uint32_t>(list.calls.size()); ++i)
+
+	// G-buffer dump 模式：geometry 已写 GB，直接把第 ch 个 RT copyImageToBuffer 读回（绕开 light/捕获）
+	if (gbDumpCh >= 0) {
+		vk::ImageMemoryBarrier2 gbToRead = RGL::createImageBarrier(*gb[gbDumpCh]->image,
+			vk::ImageLayout::eColorAttachmentOptimal, vk::ImageLayout::eTransferSrcOptimal,
+			vk::ImageAspectFlagBits::eColor, vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+			vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eColorAttachmentWrite,
+			vk::AccessFlagBits2::eTransferRead);
+		vk::DependencyInfo gbReadDep{};
+		gbReadDep.setImageMemoryBarriers(gbToRead);
+		cmd.pipelineBarrier2(gbReadDep);
+		VkBufferImageCopy gbCopy{};
+		gbCopy.bufferOffset = 0;
+		gbCopy.bufferRowLength = 0;
+		gbCopy.bufferImageHeight = h;
+		gbCopy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+		gbCopy.imageOffset = {0, 0, 0};
+		gbCopy.imageExtent = {w, h, 1};
+		::vkCmdCopyImageToBuffer(*cmd, *gb[gbDumpCh]->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+			*readback, 1, &gbCopy);
+		cmd.end();
+	}
+	else {
+	cmd.beginRendering(renderingInfo);
+
+	// ⑧ 绘制（同 drawFrame ⑨ 契约：opaque/skybox/transparent 三段各段首 applyDynamicState
+	// 一次——离屏 pass 与上屏 pass 状态同构，天空盒/透明排序在截图路径同样生效）
+	if (renderer.isDeferred()) {
+		// light pass：全屏采样刚在本命令缓冲内填好的 GB，写单捕获 color RT（前向/延迟同 RT 可比）
+		RGL::applyDynamicState(cmd, w, h, renderer.getLightState(), renderer.isDepthClipDynamic());
+		const auto& lightEntry = renderer.pipelineEntryAt(renderer.lightPipelineIndex());
+		lightEntry.pipeline.bindShaders(cmd);
+		cmd.drawMeshTasksEXT(1, 1, 1);
+	}
+	else {
+		RGL::applyDynamicState(cmd, w, h, renderer.getOpaqueState(), renderer.isDepthClipDynamic());
+		for (uint32_t i = 0; i < list.skyboxStart; ++i)
 			drawCall(list.calls[i]);
+		if (list.skyboxStart < list.transparentStart) {
+			RGL::applyDynamicState(cmd, w, h, renderer.getSkyboxState(), renderer.isDepthClipDynamic());
+			for (uint32_t i = list.skyboxStart; i < list.transparentStart; ++i)
+				drawCall(list.calls[i]);
+		}
+		if (list.transparentStart < list.calls.size()) {
+			RGL::applyDynamicState(cmd, w, h, renderer.getTransparentState(), renderer.isDepthClipDynamic());
+			for (uint32_t i = list.transparentStart; i < static_cast<uint32_t>(list.calls.size()); ++i)
+				drawCall(list.calls[i]);
+		}
 	}
 	cmd.endRendering();
 
@@ -233,6 +334,7 @@ captureFrame(RGL::Renderer& renderer, const RGL::FrameDrawList& list, const LlmD
 	::vkCmdCopyImageToBuffer(*cmd, *colorImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 		*readback, 1, &copy);
 	cmd.end();
+	}
 
 	// ⑫ 提交 + 等待（独立 fence；裸 C 提交同 drawFrame ⑬ 风格）
 	VkSubmitInfo submitInfo{};
@@ -254,7 +356,9 @@ captureFrame(RGL::Renderer& renderer, const RGL::FrameDrawList& list, const LlmD
 	// ⑬ 回读 + 写 PNG（回读缓冲 VMA 常驻映射，CPU 指针直接用）
 	const uint8_t* pixels = static_cast<const uint8_t*>(readbackAllocData.pMappedData);
 	std::filesystem::path relPath;
-	if (cfg.file.empty()) {
+	if (gbDumpCh >= 0) {
+		relPath = fmt::format("screenshots/gbuffer_{}.png", gbDumpCh);
+	} else if (cfg.file.empty()) {
 		relPath = fmt::format("screenshots/llm_{}.png",
 			std::chrono::duration_cast<std::chrono::seconds>(
 				std::chrono::system_clock::now().time_since_epoch()).count());

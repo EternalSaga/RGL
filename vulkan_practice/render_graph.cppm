@@ -65,8 +65,20 @@ export struct RgClearValue {
 export struct RgAttachmentDesc {
 	std::string name;
 	RgAttachmentKind kind = RgAttachmentKind::swapchain;
-	std::string format = "inherit";  // "inherit" = 随 swapchain/depth 现有格式；offscreen 具体格式留批次 4
+	std::string format = "inherit";  // "inherit" = 随 swapchain/depth 现有格式；
+	                                 // offscreen 可用具名格式（词表见 isKnownRgFormat）
 };
+
+// offscreen attachment 格式词表（字符串 → vk::Format，小写下划线命名）：
+// "inherit" = 随 swapchain 格式（执行器解析 fallback）；具名覆盖 Phase 7 G-buffer 类
+// 显式 RT 需求（rgba8_srgb/rgba8_unorm/b8g8r8a8_srgb/rgb8_srgb/rg16_snorm/rg16_unorm/
+// rgba16_sfloat/rgb16_sfloat/r32g32b32_sfloat/rgba32_sfloat/r32_sfloat/rg32_sfloat），
+// 表驱动，扩展 = impl 加一行。
+// isKnownRgFormat = compile 校验入口（"inherit" 与全部具名为 true）。
+// resolveRgFormat = 执行器物化 vk::Format（"inherit"→inheritFallback，具名→映射值；
+// 调用方保证已 isKnownRgFormat，漏网返回 eUndefined）。
+export bool isKnownRgFormat(const std::string& name);
+export vk::Format resolveRgFormat(const std::string& name, vk::Format inheritFallback);
 
 export struct RgPassAttachment {
 	std::string attachment;  // 引用 RgAttachmentDesc.name
@@ -79,6 +91,9 @@ export struct RgPassAttachment {
 export enum class RgPassKind : uint8_t {
 	drawMesh,  // 执行 FrameDrawList 段（drawSource → 段边界映射由执行器完成）
 	blit,      // transferRead input → transferWrite output 整幅拷贝
+	// Phase 7 D1：deferred light pass——执行器特殊处理（bind 固定 light 管线 + 全屏单 group draw，
+	// 不走 FrameDrawList 段）；outputs=swapchain colorWrite、inputs=sampleRead（采 G-buffer，barrier 自动）
+	drawLight,
 };
 
 export struct RgPassDesc {
@@ -180,6 +195,12 @@ export const RgGraphDesc& defaultRenderGraphDesc();
 // 变 Transfer（blit 是 swapchain 最后写），submit waitStage 派生 = Transfer——
 // 与旧手工分支语义等价。
 export const RgGraphDesc& offscreenRenderGraphDesc();
+
+// Phase 7 D1（RGL_DEFERRED）：2-pass deferred 图——geometry pass 把 opaque 段渲入 4 个 G-buffer
+// RT（albedo rgba8_srgb / normal rg16_snorm oct / worldPos r32g32b32_sfloat / metalRough rgba8_unorm，
+// 显式格式，见词表）+ depth；light pass（drawLight kind）全屏采样 4 RT + 单灯 GGX 直写 swapchain
+//（present 转换由图派生）。forward 默认图零改，本图为 exclusive 变体。
+export const RgGraphDesc& deferredRenderGraphDesc();
 
 // 编译期自检（无 GPU）：构造合法/非法图样本跑 compileRenderGraph，返回全部
 // 失败描述（空 = 通过）。main 启动期 debug 日志通道消费。

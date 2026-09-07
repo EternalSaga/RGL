@@ -207,8 +207,66 @@ std::expected<Resources::RtAttachment*, Error> Resources::ensureRtAttachment(
 		viewInfo.format = format;
 		viewInfo.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
 		slot.view.emplace(vkDevice.getDevice(), viewInfo);
+
+		// Phase 7 gap ④：写 SAMPLED_IMAGE 描述符供 deferred light pass 采样。首建 allocSlot，
+		// 跨 resize 复用同槽（重建只换 image→更新 sampleViewCreate，指针链稳定）；light 管线
+		// baked 的槽号因此永久有效。forward/offscreen 图不 bind 此槽 = 无副作用（行为中性）。
+		if (!slot.hasSampleDescriptor) {
+			auto sampleSlot = allocSlot(name.c_str());
+			if (!sampleSlot)
+				return std::unexpected(std::move(sampleSlot).error());
+			slot.heapSlot = *sampleSlot;
+			slot.hasSampleDescriptor = true;
+		}
+		slot.sampleViewCreate = vk::ImageViewCreateInfo{};
+		slot.sampleViewCreate.image = slot.image.image;
+		slot.sampleViewCreate.viewType = vk::ImageViewType::e2D;
+		slot.sampleViewCreate.format = format;
+		slot.sampleViewCreate.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+		slot.imageDesc = vk::ImageDescriptorInfoEXT{};
+		slot.imageDesc.pView = &slot.sampleViewCreate;  // v341 契约：pView 指 create info（非 VkImageView）
+		slot.imageDesc.layout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		slot.resourceDesc = vk::ResourceDescriptorInfoEXT{};
+		slot.resourceDesc.type = vk::DescriptorType::eSampledImage;
+		slot.resourceDesc.data.pImage = &slot.imageDesc;
+		auto slotAddr = descriptorHeap.getSlotCpuAddress(slot.heapSlot);
+		if (!slotAddr)
+			return std::unexpected(std::move(slotAddr).error());
+		slot.dst = vk::HostAddressRangeEXT{*slotAddr, descriptorHeap.getDescriptorSize()};
+		vkDevice.getDevice().writeResourceDescriptorsEXT(slot.resourceDesc, slot.dst);
+
 		return &slot;
 	}
+
+std::expected<std::array<uint32_t, 4>, Error> Resources::ensureDeferredGBufferSlots() {
+	// 名字/格式 = deferredRenderGraphDesc 的 4 个 offscreen attachment（契约同步，勿漂移）
+	const vk::Extent2D extent = vkSwapchain.getExtent();
+	struct Item {
+		const char* name;
+		vk::Format format;
+	};
+	static constexpr Item items[4] = {
+		{"gbuffer_albedo", vk::Format::eR8G8B8A8Srgb},
+		{"gbuffer_normal", vk::Format::eR16G16Snorm},
+		{"gbuffer_position", vk::Format::eR32G32B32A32Sfloat},
+		{"gbuffer_metalrough", vk::Format::eR8G8B8A8Unorm},
+	};
+	std::array<uint32_t, 4> slots{};
+	for (uint32_t i = 0; i < 4; ++i) {
+		auto rt = ensureRtAttachment(items[i].name, extent, items[i].format);
+		if (!rt)
+			return std::unexpected(std::move(rt).error());
+		auto slot = rtHeapSlot(items[i].name);
+		if (!slot)
+			return std::unexpected(Error{ErrorCode::Unknown,
+				fmt::format("gbuffer RT '{}' has no sample descriptor slot", items[i].name)});
+		slots[i] = *slot;
+	}
+	if (auto* logger = RLLogger::getInstance())
+		logger->info("deferred G-buffer: {}x{} slots {}/{}/{}/{} (albedo/normal/position/metalrough)",
+			extent.width, extent.height, slots[0], slots[1], slots[2], slots[3]);
+	return slots;
+}
 
 std::expected<RGL::VmaImage, Error> Resources::createDepthImage(RGL::VmaAllocatorRAII& allocator, vk::Extent2D extent) {
 		vk::ImageCreateInfo depthImageInfo{};

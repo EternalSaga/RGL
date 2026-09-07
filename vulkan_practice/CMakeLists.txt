@@ -188,6 +188,14 @@ compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.mesh.slang MODEL_MESH_SP
  compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/skybox.frag.slang SKYBOX_FRAG_SPV
      ${CMAKE_CURRENT_SOURCE_DIR}/shaders/sky.slang ${CMAKE_CURRENT_SOURCE_DIR}/shaders/scene.slang
      ${CMAKE_CURRENT_SOURCE_DIR}/shaders/env.slang)
+ # Phase 7 D1：deferred G-buffer 几何 frag（mesh 复用 model.mesh.spv，写 4 MRT，import scene 对象矩阵）
+ compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/deferred_geometry.frag.slang DEFERRED_GEOM_FRAG_SPV
+     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.slang ${CMAKE_CURRENT_SOURCE_DIR}/shaders/material.slang
+     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/scene.slang)
+ # Phase 7 D1：light pass（全屏大三角 mesh + 采样 G-buffer 的 deferred 光照 frag）
+ compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/light.mesh.slang LIGHT_MESH_SPV)
+ compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/light.frag.slang LIGHT_FRAG_SPV
+     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/scene.slang)
  message(STATUS "MESH_SPV is: ${MESH_SPV}")
  message(STATUS "FRAG_SPV is: ${FRAG_SPV}")
  message(STATUS "MODEL_MESH_SPV is: ${MODEL_MESH_SPV}")
@@ -200,7 +208,7 @@ compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.mesh.slang MODEL_MESH_SP
 # 曾用 -O0（-O2 下编译吃内存，24 并发时打爆 swap）；2026-09-02 用户调整内存/显存
 # 分配至 32GB 后回归目标级 -O2（启动路径代码质量优先，编译峰值内存已非瓶颈）。
 
-add_executable(vulkan_practice main.cpp vam_impl.cpp tinygltf_impl.cpp stb_impl.cpp ${MESH_SPV} ${FRAG_SPV} ${MODEL_MESH_SPV} ${MODEL_FRAG_SPV} ${MODEL_PBR_FRAG_SPV} ${MODEL_PHONG_FRAG_SPV} ${MODEL_PBR_IBL_FRAG_SPV} ${SKYBOX_MESH_SPV} ${SKYBOX_FRAG_SPV})
+add_executable(vulkan_practice main.cpp vam_impl.cpp tinygltf_impl.cpp stb_impl.cpp ${MESH_SPV} ${FRAG_SPV} ${MODEL_MESH_SPV} ${MODEL_FRAG_SPV} ${MODEL_PBR_FRAG_SPV} ${MODEL_PHONG_FRAG_SPV} ${MODEL_PBR_IBL_FRAG_SPV} ${SKYBOX_MESH_SPV} ${SKYBOX_FRAG_SPV} ${DEFERRED_GEOM_FRAG_SPV} ${LIGHT_MESH_SPV} ${LIGHT_FRAG_SPV})
 
 # ─── Runtime config copy (configs/ → build dir) ──────────────────────────────
 # 程序运行时按相对路径读取 configs/*.json，build 目录必须完整。
@@ -230,7 +238,8 @@ set(MODEL_GLB_SOURCES
     "${PROJECT_SOURCE_DIR}/assets/grass_variations.glb"
     "${PROJECT_SOURCE_DIR}/assets/realistic_wooden_cottage_garden_house_3d_model.glb"
     "${PROJECT_SOURCE_DIR}/assets/castle_of_loarre.glb"
-    "${PROJECT_SOURCE_DIR}/assets/kyoto_fushimi_inari_taisha_temple.glb")
+    "${PROJECT_SOURCE_DIR}/assets/kyoto_fushimi_inari_taisha_temple.glb"
+    "${PROJECT_SOURCE_DIR}/assets/bistro_exterior.glb")
 set(MODEL_GLB_OUTPUTS)
 foreach(MODEL_GLB_SRC ${MODEL_GLB_SOURCES})
     get_filename_component(MODEL_GLB_NAME ${MODEL_GLB_SRC} NAME)

@@ -61,6 +61,13 @@ void validateRenderGraphForExecutor(const RGL::CompiledRenderGraph& graph) {
 				fail(fmt::format("blit pass '{}' missing source/target resolution", pass.name));
 			continue;
 		}
+		// Phase 7 D1：drawLight = 固定全屏 draw（无 drawSource/段），state 必 "light"
+		if (pass.kind == RgPassKind::drawLight) {
+			if (pass.state != "light")
+				fail(fmt::format("render graph light pass '{}' has state '{}' (expected 'light')",
+					pass.name, pass.state));
+			continue;
+		}
 		if (pass.state != "opaque" && pass.state != "skybox" && pass.state != "transparent")
 			fail(fmt::format("render graph pass '{}' has unknown state '{}'", pass.name,
 				pass.state));
@@ -113,6 +120,20 @@ Renderer::Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RG
 		// 只在未被几何占据的像素（深度 = clear 1.0）通过测试画天空；绕序不剔（cull None）
 		skyboxState.depthWrite = false;
 		skyboxState.depthCompareOp = vk::CompareOp::eLessOrEqual;
+		// Phase 7 D1：deferred light pass —— 全屏终图，无深度附件（depth 无关）、cull none
+		//（大三角绕序不剔）、不混合。取 light 管线下标；图含 drawLight pass 却无 "light" 条目 = 配置错误
+		// depthTest 显式关：主图 light pass 无深度附件本就不测，但 captureFrame 2-pass 截图给 light 绑了
+		// 深度附件（清 1.0），默认 LESS + 大三角 z=1.0 → 1.0<1.0 全剔（截图纯 clear）。关测试后两路一致。
+		lightState.depthTest = false;
+		lightState.depthWrite = false;
+		lightState.cullMode = vk::CullModeFlagBits::eNone;
+		if (auto idx = shaderRegistry.pipelineIndex("light"))
+			lightPipelineIdx = *idx;
+		for (const auto& p : this->renderGraph.passes)
+			if (p.kind == RgPassKind::drawLight && !lightPipelineIdx)
+				throw std::runtime_error(
+					"Renderer: render graph has drawLight pass but no 'light' pipeline entry "
+					"(main must addLightEntry before Renderer)");
 		createSyncObjects();
 		allocateCommandBuffers();
 		createSceneStaging(vkResources);
@@ -189,6 +210,7 @@ std::expected<void, Error> Renderer::recreateSwapchainAndDepth(const char* conte
 		if (name == "opaque") return opaqueState;
 		if (name == "skybox") return skyboxState;
 		if (name == "transparent") return transparentState;
+		if (name == "light") return lightState;
 		throw std::runtime_error(
 			fmt::format("Renderer::stateFor: unknown state '{}' (constructor validation bypassed)", name));
 	}
@@ -357,8 +379,9 @@ std::expected<void, Error> Renderer::recreateSwapchainAndDepth(const char* conte
 	VkImageView depthView = *resources->getDepthImageView();
 
 	// offscreen attachment RT（批次 4）：幂等 ensure（extent 随 swapchain resize 重建，
-	// 重建含 waitIdle——录制期调用安全，本 CB 尚未提交）。format 暂恒 inherit =
-	// swapchain 格式（blit LINEAR 的 VVL 格式兼容前提；显式格式留后续按需解析）
+	// 重建含 waitIdle——录制期调用安全，本 CB 尚未提交）。format 经词表解析：
+	// "inherit" = swapchain 格式（blit LINEAR 的 VVL 格式兼容前提），具名 = 显式格式
+	// RT（Phase 7 G-buffer；词表与校验归 render_graph，此处只物化）
 	std::vector<Resources::RtAttachment*> offscreenRt(renderGraph.attachments.size());
 	// RT 重建检测（generation 变化 = 新图布局 Undefined）：布局追踪同步重置，
 	// 否则下帧首 barrier oldLayout 失配（extent 漂移 = resize 必现）
@@ -367,12 +390,8 @@ std::expected<void, Error> Renderer::recreateSwapchainAndDepth(const char* conte
 		const auto& att = renderGraph.attachments[s];
 		if (att.kind != RgAttachmentKind::offscreen)
 			continue;
-		if (att.format != "inherit")
-			return std::unexpected(Error{ErrorCode::Unknown,
-				fmt::format("render graph: offscreen attachment '{}' requests format '{}' "
-					"(only 'inherit' supported so far)", att.name, att.format)});
-		auto rtResult = resources->ensureRtAttachment(att.name, extent,
-			swapchain->getFormat().format);
+		const auto fmt = RGL::resolveRgFormat(att.format, swapchain->getFormat().format);
+		auto rtResult = resources->ensureRtAttachment(att.name, extent, fmt);
 		if (!rtResult)
 			return std::unexpected(std::move(rtResult).error());
 		offscreenRt[s] = *rtResult;
@@ -487,10 +506,17 @@ std::expected<void, Error> Renderer::recreateSwapchainAndDepth(const char* conte
 		// bindShadersEXT 先后无约束；段首各 applyDynamicState 一次（Phase 5 语义，
 		// 状态对象经 pass.state 名解析——opaque/skybox/transparent 三成员不变）
 		RGL::applyDynamicState(commandBuffers[currentFrame], extent.width, extent.height,
-			stateFor(pass.state), depthClipDynamic);
-		const auto [segBegin, segEnd] = segmentRange(pass.drawSource, list);
-		for (uint32_t i = segBegin; i < segEnd; ++i)
-			drawOne(list.calls[i]);
+			stateFor(pass.state), depthClipDynamic, static_cast<uint32_t>(pass.colors.size()));
+		if (pass.kind == RgPassKind::drawLight) {
+			// Phase 7 D1：固定全屏单 group light draw（无 push constant；采样描述符 baked 在 light
+			// shader object 的 extra mapping，4 RT 的 CAO→SRO 布局转换已由 pass.barriers 完成）
+			registry.entry(*lightPipelineIdx).pipeline.bindShaders(commandBuffers[currentFrame]);
+			commandBuffers[currentFrame].drawMeshTasksEXT(1, 1, 1);
+		} else {
+			const auto [segBegin, segEnd] = segmentRange(pass.drawSource, list);
+			for (uint32_t i = segBegin; i < segEnd; ++i)
+				drawOne(list.calls[i]);
+		}
 		commandBuffers[currentFrame].endRendering();
 	}
 

@@ -158,8 +158,16 @@ std::expected<RgGraphDesc, Error> loadRenderGraphConfig(std::string_view path) {
 					att.kind = *kindResult;
 				}
 				sol::optional<std::string> format = item["format"];
-				if (format)
+				if (format) {
+					// 词表前置校验（错误带配置路径；结构规则如 swapchain/depth
+					// 必须 inherit 仍归 compileRenderGraph）
+					if (!isKnownRgFormat(*format))
+						return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
+							fmt::format("render graph config ({}): attachment '{}' has unknown "
+								"format '{}'",
+								path, att.name, *format)});
 					att.format = *format;
+				}
 				desc.attachments.push_back(std::move(att));
 			}
 		}

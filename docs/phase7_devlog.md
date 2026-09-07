@@ -1,0 +1,194 @@
+# Phase 7 D1 开发日志（延迟渲染单灯里程碑）
+
+> **状态**：现行（滚动更新；D1 = 单灯 G-buffer→light→composite + forward/deferred 选路，测试主场景 Bistro Exterior）。
+> 实施计划见 [archive/phase7_plan.md](archive/phase7_plan.md)；本文件记过程、踩坑、决策与当前态，供连续性交接。
+
+---
+
+## 2026-09-07 — Bistro FBX→glb 转换
+
+### 素材与目标
+`Bistro_v5_2/`（Amazon Lumberyard Bistro ORCA）：Exterior/Interior/Interior_Wine 三个 FBX +
+633 张贴图（622 `.dds` + 11 tga）+ 一张等距柱状 HDR env + `.pyscene`（Falcor 场景文件，Blender 不读）。
+README 关键：贴图其实是 **metal/rough 工作流**——`*_BaseColor.dds`（RGB=色 A=opacity）、
+`*_Specular.dds`（**R=Occlusion G=Roughness B=Metalness**，命名误导）、`*_Normal.dds`（DirectX）、`*_Emissive.dds`。
+→ `Specular.dds` 逐通道**正好等于** glTF `occlusionTexture`(R) + `metallicRoughnessTexture`(G,B)。这是转换能"近乎无损"的根因。
+
+### 工具链决策（踩坑记录）
+- **Blender 直接导**：失败。老 io_fbx 读不动这份 120MB 二进制 FBX（"解析不了好多数据"）。
+- **assimp CLI**：`assimp info`/`export` **能完整读**（1306 节点 / 1513 mesh / 2.8M 三角 / 132 材质，4.2s）。
+  但 `export ... .glb` 把贴图**以 dds 原样嵌入**（mimeType dds）+ 材质塌成 `KHR_materials_specular` + 标量 rough/metal；
+  `export ... .gltf`（分离式）**只按文件名引用 dds**（`Textures\X_BaseColor.dds`）不转码。都不达标（项目 stb 只解 png/jpg）。
+- **FBX2glTF**（godotengine fork v0.13.1，`/tmp/opencode/fbx2gltf/`）：几何/层级/属性最干净
+  （POSITION+NORMAL+UV 齐、层级保留），但贴图嵌成**无头 BCn 裸块**（mimeType image/unknown，stb/Blender 都不认），
+  metal/rough 塌成统一 0.4/0.3。不达标。
+- **最终管线（达标）= assimp 分离 .gltf 骨架 + 自写 ffmpeg 打包**：
+  1. `assimp export BistroExterior.fbx out.gltf -f gltf2` → 几何(out.bin) + 按文件名引用 dds 的 .gltf；
+  2. `tools/bistro_pack.py`：ffmpeg 解 BCn dds→png（`ffmpeg -i x.dds -vf scale=..:force_original_aspect_ratio=decrease x.png`，
+     ffmpeg dds decoder 支持 BCn），按文件名 stem 重接：BaseColor→baseColorTexture(sRGB)、
+     Normal→normalTexture（**绿通道翻 + BC5 Z 重建留 Phase 8**）、Specular→metallicRoughnessTexture+occlusionTexture（同图）；
+     删 `KHR_materials_specular`；丢弃未引用图；重建**单 buffer** .glb。
+  - 产物 `assets/bistro_exterior.glb`：**424MB**（1024 贴图，原生 2K 传参 `0` 重跑约 1GB）。
+  - 校验：395 图全 image/png；132 材质 base+normal+metalRough+occlusion 齐、零扩展、factor=1；
+    1591 primitive 全有 POS+NORMAL；节点层级保留未烘；bufferView 无越界。**Blender 材质预览目检通过**（贴图/位置正确）。
+- 未做：法线绿通道翻 + BC5 Z 重建（引擎采样法线时补）；Interior/Wine 同法可转。
+
+### 关键认知
+- "FBX 读不了" = 工具问题不是资产问题；Blender 老 io_fbx 不行，assimp/FBX-SDK 系可行。
+- tinygltf 和 gltf_loader **根本不碰 FBX**；转换是上游工具的事。
+- dds→png 体积暴涨（BCn 2K→PNG）；1024 是体积/性能档，与"渲染能力"无关，可一键回 2K。
+
+---
+
+## 2026-09-07 — 批次 0：loader 节点 TRS + Bistro 进引擎（forward 测通）
+
+### loader 节点 TRS（不烘焙）
+- 动机：`gltf_loader` 旧逻辑只取"首个引用 mesh 的 node 的 translation"，丢 rotation/scale/父链（Phase 2 遗留）。
+  Bistro 1300 节点 / 深 6 层 + matrix 节点（Sketchfab 轴旋转 + 平移散布），不补则散架。
+- 改动 `gltf_loader.cppm`：
+  - `GltfPrimitive.translation(vec3)` → `nodeWorld(mat4)`；
+  - 解析后**先算全节点世界矩阵**：localTRS（`node.matrix` 列主序 `make_mat4` 优先，否则 T·R·S，rotation 是 glTF xyzw→`glm::quat(w,x,y,z)`）；
+    `nodeParent` 由 children 反查；world[n]=world[parent]·local[n]，**迭代加深**求解（避免递归栈/std::function）。
+  - 包围球按 nodeWorld 变换顶点。
+  - GMF 补 `#include <glm/gtc/{matrix_transform,quaternion,type_ptr}.hpp>` + **`#include <fmt/format.h>`**
+    （原 fmt 靠传递可见性蹭到，加 glm include 断链 → clang 报"missing #include"；用则 include，教训）。
+- `model_importer_impl.cppm`：`local = prim.nodeWorld`（原 translate(translation)），`world = rootTransform · local` 不变。
+- **踩坑（已修）**：迭代解析器全解析完成后，下一趟无 progress 会**误报 cycle**（没区分"全完成"vs"卡住"）→ 加 `resolved` 计数，
+  全完成正常 break，仅停滞且有未决才算环。kyoto/grass 首跑即触发此假警告，暴露 bug。
+- **正确性验证**：grass_variations radius 81→264、kyoto center 微移——查实是**修 bug**：grass 4 丛草本在模型内
+  Z 轴 ±164 分布（node3/5/9 平移 matrix），旧 loader 全压原点重叠；现按节点摆位=真实散布。kyoto "Model" 节点 matrix≈旋转对消 identity，基本不变。
+
+### heap 容量
+- 每 primitive 一个 object 矩阵槽；Bistro 1591 > `kSceneMatrixCapacity(1024)` → 启动契约报错。
+- **上调 `kSceneMatrixCapacity` 1024→4096**（`vkresources.cppm`）；scene data 缓冲随之 256KB（128 头 + 4096×64），staging 同步。无压力。
+
+### forward 冒烟（Bistro）
+- scene.lua：entities 单条 Bistro `scale=0.01`（厘米→米）；kyoto+37 grass 全注释保留便于恢复。
+- CMakeLists `MODEL_GLB_SOURCES` 加 `bistro_exterior.glb`（改 CMake 后 build 自动 reconfigure）。
+- 结果：**1591 primitive 正确拼装**（楼体/窗/拱门/屋顶/树/路灯/环形路面对位），零 error 零 warn，llm_debug 干净退出。
+  17 块拼接顶点 buffer + 395 纹理槽（<1026 heap capacity，1.5GB 纹理运行时上传 ~15s）。
+- **config 同步坑**：只编辑源码 `configs/` 不 `just build` → build 目录仍是旧 config（copy_if_different 需构建触发）；改 config 必先 build 再跑。
+
+### 关键发现：Bistro 材质在 forward 下偏暗（正当化 D1）
+转换把 metallic/roughness **factor 设 1.0**（让 ORM 贴图说话），但 forward 着色器**只吃标量、不采 ORM 贴图**
+→ 全 Bistro 当纯金属、无漫反射 → 画面暗。**这是 Bistro 需要延迟管线的实证**：deferred light pass 采样
+metallicRoughnessTexture(G/B) + normal 才正确。forward 暗=预期非 bug。
+
+### 相机
+- Bistro 世界包围球 center≈(0.14,0.09,0.02) r≈1.17（scale 0.01 后）；但包围球被大地面撑大，
+  建筑簇相对小——机位需贴近建筑（见 camera.lua 注释）。trackball 用 position/target 原值。
+
+---
+
+## 2026-09-07 — 批次 1a：offscreen 显式格式贯通（子 agent 实现 + 主 agent 验收）
+
+- 从此处起改「主 agent 定规格 + 派 worker 子 agent 实现 + 主 agent 独立验收」串行模式（全局规范要求子 agent 串行，勿并行）。
+- 核实：`ensureRtAttachment` 早已吃任意 `vk::Format`（usage 含 SAMPLED）、`RgAttachmentDesc.format` 字符串全链路传递——
+  **唯一硬阻塞**是 vkrenderer_impl.cppm:370 的「非 inherit 即拒绝」。改动面极小。
+- 落地（子 agent，4 文件）：render_graph 词表 `isKnownRgFormat`/`resolveRgFormat`（表驱动 12 项 RGBA/RGB/RG/R 精度）+
+  compile 校验（offscreen 查词表、swapchain/depth 强制 inherit）+ 执行器删拒绝改 resolver + self-check 两用例
+  （显式格式 compile OK / 未知格式报错）+ 词表值回读断言（守拼写错，好补充采纳）+ render_graph_config Lua format 前置校验。
+- **主 agent 独立验收**：复核 diff 属实；自跑 `just build` 绿；headless 冒烟 EXIT=0 零 `[error]`/零 VVL、self-check（含新例）全过。AGENTS.md 边界 ③ 已同步。
+
+---
+
+## 2026-09-07 — 批次 1b/2 核心设计定案（主 agent 亲自，读契约后）
+
+**MRT 地基**：执行器 `beginRendering` 已逐条吃 `pass.colors`（vkrenderer_impl.cppm:452-462）；shader object 无
+VkPipeline 级 colorFormats 锁定 → 多 RT 天然支持，管线创建零改。`PipelineSpec = {name, meshSpv, fragSpv}`
+（scene_config_impl.cppm 默认表）——deferred_geometry 复用 `model.mesh.spv`，只加写 MRT 的 frag，绑定面
+（binding0 顶点/1 baseColorTex/2 sampler/3 sceneData）与 model_pbr 完全相同（`model.slang` + `scene.slang`）。
+
+**材质现实（重定 D1 判据）**：引擎材质只带 **baseColor 贴图 + 标量 metal/rough + 顶点法线**（`model.slang` 仅声明
+binding1 baseColorTexture，`MaterialAsset` 单 textureId；无 ORM/normal 贴图绑定）。采样 metalRough/normal **贴图 = Phase 8
+纹理管线活**。→ deferred 与 forward 用同一套材质数据 → **D1 判据 = forward/deferred 单灯着色等价性回归**，非"调好看"。
+Bistro 偏暗 = metallic 标量=1 的正交问题（packer CPU 取 ORM 均值写标量可修，两路同受影响，不阻塞 D1）。
+
+**最硬整合点的优雅解（forward/deferred 互斥）**：几何 pass 让每资产用 deferred_geometry 管线，
+**不需要 per-draw 管线变体机制**——deferred 模式下 opaque 的 pipeline 规格从 `model_pbr` 换成 `deferred_geometry`
+（经 styleMap / startup 模式），`MeshAsset.pipelineIndex` 天然指向 G-buffer frag；执行器仍盲执行同一条
+`FrameDrawList`（`DrawCall.pipeline` 已是表下标，frame_draw_list.cppm:20）。
+
+**D1 最小形状 = 2 pass**（省独立 lit RT / composite）：
+1. **geometry pass**：drawSource=opaque，4 color RT（RT0 albedo `rgba8_srgb` / RT1 world-normal oct `rg16_snorm` /
+   RT2 worldPos `r32g32b32_sfloat` / RT3 (rough,metal) `rg8_unorm`）+ depth。deferred_geometry.frag 从 model_pbr 派生、
+   不算光照只写 4 目标（albedo=baseColor.rgb·baseColorTexture.Sample；normal=oct(worldNormal)；
+   worldPos=worldPos(M,positionOS)；metalRough=drawArgs.roughnessMetallic 标量）。
+2. **light pass**：全屏 draw（仿 skybox 单 group 大三角，新增 `light` PipelineSpec），sampleRead 采 4 RT + 单灯 GGX +
+   tonemap → 直写 swapchain（1 color，present 转换由图 presentTransition 派生）。透明段 D1 暂跳（deferred+alpha 单独议题）。
+
+**唯一真瓶颈 = AGENTS 边界 ④「sampleRead RT 描述符未接 heap」**（light pass 采样 G-buffer 的前提）——核心，主 agent 设计。
+
+**分工**（用户确认「核心亲自写，只把干净邻接片派子 agent」）：核心（sampleRead 接线 + 各 frag + 图选路）我写；
+干净邻接片攒到不冲突时机派 worker——**① Bistro packer 标量修正**（`tools/bistro_pack.py` CPU 取 ORM 均值写
+metallic/roughness 标量、可只 patch 材质不重编码贴图）、② AGENTS/devlog 文档同步、③（deferred 跑通后）forward/deferred
+截图 diff harness。
+
+---
+
+## K2 进度（主 agent 写，均编译验证、行为中性）
+- ✅ **K1**（keystone 采样接线）：`RtAttachment` 增 SAMPLED_IMAGE 描述符链（heapSlot 首建 allocSlot、跨 resize
+  复用；`imageDesc.pView→sampleViewCreate`、`resourceDesc.data.pImage→imageDesc` 指针链存 map 节点）+
+  `ensureRtAttachment` create/rebuild 分支写入 + `rtHeapSlot(name)` 暴露。验证：forward 零 error（不建 RT）/
+  `RGL_OFFSCREEN=1`（建 scene_rt 走写入）EXIT=0 零 VUID。
+- ✅ **K2a 着色器 + CMake**：`deferred_geometry.frag.slang`（4 MRT：albedo rgba8_srgb / normal rg16_snorm oct /
+  worldpos r32g32b32_sfloat / metalrough **rgba8_unorm** .r=metal .g=rough；复用 model.mesh + scene 对象矩阵）、
+  `light.mesh.slang`（全屏大三角带 uv）、`light.frag.slang`（binding 4-7 采 4 RT + 8 sampler + 3 sceneData，
+  octDecode，GGX 逐式同 model_pbr，无 tonemap 保可比）。CMake `compile_slang` ×3 + `add_executable` 登记。
+  踩坑：frag 漏 `[shader("fragment")]`→E57004 no exported symbols（补）；oct 的 `?:` 向量条件 E30056→`select()`。
+- ✅ **K2b-extra 机制**：`PipelineBindings.extra`（`std::vector<PipelineExtraBinding>{binding,sampler,heapSlot,
+  samplerHeapOffset}`）+ `RenderPipeline` base mapping 后追加循环（`mappings[6]`→`[16]`）。light 管线据此映射
+  4 RT 采样槽 + sampler，不动既有 cube/model/skybox 管线（零风险）。
+
+## D1 打通（2026-09-07，`RGL_DEFERRED=1` 端到端跑通）
+K2b-core 全部落地（render_graph drawLight+deferredRenderGraphDesc+self-check / shader_registry addLightEntry+
+findSpec light+deferred_geometry / 执行器 drawLight 分支+lightState+lightPipelineIdx+validate / main 选路+
+RT ensure 下移 Renderer+opaque spec 换 deferred_geometry / Resources ensureDeferredGBufferSlots）。**结果**：
+`RGL_DEFERRED=1` headless 主渲染 **零 error**，截图 = Bistro 建筑群正确拼装 + **方向光照**（立面受光/屋顶背光/
+地面/秋树），deferred 2-pass（geometry→G-buffer→light→swapchain）成立；forward 默认路径 diff 0（零 warn/error）。
+
+**两处 VVL 修复**（deferred 首跑暴露）：
+1. worldPos RT `r32g32b32_sfloat` **不支持 SAMPLED_IMAGE**（3 通道 float 格式采样位缺失，VK_ERROR_FORMAT_NOT_SUPPORTED）
+   → 换 `rgba32_sfloat`（desc/ensureSlots 同步；deferred_geometry SV_Target2 改 float4，light.frag positionTex 改 float4 .xyz）。
+2. `applyDynamicState` 只对 color attachment **0** 设 blend enable/write mask → MRT 4 附件触发 VVL 07476/07478
+   → 加 `colorAttachmentCount` 尾参（默认 1，forward/llm 不变），blend/mask 覆盖 `[0,count)`；geometry pass 传
+   `pass.colors.size()`。
+
+**已知非致命项（留后续，非 D1 核心缺陷）**：
+- **llm_debug captureFrame forward-only**：deferred 模式它把 4-MRT deferred_geometry 管线渲进**单附件**离屏 RT
+  → VVL WARNING「Location 1/2/3 写入无 pColorAttachments」（severity=warning、非 error、不污染主 drawFrame，
+  headless 截图实读 swapchain 后缓冲 = 正确 deferred 输出）。正解 = captureFrame 在 deferred 下不重渲（走 swapchain）。
+- **forward↔deferred 精确等价未比**：deferred 截图观感比 forward（Bistro metallic 标量=1 偏暗）亮且受光好，
+  疑似 metalRough RT 往返或 light 读取与 forward 标量路径有差 → **K3 同机位 forward vs deferred 逐区比对**定位。
+
+## 当前态 / 下一步
+- ✅ D1 核心：deferred 管线端到端跑通（geometry→G-buffer→light→swapchain），主渲染零 error，forward diff 0。
+- ⏭ **K3**：同机位 forward vs deferred 单灯截图逐区比对（定位 deferred 观感差：metalRough RT 往返 quantize/
+  light 读标量 vs 采样、oct 法线量化、sRGB albedo 往返）；captureFrame deferred 路径（不重渲/读 swapchain）。
+- 待办：Bistro 法线翻绿通道 + BC5 Z 重建 + ORM 贴图采样（Phase 8 纹理管线）；Interior/Wine 转换（按需）；
+  worker 干净邻接片（Bistro packer 标量修正 / forward-deferred 截图 diff harness）待不冲突时派。
+
+## K3 定位与修复（2026-09-07，forward↔deferred 比对查出 2 真 bug + 2 非 bug）
+先修 captureFrame 让它 deferred-aware（`renderer.isDeferred()`）：**自包含 2-pass** 截图——同一命令缓冲内
+geometry pass 渲入 4 G-buffer RT（capture 尺寸 == swapchain extent 命中已建 GB，名字/格式与
+`ensureDeferredGBufferSlots` 契约一致），再 light pass 全屏采样 GB 渲入单捕获 8-bit RT（前向/延迟同 RT 可比）。
+**不能跨命令缓冲读持久 GB**（实测上帧 GB 对独立提交读回黑——内容未建立跨提交可见性）。加 `RGL_DUMP_GBUF=N`
+descriptor-无关直读第 N 个 GB RT（copyImageToBuffer）。
+
+逐层 dump 定位（albedo GB 完美 = Bistro 全 albedo 正确入缓冲）：
+1. ✅ **翻转 bug**（`light.mesh.slang`）：light 全屏三角 `uv.y = ndc.y*0.5+0.5` 与 geometry 的负高 viewport
+   （framebuffer Y 翻转）写入 GB 的取向反 → 采样上下颠倒。改 `uv = float2(ndc.x*0.5+0.5, 0.5 - ndc.y*0.5)`
+   （uv.y = framebuffer_y/height，uv.x 符号本就对）。
+2. ✅ **light pass 全剔 bug**（`vkrenderer_impl` lightState）：`RenderState` 默认 `depthTest=true + eLess`，
+   lightState 只改了 depthWrite/cullMode → 截图路径 light pass 绑了清 1.0 的深度附件 + 大三角 z=1.0 →
+   `1.0<1.0` 全深度剔除 → 截图纯 clear（0.1 灰）。加 `lightState.depthTest = false`（全屏终图本就无深度；
+   主图 light pass 无深度附件本不受影响，此改让两路一致 + 语义正确）。
+3. ⚠️ **非 bug — 缺 skybox 背景**：forward 的"绿色山丘"经 [K3-DIAG] 段计数（opaque=1591=全部 Bistro 几何、
+   transparent=0）+ 直读 `skybox/rainbow/rainbow_ft.png` 证实 = **env cubemap 背景**（草地+湖+彩虹），非 Bistro 几何。
+   deferred 图无 skybox pass → 背景黑。D1 核心（G-buffer + 单灯）只渲 opaque，背景/透明 deferred 化属后续。
+4. ⚠️ **非 bug — 整体偏暗**：Bistro 材质 metallic 标量=1（packer 把因子设 1 让 ORM 贴图驱动、但两路都还没采 ORM）
+   → diffuse 被 `(1-metallic)=0` 杀掉 → 两路都暗（forward 建筑同样暗）。正交内容问题（Phase 8 采 ORM / packer 标量）。
+
+**净结果**：deferred 建筑本体光照与 forward 一致（同 GGX 抄自 model_pbr）；两张差异 = skybox 背景缺失（图未含
+skybox pass）+ metallic 暗（内容）。**下一步选项**：(a) deferred 图加 skybox/env 背景合成（视觉补齐，需处理
+light pass 与背景的深度/合成顺序）；(b) 换亮 diffuse 场景（cube）跑 forward↔deferred 像素比对证等价；(c) 先提交 D1。

@@ -493,6 +493,11 @@ Shadow、多灯、OIT/per-pixel 透明排序、MASK alphaTest；scene data 基�
 
 ## Phase 7：延迟渲染（独立分支）
 
+> **实施计划**：见 [phase7_plan.md](archive/phase7_plan.md)（2026-09-07 起草，含批次拆解、
+> 范围决策 D1–D6 待确认、验证矩阵与风险）。**开发日志**（过程/踩坑/当前态滚动记录）：
+> [phase7_devlog.md](phase7_devlog.md)。Bistro Exterior 已转 `assets/bistro_exterior.glb`
+> 作测试主场景（转换管线 `tools/bistro_pack.py`）。
+
 ### 目标
 支持延迟渲染路径，与 forward rendering 并存。
 

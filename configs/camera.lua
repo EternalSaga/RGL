@@ -6,8 +6,9 @@ return {
     -- 整球入画留裕量。near/far 有 SceneBounds 时由 projectionSystem 自适应（忽略）。
     -- position = { 128.0, 73.0, 150.0 },  -- castle_of_loarre 机位：包围球 center=(-3.4,0.6,17.7) r=59.7，3/4 视角距 ~200
     -- target = { -3.4, 0.6, 17.7 },  -- 轨道中心（仅 trackball 用）
-    position = { 380.0, 320.0, 380.0 },  -- kyoto_fushimi_inari_taisha_temple 机位：包围球 center≈(0,0,0) r=73.3，3/4 视角距 ~250
-    target = { 0.0, 0.0, 0.0 },  -- 轨道中心（仅 trackball 用）
+    -- position = { 380.0, 320.0, 380.0 },  -- kyoto_fushimi_inari_taisha_temple 机位（包围球 center≈(0,0,0) r=73.3）
+    position = { 1.1, 0.75, 1.05 },  -- Phase 7 D1 Bistro：贴近建筑簇检查拼装/贴图（世界 r≈1.17）
+    target = { 0.14, 0.12, 0.02 },  -- 轨道中心 = Bistro 世界包围球心
     -- position = { -2617.0, 1343.0, 2550.0 },  -- cottage 机位（4K 黑屏 UAF 复验，2026-08-28；包围球 center=(-182,546,115) r=1352）
     -- target = { -182.0, 300.0, 115.0 },  -- 轨道中心（仅 trackball 用）
     -- position = { 8.0, 6.0, 10.0 },  -- Phase 5 透明排序：transparent.glb 4 盒（原点 ±6 内）

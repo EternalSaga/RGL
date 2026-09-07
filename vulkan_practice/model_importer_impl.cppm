@@ -285,7 +285,7 @@ entt::entity registerScene(entt::registry& rg, const RGL::GltfModel& model,
 		const auto& prim = model.primitives[i];
 		auto e = rg.create();
 
-		glm::mat4 local = glm::translate(glm::mat4(1.0f), prim.translation);
+		glm::mat4 local = prim.nodeWorld;  // Phase 7：node 世界矩阵（TRS + 父链，loader 合成，不烘顶点）
 		auto& tf = rg.emplace<Transform>(e);
 		tf.local = local;
 		tf.world = rootTransform * local;  // 根位姿复合（批次 5；identity = 旧行为）

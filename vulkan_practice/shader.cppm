@@ -65,7 +65,7 @@ export struct RenderState {
 // depthClipDynamic（edS3 能力门）：true = 设备支持 extendedDynamicState3DepthClipEnable，
 // 才 setDepthClipEnableEXT；false = 扩展缺失，保持管线默认（干净 no-op，不 set）。
 export void applyDynamicState(vk::raii::CommandBuffer& cmd, uint32_t width, uint32_t height,
-	const RenderState& state, bool depthClipDynamic = false) {
+	const RenderState& state, bool depthClipDynamic = false, uint32_t colorAttachmentCount = 1) {
 	// Viewport & scissor
 	vk::Viewport viewport(0.0f, static_cast<float>(height),
 		static_cast<float>(width), -static_cast<float>(height),
@@ -98,9 +98,9 @@ export void applyDynamicState(vk::raii::CommandBuffer& cmd, uint32_t width, uint
 	cmd.setAlphaToCoverageEnableEXT(state.alphaToCoverage);
 	cmd.setAlphaToOneEnableEXT(state.alphaToOne);
 
-	// Color blending：enable 只是开关——factors/equation 是独立的动态状态，不设置则
-	// 保持默认值（≈不混合），开了 colorBlend 也不产生混合效果（Phase 5 透明排序接线）。
-	// 标准 alpha 混合：RGB = src·srcAlpha + dst·(1-srcAlpha)，A = srcA（替换）
+	// Color blending + 写掩码：多颜色附件（Phase 7 deferred geometry 4 MRT）须覆盖 [0, count)
+	//（VVL 07476/07478：shader object 动态色态要求所有 active color attachment 均已设 blend enable
+	// 与 write mask）。forward（count=1）与旧逐位一致。
 	if (state.colorBlend) {
 		// hpp 包装类无聚合初始化（仅默认/拷贝/Vk* 构造）——裸 C 结构体逐字段填后包一层。
 		// 注意 v341 头：单 colorBlendOp/alphaBlendOp 字段（非 src/dst 各一，新版头才拆分）
@@ -111,12 +111,30 @@ export void applyDynamicState(vk::raii::CommandBuffer& cmd, uint32_t width, uint
 		raw.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
 		raw.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
 		raw.alphaBlendOp = VK_BLEND_OP_ADD;
-		cmd.setColorBlendEquationEXT(0, vk::ColorBlendEquationEXT(raw));
+		const std::vector<vk::ColorBlendEquationEXT> eqs(colorAttachmentCount,
+			vk::ColorBlendEquationEXT(raw));
+		cmd.setColorBlendEquationEXT(0, eqs);
 	}
-	cmd.setColorBlendEnableEXT(0, state.colorBlend);
-	cmd.setColorWriteMaskEXT(0, state.colorWriteMask);
+	{
+		const std::vector<vk::Bool32> blendEnable(colorAttachmentCount,
+			state.colorBlend ? VK_TRUE : VK_FALSE);
+		cmd.setColorBlendEnableEXT(0, blendEnable);
+		const std::vector<vk::ColorComponentFlags> writeMasks(colorAttachmentCount,
+			vk::ColorComponentFlags(state.colorWriteMask));
+		cmd.setColorWriteMaskEXT(0, writeMasks);
+	}
 	cmd.setLogicOpEnableEXT(state.logicOp);
 }
+
+// Phase 7 D1：base binding 之外的单条追加映射（PipelineBindings::extra 条目）。
+// sampler=false → resource heap 描述符（heapSlot × descriptorSize）；sampler=true →
+// sampler heap 字节偏移（samplerHeapOffset）。firstBinding 显式（避开 base 0..5 段）。
+export struct PipelineExtraBinding {
+	uint32_t binding = 0;
+	bool sampler = false;
+	uint32_t heapSlot = 0;
+	vk::DeviceSize samplerHeapOffset = 0;
+};
 
 // binding mapping 烘焙参数（Phase 5.5 聚合：env 追加后构造参数膨胀到 13 个，改 struct
 // 数据驱动表达 cube/model/IBL 形态）。heap 槽 = 绝对 slot（resource heap），sampler 走
@@ -134,6 +152,10 @@ export struct PipelineBindings {
 	bool textured = false;
 	bool hasSceneData = false;
 	bool hasEnv = false;
+	// Phase 7 D1：任意追加映射（base binding 0..5 之外，按 firstBinding 显式指定）。
+	// light pass 采样 G-buffer 用：binding 4-7 → 4 个 RT 的 SAMPLED_IMAGE 堆槽、binding 8 → sampler。
+	// sampler=true → sourceData 走 sampler heap 字节偏移；false → resource heap slot×descriptorSize。
+	std::vector<PipelineExtraBinding> extra;
 };
 
 // RenderPipeline：纯 shader object 包装（mesh + frag 两个 VkShaderEXT + 烘焙的
@@ -159,7 +181,7 @@ export class RenderPipeline {
 	RenderPipeline(vk::raii::Device& device, const ShaderEffect& effect,
 		const PipelineBindings& bindings) {
 		const uint32_t descriptorSize = bindings.descriptorSize;
-		VkDescriptorSetAndBindingMappingEXT mappings[6]{};
+		VkDescriptorSetAndBindingMappingEXT mappings[16]{};
 		// 顺序填充（Phase 5.5 批次 4 修正：原固定下标 [0/1/2/3/4/5] 假设 textured=true——
 		// 天空盒首个 textured=false+hasSceneData+hasEnv 组合下 mappings[2] 留空却计入
 		// count → VVL "sType must be..." + envSampler 被挤出 count → "no mapping for
@@ -198,6 +220,11 @@ export class RenderPipeline {
 			add(4, bindings.slotEnv * descriptorSize, descriptorSize);
 			add(5, bindings.envSamplerHeapOffset, 0);
 		}
+		// Phase 7 D1：追加映射（light pass 采样 G-buffer 4 RT + sampler 等），running index 续 base
+		for (const auto& e : bindings.extra)
+			add(e.binding,
+				e.sampler ? e.samplerHeapOffset : descriptorSize * e.heapSlot,
+				e.sampler ? 0 : descriptorSize);
 		const uint32_t mappingCount = n;
 
 		VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{};

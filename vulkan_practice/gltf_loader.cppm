@@ -3,8 +3,11 @@ module;
 // NO_STB_IMAGE_WRITE 保留（tinygltf_impl.cpp 同定义，两 TU API 面一致）
 #define TINYGLTF_NO_STB_IMAGE_WRITE
 #include <tiny_gltf.h>
+#include <fmt/format.h>                     // 本模块直接用 fmt::format（原靠传递可见性，收敛为直接 include）
 #include <glm/glm.hpp>
-#include <fmt/format.h>
+#include <glm/gtc/matrix_transform.hpp>  // node TRS 合成：translate/scale
+#include <glm/gtc/quaternion.hpp>        // node.rotation（xyzw）→ mat4_cast
+#include <glm/gtc/type_ptr.hpp>          // node.matrix（列主序）→ make_mat4
 export module gltf_loader;
 
 import rlstd;
@@ -20,7 +23,7 @@ namespace RGL {
 export struct GltfPrimitive {
 	std::vector<ModelVertex> vertices;
 	uint32_t triangleCount = 0;
-	glm::vec3 translation{0.0f};  // 所属 node 的 translation（Phase 2 无层级嵌套、无旋转/缩放）
+	glm::mat4 nodeWorld{1.0f};  // 所属 node 世界矩阵（Phase 7：TRS + 父链合成，不烘进顶点；无 node = identity）
 	glm::vec4 baseColor{1.0f};    // material 的 baseColorFactor
 	int baseColorTextureIndex = -1;  // material baseColorTexture 的 image 下标（-1 = 无纹理 → 白纹理）
 	bool hasUv = true;               // TEXCOORD_0 缺失（glTF 中可选）→ uv 填 0 + 白纹理（D9）
@@ -139,26 +142,73 @@ export [[nodiscard]] std::expected<GltfModel, Error> loadGltfModel(const std::st
 	}
 
 	GltfModel model;
+
+	// 节点世界矩阵（Phase 7：层级 TRS + 父链合成，替换旧"只取首 node 的 translation"）。
+	// 根 = 无父节点（覆盖 scene.nodes 与孤立根）；world[n] = world[parent(n)] · localTRS(n)。
+	// localTRS：node.matrix（列主序，若有）否则 T·R·S（rotation 是 glTF xyzw → glm quat(w,x,y,z)）。
+	// 合法 glTF 层级无环；迭代加深求解并带环防御（残留 = 环，退化 local + warn）。
+	const size_t nodeCount = gltf.nodes.size();
+	std::vector<glm::mat4> nodeLocal(nodeCount, glm::mat4(1.0f));
+	std::vector<int> nodeParent(nodeCount, -1);
+	for (size_t ni = 0; ni < nodeCount; ++ni) {
+		const auto& nd = gltf.nodes[ni];
+		if (nd.matrix.size() == 16) {
+			nodeLocal[ni] = glm::make_mat4(nd.matrix.data());
+		} else {
+			glm::mat4 m(1.0f);
+			if (nd.translation.size() == 3)
+				m = glm::translate(m, glm::vec3(static_cast<float>(nd.translation[0]),
+					static_cast<float>(nd.translation[1]), static_cast<float>(nd.translation[2])));
+			if (nd.rotation.size() == 4)
+				m = m * glm::mat4_cast(glm::quat(static_cast<float>(nd.rotation[3]),
+					static_cast<float>(nd.rotation[0]), static_cast<float>(nd.rotation[1]),
+					static_cast<float>(nd.rotation[2])));
+			if (nd.scale.size() == 3)
+				m = glm::scale(m, glm::vec3(static_cast<float>(nd.scale[0]),
+					static_cast<float>(nd.scale[1]), static_cast<float>(nd.scale[2])));
+			nodeLocal[ni] = m;
+		}
+		for (int child : nd.children)
+			if (child >= 0 && child < static_cast<int>(nodeCount))
+				nodeParent[child] = static_cast<int>(ni);
+	}
+	std::vector<glm::mat4> nodeWorld(nodeCount, glm::mat4(1.0f));
+	std::vector<uint8_t> nodeDone(nodeCount, 0);
+	size_t resolved = 0;
+	for (size_t pass = 0; pass < nodeCount + 1; ++pass) {
+		bool progress = false;
+		for (size_t ni = 0; ni < nodeCount; ++ni) {
+			if (nodeDone[ni]) continue;
+			const int p = nodeParent[ni];
+			if (p < 0) { nodeWorld[ni] = nodeLocal[ni]; nodeDone[ni] = 1; ++resolved; progress = true; }
+			else if (nodeDone[p]) { nodeWorld[ni] = nodeWorld[p] * nodeLocal[ni]; nodeDone[ni] = 1; ++resolved; progress = true; }
+		}
+		if (resolved == nodeCount) break;  // 全部解析完成（正常）
+		if (!progress) {                    // 停滞且仍有未决 = 真环（非法 glTF）
+			for (size_t ni = 0; ni < nodeCount; ++ni)
+				if (!nodeDone[ni]) { nodeWorld[ni] = nodeLocal[ni]; nodeDone[ni] = 1; }
+			if (logger) logger->warn("glTF: node hierarchy has a cycle (illegal) — affected nodes use local TRS only");
+			break;
+		}
+	}
+
 	for (size_t mi = 0; mi < gltf.meshes.size(); ++mi) {
 		const auto& mesh = gltf.meshes[mi];
 		for (const auto& prim : mesh.primitives) {
 			GltfPrimitive out;
 
-			// 所属 node 的 translation（Phase 2：无层级嵌套；rotation/scale 忽略）
+			// 所属 node 世界矩阵（取首个引用该 mesh 的 node；同 mesh 多 node 的实例化暂取首个，
+			// 无 node → identity，见 struct 注释）
 			bool foundNode = false;
-			for (const auto& node : gltf.nodes) {
-				if (node.mesh == static_cast<int>(mi)) {
-					if (node.translation.size() == 3)
-						out.translation = glm::vec3(
-							static_cast<float>(node.translation[0]),
-							static_cast<float>(node.translation[1]),
-							static_cast<float>(node.translation[2]));
+			for (int ni = 0; ni < static_cast<int>(nodeCount); ++ni) {
+				if (gltf.nodes[ni].mesh == static_cast<int>(mi)) {
+					out.nodeWorld = nodeWorld[ni];
 					foundNode = true;
 					break;
 				}
 			}
 			if (!foundNode && logger)
-				logger->warn("glTF: mesh {} has no owning node, translation defaults to 0", mi);
+				logger->warn("glTF: mesh {} has no owning node, nodeWorld defaults to identity", mi);
 
 			// material（baseColorFactor + baseColorTexture + alphaMode + 材质下标——批次 2 去重键；
 			// Phase 4 批次 3：metallic/roughness/unlit 风格字段）
@@ -256,12 +306,13 @@ export [[nodiscard]] std::expected<GltfModel, Error> loadGltfModel(const std::st
 		model.images.push_back(std::move(img));
 	}
 
-	// 包围球（自适应空间范围）：center = 全部顶点世界坐标（含 translation）的质心，
+	// 包围球（自适应空间范围）：center = 全部顶点世界坐标（经 nodeWorld 变换）的质心，
 	// radius = 质心到最远顶点的距离（保守界，任意方向都包住）
 	uint32_t totalVertices = 0;
 	glm::vec3 center{0.0f};
 	for (const auto& p : model.primitives) {
-		for (const auto& v : p.vertices) center += v.position + p.translation;
+		for (const auto& v : p.vertices)
+			center += glm::vec3(p.nodeWorld * glm::vec4(v.position, 1.0f));
 		totalVertices += static_cast<uint32_t>(p.vertices.size());
 	}
 	if (totalVertices > 0) {
@@ -269,7 +320,8 @@ export [[nodiscard]] std::expected<GltfModel, Error> loadGltfModel(const std::st
 		float radius = 0.0f;
 		for (const auto& p : model.primitives)
 			for (const auto& v : p.vertices)
-				radius = std::max(radius, glm::length(v.position + p.translation - center));
+				radius = std::max(radius, glm::length(
+					glm::vec3(p.nodeWorld * glm::vec4(v.position, 1.0f)) - center));
 		model.bounds = {center, radius};
 	}
 

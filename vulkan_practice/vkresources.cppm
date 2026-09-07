@@ -57,7 +57,7 @@ static_assert(kSceneDataEnvOffset == 48 && kSceneDataSkyOffset == 64 &&
 // mat4 列主序 stride：派生自 sizeof(glm::mat4) 而非裸字面量（C++ 侧漂移即编译失败；
 // shader 端 scene.slang 的字面量 64u 须与本值一致——无反射端对应，见 scene.slang 头注释）
 export inline constexpr uint32_t kSceneMatrixStride = sizeof(glm::mat4);
-export inline constexpr uint32_t kSceneMatrixCapacity = 1024;   // 对象矩阵表容量（main 启动期契约检查）
+export inline constexpr uint32_t kSceneMatrixCapacity = 4096;   // 对象矩阵表容量（Phase 7：Bistro 1591 primitive 各一实例，1024 不够；scene data 缓冲随之 256KB）
 export inline constexpr vk::DeviceSize kSceneDataBytes =
 	kSceneDataHeaderBytes + vk::DeviceSize{kSceneMatrixCapacity} * kSceneMatrixStride;
 
@@ -140,12 +140,38 @@ export class Resources {
 		// 重建计数：extent/format 漂移换新图（真实布局回 Undefined）——消费方
 		//（Renderer 布局追踪）据此重置，旧值失配 = spec 违例
 		uint64_t generation = 0;
+		// Phase 7 gap ④：供 deferred light pass 采样的 SAMPLED_IMAGE 描述符链。
+		// heapSlot 首建 allocSlot 分配、跨 resize 复用（重建只换 image/view、槽不变，
+		// 故 light 管线 baked 的槽号永久有效）。描述符指针链（imageDesc.pView→
+		// sampleViewCreate、resourceDesc.data.pImage→imageDesc）存本结构体——std::map
+		// 节点地址稳定，满足 v341 writeResourceDescriptors 指针生命周期前提（同 TextureAsset）
+		uint32_t heapSlot = 0;
+		bool hasSampleDescriptor = false;
+		vk::ImageViewCreateInfo sampleViewCreate{};
+		vk::ImageDescriptorInfoEXT imageDesc{};
+		vk::ResourceDescriptorInfoEXT resourceDesc{};
+		vk::HostAddressRangeEXT dst{};
 	};
 	// 返回稳定指针（map 节点；std::expected 不支持引用类型，AGENTS 规范）
 	[[nodiscard]] std::expected<RtAttachment*, Error> ensureRtAttachment(const std::string& name,
 		vk::Extent2D extent, vk::Format format);
+	// G-buffer RT 的 SAMPLED_IMAGE heap 槽号（ensureRtAttachment 首建分配、跨 resize 复用，
+	// 管线 baked 永久有效）；尚未 ensure 的 RT 名 → nullopt（调用方须先 ensure 该 RT）
+	[[nodiscard]] std::optional<uint32_t> rtHeapSlot(const std::string& name) const {
+		auto it = rtAttachments.find(name);
+		if (it == rtAttachments.end() || !it->second.hasSampleDescriptor)
+			return std::nullopt;
+		return it->second.heapSlot;
+	}
 	// scene data buffer（drawFrame 每帧 staging copy 的目标；未创建 = 空句柄，跳过拷贝）
 	const RGL::VmaBuffer& getSceneDataBuffer() const { return sceneDataBuffer; }
+
+	// Phase 7 D1：确保 deferred G-buffer 4 个 offscreen RT 并返回其 SAMPLED_IMAGE 堆槽
+	//（[0]albedo [1]normal [2]position [3]metalrough）。名字/格式契约与 deferredRenderGraphDesc 一致
+	//（drawFrame 图循环对同名同格式 ensureRtAttachment 命中复用、堆槽跨 resize 复用，light 管线 baked 有效）。
+	// extent = 当前 swapchain。**必须在模型/纹理/env 槽之后调用**（allocSlot 单调游标，早分配破坏
+	// "[2,2+N) 模型顶点槽"布局契约断言——同 env 上传时序契约）。
+	[[nodiscard]] std::expected<std::array<uint32_t, 4>, Error> ensureDeferredGBufferSlots();
 
 	// cube 一等资产（批次 3）：资产记录 = cube 顶点/索引 buffer + slot 的唯一 holder
 	uint32_t cubeAssetId() const { return cubeAsset; }

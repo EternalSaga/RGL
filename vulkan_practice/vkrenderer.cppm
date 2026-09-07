@@ -78,6 +78,11 @@ export class Renderer {
 	// edS3：depth clip 动态状态能力（llm_debug 离屏重渲消费，同主路径同一门，避免两路分歧）
 	[[nodiscard]] bool isDepthClipDynamic() const { return depthClipDynamic; }
 	const RGL::RenderState& getSkyboxState() const { return skyboxState; }
+	// deferred 截图路径（captureFrame）：light pass 存在 = 图含 drawLight（lightPipelineIdx 有效）。
+	// captureFrame 据此走 deferred 分支：复用已填充（SRO）的 G-buffer，只把 light pass 渲进单捕获 RT
+	[[nodiscard]] bool isDeferred() const { return lightPipelineIdx.has_value(); }
+	uint32_t lightPipelineIndex() const { return *lightPipelineIdx; }
+	const RGL::RenderState& getLightState() const { return lightState; }
 	// 等待 GPU 空闲（resize / 重建 swapchain 前调用，确保旧资源不再被使用）
 	void waitForIdle() { vkDevice.getDevice().waitIdle(); }
 	// 渲染一帧：整体流程见类头注释；绘制内容 = 渲染 system 产出的 FrameDrawList
@@ -147,6 +152,11 @@ export class Renderer {
 	// 动态状态：skybox pass（Phase 5.5 批次 4）——不写深度 + LEQUAL（大三角 z=1 只在
 	// 空像素通过），drawFrame() 在 skybox 段首 applyDynamicState 一次
 	RGL::RenderState skyboxState{};
+	// Phase 7 D1：deferred light pass 状态（全屏终图：无深度附件、cull none 保证大三角不被剔、
+	// 不混合），drawFrame() 在 drawLight pass 首 applyDynamicState 一次
+	RGL::RenderState lightState{};
+	// Phase 7 D1：light 管线条目下标（构造期从 registry 取 "light"；图含 drawLight pass 时必填）
+	std::optional<uint32_t> lightPipelineIdx;
 	// 图 pass.state 名 → 动态状态（构造期校验保证图内名字全部可解析，未知名 = 校验
 	// 遗漏的编程错误，抛出）
 	const RGL::RenderState& stateFor(std::string_view name) const;

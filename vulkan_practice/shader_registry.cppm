@@ -74,6 +74,13 @@ export class ShaderRegistry {
 	// 前提 = env 已上传（main 调用点保证）；幂等。
 	[[nodiscard]] uint32_t addSkyEntry();
 
+	// Phase 7 D1：deferred light pass 管线条目（单条目，仿 addSkyEntry）。spec = "light"
+	//（全屏 mesh + 采样 frag）。binding：0/1 占位（light mesh 不声明 = 空转）+ 3 sceneData
+	//（readSceneLight 单灯）+ extra：4-7 → 4 个 G-buffer RT 的 SAMPLED_IMAGE 堆槽、8 → 共享 sampler。
+	// 前提 = 4 G-buffer RT 已 ensureRtAttachment（其堆槽由调用点取入，跨 resize 复用不变）。幂等。
+	[[nodiscard]] uint32_t addLightEntry(uint32_t albedoSlot, uint32_t normalSlot,
+		uint32_t positionSlot, uint32_t metalRoughSlot, uint32_t samplerSlot);
+
 	// 条目下标写回资产记录（启动期一次）
 	void bindToAsset(uint32_t assetId, uint32_t entryIndex) {
 		res.getAssetTable().setPipelineIndex(assetId, entryIndex);
@@ -127,6 +134,17 @@ export class ShaderRegistry {
 				"skybox", "generated_shaders/skybox.mesh.spv",
 				"generated_shaders/skybox.frag.spv"};
 			return &defaultSkybox;
+		}
+		if (std::strcmp(name, "deferred_geometry") == 0) {
+			static const RGL::PipelineSpec defaultDeferredGeom{
+				"deferred_geometry", "generated_shaders/model.mesh.spv",
+				"generated_shaders/deferred_geometry.frag.spv"};
+			return &defaultDeferredGeom;
+		}
+		if (std::strcmp(name, "light") == 0) {
+			static const RGL::PipelineSpec defaultLight{
+				"light", "generated_shaders/light.mesh.spv", "generated_shaders/light.frag.spv"};
+			return &defaultLight;
 		}
 		return nullptr;
 	}

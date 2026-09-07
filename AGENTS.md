@@ -314,10 +314,12 @@ sType 值相同。代码使用 EXT 命名形式，功能等价于 KHR。
   intensity，亮度跨路线不可直接对比（注释见 `env.slang`/`scene.slang`）
 - **Phase 6 渲染图已知边界（雏形定位）**：① 线性 pass 序——无拓扑排序/死 pass 消除/
   pass fusion（同附件连续 pass 各付一次 begin/endRendering + identity barrier，脚本序即
-  GPU 序）；② 无 transient aliasing（RT 常驻不回收，个位数 RT 可接受）；③ offscreen
-  附件 format 暂恒 inherit=swapchain 格式（显式格式/降采样 RT 留后续）；④ sampleRead
-  usage 编译面已支持但执行器未接采样描述符入库（后处理 shader 采样 RT 时补——blit 路
-  已通）；⑤ 执行器 state/drawSource 名字暂只认 opaque/skybox/transparent 三个（新状态
+GPU 序）；② 无 transient aliasing（RT 常驻不回收，个位数 RT 可接受）；③ offscreen
+   附件 format 已支持显式具名格式（Phase 7 批次 1a：`render_graph` 词表 `isKnownRgFormat`/
+   `resolveRgFormat`，12 项 RGBA/RGB/RG/R 各精度 + "inherit"；swapchain/depth 恒 inherit；
+   blit→swapchain 的源仍需 swapchain 同格式类=LINEAR filter VVL 兼容，图作者负责；降采样 RT 留后续）；④ sampleRead
+  RT→heap 接线已落地（Phase 7 D1：`ensureRtAttachment` 写 SAMPLED_IMAGE 描述符 + `rtHeapSlot` 暴露 +
+  `PipelineBindings.extra` 通用映射 → deferred light 管线采样 G-buffer；`RgPassKind::drawLight` 执行器特殊处理）；⑤ 执行器 state/drawSource 名字暂只认 opaque/skybox/transparent 三个（新状态
   = 加 RenderState 成员 + 校验表一行）；⑥ 单 swapchain attachment 约束（present 语义
   单 surface）；⑦ 多线程录制明确不做（Phase 7+ 议）
 - **`LightDataGpu` 字节布局双源、无反射**：`vkresources.cppm` 手写 struct（`static_assert`）↔

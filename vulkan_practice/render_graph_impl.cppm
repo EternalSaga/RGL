@@ -86,6 +86,42 @@ uint32_t countRole(const RgPassDesc& pass, const std::string& name) {
 
 }  // namespace
 
+// 格式词表（小写下划线 → vk::Format，接口注释是语义权威）：表驱动，扩展 = 加一行。
+// "inherit" 不在表内——语义 = 随 swapchain 格式，由 resolveRgFormat 单独短路。
+const std::array<std::pair<std::string_view, vk::Format>, 12>& rgFormatTable() {
+	static const std::array<std::pair<std::string_view, vk::Format>, 12> table = {
+		std::pair{"rgba8_srgb", vk::Format::eR8G8B8A8Srgb},
+		std::pair{"rgba8_unorm", vk::Format::eR8G8B8A8Unorm},
+		std::pair{"b8g8r8a8_srgb", vk::Format::eB8G8R8A8Srgb},
+		std::pair{"rgb8_srgb", vk::Format::eR8G8B8Srgb},
+		std::pair{"rg16_snorm", vk::Format::eR16G16Snorm},
+		std::pair{"rg16_unorm", vk::Format::eR16G16Unorm},
+		std::pair{"rgba16_sfloat", vk::Format::eR16G16B16A16Sfloat},
+		std::pair{"rgb16_sfloat", vk::Format::eR16G16B16Sfloat},
+		std::pair{"r32g32b32_sfloat", vk::Format::eR32G32B32Sfloat},
+		std::pair{"rgba32_sfloat", vk::Format::eR32G32B32A32Sfloat},
+		std::pair{"r32_sfloat", vk::Format::eR32Sfloat},
+		std::pair{"rg32_sfloat", vk::Format::eR32G32Sfloat},
+	};
+	return table;
+}
+
+bool isKnownRgFormat(const std::string& name) {
+	if (name == "inherit")
+		return true;
+	return std::ranges::any_of(rgFormatTable(),
+		[&](const auto& entry) { return entry.first == name; });
+}
+
+vk::Format resolveRgFormat(const std::string& name, vk::Format inheritFallback) {
+	if (name == "inherit")
+		return inheritFallback;
+	for (const auto& [text, format] : rgFormatTable())
+		if (text == name)
+			return format;
+	return vk::Format::eUndefined;  // 不可达（调用方保证已 isKnownRgFormat）
+}
+
 std::expected<CompiledRenderGraph, Error> compileRenderGraph(const RgGraphDesc& desc) {
 	CompiledRenderGraph graph;
 
@@ -102,6 +138,18 @@ std::expected<CompiledRenderGraph, Error> compileRenderGraph(const RgGraphDesc& 
 				rgError(fmt::format("render_graph: duplicate attachment name '{}'", att.name)));
 		if (att.kind == RgAttachmentKind::swapchain && ++swapchainCount > 1)
 			return std::unexpected(rgError("render_graph: more than one swapchain attachment"));
+		// 格式校验：offscreen 允许 "inherit" 或词表具名格式（Phase 7 G-buffer 显式
+		// RT）；swapchain/depth 的格式由执行器固定，只认 "inherit"
+		if (att.kind == RgAttachmentKind::offscreen) {
+			if (!isKnownRgFormat(att.format))
+				return std::unexpected(rgError(fmt::format(
+					"render graph: attachment '{}' has unknown format '{}'", att.name, att.format)));
+		} else if (att.format != "inherit") {
+			return std::unexpected(rgError(fmt::format(
+				"render graph: {} attachment '{}' must use format 'inherit' (got '{}')",
+				att.kind == RgAttachmentKind::swapchain ? "swapchain" : "depth", att.name,
+				att.format)));
+		}
 		graph.attachments.push_back(RgCompiledAttachment{
 			.name = att.name,
 			.kind = att.kind,
@@ -157,6 +205,35 @@ std::expected<CompiledRenderGraph, Error> compileRenderGraph(const RgGraphDesc& 
 				return std::unexpected(rgError(fmt::format(
 					"render_graph: draw pass '{}' cannot declare transferWrite outputs (blit pass only)",
 					pass.name)));
+		} else if (pass.kind == RgPassKind::drawLight) {
+			// Phase 7 D1：light pass——恰一 colorWrite 输出（swapchain）、无 depth 输出（全屏终图）、
+			// inputs 全 sampleRead（采 G-buffer，barrier 由 usage 推导自动产 CAO→SRO）
+			if (pass.state.empty())
+				return std::unexpected(rgError(fmt::format(
+					"render_graph: light pass '{}' requires non-empty state", pass.name)));
+			uint32_t colorWrites = 0, depthWrites = 0;
+			for (const auto& a : pass.outputs) {
+				if (a.usage == RgUsage::colorWrite)
+					++colorWrites;
+				else if (a.usage == RgUsage::depthWrite)
+					++depthWrites;
+				else
+					return std::unexpected(rgError(fmt::format(
+						"render_graph: light pass '{}' output '{}' must be colorWrite", pass.name,
+						a.attachment)));
+			}
+			if (colorWrites != 1)
+				return std::unexpected(rgError(fmt::format(
+					"render_graph: light pass '{}' must have exactly one colorWrite output (got {})",
+					pass.name, colorWrites)));
+			if (depthWrites != 0)
+				return std::unexpected(rgError(fmt::format(
+					"render_graph: light pass '{}' must have no depth output", pass.name)));
+			for (const auto& a : pass.inputs)
+				if (a.usage != RgUsage::sampleRead)
+					return std::unexpected(rgError(fmt::format(
+						"render_graph: light pass '{}' input '{}' must be sampleRead", pass.name,
+						a.attachment)));
 		} else {
 			if (pass.outputs.size() != 1 || pass.inputs.size() != 1 ||
 				pass.outputs[0].usage != RgUsage::transferWrite ||
@@ -424,6 +501,64 @@ const RgGraphDesc& offscreenRenderGraphDesc() {
 	return desc;
 }
 
+const RgGraphDesc& deferredRenderGraphDesc() {
+	// Phase 7 D1：2-pass deferred 图。geometry（drawMesh/opaque 段）渲入 4 G-buffer RT（显式格式）
+	// + depth；light（drawLight）全屏采样 4 RT 写 swapchain。storeOp：G-buffer 全 store（light 读），
+	// 帧首 clear；swapchain light pass clear（全屏覆盖）。present 由 presentTransition 派生。
+	static const RgGraphDesc desc = [] {
+		auto off = [](std::string name, std::string format) {
+			return RgAttachmentDesc{
+				.name = std::move(name), .kind = RgAttachmentKind::offscreen, .format = std::move(format)};
+		};
+		auto out = [](std::string name, RgUsage usage, RgLoadOp load, RgStoreOp store) {
+			return RgPassAttachment{.attachment = std::move(name), .usage = usage, .loadOp = load,
+				.storeOp = store};
+		};
+		return RgGraphDesc{
+			.attachments =
+				{
+					RgAttachmentDesc{.name = "swapchain", .kind = RgAttachmentKind::swapchain},
+					RgAttachmentDesc{.name = "depth", .kind = RgAttachmentKind::depth},
+					off("gbuffer_albedo", "rgba8_srgb"),
+					off("gbuffer_normal", "rg16_snorm"),
+					off("gbuffer_position", "rgba32_sfloat"),
+					off("gbuffer_metalrough", "rgba8_unorm"),
+				},
+			.passes =
+				{
+					RgPassDesc{.name = "geometry", .state = "opaque", .drawSource = "opaque",
+						.outputs =
+							{
+								out("gbuffer_albedo", RgUsage::colorWrite, RgLoadOp::clear,
+									RgStoreOp::store),
+								out("gbuffer_normal", RgUsage::colorWrite, RgLoadOp::clear,
+									RgStoreOp::store),
+								out("gbuffer_position", RgUsage::colorWrite, RgLoadOp::clear,
+									RgStoreOp::store),
+								out("gbuffer_metalrough", RgUsage::colorWrite, RgLoadOp::clear,
+									RgStoreOp::store),
+								out("depth", RgUsage::depthWrite, RgLoadOp::clear, RgStoreOp::store),
+							}},
+					RgPassDesc{.name = "light", .kind = RgPassKind::drawLight, .state = "light",
+						.outputs = {out("swapchain", RgUsage::colorWrite, RgLoadOp::clear,
+							      RgStoreOp::store)},
+						.inputs =
+							{
+								out("gbuffer_albedo", RgUsage::sampleRead, RgLoadOp::load,
+									RgStoreOp::store),
+								out("gbuffer_normal", RgUsage::sampleRead, RgLoadOp::load,
+									RgStoreOp::store),
+								out("gbuffer_position", RgUsage::sampleRead, RgLoadOp::load,
+									RgStoreOp::store),
+								out("gbuffer_metalrough", RgUsage::sampleRead, RgLoadOp::load,
+									RgStoreOp::store),
+							}},
+				},
+		};
+	}();
+	return desc;
+}
+
 std::vector<std::string> renderGraphSelfCheck() {
 	std::vector<std::string> failures;
 	auto expectOk = [&](const char* what, const RgGraphDesc& desc) {
@@ -440,6 +575,9 @@ std::vector<std::string> renderGraphSelfCheck() {
 	auto scAtt = [] { return RgAttachmentDesc{.name = "swapchain"}; };
 
 	expectOk("default", defaultRenderGraphDesc());
+
+	// Phase 7 D1：deferred 图（geometry 4 G-buffer + light sampleRead 采样）应编译通过
+	expectOk("deferred 2-pass", deferredRenderGraphDesc());
 
 	// blit 图：offscreen RT 渲三段 + blit 上屏（批次 4 的转正拓扑）
 	expectOk("offscreen blit", RgGraphDesc{
@@ -505,6 +643,19 @@ std::vector<std::string> renderGraphSelfCheck() {
 		.passes = {RgPassDesc{.name = "a", .state = "opaque", .drawSource = "opaque",
 			.outputs = {colorOut("rt")}}},
 	});
+	// 显式格式（Phase 7 G-buffer 前提）：offscreen 词表具名格式编译通过 / 未知格式拒绝
+	expectOk("offscreen explicit format", RgGraphDesc{
+		.attachments = {RgAttachmentDesc{.name = "gbuffer", .kind = RgAttachmentKind::offscreen,
+			.format = "rgba16_sfloat"}},
+		.passes = {RgPassDesc{.name = "g", .state = "opaque", .drawSource = "opaque",
+			.outputs = {colorOut("gbuffer")}}},
+	});
+	expectErr("offscreen unknown format", RgGraphDesc{
+		.attachments = {RgAttachmentDesc{.name = "gbuffer", .kind = RgAttachmentKind::offscreen,
+			.format = "totally_bogus_format"}},
+		.passes = {RgPassDesc{.name = "g", .state = "opaque", .drawSource = "opaque",
+			.outputs = {colorOut("gbuffer")}}},
+	});
 
 	// 结构断言：默认图 = 3 pass；首 pass 两条 discard 帧首转换；后续 pass 对
 	// color/depth 各发一条 identity barrier（跨 render pass 实例 LOAD 的执行依赖，
@@ -530,6 +681,21 @@ std::vector<std::string> renderGraphSelfCheck() {
 		if (!g.presentTransition ||
 			g.presentTransition->newLayout != vk::ImageLayout::ePresentSrcKHR)
 			failures.push_back("default: missing present transition");
+	}
+	// 格式词表断言：inherit→fallback、具名→映射值（表拼错 = Phase 7 静默错图，
+	// 编译校验查不出，回读值守卫）；membership 判定与 resolve 一致
+	{
+		if (resolveRgFormat("inherit", vk::Format::eB8G8R8A8Srgb) != vk::Format::eB8G8R8A8Srgb)
+			failures.push_back("format: 'inherit' should resolve to fallback");
+		if (resolveRgFormat("rgba16_sfloat", vk::Format::eB8G8R8A8Unorm) !=
+			vk::Format::eR16G16B16A16Sfloat)
+			failures.push_back("format: 'rgba16_sfloat' mapping broken");
+		if (resolveRgFormat("r32g32b32_sfloat", vk::Format::eB8G8R8A8Unorm) !=
+			vk::Format::eR32G32B32Sfloat)
+			failures.push_back("format: 'r32g32b32_sfloat' mapping broken");
+		if (!isKnownRgFormat("inherit") || !isKnownRgFormat("rg16_snorm") ||
+			isKnownRgFormat("totally_bogus_format"))
+			failures.push_back("format: isKnownRgFormat membership broken");
 	}
 	return failures;
 }

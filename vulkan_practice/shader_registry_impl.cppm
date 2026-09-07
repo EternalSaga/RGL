@@ -95,6 +95,41 @@ uint32_t ShaderRegistry::addModelEntry(const std::string& specName, uint32_t ver
 		return index;
 	}
 
+	uint32_t ShaderRegistry::addLightEntry(uint32_t albedoSlot, uint32_t normalSlot,
+			uint32_t positionSlot, uint32_t metalRoughSlot, uint32_t samplerSlot) {
+		if (auto idx = pipelineIndex("light"))
+			return *idx;
+		const RGL::PipelineSpec* spec = findSpec("light");
+		if (!spec)
+			throw std::runtime_error("pipeline spec not found: light");
+		const uint32_t descriptorSize = res.getDescriptorHeap().getDescriptorSize();
+		RGL::PipelineBindings b{};
+		b.descriptorSize = descriptorSize;
+		b.slotVertex = 0;   // binding 0/1 占位（light mesh 不声明 = 空转，skybox 既证）
+		b.slotIndex = 1;
+		b.slotSceneData = res.ensureSceneData();  // binding 3：readSceneLight 单灯
+		b.hasSceneData = true;
+		const uint32_t samplerHeapOffset =
+			samplerSlot * res.getSamplerHeap().getDescriptorSize();
+		// extra：4 G-buffer RT 采样槽（resource heap）+ 共享 sampler（sampler heap）
+		b.extra = {
+			{.binding = 4, .sampler = false, .heapSlot = albedoSlot},
+			{.binding = 5, .sampler = false, .heapSlot = normalSlot},
+			{.binding = 6, .sampler = false, .heapSlot = positionSlot},
+			{.binding = 7, .sampler = false, .heapSlot = metalRoughSlot},
+			{.binding = 8, .sampler = true, .samplerHeapOffset = samplerHeapOffset},
+		};
+		auto entry = PipelineEntry{"light",
+			RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b)};
+		const uint32_t index = static_cast<uint32_t>(entries.size());
+		indexByName[entry.name] = index;
+		entries.push_back(std::move(entry));
+		if (auto* logger = RLLogger::getInstance())
+			logger->debug("pipeline entry: light (gbuffer slots {}/{}/{}/{}) → 下标 {}",
+				albedoSlot, normalSlot, positionSlot, metalRoughSlot, index);
+		return index;
+	}
+
 	void ShaderRegistry::addCubeEntry() {
 		const RGL::PipelineSpec* cubeSpec = findSpec("cube");
 		if (!cubeSpec)

@@ -63,6 +63,9 @@ int main() {
 	// 尺寸 RGL_HEADLESS_SIZE="WxH"（默认 1280x720）。headless 下 llm_debug 截图直接读
 	// swapchain image 回读（compositor 无关）
 	const bool headless = std::getenv("RGL_HEADLESS") != nullptr;
+	// Phase 7 D1：deferred 渲染路线（exclusive，与 forward 二选一）——RGL_DEFERRED=1 选 deferred 图 +
+	// opaque 段用 deferred_geometry 管线 + light pass 采样 G-buffer（须在 env/models 槽后建 G-buffer RT）
+	const bool deferredMode = std::getenv("RGL_DEFERRED") != nullptr;
 	int headlessW = 1280, headlessH = 720;
 	if (const char* hs = std::getenv("RGL_HEADLESS_SIZE")) {
 		if (std::sscanf(hs, "%dx%d", &headlessW, &headlessH) != 2) {
@@ -160,9 +163,11 @@ int main() {
 		// DIAG（RGL_OFFSCREEN，批次 4 转正）：env 置位 = 强制 offscreen 图变体
 		//（三段渲 scene_rt + composite blit 上屏，旧手工通路等价；覆盖 Lua 配置——
 		// 排障开关语义 = 与配置文件无关地切换渲染路线）
-		auto graphDescResult = std::getenv("RGL_OFFSCREEN")
-			? std::expected<RgGraphDesc, Error>{offscreenRenderGraphDesc()}
-			: loadRenderGraphConfig("configs/render_graph.lua");
+		auto graphDescResult = deferredMode
+			? std::expected<RgGraphDesc, Error>{deferredRenderGraphDesc()}
+			: std::getenv("RGL_OFFSCREEN")
+				? std::expected<RgGraphDesc, Error>{offscreenRenderGraphDesc()}
+				: loadRenderGraphConfig("configs/render_graph.lua");
 		if (!graphDescResult) {
 			auto* logger = RLLogger::getInstance();
 			if (logger) logger->error("错误: {}", graphDescResult.error().describe());
@@ -179,8 +184,8 @@ int main() {
 		if (auto* logger = RLLogger::getInstance())
 			logger->info("RenderGraph: {} attachments / {} passes compiled",
 				compiledGraph->attachments.size(), compiledGraph->passes.size());
-		Renderer vkRenderer(vkDevice, vkSwapchain, vkResources, shaderRegistry,
-			std::move(*compiledGraph));
+		// Renderer 构造下移至 deferred G-buffer RT / light 管线就绪之后（deferred 模式需在构造前
+		// addLightEntry 供 Renderer 取 light 管线下标）；compiledGraph 此时保持存活（下方 move 进 Renderer）
 
 		// Phase 5.5 契约：引用 model_pbr_ibl 风格必须配 environment——frag 声明的
 		// binding 4/5 无 mapping 烘焙 = 采样未写描述符（内容未定义；VVL 会抓
@@ -310,7 +315,7 @@ int main() {
 				if (styleIt == sceneConfig.styleMap.end())
 					throw std::runtime_error(fmt::format("style not in scene.lua styles: {}", style));
 				const uint32_t entryIdx = shaderRegistry.addModelEntry(
-					styleIt->second,
+					deferredMode ? std::string("deferred_geometry") : styleIt->second,
 					assets.get(id).heapSlot,  // = 模型拼接顶点 slot（同模型全 primitive 相同）
 					assets.getTexture(primitiveTextureIds[i]).heapSlot,
 					samplerSlot);
@@ -406,6 +411,24 @@ int main() {
 					vkResources.cubeAssetId(), cubeMat,
 					assets.get(vkResources.cubeAssetId()).pipelineIndex);
 		}
+
+		// Phase 7 D1：deferred 资源 + Renderer 构造。时序关键——env/models 全部堆槽已分配，此处才
+		// 分配 G-buffer RT 堆槽（allocSlot 单调，早分配破坏布局契约）+ 建 light 管线，再构造
+		// Renderer（其构造期校验 drawLight pass 有 light 条目）。forward 路径 deferredMode=false 全跳过。
+		if (deferredMode) {
+			auto gbSlots = vkResources.ensureDeferredGBufferSlots();
+			if (!gbSlots) {
+				auto* logger = RLLogger::getInstance();
+				if (logger) logger->error("deferred: G-buffer RT 创建失败: {}", gbSlots.error().describe());
+				return -1;
+			}
+			// light 条目下标由 Renderer 构造期按名 pipelineIndex("light") 取，此处仅需触发建条目
+			[[maybe_unused]] auto lightIdx = shaderRegistry.addLightEntry(
+				(*gbSlots)[0], (*gbSlots)[1], (*gbSlots)[2], (*gbSlots)[3],
+				vkResources.ensureSharedSampler());
+		}
+		Renderer vkRenderer(vkDevice, vkSwapchain, vkResources, shaderRegistry,
+			std::move(*compiledGraph));
 
 		// DIAG（可见窗 fault 排查）：隐藏窗启动、第 showAfter 帧后 SDL_ShowWindow——
 		// 若显示瞬间开始 fault = present/合成期状态触发；若全程不 fault = 可见性非根因
