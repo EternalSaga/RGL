@@ -7,6 +7,7 @@ export module vk_resources;
 import rlstd;
 import rlvk;
 import rllogger;
+import lights_types_generated;  // Phase 7 D3：GpuLight struct + kMaxLights/kGpuLightStride/kSceneDataLightArrayBase
 import VmaRaii;
 import vk_instance;
 import vk_device;
@@ -58,8 +59,19 @@ static_assert(kSceneDataEnvOffset == 48 && kSceneDataSkyOffset == 64 &&
 // shader 端 scene.slang 的字面量 64u 须与本值一致——无反射端对应，见 scene.slang 头注释）
 export inline constexpr uint32_t kSceneMatrixStride = sizeof(glm::mat4);
 export inline constexpr uint32_t kSceneMatrixCapacity = 4096;   // 对象矩阵表容量（Phase 7：Bistro 1591 primitive 各一实例，1024 不够；scene data 缓冲随之 256KB）
+
+// Phase 7 D3：多灯数组区（追加于对象矩阵表之后——@0-128 头逐字节不动，forward/env/sky
+// shader 零改动 diff0）。基址 = 头 + 矩阵表容量；static_assert 钉死与生成常量
+// kSceneDataLightArrayBase（lights_schema.lua）三方同步，任一侧漂移编译失败。
+export inline constexpr uint32_t kSceneDataLightArrayOffset =
+	kSceneDataHeaderBytes + kSceneMatrixCapacity * kSceneMatrixStride;
+static_assert(kSceneDataLightArrayOffset == kSceneDataLightArrayBase,
+	"scene data light-array offset drifted from lights_schema.lua kSceneDataLightArrayBase");
+export inline constexpr uint32_t kSceneDataLightArrayBytes = 16u + kMaxLights * kGpuLightStride;
+
 export inline constexpr vk::DeviceSize kSceneDataBytes =
-	kSceneDataHeaderBytes + vk::DeviceSize{kSceneMatrixCapacity} * kSceneMatrixStride;
+	kSceneDataHeaderBytes + vk::DeviceSize{kSceneMatrixCapacity} * kSceneMatrixStride
+	+ kSceneDataLightArrayBytes;
 
 export class Resources {
    public:

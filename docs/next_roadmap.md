@@ -1,6 +1,6 @@
 # vulkan_practice 路线图
 
-> **状态**：现行（开发路线图；各 Phase 完成情况随提交更新，当前节点 = Phase 6 完成（2026-09-03），待进入 Phase 7）
+> **状态**：现行（开发路线图；各 Phase 完成情况随提交更新，当前节点 = Phase 7 进行中：D1 延迟单灯 `70ce9d1` + D3 多灯/反射完成，批次 4–6 待续）
 
 基于对 legacy 代码痛点的反思和新架构讨论，整理出分阶段开发计划。
 
@@ -497,6 +497,24 @@ Shadow、多灯、OIT/per-pixel 透明排序、MASK alphaTest；scene data 基�
 > 范围决策 D1–D6 待确认、验证矩阵与风险）。**开发日志**（过程/踩坑/当前态滚动记录）：
 > [phase7_devlog.md](phase7_devlog.md)。Bistro Exterior 已转 `assets/bistro_exterior.glb`
 > 作测试主场景（转换管线 `tools/bistro_pack.py`）。
+
+### 实施进度（2026-09-07，D1 里程碑已提交 `70ce9d1`）
+
+| 批次 | 内容 | 状态 | 剩余 |
+|---|---|---|---|
+| **0** Bistro + loader 节点 TRS（forward） | nodeWorld mat4 父链、Bistro forward、packer、CMake、`kSceneMatrixCapacity`↑4096 | **✅ 完成** | normal 绿通道翻 + BC5 Z 重建（→ Phase 8 纹理接缝） |
+| **1** G-buffer MRT + offscreen 显式格式 | `isKnownRgFormat`/`resolveRgFormat` 词表、4-MRT `deferred_geometry`、`RGL_DUMP_GBUF` 直读验 albedo | **✅ 核心完成** | normal/metalRough **纹理**采样（引擎材质仅 baseColor 贴图，→ Phase 8） |
+| **2** Light pass + sampleRead 接线 | SAMPLED_IMAGE 描述符入 heap（K1）、全屏 light pass GGX（抄 model_pbr）、`RGL_DEFERRED` forward/deferred 切换 | **✅ 核心完成** | ①light pass **简化 IBL**（现仅平 ambient）②选路走 `render_graph.lua` 两套 desc（现 env）③**skybox 背景合成**（deferred 图缺 → 背景 clear 黑） |
+| **3** 多灯 + 灯数据并入反射（D3） | `lights.slang`+`lights_schema.lua`+第 4 条反射管线生成 `GpuLight`、scene data 尾区灯数组 @262272（头 @0-128 不动保 forward diff0）、`SceneLights` context + `lights` 配置列表、`light.frag` 逐灯循环 + 点光线性衰减 | **✅ 核心完成** | 灯 entity 化（ECS 规范 3，现 `SceneLights` context）；forward `LightDataGpu@0` 头仍手工双源（为 diff0 未并反射）；shadow map |
+| **4** CPU frustum + AABB culling | `AabbBounds` 组件、6 面提取、逐 entity 剔除、可见统计 | **⬜ 未开工** | 全部 |
+| **5** GPU culling / DGC | `vk_indirect_commands`、compute cull、NVIDIA/RADV 双路 | **⬜ 未开工** | 按 D5 归 **Phase 7b** |
+| **6** 文档销账 | — | **🔶 部分** | 完整销账待 4–5 落地 |
+
+**净结论**：A 块（延迟渲染）**单灯核心（批次 0–2）+ 多灯（批次 3）跑通**——deferred 逐灯循环（定向+点光、
+per-light 颜色、距离衰减）headless 零 VVL error、forward 只读 `lights[0]` diff0 不变（3 灯截图验证：红/青
+点光延迟可见、远景建筑出衰减范围不受点光、forward 无点光）；灯数据经反射管线 4 生成 `GpuLight`（部分清偿
+Phase 5 `LightDataGpu` 双源债）。大头剩余 = 批次 4（CPU culling）/ 批次 5（GPU culling=7b）
++ 批次 2 三个 refine（deferred IBL、Lua 选路、skybox 合成）+ Phase 8 法线/ORM 贴图采样。
 
 ### 目标
 支持延迟渲染路径，与 forward rendering 并存。

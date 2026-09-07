@@ -8,6 +8,7 @@ module render_list:impl;
 import render_list;  // clang 不给 partition impl unit 隐式 import 主接口——必须显式
 import rlstd;
 import material_types_generated;
+import lights_types_generated;
 import frame_draw_list;
 import vk_resources;
 import asset_table;
@@ -24,7 +25,7 @@ void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListS
 	const auto& viewProj = rg.ctx().get<ViewProjection>();
 	const auto& spin = rg.ctx().get<SceneSpin>();
 	const auto& camera = rg.ctx().get<Camera>();
-	const auto& light = rg.ctx().get<Light>();
+	const auto& sceneLights = rg.ctx().get<SceneLights>();  // Phase 7 D3：lights[0]=主光(forward)，全数组=延迟
 	const auto& env = rg.ctx().get<SceneEnv>();  // Phase 5.5（天空盒 draw 生成 + env 参数）
 	const auto& assets = resources.getAssetTable();
 
@@ -91,11 +92,25 @@ void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListS
 
 	// scene data（Phase 5 批次 2）：光方向归一化、color×intensity 预乘、eyePos=相机世界位置；
 	// 对象矩阵表 span 指向 state.matrices（帧局部存储，drawFrame 录制期拷进 staging）
+	// Phase 7 D3：forward 单灯 = lights[0]（scene data @0 头，diff0）；延迟灯数组 = 全 lights
+	//（≤ kMaxLights，尾区 @kSceneDataLightArrayOffset，契约 lights.slang）。
+	const Light primary = sceneLights.lights.empty() ? Light{} : sceneLights.lights[0];
 	fresh.sceneData.light = LightDataGpu{
-		glm::normalize(light.direction),
+		glm::normalize(primary.direction),
 		camera.position,
-		light.color * light.intensity,
-		light.ambient};
+		primary.color * primary.intensity,
+		primary.ambient};
+	const uint32_t nLights = std::min<uint32_t>(
+		static_cast<uint32_t>(sceneLights.lights.size()), kMaxLights);
+	fresh.sceneData.lightCount = nLights;
+	for (uint32_t i = 0; i < nLights; ++i) {
+		const Light& L = sceneLights.lights[i];
+		GpuLight& G = fresh.sceneData.lightArray[i];
+		G.direction = glm::vec4(glm::normalize(L.direction), 0.0f);
+		G.position = glm::vec4(L.position, 0.0f);
+		G.color = glm::vec4(L.color * L.intensity, 0.0f);
+		G.params = glm::vec4(L.range, static_cast<float>(L.type), 0.0f, 0.0f);
+	}
 	// Phase 5.5 env 参数（scene data 头 @48）+ 天空盒 clip→world 矩阵（@64，
 	// inverse(proj·view) 每帧一次——glm 列主序，shader 端列组合读）
 	fresh.sceneData.envParams = {env.intensity, env.mipRange};

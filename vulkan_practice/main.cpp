@@ -130,7 +130,7 @@ int main() {
 		registry.ctx().emplace<SceneBounds>();
 		registry.ctx().emplace<ViewProjection>();
 		registry.ctx().emplace<FrameDrawList>();
-		registry.ctx().emplace<Light>(sceneConfig.light);  // Phase 5 批次 2：定向光（scene.lua light 段）
+		registry.ctx().emplace<SceneLights>(SceneLights{sceneConfig.lights});  // Phase 5 批次 2 / Phase 7 D3 多灯（scene.lua light/lights 段）
 		registry.ctx().emplace<NextObjectSlot>();  // Phase 6 instancing：实例矩阵槽分配器
 		registry.ctx().emplace<SceneEnv>();  // Phase 5.5：环境参数（env 上传成功后回填，见下）
 

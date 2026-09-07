@@ -68,15 +68,26 @@ export struct SceneBounds {
 	float radius{0.0f};
 };
 
-// 定向光（registry context，Phase 5 批次 2；main 启动期从 configs/scene.lua light 段
-// emplace，仿 SceneSpin）。renderListSystem 每帧转成 LightDataGpu 写 scene data
-//（direction 归一化、color×intensity 预乘、eyePos=相机位置，世界空间光照）。
-// 单灯是本期范围（roadmap Phase 5"Directional Light"）；多灯留 Phase 7 延迟光照。
+// 光源（registry context 元素，Phase 5 批次 2 定向光 / Phase 7 D3 加点光）。
+// type=0 定向（direction 有效，世界空间，消费时归一化）；type=1 点光（position 有效，
+// range 线性衰减）。color×intensity 预乘进 GpuLight.color。forward 只读 lights[0]
+// （写 scene data @0 头单灯，diff0）；延迟 light pass 遍历 SceneLights 全数组。
 export struct Light {
-	glm::vec3 direction{0.35f, -1.0f, 0.25f};  // 照射方向（世界空间，消费时归一化）
+	glm::vec3 direction{0.35f, -1.0f, 0.25f};  // 定向光照射方向（世界空间，消费时归一化）
 	glm::vec3 color{1.0f, 0.98f, 0.95f};
 	float intensity = 3.0f;
-	glm::vec3 ambient{0.03f, 0.03f, 0.035f};
+	glm::vec3 ambient{0.03f, 0.03f, 0.035f};   // 场景共享 ambient（仅 lights[0] 生效，进 scene data @36）
+	// Phase 7 D3 点光扩展（定向光默认 type=0 时 position/range 不使用）
+	glm::vec3 position{0.0f};
+	float range = 0.0f;
+	uint32_t type = 0;                          // 0=定向，1=点光
+};
+
+// 场景光源集合（registry context，Phase 7 D3；main 启动期从 configs/scene.lua lights 段
+// emplace，仿 SceneSpin/SceneEnv）。lights[0] = 主光（forward 读它写 scene data @0 头），
+// 全数组 = 延迟 light pass 逐灯光照（≤ kMaxLights）。ECS 规范 3 留后续（灯升格 entity）。
+export struct SceneLights {
+	std::vector<Light> lights;
 };
 
 // 环境贴图参数（registry context，Phase 5.5；main 启动期从 configs/scene.lua

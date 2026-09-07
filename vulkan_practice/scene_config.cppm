@@ -57,6 +57,7 @@ export struct SceneConfig {
 	bool spin = true;                      // 场景整体时间旋转（便于肉眼判断渲染对错）
 	bool showCube = true;                  // 是否渲染硬编码 cube（Phase 1 遗留；模型在场时通常关掉）
 	Light light;                           // Phase 5 批次 2：定向光（scene.lua light 段，可选回落默认）
+	std::vector<Light> lights;             // Phase 7 D3：多灯（scene.lua lights 列表；空则 loadSceneConfig 回落合成 [light]）
 	EnvironmentConfig environment;         // Phase 5.5：环境贴图（scene.lua environment 段，可选缺省）
 };
 

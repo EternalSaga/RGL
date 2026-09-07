@@ -192,3 +192,45 @@ descriptor-无关直读第 N 个 GB RT（copyImageToBuffer）。
 **净结果**：deferred 建筑本体光照与 forward 一致（同 GGX 抄自 model_pbr）；两张差异 = skybox 背景缺失（图未含
 skybox pass）+ metallic 暗（内容）。**下一步选项**：(a) deferred 图加 skybox/env 背景合成（视觉补齐，需处理
 light pass 与背景的深度/合成顺序）；(b) 换亮 diffuse 场景（cube）跑 forward↔deferred 像素比对证等价；(c) 先提交 D1。
+
+---
+
+## 批次 3（2026-09-07）：多灯 + 灯数据并入反射管线（D3）
+
+**设计核心决策**：scene data **@0-128 头逐字节不动**（`LightDataGpu@0` 单灯 = 主光、env@48、sky@64、
+对象矩阵表@128），灯数组**追加于对象矩阵表之后** @`128 + 4096*64 = 262272`。收益 = forward/env/sky 三 shader
+**零改动 diff0**（forward 仍 `readSceneLight()` 读 @0 主光），只新增延迟灯路径读取。代价 = scene data 缓冲
++528B（`kSceneDataBytes` 派生自动扩容，buffer alloc + descriptor range + staging + copy region 全用常量，无硬编码）。
+
+**第 4 条反射管线（lights.slang + lights_schema.lua → lights_types_generated）**：
+- `GpuLight`（4×vec4=64B：direction/position/color(×intensity 预乘)/params(.x=range .y=type 0dir/1point)）
+  经 schema `vertexLayouts` 生成（`vertexLayouts` = 纯 schema 声明的 struct 通道；反射 JSON `parameters` 只出全局
+  资源不出函数返回 struct，故无重复）+ schema `constants` 生成 `kMaxLights=8`/`kGpuLightStride=64`/
+  `kSceneDataLightArrayBase=262272`。
+- **三方同步 static_assert**：`vkresources.cppm` 计算 `kSceneDataLightArrayOffset = kSceneDataHeaderBytes +
+  kSceneMatrixCapacity*kSceneMatrixStride` == 生成常量 `kSceneDataLightArrayBase`（任一侧漂移编译失败）。
+- **CMake 三处登记**（漏一处即 "module not found"）：`reflect` 管线 PRE_BUILD 生成 + `REFLECTION_PAIRS` 校验 +
+  **`target_sources FILE_SET CXX_MODULES` 加 `${LIGHTS_CPPM}`**（新增生成模块必须登记，否则 importer 找不到 BMI——
+  本次踩过）。
+- **Slang 全局常量必须 `static const`**（`const uint X = ..` 报 E31224）。
+
+**灯数据通路（CPU→GPU）**：`SceneFrameData` +`lightCount` +`std::array<GpuLight,kMaxLights>`；`render_list_impl`
+从 `SceneLights` context（`lights[0]`=主光写 @0 头保 forward，全数组写尾区，clamp≤kMaxLights）；`vkrenderer_impl`
+staging 写 `count@base` + `GpuLight[n]@base+16`（防御 lightCount>kMaxLights）。`light.frag` 改 `readLightCount()` +
+逐灯 `readGpuLight(i)`：定向 `L=-direction` atten=1，点光 `L=(pos-P)/dist` atten=`clamp(1-dist/range)`（range=0→0），
+共享 `eyePos@12`/`ambient@36` 仍走 `readSceneLight()`。
+
+**配置（scene.lua `lights` 列表，可选回落 `[light]` 单灯）**：逐字段可选（direction/position/color/intensity/
+range/type）；缺段 = 旧单灯兼容合成（`lights[0]=cfg.light`）→ **forward diff0 结构保证**（无 lights 段时行为不变）。
+
+**3 灯截图验证**（Bistro，主定向 + 红点光 + 青点光，range 2.5）：
+- deferred：红光洗近处建筑、青光染左上楼顶、**右侧远处建筑灰白**（出 2.5 衰减范围只剩定向+ambient）
+  → 多灯累加 + per-light 颜色 + **距离衰减**三者正确，headless 零 VVL error。
+- forward（同 3 灯配置）：**无红/青点光**（只渲 lights[0] 定向）→ forward 只读主光、diff0 语义确认。
+
+**债清偿程度**：`GpuLight` 灯数组入反射（schema 生成布局常量，替 LightDataGpu 双源模式的**新增灯数据部分**）；
+但 forward `LightDataGpu@0-48` 头仍手写双源（为 diff0 刻意不并），灯仍 `SceneLights` context 未 entity 化
+（ECS 规范 3 留后续）。AGENTS.md 同步：反射管线 4→5、新增 `lights_types_generated` 模块行 + `lights.slang`
+关键文件行、`LightDataGpu` 已知问题改"灯数组已入反射/前向头仍双源"。
+
+**下一步**：批次 4（CPU frustum + AABB culling，`AabbBounds` 组件 + 逐 entity 剔除 + 可见统计）。

@@ -20,7 +20,7 @@ just config gcc Debug    # 指定编译器和构建类型
 just build               # 增量编译（需先 config）
 just build-release       # 一键配置 + 编译 Release
 just build-debug         # 一键配置 + 编译 Debug
-just reflect             # 重跑 4 条反射管线（改动 shader 契约/schema/模板后必须；见"着色器编译"）
+just reflect             # 重跑 5 条反射管线（改动 shader 契约/schema/模板后必须；见"着色器编译"）
 just run                 # 运行程序（自动检测：AMD VGA 存在时设置 RADV_EXPERIMENTAL=heap）
 just run-igpu            # 强制核显（AMD 集显原生渲染，无 offload）
 just run-dgpu            # 强制独显（NVIDIA prime offload，PROVIDER=3）
@@ -197,6 +197,7 @@ Phase 演进历史见 `docs/next_roadmap.md` 对应小节。
 | `types_generated` | generated/types_generated.cppm | auto-generated（just reflect 生成、产物已提交；反射管线 1）：`HeapSlotVertexOffset`/`HeapSlotIndexOffset`（相对 reserved range 起点偏移，运行时 slot = `reservedSlots() + offset`） |
 | `model_types_generated` | generated/model_types_generated.cppm | auto-generated（just reflect 生成、产物已提交；反射管线 2：`model.slang`+`model_schema.lua`）：`ModelVertex`、`HeapSlotModelVertexBase`、契约常量 `kTrianglesPerGroup`（schema `constants` 段，shader 端字面量必须一致） |
 | `material_types_generated` | generated/material_types_generated.cppm | auto-generated（just reflect 生成、产物已提交；反射管线 3：`material.slang`+`material_schema.lua`）：统一 push constant 超集 `DrawArgs`（scalar 布局 100B：mvp/totalTriangles/vertexOffset/baseColor/roughnessMetallic/objectIndex，所有风格共享，static_assert 钉死） |
+| `lights_types_generated` | generated/lights_types_generated.cppm | auto-generated（just reflect 生成、产物已提交；反射管线 4：`lights.slang`+`lights_schema.lua`）：多灯 `GpuLight`（4×vec4=64B：direction/position/color/params(.x=range .y=type)，static_assert 钉死）+ 契约常量 `kMaxLights`/`kGpuLightStride`/`kSceneDataLightArrayBase`（scene data 尾区灯数组，追加于对象矩阵表之后 @262272；forward `LightDataGpu@0` 头不动） |
 | `features_generated` | generated/features_generated.cppm | auto-generated（just reflect 生成、产物已提交；`reflection_tool render` + `features_config.json`）：`FeatureChain`、`buildRequestedFeatures()`、`validateFeatures()` |
 
 `main.cpp` 启动流：加载 camera/scene 配置（**先于建窗**：llm/headless 模式影响窗口）+
@@ -244,7 +245,7 @@ main.cpp 按逆序析构（RAII）。依赖图原则：只允许下层 import �
   忘跑 reflect = 构建 FATAL 指路（产物过期静默错配比构建慢危险）。
   工具链 `EXCLUDE_FROM_ALL`，日常/全新构建不再付 ~14s 串行前缀
 - Profile: `sm_6_6+spirv_1_6`，capability: `spvDescriptorHeapEXT`
-- **Scalar Block Layout（定案）**：所有 slangc 编译（3 条反射管线 + `compile_slang` 实际 SPV）
+- **Scalar Block Layout（定案）**：所有 slangc 编译（4 条反射管线 + `compile_slang` 实际 SPV）
   统一 `-fvk-use-scalar-layout`——push constant 用 scalar（C 自然）布局，C++ struct（glm 自然
   对齐 4）与 shader 逐字段偏移天然一致、零 padding（`DrawArgs` 100B）。前提：`scalarBlockLayout`
   feature 已启用（`features_config.json` + `validateFeatures` 校验）。**反射与 SPV 两处 flag
@@ -283,6 +284,7 @@ sType 值相同。代码使用 EXT 命名形式，功能等价于 KHR。
 | `shaders/material.slang` | **统一 push constant 契约**：`DrawArgs` 超集单一真相源 → `material_schema.lua` 校验 → `material_types_generated`；mesh shader 同时 import 本文件与自身契约 |
 | `shaders/scene.slang` | **场景级 bindless 数据契约**：`ByteAddressBuffer sceneData`（binding 3）+ `readSceneLight`/`readObjectMatrix`（矩阵表 @128）/`worldPos`/`worldNormal`；字节布局真相源 = vkresources `LightDataGpu`/`kSceneData*`，字面量必须手工一致（无反射端）；仅光照风格 import |
 | `shaders/env.slang` / `shaders/sky.slang` | **env cubemap 契约**（binding 4/5 + `readEnvParams()` @48，仅 `model_pbr_ibl`/`skybox.frag` import）/ **天空盒契约**（`skyClipToWorld()` 读 @64 invViewProj 重建世界射线，免 resolution） |
+| `shaders/lights.slang` | **多灯数据契约**（Phase 7 D3，反射管线 4）：`struct GpuLight`（4×vec4=64B）+ `readLightCount()`/`readGpuLight(i)` 读 scene data 尾区灯数组 @`kSceneDataLightArrayBase`(262272)，`static const` 常量与 `lights_types_generated` 同步；`light.frag.slang` import（deferred 逐灯循环），forward 不 import（仍读 scene.slang @0 单灯头） |
 | `shaders/model_pbr.frag` / `model_phong.frag` / `model_pbr_ibl.frag` | 三条 frag 路线：简化 PBR（GGX，世界空间光照）/ 基础 Phong（Blinn）/ PBR+简化 IBL（env 采样替换 ambient）；同 mesh SPV 同 `DrawArgs`，`scene.lua styles.pbr` 一行切换 |
 | `shaders/skybox.mesh` + `skybox.frag` | 天空盒：mesh 单 group 输出全屏大三角（NDC z=1=far，不读 buffer，binding 0/1 占位空转）；frag 射线采 envMap |
 | `shaders/model_schema.lua` `constants` | 契约常量单一真相源（`kTrianglesPerGroup`）：schema 声明 → 生成 constexpr，`model.mesh.slang` 字面量必须一致（无反射端对应） |
@@ -322,10 +324,12 @@ GPU 序）；② 无 transient aliasing（RT 常驻不回收，个位数 RT 可�
   `PipelineBindings.extra` 通用映射 → deferred light 管线采样 G-buffer；`RgPassKind::drawLight` 执行器特殊处理）；⑤ 执行器 state/drawSource 名字暂只认 opaque/skybox/transparent 三个（新状态
   = 加 RenderState 成员 + 校验表一行）；⑥ 单 swapchain attachment 约束（present 语义
   单 surface）；⑦ 多线程录制明确不做（Phase 7+ 议）
-- **`LightDataGpu` 字节布局双源、无反射**：`vkresources.cppm` 手写 struct（`static_assert`）↔
-  `shaders/scene.slang` 字节字面量手工一致——唯一绕过反射管线的主要 CPU↔GPU struct 契约；
-  单灯固定布局下风险可控，Phase 7 多灯布局重设计时并入反射管线（schema 声明→生成布局常量，
-  同 `model_schema.lua` `constants` 段先例），灯同时升格为灯 entity + 组件（ECS 规范 3）
+- **`LightDataGpu` 前向头双源、无反射（灯数组已入反射）**：Phase 7 D3 多灯数组 `GpuLight` 已入
+  反射管线 4（`lights.slang`+`lights_schema.lua` → `lights_types_generated`，schema 声明生成布局常量），
+  但 **forward 单灯头 `LightDataGpu@0-48`（direction/eyePos/color/ambient）仍是 `vkresources.cppm`
+  手写 struct ↔ `shaders/scene.slang` 字节字面量手工一致**——为保 forward diff0 未并入反射；
+  灯数组追加于对象矩阵表之后 @262272（`kSceneDataLightArrayBase`，static_assert 与生成常量同步）。
+  灯尚未升格为灯 entity + 组件（ECS 规范 3，留后续），当前经 `SceneLights` context（lights[0]=主光）
 - `configs/` 增量拷贝（`copy_if_different`）只认"源文件更新"：build 端副本被破坏/截断
   （mtime 更新）不会自动恢复，需手动拷贝或 `just clean`
 

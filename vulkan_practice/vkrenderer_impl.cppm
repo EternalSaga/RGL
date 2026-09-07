@@ -22,6 +22,7 @@ import vulkan_utils;
 import VmaRaii;
 import frame_draw_list;
 import model_types_generated;
+import lights_types_generated;
 import features;
 import render_graph;
 
@@ -286,11 +287,18 @@ std::expected<void, Error> Renderer::recreateSwapchainAndDepth(const char* conte
 		// Phase 5.5 批次 4：skyboxInvViewProj 写 @64（sky.slang skyClipToWorld 消费）
 		std::memcpy(stage + kSceneDataSkyOffset, &list.sceneData.skyInvViewProj, sizeof(glm::mat4));
 		const auto matricesBytes = list.sceneData.objectMatrices.size() * sizeof(glm::mat4);
-		if (matricesBytes > kSceneDataBytes - kSceneDataHeaderBytes)
+		if (matricesBytes > kSceneMatrixCapacity * kSceneMatrixStride)
 			return std::unexpected(Error{ErrorCode::Unknown,
 				"scene objectMatrices exceeds capacity (Phase 5 contract, main startup check bypassed)"});
 		std::memcpy(stage + kSceneDataHeaderBytes, list.sceneData.objectMatrices.data(),
 			matricesBytes);
+		// Phase 7 D3：多灯数组写尾区（count@base + GpuLight[count]@base+16；lightCount=0 只写 count）
+		if (list.sceneData.lightCount > kMaxLights)
+			return std::unexpected(Error{ErrorCode::Unknown,
+				"scene lightCount exceeds kMaxLights (lights_schema.lua contract)"});
+		std::memcpy(stage + kSceneDataLightArrayOffset, &list.sceneData.lightCount, sizeof(uint32_t));
+		std::memcpy(stage + kSceneDataLightArrayOffset + 16, list.sceneData.lightArray.data(),
+			list.sceneData.lightCount * kGpuLightStride);
 	}
 
 	// ④ 数据通路固定段（Phase 6 起不入图——非 attachment 状态同步，见 render_graph.cppm

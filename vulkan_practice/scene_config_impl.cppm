@@ -163,6 +163,34 @@ SceneConfig defaultSceneConfig() {
 			cfg.light.ambient = readVec3(light, "ambient", cfg.light.ambient);
 		}
 
+		// Phase 7 D3：lights 列表（多灯，延迟 light pass 遍历；缺段回落 [light] 单灯）。
+		// 逐字段可选回落 Light 默认。type=0 定向（direction）/ 1 点光（position+range）。
+		// ambient 是场景共享项（仅 lights[0] 进 scene data @36），故 per-light 不解析 ambient。
+		sol::table lights = root["lights"];
+		if (lights.valid() && lights.is<sol::table>()) {
+			for (uint32_t i = 1;; ++i) {
+				sol::table lt = lights[i];
+				if (!lt.valid() || !lt.is<sol::table>())
+					break;
+				Light L;
+				L.direction = readVec3(lt, "direction", L.direction);
+				L.position = readVec3(lt, "position", L.position);
+				L.color = readVec3(lt, "color", L.color);
+				sol::optional<float> intensity = lt["intensity"];
+				if (intensity)
+					L.intensity = *intensity;
+				sol::optional<float> range = lt["range"];
+				if (range)
+					L.range = *range;
+				sol::optional<int> type = lt["type"];
+				if (type)
+					L.type = static_cast<uint32_t>(*type);
+				cfg.lights.push_back(L);
+			}
+		}
+		if (cfg.lights.empty())
+			cfg.lights.push_back(cfg.light);  // 回落：旧单灯 light 段合成主光（lights[0]）
+
 		// Phase 5.5：environment 段（环境 cubemap，缺段 = 不启用；faces 按 Vulkan 层序
 		// 0-5 排列，见 EnvironmentConfig 注释）
 		sol::table envTable = root["environment"];

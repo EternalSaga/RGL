@@ -4,6 +4,7 @@ export module frame_draw_list;
 
 import rlstd;
 import vk_resources;
+import lights_types_generated;
 
 namespace RGL {
 
@@ -36,6 +37,11 @@ export struct SceneFrameData {
 	// = inverse(proj·view)，renderListSystem 每帧从 ViewProjection 推导）
 	glm::mat4 skyInvViewProj{1.0f};
 	std::span<const glm::mat4> objectMatrices;
+	// Phase 7 D3：多灯数组（scene data 尾区 kSceneDataLightArrayOffset，4B count@base +
+	// GpuLight[count]@base+16，契约见 lights.slang / lights_schema.lua）。lightCount=0 时
+	// 该区不写。forward 仍走 .light（@0 头单灯），二者独立填。
+	uint32_t lightCount = 0;
+	std::array<GpuLight, kMaxLights> lightArray{};
 };
 
 // 每帧绘制列表：顺序 = 绘制顺序（Phase 5 透明排序已落地：不透明段在前、透明段按

@@ -56,13 +56,18 @@ set(MATERIAL_SCHEMA "${CMAKE_CURRENT_SOURCE_DIR}/shaders/material_schema.lua")
 set(MATERIAL_REFLECTION_JSON "${GEN_SRC_DIR}/material_reflection.json")
 set(MATERIAL_CPPM "${GEN_SRC_DIR}/material_types_generated.cppm")
 
+set(LIGHTS_SLANG "${CMAKE_CURRENT_SOURCE_DIR}/shaders/lights.slang")
+set(LIGHTS_SCHEMA "${CMAKE_CURRENT_SOURCE_DIR}/shaders/lights_schema.lua")
+set(LIGHTS_REFLECTION_JSON "${GEN_SRC_DIR}/lights_reflection.json")
+set(LIGHTS_CPPM "${GEN_SRC_DIR}/lights_types_generated.cppm")
+
 set(FEATURES_CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/features_config.json")
 set(FEATURES_TEMPLATE "${CMAKE_SOURCE_DIR}/tools/templates/features_cppm.inja")
 set(FEATURES_CPPM "${GEN_SRC_DIR}/features_generated.cppm")
 
 # reflect：显式重建全部反射产物（工具由 add_dependencies 先建；管线无条件重跑）。
 add_custom_target(reflect
-    COMMENT "重跑 4 条反射管线（slangc reflection + validate + generate/render）")
+    COMMENT "重跑 5 条反射管线（slangc reflection + validate + generate/render）")
 add_dependencies(reflect reflection_tool)
 # types 管线
 add_custom_command(TARGET reflect PRE_BUILD
@@ -91,6 +96,15 @@ add_custom_command(TARGET reflect PRE_BUILD
     COMMAND reflection_tool generate --json ${MATERIAL_REFLECTION_JSON} --schema ${MATERIAL_SCHEMA}
             --output ${MATERIAL_CPPM} --module-name material_types_generated --template ${TYPES_TEMPLATE}
     VERBATIM)
+# lights 管线（Phase 7 D3：多灯 GpuLight struct + kMaxLights/布局常量）
+add_custom_command(TARGET reflect PRE_BUILD
+    COMMAND ${SLANGC_EXECUTABLE} ${LIGHTS_SLANG} ${SLANG_FLAGS}
+            -I "${CMAKE_CURRENT_SOURCE_DIR}/shaders" -no-codegen
+            -reflection-json ${LIGHTS_REFLECTION_JSON}
+    COMMAND reflection_tool validate --json ${LIGHTS_REFLECTION_JSON} --schema ${LIGHTS_SCHEMA}
+    COMMAND reflection_tool generate --json ${LIGHTS_REFLECTION_JSON} --schema ${LIGHTS_SCHEMA}
+            --output ${LIGHTS_CPPM} --module-name lights_types_generated --template ${TYPES_TEMPLATE}
+    VERBATIM)
 # features 管线（config JSON → 模板渲染，无 slangc 步骤）
 add_custom_command(TARGET reflect PRE_BUILD
     COMMAND reflection_tool render --json ${FEATURES_CONFIG}
@@ -112,6 +126,7 @@ set(REFLECTION_PAIRS
     "${TYPES_CPPM}|${TYPES_SLANG},${TYPES_SCHEMA},${TYPES_TEMPLATE},${TYPES_REFLECTION_JSON}"
     "${MODEL_CPPM}|${MODEL_SLANG},${MODEL_SCHEMA},${TYPES_TEMPLATE},${MODEL_REFLECTION_JSON}"
     "${MATERIAL_CPPM}|${MATERIAL_SLANG},${MATERIAL_SCHEMA},${TYPES_TEMPLATE},${MATERIAL_REFLECTION_JSON}"
+    "${LIGHTS_CPPM}|${LIGHTS_SLANG},${LIGHTS_SCHEMA},${TYPES_TEMPLATE},${LIGHTS_REFLECTION_JSON}"
     "${FEATURES_CPPM}|${FEATURES_CONFIG},${FEATURES_TEMPLATE}")
 string(REPLACE ";" "\n" _pairs_src "${REFLECTION_PAIRS}")
 file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/reflection_pairs.cmake CONTENT "
@@ -287,10 +302,11 @@ target_sources(vulkan_practice PUBLIC
                       gltf_loader.cppm model_importer.cppm texture_pool.cppm texture_upload.cppm scene.cppm llm_debug.cppm
                       llm_debug_impl.cppm vkrenderer_impl.cppm render_graph_impl.cppm render_graph_config_impl.cppm model_importer_impl.cppm texture_upload_impl.cppm camera_config_impl.cppm scene_config_impl.cppm render_list_impl.cppm gpu_canary_impl.cppm ecs_impl.cppm vkresources_impl.cppm shader_registry_impl.cppm
                       gpu_canary.cppm
-                       ${TYPES_CPPM}
-                       ${MODEL_CPPM}
-                       ${MATERIAL_CPPM}
-                       ${FEATURES_CPPM}
+                        ${TYPES_CPPM}
+                        ${MODEL_CPPM}
+                        ${MATERIAL_CPPM}
+                        ${LIGHTS_CPPM}
+                        ${FEATURES_CPPM}
 )
 
 add_dependencies(vulkan_practice reflection_check)
