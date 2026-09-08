@@ -32,7 +32,7 @@ float4 main(ModelVertexOutput input) : SV_Target
 
     // GGX 法线分布（epsilon 相对化 1e-7·a2：绝对 epsilon 在光滑端淹没真实分母
     // π·d²（r=0.04 时仅 ~2e-11），把高光峰值削掉 ~5000 倍且使 D(1) 对 roughness
-    // 非单调——抛光金属变天鹅绒。教训见 docs/教程拆解发现_20260902.md ①）
+    // 非单调——抛光金属变天鹅绒。教训见 docs/archive/教程拆解发现_20260902.md ①）
     float a = roughness * roughness;
     float a2 = a * a;
     float d = NdotH * NdotH * (a2 - 1.0) + 1.0;

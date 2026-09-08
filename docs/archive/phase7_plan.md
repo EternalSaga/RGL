@@ -1,7 +1,8 @@
 # Phase 7 实施计划：延迟渲染 + Culling（与 forward 并存）
 
-> **状态**：计划（未开工，2026-09-07 起草）。现状权威记录以 [AGENTS.md](../AGENTS.md) +
-> [next_roadmap.md](../next_roadmap.md) Phase 7 为准；本文件是开工前的分批拆解与验收设计。
+> **状态**：计划（2026-09-07 起草；**批次 0–4 已落地** `70ce9d1`/`ed38446`/`4c30298`，进度权威 =
+> [next_roadmap.md](../next_roadmap.md) Phase 7 表 + [phase7_devlog.md](../phase7_devlog.md)；
+> 批次 5（=7b GPU culling）计划面仍有效）。本文件是开工前的分批拆解与验收设计。
 > 完成后本文件转 `历史`，Phase 7 完成情况回写 next_roadmap。
 
 ## 0. 定位与总原则

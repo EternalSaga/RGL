@@ -206,7 +206,7 @@ int main() {
 					"(env descriptor unmapped = undefined sampling)", iblStyles));
 		}
 		// Phase 5.5 环境 cubemap（scene.lua environment 段，faces 按 Vulkan 层序 0-5，
-		// 定案表 docs/phase5_5_plan.md）。**调用时序契约**：必须在模型顶点槽 + 纹理槽
+		// 定案表 docs/archive/phase5_5_plan.md）。**调用时序契约**：必须在模型顶点槽 + 纹理槽
 		// 全部按布局分配完之后（allocSlot 单调游标——插在之前会挤占白纹理契约槽
 		// "reserved + 2 + 模型顶点槽数"，断言漂移启动报错，2026-09-01 实测踩坑），
 		// 且先于 addModelEntry（其查 getEnvTexture 烘焙 binding 4/5）。
@@ -226,14 +226,14 @@ int main() {
 
 		// CPU 解析 + GPU 上传 + 纹理 + ECS 注册：资产数据（buffer/slot/三角形数/管线条目引用、
 		// 纹理资产、材质资产）全部在 Resources 资产表（初始化层 owner，生命周期不依赖
-		// main 作用域——TexturePool 局部对象 UAF 教训，docs/heap_texture_research.md §12.6/§12.7）
+		// main 作用域——TexturePool 局部对象 UAF 教训，docs/archive/heap_texture_research.md §12.6/§12.7）
 		// Phase 6 批次 5：scene.lua entities 列表 = 场景构成数据源（画不画 = entity 有无，
 		// ECS 规范 3；缺段兼容合成见 scene_config loader）。三段时序：A 解析 + GPU 上传
 		// 全部模型（顶点/纹理槽 allocSlot 单调分配）→ B env 上传（**时序契约 = 全部纹理
 		// 槽后、管线烘焙前**，挤占白纹理契约槽 = 启动断言，2026-09-01 踩坑）→ C 管线烘焙
 		// + ECS 注册。CPU 解析产物（GltfModel）活到 C（unique_ptr 稳定地址）；资产数据
 		// （buffer/slot/纹理/材质）全部在 Resources 资产表（初始化层 owner——TexturePool
-		// 局部对象 UAF 教训，docs/heap_texture_research.md §12.6/§12.7）
+		// 局部对象 UAF 教训，docs/archive/heap_texture_research.md §12.6/§12.7）
 		auto makeRootTransform = [](const SceneEntityDesc& ent) {
 			glm::mat4 t = glm::translate(glm::mat4(1.0f), ent.position);
 			t = glm::rotate(t, glm::radians(ent.rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));

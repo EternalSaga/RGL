@@ -1,7 +1,7 @@
 // heap_texture_spike — Phase 3 预研：descriptor heap 中存 SAMPLED_IMAGE 描述符 +
 // 内嵌 sampler（pEmbeddedSampler）+ shader object 采样纹理，离屏渲染 + 像素回读验证。
 //
-// 回答的问题（spec 调研见 docs/heap_texture_research.md）：
+// 回答的问题（spec 调研见 docs/archive/heap_texture_research.md）：
 //   Q1. vkGetPhysicalDeviceDescriptorSizeEXT(SAMPLED_IMAGE) vs bufferDescriptorSize
 //       —— 现有 slot 寻址（slot * bufferDescriptorSize）能否直接容纳 image 描述符？
 //   Q2. imageDescriptorAlignment vs bufferDescriptorAlignment / descriptorSize

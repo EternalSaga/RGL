@@ -1,6 +1,6 @@
 # ─── Slang 编译器：FetchContent 拉取官方预构建（替代 vcpkg shader-slang port）────────────────
 # vcpkg shader-slang port 停在 2026.7.1（上游 master 亦同，Slang 月更，落后 9+ release），
-# 见 docs/heap_texture_research.md §九.4。此处 pin 版本 + sha256 下载 Slang 官方
+# 见 docs/archive/heap_texture_research.md §九.4。此处 pin 版本 + sha256 下载 Slang 官方
 # GitHub release 的 Linux 预构建包（解压到 build/_deps/slang-prebuilt-src/，bin/slangc）。
 #
 # 用法：include(cmake/SlangFetch.cmake) 后调用 rgl_fetch_slang()

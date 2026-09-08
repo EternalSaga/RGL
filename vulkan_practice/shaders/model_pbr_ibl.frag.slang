@@ -36,7 +36,7 @@ float4 main(ModelVertexOutput input) : SV_Target
     float VdotH = saturate(dot(V, H));
 
     // GGX 法线分布（epsilon 相对化 1e-7·a2，与 model_pbr 一致：绝对 epsilon 在光滑端
-    // 淹没真实分母把高光峰值削掉 ~5000 倍且使 D(1) 非单调，见 docs/教程拆解发现_20260902.md ①）
+    // 淹没真实分母把高光峰值削掉 ~5000 倍且使 D(1) 非单调，见 docs/archive/教程拆解发现_20260902.md ①）
     float a = roughness * roughness;
     float a2 = a * a;
     float d = NdotH * NdotH * (a2 - 1.0) + 1.0;
