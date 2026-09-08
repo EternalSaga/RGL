@@ -91,6 +91,8 @@ endforeach()
 if(stale)
     message(FATAL_ERROR
         "反射输入已变更，生成产物过期：${stale}\n"
+        "注：SHA1 按文件字节算，连注释/空格的改动都会触发（不代表语义变更）；"
+        "纯注释改动 just reflect 后产物通常仅清单哈希更新、生成码位级不变。\n"
         "修复：just reflect（重跑 slangc 反射 + reflection_tool），并把 "
         "vulkan_practice/generated/ 下的产物与清单一起提交")
 endif()
