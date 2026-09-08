@@ -506,55 +506,36 @@ const RgGraphDesc& deferredRenderGraphDesc() {
 	// + depth；light（drawLight）全屏采样 4 RT 写 swapchain。storeOp：G-buffer 全 store（light 读），
 	// 帧首 clear；swapchain light pass clear（全屏覆盖）。present 由 presentTransition 派生。
 	static const RgGraphDesc desc = [] {
-		auto off = [](std::string name, std::string format) {
-			return RgAttachmentDesc{
-				.name = std::move(name), .kind = RgAttachmentKind::offscreen, .format = std::move(format)};
-		};
 		auto out = [](std::string name, RgUsage usage, RgLoadOp load, RgStoreOp store) {
 			return RgPassAttachment{.attachment = std::move(name), .usage = usage, .loadOp = load,
 				.storeOp = store};
 		};
-		return RgGraphDesc{
+		RgGraphDesc d{
 			.attachments =
 				{
 					RgAttachmentDesc{.name = "swapchain", .kind = RgAttachmentKind::swapchain},
 					RgAttachmentDesc{.name = "depth", .kind = RgAttachmentKind::depth},
-					off("gbuffer_albedo", "rgba8_srgb"),
-					off("gbuffer_normal", "rg16_snorm"),
-					off("gbuffer_position", "rgba32_sfloat"),
-					off("gbuffer_metalrough", "rgba8_unorm"),
-				},
-			.passes =
-				{
-					RgPassDesc{.name = "geometry", .state = "opaque", .drawSource = "opaque",
-						.outputs =
-							{
-								out("gbuffer_albedo", RgUsage::colorWrite, RgLoadOp::clear,
-									RgStoreOp::store),
-								out("gbuffer_normal", RgUsage::colorWrite, RgLoadOp::clear,
-									RgStoreOp::store),
-								out("gbuffer_position", RgUsage::colorWrite, RgLoadOp::clear,
-									RgStoreOp::store),
-								out("gbuffer_metalrough", RgUsage::colorWrite, RgLoadOp::clear,
-									RgStoreOp::store),
-								out("depth", RgUsage::depthWrite, RgLoadOp::clear, RgStoreOp::store),
-							}},
-					RgPassDesc{.name = "light", .kind = RgPassKind::drawLight, .state = "light",
-						.outputs = {out("swapchain", RgUsage::colorWrite, RgLoadOp::clear,
-							      RgStoreOp::store)},
-						.inputs =
-							{
-								out("gbuffer_albedo", RgUsage::sampleRead, RgLoadOp::load,
-									RgStoreOp::store),
-								out("gbuffer_normal", RgUsage::sampleRead, RgLoadOp::load,
-									RgStoreOp::store),
-								out("gbuffer_position", RgUsage::sampleRead, RgLoadOp::load,
-									RgStoreOp::store),
-								out("gbuffer_metalrough", RgUsage::sampleRead, RgLoadOp::load,
-									RgStoreOp::store),
-							}},
 				},
 		};
+		RgPassDesc geometry{.name = "geometry", .state = "opaque", .drawSource = "opaque"};
+		RgPassDesc light{.name = "light", .kind = RgPassKind::drawLight, .state = "light"};
+		// 4 G-buffer 附件（名字/格式 = kGBufferAttachments 单一真相源，geometry 写序 =
+		// light 读序 = light.frag binding 4-7）
+		for (const auto& gb : kGBufferAttachments) {
+			d.attachments.push_back(RgAttachmentDesc{
+				.name = std::string{gb.name}, .kind = RgAttachmentKind::offscreen,
+				.format = std::string{gb.format}});
+			geometry.outputs.push_back(out(std::string{gb.name}, RgUsage::colorWrite,
+				RgLoadOp::clear, RgStoreOp::store));
+			light.inputs.push_back(out(std::string{gb.name}, RgUsage::sampleRead,
+				RgLoadOp::load, RgStoreOp::store));
+		}
+		geometry.outputs.push_back(out("depth", RgUsage::depthWrite, RgLoadOp::clear,
+			RgStoreOp::store));
+		light.outputs.push_back(out("swapchain", RgUsage::colorWrite, RgLoadOp::clear,
+			RgStoreOp::store));
+		d.passes = {std::move(geometry), std::move(light)};
+		return d;
 	}();
 	return desc;
 }

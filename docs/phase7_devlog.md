@@ -270,3 +270,11 @@ range/type）；缺段 = 旧单灯兼容合成（`lights[0]=cfg.light`）→ **f
 **净结果**：CPU 侧逐图元 frustum culling 跑通（球近似，够视锥剔除；真 AABB 更紧留后续）。
 数据流 ECS 合规：包围球是 entity 组件（`CullSphere`）、剔除在 render_list system、产出仍是抽象
 draw list（规范 4），无全局状态。**下一步**：批次 5 = GPU culling / DGC（归 Phase 7b）；批次 6 文档销账。
+
+## 勘误（2026-09-08，重构清理批次 1）
+
+- 上文 VVL 修复①"worldPos RT `r32g32b32_sfloat` 不支持 SAMPLED_IMAGE（3 通道 float 格式采样位缺失）"
+  **归因有误**：Vulkan spec 中 R32G32B32_SFLOAT 是 sampled-capable 格式（Format Properties 表含
+  SAMPLED_IMAGE_BIT）。实测 `VK_ERROR_FORMAT_NOT_SUPPORTED` 来自 **RADV 驱动实现**（未给 RGB32 float
+  格式配采样路径），非 spec/格式本身限制。换 RGBA32_SFLOAT 的处置不变（驱动现实约束），但后续维护者
+  勿以"RGB32 不可采样"为前提做决策（换驱动/换平台该前提不成立）。`deferred_geometry.frag.slang` 头注释已同步改。

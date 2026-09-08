@@ -18,6 +18,7 @@ import vkerror;
 import asset_table;
 import types_generated;
 import model_types_generated;
+import render_graph;  // Phase 7：G-buffer 契约表 kGBufferAttachments + resolveRgFormat（单源）
 
 namespace RGL {
 
@@ -239,27 +240,21 @@ std::expected<Resources::RtAttachment*, Error> Resources::ensureRtAttachment(
 	}
 
 std::expected<std::array<uint32_t, 4>, Error> Resources::ensureDeferredGBufferSlots() {
-	// 名字/格式 = deferredRenderGraphDesc 的 4 个 offscreen attachment（契约同步，勿漂移）
+	// 名字/格式 = render_graph kGBufferAttachments 契约表（单一真相源，与
+	// deferredRenderGraphDesc / llm_debug captureFrame 共享，无漂移可能）
 	const vk::Extent2D extent = vkSwapchain.getExtent();
-	struct Item {
-		const char* name;
-		vk::Format format;
-	};
-	static constexpr Item items[4] = {
-		{"gbuffer_albedo", vk::Format::eR8G8B8A8Srgb},
-		{"gbuffer_normal", vk::Format::eR16G16Snorm},
-		{"gbuffer_position", vk::Format::eR32G32B32A32Sfloat},
-		{"gbuffer_metalrough", vk::Format::eR8G8B8A8Unorm},
-	};
 	std::array<uint32_t, 4> slots{};
-	for (uint32_t i = 0; i < 4; ++i) {
-		auto rt = ensureRtAttachment(items[i].name, extent, items[i].format);
+	for (uint32_t i = 0; i < kGBufferAttachments.size(); ++i) {
+		const std::string name{kGBufferAttachments[i].name};
+		const vk::Format format = resolveRgFormat(
+			std::string{kGBufferAttachments[i].format}, vk::Format::eUndefined);
+		auto rt = ensureRtAttachment(name, extent, format);
 		if (!rt)
 			return std::unexpected(std::move(rt).error());
-		auto slot = rtHeapSlot(items[i].name);
+		auto slot = rtHeapSlot(name);
 		if (!slot)
 			return std::unexpected(Error{ErrorCode::Unknown,
-				fmt::format("gbuffer RT '{}' has no sample descriptor slot", items[i].name)});
+				fmt::format("gbuffer RT '{}' has no sample descriptor slot", name)});
 		slots[i] = *slot;
 	}
 	if (auto* logger = RLLogger::getInstance())

@@ -39,7 +39,7 @@ return {
     -- llm_debug 一次性截图（agent 自主工作：离屏隐藏窗渲染 → 截图 → 退出，默认关）
     -- 截图只改 llm_debug 开关（true/false）；file/size/delay_frames 常驻 llm_shot，改动只动 llm_shot
     -- 相机位置无额外字段：直接编辑上面的顶层 position/target/fovDegrees
-    llm_debug = true,
+    llm_debug = false,
 
     -- 常驻截图配置（全可选回落默认：1280x720 / 首帧 / screenshots/llm_<时间戳>.png）
     llm_shot = {

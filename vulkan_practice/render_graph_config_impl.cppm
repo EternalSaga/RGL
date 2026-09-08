@@ -186,7 +186,8 @@ std::expected<RgGraphDesc, Error> loadRenderGraphConfig(std::string_view path) {
 				if (kind) {
 					auto kindResult = parseEnum(*kind,
 						std::initializer_list<std::pair<std::string_view, RgPassKind>>{
-							{"draw", RgPassKind::drawMesh}, {"blit", RgPassKind::blit}},
+							{"draw", RgPassKind::drawMesh}, {"blit", RgPassKind::blit},
+							{"drawLight", RgPassKind::drawLight}},
 						"pass kind", path);
 					if (!kindResult)
 						return std::unexpected(std::move(kindResult).error());

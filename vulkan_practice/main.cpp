@@ -397,20 +397,8 @@ int main() {
 			envCtx.skybox = sceneConfig.environment.skybox;
 		}
 
-		// cube 一等资产（批次 3）：showCube 配置 → 注册 entity（画不画 = 实体有无）+
-		// 管线表下标写回（启动期一次）。cube 着色 = 每顶点色，MaterialRef 指向默认
-		// 材质（baseColor 不被 cube 管线消费，见 registerCubeEntity 注释）
-		if (sceneConfig.showCube) {
-			auto& assets = vkResources.getAssetTable();
-			const uint32_t cubeMat = assets.addMaterial(
-				MaterialAsset{glm::vec4{1.0f}, kInvalidTextureId, false});
-			registerCubeEntity(registry, vkResources.cubeAssetId(), cubeMat);
-			shaderRegistry.bindPipelineToAsset("cube", vkResources.cubeAssetId());
-			if (auto logger = RLLogger::getInstance())
-				logger->info("cube entity: 资产 {} / 材质 {} / 管线下标 {}",
-					vkResources.cubeAssetId(), cubeMat,
-					assets.get(vkResources.cubeAssetId()).pipelineIndex);
-		}
+		// （旧 showCube 直注册块已删：entities 缺段时 loader 从 cube 字段合成 entity
+		//（scene_config_impl 缺段兼容），构成判定唯一经 entities 循环——ECS 规范 3）
 
 		// Phase 7 D1：deferred 资源 + Renderer 构造。时序关键——env/models 全部堆槽已分配，此处才
 		// 分配 G-buffer RT 堆槽（allocSlot 单调，早分配破坏布局契约）+ 建 light 管线，再构造

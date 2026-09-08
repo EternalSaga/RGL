@@ -9,9 +9,11 @@ module;
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <expected>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -58,6 +60,7 @@ using std::cout;
 using std::endl;
 using std::fill;
 using std::error_code;
+using std::exception;
 using std::expected;
 using std::as_bytes;
 using std::byte;
@@ -66,7 +69,9 @@ using std::function;
 using std::ifstream;
 using std::logic_error;
 using std::map;
+using std::max;
 using std::memcpy;
+using std::min;
 using std::move;
 using std::numeric_limits;
 using std::ofstream;
@@ -79,9 +84,11 @@ using std::shared_ptr;
 using std::sin;
 using std::source_location;
 using std::span;
+using std::stable_sort;
 using std::string;
 using std::string_view;
 using std::strlen;
+using std::strtoull;
 using std::to_string;
 using std::tolower;
 using std::toupper;

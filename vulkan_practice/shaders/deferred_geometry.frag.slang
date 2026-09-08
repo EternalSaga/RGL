@@ -12,7 +12,8 @@ import scene;     // 场景级 bindless（binding 3：对象矩阵表，worldPos
 // MRT 布局（= deferred 图 pass.colors 顺序 = color index，格式见 render_graph deferred desc）：
 //   SV_Target0 albedo      RGBA8_SRGB         (linear 值写入，硬件 sRGB 编码)
 //   SV_Target1 normal      RG16_SNORM         (octahedral 编码，范围 [-1,1])
-//   SV_Target2 worldPos    RGBA32_SFLOAT      (世界空间位置，.xyz；RGBA32 因 RGB32 不支持 SAMPLED)
+//   SV_Target2 worldPos    RGBA32_SFLOAT      (世界空间位置，.xyz；RGBA32 系 RADV 对 RGB32_SFLOAT
+//                                              采样报 FORMAT_NOT_SUPPORTED 的规避——spec 上 RGB32 可采样，见 devlog 勘误)
 //   SV_Target3 metalRough  RGBA8_UNORM        (.r=metallic .g=roughness，[0,1] 直存 unorm)
 
 // octahedral 编码（McTaggart 形态；与 light.frag octDecode 逐位对称——两端必须一致）

@@ -202,6 +202,21 @@ export const RgGraphDesc& offscreenRenderGraphDesc();
 //（present 转换由图派生）。forward 默认图零改，本图为 exclusive 变体。
 export const RgGraphDesc& deferredRenderGraphDesc();
 
+// Phase 7 D1：G-buffer 4 附件契约表（**单一真相源**）——消费方 = deferredRenderGraphDesc
+//（geometry outputs / light inputs 按本表顺序生成）、vkresources ensureDeferredGBufferSlots、
+// llm_debug captureFrame。格式串 = isKnownRgFormat 词表可解析名（resolveRgFormat 物化）。
+// 顺序即 light.frag binding 4-7（albedo/normal/position/metalrough）与 RGL_DUMP_GBUF 通道号。
+export struct RgGBufferDesc {
+	std::string_view name;
+	std::string_view format;
+};
+export inline constexpr std::array<RgGBufferDesc, 4> kGBufferAttachments{{
+	{"gbuffer_albedo", "rgba8_srgb"},
+	{"gbuffer_normal", "rg16_snorm"},
+	{"gbuffer_position", "rgba32_sfloat"},
+	{"gbuffer_metalrough", "rgba8_unorm"},
+}};
+
 // 编译期自检（无 GPU）：构造合法/非法图样本跑 compileRenderGraph，返回全部
 // 失败描述（空 = 通过）。main 启动期 debug 日志通道消费。
 export std::vector<std::string> renderGraphSelfCheck();

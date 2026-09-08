@@ -14,6 +14,7 @@ import vkerror;
 import vk_device;
 import vk_resources;
 import vk_renderer;
+import render_graph;  // Phase 7：G-buffer 契约表 kGBufferAttachments + resolveRgFormat（单源）
 import frame_draw_list;
 import camera_config;
 import VmaRaii;
@@ -205,15 +206,11 @@ captureFrame(RGL::Renderer& renderer, const RGL::FrameDrawList& list, const LlmD
 			gbDumpCh = std::atoi(g);
 			if (gbDumpCh < 0 || gbDumpCh > 3) gbDumpCh = 0;
 		}
-		struct GbDesc { const char* name; vk::Format fmt; };
-		static constexpr GbDesc kGb[4] = {
-			{"gbuffer_albedo", vk::Format::eR8G8B8A8Srgb},
-			{"gbuffer_normal", vk::Format::eR16G16Snorm},
-			{"gbuffer_position", vk::Format::eR32G32B32A32Sfloat},
-			{"gbuffer_metalrough", vk::Format::eR8G8B8A8Unorm}};
+		// 名字/格式 = render_graph kGBufferAttachments 契约表（单源，与图 desc/vkresources 共享）
 		const vk::Extent2D gbExt(w, h);
-		for (uint32_t i = 0; i < 4; ++i) {
-			auto r = resources.ensureRtAttachment(kGb[i].name, gbExt, kGb[i].fmt);
+		for (uint32_t i = 0; i < kGBufferAttachments.size(); ++i) {
+			auto r = resources.ensureRtAttachment(std::string{kGBufferAttachments[i].name}, gbExt,
+				resolveRgFormat(std::string{kGBufferAttachments[i].format}, vk::Format::eUndefined));
 			if (!r)
 				return std::unexpected(std::move(r).error());
 			gb[i] = *r;
