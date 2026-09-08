@@ -1,16 +1,19 @@
 module;
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
-export module scene;
+export module scene_context;
 
 import rlstd;
-import cube;
 
 namespace RGL {
 
-// 场景组件（Phase 2 最小集）：模型 primitive 的 ECS 表示。
-// 单独成模块（而非放 ecs.cppm / model_importer.cppm）是为避免
-// ecs ↔ model_importer 的循环 import。
+// 场景上下文契约（叶子模块）：ECS 组件 + registry context 值类型 + 视锥/包围球几何工具。
+// **只有值类型**——system（animation/projection/bounds/renderList/帧循环骨架）不住这里
+//（ecs.cppm / render_list.cppm），场景内容（cube 等）也不住这里。
+// 独立成模块（2026-09-08 架构债务 2：原 `scene` 模块改名至此——它本就只含值类型）
+// 目的 = 让机制层（render_list）与配置层（scene_config）依赖"数据契约"而非某个背着别的东西
+// 的模块；组件单独成模块还避免了 ecs ↔ model_importer 的循环 import。
+// 依赖面收敛：只 import rlstd（+ entt/glm 头），任何执行层模块都不得被本模块引用。
 
 export struct Transform {
 	glm::mat4 local{1.0f};
@@ -167,34 +170,5 @@ export struct ViewProjection {
 	glm::mat4 view{1.0f};
 	glm::mat4 proj{1.0f};
 };
-
-// cube 一等资产注册（批次 3，E1.4/H1/M1）：cube entity = Transform +
-// Bounds（包围球由顶点半径派生，经 boundsSystem 自动纳入 SceneBounds 聚合，L2 解决）
-// + MeshRef{cube 资产 id} + MaterialRef{材质 id} + Relationship（根，parent = null）。
-// 画不画 = 实体有无（数据驱动：showCube 配置由 main 决定是否注册，无构造期 gating）。
-// rootTransform（Phase 6 批次 5）：cube 与模型同等 entity 位姿（local=world=根矩阵；
-// 默认 identity = 几何原点 ±0.5 旧行为）。
-// 注意：cube 着色 = 每顶点色（cube.frag 从顶点读 color），MaterialRef 的 baseColor
-// 不被 cube 管线消费（Phase 4 归一：统一 DrawArgs 超集单一布局，各风格只消费自己字段）。
-export entt::entity registerCubeEntity(entt::registry& rg, uint32_t meshAsset, uint32_t materialAsset,
-	const glm::mat4& rootTransform = glm::mat4(1.0f)) {
-	auto e = rg.create();
-	auto& tf = rg.emplace<Transform>(e);
-	tf.local = rootTransform;
-	tf.world = rootTransform;  // cube 几何已在原点 ±0.5
-	glm::vec3 center{0.0f};
-	float radius = 0.0f;
-	for (const auto& v : cubeVertices)
-		radius = std::max(radius, glm::length(glm::vec3(v.position[0], v.position[1], v.position[2])));
-	rg.emplace<Bounds>(e, glm::vec3(rootTransform * glm::vec4(center, 1.0f)),
-		radius * glm::length(glm::vec3(rootTransform[0])));
-	auto& meshRef = rg.emplace<MeshRef>(e);
-	meshRef.asset = meshAsset;
-	meshRef.objectSlot = rg.ctx().get<NextObjectSlot>().next++;
-	rg.emplace<MaterialRef>(e).material = materialAsset;
-	rg.emplace<CullSphere>(e, center, radius);  // Phase 7 批次 4：cube node-local 剔除球（原点 ±0.5）
-	rg.emplace<Relationship>(e);  // parent = null（根）
-	return e;
-}
 
 }  // namespace RGL

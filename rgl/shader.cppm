@@ -5,7 +5,6 @@ export module shader;
 
 import rlstd;
 import rlvk;
-import types_generated;
 import vkerror;
 
 namespace RGL {

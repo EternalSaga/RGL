@@ -5,7 +5,7 @@ export module scene_config;
 import rlstd;
 import vkerror;
 import rllogger;
-import scene;
+import scene_context;
 
 namespace RGL {
 
@@ -35,7 +35,7 @@ export struct EnvironmentConfig {
 
 // 场景 entity 声明（Phase 6 批次 5，scene.lua entities 段）："场景里有什么"的
 // 数据驱动列表——每项注册为场景实体（画不画 = entity 有无，ECS 规范 3）。
-// type = "model"（file = glTF 路径）| "cube"（一等资产，无需 file）。
+// type = "model"（file = glTF 路径）| "cube"（内建几何，无需 file，见 builtin_geometry）。
 // transform（仅 model/cube 通用）：position 世界平移 + rotation 欧拉角（度，
 // 应用序 X→Y→Z）+ scale 均匀缩放（约束同 Phase 5 已知近似②：world 法线 mat3
 // 直乘假定均匀缩放）。缺省 = identity（模型原始位姿）。

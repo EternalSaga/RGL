@@ -9,10 +9,6 @@ import rlstd;
 namespace RGL {
 
 
-    // 相对 descriptor heap reserved range 起点的偏移，运行时 slot = reservedSlots() + offset
-    export inline constexpr uint32_t HeapSlotVertexOffset = 0;
-    // 相对 descriptor heap reserved range 起点的偏移，运行时 slot = reservedSlots() + offset
-    export inline constexpr uint32_t HeapSlotIndexOffset = 1;
 
 
 }  // namespace RGL

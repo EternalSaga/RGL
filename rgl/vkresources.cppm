@@ -12,10 +12,7 @@ import VmaRaii;
 import vk_instance;
 import vk_device;
 import vk_swapchain;
-import cube;
 import vkerror;
-import types_generated;
-import model_types_generated;
 
 // 资产层（AssetKind/MeshAsset/TextureAsset/MaterialAsset/AssetTable）拆出为独立模块——
 // 本模块 export import 保持 Resources 接口（getAssetTable 等）类型对外可见
@@ -75,14 +72,13 @@ export inline constexpr vk::DeviceSize kSceneDataBytes =
 
 export class Resources {
    public:
-	// heap 容量与场景内容解耦（E1.3，批次 3）：固定裕量 kUserSlotMargin，不再按
-	// primitive 数精确预分配（原 modelPrimitiveCount 构造参数删除）。用户槽位布局
-	//（相对 reserved range 起点，Phase 3 统一 slot 分配器 allocSlot 连续分配）：
-	//   [0, 2)    cube（顶点 slot 0 / 索引 slot 1，types_generated）
-	//   [2, 2+N)  模型顶点 slot（每模型一个——拼接顶点 buffer，Phase 4 批次 2；
-	//   slot = reserved + HeapSlotModelVertexBase + 模型序，见 model_importer.cppm）
-	//   [2+N, …)  纹理 slot（texture_pool.cppm uploadModelTextures：2+N = 白 1×1 特例（契约断言），
-	//   其余按上传序，资产记录在 AssetTable，见 texture_pool.cppm）
+	// heap 容量与场景内容解耦（E1.3，批次 3）：固定裕量 kUserSlotMargin，不按内容精确预分配。
+	// 用户槽位布局（相对 reserved range 起点，Phase 3 统一 slot 分配器 allocSlot 连续分配，
+	// 顺序 = 上传顺序，几何全部先于纹理）：
+	//   [0, G)     几何槽（内建几何顶点/索引 + 模型拼接顶点块，每块一个；
+	//                基址与计数契约见 AssetTable::geometrySlotCount / uploadModelMeshes）
+	//   [G, …)     纹理槽（texture_pool.cppm uploadModelTextures：首槽 = 白 1×1 特例（契约断言），
+	//                其余按上传序；scene data / RT 采样槽等在后续上传点续接）
 	//   其余为裕量；运行时扩容 = 重建 heap + 重写全部描述符
 	Resources(RGL::AppContext& vkInstance, RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain);
 
@@ -181,18 +177,16 @@ export class Resources {
 		auto it = rtAttachments.find(name);
 		return it == rtAttachments.end() ? nullptr : &it->second;
 	}
-	// scene data buffer（drawFrame 每帧 staging copy 的目标；未创建 = 空句柄，跳过拷贝）
+	// SceneData buffer（drawFrame 每帧 staging copy 的目标；未创建 = 空句柄，跳过拷贝）
 	const RGL::VmaBuffer& getSceneDataBuffer() const { return sceneDataBuffer; }
 
 	// Phase 7 D1：确保 deferred G-buffer 4 个 offscreen RT 并返回其 SAMPLED_IMAGE 堆槽
 	//（[0]albedo [1]normal [2]position [3]metalrough）。名字/格式契约与 deferredRenderGraphDesc 一致
 	//（drawFrame 图循环对同名同格式 ensureRtAttachment 命中复用、堆槽跨 resize 复用，light 管线 baked 有效）。
-	// extent = 当前 swapchain。**必须在模型/纹理/env 槽之后调用**（allocSlot 单调游标，早分配破坏
-	// "[2,2+N) 模型顶点槽"布局契约断言——同 env 上传时序契约）。
+	// extent = 当前 swapchain。**必须在几何/纹理/env 槽之后调用**（allocSlot 单调游标，早分配破坏
+	// "纹理首槽 = 白 = 全部几何槽之后"契约断言——同 env 上传时序契约）。
 	[[nodiscard]] std::expected<std::array<uint32_t, 4>, Error> ensureDeferredGBufferSlots();
 
-	// cube 一等资产（批次 3）：资产记录 = cube 顶点/索引 buffer + slot 的唯一 holder
-	uint32_t cubeAssetId() const { return cubeAsset; }
 	// 资产表（已上传 primitive 的 GPU 数据 + heap slot + 三角形数 + 管线条目引用；
 	// registry entity 经 MeshRef{asset} 引用，见 AssetTable 注释）
 	RGL::AssetTable& getAssetTable() { return assetTable; }
@@ -219,13 +213,10 @@ export class Resources {
 
 	static vk::ImageViewCreateInfo buildDepthView(VkImage image);
 
-	std::expected<RGL::VmaBuffer, Error> createGpuBuffer(vk::DeviceSize size, vk::BufferUsageFlags extraUsage, const void* initData = nullptr);
-
-	// 容量 = reserved + 用户槽位。用户槽位布局（相对 reserved range 起点，allocSlot 连续分配）：
-	//   cube 顶点 slot 0、索引 slot 1（types_generated 的 HeapSlotVertexOffset/HeapSlotIndexOffset）
-	//   模型顶点 slot 基址 HeapSlotModelVertexBase=2（model_types_generated），每模型一个（拼接顶点 buffer，Phase 4 批次 2）；
-	//   纹理 slot 自 2+N 起（texture_pool.cppm，资产记录在 AssetTable）；
-	//   剩余裕量 kUserSlotMargin（固定，与场景内容解耦——E1.3）
+	// 容量 = reserved + 用户槽位（kUserSlotMargin 固定裕量）。用户槽位 = allocSlot 单调分配的
+	// 连续段，按上传时序分区：几何槽（内建几何 + 模型顶点块，AssetTable::geometrySlotCount
+	// 计数）→ 纹理槽（首槽 = 白，texture_pool.cppm）→ scene data / RT 采样槽等运行时槽。
+	// 内核不预留任何内容专属槽位（架构债务 1：cube 归还 builtin_geometry）
 	std::expected<RGL::VmaDescriptorHeap, Error> createDescriptorHeap();
 
 	// sampler heap（Phase 3）：OpTypeSampler 的独立 heap（vkCmdBindSamplerHeapEXT 每帧绑定）。
@@ -235,17 +226,12 @@ export class Resources {
 	//（共享一份 sampler 描述符，全模型管线映射指向同一槽）。
 	std::expected<RGL::VmaDescriptorHeap, Error> createSamplerHeap();
 
-	void writeDescriptors();
-
 	RGL::AppContext& vkInstance;
 	RGL::DeviceContext& vkDevice;
 	RGL::Swapchain& vkSwapchain;
 	RGL::VmaAllocatorRAII allocator;
 	RGL::VmaImage depthImage;
 	vk::raii::ImageView depthImageView;
-	// cube 顶点/索引 buffer（批次 3：构造体移入 cube 资产记录后为空，访问经 cubeAssetId）
-	RGL::VmaBuffer vertexBuffer;
-	RGL::VmaBuffer indexBuffer;
 	RGL::VmaDescriptorHeap descriptorHeap;
 	RGL::VmaDescriptorHeap samplerHeap;  // Phase 3：OpTypeSampler 独立 heap
 	// 共享 sampler 的 create info 稳定存储（ensureSharedSampler 写入；
@@ -258,16 +244,12 @@ export class Resources {
 	uint32_t skySamplerSlot = 0;
 	bool skySamplerReady = false;
 	std::optional<TextureAsset> envAsset;
-	uint32_t heapSlotVertex;
-	uint32_t heapSlotIndex;
 	// SceneData（Phase 5 批次 2）：设备端动态数据 buffer + 运行时槽（ensureSceneData 幂等写入）
 	RGL::VmaBuffer sceneDataBuffer;
 	uint32_t sceneDataSlot = 0;
 	bool sceneDataReady = false;
 	// 统一 slot 分配器（Phase 3，纹理资产并案）：单调分配游标，从 reservedSlots 起
 	uint32_t nextSlot;
-	// cube 一等资产 id（批次 3：构造体写入）
-	uint32_t cubeAsset = 0;
 	// 资产表（E1.1/E1.2：已上传 primitive 的 GPU 数据 + heap slot + 三角形数 + 管线条目引用）
 	RGL::AssetTable assetTable;
 	// Phase 6 批次 4：offscreen attachment RT 缓存（ensureRtAttachment，key = 名）

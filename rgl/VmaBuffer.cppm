@@ -176,7 +176,8 @@ export struct VmaDescriptorHeap {
 	vk::DeviceSize getHeapSize() const { return static_cast<vk::DeviceSize>(descriptorSize) * capacity - gpuOffset; }
 
 	// 指定槽位的 CPU 地址（写描述符用），带越界检查。
-	// 调用方 slot = reservedSlots() + HeapSlotXxxOffset（偏移常量由 types_generated 生成）
+	// 调用方 slot = Resources::allocSlot 单调分配（reservedSlots() + 游标；几何段基址常量
+	// HeapSlotGeometryBase 由 model_types_generated 生成）
 	[[nodiscard]] std::expected<void*, Error> getSlotCpuAddress(uint32_t slot) const {
 		if (slot >= capacity) {
 			return std::unexpected(Error{ErrorCode::DescriptorSlotOutOfBounds,

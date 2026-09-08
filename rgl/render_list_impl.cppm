@@ -13,7 +13,7 @@ import lights_types_generated;
 import frame_draw_list;
 import vk_resources;
 import asset_table;
-import scene;
+import scene_context;
 import camera;
 
 namespace RGL {

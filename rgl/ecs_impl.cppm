@@ -17,7 +17,7 @@ import render_list;
 import runtime_config;  // LlmDebugConfig（renderSystem 参数类型）
 import diagnostics;     // texel_canary 诊断单例（configs/diagnostics.lua）
 import gpu_canary;
-import scene;
+import scene_context;
 import camera;
 import rllogger;
 

@@ -13,7 +13,6 @@ import scene_config;
 import material_types_generated;
 import vkerror;
 import asset_table;
-import types_generated;
 
 namespace RGL {
 
@@ -130,11 +129,15 @@ uint32_t ShaderRegistry::addModelEntry(const std::string& specName, uint32_t ver
 		return index;
 	}
 
-	void ShaderRegistry::addCubeEntry() {
+	uint32_t ShaderRegistry::addCubeEntry(uint32_t meshAssetId) {
+		if (auto idx = pipelineIndex("cube"))
+			return *idx;
 		const RGL::PipelineSpec* cubeSpec = findSpec("cube");
 		if (!cubeSpec)
 			throw std::runtime_error("pipeline spec not found: cube");
-		const auto& cubeAsset = res.getAssetTable().get(res.cubeAssetId());
+		const auto& cubeAsset = res.getAssetTable().get(meshAssetId);
+		if (!cubeAsset.indexHeapSlot)
+			throw std::runtime_error("addCubeEntry: asset is not an indexed (builtin) mesh");
 		RGL::PipelineBindings b{};
 		b.descriptorSize = res.getDescriptorHeap().getDescriptorSize();
 		b.slotVertex = cubeAsset.heapSlot;
@@ -145,6 +148,10 @@ uint32_t ShaderRegistry::addModelEntry(const std::string& specName, uint32_t ver
 		const uint32_t index = static_cast<uint32_t>(entries.size());
 		indexByName[entry.name] = index;
 		entries.push_back(std::move(entry));
+		if (auto* logger = RLLogger::getInstance())
+			logger->debug("pipeline entry: cube (vertex slot {} / index slot {}) → 下标 {}",
+				b.slotVertex, b.slotIndex, index);
+		return index;
 	}
 
 	RGL::ShaderEffect ShaderRegistry::loadShaderEffect(const RGL::PipelineSpec& spec) {

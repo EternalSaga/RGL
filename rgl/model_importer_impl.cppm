@@ -16,7 +16,7 @@ import VmaRaii;
 import vk_device;
 import vk_resources;
 import asset_table;
-import scene;
+import scene_context;
 import gltf_loader;
 import model_types_generated;
 
@@ -136,7 +136,7 @@ static void verifyVertexUpload(RGL::DeviceContext& vkDevice, RGL::Resources& res
 	const uint32_t chunkCount = static_cast<uint32_t>(chunkBytes.size());
 
 	// ② 每块一个 buffer + 一个 slot（descriptor range = 块大小）；块序连续分配，
-	// 首块首 slot 契约 = reserved + HeapSlotModelVertexBase（违例 = 契约漂移）
+	// 首块首 slot 契约 = expectedGeometrySlot()（违例 = 契约漂移）
 	std::vector<std::shared_ptr<VmaBuffer>> chunkBuffers(chunkCount);
 	std::vector<uint32_t> chunkSlots(chunkCount);
 	for (uint32_t c = 0; c < chunkCount; ++c) {
@@ -163,7 +163,7 @@ static void verifyVertexUpload(RGL::DeviceContext& vkDevice, RGL::Resources& res
 			std::memcpy(mapped + primChunk[i].offset, vertices.data(),
 				static_cast<vk::DeviceSize>(vertices.size()) * sizeof(ModelVertex));
 		}
-		const uint32_t expectedSlot = heap.getReservedSlots() + HeapSlotModelVertexBase + assets.getModelSlotCount();
+		const uint32_t expectedSlot = assets.expectedGeometrySlot(heap.getReservedSlots());
 		auto slotResult = res.allocSlot("model.vertices.chunk");
 		if (!slotResult)
 			return std::unexpected(std::move(slotResult).error());
@@ -183,7 +183,7 @@ static void verifyVertexUpload(RGL::DeviceContext& vkDevice, RGL::Resources& res
 		device.writeResourceDescriptorsEXT(desc, dst);
 		chunkBuffers[c] = std::make_shared<VmaBuffer>(std::move(buffer));
 		chunkSlots[c] = slot;
-		assets.incrementModelSlotCount();
+		assets.incrementGeometrySlotCount();
 	}
 
 	// ③ 注册 per-primitive 资产记录（所在块的 shared_ptr + 块 slot + 块内偏移）
@@ -209,7 +209,7 @@ static void verifyVertexUpload(RGL::DeviceContext& vkDevice, RGL::Resources& res
 // uploadModelTextures 返回，上传顺序 = primitive 顺序）。
 // Phase 2 无层级嵌套：node 变换在 gltf_loader 里已扁平化为 translation，world = local。
 // 包围球经 Bounds 组件进 registry，由 boundsSystem 聚合进 SceneBounds（自适应 near/far，
-// 见 ecs.cppm）——cube 同理（批次 3 registerCubeEntity 挂自己的 Bounds，自动纳入聚合）。
+// 见 ecs.cppm）——内建几何同理（registerBuiltinCube 挂自己的 Bounds，自动纳入聚合）。
 // 批次 2：材质资产注册（按 glTF materialIndex 去重，-1 = 无材质 → 默认材质）+ MaterialRef
 // 真引用（E5.3）——材质身份（baseColor/textureId/alphaMode）收敛进资产表，纹理→primitive
 entt::entity registerScene(entt::registry& rg, const RGL::GltfModel& model,

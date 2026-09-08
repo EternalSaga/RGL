@@ -6,12 +6,13 @@
 -- material.slang 独立反射 → material_types_generated；本契约只校验 buffer slot/顶点布局/常量段）
 return {
     -- Descriptor table slot definitions
-    -- 模型顶点缓冲：运行时 slot = reservedSlots() + heapSlotOffset + primitiveIndex
-    -- 基址 2 = cube 顶点 0 / 索引 1 之后（统一 slot 分配器连续分配，见 vkresources.cppm allocSlot）
-    -- 纹理槽（Phase 3）：不带 heapSlotOffset/cppName = 运行时 allocSlot 分配（白纹理/每图一槽），
-    -- 不生成 C++ 常量（tools/validator + generator 对无 offset 条目跳过常量检查）
+    -- 几何区基址：用户槽区（reserved 之后）第一个槽 = 第一个几何槽，几何 = 内建几何
+    -- （cube 顶点/索引）+ 每模型一个的拼接顶点 buffer（架构债务 1 方案 B 后无"cube 占位 0/1"
+    -- 语义——基址与内容无关，几何按上传序连续排布，计数与漂移校验见 AssetTable::allocGeometrySlot）
+    -- 纹理槽（Phase 3）/ scene data / RT 采样槽：不带 heapSlotOffset/cppName = 运行时 allocSlot
+    -- 分配（白纹理/每图一槽），不生成 C++ 常量（tools/validator + generator 对无 offset 条目跳过）
     descriptorSlots = {
-        { name = "modelVertexBuffer", index = 0, heapSlotOffset = 2, cppName = "HeapSlotModelVertexBase", shape = "byteAddressBuffer" },
+        { name = "modelVertexBuffer", index = 0, heapSlotOffset = 0, cppName = "HeapSlotGeometryBase", shape = "byteAddressBuffer" },
         { name = "baseColorTexture", index = 1, shape = "texture2D" },
         { name = "baseColorSampler", index = 2, shape = "samplerState" },
     },

@@ -21,18 +21,18 @@ export inline constexpr uint32_t kInvalidPipelineIndex = std::numeric_limits<uin
 // 纹理资产 id 的"未设置"值（同 kInvalidPipelineIndex 模式；批次 2 材质资产的 textureId 用它 = 无纹理 → 白）
 export inline constexpr uint32_t kInvalidTextureId = std::numeric_limits<uint32_t>::max();
 
-// 资产种类（批次 1 引入：白纹理 slot 契约断言只数模型顶点槽；批次 3 cube 实体化数据源）。
+// 资产种类（批次 1 引入：白纹理 slot 契约断言只数几何槽；批次 3 内建几何实体化数据源）。
 // Phase 4 已归一 push constant（统一 DrawArgs 超集单一布局）：renderListSystem 零 AssetKind
 // 分支，kind 不再参与布局/写入路径选择（历史 64B/96B 双 struct 分支已删）
 export enum class AssetKind : uint8_t {
 	Model,
-	Cube,
+	Builtin,  // 内建几何（cube 等程序化资产，架构债务 1：与 gltf 同路的普通资产，非内核成员）
 };
 
 // 资产层：每个已上传 primitive 一条记录（GPU 顶点 buffer + heap slot + 三角形数 + 管线条目引用），
-// 以稳定 id（vector 下标，上传顺序分配）索引。registry entity 经 MeshRef{asset}（scene.cppm）
+// 以稳定 id（vector 下标，上传顺序分配）索引。registry entity 经 MeshRef{asset}（scene_context.cppm）
 // 引用资产，五方一致性（entity ↔ primitive ↔ heap slot ↔ 管线条目 ↔ draw-args）收敛为本表
-// 一处映射（E1.1）。生命周期：Resources 成员（与 descriptor heap / cube buffer 同层），
+// 一处映射（E1.1）。生命周期：Resources 成员（与 descriptor heap 同层），
 // buffer 随 SharedAllocator 控制块存活，不再靠 main.cpp 局部变量的隐式 RAII 保证（E1.2/L6）。
 // 顶点 buffer 经 shared_ptr 共享（Phase 4 批次 2：拼接顶点 buffer——每模型一个 buffer +
 // 一个 heap slot，同模型 N 个 primitive 资产记录持同一 shared_ptr，末引用析构释放；
@@ -114,21 +114,28 @@ export class AssetTable {
 	[[nodiscard]] const MeshAsset& get(uint32_t id) const { return meshes[id]; }
 	// 管线条目引用（ShaderRegistry::addModelEntry / bindPipelineToAsset 在创建管线条目后写回）
 	void setPipelineIndex(uint32_t id, uint32_t pipelineIndex) { meshes[id].pipelineIndex = pipelineIndex; }
-	// 带索引 mesh（批次 3：cube 资产——顶点 + 索引双 buffer/双 slot）
+	// 带索引 mesh（内建几何：顶点 + 索引双 buffer/双 slot，架构债务 1 方案 B 后由
+	// builtin_geometry 上传路径调用——Resources 不再创建 cube buffer）
 	// groupCount = 1 固定（cube mesh shader 恒输出 8 顶点/12 三角形，单 group，不套 ceil 公式）
 	uint32_t addIndexedMesh(VmaBuffer vertexBuffer, uint32_t vertexSlot, VmaBuffer indexBuffer,
 		uint32_t indexSlot, uint32_t triangleCount) {
-		meshes.push_back(MeshAsset{AssetKind::Cube, std::make_shared<VmaBuffer>(std::move(vertexBuffer)),
+		meshes.push_back(MeshAsset{AssetKind::Builtin, std::make_shared<VmaBuffer>(std::move(vertexBuffer)),
 			vertexSlot, triangleCount, 1, kInvalidPipelineIndex, 0, std::move(indexBuffer), indexSlot});
 		return static_cast<uint32_t>(meshes.size() - 1);
 	}
 	[[nodiscard]] uint32_t meshSize() const { return static_cast<uint32_t>(meshes.size()); }
-	// 模型顶点槽计数（Phase 4 批次 2：拼接顶点 buffer = 每模型一个 slot，白纹理 slot 契约断言用：
-	// "纹理首槽 = 白 = 模型顶点槽之后"）。按模型数（非 primitive 数）计数——uploadModelMeshes
-	// 每模型上传期递增一次；批次 3 cube 资产与本容器共用但不占模型顶点槽
-	uint32_t modelSlotCount = 0;
-	[[nodiscard]] uint32_t getModelSlotCount() const { return modelSlotCount; }
-	void incrementModelSlotCount() { ++modelSlotCount; }
+	// 几何槽计数（Phase 4 批次 2 拼接顶点 buffer = 每模型一个 slot；架构债务 1 方案 B 后
+	// 含内建几何的顶点槽与索引槽——一切几何都是 allocSlot 单调分配的普通消费者）。
+	// 白纹理 slot 契约断言用："纹理首槽 = 白 = 全部几何槽之后"。
+	// 计数单位 = 槽（非模型、非 primitive 数）：uploadModelMeshes 每块 +1，
+	// uploadBuiltinCube +2（顶点 + 索引）
+	uint32_t geometrySlotCount = 0;
+	[[nodiscard]] uint32_t getGeometrySlotCount() const { return geometrySlotCount; }
+	void incrementGeometrySlotCount() { ++geometrySlotCount; }
+	// 下一个几何槽的期望绝对槽号（上传方 allocSlot 后比对，违例 = 几何段中间插了别的分配）
+	[[nodiscard]] uint32_t expectedGeometrySlot(uint32_t reservedSlots) const {
+		return reservedSlots + HeapSlotGeometryBase + geometrySlotCount;
+	}
 
 	// 纹理（deque：元素地址稳定 = 描述符指针链的稳定存储介质，见 TextureAsset 注释）
 	// 放置资产记录（deque）→ 调用方在返回引用上设置自/兄弟引用后写描述符 → 资产 id

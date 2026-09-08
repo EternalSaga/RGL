@@ -17,7 +17,7 @@ namespace RGL {
 
 
     // 相对 descriptor heap reserved range 起点的偏移，运行时 slot = reservedSlots() + offset
-    export inline constexpr uint32_t HeapSlotModelVertexBase = 2;
+    export inline constexpr uint32_t HeapSlotGeometryBase = 0;
 
     // 契约常量（schema 单一真相源；shader 端字面量必须一致，见对应 shader 头注释）
     export inline constexpr uint32_t kTrianglesPerGroup = 10;

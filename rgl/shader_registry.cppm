@@ -27,23 +27,23 @@ export struct PipelineEntry {
 };
 
 // 管线表（Phase 4：从 Renderer 迁出，零 entt——只认 slot/资产 id，不认场景实体）：
-//   "cube" 条目恒建（批次 3：画不画 = cube entity 有无，slot 经 cube 资产记录取）；
-//   模型条目资产上传期经 addModelEntry 动态加入，按 (风格, 顶点 slot, 纹理 slot) 组合去重
+//   条目全部按需动态加入：模型 = addModelEntry、内建 cube = addCubeEntry（架构债务 1：
+//   slot 经传入的资产记录取，Resources 不认识 cube），按 (风格, 顶点 slot, 纹理 slot) 组合去重
 //   ——binding mapping 是 shader object 级状态（无法运行时换），同组合的映射恒等，
 //   故共享一条条目而非每 primitive 一条（Phase 4 验收：392 primitive → 12 条）。
 // 渲染 system 经资产记录的 pipelineIndex（数值）取条目，录制路径零字符串查找（E2.4）。
 // 条目下标写回资产记录经 bindToAsset / bindPipelineToAsset（启动期一次）。
 export class ShaderRegistry {
    public:
-	// 构造即建 "cube" 条目（需 Resources 的 cube 资产 + descriptor heap）；specs 来自
-	// configs/scene.lua（name → SPV 路径），按 name 索引。
+	// specs 来自 configs/scene.lua（name → SPV 路径），按 name 索引；条目全按需建
+	//（模型 = addModelEntry、内建 cube = addCubeEntry、天空盒 = addSkyEntry、
+	// 延迟光 = addLightEntry）——画不画 = entity 有无，无内容专属的构造期恒建条目。
 	ShaderRegistry(RGL::DeviceContext& device, RGL::Resources& res,
 		std::span<const RGL::PipelineSpec> specs)
 		: device(device),
 		  res(res) {
 		for (const auto& spec : specs)
 			styles[spec.name] = spec;
-		addCubeEntry();
 	}
 
 	// 条目名 → 下标（启动期解析用：bindPipelineToAsset / 防御检查；每帧路径经资产
@@ -81,6 +81,11 @@ export class ShaderRegistry {
 	[[nodiscard]] uint32_t addLightEntry(uint32_t albedoSlot, uint32_t normalSlot,
 		uint32_t positionSlot, uint32_t metalRoughSlot, uint32_t samplerSlot);
 
+	// 内建几何管线条目（架构债务 1 方案 B）：spec = "cube"，binding mapping = 传入资产记录的
+	// 顶点/索引 heap 槽（无纹理/无 scene data = cube 形态，binding 1 落索引槽）。
+	// 由 main 在内建几何上传后按 entity 存在与否调用（幂等：条目已存在直接返回下标）。
+	[[nodiscard]] uint32_t addCubeEntry(uint32_t meshAssetId);
+
 	// 条目下标写回资产记录（启动期一次）
 	void bindToAsset(uint32_t assetId, uint32_t entryIndex) {
 		res.getAssetTable().setPipelineIndex(assetId, entryIndex);
@@ -89,10 +94,6 @@ export class ShaderRegistry {
 	void bindPipelineToAsset(const char* name, uint32_t assetId);
 
    private:
-	// "cube" 管线条目（恒建——画不画 = cube entity 有无，数据驱动；slot 经 cube 资产
-	// 记录取，布局由反射生成的偏移常量钉死 vertex=0/index=1）
-	void addCubeEntry();
-
 	// 把一条 pipeline 规格对应的 mesh/fragment SPV 载入 ShaderEffect（SPV 路径来自 SceneConfig）
 	static RGL::ShaderEffect loadShaderEffect(const RGL::PipelineSpec& spec);
 

@@ -18,7 +18,8 @@ import scene_config;
 import gltf_loader;
 import model_importer;
 import texture_pool;
-import scene;
+import scene_context;
+import builtin_geometry;
 import material_types_generated;  // DrawArgs（push constant 尺寸契约检查）
 import camera;
 import camera_config;
@@ -166,8 +167,9 @@ int main() {
 		// 先于 Vulkan 初始化
 		Resources vkResources(vkInstance, vkDevice, vkSwapchain);
 		// 管线表（Phase 4 批次 2：ShaderRegistry，零 entt）：规格来自 configs/scene.lua；
-		// "cube" 条目恒建（批次 3：画不画 = cube entity 有无，数据驱动，下方按 showCube
-		// 决定是否注册）。先于 Renderer 构造（Renderer 持引用）
+		// 条目全按需建（画不画 = entity 有无，数据驱动）——模型条目 C1 期 addModelEntry、
+		// 内建 cube 条目 cube 资产上传后 addCubeEntry、天空盒/光源条目各自前提满足时建。
+		// 先于 Renderer 构造（Renderer 持引用）
 		ShaderRegistry shaderRegistry(vkDevice, vkResources, sceneConfig.pipelines);
 		// Phase 6 批次 3：渲染意图图 = configs/render_graph.lua（缺文件/缺段回落默认
 		// 三段图）；compileRenderGraph 校验 + barrier 布局链推导，任何图错误启动期
@@ -264,9 +266,24 @@ int main() {
 		};
 		std::vector<UploadedModel> uploaded;
 		std::map<std::string, size_t> modelOf;  // file → uploaded 下标
+		// A0：内建几何（架构债务 1 方案 B）——entities 里有 cube 就上传内建 cube 资产，
+		// 与普通模型的顶点槽同属"几何段"（先于任何纹理槽）；先于模型循环上传 = 与旧
+		// "Resources 构造期占 slot 0/1"一致的槽序（截图回归基线可比）
+		std::optional<uint32_t> cubeAsset;
+		for (const auto& ent : sceneConfig.entities) {
+			if (ent.type != "cube" || cubeAsset)
+				continue;
+			auto cubeResult = uploadBuiltinCube(vkDevice, vkResources);
+			if (!cubeResult) {
+				auto* logger = RLLogger::getInstance();
+				logger->error("错误: {}", cubeResult.error().describe());
+				return -1;
+			}
+			cubeAsset = *cubeResult;
+		}
 		// A1：解析 + 顶点上传（**全部模型的顶点槽先于任何纹理槽分配**——布局契约
-		// "[2, 2+N) 模型顶点槽、[2+N,…) 纹理槽"（vkresources.cppm），N = 全模型 chunk
-		// 总数；交错分配 = 第二个模型首 chunk slot 期望漂移，批次 5 多模型实测踩坑）
+		// "几何槽先于纹理槽"（vkresources.cppm），N = 全模型 chunk + 内建几何槽；
+		// 交错分配 = 第二个模型首 chunk slot 期望漂移，批次 5 多模型实测踩坑）
 		for (const auto& ent : sceneConfig.entities) {
 			if (ent.type != "model")
 				continue;
@@ -380,23 +397,23 @@ int main() {
 			logger->info("instancing: {} unique models / {} primitive instances (matrix slots)",
 				uploaded.size(), registry.ctx().get<NextObjectSlot>().next);
 
-		// cube 一等资产（批次 3 + Phase 6 批次 5：entities 列表驱动，可多个）：
-		// 注册 entity（画不画 = 实体有无）+ 管线表下标写回（启动期一次，幂等）。
-		// cube 着色 = 每顶点色，MaterialRef 指向默认材质（baseColor 不被 cube 管线消费，
-		// 见 registerCubeEntity 注释）
+		// 内建 cube entity 注册（架构债务 1 方案 B：cube = 内建几何资产，与模型同路）：
+		// 注册 entity（画不画 = 实体有无）+ 管线条目（按资产 slot 烘焙，cube 无纹理/无 scene
+		// data）+ 下标写回（启动期一次，幂等）。cube 着色 = 每顶点色，MaterialRef 指向默认
+		// 材质（baseColor 不被 cube 管线消费，见 registerBuiltinCube 注释）
 		for (const auto& ent : sceneConfig.entities) {
 			if (ent.type != "cube")
 				continue;
 			auto& assets = vkResources.getAssetTable();
 			const uint32_t cubeMat = assets.addMaterial(
 				MaterialAsset{glm::vec4{1.0f}, kInvalidTextureId, false});
-			registerCubeEntity(registry, vkResources.cubeAssetId(), cubeMat,
-				makeRootTransform(ent));
-			shaderRegistry.bindPipelineToAsset("cube", vkResources.cubeAssetId());
+			registerBuiltinCube(registry, *cubeAsset, cubeMat, makeRootTransform(ent));
+			const uint32_t cubeEntry = shaderRegistry.addCubeEntry(*cubeAsset);
+			shaderRegistry.bindPipelineToAsset("cube", *cubeAsset);
 			if (auto logger = RLLogger::getInstance())
 				logger->info("cube entity: 资产 {} / 材质 {} / 管线下标 {}",
-					vkResources.cubeAssetId(), cubeMat,
-					assets.get(vkResources.cubeAssetId()).pipelineIndex);
+					*cubeAsset, cubeMat, assets.get(*cubeAsset).pipelineIndex);
+			(void)cubeEntry;
 		}
 
 		// Phase 5.5 批次 4：天空盒管线条目（env 已上传才建——addSkyEntry 契约）+

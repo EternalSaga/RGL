@@ -13,16 +13,13 @@ import VmaRaii;
 import vk_instance;
 import vk_device;
 import vk_swapchain;
-import cube;
 import vkerror;
 import asset_table;
-import types_generated;
-import model_types_generated;
 import render_graph;  // Phase 7：G-buffer 契约表 kGBufferAttachments + resolveRgFormat（单源）
 
 namespace RGL {
 
-// Resources 重方法定义（ctor/sampler/sceneData/heap 创建/描述符写入，2026-09-02
+// Resources 重方法定义（ctor/sampler/sceneData/heap 创建，2026-09-02
 // 编译提速 A 方案）：函数体移出接口 TU，BMI 只留类声明；本单元是叶子边。
 //（ensure*/create* 均为启动期一次性路径，无跨 TU 内联价值）
 
@@ -37,39 +34,11 @@ Resources::Resources(RGL::AppContext& vkInstance, RGL::DeviceContext& vkDevice, 
  		  VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT),
 		  depthImage(createDepthImage(allocator, vkSwapchain.getExtent()).value()),
 		  depthImageView(vkDevice.getDevice(), buildDepthView(*depthImage)),
-		  vertexBuffer(createGpuBuffer(
-			  RGL::cubeVertices.size() * sizeof(RGL::Vertex),
-			  vk::BufferUsageFlagBits::eStorageBuffer,
-			  RGL::cubeVertices.data())
-				  .value()),
-		  indexBuffer(createGpuBuffer(
-			  RGL::cubeIndices.size() * sizeof(uint32_t),
-			  vk::BufferUsageFlagBits::eStorageBuffer,
-			  RGL::cubeIndices.data())
-				  .value()),
 		  descriptorHeap(createDescriptorHeap().value()),
 		  samplerHeap(createSamplerHeap().value()),
-		  nextSlot(reservedSlots()) {
-		// cube 槽位经统一分配器（Phase 3）：布局约定由反射生成的偏移常量钉死，违例 = 契约漂移
-		auto vertexSlotResult = allocSlot("cube.vertex");
-		if (!vertexSlotResult)
-			throw std::runtime_error(vertexSlotResult.error().describe());
-		heapSlotVertex = *vertexSlotResult;
-		if (heapSlotVertex != reservedSlots() + HeapSlotVertexOffset)
-			throw std::runtime_error("heap slot layout drift: cube.vertex");
-		auto indexSlotResult = allocSlot("cube.index");
-		if (!indexSlotResult)
-			throw std::runtime_error(indexSlotResult.error().describe());
-		heapSlotIndex = *indexSlotResult;
-		if (heapSlotIndex != reservedSlots() + HeapSlotIndexOffset)
-			throw std::runtime_error("heap slot layout drift: cube.index");
-		writeDescriptors();
-		// 批次 3：cube 一等资产——buffer 移入资产记录（kind=Cube，带索引），包装体随
-		// Resources 存活（与模型 mesh 同层）；成员 vertexBuffer/indexBuffer move 后为空，
-		// 访问一律经 cubeAssetId() → 资产表（删了直接访问器防 move 后误用）
-		cubeAsset = assetTable.addIndexedMesh(std::move(vertexBuffer), heapSlotVertex,
-			std::move(indexBuffer), heapSlotIndex,
-			static_cast<uint32_t>(RGL::cubeIndices.size() / 3));
+ 		  nextSlot(reservedSlots()) {
+		// 内核不创建任何内容资产（架构债务 1 方案 B）：几何（内建 cube / gltf 模型）、
+		// 纹理、scene data、RT 采样槽全部由内容层按上传时序经 allocSlot 领取
 	}
 
 uint32_t Resources::ensureSharedSampler() {
@@ -292,29 +261,6 @@ vk::ImageViewCreateInfo Resources::buildDepthView(VkImage image) {
 		return depthViewInfo;
 	}
 
-std::expected<RGL::VmaBuffer, Error> Resources::createGpuBuffer(vk::DeviceSize size, vk::BufferUsageFlags extraUsage, const void* initData) {
-		vk::BufferCreateInfo bufferInfo{};
-		bufferInfo.size = size;
-		bufferInfo.usage = vk::BufferUsageFlagBits::eShaderDeviceAddress | extraUsage;
-		bufferInfo.sharingMode = vk::SharingMode::eExclusive;
-
-		VmaAllocationCreateInfo allocInfo{};
-		allocInfo.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
-		allocInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-
-		VmaAllocationInfo allocData;
-		auto result = allocator.createBufferWithAddress(vkDevice.getDevice(), bufferInfo, allocInfo, &allocData);
-		if (!result) return std::unexpected(result.error());
-
-		auto buf = std::move(*result);
-
-		if (initData && size > 0) {
-			std::memcpy(allocData.pMappedData, initData, size);
-		}
-
-		return buf;
-	}
-
 std::expected<RGL::VmaDescriptorHeap, Error> Resources::createDescriptorHeap() {
 		auto props = vkDevice.getPhysicalDevice().getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDescriptorHeapPropertiesEXT>();
 
@@ -326,7 +272,8 @@ std::expected<RGL::VmaDescriptorHeap, Error> Resources::createDescriptorHeap() {
 		uint32_t descriptorSize = std::max(bufferSize, imageSize);
 		uint32_t reservedSlots = static_cast<uint32_t>(heapProps.minResourceHeapReservedRange + descriptorSize - 1) / descriptorSize;
 		vk::DeviceSize resourceHeapAlignment = heapProps.resourceHeapAlignment;
-		uint32_t userSlots = HeapSlotModelVertexBase + kUserSlotMargin;
+		// 用户槽位全为运行时分配（几何/纹理/scene data/RT 按上传时序续接，无内容专属预留）
+		uint32_t userSlots = kUserSlotMargin;
 		uint32_t capacity = userSlots + reservedSlots;
 		if (auto* logger = RLLogger::getInstance())
 			logger->info("descriptor heap: bufferDesc={}B imageDesc={}B stride={}B reservedSlots={} alignment={}B capacity={}",
@@ -358,44 +305,4 @@ std::expected<RGL::VmaDescriptorHeap, Error> Resources::createSamplerHeap() {
 			heapProps.samplerHeapAlignment);
 	}
 
-void Resources::writeDescriptors() {
-		auto& device = vkDevice.getDevice();
-
-		// 构造体内调用（cube buffer 移入资产表前）：直接用成员取地址
-		vk::DeviceAddressRangeEXT vertexRange{
-			vertexBuffer.getDeviceAddress(),
-			RGL::cubeVertices.size() * sizeof(RGL::Vertex)};
-		vk::DeviceAddressRangeEXT indexRange{
-			indexBuffer.getDeviceAddress(),
-			RGL::cubeIndices.size() * sizeof(uint32_t)};
-
-		vk::ResourceDescriptorInfoEXT vertexDescInfo{};
-		vertexDescInfo.type = vk::DescriptorType::eStorageBuffer;
-		vertexDescInfo.data.pAddressRange = &vertexRange;
-
-		vk::ResourceDescriptorInfoEXT indexDescInfo{};
-		indexDescInfo.type = vk::DescriptorType::eStorageBuffer;
-		indexDescInfo.data.pAddressRange = &indexRange;
-
-		auto vertexSlotResult = descriptorHeap.getSlotCpuAddress(heapSlotVertex);
-		if (!vertexSlotResult) {
-			throw std::runtime_error(vertexSlotResult.error().describe());
-		}
-
-		auto indexSlotResult = descriptorHeap.getSlotCpuAddress(heapSlotIndex);
-		if (!indexSlotResult) {
-			throw std::runtime_error(indexSlotResult.error().describe());
-		}
-
-		vk::HostAddressRangeEXT vertexDst{
-			*vertexSlotResult,
-			descriptorHeap.getDescriptorSize()};
-		vk::HostAddressRangeEXT indexDst{
-			*indexSlotResult,
-			descriptorHeap.getDescriptorSize()};
-
-		device.writeResourceDescriptorsEXT(
-			std::array<vk::ResourceDescriptorInfoEXT, 2>{vertexDescInfo, indexDescInfo},
-			std::array<vk::HostAddressRangeEXT, 2>{vertexDst, indexDst});
-}
 }  // namespace RGL

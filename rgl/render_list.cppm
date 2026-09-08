@@ -8,7 +8,7 @@ import material_types_generated;  // Phase 4：统一 DrawArgs 超集（scalar �
 import frame_draw_list;
 import vk_resources;
 import asset_table;
-import scene;
+import scene_context;
 import camera;
 
 namespace RGL {

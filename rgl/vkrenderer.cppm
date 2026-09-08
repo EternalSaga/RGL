@@ -54,10 +54,10 @@ export class Renderer {
    public:
 	// 成员初始化列表顺序必须与下方声明顺序一致（RAII 规则：vk::raii::* 直接成员只能在
 	// 初始化列表初始化）。管线表不再是 Renderer 成员（Phase 4 批次 2：迁出至 ShaderRegistry，
-	// Vulkan 层零 entt）——registry 在 main 先于 Renderer 构造（需 Resources 的 cube 资产
-	// + descriptor heap），Renderer 持引用；"cube" 条目恒建（批次 3：画不画 = cube entity
-	// 有无，数据驱动，showCube 配置由 main 决定是否注册 entity；条目多建 2 个 shader object，
-	// 成本可忽略）。模型管线条目不在构造期建（批次 3：管线表与场景内容解耦，E1.3）——
+	// Vulkan 层零 entt）——registry 在 main 先于 Renderer 构造（需 descriptor heap +
+	// 资产表），Renderer 持引用；条目全按需建（架构债务 1：cube 不再是内核资产、条目不再
+	// 恒建，画不画 = cube entity 有无，数据驱动）。模型管线条目不在构造期建（批次 3：
+	// 管线表与场景内容解耦，E1.3）——
 	// 资产上传期经 ShaderRegistry::addModelEntry 动态加入（按 (风格, 顶点 slot, 纹理 slot)
 	// 组合去重，同组合共享一条，Phase 4 验收 392 primitive → 12 条）。
 	// renderGraph（Phase 6）：编译图由 main 启动期 compileRenderGraph 产出（批次 3 前 =

@@ -8,7 +8,7 @@ import scene_config;  // clang 不给 partition impl unit 隐式 import 主接�
 import rlstd;
 import vkerror;
 import rllogger;
-import scene;
+import scene_context;
 
 namespace RGL {
 
