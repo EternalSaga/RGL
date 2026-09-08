@@ -29,8 +29,19 @@ namespace RGL {
 // 名字字符串引用（attachment 名 / state 名 / draws 段名），零 handle——执行侧
 // （Renderer 构造校验 + compileRenderGraph）负责全部结构检查。
 
-// 从 Lua 配置初始化渲染图声明。文件缺失 → warn + 默认三段图；脚本/类型/枚举
+// 从 Lua 配置初始化渲染图声明。文件缺失 → warn + 默认三段图 forward；脚本/类型/枚举
 // 字符串错误 → std::unexpected（结构错误留给 compileRenderGraph 报，不重复校验）。
-export [[nodiscard]] std::expected<RgGraphDesc, Error> loadRenderGraphConfig(std::string_view path);
+
+// 渲染路线变体（render_graph.lua 顶层 variant 字段；2026-09-08 替代 RGL_DEFERRED/
+// RGL_OFFSCREEN 环境变量）。deferred/offscreen = 内建图（exclusive，忽略文件 passes）；
+// forward（缺省）= 文件 passes/attachments，缺段回落默认三段图。
+export enum class RgGraphVariant : uint8_t { forward, deferred, offscreen };
+
+export struct RenderGraphConfig {
+	RgGraphVariant variant = RgGraphVariant::forward;
+	RgGraphDesc desc;
+};
+
+export [[nodiscard]] std::expected<RenderGraphConfig, Error> loadRenderGraphConfig(std::string_view path);
 
 }  // namespace RGL

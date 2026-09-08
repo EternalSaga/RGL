@@ -10,6 +10,7 @@ import model_importer;  // clang 不给 partition impl unit 隐式 import 主接
 import rlstd;
 import rlvk;
 import rllogger;
+import diagnostics;  // vtx_canary 诊断单例（configs/diagnostics.lua）
 import vkerror;
 import VmaRaii;
 import vk_device;
@@ -29,7 +30,7 @@ namespace RGL {
 // per-primitive 偏移进 push constant DrawArgs.vertexOffset（model.mesh.slang Load 前缀）。
 struct ChunkPrim { uint32_t chunk; uint32_t offset; };
 
-// 顶点读回金丝雀：RGL_VTX_CANARY=1 读回拼接 buffer 顶点数据比对 CPU，确认上传保真度
+// 顶点读回金丝雀：configs/diagnostics.lua vtx_canary=true 读回拼接 buffer 顶点数据比对 CPU，确认上传保真度
 //（数据错 = 上传/memcpy 问题；数据对 = 读取/shader 侧）。每块 VkBuffer 基址 32B（= 该块
 // 首个 primitive 首顶点）经 vkCmdCopyBuffer 拷进 staging 回读比对（独立 cmd + fence，启动期一次 GPU 停顿）。
 static void verifyVertexUpload(RGL::DeviceContext& vkDevice, RGL::Resources& res,
@@ -197,7 +198,7 @@ static void verifyVertexUpload(RGL::DeviceContext& vkDevice, RGL::Resources& res
 	if (logger)
 		logger->info("model: {} primitives → {} 块拼接顶点 buffer (每块 ≤{}KB) / {} heap slot",
 			primitiveCount, chunkCount, kVertexChunkBytes / 1024, chunkCount);
-	if (std::getenv("RGL_VTX_CANARY") != nullptr)
+	if (diagnostics().vtxCanary)
 		verifyVertexUpload(vkDevice, res, model, chunkBuffers, primChunk);
 	return assetIds;
 }

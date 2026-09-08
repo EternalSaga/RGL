@@ -168,7 +168,7 @@ export struct CompiledRenderGraph {
 	// 执行器跳过 ⑫；present 语义本身仍归执行器）
 	std::optional<RgBarrierPlan> presentTransition;
 	// submit 的 imageAvailable wait stage = swapchain 附件在命令流中首次实际使用
-	// 的 dstStage（编译期派生；现单段直渲 = ColorAttachmentOutput、RGL_OFFSCREEN
+	// 的 dstStage（编译期派生；现单段直渲 = ColorAttachmentOutput、offscreen 变体
 	// blit 图 = Transfer，与旧手工分支逐位一致）
 	vk::PipelineStageFlags2 swapchainWaitStage = vk::PipelineStageFlagBits2::eTopOfPipe;
 	std::vector<std::string> warnings;
@@ -189,14 +189,14 @@ export [[nodiscard]] std::expected<CompiledRenderGraph, Error> compileRenderGrap
 export const CompiledRenderGraph& defaultRenderGraph();
 export const RgGraphDesc& defaultRenderGraphDesc();
 
-// RGL_OFFSCREEN 图变体（Phase 6 批次 4，旧 DIAG 手工通路转正）：三段渲入
+// offscreen 图变体（Phase 6 批次 4，旧 DIAG（RGL_OFFSCREEN env，已转 variant 配置）转正）：三段渲入
 // offscreen 附件 scene_rt（format=inherit → 执行器解析为 swapchain 格式，blit
 // LINEAR 的 VVL 格式兼容前提）+ composite blit pass 上屏。present 转换 src 自动
 // 变 Transfer（blit 是 swapchain 最后写），submit waitStage 派生 = Transfer——
 // 与旧手工分支语义等价。
 export const RgGraphDesc& offscreenRenderGraphDesc();
 
-// Phase 7 D1（RGL_DEFERRED）：2-pass deferred 图——geometry pass 把 opaque 段渲入 4 个 G-buffer
+// Phase 7 D1（render_graph.lua variant="deferred"）：2-pass deferred 图——geometry pass 把 opaque 段渲入 4 个 G-buffer
 // RT（albedo rgba8_srgb / normal rg16_snorm oct / worldPos r32g32b32_sfloat / metalRough rgba8_unorm，
 // 显式格式，见词表）+ depth；light pass（drawLight kind）全屏采样 4 RT + 单灯 GGX 直写 swapchain
 //（present 转换由图派生）。forward 默认图零改，本图为 exclusive 变体。
@@ -205,7 +205,7 @@ export const RgGraphDesc& deferredRenderGraphDesc();
 // Phase 7 D1：G-buffer 4 附件契约表（**单一真相源**）——消费方 = deferredRenderGraphDesc
 //（geometry outputs / light inputs 按本表顺序生成）、vkresources ensureDeferredGBufferSlots、
 // llm_debug captureFrame。格式串 = isKnownRgFormat 词表可解析名（resolveRgFormat 物化）。
-// 顺序即 light.frag binding 4-7（albedo/normal/position/metalrough）与 RGL_DUMP_GBUF 通道号。
+// 顺序即 light.frag binding 4-7（albedo/normal/position/metalrough）与 diagnostics.lua dump_gbuf 通道号。
 export struct RgGBufferDesc {
 	std::string_view name;
 	std::string_view format;

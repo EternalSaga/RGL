@@ -224,7 +224,7 @@ std::expected<void, Error> Renderer::recreateSwapchainAndDepth(const char* conte
 	// fence（present 完成）都信号后，本 slot 的 semaphore / command buffer 才可重用。
 	// waitAll=VK_TRUE + 无限超时。正常时 fence 保证在超时内信号；device reset/lost 时
 	// fence 永不信号 → 返回 eErrorDeviceLost/Reset（非无限自旋，报错退出帧循环）
-	// DIAG（RGL_NO_PRESENT）：不 present → presentFence 永不 signal，只等 inFlight
+	// DIAG（diagnostics.lua no_present）：不 present → presentFence 永不 signal，只等 inFlight
 	const vk::Result waitResult = noPresent
 		? device.waitForFences(
 			{*inFlightFences[currentFrame]}, VK_TRUE, std::numeric_limits<uint64_t>::max())
@@ -455,7 +455,7 @@ std::expected<void, Error> Renderer::recreateSwapchainAndDepth(const char* conte
 
 	for (const auto& pass : renderGraph.passes) {
 		emitBarriers(pass.barriers);
-		// blit pass（批次 4，RGL_OFFSCREEN 图变体的 composite）：transferRead 源 →
+		// blit pass（批次 4，offscreen 图变体的 composite）：transferRead 源 →
 		// transferWrite 目标整幅拷贝（1:1 同尺寸同格式，LINEAR = 精确拷贝）；
 		// 两端布局转换已由 pass.barriers 完成（scene_rt CAO→TransferSrc、
 		// swapchain 帧首 Undefined→TransferDst），无绘制、无动态状态
@@ -580,7 +580,7 @@ std::expected<void, Error> Renderer::recreateSwapchainAndDepth(const char* conte
 	// SwapchainPresentFenceInfoEXT（KHR/EXT 为 typedef 别名，sType 相同）链到
 	// presentInfo.pNext：present 完成时信号 presentFence，实现 present 端完成
 	// 追踪（VK_KHR_swapchain_maintenance1，见 docs/技术概念.md 的"PresentFenceInfoKHR"）
-	// DIAG（RGL_NO_PRESENT）：跳 present——buffer 不出进程，KWin 不 import dmabuf
+	// DIAG（diagnostics.lua no_present）：跳 present——buffer 不出进程，KWin 不 import dmabuf
 	if (!noPresent) {
 		vk::SwapchainPresentFenceInfoEXT presentFenceInfoEXT{};
 		presentFenceInfoEXT.setFences(*presentFences[currentFrame]);

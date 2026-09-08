@@ -5,6 +5,7 @@ export module vk_instance;
 import rlstd;
 import rlvk;
 import rllogger;
+import diagnostics;  // no_vvl 诊断单例（configs/diagnostics.lua，main 启动期已 setDiagnostics）
 import vulkan_utils;
 import vulkan_window;
 import vkerror;
@@ -13,7 +14,7 @@ namespace RGL {
 
 export class AppContext {
    public:
-	// headless（RGL_EXT_headless_surface）：脱离 SDL/compositor——SDL 窗口可不建，
+	// headless（VK_EXT_headless_surface）：脱离 SDL/compositor——SDL 窗口可不建，
 	// instance 扩展用 VK_EXT_headless_surface 替代 SDL surface 扩展（surface 由
 	// createHeadlessSurfaceEXT 创建，见 vkswapchain.cppm）。headless=false 时行为不变
 	AppContext(RGL::SDLWindow* window, bool headless = false)
@@ -59,10 +60,10 @@ export class AppContext {
 		}
 
 		instanceCreateInfo.setPApplicationInfo(&engineInfo);
-		// DIAG（4K 黑屏排查 2026-08-27）：RGL_NO_VVL=1 关闭 VVL——VVL 的
-		// descriptor heap wrapper 对同一 slot 双写（先零化后写实际描述符，
-		// lldb watchpoint 实测），疑为黑屏/TCP fault 根因；验证后恢复无条件启用
-		if (!std::getenv("RGL_NO_VVL"))
+		// DIAG（configs/diagnostics.lua no_vvl，原 RGL_NO_VVL env 2026-09-08 转配置）：
+		// 关 VVL——VVL 的 descriptor heap wrapper 对同一 slot 双写（先零化后写实际描述符），
+		// 排查黑屏/fault 时隔离嫌疑；默认 false = VVL 常开
+		if (!diagnostics().noVvl)
 			instanceCreateInfo.setPEnabledLayerNames(layers);
 		instanceCreateInfo.setPEnabledExtensionNames(instanceExtensions);
 		return instanceCreateInfo;

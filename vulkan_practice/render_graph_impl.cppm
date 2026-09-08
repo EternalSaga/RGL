@@ -463,7 +463,7 @@ vk::ImageMemoryBarrier2 materializeBarrier(const RgBarrierPlan& plan, VkImage im
 }
 
 const RgGraphDesc& offscreenRenderGraphDesc() {
-	// RGL_OFFSCREEN 图变体（批次 4，旧 DIAG 转正）：三段渲 scene_rt + composite blit。
+	// offscreen 图变体（批次 4，旧 DIAG 转正）：三段渲 scene_rt + composite blit。
 	// scene_rt format 留 "inherit"——执行器解析为 swapchain 格式（blit LINEAR 兼容前提）；
 	// 清除值与默认图一致（0.1 灰背景 / depth 1.0）
 	static const RgGraphDesc desc = [] {

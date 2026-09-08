@@ -103,7 +103,7 @@ std::expected<std::vector<RgPassAttachment>, Error> readRoleList(sol::table list
 
 }  // namespace
 
-std::expected<RgGraphDesc, Error> loadRenderGraphConfig(std::string_view path) {
+std::expected<RenderGraphConfig, Error> loadRenderGraphConfig(std::string_view path) {
 	auto* logger = RLLogger::getInstance();
 	{
 		std::ifstream probe{std::string(path)};
@@ -111,7 +111,7 @@ std::expected<RgGraphDesc, Error> loadRenderGraphConfig(std::string_view path) {
 			if (logger)
 				logger->warn("Render graph config not found ({}), using default 3-pass graph",
 					std::string(path));
-			return defaultRenderGraphDesc();
+			return RenderGraphConfig{RgGraphVariant::forward, defaultRenderGraphDesc()};
 		}
 	}
 
@@ -133,6 +133,21 @@ std::expected<RgGraphDesc, Error> loadRenderGraphConfig(std::string_view path) {
 	try {
 		// 同 scene_config：此版本 sol2 的 stack_proxy→sol::table 隐式转换有坑，用 .as<>
 		sol::table root = result[0].as<sol::table>();
+
+		// variant 顶层字段（替代旧 RGL_DEFERRED/RGL_OFFSCREEN env）：deferred/offscreen
+		// 直返内建图（exclusive，文件 passes 忽略）；"forward"/缺省 = 解析文件 passes。
+		sol::optional<std::string> variant = root["variant"];
+		if (variant) {
+			if (*variant == "deferred")
+				return RenderGraphConfig{RgGraphVariant::deferred, deferredRenderGraphDesc()};
+			if (*variant == "offscreen")
+				return RenderGraphConfig{RgGraphVariant::offscreen, offscreenRenderGraphDesc()};
+			if (*variant != "forward")
+				return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
+					fmt::format("render graph config ({}): unknown variant '{}' "
+						"(want forward/deferred/offscreen)", path, *variant)});
+		}
+
 		RgGraphDesc desc;
 
 		sol::table attachments = root["attachments"];
@@ -213,7 +228,7 @@ std::expected<RgGraphDesc, Error> loadRenderGraphConfig(std::string_view path) {
 
 		// 空表回落默认图（"只写 attachments 不写 passes"类半截配置 = 意图不明，
 		// 交给 compileRenderGraph 报"no passes"比静默回落更可诊断）
-		return desc;
+		return RenderGraphConfig{RgGraphVariant::forward, std::move(desc)};
 	} catch (const std::exception& e) {
 		return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
 			fmt::format("render graph config ({}): {}", path, e.what())});

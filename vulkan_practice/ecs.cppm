@@ -7,7 +7,7 @@ import rlstd;
 import vkerror;
 import vk_renderer;
 import frame_draw_list;
-import camera_config;
+import runtime_config;  // LlmDebugConfig（2026-09-08 自 camera_config 迁入 runtime_config）
 
 namespace RGL {
 
@@ -53,7 +53,7 @@ export struct AppExit {
 // ecs 只数帧 + 触发 + 读结果，不 import llm_debug（依赖图解耦：llm_debug 拖 vk_renderer
 // 全链，本是叶子模块，不该在 ecs 的编译前置里；2026-09-02）。
 // onFrame（DIAG，可空）：每帧 drawFrame 完成后回调（帧号从 0 起）——
-// 可见窗 GPUVM fault 排查用（RGL_SHOW_AFTER：隐藏窗启动、第 N 帧后显示，
+// 可见窗 GPUVM fault 排查用（runtime.lua show_after：隐藏窗启动、第 N 帧后显示，
 // 隔离"分配期状态"与"present 期状态"）；默认空 = 无回调，正常路径零变化
 export std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer& renderer,
 	const RGL::LlmDebugConfig* llm = nullptr,

@@ -278,3 +278,29 @@ draw list（规范 4），无全局状态。**下一步**：批次 5 = GPU culli
   SAMPLED_IMAGE_BIT）。实测 `VK_ERROR_FORMAT_NOT_SUPPORTED` 来自 **RADV 驱动实现**（未给 RGB32 float
   格式配采样路径），非 spec/格式本身限制。换 RGBA32_SFLOAT 的处置不变（驱动现实约束），但后续维护者
   勿以"RGB32 不可采样"为前提做决策（换驱动/换平台该前提不成立）。`deferred_geometry.frag.slang` 头注释已同步改。
+
+---
+
+## 重构批次 3（2026-09-08）：环境变量 → 配置文件（用户偏好：不用 env）
+
+全仓 17 处 getenv 清点处置（驱动级 RADV_EXPERIMENTAL / VK_DRIVER_FILES / prime 保留——
+由 Justfile run-* 注入，非应用配置）：
+
+- **configs/runtime.lua**（新，`runtime_config` 模块）：headless / headless_size / win_size /
+  show_after + **llm_debug/llm_shot 自 camera.lua 迁入**（截图属运行模式，camera.lua 回归纯相机；
+  LlmDebugConfig 类型随迁 runtime_config，ecs/llm_debug 改 import）。
+- **configs/diagnostics.lua**（新，`diagnostics` 模块）：no_vvl / no_hdr / no_present /
+  vtx_canary / texel_canary / dump_gbuf / style_dist / tex_dist / texture_force_*（共 11 门，
+  默认全关，启动打一行汇总）。**承载方式 = 单例**（仿 RLLogger::getInstance）——这些门散在
+  低层深处（vkinstance/sdl3window/vkrenderer/texture 上传/ecs 帧循环/model_importer/llm_debug），
+  逐个加参数要穿 uploadTexture 等一串签名；单例让 diagnostics 成为叶子配置模块（零反向依赖，
+  main 在任何 GPU 对象构造前 setDiagnostics）。数值门负数 = 显式"关"哨兵（-1 直观）。
+- **configs/render_graph.lua 顶层 `variant`**（"forward"|"deferred"|"offscreen"）：
+  loadRenderGraphConfig 返回 `RenderGraphConfig{variant, desc}`，deferred/offscreen 直返内建图
+  （exclusive）；main 的 deferredMode 由 variant 求值——顺账清偿 roadmap"批次 2 剩余②选路转正"。
+- 注释同步：活跃触发名注释全部改指配置路径；历史溯源注记（"原 env"）保留；
+  顺手修 vkinstance 注释 RGL_EXT_headless_surface 笔误（→ VK_EXT）。
+
+**验证**：getenv 全仓清零；variant=deferred 编译 6att/2pass + G-buffer 槽 ✓；headless+llm
+截图与基线 **BIT-IDENTICAL** ✓；style_dist/texel_canary 非默认值实锤生效（frame 5 金丝雀
+PASS + 1591 prim 分布行）✓；forward/deferred 双路零 VVL error。

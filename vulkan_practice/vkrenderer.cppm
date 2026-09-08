@@ -15,6 +15,7 @@ import VmaRaii;
 import shader_registry;  // Phase 4 批次 2：管线表迁出（PipelineEntry/ShaderRegistry，零 entt）
 import shader;
 import vkerror;
+import diagnostics;  // no_present 诊断单例（configs/diagnostics.lua）
 
 // 绘制契约（DrawCall/SceneFrameData/FrameDrawList）拆出为独立模块——本模块 export import
 // 保持 Renderer::drawFrame 接口类型对外可见（2026-09-02 拆分）
@@ -133,10 +134,9 @@ export class Renderer {
 	// edS3：depth clip enable 动态状态能力门（vkCmdSetDepthClipEnableEXT；启动期一次探测，
 	// 未支持 = false，applyDynamicState 内 no-op 不 set——"扩展缺失干净降级"原则）
 	bool depthClipDynamic = false;
-	// DIAG（window+texture 组合触发验证）：可见窗渲染但永不 present——KWin 永不
-	// import 我们的 swapchain dmabuf。fault 在 frame 2（buffer pool 窗口内），
-	// 前几帧渲染完整，判据有效
-	bool noPresent = std::getenv("RGL_NO_PRESENT") != nullptr;
+	// DIAG（configs/diagnostics.lua no_present，原 RGL_NO_PRESENT env 2026-09-08 转配置）：
+	// 可见窗渲染但永不 present——KWin 永不 import 我们的 swapchain dmabuf
+	bool noPresent = diagnostics().noPresent;
 	// DIAG（可见窗 fault 排查）：drawFrame 帧计数——DEVICE_LOST 时打帧号，
 	// 区分"帧数累积触发"（fault 帧号恒定）vs"窗口显示触发"（fault 帧号 >> showAfter）
 	uint64_t frameCount = 0;

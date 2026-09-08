@@ -47,13 +47,21 @@ CMake 无独立构建目录 — 必须从根目录构建（`cmake -B build -S .`
 - 运行时资源由构建自动同步：`configs/` 增量拷贝（`copy_if_different`，改 config 后 `just build`
   即生效；**新增** config 文件需 `just config`）、SPV 直接编译到 `build/vulkan_practice/generated_shaders/`
 - `RADV_EXPERIMENTAL=heap` — RADV 下启用 `VK_EXT_descriptor_heap` 必需，`just run`/`run-igpu` 已自动设置
-- **headless 模式**：`RGL_HEADLESS=1` 脱 SDL/compositor（`vkCreateHeadlessSurfaceEXT`），不建 SDL 窗口；
-  尺寸 `RGL_HEADLESS_SIZE=WxH`（默认 1280×720）；llm_debug 截图直接读 swapchain 后缓冲（免离屏重渲）。
+- **运行模式全配置化**（2026-09-08 环境变量→配置文件）：`configs/runtime.lua`（headless /
+  headless_size / win_size / show_after / llm_debug+llm_shot）、`configs/diagnostics.lua`
+  （no_vvl / no_hdr / no_present / vtx_canary / texel_canary / dump_gbuf / style_dist / tex_dist /
+  texture_force_*，全可选默认关）、`configs/render_graph.lua` 顶层 `variant = "forward"|"deferred"|"offscreen"`
+  （路线选路，替代旧 RGL_DEFERRED/RGL_OFFSCREEN env）。仅驱动级 env（RADV_EXPERIMENTAL /
+  VK_DRIVER_FILES / prime offload）保留——由 `just run-*` 注入，非应用配置
+- **headless 模式**：runtime.lua `headless=true` 脱 SDL/compositor（`vkCreateHeadlessSurfaceEXT`），不建 SDL 窗口；
+  尺寸 `headless_size={W,H}`（默认 1280×720）；llm_debug 截图直接读 swapchain 后缓冲（免离屏重渲）。
   坑：v357 结构体无 width/height/format 字段、须显式 `VK_KHR_surface`、无 `eImmediate`（用 `eFifo`）
-- **agent 冒烟**：`cd build/vulkan_practice && RGL_HEADLESS=1 RADV_EXPERIMENTAL=heap timeout 8 ./vulkan_practice`
-  （正常应零 `[error]`；deferred 加 `RGL_DEFERRED=1`）
-- **llm_debug 截图流程**（agent 多模态读图）：`configs/camera.lua` 改 `llm_debug=true` → `just run` →
-  延迟 N 帧存 PNG（路径打日志）并退出 → **复原 false**。相机位置 = camera.lua 顶层 position/target/fovDegrees
+- **agent 冒烟**：改 `build/vulkan_practice/configs/runtime.lua` 为 `headless = true`（build 副本临时改，
+  下次 `just build` 按源内容比对**自动复原**）→ `cd build/vulkan_practice && RADV_EXPERIMENTAL=heap timeout 8 ./vulkan_practice`
+  （正常应零 `[error]`；deferred 另改 build 副本 render_graph.lua `variant="deferred"`）
+- **llm_debug 截图流程**（agent 多模态读图）：build 副本 `configs/runtime.lua` 改 `headless=true` +
+  `llm_debug=true` → 直接跑二进制 → 延迟 N 帧存 PNG（路径打日志）并退出 → `just build` 复原配置。
+  相机位置 = camera.lua 顶层 position/target/fovDegrees
 - **截图回归方法学**（2026-09-08）：BIT-IDENTICAL 比对须**同会话双构建**（`git stash` 基线构建 vs 改动构建）；
   跨日/跨全量重建存在 ±1 LSB 叶缘噪声（增量 .o vs 全量 codegen 微差，见 docs/调试历史.md 2026-09-08 条目）
 

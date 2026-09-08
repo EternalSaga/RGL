@@ -4,7 +4,7 @@ import rlstd;
 import vkerror;
 import vk_renderer;
 import frame_draw_list;
-import camera_config;  // LlmDebugConfig（配置归 camera_config，本模块只留执行）
+import runtime_config;  // LlmDebugConfig（2026-09-08 自 camera_config 迁入——截图属运行模式）
 
 namespace RGL {
 

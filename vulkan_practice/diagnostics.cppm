@@ -1,0 +1,37 @@
+export module diagnostics;
+
+import rlstd;
+import vkerror;
+
+namespace RGL {
+
+// 诊断开关（configs/diagnostics.lua，全可选回落默认 = 全关）：散落在低层模块深处的
+// 调试旋钮，经**单例**承载（仿 RLLogger::getInstance，见 logger/）——避免给
+// uploadTexture/loadEmbedded/AppContext/Renderer 等一串签名加参数。main 启动最早期
+// loadDiagnosticsConfig → setDiagnostics 填充，此后只读。
+//
+// 这些多为历史排查（4K 黑屏 UAF、可见窗 dmabuf fault、sRGB 嫌疑）留下的门，默认全关
+// 不影响正常路径；env 机制已于 2026-09-08 全面转配置文件（用户偏好：不用环境变量）。
+export struct DiagnosticsConfig {
+	bool noVvl = false;                 // 关 VVL（descriptor heap 双写排查，vkinstance）
+	bool noHdr = false;                 // 强制 SDR surface 格式（HDR 后缓冲 fault 排查，vulkan_window）
+	bool noPresent = false;             // 渲染但永不 present（可见窗 dmabuf fault 排查，vkrenderer）
+	bool vtxCanary = false;             // 顶点上传回读金丝雀（model_importer uploadModelMeshes）
+	uint64_t texelCanary = ~uint64_t{0};  // 帧 N 重读白纹理比对（ecs renderSystem；MAX = 关）
+	int dumpGbuf = -1;                  // deferred 截图路径直读第 N 个 G-buffer 通道（llm_debug；-1 = 关）
+	bool styleDist = false;             // per-primitive 风格分布日志（main entities 循环）
+	bool texDist = false;               // per-primitive 纹理 slot 分布日志（main entities 循环）
+	uint32_t textureForceSize = 0;      // 近邻缩放强制 N×N（texture 上传路径；0 = 关）
+	bool textureForceWhite = false;     // 纹理全白填充（"均匀内容不 fault"假设）
+	bool textureForceUnorm = false;     // upload 强制 UNORM（sRGB 嫌疑隔离）
+};
+
+// 单例访问器（main setDiagnostics 后，深栈点 diagnostics() 只读）
+export DiagnosticsConfig& diagnostics();
+export void setDiagnostics(const DiagnosticsConfig& cfg);
+
+// 从 Lua 加载诊断配置（sol2 沙箱同 camera_config：缺文件 = 全默认 + warn；类型错误 = unexpected）。
+// 纯解析（不触碰单例），main 负责 setDiagnostics(*result)。
+export [[nodiscard]] std::expected<DiagnosticsConfig, Error> loadDiagnosticsConfig(std::string_view path);
+
+}  // namespace RGL

@@ -147,7 +147,7 @@ export class Swapchain {
 		swapchainCreateInfo.imageColorSpace = format.colorSpace;
 		swapchainCreateInfo.imageExtent = extent;
 		swapchainCreateInfo.imageArrayLayers = 1;
-		// Phase 6 批次 4：RGL_OFFSCREEN 图变体的 composite blit pass 以后缓冲为
+		// Phase 6 批次 4：offscreen 图变体的 composite blit pass 以后缓冲为
 		// transferWrite 目标（VVL：blit dst 需 TRANSFER_DST usage；旧 DIAG 手工通路
 		// 时代即缺此位，属漏网）
 		swapchainCreateInfo.imageUsage = vk::ImageUsageFlagBits::eColorAttachment |

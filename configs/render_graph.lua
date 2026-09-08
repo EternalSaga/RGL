@@ -13,7 +13,14 @@
 --   clear = {r,g,b,a}（颜色）/ clearDepth = f（深度），缺省 = 0.1 灰背景 / 1.0 远平面
 -- 编译器校验（读先于写、同 pass 读写冲突、后续使用的写必须 store、swapchain 必须
 -- 被写……）失败即启动报错，见 compileRenderGraph。
+--
+-- variant（Phase 7 路线选路，2026-09-08 替代 RGL_DEFERRED/RGL_OFFSCREEN 环境变量）：
+--   "forward"（缺省）= 解析下方 attachments/passes（整段缺省 = 默认三段图）
+--   "deferred"  = 内建 2-pass 延迟图（geometry→G-buffer + light 全屏逐灯，exclusive，
+--                 下方 passes 被忽略；opaque 段管线换 deferred_geometry，main 契约联动）
+--   "offscreen" = 内建 offscreen 图变体（三段渲 scene_rt + composite blit 上屏）
 return {
+    variant = "forward",   -- "forward" | "deferred" | "offscreen"
     attachments = {
         { name = "swapchain", kind = "swapchain" },
         { name = "depth", kind = "depth" },

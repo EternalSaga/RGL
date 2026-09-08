@@ -22,6 +22,8 @@ import scene;
 import material_types_generated;  // DrawArgs（push constant 尺寸契约检查）
 import camera;
 import camera_config;
+import runtime_config;  // 2026-09-08 env→配置：runtime.lua（headless/窗口/llm 截图）
+import diagnostics;      // diagnostics.lua 诊断单例（须先于一切 GPU 对象构造 setDiagnostics）
 import llm_debug;
 import ecs;
 import rllogger;
@@ -42,9 +44,25 @@ int main() {
 		if (logger) logger->error("错误: {}", sceneResult.error().describe());
 		return -1;
 	}
+	// 2026-09-08 env→配置：runtime.lua（运行/窗口模式）+ diagnostics.lua（诊断开关单例）。
+	// setDiagnostics 必须先于一切 GPU 对象构造（vkinstance 建 instance 时读 no_vvl）
+	auto runtimeResult = loadRuntimeConfig("configs/runtime.lua");
+	if (!runtimeResult) {
+		auto* logger = RLLogger::getInstance();
+		if (logger) logger->error("错误: {}", runtimeResult.error().describe());
+		return -1;
+	}
+	auto diagResult = loadDiagnosticsConfig("configs/diagnostics.lua");
+	if (!diagResult) {
+		auto* logger = RLLogger::getInstance();
+		if (logger) logger->error("错误: {}", diagResult.error().describe());
+		return -1;
+	}
+	setDiagnostics(*diagResult);
 	auto sceneConfig = std::move(*sceneResult);
 	auto cameraConfig = std::move(*cameraResult);
-	const bool llmEnabled = cameraConfig.llm.enabled;
+	auto runtimeConfig = std::move(*runtimeResult);
+	const bool llmEnabled = runtimeConfig.llm.enabled;
 
 	// Phase 6 批次 2：渲染图编译器自检（无 GPU，纯 CPU 图算法回归守卫）——失败 =
 	// 编译器/默认图被改坏，启动期报错退出（早于建窗，headless/llm 路径同样被覆盖）
@@ -58,42 +76,30 @@ int main() {
 		}
 	}
 
-	// headless（VK_EXT_headless_surface）：脱离 SDL/compositor——RGL_HEADLESS=1 时不建
-	// SDL 窗口，surface 经 vkCreateHeadlessSurfaceEXT 创建（离屏渲染/CI 截图，无需显示）。
-	// 尺寸 RGL_HEADLESS_SIZE="WxH"（默认 1280x720）。headless 下 llm_debug 截图直接读
+	// headless（VK_EXT_headless_surface）：脱离 SDL/compositor——runtime.lua headless=true
+	// 时不建 SDL 窗口，surface 经 vkCreateHeadlessSurfaceEXT 创建（离屏渲染/CI 截图，无需显示）。
+	// 尺寸 headless_size={W,H}（默认 1280x720）。headless 下 llm_debug 截图直接读
 	// swapchain image 回读（compositor 无关）
-	const bool headless = std::getenv("RGL_HEADLESS") != nullptr;
-	// Phase 7 D1：deferred 渲染路线（exclusive，与 forward 二选一）——RGL_DEFERRED=1 选 deferred 图 +
-	// opaque 段用 deferred_geometry 管线 + light pass 采样 G-buffer（须在 env/models 槽后建 G-buffer RT）
-	const bool deferredMode = std::getenv("RGL_DEFERRED") != nullptr;
-	int headlessW = 1280, headlessH = 720;
-	if (const char* hs = std::getenv("RGL_HEADLESS_SIZE")) {
-		if (std::sscanf(hs, "%dx%d", &headlessW, &headlessH) != 2) {
-			std::fprintf(stderr, "RGL_HEADLESS_SIZE 解析失败: %s\n", hs);
-			return -1;
-		}
-	}
+	const bool headless = runtimeConfig.headless;
+	const uint32_t headlessW = runtimeConfig.headlessWidth;
+	const uint32_t headlessH = runtimeConfig.headlessHeight;
+	// Phase 7：deferred 路线 = render_graph.lua variant="deferred"（exclusive，与 forward
+	// 二选一）——deferredMode 在下方图配置加载后按 variant 求值（opaque 段用
+	// deferred_geometry 管线 + light pass 采样 G-buffer，须在 env/models 槽后建 G-buffer RT）
 
-	// llm_debug 模式：隐藏窗（永不显示，compositor 须存活）+ 配置尺寸；否则交互窗 800x600
-	// DIAG（可见窗 GPUVM fault 排查 2026-08-28）：RGL_WIN_SIZE="WxH" 覆盖交互窗尺寸
-	//（免重编译二分可见窗的尺寸阈值，同 RGL_NO_HDR / TEXTURE_FORCE_* 门模式）
-	int winW = 800, winH = 600;
-	int showAfter = -1;  // DIAG：隐藏窗启动、第 N 帧后显示（可见窗 fault 排查；-1 = 立即显示）
-	if (const char* winSize = std::getenv("RGL_WIN_SIZE")) {
-		if (std::sscanf(winSize, "%dx%d", &winW, &winH) != 2) {
-			std::fprintf(stderr, "RGL_WIN_SIZE 解析失败: %s\n", winSize);
-			return -1;
-		}
-	}
-	if (const char* sa = std::getenv("RGL_SHOW_AFTER"))
-		showAfter = std::atoi(sa);
+	// 交互窗尺寸 win_size={W,H}（默认 800x600；llm 模式用 llm_shot.size，headless 用
+	// headless_size）；show_after = DIAG（原 RGL_SHOW_AFTER env）：隐藏窗启动、第 N 帧后
+	// 显示（可见窗 fault 排查；-1 = 立即显示）
+	const int winW = static_cast<int>(runtimeConfig.winWidth);
+	const int winH = static_cast<int>(runtimeConfig.winHeight);
+	const int showAfter = runtimeConfig.showAfter;
 
 	// headless 时不建 SDL 窗口（window=nullptr）；否则照旧
 	std::unique_ptr<SDLWindow> window;
 	if (!headless) {
 		auto windowResult = SDLWindow::create(
-			llmEnabled ? static_cast<int>(cameraConfig.llm.width) : winW,
-			llmEnabled ? static_cast<int>(cameraConfig.llm.height) : winH,
+			llmEnabled ? static_cast<int>(runtimeConfig.llm.width) : winW,
+			llmEnabled ? static_cast<int>(runtimeConfig.llm.height) : winH,
 			"Vulkan Practice", llmEnabled || showAfter >= 0);
 		if (!windowResult) {
 			auto* logger = RLLogger::getInstance();
@@ -109,7 +115,7 @@ int main() {
 		auto* logger = RLLogger::getInstance();
 		if (logger)
 			logger->info("llm_debug: 一次性截图模式（延迟 {} 帧后截图并退出）",
-				cameraConfig.llm.delayFrames);
+				runtimeConfig.llm.delayFrames);
 	}
 
 	try {
@@ -160,20 +166,16 @@ int main() {
 		// Phase 6 批次 3：渲染意图图 = configs/render_graph.lua（缺文件/缺段回落默认
 		// 三段图）；compileRenderGraph 校验 + barrier 布局链推导，任何图错误启动期
 		// 报错退出（Renderer 构造校验器兜底执行器可解析性）。
-		// DIAG（RGL_OFFSCREEN，批次 4 转正）：env 置位 = 强制 offscreen 图变体
-		//（三段渲 scene_rt + composite blit 上屏，旧手工通路等价；覆盖 Lua 配置——
-		// 排障开关语义 = 与配置文件无关地切换渲染路线）
-		auto graphDescResult = deferredMode
-			? std::expected<RgGraphDesc, Error>{deferredRenderGraphDesc()}
-			: std::getenv("RGL_OFFSCREEN")
-				? std::expected<RgGraphDesc, Error>{offscreenRenderGraphDesc()}
-				: loadRenderGraphConfig("configs/render_graph.lua");
-		if (!graphDescResult) {
+		// Phase 7 路线选路（2026-09-08 env→配置）：顶层 variant = "forward"(默认)/
+		// "deferred"/"offscreen"——后两者为内建 exclusive 图变体（覆盖文件 passes）
+		auto graphConfig = loadRenderGraphConfig("configs/render_graph.lua");
+		if (!graphConfig) {
 			auto* logger = RLLogger::getInstance();
-			if (logger) logger->error("错误: {}", graphDescResult.error().describe());
+			if (logger) logger->error("错误: {}", graphConfig.error().describe());
 			return -1;
 		}
-		auto compiledGraph = compileRenderGraph(*graphDescResult);
+		const bool deferredMode = graphConfig->variant == RgGraphVariant::deferred;
+		auto compiledGraph = compileRenderGraph(graphConfig->desc);
 		if (!compiledGraph) {
 			auto* logger = RLLogger::getInstance();
 			if (logger) logger->error("错误: render graph compile failed: {}",
@@ -321,8 +323,9 @@ int main() {
 					samplerSlot);
 				shaderRegistry.bindToAsset(id, entryIdx);
 			}
-			// DIAG（Phase 4 批次 3 风格分布核查）：per-primitive 风格（unlit/pbr）+ 规格名分布
-			if (std::getenv("RGL_STYLE_DIST") != nullptr) {
+			// DIAG（configs/diagnostics.lua style_dist；Phase 4 批次 3 风格分布核查）：
+			// per-primitive 风格（unlit/pbr）+ 规格名分布
+			if (diagnostics().styleDist) {
 				std::map<std::string, uint32_t> styleCount;
 				for (size_t i = 0; i < um.assetIds.size(); ++i)
 					++styleCount[model.primitives[i].unlit ? "unlit" : "pbr"];
@@ -334,8 +337,9 @@ int main() {
 						um.file, um.instances, um.assetIds.size(), styleCount.size(), t);
 				}
 			}
-			// DIAG（Phase 4 批次 2 纹理分布核查）：per-primitive 纹理 slot 分布（验证新旧管线用同一批纹理）
-			if (std::getenv("RGL_TEX_DIST") != nullptr) {
+			// DIAG（configs/diagnostics.lua tex_dist；Phase 4 批次 2 纹理分布核查）：
+			// per-primitive 纹理 slot 分布（验证新旧管线用同一批纹理）
+			if (diagnostics().texDist) {
 				std::map<uint32_t, uint32_t> texSlotCount;
 				for (size_t i = 0; i < um.assetIds.size(); ++i)
 					++texSlotCount[assets.getTexture(primitiveTextureIds[i]).heapSlot];
@@ -434,9 +438,9 @@ int main() {
 		// llm 截图执行回调（ecs 不 import llm_debug——依赖图叶子解耦，2026-09-02）：
 		// main 是唯一知道 captureFrame 的地方，config 已按值绑进 lambda
 		auto renderResult = RGL::renderSystem(registry, vkRenderer,
-			llmEnabled ? &cameraConfig.llm : nullptr,
+			llmEnabled ? &runtimeConfig.llm : nullptr,
 			[&](RGL::Renderer& r, const RGL::FrameDrawList& l) {
-				return RGL::captureFrame(r, l, cameraConfig.llm);
+				return RGL::captureFrame(r, l, runtimeConfig.llm);
 			},
 			onFrame);
 		if (!renderResult) {

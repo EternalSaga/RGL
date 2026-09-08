@@ -36,15 +36,6 @@ return {
         right = "D",
     },
 
-    -- llm_debug 一次性截图（agent 自主工作：离屏隐藏窗渲染 → 截图 → 退出，默认关）
-    -- 截图只改 llm_debug 开关（true/false）；file/size/delay_frames 常驻 llm_shot，改动只动 llm_shot
-    -- 相机位置无额外字段：直接编辑上面的顶层 position/target/fovDegrees
-    llm_debug = false,
-
-    -- 常驻截图配置（全可选回落默认：1280x720 / 首帧 / screenshots/llm_<时间戳>.png）
-    llm_shot = {
-       file = "screenshots/llm_debug.png",
-       size = { 1280, 720 },
-       delay_frames = 8,  -- 第 N 帧渲染完成后截图（0 = 首帧）
-    },
+    -- 2026-09-08：llm_debug/llm_shot 截图段已迁至 configs/runtime.lua（截图属运行模式，
+    -- 与相机语义无关）。本文件回归纯相机姿态/输入。相机位置仍编辑顶层 position/target/fovDegrees。
 }

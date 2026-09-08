@@ -16,7 +16,8 @@ import vk_resources;
 import vk_renderer;
 import render_graph;  // Phase 7：G-buffer 契约表 kGBufferAttachments + resolveRgFormat（单源）
 import frame_draw_list;
-import camera_config;
+import runtime_config;  // LlmDebugConfig（2026-09-08 自 camera_config 迁入）
+import diagnostics;     // dump_gbuf 诊断单例（configs/diagnostics.lua）
 import VmaRaii;
 import shader;
 import vulkan_utils;
@@ -198,14 +199,12 @@ captureFrame(RGL::Renderer& renderer, const RGL::FrameDrawList& list, const LlmD
 	// （capture 尺寸 == swapchain extent 命中已建 GB），再下方 light pass 同缓冲采样出光照。
 	// 不能依赖跨命令缓冲读持久 GB——实测跨独立提交读上帧 GB 返回黑（GB 内容未对该提交建立可见性）。
 	std::array<RGL::Resources::RtAttachment*, 4> gb{};
-	// RGL_DUMP_GBUF=N（0..3）：deferred 下跳过 light/捕获，geometry pass 后直接 copyImageToBuffer
-	// 读回第 N 个 G-buffer RT 出 PNG（descriptor 无关，直查 geometry 是否写进 GB）。
+	// dump_gbuf=N（0..3，configs/diagnostics.lua，原 RGL_DUMP_GBUF env 转配置）：deferred 下跳过
+	// light/捕获，geometry pass 后直接 copyImageToBuffer 读回第 N 个 G-buffer RT 出 PNG
+	//（descriptor 无关，直查 geometry 是否写进 GB）。-1 = 关（loader 已钳越界）。
 	int gbDumpCh = -1;
 	if (renderer.isDeferred()) {
-		if (const char* g = std::getenv("RGL_DUMP_GBUF")) {
-			gbDumpCh = std::atoi(g);
-			if (gbDumpCh < 0 || gbDumpCh > 3) gbDumpCh = 0;
-		}
+		gbDumpCh = diagnostics().dumpGbuf;
 		// 名字/格式 = render_graph kGBufferAttachments 契约表（单源，与图 desc/vkresources 共享）
 		const vk::Extent2D gbExt(w, h);
 		for (uint32_t i = 0; i < kGBufferAttachments.size(); ++i) {

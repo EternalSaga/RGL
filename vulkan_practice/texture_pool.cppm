@@ -5,6 +5,7 @@ export module texture_pool;
 
 import rlstd;
 import rllogger;
+import diagnostics;  // texture_force_* 诊断单例（configs/diagnostics.lua）
 import vkerror;
 import vk_device;
 import vk_resources;
@@ -35,15 +36,11 @@ export [[nodiscard]] std::expected<uint32_t, Error> loadEmbedded(RGL::Resources&
 		return std::unexpected(Error{ErrorCode::TextureDecodeFailed,
 			fmt::format("stb_image decode failed: {}", name)});
 	}
-	// DIAG（Phase 3 4K 黑屏排查 2026-08-27）：环境变量驱动的实验开关（免重编译跑矩阵）：
-	//   TEXTURE_FORCE_SIZE=N  近邻缩放强制 N×N（测尺寸阈值：16MB vs 64MB）
-	//   TEXTURE_FORCE_WHITE=1 全白填充（测"均匀内容不 fault"假设）
-	//   TEXTURE_FORCE_UNORM=1 upload 强制 UNORM（测 sRGB 嫌疑）
-	const char* forceSize = std::getenv("TEXTURE_FORCE_SIZE");
-	const char* forceWhite = std::getenv("TEXTURE_FORCE_WHITE");
-	const uint32_t fw = forceWhite ? static_cast<uint32_t>(w) : 0;
-	const uint32_t fh = forceWhite ? static_cast<uint32_t>(h) : 0;
-	const uint32_t target = forceSize ? static_cast<uint32_t>(std::stoul(forceSize)) : 0;
+	// DIAG（configs/diagnostics.lua texture_force_*，原 TEXTURE_FORCE_* env 2026-09-08 转配置）：
+	//   texture_force_size=N   近邻缩放强制 N×N（测尺寸阈值）
+	//   texture_force_white    全白填充（测"均匀内容不 fault"假设）
+	const uint32_t target = diagnostics().textureForceSize;
+	const bool forceWhite = diagnostics().textureForceWhite;
 	if (target > 0 && (static_cast<uint32_t>(w) < target || static_cast<uint32_t>(h) < target)) {
 		std::vector<uint8_t> up(static_cast<size_t>(target) * target * 4,
 			forceWhite ? 255 : 0);

@@ -14,6 +14,7 @@ import vulkan_utils;
 import vk_device;
 import vk_resources;
 import asset_table;
+import diagnostics;  // texture_force_unorm 诊断单例（configs/diagnostics.lua）
 
 namespace RGL {
 
@@ -27,8 +28,8 @@ export [[nodiscard]] std::expected<uint32_t, Error> uploadTexture(RGL::Resources
 	auto& allocator = resources.getAllocator();
 
 	// sRGB（glTF baseColor 纹理约定，硬件完成 sRGB→线性）；不支持回落 UNORM（R4）
-	// DIAG（4K 黑屏排查）：TEXTURE_FORCE_UNORM=1 强制 UNORM（sRGB 嫌疑隔离）
-	vk::Format format = std::getenv("TEXTURE_FORCE_UNORM")
+	// DIAG（configs/diagnostics.lua texture_force_unorm，原 env 转配置）：强制 UNORM（sRGB 嫌疑隔离）
+	vk::Format format = diagnostics().textureForceUnorm
 		? vk::Format::eR8G8B8A8Unorm : vk::Format::eR8G8B8A8Srgb;
 	auto formatProps = device.getPhysicalDevice().getFormatProperties(format);
 	if ((formatProps.optimalTilingFeatures & vk::FormatFeatureFlagBits::eSampledImage)
@@ -278,7 +279,7 @@ export [[nodiscard]] std::expected<void, Error> uploadCubeMap(RGL::Resources& re
 	for (uint32_t s = size; s > 1; s >>= 1) ++mipLevels;
 
 	// 格式策略同 2D 路径：sRGB 优先 + 不支持采样回落 UNORM（R4）+ DIAG 强制 UNORM 门
-	vk::Format format = std::getenv("TEXTURE_FORCE_UNORM")
+	vk::Format format = diagnostics().textureForceUnorm
 		? vk::Format::eR8G8B8A8Unorm : vk::Format::eR8G8B8A8Srgb;
 	auto formatProps = device.getPhysicalDevice().getFormatProperties(format);
 	if ((formatProps.optimalTilingFeatures & vk::FormatFeatureFlagBits::eSampledImage)

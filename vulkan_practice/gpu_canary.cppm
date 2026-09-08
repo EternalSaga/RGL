@@ -19,7 +19,7 @@ namespace RGL {
 // texel 回读金丝雀：第 N 帧重读白纹理 texel (0,0) 比对已知值 255——纹理 BO 死了
 // （freed/VA 复用）回读立即偏/fault。白纹理已知值 = 免启动基线回读；白纹理与图片
 // 纹理同层同寿命，它死 = 全死。
-// 门控：RGL_TEXEL_CANARY=N（帧号，默认关）；调用点在 renderSystem 帧 N 的 drawFrame 前。
+// 门控：diagnostics.lua texel_canary=N（帧号，默认关）；调用点在 renderSystem 帧 N 的 drawFrame 前。
 export void texelCanaryCheck(RGL::Resources& resources, RGL::DeviceContext& device,
 	const vk::raii::CommandPool& cmdPool, uint64_t frame);
 

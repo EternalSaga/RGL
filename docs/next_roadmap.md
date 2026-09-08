@@ -91,8 +91,8 @@ present/waitStage 派生）；drawFrame 手写布局转换清零、pass 循环�
 | 批次 | 内容 | 状态 | 剩余 |
 |---|---|---|---|
 | **0** Bistro + loader 节点 TRS（forward） | nodeWorld mat4 父链、Bistro forward、packer、`kSceneMatrixCapacity`↑4096 | **✅ 完成** | normal 绿通道翻 + BC5 Z 重建（→ Phase 8） |
-| **1** G-buffer MRT + offscreen 显式格式 | 格式词表、4-MRT `deferred_geometry`、`RGL_DUMP_GBUF` 直读验 albedo | **✅ 核心完成** | normal/metalRough **纹理**采样（→ Phase 8） |
-| **2** Light pass + sampleRead 接线 | SAMPLED_IMAGE 描述符入 heap、全屏 light pass GGX、forward/deferred 切换 | **✅ 核心完成** | ①light pass 简化 IBL ②选路走 render_graph.lua（现 env）③skybox 背景合成 |
+| **1** G-buffer MRT + offscreen 显式格式 | 格式词表、4-MRT `deferred_geometry`、`dump_gbuf` 直读验 albedo | **✅ 核心完成** | normal/metalRough **纹理**采样（→ Phase 8） |
+| **2** Light pass + sampleRead 接线 | SAMPLED_IMAGE 描述符入 heap、全屏 light pass GGX、forward/deferred 切换（选路已转 render_graph.lua variant，2026-09-08） | **✅ 核心完成** | ①light pass 简化 IBL ③skybox 背景合成 |
 | **3** 多灯 + 灯数据并入反射（D3） | 第 4 条反射管线 `GpuLight`、scene data 尾区灯数组 @262272（头不动保 forward diff0）、`lights` 配置、逐灯循环 + 点光衰减 | **✅ 核心完成** | 灯 entity 化（ECS 规范 3）；forward `LightDataGpu@0` 头仍手工双源；shadow map |
 | **4** CPU frustum culling | 逐图元 node-local `CullSphere`、Gribb-Harman 6 面（z∈[0,1]）、可见统计 | **✅ 核心完成** | 真 AABB（现球近似，够 frustum） |
 | **5** GPU culling / DGC | `vk_indirect_commands`、compute cull、NVIDIA/RADV 双路 | **⬜ 未开工** | 按 D5 归 **Phase 7b** |
@@ -108,15 +108,15 @@ present/waitStage 派生）；drawFrame 手写布局转换清零、pass 循环�
 - **批次 5 = Phase 7b GPU culling**（`VK_EXT_device_generated_commands`）：culling compute 输出
   per-visible sequence → NVIDIA execution-set 路径 / RADV `vkCmdDrawMeshTasksIndirectCountEXT`
   回退；能力门控双路选路。设计细节与双驱动实测 → [device_generated_commands_research.md](device_generated_commands_research.md) + archive/phase7_plan.md。
-- **批次 2 三个 refine**：deferred light pass 简化 IBL、选路从 env 转正 render_graph.lua、
-  skybox 背景合成进 deferred 图。
+- **批次 2 refine 残二**：deferred light pass 简化 IBL、skybox 背景合成进 deferred 图
+  （选路已转正：render_graph.lua `variant`，2026-09-08 重构批次 3）。
 - **灯 entity 化**（ECS 规范 3）+ forward `LightDataGpu@0` 头并入反射（Phase 7 多灯已把灯数组
   入反射管线 4，前向头为 diff0 暂留手工双源，见 AGENTS 已知问题）。
 - **批次 6 文档销账**（待批次 5）。
 
 ### 设计决策（现行）
 
-- 延迟渲染为可选路径，不破坏 forward 管线（`RGL_DEFERRED` 选路，forward diff0 是硬约束）。
+- 延迟渲染为可选路径，不破坏 forward 管线（render_graph.lua `variant` 选路，forward diff0 是硬约束）。
 - GPU culling = 同一 culling 输出驱动两条提交路径，驱动能力升级后自动切换，不改 culling 逻辑。
 - CullSphere（node-local 剔除球）已随批次 4 落地——原"AABB 组件 Phase 2 开始积累"以球近似兑现。
 
