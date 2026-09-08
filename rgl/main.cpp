@@ -100,7 +100,7 @@ int main() {
 		auto windowResult = SDLWindow::create(
 			llmEnabled ? static_cast<int>(runtimeConfig.llm.width) : winW,
 			llmEnabled ? static_cast<int>(runtimeConfig.llm.height) : winH,
-			"Vulkan Practice", llmEnabled || showAfter >= 0);
+			"RGL", llmEnabled || showAfter >= 0);
 		if (!windowResult) {
 			auto* logger = RLLogger::getInstance();
 			if (logger) logger->error("错误: {}", windowResult.error().describe());

@@ -15,7 +15,7 @@ mesh shader 对象创建时缺少 `VK_SHADER_CREATE_NO_TASK_SHADER_BIT_EXT` flag
 ## 为什么之前误判为驱动 bug
 
 1. **Validation Layer 查不出来（spec 漏洞）**：本应报错的 VUID `vkCmdDrawMeshTasksEXT-None-08694`（"mesh shader 未带 NO_TASK_SHADER flag 时，TASK stage 必须绑定有效 task shader"）**仅在 `taskShader` 和 `meshShader` 两个 feature 都启用时才生效**。本程序只启用了 `meshShader`，所以 VVL 完全静默。这是已知的 spec/校验缺口（Vulkan-ValidationLayers issue #12886）。
-2. **AMD (RADV) 不崩溃**：RADV 对此宽松——即使没有 flag，也按 mesh-only 模式直接发射 mesh shader。因此 vulkan_practice 在 AMD Strix Halo 上一直正常，掩盖了问题。
+2. **AMD (RADV) 不崩溃**：RADV 对此宽松——即使没有 flag，也按 mesh-only 模式直接发射 mesh shader。因此 rgl 在 AMD Strix Halo 上一直正常，掩盖了问题。
 3. vertex+fragment shader object 路径不涉及 task/mesh 契约，正常工作，进一步加深了"mesh 组合被驱动特殊对待"的错觉。
 
 ## 修复
@@ -28,7 +28,7 @@ createInfos[0].flags = VK_SHADER_CREATE_LINK_STAGE_BIT_EXT;
 createInfos[0].flags |= VK_SHADER_CREATE_NO_TASK_SHADER_BIT_EXT;
 ```
 
-同 bug 也存在于 vulkan_practice，已同步修复：`vulkan_practice/shader.cppm:67`
+同 bug 也存在于 rgl，已同步修复：`rgl/shader.cppm:67`
 （`meshCreateInfoRaw.flags = VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT | VK_SHADER_CREATE_NO_TASK_SHADER_BIT_EXT;`）
 
 ## 验证结果（RTX 5090, 驱动 610.57.04）
@@ -38,8 +38,8 @@ createInfos[0].flags |= VK_SHADER_CREATE_NO_TASK_SHADER_BIT_EXT;
 | Vertex shader + shader object | ✅ 正常 | ✅ 正常（且 VVL 零错误） |
 | Mesh shader + shader object（无 NO_TASK_SHADER） | ❌ GPU page fault VA=0x0, frame 0 提交成功、frame 1 等待时 `VK_ERROR_DEVICE_LOST`，Aftermath dump 显示 `Engine reset occurred: true` | — |
 | Mesh shader + shader object（**有 NO_TASK_SHADER**） | — | ✅ 10/10 帧全部 `fN ok`，VVL 零错误 |
-| vulkan_practice（NVIDIA RTX 5090） | ❌ 同样崩溃 | ✅ 正常渲染 |
-| vulkan_practice（AMD RADV，VK_DRIVER_FILES 强制 RADV） | ✅ 正常 | ✅ 正常（flag 跨厂商兼容） |
+| rgl（NVIDIA RTX 5090） | ❌ 同样崩溃 | ✅ 正常渲染 |
+| rgl（AMD RADV，VK_DRIVER_FILES 强制 RADV） | ✅ 正常 | ✅ 正常（flag 跨厂商兼容） |
 
 ## 环境
 
@@ -74,7 +74,7 @@ VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation \
 ./min_mesh_crash
 ```
 
-AMD（隐藏 NVIDIA ICD 强制 RADV；注意本复现程序无条件启用 NV 诊断扩展，RADV 会因 `VK_ERROR_EXTENSION_NOT_PRESENT` 拒绝创建 device——这是复现程序的局限，跨厂商验证请用 vulkan_practice）：
+AMD（隐藏 NVIDIA ICD 强制 RADV；注意本复现程序无条件启用 NV 诊断扩展，RADV 会因 `VK_ERROR_EXTENSION_NOT_PRESENT` 拒绝创建 device——这是复现程序的局限，跨厂商验证请用 rgl）：
 
 ```bash
 cd build

@@ -102,7 +102,7 @@ build:
         (subprocess.call(['cmake','--build',b,'--parallel','{{ NPROC }}']) if os.path.exists(os.path.join(b,'build.ninja')) else (print('Error: Run just config first.'), sys.exit(1)))"
 
 # 重跑 4 条反射管线（改动 shaders/*.slang / *_schema.lua / tools/templates /
-# features_config.json 后必须执行；产物 vulkan_practice/generated/ 已入版本控制需随
+# features_config.json 后必须执行；产物 rgl/generated/ 已入版本控制需随
 # 改动一并提交，否则 reflection_check 守卫会拦构建）
 reflect:
     @cmake --build {{ BUILD }} --target reflect
@@ -134,22 +134,22 @@ build-debug COMPILER="default":
 
 check-run-ready:
     @python -c "import os,sys; \
-        b='{{ BUILD }}/vulkan_practice'; \
-        exe='vulkan_practice.exe' if os.name=='nt' else 'vulkan_practice'; \
+        b='{{ BUILD }}/rgl'; \
+        exe='rgl.exe' if os.name=='nt' else 'rgl'; \
         path=os.path.join(b, exe); \
         cfg=os.path.join(b,'configs','log_level.json'); \
         shaders=os.path.join(b,'generated_shaders'); \
         sys.exit(0) if os.path.isfile(path) else (print('Error: %s not found. Run just build first.' % exe), sys.exit(1)); \
         sys.exit(0) if os.path.isfile(cfg) and os.path.isdir(shaders) else (print('Error: Runtime resources missing. Run just build first.'), sys.exit(1))"
 
-# 运行入口统一 cd 到 build/vulkan_practice：程序按相对路径读 configs/*.lua 和
+# 运行入口统一 cd 到 build/rgl：程序按相对路径读 configs/*.lua 和
 # generated_shaders/*.spv，CWD 必须是该目录。
 # Linux 自动检测：lspci 见 AMD VGA/display → 设 RADV_EXPERIMENTAL=heap（RADV 启用 descriptor heap）
 run:
     just check-run-ready
     @python -c "import os,subprocess,re,shutil; \
-        b='{{ BUILD }}/vulkan_practice'; \
-        exe='vulkan_practice.exe' if os.name=='nt' else 'vulkan_practice'; \
+        b='{{ BUILD }}/rgl'; \
+        exe='rgl.exe' if os.name=='nt' else 'rgl'; \
         os.chdir(b); \
         env=dict(os.environ); \
         out=subprocess.run(['lspci'],capture_output=True,text=True).stdout if (os.name!='nt' and shutil.which('lspci')) else ''; \
@@ -166,7 +166,7 @@ run-igpu:
         echo "Error: radeon ICD json not found (Linux-only recipe)"; \
         exit 1; \
     fi; \
-    (cd {{ BUILD }}/vulkan_practice && VK_DRIVER_FILES="$RADV_ICD" RADV_EXPERIMENTAL=heap ./vulkan_practice)
+    (cd {{ BUILD }}/rgl && VK_DRIVER_FILES="$RADV_ICD" RADV_EXPERIMENTAL=heap ./rgl)
 
 # 独显运行（Linux NVIDIA prime offload；PROVIDER=3 为本机 dGPU 的 offload provider 编号）
 # 必须用 VK_DRIVER_FILES 隐藏 radeon ICD —— prime offload 环境变量对 Vulkan 设备枚举无过滤作用
@@ -178,12 +178,12 @@ run-dgpu:
         echo "Error: nvidia ICD json not found"; \
         exit 1; \
     fi; \
-    (cd {{ BUILD }}/vulkan_practice && VK_DRIVER_FILES="$NV_ICD" \
+    (cd {{ BUILD }}/rgl && VK_DRIVER_FILES="$NV_ICD" \
         __NV_PRIME_RENDER_OFFLOAD=1 \
         __NV_PRIME_RENDER_OFFLOAD_PROVIDER=3 \
         __GLX_VENDOR_LIBRARY_NAME=zink \
         __VK_LAYER_NV_optimus=NVIDIA_only \
-        ./vulkan_practice)
+        ./rgl)
 
 # 独显运行（Linux Intel dGPU，anv 驱动）
 # 必须用 VK_DRIVER_FILES 只留 intel ICD —— 设备评分器默认选分数更高的 dGPU（RTX 5090）
@@ -196,7 +196,7 @@ run-intel:
         echo "Error: intel ICD json not found (Linux-only recipe)"; \
         exit 1; \
     fi; \
-    (cd {{ BUILD }}/vulkan_practice && VK_DRIVER_FILES="$INTEL_ICD" ./vulkan_practice)
+    (cd {{ BUILD }}/rgl && VK_DRIVER_FILES="$INTEL_ICD" ./rgl)
 
 # ------------------------------------------------------------------------------
 # 3. 清理

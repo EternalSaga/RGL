@@ -15,7 +15,7 @@ namespace RGL {
 // Scalar block layout 的 size/alignment 查询表（C/C++ 自然布局规则）：
 // 用于给生成的 C++ 结构体计算字段偏移并校验总尺寸。
 // 本项目所有 shader 经 -fvk-use-scalar-layout 编译（CMake 统一策略，见
-// vulkan_practice/CMakeLists.txt 头注释），push constant 用 scalar 布局——
+// rgl/CMakeLists.txt 头注释），push constant 用 scalar 布局——
 // 与 C 自然布局一致（所有类型对齐 4），故生成的 C++ struct（glm 自然对齐 4）
 // 与 shader 逐字段偏移天然吻合，无需 padding 字段（DrawArgs = 96B，无 _padN）。
 // standardLayoutInfo 的对齐恒为 4（scalar 对齐）；offset 计算/尾 padding 逻辑保留

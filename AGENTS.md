@@ -1,8 +1,8 @@
-# vulkan_practice
+# RGL
 
 Vulkan 现代特性学习项目。Mesh shader 渲染管线，使用 ShaderObject + DescriptorHeap + DynamicState。
-核心代码位于 vulkan_practice 目录下。
-legacy 目录下的代码是陈旧的 OpenGL 项目已不是当前工作重点，一般不用看，但有些思路可以参考。
+核心代码位于 rgl 目录下。
+legacy（旧 OpenGL 项目）已于 2026-09-08 删除，历史思路参考见 git history（`legacy/` @ < 2026-09-08）。
 
 ## 给大模型
 优先使用中文回复用户，除非用户说使用英文回复。
@@ -38,14 +38,14 @@ Windows `sdl3[vulkan]`）；同一依赖可出现两次用 `"platform"` 字段�
 ### 构建系统内部
 
 CMake 无独立构建目录 — 必须从根目录构建（`cmake -B build -S .`）。
-产物: `build/vulkan_practice/vulkan_practice`（Windows 加 `.exe`）。
+产物: `build/rgl/rgl`（Windows 加 `.exe`）。
 
 ## 运行要求
 
-- **CWD 必须是 `build/vulkan_practice/`**：程序按相对路径读取 `configs/` 和 `generated_shaders/*.spv`，
+- **CWD 必须是 `build/rgl/`**：程序按相对路径读取 `configs/` 和 `generated_shaders/*.spv`，
   其他目录启动会报 "Log config file not found"
 - 运行时资源由构建自动同步：`configs/` 增量拷贝（`copy_if_different`，改 config 后 `just build`
-  即生效；**新增** config 文件需 `just config`）、SPV 直接编译到 `build/vulkan_practice/generated_shaders/`
+  即生效；**新增** config 文件需 `just config`）、SPV 直接编译到 `build/rgl/generated_shaders/`
 - `RADV_EXPERIMENTAL=heap` — RADV 下启用 `VK_EXT_descriptor_heap` 必需，`just run`/`run-igpu` 已自动设置
 - **运行模式全配置化**（2026-09-08 环境变量→配置文件）：`configs/runtime.lua`（headless /
   headless_size / win_size / show_after / llm_debug+llm_shot）、`configs/diagnostics.lua`
@@ -56,8 +56,8 @@ CMake 无独立构建目录 — 必须从根目录构建（`cmake -B build -S .`
 - **headless 模式**：runtime.lua `headless=true` 脱 SDL/compositor（`vkCreateHeadlessSurfaceEXT`），不建 SDL 窗口；
   尺寸 `headless_size={W,H}`（默认 1280×720）；llm_debug 截图直接读 swapchain 后缓冲（免离屏重渲）。
   坑：v357 结构体无 width/height/format 字段、须显式 `VK_KHR_surface`、无 `eImmediate`（用 `eFifo`）
-- **agent 冒烟**：改 `build/vulkan_practice/configs/runtime.lua` 为 `headless = true`（build 副本临时改，
-  下次 `just build` 按源内容比对**自动复原**）→ `cd build/vulkan_practice && RADV_EXPERIMENTAL=heap timeout 8 ./vulkan_practice`
+- **agent 冒烟**：改 `build/rgl/configs/runtime.lua` 为 `headless = true`（build 副本临时改，
+  下次 `just build` 按源内容比对**自动复原**）→ `cd build/rgl && RADV_EXPERIMENTAL=heap timeout 8 ./rgl`
   （正常应零 `[error]`；deferred 另改 build 副本 render_graph.lua `variant="deferred"`）
 - **llm_debug 截图流程**（agent 多模态读图）：build 副本 `configs/runtime.lua` 改 `headless=true` +
   `llm_debug=true` → 直接跑二进制 → 延迟 N 帧存 PNG（路径打日志）并退出 → `just build` 复原配置。
@@ -182,7 +182,7 @@ main.cpp 按逆序析构（RAII）。依赖图原则：只允许下层 import �
 
 ## 着色器编译
 
-`vulkan_practice/shaders/` 下的 Slang → SPV 输出到 `build/vulkan_practice/generated_shaders/`
+`rgl/shaders/` 下的 Slang → SPV 输出到 `build/rgl/generated_shaders/`
 （CMake `compile_slang()` 构建时编译；运行时相对路径读取）。
 
 - **反射管线显式触发**：`*_reflection.json` + `generated/*.cppm` + `reflection_manifest.txt` 为

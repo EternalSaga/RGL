@@ -106,7 +106,7 @@ NVRM: Xid 13, Graphics Exception: ESR 0x405848=0x80000000
 **A/B 验证**（min_mesh_crash，RTX 5090, 610.57.04）：
 - 去掉 `NO_TASK_SHADER` flag → 复现：frame 0 提交成功、frame 1 `VK_ERROR_DEVICE_LOST`，Aftermath `engine reset occurred: true`
 - 加上 flag → 10/10 帧通过，VVL 零错误
-- vulkan_practice 同步修复后 NVIDIA 与 AMD 均正常渲染
+- rgl 同步修复后 NVIDIA 与 AMD 均正常渲染
 
 **为何之前误判为驱动 bug**（三层掩盖）：
 1. **VVL 静默**：本应报错的 `VUID-vkCmdDrawMeshTasksEXT-None-08694`（无 flag 时 TASK stage 必须绑定有效 task shader）**仅在 `taskShader` + `meshShader` 双 feature 启用时才生效**；本项目只启用了 `meshShader` → spec 漏洞（Vulkan-ValidationLayers issue #12886）
@@ -126,7 +126,7 @@ NVRM: Xid 13, Graphics Exception: ESR 0x405848=0x80000000
 **最终修复**（2026-08-17）：
 
 ```cpp
-// vulkan_practice/shader.cppm:67 和 min_mesh_crash/main.cpp:253
+// rgl/shader.cppm:67 和 min_mesh_crash/main.cpp:253
 meshCreateInfoRaw.flags |= VK_SHADER_CREATE_NO_TASK_SHADER_BIT_EXT;
 ```
 
@@ -141,7 +141,7 @@ meshCreateInfoRaw.flags |= VK_SHADER_CREATE_NO_TASK_SHADER_BIT_EXT;
 
 ## 六、GPU 诊断工具集成
 
-> **2026-08-17**：本节及第七节的诊断代码（NV 诊断扩展 + Aftermath 集成）已作为 NVIDIA 专属调试代码从 vulkan_practice 移除，仅 min_mesh_crash 保留 Aftermath 用于崩溃复现。以下为历史记录。
+> **2026-08-17**：本节及第七节的诊断代码（NV 诊断扩展 + Aftermath 集成）已作为 NVIDIA 专属调试代码从 rgl 移除，仅 min_mesh_crash 保留 Aftermath 用于崩溃复现。以下为历史记录。
 
 **已完成**：集成 `VK_NV_device_diagnostic_checkpoints` 和 `VK_EXT_device_fault` 扩展（仅限 NVIDIA GPU）。
 
@@ -188,7 +188,7 @@ Device: enabling 12 extensions (含 3 个 Aftermath 扩展)
 Aftermath diagnostics: checkpoints=true, fault=true, diagnosticsConfig=true, flags=15 (全开)
 Aftermath: GPU crash dump received (60132 bytes)
 Aftermath: crash dump processing finished
-Aftermath: app=vulkan_practice, date=Wed Aug 12 23:06:39 2026, pid=427661, api=7 (Vulkan)
+Aftermath: app=rgl, date=Wed Aug 12 23:06:39 2026, pid=427661, api=7 (Vulkan)
 Aftermath: device status=Reset, adapterReset=false, engineReset=true
 Aftermath: pageFault VA=0x0 type=0 access=0 engine=0 client=0
 Aftermath: active shader count=0

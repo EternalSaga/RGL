@@ -4,7 +4,6 @@
       "name": "boost-headers",
       "version>=": "1.86.0"
     },
-
     {
       "name": "boost-program-options",
       "version>=": "1.86.0"
@@ -43,18 +42,9 @@
       "version>=": "3.11.2"
     },
     {
-      "name": "imgui",
-      "version>=": "1.91.0",
-      "features": [
-        "opengl3-binding",
-        "freetype"
-      ]
-    },
-    {
       "name": "entt",
       "version>=": "3.14.0"
     },
-
     {
       "name": "inja"
     },

@@ -4,7 +4,7 @@
 > 批次 4 CPU culling 完成，批次 5=7b / 批次 6 文档销账待续）
 
 Phase 0–6 已全部完成（各阶段结论一段话归档于下，实施细节与计划-实现偏离的权威记录在
-`docs/archive/phaseX_plan.md`）。`legacy/`（旧 OpenGL 项目）仅思路参考、非工作重点（见 AGENTS.md）。
+`docs/archive/phaseX_plan.md`）。（legacy 旧 OpenGL 项目已于 2026-09-08 删除，见 git history。）
 
 ---
 

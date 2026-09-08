@@ -304,3 +304,20 @@ draw list（规范 4），无全局状态。**下一步**：批次 5 = GPU culli
 **验证**：getenv 全仓清零；variant=deferred 编译 6att/2pass + G-buffer 槽 ✓；headless+llm
 截图与基线 **BIT-IDENTICAL** ✓；style_dist/texel_canary 非默认值实锤生效（frame 5 金丝雀
 PASS + 1591 prim 分布行）✓；forward/deferred 双路零 VVL error。
+
+---
+
+## 重构批次 4（2026-09-08）：legacy 删除 + vulkan_practice → rgl 转正
+
+- **legacy/ 删除**（146 文件，全文本、不参与构建、无 LFS）：项目已全面超越旧 OpenGL 工程，
+  思路参考回查 git history。连带清 vcpkg.json imgui（legacy 遗留依赖，主工程零使用）+
+  .gitignore 两行失效条目。代码内 4 处 legacy 溯源注释保留（设计出处记录）。
+- **vulkan_practice → rgl**（目录 + CMake target + 可执行名全转正）：产物 `build/rgl/rgl`，
+  CWD 契约 `build/rgl/`。改动面 = 根/子 CMakeLists、Justfile 6 处、.zed/debug.json、
+  ReflectionManifest 文案、tools/generator 注释、configs 注释、AGENTS + 4 篇现行 docs +
+  min_mesh_crash README；`just reflect` 重写 manifest 路径；窗口标题 "Vulkan Practice"→"RGL"。
+  依据 = 结构调研（方案 1 最小动作；"提升到根 + 分组子目录"方案否决——CWD/binary dir 连锁
+  成本大于收益；render_graph 家族目录化亦否决——modules 下目录不改变编译图）。
+
+**验证**：just config/reflect/build 全绿；headless+llm forward/deferred 截图与改名前基线
+**BIT-IDENTICAL**、零 VVL error；全仓 `vulkan_practice` 字样清零（archive 时点快照除外）。

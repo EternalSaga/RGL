@@ -3,7 +3,7 @@
 # 替代 vcpkg shader-slang port（port 停在 2026.7.1，上游 master 亦同——
 # docs/archive/heap_texture_research.md §九.4；vcpkg.json 已移除该依赖）。
 if(NOT SLANGC_EXECUTABLE OR NOT EXISTS "${SLANGC_EXECUTABLE}")
-    message(FATAL_ERROR "SLANGC_EXECUTABLE 不可用：根 CMakeLists.txt 须在 add_subdirectory(vulkan_practice) 前 include(cmake/SlangFetch.cmake) 并调用 rgl_fetch_slang()")
+    message(FATAL_ERROR "SLANGC_EXECUTABLE 不可用：根 CMakeLists.txt 须在 add_subdirectory(rgl) 前 include(cmake/SlangFetch.cmake) 并调用 rgl_fetch_slang()")
 endif()
 
 message(STATUS "找到 Slang 编译器: ${SLANGC_EXECUTABLE}")
@@ -223,7 +223,7 @@ compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.mesh.slang MODEL_MESH_SP
 # 曾用 -O0（-O2 下编译吃内存，24 并发时打爆 swap）；2026-09-02 用户调整内存/显存
 # 分配至 32GB 后回归目标级 -O2（启动路径代码质量优先，编译峰值内存已非瓶颈）。
 
-add_executable(vulkan_practice main.cpp vam_impl.cpp tinygltf_impl.cpp stb_impl.cpp ${MESH_SPV} ${FRAG_SPV} ${MODEL_MESH_SPV} ${MODEL_FRAG_SPV} ${MODEL_PBR_FRAG_SPV} ${MODEL_PHONG_FRAG_SPV} ${MODEL_PBR_IBL_FRAG_SPV} ${SKYBOX_MESH_SPV} ${SKYBOX_FRAG_SPV} ${DEFERRED_GEOM_FRAG_SPV} ${LIGHT_MESH_SPV} ${LIGHT_FRAG_SPV})
+add_executable(rgl main.cpp vam_impl.cpp tinygltf_impl.cpp stb_impl.cpp ${MESH_SPV} ${FRAG_SPV} ${MODEL_MESH_SPV} ${MODEL_FRAG_SPV} ${MODEL_PBR_FRAG_SPV} ${MODEL_PHONG_FRAG_SPV} ${MODEL_PBR_IBL_FRAG_SPV} ${SKYBOX_MESH_SPV} ${SKYBOX_FRAG_SPV} ${DEFERRED_GEOM_FRAG_SPV} ${LIGHT_MESH_SPV} ${LIGHT_FRAG_SPV})
 
 # ─── Runtime config copy (configs/ → build dir) ──────────────────────────────
 # 程序运行时按相对路径读取 configs/*.json，build 目录必须完整。
@@ -292,7 +292,7 @@ foreach(dir ${SKYBOX_DIRS})
 endforeach()
 add_custom_target(copy_skybox ALL DEPENDS ${SKYBOX_OUTPUTS})
 
-target_sources(vulkan_practice PUBLIC
+target_sources(rgl PUBLIC
                FILE_SET CXX_MODULES
                 FILES rlvk.cppm vkerror.cppm utils.cppm sdl3window.cppm QueueFamilyManager.cppm cube.cppm
                       camera.cppm camera_config.cppm scene_config.cppm runtime_config.cppm diagnostics.cppm
@@ -309,7 +309,7 @@ target_sources(vulkan_practice PUBLIC
                         ${FEATURES_CPPM}
 )
 
-add_dependencies(vulkan_practice reflection_check)
+add_dependencies(rgl reflection_check)
 
 find_package(Vulkan REQUIRED)
 find_package(glm CONFIG REQUIRED)
@@ -318,13 +318,13 @@ find_package(Sol2 CONFIG REQUIRED)
 find_package(unofficial-lua CONFIG REQUIRED)
 # tinygltf 是 header-only 且该 vcpkg port 不导出 CMake target：find_path 取头文件目录
 find_path(TINYGLTF_INCLUDE_DIRS tiny_gltf.h REQUIRED)
-target_include_directories(vulkan_practice PRIVATE ${TINYGLTF_INCLUDE_DIRS})
-target_link_libraries(vulkan_practice PRIVATE Vulkan::Vulkan rllogger glm::glm EnTT::EnTT sol2::sol2 lua rlstd)
-target_compile_definitions(vulkan_practice PRIVATE GLM_FORCE_DEPTH_ZERO_TO_ONE GLM_FORCE_RADIANS)
+target_include_directories(rgl PRIVATE ${TINYGLTF_INCLUDE_DIRS})
+target_link_libraries(rgl PRIVATE Vulkan::Vulkan rllogger glm::glm EnTT::EnTT sol2::sol2 lua rlstd)
+target_compile_definitions(rgl PRIVATE GLM_FORCE_DEPTH_ZERO_TO_ONE GLM_FORCE_RADIANS)
 find_package(SDL3 CONFIG REQUIRED)
 
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)
-target_link_libraries(vulkan_practice
+target_link_libraries(rgl
     PRIVATE
     SDL3::SDL3
     GPUOpen::VulkanMemoryAllocator
@@ -332,4 +332,4 @@ target_link_libraries(vulkan_practice
 
 
 
-target_compile_features(vulkan_practice PRIVATE cxx_std_23)
+target_compile_features(rgl PRIVATE cxx_std_23)

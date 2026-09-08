@@ -1,6 +1,6 @@
 -- 场景配置（启动时加载，字段均可选，缺省回落默认值）
 -- model 为空字符串 = 不加载模型，仅渲染 cube
--- pipelines 每条: name（管线表条目名）+ mesh/frag 的 SPV 相对路径（相对 build/vulkan_practice/）
+-- pipelines 每条: name（管线表条目名）+ mesh/frag 的 SPV 相对路径（相对 build/rgl/）
 return {
     -- model = "models/grass_variations.glb",  -- 快速排查模型（4 primitive / 1 张内嵌 PNG，全 BLEND）
     -- model = "models/castle_of_loarre.glb",  -- Loarre 城堡：11 primitive / 1 纹理，包围球 center=(-3.4,0.6,17.7) r=59.7

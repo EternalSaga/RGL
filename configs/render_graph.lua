@@ -1,7 +1,7 @@
 -- 渲染意图图（Phase 6，configs/render_graph.lua）
 -- 声明 attachment/pass 拓扑，C++ 编译为可执行序列（barrier/布局转换自动推导）。
 -- 本文件缺失或整段缺省 = 回落默认三段图（与下方内容等价）。结构规则与字段语义
--- 权威记录：vulkan_practice/render_graph.cppm（类型契约）+ render_graph_config.cppm
+-- 权威记录：rgl/render_graph.cppm（类型契约）+ render_graph_config.cppm
 -- （Lua 格式）；加载 = sol2 沙箱（禁 dofile/require），枚举字符串写错 = 启动报错。
 --
 -- attachments: kind = "swapchain" | "depth" | "offscreen"（帧首丢弃规则：
