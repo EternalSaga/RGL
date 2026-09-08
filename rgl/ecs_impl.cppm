@@ -182,7 +182,7 @@ struct FrameSystem {
 
 std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer& renderer,
 	const RGL::LlmDebugConfig* llm,
-	std::function<std::expected<std::string, Error>(RGL::Renderer&, const RGL::FrameDrawList&)>
+	std::function<std::expected<std::string, Error>(RGL::Renderer&)>
 		llmCapture,
 	std::function<void(uint32_t)> onFrame) {
 	auto& swapchain = renderer.getSwapchainRef();
@@ -242,17 +242,22 @@ std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer& rende
 				renderer.getGraphicsCommandPoolRef(), frame);
 		}
 
+		// llm 帧捕获（2026-09-08：截图 = 帧内回读本帧真实输出，离屏重渲退役）：
+		// drawFrame 前请求（vkrenderer 帧内钩子，dump_gbuf 通道一并传入）；drawFrame 后
+		// 仅当真有捕获产物时消费写 PNG 并请求退出（acquire 超时跳帧 = 请求保持 pending 重试）
+		const bool wantCapture = llm && llmCapture && llmFrame >= llm->delayFrames;
+		if (wantCapture)
+			renderer.requestFrameCapture(diagnostics().dumpGbuf);
+
 		auto result = renderer.drawFrame(rg.ctx().get<FrameDrawList>());
 		if (!result) {
 			if (logger) logger->error("渲染错误: {}", result.error().describe());
 			lastError = result.error();
 			break;
 		}
-		// llm_debug：本帧渲染完成后计数；超过延迟帧数 → 用本帧 draw list 离屏
-		// 重渲截图（场景已推进 N 步），然后请求退出（下轮循环头 break）
-		if (llm && llmCapture) {
-			if (++llmFrame > llm->delayFrames) {
-				auto shot = llmCapture(renderer, rg.ctx().get<FrameDrawList>());
+		if (wantCapture) {
+			if (renderer.hasFrameCapture()) {
+				auto shot = llmCapture(renderer);
 				if (shot) {
 					if (logger) logger->info("llm_debug: 截图已保存 ({})", *shot);
 				} else {
@@ -262,6 +267,8 @@ std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer& rende
 				rg.ctx().get<AppExit>().requested = true;
 			}
 		}
+		if (llm && llmCapture)
+			++llmFrame;  // 每帧计数（含跳帧），wantCapture 判定的基准
 		if (onFrame)
 			onFrame(frame);
 		++frame;

@@ -241,7 +241,7 @@ std::expected<Resources::RtAttachment*, Error> Resources::ensureRtAttachment(
 
 std::expected<std::array<uint32_t, 4>, Error> Resources::ensureDeferredGBufferSlots() {
 	// 名字/格式 = render_graph kGBufferAttachments 契约表（单一真相源，与
-	// deferredRenderGraphDesc / llm_debug captureFrame 共享，无漂移可能）
+	// deferredRenderGraphDesc 共享（llm_debug 重渲器已退役），无漂移可能）
 	const vk::Extent2D extent = vkSwapchain.getExtent();
 	std::array<uint32_t, 4> slots{};
 	for (uint32_t i = 0; i < kGBufferAttachments.size(); ++i) {

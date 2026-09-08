@@ -204,7 +204,7 @@ export const RgGraphDesc& deferredRenderGraphDesc();
 
 // Phase 7 D1：G-buffer 4 附件契约表（**单一真相源**）——消费方 = deferredRenderGraphDesc
 //（geometry outputs / light inputs 按本表顺序生成）、vkresources ensureDeferredGBufferSlots、
-// llm_debug captureFrame。格式串 = isKnownRgFormat 词表可解析名（resolveRgFormat 物化）。
+// drawFrame 帧内捕获（dump_gbuf）。格式串 = isKnownRgFormat 词表可解析名（resolveRgFormat 物化）。
 // 顺序即 light.frag binding 4-7（albedo/normal/position/metalrough）与 diagnostics.lua dump_gbuf 通道号。
 export struct RgGBufferDesc {
 	std::string_view name;

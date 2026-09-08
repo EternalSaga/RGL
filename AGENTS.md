@@ -54,14 +54,16 @@ CMake 无独立构建目录 — 必须从根目录构建（`cmake -B build -S .`
   （路线选路，替代旧 RGL_DEFERRED/RGL_OFFSCREEN env）。仅驱动级 env（RADV_EXPERIMENTAL /
   VK_DRIVER_FILES / prime offload）保留——由 `just run-*` 注入，非应用配置
 - **headless 模式**：runtime.lua `headless=true` 脱 SDL/compositor（`vkCreateHeadlessSurfaceEXT`），不建 SDL 窗口；
-  尺寸 `headless_size={W,H}`（默认 1280×720）；llm_debug 截图直接读 swapchain 后缓冲（免离屏重渲）。
+  尺寸 `headless_size={W,H}`（默认 1280×720）；llm_debug 截图 = drawFrame 帧内回读 swapchain 后缓冲
+  （present 前拷贝，真实上屏内容；headless+llm 时 main 契约令 headless_size 跟随 llm_shot.size）。
   坑：v357 结构体无 width/height/format 字段、须显式 `VK_KHR_surface`、无 `eImmediate`（用 `eFifo`）
 - **agent 冒烟**：改 `build/rgl/configs/runtime.lua` 为 `headless = true`（build 副本临时改，
   下次 `just build` 按源内容比对**自动复原**）→ `cd build/rgl && RADV_EXPERIMENTAL=heap timeout 8 ./rgl`
   （正常应零 `[error]`；deferred 另改 build 副本 render_graph.lua `variant="deferred"`）
 - **llm_debug 截图流程**（agent 多模态读图）：build 副本 `configs/runtime.lua` 改 `headless=true` +
   `llm_debug=true` → 直接跑二进制 → 延迟 N 帧存 PNG（路径打日志）并退出 → `just build` 复原配置。
-  相机位置 = camera.lua 顶层 position/target/fovDegrees
+  相机位置 = camera.lua 顶层 position/target/fovDegrees；截图尺寸 = swapchain extent（headless 跟随
+  llm_shot.size，见 headless 模式条）；诊断直读 G-buffer 通道 = diagnostics.lua `dump_gbuf=0..3`
 - **截图回归方法学**（2026-09-08）：BIT-IDENTICAL 比对须**同会话双构建**（`git stash` 基线构建 vs 改动构建）；
   跨日/跨全量重建存在 ±1 LSB 叶缘噪声（增量 .o vs 全量 codegen 微差，见 docs/调试历史.md 2026-09-08 条目）
 
@@ -148,7 +150,7 @@ tools 为 `EXCLUDE_FROM_ALL`（编译提速）：日常构建不碰工具链，`
 | `vk_device` | vkdevice.cppm | PhysicalDevice 选择、QueueFamilyManager、Device、CommandPools、FeatureChain |
 | `vk_swapchain` | vkswapchain.cppm | Surface、Swapchain、ImageView[] format/extent/presentMode |
 | `vk_resources` | vkresources.cppm | VmaAllocatorRAII、depth、VmaDescriptorHeap（固定裕量 `kUserSlotMargin(1024)`）、`allocSlot` 统一分配、`ensureSharedSampler/ensureSkySampler/ensureSceneData`（scene data 头 128B：@0 光参数/@48 env/@64 skyInvViewProj/@128 对象矩阵表 ×4096，尾区 @262272 灯数组）、env cubemap 单例、G-buffer RT 缓存（`ensureRtAttachment`/`rtHeapSlot`/`ensureDeferredGBufferSlots`） |
-| `vk_renderer` | vkrenderer.cppm | 同步对象、命令缓冲；`drawFrame(const FrameDrawList&)` 盲执行（零 entt）：构造收 `CompiledRenderGraph`，逐 pass = barrier 计划物化 → beginRendering → applyDynamicState → 段内逐 draw → endRendering；blit pass；present/waitStage 图派生；heap barrier + scene staging = 固定段不入图；staging ring；acquire 100ms 超时跳帧 |
+| `vk_renderer` | vkrenderer.cppm | 同步对象、命令缓冲；`drawFrame(const FrameDrawList&)` 盲执行（零 entt）：构造收 `CompiledRenderGraph`，逐 pass = barrier 计划物化 → beginRendering → applyDynamicState → 段内逐 draw → endRendering；blit pass；present/waitStage 图派生；heap barrier + scene staging = 固定段不入图；staging ring；acquire 100ms 超时跳帧；**帧内捕获回读**（llm_debug 截图 = present 前拷后缓冲/GB 通道，`requestFrameCapture/takeFrameCapture`，无离屏重渲） |
 | `render_graph` | render_graph.cppm | 渲染意图图（纯 C++ 零 Lua 零 entt）：`RgGraphDesc` → `compileRenderGraph`（校验 + barrier 自动推导 + presentTransition）→ `CompiledRenderGraph`；default/offscreen/deferred 三图变体 + `kGBufferAttachments` 契约表（G-buffer 名单一真相源）+ `renderGraphSelfCheck` |
 | `render_graph_config` | render_graph_config.cppm | `configs/render_graph.lua` → `RgGraphDesc`（sol2 沙箱，缺文件回落默认；结构合法性归 compile） |
 | `shader_registry` | shader_registry.cppm | 管线表（零 entt）：`PipelineEntry` + `ShaderRegistry`（cube 恒建 + `addModelEntry`（按组合去重）+ `addSkyEntry` + `addLightEntry` + `bindPipelineToAsset`） |
@@ -239,9 +241,6 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
 - **`LightDataGpu` 前向头双源**（灯数组已入反射）：forward `LightDataGpu@0-48` 仍手写 struct ↔
   `scene.slang` 字面量手工一致（为 forward diff0 未并反射）；灯数组 @262272 已入反射管线 4
   （static_assert 三方同步）。灯未 entity 化（经 `SceneLights` context，lights[0]=主光）
-- **captureFrame 未图化**（Phase 7 D1 债）：llm_debug 截图的 deferred 分支 = 自包含手写 2-pass
-  （绕过 `CompiledRenderGraph`，与 drawFrame 平行维护；G-buffer 名单已并入 `kGBufferAttachments`
-  单源，pass 逻辑仍双份）。正解 = deferred 下截图走 swapchain 回读不重渲，留后续
 - `configs/` 增量拷贝只认"源文件更新"：build 端副本被破坏（mtime 更新）不会自动恢复，需手动拷贝；
   且 `copy_if_different` 按内容比对——**build 端临时改配置会被下次 build 静默覆盖**（截图调试后记得
   改的是 build 副本还是源）

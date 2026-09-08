@@ -67,28 +67,37 @@ export class Renderer {
 		RGL::ShaderRegistry& shaderRegistry, RGL::CompiledRenderGraph renderGraph);
 	RGL::Swapchain& getSwapchainRef() const { return *swapchain; }
 	RGL::Resources& getResourcesRef() const { return *resources; }
-	// 离屏截图（llm_debug.cppm captureFrame）用的只读访问器
+	// 帧循环侧（ecs texel 金丝雀）用的只读访问器（截图路径已改帧内回读，不再需要
+	// 管线/状态访问器——2026-09-08 离屏重渲器退役）
 	RGL::DeviceContext& getDeviceContextRef() const { return vkDevice; }
 	const vk::raii::CommandPool& getGraphicsCommandPoolRef() const { return graphicsCommandPool; }
-	// 离屏截图（llm_debug.cppm captureFrame）用的只读访问器：委托管线表（ShaderRegistry）。
-	// entry 访问器供截图路径取 pushDataSet（与主路径 drawCall 同一契约字段，不硬编码 0——
-	// push set 显式化契约（L5）两条路径必须同步，否则 pushDataSet 离开 0 时截图静默分歧）
-	const RGL::PipelineEntry& pipelineEntryAt(uint32_t index) const { return registry.entry(index); }
-	const RGL::RenderState& getOpaqueState() const { return opaqueState; }
-	const RGL::RenderState& getTransparentState() const { return transparentState; }
-	// edS3：depth clip 动态状态能力（llm_debug 离屏重渲消费，同主路径同一门，避免两路分歧）
-	[[nodiscard]] bool isDepthClipDynamic() const { return depthClipDynamic; }
-	const RGL::RenderState& getSkyboxState() const { return skyboxState; }
-	// deferred 截图路径（captureFrame）：light pass 存在 = 图含 drawLight（lightPipelineIdx 有效）。
-	// captureFrame 据此走 deferred 分支：复用已填充（SRO）的 G-buffer，只把 light pass 渲进单捕获 RT
-	[[nodiscard]] bool isDeferred() const { return lightPipelineIdx.has_value(); }
-	uint32_t lightPipelineIndex() const { return *lightPipelineIdx; }
-	const RGL::RenderState& getLightState() const { return lightState; }
 	// 等待 GPU 空闲（resize / 重建 swapchain 前调用，确保旧资源不再被使用）
 	void waitForIdle() { vkDevice.getDevice().waitIdle(); }
 	// 渲染一帧：整体流程见类头注释；绘制内容 = 渲染 system 产出的 FrameDrawList
 	//（盲执行器，不认识具体场景资产）；失败（device lost 等）时返回错误
 	[[nodiscard]] std::expected<void, Error> drawFrame(const FrameDrawList& list);
+
+	// ===== 帧内捕获（2026-09-08：llm_debug 截图从"离屏重渲"改为"回读本帧真实输出"）=====
+	// 请求帧的 drawFrame 在 present 前录一条回读拷贝（后缓冲，或 deferred G-buffer
+	// 第 N 号 RT = 诊断 dump_gbuf），submit 后同步等本帧 inFlight fence 搬进结果——
+	// 截图恒等于真实上屏内容（与图演进零分歧、零平行渲染器维护负担）；同步停顿只
+	// 发生在请求帧（llm 一次性截图模式，正常路径零影响）。
+	struct FrameCapture {
+		uint32_t width = 0;
+		uint32_t height = 0;
+		vk::Format format = vk::Format::eUndefined;
+		int gbufChannel = -1;          // >=0 = G-buffer 直读（dump_gbuf）；-1 = swapchain 后缓冲
+		VkDeviceSize bytes = 0;
+		std::vector<uint8_t> pixels;   // 原格式回读（行紧凑），消费方转 RGBA8
+	};
+	// drawFrame 前调用（gbufChannel = diagnostics().dumpGbuf）；一次性——acquire 超时
+	// 跳帧时请求保持 pending，直到真正录制的帧消费
+	void requestFrameCapture(int gbufChannel = -1) { captureRequest = gbufChannel; }
+	// drawFrame 后调用（fence 已在 drawFrame 内等待）；空 = 本帧无捕获产物
+	std::optional<FrameCapture> takeFrameCapture() { return std::move(captureResult); }
+	// 本帧是否已产出捕获（acquire 超时跳帧时 drawFrame 不录拷贝、请求保持 pending，
+	// 消费方据此决定重试而非误读空）
+	[[nodiscard]] bool hasFrameCapture() const { return captureResult.has_value(); }
 
    private:
 	// 创建 MAX_FRAMES_IN_FLIGHT 套同步对象（每个帧 slot 一套，双缓冲）。
@@ -131,6 +140,16 @@ export class Renderer {
 	// 不查询）；录制期随每条物化 barrier 更新为 plan.newLayout。
 	//（Phase 4 前 DIAG RGL_OFFSCREEN 的 offscreenLayout 单变量泛化为逐 slot 表）
 	std::vector<vk::ImageLayout> attachmentLayouts;
+	// 帧内捕获状态（requestFrameCapture/takeFrameCapture，见其注释）
+	int captureRequest = -2;                    // -2 = 无请求；-1 = 后缓冲；>=0 = GB 通道号
+	bool captureArmed = false;                  // 本帧已录拷贝（submit 后等待搬移）
+	FrameCapture captureInFlight;               // 录制期元数据（bytes/extent/format/channel）
+	std::optional<FrameCapture> captureResult;  // takeFrameCapture 消费
+	RGL::VmaBuffer captureStaging;              // host-visible 回读缓冲（按需增长重建）
+	VkDeviceSize captureStagingSize = 0;
+	void* captureMapped = nullptr;              // 常驻映射指针（createBuffer 不回传 mapped，随分配自存）
+	uint32_t swapchainSlot = kRgNoAttachment;   // 编译图中 swapchain 的 slot（捕获布局追踪入口）
+	[[nodiscard]] bool ensureCaptureStaging(VkDeviceSize bytes);
 	// edS3：depth clip enable 动态状态能力门（vkCmdSetDepthClipEnableEXT；启动期一次探测，
 	// 未支持 = false，applyDynamicState 内 no-op 不 set——"扩展缺失干净降级"原则）
 	bool depthClipDynamic = false;

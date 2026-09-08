@@ -78,6 +78,7 @@ using std::ofstream;
 using std::optional;
 using std::out_of_range;
 using std::pair;
+using std::pow;
 using std::runtime_error;
 using std::set;
 using std::shared_ptr;

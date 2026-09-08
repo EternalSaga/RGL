@@ -81,8 +81,14 @@ int main() {
 	// 尺寸 headless_size={W,H}（默认 1280x720）。headless 下 llm_debug 截图直接读
 	// swapchain image 回读（compositor 无关）
 	const bool headless = runtimeConfig.headless;
-	const uint32_t headlessW = runtimeConfig.headlessWidth;
-	const uint32_t headlessH = runtimeConfig.headlessHeight;
+	uint32_t headlessW = runtimeConfig.headlessWidth;
+	uint32_t headlessH = runtimeConfig.headlessHeight;
+	// 截图尺寸契约（2026-09-08 帧内回读：截图 = swapchain extent）：headless+llm 时
+	// headless_size 对齐 llm_shot.size——与非 headless llm 按 llm 尺寸建窗（下方建窗段）同语义
+	if (headless && llmEnabled) {
+		headlessW = runtimeConfig.llm.width;
+		headlessH = runtimeConfig.llm.height;
+	}
 	// Phase 7：deferred 路线 = render_graph.lua variant="deferred"（exclusive，与 forward
 	// 二选一）——deferredMode 在下方图配置加载后按 variant 求值（opaque 段用
 	// deferred_geometry 管线 + light pass 采样 G-buffer，须在 env/models 槽后建 G-buffer RT）
@@ -435,12 +441,13 @@ int main() {
 				}
 			};
 		}
-		// llm 截图执行回调（ecs 不 import llm_debug——依赖图叶子解耦，2026-09-02）：
-		// main 是唯一知道 captureFrame 的地方，config 已按值绑进 lambda
+		// llm 截图消费回调（ecs 不 import llm_debug——依赖图叶子解耦，2026-09-02）：
+		// main 是唯一知道 writeCapturePng 的地方，config 已按值绑进 lambda。截图内容 =
+		// drawFrame 帧内回读的本帧真实输出（vkrenderer FrameCapture，2026-09-08 离屏重渲退役）
 		auto renderResult = RGL::renderSystem(registry, vkRenderer,
 			llmEnabled ? &runtimeConfig.llm : nullptr,
-			[&](RGL::Renderer& r, const RGL::FrameDrawList& l) {
-				return RGL::captureFrame(r, l, runtimeConfig.llm);
+			[&](RGL::Renderer& r) {
+				return RGL::writeCapturePng(r, runtimeConfig.llm);
 			},
 			onFrame);
 		if (!renderResult) {

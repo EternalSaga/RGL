@@ -506,9 +506,10 @@ const RgGraphDesc& deferredRenderGraphDesc() {
 	// + depth；light（drawLight）全屏采样 4 RT 写 swapchain。storeOp：G-buffer 全 store（light 读），
 	// 帧首 clear；swapchain light pass clear（全屏覆盖）。present 由 presentTransition 派生。
 	static const RgGraphDesc desc = [] {
-		auto out = [](std::string name, RgUsage usage, RgLoadOp load, RgStoreOp store) {
+		auto out = [](std::string name, RgUsage usage, RgLoadOp load, RgStoreOp store,
+			RgClearValue clear = {}) {
 			return RgPassAttachment{.attachment = std::move(name), .usage = usage, .loadOp = load,
-				.storeOp = store};
+				.storeOp = store, .clear = clear};
 		};
 		RgGraphDesc d{
 			.attachments =
@@ -520,13 +521,15 @@ const RgGraphDesc& deferredRenderGraphDesc() {
 		RgPassDesc geometry{.name = "geometry", .state = "opaque", .drawSource = "opaque"};
 		RgPassDesc light{.name = "light", .kind = RgPassKind::drawLight, .state = "light"};
 		// 4 G-buffer 附件（名字/格式 = kGBufferAttachments 单一真相源，geometry 写序 =
-		// light 读序 = light.frag binding 4-7）
+		// light 读序 = light.frag binding 4-7）。GB 清黑（0）——默认 0.1 灰会让空像素
+		// albedo=0.1 → deferred 背景发灰（帧内回读截图暴露的真实输出 bug，旧重渲路径
+		// 自清 0 掩盖了它）
 		for (const auto& gb : kGBufferAttachments) {
 			d.attachments.push_back(RgAttachmentDesc{
 				.name = std::string{gb.name}, .kind = RgAttachmentKind::offscreen,
 				.format = std::string{gb.format}});
 			geometry.outputs.push_back(out(std::string{gb.name}, RgUsage::colorWrite,
-				RgLoadOp::clear, RgStoreOp::store));
+				RgLoadOp::clear, RgStoreOp::store, RgClearValue{{0.0f, 0.0f, 0.0f, 0.0f}, 1.0f}));
 			light.inputs.push_back(out(std::string{gb.name}, RgUsage::sampleRead,
 				RgLoadOp::load, RgStoreOp::store));
 		}

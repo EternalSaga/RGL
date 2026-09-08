@@ -104,6 +104,10 @@ Renderer::Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RG
 	  graphicsQueue(vkDevice.getGraphicsQueue()),
 	  graphicsCommandPool(vkDevice.getGraphicsCommandPool()) {
 		validateRenderGraphForExecutor(this->renderGraph);
+		// 帧内捕获：定位 swapchain attachment slot（捕获时读写其布局追踪值）
+		for (uint32_t s = 0; s < this->renderGraph.attachments.size(); ++s)
+			if (this->renderGraph.attachments[s].kind == RgAttachmentKind::swapchain)
+				swapchainSlot = s;
 		for (const auto& warning : this->renderGraph.warnings) {
 			auto logger = RLLogger::getInstance();
 			if (logger) logger->warn("RenderGraph: {}", warning);
@@ -123,8 +127,7 @@ Renderer::Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RG
 		skyboxState.depthCompareOp = vk::CompareOp::eLessOrEqual;
 		// Phase 7 D1：deferred light pass —— 全屏终图，无深度附件（depth 无关）、cull none
 		//（大三角绕序不剔）、不混合。取 light 管线下标；图含 drawLight pass 却无 "light" 条目 = 配置错误
-		// depthTest 显式关：主图 light pass 无深度附件本就不测，但 captureFrame 2-pass 截图给 light 绑了
-		// 深度附件（清 1.0），默认 LESS + 大三角 z=1.0 → 1.0<1.0 全剔（截图纯 clear）。关测试后两路一致。
+		// depthTest 显式关：全屏终图语义（light pass 无深度附件、大三角 z=1 不测深）
 		lightState.depthTest = false;
 		lightState.depthWrite = false;
 		lightState.cullMode = vk::CullModeFlagBits::eNone;
@@ -139,6 +142,43 @@ Renderer::Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RG
 		allocateCommandBuffers();
 		createSceneStaging(vkResources);
 	}
+// 捕获回读每像素字节数（仅可能出现的格式：swapchain 候选 4B/像素系 + A2B10G10R10=4B +
+// HDR FP16=8B + G-buffer 词表 rgba32_sfloat=16B，其余 8bit×4/rg16×2 = 4B）
+static uint32_t captureBpp(vk::Format f) {
+	switch (f) {
+		case vk::Format::eR32G32B32A32Sfloat: return 16;
+		case vk::Format::eR16G16B16A16Sfloat: return 8;
+		default: return 4;
+	}
+}
+
+// 捕获回读缓冲按需增长（GPU_TO_CPU + 常驻映射，同 scene staging 的创建模式反方向）；
+// 重建安全：上一捕获的搬移在请求帧 drawFrame 内已完成（fence 已等），本函数只在
+// 新拷贝录制前调用，无飞行中写冲突
+bool Renderer::ensureCaptureStaging(VkDeviceSize bytes) {
+	if (captureStagingSize >= bytes)
+		return true;
+	vk::BufferCreateInfo info{};
+	info.size = bytes;
+	info.usage = vk::BufferUsageFlagBits::eTransferDst;
+	VmaAllocationCreateInfo alloc{};
+	alloc.usage = VMA_MEMORY_USAGE_GPU_TO_CPU;
+	alloc.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT |
+		VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
+	VmaAllocationInfo allocData{};
+	auto result = resources->getAllocator().createBuffer(info, alloc, &allocData);
+	if (!result) {
+		auto logger = RLLogger::getInstance();
+		if (logger)
+			logger->error("Renderer: capture staging alloc failed: {}", result.error().describe());
+		return false;
+	}
+	captureStaging = std::move(*result);
+	captureMapped = allocData.pMappedData;
+	captureStagingSize = bytes;
+	return true;
+}
+
 void Renderer::createSyncObjects() {
 		vk::SemaphoreCreateInfo semaphoreInfo{};
 		// fence 初始为 signaled：首帧的 waitForFences 不会阻塞
@@ -528,6 +568,79 @@ std::expected<void, Error> Renderer::recreateSwapchainAndDepth(const char* conte
 		commandBuffers[currentFrame].endRendering();
 	}
 
+	// ⑪.5 帧内捕获（llm_debug 回读，vkrenderer.cppm requestFrameCapture 契约）：请求帧在
+	// presentTransition 前插回读拷贝。后缓冲：追踪布局 → TransferSrc 拷贝 → 追踪表推进为
+	// TransferSrc（⑫ 天然转 PresentSrc，无恢复 barrier）；GB 通道（dump_gbuf）：帧末追踪
+	// 布局（SRO）→ TS 拷贝 → 转回（追踪值不变）。
+	// acquire 超时跳帧的 return 在本段之前 = 请求保持 pending 至真正录制的帧。
+	if (captureRequest != -2) {
+		auto& cmd = commandBuffers[currentFrame];
+		auto slotOfName = [&](const std::string& n) -> RgAttachmentSlot {
+			for (uint32_t s = 0; s < renderGraph.attachments.size(); ++s)
+				if (renderGraph.attachments[s].name == n)
+					return s;
+			return kRgNoAttachment;
+		};
+		auto barrier = [&](VkImage image, vk::ImageLayout from, vk::ImageLayout to,
+			vk::PipelineStageFlags2 srcStage, vk::AccessFlags2 srcAccess,
+			vk::PipelineStageFlags2 dstStage, vk::AccessFlags2 dstAccess) {
+			vk::ImageMemoryBarrier2 b = RGL::createImageBarrier(image, from, to,
+				vk::ImageAspectFlagBits::eColor, srcStage, dstStage, srcAccess, dstAccess);
+			vk::DependencyInfo dep{};
+			dep.setImageMemoryBarriers(b);
+			cmd.pipelineBarrier2(dep);
+		};
+		auto copyOut = [&](VkImage image, uint32_t w, uint32_t h, vk::Format format, int channel) {
+			const uint32_t bpp = captureBpp(format);
+			const VkDeviceSize bytes = static_cast<VkDeviceSize>(w) * h * bpp;
+			if (!ensureCaptureStaging(bytes))
+				return false;
+			VkBufferImageCopy region{};
+			region.bufferRowLength = w;
+			region.bufferImageHeight = h;
+			region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+			region.imageExtent = {w, h, 1};
+			::vkCmdCopyImageToBuffer(*cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+				*captureStaging, 1, &region);
+			captureInFlight = FrameCapture{w, h, format, channel, bytes, {}};
+			captureArmed = true;
+			return true;
+		};
+		if (captureRequest >= 0) {
+			// GB 直读：deferred 图专属（前向图无 gbuffer_* 附件 / RT 未建 = 跳过并留观测）
+			if (captureRequest < static_cast<int>(kGBufferAttachments.size())) {
+				const std::string name{kGBufferAttachments[captureRequest].name};
+				const auto slot = slotOfName(name);
+				if (auto* rt = slot != kRgNoAttachment ? resources->findRtAttachment(name) : nullptr) {
+					const auto from = attachmentLayouts[slot];  // deferred 帧末 = SRO（light 采样后）
+					barrier(rt->image.image, from, vk::ImageLayout::eTransferSrcOptimal,
+						vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderRead,
+						vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead);
+					if (copyOut(rt->image.image, rt->extent.width, rt->extent.height,
+					        rt->format, captureRequest))
+						barrier(rt->image.image, vk::ImageLayout::eTransferSrcOptimal, from,
+							vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead,
+							vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderRead);
+				} else if (auto logger = RLLogger::getInstance())
+					logger->warn("frame capture: dump_gbuf={} 但 RT '{}' 不存在（非 deferred 图？）",
+						captureRequest, name);
+			}
+		} else if (swapchainSlot != kRgNoAttachment) {
+			const auto ext = swapchain->getExtent();
+			const auto from = attachmentLayouts[swapchainSlot];  // 帧末：直渲 = CAO、blit 变体 = TransferDst
+			const bool blitWritten = from == vk::ImageLayout::eTransferDstOptimal;
+			barrier(swapchainImage, from, vk::ImageLayout::eTransferSrcOptimal,
+				blitWritten ? vk::PipelineStageFlagBits2::eTransfer
+				            : vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+				blitWritten ? vk::AccessFlagBits2::eTransferWrite
+				            : vk::AccessFlagBits2::eColorAttachmentWrite,
+				vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead);
+			if (copyOut(swapchainImage, ext.width, ext.height, swapchain->getFormat().format, -1))
+				attachmentLayouts[swapchainSlot] = vk::ImageLayout::eTransferSrcOptimal;
+		}
+		captureRequest = -2;
+	}
+
 	// ⑫ swapchain → PresentSrcKHR（图 presentTransition——src 阶段/访问由最后
 	// usage 推导：直渲 = CAO 写、blit 上屏 = Transfer 写，等价旧手工分支；
 	// 无 swapchain 写入的离屏图 = nullopt 跳过）
@@ -574,6 +687,20 @@ std::expected<void, Error> Renderer::recreateSwapchainAndDepth(const char* conte
 		auto logger = RLLogger::getInstance();
 		if (logger) logger->error("Renderer: submit failed (frame {}): {}", frame,
 			vk::to_string(vk::Result{submitVkResult}));
+	}
+
+	// 帧内捕获收口：同步等本帧命令（含回读拷贝）完成，把 mapped 字节搬进结果。
+	// fence 不在此 reset（下帧 ① waitAll 对已信号 fence 立即通过 + 照常 reset，语义不变）；
+	// 停顿只发生在捕获请求帧（llm 一次性截图），正常帧零影响。
+	if (captureArmed) {
+		(void)device.waitForFences(*inFlightFences[currentFrame], VK_TRUE,
+			std::numeric_limits<uint64_t>::max());
+		if (captureMapped) {
+			auto* src = static_cast<const uint8_t*>(captureMapped);
+			captureInFlight.pixels.assign(src, src + captureInFlight.bytes);
+			captureResult = std::move(captureInFlight);
+		}
+		captureArmed = false;
 	}
 
 	// ⑭ 上屏：等 renderFinished 信号量（确保绘制完成），把 imageIndex 交给合成器。

@@ -175,6 +175,12 @@ export class Resources {
 			return std::nullopt;
 		return it->second.heapSlot;
 	}
+	// 已存在 RT 的稳定指针（帧内捕获直读 GB image/extent/format；未建 = nullptr——
+	// deferred 图每帧 ensure，正常路径必命中）
+	RtAttachment* findRtAttachment(const std::string& name) {
+		auto it = rtAttachments.find(name);
+		return it == rtAttachments.end() ? nullptr : &it->second;
+	}
 	// scene data buffer（drawFrame 每帧 staging copy 的目标；未创建 = 空句柄，跳过拷贝）
 	const RGL::VmaBuffer& getSceneDataBuffer() const { return sceneDataBuffer; }
 

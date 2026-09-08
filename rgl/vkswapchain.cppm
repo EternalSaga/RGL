@@ -149,9 +149,10 @@ export class Swapchain {
 		swapchainCreateInfo.imageArrayLayers = 1;
 		// Phase 6 批次 4：offscreen 图变体的 composite blit pass 以后缓冲为
 		// transferWrite 目标（VVL：blit dst 需 TRANSFER_DST usage；旧 DIAG 手工通路
-		// 时代即缺此位，属漏网）
+		// 时代即缺此位，属漏网）。帧内捕获（llm_debug 回读，2026-09-08）：present 前
+		// CopyImageToBuffer 源 → 还需 TRANSFER_SRC
 		swapchainCreateInfo.imageUsage = vk::ImageUsageFlagBits::eColorAttachment |
-			vk::ImageUsageFlagBits::eTransferDst;
+			vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eTransferSrc;
 		swapchainCreateInfo.imageSharingMode = vk::SharingMode::eExclusive;
 		swapchainCreateInfo.preTransform = surfaceCapabilities.currentTransform;
 		swapchainCreateInfo.compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque;

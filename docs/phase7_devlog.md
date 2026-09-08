@@ -321,3 +321,34 @@ PASS + 1591 prim 分布行）✓；forward/deferred 双路零 VVL error。
 
 **验证**：just config/reflect/build 全绿；headless+llm forward/deferred 截图与改名前基线
 **BIT-IDENTICAL**、零 VVL error；全仓 `vulkan_practice` 字样清零（archive 时点快照除外）。
+
+---
+
+## 重构批次 5（2026-09-08）：captureFrame 退役——llm 截图改帧内回读（不图化，去平行渲染器）
+
+**动机**（用户定调"不图化但不能成负担"）：负担本质不是"没走图"而是 **captureFrame 是第二个迷你渲染器**
+（自造离屏 RT + 手写 2-pass/barrier，图每演进一次截图路径就要人工跟随一次，且分歧不报错——用
+错误画面做验收比崩溃更危险）。解法 = 不图化、删重渲：截图 = drawFrame 本帧真实输出的回读。
+
+**实现**：
+- `vkrenderer`：`requestFrameCapture(gbufChannel)`（drawFrame 前）→ ⑪.5 在 presentTransition 前录
+  barrier(追踪布局→TransferSrc) + `vkCmdCopyImageToBuffer`（后缓冲或 GB RT 直读=dump_gbuf）→
+  后缓冲追踪表推进为 TransferSrc（presentTransition 天然转 PresentSrc，**零图改动**）；submit 后
+  同步等本帧 inFlight fence 搬进结果（仅请求帧停顿）→ `takeFrameCapture()`。swapchain image 补
+  `TRANSFER_SRC` usage（VVL 实锤）。`llm_debug` 缩成 `writeCapturePng`（take→格式转 RGBA8→stb），
+  ~330 行重渲器删除；8 个 captureFrame 专用访问器退役。
+- `ecs`：llmCapture 回调签名 `(Renderer&)`；wantCapture 帧请求、`hasFrameCapture()` 防 acquire
+  超时跳帧误消费（请求保持 pending 重试）。
+- headless+llm：main 契约令 headless_size 跟随 llm_shot.size（截图尺寸 = swapchain extent）。
+
+**顺带揪出两个真实输出 bug（旧重渲路径一直在撒谎）**：
+1. **deferred 背景灰**：图里 GB 附件吃 `RgClearValue` 默认 0.1 灰 → 空像素 albedo=0.1 → light 输出
+   染灰；旧 captureFrame 自己把 GB 清 0 所以截图一直是"假干净"。修 = deferredRenderGraphDesc
+   GB outputs 显式清黑。
+2. **旧截图恒暗于真实上屏**：离屏 RT 用 R8G8B8A8_UNORM（线性值直存），丢了硬件 sRGB 编码——
+   新回读拿真实 SRGB 后缓冲，同场景截图明显变亮（= 屏幕本来就这么亮）。**旧 BIT-IDENTICAL 基线
+   全部作废，新基线 = 本批次回读截图**（fwd/def/offscreen 三 variant 已重验确定性 + offscreen
+   blit 与 forward 直渲位级一致）。
+
+**验证**：三 variant 零 VVL error、帧间确定；forward/offscreen 截图位级一致（blit 语义实锤）、
+deferred 黑背景 + 光照与 forward 一致；dump_gbuf=0 直读通道工作；captureFrame 字样全仓清零。

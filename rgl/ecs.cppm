@@ -47,17 +47,18 @@ export struct AppExit {
 
 
 // llm（可空）：llm_debug 一次性截图配置（非空 = 启用）。批处理语义：
-// 第 llm->delayFrames 帧渲染完成后离屏重渲 + 存 PNG，然后置 AppExit 退出——
-// 无常驻状态、无 mailbox（config 即控制通道：agent 改 configs/camera.lua 后重跑）。
-// llmCapture（可空，llm 非空时必传）：截图执行回调（main 传 llm_debug::captureFrame 包装）——
-// ecs 只数帧 + 触发 + 读结果，不 import llm_debug（依赖图解耦：llm_debug 拖 vk_renderer
+// 第 llm->delayFrames 帧渲染完成后回读本帧真实输出 + 存 PNG，然后置 AppExit 退出——
+// 无常驻状态、无 mailbox（config 即控制通道：agent 改 configs/runtime.lua 后重跑）。
+// llmCapture（可空，llm 非空时必传）：截图消费回调（main 传 llm_debug::writeCapturePng 包装）——
+// ecs 只数帧 + 触发 renderer.requestFrameCapture（帧内回读钩子，见 vkrenderer.cppm），
+// drawFrame 后调本回调取结果，不 import llm_debug（依赖图解耦：llm_debug 拖 vk_renderer
 // 全链，本是叶子模块，不该在 ecs 的编译前置里；2026-09-02）。
 // onFrame（DIAG，可空）：每帧 drawFrame 完成后回调（帧号从 0 起）——
 // 可见窗 GPUVM fault 排查用（runtime.lua show_after：隐藏窗启动、第 N 帧后显示，
 // 隔离"分配期状态"与"present 期状态"）；默认空 = 无回调，正常路径零变化
 export std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer& renderer,
 	const RGL::LlmDebugConfig* llm = nullptr,
-	std::function<std::expected<std::string, Error>(RGL::Renderer&, const RGL::FrameDrawList&)>
+	std::function<std::expected<std::string, Error>(RGL::Renderer&)>
 		llmCapture = {},
 	std::function<void(uint32_t)> onFrame = {});
 
