@@ -1,7 +1,8 @@
 # RGL 路线图
 
 > **状态**：现行（开发路线图；当前节点 = Phase 7 进行中：D1 延迟单灯 `70ce9d1` + D3 多灯/反射 +
-> 批次 4 CPU culling 完成，批次 5=7b / 批次 6 文档销账待续）
+> 批次 4 CPU culling 完成，批次 5=7b / 批次 6 文档销账待续；并行工作流 = 架构债务 1+2 修复
+> （scene→scene_context / cube 出内核，见 [架构债务-依赖方向审计.md](架构债务-依赖方向审计.md)，`b1788e0`））
 
 Phase 0–6 已全部完成（各阶段结论一段话归档于下，实施细节与计划-实现偏离的权威记录在
 `docs/archive/phaseX_plan.md`）。（legacy 旧 OpenGL 项目已于 2026-09-08 删除，见 git history。）

@@ -1,6 +1,6 @@
-# Phase 7 D1 开发日志（延迟渲染单灯里程碑）
+# Phase 7 开发日志（滚动更新：D1 单灯 → D3 多灯 → culling → 重构批次）
 
-> **状态**：现行（滚动更新；D1 = 单灯 G-buffer→light→composite + forward/deferred 选路，测试主场景 Bistro Exterior）。
+> **状态**：现行（滚动更新，批次 0–4 + 勘误 + 重构批次 3–5 已入册；测试主场景 Bistro Exterior；D1 = 单灯 G-buffer→light→swapchain 2-pass，D3 = 多灯延迟光照）。
 > 实施计划见 [archive/phase7_plan.md](archive/phase7_plan.md)；本文件记过程、踩坑、决策与当前态，供连续性交接。
 
 ---
@@ -29,7 +29,7 @@ README 关键：贴图其实是 **metal/rough 工作流**——`*_BaseColor.dds`
      Normal→normalTexture（**绿通道翻 + BC5 Z 重建留 Phase 8**）、Specular→metallicRoughnessTexture+occlusionTexture（同图）；
      删 `KHR_materials_specular`；丢弃未引用图；重建**单 buffer** .glb。
   - 产物 `assets/bistro_exterior.glb`：**424MB**（1024 贴图，原生 2K 传参 `0` 重跑约 1GB）。
-  - 校验：395 图全 image/png；132 材质 base+normal+metalRough+occlusion 齐、零扩展、factor=1；
+  - 校验：395 图全 image/png；131/132 材质 base+normal+metalRough+occlusion 齐、零扩展、factor=1（1 个酒瓶标签材质无 ORM 源图，留 assimp 标量 factor 0.0/0.553）；
     1591 primitive 全有 POS+NORMAL；节点层级保留未烘；bufferView 无越界。**Blender 材质预览目检通过**（贴图/位置正确）。
 - 未做：法线绿通道翻 + BC5 Z 重建（引擎采样法线时补）；Interior/Wine 同法可转。
 
@@ -63,7 +63,7 @@ README 关键：贴图其实是 **metal/rough 工作流**——`*_BaseColor.dds`
 - **上调 `kSceneMatrixCapacity` 1024→4096**（`vkresources.cppm`）；scene data 缓冲随之 256KB（128 头 + 4096×64），staging 同步。无压力。
 
 ### forward 冒烟（Bistro）
-- scene.lua：entities 单条 Bistro `scale=0.01`（厘米→米）；kyoto+37 grass 全注释保留便于恢复。
+- scene.lua：entities 单条 Bistro `scale=0.01`（厘米→米）；kyoto + 36 grass 全注释保留便于恢复。
 - CMakeLists `MODEL_GLB_SOURCES` 加 `bistro_exterior.glb`（改 CMake 后 build 自动 reconfigure）。
 - 结果：**1591 primitive 正确拼装**（楼体/窗/拱门/屋顶/树/路灯/环形路面对位），零 error 零 warn，llm_debug 干净退出。
   17 块拼接顶点 buffer + 395 纹理槽（<1026 heap capacity，1.5GB 纹理运行时上传 ~15s）。
@@ -163,10 +163,12 @@ RT ensure 下移 Renderer+opaque spec 换 deferred_geometry / Resources ensureDe
 
 ## 当前态 / 下一步
 - ✅ D1 核心：deferred 管线端到端跑通（geometry→G-buffer→light→swapchain），主渲染零 error，forward diff 0。
-- ⏭ **K3**：同机位 forward vs deferred 单灯截图逐区比对（定位 deferred 观感差：metalRough RT 往返 quantize/
-  light 读标量 vs 采样、oct 法线量化、sRGB albedo 往返）；captureFrame deferred 路径（不重渲/读 swapchain）。
+- ✅ **K3** 已完成（见"K3 定位与修复"节）：同机位 forward↔deferred 单灯截图逐区比对查出 2 真 bug（light 全屏大三角
+  uv 翻转、light pass 深度全剔），均已修；背景缺失 = 图无 skybox pass、整体偏暗 = metallic 内容问题，均证实非渲染 bug。
+- ✅ captureFrame deferred 路径（不重渲/读 swapchain）退役 = 重构批次 5 帧内回读（见"重构批次 5"节）。
 - 待办：Bistro 法线翻绿通道 + BC5 Z 重建 + ORM 贴图采样（Phase 8 纹理管线）；Interior/Wine 转换（按需）；
-  worker 干净邻接片（Bistro packer 标量修正 / forward-deferred 截图 diff harness）待不冲突时派。
+  worker 干净邻接片（Bistro packer 标量修正 / forward-deferred 截图 diff harness）待不冲突时派；
+  deferred 图 skybox/env 背景合成（K3 下一步选项 (a)，按需）。
 
 ## K3 定位与修复（2026-09-07，forward↔deferred 比对查出 2 真 bug + 2 非 bug）
 先修 captureFrame 让它 deferred-aware（`renderer.isDeferred()`）：**自包含 2-pass** 截图——同一命令缓冲内
@@ -283,7 +285,7 @@ draw list（规范 4），无全局状态。**下一步**：批次 5 = GPU culli
 
 ## 重构批次 3（2026-09-08）：环境变量 → 配置文件（用户偏好：不用 env）
 
-全仓 17 处 getenv 清点处置（驱动级 RADV_EXPERIMENTAL / VK_DRIVER_FILES / prime 保留——
+全仓 18 处 getenv 调用点（16 个不同 env 名，TEXTURE_FORCE_UNORM 两处）清点处置（驱动级 RADV_EXPERIMENTAL / VK_DRIVER_FILES / prime 保留——
 由 Justfile run-* 注入，非应用配置）：
 
 - **configs/runtime.lua**（新，`runtime_config` 模块）：headless / headless_size / win_size /
@@ -320,7 +322,7 @@ PASS + 1591 prim 分布行）✓；forward/deferred 双路零 VVL error。
   成本大于收益；render_graph 家族目录化亦否决——modules 下目录不改变编译图）。
 
 **验证**：just config/reflect/build 全绿；headless+llm forward/deferred 截图与改名前基线
-**BIT-IDENTICAL**、零 VVL error；全仓 `vulkan_practice` 字样清零（archive 时点快照除外）。
+**BIT-IDENTICAL**、零 VVL error；`vulkan_practice` 字样在代码/配置/活跃文档清零（有意保留 2 处：调试历史结构性变更备查注记、.opencode/plans 旧计划）。
 
 ---
 

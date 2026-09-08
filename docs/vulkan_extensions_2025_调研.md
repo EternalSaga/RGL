@@ -1,10 +1,10 @@
 # 2025+ Vulkan 新扩展调研（结合 rgl 项目）
 
-> **状态**：调研（2025-01→2026-08 新扩展全景 + 潜力候选评估级分析；补充 Vulkan 1.1–1.3 时代有价值扩展。不落地代码，仅作引入决策依据）
+> **状态**：调研（活文档）。2025-01→2026-08 新扩展全景 + 潜力候选评估级分析；补充 Vulkan 1.1–1.3 时代有价值扩展。§12/§13 为实际落地记录（edS3 / headless / robustness2），zero_init 已回退
 
 **日期**：2026-09-02
 **环境**：本地 Vulkan-Docs `v1.4.360`（commit 2026-08-14，`/home/robin/program/Vulkan-Docs`）
-**权威来源**：`xml/vk.xml`（registry，扩展状态 ratified/provisional）+ `ChangeLog.adoc`（1.4.305→1.4.360 逐版本 New/Extensions 段）+ `proposals/*.adoc`（语义）+ `appendices/*.adoc`（版本史）。注意 spec clone（v1.4.360）比系统头/loader（**v341**，主工程实际编译环境）**新**，写代码以系统头为准，本文版本/状态以本地 spec 为准。
+**权威来源**：`xml/vk.xml`（registry，扩展状态 ratified/provisional）+ `ChangeLog.adoc`（1.4.305→1.4.360 逐版本 New/Extensions 段）+ `proposals/*.adoc`（语义）+ `appendices/*.adoc`（版本史）。注意 spec clone（v1.4.360）比系统头/loader（**v357**，主工程实际编译环境）**新**，写代码以系统头为准，本文版本/状态以本地 spec 为准。
 
 ---
 
@@ -17,11 +17,11 @@
 
 ### 1.2 项目画像（评估基准，见 AGENTS.md）
 
-- **架构**：mesh shader（`VK_EXT_mesh_shader`）+ `VK_EXT_shader_object` + **`VK_EXT_descriptor_heap`（核心）** + `VK_EXT_dynamic_state`（经 shader object）；scalar block layout；BDA；timeline semaphore；dynamic rendering + sync2。
+- **架构**：mesh shader（`VK_EXT_mesh_shader`）+ `VK_EXT_shader_object` + **`VK_EXT_descriptor_heap`（核心）** + extended dynamic state（edS1/2 → 核心 1.3，经 shader object）；scalar block layout；BDA；timeline semaphore；dynamic rendering + sync2。
 - **渲染**：forward（opaque/skybox/transparent 三段）→ **Phase 6**（Lua 渲染意图 / RenderGraph 多 pass）→ **Phase 7**（延迟渲染 G-buffer + light pass + **GPU culling `VK_EXT_device_generated_commands`** + shadow）。
 - **资产**：glTF（tinygltf）+ 内嵌纹理（4096²，cottage 257MB / 392 primitive / 11 张 4K）+ 环境 cubemap（IBL 简化版）+ 天空盒。
 - **驱动**：AMD Strix Halo（RADV 核显，`RADV_EXPERIMENTAL=heap`）/ NVIDIA（prime offload）/ Intel Arc A310（anv）——**三驱动共存**，任何扩展必须"不支持时干净 no-op"。
-- **历史痛点**：GPUVM TCP fault（UAF 根因，已解）、RADV 4K 纹理高 VA fault（UAF 复用，已解）、eImmediate 无 pacing 导致 GPU 满占用（present_timing_research.md §八）。
+- **历史痛点**：GPUVM TCP fault（UAF 根因，已解）、RADV 4K 纹理高 VA fault（UAF 复用，已解）、eImmediate 无 pacing 导致 GPU 满占用（docs/archive/present_timing_research.md §八）。
 
 ### 1.3 关键元发现
 
@@ -53,7 +53,7 @@
 | `VK_EXT_zero_initialize_device_memory` | 1.4.315 (2025-05) | R | 分配期显式零初始化 + 新 `ZERO_INITIALIZED` image layout，直击本项目 UAF/未初始化内存痛点 |
 | `VK_KHR_device_fault` | 1.4.347 (2026-03) | R | 统一设备故障上报（含未致 device-lost 的 masked fault）+ 阻塞查询 + GPU VA 解读，补 GPUVM/Aftermath 诊断史 |
 | `VK_KHR_depth_clamp_zero_one` | 1.4.305 (2025-01) | R | 硬件深度钳制到 [0,1]，项目已用 glm 软件强制 zero-to-one，可改硬件路径；与天空盒 z=1 交互 |
-| `VK_EXT_present_timing` | 1.4.335 (2025-11) | R | present 分阶段时间戳 + 调度；**已有** `present_timing_research.md`（决策"暂不引入"），2025+ ratified 可重评 |
+| `VK_EXT_present_timing` | 1.4.335 (2025-11) | R | present 分阶段时间戳 + 调度；**已有** `docs/archive/present_timing_research.md`（决策"暂不引入"），2025+ ratified 可重评 |
 
 ### 2.2 T2 近期路线（Phase 6/7 相关）
 
@@ -80,13 +80,13 @@
 
 | 扩展 | 厂商 | 首现 | 状态 | 相关性 |
 |---|---|---|---|---|
-| `VK_AMD_gpa_interface` | AMD | 1.4.351 (2026-05) | P | AMD GPA session（GPU 性能分析采样）；Strix Halo 可探测 |
-| `VK_AMDX_dense_geometry_format` | AMD | 1.4.324 (2025-08) | X | AMD 稠密几何压缩格式；mesh shader 工作流适配待验证 |
-| `VK_NV_present_metering` | NV | 1.4.308 (2025-02) | P | NV 帧 pacing/metering，`present_timing` 的 NV 侧互补（offload 路径） |
-| `VK_NV_push_constant_bank_support` | NV | 1.4.340 (2026-01) | NV | NV push constant bank；本项目 push constant 走 `DrawArgs` 超集 |
+| `VK_AMD_gpa_interface` | AMD | 1.4.351 (2026-05) | X | AMD GPA session（GPU 性能分析采样）；Strix Halo 可探测 |
+| `VK_AMDX_dense_geometry_format` | AMD | 1.4.324 (2025-08) | P | AMD 稠密几何压缩格式；mesh shader 工作流适配待验证 |
+| `VK_NV_present_metering` | NV | 1.4.308 (2025-02) | X | NV 帧 pacing/metering，`present_timing` 的 NV 侧互补（offload 路径；1.4.308 曾 provisional，1.4.345 移除） |
+| `VK_NV_push_constant_bank` | NV | 1.4.340 (2026-01) | NV | NV push constant bank（registry 已更名，旧名 `..._bank_support` 仅见于 1.4.340 ChangeLog 条目）；本项目 push constant 走 `DrawArgs` 超集 |
 | `VK_NV_compute_occupancy_priority` | NV | 1.4.336 (2025-12) | NV | compute 占用率优先级；Phase 7 compute |
 | `VK_NV_cooperative_vector` | NV | 1.4.307 (2025-01) | NV | NV 协同向量（ML 向）；低相关 |
-| `VK_NV_external_compute_queue_vendor` | NV | 1.4.312 (2025-04) | NV | NV 外部 compute 队列；低相关 |
+| `VK_NV_external_compute_queue` | NV | 1.4.312 (2025-04) | NV | NV 外部 compute 队列（registry 已更名，旧名 `..._queue_vendor` 仅见于 1.4.312 ChangeLog 条目）；低相关 |
 | `VK_KHR_swapchain_maintenance1` | KHR | 1.4.321 (2025-07) | R | **项目已用**（features_config 含 `SwapchainMaintenance1KHR`）；同期新增 `surface_maintenance1` |
 
 ### 2.5 T4 不相关 / 低相关（简列，按类）
@@ -99,13 +99,13 @@
 
 **视频编解码**：`VK_KHR_video_maintenance2`(1.4.306) `VK_KHR_video_decode_vp9`(1.4.317) `VK_KHR_video_encode_intra_refresh`(1.4.321) `VK_KHR_video_encode_feedback2`(1.4.353) `VK_VALVE_video_encode_rgb_conversion`(1.4.327)
 
-**shader 特性（边际）**：`VK_KHR_shader_bfloat16`(1.4.311) `VK_KHR_shader_fma`(1.4.329) `VK_KHR_shader_untyped_pointers`(1.4.325) `VK_KHR_shader_abort`(1.4.347) `VK_KHR_shader_constant_data`(1.4.347) `VK_EXT_shader_split_barrier`(1.4.351)
+**shader 特性（边际）**：`VK_KHR_shader_bfloat16`(1.4.311) `VK_KHR_shader_fma`(1.4.329) `VK_KHR_shader_untyped_pointers`(1.4.325 ratified，项目已启用，见下注②) `VK_KHR_shader_abort`(1.4.347) `VK_KHR_shader_constant_data`(1.4.347) `VK_EXT_shader_split_barrier`(1.4.351)
 
 **Present / WSI**：`VK_KHR_present_id2`(1.4.317) `VK_KHR_present_wait2`(1.4.317) `VK_KHR_present_mode_fifo_latest_ready`(1.4.321) `VK_KHR_surface_maintenance1`(1.4.321) `VK_EXT_multisampled_render_to_swapchain`(1.4.353) `VK_EXT_external_memory_metal`(1.4.306)
 
 **杂项图形**：`VK_EXT_fragment_density_map_offset`(1.4.311) `VK_EXT_primitive_restart_index`(1.4.348) `VK_EXT_texture_compression_astc_3d`(1.4.337) `VK_EXT_image_tiling_control`(1.4.358) `VK_KHR_extended_flags`(1.4.353) `VK_KHR_device_address_commands`(1.4.346)
 
-> 注：① `VK_KHR_extended_flags`（1.4.353）是扩展机制本身的升级（支持新 XML tag/feature 表达），非功能扩展，但对后续扩展生态有影响。② `VK_EXT_shader_untyped_pointers`（1.4.325，2025 新）与项目已用的**核心 1.4 `shaderUntypedPointers` feature**（features_config `ShaderUntypedPointersKHR`）是**不同东西**——前者是 2025 新增的后续扩展（非核心 feature），项目未用，归入边际 shader 特性。
+> 注：① `VK_KHR_extended_flags`（1.4.353）是扩展机制本身的升级（支持新 XML tag/feature 表达），非功能扩展，但对后续扩展生态有影响。② `VK_KHR_shader_untyped_pointers` 与项目已启用的扩展是**同一个**（`features.cppm` `kDeviceExtensions` + `features_config` `shaderUntypedPointers` feature）——1.4.325 是它的 **ratified 时点**（ChangeLog 记入 New Extensions），非 2025 新扩展；feature 属该 KHR 扩展（Vulkan 1.2 时代引入），非核心 feature。
 
 ---
 
@@ -143,10 +143,10 @@
 
 ### 3.4 `VK_EXT_present_timing`（重评）
 
-- **是什么/解决什么**：详见 `present_timing_research.md`（已 ratified，spec v3；1.4.349 有一致性修复；1.4.355 澄清 `vkSetSwapchainPresentTimingQueueSizeEXT` 未调用时 present 也返回 `VK_ERROR_PRESENT_TIMING_QUEUE_FULL_EXT`）。提供 present 分阶段时间戳 + 按目标时间调度（仅 FIFO 系）。
+- **是什么/解决什么**：详见 `docs/archive/present_timing_research.md`（已 ratified，spec v3；1.4.348 有一致性修复（MR 8052）；1.4.355 澄清 `vkSetSwapchainPresentTimingQueueSizeEXT` 未调用时 present 也返回 `VK_ERROR_PRESENT_TIMING_QUEUE_FULL_EXT`）。提供 present 分阶段时间戳 + 按目标时间调度（仅 FIFO 系）。
 - **2025+ 变化**：扩展正式 ratified（生态稳定）；spec 文本一致性修复；**但 spec v 仍为 3（2024-10），无新 API**。
 - **与本项目关联（重评）**：原决策"暂不引入"的两个理由——① eImmediate 冲突（调度仅 FIFO 有效）；② 收益以测量为主。**§八（2026-09-01）已确认 eImmediate 无 pacing 导致 Intel A310 GPU 100% 占用**，且文档自陈"若未来做动画质量/延迟优化，本节即触发条件"。Phase 6/7 增加 pass（延迟渲染、compute）后**延迟敏感性上升**，测量价值（端到端延迟、judder、offload 两路对比）更突出。
-- **集成点定位**：完全沿用 `present_timing_research.md` §3.4 清单（新 `present_timing.cppm` + swapchain flag/队列容量 + drawFrame pNext 链 + 每帧 collect + rllogger 汇总；feature 链尾追加做类成员）。
+- **集成点定位**：完全沿用 `docs/archive/present_timing_research.md` §3.4 清单（新 `present_timing.cppm` + swapchain flag/队列容量 + drawFrame pNext 链 + 每帧 collect + rllogger 汇总；feature 链尾追加做类成员）。
 - **工作量/风险**：中。风险同原文档（反馈延迟数帧 + 仅轮询 + queue-full 回退 + eImmediate 功能减半 + 窗口/合成器下部分 stage 拿不到）。
 - **建议**：**近期评估（测量先行）**。按原文档"步骤 1 仅测量"落地（IPD 均值/p95、各 stage 延迟、丢帧计数、刷新属性变化），先量化 eImmediate 链路延迟 + offload 两路对比；帧 pacing（步骤 2）待 present mode 可配置化后做。
 
@@ -229,12 +229,12 @@
 
 | 扩展 | 厂商 | 建议 |
 |---|---|---|
-| `VK_AMD_gpa_interface` (P, 1.4.351) | AMD | **可探测**。Strix Halo 上 GPA session 做 GPU 性能采样，对"Phase 5.5 场景 A310 100% 占用"类问题有诊断价值。provisional，需 RADV 暴露确认；低优先。 |
-| `VK_AMDX_dense_geometry_format` (X, 1.4.324) | AMD | **观察**。稠密几何压缩格式，与 mesh shader 工作流适配未知；AMD 专属，跨驱动无意义，仅 AMD 路径可选。 |
-| `VK_NV_present_metering` (P, 1.4.308) | NV | **与 present_timing 互补**。NVIDIA offload 路径的帧 pacing/metering；若做 present_timing 测量批次，NVIDIA 侧可一并探测本扩展。 |
-| `VK_NV_push_constant_bank_support` (1.4.340) | NV | **观察**。push constant bank 机制，本项目 `DrawArgs` 超集走单 bank；NV 专属，无迫切需求。 |
+| `VK_AMD_gpa_interface` (X, 1.4.351) | AMD | **可探测**。Strix Halo 上 GPA session 做 GPU 性能采样，对"Phase 5.5 场景 A310 100% 占用"类问题有诊断价值。vendor experimental（registry 无 provisional 属性），需 RADV 暴露确认；低优先。 |
+| `VK_AMDX_dense_geometry_format` (P, 1.4.324) | AMD | **观察**。稠密几何压缩格式，与 mesh shader 工作流适配未知；AMD 专属，跨驱动无意义，仅 AMD 路径可选。 |
+| `VK_NV_present_metering` (X, 1.4.308) | NV | **与 present_timing 互补**。NVIDIA offload 路径的帧 pacing/metering；若做 present_timing 测量批次，NVIDIA 侧可一并探测本扩展。 |
+| `VK_NV_push_constant_bank` (1.4.340) | NV | **观察**。push constant bank 机制，本项目 `DrawArgs` 超集走单 bank；NV 专属，无迫切需求。 |
 | `VK_NV_compute_occupancy_priority` (1.4.336) | NV | **Phase 7 compute 选项**。NV compute 占用率优先级，light pass/culling 调优用；低优先。 |
-| `VK_NV_cooperative_vector` / `VK_NV_external_compute_queue_vendor` | NV | **低相关**（ML 向 / 外部队列），不引入。 |
+| `VK_NV_cooperative_vector` / `VK_NV_external_compute_queue` | NV | **低相关**（ML 向 / 外部队列），不引入。 |
 
 > 厂商扩展统一原则：**探测可用则启用、不可用则 no-op**，不破坏双/三 GPU 运行。AMD/NV 专属扩展不进 required 清单，走可选清单（同 present_timing 的可选化设计）。
 
@@ -247,22 +247,22 @@
 ### 7.1 `VK_EXT_host_image_copy`（R）— **高相关**
 
 - **是什么**：CPU 内存 ↔ image **直接拷贝**（免 staging buffer）：`vkCopyMemoryToImageEXT` / `vkCopyImageToMemoryEXT` / `vkCopyImageToImageEXT` + host 侧 layout 迁移 `vkTransitionImageLayoutEXT`。image 需 `VK_IMAGE_USAGE_HOST_TRANSFER_BIT`。`VkHostImageCopyDevicePerformanceQueryEXT` 查 `optimalDeviceAccess`/`identicalMemoryLayout` 判断是否损失设备端性能。
-- **与本项目关联**：项目纹理上传走 **staging buffer + `vkCmdCopyBuffer`/blit**（texture_pool.cppm：6 张独立 2D linear staging + 6 region copy + mipmap blit 链，env cubemap 同理）。本扩展可**省掉 staging buffer 的一次拷贝 + 峰值内存翻倍**（proposal 明言"同时初始化大量 image 时峰值内存翻倍 → 可能 OOM"——正是 cottage 11 张 4K 纹理的场景）。
-- **集成点定位**：`texture_pool.cppm`（`uploadModelTextures`/`uploadCubeMap` 上传路径）+ `VmaImage` 创建加 `HOST_TRANSFER_BIT`。
+- **与本项目关联**：项目纹理上传走 **staging buffer + `vkCmdCopyBuffer`/blit**（texture_upload.cppm，2026-09-02 自 texture_pool 拆出：`uploadTexture`/`uploadCubeMap` = 6 张独立 2D linear staging + region copy + mipmap blit 链，env cubemap 同理；texture_pool 留薄壳 `uploadModelTextures` 转调）。本扩展可**省掉 staging buffer 的一次拷贝 + 峰值内存翻倍**（proposal 明言"同时初始化大量 image 时峰值内存翻倍 → 可能 OOM"——正是 cottage 11 张 4K 纹理的场景）。
+- **集成点定位**：`texture_upload.cppm`（上传路径）+ `VmaImage` 创建加 `HOST_TRANSFER_BIT`。
 - **工作量/风险**：中。**关键风险**：CPU 侧 swizzle 可能比 GPU 双拷贝慢（optimal tiling 非线性），proposal 明确"建议实测，非普遍推荐全走本扩展"。sRGB/线性格式 + 驱动支持需验证。
 - **建议**：**近期评估（纹理上传优化）**。对 4K/大纹理上传路径 A/B 实测（host_image_copy vs staging+blit），`optimalDeviceAccess=TRUE` 的格式优先切换；保留 staging 路径作回退。
 
 ### 7.2 `VK_EXT_headless_surface`（R）— **中相关（llm_debug）**
 
 - **是什么**：无窗口的 headless device/surface（`vkCreateHeadlessSurfaceEXT` 等），纯离屏渲染不需真实 surface。
-- **与本项目关联**：`llm_debug` 当前用 **`SDL_WINDOW_HIDDEN` 隐藏窗**做离屏重渲。headless surface 是更干净的离屏路径（不依赖 SDL 窗口/compositor 存活），对 **CI / agent 自主工作 / 无头环境**更稳。
-- **集成点定位**：`llm_debug.cppm`（离屏 surface 创建分支）+ `sdl3window.cppm`（headless 路径）。
+- **与本项目关联**：`llm_debug` 曾用 **`SDL_WINDOW_HIDDEN` 隐藏窗**做离屏重渲（2026-09-08 退役，截图改 drawFrame 帧内回读）。`VK_EXT_headless_surface` 已于 2026-09-02 落地（§12.1 Phase E，2026-09-08 转 `runtime.lua` headless 配置）——本节候选已实现，剩余价值 = **CI / agent 自主工作 / 无头环境**下 headless 路径的稳定性。
+- **集成点定位**：（已实现）`vkinstance.cppm`（instance 扩展分支）+ `vkswapchain.cppm`（`vkCreateHeadlessSurfaceEXT` 分支）+ `main.cpp`（headless 不建窗）。
 - **工作量/风险**：低-中。风险：headless 格式/能力可能受限（经标准 `vkGetSurfaceFormatsKHR` 查询 headless surface 的可用格式，可能少于真实 surface）；驱动支持（RADV/anv/NVIDIA）。
-- **建议**：**观察 / llm_debug 增强**。当前隐藏窗可用，headless 作为"无头环境更稳"的可选路径，优先级中低。
+- **建议**：**已实现**（§12.1 Phase E）。
 
 ### 7.3 `VK_KHR_shader_clock`（R）— **中相关（延迟测量）**
 
-- **是什么**：shader 内读**高精度 GPU 时钟**（`readClockKHR`），配合 `vkCmdWriteTimestamp` 做细粒度 GPU 侧计时。
+- **是什么**：shader 内读**高精度 GPU 时钟**（GLSL 内建 `clockARB()`/`clockRealtimeEXT()`，SPIR-V `OpReadClockKHR`），配合 `vkCmdWriteTimestamp` 做细粒度 GPU 侧计时。
 - **与本项目关联**：与 present_timing 的**端到端延迟测量**互补——shader clock 量"渲染某阶段在 GPU 上的真实耗时"，present_timing 量"present→可见"，合起来是全链路延迟分解。对 Phase 6/7 多 pass 性能定位有价值。
 - **集成点定位**：诊断/测量批次（与 present_timing/device_fault 同批）+ 测量用 shader。
 - **工作量/风险**：低。风险：时钟分辨率/单调性依驱动；仅测量用途，不进渲染路径。
@@ -273,7 +273,7 @@
 - **是什么**：独占全屏模式（`VK_FULL_SCREEN_EXCLUSIVE_*` present mode / surface 能力），降低显示延迟（绕过合成器）。
 - **与本项目关联**：项目 present 延迟敏感（eImmediate + 无 pacing）。独占全屏可降延迟，但**与窗口化 + 合成器（Wayland/KWin）工作流冲突**——本项目主要在窗口/Wayland 下开发，独占全屏适用场景窄。
 - **集成点定位**：`vkswapchain.cppm` / `utils.cppm` `selectPresentMode`（present mode 可配置化后）。
-- **建议**：**观察**。待 present mode 可配置化（present_timing_research.md 步骤 2）后，作为低延迟选项之一；当前窗口化工作流下优先级低。
+- **建议**：**观察**。待 present mode 可配置化（docs/archive/present_timing_research.md 步骤 2）后，作为低延迟选项之一；当前窗口化工作流下优先级低。
 
 ### 7.5 `VK_EXT_extended_dynamic_state3`（R）— **低-中相关**
 
@@ -281,11 +281,11 @@
 - **与本项目关联**：项目已重度用 dynamic state（shader object + `applyDynamicState`）。edS3 可进一步减少管线变体（Phase 6/7 多 pass 管线爆炸时有益）。
 - **集成点定位**：`vkrenderer.cppm` `applyDynamicState` + 管线创建。
 - **工作量/风险**：低。风险：边际收益，当前管线数（12 条去重）不大。
-- **建议**：**观察**。Phase 6/7 管线变体增多时再评估。
+- **建议**：**已实现**（2026-09-02，§12.1 Phase D：`extendedDynamicState3DepthClipEnable` 门控的 `setDepthClipEnableEXT`）。
 
 ### 7.6 `VK_EXT_color_write_enable`（R/SC）+ `VK_KHR_load_store_op_none`（R）— **低-中相关（Phase 7 多 pass）**
 
-- **是什么**：`color_write_enable`：per-attachment 动态颜色写开关（免改 loadOp/storeOp）；`load_store_op_none`：`VK_LOAD_OP_NONE`/`VK_STORE_OP_NONE`（附件内容未定义时可跳过 load/store，省带宽）。
+- **是什么**：`color_write_enable`：per-attachment 动态颜色写开关（免改 loadOp/storeOp）；`load_store_op_none`：`VK_ATTACHMENT_LOAD_OP_NONE`/`VK_ATTACHMENT_STORE_OP_NONE`（附件内容未定义时可跳过 load/store，省带宽；扩展已提升核心 1.4）。
 - **与本项目关联**：Phase 7 G-buffer 多 pass——中间 pass 的附件常"不需 load 旧值 / 不需 store 回"，`NONE` op 省带宽；`color_write_enable` 做 per-attachment 写控制（如 G-buffer 某 pass 只写 normal 不写 albedo）。
 - **集成点定位**：Phase 7 G-buffer pass 的渲染附件配置 + 动态状态。
 - **工作量/风险**：低。风险：`NONE` op 要求附件内容确未定义（用错 = 读到垃圾），需 careful。
@@ -328,11 +328,11 @@
 | **Phase 6 前探测** | `unified_image_layouts` | RenderGraph | 驱动支持是关键；支持则简化多 pass 同步 |
 | **Phase 7 G-buffer** | `custom_resolve` · `color_write_enable` · `load_store_op_none` · maint10 resolve transfer fn | 多 pass | MSAA/带宽优化；依赖 MSAA 决策 |
 | **Phase 7 GPU-driven** | `copy_memory_indirect` · `subgroup_partitioned` · `device_generated_commands`(既有) · `subgroup_size_control` | compute/culling | GPU culling 栈；NVIDIA/RADV 双路 |
-| **观察** | `internally_synchronized_queues` · `extended_dynamic_state3` · `memory_decompression` · `headless_surface` · `full_screen_exclusive` · `workgroup_memory_explicit_layout` | 按需 | 需求未现或资产管线依赖 |
+| **观察** | `internally_synchronized_queues` · `memory_decompression` · `full_screen_exclusive` · `workgroup_memory_explicit_layout` | 按需 | 需求未现或资产管线依赖（**2026-09-02：`extended_dynamic_state3` / `headless_surface` 已落地，见 §12.1 D/E；2026-09-08 headless 转 `runtime.lua` 配置**） |
 | **厂商可选** | `AMD_gpa_interface` · `NV_present_metering` · `NV_compute_occupancy_priority` · `AMDX_dense_geometry_format` | 厂商 | 探测可用则启用，no-op 降级 |
 | **不引入** | T4 全部（ML/ARM/QCOM/OHOS/SEC/VALVE/光追/视频/边际 shader 特性） | — | 与项目路线无接缝 |
 
-> 落地总原则：**可选化设计**——所有新扩展走"探测可用则启用、不可用则 no-op"（同 present_timing_research.md §3.4 的 feature 链尾追加做类成员 + 可选清单模式），保双/三 GPU 运行不破坏。
+> 落地总原则：**可选化设计**——所有新扩展走"探测可用则启用、不可用则 no-op"（同 docs/archive/present_timing_research.md §3.4 的 feature 链尾追加做类成员 + 可选清单模式），保双/三 GPU 运行不破坏。
 
 ---
 
@@ -351,9 +351,9 @@
 | 设计文档（语义） | `/home/robin/program/Vulkan-Docs/proposals/*.adoc`（`VK_EXT_present_timing` / `VK_KHR_device_fault` / `VK_EXT_zero_initialize_device_memory` / `VK_EXT_custom_resolve` / `VK_KHR_unified_image_layouts` / `VK_KHR_copy_memory_indirect` / `VK_EXT_memory_decompression` / `VK_KHR_internally_synchronized_queues` / `VK_EXT_host_image_copy` / `VK_EXT_calibrated_timestamps` / `VK_EXT_device_generated_commands` / `VK_EXT_extended_dynamic_state3` / `VK_KHR_load_store_op_none`） |
 | 附录（版本史/元数据） | `/home/robin/program/Vulkan-Docs/appendices/*.adoc` |
 | 章节（部分扩展正文） | `/home/robin/program/Vulkan-Docs/chapters/`（`descriptorheaps.adoc` / `descriptorbuffers.adoc` / `synchronization.adoc` 等） |
-| 项目既有调研 | `docs/present_timing_research.md` · `docs/device_generated_commands_research.md` · `docs/archive/heap_texture_research.md` · `docs/nvidia_compatibility_report.md` |
+| 项目既有调研 | `docs/archive/present_timing_research.md`（2026-09-02 归档）· `docs/device_generated_commands_research.md` · `docs/archive/heap_texture_research.md` · `docs/nvidia_compatibility_report.md` |
 
-> **注意**：spec clone（v1.4.360）比系统头/loader（v341）新，部分新扩展（尤其 2026 年的）系统头可能尚未包含——引入前以系统头 `/usr/include/vulkan` + `vulkaninfo` 实测为准。provisional 扩展（`AMD_gpa_interface`/`NV_present_metering` 等）API 可能变动，引入需锁版本。
+> **注意**：spec clone（v1.4.360）比系统头/loader（v357）新，部分新扩展（尤其 1.4.358 起的 2026 新扩展）系统头可能尚未包含——引入前以系统头 `/usr/include/vulkan` + `vulkaninfo` 实测为准。provisional 扩展（`AMD_gpa_interface`/`NV_present_metering` 等）API 可能变动，引入需锁版本。
 
 ---
 
@@ -368,10 +368,10 @@
 | A | 可选 feature codegen：`features_config.json` `optional_features` 段 → `features_cppm.inja` 生成 `OptionalFeatureSupport`（`queryOptionalFeatures` 探测：扩展可用 **且** feature 字段置位）+ required-only `FeatureChain` | `features_config.json` / `tools/templates/features_cppm.inja` / `generated/features_generated.cppm` |
 | B | device 接线：optional feature 结构**不进** required `StructureChain`（FALSE 结构挂未启用扩展 = UB），改由 `createDevice` 按支持位**条件链接**到 `FeatureChainTail`（required 链尾） | `vkdevice.cppm` |
 | C | ~~zero_init~~（**已回退 2026-09-02**）：原实现 = VMA `vmaCreateDedicatedBuffer` 的 `pMemoryAllocateNext` 链 `VkMemoryAllocateFlagsInfo{ZERO_INITIALIZE_BIT}`，仅对 descriptor heap 启用。深挖发现 VMA 3.4 对 BDA 必撞（内部已加 `DEVICE_ADDRESS` flagsInfo）→ spec 违例 UB + VVL 噪声，且本 app 无收益 → **回退**（见 §12.3） | ~~`VmaBuffer.cppm` / `vkresources.cppm`~~ |
-| D | edS3：`extendedDynamicState3DepthClipEnable` 粒度 flag → `RenderState.depthClipEnable` + `applyDynamicState` 内 `setDepthClipEnableEXT`（能力门 `depthClipDynamic`） | `shader.cppm` / `vkrenderer.cppm` / `llm_debug.cppm` |
-| E | headless：`RGL_HEADLESS=1` 触发，`RGL_HEADLESS_SIZE="WxH"`（默认 1280×720）；instance 扩展用 `VK_KHR_surface`+`VK_EXT_headless_surface` 替代 SDL surface 扩展；`vkCreateHeadlessSurfaceEXT` 建虚拟 surface；脱离 SDL/compositor | `vkinstance.cppm` / `vkswapchain.cppm` / `main.cpp` |
+| D | edS3：`extendedDynamicState3DepthClipEnable` 粒度 flag → `RenderState.depthClipEnable` + `applyDynamicState` 内 `setDepthClipEnableEXT`（能力门 `depthClipDynamic`） | `shader.cppm` / `vkrenderer.cppm`（原 `llm_debug.cppm` 同门路径随 2026-09-08 离屏重渲器退役删除） |
+| E | headless：`configs/runtime.lua` `headless=true` 触发（2026-09-08 原 `RGL_HEADLESS`/`RGL_HEADLESS_SIZE` env 转配置），`headless_size={W,H}`（默认 1280×720）；instance 扩展用 `VK_KHR_surface`+`VK_EXT_headless_surface` 替代 SDL surface 扩展；`vkCreateHeadlessSurfaceEXT` 建虚拟 surface；脱离 SDL/compositor | `vkinstance.cppm` / `vkswapchain.cppm` / `main.cpp` |
 
-跨驱动降级：`queryOptionalFeatures` 探测（扩展可用 **且** feature 置位，缺一即 false）→ 不支持时整体 no-op，启动不破。headless 是独立启用路径（`RGL_HEADLESS` env），非降级。
+跨驱动降级：`queryOptionalFeatures` 探测（扩展可用 **且** feature 置位，缺一即 false）→ 不支持时整体 no-op，启动不破。headless 是独立启用路径（`runtime.lua` `headless` 配置），非降级。
 
 ### 12.2 主崩溃：实参错位导致 BDA flag 丢失（误诊 RADV bug）
 
@@ -395,7 +395,7 @@
 
 - ~~**edS3：VVL 误报 `depthClipEnable feature 未启用`（VVL 1.4.357 gap，app 侧无 bug）→ 保留现状（2026-09-02 定案）**。深挖定案：① feature **确实在设备级启用了**——临时诊断在 `vkCreateDevice` 时刻遍历 pNext 链（zero_init 回退前 13 元素，edS3 为末位 `sType=1000455000` `flag=1 (TRUE)`），回退后 12 元素、edS3 仍末位 flag=TRUE；② hpp `PhysicalDevice::createDevice`（`vulkan_funcs.hpp:478`）把 `&createInfo` **原样** `reinterpret_cast` 传给 `vkCreateDevice`，pNext 链一字不改——VVL 拦截到的链 = 诊断的链；③ VVL 二进制 `strings` 命中 `extendedDynamicState3DepthClipEnable` + 该 VUID（VVL **认识**此 feature），却仍报"未启用" → **VVL 设备级 feature 解析未把该结构体记进"已启用"集**（较新 ratified 扩展的 VVL 追踪 gap）。非致命：RADV 接受 `setDepthClipEnableEXT`，渲染正常。**处置 = 保留现状**（VVL 噪声留着，非致命；可选消噪 = DebugMessenger 过滤 `VUID-vkCmdSetDepthClipEnableEXT-depthClipEnable-07451` 误报，未做）。~~
 
-  > **【勘误 2026-09-02 深夜，本节结论已推翻——VVL 正确，app 真违规，已修复】** 上面"VVL 误报"三证据链本身没错（edS3 struct 确在链中、flag=TRUE），**但查错了结构体**：VUID-07451 检查的是 **另一个 feature**——旧扩展 `VK_EXT_depth_clip_enable` 的 `VkPhysicalDeviceDepthClipEnableFeaturesEXT::depthClipEnable`，而非 edS3 的 `extendedDynamicState3DepthClipEnable`。两者共享 "depthClipEnable" 子串 = 误诊根源。三源交叉证实 spec 要求成立：① 本地 Vulkan-Docs v1.4.360 `vertexpostproc.adoc:1060`（07451 锚点 `features-depthClipEnable` 定义于 `VkPhysicalDeviceDepthClipEnableFeaturesEXT` 节下）；② VVL v1.4.357 源码 `cc_cmd_buffer_dynamic.cpp:2361` 无条件查 `enabled_features.depthClipEnable`（09423 才查 eds3/shaderObject——两条 VUID 各查各的），`device_features.cpp` 把两个 sType 分别解析进两个字段；③ 最新 v1.4.359/main 均未豁免。**修复**（同日）：`features_config.json` optional 加 `depthClipBase`（探测 `VK_EXT_depth_clip_enable`）+ `vkdevice` 条件链接其 struct + `features.cppm` 同启扩展 + `depthClipDynamic` 门 = eds3 && base（双 feature 缺一不可调）+ rlvk 补名。验证：冒烟 `was not enabled` 归零、命令仍实调。**教训：VVL feature 报错先精确定位 VUID 引用的 sType/字段（查 spec 锚点或 VVL 源码 enabled_features.X 的 X），"某含该子串的 struct 在链里=TRUE" ≠ "被检查的 feature 已启用"。**
+  > **【勘误 2026-09-02 深夜，本节结论已推翻——VVL 正确，app 真违规，已修复】** 上面"VVL 误报"三证据链本身没错（edS3 struct 确在链中、flag=TRUE），**但查错了结构体**：VUID-07451 检查的是 **另一个 feature**——旧扩展 `VK_EXT_depth_clip_enable` 的 `VkPhysicalDeviceDepthClipEnableFeaturesEXT::depthClipEnable`，而非 edS3 的 `extendedDynamicState3DepthClipEnable`。两者共享 "depthClipEnable" 子串 = 误诊根源。三源交叉证实 spec 要求成立：① 本地 Vulkan-Docs v1.4.360 `vertexpostproc.adoc:1060`（07451 锚点 `features-depthClipEnable` 定义于 `VkPhysicalDeviceDepthClipEnableFeaturesEXT` 节下）；② VVL v1.4.357 源码 `cc_cmd_buffer_dynamic.cpp:2361` 无条件查 `enabled_features.depthClipEnable`（09423 才查 eds3/shaderObject——两条 VUID 各查各的），`device_features.cpp` 把两个 sType 分别解析进两个字段；③ 最新 v1.4.359/main 均未豁免。**修复**（同日）：`features_config.json` optional 加 `depthClipBase`（探测 `VK_EXT_depth_clip_enable`）+ `vkdevice` 条件链接其 struct + `features.cppm` 同启扩展 + rlvk 补名。注意：`depthClipDynamic` 门现行实现只查 edS3 探测位（`vkrenderer_impl.cppm:103`，无 `&& base` 合取）——开发机两 feature 同支持，`setDepthClipEnableEXT` 不违 VUID-07451；若遇"支持 edS3 但不支持旧扩展"的驱动，命令仍会实调，存在 07451 复发风险（如需严格门控可补 `&& depthClipBase`）。验证：冒烟 `was not enabled` 归零、命令仍实调。**教训：VVL feature 报错先精确定位 VUID 引用的 sType/字段（查 spec 锚点或 VVL 源码 enabled_features.X 的 X），"某含该子串的 struct 在链里=TRUE" ≠ "被检查的 feature 已启用"。**
 
 ### 12.4 headless 关键坑
 
@@ -431,7 +431,7 @@
 | `VK_EXT_shader_subgroup_partitioned` | ❌ | — | **当前不可引入**（RADV 26.2 未暴露，非"待验证"） |
 | `VK_EXT_memory_decompression` | ❌ | — | **当前不可引入**（同上；资产管线改造成本结论不变） |
 
-顺带实测（同文档"近期评估"批次，均未引入）：`depth_clamp_zero_one` TRUE、`shader_clock` 双 TRUE、`device_fault` TRUE（含 `deviceFaultReportMasked`）、`present_timing` rev 3 暴露、maintenance9/10/11 全 TRUE、`host_image_copy` 扩展暴露（feature struct 未见于 vulkaninfo capabilities dump，引入前需 app 内 `getFeatures2` 实查）。
+顺带实测（同文档"近期评估"批次，均未引入）：`depth_clamp_zero_one` TRUE、`shader_clock` 双 TRUE、`device_fault` TRUE（含 `deviceFaultReportMasked`）、`present_timing` rev 3 暴露、maintenance9/10/11 全 TRUE、`host_image_copy` 扩展暴露（已提升核心 1.4：feature 在 capabilities dump 的 `VkPhysicalDeviceVulkan14Features.hostImageCopy=true`，无独立 EXT feature struct，可直接引用）。
 
 ### 13.3 robustness2 引入落地（optional_features 机制首个"纯卫生"用户）
 

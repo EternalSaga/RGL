@@ -20,7 +20,7 @@ just build               # 增量编译（需先 config）；just build-release 
 just reflect             # 重跑 5 条反射管线（改动 shader 契约/schema/模板后必须；见"着色器编译"）
 just run                 # 运行（AMD VGA 存在时自动设 RADV_EXPERIMENTAL=heap）
 just run-igpu / run-dgpu / run-intel   # 强制核显 / NVIDIA prime 独显 / Intel anv
-just clean / clean-all / all           # 增量清理 / 删 build 目录 / clean+build-release
+just clean / clean-all / all           # 增量清理 / 删 build 目录 / clean-all+build-release
 ```
 
 ### Windows (NVIDIA + LLVM 22)
@@ -141,7 +141,7 @@ tools 为 `EXCLUDE_FROM_ALL`（编译提速）：日常构建不碰工具链，`
 ## 模块结构（C++20 modules, .cppm）
 
 所有导出均在 `namespace RGL` 内。**实现细节以各 `.cppm` 文件头注释为权威**，Phase 演进史见
-`docs/next_roadmap.md`。**工具/数据/生成模块 29 行速览表已下沉 `docs/技术概念.md` §模块表**，
+`docs/next_roadmap.md`。**工具/数据/生成模块 32 行速览表已下沉 `docs/技术概念.md` §模块表**，
 此处只留初始化层（构造顺序 = main.cpp 顺序，强导航价值）：
 
 | 模块 | 文件 | 职责 |
@@ -153,20 +153,23 @@ tools 为 `EXCLUDE_FROM_ALL`（编译提速）：日常构建不碰工具链，`
 | `vk_renderer` | vkrenderer.cppm | 同步对象、命令缓冲；`drawFrame(const FrameDrawList&)` 盲执行（零 entt）：构造收 `CompiledRenderGraph`，逐 pass = barrier 计划物化 → beginRendering → applyDynamicState → 段内逐 draw → endRendering；blit pass；present/waitStage 图派生；heap barrier + scene staging = 固定段不入图；staging ring；acquire 100ms 超时跳帧；**帧内捕获回读**（llm_debug 截图 = present 前拷后缓冲/GB 通道，`requestFrameCapture/takeFrameCapture`，无离屏重渲） |
 | `render_graph` | render_graph.cppm | 渲染意图图（纯 C++ 零 Lua 零 entt）：`RgGraphDesc` → `compileRenderGraph`（校验 + barrier 自动推导 + presentTransition）→ `CompiledRenderGraph`；default/offscreen/deferred 三图变体 + `kGBufferAttachments` 契约表（G-buffer 名单一真相源）+ `renderGraphSelfCheck` |
 | `render_graph_config` | render_graph_config.cppm | `configs/render_graph.lua` → `RgGraphDesc`（sol2 沙箱，缺文件回落默认；结构合法性归 compile） |
-| `shader_registry` | shader_registry.cppm | 管线表（零 entt）：`PipelineEntry` + `ShaderRegistry`（cube 恒建 + `addModelEntry`（按组合去重）+ `addSkyEntry` + `addLightEntry` + `bindPipelineToAsset`） |
+| `shader_registry` | shader_registry.cppm | 管线表（零 entt）：`PipelineEntry` + `ShaderRegistry`（条目全按需建，无构造期恒建：`addModelEntry`（按组合去重）+ `addCubeEntry`（内建几何，按资产 slot 烘焙）+ `addSkyEntry` + `addLightEntry` + `bindPipelineToAsset`） |
 
-**main.cpp 启动流**：加载 camera/scene/render_graph 配置（先于建窗）+ `compileRenderGraph` +
-`renderGraphSelfCheck` → 栈上 `entt::registry`（全部每帧 context）→ 按序构造初始化层（Renderer
-收编译图；启动期 push constant/矩阵容量契约检查）→ env 上传（**时序 = 全部模型纹理槽后、
-addModelEntry 前**）→ **entities 三段循环**（A1 解析+顶点上传全部模型 → A2 纹理 → C 逐模型
-addModelEntry+registerScene；A1/A2 拆分 = heap 布局"顶点槽先于纹理槽"契约）→ `addSkyEntry`/
-deferred 装配（G-buffer 槽 + light 条目，**须先于 Renderer 构造**）→ `renderSystem`。
+**main.cpp 启动流**：加载 camera/scene/runtime/diagnostics 配置（先于建窗）+ `renderGraphSelfCheck`
+→ 建窗（headless 不建）→ 栈上 `entt::registry`（全部每帧 context）→ 按序构造初始化层
+AppContext→DeviceContext（push constant 契约检查）→Swapchain→Resources→ShaderRegistry →
+`loadRenderGraphConfig` + `compileRenderGraph`（**建窗后**）→ **entities 四段循环**（A0 内建
+几何上传（cube，若有 cube entity）→ A1 解析+顶点上传全部模型 → A2 纹理 → **env 上传**（时序
+= A2 后、addModelEntry 前）→ C 逐模型 addModelEntry+registerScene + 容量契约检查 + cube
+entity/条目；A0/A1/A2 拆分 = heap 布局"几何槽先于纹理槽"契约，见
+`AssetTable::expectedGeometrySlot`）→ `addSkyEntry`/deferred 装配（G-buffer 槽 + light 条目，
+**须先于 Renderer 构造**）→ `Renderer`（收编译图）→ `renderSystem`。
 
 ### 构造依赖图
 
 ```
 SDLWindow → AppContext → DeviceContext → Swapchain → Resources → Renderer
-                └────────────── entt::registry（Viewport context）──────────┘
+                └────────────── entt::registry（WindowExtent/ViewProjection 等每帧 context）──────────┘
 ```
 
 main.cpp 按逆序析构（RAII）。依赖图原则：只允许下层 import 上层，**配置模块不依赖执行模块**
@@ -175,8 +178,8 @@ main.cpp 按逆序析构（RAII）。依赖图原则：只允许下层 import �
 
 ### 重要成员生命周期规则
 
-- `vkinstance.cppm`：`engineInfo_`、`instanceCreateInfo_`、`layers_`、`instanceExtensions_` 均为类成员 — `pApplicationInfo` 不能悬空
-- `vkdevice.cppm`：`featuresChain_` 为类成员 — `DeviceCreateInfo.pNext` 不能悬空
+- `vkinstance.cppm`：`engineInfo`、`instanceCreateInfo`、`layers`、`instanceExtensions` 均为类成员 — `pApplicationInfo` 不能悬空
+- `vkdevice.cppm`：`featuresChain` 为类成员 — `DeviceCreateInfo.pNext` 不能悬空
 - 所有 `vk::raii::*` 对象必须通过**成员初始化列表**初始化，绝不在函数体内初始化（默认构造函数已删除）
 - 成员声明顺序必须与初始化依赖顺序一致
 - **GPU 资源所有权**：长生命周期 GPU 资源（纹理 BO/描述符存储）不得声明在 main() 局部块内
@@ -199,9 +202,9 @@ main.cpp 按逆序析构（RAII）。依赖图原则：只允许下层 import �
 
 ## 隐式扩展依赖
 
-`features.cppm` 请求的 `VK_EXT_DEVICE_GENERATED_COMMANDS`、`VK_EXT_DESCRIPTOR_BUFFER` 等当前无
-显式使用，但被其他已启用扩展隐式依赖，不可随意删除；`vkinstance.cppm` 的 `VK_EXT_SWAPCHAIN_COLOR_SPACE`
-同理。**KHR/EXT 别名**：`VkSwapchainPresentFenceInfoKHR/EXT` 是同一结构（typedef alias），代码用 EXT。
+`features.cppm` 请求的 `VK_EXT_DESCRIPTOR_BUFFER`、`VK_KHR_SHADER_UNTYPED_POINTERS` 等
+（`kDeviceExtensions()` 8 项，features.cppm L20-27）当前无显式使用，但被其他已启用扩展隐式
+依赖，不可随意删除；`vkinstance.cppm` 的 `VK_EXT_SWAPCHAIN_COLOR_SPACE` 同理。**KHR/EXT 别名**：`VkSwapchainPresentFenceInfoKHR/EXT` 是同一结构（typedef alias），代码用 EXT。
 
 ## 外部依赖（通过父 CMake 链接）
 
@@ -219,7 +222,8 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
 | `shaders/lights.slang` | **多灯契约**（反射管线 4）：`GpuLight` + `readLightCount/readGpuLight` 读尾区 @262272；`light.frag` import，forward 不 import |
 | `shaders/model_pbr/model_phong/model_pbr_ibl.frag` | 三条 frag 路线（GGX / Blinn / GGX+简化 IBL），`scene.lua styles` 一行切换 |
 | `shaders/deferred_geometry.frag` + `light.mesh/frag` | deferred 路线：4-MRT G-buffer 写入（oct 法线）/ 全屏大三角逐灯 GGX；`kGBufferAttachments` 表定格式 |
-| `shaders/model_schema.lua` `constants` | 契约常量单一真相源（`kTrianglesPerGroup` 等 → 生成 constexpr） |
+| `shaders/model_schema.lua` `constants` | 契约常量单一真相源（`kTrianglesPerGroup` 等 → 生成 constexpr）；`HeapSlotGeometryBase` = 用户槽区起点 = 几何段基址 |
+| `rgl/builtin_geometry.cppm` | **内建几何契约**（架构债务 1 方案 B）：cube 等程序化几何的上传/注册，与 gltf 同路；`vk_resources` 不认识任何内容 |
 | `configs/*.lua` | 运行时配置（sol2 沙箱，字段可选回落默认）；**与 `shaders/*_schema.lua`（build 时契约）是两套机制，勿混** |
 
 ## 已知问题
@@ -260,7 +264,7 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
 - `docs/archive/` — 归档索引（phase 计划含 **phase6_record.md**、ecs 审查、issue_history 总账、
   present_timing/教程拆解等已结题调研）
 - 离线 Vulkan 文档（优先在线检索被 Cloudflare 拦截时）：本地克隆 `/home/robin/program/Vulkan-Docs`
-  （v1.4.360）。**注意**：spec 比系统头/loader（v341）新，结构体字段以系统头为准，spec 只作语义依据
+   （v1.4.360）。**注意**：spec 比系统头/loader（v357）新，结构体字段以系统头为准，spec 只作语义依据
 - 最小复现/验证子项目（独立 CMake，结论已吸收进主工程与 archive）：`min_mesh_crash/`（NVIDIA mesh
   shader 必带 `NO_TASK_SHADER_BIT_EXT` 根因，见其 README）、`heap_texture_spike/`（heap 纹理三驱动
   PASS + 步长取 max，见其 README + archive/heap_texture_research.md）

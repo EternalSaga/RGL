@@ -1,6 +1,6 @@
 # VK_EXT_descriptor_heap 使用规范
 
-> **状态**：现行（descriptor heap 使用规范 + 排坑记录；代码示例以 2026-08-27 当前代码为准更新过一轮）
+> **状态**：现行（descriptor heap 使用规范 + 排坑记录；代码示例以 2026-09-08 架构债务 1+2 重构后当前代码为准）
 
 ## 一、快速检查清单
 
@@ -9,7 +9,7 @@
 | 查询属性 | `VkPhysicalDeviceDescriptorHeapPropertiesEXT` | 初始化时 |
 | 分配 buffer | `eDescriptorHeapEXT` + `eShaderDeviceAddress` | VMA |
 | Reserved range | `reservedRangeSize >= minResourceHeapReservedRange` | `createDescriptorHeap` |
-| 写入描述符 | `vkWriteResourceDescriptorsEXT`，`dst.size >= descriptorSize` | `writeDescriptors` |
+| 写入描述符 | `vkWriteResourceDescriptorsEXT`，`dst.size >= descriptorSize` | 各 `ensure*` / 上传函数（内联） |
 | Shader 创建 | `VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT` + `layout = nullptr` | `shader.cppm` |
 | Binding mapping | `VkDescriptorSetAndBindingMappingEXT` 覆盖所有 `[[vk::binding]]` | `shader.cppm` |
 | Heap offset | `heapOffset` / `heapArrayStride` **以字节为单位** | `shader.cppm` |
@@ -31,7 +31,10 @@ props2.pNext = &heapProps;
 vkGetPhysicalDeviceProperties2(physicalDevice, &props2);
 
 // ⚠️ 必须查询 reservedRange
-uint32_t descriptorSize = (uint32_t)heapProps.bufferDescriptorSize;
+// Phase 3 统一步长：image 描述符比 buffer 描述符宽，slot 步长取 max（运行时查询，勿硬编码）
+uint32_t bufferSize = (uint32_t)heapProps.bufferDescriptorSize;
+uint32_t imageSize  = (uint32_t)heapProps.imageDescriptorSize;
+uint32_t descriptorSize = std::max(bufferSize, imageSize);
 uint32_t reservedSlots = (uint32_t)(
     (heapProps.minResourceHeapReservedRange + descriptorSize - 1) / descriptorSize
 );
@@ -84,16 +87,16 @@ device.writeResourceDescriptorsEXT(
 
 ### 坑 3：vk-hpp 需传 ArrayProxy 兼容容器
 
-vk-hpp 的 `writeResourceDescriptorsEXT` 参数类型是 `ArrayProxy<const T>`，**不能直接传裸指针或 initializer list**。`std::array` / `std::vector` 均可（当前代码用 `std::array`，见 `vkresources.cppm` `writeDescriptors`）。
+vk-hpp 的 `writeResourceDescriptorsEXT` 参数类型是 `ArrayProxy<const T>`，**不能直接传裸指针或 initializer list**。`std::array` / `std::vector` 均可（当前代码如 `vkresources.cppm` `Resources::ensureSceneData` 用 `std::array`；`ensureRtAttachment` 等调用点直接传单元素）。
 
 ### 坑 4：`pDescriptors[i].size` 必须 >= descriptor size
 
 ```cpp
 // ✅ 正确
-dst.size = heap->getDescriptorSize();  // 实测 16B（两台 GPU 的 bufferDescriptorSize，勿硬编码）
+dst.size = heap->getDescriptorSize();  // 统一步长 = max(buffer, image)（RADV 64B / NVIDIA 32B，运行时查询，勿硬编码）
 
-// ❌ 错误：写不完整的描述符 → 几何体错乱
-dst.size = 64;
+// ❌ 错误：写入字节 < 步长 → 描述符不完整（如 64B 步长下只写 16B）
+dst.size = 16;
 ```
 
 ---
@@ -103,12 +106,12 @@ dst.size = 64;
 ```cpp
 VkDescriptorSetAndBindingMappingEXT mappings[2]{};
 
-// Binding 0 → heap slot 8
+// Binding 0 → 顶点 buffer 槽（绝对槽号 = reservedSlots + 运行时游标，示例的 8 仅为示意）
 mappings[0].sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
 mappings[0].descriptorSet = 0;
 mappings[0].firstBinding = 0;
 mappings[0].bindingCount = 1;
-mappings[0].resourceMask = VK_SPIRV_RESOURCE_TYPE_READ_ONLY_STORAGE_BUFFER_BIT_EXT;
+mappings[0].resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;  // 当前代码统一 ALL_EXT（shader.cppm add()）
 mappings[0].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
 mappings[0].sourceData.constantOffset.heapOffset = 8 * descriptorSize;   // ⚠️ 字节
 mappings[0].sourceData.constantOffset.heapArrayStride = descriptorSize;  // ⚠️ 字节
@@ -147,40 +150,45 @@ mappings[0].sourceData.constantOffset.heapArrayStride = descriptorSize;
 ## 五、命令录制顺序
 
 ```cpp
-// ① Host→GPU barrier（如果在 CPU 端修改了 heap 数据）
+// ① Host→GPU barrier（如果在 CPU 端修改了 heap 数据；必须在 beginRendering 之前）
+//    dst 须覆盖两个 heap + staging 读（sampler heap 有独立 access bit，
+//    漏设曾致采样恒 garbage，见 docs/archive/heap_texture_research.md）
 vk::MemoryBarrier2 barrier{};
 barrier.srcAccessMask = vk::AccessFlagBits2::eHostWrite;
-barrier.dstAccessMask = vk::AccessFlagBits2::eResourceHeapReadEXT;
+barrier.dstAccessMask = vk::AccessFlagBits2::eResourceHeapReadEXT |
+                        vk::AccessFlagBits2::eSamplerHeapReadEXT |
+                        vk::AccessFlagBits2::eTransferRead;
 barrier.srcStageMask  = vk::PipelineStageFlagBits2::eHost;
 barrier.dstStageMask  = vk::PipelineStageFlagBits2::eAllGraphics;
 cmd.pipelineBarrier2(vk::DependencyInfo{}.setMemoryBarriers(barrier));
 
-// ② 绑定 heap
+// ② 绑定 heap（resource + sampler，均在 beginRendering 之前）
 vk::DeviceAddressRangeEXT heapRange{ heapAddress, heapSize };
 cmd.bindResourceHeapEXT(vk::BindHeapInfoEXT(
     heapRange,
     reservedRangeOffset,   // >= 0
     reservedRangeSize      // >= minResourceHeapReservedRange
 ));
+vk::DeviceAddressRangeEXT samplerHeapRange{ samplerHeapAddress, samplerHeapSize };
+cmd.bindSamplerHeapEXT(vk::BindHeapInfoEXT(samplerHeapRange, 0, samplerReservedRangeSize));
 
-// ③ Push data
-cmd.pushDataEXT(vk::PushDataInfoEXT(0, vk::HostAddressRangeConstEXT(&data, sizeof(data))));
+// ③ （有每帧动态数据时）staging → 设备 buffer 拷贝 + buffer barrier
+cmd.copyBuffer(stagingBuffer, deviceBuffer, region);
+cmd.pipelineBarrier2(/* buffer barrier: eTransfer/eTransferWrite → eAllGraphics/eShaderRead */);
 
-// ④ 开始渲染
+// ④ 逐 pass：beginRendering → 动态状态 → 逐 draw → endRendering
 cmd.beginRendering(renderingInfo);
-
-// ⑤ 绑定 shader + 动态状态
-cmd.bindShadersEXT(stages, shaders);
 // ... viewport, scissor, depth, ...
-
-// ⑥ 绘制
-cmd.drawMeshTasksEXT(1, 1, 1);
+// pushData 逐 draw 发（DrawArgs 含 per-primitive 索引/偏移），故在 pass 内
+cmd.pushDataEXT(vk::PushDataInfoEXT(0, vk::HostAddressRangeConstEXT(&data, sizeof(data))));
+cmd.bindShadersEXT(stages, shaders);
+cmd.drawMeshTasksEXT(groupCount, 1, 1);
 cmd.endRendering();
 ```
 
 ### 坑 8：barrier 必须在 `beginRendering` 之前
 
-`VK_PIPELINE_STAGE_2_HOST_BIT` 不能在 dynamic render pass 内部使用。barrier 和 `vkCmdBindResourceHeapEXT`、`vkCmdPushDataEXT` 全部放在 `beginRendering` 之前。
+`VK_PIPELINE_STAGE_2_HOST_BIT` 不能在 dynamic render pass 内部使用。barrier 和 `vkCmdBindResourceHeapEXT` / `vkCmdBindSamplerHeapEXT` 全部放在 `beginRendering` 之前（`vkCmdPushDataEXT` 逐 draw 在 pass 内发，与 beginRendering 无先后约束）。
 
 ### 坑 9：heap 与 descriptor set 互斥
 
@@ -294,17 +302,20 @@ vk-hpp 的 `vk::PushDataInfoEXT` 构造函数接受 `(uint32_t offset, vk::HostA
 ```
 heap slots:
   0..reservedSlots-1  → 实现保留（BindHeapInfoEXT.reservedRange），不要使用
-  用户槽位（相对 reserved range 起点，偏移常量由反射生成）:
-    [0, 8)   → cube（顶点 offset 0 / 索引 offset 4，types_generated）
-    [8, 8+N) → 模型顶点（每 primitive 一个，offset = HeapSlotModelVertexBase(8) + i，model_types_generated）
-    其余     → 固定裕量 kUserSlotMargin = 1024（与场景内容解耦；统一 slot 分配器归 Phase 3 TexturePool）
+  用户槽位（相对 reserved range 起点，全部 allocSlot 单调分配，按上传时序分区）:
+    [0, G)   → 几何段：内建几何（cube 顶点 + 索引）+ 模型拼接顶点块（每块一个）
+               基址常量 HeapSlotGeometryBase(0) = model_types_generated；
+               计数与漂移校验 = AssetTable::geometrySlotCount / expectedGeometrySlot()
+               （架构债务 1 方案 B 后无"cube 固定占位"语义，内核不预留内容专属槽）
+    [G, …)   → 纹理段（首槽 = 白 1×1，契约断言）→ scene data / RT 采样槽等运行时槽
+    其余     → 固定裕量 kUserSlotMargin = 1024（与场景内容解耦）
 
 push data (独立于 heap slots):
   vkCmdPushDataEXT 写入独立的 push data 内存区域，不占用 descriptor heap slots
   push constant 通过 [[vk::push_constant]] 直接访问 push data，不需要 binding mapping
 ```
 
-**实际代码（`vkresources.cppm` `createDescriptorHeap`）：** `capacity = reservedSlots + HeapSlotModelVertexBase + kUserSlotMargin(1024)`。`reservedRangeOffset = 0`，reserved slots 始终从 heap 起始地址开始（slot 0..reservedSlots-1）。用户实际可用 slots 为 `reservedSlots..(capacity-1)`。Slot 编号运行时动态分配 = `reservedSlots() + <偏移常量>`（偏移由 `types_generated` / `model_types_generated` 生成），天然避开 reserved range — AMD（reservedSlots=0）与 NVIDIA（reservedSlots=6048）均已验证。
+**实际代码（`vkresources.cppm` `createDescriptorHeap`）：** `capacity = reservedSlots + kUserSlotMargin(1024)`。`reservedRangeOffset = 0`，reserved slots 始终从 heap 起始地址开始（slot 0..reservedSlots-1）。用户实际可用 slots 为 `reservedSlots..(capacity-1)`。Slot 编号一律运行时 `allocSlot` 动态分配（= `reservedSlots() + 单调游标`），天然避开 reserved range — AMD（reservedSlots=0）与 NVIDIA（reservedSlots=3024 = 96768B 保留区 ÷ 32B 统一步长；16B 步长时代旧值 6048）均已验证。几何段的连续性与"纹理首槽 = 白"由 `AssetTable::expectedGeometrySlot()` 启动期断言兜底（违例 = 有人在几何段中间插了别的分配）。
 
 ### 3. 一次性分配，全程复用
 
@@ -319,10 +330,11 @@ push data (独立于 heap slots):
 // ❌ 错误：硬编码 128
 constexpr uint32_t descriptorSize = 128;
 
-// ✅ 正确：从物理设备属性查询
+// ✅ 正确：从物理设备属性查询（Phase 3 统一步长 = max(buffer, image)）
 VkPhysicalDeviceDescriptorHeapPropertiesEXT props{};
 // ... vkGetPhysicalDeviceProperties2 ...
-uint32_t descriptorSize = (uint32_t)props.bufferDescriptorSize;
+uint32_t descriptorSize = std::max((uint32_t)props.bufferDescriptorSize,
+                                   (uint32_t)props.imageDescriptorSize);
 ```
 
 ### 5. 始终使用 `vk::DependencyInfo` + `pipelineBarrier2`
@@ -350,7 +362,7 @@ vk::AccessFlagBits2::eHostWrite             // 主机写入（写入描述符后
 | API | dst 类型 | data 类型 |
 |---|---|---|
 | `writeResourceDescriptorsEXT` | `ArrayProxy<vk::HostAddressRangeEXT>`（`std::vector`/`std::array`） | `vk::DeviceAddressRangeEXT`（buffer）/ `VkImageDescriptorInfoEXT`（image，v341） |
-| `writeSamplerDescriptorsEXT` | `ArrayProxy<vk::HostAddressRangeEXT>` | `VkSamplerCreateInfo`（旧 API；新路径用 `pEmbeddedSampler` 内嵌，见 archive/heap_texture_research.md） |
+| `writeSamplerDescriptorsEXT` | `ArrayProxy<vk::HostAddressRangeEXT>` | `VkSamplerCreateInfo` —— **现行路径**（独立 sampler heap，`vkCmdBindSamplerHeapEXT` 每帧绑定，见 `vkresources.cppm` `createSamplerHeap` 注释）；`pEmbeddedSampler` 内嵌路径对 Slang 分离对在 RADV 实测采样恒 0，未采用 |
 | `pushDataEXT` | `vk::PushDataInfoEXT` | `vk::HostAddressRangeConstEXT` |
 
 注意：

@@ -132,15 +132,15 @@ layout 规则：offset 单调不减、4 字节对齐、action token 必须最后
 
 ## 四、与当前项目的交互分析
 
-### 4.1 现状：已启用、零使用
+### 4.1 现状：已移除（2026-08-22；此前为"已启用、零使用"）
 
-- `features.cppm:25,55`：`VK_EXT_DEVICE_GENERATED_COMMANDS_EXTENSION_NAME` 在 required 检查列表和启用列表中；`min_mesh_crash/main.cpp:95` 同样启用。
-- 全项目 grep（`IndirectExecutionSet|IndirectCommandsLayout|PreprocessGeneratedCommands|ExecuteGeneratedCommands`）**零 API 调用**——纯"启用未使用"。
+- （移除前状态）`features.cppm:25,55`：`VK_EXT_DEVICE_GENERATED_COMMANDS_EXTENSION_NAME` 在 required 检查列表和启用列表中（2026-08-22 移除）；`min_mesh_crash/main.cpp:95` 仍启用。
+- （移除前状态）全项目 grep（`IndirectExecutionSet|IndirectCommandsLayout|PreprocessGeneratedCommands|ExecuteGeneratedCommands`）**零 API 调用**——纯"启用未使用"。
 - **AGENTS.md"隐式扩展依赖"条目核查**（"被其他已启用的扩展隐式依赖，不可随意删除"）：**registry 级已定论，该说法不成立**——
   - 权威 registry（`Vulkan-Docs/xml/vk.xml:30852`）中该扩展块：`depends="((VK_KHR_buffer_device_address,VK_VERSION_1_2)+(VK_KHR_extended_flags,VK_KHR_maintenance5)),VK_VERSION_1_3"` → 仅依赖 **Vulkan 1.3 + device address 能力族**（本项目均已满足），**不依赖** descriptor_heap / shader_object / mesh_shader（正文中对它们的引用只是 ifdef 守卫个别 token，如 PUSH_DATA）；
-  - **反向查询**：全部 `<extension>` 标签中无任何其他扩展 `depends` 声明引用本扩展（vk.xml 中 5 处 `<require depends="VK_EXT_device_generated_commands">` 均为该扩展块**内部**的条件性 require，语义是"使用某 token 时必须启用本扩展"，方向相反）；
+  - **反向查询**：全部 `<extension>` 标签中无任何其他扩展 `depends` 声明引用本扩展（vk.xml 中 5 处 `<require depends="VK_EXT_device_generated_commands">` 位于**其他扩展块内**——descriptor_heap / NV_mesh_shader / sync2 / EXT_mesh_shader / ray_tracing_maintenance1——为条件性 token 追加，仅当 DGC 启用时生效，方向为 token→DGC，非其他扩展对 DGC 的硬依赖）；
   - 实测佐证：RADV 不加 `RADV_EXPERIMENTAL=heap` 时不 advertise `descriptor_heap` 却仍 advertise `device_generated_commands`（spec 规定被支持的扩展其依赖必须同时被支持，否则 RADV 不应 advertise 它）；
-  - 该条目是 NVIDIA Xid 排查期（`min_mesh_crash` 参考 NVIDIA sample 扩展列表）的保守遗留。保留现状（双驱动均支持，留着零成本），Phase 7 引入时从"隐式依赖"转为**显式使用**（feature chain + culling 子系统），AGENTS.md 表述已同步修正。
+  - 该条目是 NVIDIA Xid 排查期（`min_mesh_crash` 参考 NVIDIA sample 扩展列表）的保守遗留。原拟保留现状（双驱动均支持），A/B 实验（见下）确认移除零回归后正式移除，Phase 7 引入时从"隐式依赖"转为**显式使用**（feature chain + culling 子系统），AGENTS.md 表述已同步修正。
   - **A/B 编译运行实验（2026-08-22 实测）**：从 `features.cppm` 两处列表移除该扩展 → 增量编译 → 双 GPU 各跑 25s（`just run-igpu` / `run-dgpu`）→ 恢复代码对照复跑：
 
     | 运行 | GPU | 扩展 | 结果 |
@@ -228,7 +228,7 @@ indirectStride ≥ 各 token 数据总长（NVIDIA 无上限；RADV 上限 2048B
 |---|---|---|
 | 规范正文（含全部扩展章节） | `chapters/`（如 `chapters/device_generated_commands/generatedcommands.adoc`） | 语义 + VU 条文，可 grep |
 | 权威 registry | `xml/vk.xml` | 扩展依赖表（`<extension ... depends="...">` / `<require depends="...">`）、feature/limit/token 元数据——**核查"扩展 X 是否依赖 Y"以此为准** |
-| 扩展附录（元数据/贡献者/版本史） | `appendices/VK_EXT_*.adoc`（494 个） | 扩展概况 |
+| 扩展附录（元数据/贡献者/版本史） | `appendices/*.adoc`（约 492 个，含 VK_EXT_ 153 / VK_KHR_ 150 / VK_NV_ 69） | 扩展概况 |
 | 设计提案 | `proposals/` | 未合入/新扩展的设计讨论 |
 | registry schema 说明 | `registry.adoc` | XML 字段语义（`depends` 表达式语法等） |
 

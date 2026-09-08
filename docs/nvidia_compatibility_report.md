@@ -3,9 +3,9 @@
 > **状态**：现行（跨驱动兼容性排坑记录，含历史排查过程；最新验证见第八节）
 
 **日期**: 2026-08-12
-**环境**: Gentoo + RTX 5090 (GB202) / AMD Granite Ridge (Raphael_Mendocino)；2026-08-27 增补：Intel（型号未记录在档）/ AMD Strix Halo (Radeon 8060S，当前开发机)
+**环境**: Gentoo + RTX 5090 (GB202) / AMD Granite Ridge (Raphael_Mendocino)；2026-08-27 增补：Intel Arc A310（dGPU，anv）/ AMD Strix Halo (Radeon 8060S，当前开发机)
 **驱动**: NVIDIA 595.84 → 610.57.04
-**状态**: AMD ✅ | NVIDIA ✅ (vertex + mesh shader) — 2026-08-17 更新：原"NVIDIA 驱动 bug"结论已推翻，真实根因是应用侧缺 `VK_SHADER_CREATE_NO_TASK_SHADER_BIT_EXT` flag，见第五节；**2026-08-27 更新：当前代码（commit `1f43d65`）经 NVIDIA / Intel / AMD Strix Halo 三平台全流程验证通过**，见第八节
+**状态**: AMD ✅ | NVIDIA ✅ (vertex + mesh shader) — 2026-08-17 更新：原"NVIDIA 驱动 bug"结论已推翻，真实根因是应用侧缺 `VK_SHADER_CREATE_NO_TASK_SHADER_BIT_EXT` flag，见第五节；**2026-08-27 更新：该时点代码（commit `1f43d65`）经 NVIDIA / Intel / AMD Strix Halo 三平台全流程验证通过**，见第八节
 
 ---
 
@@ -29,9 +29,9 @@
 | `features_config.json` | 移除 `descriptorHeapCaptureReplay` | NVIDIA 595.84 不支持此 feature（610 驱动支持） |
 | `vkresources.cppm` | Slot 编号动态化 | NVIDIA reservedSlots=6048，原固定 slot 8/12 在 reserved range 内部 |
 | `VmaBuffer.cppm` | GPU address 对齐 | 修正 `resourceHeapAlignment` 对齐（NVIDIA=32B）+ CPU mapped data 对齐 |
-| `shader.cppm` | frag shader mappingInfo 移除 | frag shader 无 binding，`pNext = nullptr` 即可 |
+| `shader.cppm` | frag shader 沿用同一 mappingInfo | frag 未声明的 binding 映射空转无副作用（Phase 3 起 frag 声明 binding 1/2，实际消费该映射） |
 | `shader.cppm:44` | `mappings[0].resourceMask` 改为 `ALL_EXT` | NVIDIA 驱动可能更严格校验 resourceMask 与 SPIR-V 资源类型的匹配 |
-| `shader.cppm:66,78` | 添加 `VK_SHADER_CREATE_LINK_STAGE_BIT_EXT` | NVIDIA 官方 sample 使用此 flag，影响 shader 二进制生成 |
+| （主工程未启用） | `VK_SHADER_CREATE_LINK_STAGE_BIT_EXT` 仅存在于 heap_texture_spike / min_mesh_crash 子工程 | 主工程 shader.cppm 从未添加此 flag |
 | `CMakeLists.txt` | Slang profile 维持 `sm_6_6+spirv_1_6` | 最终未改为 `glsl_460+spirv_1_6`（早期记录有误；profile 不是 NVIDIA 兼容性的核心问题） |
 | `vcpkg.json` + `CMakeLists.txt` | slang 依赖标准化 | vcpkg 管理 slang 编译器 |
 
@@ -42,12 +42,12 @@
 | 属性 | NVIDIA RTX 5090 | AMD Granite Ridge (RADV) |
 |---|---|---|
 | `bufferDescriptorSize` | **16** | **16** |
-| `minResourceHeapReservedRange` | **96768** (6048 slots) | **0** |
+| `minResourceHeapReservedRange` | **96768** (当前 32B 统一步长 = 3024 槽；16B 步长时代 6048 槽) | **0** |
 | `resourceHeapAlignment` | **32** | **4** |
 
 **关键差异**：
 - 两者 descriptor size 相同（16 字节）
-- NVIDIA reserved range 巨大（6048 slots vs 0）— 需要跳过 reserved range 才能使用
+- NVIDIA reserved range 巨大（96768B = 3024 槽@32B 步长 vs 0）— 需要跳过 reserved range 才能使用
 - 对齐要求不同：NVIDIA=32B，AMD=4B
 - 当前 `VmaBuffer.cppm` 的对齐逻辑同时满足两者（32 是 4 的倍数）
 
@@ -117,7 +117,7 @@ NVRM: Xid 13, Graphics Exception: ESR 0x405848=0x80000000
 - ~~驱动 610.57.04 不支持 mesh shader + shader object 组合~~ — 实际支持，flag 设对即可
 - ~~NVIDIA 官方 sample 没有该组合验证了这一点~~ — sample 缺失不是驱动不支持的证据
 
-（5.1 中 "Class 0000ce97 是 GB202 的 GPFAS 类，错误发生在 mesh shader 执行阶段" 的观察仍然成立。）
+（早前观察 Class 0000ce97 是 GB202 的 GPFAS 类、错误发生在 mesh shader 执行阶段，仍然成立。）
 
 ### 5.4 解决方案
 
@@ -126,7 +126,7 @@ NVRM: Xid 13, Graphics Exception: ESR 0x405848=0x80000000
 **最终修复**（2026-08-17）：
 
 ```cpp
-// rgl/shader.cppm:67 和 min_mesh_crash/main.cpp:253
+// rgl/shader.cppm:67（2026-08-17 时点；文件后更名重构，现为 rgl/shader.cppm:237）和 min_mesh_crash/main.cpp:252
 meshCreateInfoRaw.flags |= VK_SHADER_CREATE_NO_TASK_SHADER_BIT_EXT;
 ```
 
@@ -246,17 +246,19 @@ Aftermath 的自动 checkpoint 在每个 Vulkan 命令后插入 CPU 调用栈。
 
 ## 八、2026-08-27 跨平台验证更新
 
-当前代码（commit `1f43d65`，Phase 2 完成态：glTF 加载 + flat unlit + 资产表 + llm_debug 一次性截图）在以下平台全流程验证通过（mesh shader + descriptor heap + dynamic state + 模型渲染，`just run` 无 warn/error）：
+该时点代码（commit `1f43d65`，Phase 2 完成态：glTF 加载 + flat unlit + 资产表 + llm_debug 一次性截图）在以下平台全流程验证通过（mesh shader + descriptor heap + dynamic state + 模型渲染，`just run` 无 warn/error）：
 
 | 平台 | 配置 | 结果 |
 |---|---|---|
 | NVIDIA RTX 5090 | prime offload（driver 610.57.04） | ✅ |
-| Intel | 具体型号/iGPU 与否未记录在档（见 commit `1f43d65` 测试） | ✅ |
+| Intel Arc A310 (dGPU, anv) | 见 commit `1f43d65` run-intel 注释 | ✅ |
 | AMD Strix Halo (Radeon 8060S) | RADV 单卡核显机，`RADV_EXPERIMENTAL=heap`（`just run` 自动设置） | ✅ |
 
 **当前开发机（2026-08-27 起）**：Strix Halo 纯核显单卡机器（无独显），运行依赖 RADV + `RADV_EXPERIMENTAL=heap`（`VK_EXT_descriptor_heap` 扩展在该 ICD 下需此实验开关）。
 
-**边界说明**：主工程通过的是 buffer 描述符路径（vertex/index BDA）；descriptor heap 的 **image 描述符 + 内嵌 sampler** 路径（Phase 3 纹理）spike 仅在 RADV 侧实测过（`heap_texture_spike/`，见 `docs/archive/heap_texture_research.md`），NVIDIA 侧待有 dGPU 环境时补测。
+**注**：其后 Phase 3–7 演进（最新 `b1788e0` 架构债务 1+2）仅在本机 Strix Halo 验证，NVIDIA/Intel 全流程未复验。
+
+**边界说明**：主工程当时全流程通过的是 buffer 描述符路径（vertex/index BDA）；descriptor heap 的 **image 描述符 + 内嵌/分离 sampler** 路径已在 spike 级完成三驱动（RADV/Intel/NVIDIA）× 5 变体像素级交叉测试（2026-08-27，`heap_texture_spike/`，见 `docs/archive/heap_texture_research.md` §九）；主工程含纹理的全流程另在 RADV 与 Windows/NVIDIA（Phase 4 时代，`602e372`）实测过，Linux NVIDIA prime offload 全流程未复测。
 
 ---
 
