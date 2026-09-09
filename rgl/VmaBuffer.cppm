@@ -10,12 +10,23 @@ import vkerror;
 
 namespace RGL {
 
+/**
+ * VMA 分配器控制块（shared_ptr 载荷）：持有裸 VmaAllocator 句柄，
+ * 最后一个 SharedAllocator 引用消失时经 deleter 调 vmaDestroyAllocator。
+ */
 struct AllocatorControlBlock {
 	VmaAllocator handle;
 };
 
+/** 共享分配器控制块（同进程内 VmaBuffer/VmaImage 共享一份；分配器随最后一个引用销毁）。 */
 export using SharedAllocator = std::shared_ptr<AllocatorControlBlock>;
 
+/**
+ * VMA 托管 buffer 的 RAII 包装：持有 (buffer, allocation) 对，析构时
+ * vmaDestroyBuffer 一并销毁；move-only（拷贝删除）。deviceAddress =
+ * vkGetBufferDeviceAddress 结果（BDA 用途，0 = 未查询）；pMappedData =
+ * 主机映射指针（nullptr = 未映射）。
+ */
 export struct VmaBuffer {
 	SharedAllocator allocatorBlock;
 	VkBuffer buffer = VK_NULL_HANDLE;
@@ -23,18 +34,31 @@ export struct VmaBuffer {
 	vk::DeviceAddress deviceAddress = 0;
 	void* pMappedData = nullptr;
 
+	/** 默认构造：空状态（无 buffer，析构不做事）。 */
 	VmaBuffer() = default;
+	/**
+	 * 从既有 VMA (buffer, allocation) 对构造。
+	 * @param allocBlock 分配器控制块（共享，须比本对象长寿由 shared_ptr 保证）
+	 * @param buf Vulkan buffer 句柄
+	 * @param alloctn VMA 分配句柄
+	 * @param addr BDA 设备地址（默认 0 = 未查询）
+	 * @param mapped 主机映射指针（默认 nullptr = 未映射）
+	 */
 	VmaBuffer(SharedAllocator allocBlock, VkBuffer buf, VmaAllocation alloctn, vk::DeviceAddress addr = 0, void* mapped = nullptr)
 		: allocatorBlock(std::move(allocBlock)), buffer(buf), allocation(alloctn), deviceAddress(addr), pMappedData(mapped) {}
 
+	/** 析构：buffer/allocation 均有效时 vmaDestroyBuffer（经控制块的分配器句柄）。 */
 	~VmaBuffer() {
 		if (allocatorBlock && allocatorBlock->handle && buffer && allocation)
 			vmaDestroyBuffer(allocatorBlock->handle, buffer, allocation);
 	}
 
+	/** 拷贝删除：GPU 资源所有权唯一（move-only）。 */
 	VmaBuffer(const VmaBuffer&) = delete;
+	/** 拷贝赋值删除：同上。 */
 	VmaBuffer& operator=(const VmaBuffer&) = delete;
 
+	/** 移动构造：接管资源，源对象重置为空状态（防二次销毁）。 */
 	VmaBuffer(VmaBuffer&& o) noexcept
 		: allocatorBlock(std::move(o.allocatorBlock)), buffer(o.buffer), allocation(o.allocation), deviceAddress(o.deviceAddress), pMappedData(o.pMappedData) {
 		o.buffer = VK_NULL_HANDLE;
@@ -43,6 +67,7 @@ export struct VmaBuffer {
 		o.pMappedData = nullptr;
 	}
 
+	/** 移动赋值：先销毁本对象持有的旧 buffer，再接管源对象资源并清空源。 */
 	VmaBuffer& operator=(VmaBuffer&& o) noexcept {
 		if (this != &o) {
 			if (allocatorBlock && allocatorBlock->handle && buffer && allocation)
@@ -60,34 +85,53 @@ export struct VmaBuffer {
 		return *this;
 	}
 
+	/** 解引用：VkBuffer 句柄。 */
 	VkBuffer operator*() const { return buffer; }
+	/** BDA 设备地址。 */
 	vk::DeviceAddress getDeviceAddress() const { return deviceAddress; }
+	/** 主机映射指针（可能为 nullptr）。 */
 	void* getMappedData() const { return pMappedData; }
 };
 
+/**
+ * VMA 托管 image 的 RAII 包装：持有 (image, allocation) 对，析构时
+ * vmaDestroyImage 一并销毁；move-only（拷贝删除）。
+ */
 export struct VmaImage {
 	SharedAllocator allocatorBlock;
 	VkImage image = VK_NULL_HANDLE;
 	VmaAllocation allocation = nullptr;
 
+	/** 默认构造：空状态（无 image，析构不做事）。 */
 	VmaImage() = default;
+	/**
+	 * 从既有 VMA (image, allocation) 对构造。
+	 * @param allocBlock 分配器控制块（共享）
+	 * @param img Vulkan image 句柄
+	 * @param alloctn VMA 分配句柄
+	 */
 	VmaImage(SharedAllocator allocBlock, VkImage img, VmaAllocation alloctn)
 		: allocatorBlock(std::move(allocBlock)), image(img), allocation(alloctn) {}
 
+	/** 析构：image/allocation 均有效时 vmaDestroyImage（经控制块的分配器句柄）。 */
 	~VmaImage() {
 		if (allocatorBlock && allocatorBlock->handle && image && allocation)
 			vmaDestroyImage(allocatorBlock->handle, image, allocation);
 	}
 
+	/** 拷贝删除：GPU 资源所有权唯一（move-only）。 */
 	VmaImage(const VmaImage&) = delete;
+	/** 拷贝赋值删除：同上。 */
 	VmaImage& operator=(const VmaImage&) = delete;
 
+	/** 移动构造：接管资源，源对象重置为空状态（防二次销毁）。 */
 	VmaImage(VmaImage&& o) noexcept
 		: allocatorBlock(std::move(o.allocatorBlock)), image(o.image), allocation(o.allocation) {
 		o.image = VK_NULL_HANDLE;
 		o.allocation = nullptr;
 	}
 
+	/** 移动赋值：先销毁本对象持有的旧 image，再接管源对象资源并清空源。 */
 	VmaImage& operator=(VmaImage&& o) noexcept {
 		if (this != &o) {
 			if (allocatorBlock && allocatorBlock->handle && image && allocation)
@@ -100,40 +144,57 @@ export struct VmaImage {
 		}
 		return *this;
 	}
+	/** 解引用：VkImage 句柄。 */
 	VkImage operator*() const { return image; }
 };
 
-// Descriptor heap 封装：把带 eDescriptorHeapEXT usage 的 BDA buffer 视为连续的"描述符槽位数组"。
-// 与普通 buffer（VmaBuffer）的本质区别在"对齐记账"：
-//   1. 传给 vkCmdBindResourceHeapEXT 的范围起始地址必须按设备的 resourceHeapAlignment
-//      对齐（NVIDIA 32B / AMD 4B），VMA 原始分配地址不保证满足且不能重新分配，
-//      只能"从分配内部偏移进去"，因此 heap 是 buffer 内带自己 base/size 的子范围；
-//   2. CPU mapped 指针需独立偏移，且槽位寻址要求它按 descriptorSize 对齐；
-//   3. heap 存在厂商特定的 reserved 槽位：字节 [0, reservedSlots * descriptorSize)
-//      由驱动管理（NVIDIA 6048 槽 / AMD 0 槽），不可使用。
-// 对齐的计算细节见下方 VmaAllocatorRAII::createDescriptorHeap。
+/**
+ * Descriptor heap 封装：把带 eDescriptorHeapEXT usage 的 BDA buffer 视为连续的"描述符槽位数组"。
+ * 与普通 buffer（VmaBuffer）的本质区别在"对齐记账"：
+ * 1. 传给 vkCmdBindResourceHeapEXT 的范围起始地址必须按设备的 resourceHeapAlignment
+ *    对齐（NVIDIA 32B / AMD 4B），VMA 原始分配地址不保证满足且不能重新分配，
+ *    只能"从分配内部偏移进去"，因此 heap 是 buffer 内带自己 base/size 的子范围；
+ * 2. CPU mapped 指针需独立偏移，且槽位寻址要求它按 descriptorSize 对齐；
+ * 3. heap 存在厂商特定的 reserved 槽位：字节 [0, reservedSlots * descriptorSize)
+ *    由驱动管理（NVIDIA 保留区 96768B = 3024 槽 @32B 统一步长，16B 步长时代旧值 6048 槽；
+ *    AMD 0 槽），不可使用。
+ * 对齐的计算细节见下方 VmaAllocatorRAII::createDescriptorHeap。
+ */
 export struct VmaDescriptorHeap {
 	VmaBuffer bufferStorage;       // 底层 buffer（RAII：随 SharedAllocator 控制块由 VMA 统一销毁）
 	void* pMappedData = nullptr;   // 偏移后的 CPU 地址（descriptorSize 对齐），slot 0 入口，写描述符用
 	uint64_t gpuAddress = 0;       // 偏移后的 GPU 设备地址（resourceHeapAlignment 对齐），vkCmdBindResourceHeapEXT 用
 	vk::DeviceSize gpuOffset = 0;  // heap 范围起点相对 buffer 原始起点的偏移（GPU/CPU 指针均加此偏移）
-	uint32_t descriptorSize = 0;   // 单个 buffer 描述符槽位大小，查询自 bufferDescriptorSize（两台 GPU 实测 16B，勿硬编码）
+	uint32_t descriptorSize = 0;   // 槽位步长（字节），运行时查询（resource heap = max(buffer, image) 描述符大小，sampler heap = samplerDescriptorSize；勿硬编码）
 	uint32_t capacity = 0;         // heap 槽位总数（含 reserved），buffer 分配大小 = capacity * descriptorSize
 	uint32_t reservedSlots = 0;    // 驱动保留槽位数，用户可用槽位为 [reservedSlots, capacity)
 
+	/** 默认构造：空状态（无 buffer，析构不做事）。 */
 	VmaDescriptorHeap() = default;
-	// 唯一的非默认构造入口：由 VmaAllocatorRAII::createDescriptorHeap 产出，
-	// 保证不变式：gpuAddress 按 resourceHeapAlignment 对齐、pMappedData 按 descriptorSize 对齐，
-	// 且两者指向同一个 "slot 0"。
+	/**
+	 * 唯一的非默认构造入口：由 VmaAllocatorRAII::createDescriptorHeap 产出，
+	 * 保证不变式：gpuAddress 按 resourceHeapAlignment 对齐、pMappedData 按
+	 * descriptorSize 对齐，且两者指向同一个 "slot 0"。
+	 * @param buf 底层 buffer（移动接管）
+	 * @param mapped 偏移后的 CPU 地址
+	 * @param gpuAddr 偏移后的 GPU 地址
+	 * @param gOffset 偏移量（getHeapSize 扣减用）
+	 * @param descSize 槽位步长
+	 * @param cap 槽位总数（含 reserved）
+	 * @param reserved 驱动保留槽位数
+	 */
 	VmaDescriptorHeap(VmaBuffer&& buf, void* mapped, uint64_t gpuAddr, vk::DeviceSize gOffset, uint32_t descSize, uint32_t cap, uint32_t reserved = 0)
 		: bufferStorage(std::move(buf)), pMappedData(mapped), gpuAddress(gpuAddr), gpuOffset(gOffset), descriptorSize(descSize), capacity(cap), reservedSlots(reserved) {}
 
+	/** 析构：默认（底层 VmaBuffer RAII 负责销毁 buffer）。 */
 	~VmaDescriptorHeap() = default;
 
+	/** 拷贝删除：GPU 资源所有权唯一（move-only）。 */
 	VmaDescriptorHeap(const VmaDescriptorHeap&) = delete;
+	/** 拷贝赋值删除：同上。 */
 	VmaDescriptorHeap& operator=(const VmaDescriptorHeap&) = delete;
 
-	// 移动语义（RAII）：移动后源对象被重置为已销毁状态，防止 buffer 被二次销毁
+	/** 移动语义（RAII）：移动后源对象被重置为已销毁状态，防止 buffer 被二次销毁。 */
 	VmaDescriptorHeap(VmaDescriptorHeap&& o) noexcept
 		: bufferStorage(std::move(o.bufferStorage)), pMappedData(o.pMappedData), gpuAddress(o.gpuAddress), gpuOffset(o.gpuOffset), descriptorSize(o.descriptorSize), capacity(o.capacity), reservedSlots(o.reservedSlots) {
 		o.pMappedData = nullptr;
@@ -144,7 +205,7 @@ export struct VmaDescriptorHeap {
 		o.reservedSlots = 0;
 	}
 
-	// 移动赋值：先销毁本对象持有的旧 buffer，再接管源对象的资源
+	/** 移动赋值：先销毁本对象持有的旧 buffer（经 VmaBuffer 移动赋值），再接管源对象的资源。 */
 	VmaDescriptorHeap& operator=(VmaDescriptorHeap&& o) noexcept {
 		if (this != &o) {
 			bufferStorage = std::move(o.bufferStorage);
@@ -165,19 +226,30 @@ export struct VmaDescriptorHeap {
 		return *this;
 	}
 
+	/** 解引用：底层 VkBuffer 句柄。 */
 	VkBuffer operator*() const { return *bufferStorage; }
-	uint64_t getGpuAddress() const { return gpuAddress; }       // heap 范围起点的 GPU 地址
+	/** heap 范围起点的 GPU 地址（vkCmdBindResourceHeapEXT 用）。 */
+	uint64_t getGpuAddress() const { return gpuAddress; }
+	/** 槽位步长（字节）。 */
 	uint32_t getDescriptorSize() const { return descriptorSize; }
+	/** heap 槽位总数（含 reserved）。 */
 	uint32_t getCapacity() const { return capacity; }
+	/** 驱动保留槽位数（用户可用槽位为 [reservedSlots, capacity)）。 */
 	uint32_t getReservedSlots() const { return reservedSlots; }
-	// heap 范围可用大小（字节）= 槽位总字节数 - 范围起点偏移。
-	// 必须用它作为 vkCmdBindResourceHeapEXT 的 size，而不是 descriptorSize * capacity：
-	// 曾漏扣偏移导致验证层报错 + device lost（见 docs/nvidia_compatibility_report.md）
+	/**
+	 * heap 范围可用大小（字节）= 槽位总字节数 - 范围起点偏移。
+	 * 必须用它作为 vkCmdBindResourceHeapEXT 的 size，而不是 descriptorSize * capacity：
+	 * 曾漏扣偏移导致验证层报错 + device lost（见 docs/nvidia_compatibility_report.md）。
+	 */
 	vk::DeviceSize getHeapSize() const { return static_cast<vk::DeviceSize>(descriptorSize) * capacity - gpuOffset; }
 
-	// 指定槽位的 CPU 地址（写描述符用），带越界检查。
-	// 调用方 slot = Resources::allocSlot 单调分配（reservedSlots() + 游标；几何段基址常量
-	// HeapSlotGeometryBase 由 model_types_generated 生成）
+	/**
+	 * 指定槽位的 CPU 地址（写描述符用），带越界检查。
+	 * 调用方 slot = Resources::allocSlot 单调分配（reservedSlots() + 游标；几何段基址常量
+	 * HeapSlotGeometryBase 由 model_types_generated 生成）。
+	 * @param slot 槽位号
+	 * @return 该槽的 mapped 指针；slot >= capacity 时返回 DescriptorSlotOutOfBounds
+	 */
 	[[nodiscard]] std::expected<void*, Error> getSlotCpuAddress(uint32_t slot) const {
 		if (slot >= capacity) {
 			return std::unexpected(Error{ErrorCode::DescriptorSlotOutOfBounds,
@@ -187,11 +259,26 @@ export struct VmaDescriptorHeap {
 	}
 };
 
+/**
+ * VMA 分配器的 RAII 包装：构造时 vmaCreateAllocator（失败抛 std::runtime_error），
+ * 析构/最后引用消失时经控制块 deleter vmaDestroyAllocator。move-only。
+ * createBuffer/createBufferWithAddress/createImage/createDescriptorHeap 产出
+ * 共享同一控制块的 VmaBuffer/VmaImage/VmaDescriptorHeap。
+ */
 export class VmaAllocatorRAII {
    private:
 	SharedAllocator allocatorBlock;
 
     public:
+	/**
+	 * 创建 VMA 分配器。
+	 * @param instance Vulkan 实例
+	 * @param physicalDevice 物理设备
+	 * @param device 逻辑设备
+	 * @param apiVersion 实例 API version（VMA 据此启用 BDA 等特性）
+	 * @param flags VMA 创建标志（默认 BUFFER_DEVICE_ADDRESS——本项目 buffer 全走 BDA 路径）
+	 * @note vmaCreateAllocator 失败抛 std::runtime_error（初始化期异常路径，不走 Error 契约）
+	 */
 	VmaAllocatorRAII(VkInstance instance, VkPhysicalDevice physicalDevice, VkDevice device, uint32_t apiVersion,
 		VmaAllocatorCreateFlags flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT) {
 		VmaAllocator raw;
@@ -213,12 +300,23 @@ export class VmaAllocatorRAII {
 			});
 	}
 
+	/** 析构：默认（分配器本体由控制块 shared_ptr deleter 销毁）。 */
 	~VmaAllocatorRAII() = default;
 
+	/** 拷贝删除：分配器句柄所有权唯一（move-only）。 */
 	VmaAllocatorRAII(const VmaAllocatorRAII&) = delete;
+	/** 拷贝赋值删除：同上。 */
 	VmaAllocatorRAII& operator=(const VmaAllocatorRAII&) = delete;
+	/** 移动构造：接管控制块。 */
 	VmaAllocatorRAII(VmaAllocatorRAII&& o) noexcept : allocatorBlock(std::move(o.allocatorBlock)) {}
 
+	/**
+	 * 创建普通 VMA buffer（不查询 BDA 地址）。
+	 * @param bufferInfo buffer 创建参数
+	 * @param allocInfo 分配参数（usage/flags）
+	 * @param pAllocInfo 可选输出：分配信息（含 mapped 指针）
+	 * @return VmaBuffer；VMA 失败返回 VMASuccessFailed
+	 */
 	[[nodiscard]] std::expected<VmaBuffer, Error> createBuffer(const vk::BufferCreateInfo& bufferInfo, const VmaAllocationCreateInfo& allocInfo, VmaAllocationInfo* pAllocInfo = nullptr) const {
 		VkBuffer buffer;
 		VmaAllocation allocation;
@@ -230,6 +328,14 @@ export class VmaAllocatorRAII {
 		return VmaBuffer(allocatorBlock, buffer, allocation);
 	}
 
+	/**
+	 * 创建 BDA buffer 并查询设备地址（vkGetBufferDeviceAddress）。
+	 * @param device 设备句柄（查 device address 用）
+	 * @param bufferInfo buffer 创建参数
+	 * @param allocInfo 分配参数
+	 * @param pAllocInfo 可选输出：分配信息（createDescriptorHeap 从 pMappedData 读映射地址）
+	 * @return VmaBuffer（deviceAddress 与 pMappedData 均已填）；VMA 失败返回 VMASuccessFailed
+	 */
 	[[nodiscard]] std::expected<VmaBuffer, Error> createBufferWithAddress(const vk::raii::Device& device, const vk::BufferCreateInfo& bufferInfo, const VmaAllocationCreateInfo& allocInfo, VmaAllocationInfo* pAllocInfo = nullptr) const {
 		VkBuffer buffer;
 		VmaAllocation allocation;
@@ -245,6 +351,13 @@ export class VmaAllocatorRAII {
 		return VmaBuffer(allocatorBlock, buffer, allocation, addr, pAllocInfo ? pAllocInfo->pMappedData : nullptr);
 	}
 
+	/**
+	 * 创建 VMA image。
+	 * @param imageInfo image 创建参数
+	 * @param allocInfo 分配参数
+	 * @param pAllocInfo 可选输出：分配信息
+	 * @return VmaImage；VMA 失败返回 VMASuccessFailed
+	 */
 	[[nodiscard]] std::expected<VmaImage, Error> createImage(const vk::ImageCreateInfo& imageInfo, const VmaAllocationCreateInfo& allocInfo, VmaAllocationInfo* pAllocInfo = nullptr) const {
 		VkImage image;
 		VmaAllocation allocation;
@@ -255,15 +368,26 @@ export class VmaAllocatorRAII {
 		return VmaImage(allocatorBlock, image, allocation);
 	}
 
-	// 创建 descriptor heap：分配带 eDescriptorHeapEXT usage 的 BDA buffer 并修正双端对齐。
-	//
-	// 对齐约束（两条，互相独立）：
-	//   GPU 端：传给 vkCmdBindResourceHeapEXT 的 heap 范围起始地址必须按
-	//           resourceHeapAlignment 对齐（NVIDIA 32B / AMD 4B）；
-	//   CPU 端：槽位寻址用的 mapped 指针必须按 descriptorSize 对齐。
-	// VMA 原始分配地址两者都不保证，且无法重新分配，因此策略是"从分配内部偏移"：
-	// 分配大小保持 descriptorSize * capacity 不变，把 heap 范围起点推进 buffer 内部
-	// offset 字节，尾部恰好落在 buffer 末尾（可用大小见 getHeapSize）。
+	/**
+	 * 创建 descriptor heap：分配带 eDescriptorHeapEXT usage 的 BDA buffer 并修正双端对齐。
+	 * 对齐约束（两条，互相独立）：
+	 * - GPU 端：传给 vkCmdBindResourceHeapEXT 的 heap 范围起始地址必须按
+	 *   resourceHeapAlignment 对齐（NVIDIA 32B / AMD 4B）；
+	 * - CPU 端：槽位寻址用的 mapped 指针必须按 descriptorSize 对齐。
+	 * VMA 原始分配地址两者都不保证，且无法重新分配，因此策略是"从分配内部偏移"：
+	 * 分配大小保持 descriptorSize * capacity 不变，把 heap 范围起点推进 buffer 内部
+	 * offset 字节，尾部恰好落在 buffer 末尾（可用大小见 getHeapSize）。
+	 * @param device 设备句柄（BDA 查询用）
+	 * @param capacity 槽位总数（含 reserved）
+	 * @param descriptorSize 槽位步长（resource heap = max(buffer, image) 描述符大小；
+	 *        sampler heap = samplerDescriptorSize；运行时查询，勿硬编码）
+	 * @param extraUsageFlags 追加 usage flags（必须含 eDescriptorHeapEXT）
+	 * @param reservedSlots 驱动保留槽位数（头部 [0, reservedSlots) 范围）
+	 * @param resourceHeapAlignment 设备 heap 对齐
+	 * @return VmaDescriptorHeap；底层 buffer 创建失败时透传 VMASuccessFailed
+	 * @note eShaderDeviceAddress 与 eDescriptorHeapEXT 两个 usage flag 必须同时设置，
+	 *       缺任一个都是 undefined behavior（spec 3.3）
+	 */
 	[[nodiscard]] std::expected<VmaDescriptorHeap, Error> createDescriptorHeap(
 		const vk::raii::Device& device,
 		uint32_t capacity,
@@ -317,6 +441,7 @@ export class VmaAllocatorRAII {
 			reservedSlots);
 	}
 
+	/** 裸 VmaAllocator 句柄（控制块为空时返回 nullptr）。 */
 	VmaAllocator get() const { return allocatorBlock ? allocatorBlock->handle : nullptr; }
 };
 

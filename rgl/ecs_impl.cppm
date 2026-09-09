@@ -26,6 +26,16 @@ namespace RGL {
 // 帧循环各 system + renderSystem 定义（2026-09-02 编译提速 A 方案）：system 体移出
 // 接口 TU——BMI 只含 renderSystem 声明与 context struct；本单元是叶子边。
 
+/**
+ * 中央事件轮询（唯一 SDL_PollEvent 调用点）：把 SDL 事件流翻译进 registry context——
+ * 窗口状态（WindowExtent/AppExit 直接写入，不走事件流）+ 输入事件流（InputEvents：
+ * 本 system 只产事件，不做键位映射——键绑定在 Camera.keys，cameraSystem 消费事件时
+ * 按绑定解释，E5.4；退出/窗口状态不走事件流）。
+ * 事件携带内容：键事件 = SDL 键码；鼠标按键 = button + pressed；鼠标增量取
+ * motion.xrel/yrel（SDL3 的 motion.x/y 是窗口内绝对坐标，相对增量在 xrel/yrel）；
+ * 滚轮 = wheel.y。
+ * @param rg registry（写 WindowExtent/AppExit/InputEvents）
+ */
 void eventSystem(entt::registry& rg) {
 	auto& extent = rg.ctx().get<WindowExtent>();
 	auto& exit = rg.ctx().get<AppExit>();
@@ -94,6 +104,17 @@ void eventSystem(entt::registry& rg) {
 	}
 }
 
+/**
+ * 窗口尺寸变化（WindowExtent 与 swapchain 实际尺寸不一致）时重建 swapchain + 深度图。
+ * 深度图必须与 swapchain extent 同步重建，否则 renderArea 会超出图像范围。
+ * recreate 返回 false（窗口尺寸超出 swapchain 可达范围：maxImageExtent/compositor
+ * 钳制，重建无益）时跳过深度重建——每帧 waitIdle + 销毁重建 = 持续 GPU 停顿，
+ * 只 warn 一次。
+ * @param rg registry（读 WindowExtent）
+ * @param swapchain 交换链层（extent 比较 / recreate 重查 caps/format/presentMode）
+ * @param resources 资源层（recreateDepthImage）
+ * @return void；深度图重建失败 → Error
+ */
 std::expected<void, Error> resizeSystem(entt::registry& rg, RGL::Swapchain& swapchain,
 	RGL::Resources& resources) {
 	auto& extent = rg.ctx().get<WindowExtent>();
@@ -123,6 +144,15 @@ std::expected<void, Error> resizeSystem(entt::registry& rg, RGL::Swapchain& swap
 	return {};
 }
 
+/**
+ * 场景整体时间旋转（SceneSpin）：angle += dt * speed；matrix = rotate(axis, angle)。
+ * speed = 0 → 直接返回，matrix 不更新（configs/scene.lua 的 spin 开关，main
+ * 启动期转成 speed）。现状承载"全场景同一旋转"（renderListSystem 乘进各
+ * MVP）；per-entity 旋转需求出现时改写 Transform 组件，结构同构，无需二次重构
+ *（ecs_compliance_review E4.1）。
+ * @param rg registry（读写 SceneSpin）
+ * @param dt 帧间隔（秒，调用方已限幅到 0.1s）
+ */
 void animationSystem(entt::registry& rg, float dt) {
 	auto& spin = rg.ctx().get<SceneSpin>();
 	if (spin.speed == 0.0f) {
@@ -132,6 +162,13 @@ void animationSystem(entt::registry& rg, float dt) {
 	spin.matrix = glm::rotate(glm::mat4(1.0f), spin.angle, spin.axis);
 }
 
+/**
+ * union 包围球（标准公式；radius = 0 视为空球）：a 包含 b → a；b 包含 a → b；
+ * 否则 r = (ra+rb+d)/2，中心从 a 向 b 滑动 t = ra/(d+r)。
+ * @param a 包围球 A（空球 = radius 0，直接返回 b）
+ * @param b 包围球 B（空球 = radius 0，直接返回 a）
+ * @return 同时包含两者的包围球
+ */
 SceneBounds unionSphere(const SceneBounds& a, const SceneBounds& b) {
 	if (a.radius == 0.0f) return b;
 	if (b.radius == 0.0f) return a;
@@ -143,6 +180,12 @@ SceneBounds unionSphere(const SceneBounds& a, const SceneBounds& b) {
 	return SceneBounds{a.center + (b.center - a.center) * t, r};
 }
 
+/**
+ * 聚合全部 Bounds 组件 → SceneBounds context（unionSphere 逐个合并，空场景 =
+ * radius 0）。现状场景静态（Bounds 仅导入期写入），每帧重聚合为未来动态场景
+ * 变更留接缝。
+ * @param rg registry（遍历 Bounds view，写 SceneBounds）
+ */
 void boundsSystem(entt::registry& rg) {
 	auto& sceneBounds = rg.ctx().get<SceneBounds>();
 	SceneBounds acc{};
@@ -152,6 +195,13 @@ void boundsSystem(entt::registry& rg) {
 	sceneBounds = acc;
 }
 
+/**
+ * Camera + 场景包围球 + 窗口尺寸 → ViewProjection context。
+ * 自适应 near/far：SceneBounds 非空时按相机到球心实时距离 ± 球半径推导
+ *（near 下限 0.05 防相机进球内），保证任意相机位置/场景尺度下整个场景在
+ * frustum 内；无场景内容时回落 configs/camera.lua 的固定 near/far。
+ * @param rg registry（读 Camera/SceneBounds/WindowExtent，写 ViewProjection）
+ */
 void projectionSystem(entt::registry& rg) {
 	auto& extent = rg.ctx().get<WindowExtent>();
 	const auto& camera = rg.ctx().get<Camera>();
@@ -174,12 +224,21 @@ void projectionSystem(entt::registry& rg) {
 }
 
 
-// 每帧 system（执行顺序 = 注册顺序，即数据流契约；新增 system = 此处 push_back）
+/**
+ * 每帧 system（执行顺序 = 注册顺序，即数据流契约；新增 system = 此处 push_back）。
+ */
 struct FrameSystem {
-	const char* name;
+	const char* name;  // system 名（文档/日志标识，执行路径不读取）
 	std::function<void(entt::registry&, float dt)> fn;
 };
 
+/** 实现流水（语义/契约见接口声明）：构建显式 system 列表（camera→animation→bounds→
+ * projection→renderlist）→ 主循环：eventSystem → AppExit 判定 → dt clamp [0, 0.1s]
+ * → resizeSystem（失败 = waitForIdle 后退出循环返回 Error）→ system 链 →
+ * texel 金丝雀（帧 N 一次性，drawFrame 前）→ llm 捕获请求（drawFrame 前，
+ * dump_gbuf 通道一并传入）→ drawFrame（失败 = 记录 lastError 退出循环）→
+ * llm 捕获消费（真有产物时调 llmCapture 写 PNG + 置 AppExit，跳帧时请求保持
+ * pending 重试）/ onFrame 回调 → 循环外 waitForIdle 后返回 lastError（若有）。 */
 std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer& renderer,
 	const RGL::LlmDebugConfig* llm,
 	std::function<std::expected<std::string, Error>(RGL::Renderer&)>

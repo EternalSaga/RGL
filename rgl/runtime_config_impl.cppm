@@ -12,9 +12,13 @@ namespace RGL {
 
 // loadRuntimeConfig 定义（sol2 解析整体移出接口 TU，GMF 只 sol/fmt；本单元是叶子边）。
 
-// llm_debug/llm_shot 解析（自 camera_config 迁入，语义不变）：
-//   llm_shot 常驻 {file,size,delay_frames} 先填，llm_debug 覆盖 enabled；
-//   向后兼容 llm_debug = table（旧格式 = 启用 + 细字段，覆盖 llm_shot）。
+/**
+ * llm_debug/llm_shot 解析（自 camera_config 迁入，语义不变）：
+ * llm_shot 常驻 {file,size,delay_frames} 先填，llm_debug 覆盖 enabled；
+ * 向后兼容 llm_debug = table（旧格式 = 启用 + 细字段，覆盖 llm_shot）。
+ * @param root 配置根表
+ * @param llm 输出：解析好的截图配置（缺字段保留当前值 = 默认或前段已填值）
+ */
 static void parseLlm(sol::table& root, LlmDebugConfig& llm) {
 	sol::table shotTable = root["llm_shot"];
 	if (shotTable.valid() && shotTable.is<sol::table>()) {
@@ -60,6 +64,7 @@ static void parseLlm(sol::table& root, LlmDebugConfig& llm) {
 	}
 }
 
+/** loadRuntimeConfig 定义（接口注释见 runtime_config.cppm）：headless/headless_size/win_size/show_after 逐一可选解析 + parseLlm。 */
 [[nodiscard]] std::expected<RuntimeConfig, Error> loadRuntimeConfig(std::string_view path) {
 	auto* logger = RLLogger::getInstance();
 

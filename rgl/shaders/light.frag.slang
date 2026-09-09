@@ -10,7 +10,7 @@ import lights;   // 多灯：readLightCount/readGpuLight（lights 内部亦 impo
 // 点光（type=1）线性衰减 1-dist/range（无物理 1/r²，够用）；定向（type=0）atten=1。
 //
 // 绑定：3=sceneData（scene.slang import）；4=albedo(RGBA8_SRGB，采样返 linear)；
-//   5=normal(RG16_SNORM，oct)；6=worldPos(RGB32_SFLOAT)；7=metalRough(RGBA8_UNORM .r=metal .g=rough)；
+//   5=normal(RG16_SNORM，oct)；6=worldPos(RGBA32_SFLOAT)；7=metalRough(RGBA8_UNORM .r=metal .g=rough)；
 //   8=sampler（共享 sampler，sampler heap）。4-8 经 PipelineBindings.extra 映射到 G-buffer RT 堆槽。
 
 [[vk::binding(4, 0)]] Texture2D<float4> albedoTex;

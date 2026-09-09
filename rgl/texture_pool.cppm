@@ -27,7 +27,18 @@ namespace RGL {
 // §12.7 ① 在此首次落地）；共享 sampler 同步移入 Resources::ensureSharedSampler。
 
 
-// glb 内嵌图（buffer view byte span）→ 纹理资产 id；解码强制 RGBA8 4 通道
+/**
+ * glb 内嵌图（buffer view byte span）→ 纹理资产 id；解码强制 RGBA8 4 通道（stb_image）。
+ * DIAG（configs/diagnostics.lua texture_force_*）：texture_force_size=N 近邻缩放强制
+ * N×N（仅原图任一边小于 N 时上采，测尺寸阈值）、texture_force_white 全白填充
+ *（测"均匀内容不 fault"假设）。
+ * @param resources 资源层（VMA 分配器 + 资产表 + slot 分配器 + descriptor heap）
+ * @param device 设备层（格式查询 / 命令池 / 队列 / fence）
+ * @param data 图片字节数据（glb buffer view span）
+ * @param size 数据字节数
+ * @param name 资产 / slot / 日志名
+ * @return 纹理资产 id；stb 解码失败 / 上传失败 → Error
+ */
 export [[nodiscard]] std::expected<uint32_t, Error> loadEmbedded(RGL::Resources& resources,
 	RGL::DeviceContext& device, const uint8_t* data, size_t size, const char* name) {
 	int w = 0, h = 0, ch = 0;
@@ -61,12 +72,19 @@ export [[nodiscard]] std::expected<uint32_t, Error> loadEmbedded(RGL::Resources&
 	return result;
 }
 
-// 1×1 白纹理（无纹理/无 uv primitive 的共用特例，D4）。
-// 幂等（纹理首槽 = 白，调用序契约：先于任何图片纹理取）。
-// 布局契约断言（批次 1 新增，Phase 4 批次 2 改按模型数，架构债务 1 方案 B 改按几何槽数）：
-// slot = reserved + HeapSlotGeometryBase + 几何槽数（内建几何 + 每模型一个拼接块，getGeometrySlotCount）
-//（违例 = 契约漂移报错——原靠"别提前取白"纪律，2026-08-28 排查踩坑：白纹理抢 slot 2
-// → model.vertex[0] drift 抛错）
+/**
+ * 1×1 白纹理（无纹理/无 uv primitive 的共用特例，D4）。
+ * 幂等（纹理首槽 = 白，调用序契约：先于任何图片纹理取；已存在纹理资产 → 直接返回 0）。
+ * 布局契约断言（批次 1 新增，Phase 4 批次 2 改按模型数，架构债务 1 方案 B 改按几何槽数）：
+ * slot = reserved + HeapSlotGeometryBase + 几何槽数（内建几何顶点/索引槽 + 模型每 16MB
+ * 拼接块（kVertexChunkBytes）一个槽，getGeometrySlotCount）
+ *（违例 = 契约漂移报错——原靠"别提前取白"纪律，2026-08-28 排查踩坑：白纹理抢 slot 2
+ * → model.vertex[0] drift 抛错）。
+ * @param resources 资源层（资产表 + slot 分配器 + descriptor heap + VMA 分配器）
+ * @param device 设备层
+ * @return 白纹理资产 id（= 0，纹理首槽）
+ * @note 布局漂移抛 runtime_error（"heap slot layout drift"）
+ */
 export uint32_t ensureWhiteTexture(RGL::Resources& resources, RGL::DeviceContext& device) {
 	auto& assets = resources.getAssetTable();
 	if (assets.textureSize() > 0)
@@ -84,10 +102,18 @@ export uint32_t ensureWhiteTexture(RGL::Resources& resources, RGL::DeviceContext
 	return *result;
 }
 
-// 模型纹理上传（批次 1：main.cpp 循环迁入）：模型顶点槽分配完（importer）后调用——
-// 先取白纹理，再按 primitive 的 baseColorTexture 加载（image 下标去重，同图不重复上传）；
-// 无纹理/无 uv → 白纹理。返回纹理资产 id 列表（与 model.primitives 下标对齐，
-// 供管线烘焙 / registerScene 材质注册消费）。
+/**
+ * 模型纹理上传（批次 1：main.cpp 循环迁入）：模型顶点槽分配完（importer）后调用——
+ * 先取白纹理，再按 primitive 的 baseColorTexture 加载（image 下标去重，同图不重复上传）；
+ * 无纹理/无 uv → 白纹理。返回纹理资产 id 列表（与 model.primitives 下标对齐，
+ * 供管线烘焙 / registerScene 材质注册消费）。
+ * @param resources 资源层
+ * @param device 设备层
+ * @param model 已解析 glTF 模型（primitives 的 baseColorTextureIndex/hasUv + images 内嵌数据）
+ * @return per-primitive 纹理资产 id 列表（与 primitives 下标对齐；无纹理/无 uv/无内嵌数据
+ *   = 白纹理 id）；解码/上传失败 → Error
+ * @note 多 buffer .gltf（image 无内嵌数据）不支持 → warn 日志 + 该 primitive 回落白纹理
+ */
 export [[nodiscard]] std::expected<std::vector<uint32_t>, Error> uploadModelTextures(
 	RGL::Resources& resources, RGL::DeviceContext& device, const RGL::GltfModel& model) {
 	const uint32_t whiteId = ensureWhiteTexture(resources, device);
@@ -130,12 +156,21 @@ export [[nodiscard]] std::expected<std::vector<uint32_t>, Error> uploadModelText
 	return primitiveTextureIds;
 }
 
-// 环境 cubemap 加载（Phase 5.5）：6 个图片文件路径（已按 Vulkan 层序 0-5 排列）→ stb 解码
-// RGBA8 + 校验（方形/2 的幂/六面同尺寸）→ uploadCubeMap。面文件顺序权威记录 =
-// docs/archive/phase5_5_plan.md 素材定案表（nightSky: 1,3,5,6,2,4；rainbow 方案 B: ft,bk,up,dn,rt,lf）。
+/**
+ * 环境 cubemap 加载（Phase 5.5）：6 个图片文件路径（已按 Vulkan 层序 0-5 排列）→ stb 解码
+ * RGBA8 + 校验（方形/2 的幂/六面同尺寸）→ uploadCubeMap。面文件顺序权威记录 =
+ * docs/archive/phase5_5_plan.md 素材定案表（nightSky: 1,3,5,6,2,4；rainbow 方案 B: ft,bk,up,dn,rt,lf）。
+ * @param resources 资源层（VMA 分配器 + env 单例 + sky sampler）
+ * @param device 设备层
+ * @param paths 6 个面文件路径（Vulkan 层序 0-5 = +X,−X,+Y,−Y,+Z,−Z）
+ * @param name 日志名
+ * @return void（成功）；解码失败 / 非方形非 2 的幂 / 六面不同尺寸 → Error
+ */
 export [[nodiscard]] std::expected<void, Error> loadEnvCubeMapFiles(RGL::Resources& resources,
 	RGL::DeviceContext& device, const std::array<std::string, 6>& paths, const char* name);
 
+/** 定义（契约见上方声明）：6 面 stb 解码 → 逐面方形 2 的幂 + 同尺寸校验（违例释放已解
+ * 面立即返回）→ uploadCubeMap（mipmap 链 + env 单例入库，见 texture_upload）。 */
 [[nodiscard]] std::expected<void, Error> loadEnvCubeMapFiles(RGL::Resources& resources,
 	RGL::DeviceContext& device, const std::array<std::string, 6>& paths, const char* name) {
 	std::array<std::vector<uint8_t>, 6> pixels;

@@ -17,6 +17,13 @@ namespace RGL {
 // loadCameraConfig + keyNameToSdlKey 定义（2026-09-02 编译提速 A 方案）：sol2 解析
 // 实现整体移出接口 TU，sol/glm/fmt GMF 不再进接口；本单元是叶子边。
 
+/**
+ * 键名（configs/camera.lua 的 keys 字段值）→ SDL 键码（仅 loadCameraConfig 内部使用）。
+ * 单字母/数字不区分大小写（A-Z / 0-9）；方向键用 Up/Down/Left/Right；另有
+ * Space/Enter（"Return" 同义）。无法识别 → nullopt（配置错误，调用方报错退出）。
+ * @param name 键名字符串
+ * @return SDL 键码；无法识别返回 nullopt
+ */
 [[nodiscard]] std::optional<uint32_t> keyNameToSdlKey(std::string_view name) {
 	if (name.size() == 1) {
 		const char c = static_cast<char>(std::toupper(static_cast<unsigned char>(name[0])));
@@ -34,6 +41,7 @@ namespace RGL {
 	return std::nullopt;
 }
 
+/** loadCameraConfig 定义（接口注释见 camera_config.cppm）。要点：初始朝向由 position→target 反推（yaw/pitch + trackball up 对齐 world-up）；keys 四字段逐一校验，任一未知键名整体失败。 */
 [[nodiscard]] std::expected<CameraConfig, Error> loadCameraConfig(std::string_view path) {
 	auto* logger = RLLogger::getInstance();
 

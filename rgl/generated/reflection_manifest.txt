@@ -7,7 +7,7 @@ a0c3b7b66bd82abc2137d057164d900b22ada7ab  rgl/generated/types_reflection.json
 33d2346d077ac61175a7f603b394d32754396cca  rgl/shaders/model_schema.lua
 69ebae222b5acfa4efbef3230e7f24fbff769ecd  tools/templates/types_cppm.inja
 51d5a0b2dc6114ccbe3474d1afef6ccb4ec289ae  rgl/generated/model_reflection.json
-429ae6db518b368a2010d8dc1f822db11753cad4  rgl/shaders/material.slang
+48576f787599051434dc4bd90138bb23b519cd06  rgl/shaders/material.slang
 7d8b2e3a4e66efcd413fb7ecca77d175b42ba7df  rgl/shaders/material_schema.lua
 69ebae222b5acfa4efbef3230e7f24fbff769ecd  tools/templates/types_cppm.inja
 683f9c23301db4a739787384b551a161baceff32  rgl/generated/material_reflection.json

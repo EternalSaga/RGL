@@ -17,14 +17,18 @@ import model_types_generated;
 
 namespace RGL {
 
-// 去索引展开后的 primitive：vertices 按 ModelVertex packed 布局（32B，
-// model_schema.lua 的 vertexLayouts 是契约 source of truth），
+/** 包围球（center + 半径，保守界）：GltfPrimitive::bounds 为节点局部球，GltfModel::bounds 为世界聚合球。 */
 export struct BoundingSphere {
 	glm::vec3 center{0.0f};
 	float radius{0.0f};
 };
 
-// triangleCount = vertices.size() / 3。
+/**
+ * 去索引展开后的 primitive：vertices 按 ModelVertex packed 布局（32B，
+ * model_schema.lua 的 vertexLayouts 是契约 source of truth）；
+ * triangleCount = vertices.size() / 3。
+ * 每个 glTF primitive 展开为一个实例（loadGltfModel 逐 primitive 产出）。
+ */
 export struct GltfPrimitive {
 	std::vector<ModelVertex> vertices;
 	uint32_t triangleCount = 0;
@@ -41,24 +45,37 @@ export struct GltfPrimitive {
 	bool unlit = false;             // material.extensions["KHR_materials_unlit"] 存在性
 };
 
-// 纹理源数据（Phase 3）：span 指向 GltfModel::bufferData（自 tinygltf buffer 0 move 而来，
-// GltfModel 存活期内有效）；外部多 buffer 的 .gltf 不支持（data 为空 span）。
+/**
+ * 纹理源数据（Phase 3）：span 指向 GltfModel::bufferData（自 tinygltf buffer 0 move 而来，
+ * GltfModel 存活期内有效）；外部多 buffer 的 .gltf 不支持（data 为空 span）。
+ */
 export struct GltfImage {
 	std::span<const uint8_t> data;
 	std::string mimeType;
 };
 
+/**
+ * glTF 模型（loadGltfModel 产物）：primitives = 全部 mesh 的逐 primitive 去索引展开；
+ * bounds = 全模型世界聚合包围球（自适应空间范围用，ecs.cppm 的 renderSystem）。
+ * bufferData/images 为纹理源数据（Phase 3）：buffer 0 原始数据（move 自 tinygltf，零拷贝），
+ * images 的 span 以此为宿主；几何数据已拷入 vertices，此处仅为纹理解码保留。
+ */
 export struct GltfModel {
 	std::vector<GltfPrimitive> primitives;
 	BoundingSphere bounds;  // 自适应空间范围用（ecs.cppm 的 renderSystem）
-	// 纹理源数据（Phase 3）：buffer 0 原始数据（move 自 tinygltf，零拷贝），
-	// images 的 span 以此为宿主；几何数据已拷入 vertices，此处仅为纹理解码保留
 	std::vector<uint8_t> bufferData;
 	std::vector<GltfImage> images;
 };
 
-// 读 accessor 的 float 数据（契约要求 float32；byteStride != 0 时按元素步进读取，
-// 0 视为紧密排列）。任何一环（类型/组件数/越界）不满足返回 false。
+/**
+ * 读 accessor 的 float 数据（契约要求 float32；byteStride != 0 时按元素步进读取，
+ * 0 视为紧密排列）。
+ * @param gltf 已加载的 tinygltf 模型
+ * @param accessorIndex accessor 下标
+ * @param components 期望的每元素分量数（2 = VEC2，3 = VEC3）
+ * @param out 输出：count × components 个 float
+ * @return false = 任何一环不满足（下标越界/组件类型非 float/分量数不符/count 为 0/byteView 越界）
+ */
 static bool readAccessorFloats(const tinygltf::Model& gltf, int accessorIndex, uint32_t components,
 	std::vector<float>& out) {
 	if (accessorIndex < 0 || accessorIndex >= static_cast<int>(gltf.accessors.size())) return false;
@@ -85,7 +102,13 @@ static bool readAccessorFloats(const tinygltf::Model& gltf, int accessorIndex, u
 	return true;
 }
 
-// 读索引 accessor（uint16/uint32 → 统一 uint32；byteStride 语义同上）
+/**
+ * 读索引 accessor（uint16/uint32 → 统一 uint32；byteStride 语义同 readAccessorFloats）。
+ * @param gltf 已加载的 tinygltf 模型
+ * @param accessorIndex 索引 accessor 下标
+ * @param out 输出：count 个 uint32 顶点下标
+ * @return false = 下标越界/组件类型非 uint16/uint32/count 为 0/bufferView 越界
+ */
 static bool readIndices(const tinygltf::Model& gltf, int accessorIndex, std::vector<uint32_t>& out) {
 	if (accessorIndex < 0 || accessorIndex >= static_cast<int>(gltf.accessors.size())) return false;
 	const auto& acc = gltf.accessors[accessorIndex];
@@ -123,10 +146,15 @@ static bool readIndices(const tinygltf::Model& gltf, int accessorIndex, std::vec
 	return true;
 }
 
-// 加载 glTF / glTF-Binary：每个 mesh 的每个 primitive 展开为一个 GltfPrimitive
-//（POSITION/NORMAL 必需 + TEXCOORD_0 可选（D9，缺失 → 白纹理）+ 去索引展开 +
-// baseColorFactor/baseColorTexture/alphaMode + 纹理源数据 bufferData/images）。
-// 任一 primitive 缺必需属性/数据畸形 → 整体失败（返回错误，不带部分结果）。
+/**
+ * 加载 glTF / glTF-Binary：每个 mesh 的每个 primitive 展开为一个 GltfPrimitive
+ *（POSITION/NORMAL 必需 + TEXCOORD_0 可选（D9，缺失 → 白纹理）+ 去索引展开 +
+ * baseColorFactor/baseColorTexture/alphaMode + 纹理源数据 bufferData/images）。
+ * 节点世界矩阵经层级 TRS + 父链合成（nodeWorld；环防御 = 残留退化 local + warn）。
+ * @param path 文件路径（.gltf / .glb）
+ * @return 解析好的 GltfModel；任一 primitive 缺必需属性/数据畸形 → 整体失败
+ *         （返回 GltfLoadFailed，不带部分结果）
+ */
 export [[nodiscard]] std::expected<GltfModel, Error> loadGltfModel(const std::string& path) {
 	auto* logger = RLLogger::getInstance();
 

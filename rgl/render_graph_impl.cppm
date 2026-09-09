@@ -17,13 +17,21 @@ namespace RGL {
 
 namespace {
 
+/** usage 推导三元组：目标布局 + 管线 stage + access mask。 */
 struct UsageInfo {
 	vk::ImageLayout layout;
 	vk::PipelineStageFlags2 stage;
 	vk::AccessFlags2 access;
 };
 
-// usage → {layout, stage, access} 推导表（接口注释速览的权威实现，单一真相源）
+/**
+ * usage → {layout, stage, access} 推导表（接口注释速览的权威实现，单一真相源）：
+ * colorWrite→CAO/写/ColorAttachmentOutput；depthWrite→DSAO/读+写/EarlyFragmentTests；
+ * sampleRead→SRO/ShaderRead/AllGraphics；transferRead→TsrcO/TransferRead/Transfer；
+ * transferWrite→TdstO/TransferWrite/Transfer。
+ * @param u 附件角色
+ * @return 推导三元组（枚举穷尽，末条 return 不可达）
+ */
 UsageInfo usageInfo(RgUsage u) {
 	using Stage = vk::PipelineStageFlagBits2;
 	using Acc = vk::AccessFlagBits2;
@@ -44,22 +52,27 @@ UsageInfo usageInfo(RgUsage u) {
 	return {vk::ImageLayout::eUndefined, Stage::eTopOfPipe, Acc::eNone};  // 不可达（枚举穷尽）
 }
 
+/** 写角色判定（colorWrite/depthWrite/transferWrite）。 */
 bool isWriteUsage(RgUsage u) {
 	return u == RgUsage::colorWrite || u == RgUsage::depthWrite || u == RgUsage::transferWrite;
 }
+/** 读角色判定（sampleRead/transferRead）。 */
 bool isReadUsage(RgUsage u) {
 	return u == RgUsage::sampleRead || u == RgUsage::transferRead;
 }
 
+/** 附件 kind → aspect mask（depth → eDepth，其余 → eColor）。 */
 vk::ImageAspectFlags aspectOf(RgAttachmentKind kind) {
 	return kind == RgAttachmentKind::depth ? vk::ImageAspectFlagBits::eDepth
 					       : vk::ImageAspectFlagBits::eColor;
 }
 
+/** 统一错误构造：ErrorCode::RenderGraphInvalid + message。 */
 Error rgError(std::string message) {
 	return Error{ErrorCode::RenderGraphInvalid, std::move(message)};
 }
 
+/** 单个 slot 的帧内游标状态（compile 跨 pass 推进，驱动 barrier 推导与校验）。 */
 struct SlotState {
 	std::optional<RgUsage> lastUse;  // 帧内上次 usage；nullopt = 本帧尚未被引用
 	bool everWritten = false;        // 本帧是否已有写（读角色前置校验；跨帧历史复用留后续）
@@ -67,14 +80,16 @@ struct SlotState {
 	uint32_t lastWritePass = kRgNoAttachment;  // 最后一条"写"所在 pass（store 完整性检查）
 };
 
+/** RgLoadOp → vk::AttachmentLoadOp（clear→eClear，load→eLoad）。 */
 vk::AttachmentLoadOp toVkLoad(RgLoadOp op) {
 	return op == RgLoadOp::clear ? vk::AttachmentLoadOp::eClear : vk::AttachmentLoadOp::eLoad;
 }
+/** RgStoreOp → vk::AttachmentStoreOp（store→eStore，dontCare→eDontCare）。 */
 vk::AttachmentStoreOp toVkStore(RgStoreOp op) {
 	return op == RgStoreOp::store ? vk::AttachmentStoreOp::eStore : vk::AttachmentStoreOp::eDontCare;
 }
 
-// 本 pass 引用了某 attachment 几次（角色重复检查）：outputs+inputs 合计
+/** 本 pass 引用了某 attachment 几次（角色重复检查）：outputs+inputs 合计。 */
 uint32_t countRole(const RgPassDesc& pass, const std::string& name) {
 	uint32_t n = 0;
 	for (const auto& att : pass.outputs)
@@ -86,8 +101,11 @@ uint32_t countRole(const RgPassDesc& pass, const std::string& name) {
 
 }  // namespace
 
-// 格式词表（小写下划线 → vk::Format，接口注释是语义权威）：表驱动，扩展 = 加一行。
-// "inherit" 不在表内——语义 = 随 swapchain 格式，由 resolveRgFormat 单独短路。
+/**
+ * 格式词表（小写下划线 → vk::Format，接口注释是语义权威）：表驱动，扩展 = 加一行。
+ * "inherit" 不在表内——语义 = 随 swapchain 格式，由 resolveRgFormat 单独短路。
+ * @return 12 项词表（引用，静态存储）
+ */
 const std::array<std::pair<std::string_view, vk::Format>, 12>& rgFormatTable() {
 	static const std::array<std::pair<std::string_view, vk::Format>, 12> table = {
 		std::pair{"rgba8_srgb", vk::Format::eR8G8B8A8Srgb},
@@ -106,6 +124,7 @@ const std::array<std::pair<std::string_view, vk::Format>, 12>& rgFormatTable() {
 	return table;
 }
 
+/** isKnownRgFormat 定义（接口注释见 render_graph.cppm）："inherit" 短路 + 词表 any_of。 */
 bool isKnownRgFormat(const std::string& name) {
 	if (name == "inherit")
 		return true;
@@ -113,6 +132,7 @@ bool isKnownRgFormat(const std::string& name) {
 		[&](const auto& entry) { return entry.first == name; });
 }
 
+/** resolveRgFormat 定义（接口注释见 render_graph.cppm）："inherit"→fallback，具名→表查，漏网 eUndefined（不可达）。 */
 vk::Format resolveRgFormat(const std::string& name, vk::Format inheritFallback) {
 	if (name == "inherit")
 		return inheritFallback;
@@ -122,6 +142,7 @@ vk::Format resolveRgFormat(const std::string& name, vk::Format inheritFallback) 
 	return vk::Format::eUndefined;  // 不可达（调用方保证已 isKnownRgFormat）
 }
 
+/** compileRenderGraph 定义（接口注释见 render_graph.cppm）：五步 = ①附件注册/格式校验 ②逐 pass 预检 ③布局链推导（SlotState 游标）④storeOp 完整性（延后到下一次引用时查）⑤帧末 present 转换 + swapchainWaitStage 派生。 */
 std::expected<CompiledRenderGraph, Error> compileRenderGraph(const RgGraphDesc& desc) {
 	CompiledRenderGraph graph;
 
@@ -406,6 +427,7 @@ std::expected<CompiledRenderGraph, Error> compileRenderGraph(const RgGraphDesc& 
 	return graph;
 }
 
+/** defaultRenderGraphDesc 定义（接口注释见 render_graph.cppm）。 */
 const RgGraphDesc& defaultRenderGraphDesc() {
 	// 现 drawFrame 三段的图表达（批次 2 diff=0 验收基准）。与单 render pass 实例
 	// 的等价性靠"中间 scope store 保内容"实现：depth 仅末段 DontCare（现 ⑤ 语义
@@ -445,6 +467,7 @@ const RgGraphDesc& defaultRenderGraphDesc() {
 	return desc;
 }
 
+/** defaultRenderGraph 定义：进程内静态单例，首次调用时编译默认图（编译失败抛 runtime_error——默认图是硬契约，失败 = 工程自身 bug）。 */
 const CompiledRenderGraph& defaultRenderGraph() {
 	static const CompiledRenderGraph graph = [] {
 		auto compiled = compileRenderGraph(defaultRenderGraphDesc());
@@ -456,12 +479,14 @@ const CompiledRenderGraph& defaultRenderGraph() {
 	return graph;
 }
 
+/** materializeBarrier 定义（接口注释见 render_graph.cppm）：经 createImageBarrier 物化（queue family 均 IGNORED）。 */
 vk::ImageMemoryBarrier2 materializeBarrier(const RgBarrierPlan& plan, VkImage image,
 	vk::ImageLayout oldLayout) {
 	return RGL::createImageBarrier(image, oldLayout, plan.newLayout, plan.aspect,
 		plan.srcStage, plan.dstStage, plan.srcAccess, plan.dstAccess);
 }
 
+/** offscreenRenderGraphDesc 定义（接口注释见 render_graph.cppm）。 */
 const RgGraphDesc& offscreenRenderGraphDesc() {
 	// offscreen 图变体（批次 4，旧 DIAG 转正）：三段渲 scene_rt + composite blit。
 	// scene_rt format 留 "inherit"——执行器解析为 swapchain 格式（blit LINEAR 兼容前提）；
@@ -501,6 +526,7 @@ const RgGraphDesc& offscreenRenderGraphDesc() {
 	return desc;
 }
 
+/** deferredRenderGraphDesc 定义（接口注释见 render_graph.cppm）。 */
 const RgGraphDesc& deferredRenderGraphDesc() {
 	// Phase 7 D1：2-pass deferred 图。geometry（drawMesh/opaque 段）渲入 4 G-buffer RT（显式格式）
 	// + depth；light（drawLight）全屏采样 4 RT 写 swapchain。storeOp：G-buffer 全 store（light 读），
@@ -543,6 +569,7 @@ const RgGraphDesc& deferredRenderGraphDesc() {
 	return desc;
 }
 
+/** renderGraphSelfCheck 定义（接口注释见 render_graph.cppm）：expectOk/expectErr 成对样本 + 默认图结构断言 + 格式词表断言，全部失败项收集后返回。 */
 std::vector<std::string> renderGraphSelfCheck() {
 	std::vector<std::string> failures;
 	auto expectOk = [&](const char* what, const RgGraphDesc& desc) {

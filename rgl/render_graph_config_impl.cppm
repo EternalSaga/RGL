@@ -16,6 +16,16 @@ namespace RGL {
 
 namespace {
 
+/**
+ * 枚举字符串 → 枚举值查表（配置字符串解析；无匹配 = ConfigLoadFailed，
+ * 错误信息带配置路径与字段名）。
+ * @tparam E 目标枚举类型
+ * @param name 配置中的字符串值
+ * @param table (字符串, 枚举值) 候选表
+ * @param what 字段名（错误信息用）
+ * @param path 配置路径（错误信息用）
+ * @return 枚举值；无匹配返回 Error
+ */
 template <typename E>
 std::expected<E, Error> parseEnum(std::string_view name,
 	std::initializer_list<std::pair<std::string_view, E>> table, std::string_view what,
@@ -27,7 +37,16 @@ std::expected<E, Error> parseEnum(std::string_view name,
 		fmt::format("render graph config ({}): unknown {} '{}'", path, what, name)});
 }
 
-// 一条 outputs/inputs 条目（attachment/usage 必填，其余可选回落）
+/**
+ * 解析一条 outputs/inputs 条目（attachment/usage 必填，load/store/clear/clearDepth
+ * 可选，缺省回落 RgPassAttachment 默认值）。
+ * @param item 配置表条目
+ * @param path 配置路径（错误信息用）
+ * @param passName 所属 pass 名（错误信息用）
+ * @param role "outputs" 或 "inputs"（错误信息用）
+ * @param index 条目序号（1 起，错误信息用）
+ * @return 解析出的 RgPassAttachment；缺必填字段/枚举串非法返回 Error
+ */
 std::expected<RgPassAttachment, Error> readPassAttachment(sol::table item,
 	std::string_view path, std::string_view passName, const char* role, int index) {
 	RgPassAttachment att;
@@ -82,6 +101,14 @@ std::expected<RgPassAttachment, Error> readPassAttachment(sol::table item,
 	return att;
 }
 
+/**
+ * 解析一条 outputs/inputs 列表（逐条目调 readPassAttachment）。
+ * @param list 配置表数组（无效/非表 = 空列表，视为无该角色）
+ * @param path 配置路径（错误信息用）
+ * @param passName 所属 pass 名（错误信息用）
+ * @param role "outputs" 或 "inputs"（错误信息用）
+ * @return 解析出的附件引用列表；条目非表/字段错误返回 Error
+ */
 std::expected<std::vector<RgPassAttachment>, Error> readRoleList(sol::table list,
 	std::string_view path, std::string_view passName, const char* role) {
 	std::vector<RgPassAttachment> out;
@@ -103,6 +130,13 @@ std::expected<std::vector<RgPassAttachment>, Error> readRoleList(sol::table list
 
 }  // namespace
 
+/**
+ * loadRenderGraphConfig 定义（接口注释见 render_graph_config.cppm）：sol2 沙箱
+ *（仅 base+table，dofile/loadfile/package/require 置 nil）执行脚本取根表；顶层
+ * variant 定路线（deferred/offscreen 直返内建图，exclusive）；forward 逐条解析
+ * attachments/passes（format 经 isKnownRgFormat 词表前置校验，结构规则仍归
+ * compileRenderGraph）；sol2 抛异常统一捕获转 ConfigLoadFailed。
+ */
 std::expected<RenderGraphConfig, Error> loadRenderGraphConfig(std::string_view path) {
 	auto* logger = RLLogger::getInstance();
 	{
@@ -226,8 +260,8 @@ std::expected<RenderGraphConfig, Error> loadRenderGraphConfig(std::string_view p
 			}
 		}
 
-		// 空表回落默认图（"只写 attachments 不写 passes"类半截配置 = 意图不明，
-		// 交给 compileRenderGraph 报"no passes"比静默回落更可诊断）
+		// 空表透传（"只写 attachments 不写 passes"类半截配置 = 意图不明，
+		// 交给 compileRenderGraph 报"no passes"比静默回落默认图更可诊断）
 		return RenderGraphConfig{RgGraphVariant::forward, std::move(desc)};
 	} catch (const std::exception& e) {
 		return std::unexpected(Error{ErrorCode::ConfigLoadFailed,

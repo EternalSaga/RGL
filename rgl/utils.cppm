@@ -9,6 +9,12 @@ import vkerror;
 
 namespace RGL {
 
+/**
+ * 校验层可用性检查：requiredLayers 中不在 availableLayers 里的层名。
+ * @param availableLayers 驱动/系统可用层属性列表
+ * @param requiredLayers 请求的层名
+ * @return 缺失层名列表（空 = 全部可用）
+ */
 export std::vector<const char*> findMissingValidationLayers(
 	const std::vector<vk::LayerProperties>& availableLayers,
 	const std::vector<const char*>& requiredLayers) {
@@ -30,6 +36,17 @@ export std::vector<const char*> findMissingValidationLayers(
 	return missing;
 }
 
+/**
+ * VVL 调试回调（C 函数指针，经 setupDebugMessenger 注册）：severity → RLLogger
+ * 级别映射（Verbose→Trace / Info→Info / Warning→Warn / Error→Error，后判覆盖先判），
+ * 消息经 format_with_location 注入（filename 固定 "Vulkan-Validation"，funcname =
+ * messageIdName）后落日志。恒返回 VK_FALSE（不中止应用）。
+ * @param messageSeverity 消息严重级别
+ * @param messageType 消息类型（未用）
+ * @param pCallbackData 回调数据（取 pMessage/pMessageIdName）
+ * @param pUserData 用户数据（注册时传的 RLLogger*，回调内未用——直接取单例）
+ * @return VK_FALSE
+ */
 static VKAPI_ATTR vk::Bool32 VKAPI_CALL
 vulkanDebugCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
 	vk::DebugUtilsMessageTypeFlagsEXT messageType,
@@ -66,6 +83,11 @@ vulkanDebugCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
 	return VK_FALSE;
 }
 
+/**
+ * 创建调试消息器（Warning+Error × General/Validation/Performance），回调接 RLLogger。
+ * @param instance Vulkan 实例
+ * @return RAII DebugUtilsMessengerEXT（预期恒成功；raii 构造失败路径预留 Error）
+ */
 export [[nodiscard]] std::expected<vk::raii::DebugUtilsMessengerEXT, Error>
 setupDebugMessenger(vk::raii::Instance& instance) {
 	auto* logger = RLLogger::getInstance();
@@ -91,6 +113,15 @@ setupDebugMessenger(vk::raii::Instance& instance) {
 	return vk::raii::DebugUtilsMessengerEXT(instance, createInfo);
 }
 
+/**
+ * GPU 选择（打分制，取最高分）：score = 核心数 × 1000（AMD 经
+ * ShaderCorePropertiesAMD 精确计算，其余设备回落 maxComputeWorkGroupInvocations）
+ * + 设备本地显存 GiB × 10 + 设备类型（DiscreteGpu +500 / IntegratedGpu +200）。
+ * score = 0 的设备不参与；全为 0 = 无合适 GPU。
+ * @param physicalDevices 实例的物理设备列表
+ * @return 最高分设备指针（生命周期 = 列表）；无候选返回 NoPhysicalDevices /
+ *         全 0 分返回 NoSuitableGPU
+ */
 export [[nodiscard]] std::expected<const vk::raii::PhysicalDevice*, Error>
 pickPhysicalDevice(const vk::raii::PhysicalDevices& physicalDevices) {
 	auto logger = RLLogger::getInstance();
@@ -171,6 +202,13 @@ pickPhysicalDevice(const vk::raii::PhysicalDevices& physicalDevices) {
 	return selectedDevice;
 }
 
+/**
+ * present 模式选择（交互窗路径）：**硬要求 eImmediate**，缺失即失败
+ *（compositor/平台不兼容）。headless 表面无 eImmediate，走 vkswapchain 内
+ * 的 eFifo 回落路径，不调本函数。
+ * @param presentModes surface 支持的 present 模式列表
+ * @return eImmediate；列表中无 eImmediate 返回 NoPresentMode
+ */
 export [[nodiscard]] std::expected<vk::PresentModeKHR, Error>
 selectPresentMode(const std::vector<vk::PresentModeKHR>& presentModes) {
 	auto it = std::ranges::find(presentModes, vk::PresentModeKHR::eImmediate);
@@ -181,6 +219,23 @@ selectPresentMode(const std::vector<vk::PresentModeKHR>& presentModes) {
 		"eImmediate not supported -- compositor or platform incompatible"});
 }
 
+/**
+ * 构造 vk::ImageMemoryBarrier2（同队列内 layout/access 转换；queue family
+ * 均 IGNORED）。render_graph::materializeBarrier 的底层物化器。
+ * @param image 目标 image 句柄
+ * @param oldLayout 旧布局（eUndefined = 内容丢弃）
+ * @param newLayout 新布局
+ * @param aspectMask 子资源 aspect（eColor / eDepth）
+ * @param srcStage 源管线 stage mask
+ * @param dstStage 目标管线 stage mask
+ * @param srcAccess 源 access mask
+ * @param dstAccess 目标 access mask
+ * @param baseMipLevel 起始 mip（默认 0）
+ * @param levelCount mip 数（默认 1）
+ * @param baseArrayLayer 起始 array layer（默认 0）
+ * @param layerCount layer 数（默认 1）
+ * @return 填好的 barrier（constexpr，可编译期使用）
+ */
 export constexpr vk::ImageMemoryBarrier2
 createImageBarrier(VkImage image, vk::ImageLayout oldLayout,
 	vk::ImageLayout newLayout, vk::ImageAspectFlags aspectMask,

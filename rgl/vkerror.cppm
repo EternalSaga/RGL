@@ -14,6 +14,15 @@ namespace RGL {
 // 第 2 个模块（每个模块都 import 它），省下的 parse 时间在全链复利。
 // fromVkResult 收 VkResult（C int）——调用点勿再包 vk::Result(...)。
 
+/**
+ * 全项目错误码契约（Error.code；诊断名映射见 errorCodeName）。
+ * 分类：Vulkan 初始化/扩展（VulkanError、MissingValidationLayers、NoPhysicalDevices、
+ * NoSuitableGPU、NoPresentMode、ExtensionUnavailable、FeatureUnavailable、
+ * QueueNotAllocated、SurfaceNotPresentable）；Vulkan 运行期（ShdrvCreateFailed、
+ * SwapchainAcquireFailed、DeviceLost）；资产加载（ShaderLoadFailed、GltfLoadFailed、
+ * TextureDecodeFailed）；运行期资源（VMASuccessFailed、DescriptorSlotOutOfBounds）；
+ * 配置/渲染图（ConfigLoadFailed、RenderGraphInvalid）；平台（SDLError）；兜底（Unknown）。
+ */
 export enum class ErrorCode {
 	VulkanError,
 	MissingValidationLayers,
@@ -38,17 +47,36 @@ export enum class ErrorCode {
 	Unknown,
 };
 
+/**
+ * 统一错误结构（code + message）：fromVkResult 是 VkResult→Error 的入口
+ *（收 C int，调用点勿再包 vk::Result(...)）；describe() 生成带 [Code] 前缀的
+ * 日志/throw 文本，同 message 不同根因可区分。
+ */
 export struct Error {
 	ErrorCode code;
 	std::string message;
 
+	/**
+	 * 将 VkResult 包装为 Error（code = VulkanError，message = 结果码名）。
+	 * @param result Vulkan 结果码
+	 * @param context 调用上下文（可选；非空时 message = "context: 结果码名"）
+	 * @return 构造好的 Error
+	 */
 	static Error fromVkResult(VkResult result, const char* context = nullptr);
 
+	/**
+	 * 人类可读描述："[ErrorCodeName] message"（诊断用，code 不丢失）。
+	 * @return 格式化字符串
+	 */
 	std::string describe() const;
 };
 
-// VkResult → 名字（诊断用，覆盖项目实际会遇到的结果码；未列出的走 Unknown 兜底）。
-// 不用 vulkan.hpp 的 vk::to_string（那会把整个 hpp 上下文拖进本模块 GMF）
+/**
+ * VkResult → 名字（诊断用，覆盖项目实际会遇到的结果码；未列出的走 Unknown 兜底）。
+ * @param result Vulkan 结果码
+ * @return 结果码名字符串；未列出的码统一返回 "VK_ERROR_UNKNOWN"
+ * @note 不用 vulkan.hpp 的 vk::to_string（那会把整个 hpp 上下文拖进本模块 GMF）
+ */
 export inline const char* vkResultName(VkResult result) {
 	switch (result) {
 		case VK_SUCCESS: return "VK_SUCCESS";
@@ -81,8 +109,12 @@ inline Error Error::fromVkResult(VkResult result, const char* context) {
 	return err;
 }
 
-// code 名（诊断用）：describe() 带 [Code] 前缀——旧实现只返回 message，
-// 20 种 code 在 throw/log 路径全部丢失（同 message 不同根因无法区分）
+/**
+ * code 名（诊断用）：describe() 带 [Code] 前缀——旧实现只返回 message，
+ * 20 种 code 在 throw/log 路径全部丢失（同 message 不同根因无法区分）。
+ * @param code 错误码
+ * @return 错误码名字符串；switch 未覆盖的码落到尾部 "Unreachable" 防御兜底
+ */
 inline const char* errorCodeName(ErrorCode code) {
 	switch (code) {
 		case ErrorCode::VulkanError: return "VulkanError";
@@ -104,6 +136,7 @@ inline const char* errorCodeName(ErrorCode code) {
 		case ErrorCode::DescriptorSlotOutOfBounds: return "DescriptorSlotOutOfBounds";
 		case ErrorCode::DeviceLost: return "DeviceLost";
 		case ErrorCode::ConfigLoadFailed: return "ConfigLoadFailed";
+		case ErrorCode::RenderGraphInvalid: return "RenderGraphInvalid";
 		case ErrorCode::Unknown: return "Unknown";
 	}
 	return "Unreachable";
@@ -113,6 +146,12 @@ inline std::string Error::describe() const {
 	return fmt::format("[{}] {}", errorCodeName(code), message);
 }
 
+/**
+ * Error 相等性：code 与 message 同时相等。
+ * @param lhs 左操作数
+ * @param rhs 右操作数
+ * @return 两者相等返回 true
+ */
 inline bool operator==(const Error& lhs, const Error& rhs) {
 	return lhs.code == rhs.code && lhs.message == rhs.message;
 }

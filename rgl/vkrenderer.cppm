@@ -27,61 +27,84 @@ export import render_graph;
 
 namespace RGL {
 
-// Renderer：每帧"录制 → 提交 → 显示"的驱动器 + 每帧同步状态的持有者。
-//
-// 渲染流程（一次 drawFrame(list) 调用，逐步骤注释见函数体内 ①~⑮）：
-//   等待上一帧同 slot 完全结束（双 fence）并重置
-//   → acquireNextImage 获取后缓冲（信号 imageAvailable 信号量）
-//   → 录制命令缓冲：descriptor heap barrier + scene staging 拷贝/绑定（数据通路
-//     固定段，Phase 6 起不入图）→ 逐 pass 循环（编译图 CompiledRenderGraph）：
-//     attachment barrier（布局链推导产物物化）→ beginRendering（逐 pass 附件）
-//     → applyDynamicState(pass.state) → 段内逐 draw → endRendering
-//   → swapchain PresentSrc barrier（图 presentTransition）
-//   → queueSubmit（waitStage = 图派生的 swapchain 首用阶段）
-//   → presentKHR（pNext 挂 SwapchainPresentFenceInfoEXT 信号 present fence）
-//   → currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT
-//
-// 绘制内容 = 渲染 system 产出的 FrameDrawList（本类是盲执行器，不认识具体场景资产，
-// 见 DrawCall/FrameDrawList 注释）；帧拓扑 = 构造传入的编译图（Phase 6：barrier 与
-// 布局转换由 render_graph 编译器从 pass 声明推导，执行器不再手写；现默认图 =
-// opaque/skybox/transparent 三段直渲）。核心现代特性：Dynamic Rendering（无 RenderPass）+
-// ShaderObject（无 PipelineLayout，bindShadersEXT + 动态状态）+ DescriptorHeap
-//（vkCmdBindResourceHeapEXT 取代 descriptor set，使用规范见 docs/DESCRIPTOR_HEAP_SPEC.md）。
-
+/**
+ * Renderer：每帧"录制 → 提交 → 显示"的驱动器 + 每帧同步状态的持有者。
+ *
+ * 渲染流程（一次 drawFrame(list) 调用，逐步骤注释见函数体内 ①~⑮）：
+ *   等待上一帧同 slot 完全结束（双 fence）并重置
+ *   → acquireNextImage 获取后缓冲（信号 imageAvailable 信号量）
+ *   → 录制命令缓冲：descriptor heap barrier + scene staging 拷贝/绑定（数据通路
+ *     固定段，Phase 6 起不入图）→ 逐 pass 循环（编译图 CompiledRenderGraph）：
+ *     attachment barrier（布局链推导产物物化）→ beginRendering（逐 pass 附件）
+ *     → applyDynamicState(pass.state) → 段内逐 draw → endRendering
+ *   → swapchain PresentSrc barrier（图 presentTransition）
+ *   → queueSubmit（waitStage = 图派生的 swapchain 首用阶段）
+ *   → presentKHR（pNext 挂 SwapchainPresentFenceInfoEXT 信号 present fence）
+ *   → currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT
+ *
+ * 绘制内容 = 渲染 system 产出的 FrameDrawList（本类是盲执行器，不认识具体场景资产，
+ * 见 DrawCall/FrameDrawList 注释）；帧拓扑 = 构造传入的编译图（Phase 6：barrier 与
+ * 布局转换由 render_graph 编译器从 pass 声明推导，执行器不再手写；现默认图 =
+ * opaque/skybox/transparent 三段直渲）。核心现代特性：Dynamic Rendering（无 RenderPass）+
+ * ShaderObject（无 PipelineLayout，bindShadersEXT + 动态状态）+ DescriptorHeap
+ *（vkCmdBindResourceHeapEXT 取代 descriptor set，使用规范见 docs/DESCRIPTOR_HEAP_SPEC.md）。
+ */
 export class Renderer;
 
 export class Renderer {
    public:
-	// 成员初始化列表顺序必须与下方声明顺序一致（RAII 规则：vk::raii::* 直接成员只能在
-	// 初始化列表初始化）。管线表不再是 Renderer 成员（Phase 4 批次 2：迁出至 ShaderRegistry，
-	// Vulkan 层零 entt）——registry 在 main 先于 Renderer 构造（需 descriptor heap +
-	// 资产表），Renderer 持引用；条目全按需建（架构债务 1：cube 不再是内核资产、条目不再
-	// 恒建，画不画 = cube entity 有无，数据驱动）。模型管线条目不在构造期建（批次 3：
-	// 管线表与场景内容解耦，E1.3）——
-	// 资产上传期经 ShaderRegistry::addModelEntry 动态加入（按 (风格, 顶点 slot, 纹理 slot)
-	// 组合去重，同组合共享一条，Phase 4 验收 392 primitive → 12 条）。
-	// renderGraph（Phase 6）：编译图由 main 启动期 compileRenderGraph 产出（批次 3 前 =
-	// defaultRenderGraph()）——构造期校验执行器可解析性（attachment kind / state 与
-	// drawSource 名字 / blit 暂未支持），不可解析 = 启动 fail-fast，录制期零图错误。
+	/**
+	 * 构建执行器（main.cpp 初始化层构造顺序末站：ShaderRegistry→Renderer）。
+	 * 成员初始化列表顺序必须与下方声明顺序一致（RAII 规则：vk::raii::* 直接成员只能在
+	 * 初始化列表初始化）。管线表不再是 Renderer 成员（Phase 4 批次 2：迁出至 ShaderRegistry，
+	 * Vulkan 层零 entt）——registry 在 main 先于 Renderer 构造（需 descriptor heap +
+	 * 资产表），Renderer 持引用；条目全按需建（架构债务 1：cube 不再是内核资产、条目不再
+	 * 恒建，画不画 = cube entity 有无，数据驱动）。模型管线条目不在构造期建（批次 3：
+	 * 管线表与场景内容解耦，E1.3）——
+	 * 资产上传期经 ShaderRegistry::addModelEntry 动态加入（按 (风格, 顶点 slot, 纹理 slot)
+	 * 组合去重，同组合共享一条，Phase 4 验收 392 primitive → 12 条）。
+	 * renderGraph（Phase 6）：编译图由 main 启动期 compileRenderGraph 产出（批次 3 前 =
+	 * defaultRenderGraph()）——构造期校验执行器可解析性（validateRenderGraphForExecutor：
+	 * swapchain/depth 各恰一次 / state 与 drawSource 名字 / blit 两端齐 / drawLight state
+	 * 必 "light"），不可解析 = 启动 fail-fast，录制期零图错误。
+	 * @param vkDevice 设备层（队列 / 命令池 / fence 等待 / 能力探测）
+	 * @param vkSwapchain 交换链层（acquire / recreate / extent）
+	 * @param vkResources 资源层（descriptor heap / 深度图 / scene data / offscreen RT）
+	 * @param shaderRegistry 管线表（条目查找 + bindShaders；main 先于 Renderer 构造）
+	 * @param renderGraph 编译渲染图（构造后不变；不可解析启动期抛出）
+	 */
 	Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RGL::Resources& vkResources,
 		RGL::ShaderRegistry& shaderRegistry, RGL::CompiledRenderGraph renderGraph);
+	/** @return 交换链层引用（extent / recreate / 后缓冲）。 */
 	RGL::Swapchain& getSwapchainRef() const { return *swapchain; }
+	/** @return 资源层引用（深度图 / descriptor heap / RT 缓存 / scene data）。 */
 	RGL::Resources& getResourcesRef() const { return *resources; }
-	// 帧循环侧（ecs texel 金丝雀）用的只读访问器（截图路径已改帧内回读，不再需要
-	// 管线/状态访问器——2026-09-08 离屏重渲器退役）
+	/**
+	 * 帧循环侧（ecs texel 金丝雀）用的只读访问器（截图路径已改帧内回读，不再需要
+	 * 管线/状态访问器——2026-09-08 离屏重渲器退役）。
+	 * @return 设备层引用（队列 / 命令池 / fence）
+	 */
 	RGL::DeviceContext& getDeviceContextRef() const { return vkDevice; }
+	/** @return 图形命令池 const 引用（ecs 金丝雀录制路径）。 */
 	const vk::raii::CommandPool& getGraphicsCommandPoolRef() const { return graphicsCommandPool; }
-	// 等待 GPU 空闲（resize / 重建 swapchain 前调用，确保旧资源不再被使用）
+	/** 等待 GPU 空闲（resize / 重建 swapchain 前调用，确保旧资源不再被使用）。 */
 	void waitForIdle() { vkDevice.getDevice().waitIdle(); }
-	// 渲染一帧：整体流程见类头注释；绘制内容 = 渲染 system 产出的 FrameDrawList
-	//（盲执行器，不认识具体场景资产）；失败（device lost 等）时返回错误
+	/**
+	 * 渲染一帧：整体流程见类头注释；绘制内容 = 渲染 system 产出的 FrameDrawList
+	 *（盲执行器，不认识具体场景资产）；失败（device lost / fence 等待 / acquire /
+	 * submit / RT 创建等）时返回错误。
+	 * @param list 每帧绘制列表（calls + 段边界 + scene data，见 FrameDrawList）
+	 * @return void；失败 → Error
+	 */
 	[[nodiscard]] std::expected<void, Error> drawFrame(const FrameDrawList& list);
 
 	// ===== 帧内捕获（2026-09-08：llm_debug 截图从"离屏重渲"改为"回读本帧真实输出"）=====
-	// 请求帧的 drawFrame 在 present 前录一条回读拷贝（后缓冲，或 deferred G-buffer
-	// 第 N 号 RT = 诊断 dump_gbuf），submit 后同步等本帧 inFlight fence 搬进结果——
-	// 截图恒等于真实上屏内容（与图演进零分歧、零平行渲染器维护负担）；同步停顿只
-	// 发生在请求帧（llm 一次性截图模式，正常路径零影响）。
+	/**
+	 * 帧内捕获产物：请求帧的 drawFrame 在 present 前录一条回读拷贝（后缓冲，或
+	 * deferred G-buffer 第 N 号 RT = 诊断 dump_gbuf），submit 后同步等本帧 inFlight
+	 * fence 搬进结果——截图恒等于真实上屏内容（与图演进零分歧、零平行渲染器维护
+	 * 负担）；同步停顿只发生在请求帧（llm 一次性截图模式，正常路径零影响）。
+	 */
 	struct FrameCapture {
 		uint32_t width = 0;
 		uint32_t height = 0;
@@ -90,46 +113,67 @@ export class Renderer {
 		VkDeviceSize bytes = 0;
 		std::vector<uint8_t> pixels;   // 原格式回读（行紧凑），消费方转 RGBA8
 	};
-	// drawFrame 前调用（gbufChannel = diagnostics().dumpGbuf）；一次性——acquire 超时
-	// 跳帧时请求保持 pending，直到真正录制的帧消费
+	/**
+	 * drawFrame 前调用（gbufChannel = diagnostics().dumpGbuf）；一次性——acquire 超时
+	 * 跳帧时请求保持 pending，直到真正录制的帧消费。
+	 * @param gbufChannel -1 = swapchain 后缓冲；>=0 = G-buffer 通道号（dump_gbuf，
+	 *   deferred 图专属，前向图无对应 RT 时跳过并留 warn）
+	 */
 	void requestFrameCapture(int gbufChannel = -1) { captureRequest = gbufChannel; }
-	// drawFrame 后调用（fence 已在 drawFrame 内等待）；空 = 本帧无捕获产物
+	/**
+	 * drawFrame 后调用（fence 已在 drawFrame 内等待）。
+	 * @return 本帧捕获产物；空 = 本帧无捕获产物
+	 */
 	std::optional<FrameCapture> takeFrameCapture() { return std::move(captureResult); }
-	// 本帧是否已产出捕获（acquire 超时跳帧时 drawFrame 不录拷贝、请求保持 pending，
-	// 消费方据此决定重试而非误读空）
+	/**
+	 * 本帧是否已产出捕获（acquire 超时跳帧时 drawFrame 不录拷贝、请求保持 pending，
+	 * 消费方据此决定重试而非误读空）。
+	 * @return true = 捕获产物就绪（takeFrameCapture 可取）
+	 */
 	[[nodiscard]] bool hasFrameCapture() const { return captureResult.has_value(); }
 
    private:
-	// 创建 MAX_FRAMES_IN_FLIGHT 套同步对象（每个帧 slot 一套，双缓冲）。
-	//
-	// 四个角色：
-	//   imageAvailableSemaphores — acquireNextImage 信号，queueSubmit 等待
-	//                              （通知 GPU 后缓冲已可绘制）
-	//   renderFinishedSemaphores — queueSubmit 信号，presentKHR 等待
-	//                              （通知合成器本帧绘制完成）
-	//   inFlightFences — 挂 queueSubmit，追踪"命令缓冲执行完"
-	//   presentFences — 经 SwapchainPresentFenceInfoEXT 挂 presentInfo.pNext，
-	//                   追踪"present 完成"（VK_KHR_swapchain_maintenance1）
-	//
-	// 为什么是双 fence：单 fence 只挂 queueSubmit 时，triple-buffer（KWin）下 fence
-	// 信号时 present 可能仍在异步等待，下一帧重用 semaphore 会违反 VUID-00067。
-	// 见 docs/技术概念.md 的"双 Fence"一节。
+	/**
+	 * 创建 MAX_FRAMES_IN_FLIGHT 套同步对象（每个帧 slot 一套，双缓冲）。
+	 *
+	 * 四个角色：
+	 *   imageAvailableSemaphores — acquireNextImage 信号，queueSubmit 等待
+	 *                              （通知 GPU 后缓冲已可绘制）
+	 *   renderFinishedSemaphores — queueSubmit 信号，presentKHR 等待
+	 *                              （通知合成器本帧绘制完成）
+	 *   inFlightFences — 挂 queueSubmit，追踪"命令缓冲执行完"
+	 *   presentFences — 经 SwapchainPresentFenceInfoEXT 挂 presentInfo.pNext，
+	 *                   追踪"present 完成"（VK_KHR_swapchain_maintenance1）
+	 *
+	 * 为什么是双 fence：单 fence 只挂 queueSubmit 时，triple-buffer（KWin）下 fence
+	 * 信号时 present 可能仍在异步等待，下一帧重用 semaphore 会违反 VUID-00067。
+	 * 见 docs/技术概念.md 的"双 Fence"一节。
+	 */
 	void createSyncObjects();
-	// 批量分配 MAX_FRAMES_IN_FLIGHT 个 primary command buffer（每帧 slot 一个，
-	// 每帧 reset() 后重新录制）
+	/** 批量分配 MAX_FRAMES_IN_FLIGHT 个 primary command buffer（每帧 slot 一个，
+	 * 每帧 reset() 后重新录制）。 */
 	void allocateCommandBuffers();
-	// scene data staging ring（Phase 5 批次 2，全项目首个每帧动态 GPU 数据）：
-	// ×MAX_FRAMES_IN_FLIGHT 常驻映射 host buffer。写安全 = 帧 slot 复用规则——
-	// drawFrame ① 已 wait 本 currentFrame slot 的 inFlight fence（f-2 帧命令跑完）
-	// 才写本 slot staging；录制期 vkCmdCopyBuffer 拷进 scene data device buffer
-	//（命令流内天然有序），描述符静态指向该 buffer 永不改动。
+	/**
+	 * scene data staging ring（Phase 5 批次 2，全项目首个每帧动态 GPU 数据）：
+	 * ×MAX_FRAMES_IN_FLIGHT 常驻映射 host buffer。写安全 = 帧 slot 复用规则——
+	 * drawFrame ① 已 wait 本 currentFrame slot 的 inFlight fence（f-2 帧命令跑完）
+	 * 才写本 slot staging；录制期 vkCmdCopyBuffer 拷进 scene data device buffer
+	 *（命令流内天然有序），描述符静态指向该 buffer 永不改动。
+	 * @param vkResources 资源层（VMA 分配器）
+	 */
 	void createSceneStaging(RGL::Resources& vkResources);
-	// 窗口尺寸变化（resize）或 acquire/present 返回 out-of-date 时重建 swapchain + 深度图。
-	// 深度图必须与 swapchain extent 同步重建，否则 renderArea 会超出图像范围。
+	/**
+	 * 窗口尺寸变化（resize）或 acquire/present 返回 out-of-date 时重建 swapchain +
+	 * 深度图。
+	 * 深度图必须与 swapchain extent 同步重建，否则 renderArea 会超出图像范围。
+	 * @param context 日志上下文（调用点标识，如 "acquire out-of-date"）
+	 * @return void；recreate 后 extent 未变 = 深度图仍有效跳过重建（静默死循环只
+	 *   报错一次）；深度重建失败 → Error
+	 */
 	[[nodiscard]] std::expected<void, Error> recreateSwapchainAndDepth(const char* context);
-	RGL::DeviceContext& vkDevice;
-	RGL::Swapchain* swapchain;
-	RGL::Resources* resources;
+	RGL::DeviceContext& vkDevice;  // 设备层引用（队列 / 命令池 / fence / 能力探测）
+	RGL::Swapchain* swapchain;      // 交换链层（main 持有，析构序在 Renderer 之后）
+	RGL::Resources* resources;      // 资源层（main 持有，析构序在 Renderer 之后）
 	// 管线表（Phase 4 批次 2：迁出至 ShaderRegistry，零 entt；main 先于 Renderer 构造并持引用，
 	// 析构序 Renderer 先于 registry 安全）
 	RGL::ShaderRegistry& registry;
@@ -149,6 +193,13 @@ export class Renderer {
 	VkDeviceSize captureStagingSize = 0;
 	void* captureMapped = nullptr;              // 常驻映射指针（createBuffer 不回传 mapped，随分配自存）
 	uint32_t swapchainSlot = kRgNoAttachment;   // 编译图中 swapchain 的 slot（捕获布局追踪入口）
+	/**
+	 * 捕获回读缓冲按需增长（GPU_TO_CPU + 常驻映射，同 scene staging 的创建模式反方向）；
+	 * 重建安全：上一捕获的搬移在请求帧 drawFrame 内已完成（fence 已等），本函数只在
+	 * 新拷贝录制前调用，无飞行中写冲突。
+	 * @param bytes 所需字节数（w×h×captureBpp）
+	 * @return true = 缓冲就绪（既有容量足够或已重建）；false = 分配失败（error 日志）
+	 */
 	[[nodiscard]] bool ensureCaptureStaging(VkDeviceSize bytes);
 	// edS3：depth clip enable 动态状态能力门（vkCmdSetDepthClipEnableEXT；启动期一次探测，
 	// 未支持 = false，applyDynamicState 内 no-op 不 set——"扩展缺失干净降级"原则）
@@ -161,7 +212,7 @@ export class Renderer {
 	uint64_t frameCount = 0;
 	// 非 RAII 句柄（队列生命周期由 DeviceContext 的 raii Device 管理）
 	vk::Queue graphicsQueue;
-	const vk::raii::CommandPool& graphicsCommandPool;
+	const vk::raii::CommandPool& graphicsCommandPool;  // 图形命令池（DeviceContext 持有，submit/reset 用）
 	// 动态状态：opaque pass（默认值 = cube 的 opaque 状态），drawFrame() 在 opaque 段首
 	// applyDynamicState 一次（Phase 7 多 pass 时按 pass 换状态）
 	RGL::RenderState opaqueState{};
@@ -176,25 +227,31 @@ export class Renderer {
 	RGL::RenderState lightState{};
 	// Phase 7 D1：light 管线条目下标（构造期从 registry 取 "light"；图含 drawLight pass 时必填）
 	std::optional<uint32_t> lightPipelineIdx;
-	// 图 pass.state 名 → 动态状态（构造期校验保证图内名字全部可解析，未知名 = 校验
-	// 遗漏的编程错误，抛出）
+	/**
+	 * 图 pass.state 名 → 动态状态（构造期校验保证图内名字全部可解析，未知名 = 校验
+	 * 遗漏的编程错误，抛出）。
+	 * @param name 状态名（"opaque"/"skybox"/"transparent"/"light"）
+	 * @return 状态 const 引用（成员存储，录制期 applyDynamicState 消费）
+	 */
 	const RGL::RenderState& stateFor(std::string_view name) const;
 	// descriptor heap 的 GPU 地址（VmaDescriptorHeap 管理的"描述符槽位数组"，
 	// 对齐细节见 VmaBuffer.cppm）
 	vk::DeviceAddress heapAddress = 0;
 
-	// 双缓冲：最多 2 帧同时在飞——当前帧在录制 + 上一帧还在 GPU 执行。
-	// 下方同步对象数组按 currentFrame 索引，fence 信号后才可重用（双 fence 设计
-	// 见 createSyncObjects 注释）
+	/**
+	 * 双缓冲：最多 2 帧同时在飞——当前帧在录制 + 上一帧还在 GPU 执行。
+	 * 下方同步对象数组按 currentFrame 索引，fence 信号后才可重用（双 fence 设计
+	 * 见 createSyncObjects 注释）
+	 */
 	static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
-	uint32_t currentFrame = 0;
+	uint32_t currentFrame = 0;  // 当前帧 slot（0/1；drawFrame ⑮ 模 MAX_FRAMES_IN_FLIGHT 推进）
 	// scene data staging ring（Phase 5 批次 2，见 createSceneStaging）
 	std::array<RGL::VmaBuffer, MAX_FRAMES_IN_FLIGHT> sceneStaging;
-	std::vector<vk::raii::Semaphore> imageAvailableSemaphores;
-	std::vector<vk::raii::Semaphore> renderFinishedSemaphores;
-	std::vector<vk::raii::Fence> inFlightFences;
-	std::vector<vk::raii::Fence> presentFences;
-	std::vector<vk::raii::CommandBuffer> commandBuffers;
+	std::vector<vk::raii::Semaphore> imageAvailableSemaphores;  // acquire 信号（queueSubmit 等待）
+	std::vector<vk::raii::Semaphore> renderFinishedSemaphores;  // submit 信号（presentKHR 等待）
+	std::vector<vk::raii::Fence> inFlightFences;                // 命令缓冲执行完（挂 queueSubmit）
+	std::vector<vk::raii::Fence> presentFences;                 // present 完成（presentInfo.pNext 挂）
+	std::vector<vk::raii::CommandBuffer> commandBuffers;        // primary 命令缓冲（每帧 slot 一个）
 };
 
 }  // namespace RGL

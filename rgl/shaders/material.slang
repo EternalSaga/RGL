@@ -28,7 +28,8 @@ struct DrawArgs
     uint vertexOffset;      // 拼接顶点 buffer 内 per-primitive 字节偏移（Phase 4 批次 2 启用）
     float4 baseColor;
     float2 roughnessMetallic;  // x=roughness y=metallic
-    uint objectIndex;       // scene buffer 对象矩阵表下标 = 资产 id（Phase 5 光照，bindless）
+    uint objectIndex;       // scene buffer 对象矩阵表下标 = MeshRef.objectSlot（实例级槽，
+                            // Phase 6 instancing；Phase 5 光照 bindless 引入）
 };
 
 [[vk::push_constant]] DrawArgs drawArgs;

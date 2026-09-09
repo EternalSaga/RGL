@@ -27,12 +27,27 @@ namespace RGL {
 // 本单元是叶子（无人 import），编译完全并行、不上关键路径。
 // 设计语义注释留在接口声明处。
 
-// per-primitive 偏移进 push constant DrawArgs.vertexOffset（model.mesh.slang Load 前缀）。
+/**
+ * per-primitive 块映射（Phase 4 批次 2 分块拼接）：chunk = 所属 16MB 块下标，
+ * offset = 该 primitive 首顶点在块内的字节偏移（进 push constant DrawArgs.vertexOffset，
+ * model.mesh.slang Load 前缀）。
+ */
 struct ChunkPrim { uint32_t chunk; uint32_t offset; };
 
-// 顶点读回金丝雀：configs/diagnostics.lua vtx_canary=true 读回拼接 buffer 顶点数据比对 CPU，确认上传保真度
-//（数据错 = 上传/memcpy 问题；数据对 = 读取/shader 侧）。每块 VkBuffer 基址 32B（= 该块
-// 首个 primitive 首顶点）经 vkCmdCopyBuffer 拷进 staging 回读比对（独立 cmd + fence，启动期一次 GPU 停顿）。
+/**
+ * 顶点读回金丝雀：configs/diagnostics.lua vtx_canary=true 时读回拼接 buffer 顶点数据比对
+ * CPU，确认上传保真度（数据错 = 上传/memcpy 问题；数据对 = 读取/shader 侧）。逐
+ * primitive 读回首顶点 32B（自其块内偏移 primChunk[i].offset——查全部非零偏移），每
+ * primitive 一个 staging 槽（32B），vkCmdCopyBuffer 拷进 staging 回读比对（独立 cmd +
+ * fence，启动期一次 GPU 停顿）；PASS/FAIL 只打日志，不影响上传结果。
+ * @param vkDevice 设备层（graphics 命令池 / 队列 / fence）
+ * @param res 资源层（VMA 分配器：staging 回读缓冲）
+ * @param model CPU 侧模型（比对源：每 primitive 顶点前 32B）
+ * @param chunkBuffers 逐块顶点 buffer（读回源）
+ * @param primChunk 逐 primitive (块下标, 块内偏移) 映射
+ * @note waitForFences 返回值（nodiscard）在调用点被丢弃——既有 warning，代码层问题
+ *   （诊断路径未处理），非注释可修
+ */
 static void verifyVertexUpload(RGL::DeviceContext& vkDevice, RGL::Resources& res,
 	const RGL::GltfModel& model, const std::vector<std::shared_ptr<VmaBuffer>>& chunkBuffers,
 	const std::vector<ChunkPrim>& primChunk) {

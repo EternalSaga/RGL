@@ -15,6 +15,14 @@ namespace RGL {
 // readVec3（内部 helper）+ defaultSceneConfig/loadSceneConfig 定义（2026-09-02
 // 编译提速 A 方案）：sol2 实现移出接口 TU；本单元是叶子边。
 
+/**
+ * Lua vec3 读取（可选字段回落默认值，同 camera.cppm loadCameraConfig 惯例）：
+ * {x,y,z} → glm::vec3；字段缺失/非表/分量不齐 → fallback。
+ * @param root 配置（子）表
+ * @param key 字段名
+ * @param fallback 缺省值
+ * @return 解析值或 fallback
+ */
 inline glm::vec3 readVec3(sol::table root, const char* key, glm::vec3 fallback) {
 	sol::table t = root[key];
 	if (!t.valid() || !t.is<sol::table>())
@@ -27,6 +35,7 @@ inline glm::vec3 readVec3(sol::table root, const char* key, glm::vec3 fallback) 
 	return fallback;
 }
 
+/** defaultSceneConfig 定义（接口注释见 scene_config.cppm）：六条内建 pipeline + styles {unlit,pbr} + spin。 */
 SceneConfig defaultSceneConfig() {
 	SceneConfig cfg;
 	cfg.pipelines = {
@@ -42,6 +51,7 @@ SceneConfig defaultSceneConfig() {
 	return cfg;
 }
 
+/** loadSceneConfig 定义（接口注释见 scene_config.cppm）。要点：entities 段非空 = 权威场景构成（type 仅 model|cube，model 缺 file / scale≤0 均报错）；缺段回落 model/cube 字段合成（逐位兼容旧配置）；lights 缺段回落合成 [light] 单灯；environment 缺段 = 不启用。 */
 [[nodiscard]] std::expected<SceneConfig, Error> loadSceneConfig(std::string_view path) {
 	auto* logger = RLLogger::getInstance();
 

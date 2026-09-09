@@ -36,9 +36,14 @@ namespace RGL {
 
 namespace {
 
-// 执行器可解析性校验（Phase 6，构造期 fail-fast——录制期零图错误）：
-// 图必须恰好引用 swapchain/depth 各一次；draw pass 的 state/drawSource 名字可解析；
-// blit pass 必须两端齐（compileRenderGraph 已保证拓扑，此处防绕过）。
+/**
+ * 执行器可解析性校验（Phase 6，构造期 fail-fast——录制期零图错误）：
+ * 图必须恰好引用 swapchain/depth 各一次；draw pass 的 state/drawSource 名字可解析；
+ * blit pass 必须两端齐（compileRenderGraph 已保证拓扑，此处防绕过）；
+ * drawLight pass 的 state 必为 "light"。
+ * @param graph 编译渲染图（Renderer 构造入参）
+ * @note 任一违例抛 runtime_error（"Renderer: …" 前缀，带 pass 名/实际值定位）
+ */
 void validateRenderGraphForExecutor(const RGL::CompiledRenderGraph& graph) {
 	auto fail = [](std::string msg) { throw std::runtime_error("Renderer: " + msg); };
 	if (graph.passes.empty())
@@ -79,8 +84,13 @@ void validateRenderGraphForExecutor(const RGL::CompiledRenderGraph& graph) {
 	}
 }
 
-// FrameDrawList 段边界 → [begin, end)（drawSource 名 = 段名的机械映射，
-// 段序契约 = FrameDrawList 注释：opaque | skybox | transparent）
+/**
+ * FrameDrawList 段边界 → [begin, end)（drawSource 名 = 段名的机械映射，
+ * 段序契约 = FrameDrawList 注释：opaque | skybox | transparent）。
+ * @param drawSource 段名（"opaque" / "skybox" / 其余按 "transparent"）
+ * @param list 每帧绘制列表（skyboxStart / transparentStart 边界 + calls）
+ * @return calls 内的半开区间 [begin, end)
+ */
 std::pair<uint32_t, uint32_t> segmentRange(std::string_view drawSource,
 	const FrameDrawList& list) {
 	const uint32_t size = static_cast<uint32_t>(list.calls.size());
@@ -142,8 +152,12 @@ Renderer::Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RG
 		allocateCommandBuffers();
 		createSceneStaging(vkResources);
 	}
-// 捕获回读每像素字节数（仅可能出现的格式：swapchain 候选 4B/像素系 + A2B10G10R10=4B +
-// HDR FP16=8B + G-buffer 词表 rgba32_sfloat=16B，其余 8bit×4/rg16×2 = 4B）
+/**
+ * 捕获回读每像素字节数（仅可能出现的格式：swapchain 候选 4B/像素系 + A2B10G10R10=4B +
+ * HDR FP16=8B + G-buffer 词表 rgba32_sfloat=16B，其余 8bit×4/rg16×2 = 4B）。
+ * @param f 捕获格式（swapchain format 或 G-buffer RT format）
+ * @return 每像素字节数（4 / 8 / 16）
+ */
 static uint32_t captureBpp(vk::Format f) {
 	switch (f) {
 		case vk::Format::eR32G32B32A32Sfloat: return 16;
@@ -152,9 +166,14 @@ static uint32_t captureBpp(vk::Format f) {
 	}
 }
 
-// 捕获回读缓冲按需增长（GPU_TO_CPU + 常驻映射，同 scene staging 的创建模式反方向）；
-// 重建安全：上一捕获的搬移在请求帧 drawFrame 内已完成（fence 已等），本函数只在
-// 新拷贝录制前调用，无飞行中写冲突
+/**
+ * 捕获回读缓冲按需增长（GPU_TO_CPU + 常驻映射，同 scene staging 的创建模式反方向）；
+ * 重建安全：上一捕获的搬移在请求帧 drawFrame 内已完成（fence 已等），本函数只在
+ * 新拷贝录制前调用，无飞行中写冲突。
+ * @param bytes 所需字节数（w×h×captureBpp）
+ * @return true = 缓冲就绪（既有容量足够或已重建并自存 mapped 指针）；
+ *   false = VMA 分配失败（error 日志）
+ */
 bool Renderer::ensureCaptureStaging(VkDeviceSize bytes) {
 	if (captureStagingSize >= bytes)
 		return true;
@@ -255,6 +274,13 @@ std::expected<void, Error> Renderer::recreateSwapchainAndDepth(const char* conte
 		throw std::runtime_error(
 			fmt::format("Renderer::stateFor: unknown state '{}' (constructor validation bypassed)", name));
 	}
+	/** drawFrame 定义（整体流程见接口声明 + 类头；逐步骤注记见体内 ①~⑮）：
+	 * 双 fence wait/reset → acquire（100ms 超时跳帧）→ ③.5 scene staging 写
+	 *（头 128B + 矩阵表 + 灯数组尾区）→ ⑥ heap barrier（3 dst flag）+ ⑥.5 scene 拷贝
+	 *（kSceneDataBytes=262800B）→ ⑦ heap/sampler heap 绑定 → ⑤ 逐 pass（barrier 物化 /
+	 * beginRendering / applyDynamicState / 段内逐 draw / blit / drawLight）→ ⑪.5 帧内
+	 * 捕获回读 → ⑫ presentTransition → ⑬ submit（waitStage = 图派生）→ 捕获搬移 →
+	 * ⑭ present（present fence）→ ⑮ 帧 slot 推进。 */
 	std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 		const uint64_t frame = frameCount++;  // DIAG：device lost 帧号定位
 		auto& device = vkDevice.getDevice();

@@ -10,14 +10,16 @@ import vkerror;
 
 namespace RGL {
 
-// 诊断配置单例存储（进程级，main setDiagnostics 一次，此后只读）。
+/** 诊断配置单例存储（进程级，main setDiagnostics 一次，此后只读）。 */
 DiagnosticsConfig& diagnostics() {
 	static DiagnosticsConfig instance;
 	return instance;
 }
 
+/** setDiagnostics 定义：整体赋值到单例。 */
 void setDiagnostics(const DiagnosticsConfig& cfg) { diagnostics() = cfg; }
 
+/** loadDiagnosticsConfig 定义（接口注释见 diagnostics.cppm）。要点：数值门（texel_canary/dump_gbuf/texture_force_size）负数 = "关"哨兵；dump_gbuf 越界（>3）钳到 0（同旧 env 行为）；解析完成后打一行 info 汇总。 */
 [[nodiscard]] std::expected<DiagnosticsConfig, Error> loadDiagnosticsConfig(std::string_view path) {
 	auto* logger = RLLogger::getInstance();
 	DiagnosticsConfig cfg;

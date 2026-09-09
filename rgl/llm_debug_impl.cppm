@@ -18,14 +18,19 @@ namespace RGL {
 
 namespace {
 
-// uint32 位模式 → float（免 std::bit_cast，memcpy 走 rlstd 导出面）
+/** uint32 位模式 → float（免 std::bit_cast，memcpy 走 rlstd 导出面）。 */
 float u32ToFloat(uint32_t b) {
 	float f;
 	std::memcpy(&f, &b, sizeof(f));
 	return f;
 }
 
-// IEEE binary16 → float（HDR 后缓冲 R16G16B16A16_SFLOAT 回读转换）
+/**
+ * IEEE binary16 → float（HDR 后缓冲 R16G16B16A16_SFLOAT 回读转换）。
+ * denorm（exp=0）走规格化移位；exp=31 透传 ±Inf/NaN（frac 原样搬入尾数）。
+ * @param h 16 位半精度位模式（调用端按小端拼合）
+ * @return 对应单精度值
+ */
 float halfToFloat(uint16_t h) {
 	const uint32_t sign = static_cast<uint32_t>(h & 0x8000u) << 16;
 	int32_t exp = (h >> 10) & 0x1F;
@@ -47,7 +52,12 @@ float halfToFloat(uint16_t h) {
 	return u32ToFloat(sign | (static_cast<uint32_t>(exp) << 23) | (frac << 13));
 }
 
-// 线性 [0,1] → sRGB 字节（PNG 惯例存 sRGB 编码值；HDR/线性 UNORM 后缓冲需要编码）
+/**
+ * 线性 [0,1] → sRGB 字节（PNG 惯例存 sRGB 编码值；HDR/线性 UNORM 后缓冲需要编码）。
+ * 标准 sRGB 传输函数（0.0031308 分段阈值），先 clamp 再四舍五入取整。
+ * @param v 线性值（可越界，clamp 到 [0,1]）
+ * @return sRGB 编码字节
+ */
 uint8_t toSrgb(float v) {
 	v = std::clamp(v, 0.0f, 1.0f);
 	const float s = v <= 0.0031308f ? v * 12.92f
@@ -55,14 +65,21 @@ uint8_t toSrgb(float v) {
 	return static_cast<uint8_t>(s * 255.0f + 0.5f);
 }
 
-// 诊断直出（GB float 通道：clamp 线性映射，不做 gamma——数据观察优先语义直观）
+/** 诊断直出（GB float 通道：clamp 线性映射，不做 gamma——数据观察优先语义直观）。 */
 uint8_t raw8(float v) {
 	return static_cast<uint8_t>(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f);
 }
 
-// 回读原格式 → RGBA8（stride 4）。gbufRaw = dump_gbuf 诊断直读（无 gamma）。
-// 覆盖 = swapchain 候选格式（sdl3window selectFormat）+ G-buffer 词表 4 格式；
-// 表外 = 返回空（调用方报错，不静默出图）。
+/**
+ * 回读原格式 → RGBA8（行紧凑 stride 4；alpha 恒 255，输出初值即 255 白）。
+ * gbufRaw = dump_gbuf 诊断直读（无 gamma）。覆盖 = swapchain 候选格式
+ *（sdl3window selectFormat）+ G-buffer 词表 4 格式（albedo/metalRough 与
+ * srgb/unorm 用例共用，normal rg16_snorm / position rgba32_sfloat 专用用例）；
+ * 表外 = 返回空（调用方报错，不静默出图）。
+ * @param cap 本帧捕获产物（width/height/format/pixels 原格式行紧凑）
+ * @param gbufRaw true = dump_gbuf 直读通道（线性 clamp，不做 sRGB 编码）
+ * @return RGBA8 字节序列（w×h×4）；空 = 该格式无转换规则
+ */
 std::vector<uint8_t> toRgba8(const Renderer::FrameCapture& cap, bool gbufRaw) {
 	const size_t px = static_cast<size_t>(cap.width) * cap.height;
 	std::vector<uint8_t> out(px * 4, 255);
@@ -135,6 +152,9 @@ std::vector<uint8_t> toRgba8(const Renderer::FrameCapture& cap, bool gbufRaw) {
 
 }  // namespace
 
+/** 实现流水（语义/契约见接口声明）：takeFrameCapture（无产物 = Error）→
+ * toRgba8（gbufRaw 由 gbufChannel 判定）→ 路径解析（gbuffer_N.png / cfg.file /
+ * 时间戳名）→ create_directories + stbi_write_png → 返回绝对路径。 */
 std::expected<std::string, Error> writeCapturePng(RGL::Renderer& renderer, const LlmDebugConfig& cfg) {
 	auto* logger = RLLogger::getInstance();
 	auto cap = renderer.takeFrameCapture();

@@ -9,6 +9,11 @@ import vkerror;
 
 namespace RGL {
 
+/**
+ * 加载 .spv 文件为 uint32 码流（二进制整读）。
+ * @param filename SPV 文件路径（相对 CWD，即 build/rgl/）
+ * @return SPV 码流（word 数组）；文件打不开返回 ShaderLoadFailed
+ */
 export [[nodiscard]] std::expected<std::vector<uint32_t>, Error>
 loadShaderSpv(const std::string& filename) {
 	std::ifstream file(filename, std::ios::ate | std::ios::binary);
@@ -24,16 +29,20 @@ loadShaderSpv(const std::string& filename) {
 	return buffer;
 }
 
+/** shader 对象对的 SPV 码流（mesh + fragment 两阶段，RenderPipeline 构造输入）。 */
 export struct ShaderEffect {
 	std::vector<uint32_t> meshStageSpv;
 	std::vector<uint32_t> fragStageSpv;
 };
 
-// 动态状态（Dynamic State）：与 shader object 解耦的"pass 状态"值集合。
-// 从 RenderPipeline 移出（原 recordRenderCommands 内烘焙），由调用点（Renderer）
-// 按 pass 传入——同一 mesh shader 可在不同 pass 用不同状态（Phase 7 G-buffer 多 pass）。
-// 默认值 = 当前 cube 的 opaque pass 状态（不透明、写深度、无混合、单采样）。
-// 注意：viewport/scissor 依赖窗口宽高，不在此结构，由 applyDynamicState 的 width/height 参数设置。
+/**
+ * 动态状态（Dynamic State）：与 shader object 解耦的"pass 状态"值集合。
+ * 从 RenderPipeline 移出（原 recordRenderCommands 内烘焙），由调用点（Renderer）
+ * 按 pass 传入——同一 mesh shader 可在不同 pass 用不同状态（Phase 7 G-buffer 多 pass）。
+ * 默认值 = 当前 cube 的 opaque pass 状态（不透明、写深度、无混合、单采样）。
+ * 注意：viewport/scissor 依赖窗口宽高，不在此结构，由 applyDynamicState 的
+ * width/height 参数设置。
+ */
 export struct RenderState {
 	vk::PolygonMode polygonMode = vk::PolygonMode::eFill;
 	vk::CullModeFlagBits cullMode = vk::CullModeFlagBits::eNone;
@@ -59,10 +68,19 @@ export struct RenderState {
 	bool logicOp = false;
 };
 
-// 设置全部动态状态（viewport/scissor 用 width/height，其余用 state）。
-// spec 要求相关 set 命令在 draw 之前调用即可（draw 时采样），与 bindShadersEXT 的先后无约束。
-// depthClipDynamic（edS3 能力门）：true = 设备支持 extendedDynamicState3DepthClipEnable，
-// 才 setDepthClipEnableEXT；false = 扩展缺失，保持管线默认（干净 no-op，不 set）。
+/**
+ * 设置全部动态状态（viewport/scissor 用 width/height，其余用 state）。
+ * spec 要求相关 set 命令在 draw 之前调用即可（draw 时采样），与 bindShadersEXT
+ * 的先后无约束。
+ * @param cmd 命令缓冲（录制期）
+ * @param width 视口宽
+ * @param height 视口高（viewport y = height、h = -height：Vulkan 坐标原点左上）
+ * @param state 状态值集合
+ * @param depthClipDynamic edS3 能力门：true = 设备支持 extendedDynamicState3DepthClipEnable，
+ *        才 setDepthClipEnableEXT；false = 扩展缺失，保持管线默认（干净 no-op，不 set）
+ * @param colorAttachmentCount 颜色附件数（多颜色附件须对 [0, count) 全部设 blend enable
+ *        与 write mask，VVL 07476/07478；默认 1 = forward）
+ */
 export void applyDynamicState(vk::raii::CommandBuffer& cmd, uint32_t width, uint32_t height,
 	const RenderState& state, bool depthClipDynamic = false, uint32_t colorAttachmentCount = 1) {
 	// Viewport & scissor
@@ -125,9 +143,11 @@ export void applyDynamicState(vk::raii::CommandBuffer& cmd, uint32_t width, uint
 	cmd.setLogicOpEnableEXT(state.logicOp);
 }
 
-// Phase 7 D1：base binding 之外的单条追加映射（PipelineBindings::extra 条目）。
-// sampler=false → resource heap 描述符（heapSlot × descriptorSize）；sampler=true →
-// sampler heap 字节偏移（samplerHeapOffset）。firstBinding 显式（避开 base 0..5 段）。
+/**
+ * Phase 7 D1：base binding 之外的单条追加映射（PipelineBindings::extra 条目）。
+ * sampler=false → resource heap 描述符（heapSlot × descriptorSize）；sampler=true →
+ * sampler heap 字节偏移（samplerHeapOffset）。binding 显式（避开 base 0..5 段）。
+ */
 export struct PipelineExtraBinding {
 	uint32_t binding = 0;
 	bool sampler = false;
@@ -135,10 +155,12 @@ export struct PipelineExtraBinding {
 	vk::DeviceSize samplerHeapOffset = 0;
 };
 
-// binding mapping 烘焙参数（Phase 5.5 聚合：env 追加后构造参数膨胀到 13 个，改 struct
-// 数据驱动表达 cube/model/IBL 形态）。heap 槽 = 绝对 slot（resource heap），sampler 走
-// **字节偏移**（sampler heap，OpTypeSampler 映射的 spec 正确字段 heapOffset，见
-// RenderPipeline 内注释）——换算（slot × descriptorSize）在调用点（ShaderRegistry）做。
+/**
+ * binding mapping 烘焙参数（Phase 5.5 聚合：env 追加后构造参数膨胀到 13 个，改 struct
+ * 数据驱动表达 cube/model/IBL 形态）。heap 槽 = 绝对 slot（resource heap），sampler 走
+ * **字节偏移**（sampler heap，OpTypeSampler 映射的 spec 正确字段 heapOffset，见
+ * RenderPipeline 内注释）——换算（slot × descriptorSize）在调用点（ShaderRegistry）做。
+ */
 export struct PipelineBindings {
 	uint32_t descriptorSize = 0;   // resource heap 步长（max(buffer, image) 运行时查询）
 	uint32_t slotVertex = 0;       // binding 0：顶点 storage buffer 槽
@@ -157,26 +179,37 @@ export struct PipelineBindings {
 	std::vector<PipelineExtraBinding> extra;
 };
 
-// RenderPipeline：纯 shader object 包装（mesh + frag 两个 VkShaderEXT + 烘焙的
-// descriptor heap binding mapping）。动态状态不再内聚于此——见 RenderState / applyDynamicState。
+/**
+ * RenderPipeline：纯 shader object 包装（mesh + frag 两个 VkShaderEXT + 烘焙的
+ * descriptor heap binding mapping）。动态状态不再内聚于此——见
+ * RenderState / applyDynamicState。RAII：设备销毁前由本对象持有句柄。
+ */
 export class RenderPipeline {
 	vk::raii::ShaderEXT meshShader = nullptr;
 	vk::raii::ShaderEXT fragShader = nullptr;
 
     public:
-	// bindings.textured 缺省 = cube 形态（2 条目：binding 0/1）。
-	// textured=true = 模型形态（3 条目，Phase 3）：binding 1 → SAMPLED_IMAGE 描述符槽
-	//（resource heap，slotTexture），binding 2 → sampler heap 槽（OpTypeSampler 映射，
-	// heapOffset 字节偏移——独立 sampler 的 spec 正确字段，见下方注释；
-	// vkCmdBindSamplerHeapEXT 每帧绑定）。
-	// 注意：sampler 走独立 sampler heap 而非 pEmbeddedSampler——2026-08-27 spike
-	// 交叉测试两者三驱动均 PASS（docs/archive/heap_texture_research.md §九），此处维持独立
-	// sampler heap（docs/archive/phase3_plan.md R1 回退链的既选路径，已验证可用）。
-	// hasSceneData=true（Phase 5 批次 2，模型形态）追加 binding 3 → scene data storage
-	// buffer 槽（光照 + 对象矩阵表，Resources::ensureSceneData；模型 mesh/unlit frag 不
-	// 声明 binding 3 = 映射空转无副作用，同 mesh 阶段不声明 binding 1/2 的既证行为）。
-	// hasEnv=true（Phase 5.5）追加 binding 4/5 → env cubemap 槽 + sky sampler 偏移
-	//（仅 import env.slang 的风格消费——pbr/phong/unlit 不声明 = 映射空转，同上既证行为）。
+	/**
+	 * 创建 mesh + frag 两个 VkShaderEXT（vk::createShadersEXT 一次两个），
+	 * binding mapping 按 bindings 形态烘焙（running index 连续填，firstBinding 显式）。
+	 * bindings.textured 缺省 = cube 形态（2 条目：binding 0/1）。
+	 * textured=true = 模型形态（3 条目，Phase 3）：binding 1 → SAMPLED_IMAGE 描述符槽
+	 *（resource heap，slotTexture），binding 2 → sampler heap 槽（OpTypeSampler 映射，
+	 * heapOffset 字节偏移——独立 sampler 的 spec 正确字段，见下方注释；
+	 * vkCmdBindSamplerHeapEXT 每帧绑定）。
+	 * 注意：sampler 走独立 sampler heap 而非 pEmbeddedSampler——2026-08-27 spike
+	 * 交叉测试两者三驱动均 PASS（docs/archive/heap_texture_research.md §九），此处维持独立
+	 * sampler heap（docs/archive/phase3_plan.md R1 回退链的既选路径，已验证可用）。
+	 * hasSceneData=true（Phase 5 批次 2，模型形态）追加 binding 3 → scene data storage
+	 * buffer 槽（光照 + 对象矩阵表，Resources::ensureSceneData；模型 mesh/unlit frag 不
+	 * 声明 binding 3 = 映射空转无副作用，同 mesh 阶段不声明 binding 1/2 的既证行为）。
+	 * hasEnv=true（Phase 5.5）追加 binding 4/5 → env cubemap 槽 + sky sampler 偏移
+	 *（仅 import env.slang 的风格消费——pbr/phong/unlit 不声明 = 映射空转，同上既证行为）。
+	 * extra（Phase 7 D1）续 base 追加（light pass 采 G-buffer 4 RT + sampler）。
+	 * @param device 设备句柄
+	 * @param effect mesh + frag 两阶段 SPV 码流
+	 * @param bindings mapping 烘焙参数（见 PipelineBindings）
+	 */
 	RenderPipeline(vk::raii::Device& device, const ShaderEffect& effect,
 		const PipelineBindings& bindings) {
 		const uint32_t descriptorSize = bindings.descriptorSize;
@@ -259,8 +292,11 @@ export class RenderPipeline {
 		meshShader = std::move(shaders[0]);
 		fragShader = std::move(shaders[1]);
 	}
-	// 绑定 mesh + frag shader object 到命令缓冲（未使用的传统 stage 传 VK_NULL_HANDLE）。
-	// 只做 bindShadersEXT——动态状态由 applyDynamicState 单独设置（调用点在 Renderer）。
+	/**
+	 * 绑定 mesh + frag shader object 到命令缓冲（未使用的传统 stage 传 VK_NULL_HANDLE）。
+	 * 只做 bindShadersEXT——动态状态由 applyDynamicState 单独设置（调用点在 Renderer）。
+	 * @param cmd 命令缓冲（录制期，draw 之前调用）
+	 */
 	void bindShaders(vk::raii::CommandBuffer& cmd) const {
 		std::array<vk::ShaderStageFlagBits, 7> stages = {
 			vk::ShaderStageFlagBits::eVertex,

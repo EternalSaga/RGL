@@ -15,28 +15,38 @@ namespace RGL {
 // （model_importer/texture_pool/shader_registry/ecs/main）只依赖本轻量模块 +
 // 按需 import vk_resources（GPU 侧操作），不必拖入整个初始化层。
 
-// 管线表下标的"未设置"值（资产记录的 pipelineIndex 初始值；ShaderRegistry::addModelEntry / bindPipelineToAsset 写入真实下标）
+/**
+ * 管线表下标的"未设置"值（资产记录的 pipelineIndex 初始值）。真实下标在管线条目创建后写回
+ * 资产记录：addModelEntry 返回条目下标、调用方经 bindToAsset 写回；bindPipelineToAsset 按条目名写回。
+ */
 export inline constexpr uint32_t kInvalidPipelineIndex = std::numeric_limits<uint32_t>::max();
 
-// 纹理资产 id 的"未设置"值（同 kInvalidPipelineIndex 模式；批次 2 材质资产的 textureId 用它 = 无纹理 → 白）
+/**
+ * 纹理资产 id 的"未设置"值（同 kInvalidPipelineIndex 模式）；批次 2 材质资产的 textureId
+ * 用它 = 无纹理 → 白。
+ */
 export inline constexpr uint32_t kInvalidTextureId = std::numeric_limits<uint32_t>::max();
 
-// 资产种类（批次 1 引入：白纹理 slot 契约断言只数几何槽；批次 3 内建几何实体化数据源）。
-// Phase 4 已归一 push constant（统一 DrawArgs 超集单一布局）：renderListSystem 零 AssetKind
-// 分支，kind 不再参与布局/写入路径选择（历史 64B/96B 双 struct 分支已删）
+/**
+ * 资产种类（批次 1 引入：白纹理 slot 契约断言只数几何槽；批次 3 内建几何实体化数据源）。
+ * Phase 4 已归一 push constant（统一 DrawArgs 超集单一布局）：renderListSystem 零 AssetKind
+ * 分支，kind 不再参与布局/写入路径选择（历史 64B/96B 双 struct 分支已删）。
+ */
 export enum class AssetKind : uint8_t {
 	Model,
 	Builtin,  // 内建几何（cube 等程序化资产，架构债务 1：与 gltf 同路的普通资产，非内核成员）
 };
 
-// 资产层：每个已上传 primitive 一条记录（GPU 顶点 buffer + heap slot + 三角形数 + 管线条目引用），
-// 以稳定 id（vector 下标，上传顺序分配）索引。registry entity 经 MeshRef{asset}（scene_context.cppm）
-// 引用资产，五方一致性（entity ↔ primitive ↔ heap slot ↔ 管线条目 ↔ draw-args）收敛为本表
-// 一处映射（E1.1）。生命周期：Resources 成员（与 descriptor heap 同层），
-// buffer 随 SharedAllocator 控制块存活，不再靠 main.cpp 局部变量的隐式 RAII 保证（E1.2/L6）。
-// 顶点 buffer 经 shared_ptr 共享（Phase 4 批次 2：拼接顶点 buffer——每模型一个 buffer +
-// 一个 heap slot，同模型 N 个 primitive 资产记录持同一 shared_ptr，末引用析构释放；
-// VmaBuffer 本体 move-only 不可拷贝，故经 shared_ptr 共享所有权）。
+/**
+ * 资产层：每个已上传 primitive 一条记录（GPU 顶点 buffer + heap slot + 三角形数 + 管线条目引用），
+ * 以稳定 id（vector 下标，上传顺序分配）索引。registry entity 经 MeshRef{asset}（scene_context.cppm）
+ * 引用资产，五方一致性（entity ↔ primitive ↔ heap slot ↔ 管线条目 ↔ draw-args）收敛为本表
+ * 一处映射（E1.1）。生命周期：Resources 成员（与 descriptor heap 同层），
+ * buffer 随 SharedAllocator 控制块存活，不再靠 main.cpp 局部变量的隐式 RAII 保证（E1.2/L6）。
+ * 顶点 buffer 经 shared_ptr 共享（Phase 4 批次 2 分块拼接：模型 primitive 拼成 16MB 块，
+ * 每块一个 buffer + 一个 heap slot，同块内 primitive 共享同一 shared_ptr，末引用析构释放；
+ * VmaBuffer 本体 move-only 不可拷贝，故经 shared_ptr 共享所有权）。
+ */
 export struct MeshAsset {
 	AssetKind kind = AssetKind::Model;
 	std::shared_ptr<VmaBuffer> vertexBuffer;          // 顶点 buffer（模型 = 拼接 buffer 共享；cube = 独占 shared_ptr）
@@ -54,16 +64,18 @@ export struct MeshAsset {
 	std::optional<uint32_t> indexHeapSlot;
 };
 
-// 纹理资产（Phase 3 → 批次 1 迁入资产表）：GPU image + view + heap 描述符槽 + 描述符指针链。
-// 原 owner = main 局部 TexturePool 对象（UAF 根因：块尾析构第 0 帧前释放纹理 BO，
-// docs/archive/heap_texture_research.md §12.6）；现活在 AssetTable（Resources 成员），VmaImage
-// 包装体随 Resources 存活——所有权规则（§12.7 ①）在此首次落地。
-// viewCreate 必须保留：v341 的 VkImageDescriptorInfoEXT::pView 要 image view 的
-// create info（值拷贝），不是句柄（docs/archive/heap_texture_research.md §二 条款表）。
-// 描述符指针链（imageDesc/resourceDesc/dst）折进记录本体：记录活在 std::deque
-//（push_back 元素地址稳定），自/兄弟引用在入表后设置——跨驱动防御稳定存储的单一介质
-//（替代原 TexturePool 的 4 个 deque；本机 RADV 写时即解析，spec 允许驱动延迟解释，
-// 见 docs/archive/heap_texture_research.md §12.2）。
+/**
+ * 纹理资产（Phase 3 → 批次 1 迁入资产表）：GPU image + view + heap 描述符槽 + 描述符指针链。
+ * 原 owner = main 局部 TexturePool 对象（UAF 根因：块尾析构第 0 帧前释放纹理 BO，
+ * docs/archive/heap_texture_research.md §12.6）；现活在 AssetTable（Resources 成员），VmaImage
+ * 包装体随 Resources 存活——所有权规则（§12.7 ①）在此首次落地。
+ * viewCreate 必须保留：v341 的 VkImageDescriptorInfoEXT::pView 要 image view 的
+ * create info（值拷贝），不是句柄（docs/archive/heap_texture_research.md §二 条款表）。
+ * 描述符指针链（imageDesc/resourceDesc/dst）折进记录本体：记录活在 std::deque
+ *（push_back 元素地址稳定），自/兄弟引用在入表后设置——跨驱动防御稳定存储的单一介质
+ *（替代原 TexturePool 的 4 个 deque；本机 RADV 写时即解析，spec 允许驱动延迟解释，
+ * 见 docs/archive/heap_texture_research.md §12.2）。
+ */
 export struct TextureAsset {
 	VmaImage image;
 	vk::ImageViewCreateInfo viewCreate{};  // hpp create info（值保留）：v341 VkImageDescriptorInfoEXT::pView 要它
@@ -79,13 +91,15 @@ export struct TextureAsset {
 	vk::HostAddressRangeEXT dst{};                 // 描述符写入目标 slot 范围
 };
 
-// 材质资产（批次 2：MaterialRef 真引用，E5.3 解决）：glTF 材质身份（按 materialIndex 去重，
-// -1 = 无材质 → 默认材质）。纹理→primitive 映射获得数据归属——材质记录引用纹理资产 id
-//（可查询，Phase 5 透明排序 / Phase 7 culling 的材质分类数据基础）；glTF 材质身份不再
-// 导入期丢弃。注意区分：textureId = 材质**引用**的纹理（baseColorTexture，可缺省）；
-// primitive 的**有效**纹理 = 有 uv 且图有内嵌数据 ? material.textureId : 白（hasUv 是
-// per-primitive 网格属性，同材质可因缺 uv 走白——有效选择留在上传返回值，见 model_importer）。
-// GPU 侧仍走 per-primitive 管线 binding mapping 烘焙（行为不变，去重归 Phase 4 ShaderRegistry）。
+/**
+ * 材质资产（批次 2：MaterialRef 真引用，E5.3 解决）：glTF 材质身份（按 materialIndex 去重，
+ * -1 = 无材质 → 默认材质）。纹理→primitive 映射获得数据归属——材质记录引用纹理资产 id
+ *（可查询，Phase 5 透明排序 / Phase 7 culling 的材质分类数据基础）；glTF 材质身份不再
+ * 导入期丢弃。注意区分：textureId = 材质**引用**的纹理（baseColorTexture，可缺省）；
+ * primitive 的**有效**纹理 = 有 uv 且图有内嵌数据 ? material.textureId : 白（hasUv 是
+ * per-primitive 网格属性，同材质可因缺 uv 走白——有效选择留在上传返回值，见 model_importer）。
+ * GPU 侧仍走 per-primitive 管线 binding mapping 烘焙（行为不变，去重归 Phase 4 ShaderRegistry）。
+ */
 export struct MaterialAsset {
 	glm::vec4 baseColor{1.0f};
 	uint32_t textureId = kInvalidTextureId;
@@ -96,13 +110,23 @@ export struct MaterialAsset {
 	bool unlit = false;           // KHR_materials_unlit 扩展存在性（风格 = unlit vs pbr）
 };
 
+/**
+ * 资产表：资产层单一数据源（ECS 规范 5）——mesh / texture / material 三表，均以稳定
+ * id（表内下标，注册顺序分配）索引，五方一致性收敛为本表一处映射。生命周期 =
+ * Resources 成员（与 descriptor heap 同层）。几何槽计数（geometrySlotCount）+
+ * expectedGeometrySlot 承载 heap 布局契约"纹理首槽 = 白 = 全部几何槽之后"
+ *（上传方断言：model_importer / builtin_geometry / texture_pool::ensureWhiteTexture）。
+ */
 export class AssetTable {
    public:
-	// mesh（模型 primitive：去索引顶点流，无索引 buffer）
-	// 注册资产（上传顺序调用）→ 资产 id
-	// groupCount 按 model shader 契约派生（D6：ceil(tri/kTrianglesPerGroup)，0 = 不渲染）
-	// vertexBuffer = 拼接顶点 buffer 的 shared_ptr（同模型 N 个 primitive 共享同一 buffer，
-	// Phase 4 批次 2）；vertexOffset = 本 primitive 在拼接 buffer 内的字节偏移（进 push constant）
+	/**
+	 * 注册模型 primitive 资产（去索引顶点流，无索引 buffer；上传顺序调用，调用方 =
+	 * uploadModelMeshes）→ 资产 id。groupCount 按 model shader 契约派生（D6：
+	 * ceil(tri/kTrianglesPerGroup)，0 = 不渲染）。vertexBuffer = 拼接块 buffer 的
+	 * shared_ptr（同块内 primitive 共享同一 buffer，Phase 4 批次 2 分块拼接）；
+	 * vertexOffset = 本 primitive 在所在块内的字节偏移（进 push constant）；
+	 * heapSlot = 本 primitive 所在块的绝对槽（同块 primitive 共享同一槽）。
+	 */
 	uint32_t addMesh(std::shared_ptr<VmaBuffer> vertexBuffer, uint32_t heapSlot,
 		uint32_t triangleCount, uint32_t vertexOffset) {
 		const uint32_t groupCount = (triangleCount + kTrianglesPerGroup - 1) / kTrianglesPerGroup;
@@ -111,45 +135,70 @@ export class AssetTable {
 				kInvalidPipelineIndex, vertexOffset});
 		return static_cast<uint32_t>(meshes.size() - 1);
 	}
+	/** @return 按 id 引用的 mesh 资产记录（无界检查，调用方保证 id 有效）。 */
 	[[nodiscard]] const MeshAsset& get(uint32_t id) const { return meshes[id]; }
-	// 管线条目引用（ShaderRegistry::addModelEntry / bindPipelineToAsset 在创建管线条目后写回）
+	/** 写回管线条目引用（ShaderRegistry::addModelEntry / bindPipelineToAsset 在创建管线条目后调用）。 */
 	void setPipelineIndex(uint32_t id, uint32_t pipelineIndex) { meshes[id].pipelineIndex = pipelineIndex; }
-	// 带索引 mesh（内建几何：顶点 + 索引双 buffer/双 slot，架构债务 1 方案 B 后由
-	// builtin_geometry 上传路径调用——Resources 不再创建 cube buffer）
-	// groupCount = 1 固定（cube mesh shader 恒输出 8 顶点/12 三角形，单 group，不套 ceil 公式）
+	/**
+	 * 注册带索引 mesh 资产（内建几何：顶点 + 索引双 buffer/双 slot，架构债务 1 方案 B 后由
+	 * builtin_geometry 上传路径调用——Resources 不再创建 cube buffer）。
+	 * groupCount = 1 固定（cube mesh shader 恒输出 8 顶点/12 三角形，单 group，不套 ceil 公式）
+	 * → 资产 id。
+	 */
 	uint32_t addIndexedMesh(VmaBuffer vertexBuffer, uint32_t vertexSlot, VmaBuffer indexBuffer,
 		uint32_t indexSlot, uint32_t triangleCount) {
 		meshes.push_back(MeshAsset{AssetKind::Builtin, std::make_shared<VmaBuffer>(std::move(vertexBuffer)),
 			vertexSlot, triangleCount, 1, kInvalidPipelineIndex, 0, std::move(indexBuffer), indexSlot});
 		return static_cast<uint32_t>(meshes.size() - 1);
 	}
+	/** @return mesh 资产记录数（模型 primitive + 内建几何）。 */
 	[[nodiscard]] uint32_t meshSize() const { return static_cast<uint32_t>(meshes.size()); }
-	// 几何槽计数（Phase 4 批次 2 拼接顶点 buffer = 每模型一个 slot；架构债务 1 方案 B 后
-	// 含内建几何的顶点槽与索引槽——一切几何都是 allocSlot 单调分配的普通消费者）。
-	// 白纹理 slot 契约断言用："纹理首槽 = 白 = 全部几何槽之后"。
-	// 计数单位 = 槽（非模型、非 primitive 数）：uploadModelMeshes 每块 +1，
-	// uploadBuiltinCube +2（顶点 + 索引）
+	/**
+	 * 几何槽计数（Phase 4 批次 2 分块拼接 = 模型每 16MB 块一个 slot；架构债务 1 方案 B 后
+	 * 含内建几何的顶点槽与索引槽——一切几何都是 allocSlot 单调分配的普通消费者）。
+	 * 白纹理 slot 契约断言用："纹理首槽 = 白 = 全部几何槽之后"（texture_pool::ensureWhiteTexture）。
+	 * 计数单位 = 槽（非模型、非 primitive 数）：uploadModelMeshes 每块 +1，
+	 * uploadBuiltinCube +2（顶点 + 索引）
+	 */
 	uint32_t geometrySlotCount = 0;
+	/** @return 几何槽计数（见 geometrySlotCount 注释）。 */
 	[[nodiscard]] uint32_t getGeometrySlotCount() const { return geometrySlotCount; }
+	/** 几何槽计数 +1（上传方在 allocSlot 成功后调用）。 */
 	void incrementGeometrySlotCount() { ++geometrySlotCount; }
-	// 下一个几何槽的期望绝对槽号（上传方 allocSlot 后比对，违例 = 几何段中间插了别的分配）
+	/**
+	 * 下一个几何槽的期望绝对槽号（= reservedSlots + HeapSlotGeometryBase + 已占几何槽数）。
+	 * 上传方 allocSlot 后比对，违例 = 几何段中间插了别的分配（契约漂移，报
+	 * DescriptorSlotOutOfBounds）；白纹理亦用此断言"纹理首槽 = 白 = 全部几何槽之后"。
+	 * @param reservedSlots descriptor heap 驱动保留槽位数（用户槽自 reservedSlots 起）
+	 * @return 下一次几何分配的期望绝对槽号
+	 */
 	[[nodiscard]] uint32_t expectedGeometrySlot(uint32_t reservedSlots) const {
 		return reservedSlots + HeapSlotGeometryBase + geometrySlotCount;
 	}
 
-	// 纹理（deque：元素地址稳定 = 描述符指针链的稳定存储介质，见 TextureAsset 注释）
-	// 放置资产记录（deque）→ 调用方在返回引用上设置自/兄弟引用后写描述符 → 资产 id
+	/**
+	 * 放置纹理资产记录（deque：元素地址稳定 = 描述符指针链的稳定存储介质，见 TextureAsset
+	 * 注释）→ 入表记录引用。调用方在返回引用上设置自/兄弟引用（imageDesc.pView /
+	 * resourceDesc.data.pImage / dst）后写描述符；资产 id 由调用方按 textureSize()-1 派生。
+	 * @param asset 待注册的纹理资产记录（GPU image + view + heap slot，按值入表）
+	 * @return 入表后的记录引用（地址稳定，随表存活）
+	 */
 	TextureAsset& emplaceTexture(TextureAsset asset) {
 		textures.push_back(std::move(asset));
 		return textures.back();
 	}
+	/** @return 按 id 引用的纹理资产记录（无界检查，调用方保证 id 有效）。 */
 	[[nodiscard]] const TextureAsset& getTexture(uint32_t id) const { return textures[id]; }
+	/** @return 纹理资产记录数（首条 id 0 按调用序契约 = 白纹理，见 ensureWhiteTexture）。 */
 	[[nodiscard]] uint32_t textureSize() const { return static_cast<uint32_t>(textures.size()); }
 
-	// 材质（批次 2：MaterialRef{material} 真引用；registerScene 按 glTF materialIndex 去重注册）
-	// find-or-add（Phase 6 instancing）：材质是纯值数据，字段全等 = 同一资产——同文件
-	// 多 entity 重复 registerScene 时返回既有 id（纹理 id 本身经 loadEmbedded 去重，
-	// 参与比较稳定）。线性扫描，材质数量级（十~百）可忽略。
+	/**
+	 * 注册材质（批次 2：MaterialRef{material} 真引用；registerScene 按 glTF materialIndex
+	 * 去重注册）。find-or-add（Phase 6 instancing）：材质是纯值数据，字段全等 = 同一资产——
+	 * 同文件多 entity 重复 registerScene 时返回既有 id（纹理 id 本身经 loadEmbedded 去重，
+	 * 参与比较稳定）。线性扫描，材质数量级（十~百）可忽略。
+	 * @return 材质资产 id（全等既有则返回既有，否则新增）。
+	 */
 	uint32_t addMaterial(const MaterialAsset& material) {
 		for (uint32_t i = 0; i < materials.size(); ++i)
 			if (materials[i].baseColor == material.baseColor &&
@@ -162,7 +211,9 @@ export class AssetTable {
 		materials.push_back(material);
 		return static_cast<uint32_t>(materials.size() - 1);
 	}
+	/** @return 按 id 引用的材质资产记录（无界检查，调用方保证 id 有效）。 */
 	[[nodiscard]] const MaterialAsset& getMaterial(uint32_t id) const { return materials[id]; }
+	/** @return 材质资产记录数。 */
 	[[nodiscard]] uint32_t materialSize() const { return static_cast<uint32_t>(materials.size()); }
 
    private:

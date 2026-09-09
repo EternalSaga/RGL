@@ -9,7 +9,8 @@
 //          GPU 端乘——env 颜色在 GPU 侧无法预乘，调光两条路线各改各 config 的一个 intensity）
 //   @48  env 参数（Phase 5.5，env.slang readEnvParams 消费）| @64 skyboxInvViewProj
 //        mat4 列主序（Phase 5.5 批次 4，sky.slang skyClipToWorld 消费）
-//   @128 对象矩阵表：mat4 列主序 × 1024，[objectIndex] = spin·world（DrawArgs.objectIndex 索引）
+//   @128 对象矩阵表：mat4 列主序 × kSceneMatrixCapacity(4096)，[objectIndex] = spin·world
+//        （DrawArgs.objectIndex = MeshRef.objectSlot，实例级槽，Phase 6 instancing）
 //
 // 世界空间光照：本文件负责 object→world 变换（位置/法线各一次矩阵读，仅光照风格消费；
 // unlit 风格不 import 本文件）。法线变换取 mat3 直接乘（假定均匀缩放——glTF 节点

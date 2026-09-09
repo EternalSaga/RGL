@@ -21,6 +21,9 @@ namespace RGL {
 // renderListSystem 定义（2026-09-02 编译提速 A 方案）：帧函数体移出接口 TU，
 // BMI 只含声明 + RenderListState；本单元是叶子边。
 
+/** 实现流水（语义/契约见接口声明）：cull 分桶（opaque/transparent，Pending 暂存）
+ * → 可见统计 → 段装配（opaque → skybox 单 draw → transparent 稳定排序）
+ * → scene data 填充 → 写 ctx。 */
 void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListState& state) {
 	auto& list = rg.ctx().get<FrameDrawList>();
 	const auto& viewProj = rg.ctx().get<ViewProjection>();
@@ -30,6 +33,8 @@ void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListS
 	const auto& env = rg.ctx().get<SceneEnv>();  // Phase 5.5（天空盒 draw 生成 + env 参数）
 	const auto& assets = resources.getAssetTable();
 
+	/** 待落段 draw（段装配前的暂存项）：call = 定稿 draw；distanceSq = 排序距离
+	 *（透明段 back-to-front 稳定排序键，距离² 免 sqrt，单调等价）。 */
 	struct Pending {
 		RGL::DrawCall call;
 		float distanceSq = 0.0f;
@@ -37,7 +42,7 @@ void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListS
 	std::vector<Pending> opaque;
 	std::vector<Pending> transparent;
 
-	// 循环前一次性 resize（资产 id 稠密 [0, meshSize)，vkresources.cppm meshSize）：
+	// 循环前一次性 resize（objectSlot 稠密 [0, NextObjectSlot.next)，Phase 6 instancing）：
 	// 循环内 resize 触发 realloc 会使先前存入 DrawCall 的 span 悬空（帧 0 确定性 UAF——
 	// span 活到 drawFrame 录制期读取，vkrenderer.cppm drawCall 的 pushData.data()）
 	// Phase 6 instancing：args/matrices 按**实例矩阵槽**（MeshRef.objectSlot）索引而非

@@ -23,6 +23,13 @@ namespace RGL {
 // 编译提速 A 方案）：函数体移出接口 TU，BMI 只留类声明；本单元是叶子边。
 //（ensure*/create* 均为启动期一次性路径，无跨 TU 内联价值）
 
+/**
+ * 初始化列表顺序与 heap 槽位布局契约见接口注释。实现补充：allocator 的 flags 显式传
+ * BDA（第 5 参）——VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT 不可省略，否则所有
+ * eShaderDeviceAddress buffer 创建返回 VK_ERROR_INITIALIZATION_FAILED（见体内注释）；
+ * 内核不创建任何内容资产（架构债务 1 方案 B——几何/纹理/scene data/RT 采样槽全部由
+ * 内容层按上传时序经 allocSlot 领取，见体内注释）。
+ */
 Resources::Resources(RGL::AppContext& vkInstance, RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain)
 	: vkInstance(vkInstance),
 		  vkDevice(vkDevice),
@@ -41,6 +48,12 @@ Resources::Resources(RGL::AppContext& vkInstance, RGL::DeviceContext& vkDevice, 
 		// 纹理、scene data、RT 采样槽全部由内容层按上传时序经 allocSlot 领取
 	}
 
+/**
+ * 幂等契约与 create info 稳定存储规则见接口注释。实现：slot =
+ * samplerHeap.getReservedSlots()（首个可用槽）；sampler 参数 linear + CLAMP_TO_EDGE、
+ * mipmapMode=NEAREST、maxLod=0（无 mipmap）；经 vkWriteSamplerDescriptorsEXT 写入
+ *（hpp raii 内部 resultCheck，失败抛 LogicError），dst 大小 = 一个槽步长。
+ */
 uint32_t Resources::ensureSharedSampler() {
 		if (sharedSamplerReady)
 			return sharedSamplerSlot;
@@ -70,6 +83,12 @@ uint32_t Resources::ensureSharedSampler() {
 		return sharedSamplerSlot;
 	}
 
+/**
+ * 幂等契约见接口注释。实现：slot = samplerHeap.getReservedSlots() + 1（共享 sampler
+ * 之后第二槽）；sampler 参数 linear mipmap（mipmapMode=LINEAR）+ maxLod = mipLevels−1
+ *（烘焙进描述符，调用点须已知环境贴图 mip 级数）；经 vkWriteSamplerDescriptorsEXT
+ * 写入。不动共享 sampler——模型纹理路径零影响。
+ */
 uint32_t Resources::ensureSkySampler(uint32_t mipLevels) {
 		if (skySamplerReady)
 			return skySamplerSlot;
@@ -98,6 +117,13 @@ uint32_t Resources::ensureSkySampler(uint32_t mipLevels) {
 		return skySamplerSlot;
 	}
 
+/**
+ * 幂等契约与调用时序见接口注释。实现：buffer usage =
+ * eShaderDeviceAddress | eStorageBuffer | eTransferDst，VMA_MEMORY_USAGE_AUTO
+ * device-local（CPU 不直接写——每帧唯一写入方 = staging copy，勿用 createGpuBuffer 的
+ * CPU_TO_GPU+MAPPED 形态，见体内注释）；slot = allocSlot("scene.data")；描述符 =
+ * eStorageBuffer，data = buffer BDA 地址范围（全 kSceneDataBytes）。
+ */
 uint32_t Resources::ensureSceneData() {
 		if (sceneDataReady)
 			return sceneDataSlot;
@@ -134,6 +160,13 @@ uint32_t Resources::ensureSceneData() {
 		return sceneDataSlot;
 	}
 
+/**
+ * 创建/重建行为契约见接口注释（RtAttachment 注释）。实现：命中 = 已存在且 extent/format
+ * 均匹配（不重建）；重建先 waitIdle（双帧在飞安全）再换 image/view、generation+1；
+ * SAMPLED_IMAGE 槽首建 allocSlot、跨 resize 复用（槽号永久有效，light 管线 baked 不失效）；
+ * 描述符指针链存 map 节点（v341 契约：imageDesc.pView 指 create info 而非 VkImageView，
+ * 见体内注释）；forward/offscreen 图不 bind 此槽 = 无副作用（行为中性）。
+ */
 std::expected<Resources::RtAttachment*, Error> Resources::ensureRtAttachment(
 		const std::string& name, vk::Extent2D extent, vk::Format format) {
 		auto it = rtAttachments.find(name);
@@ -208,6 +241,12 @@ std::expected<Resources::RtAttachment*, Error> Resources::ensureRtAttachment(
 		return &slot;
 	}
 
+/**
+ * 调用时序契约（须在几何/纹理/env 槽之后）与槽语义见接口注释。实现：名字/格式取自
+ * render_graph kGBufferAttachments 契约表（单一真相源，与 deferredRenderGraphDesc
+ * 共享，无漂移可能，见体内注释）；extent = 当前 swapchain；逐附件 ensureRtAttachment +
+ * rtHeapSlot（任一失败立即返回）；成功打日志 4 槽号（albedo/normal/position/metalrough）。
+ */
 std::expected<std::array<uint32_t, 4>, Error> Resources::ensureDeferredGBufferSlots() {
 	// 名字/格式 = render_graph kGBufferAttachments 契约表（单一真相源，与
 	// deferredRenderGraphDesc 共享（llm_debug 重渲器已退役），无漂移可能）
@@ -232,6 +271,8 @@ std::expected<std::array<uint32_t, 4>, Error> Resources::ensureDeferredGBufferSl
 	return slots;
 }
 
+/** 参数/返回见接口注释。实现：eD32Sfloat、单采样、eDepthStencilAttachment、
+ * VMA 专用内存（VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT）。 */
 std::expected<RGL::VmaImage, Error> Resources::createDepthImage(RGL::VmaAllocatorRAII& allocator, vk::Extent2D extent) {
 		vk::ImageCreateInfo depthImageInfo{};
 		depthImageInfo.imageType = vk::ImageType::e2D;
@@ -250,6 +291,8 @@ std::expected<RGL::VmaImage, Error> Resources::createDepthImage(RGL::VmaAllocato
 		return allocator.createImage(depthImageInfo, depthAllocInfo);
 	}
 
+/** 契约见接口注释。实现：e2D / eD32Sfloat / eDepth aspect / levelCount = layerCount = 1
+ *（局部临时，供构造器 / recreateDepthImage 的 raii ImageView 构造消费）。 */
 vk::ImageViewCreateInfo Resources::buildDepthView(VkImage image) {
 		vk::ImageViewCreateInfo depthViewInfo{};
 		depthViewInfo.image = image;
@@ -261,12 +304,21 @@ vk::ImageViewCreateInfo Resources::buildDepthView(VkImage image) {
 		return depthViewInfo;
 	}
 
+/**
+ * 容量构成与槽位分区契约见接口注释。实现：运行时查询
+ * VkPhysicalDeviceDescriptorHeapPropertiesEXT——统一步长 = max(bufferDescriptorSize,
+ * imageDescriptorSize)（image 描述符（SAMPLED_IMAGE）比 buffer 描述符宽：RADV 64B > 16B，
+ * docs/archive/heap_texture_research.md Q1，32B 为旧 Mesa 首测值；运行时查询，勿硬编码）；
+ * reservedSlots = ceil(minResourceHeapReservedRange / 步长)（NVIDIA = 96768B → 3024 槽
+ * @32B 统一步长，16B 步长时代旧值 6048 槽；RADV/Intel = 0）；userSlots = kUserSlotMargin；
+ * capacity = reserved + userSlots；实测值打日志。
+ */
 std::expected<RGL::VmaDescriptorHeap, Error> Resources::createDescriptorHeap() {
 		auto props = vkDevice.getPhysicalDevice().getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDescriptorHeapPropertiesEXT>();
 
 		auto& heapProps = props.get<vk::PhysicalDeviceDescriptorHeapPropertiesEXT>();
 		// Phase 3 统一步长：image 描述符（SAMPLED_IMAGE）比 buffer 描述符宽
-		//（RADV 32B > 16B，docs/archive/heap_texture_research.md Q1），slot 步长取 max（运行时查询，勿硬编码）
+		//（RADV 64B > 16B，docs/archive/heap_texture_research.md Q1；32B 为旧 Mesa 首测值），slot 步长取 max（运行时查询，勿硬编码）
 		uint32_t bufferSize = static_cast<uint32_t>(heapProps.bufferDescriptorSize);
 		uint32_t imageSize = static_cast<uint32_t>(heapProps.imageDescriptorSize);
 		uint32_t descriptorSize = std::max(bufferSize, imageSize);
@@ -287,6 +339,12 @@ std::expected<RGL::VmaDescriptorHeap, Error> Resources::createDescriptorHeap() {
 			resourceHeapAlignment);
 	}
 
+/**
+ * 背景与容量构成见接口注释。实现：步长 = samplerDescriptorSize（运行时查询）；
+ * reservedSlots = ceil(minSamplerHeapReservedRange / 步长)（NVIDIA = 512B → 16 槽 @32B，
+ * RADV/Intel = 0）；capacity = reserved + 8（固定小裕量：共享 / sky sampler 各一槽，
+ * 余量充足）；实测值打日志。
+ */
 std::expected<RGL::VmaDescriptorHeap, Error> Resources::createSamplerHeap() {
 		auto props = vkDevice.getPhysicalDevice().getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDescriptorHeapPropertiesEXT>();
 		auto& heapProps = props.get<vk::PhysicalDeviceDescriptorHeapPropertiesEXT>();

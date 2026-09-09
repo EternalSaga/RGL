@@ -13,8 +13,13 @@ export import features_generated;
 
 namespace RGL {
 
-// 设备扩展单一声明点（check 与 enable 共用——旧实现两处手工重复同一组 8 个，
-// 加一处漏一处 = 校验/启用不一致）
+/**
+ * 设备扩展单一声明点（check 与 enable 共用——旧实现两处手工重复同一组 8 个，
+ * 加一处漏一处 = 校验/启用不一致）。
+ * @note VK_EXT_descriptor_buffer / VK_KHR_shader_untyped_pointers 当前代码无显式使用，
+ * 但被其他已启用扩展隐式依赖，不可随意删除。
+ * @return 必需扩展名列表（静态存储，进程级）
+ */
 inline const std::vector<const char*>& kDeviceExtensions() {
 	static const std::vector<const char*> extensions = {
 		VK_KHR_SWAPCHAIN_EXTENSION_NAME,
@@ -28,6 +33,11 @@ inline const std::vector<const char*>& kDeviceExtensions() {
 	return extensions;
 }
 
+/**
+ * 校验设备是否支持全部必需扩展（kDeviceExtensions 清单）。
+ * @param device 待查询的物理设备
+ * @return 全部支持返回空值；缺失时返回 Error(ExtensionUnavailable, 缺失扩展名列表)
+ */
 export [[nodiscard]] std::expected<void, Error> checkDeviceExtensions(const vk::raii::PhysicalDevice& device) {
 	auto available = device.enumerateDeviceExtensionProperties();
 	const auto& required = kDeviceExtensions();
@@ -50,13 +60,20 @@ export [[nodiscard]] std::expected<void, Error> checkDeviceExtensions(const vk::
 	return {};
 }
 
+/** @return 必需设备扩展列表（与 check 同源，供 vkCreateDevice 启用）。 */
 export std::vector<const char*> getDeviceExtensions() {
 	return kDeviceExtensions();
 }
 
-// 可选扩展：仅在对应 optional feature 探测可用时追加。扩展启用与 feature 置位同源
-// （queryOptionalFeatures 先查扩展可用再读 feature 字段，缺一即 false = 整体 no-op），
-// 故此处按 OptionalFeatureSupport 位逐项追加即可——跨驱动降级不破坏启动。
+/**
+ * 设备创建用的必需 + 可选扩展列表。可选扩展：仅在对应 optional feature 探测可用时
+ * 追加。扩展启用与 feature 置位同源（queryOptionalFeatures 先查扩展可用再读 feature
+ * 字段，缺一即 false = 整体 no-op），故此处按 OptionalFeatureSupport 位逐项追加即可——
+ * 跨驱动降级不破坏启动。depthClipBase 依赖 extended_dynamic_state_3 为底座
+ *（VUID-07451，两者须同开，见函数内逐条追加）。
+ * @param opt queryOptionalFeatures 探测结果
+ * @return 待启用扩展列表（必需 + 命中的可选）
+ */
 export std::vector<const char*> getDeviceExtensions(const OptionalFeatureSupport& opt) {
 	auto extensions = kDeviceExtensions();
 	if (opt.depthClipEnable)

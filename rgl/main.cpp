@@ -30,6 +30,24 @@ import ecs;
 import rllogger;
 import vkerror;
 using namespace RGL;
+/**
+ * 启动流主函数（逐段契约见体内块注释；全景对照 AGENTS.md "main.cpp 启动流" 节）：
+ * 加载四配置（camera/scene/runtime/diagnostics；setDiagnostics 必须先于一切 GPU
+ * 对象构造）→ renderGraphSelfCheck（纯 CPU 图算法回归守卫）→ 解析 headless/llm
+ * 尺寸（headless+llm 时 headless_size 对齐 llm_shot.size）→ 建窗（headless 不建
+ * SDL 窗，surface 走 vkCreateHeadlessSurfaceEXT）→ try 内：entt::registry（全部
+ * 每帧 context）→ 初始化层 AppContext→DeviceContext（push data 容量契约检查）→
+ * Swapchain→Resources→ShaderRegistry → 渲染图配置加载 + compileRenderGraph →
+ * IBL 风格契约检查 + uploadEnvironment 闭包定义 → entities 四段循环（A0 内建 cube
+ * → A1 解析+顶点上传 → A2 纹理 → env 上传（全部纹理槽后、addModelEntry 前）→
+ * C1 管线条目烘焙 → C2 实体注册 + 矩阵容量契约 → cube entity → skybox 条目）→
+ * deferred 装配（G-buffer 堆槽 + light 条目，须先于 Renderer 构造）→ Renderer →
+ * renderSystem（llm 截图回调 + onFrame DIAG 回调）。
+ *
+ * 长生命周期对象全部 RAII（按声明逆序析构）；任何启动期错误 = 日志 + return -1。
+ * @return 0 = 正常结束（含 llm 截图完成后退出）；-1 = 配置/自检/建窗/图编译/
+ *   资产上传/渲染错误
+ */
 int main() {
 	// 配置先于窗口：llm_debug 模式影响建窗（离屏隐藏窗 + 配置尺寸）
 	auto cameraResult = loadCameraConfig("configs/camera.lua");
@@ -215,11 +233,15 @@ int main() {
 					"styles [{}] reference model_pbr_ibl but scene.lua 'environment' is disabled "
 					"(env descriptor unmapped = undefined sampling)", iblStyles));
 		}
-		// Phase 5.5 环境 cubemap（scene.lua environment 段，faces 按 Vulkan 层序 0-5，
-		// 定案表 docs/archive/phase5_5_plan.md）。**调用时序契约**：必须在模型顶点槽 + 纹理槽
-		// 全部按布局分配完之后（allocSlot 单调游标——插在之前会挤占白纹理契约槽
-		// "reserved + 2 + 模型顶点槽数"，断言漂移启动报错，2026-09-01 实测踩坑），
-		// 且先于 addModelEntry（其查 getEnvTexture 烘焙 binding 4/5）。
+		/**
+		 * Phase 5.5 环境 cubemap 上传（scene.lua environment 段，faces 按 Vulkan 层序
+		 * 0-5，定案表 docs/archive/phase5_5_plan.md）+ SceneEnv 回填（intensity/mipRange）。
+		 * **调用时序契约**：必须在模型顶点槽 + 纹理槽全部按布局分配完之后
+		 *（allocSlot 单调游标——插在之前会挤占白纹理契约槽
+		 * "reserved + 2 + 模型顶点槽数"，断言漂移启动报错，2026-09-01 实测踩坑），
+		 * 且先于 addModelEntry（其查 getEnvTexture 烘焙 binding 4/5）。
+		 * @note 文件读取 / cubemap 创建失败 → 抛 std::runtime_error
+		 */
 		auto uploadEnvironment = [&] {
 			std::array<std::string, 6> paths;
 			for (uint32_t f = 0; f < 6; ++f)
@@ -244,6 +266,14 @@ int main() {
 		// + ECS 注册。CPU 解析产物（GltfModel）活到 C（unique_ptr 稳定地址）；资产数据
 		// （buffer/slot/纹理/材质）全部在 Resources 资产表（初始化层 owner——TexturePool
 		// 局部对象 UAF 教训，docs/archive/heap_texture_research.md §12.6/§12.7）
+		/**
+		 * 实体 rootTransform 组装（scene.lua entities 的 transform 字段 → 4x4 世界矩阵）：
+		 * 先 translate(position)，再按 X→Y→Z 顺序依次 glm::rotate 后乘（rotation 为度，
+		 * 手动转弧度——GLM_FORCE_RADIANS 下 radians() 恒等），最后 scale 后乘——
+		 * 结果 = T·Rx·Ry·Rz·S（旋转应用序 X→Y→Z，同 SceneEntityDesc 契约）。
+		 * @param ent entity 声明（position/rotation/scale）
+		 * @return 实体世界变换（registerScene/registerBuiltinCube 写入 Transform 组件）
+		 */
 		auto makeRootTransform = [](const SceneEntityDesc& ent) {
 			glm::mat4 t = glm::translate(glm::mat4(1.0f), ent.position);
 			t = glm::rotate(t, glm::radians(ent.rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
@@ -251,12 +281,14 @@ int main() {
 			t = glm::rotate(t, glm::radians(ent.rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
 			return glm::scale(t, glm::vec3(ent.scale));
 		};
-		// Phase 6 instancing：entities 按 **file 去重**——同文件多 entity = 一次解析
-		// 一次上传（顶点/纹理/管线条目全部共享），每 entity 各注册一组 primitive
-		// entity（独立 Transform + 独立实例矩阵槽 objectSlot）。资产与实例分离
-		//（ECS 规范 5）：上传去重省显存，绘制仍是 per-entity per-primitive draw
-		//（真 GPU instancing——drawMeshTasksEXT 实例维 + 矩阵表批量消费——留 Phase 7
-		// 与 culling 一并议，本批先把共享资产的地基打对）。
+		/**
+		 * Phase 6 instancing：entities 按 **file 去重**——同文件多 entity = 一次解析
+		 * 一次上传（顶点/纹理/管线条目全部共享），每 entity 各注册一组 primitive
+		 * entity（独立 Transform + 独立实例矩阵槽 objectSlot）。资产与实例分离
+		 *（ECS 规范 5）：上传去重省显存，绘制仍是 per-entity per-primitive draw
+		 *（真 GPU instancing——drawMeshTasksEXT 实例维 + 矩阵表批量消费——留 Phase 7
+		 * 与 culling 一并议，本批先把共享资产的地基打对）。
+		 */
 		struct UploadedModel {
 			std::string file;
 			std::unique_ptr<GltfModel> model;
@@ -445,8 +477,12 @@ int main() {
 		Renderer vkRenderer(vkDevice, vkSwapchain, vkResources, shaderRegistry,
 			std::move(*compiledGraph));
 
-		// DIAG（可见窗 fault 排查）：隐藏窗启动、第 showAfter 帧后 SDL_ShowWindow——
-		// 若显示瞬间开始 fault = present/合成期状态触发；若全程不 fault = 可见性非根因
+		/**
+		 * DIAG（可见窗 fault 排查）每帧回调：隐藏窗启动、frame == showAfter 时
+		 * SDL_ShowWindow（恰好一次）——若显示瞬间开始 fault = present/合成期状态
+		 * 触发；若全程不 fault = 可见性非根因。headless 或 showAfter < 0 时为空
+		 * 回调（正常路径零变化）。
+		 */
 		std::function<void(uint32_t)> onFrame;
 		if (showAfter >= 0 && !headless) {
 			SDL_Window* sdlWindow = *window;

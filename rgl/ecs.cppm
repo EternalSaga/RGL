@@ -11,14 +11,19 @@ import runtime_config;  // LlmDebugConfig（2026-09-08 自 camera_config 迁入 
 
 namespace RGL {
 
-// 窗口尺寸（registry context，eventSystem 在 resize 事件写入；projectionSystem/resizeSystem 读）。
-// 无 needsResize 标志：resizeSystem 比较本值与 swapchain 实际尺寸（派生状态不存标志位）。
+/**
+ * 窗口尺寸（registry context，eventSystem 在 resize 事件写入；projectionSystem/resizeSystem 读）。
+ * 无 needsResize 标志：resizeSystem 比较本值与 swapchain 实际尺寸（派生状态不存标志位）。
+ */
 export struct WindowExtent {
 	uint32_t width = 800;
 	uint32_t height = 600;
 };
 
-// 退出请求（registry context，eventSystem 在 QUIT/ESC 写入；帧循环判定）
+/**
+ * 退出请求（registry context，eventSystem 在 QUIT/窗口关闭请求（CLOSE_REQUESTED）事件写入；
+ * 帧循环判定。ESC 不处理——退出只走窗口级事件）
+ */
 export struct AppExit {
 	bool requested = false;
 };
@@ -46,16 +51,27 @@ export struct AppExit {
 // 位置/场景尺度下整个场景在 frustum 内；无场景内容时回落 configs/camera.lua 固定值。
 
 
-// llm（可空）：llm_debug 一次性截图配置（非空 = 启用）。批处理语义：
-// 第 llm->delayFrames 帧渲染完成后回读本帧真实输出 + 存 PNG，然后置 AppExit 退出——
-// 无常驻状态、无 mailbox（config 即控制通道：agent 改 configs/runtime.lua 后重跑）。
-// llmCapture（可空，llm 非空时必传）：截图消费回调（main 传 llm_debug::writeCapturePng 包装）——
-// ecs 只数帧 + 触发 renderer.requestFrameCapture（帧内回读钩子，见 vkrenderer.cppm），
-// drawFrame 后调本回调取结果，不 import llm_debug（依赖图解耦：llm_debug 拖 vk_renderer
-// 全链，本是叶子模块，不该在 ecs 的编译前置里；2026-09-02）。
-// onFrame（DIAG，可空）：每帧 drawFrame 完成后回调（帧号从 0 起）——
-// 可见窗 GPUVM fault 排查用（runtime.lua show_after：隐藏窗启动、第 N 帧后显示，
-// 隔离"分配期状态"与"present 期状态"）；默认空 = 无回调，正常路径零变化
+/**
+ * 帧循环（main 启动流末站，运行到 AppExit 为止）：每帧 = eventSystem（事件/窗口状态）
+ * → resizeSystem（尺寸变化重建）→ 显式 system 链（camera→animation→bounds→projection→
+ * renderlist，顺序即数据流契约）→ drawFrame 盲执行 FrameDrawList。
+ *
+ * llm 批处理语义：第 llm->delayFrames 帧渲染完成后回读本帧真实输出 + 存 PNG，然后置
+ * AppExit 退出——无常驻状态、无 mailbox（config 即控制通道：agent 改
+ * configs/runtime.lua 后重跑）。
+ * @param rg registry（读写全部每帧 context：WindowExtent/AppExit/InputEvents/Camera/
+ *   SceneSpin/SceneBounds/ViewProjection/FrameDrawList）
+ * @param renderer 执行器（resize/drawFrame/帧内捕获；swapchain/resources 引用经它取）
+ * @param llm llm_debug 一次性截图配置（可空，非空 = 启用）
+ * @param llmCapture 截图消费回调（可空，llm 非空时必传；main 传 llm_debug::writeCapturePng
+ *   包装）——ecs 只数帧 + 触发 renderer.requestFrameCapture（帧内回读钩子，见
+ *   vkrenderer.cppm），drawFrame 后调本回调取结果，不 import llm_debug（依赖图解耦：
+ *   llm_debug 拖 vk_renderer 全链，本是叶子模块，不该在 ecs 的编译前置里；2026-09-02）
+ * @param onFrame （DIAG，可空）每帧 drawFrame 完成后回调（帧号从 0 起）——可见窗
+ *   GPUVM fault 排查用（runtime.lua show_after：隐藏窗启动、第 N 帧后显示，隔离"分配期
+ *   状态"与"present 期状态"）；默认空 = 无回调，正常路径零变化
+ * @return void；resize/drawFrame 失败或 llm 截图失败 → Error（正常 AppExit 退出 = 成功）
+ */
 export std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer& renderer,
 	const RGL::LlmDebugConfig* llm = nullptr,
 	std::function<std::expected<std::string, Error>(RGL::Renderer&)>

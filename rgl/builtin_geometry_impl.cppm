@@ -25,7 +25,17 @@ namespace RGL {
 
 namespace {
 
-// 内建几何 = 与模型同规格的 BDA storage buffer（CPU→GPU mapped，创建期一次写满）
+/**
+ * 内建几何 = 与模型同规格的 BDA storage buffer（CPU→GPU mapped，创建期一次写满）：
+ * eShaderDeviceAddress + eStorageBuffer，VMA CPU_TO_GPU + 常驻映射，创建期 memcpy 写满
+ *（几何数据启动期定死，无运行期更新路径）。
+ * @param res 资源层（VMA 分配器）
+ * @param device 设备（createBufferWithAddress）
+ * @param data CPU 源数据（顶点 / 索引数组）
+ * @param bytes 字节数（= data 大小）
+ * @param name 日志名（如 "cube.vertices"）
+ * @return VmaBuffer（带 BDA 设备地址）；失败 Error（VMA buffer 创建）
+ */
 std::expected<RGL::VmaBuffer, Error> makeGeometryBuffer(RGL::Resources& res,
 	vk::raii::Device& device, const void* data, vk::DeviceSize bytes, const char* name) {
 	vk::BufferCreateInfo info{};
@@ -47,9 +57,19 @@ std::expected<RGL::VmaBuffer, Error> makeGeometryBuffer(RGL::Resources& res,
 	return std::move(*result);
 }
 
-// 一个几何 heap 槽 + storage buffer 描述符写入（期望值 = reserved + 已占几何槽数，
-// 违例 = 几何段中间插了别的分配 = 契约漂移；计数的意义在下游"纹理首槽 = 白 =
-// 全部几何槽之后"断言，见 ensureWhiteTexture）
+/**
+ * 一个几何 heap 槽 + storage buffer 描述符写入（eStorageBuffer，地址范围 = buffer BDA + 字节数）。
+ * 期望槽号 = reserved + 已占几何槽数（AssetTable::expectedGeometrySlot），违例 = 几何段中间
+ * 插了别的分配 = 契约漂移，直接报 DescriptorSlotOutOfBounds；计数的意义在下游"纹理首槽 = 白 =
+ * 全部几何槽之后"断言（见 ensureWhiteTexture）。
+ * @param res 资源层（统一 slot 分配器 + 资产表几何槽计数）
+ * @param device 设备（writeResourceDescriptorsEXT）
+ * @param buffer 几何 buffer（设备地址 + 大小 → 描述符地址范围）
+ * @param bytes buffer 字节数（= 描述符地址范围长度）
+ * @param name slot 日志名
+ * @return 领取的绝对 heap 槽号（geometrySlotCount +1）；失败 Error（slot 越界 /
+ *   布局漂移 / slot 地址查询失败）
+ */
 std::expected<uint32_t, Error> allocGeometrySlot(RGL::Resources& res, vk::raii::Device& device,
 	const RGL::VmaBuffer& buffer, vk::DeviceSize bytes, const char* name) {
 	auto& assets = res.getAssetTable();

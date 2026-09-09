@@ -5,13 +5,14 @@ import vkerror;
 
 namespace RGL {
 
-// 诊断开关（configs/diagnostics.lua，全可选回落默认 = 全关）：散落在低层模块深处的
-// 调试旋钮，经**单例**承载（仿 RLLogger::getInstance，见 logger/）——避免给
-// uploadTexture/loadEmbedded/AppContext/Renderer 等一串签名加参数。main 启动最早期
-// loadDiagnosticsConfig → setDiagnostics 填充，此后只读。
-//
-// 这些多为历史排查（4K 黑屏 UAF、可见窗 dmabuf fault、sRGB 嫌疑）留下的门，默认全关
-// 不影响正常路径；env 机制已于 2026-09-08 全面转配置文件（用户偏好：不用环境变量）。
+/**
+ * 诊断开关（configs/diagnostics.lua，全可选回落默认 = 全关）：散落在低层模块深处的
+ * 调试旋钮，经**单例**承载（仿 RLLogger::getInstance，见 logger/）——避免给
+ * uploadTexture/loadEmbedded/AppContext/Renderer 等一串签名加参数。main 启动最早期
+ * loadDiagnosticsConfig → setDiagnostics 填充，此后只读。
+ * 这些多为历史排查（4K 黑屏 UAF、可见窗 dmabuf fault、sRGB 嫌疑）留下的门，默认全关
+ * 不影响正常路径；env 机制已于 2026-09-08 全面转配置文件（用户偏好：不用环境变量）。
+ */
 export struct DiagnosticsConfig {
 	bool noVvl = false;                 // 关 VVL（descriptor heap 双写排查，vkinstance）
 	bool noHdr = false;                 // 强制 SDR surface 格式（HDR 后缓冲 fault 排查，vulkan_window）
@@ -26,12 +27,23 @@ export struct DiagnosticsConfig {
 	bool textureForceUnorm = false;     // upload 强制 UNORM（sRGB 嫌疑隔离）
 };
 
-// 单例访问器（main setDiagnostics 后，深栈点 diagnostics() 只读）
+/**
+ * 单例访问器（main setDiagnostics 后，深栈点 diagnostics() 只读）。
+ * @return 进程级 DiagnosticsConfig 引用
+ */
 export DiagnosticsConfig& diagnostics();
+/**
+ * 填充诊断单例（main 启动期调用一次，此后只读）。
+ * @param cfg 解析好的诊断配置
+ */
 export void setDiagnostics(const DiagnosticsConfig& cfg);
 
-// 从 Lua 加载诊断配置（sol2 沙箱同 camera_config：缺文件 = 全默认 + warn；类型错误 = unexpected）。
-// 纯解析（不触碰单例），main 负责 setDiagnostics(*result)。
+/**
+ * 从 Lua 加载诊断配置（sol2 沙箱同 camera_config：缺文件 = 全默认 + warn；类型错误 = unexpected）。
+ * 纯解析（不触碰单例），main 负责 setDiagnostics(*result)。
+ * @param path 配置文件路径
+ * @return 解析好的 DiagnosticsConfig；脚本/类型错误返回 ConfigLoadFailed
+ */
 export [[nodiscard]] std::expected<DiagnosticsConfig, Error> loadDiagnosticsConfig(std::string_view path);
 
 }  // namespace RGL
