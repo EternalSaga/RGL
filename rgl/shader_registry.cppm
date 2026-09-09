@@ -74,6 +74,12 @@ export class ShaderRegistry {
 	 * @return 条目 const 引用（无界检查，调用方保证下标有效）
 	 */
 	[[nodiscard]] const PipelineEntry& entry(uint32_t index) const { return entries[index]; }
+	/**
+	 * 全管线表 const 视图（Phase 7b：DGC execution set 构造期逐条目一次性写 mesh/frag
+	 * shader——容量 = 2×entries.size()）。
+	 * @return entries 的 const span（下标 = 绘制契约 = 资产 pipelineIndex）
+	 */
+	[[nodiscard]] std::span<const PipelineEntry> entriesView() const { return entries; }
 
 	/**
 	 * 模型管线条目（资产上传期）：用管线规格创建 RenderPipeline，binding mapping 显式烘焙

@@ -1,7 +1,8 @@
 # RGL 路线图
 
 > **状态**：现行（开发路线图；当前节点 = Phase 7 进行中：D1 延迟单灯 `70ce9d1` + D3 多灯/反射 +
-> 批次 4 CPU culling 完成，批次 5=7b / 批次 6 文档销账待续；并行工作流 = 架构债务 1+2 修复
+> 批次 4 CPU culling + **批次 5=7b GPU culling/DGC 完成（2026-09-09，forward+deferred BIT-IDENTICAL；
+> DGC 路径待 NVIDIA 机实测）**，批次 6 文档销账待续；并行工作流 = 架构债务 1+2 修复
 > （scene→scene_context / cube 出内核，见 [架构债务-依赖方向审计.md](架构债务-依赖方向审计.md)，`b1788e0`））
 
 Phase 0–6 已全部完成（各阶段结论一段话归档于下，实施细节与计划-实现偏离的权威记录在
@@ -96,19 +97,23 @@ present/waitStage 派生）；drawFrame 手写布局转换清零、pass 循环�
 | **2** Light pass + sampleRead 接线 | SAMPLED_IMAGE 描述符入 heap、全屏 light pass GGX、forward/deferred 切换（选路已转 render_graph.lua variant，2026-09-08） | **✅ 核心完成** | ①light pass 简化 IBL ③skybox 背景合成 |
 | **3** 多灯 + 灯数据并入反射（D3） | 第 4 条反射管线 `GpuLight`、scene data 尾区灯数组 @262272（头不动保 forward diff0）、`lights` 配置、逐灯循环 + 点光衰减 | **✅ 核心完成** | 灯 entity 化（ECS 规范 3）；forward `LightDataGpu@0` 头仍手工双源；shadow map |
 | **4** CPU frustum culling | 逐图元 node-local `CullSphere`、Gribb-Harman 6 面（z∈[0,1]）、可见统计 | **✅ 核心完成** | 真 AABB（现球近似，够 frustum） |
-| **5** GPU culling / DGC | `vk_indirect_commands`、compute cull、NVIDIA/RADV 双路 | **⬜ 未开工** | 按 D5 归 **Phase 7b** |
-| **6** 文档销账 | — | **🔶 部分** | 完整销账待批次 5 |
+| **5** GPU culling / DGC | `vk_indirect_commands`、compute cull、NVIDIA/RADV 双路（读回重放）、CPU 剔除降兜底+对账 | **✅ 核心完成**（2026-09-09） | DGC 路径待 NVIDIA 机运行时实测（本机 RADV graphics 侧不可用，走读回重放） |
+| **6** 文档销账 | — | **🔶 部分** | 完整销账待批次 5 收尾（devlog/research/roadmap/AGENTS 已随 5d 更新） |
 
-**净结论**：延迟渲染单灯核心 + 多灯 + CPU culling 跑通——deferred 逐灯循环（定向+点光、per-light
-颜色、距离衰减）headless 零 VVL error；forward 只读 `lights[0]` diff0 不变；CPU 剔除默认视角
-1571/20、背向 0/1591、开剔除图像与不剔一致（保守球不误剔）。验证方法学注：**BIT-IDENTICAL
-比对须同会话双构建（stash 基线 vs 改动），跨日全量重建有 ±1 LSB 噪声**（调试历史 2026-09-08）。
+**净结论**：延迟渲染单灯核心 + 多灯 + **GPU culling（7b）** 跑通——deferred 逐灯循环（定向+点光、
+per-light 颜色、距离衰减）headless 零 VVL error；forward 只读 `lights[0]` diff0 不变；GPU culling
+= 默认路径（culling compute + DGC execute / 读回重放双路，能力门控），CPU 剔除降为兜底+每帧对账
+基准（默认视角 GPU=CPU=1571、背向 0/0 match）。验证方法学注：**BIT-IDENTICAL 比对须同会话双构建
+（stash 基线 vs 改动），跨日全量重建有 ±1 LSB 噪声**（调试历史 2026-09-08）。DGC 路径本机
+（RADV graphics 侧不可用）未运行时实测，代码经 VVL 审查+编译绿。
 
 ### 剩余计划
 
-- **批次 5 = Phase 7b GPU culling**（`VK_EXT_device_generated_commands`）：culling compute 输出
-  per-visible sequence → NVIDIA execution-set 路径 / RADV `vkCmdDrawMeshTasksIndirectCountEXT`
-  回退；能力门控双路选路。设计细节与双驱动实测 → [device_generated_commands_research.md](device_generated_commands_research.md) + archive/phase7_plan.md。
+- ~~**批次 5 = Phase 7b GPU culling**~~ **已完成（2026-09-09）**：culling compute（`gpu_cull` +
+  `cull.comp.slang`）+ `vk_indirect_commands`（DGC RAII，8 入口点 PFN via `vkGetDeviceProcAddr`）+
+  `vkrenderer` 双路（DGC execute / **读回重放**——IndirectCount 无 per-draw push data 故弃用，
+  见 research §4.4 勘误）；能力门控（`DgcSupport.graphicsIndirect`）。DGC 路径待 NVIDIA 机实测。
+  设计细节与双驱动实测 → [device_generated_commands_research.md](device_generated_commands_research.md)。
 - **批次 2 refine 残二**：deferred light pass 简化 IBL、skybox 背景合成进 deferred 图
   （选路已转正：render_graph.lua `variant`，2026-09-08 重构批次 3）。
 - **灯 entity 化**（ECS 规范 3）+ forward `LightDataGpu@0` 头并入反射（Phase 7 多灯已把灯数组
@@ -118,7 +123,10 @@ present/waitStage 派生）；drawFrame 手写布局转换清零、pass 循环�
 ### 设计决策（现行）
 
 - 延迟渲染为可选路径，不破坏 forward 管线（render_graph.lua `variant` 选路，forward diff0 是硬约束）。
-- GPU culling = 同一 culling 输出驱动两条提交路径，驱动能力升级后自动切换，不改 culling 逻辑。
+- GPU culling = **默认路径**（扩展 required，无开关），同一 culling 输出（CPU 算 mvp 进序列 +
+  GPU 只写可见性）驱动两条提交路径：DGC execute（NVIDIA）/ 读回重放（RADV），能力位自动切换，
+  不改 culling 逻辑；CPU 剔除降为兜底+每帧对账基准（不一致告警不中断）。mvp 必须 CPU 算
+  （GPU float4x4 乘法 FMA 收缩序与 glm 无位级契约 → 保 forward diff0 硬约束）。
 - CullSphere（node-local 剔除球）已随批次 4 落地——原"AABB 组件 Phase 2 开始积累"以球近似兑现。
 
 ---
@@ -126,7 +134,7 @@ present/waitStage 派生）；drawFrame 手写布局转换清零、pass 循环�
 ## 后续走向
 
 ```
-Phase 7 剩余（批次 5 = 7b GPU culling / 批次 2 refine / 灯 entity 化 / 批次 6 销账）
+Phase 7 剩余（批次 2 refine / 灯 entity 化 / 批次 6 销账；批次 5=7b GPU culling 已完成 2026-09-09）
     ↓
 Phase 8：纹理接缝（normal/ORM 贴图采样、BC5 Z 重建、法线绿通道、线性 mip 质量）
     ↓

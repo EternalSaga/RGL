@@ -5,6 +5,7 @@ export module frame_draw_list;
 import rlstd;
 import vk_resources;
 import lights_types_generated;
+import material_types_generated;  // DrawArgs（Phase 7b cullArgs：GPU culling 候选 args）
 
 namespace RGL {
 
@@ -52,6 +53,19 @@ export struct SceneFrameData {
 };
 
 /**
+ * 每帧 GPU culling 输入（Phase 7b 批次 5；render system 产出 → drawFrame 经 push
+ * constant 传给 culling compute）：planes 与 CPU 剔除路径同源同值（extractFrustum
+ * 产物）——GPU/CPU 对账基准一致的保证。布局（cull.comp.slang CullPush 同字节，
+ * scalar layout 无尾 pad = 100B ≤ maxPushDataSize 256B）：
+ *   @0 planes[6] float4 | @96 sequenceCount u32（mvp 不经 push——CPU 算进序列）
+ */
+export struct CullFrameInput {
+	glm::vec4 planes[6]{};
+	uint32_t sequenceCount = 0;
+};
+static_assert(sizeof(CullFrameInput) == 100, "CullFrameInput layout drifted from cull.comp.slang CullPush");
+
+/**
  * 每帧绘制列表：顺序 = 绘制顺序（Phase 5 透明排序已落地：不透明段在前、透明段按
  * 相机距离 back-to-front 排；Phase 7 culling 输出的落点）。
  * Phase 5.5 批次 4 三段：opaque = [0, skyboxStart)，skybox = [skyboxStart,
@@ -65,6 +79,13 @@ export struct FrameDrawList {
 	uint32_t skyboxStart = 0;       // 无天空盒 = 与 transparentStart 重合（空段跳过）
 	uint32_t transparentStart = 0;
 	SceneFrameData sceneData;
+	// Phase 7b：GPU culling 每帧输入（render_list 与 CPU 剔除同源填充；GpuCull 未激活
+	// 时 Renderer 忽略——始终填充，零条件分支）
+	CullFrameInput cullInput;
+	// Phase 7b：GPU culling 候选 args（**逐 candidate、candidate 序**——与 GpuCull 表同序
+	// 同守卫，render_list 与 main C3 双处契约）。mvp 在剔除测试**前**算（被剔候选也要有
+	// 值——序列 CPU 侧全量装配）；重放/DGC 消费 = 与 CPU drawOne 位级同源的 DrawArgs。
+	std::vector<RGL::DrawArgs> cullArgs;
 };
 
 }  // namespace RGL

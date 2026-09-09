@@ -14,6 +14,8 @@ import vk_resources;
 import VmaRaii;
 import shader_registry;  // Phase 4 批次 2：管线表迁出（PipelineEntry/ShaderRegistry，零 entt）
 import shader;
+import gpu_cull;  // Phase 7b：GPU culling 子系统（culling compute + 读回；main 先于 Renderer 构造）
+import vk_indirect_commands;  // Phase 7b：DGC 命令生成（NVIDIA 路；main 按能力位条件构造）
 import vkerror;
 import diagnostics;  // no_present 诊断单例（configs/diagnostics.lua）
 
@@ -72,9 +74,14 @@ export class Renderer {
 	 * @param vkResources 资源层（descriptor heap / 深度图 / scene data / offscreen RT）
 	 * @param shaderRegistry 管线表（条目查找 + bindShaders；main 先于 Renderer 构造）
 	 * @param renderGraph 编译渲染图（构造后不变；不可解析启动期抛出）
+	 * @param gpuCull GPU culling 子系统（Phase 7b；main 先于 Renderer 构造。inactive
+	 *   （候选表空）时 drawFrame 全路径不碰 culling = 行为中性）
+	 * @param dgc DGC 命令生成子系统（Phase 7b NVIDIA 路；main 仅 graphicsIndirect=true
+	 *   时构造，否则 null → opaque 段走读回重放）
 	 */
 	Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RGL::Resources& vkResources,
-		RGL::ShaderRegistry& shaderRegistry, RGL::CompiledRenderGraph renderGraph);
+		RGL::ShaderRegistry& shaderRegistry, RGL::CompiledRenderGraph renderGraph,
+		RGL::GpuCull* gpuCull, RGL::DgcCommands* dgc);
 	/** @return 交换链层引用（extent / recreate / 后缓冲）。 */
 	RGL::Swapchain& getSwapchainRef() const { return *swapchain; }
 	/** @return 资源层引用（深度图 / descriptor heap / RT 缓存 / scene data）。 */
@@ -153,6 +160,14 @@ export class Renderer {
 	/** 批量分配 MAX_FRAMES_IN_FLIGHT 个 primary command buffer（每帧 slot 一个，
 	 * 每帧 reset() 后重新录制）。 */
 	void allocateCommandBuffers();
+	/** Phase 7b：culling 数据通路独立命令缓冲（每帧 slot 一个；GpuCull 激活时构造期
+	 * 分配，inactive = 空）。与主 CB 分离的原因 = 读回重放需要"提交 cull → 同步等 →
+	 * 读回 → 再录 opaque 重放"的帧内停顿，同一 CB 无法 end-后-续录。 */
+	void allocateCullCommandBuffers();
+	/** Phase 7b：GPU/CPU 剔除结果对账（readCullResult 后调用）：逐 candidate 可见集合
+	 * vs CPU opaque 段（objectSlot 多重集）比对，计数/失配变化时打日志（静止不刷屏）。
+	 * 5b 验收信号 = match 恒 true；5c 读回重放后本函数是正确性哨兵。 */
+	void reconcileGpuCull(const FrameDrawList& list);
 	/**
 	 * scene data staging ring（Phase 5 批次 2，全项目首个每帧动态 GPU 数据）：
 	 * ×MAX_FRAMES_IN_FLIGHT 常驻映射 host buffer。写安全 = 帧 slot 复用规则——
@@ -179,6 +194,10 @@ export class Renderer {
 	RGL::ShaderRegistry& registry;
 	// Phase 6：编译渲染图（构造传入，main 启动期 compileRenderGraph 产出，之后不变）
 	RGL::CompiledRenderGraph renderGraph;
+	// Phase 7b：GPU culling 子系统（main 持有，构造序先于 Renderer → 析构序其后安全）；
+	// 持引用不持所有权
+	RGL::GpuCull* gpuCull;
+	RGL::DgcCommands* dgc;  // DGC 命令生成（NVIDIA 路；null = 读回重放）
 	// attachment 真实布局追踪（按图 slot 索引，跨帧持久）：帧首 barrier 的 oldLayout
 	// 来源（plan.oldLayoutDiscard=false 者用本值；swapchain/depth 走帧首丢弃规则
 	// 不查询）；录制期随每条物化 barrier 更新为 plan.newLayout。
@@ -252,6 +271,11 @@ export class Renderer {
 	std::vector<vk::raii::Fence> inFlightFences;                // 命令缓冲执行完（挂 queueSubmit）
 	std::vector<vk::raii::Fence> presentFences;                 // present 完成（presentInfo.pNext 挂）
 	std::vector<vk::raii::CommandBuffer> commandBuffers;        // primary 命令缓冲（每帧 slot 一个）
+	// Phase 7b：culling 数据通路命令缓冲（每帧 slot 一个；inactive = 空，见
+	// allocateCullCommandBuffers）+ 对账日志节流状态
+	std::vector<vk::raii::CommandBuffer> cullCommandBuffers;
+	uint32_t lastReconcileVisible = 0xFFFFFFFF;  // 对账日志节流（计数/失配变化才打）
+	bool lastReconcileMatch = false;
 };
 
 }  // namespace RGL

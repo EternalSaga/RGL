@@ -1,10 +1,12 @@
 # VK_EXT_device_generated_commands 扩展研究记录
 
-> **状态**：调研（Phase 7 GPU culling 依据；双驱动实测结论在 Phase 7 实现前持续有效）
+> **状态**：调研 + 实施记录（Phase 7b 批次 5 已按本文落地，2026-09-09；双驱动实测结论持续有效）
 
-**日期**: 2026-08-22
+**日期**: 2026-08-22（实施更新 2026-09-09）
 **环境**: Gentoo, Vulkan 头文件 1.4.341 (系统), loader 1.4.341, RADV ICD 1.4.354 / NVIDIA 610.57.04
-**结论**: 双驱动均支持该扩展（rev 1，feature 全真），本地头文件 + `vulkan.hpp`（RAII + Device/CommandBuffer wrapper）API 表面齐备。但存在**关键驱动不对称**：RADV 仅支持 compute 侧 indirect execution set（graphics 侧 per-sequence shader 绑定 / mesh draw 不支持），NVIDIA 全支持（含 MESH+FRAGMENT shader object 绑定）。**决策：随 Phase 7（延迟渲染）作为 culling 前置子阶段引入**，graphics 侧路径必须带 CPU 回退（`vkCmdDrawMeshTasksIndirectCountEXT`，属已启用的 `VK_EXT_mesh_shader`，双驱动可用）。
+**结论**: 双驱动均支持该扩展（rev 1，feature 全真）。但存在**关键驱动不对称**：RADV 仅支持 compute 侧 indirect execution set（graphics 侧 per-sequence shader 绑定 / mesh draw 不支持），NVIDIA 全支持（含 MESH+FRAGMENT shader object 绑定）。**决策：随 Phase 7（延迟渲染）作为 culling 前置子阶段引入**，graphics 侧路径必须带 CPU 回退（~~`vkCmdDrawMeshTasksIndirectCountEXT`~~ **勘误 2026-09-09：IndirectCount 无 per-draw push data 机制，回退改为读回重放，见 §4.3**）。
+
+**实施状态（2026-09-09，Phase 7b 批次 5）**：已落地 `gpu_cull`（culling compute）+ `vk_indirect_commands`（DGC RAII）+ `vkrenderer` 双路（DGC execute / 读回重放），能力门控；forward+deferred BIT-IDENTICAL 验收通过（同会话双构建）。本机（Strix Halo 核显，RADV 26.2.1）graphicsIndirect=false → 实际走读回重放；DGC 路径需 NVIDIA 机运行时实测。实施偏离与 v357 API 差异见 §4.4。
 
 ---
 
@@ -165,32 +167,62 @@ layout 规则：offset 单调不减、4 字节对齐、action token 必须最后
 
 ### 4.3 集成设计要点（P7 落地时）
 
-**Layout（token 序列，以 graphics 侧 mesh 路径为例）**：
+**Layout（token 序列，graphics 侧 mesh 路径；实施值 2026-09-09）**：
 
 ```
-[0] EXECUTION_SET   (shader object 模式, stages = MESH|FRAGMENT)  → 数据: u32 slot 索引（per-material shader）
-[1] PUSH_DATA       (offset 对齐 4)                              → 数据: RGL::DrawArgs（64B，逐序列独立 MVP/材质参数）
-[2] DRAW_MESH_TASKS (action token, 必须最后)                      → 数据: VkDrawMeshTasksIndirectCommandEXT
-indirectStride ≥ 各 token 数据总长（NVIDIA 无上限；RADV 上限 2048B）
+[0]  EXECUTION_SET   (shader object 模式, stages = MESH|FRAGMENT)  → 数据: u32[] 每 stage-bit 一个索引（LSB→MSB：@0=frag slot, @4=mesh slot，共 8B）
+[8]  PUSH_DATA       (offset 对齐 4)                              → 数据: RGL::DrawArgs（100B，逐序列独立 MVP/材质参数；非 64B——DrawArgs 超集含 baseColor/rm/objectIndex）
+[108] DRAW_MESH_TASKS (action token, 必须最后)                    → 数据: VkDrawMeshTasksIndirectCommandEXT
+indirectStride = 120B（≥ 各 token 数据总长；NVIDIA 无上限；RADV 上限 2048B）
 ```
 
-**Execution set（shader object 模式）**：`vkCreateIndirectExecutionSetEXT{type=SHADER_OBJECTS, info.pShaderInfo{pInitialShaders=初始 mesh+frag 组合, maxShaderCount=min(材质数, maxIndirectShaderObjectCount)}}` + `vkUpdateIndirectExecutionSetShaderEXT` 填充各 slot；`pipelineLayout = VK_NULL_HANDLE`（descriptor heap 已启用）。注意：shader object 的 binding mapping（`VkDescriptorSetAndBindingMappingEXT`）仍按 `shader.cppm:38-56` 现有方式在各 shader 创建时设置，execution set 不改变这一点。
+**Execution set（shader object 模式）**：`vkCreateIndirectExecutionSetEXT{type=SHADER_OBJECTS, info.pShaderInfo{pInitialShaders, maxShaderCount=min(条目数×2, maxIndirectShaderObjectCount)}}`；**每个管线条目占 2 个 slot（2j=frag, 2j+1=mesh）**——`VkWriteIndirectExecutionSetShaderEXT` 只有 `{index, shader}` 无 stage 字段，唯一 index（VU）约束下按"每 stage-bit 一位"排布；`pipelineLayout = VK_NULL_HANDLE`（descriptor heap 已启用）。注意：shader object 的 binding mapping（`VkDescriptorSetAndBindingMappingEXT`）仍按 `shader.cppm` 现有方式在各 shader 创建时设置，execution set 不改变这一点。
 
-**帧流程**（culling → 执行）：
+**帧流程**（culling → 执行，实施版）：
 
 ```
-① culling compute dispatch（新 Slang shader，非反射目标则不接 types_generated）
-   输入: 实体 transform（ByteAddressBuffer）+ AABB + 视锥
-   输出: indirect 数据 buffer（per-sequence：slot 索引 + DrawArgs + mesh task count）
-        + sequence count buffer（32 位）
-② barrier: COMPUTE_SHADER → COMMAND_PREPROCESS（eCommandPreprocess 2）
-③ vkCmdPreprocessGeneratedCommandsEXT（或并入 ④，isPreprocessed=false）
-④ vkCmdExecuteGeneratedCommandsEXT → 设备端发出 N 个 mesh draw（各自 shader + push data）
+① CPU 预写：seqStaging（MAPPED ring×2）逐 candidate 写 execSlot(2j/2j+1) + DrawArgs（CPU 算 mvp）+ meshCmd(x=groupCount)
+   → staging→sequence 拷贝（cull pass 内）
+② culling compute dispatch（cull.comp.slang，push 100B = planes[6]+sequenceCount）
+   输入: CullEntry 表 + 对象矩阵表（全量刷新，见 devlog 矩阵表陈值 bug）
+   输出: 序列 meshCmd.x（可见=groupCount / 不可见=0）+ count buffer（visible@0, total@4）
+③ barrier: COMPUTE_SHADER → COMMAND_PREPROCESS（eCommandPreprocessEXT）
+④ vkCmdPreprocessGeneratedCommandsEXT（sequenceCountAddress=0 → 用 maxSequenceCount）
+⑤ render pass 内 vkCmdExecuteGeneratedCommandsEXT（VK_TRUE, sequenceCountAddress=count BDA+4）→ 设备端发出 N 个 mesh draw
 ```
 
-**CPU 回退路径（RADV / 未来其他驱动）**：同一份 culling compute 输出改为标准 `VkDrawMeshTasksIndirectCommandEXT` 序列，CPU 侧 `vkCmdDrawMeshTasksIndirectCountEXT`（`VK_EXT_mesh_shader` 提供，vulkan_core.h:25241-25263，双驱动可用）；count 回读或保守上界（+ `deviceGeneratedCommandsMultiDrawIndirectCount` 思路）。两路径共享同一 culling compute 与数据布局，只换提交方式。
+**CPU 回退路径（RADV / 未来其他驱动）——读回重放（勘误 2026-09-09，取代原 IndirectCount 方案）**：
+`vkCmdDrawMeshTasksIndirectCountEXT` **不可行**：该命令无 per-draw push data 机制——所有 indirect
+draw 共享当前 push region，mesh shader 拿不到 per-draw DrawArgs（mvp/objectIndex 等），而项目
+push constant 契约要求每 draw 独立 DrawArgs。改法 = **读回重放**：culling compute 后 CPU 读回
+count + 序列可见性（meshCmd.x），逐可见 candidate 重放 `vkCmdPushDataEXT` + `vkCmdDrawMeshTasksEXT`
+（与 forward 现有提交路径逐位一致 → BIT-IDENTICAL 天然成立）。两路径共享同一 culling compute
+与同一序列布局（CPU args + GPU 可见性），只换提交方式。
 
-**能力门控**：`DeviceContext` 查询属性后派生 `supportsGraphicsIndirectCommands`（3.3 式 3），culling 子系统据此选路；compute 侧（DISPATCH 序列）双驱动均可用，可先行。
+**能力门控**：`DeviceContext::queryDgcSupport()` 派生 `DgcSupport{graphicsIndirect,
+computeIndirect, maxIndirectShaderObjectCount}`（graphicsIndirect = `shaderStagesShaderBinding`
+与 MESH|FRAGMENT 交集非空），`vkrenderer` 据此选 DGC execute / 读回重放；culling compute
+本身两驱动都跑（默认路径，GPU culling 无配置开关）。
+
+### 4.4 实施记录（2026-09-09，v357 系统头 + 本项目落地）
+
+**v357 API 面比本文原记录（1.4.341）窄**（字段真相源 = 系统头 `/usr/include/vulkan/vulkan_core.h`）：
+
+| 差异 | 原记录（1.4.341） | v357 实际 |
+|---|---|---|
+| execution set 绑定 | `vkCmdBindIndirectExecutionSetEXT` | **不存在**——经 `VkGeneratedCommandsInfoEXT.indirectExecutionSet` 传 |
+| sequence 地址 | `vkCmdSetGeneratedCommandsSequenceAddressEXT` | **不存在**——`info.indirectAddress/indirectAddressSize` |
+| count buffer | `vkCmdSetGeneratedCommandsSequenceCountBufferEXT` | **不存在**——`info.sequenceCountAddress`（BDA；0 → 用 maxSequenceCount） |
+| `VkWriteIndirectExecutionSetShaderEXT` | — | `{sType, pNext, index, shader}` **无 stage 字段** → 扁平 2j/2j+1 排布 |
+| EXECUTION_SET token 数据 | "u32 slot 索引" | **u32[] 每 stage-bit 一位，LSB→MSB**（MESH|FRAGMENT → @0=frag, @4=mesh） |
+
+**loader 不导出 DGC 符号**：系统 `libvulkan.so`（1.4.357）无 `vkCreateIndirectCommandsLayoutEXT`
+等任何 DGC 全局符号 → **8 个入口点全走 `vkGetDeviceProcAddr`**（PFN 模式同
+`texture_upload` 的 `writeResourceDescriptorsEXT` 先例）；BDA 用 core `vkGetBufferDeviceAddress`。
+
+**BIT-IDENTICAL 设计约束**（forward diff0 硬约束推导）：mvp 必须 **CPU 算进序列**（GPU 的
+float4x4 乘法 FMA 收缩序与 glm 无位级契约）——GPU 只覆盖可见性（meshCmd.x）+ count；
+DGC 路与重放路消费同一序列。详见 `phase7_devlog.md` 2026-09-09 条目"设计修正"。
 
 ---
 
@@ -206,6 +238,9 @@ indirectStride ≥ 各 token 数据总长（NVIDIA 无上限；RADV 上限 2048B
 ---
 
 ## 六、引入步骤（计划随 Phase 7，已写入 `docs/next_roadmap.md`）
+
+**全部完成（2026-09-09，Phase 7b 批次 5）**：1-6 均已落地，实际实现与 §4.4 勘误一致
+（PFN 解析、读回重放取代 IndirectCount、2j/2j+1 execution set 排布）。
 
 | 步骤 | 内容 | 验收 |
 |---|---|---|

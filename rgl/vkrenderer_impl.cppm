@@ -18,11 +18,13 @@ import vk_swapchain;
 import vk_resources;
 import shader_registry;
 import shader;
+import gpu_cull;
 import vulkan_utils;
 import VmaRaii;
 import frame_draw_list;
 import model_types_generated;
 import lights_types_generated;
+import material_types_generated;  // DrawArgs（GPU culling 对账经 objectIndex@96 映射 CPU draw）
 import features;
 import render_graph;
 
@@ -102,12 +104,15 @@ std::pair<uint32_t, uint32_t> segmentRange(std::string_view drawSource,
 }  // namespace
 
 Renderer::Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RGL::Resources& vkResources,
-		RGL::ShaderRegistry& shaderRegistry, RGL::CompiledRenderGraph renderGraph)
+		RGL::ShaderRegistry& shaderRegistry, RGL::CompiledRenderGraph renderGraph,
+		RGL::GpuCull* vkGpuCull, RGL::DgcCommands* vkDgc)
 	: vkDevice(vkDevice),
 	  swapchain(&vkSwapchain),
 	  resources(&vkResources),
 	  registry(shaderRegistry),
 	  renderGraph(std::move(renderGraph)),
+	  gpuCull(vkGpuCull),
+	  dgc(vkDgc),
 	  attachmentLayouts(this->renderGraph.attachments.size(), vk::ImageLayout::eUndefined),
 	  // edS3：depth clip 动态状态能力（feature 探测位，启动期一次；未支持 = 恒 false no-op）
 	  depthClipDynamic(vkDevice.getOptionalFeatures().depthClipEnable),
@@ -150,8 +155,67 @@ Renderer::Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RG
 					"(main must addLightEntry before Renderer)");
 		createSyncObjects();
 		allocateCommandBuffers();
+		allocateCullCommandBuffers();
 		createSceneStaging(vkResources);
 	}
+void Renderer::allocateCullCommandBuffers() {
+	if (!gpuCull || !gpuCull->active())
+		return;  // inactive：不分配（drawFrame 全路径不碰 culling）
+	vk::CommandBufferAllocateInfo allocInfoCmd{
+		*graphicsCommandPool, vk::CommandBufferLevel::ePrimary,
+		static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT)};
+	cullCommandBuffers = vkDevice.getDevice().allocateCommandBuffers(allocInfoCmd);
+}
+void Renderer::reconcileGpuCull(const FrameDrawList& list) {
+	// CPU opaque 段（[0, skyboxStart)）的 objectSlot 多重集 vs GPU 可见 candidate 的
+	// objectSlot 多重集（逐 candidate 固定槽，顺序无关 → 排序后多重集比对）
+	std::vector<uint32_t> cpuSlots;
+	cpuSlots.reserve(list.skyboxStart);
+	for (uint32_t i = 0; i < list.skyboxStart; ++i) {
+		const auto* a = reinterpret_cast<const RGL::DrawArgs*>(list.calls[i].pushData.data());
+		cpuSlots.push_back(a->objectIndex);
+	}
+	// 对齐自检（Phase 7b 顺序契约）：cullArgs[i] ↔ entries[i] 必须同 objectSlot
+	//（render_list 与 main C3 同守卫同序的运行时证明；失配 = args 错位 → 重放画错矩阵）
+	for (uint32_t i = 0; i < gpuCull->candidateCount(); ++i) {
+		if (list.cullArgs[i].objectIndex != gpuCull->entries()[i].objectSlot) {
+			auto logger = RLLogger::getInstance();
+			if (logger)
+				logger->warn("gpu cull alignment VIOLATION at candidate {}: cullArgs.objectIndex={} != entry.objectSlot={} (order contract broken)",
+					i, list.cullArgs[i].objectIndex, gpuCull->entries()[i].objectSlot);
+			break;
+		}
+	}
+	std::vector<uint32_t> gpuSlots;
+	gpuSlots.reserve(gpuCull->candidateCount());
+	for (uint32_t i = 0; i < gpuCull->candidateCount(); ++i)
+		if (gpuCull->isVisible(i))
+			gpuSlots.push_back(gpuCull->entries()[i].objectSlot);
+	bool match = cpuSlots.size() == gpuSlots.size();
+	if (match) {
+		std::ranges::sort(cpuSlots);
+		std::ranges::sort(gpuSlots);
+		match = (cpuSlots == gpuSlots);
+	}
+	const uint32_t gpuCount = static_cast<uint32_t>(gpuSlots.size());
+	if (gpuCount == lastReconcileVisible && match == lastReconcileMatch)
+		return;  // 节流：静止场景不刷屏（相机移动时计数变化即现）
+	lastReconcileVisible = gpuCount;
+	lastReconcileMatch = match;
+	auto logger = RLLogger::getInstance();
+	if (!logger)
+		return;
+	if (match) {
+		logger->info("gpu cull reconcile: gpu-visible={}/cpu-visible={} candidates={} match",
+			gpuCount, cpuSlots.size(), gpuCull->candidateCount());
+	} else {
+		std::string dump;
+		for (auto v : gpuSlots | std::views::take(8))
+			dump += fmt::format("{} ", v);
+		logger->warn("gpu cull reconcile MISMATCH: gpu-visible={}/cpu-visible={} candidates={} gpu[{}]",
+			gpuCount, cpuSlots.size(), gpuCull->candidateCount(), dump);
+	}
+}
 /**
  * 捕获回读每像素字节数（仅可能出现的格式：swapchain 候选 4B/像素系 + A2B10G10R10=4B +
  * HDR FP16=8B + G-buffer 词表 rgba32_sfloat=16B，其余 8bit×4/rg16×2 = 4B）。
@@ -365,6 +429,69 @@ std::expected<void, Error> Renderer::recreateSwapchainAndDepth(const char* conte
 		std::memcpy(stage + kSceneDataLightArrayOffset, &list.sceneData.lightCount, sizeof(uint32_t));
 		std::memcpy(stage + kSceneDataLightArrayOffset + 16, list.sceneData.lightArray.data(),
 			list.sceneData.lightCount * kGpuLightStride);
+	}
+
+	// ④c GPU culling 数据通路（Phase 7b 批次 5）：独立 cull CB（自含固定段 + dispatch +
+	// 读回拷贝）→ 提交 → **同帧同步等待**（读回重放的前提；性能优化 = 后续注记）→
+	// 读回对账。fence 与主 CB 共用 inFlightFences[currentFrame]：cull submit 信号后
+	// 立即 reset（vkdQueueSubmit 要求 fence 非 signaled 态——主 CB 稍后重新挂同一 fence），
+	// 帧 N+2 的 ① 对主 CB submit 信号后的 fence 照常 wait/reset。
+	if (gpuCull && gpuCull->active()) {
+		auto& ccmd = cullCommandBuffers[currentFrame];
+		ccmd.reset();
+		ccmd.begin(vk::CommandBufferBeginInfo{});
+		auto cullInput = list.cullInput;  // 值拷贝：sequenceCount 由本处填（render_list 不感知 GPU 表）
+		cullInput.sequenceCount = gpuCull->candidateCount();
+		// 序列 CPU 侧基值（execSlot + DrawArgs + meshCmd 基值；args 序 = candidate 序
+		// 契约校验在 writeSequenceStaging 内——size 不符即抛）
+		gpuCull->writeSequenceStaging(currentFrame, list.cullArgs);
+		gpuCull->recordCullPass(ccmd, cullInput, sceneStaging[currentFrame], currentFrame);
+		// DGC preprocess（NVIDIA 路）：cull dispatch 之后序列 buffer 已含 GPU 可见性——
+		// Compute→COMMAND_PREPROCESS 屏障（preprocess 读序列 + 写 preprocess 缓冲）
+		if (dgc && dgc->active()) {
+			vk::BufferMemoryBarrier2 ppBarrier{};
+			ppBarrier.srcStageMask = vk::PipelineStageFlagBits2::eComputeShader;
+			ppBarrier.srcAccessMask = vk::AccessFlagBits2::eShaderWrite;
+			ppBarrier.dstStageMask = vk::PipelineStageFlagBits2::eCommandPreprocessEXT;
+			ppBarrier.dstAccessMask = vk::AccessFlagBits2::eCommandPreprocessReadEXT;
+			ppBarrier.buffer = gpuCull->sequenceBufferHandle();
+			ppBarrier.size = VK_WHOLE_SIZE;
+			vk::DependencyInfo ppDep{};
+			ppDep.setBufferMemoryBarriers(ppBarrier);
+			ccmd.pipelineBarrier2(ppDep);
+			dgc->recordPreprocess(ccmd, gpuCull->sequenceAddress());
+		}
+		ccmd.end();
+
+		VkCommandBuffer ccb = *ccmd;
+		VkSubmitInfo cullSubmit{};
+		cullSubmit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+		cullSubmit.commandBufferCount = 1;
+		cullSubmit.pCommandBuffers = &ccb;
+		const VkResult cullSubmitResult = ::vkQueueSubmit(
+			graphicsQueue, 1, &cullSubmit, *inFlightFences[currentFrame]);
+		if (cullSubmitResult != VK_SUCCESS) {
+			auto logger = RLLogger::getInstance();
+			if (logger)
+				logger->error("Renderer: cull submit failed (frame {}): {}", frame,
+					vk::to_string(vk::Result{cullSubmitResult}));
+			return std::unexpected(Error{ErrorCode::Unknown,
+				fmt::format("cull submit failed: {}", vk::to_string(vk::Result{cullSubmitResult}))});
+		}
+		const vk::Result cullWaitResult = device.waitForFences(
+			{*inFlightFences[currentFrame]}, VK_TRUE, std::numeric_limits<uint64_t>::max());
+		if (cullWaitResult != vk::Result::eSuccess) {
+			auto logger = RLLogger::getInstance();
+			if (logger)
+				logger->error("Renderer: cull fence wait failed (frame {}): {}", frame,
+					vk::to_string(cullWaitResult));
+			return std::unexpected(Error{ErrorCode::DeviceLost,
+				fmt::format("cull fence wait failed: {}", vk::to_string(cullWaitResult))});
+		}
+		// fence 已信号 → 重置（主 CB submit 重新挂；已信号 fence 再挂 = VU 违例）
+		device.resetFences({*inFlightFences[currentFrame]});
+		gpuCull->readCullResult(currentFrame);
+		reconcileGpuCull(list);
 	}
 
 	// ④ 数据通路固定段（Phase 6 起不入图——非 attachment 状态同步，见 render_graph.cppm
@@ -586,6 +713,29 @@ std::expected<void, Error> Renderer::recreateSwapchainAndDepth(const char* conte
 			// shader object 的 extra mapping，4 RT 的 CAO→SRO 布局转换已由 pass.barriers 完成）
 			registry.entry(*lightPipelineIdx).pipeline.bindShaders(commandBuffers[currentFrame]);
 			commandBuffers[currentFrame].drawMeshTasksEXT(1, 1, 1);
+		} else if (pass.drawSource == "opaque" && gpuCull && gpuCull->active()) {
+			if (dgc && dgc->active()) {
+				// DGC execute（NVIDIA 路）：GPU 直接消费序列（CPU args + GPU 可见性，
+				// preprocess 已在 cull CB 完成）——非紧凑，被剔序列 x=0 no-op
+				dgc->recordExecute(commandBuffers[currentFrame], gpuCull->sequenceAddress(),
+					gpuCull->countTotalAddress());
+			} else {
+				// 读回重放（RADV 路）：逐 candidate 按可见位重放——candidate 序 =
+				// CPU opaque 段序（顺序契约），args = CPU 位级真相源（list.cullArgs，
+				// 与 drawOne 的 pushData 同值）→ 截图 BIT-IDENTICAL
+				for (uint32_t i = 0; i < gpuCull->candidateCount(); ++i) {
+					if (!gpuCull->isVisible(i))
+						continue;
+					const auto& e = gpuCull->entries()[i];
+					const auto& entry = registry.entry(e.pipelineIndex);
+					commandBuffers[currentFrame].pushDataEXT(vk::PushDataInfoEXT(
+						entry.pushDataSet, vk::HostAddressRangeConstEXT(
+							reinterpret_cast<const std::byte*>(&list.cullArgs[i]),
+							sizeof(RGL::DrawArgs))));
+					entry.pipeline.bindShaders(commandBuffers[currentFrame]);
+					commandBuffers[currentFrame].drawMeshTasksEXT(e.groupCount, 1, 1);
+				}
+			}
 		} else {
 			const auto [segBegin, segEnd] = segmentRange(pass.drawSource, list);
 			for (uint32_t i = segBegin; i < segEnd; ++i)

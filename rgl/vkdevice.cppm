@@ -14,6 +14,19 @@ import vkerror;
 namespace RGL {
 
 /**
+ * DGC（VK_EXT_device_generated_commands）能力位（DeviceContext 构造期自
+ * VkPhysicalDeviceDeviceGeneratedCommandsPropertiesEXT.supportedIndirectCommandsShaderStagesShaderBinding
+ * 派生；culling 子系统据此选路——Phase 7b，见 docs/device_generated_commands_research.md）。
+ * @note 本机 RADV（Strix Halo 26.2.1）实测 binding 子集仅 COMPUTE——graphics 侧 execution set
+ * /mesh draw 序列不可用，走读回重放回退（phase7_devlog 批次 5）；NVIDIA 全支持（含 MESH/FRAGMENT）。
+ */
+export struct DgcSupport {
+	bool graphicsIndirect = false;  ///< binding 子集含 MESH|FRAGMENT：execution set 逐序列换 shader + DRAW_MESH_TASKS 序列（DGC 全路径）
+	bool computeIndirect = false;   ///< binding 子集含 COMPUTE：DISPATCH 序列
+	uint32_t maxIndirectShaderObjectCount = 0;  ///< execution set 容量上限（DgcCommands 构造期校验）
+};
+
+/**
  * Vulkan 设备层（main.cpp 初始化层构造顺序第 2 站：AppContext→DeviceContext→
  * Swapchain→Resources→ShaderRegistry→Renderer，见 main.cpp）：pickPhysicalDevice
  * 打分选出 PhysicalDevice（见 vulkan_utils）→ QueueFamilyManager 按角色
@@ -30,15 +43,15 @@ namespace RGL {
  * ③ raii 对象（physicalDevices / device / 三个 CommandPool）必须经成员
  * 初始化列表初始化，绝不在函数体内初始化；
  * ④ 成员声明顺序 = 初始化依赖顺序（vkInstance→physicalDevices→physicalDevice→
- * queueManager→optionalFeatures→featuresChain→三 optional 结构→checked→device→
- * 队列→命令池；checked 是纯顺序锚定成员，见其行内注释）。
+ * dgcSupport→queueManager→optionalFeatures→featuresChain→三 optional 结构→checked→
+ * device→队列→命令池；checked 是纯顺序锚定成员，见其行内注释）。
  */
 export class DeviceContext {
    public:
 	/**
 	 * 构建设备层（全部逻辑在成员初始化列表，按成员声明序）：
 	 * vkInstance → physicalDevices → physicalDevice（pickPhysicalDevice 打分选择）→
-	 * queueManager → optionalFeatures（探测）→ featuresChain（required 链）→
+	 * dgcSupport（DGC 能力位派生）→ queueManager → optionalFeatures（探测）→ featuresChain（required 链）→
 	 * eds3Feature → depthClipBaseFeature → robustness2Feature（三个 optional 结构，
 	 * 按支持位初始化）→ checked（校验前移）→ device → 三队列
 	 * （graphics/compute/transfer）→ 三命令池（graphics/compute =
@@ -53,10 +66,12 @@ export class DeviceContext {
 	DeviceContext(RGL::AppContext& vkInstance)
 		: vkInstance(vkInstance),
 		  physicalDevices(vkInstance.getInstance()),
-		  physicalDevice([result = RGL::pickPhysicalDevice(physicalDevices)]() {
-			  if (!result) throw std::runtime_error(result.error().describe());
-			  return *result;
-		  }()),
+	  physicalDevice([result = RGL::pickPhysicalDevice(physicalDevices)]() {
+		  if (!result) throw std::runtime_error(result.error().describe());
+		  return *result;
+	  }()),
+	  /** DGC 能力位（physical device properties 查询，先于 device 创建；culling 选路消费）。 */
+	  dgcSupport(queryDgcSupport(*physicalDevice)),
 	  queueManager(RGL::QueueFamilyManager::create(*physicalDevice).value()),
 	  /** 可选 feature 探测（先于 featuresChain/eds3Feature——后者按支持位初始化）。 */
 	  optionalFeatures(RGL::queryOptionalFeatures(*physicalDevice)),
@@ -92,6 +107,10 @@ export class DeviceContext {
 		  transferCommandPool(createCommandPool(device, queueManager.getFamilyIndex(RGL::QueueFamilyRole::Transfer),
 			  vk::CommandPoolCreateFlagBits::eTransient | vk::CommandPoolCreateFlagBits::eResetCommandBuffer)
 				  .value()) {
+		if (auto logger = RLLogger::getInstance()) {
+			logger->info("Device DGC support: graphicsIndirect={} computeIndirect={}",
+				dgcSupport.graphicsIndirect, dgcSupport.computeIndirect);
+		}
 	}
 
 	/** @return 实例层引用（AppContext，非 const）；下游（Swapchain 等）经它取 raii Instance。 */
@@ -140,6 +159,9 @@ export class DeviceContext {
 	/** @return 可选 feature 支持位（queryOptionalFeatures 探测结果；Renderer 消费——
 	 * edS3 depthClip 动态状态）。 */
 	const RGL::OptionalFeatureSupport& getOptionalFeatures() const { return optionalFeatures; }
+	/** @return DGC 能力位（queryDgcSupport 派生；culling 子系统据此选 DGC 全路径 /
+	 * 读回重放回退，见 vk_indirect_commands 模块与 phase7_devlog 批次 5）。 */
+	const RGL::DgcSupport& getDgcSupport() const { return dgcSupport; }
 
    private:
 	/**
@@ -160,6 +182,26 @@ export class DeviceContext {
 			throw std::runtime_error(result.error().describe());
 		}
 		return true;
+	}
+
+	/**
+	 * DGC 能力位派生（physical device properties 查询，与 device 创建无关；结果存
+	 * dgcSupport 成员）。判据 = 研究文档 §3.3：graphics 侧可用 = shader binding 子集含
+	 * MESH|FRAGMENT（execution set 逐序列换 shader + mesh draw 序列）；compute 侧 = 含
+	 * COMPUTE（DISPATCH 序列）。
+	 * @param physicalDevice 待查询的物理设备
+	 * @return 派生能力位（本机 RADV 预期 {false, true}，NVIDIA 预期 {true, true}）
+	 */
+	static DgcSupport queryDgcSupport(const vk::raii::PhysicalDevice& physicalDevice) {
+		const auto props = physicalDevice
+			.getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDeviceGeneratedCommandsPropertiesEXT>();
+		const auto stages = props.get<vk::PhysicalDeviceDeviceGeneratedCommandsPropertiesEXT>()
+			.supportedIndirectCommandsShaderStagesShaderBinding;
+		// BMI 不随类序列化自由运算符（rlstd 同教训）：!= 0 的 operator== 不可见，
+		// 经 explicit operator bool 显式转换判定
+		return DgcSupport{static_cast<bool>(stages & (vk::ShaderStageFlagBits::eMeshEXT | vk::ShaderStageFlagBits::eFragment)),
+			static_cast<bool>(stages & vk::ShaderStageFlagBits::eCompute),
+			props.get<vk::PhysicalDeviceDeviceGeneratedCommandsPropertiesEXT>().maxIndirectShaderObjectCount};
 	}
 
 	/**
@@ -285,6 +327,7 @@ export class DeviceContext {
 	                                           //   本列表内部，须比该指针长寿
 	const vk::raii::PhysicalDevice* physicalDevice;  // 选中的物理设备指针（pickPhysicalDevice 打分；raii
 	                                                //   PhysicalDevice 不可拷贝，存指针）
+	DgcSupport dgcSupport;  // DGC 能力位（queryDgcSupport 派生；culling 选路消费，Phase 7b）
 	RGL::QueueFamilyManager queueManager;  // 队列 family 管理器（持 physicalDevice 引用，须后于其初始化）；
 	                                      //   queueCreateInfos / priorities 是其成员，须比 vkCreateDevice 长寿
 	RGL::OptionalFeatureSupport optionalFeatures;  // 可选 feature 支持位（queryOptionalFeatures 探测，先于 featuresChain）

@@ -18,6 +18,9 @@ namespace RGL {
  * 加一处漏一处 = 校验/启用不一致）。
  * @note VK_EXT_descriptor_buffer / VK_KHR_shader_untyped_pointers 当前代码无显式使用，
  * 但被其他已启用扩展隐式依赖，不可随意删除。
+ * @note VK_EXT_device_generated_commands 显式使用（Phase 7b GPU culling：vk_indirect_commands
+ * 模块 + culling compute，见 docs/device_generated_commands_research.md）；双已知驱动
+ * （RADV/NVIDIA）均无条件 advertise，required 语义 fail-fast；Intel 平台 advertise 未实测。
  * @return 必需扩展名列表（静态存储，进程级）
  */
 inline const std::vector<const char*>& kDeviceExtensions() {
@@ -29,7 +32,8 @@ inline const std::vector<const char*>& kDeviceExtensions() {
 		VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME,
 		VK_KHR_DYNAMIC_RENDERING_LOCAL_READ_EXTENSION_NAME,
 		VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME,
-		VK_KHR_SHADER_UNTYPED_POINTERS_EXTENSION_NAME};
+		VK_KHR_SHADER_UNTYPED_POINTERS_EXTENSION_NAME,
+		VK_EXT_DEVICE_GENERATED_COMMANDS_EXTENSION_NAME};
 	return extensions;
 }
 

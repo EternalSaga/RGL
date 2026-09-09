@@ -15,5 +15,5 @@ b71a2c9b41a5b6d3b7fffd4f9dc5d43682a665ba  rgl/shaders/lights.slang
 d802efb5c74a1c26fb92276b32477f6fa148b72e  rgl/shaders/lights_schema.lua
 69ebae222b5acfa4efbef3230e7f24fbff769ecd  tools/templates/types_cppm.inja
 8237ef4385a72e95458d85725e1c2d6d895e5a93  rgl/generated/lights_reflection.json
-f2e9de70ddb88e5b7f37cb4b11ddafa7d087fa1d  rgl/features_config.json
+29fe5d3a8f6cbbacd4c7ce9444c02e68e95bcefb  rgl/features_config.json
 baf9164a5bd97094db50464dbd1fb9afe00f3e1b  tools/templates/features_cppm.inja

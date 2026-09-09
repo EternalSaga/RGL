@@ -57,6 +57,9 @@ void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListS
 	const Frustum frustum = extractFrustum(viewProj.proj * viewProj.view);
 	uint32_t culled = 0;
 
+	// Phase 7b：cullArgs 逐 candidate 填充（candidate 序 = main C3 表序——同 view 迭代序 +
+	// 同守卫：pipelineIndex 有效 / groupCount>0 / 不透明；透明留 CPU 排序路径不入候选）
+	std::vector<RGL::DrawArgs> cullArgs;
 	rg.view<RGL::Transform, RGL::MeshRef, RGL::MaterialRef, RGL::CullSphere>().each(
 		[&](const RGL::Transform& tf, const RGL::MeshRef& meshRef, const RGL::MaterialRef& matRef,
 			const RGL::CullSphere& cull) {
@@ -65,8 +68,23 @@ void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListS
 				return;  // 资产无管线条目（防御：注册顺序异常，见 registerScene/bindPipelineToAsset）
 			if (asset.groupCount == 0)
 				return;  // 不渲染（0 三角形）
+			const auto& mat = assets.getMaterial(matRef.material);  // 批次 2：材质资产表解析
+			const bool candidate = !mat.alphaModeBlend;  // GPU culling 候选 = 不透明（与 main C3 同守卫）
 			auto& args = state.args[meshRef.objectSlot];
 			const glm::mat4 modelMatrix = spin.matrix * tf.world;  // 世界矩阵（无 view/proj）
+			// 矩阵表先写全量再剔除（Phase 7b）：GPU culling 读同一表（scene data @128），
+			// 被剔对象若留陈值（初值恒等）→ GPU 用错矩阵测试（背向机位 MISMATCH 根因）
+			state.matrices[meshRef.objectSlot] = modelMatrix;
+			// args 剔除测试**前**算（Phase 7b）：被剔候选也要有值（序列 CPU 侧全量装配）；
+			// mvp = CPU 位级真相源（GPU 不自算 mvp——FMA 收缩序无跨 CPU/GPU 位级契约）
+			args.mvp = viewProj.proj * viewProj.view * modelMatrix;
+			args.totalTriangles = asset.triangleCount;
+			args.vertexOffset = asset.vertexOffset;  // 拼接 buffer 内块字节偏移（Phase 4 批次 2）
+			args.baseColor = mat.baseColor;
+			args.roughnessMetallic = {mat.roughness, mat.metallic};  // Phase 5 接线（pbr frag 消费）
+			args.objectIndex = meshRef.objectSlot;  // bindless 对象矩阵表下标（实例级，instancing）
+			if (candidate)
+				cullArgs.push_back(args);
 			// 剔除（groupCount 守卫后：只统计真图元）——node-local 球 × modelMatrix → 世界球测 6 面
 			const glm::vec3 wc = glm::vec3(modelMatrix * glm::vec4(cull.center, 1.0f));
 			const float scale = std::max({glm::length(glm::vec3(modelMatrix[0])),
@@ -75,20 +93,12 @@ void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListS
 				++culled;
 				return;
 			}
-			args.mvp = viewProj.proj * viewProj.view * modelMatrix;
-			args.totalTriangles = asset.triangleCount;
-			args.vertexOffset = asset.vertexOffset;  // 拼接 buffer 内块字节偏移（Phase 4 批次 2）
-			const auto& mat = assets.getMaterial(matRef.material);  // 批次 2：材质资产表解析
-			args.baseColor = mat.baseColor;
-			args.roughnessMetallic = {mat.roughness, mat.metallic};  // Phase 5 接线（pbr frag 消费）
-			args.objectIndex = meshRef.objectSlot;  // bindless 对象矩阵表下标（实例级，instancing）
-			state.matrices[meshRef.objectSlot] = modelMatrix;
 			const RGL::DrawCall call{
 				asset.pipelineIndex,
 				std::as_bytes(std::span<const RGL::DrawArgs>{&args, 1}), asset.groupCount};
 			auto& bucket = mat.alphaModeBlend ? transparent : opaque;  // MASK 暂按不透明（见函数注释）
 			const glm::vec3 d = glm::vec3(tf.world[3]) - camera.position;  // world 平移列（无 per-entity 包围盒时的排序代理）
- 			bucket.push_back(Pending{call, glm::dot(d, d)});  // 距离²（免 sqrt，排序单调等价）
+			bucket.push_back(Pending{call, glm::dot(d, d)});  // 距离²（免 sqrt，排序单调等价）
 		});
 
 	// Phase 7 批次 4：可见统计（仅计数变化时打日志——相机移动/场景变化时可见数抖动即现，静止不刷屏）
@@ -145,6 +155,12 @@ void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListS
 	fresh.sceneData.envParams = {env.intensity, env.mipRange};
 	fresh.sceneData.skyInvViewProj = glm::inverse(viewProj.proj * viewProj.view);
 	fresh.sceneData.objectMatrices = std::span<const glm::mat4>{state.matrices};
+	fresh.cullArgs = std::move(cullArgs);
+
+	// Phase 7b：GPU culling 每帧输入（与上方 CPU 剔除同源同值——planes = 同一 frustum
+	// 对象，GPU/CPU 对账基准一致）；sequenceCount 由 Renderer 填
+	//（= GpuCull::candidateCount，render_list 不感知 GPU 候选表）
+	std::copy(frustum.planes, frustum.planes + 6, fresh.cullInput.planes);
 
 	list = std::move(fresh);
 }

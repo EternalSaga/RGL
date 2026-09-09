@@ -20,6 +20,8 @@ import model_importer;
 import texture_pool;
 import scene_context;
 import builtin_geometry;
+import gpu_cull;  // Phase 7b：GPU culling 子系统（C3 候选表构建 + 构造，先于 Renderer）
+import vk_indirect_commands;  // Phase 7b：DGC 命令生成（NVIDIA 路，管线表定后条件构造）
 import material_types_generated;  // DrawArgs（push constant 尺寸契约检查）
 import camera;
 import camera_config;
@@ -448,6 +450,29 @@ int main() {
 			(void)cubeEntry;
 		}
 
+		// C3：GPU culling 候选表（Phase 7b 批次 5）：candidate = 不透明 primitive。
+		// 守卫与迭代序和 render_list CPU 路径**完全一致**（同 view、同守卫）——GPU 输出
+		// 固定槽非紧凑，重放序与 CPU opaque 段序逐位一致（截图 BIT-IDENTICAL 前提）。
+		// 透明段不入候选（CPU 排序路径不受 GPU culling 影响）。
+		std::vector<CullEntry> cullEntries;
+		registry.view<MeshRef, MaterialRef, CullSphere>().each(
+			[&](const MeshRef& meshRef, const MaterialRef& matRef, const CullSphere& cull) {
+				auto& assets = vkResources.getAssetTable();
+				const auto& asset = assets.get(meshRef.asset);
+				if (asset.pipelineIndex == kInvalidPipelineIndex)
+					return;
+				if (asset.groupCount == 0)
+					return;
+				const auto& mat = assets.getMaterial(matRef.material);
+				if (mat.alphaModeBlend)
+					return;
+				cullEntries.push_back(CullEntry{
+					cull.center, cull.radius, meshRef.objectSlot, asset.pipelineIndex,
+					asset.groupCount, asset.triangleCount, asset.vertexOffset,
+					mat.baseColor, glm::vec2(mat.roughness, mat.metallic)});
+			});
+		GpuCull gpuCull(vkDevice, vkResources, cullEntries);
+
 		// Phase 5.5 批次 4：天空盒管线条目（env 已上传才建——addSkyEntry 契约）+
 		// SceneEnv 回填（renderListSystem 经 ctx 生成 skybox draw，画不画 = 配置有无）
 		if (vkResources.getEnvTexture()) {
@@ -474,8 +499,22 @@ int main() {
 				(*gbSlots)[0], (*gbSlots)[1], (*gbSlots)[2], (*gbSlots)[3],
 				vkResources.ensureSharedSampler());
 		}
+		// Phase 7b：DGC 命令生成（NVIDIA 路）：仅 graphicsIndirect 能力时构造（RADV =
+		// compute only → null → Renderer 读回重放路）。管线表定后建（execution set
+		// 容量 = 2×entries）；构造异常（容量超设备上限等）回落重放路
+		std::unique_ptr<DgcCommands> dgc;
+		if (vkDevice.getDgcSupport().graphicsIndirect && gpuCull.active()) {
+			try {
+				dgc = std::make_unique<DgcCommands>(vkDevice, shaderRegistry,
+					gpuCull.candidateCount());
+			} catch (const std::exception& e) {
+				auto* logger = RLLogger::getInstance();
+				if (logger)
+					logger->warn("dgc: 构造失败回落读回重放: {}", e.what());
+			}
+		}
 		Renderer vkRenderer(vkDevice, vkSwapchain, vkResources, shaderRegistry,
-			std::move(*compiledGraph));
+			std::move(*compiledGraph), &gpuCull, dgc.get());
 
 		/**
 		 * DIAG（可见窗 fault 排查）每帧回调：隐藏窗启动、frame == showAfter 时

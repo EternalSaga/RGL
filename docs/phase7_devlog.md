@@ -1,6 +1,6 @@
 # Phase 7 开发日志（滚动更新：D1 单灯 → D3 多灯 → culling → 重构批次）
 
-> **状态**：现行（滚动更新，批次 0–4 + 勘误 + 重构批次 3–5 已入册；测试主场景 Bistro Exterior；D1 = 单灯 G-buffer→light→swapchain 2-pass，D3 = 多灯延迟光照）。
+> **状态**：现行（滚动更新，批次 0–5（5=7b GPU culling/DGC，2026-09-09）+ 勘误 + 重构批次 3–5 已入册；测试主场景 Bistro Exterior；D1 = 单灯 G-buffer→light→swapchain 2-pass，D3 = 多灯延迟光照）。
 > 实施计划见 [archive/phase7_plan.md](archive/phase7_plan.md)；本文件记过程、踩坑、决策与当前态，供连续性交接。
 
 ---
@@ -354,3 +354,104 @@ PASS + 1591 prim 分布行）✓；forward/deferred 双路零 VVL error。
 
 **验证**：三 variant 零 VVL error、帧间确定；forward/offscreen 截图位级一致（blit 语义实锤）、
 deferred 黑背景 + 光照与 forward 一致；dump_gbuf=0 直读通道工作；captureFrame 字样全仓清零。
+
+---
+
+## 2026-09-09 — 批次 5（= Phase 7b）GPU culling / DGC：culling compute + 双路提交
+
+**动机**（用户定调）：GPU culling = **默认路径**（`VK_EXT_device_generated_commands` 扩展 required，
+不留"开/关 culling"配置开关）；批次 4 的 CPU frustum 剔除降为**兜底 + 对账基准**（每帧仍跑，
+结果与 GPU 对账，不一致告警）；RADV（本机 Strix Halo 核显）graphics 侧 DGC 不可用
+（`supportedIndirectCommandsShaderStages{Pipeline,Shader}Binding` 仅 COMPUTE，26.2.1 复测
+graphicsIndirect=false/computeIndirect=true）→ RADV 回退 = **读回重放**（非 IndirectCount，见下）。
+
+### 设计修正（推翻 research 文档 §4.3 的 IndirectCount 回退方案）
+
+**`vkCmdDrawMeshTasksIndirectCountEXT` 回退不可行**：该命令没有 per-draw push data 机制——
+mesh shader 拿不到 per-draw 的 DrawArgs（mvp/objectIndex/totalTriangles），IndirectCount 只给
+count 不给数据，`DrawMeshTasksIndirect` 序列里每个 draw 共享当前 push region。项目每 draw 必须
+推自己的 DrawArgs（push constant 契约）→ 回退路改为**读回重放**：culling compute 输出序列后
+CPU 读回（64B 结果 buffer + 序列 buffer 的 count 字段），CPU 侧逐可见条目重放
+`vkCmdPushDataEXT` + `vkCmdDrawMeshTasksEXT`。与 forward 现有提交路径**逐位一致**
+（同一 registry 条目、同一 pushData、同一 drawMeshTasks），BIT-IDENTICAL 天然成立。
+
+**mvp 由 CPU 算进序列，GPU 只写可见性**：GPU 端 mvp = viewProj × modelMatrix 的 float4x4 乘法，
+FMA 收缩序与 CPU（glm）无位级契约 → 若 GPU 算 mvp，DGC/重放两路拿到的 mvp 可能与 forward
+（CPU 算）差 1 ULP → 违反 forward diff0 硬约束。定稿：**CPU 把每 candidate 的完整 DrawArgs
+（含 mvp）预写进序列**，GPU 只覆盖 `meshCmd.x`（groupCount|0 或 0）+ 累加 count。
+DGC 路与重放路消费**同一份序列**（CPU args + GPU 可见性），两路输出位级一致。
+
+### 实现（5 个子批，均已完成并验证）
+
+- **5a 扩展+能力位**（行为中性）：`features.cppm` 两处加回 `VK_EXT_DEVICE_GENERATED_COMMANDS`
+  + `features_config.json` `deviceGeneratedCommands: true` + `just reflect` 重生成；
+  `vkdevice.cppm` `queryDgcSupport()` → `DgcSupport{graphicsIndirect, computeIndirect,
+  maxIndirectShaderObjectCount}`（`supportedIndirectCommandsShaderStagesShaderBinding` 与
+  MESH|FRAGMENT 的交集判 graphics），启动日志打印。
+- **5b culling compute + 对账**：`gpu_cull.cppm`（CullEntry 60B 表 + 序列 buffer + count buffer
+  + seqStaging ring×2）+ `shaders/cull.comp.slang`（6 面 Gribb-Harman，push 100B = planes[6] +
+  sequenceCount，`numthreads(64,1,1)`，ByteAddressBuffer 读 CullEntry 表/对象矩阵表，
+  `InterlockedAdd` count）。`vkrenderer` 构造 + `allocateCullCommandBuffers` +
+  `reconcileGpuCull`（多重集对账：GPU 可见集合 vs CPU 可见集合，size + 元素集合，不一致告警
+  不中断）+ `drawFrame` ④c 段（cull CB submit → waitForFences → resetFences → readback →
+  reconcile）。main C3 段构造 candidate 表（`view<MeshRef, MaterialRef, CullSphere>`，
+  守卫 = pipelineIndex 有效 && groupCount>0 && !alphaModeBlend）。
+- **5c-1 读回重放**（RADV 实际路径）：`FrameDrawList` + `cullArgs`（逐 candidate 的 DrawArgs，
+  CPU 预算含 mvp）；`render_list` 重构：candidate 判定**前置**到 cull 测试之前、args 在剔除前
+  算好（被剔条目 args 也进 cullArgs，GPU 只置 meshCmd.x=0 不画）；`GpuCull::writeSequenceStaging`
+  每帧把 CPU args memcpy 进 seqStaging（MAPPED）→ cull pass 内 staging→sequence 拷贝；
+  Renderer ④c 后读回序列可见性，pass 循环 opaque 段 = **重放**（逐可见 candidate：
+  registry 条目 + cullArgs[i] push + drawMeshTasks）。
+- **5c-2 DGC 模块**（NVIDIA 路径，本机能力门控不激活）：`vk_indirect_commands.cppm`
+  （`DgcCommands` RAII：layout 3 token = EXECUTION_SET@0（u32×2：frag@2j, mesh@2j+1，
+  per stage-bit LSB→MSB）+ PUSH_DATA@8（100B DrawArgs，`VkPushConstantRange` MESH|FRAG）+
+  DRAW_MESH_TASKS@108（action，最后）；indirectStride=120B；execution set SHADER_OBJECTS
+  capacity=2×条目数（2j=frag/2j+1=mesh，unique-index VU）；preprocess buffer 经
+  `vkGetGeneratedCommandsMemoryRequirementsEXT` + 原生 `vkAllocateMemory`（绕 VMA，
+  BDA 兼容）；**8 个 DGC 入口点全走 `vkGetDeviceProcAddr`**——系统 loader 1.4.357 不导出任何
+  DGC 全局符号，`vk::` 无 wrapper（vulkan_raii.hpp 有 raii 类但本项目不用，PFN 模式同
+  texture_upload 先例））。Renderer 双路：`dgc->active()` → DGC execute（render pass 内
+  `vkCmdExecuteGeneratedCommandsEXT`，sequenceCountAddress = count buffer BDA+4）；否则重放。
+  main 条件构造 `DgcCommands`（graphicsIndirect && cull active），catch 回落重放。
+- **5d 文档**（本条目 + research 勘误 + roadmap + AGENTS）。
+
+### 布局契约（当前值，static_assert 锁定）
+
+| buffer | 布局 | 说明 |
+|---|---|---|
+| CullEntry 表 | 60B×N | center@0 radius@12 objectSlot@16 pipelineIndex@20 groupCount@24 totalTriangles@28 vertexOffset@32 baseColor@36 rm@52 |
+| 序列 | **120B**×N | execSlotFrag@0（2×pipelineIndex）/ execSlotMesh@4（2×pipelineIndex+1）/ DrawArgs@8（100B）/ meshCmd@108（x=groupCount\|0 或 0, y=z=1） |
+| CullPush | 100B | planes[6]@0 + sequenceCount@96（viewProj 已移除——mvp 不经 push，CPU 预算进 args） |
+| count buffer | 64B | visible@0（InterlockedAdd 累计）+ total@4（thread0 写 push.sequenceCount）；DGC sequenceCountAddress = BDA+4 |
+
+### 踩坑
+
+1. **矩阵表陈值 bug**（5b 背向机位 MISMATCH 根因）：`state.matrices`（对象矩阵表）原来只对
+   **CPU 可见**对象每帧写 → GPU cull 读到被剔对象的**陈值/恒等矩阵** → 误判可见。修复 =
+   `render_list` 在 cull 测试**前**对**全部** candidate 写矩阵表（剔除只影响 draw list 不影响
+   矩阵上传）。教训：GPU cull 的输入矩阵表必须**全量刷新**，不能与 CPU 可见性耦合。
+2. **Slang `[[vk::push_constant]]` 挂变量不挂 struct**（与 `vk::buffer` 同理）；
+   `ByteAddressBuffer` 只有 `Load/Load2/Load3/Load4` + `Store/Store2/3/4`（无 LoadFloat/
+   LoadUint，Store2/4 要 uint2/uint4 先 asuint）。
+3. **Slang float4x4 构造/operator[] 语义歧义** → 矩阵乘法用 float4 数组 + 列组合手工展开
+   （`C列j = a0*Bj.x + a1*Bj.y + a2*Bj.z + a3`），不依赖 Slang 矩阵语义。
+4. **v357 API 面比 research 文档（1.4.341）窄**：无 `vkCmdBindIndirectExecutionSetEXT` /
+   `vkCmdSetGeneratedCommandsSequenceAddressEXT` / `vkCmdSetGeneratedCommandsSequenceCountBufferEXT`
+   ——全经 `VkGeneratedCommandsInfoEXT` 传（indirectAddress/Size、preprocessAddress/Size、
+   sequenceCountAddress、maxSequenceCount/maxDrawCount）；`VkWriteIndirectExecutionSetShaderEXT`
+   无 stage 字段（扁平 2j/2j+1 排布）；`sequenceCountAddress=0` → 用 maxSequenceCount。
+5. **loader 无 DGC 符号** → 8 入口点 PFN via `vkGetDeviceProcAddr`；BDA 用 core
+   `vkGetBufferDeviceAddress`（非 EXT 别名）。
+6. **raii::PhysicalDevice 无 `.get()`** → `getMemoryProperties()` 直取；`VK_UINT32_MAX` 在
+   v357 不存在 → `std::numeric_limits<uint32_t>::max()`；`eCommandPreprocess` 枚举名带
+   `EXT` 后缀（`eCommandPreprocessEXT` / `eCommandPreprocessReadEXT`）。
+
+### 验证
+
+- **5b**：默认机位 GPU=CPU=1571 可见（1591 candidate，20 被剔）；背向机位 0/0（全剔）；
+  矩阵表修复前背向 MISMATCH（GPU 38 vs CPU 0）→ 修复后 match。
+- **5c BIT-IDENTICAL**（同会话双构建，`git stash` 基线 vs 改动，stride 116→120 变更后**复验**）：
+  forward `shot2_base_fwd.png` vs `shot2_gpu_fwd.png` **cmp 相同**；deferred
+  `shot2_base_def.png` vs `shot2_gpu_def.png` **cmp 相同**。零 VVL error。
+- **DGC 路径**（NVIDIA）：本机 RADV graphicsIndirect=false → 能力门控不激活，代码经 VVL 审查
+  + 编译绿，**未运行时实测**（需 NVIDIA 机）。

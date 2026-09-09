@@ -97,6 +97,8 @@ using vk::PhysicalDeviceDescriptorBufferFeaturesEXT;
 using vk::PhysicalDeviceDescriptorHeapFeaturesEXT;
 using vk::PhysicalDeviceDescriptorHeapPropertiesEXT;
 using vk::PhysicalDeviceDepthClipEnableFeaturesEXT;
+using vk::PhysicalDeviceDeviceGeneratedCommandsFeaturesEXT;
+using vk::PhysicalDeviceDeviceGeneratedCommandsPropertiesEXT;
 using vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT;
 using vk::PhysicalDeviceFeatures2;
 using vk::PhysicalDeviceMeshShaderFeaturesEXT;

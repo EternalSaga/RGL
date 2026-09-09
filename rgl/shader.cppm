@@ -316,6 +316,10 @@ export class RenderPipeline {
 
 		cmd.bindShadersEXT(stages, shaderHandles);
 	}
+	/** @return mesh 阶段 shader 句柄（DGC execution set 一次性写入，Phase 7b；inactive 路不消费）。 */
+	[[nodiscard]] vk::ShaderEXT meshShaderHandle() const { return *meshShader; }
+	/** @return frag 阶段 shader 句柄（DGC execution set 一次性写入，Phase 7b；inactive 路不消费）。 */
+	[[nodiscard]] vk::ShaderEXT fragShaderHandle() const { return *fragShader; }
 };
 
 }  // namespace RGL

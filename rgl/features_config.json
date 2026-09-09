@@ -11,7 +11,8 @@
         "vk::PhysicalDeviceSwapchainMaintenance1FeaturesKHR",
         "vk::PhysicalDeviceShaderObjectFeaturesEXT",
         "vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR",
-        "vk::PhysicalDeviceDescriptorBufferFeaturesEXT"
+        "vk::PhysicalDeviceDescriptorBufferFeaturesEXT",
+        "vk::PhysicalDeviceDeviceGeneratedCommandsFeaturesEXT"
     ],
     "features": [
         {"vk_type": "vk::PhysicalDeviceFeatures2", "path": "features.robustBufferAccess", "name": "robustBufferAccess"},
@@ -38,7 +39,8 @@
         {"vk_type": "vk::PhysicalDeviceDescriptorBufferFeaturesEXT", "path": "descriptorBuffer", "name": "DescriptorBufferEXT::descriptorBuffer"},
         {"vk_type": "vk::PhysicalDeviceDescriptorHeapFeaturesEXT", "path": "descriptorHeap", "name": "DescriptorHeapEXT::descriptorHeap"},
         {"vk_type": "vk::PhysicalDeviceSwapchainMaintenance1FeaturesKHR", "path": "swapchainMaintenance1", "name": "SwapchainMaintenance1KHR::swapchainMaintenance1"},
-        {"vk_type": "vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR", "path": "shaderUntypedPointers", "name": "ShaderUntypedPointersKHR::shaderUntypedPointers"}
+        {"vk_type": "vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR", "path": "shaderUntypedPointers", "name": "ShaderUntypedPointersKHR::shaderUntypedPointers"},
+        {"vk_type": "vk::PhysicalDeviceDeviceGeneratedCommandsFeaturesEXT", "path": "deviceGeneratedCommands", "name": "DeviceGeneratedCommandsEXT::deviceGeneratedCommands"}
     ],
     "optional_features": [
         {"vk_type": "vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT", "path": "extendedDynamicState3DepthClipEnable", "field": "depthClipEnable", "extension": "VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME"},

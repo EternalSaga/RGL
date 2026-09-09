@@ -15,10 +15,10 @@ namespace RGL {
 // pNext 链只含"已启用扩展"的 feature 结构，FALSE 结构挂未启用扩展 = UB（RADV 实测启动后
 // 首次分配即崩，VMA 错误被 .value() 吞成 bad_expected_access）。optional 由 vkdevice.cppm
 // 在 createDevice 时按 queryOptionalFeatures 结果条件链接到链尾（见 FeatureChainTail）。
-export using FeatureChain = vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features, vk::PhysicalDeviceVulkan12Features, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceVulkan14Features, vk::PhysicalDeviceMeshShaderFeaturesEXT, vk::PhysicalDeviceDescriptorHeapFeaturesEXT, vk::PhysicalDeviceSwapchainMaintenance1FeaturesKHR, vk::PhysicalDeviceShaderObjectFeaturesEXT, vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR, vk::PhysicalDeviceDescriptorBufferFeaturesEXT>;
+export using FeatureChain = vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features, vk::PhysicalDeviceVulkan12Features, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceVulkan14Features, vk::PhysicalDeviceMeshShaderFeaturesEXT, vk::PhysicalDeviceDescriptorHeapFeaturesEXT, vk::PhysicalDeviceSwapchainMaintenance1FeaturesKHR, vk::PhysicalDeviceShaderObjectFeaturesEXT, vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR, vk::PhysicalDeviceDescriptorBufferFeaturesEXT, vk::PhysicalDeviceDeviceGeneratedCommandsFeaturesEXT>;
 
 // required 链尾类型（vkdevice 条件链接 optional feature 结构用——自动生成，与 chain_types 末位同步）
-export using FeatureChainTail = vk::PhysicalDeviceDescriptorBufferFeaturesEXT;
+export using FeatureChainTail = vk::PhysicalDeviceDeviceGeneratedCommandsFeaturesEXT;
 
 // 可选 feature 支持位：queryOptionalFeatures 探测后填（扩展可用 且 feature 置位）。
 export struct OptionalFeatureSupport {
@@ -87,13 +87,14 @@ export FeatureChain buildRequestedFeatures() {
     chain.get<vk::PhysicalDeviceDescriptorHeapFeaturesEXT>().descriptorHeap = VK_TRUE;
     chain.get<vk::PhysicalDeviceSwapchainMaintenance1FeaturesKHR>().swapchainMaintenance1 = VK_TRUE;
     chain.get<vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR>().shaderUntypedPointers = VK_TRUE;
+    chain.get<vk::PhysicalDeviceDeviceGeneratedCommandsFeaturesEXT>().deviceGeneratedCommands = VK_TRUE;
     return chain;
 }
 
 // 仅校验 required（optional 缺失 = 降级 no-op，不报错）。
 export [[nodiscard]] std::expected<void, Error> validateFeatures(
     const vk::raii::PhysicalDevice& device, FeatureChain& requested) {
-    auto supported = device.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features, vk::PhysicalDeviceVulkan12Features, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceVulkan14Features, vk::PhysicalDeviceMeshShaderFeaturesEXT, vk::PhysicalDeviceDescriptorHeapFeaturesEXT, vk::PhysicalDeviceSwapchainMaintenance1FeaturesKHR, vk::PhysicalDeviceShaderObjectFeaturesEXT, vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR, vk::PhysicalDeviceDescriptorBufferFeaturesEXT>();
+    auto supported = device.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features, vk::PhysicalDeviceVulkan12Features, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceVulkan14Features, vk::PhysicalDeviceMeshShaderFeaturesEXT, vk::PhysicalDeviceDescriptorHeapFeaturesEXT, vk::PhysicalDeviceSwapchainMaintenance1FeaturesKHR, vk::PhysicalDeviceShaderObjectFeaturesEXT, vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR, vk::PhysicalDeviceDescriptorBufferFeaturesEXT, vk::PhysicalDeviceDeviceGeneratedCommandsFeaturesEXT>();
     if (!supported.get<vk::PhysicalDeviceFeatures2>().features.robustBufferAccess) {
         return std::unexpected(Error{ErrorCode::FeatureUnavailable,
             fmt::format("Required feature not supported by device: {}", "robustBufferAccess")});
@@ -193,6 +194,10 @@ export [[nodiscard]] std::expected<void, Error> validateFeatures(
     if (!supported.get<vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR>().shaderUntypedPointers) {
         return std::unexpected(Error{ErrorCode::FeatureUnavailable,
             fmt::format("Required feature not supported by device: {}", "ShaderUntypedPointersKHR::shaderUntypedPointers")});
+    }
+    if (!supported.get<vk::PhysicalDeviceDeviceGeneratedCommandsFeaturesEXT>().deviceGeneratedCommands) {
+        return std::unexpected(Error{ErrorCode::FeatureUnavailable,
+            fmt::format("Required feature not supported by device: {}", "DeviceGeneratedCommandsEXT::deviceGeneratedCommands")});
     }
     return {};
 }

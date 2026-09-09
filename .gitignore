@@ -395,3 +395,7 @@ FodyWeavers.xsd
 
 # local build dirs
 build_min/
+
+# local assets / scratch (2026-09-09)
+Bistro_v5_2/
+novel-ignore-it/
