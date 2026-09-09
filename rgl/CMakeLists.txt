@@ -142,6 +142,19 @@ add_custom_target(reflection_check ALL
         -P ${CMAKE_SOURCE_DIR}/cmake/ReflectionManifest.cmake
     COMMENT "检查反射输入哈希（变更时请 just reflect）")
 
+# ─── Doxygen 注释检查（doc_check，只警告不阻断）───────────────────────────────
+# 每次构建随 ALL 并行跑（与编译不互锁）：复用 compile_commands.json 对 rgl/ 下
+# .cppm 做 clang -ast-dump（同一 LLVM，纯标准库 Python，见
+# tools/doccheck/doccheck.py），检查类/枚举/函数/方法声明正上方有 /** */ 块。
+# AST 缓存 build/doccheck_cache（源+命令哈希键）：增量只重 dump 改动文件（秒级），
+# 全量 ~1min。接口已声明函数在 impl 的定义处不重复要求（注释真相源 = 声明处）。
+# 单独跑：just doc-check [--methods/--strict/...]（默认构建已含 --methods）。
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+add_custom_target(doc_check ALL
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/doccheck/doccheck.py
+            --build-dir ${CMAKE_BINARY_DIR} --methods
+    COMMENT "Doxygen 注释检查（警告不阻断）")
+
 # ─── Shader Compilation ───────────────────────────────────────────────────────
 
 # 调用：compile_slang(SHADER_SOURCE OUT_SPV_PATH [EXTRA_DEPS...])

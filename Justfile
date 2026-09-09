@@ -107,6 +107,12 @@ build:
 reflect:
     @cmake --build {{ BUILD }} --target reflect
 
+# Doxygen 注释检查（每次 just build 已随 doc_check 目标并行跑、只警告；
+# 这里单独跑 + 透传参数：--methods / --strict / --max-gap N 等，见
+# tools/doccheck/doccheck.py --help）
+doc-check *ARGS="":
+    @python "{{ WORKSPACE }}/tools/doccheck/doccheck.py" --build-dir "{{ BUILD }}" --methods {{ ARGS }}
+
 # 全量编译基准: clean-all + config + 计时编译
 profile:
     just clean-all

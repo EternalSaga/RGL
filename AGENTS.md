@@ -18,6 +18,7 @@ legacy（旧 OpenGL 项目）已于 2026-09-08 删除，历史思路参考见 gi
 just config              # CMake 配置（默认 clang, Release）；just config gcc Debug 指定编译器/类型
 just build               # 增量编译（需先 config）；just build-release / build-debug = 一键配置+编译
 just reflect             # 重跑 5 条反射管线（改动 shader 契约/schema/模板后必须；见"着色器编译"）
+just doc-check [--strict]  # Doxygen 注释检查（每次 just build 已随 doc_check 并行跑、只警告；此处单独跑+透传参数）
 just run                 # 运行（AMD VGA 存在时自动设 RADV_EXPERIMENTAL=heap）
 just run-igpu / run-dgpu / run-intel   # 强制核显 / NVIDIA prime 独显 / Intel anv
 just clean / clean-all / all           # 增量清理 / 删 build 目录 / clean-all+build-release
@@ -39,6 +40,14 @@ Windows `sdl3[vulkan]`）；同一依赖可出现两次用 `"platform"` 字段�
 
 CMake 无独立构建目录 — 必须从根目录构建（`cmake -B build -S .`）。
 产物: `build/rgl/rgl`（Windows 加 `.exe`）。
+
+- `doc_check`（ALL，与编译并行，2026-09-09）：复用 `build/compile_commands.json` 对 `rgl/*.cppm`
+  做 clang `-ast-dump`（构建链同一 LLVM，纯标准库 Python，零 pip 依赖），检查类/枚举/函数/方法
+  声明正上方有非空 `/** */` 块。实现在 `tools/doccheck/`（doccheck.py + vendored astparse.py，
+  源自姊妹教学项目 modern_vulkan_tutorial 的 AST 管线）。AST 缓存 `build/doccheck_cache/`
+  （键 = 源+命令 sha256）：增量只重 dump 改动文件（秒级），全量 ~1min。规则细节：注释真相源 =
+  接口声明处（impl 里接口已声明函数的定义不重复要求）；重载组共用最上方一个块；前向声明与
+  定义间可夹空行（Renderer 先例）；只警告不阻断（`--strict` 才 exit 1），默认构建含 `--methods`。
 
 ## 运行要求
 
