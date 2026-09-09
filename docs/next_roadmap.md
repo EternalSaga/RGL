@@ -2,7 +2,8 @@
 
 > **状态**：现行（开发路线图；当前节点 = Phase 7 进行中：D1 延迟单灯 `70ce9d1` + D3 多灯/反射 +
 > 批次 4 CPU culling + **批次 5=7b GPU culling/DGC 完成（2026-09-09，forward+deferred BIT-IDENTICAL；
-> DGC 路径待 NVIDIA 机实测）**，批次 6 文档销账待续；并行工作流 = 架构债务 1+2 修复
+> DGC 路径待 NVIDIA 机实测）**，批次 6 文档销账待续；并行工作流 = **Phase 10 批次 0 Renderer 拆分
+> 完成（2026-09-10，drawFrame 577→291，5 模块摘出，BIT-IDENTICAL）** + 架构债务 1+2 修复
 > （scene→scene_context / cube 出内核，见 [架构债务-依赖方向审计.md](架构债务-依赖方向审计.md)，`b1788e0`））
 
 Phase 0–6 已全部完成（各阶段结论一段话归档于下，实施细节与计划-实现偏离的权威记录在
@@ -136,9 +137,56 @@ per-light 颜色、距离衰减）headless 零 VVL error；forward 只读 `light
 ```
 Phase 7 剩余（批次 2 refine / 灯 entity 化 / 批次 6 销账；批次 5=7b GPU culling 已完成 2026-09-09）
     ↓
-Phase 8：纹理接缝（normal/ORM 贴图采样、BC5 Z 重建、法线绿通道、线性 mip 质量）
+Phase 8：Bistro 场景打磨
+  ① HDR 累加链（先行——色彩判断基准）：light/forward 输出 → RGBA16F RT + ACES tone-map pass
+     → SRGB8 swapchain（当前 intensity 4.0 已在 SRGB8 写入时裁切高光，无 tone map）；
+     破现有 BIT-IDENTICAL 基线，重立新基线
+  ② HDR env 路径：Radiance .hdr（stb 内置 loader，16F）→ RGBA16F 上传；
+     Bistro `san_giuseppe_bridge_4k.hdr` 转正（现 skybox/rainbow 8-bit PNG 为占位）
+  ③ 纹理接缝：normal/ORM 贴图采样、BC5 Z 重建、法线绿通道、线性 mip 质量
+  **明确不升级**：G-buffer 四通道（albedo rgba8_srgb / normal rg16_snorm / worldPos rgba32f /
+  metalRough rgba8）+ albedo/normal/metalRough 贴图维持 8-bit——物理量 ≤1.0，业界标准，
+  升 16F 纯浪费带宽
     ↓
-远期候选：完整 IBL（prefiltered + BRDF LUT）、shadow、MASK alphaTest、OIT、imgui（低优先）
+Phase 9：性能观测（profiler）——先回答"CPU-bound 还是 GPU-bound"，再谈优化
+  ① CPU 帧相 profiler（内建）：每帧逐相 chrono（ECS/render_list/命令录制/④c cull
+     waitForFences/present acquire）+ rllogger 直方图——关键 = 分清 CPU 干活 vs 等 GPU stall
+  ② 函数级深挖：gprof（clang `-pg` 兼容，同一套 mcount 插桩；勿开 LTO）或 perf + flamegraph
+  ③ GPU per-pass 时间戳：`vkCmdWriteTimestamp`（sync2 stage）插渲染图 pass 边界 →
+     per-pass GPU ms（GPU 写入，与 CPU 快慢无关；图已有 pass 循环，零新架构）
+  ④ VK_EXT_present_timing 测量模式（archive/present_timing_research.md §6 步骤 1）：IPD/
+     丢帧/刷新属性/eImmediate 延迟链；RADV 运行时支持待实测（Arc A310 100% 占用问题
+     在 Strix Halo 大概率同样存在，无限帧 + eImmediate = 满速渲被丢弃的帧）
+  ⑤ 判定 + 决策输入：CPU 帧时 vs GPU 首末时间戳 vs IPD 三方对比；④c per-frame cull
+     读回成本（若显著 → 读回延后一帧）；帧率上限/present mode 可配置化的必要性
+    ↓
+Phase 10：阴影（大特性，一口气；风险分层 = CSM 承诺交付 + HFTS 带退出条件的 spike）
+  **批次 0 已完成（2026-09-10，Renderer 拆分，BIT-IDENTICAL）**：drawFrame 577→291 行，
+    摘出 5 模块（state_kit / frame_capture / cull_driver / frame_session / writeSceneStaging
+    私有方法，详见 docs/调试历史.md 2026-09-10）。阴影特性归属预置：新 pass 种类 →
+    render_graph + ⑤ pass 循环；per-cascade 光锥剔除 → CullDriver（复用 ④c 编舞）；
+    depth-only pass 状态 → StateKit 新增条目；不再往 drawFrame 塞步骤。
+  ① 保守光栅化基建（VK_EXT_conservative_rasterization，RADV 26.2.1 已实测可用 rev 1）：
+     深度写入保守化（重叠三角形不留缝）——CSM/HFTS 共同硬前提
+  ② CSM（Cascaded Shadow Maps）先行【承诺交付】：depth-only 阴影深度 pass（mesh 管线
+     新条目类型，无材质分叉）+ 4 级 cascade + PCSS 采样；**光锥剔除复用 ④c GPU culling
+     模式**（现 GPU cull 只剔相机视锥，阴影 pass 需按光锥重跑一遍 culling dispatch）；
+     PCSS penumbra 在 Phase 8 HDR float 累加里算
+  ③ HFTS/IzB（Hybrid Frustum-Traced Shadows）【spike，带退出条件，非承诺项】：
+     Irregular Z-Buffering（全视锥 Z-buffer + 光线步进，无 texel 走样）远场/场景遮挡 +
+     近场 CSM/PCSS 混合。**验收**：Bistro 场景光线步进软阴影视觉正确 + 成本 ≤X ms
+     （X 由 Phase 9 profiler 定基线）；**达不到即收手，CSM+PCSS 为最终交付**（The
+     Division 自身近场也是 shadow map，HFTS 只负责远场）。优先走 FTIZB 路线
+     （光栅管线 + 硬件保守光栅 + early-z，非重 compute）
+     参考链（公开，勿逆向游戏——系统逻辑在 CPU 侧，shader 里没有）：
+     - FTIZB "Frustum-Traced Raster Shadows: Revisiting Irregular Z-Buffers"（NVIDIA 2015，
+       research.nvidia.com 有 camera-ready PDF）——最贴近本实现的版本
+     - "Conservative Z-Prepass for FTIZB"（Tokuyoshi 2018）——性能加速
+     - 《Irregular Z-buffer Shadows》assassin-plus.github.io（2025-03）——最新教程式 walkthrough
+     - HFTS 原文（Wyman SIGGRAPH 2016，cwyman.org/abstracts/sig2016_hfts.pdf）+ Story 2015 原文
+     - github.com/strexicious/izb-on（实验参考，非生产级）
+    ↓
+远期候选：完整 IBL（prefiltered + BRDF LUT）、MASK alphaTest、OIT、imgui（低优先）
 ```
 
 ## 注意事项（现行）

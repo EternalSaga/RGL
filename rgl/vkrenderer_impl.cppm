@@ -18,7 +18,12 @@ import vk_swapchain;
 import vk_resources;
 import shader_registry;
 import shader;
+import state_kit;
 import gpu_cull;
+import frame_capture;
+import cull_driver;
+import frame_session;
+import diagnostics;
 import vulkan_utils;
 import VmaRaii;
 import frame_draw_list;
@@ -111,41 +116,28 @@ Renderer::Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RG
 	  resources(&vkResources),
 	  registry(shaderRegistry),
 	  renderGraph(std::move(renderGraph)),
-	  gpuCull(vkGpuCull),
-	  dgc(vkDgc),
+	  // culling 帧编舞（手术 3）：④c 提交时序 + opaque 段双路 + 对账全迁 CullDriver，
+	  // 构造期即分配 cull CB（inactive = 不分配，行为中性与摘出前一致）
+	  cullDriver(vkDevice, vkGpuCull, vkDgc, FrameSession::kFramesInFlight),
 	  attachmentLayouts(this->renderGraph.attachments.size(), vk::ImageLayout::eUndefined),
-	  // edS3：depth clip 动态状态能力（feature 探测位，启动期一次；未支持 = 恒 false no-op）
-	  depthClipDynamic(vkDevice.getOptionalFeatures().depthClipEnable),
-	  graphicsQueue(vkDevice.getGraphicsQueue()),
+	  // 帧内捕获器（手术 2）：持资源层 + 编译图引用，构造期自图定位 swapchain slot
+	  capturer(vkResources, this->renderGraph),
+	  // edS3 能力门 + 四段状态值（Phase 10 批次 0 手术 1：状态表迁 StateKit，
+	  // transparent/skybox/light 的差异值语义注释随迁 state_kit.cppm ctor）
+	  stateKit(vkDevice.getOptionalFeatures().depthClipEnable),
+	  // 帧生命周期会话（手术 4）：四套同步对象 + 每帧命令缓冲 + swapchain/depth 重建，
+	  // 构造期即建（原 createSyncObjects/allocateCommandBuffers 移入其 ctor）
+	  session(vkDevice, vkSwapchain, vkResources, diagnostics().noPresent),
 	  graphicsCommandPool(vkDevice.getGraphicsCommandPool()) {
 		validateRenderGraphForExecutor(this->renderGraph);
-		// 帧内捕获：定位 swapchain attachment slot（捕获时读写其布局追踪值）
-		for (uint32_t s = 0; s < this->renderGraph.attachments.size(); ++s)
-			if (this->renderGraph.attachments[s].kind == RgAttachmentKind::swapchain)
-				swapchainSlot = s;
 		for (const auto& warning : this->renderGraph.warnings) {
 			auto logger = RLLogger::getInstance();
 			if (logger) logger->warn("RenderGraph: {}", warning);
 		}
 		// descriptor heap 的 GPU 端地址，每帧传给 vkCmdBindResourceHeapEXT
 		heapAddress = vkResources.getDescriptorHeap().getGpuAddress();
-		// 透明段状态（Phase 5）：不透明段之外的差异三项——不写深度 + 开 alpha 混合 +
-		// 背面剔除。cull 必要：关深度写后封闭网格（如 glTF 盒）的正反两面同屏各混合
-		// 一次 = 有效 alpha 翻倍（实测 0.25 → 1-(1-0.25)²=0.4375）；剔除背面后
-		// 每像素单层混合，alpha 语义正确（opaque 段保持 eNone——硬编码 cube 绕序未验证）
-		transparentState.depthWrite = false;
-		transparentState.colorBlend = true;
-		transparentState.cullMode = vk::CullModeFlagBits::eBack;
-		// 天空盒段状态（Phase 5.5 批次 4）：大三角 z=1（far 平面）+ LEQUAL + 不写深度——
-		// 只在未被几何占据的像素（深度 = clear 1.0）通过测试画天空；绕序不剔（cull None）
-		skyboxState.depthWrite = false;
-		skyboxState.depthCompareOp = vk::CompareOp::eLessOrEqual;
-		// Phase 7 D1：deferred light pass —— 全屏终图，无深度附件（depth 无关）、cull none
-		//（大三角绕序不剔）、不混合。取 light 管线下标；图含 drawLight pass 却无 "light" 条目 = 配置错误
-		// depthTest 显式关：全屏终图语义（light pass 无深度附件、大三角 z=1 不测深）
-		lightState.depthTest = false;
-		lightState.depthWrite = false;
-		lightState.cullMode = vk::CullModeFlagBits::eNone;
+		// 四段状态值构造已迁 StateKit（Phase 10 批次 0 手术 1，语义注释随迁 state_kit.cppm）
+		// 取 light 管线下标；图含 drawLight pass 却无 "light" 条目 = 配置错误
 		if (auto idx = shaderRegistry.pipelineIndex("light"))
 			lightPipelineIdx = *idx;
 		for (const auto& p : this->renderGraph.passes)
@@ -153,140 +145,11 @@ Renderer::Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RG
 				throw std::runtime_error(
 					"Renderer: render graph has drawLight pass but no 'light' pipeline entry "
 					"(main must addLightEntry before Renderer)");
-		createSyncObjects();
-		allocateCommandBuffers();
-		allocateCullCommandBuffers();
-		createSceneStaging(vkResources);
+		createSceneStaging(vkResources);  // 同步对象/命令缓冲已随手术 4 迁 FrameSession ctor
 	}
-void Renderer::allocateCullCommandBuffers() {
-	if (!gpuCull || !gpuCull->active())
-		return;  // inactive：不分配（drawFrame 全路径不碰 culling）
-	vk::CommandBufferAllocateInfo allocInfoCmd{
-		*graphicsCommandPool, vk::CommandBufferLevel::ePrimary,
-		static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT)};
-	cullCommandBuffers = vkDevice.getDevice().allocateCommandBuffers(allocInfoCmd);
-}
-void Renderer::reconcileGpuCull(const FrameDrawList& list) {
-	// CPU opaque 段（[0, skyboxStart)）的 objectSlot 多重集 vs GPU 可见 candidate 的
-	// objectSlot 多重集（逐 candidate 固定槽，顺序无关 → 排序后多重集比对）
-	std::vector<uint32_t> cpuSlots;
-	cpuSlots.reserve(list.skyboxStart);
-	for (uint32_t i = 0; i < list.skyboxStart; ++i) {
-		const auto* a = reinterpret_cast<const RGL::DrawArgs*>(list.calls[i].pushData.data());
-		cpuSlots.push_back(a->objectIndex);
-	}
-	// 对齐自检（Phase 7b 顺序契约）：cullArgs[i] ↔ entries[i] 必须同 objectSlot
-	//（render_list 与 main C3 同守卫同序的运行时证明；失配 = args 错位 → 重放画错矩阵）
-	for (uint32_t i = 0; i < gpuCull->candidateCount(); ++i) {
-		if (list.cullArgs[i].objectIndex != gpuCull->entries()[i].objectSlot) {
-			auto logger = RLLogger::getInstance();
-			if (logger)
-				logger->warn("gpu cull alignment VIOLATION at candidate {}: cullArgs.objectIndex={} != entry.objectSlot={} (order contract broken)",
-					i, list.cullArgs[i].objectIndex, gpuCull->entries()[i].objectSlot);
-			break;
-		}
-	}
-	std::vector<uint32_t> gpuSlots;
-	gpuSlots.reserve(gpuCull->candidateCount());
-	for (uint32_t i = 0; i < gpuCull->candidateCount(); ++i)
-		if (gpuCull->isVisible(i))
-			gpuSlots.push_back(gpuCull->entries()[i].objectSlot);
-	bool match = cpuSlots.size() == gpuSlots.size();
-	if (match) {
-		std::ranges::sort(cpuSlots);
-		std::ranges::sort(gpuSlots);
-		match = (cpuSlots == gpuSlots);
-	}
-	const uint32_t gpuCount = static_cast<uint32_t>(gpuSlots.size());
-	if (gpuCount == lastReconcileVisible && match == lastReconcileMatch)
-		return;  // 节流：静止场景不刷屏（相机移动时计数变化即现）
-	lastReconcileVisible = gpuCount;
-	lastReconcileMatch = match;
-	auto logger = RLLogger::getInstance();
-	if (!logger)
-		return;
-	if (match) {
-		logger->info("gpu cull reconcile: gpu-visible={}/cpu-visible={} candidates={} match",
-			gpuCount, cpuSlots.size(), gpuCull->candidateCount());
-	} else {
-		std::string dump;
-		for (auto v : gpuSlots | std::views::take(8))
-			dump += fmt::format("{} ", v);
-		logger->warn("gpu cull reconcile MISMATCH: gpu-visible={}/cpu-visible={} candidates={} gpu[{}]",
-			gpuCount, cpuSlots.size(), gpuCull->candidateCount(), dump);
-	}
-}
-/**
- * 捕获回读每像素字节数（仅可能出现的格式：swapchain 候选 4B/像素系 + A2B10G10R10=4B +
- * HDR FP16=8B + G-buffer 词表 rgba32_sfloat=16B，其余 8bit×4/rg16×2 = 4B）。
- * @param f 捕获格式（swapchain format 或 G-buffer RT format）
- * @return 每像素字节数（4 / 8 / 16）
- */
-static uint32_t captureBpp(vk::Format f) {
-	switch (f) {
-		case vk::Format::eR32G32B32A32Sfloat: return 16;
-		case vk::Format::eR16G16B16A16Sfloat: return 8;
-		default: return 4;
-	}
-}
+// （captureBpp / Renderer::ensureCaptureStaging 已随手术 2 迁 frame_capture_impl.cppm）
 
-/**
- * 捕获回读缓冲按需增长（GPU_TO_CPU + 常驻映射，同 scene staging 的创建模式反方向）；
- * 重建安全：上一捕获的搬移在请求帧 drawFrame 内已完成（fence 已等），本函数只在
- * 新拷贝录制前调用，无飞行中写冲突。
- * @param bytes 所需字节数（w×h×captureBpp）
- * @return true = 缓冲就绪（既有容量足够或已重建并自存 mapped 指针）；
- *   false = VMA 分配失败（error 日志）
- */
-bool Renderer::ensureCaptureStaging(VkDeviceSize bytes) {
-	if (captureStagingSize >= bytes)
-		return true;
-	vk::BufferCreateInfo info{};
-	info.size = bytes;
-	info.usage = vk::BufferUsageFlagBits::eTransferDst;
-	VmaAllocationCreateInfo alloc{};
-	alloc.usage = VMA_MEMORY_USAGE_GPU_TO_CPU;
-	alloc.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT |
-		VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
-	VmaAllocationInfo allocData{};
-	auto result = resources->getAllocator().createBuffer(info, alloc, &allocData);
-	if (!result) {
-		auto logger = RLLogger::getInstance();
-		if (logger)
-			logger->error("Renderer: capture staging alloc failed: {}", result.error().describe());
-		return false;
-	}
-	captureStaging = std::move(*result);
-	captureMapped = allocData.pMappedData;
-	captureStagingSize = bytes;
-	return true;
-}
-
-void Renderer::createSyncObjects() {
-		vk::SemaphoreCreateInfo semaphoreInfo{};
-		// fence 初始为 signaled：首帧的 waitForFences 不会阻塞
-		vk::FenceCreateInfo fenceInfo{vk::FenceCreateFlagBits::eSignaled};
-		vk::FenceCreateInfo presentFenceInfo{vk::FenceCreateFlagBits::eSignaled};
-
-		imageAvailableSemaphores.reserve(MAX_FRAMES_IN_FLIGHT);
-		renderFinishedSemaphores.reserve(MAX_FRAMES_IN_FLIGHT);
-		inFlightFences.reserve(MAX_FRAMES_IN_FLIGHT);
-		presentFences.reserve(MAX_FRAMES_IN_FLIGHT);
-
-		std::ranges::for_each(std::views::iota(0, MAX_FRAMES_IN_FLIGHT),
-			[&](int) {
-				imageAvailableSemaphores.emplace_back(vkDevice.getDevice(), semaphoreInfo);
-				renderFinishedSemaphores.emplace_back(vkDevice.getDevice(), semaphoreInfo);
-				inFlightFences.emplace_back(vkDevice.getDevice(), fenceInfo);
-				presentFences.emplace_back(vkDevice.getDevice(), presentFenceInfo);
-			});
-	}
-void Renderer::allocateCommandBuffers() {
-		vk::CommandBufferAllocateInfo allocInfoCmd{
-			*graphicsCommandPool, vk::CommandBufferLevel::ePrimary,
-			static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT)};
-		commandBuffers = vkDevice.getDevice().allocateCommandBuffers(allocInfoCmd);
-	}
+// （createSyncObjects / allocateCommandBuffers 已随手术 4 迁 frame_session_impl.cppm）
 void Renderer::createSceneStaging(RGL::Resources& vkResources) {
 		for (auto& staging : sceneStaging) {
 			vk::BufferCreateInfo info{};
@@ -308,190 +171,62 @@ void Renderer::createSceneStaging(RGL::Resources& vkResources) {
 			staging = std::move(*result);
 		}
 	}
-std::expected<void, Error> Renderer::recreateSwapchainAndDepth(const char* context) {
-		// recreate 内部重查 caps/format/presentMode（acquire OUT_OF_DATE 的根因未必是
-		// extent，如 HDR 状态切换）。全部未变 = 重建修不好，打破静默死循环：报一次错
-		if (!swapchain->recreate()) {
-			static bool warned = false;
-			auto logger = RLLogger::getInstance();
-			if (!warned) {
-				warned = true;
-				if (logger) logger->error("Renderer: recreate requested ({}) but surface "
-					"capabilities unchanged — cannot recover, expect repeated failure", context);
-			}
-			return {};  // extent 未变 → 深度图仍有效，跳过重建
-		}
-		auto result = resources->recreateDepthImage(swapchain->getExtent());
-		if (!result) {
-			auto logger = RLLogger::getInstance();
-			if (logger) logger->error("Renderer: failed to recreate depth image ({}): {}",
-				context, result.error().describe());
-			return std::unexpected(std::move(result).error());
-		}
-		return {};
-	}
-	const RGL::RenderState& Renderer::stateFor(std::string_view name) const {
-		if (name == "opaque") return opaqueState;
-		if (name == "skybox") return skyboxState;
-		if (name == "transparent") return transparentState;
-		if (name == "light") return lightState;
-		throw std::runtime_error(
-			fmt::format("Renderer::stateFor: unknown state '{}' (constructor validation bypassed)", name));
-	}
-	/** drawFrame 定义（整体流程见接口声明 + 类头；逐步骤注记见体内 ①~⑮）：
+// （recreateSwapchainAndDepth 已随手术 4 迁 frame_session_impl.cppm）
+ 	/** drawFrame 定义（整体流程见接口声明 + 类头；逐步骤注记见体内 ①~⑮）：
 	 * 双 fence wait/reset → acquire（100ms 超时跳帧）→ ③.5 scene staging 写
 	 *（头 128B + 矩阵表 + 灯数组尾区）→ ⑥ heap barrier（3 dst flag）+ ⑥.5 scene 拷贝
 	 *（kSceneDataBytes=262800B）→ ⑦ heap/sampler heap 绑定 → ⑤ 逐 pass（barrier 物化 /
 	 * beginRendering / applyDynamicState / 段内逐 draw / blit / drawLight）→ ⑪.5 帧内
 	 * 捕获回读 → ⑫ presentTransition → ⑬ submit（waitStage = 图派生）→ 捕获搬移 →
 	 * ⑭ present（present fence）→ ⑮ 帧 slot 推进。 */
-	std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
-		const uint64_t frame = frameCount++;  // DIAG：device lost 帧号定位
+	std::expected<void, Error> Renderer::writeSceneStaging(const FrameDrawList& list,
+		uint32_t frameSlot) {
+	// ③.5 scene data 上传（Phase 5 批次 2；手术 5：块体提为私有方法，语义零改动）。
+	auto* stage = static_cast<std::byte*>(sceneStaging[frameSlot].getMappedData());
+	std::memcpy(stage, &list.sceneData.light, sizeof(LightDataGpu));
+	// Phase 5.5：env 参数写 @48（light 48B 之后、64B 头内——与 objectMatrices 区无重叠）
+	std::memcpy(stage + kSceneDataEnvOffset, &list.sceneData.envParams, sizeof(glm::vec2));
+	// Phase 5.5 批次 4：skyboxInvViewProj 写 @64（sky.slang skyClipToWorld 消费）
+	std::memcpy(stage + kSceneDataSkyOffset, &list.sceneData.skyInvViewProj, sizeof(glm::mat4));
+	const auto matricesBytes = list.sceneData.objectMatrices.size() * sizeof(glm::mat4);
+	if (matricesBytes > kSceneMatrixCapacity * kSceneMatrixStride)
+		return std::unexpected(Error{ErrorCode::Unknown,
+			"scene objectMatrices exceeds capacity (Phase 5 contract, main startup check bypassed)"});
+	std::memcpy(stage + kSceneDataHeaderBytes, list.sceneData.objectMatrices.data(),
+		matricesBytes);
+	// Phase 7 D3：多灯数组写尾区（count@base + GpuLight[count]@base+16；lightCount=0 只写 count）
+	if (list.sceneData.lightCount > kMaxLights)
+		return std::unexpected(Error{ErrorCode::Unknown,
+			"scene lightCount exceeds kMaxLights (lights_schema.lua contract)"});
+	std::memcpy(stage + kSceneDataLightArrayOffset, &list.sceneData.lightCount, sizeof(uint32_t));
+	std::memcpy(stage + kSceneDataLightArrayOffset + 16, list.sceneData.lightArray.data(),
+		list.sceneData.lightCount * kGpuLightStride);
+	return {};
+}
+std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
+		// ①②③ 帧会话开场（Phase 10 批次 0 手术 4：双 fence wait/reset + acquire 分类 +
+		// 命令缓冲 begin 全迁 FrameSession::beginFrame；skipped/recreated = 本帧不渲染）
+		auto start = session.beginFrame();
+		if (!start)
+			return std::unexpected(start.error());
+		if (*start != FrameSession::FrameStart::began)
+			return {};
+		const uint64_t frame = session.frameNumber();  // DIAG：device lost 帧号定位
 		auto& device = vkDevice.getDevice();
+		auto& cmd = session.commandBuffer();           // 本帧命令缓冲（录制期）
+		const uint32_t frameSlot = session.currentFrameSlot();
+		const uint32_t imageIndex = session.imageIndex();
 
+	// ③.5 scene data 上传（Phase 5 批次 2；手术 5：块体提为 writeSceneStaging 私有方法）
+	if (auto r = writeSceneStaging(list, frameSlot); !r)
+		return std::unexpected(std::move(r).error());
 
-	// ① 等待上一帧同 slot 完全结束：inFlight fence（命令缓冲执行完）与 present
-	// fence（present 完成）都信号后，本 slot 的 semaphore / command buffer 才可重用。
-	// waitAll=VK_TRUE + 无限超时。正常时 fence 保证在超时内信号；device reset/lost 时
-	// fence 永不信号 → 返回 eErrorDeviceLost/Reset（非无限自旋，报错退出帧循环）
-	// DIAG（diagnostics.lua no_present）：不 present → presentFence 永不 signal，只等 inFlight
-	const vk::Result waitResult = noPresent
-		? device.waitForFences(
-			{*inFlightFences[currentFrame]}, VK_TRUE, std::numeric_limits<uint64_t>::max())
-		: device.waitForFences(
-			{*inFlightFences[currentFrame], *presentFences[currentFrame]},
-			VK_TRUE, std::numeric_limits<uint64_t>::max());
-	if (waitResult != vk::Result::eSuccess) {
-		auto logger = RLLogger::getInstance();
-		if (logger) logger->error("Renderer: fence wait failed at frame start ({}): {}",
-			frame, vk::to_string(waitResult));
-		return std::unexpected(Error{ErrorCode::DeviceLost,
-			fmt::format("frame fence wait failed: {}", vk::to_string(waitResult))});
-	}
-	if (noPresent) {
-		device.resetFences({*inFlightFences[currentFrame]});
-	} else {
-		device.resetFences({*inFlightFences[currentFrame], *presentFences[currentFrame]});
-	}
-
-	// ② 从 swapchain 取一张后缓冲：成功时驱动信号 imageAvailableSemaphores
-	//（queueSubmit 的等待对象），imageIndex 为取到的图像下标。
-	// 100ms 超时（非无限）：compositor 停发 present（如 Wayland 息屏）时限时返回
-	// eTimeout，跳过本帧保住帧循环存活（llm_debug 离屏截图与事件轮询不依赖本帧
-	// 上屏）；正常 vsync 节奏下 acquire 在超时前返回，行为不变
-	auto [acquireResult, imageIndex] = swapchain->getSwapchain().acquireNextImage(
-		100'000'000,
-		*imageAvailableSemaphores[currentFrame], nullptr);
-
-	// eTimeout：无可用后缓冲——本帧不渲染，事件/system 下一轮照常
-	if (acquireResult == vk::Result::eTimeout) {
-		return {};
-	}
-
-	// eErrorOutOfDateKHR：swapchain 已失效（如 surface 尺寸变化），必须重建
-	if (acquireResult == vk::Result::eErrorOutOfDateKHR) {
-		return recreateSwapchainAndDepth("acquire out-of-date");
-	}
-	// eSuboptimalKHR：图像仍可用，只是非最优（如尺寸不匹配），可继续渲染
-	if (acquireResult != vk::Result::eSuccess &&
-		acquireResult != vk::Result::eSuboptimalKHR) {
-		return std::unexpected(Error{ErrorCode::SwapchainAcquireFailed,
-			"Failed to acquire swapchain image!"});
-	}
-
-	// ③ 开始录制：reset() 清除上一次录制状态（command buffer 每帧重用，
-	// 重新录制前必须 reset）
-	commandBuffers[currentFrame].reset();
-	// 默认 begin flags（非 one-time、非 secondary）：可多次提交
-	commandBuffers[currentFrame].begin(
-		vk::CommandBufferBeginInfo{});
-
-	// ③.5 scene data 上传（Phase 5 批次 2）：CPU 写 staging[currentFrame]——本 slot
-	// 的 fence 已在 ① wait（f-2 帧命令跑完，staging 不再被读），写安全。
-	// 容量契约（objectMatrices ≤ kSceneMatrixCapacity）由 main 启动期检查，此处防御。
-	{
-		auto* stage = static_cast<std::byte*>(sceneStaging[currentFrame].getMappedData());
-		std::memcpy(stage, &list.sceneData.light, sizeof(LightDataGpu));
-		// Phase 5.5：env 参数写 @48（light 48B 之后、64B 头内——与 objectMatrices 区无重叠）
-		std::memcpy(stage + kSceneDataEnvOffset, &list.sceneData.envParams, sizeof(glm::vec2));
-		// Phase 5.5 批次 4：skyboxInvViewProj 写 @64（sky.slang skyClipToWorld 消费）
-		std::memcpy(stage + kSceneDataSkyOffset, &list.sceneData.skyInvViewProj, sizeof(glm::mat4));
-		const auto matricesBytes = list.sceneData.objectMatrices.size() * sizeof(glm::mat4);
-		if (matricesBytes > kSceneMatrixCapacity * kSceneMatrixStride)
-			return std::unexpected(Error{ErrorCode::Unknown,
-				"scene objectMatrices exceeds capacity (Phase 5 contract, main startup check bypassed)"});
-		std::memcpy(stage + kSceneDataHeaderBytes, list.sceneData.objectMatrices.data(),
-			matricesBytes);
-		// Phase 7 D3：多灯数组写尾区（count@base + GpuLight[count]@base+16；lightCount=0 只写 count）
-		if (list.sceneData.lightCount > kMaxLights)
-			return std::unexpected(Error{ErrorCode::Unknown,
-				"scene lightCount exceeds kMaxLights (lights_schema.lua contract)"});
-		std::memcpy(stage + kSceneDataLightArrayOffset, &list.sceneData.lightCount, sizeof(uint32_t));
-		std::memcpy(stage + kSceneDataLightArrayOffset + 16, list.sceneData.lightArray.data(),
-			list.sceneData.lightCount * kGpuLightStride);
-	}
-
-	// ④c GPU culling 数据通路（Phase 7b 批次 5）：独立 cull CB（自含固定段 + dispatch +
-	// 读回拷贝）→ 提交 → **同帧同步等待**（读回重放的前提；性能优化 = 后续注记）→
-	// 读回对账。fence 与主 CB 共用 inFlightFences[currentFrame]：cull submit 信号后
-	// 立即 reset（vkdQueueSubmit 要求 fence 非 signaled 态——主 CB 稍后重新挂同一 fence），
-	// 帧 N+2 的 ① 对主 CB submit 信号后的 fence 照常 wait/reset。
-	if (gpuCull && gpuCull->active()) {
-		auto& ccmd = cullCommandBuffers[currentFrame];
-		ccmd.reset();
-		ccmd.begin(vk::CommandBufferBeginInfo{});
-		auto cullInput = list.cullInput;  // 值拷贝：sequenceCount 由本处填（render_list 不感知 GPU 表）
-		cullInput.sequenceCount = gpuCull->candidateCount();
-		// 序列 CPU 侧基值（execSlot + DrawArgs + meshCmd 基值；args 序 = candidate 序
-		// 契约校验在 writeSequenceStaging 内——size 不符即抛）
-		gpuCull->writeSequenceStaging(currentFrame, list.cullArgs);
-		gpuCull->recordCullPass(ccmd, cullInput, sceneStaging[currentFrame], currentFrame);
-		// DGC preprocess（NVIDIA 路）：cull dispatch 之后序列 buffer 已含 GPU 可见性——
-		// Compute→COMMAND_PREPROCESS 屏障（preprocess 读序列 + 写 preprocess 缓冲）
-		if (dgc && dgc->active()) {
-			vk::BufferMemoryBarrier2 ppBarrier{};
-			ppBarrier.srcStageMask = vk::PipelineStageFlagBits2::eComputeShader;
-			ppBarrier.srcAccessMask = vk::AccessFlagBits2::eShaderWrite;
-			ppBarrier.dstStageMask = vk::PipelineStageFlagBits2::eCommandPreprocessEXT;
-			ppBarrier.dstAccessMask = vk::AccessFlagBits2::eCommandPreprocessReadEXT;
-			ppBarrier.buffer = gpuCull->sequenceBufferHandle();
-			ppBarrier.size = VK_WHOLE_SIZE;
-			vk::DependencyInfo ppDep{};
-			ppDep.setBufferMemoryBarriers(ppBarrier);
-			ccmd.pipelineBarrier2(ppDep);
-			dgc->recordPreprocess(ccmd, gpuCull->sequenceAddress());
-		}
-		ccmd.end();
-
-		VkCommandBuffer ccb = *ccmd;
-		VkSubmitInfo cullSubmit{};
-		cullSubmit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-		cullSubmit.commandBufferCount = 1;
-		cullSubmit.pCommandBuffers = &ccb;
-		const VkResult cullSubmitResult = ::vkQueueSubmit(
-			graphicsQueue, 1, &cullSubmit, *inFlightFences[currentFrame]);
-		if (cullSubmitResult != VK_SUCCESS) {
-			auto logger = RLLogger::getInstance();
-			if (logger)
-				logger->error("Renderer: cull submit failed (frame {}): {}", frame,
-					vk::to_string(vk::Result{cullSubmitResult}));
-			return std::unexpected(Error{ErrorCode::Unknown,
-				fmt::format("cull submit failed: {}", vk::to_string(vk::Result{cullSubmitResult}))});
-		}
-		const vk::Result cullWaitResult = device.waitForFences(
-			{*inFlightFences[currentFrame]}, VK_TRUE, std::numeric_limits<uint64_t>::max());
-		if (cullWaitResult != vk::Result::eSuccess) {
-			auto logger = RLLogger::getInstance();
-			if (logger)
-				logger->error("Renderer: cull fence wait failed (frame {}): {}", frame,
-					vk::to_string(cullWaitResult));
-			return std::unexpected(Error{ErrorCode::DeviceLost,
-				fmt::format("cull fence wait failed: {}", vk::to_string(cullWaitResult))});
-		}
-		// fence 已信号 → 重置（主 CB submit 重新挂；已信号 fence 再挂 = VU 违例）
-		device.resetFences({*inFlightFences[currentFrame]});
-		gpuCull->readCullResult(currentFrame);
-		reconcileGpuCull(list);
+	// ④c GPU culling 数据通路（Phase 7b 批次 5；手术 3：块体迁 CullDriver::runFrame——
+	// cull CB 录制/提交/同帧同步等待/读回/对账 + fence 与主 CB 共用的时序契约见其类注释）
+	if (cullDriver.active()) {
+		if (auto r = cullDriver.runFrame(frameSlot, frame, list,
+				sceneStaging[frameSlot], session.currentInFlightFence()); !r)
+			return std::unexpected(std::move(r).error());
 	}
 
 	// ④ 数据通路固定段（Phase 6 起不入图——非 attachment 状态同步，见 render_graph.cppm
@@ -518,7 +253,7 @@ std::expected<void, Error> Renderer::recreateSwapchainAndDepth(const char* conte
 	heapBarrier.dstStageMask = vk::PipelineStageFlagBits2::eAllGraphics;
 	vk::DependencyInfo heapDepInfo{};
 	heapDepInfo.setMemoryBarriers(heapBarrier);
-	commandBuffers[currentFrame].pipelineBarrier2(heapDepInfo);
+	cmd.pipelineBarrier2(heapDepInfo);
 
 	// ⑥.5 scene data staging → device buffer 拷贝（Phase 5 批次 2）+ Transfer 写 →
 	// 图形阶段 shader 读 barrier（storage buffer 的写/读即使同 cmd 也须显式依赖，
@@ -528,7 +263,7 @@ std::expected<void, Error> Renderer::recreateSwapchainAndDepth(const char* conte
 		const auto& sceneBuffer = resources->getSceneDataBuffer();
 		if (sceneBuffer.buffer != VK_NULL_HANDLE) {
 			VkBufferCopy region{0, 0, static_cast<VkDeviceSize>(kSceneDataBytes)};
-			::vkCmdCopyBuffer(*commandBuffers[currentFrame], *sceneStaging[currentFrame],
+			::vkCmdCopyBuffer(*cmd, *sceneStaging[frameSlot],
 				sceneBuffer.buffer, 1, &region);
 			vk::BufferMemoryBarrier2 sceneBarrier{};
 			sceneBarrier.srcStageMask = vk::PipelineStageFlagBits2::eTransfer;
@@ -539,7 +274,7 @@ std::expected<void, Error> Renderer::recreateSwapchainAndDepth(const char* conte
 			sceneBarrier.size = kSceneDataBytes;
 			vk::DependencyInfo sceneDepInfo;
 			sceneDepInfo.setBufferMemoryBarriers(sceneBarrier);
-			commandBuffers[currentFrame].pipelineBarrier2(sceneDepInfo);
+			cmd.pipelineBarrier2(sceneDepInfo);
 		}
 	}
 
@@ -552,7 +287,7 @@ std::expected<void, Error> Renderer::recreateSwapchainAndDepth(const char* conte
 	vk::DeviceAddressRangeEXT heapRange{};
 	heapRange.address = heapAddress;
 	heapRange.size = resources->getDescriptorHeap().getHeapSize();
-	commandBuffers[currentFrame].bindResourceHeapEXT(vk::BindHeapInfoEXT(
+	cmd.bindResourceHeapEXT(vk::BindHeapInfoEXT(
 		heapRange,
 		resources->getReservedRangeOffset(),
 		resources->getReservedRangeSize()));
@@ -561,7 +296,7 @@ std::expected<void, Error> Renderer::recreateSwapchainAndDepth(const char* conte
 	vk::DeviceAddressRangeEXT samplerHeapRange{};
 	samplerHeapRange.address = resources->getSamplerHeap().getGpuAddress();
 	samplerHeapRange.size = resources->getSamplerHeap().getHeapSize();
-	commandBuffers[currentFrame].bindSamplerHeapEXT(vk::BindHeapInfoEXT(
+	cmd.bindSamplerHeapEXT(vk::BindHeapInfoEXT(
 		samplerHeapRange,
 		0,
 		resources->getSamplerReservedRangeSize()));
@@ -633,17 +368,17 @@ std::expected<void, Error> Renderer::recreateSwapchainAndDepth(const char* conte
 		}
 		vk::DependencyInfo depInfo;
 		depInfo.setImageMemoryBarriers(materialized);
-		commandBuffers[currentFrame].pipelineBarrier2(depInfo);
+		cmd.pipelineBarrier2(depInfo);
 		for (const auto& plan : barriers)
 			attachmentLayouts[plan.attachment] = plan.newLayout;
 	};
 
 	auto drawOne = [&](const DrawCall& call) {
 		const auto& entry = registry.entry(call.pipeline);
-		commandBuffers[currentFrame].pushDataEXT(vk::PushDataInfoEXT(
+		cmd.pushDataEXT(vk::PushDataInfoEXT(
 			entry.pushDataSet, vk::HostAddressRangeConstEXT(call.pushData.data(), call.pushData.size())));
-		entry.pipeline.bindShaders(commandBuffers[currentFrame]);
-		commandBuffers[currentFrame].drawMeshTasksEXT(call.groupCount, 1, 1);
+		entry.pipeline.bindShaders(cmd);
+		cmd.drawMeshTasksEXT(call.groupCount, 1, 1);
 	};
 
 	for (const auto& pass : renderGraph.passes) {
@@ -665,7 +400,7 @@ std::expected<void, Error> Renderer::recreateSwapchainAndDepth(const char* conte
 			blitRegion.srcOffsets[1] = vk::Offset3D{w, h, 1};
 			blitRegion.dstOffsets[0] = vk::Offset3D{0, 0, 0};
 			blitRegion.dstOffsets[1] = vk::Offset3D{w, h, 1};
-			::vkCmdBlitImage(*commandBuffers[currentFrame], srcImage,
+			::vkCmdBlitImage(*cmd, srcImage,
 				VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dstImage,
 				VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
 				reinterpret_cast<const VkImageBlit*>(&blitRegion), VK_FILTER_LINEAR);
@@ -702,120 +437,36 @@ std::expected<void, Error> Renderer::recreateSwapchainAndDepth(const char* conte
 		if (depthInfo)
 			renderingInfo.setPDepthAttachment(&*depthInfo);
 
-		commandBuffers[currentFrame].beginRendering(renderingInfo);
+		cmd.beginRendering(renderingInfo);
 		// 动态状态在 draw 时采样（spec chapters/shaders.adoc "Setting State"），与
 		// bindShadersEXT 先后无约束；段首各 applyDynamicState 一次（Phase 5 语义，
 		// 状态对象经 pass.state 名解析——opaque/skybox/transparent 三成员不变）
-		RGL::applyDynamicState(commandBuffers[currentFrame], extent.width, extent.height,
-			stateFor(pass.state), depthClipDynamic, static_cast<uint32_t>(pass.colors.size()));
+		RGL::applyDynamicState(cmd, extent.width, extent.height,
+			stateKit.stateFor(pass.state), stateKit.depthClipDynamicEnabled(),
+			static_cast<uint32_t>(pass.colors.size()));
 		if (pass.kind == RgPassKind::drawLight) {
 			// Phase 7 D1：固定全屏单 group light draw（无 push constant；采样描述符 baked 在 light
 			// shader object 的 extra mapping，4 RT 的 CAO→SRO 布局转换已由 pass.barriers 完成）
-			registry.entry(*lightPipelineIdx).pipeline.bindShaders(commandBuffers[currentFrame]);
-			commandBuffers[currentFrame].drawMeshTasksEXT(1, 1, 1);
-		} else if (pass.drawSource == "opaque" && gpuCull && gpuCull->active()) {
-			if (dgc && dgc->active()) {
-				// DGC execute（NVIDIA 路）：GPU 直接消费序列（CPU args + GPU 可见性，
-				// preprocess 已在 cull CB 完成）——非紧凑，被剔序列 x=0 no-op
-				dgc->recordExecute(commandBuffers[currentFrame], gpuCull->sequenceAddress(),
-					gpuCull->countTotalAddress());
-			} else {
-				// 读回重放（RADV 路）：逐 candidate 按可见位重放——candidate 序 =
-				// CPU opaque 段序（顺序契约），args = CPU 位级真相源（list.cullArgs，
-				// 与 drawOne 的 pushData 同值）→ 截图 BIT-IDENTICAL
-				for (uint32_t i = 0; i < gpuCull->candidateCount(); ++i) {
-					if (!gpuCull->isVisible(i))
-						continue;
-					const auto& e = gpuCull->entries()[i];
-					const auto& entry = registry.entry(e.pipelineIndex);
-					commandBuffers[currentFrame].pushDataEXT(vk::PushDataInfoEXT(
-						entry.pushDataSet, vk::HostAddressRangeConstEXT(
-							reinterpret_cast<const std::byte*>(&list.cullArgs[i]),
-							sizeof(RGL::DrawArgs))));
-					entry.pipeline.bindShaders(commandBuffers[currentFrame]);
-					commandBuffers[currentFrame].drawMeshTasksEXT(e.groupCount, 1, 1);
-				}
-			}
+			registry.entry(*lightPipelineIdx).pipeline.bindShaders(cmd);
+			cmd.drawMeshTasksEXT(1, 1, 1);
+		} else if (pass.drawSource == "opaque" && cullDriver.active()) {
+			// GPU culling 路（手术 3：双路提交迁 CullDriver::executeOpaqueSegment——
+			// DGC execute（NVIDIA）/ 读回重放（RADV，args = CPU 位级真相源 → BIT-IDENTICAL）
+			// 能力位自动切换，重放顺序契约见其类注释）
+			cullDriver.executeOpaqueSegment(cmd, list, registry);
 		} else {
 			const auto [segBegin, segEnd] = segmentRange(pass.drawSource, list);
 			for (uint32_t i = segBegin; i < segEnd; ++i)
 				drawOne(list.calls[i]);
 		}
-		commandBuffers[currentFrame].endRendering();
+		cmd.endRendering();
 	}
 
-	// ⑪.5 帧内捕获（llm_debug 回读，vkrenderer.cppm requestFrameCapture 契约）：请求帧在
-	// presentTransition 前插回读拷贝。后缓冲：追踪布局 → TransferSrc 拷贝 → 追踪表推进为
-	// TransferSrc（⑫ 天然转 PresentSrc，无恢复 barrier）；GB 通道（dump_gbuf）：帧末追踪
-	// 布局（SRO）→ TS 拷贝 → 转回（追踪值不变）。
+	// ⑪.5 帧内捕获（Phase 10 批次 0 手术 2：块体迁 FrameCapturer::record——后缓冲/
+	// GB 通道两分支的布局追踪推进语义见 frame_capture.cppm 声明注释）。
 	// acquire 超时跳帧的 return 在本段之前 = 请求保持 pending 至真正录制的帧。
-	if (captureRequest != -2) {
-		auto& cmd = commandBuffers[currentFrame];
-		auto slotOfName = [&](const std::string& n) -> RgAttachmentSlot {
-			for (uint32_t s = 0; s < renderGraph.attachments.size(); ++s)
-				if (renderGraph.attachments[s].name == n)
-					return s;
-			return kRgNoAttachment;
-		};
-		auto barrier = [&](VkImage image, vk::ImageLayout from, vk::ImageLayout to,
-			vk::PipelineStageFlags2 srcStage, vk::AccessFlags2 srcAccess,
-			vk::PipelineStageFlags2 dstStage, vk::AccessFlags2 dstAccess) {
-			vk::ImageMemoryBarrier2 b = RGL::createImageBarrier(image, from, to,
-				vk::ImageAspectFlagBits::eColor, srcStage, dstStage, srcAccess, dstAccess);
-			vk::DependencyInfo dep{};
-			dep.setImageMemoryBarriers(b);
-			cmd.pipelineBarrier2(dep);
-		};
-		auto copyOut = [&](VkImage image, uint32_t w, uint32_t h, vk::Format format, int channel) {
-			const uint32_t bpp = captureBpp(format);
-			const VkDeviceSize bytes = static_cast<VkDeviceSize>(w) * h * bpp;
-			if (!ensureCaptureStaging(bytes))
-				return false;
-			VkBufferImageCopy region{};
-			region.bufferRowLength = w;
-			region.bufferImageHeight = h;
-			region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-			region.imageExtent = {w, h, 1};
-			::vkCmdCopyImageToBuffer(*cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-				*captureStaging, 1, &region);
-			captureInFlight = FrameCapture{w, h, format, channel, bytes, {}};
-			captureArmed = true;
-			return true;
-		};
-		if (captureRequest >= 0) {
-			// GB 直读：deferred 图专属（前向图无 gbuffer_* 附件 / RT 未建 = 跳过并留观测）
-			if (captureRequest < static_cast<int>(kGBufferAttachments.size())) {
-				const std::string name{kGBufferAttachments[captureRequest].name};
-				const auto slot = slotOfName(name);
-				if (auto* rt = slot != kRgNoAttachment ? resources->findRtAttachment(name) : nullptr) {
-					const auto from = attachmentLayouts[slot];  // deferred 帧末 = SRO（light 采样后）
-					barrier(rt->image.image, from, vk::ImageLayout::eTransferSrcOptimal,
-						vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderRead,
-						vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead);
-					if (copyOut(rt->image.image, rt->extent.width, rt->extent.height,
-					        rt->format, captureRequest))
-						barrier(rt->image.image, vk::ImageLayout::eTransferSrcOptimal, from,
-							vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead,
-							vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderRead);
-				} else if (auto logger = RLLogger::getInstance())
-					logger->warn("frame capture: dump_gbuf={} 但 RT '{}' 不存在（非 deferred 图？）",
-						captureRequest, name);
-			}
-		} else if (swapchainSlot != kRgNoAttachment) {
-			const auto ext = swapchain->getExtent();
-			const auto from = attachmentLayouts[swapchainSlot];  // 帧末：直渲 = CAO、blit 变体 = TransferDst
-			const bool blitWritten = from == vk::ImageLayout::eTransferDstOptimal;
-			barrier(swapchainImage, from, vk::ImageLayout::eTransferSrcOptimal,
-				blitWritten ? vk::PipelineStageFlagBits2::eTransfer
-				            : vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-				blitWritten ? vk::AccessFlagBits2::eTransferWrite
-				            : vk::AccessFlagBits2::eColorAttachmentWrite,
-				vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead);
-			if (copyOut(swapchainImage, ext.width, ext.height, swapchain->getFormat().format, -1))
-				attachmentLayouts[swapchainSlot] = vk::ImageLayout::eTransferSrcOptimal;
-		}
-		captureRequest = -2;
-	}
+	capturer.record(cmd, swapchainImage, extent,
+		swapchain->getFormat().format, attachmentLayouts);
 
 	// ⑫ swapchain → PresentSrcKHR（图 presentTransition——src 阶段/访问由最后
 	// usage 推导：直渲 = CAO 写、blit 上屏 = Transfer 写，等价旧手工分支；
@@ -824,102 +475,23 @@ std::expected<void, Error> Renderer::recreateSwapchainAndDepth(const char* conte
 		emitBarriers(std::span<const RgBarrierPlan>{&*renderGraph.presentTransition, 1});
 
 	// 录制完毕
-	commandBuffers[currentFrame].end();
+	cmd.end();
 
-	// ⑬ 提交到图形队列。用裸 C API（vkQueueSubmit）而非 vk-hpp RAII：
-	// RAII 的 Queue::submit 重载不支持 fence 参数。
-	// wait：imageAvailable 信号量（acquireNextImage 信号）——wait stage = 图派生的
-	// swapchainWaitStage（命令流首次触碰后缓冲的阶段：直渲图 = ColorAttachmentOutput、
-	// blit 上屏图 = Transfer；现值均在 stage1 32 位范围内，截断安全）。
-	// signal：renderFinished 信号量（presentKHR 的等待对象）；
-	// fence：inFlightFence，命令缓冲执行完时信号。
-	VkSemaphore waitSem = *imageAvailableSemaphores[currentFrame];
-	const VkPipelineStageFlags waitStage = static_cast<VkPipelineStageFlags>(
-		static_cast<VkPipelineStageFlags2>(renderGraph.swapchainWaitStage));
-	VkCommandBuffer cb = *commandBuffers[currentFrame];
-	VkSemaphore signalSem = *renderFinishedSemaphores[currentFrame];
-	VkFence rawFence = *inFlightFences[currentFrame];
+	// ⑬ 提交（手术 4：块体迁 FrameSession::submit——waitStage = 图派生 swapchain
+	// 首用阶段；DEVICE_LOST → Error 退出帧循环，其余失败留观测）
+	if (auto r = session.submit(renderGraph.swapchainWaitStage); !r)
+		return std::unexpected(std::move(r).error());
 
-	VkSubmitInfo rawSubmitInfo{};
-	rawSubmitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-	rawSubmitInfo.waitSemaphoreCount = 1;
-	rawSubmitInfo.pWaitSemaphores = &waitSem;
-	rawSubmitInfo.pWaitDstStageMask = &waitStage;
-	rawSubmitInfo.commandBufferCount = 1;
-	rawSubmitInfo.pCommandBuffers = &cb;
-	rawSubmitInfo.signalSemaphoreCount = 1;
-	rawSubmitInfo.pSignalSemaphores = &signalSem;
+	// 帧内捕获收口（手术 2：块体迁 FrameCapturer::collect——等本帧 fence、搬 mapped
+	// 字节进结果；fence 不 reset（下帧 ① 照常），停顿只在请求帧，正常帧零影响）
+	capturer.collect(device, session.currentInFlightFence());
 
-	VkResult submitVkResult = ::vkQueueSubmit(graphicsQueue, 1, &rawSubmitInfo, rawFence);
-	// DEVICE_LOST：GPU 挂起/复位，不可恢复——记录后退出帧循环
-	if (submitVkResult == VK_ERROR_DEVICE_LOST) {
-		auto logger = RLLogger::getInstance();
-		if (logger) logger->error("Renderer: device lost on submit! (frame {})", frame);
-		return std::unexpected(Error{ErrorCode::DeviceLost, "VK_ERROR_DEVICE_LOST on submit"});
-	}
-	// 其余失败（OOM/device reset 等）：fence 可能永不信号 → 下帧 ① 会报错退出，
-	// 此处先留观测（旧实现静默吞掉，排障零线索）
-	if (submitVkResult != VK_SUCCESS) {
-		auto logger = RLLogger::getInstance();
-		if (logger) logger->error("Renderer: submit failed (frame {}): {}", frame,
-			vk::to_string(vk::Result{submitVkResult}));
-	}
+	// ⑭⑮ 上屏 + 帧 slot 推进（手术 4：块体迁 FrameSession::present/advance——
+	// present fence 追踪、out-of-date 重建、noPresent 跳 present 语义全保留）
+	if (auto r = session.present(); !r)
+		return std::unexpected(std::move(r).error());
+	session.advance();
 
-	// 帧内捕获收口：同步等本帧命令（含回读拷贝）完成，把 mapped 字节搬进结果。
-	// fence 不在此 reset（下帧 ① waitAll 对已信号 fence 立即通过 + 照常 reset，语义不变）；
-	// 停顿只发生在捕获请求帧（llm 一次性截图），正常帧零影响。
-	if (captureArmed) {
-		(void)device.waitForFences(*inFlightFences[currentFrame], VK_TRUE,
-			std::numeric_limits<uint64_t>::max());
-		if (captureMapped) {
-			auto* src = static_cast<const uint8_t*>(captureMapped);
-			captureInFlight.pixels.assign(src, src + captureInFlight.bytes);
-			captureResult = std::move(captureInFlight);
-		}
-		captureArmed = false;
-	}
-
-	// ⑭ 上屏：等 renderFinished 信号量（确保绘制完成），把 imageIndex 交给合成器。
-	// SwapchainPresentFenceInfoEXT（KHR/EXT 为 typedef 别名，sType 相同）链到
-	// presentInfo.pNext：present 完成时信号 presentFence，实现 present 端完成
-	// 追踪（VK_KHR_swapchain_maintenance1，见 docs/技术概念.md 的"PresentFenceInfoKHR"）
-	// DIAG（diagnostics.lua no_present）：跳 present——buffer 不出进程，KWin 不 import dmabuf
-	if (!noPresent) {
-		vk::SwapchainPresentFenceInfoEXT presentFenceInfoEXT{};
-		presentFenceInfoEXT.setFences(*presentFences[currentFrame]);
-		vk::PresentInfoKHR presentInfo{};
-		presentInfo.setPNext(&presentFenceInfoEXT);
-		presentInfo.setWaitSemaphores(*renderFinishedSemaphores[currentFrame]);
-		presentInfo.setSwapchains(*swapchain->getSwapchain());
-		presentInfo.setImageIndices(imageIndex);
-		auto presentResult = graphicsQueue.presentKHR(presentInfo);
-
-		if (presentResult == vk::Result::eErrorDeviceLost) {
-			auto logger = RLLogger::getInstance();
-			if (logger) logger->error("Renderer: device lost on present!");
-			return std::unexpected(Error{ErrorCode::DeviceLost, "VK_ERROR_DEVICE_LOST on present"});
-		}
-		// present 时 swapchain 失效：重建后下一帧继续
-		if (presentResult == vk::Result::eErrorOutOfDateKHR ||
-			presentResult == vk::Result::eSuboptimalKHR) {
-			if (auto result = recreateSwapchainAndDepth("present out-of-date/suboptimal"); !result) {
-				return std::unexpected(std::move(result).error());
-			}
-		}
-		// 其余错误码（如 SURFACE_LOST）：spec 语义下队列操作仍入队、present fence 仍
-		// 信号（不死锁），但必须留观测——下帧 acquire 大概率持续失败
-		if (presentResult != vk::Result::eSuccess &&
-			presentResult != vk::Result::eErrorDeviceLost &&
-			presentResult != vk::Result::eErrorOutOfDateKHR &&
-			presentResult != vk::Result::eSuboptimalKHR) {
-			auto logger = RLLogger::getInstance();
-			if (logger) logger->error("Renderer: present failed (frame {}): {}", frame,
-				vk::to_string(presentResult));
-		}
-	}
-
-	// ⑮ 推进到下一个帧 slot（双缓冲）
-	currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 	return {};
 }
 

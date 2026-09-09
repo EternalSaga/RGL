@@ -14,7 +14,12 @@ import vk_resources;
 import VmaRaii;
 import shader_registry;  // Phase 4 批次 2：管线表迁出（PipelineEntry/ShaderRegistry，零 entt）
 import shader;
+import state_kit;  // Phase 10 批次 0 手术 1：pass 状态表迁出 Renderer（增改集中一处）
 import gpu_cull;  // Phase 7b：GPU culling 子系统（culling compute + 读回；main 先于 Renderer 构造）
+export import frame_capture;  // 手术 2：帧内回读捕获器；FrameCapture 出现在本类公开返回类型
+	//（同 frame_draw_list 先例 export import，消费方只 import vk_renderer 即可见全类型）
+import cull_driver;  // 手术 3：culling 帧编舞（④c 提交时序 + 双路 + 对账）迁出本类
+import frame_session;  // 手术 4：帧生命周期会话（同步对象/命令缓冲/acquire/submit/present/重建）
 import vk_indirect_commands;  // Phase 7b：DGC 命令生成（NVIDIA 路；main 按能力位条件构造）
 import vkerror;
 import diagnostics;  // no_present 诊断单例（configs/diagnostics.lua）
@@ -105,72 +110,30 @@ export class Renderer {
 	 */
 	[[nodiscard]] std::expected<void, Error> drawFrame(const FrameDrawList& list);
 
-	// ===== 帧内捕获（2026-09-08：llm_debug 截图从"离屏重渲"改为"回读本帧真实输出"）=====
+	// ===== 帧内捕获（2026-09-10 Phase 10 批次 0 手术 2：状态与实现迁 frame_capture
+	// 模块 FrameCapturer，此处保留原签名转发——llm_debug/ecs 消费面零改动）=====
+	/** llm_debug 消费的类型别名（原 Renderer 嵌套类型；定义见 frame_capture）。 */
+	using FrameCapture = RGL::FrameCapture;
 	/**
-	 * 帧内捕获产物：请求帧的 drawFrame 在 present 前录一条回读拷贝（后缓冲，或
-	 * deferred G-buffer 第 N 号 RT = 诊断 dump_gbuf），submit 后同步等本帧 inFlight
-	 * fence 搬进结果——截图恒等于真实上屏内容（与图演进零分歧、零平行渲染器维护
-	 * 负担）；同步停顿只发生在请求帧（llm 一次性截图模式，正常路径零影响）。
+	 * drawFrame 前调用：请求本帧回读捕获（转发 FrameCapturer::request）。
+	 * @param gbufChannel -1 = swapchain 后缓冲；>=0 = G-buffer 通道号（dump_gbuf）
 	 */
-	struct FrameCapture {
-		uint32_t width = 0;
-		uint32_t height = 0;
-		vk::Format format = vk::Format::eUndefined;
-		int gbufChannel = -1;          // >=0 = G-buffer 直读（dump_gbuf）；-1 = swapchain 后缓冲
-		VkDeviceSize bytes = 0;
-		std::vector<uint8_t> pixels;   // 原格式回读（行紧凑），消费方转 RGBA8
-	};
+	void requestFrameCapture(int gbufChannel = -1) { capturer.request(gbufChannel); }
 	/**
-	 * drawFrame 前调用（gbufChannel = diagnostics().dumpGbuf）；一次性——acquire 超时
-	 * 跳帧时请求保持 pending，直到真正录制的帧消费。
-	 * @param gbufChannel -1 = swapchain 后缓冲；>=0 = G-buffer 通道号（dump_gbuf，
-	 *   deferred 图专属，前向图无对应 RT 时跳过并留 warn）
-	 */
-	void requestFrameCapture(int gbufChannel = -1) { captureRequest = gbufChannel; }
-	/**
-	 * drawFrame 后调用（fence 已在 drawFrame 内等待）。
+	 * drawFrame 后调用（fence 已在收口阶段等待）。
 	 * @return 本帧捕获产物；空 = 本帧无捕获产物
 	 */
-	std::optional<FrameCapture> takeFrameCapture() { return std::move(captureResult); }
+	std::optional<FrameCapture> takeFrameCapture() { return capturer.take(); }
 	/**
-	 * 本帧是否已产出捕获（acquire 超时跳帧时 drawFrame 不录拷贝、请求保持 pending，
-	 * 消费方据此决定重试而非误读空）。
+	 * 本帧是否已产出捕获（acquire 超时跳帧时请求保持 pending，据此决定重试而非误读空）。
 	 * @return true = 捕获产物就绪（takeFrameCapture 可取）
 	 */
-	[[nodiscard]] bool hasFrameCapture() const { return captureResult.has_value(); }
+	[[nodiscard]] bool hasFrameCapture() const { return capturer.has(); }
 
    private:
 	/**
-	 * 创建 MAX_FRAMES_IN_FLIGHT 套同步对象（每个帧 slot 一套，双缓冲）。
-	 *
-	 * 四个角色：
-	 *   imageAvailableSemaphores — acquireNextImage 信号，queueSubmit 等待
-	 *                              （通知 GPU 后缓冲已可绘制）
-	 *   renderFinishedSemaphores — queueSubmit 信号，presentKHR 等待
-	 *                              （通知合成器本帧绘制完成）
-	 *   inFlightFences — 挂 queueSubmit，追踪"命令缓冲执行完"
-	 *   presentFences — 经 SwapchainPresentFenceInfoEXT 挂 presentInfo.pNext，
-	 *                   追踪"present 完成"（VK_KHR_swapchain_maintenance1）
-	 *
-	 * 为什么是双 fence：单 fence 只挂 queueSubmit 时，triple-buffer（KWin）下 fence
-	 * 信号时 present 可能仍在异步等待，下一帧重用 semaphore 会违反 VUID-00067。
-	 * 见 docs/技术概念.md 的"双 Fence"一节。
-	 */
-	void createSyncObjects();
-	/** 批量分配 MAX_FRAMES_IN_FLIGHT 个 primary command buffer（每帧 slot 一个，
-	 * 每帧 reset() 后重新录制）。 */
-	void allocateCommandBuffers();
-	/** Phase 7b：culling 数据通路独立命令缓冲（每帧 slot 一个；GpuCull 激活时构造期
-	 * 分配，inactive = 空）。与主 CB 分离的原因 = 读回重放需要"提交 cull → 同步等 →
-	 * 读回 → 再录 opaque 重放"的帧内停顿，同一 CB 无法 end-后-续录。 */
-	void allocateCullCommandBuffers();
-	/** Phase 7b：GPU/CPU 剔除结果对账（readCullResult 后调用）：逐 candidate 可见集合
-	 * vs CPU opaque 段（objectSlot 多重集）比对，计数/失配变化时打日志（静止不刷屏）。
-	 * 5b 验收信号 = match 恒 true；5c 读回重放后本函数是正确性哨兵。 */
-	void reconcileGpuCull(const FrameDrawList& list);
-	/**
 	 * scene data staging ring（Phase 5 批次 2，全项目首个每帧动态 GPU 数据）：
-	 * ×MAX_FRAMES_IN_FLIGHT 常驻映射 host buffer。写安全 = 帧 slot 复用规则——
+	 * ×FrameSession::kFramesInFlight 常驻映射 host buffer。写安全 = 帧 slot 复用规则——
 	 * drawFrame ① 已 wait 本 currentFrame slot 的 inFlight fence（f-2 帧命令跑完）
 	 * 才写本 slot staging；录制期 vkCmdCopyBuffer 拷进 scene data device buffer
 	 *（命令流内天然有序），描述符静态指向该 buffer 永不改动。
@@ -178,15 +141,20 @@ export class Renderer {
 	 */
 	void createSceneStaging(RGL::Resources& vkResources);
 	/**
-	 * 窗口尺寸变化（resize）或 acquire/present 返回 out-of-date 时重建 swapchain +
-	 * 深度图。
-	 * 深度图必须与 swapchain extent 同步重建，否则 renderArea 会超出图像范围。
-	 * @param context 日志上下文（调用点标识，如 "acquire out-of-date"）
-	 * @return void；recreate 后 extent 未变 = 深度图仍有效跳过重建（静默死循环只
-	 *   报错一次）；深度重建失败 → Error
+	 * ③.5 scene data 上传（Phase 5 批次 2，全项目首个每帧动态 GPU 数据）：CPU 写
+	 * staging[frameSlot] 头 128B（光参数@0 / env@48 / skyInvViewProj@64）+ 对象矩阵表
+	 * @128 + 多灯数组尾区@262272（Phase 7 D3）。本 slot fence 已在 ① wait（f-2 帧命令
+	 * 跑完，staging 不再被读），写安全；录制期 vkCmdCopyBuffer 拷进 device buffer。
+	 * 容量契约（objectMatrices ≤ kSceneMatrixCapacity、lightCount ≤ kMaxLights）由 main
+	 * 启动期检查，此处防御性再校验。
+	 * @param list 每帧绘制列表（sceneData：light/envParams/skyInvViewProj/objectMatrices/灯数组）
+	 * @param frameSlot 本帧 staging slot 下标
+	 * @return void；超容量 → Error（Phase 5/7 契约，main 启动检查被绕过的兜底）
 	 */
-	[[nodiscard]] std::expected<void, Error> recreateSwapchainAndDepth(const char* context);
-	RGL::DeviceContext& vkDevice;  // 设备层引用（队列 / 命令池 / fence / 能力探测）
+	[[nodiscard]] std::expected<void, Error> writeSceneStaging(const FrameDrawList& list,
+		uint32_t frameSlot);
+	// recreateSwapchainAndDepth（swapchain+depth 重建）已随手术 4 迁 FrameSession。
+	RGL::DeviceContext& vkDevice;  // 设备层引用（队列 / 命令池 / fence 等待 / 能力探测）
 	RGL::Swapchain* swapchain;      // 交换链层（main 持有，析构序在 Renderer 之后）
 	RGL::Resources* resources;      // 资源层（main 持有，析构序在 Renderer 之后）
 	// 管线表（Phase 4 批次 2：迁出至 ShaderRegistry，零 entt；main 先于 Renderer 构造并持引用，
@@ -195,87 +163,42 @@ export class Renderer {
 	// Phase 6：编译渲染图（构造传入，main 启动期 compileRenderGraph 产出，之后不变）
 	RGL::CompiledRenderGraph renderGraph;
 	// Phase 7b：GPU culling 子系统（main 持有，构造序先于 Renderer → 析构序其后安全）；
-	// 持引用不持所有权
-	RGL::GpuCull* gpuCull;
-	RGL::DgcCommands* dgc;  // DGC 命令生成（NVIDIA 路；null = 读回重放）
+	// Phase 10 批次 0 手术 3：④c 提交时序 + opaque 段双路 + 对账全迁 CullDriver
+	//（本类构造期以 main 传入的裸指针建 driver；inactive = 全路径不碰 culling 语义不变）
+	RGL::CullDriver cullDriver;
 	// attachment 真实布局追踪（按图 slot 索引，跨帧持久）：帧首 barrier 的 oldLayout
 	// 来源（plan.oldLayoutDiscard=false 者用本值；swapchain/depth 走帧首丢弃规则
 	// 不查询）；录制期随每条物化 barrier 更新为 plan.newLayout。
 	//（Phase 4 前 DIAG RGL_OFFSCREEN 的 offscreenLayout 单变量泛化为逐 slot 表）
 	std::vector<vk::ImageLayout> attachmentLayouts;
-	// 帧内捕获状态（requestFrameCapture/takeFrameCapture，见其注释）
-	int captureRequest = -2;                    // -2 = 无请求；-1 = 后缓冲；>=0 = GB 通道号
-	bool captureArmed = false;                  // 本帧已录拷贝（submit 后等待搬移）
-	FrameCapture captureInFlight;               // 录制期元数据（bytes/extent/format/channel）
-	std::optional<FrameCapture> captureResult;  // takeFrameCapture 消费
-	RGL::VmaBuffer captureStaging;              // host-visible 回读缓冲（按需增长重建）
-	VkDeviceSize captureStagingSize = 0;
-	void* captureMapped = nullptr;              // 常驻映射指针（createBuffer 不回传 mapped，随分配自存）
-	uint32_t swapchainSlot = kRgNoAttachment;   // 编译图中 swapchain 的 slot（捕获布局追踪入口）
-	/**
-	 * 捕获回读缓冲按需增长（GPU_TO_CPU + 常驻映射，同 scene staging 的创建模式反方向）；
-	 * 重建安全：上一捕获的搬移在请求帧 drawFrame 内已完成（fence 已等），本函数只在
-	 * 新拷贝录制前调用，无飞行中写冲突。
-	 * @param bytes 所需字节数（w×h×captureBpp）
-	 * @return true = 缓冲就绪（既有容量足够或已重建）；false = 分配失败（error 日志）
-	 */
-	[[nodiscard]] bool ensureCaptureStaging(VkDeviceSize bytes);
-	// edS3：depth clip enable 动态状态能力门（vkCmdSetDepthClipEnableEXT；启动期一次探测，
-	// 未支持 = false，applyDynamicState 内 no-op 不 set——"扩展缺失干净降级"原则）
-	bool depthClipDynamic = false;
-	// DIAG（configs/diagnostics.lua no_present，原 RGL_NO_PRESENT env 2026-09-08 转配置）：
-	// 可见窗渲染但永不 present——KWin 永不 import 我们的 swapchain dmabuf
-	bool noPresent = diagnostics().noPresent;
-	// DIAG（可见窗 fault 排查）：drawFrame 帧计数——DEVICE_LOST 时打帧号，
-	// 区分"帧数累积触发"（fault 帧号恒定）vs"窗口显示触发"（fault 帧号 >> showAfter）
-	uint64_t frameCount = 0;
-	// 非 RAII 句柄（队列生命周期由 DeviceContext 的 raii Device 管理）
-	vk::Queue graphicsQueue;
-	const vk::raii::CommandPool& graphicsCommandPool;  // 图形命令池（DeviceContext 持有，submit/reset 用）
-	// 动态状态：opaque pass（默认值 = cube 的 opaque 状态），drawFrame() 在 opaque 段首
-	// applyDynamicState 一次（Phase 7 多 pass 时按 pass 换状态）
-	RGL::RenderState opaqueState{};
-	// 动态状态：transparent pass（Phase 5 透明排序）——不写深度 + 开混合（factors 在
-	// applyDynamicState 内接线），drawFrame() 在 transparent 段首 applyDynamicState 一次
-	RGL::RenderState transparentState{};
-	// 动态状态：skybox pass（Phase 5.5 批次 4）——不写深度 + LEQUAL（大三角 z=1 只在
-	// 空像素通过），drawFrame() 在 skybox 段首 applyDynamicState 一次
-	RGL::RenderState skyboxState{};
-	// Phase 7 D1：deferred light pass 状态（全屏终图：无深度附件、cull none 保证大三角不被剔、
-	// 不混合），drawFrame() 在 drawLight pass 首 applyDynamicState 一次
-	RGL::RenderState lightState{};
+	// 帧内捕获（Phase 10 批次 0 手术 2）：请求状态 + 回读缓冲 + record/collect 三步曲
+	// 全迁 RGL::FrameCapturer（frame_capture 模块，构造期自图定位 swapchain slot）。
+	// 声明位置 = 原 capture 成员块（attachmentLayouts 之后、stateKit 之前），
+	// ctor 初始化列表顺序与之对应（-Wreorder 同步）。
+	RGL::FrameCapturer capturer;
+	// edS3：depth clip enable 动态状态能力门 + 四段 RenderState 值集合 + 状态名解析
+	//（Phase 10 批次 0 手术 1：状态表迁出至 StateKit——pass.state 词表与状态值的唯一
+	// 持有者；Phase 10 阴影新增状态集中改该模块一处）
+	RGL::StateKit stateKit;
+	// 帧生命周期会话（Phase 10 批次 0 手术 4：①②③/⑬⑭⑮ + 四套同步对象 + 每帧命令
+	// 缓冲 + swapchain/depth 重建迁 FrameSession；本类录制期经 commandBuffer()/
+	// currentInFlightFence()/currentFrameSlot()/imageIndex() 消费）。声明序在 stateKit 后
+	// （ctor 初始化列表同序：session 依赖 vkDevice/swapchain/resources，均在更前）。
+	RGL::FrameSession session;
+	const vk::raii::CommandPool& graphicsCommandPool;  // 图形命令池（DeviceContext 持有，金丝雀录制路径用）
 	// Phase 7 D1：light 管线条目下标（构造期从 registry 取 "light"；图含 drawLight pass 时必填）
 	std::optional<uint32_t> lightPipelineIdx;
-	/**
-	 * 图 pass.state 名 → 动态状态（构造期校验保证图内名字全部可解析，未知名 = 校验
-	 * 遗漏的编程错误，抛出）。
-	 * @param name 状态名（"opaque"/"skybox"/"transparent"/"light"）
-	 * @return 状态 const 引用（成员存储，录制期 applyDynamicState 消费）
-	 */
-	const RGL::RenderState& stateFor(std::string_view name) const;
 	// descriptor heap 的 GPU 地址（VmaDescriptorHeap 管理的"描述符槽位数组"，
 	// 对齐细节见 VmaBuffer.cppm）
 	vk::DeviceAddress heapAddress = 0;
 
-	/**
-	 * 双缓冲：最多 2 帧同时在飞——当前帧在录制 + 上一帧还在 GPU 执行。
-	 * 下方同步对象数组按 currentFrame 索引，fence 信号后才可重用（双 fence 设计
-	 * 见 createSyncObjects 注释）
-	 */
-	static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
-	uint32_t currentFrame = 0;  // 当前帧 slot（0/1；drawFrame ⑮ 模 MAX_FRAMES_IN_FLIGHT 推进）
-	// scene data staging ring（Phase 5 批次 2，见 createSceneStaging）
-	std::array<RGL::VmaBuffer, MAX_FRAMES_IN_FLIGHT> sceneStaging;
-	std::vector<vk::raii::Semaphore> imageAvailableSemaphores;  // acquire 信号（queueSubmit 等待）
-	std::vector<vk::raii::Semaphore> renderFinishedSemaphores;  // submit 信号（presentKHR 等待）
-	std::vector<vk::raii::Fence> inFlightFences;                // 命令缓冲执行完（挂 queueSubmit）
-	std::vector<vk::raii::Fence> presentFences;                 // present 完成（presentInfo.pNext 挂）
-	std::vector<vk::raii::CommandBuffer> commandBuffers;        // primary 命令缓冲（每帧 slot 一个）
-	// Phase 7b：culling 数据通路命令缓冲（每帧 slot 一个；inactive = 空，见
-	// allocateCullCommandBuffers）+ 对账日志节流状态
-	std::vector<vk::raii::CommandBuffer> cullCommandBuffers;
-	uint32_t lastReconcileVisible = 0xFFFFFFFF;  // 对账日志节流（计数/失配变化才打）
-	bool lastReconcileMatch = false;
+	// scene data staging ring（Phase 5 批次 2，见 createSceneStaging；slot 数 =
+	// FrameSession::kFramesInFlight，与帧 slot 一一对应）
+	std::array<RGL::VmaBuffer, FrameSession::kFramesInFlight> sceneStaging;
+	// 双缓冲游标 / 帧计数 / noPresent / 四套同步对象 / 每帧命令缓冲（原
+	// MAX_FRAMES_IN_FLIGHT/currentFrame/frameCount/noPresent/graphicsQueue/
+	// imageAvailableSemaphores/renderFinishedSemaphores/inFlightFences/presentFences/
+	// commandBuffers）已随手术 4 迁 FrameSession 私有成员。
 };
 
 }  // namespace RGL
