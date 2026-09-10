@@ -547,6 +547,17 @@ int main() {
 					logger->warn("dgc: 构造失败回落读回重放: {}", e.what());
 			}
 		}
+		// 清晰选路日志（启动期一次）：哪个设备走 DGC execute 还是读回重放
+		if (auto* logger = RLLogger::getInstance()) {
+			std::string devName(vkDevice.getPhysicalDevice().getProperties().deviceName.data());
+			const auto& dgcSup = vkDevice.getDgcSupport();
+			if (dgc && dgc->active())
+				logger->info("DGC path: device='{}' graphicsIndirect={} computeIndirect={} -> DGC execute (vkCmdExecuteGeneratedCommandsEXT)",
+					devName, dgcSup.graphicsIndirect, dgcSup.computeIndirect);
+			else
+				logger->info("DGC path: device='{}' graphicsIndirect={} computeIndirect={} -> 读回重放 (CPU 回退)",
+					devName, dgcSup.graphicsIndirect, dgcSup.computeIndirect);
+		}
 		Renderer vkRenderer(vkDevice, vkSwapchain, vkResources, shaderRegistry,
 			std::move(*compiledGraph), &gpuCull, dgc.get());
 

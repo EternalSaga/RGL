@@ -57,7 +57,6 @@ void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListS
 	// Phase 7 批次 4：CPU frustum culling——视锥 6 面从 proj·view 提取（每帧一次），逐 entity
 	// node-local 剔除球经 modelMatrix 变换到世界后测（保守：跨界判可见，绝不误剔）。
 	const Frustum frustum = extractFrustum(viewProj.proj * viewProj.view);
-	uint32_t culled = 0;
 
 	// Phase 7b：cullArgs 逐 candidate 填充（candidate 序 = main C3 表序——同 view 迭代序 +
 	// 同守卫：pipelineIndex 有效 / groupCount>0 / 不透明；透明留 CPU 排序路径不入候选）
@@ -97,10 +96,8 @@ void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListS
 			const glm::vec3 wc = glm::vec3(modelMatrix * glm::vec4(cull.center, 1.0f));
 			const float scale = std::max({glm::length(glm::vec3(modelMatrix[0])),
 				glm::length(glm::vec3(modelMatrix[1])), glm::length(glm::vec3(modelMatrix[2]))});
-			if (!sphereInFrustum(frustum, wc, cull.radius * scale)) {
-				++culled;
+			if (!sphereInFrustum(frustum, wc, cull.radius * scale))
 				return;
-			}
 			const RGL::DrawCall call{
 				asset.pipelineIndex,
 				std::as_bytes(std::span<const RGL::DrawArgs>{&args, 1}), asset.groupCount};
@@ -108,15 +105,6 @@ void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListS
 			const glm::vec3 d = glm::vec3(tf.world[3]) - camera.position;  // world 平移列（无 per-entity 包围盒时的排序代理）
 			bucket.push_back(Pending{call, glm::dot(d, d)});  // 距离²（免 sqrt，排序单调等价）
 		});
-
-	// Phase 7 批次 4：可见统计（仅计数变化时打日志——相机移动/场景变化时可见数抖动即现，静止不刷屏）
-	const uint32_t newVisible = static_cast<uint32_t>(opaque.size() + transparent.size());
-	if (newVisible != state.visibleCount || culled != state.culledCount) {
-		if (auto* logger = RLLogger::getInstance())
-			logger->info("culling: {} visible / {} culled（frustum，node-local 剔除球）", newVisible, culled);
-	}
-	state.visibleCount = newVisible;
-	state.culledCount = culled;
 
 	FrameDrawList fresh;
 	for (const auto& p : opaque)

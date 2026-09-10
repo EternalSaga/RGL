@@ -161,10 +161,7 @@ void CullDriver::reconcile(const FrameDrawList& list) {
 	auto logger = RLLogger::getInstance();
 	if (!logger)
 		return;
-	if (match) {
-		logger->info("gpu cull reconcile: gpu-visible={}/cpu-visible={} candidates={} match",
-			gpuCount, cpuSlots.size(), gpuCull->candidateCount());
-	} else {
+	if (!match) {
 		std::string dump;
 		for (auto v : gpuSlots | std::views::take(8))
 			dump += fmt::format("{} ", v);

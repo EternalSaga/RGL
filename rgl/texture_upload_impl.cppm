@@ -59,14 +59,6 @@ export [[nodiscard]] std::expected<uint32_t, Error> uploadTexture(RGL::Resources
 	auto imageResult = allocator.createImage(imageInfo, imageAlloc, &imageAllocData);
 	if (!imageResult) return std::unexpected(std::move(imageResult).error());
 	auto image = std::move(*imageResult);
-	// DIAG（4K 黑屏排查）：VMA 选中的内存类型（实测 4K/1×1 均 type=0 pool=0
-	// DEVICE_LOCAL，与 spike 同池 → 池选择非根因）
-	if (logger) {
-		const auto& mt = device.getPhysicalDevice().getMemoryProperties().memoryTypes[imageAllocData.memoryType];
-		logger->info("DIAG {} mem: type={} pool={} props=0x{:x}", name,
-			imageAllocData.memoryType, imageAllocData.memoryType >> 4,
-			static_cast<uint32_t>(mt.propertyFlags));
-	}
 
 	// linear staging（host-visible + 常驻映射）：CPU 填充后 GPU 拷贝
 	vk::ImageCreateInfo stagingInfo = imageInfo;
@@ -85,10 +77,6 @@ export [[nodiscard]] std::expected<uint32_t, Error> uploadTexture(RGL::Resources
 	sub.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
 	VkSubresourceLayout subLayout;
 	vkGetImageSubresourceLayout(*dev, *staging, &sub, &subLayout);
-	if (logger)
-		logger->info("DIAG {} linear layout: offset={} rowPitch={} size={} mapped={}",
-			name, subLayout.offset, subLayout.rowPitch, subLayout.size,
-			static_cast<const void*>(stagingAllocData.pMappedData));
 	uint8_t* rowBase = static_cast<uint8_t*>(stagingAllocData.pMappedData) + subLayout.offset;
 	const size_t rowBytes = static_cast<size_t>(w) * 4;
 	for (uint32_t y = 0; y < h; ++y)
@@ -155,75 +143,6 @@ export [[nodiscard]] std::expected<uint32_t, Error> uploadTexture(RGL::Resources
 	if (dev.waitForFences(std::array<vk::Fence, 1>{*fence}, true, UINT64_MAX) != vk::Result::eSuccess)
 		return std::unexpected(Error{ErrorCode::VulkanError, fmt::format("texture: upload fence timeout: {}", name)});
 
-	// 临时诊断（Phase 3 全黑排查）：多位置 texel 回读（空间模式定位上传/采样问题）
-	{
-		VkBufferCreateInfo rbInfo{};
-		rbInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-		rbInfo.size = 64;
-		rbInfo.usage = static_cast<VkBufferUsageFlags>(VK_BUFFER_USAGE_TRANSFER_DST_BIT);
-		VmaAllocationCreateInfo rbAlloc{};
-		rbAlloc.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
-		rbAlloc.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
-		VmaAllocationInfo rbData{};
-		auto rbResult = allocator.createBuffer(rbInfo, rbAlloc, &rbData);
-		if (rbResult) {
-			auto& rb = *rbResult;
-			VkBufferImageCopy copies[4] = {};
-			const int32_t pts[4][2] = {{0, 0}, {static_cast<int32_t>(w / 2), static_cast<int32_t>(h / 2)},
-				{0, static_cast<int32_t>(h - 1)}, {static_cast<int32_t>(w - 1), 0}};
-			for (int i = 0; i < 4; ++i) {
-				copies[i].bufferOffset = static_cast<VkDeviceSize>(i) * 4;
-				copies[i].bufferImageHeight = 1;
-				copies[i].imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-				copies[i].imageOffset = {pts[i][0], pts[i][1], 0};
-				copies[i].imageExtent = {1, 1, 1};
-			}
-			// 图当前在 SHADER_READ_ONLY_OPTIMAL：回读前迁到 TRANSFER_SRC
-		auto toSrc = RGL::createImageBarrier(
-			*image, vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageLayout::eTransferSrcOptimal,
-				vk::ImageAspectFlagBits::eColor,
-				vk::PipelineStageFlagBits2::eFragmentShader, vk::PipelineStageFlagBits2::eTransfer,
-				vk::AccessFlagBits2::eShaderSampledRead, vk::AccessFlagBits2::eTransferRead);
-			VkDependencyInfo toSrcDep{};
-			toSrcDep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-			toSrcDep.imageMemoryBarrierCount = 1;
-			toSrcDep.pImageMemoryBarriers = reinterpret_cast<const VkImageMemoryBarrier2*>(&toSrc);
-			auto cmdAlloc = dev.allocateCommandBuffers(vk::CommandBufferAllocateInfo{
-				*device.getGraphicsCommandPool(), vk::CommandBufferLevel::ePrimary, 1});
-			auto cmd2 = std::move(cmdAlloc[0]);
-			cmd2.begin(vk::CommandBufferBeginInfo{});
-			::vkCmdPipelineBarrier2(*cmd2, &toSrcDep);
-			::vkCmdCopyImageToBuffer(*cmd2, *image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, *rb, 4, copies);
-			// 迁回 SHADER_READ_ONLY（描述符声明的布局；采样前必须）
-			auto toRead2 = RGL::createImageBarrier(
-				*image, vk::ImageLayout::eTransferSrcOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
-				vk::ImageAspectFlagBits::eColor,
-				vk::PipelineStageFlagBits2::eTransfer, vk::PipelineStageFlagBits2::eFragmentShader,
-				vk::AccessFlagBits2::eTransferRead, vk::AccessFlagBits2::eShaderSampledRead);
-			VkDependencyInfo toRead2Dep{};
-			toRead2Dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-			toRead2Dep.imageMemoryBarrierCount = 1;
-			toRead2Dep.pImageMemoryBarriers = reinterpret_cast<const VkImageMemoryBarrier2*>(&toRead2);
-			::vkCmdPipelineBarrier2(*cmd2, &toRead2Dep);
-			cmd2.end();
-			auto fence2 = vk::raii::Fence(dev, vk::FenceCreateInfo{});
-			VkSubmitInfo si{};
-			si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-			VkCommandBuffer cb2 = *cmd2;
-			si.commandBufferCount = 1;
-			si.pCommandBuffers = &cb2;
-			::vkQueueSubmit(device.getGraphicsQueue(), 1, &si, *fence2);
-			(void)dev.waitForFences(std::array<vk::Fence, 1>{*fence2}, true, UINT64_MAX);
-			const uint8_t* px = static_cast<const uint8_t*>(rbData.pMappedData);
-			if (logger)
-				logger->info("DIAG {} texels (0,0)={}/{}/{}/{} ({},{})={}/{}/{}/{} (0,{})={}/{}/{}/{} ({},0)={}/{}/{}/{}",
-					name,
-					px[0], px[1], px[2], px[3],
-					w / 2, h / 2, px[4], px[5], px[6], px[7],
-					h - 1, px[8], px[9], px[10], px[11],
-					w - 1, px[12], px[13], px[14], px[15]);
-		}
-	}
 
 	// slot 分配 + 描述符写入（SAMPLED_IMAGE，v341 4 参形态，spike 已验证）
 	auto slotResult = resources.allocSlot(name);
@@ -258,10 +177,6 @@ export [[nodiscard]] std::expected<uint32_t, Error> uploadTexture(RGL::Resources
 	// hpp dispatcher（vkGetDeviceProcAddr），同 spike 的运行时解析结论
 	dev.writeResourceDescriptorsEXT(stored.resourceDesc, stored.dst);
 
-	if (logger)
-		logger->info("texture: {} {}x{} {} → slot {} ({}MB)", name, w, h,
-			format == vk::Format::eR8G8B8A8Srgb ? "sRGB" : "UNORM", slot,
-			static_cast<double>(w) * h * 4.0 / (1024.0 * 1024.0));
 	return static_cast<uint32_t>(resources.getAssetTable().textureSize() - 1);
 }
 

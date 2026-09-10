@@ -107,8 +107,11 @@ DgcCommands::DgcCommands(RGL::DeviceContext& vkDevice, const RGL::ShaderRegistry
 	setInfo.sType = VK_STRUCTURE_TYPE_INDIRECT_EXECUTION_SET_CREATE_INFO_EXT;
 	setInfo.type = VK_INDIRECT_EXECUTION_SET_INFO_TYPE_SHADER_OBJECTS_EXT;
 	setInfo.info.pShaderInfo = &shaderInfo;
-	if (pfnCreateSet(device, &setInfo, nullptr, &executionSet) != VK_SUCCESS)
-		throw std::runtime_error("DgcCommands: vkCreateIndirectExecutionSetEXT failed");
+	const VkResult setResult = pfnCreateSet(device, &setInfo, nullptr, &executionSet);
+	if (setResult != VK_SUCCESS)
+		throw std::runtime_error(fmt::format(
+			"DgcCommands: vkCreateIndirectExecutionSetEXT failed: {} (shaderCount={} maxShaderCount={})",
+			vk::to_string(static_cast<vk::Result>(setResult)), shaderInfo.shaderCount, shaderInfo.maxShaderCount));
 	std::vector<VkWriteIndirectExecutionSetShaderEXT> writes;
 	writes.reserve(capacity);
 	for (uint32_t j = 0; j < entries.size(); ++j) {
