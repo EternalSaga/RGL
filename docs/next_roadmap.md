@@ -1,10 +1,11 @@
 # RGL 路线图
 
-> **状态**：现行（开发路线图；当前节点 = Phase 7 进行中：D1 延迟单灯 `70ce9d1` + D3 多灯/反射 +
-> 批次 4 CPU culling + **批次 5=7b GPU culling/DGC 完成（2026-09-09，forward+deferred BIT-IDENTICAL；
-> DGC 路径待 NVIDIA 机实测）**，批次 6 文档销账待续；并行工作流 = **Phase 10 批次 0 Renderer 拆分
-> 完成（2026-09-10，drawFrame 577→291，5 模块摘出，BIT-IDENTICAL）** + 架构债务 1+2 修复
-> （scene→scene_context / cube 出内核，见 [架构债务-依赖方向审计.md](架构债务-依赖方向审计.md)，`b1788e0`））
+> **状态**：现行（开发路线图；**Phase 7 完成（2026-09-10）**：D1 延迟单灯 `70ce9d1` + D3 多灯/反射 +
+> 批次 4 CPU culling + 批次 5=7b GPU culling/DGC + 批次 2 refine（IBL+skybox）+ 灯 entity 化 +
+> **前向头 SceneLight 入反射（Slang C API 工具升级，双源消除）+ 批次 6 销账**；
+> 并行工作流 = **Phase 10 批次 0 Renderer 拆分完成（2026-09-10，drawFrame 577→291，5 模块摘出，
+> BIT-IDENTICAL）** + 架构债务 1+2 修复（scene→scene_context / cube 出内核，
+> 见 [架构债务-依赖方向审计.md](架构债务-依赖方向审计.md)，`b1788e0`）；下一节点 = Phase 8）
 
 Phase 0–6 已全部完成（各阶段结论一段话归档于下，实施细节与计划-实现偏离的权威记录在
 `docs/archive/phaseX_plan.md`）。（legacy 旧 OpenGL 项目已于 2026-09-08 删除，见 git history。）
@@ -96,10 +97,10 @@ present/waitStage 派生）；drawFrame 手写布局转换清零、pass 循环�
 | **0** Bistro + loader 节点 TRS（forward） | nodeWorld mat4 父链、Bistro forward、packer、`kSceneMatrixCapacity`↑4096 | **✅ 完成** | normal 绿通道翻 + BC5 Z 重建（→ Phase 8） |
 | **1** G-buffer MRT + offscreen 显式格式 | 格式词表、4-MRT `deferred_geometry`、`dump_gbuf` 直读验 albedo | **✅ 核心完成** | normal/metalRough **纹理**采样（→ Phase 8） |
 | **2** Light pass + sampleRead 接线 | SAMPLED_IMAGE 描述符入 heap、全屏 light pass GGX、forward/deferred 切换（选路已转 render_graph.lua variant，2026-09-08）、**refine 残二完成**（2026-09-10：light pass 简化 IBL + skybox 背景合成，见下 refine 注） | **✅ 完成** | （无——refine 残二已销） |
-| **3** 多灯 + 灯数据并入反射（D3） | 第 4 条反射管线 `GpuLight`、scene data 尾区灯数组 @262272（头不动保 forward diff0）、`lights` 配置、逐灯循环 + 点光衰减、**灯 entity 化**（2026-09-10，`Light` 组件 + `index` 正序契约，ECS 规范 3） | **✅ 核心完成** | forward `LightDataGpu@0` 头仍手工双源（→ 反射）；shadow map |
+| **3** 多灯 + 灯数据并入反射（D3） | 第 4 条反射管线 `GpuLight`、scene data 尾区灯数组 @262272（头不动保 forward diff0）、`lights` 配置、逐灯循环 + 点光衰减、**灯 entity 化**（2026-09-10，`Light` 组件 + `index` 正序契约，ECS 规范 3）、**前向头 `SceneLight` 入反射**（2026-09-10，第 6 条 `scene_forward` 管线，双源消除） | **✅ 完成** | shadow map（→ Phase 10） |
 | **4** CPU frustum culling | 逐图元 node-local `CullSphere`、Gribb-Harman 6 面（z∈[0,1]）、可见统计 | **✅ 核心完成** | 真 AABB（现球近似，够 frustum） |
 | **5** GPU culling / DGC | `vk_indirect_commands`、compute cull、IES/静态/读回重放三路、CPU 剔除降兜底+对账 | **✅ 核心完成**（2026-09-09；2026-09-10 三驱动 + 静态 spike 全运行时验证） | 静态 DGC 默认关（满槽实现慢 1.85×，翻盘 = 紧凑分桶 + 去同步等待，`docs/radv_static_dgc_spike.md`） |
-| **6** 文档销账 | 批次 2 refine + 灯 entity 化 + 批次 5 收尾的文档同步（devlog/research/roadmap/AGENTS/调试历史） | **✅ 完成**（2026-09-10） | 前向 `LightDataGpu@0` 头并入反射（债消，独立项，见剩余计划） |
+| **6** 文档销账 | 批次 2 refine + 灯 entity 化 + 批次 5 收尾 + 前向头反射 + C API 工具升级的文档同步（devlog/research/roadmap/AGENTS/调试历史） | **✅ 完成**（2026-09-10） | （无——Phase 7 全项销账） |
 
 **净结论**：延迟渲染单灯核心 + 多灯 + **GPU culling（7b）** 跑通——deferred 逐灯循环（定向+点光、
 per-light 颜色、距离衰减）headless 零 VVL error；forward 只读 `lights[0]` diff0 不变；GPU culling
@@ -110,9 +111,13 @@ per-light 颜色、距离衰减）headless 零 VVL error；forward 只读 `light
 **2026-09-10 更新**：三驱动运行时全验证（NV DGC execute 石锤 + 两 AMD/Intel 画像补测），
 静态 shader DGC spike 功能通（本机 Strix Halo，VVL 零 error + 1px tie 级回归）但满槽实现
 慢重放 1.85× → 默认关（`dgc_static` 门控）——详见 调试历史 2026-09-10 条目群 +
-`docs/radv_static_dgc_spike.md`。**批次 2 refine 完结**：deferred light pass 简化 IBL
-（env 采样替换常 ambient）+ skybox 背景合成（天空像素采 env）——deferred 与 forward IBL
-路线视觉对齐，forward BIT-IDENTICAL 不变（md5 一致），deferred 新基线稳定 + VVL 零 error。
+ `docs/radv_static_dgc_spike.md`。**批次 2 refine 完结**：deferred light pass 简化 IBL
+ （env 采样替换常 ambient）+ skybox 背景合成（天空像素采 env）——deferred 与 forward IBL
+ 路线视觉对齐，forward BIT-IDENTICAL 不变（md5 一致），deferred 新基线稳定 + VVL 零 error。
+ **前向头双源消除 + 反射工具升级（2026-09-10）**：`SceneLight` 经 Slang C API 实查布局入
+ 反射（第 6 条 `scene_forward` 管线），替换手写 `LightDataGpu`；连带 `reflection_tool` 加
+ `slang` 子命令（链接 `libslang.so`，4 条 slang 管线去 JSON 中间层、升逐字段 offsetof 断言）——
+ Phase 7 全项销账，forward BIT-IDENTICAL 不变。
 
 ### 剩余计划
 
@@ -130,11 +135,17 @@ per-light 颜色、距离衰减）headless 零 VVL error；forward 只读 `light
   背景合成（天空像素 = G-buffer position 清 0，重建世界射线采 env，与 forward skybox.frag 同式）。
   env 走 light pass binding 9/10（4/5 被 G-buffer 占用）。验证：forward BIT-IDENTICAL（md5 不变）、
   deferred 新输出稳定（两次 md5 一致）+ VVL 零 error。
-- ~~**灯 entity 化**（ECS 规范 3）~~ **已完成（2026-09-10）**：`Light` 组件 + `index` 正序契约
-  （画不画 = 实体有无，forward 读 index 0 = 主光，延迟按 index 落槽），BIT-IDENTICAL（forward+
-  deferred md5 一致）+ VVL 零 error + 多灯边界验证。余 forward `LightDataGpu@0` 头并入反射
-  （Phase 7 多灯已把灯数组入反射管线 4，前向头为 diff0 暂留手工双源，见 AGENTS 已知问题）。
-- **批次 6 文档销账**（待批次 5）。
+ - ~~**灯 entity 化**（ECS 规范 3）~~ **已完成（2026-09-10）**：`Light` 组件 + `index` 正序契约
+   （画不画 = 实体有无，forward 读 index 0 = 主光，延迟按 index 落槽），BIT-IDENTICAL（forward+
+   deferred md5 一致）+ VVL 零 error + 多灯边界验证。
+ - ~~**前向头 `SceneLight`/`LightDataGpu` 双源**~~ **已完成（2026-09-10）**：新增第 6 条
+   `scene_forward` 反射管线（`scene.slang` 的 `SceneLight` 经 **Slang C API** 实查布局 →
+   `scene_forward_types_generated`，逐字段 offsetof 断言），替换 `vkresources.cppm` 手写
+   `LightDataGpu`（4 处）。原默认成员初始化为死代码（renderListSystem 每帧显式聚合初始化），
+   替换行为不变，forward BIT-IDENTICAL（md5 不变）。**工具侧连带升级**：`reflection_tool` 加
+   `slang` 子命令（链接 `libslang.so` 直接查 C API，4 条 slang 管线去 JSON 中间层）——见
+   [slang_api_reflection_research.md](slang_api_reflection_research.md)。
+ - ~~**批次 6 文档销账**~~ **已完成（2026-09-10）**。
 
 ### 设计决策（现行）
 
@@ -150,9 +161,11 @@ per-light 颜色、距离衰减）headless 零 VVL error；forward 只读 `light
 ## 后续走向
 
 ```
-Phase 7 主体完成（2026-09-10）：批次 2 refine（IBL+skybox）✓ / 灯 entity 化 ✓ / 批次 5=7b GPU culling ✓
-  / 批次 6 销账 ✓。仅剩独立债消：前向 `LightDataGpu@0` 头并入反射（不阻塞 Phase 8）。
-    ↓
+ Phase 7 完成（2026-09-10）：批次 2 refine（IBL+skybox）✓ / 灯 entity 化 ✓ / 批次 5=7b GPU culling ✓
+   / 前向头 SceneLight 入反射（双源消除，C API 工具升级）✓ / 批次 6 销账 ✓。
+   遗留（非阻塞）：静态 DGC 翻盘（紧凑分桶）、normal/metalRough 纹理采样（Phase 8）、
+   shadow map（Phase 10）。
+     ↓
 Phase 8：Bistro 场景打磨
   ① HDR 累加链（先行——色彩判断基准）：light/forward 输出 → RGBA16F RT + ACES tone-map pass
      → SRGB8 swapchain（当前 intensity 4.0 已在 SRGB8 写入时裁切高光，无 tone map）；
