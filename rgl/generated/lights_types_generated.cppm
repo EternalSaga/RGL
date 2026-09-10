@@ -15,6 +15,9 @@ namespace RGL {
         glm::vec4 params;
     };
     static_assert(sizeof(GpuLight) == 64, "Size of C++ struct GpuLight does not match shader reflection!");
+    static_assert(offsetof(GpuLight, position) == 16, "Field GpuLight.position offset does not match shader reflection (scalar layout drift!)");
+    static_assert(offsetof(GpuLight, color) == 32, "Field GpuLight.color offset does not match shader reflection (scalar layout drift!)");
+    static_assert(offsetof(GpuLight, params) == 48, "Field GpuLight.params offset does not match shader reflection (scalar layout drift!)");
 
 
 

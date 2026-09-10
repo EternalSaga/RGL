@@ -14,6 +14,8 @@ namespace RGL {
         glm::vec2 uv;
     };
     static_assert(sizeof(ModelVertex) == 32, "Size of C++ struct ModelVertex does not match shader reflection!");
+    static_assert(offsetof(ModelVertex, normal) == 12, "Field ModelVertex.normal offset does not match shader reflection (scalar layout drift!)");
+    static_assert(offsetof(ModelVertex, uv) == 24, "Field ModelVertex.uv offset does not match shader reflection (scalar layout drift!)");
 
 
     // 相对 descriptor heap reserved range 起点的偏移，运行时 slot = reservedSlots() + offset

@@ -9,6 +9,7 @@ export module generator;
 import rlstd;
 import rllogger;
 import schema_loader;
+import slang_reflect;
 
 namespace RGL {
 
@@ -287,6 +288,119 @@ export std::string renderTemplate(const nlohmann::json& data,
 	logger->debug("Rendering template '{}'", templatePath);
 	inja::Environment env;
 	return env.render_file(templatePath, data);
+}
+
+// ─── Slang C API 反射生成（替代 JSON 中间层，见 docs/slang_api_reflection_research.md）───
+// 交叉校验：API 实查布局（编译器真值）vs schema 声明（期望值）。不等 = 漂移，致命。
+
+// vertexLayout 交叉校验：size==stride + 逐属性 name/offset/cppType 一致
+export bool validateSlangVertexLayout(const SlangStruct& api, const SchemaVertexLayout& vl) {
+	auto* logger = RLLogger::getInstance();
+	if (api.name != vl.name) {
+		logger->error("[FAIL] vertexLayout '{}': API struct name '{}'", vl.name, api.name);
+		return false;
+	}
+	if (api.size != vl.stride) {
+		logger->error("[FAIL] vertexLayout '{}': API size {} != schema stride {}", vl.name, api.size, vl.stride);
+		return false;
+	}
+	if (api.fields.size() != vl.attributes.size()) {
+		logger->error("[FAIL] vertexLayout '{}': API field count {} != schema attribute count {}",
+			vl.name, api.fields.size(), vl.attributes.size());
+		return false;
+	}
+	for (size_t i = 0; i < vl.attributes.size(); i++) {
+		const auto& attr = vl.attributes[i];
+		const auto* expected = vertexAttrCppType(attr.type);
+		if (!expected) {
+			logger->error("[FAIL] vertexLayout '{}' attr '{}': unmappable schema type '{}'",
+				vl.name, attr.name, attr.type);
+			return false;
+		}
+		const auto& f = api.fields[i];
+		if (f.name != attr.name || f.offset != attr.offset || f.cppType != expected) {
+			logger->error(
+				"[FAIL] vertexLayout '{}' attr[{}]: API ({} off={} type={}) != schema ({} off={} type={})",
+				vl.name, i, f.name, f.offset, f.cppType, attr.name, attr.offset, expected);
+			return false;
+		}
+	}
+	return true;
+}
+
+// push constant 交叉校验：字段名集合一致（偏移/尺寸取 API 真值，不校验 schema 侧偏移）
+export bool validateSlangPushConst(const SlangStruct& api, const SchemaPushConst& pc) {
+	auto* logger = RLLogger::getInstance();
+	if (api.fields.size() != pc.fields.size()) {
+		logger->error("[FAIL] pushConst '{}': API field count {} != schema field count {}",
+			pc.name, api.fields.size(), pc.fields.size());
+		return false;
+	}
+	for (const auto& sf : pc.fields) {
+		bool found = false;
+		for (const auto& af : api.fields) {
+			if (af.name == sf.name) { found = true; break; }
+		}
+		if (!found) {
+			logger->error("[FAIL] pushConst '{}': schema field '{}' not in API struct '{}'",
+				pc.name, sf.name, api.name);
+			return false;
+		}
+	}
+	return true;
+}
+
+// 由 API 实查 struct 生成 .cppm（复用 types_cppm.inja 模板）。structs 顺序 = 调用方
+// 按 schema（vertexLayouts + pushConstants）查询的顺序；slots/constants 仍取 schema。
+// 与 JSON 路径的差异：逐字段 offset 用 API 真值（offsetof static_assert 全开，更严）。
+export std::optional<std::string> generateCppmFromSlang(const std::vector<SlangStruct>& structs,
+	const Schema& schema,
+	const std::string& templatePath,
+	const std::string& moduleName) {
+	auto* logger = RLLogger::getInstance();
+	logger->debug("Generating .cppm '{}' from {} API-queried structs", moduleName, structs.size());
+
+	nlohmann::json data;
+	data["module_name"] = moduleName;
+	data["structs"] = nlohmann::json::array();
+	data["slots"] = nlohmann::json::array();
+	data["constants"] = nlohmann::json::array();
+
+	for (const auto& s : structs) {
+		nlohmann::json structObj;
+		structObj["name"] = s.name;
+		structObj["size"] = s.size;
+		structObj["fields"] = nlohmann::json::array();
+		for (const auto& f : s.fields) {
+			nlohmann::json fieldObj;
+			fieldObj["name"] = f.name;
+			fieldObj["cpp_type"] = f.cppType;
+			fieldObj["offset"] = f.offset;  // API 真值 → 模板发 offsetof static_assert
+			structObj["fields"].push_back(std::move(fieldObj));
+		}
+		data["structs"].push_back(std::move(structObj));
+	}
+
+	for (const auto& ds : schema.descriptorSlots) {
+		if (ds.heapSlotOffset >= 0) {
+			nlohmann::json slotObj;
+			slotObj["cpp_name"] = ds.cppName;
+			slotObj["heap_slot_offset"] = ds.heapSlotOffset;
+			data["slots"].push_back(std::move(slotObj));
+		}
+	}
+
+	for (const auto& ct : schema.constants) {
+		nlohmann::json constObj;
+		constObj["cpp_name"] = ct.name;
+		constObj["value"] = ct.value;
+		data["constants"].push_back(std::move(constObj));
+	}
+
+	inja::Environment env;
+	std::string result = env.render_file(templatePath, data);
+	logger->debug("inja rendered (slang API path), {} bytes", result.size());
+	return result;
 }
 
 }  // namespace RGL

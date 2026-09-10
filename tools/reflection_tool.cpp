@@ -13,10 +13,21 @@ import rllogger;
 import schema_loader;
 import validator;
 import generator;
+import slang_reflect;
 
 namespace po = boost::program_options;
 namespace fs = std::filesystem;
 using json = nlohmann::json;
+
+// SLANG_FLAGS 缺省值：与 rgl/CMakeLists.txt 逐字一致（CMake 恒显式传 --flags 覆盖，
+// 此处缺省仅供 CLI 手跑；-fvk-use-scalar-layout 是布局关键，不可省）。
+static const std::vector<std::string> kDefaultSlangFlags = {
+	"-target", "spirv",
+	"-capability", "spvDescriptorHeapEXT",
+	"-profile", "sm_6_6+spirv_1_6",
+	"-fvk-use-scalar-layout",
+	"-no-codegen",
+};
 
 static void printUsage() {
 	auto* logger = RGL::RLLogger::getInstance();
@@ -24,6 +35,7 @@ static void printUsage() {
 	logger->info("  reflection_tool validate  --json <path> --schema <path>");
 	logger->info("  reflection_tool generate  --json <path> --schema <path> --output <path> --module-name <name> --template <path>");
 	logger->info("  reflection_tool render     --json <path> --output <path> --template <path>");
+	logger->info("  reflection_tool slang      --shader <path> [--shader <path>...] --schema <path> --output <path> --module-name <name> --template <path> [--flags <a b c ...>]");
 }
 
 int main(int argc, char* argv[]) {
@@ -33,10 +45,11 @@ int main(int argc, char* argv[]) {
 
 	try {
 		std::string command;
-		std::string jsonPath, schemaPath, outputPath, moduleName, templatePath;
+		std::string jsonPath, schemaPath, outputPath, moduleName, templatePath, slangFlagsStr;
+		std::vector<std::string> shaderPaths, includePaths;
 
 		po::options_description desc("Options");
-		desc.add_options()("help,h", "produce help message")("json,j", po::value<std::string>(&jsonPath)->required(), "path to slangc reflection JSON")("schema,s", po::value<std::string>(&schemaPath), "path to Lua schema file")("output,o", po::value<std::string>(&outputPath), "output .cppm file path")("module-name,m", po::value<std::string>(&moduleName), "C++ module name for generated .cppm")("template,t", po::value<std::string>(&templatePath), "path to inja template file");
+		desc.add_options()("help,h", "produce help message")("json,j", po::value<std::string>(&jsonPath), "path to slangc reflection JSON")("schema,s", po::value<std::string>(&schemaPath), "path to Lua schema file")("output,o", po::value<std::string>(&outputPath), "output .cppm file path")("module-name,m", po::value<std::string>(&moduleName), "C++ module name for generated .cppm")("template,t", po::value<std::string>(&templatePath), "path to inja template file")("shader", po::value<std::vector<std::string>>(&shaderPaths), "slang source file(s) for 'slang' command (repeatable)")("flags", po::value<std::string>(&slangFlagsStr), "space-separated slang compiler flags for 'slang' (SLANG_FLAGS; boost 不吞 dash 参数故用单串 split)")("include,I", po::value<std::vector<std::string>>(&includePaths), "slang search path(s) for 'slang' (repeatable; -I)");
 
 		if (argc < 2) {
 			printUsage();
@@ -57,7 +70,96 @@ int main(int argc, char* argv[]) {
 			return 0;
 		}
 
-		if (!fs::exists(jsonPath)) {
+		// slang 子命令不消费 JSON（直接链接 libslang.so 查 API）
+		if (command == "slang") {
+			if (shaderPaths.empty()) {
+				logger->error("--shader is required for 'slang'");
+				return 1;
+			}
+			if (vm["schema"].empty() || outputPath.empty() || moduleName.empty() || templatePath.empty()) {
+				logger->error("'slang' requires --schema --output --module-name --template");
+				return 1;
+			}
+			// flags：--flags 单串 split（缺省 = kDefaultSlangFlags）；-I 搜索路径追加
+			std::vector<std::string> flags;
+			if (slangFlagsStr.empty()) {
+				flags = kDefaultSlangFlags;
+			} else {
+				std::string remaining = slangFlagsStr;
+				size_t pos;
+				while ((pos = remaining.find(' ')) != std::string::npos) {
+					flags.push_back(remaining.substr(0, pos));
+					remaining.erase(0, pos + 1);
+				}
+				if (!remaining.empty())
+					flags.push_back(remaining);
+			}
+			for (const auto& inc : includePaths) {
+				flags.push_back("-I");
+				flags.push_back(inc);
+			}
+			RGL::Schema schema = RGL::loadSchema(schemaPath);
+			RGL::SlangContext ctx;
+			std::string diag;
+			if (!ctx.compile(shaderPaths, flags, diag)) {
+				logger->error("[FAIL] slang compile: {}", diag);
+				return 1;
+			}
+			logger->info("[OK] slang compile succeeded, querying API");
+			// 按 schema 顺序查询 + 交叉校验（vertexLayouts 先，pushConstants 后）
+			std::vector<RGL::SlangStruct> structs;
+			bool ok = true;
+			for (const auto& vl : schema.vertexLayouts) {
+				if (vl.name.empty()) continue;
+				auto api = ctx.queryStruct(vl.name);
+				if (!api) {
+					logger->error("[FAIL] vertexLayout '{}': struct not found in shader", vl.name);
+					ok = false;
+					continue;
+				}
+				if (!RGL::validateSlangVertexLayout(*api, vl)) ok = false;
+				else {
+					logger->info("[PASS] vertexLayout '{}' matches API (size={} fields={})",
+						vl.name, api->size, api->fields.size());
+					structs.push_back(std::move(*api));
+				}
+			}
+			for (const auto& pc : schema.pushConstants) {
+				if (pc.name.empty()) continue;
+				auto api = ctx.queryPushConst(pc.name);
+				if (!api) {
+					logger->error("[FAIL] pushConst '{}': not found / not a constant buffer", pc.name);
+					ok = false;
+					continue;
+				}
+				if (!RGL::validateSlangPushConst(*api, pc)) ok = false;
+				else {
+					logger->info("[PASS] pushConst '{}' -> struct '{}' matches API (size={})",
+						pc.name, api->name, api->size);
+					structs.push_back(std::move(*api));
+				}
+			}
+			if (!ok) {
+				logger->error("[FAIL] slang cross-validation failed");
+				return 1;
+			}
+			std::optional<std::string> cppm = RGL::generateCppmFromSlang(structs, schema, templatePath, moduleName);
+			if (!cppm) {
+				logger->error("[FAIL] Generation aborted");
+				return 1;
+			}
+			std::ofstream out(outputPath);
+			if (!out.is_open()) {
+				logger->error("Cannot open output file: {}", outputPath);
+				return 1;
+			}
+			out << *cppm;
+			logger->info("[OK] Generated {} (slang API path)", outputPath);
+			return 0;
+		}
+
+		// validate / generate / render 走 JSON 路径
+		if (jsonPath.empty() || !fs::exists(jsonPath)) {
 			logger->error("Reflection JSON not found: {}", jsonPath);
 			return 1;
 		}

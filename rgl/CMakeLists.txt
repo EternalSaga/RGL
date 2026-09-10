@@ -25,6 +25,9 @@ set(SLANG_FLAGS
     -profile sm_6_6+spirv_1_6
     -fvk-use-scalar-layout
 )
+# 空格串版：reflection_tool slang 的 --flags 单串参数（boost 不吞 dash 参数，工具端 split）。
+# 与 SLANG_FLAGS 同源（string(REPLACE) 派生，非第二声明点）。
+string(REPLACE ";" " " SLANG_FLAGS_STR "${SLANG_FLAGS}")
 set(GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_shaders")
 file(MAKE_DIRECTORY ${GEN_DIR})
 
@@ -40,25 +43,22 @@ file(MAKE_DIRECTORY ${GEN_DIR})
 set(GEN_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/generated")
 file(MAKE_DIRECTORY ${GEN_SRC_DIR})
 
+# 反射管线输入/输出（C API 路径不产 JSON 中间层，只产 generated/*.cppm）
 set(TYPES_SLANG "${CMAKE_CURRENT_SOURCE_DIR}/shaders/types.slang")
 set(TYPES_SCHEMA "${CMAKE_CURRENT_SOURCE_DIR}/shaders/types_schema.lua")
-set(TYPES_REFLECTION_JSON "${GEN_SRC_DIR}/types_reflection.json")
 set(TYPES_CPPM "${GEN_SRC_DIR}/types_generated.cppm")
 set(TYPES_TEMPLATE "${CMAKE_SOURCE_DIR}/tools/templates/types_cppm.inja")
 
 set(MODEL_SLANG "${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.slang")
 set(MODEL_SCHEMA "${CMAKE_CURRENT_SOURCE_DIR}/shaders/model_schema.lua")
-set(MODEL_REFLECTION_JSON "${GEN_SRC_DIR}/model_reflection.json")
 set(MODEL_CPPM "${GEN_SRC_DIR}/model_types_generated.cppm")
 
 set(MATERIAL_SLANG "${CMAKE_CURRENT_SOURCE_DIR}/shaders/material.slang")
 set(MATERIAL_SCHEMA "${CMAKE_CURRENT_SOURCE_DIR}/shaders/material_schema.lua")
-set(MATERIAL_REFLECTION_JSON "${GEN_SRC_DIR}/material_reflection.json")
 set(MATERIAL_CPPM "${GEN_SRC_DIR}/material_types_generated.cppm")
 
 set(LIGHTS_SLANG "${CMAKE_CURRENT_SOURCE_DIR}/shaders/lights.slang")
 set(LIGHTS_SCHEMA "${CMAKE_CURRENT_SOURCE_DIR}/shaders/lights_schema.lua")
-set(LIGHTS_REFLECTION_JSON "${GEN_SRC_DIR}/lights_reflection.json")
 set(LIGHTS_CPPM "${GEN_SRC_DIR}/lights_types_generated.cppm")
 
 set(FEATURES_CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/features_config.json")
@@ -69,41 +69,45 @@ set(FEATURES_CPPM "${GEN_SRC_DIR}/features_generated.cppm")
 add_custom_target(reflect
     COMMENT "重跑 5 条反射管线（slangc reflection + validate + generate/render）")
 add_dependencies(reflect reflection_tool)
+# 4 条 slang 管线统一走 reflection_tool slang 子命令（链接 libslang.so 直接查 C API，
+# 不消费 JSON 中间层——见 docs/slang_api_reflection_research.md）。struct 布局 = 编译器
+# 实查真值（逐字段 offsetof static_assert），schema 降为提取清单 + 交叉校验期望值。
+# 每条 = 单一 COMMAND（原 slangc + validate + generate 三步合一）。
 # types 管线
 add_custom_command(TARGET reflect PRE_BUILD
-    COMMAND ${SLANGC_EXECUTABLE} ${TYPES_SLANG} ${SLANG_FLAGS}
-            -I "${CMAKE_CURRENT_SOURCE_DIR}/shaders" -no-codegen
-            -reflection-json ${TYPES_REFLECTION_JSON}
-    COMMAND reflection_tool validate --json ${TYPES_REFLECTION_JSON} --schema ${TYPES_SCHEMA}
-    COMMAND reflection_tool generate --json ${TYPES_REFLECTION_JSON} --schema ${TYPES_SCHEMA}
+    COMMAND reflection_tool slang
+            --shader ${TYPES_SLANG}
+            --schema ${TYPES_SCHEMA}
             --output ${TYPES_CPPM} --module-name types_generated --template ${TYPES_TEMPLATE}
+            --flags "${SLANG_FLAGS_STR} -no-codegen"
+            --include "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
     VERBATIM)
 # model 管线（模板复用 types_cppm.inja，同既有行为）
 add_custom_command(TARGET reflect PRE_BUILD
-    COMMAND ${SLANGC_EXECUTABLE} ${MODEL_SLANG} ${SLANG_FLAGS}
-            -I "${CMAKE_CURRENT_SOURCE_DIR}/shaders" -no-codegen
-            -reflection-json ${MODEL_REFLECTION_JSON}
-    COMMAND reflection_tool validate --json ${MODEL_REFLECTION_JSON} --schema ${MODEL_SCHEMA}
-    COMMAND reflection_tool generate --json ${MODEL_REFLECTION_JSON} --schema ${MODEL_SCHEMA}
+    COMMAND reflection_tool slang
+            --shader ${MODEL_SLANG}
+            --schema ${MODEL_SCHEMA}
             --output ${MODEL_CPPM} --module-name model_types_generated --template ${TYPES_TEMPLATE}
+            --flags "${SLANG_FLAGS_STR} -no-codegen"
+            --include "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
     VERBATIM)
 # material 管线
 add_custom_command(TARGET reflect PRE_BUILD
-    COMMAND ${SLANGC_EXECUTABLE} ${MATERIAL_SLANG} ${SLANG_FLAGS}
-            -I "${CMAKE_CURRENT_SOURCE_DIR}/shaders" -no-codegen
-            -reflection-json ${MATERIAL_REFLECTION_JSON}
-    COMMAND reflection_tool validate --json ${MATERIAL_REFLECTION_JSON} --schema ${MATERIAL_SCHEMA}
-    COMMAND reflection_tool generate --json ${MATERIAL_REFLECTION_JSON} --schema ${MATERIAL_SCHEMA}
+    COMMAND reflection_tool slang
+            --shader ${MATERIAL_SLANG}
+            --schema ${MATERIAL_SCHEMA}
             --output ${MATERIAL_CPPM} --module-name material_types_generated --template ${TYPES_TEMPLATE}
+            --flags "${SLANG_FLAGS_STR} -no-codegen"
+            --include "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
     VERBATIM)
 # lights 管线（Phase 7 D3：多灯 GpuLight struct + kMaxLights/布局常量）
 add_custom_command(TARGET reflect PRE_BUILD
-    COMMAND ${SLANGC_EXECUTABLE} ${LIGHTS_SLANG} ${SLANG_FLAGS}
-            -I "${CMAKE_CURRENT_SOURCE_DIR}/shaders" -no-codegen
-            -reflection-json ${LIGHTS_REFLECTION_JSON}
-    COMMAND reflection_tool validate --json ${LIGHTS_REFLECTION_JSON} --schema ${LIGHTS_SCHEMA}
-    COMMAND reflection_tool generate --json ${LIGHTS_REFLECTION_JSON} --schema ${LIGHTS_SCHEMA}
+    COMMAND reflection_tool slang
+            --shader ${LIGHTS_SLANG}
+            --schema ${LIGHTS_SCHEMA}
             --output ${LIGHTS_CPPM} --module-name lights_types_generated --template ${TYPES_TEMPLATE}
+            --flags "${SLANG_FLAGS_STR} -no-codegen"
+            --include "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
     VERBATIM)
 # features 管线（config JSON → 模板渲染，无 slangc 步骤）
 add_custom_command(TARGET reflect PRE_BUILD
@@ -123,10 +127,10 @@ add_custom_command(TARGET reflect PRE_BUILD
 # PAIRS 经文件传入（命令行 -D 参数会被 CMake 按 |/, 拆分转义，踩过）。
 # 新鲜度 = 输入 SHA1 清单（file(TIMESTAMP) 在本机 CMake 4.3.4 恒空，不可用）。
 set(REFLECTION_PAIRS
-    "${TYPES_CPPM}|${TYPES_SLANG},${TYPES_SCHEMA},${TYPES_TEMPLATE},${TYPES_REFLECTION_JSON}"
-    "${MODEL_CPPM}|${MODEL_SLANG},${MODEL_SCHEMA},${TYPES_TEMPLATE},${MODEL_REFLECTION_JSON}"
-    "${MATERIAL_CPPM}|${MATERIAL_SLANG},${MATERIAL_SCHEMA},${TYPES_TEMPLATE},${MATERIAL_REFLECTION_JSON}"
-    "${LIGHTS_CPPM}|${LIGHTS_SLANG},${LIGHTS_SCHEMA},${TYPES_TEMPLATE},${LIGHTS_REFLECTION_JSON}"
+    "${TYPES_CPPM}|${TYPES_SLANG},${TYPES_SCHEMA},${TYPES_TEMPLATE}"
+    "${MODEL_CPPM}|${MODEL_SLANG},${MODEL_SCHEMA},${TYPES_TEMPLATE}"
+    "${MATERIAL_CPPM}|${MATERIAL_SLANG},${MATERIAL_SCHEMA},${TYPES_TEMPLATE}"
+    "${LIGHTS_CPPM}|${LIGHTS_SLANG},${LIGHTS_SCHEMA},${TYPES_TEMPLATE}"
     "${FEATURES_CPPM}|${FEATURES_CONFIG},${FEATURES_TEMPLATE}")
 string(REPLACE ";" "\n" _pairs_src "${REFLECTION_PAIRS}")
 file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/reflection_pairs.cmake CONTENT "

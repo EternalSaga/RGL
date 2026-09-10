@@ -144,8 +144,11 @@ vkresources / shader_registry / render_graph / render_graph_config / gltf_loader
 
 ### 构建工具模块
 `tools/` 下构建工具统一 C++20 modules：`schema_loader`（Schema 结构体 + Lua schema 加载）、
-`validator`（reflection JSON ↔ schema 一致性校验）、`generator`（inja 模板生成 `.cppm`，
-`renderTemplate()` 支持任意 JSON + 模板渲染）。`reflection_tool` 经 `import rllogger;` 统一日志。
+`validator`（reflection JSON ↔ schema 一致性校验，JSON 路径遗留）、`generator`（inja 模板生成
+`.cppm`，`renderTemplate()` 支持任意 JSON + 模板渲染；`generateCppmFromSlang` 走 C API 路径）、
+`slang_reflect`（Slang C API 封装：链接预构建包 `libslang.so`，`SlangContext` 查非资源 struct
+实际布局，见 `docs/slang_api_reflection_research.md`）。`reflection_tool` 经 `import rllogger;`
+统一日志，`slang` 子命令 = C API 路径（4 条 slang 管线主用），`validate/generate` = JSON 路径（遗留）。
 tools 为 `EXCLUDE_FROM_ALL`（编译提速）：日常构建不碰工具链，`just reflect` 才编译。
 
 ## 模块结构（C++20 modules, .cppm）
@@ -212,10 +215,13 @@ main.cpp 按逆序析构（RAII）。依赖图原则：只允许下层 import �
 `rgl/shaders/` 下的 Slang → SPV 输出到 `build/rgl/generated_shaders/`
 （CMake `compile_slang()` 构建时编译；运行时相对路径读取）。
 
-- **反射管线显式触发**：`*_reflection.json` + `generated/*.cppm` + `reflection_manifest.txt` 为
-  **已提交产物**，只在改契约后 `just reflect` 重生成并随改动提交；构建开头 `reflection_check`
-  比对输入 SHA1，忘跑 = FATAL 指路。共 **5 条管线**（types/model/material/lights 反射生成 +
-  features 模板生成），Profile `sm_6_6+spirv_1_6` + capability `spvDescriptorHeapEXT`
+- **反射管线显式触发（C API 路径，2026-09-10 起）**：`generated/*.cppm` +
+  `reflection_manifest.txt` 为**已提交产物**，只在改契约后 `just reflect` 重生成并随改动提交；
+  构建开头 `reflection_check` 比对输入 SHA1，忘跑 = FATAL 指路。共 **5 条管线**（types/model/
+  material/lights 反射生成 + features 模板生成），Profile `sm_6_6+spirv_1_6` + capability
+  `spvDescriptorHeapEXT`。**4 条 slang 管线走 `reflection_tool slang` 子命令**（链接 libslang.so
+  直接查 C API，**不产 JSON 中间层**）：struct 布局 = 编译器实查真值（逐字段 offsetof
+  static_assert），schema 降为提取清单 + 交叉校验期望值。详见 `docs/slang_api_reflection_research.md`
 - **Scalar Block Layout（定案）**：所有 slangc 编译（反射 + SPV 两处 flag **必须一致**）统一
   `-fvk-use-scalar-layout`——C++（glm 自然对齐）与 shader 逐字段偏移天然一致零 padding
   （`DrawArgs` 4B）。前提 `scalarBlockLayout` feature（features_config.json + validateFeatures）
