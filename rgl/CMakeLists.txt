@@ -175,6 +175,19 @@ add_custom_target(doc_check ALL
             --build-dir ${CMAKE_BINARY_DIR} --methods
     COMMENT "Doxygen 注释检查（警告不阻断）")
 
+# ─── 文件/函数结构检查（style_check，只警告不阻断）─────────────────────────────
+# 每次构建随 ALL 并行跑（与编译不互锁）：libclang（ctypes）进程内解析 rgl/ 下
+# .cppm（复用 compile_commands.json 的 .modmap BMI 依赖，见
+# tools/stylecheck/stylecheck.py），三项阈值（代码行 = 去注释空行，token 级精确）：
+# 文件 >500 / 函数 >120 / 嵌套深度 >5（if/for/while/do/switch/catch/lambda 计层）。
+# ctypes 持 GIL → ProcessPoolExecutor 一进程一文件（默认 4 worker），缓存
+# build/stylecheck_cache（源+命令哈希键）：增量秒级，全量 61 文件 ~12s。
+# 单独跑：just style-check [--strict/--file-threshold N/...]。
+add_custom_target(style_check ALL
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/stylecheck/stylecheck.py
+            --build-dir ${CMAKE_BINARY_DIR}
+    COMMENT "文件/函数结构检查（警告不阻断）")
+
 # ─── Shader Compilation ───────────────────────────────────────────────────────
 
 # 调用：compile_slang(SHADER_SOURCE OUT_SPV_PATH [EXTRA_DEPS...])

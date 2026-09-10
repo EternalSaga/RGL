@@ -113,6 +113,12 @@ reflect:
 doc-check *ARGS="":
     @python "{{ WORKSPACE }}/tools/doccheck/doccheck.py" --build-dir "{{ BUILD }}" --methods {{ ARGS }}
 
+# 文件/函数结构检查（每次 just build 已随 style_check 目标并行跑、只警告；
+# 这里单独跑 + 透传参数：--strict / --file-threshold N / --func-threshold N /
+# --nesting-threshold N 等，见 tools/stylecheck/stylecheck.py --help）
+style-check *ARGS="":
+    @python "{{ WORKSPACE }}/tools/stylecheck/stylecheck.py" --build-dir "{{ BUILD }}" {{ ARGS }}
+
 # 全量编译基准: clean-all + config + 计时编译
 profile:
     just clean-all

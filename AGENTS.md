@@ -19,6 +19,7 @@ just config              # CMake 配置（默认 clang, Release）；just config
 just build               # 增量编译（需先 config）；just build-release / build-debug = 一键配置+编译
 just reflect             # 重跑 5 条反射管线（改动 shader 契约/schema/模板后必须；见"着色器编译"）
 just doc-check [--strict]  # Doxygen 注释检查（每次 just build 已随 doc_check 并行跑、只警告；此处单独跑+透传参数）
+just style-check [--strict]  # 文件/函数结构检查（文件>500/函数>120 代码行、嵌套>5，libclang 多进程，见 tools/stylecheck）
 just run                 # 运行（AMD VGA 存在时自动设 RADV_EXPERIMENTAL=heap）
 just run-igpu / run-dgpu / run-intel   # 强制核显 / NVIDIA prime 独显 / Intel anv
 just clean / clean-all / all           # 增量清理 / 删 build 目录 / clean-all+build-release
@@ -48,6 +49,17 @@ CMake 无独立构建目录 — 必须从根目录构建（`cmake -B build -S .`
   （键 = 源+命令 sha256）：增量只重 dump 改动文件（秒级），全量 ~1min。规则细节：注释真相源 =
   接口声明处（impl 里接口已声明函数的定义不重复要求）；重载组共用最上方一个块；前向声明与
   定义间可夹空行（Renderer 先例）；只警告不阻断（`--strict` 才 exit 1），默认构建含 `--methods`。
+- `style_check`（ALL，与编译并行，2026-09-11）：`rgl/*.cppm` 三项结构阈值（代码行 = 去注释
+  空行，token 级精确）——文件 >500 提示拆文件、函数 >120 提示拆函数、嵌套深度 >5（if/for/
+  while/do/switch/catch/lambda 计层，函数体 0 层）提示拆函数。实现在 `tools/stylecheck/
+  stylecheck.py`（libclang ctypes 进程内解析，纯标准库 Python；**ctypes 持 GIL →
+  ProcessPoolExecutor 一进程一文件**，默认 min(cpu,4) worker、每进程 ~550MB）。缓存
+  `build/stylecheck_cache/`（键 = 源+命令 sha256）：增量秒级，全量 61 文件 ~12s。警告文案
+  直接给 LLM 行动指令。坑（详见文件头，勿回退）：C API 不展开 @.modmap（须内联展开 +
+  BMI 路径转绝对）、输入文件/驱动路径不能进 argv、Gentoo 须显式 `-resource-dir`、
+  `export module`+import+**BMI 加载失败** → parse 返回 NULL（libclang 缺陷，按跳过+警告
+  处理）、LLVM 22 结构体布局（CXCursor 32B / Location/Range 24B / CXToken 24B 值类型）
+  与 token API 全异于旧例程。
 
 ## 运行要求
 
