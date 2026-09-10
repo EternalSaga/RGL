@@ -270,15 +270,16 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
   （static_assert 三方同步）。灯未 entity 化（经 `SceneLights` context，lights[0]=主光）
 - **GPU culling（Phase 7b）边界**：DGC 路径（`vkCmdExecuteGeneratedCommandsEXT`）本机 RADV
   graphics 侧不可用（`supportedIndirectCommandsShaderStagesShaderBinding` 仅 COMPUTE，26.2.1 复测
-  graphicsIndirect=false）→ 实际走**读回重放**；NVIDIA 侧 graphicsIndirect=true 走 DGC execute，
-  2026-09-10 首次运行时实测通（曾黑屏，根因排查 + DrawArgs bindless 化见 `docs/调试历史.md`
-  2026-09-10 条目——**根因已石锤 = NV 驱动 bug**：把 push 加大到 100B 在 NV 官方 sample
-  `vk_device_generated_cmds` 复现同样 `VK_ERROR_DEVICE_LOST`+黑屏（可复现），非 RGL 用法问题
-  （RGL 用 mesh+DRAW_MESH_TASKS、sample 用 vertex+DRAW_INDEXED，结构不同却同挂）；规避 = DrawArgs
-  压至 4B 的 bindless 化（详见 `docs/调试历史.md` 2026-09-10 续条目））；Intel Arc A310
-  （DG2/anv 26.2.1）2026-09-10 补测 graphicsIndirect=false computeIndirect=true（binding 子集
-  COMPUTE+RT、无 MESH/FRAGMENT，与 RADV 同画像）→ 走读回重放，reconcile 1571/1571、零 error、
-  画面正确（至此三驱动全验证）。culling compute 三驱动都跑（默认路径无开关）；CPU 剔除保留为兜底+
+  graphicsIndirect=false）→ 实际走**读回重放**。**注意：本机核显 = 9950X Raphael（RDNA2 小核），
+  非 Strix Halo**——graphicsIndirect=false 疑为驱动按硬件代际 gate，待真 Strix Halo 复测（若 true
+  即走与 NV 同一条 DGC execute 路径；启动期选路 log `DGC path: device=... -> ...` 直接可验）；
+  NVIDIA 侧 graphicsIndirect=true 走 DGC execute，2026-09-10 终验跑帧零 error/warning 石锤
+  （曾黑屏 = NV 驱动 push 100B 挂死 bug，官方 sample 复现，规避 = DrawArgs 压 4B bindless 化；
+  曾报 `vkCreateIndirectExecutionSetEXT: ErrorOutOfDeviceMemory` = 运行环境瞬时显存干扰**假警报**，
+  干净环境重跑即通，非驱动限制——根因全程见 `docs/调试历史.md` 2026-09-10 条目）；Intel Arc A310
+  （DG2/anv 26.2.1）graphicsIndirect=false computeIndirect=true（binding 子集 COMPUTE+RT、无
+  MESH/FRAGMENT，与 RADV 同画像）→ 走读回重放，零 error、截图与 RADV 一致（至此三驱动全验证）。
+  culling compute 三驱动都跑（默认路径无开关）；CPU 剔除保留为兜底+
   每帧对账基准（`reconcileGpuCull` 多重集，不一致
   告警不中断）；mvp 由 CPU 算进 scene data per-object 表（GPU float4x4 乘法 FMA 收缩序与 glm 无
   位级契约，保 forward diff0）
@@ -294,7 +295,8 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
 - `docs/技术概念.md` — 核心 Vulkan 模式、设计决策、**§模块表（工具/数据/生成模块速览）**
 - `docs/调试历史.md` — 问题修复时间线（只增不改，争议结论以此为准）
 - `docs/DESCRIPTOR_HEAP_SPEC.md` — descriptor heap 排坑记录（活文档）
-- `docs/nvidia_compatibility_report.md` — 跨驱动兼容性（三平台记录；当前机 = Strix Halo 核显）
+- `docs/nvidia_compatibility_report.md` — 跨驱动兼容性（三平台记录；当前机 = 9950X Raphael RDNA2 核显，
+  非 Strix Halo）
 - `docs/device_generated_commands_research.md` — GPU culling 双驱动实测（Phase 7b 依据）
 - `docs/vulkan_extensions_2025_调研.md` — 新扩展调研 + §十二/十三 实施记录（活文档）
 - `docs/phase7_devlog.md` — Phase 7 滚动开发日志（完结后归档）
