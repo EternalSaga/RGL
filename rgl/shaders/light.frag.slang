@@ -1,23 +1,49 @@
 import scene;    // binding 3：sceneData + SceneLight/readSceneLight（共享 eyePos/ambient）
 import lights;   // 多灯：readLightCount/readGpuLight（lights 内部亦 import scene）
+import sky;      // skybox 射线重建：skyClipToWorld（读 @64 invViewProj）——skybox 背景合成
 
 // Phase 7 D1：deferred light pass —— 全屏逐灯光照，读 G-buffer 4 RT 重建 albedo/法线/
 // 世界位置/metal-rough，套用与 model_pbr.frag **逐式相同**的简化 PBR（GGX Cook-Torrance）。
 // Phase 7 D3：升级为多灯循环——灯数据源 = scene data 尾区 GpuLight[]（lights.slang）；
 // 共享 eyePos(@12)/ambient(@36) 仍来自 scene.slang readSceneLight（与 forward 同源）。
-// 单灯（lights=[主定向光]）时输出与旧 D1 单灯式等价（atten=1、gl.color 预乘 = forward
-// light.color）；材质数据与 forward 同源故视觉等价（非位精确：oct 法线 rg16、albedo rgba8）。
 // 点光（type=1）线性衰减 1-dist/range（无物理 1/r²，够用）；定向（type=0）atten=1。
 //
-// 绑定：3=sceneData（scene.slang import）；4=albedo(RGBA8_SRGB，采样返 linear)；
-//   5=normal(RG16_SNORM，oct)；6=worldPos(RGBA32_SFLOAT)；7=metalRough(RGBA8_UNORM .r=metal .g=rough)；
-//   8=sampler（共享 sampler，sampler heap）。4-8 经 PipelineBindings.extra 映射到 G-buffer RT 堆槽。
+// 批次 2 refine（Phase 7 收尾）：
+//   ① 简化 IBL——env.mipRange>0 时用环境贴图项替换常 ambient（与 model_pbr_ibl.frag 逐式
+//      相同：diffuse=最高 mip 全环境平均、specular=反射向量+roughness→LOD、Schlick-F
+//      能量补偿）；mipRange=0（无环境）回落常 ambient（旧行为，BIT 兼容）。
+//   ② skybox 背景合成——天空像素（G-buffer position 清 0 = 无几何）重建世界射线采 env
+//      cubemap（与 forward skybox.frag 同式，免 resolution）；mipRange=0 = 黑天。
+//
+// 绑定：3=sceneData（scene.slang import）；4=albedo(RGBA8_SRGB)；5=normal(RG16_SNORM oct)；
+//   6=worldPos(RGBA32_SFLOAT)；7=metalRough(RGBA8_UNORM .r=metal .g=rough)；8=sampler（共享）；
+//   **9=envMap(TextureCube) / 10=envSampler(sky sampler)**（批次 2 refine 新增——本 pass 的
+//   4/5 已被 G-buffer 占用，env 走 9/10，addLightEntry extra 烘焙）。4-10 经
+//   PipelineBindings.extra 映射到 G-buffer RT / env 堆槽。
+// 注：不 import env.slang（其 envMap/envSampler 声明在 4/5，与本 pass G-buffer 冲突）——
+//   env 绑定本地声明在 9/10，env 参数（@48/@52）从 sceneData 直读（env.slang 同款布局）。
 
 [[vk::binding(4, 0)]] Texture2D<float4> albedoTex;
 [[vk::binding(5, 0)]] Texture2D<float2> normalTex;
 [[vk::binding(6, 0)]] Texture2D<float4> positionTex;
 [[vk::binding(7, 0)]] Texture2D<float4> metalRoughTex;
 [[vk::binding(8, 0)]] SamplerState gbufferSampler;
+[[vk::binding(9, 0)]] TextureCube<float4> envMapL;
+[[vk::binding(10, 0)]] SamplerState envSamplerL;
+
+// env 参数（scene data @48 intensity / @52 mipRange，env.slang readEnvParams 同款布局直读）
+struct EnvParamsL
+{
+    float intensity;
+    float mipRange;
+};
+EnvParamsL readEnvParamsL()
+{
+    EnvParamsL e;
+    e.intensity = asfloat(sceneData.Load(48));
+    e.mipRange  = asfloat(sceneData.Load(52));
+    return e;
+}
 
 struct LightInput
 {
@@ -71,7 +97,41 @@ float4 main(LightInput input) : SV_Target0
 
     SceneLight shared = readSceneLight();     // 共享项：eyePos@12、ambient@36
     float3 V = normalize(shared.eyePos - P);
-    float3 color = shared.ambient * albedo * (1.0 - metallic);
+    EnvParamsL env = readEnvParamsL();        // @48 intensity / @52 mipRange
+
+    // ② skybox 背景合成：天空像素 = G-buffer position 清 0（无几何，dot(P,P)=0）。
+    // 重建世界射线（与 forward skybox.frag 同式：near/far 两点差，免 resolution）采 env。
+    // uv→ndc：light.mesh 写 uv=(ndc.x*0.5+0.5, 0.5-ndc.y*0.5)（framebuffer Y 翻转）→ 反解。
+    if (dot(P, P) < 1e-10)
+    {
+        if (env.mipRange > 0.0)
+        {
+            float2 ndc = float2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+            float4 far  = skyClipToWorld(float4(ndc, 1.0, 1.0));
+            float4 near = skyClipToWorld(float4(ndc, 0.0, 1.0));
+            float3 dir  = normalize(far.xyz / far.w - near.xyz / near.w);
+            return float4(envMapL.Sample(envSamplerL, dir).rgb * env.intensity, 1.0);
+        }
+        return float4(0.0, 0.0, 0.0, 1.0);  // 无环境 = 黑天（旧行为：清 0 G-buffer 光照亦黑）
+    }
+
+    // 几何像素 ambient 项：① 简化 IBL（env.mipRange>0，与 model_pbr_ibl.frag 逐式相同）
+    // 替换旧常 ambient（mipRange=0 回落常 ambient = 旧行为）。
+    float3 F0 = lerp(float3(0.04), albedo, metallic);
+    float3 color;
+    if (env.mipRange > 0.0)
+    {
+        float3 R = reflect(-V, N);
+        float3 envDiffuse = envMapL.SampleLevel(envSamplerL, N, env.mipRange).rgb;
+        float3 envSpec    = envMapL.SampleLevel(envSamplerL, R, roughness * env.mipRange).rgb;
+        float3 Fenv = F0 + (1.0 - F0) * pow(1.0 - saturate(dot(N, V)), 5.0);
+        color = (envDiffuse * albedo * (1.0 - metallic)
+            + envSpec * Fenv * (1.0 - roughness)) * env.intensity;
+    }
+    else
+    {
+        color = shared.ambient * albedo * (1.0 - metallic);
+    }
 
     uint n = readLightCount();
     for (uint i = 0; i < n; ++i)

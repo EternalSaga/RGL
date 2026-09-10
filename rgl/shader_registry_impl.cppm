@@ -118,14 +118,27 @@ uint32_t ShaderRegistry::addModelEntry(const std::string& specName, uint32_t ver
 			{.binding = 7, .sampler = false, .heapSlot = metalRoughSlot},
 			{.binding = 8, .sampler = true, .samplerHeapOffset = samplerHeapOffset},
 		};
+		// 批次 2 refine：env cubemap（9）+ sky sampler（10）——本 pass 的 4/5 已被 G-buffer
+		// 占用，env 走 9/10（light.frag envMapL/envSamplerL）。env 已上传 = 正常绑定；未上传
+		// = 占位槽 0（shader 端 mipRange=0 不采样，黑天/常 ambient 回落，见 light.frag）。
+		if (const auto* env = res.getEnvTexture()) {
+			b.extra.push_back({.binding = 9, .sampler = false, .heapSlot = env->heapSlot});
+			b.extra.push_back({.binding = 10, .sampler = true,
+				.samplerHeapOffset = res.ensureSkySampler(env->mipLevels) *
+					res.getSamplerHeap().getDescriptorSize()});
+		} else {
+			b.extra.push_back({.binding = 9, .sampler = false, .heapSlot = 0});
+			b.extra.push_back({.binding = 10, .sampler = true, .samplerHeapOffset = 0});
+		}
 		auto entry = PipelineEntry{"light",
 			RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b)};
 		const uint32_t index = static_cast<uint32_t>(entries.size());
 		indexByName[entry.name] = index;
 		entries.push_back(std::move(entry));
 		if (auto* logger = RLLogger::getInstance())
-			logger->debug("pipeline entry: light (gbuffer slots {}/{}/{}/{}) → 下标 {}",
-				albedoSlot, normalSlot, positionSlot, metalRoughSlot, index);
+			logger->debug("pipeline entry: light (gbuffer slots {}/{}/{}/{}, env {}) → 下标 {}",
+				albedoSlot, normalSlot, positionSlot, metalRoughSlot,
+				res.getEnvTexture() ? "on" : "off", index);
 		return index;
 	}
 

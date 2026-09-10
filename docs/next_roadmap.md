@@ -95,11 +95,11 @@ present/waitStage 派生）；drawFrame 手写布局转换清零、pass 循环�
 |---|---|---|---|
 | **0** Bistro + loader 节点 TRS（forward） | nodeWorld mat4 父链、Bistro forward、packer、`kSceneMatrixCapacity`↑4096 | **✅ 完成** | normal 绿通道翻 + BC5 Z 重建（→ Phase 8） |
 | **1** G-buffer MRT + offscreen 显式格式 | 格式词表、4-MRT `deferred_geometry`、`dump_gbuf` 直读验 albedo | **✅ 核心完成** | normal/metalRough **纹理**采样（→ Phase 8） |
-| **2** Light pass + sampleRead 接线 | SAMPLED_IMAGE 描述符入 heap、全屏 light pass GGX、forward/deferred 切换（选路已转 render_graph.lua variant，2026-09-08） | **✅ 核心完成** | ①light pass 简化 IBL ③skybox 背景合成 |
+| **2** Light pass + sampleRead 接线 | SAMPLED_IMAGE 描述符入 heap、全屏 light pass GGX、forward/deferred 切换（选路已转 render_graph.lua variant，2026-09-08）、**refine 残二完成**（2026-09-10：light pass 简化 IBL + skybox 背景合成，见下 refine 注） | **✅ 完成** | （无——refine 残二已销） |
 | **3** 多灯 + 灯数据并入反射（D3） | 第 4 条反射管线 `GpuLight`、scene data 尾区灯数组 @262272（头不动保 forward diff0）、`lights` 配置、逐灯循环 + 点光衰减、**灯 entity 化**（2026-09-10，`Light` 组件 + `index` 正序契约，ECS 规范 3） | **✅ 核心完成** | forward `LightDataGpu@0` 头仍手工双源（→ 反射）；shadow map |
 | **4** CPU frustum culling | 逐图元 node-local `CullSphere`、Gribb-Harman 6 面（z∈[0,1]）、可见统计 | **✅ 核心完成** | 真 AABB（现球近似，够 frustum） |
 | **5** GPU culling / DGC | `vk_indirect_commands`、compute cull、IES/静态/读回重放三路、CPU 剔除降兜底+对账 | **✅ 核心完成**（2026-09-09；2026-09-10 三驱动 + 静态 spike 全运行时验证） | 静态 DGC 默认关（满槽实现慢 1.85×，翻盘 = 紧凑分桶 + 去同步等待，`docs/radv_static_dgc_spike.md`） |
-| **6** 文档销账 | — | **🔶 部分** | 完整销账待批次 5 收尾（devlog/research/roadmap/AGENTS 已随 5d 更新） |
+| **6** 文档销账 | 批次 2 refine + 灯 entity 化 + 批次 5 收尾的文档同步（devlog/research/roadmap/AGENTS/调试历史） | **✅ 完成**（2026-09-10） | 前向 `LightDataGpu@0` 头并入反射（债消，独立项，见剩余计划） |
 
 **净结论**：延迟渲染单灯核心 + 多灯 + **GPU culling（7b）** 跑通——deferred 逐灯循环（定向+点光、
 per-light 颜色、距离衰减）headless 零 VVL error；forward 只读 `lights[0]` diff0 不变；GPU culling
@@ -110,7 +110,9 @@ per-light 颜色、距离衰减）headless 零 VVL error；forward 只读 `light
 **2026-09-10 更新**：三驱动运行时全验证（NV DGC execute 石锤 + 两 AMD/Intel 画像补测），
 静态 shader DGC spike 功能通（本机 Strix Halo，VVL 零 error + 1px tie 级回归）但满槽实现
 慢重放 1.85× → 默认关（`dgc_static` 门控）——详见 调试历史 2026-09-10 条目群 +
-`docs/radv_static_dgc_spike.md`。
+`docs/radv_static_dgc_spike.md`。**批次 2 refine 完结**：deferred light pass 简化 IBL
+（env 采样替换常 ambient）+ skybox 背景合成（天空像素采 env）——deferred 与 forward IBL
+路线视觉对齐，forward BIT-IDENTICAL 不变（md5 一致），deferred 新基线稳定 + VVL 零 error。
 
 ### 剩余计划
 
@@ -123,8 +125,11 @@ per-light 颜色、距离衰减）headless 零 VVL error；forward 只读 `light
   1px tie 级回归），但满槽孔洞实现 preprocess ×N 慢重放 1.85× → **默认不开**
   （`diagnostics.dgc_static` 门控保留）。翻盘前提 = 紧凑分桶（∝visible）+ 去 cull 同步等待。
   设计底稿 → [radv_static_dgc_spike.md](radv_static_dgc_spike.md)。
-- **批次 2 refine 残二**：deferred light pass 简化 IBL、skybox 背景合成进 deferred 图
-  （选路已转正：render_graph.lua `variant`，2026-09-08 重构批次 3）。
+- ~~**批次 2 refine 残二**~~ **已完成（2026-09-10）**：deferred light pass 简化 IBL（env
+  cubemap 采样替换常 ambient，与 model_pbr_ibl.frag 逐式相同，mipRange=0 回落旧行为）+ skybox
+  背景合成（天空像素 = G-buffer position 清 0，重建世界射线采 env，与 forward skybox.frag 同式）。
+  env 走 light pass binding 9/10（4/5 被 G-buffer 占用）。验证：forward BIT-IDENTICAL（md5 不变）、
+  deferred 新输出稳定（两次 md5 一致）+ VVL 零 error。
 - ~~**灯 entity 化**（ECS 规范 3）~~ **已完成（2026-09-10）**：`Light` 组件 + `index` 正序契约
   （画不画 = 实体有无，forward 读 index 0 = 主光，延迟按 index 落槽），BIT-IDENTICAL（forward+
   deferred md5 一致）+ VVL 零 error + 多灯边界验证。余 forward `LightDataGpu@0` 头并入反射
@@ -145,7 +150,8 @@ per-light 颜色、距离衰减）headless 零 VVL error；forward 只读 `light
 ## 后续走向
 
 ```
-Phase 7 剩余（批次 2 refine / 灯 entity 化 / 批次 6 销账；批次 5=7b GPU culling 已完成 2026-09-09）
+Phase 7 主体完成（2026-09-10）：批次 2 refine（IBL+skybox）✓ / 灯 entity 化 ✓ / 批次 5=7b GPU culling ✓
+  / 批次 6 销账 ✓。仅剩独立债消：前向 `LightDataGpu@0` 头并入反射（不阻塞 Phase 8）。
     ↓
 Phase 8：Bistro 场景打磨
   ① HDR 累加链（先行——色彩判断基准）：light/forward 输出 → RGBA16F RT + ACES tone-map pass

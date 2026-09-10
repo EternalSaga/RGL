@@ -1,6 +1,6 @@
 # Phase 7 开发日志（滚动更新：D1 单灯 → D3 多灯 → culling → 重构批次）
 
-> **状态**：现行（滚动更新，批次 0–5（5=7b GPU culling/DGC，2026-09-09）+ 勘误 + 重构批次 3–5 已入册；测试主场景 Bistro Exterior；D1 = 单灯 G-buffer→light→swapchain 2-pass，D3 = 多灯延迟光照）。
+> **状态**：现行（滚动更新，批次 0–5（5=7b GPU culling/DGC，2026-09-09）+ 勘误 + 重构批次 3–5 + **批次 2 refine（IBL+skybox）+ 灯 entity 化（2026-09-10，Phase 7 主体收尾）** 已入册；测试主场景 Bistro Exterior；D1 = 单灯 G-buffer→light→swapchain 2-pass，D3 = 多灯延迟光照）。
 > 实施计划见 [archive/phase7_plan.md](archive/phase7_plan.md)；本文件记过程、踩坑、决策与当前态，供连续性交接。
 
 ---
@@ -455,3 +455,33 @@ DGC 路与重放路消费**同一份序列**（CPU args + GPU 可见性），两
   `shot2_base_def.png` vs `shot2_gpu_def.png` **cmp 相同**。零 VVL error。
 - **DGC 路径**（NVIDIA）：本机 RADV graphicsIndirect=false → 能力门控不激活，代码经 VVL 审查
   + 编译绿，**未运行时实测**（需 NVIDIA 机）。
+
+---
+
+## 2026-09-10 — 灯 entity 化 + 批次 2 refine（IBL + skybox）：Phase 7 主体收尾
+
+### 灯 entity 化（ECS 规范 3）
+- 灯从 registry context（`SceneLights` = `vector<Light>`）升格为 **entity**（每灯一 entity +
+  `Light` 组件，`index` = scene.lua lights 列表位正序契约）。画不画 = 实体有无（同 cube 先例）。
+- main C 段新增 C2b 循环；renderListSystem 改 `view<Light>` 收集、**按 `index` 落槽**
+  （不依赖 entt view 迭代序——无保证）：primary = index 0（forward @0 头），延迟灯数组按 index 填。
+- GPU 契约（`GpuLight`/`LightDataGpu`/@262272/反射管线 4）逐字节不动；无需 `just reflect`。
+- **验证**：forward + deferred 同会话双构建 **md5 完全一致**（BIT-IDENTICAL）；VVL 零 error；
+  多灯边界（2 灯：定向主光 + 橙色点光）deferred 正确、`index` 落槽生效。
+
+### 批次 2 refine（deferred light pass 简化 IBL + skybox 背景合成）
+- **简化 IBL**：`light.frag` 加 env cubemap 绑定（**binding 9/10**——本 pass 4/5 被 G-buffer 占用，
+  不 import env.slang 避 4/5 冲突，env 参数 @48/@52 从 sceneData 直读）。`env.mipRange>0` 时用
+  环境贴图项替换常 ambient（与 `model_pbr_ibl.frag` 逐式相同：diffuse=最高 mip、specular=反射向量
+  + roughness→LOD、Schlick-F 能量补偿）；`mipRange=0` 回落常 ambient（旧行为）。
+- **skybox 背景合成**：天空像素 = G-buffer position 清 0（`dot(P,P)<1e-10`）。重建世界射线
+  （`import sky` 复用 `skyClipToWorld`，uv→ndc 反解 light.mesh 的 Y 翻转，与 forward skybox.frag
+  同式 near/far 两点差）采 env cubemap；`mipRange=0` = 黑天。
+- `addLightEntry` extra 烘焙 env（9=envMap 槽 / 10=sky sampler 槽），env 从 `res` 内部取
+  （签名不变）；未上传 env = 占位槽 0（shader 端 mipRange=0 不采样）。
+- **验证**：forward **BIT-IDENTICAL**（md5 与 refine 前一致，未受影响）；deferred 新输出
+  **稳定**（两次 md5 一致）+ 视觉正确（背景 = env 山景、建筑有 IBL 环境光）+ VVL 零 error。
+
+### 状态
+Phase 7 主体完成（批次 0–5 + 批次 2 refine + 灯 entity 化 + 批次 6 销账）。仅剩独立债消：
+前向 `LightDataGpu@0` 头并入反射（手工双源 → 反射生成，不阻塞 Phase 8）。

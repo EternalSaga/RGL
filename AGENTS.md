@@ -246,7 +246,7 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
 | `shaders/env.slang` / `sky.slang` | env 采样契约（binding 4/5 + @48）/ 天空盒契约（@64 invViewProj 重建射线） |
 | `shaders/lights.slang` | **多灯契约**（反射管线 4）：`GpuLight` + `readLightCount/readGpuLight` 读尾区 @262272；`light.frag` import，forward 不 import |
 | `shaders/model_pbr/model_phong/model_pbr_ibl.frag` | 三条 frag 路线（GGX / Blinn / GGX+简化 IBL），`scene.lua styles` 一行切换 |
-| `shaders/deferred_geometry.frag` + `light.mesh/frag` | deferred 路线：4-MRT G-buffer 写入（oct 法线）/ 全屏大三角逐灯 GGX；`kGBufferAttachments` 表定格式 |
+| `shaders/deferred_geometry.frag` + `light.mesh/frag` | deferred 路线：4-MRT G-buffer 写入（oct 法线）/ 全屏大三角逐灯 GGX + **简化 IBL**（env 采样替换常 ambient，与 model_pbr_ibl 逐式相同）+ **skybox 背景合成**（天空像素 = position 清 0，重建射线采 env）；env 走 light pass binding 9/10（4/5 被 G-buffer 占）；`kGBufferAttachments` 表定格式 |
 | `shaders/model_schema.lua` `constants` | 契约常量单一真相源（`kTrianglesPerGroup` 等 → 生成 constexpr）；`HeapSlotGeometryBase` = 用户槽区起点 = 几何段基址 |
 | `rgl/builtin_geometry.cppm` | **内建几何契约**（架构债务 1 方案 B）：cube 等程序化几何的上传/注册，与 gltf 同路；`vk_resources` 不认识任何内容 |
 | `shaders/cull.comp.slang` + `rgl/gpu_cull.cppm` | **GPU culling 契约**（Phase 7b）：CullEntry 60B / 序列 120B（execSlot 2j/2j+1 + DrawArgs@8(4B) + meshCmd@108）/ CullPush 100B（planes[6]+sequenceCount）/ count 64B（visible@0 total@4）；CPU 算 mvp 进 scene data per-object 表、GPU 只写可见性（保 forward diff0）；DGC 序列契约见 `vk_indirect_commands.cppm` + `docs/device_generated_commands_research.md` §4.4。静态 DGC 路追加 `shaders/stream_fanout.comp.slang`（per-entry 满槽孔洞流扇出，`dgc_static` 门控，见 `docs/radv_static_dgc_spike.md`） |
@@ -264,7 +264,10 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
   per-primitive 距离²（非 OIT）；透明段开背面剔除（非封闭几何会剔掉一面）。留 Phase 7+
 - **Phase 5.5 IBL/天空盒近似**：无 prefiltered/BRDF LUT；mip blit NEAREST（sRGB LINEAR 违
   VUID-00239）；单环境贴图；大三角 z=1 依赖 depth clear + LEQUAL；**light/env 两个 intensity
-  语义不对称**（light CPU 预乘、env shader 端乘，亮度跨路线不可直接对比）
+  语义不对称**（light CPU 预乘、env shader 端乘，亮度跨路线不可直接对比）。**简化 IBL 已扩展
+  到 deferred light pass（批次 2 refine，2026-09-10）**：forward（model_pbr_ibl）与 deferred
+  （light.frag）逐式相同，mipRange=0 回落常 ambient；skybox 背景亦在 deferred light pass 内
+  合成（天空像素采 env），非独立 pass
 - **Phase 6 渲染图边界**：线性 pass 序（无拓扑排序/fusion/aliasing）；offscreen 显式格式已落地
   （词表 12 项）；sampleRead RT→heap 接线已落地（D1）；执行器 state/drawSource 名字表认
   opaque/skybox/transparent/light 四个；单 swapchain attachment；多线程录制不做（7b+ 议）
