@@ -272,8 +272,10 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
   graphics 侧不可用（`supportedIndirectCommandsShaderStagesShaderBinding` 仅 COMPUTE，26.2.1 复测
   graphicsIndirect=false）→ 实际走**读回重放**；NVIDIA 侧 graphicsIndirect=true 走 DGC execute，
   2026-09-10 首次运行时实测通（曾黑屏，根因排查 + DrawArgs bindless 化见 `docs/调试历史.md`
-  2026-09-10 条目——**根因存疑未闭环**：实测"push 字节数 × 序列数"超阈值挂死，压 DrawArgs 至 4B
-  绕开，但用户判断此阈值规律太邪门、不确信是 NV 真 bug 的根因，留待以后复查）；Intel Arc A310
+  2026-09-10 条目——**根因已石锤 = NV 驱动 bug**：把 push 加大到 100B 在 NV 官方 sample
+  `vk_device_generated_cmds` 复现同样 `VK_ERROR_DEVICE_LOST`+黑屏（可复现），非 RGL 用法问题
+  （RGL 用 mesh+DRAW_MESH_TASKS、sample 用 vertex+DRAW_INDEXED，结构不同却同挂）；规避 = DrawArgs
+  压至 4B 的 bindless 化（详见 `docs/调试历史.md` 2026-09-10 续条目））；Intel Arc A310
   （DG2/anv 26.2.1）2026-09-10 补测 graphicsIndirect=false computeIndirect=true（binding 子集
   COMPUTE+RT、无 MESH/FRAGMENT，与 RADV 同画像）→ 走读回重放，reconcile 1571/1571、零 error、
   画面正确（至此三驱动全验证）。culling compute 三驱动都跑（默认路径无开关）；CPU 剔除保留为兜底+
