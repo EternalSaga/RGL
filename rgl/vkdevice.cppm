@@ -210,11 +210,17 @@ export class DeviceContext {
 		// 静态 shader 路判据 = **全集**（非 binding 子集）含 MESH|FRAGMENT：layout token
 		// 无 SHADER/EXECUTION_SET 时仅受全集约束（radv_static_dgc_spike §2.2）
 		const auto allStages = dgcProps.supportedIndirectCommandsShaderStages;
-		// BMI 不随类序列化自由运算符（rlstd 同教训）：!= 0 的 operator== 不可见，
-		// 经 explicit operator bool 显式转换判定
-		return DgcSupport{static_cast<bool>(stages & (vk::ShaderStageFlagBits::eMeshEXT | vk::ShaderStageFlagBits::eFragment)),
+		// MESH 与 FRAGMENT 必须**同时**在位（layout shaderStages = MESH|FRAGMENT 须为子集）；
+		// 单 bit OR 会在 Intel（全集 12 stage 含 FRAGMENT、无 MESH/TASK）误报 true →
+		// 建 layout 撞 VU-11091（VVL 违规）。BMI 不序列化 flag 枚举 == 运算符（同上）→
+		// 拆两个 static_cast<bool> 相与
+		const bool bindingMeshFrag = static_cast<bool>(stages & vk::ShaderStageFlagBits::eMeshEXT)
+			&& static_cast<bool>(stages & vk::ShaderStageFlagBits::eFragment);
+		const bool allMeshFrag = static_cast<bool>(allStages & vk::ShaderStageFlagBits::eMeshEXT)
+			&& static_cast<bool>(allStages & vk::ShaderStageFlagBits::eFragment);
+		return DgcSupport{bindingMeshFrag,
 			static_cast<bool>(stages & vk::ShaderStageFlagBits::eCompute),
-			static_cast<bool>(allStages & (vk::ShaderStageFlagBits::eMeshEXT | vk::ShaderStageFlagBits::eFragment)),
+			allMeshFrag,
 			dgcProps.maxIndirectShaderObjectCount};
 	}
 
