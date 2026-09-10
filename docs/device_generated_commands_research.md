@@ -1,12 +1,12 @@
 # VK_EXT_device_generated_commands 扩展研究记录
 
-> **状态**：调研 + 实施记录（Phase 7b 批次 5 已按本文落地，2026-09-09；双驱动实测结论持续有效）
+> **状态**：调研 + 实施记录（Phase 7b 批次 5 已按本文落地，2026-09-09；三驱动（RADV/NVIDIA/anv）实测结论持续有效）
 
 **日期**: 2026-08-22（实施更新 2026-09-09）
 **环境**: Gentoo, Vulkan 头文件 1.4.341 (系统), loader 1.4.341, RADV ICD 1.4.354 / NVIDIA 610.57.04
 **结论**: 双驱动均支持该扩展（rev 1，feature 全真）。但存在**关键驱动不对称**：RADV 仅支持 compute 侧 indirect execution set（graphics 侧 per-sequence shader 绑定 / mesh draw 不支持），NVIDIA 全支持（含 MESH+FRAGMENT shader object 绑定）。**决策：随 Phase 7（延迟渲染）作为 culling 前置子阶段引入**，graphics 侧路径必须带 CPU 回退（~~`vkCmdDrawMeshTasksIndirectCountEXT`~~ **勘误 2026-09-09：IndirectCount 无 per-draw push data 机制，回退改为读回重放，见 §4.3**）。
 
-**实施状态（2026-09-09，Phase 7b 批次 5）**：已落地 `gpu_cull`（culling compute）+ `vk_indirect_commands`（DGC RAII）+ `vkrenderer` 双路（DGC execute / 读回重放），能力门控；forward+deferred BIT-IDENTICAL 验收通过（同会话双构建）。本机（Strix Halo 核显，RADV 26.2.1）graphicsIndirect=false → 实际走读回重放。**2026-09-10 NVIDIA 机（RTX 5090/610.57.04）首次运行时实测**：初崩（DGC push token 挂死 GPU），经 DrawArgs bindless 化（push 降至 4B）后跑通——根因存疑未闭环，详见 `docs/调试历史.md` 2026-09-10 条目。实施偏离与 v357 API 差异见 §4.4。
+**实施状态（2026-09-09，Phase 7b 批次 5）**：已落地 `gpu_cull`（culling compute）+ `vk_indirect_commands`（DGC RAII）+ `vkrenderer` 双路（DGC execute / 读回重放），能力门控；forward+deferred BIT-IDENTICAL 验收通过（同会话双构建）。本机（Strix Halo 核显，RADV 26.2.1）graphicsIndirect=false → 实际走读回重放。**2026-09-10 NVIDIA 机（RTX 5090/610.57.04）首次运行时实测**：初崩（DGC push token 挂死 GPU），经 DrawArgs bindless 化（push 降至 4B）后跑通——根因存疑未闭环，详见 `docs/调试历史.md` 2026-09-10 条目。实施偏离与 v357 API 差异见 §4.4。**2026-09-10 Intel Arc A310（DG2/anv 26.2.1）补测**：能力位 `graphicsIndirect=false computeIndirect=true`（`...ShaderBinding` 子集 = COMPUTE+RT，无 MESH/FRAGMENT，与 RADV 同画像；vulkaninfo 属性见 §3.2）→ 走读回重放，culling compute 照跑，reconcile 1571/1571 全匹配、零 error、bistro 画面正确。**至此三驱动（RADV/NVIDIA/anv）Phase 7b DGC/culling 路径全验证通过。**
 
 ---
 
@@ -98,29 +98,29 @@ layout 规则：offset 单调不减、4 字节对齐、action token 必须最后
 
 ---
 
-## 三、本地驱动实测（vulkaninfo，2026-08-22）
+## 三、本地驱动实测（vulkaninfo，2026-08-22；Intel A310 列 2026-09-10 补测）
 
 ### 3.1 扩展与 feature
 
-| 项 | GPU0: RADV (Raphael_Mendocino, ICD 1.4.354) | GPU1: NVIDIA RTX 5090 (610.57.04) |
-|---|---|---|
-| `VK_EXT_device_generated_commands` | ✅ rev 1（**不加** `RADV_EXPERIMENTAL=heap` 也 advertise） | ✅ rev 1（另 advertise legacy `VK_NV_device_generated_commands` rev 3、`..._compute` rev 2） |
-| `deviceGeneratedCommands` | true | true |
-| `dynamicGeneratedPipelineLayout` | true | true |
+| 项 | GPU0: RADV (Raphael_Mendocino, ICD 1.4.354) | GPU1: NVIDIA RTX 5090 (610.57.04) | GPU2: Intel Arc A310 (DG2, anv 26.2.1) |
+|---|---|---|---|
+| `VK_EXT_device_generated_commands` | ✅ rev 1（**不加** `RADV_EXPERIMENTAL=heap` 也 advertise） | ✅ rev 1（另 advertise legacy `VK_NV_device_generated_commands` rev 3、`..._compute` rev 2） | ✅ rev 1 |
+| `deviceGeneratedCommands` | true | true | true |
+| `dynamicGeneratedPipelineLayout` | true | true | true |
 
 ### 3.2 属性对比（`VkPhysicalDeviceDeviceGeneratedCommandsPropertiesEXT`）
 
-| 属性 | RADV（需 `RADV_EXPERIMENTAL=heap` 环境） | NVIDIA |
-|---|---|---|
-| `maxIndirectShaderObjectCount` | 4096 | 16384 |
-| `maxIndirectSequenceCount` | 1048576 | 4194303 |
-| `maxIndirectCommandsTokenCount` | 128 | 32 |
-| `maxIndirectCommandsTokenOffset` / `...IndirectStride` | 2047 / **2048B** | 4G-1 / 4G-1 |
-| `supportedIndirectCommandsInputModes` | VULKAN_INDEX_BUFFER + DXGI_INDEX_BUFFER | 同左 |
-| `supportedIndirectCommandsShaderStages` | 14 个 stage（全 graphics + compute + RT + task/mesh） | 8 个 stage（graphics + compute + task/mesh，无 RT） |
-| **`...ShaderStagesPipelineBinding`** | **仅 COMPUTE** | 全部 8 个（含 MESH/FRAGMENT） |
-| **`...ShaderStagesShaderBinding`** | **仅 COMPUTE** | 全部 8 个（含 MESH/FRAGMENT） |
-| `...TransformFeedback` / `...MultiDrawIndirectCount` | true / true | true / true |
+| 属性 | RADV（需 `RADV_EXPERIMENTAL=heap` 环境） | NVIDIA | Intel A310 (anv 26.2.1) |
+|---|---|---|---|
+| `maxIndirectShaderObjectCount` | 4096 | 16384 | 4096 |
+| `maxIndirectSequenceCount` | 1048576 | 4194303 | 1048576 |
+| `maxIndirectCommandsTokenCount` | 128 | 32 | 32 |
+| `maxIndirectCommandsTokenOffset` / `...IndirectStride` | 2047 / **2048B** | 4G-1 / 4G-1 | 65536 / 4G-1 |
+| `supportedIndirectCommandsInputModes` | VULKAN_INDEX_BUFFER + DXGI_INDEX_BUFFER | 同左 | 同左 |
+| `supportedIndirectCommandsShaderStages` | 14 个 stage（全 graphics + compute + RT + task/mesh） | 8 个 stage（graphics + compute + task/mesh，无 RT） | 12 个 stage（graphics + compute + RT，**无 MESH/TASK**） |
+| **`...ShaderStagesPipelineBinding`** | **仅 COMPUTE** | 全部 8 个（含 MESH/FRAGMENT） | 7 个（COMPUTE + 全 RT，**无 MESH/FRAGMENT/VERTEX**） |
+| **`...ShaderStagesShaderBinding`** | **仅 COMPUTE** | 全部 8 个（含 MESH/FRAGMENT） | 7 个（COMPUTE + 全 RT，**无 MESH/FRAGMENT/VERTEX**） |
+| `...TransformFeedback` / `...MultiDrawIndirectCount` | true / true | true / true | true / **false** |
 
 ### 3.3 关键结论
 
@@ -129,6 +129,7 @@ layout 规则：offset 单调不减、4 字节对齐、action token 必须最后
 3. **能力探测必须运行时做**：`supportsGraphicsIndirect = (shaderStagesShaderBinding & (MESH|FRAGMENT)) != 0`，据此选 GPU-driven 路径（NVIDIA）或 CPU 回退（RADV）。
 4. RADV 侧限制（stride 2048B、sequence 1M）对 culling 用途无碍；NVIDIA token 数上限 32 也远大于本项目需要（3-4 个 token）。
 5. **驱动探测陷阱**：NVIDIA ICD 是 thin loader，`libGLX_nvidia.so.0` 内 grep 不到任何扩展名串（连 `descriptor_heap` 都没有），**不能用 .so 字符串判断 NVIDIA 能力**；RADV 则相反（扩展名串在 `.so` 内）。一律以 `vulkaninfo` / 运行时 enumerate 为准。
+6. **Intel A310 (anv) 与 RADV 同画像**（2026-09-10 补测）：`...ShaderStagesShaderBinding` 子集仅 COMPUTE + 全 RT（**无 MESH/FRAGMENT/VERTEX**）→ `graphicsIndirect=false`，走读回重放；culling compute（COMPUTE 在 binding 内）照跑。其全 stage 集（12）**连 MESH/TASK 都不含**（RADV 14 / NVIDIA 8 均含 task/mesh），且 `MultiDrawIndirectCount=false`（另两家 true）——anv 的 DGC graphics 侧目前比 RADV 还保守，日后跟进后能力位自动生效、无需改代码。
 
 ---
 
@@ -202,7 +203,7 @@ count + 序列可见性（meshCmd.x），逐可见 candidate 重放 `vkCmdPushDa
 **能力门控**：`DeviceContext::queryDgcSupport()` 派生 `DgcSupport{graphicsIndirect,
 computeIndirect, maxIndirectShaderObjectCount}`（graphicsIndirect = `shaderStagesShaderBinding`
 与 MESH|FRAGMENT 交集非空），`vkrenderer` 据此选 DGC execute / 读回重放；culling compute
-本身两驱动都跑（默认路径，GPU culling 无配置开关）。
+本身三驱动（RADV/NVIDIA/anv）都跑（默认路径，GPU culling 无配置开关）。
 
 ### 4.4 实施记录（2026-09-09，v357 系统头 + 本项目落地）
 

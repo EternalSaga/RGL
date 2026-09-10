@@ -273,8 +273,11 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
   graphicsIndirect=false）→ 实际走**读回重放**；NVIDIA 侧 graphicsIndirect=true 走 DGC execute，
   2026-09-10 首次运行时实测通（曾黑屏，根因排查 + DrawArgs bindless 化见 `docs/调试历史.md`
   2026-09-10 条目——**根因存疑未闭环**：实测"push 字节数 × 序列数"超阈值挂死，压 DrawArgs 至 4B
-  绕开，但用户判断此阈值规律太邪门、不确信是 NV 真 bug 的根因，留待以后复查）。culling compute
-  两驱动都跑（默认路径无开关）；CPU 剔除保留为兜底+每帧对账基准（`reconcileGpuCull` 多重集，不一致
+  绕开，但用户判断此阈值规律太邪门、不确信是 NV 真 bug 的根因，留待以后复查）；Intel Arc A310
+  （DG2/anv 26.2.1）2026-09-10 补测 graphicsIndirect=false computeIndirect=true（binding 子集
+  COMPUTE+RT、无 MESH/FRAGMENT，与 RADV 同画像）→ 走读回重放，reconcile 1571/1571、零 error、
+  画面正确（至此三驱动全验证）。culling compute 三驱动都跑（默认路径无开关）；CPU 剔除保留为兜底+
+  每帧对账基准（`reconcileGpuCull` 多重集，不一致
   告警不中断）；mvp 由 CPU 算进 scene data per-object 表（GPU float4x4 乘法 FMA 收缩序与 glm 无
   位级契约，保 forward diff0）
 - `configs/` 增量拷贝只认"源文件更新"：build 端副本被破坏（mtime 更新）不会自动恢复，需手动拷贝；
