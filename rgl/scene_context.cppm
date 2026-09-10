@@ -154,29 +154,23 @@ export inline bool sphereInFrustum(const Frustum& f, const glm::vec3& c, float r
 }
 
 /**
- * 光源（registry context 元素，Phase 5 批次 2 定向光 / Phase 7 D3 加点光）。
- * type=0 定向（direction 有效，世界空间，消费时归一化）；type=1 点光（position 有效，
- * range 线性衰减）。color×intensity 预乘进 GpuLight.color。forward 只读 lights[0]
- *（写 scene data @0 头单灯，diff0）；延迟 light pass 遍历 SceneLights 全数组。
+ * 光源（组件，Phase 7 灯 entity 化，ECS 规范 3：画不画 = 实体有无）。每灯一个 entity + 本组件，
+ * main 启动期 C2b 段按 sceneConfig.lights 顺序创建（scene_config 保证非空：lights 段缺 → 回落
+ * [light]）。index = scene.lua lights 列表位（正序契约，显式钉死不靠 view 迭代序）：
+ * forward 只读 index 0 = 主光（写 scene data @0 头单灯，diff0）；延迟 light pass 按 index
+ * 落槽遍历全灯（≤ kMaxLights）。type=0 定向（direction 有效，世界空间，消费时归一化）；
+ * type=1 点光（position 有效，range 线性衰减）。color×intensity 预乘进 GpuLight.color。
  */
 export struct Light {
+	uint32_t index = 0;                         // scene.lua lights 列表位（正序契约：index 0 = 主光）
 	glm::vec3 direction{0.35f, -1.0f, 0.25f};  // 定向光照射方向（世界空间，消费时归一化）
 	glm::vec3 color{1.0f, 0.98f, 0.95f};
 	float intensity = 3.0f;
-	glm::vec3 ambient{0.03f, 0.03f, 0.035f};   // 场景共享 ambient（仅 lights[0] 生效，进 scene data @36）
+	glm::vec3 ambient{0.03f, 0.03f, 0.035f};   // 场景共享 ambient（仅 index 0 生效，进 scene data @36）
 	// Phase 7 D3 点光扩展（定向光默认 type=0 时 position/range 不使用）
 	glm::vec3 position{0.0f};
 	float range = 0.0f;
 	uint32_t type = 0;                          // 0=定向，1=点光
-};
-
-/**
- * 场景光源集合（registry context，Phase 7 D3；main 启动期从 configs/scene.lua lights 段
- * emplace，仿 SceneSpin/SceneEnv）。lights[0] = 主光（forward 读它写 scene data @0 头），
- * 全数组 = 延迟 light pass 逐灯光照（≤ kMaxLights）。ECS 规范 3 留后续（灯升格 entity）。
- */
-export struct SceneLights {
-	std::vector<Light> lights;
 };
 
 /**

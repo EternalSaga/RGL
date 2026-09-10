@@ -73,8 +73,12 @@ export struct RenderListState {
  * node-local 剔除球（CullSphere 组件）经 modelMatrix（spin·world）变换到世界后测——
  * 保守：跨界判可见，绝不误剔；可见/剔除计数写 state（仅计数变化时打日志）。
  *
- * @param rg registry（读 ViewProjection/SceneSpin/Camera/SceneLights/SceneEnv/NextObjectSlot，
- *   遍历 Transform+MeshRef+MaterialRef+CullSphere 实体 view，写 ctx FrameDrawList）
+ * 灯 entity 化（Phase 7，ECS 规范 3）：灯 = entity（Light 组件，画不画 = 实体有无），
+ * 收集按 Light.index 落槽（不依赖 view 迭代序）：primary = index 0（forward @0 头），
+ * 延迟灯数组按 index 填（≤ kMaxLights）。
+ *
+ * @param rg registry（读 ViewProjection/SceneSpin/Camera/SceneEnv/NextObjectSlot，
+ *   遍历 Transform+MeshRef+MaterialRef+CullSphere 实体 view + Light 组件 view，写 ctx FrameDrawList）
  * @param resources 资源层（资产表：mesh/material 记录解析）
  * @param state 每帧 push constant 存储（args/matrices/skyboxArgs 填充 + culling 统计）
  */

@@ -96,7 +96,7 @@ present/waitStage 派生）；drawFrame 手写布局转换清零、pass 循环�
 | **0** Bistro + loader 节点 TRS（forward） | nodeWorld mat4 父链、Bistro forward、packer、`kSceneMatrixCapacity`↑4096 | **✅ 完成** | normal 绿通道翻 + BC5 Z 重建（→ Phase 8） |
 | **1** G-buffer MRT + offscreen 显式格式 | 格式词表、4-MRT `deferred_geometry`、`dump_gbuf` 直读验 albedo | **✅ 核心完成** | normal/metalRough **纹理**采样（→ Phase 8） |
 | **2** Light pass + sampleRead 接线 | SAMPLED_IMAGE 描述符入 heap、全屏 light pass GGX、forward/deferred 切换（选路已转 render_graph.lua variant，2026-09-08） | **✅ 核心完成** | ①light pass 简化 IBL ③skybox 背景合成 |
-| **3** 多灯 + 灯数据并入反射（D3） | 第 4 条反射管线 `GpuLight`、scene data 尾区灯数组 @262272（头不动保 forward diff0）、`lights` 配置、逐灯循环 + 点光衰减 | **✅ 核心完成** | 灯 entity 化（ECS 规范 3）；forward `LightDataGpu@0` 头仍手工双源；shadow map |
+| **3** 多灯 + 灯数据并入反射（D3） | 第 4 条反射管线 `GpuLight`、scene data 尾区灯数组 @262272（头不动保 forward diff0）、`lights` 配置、逐灯循环 + 点光衰减、**灯 entity 化**（2026-09-10，`Light` 组件 + `index` 正序契约，ECS 规范 3） | **✅ 核心完成** | forward `LightDataGpu@0` 头仍手工双源（→ 反射）；shadow map |
 | **4** CPU frustum culling | 逐图元 node-local `CullSphere`、Gribb-Harman 6 面（z∈[0,1]）、可见统计 | **✅ 核心完成** | 真 AABB（现球近似，够 frustum） |
 | **5** GPU culling / DGC | `vk_indirect_commands`、compute cull、IES/静态/读回重放三路、CPU 剔除降兜底+对账 | **✅ 核心完成**（2026-09-09；2026-09-10 三驱动 + 静态 spike 全运行时验证） | 静态 DGC 默认关（满槽实现慢 1.85×，翻盘 = 紧凑分桶 + 去同步等待，`docs/radv_static_dgc_spike.md`） |
 | **6** 文档销账 | — | **🔶 部分** | 完整销账待批次 5 收尾（devlog/research/roadmap/AGENTS 已随 5d 更新） |
@@ -125,8 +125,10 @@ per-light 颜色、距离衰减）headless 零 VVL error；forward 只读 `light
   设计底稿 → [radv_static_dgc_spike.md](radv_static_dgc_spike.md)。
 - **批次 2 refine 残二**：deferred light pass 简化 IBL、skybox 背景合成进 deferred 图
   （选路已转正：render_graph.lua `variant`，2026-09-08 重构批次 3）。
-- **灯 entity 化**（ECS 规范 3）+ forward `LightDataGpu@0` 头并入反射（Phase 7 多灯已把灯数组
-  入反射管线 4，前向头为 diff0 暂留手工双源，见 AGENTS 已知问题）。
+- ~~**灯 entity 化**（ECS 规范 3）~~ **已完成（2026-09-10）**：`Light` 组件 + `index` 正序契约
+  （画不画 = 实体有无，forward 读 index 0 = 主光，延迟按 index 落槽），BIT-IDENTICAL（forward+
+  deferred md5 一致）+ VVL 零 error + 多灯边界验证。余 forward `LightDataGpu@0` 头并入反射
+  （Phase 7 多灯已把灯数组入反射管线 4，前向头为 diff0 暂留手工双源，见 AGENTS 已知问题）。
 - **批次 6 文档销账**（待批次 5）。
 
 ### 设计决策（现行）

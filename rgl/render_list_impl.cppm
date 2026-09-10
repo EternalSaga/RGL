@@ -29,7 +29,6 @@ void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListS
 	const auto& viewProj = rg.ctx().get<ViewProjection>();
 	const auto& spin = rg.ctx().get<SceneSpin>();
 	const auto& camera = rg.ctx().get<Camera>();
-	const auto& sceneLights = rg.ctx().get<SceneLights>();  // Phase 7 D3：lights[0]=主光(forward)，全数组=延迟
 	const auto& env = rg.ctx().get<SceneEnv>();  // Phase 5.5（天空盒 draw 生成 + env 参数）
 	const auto& assets = resources.getAssetTable();
 
@@ -127,19 +126,30 @@ void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListS
 
 	// scene data（Phase 5 批次 2）：光方向归一化、color×intensity 预乘、eyePos=相机世界位置；
 	// 对象矩阵表 span 指向 state.matrices（帧局部存储，drawFrame 录制期拷进 staging）
-	// Phase 7 D3：forward 单灯 = lights[0]（scene data @0 头，diff0）；延迟灯数组 = 全 lights
-	//（≤ kMaxLights，尾区 @kSceneDataLightArrayOffset，契约 lights.slang）。
-	const Light primary = sceneLights.lights.empty() ? Light{} : sceneLights.lights[0];
+	// 灯 entity 化（Phase 7，ECS 规范 3）：灯 = entity（Light 组件），画不画 = 实体有无。
+	// 收集**不依赖 view 迭代序**（无保证）——按 Light.index 显式落槽：primary = index 0
+	//（forward @0 头单灯，diff0）；延迟灯数组按 index 填（≤ kMaxLights，尾区
+	// @kSceneDataLightArrayOffset，契约 lights.slang）。lightEntityCount 每帧算（非启动期
+	// 常量）= 留"运行时增删灯"接缝。
+	std::array<Light, kMaxLights> lightSlot{};
+	Light primary{};  // 无灯时 = 默认 Light{}（同旧 empty() 分支）
+	uint32_t lightEntityCount = 0;
+	rg.view<Light>().each([&](const Light& L) {
+		++lightEntityCount;
+		if (L.index == 0)
+			primary = L;
+		if (L.index < kMaxLights)
+			lightSlot[L.index] = L;
+	});
+	const uint32_t nLights = std::min(lightEntityCount, kMaxLights);
 	fresh.sceneData.light = LightDataGpu{
 		glm::normalize(primary.direction),
 		camera.position,
 		primary.color * primary.intensity,
 		primary.ambient};
-	const uint32_t nLights = std::min<uint32_t>(
-		static_cast<uint32_t>(sceneLights.lights.size()), kMaxLights);
 	fresh.sceneData.lightCount = nLights;
 	for (uint32_t i = 0; i < nLights; ++i) {
-		const Light& L = sceneLights.lights[i];
+		const Light& L = lightSlot[i];
 		GpuLight& G = fresh.sceneData.lightArray[i];
 		G.direction = glm::vec4(glm::normalize(L.direction), 0.0f);
 		G.position = glm::vec4(L.position, 0.0f);

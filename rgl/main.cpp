@@ -197,7 +197,6 @@ int main() {
 		registry.ctx().emplace<SceneBounds>();
 		registry.ctx().emplace<ViewProjection>();
 		registry.ctx().emplace<FrameDrawList>();
-		registry.ctx().emplace<SceneLights>(SceneLights{sceneConfig.lights});  // Phase 5 批次 2 / Phase 7 D3 多灯（scene.lua light/lights 段）
 		registry.ctx().emplace<NextObjectSlot>();  // Phase 6 instancing：实例矩阵槽分配器
 		registry.ctx().emplace<SceneEnv>();  // Phase 5.5：环境参数（env 上传成功后回填，见下）
 
@@ -482,6 +481,17 @@ int main() {
 				logger->info("cube entity: 资产 {} / 材质 {} / 管线下标 {}",
 					*cubeAsset, cubeMat, assets.get(*cubeAsset).pipelineIndex);
 			(void)cubeEntry;
+		}
+
+		// C2b：灯 entity 注册（Phase 7 灯 entity 化，ECS 规范 3：画不画 = 实体有无）。
+		// 数据源 = sceneConfig.lights（scene_config 保证非空：lights 段缺 → 回落 [light]）。
+		// 每灯一个 entity + Light 组件；index = lights 列表位（正序契约：index 0 = 主光
+		// forward @0 头，全数组按 index 落槽 deferred）。灯无资产/上传/矩阵槽，逻辑内联最简。
+		for (uint32_t i = 0; i < sceneConfig.lights.size(); ++i) {
+			auto e = registry.create();
+			auto& L = registry.emplace<Light>(e);
+			L = sceneConfig.lights[i];
+			L.index = i;
 		}
 
 		// C3：GPU culling 候选表（Phase 7b 批次 5）：candidate = 不透明 primitive。

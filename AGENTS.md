@@ -177,7 +177,8 @@ AppContext→DeviceContext（push constant 契约检查）→Swapchain→Resourc
 `loadRenderGraphConfig` + `compileRenderGraph`（**建窗后**）→ **entities 四段循环**（A0 内建
 几何上传（cube，若有 cube entity）→ A1 解析+顶点上传全部模型 → A2 纹理 → **env 上传**（时序
 = A2 后、addModelEntry 前）→ C 逐模型 addModelEntry+registerScene + 容量契约检查 + cube
-entity/条目；A0/A1/A2 拆分 = heap 布局"几何槽先于纹理槽"契约，见
+entity/条目 + **C2b 灯 entity**（`sceneConfig.lights` → 每灯一 entity + `Light` 组件，`index`=
+列表位正序契约，画不画 = 实体有无）；A0/A1/A2 拆分 = heap 布局"几何槽先于纹理槽"契约，见
 `AssetTable::expectedGeometrySlot`）→ **C3 GPU culling 候选表**（`view<MeshRef, MaterialRef,
 CullSphere>` 迭代序+守卫与 render_list CPU 路径完全一致；candidate = 不透明 primitive）+
 `GpuCull` 构造 → `addSkyEntry`/deferred 装配（G-buffer 槽 + light 条目，**须先于 Renderer 构造**）
@@ -269,7 +270,8 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
   opaque/skybox/transparent/light 四个；单 swapchain attachment；多线程录制不做（7b+ 议）
 - **`LightDataGpu` 前向头双源**（灯数组已入反射）：forward `LightDataGpu@0-48` 仍手写 struct ↔
   `scene.slang` 字面量手工一致（为 forward diff0 未并反射）；灯数组 @262272 已入反射管线 4
-  （static_assert 三方同步）。灯未 entity 化（经 `SceneLights` context，lights[0]=主光）
+  （static_assert 三方同步）。**灯已 entity 化（2026-09-10）**：`Light` 组件 + `index` 正序契约
+  （画不画 = 实体有无，forward 读 index 0 = 主光，延迟按 index 落槽，见 main C2b + render_list）
 - **GPU culling（Phase 7b）边界**：DGC 路径（`vkCmdExecuteGeneratedCommandsEXT`）本机 RADV
   graphics 侧不可用（`supportedIndirectCommandsShaderStagesShaderBinding` 仅 COMPUTE，26.2.1 复测
   graphicsIndirect=false）→ 默认走**读回重放**。**注意：本机核显 = 9950X Raphael（RDNA2 小核），
