@@ -248,7 +248,7 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
 | 位置 | 说明 |
 |---|---|
 | `shaders/material.slang` | **统一 push constant 契约**：`DrawArgs`（Phase 7b+ 仅 `objectIndex` 4B）单一真相源 → schema 校验 → `material_types_generated` |
-| `shaders/scene.slang` | **场景级 bindless 契约**：`sceneData`（binding 3）+ `readSceneLight`/`readObjectMatrix`/`readObjectMvp`/`readObjectDraw`/`worldPos`/`worldNormal`/`clipPos`；@0-128 头 + 各 per-object 表字节布局 = vkresources 手写 ↔ shader 字面量手工一致（无反射端，见已知问题） |
+| `shaders/scene.slang` | **场景级 bindless 契约**：`sceneData`（binding 3）+ `SceneLight`（@0 前向头，**C API 反射生成** `scene_forward_types_generated`，双源已消）+ `readSceneLight`/`readObjectMatrix`/`readObjectMvp`/`readObjectDraw`/`worldPos`/`worldNormal`/`clipPos`；@0-128 头 + 各 per-object 表字节布局 = shader 字面量（per-object 表仍手工一致，见已知问题） |
 | `shaders/env.slang` / `sky.slang` | env 采样契约（binding 4/5 + @48）/ 天空盒契约（@64 invViewProj 重建射线） |
 | `shaders/lights.slang` | **多灯契约**（反射管线 4）：`GpuLight` + `readLightCount/readGpuLight` 读尾区 @262272；`light.frag` import，forward 不 import |
 | `shaders/model_pbr/model_phong/model_pbr_ibl.frag` | 三条 frag 路线（GGX / Blinn / GGX+简化 IBL），`scene.lua styles` 一行切换 |
@@ -277,10 +277,12 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
 - **Phase 6 渲染图边界**：线性 pass 序（无拓扑排序/fusion/aliasing）；offscreen 显式格式已落地
   （词表 12 项）；sampleRead RT→heap 接线已落地（D1）；执行器 state/drawSource 名字表认
   opaque/skybox/transparent/light 四个；单 swapchain attachment；多线程录制不做（7b+ 议）
-- **`LightDataGpu` 前向头双源**（灯数组已入反射）：forward `LightDataGpu@0-48` 仍手写 struct ↔
-  `scene.slang` 字面量手工一致（为 forward diff0 未并反射）；灯数组 @262272 已入反射管线 4
-  （static_assert 三方同步）。**灯已 entity 化（2026-09-10）**：`Light` 组件 + `index` 正序契约
-  （画不画 = 实体有无，forward 读 index 0 = 主光，延迟按 index 落槽，见 main C2b + render_list）
+ - **前向头 `SceneLight` 已入反射（2026-09-10，双源消除）**：forward 头 `@0-48` 原手写
+   `LightDataGpu` ↔ `scene.slang` 手工一致 → 现经 C API 反射管线（第 6 条 `scene_forward`）生成
+   `SceneLight`（`scene_forward_types_generated`，逐字段 offsetof 断言），替换 4 处手写引用
+   （vkresources/frame_draw_list/render_list_impl/vkrenderer_impl）。灯数组 @262272 走反射管线 4
+   （`GpuLight`）。**灯已 entity 化**：`Light` 组件 + `index` 正序契约（画不画 = 实体有无，forward
+   读 index 0 = 主光，延迟按 index 落槽，见 main C2b + render_list）
 - **GPU culling（Phase 7b）边界**：DGC 路径（`vkCmdExecuteGeneratedCommandsEXT`）本机 RADV
   graphics 侧不可用（`supportedIndirectCommandsShaderStagesShaderBinding` 仅 COMPUTE，26.2.1 复测
   graphicsIndirect=false）→ 默认走**读回重放**。**注意：本机核显 = 9950X Raphael（RDNA2 小核），

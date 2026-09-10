@@ -16,6 +16,7 @@ import vkerror;
 import vk_device;
 import vk_swapchain;
 import vk_resources;
+import scene_forward_types_generated;  // 前向头 SceneLight（C API 反射生成，替换原 LightDataGpu）
 import shader_registry;
 import shader;
 import state_kit;
@@ -183,7 +184,7 @@ void Renderer::createSceneStaging(RGL::Resources& vkResources) {
 		uint32_t frameSlot) {
 	// ③.5 scene data 上传（Phase 5 批次 2；手术 5：块体提为私有方法，语义零改动）。
 	auto* stage = static_cast<std::byte*>(sceneStaging[frameSlot].getMappedData());
-	std::memcpy(stage, &list.sceneData.light, sizeof(LightDataGpu));
+	std::memcpy(stage, &list.sceneData.light, sizeof(SceneLight));
 	// Phase 5.5：env 参数写 @48（light 48B 之后、64B 头内——与 objectMatrices 区无重叠）
 	std::memcpy(stage + kSceneDataEnvOffset, &list.sceneData.envParams, sizeof(glm::vec2));
 	// Phase 5.5 批次 4：skyboxInvViewProj 写 @64（sky.slang skyClipToWorld 消费）

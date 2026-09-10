@@ -61,6 +61,12 @@ set(LIGHTS_SLANG "${CMAKE_CURRENT_SOURCE_DIR}/shaders/lights.slang")
 set(LIGHTS_SCHEMA "${CMAKE_CURRENT_SOURCE_DIR}/shaders/lights_schema.lua")
 set(LIGHTS_CPPM "${GEN_SRC_DIR}/lights_types_generated.cppm")
 
+# 前向头管线（Phase 7 债消）：scene.slang 的 SceneLight（forward 单灯头 @0-48）经 C API
+# 反射生成 C++ struct，替换 vkresources.cppm 原手写 LightDataGpu（双源消除）。
+set(SCENE_FORWARD_SLANG "${CMAKE_CURRENT_SOURCE_DIR}/shaders/scene.slang")
+set(SCENE_FORWARD_SCHEMA "${CMAKE_CURRENT_SOURCE_DIR}/shaders/scene_forward_schema.lua")
+set(SCENE_FORWARD_CPPM "${GEN_SRC_DIR}/scene_forward_types_generated.cppm")
+
 set(FEATURES_CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/features_config.json")
 set(FEATURES_TEMPLATE "${CMAKE_SOURCE_DIR}/tools/templates/features_cppm.inja")
 set(FEATURES_CPPM "${GEN_SRC_DIR}/features_generated.cppm")
@@ -109,6 +115,15 @@ add_custom_command(TARGET reflect PRE_BUILD
             --flags "${SLANG_FLAGS_STR} -no-codegen"
             --include "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
     VERBATIM)
+# 前向头管线（Phase 7 债消）：scene.slang SceneLight → 替换手写 LightDataGpu（双源消除）
+add_custom_command(TARGET reflect PRE_BUILD
+    COMMAND reflection_tool slang
+            --shader ${SCENE_FORWARD_SLANG}
+            --schema ${SCENE_FORWARD_SCHEMA}
+            --output ${SCENE_FORWARD_CPPM} --module-name scene_forward_types_generated --template ${TYPES_TEMPLATE}
+            --flags "${SLANG_FLAGS_STR} -no-codegen"
+            --include "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
+    VERBATIM)
 # features 管线（config JSON → 模板渲染，无 slangc 步骤）
 add_custom_command(TARGET reflect PRE_BUILD
     COMMAND reflection_tool render --json ${FEATURES_CONFIG}
@@ -131,6 +146,7 @@ set(REFLECTION_PAIRS
     "${MODEL_CPPM}|${MODEL_SLANG},${MODEL_SCHEMA},${TYPES_TEMPLATE}"
     "${MATERIAL_CPPM}|${MATERIAL_SLANG},${MATERIAL_SCHEMA},${TYPES_TEMPLATE}"
     "${LIGHTS_CPPM}|${LIGHTS_SLANG},${LIGHTS_SCHEMA},${TYPES_TEMPLATE}"
+    "${SCENE_FORWARD_CPPM}|${SCENE_FORWARD_SLANG},${SCENE_FORWARD_SCHEMA},${TYPES_TEMPLATE}"
     "${FEATURES_CPPM}|${FEATURES_CONFIG},${FEATURES_TEMPLATE}")
 string(REPLACE ";" "\n" _pairs_src "${REFLECTION_PAIRS}")
 file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/reflection_pairs.cmake CONTENT "
@@ -323,11 +339,12 @@ target_sources(rgl PUBLIC
                       gltf_loader.cppm model_importer.cppm builtin_geometry.cppm texture_pool.cppm texture_upload.cppm scene_context.cppm llm_debug.cppm
                         llm_debug_impl.cppm vkrenderer_impl.cppm render_graph_impl.cppm render_graph_config_impl.cppm model_importer_impl.cppm builtin_geometry_impl.cppm texture_upload_impl.cppm camera_config_impl.cppm scene_config_impl.cppm runtime_config_impl.cppm diagnostics_impl.cppm render_list_impl.cppm gpu_canary_impl.cppm ecs_impl.cppm vkresources_impl.cppm shader_registry_impl.cppm gltf_loader_impl.cppm gpu_cull_impl.cppm vk_indirect_commands_impl.cppm frame_capture_impl.cppm cull_driver_impl.cppm frame_session_impl.cppm
                        gpu_canary.cppm gpu_cull.cppm vk_indirect_commands.cppm state_kit.cppm frame_capture.cppm cull_driver.cppm frame_session.cppm
-                        ${TYPES_CPPM}
-                        ${MODEL_CPPM}
-                        ${MATERIAL_CPPM}
-                        ${LIGHTS_CPPM}
-                        ${FEATURES_CPPM}
+                         ${TYPES_CPPM}
+                         ${MODEL_CPPM}
+                         ${MATERIAL_CPPM}
+                         ${LIGHTS_CPPM}
+                         ${SCENE_FORWARD_CPPM}
+                         ${FEATURES_CPPM}
 )
 
 add_dependencies(rgl reflection_check)

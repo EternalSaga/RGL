@@ -113,9 +113,11 @@ shader，须 BIT-IDENTICAL 验证）；② `ICompileRequest` 标 `[[deprecated]]
 - **生成物变化**：`GpuLight` +3 条、`ModelVertex` +2 条 `offsetof` static_assert（旧 JSON 路径只
   有总尺寸断言）；`DrawArgs`/`types` 无变化。struct 字段/尺寸/常量全部一致 = 等价或更严。
 
-## 剩余应用（本升级的能力，尚未接线）
+## 剩余应用（本升级的能力）
 
-- [ ] **前向头 `SceneLight`/`LightDataGpu` 双源**（本升级的原始动机）：新建管线反射
-  `scene.slang` 的 `SceneLight`（lights 管线已 import scene，跨模块可查）→ 生成 C++ struct →
-  替换 `vkresources.cppm` 手写 `LightDataGpu`。这是 C API 能力真正兑现"消除双源"的点
-  （5 管线升级只是把既有 struct 的断言从总尺寸升到逐字段）。
+- [x] **前向头 `SceneLight`/`LightDataGpu` 双源**（本升级的原始动机，2026-09-10 落地）：
+  新建第 6 条管线 `scene_forward`（`scene.slang` 的 `SceneLight` → `scene_forward_types_generated.cppm`，
+  逐字段 offsetof 断言）→ 替换 `vkresources.cppm` 手写 `LightDataGpu`（4 处：vkresources/
+  frame_draw_list/render_list_impl/vkrenderer_impl）。原 `LightDataGpu` 默认成员初始化为死代码
+  （renderListSystem 每帧显式聚合初始化 `.light`），替换为无默认的生成 `SceneLight` 行为不变。
+  **forward BIT-IDENTICAL（md5 `59fb4c0f...` 不变）**——C API 能力真正兑现"消除双源"。

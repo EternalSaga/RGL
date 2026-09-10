@@ -6,6 +6,7 @@ import rlstd;
 import vk_resources;
 import lights_types_generated;
 import material_types_generated;  // DrawArgs（Phase 7b cullArgs：GPU culling 候选 args）
+import scene_forward_types_generated;  // 前向头 SceneLight（C API 反射生成，替换原 LightDataGpu）
 
 namespace RGL {
 
@@ -47,13 +48,13 @@ static_assert(sizeof(ObjectDrawGpu) == 32, "ObjectDrawGpu must match scene.slang
 /**
  * 场景级每帧动态数据（Phase 5 批次 2，bindless）：渲染 system 产出、drawFrame 消费——
  * CPU 写 staging[currentFrame] + 录制期 vkCmdCopyBuffer 拷进 scene data buffer
- *（布局契约见 vkresources.cppm LightDataGpu / scene.slang）。objectMatrices 按
+ *（布局契约见 scene.slang SceneLight / scene_forward_types_generated）。objectMatrices 按
  * **对象矩阵槽**（MeshRef.objectSlot，实例级；DrawArgs.objectIndex = 同值——Phase 6
  * instancing：同 asset 多实例各持独立槽，**非**资产 id 索引），span 指向渲染 system
  * 帧局部存储（录制期读取即完成使命，同 DrawCall.pushData 生命周期规则）。
  */
 export struct SceneFrameData {
-	LightDataGpu light;  // scene data @0 头单灯（forward 消费 lights[0]，布局见 LightDataGpu）
+	SceneLight light;  // scene data @0 头单灯（forward 消费 lights[0]，布局见 scene_forward_types_generated）
 	// Phase 5.5 env 参数（scene data 头 @48/@52，原 16B 保留区启用；shader 端
 	// env.slang readEnvParams 字面量一致）：x=envIntensity y=envMipRange（=L−1，0 = 无环境）
 	glm::vec2 envParams{0.0f};

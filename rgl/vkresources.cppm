@@ -8,6 +8,7 @@ import rlstd;
 import rlvk;
 import rllogger;
 import lights_types_generated;  // Phase 7 D3：GpuLight struct + kMaxLights/kGpuLightStride/kSceneDataLightArrayBase
+import scene_forward_types_generated;  // 前向头 SceneLight（C API 反射生成，替换原手写 LightDataGpu，双源消除）
 import VmaRaii;
 import vk_instance;
 import vk_device;
@@ -26,7 +27,8 @@ namespace RGL {
  *（heap slot 经 allocSlot 运行时分配——纹理槽数随场景动态，light 槽无法钉编译期偏移，
  * 同 slotTexture 模式），字节布局的单一真相源（shader 端 scene.slang 字面量必须一致，
  * kTrianglesPerGroup 先例——无反射端对应）：
- *   @0   LightDataGpu（48B：direction/eyePos/color/ambient 各 vec3）
+ *   @0   SceneLight（48B：direction/eyePos/color/ambient 各 vec3，C API 反射生成，
+ *        见 scene_forward_types_generated / docs/slang_api_reflection_research.md）
  *   @48  Phase 5.5 env 参数（原 16B 保留区启用）：envIntensity float + envMipRange
  *        float（= mipLevels−1，0 = 无环境）+ 8B 留白——scene.slang/env.slang 字面量一致
  *   @64  Phase 5.5 批次 4 skyboxInvViewProj（mat4 列主序 = inverse(proj·view)，
@@ -38,18 +40,16 @@ namespace RGL {
  * drawFrame ① 已 wait 本 slot fence → 写安全）+ 录制期 vkCmdCopyBuffer 拷进本 buffer
  *（命令流内天然有序；描述符静态指向本 buffer 永不改动，见 vkrenderer.cppm）。
  */
-export struct LightDataGpu {
-	glm::vec3 direction{0.0f, -1.0f, 0.0f};  // @0 世界空间光方向（归一化，照射方向）
-	glm::vec3 eyePos{0.0f};                    // @12 世界空间相机位置（高光视向）
-	glm::vec3 color{1.0f};                     // @24 光色 × intensity（CPU 预乘）
-	glm::vec3 ambient{0.1f};                   // @36 环境光
-};
-static_assert(sizeof(LightDataGpu) == 48);
+// 前向头 SceneLight（scene data @0-48）= C API 反射生成（scene_forward_types_generated，
+// 布局真相源 = scene.slang SceneLight，逐字段 offsetof static_assert 钉死）。原手写
+// LightDataGpu 已删（双源消除）——默认成员初始化为死代码（renderListSystem 每帧显式
+// 聚合初始化 .light，从不用默认值），故无默认不影响行为。
+// 注意：SceneLight 无默认成员初始化；消费方须显式赋值（render_list 已保证）。
 
 /** Phase 5.5：env 参数偏移（envIntensity float @48 + envMipRange float @52；env.slang
  * readEnvParams 的 Load(48)/Load(52) 字面量必须与本值一致——scene.slang 先例）。派生自
- * sizeof(LightDataGpu)，C++ 侧 struct 漂移即编译失败。 */
-export inline constexpr uint32_t kSceneDataEnvOffset = sizeof(LightDataGpu);
+ * sizeof(SceneLight)（C API 反射生成），shader 布局漂移即编译失败。 */
+export inline constexpr uint32_t kSceneDataEnvOffset = sizeof(SceneLight);
 /** Phase 5.5 批次 4：skyboxInvViewProj mat4 列主序 @64（inverse(proj·view)，sky.slang
  * skyClipToWorld 的 Load4(64/80/96/112) 字面量必须与本值一致）。 */
 export inline constexpr uint32_t kSceneDataSkyOffset = 64;

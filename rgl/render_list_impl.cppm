@@ -10,6 +10,7 @@ import rlstd;
 import rllogger;
 import material_types_generated;
 import lights_types_generated;
+import scene_forward_types_generated;  // 前向头 SceneLight（C API 反射生成，替换原 LightDataGpu）
 import frame_draw_list;
 import vk_resources;
 import asset_table;
@@ -142,7 +143,7 @@ void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListS
 			lightSlot[L.index] = L;
 	});
 	const uint32_t nLights = std::min(lightEntityCount, kMaxLights);
-	fresh.sceneData.light = LightDataGpu{
+	fresh.sceneData.light = SceneLight{
 		glm::normalize(primary.direction),
 		camera.position,
 		primary.color * primary.intensity,
