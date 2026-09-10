@@ -505,7 +505,16 @@ int main() {
 					asset.groupCount, asset.triangleCount, asset.vertexOffset,
 					mat.baseColor, glm::vec2(mat.roughness, mat.metallic)});
 			});
-		GpuCull gpuCull(vkDevice, vkResources, cullEntries);
+		// 静态 shader DGC 路选路（spike，docs/radv_static_dgc_spike.md）：IES 路缺席
+		// （非 graphicsIndirect）但全集含 MESH 且 diagnostics.dgcStatic 开 → per-entry 流
+		// 随 GpuCull 分配（fanout kernel 输出）。N = 此刻管线表条目数——sky/light 条目在
+		// 其后加入、非 candidate，DgcStaticCommands 必须用同一数保证流布局一致。
+		const auto& dgcSup = vkDevice.getDgcSupport();
+		const uint32_t dgcStaticEntryCount = static_cast<uint32_t>(shaderRegistry.entriesView().size());
+		const bool dgcStaticEnabled = !dgcSup.graphicsIndirect && dgcSup.staticGraphicsIndirect
+			&& diagnostics().dgcStatic && !cullEntries.empty();
+		GpuCull gpuCull(vkDevice, vkResources, cullEntries,
+			dgcStaticEnabled ? dgcStaticEntryCount : 0u);
 
 		// Phase 5.5 批次 4：天空盒管线条目（env 已上传才建——addSkyEntry 契约）+
 		// SceneEnv 回填（renderListSystem 经 ctx 生成 skybox draw，画不画 = 配置有无）
@@ -547,19 +556,35 @@ int main() {
 					logger->warn("dgc: 构造失败回落读回重放: {}", e.what());
 			}
 		}
-		// 清晰选路日志（启动期一次）：哪个设备走 DGC execute 还是读回重放
+		// 静态 shader DGC 路（RADV spike）：IES 未建且门控开时构造；异常回落读回重放
+		// （流 buffer 已随 GpuCull 分配但无人消费——仅多占显存，像素路径无影响）
+		std::unique_ptr<DgcStaticCommands> dgcStatic;
+		if (dgcStaticEnabled && gpuCull.active() && !dgc) {
+			try {
+				dgcStatic = std::make_unique<DgcStaticCommands>(vkDevice, shaderRegistry,
+					gpuCull.candidateCount(), dgcStaticEntryCount, 2);
+			} catch (const std::exception& e) {
+				auto* logger = RLLogger::getInstance();
+				if (logger)
+					logger->warn("dgc static: 构造失败回落读回重放: {}", e.what());
+			}
+		}
+		// 清晰选路日志（启动期一次）：哪个设备走 DGC execute / 静态 execute / 读回重放
 		if (auto* logger = RLLogger::getInstance()) {
 			std::string devName(vkDevice.getPhysicalDevice().getProperties().deviceName.data());
-			const auto& dgcSup = vkDevice.getDgcSupport();
 			if (dgc && dgc->active())
-				logger->info("DGC path: device='{}' graphicsIndirect={} computeIndirect={} -> DGC execute (vkCmdExecuteGeneratedCommandsEXT)",
-					devName, dgcSup.graphicsIndirect, dgcSup.computeIndirect);
+				logger->info("DGC path: device='{}' graphicsIndirect={} computeIndirect={} static={} -> DGC execute (vkCmdExecuteGeneratedCommandsEXT)",
+					devName, dgcSup.graphicsIndirect, dgcSup.computeIndirect, dgcSup.staticGraphicsIndirect);
+			else if (dgcStatic && dgcStatic->active())
+				logger->info("DGC path: device='{}' graphicsIndirect={} computeIndirect={} static={} -> DGC static execute ({} entries × vkCmdExecuteGeneratedCommandsEXT)",
+					devName, dgcSup.graphicsIndirect, dgcSup.computeIndirect, dgcSup.staticGraphicsIndirect,
+					dgcStatic->entryCount());
 			else
-				logger->info("DGC path: device='{}' graphicsIndirect={} computeIndirect={} -> 读回重放 (CPU 回退)",
-					devName, dgcSup.graphicsIndirect, dgcSup.computeIndirect);
+				logger->info("DGC path: device='{}' graphicsIndirect={} computeIndirect={} static={} -> 读回重放 (CPU 回退)",
+					devName, dgcSup.graphicsIndirect, dgcSup.computeIndirect, dgcSup.staticGraphicsIndirect);
 		}
 		Renderer vkRenderer(vkDevice, vkSwapchain, vkResources, shaderRegistry,
-			std::move(*compiledGraph), &gpuCull, dgc.get());
+			std::move(*compiledGraph), &gpuCull, dgc.get(), dgcStatic.get());
 
 		/**
 		 * DIAG（可见窗 fault 排查）每帧回调：隐藏窗启动、frame == showAfter 时

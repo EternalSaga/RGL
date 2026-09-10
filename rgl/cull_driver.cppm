@@ -30,11 +30,13 @@ export class CullDriver {
 	 * 构造（main 先建 GpuCull/DgcCommands 再建 Renderer，本类在 Renderer 构造体内建）。
 	 * @param vkDevice 设备层（device/graphicsQueue/graphicsCommandPool）
 	 * @param vkGpuCull culling 数据通路（nullptr = culling 不存在）
-	 * @param vkDgc DGC 命令生成（nullptr = 恒走读回重放；NVIDIA 机才有）
+	 * @param vkDgc DGC 命令生成 IES 路（nullptr = 非 NVIDIA 全 DGC 路；优先级最高）
+	 * @param vkDgcStatic 静态 shader DGC 路（nullptr = 关；RADV spike，
+	 *   docs/radv_static_dgc_spike.md——IES 路缺席时接管 opaque 段，两者皆 null 走重放）
 	 * @param framesInFlight 帧 slot 数（= Renderer::MAX_FRAMES_IN_FLIGHT，cull CB 按 slot 分配）
 	 */
 	CullDriver(RGL::DeviceContext& vkDevice, RGL::GpuCull* vkGpuCull, RGL::DgcCommands* vkDgc,
-		uint32_t framesInFlight);
+		RGL::DgcStaticCommands* vkDgcStatic, uint32_t framesInFlight);
 
 	/**
 	 * culling 是否激活（null/inactive = false，drawFrame 全路径不碰 culling）。
@@ -86,6 +88,7 @@ export class CullDriver {
 	RGL::DeviceContext& device;
 	RGL::GpuCull* gpuCull;
 	RGL::DgcCommands* dgc;
+	RGL::DgcStaticCommands* dgcStatic;  // 静态 shader DGC 路（nullptr = 关；IES 路优先）
 	uint32_t framesInFlight;                    // cull CB 数（= Renderer 帧 slot 数）
 	std::vector<vk::raii::CommandBuffer> cullCommandBuffers;  // 每帧 slot 一个（inactive = 空）
 	uint32_t lastReconcileVisible = 0xFFFFFFFF;  // 对账日志节流（计数/失配变化才打）

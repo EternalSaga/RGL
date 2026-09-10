@@ -63,6 +63,7 @@ void setDiagnostics(const DiagnosticsConfig& cfg) { diagnostics() = cfg; }
 		cfg.texDist = readBool("tex_dist", cfg.texDist);
 		cfg.textureForceWhite = readBool("texture_force_white", cfg.textureForceWhite);
 		cfg.textureForceUnorm = readBool("texture_force_unorm", cfg.textureForceUnorm);
+		cfg.dgcStatic = readBool("dgc_static", cfg.dgcStatic);
 
 		// 数值门：负数 = 显式"关"哨兵（配置文件写 -1 直观）；越界钳位同旧 env 行为
 		auto readI64 = [&](const char* key, int64_t def) -> std::optional<int64_t> {
@@ -78,14 +79,16 @@ void setDiagnostics(const DiagnosticsConfig& cfg) { diagnostics() = cfg; }
 		cfg.dumpGbuf = static_cast<int>(readI64("dump_gbuf", -1).value_or(-1));
 		if (cfg.dumpGbuf > 3)
 			cfg.dumpGbuf = 0;  // 越界钳到 0（同旧 env 行为）；负数 = 关
+		cfg.frameStats = static_cast<uint32_t>(
+			std::max<int64_t>(0, readI64("frame_stats", 0).value_or(0)));
 
 		if (auto* lg = RLLogger::getInstance())
 			lg->info("diagnostics: no_vvl={} no_present={} vtx_canary={} texel_canary={} "
-				"dump_gbuf={} style_dist={} tex_dist={} tex_force(size={} white={} unorm={})",
+				"dump_gbuf={} style_dist={} tex_dist={} tex_force(size={} white={} unorm={}) dgc_static={}",
 				cfg.noVvl, cfg.noPresent, cfg.vtxCanary,
 				cfg.texelCanary == ~uint64_t{0} ? "off" : std::to_string(cfg.texelCanary),
 				cfg.dumpGbuf, cfg.styleDist, cfg.texDist,
-				cfg.textureForceSize, cfg.textureForceWhite, cfg.textureForceUnorm);
+				cfg.textureForceSize, cfg.textureForceWhite, cfg.textureForceUnorm, cfg.dgcStatic);
 		return cfg;
 	} catch (const std::exception& e) {
 		return std::unexpected(Error{ErrorCode::ConfigLoadFailed,

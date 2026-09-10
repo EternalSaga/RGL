@@ -17,12 +17,21 @@ namespace RGL {
  * DGC（VK_EXT_device_generated_commands）能力位（DeviceContext 构造期自
  * VkPhysicalDeviceDeviceGeneratedCommandsPropertiesEXT.supportedIndirectCommandsShaderStagesShaderBinding
  * 派生；culling 子系统据此选路——Phase 7b，见 docs/device_generated_commands_research.md）。
- * @note 本机 RADV（Strix Halo 26.2.1）实测 binding 子集仅 COMPUTE——graphics 侧 execution set
- * /mesh draw 序列不可用，走读回重放回退（phase7_devlog 批次 5）；NVIDIA 全支持（含 MESH/FRAGMENT）。
+ * @note 本机 RADV（Strix Halo 26.2.1）实测 binding 子集仅 COMPUTE——IES 逐序列换 shader 路
+ * 不可用，但 graphics 执行路径驱动已实现 → staticGraphicsIndirect 走静态 shader 路
+ * （docs/radv_static_dgc_spike.md）；两者皆无才读回重放（phase7_devlog 批次 5 语义）。
+ * NVIDIA binding 子集全开（含 MESH/FRAGMENT）→ 恒走 IES 路。
  */
 export struct DgcSupport {
 	bool graphicsIndirect = false;  ///< binding 子集含 MESH|FRAGMENT：execution set 逐序列换 shader + DRAW_MESH_TASKS 序列（DGC 全路径）
 	bool computeIndirect = false;   ///< binding 子集含 COMPUTE：DISPATCH 序列
+	/**
+	 * 全集（supportedIndirectCommandsShaderStages）含 MESH：静态 shader DGC 路可用
+	 * （layout 去 EXECUTION_SET token + pNext 挂 VkGeneratedCommandsShaderInfoEXT，
+	 * 每管线一次 Execute——RADV 实现了 graphics 执行、只缺逐序列 binding，spec 无子集
+	 * 要求，见 docs/radv_static_dgc_spike.md §2）。graphicsIndirect 优先级更高。
+	 */
+	bool staticGraphicsIndirect = false;
 	uint32_t maxIndirectShaderObjectCount = 0;  ///< execution set 容量上限（DgcCommands 构造期校验）
 };
 
@@ -108,8 +117,8 @@ export class DeviceContext {
 			  vk::CommandPoolCreateFlagBits::eTransient | vk::CommandPoolCreateFlagBits::eResetCommandBuffer)
 				  .value()) {
 		if (auto logger = RLLogger::getInstance()) {
-			logger->info("Device DGC support: graphicsIndirect={} computeIndirect={}",
-				dgcSupport.graphicsIndirect, dgcSupport.computeIndirect);
+			logger->info("Device DGC support: graphicsIndirect={} computeIndirect={} staticGraphicsIndirect={}",
+				dgcSupport.graphicsIndirect, dgcSupport.computeIndirect, dgcSupport.staticGraphicsIndirect);
 		}
 	}
 
@@ -188,20 +197,25 @@ export class DeviceContext {
 	 * DGC 能力位派生（physical device properties 查询，与 device 创建无关；结果存
 	 * dgcSupport 成员）。判据 = 研究文档 §3.3：graphics 侧可用 = shader binding 子集含
 	 * MESH|FRAGMENT（execution set 逐序列换 shader + mesh draw 序列）；compute 侧 = 含
-	 * COMPUTE（DISPATCH 序列）。
+	 * COMPUTE（DISPATCH 序列）；静态 shader 路 = **全集**含 MESH|FRAGMENT（RADV graphics
+	 * 执行已实现、只缺逐序列 binding，docs/radv_static_dgc_spike.md）。
 	 * @param physicalDevice 待查询的物理设备
-	 * @return 派生能力位（本机 RADV 预期 {false, true}，NVIDIA 预期 {true, true}）
+	 * @return 派生能力位（本机 RADV 预期 {false, true, true}，NVIDIA 预期 {true, true, true}）
 	 */
 	static DgcSupport queryDgcSupport(const vk::raii::PhysicalDevice& physicalDevice) {
 		const auto props = physicalDevice
 			.getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDeviceGeneratedCommandsPropertiesEXT>();
-		const auto stages = props.get<vk::PhysicalDeviceDeviceGeneratedCommandsPropertiesEXT>()
-			.supportedIndirectCommandsShaderStagesShaderBinding;
+		const auto& dgcProps = props.get<vk::PhysicalDeviceDeviceGeneratedCommandsPropertiesEXT>();
+		const auto stages = dgcProps.supportedIndirectCommandsShaderStagesShaderBinding;
+		// 静态 shader 路判据 = **全集**（非 binding 子集）含 MESH|FRAGMENT：layout token
+		// 无 SHADER/EXECUTION_SET 时仅受全集约束（radv_static_dgc_spike §2.2）
+		const auto allStages = dgcProps.supportedIndirectCommandsShaderStages;
 		// BMI 不随类序列化自由运算符（rlstd 同教训）：!= 0 的 operator== 不可见，
 		// 经 explicit operator bool 显式转换判定
 		return DgcSupport{static_cast<bool>(stages & (vk::ShaderStageFlagBits::eMeshEXT | vk::ShaderStageFlagBits::eFragment)),
 			static_cast<bool>(stages & vk::ShaderStageFlagBits::eCompute),
-			props.get<vk::PhysicalDeviceDeviceGeneratedCommandsPropertiesEXT>().maxIndirectShaderObjectCount};
+			static_cast<bool>(allStages & (vk::ShaderStageFlagBits::eMeshEXT | vk::ShaderStageFlagBits::eFragment)),
+			dgcProps.maxIndirectShaderObjectCount};
 	}
 
 	/**

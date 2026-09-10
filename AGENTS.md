@@ -163,13 +163,13 @@ tools 为 `EXCLUDE_FROM_ALL`（编译提速）：日常构建不碰工具链，`
 | `vk_renderer` | vkrenderer.cppm | **盲执行器骨架**（Phase 10 批次 0 拆四子系统，见下四行；drawFrame 577→291 行，BIT-IDENTICAL 全程维持）：`drawFrame(const FrameDrawList&)`（零 entt）构造收 `CompiledRenderGraph`，流程 = `session.beginFrame`（①②③）→ `writeSceneStaging`（③.5）→ `cullDriver.runFrame`（④c）→ heap barrier/copy/bind（④⑥固定段）→ pass 循环（barrier 物化 / beginRendering / `stateKit.stateFor`+applyDynamicState / 段内逐 draw / blit / drawLight）→ `capturer.record`（⑪.5）→ presentTransition（⑫）→ `session.submit/present/advance`（⑬⑭⑮）；公开 `requestFrameCapture/takeFrameCapture/hasFrameCapture`（转发 capturer）+ `waitForIdle` + `getGraphicsCommandPoolRef`（金丝雀）；构造期 `validateRenderGraphForExecutor` fail-fast |
 | `frame_session` | frame_session.cppm | 帧生命周期会话（手术 4 自 drawFrame 摘出）：四套同步对象（双 fence，VUID-00067）+ 每帧命令缓冲 + `beginFrame`（①双 fence wait/reset + ②acquire 100ms 超时三态 began/skipped/recreated + ③CB begin）/`submit`（⑬裸 vkQueueSubmit）/`present`（⑭presentFence + out-of-date 重建）/`advance`（⑮）；`recreateSwapchainAndDepth`（swapchain+depth extent 同步重建）；`kFramesInFlight=2`；noPresent 诊断分支保留 |
 | `frame_capture` | frame_capture.cppm | 帧内回读捕获器（手术 2 自 Renderer 摘出，llm_debug 截图载体）：`FrameCapture` 产物（width/height/format/gbufChannel/bytes/pixels）+ 三步曲 `request`（⑫前挂）/`record`（后缓冲 or GB 通道回读拷贝，读写 attachmentLayouts 布局追踪）/`collect`（⑬后等本帧 fence 搬 mapped 字节）；captureStaging GPU_TO_CPU 按需增长；acquire 跳帧时请求保持 pending |
-| `cull_driver` | cull_driver.cppm | GPU culling 帧编舞（手术 3 自 drawFrame ④c + opaque 段摘出，持 GpuCull*+DgcCommands*）：`runFrame`（cull CB 录制 dispatch+DGC preprocess → 提交 → 同帧同步等待 → readCull → `reconcile` objectSlot 多重集 + cullArgs↔entries 对齐自检）+ `executeOpaqueSegment`（DGC execute / 读回重放双路，能力位切换）；inactive = 全路径不碰 culling |
+| `cull_driver` | cull_driver.cppm | GPU culling 帧编舞（手术 3 自 drawFrame ④c + opaque 段摘出，持 GpuCull*+DgcCommands*+DgcStaticCommands*）：`runFrame`（cull CB 录制 dispatch+DGC preprocess → 提交 → 同帧同步等待 → readCull → `reconcile` objectSlot 多重集 + cullArgs↔entries 对齐自检）+ `executeOpaqueSegment`（IES DGC execute / 静态 DGC / 读回重放**三路分发**，能力位 + 门控切换；默认 AMD = 重放）；inactive = 全路径不碰 culling |
 | `state_kit` | state_kit.cppm | pass 动态状态表（手术 1 自 Renderer 摘出）：四段 RenderState（opaque/transparent/skybox/light，值语义含透明段剔背面防 alpha 翻倍、天空盒 z=1 LEQUAL、light 全屏终图不测深）+ `stateFor(name)`（词表与 validateRenderGraphForExecutor 同步）+ edS3 depthClip 能力门；Phase 10 阴影新增状态集中改此一处 |
 | `render_graph` | render_graph.cppm | 渲染意图图（纯 C++ 零 Lua 零 entt）：`RgGraphDesc` → `compileRenderGraph`（校验 + barrier 自动推导 + presentTransition）→ `CompiledRenderGraph`；default/offscreen/deferred 三图变体 + `kGBufferAttachments` 契约表（G-buffer 名单一真相源）+ `renderGraphSelfCheck` |
 | `render_graph_config` | render_graph_config.cppm | `configs/render_graph.lua` → `RgGraphDesc`（sol2 沙箱，缺文件回落默认；结构合法性归 compile） |
 | `shader_registry` | shader_registry.cppm | 管线表（零 entt）：`PipelineEntry` + `ShaderRegistry`（条目全按需建，无构造期恒建：`addModelEntry`（按组合去重）+ `addCubeEntry`（内建几何，按资产 slot 烘焙）+ `addSkyEntry` + `addLightEntry` + `bindPipelineToAsset`） |
 | `gpu_cull` | gpu_cull.cppm | GPU culling 数据通路：CullEntry 表（60B）+ 序列 buffer（120B：execSlotFrag/Mesh + DrawArgs@8(4B) + meshCmd@108）+ count buffer（64B：visible/total）+ seqStaging ring×2（MAPPED，CPU 预写 args = 仅 objectIndex）；`writeSequenceStaging`（CPU args）+ `recordCullPass`（staging 拷贝 + dispatch）+ `readCullResult`；GPU 只覆盖可见性（meshCmd.x），mvp 走 scene data per-object 表（Phase 7b+，CPU 每帧写位级一致，见 scene.slang readObjectMvp） |
-| `vk_indirect_commands` | vk_indirect_commands.cppm | DGC RAII（NVIDIA 路径，能力门控）：indirect commands layout（3 token：EXECUTION_SET@0 每 stage-bit 一位 / PUSH_DATA@8 DrawArgs(4B) / DRAW_MESH_TASKS@108，stride 120B）+ shader-object execution set（每条目 2 slot：2j=frag/2j+1=mesh，初始态=首条目 frag+mesh 建后 update 全槽）+ preprocess buffer（`vkGetGeneratedCommandsMemoryRequirementsEXT` + 原生 `vkAllocateMemory`，按帧槽 ×framesInFlight）；**7 入口点全走 `vkGetDeviceProcAddr`**（系统 loader 不导出 DGC 符号，v357 无 `vk::` wrapper；隐式 preprocess 不含 preprocess 入口点）；`bindInitialShaders`/`recordExecute` |
+| `vk_indirect_commands` | vk_indirect_commands.cppm | DGC RAII（能力门控，两类）：**DgcCommands**（NVIDIA IES 路）= indirect commands layout（3 token：EXECUTION_SET@0 每 stage-bit 一位 / PUSH_DATA@8 DrawArgs(4B) / DRAW_MESH_TASKS@108，stride 120B）+ shader-object execution set（每条目 2 slot：2j=frag/2j+1=mesh，初始态=首条目 frag+mesh 建后 update 全槽）+ preprocess buffer（`vkGetGeneratedCommandsMemoryRequirementsEXT` + 原生 `vkAllocateMemory`，按帧槽 ×framesInFlight）；**DgcStaticCommands**（RADV 静态 shader 路，spike 门控 `dgc_static` 默认关——功能通/性能亏，见 `docs/radv_static_dgc_spike.md`）= 2 token layout（去 EXECUTION_SET）+ pNext 静态 `VkGeneratedCommandsShaderInfoEXT` 逐条目 Execute + preprocess 槽 N×framesInFlight（execute 前四阶段 bindShadersEXT，mesh 管线 vertex/task 须显式 null 绑——VVL 独有）；**7 入口点全走 `vkGetDeviceProcAddr`**（系统 loader 不导出 DGC 符号，v357 无 `vk::` wrapper；隐式 preprocess 不含 preprocess 入口点）；`bindInitialShaders`/`recordExecute` |
 
 **main.cpp 启动流**：加载 camera/scene/runtime/diagnostics 配置（先于建窗）+ `renderGraphSelfCheck`
 → 建窗（headless 不建）→ 栈上 `entt::registry`（全部每帧 context）→ 按序构造初始化层
@@ -182,7 +182,9 @@ entity/条目；A0/A1/A2 拆分 = heap 布局"几何槽先于纹理槽"契约，
 CullSphere>` 迭代序+守卫与 render_list CPU 路径完全一致；candidate = 不透明 primitive）+
 `GpuCull` 构造 → `addSkyEntry`/deferred 装配（G-buffer 槽 + light 条目，**须先于 Renderer 构造**）
 → `DgcCommands` 条件构造（graphicsIndirect && cull active，异常回落 null）→
-`Renderer`（收编译图 + &gpuCull + dgc）→ `renderSystem`。
+`DgcStaticCommands` 条件构造（非 graphicsIndirect && staticGraphicsIndirect &&
+`diagnostics.dgcStatic`，spike 门默认关；流数 N 与 `GpuCull` 构造期同取 registry 条目数）→
+`Renderer`（收编译图 + &gpuCull + dgc + dgcStatic）→ `renderSystem`。
 
 ### 构造依赖图
 
@@ -246,7 +248,7 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
 | `shaders/deferred_geometry.frag` + `light.mesh/frag` | deferred 路线：4-MRT G-buffer 写入（oct 法线）/ 全屏大三角逐灯 GGX；`kGBufferAttachments` 表定格式 |
 | `shaders/model_schema.lua` `constants` | 契约常量单一真相源（`kTrianglesPerGroup` 等 → 生成 constexpr）；`HeapSlotGeometryBase` = 用户槽区起点 = 几何段基址 |
 | `rgl/builtin_geometry.cppm` | **内建几何契约**（架构债务 1 方案 B）：cube 等程序化几何的上传/注册，与 gltf 同路；`vk_resources` 不认识任何内容 |
-| `shaders/cull.comp.slang` + `rgl/gpu_cull.cppm` | **GPU culling 契约**（Phase 7b）：CullEntry 60B / 序列 120B（execSlot 2j/2j+1 + DrawArgs@8(4B) + meshCmd@108）/ CullPush 100B（planes[6]+sequenceCount）/ count 64B（visible@0 total@4）；CPU 算 mvp 进 scene data per-object 表、GPU 只写可见性（保 forward diff0）；DGC 序列契约见 `vk_indirect_commands.cppm` + `docs/device_generated_commands_research.md` §4.4 |
+| `shaders/cull.comp.slang` + `rgl/gpu_cull.cppm` | **GPU culling 契约**（Phase 7b）：CullEntry 60B / 序列 120B（execSlot 2j/2j+1 + DrawArgs@8(4B) + meshCmd@108）/ CullPush 100B（planes[6]+sequenceCount）/ count 64B（visible@0 total@4）；CPU 算 mvp 进 scene data per-object 表、GPU 只写可见性（保 forward diff0）；DGC 序列契约见 `vk_indirect_commands.cppm` + `docs/device_generated_commands_research.md` §4.4。静态 DGC 路追加 `shaders/stream_fanout.comp.slang`（per-entry 满槽孔洞流扇出，`dgc_static` 门控，见 `docs/radv_static_dgc_spike.md`） |
 | `configs/*.lua` | 运行时配置（sol2 沙箱，字段可选回落默认）；**与 `shaders/*_schema.lua`（build 时契约）是两套机制，勿混** |
 
 ## 已知问题
@@ -270,9 +272,14 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
   （static_assert 三方同步）。灯未 entity 化（经 `SceneLights` context，lights[0]=主光）
 - **GPU culling（Phase 7b）边界**：DGC 路径（`vkCmdExecuteGeneratedCommandsEXT`）本机 RADV
   graphics 侧不可用（`supportedIndirectCommandsShaderStagesShaderBinding` 仅 COMPUTE，26.2.1 复测
-  graphicsIndirect=false）→ 实际走**读回重放**。**注意：本机核显 = 9950X Raphael（RDNA2 小核），
+  graphicsIndirect=false）→ 默认走**读回重放**。**注意：本机核显 = 9950X Raphael（RDNA2 小核），
   非 Strix Halo**——graphicsIndirect=false 疑为驱动按硬件代际 gate，待真 Strix Halo 复测（若 true
-  即走与 NV 同一条 DGC execute 路径；启动期选路 log `DGC path: device=... -> ...` 直接可验）；
+  即走与 NV 同一条 DGC execute 路径；启动期选路 log `DGC path: device=... -> ...` 直接可验）。
+  **2026-09-10 静态模式 spike**：Strix Halo（8060S）复测 graphicsIndirect 仍 false（代际 gate
+  假说不成立，binding 子集两代同硬编码）；但 RADV graphics DGC 执行路径实为已实现，**静态
+  shader 模式**（2 token layout + pNext ShaderInfo，绕开 binding 子集）功能验证通过
+  （VVL 零 error + 1px tie 级回归，`docs/radv_static_dgc_spike.md`）——满槽实现 preprocess
+  ×N 慢重放 1.85× → **默认不开**，`diagnostics.dgc_static` 门控保留（详见 调试历史 2026-09-10 续 3）；
   NVIDIA 侧 graphicsIndirect=true 走 DGC execute，2026-09-10 终验跑帧零 error/warning 石锤
   （曾黑屏 = NV 驱动 push 100B 挂死 bug，官方 sample 复现，规避 = DrawArgs 压 4B bindless 化；
   曾报 `vkCreateIndirectExecutionSetEXT: ErrorOutOfDeviceMemory` = 运行环境瞬时显存干扰**假警报**，
@@ -298,6 +305,8 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
 - `docs/nvidia_compatibility_report.md` — 跨驱动兼容性（三平台记录；当前机 = 9950X Raphael RDNA2 核显，
   非 Strix Halo）
 - `docs/device_generated_commands_research.md` — GPU culling 双驱动实测（Phase 7b 依据）
+- `docs/radv_static_dgc_spike.md` — RADV 静态 shader DGC spike（历史：功能通、满槽实现慢重放
+  1.85× → 默认不开；翻盘 = 紧凑分桶 + 去同步等待，以本文为设计底稿重启）
 - `docs/vulkan_extensions_2025_调研.md` — 新扩展调研 + §十二/十三 实施记录（活文档）
 - `docs/phase7_devlog.md` — Phase 7 滚动开发日志（完结后归档）
 - `docs/archive/` — 归档索引（phase 计划含 **phase6_record.md**、ecs 审查、issue_history 总账、

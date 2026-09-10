@@ -82,11 +82,13 @@ export class Renderer {
 	 * @param gpuCull GPU culling 子系统（Phase 7b；main 先于 Renderer 构造。inactive
 	 *   （候选表空）时 drawFrame 全路径不碰 culling = 行为中性）
 	 * @param dgc DGC 命令生成子系统（Phase 7b NVIDIA 路；main 仅 graphicsIndirect=true
-	 *   时构造，否则 null → opaque 段走读回重放）
+	 *   时构造，否则 null → 看 dgcStatic / 读回重放）
+	 * @param dgcStatic 静态 shader DGC 路（RADV spike，docs/radv_static_dgc_spike.md；
+	 *   main 按 staticGraphicsIndirect + diagnostics.dgcStatic 条件构造，null = 关）
 	 */
 	Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RGL::Resources& vkResources,
 		RGL::ShaderRegistry& shaderRegistry, RGL::CompiledRenderGraph renderGraph,
-		RGL::GpuCull* gpuCull, RGL::DgcCommands* dgc);
+		RGL::GpuCull* gpuCull, RGL::DgcCommands* dgc, RGL::DgcStaticCommands* dgcStatic = nullptr);
 	/** @return 交换链层引用（extent / recreate / 后缓冲）。 */
 	RGL::Swapchain& getSwapchainRef() const { return *swapchain; }
 	/** @return 资源层引用（深度图 / descriptor heap / RT 缓存 / scene data）。 */

@@ -22,10 +22,12 @@ namespace RGL {
 // 构造器 / recordCullPass / readCullResult 实现（契约见接口声明）。
 
 GpuCull::GpuCull(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
-	const std::vector<CullEntry>& vkEntries)
+	const std::vector<CullEntry>& vkEntries, uint32_t entryStreamCount)
 	: resources(vkResources),
 	  entryTable(vkEntries),
-	  nCandidates(static_cast<uint32_t>(vkEntries.size())) {
+	  nCandidates(static_cast<uint32_t>(vkEntries.size())),
+	  // 静态 DGC 流：候选表空则流无意义（钳 0 = 与未启用同构）
+	  nEntryStreams(vkEntries.empty() ? 0u : entryStreamCount) {
 	auto& device = vkDevice.getDevice();
 	auto& allocator = resources.getAllocator();
 
@@ -77,6 +79,22 @@ GpuCull::GpuCull(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
 		countBuffer = std::move(*cntResult);
 	}
 
+	// per-entry 满槽孔洞流（静态 shader DGC 路，docs/radv_static_dgc_spike.md §3.2；
+	// 仅启用时建——NV/重放路零开销）
+	if (nEntryStreams > 0) {
+		vk::BufferCreateInfo fi{};
+		fi.size = static_cast<vk::DeviceSize>(nEntryStreams) * nCandidates * kCullSequenceStride;
+		fi.usage = vk::BufferUsageFlagBits::eStorageBuffer |  // fanout kernel 写（heap binding）
+			vk::BufferUsageFlagBits::eShaderDeviceAddress |
+			vk::BufferUsageFlagBits::eIndirectBuffer;  // DGC execute indirectAddress（VUID-12407）
+		VmaAllocationCreateInfo fa{};
+		fa.usage = VMA_MEMORY_USAGE_AUTO;
+		auto streamResult = allocator.createBufferWithAddress(device, fi, fa);
+		if (!streamResult)
+			throw std::runtime_error(streamResult.error().describe());
+		streamsBuffer = std::move(*streamResult);
+	}
+
 	// 序列 staging ring（×2 host-visible；CPU 每帧写基值 → 拷入 device 序列 buffer）
 	for (uint32_t s = 0; s < 2; ++s) {
 		vk::BufferCreateInfo si2{};
@@ -122,6 +140,8 @@ GpuCull::GpuCull(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
 	tableSlot = ensureSlot("cull.table");
 	sequenceSlot = ensureSlot("cull.sequences");
 	countSlot = ensureSlot("cull.count");
+	if (nEntryStreams > 0)
+		streamsSlot = ensureSlot("cull.streams");  // scene data 槽早已被 main C1 固定，不漂移
 	sceneDataSlot = resources.ensureSceneData();
 
 	// 描述符写入（eStorageBuffer + BDA 全范围——ensureSceneData 同款模式）
@@ -142,6 +162,9 @@ GpuCull::GpuCull(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
 		writeDesc(tableBuffer, static_cast<vk::DeviceSize>(nCandidates) * 60, tableSlot);
 		writeDesc(sequenceBuffer, static_cast<vk::DeviceSize>(nCandidates) * kCullSequenceStride, sequenceSlot);
 		writeDesc(countBuffer, kCullCountBytes, countSlot);
+		if (nEntryStreams > 0)
+			writeDesc(streamsBuffer,
+				static_cast<vk::DeviceSize>(nEntryStreams) * nCandidates * kCullSequenceStride, streamsSlot);
 	}
 
 	// compute shader object（stage=COMPUTE + heap bit + 4 binding 映射；
@@ -184,11 +207,51 @@ GpuCull::GpuCull(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
 	auto shaders = device.createShadersEXT(std::vector<vk::ShaderCreateInfoEXT>{createInfo});
 	cullShader = std::move(shaders[0]);
 
+	// stream fanout shader object（静态 DGC 路；3 binding：0=table 1=sequences(ro) 2=streams(rw)，
+	// heap 映射同款模式——仅启用时建，docs/radv_static_dgc_spike.md §3.3）
+	if (nEntryStreams > 0) {
+		auto fanResult = loadShaderSpv("generated_shaders/stream_fanout.comp.spv");
+		if (!fanResult)
+			throw std::runtime_error(fanResult.error().describe());
+		const auto& fanSpv = *fanResult;
+		VkDescriptorSetAndBindingMappingEXT fanMappings[3]{};
+		const uint32_t fanSlots[3] = {tableSlot, sequenceSlot, streamsSlot};
+		for (uint32_t n = 0; n < 3; ++n) {
+			auto& m = fanMappings[n];
+			m.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
+			m.descriptorSet = 0;
+			m.firstBinding = n;
+			m.bindingCount = 1;
+			m.resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
+			m.source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
+			m.sourceData.constantOffset.heapOffset = fanSlots[n] * descriptorSize;
+			m.sourceData.constantOffset.heapArrayStride = descriptorSize;
+		}
+		VkShaderDescriptorSetAndBindingMappingInfoEXT fanMappingInfo{};
+		fanMappingInfo.sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT;
+		fanMappingInfo.mappingCount = 3;
+		fanMappingInfo.pMappings = fanMappings;
+		VkShaderCreateInfoEXT fanRaw{};
+		fanRaw.sType = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT;
+		fanRaw.pNext = &fanMappingInfo;
+		fanRaw.flags = VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT;
+		fanRaw.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+		fanRaw.codeType = VK_SHADER_CODE_TYPE_SPIRV_EXT;
+		fanRaw.codeSize = fanSpv.size() * sizeof(uint32_t);
+		fanRaw.pCode = fanSpv.data();
+		fanRaw.pName = "main";
+		vk::ShaderCreateInfoEXT fanCreateInfo(fanRaw);
+		auto fanShaders = device.createShadersEXT(std::vector<vk::ShaderCreateInfoEXT>{fanCreateInfo});
+		fanoutShader = std::move(fanShaders[0]);
+	}
+
 	visibleFlags.assign(nCandidates, false);
 
 	if (auto logger = RLLogger::getInstance())
-		logger->info("gpu cull: {} candidates ({} sequences × {}B) — table slots {}/{}/{}",
-			nCandidates, nCandidates, kCullSequenceStride, tableSlot, sequenceSlot, countSlot);
+		logger->info("gpu cull: {} candidates ({} sequences × {}B) — table slots {}/{}/{}{}",
+			nCandidates, nCandidates, kCullSequenceStride, tableSlot, sequenceSlot, countSlot,
+			nEntryStreams > 0 ? fmt::format(" + streams {}×{}B @slot {}", nEntryStreams,
+				static_cast<uint64_t>(nCandidates) * kCullSequenceStride, streamsSlot) : std::string());
 }
 
 void GpuCull::writeSequenceStaging(uint32_t slot, const std::vector<RGL::DrawArgs>& args) {
@@ -284,6 +347,31 @@ void GpuCull::recordCullPass(vk::raii::CommandBuffer& cmd, const CullFrameInput&
 	cmd.pushDataEXT(vk::PushDataInfoEXT(
 		0, vk::HostAddressRangeConstEXT(pushBytes, sizeof(CullFrameInput))));
 	cmd.dispatch((nCandidates + 63) / 64, 1, 1);
+
+	// 静态 DGC 路：基础序列 → per-entry 流扇出（cull 写 sequences → fanout 读，
+	// compute→compute 屏障；流写完后由主 CB DGC preprocess 消费——同队列提交序 +
+	// 同帧 fence 执行依赖，与 NV 路序列消费同款前提，帧内无跨在途帧读写）。
+	// grid.y = entryCount；写全 (i,j) 行（孔洞 = x=0），无脏行残留（spike §3.3）
+	if (nEntryStreams > 0) {
+		vk::BufferMemoryBarrier2 fanBarrier{};
+		fanBarrier.srcStageMask = vk::PipelineStageFlagBits2::eComputeShader;
+		fanBarrier.srcAccessMask = vk::AccessFlagBits2::eShaderWrite;
+		fanBarrier.dstStageMask = vk::PipelineStageFlagBits2::eComputeShader;
+		fanBarrier.dstAccessMask = vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite;
+		fanBarrier.buffer = *sequenceBuffer;
+		fanBarrier.size = VK_WHOLE_SIZE;
+		vk::DependencyInfo fanDep{};
+		fanDep.setBufferMemoryBarriers(fanBarrier);
+		cmd.pipelineBarrier2(fanDep);
+
+		std::array<vk::ShaderStageFlagBits, 1> fanStages = {vk::ShaderStageFlagBits::eCompute};
+		std::array<vk::ShaderEXT, 1> fanHandles = {*fanoutShader};
+		cmd.bindShadersEXT(fanStages, fanHandles);
+		const uint32_t fanPush[1] = {nCandidates};  // FanoutPush.sequenceCount（kernel 头注释契约）
+		cmd.pushDataEXT(vk::PushDataInfoEXT(0, vk::HostAddressRangeConstEXT(
+			reinterpret_cast<const std::byte*>(fanPush), sizeof(fanPush))));
+		cmd.dispatch((nCandidates + 63) / 64, nEntryStreams, 1);
+	}
 
 	// 输出 buffer：Compute 写 → Transfer 读（序列 + count）
 	vk::BufferMemoryBarrier2 seqBarrier{};

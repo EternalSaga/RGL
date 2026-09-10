@@ -70,9 +70,13 @@ export class GpuCull {
 	 * @param vkDevice 设备层（buffer / shader 创建 / 描述符写入）
 	 * @param resources 资源层（VMA 分配器 / allocSlot / 描述符 heap / scene data 槽）
 	 * @param entries 候选表（main 从 registry 构建，顺序契约见类注释）；空 = inactive
+	 * @param entryStreamCount 静态 shader DGC 路的 per-entry 流数（>0 = 启用：分配
+	 *   entryStreamCount × candidateCount × 120B 流 buffer + fanout shader object，
+	 *   recordCullPass 尾部追加扇出 dispatch；0 = 不建，NV/重放路零开销——
+	 *   docs/radv_static_dgc_spike.md §3.2/§3.3）
 	 */
 	GpuCull(RGL::DeviceContext& vkDevice, RGL::Resources& resources,
-		const std::vector<CullEntry>& entries);
+		const std::vector<CullEntry>& entries, uint32_t entryStreamCount = 0);
 
 	/** @return 子系统是否激活（候选表非空；Renderer 据此决定是否走 culling 数据通路）。 */
 	[[nodiscard]] bool active() const { return nCandidates > 0; }
@@ -124,6 +128,10 @@ export class GpuCull {
 	 * 未 readCullResult = nullptr。
 	 */
 	[[nodiscard]] const std::byte* readbackSequences(uint32_t slot) const { return readbackSeqPtr[slot]; }
+	/** @return 静态 DGC 路的 per-entry 流是否启用（= 构造期 entryStreamCount > 0）。 */
+	[[nodiscard]] bool entryStreamsEnabled() const { return nEntryStreams > 0; }
+	/** @return 流 buffer device 地址（条目 j 流基址 = 此值 + j × candidateCount × kCullSequenceStride）。 */
+	[[nodiscard]] VkDeviceAddress streamsAddress() const { return streamsBuffer.getDeviceAddress(); }
 
    private:
 	RGL::Resources& resources;  // 资源层引用（记录期 heap 信息 / scene data buffer；main 栈对象生命周期覆盖）
@@ -143,6 +151,14 @@ export class GpuCull {
 	uint32_t sequenceSlot = 0;  // 序列 buffer heap 槽
 	uint32_t countSlot = 0;  // count buffer heap 槽
 	uint32_t sceneDataSlot = 0;  // scene data heap 槽（Resources::ensureSceneData 幂等返回）
+
+	// 静态 shader DGC 路（spike，docs/radv_static_dgc_spike.md §3.2/§3.3；
+	// nEntryStreams = 0 时以下全不创建，NV/重放路零开销）
+	uint32_t nEntryStreams = 0;         // per-entry 流数（= 构造期管线表条目数）
+	RGL::VmaBuffer streamsBuffer;      // per-entry 满槽孔洞流（N×candidateCount×120B；
+	                                   // device-local + BDA + INDIRECT_BUFFER[VUID-12407]）
+	uint32_t streamsSlot = 0;          // 流 buffer heap 槽（fanout kernel binding 2）
+	vk::raii::ShaderEXT fanoutShader = nullptr;  // stream_fanout.comp（3 binding；仅启用时建）
 
 	vk::raii::ShaderEXT cullShader = nullptr;  // compute shader object（4 binding 映射烘焙；inactive 保持 null）
 	std::vector<uint8_t> visibleFlags;  // readCullResult 填充（candidate 可见位）

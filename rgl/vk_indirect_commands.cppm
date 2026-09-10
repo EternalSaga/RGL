@@ -100,4 +100,76 @@ export class DgcCommands {
 	uint32_t seqCapacity = 0;  // 序列容量（maxSequenceCount，构造期冻结）
 };
 
+/**
+ * 静态 shader DGC 路（spike：docs/radv_static_dgc_spike.md）——面向"graphics 执行已实现、
+ * 只缺 per-sequence shader 绑定"的设备（RADV：binding 子集仅 COMPUTE，但全集 14 stage 含
+ * MESH|FRAGMENT，且 pNext 静态 shader 无子集要求，spec VU-11080）。与 DgcCommands 的差异：
+ *   - layout 2 token（无 EXECUTION_SET）：@8 PUSH_DATA（DrawArgs 4B）+ @108 DRAW_MESH_TASKS；
+ *   - 每管线条目一次 Execute，静态 shader 经 VkGeneratedCommandsInfoEXT.pNext 挂
+ *     VkGeneratedCommandsShaderInfoEXT{frag, mesh}（VU-10241：IES 必须 NULL）；
+ *   - 序列 = GpuCull fanout 的 per-entry 满槽孔洞流（120B 步长、条目内 candidate 序，
+ *     孔洞 = x=0 no-op）；sequenceCount 全条目复用 count buffer @4（= candidate 数）；
+ *   - preprocess 区 = entryCount × framesInFlight 槽（VU-11142 每 execute 独占，
+ *     槽号 = entry×FIS + frameSlot）；
+ *   - 无 bindInitialShaders（VU-11053 仅约束含 EXECUTION_SET token 的布局）。
+ * main 仅 staticGraphicsIndirect && 非 graphicsIndirect && diagnostics.dgcStatic 时构造；
+ * 构造抛异常 → 回落读回重放（与 DgcCommands 同契约）。
+ */
+export class DgcStaticCommands {
+   public:
+	/**
+	 * 构建（启动期，管线表 C3 段后 + GpuCull 表定后）：layout + preprocess buffer
+	 * （memReq 查询 IES=NULL + pNext 挂条目 0 ShaderInfo——VU-11012 对查询同样生效）。
+	 * @param device 设备层
+	 * @param registry 管线表（shader 句柄来源；仅前 entryCount 条）
+	 * @param maxSequenceCount 序列容量（= GpuCull::candidateCount）
+	 * @param entryCount per-entry 流数（= GpuCull 构造期的管线表条目数——sky/light 条目
+	 *   在其后加入、非 candidate，须用同一数保证流布局一致）
+	 * @param framesInFlight 帧槽数（preprocess 槽 = entryCount × framesInFlight）
+	 */
+	DgcStaticCommands(RGL::DeviceContext& device, const RGL::ShaderRegistry& registry,
+		uint32_t maxSequenceCount, uint32_t entryCount, uint32_t framesInFlight);
+	/** 析构：销毁 preprocess buffer/内存 + layout。 */
+	~DgcStaticCommands();
+	/** 禁止拷贝（GPU 资源句柄独占）。 */
+	DgcStaticCommands(const DgcStaticCommands&) = delete;
+	/** 禁止拷贝赋值（GPU 资源句柄独占）。 */
+	DgcStaticCommands& operator=(const DgcStaticCommands&) = delete;
+	/** @return 子系统是否就绪（layout 创建成功）。 */
+	[[nodiscard]] bool active() const { return layout != VK_NULL_HANDLE; }
+	/** @return 管线条目数（= per-entry 流数 = 帧内 Execute 次数）。 */
+	[[nodiscard]] uint32_t entryCount() const { return static_cast<uint32_t>(entryShaders.size()); }
+	/**
+	 * 录制条目 entryIndex 的 execute（主 CB，render pass 内——替换 opaque 段逐 draw 循环）。
+	 * @param cmd 命令缓冲（录制期）
+	 * @param entryIndex 管线条目下标（选静态 shader 对 + preprocess 槽 + 流行基址由调用方算）
+	 * @param streamAddress 该条目的流行基址 device 地址（GpuCull 流 buffer + entry×容量×120）
+	 * @param sequenceCountAddress 计数 u32 device 地址（count buffer @4，全条目共用）
+	 * @param frameSlot 本帧 in-flight slot
+	 */
+	void recordExecute(vk::raii::CommandBuffer& cmd, uint32_t entryIndex,
+		VkDeviceAddress streamAddress, VkDeviceAddress sequenceCountAddress,
+		uint32_t frameSlot) const;
+
+   private:
+	// DGC 入口点（同 DgcCommands：loader 不导出设备级扩展符号，vkGetDeviceProcAddr；
+	// 静态路无 execution set → 4 个）
+	PFN_vkCreateIndirectCommandsLayoutEXT pfnCreateLayout = nullptr;
+	PFN_vkDestroyIndirectCommandsLayoutEXT pfnDestroyLayout = nullptr;
+	PFN_vkGetGeneratedCommandsMemoryRequirementsEXT pfnGetMemReq = nullptr;
+	PFN_vkCmdExecuteGeneratedCommandsEXT pfnCmdExecute = nullptr;
+
+	VkDevice device = VK_NULL_HANDLE;
+	VkIndirectCommandsLayoutEXT layout = VK_NULL_HANDLE;
+	std::vector<std::array<VkShaderEXT, 2>> entryShaders;  // 逐条目 {frag, mesh}（pNext 静态态）
+	VkBuffer preprocessBuffer = VK_NULL_HANDLE;
+	VkDeviceMemory preprocessMem = VK_NULL_HANDLE;
+	VkDeviceAddress preprocessAddress = 0;
+	VkDeviceSize preprocessSize = 0;
+	VkDeviceSize preprocessSlotStride = 0;
+	uint32_t preprocessSlots = 1;   // = entryCount × framesPerEntry
+	uint32_t framesPerEntry = 1;    // preprocess 槽步长维（= framesInFlight；槽号 = entry×此值+frameSlot）
+	uint32_t seqCapacity = 0;
+};
+
 }  // namespace RGL

@@ -259,6 +259,13 @@ std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer& rende
 	const uint64_t canaryFrame = diagnostics().texelCanary;
 	bool canaryFired = false;
 
+	// 帧时间统计（diagnostics.frame_stats = N：每 N 帧一行 avg/min/max，0 = 关）：
+	// 帧循环整周期（input+systems+drawFrame），headless 无 present 限帧时 ≈ GPU/提交吞吐
+	const uint32_t statsN = diagnostics().frameStats;
+	uint64_t statsPrevNs = 0;
+	double statsSum = 0.0, statsMin = 1e30, statsMax = 0.0;
+	uint32_t statsCount = 0;
+
 	// system 顺序（数据流契约）：
 	//   camera（InputEvents→Camera，消费即清空）→ animation（SceneSpin）→ bounds（Bounds→SceneBounds）
 	//   → projection（Camera+SceneBounds+WindowExtent→ViewProjection）→ renderlist（→FrameDrawList）
@@ -331,6 +338,27 @@ std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer& rende
 		if (onFrame)
 			onFrame(frame);
 		++frame;
+
+		if (statsN > 0) {
+			const uint64_t nowNs = SDL_GetTicksNS();  // 帧尾 = 本帧整周期终点
+			if (statsPrevNs != 0) {
+				const double ms = static_cast<double>(nowNs - statsPrevNs) / 1'000'000.0;
+				statsSum += ms;
+				++statsCount;
+				statsMin = std::min(statsMin, ms);
+				statsMax = std::max(statsMax, ms);
+			}
+			statsPrevNs = nowNs;
+			if (statsCount >= statsN) {
+				if (logger)
+					logger->info("frame stats: avg={:.3f}ms min={:.3f} max={:.3f} ({} 帧)",
+						statsSum / statsCount, statsMin, statsMax, statsCount);
+				statsSum = 0.0;
+				statsCount = 0;
+				statsMin = 1e30;
+				statsMax = 0.0;
+			}
+		}
 	}
 
 	renderer.waitForIdle();

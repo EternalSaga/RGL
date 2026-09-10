@@ -226,6 +226,8 @@ compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.mesh.slang MODEL_MESH_SP
       ${CMAKE_CURRENT_SOURCE_DIR}/shaders/scene.slang)
   # Phase 7b（批次 5）：GPU culling compute（独立契约 cull.comp.slang 头注释，无 import 契约文件）
   compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/cull.comp.slang CULL_SPV)
+  # 静态 shader DGC spike：per-entry 序列流扇出（独立契约 kernel 头注释，docs/radv_static_dgc_spike.md）
+  compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/stream_fanout.comp.slang STREAM_FANOUT_SPV)
  message(STATUS "MESH_SPV is: ${MESH_SPV}")
  message(STATUS "FRAG_SPV is: ${FRAG_SPV}")
  message(STATUS "MODEL_MESH_SPV is: ${MODEL_MESH_SPV}")
@@ -238,7 +240,7 @@ compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.mesh.slang MODEL_MESH_SP
 # 曾用 -O0（-O2 下编译吃内存，24 并发时打爆 swap）；2026-09-02 用户调整内存/显存
 # 分配至 32GB 后回归目标级 -O2（启动路径代码质量优先，编译峰值内存已非瓶颈）。
 
-add_executable(rgl main.cpp vam_impl.cpp tinygltf_impl.cpp stb_impl.cpp ${MESH_SPV} ${FRAG_SPV} ${MODEL_MESH_SPV} ${MODEL_FRAG_SPV} ${MODEL_PBR_FRAG_SPV} ${MODEL_PHONG_FRAG_SPV} ${MODEL_PBR_IBL_FRAG_SPV} ${SKYBOX_MESH_SPV} ${SKYBOX_FRAG_SPV} ${DEFERRED_GEOM_FRAG_SPV} ${LIGHT_MESH_SPV} ${LIGHT_FRAG_SPV} ${CULL_SPV})
+add_executable(rgl main.cpp vam_impl.cpp tinygltf_impl.cpp stb_impl.cpp ${MESH_SPV} ${FRAG_SPV} ${MODEL_MESH_SPV} ${MODEL_FRAG_SPV} ${MODEL_PBR_FRAG_SPV} ${MODEL_PHONG_FRAG_SPV} ${MODEL_PBR_IBL_FRAG_SPV} ${SKYBOX_MESH_SPV} ${SKYBOX_FRAG_SPV} ${DEFERRED_GEOM_FRAG_SPV} ${LIGHT_MESH_SPV} ${LIGHT_FRAG_SPV} ${CULL_SPV} ${STREAM_FANOUT_SPV})
 
 # ─── Runtime config copy (configs/ → build dir) ──────────────────────────────
 # 程序运行时按相对路径读取 configs/*.json，build 目录必须完整。

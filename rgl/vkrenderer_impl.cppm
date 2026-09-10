@@ -110,15 +110,15 @@ std::pair<uint32_t, uint32_t> segmentRange(std::string_view drawSource,
 
 Renderer::Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RGL::Resources& vkResources,
 		RGL::ShaderRegistry& shaderRegistry, RGL::CompiledRenderGraph renderGraph,
-		RGL::GpuCull* vkGpuCull, RGL::DgcCommands* vkDgc)
+		RGL::GpuCull* vkGpuCull, RGL::DgcCommands* vkDgc, RGL::DgcStaticCommands* vkDgcStatic)
 	: vkDevice(vkDevice),
 	  swapchain(&vkSwapchain),
 	  resources(&vkResources),
 	  registry(shaderRegistry),
 	  renderGraph(std::move(renderGraph)),
-	  // culling 帧编舞（手术 3）：④c 提交时序 + opaque 段双路 + 对账全迁 CullDriver，
-	  // 构造期即分配 cull CB（inactive = 不分配，行为中性与摘出前一致）
-	  cullDriver(vkDevice, vkGpuCull, vkDgc, FrameSession::kFramesInFlight),
+	  // culling 帧编舞（手术 3）：④c 提交时序 + opaque 段三路（IES/静态 DGC/重放）+ 对账
+	  // 全迁 CullDriver，构造期即分配 cull CB（inactive = 不分配，行为中性与摘出前一致）
+	  cullDriver(vkDevice, vkGpuCull, vkDgc, vkDgcStatic, FrameSession::kFramesInFlight),
 	  attachmentLayouts(this->renderGraph.attachments.size(), vk::ImageLayout::eUndefined),
 	  // 帧内捕获器（手术 2）：持资源层 + 编译图引用，构造期自图定位 swapchain slot
 	  capturer(vkResources, this->renderGraph),

@@ -98,7 +98,7 @@ present/waitStage 派生）；drawFrame 手写布局转换清零、pass 循环�
 | **2** Light pass + sampleRead 接线 | SAMPLED_IMAGE 描述符入 heap、全屏 light pass GGX、forward/deferred 切换（选路已转 render_graph.lua variant，2026-09-08） | **✅ 核心完成** | ①light pass 简化 IBL ③skybox 背景合成 |
 | **3** 多灯 + 灯数据并入反射（D3） | 第 4 条反射管线 `GpuLight`、scene data 尾区灯数组 @262272（头不动保 forward diff0）、`lights` 配置、逐灯循环 + 点光衰减 | **✅ 核心完成** | 灯 entity 化（ECS 规范 3）；forward `LightDataGpu@0` 头仍手工双源；shadow map |
 | **4** CPU frustum culling | 逐图元 node-local `CullSphere`、Gribb-Harman 6 面（z∈[0,1]）、可见统计 | **✅ 核心完成** | 真 AABB（现球近似，够 frustum） |
-| **5** GPU culling / DGC | `vk_indirect_commands`、compute cull、NVIDIA/RADV 双路（读回重放）、CPU 剔除降兜底+对账 | **✅ 核心完成**（2026-09-09） | DGC 路径待 NVIDIA 机运行时实测（本机 RADV graphics 侧不可用，走读回重放） |
+| **5** GPU culling / DGC | `vk_indirect_commands`、compute cull、IES/静态/读回重放三路、CPU 剔除降兜底+对账 | **✅ 核心完成**（2026-09-09；2026-09-10 三驱动 + 静态 spike 全运行时验证） | 静态 DGC 默认关（满槽实现慢 1.85×，翻盘 = 紧凑分桶 + 去同步等待，`docs/radv_static_dgc_spike.md`） |
 | **6** 文档销账 | — | **🔶 部分** | 完整销账待批次 5 收尾（devlog/research/roadmap/AGENTS 已随 5d 更新） |
 
 **净结论**：延迟渲染单灯核心 + 多灯 + **GPU culling（7b）** 跑通——deferred 逐灯循环（定向+点光、
@@ -107,6 +107,10 @@ per-light 颜色、距离衰减）headless 零 VVL error；forward 只读 `light
 基准（默认视角 GPU=CPU=1571、背向 0/0 match）。验证方法学注：**BIT-IDENTICAL 比对须同会话双构建
 （stash 基线 vs 改动），跨日全量重建有 ±1 LSB 噪声**（调试历史 2026-09-08）。DGC 路径本机
 （RADV graphics 侧不可用）未运行时实测，代码经 VVL 审查+编译绿。
+**2026-09-10 更新**：三驱动运行时全验证（NV DGC execute 石锤 + 两 AMD/Intel 画像补测），
+静态 shader DGC spike 功能通（本机 Strix Halo，VVL 零 error + 1px tie 级回归）但满槽实现
+慢重放 1.85× → 默认关（`dgc_static` 门控）——详见 调试历史 2026-09-10 条目群 +
+`docs/radv_static_dgc_spike.md`。
 
 ### 剩余计划
 
@@ -115,6 +119,10 @@ per-light 颜色、距离衰减）headless 零 VVL error；forward 只读 `light
   `vkrenderer` 双路（DGC execute / **读回重放**——IndirectCount 无 per-draw push data 故弃用，
   见 research §4.4 勘误）；能力门控（`DgcSupport.graphicsIndirect`）。DGC 路径待 NVIDIA 机实测。
   设计细节与双驱动实测 → [device_generated_commands_research.md](device_generated_commands_research.md)。
+- **静态 shader DGC（RADV 路，2026-09-10 spike 完结）**：功能验证通过（VVL 零 error +
+  1px tie 级回归），但满槽孔洞实现 preprocess ×N 慢重放 1.85× → **默认不开**
+  （`diagnostics.dgc_static` 门控保留）。翻盘前提 = 紧凑分桶（∝visible）+ 去 cull 同步等待。
+  设计底稿 → [radv_static_dgc_spike.md](radv_static_dgc_spike.md)。
 - **批次 2 refine 残二**：deferred light pass 简化 IBL、skybox 背景合成进 deferred 图
   （选路已转正：render_graph.lua `variant`，2026-09-08 重构批次 3）。
 - **灯 entity 化**（ECS 规范 3）+ forward `LightDataGpu@0` 头并入反射（Phase 7 多灯已把灯数组
