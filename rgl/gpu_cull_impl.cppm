@@ -2,7 +2,6 @@ module;
 #include <vulkan/vulkan.h>  // VK_* 宏/C 函数（rlvk 不含宏；C 头解析 ~0.4s）
 #include <vk_mem_alloc.h>  // VMA 分配类型（VmaRaii 不导出 C 层，各 impl 同款自含）
 #include <fmt/format.h>  // fmt::format（契约违例报错）
-#include <cstring>
 module gpu_cull:impl;
 
 import gpu_cull;  // clang 不给 partition impl unit 隐式 import 主接口——必须显式

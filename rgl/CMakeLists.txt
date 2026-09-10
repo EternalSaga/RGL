@@ -177,9 +177,17 @@ add_custom_target(doc_check ALL
 
 # ─── 文件/函数结构检查（style_check，只警告不阻断）─────────────────────────────
 # 每次构建随 ALL 并行跑（与编译不互锁）：libclang（ctypes）进程内解析 rgl/ 下
-# .cppm（复用 compile_commands.json 的 .modmap BMI 依赖，见
-# tools/stylecheck/stylecheck.py），三项阈值（代码行 = 去注释空行，token 级精确）：
-# 文件 >500 / 函数 >120 / 嵌套深度 >5（if/for/while/do/switch/catch/lambda 计层）。
+# .cppm（复用 compile_commands.json 的 .modmap BMI 依赖）+ 纯文本规则，
+# 见 tools/stylecheck/stylecheck.py，七类规则：
+# 1) 文件代码行 >500（去注释空行，token 级精确）→ 拆文件
+# 2) 函数代码行 >120 → 拆函数
+# 3) 嵌套深度 >5（if/for/while/do/switch/catch/lambda 计层，函数体 0 层）→ 拆函数
+# 4) 接口瘦身：非 _impl 文件函数体 >100 → 迁入 xxx_impl.cppm
+# 5) 成员命名：_ / m_ 前缀、_ 后缀 → 自然命名
+# 6) 分层/模块优先（文本）：底层零 entt（名单 ZERO_ENTT_MODULES，拦 import ecs
+#    与 GMF #include <entt>）、点名禁止 import 边、rgl/ 禁 .h/.hpp/.hh、
+#    .cpp 仅 main.cpp + 三个单头库实现单元、禁内部头 #include "
+# 7) GMF STL 白名单：#include <STL> 只许 ranges/filesystem/chrono，余走 import rlstd
 # ctypes 持 GIL → ProcessPoolExecutor 一进程一文件（默认 4 worker），缓存
 # build/stylecheck_cache（源+命令哈希键）：增量秒级，全量 61 文件 ~12s。
 # 单独跑：just style-check [--strict/--file-threshold N/...]。

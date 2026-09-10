@@ -2,7 +2,6 @@ module;
 #include <stb_image_write.h>
 #include <filesystem>
 #include <chrono>
-#include <cmath>
 #include <fmt/format.h>
 module llm_debug:capture;
 

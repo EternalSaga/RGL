@@ -4,7 +4,6 @@ module;
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/glm.hpp>
 #include <ranges>
-#include <cstring>
 #include <fmt/format.h>
 module vk_renderer:impl;
 

@@ -1,6 +1,5 @@
 module;
 #include <vulkan/vulkan_core.h>
-#include <string>
 #include <fmt/format.h>
 export module vkerror;
 

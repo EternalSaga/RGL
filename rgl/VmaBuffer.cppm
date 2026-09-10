@@ -1,7 +1,6 @@
 module;
 #include <vulkan/vulkan.h>  // VK_* 宏/C 函数（rlvk 不含宏；C 头解析 ~0.4s）
 #include <vk_mem_alloc.h>
-#include <cstdint>
 export module VmaRaii;
 
 import rlstd;

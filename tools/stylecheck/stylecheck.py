@@ -1,10 +1,20 @@
 """文件/函数结构检查（CMake style_check 目标 / just style-check）。
 
-三项阈值（代码行 = 去除注释与空行，token 级精确）：
+七类规则（前五项走 libclang 解析，后两项纯文本主进程）：
 - 文件代码行 > --file-threshold（默认 500）→ 提示拆分文件
 - 函数代码行 > --func-threshold（默认 120）→ 提示拆分函数
 - 函数嵌套深度 > --nesting-threshold（默认 5）→ 提示拆分函数
   （嵌套 = if/for/while/do/switch/catch/lambda 各 +1 层，函数体本身 0 层）
+- 接口瘦身：非 _impl 文件里函数定义 > --impl-threshold（默认 100）代码行
+  → 提示迁入 xxx_impl.cppm（AGENTS.md"接口瘦身"，接口 BMI 不含函数体）
+- 成员命名：成员变量名带 _/m_ 前缀或 _ 后缀 → 提示自然命名
+- 分层/模块优先（文本）：底层零 entt（不得 import ecs、GMF 不得 include <entt>，
+  名单 ZERO_ENTT_MODULES）；点名的禁止 import 边（FORBIDDEN_EDGES）；rgl/ 下
+  不得有 .h/.hpp/.hh、.cpp 仅许 main.cpp；任何内部头 #include " 禁止
+- GMF STL 白名单：GMF #include <STL 头> 只许 ranges/filesystem/chrono 三例外，
+  其余走 import rlstd（AGENTS.md"优先使用 rlstd"）
+
+代码行 = 去除注释与空行，token 级精确。
 
 设计要点：
 - 与 doccheck 同源：复用 build/compile_commands.json 的编译命令（含 C++20 modules 的
@@ -29,7 +39,8 @@
 用法：
     python3 tools/stylecheck/stylecheck.py [--build-dir build] [--workers N]
                                            [--file-threshold 500] [--func-threshold 120]
-                                           [--nesting-threshold 5] [--strict]
+                                           [--nesting-threshold 5] [--impl-threshold 100]
+                                           [--strict]
 """
 
 import argparse
@@ -37,6 +48,7 @@ import ctypes
 import hashlib
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -48,6 +60,9 @@ ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 EXCLUDE_SUBDIRS = ("/rgl/generated/",)
 EXCLUDE_FILES = ("rgl/rlvk.cppm",)
 
+# 缓存版本：指标结构变化（如新增 fields）时 +1，自动失效旧缓存
+CACHE_VERSION = "v2"
+
 DEFAULT_FILE_THRESHOLD = 500
 DEFAULT_FUNC_THRESHOLD = 120
 DEFAULT_NESTING_THRESHOLD = 5
@@ -57,6 +72,54 @@ FUNC_SPELLINGS = {"FunctionDecl", "CXXMethod", "Constructor", "Destructor",
 CTRL_SPELLINGS = {"IfStmt", "WhileStmt", "DoStmt", "ForStmt", "CXXForRangeStmt",
                   "SwitchStmt", "CXXCatchStmt", "LambdaExpr"}
 TOK_COMMENT = 5
+FIELD_SPELLING = "FieldDecl"
+
+# 接口瘦身（AGENTS.md"接口瘦身"）：非 _impl 接口单元里 >100 代码行的函数定义
+# 应迁入 xxx_impl.cppm（接口 BMI 不含函数体，所有 importer 受益）
+DEFAULT_IMPL_THRESHOLD = 100
+
+# 分层依赖（AGENTS.md"构造依赖图"原则：只允许下层 import 上层）——
+# 底层渲染层/纯配置零 entt：不得 import ecs，GMF 不得 #include <entt>
+# （entt 经 GMF #include 暴露，import ecs 与 GMF include 都要拦）
+ZERO_ENTT_MODULES = {
+    "rlvk", "vkerror", "vulkan_utils", "features", "queue_family_manager",
+    "VmaRaii", "vk_instance", "vk_device", "vk_swapchain", "vulkan_window",
+    "vk_resources", "shader", "shader_registry", "state_kit", "gpu_cull",
+    "vk_indirect_commands", "frame_session", "frame_capture", "cull_driver",
+    "frame_draw_list", "render_graph", "render_graph_config", "diagnostics",
+    "gpu_canary", "runtime_config", "camera_config", "scene_config",
+}
+# AGENTS.md 点名的假边（配置不依赖执行模块；截图经回调）
+FORBIDDEN_EDGES = {
+    "camera_config": {"llm_debug"},
+    "ecs": {"llm_debug"},
+}
+
+# 模块优先：rgl/ 下除入口与单头库实现单元外不得有 .cpp，任何 .h/.hpp/.hh 都不允许
+# （stb/tinygltf/VMA 是单头 C 库，实现宏只能放普通 .cpp——既有例外，勿删）
+ALLOWED_CPP = {"main.cpp", "stb_impl.cpp", "tinygltf_impl.cpp", "vam_impl.cpp"}
+
+# GMF 的 STL 白名单（AGENTS.md"优先使用 rlstd"）：STL 头只许三个例外，
+# 其余一律走 import rlstd（缺名补入 rlstd.cppm）；第三方头不受此限
+STL_HEADERS = {
+    "algorithm", "any", "array", "atomic", "bit", "bitset", "charconv",
+    "chrono", "compare", "complex", "concepts", "condition_variable",
+    "coroutine", "deque", "exception", "execution", "expected",
+    "filesystem", "forward_list", "fstream", "functional", "future",
+    "generator", "iomanip", "ios", "iosfwd", "iostream", "istream", "latch",
+    "limits", "list", "locale", "map", "memory", "mutex", "new", "numbers",
+    "numeric", "optional", "ostream", "queue", "random", "ranges", "regex",
+    "set", "semaphore", "source_location", "span", "sstream", "stack",
+    "stdfloat", "stdexcept", "streambuf", "string", "string_view",
+    "stride", "syncstream", "thread", "tuple", "type_traits", "typeindex",
+    "typeinfo", "unordered_map", "unordered_set", "variant", "vector",
+    "version",
+    "cassert", "ccomplex", "cctype", "cerrno", "cfloat", "cfenv",
+    "cinttypes", "climits", "clocale", "cmath", "csetjmp", "csignal",
+    "cstdarg", "cstdbool", "cstddef", "cstdint", "cstdio", "cstdlib",
+    "cstring", "ctgmath", "ctime", "cuchar", "cwchar", "cwctype",
+}
+STL_GMF_EXCEPTIONS = {"ranges", "filesystem", "chrono"}
 
 # ─── libclang ctypes 绑定（LLVM 22 API，结构体布局见文件头坑 5）────────────────
 
@@ -193,13 +256,13 @@ def code_lines_in_range(lib, tu, rng, main_file):
     return lines
 
 
-def collect_functions(lib, tu_cur, main_file):
-    """主文件内全部函数定义 [(name, line, cursor)]。
+def collect_decls(lib, tu_cur, main_file):
+    """主文件内全部函数定义 + 成员字段 [(name, line, cursor)]。
 
-    项目约定：主文件顶层 = imports + namespace RGL，函数都在 namespace 子树里；
+    项目约定：主文件顶层 = imports + namespace RGL，声明都在 namespace 子树里；
     递归进入主文件位置的子树，非主文件子树整体剪枝（import 模块声明全在里面）。
     """
-    funcs = []
+    funcs, fields = [], []
     cb = None
 
     def walk(cur, parent, data):
@@ -207,14 +270,17 @@ def collect_functions(lib, tu_cur, main_file):
         if fn != main_file:
             return 1
         sp = lib.clang_getCursorKindSpelling(cur.kind).decode()
+        name = lib.clang_getCursorDisplayName(cur).decode()
         if sp in FUNC_SPELLINGS and is_definition(lib, cur):
-            funcs.append((lib.clang_getCursorDisplayName(cur).decode(), ln, cur))
+            funcs.append((name, ln, cur))
+        elif sp == FIELD_SPELLING:
+            fields.append((name, ln))
         lib.clang_visitChildren(cur, cb, None)
         return 1
 
     cb = VISITOR(walk)
     lib.clang_visitChildren(tu_cur, cb, None)
-    return funcs
+    return funcs, fields
 
 
 def nesting_depth(lib, func_cur):
@@ -303,15 +369,17 @@ def analyze_file(lib, entry, full, scratch_dir, resdir):
         total_lines = len(src.splitlines())
         tu_cur = lib.clang_getTranslationUnitCursor(tu)
         file_lines = code_lines_in_range(lib, tu, lib.clang_getCursorExtent(tu_cur), full)
+        funcs, fields = collect_decls(lib, tu_cur, full)
         functions = []
-        for name, ln, cur in collect_functions(lib, tu_cur, full):
+        for name, ln, cur in funcs:
             flines = code_lines_in_range(lib, tu, lib.clang_getCursorExtent(cur), full)
             functions.append({"name": name, "line": ln,
                               "code_lines": len(flines),
                               "nesting": nesting_depth(lib, cur)})
         return {"total_lines": total_lines,
                 "file_code_lines": len(file_lines),
-                "functions": functions}
+                "functions": functions,
+                "fields": [{"name": n, "line": l} for n, l in fields]}
     finally:
         lib.clang_disposeTranslationUnit(tu)
 
@@ -336,7 +404,8 @@ def _worker_task(rel_entry):
     src = open(full, "rb").read()
     cmd = clean_cmd(entry, full, ctx["scratch_dir"], ctx["resdir"])
     key = hashlib.sha256(
-        hashlib.sha256(src).hexdigest().encode()
+        CACHE_VERSION.encode()
+        + hashlib.sha256(src).hexdigest().encode()
         + json.dumps(cmd, sort_keys=True).encode()
     ).hexdigest()[:24]
     cache = os.path.join(ctx["cache_dir"], key + ".json")
@@ -350,6 +419,118 @@ def _worker_task(rel_entry):
     with open(cache, "w", encoding="utf-8") as f:
         json.dump(m, f, ensure_ascii=False)
     return rel, m, "parsed"
+
+
+# ─── 文本检查（纯主进程，覆盖全部 rgl/*.cppm 含 rlvk，排除 generated/）──────
+
+MODULE_LINE_RE = re.compile(r"^\s*(?:export\s+)?module\s*([\w:]+)?\s*;")
+IMPORT_RE = re.compile(r"^\s*import\s+([\w:]+)\s*;")
+# 两组定界符各自闭合（不能用 \1 反引用：< 的闭合符是 >）
+INCLUDE_RE = re.compile(r"^\s*#include\s*(?:<([^>]+)>|\"([^\"]+)\")")
+
+
+def parse_module_file(src):
+    """按行状态机解析：GMF = 裸 module; 之后、具名模块声明之前。
+
+    返回 (模块名, {import: 行号}, [(include 路径, 行号, 定界符)])。
+    """
+    name, imps, gmf_incs = None, {}, []
+    in_gmf = False
+    for i, ln in enumerate(src.splitlines(), 1):
+        m = MODULE_LINE_RE.match(ln)
+        if m:
+            if m.group(1) is None:
+                in_gmf = True
+            else:
+                name = m.group(1)
+                in_gmf = False
+            continue
+        if in_gmf:
+            m = INCLUDE_RE.match(ln)
+            if m:
+                path = m.group(1) if m.group(1) is not None else m.group(2)
+                delim = "<" if m.group(1) is not None else '"'
+                gmf_incs.append((path, i, delim))
+            continue
+        m = IMPORT_RE.match(ln)
+        if m and m.group(1) not in imps:
+            imps[m.group(1)] = i
+    return name, imps, gmf_incs
+
+
+def rgl_cppm_files():
+    """rgl/ 下全部 .cppm（含 rlvk，排除 generated/），仓库相对 POSIX 路径。"""
+    out = []
+    base = os.path.join(ROOT, "rgl")
+    for dirpath, dirnames, filenames in os.walk(base):
+        norm = dirpath.replace(os.sep, "/")
+        if "/generated" in norm:
+            dirnames[:] = []
+            continue
+        for fn in filenames:
+            if fn.endswith(".cppm"):
+                out.append(os.path.relpath(os.path.join(dirpath, fn), ROOT)
+                           .replace(os.sep, "/"))
+    return sorted(out)
+
+
+def text_checks():
+    """A3 分层依赖 + B1 模块优先 + B2 GMF STL 白名单。返回 [(rel, line, msg)]。"""
+    warnings = []
+    mods = {}
+    for rel in rgl_cppm_files():
+        src = open(os.path.join(ROOT, rel), encoding="utf-8").read()
+        name, imps, gmf_incs = parse_module_file(src)
+        if name is None:
+            continue
+        mods[name] = (rel, imps, gmf_incs)
+        # B1：内部头 include（模块优先：模块间只走 import）
+        for inc, i, delim in gmf_incs:
+            if delim == '"':
+                warnings.append((rel, i,
+                    f'GMF #include "{inc}"——模块优先：模块间依赖只走 import，'
+                    f"内部头文件不应存在"))
+        # B2：GMF 的 STL 头白名单
+        for inc, i, delim in gmf_incs:
+            if delim != "<" or "/" in inc:
+                continue
+            if inc in STL_HEADERS and inc not in STL_GMF_EXCEPTIONS:
+                warnings.append((rel, i,
+                    f"GMF #include <{inc}>——STL 走 import rlstd"
+                    f"（例外仅 ranges/filesystem/chrono；rlstd 缺名则补入 rlstd.cppm）"))
+    # A3：底层零 entt + 点名禁止边
+    for name, (rel, imps, gmf_incs) in mods.items():
+        if name in ZERO_ENTT_MODULES:
+            if "ecs" in imps:
+                warnings.append((rel, imps["ecs"],
+                    f"模块 '{name}' import ecs——底层渲染层不得依赖 ECS"
+                    f"（entity/component/system 归场景层，见 AGENTS.md 分层）"))
+            for inc, i, _ in gmf_incs:
+                if inc.startswith("entt/"):
+                    warnings.append((rel, i,
+                        f"模块 '{name}' GMF #include <{inc}>"
+                        f"——底层渲染层零 entt（见 AGENTS.md 分层）"))
+        for target in sorted(FORBIDDEN_EDGES.get(name, ())):
+            if target in imps:
+                warnings.append((rel, imps[target],
+                    f"模块 '{name}' import '{target}'——禁止依赖边"
+                    f"（见 AGENTS.md 构造依赖图原则）"))
+    # B1：rgl/ 下 .h/.hpp/.hh/.cpp 文件
+    base = os.path.join(ROOT, "rgl")
+    for dirpath, dirnames, filenames in os.walk(base):
+        norm = dirpath.replace(os.sep, "/")
+        if "/generated" in norm:
+            dirnames[:] = []
+            continue
+        for fn in sorted(filenames):
+            rel = os.path.relpath(os.path.join(dirpath, fn), ROOT).replace(os.sep, "/")
+            if fn.endswith((".h", ".hpp", ".hh")):
+                warnings.append((rel, 0,
+                    "头文件——模块优先：所有新代码必须 C++20 modules (.cppm)"))
+            elif fn.endswith(".cpp") and fn not in ALLOWED_CPP:
+                warnings.append((rel, 0,
+                    ".cpp 文件——模块优先：仅入口 main.cpp 允许 .cpp"))
+    return warnings
 
 
 # ─── 主进程 ───────────────────────────────────────────────────────────────────
@@ -385,6 +566,8 @@ def main():
                         help=f"函数代码行阈值（默认 {DEFAULT_FUNC_THRESHOLD}）")
     parser.add_argument("--nesting-threshold", type=int, default=DEFAULT_NESTING_THRESHOLD,
                         help=f"函数嵌套深度阈值（默认 {DEFAULT_NESTING_THRESHOLD}）")
+    parser.add_argument("--impl-threshold", type=int, default=DEFAULT_IMPL_THRESHOLD,
+                        help=f"接口单元函数体代码行阈值（默认 {DEFAULT_IMPL_THRESHOLD}）")
     parser.add_argument("--strict", action="store_true",
                         help="有警告时 exit 1（默认只警告不阻断）")
     args = parser.parse_args()
@@ -445,6 +628,19 @@ def main():
                     warnings.append((rel, fn["line"],
                         f"函数 '{fn['name']}' 嵌套深度 {fn['nesting']} > {args.nesting_threshold}"
                         f"——应拆分为更小函数"))
+                if (not rel.endswith("_impl.cppm")
+                        and fn["code_lines"] > args.impl_threshold):
+                    target = os.path.basename(rel)[:-len(".cppm")] + "_impl.cppm"
+                    warnings.append((rel, fn["line"],
+                        f"函数 '{fn['name']}' 函数体代码行 {fn['code_lines']} > {args.impl_threshold}"
+                        f"——接口瘦身：实现应迁入 {target}（接口 BMI 不含函数体）"))
+            for fd in metrics["fields"]:
+                n = fd["name"]
+                if n.startswith("_") or n.startswith("m_") or n.endswith("_"):
+                    warnings.append((rel, fd["line"],
+                        f"成员变量 '{n}'——成员命名不加 _/m_ 前缀、不加 _ 后缀（自然命名）"))
+
+    warnings.extend(text_checks())
 
     for rel, line, msg in sorted(warnings, key=lambda w: (w[0], w[1])):
         loc = f"{rel}:{line}" if line else rel

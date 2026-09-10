@@ -49,16 +49,22 @@ CMake 无独立构建目录 — 必须从根目录构建（`cmake -B build -S .`
   （键 = 源+命令 sha256）：增量只重 dump 改动文件（秒级），全量 ~1min。规则细节：注释真相源 =
   接口声明处（impl 里接口已声明函数的定义不重复要求）；重载组共用最上方一个块；前向声明与
   定义间可夹空行（Renderer 先例）；只警告不阻断（`--strict` 才 exit 1），默认构建含 `--methods`。
-- `style_check`（ALL，与编译并行，2026-09-11）：`rgl/*.cppm` 三项结构阈值（代码行 = 去注释
-  空行，token 级精确）——文件 >500 提示拆文件、函数 >120 提示拆函数、嵌套深度 >5（if/for/
-  while/do/switch/catch/lambda 计层，函数体 0 层）提示拆函数。实现在 `tools/stylecheck/
-  stylecheck.py`（libclang ctypes 进程内解析，纯标准库 Python；**ctypes 持 GIL →
-  ProcessPoolExecutor 一进程一文件**，默认 min(cpu,4) worker、每进程 ~550MB）。缓存
-  `build/stylecheck_cache/`（键 = 源+命令 sha256）：增量秒级，全量 61 文件 ~12s。警告文案
-  直接给 LLM 行动指令。坑（详见文件头，勿回退）：C API 不展开 @.modmap（须内联展开 +
-  BMI 路径转绝对）、输入文件/驱动路径不能进 argv、Gentoo 须显式 `-resource-dir`、
-  `export module`+import+**BMI 加载失败** → parse 返回 NULL（libclang 缺陷，按跳过+警告
-  处理）、LLVM 22 结构体布局（CXCursor 32B / Location/Range 24B / CXToken 24B 值类型）
+- `style_check`（ALL，与编译并行，2026-09-11）：`rgl/*.cppm` 七类规则——前五项 libclang 解析
+  （代码行 = 去注释空行，token 级精确）：①文件 >500 提示拆文件、②函数 >120 提示拆函数、
+  ③嵌套深度 >5（if/for/while/do/switch/catch/lambda 计层，函数体 0 层）提示拆函数、
+  ④接口瘦身（非 _impl 文件函数体 >100 → 迁入 xxx_impl.cppm）、⑤成员命名（_ / m_ 前缀、
+  _ 后缀 → 自然命名）；后两项纯文本：⑥分层/模块优先（底层零 entt = 不 import ecs 且
+  GMF 不 include <entt>，名单 `ZERO_ENTT_MODULES`；点名禁止 import 边 `FORBIDDEN_EDGES`；
+  rgl/ 禁 .h/.hpp/.hh、.cpp 仅 main.cpp + 三个单头库实现单元、禁内部头 #include "）、
+  ⑦GMF STL 白名单（#include <STL> 只许 ranges/filesystem/chrono，余走 import rlstd）。
+  实现在 `tools/stylecheck/stylecheck.py`（libclang ctypes 进程内解析，纯标准库 Python；
+  **ctypes 持 GIL → ProcessPoolExecutor 一进程一文件**，默认 min(cpu,4) worker、每进程
+  ~550MB）。缓存 `build/stylecheck_cache/`（键 = 源+命令 sha256 + 缓存版本）：增量秒级，
+  全量 61 文件 ~12s。警告文案直接给 LLM 行动指令。坑（详见文件头，勿回退）：C API 不展开
+  @.modmap（须内联展开 + BMI 路径转绝对）、输入文件/驱动路径不能进 argv、Gentoo 须显式
+  `-resource-dir`、`export module`+import+**BMI 加载失败** → parse 返回 NULL（libclang 缺陷，
+  按跳过+警告处理）、LLVM 22 结构体布局（CXCursor 32B / Location/Range 24B / CXToken 24B
+  值类型）
   与 token API 全异于旧例程。
 
 ## 运行要求
