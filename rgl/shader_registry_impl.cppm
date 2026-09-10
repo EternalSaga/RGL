@@ -142,6 +142,10 @@ uint32_t ShaderRegistry::addModelEntry(const std::string& specName, uint32_t ver
 		b.descriptorSize = res.getDescriptorHeap().getDescriptorSize();
 		b.slotVertex = cubeAsset.heapSlot;
 		b.slotIndex = *cubeAsset.indexHeapSlot;
+		// Phase 7b+（NV DGC 规避）：cube mesh 也走 readObjectMvp（binding 3 scene data，
+		// 同 model 条目恒烘焙；cube 的 mvp 由 render_list 循环填进 mvp 表，objectIndex 有效）
+		b.slotSceneData = res.ensureSceneData();
+		b.hasSceneData = true;
 		auto entry = PipelineEntry{
 			"cube",
 			RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*cubeSpec), b)};

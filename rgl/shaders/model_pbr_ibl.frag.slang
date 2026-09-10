@@ -14,8 +14,9 @@ import env;       // 环境 cubemap（Phase 5.5：binding 4/5 + readEnvParams）
 float4 main(ModelVertexOutput input) : SV_Target
 {
     float4 texel = baseColorTexture.Sample(baseColorSampler, input.uv);
-    float3 albedo = drawArgs.baseColor.rgb * texel.rgb;
-    float alpha = drawArgs.baseColor.a * texel.a;
+    const ObjectDraw od = readObjectDraw(drawArgs.objectIndex);  // Phase 7b+：材质进 heap
+    float3 albedo = od.baseColor.rgb * texel.rgb;
+    float alpha = od.baseColor.a * texel.a;
 
     SceneLight light = readSceneLight();
     EnvParams env = readEnvParams();
@@ -25,8 +26,8 @@ float4 main(ModelVertexOutput input) : SV_Target
     float3 V = normalize(light.eyePos - P);
     float3 L = -light.direction;  // 照射方向取反 = 指向光源
 
-    float roughness = clamp(drawArgs.roughnessMetallic.x, 0.04, 1.0);
-    float metallic = clamp(drawArgs.roughnessMetallic.y, 0.0, 1.0);
+    float roughness = clamp(od.roughnessMetallic.x, 0.04, 1.0);
+    float metallic = clamp(od.roughnessMetallic.y, 0.0, 1.0);
     float3 F0 = lerp(float3(0.04), albedo, metallic);
 
     float NdotL = saturate(dot(N, L));

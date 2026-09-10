@@ -65,7 +65,7 @@ export class CullDriver {
 	 * @param registry 管线表（重放路径 bindShaders/pushDataSet 查找）
 	 */
 	void executeOpaqueSegment(vk::raii::CommandBuffer& cmd, const FrameDrawList& list,
-		RGL::ShaderRegistry& registry);
+		RGL::ShaderRegistry& registry, uint32_t frameSlot);
 
    private:
 	/**

@@ -82,6 +82,7 @@ export FeatureChain buildRequestedFeatures() {
     chain.get<vk::PhysicalDeviceVulkan14Features>().maintenance5 = VK_TRUE;
     chain.get<vk::PhysicalDeviceVulkan14Features>().maintenance6 = VK_TRUE;
     chain.get<vk::PhysicalDeviceMeshShaderFeaturesEXT>().meshShader = VK_TRUE;
+    chain.get<vk::PhysicalDeviceMeshShaderFeaturesEXT>().taskShader = VK_TRUE;
     chain.get<vk::PhysicalDeviceShaderObjectFeaturesEXT>().shaderObject = VK_TRUE;
     chain.get<vk::PhysicalDeviceDescriptorBufferFeaturesEXT>().descriptorBuffer = VK_TRUE;
     chain.get<vk::PhysicalDeviceDescriptorHeapFeaturesEXT>().descriptorHeap = VK_TRUE;
@@ -174,6 +175,10 @@ export [[nodiscard]] std::expected<void, Error> validateFeatures(
     if (!supported.get<vk::PhysicalDeviceMeshShaderFeaturesEXT>().meshShader) {
         return std::unexpected(Error{ErrorCode::FeatureUnavailable,
             fmt::format("Required feature not supported by device: {}", "MeshShaderEXT::meshShader")});
+    }
+    if (!supported.get<vk::PhysicalDeviceMeshShaderFeaturesEXT>().taskShader) {
+        return std::unexpected(Error{ErrorCode::FeatureUnavailable,
+            fmt::format("Required feature not supported by device: {}", "MeshShaderEXT::taskShader")});
     }
     if (!supported.get<vk::PhysicalDeviceShaderObjectFeaturesEXT>().shaderObject) {
         return std::unexpected(Error{ErrorCode::FeatureUnavailable,

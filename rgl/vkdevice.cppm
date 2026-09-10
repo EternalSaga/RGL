@@ -287,6 +287,26 @@ export class DeviceContext {
 
 		// required 恒启用 + optional 按探测支持位追加（与上方条件链接同源一致）
 		std::vector<const char*> extensions = RGL::getDeviceExtensions(optionalFeatures);
+#ifdef RGL_AFTERMATH  // 编译期开关（rgl/CMakeLists.txt option）：Aftermath 富 dump 前置
+		// NVIDIA Aftermath 富 dump——探测 diagnostics_config 扩展（NV-only，RADV/Intel
+		// 无 = 整体 no-op），命中则加两扩展 + 链 config(flags=15：错误报告/资源跟踪/
+		// 自动 checkpoint=CPU 调用栈/shader 调试信息）。仅 RGL_AFTERMATH=ON 时编译
+		bool nvDiag = false;
+		for (const auto& p : physicalDevice.enumerateDeviceExtensionProperties())
+			if (std::string_view(p.extensionName.data()) == VK_NV_DEVICE_DIAGNOSTICS_CONFIG_EXTENSION_NAME)
+				nvDiag = true;
+		vk::DeviceDiagnosticsConfigCreateInfoNV diagCfg{};
+		if (nvDiag) {
+			extensions.push_back(VK_NV_DEVICE_DIAGNOSTICS_CONFIG_EXTENSION_NAME);
+			extensions.push_back(VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME);
+			diagCfg.flags = vk::DeviceDiagnosticsConfigFlagBitsNV::eEnableShaderErrorReporting |
+				vk::DeviceDiagnosticsConfigFlagBitsNV::eEnableResourceTracking |
+				vk::DeviceDiagnosticsConfigFlagBitsNV::eEnableAutomaticCheckpoints |
+				vk::DeviceDiagnosticsConfigFlagBitsNV::eEnableShaderDebugInfo;
+			diagCfg.pNext = deviceCreateInfo.pNext;
+			deviceCreateInfo.pNext = &diagCfg;
+		}
+#endif
 		deviceCreateInfo.setPEnabledExtensionNames(extensions);
 
 		auto logger = RLLogger::getInstance();

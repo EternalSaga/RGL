@@ -55,6 +55,7 @@ GpuCull::GpuCull(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
 		si.size = static_cast<vk::DeviceSize>(nCandidates) * kCullSequenceStride;
 		si.usage = vk::BufferUsageFlagBits::eStorageBuffer |
 			vk::BufferUsageFlagBits::eShaderDeviceAddress |
+			vk::BufferUsageFlagBits::eIndirectBuffer |  // DGC execute 消费序列（VUID-12407）
 			vk::BufferUsageFlagBits::eTransferSrc |  // 读回拷贝源
 			vk::BufferUsageFlagBits::eTransferDst;  // 序列 staging 拷贝目标（CPU 基值入 device）
 		VmaAllocationCreateInfo sa{};
@@ -68,6 +69,7 @@ GpuCull::GpuCull(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
 		ci.size = kCullCountBytes;
 		ci.usage = vk::BufferUsageFlagBits::eStorageBuffer |
 			vk::BufferUsageFlagBits::eShaderDeviceAddress |
+			vk::BufferUsageFlagBits::eIndirectBuffer |  // DGC sequenceCountAddress 源（VUID-11072）
 			vk::BufferUsageFlagBits::eTransferSrc;
 		auto cntResult = allocator.createBufferWithAddress(device, ci, sa);
 		if (!cntResult)
@@ -204,7 +206,7 @@ void GpuCull::writeSequenceStaging(uint32_t slot, const std::vector<RGL::DrawArg
 		const uint32_t execMesh = 2 * entryTable[i].pipelineIndex + 1;
 		std::memcpy(s, &execFrag, sizeof(uint32_t));
 		std::memcpy(s + 4, &execMesh, sizeof(uint32_t));
-		std::memcpy(s + 8, &args[i], sizeof(RGL::DrawArgs));  // DrawArgs @8（100B，CPU 位级真相源）
+		std::memcpy(s + 8, &args[i], sizeof(RGL::DrawArgs));  // DrawArgs @8（36B，Phase 7b+ 去 mvp；mvp 走 scene data 表）
 		const uint32_t meshCmd[3] = {entryTable[i].groupCount, 1, 1};
 		std::memcpy(s + 108, meshCmd, sizeof(meshCmd));  // meshCmd @108 基值（GPU 覆盖 x）
 	}

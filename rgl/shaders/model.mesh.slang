@@ -1,5 +1,6 @@
 import model;
-import material;  // 统一 push constant（Phase 4：DrawArgs 超集，model 风格消费 mvp/totalTriangles/baseColor）
+import material;  // 统一 push constant（Phase 4：DrawArgs 超集，model 风格消费 totalTriangles/baseColor）
+import scene;     // Phase 7b+：readObjectMvp（binding 3 scene data，mvp 从 heap 读不走 push）
 
 // 无 task stage：一次 mesh 调用 = 一个 group，group 序号 = SV_GroupID.x
 //（CPU 端 drawMeshTasksEXT(groupCount, 1, 1) 派生），每 group 处理
@@ -25,12 +26,13 @@ void main(
 
     uint groupIndex = groupID.x;
     uint firstTriangle = groupIndex * kTrianglesPerGroup;
+    const ObjectDraw od = readObjectDraw(drawArgs.objectIndex);  // Phase 7b+：几何字段进 heap
     // 条件式前置：max(uint, 0) 救不回无符号回绕——firstTriangle > totalTriangles 时
     // 减法先回绕成巨大值，triangleCount = 10 → 越界读字节（静默垃圾而非空组）。
     // 当前 CPU 侧 groupCount = ceil(total/10) 恒正确不可触发，但 groupCount 一旦算错
     // （资产改动 / Phase 7 indirect 路径）症状难查（docs/archive/教程拆解发现_20260902.md ②）
-    uint remaining = (firstTriangle >= drawArgs.totalTriangles) ? 0u
-                 : drawArgs.totalTriangles - firstTriangle;
+    uint remaining = (firstTriangle >= od.totalTriangles) ? 0u
+                 : od.totalTriangles - firstTriangle;
     uint triangleCount = min(kTrianglesPerGroup, remaining);
     uint vertexCount = triangleCount * 3;
 
@@ -40,11 +42,11 @@ void main(
         uint vertexIndex = firstTriangle * 3 + ti;
         // 拼接顶点 buffer（Phase 4 批次 2）：本 primitive 在拼接 buffer 内的字节偏移
         //（DrawArgs.vertexOffset，CPU 端 renderListSystem 经资产表 MeshAsset.vertexOffset 写入）
-        uint byteOffset = drawArgs.vertexOffset + vertexIndex * kVertexStride;
+        uint byteOffset = od.vertexOffset + vertexIndex * kVertexStride;
         float3 pos = asfloat(modelVertexBuffer.Load3(byteOffset));         // @0
         float3 nrm = asfloat(modelVertexBuffer.Load3(byteOffset + 12));   // @12
         float2 uv  = asfloat(modelVertexBuffer.Load2(byteOffset + 24));  // @24
-        verts[ti].position = mul(drawArgs.mvp, float4(pos, 1.0));
+        verts[ti].position = clipPos(readObjectMvp(drawArgs.objectIndex), pos);
         verts[ti].normal = nrm;
         verts[ti].uv = uv;
         verts[ti].positionOS = pos;  // Phase 5 光照（object→world 变换在 frag 做，unlit 不消费）

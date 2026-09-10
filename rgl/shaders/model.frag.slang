@@ -1,5 +1,6 @@
 import model;
-import material;  // 统一 push constant（Phase 4：DrawArgs 超集）
+import material;  // 统一 push constant（Phase 7b+：DrawArgs 仅 objectIndex）
+import scene;     // Phase 7b+：readObjectDraw（baseColor 从 heap per-object 材质表读）
 
 [shader("fragment")]
 float4 main(ModelVertexOutput input) : SV_Target
@@ -11,5 +12,6 @@ float4 main(ModelVertexOutput input) : SV_Target
     // Phase 5：alpha = baseColor.a × texel.a——BLEND 材质走透明队列（混合 factors 在
     // applyDynamicState 接线）；白纹理 a=1，OPAQUE/unlit 输出不受影响。
     float4 texel = baseColorTexture.Sample(baseColorSampler, input.uv);
-    return float4(drawArgs.baseColor.rgb * texel.rgb, drawArgs.baseColor.a * texel.a);
+    float4 baseColor = readObjectDraw(drawArgs.objectIndex).baseColor;  // Phase 7b+：进 heap
+    return float4(baseColor.rgb * texel.rgb, baseColor.a * texel.a);
 }

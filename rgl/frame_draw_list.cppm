@@ -29,6 +29,22 @@ export struct DrawCall {
 };
 
 /**
+ * Phase 7b+（NV DGC 规避）：per-object 材质/几何表条目（scene data @kSceneDataDrawTableOffset，
+ * stride 32，objectIndex 索引）。DrawArgs 去 mvp 后剩余字段一并进 heap，push 仅留 objectIndex
+ *（4B）绕开 NV DGC push 挂死。布局与 scene.slang readObjectDraw 字面量手工一致：
+ *   @0 uint totalTriangles | uint vertexOffset | float roughness | float metallic
+ *   @16 float4 baseColor
+ */
+export struct ObjectDrawGpu {
+	uint32_t totalTriangles = 0;
+	uint32_t vertexOffset = 0;
+	float roughness = 0.0f;
+	float metallic = 0.0f;
+	glm::vec4 baseColor{1.0f};
+};
+static_assert(sizeof(ObjectDrawGpu) == 32, "ObjectDrawGpu must match scene.slang readObjectDraw stride 32");
+
+/**
  * 场景级每帧动态数据（Phase 5 批次 2，bindless）：渲染 system 产出、drawFrame 消费——
  * CPU 写 staging[currentFrame] + 录制期 vkCmdCopyBuffer 拷进 scene data buffer
  *（布局契约见 vkresources.cppm LightDataGpu / scene.slang）。objectMatrices 按
@@ -45,6 +61,12 @@ export struct SceneFrameData {
 	// = inverse(proj·view)，renderListSystem 每帧从 ViewProjection 推导）
 	glm::mat4 skyInvViewProj{1.0f};
 	std::span<const glm::mat4> objectMatrices;  // scene data @128 对象矩阵表（spin·world，按 objectSlot 索引）
+	// Phase 7b+（NV DGC 规避）：per-object MVP 表（scene data @kSceneDataMvpTableOffset，
+	// 按 objectSlot 索引，值 = 原 DrawArgs.mvp 位级一致；shader readObjectMvp）
+	std::span<const glm::mat4> objectMvps;
+	// Phase 7b+（续）：per-object 材质/几何表（scene data @kSceneDataDrawTableOffset，
+	// 按 objectSlot 索引；shader readObjectDraw 消费，DrawArgs 仅剩 objectIndex）
+	std::span<const ObjectDrawGpu> objectDraws;
 	// Phase 7 D3：多灯数组（scene data 尾区 kSceneDataLightArrayOffset，4B count@base +
 	// GpuLight[count]@base+16，契约见 lights.slang / lights_schema.lua）。lightCount=0 时
 	// 该区不写。forward 仍走 .light（@0 头单灯），二者独立填。

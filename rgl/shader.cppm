@@ -267,7 +267,9 @@ export class RenderPipeline {
 		VkShaderCreateInfoEXT meshCreateInfoRaw{};
 		meshCreateInfoRaw.sType = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT;
 		meshCreateInfoRaw.pNext = &mappingInfo;
-		meshCreateInfoRaw.flags = VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT | VK_SHADER_CREATE_NO_TASK_SHADER_BIT_EXT;
+		// INDIRECT_BINDABLE：进 DGC execution set 的 shader 必须带（VUID-11032/11154；
+		// 非 DGC 路无害，统一加免得管线表再分两类）
+		meshCreateInfoRaw.flags = VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT | VK_SHADER_CREATE_NO_TASK_SHADER_BIT_EXT | VK_SHADER_CREATE_INDIRECT_BINDABLE_BIT_EXT;
 		meshCreateInfoRaw.stage = VK_SHADER_STAGE_MESH_BIT_EXT;
 		meshCreateInfoRaw.nextStage = VK_SHADER_STAGE_FRAGMENT_BIT;
 		meshCreateInfoRaw.codeType = VK_SHADER_CODE_TYPE_SPIRV_EXT;
@@ -279,7 +281,7 @@ export class RenderPipeline {
 		VkShaderCreateInfoEXT fragCreateInfoRaw{};
 		fragCreateInfoRaw.sType = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT;
 		fragCreateInfoRaw.pNext = &mappingInfo;
-		fragCreateInfoRaw.flags = VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT;
+		fragCreateInfoRaw.flags = VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT | VK_SHADER_CREATE_INDIRECT_BINDABLE_BIT_EXT;
 		fragCreateInfoRaw.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
 		fragCreateInfoRaw.codeType = VK_SHADER_CODE_TYPE_SPIRV_EXT;
 		fragCreateInfoRaw.codeSize = effect.fragStageSpv.size() * sizeof(uint32_t);

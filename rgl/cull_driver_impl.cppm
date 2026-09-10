@@ -61,21 +61,6 @@ std::expected<void, Error> CullDriver::runFrame(uint32_t frameSlot, uint64_t fra
 	// 契约校验在 writeSequenceStaging 内——size 不符即抛）
 	gpuCull->writeSequenceStaging(frameSlot, list.cullArgs);
 	gpuCull->recordCullPass(ccmd, cullInput, sceneStaging, frameSlot);
-	// DGC preprocess（NVIDIA 路）：cull dispatch 之后序列 buffer 已含 GPU 可见性——
-	// Compute→COMMAND_PREPROCESS 屏障（preprocess 读序列 + 写 preprocess 缓冲）
-	if (dgc && dgc->active()) {
-		vk::BufferMemoryBarrier2 ppBarrier{};
-		ppBarrier.srcStageMask = vk::PipelineStageFlagBits2::eComputeShader;
-		ppBarrier.srcAccessMask = vk::AccessFlagBits2::eShaderWrite;
-		ppBarrier.dstStageMask = vk::PipelineStageFlagBits2::eCommandPreprocessEXT;
-		ppBarrier.dstAccessMask = vk::AccessFlagBits2::eCommandPreprocessReadEXT;
-		ppBarrier.buffer = gpuCull->sequenceBufferHandle();
-		ppBarrier.size = VK_WHOLE_SIZE;
-		vk::DependencyInfo ppDep{};
-		ppDep.setBufferMemoryBarriers(ppBarrier);
-		ccmd.pipelineBarrier2(ppDep);
-		dgc->recordPreprocess(ccmd, gpuCull->sequenceAddress());
-	}
 	ccmd.end();
 
 	VkCommandBuffer ccb = *ccmd;
@@ -111,11 +96,13 @@ std::expected<void, Error> CullDriver::runFrame(uint32_t frameSlot, uint64_t fra
 }
 
 void CullDriver::executeOpaqueSegment(vk::raii::CommandBuffer& cmd, const FrameDrawList& list,
-		RGL::ShaderRegistry& registry) {
+		RGL::ShaderRegistry& registry, uint32_t frameSlot) {
 	if (dgc && dgc->active()) {
 		// DGC execute（NVIDIA 路）：GPU 直接消费序列（CPU args + GPU 可见性，
-		// preprocess 已在 cull CB 完成）——非紧凑，被剔序列 x=0 no-op
-		dgc->recordExecute(cmd, gpuCull->sequenceAddress(), gpuCull->countTotalAddress());
+		// 隐式 preprocess）——非紧凑，被剔序列 x=0 no-op。VUID-11053：EXECUTION_SET
+		// token 布局要求执行 CB 上先绑 execution set 初始 shader 态
+		dgc->bindInitialShaders(cmd);
+		dgc->recordExecute(cmd, gpuCull->sequenceAddress(), gpuCull->countTotalAddress(), frameSlot);
 	} else {
 		// 读回重放（RADV 路）：逐 candidate 按可见位重放——candidate 序 =
 		// CPU opaque 段序（顺序契约），args = CPU 位级真相源（list.cullArgs，

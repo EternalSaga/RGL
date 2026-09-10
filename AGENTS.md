@@ -159,7 +159,7 @@ tools 为 `EXCLUDE_FROM_ALL`（编译提速）：日常构建不碰工具链，`
 | `vk_instance` | vkinstance.cppm | Context、Instance、DebugMessenger、apiVersion（headless 换 `VK_EXT_headless_surface`） |
 | `vk_device` | vkdevice.cppm | PhysicalDevice 选择、QueueFamilyManager、Device、CommandPools、FeatureChain |
 | `vk_swapchain` | vkswapchain.cppm | Surface、Swapchain、ImageView[] format/extent/presentMode |
-| `vk_resources` | vkresources.cppm | VmaAllocatorRAII、depth、VmaDescriptorHeap（固定裕量 `kUserSlotMargin(1024)`）、`allocSlot` 统一分配、`ensureSharedSampler/ensureSkySampler/ensureSceneData`（scene data 头 128B：@0 光参数/@48 env/@64 skyInvViewProj/@128 对象矩阵表 ×4096，尾区 @262272 灯数组）、env cubemap 单例、G-buffer RT 缓存（`ensureRtAttachment`/`rtHeapSlot`/`ensureDeferredGBufferSlots`） |
+| `vk_resources` | vkresources.cppm | VmaAllocatorRAII、depth、VmaDescriptorHeap（固定裕量 `kUserSlotMargin(1024)`）、`allocSlot` 统一分配、`ensureSharedSampler/ensureSkySampler/ensureSceneData`（scene data 头 128B：@0 光参数/@48 env/@64 skyInvViewProj/@128 对象矩阵表 ×4096，尾区 @262272 灯数组 / @262800 per-object MVP 表 / @524944 per-object 材质表——Phase 7b+ DrawArgs bindless 化，见 scene.slang）、env cubemap 单例、G-buffer RT 缓存（`ensureRtAttachment`/`rtHeapSlot`/`ensureDeferredGBufferSlots`） |
 | `vk_renderer` | vkrenderer.cppm | **盲执行器骨架**（Phase 10 批次 0 拆四子系统，见下四行；drawFrame 577→291 行，BIT-IDENTICAL 全程维持）：`drawFrame(const FrameDrawList&)`（零 entt）构造收 `CompiledRenderGraph`，流程 = `session.beginFrame`（①②③）→ `writeSceneStaging`（③.5）→ `cullDriver.runFrame`（④c）→ heap barrier/copy/bind（④⑥固定段）→ pass 循环（barrier 物化 / beginRendering / `stateKit.stateFor`+applyDynamicState / 段内逐 draw / blit / drawLight）→ `capturer.record`（⑪.5）→ presentTransition（⑫）→ `session.submit/present/advance`（⑬⑭⑮）；公开 `requestFrameCapture/takeFrameCapture/hasFrameCapture`（转发 capturer）+ `waitForIdle` + `getGraphicsCommandPoolRef`（金丝雀）；构造期 `validateRenderGraphForExecutor` fail-fast |
 | `frame_session` | frame_session.cppm | 帧生命周期会话（手术 4 自 drawFrame 摘出）：四套同步对象（双 fence，VUID-00067）+ 每帧命令缓冲 + `beginFrame`（①双 fence wait/reset + ②acquire 100ms 超时三态 began/skipped/recreated + ③CB begin）/`submit`（⑬裸 vkQueueSubmit）/`present`（⑭presentFence + out-of-date 重建）/`advance`（⑮）；`recreateSwapchainAndDepth`（swapchain+depth extent 同步重建）；`kFramesInFlight=2`；noPresent 诊断分支保留 |
 | `frame_capture` | frame_capture.cppm | 帧内回读捕获器（手术 2 自 Renderer 摘出，llm_debug 截图载体）：`FrameCapture` 产物（width/height/format/gbufChannel/bytes/pixels）+ 三步曲 `request`（⑫前挂）/`record`（后缓冲 or GB 通道回读拷贝，读写 attachmentLayouts 布局追踪）/`collect`（⑬后等本帧 fence 搬 mapped 字节）；captureStaging GPU_TO_CPU 按需增长；acquire 跳帧时请求保持 pending |
@@ -168,8 +168,8 @@ tools 为 `EXCLUDE_FROM_ALL`（编译提速）：日常构建不碰工具链，`
 | `render_graph` | render_graph.cppm | 渲染意图图（纯 C++ 零 Lua 零 entt）：`RgGraphDesc` → `compileRenderGraph`（校验 + barrier 自动推导 + presentTransition）→ `CompiledRenderGraph`；default/offscreen/deferred 三图变体 + `kGBufferAttachments` 契约表（G-buffer 名单一真相源）+ `renderGraphSelfCheck` |
 | `render_graph_config` | render_graph_config.cppm | `configs/render_graph.lua` → `RgGraphDesc`（sol2 沙箱，缺文件回落默认；结构合法性归 compile） |
 | `shader_registry` | shader_registry.cppm | 管线表（零 entt）：`PipelineEntry` + `ShaderRegistry`（条目全按需建，无构造期恒建：`addModelEntry`（按组合去重）+ `addCubeEntry`（内建几何，按资产 slot 烘焙）+ `addSkyEntry` + `addLightEntry` + `bindPipelineToAsset`） |
-| `gpu_cull` | gpu_cull.cppm | GPU culling 数据通路：CullEntry 表（60B）+ 序列 buffer（120B：execSlotFrag/Mesh + DrawArgs + meshCmd）+ count buffer（64B：visible/total）+ seqStaging ring×2（MAPPED，CPU 预写 args 含 mvp）；`writeSequenceStaging`（CPU args）+ `recordCullPass`（staging 拷贝 + dispatch）+ `readCullResult`；GPU 只覆盖可见性（meshCmd.x），mvp 由 CPU 算（保 forward diff0 位级契约） |
-| `vk_indirect_commands` | vk_indirect_commands.cppm | DGC RAII（NVIDIA 路径，能力门控）：indirect commands layout（3 token：EXECUTION_SET@0 每 stage-bit 一位 / PUSH_DATA@8 DrawArgs / DRAW_MESH_TASKS@108，stride 120B）+ shader-object execution set（每条目 2 slot：2j=frag/2j+1=mesh，`VkWriteIndirectExecutionSetShaderEXT` 无 stage）+ preprocess buffer（`vkGetGeneratedCommandsMemoryRequirementsEXT` + 原生 `vkAllocateMemory`）；**8 入口点全走 `vkGetDeviceProcAddr`**（系统 loader 不导出 DGC 符号，v357 无 `vk::` wrapper）；`recordPreprocess`/`recordExecute` |
+| `gpu_cull` | gpu_cull.cppm | GPU culling 数据通路：CullEntry 表（60B）+ 序列 buffer（120B：execSlotFrag/Mesh + DrawArgs@8(4B) + meshCmd@108）+ count buffer（64B：visible/total）+ seqStaging ring×2（MAPPED，CPU 预写 args = 仅 objectIndex）；`writeSequenceStaging`（CPU args）+ `recordCullPass`（staging 拷贝 + dispatch）+ `readCullResult`；GPU 只覆盖可见性（meshCmd.x），mvp 走 scene data per-object 表（Phase 7b+，CPU 每帧写位级一致，见 scene.slang readObjectMvp） |
+| `vk_indirect_commands` | vk_indirect_commands.cppm | DGC RAII（NVIDIA 路径，能力门控）：indirect commands layout（3 token：EXECUTION_SET@0 每 stage-bit 一位 / PUSH_DATA@8 DrawArgs(4B) / DRAW_MESH_TASKS@108，stride 120B）+ shader-object execution set（每条目 2 slot：2j=frag/2j+1=mesh，初始态=首条目 frag+mesh 建后 update 全槽）+ preprocess buffer（`vkGetGeneratedCommandsMemoryRequirementsEXT` + 原生 `vkAllocateMemory`，按帧槽 ×framesInFlight）；**7 入口点全走 `vkGetDeviceProcAddr`**（系统 loader 不导出 DGC 符号，v357 无 `vk::` wrapper；隐式 preprocess 不含 preprocess 入口点）；`bindInitialShaders`/`recordExecute` |
 
 **main.cpp 启动流**：加载 camera/scene/runtime/diagnostics 配置（先于建窗）+ `renderGraphSelfCheck`
 → 建窗（headless 不建）→ 栈上 `entt::registry`（全部每帧 context）→ 按序构造初始化层
@@ -215,8 +215,9 @@ main.cpp 按逆序析构（RAII）。依赖图原则：只允许下层 import �
   features 模板生成），Profile `sm_6_6+spirv_1_6` + capability `spvDescriptorHeapEXT`
 - **Scalar Block Layout（定案）**：所有 slangc 编译（反射 + SPV 两处 flag **必须一致**）统一
   `-fvk-use-scalar-layout`——C++（glm 自然对齐）与 shader 逐字段偏移天然一致零 padding
-  （`DrawArgs` 100B）。前提 `scalarBlockLayout` feature（features_config.json + validateFeatures）
-- **bindless 原则**：push constant 冻结在"mvp + 索引"级别（`DrawArgs` 100B 不再扩）——场景级/
+  （`DrawArgs` 4B）。前提 `scalarBlockLayout` feature（features_config.json + validateFeatures）
+- **bindless 原则**：push constant 冻结在"纯索引"级别（Phase 7b+ 起 `DrawArgs` 仅 `objectIndex`
+  4B，不再扩）——场景级/每帧变化的数据（光照、对象矩阵、MVP、材质）一律进 descriptor heap（scene data）
   每帧变化的数据（光照、对象矩阵、env 参数、灯数组）一律进 descriptor heap（scene data）
 
 ## 隐式扩展依赖
@@ -237,15 +238,15 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
 
 | 位置 | 说明 |
 |---|---|
-| `shaders/material.slang` | **统一 push constant 契约**：`DrawArgs` 超集单一真相源 → schema 校验 → `material_types_generated` |
-| `shaders/scene.slang` | **场景级 bindless 契约**：`sceneData`（binding 3）+ `readSceneLight`/`readObjectMatrix`/`worldPos`/`worldNormal`；@0-128 头字节布局 = vkresources 手写 ↔ shader 字面量手工一致（无反射端，见已知问题） |
+| `shaders/material.slang` | **统一 push constant 契约**：`DrawArgs`（Phase 7b+ 仅 `objectIndex` 4B）单一真相源 → schema 校验 → `material_types_generated` |
+| `shaders/scene.slang` | **场景级 bindless 契约**：`sceneData`（binding 3）+ `readSceneLight`/`readObjectMatrix`/`readObjectMvp`/`readObjectDraw`/`worldPos`/`worldNormal`/`clipPos`；@0-128 头 + 各 per-object 表字节布局 = vkresources 手写 ↔ shader 字面量手工一致（无反射端，见已知问题） |
 | `shaders/env.slang` / `sky.slang` | env 采样契约（binding 4/5 + @48）/ 天空盒契约（@64 invViewProj 重建射线） |
 | `shaders/lights.slang` | **多灯契约**（反射管线 4）：`GpuLight` + `readLightCount/readGpuLight` 读尾区 @262272；`light.frag` import，forward 不 import |
 | `shaders/model_pbr/model_phong/model_pbr_ibl.frag` | 三条 frag 路线（GGX / Blinn / GGX+简化 IBL），`scene.lua styles` 一行切换 |
 | `shaders/deferred_geometry.frag` + `light.mesh/frag` | deferred 路线：4-MRT G-buffer 写入（oct 法线）/ 全屏大三角逐灯 GGX；`kGBufferAttachments` 表定格式 |
 | `shaders/model_schema.lua` `constants` | 契约常量单一真相源（`kTrianglesPerGroup` 等 → 生成 constexpr）；`HeapSlotGeometryBase` = 用户槽区起点 = 几何段基址 |
 | `rgl/builtin_geometry.cppm` | **内建几何契约**（架构债务 1 方案 B）：cube 等程序化几何的上传/注册，与 gltf 同路；`vk_resources` 不认识任何内容 |
-| `shaders/cull.comp.slang` + `rgl/gpu_cull.cppm` | **GPU culling 契约**（Phase 7b）：CullEntry 60B / 序列 120B（execSlot 2j/2j+1 + DrawArgs@8 + meshCmd@108）/ CullPush 100B（planes[6]+sequenceCount）/ count 64B（visible@0 total@4）；CPU 算 mvp 进序列、GPU 只写可见性（保 forward diff0）；DGC 序列契约见 `vk_indirect_commands.cppm` + `docs/device_generated_commands_research.md` §4.4 |
+| `shaders/cull.comp.slang` + `rgl/gpu_cull.cppm` | **GPU culling 契约**（Phase 7b）：CullEntry 60B / 序列 120B（execSlot 2j/2j+1 + DrawArgs@8(4B) + meshCmd@108）/ CullPush 100B（planes[6]+sequenceCount）/ count 64B（visible@0 total@4）；CPU 算 mvp 进 scene data per-object 表、GPU 只写可见性（保 forward diff0）；DGC 序列契约见 `vk_indirect_commands.cppm` + `docs/device_generated_commands_research.md` §4.4 |
 | `configs/*.lua` | 运行时配置（sol2 沙箱，字段可选回落默认）；**与 `shaders/*_schema.lua`（build 时契约）是两套机制，勿混** |
 
 ## 已知问题
@@ -269,10 +270,13 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
   （static_assert 三方同步）。灯未 entity 化（经 `SceneLights` context，lights[0]=主光）
 - **GPU culling（Phase 7b）边界**：DGC 路径（`vkCmdExecuteGeneratedCommandsEXT`）本机 RADV
   graphics 侧不可用（`supportedIndirectCommandsShaderStagesShaderBinding` 仅 COMPUTE，26.2.1 复测
-  graphicsIndirect=false）→ 实际走**读回重放**；DGC 代码经 VVL 审查+编译绿但**未运行时实测**
-  （需 NVIDIA 机）。culling compute 两驱动都跑（默认路径无开关）；CPU 剔除保留为兜底+每帧对账
-  基准（`reconcileGpuCull` 多重集，不一致告警不中断）；mvp 由 CPU 算进序列（GPU float4x4 乘法
-  FMA 收缩序与 glm 无位级契约，保 forward diff0）
+  graphicsIndirect=false）→ 实际走**读回重放**；NVIDIA 侧 graphicsIndirect=true 走 DGC execute，
+  2026-09-10 首次运行时实测通（曾黑屏，根因排查 + DrawArgs bindless 化见 `docs/调试历史.md`
+  2026-09-10 条目——**根因存疑未闭环**：实测"push 字节数 × 序列数"超阈值挂死，压 DrawArgs 至 4B
+  绕开，但用户判断此阈值规律太邪门、不确信是 NV 真 bug 的根因，留待以后复查）。culling compute
+  两驱动都跑（默认路径无开关）；CPU 剔除保留为兜底+每帧对账基准（`reconcileGpuCull` 多重集，不一致
+  告警不中断）；mvp 由 CPU 算进 scene data per-object 表（GPU float4x4 乘法 FMA 收缩序与 glm 无
+  位级契约，保 forward diff0）
 - `configs/` 增量拷贝只认"源文件更新"：build 端副本被破坏（mtime 更新）不会自动恢复，需手动拷贝；
   且 `copy_if_different` 按内容比对——**build 端临时改配置会被下次 build 静默覆盖**（截图调试后记得
   改的是 build 副本还是源）

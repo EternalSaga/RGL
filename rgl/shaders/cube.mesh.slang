@@ -1,5 +1,6 @@
 import types;
-import material;  // 统一 push constant（Phase 4：DrawArgs 超集，cube 只消费 mvp）
+import material;  // 统一 push constant（Phase 4：DrawArgs 超集）
+import scene;     // Phase 7b+：readObjectMvp（binding 3 scene data，mvp 从 heap 读不走 push）
 
 [shader("mesh")]
 [numthreads(32, 1, 1)]
@@ -17,7 +18,7 @@ void main(
         uint3 colRaw = vertexBuffer.Load3(vertexOffset + 12);
         float3 pos = asfloat(posRaw);
         float3 col = asfloat(colRaw);
-        verts[ti].position = mul(drawArgs.mvp, float4(pos, 1.0));
+        verts[ti].position = clipPos(readObjectMvp(drawArgs.objectIndex), pos);
         verts[ti].color = col;
     }
 

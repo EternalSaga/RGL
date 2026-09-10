@@ -14,12 +14,12 @@ import material_types_generated;  // DrawArgs（PUSH_DATA token size 契约）
 
 namespace RGL {
 
-// 构造器 / dtor / recordPreprocess / recordExecute 实现（契约见接口声明）。
+// 构造器 / dtor / bindInitialShaders / recordExecute 实现（契约见接口声明）。
 // VU 审查基准 = 本地 Vulkan-Docs（v1.4.360）chapters/device_generated_commands +
 // 系统头 v357 字段（docs/device_generated_commands_research.md 逐条对照，5d 入册）。
 
 DgcCommands::DgcCommands(RGL::DeviceContext& vkDevice, const RGL::ShaderRegistry& registry,
-	uint32_t vkMaxSequenceCount)
+	uint32_t vkMaxSequenceCount, uint32_t framesInFlight)
 	: pfnCreateLayout(reinterpret_cast<PFN_vkCreateIndirectCommandsLayoutEXT>(
 		  vkGetDeviceProcAddr(*vkDevice.getDevice(), "vkCreateIndirectCommandsLayoutEXT"))),
 	  pfnDestroyLayout(reinterpret_cast<PFN_vkDestroyIndirectCommandsLayoutEXT>(
@@ -32,15 +32,13 @@ DgcCommands::DgcCommands(RGL::DeviceContext& vkDevice, const RGL::ShaderRegistry
 		  vkGetDeviceProcAddr(*vkDevice.getDevice(), "vkUpdateIndirectExecutionSetShaderEXT"))),
 	  pfnGetMemReq(reinterpret_cast<PFN_vkGetGeneratedCommandsMemoryRequirementsEXT>(
 		  vkGetDeviceProcAddr(*vkDevice.getDevice(), "vkGetGeneratedCommandsMemoryRequirementsEXT"))),
-	  pfnCmdPreprocess(reinterpret_cast<PFN_vkCmdPreprocessGeneratedCommandsEXT>(
-		  vkGetDeviceProcAddr(*vkDevice.getDevice(), "vkCmdPreprocessGeneratedCommandsEXT"))),
 	  pfnCmdExecute(reinterpret_cast<PFN_vkCmdExecuteGeneratedCommandsEXT>(
 		  vkGetDeviceProcAddr(*vkDevice.getDevice(), "vkCmdExecuteGeneratedCommandsEXT"))),
 	  device(*vkDevice.getDevice()),
 	  seqCapacity(vkMaxSequenceCount) {
 	// 入口点缺失 = 驱动声明了 feature 却没有实现（spec 违例）——fail-fast 回落重放路
 	if (!pfnCreateLayout || !pfnDestroyLayout || !pfnCreateSet || !pfnDestroySet ||
-	    !pfnUpdateSetShader || !pfnGetMemReq || !pfnCmdPreprocess || !pfnCmdExecute)
+	    !pfnUpdateSetShader || !pfnGetMemReq || !pfnCmdExecute)
 		throw std::runtime_error("DgcCommands: DGC entry point missing from driver (feature/impl drift)");
 	const auto& entries = registry.entriesView();
 	const uint32_t capacity = static_cast<uint32_t>(entries.size()) * 2;
@@ -56,8 +54,13 @@ DgcCommands::DgcCommands(RGL::DeviceContext& vkDevice, const RGL::ShaderRegistry
 	execToken.type = VK_INDIRECT_EXECUTION_SET_INFO_TYPE_SHADER_OBJECTS_EXT;
 	execToken.shaderStages = VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT;
 	VkIndirectCommandsPushConstantTokenEXT pushToken{};
-	pushToken.updateRange = {VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
-		8, static_cast<uint32_t>(sizeof(RGL::DrawArgs))};
+	// VUID-VkIndirectCommandsLayoutTokenEXT-type-11333：PUSH_DATA 的 updateRange
+	// .shaderStages 必须 VK_SHADER_STAGE_ALL。updateRange 描述**目标 shader push 区**
+	// 的落点（spec "push constant range that will be updated"），非序列源偏移——
+	// DrawArgs 在 shader 侧 @0，offset 必须 0（序列源 = token.offset 起 sizeof 字节）。
+	// Phase 7b+：DrawArgs 已瘦至 objectIndex（4B）——NV 驱动 DGC push token 在
+	// "push 字节数 × 序列数"较大时命令生成阶段挂死（详见 docs/调试历史 2026-09-10）
+	pushToken.updateRange = {VK_SHADER_STAGE_ALL, 0, static_cast<uint32_t>(sizeof(RGL::DrawArgs))};
 	VkIndirectCommandsLayoutTokenEXT tokens[3]{};
 	tokens[0].sType = VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_TOKEN_EXT;
 	tokens[0].type = VK_INDIRECT_COMMANDS_TOKEN_TYPE_EXECUTION_SET_EXT;
@@ -66,7 +69,7 @@ DgcCommands::DgcCommands(RGL::DeviceContext& vkDevice, const RGL::ShaderRegistry
 	tokens[1].sType = VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_TOKEN_EXT;
 	tokens[1].type = VK_INDIRECT_COMMANDS_TOKEN_TYPE_PUSH_DATA_EXT;
 	tokens[1].data.pPushConstant = &pushToken;
-	tokens[1].offset = 8;  // DrawArgs 100B（descriptor heap push 区）
+	tokens[1].offset = 8;  // DrawArgs（descriptor heap push 区，Phase 7b+ 起 4B）
 	tokens[2].sType = VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_TOKEN_EXT;
 	tokens[2].type = VK_INDIRECT_COMMANDS_TOKEN_TYPE_DRAW_MESH_TASKS_EXT;
 	tokens[2].offset = 108;  // VkDrawMeshTasksIndirectCommandEXT 12B
@@ -83,10 +86,19 @@ DgcCommands::DgcCommands(RGL::DeviceContext& vkDevice, const RGL::ShaderRegistry
 
 	// ② execution set（SHADER_OBJECTS；容量 = 2×条目；2j = entry j 的 frag、2j+1 = mesh——
 	// 与序列 execSlot 约定（writeSequenceStaging）同源）
+	// 两条 VUID 联合约束（NVIDIA 实测 2026-09-10，RADV 走不到此路故此前从未暴露）：
+	//   - shaderCount-arraylength：初始 shader 数必须 >0（不允许空建）
+	//   - stage-11023：pInitialShaders 各元素 stage 必须唯一（不能逐条目重复 mesh/frag）
+	// → 初始 = 首条目 frag+mesh 一对（即"初始 shader 态"，execute 前绑到 CB 满足 11053），
+	//   全 2N 槽建好后 vkUpdateIndirectExecutionSetEXT 一次写入
+	if (entries.empty())
+		throw std::runtime_error("DgcCommands: no pipeline entries (execution set needs initial shaders)");
+	std::vector<VkShaderEXT> initialShaders{
+		entries[0].pipeline.fragShaderHandle(), entries[0].pipeline.meshShaderHandle()};
 	VkIndirectExecutionSetShaderInfoEXT shaderInfo{};
 	shaderInfo.sType = VK_STRUCTURE_TYPE_INDIRECT_EXECUTION_SET_SHADER_INFO_EXT;
-	shaderInfo.shaderCount = 0;
-	shaderInfo.pInitialShaders = nullptr;
+	shaderInfo.shaderCount = static_cast<uint32_t>(initialShaders.size());
+	shaderInfo.pInitialShaders = initialShaders.data();
 	shaderInfo.pSetLayoutInfos = nullptr;
 	shaderInfo.maxShaderCount = capacity;
 	shaderInfo.pushConstantRangeCount = 0;
@@ -106,6 +118,8 @@ DgcCommands::DgcCommands(RGL::DeviceContext& vkDevice, const RGL::ShaderRegistry
 			2 * j + 1, entries[j].pipeline.meshShaderHandle()});
 	}
 	pfnUpdateSetShader(device, executionSet, static_cast<uint32_t>(writes.size()), writes.data());
+	initialShaders_[0] = initialShaders[0];
+	initialShaders_[1] = initialShaders[1];
 
 	// ③ preprocess buffer（内存需求按 layout+execution set+maxSequenceCount 查询；
 	// memoryTypeBits 严格匹配——VMA 自动选型不保证满足驱动要求位）
@@ -119,6 +133,12 @@ DgcCommands::DgcCommands(RGL::DeviceContext& vkDevice, const RGL::ShaderRegistry
 	req.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2;
 	pfnGetMemReq(device, &memReq, &req);
 	preprocessSize = std::max(req.memoryRequirements.size, VkDeviceSize(1));
+	// 每帧槽步长 = size 上对齐到 alignment；×framesInFlight 槽（11142：preprocess 区
+	// 不得被一条以上 execute 复用——隐式路每帧 execute 都写它，跨在途帧必须分开）
+	const VkDeviceSize align = std::max(req.memoryRequirements.alignment, VkDeviceSize(1));
+	preprocessSlotStride = (preprocessSize + align - 1) / align * align;
+	preprocessSlots = framesInFlight == 0 ? 1 : framesInFlight;
+	const VkDeviceSize totalPreprocessSize = preprocessSlotStride * preprocessSlots;
 	const auto memProps = vkDevice.getPhysicalDevice().getMemoryProperties();
 	uint32_t memType = std::numeric_limits<uint32_t>::max();
 	for (uint32_t i = 0; i < memProps.memoryTypeCount; ++i)
@@ -128,14 +148,24 @@ DgcCommands::DgcCommands(RGL::DeviceContext& vkDevice, const RGL::ShaderRegistry
 		}
 	if (memType == std::numeric_limits<uint32_t>::max())
 		throw std::runtime_error("DgcCommands: preprocess memory requirements match no memory type");
+	// preprocess 工作缓冲（隐式 preprocess——execute isPreprocessed=FALSE 时驱动内部
+	// 读写此区）：usage 含 bit-31 的 PREPROCESS_BUFFER 必须走 flags2 pNext
+	// （VUID-VkBufferCreateInfo-pNext-09040：usage 须为 0）
+	VkBufferUsageFlags2CreateInfoKHR bufUsage2{};
+	bufUsage2.sType = VK_STRUCTURE_TYPE_BUFFER_USAGE_FLAGS_2_CREATE_INFO_KHR;
+	bufUsage2.usage = VK_BUFFER_USAGE_2_PREPROCESS_BUFFER_BIT_EXT |
+		VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT;  // BDA 查询需 DEVICE_ADDRESS（02601）
 	VkBufferCreateInfo bufInfo{};
 	bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-	bufInfo.size = preprocessSize;
-	bufInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+	bufInfo.pNext = &bufUsage2;
+	bufInfo.size = totalPreprocessSize;
 	if (vkCreateBuffer(device, &bufInfo, nullptr, &preprocessBuffer) != VK_SUCCESS)
 		throw std::runtime_error("DgcCommands: preprocess vkCreateBuffer failed");
-	const VkMemoryAllocateInfo allocInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, nullptr,
-		preprocessSize, memType};
+	// 带 DEVICE_ADDRESS usage 的 buffer，内存须 DEVICE_ADDRESS 分配位（VUID-03339，BDA）
+	const VkMemoryAllocateFlagsInfo allocFlags{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO,
+		nullptr, VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT};
+	const VkMemoryAllocateInfo allocInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, &allocFlags,
+		totalPreprocessSize, memType};
 	if (vkAllocateMemory(device, &allocInfo, nullptr, &preprocessMem) != VK_SUCCESS)
 		throw std::runtime_error("DgcCommands: preprocess vkAllocateMemory failed");
 	vkBindBufferMemory(device, preprocessBuffer, preprocessMem, 0);
@@ -143,8 +173,8 @@ DgcCommands::DgcCommands(RGL::DeviceContext& vkDevice, const RGL::ShaderRegistry
 		nullptr, preprocessBuffer};
 	preprocessAddress = vkGetBufferDeviceAddress(device, &bda);  // core 1.2（loader 导出）
 	if (auto logger = RLLogger::getInstance())
-		logger->info("dgc: layout + execution set (capacity {}) + preprocess buffer ({}B) ready",
-			capacity, preprocessSize);
+		logger->info("dgc: layout + execution set (capacity {}) + preprocess buffer ({}B ×{} slots) ready",
+			capacity, preprocessSize, preprocessSlots);
 }
 
 DgcCommands::~DgcCommands() {
@@ -166,24 +196,20 @@ DgcCommands::~DgcCommands() {
 	}
 }
 
-void DgcCommands::recordPreprocess(vk::raii::CommandBuffer& cmd, VkDeviceAddress sequenceAddress) const {
-	VkGeneratedCommandsInfoEXT info{};
-	info.sType = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_INFO_EXT;
-	info.shaderStages = VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT;
-	info.indirectExecutionSet = executionSet;
-	info.indirectCommandsLayout = layout;
-	info.indirectAddress = sequenceAddress;
-	info.indirectAddressSize = static_cast<VkDeviceSize>(seqCapacity) * kCullSequenceStride;
-	info.preprocessAddress = preprocessAddress;
-	info.preprocessSize = preprocessSize;
-	info.maxSequenceCount = seqCapacity;
-	info.sequenceCountAddress = 0;  // preprocess 不消费计数（execute 才用）
-	info.maxDrawCount = seqCapacity;
-	pfnCmdPreprocess(*cmd, &info, VK_NULL_HANDLE);
+void DgcCommands::bindInitialShaders(vk::raii::CommandBuffer& cmd) const {
+	// VUID-vkCmdExecuteGeneratedCommandsEXT-indirectCommandsLayout-11053：含
+	// EXECUTION_SET token 的布局执行前，execution set 的初始 shader 态必须已绑于该 CB
+	// （每序列 token 随后逐 draw 覆盖为各自管线）。stages 与 pInitialShaders 序一致：
+	// slot0=frag、slot1=mesh
+	std::array<vk::ShaderStageFlagBits, 2> stages = {
+		vk::ShaderStageFlagBits::eFragment, vk::ShaderStageFlagBits::eMeshEXT};
+	std::array<vk::ShaderEXT, 2> handles = {
+		vk::ShaderEXT(initialShaders_[0]), vk::ShaderEXT(initialShaders_[1])};
+	cmd.bindShadersEXT(stages, handles);
 }
 
 void DgcCommands::recordExecute(vk::raii::CommandBuffer& cmd, VkDeviceAddress sequenceAddress,
-	VkDeviceAddress sequenceCountAddress) const {
+	VkDeviceAddress sequenceCountAddress, uint32_t frameSlot) const {
 	VkGeneratedCommandsInfoEXT info{};
 	info.sType = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_INFO_EXT;
 	info.shaderStages = VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -191,12 +217,12 @@ void DgcCommands::recordExecute(vk::raii::CommandBuffer& cmd, VkDeviceAddress se
 	info.indirectCommandsLayout = layout;
 	info.indirectAddress = sequenceAddress;
 	info.indirectAddressSize = static_cast<VkDeviceSize>(seqCapacity) * kCullSequenceStride;
-	info.preprocessAddress = preprocessAddress;
+	info.preprocessAddress = preprocessAddress + preprocessSlotStride * frameSlot;
 	info.preprocessSize = preprocessSize;
 	info.maxSequenceCount = seqCapacity;
 	info.sequenceCountAddress = sequenceCountAddress;  // count buffer @4 = candidate 数（GPU 写）
 	info.maxDrawCount = seqCapacity;
-	pfnCmdExecute(*cmd, VK_TRUE, &info);
+	pfnCmdExecute(*cmd, VK_FALSE, &info);  // 隐式 preprocess（驱动内部生成+同步）
 }
 
 }  // namespace RGL

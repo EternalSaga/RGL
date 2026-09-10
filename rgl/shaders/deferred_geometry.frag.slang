@@ -34,7 +34,8 @@ void main(
     out float4 outMetalRough : SV_Target3)
 {
     float4 texel = baseColorTexture.Sample(baseColorSampler, input.uv);
-    float3 albedo = drawArgs.baseColor.rgb * texel.rgb;
+    const ObjectDraw od = readObjectDraw(drawArgs.objectIndex);  // Phase 7b+：材质进 heap
+    float3 albedo = od.baseColor.rgb * texel.rgb;
 
     ObjectMatrix M = readObjectMatrix(drawArgs.objectIndex);
     float3 N = worldNormal(M, normalize(input.normal));
@@ -43,8 +44,8 @@ void main(
     outAlbedo = float4(albedo, 1.0);
     outNormal = octEncode(N);
     outWorldPos = float4(P, 0.0);
-    // DrawArgs.roughnessMetallic: x=roughness y=metallic（material.slang 契约）
-    outMetalRough = float4(clamp(drawArgs.roughnessMetallic.y, 0.0, 1.0),  // .r = metallic
-                           clamp(drawArgs.roughnessMetallic.x, 0.0, 1.0),  // .g = roughness
+    // ObjectDraw.roughnessMetallic: x=roughness y=metallic（scene.slang readObjectDraw）
+    outMetalRough = float4(clamp(od.roughnessMetallic.y, 0.0, 1.0),  // .r = metallic
+                           clamp(od.roughnessMetallic.x, 0.0, 1.0),  // .g = roughness
                            0.0, 1.0);
 }

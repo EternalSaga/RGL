@@ -3,6 +3,34 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>  // entity rootTransform（translate/rotate/scale 组装）
 #include <fmt/format.h>
+#ifdef RGL_AFTERMATH  // 编译期开关（rgl/CMakeLists.txt option）：NVIDIA GPU crash dump 诊断
+#include "GFSDK_Aftermath_GpuCrashDump.h"
+#include "GFSDK_Aftermath_GpuCrashDumpDecoding.h"
+#include <cstdio>
+namespace {
+// Aftermath GPU crash dump 回调：崩溃时驱动回调本函数，落盘 .bin + 解码 .json（供离线分析）。
+// 须早于任何 device 创建启用（见 main 顶部 EnableGpuCrashDumps）。
+void GFSDK_AFTERMATH_CALL rglAftermathDumpCb(const void* data, uint32_t size, void*) {
+	std::FILE* f = std::fopen("aftermath_crash.bin", "wb");
+	if (f) { std::fwrite(data, 1, size, f); std::fclose(f); }
+	std::fprintf(stderr, "[aftermath] crash dump %u bytes\n", size);
+	GFSDK_Aftermath_GpuCrashDump_Decoder dec = nullptr;
+	if (GFSDK_Aftermath_SUCCEED(GFSDK_Aftermath_GpuCrashDump_CreateDecoder(
+		    GFSDK_Aftermath_Version_API, data, size, &dec))) {
+		uint32_t jsonSize = 0;
+		GFSDK_Aftermath_GpuCrashDump_GenerateJSON(dec, 0x3fff, 2,
+			nullptr, nullptr, nullptr, nullptr, &jsonSize);
+		if (jsonSize > 0) {
+			std::vector<char> buf(jsonSize);
+			GFSDK_Aftermath_GpuCrashDump_GetJSON(dec, jsonSize, buf.data());
+			std::FILE* jf = std::fopen("aftermath_crash.json", "wb");
+			if (jf) { std::fwrite(buf.data(), 1, jsonSize, jf); std::fclose(jf); }
+		}
+		GFSDK_Aftermath_GpuCrashDump_DestroyDecoder(dec);
+	}
+}
+}  // namespace
+#endif
 import rlstd;
 import vulkan_window;
 import vk_instance;
@@ -51,6 +79,12 @@ using namespace RGL;
  *   资产上传/渲染错误
  */
 int main() {
+#ifdef RGL_AFTERMATH  // 编译期开关：须早于任何 device 创建（Aftermath 文档要求）
+	GFSDK_Aftermath_EnableGpuCrashDumps(GFSDK_Aftermath_Version_API,
+		GFSDK_Aftermath_GpuCrashDumpWatchedApiFlags_Vulkan,
+		GFSDK_Aftermath_GpuCrashDumpFeatureFlags_Default,
+		rglAftermathDumpCb, nullptr, nullptr, nullptr, nullptr);
+#endif
 	// 配置先于窗口：llm_debug 模式影响建窗（离屏隐藏窗 + 配置尺寸）
 	auto cameraResult = loadCameraConfig("configs/camera.lua");
 	if (!cameraResult) {
@@ -506,7 +540,7 @@ int main() {
 		if (vkDevice.getDgcSupport().graphicsIndirect && gpuCull.active()) {
 			try {
 				dgc = std::make_unique<DgcCommands>(vkDevice, shaderRegistry,
-					gpuCull.candidateCount());
+					gpuCull.candidateCount(), 2);  // framesInFlight=2（preprocess 槽 ×2，11142）
 			} catch (const std::exception& e) {
 				auto* logger = RLLogger::getInstance();
 				if (logger)

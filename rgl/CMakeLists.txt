@@ -345,6 +345,16 @@ target_link_libraries(rgl
     GPUOpen::VulkanMemoryAllocator
     )
 
+# NVIDIA Aftermath GPU crash dump（诊断能力，编译期开关；默认关，排查 NV 崩溃时开）
+# 用法：just config 前设 RGL_AFTERMATH=ON，或 cmake -DRGL_AFTERMATH=ON
+option(RGL_AFTERMATH "Enable NVIDIA Aftermath GPU crash dumps (Linux/NVIDIA only)" OFF)
+if(RGL_AFTERMATH AND UNIX AND NOT APPLE)
+    set(AFTERMATH_SDK_DIR "${CMAKE_SOURCE_DIR}/../Aftermath")
+    target_include_directories(rgl PRIVATE "${AFTERMATH_SDK_DIR}/include")
+    target_link_libraries(rgl PRIVATE "${AFTERMATH_SDK_DIR}/lib/x64/libGFSDK_Aftermath_Lib.x64.so")
+    target_compile_definitions(rgl PRIVATE RGL_AFTERMATH=1)
+endif()
+
 
 
 target_compile_features(rgl PRIVATE cxx_std_23)

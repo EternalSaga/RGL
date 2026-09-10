@@ -35,6 +35,7 @@
         {"vk_type": "vk::PhysicalDeviceVulkan14Features", "path": "maintenance5", "name": "Vulkan14::maintenance5"},
         {"vk_type": "vk::PhysicalDeviceVulkan14Features", "path": "maintenance6", "name": "Vulkan14::maintenance6"},
         {"vk_type": "vk::PhysicalDeviceMeshShaderFeaturesEXT", "path": "meshShader", "name": "MeshShaderEXT::meshShader"},
+        {"vk_type": "vk::PhysicalDeviceMeshShaderFeaturesEXT", "path": "taskShader", "name": "MeshShaderEXT::taskShader"},
         {"vk_type": "vk::PhysicalDeviceShaderObjectFeaturesEXT", "path": "shaderObject", "name": "ShaderObjectEXT::shaderObject"},
         {"vk_type": "vk::PhysicalDeviceDescriptorBufferFeaturesEXT", "path": "descriptorBuffer", "name": "DescriptorBufferEXT::descriptorBuffer"},
         {"vk_type": "vk::PhysicalDeviceDescriptorHeapFeaturesEXT", "path": "descriptorHeap", "name": "DescriptorHeapEXT::descriptorHeap"},

@@ -27,12 +27,18 @@ namespace RGL {
  * ≤ kSceneMatrixCapacity）索引，**非**资产 id。
  */
 export struct RenderListState {
-	std::vector<RGL::DrawArgs> args;  // 每 objectSlot 一份（100B；实例级索引，cube/model 共用同一路径）
+	std::vector<RGL::DrawArgs> args;  // 每 objectSlot 一份（Phase 7b+ 起 4B = 仅 objectIndex；实例级索引）
 	// 对象矩阵表（Phase 5 批次 2，bindless）：objectSlot 索引（实例级，Phase 6
 	// instancing）的 spin·world，DrawArgs.objectIndex
 	// 进 shader 索引本表（世界空间光照）。帧局部存储（FrameDrawList.sceneData 持 span，
 	// 录制期拷贝进 staging，生命周期规则同 args）
 	std::vector<glm::mat4> matrices;
+	// Phase 7b+（NV DGC 规避）：per-objectSlot MVP 表（scene data 尾区上传，
+	// 填值 = args[slot].mvp 同一份，位级一致；shader readObjectMvp 消费）
+	std::vector<glm::mat4> mvps;
+	// Phase 7b+（NV DGC 规避）：per-objectSlot 材质/几何表（scene data 尾区上传，
+	// shader readObjectDraw 消费；DrawArgs 仅剩 objectIndex）
+	std::vector<ObjectDrawGpu> draws;
 	// Phase 5.5 批次 4：天空盒 draw 的 push data（shader 不声明 push constants，
 	// 推默认零值 DrawArgs 占位——pushDataEXT 与 shader 声明无关，见 DrawCall 契约）
 	RGL::DrawArgs skyboxArgs{};

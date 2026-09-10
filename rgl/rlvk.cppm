@@ -60,6 +60,9 @@ using vk::Device;
 using vk::DeviceAddress;
 using vk::DeviceAddressRangeEXT;
 using vk::DeviceCreateInfo;
+using vk::DeviceDiagnosticsConfigCreateInfoNV;  // RGL_AFTERMATH 诊断（vkdevice 条件链入）
+using vk::DeviceDiagnosticsConfigFlagBitsNV;    // RGL_AFTERMATH 诊断
+using vk::DeviceDiagnosticsConfigFlagsNV;       // RGL_AFTERMATH 诊断
 using vk::DeviceQueueCreateFlags;
 using vk::DeviceQueueCreateInfo;
 using vk::DeviceSize;

@@ -201,6 +201,20 @@ void Renderer::createSceneStaging(RGL::Resources& vkResources) {
 	std::memcpy(stage + kSceneDataLightArrayOffset, &list.sceneData.lightCount, sizeof(uint32_t));
 	std::memcpy(stage + kSceneDataLightArrayOffset + 16, list.sceneData.lightArray.data(),
 		list.sceneData.lightCount * kGpuLightStride);
+	// Phase 7b+（NV DGC 规避）：per-object MVP 表上传（尾区 @kSceneDataMvpTableOffset，
+	// scene.slang readObjectMvp 消费；值 = 原 DrawArgs.mvp，位级一致）
+	const auto mvpsBytes = list.sceneData.objectMvps.size() * sizeof(glm::mat4);
+	if (mvpsBytes > kSceneMatrixCapacity * kSceneMatrixStride)
+		return std::unexpected(Error{ErrorCode::Unknown,
+			"scene objectMvps exceeds capacity (same contract as objectMatrices)"});
+	std::memcpy(stage + kSceneDataMvpTableOffset, list.sceneData.objectMvps.data(), mvpsBytes);
+	// Phase 7b+（续）：per-object 材质/几何表上传（@kSceneDataDrawTableOffset，
+	// scene.slang readObjectDraw 消费；DrawArgs 仅剩 objectIndex）
+	const auto drawsBytes = list.sceneData.objectDraws.size() * sizeof(ObjectDrawGpu);
+	if (drawsBytes > kSceneMatrixCapacity * kSceneDrawStride)
+		return std::unexpected(Error{ErrorCode::Unknown,
+			"scene objectDraws exceeds capacity (same contract as objectMatrices)"});
+	std::memcpy(stage + kSceneDataDrawTableOffset, list.sceneData.objectDraws.data(), drawsBytes);
 	return {};
 }
 std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
@@ -453,7 +467,7 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 			// GPU culling 路（手术 3：双路提交迁 CullDriver::executeOpaqueSegment——
 			// DGC execute（NVIDIA）/ 读回重放（RADV，args = CPU 位级真相源 → BIT-IDENTICAL）
 			// 能力位自动切换，重放顺序契约见其类注释）
-			cullDriver.executeOpaqueSegment(cmd, list, registry);
+			cullDriver.executeOpaqueSegment(cmd, list, registry, frameSlot);
 		} else {
 			const auto [segBegin, segEnd] = segmentRange(pass.drawSource, list);
 			for (uint32_t i = segBegin; i < segEnd; ++i)

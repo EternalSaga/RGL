@@ -9,19 +9,9 @@ import rlstd;
 namespace RGL {
 
     export struct DrawArgs {
-        glm::mat4 mvp;
-        uint32_t totalTriangles;
-        uint32_t vertexOffset;
-        glm::vec4 baseColor;
-        glm::vec2 roughnessMetallic;
         uint32_t objectIndex;
     };
-    static_assert(sizeof(DrawArgs) == 100, "Size of C++ struct DrawArgs does not match shader reflection!");
-    static_assert(offsetof(DrawArgs, totalTriangles) == 64, "Field DrawArgs.totalTriangles offset does not match shader reflection (scalar layout drift!)");
-    static_assert(offsetof(DrawArgs, vertexOffset) == 68, "Field DrawArgs.vertexOffset offset does not match shader reflection (scalar layout drift!)");
-    static_assert(offsetof(DrawArgs, baseColor) == 72, "Field DrawArgs.baseColor offset does not match shader reflection (scalar layout drift!)");
-    static_assert(offsetof(DrawArgs, roughnessMetallic) == 88, "Field DrawArgs.roughnessMetallic offset does not match shader reflection (scalar layout drift!)");
-    static_assert(offsetof(DrawArgs, objectIndex) == 96, "Field DrawArgs.objectIndex offset does not match shader reflection (scalar layout drift!)");
+    static_assert(sizeof(DrawArgs) == 4, "Size of C++ struct DrawArgs does not match shader reflection!");
 
 
 

@@ -51,6 +51,8 @@ void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListS
 	const uint32_t objectSlotCount = rg.ctx().get<NextObjectSlot>().next;
 	state.args.resize(objectSlotCount);
 	state.matrices.resize(objectSlotCount, glm::mat4(1.0f));
+	state.mvps.resize(objectSlotCount, glm::mat4(1.0f));
+	state.draws.resize(objectSlotCount);
 
 	// Phase 7 批次 4：CPU frustum culling——视锥 6 面从 proj·view 提取（每帧一次），逐 entity
 	// node-local 剔除球经 modelMatrix 变换到世界后测（保守：跨界判可见，绝不误剔）。
@@ -76,13 +78,19 @@ void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListS
 			// 被剔对象若留陈值（初值恒等）→ GPU 用错矩阵测试（背向机位 MISMATCH 根因）
 			state.matrices[meshRef.objectSlot] = modelMatrix;
 			// args 剔除测试**前**算（Phase 7b）：被剔候选也要有值（序列 CPU 侧全量装配）；
-			// mvp = CPU 位级真相源（GPU 不自算 mvp——FMA 收缩序无跨 CPU/GPU 位级契约）
-			args.mvp = viewProj.proj * viewProj.view * modelMatrix;
-			args.totalTriangles = asset.triangleCount;
-			args.vertexOffset = asset.vertexOffset;  // 拼接 buffer 内块字节偏移（Phase 4 批次 2）
-			args.baseColor = mat.baseColor;
-			args.roughnessMetallic = {mat.roughness, mat.metallic};  // Phase 5 接线（pbr frag 消费）
-			args.objectIndex = meshRef.objectSlot;  // bindless 对象矩阵表下标（实例级，instancing）
+			// mvp = CPU 位级真相源（GPU 不自算 mvp——FMA 收缩序无跨 CPU/GPU 位级契约）。
+			// Phase 7b+（NV DGC 规避）：mvp 写 scene data per-object MVP 表（不再进 DrawArgs），
+			// shader readObjectMvp 读同一份值，位级与旧 push 路径一致
+			state.mvps[meshRef.objectSlot] = viewProj.proj * viewProj.view * modelMatrix;
+			// Phase 7b+（NV DGC 规避）：材质/几何进 per-object 表（不再进 DrawArgs），
+			// DrawArgs 仅剩 objectIndex（4B push，绕 NV DGC push 挂死）
+			auto& draw = state.draws[meshRef.objectSlot];
+			draw.totalTriangles = asset.triangleCount;
+			draw.vertexOffset = asset.vertexOffset;  // 拼接 buffer 内块字节偏移（Phase 4 批次 2）
+			draw.baseColor = mat.baseColor;
+			draw.roughness = mat.roughness;  // Phase 5 接线（pbr frag 消费）
+			draw.metallic = mat.metallic;
+			args.objectIndex = meshRef.objectSlot;  // bindless 各表下标（实例级，instancing）
 			if (candidate)
 				cullArgs.push_back(args);
 			// 剔除（groupCount 守卫后：只统计真图元）——node-local 球 × modelMatrix → 世界球测 6 面
@@ -155,6 +163,8 @@ void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListS
 	fresh.sceneData.envParams = {env.intensity, env.mipRange};
 	fresh.sceneData.skyInvViewProj = glm::inverse(viewProj.proj * viewProj.view);
 	fresh.sceneData.objectMatrices = std::span<const glm::mat4>{state.matrices};
+	fresh.sceneData.objectMvps = std::span<const glm::mat4>{state.mvps};
+	fresh.sceneData.objectDraws = std::span<const ObjectDrawGpu>{state.draws};
 	fresh.cullArgs = std::move(cullArgs);
 
 	// Phase 7b：GPU culling 每帧输入（与上方 CPU 剔除同源同值——planes = 同一 frustum

@@ -73,12 +73,33 @@ static_assert(kSceneDataLightArrayOffset == kSceneDataLightArrayBase,
  * 区布局见 lights.slang readLightCount/readGpuLight）。 */
 export inline constexpr uint32_t kSceneDataLightArrayBytes = 16u + kMaxLights * kGpuLightStride;
 
-/** scene data buffer 总字节数 = 头 128 + 对象矩阵表（kSceneMatrixCapacity × stride）+
- * 灯数组区（= 262800B，编译期派生）；ensureSceneData 的分配尺寸与 drawFrame 每帧
+/** Phase 7b+（NV DGC 规避）：per-object MVP 表区（追加于灯数组之后——既有各区基址
+ * 逐字节不动 diff0）。CPU 每帧写（值 = 原 DrawArgs.mvp，位级一致），shader
+ * scene.slang readObjectMvp 按 objectIndex 读——DrawArgs 去 mvp 字段后 push 36B，
+ * 绕 NV DGC PUSH token >83B 多序列挂死（见 docs/调试历史）。
+ * 基址 = 灯数组尾（262272 + 528 = 262800，scene.slang 字面量同值）。 */
+export inline constexpr uint32_t kSceneDataMvpTableOffset =
+	kSceneDataLightArrayOffset + kSceneDataLightArrayBytes;
+static_assert(kSceneDataMvpTableOffset % 16 == 0, "MVP table must stay 16B aligned");
+
+/** Phase 7b+（NV DGC 规避，续 MVP 表）：per-object 材质/几何表区（DrawArgs 去 mvp 后
+ * 仍剩 baseColor/roughnessMetallic/totalTriangles/vertexOffset 是 per-object 数据，一并
+ * 进 heap，DrawArgs 最终只留 objectIndex（4B push）——彻底绕开 NV DGC push 挂死）。
+ * 基址 = MVP 表尾（262800 + 4096×64 = 524944，scene.slang 字面量同值）。stride 32
+ *（ObjectDrawGpu，见 render_list.cppm）。 */
+export inline constexpr uint32_t kSceneDataDrawTableOffset =
+	kSceneDataMvpTableOffset + kSceneMatrixCapacity * kSceneMatrixStride;
+export inline constexpr uint32_t kSceneDrawStride = 32;
+static_assert(kSceneDataDrawTableOffset % 16 == 0, "draw table must stay 16B aligned");
+
+/** scene data buffer 总字节数 = 头 128 + 对象矩阵表 + 灯数组区 + MVP 表 + 材质表
+ *（= 656016B，编译期派生）；ensureSceneData 的分配尺寸与 drawFrame 每帧
  * staging 拷贝区尺寸均为本值（vkrenderer.cppm ⑥.5）。 */
 export inline constexpr vk::DeviceSize kSceneDataBytes =
 	kSceneDataHeaderBytes + vk::DeviceSize{kSceneMatrixCapacity} * kSceneMatrixStride
-	+ kSceneDataLightArrayBytes;
+	+ kSceneDataLightArrayBytes
+	+ vk::DeviceSize{kSceneMatrixCapacity} * kSceneMatrixStride
+	+ vk::DeviceSize{kSceneMatrixCapacity} * kSceneDrawStride;
 
 /**
  * GPU 资源层（main.cpp 初始化层构造顺序第 4 站：AppContext→DeviceContext→Swapchain→
