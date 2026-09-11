@@ -188,8 +188,10 @@ export class Renderer {
 	// （ctor 初始化列表同序：session 依赖 vkDevice/swapchain/resources，均在更前）。
 	RGL::FrameSession session;
 	const vk::raii::CommandPool& graphicsCommandPool;  // 图形命令池（DeviceContext 持有，金丝雀录制路径用）
-	// Phase 7 D1：light 管线条目下标（构造期从 registry 取 "light"；图含 drawLight pass 时必填）
-	std::optional<uint32_t> lightPipelineIdx;
+	// Phase 7 D1 / Phase 8 批次 ①泛化：drawLight pass 的 state 名 → 固定全屏管线条目下标
+	//（词表 = render_graph kFullscreenPassStates："light"/"tonemap"，构造期从 registry 取；
+	// 图含对应 state 的 drawLight pass 而表内无条目 = 配置错误，构造期抛）
+	std::map<std::string, uint32_t> fullscreenPipelineIdx;
 	// descriptor heap 的 GPU 地址（VmaDescriptorHeap 管理的"描述符槽位数组"，
 	// 对齐细节见 VmaBuffer.cppm）
 	vk::DeviceAddress heapAddress = 0;

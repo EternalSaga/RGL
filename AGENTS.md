@@ -60,7 +60,9 @@ CMake 无独立构建目录 — 必须从根目录构建（`cmake -B build -S .`
   实现在 `tools/stylecheck/stylecheck.py`（libclang ctypes 进程内解析，纯标准库 Python；
   **ctypes 持 GIL → ProcessPoolExecutor 一进程一文件**，默认 min(cpu,4) worker、每进程
   ~550MB）。缓存 `build/stylecheck_cache/`（键 = 源+命令 sha256 + 缓存版本）：增量秒级，
-  全量 61 文件 ~12s。警告文案直接给 LLM 行动指令。坑（详见文件头，勿回退）：C API 不展开
+  全量 61 文件 ~12s。**产物预检**：@modmap/BMI 是构建产物，clean 后首次构建（style_check 与
+  编译并行时尚未生成）未就绪文件整体跳过 libclang 规则、只跑纯文本规则（汇总"产物未就绪跳过 N"
+  = 正常非故障，编译完成重跑即全量）。警告文案直接给 LLM 行动指令。坑（详见文件头，勿回退）：C API 不展开
   @.modmap（须内联展开 + BMI 路径转绝对）、输入文件/驱动路径不能进 argv、Gentoo 须显式
   `-resource-dir`、`export module`+import+**BMI 加载失败** → parse 返回 NULL（libclang 缺陷，
   按跳过+警告处理）、LLVM 22 结构体布局（CXCursor 32B / Location/Range 24B / CXToken 24B

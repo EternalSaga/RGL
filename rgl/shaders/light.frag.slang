@@ -115,18 +115,19 @@ float4 main(LightInput input) : SV_Target0
         return float4(0.0, 0.0, 0.0, 1.0);  // 无环境 = 黑天（旧行为：清 0 G-buffer 光照亦黑）
     }
 
-    // 几何像素 ambient 项：① 简化 IBL（env.mipRange>0，与 model_pbr_ibl.frag 逐式相同）
-    // 替换旧常 ambient（mipRange=0 回落常 ambient = 旧行为）。
+    // 几何像素 ambient 项（Phase 8 批次 ④a 完整版 IBL，与 forward model_pbr_ibl 逐式同源）：
+    // 漫反射 = SH9 辐照度 irradianceSH(N)（scene.slang），镜面 = prefiltered env × BRDF
+    // split-sum（envBrdfFactor）。env.mipRange=0（无环境）回落常 ambient（旧行为 BIT 兼容）。
     float3 F0 = lerp(float3(0.04), albedo, metallic);
+    float NdotV = max(dot(N, V), 1e-4);
     float3 color;
     if (env.mipRange > 0.0)
     {
         float3 R = reflect(-V, N);
-        float3 envDiffuse = envMapL.SampleLevel(envSamplerL, N, env.mipRange).rgb;
+        float3 irradiance = irradianceSH(N);
         float3 envSpec    = envMapL.SampleLevel(envSamplerL, R, roughness * env.mipRange).rgb;
-        float3 Fenv = F0 + (1.0 - F0) * pow(1.0 - saturate(dot(N, V)), 5.0);
-        color = (envDiffuse * albedo * (1.0 - metallic)
-            + envSpec * Fenv * (1.0 - roughness)) * env.intensity;
+        color = (irradiance * albedo * (1.0 - metallic)
+            + envSpec * envBrdfFactor(NdotV, roughness, F0)) * env.intensity;
     }
     else
     {

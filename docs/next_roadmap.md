@@ -167,6 +167,11 @@ per-light 颜色、距离衰减）headless 零 VVL error；forward 只读 `light
    shadow map（Phase 10）。
      ↓
 Phase 8：Bistro 场景打磨
+  **结构债（style_check 存量 8 条，2026-09-11 定：各批次"进场顺手拆"，沿用 Phase 10 批次 0
+  先例，拆完即从清单划名）**：render_graph_impl ×4（文件 658 / compileRenderGraph 267+嵌套 6
+  / selfCheck 135 ← ① 插 tone-map pass 时拆，文件拆分 = builtin 三图描述另立 partition）；
+  loadSceneConfig 175（← ② 加 env 字段时）；loadGltfModel 209 + renderListSystem 139
+  （← ③ 纹理接缝动加载/材质路径时）；drawFrame 270（Phase 10 阴影 pass 循环定型时一并）。
   ① HDR 累加链（先行——色彩判断基准）：light/forward 输出 → RGBA16F RT + ACES tone-map pass
      → SRGB8 swapchain（当前 intensity 4.0 已在 SRGB8 写入时裁切高光，无 tone map）；
      破现有 BIT-IDENTICAL 基线，重立新基线

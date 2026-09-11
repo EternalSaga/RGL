@@ -114,3 +114,50 @@ float3 worldNormal(ObjectMatrix m, float3 n)
 {
     return normalize(m.c0.xyz * n.x + m.c1.xyz * n.y + m.c2.xyz * n.z);
 }
+
+// ── Phase 8 批次 ④a：完整版 IBL 辅助（forward model_pbr_ibl 与 deferred light.frag 共用）──
+//
+// 漫反射辐照度 = CPU 投影的 radiance SH9（scene data 尾区 @656016，9×vec3）做辐照度余弦卷积。
+// 卷积常数（Karis/Green 辐照度 A 因子：π·l0 + 2π/3·l1 + π/4·l2）在求值里施加，CPU 侧只投影
+// radiance（texture_pool::projectRadianceSH9，基函数与本处逐式一致，两端必须同步）。
+// 基函数与 CPU shBasis 严格相同（real SH，归一化常数烘焙）。
+float3 irradianceSH(float3 n)
+{
+    uint base = 656016u;  // kSceneDataIrradianceOffset（vkresources.cppm 字面量同步）
+    // 9 × vec4 排布（.xyz=系数，.w 留白；16B 对齐满足 ByteAddressBuffer.Load4 前提）
+    float3 sh0 = asfloat(sceneData.Load4(base + 0u)).xyz;
+    float3 sh1 = asfloat(sceneData.Load4(base + 16u)).xyz;
+    float3 sh2 = asfloat(sceneData.Load4(base + 32u)).xyz;
+    float3 sh3 = asfloat(sceneData.Load4(base + 48u)).xyz;
+    float3 sh4 = asfloat(sceneData.Load4(base + 64u)).xyz;
+    float3 sh5 = asfloat(sceneData.Load4(base + 80u)).xyz;
+    float3 sh6 = asfloat(sceneData.Load4(base + 96u)).xyz;
+    float3 sh7 = asfloat(sceneData.Load4(base + 112u)).xyz;
+    float3 sh8 = asfloat(sceneData.Load4(base + 128u)).xyz;
+    float3 r = 3.14159265 * sh0 * 0.282095;
+    r += 2.09439510 * sh1 * (0.48860251 * n.y);
+    r += 2.09439510 * sh2 * (0.48860251 * n.z);
+    r += 2.09439510 * sh3 * (0.48860251 * n.x);
+    r += 0.78539816 * sh4 * (1.09254843 * n.x * n.y);
+    r += 0.78539816 * sh5 * (1.09254843 * n.y * n.z);
+    r += 0.78539816 * sh6 * (0.31539157 * (3.0 * n.z * n.z - 1.0));
+    r += 0.78539816 * sh7 * (1.09254843 * n.x * n.z);
+    r += 0.78539816 * sh8 * (0.54627422 * (n.x * n.x - n.y * n.y));
+    return r;
+}
+
+// 环境镜面 split-sum 第二项 BRDF 积分近似（Karis/Epic 解析拟合，免 LUT 纹理）。
+// 返回 (F0 * A + B)：prefiltered env 采样值乘此即环境镜面反射（能量守恒、粗糙金属不塌黑）。
+float3 envBrdfFactor(float NoV, float roughness, float3 F0)
+{
+    float4 c0 = float4(-1.0, -0.0275, -0.572, 0.022);
+    float4 c1 = float4(1.0, 0.0425, 1.04, -0.04);
+    float r = roughness * c0.x + c0.y;
+    float a0 = r * c0.z + c0.w;
+    a0 = a0 * a0;
+    float A = 1.0 - a0 * c1.x;
+    float a1 = r * c1.z + c1.w;
+    a1 = a1 * a1;
+    float B = -a1;
+    return F0 * A + B;
+}

@@ -14,6 +14,8 @@ namespace RGL {
 
 // readVec3（内部 helper）+ defaultSceneConfig/loadSceneConfig 定义（2026-09-02
 // 编译提速 A 方案）：sol2 实现移出接口 TU；本单元是叶子边。
+// Phase 8 批次 ②b 拆债：loadSceneConfig（175 行）按段拆 parse* helper，主函数
+// 只剩沙箱建立 + dofile + 段调度；environment 段新增 hdr/hdr_size 可选字段。
 
 /**
  * Lua vec3 读取（可选字段回落默认值，同 camera.cppm loadCameraConfig 惯例）：
@@ -35,6 +37,27 @@ inline glm::vec3 readVec3(sol::table root, const char* key, glm::vec3 fallback) 
 	return fallback;
 }
 
+/** 顶层表取字符串字段（缺失/非表 = no-op 回落现值）。 */
+void readStr(sol::table table, const char* key, std::string& into) {
+	sol::optional<std::string> v = table[key];
+	if (v)
+		into = *v;
+}
+
+/** 顶层表取 float 字段（缺失 = no-op 回落现值）。 */
+void readFloat(sol::table table, const char* key, float& into) {
+	sol::optional<float> v = table[key];
+	if (v)
+		into = *v;
+}
+
+/** 顶层表取 bool 字段（缺失 = no-op 回落现值）。 */
+void readBool(sol::table table, const char* key, bool& into) {
+	sol::optional<bool> v = table[key];
+	if (v)
+		into = *v;
+}
+
 /** defaultSceneConfig 定义（接口注释见 scene_config.cppm）：六条内建 pipeline + styles {unlit,pbr} + spin。 */
 SceneConfig defaultSceneConfig() {
 	SceneConfig cfg;
@@ -51,7 +74,166 @@ SceneConfig defaultSceneConfig() {
 	return cfg;
 }
 
-/** loadSceneConfig 定义（接口注释见 scene_config.cppm）。要点：entities 段非空 = 权威场景构成（type 仅 model|cube，model 缺 file / scale≤0 均报错）；缺段回落 model/cube 字段合成（逐位兼容旧配置）；lights 缺段回落合成 [light] 单灯；environment 缺段 = 不启用。 */
+namespace {
+
+/**
+ * entities 段解析（Phase 6 批次 5：场景构成数据驱动列表，非空 = 权威；缺段 =
+ * 回落旧 model/cube 字段合成，既有配置零改动等价）。type "model"|"cube"，
+ * transform 全可选（position/rotation 欧拉角度/scale 均匀）。
+ * @param root 配置根表
+ * @param cfg 目标配置（读 modelPath/showCube 做缺段合成，写 entities）
+ * @return 结构违例（未知 type / model 缺 file / scale≤0）= Error
+ */
+std::expected<void, Error> parseEntities(sol::table root, SceneConfig& cfg) {
+	sol::table entities = root["entities"];
+	if (entities.valid() && entities.is<sol::table>()) {
+		cfg.entities.clear();
+		for (int i = 1; i <= static_cast<int>(entities.size()); ++i) {
+			sol::table item = entities[i];
+			SceneEntityDesc ent;
+			readStr(item, "type", ent.type);
+			if (ent.type != "model" && ent.type != "cube")
+				return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
+					fmt::format("scene config: entities[{}] unknown type '{}' (want model|cube)",
+						i, ent.type)});
+			readStr(item, "file", ent.file);
+			if (ent.type == "model" && ent.file.empty())
+				return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
+					fmt::format("scene config: entities[{}] type 'model' missing 'file'", i)});
+			ent.position = readVec3(item, "position", ent.position);
+			ent.rotation = readVec3(item, "rotation", ent.rotation);
+			float scale = ent.scale;
+			readFloat(item, "scale", scale);
+			ent.scale = scale;
+			if (ent.scale <= 0.0f)
+				return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
+					fmt::format("scene config: entities[{}] scale must be > 0", i)});
+			cfg.entities.push_back(std::move(ent));
+		}
+	}
+	// 缺段兼容合成（entities 空 = 旧 model/cube 字段语义，行为逐位不变）
+	if (cfg.entities.empty()) {
+		if (!cfg.modelPath.empty())
+			cfg.entities.push_back(SceneEntityDesc{.type = "model", .file = cfg.modelPath});
+		if (cfg.showCube)
+			cfg.entities.push_back(SceneEntityDesc{.type = "cube"});
+	}
+	return {};
+}
+
+/**
+ * pipelines 段解析（条目名 → SPV 路径规格表，非空覆盖默认六条）。
+ * @param root 配置根表
+ * @param cfg 目标配置（写 pipelines）
+ * @return 缺 name = Error
+ */
+std::expected<void, Error> parsePipelines(sol::table root, SceneConfig& cfg) {
+	sol::table pipelines = root["pipelines"];
+	if (!(pipelines.valid() && pipelines.is<sol::table>()))
+		return {};
+	cfg.pipelines.clear();
+	for (int i = 1; i <= static_cast<int>(pipelines.size()); ++i) {
+		sol::table item = pipelines[i];
+		PipelineSpec spec;
+		readStr(item, "name", spec.name);
+		readStr(item, "mesh", spec.meshSpv);
+		readStr(item, "frag", spec.fragSpv);
+		if (spec.name.empty())
+			return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
+				fmt::format("scene config: pipeline[{}] missing 'name'", i)});
+		cfg.pipelines.push_back(std::move(spec));
+	}
+	return {};
+}
+
+/**
+ * light 单灯段 + lights 多灯列表段解析（Phase 5 批次 2 / Phase 7 D3）。
+ * lights 缺段回落合成 [light] 单灯（lights[0] = 主光）；per-light 不解析 ambient
+ *（场景共享项，仅 lights[0] 进 scene data @36）。type=0 定向 / 1 点光。
+ * @param root 配置根表
+ * @param cfg 目标配置（写 light/lights）
+ */
+void parseLights(sol::table root, SceneConfig& cfg) {
+	sol::table light = root["light"];
+	if (light.valid() && light.is<sol::table>()) {
+		cfg.light.direction = readVec3(light, "direction", cfg.light.direction);
+		cfg.light.color = readVec3(light, "color", cfg.light.color);
+		readFloat(light, "intensity", cfg.light.intensity);
+		cfg.light.ambient = readVec3(light, "ambient", cfg.light.ambient);
+	}
+	sol::table lights = root["lights"];
+	if (lights.valid() && lights.is<sol::table>()) {
+		for (uint32_t i = 1;; ++i) {
+			sol::table lt = lights[i];
+			if (!lt.valid() || !lt.is<sol::table>())
+				break;
+			Light L;
+			L.direction = readVec3(lt, "direction", L.direction);
+			L.position = readVec3(lt, "position", L.position);
+			L.color = readVec3(lt, "color", L.color);
+			readFloat(lt, "intensity", L.intensity);
+			readFloat(lt, "range", L.range);
+			float type = static_cast<float>(L.type);
+			readFloat(lt, "type", type);
+			L.type = static_cast<uint32_t>(type);
+			cfg.lights.push_back(L);
+		}
+	}
+	if (cfg.lights.empty())
+		cfg.lights.push_back(cfg.light);  // 回落：旧单灯 light 段合成主光（lights[0]）
+}
+
+/**
+ * environment 段解析（Phase 5.5；缺段 = 不启用）。faces 按 Vulkan 层序 0-5 排列。
+ * Phase 8 ②b 新增 hdr（.hdr 环境路径，非空优先于 faces）+ hdr_size（重投影面边长，
+ * 必须 2 的幂，默认 2048）。
+ * @param root 配置根表
+ * @param cfg 目标配置（写 environment）
+ * @return hdr_size 非 2 的幂 = Error
+ */
+std::expected<void, Error> parseEnvironment(sol::table root, SceneConfig& cfg) {
+	sol::table envTable = root["environment"];
+	if (!(envTable.valid() && envTable.is<sol::table>()))
+		return {};
+	cfg.environment.enabled = true;
+	readStr(envTable, "dir", cfg.environment.dir);
+	sol::table faces = envTable["faces"];
+	if (faces.valid() && faces.is<sol::table>()) {
+		for (int i = 1; i <= 6; ++i) {
+			sol::optional<std::string> face = faces[i];
+			if (face)
+				cfg.environment.faces[i - 1] = *face;
+		}
+	}
+	readFloat(envTable, "intensity", cfg.environment.intensity);
+	readBool(envTable, "skybox", cfg.environment.skybox);
+	readStr(envTable, "hdr", cfg.environment.hdr);
+	if (!envTable["hdr_size"].valid())
+		return {};
+	sol::optional<float> hdrSize = envTable["hdr_size"];
+	if (!hdrSize)
+		return {};
+	cfg.environment.hdrSize = static_cast<uint32_t>(*hdrSize);
+	const uint32_t s = cfg.environment.hdrSize;
+	if (s == 0 || (s & (s - 1)) != 0)
+		return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
+			fmt::format("scene config: environment.hdr_size {} 须为 2 的幂", s)});
+	return {};
+}
+
+/** styles 表解析（风格名→管线规格名，Phase 4 批次 3；非空覆盖默认 {unlit,pbr}）。 */
+void parseStyles(sol::table root, SceneConfig& cfg) {
+	sol::table styles = root["styles"];
+	if (!(styles.valid() && styles.is<sol::table>()))
+		return;
+	cfg.styleMap.clear();
+	for (auto [key, value] : styles)
+		cfg.styleMap[key.as<std::string>()] = value.as<std::string>();
+}
+
+}  // namespace
+
+/** loadSceneConfig 定义（接口注释见 scene_config.cppm）：沙箱 dofile + 段调度（entities/pipelines/lights/environment/styles 各 parse* helper，Phase ②b 拆债）；缺文件回落默认。 */
 [[nodiscard]] std::expected<SceneConfig, Error> loadSceneConfig(std::string_view path) {
 	auto* logger = RLLogger::getInstance();
 
@@ -83,158 +265,20 @@ SceneConfig defaultSceneConfig() {
 	try {
 		// 同 camera.cppm：此版本 sol2 的 stack_proxy→sol::table 隐式转换有坑，用 .as<>
 		sol::table root = result[0].as<sol::table>();
-
 		SceneConfig cfg = defaultSceneConfig();
 
-		sol::optional<std::string> model = root["model"];
-		if (model)
-			cfg.modelPath = *model;
+		readStr(root, "model", cfg.modelPath);
+		readBool(root, "spin", cfg.spin);
+		readBool(root, "cube", cfg.showCube);
 
-		sol::optional<bool> spin = root["spin"];
-		if (spin)
-			cfg.spin = *spin;
-
-		sol::optional<bool> showCube = root["cube"];
-		if (showCube)
-			cfg.showCube = *showCube;
-
-		// Phase 6 批次 5：entities 段（场景构成数据驱动列表，非空 = 权威；缺段 =
-		// 回落旧 model/cube 字段合成，既有配置零改动等价）。type "model"|"cube"，
-		// transform 全可选（position/rotation 欧拉角度/scale 均匀）
-		sol::table entities = root["entities"];
-		if (entities.valid() && entities.is<sol::table>()) {
-			cfg.entities.clear();
-			for (int i = 1; i <= static_cast<int>(entities.size()); ++i) {
-				sol::table item = entities[i];
-				SceneEntityDesc ent;
-				sol::optional<std::string> type = item["type"];
-				if (type)
-					ent.type = *type;
-				if (ent.type != "model" && ent.type != "cube")
-					return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
-						fmt::format("scene config: entities[{}] unknown type '{}' (want model|cube)",
-							i, ent.type)});
-				sol::optional<std::string> file = item["file"];
-				if (file)
-					ent.file = *file;
-				if (ent.type == "model" && ent.file.empty())
-					return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
-						fmt::format("scene config: entities[{}] type 'model' missing 'file'", i)});
-				ent.position = readVec3(item, "position", ent.position);
-				ent.rotation = readVec3(item, "rotation", ent.rotation);
-				sol::optional<float> scale = item["scale"];
-				if (scale)
-					ent.scale = *scale;
-				if (ent.scale <= 0.0f)
-					return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
-						fmt::format("scene config: entities[{}] scale must be > 0", i)});
-				cfg.entities.push_back(std::move(ent));
-			}
-		}
-		// 缺段兼容合成（entities 空 = 旧 model/cube 字段语义，行为逐位不变）
-		if (cfg.entities.empty()) {
-			if (!cfg.modelPath.empty())
-				cfg.entities.push_back(SceneEntityDesc{.type = "model", .file = cfg.modelPath});
-			if (cfg.showCube)
-				cfg.entities.push_back(SceneEntityDesc{.type = "cube"});
-		}
-
-		sol::table pipelines = root["pipelines"];
-		if (pipelines.valid() && pipelines.is<sol::table>()) {
-			cfg.pipelines.clear();
-			for (int i = 1; i <= static_cast<int>(pipelines.size()); ++i) {
-				sol::table item = pipelines[i];
-				PipelineSpec spec;
-				sol::optional<std::string> name = item["name"];
-				if (name)
-					spec.name = *name;
-				sol::optional<std::string> mesh = item["mesh"];
-				if (mesh)
-					spec.meshSpv = *mesh;
-				sol::optional<std::string> frag = item["frag"];
-				if (frag)
-					spec.fragSpv = *frag;
-				if (spec.name.empty()) {
-					return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
-						fmt::format("scene config: pipeline[{}] missing 'name'", i)});
-				}
-				cfg.pipelines.push_back(std::move(spec));
-			}
-		}
-
-		// Phase 5 批次 2：light 段（定向光，全字段可选回落 Light 默认值）
-		sol::table light = root["light"];
-		if (light.valid() && light.is<sol::table>()) {
-			cfg.light.direction = readVec3(light, "direction", cfg.light.direction);
-			cfg.light.color = readVec3(light, "color", cfg.light.color);
-			sol::optional<float> intensity = light["intensity"];
-			if (intensity)
-				cfg.light.intensity = *intensity;
-			cfg.light.ambient = readVec3(light, "ambient", cfg.light.ambient);
-		}
-
-		// Phase 7 D3：lights 列表（多灯，延迟 light pass 遍历；缺段回落 [light] 单灯）。
-		// 逐字段可选回落 Light 默认。type=0 定向（direction）/ 1 点光（position+range）。
-		// ambient 是场景共享项（仅 lights[0] 进 scene data @36），故 per-light 不解析 ambient。
-		sol::table lights = root["lights"];
-		if (lights.valid() && lights.is<sol::table>()) {
-			for (uint32_t i = 1;; ++i) {
-				sol::table lt = lights[i];
-				if (!lt.valid() || !lt.is<sol::table>())
-					break;
-				Light L;
-				L.direction = readVec3(lt, "direction", L.direction);
-				L.position = readVec3(lt, "position", L.position);
-				L.color = readVec3(lt, "color", L.color);
-				sol::optional<float> intensity = lt["intensity"];
-				if (intensity)
-					L.intensity = *intensity;
-				sol::optional<float> range = lt["range"];
-				if (range)
-					L.range = *range;
-				sol::optional<int> type = lt["type"];
-				if (type)
-					L.type = static_cast<uint32_t>(*type);
-				cfg.lights.push_back(L);
-			}
-		}
-		if (cfg.lights.empty())
-			cfg.lights.push_back(cfg.light);  // 回落：旧单灯 light 段合成主光（lights[0]）
-
-		// Phase 5.5：environment 段（环境 cubemap，缺段 = 不启用；faces 按 Vulkan 层序
-		// 0-5 排列，见 EnvironmentConfig 注释）
-		sol::table envTable = root["environment"];
-		if (envTable.valid() && envTable.is<sol::table>()) {
-			cfg.environment.enabled = true;
-			sol::optional<std::string> dir = envTable["dir"];
-			if (dir)
-				cfg.environment.dir = *dir;
-			sol::table faces = envTable["faces"];
-			if (faces.valid() && faces.is<sol::table>()) {
-				for (int i = 1; i <= 6; ++i) {
-					sol::optional<std::string> face = faces[i];
-					if (face)
-						cfg.environment.faces[i - 1] = *face;
-				}
-			}
-			sol::optional<float> intensity = envTable["intensity"];
-			if (intensity)
-				cfg.environment.intensity = *intensity;
-			sol::optional<bool> skybox = envTable["skybox"];
-			if (skybox)
-				cfg.environment.skybox = *skybox;
-		}
-
-		// Phase 4 批次 3：styles 表（风格名→管线规格名，可选回落默认 {unlit,pbr}）
-		sol::table styles = root["styles"];
-		if (styles.valid() && styles.is<sol::table>()) {
-			cfg.styleMap.clear();
-			for (auto [key, value] : styles) {
-				auto styleName = key.as<std::string>();
-				auto pipelineName = value.as<std::string>();
-				cfg.styleMap[styleName] = pipelineName;
-			}
-		}
+		if (auto r = parseEntities(root, cfg); !r)
+			return std::unexpected(r.error());
+		if (auto r = parsePipelines(root, cfg); !r)
+			return std::unexpected(r.error());
+		parseLights(root, cfg);
+		if (auto r = parseEnvironment(root, cfg); !r)
+			return std::unexpected(r.error());
+		parseStyles(root, cfg);
 
 		return cfg;
 	} catch (const std::exception& e) {

@@ -128,6 +128,107 @@ std::expected<std::vector<RgPassAttachment>, Error> readRoleList(sol::table list
 	return out;
 }
 
+/**
+ * 解析顶层 attachments 数组（name 必填；kind 走 parseEnum 词表；format 经
+ * isKnownRgFormat 词表前置校验——结构规则如 swapchain/depth 必须 inherit 仍归
+ * compileRenderGraph）。
+ * @param root 配置根表（attachments 缺失/非表 = 空列表，透传给 compile 判定）
+ * @param path 配置路径（错误信息用）
+ * @return 附件描述列表；缺 name/词表串非法返回 Error
+ */
+std::expected<std::vector<RgAttachmentDesc>, Error> readAttachments(sol::table root,
+	std::string_view path) {
+	std::vector<RgAttachmentDesc> out;
+	sol::table attachments = root["attachments"];
+	if (!attachments.valid() || !attachments.is<sol::table>())
+		return out;
+	for (int i = 1; i <= static_cast<int>(attachments.size()); ++i) {
+		sol::table item = attachments[i];
+		RgAttachmentDesc att;
+		sol::optional<std::string> name = item["name"];
+		if (!name)
+			return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
+				fmt::format("render graph config ({}): attachment[{}] missing 'name'", path, i)});
+		att.name = *name;
+		sol::optional<std::string> kind = item["kind"];
+		if (kind) {
+			auto kindResult = parseEnum(*kind,
+				std::initializer_list<std::pair<std::string_view, RgAttachmentKind>>{
+					{"swapchain", RgAttachmentKind::swapchain},
+					{"depth", RgAttachmentKind::depth},
+					{"offscreen", RgAttachmentKind::offscreen}},
+				"attachment kind", path);
+			if (!kindResult)
+				return std::unexpected(std::move(kindResult).error());
+			att.kind = *kindResult;
+		}
+		sol::optional<std::string> format = item["format"];
+		if (format) {
+			// 词表前置校验（错误带配置路径；结构规则如 swapchain/depth
+			// 必须 inherit 仍归 compileRenderGraph）
+			if (!isKnownRgFormat(*format))
+				return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
+					fmt::format("render graph config ({}): attachment '{}' has unknown "
+						"format '{}'",
+						path, att.name, *format)});
+			att.format = *format;
+		}
+		out.push_back(std::move(att));
+	}
+	return out;
+}
+
+/**
+ * 解析顶层 passes 数组（name 必填；kind 词表 draw/blit/drawLight；state/draws 直取
+ * 字符串；outputs/inputs 经 readRoleList）。
+ * @param root 配置根表（passes 缺失/非表 = 空列表，透传给 compile 报"no passes"）
+ * @param path 配置路径（错误信息用）
+ * @return pass 描述列表；缺 name/词表串非法返回 Error
+ */
+std::expected<std::vector<RgPassDesc>, Error> readPasses(sol::table root,
+	std::string_view path) {
+	std::vector<RgPassDesc> out;
+	sol::table passes = root["passes"];
+	if (!passes.valid() || !passes.is<sol::table>())
+		return out;
+	for (int i = 1; i <= static_cast<int>(passes.size()); ++i) {
+		sol::table item = passes[i];
+		RgPassDesc pass;
+		sol::optional<std::string> name = item["name"];
+		if (!name)
+			return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
+				fmt::format("render graph config ({}): pass[{}] missing 'name'", path, i)});
+		pass.name = *name;
+		sol::optional<std::string> kind = item["kind"];
+		if (kind) {
+			auto kindResult = parseEnum(*kind,
+				std::initializer_list<std::pair<std::string_view, RgPassKind>>{
+					{"draw", RgPassKind::drawMesh}, {"blit", RgPassKind::blit},
+					{"drawLight", RgPassKind::drawLight}},
+				"pass kind", path);
+			if (!kindResult)
+				return std::unexpected(std::move(kindResult).error());
+			pass.kind = *kindResult;
+		}
+		sol::optional<std::string> state = item["state"];
+		if (state)
+			pass.state = *state;
+		sol::optional<std::string> draws = item["draws"];
+		if (draws)
+			pass.drawSource = *draws;
+		auto outputs = readRoleList(item["outputs"], path, pass.name, "outputs");
+		if (!outputs)
+			return std::unexpected(std::move(outputs).error());
+		pass.outputs = std::move(*outputs);
+		auto inputs = readRoleList(item["inputs"], path, pass.name, "inputs");
+		if (!inputs)
+			return std::unexpected(std::move(inputs).error());
+		pass.inputs = std::move(*inputs);
+		out.push_back(std::move(pass));
+	}
+	return out;
+}
+
 }  // namespace
 
 /**
@@ -182,83 +283,16 @@ std::expected<RenderGraphConfig, Error> loadRenderGraphConfig(std::string_view p
 						"(want forward/deferred/offscreen)", path, *variant)});
 		}
 
+		// attachments/passes 逐条解析见 readAttachments/readPasses（上方匿名 namespace）
 		RgGraphDesc desc;
-
-		sol::table attachments = root["attachments"];
-		if (attachments.valid() && attachments.is<sol::table>()) {
-			for (int i = 1; i <= static_cast<int>(attachments.size()); ++i) {
-				sol::table item = attachments[i];
-				RgAttachmentDesc att;
-				sol::optional<std::string> name = item["name"];
-				if (!name)
-					return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
-						fmt::format("render graph config ({}): attachment[{}] missing 'name'", path, i)});
-				att.name = *name;
-				sol::optional<std::string> kind = item["kind"];
-				if (kind) {
-					auto kindResult = parseEnum(*kind,
-						std::initializer_list<std::pair<std::string_view, RgAttachmentKind>>{
-							{"swapchain", RgAttachmentKind::swapchain},
-							{"depth", RgAttachmentKind::depth},
-							{"offscreen", RgAttachmentKind::offscreen}},
-						"attachment kind", path);
-					if (!kindResult)
-						return std::unexpected(std::move(kindResult).error());
-					att.kind = *kindResult;
-				}
-				sol::optional<std::string> format = item["format"];
-				if (format) {
-					// 词表前置校验（错误带配置路径；结构规则如 swapchain/depth
-					// 必须 inherit 仍归 compileRenderGraph）
-					if (!isKnownRgFormat(*format))
-						return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
-							fmt::format("render graph config ({}): attachment '{}' has unknown "
-								"format '{}'",
-								path, att.name, *format)});
-					att.format = *format;
-				}
-				desc.attachments.push_back(std::move(att));
-			}
-		}
-
-		sol::table passes = root["passes"];
-		if (passes.valid() && passes.is<sol::table>()) {
-			for (int i = 1; i <= static_cast<int>(passes.size()); ++i) {
-				sol::table item = passes[i];
-				RgPassDesc pass;
-				sol::optional<std::string> name = item["name"];
-				if (!name)
-					return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
-						fmt::format("render graph config ({}): pass[{}] missing 'name'", path, i)});
-				pass.name = *name;
-				sol::optional<std::string> kind = item["kind"];
-				if (kind) {
-					auto kindResult = parseEnum(*kind,
-						std::initializer_list<std::pair<std::string_view, RgPassKind>>{
-							{"draw", RgPassKind::drawMesh}, {"blit", RgPassKind::blit},
-							{"drawLight", RgPassKind::drawLight}},
-						"pass kind", path);
-					if (!kindResult)
-						return std::unexpected(std::move(kindResult).error());
-					pass.kind = *kindResult;
-				}
-				sol::optional<std::string> state = item["state"];
-				if (state)
-					pass.state = *state;
-				sol::optional<std::string> draws = item["draws"];
-				if (draws)
-					pass.drawSource = *draws;
-				auto outputs = readRoleList(item["outputs"], path, pass.name, "outputs");
-				if (!outputs)
-					return std::unexpected(std::move(outputs).error());
-				pass.outputs = std::move(*outputs);
-				auto inputs = readRoleList(item["inputs"], path, pass.name, "inputs");
-				if (!inputs)
-					return std::unexpected(std::move(inputs).error());
-				pass.inputs = std::move(*inputs);
-				desc.passes.push_back(std::move(pass));
-			}
-		}
+		if (auto atts = readAttachments(root, path))
+			desc.attachments = std::move(*atts);
+		else
+			return std::unexpected(std::move(atts).error());
+		if (auto ps = readPasses(root, path))
+			desc.passes = std::move(*ps);
+		else
+			return std::unexpected(std::move(ps).error());
 
 		// 空表透传（"只写 attachments 不写 passes"类半截配置 = 意图不明，
 		// 交给 compileRenderGraph 报"no passes"比静默回落默认图更可诊断）

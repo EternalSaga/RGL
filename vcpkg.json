@@ -29,10 +29,10 @@
       "name": "glm",
       "version>=": "1.0.1#3"
     },
-    {
-      "name": "stb",
-      "version>=": "2024-07-29#1"
-    },
+    "freeimage",
+    "libpng",
+    "libjpeg-turbo",
+    "zlib",
     {
       "name": "spdlog",
       "version>=": "1.15.0#1"

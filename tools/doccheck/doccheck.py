@@ -97,8 +97,37 @@ class Env:
             "-fmodule-output=" + os.path.join(self.scratch_dir, rel.replace("/", "_") + ".pcm"),
             "-fsyntax-only",
             "-Xclang", "-ast-dump",
+            # BMI 缺失时快速报错而非隐式从源码重建整条模块链（2026-09-11 教训：
+            # 主构建失败/产物未就绪时 dump 退化为全链编译，单文件卡死 20+ 分钟）
+            "-fno-implicit-modules",
         ]
         return clean
+
+    def _missing_bmis(self, cmd, directory):
+        """扫描命令（含 @响应文件）的 -fmodule-file=NAME=PATH 引用，返回不存在的 PATH。
+
+        @param cmd _dump_cmd 产出的 token 列表（@modmap 保持未展开形态）
+        @param directory compile_commands 条目的工作目录（相对路径基准）
+        @return 缺失的 BMI 路径列表（空 = 全部就绪）
+        """
+        paths = []
+
+        def scan(tok):
+            if tok.startswith("-fmodule-file="):
+                spec = tok[len("-fmodule-file="):]
+                p = spec.split("=", 1)[1] if "=" in spec else spec
+                paths.append(p.strip('"'))
+
+        for a in cmd:
+            if a.startswith("@"):
+                rsp = a[1:] if os.path.isabs(a[1:]) else os.path.join(directory, a[1:])
+                with open(rsp, encoding="utf-8") as f:
+                    for tok in f.read().split():
+                        scan(tok)
+            else:
+                scan(a)
+        return [p for p in paths
+                if not os.path.exists(p if os.path.isabs(p) else os.path.join(directory, p))]
 
     def read(self, rel):
         with open(os.path.join(self.root, rel), encoding="utf-8") as f:
@@ -117,8 +146,16 @@ class Env:
         cache = os.path.join(self.cache_dir, key + ".txt")
         if os.path.exists(cache):
             return open(cache, encoding="utf-8").read()
-        proc = subprocess.run(cmd, cwd=entry["directory"],
-                              capture_output=True, text=True)
+        missing = self._missing_bmis(cmd, entry["directory"])
+        if missing:
+            raise RuntimeError(
+                f"产物未就绪跳过（缺 {len(missing)} 个 BMI，如 {os.path.basename(missing[0])}）"
+                "——clean 后首次构建属正常，编译完成重跑即全量生效")
+        try:
+            proc = subprocess.run(cmd, cwd=entry["directory"],
+                                  capture_output=True, text=True, timeout=300)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("clang AST dump 超时（300s）——检查是否触发隐式模块重建")
         if proc.returncode != 0:
             raise RuntimeError(f"clang AST dump 失败 rc={proc.returncode}: {rel}\n{proc.stderr[:300]}")
         with open(cache, "w", encoding="utf-8") as f:

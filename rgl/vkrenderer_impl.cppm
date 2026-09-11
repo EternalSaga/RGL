@@ -74,10 +74,14 @@ void validateRenderGraphForExecutor(const RGL::CompiledRenderGraph& graph) {
 				fail(fmt::format("blit pass '{}' missing source/target resolution", pass.name));
 			continue;
 		}
-		// Phase 7 D1：drawLight = 固定全屏 draw（无 drawSource/段），state 必 "light"
+		// Phase 7 D1 / Phase 8 ①泛化：drawLight = 固定全屏 draw（无 drawSource/段），
+		// state 必在 kFullscreenPassStates 词表（"light"/"tonemap"）
 		if (pass.kind == RgPassKind::drawLight) {
-			if (pass.state != "light")
-				fail(fmt::format("render graph light pass '{}' has state '{}' (expected 'light')",
+			if (!std::ranges::any_of(kFullscreenPassStates,
+					[&](std::string_view s) { return pass.state == s; }))
+				fail(fmt::format(
+					"render graph fullscreen pass '{}' has state '{}' (expected one of the "
+					"kFullscreenPassStates vocabulary)",
 					pass.name, pass.state));
 			continue;
 		}
@@ -137,14 +141,17 @@ Renderer::Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RG
 		// descriptor heap 的 GPU 端地址，每帧传给 vkCmdBindResourceHeapEXT
 		heapAddress = vkResources.getDescriptorHeap().getGpuAddress();
 		// 四段状态值构造已迁 StateKit（Phase 10 批次 0 手术 1，语义注释随迁 state_kit.cppm）
-		// 取 light 管线下标；图含 drawLight pass 却无 "light" 条目 = 配置错误
-		if (auto idx = shaderRegistry.pipelineIndex("light"))
-			lightPipelineIdx = *idx;
+		// Phase 8 ①泛化：逐词表名（"light"/"tonemap"）从 registry 取固定全屏管线下标；
+		// 图含对应 state 的 drawLight pass 而条目缺失 = 配置错误（main 须先建条目）
+		for (const auto name : kFullscreenPassStates)
+			if (auto idx = shaderRegistry.pipelineIndex(name))
+				fullscreenPipelineIdx.emplace(std::string{name}, *idx);
 		for (const auto& p : this->renderGraph.passes)
-			if (p.kind == RgPassKind::drawLight && !lightPipelineIdx)
-				throw std::runtime_error(
-					"Renderer: render graph has drawLight pass but no 'light' pipeline entry "
-					"(main must addLightEntry before Renderer)");
+			if (p.kind == RgPassKind::drawLight && !fullscreenPipelineIdx.contains(p.state))
+				throw std::runtime_error(fmt::format(
+					"Renderer: render graph has drawLight pass (state '{}') but no matching "
+					"pipeline entry (main must add{}Entry before Renderer)",
+					p.state, p.state == "light" ? "Light" : "Tonemap"));
 		createSceneStaging(vkResources);  // 同步对象/命令缓冲已随手术 4 迁 FrameSession ctor
 	}
 // （captureBpp / Renderer::ensureCaptureStaging 已随手术 2 迁 frame_capture_impl.cppm）
@@ -215,6 +222,10 @@ void Renderer::createSceneStaging(RGL::Resources& vkResources) {
 		return std::unexpected(Error{ErrorCode::Unknown,
 			"scene objectDraws exceeds capacity (same contract as objectMatrices)"});
 	std::memcpy(stage + kSceneDataDrawTableOffset, list.sceneData.objectDraws.data(), drawsBytes);
+	// Phase 8 批次 ④a：漫反射辐照度 SH9 上传（scene data 尾区 kSceneDataIrradianceOffset，
+	// scene.slang irradiance(N) 消费；静态数据，随每帧 mirror 拷入）
+	std::memcpy(stage + kSceneDataIrradianceOffset, list.sceneData.irradianceSH.data(),
+		kSceneDataIrradianceBytes);
 	return {};
 }
 std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
@@ -459,9 +470,11 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 			stateKit.stateFor(pass.state), stateKit.depthClipDynamicEnabled(),
 			static_cast<uint32_t>(pass.colors.size()));
 		if (pass.kind == RgPassKind::drawLight) {
-			// Phase 7 D1：固定全屏单 group light draw（无 push constant；采样描述符 baked 在 light
-			// shader object 的 extra mapping，4 RT 的 CAO→SRO 布局转换已由 pass.barriers 完成）
-			registry.entry(*lightPipelineIdx).pipeline.bindShaders(cmd);
+			// Phase 7 D1 / Phase 8 ①：固定全屏单 group draw（无 push constant；采样描述符
+			// baked 在 shader object 的 extra mapping，输入 RT 的 CAO→SRO 布局转换已由
+			// pass.barriers 完成）；条目按 pass.state 名解析（"light"/"tonemap"，
+			// 构造期校验过必命中）
+			registry.entry(fullscreenPipelineIdx.at(pass.state)).pipeline.bindShaders(cmd);
 			cmd.drawMeshTasksEXT(1, 1, 1);
 		} else if (pass.drawSource == "opaque" && cullDriver.active()) {
 			// GPU culling 路（手术 3：双路提交迁 CullDriver::executeOpaqueSegment——

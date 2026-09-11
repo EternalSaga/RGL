@@ -247,26 +247,34 @@ compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.mesh.slang MODEL_MESH_SP
  compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/model_phong.frag.slang MODEL_PHONG_FRAG_SPV
      ${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.slang ${CMAKE_CURRENT_SOURCE_DIR}/shaders/material.slang
      ${CMAKE_CURRENT_SOURCE_DIR}/shaders/scene.slang)
- # Phase 5.5：IBL 路线（model_pbr + 环境 cubemap 采样替换常 ambient；env.slang 契约）
- compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/model_pbr_ibl.frag.slang MODEL_PBR_IBL_FRAG_SPV
-     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.slang ${CMAKE_CURRENT_SOURCE_DIR}/shaders/material.slang
-     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/scene.slang ${CMAKE_CURRENT_SOURCE_DIR}/shaders/env.slang)
+  # Phase 5.5：IBL 路线（model_pbr + 环境 cubemap 采样替换常 ambient；env.slang 契约）
+  # Phase 8 ③a：normal 贴图导数 TBN（normalmap.slang 契约，binding 6/7 消费）
+  compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/model_pbr_ibl.frag.slang MODEL_PBR_IBL_FRAG_SPV
+      ${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.slang ${CMAKE_CURRENT_SOURCE_DIR}/shaders/material.slang
+      ${CMAKE_CURRENT_SOURCE_DIR}/shaders/scene.slang ${CMAKE_CURRENT_SOURCE_DIR}/shaders/env.slang
+      ${CMAKE_CURRENT_SOURCE_DIR}/shaders/normalmap.slang)
  # Phase 5.5 批次 4：天空盒（全屏大三角 mesh + clip→world 射线采 env cubemap frag）
  compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/skybox.mesh.slang SKYBOX_MESH_SPV
      ${CMAKE_CURRENT_SOURCE_DIR}/shaders/sky.slang ${CMAKE_CURRENT_SOURCE_DIR}/shaders/scene.slang)
  compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/skybox.frag.slang SKYBOX_FRAG_SPV
      ${CMAKE_CURRENT_SOURCE_DIR}/shaders/sky.slang ${CMAKE_CURRENT_SOURCE_DIR}/shaders/scene.slang
      ${CMAKE_CURRENT_SOURCE_DIR}/shaders/env.slang)
- # Phase 7 D1：deferred G-buffer 几何 frag（mesh 复用 model.mesh.spv，写 4 MRT，import scene 对象矩阵）
- compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/deferred_geometry.frag.slang DEFERRED_GEOM_FRAG_SPV
-     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.slang ${CMAKE_CURRENT_SOURCE_DIR}/shaders/material.slang
-     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/scene.slang)
+  # Phase 7 D1：deferred G-buffer 几何 frag（mesh 复用 model.mesh.spv，写 4 MRT，import scene 对象矩阵）
+  # Phase 8 ③a：normal 贴图导数 TBN + ORM（normalmap.slang 契约，与 forward 严格同源）
+  compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/deferred_geometry.frag.slang DEFERRED_GEOM_FRAG_SPV
+      ${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.slang ${CMAKE_CURRENT_SOURCE_DIR}/shaders/material.slang
+      ${CMAKE_CURRENT_SOURCE_DIR}/shaders/scene.slang ${CMAKE_CURRENT_SOURCE_DIR}/shaders/normalmap.slang)
   # Phase 7 D1：light pass（全屏大三角 mesh + 采样 G-buffer 的 deferred 光照 frag）
   compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/light.mesh.slang LIGHT_MESH_SPV)
-  compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/light.frag.slang LIGHT_FRAG_SPV
-      ${CMAKE_CURRENT_SOURCE_DIR}/shaders/scene.slang)
+   compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/light.frag.slang LIGHT_FRAG_SPV
+       ${CMAKE_CURRENT_SOURCE_DIR}/shaders/scene.slang)
+   # Phase 8 批次 ①：HDR tonemap frag（mesh 复用 light.mesh.spv；无 import 契约——不读 scene data）
+   compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/tonemap.frag.slang TONEMAP_FRAG_SPV)
   # Phase 7b（批次 5）：GPU culling compute（独立契约 cull.comp.slang 头注释，无 import 契约文件）
   compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/cull.comp.slang CULL_SPV)
+  # Phase 8 批次 ③b：2D 纹理 compute mip 链（独立契约 mip_gen.comp.slang 头注释，无 import 契约文件；
+  # 传统 descriptor set + 经典 compute 管线，与 bindless 渲染路径隔离，见 mip_gen.cppm）
+  compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/mip_gen.comp.slang MIP_GEN_SPV)
   # 静态 shader DGC spike：per-entry 序列流扇出（独立契约 kernel 头注释，docs/radv_static_dgc_spike.md）
   compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/stream_fanout.comp.slang STREAM_FANOUT_SPV)
  message(STATUS "MESH_SPV is: ${MESH_SPV}")
@@ -281,7 +289,7 @@ compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.mesh.slang MODEL_MESH_SP
 # 曾用 -O0（-O2 下编译吃内存，24 并发时打爆 swap）；2026-09-02 用户调整内存/显存
 # 分配至 32GB 后回归目标级 -O2（启动路径代码质量优先，编译峰值内存已非瓶颈）。
 
-add_executable(rgl main.cpp vam_impl.cpp tinygltf_impl.cpp stb_impl.cpp ${MESH_SPV} ${FRAG_SPV} ${MODEL_MESH_SPV} ${MODEL_FRAG_SPV} ${MODEL_PBR_FRAG_SPV} ${MODEL_PHONG_FRAG_SPV} ${MODEL_PBR_IBL_FRAG_SPV} ${SKYBOX_MESH_SPV} ${SKYBOX_FRAG_SPV} ${DEFERRED_GEOM_FRAG_SPV} ${LIGHT_MESH_SPV} ${LIGHT_FRAG_SPV} ${CULL_SPV} ${STREAM_FANOUT_SPV})
+add_executable(rgl main.cpp vam_impl.cpp tinygltf_impl.cpp ${MESH_SPV} ${FRAG_SPV} ${MODEL_MESH_SPV} ${MODEL_FRAG_SPV} ${MODEL_PBR_FRAG_SPV} ${MODEL_PHONG_FRAG_SPV} ${MODEL_PBR_IBL_FRAG_SPV} ${SKYBOX_MESH_SPV} ${SKYBOX_FRAG_SPV} ${DEFERRED_GEOM_FRAG_SPV} ${LIGHT_MESH_SPV} ${LIGHT_FRAG_SPV} ${TONEMAP_FRAG_SPV} ${CULL_SPV} ${STREAM_FANOUT_SPV} ${MIP_GEN_SPV})
 
 # ─── Runtime config copy (configs/ → build dir) ──────────────────────────────
 # 程序运行时按相对路径读取 configs/*.json，build 目录必须完整。
@@ -350,6 +358,30 @@ foreach(dir ${SKYBOX_DIRS})
 endforeach()
 add_custom_target(copy_skybox ALL DEPENDS ${SKYBOX_OUTPUTS})
 
+# ─── HDR 环境素材拷贝 (Bistro_v5_2/*.hdr → build env/, Phase 8 批次 ②b) ─────────
+# .hdr 属 gitignore 本地素材（Bistro_v5_2/ 1.7G 不入 git）：存在才拷，缺失时引擎按
+# scene.lua environment.hdr 探测告警并回落 faces PNG 路径（干净 checkout 仍可运行）。
+# 新增 .hdr 素材需在此加文件名 + just config。
+set(ENV_HDR_FILES san_giuseppe_bridge_4k.hdr)
+set(ENV_HDR_OUTPUTS)
+foreach(hdr ${ENV_HDR_FILES})
+    set(hdr_src "${PROJECT_SOURCE_DIR}/Bistro_v5_2/${hdr}")
+    if(EXISTS ${hdr_src})
+        file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/env)
+        list(APPEND ENV_HDR_OUTPUTS ${CMAKE_CURRENT_BINARY_DIR}/env/${hdr})
+        add_custom_command(
+            OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/env/${hdr}
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different ${hdr_src} ${CMAKE_CURRENT_BINARY_DIR}/env/
+            DEPENDS ${hdr_src}
+            COMMENT "Copying env hdr (${hdr}) to build directory..."
+            VERBATIM
+        )
+    endif()
+endforeach()
+if(ENV_HDR_OUTPUTS)
+    add_custom_target(copy_env_hdr ALL DEPENDS ${ENV_HDR_OUTPUTS})
+endif()
+
 target_sources(rgl PUBLIC
                FILE_SET CXX_MODULES
                 FILES rlvk.cppm vkerror.cppm utils.cppm sdl3window.cppm QueueFamilyManager.cppm cube.cppm
@@ -358,8 +390,8 @@ target_sources(rgl PUBLIC
                        vkswapchain.cppm vkresources.cppm vkrenderer.cppm ecs.cppm frame_draw_list.cppm
                        asset_table.cppm render_list.cppm render_graph.cppm render_graph_config.cppm
                       gltf_loader.cppm model_importer.cppm builtin_geometry.cppm texture_pool.cppm texture_upload.cppm scene_context.cppm llm_debug.cppm
-                        llm_debug_impl.cppm vkrenderer_impl.cppm render_graph_impl.cppm render_graph_config_impl.cppm model_importer_impl.cppm builtin_geometry_impl.cppm texture_upload_impl.cppm camera_config_impl.cppm scene_config_impl.cppm runtime_config_impl.cppm diagnostics_impl.cppm render_list_impl.cppm gpu_canary_impl.cppm ecs_impl.cppm vkresources_impl.cppm shader_registry_impl.cppm gltf_loader_impl.cppm gpu_cull_impl.cppm vk_indirect_commands_impl.cppm frame_capture_impl.cppm cull_driver_impl.cppm frame_session_impl.cppm
-                       gpu_canary.cppm gpu_cull.cppm vk_indirect_commands.cppm state_kit.cppm frame_capture.cppm cull_driver.cppm frame_session.cppm
+                        llm_debug_impl.cppm vkrenderer_impl.cppm render_graph_impl.cppm render_graph_builtin.cppm render_graph_config_impl.cppm model_importer_impl.cppm builtin_geometry_impl.cppm texture_upload_impl.cppm texture_upload_cubemap.cppm camera_config_impl.cppm scene_config_impl.cppm runtime_config_impl.cppm diagnostics_impl.cppm render_list_impl.cppm gpu_canary_impl.cppm ecs_impl.cppm vkresources_impl.cppm shader_registry_impl.cppm gltf_loader_impl.cppm gpu_cull_impl.cppm vk_indirect_commands_impl.cppm frame_capture_impl.cppm cull_driver_impl.cppm frame_session_impl.cppm image_codec_impl.cppm mip_gen_impl.cppm
+                         gpu_canary.cppm gpu_cull.cppm vk_indirect_commands.cppm state_kit.cppm frame_capture.cppm cull_driver.cppm frame_session.cppm image_codec.cppm mip_gen.cppm
                          ${TYPES_CPPM}
                          ${MODEL_CPPM}
                          ${MATERIAL_CPPM}
@@ -388,6 +420,16 @@ target_link_libraries(rgl
     SDL3::SDL3
     GPUOpen::VulkanMemoryAllocator
     )
+
+# ─── 图像编解码（image_codec 模块：libpng 简单 API + libjpeg(-turbo) + FreeImage .hdr）───
+# vcpkg 静态库的依赖闭包经各 target 的 INTERFACE_LINK_LIBRARIES 传递（freeimage::FreeImage
+# 自带完整依赖清单）；ZLIB::ZLIB 显式收尾（libpng/libjpeg 的 INTERFACE 未带 zlib，静态
+# 链接顺序要求 zlib 在消费者之后）。
+find_package(libpng CONFIG REQUIRED)
+find_package(libjpeg-turbo CONFIG REQUIRED)
+find_package(freeimage CONFIG REQUIRED)
+find_package(ZLIB REQUIRED)
+target_link_libraries(rgl PRIVATE PNG::PNG libjpeg-turbo::jpeg-static freeimage::FreeImage ZLIB::ZLIB)
 
 # NVIDIA Aftermath GPU crash dump（诊断能力，编译期开关；默认关，排查 NV 崩溃时开）
 # 用法：just config 前设 RGL_AFTERMATH=ON，或 cmake -DRGL_AFTERMATH=ON

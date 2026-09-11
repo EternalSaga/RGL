@@ -66,6 +66,8 @@ using std::as_bytes;
 using std::byte;
 using std::fstream;
 using std::function;
+using std::floor;
+using std::fmod;
 using std::ifstream;
 using std::logic_error;
 using std::map;

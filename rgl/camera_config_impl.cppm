@@ -41,6 +41,50 @@ namespace RGL {
 	return std::nullopt;
 }
 
+/**
+ * keys 键位绑定段读取（仅 loadCameraConfig 内部使用）：四字段逐个可选、缺省回落
+ * camera 当前值（默认 WASD）；字段存在但键名无法识别 → ConfigLoadFailed（消息格式
+ * 与拆分前的内联实现逐字相同）。
+ * @param keysTable keys 子表（调用方保证为表）
+ * @param camera 写入目标（字段存在才覆盖对应键）
+ * @param path 配置路径（错误信息用）
+ * @return 成功 = void；失败 = ConfigLoadFailed
+ */
+[[nodiscard]] std::expected<void, Error> readCameraKeys(sol::table keysTable,
+	Camera& camera, std::string_view path) {
+	auto readKey = [&](const char* field, uint32_t def) -> std::expected<uint32_t, std::string> {
+		sol::optional<std::string> v = keysTable[field];
+		if (!v)
+			return def;
+		auto mapped = keyNameToSdlKey(*v);
+		if (!mapped)
+		return std::unexpected(fmt::format(
+			"unknown key name '{}' (want single letter/digit or Up/Down/Left/Right/Space/Enter)", *v));
+		return *mapped;
+	};
+	if (auto k = readKey("forward", camera.keys.forward))
+		camera.keys.forward = *k;
+	else
+		return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
+			fmt::format("camera config ({}): keys.forward: {}", path, std::move(k).error())});
+	if (auto k = readKey("back", camera.keys.back))
+		camera.keys.back = *k;
+	else
+		return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
+			fmt::format("camera config ({}): keys.back: {}", path, std::move(k).error())});
+	if (auto k = readKey("left", camera.keys.left))
+		camera.keys.left = *k;
+	else
+		return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
+			fmt::format("camera config ({}): keys.left: {}", path, std::move(k).error())});
+	if (auto k = readKey("right", camera.keys.right))
+		camera.keys.right = *k;
+	else
+		return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
+			fmt::format("camera config ({}): keys.right: {}", path, std::move(k).error())});
+	return {};
+}
+
 /** loadCameraConfig 定义（接口注释见 camera_config.cppm）。要点：初始朝向由 position→target 反推（yaw/pitch + trackball up 对齐 world-up）；keys 四字段逐一校验，任一未知键名整体失败。 */
 [[nodiscard]] std::expected<CameraConfig, Error> loadCameraConfig(std::string_view path) {
 	auto* logger = RLLogger::getInstance();
@@ -151,38 +195,9 @@ namespace RGL {
 
 		// 键位绑定（可选字段回落默认 WASD；字段存在但键名无法识别 → 报错退出）
 		sol::table keysTable = root["keys"];
-		if (keysTable.valid() && keysTable.is<sol::table>()) {
-			auto readKey = [&](const char* field, uint32_t def) -> std::expected<uint32_t, std::string> {
-				sol::optional<std::string> v = keysTable[field];
-				if (!v)
-					return def;
-				auto mapped = keyNameToSdlKey(*v);
-				if (!mapped)
-				return std::unexpected(fmt::format(
-					"unknown key name '{}' (want single letter/digit or Up/Down/Left/Right/Space/Enter)", *v));
-				return *mapped;
-			};
-			if (auto k = readKey("forward", camera.keys.forward))
-				camera.keys.forward = *k;
-			else
-				return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
-					fmt::format("camera config ({}): keys.forward: {}", path, std::move(k).error())});
-			if (auto k = readKey("back", camera.keys.back))
-				camera.keys.back = *k;
-			else
-				return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
-					fmt::format("camera config ({}): keys.back: {}", path, std::move(k).error())});
-			if (auto k = readKey("left", camera.keys.left))
-				camera.keys.left = *k;
-			else
-				return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
-					fmt::format("camera config ({}): keys.left: {}", path, std::move(k).error())});
-			if (auto k = readKey("right", camera.keys.right))
-				camera.keys.right = *k;
-			else
-				return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
-					fmt::format("camera config ({}): keys.right: {}", path, std::move(k).error())});
-		}
+		if (keysTable.valid() && keysTable.is<sol::table>())
+			if (auto keys = readCameraKeys(keysTable, camera, path); !keys)
+				return std::unexpected(std::move(keys).error());
 
 		return CameraConfig{camera};
 	} catch (const std::exception& e) {

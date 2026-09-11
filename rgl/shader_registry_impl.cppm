@@ -19,10 +19,11 @@ namespace RGL {
 // addModelEntry/addSkyEntry/addCubeEntry/loadShaderEffect 定义（2026-09-02 编译提速
 // A 方案）：SPV 加载 + 管线创建函数体移出接口 TU；本单元是叶子边。
 
-uint32_t ShaderRegistry::addModelEntry(const std::string& specName, uint32_t vertexSlot,
-		uint32_t textureSlot, uint32_t samplerSlot) {
-		const auto key = std::make_tuple(specName, vertexSlot, textureSlot);
-		// 按 (规格, 顶点 slot, 纹理 slot) 组合去重：同组合返回既有条目（不重复建 shader object）
+	uint32_t ShaderRegistry::addModelEntry(const std::string& specName, uint32_t vertexSlot,
+			uint32_t textureSlot, uint32_t normalSlot, uint32_t ormSlot, uint32_t samplerSlot) {
+		const auto key = std::make_tuple(specName, vertexSlot, textureSlot, normalSlot, ormSlot);
+		// 按 (规格, 顶点 slot, base 纹理 slot, normal slot, orm slot) 五元组组合去重：
+		// 同组合返回既有条目（不重复建 shader object）
 		if (auto it = modelEntryBySlot.find(key); it != modelEntryBySlot.end())
 			return it->second;
 
@@ -52,16 +53,22 @@ uint32_t ShaderRegistry::addModelEntry(const std::string& specName, uint32_t ver
 			b.envSamplerHeapOffset =
 				res.ensureSkySampler(env->mipLevels) * res.getSamplerHeap().getDescriptorSize();
 		}
+		// Phase 8 ③a：normal（binding 6）+ ORM（binding 7）贴图槽（resource heap SAMPLED_IMAGE，
+		// extra 追加，仿 addLightEntry 的 extra 用法；不 import model.slang 或 Slang 剔除未用
+		// 全局的 frag 不声明 = 映射空转，同上既证行为）
+		b.extra.push_back({.binding = 6, .sampler = false, .heapSlot = normalSlot});
+		b.extra.push_back({.binding = 7, .sampler = false, .heapSlot = ormSlot});
 		auto entry = PipelineEntry{
-			fmt::format("{}.v{}.t{}", specName, vertexSlot, textureSlot),
+			fmt::format("{}.v{}.t{}.n{}.o{}", specName, vertexSlot, textureSlot, normalSlot, ormSlot),
 			RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b)};
 		const uint32_t index = static_cast<uint32_t>(entries.size());
 		indexByName[entry.name] = index;
 		modelEntryBySlot[key] = index;
 		entries.push_back(std::move(entry));
 		if (auto* logger = RLLogger::getInstance())
-			logger->debug("pipeline entry: {} (vertex slot {} / texture slot {}) → 下标 {}",
-				specName, vertexSlot, textureSlot, index);
+			logger->debug("pipeline entry: {} (vertex slot {} / base slot {} / normal slot {} / "
+				"orm slot {}) → 下标 {}",
+				specName, vertexSlot, textureSlot, normalSlot, ormSlot, index);
 		return index;
 	}
 
@@ -139,6 +146,38 @@ uint32_t ShaderRegistry::addModelEntry(const std::string& specName, uint32_t ver
 			logger->debug("pipeline entry: light (gbuffer slots {}/{}/{}/{}, env {}) → 下标 {}",
 				albedoSlot, normalSlot, positionSlot, metalRoughSlot,
 				res.getEnvTexture() ? "on" : "off", index);
+		return index;
+	}
+
+	// Phase 8 批次 ①：tonemap pass 条目（仿 addLightEntry 单条目形态）。不 import scene
+	//（不读 scene data——曝光写在 tonemap.frag 常量），hasSceneData = false；extra 仅
+	// scene_hdr 采样槽 + 共享 sampler。执行器 drawLight 分支按 state 名 "tonemap" 取本条目。
+	uint32_t ShaderRegistry::addTonemapEntry(uint32_t sceneHdrSlot, uint32_t samplerSlot) {
+		if (auto idx = pipelineIndex("tonemap"))
+			return *idx;
+		const RGL::PipelineSpec* spec = findSpec("tonemap");
+		if (!spec)
+			throw std::runtime_error("pipeline spec not found: tonemap");
+		const uint32_t descriptorSize = res.getDescriptorHeap().getDescriptorSize();
+		RGL::PipelineBindings b{};
+		b.descriptorSize = descriptorSize;
+		b.slotVertex = 0;   // binding 0/1 占位（tonemap mesh = light.mesh 全屏大三角，不声明顶点）
+		b.slotIndex = 1;
+		b.hasSceneData = false;  // tonemap.frag 不 import scene
+		const uint32_t samplerHeapOffset =
+			samplerSlot * res.getSamplerHeap().getDescriptorSize();
+		b.extra = {
+			{.binding = 4, .sampler = false, .heapSlot = sceneHdrSlot},
+			{.binding = 5, .sampler = true, .samplerHeapOffset = samplerHeapOffset},
+		};
+		auto entry = PipelineEntry{"tonemap",
+			RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b)};
+		const uint32_t index = static_cast<uint32_t>(entries.size());
+		indexByName[entry.name] = index;
+		entries.push_back(std::move(entry));
+		if (auto* logger = RLLogger::getInstance())
+			logger->debug("pipeline entry: tonemap (scene_hdr slot {}) → 下标 {}", sceneHdrSlot,
+				index);
 		return index;
 	}
 

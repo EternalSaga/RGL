@@ -134,6 +134,14 @@ export class GpuCull {
 	[[nodiscard]] VkDeviceAddress streamsAddress() const { return streamsBuffer.getDeviceAddress(); }
 
    private:
+	/**
+	 * 静态 DGC 路：基础序列 → per-entry 流扇出 dispatch（recordCullPass 内 nEntryStreams>0
+	 * 分支抽出）。Compute→Compute 屏障后绑 fanoutShader + pushData(sequenceCount) +
+	 * dispatch(candidate, nEntryStreams)。nEntryStreams==0 时调用方跳过（NV/重放路零开销）。
+	 * @param cmd recordCullPass 正在录制的同一命令缓冲（pass 外）
+	 */
+	void recordFanoutDispatch(vk::raii::CommandBuffer& cmd);
+
 	RGL::Resources& resources;  // 资源层引用（记录期 heap 信息 / scene data buffer；main 栈对象生命周期覆盖）
 	std::vector<CullEntry> entryTable;  // 候选表（构建期存副本；对账/重放映射用）
 	uint32_t nCandidates = 0;

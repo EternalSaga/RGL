@@ -44,3 +44,21 @@ Texture2D<float4> baseColorTexture;
 
 [[vk::binding(2, 0)]]
 SamplerState baseColorSampler;
+
+// 贴图扩展（Phase 8 批次 ③a）：normal + ORM 各占一个 SAMPLED_IMAGE 堆槽（运行时
+// allocSlot，同 baseColorTexture；sampler 复用 baseColorSampler binding 2，不新增
+// sampler binding）。不 import 本文件的风格（cube/skybox/light 等）不声明 = 无影响；
+// import 但不消费的风格（model.frag unlit 等）Slang 剔除未用全局 = SPV 无此描述符，
+// 烘焙的 mapping 空转（既证无害，同 binding 4/5 对不 import env 的风格）。
+// normal 贴图：DirectX 约定（Y-up，README "Normal (DirectX)"）+ 可能 BC5 压缩无 Z——
+// flip-G 与 Z 重建在 normalmap.slang（decodeNormalDx）处理，本处只声明采样源；
+// 无 normal 贴图的 primitive 绑中性法线纹理 (0.5,0.5,1,1)（flip-G 解码不动点，
+// texture_pool::ensureNeutralNormalTexture），shader 路径单一。
+[[vk::binding(6, 0)]]
+Texture2D<float4> normalTexture;
+
+// ORM 约定（glTF metallicRoughnessTexture = R=Occlusion / G=Roughness / B=Metalness，
+// bistro README 石锤）：shader 消费 G=roughness B=metallic，R（AO）采样不应用（留后）；
+// 无 ORM 贴图的 primitive 绑白纹理 orm=(1,1,1,1) → metallic/roughness 回落材质 factor。
+[[vk::binding(7, 0)]]
+Texture2D<float4> ormTexture;

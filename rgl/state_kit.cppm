@@ -11,9 +11,9 @@ namespace RGL {
 /**
  * pass 动态状态表（Phase 10 批次 0 手术 1：自 Renderer 摘出）。
  *
- * 持有四种命名状态的值集合 + edS3 能力门。状态名（"opaque"/"skybox"/
- * "transparent"/"light"）= render_graph pass.state 的词表，与本类键集合同步
- * （Renderer 构造期 validateRenderGraphForExecutor 校验图内名字全部可解析）。
+ * 持有五种命名状态的值集合 + edS3 能力门。状态名（"opaque"/"skybox"/
+ * "transparent"/"light"/"tonemap"）= render_graph pass.state 的词表，与本类键集合
+ * 同步（Renderer 构造期 validateRenderGraphForExecutor 校验图内名字全部可解析）。
  * Phase 10 阴影将新增状态条目（depth-only pass 等）——增改集中在本类一处。
  * viewport/scissor 依赖窗口尺寸，不在状态内（applyDynamicState 参数传入）。
  */
@@ -42,12 +42,17 @@ export class StateKit {
 		lightState.depthTest = false;
 		lightState.depthWrite = false;
 		lightState.cullMode = vk::CullModeFlagBits::eNone;
+		// Phase 8 批次 ①：tonemap pass —— 与 light 同形（全屏终图、无深度附件、绕序不剔、
+		// 不混合；scene_hdr→swapchain 全屏覆盖，深度无关）
+		tonemapState.depthTest = false;
+		tonemapState.depthWrite = false;
+		tonemapState.cullMode = vk::CullModeFlagBits::eNone;
 	}
 
 	/**
 	 * 图 pass.state 名 → 动态状态（Renderer 构造期校验保证图内名字全部可解析，
 	 * 未知名 = 校验遗漏的编程错误，抛出）。
-	 * @param name 状态名（"opaque"/"skybox"/"transparent"/"light"）
+	 * @param name 状态名（"opaque"/"skybox"/"transparent"/"light"/"tonemap"）
 	 * @return 状态 const 引用（成员存储，录制期 applyDynamicState 消费）
 	 */
 	[[nodiscard]] const RenderState& stateFor(std::string_view name) const {
@@ -55,6 +60,7 @@ export class StateKit {
 		if (name == "skybox") return skyboxState;
 		if (name == "transparent") return transparentState;
 		if (name == "light") return lightState;
+		if (name == "tonemap") return tonemapState;
 		throw std::runtime_error(fmt::format(
 			"StateKit::stateFor: unknown state '{}' (executor validation bypassed)", name));
 	}
@@ -70,6 +76,7 @@ export class StateKit {
 	RenderState transparentState{}; // 不写深度 + 混合 + 剔背面（见 ctor 注）
 	RenderState skyboxState{};      // 大三角 z=1 只在空像素通过（见 ctor 注）
 	RenderState lightState{};       // deferred light 全屏终图（见 ctor 注）
+	RenderState tonemapState{};     // Phase 8 ①：HDR→LDR tonemap 全屏终图（与 light 同形，见 ctor 注）
 	bool depthClipDynamic = false;
 };
 

@@ -22,7 +22,7 @@ namespace RGL {
  * material_types_generated static_assert 与 shader 反射一致）；pushDataSet = 0（显式）。
  */
 export struct PipelineEntry {
-	std::string name;                             // 条目名（模型 = "{规格}.v{顶点槽}.t{纹理槽}"，skybox/cube/light 固定名）
+	std::string name;                             // 条目名（模型 = "{规格}.v{顶点槽}.t{base槽}.n{normal槽}.o{orm槽}"，skybox/cube/light 固定名）
 	RGL::RenderPipeline pipeline;                 // shader object + 烘焙 binding mapping（见 PipelineBindings）
 	uint32_t argsSize = sizeof(RGL::DrawArgs);    // push constant 字节数（DrawArgs 100B scalar 布局）
 	uint32_t pushDataSet = 0;                     // 显式 push constant set 号（vkCmdPushDataEXT 用）
@@ -32,9 +32,10 @@ export struct PipelineEntry {
  * 管线表（Phase 4：从 Renderer 迁出，零 entt——只认 slot/资产 id，不认场景实体）：
  *   条目全部按需动态加入：模型 = addModelEntry、内建 cube = addCubeEntry（架构债务 1：
  *   slot 经传入的资产记录取，Resources 不认识 cube）、天空盒 = addSkyEntry、
- *   延迟光 = addLightEntry；模型条目按 (规格, 顶点 slot, 纹理 slot) 组合去重
- *   ——binding mapping 是 shader object 级状态（无法运行时换），同组合的映射恒等，
- *   故共享一条条目而非每 primitive 一条（Phase 4 验收：392 primitive → 12 条）。
+ *   延迟光 = addLightEntry；模型条目按 (规格, 顶点 slot, base 纹理 slot, normal slot,
+ *   orm slot) 五元组组合去重——binding mapping 是 shader object 级状态（无法运行时换），
+ *   同组合的映射恒等，故共享一条条目而非每 primitive 一条（Phase 4 验收：392 primitive
+ *   → 12 条；Phase 8 ③a 扩 normal/orm 槽后条目数仍 ≤ 材质贴图组合数）。
  * 渲染 system 经资产记录的 pipelineIndex（数值）取条目，录制路径零字符串查找（E2.4）。
  * 条目下标写回资产记录经 bindToAsset / bindPipelineToAsset（启动期一次）。
  */
@@ -83,23 +84,27 @@ export class ShaderRegistry {
 
 	/**
 	 * 模型管线条目（资产上传期）：用管线规格创建 RenderPipeline，binding mapping 显式烘焙
-	 * 顶点 slot + 纹理 slot（binding 0 = 顶点 buffer 槽、binding 1 = resource heap 的
-	 * SAMPLED_IMAGE 描述符槽、binding 2 = sampler heap 槽——OpTypeSampler 映射，
+	 * 顶点 slot + 纹理槽（binding 0 = 顶点 buffer 槽、binding 1 = resource heap 的
+	 * baseColor SAMPLED_IMAGE 描述符槽、binding 2 = sampler heap 槽——OpTypeSampler 映射，
 	 * 共享一份 sampler 描述符，偏移 = samplerSlot * samplerHeap.getDescriptorSize()；
-	 * binding 3 = scene data、4/5 = env 亦恒烘焙，见 impl）。
+	 * binding 3 = scene data、4/5 = env 恒烘焙；binding 6/7 = normal/orm 贴图槽
+	 *（Phase 8 ③a，extra 追加，见 impl））。
 	 * 首参 specName = 管线规格名（Phase 4 批次 3：风格→规格名映射在 main.cpp 经 scene.lua
-	 * styles 表完成，本函数只认规格名）；按 (规格, 顶点 slot, 纹理 slot) 组合去重——
-	 * 同组合返回既有条目下标（不重复建 shader object）；新组合建条目并记入 indexByName /
-	 * 去重表。返回条目下标，调用方经 bindToAsset 写回资产记录（renderListSystem 经资产表
-	 * 解析管线，无字符串约定）。失败（规格缺失 / SPV 加载失败等）抛出（同构造期路径）。
+	 * styles 表完成，本函数只认规格名）；按 (规格, 顶点 slot, base 纹理 slot, normal slot,
+	 * orm slot) 五元组组合去重——同组合返回既有条目下标（不重复建 shader object）；
+	 * 新组合建条目并记入 indexByName / 去重表。返回条目下标，调用方经 bindToAsset 写回
+	 * 资产记录（renderListSystem 经资产表解析管线，无字符串约定）。失败（规格缺失 /
+	 * SPV 加载失败等）抛出（同构造期路径）。
 	 * @param specName 管线规格名（scene.lua styles / findSpec 回落词表）
 	 * @param vertexSlot 顶点 buffer heap 槽（binding 0；模型顶点/索引共享同一 buffer）
-	 * @param textureSlot 纹理 SAMPLED_IMAGE heap 槽（binding 1；白纹理 = 纹理首槽）
+	 * @param textureSlot baseColor 纹理 SAMPLED_IMAGE heap 槽（binding 1；白纹理 = 纹理首槽）
+	 * @param normalSlot normal 贴图 SAMPLED_IMAGE heap 槽（binding 6；无贴图 = 中性法线纹理槽）
+	 * @param ormSlot ORM 贴图 SAMPLED_IMAGE heap 槽（binding 7；无贴图 = 白纹理槽）
 	 * @param samplerSlot 共享 sampler 的 sampler heap 槽（binding 2，ensureSharedSampler 产物）
 	 * @return 条目下标（新组合 = entries 追加）
 	 */
 	[[nodiscard]] uint32_t addModelEntry(const std::string& specName, uint32_t vertexSlot,
-		uint32_t textureSlot, uint32_t samplerSlot);
+		uint32_t textureSlot, uint32_t normalSlot, uint32_t ormSlot, uint32_t samplerSlot);
 
 	/**
 	 * 天空盒管线条目（Phase 5.5 批次 4）：单条目（env 槽全局单例，无组合去重需求）。
@@ -125,6 +130,17 @@ export class ShaderRegistry {
 	 */
 	[[nodiscard]] uint32_t addLightEntry(uint32_t albedoSlot, uint32_t normalSlot,
 		uint32_t positionSlot, uint32_t metalRoughSlot, uint32_t samplerSlot);
+
+	/**
+	 * Phase 8 批次 ①：tonemap pass 管线条目（单条目，仿 addLightEntry）。spec = "tonemap"
+	 *（mesh 复用 light.mesh.spv 全屏大三角 + ACES frag）。binding：0/1 占位 + extra：
+	 * 4 → scene_hdr RT 的 SAMPLED_IMAGE 堆槽、5 → 共享 sampler。不 import scene（不读
+	 * scene data，曝光写在 shader 常量）。前提 = scene_hdr RT 已 ensureSceneHdrSlot。幂等。
+	 * @param sceneHdrSlot scene_hdr RT 的 SAMPLED_IMAGE heap 槽（binding 4）
+	 * @param samplerSlot 共享 sampler 的 sampler heap 槽（binding 5）
+	 * @return 条目下标；规格缺失抛 runtime_error
+	 */
+	[[nodiscard]] uint32_t addTonemapEntry(uint32_t sceneHdrSlot, uint32_t samplerSlot);
 
 	/**
 	 * 内建几何管线条目（架构债务 1 方案 B）：spec = "cube"，binding mapping = 传入资产记录的
@@ -215,6 +231,12 @@ export class ShaderRegistry {
 				"light", "generated_shaders/light.mesh.spv", "generated_shaders/light.frag.spv"};
 			return &defaultLight;
 		}
+		if (std::strcmp(name, "tonemap") == 0) {
+			static const RGL::PipelineSpec defaultTonemap{
+				"tonemap", "generated_shaders/light.mesh.spv",
+				"generated_shaders/tonemap.frag.spv"};  // mesh 复用全屏大三角（Phase 8 ①）
+			return &defaultTonemap;
+		}
 		return nullptr;
 	}
 
@@ -222,7 +244,7 @@ export class ShaderRegistry {
 	RGL::Resources& res;         // 资源层引用（heap / sampler 槽 / scene data / env 烘焙）
 	std::map<std::string, RGL::PipelineSpec> styles;          // 风格名 → SPV 规格（scene.lua）
 	std::map<std::string, uint32_t> indexByName;              // 条目名 → 下标（启动期 name 解析）
-	std::map<std::tuple<std::string, uint32_t, uint32_t>, uint32_t> modelEntryBySlot;  // 模型条目去重表：(规格名, 顶点 slot, 纹理 slot) → 下标
+	std::map<std::tuple<std::string, uint32_t, uint32_t, uint32_t, uint32_t>, uint32_t> modelEntryBySlot;  // 模型条目去重表：(规格名, 顶点 slot, base 纹理 slot, normal slot, orm slot) → 下标
 	std::vector<PipelineEntry> entries;                       // 管线表（下标 = 绘制契约）
 };
 

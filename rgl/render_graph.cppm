@@ -122,17 +122,33 @@ export struct RgPassAttachment {
  * pass 种类：
  * - drawMesh：执行 FrameDrawList 段（drawSource → 段边界映射由执行器完成）；
  * - blit：transferRead input → transferWrite output 整幅拷贝（无绘制）；
- * - drawLight（Phase 7 D1）：deferred light pass——执行器特殊处理（bind 固定 light
- *   管线 + 全屏单 group draw，不走 FrameDrawList 段）；outputs=swapchain colorWrite、
- *   inputs=sampleRead（采 G-buffer，barrier 自动）。
+ * - drawLight（Phase 7 D1 / Phase 8 ①泛化）：固定全屏单 group draw——执行器按
+ *   **state 名**绑定预建管线条目（词表 = "light"/"tonemap"，见 kFullscreenPassStates），
+ *   不走 FrameDrawList 段；outputs 恰一 colorWrite、inputs = sampleRead（barrier 自动）。
  */
 export enum class RgPassKind : uint8_t {
 	drawMesh,  // 执行 FrameDrawList 段（drawSource → 段边界映射由执行器完成）
 	blit,      // transferRead input → transferWrite output 整幅拷贝
-	// Phase 7 D1：deferred light pass——执行器特殊处理（bind 固定 light 管线 + 全屏单 group draw，
-	// 不走 FrameDrawList 段）；outputs=swapchain colorWrite、inputs=sampleRead（采 G-buffer，barrier 自动）
+	// 固定全屏单 group draw（Phase 8 ①起 state 名泛化，不再限 "light"）
 	drawLight,
 };
+
+/**
+ * drawLight kind 的 state 词表（单一真相源）：state 名同时是 ShaderRegistry 固定条目名
+ *（"light" = deferred 逐灯 GGX，"tonemap" = HDR→LDR ACES）与 StateKit 状态名——
+ * 执行器构造期按 state 名解析管线条目，图内 drawLight pass 的 state 必须在此表内
+ *（validateRenderGraphForExecutor 校验）。
+ */
+export inline constexpr std::array<std::string_view, 2> kFullscreenPassStates{"light", "tonemap"};
+
+/**
+ * Phase 8 批次 ①：HDR 累加链附件契约（单一真相源）——forward/deferred 图的颜色目标
+ * scene_hdr（rgba16_sfloat offscreen RT），tonemap pass 采样后写 swapchain。
+ * 消费方 = render_graph_builtin 三图描述 + Resources::ensureSceneHdrSlot（启动期建
+ * RT + 采样堆槽）+ addTonemapEntry（烘焙 binding 4）。
+ */
+export inline constexpr std::string_view kSceneHdrName = "scene_hdr";
+export inline constexpr std::string_view kSceneHdrFormat = "rgba16_sfloat";
 
 /**
  * pass 声明（RgGraphDesc.passes 元素）：name 必填；kind 定执行语义；
@@ -268,9 +284,10 @@ export vk::ImageMemoryBarrier2 materializeBarrier(const RgBarrierPlan& plan, VkI
 export [[nodiscard]] std::expected<CompiledRenderGraph, Error> compileRenderGraph(const RgGraphDesc& desc);
 
 /**
- * 缺省图 = 现 drawFrame 三段语义的图表达（swapchain+depth；opaque/skybox/transparent
- * 各一 pass，中间 attachment store 保内容、末段 depth DontCare）——批次 2 的
- * diff=0 验收基准。进程内静态单例，首次调用时编译（失败抛 runtime_error）。
+ * 缺省图 = forward HDR 链（Phase 8 批次 ①）：opaque/skybox/transparent 三段渲入
+ * scene_hdr（rgba16_sfloat，中间 attachment store 保内容、末段 depth DontCare）+
+ * tonemap pass（drawLight）ACES 上屏 swapchain。原三段直写 swapchain 的 diff=0
+ * 基准随 ACES 换 baseline。进程内静态单例，首次调用时编译（失败抛 runtime_error）。
  * @return 编译好的默认图（引用，生命周期进程级）
  */
 export const CompiledRenderGraph& defaultRenderGraph();
@@ -288,11 +305,12 @@ export const RgGraphDesc& defaultRenderGraphDesc();
 export const RgGraphDesc& offscreenRenderGraphDesc();
 
 /**
- * Phase 7 D1（render_graph.lua variant="deferred"）：2-pass deferred 图——geometry pass
+ * Phase 7 D1（render_graph.lua variant="deferred"）：3-pass deferred 图——geometry pass
  * 把 opaque 段渲入 4 个 G-buffer RT（albedo rgba8_srgb / normal rg16_snorm oct /
  * worldPos rgba32_sfloat / metalRough rgba8_unorm，显式格式见 kGBufferAttachments 词表）
- * + depth；light pass（drawLight kind）全屏采样 4 RT + 逐灯 GGX 直写 swapchain
- *（present 转换由图派生）。forward 默认图零改，本图为 exclusive 变体。静态单例。
+ * + depth；light pass（drawLight kind）全屏采样 4 RT + 逐灯 GGX 渲入 scene_hdr；
+ * tonemap pass（drawLight，Phase 8 批次 ①）ACES 上屏 swapchain（present 由图派生）。
+ * 本图为 exclusive 变体。静态单例。
  * @return deferred 图声明（引用）
  */
 export const RgGraphDesc& deferredRenderGraphDesc();

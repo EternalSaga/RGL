@@ -15,6 +15,11 @@ return {
         { name = "modelVertexBuffer", index = 0, heapSlotOffset = 0, cppName = "HeapSlotGeometryBase", shape = "byteAddressBuffer" },
         { name = "baseColorTexture", index = 1, shape = "texture2D" },
         { name = "baseColorSampler", index = 2, shape = "samplerState" },
+        -- Phase 8 批次 ③a：normal 贴图（DirectX 约定，flip-G 解码见 normalmap.slang）
+        -- + ORM 贴图（R=Occlusion/G=Roughness/B=Metalness），运行时 allocSlot（同
+        -- baseColorTexture，无 heapSlotOffset/cppName 不生成 C++ 常量）
+        { name = "normalTexture", index = 6, shape = "texture2D" },
+        { name = "ormTexture", index = 7, shape = "texture2D" },
     },
 
     -- 契约常量（无反射端对应，schema 声明直接生成，同 vertexLayouts 模式）：

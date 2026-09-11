@@ -27,6 +27,9 @@ export struct GltfPrimitive {
 	BoundingSphere bounds;       // 节点局部包围球（over raw vertices.position，不含 nodeWorld；剔除时 modelMatrix 再乘）
 	glm::vec4 baseColor{1.0f};    // material 的 baseColorFactor
 	int baseColorTextureIndex = -1;  // material baseColorTexture 的 image 下标（-1 = 无纹理 → 白纹理）
+	int normalTextureIndex = -1;              // material normalTexture 的 image 下标（-1 = 无 → 中性法线纹理）
+	int metallicRoughnessTextureIndex = -1;   // pbrMetallicRoughness.metallicRoughnessTexture 的 image 下标
+	                                       //（glTF ORM 约定 R=Occlusion/G=Roughness/B=Metalness；-1 = 无 → 白纹理）
 	bool hasUv = true;               // TEXCOORD_0 缺失（glTF 中可选）→ uv 填 0 + 白纹理（D9）
 	bool alphaModeBlend = false;    // material alphaMode == "BLEND"（Phase 5 透明用，预留）
 	int materialIndex = -1;         // glTF materials 数组下标（-1 = 无材质）——批次 2 材质资产去重键

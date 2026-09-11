@@ -43,7 +43,9 @@ Resources::Resources(RGL::AppContext& vkInstance, RGL::DeviceContext& vkDevice, 
 		  depthImageView(vkDevice.getDevice(), buildDepthView(*depthImage)),
 		  descriptorHeap(createDescriptorHeap().value()),
 		  samplerHeap(createSamplerHeap().value()),
- 		  nextSlot(reservedSlots()) {
+  		  // Phase 8 ③b：compute mip 链生成器（传统管线全栈，加载 SPV 建管线；启动期一次性）
+  		  mipGen(vkDevice),
+  		  nextSlot(reservedSlots()) {
 		// 内核不创建任何内容资产（架构债务 1 方案 B）：几何（内建 cube / gltf 模型）、
 		// 纹理、scene data、RT 采样槽全部由内容层按上传时序经 allocSlot 领取
 	}
@@ -51,8 +53,10 @@ Resources::Resources(RGL::AppContext& vkInstance, RGL::DeviceContext& vkDevice, 
 /**
  * 幂等契约与 create info 稳定存储规则见接口注释。实现：slot =
  * samplerHeap.getReservedSlots()（首个可用槽）；sampler 参数 linear + CLAMP_TO_EDGE、
- * mipmapMode=NEAREST、maxLod=0（无 mipmap）；经 vkWriteSamplerDescriptorsEXT 写入
- *（hpp raii 内部 resultCheck，失败抛 LogicError），dst 大小 = 一个槽步长。
+ * Phase 8 ③b 起 mipmapMode=LINEAR + maxLod=20（2D 纹理带 compute mip 链——采样自动
+ * 用 mip，maxLod 覆盖 ≤2^20 纹理链长，Vulkan 按各图实际 mip 范围钳制）；经
+ * vkWriteSamplerDescriptorsEXT 写入（hpp raii 内部 resultCheck，失败抛 LogicError），
+ * dst 大小 = 一个槽步长。
  */
 uint32_t Resources::ensureSharedSampler() {
 		if (sharedSamplerReady)
@@ -61,14 +65,14 @@ uint32_t Resources::ensureSharedSampler() {
 		info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
 		info.magFilter = VK_FILTER_LINEAR;
 		info.minFilter = VK_FILTER_LINEAR;
-		info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+		info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
 		info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
 		info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
 		info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
 		info.anisotropyEnable = VK_FALSE;
 		info.compareEnable = VK_FALSE;
 		info.minLod = 0.0f;
-		info.maxLod = 0.0f;
+		info.maxLod = 20.0f;
 		info.unnormalizedCoordinates = VK_FALSE;
 		info.borderColor = VK_BORDER_COLOR_INT_TRANSPARENT_BLACK;
 		sharedSamplerSlot = samplerHeap.getReservedSlots();
@@ -269,6 +273,29 @@ std::expected<std::array<uint32_t, 4>, Error> Resources::ensureDeferredGBufferSl
 		logger->info("deferred G-buffer: {}x{} slots {}/{}/{}/{} (albedo/normal/position/metalrough)",
 			extent.width, extent.height, slots[0], slots[1], slots[2], slots[3]);
 	return slots;
+}
+
+/**
+ * Phase 8 批次 ①（接口注释见 vkresources.cppm）：名字/格式 = render_graph
+ * kSceneHdrName/kSceneHdrFormat 契约常量（与 default/deferred 图描述共享，无漂移）；
+ * extent = 当前 swapchain；ensureRtAttachment（rgba16_sfloat 自带
+ * COLOR_ATTACHMENT|SAMPLED usage）+ rtHeapSlot。启动期一次（main 在 deferred 装配后、
+ * addTonemapEntry 前）；drawFrame 图循环每帧对同名命中复用。
+ */
+std::expected<uint32_t, Error> Resources::ensureSceneHdrSlot() {
+	const std::string name{std::string{kSceneHdrName}.c_str()};
+	const vk::Extent2D extent = vkSwapchain.getExtent();
+	const vk::Format format = vk::Format::eR16G16B16A16Sfloat;  // = kSceneHdrFormat 物化
+	auto rt = ensureRtAttachment(name, extent, format);
+	if (!rt)
+		return std::unexpected(std::move(rt).error());
+	auto slot = rtHeapSlot(name);
+	if (!slot)
+		return std::unexpected(Error{ErrorCode::Unknown,
+			fmt::format("scene_hdr RT has no sample descriptor slot", name)});
+	if (auto* logger = RLLogger::getInstance())
+		logger->info("scene_hdr (RGBA16F): {}x{} slot {}", extent.width, extent.height, *slot);
+	return *slot;
 }
 
 /** 参数/返回见接口注释。实现：eD32Sfloat、单采样、eDepthStencilAttachment、

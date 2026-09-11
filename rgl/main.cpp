@@ -3,6 +3,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>  // entity rootTransform（translate/rotate/scale 组装）
 #include <fmt/format.h>
+#include <filesystem>  // environment.hdr 本地素材存在性探测（GMF 例外清单成员）
 #ifdef RGL_AFTERMATH  // 编译期开关（rgl/CMakeLists.txt option）：NVIDIA GPU crash dump 诊断
 #include "GFSDK_Aftermath_GpuCrashDump.h"
 #include "GFSDK_Aftermath_GpuCrashDumpDecoding.h"
@@ -275,19 +276,41 @@ int main() {
 		 *（allocSlot 单调游标——插在之前会挤占白纹理契约槽
 		 * "reserved + 2 + 模型顶点槽数"，断言漂移启动报错，2026-09-01 实测踩坑），
 		 * 且先于 addModelEntry（其查 getEnvTexture 烘焙 binding 4/5）。
+		 *
+		 * Phase 8 批次 ②b：`environment.hdr` 非空 = 优先走 Radiance .hdr 路径（CPU
+		 * 等距柱状→RGBA16F cubemap 重投影）；.hdr 属 gitignore 本地素材，文件不存在时
+		 * 告警并回落 faces 六面 PNG 路径（干净 checkout 仍可运行）。
 		 * @note 文件读取 / cubemap 创建失败 → 抛 std::runtime_error
 		 */
 		auto uploadEnvironment = [&] {
+			auto& envCfg = sceneConfig.environment;
+			if (!envCfg.hdr.empty()) {
+				std::error_code ec;
+				if (std::filesystem::exists(envCfg.hdr, ec) && !ec) {
+					auto hdrResult = loadEnvCubeMapHdr(vkResources, vkDevice, envCfg.hdr,
+						envCfg.hdrSize, "scene.environment");
+					if (!hdrResult)
+						throw std::runtime_error(
+							fmt::format("environment: {}", hdrResult.error().describe()));
+					const auto& envAsset = *vkResources.getEnvTexture();
+					auto& envCtx = registry.ctx().get<SceneEnv>();
+					envCtx.intensity = envCfg.intensity;
+					envCtx.mipRange = static_cast<float>(envAsset.mipLevels - 1);
+					return;
+				}
+				if (auto* logger = RLLogger::getInstance())
+					logger->warn("environment.hdr '{}' 不存在（本地素材），回落 faces PNG 路径",
+						envCfg.hdr);
+			}
 			std::array<std::string, 6> paths;
 			for (uint32_t f = 0; f < 6; ++f)
-				paths[f] = fmt::format("{}/{}", sceneConfig.environment.dir,
-					sceneConfig.environment.faces[f]);
+				paths[f] = fmt::format("{}/{}", envCfg.dir, envCfg.faces[f]);
 			auto envResult = loadEnvCubeMapFiles(vkResources, vkDevice, paths, "scene.environment");
 			if (!envResult)
 				throw std::runtime_error(fmt::format("environment: {}", envResult.error().describe()));
 			const auto& envAsset = *vkResources.getEnvTexture();
 			auto& envCtx = registry.ctx().get<SceneEnv>();
-			envCtx.intensity = sceneConfig.environment.intensity;
+			envCtx.intensity = envCfg.intensity;
 			envCtx.mipRange = static_cast<float>(envAsset.mipLevels - 1);
 		};
 
@@ -328,7 +351,7 @@ int main() {
 			std::string file;
 			std::unique_ptr<GltfModel> model;
 			std::vector<uint32_t> assetIds;    // per-primitive 网格资产 id
-			std::vector<uint32_t> textureIds;  // per-primitive 纹理资产 id
+			ModelTextureIds textureIds;        // per-primitive 纹理资产 id 三元组（base/normal/orm，Phase 8 ③a）
 			uint32_t instances = 0;            // entities 引用计数（日志）
 		};
 		std::vector<UploadedModel> uploaded;
@@ -392,14 +415,15 @@ int main() {
 		// 按 (规格,顶点 slot,纹理 slot) 组合去重兜底）
 		for (auto& um : uploaded) {
 			auto& model = *um.model;
-			const auto& primitiveTextureIds = um.textureIds;
+			const auto& texIds = um.textureIds;
 			auto& assets = vkResources.getAssetTable();
 			const uint32_t samplerSlot = vkResources.ensureSharedSampler();
 			for (size_t i = 0; i < um.assetIds.size(); ++i) {
 				const uint32_t id = um.assetIds[i];
-				// 管线条目（Phase 4 批次 2：按 (规格, 顶点 slot, 纹理 slot) 组合去重——同模型
-				// 全 primitive 共享一个拼接顶点 slot，仅纹理 slot 差异决定条目拆分；纹理/sampler
-				// slot 烘焙进 binding mapping，每帧零成本）。批次 3：风格派生（loader unlit
+				// 管线条目（Phase 4 批次 2：按 (规格, 顶点 slot, base 纹理 slot, normal slot,
+				// orm slot) 五元组组合去重——同模型全 primitive 共享一个拼接顶点 slot，
+				// 仅纹理槽差异决定条目拆分；纹理/sampler slot 烘焙进 binding mapping，每帧
+				// 零成本；Phase 8 ③a 扩 normal/orm 槽）。批次 3：风格派生（loader unlit
 				// 字段即数据源，与 MaterialAsset 一致性由 registerScene 金丝雀保证）→ scene.lua
 				// styles 表映射到管线规格名（缺失 = 启动报错，同现有 config 错误路径）。
 				const std::string style = model.primitives[i].unlit ? "unlit" : "pbr";
@@ -409,7 +433,9 @@ int main() {
 				const uint32_t entryIdx = shaderRegistry.addModelEntry(
 					deferredMode ? std::string("deferred_geometry") : styleIt->second,
 					assets.get(id).heapSlot,  // = 模型拼接顶点 slot（同模型全 primitive 相同）
-					assets.getTexture(primitiveTextureIds[i]).heapSlot,
+					assets.getTexture(texIds.base[i]).heapSlot,
+					assets.getTexture(texIds.normal[i]).heapSlot,
+					assets.getTexture(texIds.orm[i]).heapSlot,
 					samplerSlot);
 				shaderRegistry.bindToAsset(id, entryIdx);
 			}
@@ -432,7 +458,7 @@ int main() {
 			if (diagnostics().texDist) {
 				std::map<uint32_t, uint32_t> texSlotCount;
 				for (size_t i = 0; i < um.assetIds.size(); ++i)
-					++texSlotCount[assets.getTexture(primitiveTextureIds[i]).heapSlot];
+					++texSlotCount[assets.getTexture(texIds.base[i]).heapSlot];
 				if (auto logger = RLLogger::getInstance()) {
 					std::string t;
 					for (const auto& [slot, cnt] : texSlotCount)
@@ -449,7 +475,7 @@ int main() {
 				continue;
 			auto& um = uploaded[modelOf[ent.file]];
 			registerScene(registry, *um.model, std::span<const uint32_t>(um.assetIds),
-				std::span<const uint32_t>(um.textureIds), vkResources,
+				std::span<const uint32_t>(um.textureIds.base), vkResources,
 				makeRootTransform(ent));
 		}
 		// scene data 容量契约（Phase 5 批次 2，Phase 6 instancing 改**实例矩阵槽**计数
@@ -551,6 +577,21 @@ int main() {
 			[[maybe_unused]] auto lightIdx = shaderRegistry.addLightEntry(
 				(*gbSlots)[0], (*gbSlots)[1], (*gbSlots)[2], (*gbSlots)[3],
 				vkResources.ensureSharedSampler());
+		}
+		// Phase 8 批次 ①：HDR 累加链——scene_hdr RT + tonemap 条目（forward/deferred 图都含
+		// tonemap pass，无条件建；offscreen DIAG 变体图不含 = 条目闲置无害）。时序同
+		// G-buffer：几何/纹理/env（deferred 含 G-buffer）槽之后、DGC/Renderer 之前
+		//（allocSlot 单调游标契约）。
+		{
+			auto hdrSlot = vkResources.ensureSceneHdrSlot();
+			if (!hdrSlot) {
+				auto* logger = RLLogger::getInstance();
+				if (logger) logger->error("scene_hdr RT 创建失败: {}", hdrSlot.error().describe());
+				return -1;
+			}
+			// tonemap 条目下标由 Renderer 构造期按名 pipelineIndex("tonemap") 取
+			[[maybe_unused]] auto tonemapIdx = shaderRegistry.addTonemapEntry(
+				*hdrSlot, vkResources.ensureSharedSampler());
 		}
 		// Phase 7b：DGC 命令生成（NVIDIA 路）：仅 graphicsIndirect 能力时构造（RADV =
 		// compute only → null → Renderer 读回重放路）。管线表定后建（execution set

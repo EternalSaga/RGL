@@ -13,6 +13,7 @@ import VmaRaii;
 import vk_instance;
 import vk_device;
 import vk_swapchain;
+import mip_gen;
 import vkerror;
 
 // 资产层（AssetKind/MeshAsset/TextureAsset/MaterialAsset/AssetTable）拆出为独立模块——
@@ -92,14 +93,24 @@ export inline constexpr uint32_t kSceneDataDrawTableOffset =
 export inline constexpr uint32_t kSceneDrawStride = 32;
 static_assert(kSceneDataDrawTableOffset % 16 == 0, "draw table must stay 16B aligned");
 
-/** scene data buffer 总字节数 = 头 128 + 对象矩阵表 + 灯数组区 + MVP 表 + 材质表
- *（= 656016B，编译期派生）；ensureSceneData 的分配尺寸与 drawFrame 每帧
+/** Phase 8 批次 ④a：漫反射辐照度 SH9 区（追加于材质表之后——既有各区基址逐字节不动 diff0）。
+ * 9 × vec4 = 144B（.xyz=系数、.w 留白，满足 ByteAddressBuffer.Load4 16B 对齐前提；CPU env
+ * 加载期从等距柱状源余弦加权投影 radiance，shader scene.slang irradiance(N) 做辐照度卷积）。
+ * 基址 = 材质表尾（524944 + 4096×32 = 656016，scene.slang 字面量同值）。 */
+export inline constexpr uint32_t kSceneDataIrradianceOffset =
+	kSceneDataDrawTableOffset + kSceneMatrixCapacity * kSceneDrawStride;
+export inline constexpr uint32_t kSceneDataIrradianceBytes = 144;  // 9×vec4=144（16B 对齐）
+static_assert(kSceneDataIrradianceOffset % 16 == 0, "irradiance region must stay 16B aligned");
+
+/** scene data buffer 总字节数 = 头 128 + 对象矩阵表 + 灯数组区 + MVP 表 + 材质表 +
+ * 辐照度 SH9 区（= 656144B，编译期派生）；ensureSceneData 的分配尺寸与 drawFrame 每帧
  * staging 拷贝区尺寸均为本值（vkrenderer.cppm ⑥.5）。 */
 export inline constexpr vk::DeviceSize kSceneDataBytes =
 	kSceneDataHeaderBytes + vk::DeviceSize{kSceneMatrixCapacity} * kSceneMatrixStride
 	+ kSceneDataLightArrayBytes
 	+ vk::DeviceSize{kSceneMatrixCapacity} * kSceneMatrixStride
-	+ vk::DeviceSize{kSceneMatrixCapacity} * kSceneDrawStride;
+	+ vk::DeviceSize{kSceneMatrixCapacity} * kSceneDrawStride
+	+ kSceneDataIrradianceBytes;
 
 /**
  * GPU 资源层（main.cpp 初始化层构造顺序第 4 站：AppContext→DeviceContext→Swapchain→
@@ -123,7 +134,8 @@ export class Resources {
 	 * 构建资源层（全部逻辑在成员初始化列表，按成员声明序）：vkInstance → vkDevice →
 	 * vkSwapchain → allocator（VMA，BDA flag）→ depthImage（createDepthImage，extent =
 	 * swapchain）→ depthImageView → descriptorHeap（createDescriptorHeap）→
-	 * samplerHeap（createSamplerHeap）→ nextSlot = reservedSlots（allocSlot 游标起点）。
+	 * samplerHeap（createSamplerHeap）→ mipGen（Phase 8 ③b compute mip 链管线）→
+	 * nextSlot = reservedSlots（allocSlot 游标起点）。
 	 * heap 容量与场景内容解耦（E1.3，批次 3）：固定裕量 kUserSlotMargin，不按内容
 	 * 精确预分配。用户槽位布局（相对 reserved range 起点，Phase 3 统一 slot 分配器
 	 * allocSlot 连续分配，顺序 = 上传顺序，几何全部先于纹理）：
@@ -187,9 +199,11 @@ export class Resources {
 	vk::DeviceSize getSamplerReservedRangeSize() const { return samplerHeap.getReservedSlots() * samplerHeap.getDescriptorSize(); }
 	/**
 	 * 共享 sampler（批次 1：owner 从 TexturePool 构造移入 Resources——初始化层对象持有）：
-	 * 一份 sampler 描述符（linear + CLAMP_TO_EDGE，无 mipmap）写 sampler heap 首个可用槽，
-	 * 全模型管线映射指向同一槽。幂等（首次调用写入，之后返回既有槽号）；调用点 = 创建
-	 * textured 管线前（main 启动期）。
+	 * 一份 sampler 描述符（linear + mipmap LINEAR + CLAMP_TO_EDGE，maxLod=20）写
+	 * sampler heap 首个可用槽，全模型管线映射指向同一槽。Phase 8 ③b 起 2D 纹理带
+	 * compute mip 链（mip_gen）——采样自动用 mip（maxLod 20 覆盖 ≤2^20 纹理链长，
+	 * Vulkan 按各图实际 mip 范围钳制，单 sampler 通吃不同尺寸）。幂等（首次调用写入，
+	 * 之后返回既有槽号）；调用点 = 创建 textured 管线前（main 启动期）。
 	 * sampler create info 存成员（稳定存储）：本机 RADV 写时即解析
 	 *（docs/archive/heap_texture_research.md §12.2，"采样期解引用"旧归因已证伪），
 	 * 但 spec 允许驱动延迟解释，生命周期须覆盖运行期。
@@ -223,6 +237,12 @@ export class Resources {
 	[[nodiscard]] const TextureAsset* getEnvTexture() const {
 		return envAsset ? &*envAsset : nullptr;
 	}
+	/** Phase 8 批次 ④a：环境漫反射辐照度 radiance SH9（9 × vec4，.xyz=系数、.w 留白；CPU
+	 * env 加载期投影，renderListSystem 每帧拷进 SceneFrameData.irradianceSH → scene data 尾区
+	 * → scene.slang irradiance(N) 做辐照度卷积消费）。 */
+	void setEnvIrradianceSH(const std::array<glm::vec4, 9>& sh) { envIrradianceSH = sh; }
+	/** @return 环境漫反射辐照度 radiance SH9（未设 = 全 0 = 无环境漫反射）。 */
+	[[nodiscard]] const std::array<glm::vec4, 9>& getEnvIrradianceSH() const { return envIrradianceSH; }
 	/**
 	 * SceneData buffer（Phase 5 批次 2）：幂等创建设备端 storage buffer（eTransferDst——
 	 * 每帧内容由 staging 拷入）+ 描述符写 allocSlot 运行时槽（同 slotTexture 模式，
@@ -305,6 +325,16 @@ export class Resources {
 	 */
 	[[nodiscard]] std::expected<std::array<uint32_t, 4>, Error> ensureDeferredGBufferSlots();
 
+	/**
+	 * Phase 8 批次 ①：确保 HDR 累加链 scene_hdr RT（名字/格式 = render_graph
+	 * kSceneHdrName/kSceneHdrFormat 单一真相源，rgba16_sfloat offscreen）并返回其
+	 * SAMPLED_IMAGE 堆槽（addTonemapEntry 烘焙 binding 4；tonemap pass 采样）。
+	 * 调用时序同 ensureDeferredGBufferSlots——几何/纹理/env（deferred 还有 G-buffer）
+	 * 槽之后、Renderer 之前；drawFrame 图循环对同名同格式命中复用、堆槽跨 resize 不变。
+	 * @return scene_hdr 的 SAMPLED_IMAGE heap 槽；Error = RT 创建 / 槽分配失败
+	 */
+	[[nodiscard]] std::expected<uint32_t, Error> ensureSceneHdrSlot();
+
 	/** @return 资产表引用（已上传 primitive 的 GPU 数据 + heap slot + 三角形数 + 管线
 	 * 条目引用；registry entity 经 MeshRef{asset} 引用，见 AssetTable 注释） */
 	RGL::AssetTable& getAssetTable() { return assetTable; }
@@ -312,6 +342,11 @@ export class Resources {
 	 * 路径经它创建 buffer/image（builtin_geometry / model_importer / texture_upload /
 	 * gpu_canary / Renderer staging）。 */
 	RGL::VmaAllocatorRAII& getAllocator() { return allocator; }
+	/** @return mip 链生成器（Phase 8 ③b；启动期一次性基础设施，构造于本对象构造期）。
+	 * uploadTexture 2D 路径经它把 mip 链（level ≥1）录进该纹理的上传 CB：UNORM =
+	 * compute 链（传统 descriptor set + 经典 compute 管线，与 bindless 渲染路径隔离）/
+	 * sRGB = LINEAR blit 链（见 mip_gen 模块头注释：RADV SRGB 无 STORAGE_IMAGE 能力）。 */
+	RGL::MipGen& getMipGen() { return mipGen; }
 	/**
 	 * 统一 slot 分配器（Phase 3，纹理资产并案）：从 reservedSlots 起单调分配，
 	 * name→slot 记日志（slot 表排查用）；调用方以生成的偏移常量校验布局契约（见构造器
@@ -383,6 +418,7 @@ export class Resources {
 	vk::raii::ImageView depthImageView;  // 深度图 view（raii，不可拷贝——成员初始化列表构造；与 depthImage 同步重建）
 	RGL::VmaDescriptorHeap descriptorHeap;  // resource heap（用户槽 = allocSlot 单调段，布局契约见构造器注释）
 	RGL::VmaDescriptorHeap samplerHeap;  // Phase 3：OpTypeSampler 独立 heap
+	RGL::MipGen mipGen;  // Phase 8 ③b：compute mip 链生成器（传统管线全栈，启动期一次性）
 	// 共享 sampler 的 create info 稳定存储（ensureSharedSampler 写入；
 	// 本机 RADV 写时即解析、spec 允许驱动延迟解释，生命周期须覆盖运行期，见其注释）
 	vk::SamplerCreateInfo samplerCreateInfo{};
@@ -393,6 +429,7 @@ export class Resources {
 	uint32_t skySamplerSlot = 0;  // sky sampler 槽号（= reservedSlots + 1）
 	bool skySamplerReady = false;  // sky sampler 就绪标记（ensureSkySampler 幂等守卫）
 	std::optional<TextureAsset> envAsset;  // env cubemap 单例（nullopt = 未上传环境；场景级资产，见 emplaceEnvTexture 注释）
+	std::array<glm::vec4, 9> envIrradianceSH{};  // Phase 8 ④a：环境漫反射 radiance SH9（env 加载期算，见 setEnvIrradianceSH）
 	// SceneData（Phase 5 批次 2）：设备端动态数据 buffer + 运行时槽（ensureSceneData 幂等写入）
 	RGL::VmaBuffer sceneDataBuffer;  // 设备端 scene data buffer（BDA + eTransferDst；未创建 = 空句柄）
 	uint32_t sceneDataSlot = 0;  // scene data 在 resource heap 的槽号（allocSlot 领取）
@@ -405,8 +442,10 @@ export class Resources {
 	std::map<std::string, RtAttachment> rtAttachments;  // std::map 节点地址稳定（RtAttachment 指针链前提）
 	/** 用户槽位固定裕量（与场景内容解耦；Phase 3 统一步长 = max(buffer, image)
 	 * descriptorSize，运行时查询——实测 RADV 64B（Mesa 26.2.1；首测 32B 为旧 Mesa 值）/
-	 * NVIDIA 32B / Intel 64B，1024 槽为 KB 级开销）。 */
-	static constexpr uint32_t kUserSlotMargin = 1024;
+	 * NVIDIA 32B / Intel 64B，4096 槽为 MB 级开销）。Phase 8 批次 ③a：纹理四元组
+	 *（base/normal/orm 独立去重上传 + 白 + 中性法线）后 bistro 纹理槽 ~1200+，
+	 * 1024 不够 → 4096。 */
+	static constexpr uint32_t kUserSlotMargin = 4096;
 };
 
 }  // namespace RGL

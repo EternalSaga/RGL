@@ -28,6 +28,11 @@ export struct PipelineSpec {
  * docs/archive/phase5_5_plan.md 素材定案；nightSky 层序 1,3,5,6,2,4 / rainbow 方案 B
  * ft,bk,up,dn,rt,lf），完整路径 = dir + "/" + faces[i]。intensity 进 scene data
  * @48（env.slang readEnvParams）；skybox = 背景天穹开关（批次 4 消费）。
+ *
+ * Phase 8 批次 ②b：`hdr` 非空 = 走 Radiance .hdr 环境路径（image_codec::decodeHdr →
+ * CPU 等距柱状→cubemap 重投影 → RGBA16F 上传），**优先于** dir/faces 六面 PNG 路径；
+ * .hdr 文件缺失时回落 PNG 路径（素材 gitignore，干净 checkout 仍可运行）。
+ * hdrSize = 重投影面边长（2 的幂，默认 2048）。
  */
 export struct EnvironmentConfig {
 	bool enabled = false;
@@ -35,6 +40,8 @@ export struct EnvironmentConfig {
 	std::array<std::string, 6> faces;
 	float intensity = 1.0f;
 	bool skybox = true;
+	std::string hdr;      // Phase 8 ②b：.hdr 环境路径（非空优先于 faces）
+	uint32_t hdrSize = 2048;  // 重投影面边长（2 的幂）
 };
 
 /**

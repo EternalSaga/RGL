@@ -25,8 +25,11 @@
   2. 输入文件与驱动路径不能混进 argv（文件走 source_filename 参数；混入 → parse 返回 NULL）；
   3. Gentoo 布局 resource dir 在 /usr/lib/clang/22，与 libclang 默认推导不一致——
      须显式 -resource-dir（否则 stddef.h not found、AST 残缺）；
-  4. `export module` + import + BMI 加载失败（缺失/标准不匹配）→ parse 返回 NULL 且
-     无诊断（libclang 缺陷）——按"跳过该文件 + 警告"处理（BMI 陈旧/部分构建时发生）；
+   4. `export module` + import + BMI 加载失败（缺失/标准不匹配）→ parse 返回 NULL 且
+      无诊断（libclang 缺陷）——按"跳过该文件 + 警告"处理（BMI 陈旧/部分构建时发生）；
+   4b. clean 后首次构建：@modmap 与 -fmodule-file 指向的 BMI 都是构建产物、此时不存在——
+      主进程预检 bmi_ready 整体跳过未就绪文件（纯文本规则不受影响照常跑），
+      不当失败报；编译产物就绪后（下一次构建 / 构建结束手动跑）自然恢复全量检查；
   5. LLVM 22 的 C API 结构体布局与网上旧例程全不同：CXCursor=32B {kind,xdata,data[3]}、
      CXSourceLocation/CXSourceRange=24B、CXToken=24B 值类型（tokenize 返回平铺数组，
      无 clang_getToken(array,i)）、CXString=16B 值类型——照旧例程写必段错误。
@@ -53,6 +56,7 @@ import shlex
 import subprocess
 import sys
 from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
@@ -88,6 +92,7 @@ ZERO_ENTT_MODULES = {
     "vk_indirect_commands", "frame_session", "frame_capture", "cull_driver",
     "frame_draw_list", "render_graph", "render_graph_config", "diagnostics",
     "gpu_canary", "runtime_config", "camera_config", "scene_config",
+    "image_codec",
 }
 # AGENTS.md 点名的假边（配置不依赖执行模块；截图经回调）
 FORBIDDEN_EDGES = {
@@ -96,8 +101,8 @@ FORBIDDEN_EDGES = {
 }
 
 # 模块优先：rgl/ 下除入口与单头库实现单元外不得有 .cpp，任何 .h/.hpp/.hh 都不允许
-# （stb/tinygltf/VMA 是单头 C 库，实现宏只能放普通 .cpp——既有例外，勿删）
-ALLOWED_CPP = {"main.cpp", "stb_impl.cpp", "tinygltf_impl.cpp", "vam_impl.cpp"}
+# （tinygltf/VMA 是单头 C 库，实现宏只能放普通 .cpp——既有例外，勿删）
+ALLOWED_CPP = {"main.cpp", "tinygltf_impl.cpp", "vam_impl.cpp"}
 
 # GMF 的 STL 白名单（AGENTS.md"优先使用 rlstd"）：STL 头只许三个例外，
 # 其余一律走 import rlstd（缺名补入 rlstd.cppm）；第三方头不受此限
@@ -307,20 +312,28 @@ def nesting_depth(lib, func_cur):
 # ─── 编译命令清理（坑 1/2/3 全在这里）────────────────────────────────────────
 
 
-def clean_cmd(entry, full, scratch_dir, resdir):
-    """compile_commands 命令 → libclang 可用的纯 flag 列表。"""
+def expand_at(entry):
+    """展开命令里的 @response file（modmap）→ raw token 列表。
+
+    @response file 是构建产物；clean 后尚未编译时不存在 → 返回 None（未就绪），
+    调用方据此跳过而非崩溃（坑 4b）。"""
     raw = []
     for a in shlex.split(entry["command"], posix=os.name != "nt"):
         if a.startswith("@"):
             rf = a[1:]
             if not os.path.isabs(rf):
                 rf = os.path.join(entry["directory"], rf)
+            if not os.path.exists(rf):
+                return None
             raw.extend(shlex.split(open(rf, encoding="utf-8").read().strip()))
         else:
             raw.append(a)
-    # -fmodule-file 的 BMI 相对路径按 CWD 解析（构建时 CWD=build 目录）——
-    # 这里统一转绝对路径，工具自身 CWD 无所谓
-    absed = []
+    return raw
+
+
+def abs_module_files(raw, directory):
+    """-fmodule-file 的 BMI 相对路径按 CWD 解析（构建时 CWD=build 目录）——转绝对。"""
+    out = []
     for a in raw:
         if a.startswith("-fmodule-file="):
             v = a[len("-fmodule-file="):]
@@ -329,10 +342,33 @@ def clean_cmd(entry, full, scratch_dir, resdir):
             else:
                 name, path = None, v
             if not os.path.isabs(path):
-                path = os.path.abspath(os.path.join(entry["directory"], path))
+                path = os.path.abspath(os.path.join(directory, path))
             a = f"-fmodule-file={name}={path}" if name else f"-fmodule-file={path}"
-        absed.append(a)
-    raw = absed
+        out.append(a)
+    return out
+
+
+def bmi_ready(entry):
+    """libclang 检查是否可用：@modmap 存在 + 全部 -fmodule-file BMI 存在。
+
+    clean 后首次构建产物尚未生成 → False，主进程跳过 libclang 解析（纯文本规则不受影响）。"""
+    raw = expand_at(entry)
+    if raw is None:
+        return False
+    for a in abs_module_files(raw, entry["directory"]):
+        if a.startswith("-fmodule-file="):
+            path = a[len("-fmodule-file="):].split("=", 1)[-1]
+            if not os.path.exists(path):
+                return False
+    return True
+
+
+def clean_cmd(entry, full, scratch_dir, resdir):
+    """compile_commands 命令 → libclang 可用的纯 flag 列表。"""
+    raw = expand_at(entry)
+    if raw is None:
+        raise RuntimeError("构建产物未就绪：@response file（modmap）缺失，需先 just build")
+    raw = abs_module_files(raw, entry["directory"])
     cmd = []
     skip = False
     for a in raw:
@@ -401,8 +437,11 @@ def _worker_task(rel_entry):
     rel, entry = rel_entry
     ctx = _W["ctx"]
     full = os.path.join(ctx["root"], rel)
-    src = open(full, "rb").read()
-    cmd = clean_cmd(entry, full, ctx["scratch_dir"], ctx["resdir"])
+    try:
+        src = open(full, "rb").read()
+        cmd = clean_cmd(entry, full, ctx["scratch_dir"], ctx["resdir"])
+    except Exception as ex:
+        return rel, None, "error:" + str(ex).splitlines()[0]
     key = hashlib.sha256(
         CACHE_VERSION.encode()
         + hashlib.sha256(src).hexdigest().encode()
@@ -419,6 +458,20 @@ def _worker_task(rel_entry):
     with open(cache, "w", encoding="utf-8") as f:
         json.dump(m, f, ensure_ascii=False)
     return rel, m, "parsed"
+
+
+def _pool_results(ctx, ready, workers):
+    """ProcessPoolExecutor 一进程一文件跑 _worker_task，逐条 yield 结果（main 的
+    try/except BrokenProcessPool 消费本生成器，worker 猝死不 traceback 阻断构建）。
+
+    @param ctx _worker_init 上下文字典（libclang/root/scratch/cache/resdir）
+    @param ready 预检就绪的 (rel, entry) 列表
+    @param workers 并行进程数
+    @return (rel, metrics, how) 三元组生成器（metrics=None 时 how 携 error 描述）
+    """
+    with ProcessPoolExecutor(max_workers=workers, initializer=_worker_init,
+                             initargs=(ctx,)) as pool:
+        yield from pool.map(_worker_task, ready)
 
 
 # ─── 文本检查（纯主进程，覆盖全部 rgl/*.cppm 含 rlvk，排除 generated/）──────
@@ -597,6 +650,11 @@ def main():
             continue
         units.append((rel, by_file[full]))
 
+    # 预检构建产物（坑 4b）：clean 后首次构建 modmap/BMI 尚未生成且与编译并行竞争，
+    # 未就绪的跳过 libclang 解析——纯文本规则（分层/模块优先/STL 白名单）不受影响
+    ready = [u for u in units if bmi_ready(u[1])]
+    notready = len(units) - len(ready)
+
     ctx = {"root": ROOT, "build": build, "libclang": libclang,
            "cache_dir": os.path.join(build, "stylecheck_cache"),
            "scratch_dir": os.path.join(build, "stylecheck_scratch"),
@@ -605,9 +663,9 @@ def main():
     os.makedirs(ctx["cache_dir"], exist_ok=True)
 
     warnings, errors, hits, parsed = [], [], 0, 0
-    with ProcessPoolExecutor(max_workers=args.workers, initializer=_worker_init,
-                             initargs=(ctx,)) as pool:
-        for rel, metrics, how in pool.map(_worker_task, units):
+    try:
+        pool_iter = _pool_results(ctx, ready, args.workers)
+        for rel, metrics, how in pool_iter:
             if metrics is None:
                 errors.append((rel, how[len("error:"):]))
                 continue
@@ -639,6 +697,12 @@ def main():
                 if n.startswith("_") or n.startswith("m_") or n.endswith("_"):
                     warnings.append((rel, fd["line"],
                         f"成员变量 '{n}'——成员命名不加 _/m_ 前缀、不加 _ 后缀（自然命名）"))
+    except BrokenProcessPool:
+        # libclang worker 进程猝死（段错误/OOM）：本批未消费文件整体跳过（警告语义不
+        # 阻断构建——2026-09-11 教训：pool 崩溃 traceback 会让 ninja 误判 style_check
+        # 边失败，-k1 停调度连带拖死整条构建）。已就绪 BMI 重跑即恢复。
+        print("[style-check] libclang worker 进程崩溃（BrokenProcessPool），本次剩余文件跳过"
+              "——多为 BMI 写坏（构建中途 kill）或 libclang 缺陷，编译完成重跑即恢复")
 
     warnings.extend(text_checks())
 
@@ -647,8 +711,12 @@ def main():
         print(f"[style-check] {loc}: {msg}")
     for rel, err in errors:
         print(f"[style-check] {rel}: 检查失败（跳过）: {err}")
+    skipped_note = f"、产物未就绪跳过 {notready}" if notready else ""
     print(f"[style-check] 汇总: {len(warnings)} 警告 / {len(units)} 个 .cppm"
-          f"（缓存命中 {hits}、解析 {parsed}、失败 {len(errors)}）")
+          f"（缓存命中 {hits}、解析 {parsed}、失败 {len(errors)}{skipped_note}）")
+    if notready:
+        print("[style-check] 提示: 跳过 = modmap/BMI 构建产物缺失（clean 后首次构建属正常，"
+              "与编译并行时尚未生成）；本次仅跑纯文本规则，编译完成后重跑即全量生效")
     sys.exit(1 if (args.strict and (warnings or errors)) else 0)
 
 

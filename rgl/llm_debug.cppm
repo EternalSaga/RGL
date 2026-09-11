@@ -11,7 +11,7 @@ namespace RGL {
  * llm_debug 截图消费端（2026-09-08：离屏重渲器退役——截图 = drawFrame 本帧真实输出的
  * 帧内回读，见 vkrenderer.cppm FrameCapture）。渲染侧已在 drawFrame 内完成（present 前
  * 录回读拷贝 + 同步等本帧 fence），本函数 = takeFrameCapture → 按格式转 RGBA8 →
- * stb PNG。
+ * image_codec PNG（libpng 简单 API，替代旧 stb）。
  *
  * 旧 rationale（"后缓冲 present 生命周期由 compositor 掌控、Wayland 息屏 present
  * 停滞、隐藏窗 extent 协商抖动，故离屏重渲"）被新设计消解：拷贝录在 present 之前

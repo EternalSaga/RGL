@@ -104,7 +104,15 @@ return {
     -- Phase 5.5 环境 cubemap（缺段 = 不启用）。faces 按 Vulkan 层序 0-5 = (+X,−X,+Y,−Y,+Z,−Z)
     -- 排列，素材面顺序定案表见 docs/archive/phase5_5_plan.md（rainbow 方案 B：ft,bk,up,dn,rt,lf；
     -- nightSky 层序 = 1,3,5,6,2,4）。intensity 进 scene data @48；skybox = 背景天穹（批次 4）。
+    -- Phase 8 批次 ②b：hdr 非空 = 优先走 Radiance .hdr 环境（CPU 等距柱状→RGBA16F cubemap
+    -- 重投影，官方 Bistro 素材 san_giuseppe_bridge）；素材 gitignore，文件缺失自动告警回落
+    -- faces PNG 路径。hdr_size = 重投影面边长（2 的幂，默认 2048）。
+    -- intensity：官方 Falcor 配方为 10，但那是对其 irradiance 卷积归一后的校准值；本工程
+    -- 简化 IBL 直接采 cubemap top-mip 平均（env 线性均值本就 ≈0.56），×10 必过曝。实测
+    -- 1.0 时 forward/deferred 建筑与背景曝光正常（docs/phase8_plan.md ②b/③a 记录）。
     environment = {
+        hdr = "env/san_giuseppe_bridge_4k.hdr",
+        hdr_size = 2048,
         dir = "skybox/rainbow",
         faces = { "rainbow_ft.png", "rainbow_bk.png", "rainbow_up.png",
                   "rainbow_dn.png", "rainbow_rt.png", "rainbow_lf.png" },

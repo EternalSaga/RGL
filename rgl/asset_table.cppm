@@ -83,7 +83,8 @@ export struct TextureAsset {
 	uint32_t heapSlot = 0;
 	uint32_t width = 0;
 	uint32_t height = 0;
-	// Phase 5.5：mip 级数（2D 路径 = 1；cubemap = 1+log2(size)，sky sampler maxLod 由此派生）
+	// Phase 5.5：mip 级数（2D 路径 = 1+floor(log2(max(w,h))，Phase 8 ③b compute 链；
+	// cubemap = 1+log2(size)，sky sampler maxLod 由此派生）
 	uint32_t mipLevels = 1;
 	// 描述符指针链（自/兄弟引用，入 deque 后设置——元素地址稳定保证指针有效）
 	vk::ImageDescriptorInfoEXT imageDesc{};        // pView = &viewCreate，layout = eShaderReadOnlyOptimal

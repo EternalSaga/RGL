@@ -1,5 +1,4 @@
 module;
-#include <stb_image_write.h>
 #include <filesystem>
 #include <chrono>
 #include <fmt/format.h>
@@ -7,6 +6,7 @@ module llm_debug:capture;
 
 import llm_debug;  // clang 不给 partition impl unit 隐式 import 主接口——必须显式
 import rlstd;
+import image_codec;  // PNG 写盘（替代旧 stb_image_write）
 import rlvk;
 import rllogger;
 import vkerror;
@@ -153,7 +153,7 @@ std::vector<uint8_t> toRgba8(const Renderer::FrameCapture& cap, bool gbufRaw) {
 
 /** 实现流水（语义/契约见接口声明）：takeFrameCapture（无产物 = Error）→
  * toRgba8（gbufRaw 由 gbufChannel 判定）→ 路径解析（gbuffer_N.png / cfg.file /
- * 时间戳名）→ create_directories + stbi_write_png → 返回绝对路径。 */
+ * 时间戳名）→ create_directories + image_codec::writePng → 返回绝对路径。 */
 std::expected<std::string, Error> writeCapturePng(RGL::Renderer& renderer, const LlmDebugConfig& cfg) {
 	auto* logger = RLLogger::getInstance();
 	auto cap = renderer.takeFrameCapture();
@@ -179,10 +179,9 @@ std::expected<std::string, Error> writeCapturePng(RGL::Renderer& renderer, const
 		relPath = cfg.file;
 	std::error_code ec;
 	std::filesystem::create_directories(relPath.parent_path(), ec);
-	if (!stbi_write_png(relPath.string().c_str(), static_cast<int>(cap->width),
-	        static_cast<int>(cap->height), 4, rgba.data(), static_cast<int>(cap->width) * 4)) {
+	if (!writePng(relPath.string(), cap->width, cap->height, rgba.data())) {
 		if (logger)
-			logger->error("llm_debug: stbi_write_png failed: {}", relPath.string());
+			logger->error("llm_debug: writePng failed: {}", relPath.string());
 		return std::unexpected(Error{ErrorCode::Unknown,
 			fmt::format("llm_debug: failed to write PNG: {}", relPath.string())});
 	}

@@ -58,6 +58,10 @@ export struct SceneFrameData {
 	// Phase 5.5 env 参数（scene data 头 @48/@52，原 16B 保留区启用；shader 端
 	// env.slang readEnvParams 字面量一致）：x=envIntensity y=envMipRange（=L−1，0 = 无环境）
 	glm::vec2 envParams{0.0f};
+	// Phase 8 批次 ④a：漫反射辐照度 radiance SH9（scene data 尾区 kSceneDataIrradianceOffset，
+	// 9×vec4 .xyz=系数，scene.slang irradiance(N) 消费）；renderListSystem 每帧从
+	// Resources::getEnvIrradianceSH 填。
+	std::array<glm::vec4, 9> irradianceSH{};
 	// Phase 5.5 批次 4：天空盒 clip→world 矩阵（scene data @64，sky.slang skyClipToWorld；
 	// = inverse(proj·view)，renderListSystem 每帧从 ViewProjection 推导）
 	glm::mat4 skyInvViewProj{1.0f};

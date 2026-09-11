@@ -347,30 +347,9 @@ void GpuCull::recordCullPass(vk::raii::CommandBuffer& cmd, const CullFrameInput&
 		0, vk::HostAddressRangeConstEXT(pushBytes, sizeof(CullFrameInput))));
 	cmd.dispatch((nCandidates + 63) / 64, 1, 1);
 
-	// 静态 DGC 路：基础序列 → per-entry 流扇出（cull 写 sequences → fanout 读，
-	// compute→compute 屏障；流写完后由主 CB DGC preprocess 消费——同队列提交序 +
-	// 同帧 fence 执行依赖，与 NV 路序列消费同款前提，帧内无跨在途帧读写）。
-	// grid.y = entryCount；写全 (i,j) 行（孔洞 = x=0），无脏行残留（spike §3.3）
-	if (nEntryStreams > 0) {
-		vk::BufferMemoryBarrier2 fanBarrier{};
-		fanBarrier.srcStageMask = vk::PipelineStageFlagBits2::eComputeShader;
-		fanBarrier.srcAccessMask = vk::AccessFlagBits2::eShaderWrite;
-		fanBarrier.dstStageMask = vk::PipelineStageFlagBits2::eComputeShader;
-		fanBarrier.dstAccessMask = vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite;
-		fanBarrier.buffer = *sequenceBuffer;
-		fanBarrier.size = VK_WHOLE_SIZE;
-		vk::DependencyInfo fanDep{};
-		fanDep.setBufferMemoryBarriers(fanBarrier);
-		cmd.pipelineBarrier2(fanDep);
-
-		std::array<vk::ShaderStageFlagBits, 1> fanStages = {vk::ShaderStageFlagBits::eCompute};
-		std::array<vk::ShaderEXT, 1> fanHandles = {*fanoutShader};
-		cmd.bindShadersEXT(fanStages, fanHandles);
-		const uint32_t fanPush[1] = {nCandidates};  // FanoutPush.sequenceCount（kernel 头注释契约）
-		cmd.pushDataEXT(vk::PushDataInfoEXT(0, vk::HostAddressRangeConstEXT(
-			reinterpret_cast<const std::byte*>(fanPush), sizeof(fanPush))));
-		cmd.dispatch((nCandidates + 63) / 64, nEntryStreams, 1);
-	}
+	// 静态 DGC 路：per-entry 流扇出（门控 = 构造期是否建流，NV/重放路零开销）
+	if (nEntryStreams > 0)
+		recordFanoutDispatch(cmd);
 
 	// 输出 buffer：Compute 写 → Transfer 读（序列 + count）
 	vk::BufferMemoryBarrier2 seqBarrier{};
@@ -405,6 +384,31 @@ void GpuCull::recordCullPass(vk::raii::CommandBuffer& cmd, const CullFrameInput&
 	vk::DependencyInfo hostDep{};
 	hostDep.setMemoryBarriers(hostBarrier);
 	cmd.pipelineBarrier2(hostDep);
+}
+
+// recordFanoutDispatch 定义（接口注释见 gpu_cull.cppm 私有段）。流写完后由主 CB
+// DGC preprocess 消费——同队列提交序 + 同帧 fence 执行依赖，与 NV 路序列消费同款
+// 前提，帧内无跨在途帧读写。grid.y = entryCount；写全 (i,j) 行（孔洞 = x=0），
+// 无脏行残留（spike §3.3）。
+void GpuCull::recordFanoutDispatch(vk::raii::CommandBuffer& cmd) {
+	vk::BufferMemoryBarrier2 fanBarrier{};
+	fanBarrier.srcStageMask = vk::PipelineStageFlagBits2::eComputeShader;
+	fanBarrier.srcAccessMask = vk::AccessFlagBits2::eShaderWrite;
+	fanBarrier.dstStageMask = vk::PipelineStageFlagBits2::eComputeShader;
+	fanBarrier.dstAccessMask = vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite;
+	fanBarrier.buffer = *sequenceBuffer;
+	fanBarrier.size = VK_WHOLE_SIZE;
+	vk::DependencyInfo fanDep{};
+	fanDep.setBufferMemoryBarriers(fanBarrier);
+	cmd.pipelineBarrier2(fanDep);
+
+	std::array<vk::ShaderStageFlagBits, 1> fanStages = {vk::ShaderStageFlagBits::eCompute};
+	std::array<vk::ShaderEXT, 1> fanHandles = {*fanoutShader};
+	cmd.bindShadersEXT(fanStages, fanHandles);
+	const uint32_t fanPush[1] = {nCandidates};  // FanoutPush.sequenceCount（kernel 头注释契约）
+	cmd.pushDataEXT(vk::PushDataInfoEXT(0, vk::HostAddressRangeConstEXT(
+		reinterpret_cast<const std::byte*>(fanPush), sizeof(fanPush))));
+	cmd.dispatch((nCandidates + 63) / 64, nEntryStreams, 1);
 }
 
 uint32_t GpuCull::readCullResult(uint32_t slot) {
