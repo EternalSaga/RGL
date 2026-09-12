@@ -16,7 +16,7 @@
 //        （Phase 7b+ NV DGC 规避：DrawArgs 去 mvp 后 push 36B < NV 驱动 84B 挂死阈值；
 //          CPU 每帧写，值 = 原 DrawArgs.mvp 位级一致；基址 = 128+4096×64+528，
 //          vkresources kSceneDataMvpTableOffset 同值——字面量同步，无反射端）
-//   @524944 per-object 材质/几何表：stride 32 × 4096，[objectIndex]（Phase 7b+ 续：
+//   @524944 per-object 材质/几何表：stride 48 × 4096，[objectIndex]（Phase 7b+ 续：
 //        DrawArgs 最终只留 objectIndex 4B push，其余全进此表；readObjectDraw 消费）
 //
 // 世界空间光照：本文件负责 object→world 变换（位置/法线各一次矩阵读，仅光照风格消费；
@@ -81,27 +81,30 @@ ObjectMatrix readObjectMvp(uint objectIndex)
 }
 
 // Phase 7b+（NV DGC 规避）：per-object 材质/几何表（DrawArgs 去 mvp 后剩余字段也进 heap，
-// push 仅留 objectIndex）。基址 @524944 = 128+4096×64+528+4096×64，stride 32，
+// push 仅留 objectIndex）。基址 @524944 = 128+4096×64+528+4096×64，stride 48，
 // vkresources kSceneDataDrawTableOffset / ObjectDrawGpu 同布局（字面量同步，无反射端）：
 //   @0  uint totalTriangles | uint vertexOffset | float roughness | float metallic
 //   @16 float4 baseColor
+//   @32 float4 emissive（Phase 8 ③：xyz=emissiveFactor、w 留白；无 emissive 材质 = 0）
 struct ObjectDraw
 {
     uint totalTriangles;
     uint vertexOffset;
     float4 baseColor;
     float2 roughnessMetallic;
+    float4 emissive;  // Phase 8 ③：xyz=emissiveFactor（model_pbr_ibl.frag 叠加自发光）
 };
 
 ObjectDraw readObjectDraw(uint objectIndex)
 {
-    uint base = 524944u + objectIndex * 32u;
+    uint base = 524944u + objectIndex * 48u;
     float4 a = asfloat(sceneData.Load4(base));  // x=totalTri y=vertOff z=rough w=metal
     ObjectDraw d;
     d.totalTriangles = asuint(a.x);
     d.vertexOffset = asuint(a.y);
     d.roughnessMetallic = float2(a.z, a.w);
     d.baseColor = asfloat(sceneData.Load4(base + 16u));
+    d.emissive = asfloat(sceneData.Load4(base + 32u));  // Phase 8 ③：@32 emissive（xyz=factor）
     return d;
 }
 
@@ -117,13 +120,13 @@ float3 worldNormal(ObjectMatrix m, float3 n)
 
 // ── Phase 8 批次 ④a：完整版 IBL 辅助（forward model_pbr_ibl 与 deferred light.frag 共用）──
 //
-// 漫反射辐照度 = CPU 投影的 radiance SH9（scene data 尾区 @656016，9×vec3）做辐照度余弦卷积。
+// 漫反射辐照度 = CPU 投影的 radiance SH9（scene data 尾区 @721552，9×vec3）做辐照度余弦卷积。
 // 卷积常数（Karis/Green 辐照度 A 因子：π·l0 + 2π/3·l1 + π/4·l2）在求值里施加，CPU 侧只投影
 // radiance（texture_pool::projectRadianceSH9，基函数与本处逐式一致，两端必须同步）。
 // 基函数与 CPU shBasis 严格相同（real SH，归一化常数烘焙）。
 float3 irradianceSH(float3 n)
 {
-    uint base = 656016u;  // kSceneDataIrradianceOffset（vkresources.cppm 字面量同步）
+    uint base = 721552u;  // kSceneDataIrradianceOffset（vkresources.cppm 字面量同步）
     // 9 × vec4 排布（.xyz=系数，.w 留白；16B 对齐满足 ByteAddressBuffer.Load4 前提）
     float3 sh0 = asfloat(sceneData.Load4(base + 0u)).xyz;
     float3 sh1 = asfloat(sceneData.Load4(base + 16u)).xyz;

@@ -88,23 +88,25 @@ export class ShaderRegistry {
 	 * baseColor SAMPLED_IMAGE 描述符槽、binding 2 = sampler heap 槽——OpTypeSampler 映射，
 	 * 共享一份 sampler 描述符，偏移 = samplerSlot * samplerHeap.getDescriptorSize()；
 	 * binding 3 = scene data、4/5 = env 恒烘焙；binding 6/7 = normal/orm 贴图槽
-	 *（Phase 8 ③a，extra 追加，见 impl））。
+	 *（Phase 8 ③a）、binding 8 = emissive 贴图槽（Phase ③，extra 追加，见 impl））。
 	 * 首参 specName = 管线规格名（Phase 4 批次 3：风格→规格名映射在 main.cpp 经 scene.lua
 	 * styles 表完成，本函数只认规格名）；按 (规格, 顶点 slot, base 纹理 slot, normal slot,
-	 * orm slot) 五元组组合去重——同组合返回既有条目下标（不重复建 shader object）；
-	 * 新组合建条目并记入 indexByName / 去重表。返回条目下标，调用方经 bindToAsset 写回
-	 * 资产记录（renderListSystem 经资产表解析管线，无字符串约定）。失败（规格缺失 /
+	 * orm slot, emissive slot) 六元组组合去重——同组合返回既有条目下标（不重复建 shader
+	 * object）；新组合建条目并记入 indexByName / 去重表。返回条目下标，调用方经 bindToAsset
+	 * 写回资产记录（renderListSystem 经资产表解析管线，无字符串约定）。失败（规格缺失 /
 	 * SPV 加载失败等）抛出（同构造期路径）。
 	 * @param specName 管线规格名（scene.lua styles / findSpec 回落词表）
 	 * @param vertexSlot 顶点 buffer heap 槽（binding 0；模型顶点/索引共享同一 buffer）
 	 * @param textureSlot baseColor 纹理 SAMPLED_IMAGE heap 槽（binding 1；白纹理 = 纹理首槽）
 	 * @param normalSlot normal 贴图 SAMPLED_IMAGE heap 槽（binding 6；无贴图 = 中性法线纹理槽）
 	 * @param ormSlot ORM 贴图 SAMPLED_IMAGE heap 槽（binding 7；无贴图 = 白纹理槽）
+	 * @param emissiveSlot emissive 贴图 SAMPLED_IMAGE heap 槽（binding 8；无贴图 = 白纹理槽）
 	 * @param samplerSlot 共享 sampler 的 sampler heap 槽（binding 2，ensureSharedSampler 产物）
 	 * @return 条目下标（新组合 = entries 追加）
 	 */
 	[[nodiscard]] uint32_t addModelEntry(const std::string& specName, uint32_t vertexSlot,
-		uint32_t textureSlot, uint32_t normalSlot, uint32_t ormSlot, uint32_t samplerSlot);
+		uint32_t textureSlot, uint32_t normalSlot, uint32_t ormSlot, uint32_t emissiveSlot,
+		uint32_t samplerSlot);
 
 	/**
 	 * 天空盒管线条目（Phase 5.5 批次 4）：单条目（env 槽全局单例，无组合去重需求）。
@@ -244,7 +246,7 @@ export class ShaderRegistry {
 	RGL::Resources& res;         // 资源层引用（heap / sampler 槽 / scene data / env 烘焙）
 	std::map<std::string, RGL::PipelineSpec> styles;          // 风格名 → SPV 规格（scene.lua）
 	std::map<std::string, uint32_t> indexByName;              // 条目名 → 下标（启动期 name 解析）
-	std::map<std::tuple<std::string, uint32_t, uint32_t, uint32_t, uint32_t>, uint32_t> modelEntryBySlot;  // 模型条目去重表：(规格名, 顶点 slot, base 纹理 slot, normal slot, orm slot) → 下标
+	std::map<std::tuple<std::string, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>, uint32_t> modelEntryBySlot;  // 模型条目去重表：(规格名, 顶点 slot, base 纹理 slot, normal slot, orm slot, emissive slot) → 下标
 	std::vector<PipelineEntry> entries;                       // 管线表（下标 = 绘制契约）
 };
 

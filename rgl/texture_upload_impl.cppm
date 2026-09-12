@@ -201,6 +201,13 @@ export [[nodiscard]] std::expected<uint32_t, Error> uploadTexture(RGL::Resources
 		*device.getGraphicsCommandPool(), vk::CommandBufferLevel::ePrimary, 1});
 	auto cmd = std::move(cmdAlloc[0]);
 	cmd.begin(vk::CommandBufferBeginInfo{});
+	// UNORM compute 链走 descriptor heap + shader object：录制前备齐本纹理 mip 级数对应的
+	// level shader/槽（幂等增量；仅 UNORM 多 mip 触发，sRGB blit 链无描述符）。时序天然
+	// 晚于几何段与白纹理首槽（A2 阶段，见 ensureMipGenReady 接口"时序契约"）。
+	if (!isSrgb && mipLevels > 1) {
+		if (auto ready = resources.ensureMipGenReady(mipLevels); !ready)
+			return std::unexpected(std::move(ready).error());
+	}
 	auto recordResult = recordMipZeroAndChain(cmd, staging, image, w, h, mipLevels,
 		format, isSrgb, resources.getMipGen(), name);
 	if (!recordResult) return std::unexpected(std::move(recordResult).error());

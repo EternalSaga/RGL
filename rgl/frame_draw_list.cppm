@@ -31,10 +31,11 @@ export struct DrawCall {
 
 /**
  * Phase 7b+（NV DGC 规避）：per-object 材质/几何表条目（scene data @kSceneDataDrawTableOffset，
- * stride 32，objectIndex 索引）。DrawArgs 去 mvp 后剩余字段一并进 heap，push 仅留 objectIndex
+ * stride 48，objectIndex 索引）。DrawArgs 去 mvp 后剩余字段一并进 heap，push 仅留 objectIndex
  *（4B）绕开 NV DGC push 挂死。布局与 scene.slang readObjectDraw 字面量手工一致：
  *   @0 uint totalTriangles | uint vertexOffset | float roughness | float metallic
  *   @16 float4 baseColor
+ *   @32 float4 emissive（Phase 8 ③：xyz=emissiveFactor、w 留白；无 emissive 材质 = 0）
  */
 export struct ObjectDrawGpu {
 	uint32_t totalTriangles = 0;
@@ -42,8 +43,9 @@ export struct ObjectDrawGpu {
 	float roughness = 0.0f;
 	float metallic = 0.0f;
 	glm::vec4 baseColor{1.0f};
+	glm::vec4 emissive{0.0f};  // Phase 8 ③：xyz=emissiveFactor（w 留白），shader readObjectDraw().emissive
 };
-static_assert(sizeof(ObjectDrawGpu) == 32, "ObjectDrawGpu must match scene.slang readObjectDraw stride 32");
+static_assert(sizeof(ObjectDrawGpu) == 48, "ObjectDrawGpu must match scene.slang readObjectDraw stride 48");
 
 /**
  * 场景级每帧动态数据（Phase 5 批次 2，bindless）：渲染 system 产出、drawFrame 消费——

@@ -203,6 +203,13 @@ static void fillMaterialFields(const tinygltf::Model& gltf, int materialIndex, G
 	const auto& mrt = mat.pbrMetallicRoughness.metallicRoughnessTexture;
 	if (mrt.index >= 0 && mrt.index < static_cast<int>(gltf.images.size()))
 		out.metallicRoughnessTextureIndex = mrt.index;
+	const auto& ef = mat.emissiveFactor;  // Phase 8 ③：emissiveFactor（缺省 [0,0,0] = 不发光）
+	if (ef.size() == 3)
+		out.emissive = glm::vec3(
+			static_cast<float>(ef[0]), static_cast<float>(ef[1]), static_cast<float>(ef[2]));
+	const auto& et = mat.emissiveTexture;
+	if (et.index >= 0 && et.index < static_cast<int>(gltf.images.size()))
+		out.emissiveTextureIndex = et.index;
 	out.alphaModeBlend = (mat.alphaMode == "BLEND");
 	out.metallic = static_cast<float>(mat.pbrMetallicRoughness.metallicFactor);
 	out.roughness = static_cast<float>(mat.pbrMetallicRoughness.roughnessFactor);

@@ -1,5 +1,6 @@
 module;
 #include <vulkan/vulkan.h>  // VK_* 宏/C 函数（rlvk 不含宏；C 头解析 ~0.4s）
+#include <cstddef>          // offsetof（MipGenPushData heapIndex 偏移 static_assert）
 #include <fmt/format.h>
 module mip_gen:impl;
 
@@ -9,13 +10,15 @@ import rlvk;
 import rllogger;
 import vkerror;
 import vk_device;
+import VmaRaii;       // VmaDescriptorHeap（heap 引用类型 + getSlotCpuAddress/getDescriptorSize）
 import vulkan_utils;  // createImageBarrier（per-level 布局物化）
-import shader;        // loadShaderSpv（mip_gen.comp.spv）
+import shader;        // loadShaderSpv（mip_gen.comp.slang）
 
 namespace RGL {
 
-// 构造器 / recordChain 定义（契约与行为注释见 mip_gen.cppm 接口声明）。本单元是
-// 叶子边（不 import vk_resources——Resources 持本模块类型，无环），编译不上关键路径。
+// 构造器 / init / addLevel / createLevelShader / writeImageDesc / recordChain 定义（契约见
+// 接口声明）。本单元是叶子边（不 import vk_resources——Resources 持本模块类型，无环），
+// 编译不上关键路径。descriptor heap + shader object 版（迁离旧 descriptor pool）。
 
 namespace {
 
@@ -27,109 +30,178 @@ std::vector<uint32_t> loadMipGenSpv() {
 	return *spv;
 }
 
-/** shader module create info（SPV 码流拷贝进驱动）。 */
-vk::ShaderModuleCreateInfo buildShaderModuleInfo(const std::vector<uint32_t>& spv) {
-	vk::ShaderModuleCreateInfo info{};
-	info.codeSize = spv.size() * sizeof(uint32_t);
-	info.pCode = spv.data();
-	return info;
-}
+/** heap push index 在 push data 的字节偏移：MipGenPush 占 3×u32（0..11），留 2 槽位后
+ * 落在第 5 个 u32（offset 20）——与 createLevelShader 的 mapping.pushOffset 一致，
+ * 与 recordChain push data 里 heapIndex 成员偏移一致（三者手工同频，改动须同步）。 */
+constexpr uint32_t kPushIndexByte = 5 * 4;
 
-/** 3 binding（0=sampled 1=storage 2=sampler，均 COMPUTE 阶段）——返回值存成员
- * setLayoutBindings（pBindings 目标须活过 create 调用，见接口成员注释）。 */
-std::array<vk::DescriptorSetLayoutBinding, 3> buildSetLayoutBindings() {
-	std::array<vk::DescriptorSetLayoutBinding, 3> bindings{};
-	bindings[0] = {0, vk::DescriptorType::eSampledImage, 1, vk::ShaderStageFlagBits::eCompute, nullptr};
-	bindings[1] = {1, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute, nullptr};
-	bindings[2] = {2, vk::DescriptorType::eSampler, 1, vk::ShaderStageFlagBits::eCompute, nullptr};
-	return bindings;
-}
-
-/** set layout create info（pBindings 指向调用方长期存活的 bindings——helper 不得持局部数组）。 */
-vk::DescriptorSetLayoutCreateInfo buildSetLayoutInfo(const std::array<vk::DescriptorSetLayoutBinding, 3>& bindings) {
-	vk::DescriptorSetLayoutCreateInfo info{};
-	info.bindingCount = static_cast<uint32_t>(bindings.size());
-	info.pBindings = bindings.data();
-	return info;
-}
-
-/** pipeline layout（set layout + COMPUTE push 16B = MipGenPush）。
- * hpp struct 的数组成员是 handle-class 指针（与 raii 同名冲突、rlvk 未导出）——
- * 走 C struct + hpp from-C 构造（项目既有模式，如 ensureSharedSampler）。
- * pSetLayouts/pPushConstantRanges 指向调用方成员（活过 create 调用）。 */
-vk::PipelineLayoutCreateInfo buildPipelineLayoutInfo(const VkDescriptorSetLayout& layout,
-	const VkPushConstantRange& range) {
-	VkPipelineLayoutCreateInfo cInfo{};
-	cInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-	cInfo.setLayoutCount = 1;
-	cInfo.pSetLayouts = &layout;
-	cInfo.pushConstantRangeCount = 1;
-	cInfo.pPushConstantRanges = &range;
-	return vk::PipelineLayoutCreateInfo(cInfo);
-}
-
-/** compute 管线 create info（entry = main，传统管线非 shader object；C struct 同上）。 */
-vk::ComputePipelineCreateInfo buildPipelineInfo(VkShaderModule module, VkPipelineLayout layout) {
-	VkPipelineShaderStageCreateInfo stage{};
-	stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-	stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-	stage.module = module;
-	stage.pName = "main";
-	VkComputePipelineCreateInfo cInfo{};
-	cInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-	cInfo.stage = stage;
-	cInfo.layout = layout;
-	return vk::ComputePipelineCreateInfo(cInfo);
-}
-
-/** 专用 sampler（LINEAR/CLAMP；mip-gen 自用，不碰渲染共享 sampler——避免污染模型纹理采样）。 */
-vk::SamplerCreateInfo buildSamplerInfo() {
-	vk::SamplerCreateInfo info{};
-	info.magFilter = vk::Filter::eLinear;
-	info.minFilter = vk::Filter::eLinear;
-	info.mipmapMode = vk::SamplerMipmapMode::eLinear;
-	info.addressModeU = vk::SamplerAddressMode::eClampToEdge;
-	info.addressModeV = vk::SamplerAddressMode::eClampToEdge;
-	info.addressModeW = vk::SamplerAddressMode::eClampToEdge;
-	info.anisotropyEnable = false;
-	info.compareEnable = false;
-	info.minLod = 0.0f;
-	info.maxLod = 32.0f;  // SampleLevel 显式 lod 钳到此值（覆盖任何现实链长）
-	info.unnormalizedCoordinates = false;
-	return info;
-}
+/** 本模块 push data 布局（24B）：@0 MipGenPush（12B shader push constant）+ 2 u32 留白 +
+ * @20 heap push index（u32，恒 0）。descriptor heap 下 push constant 经 vkCmdPushDataEXT
+ * 供给（vkCmdPushConstants 与 descriptor heap 互斥——见 descriptorheaps.adoc :962-965）。
+ * static_assert 锁死 heapIndex 落在 kPushIndexByte（漂移即编译失败）。 */
+struct MipGenPushData {
+	MipGenPush push;
+	uint32_t pad[2];
+	uint32_t heapIndex;
+};
+static_assert(offsetof(MipGenPushData, heapIndex) == kPushIndexByte,
+	"MipGenPushData.heapIndex 必须落在 push data offset 20（与 mapping.pushOffset 同频）");
+static_assert(sizeof(MipGenPushData) == 24, "MipGenPushData 须 24B（覆盖 heapIndex@20）");
 
 }  // namespace
 
-/** 契约见接口注释。实现：初始化列表按成员声明序建全栈（raii 无默认构造，必须初始化列表）；
- * 体内校验 UNORM STORAGE_IMAGE 能力 + 建初始 pool + 日志。 */
+/** 契约见接口注释。实现：初始化列表加载 SPV + 存设备引用；体内校验 UNORM STORAGE_IMAGE
+ * 能力 + 日志。**不建 shader object**（heap 槽由 Resources 后续喂入）。 */
 MipGen::MipGen(RGL::DeviceContext& device)
-	: device(device.getDevice()),
-	  shaderModule(device.getDevice(), buildShaderModuleInfo(loadMipGenSpv())),
-	  setLayoutBindings(buildSetLayoutBindings()),
-	  setLayout(device.getDevice(), buildSetLayoutInfo(setLayoutBindings)),
-	  setLayoutHandle(*setLayout),
-	  pushRange{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(MipGenPush)},
-	  pipelineLayout(device.getDevice(), buildPipelineLayoutInfo(setLayoutHandle, pushRange)),
-	  pipeline(device.getDevice(), nullptr, buildPipelineInfo(*shaderModule, *pipelineLayout)),
-	  mipSampler(device.getDevice(), buildSamplerInfo()) {
+	: device(device.getDevice()), code(loadMipGenSpv()) {
 	// sRGB 纹理的 storage view 走 UNORM 重解释——UNORM 形式必须有 STORAGE_IMAGE 能力
 	const auto props = device.getPhysicalDevice().getFormatProperties(vk::Format::eR8G8B8A8Unorm);
 	if ((props.optimalTilingFeatures & vk::FormatFeatureFlagBits::eStorageImage) == vk::FormatFeatureFlags{})
 		throw std::runtime_error("mip_gen: R8G8B8A8_UNORM 无 STORAGE_IMAGE 能力（UNORM compute 链前提）");
-	createPool();
 	if (auto* logger = RLLogger::getInstance())
-		logger->info("mip_gen: compute mip 链管线就绪（传统 descriptor set + 12B push）");
+		logger->info("mip_gen: SPV 就绪（{} 字节），heap shader object 待 Resources 喂槽后建",
+			code.size() * sizeof(uint32_t));
 }
 
-/** 契约见接口注释。实现：逐目标级 ① per-level 视图对（sampled=level−1 SRO /
- * storage=level）② 描述符集分配 + 3 write ③ UNDEFINED→GENERAL barrier → bind +
- * dispatch → GENERAL→SHADER_READ_ONLY barrier。视图/集存成员容器（活过调用方的
- * submit + fence wait）。仅 UNORM（sRGB 走 recordMipBlitChain，见模块头注释）。 */
+/** 契约见接口注释。实现：仅记 heap 引用 + sampler 槽（不拥有 heap）。幂等由调用方
+ * （Resources::ensureMipGenReady 的 mipGenBound 守卫）保证——重复调用覆盖同值无害。 */
+void MipGen::init(const VmaDescriptorHeap& resourceHeapIn, const VmaDescriptorHeap& samplerHeapIn,
+	uint32_t samplerSlotIn) {
+	resourceHeap = &resourceHeapIn;
+	samplerHeap = &samplerHeapIn;
+	samplerSlot = samplerSlotIn;
+}
+
+/** 契约见接口注释。实现：3 条 mapping（binding 0/1 = resource heap push-index 各烘焙到
+ * 独立槽；binding 2 = sampler heap constant-offset）+ heap bit compute shader object。
+ * push-index 配方（非 constant-offset）= RADV heap storage image 唯一验证可用路径
+ * （docs/DESCRIPTOR_HEAP_SPEC.md 坑 17）：push index 恒 0 → offset = heapOffset + 0×stride =
+ * heapOffset（slot 固定，靠不同 level 的 shader object 绑不同槽换视图，非重写同槽）。 */
+std::expected<vk::raii::ShaderEXT, Error> MipGen::createLevelShader(uint32_t srcSlot,
+	uint32_t dstSlot) {
+	const uint32_t descriptorSize = resourceHeap->getDescriptorSize();
+	const uint32_t samplerDescriptorSize = samplerHeap->getDescriptorSize();
+
+	VkDescriptorSetAndBindingMappingEXT mappings[3]{};
+	// binding 0 = src sampled image（resource heap，push-index 源，heapOffset = src 槽字节偏移）
+	mappings[0].sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
+	mappings[0].firstBinding = 0;
+	mappings[0].bindingCount = 1;
+	mappings[0].resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
+	mappings[0].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_PUSH_INDEX_EXT;
+	mappings[0].sourceData.pushIndex.heapOffset = srcSlot * descriptorSize;
+	mappings[0].sourceData.pushIndex.pushOffset = kPushIndexByte;
+	mappings[0].sourceData.pushIndex.heapIndexStride = descriptorSize;
+	mappings[0].sourceData.pushIndex.heapArrayStride = descriptorSize;
+	mappings[0].sourceData.pushIndex.pEmbeddedSampler = nullptr;
+	mappings[0].sourceData.pushIndex.useCombinedImageSamplerIndex = VK_FALSE;
+	// binding 1 = dst storage image（resource heap，push-index 源，heapOffset = dst 槽字节偏移）
+	mappings[1] = mappings[0];
+	mappings[1].firstBinding = 1;
+	mappings[1].sourceData.pushIndex.heapOffset = dstSlot * descriptorSize;
+	// binding 2 = sampler（sampler heap，constant-offset 源——shader.cppm binding 2 同款，
+	// OpTypeSampler 的 heapOffset 指 sampler heap 字节偏移；sampler 一份全 level 共用、
+	// 从不重写，无 push-index 需求）
+	mappings[2].sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
+	mappings[2].firstBinding = 2;
+	mappings[2].bindingCount = 1;
+	mappings[2].resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
+	mappings[2].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
+	mappings[2].sourceData.constantOffset.heapOffset = samplerSlot * samplerDescriptorSize;
+	mappings[2].sourceData.constantOffset.heapArrayStride = 0;
+	mappings[2].sourceData.constantOffset.pEmbeddedSampler = nullptr;
+
+	VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{};
+	mappingInfo.sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT;
+	mappingInfo.mappingCount = 3;
+	mappingInfo.pMappings = mappings;
+
+	VkShaderCreateInfoEXT raw{};
+	raw.sType = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT;
+	raw.pNext = &mappingInfo;
+	raw.flags = VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT;
+	raw.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+	raw.codeType = VK_SHADER_CODE_TYPE_SPIRV_EXT;
+	raw.codeSize = code.size() * sizeof(uint32_t);
+	raw.pCode = code.data();
+	raw.pName = "main";
+	vk::ShaderCreateInfoEXT createInfo(raw);
+	try {
+		auto built = device.createShadersEXT(std::vector<vk::ShaderCreateInfoEXT>{createInfo});
+		return std::move(built[0]);
+	} catch (const vk::SystemError& e) {
+		return std::unexpected(Error{ErrorCode::VulkanError,
+			fmt::format("mip_gen: compute shader object 创建失败（level {}）: {}", levels, e.what())});
+	}
+}
+
+/** 契约见接口注释。实现：建 shader object + 登记 src/dst 槽 + 追加 per-level 描述符链
+ * （deque 尾追加——元素地址不迁移，pView 指针稳定活过提交）。level index = mip level
+ * （0 占位不用于链生成，但同批建好以便按下标直接取）。 */
+std::expected<void, Error> MipGen::addLevel(uint32_t srcSlot, uint32_t dstSlot) {
+	auto shader = createLevelShader(srcSlot, dstSlot);
+	if (!shader)
+		return std::unexpected(std::move(shader).error());
+	shaders.push_back(std::move(*shader));
+	srcSlots.push_back(srcSlot);
+	dstSlots.push_back(dstSlot);
+	srcChains.emplace_back();
+	dstChains.emplace_back();
+	++levels;
+	return {};
+}
+
+/** 契约见接口注释。实现：填 chain（viewCreate/imageDesc/resourceDesc/dst 全在 chain 内，
+ * 互指地址稳定）+ vkWriteResourceDescriptorsEXT 写进 resource heap 该 level 固定槽。
+ * pView 指 chain.viewCreate（v341 契约：create info 值，非 VkImageView 句柄）。 */
+std::expected<void, Error> MipGen::writeImageDesc(DescChain& chain, uint32_t slot, VkImage image,
+	vk::Format format, uint32_t mip, vk::DescriptorType type, vk::ImageLayout layout) {
+	chain.viewCreate = vk::ImageViewCreateInfo{};
+	chain.viewCreate.image = image;
+	chain.viewCreate.viewType = vk::ImageViewType::e2D;
+	chain.viewCreate.format = format;
+	chain.viewCreate.subresourceRange = {vk::ImageAspectFlagBits::eColor, mip, 1, 0, 1};
+	chain.imageDesc = vk::ImageDescriptorInfoEXT{};
+	chain.imageDesc.pView = &chain.viewCreate;
+	chain.imageDesc.layout = layout;
+	chain.resourceDesc = vk::ResourceDescriptorInfoEXT{};
+	chain.resourceDesc.type = type;
+	chain.resourceDesc.data.pImage = &chain.imageDesc;
+	auto addr = resourceHeap->getSlotCpuAddress(slot);
+	if (!addr)
+		return std::unexpected(std::move(addr).error());
+	chain.dst = vk::HostAddressRangeEXT{*addr, resourceHeap->getDescriptorSize()};
+	device.writeResourceDescriptorsEXT(chain.resourceDesc, chain.dst);
+	return {};
+}
+
+/** 契约见接口注释。实现：先各 level 描述符一次性写各自固定槽（同 submission 内独立、
+ * 互不覆盖），再 heap host barrier → 一次 bind resource/sampler heap → 逐 level { dst
+ * UNDEFINED→GENERAL → bindShadersEXT（该 level）→ pushDataEXT（MipGenPush + @20 push index 0）
+ * → dispatch → dst GENERAL→SHADER_READ_ONLY }。视图范围精确到单 level，VVL 逐 subresource
+ * 布局检查干净（全链视图会在链中期看到未过渡 level 误报）。仅 UNORM（sRGB 走 blit 链）。 */
 std::expected<void, Error> MipGen::recordChain(vk::raii::CommandBuffer& cmd, VkImage image,
 	vk::Format format, uint32_t w, uint32_t h, uint32_t mipLevels, const char* name) {
 	if (mipLevels <= 1)
 		return {};
+	if (resourceHeap == nullptr || samplerHeap == nullptr)
+		return std::unexpected(Error{ErrorCode::Unknown, "mip_gen: heap 未 init（ensureMipGenReady 未跑）"});
+	if (levelCount() < mipLevels)
+		return std::unexpected(Error{ErrorCode::Unknown,
+			fmt::format("mip_gen: level shader 不足（有 {} 需 {}）", levelCount(), mipLevels)});
+
+	// 阶段 1：各 level 的 src/dst image 描述符写进各自固定槽（host 写；同 submission 内各
+	// level 独立槽互不覆盖——这是"每 level 一对固定槽"而非"重写同槽"的根本理由）
+	for (uint32_t level = 1; level < mipLevels; ++level) {
+		auto s = writeImageDesc(srcChains[level], srcSlots[level], image, format, level - 1,
+			vk::DescriptorType::eSampledImage, vk::ImageLayout::eShaderReadOnlyOptimal);
+		if (!s)
+			return s;
+		auto d = writeImageDesc(dstChains[level], dstSlots[level], image, format, level,
+			vk::DescriptorType::eStorageImage, vk::ImageLayout::eGeneral);
+		if (!d)
+			return d;
+	}
 
 	const auto emitBarrier = [&](const vk::ImageMemoryBarrier2& b) {
 		VkDependencyInfo dep{};
@@ -139,55 +211,34 @@ std::expected<void, Error> MipGen::recordChain(vk::raii::CommandBuffer& cmd, VkI
 		::vkCmdPipelineBarrier2(*cmd, &dep);
 	};
 
+	// heap host barrier（host 写描述符 + 共享 sampler → compute heap 读；eHost 不能在 render
+	// pass 内，本上传 CB 全程 pass 外——坑 8）
+	vk::MemoryBarrier2 heapBarrier{};
+	heapBarrier.srcStageMask = vk::PipelineStageFlagBits2::eHost;
+	heapBarrier.srcAccessMask = vk::AccessFlagBits2::eHostWrite;
+	heapBarrier.dstStageMask = vk::PipelineStageFlagBits2::eComputeShader;
+	heapBarrier.dstAccessMask = vk::AccessFlagBits2::eResourceHeapReadEXT |
+		vk::AccessFlagBits2::eSamplerHeapReadEXT;
+	vk::DependencyInfo heapDep{};
+	heapDep.setMemoryBarriers(heapBarrier);
+	cmd.pipelineBarrier2(heapDep);
+
+	// bind heap + sampler heap（一次，覆盖本 CB 全部 dispatch；reserved 声明 [0, reservedSlots)
+	// 不可用——本模块用的都是 ≥ reservedSlots 的用户槽）
+	const uint32_t descriptorSize = resourceHeap->getDescriptorSize();
+	vk::DeviceAddressRangeEXT heapRange{resourceHeap->getGpuAddress(), resourceHeap->getHeapSize()};
+	cmd.bindResourceHeapEXT(vk::BindHeapInfoEXT(heapRange, 0,
+		resourceHeap->getReservedSlots() * descriptorSize));
+	vk::DeviceAddressRangeEXT samplerRange{samplerHeap->getGpuAddress(), samplerHeap->getHeapSize()};
+	cmd.bindSamplerHeapEXT(vk::BindHeapInfoEXT(samplerRange, 0,
+		samplerHeap->getReservedSlots() * samplerHeap->getDescriptorSize()));
+
+	std::array<vk::ShaderStageFlagBits, 1> stages = {vk::ShaderStageFlagBits::eCompute};
 	uint32_t dstW = w;
 	uint32_t dstH = h;
 	for (uint32_t level = 1; level < mipLevels; ++level) {
 		dstW = std::max(1u, dstW >> 1);
 		dstH = std::max(1u, dstH >> 1);
-
-		// per-level 视图对（视图范围 = 本次精确访问的子资源——VVL 逐 subresource
-		// 布局检查天然干净；全链视图会在链生成中期看到 UNDEFINED/GENERAL 级误报）
-		vk::ImageViewCreateInfo sInfo{};
-		sInfo.image = image;
-		sInfo.viewType = vk::ImageViewType::e2D;
-		sInfo.format = format;  // UNORM src（本链仅 UNORM）
-		sInfo.subresourceRange = {vk::ImageAspectFlagBits::eColor, level - 1, 1, 0, 1};
-		sampledViews.emplace_back(device, sInfo);
-		vk::ImageViewCreateInfo dInfo{};
-		dInfo.image = image;
-		dInfo.viewType = vk::ImageViewType::e2D;
-		dInfo.format = format;  // UNORM storage（同格式；sRGB 走 blit 链）
-		dInfo.subresourceRange = {vk::ImageAspectFlagBits::eColor, level, 1, 0, 1};
-		storageViews.emplace_back(device, dInfo);
-
-		// 描述符集（3 write：sampled/storage/sampler）。本 spec 版本
-		// WriteDescriptorSet 已无 pSampler——sampler 一律走 DescriptorImageInfo.sampler
-		// （SAMPLER 型 imageView=null，sType 默认 eWriteDescriptorSet）。
-		const VkDescriptorSet set = allocateSet();
-		vk::DescriptorImageInfo sImg{};
-		sImg.sampler = *mipSampler;
-		sImg.imageView = *sampledViews.back();
-		sImg.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-		vk::DescriptorImageInfo dImg{};
-		dImg.imageView = *storageViews.back();
-		dImg.imageLayout = vk::ImageLayout::eGeneral;
-		vk::DescriptorImageInfo lImg{};
-		lImg.sampler = *mipSampler;
-		std::array<vk::WriteDescriptorSet, 3> writes{};
-		for (auto& wr : writes)
-			wr.descriptorCount = 1;  // 默认 0——VVL VUID-00348 必须 >0
-		writes[0].dstSet = set;
-		writes[0].descriptorType = vk::DescriptorType::eSampledImage;
-		writes[0].pImageInfo = &sImg;
-		writes[1].dstSet = set;
-		writes[1].dstBinding = 1;
-		writes[1].descriptorType = vk::DescriptorType::eStorageImage;
-		writes[1].pImageInfo = &dImg;
-		writes[2].dstSet = set;
-		writes[2].dstBinding = 2;
-		writes[2].descriptorType = vk::DescriptorType::eSampler;
-		writes[2].pImageInfo = &lImg;
-		device.updateDescriptorSets(vk::ArrayProxy<vk::WriteDescriptorSet const>(3, writes.data()), nullptr);
 
 		// level i：UNDEFINED→GENERAL（compute 写目标）
 		emitBarrier(RGL::createImageBarrier(image, vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral,
@@ -195,12 +246,12 @@ std::expected<void, Error> MipGen::recordChain(vk::raii::CommandBuffer& cmd, VkI
 			vk::PipelineStageFlagBits2::eBottomOfPipe, vk::PipelineStageFlagBits2::eComputeShader,
 			vk::AccessFlagBits2::eMemoryWrite, vk::AccessFlagBits2::eShaderWrite,
 			level, 1, 0, 1));
-		cmd.bindPipeline(vk::PipelineBindPoint::eCompute, *pipeline);
-		// raii bindDescriptorSets 收 ArrayProxy<handle>（handle-class 转换不便）——直接 C 调用
-		//（本 GMF 已含 vulkan.h，precedent = 上方 vkCmdPipelineBarrier2）
-		vkCmdBindDescriptorSets(*cmd, VK_PIPELINE_BIND_POINT_COMPUTE, *pipelineLayout, 0, 1, &set, 0, nullptr);
-		const MipGenPush push{level, dstW, dstH};
-		cmd.pushConstants(*pipelineLayout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(MipGenPush), &push);
+		// bind 该 level 的 shader object（烘焙到本 level 的固定 src/dst 槽）+ push data + dispatch
+		std::array<vk::ShaderEXT, 1> handles = {*shaders[level]};
+		cmd.bindShadersEXT(stages, handles);
+		const MipGenPushData pushData{MipGenPush{level, dstW, dstH}, {0, 0}, 0u};
+		cmd.pushDataEXT(vk::PushDataInfoEXT(0, vk::HostAddressRangeConstEXT(
+			reinterpret_cast<const std::byte*>(&pushData), sizeof(pushData))));
 		cmd.dispatch((dstW + 7) / 8, (dstH + 7) / 8, 1);
 		// level i：GENERAL→SHADER_READ_ONLY（下级的采样源 / 渲染端最终布局）
 		emitBarrier(RGL::createImageBarrier(image, vk::ImageLayout::eGeneral, vk::ImageLayout::eShaderReadOnlyOptimal,
@@ -210,25 +261,9 @@ std::expected<void, Error> MipGen::recordChain(vk::raii::CommandBuffer& cmd, VkI
 			level, 1, 0, 1));
 	}
 	if (auto* logger = RLLogger::getInstance())
-		logger->debug("mip_gen {}: {} 级链（{} 次 dispatch，UNORM compute）", name, mipLevels - 1,
-			mipLevels - 1);
+		logger->debug("mip_gen {}: {} 级链（{} 次 dispatch，heap shader object，UNORM compute）", name,
+			mipLevels - 1, mipLevels - 1);
 	return {};
-}
-
-/** 契约见接口注释。实现：1024 套 × {sampled,storage,sampler} 一池，追加进 pools。 */
-void MipGen::createPool() {
-	constexpr uint32_t kPoolSets = 1024;
-	std::array<vk::DescriptorPoolSize, 3> sizes{};
-	sizes[0] = {vk::DescriptorType::eSampledImage, kPoolSets};
-	sizes[1] = {vk::DescriptorType::eStorageImage, kPoolSets};
-	sizes[2] = {vk::DescriptorType::eSampler, kPoolSets};
-	vk::DescriptorPoolCreateInfo info{};
-	info.maxSets = kPoolSets;
-	info.poolSizeCount = 3;
-	info.pPoolSizes = sizes.data();
-	// raii::DescriptorSet 析构走 vkFreeDescriptorSets——池须带 FREE_DESCRIPTOR_SET_BIT
-	info.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet;
-	pools.emplace_back(device, info);
 }
 
 /** 契约见接口注释。实现：level 1..mipLevels−1 逐级 blit（LINEAR）。每级两组 barrier：
@@ -298,31 +333,6 @@ void recordMipBlitChain(vk::raii::CommandBuffer& cmd, VkImage image, uint32_t w,
 		emitBarrier(post.data(), 2);
 		srcW = dstW;
 		srcH = dstH;
-	}
-}
-
-/** 契约见接口注释。实现：pools 尾部池优先，VK_ERROR_OUT_OF_POOL_MEMORY = 建新池重试
- *（bistro 395 图 × ~10 级 ≈ 4000 套 > 首池 1024，扩容是常态路径）。 */
-VkDescriptorSet MipGen::allocateSet() {
-	for (;;) {
-		const VkDescriptorPool cPool = *pools.back();    // C 句柄（raii → handle 隐式转）
-		const VkDescriptorSetLayout cLayout = *setLayout;
-		VkDescriptorSetAllocateInfo cInfo{};
-		cInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-		cInfo.descriptorPool = cPool;
-		cInfo.descriptorSetCount = 1;
-		cInfo.pSetLayouts = &cLayout;
-		try {
-			// 异常模式（默认）：失败抛 vk::SystemError，成功直返 vector<raii::DescriptorSet>
-			//（raii Device 方法签名里的 DescriptorSet = raii 类——自带 pool 引用，析构自动归还）
-			auto allocated = device.allocateDescriptorSets(vk::DescriptorSetAllocateInfo(cInfo));
-			sets.push_back(std::move(allocated.front()));
-			return *sets.back();
-		} catch (const vk::SystemError& e) {
-			if (static_cast<vk::Result>(e.code().value()) != vk::Result::eErrorOutOfPoolMemory)
-				throw;
-			createPool();
-		}
 	}
 }
 

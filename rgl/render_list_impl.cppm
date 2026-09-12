@@ -89,6 +89,7 @@ void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListS
 			draw.baseColor = mat.baseColor;
 			draw.roughness = mat.roughness;  // Phase 5 接线（pbr frag 消费）
 			draw.metallic = mat.metallic;
+			draw.emissive = glm::vec4(mat.emissive, 0.0f);  // Phase 8 ③：自发光（xyz=factor、w 留白）
 			args.objectIndex = meshRef.objectSlot;  // bindless 各表下标（实例级，instancing）
 			if (candidate)
 				cullArgs.push_back(args);

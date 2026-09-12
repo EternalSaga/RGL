@@ -30,6 +30,8 @@ export struct GltfPrimitive {
 	int normalTextureIndex = -1;              // material normalTexture 的 image 下标（-1 = 无 → 中性法线纹理）
 	int metallicRoughnessTextureIndex = -1;   // pbrMetallicRoughness.metallicRoughnessTexture 的 image 下标
 	                                       //（glTF ORM 约定 R=Occlusion/G=Roughness/B=Metalness；-1 = 无 → 白纹理）
+	glm::vec3 emissive{0.0f};    // material emissiveFactor（Phase 8 ③ 自发光，缺省黑 = 不发光）
+	int emissiveTextureIndex = -1;  // material emissiveTexture 的 image 下标（-1 = 无 → 白纹理）
 	bool hasUv = true;               // TEXCOORD_0 缺失（glTF 中可选）→ uv 填 0 + 白纹理（D9）
 	bool alphaModeBlend = false;    // material alphaMode == "BLEND"（Phase 5 透明用，预留）
 	int materialIndex = -1;         // glTF materials 数组下标（-1 = 无材质）——批次 2 材质资产去重键

@@ -102,5 +102,8 @@ float4 main(ModelVertexOutput input) : SV_Target
             color += atten * gl.color.rgb * shadeDirect(N, V, albedo, metallic, roughness, L);
         }
     }
+    // Phase 8 ③：自发光（emissiveFactor × emissiveTexture，HDR 叠加，tonemap 链收；无 emissive 材质 = 恒黑）
+    float3 emissive = od.emissive.rgb * emissiveTexture.Sample(baseColorSampler, input.uv).rgb;
+    color += emissive;
     return float4(color, alpha);
 }

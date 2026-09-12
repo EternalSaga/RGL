@@ -122,6 +122,34 @@ uint32_t Resources::ensureSkySampler(uint32_t mipLevels) {
 	}
 
 /**
+ * 幂等契约与时序契约见接口注释。实现：首次注入 heap 引用 + 共享 sampler 槽（复用
+ * ensureSharedSampler 的 LINEAR sampler——全 level 共用一份，SampleLevel 显式 lod）；
+ * 之后把 level shader/槽 补齐到 levels（每 level allocSlot 两槽 + MipGen::addLevel 建
+ * 一个烘焙到该槽的 compute shader object）。领槽推进 allocSlot 游标——调用点保证晚于
+ * 几何段与白纹理首槽（见接口"时序契约"）。
+ */
+std::expected<void, Error> Resources::ensureMipGenReady(uint32_t levels) {
+		if (levels <= 1)
+			return {};  // 单级图无需 mip 链
+		if (!mipGenBound) {
+			const uint32_t samplerSlot = ensureSharedSampler();  // 幂等：LINEAR/CLAMP，mip-gen 共用
+			mipGen.init(descriptorHeap, samplerHeap, samplerSlot);
+			mipGenBound = true;
+		}
+		while (mipGen.levelCount() < levels) {
+			auto srcSlot = allocSlot("mipgen.src");
+			if (!srcSlot)
+				return std::unexpected(std::move(srcSlot).error());
+			auto dstSlot = allocSlot("mipgen.dst");
+			if (!dstSlot)
+				return std::unexpected(std::move(dstSlot).error());
+			if (auto added = mipGen.addLevel(*srcSlot, *dstSlot); !added)
+				return std::unexpected(std::move(added).error());
+		}
+		return {};
+	}
+
+/**
  * 幂等契约与调用时序见接口注释。实现：buffer usage =
  * eShaderDeviceAddress | eStorageBuffer | eTransferDst，VMA_MEMORY_USAGE_AUTO
  * device-local（CPU 不直接写——每帧唯一写入方 = staging copy，勿用 createGpuBuffer 的

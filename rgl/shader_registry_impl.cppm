@@ -20,10 +20,11 @@ namespace RGL {
 // A 方案）：SPV 加载 + 管线创建函数体移出接口 TU；本单元是叶子边。
 
 	uint32_t ShaderRegistry::addModelEntry(const std::string& specName, uint32_t vertexSlot,
-			uint32_t textureSlot, uint32_t normalSlot, uint32_t ormSlot, uint32_t samplerSlot) {
-		const auto key = std::make_tuple(specName, vertexSlot, textureSlot, normalSlot, ormSlot);
-		// 按 (规格, 顶点 slot, base 纹理 slot, normal slot, orm slot) 五元组组合去重：
-		// 同组合返回既有条目（不重复建 shader object）
+			uint32_t textureSlot, uint32_t normalSlot, uint32_t ormSlot, uint32_t emissiveSlot,
+			uint32_t samplerSlot) {
+		const auto key = std::make_tuple(specName, vertexSlot, textureSlot, normalSlot, ormSlot, emissiveSlot);
+		// 按 (规格, 顶点 slot, base 纹理 slot, normal slot, orm slot, emissive slot) 六元组组合
+		// 去重：同组合返回既有条目（不重复建 shader object）
 		if (auto it = modelEntryBySlot.find(key); it != modelEntryBySlot.end())
 			return it->second;
 
@@ -53,13 +54,16 @@ namespace RGL {
 			b.envSamplerHeapOffset =
 				res.ensureSkySampler(env->mipLevels) * res.getSamplerHeap().getDescriptorSize();
 		}
-		// Phase 8 ③a：normal（binding 6）+ ORM（binding 7）贴图槽（resource heap SAMPLED_IMAGE，
-		// extra 追加，仿 addLightEntry 的 extra 用法；不 import model.slang 或 Slang 剔除未用
-		// 全局的 frag 不声明 = 映射空转，同上既证行为）
+		// Phase 8 ③a：normal（binding 6）+ ORM（binding 7）贴图槽；Phase 8 ③：emissive
+		//（binding 8）贴图槽（resource heap SAMPLED_IMAGE，extra 追加，仿 addLightEntry 的
+		// extra 用法；不 import model.slang 或 Slang 剔除未用全局的 frag 不声明 = 映射空转，
+		// 同上既证行为——deferred_geometry 不声明 binding 8 亦无害空转）
 		b.extra.push_back({.binding = 6, .sampler = false, .heapSlot = normalSlot});
 		b.extra.push_back({.binding = 7, .sampler = false, .heapSlot = ormSlot});
+		b.extra.push_back({.binding = 8, .sampler = false, .heapSlot = emissiveSlot});
 		auto entry = PipelineEntry{
-			fmt::format("{}.v{}.t{}.n{}.o{}", specName, vertexSlot, textureSlot, normalSlot, ormSlot),
+			fmt::format("{}.v{}.t{}.n{}.o{}.e{}", specName, vertexSlot, textureSlot, normalSlot,
+				ormSlot, emissiveSlot),
 			RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b)};
 		const uint32_t index = static_cast<uint32_t>(entries.size());
 		indexByName[entry.name] = index;
@@ -67,8 +71,8 @@ namespace RGL {
 		entries.push_back(std::move(entry));
 		if (auto* logger = RLLogger::getInstance())
 			logger->debug("pipeline entry: {} (vertex slot {} / base slot {} / normal slot {} / "
-				"orm slot {}) → 下标 {}",
-				specName, vertexSlot, textureSlot, normalSlot, ormSlot, index);
+				"orm slot {} / emissive slot {}) → 下标 {}",
+				specName, vertexSlot, textureSlot, normalSlot, ormSlot, emissiveSlot, index);
 		return index;
 	}
 

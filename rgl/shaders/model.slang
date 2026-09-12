@@ -62,3 +62,7 @@ Texture2D<float4> normalTexture;
 // 无 ORM 贴图的 primitive 绑白纹理 orm=(1,1,1,1) → metallic/roughness 回落材质 factor。
 [[vk::binding(7, 0)]]
 Texture2D<float4> ormTexture;
+
+// Phase 8 ③：emissive 贴图（binding 8，复用 baseColorSampler，allocSlot 分配，白纹理回落；无 emissive 材质 factor=0 → 该项恒黑）
+[[vk::binding(8, 0)]]
+Texture2D<float4> emissiveTexture;

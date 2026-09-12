@@ -351,7 +351,7 @@ int main() {
 			std::string file;
 			std::unique_ptr<GltfModel> model;
 			std::vector<uint32_t> assetIds;    // per-primitive 网格资产 id
-			ModelTextureIds textureIds;        // per-primitive 纹理资产 id 三元组（base/normal/orm，Phase 8 ③a）
+			ModelTextureIds textureIds;        // per-primitive 纹理资产 id 四元组（base/normal/orm/emissive，Phase 8 ③）
 			uint32_t instances = 0;            // entities 引用计数（日志）
 		};
 		std::vector<UploadedModel> uploaded;
@@ -421,9 +421,9 @@ int main() {
 			for (size_t i = 0; i < um.assetIds.size(); ++i) {
 				const uint32_t id = um.assetIds[i];
 				// 管线条目（Phase 4 批次 2：按 (规格, 顶点 slot, base 纹理 slot, normal slot,
-				// orm slot) 五元组组合去重——同模型全 primitive 共享一个拼接顶点 slot，
-				// 仅纹理槽差异决定条目拆分；纹理/sampler slot 烘焙进 binding mapping，每帧
-				// 零成本；Phase 8 ③a 扩 normal/orm 槽）。批次 3：风格派生（loader unlit
+				// orm slot, emissive slot) 六元组组合去重——同模型全 primitive 共享一个拼接顶点
+				// slot，仅纹理槽差异决定条目拆分；纹理/sampler slot 烘焙进 binding mapping，每帧
+				// 零成本；Phase 8 ③a 扩 normal/orm 槽、③ 扩 emissive 槽）。批次 3：风格派生（loader unlit
 				// 字段即数据源，与 MaterialAsset 一致性由 registerScene 金丝雀保证）→ scene.lua
 				// styles 表映射到管线规格名（缺失 = 启动报错，同现有 config 错误路径）。
 				const std::string style = model.primitives[i].unlit ? "unlit" : "pbr";
@@ -436,6 +436,7 @@ int main() {
 					assets.getTexture(texIds.base[i]).heapSlot,
 					assets.getTexture(texIds.normal[i]).heapSlot,
 					assets.getTexture(texIds.orm[i]).heapSlot,
+					assets.getTexture(texIds.emissive[i]).heapSlot,
 					samplerSlot);
 				shaderRegistry.bindToAsset(id, entryIdx);
 			}

@@ -229,5 +229,24 @@ compute。当前观感可接受，暂不做。
 零回归。多灯基础设施就位；bistro glb 无 punctual 灯故当前无视觉变化，为后续手写灯（scene.lua
 lights 多条目）与 deferred 对齐铺路。
 
-**剩余 ③**：emissive（bistro 10 发光材质，需 ObjectDraw 表扩 emissive + binding 8 emissiveTexture
-+ loader 解析 emissiveFactor/Texture/Strength + forward/deferred 消费）——独立批次。
+### 6.2 ③ emissive（forward 完成，2026-09-11）
+
+glTF 自发光接入 forward 主路径（bistro 102 primitive 带 emissive）：
+- **数据流**：`GltfPrimitive.emissive`（loader 解析 `emissiveFactor`）+ `emissiveTextureIndex` →
+  `MaterialAsset.emissive`（末尾新字段，去重比较纳入）→ `ObjectDrawGpu.emissive`（@32 float4，
+  stride 32→**48**）→ scene data per-object 表 → `scene.slang readObjectDraw().emissive`。
+  stride 32→48 令 `kSceneDataIrradianceOffset` 自动后移 656016→**721552**（buffer 721696），
+  scene.slang 两处字面量手工同步（stride + irradiance base）。
+- **纹理**：emissive 走 sRGB 路（同 baseColor），`ModelTextureIds` 扩四元组（+emissive），
+  白纹理回落（白×factor，factor=0=黑）；`addModelEntry` 扩 `emissiveSlot`（六元组去重）烘焙
+  **binding 8**（`model.slang` + `model_schema.lua` 各加 emissiveTexture@8，复用 baseColorSampler）→ `just reflect`。
+- **消费**：`model_pbr_ibl.frag` return 前 `color += od.emissive.rgb * emissiveTexture.Sample(...)`
+  （HDR 叠加，tonemap 链收）。
+- **验证**：build 零 error；headless 冒烟 102 emissive primitive、binding 8 VVL-clean 零 error；
+  对 ④a 基线仅 **43/921600 像素变（0.005%）**、bbox 落右侧窗/灯区、max Δ157 = 局部自发光显形、零回归。
+- **deferred emissive（后续）**：deferred 路径未接（geometry pass 无 emissive、G-buffer 仅 4 通道），
+  需第 5 个 G-buffer attachment（`kGBufferAttachments` 4→5 + ensureDeferredGBufferSlots + light pass
+  绑定 + geometry 写/light 加）才能保持 D1 等价——独立小批次，forward 已覆盖默认 variant。
+
+**剩余 ③**：KHR_materials_emissive_strength（HDR 发光强度扩展，bistro 若用则 factor 需 ×strength）；
+deferred emissive（见上）。④b GGX 预滤波 env（治金属顶镜面条纹/色带，见 §5.4 备注）另批次。

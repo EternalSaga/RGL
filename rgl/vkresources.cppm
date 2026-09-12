@@ -86,24 +86,25 @@ static_assert(kSceneDataMvpTableOffset % 16 == 0, "MVP table must stay 16B align
 /** Phase 7b+（NV DGC 规避，续 MVP 表）：per-object 材质/几何表区（DrawArgs 去 mvp 后
  * 仍剩 baseColor/roughnessMetallic/totalTriangles/vertexOffset 是 per-object 数据，一并
  * 进 heap，DrawArgs 最终只留 objectIndex（4B push）——彻底绕开 NV DGC push 挂死）。
- * 基址 = MVP 表尾（262800 + 4096×64 = 524944，scene.slang 字面量同值）。stride 32
- *（ObjectDrawGpu，见 render_list.cppm）。 */
+ * 基址 = MVP 表尾（262800 + 4096×64 = 524944，scene.slang 字面量同值）。stride 48
+ *（ObjectDrawGpu，见 render_list.cppm；Phase 8 ③ 加 emissive 后 32→48）。 */
 export inline constexpr uint32_t kSceneDataDrawTableOffset =
 	kSceneDataMvpTableOffset + kSceneMatrixCapacity * kSceneMatrixStride;
-export inline constexpr uint32_t kSceneDrawStride = 32;
+export inline constexpr uint32_t kSceneDrawStride = 48;
 static_assert(kSceneDataDrawTableOffset % 16 == 0, "draw table must stay 16B aligned");
 
 /** Phase 8 批次 ④a：漫反射辐照度 SH9 区（追加于材质表之后——既有各区基址逐字节不动 diff0）。
  * 9 × vec4 = 144B（.xyz=系数、.w 留白，满足 ByteAddressBuffer.Load4 16B 对齐前提；CPU env
  * 加载期从等距柱状源余弦加权投影 radiance，shader scene.slang irradiance(N) 做辐照度卷积）。
- * 基址 = 材质表尾（524944 + 4096×32 = 656016，scene.slang 字面量同值）。 */
+ * 基址 = 材质表尾（524944 + 4096×48 = 721552，scene.slang 字面量同值；Phase 8 ③ stride
+ * 32→48 后本区随之后移）。 */
 export inline constexpr uint32_t kSceneDataIrradianceOffset =
 	kSceneDataDrawTableOffset + kSceneMatrixCapacity * kSceneDrawStride;
 export inline constexpr uint32_t kSceneDataIrradianceBytes = 144;  // 9×vec4=144（16B 对齐）
 static_assert(kSceneDataIrradianceOffset % 16 == 0, "irradiance region must stay 16B aligned");
 
 /** scene data buffer 总字节数 = 头 128 + 对象矩阵表 + 灯数组区 + MVP 表 + 材质表 +
- * 辐照度 SH9 区（= 656144B，编译期派生）；ensureSceneData 的分配尺寸与 drawFrame 每帧
+ * 辐照度 SH9 区（= 721696B，编译期派生）；ensureSceneData 的分配尺寸与 drawFrame 每帧
  * staging 拷贝区尺寸均为本值（vkrenderer.cppm ⑥.5）。 */
 export inline constexpr vk::DeviceSize kSceneDataBytes =
 	kSceneDataHeaderBytes + vk::DeviceSize{kSceneMatrixCapacity} * kSceneMatrixStride
@@ -344,9 +345,23 @@ export class Resources {
 	RGL::VmaAllocatorRAII& getAllocator() { return allocator; }
 	/** @return mip 链生成器（Phase 8 ③b；启动期一次性基础设施，构造于本对象构造期）。
 	 * uploadTexture 2D 路径经它把 mip 链（level ≥1）录进该纹理的上传 CB：UNORM =
-	 * compute 链（传统 descriptor set + 经典 compute 管线，与 bindless 渲染路径隔离）/
-	 * sRGB = LINEAR blit 链（见 mip_gen 模块头注释：RADV SRGB 无 STORAGE_IMAGE 能力）。 */
+	 * compute 链（descriptor heap + shader object，须先经 ensureMipGenReady 建齐 level
+	 * shader/槽）/ sRGB = LINEAR blit 链（见 mip_gen 模块头注释：RADV SRGB 无
+	 * STORAGE_IMAGE 能力）。 */
 	RGL::MipGen& getMipGen() { return mipGen; }
+	/**
+	 * 备齐 mip-gen 的 heap 基础设施（首张 UNORM compute 链纹理上传前调用，幂等增量）。
+	 * 职责：首次注入 heap 引用 + 复用 ensureSharedSampler 的 LINEAR sampler（init）；
+	 * 若已建 level shader 数 < levels，逐个 allocSlot 领取 src/dst 描述符槽 + MipGen
+	 * 建对应 level 的 shader object（每 level 一 shader object + 一对独立固定槽，跨纹理
+	 * fence 分隔复用）。
+	 * **时序契约**：必须在"全部几何槽分配完 + 白纹理首槽契约断言通过"之后调用（首张
+	 * UNORM 多 mip 纹理 = A2 阶段，天然满足——此处领槽会推进 allocSlot 游标，早于几何/白
+	 * 将破坏 expectedGeometrySlot 断言）。
+	 * @param levels 需要覆盖的最大 mip level 数（= 当纹理 mipLevels；只增不减）
+	 * @return void；Error = allocSlot 越界 或 shader object 创建失败
+	 */
+	[[nodiscard]] std::expected<void, Error> ensureMipGenReady(uint32_t levels);
 	/**
 	 * 统一 slot 分配器（Phase 3，纹理资产并案）：从 reservedSlots 起单调分配，
 	 * name→slot 记日志（slot 表排查用）；调用方以生成的偏移常量校验布局契约（见构造器
@@ -418,7 +433,8 @@ export class Resources {
 	vk::raii::ImageView depthImageView;  // 深度图 view（raii，不可拷贝——成员初始化列表构造；与 depthImage 同步重建）
 	RGL::VmaDescriptorHeap descriptorHeap;  // resource heap（用户槽 = allocSlot 单调段，布局契约见构造器注释）
 	RGL::VmaDescriptorHeap samplerHeap;  // Phase 3：OpTypeSampler 独立 heap
-	RGL::MipGen mipGen;  // Phase 8 ③b：compute mip 链生成器（传统管线全栈，启动期一次性）
+	RGL::MipGen mipGen;  // Phase 8 ③b：compute mip 链生成器（heap + shader object，启动期一次性）
+	bool mipGenBound = false;  // mip-gen heap 引用已注入标记（ensureMipGenReady 首建守卫；幂等）
 	// 共享 sampler 的 create info 稳定存储（ensureSharedSampler 写入；
 	// 本机 RADV 写时即解析、spec 允许驱动延迟解释，生命周期须覆盖运行期，见其注释）
 	vk::SamplerCreateInfo samplerCreateInfo{};

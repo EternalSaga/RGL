@@ -20,6 +20,9 @@ return {
         -- baseColorTexture，无 heapSlotOffset/cppName 不生成 C++ 常量）
         { name = "normalTexture", index = 6, shape = "texture2D" },
         { name = "ormTexture", index = 7, shape = "texture2D" },
+        -- Phase 8 批次 ③：emissive 贴图（binding 8，运行时 allocSlot，同其它纹理；无
+        -- heapSlotOffset/cppName 不生成 C++ 常量；复用 baseColorSampler，无独立 sampler 槽）
+        { name = "emissiveTexture", index = 8, shape = "texture2D" },
     },
 
     -- 契约常量（无反射端对应，schema 声明直接生成，同 vertexLayouts 模式）：

@@ -110,19 +110,22 @@ export uint32_t ensureWhiteTexture(RGL::Resources& resources, RGL::DeviceContext
 }
 
 /**
- * 模型纹理上传产物（Phase 8 批次 ③a）：per-primitive 纹理资产 id 三元组，三向量均与
- * model.primitives 下标对齐（供管线烘焙 binding 1/6/7 + registerScene 材质注册消费）：
- *   base   = baseColorTexture image（无纹理/无 uv → 白纹理）
- *   normal = material.normalTexture image（无 normal 贴图/无 uv → 中性法线纹理，
- *            (0.5,0.5,1,1) flip-G 解码不动点，shader 端零特判）
- *   orm    = pbrMetallicRoughness.metallicRoughnessTexture image（glTF ORM 约定
- *            R=Occlusion/G=Roughness/B=Metalness；无贴图/无 uv → 白纹理 orm=(1,1,1,1)，
- *            metallic/roughness 回落材质 factor）
+ * 模型纹理上传产物（Phase 8 批次 ③a；③ 扩 emissive）：per-primitive 纹理资产 id 四元组，
+ * 四向量均与 model.primitives 下标对齐（供管线烘焙 binding 1/6/7/8 + registerScene 材质注册消费）：
+ *   base     = baseColorTexture image（无纹理/无 uv → 白纹理）
+ *   normal   = material.normalTexture image（无 normal 贴图/无 uv → 中性法线纹理，
+ *              (0.5,0.5,1,1) flip-G 解码不动点，shader 端零特判）
+ *   orm      = pbrMetallicRoughness.metallicRoughnessTexture image（glTF ORM 约定
+ *              R=Occlusion/G=Roughness/B=Metalness；无贴图/无 uv → 白纹理 orm=(1,1,1,1)，
+ *              metallic/roughness 回落材质 factor）
+ *   emissive = material.emissiveTexture image（Phase 8 ③：无贴图/无 uv → 白纹理；白×
+ *              emissiveFactor，factor=0 时该项恒黑 = 不发光正确）
  */
 export struct ModelTextureIds {
 	std::vector<uint32_t> base;
 	std::vector<uint32_t> normal;
 	std::vector<uint32_t> orm;
+	std::vector<uint32_t> emissive;  // Phase 8 ③：emissiveTexture（binding 8，白纹理回落）
 };
 
 /**
@@ -192,16 +195,17 @@ static std::expected<uint32_t, Error> uploadImageSlot(RGL::Resources& resources,
 }
 
 /**
- * 模型纹理上传（批次 1：main.cpp 循环迁入；Phase 8 批次 ③a 扩三元组 base/normal/orm）：
- * 模型顶点槽分配完（importer）后调用——先取白纹理 + 中性法线纹理，再按 primitive 的
- * baseColorTexture/normalTexture/metallicRoughnessTexture 分别加载（三类各自独立 image
- * 下标去重缓存，同图不重复上传）；无纹理/无 uv → 各自回落（白 / 中性法线 / 白）。
- * 返回 ModelTextureIds（三向量与 model.primitives 下标对齐，供管线烘焙 binding 1/6/7 +
+ * 模型纹理上传（批次 1：main.cpp 循环迁入；Phase 8 批次 ③a 扩三元组 base/normal/orm；
+ * ③ 再扩 emissive 成四元组）：模型顶点槽分配完（importer）后调用——先取白纹理 + 中性法线
+ * 纹理，再按 primitive 的 baseColorTexture/normalTexture/metallicRoughnessTexture/
+ * emissiveTexture 分别加载（四类各自独立 image 下标去重缓存，同图不重复上传）；无纹理/无 uv
+ * → 各自回落（白 / 中性法线 / 白 / 白）。
+ * 返回 ModelTextureIds（四向量与 model.primitives 下标对齐，供管线烘焙 binding 1/6/7/8 +
  * registerScene 材质注册消费）。
  * @param resources 资源层
  * @param device 设备层
- * @param model 已解析 glTF 模型（primitives 的三个 TextureIndex/hasUv + images 内嵌数据）
- * @return per-primitive 纹理资产 id 三元组（与 primitives 下标对齐；回落规则见
+ * @param model 已解析 glTF 模型（primitives 的四个 TextureIndex/hasUv + images 内嵌数据）
+ * @return per-primitive 纹理资产 id 四元组（与 primitives 下标对齐；回落规则见
  *   ModelTextureIds 注释）；解码/上传失败 → Error
  * @note 多 buffer .gltf（image 无内嵌数据）不支持 → warn 日志 + 该 primitive 回落
  */
@@ -211,15 +215,16 @@ export [[nodiscard]] std::expected<ModelTextureIds, Error> uploadModelTextures(
 	const uint32_t neutralNormalId = ensureNeutralNormalTexture(resources, device);
 	const size_t n = model.primitives.size();
 	ModelTextureIds ids{std::vector<uint32_t>(n, whiteId),
-		std::vector<uint32_t>(n, neutralNormalId), std::vector<uint32_t>(n, whiteId)};
-	// image 下标 → 纹理资产 id（去重）；三类贴图各自独立缓存（同 image 下标空间 =
-	// model.images，但 base/normal/orm 语义独立）
-	std::map<int, uint32_t> baseCache, normalCache, ormCache;
+		std::vector<uint32_t>(n, neutralNormalId), std::vector<uint32_t>(n, whiteId),
+		std::vector<uint32_t>(n, whiteId)};  // emissive 回落白（白×factor，factor=0 = 黑）
+	// image 下标 → 纹理资产 id（去重）；四类贴图各自独立缓存（同 image 下标空间 =
+	// model.images，但 base/normal/orm/emissive 语义独立）
+	std::map<int, uint32_t> baseCache, normalCache, ormCache, emissiveCache;
 	for (size_t i = 0; i < n; ++i) {
 		const auto& prim = model.primitives[i];
 		if (!prim.hasUv)
-			continue;  // 无 uv = 无纹理（base 白 / normal 中性 / orm 白，初值即回落）
-		// 格式语义（glTF）：baseColor = sRGB（硬件解码），normal/ORM = 线性数据
+			continue;  // 无 uv = 无纹理（base 白 / normal 中性 / orm 白 / emissive 白，初值即回落）
+		// 格式语义（glTF）：baseColor/emissive = sRGB（硬件解码颜色），normal/ORM = 线性数据
 		//（UNORM 上传，sRGB 解码会污染数值——批次 ③a G-buffer 实证）
 		auto r = uploadImageSlot(resources, device, model, prim.baseColorTextureIndex,
 			false, baseCache, whiteId, i);
@@ -233,19 +238,26 @@ export [[nodiscard]] std::expected<ModelTextureIds, Error> uploadModelTextures(
 			true, ormCache, whiteId, i);
 		if (!r) return std::unexpected(std::move(r).error());
 		ids.orm[i] = *r;
+		// Phase 8 ③：emissive 是颜色 → sRGB 路（linear=false，同 baseColor），回落白纹理
+		//（白×emissiveFactor，factor=0 时该项恒黑 = 不发光正确）
+		r = uploadImageSlot(resources, device, model, prim.emissiveTextureIndex,
+			false, emissiveCache, whiteId, i);
+		if (!r) return std::unexpected(std::move(r).error());
+		ids.emissive[i] = *r;
 	}
 	auto* logger = RLLogger::getInstance();
 	if (logger) {
 		const uint32_t textureCount = resources.getAssetTable().textureSize();
-		uint32_t basePrims = 0, normalPrims = 0, ormPrims = 0;
+		uint32_t basePrims = 0, normalPrims = 0, ormPrims = 0, emissivePrims = 0;
 		for (size_t i = 0; i < n; ++i) {
 			if (ids.base[i] != whiteId) basePrims++;
 			if (ids.normal[i] != neutralNormalId) normalPrims++;
 			if (ids.orm[i] != whiteId) ormPrims++;
+			if (ids.emissive[i] != whiteId) emissivePrims++;
 		}
 		logger->info("textures: {} 资产（白 + 中性 normal + {} 图片），{}/{} primitive 带 base / "
-			"{} normal / {} orm",
-			textureCount, textureCount - 2, basePrims, n, normalPrims, ormPrims);
+			"{} normal / {} orm / {} emissive",
+			textureCount, textureCount - 2, basePrims, n, normalPrims, ormPrims, emissivePrims);
 	}
 	return ids;
 }
