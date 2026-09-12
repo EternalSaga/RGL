@@ -32,6 +32,20 @@ IMPORT_RE = re.compile(r"^\s*import\s+([\w:]+)\s*;")
 INCLUDE_RE = re.compile(r"^\s*#include\s*(?:<([^>]+)>|\"([^\"]+)\")")
 
 
+def read_text(path):
+    """容错读源文件文本：非 UTF-8 字节按 replace 解码（坏字节→U+FFFD，token 匹配无害）。
+
+    纯文本规则在主进程跑，单个畸形文件（二进制/非法编码/读失败）**绝不允许**抛异常崩掉
+    整个检查——style_check 非阻断，但 uncaught 异常 exit 1 会让 ninja 误判目标失败、-k1
+    stall 整条构建（同 worker BrokenProcessPool 教训）。失败返回 None，调用方跳过该文件。
+    """
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
 # ─── libclang 指标规则（消费 metrics.analyze_file 的指标字典）─────────────────
 
 def rule_file_lines(rel, metrics, threshold):
@@ -149,7 +163,9 @@ def text_checks():
     warnings = []
     mods = {}
     for rel in rgl_cppm_files():
-        src = open(os.path.join(ROOT, rel), encoding="utf-8").read()
+        src = read_text(os.path.join(ROOT, rel))
+        if src is None:
+            continue
         name, imps, gmf_incs = parse_module_file(src)
         if name is None:
             continue
@@ -280,7 +296,9 @@ def forbidden_vulkan_checks():
     for rel in rgl_cppm_files():
         if rel in EXCLUDE_FILES:
             continue
-        src = open(os.path.join(ROOT, rel), encoding="utf-8").read()
+        src = read_text(os.path.join(ROOT, rel))
+        if src is None:
+            continue
         for lineno, line in enumerate(strip_comments(src).splitlines(), 1):
             for tok, rx in FORBIDDEN_REGEXES:
                 if rx.search(line):

@@ -22,7 +22,7 @@ def analyze_file(lib, entry, full, scratch_dir, resdir):
     if not tu:
         raise RuntimeError("parse 返回 NULL（BMI 缺失/陈旧或 libclang 模块缺陷）")
     try:
-        src = open(full, encoding="utf-8").read()
+        src = open(full, encoding="utf-8", errors="replace").read()  # 仅供 total_lines；坏字节不抛
         total_lines = len(src.splitlines())
         tu_cur = lib.clang_getTranslationUnitCursor(tu)
         file_lines = code_lines_in_range(lib, tu, lib.clang_getCursorExtent(tu_cur), full)
