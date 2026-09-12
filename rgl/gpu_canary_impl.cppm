@@ -16,6 +16,25 @@ import vk_resources;
 
 namespace RGL {
 
+namespace {
+
+/** texel 值比对与日志：白 = 255/255/255/255 已知值（sRGB 不影响全白）；FAIL = 纹理 BO UAF 签名。 */
+void logTexelResult(const void* mapped, uint64_t frame) {
+	const uint8_t* px = static_cast<const uint8_t*>(mapped);
+	auto* logger = RLLogger::getInstance();
+	if (px[0] == 255 && px[1] == 255 && px[2] == 255 && px[3] == 255) {
+		if (logger)
+			logger->info("texel canary (frame {}): 白纹理 texel (0,0) = 255/255/255/255 PASS", frame);
+	} else {
+		if (logger)
+			logger->error("texel canary (frame {}): 白纹理 texel (0,0) = {}/{}/{}/{} —— 纹理 BO 已死"
+				"（freed/VA 复用，docs/archive/heap_texture_research.md §12.6/§12.7 的 UAF 签名）",
+				frame, px[0], px[1], px[2], px[3]);
+	}
+}
+
+}  // namespace
+
 // texelCanaryCheck 定义（2026-09-02 编译提速 A 方案）：诊断实现移出接口 TU；
 // 本单元是叶子边、编译不上关键路径。
 
@@ -94,16 +113,7 @@ void texelCanaryCheck(RGL::Resources& resources, RGL::DeviceContext& device,
 		return;
 	}
 	(void)device.getDevice().waitForFences(*fence, true, UINT64_MAX);
-	const uint8_t* px = static_cast<const uint8_t*>(rbData.pMappedData);
-	if (px[0] == 255 && px[1] == 255 && px[2] == 255 && px[3] == 255) {
-		if (logger)
-			logger->info("texel canary (frame {}): 白纹理 texel (0,0) = 255/255/255/255 PASS", frame);
-	} else {
-		if (logger)
-			logger->error("texel canary (frame {}): 白纹理 texel (0,0) = {}/{}/{}/{} —— 纹理 BO 已死"
-				"（freed/VA 复用，docs/archive/heap_texture_research.md §12.6/§12.7 的 UAF 签名）",
-				frame, px[0], px[1], px[2], px[3]);
-	}
+	logTexelResult(rbData.pMappedData, frame);
 }
 
 }  // namespace RGL

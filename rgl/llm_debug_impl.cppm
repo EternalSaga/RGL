@@ -69,12 +69,83 @@ uint8_t raw8(float v) {
 	return static_cast<uint8_t>(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f);
 }
 
+/** B8G8R8A8_SRGB → RGBA8：BGRA 字节序、值已 sRGB 编码，仅换 B/R 通道。 */
+void convBgraSrgb(const uint8_t* src, uint8_t* out, size_t px) {
+	for (size_t i = 0; i < px; ++i) {
+		out[i * 4 + 0] = src[i * 4 + 2];
+		out[i * 4 + 1] = src[i * 4 + 1];
+		out[i * 4 + 2] = src[i * 4 + 0];
+	}
+}
+
+/** B8G8R8A8_UNORM → RGBA8：换 B/R 通道 + gamma（线性 UNORM 后缓冲需编码）。 */
+void convBgraUnorm(const uint8_t* src, uint8_t* out, size_t px) {
+	for (size_t i = 0; i < px; ++i) {
+		out[i * 4 + 0] = toSrgb(src[i * 4 + 2] / 255.0f);
+		out[i * 4 + 1] = toSrgb(src[i * 4 + 1] / 255.0f);
+		out[i * 4 + 2] = toSrgb(src[i * 4 + 0] / 255.0f);
+	}
+}
+
+/** RGBA8_UNORM → RGBA8：逐通道 gamma；gbufRaw 诊断直出 = 原字节（无 gamma）。 */
+void convRgbaUnorm(const uint8_t* src, uint8_t* out, size_t px, bool gbufRaw) {
+	for (size_t i = 0; i < px; ++i) {
+		for (int c = 0; c < 3; ++c) {
+			const float v = src[i * 4 + c] / 255.0f;
+			out[i * 4 + c] = gbufRaw ? static_cast<uint8_t>(src[i * 4 + c]) : toSrgb(v);
+		}
+	}
+}
+
+/** A2B10G10R10_UNORM_PACK32 → RGBA8：拆 10bit 通道归一（/1023）+ gamma。 */
+void convA2B10G10R10(const uint8_t* src, uint8_t* out, size_t px) {
+	for (size_t i = 0; i < px; ++i) {
+		uint32_t p;
+		std::memcpy(&p, src + i * 4, 4);
+		out[i * 4 + 0] = toSrgb(static_cast<float>(p & 0x3FFu) / 1023.0f);
+		out[i * 4 + 1] = toSrgb(static_cast<float>((p >> 10) & 0x3FFu) / 1023.0f);
+		out[i * 4 + 2] = toSrgb(static_cast<float>((p >> 20) & 0x3FFu) / 1023.0f);
+	}
+}
+
+/** R16G16B16A16_SFLOAT（HDR）→ RGBA8：half→float，gbufRaw 直出 raw8 / 否则 sRGB。 */
+void convRgba16Half(const uint8_t* src, uint8_t* out, size_t px, bool gbufRaw) {
+	for (size_t i = 0; i < px; ++i) {
+		for (int c = 0; c < 3; ++c) {
+			const float v = halfToFloat(
+				static_cast<uint16_t>(src[i * 8 + c * 2] | (src[i * 8 + c * 2 + 1] << 8)));
+			out[i * 4 + c] = gbufRaw ? raw8(v) : toSrgb(v);
+		}
+	}
+}
+
+/** R16G16_SNORM（GB normal）→ RGBA8：oct 编码 (x,y)∈[-1,1] → 中点 0.5 展开。 */
+void convRg16Snorm(const uint8_t* src, uint8_t* out, size_t px) {
+	for (size_t i = 0; i < px; ++i) {
+		const auto x = static_cast<int16_t>(src[i * 4] | (src[i * 4 + 1] << 8));
+		const auto y = static_cast<int16_t>(src[i * 4 + 2] | (src[i * 4 + 3] << 8));
+		out[i * 4 + 0] = raw8(static_cast<float>(x) / 32767.0f * 0.5f + 0.5f);
+		out[i * 4 + 1] = raw8(static_cast<float>(y) / 32767.0f * 0.5f + 0.5f);
+	}
+}
+
+/** R32G32B32A32_SFLOAT（GB position）→ RGBA8：世界坐标 clamp 显示。 */
+void convRgba32Sfloat(const uint8_t* src, uint8_t* out, size_t px) {
+	for (size_t i = 0; i < px; ++i) {
+		for (int c = 0; c < 3; ++c) {
+			float v;
+			std::memcpy(&v, src + i * 16 + c * 4, 4);
+			out[i * 4 + c] = raw8(v);
+		}
+	}
+}
+
 /**
  * 回读原格式 → RGBA8（行紧凑 stride 4；alpha 恒 255，输出初值即 255 白）。
  * gbufRaw = dump_gbuf 诊断直读（无 gamma）。覆盖 = swapchain 候选格式
  *（sdl3window selectFormat）+ G-buffer 词表 4 格式（albedo/metalRough 与
  * srgb/unorm 用例共用，normal rg16_snorm / position rgba32_sfloat 专用用例）；
- * 表外 = 返回空（调用方报错，不静默出图）。
+ * 表外 = 返回空（调用方报错，不静默出图）。逐格式转换见上方 conv* 辅助。
  * @param cap 本帧捕获产物（width/height/format/pixels 原格式行紧凑）
  * @param gbufRaw true = dump_gbuf 直读通道（线性 clamp，不做 sRGB 编码）
  * @return RGBA8 字节序列（w×h×4）；空 = 该格式无转换规则
@@ -85,64 +156,28 @@ std::vector<uint8_t> toRgba8(const Renderer::FrameCapture& cap, bool gbufRaw) {
 	const uint8_t* src = cap.pixels.data();
 	switch (cap.format) {
 		case vk::Format::eB8G8R8A8Srgb:  // BGRA 字节序，值已 sRGB 编码：仅换通道
-			for (size_t i = 0; i < px; ++i) {
-				out[i * 4 + 0] = src[i * 4 + 2];
-				out[i * 4 + 1] = src[i * 4 + 1];
-				out[i * 4 + 2] = src[i * 4 + 0];
-			}
+			convBgraSrgb(src, out.data(), px);
 			return out;
 		case vk::Format::eB8G8R8A8Unorm:  // BGRA 线性：换通道 + gamma
-			for (size_t i = 0; i < px; ++i) {
-				out[i * 4 + 0] = toSrgb(src[i * 4 + 2] / 255.0f);
-				out[i * 4 + 1] = toSrgb(src[i * 4 + 1] / 255.0f);
-				out[i * 4 + 2] = toSrgb(src[i * 4 + 0] / 255.0f);
-			}
+			convBgraUnorm(src, out.data(), px);
 			return out;
 		case vk::Format::eR8G8B8A8Srgb:  // 已 sRGB 编码且通道序一致：原样拷贝
 			std::memcpy(out.data(), src, px * 4);
 			return out;
 		case vk::Format::eR8G8B8A8Unorm:
-			for (size_t i = 0; i < px; ++i) {
-				for (int c = 0; c < 3; ++c) {
-					const float v = src[i * 4 + c] / 255.0f;
-					out[i * 4 + c] = gbufRaw ? static_cast<uint8_t>(src[i * 4 + c]) : toSrgb(v);
-				}
-			}
+			convRgbaUnorm(src, out.data(), px, gbufRaw);
 			return out;
 		case vk::Format::eA2B10G10R10UnormPack32:
-			for (size_t i = 0; i < px; ++i) {
-				uint32_t p;
-				std::memcpy(&p, src + i * 4, 4);
-				out[i * 4 + 0] = toSrgb(static_cast<float>(p & 0x3FFu) / 1023.0f);
-				out[i * 4 + 1] = toSrgb(static_cast<float>((p >> 10) & 0x3FFu) / 1023.0f);
-				out[i * 4 + 2] = toSrgb(static_cast<float>((p >> 20) & 0x3FFu) / 1023.0f);
-			}
+			convA2B10G10R10(src, out.data(), px);
 			return out;
 		case vk::Format::eR16G16B16A16Sfloat:  // HDR：half→float，clamp（旧 UNORM RT 同近似）
-			for (size_t i = 0; i < px; ++i) {
-				for (int c = 0; c < 3; ++c) {
-					const float v = halfToFloat(
-						static_cast<uint16_t>(src[i * 8 + c * 2] | (src[i * 8 + c * 2 + 1] << 8)));
-					out[i * 4 + c] = gbufRaw ? raw8(v) : toSrgb(v);
-				}
-			}
+			convRgba16Half(src, out.data(), px, gbufRaw);
 			return out;
 		case vk::Format::eR16G16Snorm:  // GB normal：oct 编码 (x,y)∈[-1,1] → 中点 0.5 展开
-			for (size_t i = 0; i < px; ++i) {
-				const auto x = static_cast<int16_t>(src[i * 4] | (src[i * 4 + 1] << 8));
-				const auto y = static_cast<int16_t>(src[i * 4 + 2] | (src[i * 4 + 3] << 8));
-				out[i * 4 + 0] = raw8(static_cast<float>(x) / 32767.0f * 0.5f + 0.5f);
-				out[i * 4 + 1] = raw8(static_cast<float>(y) / 32767.0f * 0.5f + 0.5f);
-			}
+			convRg16Snorm(src, out.data(), px);
 			return out;
 		case vk::Format::eR32G32B32A32Sfloat:  // GB position：世界坐标 clamp 显示
-			for (size_t i = 0; i < px; ++i) {
-				for (int c = 0; c < 3; ++c) {
-					float v;
-					std::memcpy(&v, src + i * 16 + c * 4, 4);
-					out[i * 4 + c] = raw8(v);
-				}
-			}
+			convRgba32Sfloat(src, out.data(), px);
 			return out;
 		default:
 			return {};

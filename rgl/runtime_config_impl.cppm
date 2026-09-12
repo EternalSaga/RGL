@@ -13,6 +13,30 @@ namespace RGL {
 // loadRuntimeConfig 定义（sol2 解析整体移出接口 TU，GMF 只 sol/fmt；本单元是叶子边）。
 
 /**
+ * llm_shot/llm_debug 表公共细字段填充（两段字段布局相同 {delay_frames, file, size}）：
+ * 缺字段保留当前值 = 默认或前段已填值。
+ * @param shot 源表（调用方保证为表）
+ * @param llm 写入目标（delayFrames/file/width/height）
+ */
+static void applyShotFields(sol::table shot, LlmDebugConfig& llm) {
+	sol::optional<uint32_t> delayFrames = shot["delay_frames"];
+	if (delayFrames)
+		llm.delayFrames = *delayFrames;
+	sol::optional<std::string> file = shot["file"];
+	if (file)
+		llm.file = *file;
+	sol::table sizeTable = shot["size"];
+	if (sizeTable.valid() && sizeTable.is<sol::table>()) {
+		sol::optional<uint32_t> w = sizeTable[1];
+		if (w)
+			llm.width = *w;
+		sol::optional<uint32_t> h = sizeTable[2];
+		if (h)
+			llm.height = *h;
+	}
+}
+
+/**
  * llm_debug/llm_shot 解析（自 camera_config 迁入，语义不变）：
  * llm_shot 常驻 {file,size,delay_frames} 先填，llm_debug 覆盖 enabled；
  * 向后兼容 llm_debug = table（旧格式 = 启用 + 细字段，覆盖 llm_shot）。
@@ -21,23 +45,8 @@ namespace RGL {
  */
 static void parseLlm(sol::table& root, LlmDebugConfig& llm) {
 	sol::table shotTable = root["llm_shot"];
-	if (shotTable.valid() && shotTable.is<sol::table>()) {
-		sol::optional<uint32_t> delayFrames = shotTable["delay_frames"];
-		if (delayFrames)
-			llm.delayFrames = *delayFrames;
-		sol::optional<std::string> file = shotTable["file"];
-		if (file)
-			llm.file = *file;
-		sol::table sizeTable = shotTable["size"];
-		if (sizeTable.valid() && sizeTable.is<sol::table>()) {
-			sol::optional<uint32_t> w = sizeTable[1];
-			if (w)
-				llm.width = *w;
-			sol::optional<uint32_t> h = sizeTable[2];
-			if (h)
-				llm.height = *h;
-		}
-	}
+	if (shotTable.valid() && shotTable.is<sol::table>())
+		applyShotFields(shotTable, llm);
 	sol::object llmObj = root["llm_debug"];
 	if (llmObj.valid()) {
 		if (llmObj.is<bool>()) {
@@ -45,21 +54,7 @@ static void parseLlm(sol::table& root, LlmDebugConfig& llm) {
 		} else if (llmObj.is<sol::table>()) {
 			sol::table t = llmObj.as<sol::table>();
 			llm.enabled = true;
-			sol::optional<uint32_t> delayFrames = t["delay_frames"];
-			if (delayFrames)
-				llm.delayFrames = *delayFrames;
-			sol::optional<std::string> file = t["file"];
-			if (file)
-				llm.file = *file;
-			sol::table sizeTable = t["size"];
-			if (sizeTable.valid() && sizeTable.is<sol::table>()) {
-				sol::optional<uint32_t> w = sizeTable[1];
-				if (w)
-					llm.width = *w;
-				sol::optional<uint32_t> h = sizeTable[2];
-				if (h)
-					llm.height = *h;
-			}
+			applyShotFields(t, llm);
 		}
 	}
 }

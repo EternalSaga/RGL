@@ -85,6 +85,111 @@ namespace RGL {
 	return {};
 }
 
+/**
+ * mode 字段读取（仅 loadCameraConfig 内部使用）：缺失 = 保持默认 trackball；
+ * "fps" 切换模式；其余串 = ConfigLoadFailed（消息格式逐字保持拆分前内联实现）。
+ * @param root 配置根表
+ * @param camera 写入目标（仅 mode 存在且合法时写）
+ * @return 成功 = void；mode 串非法 = ConfigLoadFailed
+ */
+[[nodiscard]] std::expected<void, Error> readCameraMode(sol::table root, Camera& camera) {
+	sol::optional<std::string> mode = root["mode"];
+	if (mode) {
+		if (*mode == "fps") {
+			camera.mode = CameraMode::Fps;
+		} else if (*mode != "trackball") {
+			return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
+				fmt::format("camera config: unknown mode '{}' (want 'trackball' or 'fps')", *mode)});
+		}
+	}
+	return {};
+}
+
+/**
+ * 初始位置/朝向段读取（仅 loadCameraConfig 内部使用）：position/target 可选字段
+ * （缺失回落 camera 当前值）+ 朝向由 position→target 反推（yaw/pitch + trackball up
+ * 对齐 world-up）。与 trackball 拖拽时"forward 恒指向 target"的反推约定一致——
+ * llm_debug 工作流"编辑 position/target 即定机位"依赖此行为——此前朝向固定
+ * yaw=0/-z，导致只改 position/target 时相机并不看向 target。
+ * @param root 配置根表
+ * @param camera 写入目标（position/target/pitch/yaw/up）
+ */
+void readCameraPlacement(sol::table root, Camera& camera) {
+	auto readVec3 = [&](const char* key) -> std::optional<glm::vec3> {
+		sol::table v = root[key];
+		if (v.valid() && v.is<sol::table>()) {
+			sol::optional<float> x = v[1];
+			sol::optional<float> y = v[2];
+			sol::optional<float> z = v[3];
+			if (x && y && z)
+				return glm::vec3(*x, *y, *z);
+		}
+		return std::nullopt;
+	};
+	if (auto pos = readVec3("position"))
+		camera.position = *pos;
+	if (auto tgt = readVec3("target"))
+		camera.target = *tgt;
+
+	glm::vec3 fwd = camera.target - camera.position;
+	if (glm::length(fwd) > 1e-6f) {
+		fwd = glm::normalize(fwd);
+		camera.pitch = std::asin(std::clamp(fwd.y, -1.0f, 1.0f));
+		camera.yaw = std::atan2(-fwd.x, -fwd.z);
+		// trackball 携带 up 初始化：world-up 对齐（无 roll），与旧闭式 cameraUp 一致
+		camera.up = cameraUp(camera);
+	}
+}
+
+/**
+ * fovDegrees/near/far 标量字段读取（仅 loadCameraConfig 内部使用）：缺字段回落
+ * camera 当前值；fov 度转弧度。
+ * @param root 配置根表
+ * @param camera 写入目标（fov/nearPlane/farPlane）
+ */
+void readCameraScalars(sol::table root, Camera& camera) {
+	sol::optional<float> fov = root["fovDegrees"];
+	if (fov)
+		camera.fov = *fov * glm::pi<float>() / 180.0f;
+	sol::optional<float> nearV = root["near"];
+	if (nearV)
+		camera.nearPlane = *nearV;
+	sol::optional<float> farV = root["far"];
+	if (farV)
+		camera.farPlane = *farV;
+}
+
+/**
+ * 两模式参数子表读取（仅 loadCameraConfig 内部使用）：trackball.sensitivity/zoom、
+ * fps.speed/sensitivity；子表缺失/非表或字段缺失 = 回落 camera 当前值。
+ * @param root 配置根表
+ * @param camera 写入目标（trackballSensitivity/zoomSpeed/fpsSpeed/fpsSensitivity）
+ */
+void readCameraModeParams(sol::table root, Camera& camera) {
+	auto readModeTable = [&](const char* key) -> std::optional<sol::table> {
+		sol::table t = root[key];
+		if (t.valid() && t.is<sol::table>())
+			return t;
+		return std::nullopt;
+	};
+	if (auto tb = readModeTable("trackball")) {
+		sol::optional<float> s = (*tb)["sensitivity"];
+		if (s)
+			camera.trackballSensitivity = *s;
+		sol::optional<float> z = (*tb)["zoom"];
+		if (z)
+			camera.zoomSpeed = *z;
+	}
+	if (auto fp = readModeTable("fps")) {
+		sol::optional<float> s = (*fp)["speed"];
+		if (s)
+			camera.fpsSpeed = *s;
+		sol::optional<float> sens = (*fp)["sensitivity"];
+		if (sens)
+			camera.fpsSensitivity = *sens;
+	}
+}
+
 /** loadCameraConfig 定义（接口注释见 camera_config.cppm）。要点：初始朝向由 position→target 反推（yaw/pitch + trackball up 对齐 world-up）；keys 四字段逐一校验，任一未知键名整体失败。 */
 [[nodiscard]] std::expected<CameraConfig, Error> loadCameraConfig(std::string_view path) {
 	auto* logger = RLLogger::getInstance();
@@ -120,78 +225,12 @@ namespace RGL {
 		sol::table root = result[0].as<sol::table>();
 
 		Camera camera{};
-		sol::optional<std::string> mode = root["mode"];
-		if (mode) {
-			if (*mode == "fps") {
-				camera.mode = CameraMode::Fps;
-			} else if (*mode != "trackball") {
-				return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
-					fmt::format("camera config: unknown mode '{}' (want 'trackball' or 'fps')", *mode)});
-			}
-		}
+		if (auto mode = readCameraMode(root, camera); !mode)
+			return std::unexpected(std::move(mode).error());
 
-		auto readVec3 = [&](const char* key) -> std::optional<glm::vec3> {
-			sol::table v = root[key];
-			if (v.valid() && v.is<sol::table>()) {
-				sol::optional<float> x = v[1];
-				sol::optional<float> y = v[2];
-				sol::optional<float> z = v[3];
-				if (x && y && z)
-					return glm::vec3(*x, *y, *z);
-			}
-			return std::nullopt;
-		};
-		if (auto pos = readVec3("position"))
-			camera.position = *pos;
-		if (auto tgt = readVec3("target"))
-			camera.target = *tgt;
-
-		// 初始朝向：面向 target（与 trackball 拖拽时"forward 恒指向 target"的反推约定一致）。
-		// llm_debug 工作流"编辑 position/target 即定机位"依赖此行为——此前朝向固定 yaw=0/-z，
-		// 导致只改 position/target 时相机并不看向 target。
-		{
-			glm::vec3 fwd = camera.target - camera.position;
-			if (glm::length(fwd) > 1e-6f) {
-				fwd = glm::normalize(fwd);
-				camera.pitch = std::asin(std::clamp(fwd.y, -1.0f, 1.0f));
-				camera.yaw = std::atan2(-fwd.x, -fwd.z);
-				// trackball 携带 up 初始化：world-up 对齐（无 roll），与旧闭式 cameraUp 一致
-				camera.up = cameraUp(camera);
-			}
-		}
-
-		sol::optional<float> fov = root["fovDegrees"];
-		if (fov)
-			camera.fov = *fov * glm::pi<float>() / 180.0f;
-		sol::optional<float> nearV = root["near"];
-		if (nearV)
-			camera.nearPlane = *nearV;
-		sol::optional<float> farV = root["far"];
-		if (farV)
-			camera.farPlane = *farV;
-
-		auto readModeTable = [&](const char* key) -> std::optional<sol::table> {
-			sol::table t = root[key];
-			if (t.valid() && t.is<sol::table>())
-				return t;
-			return std::nullopt;
-		};
-		if (auto tb = readModeTable("trackball")) {
-			sol::optional<float> s = (*tb)["sensitivity"];
-			if (s)
-				camera.trackballSensitivity = *s;
-			sol::optional<float> z = (*tb)["zoom"];
-			if (z)
-				camera.zoomSpeed = *z;
-		}
-		if (auto fp = readModeTable("fps")) {
-			sol::optional<float> s = (*fp)["speed"];
-			if (s)
-				camera.fpsSpeed = *s;
-			sol::optional<float> sens = (*fp)["sensitivity"];
-			if (sens)
-				camera.fpsSensitivity = *sens;
-		}
+		readCameraPlacement(root, camera);
+		readCameraScalars(root, camera);
+		readCameraModeParams(root, camera);
 
 		// 键位绑定（可选字段回落默认 WASD；字段存在但键名无法识别 → 报错退出）
 		sol::table keysTable = root["keys"];

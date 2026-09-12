@@ -11,6 +11,7 @@ module;
 #include <glm/gtc/matrix_transform.hpp>  // node TRS 合成：translate/scale
 #include <glm/gtc/quaternion.hpp>        // node.rotation（xyzw）→ mat4_cast
 #include <glm/gtc/type_ptr.hpp>          // node.matrix（列主序）→ make_mat4
+#include <ranges>                        // std::views（AGENTS 例外：namespace alias 不可 re-export）
 module gltf_loader:impl;
 
 import gltf_loader;  // clang 不给 partition impl unit 隐式 import 主接口——必须显式
@@ -23,6 +24,46 @@ namespace RGL {
 
 // readAccessorFloats/readIndices（内部 helper）+ loadGltfModel 定义（2026-09-09
 // 接口瘦身）：tinygltf 解析实现移出接口 TU；本单元是叶子边。
+
+/**
+ * accessor 元素流定位结果（readAccessorFloats/readIndices 共享）：base = 首元素字节地址，
+ * stride = 逐元素步进（byteStride==0 → 紧密排列取 elemSize），count = 元素数，
+ * elemSize = 单元素字节数。
+ */
+struct AccessorStream {
+	const unsigned char* base;
+	size_t stride;
+	size_t count;
+	size_t elemSize;
+};
+
+/**
+ * 定位 accessor 元素流（readAccessorFloats/readIndices 共享的边界校验 + stride/required 计算）：
+ * 校验 accessor/bufferView/buffer 下标与 count，按调用方判定的 elemSize 算 stride
+ *（byteStride==0 → 紧密排列）与 required 并核对数据长度；类型合法性（float/uint）留调用方。
+ * @param gltf 已加载的 tinygltf 模型
+ * @param accIndex accessor 下标
+ * @param elemSize 单元素字节数（调用方按组件类型判定；0 = 类型不合法）
+ * @return 定位结果；nullopt = 任一环不满足（下标越界/elemSize 非法/count 为 0/数据不足）
+ */
+static std::optional<AccessorStream> locateAccessorStream(const tinygltf::Model& gltf, int accIndex,
+	size_t elemSize) {
+	if (accIndex < 0 || accIndex >= static_cast<int>(gltf.accessors.size())) return std::nullopt;
+	const auto& acc = gltf.accessors[accIndex];
+	if (elemSize == 0) return std::nullopt;
+	if (acc.count == 0) return std::nullopt;
+	if (acc.bufferView < 0 || acc.bufferView >= static_cast<int>(gltf.bufferViews.size())) return std::nullopt;
+
+	const auto& bv = gltf.bufferViews[acc.bufferView];
+	if (bv.buffer < 0 || bv.buffer >= static_cast<int>(gltf.buffers.size())) return std::nullopt;
+	const auto& data = gltf.buffers[bv.buffer].data;
+
+	const size_t stride = bv.byteStride ? bv.byteStride : elemSize;
+	const size_t required = bv.byteOffset + acc.byteOffset + (static_cast<size_t>(acc.count) - 1) * stride + elemSize;
+	if (data.size() < required) return std::nullopt;
+
+	return AccessorStream{data.data() + bv.byteOffset + acc.byteOffset, stride, acc.count, elemSize};
+}
 
 /**
  * 读 accessor 的 float 数据（契约要求 float32；byteStride != 0 时按元素步进读取，
@@ -40,22 +81,12 @@ static bool readAccessorFloats(const tinygltf::Model& gltf, int accessorIndex, u
 	if (acc.componentType != TINYGLTF_COMPONENT_TYPE_FLOAT) return false;
 	if (components == 2 && acc.type != TINYGLTF_TYPE_VEC2) return false;
 	if (components == 3 && acc.type != TINYGLTF_TYPE_VEC3) return false;
-	if (acc.count == 0) return false;
-	if (acc.bufferView < 0 || acc.bufferView >= static_cast<int>(gltf.bufferViews.size())) return false;
+	const auto stream = locateAccessorStream(gltf, accessorIndex, static_cast<size_t>(components) * sizeof(float));
+	if (!stream) return false;
 
-	const auto& bv = gltf.bufferViews[acc.bufferView];
-	if (bv.buffer < 0 || bv.buffer >= static_cast<int>(gltf.buffers.size())) return false;
-	const auto& data = gltf.buffers[bv.buffer].data;
-
-	const size_t elemSize = static_cast<size_t>(components) * sizeof(float);
-	const size_t stride = bv.byteStride ? bv.byteStride : elemSize;
-	const size_t required = bv.byteOffset + acc.byteOffset + (static_cast<size_t>(acc.count) - 1) * stride + elemSize;
-	if (data.size() < required) return false;
-
-	const unsigned char* base = data.data() + bv.byteOffset + acc.byteOffset;
-	out.resize(static_cast<size_t>(acc.count) * components);
-	for (size_t i = 0; i < acc.count; ++i)
-		std::memcpy(out.data() + i * components, base + i * stride, elemSize);
+	out.resize(stream->count * components);
+	for (size_t i = 0; i < stream->count; ++i)
+		std::memcpy(out.data() + i * components, stream->base + i * stream->stride, stream->elemSize);
 	return true;
 }
 
@@ -77,22 +108,13 @@ static bool readIndices(const tinygltf::Model& gltf, int accessorIndex, std::vec
 	} else {
 		return false;
 	}
-	if (acc.count == 0) return false;
-	if (acc.bufferView < 0 || acc.bufferView >= static_cast<int>(gltf.bufferViews.size())) return false;
+	const auto stream = locateAccessorStream(gltf, accessorIndex, elemSize);
+	if (!stream) return false;
 
-	const auto& bv = gltf.bufferViews[acc.bufferView];
-	if (bv.buffer < 0 || bv.buffer >= static_cast<int>(gltf.buffers.size())) return false;
-	const auto& data = gltf.buffers[bv.buffer].data;
-
-	const size_t stride = bv.byteStride ? bv.byteStride : elemSize;
-	const size_t required = bv.byteOffset + acc.byteOffset + (static_cast<size_t>(acc.count) - 1) * stride + elemSize;
-	if (data.size() < required) return false;
-
-	const unsigned char* base = data.data() + bv.byteOffset + acc.byteOffset;
-	out.resize(acc.count);
-	for (size_t i = 0; i < acc.count; ++i) {
-		const unsigned char* p = base + i * stride;
-		if (elemSize == 2) {
+	out.resize(stream->count);
+	for (size_t i = 0; i < stream->count; ++i) {
+		const unsigned char* p = stream->base + i * stream->stride;
+		if (stream->elemSize == 2) {
 			uint16_t u;
 			std::memcpy(&u, p, 2);
 			out[i] = u;
@@ -101,6 +123,63 @@ static bool readIndices(const tinygltf::Model& gltf, int accessorIndex, std::vec
 		}
 	}
 	return true;
+}
+
+/** 三个 double（translation/scale）→ glm::vec3（逐项 static_cast<float>，语义同原实现）。 */
+static glm::vec3 vec3FromDoubles(const std::vector<double>& v) {
+	return glm::vec3(static_cast<float>(v[0]), static_cast<float>(v[1]), static_cast<float>(v[2]));
+}
+
+/**
+ * 节点局部矩阵：node.matrix（列主序，若有 16 元素）否则 T·R·S 合成
+ *（rotation 是 glTF xyzw → glm quat(w,x,y,z)；缺失分量跳过对应变换）。
+ */
+static glm::mat4 localTransform(const tinygltf::Node& nd) {
+	if (nd.matrix.size() == 16)
+		return glm::make_mat4(nd.matrix.data());
+	glm::mat4 m(1.0f);
+	if (nd.translation.size() == 3)
+		m = glm::translate(m, vec3FromDoubles(nd.translation));
+	if (nd.rotation.size() == 4)
+		m = m * glm::mat4_cast(glm::quat(static_cast<float>(nd.rotation[3]),
+			static_cast<float>(nd.rotation[0]), static_cast<float>(nd.rotation[1]),
+			static_cast<float>(nd.rotation[2])));
+	if (nd.scale.size() == 3)
+		m = glm::scale(m, vec3FromDoubles(nd.scale));
+	return m;
+}
+
+/** 收集 child → 首见父 node 下标映射（合法层级唯一父；越界 child 忽略；nodeParent 预置 -1）。 */
+static void collectNodeParents(const tinygltf::Model& gltf, std::vector<int>& nodeParent) {
+	const size_t nodeCount = gltf.nodes.size();
+	for (size_t ni = 0; ni < nodeCount; ++ni)
+		for (int child : gltf.nodes[ni].children)
+			if (child >= 0 && child < static_cast<int>(nodeCount))
+				nodeParent[child] = static_cast<int>(ni);
+}
+
+/**
+ * 迭代加深单轮扫描：解析所有"父已决或为根"的节点（world[n] = world[parent] · local[n]，
+ * 根 = local），resolved 自增。
+ * @return 本轮是否有推进（false = 停滞）
+ */
+static bool resolveNodePass(const std::vector<glm::mat4>& nodeLocal, const std::vector<int>& nodeParent,
+	std::vector<glm::mat4>& nodeWorld, std::vector<uint8_t>& nodeDone, size_t& resolved) {
+	bool progress = false;
+	for (size_t ni = 0; ni < nodeLocal.size(); ++ni) {
+		if (nodeDone[ni]) continue;
+		const int p = nodeParent[ni];
+		if (p < 0) { nodeWorld[ni] = nodeLocal[ni]; nodeDone[ni] = 1; ++resolved; progress = true; }
+		else if (nodeDone[p]) { nodeWorld[ni] = nodeWorld[p] * nodeLocal[ni]; nodeDone[ni] = 1; ++resolved; progress = true; }
+	}
+	return progress;
+}
+
+/** 环防御：迭代加深停滞后的未决 node（真环成员，非法 glTF）退化为 local TRS。 */
+static void fixCyclicNodes(const std::vector<glm::mat4>& nodeLocal,
+	std::vector<glm::mat4>& nodeWorld, std::vector<uint8_t>& nodeDone) {
+	for (size_t ni = 0; ni < nodeLocal.size(); ++ni)
+		if (!nodeDone[ni]) { nodeWorld[ni] = nodeLocal[ni]; nodeDone[ni] = 1; }
 }
 
 /**
@@ -116,43 +195,18 @@ static std::vector<glm::mat4> resolveNodeWorlds(const tinygltf::Model& gltf) {
 	const size_t nodeCount = gltf.nodes.size();
 	std::vector<glm::mat4> nodeLocal(nodeCount, glm::mat4(1.0f));
 	std::vector<int> nodeParent(nodeCount, -1);
-	for (size_t ni = 0; ni < nodeCount; ++ni) {
-		const auto& nd = gltf.nodes[ni];
-		if (nd.matrix.size() == 16) {
-			nodeLocal[ni] = glm::make_mat4(nd.matrix.data());
-		} else {
-			glm::mat4 m(1.0f);
-			if (nd.translation.size() == 3)
-				m = glm::translate(m, glm::vec3(static_cast<float>(nd.translation[0]),
-					static_cast<float>(nd.translation[1]), static_cast<float>(nd.translation[2])));
-			if (nd.rotation.size() == 4)
-				m = m * glm::mat4_cast(glm::quat(static_cast<float>(nd.rotation[3]),
-					static_cast<float>(nd.rotation[0]), static_cast<float>(nd.rotation[1]),
-					static_cast<float>(nd.rotation[2])));
-			if (nd.scale.size() == 3)
-				m = glm::scale(m, glm::vec3(static_cast<float>(nd.scale[0]),
-					static_cast<float>(nd.scale[1]), static_cast<float>(nd.scale[2])));
-			nodeLocal[ni] = m;
-		}
-		for (int child : nd.children)
-			if (child >= 0 && child < static_cast<int>(nodeCount))
-				nodeParent[child] = static_cast<int>(ni);
-	}
+	for (size_t ni = 0; ni < nodeCount; ++ni)
+		nodeLocal[ni] = localTransform(gltf.nodes[ni]);
+	collectNodeParents(gltf, nodeParent);
+
 	std::vector<glm::mat4> nodeWorld(nodeCount, glm::mat4(1.0f));
 	std::vector<uint8_t> nodeDone(nodeCount, 0);
 	size_t resolved = 0;
 	for (size_t pass = 0; pass < nodeCount + 1; ++pass) {
-		bool progress = false;
-		for (size_t ni = 0; ni < nodeCount; ++ni) {
-			if (nodeDone[ni]) continue;
-			const int p = nodeParent[ni];
-			if (p < 0) { nodeWorld[ni] = nodeLocal[ni]; nodeDone[ni] = 1; ++resolved; progress = true; }
-			else if (nodeDone[p]) { nodeWorld[ni] = nodeWorld[p] * nodeLocal[ni]; nodeDone[ni] = 1; ++resolved; progress = true; }
-		}
+		const bool progress = resolveNodePass(nodeLocal, nodeParent, nodeWorld, nodeDone, resolved);
 		if (resolved == nodeCount) break;  // 全部解析完成（正常）
 		if (!progress) {                    // 停滞且仍有未决 = 真环（非法 glTF）
-			for (size_t ni = 0; ni < nodeCount; ++ni)
-				if (!nodeDone[ni]) { nodeWorld[ni] = nodeLocal[ni]; nodeDone[ni] = 1; }
+			fixCyclicNodes(nodeLocal, nodeWorld, nodeDone);
 			if (logger) logger->warn("glTF: node hierarchy has a cycle (illegal) — affected nodes use local TRS only");
 			break;
 		}
@@ -217,6 +271,56 @@ static void fillMaterialFields(const tinygltf::Model& gltf, int materialIndex, G
 }
 
 /**
+ * 读取并校验 POSITION/NORMAL（必需）+ TEXCOORD_0（可选，D9：缺失 → uv 填 0 走白纹理，
+ * 存在但数据畸形 → 整体失败）；三数组顶点数须一致（不一致 = 契约违例）。
+ * @return 错误描述（空 = 成功；pos/nrm/uv/hasUv 仅成功时有意义）
+ */
+static std::string readVertexAttributes(const tinygltf::Model& gltf, int meshIndex,
+	const tinygltf::Primitive& prim, std::vector<float>& pos, std::vector<float>& nrm,
+	std::vector<float>& uv, bool& hasUv) {
+	auto accessorOf = [&](const char* name) -> int {
+		auto it = prim.attributes.find(name);
+		return it == prim.attributes.end() ? -1 : it->second;
+	};
+	if (!readAccessorFloats(gltf, accessorOf("POSITION"), 3, pos))
+		return fmt::format("missing or malformed POSITION attribute (mesh {})", meshIndex);
+	if (!readAccessorFloats(gltf, accessorOf("NORMAL"), 3, nrm))
+		return fmt::format("missing or malformed NORMAL attribute (mesh {})", meshIndex);
+	// TEXCOORD_0 在 glTF 中可选（D9）：缺失 → uv 填 0 + 该 primitive 走白纹理；
+	// 存在但数据畸形 → 仍整体失败（契约违例）
+	const int uvAccessor = accessorOf("TEXCOORD_0");
+	hasUv = uvAccessor >= 0 && readAccessorFloats(gltf, uvAccessor, 2, uv);
+	if (uvAccessor >= 0 && !hasUv)
+		return fmt::format("malformed TEXCOORD_0 attribute (mesh {})", meshIndex);
+	const uint32_t vertexCount = static_cast<uint32_t>(pos.size() / 3);
+	if (vertexCount != nrm.size() / 3 || (hasUv && vertexCount != uv.size() / 2))
+		return fmt::format("attribute vertex counts differ (mesh {})", meshIndex);
+	if (!hasUv)
+		uv.assign(static_cast<size_t>(vertexCount) * 2, 0.0f);
+	return {};
+}
+
+/**
+ * 解析 primitive 索引：有 indices accessor → 读取并逐元素校验 < vertexCount；无 → 顺序展开
+ *（0..vertexCount-1）。
+ * @return 错误描述（空 = 成功；indices 仅成功时有意义）
+ */
+static std::string resolvePrimitiveIndices(const tinygltf::Model& gltf, int meshIndex,
+	const tinygltf::Primitive& prim, uint32_t vertexCount, std::vector<uint32_t>& indices) {
+	if (prim.indices < 0) {
+		indices.resize(vertexCount);
+		for (uint32_t i = 0; i < vertexCount; ++i) indices[i] = i;
+		return {};
+	}
+	if (!readIndices(gltf, prim.indices, indices))
+		return fmt::format("malformed index data (mesh {})", meshIndex);
+	for (uint32_t idx : indices)
+		if (idx >= vertexCount)
+			return fmt::format("index {} out of range (mesh {})", idx, meshIndex);
+	return {};
+}
+
+/**
  * 单个 glTF primitive 去索引展开（POSITION/NORMAL 必需 + TEXCOORD_0 可选（D9））：
  * 三角形 i 的 3 个连续顶点 = i*3..i*3+2；无 indices = 顺序展开。
  * @param gltf 已加载的 tinygltf 模型
@@ -227,37 +331,13 @@ static void fillMaterialFields(const tinygltf::Model& gltf, int materialIndex, G
  */
 static std::string expandPrimitive(const tinygltf::Model& gltf, int meshIndex,
 	const tinygltf::Primitive& prim, GltfPrimitive& out) {
-	auto accessorOf = [&](const char* name) -> int {
-		auto it = prim.attributes.find(name);
-		return it == prim.attributes.end() ? -1 : it->second;
-	};
 	std::vector<float> pos, nrm, uv;
-	if (!readAccessorFloats(gltf, accessorOf("POSITION"), 3, pos))
-		return fmt::format("missing or malformed POSITION attribute (mesh {})", meshIndex);
-	if (!readAccessorFloats(gltf, accessorOf("NORMAL"), 3, nrm))
-		return fmt::format("missing or malformed NORMAL attribute (mesh {})", meshIndex);
-	// TEXCOORD_0 在 glTF 中可选（D9）：缺失 → uv 填 0 + 该 primitive 走白纹理；
-	// 存在但数据畸形 → 仍整体失败（契约违例）
-	const int uvAccessor = accessorOf("TEXCOORD_0");
-	out.hasUv = uvAccessor >= 0 && readAccessorFloats(gltf, uvAccessor, 2, uv);
-	if (uvAccessor >= 0 && !out.hasUv)
-		return fmt::format("malformed TEXCOORD_0 attribute (mesh {})", meshIndex);
+	if (const std::string attrErr = readVertexAttributes(gltf, meshIndex, prim, pos, nrm, uv, out.hasUv); !attrErr.empty())
+		return attrErr;
 	const uint32_t vertexCount = static_cast<uint32_t>(pos.size() / 3);
-	if (vertexCount != nrm.size() / 3 || (out.hasUv && vertexCount != uv.size() / 2))
-		return fmt::format("attribute vertex counts differ (mesh {})", meshIndex);
-	if (!out.hasUv)
-		uv.assign(static_cast<size_t>(vertexCount) * 2, 0.0f);
 	std::vector<uint32_t> indices;
-	if (prim.indices >= 0) {
-		if (!readIndices(gltf, prim.indices, indices))
-			return fmt::format("malformed index data (mesh {})", meshIndex);
-		for (uint32_t idx : indices)
-			if (idx >= vertexCount)
-				return fmt::format("index {} out of range (mesh {})", idx, meshIndex);
-	} else {
-		indices.resize(vertexCount);
-		for (uint32_t i = 0; i < vertexCount; ++i) indices[i] = i;
-	}
+	if (const std::string idxErr = resolvePrimitiveIndices(gltf, meshIndex, prim, vertexCount, indices); !idxErr.empty())
+		return idxErr;
 	out.vertices.reserve(indices.size());
 	for (uint32_t idx : indices) {
 		ModelVertex v;
@@ -296,40 +376,82 @@ static void collectImages(const tinygltf::Model& gltf, GltfModel& model) {
 }
 
 /**
+ * 包围球（保守界）：center = 点集质心（按迭代序逐点累加再除 count），radius = 质心到最远点
+ * 距离（同序逐点重算距离取 max）。浮点累加序 = range 迭代序，调用方须保证与旧实现顺序一致
+ *（浮点加法不满足结合律）。空点集 → {0,0}（与 BoundingSphere 默认等价）。
+ * @param pts glm::vec3 点范围（可多趟迭代）
+ */
+template <typename Range>
+static BoundingSphere enclosingSphere(Range&& pts) {
+	BoundingSphere sphere;
+	uint32_t count = 0;
+	for (const glm::vec3& p : pts) { sphere.center += p; ++count; }
+	if (count == 0) return sphere;
+	sphere.center /= static_cast<float>(count);
+	for (const glm::vec3& p : pts)
+		sphere.radius = std::max(sphere.radius, glm::length(p - sphere.center));
+	return sphere;
+}
+
+/**
  * 包围球计算：逐图元节点局部球（over raw vertices.position，**不含 nodeWorld**——
  * registerScene 存 CullSphere，render_list 每帧 modelMatrix 变换后测视锥）+ 全模型世界
  * 聚合球（center = 全部顶点世界坐标质心，radius = 质心到最远顶点距离，保守界）。
+ * 两球同一 enclosingSphere 算法：世界版用 views::transform（nodeWorld 变换）+ views::join
+ * 组点视图，迭代序 = primitive 序 → 顶点序，与原嵌套循环逐点一致。
  * @param model 输出模型（填 per-primitive bounds + 整体 bounds）
  */
 static void computeBounds(GltfModel& model) {
 	for (auto& p : model.primitives) {
 		if (p.vertices.empty())
 			continue;
-		glm::vec3 pc{0.0f};
-		for (const auto& v : p.vertices)
-			pc += v.position;
-		pc /= static_cast<float>(p.vertices.size());
-		float pr = 0.0f;
-		for (const auto& v : p.vertices)
-			pr = std::max(pr, glm::length(v.position - pc));
-		p.bounds = {pc, pr};
+		p.bounds = enclosingSphere(p.vertices | std::views::transform(
+			[](const ModelVertex& v) { return v.position; }));
 	}
-	uint32_t totalVertices = 0;
-	glm::vec3 center{0.0f};
+	auto worldPoints = model.primitives
+		| std::views::transform([](const GltfPrimitive& p) {
+			return p.vertices | std::views::transform([&p](const ModelVertex& v) {
+				return glm::vec3(p.nodeWorld * glm::vec4(v.position, 1.0f));
+			});
+		})
+		| std::views::join;
+	model.bounds = enclosingSphere(worldPoints);  // 空点集 → {0,0}（= 默认，与原 totalVertices>0 守卫等价）
+}
+
+/**
+ * 展开单个 glTF primitive 为一个 GltfPrimitive：nodeWorld 取首个所属 node（同 mesh 多 node
+ * 的实例化暂取首个，无 node → identity + warn），再填材质字段 + 去索引几何展开。
+ * @return 错误描述（空 = 成功）
+ */
+static std::string expandMeshPrimitive(const tinygltf::Model& gltf, size_t meshIndex,
+	const tinygltf::Primitive& prim, int nodeIndex, const std::vector<glm::mat4>& nodeWorlds,
+	GltfPrimitive& out) {
+	// 所属 node 世界矩阵（取首个引用该 mesh 的 node；同 mesh 多 node 的实例化
+	// 暂取首个，无 node → identity，见 struct 注释）
+	if (nodeIndex >= 0) {
+		out.nodeWorld = nodeWorlds[nodeIndex];
+	} else if (auto* logger = RLLogger::getInstance()) {
+		logger->warn("glTF: mesh {} has no owning node, nodeWorld defaults to identity", meshIndex);
+	}
+	fillMaterialFields(gltf, prim.material, out);
+	return expandPrimitive(gltf, static_cast<int>(meshIndex), prim, out);
+}
+
+/** 加载成功后的统计日志：逐 primitive 汇总纹理/法线/ORM 计数 + 总顶点数 + 一行 info。 */
+static void logLoadSummary(RLLogger* logger, const std::string& path, const GltfModel& model) {
+	uint32_t texturedPrims = 0, normalPrims = 0, ormPrims = 0, totalVertices = 0;
 	for (const auto& p : model.primitives) {
-		for (const auto& v : p.vertices)
-			center += glm::vec3(p.nodeWorld * glm::vec4(v.position, 1.0f));
+		if (p.baseColorTextureIndex >= 0) texturedPrims++;
+		if (p.normalTextureIndex >= 0) normalPrims++;
+		if (p.metallicRoughnessTextureIndex >= 0) ormPrims++;
 		totalVertices += static_cast<uint32_t>(p.vertices.size());
 	}
-	if (totalVertices > 0) {
-		center /= static_cast<float>(totalVertices);
-		float radius = 0.0f;
-		for (const auto& p : model.primitives)
-			for (const auto& v : p.vertices)
-				radius = std::max(radius, glm::length(
-					glm::vec3(p.nodeWorld * glm::vec4(v.position, 1.0f)) - center));
-		model.bounds = {center, radius};
-	}
+	logger->info("glTF loaded ({}): {} primitives ({} textured / {} normal / {} orm), {} images, "
+		"{} vertices (de-indexed); bounds center=({}, {}, {}) radius={:.2f}",
+		path, model.primitives.size(), texturedPrims, normalPrims, ormPrims,
+		model.images.size(), totalVertices,
+		model.bounds.center.x, model.bounds.center.y, model.bounds.center.z,
+		model.bounds.radius);
 }
 
 /**
@@ -364,16 +486,7 @@ std::expected<GltfModel, Error> loadGltfModel(const std::string& path) {
 	for (size_t mi = 0; mi < gltf.meshes.size(); ++mi) {
 		for (const auto& prim : gltf.meshes[mi].primitives) {
 			GltfPrimitive out;
-			// 所属 node 世界矩阵（取首个引用该 mesh 的 node；同 mesh 多 node 的实例化
-			// 暂取首个，无 node → identity，见 struct 注释）
-			const int ni = meshToNode[mi];
-			if (ni >= 0) {
-				out.nodeWorld = nodeWorlds[ni];
-			} else if (logger) {
-				logger->warn("glTF: mesh {} has no owning node, nodeWorld defaults to identity", mi);
-			}
-			fillMaterialFields(gltf, prim.material, out);
-			const std::string primErr = expandPrimitive(gltf, static_cast<int>(mi), prim, out);
+			const std::string primErr = expandMeshPrimitive(gltf, mi, prim, meshToNode[mi], nodeWorlds, out);
 			if (!primErr.empty())
 				return std::unexpected(Error{ErrorCode::GltfLoadFailed, fmt::format("glTF: {}", primErr)});
 			model.primitives.push_back(std::move(out));
@@ -382,21 +495,7 @@ std::expected<GltfModel, Error> loadGltfModel(const std::string& path) {
 	collectImages(gltf, model);
 	computeBounds(model);
 
-	if (logger) {
-		uint32_t texturedPrims = 0, normalPrims = 0, ormPrims = 0, totalVertices = 0;
-		for (const auto& p : model.primitives) {
-			if (p.baseColorTextureIndex >= 0) texturedPrims++;
-			if (p.normalTextureIndex >= 0) normalPrims++;
-			if (p.metallicRoughnessTextureIndex >= 0) ormPrims++;
-			totalVertices += static_cast<uint32_t>(p.vertices.size());
-		}
-		logger->info("glTF loaded ({}): {} primitives ({} textured / {} normal / {} orm), {} images, "
-			"{} vertices (de-indexed); bounds center=({}, {}, {}) radius={:.2f}",
-			path, model.primitives.size(), texturedPrims, normalPrims, ormPrims,
-			model.images.size(), totalVertices,
-			model.bounds.center.x, model.bounds.center.y, model.bounds.center.z,
-			model.bounds.radius);
-	}
+	if (logger) logLoadSummary(logger, path, model);
 	return model;
 }
 

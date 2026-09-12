@@ -232,6 +232,149 @@ struct FrameSystem {
 	std::function<void(entt::registry&, float dt)> fn;
 };
 
+namespace {
+
+/** texel 回读金丝雀单次触发（docs/archive/heap_texture_research.md §12.7 ②）：
+ * texel_canary=N（帧号，默认关）——帧 N 的 drawFrame 前重读白纹理已知 texel 比对，
+ * 纹理 BO 死 = 立即报错（GPU 侧 UAF 签名，ASan 全盲；诊断路径单次 GPU 停顿，
+ * 正常路径零影响）。texel_canary = configs/diagnostics.lua（原 RGL_TEXEL_CANARY
+ * env 2026-09-08 转配置）。触发时机 = 本帧 drawFrame 前（waitForIdle 已在函数内
+ * 排空 in-flight）；fired 由调用方持有，保证至多触发一次。 */
+void texelCanaryOnce(bool& fired, uint64_t canaryFrame, uint32_t frame,
+	RGL::Renderer& renderer) {
+	if (fired || frame < canaryFrame) {
+		return;
+	}
+	fired = true;
+	texelCanaryCheck(renderer.getResourcesRef(), renderer.getDeviceContextRef(),
+		renderer.getGraphicsCommandPoolRef(), frame);
+}
+
+/** resize 处理 + 失败日志（文案原样）：转调 resizeSystem；失败打 "Resize 错误: {}"
+ * 并把错误原样上抛（调用方 waitForIdle 后退出循环返回）。 */
+std::expected<void, Error> resizeChecked(entt::registry& rg, RGL::Swapchain& swapchain,
+	RGL::Resources& resources, RLLogger* logger) {
+	auto result = resizeSystem(rg, swapchain, resources);
+	if (!result && logger) {
+		logger->error("Resize 错误: {}", result.error().describe());
+	}
+	return result;
+}
+
+/** drawFrame + 失败日志（文案原样）：成功返回空 optional；失败打 "渲染错误: {}"
+ * 并把错误上抛（调用方记录 lastError 后 break）。 */
+std::optional<Error> drawFrameChecked(RGL::Renderer& renderer, entt::registry& rg,
+	RLLogger* logger) {
+	auto result = renderer.drawFrame(rg.ctx().get<FrameDrawList>());
+	if (result) {
+		return {};
+	}
+	if (logger) {
+		logger->error("渲染错误: {}", result.error().describe());
+	}
+	return result.error();
+}
+
+/** llm 帧捕获节奏（2026-09-08：截图 = 帧内回读本帧真实输出，离屏重渲退役）：
+ * drawFrame 前请求（vkrenderer 帧内钩子，dump_gbuf 通道一并传入）；drawFrame 后
+ * 仅当真有捕获产物时消费写 PNG 并请求退出（acquire 超时跳帧 = 请求保持 pending 重试）。 */
+struct LlmCaptureFlow {
+	/** 截图配置（nullptr = llm_debug 未启用）。 */
+	const RGL::LlmDebugConfig* llm;
+	/** 捕获写盘回调（空 = 未启用；引用 renderSystem 形参，同生命周期）。 */
+	std::function<std::expected<std::string, Error>(RGL::Renderer&)>& capture;
+	/** 每帧计数（含跳帧），wantCapture 判定的基准（仅 llm 启用时递增）。 */
+	uint32_t llmFrame = 0;
+
+	/** 是否到捕获时机：llm 启用且已过 delayFrames 帧。 */
+	bool wanted() const {
+		return llm && capture && llmFrame >= llm->delayFrames;
+	}
+
+	/** drawFrame 前挂本帧回读请求（dump_gbuf 通道一并传入）；未到时机不动作。 */
+	void requestBeforeDraw(RGL::Renderer& renderer) const {
+		if (wanted()) {
+			renderer.requestFrameCapture(diagnostics().dumpGbuf);
+		}
+	}
+
+	/** drawFrame 后消费：真产物时调 consumeShot 写 PNG + 置 AppExit；llm 启用时
+	 * 无论是否命中每帧递增 llmFrame（在消费之后，与逐帧时序一致）。
+	 * @return 写盘失败错误（调用方记录 lastError；成功或无产物 = 空） */
+	std::optional<Error> afterDraw(entt::registry& rg, RGL::Renderer& renderer,
+		RLLogger* logger) {
+		if (llm && capture) {
+			std::optional<Error> error;
+			if (wanted() && renderer.hasFrameCapture()) {
+				error = consumeShot(rg, renderer, logger);
+			}
+			++llmFrame;  // 每帧计数（含跳帧），wantCapture 判定的基准
+			return error;
+		}
+		return {};
+	}
+
+	/** 真有产物时调捕获回调写 PNG + 成功/失败日志（文案原样）+ 置 AppExit。
+	 * @return 写盘失败错误（成功 = 空） */
+	std::optional<Error> consumeShot(entt::registry& rg, RGL::Renderer& renderer,
+		RLLogger* logger) {
+		auto shot = capture(renderer);
+		std::optional<Error> error;
+		if (shot) {
+			if (logger) logger->info("llm_debug: 截图已保存 ({})", *shot);
+		} else {
+			if (logger) logger->error("llm_debug: 截图失败 ({})", shot.error().describe());
+			error = shot.error();
+		}
+		rg.ctx().get<AppExit>().requested = true;
+		return error;
+	}
+};
+
+/** 帧时间统计（diagnostics.frame_stats = N：每 N 帧一行 avg/min/max，0 = 关）：
+ * 帧循环整周期（input+systems+drawFrame），headless 无 present 限帧时 ≈ GPU/提交吞吐。 */
+struct FrameStatsTracker {
+	/** 打印周期 N（0 = 关闭）。 */
+	uint32_t n;
+	/** 上一帧帧尾时刻（ns；0 = 首帧只记起点、不累积）。 */
+	uint64_t prevNs = 0;
+	/** 本周期帧时长累加（ms）。 */
+	double sumMs = 0.0;
+	/** 本周期最小帧时长（ms）。 */
+	double minMs = 1e30;
+	/** 本周期最大帧时长（ms）。 */
+	double maxMs = 0.0;
+	/** 本周期已累积帧数（达 N 打印并清零）。 */
+	uint32_t count = 0;
+
+	/** 帧尾调用：累积本帧整周期；周期满 N 帧打一行 avg/min/max 并复位。 */
+	void tick() {
+		if (n == 0) {
+			return;
+		}
+		const uint64_t nowNs = SDL_GetTicksNS();  // 帧尾 = 本帧整周期终点
+		if (prevNs != 0) {
+			const double ms = static_cast<double>(nowNs - prevNs) / 1'000'000.0;
+			sumMs += ms;
+			++count;
+			minMs = std::min(minMs, ms);
+			maxMs = std::max(maxMs, ms);
+		}
+		prevNs = nowNs;
+		if (count >= n) {
+			if (auto logger = RLLogger::getInstance())
+				logger->info("frame stats: avg={:.3f}ms min={:.3f} max={:.3f} ({} 帧)",
+					sumMs / count, minMs, maxMs, count);
+			sumMs = 0.0;
+			count = 0;
+			minMs = 1e30;
+			maxMs = 0.0;
+		}
+	}
+};
+
+}  // namespace
+
 /** 实现流水（语义/契约见接口声明）：构建显式 system 列表（camera→animation→bounds→
  * projection→renderlist）→ 主循环：eventSystem → AppExit 判定 → dt clamp [0, 0.1s]
  * → resizeSystem（失败 = waitForIdle 后退出循环返回 Error）→ system 链 →
@@ -250,21 +393,15 @@ std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer& rende
 	std::optional<Error> lastError;
 
 	RenderListState renderListState;
-	uint32_t llmFrame = 0;
-	uint32_t frame = 0;  // 每帧无条件计数（onFrame DIAG 回调用；llmFrame 仅在 llm 启用时递增）
-	// texel 回读金丝雀（docs/archive/heap_texture_research.md §12.7 ②）：texel_canary=N（帧号，
-	// 默认关）——帧 N 的 drawFrame 前重读白纹理已知 texel 比对，纹理 BO 死 = 立即报错
-	//（GPU 侧 UAF 签名，ASan 全盲；诊断路径单次 GPU 停顿，正常路径零影响）
-	// texel_canary = configs/diagnostics.lua（原 RGL_TEXEL_CANARY env 2026-09-08 转配置）
+	uint32_t frame = 0;  // 每帧无条件计数（onFrame DIAG 回调用；llmFrame 在捕获流内、仅 llm 启用时递增）
+	// texel 回读金丝雀：帧号门控 + 单次触发标记（触发逻辑见 texelCanaryOnce）
 	const uint64_t canaryFrame = diagnostics().texelCanary;
 	bool canaryFired = false;
 
-	// 帧时间统计（diagnostics.frame_stats = N：每 N 帧一行 avg/min/max，0 = 关）：
-	// 帧循环整周期（input+systems+drawFrame），headless 无 present 限帧时 ≈ GPU/提交吞吐
-	const uint32_t statsN = diagnostics().frameStats;
-	uint64_t statsPrevNs = 0;
-	double statsSum = 0.0, statsMin = 1e30, statsMax = 0.0;
-	uint32_t statsCount = 0;
+	// 帧时间统计（状态与打印见 FrameStatsTracker；tick 挂在帧尾）
+	FrameStatsTracker stats{diagnostics().frameStats};
+	// llm 帧捕获节奏（请求/消费时序与状态见 LlmCaptureFlow）
+	LlmCaptureFlow capture{llm, llmCapture};
 
 	// system 顺序（数据流契约）：
 	//   camera（InputEvents→Camera，消费即清空）→ animation（SceneSpin）→ bounds（Bounds→SceneBounds）
@@ -290,9 +427,8 @@ std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer& rende
 		float dt = std::clamp((ticks - prevTicks) / 1000.0f, 0.0f, 0.1f);
 		prevTicks = ticks;
 
-		auto resizeResult = resizeSystem(rg, swapchain, resources);
+		auto resizeResult = resizeChecked(rg, swapchain, resources, logger);
 		if (!resizeResult) {
-			if (logger) logger->error("Resize 错误: {}", resizeResult.error().describe());
 			renderer.waitForIdle();
 			return std::unexpected(std::move(resizeResult).error());
 		}
@@ -302,63 +438,22 @@ std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer& rende
 		}
 
 		// texel 金丝雀（本帧 drawFrame 前，waitForIdle 已在函数内排空 in-flight）
-		if (!canaryFired && frame >= canaryFrame) {
-			canaryFired = true;
-			texelCanaryCheck(resources, renderer.getDeviceContextRef(),
-				renderer.getGraphicsCommandPoolRef(), frame);
-		}
+		texelCanaryOnce(canaryFired, canaryFrame, frame, renderer);
 
-		// llm 帧捕获（2026-09-08：截图 = 帧内回读本帧真实输出，离屏重渲退役）：
-		// drawFrame 前请求（vkrenderer 帧内钩子，dump_gbuf 通道一并传入）；drawFrame 后
-		// 仅当真有捕获产物时消费写 PNG 并请求退出（acquire 超时跳帧 = 请求保持 pending 重试）
-		const bool wantCapture = llm && llmCapture && llmFrame >= llm->delayFrames;
-		if (wantCapture)
-			renderer.requestFrameCapture(diagnostics().dumpGbuf);
-
-		auto result = renderer.drawFrame(rg.ctx().get<FrameDrawList>());
-		if (!result) {
-			if (logger) logger->error("渲染错误: {}", result.error().describe());
-			lastError = result.error();
+		// llm 帧捕获：drawFrame 前请求 → drawFrame → 真产物才消费（时序契约见 LlmCaptureFlow）
+		capture.requestBeforeDraw(renderer);
+		if (auto drawError = drawFrameChecked(renderer, rg, logger)) {
+			lastError = std::move(drawError);
 			break;
 		}
-		if (wantCapture) {
-			if (renderer.hasFrameCapture()) {
-				auto shot = llmCapture(renderer);
-				if (shot) {
-					if (logger) logger->info("llm_debug: 截图已保存 ({})", *shot);
-				} else {
-					if (logger) logger->error("llm_debug: 截图失败 ({})", shot.error().describe());
-					lastError = shot.error();
-				}
-				rg.ctx().get<AppExit>().requested = true;
-			}
+		if (auto captureError = capture.afterDraw(rg, renderer, logger)) {
+			lastError = std::move(captureError);
 		}
-		if (llm && llmCapture)
-			++llmFrame;  // 每帧计数（含跳帧），wantCapture 判定的基准
 		if (onFrame)
 			onFrame(frame);
 		++frame;
 
-		if (statsN > 0) {
-			const uint64_t nowNs = SDL_GetTicksNS();  // 帧尾 = 本帧整周期终点
-			if (statsPrevNs != 0) {
-				const double ms = static_cast<double>(nowNs - statsPrevNs) / 1'000'000.0;
-				statsSum += ms;
-				++statsCount;
-				statsMin = std::min(statsMin, ms);
-				statsMax = std::max(statsMax, ms);
-			}
-			statsPrevNs = nowNs;
-			if (statsCount >= statsN) {
-				if (logger)
-					logger->info("frame stats: avg={:.3f}ms min={:.3f} max={:.3f} ({} 帧)",
-						statsSum / statsCount, statsMin, statsMax, statsCount);
-				statsSum = 0.0;
-				statsCount = 0;
-				statsMin = 1e30;
-				statsMax = 0.0;
-			}
-		}
+		stats.tick();
 	}
 
 	renderer.waitForIdle();

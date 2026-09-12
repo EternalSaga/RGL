@@ -4,8 +4,9 @@
 - 文件代码行 > --file-threshold（默认 500）→ 提示拆分文件
 - 函数代码行 > --func-threshold（默认 120）→ 提示拆分函数
 - 函数认知复杂度 > --cognitive-threshold（默认 15）→ 提示拆分函数
-  （SonarSource 风格：if/for/while/do/catch/三元/lambda 结构 +1+嵌套；switch 与
-  else/else-if +1 不递增嵌套；一段连续 &&/|| 整段 +1——算法 = clangbind）
+  （SonarSource 风格：if/for/while/do/catch/三元 结构 +1+嵌套；switch 与
+  else/else-if +1 不递增嵌套；一段连续 &&/|| 整段 +1；**lambda 独立计分**——
+  宿主不叠加 lambda 体，lambda 各自成条目从 nesting 0 算——算法 = clangbind）
 - 接口瘦身：非 _impl 文件里函数定义 > --impl-threshold（默认 100）代码行
   → 提示迁入 xxx_impl.cppm（AGENTS.md"接口瘦身"，接口 BMI 不含函数体）
 - 成员命名：成员变量名带 _/m_ 前缀或 _ 后缀 → 提示自然命名
@@ -47,6 +48,8 @@
   5. LLVM 22 的 C API 结构体布局与网上旧例程全不同（CXCursor=32B、
      CXSourceLocation/Range=24B、CXToken=24B 值类型、CXString=16B 值类型；
      clang_makeRange 更名 clang_getRange）——照旧例程写必段错误 → clangbind。
+  6. CXToken_Comment 枚举值 = 4（非 5）——曾误写 TOK_COMMENT=5 致注释 token 漏
+     过滤、每条注释首行计入代码行，行数类规则大面积虚高（2026-09-12 修正）。
 - 并发：ctypes 持 GIL，线程并行无效——ProcessPoolExecutor 一进程一文件（每进程加载
   一次 libclang），默认 min(cpu, 4) 个 worker，每进程 ~550MB 内存（worker.py）。
 - 缓存 {build}/stylecheck_cache（key = sha256(CACHE_VERSION + 源字节 + 命令)）：

@@ -134,31 +134,51 @@ void CullDriver::executeOpaqueSegment(vk::raii::CommandBuffer& cmd, const FrameD
 	}
 }
 
-void CullDriver::reconcile(const FrameDrawList& list) {
-	// CPU opaque 段（[0, skyboxStart)）的 objectSlot 多重集 vs GPU 可见 candidate 的
-	// objectSlot 多重集（逐 candidate 固定槽，顺序无关 → 排序后多重集比对）
+namespace {
+
+/** 收集 CPU opaque 段（[0, skyboxStart)）各 draw 的 objectIndex（对账 CPU 侧多重集源）。 */
+std::vector<uint32_t> collectCpuObjectSlots(const FrameDrawList& list) {
 	std::vector<uint32_t> cpuSlots;
 	cpuSlots.reserve(list.skyboxStart);
 	for (uint32_t i = 0; i < list.skyboxStart; ++i) {
 		const auto* a = reinterpret_cast<const RGL::DrawArgs*>(list.calls[i].pushData.data());
 		cpuSlots.push_back(a->objectIndex);
 	}
+	return cpuSlots;
+}
+
+/** cullArgs[i] ↔ entries[i] 同 objectSlot 顺序契约自检（Phase 7b）；首个失配 warn 后即返（等价原 break）。 */
+void checkCullAlignment(const FrameDrawList& list, const RGL::GpuCull& gpuCull) {
+	for (uint32_t i = 0; i < gpuCull.candidateCount(); ++i) {
+		if (list.cullArgs[i].objectIndex == gpuCull.entries()[i].objectSlot)
+			continue;
+		if (auto logger = RLLogger::getInstance())
+			logger->warn("gpu cull alignment VIOLATION at candidate {}: cullArgs.objectIndex={} != entry.objectSlot={} (order contract broken)",
+				i, list.cullArgs[i].objectIndex, gpuCull.entries()[i].objectSlot);
+		return;
+	}
+}
+
+/** 收集 GPU 可见 candidate 的 objectSlot（对账 GPU 侧多重集源，candidate 序）。 */
+std::vector<uint32_t> collectGpuVisibleSlots(const RGL::GpuCull& gpuCull) {
+	std::vector<uint32_t> gpuSlots;
+	gpuSlots.reserve(gpuCull.candidateCount());
+	for (uint32_t i = 0; i < gpuCull.candidateCount(); ++i)
+		if (gpuCull.isVisible(i))
+			gpuSlots.push_back(gpuCull.entries()[i].objectSlot);
+	return gpuSlots;
+}
+
+}  // namespace
+
+void CullDriver::reconcile(const FrameDrawList& list) {
+	// CPU opaque 段（[0, skyboxStart)）的 objectSlot 多重集 vs GPU 可见 candidate 的
+	// objectSlot 多重集（逐 candidate 固定槽，顺序无关 → 排序后多重集比对）
+	auto cpuSlots = collectCpuObjectSlots(list);
 	// 对齐自检（Phase 7b 顺序契约）：cullArgs[i] ↔ entries[i] 必须同 objectSlot
 	//（render_list 与 main C3 同守卫同序的运行时证明；失配 = args 错位 → 重放画错矩阵）
-	for (uint32_t i = 0; i < gpuCull->candidateCount(); ++i) {
-		if (list.cullArgs[i].objectIndex != gpuCull->entries()[i].objectSlot) {
-			auto logger = RLLogger::getInstance();
-			if (logger)
-				logger->warn("gpu cull alignment VIOLATION at candidate {}: cullArgs.objectIndex={} != entry.objectSlot={} (order contract broken)",
-					i, list.cullArgs[i].objectIndex, gpuCull->entries()[i].objectSlot);
-			break;
-		}
-	}
-	std::vector<uint32_t> gpuSlots;
-	gpuSlots.reserve(gpuCull->candidateCount());
-	for (uint32_t i = 0; i < gpuCull->candidateCount(); ++i)
-		if (gpuCull->isVisible(i))
-			gpuSlots.push_back(gpuCull->entries()[i].objectSlot);
+	checkCullAlignment(list, *gpuCull);
+	auto gpuSlots = collectGpuVisibleSlots(*gpuCull);
 	bool match = cpuSlots.size() == gpuSlots.size();
 	if (match) {
 		std::ranges::sort(cpuSlots);

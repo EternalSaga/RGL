@@ -108,7 +108,8 @@ void FrameCapturer::record(vk::raii::CommandBuffer& cmd, VkImage swapchainImage,
 		captureArmed = true;
 		return true;
 	};
-	if (captureRequest >= 0) {
+	// GB 直读分支（captureRequest = gbuf 通道号）：deferred 图专属，RT 不存在则跳过并留观测
+	auto recordGBuffer = [&] {
 		// GB 直读：deferred 图专属（前向图无 gbuffer_* 附件 / RT 未建 = 跳过并留观测）
 		if (captureRequest < static_cast<int>(kGBufferAttachments.size())) {
 			const std::string name{kGBufferAttachments[captureRequest].name};
@@ -127,7 +128,9 @@ void FrameCapturer::record(vk::raii::CommandBuffer& cmd, VkImage swapchainImage,
 				logger->warn("frame capture: dump_gbuf={} 但 RT '{}' 不存在（非 deferred 图？）",
 					captureRequest, name);
 		}
-	} else if (swapchainSlot != kRgNoAttachment) {
+	};
+	// swapchain 回读分支（captureRequest = -1）：presentTransition 前回读后缓冲（present 前真实内容）
+	auto recordSwapchain = [&] {
 		const auto from = layouts[swapchainSlot];  // 帧末：直渲 = CAO、blit 变体 = TransferDst
 		const bool blitWritten = from == vk::ImageLayout::eTransferDstOptimal;
 		barrier(swapchainImage, from, vk::ImageLayout::eTransferSrcOptimal,
@@ -139,7 +142,11 @@ void FrameCapturer::record(vk::raii::CommandBuffer& cmd, VkImage swapchainImage,
 		if (copyOut(swapchainImage, swapchainExtent.width, swapchainExtent.height,
 		        swapchainFormat, -1))
 			layouts[swapchainSlot] = vk::ImageLayout::eTransferSrcOptimal;
-	}
+	};
+	if (captureRequest >= 0)
+		recordGBuffer();
+	else if (swapchainSlot != kRgNoAttachment)
+		recordSwapchain();
 	captureRequest = -2;
 }
 

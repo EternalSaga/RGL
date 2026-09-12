@@ -111,12 +111,108 @@ static void verifyVertexUpload(RGL::DeviceContext& vkDevice, RGL::Resources& res
 		allPass ? "ALL PASS" : "FAIL", primitiveCount - failCount, primitiveCount, chunkCount);
 }
 
-[[nodiscard]] std::expected<std::vector<uint32_t>, Error> uploadModelMeshes(
-	RGL::DeviceContext& vkDevice, RGL::Resources& res, const RGL::GltfModel& model) {
-	auto* logger = RLLogger::getInstance();
+/** 分块粒度：每模型 primitive 拼成 ≤16MB 块，每块一个 BDA buffer + descriptor + heap slot。 */
+constexpr vk::DeviceSize kVertexChunkBytes = 16ull * 1024 * 1024;
+
+/** ① 分块：算 per-primitive (块序号, 块内偏移) + 每块总字节（16MB 边界，块序连续分配）。 */
+static std::pair<std::vector<ChunkPrim>, std::vector<vk::DeviceSize>> computeChunks(
+	const RGL::GltfModel& model, uint32_t primitiveCount) {
+	std::vector<ChunkPrim> primChunk(primitiveCount);
+	std::vector<vk::DeviceSize> chunkBytes;
+	vk::DeviceSize curOffset = 0;
+	uint32_t curChunk = 0;
+	chunkBytes.push_back(0);
+	for (uint32_t i = 0; i < primitiveCount; ++i) {
+		const vk::DeviceSize primBytes =
+			static_cast<vk::DeviceSize>(model.primitives[i].vertices.size()) * sizeof(ModelVertex);
+		if (curOffset > 0 && curOffset + primBytes > kVertexChunkBytes) {
+			++curChunk;
+			curOffset = 0;
+			chunkBytes.push_back(0);
+		}
+		primChunk[i] = {curChunk, static_cast<uint32_t>(curOffset)};
+		curOffset += primBytes;
+		chunkBytes[curChunk] += primBytes;
+	}
+	return {std::move(primChunk), std::move(chunkBytes)};
+}
+
+/** ② 单块上传：建 BDA buffer + 按块内偏移写入块内 primitive 顶点 + 分配并校验 heap slot
+ *（= expectedGeometrySlot 契约）+ 写 descriptor；块序连续分配，经 chunkBuffers/chunkSlots 回填。 */
+static std::expected<void, Error> uploadChunk(RGL::DeviceContext& vkDevice, RGL::Resources& res,
+	const RGL::GltfModel& model, uint32_t primitiveCount,
+	const std::vector<ChunkPrim>& primChunk, const std::vector<vk::DeviceSize>& chunkBytes,
+	uint32_t c, std::vector<std::shared_ptr<VmaBuffer>>& chunkBuffers,
+	std::vector<uint32_t>& chunkSlots) {
 	auto& device = vkDevice.getDevice();
 	auto& heap = res.getDescriptorHeap();
 	auto& assets = res.getAssetTable();
+	vk::BufferCreateInfo bufferInfo{};
+	bufferInfo.size = chunkBytes[c];
+	bufferInfo.usage = vk::BufferUsageFlagBits::eShaderDeviceAddress |
+		vk::BufferUsageFlagBits::eStorageBuffer;
+	bufferInfo.sharingMode = vk::SharingMode::eExclusive;
+	VmaAllocationCreateInfo allocInfo{};
+	allocInfo.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+	allocInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT |
+		VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+	VmaAllocationInfo allocData;
+	auto bufResult = res.getAllocator().createBufferWithAddress(device, bufferInfo, allocInfo, &allocData);
+	if (!bufResult)
+		return std::unexpected(std::move(bufResult).error());
+	auto buffer = std::move(*bufResult);
+	char* mapped = static_cast<char*>(allocData.pMappedData);
+	// 块内 primitive 按块内偏移写入
+	for (uint32_t i = 0; i < primitiveCount; ++i) {
+		if (primChunk[i].chunk != c)
+			continue;
+		const auto& vertices = model.primitives[i].vertices;
+		std::memcpy(mapped + primChunk[i].offset, vertices.data(),
+			static_cast<vk::DeviceSize>(vertices.size()) * sizeof(ModelVertex));
+	}
+	const uint32_t expectedSlot = assets.expectedGeometrySlot(heap.getReservedSlots());
+	auto slotResult = res.allocSlot("model.vertices.chunk");
+	if (!slotResult)
+		return std::unexpected(std::move(slotResult).error());
+	const uint32_t slot = *slotResult;
+	if (slot != expectedSlot)
+		return std::unexpected(Error{ErrorCode::DescriptorSlotOutOfBounds,
+			fmt::format("heap slot layout drift: model.vertices.chunk[{}] (slot {} != expected {})",
+				c, slot, expectedSlot)});
+	auto slotAddr = heap.getSlotCpuAddress(slot);
+	if (!slotAddr)
+		return std::unexpected(std::move(slotAddr).error());
+	vk::DeviceAddressRangeEXT range{buffer.getDeviceAddress(), chunkBytes[c]};
+	vk::ResourceDescriptorInfoEXT desc{};
+	desc.type = vk::DescriptorType::eStorageBuffer;
+	desc.data.pAddressRange = &range;
+	vk::HostAddressRangeEXT dst{*slotAddr, heap.getDescriptorSize()};
+	device.writeResourceDescriptorsEXT(desc, dst);
+	chunkBuffers[c] = std::make_shared<VmaBuffer>(std::move(buffer));
+	chunkSlots[c] = slot;
+	assets.incrementGeometrySlotCount();
+	return {};
+}
+
+/** ③ 注册 per-primitive 资产记录（所在块的 shared_ptr + 块 slot + 块内偏移），返回 primitive 序 assetIds。 */
+static std::vector<uint32_t> registerPrimAssets(RGL::Resources& res, const RGL::GltfModel& model,
+	std::vector<std::shared_ptr<VmaBuffer>>& chunkBuffers, const std::vector<uint32_t>& chunkSlots,
+	const std::vector<ChunkPrim>& primChunk, uint32_t primitiveCount) {
+	auto& assets = res.getAssetTable();
+	std::vector<uint32_t> assetIds;
+	assetIds.reserve(primitiveCount);
+	for (uint32_t i = 0; i < primitiveCount; ++i) {
+		const auto& prim = model.primitives[i];
+		const uint32_t id = assets.addMesh(chunkBuffers[primChunk[i].chunk], chunkSlots[primChunk[i].chunk],
+			prim.triangleCount, primChunk[i].offset);
+		assetIds.push_back(id);
+	}
+	return assetIds;
+}
+
+[[nodiscard]] std::expected<std::vector<uint32_t>, Error> uploadModelMeshes(
+	RGL::DeviceContext& vkDevice, RGL::Resources& res, const RGL::GltfModel& model) {
+	auto* logger = RLLogger::getInstance();
 
 	const uint32_t primitiveCount = static_cast<uint32_t>(model.primitives.size());
 
@@ -126,96 +222,84 @@ static void verifyVertexUpload(RGL::DeviceContext& vkDevice, RGL::Resources& res
 	// cottage artifact——artifact 根因 2026-08-30 定位为 gltf_loader uv 越界读（与 range
 	// 尺寸/分块无关，见 docs/archive/phase4_plan.md 批次 2 定案注记）。每块仍被同块内 primitive 共享
 	// vertex slot。per-primitive：heapSlot = 所在块的 slot，vertexOffset = 块内字节偏移（进 push constant）。
-	constexpr vk::DeviceSize kVertexChunkBytes = 16ull * 1024 * 1024;  // 16MB 块
+	// 首块首 slot 契约 = expectedGeometrySlot()（违例 = 契约漂移）。
 
 	// ① 分块：per-primitive (块序号, 块内偏移) + 每块总字节
-	std::vector<ChunkPrim> primChunk(primitiveCount);
-	std::vector<vk::DeviceSize> chunkBytes;
-	{
-		vk::DeviceSize curOffset = 0;
-		uint32_t curChunk = 0;
-		chunkBytes.push_back(0);
-		for (uint32_t i = 0; i < primitiveCount; ++i) {
-			const vk::DeviceSize primBytes =
-				static_cast<vk::DeviceSize>(model.primitives[i].vertices.size()) * sizeof(ModelVertex);
-			if (curOffset > 0 && curOffset + primBytes > kVertexChunkBytes) {
-				++curChunk;
-				curOffset = 0;
-				chunkBytes.push_back(0);
-			}
-			primChunk[i] = {curChunk, static_cast<uint32_t>(curOffset)};
-			curOffset += primBytes;
-			chunkBytes[curChunk] += primBytes;
-		}
-	}
+	auto [primChunk, chunkBytes] = computeChunks(model, primitiveCount);
 	const uint32_t chunkCount = static_cast<uint32_t>(chunkBytes.size());
 
-	// ② 每块一个 buffer + 一个 slot（descriptor range = 块大小）；块序连续分配，
-	// 首块首 slot 契约 = expectedGeometrySlot()（违例 = 契约漂移）
+	// ② 每块一个 buffer + 一个 slot（descriptor range = 块大小）；块序连续分配
 	std::vector<std::shared_ptr<VmaBuffer>> chunkBuffers(chunkCount);
 	std::vector<uint32_t> chunkSlots(chunkCount);
-	for (uint32_t c = 0; c < chunkCount; ++c) {
-		vk::BufferCreateInfo bufferInfo{};
-		bufferInfo.size = chunkBytes[c];
-		bufferInfo.usage = vk::BufferUsageFlagBits::eShaderDeviceAddress |
-			vk::BufferUsageFlagBits::eStorageBuffer;
-		bufferInfo.sharingMode = vk::SharingMode::eExclusive;
-		VmaAllocationCreateInfo allocInfo{};
-		allocInfo.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
-		allocInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT |
-			VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-		VmaAllocationInfo allocData;
-		auto bufResult = res.getAllocator().createBufferWithAddress(device, bufferInfo, allocInfo, &allocData);
-		if (!bufResult)
-			return std::unexpected(std::move(bufResult).error());
-		auto buffer = std::move(*bufResult);
-		char* mapped = static_cast<char*>(allocData.pMappedData);
-		// 块内 primitive 按块内偏移写入
-		for (uint32_t i = 0; i < primitiveCount; ++i) {
-			if (primChunk[i].chunk != c)
-				continue;
-			const auto& vertices = model.primitives[i].vertices;
-			std::memcpy(mapped + primChunk[i].offset, vertices.data(),
-				static_cast<vk::DeviceSize>(vertices.size()) * sizeof(ModelVertex));
-		}
-		const uint32_t expectedSlot = assets.expectedGeometrySlot(heap.getReservedSlots());
-		auto slotResult = res.allocSlot("model.vertices.chunk");
-		if (!slotResult)
-			return std::unexpected(std::move(slotResult).error());
-		const uint32_t slot = *slotResult;
-		if (slot != expectedSlot)
-			return std::unexpected(Error{ErrorCode::DescriptorSlotOutOfBounds,
-				fmt::format("heap slot layout drift: model.vertices.chunk[{}] (slot {} != expected {})",
-					c, slot, expectedSlot)});
-		auto slotAddr = heap.getSlotCpuAddress(slot);
-		if (!slotAddr)
-			return std::unexpected(std::move(slotAddr).error());
-		vk::DeviceAddressRangeEXT range{buffer.getDeviceAddress(), chunkBytes[c]};
-		vk::ResourceDescriptorInfoEXT desc{};
-		desc.type = vk::DescriptorType::eStorageBuffer;
-		desc.data.pAddressRange = &range;
-		vk::HostAddressRangeEXT dst{*slotAddr, heap.getDescriptorSize()};
-		device.writeResourceDescriptorsEXT(desc, dst);
-		chunkBuffers[c] = std::make_shared<VmaBuffer>(std::move(buffer));
-		chunkSlots[c] = slot;
-		assets.incrementGeometrySlotCount();
-	}
+	for (uint32_t c = 0; c < chunkCount; ++c)
+		if (auto chunk = uploadChunk(vkDevice, res, model, primitiveCount, primChunk, chunkBytes,
+		        c, chunkBuffers, chunkSlots); !chunk)
+			return std::unexpected(std::move(chunk).error());
 
 	// ③ 注册 per-primitive 资产记录（所在块的 shared_ptr + 块 slot + 块内偏移）
-	std::vector<uint32_t> assetIds;
-	assetIds.reserve(primitiveCount);
-	for (uint32_t i = 0; i < primitiveCount; ++i) {
-		const auto& prim = model.primitives[i];
-		const uint32_t id = assets.addMesh(chunkBuffers[primChunk[i].chunk], chunkSlots[primChunk[i].chunk],
-			prim.triangleCount, primChunk[i].offset);
-		assetIds.push_back(id);
-	}
+	auto assetIds = registerPrimAssets(res, model, chunkBuffers, chunkSlots, primChunk, primitiveCount);
 	if (logger)
 		logger->info("model: {} primitives → {} 块拼接顶点 buffer (每块 ≤{}KB) / {} heap slot",
 			primitiveCount, chunkCount, kVertexChunkBytes / 1024, chunkCount);
 	if (diagnostics().vtxCanary)
 		verifyVertexUpload(vkDevice, res, model, chunkBuffers, primChunk);
 	return assetIds;
+}
+
+/** 解析某 primitive 材质引用的纹理资产 id（baseColorTexture 的 image → 纹理 id）：取任一"该图 +
+ * 有 uv"的 primitive 的 textureId（image 去重缓存保证同图同资产）；缺纹理/无内嵌数据/全模型无 uv
+ * 可用 → kInvalidTextureId（有效选择 = 白，见 MaterialAsset 注释）。 */
+static uint32_t resolveMaterialTexture(const RGL::GltfModel& model, size_t n,
+	std::span<const uint32_t> primitiveTextureIds, size_t primIndex) {
+	const auto& prim = model.primitives[primIndex];
+	if (prim.baseColorTextureIndex < 0 || model.images[prim.baseColorTextureIndex].data.empty())
+		return kInvalidTextureId;
+	for (size_t j = 0; j < n; ++j)
+		if (model.primitives[j].baseColorTextureIndex == prim.baseColorTextureIndex &&
+			model.primitives[j].hasUv)
+			return primitiveTextureIds[j];
+	return kInvalidTextureId;
+}
+
+/** 材质资产注册（按 materialIndex 去重；-1 = 无材质 → 默认材质 {白 baseColor, 无纹理, OPAQUE}）：
+ * 每个 materialIndex 取首个 primitive 为字段样本，解析其纹理后 addMaterial，返回 materialIndex→资产 id。 */
+static std::map<int, uint32_t> buildMaterialAssets(RGL::Resources& resources,
+	const RGL::GltfModel& model, size_t n, std::span<const uint32_t> primitiveTextureIds) {
+	auto& assets = resources.getAssetTable();
+	std::map<int, uint32_t> materialOfIndex;
+	std::map<int, size_t> firstPrimOfIndex;  // 每个 materialIndex 的首个 primitive（取字段样本）
+	for (size_t i = 0; i < n; ++i)
+		firstPrimOfIndex.emplace(model.primitives[i].materialIndex, i);
+	for (const auto& [index, first] : firstPrimOfIndex) {
+		const auto& prim = model.primitives[first];
+		const uint32_t textureId = resolveMaterialTexture(model, n, primitiveTextureIds, first);
+		materialOfIndex[index] = assets.addMaterial(
+			MaterialAsset{prim.baseColor, textureId, prim.alphaModeBlend,
+				prim.metallic, prim.roughness, prim.unlit, prim.emissive});
+	}
+	return materialOfIndex;
+}
+
+/** per-primitive 材质引用解析 + 一致性金丝雀（glTF 格式保证同 materialIndex = 同材质字段：
+ * baseColorFactor/alphaMode/metallicFactor/roughnessFactor/unlit 扩展/emissiveFactor；违例 = loader bug，
+ * 启动期直接报错，不静默带病渲染）。不校验 textureId：材质可引用有数据的 image 但全部 primitive 无 uv
+ *（有效纹理 = 白），该投影含 per-primitive 的 hasUv，不是材质级格式保证。返回 primitive 序 material id。 */
+static std::vector<uint32_t> checkMaterialConsistency(RGL::Resources& resources,
+	const RGL::GltfModel& model, size_t n, std::map<int, uint32_t>& materialOfIndex) {
+	auto& assets = resources.getAssetTable();
+	std::vector<uint32_t> primitiveMaterialIds(n);
+	for (size_t i = 0; i < n; ++i) {
+		const auto& prim = model.primitives[i];
+		const auto& mat = assets.getMaterial(materialOfIndex[prim.materialIndex]);
+		if (mat.baseColor != prim.baseColor || mat.alphaModeBlend != prim.alphaModeBlend ||
+			mat.metallic != prim.metallic || mat.roughness != prim.roughness ||
+			mat.unlit != prim.unlit || mat.emissive != prim.emissive) {
+			throw std::runtime_error(fmt::format(
+				"glTF material inconsistency: primitive {} (materialIndex {})", i, prim.materialIndex));
+		}
+		primitiveMaterialIds[i] = materialOfIndex[prim.materialIndex];
+	}
+	return primitiveMaterialIds;
 }
 
 // 模型 → ECS：场景根（Relationship parent = null；Bounds 组件 = 模型整体包围球）
@@ -245,47 +329,10 @@ entt::entity registerScene(entt::registry& rg, const RGL::GltfModel& model,
 	const size_t n = model.primitives.size();
 	auto& assets = resources.getAssetTable();
 
-	// 材质资产（按 materialIndex 去重；-1 = 无材质 → 默认材质 {白 baseColor, 无纹理, OPAQUE}）
-	std::map<int, uint32_t> materialOfIndex;
-	std::map<int, size_t> firstPrimOfIndex;  // 每个 materialIndex 的首个 primitive（取字段样本）
-	for (size_t i = 0; i < n; ++i)
-		firstPrimOfIndex.emplace(model.primitives[i].materialIndex, i);
-	for (const auto& [index, first] : firstPrimOfIndex) {
-		const auto& prim = model.primitives[first];
-		// 材质引用的纹理（baseColorTexture 的 image → 纹理资产 id；image 去重缓存保证
-		// 同图同资产，取任一"该图 + 有 uv"的 primitive 的有效 id 即得）；缺纹理/无内嵌
-		// 数据/全模型无 uv 可用 → kInvalidTextureId（有效选择 = 白，见 MaterialAsset 注释）
-		uint32_t textureId = kInvalidTextureId;
-		if (prim.baseColorTextureIndex >= 0 && !model.images[prim.baseColorTextureIndex].data.empty()) {
-			for (size_t j = 0; j < n; ++j)
-				if (model.primitives[j].baseColorTextureIndex == prim.baseColorTextureIndex &&
-					model.primitives[j].hasUv) {
-					textureId = primitiveTextureIds[j];
-					break;
-				}
-		}
-		materialOfIndex[index] = assets.addMaterial(
-			MaterialAsset{prim.baseColor, textureId, prim.alphaModeBlend,
-				prim.metallic, prim.roughness, prim.unlit, prim.emissive});
-	}
-
-	// per-primitive 材质引用 + 一致性金丝雀（glTF 格式保证同 materialIndex = 同材质字段：
-	// baseColorFactor/alphaMode/metallicFactor/roughnessFactor/unlit 扩展/emissiveFactor；违例 = loader bug，
-	// 启动期直接报错，不静默带病渲染）。
-	// 不校验 textureId：材质可引用有数据的 image 但全部 primitive 无 uv（有效纹理 = 白），
-	// 该投影含 per-primitive 的 hasUv，不是材质级格式保证。
-	std::vector<uint32_t> primitiveMaterialIds(n);
-	for (size_t i = 0; i < n; ++i) {
-		const auto& prim = model.primitives[i];
-		const auto& mat = assets.getMaterial(materialOfIndex[prim.materialIndex]);
-		if (mat.baseColor != prim.baseColor || mat.alphaModeBlend != prim.alphaModeBlend ||
-			mat.metallic != prim.metallic || mat.roughness != prim.roughness ||
-			mat.unlit != prim.unlit || mat.emissive != prim.emissive) {
-			throw std::runtime_error(fmt::format(
-				"glTF material inconsistency: primitive {} (materialIndex {})", i, prim.materialIndex));
-		}
-		primitiveMaterialIds[i] = materialOfIndex[prim.materialIndex];
-	}
+	// 材质资产注册（按 materialIndex 去重；-1 = 无材质 → 默认材质）+ per-primitive 材质引用
+	// 一致性金丝雀（语义与被抽出的 buildMaterialAssets / checkMaterialConsistency 注释一致）
+	auto materialOfIndex = buildMaterialAssets(resources, model, n, primitiveTextureIds);
+	auto primitiveMaterialIds = checkMaterialConsistency(resources, model, n, materialOfIndex);
 
 	{
 		auto* logger = RLLogger::getInstance();

@@ -19,7 +19,9 @@ EXCLUDE_FILES = ("rgl/rlvk.cppm",)
 
 # 缓存版本：指标结构变化时 +1（自动失效旧缓存）。
 # v2→v3：函数指标 nesting → cognitive（认知复杂度替换嵌套深度）
-CACHE_VERSION = "v3"
+# v3→v4：lambda 独立计分（宿主不再叠加 lambda 体；collect_decls 收录 lambda 独立条目）
+# v4→v5：TOK_COMMENT 5→4 修正（注释 token 此前未被过滤，代码行数普遍虚高）
+CACHE_VERSION = "v5"
 
 DEFAULT_FILE_THRESHOLD = 500
 DEFAULT_FUNC_THRESHOLD = 120
@@ -43,13 +45,20 @@ FUNC_SPELLINGS = {"FunctionDecl", "CXXMethod", "Constructor", "Destructor",
 CTRL_SPELLINGS = {"IfStmt", "WhileStmt", "DoStmt", "ForStmt", "CXXForRangeStmt",
                   "SwitchStmt", "CXXCatchStmt", "LambdaExpr"}
 FIELD_SPELLING = "FieldDecl"
-TOK_COMMENT = 5
+# CXToken_Comment 枚举值 = 4（CXTokenKind: Punctuation=0/Keyword=1/Identifier=2/
+# Literal=3/Comment=4，LLVM 22 实测 tokenize 对 //、/*、/** 均产出 kind 4——包括
+# parse options=0）。**曾误写 5**：注释 token 全部漏过滤、每条注释首行被算进
+# 代码行，本高注释库的行数类规则大面积虚高（2026-09-12 修正，缓存 v5 随之）。
+TOK_COMMENT = 4
 
 # 认知复杂度（SonarSource 风格，算法 = clangbind.cognitive_complexity）：
-# 结构 +1+nesting 且子树递增 nesting 的一族（含三元与 lambda）
+# 结构 +1+nesting 且子树递增 nesting 的一族（含三元；**不含 lambda**——
+# lambda 是独立计分单元，宿主不叠加，见下 LAMBDA_SPELLING）
 COGNITIVE_STRUCT_SPELLINGS = {"IfStmt", "ForStmt", "CXXForRangeStmt", "WhileStmt",
-                              "DoStmt", "CXXCatchStmt", "ConditionalOperator",
-                              "LambdaExpr"}
+                              "DoStmt", "CXXCatchStmt", "ConditionalOperator"}
+# lambda = "函数中的函数"：宿主认知复杂度不叠加其体（walk 遇 LambdaExpr 即停），
+# collect_decls 收录为独立条目、从 lambda 自身起单独计分（nesting 0 起算）
+LAMBDA_SPELLING = "LambdaExpr"
 # +1 但子树 nesting 不变
 SWITCH_SPELLINGS = {"SwitchStmt"}
 BINARY_OPERATOR_SPELLING = "BinaryOperator"

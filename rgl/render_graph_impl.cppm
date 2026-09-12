@@ -116,41 +116,47 @@ struct CompileCtx {
 	}
 };
 
-/** ① attachment 注册：名字 → slot；swapchain 类至多一个；格式按 kind 校验（offscreen 词表、余 inherit）。 */
-std::expected<void, Error> registerAttachments(const RgGraphDesc& desc, CompileCtx& ctx) {
-	for (const auto& att : desc.attachments) {
-		if (att.name.empty())
-			return std::unexpected(rgError("render_graph: attachment with empty name"));
-		if (auto [it, ok] = ctx.nameToSlot.emplace(att.name,
-			    static_cast<RgAttachmentSlot>(ctx.slots.size()));
-			!ok)
-			return std::unexpected(
-				rgError(fmt::format("render_graph: duplicate attachment name '{}'", att.name)));
-		if (att.kind == RgAttachmentKind::swapchain && ++ctx.swapchainCount > 1)
-			return std::unexpected(rgError("render_graph: more than one swapchain attachment"));
-		// 格式校验：offscreen 允许 "inherit" 或词表具名格式（Phase 7 G-buffer 显式
-		// RT / Phase 8 scene_hdr）；swapchain/depth 的格式由执行器固定，只认 "inherit"
-		if (att.kind == RgAttachmentKind::offscreen) {
-			if (!isKnownRgFormat(att.format))
-				return std::unexpected(rgError(fmt::format(
-					"render graph: attachment '{}' has unknown format '{}'", att.name, att.format)));
-		} else if (att.format != "inherit") {
+/** ① 单 attachment 校验与落图：空名 / 重名 / swapchain 计数 / 按 kind 格式词表（offscreen 词表、余 inherit）→ 名字→slot + 图记录 + 游标。@return 失败带定位 Error */
+std::expected<void, Error> registerAttachment(const RgAttachmentDesc& att, CompileCtx& ctx) {
+	if (att.name.empty())
+		return std::unexpected(rgError("render_graph: attachment with empty name"));
+	if (auto [it, ok] = ctx.nameToSlot.emplace(att.name,
+		    static_cast<RgAttachmentSlot>(ctx.slots.size()));
+		!ok)
+		return std::unexpected(
+			rgError(fmt::format("render_graph: duplicate attachment name '{}'", att.name)));
+	if (att.kind == RgAttachmentKind::swapchain && ++ctx.swapchainCount > 1)
+		return std::unexpected(rgError("render_graph: more than one swapchain attachment"));
+	// 格式校验：offscreen 允许 "inherit" 或词表具名格式（Phase 7 G-buffer 显式
+	// RT / Phase 8 scene_hdr）；swapchain/depth 的格式由执行器固定，只认 "inherit"
+	if (att.kind == RgAttachmentKind::offscreen) {
+		if (!isKnownRgFormat(att.format))
 			return std::unexpected(rgError(fmt::format(
-				"render graph: {} attachment '{}' must use format 'inherit' (got '{}')",
-				att.kind == RgAttachmentKind::swapchain ? "swapchain" : "depth", att.name,
-				att.format)));
-		}
-		ctx.graph.attachments.push_back(RgCompiledAttachment{
-			.name = att.name,
-			.kind = att.kind,
-			.format = att.format,
-			.aspect = aspectOf(att.kind),
-			// 帧首丢弃规则：swapchain/depth 每帧内容按 loadOp 重建（现 ④ 的
-			// oldLayout=eUndefined 约定）；offscreen 持久图必须追踪真实布局
-			.frameStartDiscard = att.kind != RgAttachmentKind::offscreen,
-		});
-		ctx.slots.emplace_back();
+				"render graph: attachment '{}' has unknown format '{}'", att.name, att.format)));
+	} else if (att.format != "inherit") {
+		return std::unexpected(rgError(fmt::format(
+			"render graph: {} attachment '{}' must use format 'inherit' (got '{}')",
+			att.kind == RgAttachmentKind::swapchain ? "swapchain" : "depth", att.name,
+			att.format)));
 	}
+	ctx.graph.attachments.push_back(RgCompiledAttachment{
+		.name = att.name,
+		.kind = att.kind,
+		.format = att.format,
+		.aspect = aspectOf(att.kind),
+		// 帧首丢弃规则：swapchain/depth 每帧内容按 loadOp 重建（现 ④ 的
+		// oldLayout=eUndefined 约定）；offscreen 持久图必须追踪真实布局
+		.frameStartDiscard = att.kind != RgAttachmentKind::offscreen,
+	});
+	ctx.slots.emplace_back();
+	return {};
+}
+
+/** ① attachment 注册总入口：逐个交 registerAttachment（校验 + 落图），任一失败即中断（保首个报错顺序）。 */
+std::expected<void, Error> registerAttachments(const RgGraphDesc& desc, CompileCtx& ctx) {
+	for (const auto& att : desc.attachments)
+		if (auto r = registerAttachment(att, ctx); !r)
+			return std::unexpected(std::move(r).error());
 	return {};
 }
 
@@ -239,7 +245,89 @@ std::expected<void, Error> precheckPass(const RgPassDesc& pass, uint32_t passIdx
 	return {};
 }
 
-/** ③④ 单 pass 全部引用：解析/查重/usage-kind 匹配/读前置 → barrier 计划 + beginRendering 条目；本帧使用对回传（游标延后统一推进）。 */
+/** ③ 单引用解析与合法性校验：未注册 / 同 pass 多角色（feedback 一并拒）/ usage-kind 匹配（depth↔depthWrite 双向）/ 读前置（本帧未写不可读）/ blit 两端不得 depth。检查顺序即原循环体相对顺序（保首个报错定位）。@return 解析出的 slot，失败带 Error */
+std::expected<RgAttachmentSlot, Error> validatePassRef(const RgPassDesc& pass,
+	const RgPassAttachment& a, CompileCtx& ctx) {
+	const auto slot = ctx.resolve(a.attachment);
+	if (slot == kRgNoAttachment)
+		return std::unexpected(rgError(fmt::format(
+			"render_graph: pass '{}' references unknown attachment '{}'", pass.name,
+			a.attachment)));
+	if (countRole(pass, a.attachment) > 1)
+		return std::unexpected(rgError(fmt::format(
+			"render_graph: pass '{}' references attachment '{}' more than once (read/write "
+			"feedback or duplicate role)",
+			pass.name, a.attachment)));
+	const auto& compiled = ctx.graph.attachments[slot];
+	// usage 与 kind 匹配：depth 附件只能 depthWrite；非 depth 附件不能 depthWrite
+	if ((a.usage == RgUsage::depthWrite) != (compiled.kind == RgAttachmentKind::depth))
+		return std::unexpected(rgError(fmt::format(
+			"render_graph: pass '{}' usage of '{}' inconsistent with its kind", pass.name,
+			a.attachment)));
+	// 读前置：本帧尚无写入的 attachment 不可读（跨帧历史复用——TAA 类——
+	// 骨架版不支持，留后续）
+	if (isReadUsage(a.usage) && !ctx.slots[slot].everWritten)
+		return std::unexpected(rgError(fmt::format(
+			"render_graph: pass '{}' reads '{}' before any write in the frame", pass.name,
+			a.attachment)));
+	// blit 两端不得是 depth 附件
+	if (pass.kind == RgPassKind::blit && compiled.kind == RgAttachmentKind::depth)
+		return std::unexpected(rgError(fmt::format(
+			"render_graph: blit pass '{}' cannot touch depth attachment '{}'", pass.name,
+			a.attachment)));
+	return slot;
+}
+
+/** ③ barrier 计划生成：读→读无需同步；其余（帧首 / 写后读 / 读后写 / 写后写）生成一条转换（同布局的写→写跨 pass 实例也发——identity barrier 合法，为 dynamic rendering 跨实例 LOAD 提供执行依赖）。 */
+void planBarrier(const RgPassAttachment& a, RgAttachmentSlot slot,
+	const RgCompiledAttachment& compiled, const UsageInfo& target, const SlotState& state,
+	RgPassPlan& plan) {
+	if (!(state.lastUse && isReadUsage(*state.lastUse) && isReadUsage(a.usage))) {
+		RgBarrierPlan barrier{};
+		barrier.attachment = slot;
+		barrier.aspect = compiled.aspect;
+		barrier.newLayout = target.layout;
+		barrier.dstStage = target.stage;
+		barrier.dstAccess = target.access;
+		if (state.lastUse) {
+			const auto prev = usageInfo(*state.lastUse);
+			barrier.oldLayoutDiscard = false;
+			barrier.srcStage = prev.stage;
+			barrier.srcAccess = prev.access;
+		} else {
+			barrier.oldLayoutDiscard = compiled.frameStartDiscard;
+			barrier.srcStage = vk::PipelineStageFlagBits2::eTopOfPipe;
+			barrier.srcAccess = vk::AccessFlagBits2::eNone;
+		}
+		plan.barriers.push_back(barrier);
+	}
+}
+
+/** ③ beginRendering 写条目生成：写角色按 depth / color / blitTarget 落 plan；blit 的 transferRead 记 blitSource。 */
+void planBeginRenderingEntry(const RgPassDesc& pass, const RgPassAttachment& a,
+	RgAttachmentSlot slot, const RgCompiledAttachment& compiled, const UsageInfo& target,
+	RgPassPlan& plan) {
+	if (isWriteUsage(a.usage)) {
+		RgAttachmentPlan ap{};
+		ap.slot = slot;
+		ap.layout = target.layout;
+		ap.loadOp = toVkLoad(a.loadOp);
+		ap.storeOp = toVkStore(a.storeOp);
+		ap.clearValue = compiled.kind == RgAttachmentKind::depth
+			? vk::ClearValue{vk::ClearDepthStencilValue{a.clear.depth, 0u}}
+			: vk::ClearValue{std::array<float, 4>{a.clear.color}};
+		if (a.usage == RgUsage::depthWrite)
+			plan.depth = ap;
+		else if (a.usage == RgUsage::colorWrite)
+			plan.colors.push_back(ap);
+		else
+			plan.blitTarget = slot;  // transferWrite（blit pass）
+	} else if (a.usage == RgUsage::transferRead && pass.kind == RgPassKind::blit) {
+		plan.blitSource = slot;
+	}
+}
+
+/** ③④ 单 pass 全部引用：逐条 validatePassRef（解析/校验）→ planBarrier（barrier 计划）→ planBeginRenderingEntry（beginRendering 条目）；本帧使用对回传（游标延后统一推进）。 */
 std::expected<void, Error> planPassUses(const RgPassDesc& pass, CompileCtx& ctx,
 	RgPassPlan& plan, std::vector<std::pair<RgAttachmentSlot, RgUsage>>& thisPassUses) {
 	// 本 pass 引用集合（outputs 后 inputs 的发射序；同 attachment 多角色 = 冲突，
@@ -252,104 +340,51 @@ std::expected<void, Error> planPassUses(const RgPassDesc& pass, CompileCtx& ctx,
 		refs.push_back(&a);
 
 	for (const auto* a : refs) {
-		const auto slot = ctx.resolve(a->attachment);
-		if (slot == kRgNoAttachment)
-			return std::unexpected(rgError(fmt::format(
-				"render_graph: pass '{}' references unknown attachment '{}'", pass.name,
-				a->attachment)));
-		if (countRole(pass, a->attachment) > 1)
-			return std::unexpected(rgError(fmt::format(
-				"render_graph: pass '{}' references attachment '{}' more than once (read/write "
-				"feedback or duplicate role)",
-				pass.name, a->attachment)));
-		const auto& compiled = ctx.graph.attachments[slot];
-
-		// usage 与 kind 匹配：depth 附件只能 depthWrite；非 depth 附件不能 depthWrite
-		if ((a->usage == RgUsage::depthWrite) != (compiled.kind == RgAttachmentKind::depth))
-			return std::unexpected(rgError(fmt::format(
-				"render_graph: pass '{}' usage of '{}' inconsistent with its kind", pass.name,
-				a->attachment)));
-
+		auto slot = validatePassRef(pass, *a, ctx);
+		if (!slot)
+			return std::unexpected(std::move(slot).error());
+		const auto& compiled = ctx.graph.attachments[*slot];
 		const auto target = usageInfo(a->usage);
-		auto& state = ctx.slots[slot];
-
-		// 读前置：本帧尚无写入的 attachment 不可读（跨帧历史复用——TAA 类——
-		// 骨架版不支持，留后续）；blit 两端不得是 depth 附件
-		if (isReadUsage(a->usage) && !state.everWritten)
-			return std::unexpected(rgError(fmt::format(
-				"render_graph: pass '{}' reads '{}' before any write in the frame", pass.name,
-				a->attachment)));
-		if (pass.kind == RgPassKind::blit && compiled.kind == RgAttachmentKind::depth)
-			return std::unexpected(rgError(fmt::format(
-				"render_graph: blit pass '{}' cannot touch depth attachment '{}'", pass.name,
-				a->attachment)));
-
-		// barrier 计划：读→读无需同步；其余（帧首 / 写后读 / 读后写 / 写后写）
-		// 生成一条转换（同布局的写→写跨 pass 实例也发——identity barrier 合法，
-		// 为 dynamic rendering 跨实例 LOAD 提供执行依赖）
-		if (!(state.lastUse && isReadUsage(*state.lastUse) && isReadUsage(a->usage))) {
-			RgBarrierPlan barrier{};
-			barrier.attachment = slot;
-			barrier.aspect = compiled.aspect;
-			barrier.newLayout = target.layout;
-			barrier.dstStage = target.stage;
-			barrier.dstAccess = target.access;
-			if (state.lastUse) {
-				const auto prev = usageInfo(*state.lastUse);
-				barrier.oldLayoutDiscard = false;
-				barrier.srcStage = prev.stage;
-				barrier.srcAccess = prev.access;
-			} else {
-				barrier.oldLayoutDiscard = compiled.frameStartDiscard;
-				barrier.srcStage = vk::PipelineStageFlagBits2::eTopOfPipe;
-				barrier.srcAccess = vk::AccessFlagBits2::eNone;
-			}
-			plan.barriers.push_back(barrier);
-		}
-
-		// beginRendering 条目（写角色）
-		if (isWriteUsage(a->usage)) {
-			RgAttachmentPlan ap{};
-			ap.slot = slot;
-			ap.layout = target.layout;
-			ap.loadOp = toVkLoad(a->loadOp);
-			ap.storeOp = toVkStore(a->storeOp);
-			ap.clearValue = compiled.kind == RgAttachmentKind::depth
-				? vk::ClearValue{vk::ClearDepthStencilValue{a->clear.depth, 0u}}
-				: vk::ClearValue{std::array<float, 4>{a->clear.color}};
-			if (a->usage == RgUsage::depthWrite)
-				plan.depth = ap;
-			else if (a->usage == RgUsage::colorWrite)
-				plan.colors.push_back(ap);
-			else
-				plan.blitTarget = slot;  // transferWrite（blit pass）
-		} else if (a->usage == RgUsage::transferRead && pass.kind == RgPassKind::blit) {
-			plan.blitSource = slot;
-		}
-		thisPassUses.emplace_back(slot, a->usage);
+		planBarrier(*a, *slot, compiled, target, ctx.slots[*slot], plan);
+		planBeginRenderingEntry(pass, *a, *slot, compiled, target, plan);
+		thisPassUses.emplace_back(*slot, a->usage);
 	}
 	return {};
 }
 
-/** 游标推进 + store 完整性延后校验（该 attachment 上次写的 storeOp 不得 DontCare）。 */
+/** ④ 在 pass 的 beginRendering 条目里找引用该 slot 的 plan（colors 优先、depth 次之）。同 pass 内每 slot 至多一条（countRole 已拒重复引用），故 find 首命中即唯一命中，与原"末命中"手写循环等价。@return 命中条目指针，无则 nullptr */
+const RgAttachmentPlan* findPlanEntry(const RgPassPlan& pass, RgAttachmentSlot slot) {
+	const auto it = std::ranges::find(pass.colors, slot, &RgAttachmentPlan::slot);
+	if (it != pass.colors.end())
+		return &*it;
+	if (pass.depth && pass.depth->slot == slot)
+		return &*pass.depth;
+	return nullptr;
+}
+
+/** ④ store 完整性校验：该 attachment 上次写的 pass（异于当前 pass）若 storeOp=DontCare 但后续仍被使用 → 报错（内容会丢）。 */
+std::expected<void, Error> checkPriorWriteStore(const CompiledRenderGraph& graph,
+	const SlotState& state, uint32_t passIdx, RgAttachmentSlot slot) {
+	if (state.lastWritePass == kRgNoAttachment || state.lastWritePass == passIdx)
+		return {};
+	const auto& prevPass = graph.passes[state.lastWritePass];
+	const auto* prevPlan = findPlanEntry(prevPass, slot);
+	if (prevPlan && prevPlan->storeOp == vk::AttachmentStoreOp::eDontCare)
+		return std::unexpected(rgError(fmt::format(
+			"render_graph: attachment '{}' written in pass '{}' with DontCare store but used "
+			"later (contents would be lost)",
+			graph.attachments[slot].name, prevPass.name)));
+	return {};
+}
+
+/** 游标推进 + store 完整性延后校验（先 checkPriorWriteStore 后推进游标，保原检查顺序：报错先于写更新）。 */
 std::expected<void, Error> advanceCursors(const CompiledRenderGraph& graph,
 	std::vector<SlotState>& slots, uint32_t passIdx,
 	const std::vector<std::pair<RgAttachmentSlot, RgUsage>>& thisPassUses) {
 	for (const auto& [slot, usage] : thisPassUses) {
+		if (auto r = checkPriorWriteStore(graph, slots[slot], passIdx, slot); !r)
+			return std::unexpected(std::move(r).error());
 		auto& state = slots[slot];
-		if (state.lastWritePass != kRgNoAttachment && state.lastWritePass != passIdx) {
-			const auto& prevPass = graph.passes[state.lastWritePass];
-			const RgAttachmentPlan* prevPlan = nullptr;
-			for (const auto& cp : prevPass.colors)
-				if (cp.slot == slot) prevPlan = &cp;
-			if (!prevPlan && prevPass.depth && prevPass.depth->slot == slot)
-				prevPlan = &*prevPass.depth;
-			if (prevPlan && prevPlan->storeOp == vk::AttachmentStoreOp::eDontCare)
-				return std::unexpected(rgError(fmt::format(
-					"render_graph: attachment '{}' written in pass '{}' with DontCare store but used "
-					"later (contents would be lost)",
-					graph.attachments[slot].name, prevPass.name)));
-		}
 		if (isWriteUsage(usage)) {
 			state.lastWritePass = passIdx;
 			state.everWritten = true;

@@ -155,6 +155,44 @@ export class Renderer {
 	 */
 	[[nodiscard]] std::expected<void, Error> writeSceneStaging(const FrameDrawList& list,
 		uint32_t frameSlot);
+	/**
+	 * ④⑥⑥.5⑦ 数据通路固定段（Phase 6 起不入图——非 attachment 状态同步）：heap barrier
+	 *（host write → resource/sampler heap read；eHost stage 不能在 render pass 内，故必须在
+	 * beginRendering 之前）→ scene staging → device buffer 拷贝 + Transfer 写→图形 shader 读
+	 * barrier → resource heap / sampler heap 绑定。手术 6：块体自 drawFrame 摘出，命令流
+	 * 逐条不变。
+	 * @param cmd 本帧命令缓冲（录制期）
+	 * @param frameSlot 本帧 staging slot（scene staging 拷贝源）
+	 */
+	void recordFixedDataPath(vk::raii::CommandBuffer& cmd, uint32_t frameSlot);
+	/**
+	 * offscreen attachment RT 幂等 ensure（批次 4）：逐 offscreen 附件 resolveRgFormat +
+	 * ensureRtAttachment（extent 随 swapchain resize 重建，重建含 waitIdle，录制期调用安全）。
+	 * generation 变化（新图布局 Undefined）→ 重置 attachmentLayouts[slot]，防下帧首 barrier
+	 * oldLayout 失配。手术 6：块体自 drawFrame 摘出（rtGenerations 归本函数局部）。
+	 * @param extent 当前 swapchain extent
+	 * @param offscreenRt 出参：按图 slot 填 RT 指针（非 offscreen 槽留 null），大小 = 附件数
+	 * @return void；ensureRtAttachment 失败 → Error
+	 */
+	[[nodiscard]] std::expected<void, Error> ensureOffscreenAttachments(vk::Extent2D extent,
+		std::vector<Resources::RtAttachment*>& offscreenRt);
+	/**
+	 * pass draw 三路分发（手术 6：自 drawFrame pass 循环摘出）：drawLight 固定全屏单 group
+	 *（无 push constant，条目按 pass.state 名解析）/ opaque 段 GPU culling（DGC execute 或
+	 * 读回重放，能力位自动切换）/ 普通段逐 draw（segmentRange + drawOne）。
+	 * @param cmd 本帧命令缓冲（录制期）
+	 * @param pass 编译 pass 计划（kind/drawSource/state/colors）
+	 * @param list 每帧绘制列表（calls + 段边界）
+	 * @param frameSlot 本帧 slot（cull 重放 args 索引）
+	 */
+	void executePassDraws(vk::raii::CommandBuffer& cmd, const RgPassPlan& pass,
+		const FrameDrawList& list, uint32_t frameSlot);
+	/**
+	 * 单个 mesh draw：push DrawArgs（pushDataEXT）→ bindShaders → drawMeshTasksEXT。
+	 * @param cmd 本帧命令缓冲（录制期）
+	 * @param call 绘制条目（pipeline / pushData / groupCount）
+	 */
+	void drawOne(vk::raii::CommandBuffer& cmd, const DrawCall& call);
 	// recreateSwapchainAndDepth（swapchain+depth 重建）已随手术 4 迁 FrameSession。
 	RGL::DeviceContext& vkDevice;  // 设备层引用（队列 / 命令池 / fence 等待 / 能力探测）
 	RGL::Swapchain* swapchain;      // 交换链层（main 持有，析构序在 Renderer 之后）

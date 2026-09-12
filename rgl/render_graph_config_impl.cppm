@@ -38,6 +38,31 @@ std::expected<E, Error> parseEnum(std::string_view name,
 }
 
 /**
+ * 可选枚举串字段读取（load/store 两段共用）：字段存在才经 parseEnum 词表解析写回
+ * （缺失 = 回落默认；串非法 = 透传 parseEnum Error，消息格式逐字相同）。
+ * @param item 配置表条目
+ * @param key 字段名
+ * @param into 写入目标（字段存在才覆盖）
+ * @param table (字符串, 枚举值) 候选表
+ * @param what 字段名（错误信息用）
+ * @param path 配置路径（错误信息用）
+ * @return 成功 = void；枚举串非法 = Error
+ */
+template <typename E>
+std::expected<void, Error> readOptionalEnum(sol::table item, const char* key, E& into,
+	std::initializer_list<std::pair<std::string_view, E>> table, std::string_view what,
+	std::string_view path) {
+	sol::optional<std::string> text = item[key];
+	if (!text)
+		return {};
+	auto result = parseEnum(*text, table, what, path);
+	if (!result)
+		return std::unexpected(std::move(result).error());
+	into = *result;
+	return {};
+}
+
+/**
  * 解析一条 outputs/inputs 条目（attachment/usage 必填，load/store/clear/clearDepth
  * 可选，缺省回落 RgPassAttachment 默认值）。
  * @param item 配置表条目
@@ -72,24 +97,16 @@ std::expected<RgPassAttachment, Error> readPassAttachment(sol::table item,
 		return std::unexpected(std::move(usageResult).error());
 	att.usage = *usageResult;
 
-	if (sol::optional<std::string> load = item["load"]) {
-		auto loadResult = parseEnum(*load,
+	if (auto load = readOptionalEnum(item, "load", att.loadOp,
 			std::initializer_list<std::pair<std::string_view, RgLoadOp>>{
 				{"clear", RgLoadOp::clear}, {"load", RgLoadOp::load}},
-			"load op", path);
-		if (!loadResult)
-			return std::unexpected(std::move(loadResult).error());
-		att.loadOp = *loadResult;
-	}
-	if (sol::optional<std::string> store = item["store"]) {
-		auto storeResult = parseEnum(*store,
+			"load op", path); !load)
+		return std::unexpected(std::move(load).error());
+	if (auto store = readOptionalEnum(item, "store", att.storeOp,
 			std::initializer_list<std::pair<std::string_view, RgStoreOp>>{
 				{"store", RgStoreOp::store}, {"dontCare", RgStoreOp::dontCare}},
-			"store op", path);
-		if (!storeResult)
-			return std::unexpected(std::move(storeResult).error());
-		att.storeOp = *storeResult;
-	}
+			"store op", path); !store)
+		return std::unexpected(std::move(store).error());
 	// 清除值：clear={r,g,b,a}（颜色）/ clearDepth=f（深度），缺省回落 RgClearValue 默认
 	if (sol::optional<sol::table> clear = item["clear"]) {
 		for (int i = 1; i <= 4; ++i)
@@ -179,8 +196,52 @@ std::expected<std::vector<RgAttachmentDesc>, Error> readAttachments(sol::table r
 }
 
 /**
+ * 解析单条 pass 条目（name 必填；kind 词表 draw/blit/drawLight；state/draws 直取
+ * 字符串；outputs/inputs 经 readRoleList；错误消息逐字保持拆分前内联文案）。
+ * @param item 条目表
+ * @param path 配置路径（错误信息用）
+ * @param index 条目序号（1 起，错误信息用）
+ * @return 解析出的 RgPassDesc；缺 name/词表串非法返回 Error
+ */
+std::expected<RgPassDesc, Error> readPass(sol::table item, std::string_view path,
+	int index) {
+	RgPassDesc pass;
+	sol::optional<std::string> name = item["name"];
+	if (!name)
+		return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
+			fmt::format("render graph config ({}): pass[{}] missing 'name'", path, index)});
+	pass.name = *name;
+	sol::optional<std::string> kind = item["kind"];
+	if (kind) {
+		auto kindResult = parseEnum(*kind,
+			std::initializer_list<std::pair<std::string_view, RgPassKind>>{
+				{"draw", RgPassKind::drawMesh}, {"blit", RgPassKind::blit},
+				{"drawLight", RgPassKind::drawLight}},
+			"pass kind", path);
+		if (!kindResult)
+			return std::unexpected(std::move(kindResult).error());
+		pass.kind = *kindResult;
+	}
+	sol::optional<std::string> state = item["state"];
+	if (state)
+		pass.state = *state;
+	sol::optional<std::string> draws = item["draws"];
+	if (draws)
+		pass.drawSource = *draws;
+	auto outputs = readRoleList(item["outputs"], path, pass.name, "outputs");
+	if (!outputs)
+		return std::unexpected(std::move(outputs).error());
+	pass.outputs = std::move(*outputs);
+	auto inputs = readRoleList(item["inputs"], path, pass.name, "inputs");
+	if (!inputs)
+		return std::unexpected(std::move(inputs).error());
+	pass.inputs = std::move(*inputs);
+	return pass;
+}
+
+/**
  * 解析顶层 passes 数组（name 必填；kind 词表 draw/blit/drawLight；state/draws 直取
- * 字符串；outputs/inputs 经 readRoleList）。
+ * 字符串；outputs/inputs 经 readRoleList；逐条目调 readPass）。
  * @param root 配置根表（passes 缺失/非表 = 空列表，透传给 compile 报"no passes"）
  * @param path 配置路径（错误信息用）
  * @return pass 描述列表；缺 name/词表串非法返回 Error
@@ -193,40 +254,36 @@ std::expected<std::vector<RgPassDesc>, Error> readPasses(sol::table root,
 		return out;
 	for (int i = 1; i <= static_cast<int>(passes.size()); ++i) {
 		sol::table item = passes[i];
-		RgPassDesc pass;
-		sol::optional<std::string> name = item["name"];
-		if (!name)
-			return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
-				fmt::format("render graph config ({}): pass[{}] missing 'name'", path, i)});
-		pass.name = *name;
-		sol::optional<std::string> kind = item["kind"];
-		if (kind) {
-			auto kindResult = parseEnum(*kind,
-				std::initializer_list<std::pair<std::string_view, RgPassKind>>{
-					{"draw", RgPassKind::drawMesh}, {"blit", RgPassKind::blit},
-					{"drawLight", RgPassKind::drawLight}},
-				"pass kind", path);
-			if (!kindResult)
-				return std::unexpected(std::move(kindResult).error());
-			pass.kind = *kindResult;
-		}
-		sol::optional<std::string> state = item["state"];
-		if (state)
-			pass.state = *state;
-		sol::optional<std::string> draws = item["draws"];
-		if (draws)
-			pass.drawSource = *draws;
-		auto outputs = readRoleList(item["outputs"], path, pass.name, "outputs");
-		if (!outputs)
-			return std::unexpected(std::move(outputs).error());
-		pass.outputs = std::move(*outputs);
-		auto inputs = readRoleList(item["inputs"], path, pass.name, "inputs");
-		if (!inputs)
-			return std::unexpected(std::move(inputs).error());
-		pass.inputs = std::move(*inputs);
-		out.push_back(std::move(pass));
+		auto pass = readPass(item, path, i);
+		if (!pass)
+			return std::unexpected(std::move(pass).error());
+		out.push_back(std::move(*pass));
 	}
 	return out;
+}
+
+/**
+ * 顶层 variant 字段选路（替代旧 RGL_DEFERRED/RGL_OFFSCREEN env）：deferred/offscreen
+ * 直返内建图配置（exclusive，文件 passes 忽略）；"forward"/缺失 = nullopt
+ * （解析文件 passes）；未知串 = ConfigLoadFailed（消息逐字保持拆分前内联文案）。
+ * @param root 配置根表
+ * @param path 配置路径（错误信息用）
+ * @return 内建图配置 = deferred/offscreen 命中；nullopt = forward 或缺失；非法 variant = Error
+ */
+std::expected<std::optional<RenderGraphConfig>, Error> resolveVariantConfig(sol::table root,
+	std::string_view path) {
+	sol::optional<std::string> variant = root["variant"];
+	if (!variant)
+		return std::nullopt;
+	if (*variant == "deferred")
+		return RenderGraphConfig{RgGraphVariant::deferred, deferredRenderGraphDesc()};
+	if (*variant == "offscreen")
+		return RenderGraphConfig{RgGraphVariant::offscreen, offscreenRenderGraphDesc()};
+	if (*variant != "forward")
+		return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
+			fmt::format("render graph config ({}): unknown variant '{}' "
+				"(want forward/deferred/offscreen)", path, *variant)});
+	return std::nullopt;
 }
 
 }  // namespace
@@ -271,17 +328,12 @@ std::expected<RenderGraphConfig, Error> loadRenderGraphConfig(std::string_view p
 
 		// variant 顶层字段（替代旧 RGL_DEFERRED/RGL_OFFSCREEN env）：deferred/offscreen
 		// 直返内建图（exclusive，文件 passes 忽略）；"forward"/缺省 = 解析文件 passes。
-		sol::optional<std::string> variant = root["variant"];
-		if (variant) {
-			if (*variant == "deferred")
-				return RenderGraphConfig{RgGraphVariant::deferred, deferredRenderGraphDesc()};
-			if (*variant == "offscreen")
-				return RenderGraphConfig{RgGraphVariant::offscreen, offscreenRenderGraphDesc()};
-			if (*variant != "forward")
-				return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
-					fmt::format("render graph config ({}): unknown variant '{}' "
-						"(want forward/deferred/offscreen)", path, *variant)});
-		}
+		// 选路判定见 resolveVariantConfig（上方匿名 namespace）。
+		auto preset = resolveVariantConfig(root, path);
+		if (!preset)
+			return std::unexpected(std::move(preset).error());
+		if (*preset)
+			return std::move(**preset);
 
 		// attachments/passes 逐条解析见 readAttachments/readPasses（上方匿名 namespace）
 		RgGraphDesc desc;

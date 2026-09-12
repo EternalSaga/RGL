@@ -14,7 +14,7 @@ import ctypes
 import os
 
 from config import (BINARY_OPERATOR_SPELLING, COGNITIVE_STRUCT_SPELLINGS,
-                    ELSE_TOKEN, FUNC_SPELLINGS, IF_SPELLING,
+                    ELSE_TOKEN, FUNC_SPELLINGS, IF_SPELLING, LAMBDA_SPELLING,
                     LOGICAL_OPERATOR_TOKENS, SWITCH_SPELLINGS, TOK_COMMENT,
                     FIELD_SPELLING)
 
@@ -189,10 +189,14 @@ def children_of(lib, cur):
 
 
 def collect_decls(lib, tu_cur, main_file):
-    """主文件内全部函数定义 + 成员字段 [(name, line, cursor)]。
+    """主文件内全部函数定义 + lambda + 成员字段 [(name, line, cursor)]。
 
     项目约定：主文件顶层 = imports + namespace RGL，声明都在 namespace 子树里；
     递归进入主文件位置的子树，非主文件子树整体剪枝（import 模块声明全在里面）。
+    lambda 与函数定义一样收录为独立条目（独立计分行数/认知复杂度）；lambda 名字
+    取其所在函数无法从 display name 稳定得到，用 "(anonymous lambda)" 占位 + 行号定位。
+    注意：lambda 嵌在函数体内时，父函数 walk 不深入 lambda（见 cognitive_complexity
+    的 lambda 边界），但 collect_decls 独立递归整棵 AST，二者互不影响。
     """
     funcs, fields = [], []
     cb = None
@@ -205,6 +209,8 @@ def collect_decls(lib, tu_cur, main_file):
         name = lib.clang_getCursorDisplayName(cur).decode()
         if sp in FUNC_SPELLINGS and is_definition(lib, cur):
             funcs.append((name, ln, cur))
+        elif sp == LAMBDA_SPELLING:
+            funcs.append(("(anonymous lambda)", ln, cur))
         elif sp == FIELD_SPELLING:
             fields.append((name, ln))
         lib.clang_visitChildren(cur, cb, None)
@@ -218,16 +224,17 @@ def collect_decls(lib, tu_cur, main_file):
 # ─── 认知复杂度（SonarSource 风格）────────────────────────────────────────────
 # 打分规则（函数体入口 nesting=0，逐节点）：
 # - 结构 +1+nesting 且子树 nesting+1：IfStmt/ForStmt/CXXForRangeStmt/WhileStmt/
-#   DoStmt/CXXCatchStmt/三元 ConditionalOperator/LambdaExpr（lambda = "函数中的
-#   函数"，计入本函数而非单独成条目）。
+#   DoStmt/CXXCatchStmt/三元 ConditionalOperator。
 # - +1 但子树 nesting 不变：SwitchStmt；else / else if 分支（else 子节点若又是
 #   IfStmt = else if：只 +1 一次、内层 if 不再重复结构计分——skip 集实现）。
 # - 二元逻辑运算符序列：一段连续的 &&/|| 整段记 +1（flat）。链起点 = 本节点是
 #   BinaryOperator 且运算符为 &&/||、父节点不是 &&/|| 的 BinaryOperator；
 #   序列子树 nesting+1。运算符 opcode 拿 kind spelling 拿不到（恒为
 #   "BinaryOperator"），用左右操作数 extent 之间 gap 的 token 文本判定。
-# - 独立的嵌套函数定义（另一条 FunctionDecl/CXXMethod 且有 body）不深入——
-#   那些作为各自函数单独计分（collect_decls 已逐一收录）；LambdaExpr 不在此列。
+# - 独立的嵌套单元不深入、各自单独计分（collect_decls 已逐一收录为条目）：
+#   FunctionDecl/CXXMethod 等命名函数定义 + **LambdaExpr**（lambda = "函数中的
+#   函数"，其体不计入宿主、从自身起独立算 nesting=0）。宿主与 lambda 认知复杂度
+#   互不叠加（2026-09-12 修正：原实现把 lambda 体叠加进宿主，虚高宿主复杂度）。
 
 def _logical_op(lib, tu, cur):
     """cur 为 &&/|| 的 BinaryOperator 时返回运算符串，否则 None。
@@ -284,8 +291,8 @@ def cognitive_complexity(lib, tu, func_cursor):
         try:
             nest = (int(data) - 1) if data else 0
             sp = kind_spelling(lib, cur)
-            if sp in FUNC_SPELLINGS and is_definition(lib, cur):
-                return 1  # 独立嵌套函数定义：作为各自函数单独计分，不深入
+            if (sp in FUNC_SPELLINGS and is_definition(lib, cur)) or sp == LAMBDA_SPELLING:
+                return 1  # 独立嵌套单元（命名函数 / lambda）：各自单独计分，不叠加宿主
             child_nest = nest
             key = key_of(cur)
             if key in state["skip"]:

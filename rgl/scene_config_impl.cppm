@@ -77,6 +77,34 @@ SceneConfig defaultSceneConfig() {
 namespace {
 
 /**
+ * entities 单条目解析（type/file/position/rotation/scale；错误消息逐字保持拆分前文案）。
+ * @param item 条目表
+ * @param i 条目序号（1 起，错误信息用）
+ * @return 解析出的 SceneEntityDesc；未知 type / model 缺 file / scale≤0 = Error
+ */
+std::expected<SceneEntityDesc, Error> parseEntityItem(sol::table item, int i) {
+	SceneEntityDesc ent;
+	readStr(item, "type", ent.type);
+	if (ent.type != "model" && ent.type != "cube")
+		return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
+			fmt::format("scene config: entities[{}] unknown type '{}' (want model|cube)",
+				i, ent.type)});
+	readStr(item, "file", ent.file);
+	if (ent.type == "model" && ent.file.empty())
+		return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
+			fmt::format("scene config: entities[{}] type 'model' missing 'file'", i)});
+	ent.position = readVec3(item, "position", ent.position);
+	ent.rotation = readVec3(item, "rotation", ent.rotation);
+	float scale = ent.scale;
+	readFloat(item, "scale", scale);
+	ent.scale = scale;
+	if (ent.scale <= 0.0f)
+		return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
+			fmt::format("scene config: entities[{}] scale must be > 0", i)});
+	return ent;
+}
+
+/**
  * entities 段解析（Phase 6 批次 5：场景构成数据驱动列表，非空 = 权威；缺段 =
  * 回落旧 model/cube 字段合成，既有配置零改动等价）。type "model"|"cube"，
  * transform 全可选（position/rotation 欧拉角度/scale 均匀）。
@@ -90,25 +118,10 @@ std::expected<void, Error> parseEntities(sol::table root, SceneConfig& cfg) {
 		cfg.entities.clear();
 		for (int i = 1; i <= static_cast<int>(entities.size()); ++i) {
 			sol::table item = entities[i];
-			SceneEntityDesc ent;
-			readStr(item, "type", ent.type);
-			if (ent.type != "model" && ent.type != "cube")
-				return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
-					fmt::format("scene config: entities[{}] unknown type '{}' (want model|cube)",
-						i, ent.type)});
-			readStr(item, "file", ent.file);
-			if (ent.type == "model" && ent.file.empty())
-				return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
-					fmt::format("scene config: entities[{}] type 'model' missing 'file'", i)});
-			ent.position = readVec3(item, "position", ent.position);
-			ent.rotation = readVec3(item, "rotation", ent.rotation);
-			float scale = ent.scale;
-			readFloat(item, "scale", scale);
-			ent.scale = scale;
-			if (ent.scale <= 0.0f)
-				return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
-					fmt::format("scene config: entities[{}] scale must be > 0", i)});
-			cfg.entities.push_back(std::move(ent));
+			auto ent = parseEntityItem(item, i);
+			if (!ent)
+				return std::unexpected(std::move(ent).error());
+			cfg.entities.push_back(std::move(*ent));
 		}
 	}
 	// 缺段兼容合成（entities 空 = 旧 model/cube 字段语义，行为逐位不变）

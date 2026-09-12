@@ -270,56 +270,69 @@ void selfCheckTopology(std::vector<std::string>& failures) {
 	});
 }
 
-/** selfCheck 后半：默认图结构断言（barrier 形态/present 转换）+ 格式词表断言。 */
+/** selfCheck：默认图首 pass（opaque）帧首 barrier 与 color load 断言（scene_hdr tracked + depth discard 两条；首 color = Clear）。 */
+void selfCheckDefaultFirstPass(const RgPassPlan& first, std::vector<std::string>& failures) {
+	if (first.barriers.size() != 2 || first.barriers[0].oldLayoutDiscard ||
+		first.barriers[0].aspect != vk::ImageAspectFlagBits::eColor ||
+		!first.barriers[1].oldLayoutDiscard ||
+		first.barriers[1].aspect != vk::ImageAspectFlagBits::eDepth)
+		failures.push_back(
+			"default: first pass should carry scene_hdr tracked + depth discard barriers");
+	if (!first.colors.empty() && first.colors[0].loadOp != vk::AttachmentLoadOp::eClear)
+		failures.push_back("default: first color load should be Clear");
+}
+
+/** selfCheck：默认图中段（skybox）identity barrier 与 color load 断言（color/depth 各一条追踪 barrier；mid color = Load）。 */
+void selfCheckDefaultMidPass(const RgPassPlan& mid, std::vector<std::string>& failures) {
+	if (mid.barriers.size() != 2 || mid.barriers[0].oldLayoutDiscard ||
+		mid.barriers[1].oldLayoutDiscard)
+		failures.push_back("default: mid pass should carry 2 tracked identity barriers");
+	if (!mid.colors.empty() && mid.colors[0].loadOp != vk::AttachmentLoadOp::eLoad)
+		failures.push_back("default: mid color load should be Load");
+}
+
+/** selfCheck：默认图末段（tonemap）kind/state 断言。 */
+void selfCheckDefaultLastPass(const RgPassPlan& last, std::vector<std::string>& failures) {
+	if (last.kind != RgPassKind::drawLight || last.state != "tonemap")
+		failures.push_back("default: last pass should be drawLight/tonemap");
+}
+
+/** selfCheck：格式词表断言——inherit→fallback、具名→映射值（表拼错 = Phase 7 静默错图，编译校验查不出，回读值守卫）；membership 判定与 resolve 一致。 */
+void selfCheckFormats(std::vector<std::string>& failures) {
+	if (resolveRgFormat("inherit", vk::Format::eB8G8R8A8Srgb) != vk::Format::eB8G8R8A8Srgb)
+		failures.push_back("format: 'inherit' should resolve to fallback");
+	if (resolveRgFormat("rgba16_sfloat", vk::Format::eB8G8R8A8Unorm) !=
+		vk::Format::eR16G16B16A16Sfloat)
+		failures.push_back("format: 'rgba16_sfloat' mapping broken");
+	if (resolveRgFormat("r32g32b32_sfloat", vk::Format::eB8G8R8A8Unorm) !=
+		vk::Format::eR32G32B32Sfloat)
+		failures.push_back("format: 'r32g32b32_sfloat' mapping broken");
+	if (!isKnownRgFormat("inherit") || !isKnownRgFormat("rg16_snorm") ||
+		isKnownRgFormat("totally_bogus_format"))
+		failures.push_back("format: isKnownRgFormat membership broken");
+}
+
+/** selfCheck 后半：默认图结构断言（barrier 形态/present 转换）+ 格式词表断言（各段拆 selfCheckDefault* / selfCheckFormats，本函数只做编排、保 push 顺序）。 */
 void selfCheckStructure(std::vector<std::string>& failures) {
 	// 结构断言（Phase 8 ①后默认图 = 4 pass）：首 pass（opaque）两条帧首转换——
 	// scene_hdr（offscreen = 追踪布局非 discard，声明序在前）+ depth（discard）；
 	// skybox 段对 color/depth 各一条 identity barrier（跨 render pass 实例 LOAD
 	// 执行依赖，old==new 合法）；present 转换来自 tonemap 段的 swapchain
 	// colorWrite（CAO→PresentSrc）
-	{
-		const auto& g = defaultRenderGraph();
-		if (g.passes.size() != 4) failures.push_back("default: expected 4 passes");
-		if (g.passes.size() == 4) {
-			const auto& first = g.passes[0];
-			if (first.barriers.size() != 2 || first.barriers[0].oldLayoutDiscard ||
-				first.barriers[0].aspect != vk::ImageAspectFlagBits::eColor ||
-				!first.barriers[1].oldLayoutDiscard ||
-				first.barriers[1].aspect != vk::ImageAspectFlagBits::eDepth)
-				failures.push_back(
-					"default: first pass should carry scene_hdr tracked + depth discard barriers");
-			if (!first.colors.empty() &&
-				first.colors[0].loadOp != vk::AttachmentLoadOp::eClear)
-				failures.push_back("default: first color load should be Clear");
-			const auto& mid = g.passes[1];
-			if (mid.barriers.size() != 2 || mid.barriers[0].oldLayoutDiscard ||
-				mid.barriers[1].oldLayoutDiscard)
-				failures.push_back("default: mid pass should carry 2 tracked identity barriers");
-			if (!mid.colors.empty() && mid.colors[0].loadOp != vk::AttachmentLoadOp::eLoad)
-				failures.push_back("default: mid color load should be Load");
-			const auto& last = g.passes[3];
-			if (last.kind != RgPassKind::drawLight || last.state != "tonemap")
-				failures.push_back("default: last pass should be drawLight/tonemap");
-		}
-		if (!g.presentTransition ||
-			g.presentTransition->newLayout != vk::ImageLayout::ePresentSrcKHR)
-			failures.push_back("default: missing present transition");
+	const auto& g = defaultRenderGraph();
+	if (g.passes.size() != 4)
+		failures.push_back("default: expected 4 passes");
+	if (g.passes.size() == 4) {
+		selfCheckDefaultFirstPass(g.passes[0], failures);
+		selfCheckDefaultMidPass(g.passes[1], failures);
+		selfCheckDefaultLastPass(g.passes[3], failures);
 	}
+	if (!g.presentTransition ||
+		g.presentTransition->newLayout != vk::ImageLayout::ePresentSrcKHR)
+		failures.push_back("default: missing present transition");
 	// 格式词表断言：inherit→fallback、具名→映射值（表拼错 = Phase 7 静默错图，
 	// 编译校验查不出，回读值守卫）；membership 判定与 resolve 一致
-	{
-		if (resolveRgFormat("inherit", vk::Format::eB8G8R8A8Srgb) != vk::Format::eB8G8R8A8Srgb)
-			failures.push_back("format: 'inherit' should resolve to fallback");
-		if (resolveRgFormat("rgba16_sfloat", vk::Format::eB8G8R8A8Unorm) !=
-			vk::Format::eR16G16B16A16Sfloat)
-			failures.push_back("format: 'rgba16_sfloat' mapping broken");
-		if (resolveRgFormat("r32g32b32_sfloat", vk::Format::eB8G8R8A8Unorm) !=
-			vk::Format::eR32G32B32Sfloat)
-			failures.push_back("format: 'r32g32b32_sfloat' mapping broken");
-		if (!isKnownRgFormat("inherit") || !isKnownRgFormat("rg16_snorm") ||
-			isKnownRgFormat("totally_bogus_format"))
-			failures.push_back("format: isKnownRgFormat membership broken");
-	}
+	selfCheckFormats(failures);
 }
 
 }  // namespace

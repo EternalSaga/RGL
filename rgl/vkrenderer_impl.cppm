@@ -68,11 +68,14 @@ void validateRenderGraphForExecutor(const RGL::CompiledRenderGraph& graph) {
 			depthRefs));
 	static constexpr std::array<const char*, 3> kKnownDrawSources{"opaque", "skybox",
 		"transparent"};
-	for (const auto& pass : graph.passes) {
+	// 单 pass 可解析性校验（三形态：blit 两端齐 / drawLight state 在词表 / draw state+
+	// drawSource 名字表）。手术 6：提为 lambda 降宿主认知复杂度——fail 经捕获共用、
+	// 错误消息逐字不变；continue → return（lambda 内提前结束本 pass 校验语义等价）。
+	auto validatePass = [&](const RgPassPlan& pass) {
 		if (pass.kind == RgPassKind::blit) {
 			if (!pass.blitSource || !pass.blitTarget)
 				fail(fmt::format("blit pass '{}' missing source/target resolution", pass.name));
-			continue;
+			return;
 		}
 		// Phase 7 D1 / Phase 8 ①泛化：drawLight = 固定全屏 draw（无 drawSource/段），
 		// state 必在 kFullscreenPassStates 词表（"light"/"tonemap"）
@@ -83,7 +86,7 @@ void validateRenderGraphForExecutor(const RGL::CompiledRenderGraph& graph) {
 					"render graph fullscreen pass '{}' has state '{}' (expected one of the "
 					"kFullscreenPassStates vocabulary)",
 					pass.name, pass.state));
-			continue;
+			return;
 		}
 		if (pass.state != "opaque" && pass.state != "skybox" && pass.state != "transparent")
 			fail(fmt::format("render graph pass '{}' has unknown state '{}'", pass.name,
@@ -92,7 +95,9 @@ void validateRenderGraphForExecutor(const RGL::CompiledRenderGraph& graph) {
 				[&](const char* s) { return pass.drawSource == s; }))
 			fail(fmt::format("render graph pass '{}' has unknown drawSource '{}'", pass.name,
 				pass.drawSource));
-	}
+	};
+	for (const auto& pass : graph.passes)
+		validatePass(pass);
 }
 
 /**
@@ -108,6 +113,85 @@ std::pair<uint32_t, uint32_t> segmentRange(std::string_view drawSource,
 	if (drawSource == "opaque") return {0, list.skyboxStart};
 	if (drawSource == "skybox") return {list.skyboxStart, list.transparentStart};
 	return {list.transparentStart, size};
+}
+
+/** attachment slot → VkImage/View 解析 + barrier 物化发射（手术 6：drawFrame 内 imageForSlot/viewForSlot/emitBarriers 三个 lambda 改造为文件内 struct——搬移非重写、逐条命令等价；持 swapchain/depth 句柄 + offscreenRt + 追踪布局表引用 + 本帧 cmd，生命周期 = drawFrame 一次调用）。 */
+struct SlotResolver {
+	const std::vector<RgCompiledAttachment>& attachments;
+	VkImage swapchainImage; VkImageView swapchainView;
+	VkImage depthImage; VkImageView depthView;
+	const std::vector<Resources::RtAttachment*>& offscreenRt;
+	std::vector<vk::ImageLayout>& layouts;
+	vk::raii::CommandBuffer& cmd;
+	/** slot → VkImage（三 kind 穷尽）。 */
+	VkImage imageForSlot(RgAttachmentSlot slot) const {
+		switch (attachments[slot].kind) {
+			case RgAttachmentKind::swapchain: return swapchainImage;
+			case RgAttachmentKind::depth: return depthImage;
+			case RgAttachmentKind::offscreen: return offscreenRt[slot]->image.image;
+		}
+		return VK_NULL_HANDLE;  // 不可达（穷尽），消 warning
+	}
+	/** slot → VkImageView（offscreen 走 optional + raii 双重解引用）。 */
+	VkImageView viewForSlot(RgAttachmentSlot slot) const {
+		switch (attachments[slot].kind) {
+			case RgAttachmentKind::swapchain: return swapchainView;
+			case RgAttachmentKind::depth: return depthView;
+			case RgAttachmentKind::offscreen: return **offscreenRt[slot]->view;  /* optional 解引用 + raii handle */
+		}
+		return VK_NULL_HANDLE;
+	}
+	/** 物化 + 发射一组 attachment barrier（单 DependencyInfo 批量）；oldLayout = 帧首丢弃（eUndefined）或跨帧/帧内追踪值，发射后推进 layouts 追踪。 */
+	void emitBarriers(std::span<const RgBarrierPlan> barriers) {
+		if (barriers.empty()) return;
+		std::vector<vk::ImageMemoryBarrier2> materialized;
+		materialized.reserve(barriers.size());
+		for (const auto& plan : barriers) {
+			const auto oldLayout = plan.oldLayoutDiscard ? vk::ImageLayout::eUndefined
+			                                              : layouts[plan.attachment];
+			materialized.push_back(RGL::materializeBarrier(plan, imageForSlot(plan.attachment),
+				oldLayout));
+		}
+		vk::DependencyInfo depInfo;
+		depInfo.setImageMemoryBarriers(materialized);
+		cmd.pipelineBarrier2(depInfo);
+		for (const auto& plan : barriers)
+			layouts[plan.attachment] = plan.newLayout;
+	}
+};
+
+/** 构造并发起一个 pass 的 dynamic rendering（手术 6：自 drawFrame 摘出——color/depth RenderingAttachmentInfo 逐字段构造 + beginRendering，命令参数逐字不变；动态状态/draw 分发留 drawFrame 因需 stateKit/registry 成员）。 */
+void beginPassRendering(vk::raii::CommandBuffer& cmd, const SlotResolver& slots,
+	const RgPassPlan& pass, vk::Extent2D extent) {
+	std::vector<vk::RenderingAttachmentInfo> colorInfos;
+	colorInfos.reserve(pass.colors.size());
+	for (const auto& cp : pass.colors) {
+		vk::RenderingAttachmentInfo info{};
+		info.imageView = slots.viewForSlot(cp.slot);
+		info.imageLayout = cp.layout;
+		info.loadOp = cp.loadOp;
+		info.storeOp = cp.storeOp;
+		info.clearValue = cp.clearValue;
+		colorInfos.push_back(info);
+	}
+	// 背景清深灰色 (0.1)/深度清 1.0 等清除值来自图计划（默认图 = 原 ⑤ 逐位一致，末段 DontCare 省带宽）
+	std::optional<vk::RenderingAttachmentInfo> depthInfo;
+	if (pass.depth) {
+		vk::RenderingAttachmentInfo info{};
+		info.imageView = slots.viewForSlot(pass.depth->slot);
+		info.imageLayout = pass.depth->layout;
+		info.loadOp = pass.depth->loadOp;
+		info.storeOp = pass.depth->storeOp;
+		info.clearValue = pass.depth->clearValue;
+		depthInfo = info;
+	}
+	vk::RenderingInfo renderingInfo{};
+	renderingInfo.renderArea = vk::Rect2D({0, 0}, extent);
+	renderingInfo.layerCount = 1;
+	renderingInfo.setColorAttachments(colorInfos);
+	if (depthInfo)
+		renderingInfo.setPDepthAttachment(&*depthInfo);
+	cmd.beginRendering(renderingInfo);
 }
 
 }  // namespace
@@ -228,36 +312,10 @@ void Renderer::createSceneStaging(RGL::Resources& vkResources) {
 		kSceneDataIrradianceBytes);
 	return {};
 }
-std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
-		// ①②③ 帧会话开场（Phase 10 批次 0 手术 4：双 fence wait/reset + acquire 分类 +
-		// 命令缓冲 begin 全迁 FrameSession::beginFrame；skipped/recreated = 本帧不渲染）
-		auto start = session.beginFrame();
-		if (!start)
-			return std::unexpected(start.error());
-		if (*start != FrameSession::FrameStart::began)
-			return {};
-		const uint64_t frame = session.frameNumber();  // DIAG：device lost 帧号定位
-		auto& device = vkDevice.getDevice();
-		auto& cmd = session.commandBuffer();           // 本帧命令缓冲（录制期）
-		const uint32_t frameSlot = session.currentFrameSlot();
-		const uint32_t imageIndex = session.imageIndex();
+// ===== 手术 6（2026-09-12）：drawFrame 语义完整块摘为下列 Renderer 私有方法（声明见 vkrenderer.cppm 私有段）+ 文件内 SlotResolver/beginPassRendering——命令录制顺序、每条 vk 调用参数、错误路径逐字不变（逐块搬移，非重写）=====
 
-	// ③.5 scene data 上传（Phase 5 批次 2；手术 5：块体提为 writeSceneStaging 私有方法）
-	if (auto r = writeSceneStaging(list, frameSlot); !r)
-		return std::unexpected(std::move(r).error());
-
-	// ④c GPU culling 数据通路（Phase 7b 批次 5；手术 3：块体迁 CullDriver::runFrame——
-	// cull CB 录制/提交/同帧同步等待/读回/对账 + fence 与主 CB 共用的时序契约见其类注释）
-	if (cullDriver.active()) {
-		if (auto r = cullDriver.runFrame(frameSlot, frame, list,
-				sceneStaging[frameSlot], session.currentInFlightFence()); !r)
-			return std::unexpected(std::move(r).error());
-	}
-
-	// ④ 数据通路固定段（Phase 6 起不入图——非 attachment 状态同步，见 render_graph.cppm
-	// 头注释）：heap barrier → scene staging 拷贝/屏障 → heap/sampler heap 绑定。
-	//（旧 ④ 的 color/depth attachment barrier 已由图 passes[0].barriers 推导发射；
-	// 与 heap barrier 相互独立，命令流中先后位置对换无语义影响）
+// ④⑥⑥.5⑦ 数据通路固定段（heap barrier → scene staging 拷贝/屏障 → heap/sampler heap 绑定，Phase 6 起不入图——非 attachment 状态同步；旧 color/depth attachment barrier 已由图 passes[0].barriers 推导发射、与此处 heap barrier 相互独立、命令流先后对换无语义影响）
+void Renderer::recordFixedDataPath(vk::raii::CommandBuffer& cmd, uint32_t frameSlot) {
 	// ⑥ Descriptor heap 同步：描述符此前由 vkWriteResourceDescriptorsEXT 写进
 	// CPU mapped 区域（vkresources.cppm），GPU 读取前需要 host write →
 	// resource heap read 的内存 barrier。eHost stage 不能在 render pass 内部使用，
@@ -325,27 +383,13 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 		samplerHeapRange,
 		0,
 		resources->getSamplerReservedRangeSize()));
+}
 
-
-	// ⑤ pass 循环（执行序 = 图线性序，Phase 6）：attachment barrier（布局链推导
-	// 物化）→ beginRendering（逐 pass 附件）→ applyDynamicState(pass.state)
-	// → 段内逐 draw（pass.drawSource）→ endRendering。执行器盲消费——barrier/
-	// load/store/布局全部来自编译图，手写布局转换清零。
-	auto& swapchainImages = swapchain->getImages();
-	auto& swapchainImageViews = swapchain->getImageViews();
-	const auto extent = swapchain->getExtent();
-	VkImage swapchainImage = swapchainImages[imageIndex];
-	VkImageView swapchainView = *swapchainImageViews[imageIndex];
-	VkImage depthImage = *resources->getDepthImage();
-	VkImageView depthView = *resources->getDepthImageView();
-
-	// offscreen attachment RT（批次 4）：幂等 ensure（extent 随 swapchain resize 重建，
-	// 重建含 waitIdle——录制期调用安全，本 CB 尚未提交）。format 经词表解析：
-	// "inherit" = swapchain 格式（blit LINEAR 的 VVL 格式兼容前提），具名 = 显式格式
-	// RT（Phase 7 G-buffer；词表与校验归 render_graph，此处只物化）
-	std::vector<Resources::RtAttachment*> offscreenRt(renderGraph.attachments.size());
-	// RT 重建检测（generation 变化 = 新图布局 Undefined）：布局追踪同步重置，
-	// 否则下帧首 barrier oldLayout 失配（extent 漂移 = resize 必现）
+// offscreen attachment RT 幂等 ensure（批次 4；extent 随 resize 重建含 waitIdle，录制期调用安全；format 经词表解析，"inherit"=swapchain 格式、具名=显式 RT）。出参 offscreenRt 按 slot 填（非 offscreen 槽留 null）。
+std::expected<void, Error> Renderer::ensureOffscreenAttachments(vk::Extent2D extent,
+	std::vector<Resources::RtAttachment*>& offscreenRt) {
+	offscreenRt.assign(renderGraph.attachments.size(), nullptr);
+	// RT 重建检测：generation 变化（新图布局 Undefined）→ 同步重置 attachmentLayouts，否则下帧首 barrier oldLayout 失配（resize 必现）
 	std::vector<uint64_t> rtGenerations(renderGraph.attachments.size(), 0);
 	for (uint32_t s = 0; s < renderGraph.attachments.size(); ++s) {
 		const auto& att = renderGraph.attachments[s];
@@ -361,60 +405,102 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 			attachmentLayouts[s] = vk::ImageLayout::eUndefined;
 		}
 	}
+	return {};
+}
 
-	auto imageForSlot = [&](RgAttachmentSlot slot) -> VkImage {
-		switch (renderGraph.attachments[slot].kind) {
-			case RgAttachmentKind::swapchain: return swapchainImage;
-			case RgAttachmentKind::depth: return depthImage;
-			case RgAttachmentKind::offscreen: return offscreenRt[slot]->image.image;
-		}
-		return VK_NULL_HANDLE;  // 不可达（穷尽），消 warning
-	};
-	auto viewForSlot = [&](RgAttachmentSlot slot) -> VkImageView {
-		switch (renderGraph.attachments[slot].kind) {
-			case RgAttachmentKind::swapchain: return swapchainView;
-			case RgAttachmentKind::depth: return depthView;
-			case RgAttachmentKind::offscreen: return **offscreenRt[slot]->view;  /* optional 解引用 + raii handle */
-		}
-		return VK_NULL_HANDLE;
-	};
+// 单个 mesh draw：push DrawArgs（pushDataEXT）+ bindShaders + drawMeshTasksEXT。
+void Renderer::drawOne(vk::raii::CommandBuffer& cmd, const DrawCall& call) {
+	const auto& entry = registry.entry(call.pipeline);
+	cmd.pushDataEXT(vk::PushDataInfoEXT(
+		entry.pushDataSet, vk::HostAddressRangeConstEXT(call.pushData.data(), call.pushData.size())));
+	entry.pipeline.bindShaders(cmd);
+	cmd.drawMeshTasksEXT(call.groupCount, 1, 1);
+}
 
-	// 物化 + 发射一组 attachment barrier（单 DependencyInfo 批量）；oldLayout =
-	// 帧首丢弃规则（eUndefined）或跨帧/帧内追踪值，发射后推进追踪
-	auto emitBarriers = [&](std::span<const RgBarrierPlan> barriers) {
-		if (barriers.empty()) return;
-		std::vector<vk::ImageMemoryBarrier2> materialized;
-		materialized.reserve(barriers.size());
-		for (const auto& plan : barriers) {
-			const auto oldLayout = plan.oldLayoutDiscard ? vk::ImageLayout::eUndefined
-			                                              : attachmentLayouts[plan.attachment];
-			materialized.push_back(RGL::materializeBarrier(plan, imageForSlot(plan.attachment),
-				oldLayout));
-		}
-		vk::DependencyInfo depInfo;
-		depInfo.setImageMemoryBarriers(materialized);
-		cmd.pipelineBarrier2(depInfo);
-		for (const auto& plan : barriers)
-			attachmentLayouts[plan.attachment] = plan.newLayout;
-	};
+// pass draw 三路分发：drawLight 固定全屏单 group（无 push constant）/ opaque 段 GPU culling（DGC execute 或读回重放，能力位自动切换）/ 普通段逐 draw。
+void Renderer::executePassDraws(vk::raii::CommandBuffer& cmd, const RgPassPlan& pass,
+	const FrameDrawList& list, uint32_t frameSlot) {
+	if (pass.kind == RgPassKind::drawLight) {
+		// Phase 7 D1 / Phase 8 ①：固定全屏单 group draw（无 push constant；采样描述符
+		// baked 在 shader object 的 extra mapping，输入 RT 的 CAO→SRO 布局转换已由
+		// pass.barriers 完成）；条目按 pass.state 名解析（"light"/"tonemap"，
+		// 构造期校验过必命中）
+		registry.entry(fullscreenPipelineIdx.at(pass.state)).pipeline.bindShaders(cmd);
+		cmd.drawMeshTasksEXT(1, 1, 1);
+	} else if (pass.drawSource == "opaque" && cullDriver.active()) {
+		// GPU culling 路（手术 3：双路提交迁 CullDriver::executeOpaqueSegment——
+		// DGC execute（NVIDIA）/ 读回重放（RADV，args = CPU 位级真相源 → BIT-IDENTICAL）
+		// 能力位自动切换，重放顺序契约见其类注释）
+		cullDriver.executeOpaqueSegment(cmd, list, registry, frameSlot);
+	} else {
+		const auto [segBegin, segEnd] = segmentRange(pass.drawSource, list);
+		for (uint32_t i = segBegin; i < segEnd; ++i)
+			drawOne(cmd, list.calls[i]);
+	}
+}
 
-	auto drawOne = [&](const DrawCall& call) {
-		const auto& entry = registry.entry(call.pipeline);
-		cmd.pushDataEXT(vk::PushDataInfoEXT(
-			entry.pushDataSet, vk::HostAddressRangeConstEXT(call.pushData.data(), call.pushData.size())));
-		entry.pipeline.bindShaders(cmd);
-		cmd.drawMeshTasksEXT(call.groupCount, 1, 1);
-	};
+std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
+		// ①②③ 帧会话开场（Phase 10 批次 0 手术 4：双 fence wait/reset + acquire 分类 +
+		// 命令缓冲 begin 全迁 FrameSession::beginFrame；skipped/recreated = 本帧不渲染）
+		auto start = session.beginFrame();
+		if (!start)
+			return std::unexpected(start.error());
+		if (*start != FrameSession::FrameStart::began)
+			return {};
+		const uint64_t frame = session.frameNumber();  // DIAG：device lost 帧号定位
+		auto& device = vkDevice.getDevice();
+		auto& cmd = session.commandBuffer();           // 本帧命令缓冲（录制期）
+		const uint32_t frameSlot = session.currentFrameSlot();
+		const uint32_t imageIndex = session.imageIndex();
+
+	// ③.5 scene data 上传（Phase 5 批次 2；手术 5：块体提为 writeSceneStaging 私有方法）
+	if (auto r = writeSceneStaging(list, frameSlot); !r)
+		return std::unexpected(std::move(r).error());
+
+	// ④c GPU culling 数据通路（Phase 7b 批次 5；手术 3：块体迁 CullDriver::runFrame——
+	// cull CB 录制/提交/同帧同步等待/读回/对账 + fence 与主 CB 共用的时序契约见其类注释）
+	if (cullDriver.active()) {
+		if (auto r = cullDriver.runFrame(frameSlot, frame, list,
+				sceneStaging[frameSlot], session.currentInFlightFence()); !r)
+			return std::unexpected(std::move(r).error());
+	}
+
+	// ④⑥⑥.5⑦ 数据通路固定段（heap barrier + scene staging 拷贝/屏障 + heap/sampler heap
+	// 绑定，Phase 6 起不入图——非 attachment 状态同步；手术 6：块体提为 recordFixedDataPath
+	// 私有方法，命令流逐条不变）
+	recordFixedDataPath(cmd, frameSlot);
+
+	// ⑤ pass 循环（执行序 = 图线性序，Phase 6）：attachment barrier（布局链推导物化）
+	// → beginRendering（逐 pass 附件）→ applyDynamicState(pass.state) → 段内逐 draw
+	// （pass.drawSource）→ endRendering。执行器盲消费——barrier/load/store/布局全部来自
+	// 编译图，手写布局转换清零。
+	auto& swapchainImages = swapchain->getImages();
+	auto& swapchainImageViews = swapchain->getImageViews();
+	const auto extent = swapchain->getExtent();
+	VkImage swapchainImage = swapchainImages[imageIndex];
+	VkImageView swapchainView = *swapchainImageViews[imageIndex];
+	VkImage depthImage = *resources->getDepthImage();
+	VkImageView depthView = *resources->getDepthImageView();
+
+	// offscreen attachment RT（批次 4）：幂等 ensure + generation 漂移重置布局（手术 6：
+	// 块体提为 ensureOffscreenAttachments 私有方法）
+	std::vector<Resources::RtAttachment*> offscreenRt;
+	if (auto r = ensureOffscreenAttachments(extent, offscreenRt); !r)
+		return std::unexpected(std::move(r).error());
+
+	// slot → VkImage/View 解析 + barrier 物化（手术 6：三个 lambda 改造为文件内 struct）
+	SlotResolver slots{renderGraph.attachments, swapchainImage, swapchainView, depthImage,
+		depthView, offscreenRt, attachmentLayouts, cmd};
 
 	for (const auto& pass : renderGraph.passes) {
-		emitBarriers(pass.barriers);
-		// blit pass（批次 4，offscreen 图变体的 composite）：transferRead 源 →
-		// transferWrite 目标整幅拷贝（1:1 同尺寸同格式，LINEAR = 精确拷贝）；
-		// 两端布局转换已由 pass.barriers 完成（scene_rt CAO→TransferSrc、
-		// swapchain 帧首 Undefined→TransferDst），无绘制、无动态状态
+		slots.emitBarriers(pass.barriers);
+		// blit pass（批次 4，offscreen 图变体的 composite）：transferRead 源 → transferWrite
+		// 目标整幅拷贝（1:1 同尺寸同格式，LINEAR = 精确拷贝）；两端布局转换已由 pass.barriers
+		// 完成（scene_rt CAO→TransferSrc、swapchain 帧首 Undefined→TransferDst），无绘制、
+		// 无动态状态
 		if (pass.kind == RgPassKind::blit) {
-			VkImage srcImage = imageForSlot(*pass.blitSource);
-			VkImage dstImage = imageForSlot(*pass.blitTarget);
+			VkImage srcImage = slots.imageForSlot(*pass.blitSource);
+			VkImage dstImage = slots.imageForSlot(*pass.blitTarget);
 			vk::ImageBlit blitRegion{};
 			blitRegion.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
 			blitRegion.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
@@ -431,61 +517,16 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 				reinterpret_cast<const VkImageBlit*>(&blitRegion), VK_FILTER_LINEAR);
 			continue;
 		}
-
-		std::vector<vk::RenderingAttachmentInfo> colorInfos;
-		colorInfos.reserve(pass.colors.size());
-		for (const auto& cp : pass.colors) {
-			vk::RenderingAttachmentInfo info{};
-			info.imageView = viewForSlot(cp.slot);
-			info.imageLayout = cp.layout;
-			info.loadOp = cp.loadOp;
-			info.storeOp = cp.storeOp;
-			info.clearValue = cp.clearValue;
-			colorInfos.push_back(info);
-		}
-		// 背景清深灰色 (0.1) 等清除值来自图计划（默认图 = 原 ⑤ 逐位一致）；
-		// 深度清 1.0，末段 DontCare 省带宽（中间 pass store 保内容）
-		std::optional<vk::RenderingAttachmentInfo> depthInfo;
-		if (pass.depth) {
-			vk::RenderingAttachmentInfo info{};
-			info.imageView = viewForSlot(pass.depth->slot);
-			info.imageLayout = pass.depth->layout;
-			info.loadOp = pass.depth->loadOp;
-			info.storeOp = pass.depth->storeOp;
-			info.clearValue = pass.depth->clearValue;
-			depthInfo = info;
-		}
-		vk::RenderingInfo renderingInfo{};
-		renderingInfo.renderArea = vk::Rect2D({0, 0}, extent);
-		renderingInfo.layerCount = 1;
-		renderingInfo.setColorAttachments(colorInfos);
-		if (depthInfo)
-			renderingInfo.setPDepthAttachment(&*depthInfo);
-
-		cmd.beginRendering(renderingInfo);
+		beginPassRendering(cmd, slots, pass, extent);
 		// 动态状态在 draw 时采样（spec chapters/shaders.adoc "Setting State"），与
 		// bindShadersEXT 先后无约束；段首各 applyDynamicState 一次（Phase 5 语义，
 		// 状态对象经 pass.state 名解析——opaque/skybox/transparent 三成员不变）
 		RGL::applyDynamicState(cmd, extent.width, extent.height,
 			stateKit.stateFor(pass.state), stateKit.depthClipDynamicEnabled(),
 			static_cast<uint32_t>(pass.colors.size()));
-		if (pass.kind == RgPassKind::drawLight) {
-			// Phase 7 D1 / Phase 8 ①：固定全屏单 group draw（无 push constant；采样描述符
-			// baked 在 shader object 的 extra mapping，输入 RT 的 CAO→SRO 布局转换已由
-			// pass.barriers 完成）；条目按 pass.state 名解析（"light"/"tonemap"，
-			// 构造期校验过必命中）
-			registry.entry(fullscreenPipelineIdx.at(pass.state)).pipeline.bindShaders(cmd);
-			cmd.drawMeshTasksEXT(1, 1, 1);
-		} else if (pass.drawSource == "opaque" && cullDriver.active()) {
-			// GPU culling 路（手术 3：双路提交迁 CullDriver::executeOpaqueSegment——
-			// DGC execute（NVIDIA）/ 读回重放（RADV，args = CPU 位级真相源 → BIT-IDENTICAL）
-			// 能力位自动切换，重放顺序契约见其类注释）
-			cullDriver.executeOpaqueSegment(cmd, list, registry, frameSlot);
-		} else {
-			const auto [segBegin, segEnd] = segmentRange(pass.drawSource, list);
-			for (uint32_t i = segBegin; i < segEnd; ++i)
-				drawOne(list.calls[i]);
-		}
+		// draw 三路分发（手术 6：提为 executePassDraws 私有方法——drawLight 全屏 /
+		// opaque GPU-culling / 普通段逐 draw）
+		executePassDraws(cmd, pass, list, frameSlot);
 		cmd.endRendering();
 	}
 
@@ -499,7 +540,7 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 	// usage 推导：直渲 = CAO 写、blit 上屏 = Transfer 写，等价旧手工分支；
 	// 无 swapchain 写入的离屏图 = nullopt 跳过）
 	if (renderGraph.presentTransition)
-		emitBarriers(std::span<const RgBarrierPlan>{&*renderGraph.presentTransition, 1});
+		slots.emitBarriers(std::span<const RgBarrierPlan>{&*renderGraph.presentTransition, 1});
 
 	// 录制完毕
 	cmd.end();

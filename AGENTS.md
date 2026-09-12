@@ -7,6 +7,7 @@ legacy（旧 OpenGL 项目）已于 2026-09-08 删除，历史思路参考见 gi
 ## 给大模型
 优先使用中文回复用户，除非用户说使用英文回复。
 随时思考是否可以拆分子任务给子 agent 执行。主 agent 校验结果。困难任务主 agent 亲自执行。
+**文档/代码调研可委派 `researcher` 子 agent**（`.opencode/agents/researcher.md`，robin-nas/MiniCPM5:2B，只读）：适合代码定位（`文件:行号`）、文档定位、上下文简易归纳，行号命中率高、诚实不编造。**主 agent 仍需校验**：它在主动补充额外结论时可能把过期文档/注释当成生成物事实（实测踩过 sizeof 生成物 4B 被它说成 100B）。纯"grep/read 到什么报什么"时可靠，涉及产物布局/大小须自己复核生成物本体。
 
 ## 构建
 
@@ -52,9 +53,11 @@ CMake 无独立构建目录 — 必须从根目录构建（`cmake -B build -S .`
 - `style_check`（ALL，与编译并行，2026-09-11，2026-09-12 重构为多模块小包 + 规则升级）：
   `rgl/*.cppm` 八类规则——前五项 libclang 解析
   （代码行 = 去注释空行，token 级精确）：①文件 >500 提示拆文件、②函数 >120 提示拆函数、
-  ③认知复杂度 >15（SonarSource 风格：if/for/while/do/catch/三元/lambda 结构 +1+嵌套，
-  switch 与 else/else-if +1 不递增嵌套，一段连续 &&/|| 整段 +1；替换旧"嵌套深度>5"，
-  缓存版本随之 v2→v3）提示拆函数、
+  ③认知复杂度 >15（SonarSource 风格：if/for/while/do/catch/三元 结构 +1+嵌套，
+  switch 与 else/else-if +1 不递增嵌套，一段连续 &&/|| 整段 +1；**lambda 独立计分**
+  ——宿主不叠加 lambda 体、lambda 各自成条目从 nesting 0 算，2026-09-12 修正；替换旧
+  "嵌套深度>5"，缓存版本随之 v2→v3→v4→v5，v5 修正 `TOK_COMMENT` 枚举值 5→4——注释
+  token 此前未过滤、每条注释首行误计入代码行致行数类规则大面积虚高）提示拆函数、
   ④接口瘦身（非 _impl 文件函数体 >100 → 迁入 xxx_impl.cppm）、⑤成员命名（_ / m_ 前缀、
   _ 后缀 → 自然命名）；后三项纯文本：⑥分层/模块优先（底层零 entt = 不 import ecs 且
   GMF 不 include <entt>，名单 `ZERO_ENTT_MODULES`；点名禁止 import 边 `FORBIDDEN_EDGES`；
@@ -190,7 +193,7 @@ tools 为 `EXCLUDE_FROM_ALL`（编译提速）：日常构建不碰工具链，`
 | `vk_device` | vkdevice.cppm | PhysicalDevice 选择、QueueFamilyManager、Device、CommandPools、FeatureChain |
 | `vk_swapchain` | vkswapchain.cppm | Surface、Swapchain、ImageView[] format/extent/presentMode |
 | `vk_resources` | vkresources.cppm | VmaAllocatorRAII、depth、VmaDescriptorHeap（固定裕量 `kUserSlotMargin(1024)`）、`allocSlot` 统一分配、`ensureSharedSampler/ensureSkySampler/ensureSceneData`（scene data 头 128B：@0 光参数/@48 env/@64 skyInvViewProj/@128 对象矩阵表 ×4096，尾区 @262272 灯数组 / @262800 per-object MVP 表 / @524944 per-object 材质表——Phase 7b+ DrawArgs bindless 化，见 scene.slang）、env cubemap 单例、G-buffer RT 缓存（`ensureRtAttachment`/`rtHeapSlot`/`ensureDeferredGBufferSlots`） |
-| `vk_renderer` | vkrenderer.cppm | **盲执行器骨架**（Phase 10 批次 0 拆四子系统，见下四行；drawFrame 577→291 行，BIT-IDENTICAL 全程维持）：`drawFrame(const FrameDrawList&)`（零 entt）构造收 `CompiledRenderGraph`，流程 = `session.beginFrame`（①②③）→ `writeSceneStaging`（③.5）→ `cullDriver.runFrame`（④c）→ heap barrier/copy/bind（④⑥固定段）→ pass 循环（barrier 物化 / beginRendering / `stateKit.stateFor`+applyDynamicState / 段内逐 draw / blit / drawLight）→ `capturer.record`（⑪.5）→ presentTransition（⑫）→ `session.submit/present/advance`（⑬⑭⑮）；公开 `requestFrameCapture/takeFrameCapture/hasFrameCapture`（转发 capturer）+ `waitForIdle` + `getGraphicsCommandPoolRef`（金丝雀）；构造期 `validateRenderGraphForExecutor` fail-fast |
+| `vk_renderer` | vkrenderer.cppm | **盲执行器骨架**（Phase 10 批次 0 拆四子系统，见下四行；手术 6 续拆 pass 循环节点，BIT-IDENTICAL 全程维持）：`drawFrame(const FrameDrawList&)`（零 entt）构造收 `CompiledRenderGraph`，流程 = `session.beginFrame`（①②③）→ `writeSceneStaging`（③.5）→ `cullDriver.runFrame`（④c）→ `recordFixedDataPath`（⑥⑥.5⑦ heap barrier/copy/bind，私有方法）→ pass 循环（`ensureOffscreenAttachments` 帧首 ensure / `SlotResolver`（文件内）解析 slot→image/view + 物化 barrier / `beginPassRendering`（文件内）/ `stateKit.stateFor`+applyDynamicState / `executePassDraws` 三路分发（drawLight/GPU-cull opaque/逐 draw））→ `capturer.record`（⑪.5）→ presentTransition（⑫）→ `session.submit/present/advance`（⑬⑭⑮）；公开 `requestFrameCapture/takeFrameCapture/hasFrameCapture`（转发 capturer）+ `waitForIdle` + `getGraphicsCommandPoolRef`（金丝雀）；构造期 `validateRenderGraphForExecutor` fail-fast |
 | `frame_session` | frame_session.cppm | 帧生命周期会话（手术 4 自 drawFrame 摘出）：四套同步对象（双 fence，VUID-00067）+ 每帧命令缓冲 + `beginFrame`（①双 fence wait/reset + ②acquire 100ms 超时三态 began/skipped/recreated + ③CB begin）/`submit`（⑬裸 vkQueueSubmit）/`present`（⑭presentFence + out-of-date 重建）/`advance`（⑮）；`recreateSwapchainAndDepth`（swapchain+depth extent 同步重建）；`kFramesInFlight=2`；noPresent 诊断分支保留 |
 | `frame_capture` | frame_capture.cppm | 帧内回读捕获器（手术 2 自 Renderer 摘出，llm_debug 截图载体）：`FrameCapture` 产物（width/height/format/gbufChannel/bytes/pixels）+ 三步曲 `request`（⑫前挂）/`record`（后缓冲 or GB 通道回读拷贝，读写 attachmentLayouts 布局追踪）/`collect`（⑬后等本帧 fence 搬 mapped 字节）；captureStaging GPU_TO_CPU 按需增长；acquire 跳帧时请求保持 pending |
 | `cull_driver` | cull_driver.cppm | GPU culling 帧编舞（手术 3 自 drawFrame ④c + opaque 段摘出，持 GpuCull*+DgcCommands*+DgcStaticCommands*）：`runFrame`（cull CB 录制 dispatch+DGC preprocess → 提交 → 同帧同步等待 → readCull → `reconcile` objectSlot 多重集 + cullArgs↔entries 对齐自检）+ `executeOpaqueSegment`（IES DGC execute / 静态 DGC / 读回重放**三路分发**，能力位 + 门控切换；默认 AMD = 重放）；inactive = 全路径不碰 culling |

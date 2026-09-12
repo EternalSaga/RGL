@@ -1,6 +1,5 @@
 module;
-#include <vulkan/vulkan.h>  // VK_* 宏/C 函数（rlvk 不含宏；C 头解析 ~0.4s）
-#include <cstddef>          // offsetof（MipGenPushData heapIndex 偏移 static_assert）
+#include <vulkan/vulkan.h>  // VK_* 宏/C 函数（rlvk 不含宏；C 头解析 ~0.4s）；offsetof 经其 stddef.h 提供
 #include <fmt/format.h>
 module mip_gen:impl;
 
