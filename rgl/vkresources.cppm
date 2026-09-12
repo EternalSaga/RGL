@@ -14,6 +14,7 @@ import vk_instance;
 import vk_device;
 import vk_swapchain;
 import mip_gen;
+import env_prefilter;  // Phase 8 ④b：GGX 预滤波环境 cubemap（heap + shader object，mip_gen 变体）
 import vkerror;
 
 // 资产层（AssetKind/MeshAsset/TextureAsset/MaterialAsset/AssetTable）拆出为独立模块——
@@ -362,6 +363,22 @@ export class Resources {
 	 * @return void；Error = allocSlot 越界 或 shader object 创建失败
 	 */
 	[[nodiscard]] std::expected<void, Error> ensureMipGenReady(uint32_t levels);
+	/** @return GGX 预滤波生成器（Phase 8 ④b；启动期一次性基础设施，构造于本对象构造期）。
+	 * cubemap 16F 上传路径经它把 env mip 链（level ≥1）录进该 cube 的上传 CB：GGX
+	 * importance-sample 预滤波（descriptor heap + shader object，须先经 ensureEnvPrefilterReady
+	 * 建齐 level shader/槽，见 env_prefilter 模块头注释）。 */
+	RGL::EnvPrefilter& getEnvPrefilter() { return envPrefilter; }
+	/**
+	 * 备齐 GGX 预滤波的 heap 基础设施（env 16F cube 上传前调用，幂等增量）。职责：首次注入
+	 * heap 引用 + 复用 ensureSharedSampler 的 LINEAR sampler（init）；若已建 level shader 数 <
+	 * levels，逐个 allocSlot 领取 src/dst 描述符槽 + EnvPrefilter 建对应 level 的 shader object
+	 * （每 level 一 shader object + 一对独立固定槽）。env 单例启动期只上传一次，实际只补一轮。
+	 * **时序契约**：同 ensureMipGenReady——必须在"全部几何槽分配完 + 白纹理首槽契约断言通过"
+	 * 之后调用（env 上传 = A2 之后阶段，天然满足；此处领槽会推进 allocSlot 游标）。
+	 * @param levels env 总 mip 级数（= cube mipLevels；只增不减）
+	 * @return void；Error = allocSlot 越界 或 shader object 创建失败
+	 */
+	[[nodiscard]] std::expected<void, Error> ensureEnvPrefilterReady(uint32_t levels);
 	/**
 	 * 统一 slot 分配器（Phase 3，纹理资产并案）：从 reservedSlots 起单调分配，
 	 * name→slot 记日志（slot 表排查用）；调用方以生成的偏移常量校验布局契约（见构造器
@@ -435,6 +452,8 @@ export class Resources {
 	RGL::VmaDescriptorHeap samplerHeap;  // Phase 3：OpTypeSampler 独立 heap
 	RGL::MipGen mipGen;  // Phase 8 ③b：compute mip 链生成器（heap + shader object，启动期一次性）
 	bool mipGenBound = false;  // mip-gen heap 引用已注入标记（ensureMipGenReady 首建守卫；幂等）
+	RGL::EnvPrefilter envPrefilter;  // Phase 8 ④b：GGX 预滤波 env cubemap 生成器（heap + shader object，启动期一次性）
+	bool envPrefilterBound = false;  // env-prefilter heap 引用已注入标记（ensureEnvPrefilterReady 首建守卫；幂等）
 	// 共享 sampler 的 create info 稳定存储（ensureSharedSampler 写入；
 	// 本机 RADV 写时即解析、spec 允许驱动延迟解释，生命周期须覆盖运行期，见其注释）
 	vk::SamplerCreateInfo samplerCreateInfo{};

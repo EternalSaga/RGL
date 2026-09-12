@@ -43,9 +43,11 @@ Resources::Resources(RGL::AppContext& vkInstance, RGL::DeviceContext& vkDevice, 
 		  depthImageView(vkDevice.getDevice(), buildDepthView(*depthImage)),
 		  descriptorHeap(createDescriptorHeap().value()),
 		  samplerHeap(createSamplerHeap().value()),
-  		  // Phase 8 ③b：compute mip 链生成器（传统管线全栈，加载 SPV 建管线；启动期一次性）
-  		  mipGen(vkDevice),
-  		  nextSlot(reservedSlots()) {
+   		  // Phase 8 ③b：compute mip 链生成器（传统管线全栈，加载 SPV 建管线；启动期一次性）
+   		  mipGen(vkDevice),
+   		  // Phase 8 ④b：GGX 预滤波 env cubemap 生成器（heap + shader object，加载 SPV；启动期一次性）
+   		  envPrefilter(vkDevice),
+   		  nextSlot(reservedSlots()) {
 		// 内核不创建任何内容资产（架构债务 1 方案 B）：几何（内建 cube / gltf 模型）、
 		// 纹理、scene data、RT 采样槽全部由内容层按上传时序经 allocSlot 领取
 	}
@@ -144,6 +146,34 @@ std::expected<void, Error> Resources::ensureMipGenReady(uint32_t levels) {
 			if (!dstSlot)
 				return std::unexpected(std::move(dstSlot).error());
 			if (auto added = mipGen.addLevel(*srcSlot, *dstSlot); !added)
+				return std::unexpected(std::move(added).error());
+		}
+		return {};
+	}
+
+/**
+ * 幂等契约与时序契约见接口注释。实现：首次注入 heap 引用 + 共享 sampler 槽（复用
+ * ensureSharedSampler 的 LINEAR sampler——全 level 共用一份，SampleLevel 显式 lod=0 读 mip0）；
+ * 之后把 level shader/槽 补齐到 levels（每 level allocSlot 两槽 + EnvPrefilter::addLevel 建
+ * 一个烘焙到该槽的 compute shader object）。env 单例启动期只上传一次，实际只补一轮。领槽
+ * 推进 allocSlot 游标——时序契约同 ensureMipGenReady（env 上传晚于几何段/白纹理首槽）。
+ */
+std::expected<void, Error> Resources::ensureEnvPrefilterReady(uint32_t levels) {
+		if (levels <= 1)
+			return {};  // 单级图无需预滤波
+		if (!envPrefilterBound) {
+			const uint32_t samplerSlot = ensureSharedSampler();  // 幂等：LINEAR/CLAMP，共用一份
+			envPrefilter.init(descriptorHeap, samplerHeap, samplerSlot);
+			envPrefilterBound = true;
+		}
+		while (envPrefilter.levelCount() < levels) {
+			auto srcSlot = allocSlot("envpf.src");
+			if (!srcSlot)
+				return std::unexpected(std::move(srcSlot).error());
+			auto dstSlot = allocSlot("envpf.dst");
+			if (!dstSlot)
+				return std::unexpected(std::move(dstSlot).error());
+			if (auto added = envPrefilter.addLevel(*srcSlot, *dstSlot); !added)
 				return std::unexpected(std::move(added).error());
 		}
 		return {};

@@ -13,6 +13,7 @@ import VmaRaii;
 import vulkan_utils;
 import vk_device;
 import vk_resources;
+import env_prefilter;  // Phase 8 ④b：GGX 预滤波 env cubemap（getEnvPrefilter().recordPrefilter，16F 分支）
 import asset_table;
 import diagnostics;  // texture_force_unorm 诊断单例（configs/diagnostics.lua）
 
@@ -24,12 +25,15 @@ namespace RGL {
 
 namespace {
 
-/** cubemap 上传核心参数：格式 + 每 texel 字节数 + mip 链 blit 滤镜 + 日志标签。 */
+/** cubemap 上传核心参数：格式 + 每 texel 字节数 + mip 链 blit 滤镜 + 日志标签 + 是否走
+ * GGX 预滤波（16F HDR env = true：加 eStorage usage + mip 链走 heap compute 预滤波；8-bit
+ * PNG env = false：usage 不含 eStorage，mip 链走 LINEAR/NEAREST blit，完全不变）。 */
 struct CubeFormat {
 	vk::Format format;
 	uint32_t bytesPerTexel;
 	VkFilter mipFilter;
 	const char* label;
+	bool ggxPrefilter = false;
 };
 
 /** 上传期资源束：cube 目标图（optimal，全 mip）+ 6 张 per-face linear staging。 */
@@ -68,6 +72,10 @@ std::expected<CubeImages, Error> createCubeImages(RGL::Resources& resources, uin
 	imageInfo.tiling = vk::ImageTiling::eOptimal;
 	imageInfo.usage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst |
 		vk::ImageUsageFlagBits::eTransferSrc;
+	// GGX 预滤波（16F HDR env）额外加 eStorage：dst 第 level 级 storage 2DArray view 写前提。
+	// 8-bit sRGB cube 不加（RADV SRGB 无 STORAGE_IMAGE 能力；且视图格式须支持图全部 usage）。
+	if (fmt.ggxPrefilter)
+		imageInfo.usage |= vk::ImageUsageFlagBits::eStorage;
 	imageInfo.initialLayout = vk::ImageLayout::eUndefined;
 	VmaAllocationCreateInfo imageAlloc{};
 	imageAlloc.usage = VMA_MEMORY_USAGE_GPU_ONLY;
@@ -162,7 +170,7 @@ std::expected<void, Error> recordCubeUpload(RGL::Resources& resources, RGL::Devi
 		vk::ImageAspectFlagBits::eColor,
 		vk::PipelineStageFlagBits2::eBottomOfPipe, vk::PipelineStageFlagBits2::eTransfer,
 		vk::AccessFlagBits2::eMemoryWrite, vk::AccessFlagBits2::eTransferWrite,
-		0, mipLevels, 0, 6));
+		0, fmt.ggxPrefilter ? 1u : mipLevels, 0, 6));  // GGX：只覆盖 mip0（level ≥1 留 UNDEFINED 待预滤波）
 	VkDependencyInfo toDstDep{};
 	toDstDep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
 	toDstDep.imageMemoryBarrierCount = static_cast<uint32_t>(uploadBarriers.size());
@@ -178,41 +186,60 @@ std::expected<void, Error> recordCubeUpload(RGL::Resources& resources, RGL::Devi
 			*images.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyRegion);
 	}
 
-	// mip 链：level i−1 先 DST→SRC，再 6 面 blit 到 level i（同图不同 subresource 不重叠，
-	// spec 允许；滤镜见 CubeFormat::mipFilter 注）
-	for (uint32_t level = 1; level < mipLevels; ++level) {
-		emitBarrier(RGL::createImageBarrier(
-			*images.image, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eTransferSrcOptimal,
-			vk::ImageAspectFlagBits::eColor,
-			vk::PipelineStageFlagBits2::eTransfer, vk::PipelineStageFlagBits2::eTransfer,
-			vk::AccessFlagBits2::eTransferWrite, vk::AccessFlagBits2::eTransferRead,
-			level - 1, 1, 0, 6));
-		const uint32_t srcSize = size >> (level - 1);
-		const uint32_t dstSize = std::max(1u, size >> level);
-		std::array<VkImageBlit, 6> blits{};
-		for (uint32_t face = 0; face < 6; ++face) {
-			blits[face].srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level - 1, face, 1};
-			blits[face].srcOffsets[0] = {0, 0, 0};
-			blits[face].srcOffsets[1] = {static_cast<int32_t>(srcSize), static_cast<int32_t>(srcSize), 1};
-			blits[face].dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, face, 1};
-			blits[face].dstOffsets[0] = {0, 0, 0};
-			blits[face].dstOffsets[1] = {static_cast<int32_t>(dstSize), static_cast<int32_t>(dstSize), 1};
+	if (fmt.ggxPrefilter) {
+		// 16F HDR env（Phase 8 ④b）：mip 链走 heap compute GGX importance-sample 预滤波（替代
+		// LINEAR blit box 平均）。先 mip0：TRANSFER_DST → SHADER_READ_ONLY（compute 采样源
+		// SampleLevel(_,L,0)，SampleLevel lod=0 恒取 mip0）；level ≥1 留 UNDEFINED（初始上传
+		// barrier 只覆盖 mip0），recordPrefilter 逐级 UNDEFINED→GENERAL→dispatch(fs/8,fs/8,6)
+		// →SHADER_READ_ONLY，返回后全级已 SRO（渲染端最终布局），无需下方 blit 收尾 barrier。
+		emitBarrier(RGL::createImageBarrier(*images.image, vk::ImageLayout::eTransferDstOptimal,
+			vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageAspectFlagBits::eColor,
+			vk::PipelineStageFlagBits2::eTransfer, vk::PipelineStageFlagBits2::eComputeShader,
+			vk::AccessFlagBits2::eTransferWrite, vk::AccessFlagBits2::eShaderSampledRead,
+			0, 1, 0, 6));
+		// 备齐 env-prefilter heap 基础设施（幂等增量；env 上传晚于几何段/白纹理首槽，时序满足）
+		if (auto ready = resources.ensureEnvPrefilterReady(mipLevels); !ready)
+			return std::unexpected(std::move(ready).error());
+		if (auto pf = resources.getEnvPrefilter().recordPrefilter(cmd, *images.image, fmt.format,
+				size, mipLevels, name); !pf)
+			return std::unexpected(std::move(pf).error());
+	} else {
+		// mip 链（8-bit / 非预滤波）：level i−1 先 DST→SRC，再 6 面 blit 到 level i（同图不同
+		// subresource 不重叠，spec 允许；滤镜见 CubeFormat::mipFilter 注）
+		for (uint32_t level = 1; level < mipLevels; ++level) {
+			emitBarrier(RGL::createImageBarrier(
+				*images.image, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eTransferSrcOptimal,
+				vk::ImageAspectFlagBits::eColor,
+				vk::PipelineStageFlagBits2::eTransfer, vk::PipelineStageFlagBits2::eTransfer,
+				vk::AccessFlagBits2::eTransferWrite, vk::AccessFlagBits2::eTransferRead,
+				level - 1, 1, 0, 6));
+			const uint32_t srcSize = size >> (level - 1);
+			const uint32_t dstSize = std::max(1u, size >> level);
+			std::array<VkImageBlit, 6> blits{};
+			for (uint32_t face = 0; face < 6; ++face) {
+				blits[face].srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level - 1, face, 1};
+				blits[face].srcOffsets[0] = {0, 0, 0};
+				blits[face].srcOffsets[1] = {static_cast<int32_t>(srcSize), static_cast<int32_t>(srcSize), 1};
+				blits[face].dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, face, 1};
+				blits[face].dstOffsets[0] = {0, 0, 0};
+				blits[face].dstOffsets[1] = {static_cast<int32_t>(dstSize), static_cast<int32_t>(dstSize), 1};
+			}
+			::vkCmdBlitImage(*cmd, *images.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+				*images.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 6, blits.data(), fmt.mipFilter);
 		}
-		::vkCmdBlitImage(*cmd, *images.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-			*images.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 6, blits.data(), fmt.mipFilter);
-	}
-	// → SHADER_READ_ONLY：level 0..L−2 停在 TRANSFER_SRC（blit 源），末级停 TRANSFER_DST
-	if (mipLevels > 1)
-		emitBarrier(RGL::createImageBarrier(*images.image, vk::ImageLayout::eTransferSrcOptimal,
+		// → SHADER_READ_ONLY：level 0..L−2 停在 TRANSFER_SRC（blit 源），末级停 TRANSFER_DST
+		if (mipLevels > 1)
+			emitBarrier(RGL::createImageBarrier(*images.image, vk::ImageLayout::eTransferSrcOptimal,
+				vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageAspectFlagBits::eColor,
+				vk::PipelineStageFlagBits2::eTransfer, vk::PipelineStageFlagBits2::eFragmentShader,
+				vk::AccessFlagBits2::eTransferRead, vk::AccessFlagBits2::eShaderSampledRead,
+				0, mipLevels - 1, 0, 6));
+		emitBarrier(RGL::createImageBarrier(*images.image, vk::ImageLayout::eTransferDstOptimal,
 			vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageAspectFlagBits::eColor,
 			vk::PipelineStageFlagBits2::eTransfer, vk::PipelineStageFlagBits2::eFragmentShader,
-			vk::AccessFlagBits2::eTransferRead, vk::AccessFlagBits2::eShaderSampledRead,
-			0, mipLevels - 1, 0, 6));
-	emitBarrier(RGL::createImageBarrier(*images.image, vk::ImageLayout::eTransferDstOptimal,
-		vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageAspectFlagBits::eColor,
-		vk::PipelineStageFlagBits2::eTransfer, vk::PipelineStageFlagBits2::eFragmentShader,
-		vk::AccessFlagBits2::eTransferWrite, vk::AccessFlagBits2::eShaderSampledRead,
-		mipLevels - 1, 1, 0, 6));
+			vk::AccessFlagBits2::eTransferWrite, vk::AccessFlagBits2::eShaderSampledRead,
+			mipLevels - 1, 1, 0, 6));
+	}
 	cmd.end();
 
 	auto fence = vk::raii::Fence(dev, vk::FenceCreateInfo{});
@@ -436,10 +463,12 @@ export [[nodiscard]] std::expected<void, Error> uploadCubeMap16F(RGL::Resources&
 	const bool linearBlit = (props.optimalTilingFeatures
 		& vk::FormatFeatureFlagBits::eSampledImageFilterLinear)
 		!= vk::FormatFeatureFlags{};
-	if (!linearBlit && logger)
-		logger->warn("cubemap: RGBA16_SFLOAT 无 LINEAR blit 能力，mip 链回落 NEAREST ({})", name);
-	const CubeFormat fmt{format, 8, linearBlit ? VK_FILTER_LINEAR : VK_FILTER_NEAREST, "HDR16F"};
-	return uploadCubeMapCore(resources, device, faces, size, fmt, name);
+ 	if (!linearBlit && logger)
+ 		logger->warn("cubemap: RGBA16_SFLOAT 无 LINEAR blit 能力（GGX 预滤波不依赖 blit，仅旧回退路径相关）({})", name);
+ 	// GGX 预滤波开启：mip 链走 heap compute（mipFilter 对 16F 路径失效——不再 blit）。
+ 	// EnvPrefilter 构造期已校验 RGBA16F STORAGE_IMAGE 能力（缺则启动即抛），故此处恒开安全。
+ 	const CubeFormat fmt{format, 8, linearBlit ? VK_FILTER_LINEAR : VK_FILTER_NEAREST, "HDR16F", true};
+ 	return uploadCubeMapCore(resources, device, faces, size, fmt, name);
 }
 
 
