@@ -54,7 +54,8 @@ Resources::Resources(RGL::AppContext& vkInstance, RGL::DeviceContext& vkDevice, 
 
 /**
  * 幂等契约与 create info 稳定存储规则见接口注释。实现：slot =
- * samplerHeap.getReservedSlots()（首个可用槽）；sampler 参数 linear + CLAMP_TO_EDGE、
+ * samplerHeap.getReservedSlots()（首个可用槽）；sampler 参数 linear + REPEAT（平铺 UV
+ * 契约，见接口注释；mip_gen 降采样采样点恒在 [0,1) 内、全屏 pass UV 不越界，不受影响）、
  * Phase 8 ③b 起 mipmapMode=LINEAR + maxLod=20（2D 纹理带 compute mip 链——采样自动
  * 用 mip，maxLod 覆盖 ≤2^20 纹理链长，Vulkan 按各图实际 mip 范围钳制）；经
  * vkWriteSamplerDescriptorsEXT 写入（hpp raii 内部 resultCheck，失败抛 LogicError），
@@ -68,8 +69,8 @@ uint32_t Resources::ensureSharedSampler() {
 		info.magFilter = VK_FILTER_LINEAR;
 		info.minFilter = VK_FILTER_LINEAR;
 		info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-		info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-		info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		info.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+		info.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
 		info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
 		info.anisotropyEnable = VK_FALSE;
 		info.compareEnable = VK_FALSE;

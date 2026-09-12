@@ -201,8 +201,11 @@ export class Resources {
 	vk::DeviceSize getSamplerReservedRangeSize() const { return samplerHeap.getReservedSlots() * samplerHeap.getDescriptorSize(); }
 	/**
 	 * 共享 sampler（批次 1：owner 从 TexturePool 构造移入 Resources——初始化层对象持有）：
-	 * 一份 sampler 描述符（linear + mipmap LINEAR + CLAMP_TO_EDGE，maxLod=20）写
-	 * sampler heap 首个可用槽，全模型管线映射指向同一槽。Phase 8 ③b 起 2D 纹理带
+	 * 一份 sampler 描述符（linear + mipmap LINEAR + **REPEAT**，maxLod=20）写
+	 * sampler heap 首个可用槽，全模型管线映射指向同一槽。wrap 定案 REPEAT（2026-09-13，
+	 * 见调试历史）：bistro 49.5% primitive 平铺 UV 越界 [0,1]（最大 V 跨度 ~77000），
+	 * CLAMP 把越界钳成边缘纹素拉平 = 大片纯色块；glb 405 sampler 全空 = glTF 默认
+	 * REPEAT，工程单 sampler 与之对齐。Phase 8 ③b 起 2D 纹理带
 	 * compute mip 链（mip_gen）——采样自动用 mip（maxLod 20 覆盖 ≤2^20 纹理链长，
 	 * Vulkan 按各图实际 mip 范围钳制，单 sampler 通吃不同尺寸）。幂等（首次调用写入，
 	 * 之后返回既有槽号）；调用点 = 创建 textured 管线前（main 启动期）。
