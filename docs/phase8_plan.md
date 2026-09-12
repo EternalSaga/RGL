@@ -248,5 +248,31 @@ glTF 自发光接入 forward 主路径（bistro 102 primitive 带 emissive）：
   需第 5 个 G-buffer attachment（`kGBufferAttachments` 4→5 + ensureDeferredGBufferSlots + light pass
   绑定 + geometry 写/light 加）才能保持 D1 等价——独立小批次，forward 已覆盖默认 variant。
 
-**剩余 ③**：KHR_materials_emissive_strength（HDR 发光强度扩展，bistro 若用则 factor 需 ×strength）；
-deferred emissive（见上）。④b GGX 预滤波 env（治金属顶镜面条纹/色带，见 §5.4 备注）另批次。
+### 6.3 ④b GGX 预滤波 env（完成，2026-09-12）
+
+金属锌顶锐利镜面条纹 = env 镜面用 box-blit mip（非 GGX 卷积）。治本 = **GGX importance-sample
+预滤波 compute**（`env_prefilter.comp.slang` + `env_prefilter.cppm`/`_impl.cppm`，mip_gen 的 cube 变体，
+**descriptor heap + shader object、零 pool**）：Karis GGX 采样、256 样本（Hammer 低差异）、src=mip0
+cube、dst=第 level 级 `RWTexture2DArray`（2D_ARRAY view，GENERAL）、`roughness=level/(L-1)` 对齐采样端。
+接入 `texture_upload_cubemap` 16F 分支（替 LINEAR blit；8-bit sRGB 分支不动；16F cube 图加 `eStorage`）。
+验证：RADV heap 可写 storage image 再验可行、VVL 零 error；before/after 金属顶镜面条纹→随粗糙度模糊渐变、
+方向正确、非金属逐像素不变。commit `c55c111`。
+
+## 7. Phase 8 剩余 / 后续批次（截至 2026-09-12）
+
+已完成批次：① HDR tonemap、②a codec、②b HDR env、③a ORM+normal、③b mip（→heap）、③ forward 多灯、
+③ emissive（forward）、④a 完整版 IBL（SH9 + split-sum）、④b GGX 预滤波 env。descriptor pool 全项目清零
+（见 mip_gen 迁 heap，commit `a79b16f`）。
+
+**未做（按优先级）**：
+1. **deferred emissive**：deferred 路径接 emissive，需第 5 个 G-buffer attachment（`kGBufferAttachments`
+   4→5 + `ensureDeferredGBufferSlots` + light pass 绑定 + geometry pass 写 / light pass 加）保持 D1 等价。
+   forward 已覆盖默认 variant，故非阻塞。见 §6.2。
+2. **KHR_materials_emissive_strength**：HDR 发光强度扩展（bistro 若用则该扩展则 `emissiveFactor ×= strength`；
+   loader 现只读 `emissiveFactor`，未读 strength）。
+3. **植被 mip 杂色**（独立问题，非 emissive/GGX）：alpha-cutout 叶片在小 mip 出现随机彩色噪点，疑
+   `mip_gen`/blit 对带 alpha 的颜色纹理降采样所致，需单独定位（可能要 alpha-to-coverage 或叶片纹理专用降采样）。
+4. **env 存储 RGBA16F→RGBA32F（可选）**：GGX 预滤波后金属反射色带已大减；若仍见半精度量化带，env 改
+   32F 存储彻底消除（GGX src 也受益）。低优先。
+5. **NVIDIA/Intel 复测**：mip_gen 迁 heap、env_prefilter GGX 均本机 RADV（STRIX_HALO）验证；reserved-range
+   跨驱动（NVIDIA reservedSlots≈3024）与 heap storage image 在 NV/anv 未实测，需上机复跑（见 nvidia_compatibility_report）。

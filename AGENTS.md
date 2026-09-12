@@ -19,7 +19,7 @@ just config              # CMake 配置（默认 clang, Release）；just config
 just build               # 增量编译（需先 config）；just build-release / build-debug = 一键配置+编译
 just reflect             # 重跑 5 条反射管线（改动 shader 契约/schema/模板后必须；见"着色器编译"）
 just doc-check [--strict]  # Doxygen 注释检查（每次 just build 已随 doc_check 并行跑、只警告；此处单独跑+透传参数）
-just style-check [--strict]  # 文件/函数结构检查（文件>500/函数>120 代码行、嵌套>5，libclang 多进程，见 tools/stylecheck）
+just style-check [--strict]  # 文件/函数结构检查（文件>500/函数>120 代码行、认知复杂度>15，libclang 多进程，见 tools/stylecheck）
 just run                 # 运行（AMD VGA 存在时自动设 RADV_EXPERIMENTAL=heap）
 just run-igpu / run-dgpu / run-intel   # 强制核显 / NVIDIA prime 独显 / Intel anv
 just clean / clean-all / all           # 增量清理 / 删 build 目录 / clean-all+build-release
@@ -49,18 +49,25 @@ CMake 无独立构建目录 — 必须从根目录构建（`cmake -B build -S .`
   （键 = 源+命令 sha256）：增量只重 dump 改动文件（秒级），全量 ~1min。规则细节：注释真相源 =
   接口声明处（impl 里接口已声明函数的定义不重复要求）；重载组共用最上方一个块；前向声明与
   定义间可夹空行（Renderer 先例）；只警告不阻断（`--strict` 才 exit 1），默认构建含 `--methods`。
-- `style_check`（ALL，与编译并行，2026-09-11）：`rgl/*.cppm` 七类规则——前五项 libclang 解析
+- `style_check`（ALL，与编译并行，2026-09-11，2026-09-12 重构为多模块小包 + 规则升级）：
+  `rgl/*.cppm` 八类规则——前五项 libclang 解析
   （代码行 = 去注释空行，token 级精确）：①文件 >500 提示拆文件、②函数 >120 提示拆函数、
-  ③嵌套深度 >5（if/for/while/do/switch/catch/lambda 计层，函数体 0 层）提示拆函数、
+  ③认知复杂度 >15（SonarSource 风格：if/for/while/do/catch/三元/lambda 结构 +1+嵌套，
+  switch 与 else/else-if +1 不递增嵌套，一段连续 &&/|| 整段 +1；替换旧"嵌套深度>5"，
+  缓存版本随之 v2→v3）提示拆函数、
   ④接口瘦身（非 _impl 文件函数体 >100 → 迁入 xxx_impl.cppm）、⑤成员命名（_ / m_ 前缀、
-  _ 后缀 → 自然命名）；后两项纯文本：⑥分层/模块优先（底层零 entt = 不 import ecs 且
+  _ 后缀 → 自然命名）；后三项纯文本：⑥分层/模块优先（底层零 entt = 不 import ecs 且
   GMF 不 include <entt>，名单 `ZERO_ENTT_MODULES`；点名禁止 import 边 `FORBIDDEN_EDGES`；
   rgl/ 禁 .h/.hpp/.hh、.cpp 仅 main.cpp + 三个单头库实现单元、禁内部头 #include "）、
-  ⑦GMF STL 白名单（#include <STL> 只许 ranges/filesystem/chrono，余走 import rlstd）。
-  实现在 `tools/stylecheck/stylecheck.py`（libclang ctypes 进程内解析，纯标准库 Python；
+  ⑦GMF STL 白名单（#include <STL> 只许 ranges/filesystem/chrono，余走 import rlstd）、
+  ⑧禁用旧式 Vulkan API（剥注释后按行匹配 `FORBIDDEN_VULKAN_APIS`：经典 descriptor pool /
+  pipeline object / render pass / push constants——项目已全面 descriptor heap / shader
+  object / dynamic rendering，回归护栏；标识符边界匹配防 bindPipelineToAsset 误报）。
+  实现在 `tools/stylecheck/` 包（stylecheck.py CLI 入口 + config/clangbind/cmdclean/
+  metrics/worker/rules 各司其职；libclang ctypes 进程内解析，纯标准库 Python；
   **ctypes 持 GIL → ProcessPoolExecutor 一进程一文件**，默认 min(cpu,4) worker、每进程
   ~550MB）。缓存 `build/stylecheck_cache/`（键 = 源+命令 sha256 + 缓存版本）：增量秒级，
-  全量 61 文件 ~12s。**产物预检**：@modmap/BMI 是构建产物，clean 后首次构建（style_check 与
+  全量 69 文件 ~12s。**产物预检**：@modmap/BMI 是构建产物，clean 后首次构建（style_check 与
   编译并行时尚未生成）未就绪文件整体跳过 libclang 规则、只跑纯文本规则（汇总"产物未就绪跳过 N"
   = 正常非故障，编译完成重跑即全量）。警告文案直接给 LLM 行动指令。坑（详见文件头，勿回退）：C API 不展开
   @.modmap（须内联展开 + BMI 路径转绝对）、输入文件/驱动路径不能进 argv、Gentoo 须显式
