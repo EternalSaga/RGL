@@ -74,6 +74,7 @@ export struct SceneConfig {
 	Light light;                           // Phase 5 批次 2：定向光（scene.lua light 段，可选回落默认）
 	std::vector<Light> lights;             // Phase 7 D3：多灯（scene.lua lights 列表；空则 loadSceneConfig 回落合成 [light]）
 	EnvironmentConfig environment;         // Phase 5.5：环境贴图（scene.lua environment 段，可选缺省）
+	float exposure = 1.0f;                 // Phase 8 收尾：tonemap 曝光（scene.lua 顶层 exposure，ACES 前线性倍率，1.0 = 直通）
 };
 
 /**

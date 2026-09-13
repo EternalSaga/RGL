@@ -200,6 +200,7 @@ int main() {
 		registry.ctx().emplace<FrameDrawList>();
 		registry.ctx().emplace<NextObjectSlot>();  // Phase 6 instancing：实例矩阵槽分配器
 		registry.ctx().emplace<SceneEnv>();  // Phase 5.5：环境参数（env 上传成功后回填，见下）
+		registry.ctx().get<SceneEnv>().exposure = sceneConfig.exposure;  // Phase 8 收尾：tonemap 曝光（与 env 开关无关）
 
 		AppContext vkInstance(window.get(), headless);
 		DeviceContext vkDevice(vkInstance);

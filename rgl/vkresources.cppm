@@ -52,11 +52,15 @@ namespace RGL {
  * readEnvParams 的 Load(48)/Load(52) 字面量必须与本值一致——scene.slang 先例）。派生自
  * sizeof(SceneLight)（C API 反射生成），shader 布局漂移即编译失败。 */
 export inline constexpr uint32_t kSceneDataEnvOffset = sizeof(SceneLight);
+/** tonemap 曝光（scene data 头 @56，env 16B 之后的保留区；tonemap.frag Load(56) 直读，
+ *  ACES 前线性倍率，1.0 = 直通）。 */
+export inline constexpr uint32_t kSceneDataExposureOffset = 56;
 /** Phase 5.5 批次 4：skyboxInvViewProj mat4 列主序 @64（inverse(proj·view)，sky.slang
  * skyClipToWorld 的 Load4(64/80/96/112) 字面量必须与本值一致）。 */
 export inline constexpr uint32_t kSceneDataSkyOffset = 64;
-export inline constexpr uint32_t kSceneDataHeaderBytes = 128;   // light 48 + env 16 + sky invVP 64
+export inline constexpr uint32_t kSceneDataHeaderBytes = 128;   // light 48 + env 16（含曝光 4B@56）+ sky invVP 64
 static_assert(kSceneDataEnvOffset == 48 && kSceneDataSkyOffset == 64 &&
+	kSceneDataExposureOffset == kSceneDataEnvOffset + sizeof(glm::vec2) &&
 	kSceneDataSkyOffset + sizeof(glm::mat4) == kSceneDataHeaderBytes);
 /** mat4 列主序 stride：派生自 sizeof(glm::mat4) 而非裸字面量（C++ 侧漂移即编译失败；
  * shader 端 scene.slang 的字面量 64u 须与本值一致——无反射端对应，见 scene.slang 头注释）。 */

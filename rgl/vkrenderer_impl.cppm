@@ -277,6 +277,8 @@ void Renderer::createSceneStaging(RGL::Resources& vkResources) {
 	std::memcpy(stage, &list.sceneData.light, sizeof(SceneLight));
 	// Phase 5.5：env 参数写 @48（light 48B 之后、64B 头内——与 objectMatrices 区无重叠）
 	std::memcpy(stage + kSceneDataEnvOffset, &list.sceneData.envParams, sizeof(glm::vec2));
+	// Phase 8 收尾：tonemap 曝光写 @56（env 16B 保留区内；tonemap.frag Load(56) 消费）
+	std::memcpy(stage + kSceneDataExposureOffset, &list.sceneData.exposure, sizeof(float));
 	// Phase 5.5 批次 4：skyboxInvViewProj 写 @64（sky.slang skyClipToWorld 消费）
 	std::memcpy(stage + kSceneDataSkyOffset, &list.sceneData.skyInvViewProj, sizeof(glm::mat4));
 	const auto matricesBytes = list.sceneData.objectMatrices.size() * sizeof(glm::mat4);

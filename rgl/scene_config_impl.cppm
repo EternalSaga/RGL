@@ -283,6 +283,7 @@ void parseStyles(sol::table root, SceneConfig& cfg) {
 		readStr(root, "model", cfg.modelPath);
 		readBool(root, "spin", cfg.spin);
 		readBool(root, "cube", cfg.showCube);
+		readFloat(root, "exposure", cfg.exposure);  // Phase 8 收尾：tonemap 曝光（可选，1.0 = 直通）
 
 		if (auto r = parseEntities(root, cfg); !r)
 			return std::unexpected(r.error());

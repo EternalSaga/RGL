@@ -60,6 +60,9 @@ export struct SceneFrameData {
 	// Phase 5.5 env 参数（scene data 头 @48/@52，原 16B 保留区启用；shader 端
 	// env.slang readEnvParams 字面量一致）：x=envIntensity y=envMipRange（=L−1，0 = 无环境）
 	glm::vec2 envParams{0.0f};
+	// Phase 8 收尾：tonemap 曝光（scene data 头 @56 保留区，tonemap.frag 直读；
+	// ACES 前线性倍率，1.0 = 直通旧行为）
+	float exposure = 1.0f;
 	// Phase 8 批次 ④a：漫反射辐照度 radiance SH9（scene data 尾区 kSceneDataIrradianceOffset，
 	// 9×vec4 .xyz=系数，scene.slang irradiance(N) 消费）；renderListSystem 每帧从
 	// Resources::getEnvIrradianceSH 填。

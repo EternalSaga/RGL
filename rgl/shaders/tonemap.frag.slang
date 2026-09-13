@@ -5,15 +5,22 @@
 // group draw（drawLight kind，state="tonemap"，执行器经 state 名解析管线条目）。
 //
 // 绑定：4=sceneHdr（Texture2D RGBA16F 线性）/ 5=hdrSampler（共享 sampler，1:1
-//   全屏采样 maxLod 0 够用）。**不 import scene**（不读 scene data——曝光暂写死
-//   kExposure，环境光接入后调参再走配置，见 docs/phase8_plan.md）。
+//   全屏采样 maxLod 0 够用）。import scene 仅为读 scene data 头 @56 的曝光标量
+//   （CPU 真相源 vkresources.cppm kSceneDataExposureOffset；configs/scene.lua
+//   顶层 exposure 每帧经 SceneFrameData 上传——原写死 kExposure 的"调参再走
+//   配置"预留兑现）。
+
+import scene;  // sceneData buffer（binding 3，仅 Load(56)）
 
 [[vk::binding(4, 0)]] Texture2D<float4> sceneHdrTex;
 [[vk::binding(5, 0)]] SamplerState hdrSampler;
 
-// 曝光（ACES 输入前的线性倍率）；写死 1.0 = 保持 env intensity 语义直通，
-// HDR env（intensity 10）接入后若过曝在此或 scene 侧调整。
-static const float kExposure = 1.0;
+// 曝光（ACES 输入前的线性倍率）：scene data @56，configs/scene.lua exposure，
+// 1.0 = 直通（默认，与旧写死常量逐位一致）。
+float readExposure()
+{
+    return asfloat(sceneData.Load(56));
+}
 
 // Narkowicz 2015 "ACES Filmic Tone Mapping Curve" 近似（per-channel 有理二次式，
 // RRT+ODT 的曲线拟合；输出仍在显示线性域，交给 sRGB attachment 硬件编码）。
@@ -47,6 +54,6 @@ struct TonemapInput
 float4 main(TonemapInput input) : SV_Target
 {
     float3 hdr = sceneHdrTex.Sample(hdrSampler, input.uv).rgb;
-    float3 mapped = acesTonemap(hdr * kExposure);
+    float3 mapped = acesTonemap(hdr * readExposure());
     return float4(mapped, 1.0);
 }

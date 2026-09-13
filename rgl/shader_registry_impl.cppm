@@ -153,8 +153,8 @@ namespace RGL {
 		return index;
 	}
 
-	// Phase 8 批次 ①：tonemap pass 条目（仿 addLightEntry 单条目形态）。不 import scene
-	//（不读 scene data——曝光写在 tonemap.frag 常量），hasSceneData = false；extra 仅
+	// Phase 8 批次 ①：tonemap pass 条目（仿 addLightEntry 单条目形态）。import scene
+	// 仅读 @56 曝光（configs/scene.lua exposure），hasSceneData = true；extra 仅
 	// scene_hdr 采样槽 + 共享 sampler。执行器 drawLight 分支按 state 名 "tonemap" 取本条目。
 	uint32_t ShaderRegistry::addTonemapEntry(uint32_t sceneHdrSlot, uint32_t samplerSlot) {
 		if (auto idx = pipelineIndex("tonemap"))
@@ -167,7 +167,8 @@ namespace RGL {
 		b.descriptorSize = descriptorSize;
 		b.slotVertex = 0;   // binding 0/1 占位（tonemap mesh = light.mesh 全屏大三角，不声明顶点）
 		b.slotIndex = 1;
-		b.hasSceneData = false;  // tonemap.frag 不 import scene
+		b.slotSceneData = res.ensureSceneData();  // binding 3：@56 曝光
+		b.hasSceneData = true;
 		const uint32_t samplerHeapOffset =
 			samplerSlot * res.getSamplerHeap().getDescriptorSize();
 		b.extra = {
