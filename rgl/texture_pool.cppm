@@ -446,7 +446,11 @@ export [[nodiscard]] std::expected<void, Error> loadEnvCubeMapHdr(RGL::Resources
 		auto* dst = reinterpret_cast<glm::u32vec2*>(faces[face].data());
 		for (uint32_t y = 0; y < faceSize; ++y)
 			for (uint32_t x = 0; x < faceSize; ++x) {
-				const glm::vec3 rgb = sampleEquirect(*src, cubeFaceDir(face, x, y, faceSize));
+				// 太阳等超亮 texel（RGBE 指数 255 → float32 天文值）packHalf2x16 溢出成 inf →
+				// 三线性混合 inf×0 = NaN → 反射命中处 radiance NaN → ACES NaN → 黑块（调试历史 2026-09-13）。
+				// 钳到 half 安全域 6e4（天空 p50 的 ~1.4 万倍，视觉无损）。
+				glm::vec3 rgb = glm::clamp(
+					sampleEquirect(*src, cubeFaceDir(face, x, y, faceSize)), 0.0f, 60000.0f);
 				*dst++ = glm::u32vec2{glm::packHalf2x16({rgb.x, rgb.y}),
 					glm::packHalf2x16({rgb.z, 1.0f})};
 			}

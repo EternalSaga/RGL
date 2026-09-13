@@ -146,21 +146,27 @@ float3 irradianceSH(float3 n)
     r += 0.78539816 * sh6 * (0.31539157 * (3.0 * n.z * n.z - 1.0));
     r += 0.78539816 * sh7 * (1.09254843 * n.x * n.z);
     r += 0.78539816 * sh8 * (0.54627422 * (n.x * n.x - n.y * n.y));
-    return r;
+    return max(r, 0.0);  // SH 截断振铃（高对比 HDR 尤甚）可产生负辐照度 → 负 radiance clamp 成黑点（Filament 同款钳制）
 }
 
-// 环境镜面 split-sum 第二项 BRDF 积分近似（Karis/Epic 解析拟合，免 LUT 纹理）。
-// 返回 (F0 * A + B)：prefiltered env 采样值乘此即环境镜面反射（能量守恒、粗糙金属不塌黑）。
+// 环境镜面 split-sum 第二项 BRDF 积分（免 LUT 纹理）。返回 (F0 * A + B)：
+// prefiltered env 采样值乘此即环境镜面反射（能量守恒、粗糙金属不塌黑、恒非负）。
+// A/B = GGX(height-correlated Smith, Schlick (1-VoH)^5) 半球积分的二维三次多项式拟合，
+// 系数由蒙特卡洛数值积分（52 万样本/格 × 29×29 网格，x=NoV、y=roughness、定义域 [0.05,1]²）
+// 最小二乘得出，最大误差 0.056（掠射角角落，典型区域 <0.02）；复现脚本 tools/brdf_fit.py。
+// 前版手抄 "Karis 拟合" 的 B=-a1² 项致粗糙度全域大负值（非金属像素被减去天空亮度 →
+// 墙面特定角度死黑 + 地面脏噪点），复盘见 docs/调试历史.md 2026-09-13。
 float3 envBrdfFactor(float NoV, float roughness, float3 F0)
 {
-    float4 c0 = float4(-1.0, -0.0275, -0.572, 0.022);
-    float4 c1 = float4(1.0, 0.0425, 1.04, -0.04);
-    float r = roughness * c0.x + c0.y;
-    float a0 = r * c0.z + c0.w;
-    a0 = a0 * a0;
-    float A = 1.0 - a0 * c1.x;
-    float a1 = r * c1.z + c1.w;
-    a1 = a1 * a1;
-    float B = -a1;
+    float x = clamp(NoV, 0.05, 1.0);
+    float y = clamp(roughness, 0.05, 1.0);
+    float A = (-0.117235 + 5.220972 * x + -8.006398 * x * x + 3.885701 * x * x * x)
+        + (1.954888 + -14.014978 * x + 28.979388 * x * x + -16.481228 * x * x * x) * y
+        + (-0.131519 + 7.607602 * x + -28.805193 * x * x + 19.973097 * x * x * x) * y * y
+        + (-0.881902 + -0.051407 * x + 9.053260 * x * x + -7.915266 * x * x * x) * y * y * y;
+    float B = (1.155254 + -5.110554 * x + 7.342248 * x * x + -3.416029 * x * x * x)
+        + (-3.041213 + 17.121746 * x + -28.588772 * x * x + 14.698225 * x * x * x) * y
+        + (2.639804 + -20.172317 * x + 38.436536 * x * x + -21.248779 * x * x * x) * y * y
+        + (-0.701261 + 8.016208 * x + -17.080260 * x * x + 9.950964 * x * x * x) * y * y * y;
     return F0 * A + B;
 }
