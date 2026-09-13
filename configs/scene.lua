@@ -116,7 +116,8 @@ return {
         dir = "skybox/rainbow",
         faces = { "rainbow_ft.png", "rainbow_bk.png", "rainbow_up.png",
                   "rainbow_dn.png", "rainbow_rt.png", "rainbow_lf.png" },
-        intensity = 1.0,
+        intensity = 0.2,      -- env 强度（④a 后 = SH 卷积全量天空辐照，p50≈4 的天空 π 卷积
+                              -- ≈13；1.0 时天光 ≈14× 太阳光 = 影面全蓝，0.2 重校准见调试历史）
         skybox = true,
     },
 
@@ -124,12 +125,12 @@ return {
     light = {
         direction = { 0.5, -0.75, -0.45 },  -- 照射方向（消费时归一化；从相机侧上方照）
         color = { 1.0, 0.98, 0.95 },
-        intensity = 4.0,
+        intensity = 15.0,
         ambient = { 0.25, 0.25, 0.28 },
     },
 
     spin = false,  -- 场景整体时间旋转（true 便于肉眼判断渲染对错；false 静止便于排查遮挡）
     cube = false,  -- 是否渲染硬编码 cube（Phase 1 遗留，原点 ±0.5，与模型互穿时建议关掉）
-    exposure = 0.35,  -- tonemap 曝光（ACES 前线性倍率，缺省 1.0 = 直通；bistro 湿地面 +
-                      -- HDR env 高亮过饱和时压回，2026-09-13 调试历史；0.1 过暗 0.65 蓝紫仍显）
+    exposure = 1.2,  -- tonemap 曝光（ACES 前线性倍率，缺省 1.0 = 直通；env 0.2 重配比分
+                     -- 后按亮度回提，2026-09-13 调试历史：真正元凶是 ambient/sun 配比非曝光）
 }
