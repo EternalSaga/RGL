@@ -187,7 +187,8 @@ add_custom_target(doc_check ALL
 # 5) 成员命名：_ / m_ 前缀、_ 后缀 → 自然命名
 # 6) 分层/模块优先（文本）：底层零 entt（名单 ZERO_ENTT_MODULES，拦 import ecs
 #    与 GMF #include <entt>）、点名禁止 import 边、rgl/ 禁 .h/.hpp/.hh、
-#    .cpp 仅 main.cpp + 三个单头库实现单元、禁内部头 #include "
+#    .cpp 仅单头库实现单元（tinygltf_impl/vam_impl；入口 main.cppm 为模块实现单元）、
+#    禁内部头 #include "（外部 SDK 头不报）
 # 7) GMF STL 白名单：#include <STL> 只许 ranges/filesystem/chrono，余走 import rlstd
 # 8) 禁用旧式 Vulkan API（文本，剥注释）：经典 descriptor pool / pipeline object /
 #    render pass / push constants 名单（config.FORBIDDEN_VULKAN_APIS）命中即警告
@@ -314,7 +315,12 @@ compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.mesh.slang MODEL_MESH_SP
 # 曾用 -O0（-O2 下编译吃内存，24 并发时打爆 swap）；2026-09-02 用户调整内存/显存
 # 分配至 32GB 后回归目标级 -O2（启动路径代码质量优先，编译峰值内存已非瓶颈）。
 
-add_executable(rgl main.cpp vam_impl.cpp tinygltf_impl.cpp ${MESH_SPV} ${FRAG_SPV} ${MODEL_MESH_SPV} ${MODEL_FRAG_SPV} ${MODEL_PBR_FRAG_SPV} ${MODEL_PHONG_FRAG_SPV} ${MODEL_PBR_IBL_FRAG_SPV} ${MODEL_VEGETATION_FRAG_SPV} ${MODEL_LIGHT_FRAG_SPV} ${SKYBOX_MESH_SPV} ${SKYBOX_FRAG_SPV} ${DEFERRED_GEOM_FRAG_SPV} ${DEFERRED_GEOM_VEG_FRAG_SPV} ${DEFERRED_GEOM_LIGHT_FRAG_SPV} ${LIGHT_MESH_SPV} ${LIGHT_FRAG_SPV} ${TONEMAP_FRAG_SPV} ${CULL_SPV} ${STREAM_FANOUT_SPV} ${MIP_GEN_SPV} ${ENV_PREFILTER_SPV})
+# main.cppm（主接口：启动流 helper 声明 + 轻量 struct）+ main_scene.cppm（module
+# main:scene; 重函数定义）+ main_impl.cppm（module main:impl; 轻函数 + main()）
+# ——2026-09-14 由 main.cpp 转来：CMake FILE_SET 不收纯实现单元，故"接口声明 + 分区
+# 实现"形状（同 ecs/ecs_impl 惯例）；经 FILE_SET 编译为模块 TU 并纳入
+# stylecheck/doccheck 全规则管理。
+add_executable(rgl vam_impl.cpp tinygltf_impl.cpp ${MESH_SPV} ${FRAG_SPV} ${MODEL_MESH_SPV} ${MODEL_FRAG_SPV} ${MODEL_PBR_FRAG_SPV} ${MODEL_PHONG_FRAG_SPV} ${MODEL_PBR_IBL_FRAG_SPV} ${MODEL_VEGETATION_FRAG_SPV} ${MODEL_LIGHT_FRAG_SPV} ${SKYBOX_MESH_SPV} ${SKYBOX_FRAG_SPV} ${DEFERRED_GEOM_FRAG_SPV} ${DEFERRED_GEOM_VEG_FRAG_SPV} ${DEFERRED_GEOM_LIGHT_FRAG_SPV} ${LIGHT_MESH_SPV} ${LIGHT_FRAG_SPV} ${TONEMAP_FRAG_SPV} ${CULL_SPV} ${STREAM_FANOUT_SPV} ${MIP_GEN_SPV} ${ENV_PREFILTER_SPV})
 
 # ─── Runtime config copy (configs/ → build dir) ──────────────────────────────
 # 程序运行时按相对路径读取 configs/*.json，build 目录必须完整。
@@ -408,8 +414,8 @@ if(ENV_HDR_OUTPUTS)
 endif()
 
 target_sources(rgl PUBLIC
-               FILE_SET CXX_MODULES
-                FILES rlvk.cppm vkerror.cppm utils.cppm sdl3window.cppm QueueFamilyManager.cppm cube.cppm
+                FILE_SET CXX_MODULES
+                 FILES main.cppm main_impl.cppm main_scene.cppm rlvk.cppm vkerror.cppm utils.cppm sdl3window.cppm QueueFamilyManager.cppm cube.cppm
                       camera.cppm camera_config.cppm scene_config.cppm runtime_config.cppm diagnostics.cppm
                        shader.cppm shader_registry.cppm VmaBuffer.cppm features.cppm vkinstance.cppm vkdevice.cppm
                        vkswapchain.cppm vkresources.cppm vkrenderer.cppm ecs.cppm frame_draw_list.cppm

@@ -58,14 +58,19 @@ CMake 无独立构建目录——必须从根目录构建（`cmake -B build -S .
 
 ## 命名规范
 
-**所有 C++ 符号均在 `namespace RGL` 中**，模块导出包裹 `namespace RGL { ... }`；`main.cpp` 用
-`using namespace RGL;`，跨模块引用统一 `RGL::` 前缀。
+**所有 C++ 符号均在 `namespace RGL` 中**，模块导出包裹 `namespace RGL { ... }`；入口
+`main_impl.cppm`（module main:impl，2026-09-14 由 main.cpp 转来）用 `using namespace RGL;`，
+跨模块引用统一 `RGL::` 前缀。
 
 ## 代码规范
 
 ### 模块优先
 新代码**必须** C++20 modules（`.cppm`），非 `.hpp/.cpp` 头文件对；入口 `import` 导入，不在模块外
 `#include` 项目内部头文件。新建/拆分的完整 checklist → skill `rgl-new-module`。
+入口也是模块（2026-09-14 起，纳入 stylecheck/doccheck 全规则）：`main.cppm`（`export module main;`
+接口：启动流 helper 声明 + 轻量 struct）+ `main_impl.cppm`（`module main:impl;`：轻函数 +
+`main()`，main 合法于分区实现单元）+ `main_scene.cppm`（`module main:scene;`：重函数定义）——
+CMake CXX_MODULES FILE_SET 不收纯实现单元，故"接口声明 + 分区实现"形状（同 ecs/ecs_impl）。
 
 ### 优先使用 rlstd 代替 #include STL
 `.cppm` 一律 `import rlstd;` 取 STL 类型，GMF 不 `#include` STL（例外仅 `<ranges>/<filesystem>/<chrono>`）；
@@ -98,7 +103,7 @@ CMake 无独立构建目录——必须从根目录构建（`cmake -B build -S .
 
 **实现细节以各 `.cppm` 文件头注释为权威**，Phase 演进史见 `docs/next_roadmap.md`；
 工具/数据/生成模块速览 → `docs/技术概念.md §模块表`；下表深版职责 → 同文件 §核心运行时模块表（深版）。
-此处只留初始化层骨架（构造顺序 = main.cpp 顺序）：
+此处只留初始化层骨架（构造顺序 = main 启动流顺序）：
 
 | 模块 | 文件 | 职责（一行） |
 |---|---|---|
@@ -117,7 +122,7 @@ CMake 无独立构建目录——必须从根目录构建（`cmake -B build -S .
 | `gpu_cull` | gpu_cull.cppm | GPU culling 数据通路：CullEntry/序列/count buffer + seqStaging ring×2；recordCullPass/readCullResult（字节布局 → 深版表 + skill rgl-shader-contract） |
 | `vk_indirect_commands` | vk_indirect_commands.cppm | DGC RAII（能力门控）：`DgcCommands`（NVIDIA IES 路）/ `DgcStaticCommands`（RADV 静态路，默认关）；7 入口点全走 `vkGetDeviceProcAddr` |
 
-**main.cpp 启动流**（完整版 → `docs/技术概念.md §main.cpp 启动流`；析构 = 构造逆序 RAII）：
+**main 启动流**（main_impl.cppm；完整版 → `docs/技术概念.md §main 启动流`；析构 = 构造逆序 RAII）：
 加载四类配置 + `renderGraphSelfCheck` → 建窗（headless 不建）→ 栈上 `entt::registry` →
 AppContext→DeviceContext→Swapchain→Resources→ShaderRegistry → `compileRenderGraph`（建窗后）→
 entities 循环：A0 内建几何→A1 模型顶点→A2 纹理→env 上传→C 模型注册+C2b 灯 entity →
@@ -194,7 +199,7 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
 > 每篇文档头部带状态（`现行`/`历史`/`调研`）。现状权威 = 本文件 + `next_roadmap.md`。
 
 - `docs/next_roadmap.md` — **路线图（权威）**：Phase 0–6 一段话结论 + Phase 7 进度表 + 剩余计划
-- `docs/技术概念.md` — 核心 Vulkan 模式、设计决策、§模块表 / §构建检查工具机制 / §核心运行时模块表（深版）/ §main.cpp 启动流（完整版）
+- `docs/技术概念.md` — 核心 Vulkan 模式、设计决策、§模块表 / §构建检查工具机制 / §核心运行时模块表（深版）/ §main 启动流（完整版）
 - `docs/调试历史.md` — 问题修复时间线（只增不改，争议结论以此为准）
 - `docs/DESCRIPTOR_HEAP_SPEC.md` — descriptor heap 排坑记录（活文档）
 - `docs/nvidia_compatibility_report.md` — 跨驱动兼容性（三平台记录；当前机 = 9950X Raphael RDNA2 核显，非 Strix Halo）

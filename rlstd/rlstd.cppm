@@ -9,6 +9,7 @@ module;
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <deque>
@@ -61,6 +62,10 @@ using std::endl;
 using std::fill;
 using std::error_code;
 using std::exception;
+using std::FILE;
+using std::fclose;
+using std::fopen;
+using std::fwrite;
 using std::expected;
 using std::as_bytes;
 using std::byte;
@@ -128,6 +133,7 @@ using std::optional;
 using std::strcmp;
 using std::tuple;
 using std::make_unique;
+using std::unique_ptr;
 using std::ifstream;
 using std::ios;
 using std::ios_base;

@@ -85,9 +85,11 @@ FORBIDDEN_EDGES = {
     "ecs": {"llm_debug"},
 }
 
-# ─── 模块优先（rgl/ 下除入口与单头库实现单元外不得有 .cpp，.h/.hpp/.hh 全禁）────
-# （tinygltf/VMA 是单头 C 库，实现宏只能放普通 .cpp——既有例外，勿删）
-ALLOWED_CPP = {"main.cpp", "tinygltf_impl.cpp", "vam_impl.cpp"}
+# ─── 模块优先（rgl/ 下 .h/.hpp/.hh 全禁，.cpp 仅单头库实现单元）─────────────────
+# （tinygltf/VMA 是单头 C 库，实现宏只能放普通 .cpp——既有例外，勿删；
+#  入口 = main.cppm 模块实现单元（module main;，main() 合法于实现单元），
+#  2026-09-14 由 .cpp 转 .cppm 起纳入 stylecheck/doccheck 全规则管理）
+ALLOWED_CPP = {"tinygltf_impl.cpp", "vam_impl.cpp"}
 
 # ─── GMF 的 STL 白名单（AGENTS.md"优先使用 rlstd"）─────────────────────────────
 # STL 头只许三个例外，其余一律走 import rlstd（缺名补入 rlstd.cppm）；第三方头不受此限

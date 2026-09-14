@@ -140,6 +140,21 @@ def parse_module_file(src):
     return name, imps, gmf_incs
 
 
+def is_internal_header(rel, inc):
+    """引号 include 能否解析到仓库内文件 = 内部头（模块优先违规）。
+
+    外部 SDK 头（如 Aftermath GFSDK_*.h，include 目录在仓库外）解析不到 → 不误报
+    （引号 include 本身不违规，违规的是"内部头文件存在"——模块间只走 import）。
+    """
+    root_abs = os.path.realpath(ROOT)
+    base = os.path.dirname(os.path.join(ROOT, rel))
+    for cand in (os.path.join(base, inc), os.path.join(ROOT, inc)):
+        p = os.path.realpath(os.path.normpath(cand))
+        if os.path.isfile(p) and p.startswith(root_abs + os.sep):
+            return True
+    return False
+
+
 def rgl_cppm_files():
     """rgl/ 下全部 .cppm（含 rlvk，排除 generated/），仓库相对 POSIX 路径。"""
     out = []
@@ -170,9 +185,10 @@ def text_checks():
         if name is None:
             continue
         mods[name] = (rel, imps, gmf_incs)
-        # B1：内部头 include（模块优先：模块间只走 import）
+        # B1：内部头 include（模块优先：模块间只走 import）。外部 SDK 头（仓库外，
+        # 如 Aftermath GFSDK_*.h）解析不到仓库内文件 → 不报（is_internal_header）。
         for inc, i, delim in gmf_incs:
-            if delim == '"':
+            if delim == '"' and is_internal_header(rel, inc):
                 warnings.append((rel, i,
                     f'GMF #include "{inc}"——模块优先：模块间依赖只走 import，'
                     f"内部头文件不应存在"))
@@ -215,7 +231,8 @@ def text_checks():
                     "头文件——模块优先：所有新代码必须 C++20 modules (.cppm)"))
             elif fn.endswith(".cpp") and fn not in ALLOWED_CPP:
                 warnings.append((rel, 0,
-                    ".cpp 文件——模块优先：仅入口 main.cpp 允许 .cpp"))
+                    ".cpp 文件——模块优先：仅单头库实现单元（tinygltf_impl/vam_impl）"
+                    "允许 .cpp"))
     return warnings
 
 

@@ -12,7 +12,8 @@
 - 成员命名：成员变量名带 _/m_ 前缀或 _ 后缀 → 提示自然命名
 - 分层/模块优先（文本）：底层零 entt（不得 import ecs、GMF 不得 include <entt>，
   名单 ZERO_ENTT_MODULES）；点名的禁止 import 边（FORBIDDEN_EDGES）；rgl/ 下
-  不得有 .h/.hpp/.hh、.cpp 仅许 main.cpp；任何内部头 #include " 禁止
+  不得有 .h/.hpp/.hh、.cpp 仅许单头库实现单元（入口 main.cppm 是模块实现单元）；
+  内部头 #include " 禁止（外部 SDK 头如 Aftermath GFSDK_*.h 解析不到仓库内 → 不报）
 - GMF STL 白名单：GMF #include <STL 头> 只许 ranges/filesystem/chrono 三例外，
   其余走 import rlstd（AGENTS.md"优先使用 rlstd"）
 - 禁用旧式 Vulkan API（文本，剥注释）：经典 descriptor pool / pipeline object /
