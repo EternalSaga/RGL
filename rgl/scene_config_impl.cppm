@@ -69,10 +69,18 @@ SceneConfig defaultSceneConfig() {
 		{"model_pbr_ibl", "generated_shaders/model.mesh.spv", "generated_shaders/model_pbr_ibl.frag.spv"},
 		{"model_vegetation", "generated_shaders/model.mesh.spv", "generated_shaders/model_vegetation.frag.spv"},
 		{"model_light", "generated_shaders/model.mesh.spv", "generated_shaders/model_light.frag.spv"},
+		{"deferred_geometry", "generated_shaders/model.mesh.spv", "generated_shaders/deferred_geometry.frag.spv"},
+		{"deferred_geometry_vegetation", "generated_shaders/model.mesh.spv",
+			"generated_shaders/deferred_geometry_vegetation.frag.spv"},
+		{"deferred_geometry_light", "generated_shaders/model.mesh.spv",
+			"generated_shaders/deferred_geometry_light.frag.spv"},
 		{"skybox", "generated_shaders/skybox.mesh.spv", "generated_shaders/skybox.frag.spv"},
 	};
 	cfg.styleMap = {{"unlit", "model"}, {"pbr", "model_pbr"},
 		{"vegetation", "model_vegetation"}, {"light", "model_light"}};
+	cfg.materialRules = {{"Emissive", "light"}, {"Foliage", "vegetation"}};
+	cfg.deferredStyleMap = {{"vegetation", "deferred_geometry_vegetation"},
+		{"light", "deferred_geometry_light"}};
 	cfg.spin = true;
 	return cfg;
 }
@@ -247,6 +255,35 @@ void parseStyles(sol::table root, SceneConfig& cfg) {
 		cfg.styleMap[key.as<std::string>()] = value.as<std::string>();
 }
 
+/** material_styles 解析（Phase 8 批次 F，材质名连连看：数组 { pattern=..., style=... }，
+ * 有序首个命中；非空覆盖默认）。 */
+void parseMaterialStyles(sol::table root, SceneConfig& cfg) {
+	sol::table rules = root["material_styles"];
+	if (!(rules.valid() && rules.is<sol::table>()))
+		return;
+	cfg.materialRules.clear();
+	for (int i = 1; i <= static_cast<int>(rules.size()); ++i) {
+		sol::table item = rules[i];
+		if (!(item.valid() && item.is<sol::table>()))
+			continue;
+		sol::optional<std::string> pattern = item["pattern"];
+		sol::optional<std::string> style = item["style"];
+		if (pattern && style)
+			cfg.materialRules.emplace_back(*pattern, *style);
+	}
+}
+
+/** deferred_styles 解析（Phase 8 批次 F，风格名→deferred 规格名；非空覆盖默认。
+ * 未列出的风格在 deferred 下回落 deferred_geometry 本体）。 */
+void parseDeferredStyles(sol::table root, SceneConfig& cfg) {
+	sol::table styles = root["deferred_styles"];
+	if (!(styles.valid() && styles.is<sol::table>()))
+		return;
+	cfg.deferredStyleMap.clear();
+	for (auto [key, value] : styles)
+		cfg.deferredStyleMap[key.as<std::string>()] = value.as<std::string>();
+}
+
 }  // namespace
 
 /** loadSceneConfig 定义（接口注释见 scene_config.cppm）：沙箱 dofile + 段调度（entities/pipelines/lights/environment/styles 各 parse* helper，Phase ②b 拆债）；缺文件回落默认。 */
@@ -296,6 +333,8 @@ void parseStyles(sol::table root, SceneConfig& cfg) {
 		if (auto r = parseEnvironment(root, cfg); !r)
 			return std::unexpected(r.error());
 		parseStyles(root, cfg);
+		parseMaterialStyles(root, cfg);
+		parseDeferredStyles(root, cfg);
 
 		return cfg;
 	} catch (const std::exception& e) {

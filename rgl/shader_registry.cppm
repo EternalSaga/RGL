@@ -232,6 +232,18 @@ export class ShaderRegistry {
 				"generated_shaders/deferred_geometry.frag.spv"};
 			return &defaultDeferredGeom;
 		}
+		if (std::strcmp(name, "deferred_geometry_vegetation") == 0) {
+			static const RGL::PipelineSpec defaultDeferredGeomVeg{
+				"deferred_geometry_vegetation", "generated_shaders/model.mesh.spv",
+				"generated_shaders/deferred_geometry_vegetation.frag.spv"};
+			return &defaultDeferredGeomVeg;
+		}
+		if (std::strcmp(name, "deferred_geometry_light") == 0) {
+			static const RGL::PipelineSpec defaultDeferredGeomLight{
+				"deferred_geometry_light", "generated_shaders/model.mesh.spv",
+				"generated_shaders/deferred_geometry_light.frag.spv"};
+			return &defaultDeferredGeomLight;
+		}
 		if (std::strcmp(name, "light") == 0) {
 			static const RGL::PipelineSpec defaultLight{
 				"light", "generated_shaders/light.mesh.spv", "generated_shaders/light.frag.spv"};

@@ -69,6 +69,10 @@ export struct SceneConfig {
 	std::vector<SceneEntityDesc> entities; // Phase 6 批次 5：entity 列表（非空 = 权威场景构成）
 	std::vector<PipelineSpec> pipelines;   // pipeline 规格列表
 	std::map<std::string, std::string> styleMap;  // Phase 4 批次 3：风格名→管线规格名
+	// Phase 8 批次 F：材质名连连看规则表（有序，首个命中生效）——材质名含 pattern → 风格键。
+	// forward 经 styleMap、deferred 经 deferredStyleMap 落到各自规格名；空 = 全走 pbr。
+	std::vector<std::pair<std::string, std::string>> materialRules;
+	std::map<std::string, std::string> deferredStyleMap;  // 风格名→deferred 规格名（缺省风格 = deferred_geometry）
 	bool spin = true;                      // 场景整体时间旋转（便于肉眼判断渲染对错）
 	bool showCube = true;                  // 是否渲染硬编码 cube（Phase 1 遗留；模型在场时通常关掉）
 	Light light;                           // Phase 5 批次 2：定向光（scene.lua light 段，可选回落默认）

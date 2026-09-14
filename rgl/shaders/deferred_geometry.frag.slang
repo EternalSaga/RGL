@@ -10,6 +10,15 @@ import normalmap;  // Phase 8 方案 A：normal 贴图标准 TBN + DX flip-G 解
 // 法线 oct 编码（Phase 8 ③a normal 贴图，DX flip-G + Z 重建）；metal/rough = 材质 factor
 // × ORM 贴图 B/G 通道（Phase 8 ③a））——故 D1 判据 = deferred 与 forward 单灯着色等价。
 //
+// Phase 8 批次 F：材质类别宏 → emissive.a 通道（light pass 按类分支复刻 forward 专属
+// shader 视觉：1=植被 wrap+透射、2=光源本色；light.frag 头注）。本文件 = 标准 PBR 本体
+//（class 0）；类别变体 = deferred_geometry_vegetation/light.frag.slang 先 #define 再
+// #include 本文件（常量折叠进 SPV，实测包装器编译成立）。路由 = scene.lua
+// material_styles（材质名→风格）+ deferred_styles（风格→本组变体规格名），零 heap 契约改动。
+#ifndef MATERIAL_CLASS
+#define MATERIAL_CLASS 0.0
+#endif
+
 // MRT 布局（= deferred 图 pass.colors 顺序 = color index，格式见 render_graph deferred desc）：
 //   SV_Target0 albedo      RGBA8_SRGB         (linear 值写入，硬件 sRGB 编码)
 //   SV_Target1 normal      RG16_SNORM         (octahedral 编码，范围 [-1,1])
@@ -72,5 +81,7 @@ void main(
     outWorldPos = float4(P, 0.0);
     outMetalRough = float4(metallic, roughness, 0.0, 1.0);
     // Phase 8 剩余批次 B：emissive HDR 写第 5 G-buffer（binding 8 已烘焙进模型条目，此前空转）
-    outEmissive = float4(od.emissive.rgb * emissiveTexture.Sample(baseColorSampler, input.uv).rgb, 0.0);
+    // Phase 8 批次 F：.a = 材质类别（MATERIAL_CLASS 宏，clear 值 0 = 标准 PBR；light.frag 消费）
+    outEmissive = float4(od.emissive.rgb * emissiveTexture.Sample(baseColorSampler, input.uv).rgb,
+        MATERIAL_CLASS);
 }

@@ -428,30 +428,32 @@ int main() {
 				// 零成本；Phase 8 ③a 扩 normal/orm 槽、③ 扩 emissive 槽）。批次 3：风格派生（loader unlit
 				// 字段即数据源，与 MaterialAsset 一致性由 registerScene 金丝雀保证）→ scene.lua
 				// styles 表映射到管线规格名（缺失 = 启动报错，同现有 config 错误路径）。
-				// Phase 8：forward 路风格派生——植被（MASK+doubleSided 叶片卡）/ 光源（emissive
-				// 非零）走各自专属 frag。判据纯数据驱动（loader 输出字段，零名字匹配）。deferred
-				// 无视 styleMap（下方恒 deferred_geometry），style 仅求其在 styleMap 中存在，
-				// 植被/光源在 deferred 下不派生新风格 → 逐位 D1 不变。
+				// Phase 8 批次 F：材质风格 = scene.lua material_styles 连连看（材质名含 pattern →
+				// 风格键，有序首个命中；默认规则 {Emissive→light, Foliage→vegetation}）。forward 经
+				// styleMap、deferred 经 deferredStyleMap 落各自规格名（植被/光源两路专属视觉对齐；
+				// deferred 变体把类别写进 G-buffer emissive.a，light.frag 分支复刻 forward 视觉）。
 				const auto& prim = model.primitives[i];
 				std::string style = prim.unlit ? "unlit" : "pbr";
-				if (!deferredMode && !prim.unlit) {
-					const bool isLight = prim.emissive.r > 0.0f || prim.emissive.g > 0.0f
-						|| prim.emissive.b > 0.0f;
-					// 植被判据：MASK+DS 叶卡 或 材质名含 Foliage（bistro 植被统一 Foliage_ 前缀，
-					// 覆盖 OPAQUE 花床 Foliage_Paris_Flowers——否则其走通用 PBR 出潮湿 IBL 反射；
-					// Plantpots 花盆不含 Foliage，正确留 PBR）。材质名 = glTF 官方元数据，非 hack。
-					const bool isLeaf = (prim.alphaModeMask && prim.doubleSided)
-						|| prim.materialName.find("Foliage") != std::string::npos;
-					if (isLight)
-						style = "light";
-					else if (isLeaf)
-						style = "vegetation";
+				if (!prim.unlit) {
+					for (const auto& [pattern, styleKey] : sceneConfig.materialRules)
+						if (prim.materialName.find(pattern) != std::string::npos) {
+							style = styleKey;
+							break;
+						}
 				}
-				const auto styleIt = sceneConfig.styleMap.find(style);
-				if (styleIt == sceneConfig.styleMap.end())
-					throw std::runtime_error(fmt::format("style not in scene.lua styles: {}", style));
+				std::string specName;
+				if (deferredMode) {
+					const auto defIt = sceneConfig.deferredStyleMap.find(style);
+					specName = defIt != sceneConfig.deferredStyleMap.end() ? defIt->second
+																		   : std::string("deferred_geometry");
+				} else {
+					const auto styleIt = sceneConfig.styleMap.find(style);
+					if (styleIt == sceneConfig.styleMap.end())
+						throw std::runtime_error(fmt::format("style not in scene.lua styles: {}", style));
+					specName = styleIt->second;
+				}
 				const uint32_t entryIdx = shaderRegistry.addModelEntry(
-					deferredMode ? std::string("deferred_geometry") : styleIt->second,
+					specName,
 					assets.get(id).heapSlot,  // = 模型拼接顶点 slot（同模型全 primitive 相同）
 					assets.getTexture(texIds.base[i]).heapSlot,
 					assets.getTexture(texIds.normal[i]).heapSlot,

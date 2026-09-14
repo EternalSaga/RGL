@@ -356,3 +356,40 @@ assetId)`；deferred **无视 styleMap 恒走 `deferred_geometry`**（main.cpp:4
 
 **方法论**：植被参数两轮 strength 调整零响应，手算符号发现 `dot(V, 透光方向)<0`——**调参无效先验证驱动项
 是否为 0，别盲调幅度**；"效果不出"一次点积验算比反复迭代便宜一个数量级（详见调试历史续 6）。
+
+## 11. 批次 F：deferred 材质类别合并（薄方案，完成 2026-09-14）
+
+**动机**：批次 E 植被/光源是 forward-only——deferred 路植被走通用 PBR（envSpec 掠射"潮湿"、
+无 wrap/透射），路灯仍是 strength=4 绿霓虹（×1/4 还原只在 forward model_light）。自 E 起 D1 对拍
+在设计上已分叉，用户拍板做**完整 deferred 合并**（两路视觉一致），并否决了 ObjectDraw 加字段
+（stride 48→64）的重方案——"有 shader 反射 + 资产自给自足，材质类应该很薄，靠 map/lua 就够"。
+
+**薄方案（定案）**：per-pipeline 类别常量 + lua 连连看路由，**零 heap 契约改动**（DrawArgs 冻结纯
+索引级、ObjectDraw stride 48 不动、cull/DGC 全不碰）：
+- `deferred_geometry.frag` = 标准 PBR 本体（class 0，`#ifndef MATERIAL_CLASS` 缺省）；两个类别变体
+  = 包装器文件先 `#define MATERIAL_CLASS 1.0/2.0` 再 `#include` 本体——slang 文本 include + 常量折叠，
+  SPV 反汇编实测三哈希不同、emissive.a 分别 = float_0/1/2。
+- 类别经**第 5 G-buffer（emissive）的 alpha 通道**传递（此前恒 0.0 留白；clear 值 0 = PBR，天空像素
+  提前 return 不消费）。
+- `light.frag` 按 `emissiveTex.a` 分支：veg = metallic 0 + envSpec×0.2 + 逐灯 `shadeLightVeg`
+  （half-Lambert wrap 保底 0.3 + 背光透射，公式独立副本对齐 model_vegetation）；lamp = metallic 0 +
+  emission×0.25（对齐 model_light 暗绿玻璃）。class 0 恒不取分支 → 标准像素算式逐位不动。
+- 路由 = scene.lua `material_styles`（材质名子串→风格键，**有序首个命中**：Emissive→light /
+  Foliage→vegetation，bistro 132 材质实测全覆盖）+ `deferred_styles`（风格→变体规格名，未列风格
+  回落 deferred_geometry 本体）。main.cpp 原硬编码判据（MASK&&DS||Foliage 名 / emissive>0）**废除**，
+  连连看纯配置数据——换资产改 lua 即可，零重编译。
+- 接线：findSpec 回落词表 +2、scene_config 默认值（materialRules/deferredStyleMap 非空覆盖）、
+  CMake 2 条 compile_slang（EXTRA_DEPS 含本体——改本体必触发变体重编译）。
+
+**验证**：
+- 双路线 headless 冒烟零错误；同路线背靠背 run = **0 diff**（确定性）。
+- D1 总览机位 forward vs deferred：严格 diff 149,601 px 但 **149,601 @1LSB + 132 @2LSB + 18 px
+  @81–217（全在树/屋脊剪影边缘，8–32 区间 = 0）**。1LSB 底噪 = deferred G-buffer 8-bit 量化（albedo
+  RGBA8_SRGB / normal RG16_SNORM）固有——历史基线对同谱系（batch1 23k → batch4a 186k strict，
+  "29px" 系阈值口径非严格 diff）；植被/灯区域**无大块分叉**（若仍走通用 PBR 必出 30–100 LSB 区域差）
+  = 类别合并生效。
+- 视觉：树/花床/路灯裁剪两路一致（暗绿玻璃、无潮湿反光、无死黑面）。
+
+**边界**：mipRange=0（无环境）的 ambient 回落分支不含 veg 专属 IBL 修正（当前配置恒有 env，不触发）；
+forward model_vegetation 的 n==0 头灯回落与 deferred 仅循环 GpuLight 的差异属两路既有行为（sun 恒在
+数组内），不强行对齐。

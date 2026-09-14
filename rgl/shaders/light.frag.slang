@@ -86,6 +86,40 @@ float3 shadeLight(float3 N, float3 V, float3 albedo, float metallic, float rough
     return atten * radiance * NdotL * (diffuse + specular);
 }
 
+// Phase 8 批次 F：植被单灯贡献（对齐 forward model_vegetation.shadeDirect + shadeTransmit，
+// 独立副本不与其源码耦合）：漫反射 = half-Lambert wrap（保底 0.3 = 冠内弹射），叠加背光透射
+//（出射向 T=normalize(-L+0.2N)、backLit=pow(dot(V,T),3)、thickness 用 albedo 亮度近似保底 0.45）；
+// specular 保持标准 saturate（高光不该绕）。metallic 恒 0（调用方已置）。
+float3 shadeLightVeg(float3 N, float3 V, float3 albedo, float roughness,
+                     float3 L, float3 radiance, float atten)
+{
+    float3 F0 = float3(0.04);
+    float NdotL = saturate(dot(N, L));
+    float NdotV = max(dot(N, V), 1e-4);
+    float3 H = normalize(V + L);
+    float NdotH = saturate(dot(N, H));
+    float VdotH = saturate(dot(V, H));
+
+    float a = roughness * roughness;
+    float a2 = a * a;
+    float d = NdotH * NdotH * (a2 - 1.0) + 1.0;
+    float D = a2 / (3.14159265 * d * d + 1e-7 * a2);
+    float3 F = F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0);
+    float k = a * 0.5;
+    float G = (NdotV / (NdotV * (1.0 - k) + k)) * (NdotL / (NdotL * (1.0 - k) + k));
+    float3 specular = D * G * F / (4.0 * NdotV * NdotL + 1e-4);
+
+    float wrap = max(pow(saturate(dot(N, L) * 0.5 + 0.5), 2.0), 0.3);
+    float3 diffuseWrap = albedo * wrap / 3.14159265;
+
+    float3 T = normalize(-L + 0.20 * N);
+    float backLit = pow(saturate(dot(V, T)), 3.0);
+    float thickness = 0.45 + 0.55 * saturate(dot(albedo, float3(0.333)));
+    float3 transmit = albedo * backLit * thickness * 1.5;
+
+    return atten * radiance * (NdotL * specular + diffuseWrap + transmit);
+}
+
 [shader("fragment")]
 float4 main(LightInput input) : SV_Target0
 {
@@ -96,6 +130,15 @@ float4 main(LightInput input) : SV_Target0
     float4 mr = metalRoughTex.Sample(gbufferSampler, uv);
     float metallic = clamp(mr.r, 0.0, 1.0);
     float roughness = clamp(mr.g, 0.04, 1.0);
+    // Phase 8 批次 F：材质类别 = emissive.a 通道（deferred_geometry 类别变体写入，clear 0 = 标准
+    // PBR）。1=植被 / 2=光源 → 强制电介质（forward model_vegetation/model_light 均 metallic=0）。
+    // 类别 0 恒不取分支 → 标准像素算式逐位不动（D1 基线保持）。
+    float4 emis = emissiveTex.Sample(gbufferSampler, uv);
+    const float materialClass = emis.a;
+    const bool isVeg = materialClass > 0.5 && materialClass < 1.5;
+    const bool isLamp = materialClass > 1.5;
+    if (isVeg || isLamp)
+        metallic = 0.0;
 
     SceneLight shared = readSceneLight();     // 共享项：eyePos@12、ambient@36
     float3 V = normalize(shared.eyePos - P);
@@ -134,8 +177,9 @@ float4 main(LightInput input) : SV_Target0
         float3 R = reflect(-V, N);
         float3 irradiance = irradianceSH(N);
         float3 envSpec    = envMapL.SampleLevel(envSamplerL, R, roughness * env.mipRange).rgb;
+        // 植被 env 镜面 ×0.2（同 forward model_vegetation：掠射菲涅尔→1 的天空镜像 = 潮湿感）
         color = (irradiance * albedo * (1.0 - metallic)
-            + envSpec * envBrdfFactor(NdotV, roughness, F0)) * env.intensity;
+            + envSpec * envBrdfFactor(NdotV, roughness, F0) * (isVeg ? 0.2 : 1.0)) * env.intensity;
     }
     else
     {
@@ -161,10 +205,14 @@ float4 main(LightInput input) : SV_Target0
         }
         if (atten <= 0.0)
             continue;
-        color += shadeLight(N, V, albedo, metallic, roughness, L, gl.color.rgb, atten);
+        if (isVeg)
+            color += shadeLightVeg(N, V, albedo, roughness, L, gl.color.rgb, atten);
+        else
+            color += shadeLight(N, V, albedo, metallic, roughness, L, gl.color.rgb, atten);
     }
     // Phase 8 剩余批次 B：自发光相加（deferred_geometry SV_Target4 写入的第 5 G-buffer 通道，
     // 与 forward model_pbr_ibl 的 od.emissive.rgb × emissiveTexture 相加项同源；天空分支已提前返回）
-    color += emissiveTex.Sample(gbufferSampler, uv).rgb;
+    // Phase 8 批次 F：光源类 ×1/4 = 还原 strength 预乘（同 forward model_light，暗绿玻璃定案）
+    color += emis.rgb * (isLamp ? 0.25 : 1.0);
     return float4(color, 1.0);
 }

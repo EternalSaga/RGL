@@ -97,6 +97,16 @@ return {
             frag = "generated_shaders/model_light.frag.spv",
         },
         {
+            name = "deferred_geometry_vegetation",
+            mesh = "generated_shaders/model.mesh.spv",  -- Phase 8 批次 F：植被 deferred 几何变体（class 1 → emissive.a）
+            frag = "generated_shaders/deferred_geometry_vegetation.frag.spv",
+        },
+        {
+            name = "deferred_geometry_light",
+            mesh = "generated_shaders/model.mesh.spv",  -- Phase 8 批次 F：光源 deferred 几何变体（class 2 → emissive.a）
+            frag = "generated_shaders/deferred_geometry_light.frag.spv",
+        },
+        {
             name = "skybox",
             mesh = "generated_shaders/skybox.mesh.spv",  -- Phase 5.5 批次 4：全屏大三角采 env cubemap
             frag = "generated_shaders/skybox.frag.spv",
@@ -109,8 +119,22 @@ return {
     styles = {
         unlit = "model",
         pbr = "model_pbr_ibl",
-        vegetation = "model_vegetation",  -- Phase 8：植被（MASK+doubleSided）→ 背光透射 SSS，forward-only
-        light = "model_light",            -- Phase 8：光源（emissive 非零）→ 本色（去金属镜面），forward-only
+        vegetation = "model_vegetation",  -- Phase 8：植被 → 背光透射 SSS
+        light = "model_light",            -- Phase 8：光源 → 本色（去金属镜面）
+    },
+
+    -- Phase 8 批次 F：材质名连连看规则表（有序，首个命中生效；材质名含 pattern → 风格键）。
+    -- 材质名 = glTF 官方元数据（loader 透出 materialName）；bistro 全 132 材质：Foliage_ 前缀
+    -- = 植被（含 OPAQUE 花床/枝干），Emissive 含串 = 10 光源，其余落 pbr。
+    material_styles = {
+        { pattern = "Emissive", style = "light" },
+        { pattern = "Foliage", style = "vegetation" },
+    },
+    -- Phase 8 批次 F：风格→deferred 路线规格名（未列风格回落 deferred_geometry 本体）；
+    -- 变体把类别写进 G-buffer emissive.a，light pass 分支复刻 forward 专属视觉
+    deferred_styles = {
+        vegetation = "deferred_geometry_vegetation",
+        light = "deferred_geometry_light",
     },
 
     -- Phase 5.5 环境 cubemap（缺段 = 不启用）。faces 按 Vulkan 层序 0-5 = (+X,−X,+Y,−Y,+Z,−Z)

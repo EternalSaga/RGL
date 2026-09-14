@@ -276,6 +276,16 @@ compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.mesh.slang MODEL_MESH_SP
   compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/deferred_geometry.frag.slang DEFERRED_GEOM_FRAG_SPV
       ${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.slang ${CMAKE_CURRENT_SOURCE_DIR}/shaders/material.slang
       ${CMAKE_CURRENT_SOURCE_DIR}/shaders/scene.slang ${CMAKE_CURRENT_SOURCE_DIR}/shaders/normalmap.slang)
+  # Phase 8 批次 F：deferred 材质类别变体（#include 本体 + MATERIAL_CLASS 宏，class 进 emissive.a；
+  # DEPS 含本体——改本体必触发两变体重编译）
+  compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/deferred_geometry_vegetation.frag.slang DEFERRED_GEOM_VEG_FRAG_SPV
+      ${CMAKE_CURRENT_SOURCE_DIR}/shaders/deferred_geometry.frag.slang
+      ${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.slang ${CMAKE_CURRENT_SOURCE_DIR}/shaders/material.slang
+      ${CMAKE_CURRENT_SOURCE_DIR}/shaders/scene.slang ${CMAKE_CURRENT_SOURCE_DIR}/shaders/normalmap.slang)
+  compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/deferred_geometry_light.frag.slang DEFERRED_GEOM_LIGHT_FRAG_SPV
+      ${CMAKE_CURRENT_SOURCE_DIR}/shaders/deferred_geometry.frag.slang
+      ${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.slang ${CMAKE_CURRENT_SOURCE_DIR}/shaders/material.slang
+      ${CMAKE_CURRENT_SOURCE_DIR}/shaders/scene.slang ${CMAKE_CURRENT_SOURCE_DIR}/shaders/normalmap.slang)
   # Phase 7 D1：light pass（全屏大三角 mesh + 采样 G-buffer 的 deferred 光照 frag）
   compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/light.mesh.slang LIGHT_MESH_SPV)
    compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/light.frag.slang LIGHT_FRAG_SPV
@@ -304,7 +314,7 @@ compile_slang(${CMAKE_CURRENT_SOURCE_DIR}/shaders/model.mesh.slang MODEL_MESH_SP
 # 曾用 -O0（-O2 下编译吃内存，24 并发时打爆 swap）；2026-09-02 用户调整内存/显存
 # 分配至 32GB 后回归目标级 -O2（启动路径代码质量优先，编译峰值内存已非瓶颈）。
 
-add_executable(rgl main.cpp vam_impl.cpp tinygltf_impl.cpp ${MESH_SPV} ${FRAG_SPV} ${MODEL_MESH_SPV} ${MODEL_FRAG_SPV} ${MODEL_PBR_FRAG_SPV} ${MODEL_PHONG_FRAG_SPV} ${MODEL_PBR_IBL_FRAG_SPV} ${MODEL_VEGETATION_FRAG_SPV} ${MODEL_LIGHT_FRAG_SPV} ${SKYBOX_MESH_SPV} ${SKYBOX_FRAG_SPV} ${DEFERRED_GEOM_FRAG_SPV} ${LIGHT_MESH_SPV} ${LIGHT_FRAG_SPV} ${TONEMAP_FRAG_SPV} ${CULL_SPV} ${STREAM_FANOUT_SPV} ${MIP_GEN_SPV} ${ENV_PREFILTER_SPV})
+add_executable(rgl main.cpp vam_impl.cpp tinygltf_impl.cpp ${MESH_SPV} ${FRAG_SPV} ${MODEL_MESH_SPV} ${MODEL_FRAG_SPV} ${MODEL_PBR_FRAG_SPV} ${MODEL_PHONG_FRAG_SPV} ${MODEL_PBR_IBL_FRAG_SPV} ${MODEL_VEGETATION_FRAG_SPV} ${MODEL_LIGHT_FRAG_SPV} ${SKYBOX_MESH_SPV} ${SKYBOX_FRAG_SPV} ${DEFERRED_GEOM_FRAG_SPV} ${DEFERRED_GEOM_VEG_FRAG_SPV} ${DEFERRED_GEOM_LIGHT_FRAG_SPV} ${LIGHT_MESH_SPV} ${LIGHT_FRAG_SPV} ${TONEMAP_FRAG_SPV} ${CULL_SPV} ${STREAM_FANOUT_SPV} ${MIP_GEN_SPV} ${ENV_PREFILTER_SPV})
 
 # ─── Runtime config copy (configs/ → build dir) ──────────────────────────────
 # 程序运行时按相对路径读取 configs/*.json，build 目录必须完整。
