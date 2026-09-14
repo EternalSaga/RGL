@@ -177,9 +177,9 @@ float4 main(LightInput input) : SV_Target0
         float3 R = reflect(-V, N);
         float3 irradiance = irradianceSH(N);
         float3 envSpec    = envMapL.SampleLevel(envSamplerL, R, roughness * env.mipRange).rgb;
-        // 植被 env 镜面 ×0.2（同 forward model_vegetation：掠射菲涅尔→1 的天空镜像 = 潮湿感）
+        // 植被 env 镜面 = 0（同 forward model_vegetation：掠射天空镜像 = 油亮湿感，探针定案）
         color = (irradiance * albedo * (1.0 - metallic)
-            + envSpec * envBrdfFactor(NdotV, roughness, F0) * (isVeg ? 0.2 : 1.0)) * env.intensity;
+            + envSpec * envBrdfFactor(NdotV, roughness, F0) * (isVeg ? 0.0 : 1.0)) * env.intensity;
     }
     else
     {

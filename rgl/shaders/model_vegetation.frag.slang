@@ -99,9 +99,9 @@ float4 main(ModelVertexOutput input, bool frontFace : SV_IsFrontFace) : SV_Targe
     float3 irradiance = irradianceSH(N);
     float3 envSpec = envMap.SampleLevel(envSampler, R, roughness * env.mipRange).rgb;
     float3 color = (irradiance * albedo * (1.0 - metallic)
-        + envSpec * envBrdfFactor(NdotV, roughness, F0) * 0.2) * env.intensity;
-    // 植被 env 镜面 ×0.2：F0=0.04 掠射 Fresnel→1 会出完整天空镜像 = "潮湿 IBL 反射"（花床
-    // 掠射角实测水光）；真实叶面粗糙蜡质，specular 本就弱，diffuse + 透射才是植被主体。
+        + envSpec * envBrdfFactor(NdotV, roughness, F0) * 0.0) * env.intensity;
+    // 植被 env 镜面 = 0：F0=0.04 掠射 Fresnel→1 出完整天空镜像（×0.2 在绿篱垂直面掠射机位
+    // 仍出"油亮"湿感，探针置 0 后 matte 自然——薄叶蜡质层无可分辨环境像，diffuse+透射即主体）。
 
     // 直接光多灯循环 + 背光透射（透射项 = 叶片被光照亮背面时的透光）
     uint n = readLightCount();

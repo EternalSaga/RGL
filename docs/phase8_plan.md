@@ -342,8 +342,9 @@ assetId)`；deferred **无视 styleMap 恒走 `deferred_geometry`**（main.cpp:4
   压得几乎不透光），strength 1.5；**`shadeDirect` 漫反射 = half-Lambert wrap**（`max(pow(dot(N,L)·0.5+0.5, 2),
   0.3)`）——标准 saturate(NdotL) 下单层叶片卡背阴面直接光恰为 0 = 死黑面（真实树冠靠冠内多层散射补亮，单层
   卡无此信息），wrap 把阳光绕到背光侧廉价模拟冠内散射（HF2/UE vegetation 同款），0.3 保底 = 冠内环境弹射；
-  **`envSpec ×0.2`**——植被掠射角菲涅尔→1 把天空拉成镜面 = 用户实拍的"潮湿感"（红色探针实证花床本就走
-  植被 shader，潮湿即 envSpec 本身；树叶物理上无锐利环境像）。
+  **`envSpec = 0`**——植被掠射角菲涅尔→1 把天空拉成镜面 = 用户实拍的"潮湿感"（红色探针实证花床本就走
+  植被 shader，潮湿即 envSpec 本身）。先降 ×0.2，后在绿篱垂直面掠射机位复现油亮 → 探针置 0 定案
+  （薄叶蜡质层无可分辨环境像，diffuse+透射即主体；详见调试历史续 7）。
 - **`model_light.frag`（光源本色）**：**数据根因 = 路灯 `baseColor` 纯黑、绿 100% 来自 `emissiveTexture`
   绿玻璃纹理**，`emissiveFactor(0.5)×strength(4.0)=2.0` 乘绿纹理在 emission 主导下 = 纯绿霓虹——金属球版
   是黑金属底把绿压暗才藏住。修复 = emission × `(1/strength)` 还原 glTF 原值 + 保留 F0=0.04 玻璃反射 →
@@ -371,9 +372,9 @@ assetId)`；deferred **无视 styleMap 恒走 `deferred_geometry`**（main.cpp:4
   SPV 反汇编实测三哈希不同、emissive.a 分别 = float_0/1/2。
 - 类别经**第 5 G-buffer（emissive）的 alpha 通道**传递（此前恒 0.0 留白；clear 值 0 = PBR，天空像素
   提前 return 不消费）。
-- `light.frag` 按 `emissiveTex.a` 分支：veg = metallic 0 + envSpec×0.2 + 逐灯 `shadeLightVeg`
-  （half-Lambert wrap 保底 0.3 + 背光透射，公式独立副本对齐 model_vegetation）；lamp = metallic 0 +
-  emission×0.25（对齐 model_light 暗绿玻璃）。class 0 恒不取分支 → 标准像素算式逐位不动。
+- `light.frag` 按 `emissiveTex.a` 分支：veg = metallic 0 + envSpec=0（同 forward 探针定案）+ 逐灯
+  `shadeLightVeg`（half-Lambert wrap 保底 0.3 + 背光透射，公式独立副本对齐 model_vegetation）；
+  lamp = metallic 0 + emission×0.25（对齐 model_light 暗绿玻璃）。class 0 恒不取分支 → 标准像素算式逐位不动。
 - 路由 = scene.lua `material_styles`（材质名子串→风格键，**有序首个命中**：Emissive→light /
   Foliage→vegetation，bistro 132 材质实测全覆盖）+ `deferred_styles`（风格→变体规格名，未列风格
   回落 deferred_geometry 本体）。main.cpp 原硬编码判据（MASK&&DS||Foliage 名 / emissive>0）**废除**，
