@@ -308,13 +308,13 @@ std::expected<Resources::RtAttachment*, Error> Resources::ensureRtAttachment(
  * 调用时序契约（须在几何/纹理/env 槽之后）与槽语义见接口注释。实现：名字/格式取自
  * render_graph kGBufferAttachments 契约表（单一真相源，与 deferredRenderGraphDesc
  * 共享，无漂移可能，见体内注释）；extent = 当前 swapchain；逐附件 ensureRtAttachment +
- * rtHeapSlot（任一失败立即返回）；成功打日志 4 槽号（albedo/normal/position/metalrough）。
+ * rtHeapSlot（任一失败立即返回）；成功打日志 5 槽号（albedo/normal/position/metalrough/emissive）。
  */
-std::expected<std::array<uint32_t, 4>, Error> Resources::ensureDeferredGBufferSlots() {
+std::expected<std::array<uint32_t, 5>, Error> Resources::ensureDeferredGBufferSlots() {
 	// 名字/格式 = render_graph kGBufferAttachments 契约表（单一真相源，与
 	// deferredRenderGraphDesc 共享（llm_debug 重渲器已退役），无漂移可能）
 	const vk::Extent2D extent = vkSwapchain.getExtent();
-	std::array<uint32_t, 4> slots{};
+	std::array<uint32_t, 5> slots{};
 	for (uint32_t i = 0; i < kGBufferAttachments.size(); ++i) {
 		const std::string name{kGBufferAttachments[i].name};
 		const vk::Format format = resolveRgFormat(
@@ -329,8 +329,8 @@ std::expected<std::array<uint32_t, 4>, Error> Resources::ensureDeferredGBufferSl
 		slots[i] = *slot;
 	}
 	if (auto* logger = RLLogger::getInstance())
-		logger->info("deferred G-buffer: {}x{} slots {}/{}/{}/{} (albedo/normal/position/metalrough)",
-			extent.width, extent.height, slots[0], slots[1], slots[2], slots[3]);
+		logger->info("deferred G-buffer: {}x{} slots {}/{}/{}/{}/{} (albedo/normal/position/metalrough/emissive)",
+			extent.width, extent.height, slots[0], slots[1], slots[2], slots[3], slots[4]);
 	return slots;
 }
 

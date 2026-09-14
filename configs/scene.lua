@@ -87,6 +87,16 @@ return {
             frag = "generated_shaders/model_pbr_ibl.frag.spv",
         },
         {
+            name = "model_vegetation",
+            mesh = "generated_shaders/model.mesh.spv",  -- Phase 8 植被：PBR + 背光透射 SSS，同 mesh，forward-only
+            frag = "generated_shaders/model_vegetation.frag.spv",
+        },
+        {
+            name = "model_light",
+            mesh = "generated_shaders/model.mesh.spv",  -- Phase 8 光源本色：emission 主导 + 去金属镜面，同 mesh，forward-only
+            frag = "generated_shaders/model_light.frag.spv",
+        },
+        {
             name = "skybox",
             mesh = "generated_shaders/skybox.mesh.spv",  -- Phase 5.5 批次 4：全屏大三角采 env cubemap
             frag = "generated_shaders/skybox.frag.spv",
@@ -99,6 +109,8 @@ return {
     styles = {
         unlit = "model",
         pbr = "model_pbr_ibl",
+        vegetation = "model_vegetation",  -- Phase 8：植被（MASK+doubleSided）→ 背光透射 SSS，forward-only
+        light = "model_light",            -- Phase 8：光源（emissive 非零）→ 本色（去金属镜面），forward-only
     },
 
     -- Phase 5.5 环境 cubemap（缺段 = 不启用）。faces 按 Vulkan 层序 0-5 = (+X,−X,+Y,−Y,+Z,−Z)

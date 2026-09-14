@@ -2,7 +2,7 @@ import scene;    // binding 3：sceneData + SceneLight/readSceneLight（共享 e
 import lights;   // 多灯：readLightCount/readGpuLight（lights 内部亦 import scene）
 import sky;      // skybox 射线重建：skyClipToWorld（读 @64 invViewProj）——skybox 背景合成
 
-// Phase 7 D1：deferred light pass —— 全屏逐灯光照，读 G-buffer 4 RT 重建 albedo/法线/
+// Phase 7 D1：deferred light pass —— 全屏逐灯光照，读 G-buffer 4+1 RT 重建 albedo/法线/
 // 世界位置/metal-rough，套用与 model_pbr.frag **逐式相同**的简化 PBR（GGX Cook-Torrance）。
 // Phase 7 D3：升级为多灯循环——灯数据源 = scene data 尾区 GpuLight[]（lights.slang）；
 // 共享 eyePos(@12)/ambient(@36) 仍来自 scene.slang readSceneLight（与 forward 同源）。
@@ -17,8 +17,9 @@ import sky;      // skybox 射线重建：skyClipToWorld（读 @64 invViewProj�
 //
 // 绑定：3=sceneData（scene.slang import）；4=albedo(RGBA8_SRGB)；5=normal(RG16_SNORM oct)；
 //   6=worldPos(RGBA32_SFLOAT)；7=metalRough(RGBA8_UNORM .r=metal .g=rough)；8=sampler（共享）；
-//   **9=envMap(TextureCube) / 10=envSampler(sky sampler)**（批次 2 refine 新增——本 pass 的
-//   4/5 已被 G-buffer 占用，env 走 9/10，addLightEntry extra 烘焙）。4-10 经
+//   9=envMap(TextureCube) / 10=envSampler(sky sampler)（批次 2 refine 新增）；
+//   **11=emissive(RGBA16_SFLOAT)**（Phase 8 剩余批次 B：G-buffer 第 5 通道——排在尾部是因
+//   4-10 已被旧布局占用，勿按 kGBufferAttachments 序推断 binding）。4-11 经
 //   PipelineBindings.extra 映射到 G-buffer RT / env 堆槽。
 // 注：不 import env.slang（其 envMap/envSampler 声明在 4/5，与本 pass G-buffer 冲突）——
 //   env 绑定本地声明在 9/10，env 参数（@48/@52）从 sceneData 直读（env.slang 同款布局）。
@@ -30,6 +31,7 @@ import sky;      // skybox 射线重建：skyClipToWorld（读 @64 invViewProj�
 [[vk::binding(8, 0)]] SamplerState gbufferSampler;
 [[vk::binding(9, 0)]] TextureCube<float4> envMapL;
 [[vk::binding(10, 0)]] SamplerState envSamplerL;
+[[vk::binding(11, 0)]] Texture2D<float4> emissiveTex;
 
 // env 参数（scene data @48 intensity / @52 mipRange，env.slang readEnvParams 同款布局直读）
 struct EnvParamsL
@@ -102,16 +104,22 @@ float4 main(LightInput input) : SV_Target0
     // ② skybox 背景合成：天空像素 = G-buffer position 清 0（无几何，dot(P,P)=0）。
     // 重建世界射线（与 forward skybox.frag 同式：near/far 两点差，免 resolution）采 env。
     // uv→ndc：light.mesh 写 uv=(ndc.x*0.5+0.5, 0.5-ndc.y*0.5)（framebuffer Y 翻转）→ 反解。
+    // env 采样必须在 sky/几何分支**之前**（全 quad 活跃）：隐式 LOD 采样放在分支内时，
+    // 天空/几何混 quad 的几何 lane 提前 return = partial quad 偏导未定义 → 边界天空像素
+    // mip 漂移（2026-09-13 对拍石锤；red-probe 证实差异像素全走 sky 分支、SampleLevel(0)
+    // 全局变差证实 forward 隐式 LOD ≠ 固定 mip）。方向向量的偏导与几何无关 = 等价 forward
+    // skybox pass（其天空盒大三角覆盖全屏恒全 quad）。不乘 env.intensity——forward
+    // skybox.frag 输出裸 env radiance（intensity 是 IBL 光照标定系数不是显示增益，
+    // 本分支曾乘 intensity，②续重校准 0.2 起破坏 D1，本次一并以 forward 为准移除）。
+    float2 ndc = float2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    float4 far  = skyClipToWorld(float4(ndc, 1.0, 1.0));
+    float4 near = skyClipToWorld(float4(ndc, 0.0, 1.0));
+    float3 dir  = normalize(far.xyz / far.w - near.xyz / near.w);
+    float3 envSky = envMapL.Sample(envSamplerL, dir).rgb;
     if (dot(P, P) < 1e-10)
     {
         if (env.mipRange > 0.0)
-        {
-            float2 ndc = float2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
-            float4 far  = skyClipToWorld(float4(ndc, 1.0, 1.0));
-            float4 near = skyClipToWorld(float4(ndc, 0.0, 1.0));
-            float3 dir  = normalize(far.xyz / far.w - near.xyz / near.w);
-            return float4(envMapL.Sample(envSamplerL, dir).rgb * env.intensity, 1.0);
-        }
+            return float4(envSky, 1.0);
         return float4(0.0, 0.0, 0.0, 1.0);  // 无环境 = 黑天（旧行为：清 0 G-buffer 光照亦黑）
     }
 
@@ -155,5 +163,8 @@ float4 main(LightInput input) : SV_Target0
             continue;
         color += shadeLight(N, V, albedo, metallic, roughness, L, gl.color.rgb, atten);
     }
+    // Phase 8 剩余批次 B：自发光相加（deferred_geometry SV_Target4 写入的第 5 G-buffer 通道，
+    // 与 forward model_pbr_ibl 的 od.emissive.rgb × emissiveTexture 相加项同源；天空分支已提前返回）
+    color += emissiveTex.Sample(gbufferSampler, uv).rgb;
     return float4(color, 1.0);
 }

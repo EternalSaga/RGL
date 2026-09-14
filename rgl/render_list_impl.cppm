@@ -89,7 +89,8 @@ void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListS
 			draw.baseColor = mat.baseColor;
 			draw.roughness = mat.roughness;  // Phase 5 接线（pbr frag 消费）
 			draw.metallic = mat.metallic;
-			draw.emissive = glm::vec4(mat.emissive, 0.0f);  // Phase 8 ③：自发光（xyz=factor、w 留白）
+			// Phase 8 ③：自发光 xyz=factor；Phase 8 C1：w = MASK alphaCutoff（0 = 不测 alpha）
+			draw.emissive = glm::vec4(mat.emissive, 0.0f /* DBG */);
 			args.objectIndex = meshRef.objectSlot;  // bindless 各表下标（实例级，instancing）
 			if (candidate)
 				cullArgs.push_back(args);
@@ -102,7 +103,7 @@ void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListS
 			const RGL::DrawCall call{
 				asset.pipelineIndex,
 				std::as_bytes(std::span<const RGL::DrawArgs>{&args, 1}), asset.groupCount};
-			auto& bucket = mat.alphaModeBlend ? transparent : opaque;  // MASK 暂按不透明（见函数注释）
+			auto& bucket = mat.alphaModeBlend ? transparent : opaque;  // MASK 走 opaque（shader 内 discard，Phase 8 C1）
 			const glm::vec3 d = glm::vec3(tf.world[3]) - camera.position;  // world 平移列（无 per-entity 包围盒时的排序代理）
 			bucket.push_back(Pending{call, glm::dot(d, d)});  // 距离²（免 sqrt，排序单调等价）
 		});

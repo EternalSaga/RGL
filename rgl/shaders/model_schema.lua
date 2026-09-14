@@ -37,12 +37,16 @@ return {
     -- 偏移用 ByteAddressBuffer 逐字段读取（见 model.mesh.slang 的注释）。
     vertexLayouts = {
         {
+            -- Phase 8（方案 A）：tangent vec4 @32 —— 切线 xyz + 手性 w（loader 按 uv
+            -- Jacobian 符号逐三角形推）。bistro 由 bistro_pack.py CPU 烘 Lengyel 平滑
+            -- 切线（glTF core TANGENT）；无切线资产 loader 以 Frisvad 基兜底（w=+1）。
             name = "ModelVertex",
-            stride = 32,
+            stride = 48,
             attributes = {
                 { name = "position", type = "vec3", offset = 0 },
                 { name = "normal",   type = "vec3", offset = 12 },
                 { name = "uv",       type = "vec2", offset = 24 },
+                { name = "tangent",  type = "vec4", offset = 32 },
             },
         },
     },

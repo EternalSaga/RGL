@@ -35,7 +35,8 @@ export struct DrawCall {
  *（4B）绕开 NV DGC push 挂死。布局与 scene.slang readObjectDraw 字面量手工一致：
  *   @0 uint totalTriangles | uint vertexOffset | float roughness | float metallic
  *   @16 float4 baseColor
- *   @32 float4 emissive（Phase 8 ③：xyz=emissiveFactor、w 留白；无 emissive 材质 = 0）
+ *   @32 float4 emissive（Phase 8 ③：xyz=emissiveFactor；Phase 8 C1：w=MASK alphaCutoff，
+ *      0 = 不测 alpha；无 emissive 材质 = 0）
  */
 export struct ObjectDrawGpu {
 	uint32_t totalTriangles = 0;
@@ -43,7 +44,7 @@ export struct ObjectDrawGpu {
 	float roughness = 0.0f;
 	float metallic = 0.0f;
 	glm::vec4 baseColor{1.0f};
-	glm::vec4 emissive{0.0f};  // Phase 8 ③：xyz=emissiveFactor（w 留白），shader readObjectDraw().emissive
+	glm::vec4 emissive{0.0f};  // Phase 8 ③：xyz=emissiveFactor；w = MASK alphaCutoff（C1，0 = 不测）
 };
 static_assert(sizeof(ObjectDrawGpu) == 48, "ObjectDrawGpu must match scene.slang readObjectDraw stride 48");
 

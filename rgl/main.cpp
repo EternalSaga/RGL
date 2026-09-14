@@ -263,7 +263,8 @@ int main() {
 		if (!sceneConfig.environment.enabled) {
 			std::string iblStyles;
 			for (const auto& [style, specName] : sceneConfig.styleMap)
-				if (specName == "model_pbr_ibl")
+				if (specName == "model_pbr_ibl" || specName == "model_vegetation"
+					|| specName == "model_light")
 					iblStyles += (iblStyles.empty() ? "" : ", ") + style;
 			if (!iblStyles.empty())
 				throw std::runtime_error(fmt::format(
@@ -427,7 +428,20 @@ int main() {
 				// 零成本；Phase 8 ③a 扩 normal/orm 槽、③ 扩 emissive 槽）。批次 3：风格派生（loader unlit
 				// 字段即数据源，与 MaterialAsset 一致性由 registerScene 金丝雀保证）→ scene.lua
 				// styles 表映射到管线规格名（缺失 = 启动报错，同现有 config 错误路径）。
-				const std::string style = model.primitives[i].unlit ? "unlit" : "pbr";
+				// Phase 8：forward 路风格派生——植被（MASK+doubleSided 叶片卡）/ 光源（emissive
+				// 非零）走各自专属 frag。判据纯数据驱动（loader 输出字段，零名字匹配）。deferred
+				// 无视 styleMap（下方恒 deferred_geometry），style 仅求其在 styleMap 中存在，
+				// 植被/光源在 deferred 下不派生新风格 → 逐位 D1 不变。
+				const auto& prim = model.primitives[i];
+				std::string style = prim.unlit ? "unlit" : "pbr";
+				if (!deferredMode && !prim.unlit) {
+					const bool isLight = prim.emissive.r > 0.0f || prim.emissive.g > 0.0f
+						|| prim.emissive.b > 0.0f;
+					if (isLight)
+						style = "light";
+					else if (prim.alphaModeMask && prim.doubleSided)
+						style = "vegetation";
+				}
 				const auto styleIt = sceneConfig.styleMap.find(style);
 				if (styleIt == sceneConfig.styleMap.end())
 					throw std::runtime_error(fmt::format("style not in scene.lua styles: {}", style));
@@ -577,7 +591,7 @@ int main() {
 			}
 			// light 条目下标由 Renderer 构造期按名 pipelineIndex("light") 取，此处仅需触发建条目
 			[[maybe_unused]] auto lightIdx = shaderRegistry.addLightEntry(
-				(*gbSlots)[0], (*gbSlots)[1], (*gbSlots)[2], (*gbSlots)[3],
+				(*gbSlots)[0], (*gbSlots)[1], (*gbSlots)[2], (*gbSlots)[3], (*gbSlots)[4],
 				vkResources.ensureSharedSampler());
 		}
 		// Phase 8 批次 ①：HDR 累加链——scene_hdr RT + tonemap 条目（forward/deferred 图都含

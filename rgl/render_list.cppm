@@ -65,8 +65,9 @@ export struct RenderListState {
  * 经 MaterialRef → MaterialAsset.alphaModeBlend（glTF alphaMode == "BLEND"）分桶——
  * 不透明段保持实体迭代序（深度写正确），透明段按相机距离² 降序（back-to-front）稳定排序，
  * 产出 [opaque | skybox | transparent 远→近] 单列表 + skyboxStart/transparentStart 边界
- *（drawFrame 段首各 applyDynamicState 一次，见 vkrenderer.cppm）。MASK 材质暂按不透明
- * 处理（glTF 规范要求 alphaTest 剔除，未实现）；排序距离 = primitive 实体 world 平移列
+ *（drawFrame 段首各 applyDynamicState 一次，见 vkrenderer.cppm）。MASK 材质留在不透明段
+ *（Phase 8 C1：alpha-test discard 在 shader 内，cutoff 经 ObjectDraw.emissive.w；doubleSided
+ * 的 cull 切换见 C2）；排序距离 = primitive 实体 world 平移列
  * 到相机位置的 distance2（无包围盒时的标准近似，legacy RenderQueue 同款思路）。
  *
  * Phase 7 批次 4 CPU frustum culling：视锥 6 面从 proj·view 提取（每帧一次），逐 entity

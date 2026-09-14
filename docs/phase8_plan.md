@@ -101,7 +101,7 @@ bistro specular workflow 未写 metallicRoughness 贴图）→ `(1-metallic)=0` 
 - mip 链：新 `shaders/mip_gen.comp.slang` + 启动期批量 CB（LINEAR；全部 2D 纹理 + env cubemap）；
   `ensureSharedSampler` maxLod 0 → 链长。
 - `rgl/render_list_impl.cppm`：`renderListSystem`（139 行）拆债。
-- deferred 路 emissive：`deferred_geometry.frag` MRT 无空道——Phase 8 不做（记文档），forward 先行。
+- deferred 路 emissive：`deferred_geometry.frag` MRT 无空道——当时不做，forward 先行（后于剩余批次 B 以第 5 G-buffer 通道接入，见 §8）。
 - 验收：截图目检贴图接缝消失 + 串灯/霓虹发光 + 街灯点光氛围；重建 baseline；heap 容量契约过。
 
 **③a 完成（2026-09-11）**：loader 解析 normal/metallicRoughness 索引（loadGltfModel 215 行债清零）；
@@ -244,9 +244,8 @@ glTF 自发光接入 forward 主路径（bistro 102 primitive 带 emissive）：
   （HDR 叠加，tonemap 链收）。
 - **验证**：build 零 error；headless 冒烟 102 emissive primitive、binding 8 VVL-clean 零 error；
   对 ④a 基线仅 **43/921600 像素变（0.005%）**、bbox 落右侧窗/灯区、max Δ157 = 局部自发光显形、零回归。
-- **deferred emissive（后续）**：deferred 路径未接（geometry pass 无 emissive、G-buffer 仅 4 通道），
-  需第 5 个 G-buffer attachment（`kGBufferAttachments` 4→5 + ensureDeferredGBufferSlots + light pass
-  绑定 + geometry 写/light 加）才能保持 D1 等价——独立小批次，forward 已覆盖默认 variant。
+- **deferred emissive（后续）**：当时 deferred 路径未接（geometry pass 无 emissive、G-buffer 仅 4 通道）。
+  → 已于剩余批次 B 完成（第 5 G-buffer attachment，见 §8）。
 
 ### 6.3 ④b GGX 预滤波 env（完成，2026-09-12）
 
@@ -264,15 +263,92 @@ cube、dst=第 level 级 `RWTexture2DArray`（2D_ARRAY view，GENERAL）、`roug
 ③ emissive（forward）、④a 完整版 IBL（SH9 + split-sum）、④b GGX 预滤波 env。descriptor pool 全项目清零
 （见 mip_gen 迁 heap，commit `a79b16f`）。
 
-**未做（按优先级）**：
-1. **deferred emissive**：deferred 路径接 emissive，需第 5 个 G-buffer attachment（`kGBufferAttachments`
-   4→5 + `ensureDeferredGBufferSlots` + light pass 绑定 + geometry pass 写 / light pass 加）保持 D1 等价。
-   forward 已覆盖默认 variant，故非阻塞。见 §6.2。
-2. **KHR_materials_emissive_strength**：HDR 发光强度扩展（bistro 若用则该扩展则 `emissiveFactor ×= strength`；
-   loader 现只读 `emissiveFactor`，未读 strength）。
-3. **植被 mip 杂色**（独立问题，非 emissive/GGX）：alpha-cutout 叶片在小 mip 出现随机彩色噪点，疑
-   `mip_gen`/blit 对带 alpha 的颜色纹理降采样所致，需单独定位（可能要 alpha-to-coverage 或叶片纹理专用降采样）。
+**未做（按优先级）**（1–3 已于 2026-09-13 完成，见 §8；3 = 植被杂色实为蓝染，已由 envBrdf 重拟合 + 光配比重校准收口，见调试历史 2026-09-13 及续条）：
 4. **env 存储 RGBA16F→RGBA32F（可选）**：GGX 预滤波后金属反射色带已大减；若仍见半精度量化带，env 改
    32F 存储彻底消除（GGX src 也受益）。低优先。
 5. **NVIDIA/Intel 复测**：mip_gen 迁 heap、env_prefilter GGX 均本机 RADV（STRIX_HALO）验证；reserved-range
    跨驱动（NVIDIA reservedSlots≈3024）与 heap storage image 在 NV/anv 未实测，需上机复跑（见 nvidia_compatibility_report）。
+
+## 8. Phase 8 剩余批次 A/B/C（完成，2026-09-13）
+
+**前置——资产元数据回填（石锤：丢失点在 assimp FBX importer）**：Source2 自定义 blend shader
+（MASK/双面）无 FBX 标准属性可映射，assimp 导出即丢；bistro 官方亦无 emissive strength 源值
+（pyscene 仅 envMap.intensity=10）。`tools/bistro_pack.py` 升级为**修复层**按标准字段回填：
+MASK ×10（PIL alpha 直方图扫描判 cutout，`alphaCutoff=0.5`）、doubleSided ×6（名含 `.DoubleSided`）、
+`KHR_materials_emissive_strength` ×10（look-dev 常量 4.0）、`extensionsUsed` 按材质实际使用重建
+（顺带修 assimp over-declare）。重转新 glb：几何段 + 395 张 PNG 与旧 glb **逐字节一致**，仅 JSON 变。
+
+- **A = strength loader**：`gltf_loader_impl` 新增 `extNumber`（vcpkg tinygltf 老 API：
+  `IsObject/Has/Get(key)/IsReal/IsInt`，无 `ObjectFind`），CPU 端把 strength 预乘进 emissiveFactor
+  ——shader/ObjectDraw 布局零改动。
+- **B = deferred emissive**：`kGBufferAttachments` 4→5（`gbuffer_emissive` RGBA16F）+
+  `ensureDeferredGBufferSlots` 5 槽 + geometry pass SV_Target4 = `od.emissive.rgb × emissiveTexture` +
+  light pass 相加。**binding 实际布局：4-7 = G-buffer 前 4、8 = 共享 sampler、9/10 = env、
+  11 = emissive**（emissive 排尾——4-10 被旧布局占用，勿按 kGBufferAttachments 序推断）。
+- **C1 = MASK alpha-test**：ObjectDraw.emissive 的 **w 复用为 alphaCutoff**（0 = 不测，ObjectDraw 仍
+  48B、反射 layout 不变）→ `scene.slang ObjectDraw.alphaDiscard(alpha)`；model_pbr_ibl /
+  deferred_geometry 两 frag 消费（discard + `SV_IsFrontFace` 法线翻向）。MASK 留 opaque 桶
+  （shader 内 discard），不新建 pipeline spec。discard → `OpDemoteToHelperInvocation` →
+  features_config.json 增 `Vulkan13::shaderDemoteToHelperInvocation`。
+- **C2 = doubleSided**：loader 期**背面副本复制**（绕序翻转 b/c + 法线取反，doubleSided 三角形数 ×2）
+  ——动态 cull 状态零改动（盲执行器 / DGC 捕获 / cull 候选全不知情）；与 C1 的 frontFace 翻向
+  互补冗余（剔除开时后者恒 false）。
+- **验证**：总览机位 D1 = **0（逐位全等）**；街景 D1 = 19px（纯相机时间漂移，背靠背 run 可比性见
+  调试历史当日条）；forward/deferred 冒烟零 error；植被 cutout + 树背面目检通过；
+  G-buffer 日志 5 槽（albedo/normal/position/metalrough/emissive）。
+
+## 9. 批次 D：掠射角法线质量（方案 A+C，完成 2026-09-13）
+
+**问题**：湿地面 / 植被表面掠射角出白色椒盐噪点。G-buffer 通道分解：position/albedo 平滑
+（排除 z-fighting），仅 normal 通道噪声 → normal map 法线源。根因 = `applyNormalMap` 用屏幕
+空间导数 Jacobian 造 TBN，掠射角 `det→0` 时 invDet 放大浮点误差 → world normal 逐像素椒盐。
+
+**Filament 标准实现基准**：lit 材质编译期强制 TANGENTS 属性（MaterialBuilder），导入期 CPU 预烘
+MikkTSpace，FS 只做一次 `normalize(TBN·n_ts)`，**零 dFdx 造 TBN**；dFdx 唯一正当用途 = specular
+AA `normalFiltering()`（Kaplanyan 2016，刻意喂几何法线，glTF 默认 variance 0.15 / threshold 0.2）。
+
+- **A = CPU 烘切线 + 标准 TBN**：assimp 三路（默认 / WEBCGL_GLTF_TANGENTS / via-FBX）均不导出切线
+  → `bistro_pack.py` 用 numpy Lengyel 平滑切线（+ Frisvad 退化兜底）生成 glTF 2.0 核心 `TANGENT`
+  （VEC3 float32，|len-1|≤4e-8、|T·N|≤7e-7）；loader 读 TANGENT + **逐三角形按 UV Jacobian det
+  符号推手性 W**（bistro UV 92% det<0 = 镜像 UV，W 硬编码 +1 会翻错）+ 无属性时 Frisvad 兜底；
+  ModelVertex 32→48B（tangent vec4@32，`just reflect` 重生 static_assert）；mesh shader 直通
+  tangentOS；`applyNormalMapTBN`（Gram-Schmidt 正交化 + `cross(T,N)·w` 手性）。
+- **C = specular AA**：`normalFiltering`（Kaplanyan 2016，喂几何法线 geoN）forward lighting /
+  deferred geometry 两 pass 接入。
+- **验证**：白噪点随机成分消失（目测：椒盐 → 连续高光）；forward/deferred 冒烟零 error。
+- **D1 剪影边缘容差（本批接受项）**：总览 D1 = 0→**29px（0.0031%，全剪影边缘，肉眼不可见）**。
+  隔离 = 19px（A 标准 TBN）+ 10px（C normalFiltering）。性质 = **forward（float N）↔deferred
+  （oct RG16_SNORM 量化 N）固有精度差在掠射角 Fresnel→1 被 reflect 方向放大**（排除 LINEAR halo：
+  G-buffer 1:1 映射 LINEAR 退化成 NEAREST；diff 像素 deferred position 非零 = 覆盖一致、差在
+  specular）；**非本批新引入 bug，是 deferred 路线一直存在的固有灵敏度**（street 长期 19px 同属
+  此类，其旧"相机漂移"结论系误诊，见调试历史续 5）。强行归零 = normal G-buffer 升 RGBA16F，
+  独立批次量级，暂不做。
+
+## 10. 批次 E：植被透射 SSS + 光源本色（forward-only，完成 2026-09-14）
+
+**动机**：全场景共用 `model_pbr_ibl`——植被太平、灯具镀铬球。bistro 材质调研（132 个，金属粗糙度全同质、
+无扩展 PBR）：植被 = MASK+doubleSided 6 种（Foliage 叶卡，余为枝干），灯具 = emissive 非零 10 种；
+**MASKDS 6 种全是植被**（窗帘/锻铁是 MASK 无 DS）→ 两条路由判据纯数据驱动、零名字匹配。
+
+**路由基础设施现成、零 D1 风险**：`pipelineIndex` 是 per-primitive（=材质粒度）+ `bindPipelineToAsset(name,
+assetId)`；deferred **无视 styleMap 恒走 `deferred_geometry`**（main.cpp:435）→ 新 spec 只在 forward 路
+按风格派生（`!deferredMode` 门控），deferred 逐位不动。
+
+- **`model_vegetation.frag`（L2 背光透射）**：pbr_ibl 派生（binding/import 严格一致，复用 model.mesh.spv
+  + 4 纹理槽），metallic 恒 0；逐灯 `shadeTransmit`：出射向 `T=normalize(-L+0.2N)`、`backLit=pow(dot(V,T),3)`、
+  `thickness=0.45+0.55·lum(albedo)` 保底（椴树叶贴深棕区否则死黑剪影），透光色用 `albedo`（albedo² 把深叶
+  压得几乎不透光），strength 1.5；**`shadeDirect` 漫反射 = half-Lambert wrap**（`pow(dot(N,L)·0.5+0.5, 2)`）——
+  标准 saturate(NdotL) 下单层叶片卡背阴面直接光恰为 0 = 死黑面（真实树冠靠冠内多层散射补亮，单层卡无此
+  信息），wrap 把阳光绕到背光侧廉价模拟冠内散射（HF2/UE vegetation 同款），specular 保持标准 saturate。
+- **`model_light.frag`（光源本色）**：**数据根因 = 路灯 `baseColor` 纯黑、绿 100% 来自 `emissiveTexture`
+  绿玻璃纹理**，`emissiveFactor(0.5)×strength(4.0)=2.0` 乘绿纹理在 emission 主导下 = 纯绿霓虹——金属球版
+  是黑金属底把绿压暗才藏住。修复 = emission × `(1/strength)` 还原 glTF 原值 + 保留 F0=0.04 玻璃反射 →
+  **暗绿玻璃灯罩**（用户拍板：白天暗绿玻璃，既不霓虹也不熄灭）。
+- **接线**：scene.lua/scene_config_impl 2 spec + styles 植被/light 映射；env 契约检查扩两 spec（import env）；
+  CMake compile_slang + add_executable 汇总。
+- **验证**：forward 建植被条目 12 / 光源条目 19；黄昏逆光 demo（临时压 sun 到镜头正逆光）树冠金黄透亮 =
+  **透射机制正确**；白天高 sun `backLit≈0` 透射微弱（物理正确：透光朝正下出射、仰视镜头不在出射下游）；
+  绿光霓虹 → 暗绿玻璃确认。
+
+**方法论**：植被参数两轮 strength 调整零响应，手算符号发现 `dot(V, 透光方向)<0`——**调参无效先验证驱动项
+是否为 0，别盲调幅度**；"效果不出"一次点积验算比反复迭代便宜一个数量级（详见调试历史续 6）。

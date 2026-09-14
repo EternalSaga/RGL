@@ -30,10 +30,14 @@ export struct GltfPrimitive {
 	int normalTextureIndex = -1;              // material normalTexture 的 image 下标（-1 = 无 → 中性法线纹理）
 	int metallicRoughnessTextureIndex = -1;   // pbrMetallicRoughness.metallicRoughnessTexture 的 image 下标
 	                                       //（glTF ORM 约定 R=Occlusion/G=Roughness/B=Metalness；-1 = 无 → 白纹理）
-	glm::vec3 emissive{0.0f};    // material emissiveFactor（Phase 8 ③ 自发光，缺省黑 = 不发光）
+	glm::vec3 emissive{0.0f};    // material emissiveFactor × KHR_materials_emissive_strength
+	                              //（Phase 8 ③ 自发光；strength 扩展 CPU 端预乘，缺省黑 = 不发光）
 	int emissiveTextureIndex = -1;  // material emissiveTexture 的 image 下标（-1 = 无 → 白纹理）
 	bool hasUv = true;               // TEXCOORD_0 缺失（glTF 中可选）→ uv 填 0 + 白纹理（D9）
 	bool alphaModeBlend = false;    // material alphaMode == "BLEND"（Phase 5 透明用，预留）
+	bool alphaModeMask = false;     // material alphaMode == "MASK"（Phase 8 C1：alpha-test cutout）
+	float alphaCutoff = 0.5f;       // material alphaCutoff（仅 MASK 消费；glTF 缺省 0.5）
+	bool doubleSided = false;       // material doubleSided（Phase 8 C2：加载期背面副本复制，见 loader）
 	int materialIndex = -1;         // glTF materials 数组下标（-1 = 无材质）——批次 2 材质资产去重键
 	// Phase 4 批次 3：材质风格字段（loader 输出即数据源，风格→管线映射经 scene.lua styles）
 	float metallic = 1.0f;          // pbrMetallicRoughness.metallicFactor（缺省 1.0）

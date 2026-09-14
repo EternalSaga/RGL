@@ -109,7 +109,10 @@ export struct MaterialAsset {
 	float metallic = 1.0f;        // pbrMetallicRoughness.metallicFactor（缺省 1.0）
 	float roughness = 1.0f;       // pbrMetallicRoughness.roughnessFactor（缺省 1.0）
 	bool unlit = false;           // KHR_materials_unlit 扩展存在性（风格 = unlit vs pbr）
-	glm::vec3 emissive{0.0f};     // Phase 8 ③：material emissiveFactor（缺省黑 = 不发光，放末尾不破坏聚合初始化）
+	glm::vec3 emissive{0.0f};     // Phase 8 ③：material emissiveFactor（含 strength 预乘；缺省黑 = 不发光）
+	bool alphaModeMask = false;   // Phase 8 C1：alphaMode == "MASK"（alpha-test cutout）
+	float alphaCutoff = 0.5f;     // Phase 8 C1：MASK 截止（进 ObjectDraw.emissive.w；非 MASK = 0 = 不测）
+	bool doubleSided = false;     // Phase 8 C1：doubleSided（背面不剔 + 法线翻向）
 };
 
 /**
@@ -209,7 +212,10 @@ export class AssetTable {
 				materials[i].metallic == material.metallic &&
 				materials[i].roughness == material.roughness &&
 				materials[i].unlit == material.unlit &&
-				materials[i].emissive == material.emissive)
+				materials[i].emissive == material.emissive &&
+				materials[i].alphaModeMask == material.alphaModeMask &&
+				materials[i].alphaCutoff == material.alphaCutoff &&
+				materials[i].doubleSided == material.doubleSided)
 				return i;
 		materials.push_back(material);
 		return static_cast<uint32_t>(materials.size() - 1);

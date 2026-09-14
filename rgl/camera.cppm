@@ -203,7 +203,18 @@ export void cameraSystem(entt::registry& rg, float dt) {
 	for (const auto& ev : events.events) {
 		switch (ev.type) {
 			case InputEvent::Type::KeyDown:
-				if (ev.key == keys.forward) state.keyForward = true;
+				if (ev.key == SDLK_F1) {  // 调试快捷键：当前机位打进日志（camera_saved 行，可直接抄回 camera.lua）
+					const glm::vec3 t = camera.mode == CameraMode::Fps
+						? camera.position + cameraForward(camera) *
+							std::max(glm::length(camera.target - camera.position), 0.05f)
+						: camera.target;
+					if (logger)
+						logger->info("[camera_saved] mode = \"{}\", position = {{ {:.6f}, {:.6f}, {:.6f} }}, target = {{ {:.6f}, {:.6f}, {:.6f} }}, fovDegrees = {:.4f}",
+							camera.mode == CameraMode::Fps ? "fps" : "trackball",
+							camera.position.x, camera.position.y, camera.position.z,
+							t.x, t.y, t.z, glm::degrees(camera.fov));
+				}
+				else if (ev.key == keys.forward) state.keyForward = true;
 				else if (ev.key == keys.back) state.keyBack = true;
 				else if (ev.key == keys.left) state.keyLeft = true;
 				else if (ev.key == keys.right) state.keyRight = true;

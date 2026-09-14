@@ -323,16 +323,16 @@ export class Resources {
 	const RGL::VmaBuffer& getSceneDataBuffer() const { return sceneDataBuffer; }
 
 	/**
-	 * Phase 7 D1：确保 deferred G-buffer 4 个 offscreen RT 并返回其 SAMPLED_IMAGE 堆槽
-	 *（[0]albedo [1]normal [2]position [3]metalrough）。名字/格式契约与
+	 * Phase 7 D1：确保 deferred G-buffer 5 个 offscreen RT 并返回其 SAMPLED_IMAGE 堆槽
+	 *（[0]albedo [1]normal [2]position [3]metalrough [4]emissive——Phase 8 剩余批次 B）。名字/格式契约与
 	 * deferredRenderGraphDesc 一致（共享 render_graph kGBufferAttachments 单一真相源）；
 	 * drawFrame 图循环对同名同格式 ensureRtAttachment 命中复用、堆槽跨 resize 复用，
 	 * light 管线 baked 有效。extent = 当前 swapchain。**必须在几何/纹理/env 槽之后调用**
 	 *（allocSlot 单调游标，早分配破坏"纹理首槽 = 白 = 全部几何槽之后"契约断言——同
 	 * env 上传时序契约）。
-	 * @return 4 个 heap 槽（kGBufferAttachments 序）；Error = RT 创建 / 槽分配失败
+	 * @return 5 个 heap 槽（kGBufferAttachments 序）；Error = RT 创建 / 槽分配失败
 	 */
-	[[nodiscard]] std::expected<std::array<uint32_t, 4>, Error> ensureDeferredGBufferSlots();
+	[[nodiscard]] std::expected<std::array<uint32_t, 5>, Error> ensureDeferredGBufferSlots();
 
 	/**
 	 * Phase 8 批次 ①：确保 HDR 累加链 scene_hdr RT（名字/格式 = render_graph

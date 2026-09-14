@@ -22,7 +22,7 @@ void main(
     out indices uint3 triangles[10])
 {
     const uint kTrianglesPerGroup = 10;
-    const uint kVertexStride = 32;
+    const uint kVertexStride = 48;  // Phase 8 方案 A：+tangent vec4 @32（model_schema.lua 同步）
 
     uint groupIndex = groupID.x;
     uint firstTriangle = groupIndex * kTrianglesPerGroup;
@@ -46,9 +46,11 @@ void main(
         float3 pos = asfloat(modelVertexBuffer.Load3(byteOffset));         // @0
         float3 nrm = asfloat(modelVertexBuffer.Load3(byteOffset + 12));   // @12
         float2 uv  = asfloat(modelVertexBuffer.Load2(byteOffset + 24));  // @24
+        float4 tan = asfloat(modelVertexBuffer.Load4(byteOffset + 32));  // @32（方案 A）
         verts[ti].position = clipPos(readObjectMvp(drawArgs.objectIndex), pos);
         verts[ti].normal = nrm;
         verts[ti].uv = uv;
+        verts[ti].tangentOS = tan;
         verts[ti].positionOS = pos;  // Phase 5 光照（object→world 变换在 frag 做，unlit 不消费）
     }
 

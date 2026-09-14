@@ -1,6 +1,6 @@
 -- 相机与控制配置（启动时加载，字段均可选，缺省回落默认值）
 return {
-    mode = "trackball",  -- "trackball"（轨道环绕）或 "fps"（第一人称飞行）
+    mode = "fps",  -- "trackball"（轨道环绕）或 "fps"（第一人称飞行）
 
     -- 机位约定：trackball 绕 target 公转，target = 模型包围球中心，position 距球心 ~1.4·(r/tan(fov/2))
     -- 整球入画留裕量。near/far 有 SceneBounds 时由 projectionSystem 自适应（忽略）。
@@ -25,7 +25,7 @@ return {
         zoom = 0.03,          -- 每格滚轮的轨道半径相对缩放（半径 ×(1∓zoom)，2026-08-28 改：加法式在远机位失效）
     },
     fps = {
-        speed = 3.0,          -- WASD 移动速度，单位/秒
+        speed = 0.4,          -- WASD 移动速度，单位/秒
         sensitivity = 0.003,  -- rad/px
     },
 

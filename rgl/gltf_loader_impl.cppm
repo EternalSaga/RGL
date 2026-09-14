@@ -230,10 +230,24 @@ static std::vector<int> buildMeshToNode(const tinygltf::Model& gltf) {
 	return meshToNode;
 }
 
+/** 扩展对象数字字段读取（KHR_materials_emissive_strength 等泛型扩展，同 unlit 的
+ * extensions map 查法；缺字段/非对象/非数字 = fallback）。 */
+static double extNumber(const tinygltf::Value& value, const char* key, double fallback) {
+	if (!value.IsObject() || !value.Has(key))
+		return fallback;
+	const auto& v = value.Get(key);
+	if (v.IsReal())
+		return v.Get<double>();
+	if (v.IsInt())
+		return static_cast<double>(v.Get<int>());
+	return fallback;
+}
+
 /**
  * 材质字段提取（baseColorFactor + baseColorTexture + normalTexture +
  * metallicRoughnessTexture（Phase 8 ③a：ORM 贴图 R=Occlusion/G=Roughness/B=Metalness）+
- * alphaMode + metallic/roughness/unlit 风格字段 + 材质下标——批次 2 去重键）。
+ * alphaMode（BLEND/MASK/cutoff）+ doubleSided + metallic/roughness/unlit 风格字段 +
+ * emissiveStrength 预乘（Phase 8 A）+ 材质下标——批次 2 去重键）。
  * @param gltf 已加载的 tinygltf 模型
  * @param materialIndex materials 数组下标（-1 = 无材质，只写 materialIndex）
  * @param out 输出 primitive（覆盖材质相关字段；image 下标越界保留 -1）
@@ -261,10 +275,18 @@ static void fillMaterialFields(const tinygltf::Model& gltf, int materialIndex, G
 	if (ef.size() == 3)
 		out.emissive = glm::vec3(
 			static_cast<float>(ef[0]), static_cast<float>(ef[1]), static_cast<float>(ef[2]));
+	// Phase 8 A：KHR_materials_emissive_strength（HDR 发光强度，spec 值域 ≥1.0）CPU 端
+	// 预乘进 factor——ObjectDraw/scene.slang/两路 frag 零改动即得 HDR 亮度
+	if (const auto es = mat.extensions.find("KHR_materials_emissive_strength");
+		es != mat.extensions.end())
+		out.emissive *= static_cast<float>(extNumber(es->second, "emissiveStrength", 1.0));
 	const auto& et = mat.emissiveTexture;
 	if (et.index >= 0 && et.index < static_cast<int>(gltf.images.size()))
 		out.emissiveTextureIndex = et.index;
 	out.alphaModeBlend = (mat.alphaMode == "BLEND");
+	out.alphaModeMask = (mat.alphaMode == "MASK");  // Phase 8 C1：alpha-test cutout
+	out.alphaCutoff = static_cast<float>(mat.alphaCutoff);
+	out.doubleSided = mat.doubleSided;
 	out.metallic = static_cast<float>(mat.pbrMetallicRoughness.metallicFactor);
 	out.roughness = static_cast<float>(mat.pbrMetallicRoughness.roughnessFactor);
 	out.unlit = mat.extensions.count("KHR_materials_unlit") > 0;
@@ -277,7 +299,7 @@ static void fillMaterialFields(const tinygltf::Model& gltf, int materialIndex, G
  */
 static std::string readVertexAttributes(const tinygltf::Model& gltf, int meshIndex,
 	const tinygltf::Primitive& prim, std::vector<float>& pos, std::vector<float>& nrm,
-	std::vector<float>& uv, bool& hasUv) {
+	std::vector<float>& uv, std::vector<float>& tan, bool& hasUv, bool& hasTangent) {
 	auto accessorOf = [&](const char* name) -> int {
 		auto it = prim.attributes.find(name);
 		return it == prim.attributes.end() ? -1 : it->second;
@@ -292,8 +314,16 @@ static std::string readVertexAttributes(const tinygltf::Model& gltf, int meshInd
 	hasUv = uvAccessor >= 0 && readAccessorFloats(gltf, uvAccessor, 2, uv);
 	if (uvAccessor >= 0 && !hasUv)
 		return fmt::format("malformed TEXCOORD_0 attribute (mesh {})", meshIndex);
+	// TANGENT（glTF 2.0 core，Phase 8 方案 A）：bistro 由 bistro_pack.py CPU 烘 Lengyel
+	// 平滑切线；缺失（kyoto 等旧资产）→ expandPrimitive Frisvad 基兜底（normal 贴图
+	// 中性时结果与切线基无关，仅带 normal 贴图的缺切线资产才有近似损失）
+	const int tanAccessor = accessorOf("TANGENT");
+	hasTangent = tanAccessor >= 0 && readAccessorFloats(gltf, tanAccessor, 3, tan);
+	if (tanAccessor >= 0 && !hasTangent)
+		return fmt::format("malformed TANGENT attribute (mesh {})", meshIndex);
 	const uint32_t vertexCount = static_cast<uint32_t>(pos.size() / 3);
-	if (vertexCount != nrm.size() / 3 || (hasUv && vertexCount != uv.size() / 2))
+	if (vertexCount != nrm.size() / 3 || (hasUv && vertexCount != uv.size() / 2) ||
+		(hasTangent && vertexCount != tan.size() / 3))
 		return fmt::format("attribute vertex counts differ (mesh {})", meshIndex);
 	if (!hasUv)
 		uv.assign(static_cast<size_t>(vertexCount) * 2, 0.0f);
@@ -329,10 +359,24 @@ static std::string resolvePrimitiveIndices(const tinygltf::Model& gltf, int mesh
  * @param out 输出 primitive（填 vertices/triangleCount/hasUv）
  * @return 错误描述（空 = 成功；调用方整体失败）
  */
+/**
+ * Frisvad 2012 解析正交基切线（无 TANGENT 属性资产的兜底；与 bistro_pack.py 的
+ * degenerate 分支同式）：返回单位 tangent ⟂ 单位 n，奇点 (0,0,-1) 显式处理。
+ */
+static glm::vec3 frisvadTangent(const glm::vec3& n) {
+	if (n.z < -0.9999999f)
+		return glm::vec3(0.0f, -1.0f, 0.0f);
+	const float a = 1.0f / (1.0f - n.z);
+	const float b = -n.x * n.y * a;
+	return glm::normalize(glm::vec3(1.0f - n.x * n.x * a, b, -n.x));
+}
+
 static std::string expandPrimitive(const tinygltf::Model& gltf, int meshIndex,
 	const tinygltf::Primitive& prim, GltfPrimitive& out) {
-	std::vector<float> pos, nrm, uv;
-	if (const std::string attrErr = readVertexAttributes(gltf, meshIndex, prim, pos, nrm, uv, out.hasUv); !attrErr.empty())
+	std::vector<float> pos, nrm, uv, tan;
+	bool hasTangent = false;
+	if (const std::string attrErr = readVertexAttributes(gltf, meshIndex, prim, pos, nrm, uv,
+		tan, out.hasUv, hasTangent); !attrErr.empty())
 		return attrErr;
 	const uint32_t vertexCount = static_cast<uint32_t>(pos.size() / 3);
 	std::vector<uint32_t> indices;
@@ -346,8 +390,60 @@ static std::string expandPrimitive(const tinygltf::Model& gltf, int meshIndex,
 		v.uv = glm::vec2(uv[idx * 2 + 0], uv[idx * 2 + 1]);
 		out.vertices.push_back(v);
 	}
+	// Phase 8 方案 A：切线填充——xyz 用烘焙 TANGENT（缺 → Frisvad(N) 兜底），手性 w 按
+	// uv Jacobian det 符号**逐三角形**推（glTF core TANGENT 不含 w，spec 约定从几何推断；
+	// bistro UV 手性 92% 为负——DirectX Y-down 传统，W=+1 硬编码会把镜像 UV 面的
+	// normal map 副切线翻反）。三角形 t 的去索引顶点 = t*3..t*3+2，w 整三角形同值。
+	const size_t triCount = indices.size() / 3;
+	for (size_t t = 0; t < triCount; ++t) {
+		float w = 1.0f;
+		if (hasTangent && out.hasUv) {
+			const uint32_t i0 = indices[t * 3], i1 = indices[t * 3 + 1], i2 = indices[t * 3 + 2];
+			const float s1x = uv[i1 * 2] - uv[i0 * 2], s1y = uv[i1 * 2 + 1] - uv[i0 * 2 + 1];
+			const float s2x = uv[i2 * 2] - uv[i0 * 2], s2y = uv[i2 * 2 + 1] - uv[i0 * 2 + 1];
+			w = (s1x * s2y - s2x * s1y) < 0.0f ? -1.0f : 1.0f;
+		}
+		for (int k = 0; k < 3; ++k) {
+			const size_t vi = t * 3 + k;
+			const size_t src = indices[vi];
+			glm::vec3 t3;
+			if (hasTangent) {
+				t3 = glm::vec3(tan[src * 3], tan[src * 3 + 1], tan[src * 3 + 2]);
+				if (glm::length(t3) < 1e-6f)  // 坏 texel 防御（pack 理论不产出）
+					t3 = frisvadTangent(glm::normalize(out.vertices[vi].normal));
+			} else {
+				t3 = frisvadTangent(glm::normalize(out.vertices[vi].normal));
+			}
+			out.vertices[vi].tangent = glm::vec4(t3, w);
+		}
+	}
 	out.triangleCount = static_cast<uint32_t>(indices.size() / 3);
 	return {};
+}
+
+/**
+ * Phase 8 C2：doubleSided 背面副本复制——每三角形追加一份绕序翻转（b/c 交换）+
+ * 法线取反的拷贝：背面剔除下"背面"由翻转前片可见、法线已预取反，光照天然正确；
+ * 动态 cull 状态零改动（盲执行器 / DGC 捕获 / cull 候选路径全不知情），
+ * 与 scene.slang frontFace 翻向互补冗余（剔除开时后者恒 false）。
+ * 代价 = doubleSided primitive 顶点数据 ×2（叶片量级，可忽略）。
+ */
+static void duplicateForDoubleSided(GltfPrimitive& prim) {
+	const size_t tris = prim.vertices.size() / 3;
+	if (tris == 0)
+		return;
+	prim.vertices.reserve(prim.vertices.size() + tris * 3);
+	for (size_t t = 0; t < tris; ++t) {
+		const ModelVertex a = prim.vertices[t * 3 + 0];
+		const ModelVertex b = prim.vertices[t * 3 + 1];
+		const ModelVertex c = prim.vertices[t * 3 + 2];
+		// tangent：xyz 保持（切线方向与正/背面无关），手性 w 翻转（绕序反 = 镜像 UV 面，
+		// 副切线 B = cross(N,T)·w 须随翻转后的面重新自洽）
+		prim.vertices.push_back({a.position, -a.normal, a.uv, glm::vec4(a.tangent.x, a.tangent.y, a.tangent.z, -a.tangent.w)});
+		prim.vertices.push_back({c.position, -c.normal, c.uv, glm::vec4(c.tangent.x, c.tangent.y, c.tangent.z, -c.tangent.w)});
+		prim.vertices.push_back({b.position, -b.normal, b.uv, glm::vec4(b.tangent.x, b.tangent.y, b.tangent.z, -b.tangent.w)});
+	}
+	prim.triangleCount += static_cast<uint32_t>(tris);
 }
 
 /**
@@ -489,6 +585,8 @@ std::expected<GltfModel, Error> loadGltfModel(const std::string& path) {
 			const std::string primErr = expandMeshPrimitive(gltf, mi, prim, meshToNode[mi], nodeWorlds, out);
 			if (!primErr.empty())
 				return std::unexpected(Error{ErrorCode::GltfLoadFailed, fmt::format("glTF: {}", primErr)});
+			if (out.doubleSided)  // Phase 8 C2：双面 = 背面副本（见 duplicateForDoubleSided）
+				duplicateForDoubleSided(out);
 			model.primitives.push_back(std::move(out));
 		}
 	}

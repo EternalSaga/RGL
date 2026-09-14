@@ -57,8 +57,9 @@ static void verifyVertexUpload(RGL::DeviceContext& vkDevice, RGL::Resources& res
 	auto& device = vkDevice.getDevice();
 	const uint32_t chunkCount = static_cast<uint32_t>(chunkBuffers.size());
 	const uint32_t primitiveCount = static_cast<uint32_t>(model.primitives.size());
-	// staging（32B/primitive）
-	const vk::DeviceSize total = static_cast<vk::DeviceSize>(primitiveCount) * 32;
+	// staging（sizeof(ModelVertex)/primitive，Phase 8 方案 A 后 = 48B 覆盖含 tangent 全顶点）
+	constexpr vk::DeviceSize kVertBytes = sizeof(ModelVertex);
+	const vk::DeviceSize total = static_cast<vk::DeviceSize>(primitiveCount) * kVertBytes;
 	vk::BufferCreateInfo si{};
 	si.size = total;
 	si.usage = vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer;
@@ -77,9 +78,9 @@ static void verifyVertexUpload(RGL::DeviceContext& vkDevice, RGL::Resources& res
 		*vkDevice.getGraphicsCommandPool(), vk::CommandBufferLevel::ePrimary, 1});
 	auto cmd = std::move(cmdAlloc[0]);
 	cmd.begin(vk::CommandBufferBeginInfo{});
-	// 每 primitive 读回首顶点（32B）自其块内偏移（primChunk[i].offset）——查全部非零偏移
+	// 每 primitive 读回首顶点（一整顶点）自其块内偏移（primChunk[i].offset）——查全部非零偏移
 	for (uint32_t i = 0; i < primitiveCount; ++i) {
-		const VkBufferCopy region{primChunk[i].offset, static_cast<vk::DeviceSize>(i) * 32, 32};
+		const VkBufferCopy region{primChunk[i].offset, static_cast<vk::DeviceSize>(i) * kVertBytes, kVertBytes};
 		::vkCmdCopyBuffer(*cmd, **chunkBuffers[primChunk[i].chunk], *staging, 1, &region);
 	}
 	cmd.end();
@@ -96,7 +97,7 @@ static void verifyVertexUpload(RGL::DeviceContext& vkDevice, RGL::Resources& res
 	uint32_t failCount = 0;
 	for (uint32_t i = 0; i < primitiveCount; ++i) {
 		const uint8_t* cpu = reinterpret_cast<const uint8_t*>(model.primitives[i].vertices.data());
-		const bool pass = std::memcmp(back + i * 32, cpu, 32) == 0;
+		const bool pass = std::memcmp(back + i * kVertBytes, cpu, kVertBytes) == 0;
 		if (!pass) {
 			++failCount;
 			allPass = false;
@@ -104,7 +105,7 @@ static void verifyVertexUpload(RGL::DeviceContext& vkDevice, RGL::Resources& res
 				logger->info("vtx canary prim {} (chunk {} off {:x}): FAIL (cpu={:08x} gpu={:08x})",
 					i, primChunk[i].chunk, primChunk[i].offset,
 					*reinterpret_cast<const uint32_t*>(cpu),
-					*reinterpret_cast<const uint32_t*>(back + i * 32));
+					*reinterpret_cast<const uint32_t*>(back + i * kVertBytes));
 		}
 	}
 	logger->info("vtx canary: {} ({}/{} primitives, {} chunks)",
@@ -275,7 +276,8 @@ static std::map<int, uint32_t> buildMaterialAssets(RGL::Resources& resources,
 		const uint32_t textureId = resolveMaterialTexture(model, n, primitiveTextureIds, first);
 		materialOfIndex[index] = assets.addMaterial(
 			MaterialAsset{prim.baseColor, textureId, prim.alphaModeBlend,
-				prim.metallic, prim.roughness, prim.unlit, prim.emissive});
+				prim.metallic, prim.roughness, prim.unlit, prim.emissive,
+				prim.alphaModeMask, prim.alphaCutoff, prim.doubleSided});
 	}
 	return materialOfIndex;
 }
@@ -293,7 +295,9 @@ static std::vector<uint32_t> checkMaterialConsistency(RGL::Resources& resources,
 		const auto& mat = assets.getMaterial(materialOfIndex[prim.materialIndex]);
 		if (mat.baseColor != prim.baseColor || mat.alphaModeBlend != prim.alphaModeBlend ||
 			mat.metallic != prim.metallic || mat.roughness != prim.roughness ||
-			mat.unlit != prim.unlit || mat.emissive != prim.emissive) {
+			mat.unlit != prim.unlit || mat.emissive != prim.emissive ||
+			mat.alphaModeMask != prim.alphaModeMask || mat.alphaCutoff != prim.alphaCutoff ||
+			mat.doubleSided != prim.doubleSided) {
 			throw std::runtime_error(fmt::format(
 				"glTF material inconsistency: primitive {} (materialIndex {})", i, prim.materialIndex));
 		}

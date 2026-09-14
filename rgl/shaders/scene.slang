@@ -85,7 +85,7 @@ ObjectMatrix readObjectMvp(uint objectIndex)
 // vkresources kSceneDataDrawTableOffset / ObjectDrawGpu 同布局（字面量同步，无反射端）：
 //   @0  uint totalTriangles | uint vertexOffset | float roughness | float metallic
 //   @16 float4 baseColor
-//   @32 float4 emissive（Phase 8 ③：xyz=emissiveFactor、w 留白；无 emissive 材质 = 0）
+//   @32 float4 emissive（Phase 8 ③：xyz=emissiveFactor；Phase 8 C1：w=MASK alphaCutoff，0 = 不测）
 struct ObjectDraw
 {
     uint totalTriangles;
@@ -93,6 +93,13 @@ struct ObjectDraw
     float4 baseColor;
     float2 roughnessMetallic;
     float4 emissive;  // Phase 8 ③：xyz=emissiveFactor（model_pbr_ibl.frag 叠加自发光）
+
+    // Phase 8 C1：alpha-test cutout（MASK 材质 w=alphaCutoff>0；其余材质 w=0 = 恒不 discard，
+    // 非 MASK 路径逐位不变）。采样后、着色前调用（discard 后 derivatives 仅余存活 lane）。
+    bool alphaDiscard(float alpha)
+    {
+        return emissive.w > 0.0 && alpha < emissive.w;
+    }
 };
 
 ObjectDraw readObjectDraw(uint objectIndex)
@@ -116,6 +123,13 @@ float3 worldPos(ObjectMatrix m, float3 p)
 float3 worldNormal(ObjectMatrix m, float3 n)
 {
     return normalize(m.c0.xyz * n.x + m.c1.xyz * n.y + m.c2.xyz * n.z);
+}
+
+// Phase 8 方案 A：object-space 切线 → 世界（与 worldNormal 同款 mat3 直乘约定——
+// 均匀缩放假设一致，见 AGENTS.md Phase 5 已知项；手性 w 原样透传）
+float4 worldTangent(ObjectMatrix m, float4 t)
+{
+    return float4(normalize(m.c0.xyz * t.x + m.c1.xyz * t.y + m.c2.xyz * t.z), t.w);
 }
 
 // ── Phase 8 批次 ④a：完整版 IBL 辅助（forward model_pbr_ibl 与 deferred light.frag 共用）──

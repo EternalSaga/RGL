@@ -121,17 +121,21 @@ export class ShaderRegistry {
 	/**
 	 * Phase 7 D1：deferred light pass 管线条目（单条目，仿 addSkyEntry）。spec = "light"
 	 *（全屏 mesh + 采样 frag）。binding：0/1 占位（light mesh 不声明 = 空转）+ 3 sceneData
-	 *（readSceneLight 单灯）+ extra：4-7 → 4 个 G-buffer RT 的 SAMPLED_IMAGE 堆槽、8 → 共享 sampler。
-	 * 前提 = 4 G-buffer RT 已 ensureRtAttachment（其堆槽由调用点取入，跨 resize 复用不变）。幂等。
+	 *（readSceneLight 单灯）+ extra：4-8 → 5 个 G-buffer RT 的 SAMPLED_IMAGE 堆槽
+	 *、8 → 共享 sampler、9/10 → env、**11 → emissive 第 5 通道**（Phase 8 剩余批次 B；
+     * emissive 排尾——4-10 已被旧布局占用，勿按 kGBufferAttachments 序推断 binding）。
+	 * 前提 = 5 G-buffer RT 已 ensureRtAttachment（其堆槽由调用点取入，跨 resize 复用不变）。幂等。
 	 * @param albedoSlot G-buffer albedo RT 的 SAMPLED_IMAGE heap 槽（binding 4）
 	 * @param normalSlot G-buffer normal RT 槽（binding 5）
 	 * @param positionSlot G-buffer position RT 槽（binding 6）
 	 * @param metalRoughSlot G-buffer metalRough RT 槽（binding 7）
+	 * @param emissiveSlot G-buffer emissive RT 槽（binding 11，RGBA16F）
 	 * @param samplerSlot 共享 sampler 的 sampler heap 槽（binding 8，sampler 映射）
 	 * @return 条目下标；规格缺失抛 runtime_error
 	 */
 	[[nodiscard]] uint32_t addLightEntry(uint32_t albedoSlot, uint32_t normalSlot,
-		uint32_t positionSlot, uint32_t metalRoughSlot, uint32_t samplerSlot);
+		uint32_t positionSlot, uint32_t metalRoughSlot, uint32_t emissiveSlot,
+		uint32_t samplerSlot);
 
 	/**
 	 * Phase 8 批次 ①：tonemap pass 管线条目（单条目，仿 addLightEntry）。spec = "tonemap"

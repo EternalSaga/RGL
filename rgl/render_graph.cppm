@@ -306,9 +306,10 @@ export const RgGraphDesc& offscreenRenderGraphDesc();
 
 /**
  * Phase 7 D1（render_graph.lua variant="deferred"）：3-pass deferred 图——geometry pass
- * 把 opaque 段渲入 4 个 G-buffer RT（albedo rgba8_srgb / normal rg16_snorm oct /
- * worldPos rgba32_sfloat / metalRough rgba8_unorm，显式格式见 kGBufferAttachments 词表）
- * + depth；light pass（drawLight kind）全屏采样 4 RT + 逐灯 GGX 渲入 scene_hdr；
+ * 把 opaque 段渲入 5 个 G-buffer RT（albedo rgba8_srgb / normal rg16_snorm oct /
+ * worldPos rgba32_sfloat / metalRough rgba8_unorm / emissive rgba16_sfloat，显式格式见
+ * kGBufferAttachments 词表）+ depth；light pass（drawLight kind）全屏采样 5 RT + 逐灯 GGX
+ * 渲入 scene_hdr；
  * tonemap pass（drawLight，Phase 8 批次 ①）ACES 上屏 swapchain（present 由图派生）。
  * 本图为 exclusive 变体。静态单例。
  * @return deferred 图声明（引用）
@@ -321,18 +322,19 @@ export struct RgGBufferDesc {
 	std::string_view format;
 };
 /**
- * Phase 7 D1：G-buffer 4 附件契约表（**单一真相源**）——消费方 =
+ * Phase 7 D1：G-buffer 附件契约表（**单一真相源**）——消费方 =
  * deferredRenderGraphDesc（geometry outputs / light inputs 按本表顺序生成）、
  * vkresources ensureDeferredGBufferSlots、drawFrame 帧内捕获（dump_gbuf）。
  * 格式串 = isKnownRgFormat 词表可解析名（resolveRgFormat 物化）。
- * 顺序即 light.frag binding 4-7（albedo/normal/position/metalrough）与
- * diagnostics.lua dump_gbuf 通道号。
+ * 顺序即 light.frag binding 4-7 + 尾部 11 = emissive（albedo/normal/position/metalrough/emissive——Phase 8
+ * 剩余批次 B 加第 5 通道 emissive，RGBA16F 保 HDR 域）与 diagnostics.lua dump_gbuf 通道号。
  */
-export inline constexpr std::array<RgGBufferDesc, 4> kGBufferAttachments{{
+export inline constexpr std::array<RgGBufferDesc, 5> kGBufferAttachments{{
 	{"gbuffer_albedo", "rgba8_srgb"},
 	{"gbuffer_normal", "rg16_snorm"},
 	{"gbuffer_position", "rgba32_sfloat"},
 	{"gbuffer_metalrough", "rgba8_unorm"},
+	{"gbuffer_emissive", "rgba16_sfloat"},
 }};
 
 /**

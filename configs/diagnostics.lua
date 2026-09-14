@@ -7,7 +7,7 @@ return {
     no_present = false,         -- 渲染但永不 present（KWin dmabuf import 排查）
     vtx_canary = false,         -- 顶点上传读回金丝雀（拼接 buffer 保真度）
     texel_canary = -1,          -- 帧 N 重读白纹理比对（GPU 侧 UAF 签名；-1/缺省 = 关）
-    dump_gbuf = -1,             -- deferred 截图直读第 N 个 G-buffer 通道出 PNG（0..3；-1 = 关）
+    dump_gbuf = -1,             -- deferred 截图直读第 N 个 G-buffer 通道出 PNG（0..4；-1 = 关）
     style_dist = false,         -- per-primitive 风格分布日志
     tex_dist = false,           -- per-primitive 纹理 slot 分布日志
     texture_force_size = 0,     -- 纹理近邻缩放强制 N×N（尺寸阈值实验；0 = 关）

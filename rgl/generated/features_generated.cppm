@@ -77,6 +77,7 @@ export FeatureChain buildRequestedFeatures() {
     chain.get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering = VK_TRUE;
     chain.get<vk::PhysicalDeviceVulkan13Features>().synchronization2 = VK_TRUE;
     chain.get<vk::PhysicalDeviceVulkan13Features>().shaderZeroInitializeWorkgroupMemory = VK_TRUE;
+    chain.get<vk::PhysicalDeviceVulkan13Features>().shaderDemoteToHelperInvocation = VK_TRUE;
     chain.get<vk::PhysicalDeviceVulkan14Features>().pushDescriptor = VK_TRUE;
     chain.get<vk::PhysicalDeviceVulkan14Features>().dynamicRenderingLocalRead = VK_TRUE;
     chain.get<vk::PhysicalDeviceVulkan14Features>().maintenance5 = VK_TRUE;
@@ -155,6 +156,10 @@ export [[nodiscard]] std::expected<void, Error> validateFeatures(
     if (!supported.get<vk::PhysicalDeviceVulkan13Features>().shaderZeroInitializeWorkgroupMemory) {
         return std::unexpected(Error{ErrorCode::FeatureUnavailable,
             fmt::format("Required feature not supported by device: {}", "Vulkan13::shaderZeroInitializeWorkgroupMemory")});
+    }
+    if (!supported.get<vk::PhysicalDeviceVulkan13Features>().shaderDemoteToHelperInvocation) {
+        return std::unexpected(Error{ErrorCode::FeatureUnavailable,
+            fmt::format("Required feature not supported by device: {}", "Vulkan13::shaderDemoteToHelperInvocation")});
     }
     if (!supported.get<vk::PhysicalDeviceVulkan14Features>().pushDescriptor) {
         return std::unexpected(Error{ErrorCode::FeatureUnavailable,

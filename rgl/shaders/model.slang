@@ -1,7 +1,7 @@
 // Model 契约（Phase 3：baseColor × baseColorTexture 采样 + position/normal/uv）
 //
 // 顶点缓冲是平铺字节流，字段偏移/stride 以 model_schema.lua 的 vertexLayouts
-// 声明为准（ModelVertex: position@0 normal@12 uv@24 stride=32，packed 布局）。
+// 声明为准（ModelVertex: position@0 normal@12 uv@24 tangent@32 stride=48，packed 布局）。
 // 下方 ModelVertex 结构体仅作文档用途——实际读取用显式字节偏移
 //（见 model.mesh.slang），不依赖 Slang struct 的内存布局
 //（Slang float3 按 16B 对齐，与 CPU 侧 packed 布局不一致）。
@@ -11,6 +11,7 @@ struct ModelVertex
     float3 position;
     float3 normal;
     float2 uv;
+    float4 tangent;   // Phase 8 方案 A：切线 xyz + 手性 w（loader 推，见 schema 注释）
 };
 
 struct ModelVertexOutput
@@ -20,6 +21,9 @@ struct ModelVertexOutput
     float2 uv       : TEXCOORD0;
     float3 positionOS : TEXCOORD1;  // object-space 位置（Phase 5 光照：frag 经对象矩阵表
                                     // 变换到世界空间求视向 V，见 scene.slang；unlit 不消费）
+    float4 tangentOS : TANGENT;     // Phase 8 方案 A：object-space 切线 xyz + 手性 w（对象→
+                                    // 世界与 normal 同路在 frag 做，standard TBN 消费见
+                                    // normalmap.slang applyNormalMapTBN）
 };
 
 // push constant 契约已移至 material.slang（Phase 4 统一 DrawArgs 超集，所有风格共享；

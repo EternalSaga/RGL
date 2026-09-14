@@ -30,6 +30,7 @@
         {"vk_type": "vk::PhysicalDeviceVulkan13Features", "path": "dynamicRendering", "name": "Vulkan13::dynamicRendering"},
         {"vk_type": "vk::PhysicalDeviceVulkan13Features", "path": "synchronization2", "name": "Vulkan13::synchronization2"},
         {"vk_type": "vk::PhysicalDeviceVulkan13Features", "path": "shaderZeroInitializeWorkgroupMemory", "name": "Vulkan13::shaderZeroInitializeWorkgroupMemory"},
+        {"vk_type": "vk::PhysicalDeviceVulkan13Features", "path": "shaderDemoteToHelperInvocation", "name": "Vulkan13::shaderDemoteToHelperInvocation"},
         {"vk_type": "vk::PhysicalDeviceVulkan14Features", "path": "pushDescriptor", "name": "Vulkan14::pushDescriptor"},
         {"vk_type": "vk::PhysicalDeviceVulkan14Features", "path": "dynamicRenderingLocalRead", "name": "Vulkan14::dynamicRenderingLocalRead"},
         {"vk_type": "vk::PhysicalDeviceVulkan14Features", "path": "maintenance5", "name": "Vulkan14::maintenance5"},

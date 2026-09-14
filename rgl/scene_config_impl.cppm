@@ -67,9 +67,12 @@ SceneConfig defaultSceneConfig() {
 		{"model_pbr", "generated_shaders/model.mesh.spv", "generated_shaders/model_pbr.frag.spv"},
 		{"model_phong", "generated_shaders/model.mesh.spv", "generated_shaders/model_phong.frag.spv"},
 		{"model_pbr_ibl", "generated_shaders/model.mesh.spv", "generated_shaders/model_pbr_ibl.frag.spv"},
+		{"model_vegetation", "generated_shaders/model.mesh.spv", "generated_shaders/model_vegetation.frag.spv"},
+		{"model_light", "generated_shaders/model.mesh.spv", "generated_shaders/model_light.frag.spv"},
 		{"skybox", "generated_shaders/skybox.mesh.spv", "generated_shaders/skybox.frag.spv"},
 	};
-	cfg.styleMap = {{"unlit", "model"}, {"pbr", "model_pbr"}};
+	cfg.styleMap = {{"unlit", "model"}, {"pbr", "model_pbr"},
+		{"vegetation", "model_vegetation"}, {"light", "model_light"}};
 	cfg.spin = true;
 	return cfg;
 }

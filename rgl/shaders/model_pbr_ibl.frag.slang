@@ -2,7 +2,7 @@ import model;
 import material;  // 统一 push constant（Phase 4：DrawArgs 超集）
 import scene;     // 场景级 bindless 数据（Phase 5：光照 + 对象矩阵表，binding 3；④a irradianceSH/envBrdfFactor）
 import env;       // 环境 cubemap（Phase 5.5：binding 4/5 + readEnvParams）
-import normalmap; // Phase 8 ③a：normal 贴图导数 TBN + DX flip-G 解码（binding 6/7 消费）
+import normalmap; // Phase 8 方案 A：normal 贴图标准 TBN + DX flip-G 解码（binding 6/7 消费）
 import lights;    // Phase 8 ③：前向多灯循环（sceneData 尾区 GpuLight[]，无新绑定）
 
 // Phase 5.5：简化 PBR + IBL。direct light = 简化 Cook-Torrance；IBL 环境项 Phase 8 ④a 升级
@@ -34,29 +34,37 @@ float3 shadeDirect(float3 N, float3 V, float3 albedo, float metallic, float roug
 }
 
 [shader("fragment")]
-float4 main(ModelVertexOutput input) : SV_Target
+float4 main(ModelVertexOutput input, bool frontFace : SV_IsFrontFace) : SV_Target
 {
     float4 texel = baseColorTexture.Sample(baseColorSampler, input.uv);
     const ObjectDraw od = readObjectDraw(drawArgs.objectIndex);  // Phase 7b+：材质进 heap
     float3 albedo = od.baseColor.rgb * texel.rgb;
     float alpha = od.baseColor.a * texel.a;
+    // Phase 8 C1：MASK cutout（cutoff 在 od.emissive.w；0 = 不测 → 非 MASK 恒 false 逐位不变）
+    if (od.alphaDiscard(alpha))
+        discard;
 
     SceneLight light = readSceneLight();  // eyePos@12（共享）+ 头单灯（count=0 回落用）
     EnvParams env = readEnvParams();
     ObjectMatrix M = readObjectMatrix(drawArgs.objectIndex);
-    // P 先于 N：导数 TBN 需要 dFdx/dFdy(世界位置)（Phase 8 ③a）
     float3 P = worldPos(M, input.positionOS);
-    float3 N = worldNormal(M, normalize(input.normal));
+    float3 geoN = worldNormal(M, normalize(input.normal));  // 几何法线（方案 C AA 用）
+    float3 N = geoN;
 
-    // Phase 8 ③a：normal 贴图（导数 TBN，DX flip-G + Z 重建，中性法线纹理不动点）+ ORM
+    // Phase 8 ③a：normal 贴图（DX flip-G + Z 重建，中性法线纹理不动点）+ ORM
     //（G=roughness B=metallic，R=AO 采样不应用；白纹理回落材质 factor）
     float4 orm = ormTexture.Sample(baseColorSampler, input.uv);
     float3 tangentNormal = decodeNormalDx(normalTexture.Sample(baseColorSampler, input.uv));
-    // Slang 导数内建 = ddx/ddy（GLSL 式 dFdx/dFdy 名不存在，本版本实测）
-    N = applyNormalMap(N, ddx(P), ddy(P), ddx(input.uv), ddy(input.uv), tangentNormal);
+    // Phase 8 方案 A：标准 TBN（CPU 烘切线 + GS + 手性，无导数）——掠射角白噪点根治
+    N = applyNormalMapTBN(N, worldTangent(M, input.tangentOS), tangentNormal);
+    // Phase 8 C1：doubleSided 背面法线翻向（cull 开时 frontFace 恒真 = 无副作用；C2 关 cull 后生效）
+    if (!frontFace)
+        N = -N;
 
     float3 V = normalize(light.eyePos - P);
     float roughness = clamp(od.roughnessMetallic.x * orm.g, 0.04, 1.0);
+    // Phase 8 方案 C：geometric specular AA（几何法线导数估方差抬 roughness，掠射角白噪点）
+    roughness = normalFiltering(roughness, geoN);
     float metallic = clamp(od.roughnessMetallic.y * orm.b, 0.0, 1.0);
     float3 F0 = lerp(float3(0.04), albedo, metallic);
     float NdotV = max(dot(N, V), 1e-4);
