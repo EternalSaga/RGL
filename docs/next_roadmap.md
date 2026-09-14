@@ -165,23 +165,22 @@ per-light 颜色、距离衰减）headless 零 VVL error；forward 只读 `light
    / 前向头 SceneLight 入反射（双源消除，C API 工具升级）✓ / 批次 6 销账 ✓。
    遗留（非阻塞）：静态 DGC 翻盘（紧凑分桶）、normal/metalRough 纹理采样（Phase 8）、
    shadow map（Phase 10）。
+      ↓
+ Phase 8 完成（2026-09-14）：① HDR tonemap ✓ / ② codec + HDR env（治死黑+天空盒主根因）✓ /
+   ③ 纹理接缝 + forward 多灯 + emissive ✓ / ④ 完整版 IBL（SH9 + prefiltered）✓ /
+   剩余批次 A 掠射角法线（A+C）✓ B MASK/双面/deferred emissive ✓ C 多灯 ✓ D 掠射角法线质量 ✓
+   E 植被透射 SSS + 光源本色（forward）✓    F deferred 材质类别合并（per-pipeline class 常量 +
+   lua 连连看路由，零 heap 契约）✓——实施细节与验证记录全在 phase8_plan.md §1–11
+   结构债 8 条随批次拆完（"进场顺手拆"）；残留 style_check 1 条 = expandPrimitive 认知复杂度
+   20>15（loader 批次字段累积，下次动加载路径时拆）
+   **延后项（2026-09-14 用户拍板延后）——地面"水质感"**：现状地面"亮"但反射里只有环境（天空）、
+   没有场景（建筑/树/灯）= 油亮 ≠ 湿。补齐清单：① 反射源：planar reflection（地面单平面，
+   镜像相机重渲 + 剔平面下方，电影湿街标准做法）或 SSR（deferred G-buffer 已有 pos+normal，
+   但属后处理 → deferred-only，破 D1 对等）② 水洼状粗糙度贴图（洼 ≈0.05/湿石 0.3–0.5）
+   ③ 湿区 albedo×0.5–0.7 压暗 ④ 水膜法线扰动（镜面扭曲 = "水"与"玻璃"的区分要素）
+   ⑤ 太阳 glint（GGX 机制已在，被粗糙度分布解锁）⑥ AO/接触阴影（石缝积水暗部）；
+   架构上长在 deferred light pass（逐像素 specular 现成），D1 两路对等需豁免或 forward 补 G-buffer
      ↓
-Phase 8：Bistro 场景打磨
-  **结构债（style_check 存量 8 条，2026-09-11 定：各批次"进场顺手拆"，沿用 Phase 10 批次 0
-  先例，拆完即从清单划名）**：render_graph_impl ×4（文件 658 / compileRenderGraph 267+嵌套 6
-  / selfCheck 135 ← ① 插 tone-map pass 时拆，文件拆分 = builtin 三图描述另立 partition）；
-  loadSceneConfig 175（← ② 加 env 字段时）；loadGltfModel 209 + renderListSystem 139
-  （← ③ 纹理接缝动加载/材质路径时）；drawFrame 270（Phase 10 阴影 pass 循环定型时一并）。
-  ① HDR 累加链（先行——色彩判断基准）：light/forward 输出 → RGBA16F RT + ACES tone-map pass
-     → SRGB8 swapchain（当前 intensity 4.0 已在 SRGB8 写入时裁切高光，无 tone map）；
-     破现有 BIT-IDENTICAL 基线，重立新基线
-  ② HDR env 路径：Radiance .hdr（stb 内置 loader，16F）→ RGBA16F 上传；
-     Bistro `san_giuseppe_bridge_4k.hdr` 转正（现 skybox/rainbow 8-bit PNG 为占位）
-  ③ 纹理接缝：normal/ORM 贴图采样、BC5 Z 重建、法线绿通道、线性 mip 质量
-  **明确不升级**：G-buffer 四通道（albedo rgba8_srgb / normal rg16_snorm / worldPos rgba32f /
-  metalRough rgba8）+ albedo/normal/metalRough 贴图维持 8-bit——物理量 ≤1.0，业界标准，
-  升 16F 纯浪费带宽
-    ↓
 Phase 9：性能观测（profiler）——先回答"CPU-bound 还是 GPU-bound"，再谈优化
   ① CPU 帧相 profiler（内建）：每帧逐相 chrono（ECS/render_list/命令录制/④c cull
      waitForFences/present acquire）+ rllogger 直方图——关键 = 分清 CPU 干活 vs 等 GPU stall
