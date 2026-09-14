@@ -332,14 +332,18 @@ AA `normalFiltering()`（Kaplanyan 2016，刻意喂几何法线，glTF 默认 va
 
 **路由基础设施现成、零 D1 风险**：`pipelineIndex` 是 per-primitive（=材质粒度）+ `bindPipelineToAsset(name,
 assetId)`；deferred **无视 styleMap 恒走 `deferred_geometry`**（main.cpp:435）→ 新 spec 只在 forward 路
-按风格派生（`!deferredMode` 门控），deferred 逐位不动。
+按风格派生（`!deferredMode` 门控），deferred 逐位不动。植被判据 = `MASK&&DS` **或材质名含 `Foliage`**
+（loader 透出 `materialName`）——纯 MASK+DS 会漏 OPAQUE 花床 `Foliage_Paris_Flowers`（39 实例）与枝干
+（走通用 PBR 出潮湿反射，用户实拍指出）；`Plantpots` 花盆不含 Foliage 正确留 PBR。植被条目 12→25。
 
 - **`model_vegetation.frag`（L2 背光透射）**：pbr_ibl 派生（binding/import 严格一致，复用 model.mesh.spv
   + 4 纹理槽），metallic 恒 0；逐灯 `shadeTransmit`：出射向 `T=normalize(-L+0.2N)`、`backLit=pow(dot(V,T),3)`、
   `thickness=0.45+0.55·lum(albedo)` 保底（椴树叶贴深棕区否则死黑剪影），透光色用 `albedo`（albedo² 把深叶
-  压得几乎不透光），strength 1.5；**`shadeDirect` 漫反射 = half-Lambert wrap**（`pow(dot(N,L)·0.5+0.5, 2)`）——
-  标准 saturate(NdotL) 下单层叶片卡背阴面直接光恰为 0 = 死黑面（真实树冠靠冠内多层散射补亮，单层卡无此
-  信息），wrap 把阳光绕到背光侧廉价模拟冠内散射（HF2/UE vegetation 同款），specular 保持标准 saturate。
+  压得几乎不透光），strength 1.5；**`shadeDirect` 漫反射 = half-Lambert wrap**（`max(pow(dot(N,L)·0.5+0.5, 2),
+  0.3)`）——标准 saturate(NdotL) 下单层叶片卡背阴面直接光恰为 0 = 死黑面（真实树冠靠冠内多层散射补亮，单层
+  卡无此信息），wrap 把阳光绕到背光侧廉价模拟冠内散射（HF2/UE vegetation 同款），0.3 保底 = 冠内环境弹射；
+  **`envSpec ×0.2`**——植被掠射角菲涅尔→1 把天空拉成镜面 = 用户实拍的"潮湿感"（红色探针实证花床本就走
+  植被 shader，潮湿即 envSpec 本身；树叶物理上无锐利环境像）。
 - **`model_light.frag`（光源本色）**：**数据根因 = 路灯 `baseColor` 纯黑、绿 100% 来自 `emissiveTexture`
   绿玻璃纹理**，`emissiveFactor(0.5)×strength(4.0)=2.0` 乘绿纹理在 emission 主导下 = 纯绿霓虹——金属球版
   是黑金属底把绿压暗才藏住。修复 = emission × `(1/strength)` 还原 glTF 原值 + 保留 F0=0.04 玻璃反射 →

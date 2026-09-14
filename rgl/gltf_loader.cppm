@@ -38,7 +38,8 @@ export struct GltfPrimitive {
 	bool alphaModeMask = false;     // material alphaMode == "MASK"（Phase 8 C1：alpha-test cutout）
 	float alphaCutoff = 0.5f;       // material alphaCutoff（仅 MASK 消费；glTF 缺省 0.5）
 	bool doubleSided = false;       // material doubleSided（Phase 8 C2：加载期背面副本复制，见 loader）
-	int materialIndex = -1;         // glTF materials 数组下标（-1 = 无材质）——批次 2 材质资产去重键
+ 	int materialIndex = -1;         // glTF materials 数组下标（-1 = 无材质）——批次 2 材质资产去重键
+ 	std::string materialName;       // material.name（资产官方元数据；植被路由判据「Foliage」前缀）
 	// Phase 4 批次 3：材质风格字段（loader 输出即数据源，风格→管线映射经 scene.lua styles）
 	float metallic = 1.0f;          // pbrMetallicRoughness.metallicFactor（缺省 1.0）
 	float roughness = 1.0f;         // pbrMetallicRoughness.roughnessFactor（缺省 1.0）

@@ -45,7 +45,7 @@ float3 shadeDirect(float3 N, float3 V, float3 albedo, float metallic, float roug
     // 标准 GGX saturate(NdotL) 让单层叶片卡背阴面直接光恰好为 0 → 死黑面；真实树冠靠冠内
     // 多层叶互射（多重散射）发亮，单层卡无此信息。wrap 把阳光绕到晨昏线背光侧，廉价模拟
     // 冠内散射。specular 保持标准 saturate（高光不该绕）。
-    float wrap = pow(saturate(dot(N, L) * 0.5 + 0.5), 2.0);
+    float wrap = max(pow(saturate(dot(N, L) * 0.5 + 0.5), 2.0), 0.3);  // 保底 0.3 = 冠内弹射光基色（纯 wrap 背光面仍死黑）
     float3 diffuseWrap = albedo * (1.0 - metallic) * wrap / 3.14159265;
     return NdotL * specular + diffuseWrap;
 }
@@ -99,7 +99,9 @@ float4 main(ModelVertexOutput input, bool frontFace : SV_IsFrontFace) : SV_Targe
     float3 irradiance = irradianceSH(N);
     float3 envSpec = envMap.SampleLevel(envSampler, R, roughness * env.mipRange).rgb;
     float3 color = (irradiance * albedo * (1.0 - metallic)
-        + envSpec * envBrdfFactor(NdotV, roughness, F0)) * env.intensity;
+        + envSpec * envBrdfFactor(NdotV, roughness, F0) * 0.2) * env.intensity;
+    // 植被 env 镜面 ×0.2：F0=0.04 掠射 Fresnel→1 会出完整天空镜像 = "潮湿 IBL 反射"（花床
+    // 掠射角实测水光）；真实叶面粗糙蜡质，specular 本就弱，diffuse + 透射才是植被主体。
 
     // 直接光多灯循环 + 背光透射（透射项 = 叶片被光照亮背面时的透光）
     uint n = readLightCount();

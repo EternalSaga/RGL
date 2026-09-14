@@ -287,6 +287,7 @@ static void fillMaterialFields(const tinygltf::Model& gltf, int materialIndex, G
 	out.alphaModeMask = (mat.alphaMode == "MASK");  // Phase 8 C1：alpha-test cutout
 	out.alphaCutoff = static_cast<float>(mat.alphaCutoff);
 	out.doubleSided = mat.doubleSided;
+	out.materialName = mat.name;  // Phase 8：植被路由判据（OPAQUE 花床 Foliage_Paris_Flowers 不满足 MASK+DS）
 	out.metallic = static_cast<float>(mat.pbrMetallicRoughness.metallicFactor);
 	out.roughness = static_cast<float>(mat.pbrMetallicRoughness.roughnessFactor);
 	out.unlit = mat.extensions.count("KHR_materials_unlit") > 0;

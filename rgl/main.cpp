@@ -437,9 +437,14 @@ int main() {
 				if (!deferredMode && !prim.unlit) {
 					const bool isLight = prim.emissive.r > 0.0f || prim.emissive.g > 0.0f
 						|| prim.emissive.b > 0.0f;
+					// 植被判据：MASK+DS 叶卡 或 材质名含 Foliage（bistro 植被统一 Foliage_ 前缀，
+					// 覆盖 OPAQUE 花床 Foliage_Paris_Flowers——否则其走通用 PBR 出潮湿 IBL 反射；
+					// Plantpots 花盆不含 Foliage，正确留 PBR）。材质名 = glTF 官方元数据，非 hack。
+					const bool isLeaf = (prim.alphaModeMask && prim.doubleSided)
+						|| prim.materialName.find("Foliage") != std::string::npos;
 					if (isLight)
 						style = "light";
-					else if (prim.alphaModeMask && prim.doubleSided)
+					else if (isLeaf)
 						style = "vegetation";
 				}
 				const auto styleIt = sceneConfig.styleMap.find(style);
