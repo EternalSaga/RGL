@@ -47,7 +47,8 @@ static_assert(sizeof(CullEntry) == 60, "CullEntry layout drifted from cull.comp.
  * DGC 路消费（值 = 2×pipelineIndex / 2×pipelineIndex+1，execution set 下标约定见
  * vk_indirect_commands.cppm）。≤ RADV maxIndirectCommandsIndirectStride 2048。 */
 export inline constexpr uint32_t kCullSequenceStride = 120;
-/** count buffer 字节数（@0 visible atomicAdd | @4 total 每帧 thread0 写；64B 对齐留白）。 */
+/** count buffer 字节数（@0 保留未用——旧 visible atomicAdd 无人清零已删，2026-09-15
+ * | @4 total 每帧 thread0 写；64B 对齐留白）。 */
 export inline constexpr uint32_t kCullCountBytes = 64;
 
 /**
@@ -86,8 +87,11 @@ export class GpuCull {
 	[[nodiscard]] const std::vector<CullEntry>& entries() const { return entryTable; }
 	/**
 	 * 序列 staging 写 CPU 侧基值（recordCullPass 之前调用）：逐 candidate
-	 * execSlot@0（= pipelineIndex）+ DrawArgs@4（100B，mvp = CPU 位级真相源）+
-	 * meshCmd@104（x=groupCount y=z=1，GPU dispatch 只覆盖 x）。
+	 * execSlotFrag@0（= 2×pipelineIndex）+ execSlotMesh@4（= 2×pipelineIndex+1）+
+	 * DrawArgs@8（4B = objectIndex，material_types_generated；mvp 走 scene data
+	 * per-object 表，CPU = 位级真相源）+ meshCmd@108（x=groupCount y=z=1，
+	 * GPU dispatch 只覆盖 x）——偏移与 gpu_cull_impl.cppm writeSequenceStaging
+	 * 实现及 cull.comp.slang 头注释同源。
 	 * @param slot 帧 slot（staging ring 下标，0/1）
 	 * @param args 逐 candidate DrawArgs（candidate 序，render_list 产出；
 	 *             size 必须 = candidateCount，否则越界）
@@ -110,7 +114,7 @@ export class GpuCull {
 	 * 读回结果（调用方已同步等待本帧 culling 提交 fence）：visible 计数 + 逐 candidate
 	 * 可见位（不可见 = 序列 meshCmd.x == 0）。
 	 * @param slot 帧 slot（与 recordCullPass 同值）
-	 * @return 可见序列数
+	 * @return 可见序列数（由序列 meshCmd.x 位统计，非 count buffer @0——@0 保留未用）
 	 */
 	uint32_t readCullResult(uint32_t slot);
 	/** @return candidate i 是否可见（readCullResult 后有效）。 */

@@ -395,12 +395,19 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 			logger->info("DGC path: device='{}' graphicsIndirect={} computeIndirect={} static={} -> 读回重放 (CPU 回退)",
 				devName, dgcSup.graphicsIndirect, dgcSup.computeIndirect, dgcSup.staticGraphicsIndirect);
 	}
-	// Renderer 先构造（持 cull 堆指针），再 move 聚合成 struct——struct 内析构逆序
-	// renderer→dgcStatic→dgc→cull，与拆分前 main 局部变量序一致
-	Renderer renderer(device, swapchain, resources, pipelines,
-		std::move(graph), cull.get(), dgc.get(), dgcStatic.get());
+	// Renderer 以 prvalue **直接初始化**进聚合并 move-init 的 RenderBackEnd 槽位——
+	// 绝不 move Renderer：其成员 FrameCapturer::graph 是指向本对象 renderGraph 成员的
+	// 引用，隐式 move 的成员拷贝保留旧绑定（= 本函数栈上旧对象），assembleBackEnd
+	// 返回即悬空，dump_gbuf 路径 record()→slotOfName 解引用悬垂 vector → SIGSEGV
+	// （2026-09-15 勘误）。raw 指针在 unique_ptr 移走前捕获（聚合元素按声明序求值：
+	// cull/dgc/dgcStatic 先 move、Renderer 后构造，对象本体不换地址）。
+	// struct 内析构逆序 renderer→dgcStatic→dgc→cull 不变，与拆分前 main 局部变量序一致。
+	auto* cullRaw = cull.get();
+	auto* dgcRaw = dgc.get();
+	auto* dgcStaticRaw = dgcStatic.get();
 	return RenderBackEnd{std::move(cull), std::move(dgc), std::move(dgcStatic),
-		std::move(renderer)};
+		Renderer(device, swapchain, resources, pipelines,
+			std::move(graph), cullRaw, dgcRaw, dgcStaticRaw)};
 }
 
 }  // namespace RGL

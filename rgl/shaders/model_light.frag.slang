@@ -77,7 +77,8 @@ float4 main(ModelVertexOutput input, bool frontFace : SV_IsFrontFace) : SV_Targe
     float3 R = reflect(-V, N);
     float3 irradiance = irradianceSH(N);
     float3 envSpec = envMap.SampleLevel(envSampler, R, roughness * env.mipRange).rgb;
-    float3 color = (irradiance * albedo * (1.0 - metallic)
+    // Lambert 1/π：irradianceSH 输出真辐照度 E，出射 = E·albedo/π（与直接光 shadeDirect 的 albedo/π 一致；Filament 把该 1/π 烘进 CPU SH 系数，我们在求值端）
+    float3 color = (irradiance / 3.14159265 * albedo * (1.0 - metallic)
         + envSpec * envBrdfFactor(NdotV, roughness, F0)) * env.intensity;
 
     uint n = readLightCount();

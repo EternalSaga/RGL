@@ -174,6 +174,8 @@ std::expected<void, Error> parsePipelines(sol::table root, SceneConfig& cfg) {
  * light 单灯段 + lights 多灯列表段解析（Phase 5 批次 2 / Phase 7 D3）。
  * lights 缺段回落合成 [light] 单灯（lights[0] = 主光）；per-light 不解析 ambient
  *（场景共享项，仅 lights[0] 进 scene data @36）。type=0 定向 / 1 点光。
+ * ambient 语义：light 段是唯一可配源——lights 段被采用时 lights[0].ambient 也取
+ * light 段值（否则 lights 段一存在，light.ambient 就成死配置、静默回落组件默认）。
  * @param root 配置根表
  * @param cfg 目标配置（写 light/lights）
  */
@@ -203,8 +205,16 @@ void parseLights(sol::table root, SceneConfig& cfg) {
 			cfg.lights.push_back(L);
 		}
 	}
-	if (cfg.lights.empty())
+	if (cfg.lights.empty()) {
 		cfg.lights.push_back(cfg.light);  // 回落：旧单灯 light 段合成主光（lights[0]）
+		return;
+	}
+	cfg.lights[0].ambient = cfg.light.ambient;
+	// ambient = 场景共享项（仅 lights[0] 进 scene data @36），light 段保持唯一可配源；
+	// per-light 不解析 ambient（契约见函数 doc）
+	if (auto* logger = RLLogger::getInstance())
+		logger->info("scene: lights 段生效（{} 灯），light 段仅作 ambient 源（per-light ambient 不解析）",
+			cfg.lights.size());
 }
 
 /**

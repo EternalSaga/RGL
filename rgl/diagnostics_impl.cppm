@@ -7,6 +7,7 @@ import diagnostics;  // clang 不给 partition impl unit 隐式 import 主接口
 import rlstd;
 import rllogger;
 import vkerror;
+import render_graph;  // kGBufferAttachments（dump_gbuf 越界闸门按表判界；render_graph 不依赖本模块，无环）
 
 namespace RGL {
 
@@ -19,7 +20,7 @@ DiagnosticsConfig& diagnostics() {
 /** setDiagnostics 定义：整体赋值到单例。 */
 void setDiagnostics(const DiagnosticsConfig& cfg) { diagnostics() = cfg; }
 
-/** loadDiagnosticsConfig 定义（接口注释见 diagnostics.cppm）。要点：数值门（texel_canary/dump_gbuf/texture_force_size）负数 = "关"哨兵；dump_gbuf 越界（>3）钳到 0（同旧 env 行为）；解析完成后打一行 info 汇总。 */
+/** loadDiagnosticsConfig 定义（接口注释见 diagnostics.cppm）。要点：数值门（texel_canary/dump_gbuf/texture_force_size）负数 = "关"哨兵；dump_gbuf 越界（> kGBufferAttachments 最大通道号）warn 一句并置 -1（关，不再静默改判为 0）；解析完成后打一行 info 汇总。 */
 [[nodiscard]] std::expected<DiagnosticsConfig, Error> loadDiagnosticsConfig(std::string_view path) {
 	auto* logger = RLLogger::getInstance();
 	DiagnosticsConfig cfg;
@@ -65,7 +66,7 @@ void setDiagnostics(const DiagnosticsConfig& cfg) { diagnostics() = cfg; }
 		cfg.textureForceUnorm = readBool("texture_force_unorm", cfg.textureForceUnorm);
 		cfg.dgcStatic = readBool("dgc_static", cfg.dgcStatic);
 
-		// 数值门：负数 = 显式"关"哨兵（配置文件写 -1 直观）；越界钳位同旧 env 行为
+		// 数值门：负数 = 显式"关"哨兵（配置文件写 -1 直观）；dump_gbuf 越界 = warn + 关闭
 		auto readI64 = [&](const char* key, int64_t def) -> std::optional<int64_t> {
 			sol::optional<double> v = root[key];
 			if (!v)
@@ -77,8 +78,13 @@ void setDiagnostics(const DiagnosticsConfig& cfg) { diagnostics() = cfg; }
 		cfg.textureForceSize = static_cast<uint32_t>(
 			std::max<int64_t>(0, readI64("texture_force_size", 0).value_or(0)));
 		cfg.dumpGbuf = static_cast<int>(readI64("dump_gbuf", -1).value_or(-1));
-		if (cfg.dumpGbuf > 3)
-			cfg.dumpGbuf = 0;  // 越界钳到 0（同旧 env 行为）；负数 = 关
+		constexpr int kMaxGbufChannel = static_cast<int>(kGBufferAttachments.size()) - 1;
+		if (cfg.dumpGbuf > kMaxGbufChannel) {
+			if (logger)
+				logger->warn("diagnostics: dump_gbuf={} 超出 G-buffer 通道数（0..{}），已关闭",
+					cfg.dumpGbuf, kMaxGbufChannel);
+			cfg.dumpGbuf = -1;
+		}
 		cfg.frameStats = static_cast<uint32_t>(
 			std::max<int64_t>(0, readI64("frame_stats", 0).value_or(0)));
 

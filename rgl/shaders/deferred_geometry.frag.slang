@@ -28,12 +28,14 @@ import normalmap;  // Phase 8 方案 A：normal 贴图标准 TBN + DX flip-G 解
 //   SV_Target4 emissive    RGBA16_SFLOAT      (Phase 8 剩余批次 B：HDR 自发光 = emissiveFactor ×
 //                                              emissiveTexture，与 forward 相加项同源；16F 保 HDR 域)
 
-// octahedral 编码（McTaggart 形态；与 light.frag octDecode 逐位对称——两端必须一致）
+// octahedral 编码（McTaggart **标准形 +signNotZero**——z<0 半区折进同象限菱形外区，
+// 码面连续；与 light.frag octDecode 同式自反——两端必须一致。旧 −signNotZero 乘子
+// 折到对角象限，码面撕裂且在赤道带 z≈0⁻ 处产生 180° 翻转，2026-09-15 勘误）
 float2 octEncode(float3 n)
 {
     n /= (abs(n.x) + abs(n.y) + abs(n.z));
     if (n.z < 0.0)
-        n.xy = (1.0 - abs(n.yx)) * select(n.xy >= 0.0, -1.0, 1.0);
+        n.xy = (1.0 - abs(n.yx)) * select(n.xy >= 0.0, 1.0, -1.0);
     return n.xy;
 }
 

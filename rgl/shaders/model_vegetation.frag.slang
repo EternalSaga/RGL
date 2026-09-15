@@ -98,7 +98,8 @@ float4 main(ModelVertexOutput input, bool frontFace : SV_IsFrontFace) : SV_Targe
     float3 R = reflect(-V, N);
     float3 irradiance = irradianceSH(N);
     float3 envSpec = envMap.SampleLevel(envSampler, R, roughness * env.mipRange).rgb;
-    float3 color = (irradiance * albedo * (1.0 - metallic)
+    // Lambert 1/π：irradianceSH 输出真辐照度 E，出射 = E·albedo/π（与直接光 shadeDirect 的 albedo/π 一致；Filament 把该 1/π 烘进 CPU SH 系数，我们在求值端）
+    float3 color = (irradiance / 3.14159265 * albedo * (1.0 - metallic)
         + envSpec * envBrdfFactor(NdotV, roughness, F0) * 0.0) * env.intensity;
     // 植被 env 镜面 = 0：F0=0.04 掠射 Fresnel→1 出完整天空镜像（×0.2 在绿篱垂直面掠射机位
     // 仍出"油亮"湿感，探针置 0 后 matte 自然——薄叶蜡质层无可分辨环境像，diffuse+透射即主体）。

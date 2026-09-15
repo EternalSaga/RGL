@@ -412,14 +412,17 @@ void GpuCull::recordFanoutDispatch(vk::raii::CommandBuffer& cmd) {
 }
 
 uint32_t GpuCull::readCullResult(uint32_t slot) {
-	auto* rb = static_cast<const uint32_t*>(readbackMapped[slot]);
-	lastVisible = rb[0];
 	readbackSeqPtr[slot] = static_cast<const std::byte*>(readbackMapped[slot]) + kCullCountBytes;
+	// 可见数由 meshCmd.x 位统计（count buffer @0 保留未用——旧 visible atomicAdd
+	// 无人清零已删，2026-09-15）
+	uint32_t visible = 0;
 	for (uint32_t i = 0; i < nCandidates; ++i) {
 		const auto* s = readbackSeqPtr[slot] + static_cast<size_t>(i) * kCullSequenceStride;
 		const uint32_t x = *reinterpret_cast<const uint32_t*>(s + 108);  // meshCmd.x@108
 		visibleFlags[i] = (x != 0);
+		visible += (x != 0);
 	}
+	lastVisible = visible;
 	return lastVisible;
 }
 

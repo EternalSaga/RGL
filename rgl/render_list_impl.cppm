@@ -89,8 +89,9 @@ void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListS
 			draw.baseColor = mat.baseColor;
 			draw.roughness = mat.roughness;  // Phase 5 接线（pbr frag 消费）
 			draw.metallic = mat.metallic;
-			// Phase 8 ③：自发光 xyz=factor；Phase 8 C1：w = MASK alphaCutoff（0 = 不测 alpha）
-			draw.emissive = glm::vec4(mat.emissive, 0.0f /* DBG */);
+			// Phase 8 ③：自发光 xyz=factor；Phase 8 C1：w = MASK alphaCutoff（alphaDiscard：
+			// w>0 且 alpha<w 才丢；非 MASK 写 0 = 恒不测，逐位不变）
+			draw.emissive = glm::vec4(mat.emissive, mat.alphaModeMask ? mat.alphaCutoff : 0.0f);
 			args.objectIndex = meshRef.objectSlot;  // bindless 各表下标（实例级，instancing）
 			if (candidate)
 				cullArgs.push_back(args);

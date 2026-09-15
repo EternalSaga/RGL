@@ -24,11 +24,16 @@ float readExposure()
 
 // Narkowicz 2015 "ACES Filmic Tone Mapping Curve" 近似（per-channel 有理二次式，
 // RRT+ODT 的曲线拟合；输出仍在显示线性域，交给 sRGB attachment 硬件编码）。
-// 矩阵 = ACESInputMat/ACESOutputMat 常数（行主序，mul(v, M) 行向量约定）。
+// 矩阵存放/乘法约定：内层花括号 = 行（行主序字面量），mul(v, M) = 行向量×矩阵
+// （v 乘第 i 行取分量 j）——此约定下"中性输入不变"要求 **M 的列和 = 1**。
+// kACESInput = 标准 ACESFitted sRGB→AP1 矩阵（Narkowicz/MJP：行和为 1 的那张）的
+// **转置**存放（列和 = 1 正是原矩阵行和），配 mul(x, M) 方向使用；kACESOutput =
+// 标准 AP1→sRGB 矩阵的转置（原本就正确，勿动）。2026-09-15 勘误：旧值第 2/3 行
+// 系转写错误（抄成行和≈1 的错版），白输入灰化 + 通道串扰方向反了。
 static const float3x3 kACESInput = {
     { 0.59719, 0.07600, 0.02840 },
-    { 0.21113, 0.75515, 0.14358 },
-    { 0.02413, 0.07502, 0.63504 },
+    { 0.35458, 0.90834, 0.13383 },
+    { 0.04823, 0.01566, 0.83777 },
 };
 static const float3x3 kACESOutput = {
     {  1.60475, -0.10208, -0.00327 },

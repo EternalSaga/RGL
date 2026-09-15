@@ -4,8 +4,9 @@
 //
 // **数据分工（BIT-IDENTICAL 契约）**：序列的 execSlot/DrawArgs/meshCmd 基值由 CPU 每帧
 // 写进 seq staging（mvp = CPU 算——GPU 若自算 mvp，FMA 收缩序与 CPU 无位级契约，
-// 叶缘光栅 ±1 LSB 不可控）；GPU 只覆盖可见性：meshCmd.x@104（groupCount 或 0 = no-op）
-// 与 count（@0 visible atomicAdd | @4 total，DGC sequenceCountAddress 指向 @4）。
+// 叶缘光栅 ±1 LSB 不可控）；GPU 只覆盖可见性：meshCmd.x@108（groupCount 或 0 = no-op）
+// 与 count（@0 保留未用（旧 visible atomicAdd 无人清零已删，2026-09-15）| @4 total
+// 每帧 thread0 写，DGC sequenceCountAddress 指向 @4；可见数 = CPU 读回序列 meshCmd 位统计）。
 // DGC 执行路与读回重放路消费同一序列内容（CPU args + GPU 可见性），跨平台位级一致。
 //
 // 矩阵约定（无行/列主序歧义）：对象矩阵按"内存 chunk j = 数学列 j"处理（C++ 侧 glm
@@ -26,8 +27,9 @@
 //     @4   execSlotMesh u32（= 2×pipelineIndex+1，CPU 写；token 第 2 位 = MESH 阶段）
 //     @8   DrawArgs 100B（CPU 写，material.slang 契约）
 //     @108 meshCmd 12B（CPU 写基值 x=groupCount y=z=1；**GPU 覆盖 x**）
-//   count (binding 3)：@0 visible u32（atomicAdd）| @4 total u32（thread0 每帧写
-//     push.sequenceCount——DGC sequenceCountAddress 指向此处，非紧凑 = candidate 数）
+//   count (binding 3)：@0 保留未用（旧 visible atomicAdd 无人清零已删，2026-09-15）
+//     | @4 total u32（thread0 每帧写 push.sequenceCount——DGC sequenceCountAddress
+//     指向此处，非紧凑 = candidate 数；可见数 = CPU 读回序列 meshCmd 位统计）
 [[vk::binding(0, 0)]]
 readonly ByteAddressBuffer cullTable;
 [[vk::binding(1, 0)]]
@@ -55,6 +57,11 @@ static const uint kSequenceStride = 120u;
 void main(uint3 tid : SV_DispatchThreadID)
 {
     uint i = tid.x;
+    // 尾线程守卫（stream_fanout.comp.slang 同款）：dispatch 上取整 64，尾线程 i ≥
+    // sequenceCount 会越界读写表/序列 buffer——robustBufferAccess 只保证"丢弃或改写
+    // 绑定内存内值"，不可依赖
+    if (i >= push.sequenceCount)
+        return;
     uint base = i * kEntryStride;
     float3 c = asfloat(cullTable.Load3(base));
     float r = asfloat(cullTable.Load(base + 12u));
@@ -89,8 +96,6 @@ void main(uint3 tid : SV_DispatchThreadID)
 
     // GPU 只覆盖可见性（序列其余字节 = CPU 基值）：meshCmd.x@108
     sequences.Store(i * kSequenceStride + 108u, visible ? groupCount : 0u);
-    if (visible)
-        countBuf.InterlockedAdd(0u, 1u);
     if (tid.x == 0u)
         countBuf.Store(4u, push.sequenceCount);
 }

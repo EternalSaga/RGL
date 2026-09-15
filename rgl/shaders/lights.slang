@@ -1,10 +1,11 @@
 // lights.slang — Phase 7 D3：多灯数据契约（第 4 条反射管线）
 //
 // scene data buffer（binding 3，import scene）尾部**灯数组区**的单一真相源。
-// forward 灯路径仍走 scene.slang readSceneLight()（读 LightDataGpu@0 = 主光，字节布局不变
-// → forward 回归 diff0）；deferred light pass 经本文件逐灯读灯数组累加。
+// forward 三支 frag（model_pbr_ibl/model_light/model_vegetation）与 deferred light.frag
+// 均先 readLightCount()：>0 时逐灯经本文件读 GpuLight[] 累加；count=0 回落
+// scene.slang readSceneLight() 的 @0 头单灯（旧默认场景无显式 Light entity 时的直接光）。
 // GpuLight struct + kMaxLights 经反射管线生成 C++ struct（generated/lights_types_generated.cppm），
-// 替换 LightDataGpu 手工双源债（AGENTS 已知问题）。
+// 替换了旧 LightDataGpu 手工双源债（该类型已删，@0 头 = 反射生成的 SceneLight）。
 //
 // 布局（字节偏移真相源 = vkresources.cppm kSceneDataLightArray*，字面量手工一致，scene.slang 先例）：
 //   @base + 0   uint lightCount（有效灯数，≤ kMaxLights）

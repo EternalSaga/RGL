@@ -2,8 +2,15 @@
 //
 // 单一 storage buffer（descriptor heap binding 3，Resources::ensureSceneData 创建，
 // 每帧 staging → vkCmdCopyBuffer 更新，见 vkrenderer.cppm）。
-// 字节布局契约的单一真相源 = vkresources.cppm（LightDataGpu / kSceneData* 常量），
-// 本文件字面量必须一致（kTrianglesPerGroup 先例，无反射端对应）：
+// 字节布局真相源分两段（2026-09-15 勘误：旧注释称真相源 = vkresources.cppm 的
+// LightDataGpu——该类型已删）：
+//   · SceneLight（@0-48 头）真相源 = **本文件**——scene_forward 反射管线从本文件
+//     生成 scene_forward_types_generated.cppm（逐字段 offsetof static_assert 钉死），
+//     vkresources 的 kSceneDataEnvOffset 等派生自 sizeof(SceneLight) 并 static_assert
+//     钉死各区偏移，shader 结构漂移 = C++ 编译失败；
+//   · 其余表区（@128 矩阵表 / @262272 灯数组 / @262800 MVP 表 / @524944 draw 表）
+//     字节字面量与 vkresources kSceneData* 手工一致（灯数组基址经 lights_schema 常量
+//     三方 static_assert 钉死；MVP/draw 表基址仅对齐 assert，改字面量须两端同步）。
 //   @0   direction vec3 | @12 eyePos vec3 | @24 color vec3（CPU 预乘 intensity）| @36 ambient vec3
 //        （两个 intensity 语义：光色在此 CPU 预乘成最终值；env intensity 是 @48 的裸标量、
 //          GPU 端乘——env 颜色在 GPU 侧无法预乘，调光两条路线各改各 config 的一个 intensity）

@@ -53,12 +53,14 @@ struct LightInput
     float2 uv       : TEXCOORD0;
 };
 
-// octahedral 解码（与 deferred_geometry.frag octEncode 逐位对称）
+// octahedral 解码（与 deferred_geometry.frag octEncode 同式自反；McTaggart **标准形
+// +signNotZero**——折叠乘子两端必须一致。旧 −signNotZero 在赤道带 z≈0⁻ 产生 180°
+// 翻转，2026-09-15 勘误）
 float3 octDecode(float2 e)
 {
     float3 n = float3(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
     if (n.z < 0.0)
-        n.xy = (1.0 - abs(n.yx)) * select(n.xy >= 0.0, -1.0, 1.0);
+        n.xy = (1.0 - abs(n.yx)) * select(n.xy >= 0.0, 1.0, -1.0);
     return normalize(n);
 }
 
@@ -178,7 +180,8 @@ float4 main(LightInput input) : SV_Target0
         float3 irradiance = irradianceSH(N);
         float3 envSpec    = envMapL.SampleLevel(envSamplerL, R, roughness * env.mipRange).rgb;
         // 植被 env 镜面 = 0（同 forward model_vegetation：掠射天空镜像 = 油亮湿感，探针定案）
-        color = (irradiance * albedo * (1.0 - metallic)
+        // Lambert 1/π：irradianceSH 输出真辐照度 E，出射 = E·albedo/π（与直接光 shadeLight 的 albedo/π 一致；Filament 把该 1/π 烘进 CPU SH 系数，我们在求值端）
+        color = (irradiance / 3.14159265 * albedo * (1.0 - metallic)
             + envSpec * envBrdfFactor(NdotV, roughness, F0) * (isVeg ? 0.0 : 1.0)) * env.intensity;
     }
     else
@@ -187,28 +190,39 @@ float4 main(LightInput input) : SV_Target0
     }
 
     uint n = readLightCount();
-    for (uint i = 0; i < n; ++i)
+    if (n == 0)
     {
-        GpuLight gl = readGpuLight(i);
-        float3 L;
-        float atten = 1.0;
-        if (gl.params.y < 0.5)  // 定向光：照射方向 = -direction，无衰减
+        // count=0 回落 @0 头单灯（与 forward model_pbr_ibl/model_light/model_vegetation 同款；
+        // shadeLightVeg 已含植被透射项 ≈ forward 回落的 shadeDirect+shadeTransmit）
+        float3 L0 = -shared.direction;
+        color += isVeg ? shadeLightVeg(N, V, albedo, roughness, L0, shared.color, 1.0)
+                       : shadeLight(N, V, albedo, metallic, roughness, L0, shared.color, 1.0);
+    }
+    else
+    {
+        for (uint i = 0; i < n; ++i)
         {
-            L = -gl.direction.xyz;
+            GpuLight gl = readGpuLight(i);
+            float3 L;
+            float atten = 1.0;
+            if (gl.params.y < 0.5)  // 定向光：照射方向 = -direction，无衰减
+            {
+                L = -gl.direction.xyz;
+            }
+            else                    // 点光：指向光源，线性衰减 clamp(1 - dist/range)
+            {
+                float3 toLight = gl.position.xyz - P;
+                float dist = length(toLight);
+                L = toLight / max(dist, 1e-4);
+                atten = gl.params.x > 0.0 ? saturate(1.0 - dist / gl.params.x) : 0.0;
+            }
+            if (atten <= 0.0)
+                continue;
+            if (isVeg)
+                color += shadeLightVeg(N, V, albedo, roughness, L, gl.color.rgb, atten);
+            else
+                color += shadeLight(N, V, albedo, metallic, roughness, L, gl.color.rgb, atten);
         }
-        else                    // 点光：指向光源，线性衰减 clamp(1 - dist/range)
-        {
-            float3 toLight = gl.position.xyz - P;
-            float dist = length(toLight);
-            L = toLight / max(dist, 1e-4);
-            atten = gl.params.x > 0.0 ? saturate(1.0 - dist / gl.params.x) : 0.0;
-        }
-        if (atten <= 0.0)
-            continue;
-        if (isVeg)
-            color += shadeLightVeg(N, V, albedo, roughness, L, gl.color.rgb, atten);
-        else
-            color += shadeLight(N, V, albedo, metallic, roughness, L, gl.color.rgb, atten);
     }
     // Phase 8 剩余批次 B：自发光相加（deferred_geometry SV_Target4 写入的第 5 G-buffer 通道，
     // 与 forward model_pbr_ibl 的 od.emissive.rgb × emissiveTexture 相加项同源；天空分支已提前返回）

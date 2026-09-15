@@ -338,18 +338,19 @@ glm::vec3 sampleEquirect(const DecodedImageF& src, glm::vec3 dir) {
 }
 
 /** 球谐 9 基（real SH，归一化常数烘焙进基函数——与 scene.slang irradiance 求值逐式相同，
- * 两端必须一致）。dir 须归一化；输出 9 项 Y00..Y22。 */
+ * 两端必须一致）。dir 须归一化；输出 9 项 Y00..Y22。
+ * 归一化常数字面量与 scene.slang irradianceSH 逐字符一致（改一端必须同步另一端）。 */
 inline std::array<float, 9> shBasis(glm::vec3 d) {
 	return {
 		0.282095f,
-		0.488603f * d.y,
-		0.488603f * d.z,
-		0.488603f * d.x,
-		1.092548f * d.x * d.y,
-		1.092548f * d.y * d.z,
-		0.315392f * (3.0f * d.z * d.z - 1.0f),
-		1.092548f * d.x * d.z,
-		0.546274f * (d.x * d.x - d.y * d.y)};
+		0.48860251f * d.y,
+		0.48860251f * d.z,
+		0.48860251f * d.x,
+		1.09254843f * d.x * d.y,
+		1.09254843f * d.y * d.z,
+		0.31539157f * (3.0f * d.z * d.z - 1.0f),
+		1.09254843f * d.x * d.z,
+		0.54627422f * (d.x * d.x - d.y * d.y)};
 }
 
 /**
