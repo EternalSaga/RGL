@@ -11,6 +11,7 @@ import rlstd;
 import vkerror;
 import vk_swapchain;
 import vk_resources;
+import asset_table;  // AssetTable（renderSystem 参数透传；F 拆出）
 import vk_renderer;
 import frame_draw_list;
 import render_list;
@@ -241,12 +242,12 @@ namespace {
  * env 2026-09-08 转配置）。触发时机 = 本帧 drawFrame 前（waitForIdle 已在函数内
  * 排空 in-flight）；fired 由调用方持有，保证至多触发一次。 */
 void texelCanaryOnce(bool& fired, uint64_t canaryFrame, uint32_t frame,
-	RGL::Renderer& renderer) {
+	RGL::Renderer& renderer, const RGL::AssetTable& assets) {
 	if (fired || frame < canaryFrame) {
 		return;
 	}
 	fired = true;
-	texelCanaryCheck(renderer.getResourcesRef(), renderer.getDeviceContextRef(),
+	texelCanaryCheck(renderer.getResourcesRef(), assets, renderer.getDeviceContextRef(),
 		renderer.getGraphicsCommandPoolRef(), frame);
 }
 
@@ -383,6 +384,7 @@ struct FrameStatsTracker {
  * llm 捕获消费（真有产物时调 llmCapture 写 PNG + 置 AppExit，跳帧时请求保持
  * pending 重试）/ onFrame 回调 → 循环外 waitForIdle 后返回 lastError（若有）。 */
 std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer& renderer,
+	const RGL::AssetTable& assets,
 	const RGL::LlmDebugConfig* llm,
 	std::function<std::expected<std::string, Error>(RGL::Renderer&)>
 		llmCapture,
@@ -411,7 +413,7 @@ std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer& rende
 		{"animation",  [](entt::registry& rg, float dt) { animationSystem(rg, dt); }},
 		{"bounds",     [](entt::registry& rg, float) { boundsSystem(rg); }},
 		{"projection", [](entt::registry& rg, float) { projectionSystem(rg); }},
-		{"renderlist", [&](entt::registry& rg, float) { renderListSystem(rg, resources, renderListState); }},
+		{"renderlist", [&](entt::registry& rg, float) { renderListSystem(rg, resources, renderer.getEnvironmentRef(), assets, renderListState); }},
 	};
 
 	float prevTicks = static_cast<float>(SDL_GetTicks());
@@ -438,7 +440,7 @@ std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer& rende
 		}
 
 		// texel 金丝雀（本帧 drawFrame 前，waitForIdle 已在函数内排空 in-flight）
-		texelCanaryOnce(canaryFired, canaryFrame, frame, renderer);
+		texelCanaryOnce(canaryFired, canaryFrame, frame, renderer, assets);
 
 		// llm 帧捕获：drawFrame 前请求 → drawFrame → 真产物才消费（时序契约见 LlmCaptureFlow）
 		capture.requestBeforeDraw(renderer);

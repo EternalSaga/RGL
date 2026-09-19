@@ -7,6 +7,7 @@ import rlstd;
 import material_types_generated;  // Phase 4：统一 DrawArgs 超集（scalar 布局 100B，Phase 5 +objectIndex）
 import frame_draw_list;
 import vk_resources;
+import environment;  // Environment（irradianceSH，架构债务续账步骤 3）
 import asset_table;
 import scene_context;
 import camera;
@@ -81,8 +82,11 @@ export struct RenderListState {
  * @param rg registry（读 ViewProjection/SceneSpin/Camera/SceneEnv/NextObjectSlot，
  *   遍历 Transform+MeshRef+MaterialRef+CullSphere 实体 view + Light 组件 view，写 ctx FrameDrawList）
  * @param resources 资源层（资产表：mesh/material 记录解析）
+ * @param env 环境服务（irradianceSH 每帧拷入 scene data，架构债务续账步骤 3）
+ * @param assets 资产表（mesh/material 记录解析；F 拆出不再经内核取）
  * @param state 每帧 push constant 存储（args/matrices/skyboxArgs 填充 + culling 统计）
  */
-export void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListState& state);
+export void renderListSystem(entt::registry& rg, RGL::Resources& resources,
+	RGL::Environment& envService, const RGL::AssetTable& assets, RenderListState& state);
 
 }  // namespace RGL

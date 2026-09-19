@@ -67,7 +67,7 @@ EnvPrefilter::EnvPrefilter(RGL::DeviceContext& device)
 }
 
 /** 契约见接口注释。实现：仅记 heap 引用 + sampler 槽（不拥有 heap）。幂等由调用方
- * （Resources::ensureEnvPrefilterReady 的 envPrefilterBound 守卫）保证——重复调用覆盖同值无害。 */
+ * （Environment::ensurePrefilterReady 的 envPrefilterBound 守卫）保证——重复调用覆盖同值无害。 */
 void EnvPrefilter::init(const VmaDescriptorHeap& resourceHeapIn,
 	const VmaDescriptorHeap& samplerHeapIn, uint32_t samplerSlotIn) {
 	resourceHeap = &resourceHeapIn;

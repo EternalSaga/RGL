@@ -17,7 +17,7 @@ namespace RGL {
 //     每 level index 一 shader object + 一对独立 heap 槽（srcSampledSlot/dstStorageSlot，
 //     init 时一次性建好、每纹理复用同一批），binding 0/1 → resource heap（各槽固定，
 //     非每 dispatch 重写同槽——同 submission 内重写同槽必被后续 host 写覆盖 = 错数据），
-//     binding 2 → sampler heap（复用 Resources::ensureSharedSampler 的 LINEAR sampler）。
+//     binding 2 → sampler heap（复用 SamplerLibrary::ensureShared 的 LINEAR sampler）。
 //     shader object 的 image binding 用 VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_PUSH_INDEX_EXT
 //     （RADV heap storage image 唯一验证可用配方，见 docs/DESCRIPTOR_HEAP_SPEC.md 坑 17），
 //     push index 恒 0（pushOffset=5×4 处 push data）。per-level 视图：每目标级一对
@@ -28,9 +28,9 @@ namespace RGL {
 //     usage；且本 spec 视图格式须支持图的全部 usage → SRGB 视图 + eStorage 图必被 VVL
 //     拒）→ compute 存储不可行，走 blit（字节保真 + 硬件双线性降采样）。本路径无描述符，
 //     不受 heap 迁移影响。
-//   - **生命周期**：owner = Resources 成员（启动期一次性，覆盖全部上传；先于 device 析构）。
-//     heap 槽由 Resources 经 allocSlot 领取后喂给本类型（本模块不 import vk_resources——
-//     Resources 持本类型成员，无环；heap 引用经 init 注入）。per-level 视图 create info
+//   - **生命周期**：owner = SamplerLibrary 成员（启动期一次性，覆盖全部上传；先于 device 析构）。
+//     heap 槽由 SamplerLibrary 经 Resources::allocSlot(Runtime) 领取后喂给本类型（本模块不 import vk_resources——
+//     SamplerLibrary 持本类型成员，无环；heap 引用经 init 注入）。per-level 视图 create info
 //     存成员 deque（不 realloc → pView 指针稳定，活过提交 + fence wait——驱动可延迟解析）。
 
 /**
@@ -50,17 +50,17 @@ static_assert(sizeof(MipGenPush) == 12, "MipGenPush 须与 mip_gen.comp.slang pu
  * MipGen：2D 纹理 compute mip 链生成器（Phase 8 ③b，启动期一次性基础设施）。
  * 持有 mip_gen.comp SPV + **每 level index 一个 compute shader object**（heap + push-index
  * mapping，非传统管线/pipeline layout）+ 每 level 一对 heap 描述符槽（src sampled /
- * dst storage，由 Resources 领取喂入）+ per-level 视图 create info 稳定容器（pView 指向，
+ * dst storage，由 SamplerLibrary 领取喂入）+ per-level 视图 create info 稳定容器（pView 指向，
  * 生命周期覆盖全部提交）。无 descriptor pool / set layout / pipeline layout / pipeline
- * （全走 descriptor heap）。owner = Resources 成员（构造于 Resources 构造期，析构先于 device）。
+ * （全走 descriptor heap）。owner = SamplerLibrary 成员（构造于 SamplerLibrary 构造期，析构先于 device）。
  */
 export class MipGen {
    public:
 	/**
 	 * 加载 mip_gen.comp.spv 进成员（启动期一次性）+ 校验 R8G8B8A8_UNORM 的 STORAGE_IMAGE
 	 * 能力（UNORM compute 链前提）。**不建 shader object**——shader object 需 heap 槽，
-	 * 槽由 Resources 于首张 UNORM 纹理上传前经 init + addLevel 喂入（避免在构造期抢占
-	 * heap 游标破坏"纹理首槽 = 白 = 全部几何槽之后"契约）。
+	 * 槽由 Resources 于首张 UNORM 纹理上传前经 init + addLevel 喂入（构造期不抢占
+	 * descriptor heap 用户槽）。
 	 * @param device 设备层（device / physical device 能力查询 + 后续 createShadersEXT）
 	 * @note SPV 加载 / 格式无存储能力 = 抛 runtime_error（启动期一次性路径，同 GpuCull）
 	 */
@@ -75,7 +75,7 @@ export class MipGen {
 	MipGen& operator=(MipGen&&) = delete;
 
 	/**
-	 * 注入 heap 引用与共享 sampler 槽（幂等首建，由 Resources::ensureMipGenReady 驱动）。
+	 * 注入 heap 引用与共享 sampler 槽（幂等首建，由 SamplerLibrary::ensureMipGenReady 驱动）。
 	 * 仅记录引用（不拥有 heap）+ sampler heap 槽号；shader object 待 addLevel 建。
 	 * @param resourceHeap resource descriptor heap（src/dst image 描述符落此，bind 此）
 	 * @param samplerHeap sampler heap（sampler 描述符所在，bind 此）
@@ -87,7 +87,7 @@ export class MipGen {
 	/**
 	 * 为一个 level index 建独立 compute shader object（heap + push-index mapping，binding
 	 * 0=srcSampled / 1=dstStorage 各烘焙到独立槽，2=sampler）+ 登记 src/dst 槽号 + 追加
-	 * per-level 描述符链稳定存储。由 Resources::ensureMipGenReady 逐 level 调用（首张足够大的
+	 * per-level 描述符链稳定存储。由 SamplerLibrary::ensureMipGenReady 逐 level 调用（首张足够大的
 	 * 纹理时把 level 数补齐到所需，之后每纹理复用同批——跨纹理由 fence 分隔，无覆盖）。
 	 * @param srcSlot src sampled image 描述符在 resource heap 的槽号（Resources allocSlot 领取）
 	 * @param dstSlot dst storage image 描述符在 resource heap 的槽号（同上）
@@ -104,7 +104,7 @@ export class MipGen {
 	 * uploadTexture（**仅 UNORM 纹理**；sRGB 走 recordMipBlitChain，见模块头注释），
 	 * cmd = 该纹理的一次性上传 CB（mip0 拷贝 + mip0→SHADER_READ_ONLY 已先行录制，
 	 * 本方法续录后由调用方统一 end + submit + fence）。
-	 * **前置**：Resources::ensureMipGenReady(mipLevels) 已把 level shader/槽 建齐（本方法
+	 * **前置**：SamplerLibrary::ensureMipGenReady(mipLevels) 已把 level shader/槽 建齐（本方法
 	 * 不分配槽，只用 level 0..mipLevels−1）。
 	 * 录制序：先把各 level 的 src/dst image 描述符一次性写进各自固定槽（同 submission 内
 	 * 各 level 独立槽、互不覆盖）→ 一次 heap host barrier（eHost→heap read）→ 一次 bind

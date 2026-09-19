@@ -418,10 +418,10 @@ target_sources(rgl PUBLIC
                  FILES main.cppm main_impl.cppm main_scene.cppm rlvk.cppm vkerror.cppm utils.cppm sdl3window.cppm QueueFamilyManager.cppm cube.cppm
                       camera.cppm camera_config.cppm scene_config.cppm runtime_config.cppm diagnostics.cppm
                        shader.cppm shader_registry.cppm VmaBuffer.cppm features.cppm vkinstance.cppm vkdevice.cppm
-                       vkswapchain.cppm vkresources.cppm vkrenderer.cppm ecs.cppm frame_draw_list.cppm
+                       vkswapchain.cppm vkresources.cppm scene_data.cppm sampler_library.cppm environment.cppm render_target_cache.cppm vkrenderer.cppm ecs.cppm frame_draw_list.cppm
                        asset_table.cppm render_list.cppm render_graph.cppm render_graph_config.cppm
                       gltf_loader.cppm model_importer.cppm builtin_geometry.cppm texture_pool.cppm texture_upload.cppm scene_context.cppm llm_debug.cppm
-                        llm_debug_impl.cppm vkrenderer_impl.cppm render_graph_impl.cppm render_graph_builtin.cppm render_graph_config_impl.cppm model_importer_impl.cppm builtin_geometry_impl.cppm texture_upload_impl.cppm texture_upload_cubemap.cppm camera_config_impl.cppm scene_config_impl.cppm runtime_config_impl.cppm diagnostics_impl.cppm render_list_impl.cppm gpu_canary_impl.cppm ecs_impl.cppm vkresources_impl.cppm shader_registry_impl.cppm gltf_loader_impl.cppm gpu_cull_impl.cppm vk_indirect_commands_impl.cppm frame_capture_impl.cppm cull_driver_impl.cppm frame_session_impl.cppm image_codec_impl.cppm mip_gen_impl.cppm env_prefilter_impl.cppm
+                        llm_debug_impl.cppm vkrenderer_impl.cppm render_graph_impl.cppm render_graph_builtin.cppm render_graph_rtslot.cppm render_graph_config_impl.cppm model_importer_impl.cppm builtin_geometry_impl.cppm texture_upload_impl.cppm texture_upload_cubemap.cppm camera_config_impl.cppm scene_config_impl.cppm runtime_config_impl.cppm diagnostics_impl.cppm render_list_impl.cppm gpu_canary_impl.cppm ecs_impl.cppm vkresources_impl.cppm shader_registry_impl.cppm gltf_loader_impl.cppm gpu_cull_impl.cppm vk_indirect_commands_impl.cppm frame_capture_impl.cppm cull_driver_impl.cppm frame_session_impl.cppm image_codec_impl.cppm mip_gen_impl.cppm env_prefilter_impl.cppm
                           gpu_canary.cppm gpu_cull.cppm vk_indirect_commands.cppm state_kit.cppm frame_capture.cppm cull_driver.cppm frame_session.cppm image_codec.cppm mip_gen.cppm env_prefilter.cppm
                           ${TYPES_CPPM}
                          ${MODEL_CPPM}

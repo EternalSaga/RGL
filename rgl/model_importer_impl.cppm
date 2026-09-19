@@ -141,13 +141,12 @@ static std::pair<std::vector<ChunkPrim>, std::vector<vk::DeviceSize>> computeChu
 /** ② 单块上传：建 BDA buffer + 按块内偏移写入块内 primitive 顶点 + 分配并校验 heap slot
  *（= expectedGeometrySlot 契约）+ 写 descriptor；块序连续分配，经 chunkBuffers/chunkSlots 回填。 */
 static std::expected<void, Error> uploadChunk(RGL::DeviceContext& vkDevice, RGL::Resources& res,
-	const RGL::GltfModel& model, uint32_t primitiveCount,
+	RGL::AssetTable& assets, const RGL::GltfModel& model, uint32_t primitiveCount,
 	const std::vector<ChunkPrim>& primChunk, const std::vector<vk::DeviceSize>& chunkBytes,
 	uint32_t c, std::vector<std::shared_ptr<VmaBuffer>>& chunkBuffers,
 	std::vector<uint32_t>& chunkSlots) {
 	auto& device = vkDevice.getDevice();
 	auto& heap = res.getDescriptorHeap();
-	auto& assets = res.getAssetTable();
 	vk::BufferCreateInfo bufferInfo{};
 	bufferInfo.size = chunkBytes[c];
 	bufferInfo.usage = vk::BufferUsageFlagBits::eShaderDeviceAddress |
@@ -172,7 +171,7 @@ static std::expected<void, Error> uploadChunk(RGL::DeviceContext& vkDevice, RGL:
 			static_cast<vk::DeviceSize>(vertices.size()) * sizeof(ModelVertex));
 	}
 	const uint32_t expectedSlot = assets.expectedGeometrySlot(heap.getReservedSlots());
-	auto slotResult = res.allocSlot("model.vertices.chunk");
+	auto slotResult = res.allocSlot(RGL::SlotSegment::Geometry, "model.vertices.chunk");
 	if (!slotResult)
 		return std::unexpected(std::move(slotResult).error());
 	const uint32_t slot = *slotResult;
@@ -196,10 +195,9 @@ static std::expected<void, Error> uploadChunk(RGL::DeviceContext& vkDevice, RGL:
 }
 
 /** ③ 注册 per-primitive 资产记录（所在块的 shared_ptr + 块 slot + 块内偏移），返回 primitive 序 assetIds。 */
-static std::vector<uint32_t> registerPrimAssets(RGL::Resources& res, const RGL::GltfModel& model,
+static std::vector<uint32_t> registerPrimAssets(RGL::Resources& res, RGL::AssetTable& assets, const RGL::GltfModel& model,
 	std::vector<std::shared_ptr<VmaBuffer>>& chunkBuffers, const std::vector<uint32_t>& chunkSlots,
 	const std::vector<ChunkPrim>& primChunk, uint32_t primitiveCount) {
-	auto& assets = res.getAssetTable();
 	std::vector<uint32_t> assetIds;
 	assetIds.reserve(primitiveCount);
 	for (uint32_t i = 0; i < primitiveCount; ++i) {
@@ -212,7 +210,8 @@ static std::vector<uint32_t> registerPrimAssets(RGL::Resources& res, const RGL::
 }
 
 [[nodiscard]] std::expected<std::vector<uint32_t>, Error> uploadModelMeshes(
-	RGL::DeviceContext& vkDevice, RGL::Resources& res, const RGL::GltfModel& model) {
+	RGL::DeviceContext& vkDevice, RGL::Resources& res, RGL::AssetTable& assets,
+	const RGL::GltfModel& model) {
 	auto* logger = RLLogger::getInstance();
 
 	const uint32_t primitiveCount = static_cast<uint32_t>(model.primitives.size());
@@ -223,7 +222,7 @@ static std::vector<uint32_t> registerPrimAssets(RGL::Resources& res, const RGL::
 	// cottage artifact——artifact 根因 2026-08-30 定位为 gltf_loader uv 越界读（与 range
 	// 尺寸/分块无关，见 docs/archive/phase4_plan.md 批次 2 定案注记）。每块仍被同块内 primitive 共享
 	// vertex slot。per-primitive：heapSlot = 所在块的 slot，vertexOffset = 块内字节偏移（进 push constant）。
-	// 首块首 slot 契约 = expectedGeometrySlot()（违例 = 契约漂移）。
+	// 几何段 slot 契约 = expectedGeometrySlot()（违例 = 契约漂移）。
 
 	// ① 分块：per-primitive (块序号, 块内偏移) + 每块总字节
 	auto [primChunk, chunkBytes] = computeChunks(model, primitiveCount);
@@ -233,12 +232,12 @@ static std::vector<uint32_t> registerPrimAssets(RGL::Resources& res, const RGL::
 	std::vector<std::shared_ptr<VmaBuffer>> chunkBuffers(chunkCount);
 	std::vector<uint32_t> chunkSlots(chunkCount);
 	for (uint32_t c = 0; c < chunkCount; ++c)
-		if (auto chunk = uploadChunk(vkDevice, res, model, primitiveCount, primChunk, chunkBytes,
+		if (auto chunk = uploadChunk(vkDevice, res, assets, model, primitiveCount, primChunk, chunkBytes,
 		        c, chunkBuffers, chunkSlots); !chunk)
 			return std::unexpected(std::move(chunk).error());
 
 	// ③ 注册 per-primitive 资产记录（所在块的 shared_ptr + 块 slot + 块内偏移）
-	auto assetIds = registerPrimAssets(res, model, chunkBuffers, chunkSlots, primChunk, primitiveCount);
+	auto assetIds = registerPrimAssets(res, assets, model, chunkBuffers, chunkSlots, primChunk, primitiveCount);
 	if (logger)
 		logger->info("model: {} primitives → {} 块拼接顶点 buffer (每块 ≤{}KB) / {} heap slot",
 			primitiveCount, chunkCount, kVertexChunkBytes / 1024, chunkCount);
@@ -264,9 +263,8 @@ static uint32_t resolveMaterialTexture(const RGL::GltfModel& model, size_t n,
 
 /** 材质资产注册（按 materialIndex 去重；-1 = 无材质 → 默认材质 {白 baseColor, 无纹理, OPAQUE}）：
  * 每个 materialIndex 取首个 primitive 为字段样本，解析其纹理后 addMaterial，返回 materialIndex→资产 id。 */
-static std::map<int, uint32_t> buildMaterialAssets(RGL::Resources& resources,
+static std::map<int, uint32_t> buildMaterialAssets(RGL::AssetTable& assets,
 	const RGL::GltfModel& model, size_t n, std::span<const uint32_t> primitiveTextureIds) {
-	auto& assets = resources.getAssetTable();
 	std::map<int, uint32_t> materialOfIndex;
 	std::map<int, size_t> firstPrimOfIndex;  // 每个 materialIndex 的首个 primitive（取字段样本）
 	for (size_t i = 0; i < n; ++i)
@@ -286,9 +284,8 @@ static std::map<int, uint32_t> buildMaterialAssets(RGL::Resources& resources,
  * baseColorFactor/alphaMode/metallicFactor/roughnessFactor/unlit 扩展/emissiveFactor；违例 = loader bug，
  * 启动期直接报错，不静默带病渲染）。不校验 textureId：材质可引用有数据的 image 但全部 primitive 无 uv
  *（有效纹理 = 白），该投影含 per-primitive 的 hasUv，不是材质级格式保证。返回 primitive 序 material id。 */
-static std::vector<uint32_t> checkMaterialConsistency(RGL::Resources& resources,
+static std::vector<uint32_t> checkMaterialConsistency(RGL::AssetTable& assets,
 	const RGL::GltfModel& model, size_t n, std::map<int, uint32_t>& materialOfIndex) {
-	auto& assets = resources.getAssetTable();
 	std::vector<uint32_t> primitiveMaterialIds(n);
 	for (size_t i = 0; i < n; ++i) {
 		const auto& prim = model.primitives[i];
@@ -317,7 +314,7 @@ static std::vector<uint32_t> checkMaterialConsistency(RGL::Resources& resources,
 // 真引用（E5.3）——材质身份（baseColor/textureId/alphaMode）收敛进资产表，纹理→primitive
 entt::entity registerScene(entt::registry& rg, const RGL::GltfModel& model,
 	std::span<const uint32_t> assetIds, std::span<const uint32_t> primitiveTextureIds,
-	RGL::Resources& resources, const glm::mat4& rootTransform) {
+	RGL::Resources& resources, RGL::AssetTable& assets, const glm::mat4& rootTransform) {
 	auto sceneRoot = rg.create();
 	rg.emplace<Relationship>(sceneRoot);  // parent = null（根）；children 不存储（单向，E5.2）
 	// 场景根位姿（Phase 6 批次 5：多模型场景 entity 级 transform）：根 local =
@@ -331,12 +328,11 @@ entt::entity registerScene(entt::registry& rg, const RGL::GltfModel& model,
 	rg.emplace<Bounds>(sceneRoot, boundsCenter, model.bounds.radius * rootScale);
 
 	const size_t n = model.primitives.size();
-	auto& assets = resources.getAssetTable();
 
 	// 材质资产注册（按 materialIndex 去重；-1 = 无材质 → 默认材质）+ per-primitive 材质引用
 	// 一致性金丝雀（语义与被抽出的 buildMaterialAssets / checkMaterialConsistency 注释一致）
-	auto materialOfIndex = buildMaterialAssets(resources, model, n, primitiveTextureIds);
-	auto primitiveMaterialIds = checkMaterialConsistency(resources, model, n, materialOfIndex);
+	auto materialOfIndex = buildMaterialAssets(assets, model, n, primitiveTextureIds);
+	auto primitiveMaterialIds = checkMaterialConsistency(assets, model, n, materialOfIndex);
 
 	{
 		auto* logger = RLLogger::getInstance();

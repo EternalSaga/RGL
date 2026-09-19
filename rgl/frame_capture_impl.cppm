@@ -9,6 +9,7 @@ import rlstd;
 import rlvk;
 import rllogger;
 import vk_resources;
+import render_target_cache;  // RenderTargetCache（架构债务续账步骤 2）
 import render_graph;
 import VmaRaii;
 import vulkan_utils;
@@ -36,9 +37,9 @@ uint32_t captureBpp(vk::Format f) {
 
 }  // namespace
 
-FrameCapturer::FrameCapturer(RGL::Resources& vkResources,
+FrameCapturer::FrameCapturer(RGL::Resources& vkResources, RGL::RenderTargetCache& vkRts,
 		const RGL::CompiledRenderGraph& renderGraph)
-	: resources(vkResources), graph(renderGraph) {
+	: resources(vkResources), rts(vkRts), graph(renderGraph) {
 	// 帧内捕获：定位 swapchain attachment slot（捕获时读写其布局追踪值）
 	for (uint32_t s = 0; s < graph.attachments.size(); ++s)
 		if (graph.attachments[s].kind == RgAttachmentKind::swapchain)
@@ -114,7 +115,7 @@ void FrameCapturer::record(vk::raii::CommandBuffer& cmd, VkImage swapchainImage,
 		if (captureRequest < static_cast<int>(kGBufferAttachments.size())) {
 			const std::string name{kGBufferAttachments[captureRequest].name};
 			const auto slot = slotOfName(name);
-			if (auto* rt = slot != kRgNoAttachment ? resources.findRtAttachment(name) : nullptr) {
+			if (auto* rt = slot != kRgNoAttachment ? rts.find(name) : nullptr) {
 				const auto from = layouts[slot];  // deferred 帧末 = SRO（light 采样后）
 				barrier(rt->image.image, from, vk::ImageLayout::eTransferSrcOptimal,
 					vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderRead,

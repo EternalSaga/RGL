@@ -13,7 +13,8 @@ import VmaRaii;
 import vulkan_utils;
 import vk_device;
 import vk_resources;
-import env_prefilter;  // Phase 8 ④b：GGX 预滤波 env cubemap（getEnvPrefilter().recordPrefilter，16F 分支）
+import env_prefilter;  // Phase 8 ④b：GGX 预滤波 env cubemap（env.getPrefilter().recordPrefilter，16F 分支）
+import environment;  // 环境服务（env 单例入库/sky sampler/预滤波供给，架构债务续账步骤 3）
 import asset_table;
 import diagnostics;  // texture_force_unorm 诊断单例（configs/diagnostics.lua）
 
@@ -198,7 +199,7 @@ void recordCubeBarriersAndCopies(vk::raii::CommandBuffer& cmd, CubeImages& image
  * @param mipLevels 全级数
  * @param name 日志名
  * @return env-prefilter 准备 / recordPrefilter 失败 = Error */
-std::expected<void, Error> recordGgxMipChain(RGL::Resources& resources,
+std::expected<void, Error> recordGgxMipChain(RGL::Resources& resources, RGL::Environment& env,
 	vk::raii::CommandBuffer& cmd, CubeImages& images, const CubeFormat& fmt, uint32_t size,
 	uint32_t mipLevels, const char* name) {
 	// 16F HDR env（Phase 8 ④b）：mip 链走 heap compute GGX importance-sample 预滤波（替代
@@ -211,10 +212,10 @@ std::expected<void, Error> recordGgxMipChain(RGL::Resources& resources,
 		vk::PipelineStageFlagBits2::eTransfer, vk::PipelineStageFlagBits2::eComputeShader,
 		vk::AccessFlagBits2::eTransferWrite, vk::AccessFlagBits2::eShaderSampledRead,
 		0, 1, 0, 6));
-	// 备齐 env-prefilter heap 基础设施（幂等增量；env 上传晚于几何段/白纹理首槽，时序满足）
-	if (auto ready = resources.ensureEnvPrefilterReady(mipLevels); !ready)
+	// 备齐 env-prefilter heap 基础设施（幂等增量；prefilter 辅助槽走运行时段）
+	if (auto ready = env.ensurePrefilterReady(mipLevels); !ready)
 		return std::unexpected(std::move(ready).error());
-	if (auto pf = resources.getEnvPrefilter().recordPrefilter(cmd, *images.image, fmt.format,
+	if (auto pf = env.getPrefilter().recordPrefilter(cmd, *images.image, fmt.format,
 			size, mipLevels, name); !pf)
 		return std::unexpected(std::move(pf).error());
 	return {};
@@ -302,7 +303,7 @@ std::expected<void, Error> submitCubeUpload(RGL::DeviceContext& device,
  * @param name 日志名
  * @return submit/fence 失败 = Error
  */
-std::expected<void, Error> recordCubeUpload(RGL::Resources& resources, RGL::DeviceContext& device,
+std::expected<void, Error> recordCubeUpload(RGL::Resources& resources, RGL::Environment& env, RGL::DeviceContext& device,
 	CubeImages& images, std::span<const uint8_t* const, 6> faces, uint32_t size,
 	const CubeFormat& fmt, const char* name) {
 	auto& dev = device.getDevice();
@@ -320,7 +321,7 @@ std::expected<void, Error> recordCubeUpload(RGL::Resources& resources, RGL::Devi
 
 	if (fmt.ggxPrefilter) {
 		// GGX 预滤波 mip 链：失败则不 submit（保持原 early-return 语义）
-		if (auto r = recordGgxMipChain(resources, cmd, images, fmt, size, mipLevels, name); !r)
+		if (auto r = recordGgxMipChain(resources, env, cmd, images, fmt, size, mipLevels, name); !r)
 			return std::unexpected(std::move(r).error());
 	} else {
 		recordBlitMipChain(cmd, images, size, mipLevels, fmt.mipFilter);
@@ -455,7 +456,7 @@ void cubeCanary(RGL::Resources& resources, RGL::DeviceContext& device, CubeImage
  * @param name 日志名
  * @return slot 分配 / 槽地址查询失败 = Error
  */
-std::expected<void, Error> registerCubeEnv(RGL::Resources& resources, RGL::DeviceContext& device,
+std::expected<void, Error> registerCubeEnv(RGL::Resources& resources, RGL::Environment& env, RGL::DeviceContext& device,
 	CubeImages& images, uint32_t size, const CubeFormat& fmt, const char* name) {
 	auto* logger = RLLogger::getInstance();
 	auto& dev = device.getDevice();
@@ -466,7 +467,7 @@ std::expected<void, Error> registerCubeEnv(RGL::Resources& resources, RGL::Devic
 	viewCreate.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, images.mipLevels, 0, 6};
 	auto view = vk::raii::ImageView(dev, viewCreate);
 
-	auto slotResult = resources.allocSlot(name);
+	auto slotResult = resources.allocSlot(RGL::SlotSegment::Texture, name);
 	if (!slotResult)
 		return std::unexpected(std::move(slotResult).error());
 	const uint32_t slot = *slotResult;
@@ -474,7 +475,7 @@ std::expected<void, Error> registerCubeEnv(RGL::Resources& resources, RGL::Devic
 
 	TextureAsset asset{std::move(images.image), viewCreate, std::move(view), slot, size, size,
 		images.mipLevels};
-	auto& stored = resources.emplaceEnvTexture(std::move(asset));
+	auto& stored = env.emplace(std::move(asset));
 	stored.imageDesc.pView = &stored.viewCreate;
 	stored.imageDesc.layout = vk::ImageLayout::eShaderReadOnlyOptimal;
 	stored.resourceDesc.type = vk::DescriptorType::eSampledImage;
@@ -485,7 +486,7 @@ std::expected<void, Error> registerCubeEnv(RGL::Resources& resources, RGL::Devic
 	stored.dst = vk::HostAddressRangeEXT{*slotAddr, heap.getDescriptorSize()};
 	dev.writeResourceDescriptorsEXT(stored.resourceDesc, stored.dst);
 
-	const uint32_t skySlot = resources.ensureSkySampler(images.mipLevels);
+	const uint32_t skySlot = env.ensureSkySampler(images.mipLevels);
 	if (logger)
 		logger->info("cubemap: {} {}²×6 {} mips={} → res slot {} + sky sampler slot {}", name,
 			size, fmt.label, images.mipLevels, slot, skySlot);
@@ -500,7 +501,7 @@ std::expected<void, Error> registerCubeEnv(RGL::Resources& resources, RGL::Devic
  * @param name 日志名
  * @return 任一环节失败 = Error（金丝雀除外，只日志）
  */
-std::expected<void, Error> uploadCubeMapCore(RGL::Resources& resources,
+std::expected<void, Error> uploadCubeMapCore(RGL::Resources& resources, RGL::Environment& env,
 	RGL::DeviceContext& device, std::span<const uint8_t* const, 6> faces, uint32_t size,
 	const CubeFormat& fmt, const char* name) {
 	if (size == 0 || (size & (size - 1)) != 0)
@@ -509,16 +510,16 @@ std::expected<void, Error> uploadCubeMapCore(RGL::Resources& resources,
 	auto images = createCubeImages(resources, size, fmt);
 	if (!images)
 		return std::unexpected(std::move(images).error());
-	if (auto r = recordCubeUpload(resources, device, *images, faces, size, fmt, name); !r)
+	if (auto r = recordCubeUpload(resources, env, device, *images, faces, size, fmt, name); !r)
 		return std::unexpected(std::move(r).error());
 	cubeCanary(resources, device, *images, faces, size, fmt, name);
-	return registerCubeEnv(resources, device, *images, size, fmt, name);
+	return registerCubeEnv(resources, env, device, *images, size, fmt, name);
 }
 
 }  // namespace
 
 /** uploadCubeMap 定义（契约与行为注释见 texture_upload.cppm 接口声明；格式策略 sRGB 优先回落 UNORM）。 */
-export [[nodiscard]] std::expected<void, Error> uploadCubeMap(RGL::Resources& resources,
+export [[nodiscard]] std::expected<void, Error> uploadCubeMap(RGL::Resources& resources, RGL::Environment& env,
 	RGL::DeviceContext& device, std::span<const uint8_t* const, 6> faces, uint32_t size,
 	const char* name) {
 	auto* logger = RLLogger::getInstance();
@@ -534,7 +535,7 @@ export [[nodiscard]] std::expected<void, Error> uploadCubeMap(RGL::Resources& re
 	}
 	const CubeFormat fmt{format, 4, VK_FILTER_NEAREST,
 		format == vk::Format::eR8G8B8A8Srgb ? "sRGB" : "UNORM"};
-	return uploadCubeMapCore(resources, device, faces, size, fmt, name);
+	return uploadCubeMapCore(resources, env, device, faces, size, fmt, name);
 }
 
 /**
@@ -542,7 +543,7 @@ export [[nodiscard]] std::expected<void, Error> uploadCubeMap(RGL::Resources& re
  * float 格式不受 sRGB blit VUID-00239 限制，mip 链 LINEAR 降采样（设备缺 FILTER_LINEAR
  * 能力回落 NEAREST + 警告）；面像素每 texel 4 half（R,G,B,A），top-down，Vulkan 层序 0-5。
  */
-export [[nodiscard]] std::expected<void, Error> uploadCubeMap16F(RGL::Resources& resources,
+export [[nodiscard]] std::expected<void, Error> uploadCubeMap16F(RGL::Resources& resources, RGL::Environment& env,
 	RGL::DeviceContext& device, std::span<const uint8_t* const, 6> faces, uint32_t size,
 	const char* name) {
 	auto* logger = RLLogger::getInstance();
@@ -560,7 +561,7 @@ export [[nodiscard]] std::expected<void, Error> uploadCubeMap16F(RGL::Resources&
  	// GGX 预滤波开启：mip 链走 heap compute（mipFilter 对 16F 路径失效——不再 blit）。
  	// EnvPrefilter 构造期已校验 RGBA16F STORAGE_IMAGE 能力（缺则启动即抛），故此处恒开安全。
  	const CubeFormat fmt{format, 8, linearBlit ? VK_FILTER_LINEAR : VK_FILTER_NEAREST, "HDR16F", true};
- 	return uploadCubeMapCore(resources, device, faces, size, fmt, name);
+	return uploadCubeMapCore(resources, env, device, faces, size, fmt, name);
 }
 
 

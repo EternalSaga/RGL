@@ -3,6 +3,8 @@ export module render_graph;
 import rlstd;
 import rlvk;
 import vkerror;
+import vk_swapchain;  // Swapchain&（rtslot 装配分区取 extent，架构债务续账步骤 2）
+import render_target_cache;  // RenderTargetCache&（G-buffer/scene_hdr 装配，架构债务续账步骤 2）
 
 // Phase 6：渲染意图图（声明 → 编译 → 执行三层中的"编译"层）。
 //
@@ -345,5 +347,34 @@ export inline constexpr std::array<RgGBufferDesc, 5> kGBufferAttachments{{
  * @return 失败描述列表（空 = 全部通过）
  */
 export std::vector<std::string> renderGraphSelfCheck();
+
+/**
+ * Phase 7 D1（架构债务续账步骤 2 自 Resources 搬入本模块——kGBufferAttachments 契约表
+ * 的装配函数留在契约表本家）：确保 deferred G-buffer 5 个 offscreen RT 并返回其
+ * SAMPLED_IMAGE 堆槽（[0]albedo [1]normal [2]position [3]metalrough [4]emissive）。
+ * 名字/格式 = kGBufferAttachments 单一真相源（与 deferredRenderGraphDesc 共享）；
+ * drawFrame 图循环对同名同格式 ensure 命中复用、堆槽跨 resize 复用，light 管线 baked
+ * 有效。extent = 当前 swapchain。**调用序契约**：仍在装配后期、Renderer 前调用；RT
+ * 采样槽走运行时段，不再插入几何/纹理契约段。
+ * @param rts RT 缓存（ensure/heapSlot）
+ * @param swapchain 交换链层（extent）
+ * @return 5 个 heap 槽（kGBufferAttachments 序）；Error = RT 创建 / 槽分配失败
+ */
+export std::expected<std::array<uint32_t, 5>, Error> ensureDeferredGBufferSlots(
+	RenderTargetCache& rts, Swapchain& swapchain);
+
+/**
+ * Phase 8 批次 ①（架构债务续账步骤 2 自 Resources 搬入本模块）：确保 HDR 累加链
+ * scene_hdr RT（名字/格式 = kSceneHdrName/kSceneHdrFormat 单一真相源，rgba16_sfloat
+ * offscreen）并返回其 SAMPLED_IMAGE 堆槽（addTonemapEntry 烘焙 binding 4；tonemap pass
+ * 采样）。调用时序同 ensureDeferredGBufferSlots——几何/纹理/env（deferred 还有
+ * G-buffer）槽之后、Renderer 之前；drawFrame 图循环对同名同格式命中复用、堆槽跨
+ * resize 不变。
+ * @param rts RT 缓存（ensure/heapSlot）
+ * @param swapchain 交换链层（extent）
+ * @return scene_hdr 的 SAMPLED_IMAGE heap 槽；Error = RT 创建 / 槽分配失败
+ */
+export std::expected<uint32_t, Error> ensureSceneHdrSlot(
+	RenderTargetCache& rts, Swapchain& swapchain);
 
 }  // namespace RGL

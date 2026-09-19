@@ -93,7 +93,7 @@ CMake CXX_MODULES FILE_SET 不收纯实现单元，故"接口声明 + 分区实�
 场景代码（ecs/scene/model_importer + 相关 system）必须符合五条规范
 （逐条处置记录：`docs/archive/ecs_compliance_review.md`）：
 
-1. **registry 是场景唯一数据源**——场景状态不在 registry 外平行维护（每帧/配置状态进 context；资产数据进 `Resources::AssetTable`）
+1. **registry 是场景唯一数据源**——场景状态不在 registry 外平行维护（每帧/配置状态进 context；资产数据进 main 装配层持有的 `AssetTable`）
 2. **entity 是 ID、component 是纯数据、system 是逻辑唯一载体**——system 间经数据通信，执行顺序显式（显式 system 列表，不用 entt::scheduler）
 3. **场景构成数据驱动**——"场景里有什么" = registry 里有什么 entity，不用全局变量/config 字段/构造参数决定构成（画不画 = 实体有无）
 4. **分层**——底层 Vulkan 类不依赖 ECS、不认识具体资产（Renderer 零 entt 依赖）；渲染 system 产出抽象 draw list（`FrameDrawList`），执行器只盲执行
@@ -110,7 +110,7 @@ CMake CXX_MODULES FILE_SET 不收纯实现单元，故"接口声明 + 分区实�
 | `vk_instance` | vkinstance.cppm | Context、Instance、DebugMessenger（headless 换 `VK_EXT_headless_surface`） |
 | `vk_device` | vkdevice.cppm | PhysicalDevice 选择、QueueFamilyManager、Device、CommandPools、FeatureChain |
 | `vk_swapchain` | vkswapchain.cppm | Surface、Swapchain、ImageView[] format/extent/presentMode |
-| `vk_resources` | vkresources.cppm | VMA 分配器、depth、VmaDescriptorHeap、scene data 单例（头 128B + 尾区灯数组/per-object 表，字节布局契约见 scene.slang）、env cubemap、G-buffer RT 缓存 |
+| `vk_resources` | vkresources.cppm | VMA 分配器、depth、resource/sampler VmaDescriptorHeap、descriptor heap 用户槽三段分配器（geometry / texture / runtime） |
 | `vk_renderer` | vkrenderer.cppm | **盲执行器**：`drawFrame(CompiledRenderGraph)`（零 entt）= beginFrame→writeSceneStaging→cullDriver→recordFixedDataPath→pass 循环（SlotResolver/stateKit/executePassDraws 三路分发）→capture→present→submit；构造期 `validateRenderGraphForExecutor` fail-fast |
 | `frame_session` | frame_session.cppm | 帧生命周期会话：双 fence 同步 + 每帧 CB + beginFrame/submit/present/advance + swapchain/depth 重建 |
 | `frame_capture` | frame_capture.cppm | 帧内回读捕获器（llm_debug 截图载体）：request/record/collect 三步曲 |
@@ -128,9 +128,9 @@ AppContext→DeviceContext→Swapchain→Resources→ShaderRegistry → `compile
 entities 循环：A0 内建几何→A1 模型顶点→A2 纹理→env 上传→C 模型注册+C2b 灯 entity →
 C3 候选表+`GpuCull` → addSkyEntry/deferred 装配 → DgcCommands/DgcStaticCommands 条件构造 →
 `Renderer` → `renderSystem`。
-关键时序契约：heap 布局"几何槽先于纹理槽"（A0/A1/A2 拆分，见 `AssetTable::expectedGeometrySlot`）；
-env 上传 = A2 后、addModelEntry 前；候选表迭代序与 render_list CPU 路径完全一致；
-deferred 装配与 DGC 构造**先于 Renderer**。
+关键时序契约：heap 用户槽按用途段分配（几何段仍由 `AssetTable::expectedGeometrySlot` 校验，
+纹理首槽 = 白 = 纹理段首槽）；env 上传 = A2 后、addModelEntry 前；候选表迭代序与
+render_list CPU 路径完全一致；deferred 装配与 DGC 构造**先于 Renderer**。
 
 ### 构造依赖图
 

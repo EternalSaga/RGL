@@ -17,6 +17,11 @@ import render_graph;        // CompiledRenderGraph
 import vk_device;           // DeviceContext
 import vk_swapchain;        // Swapchain
 import vk_resources;        // Resources
+import scene_data;          // SceneDataService（架构债务续账步骤 1）
+import sampler_library;    // SamplerLibrary（架构债务续账步骤 4a/4b）
+import environment;        // Environment（架构债务续账步骤 3）
+import render_target_cache;  // RenderTargetCache（架构债务续账步骤 2）
+import asset_table;        // AssetTable（装配 helper 参数，F 拆出）
 import gltf_loader;         // GltfModel
 import texture_pool;        // ModelTextureIds
 import shader_registry;     // ShaderRegistry
@@ -134,24 +139,24 @@ export struct UploadedAssets {
 };
 
 /**
- * A0 内建 cube 上传 + A1 模型解析+顶点上传 + A2 纹理上传。时序契约（allocSlot 单调
- * 游标）：**全部几何槽先于任何纹理槽**、纹理首槽 = 白（ensureWhiteTexture 契约断言）；
- * 交错分配 = 第二个模型首 chunk slot 期望漂移（批次 5 多模型实测踩坑）。
+ * A0 内建 cube 上传 + A1 模型解析+顶点上传 + A2 纹理上传。段契约：几何分配走几何段，
+ * 纹理分配走纹理段；几何段期望槽号仍由 AssetTable::expectedGeometrySlot 校验，纹理首槽
+ * = 白由纹理段首槽校验。
  * @note 任一加载/上传失败 → 抛 std::runtime_error（启动期 catch 退出）
  */
-export UploadedAssets uploadModelAssets(DeviceContext& device, Resources& resources, const SceneConfig& scene);
+export UploadedAssets uploadModelAssets(DeviceContext& device, Resources& resources,
+								 SamplerLibrary& samplers, AssetTable& assets, const SceneConfig& scene);
 
 /**
  * Phase 5.5 环境 cubemap 上传（scene.lua environment 段，faces 按 Vulkan 层序 0-5）+
- * SceneEnv 回填（intensity/mipRange）。**调用时序契约**：必须在模型顶点槽 + 纹理槽全部
- * 按布局分配完之后（插在之前会挤占白纹理契约槽，断言漂移启动报错，2026-09-01 实测踩坑），
- * 且先于管线烘焙（addModelEntry 查 getEnvTexture 烘焙 binding 4/5）。
+ * SceneEnv 回填（intensity/mipRange）。**调用序契约**：env 纹理走纹理段，白纹理首槽由段
+ * 首固定校验；env 上传仍须在管线烘焙前完成（addModelEntry 查 getEnvTexture 烘焙 binding 4/5）。
  * environment.hdr 非空 = 优先 Radiance .hdr 路径（.hdr 属 gitignore 本地素材，缺失告警
  * 回落 faces 六面 PNG，干净 checkout 仍可运行）。
  * @note 文件读取 / cubemap 创建失败 → 抛 std::runtime_error
  */
-export void uploadEnvironment(Resources& resources, DeviceContext& device, const SceneConfig& scene,
-							  entt::registry& registry);
+export void uploadEnvironment(Resources& resources, Environment& env, DeviceContext& device,
+							  const SceneConfig& scene, entt::registry& registry);
 
 /**
  * C1：管线条目烘焙（per **unique 模型**——instancing 共享条目；addModelEntry 按
@@ -160,8 +165,9 @@ export void uploadEnvironment(Resources& resources, DeviceContext& device, const
  * 匹配（有序首个命中）；forward 经 styles 表（缺失 = 启动抛错）、deferred 经 deferred_styles
  * 表（缺失回落 deferred_geometry）。DIAG style_dist/tex_dist：per-模型风格/纹理 slot 分布日志。
  */
-export void bakePipelineEntries(UploadedAssets& assets, const SceneConfig& scene, bool deferredMode,
-								ShaderRegistry& pipelines, Resources& resources);
+export void bakePipelineEntries(UploadedAssets& uploaded, const SceneConfig& scene, bool deferredMode,
+								ShaderRegistry& pipelines, Resources& resources,
+								SamplerLibrary& samplers, AssetTable& assets);
 
 /**
  * C2/C2b：场景实体注册——per **entity**：模型 entity（rootTransform = T·Rx·Ry·Rz·S，
@@ -171,7 +177,8 @@ export void bakePipelineEntries(UploadedAssets& assets, const SceneConfig& scene
  * kSceneMatrixCapacity → 抛 std::runtime_error（对象矩阵表越界写，启动期先拦截）。
  */
 export void registerSceneEntities(entt::registry& registry, const UploadedAssets& assets,
-								  const SceneConfig& scene, Resources& resources, ShaderRegistry& pipelines);
+								  const SceneConfig& scene, Resources& resources, AssetTable& table,
+								  ShaderRegistry& pipelines);
 
 /**
  * C3+deferred+DGC+Renderer 装配产物（成员析构逆序 renderer→dgcStatic→dgc→cull，与
@@ -187,7 +194,7 @@ export struct RenderBackEnd {
 };
 
 /**
- * C3+deferred+HDR+DGC+Renderer 装配（时序关键，allocSlot 单调游标契约）：GPU culling
+ * C3+deferred+HDR+DGC+Renderer 装配（时序关键；运行期辅助 heap 槽走运行时段）：GPU culling
  * 候选表（守卫/迭代序与 render_list CPU 路径**逐位一致**——重放序 BIT-IDENTICAL 前提，
  * 透明段不入候选）→ GpuCull 构造（静态 DGC 流条目数快照 = 此刻管线表条目数，sky/light
  * 条目其后加入非 candidate）→ skybox 条目（env 已上传才建 + SceneEnv 回填）→ deferred
@@ -197,6 +204,8 @@ export struct RenderBackEnd {
  * @note G-buffer / scene_hdr RT 创建失败 → 抛 std::runtime_error
  */
 export RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resources& resources,
+									 SceneDataService& sceneData, SamplerLibrary& samplers, Environment& env,
+									 RenderTargetCache& rtCache, AssetTable& assets,
 									 ShaderRegistry& pipelines, CompiledRenderGraph&& graph,
 									 entt::registry& registry, const SceneConfig& scene, bool deferredMode);
 

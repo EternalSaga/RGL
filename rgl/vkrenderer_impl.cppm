@@ -15,6 +15,8 @@ import vkerror;
 import vk_device;
 import vk_swapchain;
 import vk_resources;
+import scene_data;  // kSceneData* 布局常量 + SceneDataService（架构债务续账步骤 1）
+import render_target_cache;  // RenderTargetCache/RtAttachment（架构债务续账步骤 2）
 import scene_forward_types_generated;  // 前向头 SceneLight（C API 反射生成，替换原 LightDataGpu）
 import shader_registry;
 import shader;
@@ -120,7 +122,7 @@ struct SlotResolver {
 	const std::vector<RgCompiledAttachment>& attachments;
 	VkImage swapchainImage; VkImageView swapchainView;
 	VkImage depthImage; VkImageView depthView;
-	const std::vector<Resources::RtAttachment*>& offscreenRt;
+	const std::vector<RtAttachment*>& offscreenRt;
 	std::vector<vk::ImageLayout>& layouts;
 	vk::raii::CommandBuffer& cmd;
 	/** slot → VkImage（三 kind 穷尽）。 */
@@ -197,11 +199,15 @@ void beginPassRendering(vk::raii::CommandBuffer& cmd, const SlotResolver& slots,
 }  // namespace
 
 Renderer::Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RGL::Resources& vkResources,
+		RGL::SceneDataService& sceneData, RGL::Environment& env, RGL::RenderTargetCache& rtCache,
 		RGL::ShaderRegistry& shaderRegistry, RGL::CompiledRenderGraph renderGraph,
 		RGL::GpuCull* vkGpuCull, RGL::DgcCommands* vkDgc, RGL::DgcStaticCommands* vkDgcStatic)
 	: vkDevice(vkDevice),
 	  swapchain(&vkSwapchain),
 	  resources(&vkResources),
+	  sceneData(&sceneData),
+	  env(&env),
+	  rtCache(&rtCache),
 	  registry(shaderRegistry),
 	  renderGraph(std::move(renderGraph)),
 	  // culling 帧编舞（手术 3）：④c 提交时序 + opaque 段三路（IES/静态 DGC/重放）+ 对账
@@ -209,7 +215,7 @@ Renderer::Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RG
 	  cullDriver(vkDevice, vkGpuCull, vkDgc, vkDgcStatic, FrameSession::kFramesInFlight),
 	  attachmentLayouts(this->renderGraph.attachments.size(), vk::ImageLayout::eUndefined),
 	  // 帧内捕获器（手术 2）：持资源层 + 编译图引用，构造期自图定位 swapchain slot
-	  capturer(vkResources, this->renderGraph),
+	  capturer(vkResources, rtCache, this->renderGraph),
 	  // edS3 能力门 + 四段状态值（Phase 10 批次 0 手术 1：状态表迁 StateKit，
 	  // transparent/skybox/light 的差异值语义注释随迁 state_kit.cppm ctor）
 	  stateKit(vkDevice.getOptionalFeatures().depthClipEnable),
@@ -342,10 +348,10 @@ void Renderer::recordFixedDataPath(vk::raii::CommandBuffer& cmd, uint32_t frameS
 
 	// ⑥.5 scene data staging → device buffer 拷贝（Phase 5 批次 2）+ Transfer 写 →
 	// 图形阶段 shader 读 barrier（storage buffer 的写/读即使同 cmd 也须显式依赖，
-	// VVL BUFFER_SYNC 检查项）。目标未创建（无模型场景 = ensureSceneData 未被调用）
-	// 则跳过——cube 管线不绑 scene data。
+	// VVL BUFFER_SYNC 检查项）。目标未创建（无模型场景 = SceneDataService::ensure
+	// 未被调用）则跳过——cube 管线不绑 scene data。
 	{
-		const auto& sceneBuffer = resources->getSceneDataBuffer();
+		const auto& sceneBuffer = sceneData->getBuffer();
 		if (sceneBuffer.buffer != VK_NULL_HANDLE) {
 			VkBufferCopy region{0, 0, static_cast<VkDeviceSize>(kSceneDataBytes)};
 			::vkCmdCopyBuffer(*cmd, *sceneStaging[frameSlot],
@@ -389,7 +395,7 @@ void Renderer::recordFixedDataPath(vk::raii::CommandBuffer& cmd, uint32_t frameS
 
 // offscreen attachment RT 幂等 ensure（批次 4；extent 随 resize 重建含 waitIdle，录制期调用安全；format 经词表解析，"inherit"=swapchain 格式、具名=显式 RT）。出参 offscreenRt 按 slot 填（非 offscreen 槽留 null）。
 std::expected<void, Error> Renderer::ensureOffscreenAttachments(vk::Extent2D extent,
-	std::vector<Resources::RtAttachment*>& offscreenRt) {
+	std::vector<RtAttachment*>& offscreenRt) {
 	offscreenRt.assign(renderGraph.attachments.size(), nullptr);
 	// RT 重建检测：generation 变化（新图布局 Undefined）→ 同步重置 attachmentLayouts，否则下帧首 barrier oldLayout 失配（resize 必现）
 	std::vector<uint64_t> rtGenerations(renderGraph.attachments.size(), 0);
@@ -398,7 +404,7 @@ std::expected<void, Error> Renderer::ensureOffscreenAttachments(vk::Extent2D ext
 		if (att.kind != RgAttachmentKind::offscreen)
 			continue;
 		const auto fmt = RGL::resolveRgFormat(att.format, swapchain->getFormat().format);
-		auto rtResult = resources->ensureRtAttachment(att.name, extent, fmt);
+		auto rtResult = rtCache->ensure(att.name, extent, fmt);
 		if (!rtResult)
 			return std::unexpected(std::move(rtResult).error());
 		offscreenRt[s] = *rtResult;
@@ -486,7 +492,7 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 
 	// offscreen attachment RT（批次 4）：幂等 ensure + generation 漂移重置布局（手术 6：
 	// 块体提为 ensureOffscreenAttachments 私有方法）
-	std::vector<Resources::RtAttachment*> offscreenRt;
+	std::vector<RtAttachment*> offscreenRt;
 	if (auto r = ensureOffscreenAttachments(extent, offscreenRt); !r)
 		return std::unexpected(std::move(r).error());
 

@@ -8,6 +8,7 @@ import VmaRaii;
 import vulkan_utils;
 import vk_device;
 import vk_resources;
+import asset_table;  // AssetTable（白纹理回读，F 拆出：不再经内核透传）
 
 namespace RGL {
 
@@ -28,7 +29,7 @@ namespace RGL {
  *   帧 N 的 drawFrame 前；日志用）
  * @note 无纹理资产（未加载模型）→ warn 后跳过
  */
-export void texelCanaryCheck(RGL::Resources& resources, RGL::DeviceContext& device,
-	const vk::raii::CommandPool& cmdPool, uint64_t frame);
+export void texelCanaryCheck(RGL::Resources& resources, const RGL::AssetTable& assets,
+	RGL::DeviceContext& device, const vk::raii::CommandPool& cmdPool, uint64_t frame);
 
 }  // namespace RGL

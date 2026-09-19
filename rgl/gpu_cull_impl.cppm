@@ -11,6 +11,7 @@ import rllogger;
 import vkerror;
 import vk_device;
 import vk_resources;
+import scene_data;  // kSceneDataBytes + SceneDataService（架构债务续账步骤 1）
 import frame_draw_list;
 import shader;
 import VmaRaii;
@@ -21,8 +22,10 @@ namespace RGL {
 // 构造器 / recordCullPass / readCullResult 实现（契约见接口声明）。
 
 GpuCull::GpuCull(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
+	RGL::SceneDataService& vkSceneData,
 	const std::vector<CullEntry>& vkEntries, uint32_t entryStreamCount)
 	: resources(vkResources),
+	  sceneData(vkSceneData),
 	  entryTable(vkEntries),
 	  nCandidates(static_cast<uint32_t>(vkEntries.size())),
 	  // 静态 DGC 流：候选表空则流无意义（钳 0 = 与未启用同构）
@@ -128,10 +131,10 @@ GpuCull::GpuCull(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
 		readbackMapped[s] = rada.pMappedData;
 	}
 
-	// heap 描述符槽（table/sequence/count 各一；scene data 槽 = ensureSceneData
+	// heap 描述符槽（table/sequence/count 各一走运行时段；scene data 槽 = SceneDataService::ensure
 	// 幂等返回——main 的 C1 已建，此处只取槽号）
 	auto ensureSlot = [&](const char* name) -> uint32_t {
-		auto slotResult = resources.allocSlot(name);
+		auto slotResult = resources.allocSlot(RGL::SlotSegment::Runtime, name);
 		if (!slotResult)
 			throw std::runtime_error(slotResult.error().describe());
 		return *slotResult;
@@ -141,9 +144,9 @@ GpuCull::GpuCull(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
 	countSlot = ensureSlot("cull.count");
 	if (nEntryStreams > 0)
 		streamsSlot = ensureSlot("cull.streams");  // scene data 槽早已被 main C1 固定，不漂移
-	sceneDataSlot = resources.ensureSceneData();
+	sceneDataSlot = sceneData.ensure();
 
-	// 描述符写入（eStorageBuffer + BDA 全范围——ensureSceneData 同款模式）
+	// 描述符写入（eStorageBuffer + BDA 全范围——SceneDataService::ensure 同款模式）
 	if (nCandidates > 0) {
 		const auto writeDesc = [&](RGL::VmaBuffer& buf, vk::DeviceSize size, uint32_t slot) {
 			vk::DeviceAddressRangeEXT range{buf.getDeviceAddress(), size};
@@ -294,7 +297,7 @@ void GpuCull::recordCullPass(vk::raii::CommandBuffer& cmd, const CullFrameInput&
 	cmd.pipelineBarrier2(heapDep);
 
 	// scene data 拷贝（staging → device buffer；compute 读对象矩阵表 @128）
-	const auto& sceneBuffer = resources.getSceneDataBuffer();
+	const auto& sceneBuffer = sceneData.getBuffer();
 	if (sceneBuffer.buffer != VK_NULL_HANDLE) {
 		VkBufferCopy region{0, 0, static_cast<VkDeviceSize>(kSceneDataBytes)};
 		::vkCmdCopyBuffer(*cmd, *sceneStaging, sceneBuffer.buffer, 1, &region);

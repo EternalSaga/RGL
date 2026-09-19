@@ -23,6 +23,10 @@ import vk_instance;
 import vk_device;
 import vk_swapchain;
 import vk_resources;
+import scene_data;  // SceneDataService（架构债务续账步骤 1）
+import sampler_library;  // SamplerLibrary（架构债务续账步骤 4a/4b）
+import environment;  // Environment（架构债务续账步骤 3）
+import render_target_cache;  // RenderTargetCache（架构债务续账步骤 2）
 import asset_table;
 import shader_registry;
 import vk_renderer;
@@ -294,11 +298,20 @@ int main() {
 		// heap 容量为固定裕量（与场景内容解耦，批次 3 E1.3）：CPU 解析模型不再需要
 		// 先于 Vulkan 初始化
 		Resources vkResources(vkInstance, vkDevice, vkSwapchain);
+		// SceneData 服务（架构债务续账步骤 1：buffer/槽自 Resources 拆出，构造紧随内核）
+		SceneDataService sceneData(vkResources, vkDevice);
+		// 内容服务层（架构债务续账步骤 3/4a/4b：共享 sampler+mip-gen 供给 / env-IBL 拆自内核）
+		SamplerLibrary samplers(vkResources, vkDevice);
+		Environment env(vkResources, vkDevice, samplers);
+		RenderTargetCache rtCache(vkResources, vkDevice);
+		// 资产表（ECS 规范 5 单一数据源；架构债务续账 F：所有权自 Resources 移入装配层，
+		// 声明序在 Renderer（backEnd）之前 = 析构序其后，表内 GPU 资源不在渲染器存活期释放）
+		AssetTable assetTable;
 		// 管线表（Phase 4 批次 2：ShaderRegistry，零 entt）：规格来自 configs/scene.lua；
 		// 条目全按需建（画不画 = entity 有无，数据驱动）——模型条目 C1 期 addModelEntry、
 		// 内建 cube 条目 cube 资产上传后 addCubeEntry、天空盒/光源条目各自前提满足时建。
 		// 先于 Renderer 构造（Renderer 持引用）
-		ShaderRegistry shaderRegistry(vkDevice, vkResources, configs.scene.pipelines);
+		ShaderRegistry shaderRegistry(vkDevice, vkResources, sceneData, env, assetTable, configs.scene.pipelines);
 		// Phase 6 批次 3：渲染意图图 = configs/render_graph.lua（缺文件/缺段回落默认
 		// 三段图）；compileRenderGraph 校验 + barrier 布局链推导，任何图错误启动期
 		// 报错退出（Renderer 构造校验器兜底执行器可解析性）。
@@ -322,24 +335,24 @@ int main() {
 		// main 作用域——TexturePool 局部对象 UAF 教训，docs/archive/heap_texture_research.md §12.6/§12.7）
 		// Phase 6 批次 5：scene.lua entities 列表 = 场景构成数据源（画不画 = entity 有无，
 		// ECS 规范 3；缺段兼容合成见 scene_config loader）。三段时序：A 解析 + GPU 上传
-		// 全部模型（顶点/纹理槽 allocSlot 单调分配）→ B env 上传（**时序契约 = 全部纹理
-		// 槽后、管线烘焙前**，挤占白纹理契约槽 = 启动断言，2026-09-01 踩坑）→ C 管线烘焙
+		// 全部模型（顶点/纹理槽按段分配）→ B env 上传（**调用序契约 = 管线烘焙前**，
+		// env 纹理仍走纹理段，白纹理首槽由段首固定校验）→ C 管线烘焙
 		// + ECS 注册。CPU 解析产物（GltfModel）活到 C（unique_ptr 稳定地址）；资产数据
 		// （buffer/slot/纹理/材质）全部在 Resources 资产表（初始化层 owner——TexturePool
 		// 局部对象 UAF 教训，docs/archive/heap_texture_research.md §12.6/§12.7）
-		auto assets = uploadModelAssets(vkDevice, vkResources, configs.scene);
+		auto assets = uploadModelAssets(vkDevice, vkResources, samplers, assetTable, configs.scene);
 		if (configs.scene.environment.enabled)
-			uploadEnvironment(vkResources, vkDevice, configs.scene, registry);  // 时序契约见定义处注释
+			uploadEnvironment(vkResources, env, vkDevice, configs.scene, registry);  // 时序契约见定义处注释
 
 		// C1：管线条目烘焙（per **unique 模型**——instancing 共享条目；addModelEntry
 		// 按 (规格,顶点 slot,纹理 slot) 组合去重兜底）
-		bakePipelineEntries(assets, configs.scene, deferredMode, shaderRegistry, vkResources);
+		bakePipelineEntries(assets, configs.scene, deferredMode, shaderRegistry, vkResources, samplers, assetTable);
 		// C2/C2b：场景实体注册（模型/cube/灯）+ 实例矩阵槽容量契约
-		registerSceneEntities(registry, assets, configs.scene, vkResources, shaderRegistry);
+		registerSceneEntities(registry, assets, configs.scene, vkResources, assetTable, shaderRegistry);
 
 		// C3 GPU culling 候选表 + GpuCull + skybox + deferred G-buffer/HDR + DGC + Renderer
 		//（装配时序契约见 assembleBackEnd 接口注释；graph 在此 move 进 Renderer）
-		auto backEnd = assembleBackEnd(vkDevice, vkSwapchain, vkResources, shaderRegistry,
+		auto backEnd = assembleBackEnd(vkDevice, vkSwapchain, vkResources, sceneData, samplers, env, rtCache, assetTable, shaderRegistry,
 			std::move(graphResult.graph), registry, configs.scene, deferredMode);
 
 		/**
@@ -362,7 +375,7 @@ int main() {
 		// llm 截图消费回调（ecs 不 import llm_debug——依赖图叶子解耦，2026-09-02）：
 		// main 是唯一知道 writeCapturePng 的地方，config 指针绑进 lambda。截图内容 =
 		// drawFrame 帧内回读的本帧真实输出（vkrenderer FrameCapture，2026-09-08 离屏重渲退役）
-		auto renderResult = RGL::renderSystem(registry, backEnd.renderer,
+		auto renderResult = RGL::renderSystem(registry, backEnd.renderer, assetTable,
 			pre.llm,
 			[&](RGL::Renderer& r) {
 				return RGL::writeCapturePng(r, *pre.llm);

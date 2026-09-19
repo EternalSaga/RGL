@@ -201,7 +201,7 @@ export class RenderPipeline {
 	 * 交叉测试两者三驱动均 PASS（docs/archive/heap_texture_research.md §九），此处维持独立
 	 * sampler heap（docs/archive/phase3_plan.md R1 回退链的既选路径，已验证可用）。
 	 * hasSceneData=true（Phase 5 批次 2，模型形态）追加 binding 3 → scene data storage
-	 * buffer 槽（光照 + 对象矩阵表，Resources::ensureSceneData；模型 mesh/unlit frag 不
+	 * buffer 槽（光照 + 对象矩阵表，SceneDataService::ensure；模型 mesh/unlit frag 不
 	 * 声明 binding 3 = 映射空转无副作用，同 mesh 阶段不声明 binding 1/2 的既证行为）。
 	 * hasEnv=true（Phase 5.5）追加 binding 4/5 → env cubemap 槽 + sky sampler 偏移
 	 *（仅 import env.slang 的风格消费——pbr/phong/unlit 不声明 = 映射空转，同上既证行为）。

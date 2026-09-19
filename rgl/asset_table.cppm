@@ -41,7 +41,7 @@ export enum class AssetKind : uint8_t {
  * 资产层：每个已上传 primitive 一条记录（GPU 顶点 buffer + heap slot + 三角形数 + 管线条目引用），
  * 以稳定 id（vector 下标，上传顺序分配）索引。registry entity 经 MeshRef{asset}（scene_context.cppm）
  * 引用资产，五方一致性（entity ↔ primitive ↔ heap slot ↔ 管线条目 ↔ draw-args）收敛为本表
- * 一处映射（E1.1）。生命周期：Resources 成员（与 descriptor heap 同层），
+ * 一处映射（E1.1）。生命周期：main 装配层持有（架构债务续账 F），
  * buffer 随 SharedAllocator 控制块存活，不再靠 main.cpp 局部变量的隐式 RAII 保证（E1.2/L6）。
  * 顶点 buffer 经 shared_ptr 共享（Phase 4 批次 2 分块拼接：模型 primitive 拼成 16MB 块，
  * 每块一个 buffer + 一个 heap slot，同块内 primitive 共享同一 shared_ptr，末引用析构释放；
@@ -67,8 +67,8 @@ export struct MeshAsset {
 /**
  * 纹理资产（Phase 3 → 批次 1 迁入资产表）：GPU image + view + heap 描述符槽 + 描述符指针链。
  * 原 owner = main 局部 TexturePool 对象（UAF 根因：块尾析构第 0 帧前释放纹理 BO，
- * docs/archive/heap_texture_research.md §12.6）；现活在 AssetTable（Resources 成员），VmaImage
- * 包装体随 Resources 存活——所有权规则（§12.7 ①）在此首次落地。
+ * docs/archive/heap_texture_research.md §12.6）；现活在 main 装配层持有的 AssetTable，VmaImage
+ * 包装体随 AssetTable 存活——所有权规则（§12.7 ①）在此首次落地。
  * viewCreate 必须保留：v341 的 VkImageDescriptorInfoEXT::pView 要 image view 的
  * create info（值拷贝），不是句柄（docs/archive/heap_texture_research.md §二 条款表）。
  * 描述符指针链（imageDesc/resourceDesc/dst）折进记录本体：记录活在 std::deque
@@ -118,9 +118,9 @@ export struct MaterialAsset {
 /**
  * 资产表：资产层单一数据源（ECS 规范 5）——mesh / texture / material 三表，均以稳定
  * id（表内下标，注册顺序分配）索引，五方一致性收敛为本表一处映射。生命周期 =
- * Resources 成员（与 descriptor heap 同层）。几何槽计数（geometrySlotCount）+
- * expectedGeometrySlot 承载 heap 布局契约"纹理首槽 = 白 = 全部几何槽之后"
- *（上传方断言：model_importer / builtin_geometry / texture_pool::ensureWhiteTexture）。
+ * main 装配层（架构债务续账 F）。几何槽计数（geometrySlotCount）+
+ * expectedGeometrySlot 承载 descriptor heap 几何段布局契约（上传方断言：
+ * model_importer / builtin_geometry）；白纹理契约由 Resources 纹理段首槽断言。
  */
 export class AssetTable {
    public:
@@ -160,8 +160,8 @@ export class AssetTable {
 	[[nodiscard]] uint32_t meshSize() const { return static_cast<uint32_t>(meshes.size()); }
 	/**
 	 * 几何槽计数（Phase 4 批次 2 分块拼接 = 模型每 16MB 块一个 slot；架构债务 1 方案 B 后
-	 * 含内建几何的顶点槽与索引槽——一切几何都是 allocSlot 单调分配的普通消费者）。
-	 * 白纹理 slot 契约断言用："纹理首槽 = 白 = 全部几何槽之后"（texture_pool::ensureWhiteTexture）。
+	 * 含内建几何的顶点槽与索引槽——一切几何都是 allocSlot Geometry 段的普通消费者）。
+	 * expectedGeometrySlot 几何段契约断言用（texture_pool::ensureWhiteTexture 改按纹理段首槽）。
 	 * 计数单位 = 槽（非模型、非 primitive 数）：uploadModelMeshes 每块 +1，
 	 * uploadBuiltinCube +2（顶点 + 索引）
 	 */
@@ -172,8 +172,8 @@ export class AssetTable {
 	void incrementGeometrySlotCount() { ++geometrySlotCount; }
 	/**
 	 * 下一个几何槽的期望绝对槽号（= reservedSlots + HeapSlotGeometryBase + 已占几何槽数）。
-	 * 上传方 allocSlot 后比对，违例 = 几何段中间插了别的分配（契约漂移，报
-	 * DescriptorSlotOutOfBounds）；白纹理亦用此断言"纹理首槽 = 白 = 全部几何槽之后"。
+	 * 上传方 allocSlot(Geometry) 后比对，违例 = 几何段中间插了别的分配（契约漂移，报
+	 * DescriptorSlotOutOfBounds）；白纹理不再借用本断言，改断 Resources 纹理段首槽。
 	 * @param reservedSlots descriptor heap 驱动保留槽位数（用户槽自 reservedSlots 起）
 	 * @return 下一次几何分配的期望绝对槽号
 	 */

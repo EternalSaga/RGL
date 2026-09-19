@@ -9,6 +9,7 @@ import rllogger;
 import vkerror;
 import vk_device;
 import vk_resources;
+import scene_data;  // SceneDataService（架构债务续账步骤 1：scene data buffer 移出内核）
 import VmaRaii;
 import frame_draw_list;
 import material_types_generated;  // DrawArgs（writeSequenceStaging：序列 CPU 侧基值）
@@ -69,7 +70,8 @@ export class GpuCull {
 	 * shader object（stage=COMPUTE + heap bit + 4 binding 映射，RenderPipeline
 	 * 同款模式）+ 表数据 memcpy。
 	 * @param vkDevice 设备层（buffer / shader 创建 / 描述符写入）
-	 * @param resources 资源层（VMA 分配器 / allocSlot / 描述符 heap / scene data 槽）
+	 * @param resources 资源层（VMA 分配器 / allocSlot / 描述符 heap）
+	 * @param sceneData scene data 服务（幂等领 buffer/槽 + staging 拷贝目标，架构债务续账步骤 1）
 	 * @param entries 候选表（main 从 registry 构建，顺序契约见类注释）；空 = inactive
 	 * @param entryStreamCount 静态 shader DGC 路的 per-entry 流数（>0 = 启用：分配
 	 *   entryStreamCount × candidateCount × 120B 流 buffer + fanout shader object，
@@ -77,6 +79,7 @@ export class GpuCull {
 	 *   docs/radv_static_dgc_spike.md §3.2/§3.3）
 	 */
 	GpuCull(RGL::DeviceContext& vkDevice, RGL::Resources& resources,
+		RGL::SceneDataService& sceneData,
 		const std::vector<CullEntry>& entries, uint32_t entryStreamCount = 0);
 
 	/** @return 子系统是否激活（候选表非空；Renderer 据此决定是否走 culling 数据通路）。 */
@@ -146,7 +149,8 @@ export class GpuCull {
 	 */
 	void recordFanoutDispatch(vk::raii::CommandBuffer& cmd);
 
-	RGL::Resources& resources;  // 资源层引用（记录期 heap 信息 / scene data buffer；main 栈对象生命周期覆盖）
+	RGL::Resources& resources;  // 资源层引用（记录期 heap 信息；main 栈对象生命周期覆盖）
+	RGL::SceneDataService& sceneData;  // scene data 服务引用（buffer / 槽；架构债务续账步骤 1）
 	std::vector<CullEntry> entryTable;  // 候选表（构建期存副本；对账/重放映射用）
 	uint32_t nCandidates = 0;
 
@@ -162,7 +166,7 @@ export class GpuCull {
 	uint32_t tableSlot = 0;  // 静态表 heap 槽（allocSlot）
 	uint32_t sequenceSlot = 0;  // 序列 buffer heap 槽
 	uint32_t countSlot = 0;  // count buffer heap 槽
-	uint32_t sceneDataSlot = 0;  // scene data heap 槽（Resources::ensureSceneData 幂等返回）
+	uint32_t sceneDataSlot = 0;  // scene data heap 槽（SceneDataService::ensure 幂等返回）
 
 	// 静态 shader DGC 路（spike，docs/radv_static_dgc_spike.md §3.2/§3.3；
 	// nEntryStreams = 0 时以下全不创建，NV/重放路零开销）

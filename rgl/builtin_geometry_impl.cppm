@@ -60,8 +60,8 @@ std::expected<RGL::VmaBuffer, Error> makeGeometryBuffer(RGL::Resources& res,
 /**
  * 一个几何 heap 槽 + storage buffer 描述符写入（eStorageBuffer，地址范围 = buffer BDA + 字节数）。
  * 期望槽号 = reserved + 已占几何槽数（AssetTable::expectedGeometrySlot），违例 = 几何段中间
- * 插了别的分配 = 契约漂移，直接报 DescriptorSlotOutOfBounds；计数的意义在下游"纹理首槽 = 白 =
- * 全部几何槽之后"断言（见 ensureWhiteTexture）。
+ * 插了别的分配 = 契约漂移，直接报 DescriptorSlotOutOfBounds；白纹理契约改由纹理段首槽校验
+ *（见 ensureWhiteTexture），不再依赖几何段与纹理段的动态邻接关系。
  * @param res 资源层（统一 slot 分配器 + 资产表几何槽计数）
  * @param device 设备（writeResourceDescriptorsEXT）
  * @param buffer 几何 buffer（设备地址 + 大小 → 描述符地址范围）
@@ -70,12 +70,11 @@ std::expected<RGL::VmaBuffer, Error> makeGeometryBuffer(RGL::Resources& res,
  * @return 领取的绝对 heap 槽号（geometrySlotCount +1）；失败 Error（slot 越界 /
  *   布局漂移 / slot 地址查询失败）
  */
-std::expected<uint32_t, Error> allocGeometrySlot(RGL::Resources& res, vk::raii::Device& device,
+std::expected<uint32_t, Error> allocGeometrySlot(RGL::Resources& res, RGL::AssetTable& assets, vk::raii::Device& device,
 	const RGL::VmaBuffer& buffer, vk::DeviceSize bytes, const char* name) {
-	auto& assets = res.getAssetTable();
 	auto& heap = res.getDescriptorHeap();
 	const uint32_t expectedSlot = assets.expectedGeometrySlot(heap.getReservedSlots());
-	auto slotResult = res.allocSlot(name);
+	auto slotResult = res.allocSlot(RGL::SlotSegment::Geometry, name);
 	if (!slotResult)
 		return std::unexpected(std::move(slotResult).error());
 	if (*slotResult != expectedSlot)
@@ -98,9 +97,8 @@ std::expected<uint32_t, Error> allocGeometrySlot(RGL::Resources& res, vk::raii::
 }  // namespace
 
 std::expected<uint32_t, Error> uploadBuiltinCube(
-	RGL::DeviceContext& vkDevice, RGL::Resources& res) {
+	RGL::DeviceContext& vkDevice, RGL::Resources& res, RGL::AssetTable& assets) {
 	auto& device = vkDevice.getDevice();
-	auto& assets = res.getAssetTable();
 	auto* logger = RLLogger::getInstance();
 
 	const vk::DeviceSize vertexBytes =
@@ -115,10 +113,10 @@ std::expected<uint32_t, Error> uploadBuiltinCube(
 	if (!indexResult)
 		return std::unexpected(std::move(indexResult).error());
 
-	auto vertexSlot = allocGeometrySlot(res, device, *vertexResult, vertexBytes, "cube.vertices");
+	auto vertexSlot = allocGeometrySlot(res, assets, device, *vertexResult, vertexBytes, "cube.vertices");
 	if (!vertexSlot)
 		return std::unexpected(std::move(vertexSlot).error());
-	auto indexSlot = allocGeometrySlot(res, device, *indexResult, indexBytes, "cube.indices");
+	auto indexSlot = allocGeometrySlot(res, assets, device, *indexResult, indexBytes, "cube.indices");
 	if (!indexSlot)
 		return std::unexpected(std::move(indexSlot).error());
 

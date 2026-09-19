@@ -36,7 +36,7 @@ namespace RGL {
 			samplerSlot * res.getSamplerHeap().getDescriptorSize();
 		// Phase 5 批次 2：模型管线恒绑 scene data（binding 3，幂等创建；unlit frag 不声明
 		// = 映射空转，同 mesh 阶段对 binding 1/2 的既证行为）
-		const uint32_t sceneSlot = res.ensureSceneData();
+		const uint32_t sceneSlot = sceneData.ensure();
 		RGL::PipelineBindings b{};
 		b.descriptorSize = descriptorSize;
 		b.slotVertex = vertexSlot;
@@ -48,11 +48,11 @@ namespace RGL {
 		b.hasSceneData = true;
 		// Phase 5.5：env cubemap 已上传 → 全模型条目烘焙 binding 4/5（env 槽全局单例
 		// 恒等，不进组合去重 key；不 import env.slang 的 frag 不声明 = 映射空转，同上既证行为）
-		if (const auto* env = res.getEnvTexture()) {
+		if (const auto* envAsset = env.get()) {
 			b.hasEnv = true;
-			b.slotEnv = env->heapSlot;
+			b.slotEnv = envAsset->heapSlot;
 			b.envSamplerHeapOffset =
-				res.ensureSkySampler(env->mipLevels) * res.getSamplerHeap().getDescriptorSize();
+				env.ensureSkySampler(envAsset->mipLevels) * res.getSamplerHeap().getDescriptorSize();
 		}
 		// Phase 8 ③a：normal（binding 6）+ ORM（binding 7）贴图槽；Phase 8 ③：emissive
 		//（binding 8）贴图槽（resource heap SAMPLED_IMAGE，extra 追加，仿 addLightEntry 的
@@ -82,19 +82,19 @@ namespace RGL {
 		const RGL::PipelineSpec* spec = findSpec("skybox");
 		if (!spec)
 			throw std::runtime_error("pipeline spec not found: skybox");
-		const auto* env = res.getEnvTexture();
-		if (!env)
+		const auto* envAsset = env.get();
+		if (!envAsset)
 			throw std::runtime_error("skybox entry requires env cubemap uploaded");
 		RGL::PipelineBindings b{};
 		b.descriptorSize = res.getDescriptorHeap().getDescriptorSize();
 		b.slotVertex = 0;
 		b.slotIndex = 1;
-		b.slotSceneData = res.ensureSceneData();
+		b.slotSceneData = sceneData.ensure();
 		b.hasSceneData = true;
 		b.hasEnv = true;
-		b.slotEnv = env->heapSlot;
+		b.slotEnv = envAsset->heapSlot;
 		b.envSamplerHeapOffset =
-			res.ensureSkySampler(env->mipLevels) * res.getSamplerHeap().getDescriptorSize();
+			env.ensureSkySampler(envAsset->mipLevels) * res.getSamplerHeap().getDescriptorSize();
 		auto entry = PipelineEntry{"skybox",
 			RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b)};
 		const uint32_t index = static_cast<uint32_t>(entries.size());
@@ -118,7 +118,7 @@ namespace RGL {
 		b.descriptorSize = descriptorSize;
 		b.slotVertex = 0;   // binding 0/1 占位（light mesh 不声明 = 空转，skybox 既证）
 		b.slotIndex = 1;
-		b.slotSceneData = res.ensureSceneData();  // binding 3：readSceneLight 单灯
+		b.slotSceneData = sceneData.ensure();  // binding 3：readSceneLight 单灯
 		b.hasSceneData = true;
 		const uint32_t samplerHeapOffset =
 			samplerSlot * res.getSamplerHeap().getDescriptorSize();
@@ -135,10 +135,10 @@ namespace RGL {
 		// 批次 2 refine：env cubemap（9）+ sky sampler（10）——本 pass 低段 binding 被
 		// G-buffer 连号占用，env 排尾（light.frag envMapL/envSamplerL）。env 已上传 = 正常绑定；
 		// 未上传 = 占位槽 0（shader 端 mipRange=0 不采样，黑天/常 ambient 回落，见 light.frag）。
-		if (const auto* env = res.getEnvTexture()) {
-			b.extra.push_back({.binding = 9, .sampler = false, .heapSlot = env->heapSlot});
+		if (const auto* envAsset = env.get()) {
+			b.extra.push_back({.binding = 9, .sampler = false, .heapSlot = envAsset->heapSlot});
 			b.extra.push_back({.binding = 10, .sampler = true,
-				.samplerHeapOffset = res.ensureSkySampler(env->mipLevels) *
+				.samplerHeapOffset = env.ensureSkySampler(envAsset->mipLevels) *
 					res.getSamplerHeap().getDescriptorSize()});
 		} else {
 			b.extra.push_back({.binding = 9, .sampler = false, .heapSlot = 0});
@@ -153,7 +153,7 @@ namespace RGL {
 		if (auto* logger = RLLogger::getInstance())
 			logger->debug("pipeline entry: light (gbuffer slots {}/{}/{}/{}/{}, env {}) → 下标 {}",
 				albedoSlot, normalSlot, positionSlot, metalRoughSlot, emissiveSlot,
-				res.getEnvTexture() ? "on" : "off", index);
+				env.get() ? "on" : "off", index);
 		return index;
 	}
 
@@ -171,7 +171,7 @@ namespace RGL {
 		b.descriptorSize = descriptorSize;
 		b.slotVertex = 0;   // binding 0/1 占位（tonemap mesh = light.mesh 全屏大三角，不声明顶点）
 		b.slotIndex = 1;
-		b.slotSceneData = res.ensureSceneData();  // binding 3：@56 曝光
+		b.slotSceneData = sceneData.ensure();  // binding 3：@56 曝光
 		b.hasSceneData = true;
 		const uint32_t samplerHeapOffset =
 			samplerSlot * res.getSamplerHeap().getDescriptorSize();
@@ -196,7 +196,7 @@ namespace RGL {
 		const RGL::PipelineSpec* cubeSpec = findSpec("cube");
 		if (!cubeSpec)
 			throw std::runtime_error("pipeline spec not found: cube");
-		const auto& cubeAsset = res.getAssetTable().get(meshAssetId);
+		const auto& cubeAsset = assets.get(meshAssetId);
 		if (!cubeAsset.indexHeapSlot)
 			throw std::runtime_error("addCubeEntry: asset is not an indexed (builtin) mesh");
 		RGL::PipelineBindings b{};
@@ -205,7 +205,7 @@ namespace RGL {
 		b.slotIndex = *cubeAsset.indexHeapSlot;
 		// Phase 7b+（NV DGC 规避）：cube mesh 也走 readObjectMvp（binding 3 scene data，
 		// 同 model 条目恒烘焙；cube 的 mvp 由 render_list 循环填进 mvp 表，objectIndex 有效）
-		b.slotSceneData = res.ensureSceneData();
+		b.slotSceneData = sceneData.ensure();
 		b.hasSceneData = true;
 		auto entry = PipelineEntry{
 			"cube",
@@ -235,7 +235,7 @@ void ShaderRegistry::bindPipelineToAsset(const char* name, uint32_t assetId) {
 		auto idx = pipelineIndex(name);
 		if (!idx)
 			throw std::runtime_error(fmt::format("pipeline entry not found: {}", name));
-		res.getAssetTable().setPipelineIndex(assetId, *idx);
+		assets.setPipelineIndex(assetId, *idx);
 	}
 
 }  // namespace RGL

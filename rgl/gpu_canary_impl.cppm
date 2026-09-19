@@ -13,6 +13,7 @@ import VmaRaii;
 import vulkan_utils;
 import vk_device;
 import vk_resources;
+import asset_table;  // AssetTable（F 拆出）
 
 namespace RGL {
 
@@ -38,10 +39,9 @@ void logTexelResult(const void* mapped, uint64_t frame) {
 // texelCanaryCheck 定义（2026-09-02 编译提速 A 方案）：诊断实现移出接口 TU；
 // 本单元是叶子边、编译不上关键路径。
 
-void texelCanaryCheck(RGL::Resources& resources, RGL::DeviceContext& device,
-	const vk::raii::CommandPool& cmdPool, uint64_t frame) {
+void texelCanaryCheck(RGL::Resources& resources, const RGL::AssetTable& assets,
+	RGL::DeviceContext& device, const vk::raii::CommandPool& cmdPool, uint64_t frame) {
 	auto* logger = RLLogger::getInstance();
-	const auto& assets = resources.getAssetTable();
 	if (assets.textureSize() == 0) {
 		if (logger)
 			logger->warn("texel canary (frame {}): 无纹理资产（未加载模型），跳过", frame);

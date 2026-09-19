@@ -28,6 +28,7 @@ using vk::ArrayProxy;
 using vk::AttachmentLoadOp;
 using vk::AttachmentStoreOp;
 using vk::BindHeapInfoEXT;
+using vk::BorderColor;
 using vk::Bool32;
 using vk::BufferCreateInfo;
 using vk::BufferDeviceAddressInfo;

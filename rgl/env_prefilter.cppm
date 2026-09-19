@@ -27,8 +27,8 @@ namespace RGL {
 //     TRANSFER_DST→GENERAL（compute 写）→SHADER_READ_ONLY（渲染端最终态）。
 // 全走 descriptor heap，零 descriptor pool / set layout / pipeline layout / pipeline。
 //
-// **生命周期**：owner = Resources 成员（启动期一次性，env 16F 上传时喂 level，先于 device 析构）。
-// heap 槽由 Resources 经 allocSlot 领取后喂给本类型（本模块不 import vk_resources——Resources
+// **生命周期**：owner = Environment 成员（启动期一次性，env 16F 上传时喂 level，先于 device 析构）。
+// heap 槽由 Environment 经 Resources::allocSlot(Runtime) 领取后喂给本类型（本模块不 import vk_resources——Environment
 // 持本类型成员，无环；heap 引用经 init 注入）。per-level 视图 create info 存成员 deque
 // （不 realloc → pView 指针稳定，活过提交 + fence wait——驱动可延迟解析）。
 
@@ -49,9 +49,9 @@ static_assert(sizeof(EnvPrefilterPush) == 12, "EnvPrefilterPush 须与 env_prefi
  * EnvPrefilter：GGX 预滤波环境 cubemap 生成器（Phase 8 ④b，启动期一次性基础设施）。
  * 持有 env_prefilter.comp SPV + **每 level index 一个 compute shader object**（heap +
  * push-index mapping，非传统管线/pipeline layout）+ 每 level 一对 heap 描述符槽（src sampled
- * cube mip0 / dst storage 2DArray，由 Resources 领取喂入）+ per-level 视图 create info 稳定
+ * cube mip0 / dst storage 2DArray，由 Environment 领取喂入）+ per-level 视图 create info 稳定
  * 容器（pView 指向，生命周期覆盖全部提交）。无 descriptor pool / set layout / pipeline layout /
- * pipeline（全走 descriptor heap）。owner = Resources 成员（构造于 Resources 构造期，析构先于 device）。
+ * pipeline（全走 descriptor heap）。owner = Environment 成员（构造于 Environment 构造期，析构先于 device）。
  */
 export class EnvPrefilter {
    public:
@@ -73,7 +73,7 @@ export class EnvPrefilter {
 	EnvPrefilter& operator=(EnvPrefilter&&) = delete;
 
 	/**
-	 * 注入 heap 引用与共享 sampler 槽（幂等首建，由 Resources::ensureEnvPrefilterReady 驱动）。
+	 * 注入 heap 引用与共享 sampler 槽（幂等首建，由 Environment::ensurePrefilterReady 驱动）。
 	 * 仅记录引用（不拥有 heap）+ sampler heap 槽号；shader object 待 addLevel 建。
 	 * @param resourceHeap resource descriptor heap（src/dst image 描述符落此，bind 此）
 	 * @param samplerHeap sampler heap（sampler 描述符所在，bind 此）
@@ -85,7 +85,7 @@ export class EnvPrefilter {
 	/**
 	 * 为一个 mip level index 建独立 compute shader object（heap + push-index mapping，binding
 	 * 0=srcSampled / 1=dstStorage 各烘焙到独立槽，2=sampler）+ 登记 src/dst 槽号 + 追加
-	 * per-level 描述符链稳定存储。由 Resources::ensureEnvPrefilterReady 逐 level 调用（env 单例
+	 * per-level 描述符链稳定存储。由 Environment::ensurePrefilterReady 逐 level 调用（env 单例
 	 * 上传时把 level 数补齐到 mipLevels，之后每 level 复用同批）。level index = mip level
 	 * （0 占位不用于预滤波生成，但同批建好以便按下标直接取）。
 	 * @param srcSlot src sampled image 描述符在 resource heap 的槽号（Resources allocSlot 领取）
@@ -102,7 +102,7 @@ export class EnvPrefilter {
 	 * 把 GGX 预滤波链（level 1..mipLevels−1，每级一个 dispatch (ceil(fs/8),ceil(fs/8),6)）录进
 	 * cmd——调用点 = cubemap 上传 CB（16F/ggxPrefilter 分支，**mip0 已 copy 完并先行迁到
 	 * SHADER_READ_ONLY**，本方法续录后由调用方统一 end + submit + fence）。
-	 * **前置**：Resources::ensureEnvPrefilterReady(mipLevels) 已把 level shader/槽建齐（本方法
+	 * **前置**：Environment::ensurePrefilterReady(mipLevels) 已把 level shader/槽建齐（本方法
 	 * 不分配槽，只用 level 1..mipLevels−1）。
 	 * 录制序：先把各 level 的 src（cube mip0 sampled SRO）/dst（2DArray 第 level 级 storage
 	 * GENERAL）image 描述符一次性写进各自固定槽（同 submission 内各 level 独立槽、互不覆盖）

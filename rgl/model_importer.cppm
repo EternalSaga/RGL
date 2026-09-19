@@ -7,6 +7,7 @@ import rlstd;
 import vkerror;
 import vk_device;
 import vk_resources;
+import asset_table;  // AssetTable（mesh/material 资产注册目标，F 拆出：不再经内核透传）
 import gltf_loader;
 
 namespace RGL {
@@ -14,9 +15,9 @@ namespace RGL {
 /**
  * GPU 上传（Phase 4 批次 2 分块拼接）：模型 primitive 拼成 16MB 块（kVertexChunkBytes，
  * 见 impl），**每块一个 BDA storage buffer**（CPU→GPU mapped，块内 primitive 按块内偏移
- * 写入全部顶点数据）+ **每块一个 heap 描述符槽**（块 = 单一地址范围），注册进 Resources
- * 资产表（每 primitive 一条 MeshAsset 记录，共享所在块 buffer 的 shared_ptr +
- * per-primitive vertexOffset，E1.1）。资产数据生命周期归资产表（Resources 成员），不再经
+ * 写入全部顶点数据）+ **每块一个 heap 描述符槽**（块 = 单一地址范围），注册进
+ * AssetTable（每 primitive 一条 MeshAsset 记录，共享所在块 buffer 的 shared_ptr +
+ * per-primitive vertexOffset，E1.1）。资产数据生命周期归 main 装配层持有的 AssetTable，不再经
  * 返回值持有（E1.2/L6）。返回资产 id 列表（与 model.primitives 下标对齐：上传顺序 = primitive 顺序）。
  *
  * 管线去重依赖"同 (顶点 slot, 纹理 slot) 组合共享一条管线条目"——binding mapping 是
@@ -33,7 +34,8 @@ namespace RGL {
  *   slot 越界 / 几何槽布局漂移）
  */
 export [[nodiscard]] std::expected<std::vector<uint32_t>, Error> uploadModelMeshes(
-	RGL::DeviceContext& vkDevice, RGL::Resources& res, const RGL::GltfModel& model);
+	RGL::DeviceContext& vkDevice, RGL::Resources& res, RGL::AssetTable& assets,
+	const RGL::GltfModel& model);
 
 /**
  * 场景实体注册：场景根 entity 挂 Bounds + Transform（+ Relationship 根）+ 每 primitive
@@ -57,6 +59,6 @@ export [[nodiscard]] std::expected<std::vector<uint32_t>, Error> uploadModelMesh
  */
 export entt::entity registerScene(entt::registry& rg, const RGL::GltfModel& model,
 	std::span<const uint32_t> assetIds, std::span<const uint32_t> primitiveTextureIds,
-	RGL::Resources& resources, const glm::mat4& rootTransform = glm::mat4(1.0f));
+	RGL::Resources& resources, RGL::AssetTable& assets, const glm::mat4& rootTransform = glm::mat4(1.0f));
 
 }  // namespace RGL

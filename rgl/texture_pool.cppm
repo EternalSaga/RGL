@@ -13,6 +13,8 @@ import diagnostics;  // texture_force_* 诊断单例（configs/diagnostics.lua�
 import vkerror;
 import vk_device;
 import vk_resources;
+import sampler_library;  // mip-gen 供给透传（架构债务续账步骤 4a/4b）
+import environment;  // env 服务透传（架构债务续账步骤 3）
 import asset_table;
 import texture_upload;
 import gltf_loader;
@@ -27,8 +29,8 @@ namespace RGL {
 //
 // 批次 1 重构（2026-08-28）：原 TexturePool 类持有资产 + 描述符存储（main 局部对象 = UAF
 // 根因：块尾析构第 0 帧前释放纹理 BO，docs/archive/heap_texture_research.md §12.6）。现为无状态
-// 工具函数，注册产物（TextureAsset）落 Resources::AssetTable（初始化层 owner，所有权规则
-// §12.7 ① 在此首次落地）；共享 sampler 同步移入 Resources::ensureSharedSampler。
+// 工具函数，注册产物（TextureAsset）落 main 装配层持有的 AssetTable（所有权规则
+// §12.7 ① 在此首次落地）；共享 sampler 同步移入 SamplerLibrary::ensureShared。
 
 
 /**
@@ -46,8 +48,8 @@ namespace RGL {
  * @return 纹理资产 id；image_codec 解码失败 / 上传失败 → Error
  */
 export [[nodiscard]] std::expected<uint32_t, Error> loadEmbedded(RGL::Resources& resources,
-	RGL::DeviceContext& device, const uint8_t* data, size_t size, bool linear,
-	const char* name) {
+	RGL::SamplerLibrary& samplers, RGL::AssetTable& assets, RGL::DeviceContext& device,
+	const uint8_t* data, size_t size, bool linear, const char* name) {
 	auto image = decodeRgba8(data, size);
 	if (!image) {
 		return std::unexpected(Error{ErrorCode::TextureDecodeFailed,
@@ -70,38 +72,34 @@ export [[nodiscard]] std::expected<uint32_t, Error> loadEmbedded(RGL::Resources&
 				const uint8_t* s = rgba + (static_cast<size_t>(y * h / target) * w + x * w / target) * 4;
 				std::copy_n(s, 4, up.data() + static_cast<size_t>(y) * target * 4 + x * 4);
 			}
-		return uploadTexture(resources, device, up.data(), target, target, linear, name);
+		return uploadTexture(resources, samplers, assets, device, up.data(), target, target, linear, name);
 	}
 	if (forceWhite) {
 		std::fill(rgba, rgba + static_cast<size_t>(w) * h * 4, 255);
 	}
-	return uploadTexture(resources, device, rgba, w, h, linear, name);
+	return uploadTexture(resources, samplers, assets, device, rgba, w, h, linear, name);
 }
 
 /**
  * 1×1 白纹理（无纹理/无 uv primitive 的共用特例，D4）。
  * 幂等（纹理首槽 = 白，调用序契约：先于任何图片纹理取；已存在纹理资产 → 直接返回 0）。
- * 布局契约断言（批次 1 新增，Phase 4 批次 2 改按模型数，架构债务 1 方案 B 改按几何槽数）：
- * slot = reserved + HeapSlotGeometryBase + 几何槽数（内建几何顶点/索引槽 + 模型每 16MB
- * 拼接块（kVertexChunkBytes）一个槽，getGeometrySlotCount）
- *（违例 = 契约漂移报错——原靠"别提前取白"纪律，2026-08-28 排查踩坑：白纹理抢 slot 2
- * → model.vertex[0] drift 抛错）。
+ * 布局契约断言（段隔离后）：白纹理 slot = Resources 纹理段首槽（纹理段起点固定，运行时段
+ * 辅助槽不再插入纹理段；几何段容量与纹理段起点由 Resources 统一维护）。
  * @param resources 资源层（资产表 + slot 分配器 + descriptor heap + VMA 分配器）
  * @param device 设备层
  * @return 白纹理资产 id（= 0，纹理首槽）
  * @note 布局漂移抛 runtime_error（"heap slot layout drift"）
  */
-export uint32_t ensureWhiteTexture(RGL::Resources& resources, RGL::DeviceContext& device) {
-	auto& assets = resources.getAssetTable();
+export uint32_t ensureWhiteTexture(RGL::Resources& resources, RGL::SamplerLibrary& samplers,
+	RGL::AssetTable& assets, RGL::DeviceContext& device) {
 	if (assets.textureSize() > 0)
 		return 0;  // 首个纹理资产 = 白（调用序契约）
 	const uint8_t rgba[4] = {255, 255, 255, 255};
 	// 白纹理走 sRGB 路：(1,1,1,1) 是 sRGB 解码不动点（采样后仍 1），base/orm 回落共用
-	auto result = uploadTexture(resources, device, rgba, 1, 1, false, "texture.white");
+	auto result = uploadTexture(resources, samplers, assets, device, rgba, 1, 1, false, "texture.white");
 	if (!result)
 		throw std::runtime_error(fmt::format("white texture: {}", result.error().describe()));
-	const uint32_t expected = assets.expectedGeometrySlot(
-		resources.getDescriptorHeap().getReservedSlots());
+	const uint32_t expected = resources.segmentBegin(RGL::SlotSegment::Texture);
 	const uint32_t slot = assets.getTexture(*result).heapSlot;
 	if (slot != expected)
 		throw std::runtime_error(fmt::format(
@@ -140,8 +138,8 @@ export struct ModelTextureIds {
  * @return 中性法线纹理资产 id（= 1，纹理第 2 槽）
  * @note 调用序违例（白纹理未先建）抛 runtime_error
  */
-export uint32_t ensureNeutralNormalTexture(RGL::Resources& resources, RGL::DeviceContext& device) {
-	auto& assets = resources.getAssetTable();
+export uint32_t ensureNeutralNormalTexture(RGL::Resources& resources, RGL::SamplerLibrary& samplers,
+	RGL::AssetTable& assets, RGL::DeviceContext& device) {
 	if (assets.textureSize() > 1)
 		return 1;  // 已建（幂等；调用序契约保证第 2 纹理槽 = 中性法线）
 	if (assets.textureSize() != 1)
@@ -149,7 +147,7 @@ export uint32_t ensureNeutralNormalTexture(RGL::Resources& resources, RGL::Devic
 	const uint8_t rgba[4] = {128, 128, 255, 255};
 	// 中性法线 = 线性数据纹理（UNORM）：sRGB 解码会把 (0.5,0.5,1) 变成 (0.216,0.216,1)，
 	// 破坏 flip-G 解码不动点契约
-	auto result = uploadTexture(resources, device, rgba, 1, 1, true, "texture.normal.neutral");
+	auto result = uploadTexture(resources, samplers, assets, device, rgba, 1, 1, true, "texture.normal.neutral");
 	if (!result)
 		throw std::runtime_error(fmt::format("neutral normal texture: {}", result.error().describe()));
 	return *result;
@@ -169,8 +167,8 @@ export uint32_t ensureNeutralNormalTexture(RGL::Resources& resources, RGL::Devic
  * @param primitiveIndex 请求 primitive 下标（仅 warn 日志用）
  * @return 纹理资产 id（回落 = fallback）；解码/上传失败 → Error
  */
-static std::expected<uint32_t, Error> uploadImageSlot(RGL::Resources& resources,
-	RGL::DeviceContext& device, const RGL::GltfModel& model, int imageIndex, bool linear,
+static std::expected<uint32_t, Error> uploadImageSlot(RGL::Resources& resources, RGL::SamplerLibrary& samplers,
+	RGL::AssetTable& assets, RGL::DeviceContext& device, const RGL::GltfModel& model, int imageIndex, bool linear,
 	std::map<int, uint32_t>& cache, uint32_t fallback, size_t primitiveIndex) {
 	if (imageIndex < 0)
 		return fallback;
@@ -185,7 +183,7 @@ static std::expected<uint32_t, Error> uploadImageSlot(RGL::Resources& resources,
 				imageIndex, primitiveIndex);
 		return fallback;
 	}
-	auto textureResult = loadEmbedded(resources, device,
+	auto textureResult = loadEmbedded(resources, samplers, assets, device,
 		image.data.data(), image.data.size(), linear,
 		fmt::format("texture.image.{}", imageIndex).c_str());
 	if (!textureResult)
@@ -210,9 +208,10 @@ static std::expected<uint32_t, Error> uploadImageSlot(RGL::Resources& resources,
  * @note 多 buffer .gltf（image 无内嵌数据）不支持 → warn 日志 + 该 primitive 回落
  */
 export [[nodiscard]] std::expected<ModelTextureIds, Error> uploadModelTextures(
-	RGL::Resources& resources, RGL::DeviceContext& device, const RGL::GltfModel& model) {
-	const uint32_t whiteId = ensureWhiteTexture(resources, device);
-	const uint32_t neutralNormalId = ensureNeutralNormalTexture(resources, device);
+	RGL::Resources& resources, RGL::SamplerLibrary& samplers, RGL::AssetTable& assets,
+	RGL::DeviceContext& device, const RGL::GltfModel& model) {
+	const uint32_t whiteId = ensureWhiteTexture(resources, samplers, assets, device);
+	const uint32_t neutralNormalId = ensureNeutralNormalTexture(resources, samplers, assets, device);
 	const size_t n = model.primitives.size();
 	ModelTextureIds ids{std::vector<uint32_t>(n, whiteId),
 		std::vector<uint32_t>(n, neutralNormalId), std::vector<uint32_t>(n, whiteId),
@@ -226,28 +225,28 @@ export [[nodiscard]] std::expected<ModelTextureIds, Error> uploadModelTextures(
 			continue;  // 无 uv = 无纹理（base 白 / normal 中性 / orm 白 / emissive 白，初值即回落）
 		// 格式语义（glTF）：baseColor/emissive = sRGB（硬件解码颜色），normal/ORM = 线性数据
 		//（UNORM 上传，sRGB 解码会污染数值——批次 ③a G-buffer 实证）
-		auto r = uploadImageSlot(resources, device, model, prim.baseColorTextureIndex,
+		auto r = uploadImageSlot(resources, samplers, assets, device, model, prim.baseColorTextureIndex,
 			false, baseCache, whiteId, i);
 		if (!r) return std::unexpected(std::move(r).error());
 		ids.base[i] = *r;
-		r = uploadImageSlot(resources, device, model, prim.normalTextureIndex,
+		r = uploadImageSlot(resources, samplers, assets, device, model, prim.normalTextureIndex,
 			true, normalCache, neutralNormalId, i);
 		if (!r) return std::unexpected(std::move(r).error());
 		ids.normal[i] = *r;
-		r = uploadImageSlot(resources, device, model, prim.metallicRoughnessTextureIndex,
+		r = uploadImageSlot(resources, samplers, assets, device, model, prim.metallicRoughnessTextureIndex,
 			true, ormCache, whiteId, i);
 		if (!r) return std::unexpected(std::move(r).error());
 		ids.orm[i] = *r;
 		// Phase 8 ③：emissive 是颜色 → sRGB 路（linear=false，同 baseColor），回落白纹理
 		//（白×emissiveFactor，factor=0 时该项恒黑 = 不发光正确）
-		r = uploadImageSlot(resources, device, model, prim.emissiveTextureIndex,
+		r = uploadImageSlot(resources, samplers, assets, device, model, prim.emissiveTextureIndex,
 			false, emissiveCache, whiteId, i);
 		if (!r) return std::unexpected(std::move(r).error());
 		ids.emissive[i] = *r;
 	}
 	auto* logger = RLLogger::getInstance();
 	if (logger) {
-		const uint32_t textureCount = resources.getAssetTable().textureSize();
+		const uint32_t textureCount = assets.textureSize();
 		uint32_t basePrims = 0, normalPrims = 0, ormPrims = 0, emissivePrims = 0;
 		for (size_t i = 0; i < n; ++i) {
 			if (ids.base[i] != whiteId) basePrims++;
@@ -274,7 +273,8 @@ export [[nodiscard]] std::expected<ModelTextureIds, Error> uploadModelTextures(
  * @return void（成功）；解码失败 / 非方形非 2 的幂 / 六面不同尺寸 → Error
  */
 export [[nodiscard]] std::expected<void, Error> loadEnvCubeMapFiles(RGL::Resources& resources,
-	RGL::DeviceContext& device, const std::array<std::string, 6>& paths, const char* name);
+	RGL::Environment& env, RGL::DeviceContext& device, const std::array<std::string, 6>& paths,
+	const char* name);
 
 namespace {
 
@@ -425,8 +425,8 @@ inline std::array<glm::vec4, 9> projectFacesSH9(const std::array<const uint8_t*,
  * @return void（成功）；解码失败 / 上传失败 → Error
  */
 export [[nodiscard]] std::expected<void, Error> loadEnvCubeMapHdr(RGL::Resources& resources,
-	RGL::DeviceContext& device, const std::string& hdrPath, uint32_t faceSize,
-	const char* name) {
+	RGL::Environment& env, RGL::DeviceContext& device, const std::string& hdrPath,
+	uint32_t faceSize, const char* name) {
 	auto* logger = RLLogger::getInstance();
 	const auto t0 = std::chrono::steady_clock::now();
 	auto src = decodeHdr(hdrPath);
@@ -435,11 +435,11 @@ export [[nodiscard]] std::expected<void, Error> loadEnvCubeMapHdr(RGL::Resources
 			fmt::format("hdr decode failed: {}", hdrPath)});
 	// Phase 8 ④a：等距柱状 radiance → 漫反射辐照度 SH9（存 Resources，renderListSystem 每帧
 	// 拷进 scene data 尾区 irradiance(N) 消费）。
-	resources.setEnvIrradianceSH(projectRadianceSH9(*src));
-	if (const auto* env = resources.getEnvTexture(); env && env->width != faceSize) {
+	env.setIrradianceSH(projectRadianceSH9(*src));
+	if (const auto* prev = env.get(); prev && prev->width != faceSize) {
 		// 理论不可达（env 单例启动期只建一次）——防御性提示，resize 留后
 		if (logger)
-			logger->warn("env: {}² 与已入库 env {}² 不一致，以后者为准", faceSize, env->width);
+			logger->warn("env: {}² 与已入库 env {}² 不一致，以后者为准", faceSize, prev->width);
 	}
 	std::array<std::vector<uint8_t>, 6> faces;
 	for (uint32_t face = 0; face < 6; ++face) {
@@ -458,7 +458,7 @@ export [[nodiscard]] std::expected<void, Error> loadEnvCubeMapHdr(RGL::Resources
 	}
 	std::array<const uint8_t*, 6> ptrs;
 	for (uint32_t face = 0; face < 6; ++face) ptrs[face] = faces[face].data();
-	auto result = uploadCubeMap16F(resources, device, ptrs, faceSize, name);
+	auto result = uploadCubeMap16F(resources, env, device, ptrs, faceSize, name);
 	if (result && logger)
 		logger->info("env hdr: {} ({}) → {}²×6 RGBA16F 重投影+上传 {:.2f}s", hdrPath,
 			src->width, faceSize,
@@ -469,7 +469,8 @@ export [[nodiscard]] std::expected<void, Error> loadEnvCubeMapHdr(RGL::Resources
 /** 定义（契约见上方声明）：6 面 image_codec 解码 → 逐面方形 2 的幂 + 同尺寸校验（违例立即
  * 返回）→ uploadCubeMap（mipmap 链 + env 单例入库，见 texture_upload）。 */
 [[nodiscard]] std::expected<void, Error> loadEnvCubeMapFiles(RGL::Resources& resources,
-	RGL::DeviceContext& device, const std::array<std::string, 6>& paths, const char* name) {
+	RGL::Environment& env, RGL::DeviceContext& device, const std::array<std::string, 6>& paths,
+	const char* name) {
 	std::array<std::vector<uint8_t>, 6> pixels;
 	uint32_t size = 0;
 	for (uint32_t face = 0; face < 6; ++face) {
@@ -489,8 +490,8 @@ export [[nodiscard]] std::expected<void, Error> loadEnvCubeMapHdr(RGL::Resources
 	}
 	std::array<const uint8_t*, 6> ptrs;
 	for (uint32_t face = 0; face < 6; ++face) ptrs[face] = pixels[face].data();
-	resources.setEnvIrradianceSH(projectFacesSH9(ptrs, size));  // Phase 8 ④a：回落面近似 SH
-	return uploadCubeMap(resources, device, ptrs, size, name);
+	env.setIrradianceSH(projectFacesSH9(ptrs, size));  // Phase 8 ④a：回落面近似 SH
+	return uploadCubeMap(resources, env, device, ptrs, size, name);
 }
 
 }  // namespace RGL

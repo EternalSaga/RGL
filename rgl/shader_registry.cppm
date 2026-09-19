@@ -7,6 +7,9 @@ import rllogger;
 
 import vk_device;
 import vk_resources;
+import scene_data;  // SceneDataService（架构债务续账步骤 1：scene data 槽移出内核）
+import environment;  // Environment（架构债务续账步骤 3：env 单例/sky sampler 移出内核）
+import asset_table;  // AssetTable（F 拆出：不再经内核透传）
 import shader;
 import scene_config;
 import material_types_generated;
@@ -47,14 +50,20 @@ export class ShaderRegistry {
 	 *（模型 = addModelEntry、内建 cube = addCubeEntry、天空盒 = addSkyEntry、
 	 * 延迟光 = addLightEntry）——画不画 = entity 有无，无内容专属的构造期恒建条目。
 	 * @param device 设备层（RenderPipeline 创建）
-	 * @param res 资源层（heap / sampler 槽 / scene data / env——binding mapping 烘焙）
+	 * @param res 资源层（heap / sampler 槽 / env——binding mapping 烘焙）
+	 * @param sceneData scene data 服务（binding 3 槽 = ensure 幂等返回，架构债务续账步骤 1）
+	 * @param env 环境服务（env 槽/sky sampler binding 4/5 烘焙，架构债务续账步骤 3）
 	 * @param specs 管线规格（scene.lua styles 表，name → SPV 路径；缺条目时
 	 *   findSpec 回落默认路径）
 	 */
 	ShaderRegistry(RGL::DeviceContext& device, RGL::Resources& res,
+		RGL::SceneDataService& sceneData, RGL::Environment& env, RGL::AssetTable& assets,
 		std::span<const RGL::PipelineSpec> specs)
 		: device(device),
-		  res(res) {
+		  res(res),
+		  sceneData(sceneData),
+		  env(env),
+		  assets(assets) {
 		for (const auto& spec : specs)
 			styles[spec.name] = spec;
 	}
@@ -164,7 +173,7 @@ export class ShaderRegistry {
 	 * @param entryIndex 管线条目下标
 	 */
 	void bindToAsset(uint32_t assetId, uint32_t entryIndex) {
-		res.getAssetTable().setPipelineIndex(assetId, entryIndex);
+		assets.setPipelineIndex(assetId, entryIndex);
 	}
 	/**
 	 * 条目名 → 下标写回资产记录（启动期一次；条目缺失 = 配置/构建不一致，直接 throw）。
@@ -259,7 +268,10 @@ export class ShaderRegistry {
 	}
 
 	RGL::DeviceContext& device;  // 设备层引用（RenderPipeline 创建）
-	RGL::Resources& res;         // 资源层引用（heap / sampler 槽 / scene data / env 烘焙）
+	RGL::Resources& res;         // 资源层引用（heap / sampler 槽 / env 烘焙）
+	RGL::SceneDataService& sceneData;  // scene data 服务引用（binding 3 槽烘焙；架构债务续账步骤 1）
+	RGL::Environment& env;  // 环境服务引用（env 槽 + sky sampler binding 4/5 烘焙；架构债务续账步骤 3）
+	RGL::AssetTable& assets;  // 资产表引用（bindPipelineToAsset 回写；F 拆出）
 	std::map<std::string, RGL::PipelineSpec> styles;          // 风格名 → SPV 规格（scene.lua）
 	std::map<std::string, uint32_t> indexByName;              // 条目名 → 下标（启动期 name 解析）
 	std::map<std::tuple<std::string, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>, uint32_t> modelEntryBySlot;  // 模型条目去重表：(规格名, 顶点 slot, base 纹理 slot, normal slot, orm slot, emissive slot) → 下标

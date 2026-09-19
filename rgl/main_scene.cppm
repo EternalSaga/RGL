@@ -14,6 +14,10 @@ import main;  // clang 不给 partition impl unit 隐式 import 主接口——�
 import rlstd;
 import vk_device;
 import vk_resources;
+import scene_data;  // kSceneMatrixCapacity + SceneDataService（架构债务续账步骤 1）
+import sampler_library;  // SamplerLibrary（架构债务续账步骤 4a/4b）
+import environment;  // Environment（架构债务续账步骤 3）
+import render_target_cache;  // RenderTargetCache（架构债务续账步骤 2）
 import gltf_loader;
 import model_importer;
 import texture_pool;
@@ -33,7 +37,8 @@ import rllogger;
 namespace RGL {
 
 /** A0 内建 cube + A1 解析/顶点上传（全几何槽先于任何纹理槽）+ A2 纹理上传。 */
-UploadedAssets uploadModelAssets(DeviceContext& device, Resources& resources, const SceneConfig& scene) {
+UploadedAssets uploadModelAssets(DeviceContext& device, Resources& resources,
+	SamplerLibrary& samplers, AssetTable& assets, const SceneConfig& scene) {
 	UploadedAssets out;
 	// A0：内建几何（架构债务 1 方案 B）——entities 里有 cube 就上传内建 cube 资产，
 	// 与普通模型的顶点槽同属"几何段"（先于任何纹理槽）；先于模型循环上传 = 与旧
@@ -41,14 +46,13 @@ UploadedAssets uploadModelAssets(DeviceContext& device, Resources& resources, co
 	for (const auto& ent : scene.entities) {
 		if (ent.type != "cube" || out.cubeAsset)
 			continue;
-		auto cubeResult = uploadBuiltinCube(device, resources);
+		auto cubeResult = uploadBuiltinCube(device, resources, assets);
 		if (!cubeResult)
 			throw std::runtime_error(cubeResult.error().describe());
 		out.cubeAsset = *cubeResult;
 	}
-	// A1：解析 + 顶点上传（**全部模型的顶点槽先于任何纹理槽分配**——布局契约
-	// "几何槽先于纹理槽"（vkresources.cppm），N = 全模型 chunk + 内建几何槽；
-	// 交错分配 = 第二个模型首 chunk slot 期望漂移，批次 5 多模型实测踩坑）。
+	// A1：解析 + 顶点上传（模型的顶点块走 geometry 段，N = 全模型 chunk + 内建几何槽；
+	// 几何段内部连续性由 AssetTable::expectedGeometrySlot 校验）。
 	// Phase 6 instancing：entities 按 **file 去重**——同文件多 entity = 一次解析
 	// 一次上传（顶点/纹理/管线条目全部共享），每 entity 各注册一组 primitive
 	// entity（独立 Transform + 独立实例矩阵槽 objectSlot）。资产与实例分离（ECS 规范 5）
@@ -64,7 +68,7 @@ UploadedAssets uploadModelAssets(DeviceContext& device, Resources& resources, co
 		if (!modelResult)
 			throw std::runtime_error(modelResult.error().describe());
 		auto mesh = std::make_unique<GltfModel>(std::move(*modelResult));
-		auto assetIdsResult = uploadModelMeshes(device, resources, *mesh);
+		auto assetIdsResult = uploadModelMeshes(device, resources, assets, *mesh);
 		if (!assetIdsResult)
 			throw std::runtime_error(assetIdsResult.error().describe());
 		out.models.push_back(UploadedModel{.file = ent.file, .model = std::move(mesh),
@@ -72,10 +76,10 @@ UploadedAssets uploadModelAssets(DeviceContext& device, Resources& resources, co
 	};
 	for (const auto& ent : scene.entities)
 		uploadModelFile(ent);
-	// A2：纹理上传（Phase 3）：全部模型顶点槽分配完后再上传（先取白纹理——布局契约
-	// "纹理首槽 = 白"，ensureWhiteTexture 带契约断言）；产物在资产表
+	// A2：纹理上传（Phase 3）：先取白纹理——布局契约"纹理首槽 = 白 = 纹理段首槽"，
+	// ensureWhiteTexture 带契约断言；产物在资产表
 	for (auto& um : out.models) {
-		auto textureIdsResult = uploadModelTextures(resources, device, *um.model);
+		auto textureIdsResult = uploadModelTextures(resources, samplers, assets, device, *um.model);
 		if (!textureIdsResult)
 			throw std::runtime_error(textureIdsResult.error().describe());
 		um.textureIds = std::move(*textureIdsResult);
@@ -84,18 +88,18 @@ UploadedAssets uploadModelAssets(DeviceContext& device, Resources& resources, co
 }
 
 /** env cubemap 上传 + SceneEnv 回填（hdr 优先路径缺失回落 faces PNG）。 */
-void uploadEnvironment(Resources& resources, DeviceContext& device, const SceneConfig& scene,
-					   entt::registry& registry) {
+void uploadEnvironment(Resources& resources, Environment& env, DeviceContext& device,
+					   const SceneConfig& scene, entt::registry& registry) {
 	auto& envCfg = scene.environment;
 	if (!envCfg.hdr.empty()) {
 		std::error_code ec;
 		if (std::filesystem::exists(envCfg.hdr, ec) && !ec) {
-			auto hdrResult = loadEnvCubeMapHdr(resources, device, envCfg.hdr,
+			auto hdrResult = loadEnvCubeMapHdr(resources, env, device, envCfg.hdr,
 				envCfg.hdrSize, "scene.environment");
 			if (!hdrResult)
 				throw std::runtime_error(
 					fmt::format("environment: {}", hdrResult.error().describe()));
-			const auto& envAsset = *resources.getEnvTexture();
+			const auto& envAsset = *env.get();
 			auto& envCtx = registry.ctx().get<SceneEnv>();
 			envCtx.intensity = envCfg.intensity;
 			envCtx.mipRange = static_cast<float>(envAsset.mipLevels - 1);
@@ -108,21 +112,21 @@ void uploadEnvironment(Resources& resources, DeviceContext& device, const SceneC
 	std::array<std::string, 6> paths;
 	for (uint32_t f = 0; f < 6; ++f)
 		paths[f] = fmt::format("{}/{}", envCfg.dir, envCfg.faces[f]);
-	auto envResult = loadEnvCubeMapFiles(resources, device, paths, "scene.environment");
+	auto envResult = loadEnvCubeMapFiles(resources, env, device, paths, "scene.environment");
 	if (!envResult)
 		throw std::runtime_error(fmt::format("environment: {}", envResult.error().describe()));
-	const auto& envAsset = *resources.getEnvTexture();
+	const auto& envAsset = *env.get();
 	auto& envCtx = registry.ctx().get<SceneEnv>();
 	envCtx.intensity = envCfg.intensity;
 	envCtx.mipRange = static_cast<float>(envAsset.mipLevels - 1);
 }
 
 /** C1 管线条目烘焙（per unique 模型；风格派生 + 条目去重 + DIAG 分布日志）。 */
-void bakePipelineEntries(UploadedAssets& assets, const SceneConfig& scene, bool deferredMode,
-						 ShaderRegistry& pipelines, Resources& resources) {
-	auto& assetTable = resources.getAssetTable();
-	const uint32_t samplerSlot = resources.ensureSharedSampler();
-	for (auto& um : assets.models) {
+void bakePipelineEntries(UploadedAssets& uploaded, const SceneConfig& scene, bool deferredMode,
+						 ShaderRegistry& pipelines, Resources& resources, SamplerLibrary& samplers,
+						 AssetTable& assetTable) {
+	const uint32_t samplerSlot = samplers.ensureShared();
+	for (auto& um : uploaded.models) {
 		auto& model = *um.model;
 		const auto& texIds = um.textureIds;
 		// 管线条目（Phase 4 批次 2：按 (规格,顶点 slot,base 纹理 slot,normal slot,
@@ -209,7 +213,8 @@ void bakePipelineEntries(UploadedAssets& assets, const SceneConfig& scene, bool 
 
 /** C2/C2b：模型/cube/灯 entity 注册 + 实例矩阵槽容量契约。 */
 void registerSceneEntities(entt::registry& registry, const UploadedAssets& assets,
-						   const SceneConfig& scene, Resources& resources, ShaderRegistry& pipelines) {
+						   const SceneConfig& scene, Resources& resources, AssetTable& table,
+						   ShaderRegistry& pipelines) {
 	/**
 	 * 实体 rootTransform 组装（scene.lua entities 的 transform 字段 → 4x4 世界矩阵）：
 	 * 先 translate(position)，再按 X→Y→Z 顺序依次 glm::rotate 后乘（rotation 为度，
@@ -231,7 +236,7 @@ void registerSceneEntities(entt::registry& registry, const UploadedAssets& asset
 			continue;
 		auto& um = assets.models[assets.modelOf.at(ent.file)];
 		registerScene(registry, *um.model, std::span<const uint32_t>(um.assetIds),
-			std::span<const uint32_t>(um.textureIds.base), resources,
+			std::span<const uint32_t>(um.textureIds.base), resources, table,
 			makeRootTransform(ent));
 	}
 	// scene data 容量契约（Phase 5 批次 2，Phase 6 instancing 改**实例矩阵槽**计数
@@ -253,7 +258,6 @@ void registerSceneEntities(entt::registry& registry, const UploadedAssets& asset
 	for (const auto& ent : scene.entities) {
 		if (ent.type != "cube")
 			continue;
-		auto& table = resources.getAssetTable();
 		const uint32_t cubeMat = table.addMaterial(
 			MaterialAsset{glm::vec4{1.0f}, kInvalidTextureId, false});
 		registerBuiltinCube(registry, *assets.cubeAsset, cubeMat, makeRootTransform(ent));
@@ -279,6 +283,8 @@ void registerSceneEntities(entt::registry& registry, const UploadedAssets& asset
 
 /** C3 候选表 + GpuCull + skybox + deferred + HDR + DGC + Renderer（装配时序见接口注释）。 */
 RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resources& resources,
+	SceneDataService& sceneData, SamplerLibrary& samplers, Environment& env,
+	RenderTargetCache& rtCache, AssetTable& assets,
 							  ShaderRegistry& pipelines, CompiledRenderGraph&& graph,
 							  entt::registry& registry, const SceneConfig& scene, bool deferredMode) {
 	// C3：GPU culling 候选表（Phase 7b 批次 5）：candidate = 不透明 primitive。
@@ -288,13 +294,12 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 	std::vector<CullEntry> cullEntries;
 	registry.view<MeshRef, MaterialRef, CullSphere>().each(
 		[&](const MeshRef& meshRef, const MaterialRef& matRef, const CullSphere& cull) {
-			auto& table = resources.getAssetTable();
-			const auto& asset = table.get(meshRef.asset);
+			const auto& asset = assets.get(meshRef.asset);
 			if (asset.pipelineIndex == kInvalidPipelineIndex)
 				return;
 			if (asset.groupCount == 0)
 				return;
-			const auto& mat = table.getMaterial(matRef.material);
+			const auto& mat = assets.getMaterial(matRef.material);
 			if (mat.alphaModeBlend)
 				return;
 			cullEntries.push_back(CullEntry{
@@ -312,41 +317,40 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 		&& diagnostics().dgcStatic && !cullEntries.empty();
 	// GpuCull 堆分配（Renderer 持其指针，聚合返回时局部析构会悬空——见 RenderBackEnd
 	// 注释）；先构造（skybox 条目其后加入，见上 N 快照契约）
-	auto cull = std::make_unique<GpuCull>(device, resources, cullEntries,
+	auto cull = std::make_unique<GpuCull>(device, resources, sceneData, cullEntries,
 		dgcStaticEnabled ? dgcStaticEntryCount : 0u);
 
 	// Phase 5.5 批次 4：天空盒管线条目（env 已上传才建——addSkyEntry 契约）+
 	// SceneEnv 回填（renderListSystem 经 ctx 生成 skybox draw，画不画 = 配置有无）
-	if (resources.getEnvTexture()) {
+	if (env.get()) {
 		auto& envCtx = registry.ctx().get<SceneEnv>();
 		envCtx.skyboxPipeline = pipelines.addSkyEntry();
 		envCtx.skybox = scene.environment.skybox;
 	}
 
-	// Phase 7 D1：deferred 资源。时序关键——env/models 全部堆槽已分配，此处才分配
-	// G-buffer RT 堆槽（allocSlot 单调，早分配破坏布局契约）+ 建 light 管线，再构造
+	// Phase 7 D1：deferred 资源。装配序——env/models 已分配，此处才分配
+	// G-buffer RT 堆槽（运行时段）+ 建 light 管线，再构造
 	// Renderer（其构造期校验 drawLight pass 有 light 条目）。forward 全跳过。
 	if (deferredMode) {
-		auto gbSlots = resources.ensureDeferredGBufferSlots();
+		auto gbSlots = ensureDeferredGBufferSlots(rtCache, swapchain);
 		if (!gbSlots)
 			throw std::runtime_error(
 				fmt::format("deferred: G-buffer RT 创建失败: {}", gbSlots.error().describe()));
 		// light 条目下标由 Renderer 构造期按名 pipelineIndex("light") 取，此处仅需触发建条目
 		[[maybe_unused]] auto lightIdx = pipelines.addLightEntry(
 			(*gbSlots)[0], (*gbSlots)[1], (*gbSlots)[2], (*gbSlots)[3], (*gbSlots)[4],
-			resources.ensureSharedSampler());
+			samplers.ensureShared());
 	}
 	// Phase 8 批次 ①：HDR 累加链——scene_hdr RT + tonemap 条目（forward/deferred 图都含
 	// tonemap pass，无条件建；offscreen DIAG 变体图不含 = 条目闲置无害）。时序同
-	// G-buffer：几何/纹理/env（deferred 含 G-buffer）槽之后、DGC/Renderer 之前
-	//（allocSlot 单调游标契约）。
-	auto hdrSlot = resources.ensureSceneHdrSlot();
+	// G-buffer：deferred 含 G-buffer，scene_hdr 同走运行时段、DGC/Renderer 之前。
+	auto hdrSlot = ensureSceneHdrSlot(rtCache, swapchain);
 	if (!hdrSlot)
 		throw std::runtime_error(
 			fmt::format("scene_hdr RT 创建失败: {}", hdrSlot.error().describe()));
 	// tonemap 条目下标由 Renderer 构造期按名 pipelineIndex("tonemap") 取
 	[[maybe_unused]] auto tonemapIdx = pipelines.addTonemapEntry(
-		*hdrSlot, resources.ensureSharedSampler());
+		*hdrSlot, samplers.ensureShared());
 
 	// Phase 7b：DGC 命令生成（NVIDIA 路）：仅 graphicsIndirect 能力时构造（RADV =
 	// compute only → null → Renderer 读回重放路）。管线表定后建（execution set
@@ -406,7 +410,7 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 	auto* dgcRaw = dgc.get();
 	auto* dgcStaticRaw = dgcStatic.get();
 	return RenderBackEnd{std::move(cull), std::move(dgc), std::move(dgcStatic),
-		Renderer(device, swapchain, resources, pipelines,
+		Renderer(device, swapchain, resources, sceneData, env, rtCache, pipelines,
 			std::move(graph), cullRaw, dgcRaw, dgcStaticRaw)};
 }
 

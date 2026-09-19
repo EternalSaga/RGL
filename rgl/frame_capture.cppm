@@ -7,6 +7,7 @@ import rlvk;
 import VmaRaii;
 import render_graph;
 import vk_resources;
+import render_target_cache;  // RenderTargetCache（架构债务续账步骤 2）
 
 namespace RGL {
 
@@ -39,10 +40,12 @@ export class FrameCapturer {
    public:
 	/**
 	 * 构造并定位 swapchain attachment slot（捕获时读写其布局追踪值）。
-	 * @param resources 资源层（RT 查找 findRtAttachment + staging 分配器）
+	 * @param resources 资源层（staging 分配器）
+	 * @param rts offscreen RT 缓存（RT 查找 find，架构债务续账步骤 2）
 	 * @param graph 编译渲染图（附件名单：GB 通道名 → slot 反查）
 	 */
-	FrameCapturer(RGL::Resources& resources, const RGL::CompiledRenderGraph& graph);
+	FrameCapturer(RGL::Resources& resources, RGL::RenderTargetCache& rts,
+		const RGL::CompiledRenderGraph& graph);
 
 	/**
 	 * drawFrame 前调用（gbufChannel = diagnostics().dumpGbuf）；一次性——acquire 超时
@@ -100,6 +103,7 @@ export class FrameCapturer {
 	[[nodiscard]] bool ensureCaptureStaging(VkDeviceSize bytes);
 
 	RGL::Resources& resources;
+	RGL::RenderTargetCache& rts;  // offscreen RT 缓存（find，架构债务续账步骤 2）
 	const RGL::CompiledRenderGraph& graph;
 	uint32_t swapchainSlot = kRgNoAttachment;  // 构造期从图定位（捕获读写其布局追踪值）
 	int captureRequest = -2;                    // -2 = 无请求；-1 = 后缓冲；>=0 = GB 通道号

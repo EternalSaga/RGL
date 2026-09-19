@@ -13,6 +13,7 @@ import lights_types_generated;
 import scene_forward_types_generated;  // 前向头 SceneLight（C API 反射生成，替换原 LightDataGpu）
 import frame_draw_list;
 import vk_resources;
+import environment;  // Environment（irradianceSH，架构债务续账步骤 3）
 import asset_table;
 import scene_context;
 import camera;
@@ -25,13 +26,13 @@ namespace RGL {
 /** 实现流水（语义/契约见接口声明）：cull 分桶（opaque/transparent，Pending 暂存）
  * → 可见统计 → 段装配（opaque → skybox 单 draw → transparent 稳定排序）
  * → scene data 填充 → 写 ctx。 */
-void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListState& state) {
+void renderListSystem(entt::registry& rg, RGL::Resources& resources,
+	RGL::Environment& envService, const RGL::AssetTable& assets, RenderListState& state) {
 	auto& list = rg.ctx().get<FrameDrawList>();
 	const auto& viewProj = rg.ctx().get<ViewProjection>();
 	const auto& spin = rg.ctx().get<SceneSpin>();
 	const auto& camera = rg.ctx().get<Camera>();
 	const auto& env = rg.ctx().get<SceneEnv>();  // Phase 5.5（天空盒 draw 生成 + env 参数）
-	const auto& assets = resources.getAssetTable();
 
 	/** 待落段 draw（段装配前的暂存项）：call = 定稿 draw；distanceSq = 排序距离
 	 *（透明段 back-to-front 稳定排序键，距离² 免 sqrt，单调等价）。 */
@@ -165,7 +166,7 @@ void renderListSystem(entt::registry& rg, RGL::Resources& resources, RenderListS
 	fresh.sceneData.envParams = {env.intensity, env.mipRange};
 	fresh.sceneData.exposure = env.exposure;  // Phase 8 收尾：tonemap 曝光 @56
 	// Phase 8 批次 ④a：漫反射辐照度 SH9（env 加载期算好存 Resources，此处每帧拷入）
-	fresh.sceneData.irradianceSH = resources.getEnvIrradianceSH();
+	fresh.sceneData.irradianceSH = envService.getIrradianceSH();
 	fresh.sceneData.skyInvViewProj = glm::inverse(viewProj.proj * viewProj.view);
 	fresh.sceneData.objectMatrices = std::span<const glm::mat4>{state.matrices};
 	fresh.sceneData.objectMvps = std::span<const glm::mat4>{state.mvps};

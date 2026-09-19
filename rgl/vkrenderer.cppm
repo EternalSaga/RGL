@@ -11,6 +11,9 @@ import vulkan_window;
 import vk_device;
 import vk_swapchain;
 import vk_resources;
+import scene_data;  // SceneDataService（架构债务续账步骤 1：scene data buffer 移出内核）
+import environment;  // Environment（架构债务续账步骤 3：env 单例移出内核，经访问器给 ecs）
+import render_target_cache;  // RenderTargetCache/RtAttachment（架构债务续账步骤 2：RT 缓存移出内核）
 import VmaRaii;
 import shader_registry;  // Phase 4 批次 2：管线表迁出（PipelineEntry/ShaderRegistry，零 entt）
 import shader;
@@ -76,7 +79,10 @@ export class Renderer {
 	 * 必 "light"），不可解析 = 启动 fail-fast，录制期零图错误。
 	 * @param vkDevice 设备层（队列 / 命令池 / fence 等待 / 能力探测）
 	 * @param vkSwapchain 交换链层（acquire / recreate / extent）
-	 * @param vkResources 资源层（descriptor heap / 深度图 / scene data / offscreen RT）
+	 * @param vkResources 资源层（descriptor heap / 深度图 / offscreen RT）
+	 * @param sceneData scene data 服务（staging 拷贝目标 buffer，架构债务续账步骤 1）
+	 * @param env 环境服务（ecs renderListSystem 经 getEnvironmentRef 读，架构债务续账步骤 3）
+	 * @param rtCache offscreen RT 缓存（drawFrame 每帧 ensure，架构债务续账步骤 2）
 	 * @param shaderRegistry 管线表（条目查找 + bindShaders；main 先于 Renderer 构造）
 	 * @param renderGraph 编译渲染图（构造后不变；不可解析启动期抛出）
 	 * @param gpuCull GPU culling 子系统（Phase 7b；main 先于 Renderer 构造。inactive
@@ -87,12 +93,15 @@ export class Renderer {
 	 *   main 按 staticGraphicsIndirect + diagnostics.dgcStatic 条件构造，null = 关）
 	 */
 	Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RGL::Resources& vkResources,
+		RGL::SceneDataService& sceneData, RGL::Environment& env, RGL::RenderTargetCache& rtCache,
 		RGL::ShaderRegistry& shaderRegistry, RGL::CompiledRenderGraph renderGraph,
 		RGL::GpuCull* gpuCull, RGL::DgcCommands* dgc, RGL::DgcStaticCommands* dgcStatic = nullptr);
 	/** @return 交换链层引用（extent / recreate / 后缓冲）。 */
 	RGL::Swapchain& getSwapchainRef() const { return *swapchain; }
-	/** @return 资源层引用（深度图 / descriptor heap / RT 缓存 / scene data）。 */
+	/** @return 资源层引用（深度图 / descriptor heap / RT 缓存）。 */
 	RGL::Resources& getResourcesRef() const { return *resources; }
+	/** @return 环境服务引用（ecs renderListSystem 每帧读 irradianceSH，架构债务续账步骤 3）。 */
+	RGL::Environment& getEnvironmentRef() const { return *env; }
 	/**
 	 * 帧循环侧（ecs texel 金丝雀）用的只读访问器（截图路径已改帧内回读，不再需要
 	 * 管线/状态访问器——2026-09-08 离屏重渲器退役）。
@@ -167,15 +176,15 @@ export class Renderer {
 	void recordFixedDataPath(vk::raii::CommandBuffer& cmd, uint32_t frameSlot);
 	/**
 	 * offscreen attachment RT 幂等 ensure（批次 4）：逐 offscreen 附件 resolveRgFormat +
-	 * ensureRtAttachment（extent 随 swapchain resize 重建，重建含 waitIdle，录制期调用安全）。
+	 * RenderTargetCache::ensure（extent 随 swapchain resize 重建，重建含 waitIdle，录制期调用安全）。
 	 * generation 变化（新图布局 Undefined）→ 重置 attachmentLayouts[slot]，防下帧首 barrier
 	 * oldLayout 失配。手术 6：块体自 drawFrame 摘出（rtGenerations 归本函数局部）。
 	 * @param extent 当前 swapchain extent
 	 * @param offscreenRt 出参：按图 slot 填 RT 指针（非 offscreen 槽留 null），大小 = 附件数
-	 * @return void；ensureRtAttachment 失败 → Error
+	 * @return void；RenderTargetCache::ensure 失败 → Error
 	 */
 	[[nodiscard]] std::expected<void, Error> ensureOffscreenAttachments(vk::Extent2D extent,
-		std::vector<Resources::RtAttachment*>& offscreenRt);
+		std::vector<RtAttachment*>& offscreenRt);
 	/**
 	 * pass draw 三路分发（手术 6：自 drawFrame pass 循环摘出）：drawLight 固定全屏单 group
 	 *（无 push constant，条目按 pass.state 名解析）/ opaque 段 GPU culling（DGC execute 或
@@ -197,6 +206,9 @@ export class Renderer {
 	RGL::DeviceContext& vkDevice;  // 设备层引用（队列 / 命令池 / fence 等待 / 能力探测）
 	RGL::Swapchain* swapchain;      // 交换链层（main 持有，析构序在 Renderer 之后）
 	RGL::Resources* resources;      // 资源层（main 持有，析构序在 Renderer 之后）
+	RGL::SceneDataService* sceneData;  // scene data 服务（main 持有，架构债务续账步骤 1 拆自内核）
+	RGL::Environment* env;  // 环境服务（main 持有，架构债务续账步骤 3 拆自内核；ecs 经访问器读）
+	RGL::RenderTargetCache* rtCache;  // offscreen RT 缓存（main 持有，架构债务续账步骤 2 拆自内核）
 	// 管线表（Phase 4 批次 2：迁出至 ShaderRegistry，零 entt；main 先于 Renderer 构造并持引用，
 	// 析构序 Renderer 先于 registry 安全）
 	RGL::ShaderRegistry& registry;

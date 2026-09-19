@@ -13,6 +13,7 @@ import VmaRaii;
 import vulkan_utils;
 import vk_device;
 import vk_resources;
+import sampler_library;  // mip-gen 供给（架构债务续账步骤 4a/4b）
 import mip_gen;        // Phase 8 ③b：compute mip 链（录进本纹理上传 CB）
 import asset_table;
 import diagnostics;  // texture_force_unorm 诊断单例（configs/diagnostics.lua）
@@ -120,8 +121,8 @@ std::expected<void, Error> recordMipZeroAndChain(vk::raii::CommandBuffer& cmd,
 
 /** uploadTexture 定义（契约与行为注释见 texture_upload.cppm 接口声明）。 */
 export [[nodiscard]] std::expected<uint32_t, Error> uploadTexture(RGL::Resources& resources,
-	RGL::DeviceContext& device, const uint8_t* rgba, uint32_t w, uint32_t h, bool linear,
-	const char* name) {
+	RGL::SamplerLibrary& samplers, RGL::AssetTable& assets, RGL::DeviceContext& device,
+	const uint8_t* rgba, uint32_t w, uint32_t h, bool linear, const char* name) {
 	auto* logger = RLLogger::getInstance();
 	auto& dev = device.getDevice();
 	auto& allocator = resources.getAllocator();
@@ -202,14 +203,14 @@ export [[nodiscard]] std::expected<uint32_t, Error> uploadTexture(RGL::Resources
 	auto cmd = std::move(cmdAlloc[0]);
 	cmd.begin(vk::CommandBufferBeginInfo{});
 	// UNORM compute 链走 descriptor heap + shader object：录制前备齐本纹理 mip 级数对应的
-	// level shader/槽（幂等增量；仅 UNORM 多 mip 触发，sRGB blit 链无描述符）。时序天然
-	// 晚于几何段与白纹理首槽（A2 阶段，见 ensureMipGenReady 接口"时序契约"）。
+	// level shader/槽（幂等增量；仅 UNORM 多 mip 触发，sRGB blit 链无描述符）。mip-gen
+	// 辅助槽走运行时段，不再插入几何/纹理契约段。
 	if (!isSrgb && mipLevels > 1) {
-		if (auto ready = resources.ensureMipGenReady(mipLevels); !ready)
+		if (auto ready = samplers.ensureMipGenReady(mipLevels); !ready)
 			return std::unexpected(std::move(ready).error());
 	}
 	auto recordResult = recordMipZeroAndChain(cmd, staging, image, w, h, mipLevels,
-		format, isSrgb, resources.getMipGen(), name);
+		format, isSrgb, samplers.getMipGen(), name);
 	if (!recordResult) return std::unexpected(std::move(recordResult).error());
 	cmd.end();
 
@@ -228,7 +229,7 @@ export [[nodiscard]] std::expected<uint32_t, Error> uploadTexture(RGL::Resources
 		return std::unexpected(Error{ErrorCode::VulkanError, fmt::format("texture: upload fence timeout: {}", name)});
 
 	// slot 分配 + 描述符写入（SAMPLED_IMAGE，v341 4 参形态，spike 已验证）
-	auto slotResult = resources.allocSlot(name);
+	auto slotResult = resources.allocSlot(RGL::SlotSegment::Texture, name);
 	if (!slotResult) return std::unexpected(std::move(slotResult).error());
 	const uint32_t slot = *slotResult;
 	const auto& heap = resources.getDescriptorHeap();
@@ -238,7 +239,7 @@ export [[nodiscard]] std::expected<uint32_t, Error> uploadTexture(RGL::Resources
 	//（docs/archive/heap_texture_research.md §12.2，A/B 实验证伪"采样期解引用"旧归因），
 	// 但 spec 无调用后指针生命周期条款，指针稳定性 = 对其他驱动的正确性前提
 	TextureAsset asset{std::move(image), viewCreate, std::move(view), slot, w, h, mipLevels};
-	auto& stored = resources.getAssetTable().emplaceTexture(std::move(asset));
+	auto& stored = assets.emplaceTexture(std::move(asset));
 	stored.imageDesc.pView = &stored.viewCreate;  // hpp create info 指针（v341 契约，spike 已验证）
 	stored.imageDesc.layout = vk::ImageLayout::eShaderReadOnlyOptimal;
 	stored.resourceDesc.type = vk::DescriptorType::eSampledImage;
@@ -251,7 +252,7 @@ export [[nodiscard]] std::expected<uint32_t, Error> uploadTexture(RGL::Resources
 	// hpp dispatcher（vkGetDeviceProcAddr），同 spike 的运行时解析结论
 	dev.writeResourceDescriptorsEXT(stored.resourceDesc, stored.dst);
 
-	return static_cast<uint32_t>(resources.getAssetTable().textureSize() - 1);
+	return static_cast<uint32_t>(assets.textureSize() - 1);
 }
 
 

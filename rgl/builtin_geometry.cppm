@@ -7,6 +7,7 @@ import rlstd;
 import vkerror;
 import vk_device;
 import vk_resources;
+import asset_table;  // AssetTable（资产注册目标，F 拆出：不再经内核透传）
 import scene_context;
 
 namespace RGL {
@@ -20,17 +21,17 @@ namespace RGL {
 
 /**
  * 上传内建 cube（8 顶点 / 36 索引 / 12 三角形 / 每顶点色，几何数据见 cube.cppm）：
- * 两个 BDA storage buffer + 两个 heap **几何槽**（allocSlot 单调，计入
+ * 两个 BDA storage buffer + 两个 heap **几何段槽**（allocSlot Geometry，计入
  * AssetTable::geometrySlotCount）+ 描述符写入 → 产物 = AssetTable 一条 MeshAsset
  *（AssetKind::Builtin，带索引 buffer/slot，groupCount = 1 固定）。
- * **时序契约**：与 uploadModelMeshes 同阶段（A1 几何段，先于任何纹理槽）——
- * "纹理首槽 = 白 = 全部几何槽之后"断言依赖本顺序。
+ * **段契约**：与 uploadModelMeshes 同走几何段，期望槽号由几何段游标和
+ * AssetTable::expectedGeometrySlot 校验；纹理首槽由纹理段首槽独立校验。
  * @param vkDevice 设备层（VMA buffer 创建 / 描述符写入）
  * @param res 资源层（VMA 分配器 + 资产表 + 统一 slot 分配器）
  * @return 资产 id；失败 Error（VMA buffer 创建 / slot 越界 / 几何槽布局漂移，见 impl）
  */
 export [[nodiscard]] std::expected<uint32_t, Error> uploadBuiltinCube(
-	RGL::DeviceContext& vkDevice, RGL::Resources& res);
+	RGL::DeviceContext& vkDevice, RGL::Resources& res, RGL::AssetTable& assets);
 
 /**
  * cube entity 注册（与 registerScene 同构，ECS 规范 3：画不画 = 实体有无）：

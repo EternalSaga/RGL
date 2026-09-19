@@ -63,7 +63,7 @@ MipGen::MipGen(RGL::DeviceContext& device)
 }
 
 /** 契约见接口注释。实现：仅记 heap 引用 + sampler 槽（不拥有 heap）。幂等由调用方
- * （Resources::ensureMipGenReady 的 mipGenBound 守卫）保证——重复调用覆盖同值无害。 */
+ * （SamplerLibrary::ensureMipGenReady 的 mipGenBound 守卫）保证——重复调用覆盖同值无害。 */
 void MipGen::init(const VmaDescriptorHeap& resourceHeapIn, const VmaDescriptorHeap& samplerHeapIn,
 	uint32_t samplerSlotIn) {
 	resourceHeap = &resourceHeapIn;

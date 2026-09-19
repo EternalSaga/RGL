@@ -244,8 +244,8 @@ export struct VmaDescriptorHeap {
 
 	/**
 	 * 指定槽位的 CPU 地址（写描述符用），带越界检查。
-	 * 调用方 slot = Resources::allocSlot 单调分配（reservedSlots() + 游标；几何段基址常量
-	 * HeapSlotGeometryBase 由 model_types_generated 生成）。
+	 * 调用方 slot = Resources::allocSlot 按用途段分配（reservedSlots() + 段内游标；几何段
+	 * 基址常量 HeapSlotGeometryBase 由 model_types_generated 生成）。
 	 * @param slot 槽位号
 	 * @return 该槽的 mapped 指针；slot >= capacity 时返回 DescriptorSlotOutOfBounds
 	 */

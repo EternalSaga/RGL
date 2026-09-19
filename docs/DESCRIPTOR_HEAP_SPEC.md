@@ -87,7 +87,7 @@ device.writeResourceDescriptorsEXT(
 
 ### 坑 3：vk-hpp 需传 ArrayProxy 兼容容器
 
-vk-hpp 的 `writeResourceDescriptorsEXT` 参数类型是 `ArrayProxy<const T>`，**不能直接传裸指针或 initializer list**。`std::array` / `std::vector` 均可（当前代码如 `vkresources.cppm` `Resources::ensureSceneData` 用 `std::array`；`ensureRtAttachment` 等调用点直接传单元素）。
+vk-hpp 的 `writeResourceDescriptorsEXT` 参数类型是 `ArrayProxy<const T>`，**不能直接传裸指针或 initializer list**。`std::array` / `std::vector` 均可（当前代码如 `scene_data.cppm` `SceneDataService::ensure` 用 `std::array`；`RenderTargetCache::ensure` 等调用点直接传单元素）。
 
 ### 坑 4：`pDescriptors[i].size` 必须 >= descriptor size
 
@@ -302,20 +302,20 @@ vk-hpp 的 `vk::PushDataInfoEXT` 构造函数接受 `(uint32_t offset, vk::HostA
 ```
 heap slots:
   0..reservedSlots-1  → 实现保留（BindHeapInfoEXT.reservedRange），不要使用
-  用户槽位（相对 reserved range 起点，全部 allocSlot 单调分配，按上传时序分区）:
-    [0, G)   → 几何段：内建几何（cube 顶点 + 索引）+ 模型拼接顶点块（每块一个）
-               基址常量 HeapSlotGeometryBase(0) = model_types_generated；
-               计数与漂移校验 = AssetTable::geometrySlotCount / expectedGeometrySlot()
-               （架构债务 1 方案 B 后无"cube 固定占位"语义，内核不预留内容专属槽）
-    [G, …)   → 纹理段（首槽 = 白 1×1，契约断言）→ scene data / RT 采样槽等运行时槽
-    其余     → 固定裕量 kUserSlotMargin = 1024（与场景内容解耦）
+  用户槽位（相对 reserved range 起点，Resources::allocSlot(SlotSegment, name) 按用途段分配）:
+     [0, kGeometrySlotCapacity)                    → geometry 段：内建几何（cube 顶点 + 索引）+ 模型拼接顶点块（每块一个）
+                基址常量 HeapSlotGeometryBase(0) = model_types_generated；
+                计数与漂移校验 = AssetTable::geometrySlotCount / expectedGeometrySlot()
+                （架构债务 1 方案 B 后无"cube 固定占位"语义，内核不预留具体资产专属槽）
+     [kGeometrySlotCapacity, +kTextureSlotCapacity) → texture 段：纹理 / cubemap 采样描述符，首槽 = 白 1×1
+     [kGeometrySlotCapacity + kTextureSlotCapacity, +kRuntimeSlotCapacity) → runtime 段：scene data / RT 采样槽 / mip-gen / env-prefilter / cull
 
 push data (独立于 heap slots):
   vkCmdPushDataEXT 写入独立的 push data 内存区域，不占用 descriptor heap slots
   push constant 通过 [[vk::push_constant]] 直接访问 push data，不需要 binding mapping
 ```
 
-**实际代码（`vkresources.cppm` `createDescriptorHeap`）：** `capacity = reservedSlots + kUserSlotMargin(1024)`。`reservedRangeOffset = 0`，reserved slots 始终从 heap 起始地址开始（slot 0..reservedSlots-1）。用户实际可用 slots 为 `reservedSlots..(capacity-1)`。Slot 编号一律运行时 `allocSlot` 动态分配（= `reservedSlots() + 单调游标`），天然避开 reserved range — AMD（reservedSlots=0）与 NVIDIA（reservedSlots=3024 = 96768B 保留区 ÷ 32B 统一步长；16B 步长时代旧值 6048）均已验证。几何段的连续性与"纹理首槽 = 白"由 `AssetTable::expectedGeometrySlot()` 启动期断言兜底（违例 = 有人在几何段中间插了别的分配）。
+**实际代码（`vkresources.cppm` `createDescriptorHeap`）：** `capacity = reservedSlots + kGeometrySlotCapacity + kTextureSlotCapacity + kRuntimeSlotCapacity`。`reservedRangeOffset = 0`，reserved slots 始终从 heap 起始地址开始（slot 0..reservedSlots-1）。用户实际可用 slots 为 `reservedSlots..(capacity-1)`。Slot 编号由 `Resources::allocSlot(SlotSegment, name)` 在指定用途段内运行时分配，天然避开 reserved range — AMD（reservedSlots=0）与 NVIDIA（reservedSlots=3024 = 96768B 保留区 ÷ 32B 统一步长；16B 步长时代旧值 6048）均已验证。几何段连续性由 `AssetTable::expectedGeometrySlot()` 启动期断言兜底；白纹理契约断言其 slot 等于 texture 段首槽，不再要求跨段上传顺序。
 
 ### 3. 一次性分配，全程复用
 

@@ -6,6 +6,7 @@ export module ecs;
 import rlstd;
 import vkerror;
 import vk_renderer;
+import asset_table;  // AssetTable（renderSystem 参数；F 拆出）
 import frame_draw_list;
 import runtime_config;  // LlmDebugConfig（2026-09-08 自 camera_config 迁入 runtime_config）
 
@@ -62,6 +63,7 @@ export struct AppExit {
  * @param rg registry（读写全部每帧 context：WindowExtent/AppExit/InputEvents/Camera/
  *   SceneSpin/SceneBounds/ViewProjection/FrameDrawList）
  * @param renderer 执行器（resize/drawFrame/帧内捕获；swapchain/resources 引用经它取）
+ * @param assets 资产表（renderListSystem/texelCanaryCheck 消费；F 拆出不再经内核取）
  * @param llm llm_debug 一次性截图配置（可空，非空 = 启用）
  * @param llmCapture 截图消费回调（可空，llm 非空时必传；main 传 llm_debug::writeCapturePng
  *   包装）——ecs 只数帧 + 触发 renderer.requestFrameCapture（帧内回读钩子，见
@@ -73,6 +75,7 @@ export struct AppExit {
  * @return void；resize/drawFrame 失败或 llm 截图失败 → Error（正常 AppExit 退出 = 成功）
  */
 export std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer& renderer,
+	const RGL::AssetTable& assets,
 	const RGL::LlmDebugConfig* llm = nullptr,
 	std::function<std::expected<std::string, Error>(RGL::Renderer&)>
 		llmCapture = {},
