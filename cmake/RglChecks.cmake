@@ -25,7 +25,9 @@ find_package(Python3 COMPONENTS Interpreter REQUIRED)
 #    禁内部头 #include "（外部 SDK 头不报）
 # 7) GMF STL 白名单：#include <STL> 只许 ranges/filesystem/chrono，余走 import rlstd
 # 8) 禁用旧式 Vulkan API（文本，剥注释）：经典 descriptor pool / pipeline object /
-#    render pass / push constants 名单（config.FORBIDDEN_VULKAN_APIS）命中即警告
+#    render pass / push constants / 输入装配（vertex/index 绑定）名单
+#    （config.FORBIDDEN_VULKAN_APIS）命中即警告——项目已全面 descriptor heap /
+#    shader object / dynamic rendering / mesh shader（2026-09-24 封死经典 IA 路径）
 # Doxygen 规则：类/枚举/函数/方法声明首行正上方须紧邻非空 /** */ 块（impl 里
 # 接口已声明函数的定义处豁免——真相源 = 声明处）。
 # 单独跑：just checks / just style-check / just doc-check [--strict/--only/...]。

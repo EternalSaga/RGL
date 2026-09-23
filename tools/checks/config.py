@@ -130,6 +130,10 @@ STL_GMF_EXCEPTIONS = {"ranges", "filesystem", "chrono"}
 # - 不加 vk::DescriptorSet 单独串（会命中现代 mapping 别名）；
 # - 不加宽泛串（如裸 VkPipeline——会命中 VkPhysicalDevice*Pipeline*Features 等
 #   现代 feature 结构体）。
+# - 以 '*' 结尾的 token = 前缀匹配（无右边界，rules.py 实现）：用于结构体族与
+#   sync2 变体（vkCmdBindVertexBuffers2 等），**勿给现代机制加前缀串**——
+#   vkCmdBindDescriptorBuffersEXT（descriptor buffer）是 descriptor 的当代用法，
+#   绝不能被 "bindDescriptorBuffers*" 之类误伤。
 FORBIDDEN_VULKAN_APIS = [
     # 经典描述符模型 → VK_EXT_descriptor_heap
     "VkDescriptorPool", "vk::DescriptorPool",
@@ -149,6 +153,12 @@ FORBIDDEN_VULKAN_APIS = [
     # render pass → VK_KHR_dynamic_rendering
     "VkRenderPass", "vk::RenderPass", "vkCreateRenderPass",
     "vkCmdBeginRenderPass", "vkCmdEndRenderPass",
+    # 经典输入装配（vertex/index 绑定与输入状态）→ mesh shader 路线
+    # （2026-09-24 用户确认 mesh shader 兼容性兜底不再需要，此路径封死）
+    "vkCmdBindVertexBuffers*", "bindVertexBuffers*",
+    "vkCmdBindIndexBuffer*", "bindIndexBuffer*",
+    "VkVertexInput*", "vk::VertexInput*",
+    "VkPipelineVertexInputStateCreateInfo", "vk::PipelineVertexInputStateCreateInfo",
 ]
 FORBIDDEN_VULKAN_MSG = ("旧式 Vulkan API，已被现代替代（descriptor heap / shader "
-                        "object / dynamic rendering；见 AGENTS.md）")
+                        "object / dynamic rendering / mesh shader；见 AGENTS.md）")

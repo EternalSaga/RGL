@@ -14,8 +14,9 @@ config.Thresholds 传入；libclang 指标规则消费 metrics.analyze_file 的�
                        + GMF STL 白名单（只许 ranges/filesystem/chrono）
 - forbidden_vulkan_checks
                        （文本）禁用旧式 Vulkan API（经典 descriptor pool/pipeline/
-                       render pass/push constants——项目已全面 descriptor heap /
-                       shader object / dynamic rendering）。扫描先剥注释（现有注释
+                       render pass/push constants/输入装配——项目已全面 descriptor
+                       heap / shader object / dynamic rendering / mesh shader）。
+                       扫描先剥注释（现有注释
                        提到 vkCmdPushConstants 互斥语义，不剥会误报）；名单与精确
                        匹配护栏见 config.FORBIDDEN_VULKAN_APIS。
 
@@ -300,10 +301,16 @@ def _build_forbidden_regexes():
     bindPipelineToAsset（ShaderRegistry，AGENTS.md 现行 API）。边界规则：
     - 左右邻字符不得是 [A-Za-z0-9_]（'.'/'(' ':' 空格 均放行——vk::X 与 cmd->X()
       调用式照抓）；
-    - 以 '(' 结尾的 token（pushConstants(）本身即调用签名，只加左边界。
+    - 以 '(' 结尾的 token（pushConstants(）本身即调用签名，只加左边界；
+    - 以 '*' 结尾的 token = 显式前缀匹配（去 '*'、**不**加右边界）：结构体族
+      （VkVertexInput*）与 sync2 变体（vkCmdBindVertexBuffers2）用，名单里
+      只给确定封死的全族（见 config.FORBIDDEN_VULKAN_APIS 注释，防误伤现代名）。
     精确串互不包含现代名（VkDescriptorSetAndBindingMappingEXT 等均不命中）。"""
     out = []
     for tok in FORBIDDEN_VULKAN_APIS:
+        if tok.endswith("*"):
+            out.append((tok, re.compile(r"(?<![A-Za-z0-9_])" + re.escape(tok[:-1]))))
+            continue
         esc = re.escape(tok)
         right = "" if not (tok[-1].isalnum() or tok[-1] == "_") else r"(?![A-Za-z0-9_])"
         out.append((tok, re.compile(r"(?<![A-Za-z0-9_])" + esc + right)))

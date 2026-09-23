@@ -42,4 +42,4 @@ description: 新建或拆分 C++20 模块 (.cppm)——rlstd/GMF include 细则�
 - 成员自然命名：无 `_`/`m_` 前缀、无 `_` 后缀
 - 分层：`ZERO_ENTT_MODULES` 名单不 import ecs 且 GMF 不 include `<entt>`；点名禁止 import 边 `FORBIDDEN_EDGES`（名单见 `tools/checks/config.py`）；禁内部头 `#include "`
 - GMF `#include <STL>` 白名单：只许 ranges/filesystem/chrono，余走 import rlstd
-- 禁用旧式 Vulkan API：经典 descriptor pool / pipeline object / render pass / push constants（项目已全面 descriptor heap / shader object / dynamic rendering；护栏名单 `FORBIDDEN_VULKAN_APIS`，标识符边界匹配）
+- 禁用旧式 Vulkan API：经典 descriptor pool / pipeline object / render pass / push constants / 输入装配（`bindVertexBuffers*`/`VkVertexInput*` 等，mesh shader 路线封死经典 IA；`*` = 前缀匹配 token）（项目已全面 descriptor heap / shader object / dynamic rendering / mesh shader；护栏名单 `FORBIDDEN_VULKAN_APIS`，标识符边界匹配；**勿把现代机制写成前缀串**——`vkCmdBindDescriptorBuffersEXT` 是 descriptor buffer 当代用法）
