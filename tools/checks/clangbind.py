@@ -7,7 +7,17 @@ CXString=16B 值类型——照旧例程写必段错误。
 另：clang_makeRange 在 LLVM 22 已更名 clang_getRange（CXSourceLocation.h，
 旧名 ctypes 查找必 AttributeError）。
 
-本模块只放"绑定 + 通用 AST helper + 认知复杂度"；编译命令清理在 cmdclean.py。
+坑 7（2026-09-23 实测，声明抽取唯一通路）：`-std=gnu++23` + `-x c++-module`
+下 clang 的 export 声明在 libclang cursor 树里映射为 UnexposedDecl 且
+clang_visitChildren 返回 0 子——**export 子树对游标遍历完全不可见**（任何
+parse flags 组合均不改变；去掉 -std= 虽可见但 BMI 加载失败、类型解析成
+error 型）。文本 -ast-dump 与 Indexer API 则穿透。本模块的 Indexer 绑定
+（CXIdxDeclInfo=128B，**不是**旧例程的 120B——尺寸错必 crash）即声明/指标
+抽取的数据源；回调内可重入 visitChildren/tokenize（实测），函数体指标在
+indexDeclaration 回调里就地计算，**cursor 不得出回调保存**（悬垂段错误）。
+
+本模块只放"绑定 + 通用 AST helper + 认知复杂度 + Indexer"；编译命令清理在
+cmdclean.py，单文件分析编排在 metrics.py。
 """
 
 import ctypes
@@ -15,8 +25,7 @@ import os
 
 from config import (BINARY_OPERATOR_SPELLING, COGNITIVE_STRUCT_SPELLINGS,
                     ELSE_TOKEN, FUNC_SPELLINGS, IF_SPELLING, LAMBDA_SPELLING,
-                    LOGICAL_OPERATOR_TOKENS, SWITCH_SPELLINGS, TOK_COMMENT,
-                    FIELD_SPELLING)
+                    LOGICAL_OPERATOR_TOKENS, SWITCH_SPELLINGS, TOK_COMMENT)
 
 
 class CXCursorT(ctypes.Structure):
@@ -72,6 +81,8 @@ def bind_libclang(lib):
     lib.clang_getFileName.argtypes = [ctypes.c_void_p]
     lib.clang_getCursorUSR.restype = CXStringT
     lib.clang_getCursorUSR.argtypes = [CXCursorT]
+    lib.clang_getCursorSpelling.restype = ctypes.c_char_p
+    lib.clang_getCursorSpelling.argtypes = [CXCursorT]
     lib.clang_getCString.restype = ctypes.c_char_p
     lib.clang_getCString.argtypes = [CXStringT]
     lib.clang_disposeString.argtypes = [CXStringT]
@@ -188,37 +199,8 @@ def children_of(lib, cur):
     return kids
 
 
-def collect_decls(lib, tu_cur, main_file):
-    """主文件内全部函数定义 + lambda + 成员字段 [(name, line, cursor)]。
-
-    项目约定：主文件顶层 = imports + namespace RGL，声明都在 namespace 子树里；
-    递归进入主文件位置的子树，非主文件子树整体剪枝（import 模块声明全在里面）。
-    lambda 与函数定义一样收录为独立条目（独立计分行数/认知复杂度）；lambda 名字
-    取其所在函数无法从 display name 稳定得到，用 "(anonymous lambda)" 占位 + 行号定位。
-    注意：lambda 嵌在函数体内时，父函数 walk 不深入 lambda（见 cognitive_complexity
-    的 lambda 边界），但 collect_decls 独立递归整棵 AST，二者互不影响。
-    """
-    funcs, fields = [], []
-    cb = None
-
-    def walk(cur, parent, data):
-        fn, ln, _ = spelling_loc(lib, lib.clang_getCursorLocation(cur))
-        if fn != main_file:
-            return 1
-        sp = kind_spelling(lib, cur)
-        name = lib.clang_getCursorDisplayName(cur).decode()
-        if sp in FUNC_SPELLINGS and is_definition(lib, cur):
-            funcs.append((name, ln, cur))
-        elif sp == LAMBDA_SPELLING:
-            funcs.append(("(anonymous lambda)", ln, cur))
-        elif sp == FIELD_SPELLING:
-            fields.append((name, ln))
-        lib.clang_visitChildren(cur, cb, None)
-        return 1
-
-    cb = VISITOR(walk)
-    lib.clang_visitChildren(tu_cur, cb, None)
-    return funcs, fields
+# （2026-09-23：原 collect_decls 游标遍历删除——export 子树不可见（坑 7），
+#  声明/函数/字段收录全部改走下方 Indexer + metrics.py 回调。）
 
 
 # ─── 认知复杂度（SonarSource 风格）────────────────────────────────────────────
@@ -231,7 +213,7 @@ def collect_decls(lib, tu_cur, main_file):
 #   BinaryOperator 且运算符为 &&/||、父节点不是 &&/|| 的 BinaryOperator；
 #   序列子树 nesting+1。运算符 opcode 拿 kind spelling 拿不到（恒为
 #   "BinaryOperator"），用左右操作数 extent 之间 gap 的 token 文本判定。
-# - 独立的嵌套单元不深入、各自单独计分（collect_decls 已逐一收录为条目）：
+# - 独立的嵌套单元不深入、各自单独计分（metrics 已逐一收录为条目）：
 #   FunctionDecl/CXXMethod 等命名函数定义 + **LambdaExpr**（lambda = "函数中的
 #   函数"，其体不计入宿主、从自身起独立算 nesting=0）。宿主与 lambda 认知复杂度
 #   互不叠加（2026-09-12 修正：原实现把 lambda 体叠加进宿主，虚高宿主复杂度）。
@@ -323,3 +305,114 @@ def cognitive_complexity(lib, tu, func_cursor):
     if state["err"] is not None:
         raise RuntimeError(f"认知复杂度遍历异常: {state['err']}")
     return state["total"]
+
+
+# ─── Indexer API（声明抽取唯一可见 export 的通路，坑 7 见模块头）───────────────
+# 结构体布局照抄 LLVM 22 Index.h（CXIdxDeclInfo 实测 128B，非旧例程 120B）。
+# entityInfo/semanticContainer 等以 c_void_p 存，用 POINTER(结构) 现场 cast。
+# 分类一律用 CXIdxEntityKind 枚举值（Index.h 6235-6268 权威）——cursor kind
+# 数值有相邻雷区（如 Namespace 与 ctor/conversion 数值区重叠的错觉），拼写串
+# 走 kind_spelling。
+
+class CXIdxLoc(ctypes.Structure):
+    _fields_ = [("ptr_data", ctypes.c_void_p * 2), ("int_data", ctypes.c_uint)]
+
+
+class CXIdxEntityInfo(ctypes.Structure):
+    _fields_ = [("kind", ctypes.c_int), ("templateKind", ctypes.c_int),
+                ("lang", ctypes.c_int), ("name", ctypes.c_char_p),
+                ("USR", ctypes.c_char_p), ("cursor", CXCursorT),
+                ("attributes", ctypes.c_void_p), ("numAttributes", ctypes.c_uint)]
+
+
+class CXIdxDeclInfo(ctypes.Structure):
+    _fields_ = [("entityInfo", ctypes.c_void_p), ("cursor", CXCursorT),
+                ("loc", CXIdxLoc),
+                ("semanticContainer", ctypes.c_void_p),
+                ("lexicalContainer", ctypes.c_void_p),
+                ("isRedeclaration", ctypes.c_int), ("isDefinition", ctypes.c_int),
+                ("isContainer", ctypes.c_int),
+                ("declAsContainer", ctypes.c_void_p), ("isImplicit", ctypes.c_int),
+                ("attributes", ctypes.c_void_p), ("numAttributes", ctypes.c_uint),
+                ("flags", ctypes.c_uint)]
+
+
+# CXIdxEntityKind（Index.h 枚举正身）
+EKIND_FUNCTION = 2
+EKIND_RECORD = {14, 15, 16}          # Struct/Union/CXXClass
+EKIND_ENUM = 13
+EKIND_FIELD = 4
+EKIND_METHODS = {20, 21, 22, 23, 24}  # CXXStatic/InstanceMethod/Constructor/
+                                      # Destructor/ConversionFunction
+EKIND_FUNCTIONISH = {EKIND_FUNCTION} | EKIND_METHODS
+
+_IDX_CB = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.POINTER(CXIdxDeclInfo))
+
+
+class _IndexerCallbacks(ctypes.Structure):
+    _fields_ = [(n, ctypes.c_void_p) for n in (
+        "abortQuery", "diagnostic", "enteredMainFile", "ppIncludedFile",
+        "importedASTFile", "startedTranslationUnit", "indexDeclaration",
+        "indexEntityReference")]
+
+
+def bind_indexer(lib):
+    """IndexAction + indexTranslationUnit 绑定（worker 进程加载时调一次）。"""
+    lib.clang_IndexAction_create.restype = ctypes.c_void_p
+    lib.clang_IndexAction_create.argtypes = [ctypes.c_void_p]
+    lib.clang_IndexAction_dispose.argtypes = [ctypes.c_void_p]
+    lib.clang_indexTranslationUnit.restype = ctypes.c_int
+    lib.clang_indexTranslationUnit.argtypes = [
+        ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+        ctypes.c_uint, ctypes.c_uint, ctypes.c_void_p]
+
+
+def index_decls(lib, cxindex, tu, on_decl):
+    """对已 parse 的 TU 跑 Indexer，on_decl(entity, cursor, flags) 逐声明回调。
+
+    entity = dict{ekind, tmpl, name, isDef, isRedecl, isImplicit, cont_id}
+    （cont_id = semanticContainer cursor 的身份值组，容器实体先于成员回调，
+    调用方可建 parent 链）；cursor 仅回调内有效（坑 7），回调返回后不得再用。
+    回调内可重入本 libclang 实例（实测 visitChildren/tokenize 安全）。
+    @return 回调成功数（rc!=0 或 entity 解析失败也计数无意义——失败抛错）
+    """
+    action = lib.clang_IndexAction_create(cxindex)
+    state: dict = {"err": None}
+
+    def cb(_client, info_p):
+        if state["err"] is not None:
+            return
+        try:
+            info = info_p.contents
+            if not info.entityInfo:
+                return
+            ei = ctypes.cast(info.entityInfo,
+                             ctypes.POINTER(CXIdxEntityInfo)).contents
+            cont_id = None
+            if info.semanticContainer:
+                sc = ctypes.cast(info.semanticContainer,
+                                 ctypes.POINTER(CXCursorT)).contents
+                cont_id = (sc.kind, sc.xdata,
+                           tuple(int(x or 0) for x in sc.data))
+            on_decl({"ekind": ei.kind, "tmpl": ei.templateKind,
+                     "name": (ei.name or b"").decode(),
+                     "isDef": bool(info.isDefinition),
+                     "isRedecl": bool(info.isRedeclaration),
+                     "isImplicit": bool(info.isImplicit),
+                     "cont_id": cont_id},
+                    info.cursor)
+        except Exception as ex:  # ctypes 回调内异常不外逃
+            state["err"] = repr(ex)
+
+    trampoline = _IDX_CB(cb)
+    cbs = _IndexerCallbacks()
+    cbs.indexDeclaration = ctypes.cast(trampoline, ctypes.c_void_p)
+    try:
+        rc = lib.clang_indexTranslationUnit(action, None, ctypes.byref(cbs),
+                                            ctypes.sizeof(cbs), 0, tu)
+    finally:
+        lib.clang_IndexAction_dispose(action)
+    if state["err"] is not None:
+        raise RuntimeError(f"Indexer 回调异常: {state['err']}")
+    if rc != 0:
+        raise RuntimeError(f"clang_indexTranslationUnit rc={rc}")

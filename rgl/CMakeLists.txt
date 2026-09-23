@@ -3,7 +3,7 @@
 # 模块分解（2026-09-23 瘦身）：
 #   cmake/RglSlang.cmake         SLANG_FLAGS 契约 + compile_slang/rgl_shader
 #   cmake/RglReflection.cmake    反射管线 + reflect/reflection_check
-#   cmake/RglChecks.cmake        doc_check / style_check
+#   cmake/RglChecks.cmake        source_checks（样式 + Doxygen）
 #   cmake/RglRuntimeAssets.cmake configs/models/skybox/env 拷贝
 include(${CMAKE_SOURCE_DIR}/cmake/RglSlang.cmake)
 include(${CMAKE_SOURCE_DIR}/cmake/RglReflection.cmake)
@@ -61,7 +61,7 @@ rgl_shader(stream_fanout.comp STREAM_FANOUT_SPV)
 # main:scene; 重函数定义）+ main_impl.cppm（module main:impl; 轻函数 + main()）
 # ——2026-09-14 由 main.cpp 转来：CMake FILE_SET 不收纯实现单元，故"接口声明 + 分区
 # 实现"形状（同 ecs/ecs_impl 惯例）；经 FILE_SET 编译为模块 TU 并纳入
-# stylecheck/doccheck 全规则管理。
+# source_checks（tools/checks/）全规则管理。
 get_property(RGL_SPV GLOBAL PROPERTY RGL_SPV_OUTPUTS)
 add_executable(rgl vam_impl.cpp tinygltf_impl.cpp ${RGL_SPV})
 
@@ -74,6 +74,9 @@ target_sources(rgl PUBLIC
 )
 
 add_dependencies(rgl reflection_check)
+# 源码检查必须等编译产物就绪（libclang 读半写 BMI 会 crash，坑 4c，
+# 详见 cmake/RglChecks.cmake 头注释）。
+add_dependencies(source_checks rgl)
 
 find_package(Vulkan REQUIRED)
 find_package(glm CONFIG REQUIRED)

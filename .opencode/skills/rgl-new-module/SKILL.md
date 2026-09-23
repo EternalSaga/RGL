@@ -1,6 +1,6 @@
 ---
 name: rgl-new-module
-description: 新建或拆分 C++20 模块 (.cppm)——rlstd/GMF include 细则与完整可用面、partition implementation unit 接口瘦身的三条坑、CMake FILE_SET 登记、doc_check/style_check 规则红线。触发词：新建模块、新 cppm、拆 impl、接口瘦身、GMF、rlstd、加 include。
+description: 新建或拆分 C++20 模块 (.cppm)——rlstd/GMF include 细则与完整可用面、partition implementation unit 接口瘦身的三条坑、CMake FILE_SET 登记、源码检查（source_checks）规则红线。触发词：新建模块、新 cppm、拆 impl、接口瘦身、GMF、rlstd、加 include。
 ---
 
 # 新建与拆分 .cppm 模块
@@ -13,7 +13,7 @@ description: 新建或拆分 C++20 模块 (.cppm)——rlstd/GMF include 细则�
 2. STL 走 `import rlstd;`（不在 GMF `#include` STL）；Vulkan C++ 头一律 `import rlvk;`（新用 vk:: 名报 "not visible" → 补一行 `export using` 保持字典序）；仅用 `VK_*` 宏/C 函数的文件可额外 `#include <vulkan/vulkan.h>`（core 量级 ~0.4s）
 3. 函数体 >100 行 → 拆 `xxx_impl.cppm`（`module xxx:impl;`）
 4. CMake 与接口同登记 FILE_SET
-5. 类/枚举/函数/方法声明正上方非空 `/** */` 块（doc_check 检查；真相源 = 接口声明处，impl 里接口已声明函数的定义不重复要求；重载组共用最上方一个块）
+5. 类/枚举/函数/方法声明正上方非空 `/** */` 块（Doxygen 检查在 source_checks 内；真相源 = 接口声明处，impl 里接口已声明函数的定义不重复要求；重载组共用最上方一个块；注释挂 `template` 行上方亦可）
 
 ## rlstd / GMF 细则
 
@@ -35,11 +35,11 @@ description: 新建或拆分 C++20 模块 (.cppm)——rlstd/GMF include 细则�
 
 小函数/模板/constexpr 留接口内联无妨。
 
-## 检查工具规则红线（just build 随编译并行跑 doc_check / style_check，只警告）
+## 检查工具规则红线（just build 编译完成后跑 source_checks = tools/checks/main.py 单入口，只警告）
 
 - 文件 >500 代码行 → 拆文件；函数 >120 代码行、认知复杂度 >15（SonarSource 风格，**lambda 独立计分**）→ 拆函数
 - 非 _impl 文件函数体 >100 行 → 迁入 xxx_impl.cppm（接口瘦身）
 - 成员自然命名：无 `_`/`m_` 前缀、无 `_` 后缀
-- 分层：`ZERO_ENTT_MODULES` 名单不 import ecs 且 GMF 不 include `<entt>`；点名禁止 import 边 `FORBIDDEN_EDGES`（名单见 `tools/stylecheck/config.py`）；禁内部头 `#include "`
+- 分层：`ZERO_ENTT_MODULES` 名单不 import ecs 且 GMF 不 include `<entt>`；点名禁止 import 边 `FORBIDDEN_EDGES`（名单见 `tools/checks/config.py`）；禁内部头 `#include "`
 - GMF `#include <STL>` 白名单：只许 ranges/filesystem/chrono，余走 import rlstd
 - 禁用旧式 Vulkan API：经典 descriptor pool / pipeline object / render pass / push constants（项目已全面 descriptor heap / shader object / dynamic rendering；护栏名单 `FORBIDDEN_VULKAN_APIS`，标识符边界匹配）

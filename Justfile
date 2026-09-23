@@ -107,17 +107,20 @@ build:
 reflect:
     @cmake --build {{ BUILD }} --target reflect
 
-# Doxygen 注释检查（每次 just build 已随 doc_check 目标并行跑、只警告；
-# 这里单独跑 + 透传参数：--methods / --strict / --max-gap N 等，见
-# tools/doccheck/doccheck.py --help）
-doc-check *ARGS="":
-    @python "{{ WORKSPACE }}/tools/doccheck/doccheck.py" --build-dir "{{ BUILD }}" --methods {{ ARGS }}
+# 源码检查统一入口（样式 + Doxygen；每次 just build 已随 source_checks 目标跑、
+# 只警告。单 parse 共享缓存，--only 只过滤规则求值不影响解析）。透传参数见
+# tools/checks/main.py --help（--only style|doc / --strict / --max-gap N /
+# --file-threshold N / --verbose 等）
+checks *ARGS="":
+    @python "{{ WORKSPACE }}/tools/checks/main.py" --build-dir "{{ BUILD }}" {{ ARGS }}
 
-# 文件/函数结构检查（每次 just build 已随 style_check 目标并行跑、只警告；
-# 这里单独跑 + 透传参数：--strict / --file-threshold N / --func-threshold N /
-# --cognitive-threshold N 等，见 tools/stylecheck/stylecheck.py --help）
+# Doxygen 注释检查（= checks --only doc，兼容旧调用位）
+doc-check *ARGS="":
+    @python "{{ WORKSPACE }}/tools/checks/main.py" --build-dir "{{ BUILD }}" --only doc {{ ARGS }}
+
+# 文件/函数结构检查（= checks --only style，兼容旧调用位）
 style-check *ARGS="":
-    @python "{{ WORKSPACE }}/tools/stylecheck/stylecheck.py" --build-dir "{{ BUILD }}" {{ ARGS }}
+    @python "{{ WORKSPACE }}/tools/checks/main.py" --build-dir "{{ BUILD }}" --only style {{ ARGS }}
 
 # 全量编译基准: clean-all + config + 计时编译
 profile:

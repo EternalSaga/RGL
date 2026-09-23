@@ -27,8 +27,7 @@ legacy（旧 OpenGL 项目）已于 2026-09-08 删除，历史思路参考见 gi
 just config              # CMake 配置（默认 clang, Release）；just config gcc Debug 指定编译器/类型
 just build               # 增量编译（需先 config）；just build-release / build-debug = 一键配置+编译
 just reflect             # 重跑 6 条反射管线（改动 shader 契约/schema/模板后必须，见 skill rgl-shader-contract）
-just doc-check [--strict]    # Doxygen 注释检查（每次 just build 已随 doc_check 并行跑、只警告）
-just style-check [--strict]  # 文件/函数结构检查（红线清单见 skill rgl-new-module）
+just checks / doc-check / style-check [--strict]  # 源码检查统一入口（tools/checks/main.py，--only style|doc；每次 just build 已随 source_checks 目标跑、只警告；红线清单见 skill rgl-new-module）
 just run                 # 运行（AMD VGA 存在时自动设 RADV_EXPERIMENTAL=heap）
 just run-igpu / run-dgpu / run-intel   # 强制核显 / NVIDIA prime 独显 / Intel anv
 just clean / clean-all / all           # 增量清理 / 删 build 目录 / clean-all+build-release
@@ -41,9 +40,10 @@ Git for Windows（`sh.exe` 在 PATH）；命令同名，默认 clang++ + Ninja�
 Windows `sdl3[vulkan]`）；同一依赖可出现两次用 `"platform"` 字段区分。
 
 CMake 无独立构建目录——必须从根目录构建（`cmake -B build -S .`）。产物: `build/rgl/rgl`（Windows 加 `.exe`）。
-构建内置检查步骤（均只警告不阻断，与编译并行）：`reflection_check`（反射产物 SHA1 护栏）、
-`doc_check`（声明处 `/** */` 注释，`tools/doccheck/`）、`style_check`（八类规则，`tools/stylecheck/`）。
-三者内部机制（缓存、并发、已知坑）→ `docs/技术概念.md §构建检查工具机制`；tools/ 工具链说明 → 同文件 §构建工具。
+构建内置检查步骤（均只警告不阻断）：`reflection_check`（反射产物 SHA1 护栏，与编译并行）、
+`source_checks`（样式 + Doxygen 单入口，`tools/checks/`，2026-09-23 合并；**依赖 rgl 编译完成后
+才跑**——libclang 读半写 BMI 会崩，勿删该 add_dependencies）。
+两者内部机制（缓存、并发、已知坑）→ `docs/技术概念.md §构建检查工具机制`；tools/ 工具链说明 → 同文件 §构建工具。
 
 ## 运行要点
 
@@ -67,7 +67,7 @@ CMake 无独立构建目录——必须从根目录构建（`cmake -B build -S .
 ### 模块优先
 新代码**必须** C++20 modules（`.cppm`），非 `.hpp/.cpp` 头文件对；入口 `import` 导入，不在模块外
 `#include` 项目内部头文件。新建/拆分的完整 checklist → skill `rgl-new-module`。
-入口也是模块（2026-09-14 起，纳入 stylecheck/doccheck 全规则）：`main.cppm`（`export module main;`
+入口也是模块（2026-09-14 起，纳入源码检查全规则）：`main.cppm`（`export module main;`
 接口：启动流 helper 声明 + 轻量 struct）+ `main_impl.cppm`（`module main:impl;`：轻函数 +
 `main()`，main 合法于分区实现单元）+ `main_scene.cppm`（`module main:scene;`：重函数定义）——
 CMake CXX_MODULES FILE_SET 不收纯实现单元，故"接口声明 + 分区实现"形状（同 ecs/ecs_impl）。

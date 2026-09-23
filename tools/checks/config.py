@@ -1,15 +1,15 @@
-"""阈值与名单（stylecheck 规则参数的唯一真相源，零逻辑）。
+"""阈值与名单（checks 规则参数的唯一真相源，零逻辑）。
 
 各规则的语义与本机实测坑见对应模块 docstring：
-- libclang 绑定与坑 5（LLVM 22 结构体布局）→ clangbind.py
-- 编译命令清理与坑 1/2/3/4b（@response 展开/resource-dir/BMI 预检）→ cmdclean.py
-- 八类规则判定（含认知复杂度算法、禁用旧式 Vulkan API）→ rules.py
+- libclang 绑定与坑 5/7（LLVM 22 结构体布局、Indexer 与 export 可见性）→ clangbind.py
+- 编译命令清理与坑 1/2/3/4b/4c（@response 展开/resource-dir/BMI 预检/竞态稳定）→ cmdclean.py
+- 八类样式规则 + Doxygen 规则判定 → rules.py
 """
 
 import os
 from dataclasses import dataclass
 
-# 本包目录与仓库根（stylecheck.py 从 tools/stylecheck/ 以脚本方式启动，ROOT 上两级）
+# 本包目录与仓库根（main.py 从 tools/checks/ 以脚本方式启动，ROOT 上两级）
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 
@@ -19,9 +19,13 @@ EXCLUDE_FILES = ("rgl/rlvk.cppm",)
 
 # 缓存版本：指标结构变化时 +1（自动失效旧缓存）。
 # v2→v3：函数指标 nesting → cognitive（认知复杂度替换嵌套深度）
-# v3→v4：lambda 独立计分（宿主不再叠加 lambda 体；collect_decls 收录 lambda 独立条目）
+# v3→v4：lambda 独立计分（宿主不再叠加 lambda 体；lambda 收录为独立条目）
 # v4→v5：TOK_COMMENT 5→4 修正（注释 token 此前未被过滤，代码行数普遍虚高）
-CACHE_VERSION = "v5"
+# v5→v6：单 parse+Indexer 管线（2026-09-23）——schema 增 decls（doc 声明表）；
+#         export 包裹的类内方法/字段首次进入 functions/fields（此前游标树
+#         不可见 = 样式规则盲区）；FUNC_SPELLINGS 修正（下）连带构造/析构/
+#         转换函数开始被收录与正确停止嵌套计分。
+CACHE_VERSION = "v6"
 
 DEFAULT_FILE_THRESHOLD = 500
 DEFAULT_FUNC_THRESHOLD = 120
@@ -40,11 +44,15 @@ class Thresholds:
 
 # ─── libclang 游标 kind 拼写集合（clang_getCursorKindSpelling 返回串，LLVM 22 实查）──
 
-FUNC_SPELLINGS = {"FunctionDecl", "CXXMethod", "Constructor", "Destructor",
-                  "ConversionFunction"}
+# **v6 修正**（2026-09-23 实测 kind_spelling 值）：构造/析构/转换函数的 LLVM 22
+# 拼写是 CXXConstructor/CXXDestructor/CXXConversion——旧表里 Constructor/
+# Destructor/ConversionFunction 三个名从匹配不上（v5 前 ctor/dtor 函数指标
+# 隐形、认知复杂度 stop 集亦漏这三类）。metrics 主判定已走 Indexer ekind，
+# 本表供 cognitive_complexity 游标遍历的"独立嵌套单元"边界。
+FUNC_SPELLINGS = {"FunctionDecl", "CXXMethod", "CXXConstructor", "CXXDestructor",
+                  "CXXConversion"}
 CTRL_SPELLINGS = {"IfStmt", "WhileStmt", "DoStmt", "ForStmt", "CXXForRangeStmt",
                   "SwitchStmt", "CXXCatchStmt", "LambdaExpr"}
-FIELD_SPELLING = "FieldDecl"
 # CXToken_Comment 枚举值 = 4（CXTokenKind: Punctuation=0/Keyword=1/Identifier=2/
 # Literal=3/Comment=4，LLVM 22 实测 tokenize 对 //、/*、/** 均产出 kind 4——包括
 # parse options=0）。**曾误写 5**：注释 token 全部漏过滤、每条注释首行被算进
@@ -57,7 +65,7 @@ TOK_COMMENT = 4
 COGNITIVE_STRUCT_SPELLINGS = {"IfStmt", "ForStmt", "CXXForRangeStmt", "WhileStmt",
                               "DoStmt", "CXXCatchStmt", "ConditionalOperator"}
 # lambda = "函数中的函数"：宿主认知复杂度不叠加其体（walk 遇 LambdaExpr 即停），
-# collect_decls 收录为独立条目、从 lambda 自身起单独计分（nesting 0 起算）
+# metrics 收录为独立条目、从 lambda 自身起单独计分（nesting 0 起算）
 LAMBDA_SPELLING = "LambdaExpr"
 # +1 但子树 nesting 不变
 SWITCH_SPELLINGS = {"SwitchStmt"}
