@@ -22,6 +22,7 @@ cmdclean.py，单文件分析编排在 metrics.py。
 
 import ctypes
 import os
+from pathlib import Path
 
 from config import (BINARY_OPERATOR_SPELLING, COGNITIVE_STRUCT_SPELLINGS,
                     ELSE_TOKEN, FUNC_SPELLINGS, IF_SPELLING, LAMBDA_SPELLING,
@@ -110,19 +111,18 @@ def bind_libclang(lib):
 
 def find_libclang(driver_path):
     """按构建链驱动路径推导 libclang 位置（Linux lib64/lib、Windows bin 目录）。"""
-    d = os.path.dirname(driver_path)
+    d = Path(driver_path).resolve().parent
     cands = [
-        os.path.join(d, "..", "lib64", "libclang.so"),
-        os.path.join(d, "..", "lib", "libclang.so"),
-        os.path.join(d, "libclang.so"),
+        d / ".." / "lib64" / "libclang.so",
+        d / ".." / "lib" / "libclang.so",
+        d / "libclang.so",
     ]
     if os.name == "nt":
-        base = os.path.basename(driver_path).split(".")[0]
-        cands = [os.path.join(d, "libclang.dll"),
-                 os.path.join(d, base + ".dll")] + cands
+        base = Path(driver_path).stem
+        cands = [d / "libclang.dll", d / f"{base}.dll"] + cands
     for c in cands:
-        if os.path.exists(c):
-            return c
+        if c.exists():
+            return str(c.resolve())
     return None
 
 

@@ -43,7 +43,8 @@ def _worker_task(rel_entry):
     ctx = _W["ctx"]
     full = os.path.join(ctx["root"], rel)
     try:
-        src = open(full, "rb").read()
+        with open(full, "rb") as f:
+            src = f.read()
         cmd = clean_cmd(entry, full, ctx["scratch_dir"], ctx["resdir"])
     except Exception as ex:
         return rel, None, "error:" + str(ex).splitlines()[0]
@@ -54,7 +55,8 @@ def _worker_task(rel_entry):
     ).hexdigest()[:24]
     cache = os.path.join(ctx["cache_dir"], key + ".json")
     if os.path.exists(cache):
-        return rel, json.load(open(cache, encoding="utf-8")), "cache"
+        with open(cache, encoding="utf-8") as f:
+            return rel, json.load(f), "cache"
     if not bmi_ready(entry):
         return rel, None, "skip:构建产物未就绪（modmap/BMI 缺失），编译完成后重跑即生效"
     last_err = "unknown"

@@ -1,13 +1,14 @@
 """RGL 源码检查统一入口（CMake source_checks 目标 / just checks|doc-check|style-check）。
 
+要求 **Python ≥ 3.14**（注解惰性求值 + 项目工具链对齐）。
+
 单包单入口跑两套规则，**每个编译单元只做一次 libclang parse**，样式指标与
 Doxygen 声明表共享同一份 AST 与同一份缓存（build/checks_cache，源字节+命令
 SHA 键；schema = metrics.py 文件头，CACHE_VERSION 随结构演进）：
 
-- 样式八类规则（--only style|all）→ rules.evaluate_metrics + text_checks +
-  forbidden_vulkan_checks + modern_cpp_checks + docs_status_checks（判定与名单
-  见 rules.py / config.py；两轮扩展设计见 docs/风格检查规则.md）。
-- Doxygen 注释规则（--only doc|all）→ rules.rule_doxygen；声明表来自
+- 样式规则（--only style|all）→ rules_metrics.evaluate_metrics + rules_text.*
+  （判定与名单见 rules_*.py / config.py；设计见 docs/风格检查规则.md）。
+- Doxygen 注释规则（--only doc|all）→ rules_doxygen.rule_doxygen；声明表来自
   libclang Indexer（穿透 export，坑 7；2026-09-23 起替代文本 -ast-dump 双管线，
   行为对账记录见 docs/调试历史.md 同日条目）。impl 单元接口已声明函数的
   定义处不重复要求注释（真相源 = 声明处）。
@@ -20,7 +21,7 @@ exit 0，任何检查失败都不阻断构建**（BrokenProcessPool 同样只警
 
 坑位索引（详见各模块文件头）：@response 展开/resource-dir/argv 混入/BMI 预检
 → cmdclean.py；LLVM 22 结构体布局/Indexer/export 不可见 → clangbind.py；
-TOK_COMMENT/CACHE_VERSION 等常量 → config.py。
+TOK_COMMENT/CACHE_VERSION 等常量 → config.py；Warning/阈值 → models.py。
 
 用法：
     python3 tools/checks/main.py [--build-dir build] [--only style|doc|all]
@@ -37,27 +38,36 @@ import shlex
 import subprocess
 import sys
 from concurrent.futures.process import BrokenProcessPool
+from pathlib import Path
+
+if sys.version_info < (3, 14):
+    raise SystemExit(
+        f"error: tools/checks 需要 Python ≥3.14，当前 {sys.version.split()[0]}")
 
 from clangbind import find_libclang
 from cmdclean import bmi_ready
 from config import (DEFAULT_COGNITIVE_THRESHOLD, DEFAULT_FILE_THRESHOLD,
                     DEFAULT_FUNC_THRESHOLD, DEFAULT_IMPL_THRESHOLD, EXCLUDE_FILES,
-                    EXCLUDE_SUBDIRS, ROOT, Thresholds)
-from rules import (docs_status_checks, evaluate_metrics,
-                   forbidden_vulkan_checks, interface_declared_names,
-                   modern_cpp_checks, rule_doxygen, text_checks)
+                    EXCLUDE_SUBDIRS, ROOT)
+from fs import read_text
+from rules_doxygen import interface_declared_names, rule_doxygen
+from rules_metrics import evaluate_metrics
+from rules_text import (docs_status_checks, forbidden_vulkan_checks,
+                        modern_cpp_checks, text_checks)
+from models import Thresholds, Warning
 from worker import _pool_results
 
 
-def load_db(build_dir):
+def load_db(build_dir: str) -> tuple[dict[str, dict], str | None]:
     """读 compile_commands.json → ({绝对源路径: 条目}, clang 驱动路径)。"""
     db_path = os.path.join(build_dir, "compile_commands.json")
     if not os.path.exists(db_path):
         raise SystemExit(
             f"error: 找不到 {db_path}\n  检查器复用 RGL 构建的编译命令（modules 依赖在里面）。\n"
             "  请先 just config && just build。")
-    db = json.load(open(db_path, encoding="utf-8"))
-    by_file = {}
+    with open(db_path, encoding="utf-8") as f:
+        db = json.load(f)
+    by_file: dict[str, dict] = {}
     driver = None
     for e in db:
         full = os.path.abspath(os.path.join(e["directory"], e["file"]))
@@ -69,7 +79,7 @@ def load_db(build_dir):
     return by_file, driver
 
 
-def select_units(by_file):
+def select_units(by_file: dict[str, dict]) -> list[tuple[str, dict]]:
     """db 条目 → 待检 .cppm 单元 [(rel, entry)]（排除 generated/ 与 EXCLUDE_FILES）。"""
     units = []
     for full in sorted(by_file):
@@ -80,15 +90,15 @@ def select_units(by_file):
             continue
         if any(x in norm for x in EXCLUDE_SUBDIRS):
             continue
-        rel = os.path.relpath(full, ROOT).replace(os.sep, "/")
+        rel = Path(full).resolve().relative_to(Path(ROOT).resolve()).as_posix()
         if rel in EXCLUDE_FILES:
             continue
         units.append((rel, by_file[full]))
     return units
 
 
-def parse_args():
-    ap = argparse.ArgumentParser(description="RGL 源码检查（样式 + Doxygen）")
+def parse_args() -> argparse.Namespace:
+    ap = argparse.ArgumentParser(description="RGL 源码检查（样式 + Doxygen；需 Python ≥3.14）")
     ap.add_argument("--build-dir", default=None, help="build 目录（默认 <repo>/build）")
     ap.add_argument("--only", choices=("style", "doc", "all"), default="all",
                     help="只跑一组规则的求值（parse/缓存共享；默认 all）")
@@ -114,9 +124,11 @@ def parse_args():
     return ap.parse_args()
 
 
-def main():
+def main() -> None:
     args = parse_args()
     only = args.only
+    run_style = only in ("style", "all")
+    run_doc = only in ("doc", "all")
     thresholds = Thresholds(file=args.file_threshold, func=args.func_threshold,
                             cognitive=args.cognitive_threshold,
                             impl=args.impl_threshold)
@@ -147,9 +159,10 @@ def main():
     os.makedirs(ctx["cache_dir"], exist_ok=True)
 
     metrics_by_rel = {}
-    warnings, errors, hits, parsed = [], [], 0, 0
-    skipped_notready_err = 0
-    cog_top = []
+    warnings: list[Warning] = []
+    errors: list[tuple[str, str]] = []
+    hits = parsed = skipped_notready_err = 0
+    cog_top: list[tuple[int, str, int, str]] = []
     try:
         pool_iter = _pool_results(ctx, ready, args.workers)
         for rel, metrics, how in pool_iter:
@@ -165,7 +178,7 @@ def main():
             else:
                 parsed += 1
             metrics_by_rel[rel] = metrics
-            if only in ("style", "all"):
+            if run_style:
                 warnings.extend(evaluate_metrics(rel, metrics, thresholds))
             for fn in metrics["functions"]:
                 cog_top.append((fn["cognitive"], rel, fn["line"], fn["name"]))
@@ -176,26 +189,25 @@ def main():
         print("[checks] libclang worker 进程崩溃（BrokenProcessPool），本次剩余文件跳过"
               "——多为 BMI 写坏（构建中途 kill）或 libclang 缺陷，编译完成重跑即恢复")
 
-    if only in ("style", "all"):
+    if run_style:
         warnings.extend(text_checks())
         warnings.extend(forbidden_vulkan_checks())
         warnings.extend(modern_cpp_checks())
         warnings.extend(docs_status_checks())
 
-    doc_warnings, doc_checked, doc_unverified, doc_skipped = [], 0, 0, 0
-    if only in ("doc", "all"):
+    doc_warnings: list[Warning] = []
+    doc_checked = doc_unverified = doc_skipped = 0
+    if run_doc:
         # 第一遍：接口单元声明名表（impl 定义处跨查豁免用）
         iface_names = {}
         for rel, m in metrics_by_rel.items():
             if not rel.endswith("_impl.cppm"):
                 iface_names[rel] = interface_declared_names(m)
         for rel in sorted(metrics_by_rel):
-            src = os.path.join(ROOT, rel)
-            try:
-                with open(src, encoding="utf-8", errors="replace") as f:
-                    lines = f.read().splitlines()
-            except OSError:
+            src = read_text(Path(ROOT) / rel)
+            if src is None:
                 continue
+            lines = src.splitlines()
             skip = None
             if rel.endswith("_impl.cppm"):
                 base = rel[: -len("_impl.cppm")] + ".cppm"
@@ -207,33 +219,33 @@ def main():
             doc_unverified += u
             doc_skipped += s
 
-    style_warnings = warnings if only in ("style", "all") else []
-    if only in ("style", "all"):
-        for rel, line, msg in sorted(warnings, key=lambda w: (w[0], w[1])):
-            loc = f"{rel}:{line}" if line else rel
-            print(f"[style-check] {loc}: {msg}")
+    style_warnings = warnings if run_style else []
+    if run_style:
+        for w in sorted(style_warnings, key=lambda x: (x.rel, x.line)):
+            loc = f"{w.rel}:{w.line}" if w.line else w.rel
+            print(f"[style-check] {loc}: {w.msg}")
     for rel, err in errors:
         print(f"[checks] {rel}: 检查失败（跳过）: {err}")
-    if only in ("doc", "all"):
-        for rel, line, msg in sorted(doc_warnings, key=lambda w: (w[0], w[1])):
-            print(f"[doc-check] {rel}:{line}: {msg}")
-    if args.verbose and only in ("style", "all"):
+    if run_doc:
+        for w in sorted(doc_warnings, key=lambda x: (x.rel, x.line)):
+            print(f"[doc-check] {w.rel}:{w.line}: {w.msg}")
+    if args.verbose and run_style:
         print("[style-check] 认知复杂度 top 6:")
         for cog, rel, line, name in sorted(cog_top, reverse=True)[:6]:
             print(f"[style-check]   {cog:3d}  {rel}:{line}  {name}")
-    if only in ("style", "all"):
+    if run_style:
         skipped_note = f"、产物未就绪跳过 {notready}" if notready else ""
         print(f"[style-check] 汇总: {len(style_warnings)} 警告 / {len(units)} 个 .cppm"
               f"（缓存命中 {hits}、解析 {parsed}、失败 {len(errors)}{skipped_note}）")
         if notready:
             print("[style-check] 提示: 跳过 = modmap/BMI 构建产物缺失（clean 后首次构建属正常，"
                   "与编译并行时尚未生成）；本次仅跑纯文本规则，编译完成后重跑即全量生效")
-    if only in ("doc", "all"):
+    if run_doc:
         print(f"[doc-check] 汇总: {len(doc_warnings)} 警告 / {doc_checked} 声明已检查"
               f"（{doc_unverified} 行号未验证、{doc_skipped} 接口已声明跳过），"
               f"{len(units)} 个 .cppm")
-    all_warns = (style_warnings if only in ("style", "all") else []) + \
-                (doc_warnings if only in ("doc", "all") else [])
+    all_warns = (style_warnings if run_style else []) + \
+                (doc_warnings if run_doc else [])
     sys.exit(1 if (args.strict and (all_warns or errors)) else 0)
 
 

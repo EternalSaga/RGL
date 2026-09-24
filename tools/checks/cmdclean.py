@@ -34,7 +34,8 @@ def expand_at(entry):
                 rf = os.path.join(entry["directory"], rf)
             if not os.path.exists(rf):
                 return None
-            raw.extend(shlex.split(open(rf, encoding="utf-8").read().strip()))
+            with open(rf, encoding="utf-8") as f:
+                raw.extend(shlex.split(f.read().strip()))
         else:
             raw.append(a)
     return raw
@@ -45,7 +46,7 @@ def abs_module_files(raw, directory):
     out = []
     for a in raw:
         if a.startswith("-fmodule-file="):
-            v = a[len("-fmodule-file="):]
+            v = a.removeprefix("-fmodule-file=")
             if "=" in v:
                 name, path = v.split("=", 1)
             else:
@@ -66,7 +67,7 @@ def bmi_ready(entry):
         return False
     for a in abs_module_files(raw, entry["directory"]):
         if a.startswith("-fmodule-file="):
-            path = a[len("-fmodule-file="):].split("=", 1)[-1]
+            path = a.removeprefix("-fmodule-file=").split("=", 1)[-1]
             if not os.path.exists(path):
                 return False
     return True
@@ -82,14 +83,15 @@ def dep_paths(entry):
             rf = a[1:] if os.path.isabs(a[1:]) else os.path.join(entry["directory"], a[1:])
             out.append(rf)
             if os.path.exists(rf):
-                raw.extend(shlex.split(open(rf, encoding="utf-8").read().strip()))
+                with open(rf, encoding="utf-8") as f:
+                    raw.extend(shlex.split(f.read().strip()))
             else:
                 raw.append(a)  # 未就绪：保留原 token（下方 -fmodule-file 扫不到即可）
         else:
             raw.append(a)
     for a in abs_module_files(raw, entry["directory"]):
         if a.startswith("-fmodule-file="):
-            out.append(a[len("-fmodule-file="):].split("=", 1)[-1])
+            out.append(a.removeprefix("-fmodule-file=").split("=", 1)[-1])
     return list(dict.fromkeys(out))
 
 

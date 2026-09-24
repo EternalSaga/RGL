@@ -35,6 +35,8 @@ from clangbind import (EKIND_ENUM, EKIND_FIELD, EKIND_FUNCTION, EKIND_FUNCTIONIS
                        code_lines_in_range, cognitive_complexity, index_decls,
                        kind_spelling, tokenize_spellings)
 from cmdclean import clean_cmd
+from config import TOK_COMMENT
+from models import FileMetrics
 
 _RECORD_CURSOR_SPELLINGS = {"ClassDecl", "StructDecl", "UnionDecl", "EnumDecl",
                             "ClassTemplate"}
@@ -43,23 +45,21 @@ _THROW_SPELLING = "ThrowStmt"
 # export 区的 semanticContainer cursor 是 UnexposedDecl（坑 7 同源），非 record ✓
 
 
-def _returns_expected(lib, tu, cur):
+def _returns_expected(lib, tu, cur) -> bool:
     """签名（extent 首个 `{` 之前）是否出现 `expected` token = 返回 std::expected。
 
     tokenize 全 extent 后截到首个 `{`（函数体起点）——覆盖多行签名与
     `auto f() -> std::expected<...>` 尾置返回类型；构造/析构无 expected 返回，恒 False。
     """
-    saw_open = False
     for kind, text in tokenize_spellings(lib, tu, lib.clang_getCursorExtent(cur)):
         if text == "{":
-            saw_open = True
-            break
-        if kind != 4 and text == "expected":  # TOK_COMMENT=4
+            return False
+        if kind != TOK_COMMENT and text == "expected":
             return True
-    return False if saw_open else False
+    return False
 
 
-def _body_throws(lib, cur, _depth=0):
+def _body_throws(lib, cur, _depth: int = 0) -> bool:
     """函数体（含嵌套 lambda）是否含 ThrowStmt 游标。深度护栏防病态 AST。"""
     if _depth > 40:
         return False
@@ -84,7 +84,7 @@ def _file_line(lib, cur, main_file):
     return (fn == main_file, ln.value)
 
 
-def analyze_file(lib, cxindex, entry, full, scratch_dir, resdir):
+def analyze_file(lib, cxindex, entry, full, scratch_dir, resdir) -> FileMetrics:
     """解析一个 .cppm（parse + index 同一 TU）；parse 失败（NULL）抛 RuntimeError。
 
     cxindex = worker 进程共享的 CXIndex。**绝不调 clang_disposeIndex**（本机实测：
@@ -97,7 +97,8 @@ def analyze_file(lib, cxindex, entry, full, scratch_dir, resdir):
     if not tu:
         raise RuntimeError("parse 返回 NULL（BMI 缺失/陈旧或 libclang 模块缺陷）")
     try:
-        src = open(full, encoding="utf-8", errors="replace").read()  # 仅供 total_lines
+        with open(full, encoding="utf-8", errors="replace") as f:
+            src = f.read()  # 仅供 total_lines
         total_lines = len(src.splitlines())
         tu_cur = lib.clang_getTranslationUnitCursor(tu)
         file_lines = code_lines_in_range(

@@ -3,15 +3,15 @@
 各规则的语义与本机实测坑见对应模块 docstring：
 - libclang 绑定与坑 5/7（LLVM 22 结构体布局、Indexer 与 export 可见性）→ clangbind.py
 - 编译命令清理与坑 1/2/3/4b/4c（@response 展开/resource-dir/BMI 预检/竞态稳定）→ cmdclean.py
-- 八类样式规则 + Doxygen 规则判定 → rules.py
+- libclang 指标规则 → rules_metrics.py；纯文本规则 → rules_text.py；Doxygen → rules_doxygen.py
+- Warning/阈值/metrics TypedDict → models.py；路径遍历 → fs.py
 """
 
-import os
-from dataclasses import dataclass
+from pathlib import Path
 
 # 本包目录与仓库根（main.py 从 tools/checks/ 以脚本方式启动，ROOT 上两级）
-HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
+HERE = Path(__file__).resolve().parent
+ROOT = str((HERE / ".." / "..").resolve())
 
 # 检查排除项：生成物目录与 Vulkan 包装层不参与样式规则
 EXCLUDE_SUBDIRS = ("/rgl/generated/",)
@@ -33,15 +33,6 @@ DEFAULT_FILE_THRESHOLD = 500
 DEFAULT_FUNC_THRESHOLD = 120
 DEFAULT_COGNITIVE_THRESHOLD = 15
 DEFAULT_IMPL_THRESHOLD = 100
-
-
-@dataclass
-class Thresholds:
-    """四条数值阈值（CLI 解析后传入 rules 的统一载体）。"""
-    file: int = DEFAULT_FILE_THRESHOLD
-    func: int = DEFAULT_FUNC_THRESHOLD
-    cognitive: int = DEFAULT_COGNITIVE_THRESHOLD
-    impl: int = DEFAULT_IMPL_THRESHOLD
 
 
 # ─── libclang 游标 kind 拼写集合（clang_getCursorKindSpelling 返回串，LLVM 22 实查）──
@@ -123,16 +114,16 @@ STL_HEADERS = {
 }
 STL_GMF_EXCEPTIONS = {"ranges", "filesystem", "chrono"}
 
-# ─── 禁用旧式 Vulkan API（纯文本回归护栏，判定 = rules.forbidden_vulkan_checks）──
+# ─── 禁用旧式 Vulkan API（纯文本回归护栏，判定 = rules_text.forbidden_vulkan_checks）──
 # 项目已全面转向现代 Vulkan：descriptor heap / shader object / dynamic rendering
-# （AGENTS.md）。以下经典 API 不得再引入。名单刻意精确（标识符边界匹配见 rules.py）：
+# （AGENTS.md）。以下经典 API 不得再引入。名单刻意精确（标识符边界匹配见 rules_text.py）：
 # - 绝不匹配裸 DescriptorSet——现代在用的 VkDescriptorSetAndBindingMappingEXT
 #   含子串 DescriptorSet，只匹配下列精确串（VkDescriptorSetLayout 与
 #   VkDescriptorSetAndBindingMappingEXT 不同串，安全）；
 # - 不加 vk::DescriptorSet 单独串（会命中现代 mapping 别名）；
 # - 不加宽泛串（如裸 VkPipeline——会命中 VkPhysicalDevice*Pipeline*Features 等
 #   现代 feature 结构体）。
-# - 以 '*' 结尾的 token = 前缀匹配（无右边界，rules.py 实现）：用于结构体族与
+# - 以 '*' 结尾的 token = 前缀匹配（无右边界，rules_text.py 实现）：用于结构体族与
 #   sync2 变体（vkCmdBindVertexBuffers2 等），**勿给现代机制加前缀串**——
 #   vkCmdBindDescriptorBuffersEXT（descriptor buffer）是 descriptor 的当代用法，
 #   绝不能被 "bindDescriptorBuffers*" 之类误伤。
@@ -173,7 +164,7 @@ VULKAN_HPP_INCLUDE_FILES = {"rgl/rlvk.cppm"}
 # docs/** 状态头：文件前 N 行内须出现状态行（`> **状态**` / 行首 `状态：` 等）
 DOCS_STATUS_MAX_LINES = 10
 
-# 现代 C++ 零违规回归护栏：(正则, 提示)——剥注释后按行匹配（rules.modern_cpp_checks）
+# 现代 C++ 零违规回归护栏：(正则, 提示)——剥注释后按行匹配（rules_text.modern_cpp_checks）
 MODERN_BANNED = [
     (r"\bgoto\b", "禁 goto——用结构化控制流"),
     (r"\bfriend\b", "禁 friend——用成员/访问器表达关系"),
