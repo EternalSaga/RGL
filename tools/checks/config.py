@@ -25,7 +25,9 @@ EXCLUDE_FILES = ("rgl/rlvk.cppm",)
 #         export 包裹的类内方法/字段首次进入 functions/fields（此前游标树
 #         不可见 = 样式规则盲区）；FUNC_SPELLINGS 修正（下）连带构造/析构/
 #         转换函数开始被收录与正确停止嵌套计分。
-CACHE_VERSION = "v6"
+# v6→v7：functions[] 增 returns_expected/throws（throw 折中版 A 消费，
+#         2026-09-24 风格检查两轮扩展，见 docs/风格检查规则.md）。
+CACHE_VERSION = "v7"
 
 DEFAULT_FILE_THRESHOLD = 500
 DEFAULT_FUNC_THRESHOLD = 120
@@ -162,3 +164,36 @@ FORBIDDEN_VULKAN_APIS = [
 ]
 FORBIDDEN_VULKAN_MSG = ("旧式 Vulkan API，已被现代替代（descriptor heap / shader "
                         "object / dynamic rendering / mesh shader；见 AGENTS.md）")
+
+# ─── 风格检查两轮扩展（docs/风格检查规则.md，2026-09-24）──────────────────────
+
+# C++ 头仅 Vulkan 包装层可 include（其余走 import rlvk；vulkan.h/vulkan_core.h 仍允许）
+VULKAN_HPP_INCLUDE_FILES = {"rgl/rlvk.cppm"}
+
+# docs/** 状态头：文件前 N 行内须出现状态行（`> **状态**` / 行首 `状态：` 等）
+DOCS_STATUS_MAX_LINES = 10
+
+# 现代 C++ 零违规回归护栏：(正则, 提示)——剥注释后按行匹配（rules.modern_cpp_checks）
+MODERN_BANNED = [
+    (r"\bgoto\b", "禁 goto——用结构化控制流"),
+    (r"\bfriend\b", "禁 friend——用成员/访问器表达关系"),
+    (r"\bdynamic_cast\b", "禁 dynamic_cast——项目无 RTTI/继承分层风格"),
+    (r"\bconst_cast\b", "禁 const_cast——修正 const 正确性"),
+    (r"\btypeid\s*\(", "禁 typeid——项目无 RTTI"),
+    (r"\btypedef\b", "用 using 别名，不用 typedef"),
+    (r"(?<!VK_)\bNULL\b", "用 nullptr，不用 NULL（VK_NULL_HANDLE 不受限）"),
+    (r"\benum\s+(?!class)\w+", "用 enum class，不用裸 enum"),
+    (r"\bmalloc\s*\(", "禁 malloc——走 RAII / VmaBuffer"),
+    (r"(?<![\w.>])\bfree\s*\(", "禁 free——走 RAII / VmaBuffer"),
+    (r"\bprintf\s*\(|\bputs\s*\(", "走 rllogger，不用 printf/puts"),
+    (r"\bstd::cout\b", "走 rllogger，不用 std::cout"),
+]
+
+# new/delete 表达式豁免（= delete 特殊成员删除不命中；名单 = 分配器/C API 包装）
+NEW_DELETE_EXEMPT = {"rgl/VmaBuffer.cppm"}
+
+# using namespace 豁免（仅入口模块合法；见 AGENTS.md 入口约定）
+USING_NAMESPACE_EXEMPT = {"rgl/main_impl.cppm"}
+
+# export namespace 豁免（rlvk 的 vk re-export 字典；且 rlvk 在 EXCLUDE_FILES）
+EXPORT_NAMESPACE_EXEMPT = {"rgl/rlvk.cppm"}

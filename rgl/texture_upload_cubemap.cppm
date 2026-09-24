@@ -519,7 +519,7 @@ std::expected<void, Error> uploadCubeMapCore(RGL::Resources& resources, RGL::Env
 }  // namespace
 
 /** uploadCubeMap 定义（契约与行为注释见 texture_upload.cppm 接口声明；格式策略 sRGB 优先回落 UNORM）。 */
-export [[nodiscard]] std::expected<void, Error> uploadCubeMap(RGL::Resources& resources, RGL::Environment& env,
+[[nodiscard]] std::expected<void, Error> uploadCubeMap(RGL::Resources& resources, RGL::Environment& env,
 	RGL::DeviceContext& device, std::span<const uint8_t* const, 6> faces, uint32_t size,
 	const char* name) {
 	auto* logger = RLLogger::getInstance();
@@ -543,7 +543,7 @@ export [[nodiscard]] std::expected<void, Error> uploadCubeMap(RGL::Resources& re
  * float 格式不受 sRGB blit VUID-00239 限制，mip 链 LINEAR 降采样（设备缺 FILTER_LINEAR
  * 能力回落 NEAREST + 警告）；面像素每 texel 4 half（R,G,B,A），top-down，Vulkan 层序 0-5。
  */
-export [[nodiscard]] std::expected<void, Error> uploadCubeMap16F(RGL::Resources& resources, RGL::Environment& env,
+[[nodiscard]] std::expected<void, Error> uploadCubeMap16F(RGL::Resources& resources, RGL::Environment& env,
 	RGL::DeviceContext& device, std::span<const uint8_t* const, 6> faces, uint32_t size,
 	const char* name) {
 	auto* logger = RLLogger::getInstance();

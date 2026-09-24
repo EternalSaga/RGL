@@ -12,6 +12,8 @@ config.Thresholds 传入；libclang 指标规则消费 metrics.analyze_file 的�
 - text_checks          （文本）分层零 entt + 点名禁止 import 边 + 模块优先
                        （rgl/ 禁 .h/.hpp/.hh、.cpp 白名单、禁内部头 #include "）
                        + GMF STL 白名单（只许 ranges/filesystem/chrono）
+                       + 模块结构四条（partition export/主接口 import/GMF 外
+                       include/vulkan.hpp 仅 rlvk）—— 见 module_structure_checks
 - forbidden_vulkan_checks
                        （文本）禁用旧式 Vulkan API（经典 descriptor pool/pipeline/
                        render pass/push constants/输入装配——项目已全面 descriptor
@@ -19,6 +21,12 @@ config.Thresholds 传入；libclang 指标规则消费 metrics.analyze_file 的�
                        扫描先剥注释（现有注释
                        提到 vkCmdPushConstants 互斥语义，不剥会误报）；名单与精确
                        匹配护栏见 config.FORBIDDEN_VULKAN_APIS。
+- modern_cpp_checks    （文本）现代 C++ 零违规护栏（goto/friend/RTTI/NULL/enum/
+                       malloc/printf…）+ new/delete 豁免名单 + using/export namespace
+                       豁免—— 见 docs/风格检查规则.md §2
+- docs_status_checks   （文本）docs/**.md 头部状态行（`> **状态**`）—— 见 §1.5
+- rule_expected_throw  （指标）返回 std::expected 的函数体内禁 throw（折中版 A：
+                       双通道防混用；非构造路径请用 expected 传播）—— 见 §2.3
 
 Doxygen 规则（--only doc|all 生效）：
 - rule_doxygen         声明首行正上方须紧邻非空 /** */ 块；decls 来自
@@ -30,9 +38,12 @@ Doxygen 规则（--only doc|all 生效）：
 import os
 import re
 
-from config import (ALLOWED_CPP, EXCLUDE_FILES, FORBIDDEN_EDGES,
-                    FORBIDDEN_VULKAN_APIS, FORBIDDEN_VULKAN_MSG, ROOT,
-                    STL_GMF_EXCEPTIONS, STL_HEADERS, ZERO_ENTT_MODULES)
+from config import (ALLOWED_CPP, DOCS_STATUS_MAX_LINES, EXCLUDE_FILES,
+                    EXPORT_NAMESPACE_EXEMPT, FORBIDDEN_EDGES,
+                    FORBIDDEN_VULKAN_APIS, FORBIDDEN_VULKAN_MSG, MODERN_BANNED,
+                    NEW_DELETE_EXEMPT, ROOT, STL_GMF_EXCEPTIONS, STL_HEADERS,
+                    USING_NAMESPACE_EXEMPT, VULKAN_HPP_INCLUDE_FILES,
+                    ZERO_ENTT_MODULES)
 
 MODULE_LINE_RE = re.compile(r"^\s*(?:export\s+)?module\s*([\w:]+)?\s*;")
 IMPORT_RE = re.compile(r"^\s*import\s+([\w:]+)\s*;")
@@ -105,14 +116,29 @@ def rule_member_naming(rel, fields):
     return warnings
 
 
+def rule_expected_throw(rel, fn):
+    """折中版 A：返回 std::expected 的函数体内禁 throw（双通道防混用）。
+
+    非构造/启动 fail-fast 路径请改用 std::expected 传播错误；构造函数无返回
+    类型不触发本规则。见 docs/风格检查规则.md §2.3。
+    """
+    if fn.get("returns_expected") and fn.get("throws"):
+        return [(rel, fn["line"],
+            f"函数 '{fn['name']}' 返回 std::expected 却在体内 throw——"
+            f"双通道混用；非构造/启动 fail-fast 路径请改用 expected 传播错误")]
+    return []
+
+
 def evaluate_metrics(rel, metrics, thresholds):
-    """单文件全部 libclang 指标规则（顺序：文件行→逐函数[行/认知/瘦身]→成员命名；
-    同 (rel,line) 并列时保持此相对顺序——排序在 main 里按 (rel,line) 稳定排）。"""
+    """单文件全部 libclang 指标规则（顺序：文件行→逐函数[行/认知/瘦身/expected
+    throw]→成员命名；同 (rel,line) 并列时保持此相对顺序——排序在 main 里按
+    (rel,line) 稳定排）。"""
     warnings = rule_file_lines(rel, metrics, thresholds.file)
     for fn in metrics["functions"]:
         warnings += rule_function_lines(rel, fn, thresholds.func)
         warnings += rule_cognitive(rel, fn, thresholds.cognitive)
         warnings += rule_impl_slim(rel, fn, thresholds.impl)
+        warnings += rule_expected_throw(rel, fn)
     warnings += rule_member_naming(rel, metrics["fields"])
     return warnings
 
@@ -122,10 +148,14 @@ def evaluate_metrics(rel, metrics, thresholds):
 def parse_module_file(src):
     """按行状态机解析：GMF = 裸 module; 之后、具名模块声明之前。
 
-    返回 (模块名, {import: 行号}, [(include 路径, 行号, 定界符)])。
+    返回 (模块名, {import: 行号}, gmf_incs=[(include, 行号, 定界符)],
+    post_incs=[(include, 行号, 定界符)], module_line=int|None, is_partition=bool)。
+    post_incs = 具名模块声明之后的 #include（违规盲区，module_structure 消费）；
+    is_partition = `module X:part;`（非 export module 主接口）。
     """
-    name, imps, gmf_incs = None, {}, []
-    in_gmf = False
+    name, imps, gmf_incs, post_incs = None, {}, [], []
+    in_gmf, named, is_partition = False, False, False
+    module_line = None
     for i, ln in enumerate(src.splitlines(), 1):
         m = MODULE_LINE_RE.match(ln)
         if m:
@@ -134,18 +164,23 @@ def parse_module_file(src):
             else:
                 name = m.group(1)
                 in_gmf = False
+                named = True
+                module_line = i
+                # 分区实现 = 裸 `module X:part;`；主接口 = `export module X[...]`
+                is_partition = (":" in name) and not ln.lstrip().startswith("export")
             continue
-        if in_gmf:
-            m = INCLUDE_RE.match(ln)
-            if m:
-                path = m.group(1) if m.group(1) is not None else m.group(2)
-                delim = "<" if m.group(1) is not None else '"'
+        m = INCLUDE_RE.match(ln)
+        if m and (in_gmf or (named and name is not None)):
+            path = m.group(1) if m.group(1) is not None else m.group(2)
+            delim = "<" if m.group(1) is not None else '"'
+            if in_gmf:
                 gmf_incs.append((path, i, delim))
-            continue
+            elif named:
+                post_incs.append((path, i, delim))
         m = IMPORT_RE.match(ln)
         if m and m.group(1) not in imps:
             imps[m.group(1)] = i
-    return name, imps, gmf_incs
+    return name, imps, gmf_incs, post_incs, module_line, is_partition
 
 
 def is_internal_header(rel, inc):
@@ -182,14 +217,15 @@ def rgl_cppm_files():
 # ─── 纯文本：分层零 entt + 禁止 import 边 + 模块优先 + GMF STL 白名单 ────────
 
 def text_checks():
-    """A3 分层依赖 + B1 模块优先 + B2 GMF STL 白名单。返回 [(rel, line, msg)]。"""
+    """A3 分层依赖 + B1 模块优先 + B2 GMF STL 白名单 + 模块结构四条。
+    返回 [(rel, line, msg)]。"""
     warnings = []
     mods = {}
     for rel in rgl_cppm_files():
         src = read_text(os.path.join(ROOT, rel))
         if src is None:
             continue
-        name, imps, gmf_incs = parse_module_file(src)
+        name, imps, gmf_incs, post_incs, module_line, is_partition = parse_module_file(src)
         if name is None:
             continue
         mods[name] = (rel, imps, gmf_incs)
@@ -208,6 +244,9 @@ def text_checks():
                 warnings.append((rel, i,
                     f"GMF #include <{inc}>——STL 走 import rlstd"
                     f"（例外仅 ranges/filesystem/chrono；rlstd 缺名则补入 rlstd.cppm）"))
+        # 模块结构：GMF 外 include + partition 四条（见 docs/风格检查规则.md §1）
+        warnings.extend(_module_structure_checks(
+            rel, name, imps, post_incs, module_line, is_partition, src))
     # A3：底层零 entt + 点名禁止边
     for name, (rel, imps, gmf_incs) in mods.items():
         if name in ZERO_ENTT_MODULES:
@@ -241,6 +280,118 @@ def text_checks():
                 warnings.append((rel, 0,
                     ".cpp 文件——模块优先：仅单头库实现单元（tinygltf_impl/vam_impl）"
                     "允许 .cpp"))
+    return warnings
+
+
+def _module_structure_checks(rel, name, imps, post_incs, module_line, is_partition, src):
+    """模块结构四条（§1.1–1.4）：partition export / 主接口 import / GMF 外 include /
+    vulkan.hpp 仅 rlvk。name 形如 `foo:impl`（partition）或 `foo`（主接口）。"""
+    warnings = []
+    # §1.4 vulkan C++ 头仅 rlvk
+    if rel not in VULKAN_HPP_INCLUDE_FILES:
+        for inc, i, delim in post_incs:
+            if inc in ("vulkan/vulkan.hpp", "vulkan/vulkan_raii.hpp"):
+                warnings.append((rel, i,
+                    f"#include <{inc}>——Vulkan C++ 头一律 import rlvk"
+                    f"（仅 rlvk.cppm 可 include hpp；C 头 vulkan.h 仍允许）"))
+    # §1.3 具名模块声明之后的任何 #include（GMF 外）
+    for inc, i, delim in post_incs:
+        warnings.append((rel, i,
+            f"模块声明后 #include <{inc}>——GMF 外禁 #include；"
+            f"第三方/STL 头放 GMF（裸 module; 之后、具名 module 之前）"))
+    if not is_partition or module_line is None:
+        return warnings
+    # 主接口名 = partition 前缀（name = base:part）
+    base = name.split(":", 1)[0]
+    if base not in imps:
+        warnings.append((rel, module_line,
+            f"partition '{name}' 缺 import {base}——"
+            f"clang 不给 partition impl 隐式 import 主接口，必须显式"))
+    # §1.1 partition 实现单元禁 export 声明（export import/using 放行）
+    lines = src.splitlines()
+    for i, ln in enumerate(lines, 1):
+        if i <= module_line:
+            continue
+        if re.match(r"^export\s+", ln) and not re.match(
+                r"^export\s+(import|using|module)\b", ln):
+            warnings.append((rel, i,
+                f"partition '{name}' 实体内带 export——"
+                f"导出实体在实现单元定义不得带 export（接口已声明，三条坑 #3）"))
+    return warnings
+
+
+# ─── 现代 C++ 零违规回归护栏 + new/delete + using/export namespace ────────────
+
+_MODERN_REGEXES = [(msg, re.compile(rx)) for rx, msg in MODERN_BANNED]
+_NEW_RX = re.compile(r"\bnew\s+[A-Za-z_(]")
+_DELETE_RX = re.compile(r"(?<![=\w])\bdelete\s+(?!default\b)")
+_USING_NS_RX = re.compile(r"^using namespace\s+", re.M)
+_EXPORT_NS_RX = re.compile(r"^export namespace\s+", re.M)
+
+
+def modern_cpp_checks():
+    """§2.1–2.2：剥注释后 token 级现代 C++ 护栏 + new/delete 豁免 + namespace 豁免。
+    返回 [(rel, line, msg)]。"""
+    warnings = []
+    for rel in rgl_cppm_files():
+        if rel in EXCLUDE_FILES:
+            continue
+        src = read_text(os.path.join(ROOT, rel))
+        if src is None:
+            continue
+        clean = strip_comments(src)
+        lines = clean.splitlines()
+        for lineno, line in enumerate(lines, 1):
+            for msg, rx in _MODERN_REGEXES:
+                if rx.search(line):
+                    warnings.append((rel, lineno, f"{msg}"))
+        if rel not in NEW_DELETE_EXEMPT:
+            for lineno, line in enumerate(lines, 1):
+                if _NEW_RX.search(line):
+                    warnings.append((rel, lineno,
+                        "new 表达式——禁裸 new（分配器/C API 包装走豁免名单 "
+                        "NEW_DELETE_EXEMPT；其余用 make_unique/make_shared/RAII）"))
+                if _DELETE_RX.search(line):
+                    warnings.append((rel, lineno,
+                        "delete 表达式——禁裸 delete（= delete 特殊成员删除不命中；"
+                        "分配器 deleter 走 NEW_DELETE_EXEMPT）"))
+        if rel not in USING_NAMESPACE_EXEMPT:
+            for m in _USING_NS_RX.finditer(clean):
+                lineno = clean[:m.start()].count("\n") + 1
+                warnings.append((rel, lineno,
+                    "using namespace——仅入口 main_impl 豁免；模块内用限定名"))
+        if rel not in EXPORT_NAMESPACE_EXEMPT:
+            for m in _EXPORT_NS_RX.finditer(clean):
+                lineno = clean[:m.start()].count("\n") + 1
+                warnings.append((rel, lineno,
+                    "export namespace——仅 rlvk 的 vk re-export 豁免"))
+    return warnings
+
+
+# ─── docs/** 状态头（§1.5）────────────────────────────────────────────────────
+
+_DOCS_STATUS_RX = re.compile(r"^(?:>\s*)?\**状态")
+
+
+def docs_status_checks():
+    """docs/（含 archive/）.md 前 DOCS_STATUS_MAX_LINES 行内须有状态行。
+    接受 `> **状态**：` / `> 状态：` / 行首 `状态：`（含 `**状态（日期）**` 变体）。"""
+    warnings = []
+    base = os.path.join(ROOT, "docs")
+    for dirpath, dirnames, filenames in os.walk(base):
+        for fn in sorted(filenames):
+            if not fn.endswith(".md"):
+                continue
+            rel = os.path.relpath(os.path.join(dirpath, fn), ROOT).replace(os.sep, "/")
+            src = read_text(os.path.join(ROOT, rel))
+            if src is None:
+                continue
+            head = src.splitlines()[:DOCS_STATUS_MAX_LINES]
+            if any(_DOCS_STATUS_RX.match(ln.strip()) for ln in head):
+                continue
+            warnings.append((rel, 1,
+                f"缺状态行——docs 头部前 {DOCS_STATUS_MAX_LINES} 行须有 "
+                f"`> **状态**：现行/历史/调研/…`（见 AGENTS.md 其他文档）"))
     return warnings
 
 

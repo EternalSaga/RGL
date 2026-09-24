@@ -120,7 +120,7 @@ std::expected<void, Error> recordMipZeroAndChain(vk::raii::CommandBuffer& cmd,
 }  // namespace
 
 /** uploadTexture 定义（契约与行为注释见 texture_upload.cppm 接口声明）。 */
-export [[nodiscard]] std::expected<uint32_t, Error> uploadTexture(RGL::Resources& resources,
+[[nodiscard]] std::expected<uint32_t, Error> uploadTexture(RGL::Resources& resources,
 	RGL::SamplerLibrary& samplers, RGL::AssetTable& assets, RGL::DeviceContext& device,
 	const uint8_t* rgba, uint32_t w, uint32_t h, bool linear, const char* name) {
 	auto* logger = RLLogger::getInstance();

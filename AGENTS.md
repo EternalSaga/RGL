@@ -42,7 +42,8 @@ Windows `sdl3[vulkan]`）；同一依赖可出现两次用 `"platform"` 字段�
 CMake 无独立构建目录——必须从根目录构建（`cmake -B build -S .`）。产物: `build/rgl/rgl`（Windows 加 `.exe`）。
 构建内置检查步骤（均只警告不阻断）：`reflection_check`（反射产物 SHA1 护栏，与编译并行）、
 `source_checks`（样式 + Doxygen 单入口，`tools/checks/`，2026-09-23 合并；**依赖 rgl 编译完成后
-才跑**——libclang 读半写 BMI 会崩，勿删该 add_dependencies）。
+才跑**——libclang 读半写 BMI 会崩，勿删该 add_dependencies）。样式侧 2026-09-24 扩展两轮
+（partition 结构 / docs 状态头 / 现代 C++ 护栏 / expected 禁 throw）→ `docs/风格检查规则.md`。
 两者内部机制（缓存、并发、已知坑）→ `docs/技术概念.md §构建检查工具机制`；tools/ 工具链说明 → 同文件 §构建工具。
 
 ## 运行要点
@@ -207,6 +208,7 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
 - `docs/radv_static_dgc_spike.md` — RADV 静态 shader DGC spike（功能通、慢 1.85× → 默认不开；翻盘设计底稿）
 - `docs/vulkan_extensions_2025_调研.md` — 新扩展调研 + §十二/十三 实施记录（活文档）
 - `docs/phase7_devlog.md` — Phase 7 滚动开发日志（完结后归档）
+- `docs/风格检查规则.md` — tools/checks 两轮扩展设计（partition/docs/现代 C++/expected 禁 throw）
 - `docs/archive/` — 归档索引（phase 计划含 **phase6_record.md**、ecs 审查、issue_history 总账、present_timing/教程拆解等已结题调研）
 - 离线 Vulkan 文档（优先在线检索被 Cloudflare 拦截时）：本地克隆 `/home/robin/program/Vulkan-Docs`（v1.4.360）。**注意**：spec 比系统头/loader（v357）新，结构体字段以系统头为准，spec 只作语义依据
 - 最小复现/验证子项目（独立 CMake，结论已吸收进主工程与 archive）：`min_mesh_crash/`（NVIDIA mesh shader 必带 `NO_TASK_SHADER_BIT_EXT` 根因，见其 README）、`heap_texture_spike/`（heap 纹理三驱动 PASS + 步长取 max，见其 README + archive/heap_texture_research.md）

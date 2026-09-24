@@ -5,7 +5,8 @@ Doxygen 声明表共享同一份 AST 与同一份缓存（build/checks_cache，�
 SHA 键；schema = metrics.py 文件头，CACHE_VERSION 随结构演进）：
 
 - 样式八类规则（--only style|all）→ rules.evaluate_metrics + text_checks +
-  forbidden_vulkan_checks（判定与名单见 rules.py / config.py）。
+  forbidden_vulkan_checks + modern_cpp_checks + docs_status_checks（判定与名单
+  见 rules.py / config.py；两轮扩展设计见 docs/风格检查规则.md）。
 - Doxygen 注释规则（--only doc|all）→ rules.rule_doxygen；声明表来自
   libclang Indexer（穿透 export，坑 7；2026-09-23 起替代文本 -ast-dump 双管线，
   行为对账记录见 docs/调试历史.md 同日条目）。impl 单元接口已声明函数的
@@ -42,8 +43,9 @@ from cmdclean import bmi_ready
 from config import (DEFAULT_COGNITIVE_THRESHOLD, DEFAULT_FILE_THRESHOLD,
                     DEFAULT_FUNC_THRESHOLD, DEFAULT_IMPL_THRESHOLD, EXCLUDE_FILES,
                     EXCLUDE_SUBDIRS, ROOT, Thresholds)
-from rules import (evaluate_metrics, forbidden_vulkan_checks,
-                   interface_declared_names, rule_doxygen, text_checks)
+from rules import (docs_status_checks, evaluate_metrics,
+                   forbidden_vulkan_checks, interface_declared_names,
+                   modern_cpp_checks, rule_doxygen, text_checks)
 from worker import _pool_results
 
 
@@ -177,6 +179,8 @@ def main():
     if only in ("style", "all"):
         warnings.extend(text_checks())
         warnings.extend(forbidden_vulkan_checks())
+        warnings.extend(modern_cpp_checks())
+        warnings.extend(docs_status_checks())
 
     doc_warnings, doc_checked, doc_unverified, doc_skipped = [], 0, 0, 0
     if only in ("doc", "all"):

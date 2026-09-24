@@ -2,7 +2,8 @@
 
 缓存 JSON schema（CACHE_VERSION 随结构变化递增）：
     {total_lines, file_code_lines,
-     functions: [{name, line, code_lines, cognitive}],   # 含 lambda 独立条目
+     functions: [{name, line, code_lines, cognitive,
+                  returns_expected, throws}],  # 含 lambda 独立条目；v7 增两字段
      fields:    [{name, line}],
      decls:     [{k: class|enum|function|method, n, l}]}  # doc 规则消费
 代码行 = 去注释与空行，token 级精确（libclang tokenize）。
@@ -32,13 +33,42 @@ import ctypes
 from clangbind import (EKIND_ENUM, EKIND_FIELD, EKIND_FUNCTION, EKIND_FUNCTIONISH,
                        EKIND_RECORD, children_of,
                        code_lines_in_range, cognitive_complexity, index_decls,
-                       kind_spelling)
+                       kind_spelling, tokenize_spellings)
 from cmdclean import clean_cmd
 
 _RECORD_CURSOR_SPELLINGS = {"ClassDecl", "StructDecl", "UnionDecl", "EnumDecl",
                             "ClassTemplate"}
 _LAMBDA_SPELLING = "LambdaExpr"
+_THROW_SPELLING = "ThrowStmt"
 # export 区的 semanticContainer cursor 是 UnexposedDecl（坑 7 同源），非 record ✓
+
+
+def _returns_expected(lib, tu, cur):
+    """签名（extent 首个 `{` 之前）是否出现 `expected` token = 返回 std::expected。
+
+    tokenize 全 extent 后截到首个 `{`（函数体起点）——覆盖多行签名与
+    `auto f() -> std::expected<...>` 尾置返回类型；构造/析构无 expected 返回，恒 False。
+    """
+    saw_open = False
+    for kind, text in tokenize_spellings(lib, tu, lib.clang_getCursorExtent(cur)):
+        if text == "{":
+            saw_open = True
+            break
+        if kind != 4 and text == "expected":  # TOK_COMMENT=4
+            return True
+    return False if saw_open else False
+
+
+def _body_throws(lib, cur, _depth=0):
+    """函数体（含嵌套 lambda）是否含 ThrowStmt 游标。深度护栏防病态 AST。"""
+    if _depth > 40:
+        return False
+    for c in children_of(lib, cur):
+        if kind_spelling(lib, c) == _THROW_SPELLING:
+            return True
+        if _body_throws(lib, c, _depth + 1):
+            return True
+    return False
 
 
 def _file_line(lib, cur, main_file):
@@ -89,6 +119,7 @@ def analyze_file(lib, cxindex, entry, full, scratch_dir, resdir):
             stack = list(children_of(lib, cur))
             while stack:
                 c = stack.pop()
+                # lambda 独立条目：无返回类型契约，两字段按非 expected 记 False
                 if kind_spelling(lib, c) == _LAMBDA_SPELLING:
                     ok, ln = _file_line(lib, c, full)
                     if ok:
@@ -96,7 +127,9 @@ def analyze_file(lib, cxindex, entry, full, scratch_dir, resdir):
                             lib, tu, lib.clang_getCursorExtent(c), full)
                         functions.append({"name": "(anonymous lambda)", "line": ln,
                                           "code_lines": len(lam_lines),
-                                          "cognitive": cognitive_complexity(lib, tu, c)})
+                                          "cognitive": cognitive_complexity(lib, tu, c),
+                                          "returns_expected": False,
+                                          "throws": False})
                 stack.extend(children_of(lib, c))
 
         def cont_chain_depth(cont_id):
@@ -128,11 +161,16 @@ def analyze_file(lib, cxindex, entry, full, scratch_dir, resdir):
                 key = (disp, ln)
                 if key not in seen_fn:
                     seen_fn.add(key)
+                    returns_exp = _returns_expected(lib, tu, cur)
+                    # throw 扫描仅 expected 函数需要（折中版 A）；非 expected 恒 False
+                    throws = _body_throws(lib, cur) if returns_exp else False
                     functions.append({
                         "name": disp, "line": ln,
                         "code_lines": len(code_lines_in_range(
                             lib, tu, lib.clang_getCursorExtent(cur), full)),
-                        "cognitive": cognitive_complexity(lib, tu, cur)})
+                        "cognitive": cognitive_complexity(lib, tu, cur),
+                        "returns_expected": returns_exp,
+                        "throws": throws})
                     record_children(cur)
             if ek == EKIND_FIELD:
                 fields.append({"name": name, "line": ln})

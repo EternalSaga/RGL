@@ -1,6 +1,6 @@
 # 架构债务 · Resources 职责拆分（2026-09-16）
 
-> **状态（2026-09-19）**：已完成。`Resources` 已瘦身为 allocator / depth / two descriptor heaps /
+> **状态**（2026-09-19）：已完成。`Resources` 已瘦身为 allocator / depth / two descriptor heaps /
 > `SlotSegment` 三段分配器；SceneData、RenderTargetCache、Environment、SamplerLibrary、AssetTable
 > 已拆出，allocSlot 区段化完成。`style_check` / `doc_check` 的 libclang crash 另记在
 > `docs/调试历史.md` 2026-09-19 续 10。
