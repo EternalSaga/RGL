@@ -1,6 +1,7 @@
 # 灯 entity 化实施计划（ECS 规范 3）
 
-> **状态**：待评审（设计底稿，未动代码）。
+> **状态**：历史（2026-09-10 已实施完成，BIT-IDENTICAL 全程通过；过程记录见
+> `docs/调试历史.md` 2026-09-10 续 4、`docs/phase7_devlog.md` 灯 entity 化节）。
 > **对应 roadmap**：`next_roadmap.md` Phase 7 剩余计划"**灯 entity 化**（ECS 规范 3）+ forward
 > `LightDataGpu@0` 头并入反射"。
 > **前置**：批次 3 多灯（灯数组 @262272 已入反射管线 4）、批次 5 GPU culling 均已完成——灯 entity 化
