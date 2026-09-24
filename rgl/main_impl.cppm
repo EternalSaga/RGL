@@ -268,7 +268,6 @@ int main() {
 	if (!preOpt)
 		return -1;
 	auto& pre = *preOpt;
-	const bool llmEnabled = pre.llmEnabled;
 
 	try {
 		entt::registry registry;

@@ -23,11 +23,12 @@ exit 0，任何检查失败都不阻断构建**（BrokenProcessPool 同样只警
 → cmdclean.py；LLVM 22 结构体布局/Indexer/export 不可见 → clangbind.py；
 TOK_COMMENT/CACHE_VERSION 等常量 → config.py；Warning/阈值 → models.py。
 
-用法：
+    用法：
     python3 tools/checks/main.py [--build-dir build] [--only style|doc|all]
                                  [--workers N] [--file-threshold N] [--func-threshold N]
-                                 [--cognitive-threshold N] [--impl-threshold N]
-                                 [--max-gap N] [--methods] [--strict] [--verbose]
+                                 [--cognitive-threshold N] [--cognitive-error-threshold N]
+                                 [--impl-threshold N] [--max-gap N] [--methods]
+                                 [--strict] [--verbose]
 （--methods 为兼容旧调用的 no-op：方法检查现已恒开）
 """
 
@@ -46,9 +47,9 @@ if sys.version_info < (3, 14):
 
 from clangbind import find_libclang
 from cmdclean import bmi_ready
-from config import (DEFAULT_COGNITIVE_THRESHOLD, DEFAULT_FILE_THRESHOLD,
-                    DEFAULT_FUNC_THRESHOLD, DEFAULT_IMPL_THRESHOLD, EXCLUDE_FILES,
-                    EXCLUDE_SUBDIRS, ROOT)
+from config import (DEFAULT_COGNITIVE_ERROR_THRESHOLD, DEFAULT_COGNITIVE_THRESHOLD,
+                    DEFAULT_FILE_THRESHOLD, DEFAULT_FUNC_THRESHOLD,
+                    DEFAULT_IMPL_THRESHOLD, EXCLUDE_FILES, EXCLUDE_SUBDIRS, ROOT)
 from fs import read_text
 from rules_doxygen import interface_declared_names, rule_doxygen
 from rules_metrics import evaluate_metrics
@@ -111,6 +112,10 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--cognitive-threshold", type=int,
                     default=DEFAULT_COGNITIVE_THRESHOLD,
                     help=f"函数认知复杂度阈值（默认 {DEFAULT_COGNITIVE_THRESHOLD}）")
+    ap.add_argument("--cognitive-error-threshold", type=int,
+                    default=DEFAULT_COGNITIVE_ERROR_THRESHOLD,
+                    help=f"认知复杂度 error 级阈值（超此值红粗体高亮，"
+                         f"默认 {DEFAULT_COGNITIVE_ERROR_THRESHOLD}；仍不阻断）")
     ap.add_argument("--impl-threshold", type=int, default=DEFAULT_IMPL_THRESHOLD,
                     help=f"接口单元函数体代码行阈值（默认 {DEFAULT_IMPL_THRESHOLD}）")
     ap.add_argument("--max-gap", type=int, default=0,
@@ -131,6 +136,7 @@ def main() -> None:
     run_doc = only in ("doc", "all")
     thresholds = Thresholds(file=args.file_threshold, func=args.func_threshold,
                             cognitive=args.cognitive_threshold,
+                            cognitive_error=args.cognitive_error_threshold,
                             impl=args.impl_threshold)
 
     build = os.path.abspath(args.build_dir) if args.build_dir else os.path.join(ROOT, "build")
@@ -223,7 +229,11 @@ def main() -> None:
     if run_style:
         for w in sorted(style_warnings, key=lambda x: (x.rel, x.line)):
             loc = f"{w.rel}:{w.line}" if w.line else w.rel
-            print(f"[style-check] {loc}: {w.msg}")
+            if w.severity == "error":
+                # 红粗体辣眼高亮（强制 ANSI，ninja 捕获输出也可见；仍不阻断构建）
+                print(f"\033[1;31m[style-check-ERROR] {loc}: {w.msg}\033[0m")
+            else:
+                print(f"[style-check] {loc}: {w.msg}")
     for rel, err in errors:
         print(f"[checks] {rel}: 检查失败（跳过）: {err}")
     if run_doc:
@@ -234,8 +244,10 @@ def main() -> None:
         for cog, rel, line, name in sorted(cog_top, reverse=True)[:6]:
             print(f"[style-check]   {cog:3d}  {rel}:{line}  {name}")
     if run_style:
+        n_err = sum(1 for w in style_warnings if w.severity == "error")
         skipped_note = f"、产物未就绪跳过 {notready}" if notready else ""
-        print(f"[style-check] 汇总: {len(style_warnings)} 警告 / {len(units)} 个 .cppm"
+        err_note = f"（其中 ERROR {n_err}）" if n_err else ""
+        print(f"[style-check] 汇总: {len(style_warnings)} 警告{err_note} / {len(units)} 个 .cppm"
               f"（缓存命中 {hits}、解析 {parsed}、失败 {len(errors)}{skipped_note}）")
         if notready:
             print("[style-check] 提示: 跳过 = modmap/BMI 构建产物缺失（clean 后首次构建属正常，"

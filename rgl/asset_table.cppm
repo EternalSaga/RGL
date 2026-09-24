@@ -137,7 +137,7 @@ export class AssetTable {
 		const uint32_t groupCount = (triangleCount + kTrianglesPerGroup - 1) / kTrianglesPerGroup;
 		meshes.push_back(
 			MeshAsset{AssetKind::Model, std::move(vertexBuffer), heapSlot, triangleCount, groupCount,
-				kInvalidPipelineIndex, vertexOffset});
+				kInvalidPipelineIndex, vertexOffset, std::nullopt, std::nullopt});
 		return static_cast<uint32_t>(meshes.size() - 1);
 	}
 	/** @return 按 id 引用的 mesh 资产记录（无界检查，调用方保证 id 有效）。 */

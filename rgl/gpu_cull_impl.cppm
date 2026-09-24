@@ -32,7 +32,7 @@ GpuCull::GpuCull(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
 	  nEntryStreams(vkEntries.empty() ? 0u : entryStreamCount) {
 	auto& device = vkDevice.getDevice();
 	createCullBuffers(device);
-	createHostRings(device);
+	createHostRings();
 	allocRuntimeSlots();
 	writeHeapDescriptors(device);
 	createCullShaders(device);
@@ -113,7 +113,7 @@ void GpuCull::createCullBuffers(vk::raii::Device& device) {
 	}
 }
 
-void GpuCull::createHostRings(vk::raii::Device& device) {
+void GpuCull::createHostRings() {
 	auto& allocator = resources.getAllocator();
 
 	// 序列 staging ring（×2 host-visible；CPU 每帧写基值 → 拷入 device 序列 buffer）

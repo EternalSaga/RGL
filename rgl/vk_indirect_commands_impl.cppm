@@ -166,7 +166,7 @@ DgcCommands::DgcCommands(RGL::DeviceContext& vkDevice, const RGL::ShaderRegistry
 		throw std::runtime_error("DgcCommands: preprocess vkCreateBuffer failed");
 	// 带 DEVICE_ADDRESS usage 的 buffer，内存须 DEVICE_ADDRESS 分配位（VUID-03339，BDA）
 	const VkMemoryAllocateFlagsInfo allocFlags{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO,
-		nullptr, VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT};
+		nullptr, VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT, 0};
 	const VkMemoryAllocateInfo allocInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, &allocFlags,
 		totalPreprocessSize, memType};
 	if (vkAllocateMemory(device, &allocInfo, nullptr, &preprocessMem) != VK_SUCCESS)
@@ -326,7 +326,7 @@ DgcStaticCommands::DgcStaticCommands(RGL::DeviceContext& vkDevice, const RGL::Sh
 	if (vkCreateBuffer(device, &bufInfo, nullptr, &preprocessBuffer) != VK_SUCCESS)
 		throw std::runtime_error("DgcStaticCommands: preprocess vkCreateBuffer failed");
 	const VkMemoryAllocateFlagsInfo allocFlags{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO,
-		nullptr, VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT};
+		nullptr, VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT, 0};
 	const VkMemoryAllocateInfo allocInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, &allocFlags,
 		totalPreprocessSize, memType};
 	if (vkAllocateMemory(device, &allocInfo, nullptr, &preprocessMem) != VK_SUCCESS)

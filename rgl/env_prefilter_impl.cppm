@@ -206,7 +206,6 @@ std::expected<void, Error> EnvPrefilter::recordPrefilter(vk::raii::CommandBuffer
 		if (!s)
 			return s;
 		// dst：cube 第 level 级（viewType=2DArray，baseMip=level，6 层，storage GENERAL）
-		const uint32_t levelFs = std::max(1u, faceSize >> level);
 		auto d = writeImageDesc(dstChains[level], dstSlots[level], cubeImage, format,
 			vk::ImageViewType::e2DArray, level, 0, 6, vk::DescriptorType::eStorageImage,
 			vk::ImageLayout::eGeneral);

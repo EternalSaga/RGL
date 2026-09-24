@@ -44,38 +44,49 @@ export struct SlangGlobalParam {
 	std::string cppType;
 };
 
-// 持有 slang 全局 session + 编译请求 + 反射（RAII，release 在析构）。
-// 仅 reflection_tool 一个 importer，且它链接 libslang.so——查询函数内联无妨。
-export class SlangContext {
-public:
-	SlangContext() = default;
-	~SlangContext() {
-		if (request)
-			request->release();
-		if (session)
-			session->release();
-	}
-	SlangContext(const SlangContext&) = delete;
-	SlangContext& operator=(const SlangContext&) = delete;
+	// 持有 slang 全局 session + ISession + 编译请求 + 反射（RAII，release 在析构）。
+	// 仅 reflection_tool 一个 importer，且它链接 libslang.so——查询函数内联无妨。
+	// 经 ISession::createCompileRequest（非 deprecated）而非 IGlobalSession 版
+	//（IGlobalSession::createCompileRequest 已标 [[deprecated]]，2026.16）。
+	export class SlangContext {
+	public:
+		SlangContext() = default;
+		~SlangContext() {
+			if (request)
+				request->release();
+			if (session)
+				session->release();
+			if (globalSession)
+				globalSession->release();
+		}
+		SlangContext(const SlangContext&) = delete;
+		SlangContext& operator=(const SlangContext&) = delete;
 
-	// 编译 files（slang 源）+ flags（SLANG_FLAGS 同款）。失败 = false + diag 填诊断文本。
-	// 反射在 compile 后即可用（query* 前须先 compile 成功）。
-	bool compile(const std::vector<std::string>& files, const std::vector<std::string>& flags,
-		std::string& diag)
-	{
-		auto* logger = RLLogger::getInstance();
-		if (session) {
-			logger->error("SlangContext::compile called twice");
-			return false;
-		}
-		if (slang_createGlobalSession(SLANG_API_VERSION, &session) != SLANG_OK) {
-			diag = "slang_createGlobalSession failed";
-			return false;
-		}
-		if (session->createCompileRequest(reinterpret_cast<SlangCompileRequest**>(&request)) != SLANG_OK) {
-			diag = "createCompileRequest failed";
-			return false;
-		}
+		// 编译 files（slang 源）+ flags（SLANG_FLAGS 同款）。失败 = false + diag 填诊断文本。
+		// 反射在 compile 后即可用（query* 前须先 compile 成功）。
+		bool compile(const std::vector<std::string>& files, const std::vector<std::string>& flags,
+			std::string& diag)
+		{
+			auto* logger = RLLogger::getInstance();
+			if (request) {
+				logger->error("SlangContext::compile called twice");
+				return false;
+			}
+			if (slang_createGlobalSession(SLANG_API_VERSION, &globalSession) != SLANG_OK) {
+				diag = "slang_createGlobalSession failed";
+				return false;
+			}
+			// 默认 SessionDesc（structureSize 由默认成员初始化器填）——与 spike 走
+			// IGlobalSession::createCompileRequest 前的隐式默认会话等价
+			slang::SessionDesc sessionDesc{};
+			if (globalSession->createSession(sessionDesc, &session) != SLANG_OK) {
+				diag = "createSession failed";
+				return false;
+			}
+			if (session->createCompileRequest(reinterpret_cast<SlangCompileRequest**>(&request)) != SLANG_OK) {
+				diag = "createCompileRequest failed";
+				return false;
+			}
 		// CLI 参数 = files + flags，喂 processCommandLineArguments（与 slangc CLI 等价）
 		cliArgs.clear();
 		for (const auto& f : files)
@@ -207,10 +218,11 @@ private:
 		}
 	}
 
-	slang::IGlobalSession* session = nullptr;
-	slang::ICompileRequest* request = nullptr;
-	slang::ShaderReflection* reflection = nullptr;
-	mutable std::vector<const char*> cliArgs; // 须活过 processCommandLineArguments 调用
+		slang::IGlobalSession* globalSession = nullptr;
+		slang::ISession* session = nullptr;
+		slang::ICompileRequest* request = nullptr;
+		slang::ShaderReflection* reflection = nullptr;
+		mutable std::vector<const char*> cliArgs; // 须活过 processCommandLineArguments 调用
 };
 
 } // namespace RGL

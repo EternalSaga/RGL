@@ -83,9 +83,10 @@ find_package(glm CONFIG REQUIRED)
 find_package(EnTT CONFIG REQUIRED)
 find_package(Sol2 CONFIG REQUIRED)
 find_package(unofficial-lua CONFIG REQUIRED)
-# tinygltf 是 header-only 且该 vcpkg port 不导出 CMake target：find_path 取头文件目录
+# tinygltf 是 header-only 且该 vcpkg port 不导出 CMake target：find_path 取头文件目录。
+# SYSTEM = -isystem——第三方头内警告不进本项目 -Werror 面。
 find_path(TINYGLTF_INCLUDE_DIRS tiny_gltf.h REQUIRED)
-target_include_directories(rgl PRIVATE ${TINYGLTF_INCLUDE_DIRS})
+target_include_directories(rgl SYSTEM PRIVATE ${TINYGLTF_INCLUDE_DIRS})
 target_link_libraries(rgl PRIVATE Vulkan::Vulkan rllogger glm::glm EnTT::EnTT sol2::sol2 lua rlstd)
 target_compile_definitions(rgl PRIVATE GLM_FORCE_DEPTH_ZERO_TO_ONE GLM_FORCE_RADIANS)
 find_package(SDL3 CONFIG REQUIRED)

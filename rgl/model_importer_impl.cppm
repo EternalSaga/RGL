@@ -45,8 +45,6 @@ struct ChunkPrim { uint32_t chunk; uint32_t offset; };
  * @param model CPU 侧模型（比对源：每 primitive 顶点前 32B）
  * @param chunkBuffers 逐块顶点 buffer（读回源）
  * @param primChunk 逐 primitive (块下标, 块内偏移) 映射
- * @note waitForFences 返回值（nodiscard）在调用点被丢弃——既有 warning，代码层问题
- *   （诊断路径未处理），非注释可修
  */
 static void verifyVertexUpload(RGL::DeviceContext& vkDevice, RGL::Resources& res,
 	const RGL::GltfModel& model, const std::vector<std::shared_ptr<VmaBuffer>>& chunkBuffers,
@@ -91,7 +89,10 @@ static void verifyVertexUpload(RGL::DeviceContext& vkDevice, RGL::Resources& res
 	submitInfo.commandBufferCount = 1;
 	submitInfo.pCommandBuffers = &cb;
 	::vkQueueSubmit(vkDevice.getGraphicsQueue(), 1, &submitInfo, *fence);
-	device.waitForFences(*fence, true, UINT64_MAX);
+	if (device.waitForFences(*fence, true, UINT64_MAX) != vk::Result::eSuccess) {
+		logger->error("vtx canary: waitForFences failed");
+		return;
+	}
 	uint8_t* back = static_cast<uint8_t*>(ad.pMappedData);
 	bool allPass = true;
 	uint32_t failCount = 0;
@@ -195,7 +196,7 @@ static std::expected<void, Error> uploadChunk(RGL::DeviceContext& vkDevice, RGL:
 }
 
 /** ③ 注册 per-primitive 资产记录（所在块的 shared_ptr + 块 slot + 块内偏移），返回 primitive 序 assetIds。 */
-static std::vector<uint32_t> registerPrimAssets(RGL::Resources& res, RGL::AssetTable& assets, const RGL::GltfModel& model,
+static std::vector<uint32_t> registerPrimAssets(RGL::AssetTable& assets, const RGL::GltfModel& model,
 	std::vector<std::shared_ptr<VmaBuffer>>& chunkBuffers, const std::vector<uint32_t>& chunkSlots,
 	const std::vector<ChunkPrim>& primChunk, uint32_t primitiveCount) {
 	std::vector<uint32_t> assetIds;
@@ -237,7 +238,7 @@ static std::vector<uint32_t> registerPrimAssets(RGL::Resources& res, RGL::AssetT
 			return std::unexpected(std::move(chunk).error());
 
 	// ③ 注册 per-primitive 资产记录（所在块的 shared_ptr + 块 slot + 块内偏移）
-	auto assetIds = registerPrimAssets(res, assets, model, chunkBuffers, chunkSlots, primChunk, primitiveCount);
+	auto assetIds = registerPrimAssets(assets, model, chunkBuffers, chunkSlots, primChunk, primitiveCount);
 	if (logger)
 		logger->info("model: {} primitives → {} 块拼接顶点 buffer (每块 ≤{}KB) / {} heap slot",
 			primitiveCount, chunkCount, kVertexChunkBytes / 1024, chunkCount);
@@ -314,7 +315,7 @@ static std::vector<uint32_t> checkMaterialConsistency(RGL::AssetTable& assets,
 // 真引用（E5.3）——材质身份（baseColor/textureId/alphaMode）收敛进资产表，纹理→primitive
 entt::entity registerScene(entt::registry& rg, const RGL::GltfModel& model,
 	std::span<const uint32_t> assetIds, std::span<const uint32_t> primitiveTextureIds,
-	RGL::Resources& resources, RGL::AssetTable& assets, const glm::mat4& rootTransform) {
+	RGL::Resources&, RGL::AssetTable& assets, const glm::mat4& rootTransform) {
 	auto sceneRoot = rg.create();
 	rg.emplace<Relationship>(sceneRoot);  // parent = null（根）；children 不存储（单向，E5.2）
 	// 场景根位姿（Phase 6 批次 5：多模型场景 entity 级 transform）：根 local =

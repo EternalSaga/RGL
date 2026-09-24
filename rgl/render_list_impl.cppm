@@ -26,7 +26,7 @@ namespace RGL {
 /** 实现流水（语义/契约见接口声明）：cull 分桶（opaque/transparent，Pending 暂存）
  * → 可见统计 → 段装配（opaque → skybox 单 draw → transparent 稳定排序）
  * → scene data 填充 → 写 ctx。 */
-void renderListSystem(entt::registry& rg, RGL::Resources& resources,
+void renderListSystem(entt::registry& rg, RGL::Resources&,
 	RGL::Environment& envService, const RGL::AssetTable& assets, RenderListState& state) {
 	auto& list = rg.ctx().get<FrameDrawList>();
 	const auto& viewProj = rg.ctx().get<ViewProjection>();

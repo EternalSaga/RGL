@@ -123,7 +123,7 @@ void uploadEnvironment(Resources& resources, Environment& env, DeviceContext& de
 
 /** C1 管线条目烘焙（per unique 模型；风格派生 + 条目去重 + DIAG 分布日志）。 */
 void bakePipelineEntries(UploadedAssets& uploaded, const SceneConfig& scene, bool deferredMode,
-						 ShaderRegistry& pipelines, Resources& resources, SamplerLibrary& samplers,
+						 ShaderRegistry& pipelines, Resources&, SamplerLibrary& samplers,
 						 AssetTable& assetTable) {
 	const uint32_t samplerSlot = samplers.ensureShared();
 	for (auto& um : uploaded.models) {

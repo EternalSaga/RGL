@@ -49,9 +49,9 @@ export std::vector<const char*> findMissingValidationLayers(
  */
 static VKAPI_ATTR vk::Bool32 VKAPI_CALL
 vulkanDebugCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
-	vk::DebugUtilsMessageTypeFlagsEXT messageType,
+	[[maybe_unused]] vk::DebugUtilsMessageTypeFlagsEXT messageType,
 	const vk::DebugUtilsMessengerCallbackDataEXT* pCallbackData,
-	void* pUserData) {
+	[[maybe_unused]] void* pUserData) {
 	auto* logger = RLLogger::getInstance();
 	if (!logger)
 		return VK_FALSE;

@@ -32,12 +32,17 @@ validate/generate（消费 JSON + schema）`。反射 JSON 只捕获**资源**�
 编译流（与 slangc CLI 等价，`ICompileRequest` 在 `slang-deprecated.h`，仍可用）：
 
 ```cpp
-slang::IGlobalSession* session;  slang_createGlobalSession(SLANG_API_VERSION, &session);
+slang::IGlobalSession* gsession; slang_createGlobalSession(SLANG_API_VERSION, &gsession);
+slang::ISession* session;        SessionDesc{}; gsession->createSession(desc, &session);
 slang::ICompileRequest* req;     session->createCompileRequest((SlangCompileRequest**)&req);
 req->processCommandLineArguments(cli, n);  // 喂 SLANG_FLAGS 同款：-fvk-use-scalar-layout 等
 req->compile();
 slang::ShaderReflection* refl = slang::ShaderReflection::get(req);  // C 式 opaque → C++ helper
 ```
+
+> 2026-09-24：`IGlobalSession::createCompileRequest` 已标 `[[deprecated]]`（-Werror 下炸）；
+> 改走 **`ISession::createCompileRequest`**（非 deprecated，2026.16）——先 `createSession`
+> 再在 session 上建 request，`ICompileRequest` 查询面不变。
 
 查询面（`slang::` namespace）：
 

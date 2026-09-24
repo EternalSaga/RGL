@@ -62,7 +62,7 @@ export struct SceneEntityDesc {
 
 /**
  * 场景配置：加载哪些模型 + 用哪些 pipeline + 是否场景旋转。
- * 沿用 Phase 1 确立的 configs/*.lua 模式（sol2 沙箱 + 字段可选回落默认值）。
+ * 沿用 Phase 1 确立的 configs/ 目录 *.lua 模式（sol2 沙箱 + 字段可选回落默认值）。
  */
 export struct SceneConfig {
 	std::string modelPath;                 // 旧单模型字段（entities 缺省时的兼容合成源，空 = 无模型）

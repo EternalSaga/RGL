@@ -29,8 +29,17 @@ def rule_function_lines(rel: str, fn: FunctionMetrics, threshold: int) -> list[W
     return []
 
 
-def rule_cognitive(rel: str, fn: FunctionMetrics, threshold: int) -> list[Warning]:
-    """函数认知复杂度超阈 → 提示拆函数（降低嵌套/早返回/抽函数）。"""
+def rule_cognitive(rel: str, fn: FunctionMetrics, threshold: int,
+                   error_threshold: int) -> list[Warning]:
+    """函数认知复杂度超阈 → 提示拆函数（降低嵌套/早返回/抽函数）。
+
+    >error_threshold = severity "error"（main 侧红粗体高亮；仍不阻断构建），
+    >threshold = 普通 warning。
+    """
+    if fn["cognitive"] > error_threshold:
+        return [Warning(rel, fn["line"],
+            f"函数 '{fn['name']}' 认知复杂度 {fn['cognitive']} > {error_threshold}"
+            f"——应拆分为更小函数（降低嵌套/早返回/抽函数）", "error")]
     if fn["cognitive"] > threshold:
         return [Warning(rel, fn["line"],
             f"函数 '{fn['name']}' 认知复杂度 {fn['cognitive']} > {threshold}"
@@ -79,7 +88,8 @@ def evaluate_metrics(rel: str, metrics: FileMetrics,
     warnings = rule_file_lines(rel, metrics, thresholds.file)
     for fn in metrics["functions"]:
         warnings += rule_function_lines(rel, fn, thresholds.func)
-        warnings += rule_cognitive(rel, fn, thresholds.cognitive)
+        warnings += rule_cognitive(rel, fn, thresholds.cognitive,
+                                   thresholds.cognitive_error)
         warnings += rule_impl_slim(rel, fn, thresholds.impl)
         warnings += rule_expected_throw(rel, fn)
     warnings += rule_member_naming(rel, metrics["fields"])

@@ -191,12 +191,12 @@ void RLLogger::initialize(const std::string& configPath) {
 }
 
 RLLogger::RLLogger(const std::string& configPath) {
-	const std::filesystem::path logLevelConfigFile = configFilePath;
-	if (!std::filesystem::exists(configFilePath)) {
+	const std::filesystem::path logLevelConfigFile = configPath;
+	if (!std::filesystem::exists(logLevelConfigFile)) {
 		throw std::runtime_error("Log config file not found");
 	}
 
-	std::ifstream configFile(configFilePath);
+	std::ifstream configFile(logLevelConfigFile);
 	auto conf = nlohmann::json::parse(configFile);
 
 	auto log_file_path = conf["log_file"];

@@ -149,9 +149,8 @@ export class GpuCull {
 	void createCullBuffers(vk::raii::Device& device);
 	/**
 	 * 构造期：序列 staging ring×2 + 读回 ring×2（host-visible 常驻映射）。
-	 * @param device 设备层（VMA createBuffer）
 	 */
-	void createHostRings(vk::raii::Device& device);
+	void createHostRings();
 	/**
 	 * 构造期：运行时段 heap 槽分配（cull.table/sequences/count[/streams] +
 	 * SceneDataService::ensure 幂等 scene data 槽）。

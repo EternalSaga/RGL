@@ -95,7 +95,7 @@ export FeatureChain buildRequestedFeatures() {
 
 // 仅校验 required（optional 缺失 = 降级 no-op，不报错）。
 export [[nodiscard]] std::expected<void, Error> validateFeatures(
-    const vk::raii::PhysicalDevice& device, FeatureChain& requested) {
+    const vk::raii::PhysicalDevice& device, FeatureChain&) {
     auto supported = device.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features, vk::PhysicalDeviceVulkan12Features, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceVulkan14Features, vk::PhysicalDeviceMeshShaderFeaturesEXT, vk::PhysicalDeviceDescriptorHeapFeaturesEXT, vk::PhysicalDeviceSwapchainMaintenance1FeaturesKHR, vk::PhysicalDeviceShaderObjectFeaturesEXT, vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR, vk::PhysicalDeviceDescriptorBufferFeaturesEXT, vk::PhysicalDeviceDeviceGeneratedCommandsFeaturesEXT>();
     if (!supported.get<vk::PhysicalDeviceFeatures2>().features.robustBufferAccess) {
         return std::unexpected(Error{ErrorCode::FeatureUnavailable,

@@ -191,7 +191,6 @@ void recordCubeBarriersAndCopies(vk::raii::CommandBuffer& cmd, CubeImages& image
 /** GGX 预滤波 mip 链（16F HDR env，Phase 8 ④b）：mip0 TRANSFER_DST→SHADER_READ_ONLY barrier
  * → ensureEnvPrefilterReady → recordPrefilter（逐级 UNDEFINED→GENERAL→dispatch→SRO，返回后全级
  * 已 SRO、无需 blit 收尾 barrier）；任一失败 = Error（调用方据此不 submit）。
- * @param resources 资源层（env-prefilter heap 基础设施）
  * @param cmd 录制中的命令缓冲
  * @param images cube 目标图
  * @param fmt 格式（GGX 用 format 传 recordPrefilter）
@@ -199,7 +198,7 @@ void recordCubeBarriersAndCopies(vk::raii::CommandBuffer& cmd, CubeImages& image
  * @param mipLevels 全级数
  * @param name 日志名
  * @return env-prefilter 准备 / recordPrefilter 失败 = Error */
-std::expected<void, Error> recordGgxMipChain(RGL::Resources& resources, RGL::Environment& env,
+std::expected<void, Error> recordGgxMipChain(RGL::Environment& env,
 	vk::raii::CommandBuffer& cmd, CubeImages& images, const CubeFormat& fmt, uint32_t size,
 	uint32_t mipLevels, const char* name) {
 	// 16F HDR env（Phase 8 ④b）：mip 链走 heap compute GGX importance-sample 预滤波（替代
@@ -303,7 +302,7 @@ std::expected<void, Error> submitCubeUpload(RGL::DeviceContext& device,
  * @param name 日志名
  * @return submit/fence 失败 = Error
  */
-std::expected<void, Error> recordCubeUpload(RGL::Resources& resources, RGL::Environment& env, RGL::DeviceContext& device,
+std::expected<void, Error> recordCubeUpload(RGL::Environment& env, RGL::DeviceContext& device,
 	CubeImages& images, std::span<const uint8_t* const, 6> faces, uint32_t size,
 	const CubeFormat& fmt, const char* name) {
 	auto& dev = device.getDevice();
@@ -321,7 +320,7 @@ std::expected<void, Error> recordCubeUpload(RGL::Resources& resources, RGL::Envi
 
 	if (fmt.ggxPrefilter) {
 		// GGX 预滤波 mip 链：失败则不 submit（保持原 early-return 语义）
-		if (auto r = recordGgxMipChain(resources, env, cmd, images, fmt, size, mipLevels, name); !r)
+		if (auto r = recordGgxMipChain(env, cmd, images, fmt, size, mipLevels, name); !r)
 			return std::unexpected(std::move(r).error());
 	} else {
 		recordBlitMipChain(cmd, images, size, mipLevels, fmt.mipFilter);
@@ -510,7 +509,7 @@ std::expected<void, Error> uploadCubeMapCore(RGL::Resources& resources, RGL::Env
 	auto images = createCubeImages(resources, size, fmt);
 	if (!images)
 		return std::unexpected(std::move(images).error());
-	if (auto r = recordCubeUpload(resources, env, device, *images, faces, size, fmt, name); !r)
+	if (auto r = recordCubeUpload(env, device, *images, faces, size, fmt, name); !r)
 		return std::unexpected(std::move(r).error());
 	cubeCanary(resources, device, *images, faces, size, fmt, name);
 	return registerCubeEnv(resources, env, device, *images, size, fmt, name);
