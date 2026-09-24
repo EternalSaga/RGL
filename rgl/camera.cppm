@@ -175,17 +175,155 @@ constexpr float kMaxMouseDeltaPerFrame = 100.0f;
 /** 单帧滚轮增量限幅（动机同 kMaxMouseDeltaPerFrame）。 */
 constexpr float kMaxWheelPerFrame = 10.0f;
 
+/** 本帧消费 InputEvents 后的增量累积（delta/wheel 事件求和）。 */
+struct FrameInput {
+	glm::vec2 mouseDelta{0.0f};
+	float wheel = 0.0f;
+};
+
+/** F1 调试快捷键：当前机位打进日志（camera_saved 行，可直接抄回 camera.lua）。 */
+void logCameraPose(const Camera& camera, RLLogger* logger) {
+	if (!logger)
+		return;
+	const glm::vec3 t = camera.mode == CameraMode::Fps
+		? camera.position + cameraForward(camera) *
+			std::max(glm::length(camera.target - camera.position), 0.05f)
+		: camera.target;
+	logger->info("[camera_saved] mode = \"{}\", position = {{ {:.6f}, {:.6f}, {:.6f} }}, target = {{ {:.6f}, {:.6f}, {:.6f} }}, fovDegrees = {:.4f}",
+		camera.mode == CameraMode::Fps ? "fps" : "trackball",
+		camera.position.x, camera.position.y, camera.position.z,
+		t.x, t.y, t.z, glm::degrees(camera.fov));
+}
+
+/** 键事件（KeyDown/KeyUp）→ CameraState level 状态 + F1 打印机位。 */
+void applyKeyEvent(const Camera& camera, CameraState& state, const InputEvent& ev,
+	RLLogger* logger) {
+	const auto& keys = camera.keys;
+	if (ev.type == InputEvent::Type::KeyDown) {
+		if (ev.key == SDLK_F1)
+			logCameraPose(camera, logger);
+		else if (ev.key == keys.forward) state.keyForward = true;
+		else if (ev.key == keys.back) state.keyBack = true;
+		else if (ev.key == keys.left) state.keyLeft = true;
+		else if (ev.key == keys.right) state.keyRight = true;
+		return;
+	}
+	// KeyUp
+	if (ev.key == keys.forward) state.keyForward = false;
+	else if (ev.key == keys.back) state.keyBack = false;
+	else if (ev.key == keys.left) state.keyLeft = false;
+	else if (ev.key == keys.right) state.keyRight = false;
+}
+
+/**
+ * 消费 InputEvents（消费即清空）：键事件按 Camera.keys 映射为 CameraState level
+ * 状态，鼠标按键事件更新左/右键 level，MouseDelta/Wheel 累积为本帧增量；
+ * F1 = 打印机位。
+ */
+FrameInput consumeInputEvents(const Camera& camera, CameraState& state,
+	InputEvents& events, RLLogger* logger) {
+	FrameInput frame;
+	for (const auto& ev : events.events) {
+		switch (ev.type) {
+			case InputEvent::Type::KeyDown:
+			case InputEvent::Type::KeyUp:
+				applyKeyEvent(camera, state, ev, logger);
+				break;
+			case InputEvent::Type::MouseButton:
+				if (ev.button == SDL_BUTTON_LEFT) state.mouseLeftDown = ev.pressed;
+				else if (ev.button == SDL_BUTTON_RIGHT) state.mouseRightDown = ev.pressed;
+				break;
+			case InputEvent::Type::MouseDelta:
+				frame.mouseDelta += ev.delta;
+				break;
+			case InputEvent::Type::Wheel:
+				frame.wheel += ev.amount;
+				break;
+		}
+	}
+	events.events.clear();
+	return frame;
+}
+
+/** Fps 拖拽 look：原地转朝向（拖右→向右看、拖上→向上看）。 */
+void applyFpsDrag(Camera& camera, float dx, float dy) {
+	camera.yaw -= dx * camera.fpsSensitivity;
+	camera.pitch -= dy * camera.fpsSensitivity;
+}
+
+/**
+ * Trackball 拖拽公转：basis 携带（同 legacy TrackballSystem）——offset 与 up 随拖拽
+ * 同步旋转，不反推 yaw/pitch（避开 atan2(0,0) 极点奇异）。up 与视线同旋转保内积，
+ * 恒垂直视线 → 极点不抖、可翻过头顶（roll 连续累积，物理转球手感）。
+ * 手感约定（同 three.js OrbitControls）：拖右→object 正面朝右（相机向左公转）；
+ * 拖下→object 顶部朝向观察者（相机上移）。offset 长度 < 1e-4 时跳过。
+ */
+void applyTrackballDrag(Camera& camera, float dx, float dy) {
+	glm::vec3 offset = camera.position - camera.target;
+	if (glm::length(offset) <= 1e-4f)
+		return;
+	const float s = camera.trackballSensitivity;
+	// 竖直轴 = 屏幕右向量 forward × up（恒 ⊥ 二者，极点非零、无奇异）
+	glm::vec3 forward = glm::normalize(camera.target - camera.position);
+	glm::vec3 right = glm::normalize(glm::cross(forward, camera.up));
+	// 水平：绕世界 Y（offset 与 up 同步旋转）
+	offset = rotateAroundAxis(offset, -dx * s, glm::vec3(0.0f, 1.0f, 0.0f));
+	camera.up = rotateAroundAxis(camera.up, -dx * s, glm::vec3(0.0f, 1.0f, 0.0f));
+	// 竖直：绕屏幕右轴（offset 与 up 同步旋转）
+	offset = rotateAroundAxis(offset, -dy * s, right);
+	camera.up = rotateAroundAxis(camera.up, -dy * s, right);
+	camera.position = camera.target + offset;
+}
+
+/** 拖拽旋转入口：增量限幅（触发时打 debug 日志）后按模式分发（dragging 判定在调用方）。 */
+void applyDrag(Camera& camera, const FrameInput& frame, RLLogger* logger) {
+	const float dx = std::clamp(frame.mouseDelta.x, -kMaxMouseDeltaPerFrame,
+		kMaxMouseDeltaPerFrame);
+	const float dy = std::clamp(frame.mouseDelta.y, -kMaxMouseDeltaPerFrame,
+		kMaxMouseDeltaPerFrame);
+	if (dx == kMaxMouseDeltaPerFrame || dx == -kMaxMouseDeltaPerFrame ||
+		dy == kMaxMouseDeltaPerFrame || dy == -kMaxMouseDeltaPerFrame) {
+		if (logger)
+			logger->debug("camera: clamped huge mouse delta ({}, {}) -> ({}, {})",
+				frame.mouseDelta.x, frame.mouseDelta.y, dx, dy);
+	}
+	if (camera.mode == CameraMode::Fps)
+		applyFpsDrag(camera, dx, dy);
+	else
+		applyTrackballDrag(camera, dx, dy);
+}
+
+/**
+ * 移动：Fps 按 WASD level 状态 × fpsSpeed × dt 平移；Trackball 滚轮相对缩放
+ * （半径 ×(1∓zoom×zoomSpeed)，wheel y 正 = 滚近）。
+ */
+void applyMovement(Camera& camera, const CameraState& state, float wheel, float dt) {
+	if (camera.mode == CameraMode::Fps) {
+		const float fwd = (state.keyForward ? 1.0f : 0.0f) - (state.keyBack ? 1.0f : 0.0f);
+		const float strafe = (state.keyRight ? 1.0f : 0.0f) - (state.keyLeft ? 1.0f : 0.0f);
+		if (fwd != 0.0f || strafe != 0.0f) {
+			camera.position += (cameraForward(camera) * fwd +
+					cameraRight(camera) * strafe) * (camera.fpsSpeed * dt);
+		}
+		return;
+	}
+	if (wheel == 0.0f)
+		return;
+	// 相对缩放（同 three.js OrbitControls：半径 ×(1∓zoom)）——加法式（position +=
+	// forward*zoom*step）在远机位失效（cottage 机位半径 ~3535 vs zoomSpeed 0.03 =
+	// 每格 0.0009%，2026-08-28 用户反馈"滚轮缩放没用了"）；滚近（y 正）半径缩小
+	const float clamped = std::clamp(wheel, -kMaxWheelPerFrame, kMaxWheelPerFrame);
+	camera.position = camera.target +
+		(camera.position - camera.target) * (1.0f - clamped * camera.zoomSpeed);
+}
+
 /**
  * 相机 system（每帧一次，system 链首位：camera→animation→bounds→projection→renderlist）：
- * 1) 消费 InputEvents（消费即清空）：键事件按 Camera.keys 映射为 CameraState level
- *    状态，鼠标按键事件更新左/右键 level，MouseDelta/Wheel 累积为本帧增量；
- * 2) 拖拽旋转（Fps = 右键，Trackball = 左键）：Fps 原地转朝向（拖右→向右看、
- *    拖上→向上看）；Trackball 绕 target 公转（offset 与携带 up 同步旋转，
- *    手感同 three.js OrbitControls；offset 长度 < 1e-4 时跳过）。
- *    单帧鼠标增量 clamp 到 ±kMaxMouseDeltaPerFrame（触发限幅时打 debug 日志）；
+ * 1) 消费 InputEvents（消费即清空）：键/鼠标按键 → CameraState level 状态，
+ *    MouseDelta/Wheel → 本帧增量；
+ * 2) 拖拽旋转（Fps = 右键，Trackball = 左键），增量限幅后按模式分发；
  * 3) pitch 每帧 clamp 到 ±89°（防万向翻转）；
- * 4) 移动：Fps 按 WASD level 状态 × fpsSpeed × dt 平移；Trackball 滚轮相对缩放
- *    （半径 ×(1∓zoom×zoomSpeed)，wheel y 正 = 滚近）。
+ * 4) 移动（WASD 平移 / 滚轮缩放）。
  * @param rg registry（读写 ctx 中的 Camera/CameraState/InputEvents）
  * @param dt 帧间隔（秒，调用方已限幅到 0.1s）
  */
@@ -195,107 +333,16 @@ export void cameraSystem(entt::registry& rg, float dt) {
 	auto& events = rg.ctx().get<InputEvents>();
 	auto* logger = RLLogger::getInstance();
 
-	// 消费即清空：键事件/鼠标按键事件 → level 状态（cameraSystem 自管），
-	// delta/wheel 事件 → 本帧累积
-	glm::vec2 mouseDelta{0.0f};
-	float wheel = 0.0f;
-	const auto& keys = camera.keys;
-	for (const auto& ev : events.events) {
-		switch (ev.type) {
-			case InputEvent::Type::KeyDown:
-				if (ev.key == SDLK_F1) {  // 调试快捷键：当前机位打进日志（camera_saved 行，可直接抄回 camera.lua）
-					const glm::vec3 t = camera.mode == CameraMode::Fps
-						? camera.position + cameraForward(camera) *
-							std::max(glm::length(camera.target - camera.position), 0.05f)
-						: camera.target;
-					if (logger)
-						logger->info("[camera_saved] mode = \"{}\", position = {{ {:.6f}, {:.6f}, {:.6f} }}, target = {{ {:.6f}, {:.6f}, {:.6f} }}, fovDegrees = {:.4f}",
-							camera.mode == CameraMode::Fps ? "fps" : "trackball",
-							camera.position.x, camera.position.y, camera.position.z,
-							t.x, t.y, t.z, glm::degrees(camera.fov));
-				}
-				else if (ev.key == keys.forward) state.keyForward = true;
-				else if (ev.key == keys.back) state.keyBack = true;
-				else if (ev.key == keys.left) state.keyLeft = true;
-				else if (ev.key == keys.right) state.keyRight = true;
-				break;
-			case InputEvent::Type::KeyUp:
-				if (ev.key == keys.forward) state.keyForward = false;
-				else if (ev.key == keys.back) state.keyBack = false;
-				else if (ev.key == keys.left) state.keyLeft = false;
-				else if (ev.key == keys.right) state.keyRight = false;
-				break;
-			case InputEvent::Type::MouseButton:
-				if (ev.button == SDL_BUTTON_LEFT) state.mouseLeftDown = ev.pressed;
-				else if (ev.button == SDL_BUTTON_RIGHT) state.mouseRightDown = ev.pressed;
-				break;
-			case InputEvent::Type::MouseDelta:
-				mouseDelta += ev.delta;
-				break;
-			case InputEvent::Type::Wheel:
-				wheel += ev.amount;
-				break;
-		}
-	}
-	events.events.clear();
+	const FrameInput frame = consumeInputEvents(camera, state, events, logger);
 
-	bool dragging = (camera.mode == CameraMode::Fps && state.mouseRightDown) ||
+	const bool dragging = (camera.mode == CameraMode::Fps && state.mouseRightDown) ||
 		(camera.mode == CameraMode::Trackball && state.mouseLeftDown);
-	if (dragging) {
-		float dx = std::clamp(mouseDelta.x, -kMaxMouseDeltaPerFrame,
-			kMaxMouseDeltaPerFrame);
-		float dy = std::clamp(mouseDelta.y, -kMaxMouseDeltaPerFrame,
-			kMaxMouseDeltaPerFrame);
-		if (dx == kMaxMouseDeltaPerFrame || dx == -kMaxMouseDeltaPerFrame ||
-			dy == kMaxMouseDeltaPerFrame || dy == -kMaxMouseDeltaPerFrame) {
-			if (logger)
-				logger->debug("camera: clamped huge mouse delta ({}, {}) -> ({}, {})",
-					mouseDelta.x, mouseDelta.y, dx, dy);
-		}
-		if (camera.mode == CameraMode::Fps) {
-			// FPS 鼠标 look：拖右→向右看，拖上→向上看（相机原地转朝向）
-			camera.yaw -= dx * camera.fpsSensitivity;
-			camera.pitch -= dy * camera.fpsSensitivity;
-		} else {
-			// Trackball：basis 携带（同 legacy TrackballSystem）——offset 与 up 随拖拽
-			// 同步旋转，不反推 yaw/pitch（避开 atan2(0,0) 极点奇异）。up 与视线同旋转
-			// 保内积，恒垂直视线 → 极点不抖、可翻过头顶（roll 连续累积，物理转球手感）。
-			// 手感约定（同 three.js OrbitControls）：拖右→object 正面朝右（相机向左公转）；
-			// 拖下→object 顶部朝向观察者（相机上移）
-			glm::vec3 offset = camera.position - camera.target;
-			if (glm::length(offset) > 1e-4f) {
-				const float s = camera.trackballSensitivity;
-				// 竖直轴 = 屏幕右向量 forward × up（恒 ⊥ 二者，极点非零、无奇异）
-				glm::vec3 forward = glm::normalize(camera.target - camera.position);
-				glm::vec3 right = glm::normalize(glm::cross(forward, camera.up));
-				// 水平：绕世界 Y（offset 与 up 同步旋转）
-				offset = rotateAroundAxis(offset, -dx * s, glm::vec3(0.0f, 1.0f, 0.0f));
-				camera.up = rotateAroundAxis(camera.up, -dx * s, glm::vec3(0.0f, 1.0f, 0.0f));
-				// 竖直：绕屏幕右轴（offset 与 up 同步旋转）
-				offset = rotateAroundAxis(offset, -dy * s, right);
-				camera.up = rotateAroundAxis(camera.up, -dy * s, right);
-				camera.position = camera.target + offset;
-			}
-		}
-	}
+	if (dragging)
+		applyDrag(camera, frame, logger);
 
 	camera.pitch = std::clamp(camera.pitch, -kPitchLimit, kPitchLimit);
 
-	if (camera.mode == CameraMode::Fps) {
-		float fwd = (state.keyForward ? 1.0f : 0.0f) - (state.keyBack ? 1.0f : 0.0f);
-		float strafe = (state.keyRight ? 1.0f : 0.0f) - (state.keyLeft ? 1.0f : 0.0f);
-		if (fwd != 0.0f || strafe != 0.0f) {
-			camera.position += (cameraForward(camera) * fwd +
-					cameraRight(camera) * strafe) * (camera.fpsSpeed * dt);
-		}
-	} else if (wheel != 0.0f) {
-		// 相对缩放（同 three.js OrbitControls：半径 ×(1∓zoom)）——加法式（position +=
-		// forward*zoom*step）在远机位失效（cottage 机位半径 ~3535 vs zoomSpeed 0.03 =
-		// 每格 0.0009%，2026-08-28 用户反馈"滚轮缩放没用了"）；滚近（y 正）半径缩小
-		const float clamped = std::clamp(wheel, -kMaxWheelPerFrame, kMaxWheelPerFrame);
-		camera.position = camera.target +
-			(camera.position - camera.target) * (1.0f - clamped * camera.zoomSpeed);
-	}
+	applyMovement(camera, state, frame.wheel, dt);
 }
 
 

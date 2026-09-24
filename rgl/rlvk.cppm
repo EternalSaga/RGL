@@ -142,6 +142,7 @@ using vk::PresentModeKHR;
 using vk::PushConstantRange;
 using vk::PushDataInfoEXT;
 using vk::Queue;
+using vk::QueueFamilyProperties;
 using vk::QueueFlagBits;
 using vk::Rect2D;
 using vk::RenderingAttachmentInfo;

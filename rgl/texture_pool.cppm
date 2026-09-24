@@ -209,6 +209,33 @@ static std::expected<uint32_t, Error> uploadImageSlot(RGL::Resources& resources,
 	return *textureResult;
 }
 
+/** 单槽上传：失败 → unexpected；成功 → 写入 out 并返回。 */
+std::expected<void, Error> uploadOneSlot(std::expected<uint32_t, Error>& r, uint32_t& out) {
+	if (!r)
+		return std::unexpected(std::move(r).error());
+	out = *r;
+	return {};
+}
+
+/** 上传完成后打统计日志（带纹理的 primitive 计数）。 */
+void logModelTextureStats(const RGL::AssetTable& assets, const ModelTextureIds& ids,
+	uint32_t whiteId, uint32_t neutralNormalId, size_t n) {
+	auto* logger = RLLogger::getInstance();
+	if (!logger)
+		return;
+	const uint32_t textureCount = assets.textureSize();
+	uint32_t basePrims = 0, normalPrims = 0, ormPrims = 0, emissivePrims = 0;
+	for (size_t i = 0; i < n; ++i) {
+		if (ids.base[i] != whiteId) basePrims++;
+		if (ids.normal[i] != neutralNormalId) normalPrims++;
+		if (ids.orm[i] != whiteId) ormPrims++;
+		if (ids.emissive[i] != whiteId) emissivePrims++;
+	}
+	logger->info("textures: {} 资产（白 + 中性 normal + {} 图片），{}/{} primitive 带 base / "
+		"{} normal / {} orm / {} emissive",
+		textureCount, textureCount - 2, basePrims, n, normalPrims, ormPrims, emissivePrims);
+}
+
 /**
  * 模型纹理上传（批次 1：main.cpp 循环迁入；Phase 8 批次 ③a 扩三元组 base/normal/orm；
  * ③ 再扩 emissive 成四元组）：模型顶点槽分配完（importer）后调用——先取白纹理 + 中性法线
@@ -244,37 +271,20 @@ export [[nodiscard]] std::expected<ModelTextureIds, Error> uploadModelTextures(
 		//（UNORM 上传，sRGB 解码会污染数值——批次 ③a G-buffer 实证）
 		auto r = uploadImageSlot(resources, samplers, assets, device, model, prim.baseColorTextureIndex,
 			false, baseCache, whiteId, i);
-		if (!r) return std::unexpected(std::move(r).error());
-		ids.base[i] = *r;
+		if (auto e = uploadOneSlot(r, ids.base[i]); !e) return std::unexpected(std::move(e).error());
 		r = uploadImageSlot(resources, samplers, assets, device, model, prim.normalTextureIndex,
 			true, normalCache, neutralNormalId, i);
-		if (!r) return std::unexpected(std::move(r).error());
-		ids.normal[i] = *r;
+		if (auto e = uploadOneSlot(r, ids.normal[i]); !e) return std::unexpected(std::move(e).error());
 		r = uploadImageSlot(resources, samplers, assets, device, model, prim.metallicRoughnessTextureIndex,
 			true, ormCache, whiteId, i);
-		if (!r) return std::unexpected(std::move(r).error());
-		ids.orm[i] = *r;
+		if (auto e = uploadOneSlot(r, ids.orm[i]); !e) return std::unexpected(std::move(e).error());
 		// Phase 8 ③：emissive 是颜色 → sRGB 路（linear=false，同 baseColor），回落白纹理
 		//（白×emissiveFactor，factor=0 时该项恒黑 = 不发光正确）
 		r = uploadImageSlot(resources, samplers, assets, device, model, prim.emissiveTextureIndex,
 			false, emissiveCache, whiteId, i);
-		if (!r) return std::unexpected(std::move(r).error());
-		ids.emissive[i] = *r;
+		if (auto e = uploadOneSlot(r, ids.emissive[i]); !e) return std::unexpected(std::move(e).error());
 	}
-	auto* logger = RLLogger::getInstance();
-	if (logger) {
-		const uint32_t textureCount = assets.textureSize();
-		uint32_t basePrims = 0, normalPrims = 0, ormPrims = 0, emissivePrims = 0;
-		for (size_t i = 0; i < n; ++i) {
-			if (ids.base[i] != whiteId) basePrims++;
-			if (ids.normal[i] != neutralNormalId) normalPrims++;
-			if (ids.orm[i] != whiteId) ormPrims++;
-			if (ids.emissive[i] != whiteId) emissivePrims++;
-		}
-		logger->info("textures: {} 资产（白 + 中性 normal + {} 图片），{}/{} primitive 带 base / "
-			"{} normal / {} orm / {} emissive",
-			textureCount, textureCount - 2, basePrims, n, normalPrims, ormPrims, emissivePrims);
-	}
+	logModelTextureStats(assets, ids, whiteId, neutralNormalId, n);
 	return ids;
 }
 

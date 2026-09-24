@@ -113,6 +113,65 @@ setupDebugMessenger(vk::raii::Instance& instance) {
 	return vk::raii::DebugUtilsMessengerEXT(instance, createInfo);
 }
 
+/** 单设备打分（core 数 ×1000 + 设备本地 GiB ×10 + 类型分）；score = 0 = 不参与。 */
+uint64_t scorePhysicalDevice(const vk::raii::PhysicalDevice& device, uint32_t& coreCount,
+	std::string& deviceName, uint64_t& vramBytes) {
+	vk::PhysicalDeviceProperties properties = device.getProperties();
+	deviceName = properties.deviceName.data();
+	std::string deviceNameLower = deviceName;
+	std::ranges::transform(deviceNameLower, deviceNameLower.begin(),
+		[](unsigned char c) { return std::tolower(c); });
+
+	coreCount = 0;
+	if (deviceNameLower.find("amd") != std::string::npos) {
+		auto props2 = device.getProperties2<
+			vk::PhysicalDeviceProperties2,
+			vk::PhysicalDeviceSubgroupSizeControlProperties,
+			vk::PhysicalDeviceShaderCorePropertiesAMD>();
+		auto& amdShaderProps = props2.get<vk::PhysicalDeviceShaderCorePropertiesAMD>();
+		if (amdShaderProps.shaderEngineCount > 0) {
+			coreCount = amdShaderProps.shaderEngineCount *
+						amdShaderProps.shaderArraysPerEngineCount *
+						amdShaderProps.computeUnitsPerShaderArray;
+		}
+	}
+	if (coreCount == 0)
+		coreCount = properties.limits.maxComputeWorkGroupInvocations;
+
+	uint64_t score = static_cast<uint64_t>(coreCount) * 1000;
+
+	auto memProps = device.getMemoryProperties();
+	vramBytes = 0;
+	for (uint32_t i = 0; i < memProps.memoryHeapCount; ++i) {
+		if (memProps.memoryHeaps[i].flags & vk::MemoryHeapFlagBits::eDeviceLocal)
+			vramBytes += memProps.memoryHeaps[i].size;
+	}
+	score += (vramBytes / (1024 * 1024 * 1024)) * 10;
+
+	if (properties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu)
+		score += 500;
+	else if (properties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu)
+		score += 200;
+	return score;
+}
+
+/** 单设备候选入表（score > 0）+ debug 日志。 */
+void addDeviceCandidate(const vk::raii::PhysicalDevice& device, uint64_t score,
+	uint32_t coreCount, uint64_t vramBytes, std::string deviceName,
+	std::map<uint64_t, const vk::raii::PhysicalDevice*>& deviceCandidates,
+	std::map<const vk::raii::PhysicalDevice*, std::string>& deviceNames, RLLogger* logger) {
+	if (score == 0)
+		return;
+	deviceCandidates.insert({score, &device});
+	deviceNames.insert({&device, deviceName});
+	if (logger) {
+		const auto props = device.getProperties();
+		logger->debug("GPU candidate: {} (type={}, cores={}, vram={}GiB, score={})",
+			deviceName, vk::to_string(props.deviceType),
+			coreCount, vramBytes / (1024 * 1024 * 1024), score);
+	}
+}
+
 /**
  * GPU 选择（打分制，取最高分）：score = 核心数 × 1000（AMD 经
  * ShaderCorePropertiesAMD 精确计算，其余设备回落 maxComputeWorkGroupInvocations）
@@ -134,59 +193,12 @@ pickPhysicalDevice(const vk::raii::PhysicalDevices& physicalDevices) {
 	std::map<const vk::raii::PhysicalDevice*, std::string> deviceNames;
 
 	for (const auto& device : physicalDevices) {
-		uint64_t score = 0;
-
-		vk::PhysicalDeviceProperties properties = device.getProperties();
-		std::string deviceName(properties.deviceName.data());
-		std::string deviceNameLower = deviceName;
-		std::ranges::transform(deviceNameLower, deviceNameLower.begin(),
-			[](unsigned char c) { return std::tolower(c); });
-
 		uint32_t coreCount = 0;
-
-		if (deviceNameLower.find("amd") != std::string::npos) {
-			auto props2 = device.getProperties2<
-				vk::PhysicalDeviceProperties2,
-				vk::PhysicalDeviceSubgroupSizeControlProperties,
-				vk::PhysicalDeviceShaderCorePropertiesAMD>();
-			auto& amdShaderProps = props2.get<vk::PhysicalDeviceShaderCorePropertiesAMD>();
-			if (amdShaderProps.shaderEngineCount > 0) {
-				coreCount = amdShaderProps.shaderEngineCount *
-							amdShaderProps.shaderArraysPerEngineCount *
-							amdShaderProps.computeUnitsPerShaderArray;
-			}
-		}
-
-		if (coreCount == 0) {
-			coreCount = properties.limits.maxComputeWorkGroupInvocations;
-		}
-
-		score += coreCount * 1000;
-
-		auto memProps = device.getMemoryProperties();
+		std::string deviceName;
 		uint64_t vramBytes = 0;
-		for (uint32_t i = 0; i < memProps.memoryHeapCount; ++i) {
-			if (memProps.memoryHeaps[i].flags & vk::MemoryHeapFlagBits::eDeviceLocal) {
-				vramBytes += memProps.memoryHeaps[i].size;
-			}
-		}
-
-		score += (vramBytes / (1024 * 1024 * 1024)) * 10;
-
-		if (properties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu) {
-			score += 500;
-		} else if (properties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu) {
-			score += 200;
-		}
-
-		if (score > 0) {
-			deviceCandidates.insert({score, &device});
-			deviceNames.insert({&device, deviceName});
-			if (logger)
-				logger->debug("GPU candidate: {} (type={}, cores={}, vram={}GiB, score={})",
-					deviceName, vk::to_string(properties.deviceType),
-					coreCount, vramBytes / (1024 * 1024 * 1024), score);
-		}
+		const uint64_t score = scorePhysicalDevice(device, coreCount, deviceName, vramBytes);
+		addDeviceCandidate(device, score, coreCount, vramBytes, std::move(deviceName),
+			deviceCandidates, deviceNames, logger);
 	}
 
 	if (deviceCandidates.empty() || deviceCandidates.rbegin()->first == 0) {

@@ -76,6 +76,13 @@ export class DgcCommands {
 		VkDeviceAddress sequenceCountAddress, uint32_t frameSlot) const;
 
    private:
+	/** ① 创建 3-token layout（EXECUTION_SET + PUSH_DATA + DRAW_MESH_TASKS）。 */
+	void createLayout();
+	/** ② 创建 execution set（SHADER_OBJECTS）并写入全 2N 槽初始 shader 对。 */
+	void createExecutionSet(const RGL::ShaderRegistry& registry, uint32_t capacity);
+	/** ③ 按 memReq 严格匹配 memoryType 分配 preprocess buffer（×framesInFlight 槽）。 */
+	void createPreprocessBuffer(const RGL::DeviceContext& vkDevice, uint32_t framesInFlight);
+
 	// DGC 入口点运行时解析（loader 不导出设备级扩展全局符号——texture_upload
 	// writeResourceDescriptorsEXT 同款先例：vkGetDeviceProcAddr；构造期一次性；
 	// 7 入口点 = 隐式 preprocess 路所需，不含 vkCmdPreprocessGeneratedCommandsEXT）

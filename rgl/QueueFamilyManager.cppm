@@ -58,80 +58,11 @@ export class QueueFamilyManager {
 	QueueFamilyManager(const vk::raii::PhysicalDevice& physicalDevice)
 		: physicalDevice(physicalDevice) {
 		auto queueFamilies = physicalDevice.getQueueFamilyProperties();
-		std::map<QueueFamilyRole, uint32_t> roleToFamilies;
 		logger = RLLogger::getInstance();
 
-		for (uint32_t i = 0; i < queueFamilies.size(); ++i) {
-			const auto& props = queueFamilies[i];
-
-			if (!roleToFamilies.contains(QueueFamilyRole::Graphics) &&
-				(props.queueFlags & vk::QueueFlagBits::eGraphics)) {
-				roleToFamilies[QueueFamilyRole::Graphics] = i;
-			}
-			if (!roleToFamilies.contains(QueueFamilyRole::Compute) &&
-				(props.queueFlags & vk::QueueFlagBits::eCompute)) {
-				roleToFamilies[QueueFamilyRole::Compute] = i;
-			}
-			// Prefer dedicated transfer queue
-			if (!roleToFamilies.contains(QueueFamilyRole::Transfer) &&
-				(props.queueFlags & vk::QueueFlagBits::eTransfer) &&
-				!(props.queueFlags & vk::QueueFlagBits::eGraphics) &&
-				!(props.queueFlags & vk::QueueFlagBits::eCompute)) {
-				roleToFamilies[QueueFamilyRole::Transfer] = i;
-			}
-		}
-
-		// Fallback: reuse existing family if dedicated not available
-		if (!roleToFamilies.contains(QueueFamilyRole::Transfer)) {
-			for (uint32_t i = 0; i < queueFamilies.size(); ++i) {
-				if (queueFamilies[i].queueFlags & vk::QueueFlagBits::eTransfer) {
-					roleToFamilies[QueueFamilyRole::Transfer] = i;
-					break;
-				}
-			}
-			if (!roleToFamilies.contains(QueueFamilyRole::Transfer)) {
-				roleToFamilies[QueueFamilyRole::Transfer] = roleToFamilies[QueueFamilyRole::Graphics];
-			}
-		}
-		if (!roleToFamilies.contains(QueueFamilyRole::Compute)) {
-			roleToFamilies[QueueFamilyRole::Compute] = roleToFamilies[QueueFamilyRole::Graphics];
-		}
-
-		// Allocate physical queue indices within hardware queueCount limits
-		std::map<uint32_t, uint32_t> familyAllocatedCount;
-		std::array<QueueFamilyRole, 3> roleOrder = {
-			QueueFamilyRole::Graphics, QueueFamilyRole::Compute, QueueFamilyRole::Transfer};
-
-		for (QueueFamilyRole role : roleOrder) {
-			uint32_t familyIdx = roleToFamilies[role];
-			uint32_t maxAvailable = queueFamilies[familyIdx].queueCount;
-			uint32_t currentAllocated = familyAllocatedCount[familyIdx];
-
-			if (currentAllocated < maxAvailable) {
-				allocations[role] = {familyIdx, currentAllocated};
-				familyAllocatedCount[familyIdx]++;
-			} else {
-				allocations[role] = {familyIdx, maxAvailable - 1};
-			}
-		}
-
-		// Build vk::DeviceQueueCreateInfo with dynamic priority arrays
-		// priorities must outlive vkCreateDevice, so stored as class member
-		priorities.clear();
-		queueCreateInfos.clear();
-
-		for (const auto& [familyIdx, count] : familyAllocatedCount) {
-			size_t startIdx = priorities.size();
-			for (uint32_t i = 0; i < count; ++i) {
-				priorities.push_back(1.0f);
-			}
-
-			queueCreateInfos.emplace_back(
-				vk::DeviceQueueCreateFlags{},
-				familyIdx,
-				count,
-				&priorities[startIdx]);
-		}
+		const auto roleToFamilies = selectRoleFamilies(queueFamilies);
+		const auto familyAllocatedCount = allocateQueues(roleToFamilies, queueFamilies);
+		buildQueueCreateInfos(familyAllocatedCount);
 	}
 
 	/** vkCreateDevice 用的 queue create info 列表（priorities 由本对象持有）。 */
@@ -185,6 +116,83 @@ export class QueueFamilyManager {
 	}
 
    private:
+	/** 首轮选择：Graphics/Compute 取首个带 flag 的 family；Transfer 优先专用（仅 eTransfer）。 */
+	static std::map<QueueFamilyRole, uint32_t> selectRoleFamilies(
+		const std::vector<vk::QueueFamilyProperties>& queueFamilies) {
+		std::map<QueueFamilyRole, uint32_t> roleToFamilies;
+		for (uint32_t i = 0; i < queueFamilies.size(); ++i) {
+			const auto& props = queueFamilies[i];
+			if (!roleToFamilies.contains(QueueFamilyRole::Graphics) &&
+				(props.queueFlags & vk::QueueFlagBits::eGraphics))
+				roleToFamilies[QueueFamilyRole::Graphics] = i;
+			if (!roleToFamilies.contains(QueueFamilyRole::Compute) &&
+				(props.queueFlags & vk::QueueFlagBits::eCompute))
+				roleToFamilies[QueueFamilyRole::Compute] = i;
+			// Prefer dedicated transfer queue
+			if (!roleToFamilies.contains(QueueFamilyRole::Transfer) &&
+				(props.queueFlags & vk::QueueFlagBits::eTransfer) &&
+				!(props.queueFlags & vk::QueueFlagBits::eGraphics) &&
+				!(props.queueFlags & vk::QueueFlagBits::eCompute))
+				roleToFamilies[QueueFamilyRole::Transfer] = i;
+		}
+		applyRoleFallbacks(roleToFamilies, queueFamilies);
+		return roleToFamilies;
+	}
+
+	/** Transfer 无专用 → 任意 eTransfer → graphics；Compute 无匹配 → graphics。 */
+	static void applyRoleFallbacks(std::map<QueueFamilyRole, uint32_t>& roleToFamilies,
+		const std::vector<vk::QueueFamilyProperties>& queueFamilies) {
+		if (!roleToFamilies.contains(QueueFamilyRole::Transfer)) {
+			for (uint32_t i = 0; i < queueFamilies.size(); ++i) {
+				if (queueFamilies[i].queueFlags & vk::QueueFlagBits::eTransfer) {
+					roleToFamilies[QueueFamilyRole::Transfer] = i;
+					break;
+				}
+			}
+			if (!roleToFamilies.contains(QueueFamilyRole::Transfer))
+				roleToFamilies[QueueFamilyRole::Transfer] = roleToFamilies[QueueFamilyRole::Graphics];
+		}
+		if (!roleToFamilies.contains(QueueFamilyRole::Compute))
+			roleToFamilies[QueueFamilyRole::Compute] = roleToFamilies[QueueFamilyRole::Graphics];
+	}
+
+	/** 同一 family 被多角色共享时在 hardware queueCount 内分配不同队列下标。 */
+	[[nodiscard]] std::map<uint32_t, uint32_t> allocateQueues(
+		const std::map<QueueFamilyRole, uint32_t>& roleToFamilies,
+		const std::vector<vk::QueueFamilyProperties>& queueFamilies) {
+		std::map<uint32_t, uint32_t> familyAllocatedCount;
+		constexpr std::array<QueueFamilyRole, 3> roleOrder = {
+			QueueFamilyRole::Graphics, QueueFamilyRole::Compute, QueueFamilyRole::Transfer};
+		for (QueueFamilyRole role : roleOrder) {
+			const uint32_t familyIdx = roleToFamilies.at(role);
+			const uint32_t maxAvailable = queueFamilies[familyIdx].queueCount;
+			const uint32_t currentAllocated = familyAllocatedCount[familyIdx];
+			if (currentAllocated < maxAvailable) {
+				allocations[role] = {familyIdx, currentAllocated};
+				familyAllocatedCount[familyIdx]++;
+			} else {
+				allocations[role] = {familyIdx, maxAvailable - 1};
+			}
+		}
+		return familyAllocatedCount;
+	}
+
+	/** Build vk::DeviceQueueCreateInfo（priorities must outlive vkCreateDevice → 类成员）。 */
+	void buildQueueCreateInfos(const std::map<uint32_t, uint32_t>& familyAllocatedCount) {
+		priorities.clear();
+		queueCreateInfos.clear();
+		for (const auto& [familyIdx, count] : familyAllocatedCount) {
+			const size_t startIdx = priorities.size();
+			for (uint32_t i = 0; i < count; ++i)
+				priorities.push_back(1.0f);
+			queueCreateInfos.emplace_back(
+				vk::DeviceQueueCreateFlags{},
+				familyIdx,
+				count,
+				&priorities[startIdx]);
+		}
+	}
+
 	std::vector<vk::DeviceQueueCreateInfo> queueCreateInfos;
 	std::vector<float> priorities;
 	std::map<QueueFamilyRole, QueueAllocation> allocations;
