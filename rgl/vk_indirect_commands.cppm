@@ -90,7 +90,7 @@ export class DgcCommands {
 	VkDevice device = VK_NULL_HANDLE;  // 原始句柄（dtor 销毁 layout/execution set/buffer）
 	VkIndirectCommandsLayoutEXT layout = VK_NULL_HANDLE;
 	VkIndirectExecutionSetEXT executionSet = VK_NULL_HANDLE;
-	std::array<VkShaderEXT, 2> initialShaders_{};  // execution set 初始态（slot0=frag slot1=mesh）
+	std::array<VkShaderEXT, 2> initialShaders{};  // execution set 初始态（slot0=frag slot1=mesh）
 	VkBuffer preprocessBuffer = VK_NULL_HANDLE;  // preprocess 工作缓冲（driver 读写，地址进 info）
 	VkDeviceMemory preprocessMem = VK_NULL_HANDLE;
 	VkDeviceAddress preprocessAddress = 0;

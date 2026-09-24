@@ -34,6 +34,30 @@ namespace RGL {
 
 
 /**
+ * DIAG texture_force_* 近邻强制上采（loadEmbedded 抽出）：任一边 < target 时放大到
+ * target×target（nearest；forceWhite 时全白填充，否则逐目标像素取源最近邻）。
+ * @param rgba 源像素（w×h×4B，已解码）
+ * @param w 源宽
+ * @param h 源高
+ * @param target 目标边长（>0）
+ * @param forceWhite true = 输出全白（跳过采样）
+ * @return target×target×4B 像素缓冲
+ */
+static std::vector<uint8_t> forceUpsampleNearest(const uint8_t* rgba, uint32_t w, uint32_t h,
+	uint32_t target, bool forceWhite) {
+	std::vector<uint8_t> up(static_cast<size_t>(target) * target * 4,
+		forceWhite ? 255 : 0);
+	if (forceWhite)
+		return up;
+	for (uint32_t y = 0; y < target; ++y)
+		for (uint32_t x = 0; x < target; ++x) {
+			const uint8_t* s = rgba + (static_cast<size_t>(y * h / target) * w + x * w / target) * 4;
+			std::copy_n(s, 4, up.data() + static_cast<size_t>(y) * target * 4 + x * 4);
+		}
+	return up;
+}
+
+/**
  * glb 内嵌图（buffer view byte span）→ 纹理资产 id；解码强制 RGBA8 4 通道（image_codec，
  * 替代旧 stb_image）。
  * DIAG（configs/diagnostics.lua texture_force_*）：texture_force_size=N 近邻缩放强制
@@ -64,14 +88,7 @@ export [[nodiscard]] std::expected<uint32_t, Error> loadEmbedded(RGL::Resources&
 	const uint32_t target = diagnostics().textureForceSize;
 	const bool forceWhite = diagnostics().textureForceWhite;
 	if (target > 0 && (w < target || h < target)) {
-		std::vector<uint8_t> up(static_cast<size_t>(target) * target * 4,
-			forceWhite ? 255 : 0);
-		for (uint32_t y = 0; y < target; ++y)
-			for (uint32_t x = 0; x < target; ++x) {
-				if (forceWhite) continue;
-				const uint8_t* s = rgba + (static_cast<size_t>(y * h / target) * w + x * w / target) * 4;
-				std::copy_n(s, 4, up.data() + static_cast<size_t>(y) * target * 4 + x * 4);
-			}
+		auto up = forceUpsampleNearest(rgba, w, h, target, forceWhite);
 		return uploadTexture(resources, samplers, assets, device, up.data(), target, target, linear, name);
 	}
 	if (forceWhite) {

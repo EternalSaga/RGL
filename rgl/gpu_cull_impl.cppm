@@ -31,6 +31,21 @@ GpuCull::GpuCull(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
 	  // 静态 DGC 流：候选表空则流无意义（钳 0 = 与未启用同构）
 	  nEntryStreams(vkEntries.empty() ? 0u : entryStreamCount) {
 	auto& device = vkDevice.getDevice();
+	createCullBuffers(device);
+	createHostRings(device);
+	allocRuntimeSlots();
+	writeHeapDescriptors(device);
+	createCullShaders(device);
+	visibleFlags.assign(nCandidates, false);
+
+	if (auto logger = RLLogger::getInstance())
+		logger->info("gpu cull: {} candidates ({} sequences × {}B) — table slots {}/{}/{}{}",
+			nCandidates, nCandidates, kCullSequenceStride, tableSlot, sequenceSlot, countSlot,
+			nEntryStreams > 0 ? fmt::format(" + streams {}×{}B @slot {}", nEntryStreams,
+				static_cast<uint64_t>(nCandidates) * kCullSequenceStride, streamsSlot) : std::string());
+}
+
+void GpuCull::createCullBuffers(vk::raii::Device& device) {
 	auto& allocator = resources.getAllocator();
 
 	// 静态表 buffer（host-visible + BDA + eStorageBuffer；启动期 memcpy 一次，
@@ -96,6 +111,10 @@ GpuCull::GpuCull(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
 			throw std::runtime_error(streamResult.error().describe());
 		streamsBuffer = std::move(*streamResult);
 	}
+}
+
+void GpuCull::createHostRings(vk::raii::Device& device) {
+	auto& allocator = resources.getAllocator();
 
 	// 序列 staging ring（×2 host-visible；CPU 每帧写基值 → 拷入 device 序列 buffer）
 	for (uint32_t s = 0; s < 2; ++s) {
@@ -130,7 +149,9 @@ GpuCull::GpuCull(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
 		readback[s] = std::move(*rbResult);
 		readbackMapped[s] = rada.pMappedData;
 	}
+}
 
+void GpuCull::allocRuntimeSlots() {
 	// heap 描述符槽（table/sequence/count 各一走运行时段；scene data 槽 = SceneDataService::ensure
 	// 幂等返回——main 的 C1 已建，此处只取槽号）
 	auto ensureSlot = [&](const char* name) -> uint32_t {
@@ -145,7 +166,9 @@ GpuCull::GpuCull(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
 	if (nEntryStreams > 0)
 		streamsSlot = ensureSlot("cull.streams");  // scene data 槽早已被 main C1 固定，不漂移
 	sceneDataSlot = sceneData.ensure();
+}
 
+void GpuCull::writeHeapDescriptors(vk::raii::Device& device) {
 	// 描述符写入（eStorageBuffer + BDA 全范围——SceneDataService::ensure 同款模式）
 	if (nCandidates > 0) {
 		const auto writeDesc = [&](RGL::VmaBuffer& buf, vk::DeviceSize size, uint32_t slot) {
@@ -168,7 +191,9 @@ GpuCull::GpuCull(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
 			writeDesc(streamsBuffer,
 				static_cast<vk::DeviceSize>(nEntryStreams) * nCandidates * kCullSequenceStride, streamsSlot);
 	}
+}
 
+void GpuCull::createCullShaders(vk::raii::Device& device) {
 	// compute shader object（stage=COMPUTE + heap bit + 4 binding 映射；
 	// RenderPipeline 同款模式，单阶段版——push constant 无需映射条目，
 	// descriptor heap 下经 vkCmdPushDataEXT 的 push data 区自动供给）
@@ -246,14 +271,6 @@ GpuCull::GpuCull(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
 		auto fanShaders = device.createShadersEXT(std::vector<vk::ShaderCreateInfoEXT>{fanCreateInfo});
 		fanoutShader = std::move(fanShaders[0]);
 	}
-
-	visibleFlags.assign(nCandidates, false);
-
-	if (auto logger = RLLogger::getInstance())
-		logger->info("gpu cull: {} candidates ({} sequences × {}B) — table slots {}/{}/{}{}",
-			nCandidates, nCandidates, kCullSequenceStride, tableSlot, sequenceSlot, countSlot,
-			nEntryStreams > 0 ? fmt::format(" + streams {}×{}B @slot {}", nEntryStreams,
-				static_cast<uint64_t>(nCandidates) * kCullSequenceStride, streamsSlot) : std::string());
 }
 
 void GpuCull::writeSequenceStaging(uint32_t slot, const std::vector<RGL::DrawArgs>& args) {

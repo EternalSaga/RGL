@@ -14,6 +14,23 @@ import vkerror;
 namespace RGL {
 
 /**
+ * 在 available 中按 preferred 顺序找首个精确匹配（format + colorSpace；
+ * selectFormat 抽出——HDR/SDR 两段偏好列表共用）。
+ * @param preferred 偏好格式列表（外层循环序 = 优先级）
+ * @param available surface 可用格式（调用方保证非空）
+ * @return 首个命中的可用格式；无匹配 = nullopt
+ */
+static std::optional<vk::SurfaceFormatKHR> matchSurfaceFormat(
+	const std::vector<vk::SurfaceFormatKHR>& preferred,
+	const std::vector<vk::SurfaceFormatKHR>& available) {
+	for (const auto& p : preferred)
+		for (const auto& a : available)
+			if (a.format == p.format && a.colorSpace == p.colorSpace)
+				return a;
+	return std::nullopt;
+}
+
+/**
  * SDL3 窗口 RAII（SDL_Window 创建/销毁 + Vulkan surface/格式/extent/图像数选择）。
  * 仅非 headless 路径使用：headless（runtime.lua headless=true）不建 SDL 窗口，
  * surface 经 vkCreateHeadlessSurfaceEXT（vkswapchain.cppm）；llm_debug / show_after
@@ -190,24 +207,15 @@ export class SDLWindow {
 
 		if (isHdrEnabled) {
 			logger->info("[SDL3] HDR enabled, matching HDR surface format...");
-			for (const auto& preferred : preferredHdrFormats) {
-				for (const auto& available : availableFormats) {
-					if (available.format == preferred.format && available.colorSpace == preferred.colorSpace) {
-						logger->info("[Vulkan] HDR format matched: {}", vk::to_string(available.format));
-						return available;
-					}
-				}
+			if (const auto hdrMatch = matchSurfaceFormat(preferredHdrFormats, availableFormats)) {
+				logger->info("[Vulkan] HDR format matched: {}", vk::to_string(hdrMatch->format));
+				return *hdrMatch;
 			}
 			logger->info("[Vulkan] No HDR format found, falling back to SDR.");
 		}
 
-		for (const auto& preferred : preferredSdrFormats) {
-			for (const auto& available : availableFormats) {
-				if (available.format == preferred.format && available.colorSpace == preferred.colorSpace) {
-					return available;
-				}
-			}
-		}
+		if (const auto sdrMatch = matchSurfaceFormat(preferredSdrFormats, availableFormats))
+			return *sdrMatch;
 
 		logger->warn("[Vulkan] Warning: no ideal sRGB format found, using default {}",
 			vk::to_string(availableFormats[0].format));

@@ -93,12 +93,12 @@ DgcCommands::DgcCommands(RGL::DeviceContext& vkDevice, const RGL::ShaderRegistry
 	//   全 2N 槽建好后 vkUpdateIndirectExecutionSetEXT 一次写入
 	if (entries.empty())
 		throw std::runtime_error("DgcCommands: no pipeline entries (execution set needs initial shaders)");
-	std::vector<VkShaderEXT> initialShaders{
+	std::vector<VkShaderEXT> initialPair{
 		entries[0].pipeline.fragShaderHandle(), entries[0].pipeline.meshShaderHandle()};
 	VkIndirectExecutionSetShaderInfoEXT shaderInfo{};
 	shaderInfo.sType = VK_STRUCTURE_TYPE_INDIRECT_EXECUTION_SET_SHADER_INFO_EXT;
-	shaderInfo.shaderCount = static_cast<uint32_t>(initialShaders.size());
-	shaderInfo.pInitialShaders = initialShaders.data();
+	shaderInfo.shaderCount = static_cast<uint32_t>(initialPair.size());
+	shaderInfo.pInitialShaders = initialPair.data();
 	shaderInfo.pSetLayoutInfos = nullptr;
 	shaderInfo.maxShaderCount = capacity;
 	shaderInfo.pushConstantRangeCount = 0;
@@ -121,8 +121,8 @@ DgcCommands::DgcCommands(RGL::DeviceContext& vkDevice, const RGL::ShaderRegistry
 			2 * j + 1, entries[j].pipeline.meshShaderHandle()});
 	}
 	pfnUpdateSetShader(device, executionSet, static_cast<uint32_t>(writes.size()), writes.data());
-	initialShaders_[0] = initialShaders[0];
-	initialShaders_[1] = initialShaders[1];
+	initialShaders[0] = initialPair[0];
+	initialShaders[1] = initialPair[1];
 
 	// ③ preprocess buffer（内存需求按 layout+execution set+maxSequenceCount 查询；
 	// memoryTypeBits 严格匹配——VMA 自动选型不保证满足驱动要求位）
@@ -207,7 +207,7 @@ void DgcCommands::bindInitialShaders(vk::raii::CommandBuffer& cmd) const {
 	std::array<vk::ShaderStageFlagBits, 2> stages = {
 		vk::ShaderStageFlagBits::eFragment, vk::ShaderStageFlagBits::eMeshEXT};
 	std::array<vk::ShaderEXT, 2> handles = {
-		vk::ShaderEXT(initialShaders_[0]), vk::ShaderEXT(initialShaders_[1])};
+		vk::ShaderEXT(initialShaders[0]), vk::ShaderEXT(initialShaders[1])};
 	cmd.bindShadersEXT(stages, handles);
 }
 

@@ -117,20 +117,17 @@ std::expected<void, Error> recordMipZeroAndChain(vk::raii::CommandBuffer& cmd,
 	return {};
 }
 
-}  // namespace
-
-/** uploadTexture 定义（契约与行为注释见 texture_upload.cppm 接口声明）。 */
-[[nodiscard]] std::expected<uint32_t, Error> uploadTexture(RGL::Resources& resources,
-	RGL::SamplerLibrary& samplers, RGL::AssetTable& assets, RGL::DeviceContext& device,
-	const uint8_t* rgba, uint32_t w, uint32_t h, bool linear, const char* name) {
+/**
+ * 上传格式策略（uploadTexture 抽出）：sRGB 优先（glTF baseColor 约定，硬件完成
+ * sRGB→线性）；不支持采样回落 UNORM（R4）；linear = 数据纹理（normal/ORM）强制
+ * UNORM——sRGB 解码污染线性数值（批次 ③a 实证）；DIAG texture_force_unorm 强制 UNORM。
+ * @param device 设备层（格式属性查询）
+ * @param linear 线性数据纹理
+ * @param name 日志名（回落 warn 用）
+ * @return 上传用格式（eR8G8B8A8Srgb 或 eR8G8B8A8Unorm）
+ */
+vk::Format selectUploadFormat(RGL::DeviceContext& device, bool linear, const char* name) {
 	auto* logger = RLLogger::getInstance();
-	auto& dev = device.getDevice();
-	auto& allocator = resources.getAllocator();
-
-	// sRGB（glTF baseColor 纹理约定，硬件完成 sRGB→线性）；不支持采样回落 UNORM（R4）
-	// linear = 数据纹理（normal/ORM）强制 UNORM——sRGB 解码污染线性数值（批次 ③a 实证：
-	// G-buffer roughness 恒 0.502 = 0.737 的 sRGB→线性值）
-	// DIAG（configs/diagnostics.lua texture_force_unorm，原 env 转配置）：强制 UNORM（sRGB 嫌疑隔离）
 	vk::Format format = (linear || diagnostics().textureForceUnorm)
 		? vk::Format::eR8G8B8A8Unorm : vk::Format::eR8G8B8A8Srgb;
 	auto formatProps = device.getPhysicalDevice().getFormatProperties(format);
@@ -139,6 +136,45 @@ std::expected<void, Error> recordMipZeroAndChain(vk::raii::CommandBuffer& cmd,
 		format = vk::Format::eR8G8B8A8Unorm;
 		if (logger) logger->warn("texture: R8G8B8A8_SRGB 不支持采样，回落 UNORM ({})", name);
 	}
+	return format;
+}
+
+/**
+ * 一次性上传命令提交 + 等待（uploadTexture 抽出；裸 C 提交同 llm_debug ⑫ 风格）。
+ * @param dev 设备层（fence 创建 / waitForFences）
+ * @param cmd 已 end 的上传命令缓冲
+ * @param queue graphics 队列
+ * @param name 日志名（失败 Error 用）
+ * @return void（成功）；submit 失败 / fence 超时 → Error
+ */
+std::expected<void, Error> submitUploadAndWait(vk::raii::Device& dev,
+	vk::raii::CommandBuffer& cmd, VkQueue queue, const char* name) {
+	auto fence = vk::raii::Fence(dev, vk::FenceCreateInfo{});
+	VkSubmitInfo submitInfo{};
+	submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+	VkCommandBuffer cmdBuffer = *cmd;
+	submitInfo.commandBufferCount = 1;
+	submitInfo.pCommandBuffers = &cmdBuffer;
+	if (auto result = vk::Result(::vkQueueSubmit(queue, 1, &submitInfo, *fence));
+		result != vk::Result::eSuccess)
+		return std::unexpected(Error{ErrorCode::VulkanError,
+			fmt::format("texture: upload submit failed: {}", name)});
+	if (dev.waitForFences(std::array<vk::Fence, 1>{*fence}, true, UINT64_MAX) != vk::Result::eSuccess)
+		return std::unexpected(Error{ErrorCode::VulkanError, fmt::format("texture: upload fence timeout: {}", name)});
+	return {};
+}
+
+}  // namespace
+
+/** uploadTexture 定义（契约与行为注释见 texture_upload.cppm 接口声明）。 */
+[[nodiscard]] std::expected<uint32_t, Error> uploadTexture(RGL::Resources& resources,
+	RGL::SamplerLibrary& samplers, RGL::AssetTable& assets, RGL::DeviceContext& device,
+	const uint8_t* rgba, uint32_t w, uint32_t h, bool linear, const char* name) {
+	auto& dev = device.getDevice();
+	auto& allocator = resources.getAllocator();
+
+	// 格式策略见 selectUploadFormat（sRGB 优先 / linear 与 DIAG force_unorm 强制 UNORM）
+	vk::Format format = selectUploadFormat(device, linear, name);
 	// Phase 8 ③b：全 mip 链 1+floor(log2(max(w,h)))（1×1 = 1 级，跳过 mip 生成）——
 	// 消除缩小采样无 mip 的走样 speckle（平面墙/广场），见 mip_gen。sRGB 图（baseColor）
 	// 不能带 eStorage（RADV SRGB 无 STORAGE_IMAGE 能力 → 图创建 FORMAT_NOT_SUPPORTED，
@@ -214,19 +250,10 @@ std::expected<void, Error> recordMipZeroAndChain(vk::raii::CommandBuffer& cmd,
 	if (!recordResult) return std::unexpected(std::move(recordResult).error());
 	cmd.end();
 
-	// 提交 + 等待（独立 fence；裸 C 提交同 llm_debug ⑫ 风格）
-	auto fence = vk::raii::Fence(dev, vk::FenceCreateInfo{});
-	VkSubmitInfo submitInfo{};
-	submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-	VkCommandBuffer cmdBuffer = *cmd;
-	submitInfo.commandBufferCount = 1;
-	submitInfo.pCommandBuffers = &cmdBuffer;
-	if (auto result = vk::Result(::vkQueueSubmit(device.getGraphicsQueue(), 1, &submitInfo, *fence));
-		result != vk::Result::eSuccess)
-		return std::unexpected(Error{ErrorCode::VulkanError,
-			fmt::format("texture: upload submit failed: {}", name)});
-	if (dev.waitForFences(std::array<vk::Fence, 1>{*fence}, true, UINT64_MAX) != vk::Result::eSuccess)
-		return std::unexpected(Error{ErrorCode::VulkanError, fmt::format("texture: upload fence timeout: {}", name)});
+	// 提交 + 等待（独立 fence，见 submitUploadAndWait）
+	if (auto submitResult = submitUploadAndWait(dev, cmd, device.getGraphicsQueue(), name);
+		!submitResult)
+		return std::unexpected(std::move(submitResult).error());
 
 	// slot 分配 + 描述符写入（SAMPLED_IMAGE，v341 4 参形态，spike 已验证）
 	auto slotResult = resources.allocSlot(RGL::SlotSegment::Texture, name);

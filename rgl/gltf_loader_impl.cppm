@@ -352,15 +352,6 @@ static std::string resolvePrimitiveIndices(const tinygltf::Model& gltf, int mesh
 }
 
 /**
- * 单个 glTF primitive 去索引展开（POSITION/NORMAL 必需 + TEXCOORD_0 可选（D9））：
- * 三角形 i 的 3 个连续顶点 = i*3..i*3+2；无 indices = 顺序展开。
- * @param gltf 已加载的 tinygltf 模型
- * @param meshIndex mesh 下标（仅错误信息用）
- * @param prim 待展开的 glTF primitive
- * @param out 输出 primitive（填 vertices/triangleCount/hasUv）
- * @return 错误描述（空 = 成功；调用方整体失败）
- */
-/**
  * Frisvad 2012 解析正交基切线（无 TANGENT 属性资产的兜底；与 bistro_pack.py 的
  * degenerate 分支同式）：返回单位 tangent ⟂ 单位 n，奇点 (0,0,-1) 显式处理。
  */
@@ -372,6 +363,78 @@ static glm::vec3 frisvadTangent(const glm::vec3& n) {
 	return glm::normalize(glm::vec3(1.0f - n.x * n.x * a, b, -n.x));
 }
 
+/**
+ * 三角形 UV Jacobian 手性 w（expandPrimitive 切线填充抽出）：s1×s2 的 det 符号
+ *（glTF core TANGENT 不含 w，spec 约定从几何推断；bistro UV 手性 92% 为负——
+ * DirectX Y-down 传统）。
+ * @param indices primitive 索引（三角形 t = [3t..3t+2]）
+ * @param uv 顶点 UV（交错 2 分量）
+ * @param t 三角形下标
+ * @return det < 0 → -1，否则 +1
+ */
+static float uvTriangleHandedness(const std::vector<uint32_t>& indices,
+	const std::vector<float>& uv, size_t t) {
+	const uint32_t i0 = indices[t * 3], i1 = indices[t * 3 + 1], i2 = indices[t * 3 + 2];
+	const float s1x = uv[i1 * 2] - uv[i0 * 2], s1y = uv[i1 * 2 + 1] - uv[i0 * 2 + 1];
+	const float s2x = uv[i2 * 2] - uv[i0 * 2], s2y = uv[i2 * 2 + 1] - uv[i0 * 2 + 1];
+	return (s1x * s2y - s2x * s1y) < 0.0f ? -1.0f : 1.0f;
+}
+
+/**
+ * 顶点切线解析（expandPrimitive 切线填充抽出）：xyz 用烘焙 TANGENT（坏 texel 长度
+ * < 1e-6 → Frisvad(N) 兜底），缺失整体走 Frisvad(N) 兜底。
+ * @param out 输出 primitive（vertices[vi].normal 已就位）
+ * @param vi 去索引顶点下标（取 normal 用）
+ * @param src 源顶点下标（= indices[vi]，取 tan 属性流用）
+ * @param tan TANGENT 属性流（交错 3 分量；hasTangent=false 时忽略）
+ * @param hasTangent 是否有烘焙 TANGENT
+ * @return 单位切线
+ */
+static glm::vec3 resolveVertexTangent(const GltfPrimitive& out, size_t vi, size_t src,
+	const std::vector<float>& tan, bool hasTangent) {
+	if (hasTangent) {
+		glm::vec3 t3 = glm::vec3(tan[src * 3], tan[src * 3 + 1], tan[src * 3 + 2]);
+		if (glm::length(t3) < 1e-6f)  // 坏 texel 防御（pack 理论不产出）
+			return frisvadTangent(glm::normalize(out.vertices[vi].normal));
+		return t3;
+	}
+	return frisvadTangent(glm::normalize(out.vertices[vi].normal));
+}
+
+/**
+ * 逐三角形切线填充（Phase 8 方案 A，expandPrimitive 抽出）：手性 w 按 uv Jacobian
+ * det 符号逐三角形推、整三角形同值；xyz 见 resolveVertexTangent。
+ * @param out 输出 primitive（vertices 已按去索引展开，indices 与之对应）
+ * @param indices primitive 索引
+ * @param uv 顶点 UV
+ * @param tan TANGENT 属性流
+ * @param hasTangent 是否有烘焙 TANGENT
+ */
+static void fillTangents(GltfPrimitive& out, const std::vector<uint32_t>& indices,
+	const std::vector<float>& uv, const std::vector<float>& tan, bool hasTangent) {
+	const size_t triCount = indices.size() / 3;
+	for (size_t t = 0; t < triCount; ++t) {
+		const float w = (hasTangent && out.hasUv)
+			? uvTriangleHandedness(indices, uv, t)
+			: 1.0f;
+		for (int k = 0; k < 3; ++k) {
+			const size_t vi = t * 3 + k;
+			const size_t src = indices[vi];
+			out.vertices[vi].tangent = glm::vec4(
+				resolveVertexTangent(out, vi, src, tan, hasTangent), w);
+		}
+	}
+}
+
+/**
+ * 单个 glTF primitive 去索引展开（POSITION/NORMAL 必需 + TEXCOORD_0 可选（D9））：
+ * 三角形 i 的 3 个连续顶点 = i*3..i*3+2；无 indices = 顺序展开；切线填充见 fillTangents。
+ * @param gltf 已加载的 tinygltf 模型
+ * @param meshIndex mesh 下标（仅错误信息用）
+ * @param prim 待展开的 glTF primitive
+ * @param out 输出 primitive（填 vertices/triangleCount/hasUv）
+ * @return 错误描述（空 = 成功；调用方整体失败）
+ */
 static std::string expandPrimitive(const tinygltf::Model& gltf, int meshIndex,
 	const tinygltf::Primitive& prim, GltfPrimitive& out) {
 	std::vector<float> pos, nrm, uv, tan;
@@ -391,33 +454,7 @@ static std::string expandPrimitive(const tinygltf::Model& gltf, int meshIndex,
 		v.uv = glm::vec2(uv[idx * 2 + 0], uv[idx * 2 + 1]);
 		out.vertices.push_back(v);
 	}
-	// Phase 8 方案 A：切线填充——xyz 用烘焙 TANGENT（缺 → Frisvad(N) 兜底），手性 w 按
-	// uv Jacobian det 符号**逐三角形**推（glTF core TANGENT 不含 w，spec 约定从几何推断；
-	// bistro UV 手性 92% 为负——DirectX Y-down 传统，W=+1 硬编码会把镜像 UV 面的
-	// normal map 副切线翻反）。三角形 t 的去索引顶点 = t*3..t*3+2，w 整三角形同值。
-	const size_t triCount = indices.size() / 3;
-	for (size_t t = 0; t < triCount; ++t) {
-		float w = 1.0f;
-		if (hasTangent && out.hasUv) {
-			const uint32_t i0 = indices[t * 3], i1 = indices[t * 3 + 1], i2 = indices[t * 3 + 2];
-			const float s1x = uv[i1 * 2] - uv[i0 * 2], s1y = uv[i1 * 2 + 1] - uv[i0 * 2 + 1];
-			const float s2x = uv[i2 * 2] - uv[i0 * 2], s2y = uv[i2 * 2 + 1] - uv[i0 * 2 + 1];
-			w = (s1x * s2y - s2x * s1y) < 0.0f ? -1.0f : 1.0f;
-		}
-		for (int k = 0; k < 3; ++k) {
-			const size_t vi = t * 3 + k;
-			const size_t src = indices[vi];
-			glm::vec3 t3;
-			if (hasTangent) {
-				t3 = glm::vec3(tan[src * 3], tan[src * 3 + 1], tan[src * 3 + 2]);
-				if (glm::length(t3) < 1e-6f)  // 坏 texel 防御（pack 理论不产出）
-					t3 = frisvadTangent(glm::normalize(out.vertices[vi].normal));
-			} else {
-				t3 = frisvadTangent(glm::normalize(out.vertices[vi].normal));
-			}
-			out.vertices[vi].tangent = glm::vec4(t3, w);
-		}
-	}
+	fillTangents(out, indices, uv, tan, hasTangent);
 	out.triangleCount = static_cast<uint32_t>(indices.size() / 3);
 	return {};
 }

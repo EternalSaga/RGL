@@ -142,6 +142,34 @@ export class GpuCull {
 
    private:
 	/**
+	 * 构造期：静态表 / 序列 / count / 流 buffer 分配（候选表空 = 跳过表/序列/count
+	 * 段；流仅 nEntryStreams>0 时建）。
+	 * @param device 设备层（VMA createBuffer[WithAddress]）
+	 */
+	void createCullBuffers(vk::raii::Device& device);
+	/**
+	 * 构造期：序列 staging ring×2 + 读回 ring×2（host-visible 常驻映射）。
+	 * @param device 设备层（VMA createBuffer）
+	 */
+	void createHostRings(vk::raii::Device& device);
+	/**
+	 * 构造期：运行时段 heap 槽分配（cull.table/sequences/count[/streams] +
+	 * SceneDataService::ensure 幂等 scene data 槽）。
+	 */
+	void allocRuntimeSlots();
+	/**
+	 * 构造期：descriptor heap 写入（eStorageBuffer + BDA 全范围；
+	 * SceneDataService::ensure 同款模式；候选表空 = 跳过）。
+	 * @param device 设备层（writeResourceDescriptorsEXT）
+	 */
+	void writeHeapDescriptors(vk::raii::Device& device);
+	/**
+	 * 构造期：compute cull shader object（4 binding heap 映射）+（nEntryStreams>0）
+	 * stream fanout shader object（3 binding）。
+	 * @param device 设备层（createShadersEXT）
+	 */
+	void createCullShaders(vk::raii::Device& device);
+	/**
 	 * 静态 DGC 路：基础序列 → per-entry 流扇出 dispatch（recordCullPass 内 nEntryStreams>0
 	 * 分支抽出）。Compute→Compute 屏障后绑 fanoutShader + pushData(sequenceCount) +
 	 * dispatch(candidate, nEntryStreams)。nEntryStreams==0 时调用方跳过（NV/重放路零开销）。
