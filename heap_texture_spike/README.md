@@ -35,7 +35,7 @@ cd build
 # 一键三驱动 × 五变体矩阵：
 bash ../cross_test.sh
 # 单驱动单变体：
-RADV_EXPERIMENTAL=heap ./heap_texture_spike                                        # glsl 基线
+./heap_texture_spike                                                 # glsl 基线（RADV，Mesa ≥26.2.3 无需 RADV_EXPERIMENTAL）
 VK_DRIVER_FILES=.../intel_icd.x86_64.json SPIKE_SHADER=slang SPIKE_SAMPLER=heap ./heap_texture_spike
 VK_DRIVER_FILES=.../nvidia_icd.json __NV_PRIME_RENDER_OFFLOAD=1 \
   __NV_PRIME_RENDER_OFFLOAD_PROVIDER=3 __GLX_VENDOR_LIBRARY_NAME=zink \

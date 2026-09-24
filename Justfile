@@ -159,21 +159,17 @@ check-run-ready:
 
 # 运行入口统一 cd 到 build/rgl：程序按相对路径读 configs/*.lua 和
 # generated_shaders/*.spv，CWD 必须是该目录。
-# Linux 自动检测：lspci 见 AMD VGA/display → 设 RADV_EXPERIMENTAL=heap（RADV 启用 descriptor heap）
+# Mesa ≥26.2.3 起 RADV 无条件 advertise VK_EXT_descriptor_heap，无需 RADV_EXPERIMENTAL。
 run:
     just check-run-ready
-    @python -c "import os,subprocess,re,shutil; \
+    @python -c "import os,subprocess; \
         b='{{ BUILD }}/rgl'; \
         exe='rgl.exe' if os.name=='nt' else 'rgl'; \
         os.chdir(b); \
-        env=dict(os.environ); \
-        out=subprocess.run(['lspci'],capture_output=True,text=True).stdout if (os.name!='nt' and shutil.which('lspci')) else ''; \
-        (env.update(RADV_EXPERIMENTAL='heap') if re.search(r'(?i)(vga|display).*amd',out) else None); \
-        subprocess.call([os.path.join('.', exe)],env=env)"  # './' 前缀：Python 3.12+ 起无路径分隔符的相对名改走 PATH 搜索（裸名 = FileNotFoundError）
+        subprocess.call([os.path.join('.', exe)])"  # './' 前缀：Python 3.12+ 起无路径分隔符的相对名改走 PATH 搜索（裸名 = FileNotFoundError）
 
 # 核显运行（Linux AMD 集显，原生渲染，无 offload）
 # 必须用 VK_DRIVER_FILES 隐藏 NVIDIA ICD —— 设备评分器默认选 dGPU（分数更高）
-# RADV_EXPERIMENTAL=heap 用于 RADV 启用 descriptor heap
 run-igpu:
     just check-run-ready
     @RADV_ICD=$(ls /usr/share/vulkan/icd.d/radeon_icd.*.json /etc/vulkan/icd.d/radeon_icd.*.json 2>/dev/null | head -1); \
@@ -181,7 +177,7 @@ run-igpu:
         echo "Error: radeon ICD json not found (Linux-only recipe)"; \
         exit 1; \
     fi; \
-    (cd {{ BUILD }}/rgl && VK_DRIVER_FILES="$RADV_ICD" RADV_EXPERIMENTAL=heap ./rgl)
+    (cd {{ BUILD }}/rgl && VK_DRIVER_FILES="$RADV_ICD" ./rgl)
 
 # 独显运行（Linux NVIDIA prime offload；PROVIDER=3 为本机 dGPU 的 offload provider 编号）
 # 必须用 VK_DRIVER_FILES 隐藏 radeon ICD —— prime offload 环境变量对 Vulkan 设备枚举无过滤作用

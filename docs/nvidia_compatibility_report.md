@@ -25,7 +25,7 @@
 | 文件 | 修改 | 原因 |
 |---|---|---|
 | `utils.cppm:114-129` | AMD pNext 链修复 | 原代码无条件链入 `VK_AMD_shader_core_properties`，非 AMD 上为 UB。改用模板 `getProperties2<...>`，仅在 AMD GPU 上查询 |
-| `Justfile:70` | 条件化 `RADV_EXPERIMENTAL=heap` | `lspci` 检测 AMD GPU 时保留环境变量，NVIDIA 上跳过 |
+| `Justfile` run 路径 | ~~条件化 `RADV_EXPERIMENTAL=heap`~~（Mesa ≥26.2.3 已移除，无需该 env） | 历史：`lspci` 检测 AMD GPU 时设置环境变量，NVIDIA 上跳过 |
 | `features_config.json` | 移除 `descriptorHeapCaptureReplay` | NVIDIA 595.84 不支持此 feature（610 驱动支持） |
 | `vkresources.cppm` | Slot 编号动态化 | NVIDIA reservedSlots=6048，原固定 slot 8/12 在 reserved range 内部 |
 | `VmaBuffer.cppm` | GPU address 对齐 | 修正 `resourceHeapAlignment` 对齐（NVIDIA=32B）+ CPU mapped data 对齐 |
@@ -252,9 +252,9 @@ Aftermath 的自动 checkpoint 在每个 Vulkan 命令后插入 CPU 调用栈。
 |---|---|---|
 | NVIDIA RTX 5090 | prime offload（driver 610.57.04） | ✅ |
 | Intel Arc A310 (dGPU, anv) | 见 commit `1f43d65` run-intel 注释 | ✅ |
-| AMD Strix Halo (Radeon 8060S) | RADV 单卡核显机，`RADV_EXPERIMENTAL=heap`（`just run` 自动设置） | ✅ |
+| AMD Strix Halo (Radeon 8060S) | RADV 单卡核显机（Mesa ≥26.2.3，无需 `RADV_EXPERIMENTAL`） | ✅ |
 
-**当前开发机（2026-08-27 起）**：Strix Halo 纯核显单卡机器（无独显），运行依赖 RADV + `RADV_EXPERIMENTAL=heap`（`VK_EXT_descriptor_heap` 扩展在该 ICD 下需此实验开关）。
+**当前开发机（2026-08-27 起）**：Strix Halo 纯核显单卡机器（无独显），RADV + Mesa ≥26.2.3——`VK_EXT_descriptor_heap` 已无条件 advertise，不再依赖 experimental 开关。
 
 **注**：其后 Phase 3–7 演进（最新 `b1788e0` 架构债务 1+2）仅在本机 Strix Halo 验证，NVIDIA/Intel 全流程未复验。
 

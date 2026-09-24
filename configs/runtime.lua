@@ -1,7 +1,7 @@
 -- configs/runtime.lua — 运行/窗口模式（2026-09-08 起环境变量全面转配置）
 -- 全部字段可选，缺文件/缺段 = 回落默认（交互窗 800x600、不截图）。
--- 注：驱动级 env（RADV_EXPERIMENTAL / VK_DRIVER_FILES / prime offload）不在此列——
--- 由 Justfile run-* 配方注入，非应用配置。
+-- 注：驱动级 env（VK_DRIVER_FILES / prime offload）不在此列——由 Justfile run-* 配方注入，
+-- 非应用配置。Mesa ≥26.2.3 起 RADV 无需 RADV_EXPERIMENTAL。
 return {
     -- headless：VK_EXT_headless_surface，脱 SDL/compositor（CI/agent 冒烟/截图）
     headless = false,

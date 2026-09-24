@@ -136,7 +136,7 @@ FORMAT_NOT_SUPPORTED，且 v357 ImageViewCreateInfo 无 usage 成员 → sRGB �
 ## 3. 验证矩阵（每批次执行）
 
 1. `just build`：编译零错 + doc_check 零警告 + style_check 相关条目警告清零。
-2. headless 冒烟：`cd build/rgl && RADV_EXPERIMENTAL=heap timeout 8 ./rgl` forward + deferred 零 `[error]`。
+2. headless 冒烟：`cd build/rgl && timeout 8 ./rgl` forward + deferred 零 `[error]`。
 3. VVL 零 error（含 scene_hdr fp16、16F cubemap、DGC 路径日志正常）。
 4. llm_debug 截图：①/②a/③ 各批次重建 baseline；像素级对比仅在 codec 批次用（换编码器文件 md5 失效）。
 5. ②a 专项：395 张 PNG 新旧解码器像素级逐字节一致。

@@ -20,7 +20,7 @@
 - **架构**：mesh shader（`VK_EXT_mesh_shader`）+ `VK_EXT_shader_object` + **`VK_EXT_descriptor_heap`（核心）** + extended dynamic state（edS1/2 → 核心 1.3，经 shader object）；scalar block layout；BDA；timeline semaphore；dynamic rendering + sync2。
 - **渲染**：forward（opaque/skybox/transparent 三段）→ **Phase 6**（Lua 渲染意图 / RenderGraph 多 pass）→ **Phase 7**（延迟渲染 G-buffer + light pass + **GPU culling `VK_EXT_device_generated_commands`** + shadow）。
 - **资产**：glTF（tinygltf）+ 内嵌纹理（4096²，cottage 257MB / 392 primitive / 11 张 4K）+ 环境 cubemap（IBL 简化版）+ 天空盒。
-- **驱动**：AMD Strix Halo（RADV 核显，`RADV_EXPERIMENTAL=heap`）/ NVIDIA（prime offload）/ Intel Arc A310（anv）——**三驱动共存**，任何扩展必须"不支持时干净 no-op"。
+- **驱动**：AMD Strix Halo（RADV 核显，Mesa ≥26.2.3）/ NVIDIA（prime offload）/ Intel Arc A310（anv）——**三驱动共存**，任何扩展必须"不支持时干净 no-op"。
 - **历史痛点**：GPUVM TCP fault（UAF 根因，已解）、RADV 4K 纹理高 VA fault（UAF 复用，已解）、eImmediate 无 pacing 导致 GPU 满占用（docs/archive/present_timing_research.md §八）。
 
 ### 1.3 关键元发现
@@ -359,7 +359,7 @@
 
 ## 十二、实施记录（2026-09-02）：edS3 + headless（zero_init 已回退）
 
-> 状态：`现行`。§3.1（zero_init）/§7.2（headless）/§7.5（edS3）评估级候选的落地记录，含主崩溃误诊复盘 + 遗留项处置 + headless 关键坑。开发机 = Strix Halo 纯核显（RADV Mesa 26.2.1，`RADV_EXPERIMENTAL=heap`），VVL 1.4.357，系统头 v357。**最终落地 = edS3 + headless**；zero_init 经深挖（VMA 3.4 必撞 + 本 app 无收益 + VMA 无上游 zero-init 计划）后**回退**（见 §12.1 Phase C / §12.3）。
+> 状态：`现行`。§3.1（zero_init）/§7.2（headless）/§7.5（edS3）评估级候选的落地记录，含主崩溃误诊复盘 + 遗留项处置 + headless 关键坑。开发机 = Strix Halo 纯核显（RADV Mesa ≥26.2.3，`descriptor_heap` 无需 experimental 开关），VVL 1.4.357，系统头 v357。**最终落地 = edS3 + headless**；zero_init 经深挖（VMA 3.4 必撞 + 本 app 无收益 + VMA 无上游 zero-init 计划）后**回退**（见 §12.1 Phase C / §12.3）。
 
 ### 12.1 落地范围
 

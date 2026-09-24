@@ -22,6 +22,7 @@
 | [ecs_compliance_review.md](ecs_compliance_review.md) | 历史 | ECS 五条设计规范（现行摘要在 AGENTS.md）+ 2026-08-24 合规审查 + 逐条处置记录 | 五项 ECS 债 2026-08-30 全清（处置记录为时点快照） |
 | [present_timing_research.md](present_timing_research.md) | 调研 | VK_EXT_present_timing 预研（决策 = 暂不引入；结论已吸收进 技术概念.md Present Mode 节） | 真实帧 pacing 需求出现时按第六节步骤执行 |
 | [教程拆解发现_20260902.md](教程拆解发现_20260902.md) | 已修复 | 兄弟教程双实现对账查出 5 项（GGX epsilon/mesh 减法/契约检查/ambient/intensity 语义），2026-09-03 全部落地 | 各修复已附代码注释指针（4 处 shader 引本文件 archive 路径） |
+| [light_entity_plan.md](light_entity_plan.md) | 历史 | 灯 entity 化实施计划（ECS 规范 3，2026-09-10 完成，BIT-IDENTICAL） | 正文冒烟命令曾含 `RADV_EXPERIMENTAL`，Mesa ≥26.2.3 已不需要（2026-09-24） |
 
 ## 已解决问题总账
 

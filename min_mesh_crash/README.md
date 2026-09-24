@@ -79,7 +79,7 @@ AMD（隐藏 NVIDIA ICD 强制 RADV；注意本复现程序无条件启用 NV �
 ```bash
 cd build
 VK_DRIVER_FILES=/usr/share/vulkan/icd.d/radeon_icd.x86_64.json \
-RADV_EXPERIMENTAL=heap ./min_mesh_crash   # 会失败于 createDevice（缺 NV 扩展）
+./min_mesh_crash   # 会失败于 createDevice（缺 NV 扩展；Mesa ≥26.2.3 无需 RADV_EXPERIMENTAL）
 ```
 
 ## 代码修复记录

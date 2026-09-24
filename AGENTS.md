@@ -28,7 +28,7 @@ just config              # CMake 配置（默认 clang, Release）；just config
 just build               # 增量编译（需先 config）；just build-release / build-debug = 一键配置+编译
 just reflect             # 重跑 6 条反射管线（改动 shader 契约/schema/模板后必须，见 skill rgl-shader-contract）
 just checks / doc-check / style-check [--strict]  # 源码检查统一入口（tools/checks/main.py，--only style|doc；每次 just build 已随 source_checks 目标跑、只警告；红线清单见 skill rgl-new-module）
-just run                 # 运行（AMD VGA 存在时自动设 RADV_EXPERIMENTAL=heap）
+just run                 # 运行
 just run-igpu / run-dgpu / run-intel   # 强制核显 / NVIDIA prime 独显 / Intel anv
 just clean / clean-all / all           # 增量清理 / 删 build 目录 / clean-all+build-release
 ```
@@ -50,7 +50,7 @@ CMake 无独立构建目录——必须从根目录构建（`cmake -B build -S .
 ## 运行要点
 
 - **CWD 必须是 `build/rgl/`**（相对路径读 `configs/` 与 `generated_shaders/*.spv`）；RADV 下
-  `RADV_EXPERIMENTAL=heap` 必需（`just run` 自动，直接跑二进制须手动带）
+  Mesa ≥26.2.3 起 `VK_EXT_descriptor_heap` 默认 advertise，无需 `RADV_EXPERIMENTAL`
 - **运行模式全配置化**：`configs/runtime.lua`（headless/llm_debug/窗口）、`configs/diagnostics.lua`
   （诊断开关）、`configs/render_graph.lua`（`variant` 选 forward/deferred/offscreen）；
   仅驱动级 env 保留，由 `just run-*` 注入
@@ -210,6 +210,7 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
 - `docs/vulkan_extensions_2025_调研.md` — 新扩展调研 + §十二/十三 实施记录（活文档）
 - `docs/phase7_devlog.md` — Phase 7 滚动开发日志（完结后归档）
 - `docs/风格检查规则.md` — tools/checks 两轮扩展设计（partition/docs/现代 C++/expected 禁 throw）；工具 Python ≥3.14，规则拆 `rules_{metrics,text,doxygen}.py`
+- `docs/静态审查升级路线.md` — LLVM 23 + `-Wlifetime-safety` 两阶段落地计划（vs Rust 借用检查差距结论；clangbind ABI 回归是阶段 1 最高风险）
 - `docs/archive/` — 归档索引（phase 计划含 **phase6_record.md**、ecs 审查、issue_history 总账、present_timing/教程拆解等已结题调研）
 - 离线 Vulkan 文档（优先在线检索被 Cloudflare 拦截时）：本地克隆 `/home/robin/program/Vulkan-Docs`（v1.4.360）。**注意**：spec 比系统头/loader（v357）新，结构体字段以系统头为准，spec 只作语义依据
 - 最小复现/验证子项目（独立 CMake，结论已吸收进主工程与 archive）：`min_mesh_crash/`（NVIDIA mesh shader 必带 `NO_TASK_SHADER_BIT_EXT` 根因，见其 README）、`heap_texture_spike/`（heap 纹理三驱动 PASS + 步长取 max，见其 README + archive/heap_texture_research.md）

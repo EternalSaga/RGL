@@ -22,8 +22,8 @@ export struct LlmDebugConfig {
  * 运行/窗口模式（configs/runtime.lua）：替代 RGL_HEADLESS / RGL_HEADLESS_SIZE /
  * RGL_WIN_SIZE / RGL_SHOW_AFTER 环境变量 + camera.lua 的 llm_debug/llm_shot 段。
  * 全字段可选，缺文件 = 全默认（交互窗 800x600、不截图）。
- * 注：驱动级 env（RADV_EXPERIMENTAL / VK_DRIVER_FILES / prime offload）不在此列——
- * 由 Justfile run-* 配方注入，非应用配置。
+ * 注：驱动级 env（VK_DRIVER_FILES / prime offload）不在此列——
+ * 由 Justfile run-* 配方注入，非应用配置。Mesa ≥26.2.3 起 RADV 无需 RADV_EXPERIMENTAL。
  */
 export struct RuntimeConfig {
 	bool headless = false;            // VK_EXT_headless_surface 脱 SDL/compositor（CI/agent 冒烟）

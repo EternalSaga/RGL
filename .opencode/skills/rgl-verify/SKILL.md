@@ -8,7 +8,7 @@ description: 运行 RGL 程序做 headless 冒烟、llm_debug 截图多模态读
 ## 运行环境
 
 - **CWD 必须是 `build/rgl/`**：程序按相对路径读取 `configs/` 和 `generated_shaders/*.spv`，其他目录启动报 "Log config file not found"
-- `RADV_EXPERIMENTAL=heap` — RADV 下启用 `VK_EXT_descriptor_heap` 必需；`just run`/`run-igpu` 自动设置，直接跑二进制须手动带上
+- Mesa ≥26.2.3：RADV 无条件 advertise `VK_EXT_descriptor_heap`，**无需** `RADV_EXPERIMENTAL=heap`（`just run*` 也不再注入）
 - 运行时资源由构建自动同步：`configs/` 增量拷贝（`copy_if_different`，改 config 后 `just build` 即生效；**新增** config 文件需 `just config`）；SPV 直接编译到 `build/rgl/generated_shaders/`
 - **build 端 configs 副本会被下次 `just build` 按内容比对静默覆盖复原**——调试临时改 `build/rgl/configs/`（副本），调试完 `just build` 复原；别改仓库源文件
 - 启动期 DGC 选路可直接看 log：`DGC path: device=... -> ...`
@@ -18,7 +18,7 @@ description: 运行 RGL 程序做 headless 冒烟、llm_debug 截图多模态读
 - `configs/runtime.lua`：headless / headless_size / win_size / show_after / llm_debug + llm_shot
 - `configs/diagnostics.lua`：no_vvl / no_hdr / no_present / vtx_canary / texel_canary / dump_gbuf / style_dist / tex_dist / texture_force_*（全可选默认关）
 - `configs/render_graph.lua` 顶层 `variant = "forward"|"deferred"|"offscreen"`（路线选路，替代旧 RGL_DEFERRED/RGL_OFFSCREEN env）
-- 仅驱动级 env（RADV_EXPERIMENTAL / VK_DRIVER_FILES / prime offload）保留——由 `just run-*` 注入，非应用配置
+- 仅驱动级 env（`VK_DRIVER_FILES` / prime offload）保留——由 `just run-*` 注入，非应用配置
 
 ## headless 模式
 
@@ -29,7 +29,7 @@ llm_debug 截图 = drawFrame 帧内回读 swapchain 后缓冲（present 前拷�
 ## agent 冒烟
 
 1. 改 `build/rgl/configs/runtime.lua` 为 `headless = true`（build 副本临时改，下次 `just build` 自动复原）
-2. `cd build/rgl && RADV_EXPERIMENTAL=heap timeout 8 ./rgl`
+2. `cd build/rgl && timeout 8 ./rgl`
 3. 正常应零 `[error]`；deferred 路线另改 build 副本 `render_graph.lua` 的 `variant="deferred"`
 
 ## llm_debug 截图（多模态读图）

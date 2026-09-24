@@ -5,9 +5,6 @@
     "request": "launch",
     "program": "$ZED_WORKTREE_ROOT/build/rgl/rgl",
     "build": "Build (Debug)",
-    "cwd": "$ZED_WORKTREE_ROOT/build/rgl",
-    "env": {
-      "RADV_EXPERIMENTAL": "heap"
-    }
+    "cwd": "$ZED_WORKTREE_ROOT/build/rgl"
   }
 ]

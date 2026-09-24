@@ -11,7 +11,7 @@ run_one() {
     local driver="$1" variant_env="$2" tag="$3"
     local envs=()
     case "$driver" in
-        radv) envs+=(VK_DRIVER_FILES=/usr/share/vulkan/icd.d/radeon_icd.x86_64.json RADV_EXPERIMENTAL=heap) ;;
+        radv) envs+=(VK_DRIVER_FILES=/usr/share/vulkan/icd.d/radeon_icd.x86_64.json) ;;
         intel) envs+=(VK_DRIVER_FILES=/usr/share/vulkan/icd.d/intel_icd.x86_64.json) ;;
         nvidia) envs+=(VK_DRIVER_FILES=/usr/share/vulkan/icd.d/nvidia_icd.json __NV_PRIME_RENDER_OFFLOAD=1 __NV_PRIME_RENDER_OFFLOAD_PROVIDER=3 __GLX_VENDOR_LIBRARY_NAME=zink __VK_LAYER_NV_optimus=NVIDIA_only) ;;
     esac

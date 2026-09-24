@@ -129,7 +129,7 @@ staticGraphicsIndirect 否则 → 静态路（本 spike；S1/S2 期由 diagnosti
 ## 5. 验收标准
 
 - **S0**：`just build` 通过；启动日志打印 `staticGraphicsIndirect=true`；行为零变化。
-- **S1**：build 副本 `dgc_static=true` → headless 冒烟（`RADV_EXPERIMENTAL=heap timeout 8`）
+- **S1**：build 副本 `dgc_static=true` → headless 冒烟（`timeout 8`）
   **VVL 开启、零 `[error]`/`Validation Error`**；llm_debug 截图目测正确（bistro 场景完整、
   无缺块/黑块）；日志 `DGC path: … -> DGC static execute (×N entries)`。
 - **S2**：同会话双构建截图回归（重放路 vs 静态路，方法学见 AGENTS"截图回归方法学"）——

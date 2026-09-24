@@ -104,13 +104,13 @@ layout 规则：offset 单调不减、4 字节对齐、action token 必须最后
 
 | 项 | GPU0: RADV (Raphael_Mendocino, ICD 1.4.354) | GPU1: NVIDIA RTX 5090 (610.57.04) | GPU2: Intel Arc A310 (DG2, anv 26.2.1) |
 |---|---|---|---|
-| `VK_EXT_device_generated_commands` | ✅ rev 1（**不加** `RADV_EXPERIMENTAL=heap` 也 advertise） | ✅ rev 1（另 advertise legacy `VK_NV_device_generated_commands` rev 3、`..._compute` rev 2） | ✅ rev 1 |
+| `VK_EXT_device_generated_commands` | ✅ rev 1 | ✅ rev 1（另 advertise legacy `VK_NV_device_generated_commands` rev 3、`..._compute` rev 2） | ✅ rev 1 |
 | `deviceGeneratedCommands` | true | true | true |
 | `dynamicGeneratedPipelineLayout` | true | true | true |
 
 ### 3.2 属性对比（`VkPhysicalDeviceDeviceGeneratedCommandsPropertiesEXT`）
 
-| 属性 | RADV（需 `RADV_EXPERIMENTAL=heap` 环境） | NVIDIA | Intel A310 (anv 26.2.1) |
+| 属性 | RADV | NVIDIA | Intel A310 (anv 26.2.1) |
 |---|---|---|---|
 | `maxIndirectShaderObjectCount` | 4096 | 16384 | 4096 |
 | `maxIndirectSequenceCount` | 1048576 | 4194303 | 1048576 |
@@ -142,7 +142,7 @@ layout 规则：offset 单调不减、4 字节对齐、action token 必须最后
 - **AGENTS.md"隐式扩展依赖"条目核查**（"被其他已启用的扩展隐式依赖，不可随意删除"）：**registry 级已定论，该说法不成立**——
   - 权威 registry（`Vulkan-Docs/xml/vk.xml:30852`）中该扩展块：`depends="((VK_KHR_buffer_device_address,VK_VERSION_1_2)+(VK_KHR_extended_flags,VK_KHR_maintenance5)),VK_VERSION_1_3"` → 仅依赖 **Vulkan 1.3 + device address 能力族**（本项目均已满足），**不依赖** descriptor_heap / shader_object / mesh_shader（正文中对它们的引用只是 ifdef 守卫个别 token，如 PUSH_DATA）；
   - **反向查询**：全部 `<extension>` 标签中无任何其他扩展 `depends` 声明引用本扩展（vk.xml 中 5 处 `<require depends="VK_EXT_device_generated_commands">` 位于**其他扩展块内**——descriptor_heap / NV_mesh_shader / sync2 / EXT_mesh_shader / ray_tracing_maintenance1——为条件性 token 追加，仅当 DGC 启用时生效，方向为 token→DGC，非其他扩展对 DGC 的硬依赖）；
-  - 实测佐证：RADV 不加 `RADV_EXPERIMENTAL=heap` 时不 advertise `descriptor_heap` 却仍 advertise `device_generated_commands`（spec 规定被支持的扩展其依赖必须同时被支持，否则 RADV 不应 advertise 它）；
+  - 实测佐证（Mesa 26.2.1 时代，`descriptor_heap` 尚需 `RADV_EXPERIMENTAL` 开关时）：RADV 可不 advertise `descriptor_heap` 却仍 advertise `device_generated_commands`（spec 规定被支持的扩展其依赖必须同时被支持，否则 RADV 不应 advertise 它）。Mesa ≥26.2.3 起 `descriptor_heap` 已无条件 advertise，二者独立性结论不变；
   - 该条目是 NVIDIA Xid 排查期（`min_mesh_crash` 参考 NVIDIA sample 扩展列表）的保守遗留。原拟保留现状（双驱动均支持），A/B 实验（见下）确认移除零回归后正式移除，Phase 7 引入时从"隐式依赖"转为**显式使用**（feature chain + culling 子系统），AGENTS.md 表述已同步修正。
   - **A/B 编译运行实验（2026-08-22 实测）**：从 `features.cppm` 两处列表移除该扩展 → 增量编译 → 双 GPU 各跑 25s（`just run-igpu` / `run-dgpu`）→ 恢复代码对照复跑：
 
@@ -283,5 +283,5 @@ DGC 路与重放路消费同一序列。详见 `phase7_devlog.md` 2026-09-09 条
 - 扩展依赖权威来源：本地 `/home/robin/program/Vulkan-Docs/xml/vk.xml`（registry，`depends` 属性）
 - 本地头文件：`/usr/include/vulkan/vulkan_core.h:23946-24011`（扩展块：enums/features/properties）、`:24020-24150`（structs）、`:24165-24235`（入口点）、`:7091/:2641-2642/:7176-7177`（COMMAND_PREPROCESS stage/access）
 - C++ wrapper：`vulkan.hpp:7416-7469`（raw 命令）、`:5806/:28286`（`vk::Device` 方法）、`:11118`（RAII）
-- 驱动实测：`vulkaninfo`（2026-08-22，本机双 GPU；RADV 侧需 `RADV_EXPERIMENTAL=heap` 才 advertise `descriptor_heap`，`device_generated_commands` 则无条件 advertise）
+- 驱动实测：`vulkaninfo`（2026-08-22 本机双 GPU 基线 + 2026-09-24 Mesa 26.2.3 复核；现 RADV 无条件 advertise `descriptor_heap` 与 `device_generated_commands`，无需 `RADV_EXPERIMENTAL`）
 - 相关项目文档：`docs/nvidia_compatibility_report.md`（双驱动差异排查史）、`docs/DESCRIPTOR_HEAP_SPEC.md`（heap 排坑）、`docs/技术概念.md`（sync2 / push data / 缓冲访问规则）、`docs/next_roadmap.md` Phase 7

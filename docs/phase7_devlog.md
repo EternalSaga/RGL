@@ -285,8 +285,8 @@ draw list（规范 4），无全局状态。**下一步**：批次 5 = GPU culli
 
 ## 重构批次 3（2026-09-08）：环境变量 → 配置文件（用户偏好：不用 env）
 
-全仓 18 处 getenv 调用点（16 个不同 env 名，TEXTURE_FORCE_UNORM 两处）清点处置（驱动级 RADV_EXPERIMENTAL / VK_DRIVER_FILES / prime 保留——
-由 Justfile run-* 注入，非应用配置）：
+全仓 18 处 getenv 调用点（16 个不同 env 名，TEXTURE_FORCE_UNORM 两处）清点处置（驱动级 VK_DRIVER_FILES / prime 保留——
+由 Justfile run-* 注入，非应用配置；`RADV_EXPERIMENTAL` 已于 Mesa 26.2.3 移除，见 `调试历史.md` 2026-09-24 条目）：
 
 - **configs/runtime.lua**（新，`runtime_config` 模块）：headless / headless_size / win_size /
   show_after + **llm_debug/llm_shot 自 camera.lua 迁入**（截图属运行模式，camera.lua 回归纯相机；

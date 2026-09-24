@@ -19,7 +19,7 @@
 //       samplerHeapOffset 复现首版/主工程现态的字段误用，做跨驱动行为对照）
 //
 // 无窗口、无 SDL：离屏 256x256 渲染 + copy 回读 + CPU 像素比对（PASS/FAIL）。
-// 驱动由 VK_DRIVER_FILES 环境变量决定（RADV: RADV_EXPERIMENTAL=heap；NVIDIA: prime offload）。
+// 驱动由 VK_DRIVER_FILES 环境变量决定（NVIDIA: prime offload）。Mesa ≥26.2.3 起 RADV 无需 RADV_EXPERIMENTAL。
 // API 按系统 Vulkan 头 v341（与主工程同一编译环境）：buffer 描述符走 pAddressRange 裸地址。
 
 #include <vulkan/vulkan.h>
