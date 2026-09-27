@@ -94,6 +94,25 @@ export uint64_t profilerCurrentFrame();
 export void profilerPushRecord(const ZoneRecord& rec);
 
 /**
+ * 计数记录（批 9.3 present_timing）：标量采样（IPD ns、丢帧/queue-full 累计、刷新
+ * 周期 ns）→ Perfetto `ph:"C"` 进程级 counter 轨 + stats JSON `counters` 段
+ *（count/last/min/max/avg）+ rllogger 摘要行。落位与 zone 同帧槽，窗口钳制/溢出
+ * drops/orphan drops 三语义一致。
+ */
+export struct CounterRecord {
+	uint64_t frame = 0;      // 归属逻辑帧号（profilerCurrentFrame() 采样时刻取值）
+	uint64_t tsNs = 0;       // 采样时刻（steady_clock ns；trace 时间轴定位）
+	uint64_t value = 0;      // 计数值（单位由 name 定：ns 或累计次数）
+	std::string_view name;   // 计数器名（须静态字面量等 ≥ dump 生命周期）
+};
+
+/**
+ * 推入一条计数（window = 0 / 未开帧 = 静默 no-op；目标帧已挤出 = 计 orphanDrops）。
+ * @param rec 完整计数记录
+ */
+export void profilerPushCounter(const CounterRecord& rec);
+
+/**
  * 收口 dump（renderSystem 返回后调用一次）：写 profiles/trace_<epoch>.json（Perfetto
  * 主报告）+ profiles/stats_<epoch>.json（每 zone 聚合 + 帧时长分布）+ rllogger 摘要。
  * profiler = 0 时静默 no-op；写盘失败仅 warn——诊断路径不得改变程序结果。

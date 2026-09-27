@@ -1,6 +1,9 @@
 # VK_EXT_present_timing 扩展研究记录
 
-> **状态**：调研（已归档 2026-09-08；决策"暂不引入"，待真实帧 pacing 需求出现时按第六节步骤执行）
+> **状态**：调研 → **已引入（仅测量）2026-09-27**（Phase 9 批 9.3 按本文第六节步骤落地；
+> 决策"暂不引入"于当日解除——RADV 侧 advertise 与运行时支持均已实测确认，见文末补记。
+> 本文仍是 API/语义底稿，**实现细节与四处分歧结论以 `docs/phase9_plan.md` §4.4 +
+> `docs/调试历史.md` 2026-09-27 为权威**）
 
 **日期**: 2026-08-22
 **环境**: Gentoo, Vulkan 头文件 1.4.341 (系统), loader 1.4.341, RADV ICD 1.4.354 / NVIDIA 610.57.04
@@ -225,3 +228,41 @@ eFifo 让驱动在 acquire 处阻塞等 vblank，渲染被压回刷新率；72% 
 ① 帧率上限（CPU pacing）；② present mode 可配置化（第六节步骤 2 的前半）；
 ③ `VK_EXT_present_timing` 的 `targetTime` 调度（需 FIFO 系，见 3.1）——与本文档
 "待真实帧 pacing 需求出现时引入"的决策衔接：**若未来做动画质量/延迟优化，本节即触发条件**。
+
+---
+
+## 补记（2026-09-27，批 9.3 引入当日）
+
+本文档"暂不引入"的前提（驱动运行时支持未验证）已解除：本机 **Mesa 26.2.3
+RADV STRIX_HALO（Radeon 8060S）+ KWin Wayland** 已按下列顺序激活并跑通双 present 模式。
+**实现落位与逐条分歧见 `docs/phase9_plan.md` §4.4 与 `docs/调试历史.md` 2026-09-27 条目**，
+此处只记与本文原结论不一致之处：
+
+1. **§二"Swapchain 使能"/§3.2 探测链的 `swapchainSupportedFlags` 一步不可用作门槛**——
+   RADV 对 per-surface+mode 查询返 `swapchainSupportedFlags = 0`，而
+   `presentTimingSupported = true`。查 spec：约束它的 VUID-12448 整段包在
+   `VK_EXT_multisampled_render_to_swapchain` 的 ifdef 内（本项目不启用该扩展）。
+   实际门槛 = `presentTimingSupported` + `presentStageQueries` 含 `QUEUE_OPERATIONS_END`。
+2. **§83 "present pNext 链 = PresentTimingsInfoEXT → PresentId2KHR → PresentFenceInfoEXT"
+   需补两个前提**：① 链上 `PresentId2KHR` 要求 swapchain 创建带
+   `VK_SWAPCHAIN_CREATE_PRESENT_ID_2_BIT_KHR`（VVL 实测报错）；② **queue-full 回退重试时
+   pNext 必须清空**——被拒 present 已把 present fence 置为 SIGNALED（VVL 报
+   `Fences must be reset before being submitted`）且其 wait 已执行，故 fence 与 wait
+   信号量都不可重复提交。
+3. **§67 "四个新入口点 vulkan.hpp wrapper 齐备"需补一条坑**：`vk::Queue::presentKHR`
+   的允许结果列表不含 `VK_ERROR_PRESENT_TIMING_QUEUE_FULL_EXT`，命中**抛异常**而非返回码；
+   按返回码写回退分支永远进不去（实测首轮表现为异常穿透退出）。
+4. **§48 时间域：本机 RADV 只 advertise `VK_TIME_DOMAIN_PRESENT_STAGE_LOCAL_EXT`**
+   （无 swapchain-local），实现改为"优先 swapchain-local，缺则 stage-local"。
+   代价：stage-local 下不同 stage 时间戳**历元不一致**（实测 `QueueOperationsEnd` 比
+   `ImageFirstPixelOut` 晚 ~10 s），故本文设想的"GPU 末时间戳 → 像素可见 = 端到端延迟"
+   在本机不可得，报告侧改为基准 stage 瞬时落位；同 stage 相邻差（IPD）与丢帧计数不受影响。
+5. **§一 stage 支持面实测**：`presentStageQueries = 0x5` = `QUEUE_OPERATIONS_END` +
+   `IMAGE_FIRST_PIXEL_OUT`（本文 §39 列的四个 stage 中，KWin/RADV 不给
+   `REQUEST_DEQUEUED` 与 `IMAGE_FIRST_PIXEL_VISIBLE`）——§4.1"只有 QUEUE_OPERATIONS_END
+   也可交付"的保守预期被超出，像素侧拿到的是 FIRST_PIXEL_OUT。
+6. **§3.1/§八 "不加环境变量开关"的决策被 Phase 9 批 9.3a 修订**：新增
+   `configs/runtime.lua` 的 `present_mode = "immediate"|"fifo"`（默认 immediate = 现状），
+   理由是 9.4 的"帧率上限/present mode 结论"需要双模式对比证据。§八 的定性观测已被量化
+   取代：eImmediate 下 **85%（34190/40117）的 present 其像素 stage 时间恒 0**（= 被合成器
+   丢弃），FIFO 下仅 4/10090。

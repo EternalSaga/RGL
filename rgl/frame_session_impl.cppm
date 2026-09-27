@@ -13,6 +13,7 @@ import vk_device;
 import vk_swapchain;
 import vk_resources;
 import profiler;  // Phase 9 帧相 zone（fenceWait/acquire/submit/present，docs/phase9_plan.md）
+import present_timing;  // Phase 9.3：attach/onQueueFull/collect 方法声明可见（不靠可达性穿透）
 
 namespace RGL {
 
@@ -22,7 +23,8 @@ namespace RGL {
 
 FrameSession::FrameSession(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain,
 		RGL::Resources& vkResources, bool noPresent_)
-	: device(vkDevice), swapchain(&vkSwapchain), resources(&vkResources), noPresent(noPresent_) {
+	: device(vkDevice), swapchain(&vkSwapchain), resources(&vkResources), noPresent(noPresent_),
+	  presentTiming(vkDevice, vkSwapchain) {
 	createSyncObjects();
 	allocateCommandBuffers();
 }
@@ -193,6 +195,46 @@ std::expected<void, Error> FrameSession::submit(vk::PipelineStageFlags2 waitStag
 	return {};
 }
 
+namespace {
+
+/**
+ * vkQueuePresentKHR 包装：vk::raii::Queue::presentKHR 的允许结果列表不含
+ * VK_ERROR_PRESENT_TIMING_QUEUE_FULL_EXT（批 9.3 前该码不存在），命中即抛
+ * PresentTimingQueueFullEXTError → 这里统一折回 Result 值，让帧会话按码走回退分支
+ *（其余码语义与直接调用一致：out-of-date/suboptimal 仍作返回值）。
+ */
+vk::Result presentKHRTolerantQueueFull(vk::Queue queue, const vk::PresentInfoKHR& presentInfo) {
+	try {
+		return queue.presentKHR(presentInfo);
+	} catch (const vk::PresentTimingQueueFullEXTError&) {
+		return vk::Result::eErrorPresentTimingQueueFullEXT;
+	}
+}
+
+/**
+ * 批 9.3 queue-full 回退重试：pNext 清空（同时摘掉 timing 链与 present fence）并摘掉 wait
+ * 信号量后重投同一 image。前提 = spec 语义（wsi.adoc）：被拒 present 的队列操作仍视为已入队、
+ * renderFinished 的 wait 与 present fence 的信号均照常执行——实测 VVL 两条印证：再 wait 同一
+ * binary 信号量非法（同队列自死锁形态），再提交已 SIGNALED 的 present fence 报
+ * "Fences must be reset before being submitted"，故两者都不得重复提交；重试的队列操作排在
+ * 已入队 wait 之后 ⇒ 图像此时必已渲染完成。VVL 未对"再 present 同一 image"报警（acquisition
+ * 已随被拒 present 释放，重投在驱动侧可行）。
+ */
+vk::Result retryPresentWithoutTiming(vk::PresentInfoKHR& presentInfo, vk::Queue queue) {
+	presentInfo.pNext = nullptr;
+	presentInfo.waitSemaphoreCount = 0;
+	presentInfo.pWaitSemaphores = nullptr;
+	return presentKHRTolerantQueueFull(queue, presentInfo);
+}
+
+/** present 返回码中"已有专门分支处理"的四个（其余 = 需留观测的意外错误）。 */
+bool isExpectedPresentResult(vk::Result r) {
+	return r == vk::Result::eSuccess || r == vk::Result::eErrorDeviceLost
+		|| r == vk::Result::eErrorOutOfDateKHR || r == vk::Result::eSuboptimalKHR;
+}
+
+}  // namespace
+
 std::expected<void, Error> FrameSession::present() {
 	auto z = zone("present");  // Phase 9：present 提交 CPU 成本（合成器等待不在内——那是 9.3）
 	// ⑭ 上屏：等 renderFinished 信号量（确保绘制完成），把 imageIndex 交给合成器。
@@ -202,6 +244,8 @@ std::expected<void, Error> FrameSession::present() {
 	// DIAG（diagnostics.lua no_present）：跳 present——buffer 不出进程，KWin 不 import dmabuf
 	if (noPresent)
 		return {};
+	// 批 9.3：本帧先回收上一批结果（合成器反馈有数帧滞后），再决定是否挂 timing 链
+	presentTiming.collect();
 	vk::SwapchainPresentFenceInfoEXT presentFenceInfoEXT{};
 	presentFenceInfoEXT.setFences(*presentFences[currentFrame]);
 	vk::PresentInfoKHR presentInfo{};
@@ -209,7 +253,22 @@ std::expected<void, Error> FrameSession::present() {
 	presentInfo.setWaitSemaphores(*renderFinishedSemaphores[currentFrame]);
 	presentInfo.setSwapchains(*swapchain->getSwapchain());
 	presentInfo.setImageIndices(acquiredImageIndex);
-	auto presentResult = device.getGraphicsQueue().presentKHR(presentInfo);
+	const bool timingAttached = presentTiming.attach(presentInfo);
+	auto presentResult = presentKHRTolerantQueueFull(device.getGraphicsQueue(), presentInfo);
+
+	// 批 9.3 回退：present timing 结果队列满（提案明示路径）。spec（wsi.adoc）：present 被
+	// 拒但队列操作仍视为已入队、renderFinished 的 wait 仍会执行——重试**必须摘掉 wait
+	// 信号量**（同一 binary 信号量再 wait 只能等下一帧的 signal，而那排在更后面 = 自死锁），
+	// 且不挂 timing 链（失败 present 不占结果槽，重试不挂链才不会再次满队列）。重试的队列
+	// 操作排在已入队 wait 之后 ⇒ 图像此时必已渲染完成。若验证期 VVL 对"已释放 acquisition
+	// 的图像再 present"有异议，则改为丢弃本帧不重试（见 docs/调试历史）。
+	if (timingAttached && presentResult == vk::Result::eErrorPresentTimingQueueFullEXT) {
+		if (auto logger = RLLogger::getInstance())
+			logger->info("present_timing: result queue full (frame {}), retry without timing chain",
+				currentFrameNumber);
+		presentTiming.onQueueFull();
+		presentResult = retryPresentWithoutTiming(presentInfo, device.getGraphicsQueue());
+	}
 
 	if (presentResult == vk::Result::eErrorDeviceLost) {
 		auto logger = RLLogger::getInstance();
@@ -225,10 +284,7 @@ std::expected<void, Error> FrameSession::present() {
 	}
 	// 其余错误码（如 SURFACE_LOST）：spec 语义下队列操作仍入队、present fence 仍
 	// 信号（不死锁），但必须留观测——下帧 acquire 大概率持续失败
-	if (presentResult != vk::Result::eSuccess &&
-		presentResult != vk::Result::eErrorDeviceLost &&
-		presentResult != vk::Result::eErrorOutOfDateKHR &&
-		presentResult != vk::Result::eSuboptimalKHR) {
+	if (!isExpectedPresentResult(presentResult)) {
 		auto logger = RLLogger::getInstance();
 		if (logger) logger->error("Renderer: present failed (frame {}): {}", currentFrameNumber,
 			vk::to_string(presentResult));

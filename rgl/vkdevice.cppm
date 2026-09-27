@@ -52,7 +52,7 @@ export struct DgcSupport {
  * ③ raii 对象（physicalDevices / device / 三个 CommandPool）必须经成员
  * 初始化列表初始化，绝不在函数体内初始化；
  * ④ 成员声明顺序 = 初始化依赖顺序（vkInstance→physicalDevices→physicalDevice→
- * dgcSupport→queueManager→optionalFeatures→featuresChain→三 optional 结构→checked→
+ * dgcSupport→queueManager→optionalFeatures→featuresChain→五 optional 结构→checked→
  * device→队列→命令池；checked 是纯顺序锚定成员，见其行内注释）。
  */
 export class DeviceContext {
@@ -61,7 +61,8 @@ export class DeviceContext {
 	 * 构建设备层（全部逻辑在成员初始化列表，按成员声明序）：
 	 * vkInstance → physicalDevices → physicalDevice（pickPhysicalDevice 打分选择）→
 	 * dgcSupport（DGC 能力位派生）→ queueManager → optionalFeatures（探测）→ featuresChain（required 链）→
-	 * eds3Feature → depthClipBaseFeature → robustness2Feature（三个 optional 结构，
+	 * eds3Feature → depthClipBaseFeature → robustness2Feature → presentTimingFeature →
+	 * presentId2Feature（五个 optional 结构，
 	 * 按支持位初始化）→ checked（校验前移）→ device → 三队列
 	 * （graphics/compute/transfer）→ 三命令池（graphics/compute =
 	 * eResetCommandBuffer，transfer = eTransient | eResetCommandBuffer）。
@@ -99,11 +100,15 @@ export class DeviceContext {
 	  /** robustness2（越界访问规范化 + null 描述符）：两支持位共用一个 feature 结构，
 	   * 任一位可用即结构进链（字段按各自支持位置位）；不可用 = 不链接，no-op 降级。 */
 	  robustness2Feature(initOptionalRobustness2Feature(optionalFeatures)),
+	  /** Phase 9.3 present_timing 整组（presentTiming+presentId2+KHR 校准同门，见
+	   * features.cppm presentTimingSupported——与扩展启用同源，任一缺 = 都不链接）。 */
+	  presentTimingFeature(initOptionalPresentTimingFeature(optionalFeatures)),
+	  presentId2Feature(initOptionalPresentId2Feature(optionalFeatures)),
 	  /** 校验前移：必须在 raii::Device 构造（device 成员）之前——feature/extension
 	   * 不支持时 raii 构造器先抛 vk::SystemError（不透明），自定义 Error 路径不可达
 	   *（旧实现在构造体校验 = 失败路径死代码）。本成员只为钉死初始化顺序。 */
 	  checked(precheckDevice(*physicalDevice, featuresChain)),
-	  device(createDevice(*physicalDevice, queueManager, featuresChain, optionalFeatures, eds3Feature, depthClipBaseFeature, robustness2Feature)),
+	  device(createDevice(*physicalDevice, queueManager, featuresChain, optionalFeatures, eds3Feature, depthClipBaseFeature, robustness2Feature, presentTimingFeature, presentId2Feature)),
 		  graphicsQueue(queueManager.getQueue(device, RGL::QueueFamilyRole::Graphics).value()),
 		  computeQueue(queueManager.getQueue(device, RGL::QueueFamilyRole::Compute).value()),
 		  transferQueue(queueManager.getQueue(device, RGL::QueueFamilyRole::Transfer).value()),
@@ -265,6 +270,35 @@ export class DeviceContext {
 	}
 
 	/**
+	 * Phase 9.3 present_timing feature 结构初始化（sType + presentTiming 组门置位；
+	 * 调度两特征 presentAtAbsoluteTime/presentAtRelativeTime 恒 FALSE——9.3 测量-only，
+	 * 不做 targetTime 调度）。
+	 * @param opt 可选 feature 支持位（组门 = presentTimingSupported）
+	 * @return feature 结构（存入 presentTimingFeature 成员，createDevice 组门链接进链尾）
+	 */
+	static vk::PhysicalDevicePresentTimingFeaturesEXT initOptionalPresentTimingFeature(const RGL::OptionalFeatureSupport& opt) {
+		vk::PhysicalDevicePresentTimingFeaturesEXT f{};
+		f.sType = vk::StructureType::ePhysicalDevicePresentTimingFeaturesEXT;
+		f.presentTiming = RGL::presentTimingSupported(opt) ? VK_TRUE : VK_FALSE;
+		f.presentAtAbsoluteTime = VK_FALSE;
+		f.presentAtRelativeTime = VK_FALSE;
+		return f;
+	}
+
+	/**
+	 * Phase 9.3 VK_KHR_present_id2 feature 结构初始化（sType + 组门置位——与
+	 * presentTiming 同门，保证两扩展恒同启用同链接）。
+	 * @param opt 可选 feature 支持位（组门 = presentTimingSupported）
+	 * @return feature 结构（存入 presentId2Feature 成员，createDevice 组门链接进链尾）
+	 */
+	static vk::PhysicalDevicePresentId2FeaturesKHR initOptionalPresentId2Feature(const RGL::OptionalFeatureSupport& opt) {
+		vk::PhysicalDevicePresentId2FeaturesKHR f{};
+		f.sType = vk::StructureType::ePhysicalDevicePresentId2FeaturesKHR;
+		f.presentId2 = RGL::presentTimingSupported(opt) ? VK_TRUE : VK_FALSE;
+		return f;
+	}
+
+	/**
 	 * 创建 raii Device：先按支持位条件链接 optional feature 结构进 required 链尾（见
 	 * 体内注释），再组装 DeviceCreateInfo（pNext = required 链头、queue create infos
 	 * 来自 QueueFamilyManager、扩展 = required 恒启用 + optional 按探测追加）并打日志，
@@ -277,6 +311,8 @@ export class DeviceContext {
 	 * @param eds3Feature edS3 feature 结构（depthClipEnable 置位时链接）
 	 * @param depthClipBaseFeature 旧扩展 base feature 结构（depthClipBase 置位时链接）
 	 * @param robustness2Feature robustness2 feature 结构（两位支持位任一置位时链接）
+	 * @param presentTimingFeature present_timing feature 结构（组门置位时链接）
+	 * @param presentId2Feature present_id2 feature 结构（与 present_timing 同组门链接）
 	 * @return 创建好的 raii Device
 	 * @note 扩展/feature 支持须先经 precheckDevice（校验前移，见构造器）；raii 构造
 	 *   失败抛 vk::SystemError
@@ -287,7 +323,9 @@ export class DeviceContext {
 		const RGL::OptionalFeatureSupport& optionalFeatures,
 		vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT& eds3Feature,
 		vk::PhysicalDeviceDepthClipEnableFeaturesEXT& depthClipBaseFeature,
-		vk::PhysicalDeviceRobustness2FeaturesKHR& robustness2Feature) {
+		vk::PhysicalDeviceRobustness2FeaturesKHR& robustness2Feature,
+		vk::PhysicalDevicePresentTimingFeaturesEXT& presentTimingFeature,
+		vk::PhysicalDevicePresentId2FeaturesKHR& presentId2Feature) {
 		// 条件链接 optional feature 结构进 required 链尾（spec：vkCreateDevice pNext 链只含
 		// "已启用扩展"的 feature 结构——FALSE 结构挂未启用扩展 = UB，RADV 实测启动后首次分配
 		// 即崩）。仅启用者链接；未启用 = 链尾保持 nullptr。扩展启用（getDeviceExtensions）
@@ -297,6 +335,10 @@ export class DeviceContext {
 		if (optionalFeatures.depthClipEnable) { eds3Feature.pNext = optHead; optHead = &eds3Feature; }
 		if (optionalFeatures.robustBufferAccess2 || optionalFeatures.nullDescriptor) {
 			robustness2Feature.pNext = optHead; optHead = &robustness2Feature;
+		}
+		if (RGL::presentTimingSupported(optionalFeatures)) {  // Phase 9.3 整组（与扩展启用同门）
+			presentId2Feature.pNext = optHead; optHead = &presentId2Feature;
+			presentTimingFeature.pNext = optHead; optHead = &presentTimingFeature;
 		}
 		featuresChain.get<RGL::FeatureChainTail>().pNext = optHead;
 
@@ -341,6 +383,10 @@ export class DeviceContext {
 				optionalFeatures.robustBufferAccess2, optionalFeatures.nullDescriptor);
 			logger->info("Device optional ext: calibratedTimestamps={} (Phase 9.2 GPU 时间戳)",
 				optionalFeatures.calibratedTimestamps);
+			logger->info("Device optional: presentTiming gate presentTiming={} presentId2={} calibratedKhr={} -> group={}",
+				optionalFeatures.presentTiming, optionalFeatures.presentId2,
+				optionalFeatures.calibratedTimestampsKhr,
+				RGL::presentTimingSupported(optionalFeatures));
 		}
 
 		return vk::raii::Device(physicalDevice, deviceCreateInfo);
@@ -380,6 +426,8 @@ export class DeviceContext {
 	vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT eds3Feature;
 	vk::PhysicalDeviceDepthClipEnableFeaturesEXT depthClipBaseFeature;
 	vk::PhysicalDeviceRobustness2FeaturesKHR robustness2Feature;
+	vk::PhysicalDevicePresentTimingFeaturesEXT presentTimingFeature;  // Phase 9.3（presentTiming 组门置位才链接）
+	vk::PhysicalDevicePresentId2FeaturesKHR presentId2Feature;  // Phase 9.3（同组，与 presentTiming 整组同进退）
 	bool checked;  // 仅用于钉死初始化顺序：precheckDevice 先于 device 构造（见构造器）
 	vk::raii::Device device;  // raii Device（初始化列表由 createDevice 构造；扩展/feature 校验已前移到 checked）
 	vk::Queue graphicsQueue;  // 图形队列（vk::Queue C 句柄，按值）；主渲染队列

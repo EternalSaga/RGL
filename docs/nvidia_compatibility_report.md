@@ -1,6 +1,7 @@
 # NVIDIA 跨平台兼容性排查报告
 
-> **状态**：现行（跨驱动兼容性排坑记录，含历史排查过程；最新验证见第八节）
+> **状态**：现行（跨驱动兼容性排坑记录，含历史排查过程；最新跨平台全流程验证见第八节，
+> 最新驱动支持状态（present_timing）见第九节）
 
 **日期**: 2026-08-12
 **环境**: Gentoo + RTX 5090 (GB202) / AMD Granite Ridge (Raphael_Mendocino)；2026-08-27 增补：Intel Arc A310（dGPU，anv）/ AMD Strix Halo (Radeon 8060S，当前开发机)
@@ -262,7 +263,30 @@ Aftermath 的自动 checkpoint 在每个 Vulkan 命令后插入 CPU 调用栈。
 
 ---
 
-## 九、参考
+## 九、Phase 9.3 `VK_EXT_present_timing` 驱动支持状态（2026-09-27）
+
+批 9.3 把 present_timing 作为**可选组门**引入（`present_timing + present_id2 +
+VK_KHR_calibrated_timestamps` 三探测全真才启用，任一缺 = 整组 no-op，不破坏启动），
+因此跨驱动差异只影响诊断能力、不影响渲染正确性。当前状态：
+
+| 平台 | 扩展 advertise | 运行时实测 | 结论 |
+|---|---|---|---|
+| **AMD Strix Halo（Radeon 8060S，RADV，Mesa 26.2.3）= 当前开发机** | ✅ 五项齐（present_timing / present_id2 / get_surface_capabilities2 / KHR+EXT calibrated_timestamps，`vulkaninfo` 复核，且 `VK_EXT_descriptor_heap` 同机 advertise） | ✅ **激活并跑通**：窗口 FIFO 与 eImmediate 双模式各长跑，present 结果持续回收、IPD p50 = 6.066 ms 恰 = 驱动报 refreshDuration 6.061 ms、queue-full 回退实测触发并自动恢复、VVL 零报警 | 支持完整（**只 advertise `VK_TIME_DOMAIN_PRESENT_STAGE_LOCAL_EXT`**，无 swapchain-local；且不同 stage 时间戳历元相差 ~10 s → 跨 stage 跨度不可用，详见 `docs/调试历史.md` 2026-09-27 条目） |
+| **NVIDIA（RTX 5090，prime offload / Windows）** | ❓ 未查（本机无 NVIDIA 可见；`vulkaninfo` 枚举不到该设备） | ⏳ 待有卡机器：`just run-igpu` 之外需 `just run`（NVIDIA 路）跑一次窗口 FIFO + eImmediate，看激活三行 log（`Present timing probe` / `active` / `first result`）与 drop/IPD 分布 | 未验证 |
+| **Intel Arc A310（anv）** | ❓ 未查 | ⏳ 同上（`just run-intel`） | 未验证 |
+
+**验证操作口径**（跨机接手时照此）：`configs/diagnostics.lua` 置 `profiler = 30`、
+`configs/runtime.lua` 保持窗口模式，分别以 `present_mode = "immediate"` / `"fifo"` 各跑
+≥60 s；判读 = ① 是否出现 `Present timing active`（未出现则看 `Present timing probe`
+行的 `presentTimingSupported` / `stageQueries`，即该驱动/合成器的支持面）；②
+`present_timing: first result` 行里哪些 stage 给了非 0 时间；③ 终值
+`present_timing summary` / `IPD` 两行的 mean/p50/p95 与 `drop`、`queueFull` 计数。
+未激活或结果全 0 均**不影响程序正确性**（测量-only，默认关时交换链创建参数逐位同旧版，
+headless 与窗口 llm_debug 截图已验证 BIT-IDENTICAL）。
+
+---
+
+## 十、参考
 
 - `min_mesh_crash/README.md` — 最小复现 + 根因证据链（本调查的权威记录）
 - NVIDIA 官方 sample：`/home/robin/mounts/gm7000/program/vk_mini_samples/`

@@ -12,6 +12,8 @@ import vk_instance;
 import vk_device;
 import vkerror;
 import runtime_config;  // PresentModePref（窗口 present 模式偏好，批 9.3 双模式开关）
+import features;        // presentTimingSupported 设备组门（批 9.3）
+import diagnostics;     // diagnostics().profiler（批 9.3 激活门：默认 0 = 零行为变化）
 
 namespace RGL {
 
@@ -32,8 +34,8 @@ namespace RGL {
  * **成员生命周期规则**（AGENTS.md"重要成员生命周期规则"）：raii 对象（surface /
  * swapchain / swapchainImageViews 元素）无默认构造、不可拷贝，必须经成员初始化列表
  * 初始化，绝不在函数体内初始化；成员声明顺序 = 初始化依赖顺序（surface→format/
- * presentMode/surfaceCapabilities→extent→imageCount→swapchain→swapchainImages→
- * swapchainImageViews，前序成员在初始化列表中被后序成员消费）。
+ * presentMode/presentTiming/surfaceCapabilities→extent→imageCount→swapchain→
+ * swapchainImages→swapchainImageViews，前序成员在初始化列表中被后序成员消费）。
  */
 export class Swapchain {
    public:
@@ -42,7 +44,8 @@ export class Swapchain {
 	 * vkDevice → window → surface（headless ? createHeadlessSurface : createSurface）→
 	 * format（headless ? selectHeadlessFormat : window->selectFormat）→ presentMode
 	 * （headless ? selectHeadlessPresentMode : createPresentMode）→ surfaceCapabilities
-	 * （查询）→ extent（headless = {headlessWidth, headlessHeight} :
+	 * （查询）→ presentTiming（批 9.3 激活探测：设备组门 ∧ profiler>0 ∧ surface 能力，
+	 * 门不过 = active false 零额外查询）→ extent（headless = {headlessWidth, headlessHeight} :
 	 * window->getSwapchainExtend）→ imageCount（headless = minImageCount :
 	 * window->getImageCount）→ swapchain（buildSwapchainCreateInfo）→
 	 * swapchainImages（getImages）→ swapchainImageViews（createImageViews）。
@@ -74,6 +77,7 @@ export class Swapchain {
 		  presentModePref(presentModePref),
 		  presentMode(headless ? selectHeadlessPresentMode(vkDevice.getPhysicalDevice().getSurfacePresentModesKHR(*surface))
 		                      : createPresentMode(vkDevice, surface, presentModePref)),
+		  presentTiming(probePresentTiming(vkDevice, surface, presentMode)),
 		  surfaceCapabilities(vkDevice.getPhysicalDevice().getSurfaceCapabilitiesKHR(*surface)),
 		  extent(headless ? vk::Extent2D{headlessWidth, headlessHeight}
 		                 : window->getSwapchainExtend(surfaceCapabilities)),
@@ -90,6 +94,8 @@ export class Swapchain {
 		if (auto* logger = RLLogger::getInstance())
 			logger->info("Swapchain present mode: {}{}", vk::to_string(presentMode),
 				headless ? " (headless)" : "");
+		// 批 9.3：激活时设结果队列容量 + 打激活日志（未激活 = no-op，零噪声）
+		setupPresentTiming();
 	}
 
 	/** @return raii surface const 引用（headless = vkCreateHeadlessSurfaceEXT，否则
@@ -110,12 +116,19 @@ export class Swapchain {
 	vk::SurfaceFormatKHR getFormat() const { return format; }
 	/** @return 交换链 present 模式（headless 优先 eFifo；窗口路径按 presentModePref，默认 eImmediate）。 */
 	vk::PresentModeKHR getPresentMode() const { return presentMode; }
+	/** @return 批 9.3 present_timing 是否激活（探测三条件全过；false = 帧会话不挂 timing pNext 链）。 */
+	bool isPresentTimingActive() const { return presentTiming.active; }
+	/** @return 激活时的 stage 查询掩码（VK_PRESENT_STAGE_* 位集；present_timing attach 逐项填
+	 * presentStageQueries，未激活 = 0 无意义）。 */
+	vk::PresentStageFlagsEXT getPresentStageQueries() const { return presentTiming.stageQueries; }
+	/** @return 结果队列容量（激活时 = imageCount×2，present_timing 用它限 in-flight 计数）。 */
+	uint32_t getPresentTimingQueueCapacity() const { return imageCount * 2; }
 
 	/**
-	 * 重查 caps/format/presentMode 后按需重建。仅按 extent 判断（旧实现）会漏掉
+	 * 重查 caps/format/presentMode/presentTiming 后按需重建。仅按 extent 判断（旧实现）会漏掉
 	 * format/颜色空间/transform 漂移（如 HDR 状态切换）：acquire OUT_OF_DATE 后 extent 未变
 	 * 时静默 no-op → 每帧再失败的死循环。changed = extent / format / colorSpace /
-	 * presentMode / currentTransform 任一不同；重建 = device waitIdle → 销毁旧 swapchain
+	 * presentMode / currentTransform / presentTiming.active 任一不同；重建 = device waitIdle → 销毁旧 swapchain
 	 * （swapchain = nullptr：raii nullptr_t 临时 + 移动赋值，旧对象在语句末析构）→ 按
 	 * 重查值（非构造期缓存）建新 swapchain + 刷新 images/views。
 	 * @pre window 必非空（重查全走 window 的 selectFormat / getSwapchainExtend /
@@ -132,12 +145,14 @@ export class Swapchain {
 		auto newFormat = window->selectFormat(
 			vkDevice.getPhysicalDevice().getSurfaceFormatsKHR(*surface));
 		auto newPresentMode = createPresentMode(vkDevice, surface, presentModePref);
+		auto newPresentTiming = probePresentTiming(vkDevice, surface, newPresentMode);
 		const vk::Extent2D newExtent = window->getSwapchainExtend(newCaps);
 
 		const bool changed =
 			newExtent.width != extent.width || newExtent.height != extent.height ||
 			newFormat.format != format.format || newFormat.colorSpace != format.colorSpace ||
-			newPresentMode != presentMode || newCaps.currentTransform != surfaceCapabilities.currentTransform;
+			newPresentMode != presentMode || newCaps.currentTransform != surfaceCapabilities.currentTransform ||
+			newPresentTiming.active != presentTiming.active;  // 批 9.3：激活态翻转也须重建（flag 是创建期属性）
 		if (!changed) {
 			return false;
 		}
@@ -152,10 +167,12 @@ export class Swapchain {
 		surfaceCapabilities = newCaps;
 		format = newFormat;
 		presentMode = newPresentMode;
+		presentTiming = newPresentTiming;  // 批 9.3：时间域 id 等运行态随新链作废（collect 侧按句柄变化自适应）
 		extent = newExtent;
 		imageCount = window->getImageCount(surfaceCapabilities.minImageCount,
 			surfaceCapabilities.maxImageCount);
 		swapchain = vk::raii::SwapchainKHR(vkDevice.getDevice(), buildSwapchainCreateInfo());
+		setupPresentTiming();  // 批 9.3：新链重设结果队列容量（未激活 = no-op）
 		swapchainImages = swapchain.getImages();
 		swapchainImageViews = createImageViews(vkDevice.getDevice(), swapchainImages, format.format);
 		return true;
@@ -257,6 +274,97 @@ export class Swapchain {
 	}
 
 	/**
+	 * 批 9.3 present_timing 探测结果（成员 `presentTiming`；构造期与 recreate() 各重探一次）。
+	 * 三态：不支持（设备组门/surface 能力任一缺）= active false，交换链行为与旧版完全一致；
+	 * 支持 = active true，交换链带 ePresentTimingEXT flag 创建、结果队列容量 = imageCount×2
+	 *（提案建议 ≥2×imageCount，覆盖在飞帧 + 一读回延迟）。时间域/刷新周期等运行态
+	 * **不在本结构**——归 present_timing 模块自持（本类只管创建期机械）。
+	 */
+	struct PresentTimingSupport {
+		bool active = false;  // true = 已激活（flag 已置 + 队列已设容量）
+		vk::PresentStageFlagsEXT stageQueries{};  // surface 支持的 stage 查询掩码（attach 用）
+	};
+
+	/**
+	 * 批 9.3 激活探测（三条件全过才 active）：
+	 * ① 设备组门 RGL::presentTimingSupported（present_timing + present_id2 + KHR 校准）；
+	 * ② profiler 帧窗口已开（diagnostics().profiler > 0）——默认关 = 探测都不做，
+	 *    交换链创建参数逐位与旧版一致（BIT-IDENTICAL 红线，phase9_plan §8）；
+	 * ③ surface 能力：VK_KHR_get_surface_capabilities2（vkinstance 基础扩展恒启用）经
+	 *    getSurfaceCapabilities2KHR 的 timingCaps 查 presentTimingSupported 与
+	 *    presentStageQueries（含 QUEUE_OPERATIONS_END）。**per-present-mode**——
+	 *    用 SurfacePresentModeKHR 过滤当前选定模式查询（FIFO 与 eImmediate 支持位可能不同，
+	 *    本机 RADV 实测见 nvidia_compatibility_report / 调试历史）。
+	 * headless surface 无 present_timing 支持 → 自然落选（不特判）。
+	 * @param vkDevice 设备层（组门位 + PhysicalDevice 查询）
+	 * @param surface 目标 surface
+	 * @param mode 已选 present 模式（按模式过滤能力）
+	 * @return 探测结果（active=false 时其余字段无意义）
+	 */
+	static PresentTimingSupport probePresentTiming(RGL::DeviceContext& vkDevice,
+		const vk::raii::SurfaceKHR& surface, vk::PresentModeKHR mode) {
+		if (!RGL::presentTimingSupported(vkDevice.getOptionalFeatures())
+			|| RGL::diagnostics().profiler == 0) {
+			return {};  // 门①②短路：不查 surface 能力（默认关 = 零额外查询）
+		}
+		vk::SurfacePresentModeKHR modeFilter{};
+		modeFilter.presentMode = mode;
+		vk::PhysicalDeviceSurfaceInfo2KHR surfaceInfo{};
+		surfaceInfo.surface = *surface;
+		surfaceInfo.pNext = &modeFilter;
+		vk::PresentTimingSurfaceCapabilitiesEXT timingCaps{};
+		vk::SurfaceCapabilities2KHR caps2{};
+		caps2.pNext = &timingCaps;
+		auto* logger = RLLogger::getInstance();
+		auto capsResult = vkDevice.getPhysicalDevice().getSurfaceCapabilities2KHR(&surfaceInfo, &caps2);
+		if (capsResult != vk::Result::eSuccess) {
+			if (logger)
+				logger->info("Present timing probe: caps2 query -> {} (mode {}), inactive",
+					vk::to_string(capsResult), vk::to_string(mode));
+			return {};  // 查询失败（理论罕见）= 降级不激活
+		}
+		// 探测结论入 log（phase9_plan §4.1"先 probe 再定深浅"的证据行；profiler>0 才走到这）
+		if (logger)
+			logger->info("Present timing probe: mode={} presentTimingSupported={} "
+				"absoluteTime={} relativeTime={} stageQueries={:08x}",
+				vk::to_string(mode), timingCaps.presentTimingSupported != 0,
+				timingCaps.presentAtAbsoluteTimeSupported != 0, timingCaps.presentAtRelativeTimeSupported != 0,
+				static_cast<uint32_t>(timingCaps.presentStageQueries));
+		// 门槛 = presentTimingSupported + stage 掩码含 QUEUE_OPERATIONS_END（spec：supported 时
+		// 至少 advertise 该位，缺失即驱动异常，降级）。注：VkSwapchainFlagsSurfaceCapabilitiesEXT
+		// 的 flags-subset VUID-12448 只在启用 multisampled_render_to_swapchain 时生效（本项目
+		// 恒不启用），故 ePresentTimingEXT 不经该结构把关，本机 RADV 实测该结构返 0
+		//（2026-09-27，若按它筛会误判为不支持）。
+		if (!timingCaps.presentTimingSupported)
+			return {};
+		auto stages = timingCaps.presentStageQueries;
+		if (!(stages & vk::PresentStageFlagBitsEXT::eQueueOperationsEnd))
+			return {};
+		return PresentTimingSupport{true, stages};
+	}
+
+	/**
+	 * 激活后置动作（构造体与 recreate() 共用）：设 present timing 结果队列容量
+	 *（= imageCount × 2，提案建议值；容量满时 present 返回
+	 * VK_ERROR_PRESENT_TIMING_QUEUE_FULL_EXT → 帧会话侧回退），并打激活日志
+	 *（stageQueries 掩码 = 报告侧可查 stage 的证据）。
+	 */
+	void setupPresentTiming() {
+		if (!presentTiming.active)
+			return;
+		auto* logger = RLLogger::getInstance();
+		auto queueCapacity = imageCount * 2;  // 覆盖双在飞帧 + 一读回延迟
+		if (logger)
+			logger->info("Present timing active: queueCapacity={}, stageQueries={:#010x}",
+				queueCapacity, static_cast<uint32_t>(presentTiming.stageQueries));
+		auto result = swapchain.setPresentTimingQueueSizeEXT(queueCapacity);
+		if (result != vk::Result::eSuccess && logger)
+			logger->warn("vkSetSwapchainPresentTimingQueueSizeEXT({}) -> {}",
+				queueCapacity, vk::to_string(result));
+	}
+
+
+	/**
 	 * 按当前成员组装 SwapchainCreateInfo（构造器与 recreate() 共用，后者按重查值再调）：
 	 * surface / minImageCount = imageCount / imageFormat + imageColorSpace = format /
 	 * imageExtent = extent（headless = 唯一尺寸来源，v357 headless create info 无尺寸
@@ -264,7 +372,7 @@ export class Swapchain {
 	 * COLOR_ATTACHMENT | TRANSFER_DST | TRANSFER_SRC（原因见体内注释）/
 	 * imageSharingMode = EXCLUSIVE / preTransform = currentTransform / compositeAlpha =
 	 * OPAQUE / presentMode / clipped = TRUE / oldSwapchain = nullptr（不走旧 swapchain
-	 * 隐式重建路径）。
+	 * 隐式重建路径）/ flags = 0 或批 9.3 激活时含 ePresentTimingEXT。
 	 * @return 填好的 SwapchainCreateInfo（局部临时，仅供 raii 构造消费）
 	 */
 	vk::SwapchainCreateInfoKHR buildSwapchainCreateInfo() const {
@@ -287,6 +395,13 @@ export class Swapchain {
 		swapchainCreateInfo.presentMode = presentMode;
 		swapchainCreateInfo.clipped = VK_TRUE;
 		swapchainCreateInfo.oldSwapchain = nullptr;
+		// 批 9.3：激活才置 flag（未激活 = flags 保持默认 0，创建参数逐位同旧版）。
+		// present timing 结果按 present id 关联 → 帧会话恒挂 VkPresentId2KHR，该结构要求
+		// swapchain 带 ePresentId2 创建位（VUID-VkPresentInfoKHR-pPresentId…，VVL 实测报错），
+		// 故两 flag 同进退；两 feature（presentTiming / presentId2）已在设备组门启用。
+		if (presentTiming.active)
+			swapchainCreateInfo.flags = vk::SwapchainCreateFlagBitsKHR::ePresentTimingEXT
+				| vk::SwapchainCreateFlagBitsKHR::ePresentId2;
 		return swapchainCreateInfo;
 	}
 
@@ -327,6 +442,7 @@ export class Swapchain {
 	vk::SurfaceFormatKHR format;  // 交换链格式（headless 优先 B8G8R8A8Srgb/eSrgbNonlinear；窗口路径 = SDLWindow::selectFormat）
 	PresentModePref presentModePref;  // 窗口 present 模式偏好（runtime.lua present_mode；headless 忽略；recreate() 复选用）
 	vk::PresentModeKHR presentMode;  // 交换链 present 模式（headless 优先 eFifo；窗口路径按 presentModePref，默认 eImmediate）
+	PresentTimingSupport presentTiming;  // 批 9.3 present_timing 探测/激活态（门不过 = active false，行为同旧版；recreate() 重探）
 	vk::SurfaceCapabilitiesKHR surfaceCapabilities;  // surface 能力快照（构造期查询；recreate() 重查刷新）
 	vk::Extent2D extent;  // 交换链 extent（headless = headless_width/height；窗口路径 = getSwapchainExtend 钳制值）
 	uint32_t imageCount;  // 图像数（headless = minImageCount；窗口路径 = getImageCount，Wayland 不加 1）

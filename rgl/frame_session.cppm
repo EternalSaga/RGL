@@ -8,6 +8,7 @@ import vk_device;
 import vk_swapchain;
 import vk_resources;
 import vkerror;
+import present_timing;  // Phase 9.3：present 挂 timing 链 + 每帧读回（成员直持，无全局）
 
 namespace RGL {
 
@@ -36,9 +37,10 @@ export class FrameSession {
 	};
 
 	/**
-	 * 构造即建同步对象与命令缓冲（Renderer 构造末站调用，设备层已就绪）。
+	 * 构造即建同步对象与命令缓冲（Renderer 构造末站调用，设备层已就绪）；Phase 9.3
+	 * present_timing 会话同站构造（激活与否已由 Swapchain 探测门定型，未激活 = 全钩子 no-op）。
 	 * @param vkDevice 设备层（device/graphicsQueue）
-	 * @param vkSwapchain 交换链（acquire/recreate/images）
+	 * @param vkSwapchain 交换链（acquire/recreate/images + present_timing 激活态）
 	 * @param vkResources 资源层（深度图随 swapchain extent 同步重建）
 	 * @param noPresent DIAG：true = 永不 present（见类注释）
 	 */
@@ -114,6 +116,7 @@ export class FrameSession {
 	RGL::Swapchain* swapchain;
 	RGL::Resources* resources;
 	bool noPresent;
+	RGL::PresentTiming presentTiming;  // Phase 9.3 present_timing 会话（激活门在 vkswapchain；本对象随帧会话生命周期）
 	uint32_t currentFrame = 0;        // 当前帧 slot（0/1；advance() 模 kFramesInFlight 推进）
 	uint32_t acquiredImageIndex = 0;  // 本帧 acquire 的后缓冲下标
 	uint64_t frameCount = 0;          // DIAG：device lost 帧号定位（beginFrame 自增）

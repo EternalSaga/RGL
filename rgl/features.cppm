@@ -70,6 +70,20 @@ export std::vector<const char*> getDeviceExtensions() {
 }
 
 /**
+ * Phase 9.3 present_timing 设备侧**整组门**：三扩展（VK_EXT_present_timing +
+ * VK_KHR_present_id2 + VK_KHR_calibrated_timestamps）全探测可用才视为支持。
+ * 同一判定供 getDeviceExtensions（启用）、vkdevice 条件链 feature 结构、
+ * vkswapchain surface 探测门三处消费——同源不可分叉（部分启用 = 启用但永不使用，
+ * 白增设备开销且违背"全可用才启用"验收口径）。
+ * @param opt queryOptionalFeatures 探测结果
+ * @return true = 三扩展齐备（注意：还须实例侧 surface_capabilities2 与
+ *   diagnostics.profiler>0 与 surface/模式探测（vkswapchain 侧），才是完整激活）
+ */
+export bool presentTimingSupported(const OptionalFeatureSupport& opt) {
+	return opt.presentTiming && opt.presentId2 && opt.calibratedTimestampsKhr;
+}
+
+/**
  * 设备创建用的必需 + 可选扩展列表。可选扩展：仅在对应 optional feature 探测可用时
  * 追加。扩展启用与 feature 置位同源（queryOptionalFeatures 先查扩展可用再读 feature
  * 字段，缺一即 false = 整体 no-op），故此处按 OptionalFeatureSupport 位逐项追加即可——
@@ -88,6 +102,12 @@ export std::vector<const char*> getDeviceExtensions(const OptionalFeatureSupport
 		extensions.push_back(VK_KHR_ROBUSTNESS_2_EXTENSION_NAME);
 	if (opt.calibratedTimestamps)  // Phase 9.2 GPU 时间戳：设备↔CLOCK_MONOTONIC 校准
 		extensions.push_back(VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME);  //（无 feature 结构，纯扩展启用）
+	if (presentTimingSupported(opt)) {  // Phase 9.3 present_timing：三扩展全有才整组启用
+		extensions.push_back(VK_EXT_PRESENT_TIMING_EXTENSION_NAME);
+		extensions.push_back(VK_KHR_PRESENT_ID_2_EXTENSION_NAME);
+		if (opt.calibratedTimestampsKhr)  // KHR 校准（present timing 时间域换算，与 EXT 同名异入口）
+			extensions.push_back(VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME);
+	}
 	return extensions;
 }
 

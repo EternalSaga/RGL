@@ -182,6 +182,14 @@ per-light 颜色、距离衰减）headless 零 VVL error；forward 只读 `light
    架构上长在 deferred light pass（逐像素 specular 现成），D1 两路对等需豁免或 forward 补 G-buffer
      ↓
 Phase 9：性能观测（profiler）——先回答"CPU-bound 还是 GPU-bound"，再谈优化
+  **进度（2026-09-27）**：批 9.1（① CPU zone profiler，零宏 `RGL::zone()`）/ 9.2（③ GPU
+  时间戳 + 校准同轴）/ 9.3（④ `VK_EXT_present_timing` 测量通路 + 9.3a `present_mode`
+  双模式开关）均已落地，默认关全部 BIT-IDENTICAL；②（gprof/perf）未做（判定不依赖）。
+  ⑤ 判定收口 = 批 9.4（待做，输入已备齐）。实施与实测记录 = `docs/phase9_plan.md`
+  §3.4/§4.4/§7；跨驱动状态 = `docs/nvidia_compatibility_report.md` §九。
+  关键实测（本机 RADV Strix Halo + KWin，refresh 6.061 ms）：FIFO IPD p50 = 6.066 ms
+  ≈ 刷新周期、丢帧 0.04%；**eImmediate 下 85% 的 present 从未到达像素 stage**
+  （满速渲被丢弃的帧，直接给出"帧率上限"证据）。
   ① CPU 帧相 profiler（内建）：每帧逐相 chrono（ECS/render_list/命令录制/④c cull
      waitForFences/present acquire）+ rllogger 直方图——关键 = 分清 CPU 干活 vs 等 GPU stall
   ② 函数级深挖：gprof（clang `-pg` 兼容，同一套 mcount 插桩；勿开 LTO）或 perf + flamegraph

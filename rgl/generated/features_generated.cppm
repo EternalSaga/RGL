@@ -27,7 +27,10 @@ export struct OptionalFeatureSupport {
     bool depthClipBase = false;
     bool robustBufferAccess2 = false;
     bool nullDescriptor = false;
+    bool presentTiming = false;
+    bool presentId2 = false;
     bool calibratedTimestamps = false;
+    bool calibratedTimestampsKhr = false;
 };
 
 namespace {
@@ -59,7 +62,16 @@ export OptionalFeatureSupport queryOptionalFeatures(const vk::raii::PhysicalDevi
         auto f_nullDescriptor = device.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceRobustness2FeaturesKHR>();
         s.nullDescriptor = f_nullDescriptor.get<vk::PhysicalDeviceRobustness2FeaturesKHR>().nullDescriptor != 0;
     }
+    if (extensionAvailable(device, VK_EXT_PRESENT_TIMING_EXTENSION_NAME)) {
+        auto f_presentTiming = device.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDevicePresentTimingFeaturesEXT>();
+        s.presentTiming = f_presentTiming.get<vk::PhysicalDevicePresentTimingFeaturesEXT>().presentTiming != 0;
+    }
+    if (extensionAvailable(device, VK_KHR_PRESENT_ID_2_EXTENSION_NAME)) {
+        auto f_presentId2 = device.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDevicePresentId2FeaturesKHR>();
+        s.presentId2 = f_presentId2.get<vk::PhysicalDevicePresentId2FeaturesKHR>().presentId2 != 0;
+    }
     s.calibratedTimestamps = extensionAvailable(device, VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME);
+    s.calibratedTimestampsKhr = extensionAvailable(device, VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME);
     return s;
 }
 

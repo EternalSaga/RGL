@@ -137,9 +137,23 @@ using vk::PipelineLayoutCreateInfo;
 using vk::PipelineShaderStageCreateInfo;
 using vk::PipelineStageFlagBits2;
 using vk::PipelineStageFlags2;
+using vk::PastPresentationTimingEXT;          // Phase 9.3 present_timing 结果项
+using vk::PastPresentationTimingInfoEXT;      // Phase 9.3 collect 输入描述
+using vk::PastPresentationTimingPropertiesEXT;  // Phase 9.3 collect 输出缓冲描述
+using vk::PhysicalDevicePresentId2FeaturesKHR;  // Phase 9.3 feature 结构（vkdevice 成员）
+using vk::PhysicalDevicePresentTimingFeaturesEXT;  // Phase 9.3 feature 结构（vkdevice 成员）
+using vk::PhysicalDeviceSurfaceInfo2KHR;      // Phase 9.3 caps2 查询输入
 using vk::PolygonMode;
+using vk::PresentId2KHR;                      // Phase 9.3 present id pNext
 using vk::PresentInfoKHR;
 using vk::PresentModeKHR;
+using vk::PresentStageFlagBitsEXT;            // Phase 9.3 stage 位（VK_PRESENT_STAGE_*）
+using vk::PresentStageFlagsEXT;               // Phase 9.3 stage 查询/结果 flags
+using vk::PresentStageTimeEXT;                // Phase 9.3 per-stage 时间对
+using vk::PresentTimingInfoEXT;               // Phase 9.3 present pNext 链主结构
+using vk::PresentTimingsInfoEXT;              // Phase 9.3 present pNext 链头（数组描述）
+using vk::PresentTimingSurfaceCapabilitiesEXT;  // Phase 9.3 surface 能力（stageQueries）
+using vk::PresentTimingQueueFullEXTError;       // Phase 9.3：raii presentKHR 遇队列满抛此异常
 using vk::PushConstantRange;
 using vk::PushDataInfoEXT;
 using vk::QueryPool;
@@ -167,12 +181,20 @@ using vk::ShaderStageFlagBits;
 using vk::SharingMode;
 using vk::StructureChain;
 using vk::StructureType;
+using vk::SurfaceCapabilities2KHR;            // Phase 9.3 caps2 查询输出
 using vk::SurfaceCapabilitiesKHR;
 using vk::SurfaceFormatKHR;
+using vk::SurfacePresentModeKHR;              // Phase 9.3 caps2 查询输入（按 present 模式过滤）
+using vk::SwapchainCalibratedTimestampInfoEXT;  // Phase 9.3 时间域校准 pNext
 using vk::SwapchainCreateInfoKHR;
+using vk::SwapchainKHR;                       // Phase 9.3 交换链句柄（重建检测）
+using vk::SwapchainCreateFlagBitsKHR;         // Phase 9.3 ePresentTimingEXT 创建 flag
 using vk::SwapchainPresentFenceInfoEXT;
+using vk::SwapchainTimeDomainPropertiesEXT;   // Phase 9.3 时间域 id 列表输出
+using vk::SwapchainTimingPropertiesEXT;       // Phase 9.3 refreshDuration/Interval
 using vk::SystemError;
 using vk::TimeDomainEXT;
+using vk::TimeDomainKHR;                      // Phase 9.3 eSwapchainLocalEXT / eClockMonotonic
 using vk::Viewport;
 using vk::WriteDescriptorSet;
 using vk::makeVersion;

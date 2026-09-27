@@ -19,6 +19,8 @@ namespace {
 
 /** 单帧 zone 容量上限（超出计 drops；正常 ~15 zone/帧，防失控循环刷爆内存）。 */
 constexpr uint32_t kMaxZonesPerFrame = 16384;
+/** 单帧计数容量上限（批 9.3：present 每帧 ≤ 队列容量条结果，正常 <10；防失控）。 */
+constexpr uint32_t kMaxCountersPerFrame = 4096;
 /** 帧窗口配置钳制上限（防离谱 N 值；最坏 ~4096 帧 × 16384 × 64B ≈ 4GB 仅理论，实际远小）。 */
 constexpr uint32_t kMaxWindowFrames = 4096;
 /** Perfetto trace pid 常量（process_name 元数据同值）。 */
@@ -37,6 +39,7 @@ struct FrameSlot {
 	uint64_t prevFrameDurNs = 0;   // 上一帧墙钟时长（开本帧时算出，归属帧号 = frame-1）
 	uint32_t drops = 0;            // 本帧溢出丢弃数
 	std::vector<ZoneRecord> zones; // 本帧记录（clear 保留容量，帧内复用）
+	std::vector<CounterRecord> counters;  // 本帧计数记录（批 9.3 present_*，与 zones 同生命周期）
 };
 
 /** profiler 单例态（单线程帧循环；window 定型后不再变化）。 */
@@ -126,18 +129,47 @@ struct ZoneAgg {
 	std::vector<uint64_t> durs;  // 升序（聚合末尾排序）
 };
 
-/** 聚合结果（zones 按 total 降序 + 帧时长升序分布 + 丢弃/帧数）。 */
+/** 单计数聚合条目（批 9.3：按 name 聚合，值序无关——last 取帧号最大者）。 */
+struct CounterAgg {
+	std::string name;
+	uint64_t count = 0;
+	uint64_t sum = 0;
+	uint64_t min = 0;
+	uint64_t max = 0;
+	uint64_t last = 0;
+};
+
+/** 聚合结果（zones 按 total 降序 + 帧时长升序分布 + 计数聚合 + 丢弃/帧数）。 */
 struct ReportData {
 	std::vector<ZoneAgg> zones;
+	std::vector<CounterAgg> counters;  // 按首次出现序
 	std::vector<uint64_t> frameDursNs;
 	uint64_t drops = 0;
 	uint64_t frames = 0;
 };
 
+/** 累加单槽计数记录到聚合表（ordered 已按帧升序 → 后写覆盖 last 即为最新值）。 */
+void accumulateCounters(const FrameSlot& slot, ReportData& out,
+	std::map<std::string, size_t>& counterIndex) {
+	for (const CounterRecord& c : slot.counters) {
+		auto [it, inserted] = counterIndex.try_emplace(std::string(c.name), out.counters.size());
+		if (inserted)
+			out.counters.push_back(CounterAgg{std::string(c.name), 0, 0,
+				std::numeric_limits<uint64_t>::max(), 0, 0});
+		CounterAgg& agg = out.counters[it->second];
+		++agg.count;
+		agg.sum += c.value;
+		agg.min = std::min(agg.min, c.value);
+		agg.max = std::max(agg.max, c.value);
+		agg.last = c.value;
+	}
+}
+
 /** 遍历帧槽聚合（聚合与帧序无关；帧时长同时排序供分位数用）。 */
 ReportData aggregate(const std::vector<FrameSlot*>& ordered) {
 	ReportData out;
 	std::map<std::string, size_t> index;  // key → out.zones 下标
+	std::map<std::string, size_t> counterIndex;  // name → out.counters 下标
 	for (const FrameSlot* slot : ordered) {
 		++out.frames;
 		out.drops += slot->drops;
@@ -153,7 +185,11 @@ ReportData aggregate(const std::vector<FrameSlot*>& ordered) {
 			agg.totalNs += r.durNs;
 			agg.durs.push_back(r.durNs);
 		}
+		accumulateCounters(*slot, out, counterIndex);
 	}
+	for (CounterAgg& a : out.counters)
+		if (a.count == 0)
+			a.min = 0;
 	for (ZoneAgg& a : out.zones)
 		std::ranges::sort(a.durs);
 	std::ranges::sort(out.frameDursNs);
@@ -193,6 +229,14 @@ bool writeTrace(const std::vector<FrameSlot*>& ordered, const std::filesystem::p
 				static_cast<double>(r.durNs) / 1000.0,
 				kTracePid, tidFor(r.kind), jsonEscape(r.file), r.line, r.frame);
 		}
+		// C = 进程级 counter（批 9.3：present.ipd / present.drops / present.queue_full /
+		// present.refresh_ns——不写 tid = 归 process counter 轨，Perfetto 自动画阶梯曲线）
+		for (const CounterRecord& c : slot->counters) {
+			fmt::format_to(std::back_inserter(out),
+				R"(,{{"name":"{}","cat":"counter","ph":"C","ts":{:.3f},"pid":{},"args":{{"value":{},"frame":{}}}}})",
+				jsonEscape(c.name), static_cast<double>(c.tsNs) / 1000.0,
+				kTracePid, c.value, c.frame);
+		}
 	}
 	out += "]}";
 	return writeTextFile(path, out);
@@ -223,7 +267,19 @@ bool writeStats(const ReportData& data, const std::filesystem::path& path) {
 		data.frameDursNs.size(), meanMs(data.frameDursNs),
 		toMs(percentile(data.frameDursNs, 0.50)), toMs(percentile(data.frameDursNs, 0.95)),
 		toMs(data.frameDursNs.empty() ? 0 : data.frameDursNs.back()));
-	out += "}";
+	// 计数聚合（批 9.3 present_* 等；值原样 ns/次数，不做单位换算——消费方按 name 定）
+	out += R"(,"counters":[)";
+	first = true;
+	for (const CounterAgg& c : data.counters) {
+		if (!first)
+			out += ',';
+		first = false;
+		out += fmt::format(
+			R"({{"name":"{}","count":{},"last":{},"min":{},"max":{},"avg":{:.1f}}})",
+			jsonEscape(c.name), c.count, c.last, c.min, c.max,
+			c.count ? static_cast<double>(c.sum) / static_cast<double>(c.count) : 0.0);
+	}
+	out += "]}";
 	return writeTextFile(path, out);
 }
 
@@ -247,6 +303,12 @@ void logSummary(const ReportData& data, uint32_t window) {
 			a.name, count, toMs(a.totalNs),
 			count ? toMs(a.totalNs) / static_cast<double>(count) : 0.0,
 			toMs(percentile(a.durs, 0.95)), toMs(count ? a.durs.back() : 0));
+	}
+	// 计数摘要行（批 9.3：present.* 等——单位由 name 定，此处原样输出）
+	for (const CounterAgg& c : data.counters) {
+		logger->info("  counter {:<22} n={:<6} last={:<10} min={:<10} max={:<10} avg={:.1f}",
+			c.name, c.count, c.last, c.min, c.max,
+			c.count ? static_cast<double>(c.sum) / static_cast<double>(c.count) : 0.0);
 	}
 }
 
@@ -343,6 +405,7 @@ void profilerFrameBegin() {
 	slot.prevFrameDurNs = (st.prevBeginNs != 0 && k > 0) ? t - st.prevBeginNs : 0;
 	slot.frame = k;
 	slot.zones.clear();
+	slot.counters.clear();
 	slot.drops = 0;
 	st.frame = k;
 	st.prevBeginNs = t;
@@ -366,6 +429,22 @@ void profilerPushRecord(const ZoneRecord& rec) {
 		return;
 	}
 	slot.zones.push_back(rec);
+}
+
+void profilerPushCounter(const CounterRecord& rec) {
+	auto& st = state();
+	if (st.window == 0 || !st.inFrame)
+		return;  // 关/未开帧：静默丢（批 9.3 present 计数同配置门控，正常不可达）
+	FrameSlot& slot = st.slots[rec.frame % st.window];
+	if (slot.frame != rec.frame) {
+		++st.orphanDrops;  // 目标帧已挤出（present 结果回读滞后数帧，窗口过小时命中）
+		return;
+	}
+	if (slot.counters.size() >= kMaxCountersPerFrame) {
+		++slot.drops;
+		return;
+	}
+	slot.counters.push_back(rec);
 }
 
 void profilerDump() {

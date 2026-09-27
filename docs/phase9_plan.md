@@ -201,6 +201,72 @@ eImmediate 限制（archive §3.1）：`targetTime` 调度仅 FIFO 系有效 →
 | 反馈仅轮询、queue-full | §4.2 回退路径为必须项，非可选 |
 | **跨平台未验**：本机单 GPU RADV 已确认；NVIDIA/Intel ❓ | 9.3 验收在有卡机器补测，结果补录 `nvidia_compatibility_report.md`（archive §3.3 两个 ❓ 全部闭环） |
 
+### 4.4 实施记录（2026-09-27，批 9.3a + 9.3b 落地，本机 RADV 实测）
+
+**结构**：新 `present_timing.cppm`（接口 = PresentTiming 类 + PresentTimingStats）+
+`present_timing_impl.cppm`（重函数体）。**FrameSession 成员直持**（不像 9.2 走 bind 全局——
+唯一消费者就是帧会话 present()）。§191 改动面表的 `vkrenderer.cppm` present 行号已失效
+（present 早迁至 `frame_session_impl.cppm::present()`），接线点即在那里。
+
+**三层激活门**：设备组门 `features.cppm::presentTimingSupported`（present_timing +
+present_id2 + KHR 校准三探测位全真，缺一整组不启用/不链接；feature 结构走 `optional_features`
+条件链尾机制——**不可进固定链**：FALSE 结构挂未启用扩展 = UB，9.2 已踩，见
+`features_generated.cppm` 头注释）∧ `diagnostics().profiler > 0`（默认关 = 交换链创建参数
+逐位同旧版）∧ surface/模式能力探测（`vkGetPhysicalDeviceSurfaceCapabilities2KHR` 以
+`VkSurfacePresentModeKHR` 过滤 + `VkPresentTimingSurfaceCapabilitiesEXT`）。
+三行激活 log（probe 结果 / active+容量+掩码 / 基准 stage）= 跨驱动取证载体。
+swapchain-local 域缺失时退 `present-stage-local`（Mesa 26.2 只 advertise 后者）。
+
+**与 §4.2 计划清单的三处偏差（均由实测 VVL/驱动行为决定）**：
+
+1. **flag 门槛不看 `VkSwapchainFlagsSurfaceCapabilitiesEXT.swapchainSupportedFlags`**：该结构的
+   flags-subset VUID-12448 只在启用 `VK_EXT_multisampled_render_to_swapchain` 时生效（本项目
+   恒不启用），而 RADV 对它返 0——按它筛会把明明支持的 present timing 误判为不支持。
+   门槛改为 `presentTimingSupported` + stage 掩码含 `QUEUE_OPERATIONS_END`。
+2. **挂 `VkPresentId2KHR` 要求 swapchain 创建带 `VK_SWAPCHAIN_CREATE_PRESENT_ID_2_BIT_KHR`**
+   （VVL 实测报错）→ 激活时与 present timing flag 同置；两 feature 已在组门内启用。
+3. **报告侧不做 queue→pixel 跨度**：stage-local 域下本机实测 `QueueOperationsEnd` 与
+   `ImageFirstPixelOut` 历元相差 ~10 s（首条结果 log 为证），跨 stage 相减无意义；改为基准
+   stage **瞬时落位**（`present.stage`，tid=present，dur=0），与 CPU/GPU 轨同 steady 基
+   （实测首帧 pixel-out 落在首个 present CPU zone 后 ~5.9 ms，一帧周期内 ✓）。校准的
+   `VkSwapchainCalibratedTimestampInfoEXT.presentStage` 随域类型定（stage-local 须恰一位，
+   VU-12228）。同 stage 相邻差（IPD）不受影响：min 恰 = refreshDuration（6.062 vs 6.061 ms）。
+
+**queue-full 回退（必做项）实测**：`vk::Queue::presentKHR` 允许结果列表不含
+`VK_ERROR_PRESENT_TIMING_QUEUE_FULL_EXT`，命中即抛 `PresentTimingQueueFullEXTError` →
+帧会话 `presentKHRTolerantQueueFull` 折回 Result 再回退。回退 = 同一 image 重投，但
+**pNext 清空（timing 链与 present fence 都摘）+ wait 信号量清零**：spec 述被拒 present 的
+队列操作仍视为已入队（wait 照常执行、present fence 已 SIGNALED——VVL 两条报错分别印证
+"再提交已 signaled fence"非法与同队列 wait-then-signal 死锁形态），故两者均不可重复提交；
+重投排在已入队 wait 之后 ⇒ 图像必已渲染完成；VVL 对"重投同一 image"不报警。随后 8 帧冷却
+不挂链。验证：临时把队列容量压到 1 强制触发（FIFO 2 次 / eImmediate 多次），恢复后零错误。
+
+**collect 节奏**：每帧 present 前轮询（`flags = 0` = 全有或无 + 按 present 序），结果缓冲
+32 项 × 4 stage；每轮重钉 `presentStageCount` 容量（VU-12231）；驱动侧
+`timingPropertiesCounter` / `timeDomainsCounter` 变化 → 重解析刷新属性/时间域并重校准。
+
+**报告落位**：counter = `present.ipd` / `present.drop` / `present.queue_full` /
+`present.refresh_ns`（profiler 新增 `profilerPushCounter` + `FrameSlot.counters` + trace
+`ph:"C"` + stats `counters` 段 + 摘要行）；rllogger = 周期 2 s 一行 + 终值三行（含 IPD
+p50/p95 与校准 maxDeviation）。§5 的 "stage 瞬时 `ph:"i"`" 落地为 dur=0 的 `ph:"X"`
+（同轨同色、免再引第四种事件类型）。
+
+**本机实测（Mesa 26.2.3 RADV STRIX_HALO / KWin Wayland；驱动报 refreshDuration=6.061 ms
+≈ 165 Hz 面板）**：
+
+| 模式 | 时长 / 样本 | IPD（n=有效样本） | 基准无时间戳（=被丢弃/替换） | queueFull | 备注 |
+|---|---|---|---|---|---|
+| eImmediate（**6.5 min，≥5min 红线达标**） | 40117 present / n=2079 | mean 7.80 ms，p50 7.01，min 6.061，max 19.32 | **34190（85.2%）** | 0 | 零 [error]/零 VVL；校准 maxDeviation 243 ns；CPU frame avg 7.24 ms（≈138 fps 渲染） |
+| FIFO（2 min，用户提前关窗） | 10090 present / n=10075 | mean 9.05 ms，**p50 6.066 ≈ 刷新周期**，p95 17.06，max 156.9 | 4（0.04%） | 0 | 零 [error]/零 VVL；校准 maxDeviation 92 ns；CPU frame avg 10.02 ms |
+| eImmediate（临时压容量到 1 强制） | 16 s | — | — | 多次 | 回退路径实测触发 + 8 帧冷却后自动恢复，VVL 零报警 |
+
+**⑤ 的直接证据**：eImmediate 下 **85% 的 present 从未到达像素 stage**（138 fps 渲染 vs
+165 Hz 显示，多出的帧被 KWin 丢弃），FIFO 下该比例 0.04% —— 帧率上限/present mode
+可配置化的必要性由此定量。queue-full 回退在正常容量（imageCount×2 = 6）下本机不自然触发
+（KWin 反馈仅滞后 1–2 帧），故用临时压容量到 1 的方式实测该路径（已撤销）。
+默认关（profiler=0）headless 与窗口 llm_debug 截图均 BIT-IDENTICAL（`10b00c78…`）；
+headless + profiler>0 时探测 `presentTimingSupported=false` → 自动不激活、截图同基线。
+
 ## 5. 报告设计（主格式已确认 = Perfetto）
 
 **主产物：Chrome Trace Event JSON → Perfetto UI**（`ui.perfetto.dev` 浏览器拖入，
@@ -239,7 +305,7 @@ profiler = 0,   -- 0 = 关（默认）；N = 保留最近 N 帧，退出时 dump
 |---|---|---|---|
 | **9.1** CPU + 报告骨架 | 新 `profiler.cppm(/_impl)`、`RGL::zone()` 零宏 API、拦截点 1-3、Perfetto writer、摘要（bound 判定行随 9.2 GPU 数据落地）、`diagnostics.profiler=N` | `ecs_impl.cppm:438`、`frame_session.cppm:54/64/72`、`diagnostics.cppm` + `configs/diagnostics.lua`、CMake FILE_SET | 默认关 BIT-IDENTICAL + `just checks` 过；开 = trace 进 Perfetto、摘要自洽 |
 | **9.2** GPU 时间戳 | query pool 分槽、pass 循环/帧首末/cull 插桩、calibrated 校准、同轴合并 | 新 `gpu_profiler.cppm(/_impl)`、`vkrenderer_impl.cppm` frameBegin/pass 钩子、`cull_driver_impl.cppm` cullCB 钩子、`main_impl.cppm` 构造/绑定、`features_config` `optional_extensions` 校准扩展探针 | **开跑也 BIT-IDENTICAL**；读回零 stall；开销自检（`frame_stats` 前后差记档） |
-| **9.3** present_timing（独立批） | §4.2 全清单：探测→flag→队列→pNext→collect→IPD/丢帧进 trace | 新 `present_timing.cppm`、`vkswapchain.cppm`、`vkrenderer.cppm` present、`vkdevice.cppm`、`features.cppm` | RADV ≥5min 无 crash、IPD ≈ 刷新周期；跨机 NVIDIA/Intel 补测录档 |
+| **9.3** present_timing（独立批）**✅ 本机落地 2026-09-27** | §4.2 全清单 + 9.3a `present_mode` 双模式开关（D5）；偏差与实测见 §4.4 | 新 `present_timing.cppm(/_impl)`（FrameSession 成员）、`vkswapchain.cppm`（探测/flag/队列/recreate）、`frame_session_impl.cppm` present（collect/attach/queue-full 回退）、`vkdevice.cppm`（两 optional feature 结构）、`features.cppm` + `features_config.json`（组门三探针，`just reflect`）、`profiler.cppm(/_impl)`（counter 通道）、`rlvk.cppm`（导出面） | RADV ≥5min 无 crash、IPD ≈ 刷新周期、queue-full 回退实测触发 ✓；跨机 NVIDIA/Intel 补测录档（待有卡机器） |
 | **9.4** 判定收口 | CPU vs GPU vs IPD 三方对比结论 → `next_roadmap.md` ⑤ 决策建议成文 | 文档 | cull 读回成本、帧率上限/present mode 结论成文 |
 
 模块规范走 skill `rgl-new-module`（impl partition / rlstd / FILE_SET / 检查红线），
@@ -251,7 +317,9 @@ profiler = 0,   -- 0 = 关（默认）；N = 保留最近 N 帧，退出时 dump
 1. 默认关 = BIT-IDENTICAL 截图回归 + `just checks` 过（9.1 起每批都要过）；
 2. 9.2 开着跑回归**也 BIT-IDENTICAL**（时间戳不改像素）；
 3. 9.3：RADV ≥5min 无 crash、IPD 合理（≈ 刷新周期）、queue-full 回退路径实测触发过
-   （无限帧率下天然触发）；
+   （无限帧率下天然触发）——**✅ 2026-09-27 达成**（eImmediate 6.5 min 无 crash、FIFO
+   IPD p50 6.066 ms = 刷新周期 6.061 ms；queue-full 本机不天然触发，改用临时压队列容量
+   到 1 强制触发并验证自动恢复，数据表见 §4.4）；
 4. 报告三件套齐：trace 进 Perfetto 可读 / 摘要判定行 / `profiler_stats.json` 合法 JSON；
 5. 文档回写：`next_roadmap.md` Phase 9 状态、`nvidia_compatibility_report.md` 跨机
    present_timing 结果、archive `present_timing_research.md` 状态头补"已引入（仅测量）"、
