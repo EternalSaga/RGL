@@ -12,6 +12,7 @@ import vkerror;
 import vk_device;
 import vk_swapchain;
 import vk_resources;
+import profiler;  // Phase 9 帧相 zone（fenceWait/acquire/submit/present，docs/phase9_plan.md）
 
 namespace RGL {
 
@@ -86,62 +87,71 @@ std::expected<FrameSession::FrameStart, Error> FrameSession::beginFrame() {
 	// waitAll=VK_TRUE + 无限超时。正常时 fence 保证在超时内信号；device reset/lost 时
 	// fence 永不信号 → 返回 eErrorDeviceLost/Reset（非无限自旋，报错退出帧循环）
 	// DIAG（diagnostics.lua no_present）：不 present → presentFence 永不 signal，只等 inFlight
-	const vk::Result waitResult = noPresent
-		? dev.waitForFences(
-			{*inFlightFences[currentFrame]}, VK_TRUE, std::numeric_limits<uint64_t>::max())
-		: dev.waitForFences(
-			{*inFlightFences[currentFrame], *presentFences[currentFrame]},
-			VK_TRUE, std::numeric_limits<uint64_t>::max());
-	if (waitResult != vk::Result::eSuccess) {
-		auto logger = RLLogger::getInstance();
-		if (logger) logger->error("Renderer: fence wait failed at frame start ({}): {}",
-			frame, vk::to_string(waitResult));
-		return std::unexpected(Error{ErrorCode::DeviceLost,
-			fmt::format("frame fence wait failed: {}", vk::to_string(waitResult))});
-	}
-	if (noPresent) {
-		dev.resetFences({*inFlightFences[currentFrame]});
-	} else {
-		dev.resetFences({*inFlightFences[currentFrame], *presentFences[currentFrame]});
+	// Phase 9 拦截点 3（phase9_plan §2.3）：本段 = CPU 等 GPU（帧相里最长的嫌疑段）
+	{
+		auto z = zone("fenceWait");
+		const vk::Result waitResult = noPresent
+			? dev.waitForFences(
+				{*inFlightFences[currentFrame]}, VK_TRUE, std::numeric_limits<uint64_t>::max())
+			: dev.waitForFences(
+				{*inFlightFences[currentFrame], *presentFences[currentFrame]},
+				VK_TRUE, std::numeric_limits<uint64_t>::max());
+		if (waitResult != vk::Result::eSuccess) {
+			auto logger = RLLogger::getInstance();
+			if (logger) logger->error("Renderer: fence wait failed at frame start ({}): {}",
+				frame, vk::to_string(waitResult));
+			return std::unexpected(Error{ErrorCode::DeviceLost,
+				fmt::format("frame fence wait failed: {}", vk::to_string(waitResult))});
+		}
+		if (noPresent) {
+			dev.resetFences({*inFlightFences[currentFrame]});
+		} else {
+			dev.resetFences({*inFlightFences[currentFrame], *presentFences[currentFrame]});
+		}
 	}
 
 	// ② 从 swapchain 取一张后缓冲：成功时驱动信号 imageAvailableSemaphores
 	//（queueSubmit 的等待对象），imageIndex 为取到的图像下标。
 	// 100ms 超时（非无限）：compositor 停发 present（如 Wayland 息屏）时限时返回
 	// eTimeout，跳过本帧保住帧循环存活（llm_debug 离屏截图与事件轮询不依赖本帧
-	// 上屏）；正常 vsync 节奏下 acquire 在超时前返回，行为不变
-	auto [acquireResult, imageIndex] = swapchain->getSwapchain().acquireNextImage(
-		100'000'000,
-		*imageAvailableSemaphores[currentFrame], nullptr);
+	// 上屏）；正常 vsync 节奏下 acquire 在超时前返回，行为不变。
+	// Phase 9：acquire zone 含 ③ CB reset+begin（录制准备，量级同段）
+	{
+		auto z = zone("acquire");
+		auto [acquireResult, imageIndex] = swapchain->getSwapchain().acquireNextImage(
+			100'000'000,
+			*imageAvailableSemaphores[currentFrame], nullptr);
 
-	// eTimeout：无可用后缓冲——本帧不渲染，事件/system 下一轮照常
-	if (acquireResult == vk::Result::eTimeout)
-		return FrameStart::skipped;
+		// eTimeout：无可用后缓冲——本帧不渲染，事件/system 下一轮照常
+		if (acquireResult == vk::Result::eTimeout)
+			return FrameStart::skipped;
 
-	// eErrorOutOfDateKHR：swapchain 已失效（如 surface 尺寸变化），必须重建
-	if (acquireResult == vk::Result::eErrorOutOfDateKHR) {
-		if (auto result = recreateSwapchainAndDepth("acquire out-of-date"); !result)
-			return std::unexpected(std::move(result).error());
-		return FrameStart::recreated;
+		// eErrorOutOfDateKHR：swapchain 已失效（如 surface 尺寸变化），必须重建
+		if (acquireResult == vk::Result::eErrorOutOfDateKHR) {
+			if (auto result = recreateSwapchainAndDepth("acquire out-of-date"); !result)
+				return std::unexpected(std::move(result).error());
+			return FrameStart::recreated;
+		}
+		// eSuboptimalKHR：图像仍可用，只是非最优（如尺寸不匹配），可继续渲染
+		if (acquireResult != vk::Result::eSuccess &&
+			acquireResult != vk::Result::eSuboptimalKHR) {
+			return std::unexpected(Error{ErrorCode::SwapchainAcquireFailed,
+				"Failed to acquire swapchain image!"});
+		}
+		acquiredImageIndex = imageIndex;
+
+		// ③ 开始录制：reset() 清除上一次录制状态（command buffer 每帧重用，
+		// 重新录制前必须 reset）
+		commandBuffers[currentFrame].reset();
+		// 默认 begin flags（非 one-time、非 secondary）：可多次提交
+		commandBuffers[currentFrame].begin(
+			vk::CommandBufferBeginInfo{});
 	}
-	// eSuboptimalKHR：图像仍可用，只是非最优（如尺寸不匹配），可继续渲染
-	if (acquireResult != vk::Result::eSuccess &&
-		acquireResult != vk::Result::eSuboptimalKHR) {
-		return std::unexpected(Error{ErrorCode::SwapchainAcquireFailed,
-			"Failed to acquire swapchain image!"});
-	}
-	acquiredImageIndex = imageIndex;
-
-	// ③ 开始录制：reset() 清除上一次录制状态（command buffer 每帧重用，
-	// 重新录制前必须 reset）
-	commandBuffers[currentFrame].reset();
-	// 默认 begin flags（非 one-time、非 secondary）：可多次提交
-	commandBuffers[currentFrame].begin(
-		vk::CommandBufferBeginInfo{});
 	return FrameStart::began;
 }
 
 std::expected<void, Error> FrameSession::submit(vk::PipelineStageFlags2 waitStage) {
+	auto z = zone("submit");  // Phase 9：CPU 提交成本（应为 µs 级；异常大 = 驱动同步嫌疑）
 	// ⑬ 提交到图形队列。用裸 C API（vkQueueSubmit）而非 vk-hpp RAII：
 	// RAII 的 Queue::submit 重载不支持 fence 参数。
 	// wait：imageAvailable 信号量（acquireNextImage 信号）——wait stage = 图派生的
@@ -184,6 +194,7 @@ std::expected<void, Error> FrameSession::submit(vk::PipelineStageFlags2 waitStag
 }
 
 std::expected<void, Error> FrameSession::present() {
+	auto z = zone("present");  // Phase 9：present 提交 CPU 成本（合成器等待不在内——那是 9.3）
 	// ⑭ 上屏：等 renderFinished 信号量（确保绘制完成），把 imageIndex 交给合成器。
 	// SwapchainPresentFenceInfoEXT（KHR/EXT 为 typedef 别名，sType 相同）链到
 	// presentInfo.pNext：present 完成时信号 presentFence，实现 present 端完成

@@ -46,6 +46,7 @@ import camera;
 import camera_config;
 import runtime_config;  // 2026-09-08 env→配置：runtime.lua（headless/窗口/llm 截图）
 import diagnostics;      // diagnostics.lua 诊断单例（须先于一切 GPU 对象构造 setDiagnostics）
+import profiler;         // Phase 9：帧循环 zone 收口 dump（docs/phase9_plan.md 批 9.1）
 import llm_debug;
 import ecs;
 import rllogger;
@@ -380,12 +381,14 @@ int main() {
 				return RGL::writeCapturePng(r, *pre.llm);
 			},
 			onFrame);
+		RGL::profilerDump();  // Phase 9：trace/stats/摘要收口（profiler=0 = 静默 no-op）
 		if (!renderResult) {
 			auto* logger = RLLogger::getInstance();
 			if (logger) logger->error("错误: {}", renderResult.error().describe());
 			return -1;
 		}
 	} catch (const std::exception& e) {
+		RGL::profilerDump();  // 异常路径也收口（RAII 已展开，帧内记录完整）
 		auto* logger = RLLogger::getInstance();
 		if (logger) logger->error("错误: {}", e.what());
 		return -1;

@@ -87,6 +87,8 @@ void setDiagnostics(const DiagnosticsConfig& cfg) { diagnostics() = cfg; }
 		}
 		cfg.frameStats = static_cast<uint32_t>(
 			std::max<int64_t>(0, readI64("frame_stats", 0).value_or(0)));
+		cfg.profiler = static_cast<uint32_t>(
+			std::max<int64_t>(0, readI64("profiler", 0).value_or(0)));
 
 		if (auto* lg = RLLogger::getInstance())
 			lg->info("diagnostics: no_vvl={} no_present={} vtx_canary={} texel_canary={} "

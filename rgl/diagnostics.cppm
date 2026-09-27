@@ -27,6 +27,7 @@ export struct DiagnosticsConfig {
 	bool textureForceUnorm = false;     // upload 强制 UNORM（sRGB 嫌疑隔离）
 	bool dgcStatic = false;             // RADV 静态 shader DGC 路（staticGraphicsIndirect 设备的 spike 门，默认关，见 docs/radv_static_dgc_spike.md）
 	uint32_t frameStats = 0;            // 帧时间统计：每 N 帧打一行 avg/min/max（0 = 关；headless 吞吐 ≈ GPU-bound）
+	uint32_t profiler = 0;              // Phase 9 zone profiler 帧窗口 N（0 = 关；最近 N 帧 → 退出 dump trace+stats，docs/phase9_plan.md）
 };
 
 /**

@@ -17,6 +17,7 @@ import frame_draw_list;
 import render_list;
 import runtime_config;  // LlmDebugConfig（renderSystem 参数类型）
 import diagnostics;     // texel_canary 诊断单例（configs/diagnostics.lua）
+import profiler;        // Phase 9 帧相 zone（frameBegin + 帧循环拦截点，docs/phase9_plan.md）
 import gpu_canary;
 import scene_context;
 import camera;
@@ -419,7 +420,11 @@ std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer& rende
 	float prevTicks = static_cast<float>(SDL_GetTicks());
 
 	while (true) {
-		eventSystem(rg);
+		profilerFrameBegin();  // Phase 9：帧槽推进 + 帧墙钟基准（off = 早退）
+		{
+			auto z = zone("events");  // 拦截点 1（phase9_plan §2.3）：SDL 事件轮询
+			eventSystem(rg);
+		}
 		if (rg.ctx().get<AppExit>().requested) {
 			break;
 		}
@@ -429,13 +434,17 @@ std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer& rende
 		float dt = std::clamp((ticks - prevTicks) / 1000.0f, 0.0f, 0.1f);
 		prevTicks = ticks;
 
-		auto resizeResult = resizeChecked(rg, swapchain, resources, logger);
-		if (!resizeResult) {
-			renderer.waitForIdle();
-			return std::unexpected(std::move(resizeResult).error());
+		{
+			auto z = zone("resize");  // swapchain/深度重建（罕见路径，触发时单列）
+			auto resizeResult = resizeChecked(rg, swapchain, resources, logger);
+			if (!resizeResult) {
+				renderer.waitForIdle();
+				return std::unexpected(std::move(resizeResult).error());
+			}
 		}
 
 		for (auto& system : systems) {
+			auto z = zone(system.name);  // 拦截点 1 核心：显式 system 列表全量计时
 			system.fn(rg, dt);
 		}
 
@@ -444,12 +453,18 @@ std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer& rende
 
 		// llm 帧捕获：drawFrame 前请求 → drawFrame → 真产物才消费（时序契约见 LlmCaptureFlow）
 		capture.requestBeforeDraw(renderer);
-		if (auto drawError = drawFrameChecked(renderer, rg, logger)) {
-			lastError = std::move(drawError);
-			break;
+		{
+			auto z = zone("drawFrame");  // CPU 命令录制主段（vs 9.2 GPU 跨度对比）
+			if (auto drawError = drawFrameChecked(renderer, rg, logger)) {
+				lastError = std::move(drawError);
+				break;
+			}
 		}
-		if (auto captureError = capture.afterDraw(rg, renderer, logger)) {
-			lastError = std::move(captureError);
+		{
+			auto z = zone("capture");  // llm 帧回读（真截图帧才有 GPU 同步等待）
+			if (auto captureError = capture.afterDraw(rg, renderer, logger)) {
+				lastError = std::move(captureError);
+			}
 		}
 		if (onFrame)
 			onFrame(frame);

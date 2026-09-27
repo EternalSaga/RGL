@@ -80,7 +80,7 @@ ZERO_ENTT_MODULES = {
     "vk_indirect_commands", "frame_session", "frame_capture", "cull_driver",
     "frame_draw_list", "render_graph", "render_graph_config", "diagnostics",
     "gpu_canary", "runtime_config", "camera_config", "scene_config",
-    "image_codec",
+    "image_codec", "profiler",
 }
 # AGENTS.md 点名的假边（配置不依赖执行模块；截图经回调）
 FORBIDDEN_EDGES = {
