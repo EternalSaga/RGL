@@ -66,6 +66,16 @@ export class DgcCommands {
 	 */
 	void bindInitialShaders(vk::raii::CommandBuffer& cmd) const;
 	/**
+	 * 热重载（Phase 10 批 10.4）：把 execution set 槽 2j（frag）/2j+1（mesh）指向新句柄
+	 * （与启动期写入同路 vkUpdateIndirectExecutionSetShaderEXT）。entryIndex 0 时同步刷
+	 * initialShaders（bindInitialShaders 数据源）。
+	 * **前置契约 = GPU idle（waitForIdle 后调）**——execution set 不得被 in-flight
+	 * execute 引用时更新（VU 9322 族）；新句柄须带 INDIRECT_BINDABLE（本管线表恒带，
+	 * VUID-VkWriteIndirectExecutionSetShaderEXT-shaderHandle-09329）。
+	 * entryIndex 超出启动期固化槽数（sky/light 等 DGC 后增条目 = 非 candidate）= 忽略。
+	 */
+	void updateShaderPair(uint32_t entryIndex, vk::ShaderEXT fragHandle, vk::ShaderEXT meshHandle);
+	/**
 	 * 录制 execute（主 CB，render pass 内——替换 opaque 段逐 draw 循环）。
 	 * @param cmd 命令缓冲（录制期）
 	 * @param sequenceAddress 序列 buffer device 地址
@@ -98,6 +108,7 @@ export class DgcCommands {
 	VkIndirectCommandsLayoutEXT layout = VK_NULL_HANDLE;
 	VkIndirectExecutionSetEXT executionSet = VK_NULL_HANDLE;
 	std::array<VkShaderEXT, 2> initialShaders{};  // execution set 初始态（slot0=frag slot1=mesh）
+	uint32_t execSlotCapacity = 0;  // 已写槽数（= 启动期 2×条目数，热重载 updateShaderPair 界内检查）
 	VkBuffer preprocessBuffer = VK_NULL_HANDLE;  // preprocess 工作缓冲（driver 读写，地址进 info）
 	VkDeviceMemory preprocessMem = VK_NULL_HANDLE;
 	VkDeviceAddress preprocessAddress = 0;
@@ -146,6 +157,18 @@ export class DgcStaticCommands {
 	[[nodiscard]] bool active() const { return layout != VK_NULL_HANDLE; }
 	/** @return 管线条目数（= per-entry 流数 = 帧内 Execute 次数）。 */
 	[[nodiscard]] uint32_t entryCount() const { return static_cast<uint32_t>(entryShaders.size()); }
+	/**
+	 * 热重载（Phase 10 批 10.4）：把 entryShaders[entryIndex] 刷成新句柄（静态路 execute
+	 * 直接引用 entryShaders，重建管线后必须同步，否则 pNext 挂的是已销毁旧句柄 = UAF）。
+	 * 与 DgcCommands 同契约：**前置 = GPU idle（waitForIdle 后调）**。
+	 * entryIndex 越界（非 candidate 条目）= 忽略。
+	 */
+	void updateEntryShader(uint32_t entryIndex, vk::ShaderEXT fragHandle, vk::ShaderEXT meshHandle) {
+		if (entryIndex >= entryShaders.size())
+			return;
+		entryShaders[entryIndex] = {static_cast<VkShaderEXT>(fragHandle),
+			static_cast<VkShaderEXT>(meshHandle)};
+	}
 	/**
 	 * 录制条目 entryIndex 的 execute（主 CB，render pass 内——替换 opaque 段逐 draw 循环）。
 	 * @param cmd 命令缓冲（录制期）

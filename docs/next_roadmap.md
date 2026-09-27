@@ -218,9 +218,10 @@ Phase 9：性能观测（profiler）——先回答"CPU-bound 还是 GPU-bound"�
  Phase 10：调试交互（配置热重载 + IMGUI 参数面板 + shader 热重载 L1 + GPU id 点选取参）
    **计划已立（2026-09-27，[phase10_plan.md](phase10_plan.md)），插队阴影（原 Phase 10 → 11）**。
    总纲 = **单一事实来源**（控件字段结构引用反射生成物，注册表不镜像布局；ObjectDraw 材质表
-   单源化为前置批）。批次：10.1 imgui 骨架（开关进 `configs/diagnostics.lua`）/
-   10.2a ObjectDraw 单源化 / 10.2b 灯曝光控件 / 10.2c 材质控件 / 10.3 配置热重载 /
-   10.4 shader 热重载 / 10.5 点选 / 10.6（可选）反射语义扩产。
+   单源化为前置批）。批次：10.1 imgui 骨架 ✅ / 10.2a ObjectDraw 单源化 ✅ /
+   10.2b 灯曝光控件 ✅ / 10.2c 材质控件 ✅ / 10.3 配置热重载 ✅（均 2026-09-28）/
+   10.4 shader 热重载 L1 ✅（2026-09-28，SPV 二进制签名守卫 + 两阶段同槽重建；顺带暴露并
+   修复 rgl_shader DEP 表 11 处 import 漏登）/ 10.5 点选（剩）/ 10.6（可选）反射语义扩产。
      ↓
 Phase 11：阴影（大特性，一口气；风险分层 = CSM 承诺交付 + HFTS 带退出条件的 spike；
    原编号 Phase 10，2026-09-27 因调试交互插队顺延）

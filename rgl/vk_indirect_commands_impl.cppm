@@ -133,8 +133,29 @@ void DgcCommands::createExecutionSet(const RGL::ShaderRegistry& registry, uint32
 			2 * j + 1, entries[j].pipeline.meshShaderHandle()});
 	}
 	pfnUpdateSetShader(device, executionSet, static_cast<uint32_t>(writes.size()), writes.data());
+	execSlotCapacity = static_cast<uint32_t>(writes.size());
 	initialShaders[0] = initialPair[0];
 	initialShaders[1] = initialPair[1];
+}
+
+void DgcCommands::updateShaderPair(uint32_t entryIndex, vk::ShaderEXT fragHandle, vk::ShaderEXT meshHandle) {
+	if (!active() || 2 * entryIndex + 1 >= execSlotCapacity) {
+		if (auto* logger = RLLogger::getInstance())
+			logger->info("hot_reload DGC: entry {} 无 execution set 槽（非 candidate 条目），跳过",
+				entryIndex);
+		return;
+	}
+	std::array<VkWriteIndirectExecutionSetShaderEXT, 2> writes{{
+		{VK_STRUCTURE_TYPE_WRITE_INDIRECT_EXECUTION_SET_SHADER_EXT, nullptr,
+			2 * entryIndex, static_cast<VkShaderEXT>(fragHandle)},
+		{VK_STRUCTURE_TYPE_WRITE_INDIRECT_EXECUTION_SET_SHADER_EXT, nullptr,
+			2 * entryIndex + 1, static_cast<VkShaderEXT>(meshHandle)},
+	}};
+	pfnUpdateSetShader(device, executionSet, 2, writes.data());
+	if (entryIndex == 0) {  // bindInitialShaders 数据源同步（VUID-11053 初始态绑定）
+		initialShaders[0] = static_cast<VkShaderEXT>(fragHandle);
+		initialShaders[1] = static_cast<VkShaderEXT>(meshHandle);
+	}
 }
 
 void DgcCommands::createPreprocessBuffer(const RGL::DeviceContext& vkDevice, uint32_t framesInFlight) {

@@ -46,6 +46,7 @@ export using std::uint32_t;
 export using std::uint64_t;
 export using std::int32_t;
 export using std::int64_t;
+export using std::size_t;
 
 export namespace std {
 using std::array;
@@ -91,16 +92,19 @@ using std::set;
 using std::shared_ptr;
 using std::sin;
 using std::source_location;
+using std::sort;
 using std::span;
 using std::stable_sort;
 using std::string;
 using std::string_view;
 using std::strlen;
 using std::strtoull;
+using std::system;
 using std::to_string;
 using std::tolower;
 using std::toupper;
 using std::unexpected;
+using std::unordered_map;
 using std::vector;
 
 // 自由函数与运算符重载（GMF 已含全部相关头；using 一个运算符名导入整个重载集）：

@@ -1,7 +1,7 @@
 # Phase 10 实施计划：调试交互（配置热重载 + IMGUI 参数面板 + shader 热重载 + 点选取参）
 
-> **状态**：现行——**批 10.1 / 10.2a / 10.2b / 10.2c / 10.3 已落地（2026-09-28）**，
-> 剩 10.4（shader 热重载）/ 10.5（点选）/ 10.6（可选）。
+> **状态**：现行——**批 10.1 / 10.2a / 10.2b / 10.2c / 10.3 / 10.4 已落地（2026-09-28）**，
+> 剩 10.5（点选）/ 10.6（可选）。
 > 关键决策 D1–D5 已由用户拍板（见 §2），D6–D11 为主 agent 技术决策（可否决）。
 > 批次 10.1–10.6 见 §9。
 > 依据 = 2026-09-27 只读调研（worker 子 agent A–F 六节 + 主 agent 逐项复核）+ 方向讨论。
@@ -145,17 +145,30 @@ kSceneData\*"（常量已搬 `scene_data.cppm`，vkresources 0 命中）；`shad
 流程（全部在帧边界执行，不中断录制中 CB）：
 
 ```
-watch rgl/shaders/*.slang（mtime；导入闭包按 import 语句递归求，v1 可全量重编 21 条）
-  → fork slangc（注入 SLANG_FLAGS_STR D11 + slangc 路径 + 输出临时路径）
-  → -reflection-json 与在役 pipeline 的绑定/顶点/push 布局比对（守卫基线 = 运行时已装载状态）
+watch rgl/shaders/ 全部 .slang（mtime；v1 全量重编 unique 源 = 每源 1 次 fork，共享模块去重）
+  → fork slangc（注入 SLANG_FLAGS D11 + slangc 路径 + 输出临时路径；std::system 引号包路径）
+  → 守卫 = **运行时 SPV 二进制解析**接口签名（2026-09-28 偏差：不用计划的 -reflection-json，
+    见 §6.1）与基线比对；SPV 字节 hash 无变 = 先跳过（免签名比对）
   ├─ 同签名 → 同槽重建 RenderPipeline（pipelineIndex 不变 → 资产表/cull 静态表零改动）
-  │           + DGC execution set 重建（VkShaderEXT 换新；重建失败 → 降级读回重放，不中断）
-  │           → 下一帧生效
-  └─ 不一致 / 编译失败 → 日志 fail-fast + 保留旧 SPV 继续跑（提示"契约变化请重启"）
+  │           + DGC 两路句柄刷新（IES execution set / 静态 shader 对；先 waitForIdle）
+  │           → commit（旧句柄在 set 指向新句柄**之后**才销毁）→ 下一帧生效
+  └─ 不一致 / 编译失败 → warn + 保留旧 SPV 继续跑（提示"契约变化请重启"；编译失败等下次保存）
 ```
 
-**前置精查（10.4 开工前，只读）**：`vk_indirect_commands` 的 VkShaderEXT handle 生命周期
-依赖（execution set 容量/条目稳定性、swap 时序）——worker 二期只读调研。
+### 6.1 守卫实现偏差：SPV 二进制解析 替代 -reflection-json（2026-09-28）
+
+- 计划原案 = fork slangc 带 `-reflection-json` 比对布局。实做改为直接解析**已编译 SPV
+  字节**（`shader` 模块 `spvInterfaceSignature`，实现拆在 `shader:impl` 分区）：同数据面、
+  少一次 fork、无 JSON 归一化痛点。
+- 签名 = 排序 token 集：ExecutionMode（mode+字面量，**entry id 排除**——跨编译漂移）+
+  OpEntryPoint（model+名字，**interface id 列表排除**）+ 每接口变量（storage class +
+  原始 decoration 集全量含操作数 + 指向类型递归展开到字面量）。同型成员重排的可见性
+  来源 = member Offset decoration 配对集合；类型 id 漂移由递归展开吸收。
+- **实测踩坑两枚**（守卫假阳根因，均修）：① SPIR-V opcode 15/16 = OpEntryPoint/
+  OpExecutionMode（与直觉相反易写反——写反则 EntryPoint 的 interface id 列表泄进签名
+  → 跨编译必假阳）；② 类型指令结果 id 在字 1（常量在字 2）——索引错格 = defs 查表全
+  miss → 原始 id 泄进签名。判据 = 29 源 fresh 编译 vs build 产物全量交叉 **21/21 SIG
+  IDENTICAL**（同源码跨 slangc 版本产物字节异但接口签名稳）。
 
 ## 7. 点选取参 = GPU id pass（批 10.5，D3）
 
@@ -190,7 +203,7 @@ profiler 面板读数复用现成 `profiler = 0`（不开 profiler 时面板显�
 | **10.2b** 灯/曝光控件 **✅ 2026-09-28** | `param_registry` 模块 + 首批条目（§3.3 前两行）+ 灯/曝光控件接面板 | 新 `.cppm`、`ecs.cppm/_impl.cppm`（build 函数落点修正：render_list 无 registry ctx 全链，装配归 ecs）、`imgui_layer` 消费 | 默认关 diff0；开 = 拖动下一帧画面变化 |
 | **10.2c** 材质控件 **✅ 2026-09-28** | `AssetTable` setter + 材质条目（吃 10.2a 生成物）+ 共享实体数提示 | `asset_table.cppm`、`param_registry` | 同上 + 共享提示正确 |
 | **10.3** 配置热重载 **✅ 2026-09-28** | §5：`hot_reload` 模块 + 帧边界换入基建 + T1 清单；（T2 可选不做） | 新 `.cppm`、`main.cppm/_scene.cppm`（wireHotReload）、`ecs.cppm/_impl.cppm`（ConfigReloadHook）、`rllogger`、CMake 注入源目录 | 默认关 diff0；开 = 改源 `configs/` 下一帧生效且 build 副本不被污染；缺源目录降级关 |
-| **10.4** shader 热重载 L1 | §6：前置精查（只读）→ watch + fork slangc + 签名守卫 + 同槽重建 + DGC 降级 | 新 `.cppm`、`shader.cppm` 重建入口、`vk_indirect_commands` 重建/降级、编译期注入 flags | 默认关 diff0；开 = 改注释重载无视觉变化、改逻辑下一帧生效、**改契约被拦且旧管线继续跑** |
+| **10.4** shader 热重载 L1 **✅ 2026-09-28** | §6：watch + fork slangc + SPV 二进制签名守卫（§6.1 偏差）+ 两阶段同槽重建 + DGC 两路句柄刷新 | 新 `.cppm`×2 + `shader_impl`、`shader.cppm` 签名解析、`shader_registry` build/commitReplacement、`vk_indirect_commands` update 入口、CMake 三宏注入 | 默认关 diff0；开 = 改注释重载无视觉变化、改逻辑下一帧生效、**改契约被拦且旧管线继续跑** |
 | **10.5** 点选取参 | §7：点击事件 + id pass 进图 + 1 texel 回读 + objectSlot 反查 + 面板实体绑定 | 图配置/id shader（新 `rgl_shader` 条目）、回读通路、`ecs` 选中 context、面板区 | 默认关 diff0；开 = 点击命中正确（含遮挡层序）、面板显示并可调该实体参数 |
 | **10.6**（可选，D4 视情况） | 反射语义扩产：range/默认值/单位入 schema → 生成语义层，注册表薄化 | schema/生成器 | 10.2b/c 行为不变（仅数据源换薄） |
 
@@ -291,6 +304,47 @@ BIT-IDENTICAL 截图回归，基线 `10b00c78c4a2d644479bb56eb35ac796bae90ada643
 - **验收**：默认关 forward 截图 = 基线 `10b00c78…`（0 hot_reload 日志）；窗口开
   config_reload 实测 camera/log_level/scene 三链套用日志 + 恢复；`checks --strict`
   0 警告（HotReloader::poll 与 renderSystem 认知复杂度告警各拆一 helper 消解）。
+
+### 10.4 实施记录（2026-09-28）
+
+- **模块**：`shader_hot_reload`（接口 = ShaderHotReloader + 私有 StageSource/Candidate，
+  实现全在 `shader_hot_reload:impl`）。复用 10.3 `hot_reload.HotReloader` 做 .slang mtime
+  watch（回调只置 dirty = 同帧多文件变更合并一次重载）；挂点复用 `ConfigReloadHook`
+  （config_reload 已开 = 组合追加、未开 = 独占 emplace；reloader 所有权在闭包）。
+  门 = `diagnostics.shader_reload`（独立于 config_reload）。
+- **编译期注入三宏**（rgl/CMakeLists.txt）：`RGL_SLANGC_PATH`（同构建用 slangc）、
+  `RGL_SLANG_FLAGS`（= SLANG_FLAGS 列表拼串，D11 单源）、`RGL_SOURCE_SHADER_DIR`（源树
+  shaders/，同 D7 语义）；任一缺失/不可用 = init 降级关并 warn。temp SPV 目录 =
+  tmp + hash(源目录)^chrono 熵，析构清。
+- **两阶段重建**（管线表扩口）：`PipelineEntry` 增存 spec + 绑定语义（5 个 add* 构造点
+  designated init）→ `buildReplacement(index, effect)` 用同参数新建管线（**旧管线仍活**）
+  → 全部候选建完后 `waitForIdle` → DGC 两路刷句柄（IES `updateShaderPair` / 静态
+  `updateEntryShader`，槽约定 2j=frag、2j+1=mesh；entry 0 同步 initialShaders 保
+  VUID-11053；容量启动期固化 = 越界槽忽略不报错）→ `commitReplacement`（旧句柄此刻
+  才销毁）。同槽 = pipelineIndex 不变 → 资产表/cull 序列表/heap 槽零改动。单条目
+  build 抛异常 = 该条目保留旧、其余继续。**mesh LocalSize 变化由 ExecutionMode token
+  拦住**（kTrianglesPerGroup 类契约改 = 重启）。
+- **守卫基线** = init 逐条目读在役 SPV（spec 路径）建 hash + 签名；commit 后写回候选
+  的新 hash/签名 = 下轮守卫判据是**最近一次已接受状态**（非启动快照，连续编辑可叠加）。
+  编译失败 = 全量保留旧、等下次保存（slangc 报错输出吞进日志 warn 不刷屏）。
+- **热重载暴露并修复存量 CMake 依赖缺口**：`rgl_shader()` 的 DEP 表按"手写 import 清单"
+  维护，9+2 处漏登（model.mesh/model.frag 漏 scene、model_pbr_ibl/vegetation/light.frag
+  漏 lights、cube.mesh/light.frag/tonemap 漏 scene 等）。后果实测：scene.slang 被 10.2a
+  改动后 `model.frag.spv` **未重编**（build 里 09-13 旧产物，ObjectDraw 声明序与源码
+  脱节；因 scalar layout offset 未变渲染仍对，故此前 BIT-IDENTICAL 没暴露）。已全部补登
+  + 重编后 forward 截图仍 = 基线（内存布局等价实证）。教训：**DEP 表 = 人工同步债**，
+  未来可考虑 slangc `-M` 自动生成。
+- **v1 已知限制**（注释在接口头）：新文件不追登 watch（新增 .slang 需重启）；全量重编
+  29 源 ≈5s 阻塞帧循环（slangc 0.19s/次，改哪个都要等全量）；DGC 容量外条目（sky/light
+  等启动后增条目）update 越界忽略 = 其句柄不刷新（本机 RADV 静态路 entry 容量按构造期
+  条目数固化，NVIDIA IES 路同理）。
+- **验收**：默认关 forward 截图 = 基线 `10b00c78…`（0 hot_reload 日志）；开 = ①touch 无
+  改 → 全量重编 → 字节无变全跳（"无接口兼容的可热换变更"）②tonemap 输出乘 0.5（同签名
+  功能改）→ "已重建 1 条管线（pipelineIndex 不变，下一帧生效）"，复原同理 ③加
+  `[[vk::binding(30)]]` 真采样 = 契约改 → "条目 313（tonemap）接口契约变化——保留旧
+  管线" warn，程序继续跑；全程 VVL 0 error。`checks --strict` 0 警告（守卫解析器拆
+  shader:impl 分区 + spvAbsorb/EMD 拆 helper；rlstd 补导出 sort/unordered_map/size_t/
+  system）。
 
 ## 10. 验收红线（汇总）
 

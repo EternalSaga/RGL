@@ -62,9 +62,10 @@ namespace RGL {
 		b.extra.push_back({.binding = 7, .sampler = false, .heapSlot = ormSlot});
 		b.extra.push_back({.binding = 8, .sampler = false, .heapSlot = emissiveSlot});
 		auto entry = PipelineEntry{
-			fmt::format("{}.v{}.t{}.n{}.o{}.e{}", specName, vertexSlot, textureSlot, normalSlot,
+			.name = fmt::format("{}.v{}.t{}.n{}.o{}.e{}", specName, vertexSlot, textureSlot, normalSlot,
 				ormSlot, emissiveSlot),
-			RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b)};
+			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b),
+			.spec = *spec, .bindings = b};
 		const uint32_t index = static_cast<uint32_t>(entries.size());
 		indexByName[entry.name] = index;
 		modelEntryBySlot[key] = index;
@@ -95,8 +96,9 @@ namespace RGL {
 		b.slotEnv = envAsset->heapSlot;
 		b.envSamplerHeapOffset =
 			env.ensureSkySampler(envAsset->mipLevels) * res.getSamplerHeap().getDescriptorSize();
-		auto entry = PipelineEntry{"skybox",
-			RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b)};
+		auto entry = PipelineEntry{.name = "skybox",
+			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b),
+			.spec = *spec, .bindings = b};
 		const uint32_t index = static_cast<uint32_t>(entries.size());
 		indexByName[entry.name] = index;
 		entries.push_back(std::move(entry));
@@ -145,8 +147,9 @@ namespace RGL {
 			b.extra.push_back({.binding = 10, .sampler = true, .samplerHeapOffset = 0});
 		}
 		b.extra.push_back({.binding = 11, .sampler = false, .heapSlot = emissiveSlot});
-		auto entry = PipelineEntry{"light",
-			RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b)};
+		auto entry = PipelineEntry{.name = "light",
+			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b),
+			.spec = *spec, .bindings = b};
 		const uint32_t index = static_cast<uint32_t>(entries.size());
 		indexByName[entry.name] = index;
 		entries.push_back(std::move(entry));
@@ -179,8 +182,9 @@ namespace RGL {
 			{.binding = 4, .sampler = false, .heapSlot = sceneHdrSlot},
 			{.binding = 5, .sampler = true, .samplerHeapOffset = samplerHeapOffset},
 		};
-		auto entry = PipelineEntry{"tonemap",
-			RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b)};
+		auto entry = PipelineEntry{.name = "tonemap",
+			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b),
+			.spec = *spec, .bindings = b};
 		const uint32_t index = static_cast<uint32_t>(entries.size());
 		indexByName[entry.name] = index;
 		entries.push_back(std::move(entry));
@@ -208,8 +212,9 @@ namespace RGL {
 		b.slotSceneData = sceneData.ensure();
 		b.hasSceneData = true;
 		auto entry = PipelineEntry{
-			"cube",
-			RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*cubeSpec), b)};
+			.name = "cube",
+			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*cubeSpec), b),
+			.spec = *cubeSpec, .bindings = b};
 		const uint32_t index = static_cast<uint32_t>(entries.size());
 		indexByName[entry.name] = index;
 		entries.push_back(std::move(entry));

@@ -227,4 +227,19 @@ export RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain
  */
 export void wireHotReload(entt::registry& registry);
 
+/**
+ * shader 热重载装配（Phase 10 批 10.4，L1 = D2 同签名才热换；docs/phase10_plan.md §6）。
+ * 门 = `diagnostics.shader_reload`（默认 false = 直接返回零变化）。独立于 config_reload
+ * 但**复用同一 ConfigReloadHook 帧边界挂点**（已 emplace = 组合追加，未 emplace = 独占
+ * emplace）。装配 = 构造 ShaderHotReloader（基线 = 在役 SPV hash+接口签名）+ init
+ * （失败降级关：编译期三件套缺失 / 基线 SPV 读不到）；poll 时 fork slangc 全量重编源
+ * rgl/shaders/，同签名条目同槽重建（pipelineIndex 不变 = 资产表/cull 零改动）。
+ * @param registry 场景 registry（ConfigReloadHook ctx 挂点）
+ * @param pipelines 管线表（基线来源 + build/commitReplacement 宿主）
+ * @param backEnd 后端（waitForIdle 宿主 + DGC 两路可空指针——换入前清 in-flight、
+ *                execution set / 静态 shader 对刷成新句柄后才销毁旧句柄）
+ */
+export void wireShaderHotReload(entt::registry& registry, ShaderRegistry& pipelines,
+	RenderBackEnd& backEnd);
+
 }  // namespace RGL

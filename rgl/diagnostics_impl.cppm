@@ -67,6 +67,7 @@ void setDiagnostics(const DiagnosticsConfig& cfg) { diagnostics() = cfg; }
 		cfg.dgcStatic = readBool("dgc_static", cfg.dgcStatic);
 		cfg.imgui = readBool("imgui", cfg.imgui);
 		cfg.configReload = readBool("config_reload", cfg.configReload);
+		cfg.shaderReload = readBool("shader_reload", cfg.shaderReload);
 
 		// 数值门：负数 = 显式"关"哨兵（配置文件写 -1 直观）；dump_gbuf 越界 = warn + 关闭
 		auto readI64 = [&](const char* key, int64_t def) -> std::optional<int64_t> {

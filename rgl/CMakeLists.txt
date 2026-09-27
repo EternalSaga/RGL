@@ -13,20 +13,20 @@ include(${CMAKE_SOURCE_DIR}/cmake/RglRuntimeAssets.cmake)
 # ─── Shader Compilation ───────────────────────────────────────────────────────
 # rgl_shader(<name> <OUT_VAR> [<DEP>...])：短名相对 shaders/，DEP = import 契约文件。
 # （OUT_VAR 供调试；add_executable 经全局属性 RGL_SPV_OUTPUTS 汇总，勿依赖散落变量。）
-rgl_shader(cube.mesh MESH_SPV types material)
+rgl_shader(cube.mesh MESH_SPV types material scene)
 rgl_shader(cube.frag FRAG_SPV types)
-rgl_shader(model.mesh MODEL_MESH_SPV model material)
-rgl_shader(model.frag MODEL_FRAG_SPV model material)
+rgl_shader(model.mesh MODEL_MESH_SPV model material scene)
+rgl_shader(model.frag MODEL_FRAG_SPV model material scene)
 # Phase 5 批次 3：真简化 PBR frag（mesh 复用 model.mesh.spv，import scene.slang 光照数据）
 rgl_shader(model_pbr.frag MODEL_PBR_FRAG_SPV model material scene)
 # Phase 5 批次 3：基础 Phong frag（第二条光照路线，同契约同 mesh SPV，scene.lua styles 一行切换）
 rgl_shader(model_phong.frag MODEL_PHONG_FRAG_SPV model material scene)
 # Phase 5.5：IBL 路线（model_pbr + 环境 cubemap 采样替换常 ambient；env.slang 契约）
 # Phase 8 ③a：normal 贴图导数 TBN（normalmap.slang 契约，binding 6/7 消费）
-rgl_shader(model_pbr_ibl.frag MODEL_PBR_IBL_FRAG_SPV model material scene env normalmap)
+rgl_shader(model_pbr_ibl.frag MODEL_PBR_IBL_FRAG_SPV model material scene env normalmap lights)
 # Phase 8 植被/光源专属 frag（forward-only；mesh 复用 model.mesh.spv，import 契约同 model_pbr_ibl）
-rgl_shader(model_vegetation.frag MODEL_VEGETATION_FRAG_SPV model material scene env normalmap)
-rgl_shader(model_light.frag MODEL_LIGHT_FRAG_SPV model material scene env normalmap)
+rgl_shader(model_vegetation.frag MODEL_VEGETATION_FRAG_SPV model material scene env normalmap lights)
+rgl_shader(model_light.frag MODEL_LIGHT_FRAG_SPV model material scene env normalmap lights)
 # Phase 5.5 批次 4：天空盒（全屏大三角 mesh + clip→world 射线采 env cubemap frag）
 rgl_shader(skybox.mesh SKYBOX_MESH_SPV sky scene)
 rgl_shader(skybox.frag SKYBOX_FRAG_SPV sky scene env)
@@ -39,9 +39,9 @@ rgl_shader(deferred_geometry_vegetation.frag DEFERRED_GEOM_VEG_FRAG_SPV deferred
 rgl_shader(deferred_geometry_light.frag DEFERRED_GEOM_LIGHT_FRAG_SPV deferred_geometry.frag model material scene normalmap)
 # Phase 7 D1：light pass（全屏大三角 mesh + 采样 G-buffer 的 deferred 光照 frag）
 rgl_shader(light.mesh LIGHT_MESH_SPV)
-rgl_shader(light.frag LIGHT_FRAG_SPV scene)
-# Phase 8 批次 ①：HDR tonemap frag（mesh 复用 light.mesh.spv；无 import 契约——不读 scene data）
-rgl_shader(tonemap.frag TONEMAP_FRAG_SPV)
+rgl_shader(light.frag LIGHT_FRAG_SPV scene lights sky)
+# Phase 8 批次 ①：HDR tonemap frag（mesh 复用 light.mesh.spv；import scene 读 @56 曝光）
+rgl_shader(tonemap.frag TONEMAP_FRAG_SPV scene)
 # Phase 7b（批次 5）：GPU culling compute（独立契约 cull.comp.slang 头注释，无 import 契约文件）
 rgl_shader(cull.comp CULL_SPV)
 # Phase 8 批次 ③b：2D 纹理 compute mip 链（独立契约 mip_gen.comp.slang 头注释，无 import 契约文件；
@@ -92,6 +92,13 @@ target_compile_definitions(rgl PRIVATE GLM_FORCE_DEPTH_ZERO_TO_ONE GLM_FORCE_RAD
 # Phase 10 批 10.3 配置热重载：监视**源树** configs/（D7——build 副本会被 just build
 # 内容比对静默覆盖复原，监听它无意义）；运行期路径不存在 = warn + 关（优雅降级）
 target_compile_definitions(rgl PRIVATE "RGL_SOURCE_CONFIG_DIR=\"${PROJECT_SOURCE_DIR}/configs\"")
+# Phase 10 批 10.4 shader 热重载（L1）：fork slangc 重编源树 shaders/ 所需的三件套
+# （D11：flags = SLANG_FLAGS_STR 同源派生串，与构建期 SPV 编译 flag 恒一致；
+#  路径/flags 缺失 = wireShaderHotReload 降级关并日志）
+target_compile_definitions(rgl PRIVATE
+	"RGL_SLANGC_PATH=\"${SLANGC_EXECUTABLE}\""
+	"RGL_SLANG_FLAGS=\"${SLANG_FLAGS_STR}\""
+	"RGL_SOURCE_SHADER_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/shaders\"")
 find_package(SDL3 CONFIG REQUIRED)
 
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)

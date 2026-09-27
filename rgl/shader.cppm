@@ -36,6 +36,29 @@ export struct ShaderEffect {
 };
 
 /**
+ * SPIR-V 接口签名（Phase 10 批 10.4 shader 热重载守卫）：解析 SPV 二进制提取"对外可见
+ * 接口"的规范化文本——两次编译签名相等 ⇔ 新 shader 与在役 pipeline 的烘焙 binding
+ * mapping / push argsSize / render pass 附件数 / mesh 工作组契约全部兼容（= L1
+ * "同签名"判定，热换后不重启即正确）。
+ *
+ * 采集面（每条目一个 token，排序后 `;` 连接——声明序无关）：
+ *  · 接口变量（OpVariable）：storage class 号 + **原始 decoration 集**（dec{值}:{操作数}
+ *    原样入 token——Binding=33/DescriptorSet=34/Location=30 等语义无需硬编码，原始集
+ *    相等即语义相等）+ 指向类型**递归结构 token**（类型 id 编译间漂移，必须展开到
+ *    字面量：标量宽度/符号、向量/矩阵维、数组长度（常量解析）、struct 成员展开、
+ *    image 系操作数字面量）
+ *  · 执行模式（OpExecutionMode）：mode + 操作数字面量——mesh shader 的 LocalSize /
+ *    OutputVertices / OutputPrimitivesEXT 在此钉死（cull groupCount = kTrianglesPerGroup
+ *    契约若被改 = 签名变化被拦）。
+ *
+ * 已知边界（v1，L1 够用）：decoration group（OpGroupDecorate）不解析（slangc 直出
+ * OpDecorate）；数组长度非常量时落 "?"；解析失败返回 "SPV_CORRUPT"（哨兵互不相等 →
+ * 守卫必拒，fail-safe）。同型成员重排（纯 Offset decoration 漂移）经 struct 的
+ * member decoration 集采集覆盖（appendDecos 的 MD 行）。
+ */
+export std::string spvInterfaceSignature(const std::vector<uint32_t>& spv);
+
+/**
  * 动态状态（Dynamic State）：与 shader object 解耦的"pass 状态"值集合。
  * 从 RenderPipeline 移出（原 recordRenderCommands 内烘焙），由调用点（Renderer）
  * 按 pass 传入——同一 mesh shader 可在不同 pass 用不同状态（Phase 7 G-buffer 多 pass）。

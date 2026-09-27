@@ -26,6 +26,7 @@ import scene_context;
 import camera_config;  // loadCameraConfig（hot_reload camera.lua 套用，Phase 10 批 10.3）
 import camera;  // Camera ctx 类型（hot_reload 调参字段套用，10.3）
 import hot_reload;  // HotReloader（配置热重载机制模块，10.3）
+import shader_hot_reload;  // ShaderHotReloader（shader 热重载 L1，10.4）
 import ecs;  // ConfigReloadHook ctx（帧边界挂点类型，10.3）
 import shader_registry;
 import gpu_cull;
@@ -488,6 +489,32 @@ void wireHotReload(entt::registry& registry) {
 	if (auto* logger = RLLogger::getInstance())
 		logger->info("hot_reload: 已启动，监视源树 {}（scene.lua / camera.lua / log_level.json）",
 			sourceDir.string());
+}
+
+/**
+ * wireShaderHotReload 定义（契约见 main.cppm 接口注释）。复用 ConfigReloadHook
+ * 帧边界挂点：config_reload 已挂 = 组合追加（配置链先跑），否则独占 emplace；
+ * reloader 所有权在闭包内（ctx 活多久它活多久，同 10.3 模式）。init 失败
+ * （编译期三件套缺失 / 基线 SPV 读不到）= 降级关，ShaderHotReloader 内部已日志。
+ */
+void wireShaderHotReload(entt::registry& registry, ShaderRegistry& pipelines,
+	RenderBackEnd& backEnd) {
+	if (!diagnostics().shaderReload)
+		return;  // 总开关默认关 = 零行为变化（红线）
+	auto reloader = std::make_shared<ShaderHotReloader>(pipelines, backEnd.renderer,
+		backEnd.dgc.get(), backEnd.dgcStatic.get());
+	if (!reloader->init())
+		return;
+	if (auto* hook = registry.ctx().find<ConfigReloadHook>(); hook && hook->poll) {
+		auto prev = std::move(hook->poll);
+		hook->poll = [prev = std::move(prev), r = std::move(reloader)] {
+			prev();
+			r->poll();
+		};
+	} else {
+		registry.ctx().emplace<ConfigReloadHook>(ConfigReloadHook{
+			.poll = [r = std::move(reloader)] { r->poll(); }});
+	}
 }
 
 }  // namespace RGL

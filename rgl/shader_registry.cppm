@@ -29,6 +29,11 @@ export struct PipelineEntry {
 	RGL::RenderPipeline pipeline;                 // shader object + 烘焙 binding mapping（见 PipelineBindings）
 	uint32_t argsSize = sizeof(RGL::DrawArgs);    // push constant 字节数（DrawArgs 4B，仅 objectIndex）
 	uint32_t pushDataSet = 0;                     // 显式 push constant set 号（vkCmdPushDataEXT 用）
+	// Phase 10 批 10.4 热重载重建参数（buildReplacement 消费）：条目建成的两份输入存下
+	// 即可原位重建——heap 槽运行期不漂移（binding mapping 恒可复用），SPV 由 hot reload
+	// 侧提供新字节。默认值 = 未填（cube 等一次性条目不影响：热重载只处理填了 spec 的条目）。
+	RGL::PipelineSpec spec;                       // SPV 规格路径（源 .slang 名 = basename 换扩展）
+	RGL::PipelineBindings bindings;               // 烘焙 mapping 参数（heap 槽/形态位/extra）
 };
 
 /**
@@ -90,6 +95,31 @@ export class ShaderRegistry {
 	 * @return entries 的 const span（下标 = 绘制契约 = 资产 pipelineIndex）
 	 */
 	[[nodiscard]] std::span<const PipelineEntry> entriesView() const { return entries; }
+
+	/**
+	 * 热重载重建 · 第一步（Phase 10 批 10.4；调用方 = shader_hot_reload）：用条目存的
+	 * spec/bindings + 新 SPV 造一条**新的** RenderPipeline——在役条目不动，旧 pipeline
+	 * 仍活着（execution set 此刻仍可安全指向旧句柄）。签名守卫（同签名判定）在调用方
+	 * 完成，本函数不做校验。
+	 * @param index 条目下标
+	 * @param effect 新编译的 mesh + frag SPV
+	 * @throws vk::SystemError 等（vkCreateShadersEXT 失败 = 新 SPV 不可加载，调用方
+	 *         catch 后保留旧管线）
+	 */
+	[[nodiscard]] RGL::RenderPipeline buildReplacement(uint32_t index, const RGL::ShaderEffect& effect) {
+		return RGL::RenderPipeline(device.getDevice(), effect, entries[index].bindings);
+	}
+
+	/**
+	 * 热重载重建 · 提交（第二步，时序契约）：**调用方前置 = waitForIdle + execution set
+	 * 槽已指向新句柄**（旧句柄零 in-flight 引用 + 集合内零残留引用），本函数 move 覆盖
+	 * 条目 = 旧 VkShaderEXT 在赋值点销毁。pipelineIndex 不变 = 资产表/cull 序列表零改动。
+	 * @param index 条目下标
+	 * @param fresh buildReplacement 产物
+	 */
+	void commitReplacement(uint32_t index, RGL::RenderPipeline&& fresh) {
+		entries[index].pipeline = std::move(fresh);
+	}
 
 	/**
 	 * 模型管线条目（资产上传期）：用管线规格创建 RenderPipeline，binding mapping 显式烘焙
