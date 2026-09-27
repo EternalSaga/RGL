@@ -53,6 +53,7 @@ import llm_debug;
 import imgui_layer;  // Phase 10 批 10.1：IMGUI 调试面板层（main 装配 = 唯一认识 imgui 的地方之一）
 import picking;  // PickingService（Phase 10 批 10.5 装配）
 import param_registry;  // DebugPanelState ctx（面板跨帧 UI 态，10.2c）
+import param_pages;  // buildDebugParamPages（参数页构建器，批 10.6 自 ecs 拆出）
 import ecs;
 import rllogger;
 import vkerror;

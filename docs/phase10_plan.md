@@ -1,7 +1,7 @@
 # Phase 10 实施计划：调试交互（配置热重载 + IMGUI 参数面板 + shader 热重载 + 点选取参）
 
-> **状态**：现行——**批 10.1 / 10.2a / 10.2b / 10.2c / 10.3 / 10.4 / 10.5 已落地（2026-09-28）**，
-> 剩 10.6（可选）。
+> **状态**：现行——**批 10.1–10.6 全部落地（2026-09-28）**。Phase 10 收口，本文件转 archive 待办；
+> 剩面板"选中"页/整体 UI 视觉验收（用户）。
 > 关键决策 D1–D5 已由用户拍板（见 §2），D6–D11 为主 agent 技术决策（可否决）。
 > 批次 10.1–10.6 见 §9。
 > 依据 = 2026-09-27 只读调研（worker 子 agent A–F 六节 + 主 agent 逐项复核）+ 方向讨论。
@@ -206,7 +206,7 @@ profiler 面板读数复用现成 `profiler = 0`（不开 profiler 时面板显�
 | **10.3** 配置热重载 **✅ 2026-09-28** | §5：`hot_reload` 模块 + 帧边界换入基建 + T1 清单；（T2 可选不做） | 新 `.cppm`、`main.cppm/_scene.cppm`（wireHotReload）、`ecs.cppm/_impl.cppm`（ConfigReloadHook）、`rllogger`、CMake 注入源目录 | 默认关 diff0；开 = 改源 `configs/` 下一帧生效且 build 副本不被污染；缺源目录降级关 |
 | **10.4** shader 热重载 L1 **✅ 2026-09-28** | §6：watch + fork slangc + SPV 二进制签名守卫（§6.1 偏差）+ 两阶段同槽重建 + DGC 两路句柄刷新 | 新 `.cppm`×2 + `shader_impl`、`shader.cppm` 签名解析、`shader_registry` build/commitReplacement、`vk_indirect_commands` update 入口、CMake 三宏注入 | 默认关 diff0；开 = 改注释重载无视觉变化、改逻辑下一帧生效、**改契约被拦且旧管线继续跑** |
 | **10.5** 点选取参 **✅ 2026-09-28** | §7：点击事件 + id pass 进图 + 1 texel 回读 + objectSlot 反查 + 面板实体绑定 | 新 `.cppm`×2（picking）、`decoratePickingPass`、`addPickingEntries` 克隆、执行器分支、`PickingHook`/`SelectedObject` ctx、面板"选中"页、`picking_probe` | 默认关 diff0；开 = 点击命中正确（含遮挡层序）、面板显示并可调该实体参数 |
-| **10.6**（可选，D4 视情况） | 反射语义扩产：range/默认值/单位入 schema → 生成语义层，注册表薄化 | schema/生成器 | 10.2b/c 行为不变（仅数据源换薄） |
+| **10.6**（可选，D4 视情况）**✅ 2026-09-28** | 反射语义扩产：range/默认值/单位入 schema → 生成语义层，注册表薄化 | `rgl/param_semantics.json`（新第 7 管线数据源）+ inja 模板 + `param_semantics_generated`；面板构建拆出 `param_pages`(+impl) | 10.2b/c 行为不变（仅数据源换薄）✅ |
 
 模块新建一律走 skill `rgl-new-module`；每批验收走 skill `rgl-verify`（headless 冒烟 +
 BIT-IDENTICAL 截图回归，基线 `10b00c78c4a2d644479bb56eb35ac796bae90ada6433178fecd3dc21f2e72d14`）。
@@ -385,6 +385,28 @@ BIT-IDENTICAL 截图回归，基线 `10b00c78c4a2d644479bb56eb35ac796bae90ada643
   (900,600) → raw 1495 → objectSlot 1494 → entity 1495（bistro 桌面命中，反查日志
   齐全）、probe (640,120) 天空 → raw 0 miss 保持选中；全程 VVL 0 error；
   `checks --strict` 0 警告。面板"选中"页视觉走查留用户（窗口注入不可得）。
+
+### 10.6 实施记录（2026-09-28）
+
+- **语义层 = 第 7 条反射管线（模板形态，同 features 管线）**：`rgl/param_semantics.json`
+  （label/range/speed 唯一权威，13 条控件元数据 = 8 sliders + 4 colors + 1 drag3）→
+  `tools/templates/param_semantics_cppm.inja` → `reflection_tool render` →
+  `generated/param_semantics_generated.cppm`（`RGL::semantics::kXxx` constexpr 表）。
+  管线注册在 `cmake/RglReflection.cmake`（SHA1 护栏 REFLECTION_PAIRS 自动纳入 json+模板）。
+- **D1 边界落定**：**语义是数据、通道是代码**——schema 只装反射/配置给得了的静态语义
+  （label/min/max/speed）；get/set 写通道（闭包捕获 ctx/组件/资产指针）留消费侧。灯页
+  逐实例 label = meta 前缀 + index tag 运行时拼接（json 存"强度 L"，面板显"强度 L3"）。
+- **与原计划偏差（记录）**：**默认值/单位未入表**——当前面板无消费场景（无"重置默认"
+  按钮、控件不带单位后缀），入表即死数据；将来做重置功能时再扩 json 字段即可。
+- **附带拆模块**：切薄后 `ecs_impl.cppm` 代码行 504 > 500 红线 → 面板页构建拆出独立
+  模块 `param_pages`(+`param_pages:impl`)（与帧循环 system 职责本不同源）。依赖方向：
+  param_pages → ecs/scene_context（认识 ECS 搭控件）；imgui_layer 仍零认识 ECS
+  （builder 回调契约不变）；ecs 不 import param_pages（无环）。踩坑：模板生成物
+  `inline constexpr` 常量漏 `export`（struct 导了实例没导，症状 = "must be imported
+  from module before it is required"，同 rlstd "完整可用面"教训）。
+- **验收**：`just reflect` 产物 13 常量全导出；默认关 forward 截图 = 基线
+  `10b00c78…`；窗口 + imgui 面板（pageBuilder 每帧跑）25s 无崩溃 0 error；
+  `checks --strict` 0 警告（style + doc）。
 
 ## 10. 验收红线（汇总）
 

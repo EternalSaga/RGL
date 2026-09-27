@@ -16,3 +16,5 @@ b69c754d3707de52b36ba128de7523acb3a10a77  rgl/shaders/scene_forward_schema.lua
 69ebae222b5acfa4efbef3230e7f24fbff769ecd  tools/templates/types_cppm.inja
 14675468a12722ab2309eede5dd86a9479381c05  rgl/features_config.json
 da1def94ebf981fe36da38e31d7baf178a38b095  tools/templates/features_cppm.inja
+a402202e0e99c76147b8bd47d0f8394ebfaf07d8  rgl/param_semantics.json
+bea192a811bf3d98992a548e32b9a5c3a23df225  tools/templates/param_semantics_cppm.inja

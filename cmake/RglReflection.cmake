@@ -76,6 +76,18 @@ add_custom_command(TARGET reflect PRE_BUILD
 list(APPEND RGL_GENERATED_CPPM ${FEATURES_CPPM})
 list(APPEND REFLECTION_PAIRS "${FEATURES_CPPM}|${FEATURES_CONFIG},${FEATURES_TEMPLATE}")
 
+# param_semantics 管线（Phase 10 批 10.6：面板控件语义 JSON → 模板渲染，无 slangc 步骤，
+# 同 features 管线形态）——label/range/speed 单一真相源 = rgl/param_semantics.json
+set(PARAM_SEMANTICS_TEMPLATE "${CMAKE_SOURCE_DIR}/tools/templates/param_semantics_cppm.inja")
+set(PARAM_SEMANTICS_CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/param_semantics.json")
+set(PARAM_SEMANTICS_CPPM "${GEN_SRC_DIR}/param_semantics_generated.cppm")
+add_custom_command(TARGET reflect PRE_BUILD
+    COMMAND reflection_tool render --json ${PARAM_SEMANTICS_CONFIG}
+            --output ${PARAM_SEMANTICS_CPPM} --template ${PARAM_SEMANTICS_TEMPLATE}
+    VERBATIM)
+list(APPEND RGL_GENERATED_CPPM ${PARAM_SEMANTICS_CPPM})
+list(APPEND REFLECTION_PAIRS "${PARAM_SEMANTICS_CPPM}|${PARAM_SEMANTICS_CONFIG},${PARAM_SEMANTICS_TEMPLATE}")
+
 # 收尾：写输入哈希清单（check 守卫的比对基准；与产物一起提交）
 add_custom_command(TARGET reflect PRE_BUILD
     COMMAND ${CMAKE_COMMAND} -DMODE=write

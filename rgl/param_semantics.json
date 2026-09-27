@@ -1,0 +1,30 @@
+{
+    "module_name": "param_semantics_generated",
+    "_comment": [
+        "Phase 10 批 10.6：IMGUI 面板控件语义单一真相源（label/range/speed）。",
+        "key = C++ 常量名后缀（k + key）；写通道（get/set）不在本表——语义是数据、",
+        "通道是代码，留 ecs_impl buildDebugParamPages（D1：注册表只存写入通道+语义，",
+        "本表把语义数据从 C++ 硬编码搬进配置）。消费方 = ecs_impl。",
+        "灯页 label = 前缀 + index tag 运行时拼接（'强度 L' + '3'）。",
+        "行为对齐红线：改动本表 = 改面板交互语义（验收 = 10.2b/c 行为不变）。"
+    ],
+    "sliders": [
+        { "key": "EnvExposure",    "label": "曝光 exposure",            "min": 0.0, "max": 4.0,  "speed": 0.01 },
+        { "key": "EnvIntensity",   "label": "env 强度",                 "min": 0.0, "max": 10.0, "speed": 0.01 },
+        { "key": "EnvMipRange",    "label": "env mip 范围",             "min": 0.0, "max": 16.0, "speed": 0.1 },
+        { "key": "LightIntensity", "label": "强度 L",                   "min": 0.0, "max": 20.0, "speed": 0.05 },
+        { "key": "MatAlpha",       "label": "不透明度 α",               "min": 0.0, "max": 1.0,  "speed": 0.01 },
+        { "key": "MatRoughness",   "label": "roughness",                "min": 0.0, "max": 1.0,  "speed": 0.01 },
+        { "key": "MatMetallic",    "label": "metallic",                 "min": 0.0, "max": 1.0,  "speed": 0.01 },
+        { "key": "MatAlphaCutoff", "label": "alphaCutoff（MASK 生效）", "min": 0.0, "max": 1.0,  "speed": 0.01 }
+    ],
+    "colors": [
+        { "key": "MatBaseColor", "label": "基色 baseColor rgb" },
+        { "key": "MatEmissive",  "label": "自发光 emissive" },
+        { "key": "LightColor",   "label": "光色 L" },
+        { "key": "LightAmbient", "label": "环境色 ambient（主光）" }
+    ],
+    "drags3": [
+        { "key": "LightDirection", "label": "方向 L", "min": -10.0, "max": 10.0, "speed": 0.05 }
+    ]
+}
