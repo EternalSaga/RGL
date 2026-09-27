@@ -20,6 +20,8 @@ import diagnostics;     // texel_canary 诊断单例（configs/diagnostics.lua�
 import profiler;        // Phase 9 帧相 zone（frameBegin + 帧循环拦截点，docs/phase9_plan.md）
 import gpu_canary;
 import scene_context;
+import param_registry;  // ParamPage 条目结构（buildDebugParamPages，Phase 10 批 10.2b）
+import lights_types_generated;  // kMaxLights（灯槽数组上界，与 render_list 收集环一致）
 import camera;
 import rllogger;
 
@@ -488,6 +490,56 @@ std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer& rende
 		return std::unexpected(std::move(*lastError));
 	}
 	return {};
+}
+
+/** buildDebugParamPages 定义（接口注释）：页 = "渲染"（SceneEnv ctx）+ "灯光"（Light
+ *  组件按 index 升序，index 0 主光附共享 ambient）。回调捕获组件指针当帧即用（面板
+ *  不增删 entity，entt 组件地址稳定）；写回 = 改组件/ctx 本体，下一帧渲染生效。 */
+std::vector<ParamPage> buildDebugParamPages(entt::registry& rg) {
+	ParamPage renderPage{.name = "渲染"};
+	auto& env = rg.ctx().get<SceneEnv>();
+	renderPage.sliders.push_back({.label = "曝光 exposure", .minValue = 0.0f, .maxValue = 4.0f,
+		.get = [&env] { return env.exposure; },
+		.set = [&env](float v) { env.exposure = v; }});
+	renderPage.sliders.push_back({.label = "env 强度", .minValue = 0.0f, .maxValue = 10.0f,
+		.get = [&env] { return env.intensity; },
+		.set = [&env](float v) { env.intensity = v; }});
+	renderPage.sliders.push_back({.label = "env mip 范围", .minValue = 0.0f, .maxValue = 16.0f,
+		.speed = 0.1f,
+		.get = [&env] { return env.mipRange; },
+		.set = [&env](float v) { env.mipRange = v; }});
+
+	ParamPage lightPage{.name = "灯光"};
+	std::array<Light*, kMaxLights> slots{};
+	rg.view<Light>().each([&slots](Light& L) {
+		if (L.index < kMaxLights)
+			slots[L.index] = &L;  // 组件池地址稳定（面板不增删 entity）
+	});
+	for (uint32_t i = 0; i < kMaxLights; ++i) {
+		Light* p = slots[i];
+		if (!p)
+			continue;  // 画不画 = 实体有无（灯位空缺 = 无该 index 的 entity）
+		const std::string tag = std::to_string(i);
+		lightPage.sliders.push_back({.label = "强度 L" + tag, .minValue = 0.0f, .maxValue = 20.0f,
+			.speed = 0.05f,
+			.get = [p] { return p->intensity; },
+			.set = [p](float v) { p->intensity = v; }});
+		lightPage.colors.push_back({.label = "光色 L" + tag,
+			.get = [p] { return p->color; },
+			.set = [p](const glm::vec3& v) { p->color = v; }});
+		lightPage.drags.push_back({.label = "方向 L" + tag,
+			.get = [p] { return p->direction; },
+			.set = [p](const glm::vec3& v) { p->direction = v; }});
+		if (i == 0)  // 主光专属：场景共享 ambient（scene data @36 仅此灯生效）
+			lightPage.colors.push_back({.label = "环境色 ambient（主光）",
+				.get = [p] { return p->ambient; },
+				.set = [p](const glm::vec3& v) { p->ambient = v; }});
+	}
+
+	std::vector<ParamPage> out;
+	out.push_back(std::move(renderPage));
+	out.push_back(std::move(lightPage));
+	return out;
 }
 
 }  // namespace RGL

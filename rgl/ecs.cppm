@@ -9,6 +9,7 @@ import vk_renderer;
 import asset_table;  // AssetTable（renderSystem 参数；F 拆出）
 import frame_draw_list;
 import runtime_config;  // LlmDebugConfig（2026-09-08 自 camera_config 迁入 runtime_config）
+import param_registry;  // ParamPage（buildDebugParamPages 返回类型，Phase 10 批 10.2b）
 
 namespace RGL {
 
@@ -93,5 +94,16 @@ export std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer
 	std::function<std::expected<std::string, Error>(RGL::Renderer&)>
 		llmCapture = {},
 	std::function<void(uint32_t)> onFrame = {});
+
+/**
+ * 调试参数面板页装配（Phase 10 批 10.2b；imgui 层 pageBuilder 每帧调用）。
+ * 条目 = 语义层 + 读写回调对（param_registry 契约，零布局镜像）：
+ * "渲染"页 = SceneEnv ctx（exposure/envIntensity/mipRange）；"灯光"页 = 每灯 entity
+ * 的 Light 组件（intensity/color/direction + index 0 主光 ambient）。写回 = 直接改
+ * ctx/组件，`renderListSystem` 下一帧消费（生效 = 下一帧）。
+ * @param rg 场景 registry（读 + 写回调捕获：SceneEnv ctx + Light 组件）
+ * @return 参数页列表（"渲染" + "灯光"，灯按 index 升序）
+ */
+export std::vector<ParamPage> buildDebugParamPages(entt::registry& rg);
 
 }  // namespace RGL

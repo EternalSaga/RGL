@@ -380,6 +380,8 @@ int main() {
 				vk::raii::CommandBuffer& cmd, vk::Extent2D extent, vk::ImageView view) {
 				return layer->renderFrame(cmd, extent, view);
 			});
+			// 参数页构建器（10.2b）：imgui 层不认识 ECS，页 = buildDebugParamPages(registry)
+			imguiLayer.setPageBuilder([&registry] { return buildDebugParamPages(registry); });
 		}
 
 		/**

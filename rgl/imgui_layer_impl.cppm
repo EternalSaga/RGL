@@ -1,5 +1,6 @@
 module;
 #include <SDL3/SDL.h>
+#include <glm/glm.hpp>  // ParamPage 条目 get/set 用 glm::vec3（Color3/Drag3）
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
 #include <imgui_impl_vulkan.h>
@@ -15,6 +16,7 @@ import vk_device;
 import vk_swapchain;
 import vulkan_window;
 import profiler;  // 面板读数 = profilerSnapshotNow（Phase 10 批 10.1）
+import param_registry;  // ParamPage/条目渲染（Phase 10 批 10.2b）
 
 namespace RGL {
 
@@ -26,6 +28,32 @@ void checkVkResult(VkResult err) {
 		return;
 	if (auto* logger = RLLogger::getInstance())
 		logger->error("imgui backend: VkResult={}", static_cast<int>(err));
+}
+
+// ─── 参数条目 widget（Phase 10 批 10.2b）：每帧从源同步临时值 → widget → 编辑才写回
+//（get 每帧跑 = 配置热重载/外部改动自动反映）；label 帧间稳定 = imgui id 稳定 ───
+
+/** 标量滑条（SliderEntry）。 */
+void renderSlider(const SliderEntry& e) {
+	float v = e.get();
+	if (ImGui::SliderFloat(e.label.c_str(), &v, e.minValue, e.maxValue, "%.3f"))
+		e.set(v);
+}
+
+/** 颜色编辑（Color3Entry，HDR 线性域）。 */
+void renderColor3(const Color3Entry& e) {
+	const glm::vec3 c = e.get();
+	float rgb[3] = {c.x, c.y, c.z};
+	if (ImGui::ColorEdit3(e.label.c_str(), rgb))
+		e.set(glm::vec3(rgb[0], rgb[1], rgb[2]));
+}
+
+/** 三维拖拽（Drag3Entry）。 */
+void renderDrag3(const Drag3Entry& e) {
+	const glm::vec3 v3 = e.get();
+	float arr[3] = {v3.x, v3.y, v3.z};
+	if (ImGui::DragFloat3(e.label.c_str(), arr, e.speed, e.minValue, e.maxValue, "%.3f"))
+		e.set(glm::vec3(arr[0], arr[1], arr[2]));
 }
 
 }  // namespace
@@ -165,7 +193,7 @@ bool ImGuiLayer::renderFrame(vk::raii::CommandBuffer& cmd, vk::Extent2D extent,
 	return true;
 }
 
-/** 面板内容（批 10.1 骨架）：profiler 读数区 + 参数区占位（10.2 接注册表）。 */
+/** 面板内容（接口注释）：profiler 读数区 + 参数页 TabBar（builder 非空时）。 */
 void ImGuiLayer::buildPanels() {
 	const ProfilerSnapshot snap = profilerSnapshotNow();
 	ImGui::Begin("RGL Debug");
@@ -179,8 +207,32 @@ void ImGuiLayer::buildPanels() {
 		ImGui::Text("gpu.frame  avg %.2f ms", snap.gpuFrameAvgMs);
 	}
 	ImGui::Separator();
-	ImGui::TextUnformatted("参数控件占位（10.2b 灯/曝光 → 10.2c 材质，见 docs/phase10_plan.md）");
+	buildParamTabs();
 	ImGui::End();
+}
+
+/** 渲染参数页（契约 = param_registry）：TabItem per page；非当前页不渲染
+ *  （条目回调不跑 = 零副作用）。 */
+void ImGuiLayer::buildParamTabs() {
+	if (!pageBuilder)
+		return;
+	const std::vector<ParamPage> pages = pageBuilder();
+	if (pages.empty())
+		return;
+	if (!ImGui::BeginTabBar("rgl_params"))
+		return;
+	for (const ParamPage& page : pages) {
+		if (!ImGui::BeginTabItem(page.name.c_str()))
+			continue;
+		for (const SliderEntry& e : page.sliders)
+			renderSlider(e);
+		for (const Color3Entry& e : page.colors)
+			renderColor3(e);
+		for (const Drag3Entry& e : page.drags)
+			renderDrag3(e);
+		ImGui::EndTabItem();
+	}
+	ImGui::EndTabBar();
 }
 
 }  // namespace RGL

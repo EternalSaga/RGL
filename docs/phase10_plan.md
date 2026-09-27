@@ -186,7 +186,7 @@ profiler 面板读数复用现成 `profiler = 0`（不开 profiler 时面板显�
 |---|---|---|---|
 | **10.1** imgui 骨架 **✅ 2026-09-28** | vcpkg 引入、`imgui_layer` 模块、输入链绝对坐标 + WantCapture 门、帧末 UI 段（D6 位）、`imgui` 开关、面板骨架（profiler 读数 + 占位页） | vcpkg.json、新 `.cppm`、`ecs_impl.cppm` 事件、`vkrenderer_impl.cppm` 帧末段、`diagnostics.cppm` + `configs/diagnostics.lua`、CMake | 默认关 BIT-IDENTICAL + `checks --strict`；开 = 窗口面板显示、profiler 读数跳动、headless no-op |
 | **10.2a** `ObjectDraw` 单源化 **✅ 2026-09-28** | §3.1 五步：schema 登记 + 表基址常量 → `just reflect` → 删手写 `ObjectDrawGpu` → 字面量钉住 → 清注释残留 | `scene_forward_schema.lua`（实际落点，见 10.2a 实施记录）、`generated/*`（随提交）、`frame_draw_list.cppm`、消费方、`scene.slang`/`shader_registry.cppm` 注释 | **BIT-IDENTICAL** + `reflection_check` 过 + `checks --strict`（走 skill `rgl-shader-contract`） |
-| **10.2b** 灯/曝光控件 | `param_registry` 模块 + 首批条目（§3.3 前两行）+ 灯/曝光控件接面板 | 新 `.cppm`、`render_list` 写入侧、`imgui_layer` 消费 | 默认关 diff0；开 = 拖动下一帧画面变化 |
+| **10.2b** 灯/曝光控件 **✅ 2026-09-28** | `param_registry` 模块 + 首批条目（§3.3 前两行）+ 灯/曝光控件接面板 | 新 `.cppm`、`ecs.cppm/_impl.cppm`（build 函数落点修正：render_list 无 registry ctx 全链，装配归 ecs）、`imgui_layer` 消费 | 默认关 diff0；开 = 拖动下一帧画面变化 |
 | **10.2c** 材质控件 | `AssetTable` setter + 材质条目（吃 10.2a 生成物）+ 共享实体数提示 | `asset_table.cppm`、`param_registry` | 同上 + 共享提示正确 |
 | **10.3** 配置热重载 | §5：`hot_reload` 模块 + 帧边界换入基建 + T1 清单；（T2 可选） | 新 `.cppm`、各 `loadXxxConfig` 调用点、CMake 注入源目录 | 默认关 diff0；开 = 改源 `configs/` 下一帧生效且 build 副本不被污染；缺源目录降级关 |
 | **10.4** shader 热重载 L1 | §6：前置精查（只读）→ watch + fork slangc + 签名守卫 + 同槽重建 + DGC 降级 | 新 `.cppm`、`shader.cppm` 重建入口、`vk_indirect_commands` 重建/降级、编译期注入 flags | 默认关 diff0；开 = 改注释重载无视觉变化、改逻辑下一帧生效、**改契约被拦且旧管线继续跑** |
@@ -238,6 +238,24 @@ BIT-IDENTICAL 截图回归，基线 `10b00c78c4a2d644479bb56eb35ac796bae90ada643
   未写槽位无 reader（objectIndex 只来自存在的 entity）。
 - **验收全过**：`just reflect` 5 管线 PASS（ObjectDraw size=48 fields=5 交叉校验）；
   forward 截图 = 基线 `10b00c78…`；deferred/offscreen 冒烟 0 error；`checks --strict` 0 警告。
+
+### 10.2b 实施记录（2026-09-28）
+
+- **条目契约 = 回调对 + 语义层（零布局镜像）**：`param_registry` 纯数据类型模块
+  （Slider/Color3/Drag3 Entry + ParamPage），字段结构由回调两端各自引用源头类型
+  （ECS 组件 / SceneEnv ctx），注册表本体零 GPU 布局副本（D1 硬约束）。
+- **装配落点修正**：`buildDebugParamPages(entt::registry&)` 声明在 **ecs.cppm**、定义在
+  ecs_impl（计划原文写"render_list 写入侧"——renderListSystem 只消费 ctx，装配页需要
+  registry 全貌 + Light 组件可变 view，归 ecs 更顺）；imgui_layer 经 `setPageBuilder`
+  回调注入，**不认识 ECS/registry**（分层与 llm_debug 回调先例同构）。
+- **页内容**：「渲染」= exposure / env 强度 / env mip 范围（SceneEnv ctx）；「灯光」=
+  每灯强度滑条 + 光色 + 方向 drag3（按 index 升序，index 0 主光附共享 ambient）。
+  写回 = 改组件/ctx 本体，renderListSystem 下一帧消费（= 计划"下一帧"时序）。
+- **渲染模式**：get 每帧跑（热重载/外部改动自动反映）→ widget → 编辑才 set；
+  label 帧间稳定 = imgui id 稳定。
+- **验收**：默认关 forward 截图 = 基线 `10b00c78…`；窗口 `imgui=true` 12s VVL 0 error
+  （面板就绪 + TabBar 渲染）；`checks --strict` 0 警告。**视觉验收留给用户**
+  （llm 截图在 UI 段之前，不含面板画面）。
 
 ## 10. 验收红线（汇总）
 

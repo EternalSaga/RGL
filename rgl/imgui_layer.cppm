@@ -8,6 +8,7 @@ import vk_instance;   // AppContext（instance 句柄 → 后端 init）
 import vk_device;     // DeviceContext（device/queue/family → 后端 init）
 import vk_swapchain;  // Swapchain（color format + imageCount → 后端 init）
 import vulkan_window; // SDLWindow（sdl3-binding 挂窗）
+import param_registry;  // ParamPage（参数页构建器返回类型，Phase 10 批 10.2b）
 
 namespace RGL {
 
@@ -70,6 +71,16 @@ export class ImGuiLayer {
 	bool handleEvent(const void* sdlEvent);
 
 	/**
+	 * 参数页构建器挂载点（Phase 10 批 10.2b；main 装配，缺省空 = 面板只显示读数区）。
+	 * 每帧 UI 段调用一次重建页面（调试路径分配）；条目契约 = param_registry（回调对 +
+	 * 语义层，零布局镜像）——本层只渲染条目，不认识 ECS/registry。
+	 * @param builder 页构建回调（如 `buildDebugParamPages(registry)` 包装）
+	 */
+	void setPageBuilder(std::function<std::vector<ParamPage>()> builder) {
+		pageBuilder = std::move(builder);
+	}
+
+	/**
 	 * 帧末 UI 渲染段（Renderer setFrameEndHook 挂载点；当前 CB 录制中、swapchain
 	 * 已推进到 COLOR_ATTACHMENT_OPTIMAL 是调用方契约）。
 	 * NewFrame → buildPanels → Render → beginRendering(load) → 后端画 → end。
@@ -81,13 +92,17 @@ export class ImGuiLayer {
 	bool renderFrame(vk::raii::CommandBuffer& cmd, vk::Extent2D extent, vk::ImageView swapchainView);
 
   private:
-	/** 面板内容（10.1 = profiler 读数 + 参数占位；10.2 起接参数注册表）。 */
+	/** 面板内容（10.1 = profiler 读数；10.2b = 参数页 TabBar）。 */
 	void buildPanels();
+	/** 渲染参数页（pageBuilder 非空时；TabItem per page，条目 = Slider/ColorEdit3/Drag3）。 */
+	void buildParamTabs();
 
 	bool initialized = false;
 	// 后端 init 后仍持有指针（pColorAttachmentFormats），必须比后端活得久；
 	// VkFormat{} = 0 = VK_FORMAT_UNDEFINED（枚举子不经 rlvk using 传播，用零值等价）
 	VkFormat uiColorFormat = VkFormat{};
+	// 参数页构建器（Phase 10 批 10.2b，setPageBuilder 装配；空 = 面板只显示读数区）
+	std::function<std::vector<ParamPage>()> pageBuilder;
 };
 
 }  // namespace RGL
