@@ -9,7 +9,7 @@
 > 见 [架构债务-依赖方向审计.md](架构债务-依赖方向审计.md)，`b1788e0`）；下一节点 = Phase 8）
 >
 > **阶段号重排（2026-09-27）**：**Phase 10 = 调试交互**（配置热重载 + IMGUI 参数面板 + shader 热重载
-> + 点选取参，计划 = [phase10_plan.md](phase10_plan.md)）插队，**阴影整体顺延为 Phase 11**。
+> + 点选取参，计划 = [phase10_plan.md](archive/phase10_plan.md)）插队，**阴影整体顺延为 Phase 11**。
 > 历史代码注释里的旧口径 "Phase 10 批次 0"（= 2026-09-10 Renderer 拆分）**一律不改**；
 > 本文件与 AGENTS/技术概念等活文档中的"阴影 Phase 10"引用已全部改为 Phase 11。
 
@@ -216,7 +216,7 @@ Phase 9：性能观测（profiler）——先回答"CPU-bound 还是 GPU-bound"�
      帧率上限**当前不需要**；下一步头寸 = `drawFrame` 内部 CPU 细分（可选批 9.5）
     ↓
  Phase 10：调试交互（配置热重载 + IMGUI 参数面板 + shader 热重载 L1 + GPU id 点选取参）
-   **计划已立（2026-09-27，[phase10_plan.md](phase10_plan.md)），插队阴影（原 Phase 10 → 11）**。
+   **计划已立（2026-09-27，[phase10_plan.md](archive/phase10_plan.md)），插队阴影（原 Phase 10 → 11）**。
    总纲 = **单一事实来源**（控件字段结构引用反射生成物，注册表不镜像布局；ObjectDraw 材质表
    单源化为前置批）。批次：10.1 imgui 骨架 ✅ / 10.2a ObjectDraw 单源化 ✅ /
    10.2b 灯曝光控件 ✅ / 10.2c 材质控件 ✅ / 10.3 配置热重载 ✅（均 2026-09-28）/

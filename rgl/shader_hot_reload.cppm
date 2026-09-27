@@ -13,7 +13,7 @@ import vk_indirect_commands;
 namespace RGL {
 
 /**
- * Shader 热重载编排器（L1 = D2「同签名才热换」；Phase 10 批 10.4；docs/phase10_plan.md §6）。
+ * Shader 热重载编排器（L1 = D2「同签名才热换」；Phase 10 批 10.4；docs/archive/phase10_plan.md §6）。
  *
  * 流程（全帧边界，由 ConfigReloadHook 挂载 poll）：
  *   watch 源树 rgl/shaders/ 全部 .slang（mtime；v1 全量重编——导入闭包不递归解析，

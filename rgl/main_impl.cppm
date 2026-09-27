@@ -380,7 +380,7 @@ int main() {
 		GpuProfiler gpuProfiler(vkDevice);
 		bindGpuProfiler(&gpuProfiler);
 
-		// Phase 10 批 10.1：IMGUI 调试面板（docs/phase10_plan.md §4）。装配门 = 有窗 &&
+		// Phase 10 批 10.1：IMGUI 调试面板（docs/archive/phase10_plan.md §4）。装配门 = 有窗 &&
 		// diagnostics.imgui（headless 天然关）；声明序在 backEnd 之后 = 析构序其先
 		//（后端 shutdown 需 device/swapchain 存活）。init 失败 = 日志 + 无 UI 继续（降级不崩）。
 		// 挂载点两处：InputFilter.consume（事件先手，WantCapture 门）+ Renderer 帧末扩展段

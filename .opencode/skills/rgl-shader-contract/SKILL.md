@@ -8,7 +8,7 @@ description: 修改 Slang 着色器契约与反射管线——just reflect、sca
 ## 编译与反射流程
 
 - `rgl/shaders/` 下的 Slang → SPV 输出到 `build/rgl/generated_shaders/`（CMake `compile_slang()` 构建时编译；运行时相对路径读取）
-- **反射管线显式触发（C API 路径，2026-09-10 起）**：`generated/*.cppm` + `reflection_manifest.txt` 为**已提交产物**，只在改契约后 `just reflect` 重生成并随改动提交；构建开头 `reflection_check` 比对输入 SHA1，忘跑 = FATAL 指路。共 **6 条管线**（types/model/material/lights/scene_forward 反射生成 + features 模板生成；旧文档"5 条"系 scene_forward 2026-09-10 加入后未同步），Profile `sm_6_6+spirv_1_6` + capability `spvDescriptorHeapEXT`
+- **反射管线显式触发（C API 路径，2026-09-10 起）**：`generated/*.cppm` + `reflection_manifest.txt` 为**已提交产物**，只在改契约后 `just reflect` 重生成并随改动提交；构建开头 `reflection_check` 比对输入 SHA1，忘跑 = FATAL 指路。共 **7 条管线**（types/model/material/lights/scene_forward 反射生成 + features/param_semantics 模板生成；旧文档"5 条"系 scene_forward 2026-09-10 加入后未同步，"6 条"系批 10.6 param_semantics 加入后未同步），Profile `sm_6_6+spirv_1_6` + capability `spvDescriptorHeapEXT`
 - **5 条 slang 管线走 `reflection_tool slang` 子命令**（链接 libslang.so 直接查 C API，**不产 JSON 中间层**）：struct 布局 = 编译器实查真值（逐字段 offsetof static_assert），schema 降为提取清单 + 交叉校验期望值。详见 `docs/slang_api_reflection_research.md`
 - **Scalar Block Layout（定案）**：所有 slangc 编译（反射 + SPV 两处 flag **必须一致**）统一 `-fvk-use-scalar-layout`——C++（glm 自然对齐）与 shader 逐字段偏移天然一致零 padding（`DrawArgs` 4B）。前提 `scalarBlockLayout` feature（features_config.json + validateFeatures）
 - **bindless 原则**：push constant 冻结在"纯索引"级别（Phase 7b+ 起 `DrawArgs` 仅 `objectIndex` 4B，不再扩）——场景级/每帧变化的数据（光照、对象矩阵、MVP、材质、env 参数、灯数组）一律进 descriptor heap（scene data）

@@ -15,7 +15,7 @@ namespace RGL {
 export inline constexpr std::string_view kObjectIdAttachmentName = "object_id";
 
 /**
- * GPU id 点选取参服务（Phase 10 批 10.5，D3；docs/phase10_plan.md §7）。
+ * GPU id 点选取参服务（Phase 10 批 10.5，D3；docs/archive/phase10_plan.md §7）。
  *
  * 三步曲复用 frame_capture 先例（同帧边界时序契约）：request（输入侧挂坐标请求）→
  * record（帧末捕获段位录 1-texel 回读拷贝：object_id RT 该像素 → staging u32）→

@@ -26,7 +26,7 @@ legacy（旧 OpenGL 项目）已于 2026-09-08 删除，历史思路参考见 gi
 ```bash
 just config              # CMake 配置（默认 clang, Release）；just config gcc Debug 指定编译器/类型
 just build               # 增量编译（需先 config）；just build-release / build-debug = 一键配置+编译
-just reflect             # 重跑 6 条反射管线（改动 shader 契约/schema/模板后必须，见 skill rgl-shader-contract）
+just reflect             # 重跑 7 条反射管线（改动 shader 契约/schema/模板后必须，见 skill rgl-shader-contract）
 just checks / doc-check / style-check [--strict]  # 源码检查统一入口（tools/checks/main.py，--only style|doc；每次 just build 已随 source_checks 目标跑、只警告；红线清单见 skill rgl-new-module）
 just run                 # 运行
 just run-igpu / run-dgpu / run-intel   # 强制核显 / NVIDIA prime 独显 / Intel anv
@@ -222,7 +222,7 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
 - `docs/radv_static_dgc_spike.md` — RADV 静态 shader DGC spike（功能通、慢 1.85× → 默认不开；翻盘设计底稿）
 - `docs/vulkan_extensions_2025_调研.md` — 新扩展调研 + §十二/十三 实施记录（活文档）
 - `docs/phase7_devlog.md` — Phase 7 滚动开发日志（完结后归档）
-- `docs/phase10_plan.md` — **Phase 10 调试交互计划**（配置热重载 + IMGUI 参数面板 + shader 热重载 L1 + GPU id 点选；2026-09-27 计划已立，阴影顺延 Phase 11）
+- `docs/archive/phase10_plan.md` — Phase 10 调试交互计划（**2026-09-28 批 10.1–10.6 全落地归档**；imgui 面板/热重载/点选；决策表 D1–D12 含 D12 RPC 延后；遗留 UI 视觉走查）
 - `docs/风格检查规则.md` — tools/checks 两轮扩展设计（partition/docs/现代 C++/expected 禁 throw）；工具 Python ≥3.14，规则拆 `rules_{metrics,text,doxygen}.py`
 - `docs/静态审查升级路线.md` — LLVM 23 + `-Wlifetime-safety` 两阶段落地计划（vs Rust 借用检查差距结论；clangbind ABI 回归是阶段 1 最高风险）
 - `docs/archive/` — 归档索引（phase 计划含 **phase6_record.md**、ecs 审查、issue_history 总账、present_timing/教程拆解等已结题调研）

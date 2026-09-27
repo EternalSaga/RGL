@@ -212,7 +212,7 @@ export RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain
 									 entt::registry& registry, const SceneConfig& scene, bool deferredMode);
 
 /**
- * 配置热重载装配（Phase 10 批 10.3；docs/phase10_plan.md §5）。门 =
+ * 配置热重载装配（Phase 10 批 10.3；docs/archive/phase10_plan.md §5）。门 =
  * `diagnostics.config_reload`（默认 false = 直接返回零变化）；监视源 = **源树**
  * configs/（编译期定义 RGL_SOURCE_CONFIG_DIR，D7——build 副本会被 just build 覆盖
  * 复原，监听无意义；目录缺失 warn + 关）。挂 `ConfigReloadHook`（ecs ctx）由
@@ -229,7 +229,7 @@ export RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain
 export void wireHotReload(entt::registry& registry);
 
 /**
- * shader 热重载装配（Phase 10 批 10.4，L1 = D2 同签名才热换；docs/phase10_plan.md §6）。
+ * shader 热重载装配（Phase 10 批 10.4，L1 = D2 同签名才热换；docs/archive/phase10_plan.md §6）。
  * 门 = `diagnostics.shader_reload`（默认 false = 直接返回零变化）。独立于 config_reload
  * 但**复用同一 ConfigReloadHook 帧边界挂点**（已 emplace = 组合追加，未 emplace = 独占
  * emplace）。装配 = 构造 ShaderHotReloader（基线 = 在役 SPV hash+接口签名）+ init
@@ -244,7 +244,7 @@ export void wireShaderHotReload(entt::registry& registry, ShaderRegistry& pipeli
 	RenderBackEnd& backEnd);
 
 /**
- * GPU id 点选装配（Phase 10 批 10.5，D3；docs/phase10_plan.md §7）。
+ * GPU id 点选装配（Phase 10 批 10.5，D3；docs/archive/phase10_plan.md §7）。
  * 门 = `diagnostics.picking`（默认关 = 返回 nullptr 零装配）。装配 = 构造服务 +
  * `Renderer::setPickingService` + `PickingHook`（registry ctx）双向函数桥：
  * requestPick = eventSystem 鼠标按下（未被 imgui InputFilter 消费的事件）→ 服务

@@ -13,7 +13,7 @@ import param_registry;  // ParamPage（参数页构建器返回类型，Phase 10
 namespace RGL {
 
 /**
- * IMGUI 调试面板层（Phase 10 批 10.1 骨架；docs/phase10_plan.md §4）。
+ * IMGUI 调试面板层（Phase 10 批 10.1 骨架；docs/archive/phase10_plan.md §4）。
  *
  * 装配位置 = **上层调试胶水**（与 llm_debug 同层，允许认识 ECS/renderer；反向禁止）：
  * main 在 `!headless && diagnostics().imgui` 时构造本层并把

@@ -101,8 +101,8 @@ build:
     @python -c "import os,sys,subprocess; b='{{ BUILD }}'; \
         (subprocess.call(['cmake','--build',b,'--parallel','{{ NPROC }}']) if os.path.exists(os.path.join(b,'build.ninja')) else (print('Error: Run just config first.'), sys.exit(1)))"
 
-# 重跑 4 条反射管线（改动 shaders/*.slang / *_schema.lua / tools/templates /
-# features_config.json 后必须执行；产物 rgl/generated/ 已入版本控制需随
+# 重跑 7 条反射管线（改动 shaders/*.slang / *_schema.lua / tools/templates /
+# features_config.json / param_semantics.json 后必须执行；产物 rgl/generated/ 已入版本控制需随
 # 改动一并提交，否则 reflection_check 守卫会拦构建）
 reflect:
     @cmake --build {{ BUILD }} --target reflect

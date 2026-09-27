@@ -8,7 +8,7 @@ import rlstd;
 namespace RGL {
 
 /**
- * 调试面板参数条目（Phase 10 批 10.2b；docs/phase10_plan.md §3.2）。
+ * 调试面板参数条目（Phase 10 批 10.2b；docs/archive/phase10_plan.md §3.2）。
  *
  * **单一事实来源约定**：条目只携带「语义层（label/range/speed）+ 读写回调对」，
  * **不镜像任何 GPU 布局**——字段结构由回调两端各自引用源头类型（ECS 组件 /

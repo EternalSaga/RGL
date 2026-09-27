@@ -9,7 +9,7 @@ import rllogger;
 namespace RGL {
 
 /**
- * 文件热重载监视器（Phase 10 批 10.3；docs/phase10_plan.md §5）。
+ * 文件热重载监视器（Phase 10 批 10.3；docs/archive/phase10_plan.md §5）。
  *
  * 纯机制、零配置语义：登记「文件路径 + 变更回调」，`poll()`（帧边界调用，
  * 由 ConfigReloadHook 挂进帧循环）比对 mtime，变更即回调。语义（重载哪个配置、

@@ -28,10 +28,10 @@ export struct DiagnosticsConfig {
 	bool dgcStatic = false;             // RADV 静态 shader DGC 路（staticGraphicsIndirect 设备的 spike 门，默认关，见 docs/radv_static_dgc_spike.md）
 	uint32_t frameStats = 0;            // 帧时间统计：每 N 帧打一行 avg/min/max（0 = 关；headless 吞吐 ≈ GPU-bound）
 	uint32_t profiler = 0;              // Phase 9 zone profiler 帧窗口 N（0 = 关；最近 N 帧 → 退出 dump trace+stats，docs/phase9_plan.md）
-	bool imgui = false;                 // Phase 10 IMGUI 调试面板总开关（帧末 UI 段 + 输入拦截；headless 无窗天然 no-op，docs/phase10_plan.md）
-	bool configReload = false;          // Phase 10 批 10.3 配置热重载总开关（帧边界轮询源 configs/：scene/camera/log_level 的 T1 字段；imgui 面板开关本身不可热载=需重建后端，docs/phase10_plan.md）
-	bool shaderReload = false;          // Phase 10 批 10.4 shader 热重载 L1（帧边界 fork slangc 重编源 shaders/ + 同签名守卫换入；slangc/flags/源目录缺失降级关，docs/phase10_plan.md）
-	bool picking = false;               // Phase 10 批 10.5 GPU id 点选（编译图期装饰 object_id pass，D10 默认关 = 图逐位同；面板点中实体 → 参数上下文，docs/phase10_plan.md）
+	bool imgui = false;                 // Phase 10 IMGUI 调试面板总开关（帧末 UI 段 + 输入拦截；headless 无窗天然 no-op，docs/archive/phase10_plan.md）
+	bool configReload = false;          // Phase 10 批 10.3 配置热重载总开关（帧边界轮询源 configs/：scene/camera/log_level 的 T1 字段；imgui 面板开关本身不可热载=需重建后端，docs/archive/phase10_plan.md）
+	bool shaderReload = false;          // Phase 10 批 10.4 shader 热重载 L1（帧边界 fork slangc 重编源 shaders/ + 同签名守卫换入；slangc/flags/源目录缺失降级关，docs/archive/phase10_plan.md）
+	bool picking = false;               // Phase 10 批 10.5 GPU id 点选（编译图期装饰 object_id pass，D10 默认关 = 图逐位同；面板点中实体 → 参数上下文，docs/archive/phase10_plan.md）
 	uint32_t pickingProbeFrame = 0;     // 脚本化点选探针（同 texel_canary headless 驱动方法论）：第 N 帧（1 起）自动 requestProbe(x,y) 一次；0 = 关
 	uint32_t pickingProbeX = 0;         // 探针像素列（窗口/RT 坐标）
 	uint32_t pickingProbeY = 0;         // 探针像素行
