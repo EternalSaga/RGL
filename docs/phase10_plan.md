@@ -1,7 +1,8 @@
 # Phase 10 实施计划：调试交互（配置热重载 + IMGUI 参数面板 + shader 热重载 + 点选取参）
 
-> **状态**：现行——计划起草完成（2026-09-27），**未实施**。关键决策 D1–D5 已由用户拍板
-> （见 §2），D6–D11 为主 agent 技术决策（可否决）。批次 10.1–10.6 见 §9。
+> **状态**：现行——**批 10.1 imgui 骨架已落地（2026-09-28）**，其余批次未开工。
+> 关键决策 D1–D5 已由用户拍板（见 §2），D6–D11 为主 agent 技术决策（可否决）。
+> 批次 10.1–10.6 见 §9。
 > 依据 = 2026-09-27 只读调研（worker 子 agent A–F 六节 + 主 agent 逐项复核）+ 方向讨论。
 > **阶段号消歧**：本 Phase 10 ≠ 2026-09-10 的 Renderer 拆分批（当时批次被旧口径称
 > "Phase 10 批次 0"，散见约 19 处历史代码注释——**历史注释一律不改**，仅本文件与
@@ -183,7 +184,7 @@ profiler 面板读数复用现成 `profiler = 0`（不开 profiler 时面板显�
 
 | 批 | 内容 | 主要改动 | 验收 |
 |---|---|---|---|
-| **10.1** imgui 骨架 | vcpkg 引入、`imgui_layer` 模块、输入链绝对坐标 + WantCapture 门、帧末 UI 段（D6 位）、`imgui` 开关、面板骨架（profiler 读数 + 占位页） | vcpkg.json、新 `.cppm`、`ecs_impl.cppm` 事件、`vkrenderer_impl.cppm` 帧末段、`diagnostics.cppm` + `configs/diagnostics.lua`、CMake | 默认关 BIT-IDENTICAL + `checks --strict`；开 = 窗口面板显示、profiler 读数跳动、headless no-op |
+| **10.1** imgui 骨架 **✅ 2026-09-28** | vcpkg 引入、`imgui_layer` 模块、输入链绝对坐标 + WantCapture 门、帧末 UI 段（D6 位）、`imgui` 开关、面板骨架（profiler 读数 + 占位页） | vcpkg.json、新 `.cppm`、`ecs_impl.cppm` 事件、`vkrenderer_impl.cppm` 帧末段、`diagnostics.cppm` + `configs/diagnostics.lua`、CMake | 默认关 BIT-IDENTICAL + `checks --strict`；开 = 窗口面板显示、profiler 读数跳动、headless no-op |
 | **10.2a** `ObjectDraw` 单源化 **（前置）** | §3.1 五步：schema 登记 + 表基址常量 → `just reflect` → 删手写 `ObjectDrawGpu` → 字面量钉住 → 清注释残留 | `material_schema.lua`、`generated/*`（随提交）、`frame_draw_list.cppm`、消费方、`scene.slang`/`shader_registry.cppm` 注释 | **BIT-IDENTICAL** + `reflection_check` 过 + `checks --strict`（走 skill `rgl-shader-contract`） |
 | **10.2b** 灯/曝光控件 | `param_registry` 模块 + 首批条目（§3.3 前两行）+ 灯/曝光控件接面板 | 新 `.cppm`、`render_list` 写入侧、`imgui_layer` 消费 | 默认关 diff0；开 = 拖动下一帧画面变化 |
 | **10.2c** 材质控件 | `AssetTable` setter + 材质条目（吃 10.2a 生成物）+ 共享实体数提示 | `asset_table.cppm`、`param_registry` | 同上 + 共享提示正确 |
@@ -194,6 +195,26 @@ profiler 面板读数复用现成 `profiler = 0`（不开 profiler 时面板显�
 
 模块新建一律走 skill `rgl-new-module`；每批验收走 skill `rgl-verify`（headless 冒烟 +
 BIT-IDENTICAL 截图回归，基线 `10b00c78c4a2d644479bb56eb35ac796bae90ada6433178fecd3dc21f2e72d14`）。
+
+### 10.1 实施记录（2026-09-28）
+
+- **输入过滤 = `InputFilter.consume(const void*)`**：`void*` 类型擦除（ecs 接口不 GMF
+  include SDL，且不在 purview 前置声明 `SDL_Event`——GMF 全局模块实体 vs purview 模块实体
+  同名双声明地雷）；eventSystem 循环先手调过滤器（WantCapture 门），空 = 逐位不变。
+  InputEvent 新增 `pos`（鼠标绝对坐标，10.5 点选复用）。
+- **imgui 依赖面收口**：imgui.h/backends 只 include 于 `imgui_layer_impl` GMF；接口只暴露
+  `ImGuiLayer` 四方法。后端 = 1.92.8 dynamic rendering 路（swapchain color format 建主
+  pipeline，descriptor pool 后端自建与项目 heap 无关）。rlvk 补导出 `vk::ImageView`/`::VkFormat`。
+- **Renderer 帧末扩展段 = `setFrameEndHook` + `emitFrameEndOverlay`（⑪.6 位）**：执行器负责
+  swapchain 任意帧末布局（CAO/TransferDst/捕获帧 TransferSrc）→ CAO barrier + 追踪表更新，
+  hook 契约 beginRendering(load)；空 hook 零调用零 barrier。
+- **profiler 新增只读 API `profilerSnapshotNow()`**（面板读数：帧墙钟 last/avg +
+  drawFrame/gpu.frame 窗口均值；profiler=0 = enabled false）。
+- **验收全过**：同会话双构建 BIT-IDENTICAL（改后 = 基线 = `10b00c78…`）；`checks --strict`
+  0 警告（85 cppm）；窗口 `imgui=true` 10s VVL 0 error（含面板就绪日志）；offscreen 变体
+  （blit→TransferDst→CAO overlay）barrier 分支 12s VVL 0 error。
+- **v1 已知限制**：swapchain recreate 若改 format/imageCount 需重启（本机 resize 不改这两项）；
+  面板仅 dock 主窗，多视口不做。
 
 ## 10. 验收红线（汇总）
 

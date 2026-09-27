@@ -18,6 +18,7 @@ module main:impl;
 
 import main;  // clang 不给 partition impl unit 隐式 import 主接口——必须显式
 import rlstd;
+import rlvk;  // vk::raii::CommandBuffer 等（imgui hook lambda 形参类型）
 import vulkan_window;
 import vk_instance;
 import vk_device;
@@ -49,6 +50,7 @@ import diagnostics;      // diagnostics.lua 诊断单例（须先于一切 GPU �
 import profiler;         // Phase 9：帧循环 zone 收口 dump（docs/phase9_plan.md 批 9.1）
 import gpu_profiler;     // Phase 9.2：GPU 时间戳会话（main 栈持有 = device 生命周期内）
 import llm_debug;
+import imgui_layer;  // Phase 10 批 10.1：IMGUI 调试面板层（main 装配 = 唯一认识 imgui 的地方之一）
 import ecs;
 import rllogger;
 import vkerror;
@@ -281,6 +283,7 @@ int main() {
 		registry.ctx().emplace<AppExit>();
 		registry.ctx().emplace<Camera>(std::move(configs.camera.camera));
 		registry.ctx().emplace<InputEvents>();
+		registry.ctx().emplace<InputFilter>();  // Phase 10 调试层输入先手过滤器（imgui 装配；缺省空 = 不过滤）
 		registry.ctx().emplace<CameraState>();
 		auto& spin = registry.ctx().emplace<SceneSpin>();
 		spin.speed = configs.scene.spin ? 1.0f : 0.0f;  // 0 = 静止（configs/scene.lua 的 spin 开关）
@@ -361,6 +364,23 @@ int main() {
 		// 校准扩展缺位 = 内部不建 pool，钩子全早退）
 		GpuProfiler gpuProfiler(vkDevice);
 		bindGpuProfiler(&gpuProfiler);
+
+		// Phase 10 批 10.1：IMGUI 调试面板（docs/phase10_plan.md §4）。装配门 = 有窗 &&
+		// diagnostics.imgui（headless 天然关）；声明序在 backEnd 之后 = 析构序其先
+		//（后端 shutdown 需 device/swapchain 存活）。init 失败 = 日志 + 无 UI 继续（降级不崩）。
+		// 挂载点两处：InputFilter.consume（事件先手，WantCapture 门）+ Renderer 帧末扩展段
+		//（UI 渲染段，布局推进由执行器负责，契约见 setFrameEndHook 注释）。
+		RGL::ImGuiLayer imguiLayer;
+		if (!pre.headless && RGL::diagnostics().imgui && pre.window
+			&& imguiLayer.init(vkInstance, vkDevice, vkSwapchain, *pre.window)) {
+			registry.ctx().get<InputFilter>().consume = [layer = &imguiLayer](const void* e) {
+				return layer->handleEvent(e);
+			};
+			backEnd.renderer.setFrameEndHook([layer = &imguiLayer](
+				vk::raii::CommandBuffer& cmd, vk::Extent2D extent, vk::ImageView view) {
+				return layer->renderFrame(cmd, extent, view);
+			});
+		}
 
 		/**
 		 * DIAG（可见窗 fault 排查）每帧回调：隐藏窗启动、frame == showAfter 时

@@ -35,16 +35,23 @@ namespace RGL {
  * 按绑定解释，E5.4；退出/窗口状态不走事件流）。
  * 事件携带内容：键事件 = SDL 键码；鼠标按键 = button + pressed；鼠标增量取
  * motion.xrel/yrel（SDL3 的 motion.x/y 是窗口内绝对坐标，相对增量在 xrel/yrel）；
- * 滚轮 = wheel.y。
- * @param rg registry（写 WindowExtent/AppExit/InputEvents）
+ * 滚轮 = wheel.y。鼠标事件另带窗口内绝对坐标 pos（Phase 10 点选）。
+ * 事件流先手 = InputFilter 钩子（registry context 可选，imgui 调试层消费的事件
+ * 不产 InputEvents；缺省空 = 逐位不变）。
+ * @param rg registry（写 WindowExtent/AppExit/InputEvents；读 InputFilter）
  */
 void eventSystem(entt::registry& rg) {
 	auto& extent = rg.ctx().get<WindowExtent>();
 	auto& exit = rg.ctx().get<AppExit>();
 	auto& events = rg.ctx().get<InputEvents>();
+	auto* filter = rg.ctx().find<InputFilter>();  // Phase 10 调试层可选挂接（main 装配；缺省 = 不过滤）
 
 	SDL_Event event;
 	while (SDL_PollEvent(&event)) {
+		// 调试 UI 先手：imgui 消费的事件不产 InputEvents（相机不响应面板拖拽）。
+		// void* = InputFilter 类型擦除约定（见 ecs.cppm InputFilter 注释）。
+		if (filter && filter->consume && filter->consume(&event))
+			continue;
 		switch (event.type) {
 			case SDL_EVENT_QUIT:
 			case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
@@ -73,6 +80,7 @@ void eventSystem(entt::registry& rg) {
 				e.type = InputEvent::Type::MouseButton;
 				e.button = static_cast<uint8_t>(event.button.button);
 				e.pressed = true;
+				e.pos = {event.button.x, event.button.y};  // 窗口内绝对坐标（Phase 10 点选）
 				events.events.push_back(e);
 				break;
 			}
@@ -81,6 +89,7 @@ void eventSystem(entt::registry& rg) {
 				e.type = InputEvent::Type::MouseButton;
 				e.button = static_cast<uint8_t>(event.button.button);
 				e.pressed = false;
+				e.pos = {event.button.x, event.button.y};
 				events.events.push_back(e);
 				break;
 			}
@@ -90,6 +99,7 @@ void eventSystem(entt::registry& rg) {
 				e.type = InputEvent::Type::MouseDelta;
 				e.delta = {static_cast<float>(event.motion.xrel),
 					static_cast<float>(event.motion.yrel)};
+				e.pos = {event.motion.x, event.motion.y};  // 绝对坐标同带（Phase 10）
 				events.events.push_back(e);
 				break;
 			}

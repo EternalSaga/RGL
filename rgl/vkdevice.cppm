@@ -154,6 +154,8 @@ export class DeviceContext {
 	const vk::raii::Device& getDevice() const { return device; }
 	/** @return 图形队列（vk::Queue 为 C 句柄，按值返回）；主渲染队列。 */
 	vk::Queue getGraphicsQueue() const { return graphicsQueue; }
+	/** @return 图形队列 family 下标（QueueFamilyManager 派生；Phase 10 imgui 后端 init 等按值场景）。 */
+	uint32_t getGraphicsQueueFamily() const { return queueManager.getFamilyIndex(RGL::QueueFamilyRole::Graphics); }
 	/** @return 计算队列（C 句柄，按值）；保留给未来使用，当前未用（见 AGENTS.md 已知问题）。 */
 	vk::Queue getComputeQueue() const { return computeQueue; }
 	/** @return 传输队列（C 句柄，按值）；保留给未来使用，当前未用（见 AGENTS.md 已知问题）。 */

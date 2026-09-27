@@ -426,6 +426,46 @@ void Renderer::drawOne(vk::raii::CommandBuffer& cmd, const DrawCall& call) {
 	cmd.drawMeshTasksEXT(call.groupCount, 1, 1);
 }
 
+// ⑪.6 帧末扩展段（Phase 10 批 10.1，接口注释见 vkrenderer.cppm emitFrameEndOverlay）：
+// 布局推进（含追踪表更新）→ hook。src 侧按当前布局精确给（blit 写 = Transfer/TransferWrite、
+// 捕获读 = Transfer/TransferRead）；其余布局兜底全命令同步（仅调试路径付代价）。
+void Renderer::emitFrameEndOverlay(vk::raii::CommandBuffer& cmd, VkImage swapchainImage,
+	vk::ImageView swapchainView, vk::Extent2D extent) {
+	if (extent.width == 0 || extent.height == 0)
+		return;
+	RgAttachmentSlot uiSwapchainSlot = kRgNoAttachment;
+	for (uint32_t s = 0; s < renderGraph.attachments.size(); ++s) {
+		if (renderGraph.attachments[s].kind == RgAttachmentKind::swapchain) {
+			uiSwapchainSlot = static_cast<RgAttachmentSlot>(s);
+			break;
+		}
+	}
+	if (uiSwapchainSlot == kRgNoAttachment)
+		return;  // 纯离屏图无 swapchain 附件（headless 图外路径）
+	auto& uiLayout = attachmentLayouts[uiSwapchainSlot];
+	if (uiLayout != vk::ImageLayout::eColorAttachmentOptimal) {
+		vk::PipelineStageFlags2 uiSrcStage = vk::PipelineStageFlagBits2::eAllCommands;
+		vk::AccessFlags2 uiSrcAccess = vk::AccessFlagBits2::eMemoryRead
+			| vk::AccessFlagBits2::eMemoryWrite;
+		if (uiLayout == vk::ImageLayout::eTransferDstOptimal) {
+			uiSrcStage = vk::PipelineStageFlagBits2::eTransfer;
+			uiSrcAccess = vk::AccessFlagBits2::eTransferWrite;
+		} else if (uiLayout == vk::ImageLayout::eTransferSrcOptimal) {
+			uiSrcStage = vk::PipelineStageFlagBits2::eTransfer;
+			uiSrcAccess = vk::AccessFlagBits2::eTransferRead;
+		}
+		vk::ImageMemoryBarrier2 toCao = RGL::createImageBarrier(swapchainImage, uiLayout,
+			vk::ImageLayout::eColorAttachmentOptimal, vk::ImageAspectFlagBits::eColor,
+			uiSrcStage, vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+			uiSrcAccess, vk::AccessFlagBits2::eColorAttachmentWrite);
+		vk::DependencyInfo uiDep{};
+		uiDep.setImageMemoryBarriers(toCao);
+		cmd.pipelineBarrier2(uiDep);
+		uiLayout = vk::ImageLayout::eColorAttachmentOptimal;
+	}
+	frameEndHook(cmd, extent, swapchainView);
+}
+
 // pass draw 三路分发：drawLight 固定全屏单 group（无 push constant）/ opaque 段 GPU culling（DGC execute 或读回重放，能力位自动切换）/ 普通段逐 draw。
 void Renderer::executePassDraws(vk::raii::CommandBuffer& cmd, const RgPassPlan& pass,
 	const FrameDrawList& list, uint32_t frameSlot) {
@@ -554,6 +594,11 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 	// acquire 超时跳帧的 return 在本段之前 = 请求保持 pending 至真正录制的帧。
 	capturer.record(cmd, swapchainImage, extent,
 		swapchain->getFormat().format, attachmentLayouts);
+
+	// ⑪.6 帧末扩展段（Phase 10 批 10.1：imgui 调试面板；**空 hook = 零调用零 barrier，
+	// 正常路径逐位不变**）。布局推进与 hook 调用体见 emitFrameEndOverlay。
+	if (frameEndHook)
+		emitFrameEndOverlay(cmd, swapchainImage, swapchainView, extent);
 
 	// ⑫ swapchain → PresentSrcKHR（图 presentTransition——src 阶段/访问由最后
 	// usage 推导：直渲 = CAO 写、blit 上屏 = Transfer 写，等价旧手工分支；

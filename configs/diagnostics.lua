@@ -14,4 +14,5 @@ return {
     texture_force_white = false,-- 纹理全白填充（"均匀内容不 fault"假设）
     texture_force_unorm = false,-- 纹理上传强制 UNORM（sRGB 嫌疑隔离）
     profiler = 0,           -- Phase 9 CPU zone profiler：帧窗口 N（0=关；最近 N 帧，退出 dump 到 profiles/，见 docs/phase9_plan.md）
+    imgui = false,          -- Phase 10 IMGUI 调试面板总开关（true=帧末渲染 UI + 输入拦截；headless 无窗天然关，见 docs/phase10_plan.md）
 }

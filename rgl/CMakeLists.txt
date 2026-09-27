@@ -98,6 +98,12 @@ target_link_libraries(rgl
     GPUOpen::VulkanMemoryAllocator
     )
 
+# ─── Phase 10 批 10.1：IMGUI 调试面板（imgui[core,sdl3-binding,vulkan-binding,
+# docking-experimental]，features 见 vcpkg.json；头仅被 imgui_layer_impl GMF include，
+# 引擎其余模块零 imgui 依赖）───
+find_package(imgui CONFIG REQUIRED)
+target_link_libraries(rgl PRIVATE imgui::imgui)
+
 # ─── 图像编解码（image_codec 模块：libpng 简单 API + libjpeg(-turbo) + FreeImage .hdr）───
 # vcpkg 静态库的依赖闭包经各 target 的 INTERFACE_LINK_LIBRARIES 传递（freeimage::FreeImage
 # 自带完整依赖清单）；ZLIB::ZLIB 显式收尾（libpng/libjpeg 的 INTERFACE 未带 zlib，静态

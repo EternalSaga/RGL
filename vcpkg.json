@@ -42,6 +42,15 @@
       "version>=": "3.11.2"
     },
     {
+      "name": "imgui",
+      "version>=": "1.92.8",
+      "features": [
+        "sdl3-binding",
+        "vulkan-binding",
+        "docking-experimental"
+      ]
+    },
+    {
       "name": "entt",
       "version>=": "3.14.0"
     },

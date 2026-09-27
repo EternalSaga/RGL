@@ -141,6 +141,19 @@ export class Renderer {
 	 */
 	[[nodiscard]] bool hasFrameCapture() const { return capturer.has(); }
 
+	/**
+	 * 帧末扩展段 hook（Phase 10 调试层：imgui 面板；main 装配，缺省空）。
+	 * 调用点 = drawFrame ⑪.5 帧内捕获之后、⑫ presentTransition barrier 之前，
+	 * 参数 = 录制中的命令缓冲 + swapchain extent + 本帧后缓冲 view。
+	 * **契约**：调用 hook 前执行器已把 swapchain 推进到 COLOR_ATTACHMENT_OPTIMAL
+	 * （含布局追踪表更新）；hook 内以 beginRendering(load) 叠加绘制、结束回
+	 * 非渲染态即可——presentTransition barrier 的 oldLayout 派生自追踪表自动衔接。
+	 * 空 hook = 零调用零 barrier（正常路径逐位不变）。返回值当前仅留观测语义。
+	 */
+	void setFrameEndHook(std::function<bool(vk::raii::CommandBuffer&, vk::Extent2D, vk::ImageView)> hook) {
+		frameEndHook = std::move(hook);
+	}
+
    private:
 	/**
 	 * scene data staging ring（Phase 5 批次 2，全项目首个每帧动态 GPU 数据）：
@@ -202,6 +215,18 @@ export class Renderer {
 	 * @param call 绘制条目（pipeline / pushData / groupCount）
 	 */
 	void drawOne(vk::raii::CommandBuffer& cmd, const DrawCall& call);
+	/**
+	 * ⑪.6 帧末扩展段（drawFrame 仅 hook 非空时调用；契约见 setFrameEndHook）：
+	 * swapchain 任意帧末布局（直渲 = CAO / blit 变体 = TransferDst / 捕获帧 = TransferSrc）
+	 * 推进到 COLOR_ATTACHMENT_OPTIMAL（含追踪表更新）→ 调 hook 叠加 UI。
+	 * 图内无 swapchain 附件（纯离屏图）= 早退不调 hook。
+	 * @param cmd 录制中的命令缓冲
+	 * @param swapchainImage 本帧后缓冲（布局 barrier 目标）
+	 * @param swapchainView 本帧后缓冲 view（hook 参数）
+	 * @param extent swapchain extent
+	 */
+	void emitFrameEndOverlay(vk::raii::CommandBuffer& cmd, VkImage swapchainImage,
+		vk::ImageView swapchainView, vk::Extent2D extent);
 	// recreateSwapchainAndDepth（swapchain+depth 重建）已随手术 4 迁 FrameSession。
 	RGL::DeviceContext& vkDevice;  // 设备层引用（队列 / 命令池 / fence 等待 / 能力探测）
 	RGL::Swapchain* swapchain;      // 交换链层（main 持有，析构序在 Renderer 之后）
@@ -228,6 +253,9 @@ export class Renderer {
 	// 声明位置 = 原 capture 成员块（attachmentLayouts 之后、stateKit 之前），
 	// ctor 初始化列表顺序与之对应（-Wreorder 同步）。
 	RGL::FrameCapturer capturer;
+	// 帧末扩展段 hook（Phase 10 批 10.1，setFrameEndHook 装配；空 = drawFrame 零调用。
+	// 不列 ctor 初始化列表——默认空 std::function，无初始化顺序约束）
+	std::function<bool(vk::raii::CommandBuffer&, vk::Extent2D, vk::ImageView)> frameEndHook;
 	// edS3：depth clip enable 动态状态能力门 + 四段 RenderState 值集合 + 状态名解析
 	//（Phase 10 批次 0 手术 1：状态表迁出至 StateKit——pass.state 词表与状态值的唯一
 	// 持有者；Phase 10 阴影新增状态集中改该模块一处）

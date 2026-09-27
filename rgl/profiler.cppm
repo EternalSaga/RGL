@@ -119,4 +119,25 @@ export void profilerPushCounter(const CounterRecord& rec);
  */
 export void profilerDump();
 
+/**
+ * 帧窗口活体快照（Phase 10 IMGUI 面板读数用；profilerSnapshotNow 逐帧可读）。
+ * profiler = 0 时 enabled = false 其余全 0——面板免判空直接显示。
+ * 读环形槽现场值（单线程帧循环假设与本体一致，无锁；O(window)）。
+ */
+export struct ProfilerSnapshot {
+	bool enabled = false;         // profiler 窗口 > 0 且首帧已开
+	uint64_t frame = 0;           // 当前逻辑帧号
+	double lastFrameMs = 0.0;     // 最近一个完整帧墙钟时长（0 = 无样本）
+	double frameAvgMs = 0.0;      // 窗口内有效帧墙钟均值
+	double cpuRecordAvgMs = 0.0;  // drawFrame CPU 主段窗口均值（0 = 无记录）
+	double gpuFrameAvgMs = 0.0;   // gpu.frame 跨度窗口均值（0 = 9.2 数据缺位）
+	uint32_t sampleFrames = 0;    // 窗口内持有墙钟样本的帧数
+};
+
+/**
+ * 取帧窗口快照（无分配，帧率调用安全）。
+ * @return 快照（profiler 关 = enabled false，其余字段 0）
+ */
+export ProfilerSnapshot profilerSnapshotNow();
+
 }  // namespace RGL

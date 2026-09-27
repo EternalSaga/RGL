@@ -539,4 +539,57 @@ void profilerDump() {
 	writeAndLog(ordered, data);
 }
 
+/** profilerSnapshotNow 辅助：单槽主段时长归并（drawFrame CPU / gpu.frame GPU 均值分子分母）。
+ *  static 内部链接——FrameSlot 是本 TU 私有类型，namespace 作用域自由函数会触发
+ *  TU-local-entity-exposure。 */
+static void accumulateSnapshotZones(const FrameSlot& slot, uint64_t& cpuSum, uint32_t& cpuN,
+	uint64_t& gpuSum, uint32_t& gpuN) {
+	for (const ZoneRecord& r : slot.zones) {
+		if (r.kind == ZoneKind::cpu && r.name == "drawFrame") {
+			cpuSum += r.durNs;
+			++cpuN;
+		} else if (r.kind == ZoneKind::gpu && r.name == "gpu.frame") {
+			gpuSum += r.durNs;
+			++gpuN;
+		}
+	}
+}
+
+/** profilerSnapshotNow 定义（接口注释）：线性扫环形槽聚合；"最近完整帧" = frame 最大槽的
+ *  prevFrameDurNs（开本帧时算出的上一帧时长）。profiler 关 = enabled false 早退。 */
+ProfilerSnapshot profilerSnapshotNow() {
+	const ProfilerState& st = state();
+	ProfilerSnapshot snap;
+	if (st.window == 0 || !st.inFrame)
+		return snap;
+	snap.enabled = true;
+	snap.frame = st.frame;
+	uint64_t latestFrame = 0;
+	uint64_t frameDurSum = 0;
+	uint64_t cpuSum = 0;
+	uint64_t gpuSum = 0;
+	uint32_t cpuN = 0;
+	uint32_t gpuN = 0;
+	for (const FrameSlot& slot : st.slots) {
+		if (slot.frame == FrameSlot::kEmptyFrame)
+			continue;
+		if (slot.prevFrameDurNs != 0) {
+			++snap.sampleFrames;
+			frameDurSum += slot.prevFrameDurNs;
+			if (slot.frame >= latestFrame) {
+				latestFrame = slot.frame;
+				snap.lastFrameMs = toMs(slot.prevFrameDurNs);
+			}
+		}
+		accumulateSnapshotZones(slot, cpuSum, cpuN, gpuSum, gpuN);
+	}
+	if (snap.sampleFrames > 0)
+		snap.frameAvgMs = toMs(frameDurSum / snap.sampleFrames);
+	if (cpuN > 0)
+		snap.cpuRecordAvgMs = toMs(cpuSum / cpuN);
+	if (gpuN > 0)
+		snap.gpuFrameAvgMs = toMs(gpuSum / gpuN);
+	return snap;
+}
+
 }  // namespace RGL

@@ -77,6 +77,7 @@ export struct InputEvent {
 	uint8_t button = 0;    // SDL 鼠标按键（MouseButton）
 	bool pressed = false;  // MouseButton：true = 按下
 	glm::vec2 delta{};     // MouseDelta（xrel/yrel 增量）
+	glm::vec2 pos{};       // MouseButton/MouseDelta：窗口内绝对坐标（Phase 10 点选/imgui 用；其余类型无意义）
 	float amount = 0.0f;   // Wheel（y 增量）
 };
 

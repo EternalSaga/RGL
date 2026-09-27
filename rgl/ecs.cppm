@@ -29,6 +29,19 @@ export struct AppExit {
 	bool requested = false;
 };
 
+/**
+ * 输入过滤器钩子（registry context，Phase 10 调试层可选挂接；main 装配，缺省空）：
+ * eventSystem 在翻译每条 SDL 事件**之前**过一遍过滤器——返回 true = 事件被消费
+ * （imgui 控件接管），不再产 InputEvents（相机等下游不响应）。空 = 零行为变化。
+ * **参数为 `const SDL_Event*` 的 void\* 类型擦除**：ecs 接口刻意不 GMF include SDL
+ * （GMF 收敛）且不在 purview 前置声明 SDL_Event（GMF 全局模块实体 vs purview 模块
+ * 实体同名双声明地雷）；唯一两个调用侧（ecs_impl / imgui_layer）各自 GMF 有完整
+ * SDL_Event 定义，static_cast 即还原类型安全。
+ */
+export struct InputFilter {
+	std::function<bool(const void* sdlEvent)> consume = nullptr;
+};
+
 // 中央事件轮询（唯一 SDL_PollEvent 调用点）：窗口状态（WindowExtent/AppExit）+
 // 输入事件流（InputEvents：本 system 只产事件，不做键位映射——键绑定在 Camera.keys，
 // cameraSystem 消费事件时按绑定解释，E5.4；退出/窗口状态不走事件流）
