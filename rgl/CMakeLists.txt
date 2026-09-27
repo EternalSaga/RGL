@@ -89,6 +89,9 @@ find_path(TINYGLTF_INCLUDE_DIRS tiny_gltf.h REQUIRED)
 target_include_directories(rgl SYSTEM PRIVATE ${TINYGLTF_INCLUDE_DIRS})
 target_link_libraries(rgl PRIVATE Vulkan::Vulkan rllogger glm::glm EnTT::EnTT sol2::sol2 lua rlstd)
 target_compile_definitions(rgl PRIVATE GLM_FORCE_DEPTH_ZERO_TO_ONE GLM_FORCE_RADIANS)
+# Phase 10 批 10.3 配置热重载：监视**源树** configs/（D7——build 副本会被 just build
+# 内容比对静默覆盖复原，监听它无意义）；运行期路径不存在 = warn + 关（优雅降级）
+target_compile_definitions(rgl PRIVATE "RGL_SOURCE_CONFIG_DIR=\"${PROJECT_SOURCE_DIR}/configs\"")
 find_package(SDL3 CONFIG REQUIRED)
 
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)

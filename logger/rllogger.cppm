@@ -82,6 +82,15 @@ export class RLLogger {
 	~RLLogger();
 	static void
 	initialize(const std::string& configPath = "configs/log_level.json");
+	/**
+	 * 热重载日志级别（Phase 10 批 10.3；config_reload 热链路专用）：重读指定 JSON，
+	 * 只改 console/file 两个 sink 的 level——**不**重建 logger/file sink（file sink
+	 * 构造带 truncate=true，重建会清空日志文件）。文件读不到 / JSON 坏 = warn +
+	 * 保留旧级别（诊断设施不得反杀主程序）。
+	 * @param configPath log_level.json 路径（监视方传入——非启动期的 configFilePath，
+	 *                   热重载监视的是源树副本）
+	 */
+	static void reloadLevels(const std::string& configPath);
 	static RLLogger* getInstance();
 
 	RLLogger(const RLLogger&) = delete;
@@ -188,6 +197,34 @@ RLLogger* RLLogger::getInstance() {
 
 void RLLogger::initialize(const std::string& configPath) {
 	configFilePath = configPath;
+}
+
+void RLLogger::reloadLevels(const std::string& configPath) {
+	// singletonLogger 是实例成员（进程内仅 rllogger 单例一个实例）——静态入口经
+	// 静态 unique_ptr 取；尚未初始化 = 直接返回（热重载挂点晚于 getInstance，防御）
+	if (!rllogger || !rllogger->singletonLogger)
+		return;
+	spdlog::logger* logger = rllogger->singletonLogger;
+	std::ifstream configFile(configPath);
+	if (!configFile) {
+		logger->warn("log_level: 热重载读不到文件（保留旧级别）: {}", configPath);
+		return;
+	}
+	auto conf = nlohmann::json::parse(configFile, nullptr, /*allow_exceptions=*/false);
+	if (conf.is_discarded()) {
+		logger->warn("log_level: 热重载 JSON 解析失败（保留旧级别）: {}", configPath);
+		return;
+	}
+	// sink 顺序 = 构造期登记序（[0]=console, [1]=file）；缺省级别同构造期（warn/info）
+	logger->sinks()[0]->set_level(conf.contains("console_level")
+		? spdlog::level::from_str(conf["console_level"].get<std::string>())
+		: spdlog::level::warn);
+	logger->sinks()[1]->set_level(conf.contains("file_level")
+		? spdlog::level::from_str(conf["file_level"].get<std::string>())
+		: spdlog::level::info);
+	logger->info("log_level: 热重载完成 console={} file={}",
+		spdlog::level::to_string_view(logger->sinks()[0]->level()),
+		spdlog::level::to_string_view(logger->sinks()[1]->level()));
 }
 
 RLLogger::RLLogger(const std::string& configPath) {

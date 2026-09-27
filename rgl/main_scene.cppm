@@ -23,6 +23,10 @@ import model_importer;
 import texture_pool;
 import scene_config;
 import scene_context;
+import camera_config;  // loadCameraConfig（hot_reload camera.lua 套用，Phase 10 批 10.3）
+import camera;  // Camera ctx 类型（hot_reload 调参字段套用，10.3）
+import hot_reload;  // HotReloader（配置热重载机制模块，10.3）
+import ecs;  // ConfigReloadHook ctx（帧边界挂点类型，10.3）
 import shader_registry;
 import gpu_cull;
 import vk_indirect_commands;
@@ -412,6 +416,78 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 	return RenderBackEnd{std::move(cull), std::move(dgc), std::move(dgcStatic),
 		Renderer(device, swapchain, resources, sceneData, env, rtCache, pipelines,
 			std::move(graph), cullRaw, dgcRaw, dgcStaticRaw)};
+}
+
+/**
+ * wireHotReload 定义（契约见 main.cppm 接口注释）。三条监视链 = 帧边界
+ * HotReloader::poll 触发；回调只碰 ctx 值字段（不触碰 GPU 资源/资产表/registry 结构），
+ * 解析失败 warn + 保留旧值。reloader 所有权在 hook 闭包内（ctx 活多久它活多久）。
+ */
+void wireHotReload(entt::registry& registry) {
+	if (!diagnostics().configReload)
+		return;  // 总开关默认关 = 零行为变化（红线）
+#ifdef RGL_SOURCE_CONFIG_DIR
+	const std::filesystem::path sourceDir{RGL_SOURCE_CONFIG_DIR};
+#else
+	if (auto* logger = RLLogger::getInstance())
+		logger->warn("hot_reload: 编译期未注入 RGL_SOURCE_CONFIG_DIR，热重载关闭");
+	return;
+#endif
+	std::error_code ec;
+	if (!std::filesystem::is_directory(sourceDir, ec)) {
+		if (auto* logger = RLLogger::getInstance())
+			logger->warn("hot_reload: 源 configs 目录不存在（热重载关闭）: {}", sourceDir.string());
+		return;
+	}
+
+	auto reloader = std::make_shared<HotReloader>();
+	reloader->watch(sourceDir / "scene.lua", [&registry](const std::string& path) {
+		auto cfg = loadSceneConfig(path);
+		auto* logger = RLLogger::getInstance();
+		if (!cfg) {
+			if (logger)
+				logger->warn("hot_reload: scene.lua 解析失败（保留旧值）: {}", cfg.error().message);
+			return;
+		}
+		registry.ctx().get<SceneSpin>().speed = cfg->spin ? 1.0f : 0.0f;
+		auto& env = registry.ctx().get<SceneEnv>();
+		env.exposure = cfg->exposure;
+		env.intensity = cfg->environment.intensity;  // env 未上传时 mipRange=0 = shader 端无贡献，安全
+		if (logger)
+			logger->info("hot_reload: scene.lua 已套用 spin={} exposure={} env_intensity={}（entities/灯不热载）",
+				cfg->spin, cfg->exposure, cfg->environment.intensity);
+	});
+	reloader->watch(sourceDir / "camera.lua", [&registry](const std::string& path) {
+		auto cfg = loadCameraConfig(path);
+		auto* logger = RLLogger::getInstance();
+		if (!cfg) {
+			if (logger)
+				logger->warn("hot_reload: camera.lua 解析失败（保留旧值）: {}", cfg.error().message);
+			return;
+		}
+		const Camera& src = cfg->camera;
+		auto& cam = registry.ctx().get<Camera>();
+		cam.fov = src.fov;
+		cam.nearPlane = src.nearPlane;
+		cam.farPlane = src.farPlane;
+		cam.fpsSpeed = src.fpsSpeed;
+		cam.fpsSensitivity = src.fpsSensitivity;
+		cam.trackballSensitivity = src.trackballSensitivity;
+		cam.zoomSpeed = src.zoomSpeed;
+		cam.keys = src.keys;  // 键位表（CameraState 无键相关缓存，换表安全）
+		if (logger)
+			logger->info("hot_reload: camera.lua 已套用 fov={}（姿态/mode 不热套，重启生效）",
+				glm::degrees(cam.fov));
+	});
+	reloader->watch(sourceDir / "log_level.json", [](const std::string& path) {
+		RLLogger::reloadLevels(path);
+	});
+
+	registry.ctx().emplace<ConfigReloadHook>(ConfigReloadHook{
+		.poll = [r = std::move(reloader)] { r->poll(); }});
+	if (auto* logger = RLLogger::getInstance())
+		logger->info("hot_reload: 已启动，监视源树 {}（scene.lua / camera.lua / log_level.json）",
+			sourceDir.string());
 }
 
 }  // namespace RGL

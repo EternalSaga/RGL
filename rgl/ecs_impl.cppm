@@ -389,6 +389,16 @@ struct FrameStatsTracker {
 
 }  // namespace
 
+/** 配置热重载帧边界（Phase 10 批 10.3；renderSystem 帧首调用）：eventSystem 之后、
+ * 本帧任何 system/draw 之前 = 上一帧已 submit、本帧未录制的换入点。钩子未挂
+ * （config_reload 门默认关，main 不 emplace）= 空指针早退零开销。 */
+void configReloadTick(entt::registry& rg) {
+	auto* hook = rg.ctx().find<ConfigReloadHook>();
+	if (!hook || !hook->poll)
+		return;
+	hook->poll();
+}
+
 /** 实现流水（语义/契约见接口声明）：构建显式 system 列表（camera→animation→bounds→
  * projection→renderlist）→ 主循环：eventSystem → AppExit 判定 → dt clamp [0, 0.1s]
  * → resizeSystem（失败 = waitForIdle 后退出循环返回 Error）→ system 链 →
@@ -440,6 +450,9 @@ std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer& rende
 		if (rg.ctx().get<AppExit>().requested) {
 			break;
 		}
+
+		// 配置热重载帧边界（Phase 10 批 10.3）：本帧任何 system/draw 之前套用变更
+		configReloadTick(rg);
 
 		float ticks = static_cast<float>(SDL_GetTicks());
 		// dt 限幅：窗口卡顿/切后台回来时防止相机瞬移

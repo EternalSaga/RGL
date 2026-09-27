@@ -1,6 +1,7 @@
 # Phase 10 实施计划：调试交互（配置热重载 + IMGUI 参数面板 + shader 热重载 + 点选取参）
 
-> **状态**：现行——**批 10.1 imgui 骨架已落地（2026-09-28）**，其余批次未开工。
+> **状态**：现行——**批 10.1 / 10.2a / 10.2b / 10.2c / 10.3 已落地（2026-09-28）**，
+> 剩 10.4（shader 热重载）/ 10.5（点选）/ 10.6（可选）。
 > 关键决策 D1–D5 已由用户拍板（见 §2），D6–D11 为主 agent 技术决策（可否决）。
 > 批次 10.1–10.6 见 §9。
 > 依据 = 2026-09-27 只读调研（worker 子 agent A–F 六节 + 主 agent 逐项复核）+ 方向讨论。
@@ -188,7 +189,7 @@ profiler 面板读数复用现成 `profiler = 0`（不开 profiler 时面板显�
 | **10.2a** `ObjectDraw` 单源化 **✅ 2026-09-28** | §3.1 五步：schema 登记 + 表基址常量 → `just reflect` → 删手写 `ObjectDrawGpu` → 字面量钉住 → 清注释残留 | `scene_forward_schema.lua`（实际落点，见 10.2a 实施记录）、`generated/*`（随提交）、`frame_draw_list.cppm`、消费方、`scene.slang`/`shader_registry.cppm` 注释 | **BIT-IDENTICAL** + `reflection_check` 过 + `checks --strict`（走 skill `rgl-shader-contract`） |
 | **10.2b** 灯/曝光控件 **✅ 2026-09-28** | `param_registry` 模块 + 首批条目（§3.3 前两行）+ 灯/曝光控件接面板 | 新 `.cppm`、`ecs.cppm/_impl.cppm`（build 函数落点修正：render_list 无 registry ctx 全链，装配归 ecs）、`imgui_layer` 消费 | 默认关 diff0；开 = 拖动下一帧画面变化 |
 | **10.2c** 材质控件 **✅ 2026-09-28** | `AssetTable` setter + 材质条目（吃 10.2a 生成物）+ 共享实体数提示 | `asset_table.cppm`、`param_registry` | 同上 + 共享提示正确 |
-| **10.3** 配置热重载 | §5：`hot_reload` 模块 + 帧边界换入基建 + T1 清单；（T2 可选） | 新 `.cppm`、各 `loadXxxConfig` 调用点、CMake 注入源目录 | 默认关 diff0；开 = 改源 `configs/` 下一帧生效且 build 副本不被污染；缺源目录降级关 |
+| **10.3** 配置热重载 **✅ 2026-09-28** | §5：`hot_reload` 模块 + 帧边界换入基建 + T1 清单；（T2 可选不做） | 新 `.cppm`、`main.cppm/_scene.cppm`（wireHotReload）、`ecs.cppm/_impl.cppm`（ConfigReloadHook）、`rllogger`、CMake 注入源目录 | 默认关 diff0；开 = 改源 `configs/` 下一帧生效且 build 副本不被污染；缺源目录降级关 |
 | **10.4** shader 热重载 L1 | §6：前置精查（只读）→ watch + fork slangc + 签名守卫 + 同槽重建 + DGC 降级 | 新 `.cppm`、`shader.cppm` 重建入口、`vk_indirect_commands` 重建/降级、编译期注入 flags | 默认关 diff0；开 = 改注释重载无视觉变化、改逻辑下一帧生效、**改契约被拦且旧管线继续跑** |
 | **10.5** 点选取参 | §7：点击事件 + id pass 进图 + 1 texel 回读 + objectSlot 反查 + 面板实体绑定 | 图配置/id shader（新 `rgl_shader` 条目）、回读通路、`ecs` 选中 context、面板区 | 默认关 diff0；开 = 点击命中正确（含遮挡层序）、面板显示并可调该实体参数 |
 | **10.6**（可选，D4 视情况） | 反射语义扩产：range/默认值/单位入 schema → 生成语义层，注册表薄化 | schema/生成器 | 10.2b/c 行为不变（仅数据源换薄） |
@@ -268,6 +269,28 @@ BIT-IDENTICAL 截图回归，基线 `10b00c78c4a2d644479bb56eb35ac796bae90ada643
   无回滚、编辑仅本会话——重启回 config 值）。
 - **验收**：默认关 forward 截图 = 基线 `10b00c78…`；窗口 `imgui=true` 12s VVL 0 error；
   `checks --strict` 0 警告。
+
+### 10.3 实施记录（2026-09-28）
+
+- **机制/语义分层**：`hot_reload.HotReloader` = 纯机制（登记 path+回调，poll 比 mtime，
+  先更戳后回调 = 半写文件失败不重试风暴；回调异常吞掉 warn）；语义全在装配方
+  `main.wireHotReload`（main:scene）。帧边界挂点 = `ConfigReloadHook`（ecs ctx）由
+  renderSystem 帧首（eventSystem 后、systems/draw 前）调 `configReloadTick`——上一帧
+  已 submit、本帧未录制，套用无撕裂。
+- **门** = `diagnostics.config_reload`（默认 false = wireHotReload 直接返回，零行为
+  变化）；监视源 = **源树** configs/（D7；编译期定义 `RGL_SOURCE_CONFIG_DIR` 注入，
+  目录缺失 warn 降级关）。
+- **T1 套用面**：scene.lua → SceneSpin.speed / SceneEnv.exposure / SceneEnv.intensity
+  （entities/灯/资产不热载 = 重注册牵动 heap 槽，超 T1）；camera.lua → fov/near/far/
+  fpsSpeed/灵敏度/键位（**姿态与 mode 不套**——相机运行中已漂移，覆盖=瞬移）；
+  log_level.json → `RLLogger::reloadLevels`（新增：只改两 sink level，不重建 file sink
+  ——truncate=true 重建会清日志）。
+- **实测踩坑留档**：验证时"scene.lua 改了没反应"实为 **stdout 重定向全缓冲 + 测试
+  中途把 console_level 切 warn 隐藏了 info 行**——热重载本身 touch 后 3ms 内套用；
+  观察热重载日志别在测试中途调低 console_level。
+- **验收**：默认关 forward 截图 = 基线 `10b00c78…`（0 hot_reload 日志）；窗口开
+  config_reload 实测 camera/log_level/scene 三链套用日志 + 恢复；`checks --strict`
+  0 警告（HotReloader::poll 与 renderSystem 认知复杂度告警各拆一 helper 消解）。
 
 ## 10. 验收红线（汇总）
 

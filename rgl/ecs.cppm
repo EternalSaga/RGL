@@ -43,6 +43,17 @@ export struct InputFilter {
 	std::function<bool(const void* sdlEvent)> consume = nullptr;
 };
 
+/**
+ * 配置热重载轮询钩子（Phase 10 批 10.3；registry context，main 在
+ * diagnostics.config_reload=true 时经 wireHotReload 装配，缺省未 emplace/空 = no-op）：
+ * renderSystem 帧首调用（eventSystem 之后、本帧任何 system/draw 之前 = 帧边界——
+ * 上一帧 submit 已完成、本帧录制未开始，套用配置值无撕裂）。钩子本体 =
+ * HotReloader 轮询源 configs/ mtime + 变更回调套用（main.cppm wireHotReload）。
+ */
+export struct ConfigReloadHook {
+	std::function<void()> poll;
+};
+
 // 中央事件轮询（唯一 SDL_PollEvent 调用点）：窗口状态（WindowExtent/AppExit）+
 // 输入事件流（InputEvents：本 system 只产事件，不做键位映射——键绑定在 Camera.keys，
 // cameraSystem 消费事件时按绑定解释，E5.4；退出/窗口状态不走事件流）

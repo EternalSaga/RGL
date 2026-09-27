@@ -388,6 +388,10 @@ int main() {
 			});
 		}
 
+		// 配置热重载（Phase 10 批 10.3）：门 = diagnostics.config_reload（默认关）；
+		// 挂 ConfigReloadHook 由 renderSystem 帧边界轮询源 configs/。独立于 imgui 门。
+		wireHotReload(registry);
+
 		/**
 		 * DIAG（可见窗 fault 排查）每帧回调：隐藏窗启动、frame == showAfter 时
 		 * SDL_ShowWindow（恰好一次）——若显示瞬间开始 fault = present/合成期状态

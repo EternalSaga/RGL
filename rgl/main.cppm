@@ -210,4 +210,21 @@ export RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain
 									 ShaderRegistry& pipelines, CompiledRenderGraph&& graph,
 									 entt::registry& registry, const SceneConfig& scene, bool deferredMode);
 
+/**
+ * 配置热重载装配（Phase 10 批 10.3；docs/phase10_plan.md §5）。门 =
+ * `diagnostics.config_reload`（默认 false = 直接返回零变化）；监视源 = **源树**
+ * configs/（编译期定义 RGL_SOURCE_CONFIG_DIR，D7——build 副本会被 just build 覆盖
+ * 复原，监听无意义；目录缺失 warn + 关）。挂 `ConfigReloadHook`（ecs ctx）由
+ * renderSystem 帧边界轮询 mtime，变更即重解析 + 套用 T1 字段：
+ *   · scene.lua  → SceneSpin.speed（spin 开关）/ SceneEnv.exposure / SceneEnv.intensity
+ *     （entities/灯/资产/环境贴图**不**热载——重注册牵动 heap 槽与管线表，超 T1 范围）
+ *   · camera.lua → Camera 调参字段（fov/near/far/fpsSpeed/各灵敏度/键位）；
+ *     **姿态与模式不套**（运行中相机已漂移，position/target 覆盖 = 瞬移；mode 切换
+ *     涉及 basis 状态语义，重启生效）
+ *   · log_level.json → RLLogger::reloadLevels（只改 sink level）
+ * 解析失败 = warn + 保留旧值（不崩）。imgui 面板开关本身 = 启动期（需重建后端）。
+ * @param registry 场景 registry（写回调捕获：SceneSpin/SceneEnv/Camera ctx）
+ */
+export void wireHotReload(entt::registry& registry);
+
 }  // namespace RGL
