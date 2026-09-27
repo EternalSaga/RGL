@@ -179,7 +179,7 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
 - **Phase 9 性能基线与判定（2026-09-27 收口）**：本机 forward 1280×720 = **CPU-bound**
   （profiler 判定行 `frame=7.10ms cpu.record=7.03ms gpu.frame=2.98ms`）→ ④c"cull 读回延后
   一帧"**否决**、⑤"帧率上限"**当前不需要**（CPU 限速 ≈141 fps 低于 165 Hz，两 present 模式
-  `drop` 双零）；给 Phase 10 的硬基线 = **GPU 侧余量 ≈3.1 ms/帧，CPU 侧无余量**。未收口：
+  `drop` 双零）；给阴影（现 Phase 11）的硬基线 = **GPU 侧余量 ≈3.1 ms/帧，CPU 侧无余量**。未收口：
   `drawFrame` 内 ~93% CPU 时间无子 zone（可选批 9.5 补插桩）、跨机 NVIDIA/Intel 复测。
   全文 = `docs/phase9_plan.md` §10；present_timing 本机形态限制（只 advertise stage-local 域、
   跨 stage 历元不一致）= `docs/调试历史.md` 2026-09-27 条目。
@@ -222,6 +222,7 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
 - `docs/radv_static_dgc_spike.md` — RADV 静态 shader DGC spike（功能通、慢 1.85× → 默认不开；翻盘设计底稿）
 - `docs/vulkan_extensions_2025_调研.md` — 新扩展调研 + §十二/十三 实施记录（活文档）
 - `docs/phase7_devlog.md` — Phase 7 滚动开发日志（完结后归档）
+- `docs/phase10_plan.md` — **Phase 10 调试交互计划**（配置热重载 + IMGUI 参数面板 + shader 热重载 L1 + GPU id 点选；2026-09-27 计划已立，阴影顺延 Phase 11）
 - `docs/风格检查规则.md` — tools/checks 两轮扩展设计（partition/docs/现代 C++/expected 禁 throw）；工具 Python ≥3.14，规则拆 `rules_{metrics,text,doxygen}.py`
 - `docs/静态审查升级路线.md` — LLVM 23 + `-Wlifetime-safety` 两阶段落地计划（vs Rust 借用检查差距结论；clangbind ABI 回归是阶段 1 最高风险）
 - `docs/archive/` — 归档索引（phase 计划含 **phase6_record.md**、ecs 审查、issue_history 总账、present_timing/教程拆解等已结题调研）

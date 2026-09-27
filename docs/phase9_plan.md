@@ -5,6 +5,8 @@
 > 实施期偏差与勘误集中在 §3.4 / §4.4。
 > 依据 = [next_roadmap.md](next_roadmap.md) Phase 9 ①–⑤（:184-194）+ 2026-09-27 方案讨论
 > （CPU/GPU/present_timing 2.5 问 + ECS/AOP 取舍）。完成后本文件转 `archive/`，进度回写 next_roadmap。
+> **阶段号消歧（2026-09-27）**：文中"Phase 10 阴影"现指 **Phase 11**——Phase 10 已被调试交互
+> （[phase10_plan.md](phase10_plan.md)）接管，正文历史指称不改。
 
 ## 0. 定位与目标
 

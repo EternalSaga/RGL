@@ -3,9 +3,15 @@
 > **状态**：现行（开发路线图；**Phase 7 完成（2026-09-10）**：D1 延迟单灯 `70ce9d1` + D3 多灯/反射 +
 > 批次 4 CPU culling + 批次 5=7b GPU culling/DGC + 批次 2 refine（IBL+skybox）+ 灯 entity 化 +
 > **前向头 SceneLight 入反射（Slang C API 工具升级，双源消除）+ 批次 6 销账**；
-> 并行工作流 = **Phase 10 批次 0 Renderer 拆分完成（2026-09-10，drawFrame 577→291，5 模块摘出，
-> BIT-IDENTICAL）** + 架构债务 1+2 修复（scene→scene_context / cube 出内核，
+> 并行工作流 = **批次 0 Renderer 拆分完成（2026-09-10，drawFrame 577→291，5 模块摘出，
+> BIT-IDENTICAL；旧称 "Phase 10 批次 0"，属阴影 Phase 前置，现随阴影归 Phase 11）** + 架构债务 1+2 修复
+> （scene→scene_context / cube 出内核，
 > 见 [架构债务-依赖方向审计.md](架构债务-依赖方向审计.md)，`b1788e0`）；下一节点 = Phase 8）
+>
+> **阶段号重排（2026-09-27）**：**Phase 10 = 调试交互**（配置热重载 + IMGUI 参数面板 + shader 热重载
+> + 点选取参，计划 = [phase10_plan.md](phase10_plan.md)）插队，**阴影整体顺延为 Phase 11**。
+> 历史代码注释里的旧口径 "Phase 10 批次 0"（= 2026-09-10 Renderer 拆分）**一律不改**；
+> 本文件与 AGENTS/技术概念等活文档中的"阴影 Phase 10"引用已全部改为 Phase 11。
 
 Phase 0–6 已全部完成（各阶段结论一段话归档于下，实施细节与计划-实现偏离的权威记录在
 `docs/archive/phaseX_plan.md`）。（legacy 旧 OpenGL 项目已于 2026-09-08 删除，见 git history。）
@@ -97,7 +103,7 @@ present/waitStage 派生）；drawFrame 手写布局转换清零、pass 循环�
 | **0** Bistro + loader 节点 TRS（forward） | nodeWorld mat4 父链、Bistro forward、packer、`kSceneMatrixCapacity`↑4096 | **✅ 完成** | normal 绿通道翻 + BC5 Z 重建（→ Phase 8） |
 | **1** G-buffer MRT + offscreen 显式格式 | 格式词表、4-MRT `deferred_geometry`、`dump_gbuf` 直读验 albedo | **✅ 核心完成** | normal/metalRough **纹理**采样（→ Phase 8） |
 | **2** Light pass + sampleRead 接线 | SAMPLED_IMAGE 描述符入 heap、全屏 light pass GGX、forward/deferred 切换（选路已转 render_graph.lua variant，2026-09-08）、**refine 残二完成**（2026-09-10：light pass 简化 IBL + skybox 背景合成，见下 refine 注） | **✅ 完成** | （无——refine 残二已销） |
-| **3** 多灯 + 灯数据并入反射（D3） | 第 4 条反射管线 `GpuLight`、scene data 尾区灯数组 @262272（头不动保 forward diff0）、`lights` 配置、逐灯循环 + 点光衰减、**灯 entity 化**（2026-09-10，`Light` 组件 + `index` 正序契约，ECS 规范 3）、**前向头 `SceneLight` 入反射**（2026-09-10，第 6 条 `scene_forward` 管线，双源消除） | **✅ 完成** | shadow map（→ Phase 10） |
+| **3** 多灯 + 灯数据并入反射（D3） | 第 4 条反射管线 `GpuLight`、scene data 尾区灯数组 @262272（头不动保 forward diff0）、`lights` 配置、逐灯循环 + 点光衰减、**灯 entity 化**（2026-09-10，`Light` 组件 + `index` 正序契约，ECS 规范 3）、**前向头 `SceneLight` 入反射**（2026-09-10，第 6 条 `scene_forward` 管线，双源消除） | **✅ 完成** | shadow map（→ Phase 11） |
 | **4** CPU frustum culling | 逐图元 node-local `CullSphere`、Gribb-Harman 6 面（z∈[0,1]）、可见统计 | **✅ 核心完成** | 真 AABB（现球近似，够 frustum） |
 | **5** GPU culling / DGC | `vk_indirect_commands`、compute cull、IES/静态/读回重放三路、CPU 剔除降兜底+对账 | **✅ 核心完成**（2026-09-09；2026-09-10 三驱动 + 静态 spike 全运行时验证） | 静态 DGC 默认关（满槽实现慢 1.85×，翻盘 = 紧凑分桶 + 去同步等待，`docs/radv_static_dgc_spike.md`） |
 | **6** 文档销账 | 批次 2 refine + 灯 entity 化 + 批次 5 收尾 + 前向头反射 + C API 工具升级的文档同步（devlog/research/roadmap/AGENTS/调试历史） | **✅ 完成**（2026-09-10） | （无——Phase 7 全项销账） |
@@ -164,7 +170,7 @@ per-light 颜色、距离衰减）headless 零 VVL error；forward 只读 `light
  Phase 7 完成（2026-09-10）：批次 2 refine（IBL+skybox）✓ / 灯 entity 化 ✓ / 批次 5=7b GPU culling ✓
    / 前向头 SceneLight 入反射（双源消除，C API 工具升级）✓ / 批次 6 销账 ✓。
    遗留（非阻塞）：静态 DGC 翻盘（紧凑分桶）、normal/metalRough 纹理采样（Phase 8）、
-   shadow map（Phase 10）。
+   shadow map（Phase 11）。
       ↓
  Phase 8 完成（2026-09-14）：① HDR tonemap ✓ / ② codec + HDR env（治死黑+天空盒主根因）✓ /
    ③ 纹理接缝 + forward 多灯 + emissive ✓ / ④ 完整版 IBL（SH9 + prefiltered）✓ /
@@ -194,7 +200,7 @@ Phase 9：性能观测（profiler）——先回答"CPU-bound 还是 GPU-bound"�
   帧率压到 ≈141 fps 低于 165 Hz，eImmediate 与 FIFO 分布重合且 `drop` 双零，
   不存在"满速渲被丢弃"（archive §八 的 A310 现象不可外推到本机）；`present_mode` 开关保留
   作复测入口；④ **头寸在未归因的 CPU 录制段**（`drawFrame` 7.03ms 中 ~93% 无子 zone）
-  → 列为可选批 9.5（纯插桩）；⑤ **给 Phase 10 的基线：GPU 侧余量 ≈ 3.1 ms/帧**
+  → 列为可选批 9.5（纯插桩）；⑤ **给阴影（现 Phase 11）的基线：GPU 侧余量 ≈ 3.1 ms/帧**
   （2.98ms 已用 / 6.061ms 预算；CPU 侧无余量），阴影 GPU 成本 ≲3ms 则整机帧时不变。
   ① CPU 帧相 profiler（内建）：每帧逐相 chrono（ECS/render_list/命令录制/④c cull
      waitForFences/present acquire）+ rllogger 直方图——关键 = 分清 CPU 干活 vs 等 GPU stall
@@ -209,8 +215,16 @@ Phase 9：性能观测（profiler）——先回答"CPU-bound 还是 GPU-bound"�
      （`docs/phase9_plan.md` §10）**：本机 CPU-bound；④c"读回延后一帧"**否决**；
      帧率上限**当前不需要**；下一步头寸 = `drawFrame` 内部 CPU 细分（可选批 9.5）
     ↓
-Phase 10：阴影（大特性，一口气；风险分层 = CSM 承诺交付 + HFTS 带退出条件的 spike）
-  **批次 0 已完成（2026-09-10，Renderer 拆分，BIT-IDENTICAL）**：drawFrame 577→291 行，
+ Phase 10：调试交互（配置热重载 + IMGUI 参数面板 + shader 热重载 L1 + GPU id 点选取参）
+   **计划已立（2026-09-27，[phase10_plan.md](phase10_plan.md)），插队阴影（原 Phase 10 → 11）**。
+   总纲 = **单一事实来源**（控件字段结构引用反射生成物，注册表不镜像布局；ObjectDraw 材质表
+   单源化为前置批）。批次：10.1 imgui 骨架（开关进 `configs/diagnostics.lua`）/
+   10.2a ObjectDraw 单源化 / 10.2b 灯曝光控件 / 10.2c 材质控件 / 10.3 配置热重载 /
+   10.4 shader 热重载 / 10.5 点选 / 10.6（可选）反射语义扩产。
+     ↓
+Phase 11：阴影（大特性，一口气；风险分层 = CSM 承诺交付 + HFTS 带退出条件的 spike；
+   原编号 Phase 10，2026-09-27 因调试交互插队顺延）
+   **批次 0 已完成（2026-09-10，Renderer 拆分，BIT-IDENTICAL；旧口径 "Phase 10 批次 0"）**：drawFrame 577→291 行，
     摘出 5 模块（state_kit / frame_capture / cull_driver / frame_session / writeSceneStaging
     私有方法，详见 docs/调试历史.md 2026-09-10）。阴影特性归属预置：新 pass 种类 →
     render_graph + ⑤ pass 循环；per-cascade 光锥剔除 → CullDriver（复用 ④c 编舞）；
@@ -238,7 +252,7 @@ Phase 10：阴影（大特性，一口气；风险分层 = CSM 承诺交付 + HF
      - HFTS 原文（Wyman SIGGRAPH 2016，cwyman.org/abstracts/sig2016_hfts.pdf）+ Story 2015 原文
      - github.com/strexicious/izb-on（实验参考，非生产级）
     ↓
-远期候选：完整 IBL（prefiltered + BRDF LUT）、MASK alphaTest、OIT、imgui（低优先）
+远期候选：完整 IBL（prefiltered + BRDF LUT）、MASK alphaTest、OIT（imgui 已升格为 Phase 10，2026-09-27）
 ```
 
 ## 注意事项（现行）
