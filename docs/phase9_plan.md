@@ -265,4 +265,5 @@ profiler = 0,   -- 0 = 关（默认）；N = 保留最近 N 帧，退出时 dump
 | D2 | 报告主格式 | **Perfetto（Chrome Trace Event JSON）为主** + rllogger 摘要 + 机器可读 JSON |
 | D3 | 开关形态 | **`diagnostics.profiler = N` 帧窗口**（0=关默认，退出 dump）；不做 `#ifdef` 双层 |
 | D4 | `source_location` 路径问题 | 原结论"最小宏"→ **翻案为零宏（2026-09-27 当日）**：实测 ① 编译规则传绝对路径（`build.ninja:793`）→ 绝对路径本来就有；② named module 不导出宏（clang 22 实测 + `rlvk.cppm:12` 先例）→ 宏无处安放。定稿 = `RGL::zone(label?)` 函数 + `source_location` 默认实参，调用形态 `auto z = RGL::zone("staging");` |
+| D5 | present_mode 双模式（**用户 2026-09-27 追加，折入 9.3**） | `configs/runtime.lua` 加 `present_mode = "immediate"|"fifo"`（默认 immediate = 现状 → BIT-IDENTICAL），窗口路径按偏好选模式（`vkswapchain::createPresentMode` 分支），headless 恒 eFifo 忽略此键。**修订** archive `present_timing_research.md` 2026-09-01 决策"不加开关"与本 plan 原"可配置化必要性留给 9.4 判断"——9.4 结论需要 FIFO vs eImmediate 双模式对比证据，开关即为其前置（改动面小：配置键 + 选择分支） |
 | — | 否决项 | per-entity profiler component（ECS 规范 1/4）；编译器级 `-finstrument-functions`；引入 Tracy 等第三方库 |

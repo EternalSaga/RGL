@@ -13,6 +13,11 @@ return {
     -- DIAG：隐藏窗启动、第 N 帧后显示（可见窗 fault 排查；-1 = 立即显示）
     show_after = -1,
 
+    -- present_mode：窗口交换链 present 模式（批 9.3 用户追加，headless 恒 eFifo 忽略此键）：
+    -- "immediate" = 现状（硬要求 eImmediate，Wayland compositor 管帧同步）
+    -- "fifo"      = eFifo（vsync 阻塞、帧率 = 刷新率；present_timing 双模式对比测量用）
+    present_mode = "immediate",
+
     -- llm_debug 一次性截图（agent 自主工作：渲染 → 截图 → 退出）：
     -- 截图只改 llm_debug 开关（true/false）；file/size/delay_frames 常驻 llm_shot。
     -- 相机位置不在本文件——编辑 camera.lua 顶层 position/target/fovDegrees。

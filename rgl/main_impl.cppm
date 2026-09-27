@@ -295,7 +295,7 @@ int main() {
 		DeviceContext vkDevice(vkInstance);
 		checkPushDataLimits(vkDevice);
 		Swapchain vkSwapchain(vkDevice, pre.window.get(), pre.headless,
-			pre.headlessW, pre.headlessH);
+			pre.headlessW, pre.headlessH, configs.runtime.presentMode);
 		// heap 容量为固定裕量（与场景内容解耦，批次 3 E1.3）：CPU 解析模型不再需要
 		// 先于 Vulkan 初始化
 		Resources vkResources(vkInstance, vkDevice, vkSwapchain);

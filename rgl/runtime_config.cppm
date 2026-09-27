@@ -19,6 +19,16 @@ export struct LlmDebugConfig {
 };
 
 /**
+ * 窗口 present 模式偏好（configs/runtime.lua 的 present_mode 键，2026-09-27 批 9.3
+ * 用户追加需求：FIFO/eImmediate 双模式对比测量）。仅**窗口路径**生效；headless
+ * surface 无 eImmediate、present 为 no-op，恒走 eFifo 回落（忽略此偏好）。
+ */
+export enum class PresentModePref {
+	immediate,  // 默认 = 现状：硬要求 eImmediate（缺失抛错，Wayland compositor 管同步）
+	fifo,       // eFifo（spec 必保模式；vsync 阻塞、帧率 = 刷新率——present_timing 测量对比用）
+};
+
+/**
  * 运行/窗口模式（configs/runtime.lua）：替代 RGL_HEADLESS / RGL_HEADLESS_SIZE /
  * RGL_WIN_SIZE / RGL_SHOW_AFTER 环境变量 + camera.lua 的 llm_debug/llm_shot 段。
  * 全字段可选，缺文件 = 全默认（交互窗 800x600、不截图）。
@@ -32,6 +42,7 @@ export struct RuntimeConfig {
 	uint32_t winWidth = 800;          // 交互窗尺寸（headless / llm 模式下被各自尺寸覆盖）
 	uint32_t winHeight = 600;
 	int showAfter = -1;               // DIAG：隐藏窗启动、第 N 帧后显示（-1 = 立即显示）
+	PresentModePref presentMode = PresentModePref::immediate;  // 窗口 present 模式（headless 忽略）
 	LlmDebugConfig llm;
 };
 

@@ -217,7 +217,9 @@ pickPhysicalDevice(const vk::raii::PhysicalDevices& physicalDevices) {
 /**
  * present 模式选择（交互窗路径）：**硬要求 eImmediate**，缺失即失败
  *（compositor/平台不兼容）。headless 表面无 eImmediate，走 vkswapchain 内
- * 的 eFifo 回落路径，不调本函数。
+ * 的 eFifo 回落路径，不调本函数；runtime.lua present_mode = "fifo" 的窗口
+ * 路径也直接在 vkswapchain::createPresentMode 选 eFifo，不调本函数
+ *（批 9.3 双模式开关——本函数语义保持"eImmediate 硬要求"不变）。
  * @param presentModes surface 支持的 present 模式列表
  * @return eImmediate；列表中无 eImmediate 返回 NoPresentMode
  */

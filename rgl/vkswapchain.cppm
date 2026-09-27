@@ -11,6 +11,7 @@ import vulkan_window;
 import vk_instance;
 import vk_device;
 import vkerror;
+import runtime_config;  // PresentModePref（窗口 present 模式偏好，批 9.3 双模式开关）
 
 namespace RGL {
 
@@ -25,8 +26,9 @@ namespace RGL {
  *   属性可参考）；
  * ② 窗口（非 headless）：window 必非空，surface 经 SDL_Vulkan_CreateSurface 创建；format 走
  *   SDLWindow::selectFormat（HDR/SDR 偏好序），extent 走 getSwapchainExtend（surface
- *   capability 钳制），imageCount 走 getImageCount（Wayland 不加 1），presentMode 硬要求
- *   eImmediate（见 utils.cppm selectPresentMode 与 docs/技术概念.md Present Mode 节）。
+ *   capability 钳制），imageCount 走 getImageCount（Wayland 不加 1），presentMode 按
+ *   runtime.lua present_mode 偏好选择（默认 eImmediate 硬要求；"fifo" = eFifo，批 9.3
+ *   双模式开关，见 utils.cppm selectPresentMode 与 docs/技术概念.md Present Mode 节）。
  * **成员生命周期规则**（AGENTS.md"重要成员生命周期规则"）：raii 对象（surface /
  * swapchain / swapchainImageViews 元素）无默认构造、不可拷贝，必须经成员初始化列表
  * 初始化，绝不在函数体内初始化；成员声明顺序 = 初始化依赖顺序（surface→format/
@@ -54,20 +56,24 @@ export class Swapchain {
 	 * @param headlessWidth headless 交换链宽（runtime.lua headless_size，默认 1280；
 	 *   headless+llm 时 main 对齐 llm_shot.size；非 headless 忽略）
 	 * @param headlessHeight headless 交换链高（同上，默认 720）
+	 * @param presentModePref 窗口 present 模式偏好（runtime.lua present_mode；headless
+	 *   忽略——恒走 eFifo 回落路径）
 	 * @note 失败路径：surface 创建失败 / raii SwapchainKHR 构造失败抛异常（后者为
 	 *   vk::SystemError）；构造体做 checkPresentAbility（graphics family 须可向
 	 *   surface present），不可时抛 std::runtime_error（describe() 带 [Code]）
 	 */
 	Swapchain(RGL::DeviceContext& vkDevice, RGL::SDLWindow* window, bool headless,
-		uint32_t headlessWidth = 0, uint32_t headlessHeight = 0)
+		uint32_t headlessWidth = 0, uint32_t headlessHeight = 0,
+		PresentModePref presentModePref = PresentModePref::immediate)
 		: vkDevice(vkDevice),
 		  window(window),
 		  surface(headless ? createHeadlessSurface(vkDevice.getVkInstance().getInstance())
 		                   : createSurface(vkDevice.getVkInstance().getInstance(), *window)),
 		  format(headless ? selectHeadlessFormat(vkDevice.getPhysicalDevice().getSurfaceFormatsKHR(*surface))
 		                  : window->selectFormat(vkDevice.getPhysicalDevice().getSurfaceFormatsKHR(*surface))),
+		  presentModePref(presentModePref),
 		  presentMode(headless ? selectHeadlessPresentMode(vkDevice.getPhysicalDevice().getSurfacePresentModesKHR(*surface))
-		                      : createPresentMode(vkDevice, surface)),
+		                      : createPresentMode(vkDevice, surface, presentModePref)),
 		  surfaceCapabilities(vkDevice.getPhysicalDevice().getSurfaceCapabilitiesKHR(*surface)),
 		  extent(headless ? vk::Extent2D{headlessWidth, headlessHeight}
 		                 : window->getSwapchainExtend(surfaceCapabilities)),
@@ -80,6 +86,10 @@ export class Swapchain {
 		if (!result) {
 			throw std::runtime_error(result.error().describe());
 		}
+		// 双模式验证证据（批 9.3：窗口 FIFO/eImmediate 对比跑要能看到实际选中项）
+		if (auto* logger = RLLogger::getInstance())
+			logger->info("Swapchain present mode: {}{}", vk::to_string(presentMode),
+				headless ? " (headless)" : "");
 	}
 
 	/** @return raii surface const 引用（headless = vkCreateHeadlessSurfaceEXT，否则
@@ -98,7 +108,7 @@ export class Swapchain {
 	/** @return 交换链格式（format + colorSpace）；offscreen RT "inherit" 格式经它解析
 	 * （Renderer），管线颜色格式同源。 */
 	vk::SurfaceFormatKHR getFormat() const { return format; }
-	/** @return 交换链 present 模式（headless 优先 eFifo；窗口路径恒 eImmediate）。 */
+	/** @return 交换链 present 模式（headless 优先 eFifo；窗口路径按 presentModePref，默认 eImmediate）。 */
 	vk::PresentModeKHR getPresentMode() const { return presentMode; }
 
 	/**
@@ -121,7 +131,7 @@ export class Swapchain {
 		auto newCaps = vkDevice.getPhysicalDevice().getSurfaceCapabilitiesKHR(*surface);
 		auto newFormat = window->selectFormat(
 			vkDevice.getPhysicalDevice().getSurfaceFormatsKHR(*surface));
-		auto newPresentMode = createPresentMode(vkDevice, surface);
+		auto newPresentMode = createPresentMode(vkDevice, surface, presentModePref);
 		const vk::Extent2D newExtent = window->getSwapchainExtend(newCaps);
 
 		const bool changed =
@@ -219,17 +229,28 @@ export class Swapchain {
 	}
 
 	/**
-	 * 窗口路径 present 模式：查询 surface 支持的模式列表 → RGL::selectPresentMode
-	 * （**硬要求 eImmediate**；Wayland 下 compositor 已管理 triple-buffering 与帧同步，
-	 * eImmediate 是正确选择，无需回退，见 utils.cppm 与 docs/技术概念.md Present Mode 节）。
+	 * 窗口路径 present 模式：按 presentModePref 选择——
+	 * fifo → find eFifo（Vulkan spec 必保模式，防御性判缺失）；
+	 * immediate（默认）→ RGL::selectPresentMode（**硬要求 eImmediate**；Wayland 下
+	 * compositor 已管理 triple-buffering 与帧同步，eImmediate 是正确选择，无需回退，
+	 * 见 utils.cppm 与 docs/技术概念.md Present Mode 节）。
 	 * @param vkDevice 设备层（经它取 PhysicalDevice 查模式列表）
 	 * @param surface 查询目标 surface
-	 * @return 选中的 present 模式（恒 eImmediate）
-	 * @note eImmediate 不可用（compositor/平台不兼容）抛 std::runtime_error（describe()
-	 *   带 [Code]）
+	 * @param pref present 模式偏好（runtime.lua present_mode）
+	 * @return 选中的 present 模式
+	 * @note eFifo 缺失（理论不可能）/ eImmediate 不可用（compositor/平台不兼容且偏好
+	 *   immediate）抛 std::runtime_error（describe() 带 [Code]）
 	 */
-	static vk::PresentModeKHR createPresentMode(RGL::DeviceContext& vkDevice, const vk::raii::SurfaceKHR& surface) {
+	static vk::PresentModeKHR createPresentMode(RGL::DeviceContext& vkDevice,
+		const vk::raii::SurfaceKHR& surface, PresentModePref pref) {
 		auto modes = vkDevice.getPhysicalDevice().getSurfacePresentModesKHR(*surface);
+		if (pref == PresentModePref::fifo) {
+			auto it = std::ranges::find(modes, vk::PresentModeKHR::eFifo);
+			if (it == modes.end())
+				throw std::runtime_error(Error{ErrorCode::NoPresentMode,
+					"eFifo not supported -- Vulkan spec mandates it"}.describe());
+			return *it;
+		}
 		auto modeResult = RGL::selectPresentMode(modes);
 		if (!modeResult) throw std::runtime_error(modeResult.error().describe());
 		return *modeResult;
@@ -304,7 +325,8 @@ export class Swapchain {
 	RGL::SDLWindow* window;  // headless 时为空（surface 经 headless 扩展创建）；窗口路径必非空，recreate() 重查依赖它
 	vk::raii::SurfaceKHR surface;  // raii surface（GPU 成员中先于 format/presentMode/caps 初始化——后三者经它查询）
 	vk::SurfaceFormatKHR format;  // 交换链格式（headless 优先 B8G8R8A8Srgb/eSrgbNonlinear；窗口路径 = SDLWindow::selectFormat）
-	vk::PresentModeKHR presentMode;  // 交换链 present 模式（headless 优先 eFifo；窗口路径恒 eImmediate）
+	PresentModePref presentModePref;  // 窗口 present 模式偏好（runtime.lua present_mode；headless 忽略；recreate() 复选用）
+	vk::PresentModeKHR presentMode;  // 交换链 present 模式（headless 优先 eFifo；窗口路径按 presentModePref，默认 eImmediate）
 	vk::SurfaceCapabilitiesKHR surfaceCapabilities;  // surface 能力快照（构造期查询；recreate() 重查刷新）
 	vk::Extent2D extent;  // 交换链 extent（headless = headless_width/height；窗口路径 = getSwapchainExtend 钳制值）
 	uint32_t imageCount;  // 图像数（headless = minImageCount；窗口路径 = getImageCount，Wayland 不加 1）

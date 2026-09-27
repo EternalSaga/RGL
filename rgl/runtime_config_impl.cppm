@@ -59,7 +59,7 @@ static void parseLlm(sol::table& root, LlmDebugConfig& llm) {
 	}
 }
 
-/** loadRuntimeConfig 定义（接口注释见 runtime_config.cppm）：headless/headless_size/win_size/show_after 逐一可选解析 + parseLlm。 */
+/** loadRuntimeConfig 定义（接口注释见 runtime_config.cppm）：headless/headless_size/win_size/show_after/present_mode 逐一可选解析 + parseLlm。 */
 [[nodiscard]] std::expected<RuntimeConfig, Error> loadRuntimeConfig(std::string_view path) {
 	auto* logger = RLLogger::getInstance();
 
@@ -111,6 +111,20 @@ static void parseLlm(sol::table& root, LlmDebugConfig& llm) {
 		sol::optional<int> showAfter = root["show_after"];
 		if (showAfter)
 			cfg.showAfter = *showAfter;
+
+		// present_mode：窗口 present 模式偏好（PresentModePref；headless 忽略）。
+		// 未知值 = 配置笔误，fail-fast（与类型错误同级，不静默回落）。
+		sol::optional<std::string> presentMode = root["present_mode"];
+		if (presentMode) {
+			if (*presentMode == "immediate")
+				cfg.presentMode = PresentModePref::immediate;
+			else if (*presentMode == "fifo")
+				cfg.presentMode = PresentModePref::fifo;
+			else
+				return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
+					fmt::format("runtime config ({}): present_mode must be \"immediate\" or \"fifo\", got \"{}\"",
+						path, *presentMode)});
+		}
 
 		parseLlm(root, cfg.llm);
 		return cfg;
