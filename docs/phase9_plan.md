@@ -128,13 +128,18 @@ RAII 调用点插桩；编译器级 `-finstrument-functions` 全函数插桩否�
 
 通路（侵入面 = 2 行/pass，读回零 stall）：
 
-1. query pool 按帧槽分段（`kFramesInFlight=2`，`frame_session` 双 fence 已保证语义）：
-   **beginFrame 等完 fence 后 reset 本槽**（上一槽此刻必已完成，host reset 安全）；
-2. 录制期每 pass 首尾各一次 `vkCmdWriteTimestamp2`（begin 取 ALL_COMMANDS 收口、
-   end 取 NONE/BOTTOM 语义，sync2 stage 掩码细节实施时定）+ 帧首末（GPU 总跨度）
-   + cull compute dispatch；
-3. **下一帧 beginFrame（fence 已信号）`vkGetQueryPoolResults`（64-bit，不带 WAIT，
-   不加 stall）**——读回延迟恒一帧；`timestampValidBits=64` 无需掩码；
+1. query pool 按帧槽分段（`kFramesInFlight=2`，`frame_session` 双 fence 已保证语义），
+   槽内**双段不相交**：主段 [0,48)（gpu.frame+pass）、cull 段 [48,64)（cull）。
+   **复位走 CB 内 `vkCmdResetQueryPool`，否决 host 版**——host 版需 `hostQueryReset`
+   特性（spec 可选，本机 RADV 未启用即 VVL 报错，实施期真跑踩过）：主段复位记主 CB 头、
+   cull 段复位记 cull CB 头——cull CB 先于主 CB 执行（同帧 fence 等待），段不相交
+   才互不抹除；各自复位先于自身时间戳记录，亦规避 VVL 跨 CB 记录序限制；
+2. 录制期每 pass 首尾各一次 `vkCmdWriteTimestamp2`（统一 ALL_COMMANDS 收口）+
+   帧首末（GPU 总跨度）+ cull 区域（cull CB 内配对）；
+3. **槽复用时（fence 已信号 → 滞后 2 帧）两段分别 `vkGetQueryPoolResults`（64-bit，
+   不带 WAIT，不加 stall）——只读各段实际写入部分**：复位后未写入的查询为"不可用"，
+   扩读到池末端必然 `VK_NOT_READY`（实施期真跑踩过）；`timestampValidBits=64` 无需
+   掩码；滞后 2 帧 → 诊断窗口需 `diagnostics.profiler ≥ 3`（否则记录计 orphan drops）；
 4. 同步顺手 `vkGetCalibratedTimestampsEXT{DEVICE_EXT, CLOCK_MONOTONIC_EXT}` →
    仿射换算（`timestampPeriod=10.019ns/tick`），**maxDeviation 记进报告**。
 
@@ -143,6 +148,11 @@ RAII 调用点插桩；编译器级 `-finstrument-functions` 全函数插桩否�
 
 **开销自检**：时间戳 ≈ 亚微秒/次，个别驱动有序列化效应——9.2 验收时开着/关着各跑
 `frame_stats` 对比一遍，差值记入文档。
+→ **实施实测**（headless llm_debug，8 帧小窗口、capture 帧 ~240ms 主导噪声）：OFF
+（9.1 基线）avg=34.56ms / p95=247.90ms；ON（9.2 终版）avg=37.74ms / p95=251.63ms
+——差值落在噪声与 capture 主导内，8 帧样本不足定量；GPU 侧区域自洽：gpu.frame
+2.656ms ≈ opaque 2.574 + skybox 0.052 + transparent 0.001 + tonemap 0.019，
+cull 14µs，校准 maxDeviation 2.4µs。定量开销留真实窗口批补测。
 
 ## 4. VK_EXT_present_timing（批 9.3，独立批）
 
@@ -228,7 +238,7 @@ profiler = 0,   -- 0 = 关（默认）；N = 保留最近 N 帧，退出时 dump
 | 批 | 内容 | 插桩点/改动 | 验收 |
 |---|---|---|---|
 | **9.1** CPU + 报告骨架 | 新 `profiler.cppm(/_impl)`、`RGL::zone()` 零宏 API、拦截点 1-3、Perfetto writer、摘要（bound 判定行随 9.2 GPU 数据落地）、`diagnostics.profiler=N` | `ecs_impl.cppm:438`、`frame_session.cppm:54/64/72`、`diagnostics.cppm` + `configs/diagnostics.lua`、CMake FILE_SET | 默认关 BIT-IDENTICAL + `just checks` 过；开 = trace 进 Perfetto、摘要自洽 |
-| **9.2** GPU 时间戳 | query pool 分槽、pass 循环/帧首末/cull 插桩、calibrated 校准、同轴合并 | 新 `gpu_profiler.cppm(/_impl)`、`vkrenderer_impl.cppm:503`、`cull_driver_impl.cppm runFrame`、`frame_session` reset/readback 挂点 | **开跑也 BIT-IDENTICAL**；读回零 stall；开销自检（`frame_stats` 前后差记档） |
+| **9.2** GPU 时间戳 | query pool 分槽、pass 循环/帧首末/cull 插桩、calibrated 校准、同轴合并 | 新 `gpu_profiler.cppm(/_impl)`、`vkrenderer_impl.cppm` frameBegin/pass 钩子、`cull_driver_impl.cppm` cullCB 钩子、`main_impl.cppm` 构造/绑定、`features_config` `optional_extensions` 校准扩展探针 | **开跑也 BIT-IDENTICAL**；读回零 stall；开销自检（`frame_stats` 前后差记档） |
 | **9.3** present_timing（独立批） | §4.2 全清单：探测→flag→队列→pNext→collect→IPD/丢帧进 trace | 新 `present_timing.cppm`、`vkswapchain.cppm`、`vkrenderer.cppm` present、`vkdevice.cppm`、`features.cppm` | RADV ≥5min 无 crash、IPD ≈ 刷新周期；跨机 NVIDIA/Intel 补测录档 |
 | **9.4** 判定收口 | CPU vs GPU vs IPD 三方对比结论 → `next_roadmap.md` ⑤ 决策建议成文 | 文档 | cull 读回成本、帧率上限/present mode 结论成文 |
 

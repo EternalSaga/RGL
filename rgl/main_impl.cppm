@@ -47,6 +47,7 @@ import camera_config;
 import runtime_config;  // 2026-09-08 env→配置：runtime.lua（headless/窗口/llm 截图）
 import diagnostics;      // diagnostics.lua 诊断单例（须先于一切 GPU 对象构造 setDiagnostics）
 import profiler;         // Phase 9：帧循环 zone 收口 dump（docs/phase9_plan.md 批 9.1）
+import gpu_profiler;     // Phase 9.2：GPU 时间戳会话（main 栈持有 = device 生命周期内）
 import llm_debug;
 import ecs;
 import rllogger;
@@ -355,6 +356,12 @@ int main() {
 		auto backEnd = assembleBackEnd(vkDevice, vkSwapchain, vkResources, sceneData, samplers, env, rtCache, assetTable, shaderRegistry,
 			std::move(graphResult.graph), registry, configs.scene, deferredMode);
 
+		// Phase 9.2：GPU 时间戳会话（声明序在 backEnd/vkDevice 后 = 析构序其先，
+		// query pool 不越过 device 生命周期——GPU 资源所有权规则；profiler=0 /
+		// 校准扩展缺位 = 内部不建 pool，钩子全早退）
+		GpuProfiler gpuProfiler(vkDevice);
+		bindGpuProfiler(&gpuProfiler);
+
 		/**
 		 * DIAG（可见窗 fault 排查）每帧回调：隐藏窗启动、frame == showAfter 时
 		 * SDL_ShowWindow（恰好一次）——若显示瞬间开始 fault = present/合成期状态
@@ -382,6 +389,7 @@ int main() {
 			},
 			onFrame);
 		RGL::profilerDump();  // Phase 9：trace/stats/摘要收口（profiler=0 = 静默 no-op）
+		bindGpuProfiler(nullptr);  // Phase 9.2：gpuProfiler 析构前解绑（帧循环已结束）
 		if (!renderResult) {
 			auto* logger = RLLogger::getInstance();
 			if (logger) logger->error("错误: {}", renderResult.error().describe());

@@ -20,12 +20,14 @@ export using FeatureChain = vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::
 // required 链尾类型（vkdevice 条件链接 optional feature 结构用——自动生成，与 chain_types 末位同步）
 export using FeatureChainTail = vk::PhysicalDeviceDeviceGeneratedCommandsFeaturesEXT;
 
-// 可选 feature 支持位：queryOptionalFeatures 探测后填（扩展可用 且 feature 置位）。
+// 可选 feature 支持位：queryOptionalFeatures 探测后填。optional_features = 扩展可用
+// 且 feature 置位；optional_extensions = 无 feature 结构的纯扩展位（仅探测扩展可用性）。
 export struct OptionalFeatureSupport {
     bool depthClipEnable = false;
     bool depthClipBase = false;
     bool robustBufferAccess2 = false;
     bool nullDescriptor = false;
+    bool calibratedTimestamps = false;
 };
 
 namespace {
@@ -57,6 +59,7 @@ export OptionalFeatureSupport queryOptionalFeatures(const vk::raii::PhysicalDevi
         auto f_nullDescriptor = device.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceRobustness2FeaturesKHR>();
         s.nullDescriptor = f_nullDescriptor.get<vk::PhysicalDeviceRobustness2FeaturesKHR>().nullDescriptor != 0;
     }
+    s.calibratedTimestamps = extensionAvailable(device, VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME);
     return s;
 }
 

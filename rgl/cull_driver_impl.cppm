@@ -12,6 +12,7 @@ import vkerror;
 import vk_device;
 import vk_resources;
 import gpu_cull;
+import gpu_profiler;  // Phase 9.2：cull CB 时间戳（cull 区域与主 CB gpu.frame 同槽配对）
 import vk_indirect_commands;
 import shader_registry;
 import frame_draw_list;
@@ -56,12 +57,14 @@ std::expected<void, Error> CullDriver::runFrame(uint32_t frameSlot, uint64_t fra
 	auto& ccmd = cullCommandBuffers[frameSlot];
 	ccmd.reset();
 	ccmd.begin(vk::CommandBufferBeginInfo{});
+	gpuProfilerCullBegin(ccmd);  // Phase 9.2：cull 段复位（本 CB 先执行）+ cull 起点时间戳
 	auto cullInput = list.cullInput;  // 值拷贝：sequenceCount 由本处填（render_list 不感知 GPU 表）
 	cullInput.sequenceCount = gpuCull->candidateCount();
 	// 序列 CPU 侧基值（execSlot + DrawArgs + meshCmd 基值；args 序 = candidate 序
 	// 契约校验在 writeSequenceStaging 内——size 不符即抛）
 	gpuCull->writeSequenceStaging(frameSlot, list.cullArgs);
 	gpuCull->recordCullPass(ccmd, cullInput, sceneStaging, frameSlot);
+	gpuProfilerEnd(ccmd);  // Phase 9.2：cull CB 终点时间戳（dispatch+barrier 完整窗口）
 	ccmd.end();
 
 	VkCommandBuffer ccb = *ccmd;

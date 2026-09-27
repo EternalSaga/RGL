@@ -86,6 +86,8 @@ export std::vector<const char*> getDeviceExtensions(const OptionalFeatureSupport
 		extensions.push_back(VK_EXT_DEPTH_CLIP_ENABLE_EXTENSION_NAME);  // 两者须同开）
 	if (opt.robustBufferAccess2 || opt.nullDescriptor)  // 与 vkdevice 条件链接同源
 		extensions.push_back(VK_KHR_ROBUSTNESS_2_EXTENSION_NAME);
+	if (opt.calibratedTimestamps)  // Phase 9.2 GPU 时间戳：设备↔CLOCK_MONOTONIC 校准
+		extensions.push_back(VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME);  //（无 feature 结构，纯扩展启用）
 	return extensions;
 }
 

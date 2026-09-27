@@ -47,6 +47,7 @@ struct ProfilerState {
 	uint32_t depth = 0;            // 嵌套深度游标（帧内 RAII 配对，开帧复位）
 	uint64_t prevBeginNs = 0;      // 上次 frameBegin 时刻（帧墙钟差基准）
 	bool dumped = false;           // dump 幂等（正常 + 异常路径都可能调）
+	uint64_t orphanDrops = 0;      // 回填时目标帧已挤出的丢弃（9.2 GPU 滞后 2 帧）
 	std::vector<FrameSlot> slots;  // size = window
 };
 
@@ -349,13 +350,32 @@ void profilerFrameBegin() {
 	st.depth = 0;
 }
 
+uint64_t profilerCurrentFrame() { return state().frame; }
+
+void profilerPushRecord(const ZoneRecord& rec) {
+	auto& st = state();
+	if (st.window == 0 || !st.inFrame)
+		return;  // 关/未开帧（GPU 轨同配置门控，正常不可达）：静默丢
+	FrameSlot& slot = st.slots[rec.frame % st.window];
+	if (slot.frame != rec.frame) {
+		++st.orphanDrops;  // 目标帧已挤出（窗口 < 归并滞后 +1）
+		return;
+	}
+	if (slot.zones.size() >= kMaxZonesPerFrame) {
+		++slot.drops;
+		return;
+	}
+	slot.zones.push_back(rec);
+}
+
 void profilerDump() {
 	auto& st = state();
 	if (st.window == 0 || st.slots.empty() || st.dumped)
 		return;
 	st.dumped = true;  // 幂等：renderSystem 正常路径 + catch 异常路径都可能调
 	const std::vector<FrameSlot*> ordered = collectOrdered(st);
-	const ReportData data = aggregate(ordered);
+	ReportData data = aggregate(ordered);
+	data.drops += st.orphanDrops;
 	logSummary(data, st.window);
 	writeAndLog(ordered, data);
 }

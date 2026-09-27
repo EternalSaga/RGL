@@ -25,6 +25,7 @@ import gpu_cull;
 import frame_capture;
 import cull_driver;
 import frame_session;
+import gpu_profiler;  // Phase 9.2：GPU 时间戳钩子（读回归并进 9.1 同报告 gpu 轨）
 import diagnostics;
 import vulkan_utils;
 import VmaRaii;
@@ -461,6 +462,13 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 		const uint32_t frameSlot = session.currentFrameSlot();
 		const uint32_t imageIndex = session.imageIndex();
 
+	// Phase 9.2：GPU 时间戳——读回本槽上一轮两段（beginFrame 已等完 fence → 必就绪）+
+	// 主段复位记入主 CB 头（cull 段复位在 cull CB，两段不相交）+ gpu.frame 跨度起点
+	//（覆盖 staging→capture 全录制段；error return 天残的未闭合区域由该槽下一次
+	// frameBegin 复位，不进报告）
+	gpuProfilerFrameBegin(cmd, frameSlot);
+	gpuProfilerBegin(cmd, "gpu.frame");
+
 	// ③.5 scene data 上传（Phase 5 批次 2；手术 5：块体提为 writeSceneStaging 私有方法）
 	if (auto r = writeSceneStaging(list, frameSlot); !r)
 		return std::unexpected(std::move(r).error());
@@ -501,6 +509,7 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 		depthView, offscreenRt, attachmentLayouts, cmd};
 
 	for (const auto& pass : renderGraph.passes) {
+		gpuProfilerBegin(cmd, pass.name);  // Phase 9.2：pass 时间戳（barrier 段计入）
 		slots.emitBarriers(pass.barriers);
 		// blit pass（批次 4，offscreen 图变体的 composite）：transferRead 源 → transferWrite
 		// 目标整幅拷贝（1:1 同尺寸同格式，LINEAR = 精确拷贝）；两端布局转换已由 pass.barriers
@@ -523,6 +532,7 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 				VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dstImage,
 				VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
 				reinterpret_cast<const VkImageBlit*>(&blitRegion), VK_FILTER_LINEAR);
+			gpuProfilerEnd(cmd);  // blit 无渲染段，pass 时间戳就地收口
 			continue;
 		}
 		beginPassRendering(cmd, slots, pass, extent);
@@ -536,6 +546,7 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 		// opaque GPU-culling / 普通段逐 draw）
 		executePassDraws(cmd, pass, list, frameSlot);
 		cmd.endRendering();
+		gpuProfilerEnd(cmd);  // Phase 9.2：pass 时间戳收口（render 段完整窗口）
 	}
 
 	// ⑪.5 帧内捕获（Phase 10 批次 0 手术 2：块体迁 FrameCapturer::record——后缓冲/
@@ -549,6 +560,8 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 	// 无 swapchain 写入的离屏图 = nullopt 跳过）
 	if (renderGraph.presentTransition)
 		slots.emitBarriers(std::span<const RgBarrierPlan>{&*renderGraph.presentTransition, 1});
+
+	gpuProfilerEnd(cmd);  // Phase 9.2：gpu.frame 收口（终点 eAllCommands = 全命令完成）
 
 	// 录制完毕
 	cmd.end();

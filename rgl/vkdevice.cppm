@@ -339,6 +339,8 @@ export class DeviceContext {
 				optionalFeatures.depthClipEnable);
 			logger->info("Device optional features: robustBufferAccess2={} nullDescriptor={}",
 				optionalFeatures.robustBufferAccess2, optionalFeatures.nullDescriptor);
+			logger->info("Device optional ext: calibratedTimestamps={} (Phase 9.2 GPU 时间戳)",
+				optionalFeatures.calibratedTimestamps);
 		}
 
 		return vk::raii::Device(physicalDevice, deviceCreateInfo);

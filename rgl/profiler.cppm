@@ -80,6 +80,20 @@ export Zone zone(std::string_view label = {},
 export void profilerFrameBegin();
 
 /**
+ * 当前逻辑帧号（profilerFrameBegin 计数；首帧前 = 0）。9.2 GPU 区域登记归属帧用
+ *（frameBegin 时点 = drawFrame 录制帧，非读回帧）。
+ */
+export uint64_t profilerCurrentFrame();
+
+/**
+ * 外部记录回填（同线程；9.2 GPU 读回 / 9.3 present 消费）：按 rec.frame 落环形槽。
+ * 槽已被挤出 = 计 orphan drops（GPU 归并滞后 2 帧 → 需 diagnostics.profiler ≥ 3，
+ * 构造期告警）；window = 0 / 未开帧 = 静默 no-op。
+ * @param rec 完整记录（kind 决定 trace 分轨；name/file 须活到 dump）
+ */
+export void profilerPushRecord(const ZoneRecord& rec);
+
+/**
  * 收口 dump（renderSystem 返回后调用一次）：写 profiles/trace_<epoch>.json（Perfetto
  * 主报告）+ profiles/stats_<epoch>.json（每 zone 聚合 + 帧时长分布）+ rllogger 摘要。
  * profiler = 0 时静默 no-op；写盘失败仅 warn——诊断路径不得改变程序结果。
