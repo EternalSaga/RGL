@@ -264,5 +264,8 @@ RADV STRIX_HALO（Radeon 8060S）+ KWin Wayland** 已按下列顺序激活并跑
 6. **§3.1/§八 "不加环境变量开关"的决策被 Phase 9 批 9.3a 修订**：新增
    `configs/runtime.lua` 的 `present_mode = "immediate"|"fifo"`（默认 immediate = 现状），
    理由是 9.4 的"帧率上限/present mode 结论"需要双模式对比证据。§八 的定性观测已被量化
-   取代：eImmediate 下 **85%（34190/40117）的 present 其像素 stage 时间恒 0**（= 被合成器
-   丢弃），FIFO 下仅 4/10090。
+   取代（并经同日勘误）：单实例下 eImmediate 与 FIFO 的 `drop`（基准 stage 无时间戳）
+   **均为 0**——本机 CPU-bound（≈141 fps）低于 165 Hz 刷新率，不存在"满速渲被丢弃"；
+   先前记的"eImmediate 85% 丢弃 / FIFO p50 = 刷新周期"出自**并行双实例**的污染跑，
+   作废过程见 `docs/调试历史.md` "并行双实例污染测量"条目。A310 的 100% 占用现象仍成立，
+   但那是 GPU-bound 形态，不可外推到本机。

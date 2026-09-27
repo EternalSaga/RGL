@@ -176,7 +176,20 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
 
 > 只列**未解决**项。已解决问题（根因/误诊复盘）见 `docs/archive/issue_history.md`。
 
+- **Phase 9 性能基线与判定（2026-09-27 收口）**：本机 forward 1280×720 = **CPU-bound**
+  （profiler 判定行 `frame=7.10ms cpu.record=7.03ms gpu.frame=2.98ms`）→ ④c"cull 读回延后
+  一帧"**否决**、⑤"帧率上限"**当前不需要**（CPU 限速 ≈141 fps 低于 165 Hz，两 present 模式
+  `drop` 双零）；给 Phase 10 的硬基线 = **GPU 侧余量 ≈3.1 ms/帧，CPU 侧无余量**。未收口：
+  `drawFrame` 内 ~93% CPU 时间无子 zone（可选批 9.5 补插桩）、跨机 NVIDIA/Intel 复测。
+  全文 = `docs/phase9_plan.md` §10；present_timing 本机形态限制（只 advertise stage-local 域、
+  跨 stage 历元不一致）= `docs/调试历史.md` 2026-09-27 条目。
+- **窗口测量纪律（同日教训）**：帧率/present timing 类测量**必须单实例串行**——起后台跑后，
+  在下一次起跑前须确认前一进程已退出（`pgrep` + 日志终值行双检）。并行两实例会互相遮挡
+  合成，把 stage 可得性与帧率双双扭曲（本项目曾据此得出"85% 白渲"的错误结论并已勘误，
+  见 `docs/调试历史.md` "并行双实例污染测量"）。用户关窗 = 该次长跑作废，不得只取关窗前片段。
 - `computeCommandPool`/`transferCommandPool`/`computeQueue`/`transferQueue` 已创建但保留给未来使用
+- **Phase 9 profiler 未收口项**：`drawFrame` 内 ~93% CPU 时间无子 zone（提帧率的下一步 =
+  补子 zone，纯插桩，可选批 9.5）；present_timing 跨机（NVIDIA / Intel anv）复测未做
 - **VMA + zero-init 冲突**：VMA 对 BDA buffer 自动加内部 DEVICE_ADDRESS flags，与用户 ZERO_INITIALIZE
   pNext 必撞——该扩展已回退，真实需求走原生 `vkAllocateMemory` 绕 VMA（`docs/vulkan_extensions_2025_调研.md` §十二/§13.1）
 - **Phase 5 光照/透明近似**：MASK alphaTest 未实现；世界法线 mat3 直乘（假定均匀缩放）；透明排序

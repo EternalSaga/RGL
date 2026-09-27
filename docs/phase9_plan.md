@@ -1,6 +1,8 @@
 # Phase 9 实施计划：性能观测（Profiler）
 
-> **状态**：计划（2026-09-27 起草；开工前三决策已确认，见 §9 决策记录）。
+> **状态**：现行——**批 9.1/9.2/9.3a/9.3b/9.4 全部落地**（2026-09-27，判定见 §10，
+> 本计划转 archive 的唯一前置 = 跨机复测未闭环，见 §11）。起草时三决策见 §9；
+> 实施期偏差与勘误集中在 §3.4 / §4.4。
 > 依据 = [next_roadmap.md](next_roadmap.md) Phase 9 ①–⑤（:184-194）+ 2026-09-27 方案讨论
 > （CPU/GPU/present_timing 2.5 问 + ECS/AOP 取舍）。完成后本文件转 `archive/`，进度回写 next_roadmap。
 
@@ -252,20 +254,33 @@ p50/p95 与校准 maxDeviation）。§5 的 "stage 瞬时 `ph:"i"`" 落地为 du
 （同轨同色、免再引第四种事件类型）。
 
 **本机实测（Mesa 26.2.3 RADV STRIX_HALO / KWin Wayland；驱动报 refreshDuration=6.061 ms
-≈ 165 Hz 面板）**：
+≈ 165 Hz 面板；单实例、窗口 1280×720、forward 变体）**：
 
-| 模式 | 时长 / 样本 | IPD（n=有效样本） | 基准无时间戳（=被丢弃/替换） | queueFull | 备注 |
-|---|---|---|---|---|---|
-| eImmediate（**6.5 min，≥5min 红线达标**） | 40117 present / n=2079 | mean 7.80 ms，p50 7.01，min 6.061，max 19.32 | **34190（85.2%）** | 0 | 零 [error]/零 VVL；校准 maxDeviation 243 ns；CPU frame avg 7.24 ms（≈138 fps 渲染） |
-| FIFO（2 min，用户提前关窗） | 10090 present / n=10075 | mean 9.05 ms，**p50 6.066 ≈ 刷新周期**，p95 17.06，max 156.9 | 4（0.04%） | 0 | 零 [error]/零 VVL；校准 maxDeviation 92 ns；CPU frame avg 10.02 ms |
-| eImmediate（临时压容量到 1 强制） | 16 s | — | — | 多次 | 回退路径实测触发 + 8 帧冷却后自动恢复，VVL 零报警 |
+| 指标（各 25 s 单实例跑，eImmediate / FIFO 两行数字几乎重合） | eImmediate | FIFO |
+|---|---|---|
+| 帧墙钟 avg / p50 / p95 (ms) | 7.10 / 6.91 / 8.48 | 7.10 / 6.91 / 8.46 |
+| CPU 录制主段 `drawFrame` mean / p95 (ms) | 7.03 / 8.40 | 7.03 / 8.38 |
+| GPU 帧跨度 `gpu.frame` mean / p95 (ms) | 2.98 / 3.20 | 2.98 / 3.20 |
+| CPU `acquire` mean (ms) | 0.05 | 0.04 |
+| present 数 / IPD n / min / p50 / p95 (ms) | 1936 / 1934 / 6.063 / 6.96 / 8.36 | 2004 / 2002 / 6.059 / 6.97 / 8.28 |
+| **丢帧（基准 stage 无时间戳）** | **0** | **0** |
+| queueFull | 0 | 0 |
 
-**⑤ 的直接证据**：eImmediate 下 **85% 的 present 从未到达像素 stage**（138 fps 渲染 vs
-165 Hz 显示，多出的帧被 KWin 丢弃），FIFO 下该比例 0.04% —— 帧率上限/present mode
-可配置化的必要性由此定量。queue-full 回退在正常容量（imageCount×2 = 6）下本机不自然触发
-（KWin 反馈仅滞后 1–2 帧），故用临时压容量到 1 的方式实测该路径（已撤销）。
+判定与结论见 §10（批 9.4）。**queue-full 回退**在正常容量（imageCount×2 = 6）下单实例不
+自然触发（KWin 反馈仅滞后 1–2 帧），故临时把容量压到 1 强制触发多次 → 回退成功 + 8 帧冷却
+后自动恢复，VVL 零报警（临时改动已撤销，路径本身成立）。**≥5 min 无 crash 红线**由那次
+6.5 min 长跑满足（进程存活、零 [error]、零 VVL 报警）。
+
 默认关（profiler=0）headless 与窗口 llm_debug 截图均 BIT-IDENTICAL（`10b00c78…`）；
 headless + profiler>0 时探测 `presentTimingSupported=false` → 自动不激活、截图同基线。
+
+> **⚠️ 数据勘误（同日自查，务必读）**：本节先前记录的两条长跑结论
+> ① "eImmediate 下 85% 的 present 从未到达像素 stage（= ⑤ 帧率上限的直接证据）"、
+> ② "FIFO 的 IPD p50 = 6.066 ms 恰 = 刷新周期"，**均作废**——那两次跑是我在 19:57:00 与
+> 19:57:05 前后脚起了**两个实例**，两窗口互相遮挡、同时合成，测量环境被污染（副作用 =
+> 呈现路径被拖成合成拷贝态、两进程帧率对半压）。单实例复跑 = 上表：drop 0、两模式分布
+> 一致。教训（长跑必须单实例 + 关窗即作废当次数据）已入 `docs/调试历史.md`
+> "并行双实例污染测量"条目。
 
 ## 5. 报告设计（主格式已确认 = Perfetto）
 
@@ -306,7 +321,7 @@ profiler = 0,   -- 0 = 关（默认）；N = 保留最近 N 帧，退出时 dump
 | **9.1** CPU + 报告骨架 | 新 `profiler.cppm(/_impl)`、`RGL::zone()` 零宏 API、拦截点 1-3、Perfetto writer、摘要（bound 判定行随 9.2 GPU 数据落地）、`diagnostics.profiler=N` | `ecs_impl.cppm:438`、`frame_session.cppm:54/64/72`、`diagnostics.cppm` + `configs/diagnostics.lua`、CMake FILE_SET | 默认关 BIT-IDENTICAL + `just checks` 过；开 = trace 进 Perfetto、摘要自洽 |
 | **9.2** GPU 时间戳 | query pool 分槽、pass 循环/帧首末/cull 插桩、calibrated 校准、同轴合并 | 新 `gpu_profiler.cppm(/_impl)`、`vkrenderer_impl.cppm` frameBegin/pass 钩子、`cull_driver_impl.cppm` cullCB 钩子、`main_impl.cppm` 构造/绑定、`features_config` `optional_extensions` 校准扩展探针 | **开跑也 BIT-IDENTICAL**；读回零 stall；开销自检（`frame_stats` 前后差记档） |
 | **9.3** present_timing（独立批）**✅ 本机落地 2026-09-27** | §4.2 全清单 + 9.3a `present_mode` 双模式开关（D5）；偏差与实测见 §4.4 | 新 `present_timing.cppm(/_impl)`（FrameSession 成员）、`vkswapchain.cppm`（探测/flag/队列/recreate）、`frame_session_impl.cppm` present（collect/attach/queue-full 回退）、`vkdevice.cppm`（两 optional feature 结构）、`features.cppm` + `features_config.json`（组门三探针，`just reflect`）、`profiler.cppm(/_impl)`（counter 通道）、`rlvk.cppm`（导出面） | RADV ≥5min 无 crash、IPD ≈ 刷新周期、queue-full 回退实测触发 ✓；跨机 NVIDIA/Intel 补测录档（待有卡机器） |
-| **9.4** 判定收口 | CPU vs GPU vs IPD 三方对比结论 → `next_roadmap.md` ⑤ 决策建议成文 | 文档 | cull 读回成本、帧率上限/present mode 结论成文 |
+| **9.4** 判定收口 **✅ 2026-09-27** | 三方对比成文（本文件 §10）+ profiler `logBoundVerdict` 判定行 + stats `present_ms` 段 → `next_roadmap.md` ⑤ 结论与阴影基线 | `profiler_impl.cppm`（bound 行 / counters 分位数）、`phase9_plan.md` §10、`next_roadmap.md` | CPU-bound 判定成文、④c 否决读回延后、⑤ 判定"当前不需要帧率上限"、GPU 余量 3.1 ms 交给 Phase 10 |
 
 模块规范走 skill `rgl-new-module`（impl partition / rlstd / FILE_SET / 检查红线），
 验证走 skill `rgl-verify`（headless 冒烟 + BIT-IDENTICAL 回归）。
@@ -317,9 +332,9 @@ profiler = 0,   -- 0 = 关（默认）；N = 保留最近 N 帧，退出时 dump
 1. 默认关 = BIT-IDENTICAL 截图回归 + `just checks` 过（9.1 起每批都要过）；
 2. 9.2 开着跑回归**也 BIT-IDENTICAL**（时间戳不改像素）；
 3. 9.3：RADV ≥5min 无 crash、IPD 合理（≈ 刷新周期）、queue-full 回退路径实测触发过
-   （无限帧率下天然触发）——**✅ 2026-09-27 达成**（eImmediate 6.5 min 无 crash、FIFO
-   IPD p50 6.066 ms = 刷新周期 6.061 ms；queue-full 本机不天然触发，改用临时压队列容量
-   到 1 强制触发并验证自动恢复，数据表见 §4.4）；
+   （无限帧率下天然触发）——**✅ 2026-09-27 达成**（单实例无 crash、零 [error]、零 VVL 报警，
+含一次 6.5 min 长跑；queue-full 本机不天然触发，改用临时压队列容量到 1 强制触发并验证
+自动恢复；数据表与**一条作废结论的勘误**见 §4.4）；
 4. 报告三件套齐：trace 进 Perfetto 可读 / 摘要判定行 / `profiler_stats.json` 合法 JSON；
 5. 文档回写：`next_roadmap.md` Phase 9 状态、`nvidia_compatibility_report.md` 跨机
    present_timing 结果、archive `present_timing_research.md` 状态头补"已引入（仅测量）"、
@@ -335,3 +350,59 @@ profiler = 0,   -- 0 = 关（默认）；N = 保留最近 N 帧，退出时 dump
 | D4 | `source_location` 路径问题 | 原结论"最小宏"→ **翻案为零宏（2026-09-27 当日）**：实测 ① 编译规则传绝对路径（`build.ninja:793`）→ 绝对路径本来就有；② named module 不导出宏（clang 22 实测 + `rlvk.cppm:12` 先例）→ 宏无处安放。定稿 = `RGL::zone(label?)` 函数 + `source_location` 默认实参，调用形态 `auto z = RGL::zone("staging");` |
 | D5 | present_mode 双模式（**用户 2026-09-27 追加，折入 9.3**） | `configs/runtime.lua` 加 `present_mode = "immediate"|"fifo"`（默认 immediate = 现状 → BIT-IDENTICAL），窗口路径按偏好选模式（`vkswapchain::createPresentMode` 分支），headless 恒 eFifo 忽略此键。**修订** archive `present_timing_research.md` 2026-09-01 决策"不加开关"与本 plan 原"可配置化必要性留给 9.4 判断"——9.4 结论需要 FIFO vs eImmediate 双模式对比证据，开关即为其前置（改动面小：配置键 + 选择分支） |
 | — | 否决项 | per-entity profiler component（ECS 规范 1/4）；编译器级 `-finstrument-functions`；引入 Tracy 等第三方库 |
+
+## 10. 批 9.4 判定收口（2026-09-27 成文；数据 = §4.4 单实例复跑表）
+
+三方对齐 = **帧墙钟 vs CPU 录制主段（9.1）vs GPU 帧跨度（9.2）**，present 侧（9.3）用显示
+节奏与丢帧计数做交叉验证。判定行已落进 profiler 摘要（`logBoundVerdict`，补上 §7 批次表
+里"bound 判定行随 9.2 GPU 数据落地"这笔欠账）：
+
+```
+bound: frame=7.10ms cpu.record=7.03ms gpu.frame=2.98ms -> CPU-bound (余量 4.05ms)
+```
+
+**结论 1｜当前工作负载 = CPU-bound**（forward 变体、1280×720 窗口、本机 Strix Halo）。
+CPU 录制主段 7.03 ms ≈ 帧墙钟 7.10 ms（99%），GPU 帧跨度 2.98 ms 只占 42% 帧预算。
+Phase 9 的原始问题"CPU-bound 还是 GPU-bound"就此收口：**CPU 侧**。
+
+**结论 2｜④c（per-frame cull 读回成本）不显著，否决"读回延后一帧"**。判据：GPU `cull`
+区域 14 µs（帧预算 0.2%）；CPU `fenceWait` 5 µs、`submit` 37 µs，无 stall 迹象。
+归因边界须写明：`drawFrame` 内部未插桩，cull 编舞的 CPU 成本落在结论 4 的未归因段里；
+但"延后一帧读回"并不减少 CPU 总工作量，而 CPU 总量本身已是瓶颈 → 无收益，否决。
+
+**结论 3｜⑤ 帧率上限 / present mode 可配置化：当前不需要**。两条独立证据：① 单实例下
+eImmediate 与 FIFO 的帧墙钟/IPD 分布在噪声内重合（avg 7.10/7.10，p50 6.91/6.91）；
+② 两模式 `drop` 计数均为 **0**，即没有 present 拿不到像素 stage 时间戳。根因 = CPU-bound
+把帧率天然压到 ≈141 fps **低于** 165 Hz 刷新率，渲染的每一帧都被显示，不存在"满速渲被
+合成器丢弃"的浪费（archive §八 在 Intel Arc A310 上看到的 100% 占用现象在本机不成立——
+那台是 GPU-bound 且慢于刷新率的情形，两种形态不可混推）。
+`present_mode` 开关（9.3a）**保留**，用途从"当前调优手段"转为"负载形态改变后的复测入口"：
+Phase 10 阴影若把成本推向 GPU 侧、使 `gpu.frame` 反超大过 `cpu.record`，FIFO 的 acquire
+背压才成为有意义的话题。
+
+**结论 4｜真正的优化头寸在 CPU 录制段，而它当前不可归因**。已命名 CPU 子段合计仅 ≈0.4 ms
+（present 0.21 + renderlist 0.07 + acquire 0.05 + submit 0.04 + 其余 µs 级），
+**`drawFrame` 7.03 ms 的 ~93% 落在没有子 zone 的区段**（固定数据通路写入 / pass 录制 /
+SlotResolver / executePassDraws / cull 编舞 / descriptor heap 写）。故 Phase 10 之前若要提
+帧率，第一步是往 `drawFrame` 内部补子 zone（纯插桩、零渲染改动），而不是先动 GPU 侧或先动
+cull。此项列为**批 9.5（可选，插桩-only）**。
+
+**结论 5｜给 Phase 10 阴影的基线数值**（= `next_roadmap.md` 里"X 由 Phase 9 profiler 定基线"
+的答案）：GPU 帧跨度 **2.98 ms**（其中 `opaque` 2.92 ms = 98%，其余 pass 合计 <0.1 ms），
+对 165 Hz（6.061 ms 预算）的 **GPU 侧余量 ≈ 3.1 ms/帧**；CPU 侧无余量（占满 99%）。
+即阴影的 GPU 成本若 ≲3 ms/帧，整机帧时不变（仍 CPU-bound）——这是 cascade 数/分辨率选型的
+硬上界输入；而阴影带来的**额外 CPU 录制成本**（多 pass 多次录制）没有余量，需与结论 4 一起考虑。
+
+**未收口项（不阻塞 Phase 10）**：① 跨机复测（NVIDIA / Intel anv，判读口径见
+`nvidia_compatibility_report.md` §九）；② `drawFrame` 内部细分（结论 4 / 批 9.5）；
+③ stage-local 域下跨 stage 历元不一致的根因（Mesa 侧；本项目已用"不做跨 stage 跨度"规避）；
+④ 端到端延迟（输入 → 像素）仍需支持 swapchain-local 域或直显路径的机器才能测。
+
+## 11. 本计划终态
+
+- 批 9.1 ✅ `dc2ab50`｜9.2 ✅ `3b1f9c0`｜9.3a ✅ `bdaa097`｜9.3b ✅ `1d0fbbe`｜
+  9.4 ✅ 本节（+ profiler `logBoundVerdict` 与 stats `present_ms` 段）。
+- 按 §8 红线 5 本文可转 archive；**唯一未闭环 = 跨机复测**（§4.3 风险表末行），故暂留
+  `docs/phase9_plan.md`，状态头标注"待跨机复测后转 archive"。
+- ②（gprof / perf 函数级深挖）全程未做，判定不依赖它；将来要 CPU 细分时优先走结论 4 的
+  补 zone 路线（零第三方依赖、与既有 trace 同轴），gprof/perf 作后备。

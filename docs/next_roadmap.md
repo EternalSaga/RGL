@@ -184,22 +184,30 @@ per-light 颜色、距离衰减）headless 零 VVL error；forward 只读 `light
 Phase 9：性能观测（profiler）——先回答"CPU-bound 还是 GPU-bound"，再谈优化
   **进度（2026-09-27）**：批 9.1（① CPU zone profiler，零宏 `RGL::zone()`）/ 9.2（③ GPU
   时间戳 + 校准同轴）/ 9.3（④ `VK_EXT_present_timing` 测量通路 + 9.3a `present_mode`
-  双模式开关）均已落地，默认关全部 BIT-IDENTICAL；②（gprof/perf）未做（判定不依赖）。
-  ⑤ 判定收口 = 批 9.4（待做，输入已备齐）。实施与实测记录 = `docs/phase9_plan.md`
-  §3.4/§4.4/§7；跨驱动状态 = `docs/nvidia_compatibility_report.md` §九。
-  关键实测（本机 RADV Strix Halo + KWin，refresh 6.061 ms）：FIFO IPD p50 = 6.066 ms
-  ≈ 刷新周期、丢帧 0.04%；**eImmediate 下 85% 的 present 从未到达像素 stage**
-  （满速渲被丢弃的帧，直接给出"帧率上限"证据）。
+  双模式开关）/ 9.4（⑤ 判定收口）全部落地，默认关全部 BIT-IDENTICAL；②（gprof/perf）
+  未做（判定不依赖）。实施与实测记录 = `docs/phase9_plan.md` §3.4/§4.4/§10；
+  跨驱动状态 = `docs/nvidia_compatibility_report.md` §九。
+  **⑤ 判定结论（本机 forward 1280×720，RADV Strix Halo + KWin，165 Hz）**：
+  ① **CPU-bound** —— profiler 判定行 `frame=7.10ms cpu.record=7.03ms gpu.frame=2.98ms
+  -> CPU-bound`，GPU 只占 42% 帧预算；② ④c **否决**"cull 读回延后一帧"（GPU cull 14µs、
+  fenceWait 5µs，无 stall；且延后不减 CPU 总量）；③ ⑤ **当前不需要帧率上限** —— CPU 把
+  帧率压到 ≈141 fps 低于 165 Hz，eImmediate 与 FIFO 分布重合且 `drop` 双零，
+  不存在"满速渲被丢弃"（archive §八 的 A310 现象不可外推到本机）；`present_mode` 开关保留
+  作复测入口；④ **头寸在未归因的 CPU 录制段**（`drawFrame` 7.03ms 中 ~93% 无子 zone）
+  → 列为可选批 9.5（纯插桩）；⑤ **给 Phase 10 的基线：GPU 侧余量 ≈ 3.1 ms/帧**
+  （2.98ms 已用 / 6.061ms 预算；CPU 侧无余量），阴影 GPU 成本 ≲3ms 则整机帧时不变。
   ① CPU 帧相 profiler（内建）：每帧逐相 chrono（ECS/render_list/命令录制/④c cull
      waitForFences/present acquire）+ rllogger 直方图——关键 = 分清 CPU 干活 vs 等 GPU stall
   ② 函数级深挖：gprof（clang `-pg` 兼容，同一套 mcount 插桩；勿开 LTO）或 perf + flamegraph
   ③ GPU per-pass 时间戳：`vkCmdWriteTimestamp`（sync2 stage）插渲染图 pass 边界 →
      per-pass GPU ms（GPU 写入，与 CPU 快慢无关；图已有 pass 循环，零新架构）
   ④ VK_EXT_present_timing 测量模式（archive/present_timing_research.md §6 步骤 1）：IPD/
-     丢帧/刷新属性/eImmediate 延迟链；RADV 运行时支持待实测（Arc A310 100% 占用问题
-     在 Strix Halo 大概率同样存在，无限帧 + eImmediate = 满速渲被丢弃的帧）
-  ⑤ 判定 + 决策输入：CPU 帧时 vs GPU 首末时间戳 vs IPD 三方对比；④c per-frame cull
-     读回成本（若显著 → 读回延后一帧）；帧率上限/present mode 可配置化的必要性
+     丢帧/刷新属性/eImmediate 延迟链 —— **✅ 批 9.3 落地，RADV 运行时支持实测确认**
+     （激活 / queue-full 回退 / 校准全跑通、VVL 零报警）；NVIDIA / Intel anv 待跨机复测，
+     判读口径 = `docs/nvidia_compatibility_report.md` §九
+  ⑤ 判定 + 决策输入：CPU 帧时 vs GPU 帧跨度 vs IPD 三方对比 —— **✅ 批 9.4 成文
+     （`docs/phase9_plan.md` §10）**：本机 CPU-bound；④c"读回延后一帧"**否决**；
+     帧率上限**当前不需要**；下一步头寸 = `drawFrame` 内部 CPU 细分（可选批 9.5）
     ↓
 Phase 10：阴影（大特性，一口气；风险分层 = CSM 承诺交付 + HFTS 带退出条件的 spike）
   **批次 0 已完成（2026-09-10，Renderer 拆分，BIT-IDENTICAL）**：drawFrame 577→291 行，
@@ -216,7 +224,10 @@ Phase 10：阴影（大特性，一口气；风险分层 = CSM 承诺交付 + HF
   ③ HFTS/IzB（Hybrid Frustum-Traced Shadows）【spike，带退出条件，非承诺项】：
      Irregular Z-Buffering（全视锥 Z-buffer + 光线步进，无 texel 走样）远场/场景遮挡 +
      近场 CSM/PCSS 混合。**验收**：Bistro 场景光线步进软阴影视觉正确 + 成本 ≤X ms
-     （X 由 Phase 9 profiler 定基线）；**达不到即收手，CSM+PCSS 为最终交付**（The
+     （**X = 3 ms**，Phase 9 批 9.4 定的 GPU 侧余量基线：本机 forward 1280×720 的
+     `gpu.frame` 2.98 ms / 165 Hz 预算 6.06 ms，超出即掉帧——注意本机现状是 **CPU-bound**，
+     CPU 录制侧无余量，详见 `docs/phase9_plan.md` §10）；
+     **达不到即收手，CSM+PCSS 为最终交付**（The
      Division 自身近场也是 shadow map，HFTS 只负责远场）。优先走 FTIZB 路线
      （光栅管线 + 硬件保守光栅 + early-z，非重 compute）
      参考链（公开，勿逆向游戏——系统逻辑在 CPU 侧，shader 里没有）：

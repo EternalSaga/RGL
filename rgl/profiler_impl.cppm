@@ -137,6 +137,7 @@ struct CounterAgg {
 	uint64_t min = 0;
 	uint64_t max = 0;
 	uint64_t last = 0;
+	std::vector<uint64_t> values;  // 全部样本（aggregate 末尾排序，供分位数；批 9.4 present_ms）
 };
 
 /** 聚合结果（zones 按 total 降序 + 帧时长升序分布 + 计数聚合 + 丢弃/帧数）。 */
@@ -155,13 +156,14 @@ void accumulateCounters(const FrameSlot& slot, ReportData& out,
 		auto [it, inserted] = counterIndex.try_emplace(std::string(c.name), out.counters.size());
 		if (inserted)
 			out.counters.push_back(CounterAgg{std::string(c.name), 0, 0,
-				std::numeric_limits<uint64_t>::max(), 0, 0});
+				std::numeric_limits<uint64_t>::max(), 0, 0, {}});
 		CounterAgg& agg = out.counters[it->second];
 		++agg.count;
 		agg.sum += c.value;
 		agg.min = std::min(agg.min, c.value);
 		agg.max = std::max(agg.max, c.value);
 		agg.last = c.value;
+		agg.values.push_back(c.value);
 	}
 }
 
@@ -187,9 +189,11 @@ ReportData aggregate(const std::vector<FrameSlot*>& ordered) {
 		}
 		accumulateCounters(*slot, out, counterIndex);
 	}
-	for (CounterAgg& a : out.counters)
+	for (CounterAgg& a : out.counters) {
 		if (a.count == 0)
 			a.min = 0;
+		std::ranges::sort(a.values);  // 分位数用（批 9.4 present_ms）
+	}
 	for (ZoneAgg& a : out.zones)
 		std::ranges::sort(a.durs);
 	std::ranges::sort(out.frameDursNs);
@@ -242,6 +246,35 @@ bool writeTrace(const std::vector<FrameSlot*>& ordered, const std::filesystem::p
 	return writeTextFile(path, out);
 }
 
+/** 按名取计数聚合（present_ms 段消费；缺位 = nullptr，调用方整段省略不写假数）。 */
+const CounterAgg* findCounter(const ReportData& data, std::string_view name) {
+	for (const CounterAgg& c : data.counters)
+		if (c.name == name)
+			return &c;
+	return nullptr;
+}
+
+/**
+ * stats JSON 的 present 段（批 9.4 判定收口的机器可读面）：IPD 分位数（窗口内样本）+
+ * 丢帧终值（present_timing 推累计计数，last 即终值）+ 刷新周期 ns。counter 名缺位
+ *（未激活 / 窗口内无样本）时整段省略，不写假数。
+ */
+void appendPresentSection(std::string& out, const ReportData& data) {
+	const CounterAgg* ipd = findCounter(data, "present.ipd");
+	if (!ipd)
+		return;
+	const CounterAgg* drop = findCounter(data, "present.drop");
+	const CounterAgg* refresh = findCounter(data, "present.refresh_ns");
+	const double count = static_cast<double>(ipd->count ? ipd->count : 1);
+	out += fmt::format(
+		R"(,"present_ms":{{"ipd_count":{},"ipd_min_ms":{:.3f},"ipd_avg_ms":{:.3f},"ipd_p50_ms":{:.3f},"ipd_p95_ms":{:.3f},"ipd_max_ms":{:.3f},"drop_total":{},"refresh_ns":{}}})",
+		ipd->count, toMs(percentile(ipd->values, 0.0)),
+		static_cast<double>(ipd->sum) / count / 1e6,
+		toMs(percentile(ipd->values, 0.50)), toMs(percentile(ipd->values, 0.95)),
+		toMs(percentile(ipd->values, 1.0)), drop ? drop->last : 0ull,
+		refresh ? refresh->last : 0ull);
+}
+
 /** 写聚合 stats JSON（每 zone count/total/mean/p50/p95/max + 帧时长分布）。 @return 是否成功。 */
 bool writeStats(const ReportData& data, const std::filesystem::path& path) {
 	std::string out;
@@ -267,6 +300,8 @@ bool writeStats(const ReportData& data, const std::filesystem::path& path) {
 		data.frameDursNs.size(), meanMs(data.frameDursNs),
 		toMs(percentile(data.frameDursNs, 0.50)), toMs(percentile(data.frameDursNs, 0.95)),
 		toMs(data.frameDursNs.empty() ? 0 : data.frameDursNs.back()));
+	// present 段（IPD 分位数 / 丢帧终值 / 刷新周期），未激活或无样本时整段省略
+	appendPresentSection(out, data);
 	// 计数聚合（批 9.3 present_* 等；值原样 ns/次数，不做单位换算——消费方按 name 定）
 	out += R"(,"counters":[)";
 	first = true;
@@ -281,6 +316,49 @@ bool writeStats(const ReportData& data, const std::filesystem::path& path) {
 	}
 	out += "]}";
 	return writeTextFile(path, out);
+}
+
+/**
+ * 判定行（批 9.4 收口，phase9_plan §2"bound 判定行"）：三方对齐 = 帧墙钟 vs CPU 录制主段
+ *（drawFrame zone，9.1）vs GPU 帧跨度（gpu.frame zone，9.2）。取 CPU/GPU 主段较大者为
+ * bound 侧并给余量；两把尺子任一缺位（profiler 开但 9.2 三重门未过 = 无 gpu.frame，或
+ * 录制段未插桩）时降级为"只报已有数值、不下 bound 结论"——判定必须基于实测而非猜测。
+ */
+void logBoundVerdict(const ReportData& data) {
+	const auto findAgg = [&data](std::string_view name, ZoneKind kind) -> const ZoneAgg* {
+		for (const ZoneAgg& a : data.zones)
+			if (a.kind == kind && a.name == name)
+				return &a;
+		return nullptr;
+	};
+	const ZoneAgg* cpu = findAgg("drawFrame", ZoneKind::cpu);
+	const ZoneAgg* gpu = findAgg("gpu.frame", ZoneKind::gpu);
+	if (data.frameDursNs.empty() || (!cpu && !gpu))
+		return;  // 无帧墙钟或无任一把尺子：不猜
+	auto* logger = RLLogger::getInstance();
+	if (!logger)
+		return;
+	const double frameMs = meanMs(data.frameDursNs);
+	const double cpuMs = cpu ? meanMs(cpu->durs) : 0.0;
+	const double gpuMs = gpu ? meanMs(gpu->durs) : 0.0;
+	const char* verdict = "indeterminate";
+	double slackMs = 0.0;
+	if (cpu && gpu) {
+		if (cpuMs >= gpuMs) {
+			verdict = "CPU-bound";
+			slackMs = cpuMs - gpuMs;
+		} else {
+			verdict = "GPU-bound";
+			slackMs = gpuMs - cpuMs;
+		}
+	}
+	logger->info("  bound: frame={:.2f}ms cpu.record={:.2f}ms gpu.frame={:.2f}ms -> {} (余量 {:.2f}ms)",
+		frameMs, cpuMs, gpuMs, verdict, slackMs);
+	// 帧墙钟远大于两侧主段（用 p50 抗首帧资产加载 outlier）= 阻塞在同步点而非算力不足
+	const double frameP50 = toMs(percentile(data.frameDursNs, 0.50));
+	if (frameP50 > std::max(cpuMs, gpuMs) * 1.5)
+		logger->info("        注：帧墙钟 p50={:.2f}ms 远大于两侧主段 = 等待主导（vsync/acquire 背压），非算力瓶颈",
+			frameP50);
 }
 
 /** rllogger 摘要（帧节奏 + top zones 按 total 降序；不开 UI 也能读）。 */
@@ -310,6 +388,8 @@ void logSummary(const ReportData& data, uint32_t window) {
 			c.name, c.count, c.last, c.min, c.max,
 			c.count ? static_cast<double>(c.sum) / static_cast<double>(c.count) : 0.0);
 	}
+	// 批 9.4 判定行：CPU 录制主段 vs GPU 帧跨度 vs 帧墙钟（bound 结论随 GPU 数据到位才有意义）
+	logBoundVerdict(data);
 }
 
 /** 收集有效帧槽并按帧号升序（环形窗口物理无序，dump 侧排序一次）。 */
