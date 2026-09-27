@@ -5,6 +5,7 @@ export module render_list;
 
 import rlstd;
 import material_types_generated;  // Phase 4：统一 DrawArgs 超集（scalar 布局 100B，Phase 5 +objectIndex）
+import scene_forward_types_generated;  // 前向头 SceneLight + ObjectDraw（Phase 10 批 10.2a 单源化）
 import frame_draw_list;
 import vk_resources;
 import environment;  // Environment（irradianceSH，架构债务续账步骤 3）
@@ -39,7 +40,7 @@ export struct RenderListState {
 	std::vector<glm::mat4> mvps;
 	// Phase 7b+（NV DGC 规避）：per-objectSlot 材质/几何表（scene data 尾区上传，
 	// shader readObjectDraw 消费；DrawArgs 仅剩 objectIndex）
-	std::vector<ObjectDrawGpu> draws;
+	std::vector<ObjectDraw> draws;
 	// Phase 5.5 批次 4：天空盒 draw 的 push data（shader 不声明 push constants，
 	// 推默认零值 DrawArgs 占位——pushDataEXT 与 shader 声明无关，见 DrawCall 契约）
 	RGL::DrawArgs skyboxArgs{};

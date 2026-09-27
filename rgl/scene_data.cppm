@@ -80,12 +80,18 @@ static_assert(kSceneDataMvpTableOffset % 16 == 0, "MVP table must stay 16B align
 /** Phase 7b+（NV DGC 规避，续 MVP 表）：per-object 材质/几何表区（DrawArgs 去 mvp 后
  * 仍剩 baseColor/roughnessMetallic/totalTriangles/vertexOffset 是 per-object 数据，一并
  * 进 heap，DrawArgs 最终只留 objectIndex（4B push）——彻底绕开 NV DGC push 挂死）。
- * 基址 = MVP 表尾（262800 + 4096×64 = 524944，scene.slang 字面量同值）。stride 48
- *（ObjectDrawGpu，见 render_list.cppm；Phase 8 ③ 加 emissive 后 32→48）。 */
+ * 基址 = MVP 表尾（262800 + 4096×64 = 524944，scene.slang 字面量同值，下方 static_assert
+ * 钉死）。stride 48（`ObjectDraw`，scene_forward_types_generated 生成；Phase 8 ③ 加
+ * emissive 后 32→48）。 */
 export inline constexpr uint32_t kSceneDataDrawTableOffset =
 	kSceneDataMvpTableOffset + kSceneMatrixCapacity * kSceneMatrixStride;
 export inline constexpr uint32_t kSceneDrawStride = 48;
 static_assert(kSceneDataDrawTableOffset % 16 == 0, "draw table must stay 16B aligned");
+// Phase 10 批 10.2a：钉死 scene.slang readObjectDraw 的字面量基址/stride——容量常量若变
+// 而 shader 字面量未同步 = 此处编译报错（shader 侧无编译期反射通道，kTrianglesPerGroup 同纪律）
+static_assert(kSceneDataDrawTableOffset == 524944, "scene.slang readObjectDraw literal 524944 out of sync");
+static_assert(kSceneDrawStride == sizeof(ObjectDraw),
+	"scene.slang ObjectDraw (reflection-generated) stride out of sync with table stride");
 
 /** Phase 8 批次 ④a：漫反射辐照度 SH9 区（追加于材质表之后——既有各区基址逐字节不动 diff0）。
  * 9 × vec4 = 144B（.xyz=系数、.w 留白，满足 ByteAddressBuffer.Load4 16B 对齐前提；CPU env

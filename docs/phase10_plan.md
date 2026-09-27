@@ -185,7 +185,7 @@ profiler 面板读数复用现成 `profiler = 0`（不开 profiler 时面板显�
 | 批 | 内容 | 主要改动 | 验收 |
 |---|---|---|---|
 | **10.1** imgui 骨架 **✅ 2026-09-28** | vcpkg 引入、`imgui_layer` 模块、输入链绝对坐标 + WantCapture 门、帧末 UI 段（D6 位）、`imgui` 开关、面板骨架（profiler 读数 + 占位页） | vcpkg.json、新 `.cppm`、`ecs_impl.cppm` 事件、`vkrenderer_impl.cppm` 帧末段、`diagnostics.cppm` + `configs/diagnostics.lua`、CMake | 默认关 BIT-IDENTICAL + `checks --strict`；开 = 窗口面板显示、profiler 读数跳动、headless no-op |
-| **10.2a** `ObjectDraw` 单源化 **（前置）** | §3.1 五步：schema 登记 + 表基址常量 → `just reflect` → 删手写 `ObjectDrawGpu` → 字面量钉住 → 清注释残留 | `material_schema.lua`、`generated/*`（随提交）、`frame_draw_list.cppm`、消费方、`scene.slang`/`shader_registry.cppm` 注释 | **BIT-IDENTICAL** + `reflection_check` 过 + `checks --strict`（走 skill `rgl-shader-contract`） |
+| **10.2a** `ObjectDraw` 单源化 **✅ 2026-09-28** | §3.1 五步：schema 登记 + 表基址常量 → `just reflect` → 删手写 `ObjectDrawGpu` → 字面量钉住 → 清注释残留 | `scene_forward_schema.lua`（实际落点，见 10.2a 实施记录）、`generated/*`（随提交）、`frame_draw_list.cppm`、消费方、`scene.slang`/`shader_registry.cppm` 注释 | **BIT-IDENTICAL** + `reflection_check` 过 + `checks --strict`（走 skill `rgl-shader-contract`） |
 | **10.2b** 灯/曝光控件 | `param_registry` 模块 + 首批条目（§3.3 前两行）+ 灯/曝光控件接面板 | 新 `.cppm`、`render_list` 写入侧、`imgui_layer` 消费 | 默认关 diff0；开 = 拖动下一帧画面变化 |
 | **10.2c** 材质控件 | `AssetTable` setter + 材质条目（吃 10.2a 生成物）+ 共享实体数提示 | `asset_table.cppm`、`param_registry` | 同上 + 共享提示正确 |
 | **10.3** 配置热重载 | §5：`hot_reload` 模块 + 帧边界换入基建 + T1 清单；（T2 可选） | 新 `.cppm`、各 `loadXxxConfig` 调用点、CMake 注入源目录 | 默认关 diff0；开 = 改源 `configs/` 下一帧生效且 build 副本不被污染；缺源目录降级关 |
@@ -215,6 +215,29 @@ BIT-IDENTICAL 截图回归，基线 `10b00c78c4a2d644479bb56eb35ac796bae90ada643
   （blit→TransferDst→CAO overlay）barrier 分支 12s VVL 0 error。
 - **v1 已知限制**：swapchain recreate 若改 format/imageCount 需重启（本机 resize 不改这两项）；
   面板仅 dock 主窗，多视口不做。
+
+### 10.2a 实施记录（2026-09-28）
+
+- **schema 落点修正**：登记进 **`scene_forward_schema.lua`**（非计划原文的 material_schema——
+  ObjectDraw 是 scene.slang 模块级 struct，scene_forward 管线的 slang 输入正是 scene.slang，
+  C API queryStruct 可直接命中；material 管线只编 material.slang 看不到它）。
+- **shader 端一步到位**：`ObjectDraw` 字段**声明序改为内存序**（roughnessMetallic 移到
+  baseColor 前 → scalar layout 0/4/8/16/32 无 padding 恰等于原手工 buffer 布局），
+  `readObjectDraw` 从手写 Load4×3 + asuint 链改为 **`Load<ObjectDraw>` 整读**——shader 内部
+  布局知识也收敛为 struct 声明一处（原手写链与声明是双份知识，字段对调即静默错位）。
+- **工具侧**：`schema_loader.cppm` 的 vertexAttrSize/vertexAttrCppType 补 `uint`/`int`
+  标量映射（与 slang_reflect typeToCppType 标量名对齐；首个整型顶点属性先例）。
+- **C++ 侧**：手写 `ObjectDrawGpu` 删除 → 生成 `ObjectDraw`（逐字段 offsetof assert 随生成物）；
+  消费方 = frame_draw_list span / render_list 写链（`roughnessMetallic = {r, m}`）/
+  vkrenderer sizeof。`scene_data.cppm` 新增双钉：`kSceneDataDrawTableOffset == 524944`
+  （shader 字面量）+ `kSceneDrawStride == sizeof(ObjectDraw)`。
+- **顺手清注释残留**：`scene.slang:11-13` vkresources 过时指称改 scene_data.cppm +
+  draw 表 assert 强度描述更新。
+- **resize 语义微差留档**：旧 `ObjectDrawGpu` 有 NSDMI（baseColor 默认 1.0），生成类型
+  无 → `resize()` 零初始化。无影响 = 每 entity 的 objectSlot 在渲染系统写链中全字段覆写，
+  未写槽位无 reader（objectIndex 只来自存在的 entity）。
+- **验收全过**：`just reflect` 5 管线 PASS（ObjectDraw size=48 fields=5 交叉校验）；
+  forward 截图 = 基线 `10b00c78…`；deferred/offscreen 冒烟 0 error；`checks --strict` 0 警告。
 
 ## 10. 验收红线（汇总）
 

@@ -193,8 +193,8 @@ std::optional<PreWindow> prepareWindow(const StartupConfigs& configs) {
 /** push data 容量契约检查（超限抛 std::runtime_error）。 */
 void checkPushDataLimits(const DeviceContext& device) {
 	// push data 契约（Phase 5）：shader object + descriptor heap 模式无 pipeline layout →
-	// 无 VkPushConstantRange，per-draw push data（DrawArgs 100B，vkCmdPushDataEXT，
-	// vkrenderer.cppm drawFrame）受设备硬限约束（双驱动实测 256B）：
+	// 无 VkPushConstantRange，per-draw push data（DrawArgs 4B——Phase 7b+ 仅 objectIndex，
+	// vkCmdPushDataEXT，vkrenderer.cppm drawFrame）受设备硬限约束（双驱动实测 256B）：
 	// ① maxPushDataSize（descriptor heap 模式专属 limit，VUID-VkPushDataInfoEXT-offset-11243：
 	//    offset+size ≤ 本值）② maxPushConstantsSize（经典 VkPhysicalDeviceLimits，
 	//    descriptor set 模式上限）。超限 = 设备不支持，启动期报错优于运行时布局错配

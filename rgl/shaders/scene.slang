@@ -6,11 +6,12 @@
 // LightDataGpu——该类型已删）：
 //   · SceneLight（@0-48 头）真相源 = **本文件**——scene_forward 反射管线从本文件
 //     生成 scene_forward_types_generated.cppm（逐字段 offsetof static_assert 钉死），
-//     vkresources 的 kSceneDataEnvOffset 等派生自 sizeof(SceneLight) 并 static_assert
+//     scene_data.cppm 的 kSceneDataEnvOffset 等派生自 sizeof(SceneLight) 并 static_assert
 //     钉死各区偏移，shader 结构漂移 = C++ 编译失败；
 //   · 其余表区（@128 矩阵表 / @262272 灯数组 / @262800 MVP 表 / @524944 draw 表）
-//     字节字面量与 vkresources kSceneData* 手工一致（灯数组基址经 lights_schema 常量
-//     三方 static_assert 钉死；MVP/draw 表基址仅对齐 assert，改字面量须两端同步）。
+//     字节字面量与 scene_data.cppm kSceneData* 手工一致（灯数组基址经 lights_schema 常量
+//     三方 static_assert 钉死；draw 表自 Phase 10 批 10.2a 起 = 生成 ObjectDraw 布局
+//     static_assert + 基址 524944 钉死断言，MVP 表仍仅对齐 assert；改字面量须两端同步）。
 //   @0   direction vec3 | @12 eyePos vec3 | @24 color vec3（CPU 预乘 intensity）| @36 ambient vec3
 //        （两个 intensity 语义：光色在此 CPU 预乘成最终值；env intensity 是 @48 的裸标量、
 //          GPU 端乘——env 颜色在 GPU 侧无法预乘，调光两条路线各改各 config 的一个 intensity）
@@ -88,8 +89,14 @@ ObjectMatrix readObjectMvp(uint objectIndex)
 }
 
 // Phase 7b+（NV DGC 规避）：per-object 材质/几何表（DrawArgs 去 mvp 后剩余字段也进 heap，
-// push 仅留 objectIndex）。基址 @524944 = 128+4096×64+528+4096×64，stride 48，
-// vkresources kSceneDataDrawTableOffset / ObjectDrawGpu 同布局（字面量同步，无反射端）：
+// push 仅留 objectIndex）。基址 @524944 = 128+4096×64+528+4096×64，stride 48。
+// **Phase 10 批 10.2a 单源化**：本 struct 声明 = 表布局唯一真相源——字段声明序按
+// 内存序排（scalar layout 下 0/4/8/16/32 无 padding），readObjectDraw 直接
+// Load<ObjectDraw>（编译器管偏移，无手写 Load4 链）；C API 反射（scene_forward_schema
+// 登记）生成 C++ 同名 struct + 逐字段 offsetof static_assert（generated/
+// scene_forward_types_generated.cppm），手写 ObjectDrawGpu 已删。
+// 基址/stride 的 C++ 侧 = scene_data.cppm 由容量常量推导（static_assert 钉 524944）；
+// 本文件字面量与其手工一致（同 kTrianglesPerGroup 纪律）。
 //   @0  uint totalTriangles | uint vertexOffset | float roughness | float metallic
 //   @16 float4 baseColor
 //   @32 float4 emissive（Phase 8 ③：xyz=emissiveFactor；Phase 8 C1：w=MASK alphaCutoff，0 = 不测）
@@ -97,8 +104,8 @@ struct ObjectDraw
 {
     uint totalTriangles;
     uint vertexOffset;
+    float2 roughnessMetallic;  // x=roughness y=metallic（@8，声明序 = 内存序，勿与 baseColor 对调）
     float4 baseColor;
-    float2 roughnessMetallic;
     float4 emissive;  // Phase 8 ③：xyz=emissiveFactor（model_pbr_ibl.frag 叠加自发光）
 
     // Phase 8 C1：alpha-test cutout（MASK 材质 w=alphaCutoff>0；其余材质 w=0 = 恒不 discard，
@@ -111,15 +118,9 @@ struct ObjectDraw
 
 ObjectDraw readObjectDraw(uint objectIndex)
 {
-    uint base = 524944u + objectIndex * 48u;
-    float4 a = asfloat(sceneData.Load4(base));  // x=totalTri y=vertOff z=rough w=metal
-    ObjectDraw d;
-    d.totalTriangles = asuint(a.x);
-    d.vertexOffset = asuint(a.y);
-    d.roughnessMetallic = float2(a.z, a.w);
-    d.baseColor = asfloat(sceneData.Load4(base + 16u));
-    d.emissive = asfloat(sceneData.Load4(base + 32u));  // Phase 8 ③：@32 emissive（xyz=factor）
-    return d;
+    // 10.2a：Load<ObjectDraw> 整读（编译器按 scalar layout 定字段偏移 = 反射真值 =
+    // 生成的 C++ 布局）；此前手写 Load4 + asuint 链与 struct 声明是双份知识。
+    return sceneData.Load<ObjectDraw>(524944u + objectIndex * 48u);
 }
 
 float3 worldPos(ObjectMatrix m, float3 p)

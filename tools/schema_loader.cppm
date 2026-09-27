@@ -71,6 +71,9 @@ export inline uint32_t vertexAttrSize(const std::string& type) {
 	if (type == "ivec2") return 8;
 	if (type == "ivec3") return 12;
 	if (type == "ivec4") return 16;
+	// Phase 10 批 10.2a：整型标量属性（ObjectDraw.totalTriangles/vertexOffset）
+	if (type == "int") return 4;
+	if (type == "uint") return 4;
 	return 0;
 }
 
@@ -83,6 +86,9 @@ export inline const char* vertexAttrCppType(const std::string& type) {
 	if (type == "ivec2") return "glm::ivec2";
 	if (type == "ivec3") return "glm::ivec3";
 	if (type == "ivec4") return "glm::ivec4";
+	// Phase 10 批 10.2a：与 slang_reflect typeToCppType 的标量名对齐
+	if (type == "int") return "int32_t";
+	if (type == "uint") return "uint32_t";
 	return nullptr;
 }
 

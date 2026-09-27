@@ -21,13 +21,13 @@ namespace RGL {
  * 管线表一条（Phase 4 批次 2：从 vkrenderer.cppm 迁入，Vulkan 层零 entt）：
  * shader 风格名 + 其 RenderPipeline（shader object + 烘焙的 descriptor heap binding mapping）
  * + 显式 push constant 元数据（L5 解决：argsSize/pushDataSet 替代旧 "set 0 被两种 struct
- * 隐式共享"）。argsSize = 该管线 push constant 字节数（统一 DrawArgs 超集 = 100B scalar 布局，
- * material_types_generated static_assert 与 shader 反射一致）；pushDataSet = 0（显式）。
+ * 隐式共享"）。argsSize = 该管线 push constant 字节数（Phase 7b+ DrawArgs 仅 objectIndex
+ * = 4B，material_types_generated static_assert 与 shader 反射一致）；pushDataSet = 0（显式）。
  */
 export struct PipelineEntry {
 	std::string name;                             // 条目名（模型 = "{规格}.v{顶点槽}.t{base槽}.n{normal槽}.o{orm槽}"，skybox/cube/light 固定名）
 	RGL::RenderPipeline pipeline;                 // shader object + 烘焙 binding mapping（见 PipelineBindings）
-	uint32_t argsSize = sizeof(RGL::DrawArgs);    // push constant 字节数（DrawArgs 100B scalar 布局）
+	uint32_t argsSize = sizeof(RGL::DrawArgs);    // push constant 字节数（DrawArgs 4B，仅 objectIndex）
 	uint32_t pushDataSet = 0;                     // 显式 push constant set 号（vkCmdPushDataEXT 用）
 };
 

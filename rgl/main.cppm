@@ -95,7 +95,8 @@ export std::optional<PreWindow> prepareWindow(const StartupConfigs& configs);
 
 /**
  * push data 容量契约（Phase 5）：shader object + descriptor heap 模式无 pipeline
- * layout，per-draw push data（DrawArgs 100B，vkCmdPushDataEXT）受设备硬限约束
+ * layout，per-draw push data（DrawArgs 4B——Phase 7b+ 仅 objectIndex，vkCmdPushDataEXT）
+ * 受设备硬限约束
  *（双驱动实测 256B）：① maxPushDataSize（descriptor heap 专属 limit，
  * VUID-VkPushDataInfoEXT-offset-11243）② maxPushConstantsSize（经典
  * VkPhysicalDeviceLimits）。超限 = 设备不支持，启动期报错优于运行时静默布局错配。

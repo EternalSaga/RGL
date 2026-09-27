@@ -310,7 +310,7 @@ void Renderer::createSceneStaging(RGL::Resources& vkResources) {
 	std::memcpy(stage + kSceneDataMvpTableOffset, list.sceneData.objectMvps.data(), mvpsBytes);
 	// Phase 7b+（续）：per-object 材质/几何表上传（@kSceneDataDrawTableOffset，
 	// scene.slang readObjectDraw 消费；DrawArgs 仅剩 objectIndex）
-	const auto drawsBytes = list.sceneData.objectDraws.size() * sizeof(ObjectDrawGpu);
+	const auto drawsBytes = list.sceneData.objectDraws.size() * sizeof(ObjectDraw);
 	if (drawsBytes > kSceneMatrixCapacity * kSceneDrawStride)
 		return std::unexpected(Error{ErrorCode::Unknown,
 			"scene objectDraws exceeds capacity (same contract as objectMatrices)"});

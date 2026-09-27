@@ -30,25 +30,6 @@ export struct DrawCall {
 };
 
 /**
- * Phase 7b+（NV DGC 规避）：per-object 材质/几何表条目（scene data @kSceneDataDrawTableOffset，
- * stride 48，objectIndex 索引）。DrawArgs 去 mvp 后剩余字段一并进 heap，push 仅留 objectIndex
- *（4B）绕开 NV DGC push 挂死。布局与 scene.slang readObjectDraw 字面量手工一致：
- *   @0 uint totalTriangles | uint vertexOffset | float roughness | float metallic
- *   @16 float4 baseColor
- *   @32 float4 emissive（Phase 8 ③：xyz=emissiveFactor；Phase 8 C1：w=MASK alphaCutoff，
- *      0 = 不测 alpha；无 emissive 材质 = 0）
- */
-export struct ObjectDrawGpu {
-	uint32_t totalTriangles = 0;
-	uint32_t vertexOffset = 0;
-	float roughness = 0.0f;
-	float metallic = 0.0f;
-	glm::vec4 baseColor{1.0f};
-	glm::vec4 emissive{0.0f};  // Phase 8 ③：xyz=emissiveFactor；w = MASK alphaCutoff（C1，0 = 不测）
-};
-static_assert(sizeof(ObjectDrawGpu) == 48, "ObjectDrawGpu must match scene.slang readObjectDraw stride 48");
-
-/**
  * 场景级每帧动态数据（Phase 5 批次 2，bindless）：渲染 system 产出、drawFrame 消费——
  * CPU 写 staging[currentFrame] + 录制期 vkCmdCopyBuffer 拷进 scene data buffer
  *（布局契约见 scene.slang SceneLight / scene_forward_types_generated）。objectMatrices 按
@@ -76,8 +57,12 @@ export struct SceneFrameData {
 	// 按 objectSlot 索引，值 = 原 DrawArgs.mvp 位级一致；shader readObjectMvp）
 	std::span<const glm::mat4> objectMvps;
 	// Phase 7b+（续）：per-object 材质/几何表（scene data @kSceneDataDrawTableOffset，
-	// 按 objectSlot 索引；shader readObjectDraw 消费，DrawArgs 仅剩 objectIndex）
-	std::span<const ObjectDrawGpu> objectDraws;
+	// 按 objectSlot 索引；shader readObjectDraw 消费，DrawArgs 仅剩 objectIndex）。
+	// Phase 10 批 10.2a 单源化：条目类型 = scene_forward_types_generated 的 ObjectDraw
+	//（scene.slang struct 经 C API 反射生成 + 逐字段 offsetof static_assert，手写
+	// ObjectDrawGpu 已删；布局 @0 totalTri|vertOff|roughnessMetallic / @16 baseColor /
+	// @32 emissive，emissive.w = MASK alphaCutoff）
+	std::span<const ObjectDraw> objectDraws;
 	// Phase 7 D3：多灯数组（scene data 尾区 kSceneDataLightArrayOffset，4B count@base +
 	// GpuLight[count]@base+16，契约见 lights.slang / lights_schema.lua）。lightCount=0 时
 	// 该区不写。forward 仍走 .light（@0 头单灯），二者独立填。

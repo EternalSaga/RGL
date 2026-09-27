@@ -17,5 +17,20 @@ return {
                 { name = "ambient",   type = "vec3", offset = 36 },
             },
         },
+        -- Phase 10 批 10.2a 单源化：per-object 材质/几何表条目（scene.slang ObjectDraw，
+        -- 表基址 @524944 stride 48，见 scene_data.cppm kSceneDataDrawTableOffset）。
+        -- 生成 C++ struct 替换手写 ObjectDrawGpu（双源消除）；字段声明序 = 内存序
+        --（scalar layout 0/4/8/16/32 无 padding，shader 端 Load<ObjectDraw> 整读）。
+        {
+            name = "ObjectDraw",
+            stride = 48,
+            attributes = {
+                { name = "totalTriangles",    type = "uint", offset = 0 },
+                { name = "vertexOffset",      type = "uint", offset = 4 },
+                { name = "roughnessMetallic", type = "vec2", offset = 8 },
+                { name = "baseColor",         type = "vec4", offset = 16 },
+                { name = "emissive",          type = "vec4", offset = 32 },
+            },
+        },
     },
 }

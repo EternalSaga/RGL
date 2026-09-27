@@ -19,6 +19,19 @@ namespace RGL {
     static_assert(offsetof(SceneLight, color) == 24, "Field SceneLight.color offset does not match shader reflection (scalar layout drift!)");
     static_assert(offsetof(SceneLight, ambient) == 36, "Field SceneLight.ambient offset does not match shader reflection (scalar layout drift!)");
 
+    export struct ObjectDraw {
+        uint32_t totalTriangles;
+        uint32_t vertexOffset;
+        glm::vec2 roughnessMetallic;
+        glm::vec4 baseColor;
+        glm::vec4 emissive;
+    };
+    static_assert(sizeof(ObjectDraw) == 48, "Size of C++ struct ObjectDraw does not match shader reflection!");
+    static_assert(offsetof(ObjectDraw, vertexOffset) == 4, "Field ObjectDraw.vertexOffset offset does not match shader reflection (scalar layout drift!)");
+    static_assert(offsetof(ObjectDraw, roughnessMetallic) == 8, "Field ObjectDraw.roughnessMetallic offset does not match shader reflection (scalar layout drift!)");
+    static_assert(offsetof(ObjectDraw, baseColor) == 16, "Field ObjectDraw.baseColor offset does not match shader reflection (scalar layout drift!)");
+    static_assert(offsetof(ObjectDraw, emissive) == 32, "Field ObjectDraw.emissive offset does not match shader reflection (scalar layout drift!)");
+
 
 
 
