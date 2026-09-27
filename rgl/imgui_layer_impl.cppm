@@ -56,6 +56,32 @@ void renderDrag3(const Drag3Entry& e) {
 		e.set(glm::vec3(arr[0], arr[1], arr[2]));
 }
 
+/** 整型滑条（SliderIntEntry）。 */
+void renderSliderInt(const SliderIntEntry& e) {
+	int v = e.get();
+	if (ImGui::SliderInt(e.label.c_str(), &v, e.minValue, e.maxValue))
+		e.set(v);
+}
+
+/** 只读文本行（TextEntry，次要色）。 */
+void renderText(const TextEntry& e) {
+	ImGui::TextDisabled("%s", e.text().c_str());
+}
+
+/** 单页条目渲染（五类 widget 顺序：float/int 滑条、颜色、三维拖拽、文本）。 */
+void renderPageEntries(const ParamPage& page) {
+	for (const SliderEntry& e : page.sliders)
+		renderSlider(e);
+	for (const SliderIntEntry& e : page.intSliders)
+		renderSliderInt(e);
+	for (const Color3Entry& e : page.colors)
+		renderColor3(e);
+	for (const Drag3Entry& e : page.drags)
+		renderDrag3(e);
+	for (const TextEntry& e : page.texts)
+		renderText(e);
+}
+
 }  // namespace
 
 /** 析构兜底：未显式 shutdown（异常路径）也不泄漏 imgui context。 */
@@ -223,13 +249,8 @@ void ImGuiLayer::buildParamTabs() {
 		return;
 	for (const ParamPage& page : pages) {
 		if (!ImGui::BeginTabItem(page.name.c_str()))
-			continue;
-		for (const SliderEntry& e : page.sliders)
-			renderSlider(e);
-		for (const Color3Entry& e : page.colors)
-			renderColor3(e);
-		for (const Drag3Entry& e : page.drags)
-			renderDrag3(e);
+			continue;  // 非当前页不渲染（条目回调不跑 = 零副作用）
+		renderPageEntries(page);
 		ImGui::EndTabItem();
 	}
 	ImGui::EndTabBar();

@@ -222,6 +222,13 @@ export class AssetTable {
 	}
 	/** @return 按 id 引用的材质资产记录（无界检查，调用方保证 id 有效）。 */
 	[[nodiscard]] const MaterialAsset& getMaterial(uint32_t id) const { return materials[id]; }
+	/**
+	 * 可变材质访问（Phase 10 批 10.2c 调试面板写入通道；无界检查同 getMaterial）。
+	 * **调试语义注意**：材质 = find-or-add 值去重——改后与别的材质值全等也不会重新
+	 * 归并（表内多一条，渲染正确性不受影响）；无回滚——编辑仅本会话有效（重启回
+	 * config 值）。每帧 renderListSystem 读本表写 ObjectDraw 表 = 编辑下一帧生效。
+	 */
+	MaterialAsset& getMaterialMut(uint32_t id) { return materials[id]; }
 	/** @return 材质资产记录数。 */
 	[[nodiscard]] uint32_t materialSize() const { return static_cast<uint32_t>(materials.size()); }
 

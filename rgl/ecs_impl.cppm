@@ -493,9 +493,10 @@ std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer& rende
 }
 
 /** buildDebugParamPages 定义（接口注释）：页 = "渲染"（SceneEnv ctx）+ "灯光"（Light
- *  组件按 index 升序，index 0 主光附共享 ambient）。回调捕获组件指针当帧即用（面板
- *  不增删 entity，entt 组件地址稳定）；写回 = 改组件/ctx 本体，下一帧渲染生效。 */
-std::vector<ParamPage> buildDebugParamPages(entt::registry& rg) {
+ *  组件按 index 升序，index 0 主光附共享 ambient）+ "材质"（选中材质五参数，10.2c）。
+ *  回调捕获组件/资产指针当帧即用（面板不增删 entity，entt 组件地址稳定；材质表仅
+ *  注册期增长）。写回 = 改组件/ctx/材质表本体，下一帧渲染生效。 */
+std::vector<ParamPage> buildDebugParamPages(entt::registry& rg, RGL::AssetTable& assets) {
 	ParamPage renderPage{.name = "渲染"};
 	auto& env = rg.ctx().get<SceneEnv>();
 	renderPage.sliders.push_back({.label = "曝光 exposure", .minValue = 0.0f, .maxValue = 4.0f,
@@ -539,6 +540,47 @@ std::vector<ParamPage> buildDebugParamPages(entt::registry& rg) {
 	std::vector<ParamPage> out;
 	out.push_back(std::move(renderPage));
 	out.push_back(std::move(lightPage));
+
+	// 材质页（Phase 10 批 10.2c）：id 选择器（DebugPanelState 持久）→ 选中材质五参数
+	//（baseColor rgb+α / metallic / roughness / emissive / alphaCutoff）+ 共享实体数提示
+	//（材质值去重共享，编辑影响全部引用者——面板明示）。写通道 = getMaterialMut，
+	// renderListSystem 每帧读本表写 ObjectDraw = 下一帧生效。
+	ParamPage matPage{.name = "材质"};
+	if (auto* panel = rg.ctx().find<DebugPanelState>(); panel != nullptr && assets.materialSize() > 0) {
+		panel->materialSel = std::min(panel->materialSel, assets.materialSize() - 1);
+		const uint32_t sel = panel->materialSel;
+		matPage.intSliders.push_back({.label = "材质 id",
+			.minValue = 0, .maxValue = static_cast<int>(assets.materialSize()) - 1,
+			.get = [panel] { return static_cast<int>(panel->materialSel); },
+			.set = [panel](int v) { panel->materialSel = static_cast<uint32_t>(v); }});
+		MaterialAsset& mat = assets.getMaterialMut(sel);
+		uint32_t sharedCount = 0;
+		rg.view<MaterialRef>().each(
+			[&](const MaterialRef& m) { if (m.material == sel) ++sharedCount; });
+		matPage.texts.push_back({.text = [sel, sharedCount] {
+			return "材质 M" + std::to_string(sel) + " · 共享该材质的实体数 " +
+				std::to_string(sharedCount); }});
+		matPage.colors.push_back({.label = "基色 baseColor rgb",
+			.get = [&mat] { return glm::vec3(mat.baseColor); },
+			.set = [&mat](const glm::vec3& v) { mat.baseColor = glm::vec4(v, mat.baseColor.a); }});
+		matPage.sliders.push_back({.label = "不透明度 α", .minValue = 0.0f, .maxValue = 1.0f,
+			.get = [&mat] { return mat.baseColor.a; },
+			.set = [&mat](float v) { mat.baseColor.a = v; }});
+		matPage.sliders.push_back({.label = "roughness", .minValue = 0.0f, .maxValue = 1.0f,
+			.get = [&mat] { return mat.roughness; },
+			.set = [&mat](float v) { mat.roughness = v; }});
+		matPage.sliders.push_back({.label = "metallic", .minValue = 0.0f, .maxValue = 1.0f,
+			.get = [&mat] { return mat.metallic; },
+			.set = [&mat](float v) { mat.metallic = v; }});
+		matPage.colors.push_back({.label = "自发光 emissive",
+			.get = [&mat] { return mat.emissive; },
+			.set = [&mat](const glm::vec3& v) { mat.emissive = v; }});
+		matPage.sliders.push_back({.label = "alphaCutoff（MASK 生效）", .minValue = 0.0f, .maxValue = 1.0f,
+			.get = [&mat] { return mat.alphaModeMask ? mat.alphaCutoff : 0.0f; },
+			.set = [&mat](float v) { mat.alphaCutoff = v; }});
+	}
+
+	out.push_back(std::move(matPage));
 	return out;
 }
 

@@ -187,7 +187,7 @@ profiler 面板读数复用现成 `profiler = 0`（不开 profiler 时面板显�
 | **10.1** imgui 骨架 **✅ 2026-09-28** | vcpkg 引入、`imgui_layer` 模块、输入链绝对坐标 + WantCapture 门、帧末 UI 段（D6 位）、`imgui` 开关、面板骨架（profiler 读数 + 占位页） | vcpkg.json、新 `.cppm`、`ecs_impl.cppm` 事件、`vkrenderer_impl.cppm` 帧末段、`diagnostics.cppm` + `configs/diagnostics.lua`、CMake | 默认关 BIT-IDENTICAL + `checks --strict`；开 = 窗口面板显示、profiler 读数跳动、headless no-op |
 | **10.2a** `ObjectDraw` 单源化 **✅ 2026-09-28** | §3.1 五步：schema 登记 + 表基址常量 → `just reflect` → 删手写 `ObjectDrawGpu` → 字面量钉住 → 清注释残留 | `scene_forward_schema.lua`（实际落点，见 10.2a 实施记录）、`generated/*`（随提交）、`frame_draw_list.cppm`、消费方、`scene.slang`/`shader_registry.cppm` 注释 | **BIT-IDENTICAL** + `reflection_check` 过 + `checks --strict`（走 skill `rgl-shader-contract`） |
 | **10.2b** 灯/曝光控件 **✅ 2026-09-28** | `param_registry` 模块 + 首批条目（§3.3 前两行）+ 灯/曝光控件接面板 | 新 `.cppm`、`ecs.cppm/_impl.cppm`（build 函数落点修正：render_list 无 registry ctx 全链，装配归 ecs）、`imgui_layer` 消费 | 默认关 diff0；开 = 拖动下一帧画面变化 |
-| **10.2c** 材质控件 | `AssetTable` setter + 材质条目（吃 10.2a 生成物）+ 共享实体数提示 | `asset_table.cppm`、`param_registry` | 同上 + 共享提示正确 |
+| **10.2c** 材质控件 **✅ 2026-09-28** | `AssetTable` setter + 材质条目（吃 10.2a 生成物）+ 共享实体数提示 | `asset_table.cppm`、`param_registry` | 同上 + 共享提示正确 |
 | **10.3** 配置热重载 | §5：`hot_reload` 模块 + 帧边界换入基建 + T1 清单；（T2 可选） | 新 `.cppm`、各 `loadXxxConfig` 调用点、CMake 注入源目录 | 默认关 diff0；开 = 改源 `configs/` 下一帧生效且 build 副本不被污染；缺源目录降级关 |
 | **10.4** shader 热重载 L1 | §6：前置精查（只读）→ watch + fork slangc + 签名守卫 + 同槽重建 + DGC 降级 | 新 `.cppm`、`shader.cppm` 重建入口、`vk_indirect_commands` 重建/降级、编译期注入 flags | 默认关 diff0；开 = 改注释重载无视觉变化、改逻辑下一帧生效、**改契约被拦且旧管线继续跑** |
 | **10.5** 点选取参 | §7：点击事件 + id pass 进图 + 1 texel 回读 + objectSlot 反查 + 面板实体绑定 | 图配置/id shader（新 `rgl_shader` 条目）、回读通路、`ecs` 选中 context、面板区 | 默认关 diff0；开 = 点击命中正确（含遮挡层序）、面板显示并可调该实体参数 |
@@ -256,6 +256,18 @@ BIT-IDENTICAL 截图回归，基线 `10b00c78c4a2d644479bb56eb35ac796bae90ada643
 - **验收**：默认关 forward 截图 = 基线 `10b00c78…`；窗口 `imgui=true` 12s VVL 0 error
   （面板就绪 + TabBar 渲染）；`checks --strict` 0 警告。**视觉验收留给用户**
   （llm 截图在 UI 段之前，不含面板画面）。
+
+### 10.2c 实施记录（2026-09-28）
+
+- **材质页 = 选择器 + 动态条目**：`param_registry` 扩 `SliderIntEntry`（材质 id 选择）+
+  `TextEntry`（只读提示）+ `DebugPanelState`（registry ctx 持久 UI 态——选择态不进
+  每帧重建的条目）；页内容 = 选中材质 baseColor(rgb+α)/roughness/metallic/emissive/
+  alphaCutoff + "共享该材质的实体数"提示（view\<MaterialRef\> 计数）。
+- **写入通道 = `AssetTable::getMaterialMut(id)`**（新增可变访问）：renderListSystem 每帧
+  读材质表写 ObjectDraw → 编辑下一帧生效；语义限制已注释在接口（值去重不重归并、
+  无回滚、编辑仅本会话——重启回 config 值）。
+- **验收**：默认关 forward 截图 = 基线 `10b00c78…`；窗口 `imgui=true` 12s VVL 0 error；
+  `checks --strict` 0 警告。
 
 ## 10. 验收红线（汇总）
 

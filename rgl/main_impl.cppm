@@ -51,6 +51,7 @@ import profiler;         // Phase 9：帧循环 zone 收口 dump（docs/phase9_p
 import gpu_profiler;     // Phase 9.2：GPU 时间戳会话（main 栈持有 = device 生命周期内）
 import llm_debug;
 import imgui_layer;  // Phase 10 批 10.1：IMGUI 调试面板层（main 装配 = 唯一认识 imgui 的地方之一）
+import param_registry;  // DebugPanelState ctx（面板跨帧 UI 态，10.2c）
 import ecs;
 import rllogger;
 import vkerror;
@@ -284,6 +285,7 @@ int main() {
 		registry.ctx().emplace<Camera>(std::move(configs.camera.camera));
 		registry.ctx().emplace<InputEvents>();
 		registry.ctx().emplace<InputFilter>();  // Phase 10 调试层输入先手过滤器（imgui 装配；缺省空 = 不过滤）
+		registry.ctx().emplace<DebugPanelState>();  // 面板跨帧 UI 态（材质选择器等，10.2c）
 		registry.ctx().emplace<CameraState>();
 		auto& spin = registry.ctx().emplace<SceneSpin>();
 		spin.speed = configs.scene.spin ? 1.0f : 0.0f;  // 0 = 静止（configs/scene.lua 的 spin 开关）
@@ -380,8 +382,10 @@ int main() {
 				vk::raii::CommandBuffer& cmd, vk::Extent2D extent, vk::ImageView view) {
 				return layer->renderFrame(cmd, extent, view);
 			});
-			// 参数页构建器（10.2b）：imgui 层不认识 ECS，页 = buildDebugParamPages(registry)
-			imguiLayer.setPageBuilder([&registry] { return buildDebugParamPages(registry); });
+			// 参数页构建器（10.2b/c）：imgui 层不认识 ECS，页 = buildDebugParamPages(registry, 资产表)
+			imguiLayer.setPageBuilder([&registry, &assetTable] {
+				return buildDebugParamPages(registry, assetTable);
+			});
 		}
 
 		/**

@@ -101,9 +101,10 @@ export std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer
  * "渲染"页 = SceneEnv ctx（exposure/envIntensity/mipRange）；"灯光"页 = 每灯 entity
  * 的 Light 组件（intensity/color/direction + index 0 主光 ambient）。写回 = 直接改
  * ctx/组件，`renderListSystem` 下一帧消费（生效 = 下一帧）。
- * @param rg 场景 registry（读 + 写回调捕获：SceneEnv ctx + Light 组件）
- * @return 参数页列表（"渲染" + "灯光"，灯按 index 升序）
+ * @param rg 场景 registry（读 + 写回调捕获：SceneEnv ctx + Light 组件 + DebugPanelState）
+ * @param assets 资产表（材质页读写：getMaterialMut = 10.2c 调试写入通道）
+ * @return 参数页列表（"渲染" + "灯光" + "材质"，灯按 index 升序）
  */
-export std::vector<ParamPage> buildDebugParamPages(entt::registry& rg);
+export std::vector<ParamPage> buildDebugParamPages(entt::registry& rg, RGL::AssetTable& assets);
 
 }  // namespace RGL

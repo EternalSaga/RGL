@@ -46,12 +46,37 @@ export struct Drag3Entry {
 	std::function<void(const glm::vec3&)> set;
 };
 
+/** 整型滑条条目（材质 id 选择器等离散量）。 */
+export struct SliderIntEntry {
+	std::string label;
+	int minValue = 0;
+	int maxValue = 0;
+	std::function<int()> get;
+	std::function<void(int)> set;
+};
+
+/** 只读文本行（信息提示：如"材质 M3 · 共享实体数 12"）。 */
+export struct TextEntry {
+	std::function<std::string()> text;
+};
+
+/**
+ * 面板跨帧持久状态（registry context，main emplace；param_registry 契约类型）。
+ * 选择器类 UI 态（当前页/当前材质）不在条目里（条目每帧重建），集中放这里由
+ * buildDebugParamPages 读写。
+ */
+export struct DebugPanelState {
+	uint32_t materialSel = 0;  // 材质页当前材质 id（buildDebugParamPages 每帧按 materialSize 钳位）
+};
+
 /** 参数页（面板一个 Tab 页；页名 = 参数组名，如"渲染"/"灯光"）。 */
 export struct ParamPage {
 	std::string name;
 	std::vector<SliderEntry> sliders;
+	std::vector<SliderIntEntry> intSliders;
 	std::vector<Color3Entry> colors;
 	std::vector<Drag3Entry> drags;
+	std::vector<TextEntry> texts;
 };
 
 }  // namespace RGL
