@@ -47,6 +47,11 @@ export class StateKit {
 		tonemapState.depthTest = false;
 		tonemapState.depthWrite = false;
 		tonemapState.cullMode = vk::CullModeFlagBits::eNone;
+		// Phase 10 批 10.5：picking pass —— depth **只测不写**（复用 scene depth 得可见层，
+		// 不污染后续 transparent 段）；其余 = opaque 同（cull 后端面剔与 opaque 一致即可，
+		// id 归属 = 可见前表面）
+		pickingState.depthWrite = false;
+		pickingState.depthCompareOp = vk::CompareOp::eLessOrEqual;  // 与 scene depth 同面等值（eLess 全拒 = 实测踩坑）
 	}
 
 	/**
@@ -61,6 +66,7 @@ export class StateKit {
 		if (name == "transparent") return transparentState;
 		if (name == "light") return lightState;
 		if (name == "tonemap") return tonemapState;
+		if (name == "picking") return pickingState;
 		throw std::runtime_error(fmt::format(
 			"StateKit::stateFor: unknown state '{}' (executor validation bypassed)", name));
 	}
@@ -77,6 +83,7 @@ export class StateKit {
 	RenderState skyboxState{};      // 大三角 z=1 只在空像素通过（见 ctor 注）
 	RenderState lightState{};       // deferred light 全屏终图（见 ctor 注）
 	RenderState tonemapState{};     // Phase 8 ①：HDR→LDR tonemap 全屏终图（与 light 同形，见 ctor 注）
+	RenderState pickingState{};     // Phase 10 批 10.5：id pass 复用 scene depth 只测不写（见 ctor 注）
 	bool depthClipDynamic = false;
 };
 

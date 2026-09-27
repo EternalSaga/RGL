@@ -27,6 +27,7 @@ import camera_config;  // loadCameraConfig（hot_reload camera.lua 套用，Phas
 import camera;  // Camera ctx 类型（hot_reload 调参字段套用，10.3）
 import hot_reload;  // HotReloader（配置热重载机制模块，10.3）
 import shader_hot_reload;  // ShaderHotReloader（shader 热重载 L1，10.4）
+import picking;  // PickingService（wirePicking 桥接，10.5）
 import ecs;  // ConfigReloadHook ctx（帧边界挂点类型，10.3）
 import shader_registry;
 import gpu_cull;
@@ -515,6 +516,28 @@ void wireShaderHotReload(entt::registry& registry, ShaderRegistry& pipelines,
 		registry.ctx().emplace<ConfigReloadHook>(ConfigReloadHook{
 			.poll = [r = std::move(reloader)] { r->poll(); }});
 	}
+}
+
+/**
+ * wirePicking 定义（契约见 main.cppm 接口注释）：门关早退；门开 = 构造服务 +
+ * 挂 Renderer + 双向函数桥（ecs 零依赖 picking 模块，同 ConfigReloadHook 闭包
+ * 模式）。requestPick 只在左键按下产请求（右键 = 相机拖拽）；takeResult = 服务侧
+ * 一次性消费。
+ */
+std::unique_ptr<PickingService> wirePicking(entt::registry& registry, Resources& resources,
+	RenderTargetCache& rts, Renderer& renderer) {
+	if (!diagnostics().picking)
+		return nullptr;
+	auto service = std::make_unique<PickingService>(resources, rts,
+		renderer.getRenderGraphRef());
+	renderer.setPickingService(service.get());
+	PickingHook hook;
+	hook.requestPick = [svc = service.get()](float x, float y) {
+		svc->request(static_cast<uint32_t>(x), static_cast<uint32_t>(y));
+	};
+	hook.takeResult = [svc = service.get()] { return svc->take(); };
+	registry.ctx().emplace<PickingHook>(std::move(hook));
+	return service;
 }
 
 }  // namespace RGL

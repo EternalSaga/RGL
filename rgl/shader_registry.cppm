@@ -34,6 +34,7 @@ export struct PipelineEntry {
 	// 侧提供新字节。默认值 = 未填（cube 等一次性条目不影响：热重载只处理填了 spec 的条目）。
 	RGL::PipelineSpec spec;                       // SPV 规格路径（源 .slang 名 = basename 换扩展）
 	RGL::PipelineBindings bindings;               // 烘焙 mapping 参数（heap 槽/形态位/extra）
+	bool modelEntry = false;                      // addModelEntry 建的模式位（picking 克隆范围判据 = mesh 接口是 ModelVertexOutput）
 };
 
 /**
@@ -119,6 +120,30 @@ export class ShaderRegistry {
 	 */
 	void commitReplacement(uint32_t index, RGL::RenderPipeline&& fresh) {
 		entries[index].pipeline = std::move(fresh);
+	}
+
+	/**
+	 * picking 克隆条目（Phase 10 批 10.5，D3）：把当前表**全部 model 族条目**克隆出
+	 * picking 变体——mesh SPV = 原条目 mesh、frag SPV = picking.frag（写 objectIndex+1
+	 * 进 r32ui）、bindings 原样（picking.frag 不声明 descriptor，贴图映射空转无害，
+	 * skybox 条目同先例）。非 model 条目（cube/天空盒/光 = mesh 输出接口非
+	 * ModelVertexOutput）不克隆——picking 重放路对其跳过。
+	 * 装配时序契约 = main 于模型注册完成后调用（门 = diagnostics.picking；先于
+	 * addSkyEntry/addLightEntry = 克隆段追加在 model 条目后）；既有条目下标语义零改动。
+	 * @param fragSpvPath picking.frag SPV 相对路径（generated_shaders/ 下）
+	 * @throws std::runtime_error picking frag / model mesh SPV 读失败（装配期 fail-fast）
+	 */
+	void addPickingEntries(const std::string& fragSpvPath);
+
+	/**
+	 * picking 克隆反查（执行器 picking 重放路逐 draw 调用）。
+	 * @param entry 原条目下标（DrawCall.pipeline）
+	 * @return 克隆条目下标；nullopt = 该条目不可点选（cube/天空盒/克隆条目本身）
+	 */
+	[[nodiscard]] std::optional<uint32_t> pickingEntryFor(uint32_t entry) const {
+		if (entry >= pickingRemap.size() || pickingRemap[entry] == kNoPickingClone)
+			return std::nullopt;
+		return pickingRemap[entry];
 	}
 
 	/**
@@ -306,6 +331,10 @@ export class ShaderRegistry {
 	std::map<std::string, uint32_t> indexByName;              // 条目名 → 下标（启动期 name 解析）
 	std::map<std::tuple<std::string, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>, uint32_t> modelEntryBySlot;  // 模型条目去重表：(规格名, 顶点 slot, base 纹理 slot, normal slot, orm slot, emissive slot) → 下标
 	std::vector<PipelineEntry> entries;                       // 管线表（下标 = 绘制契约）
+	// picking 克隆反查表（批 10.5，addPickingEntries 填）：原条目下标 → 克隆条目下标，
+	// kNoPickingClone = 不可点选；调用时刻之后新增条目不在表内（天然 nullopt）
+	static constexpr uint32_t kNoPickingClone = 0xFFFFFFFFu;
+	std::vector<uint32_t> pickingRemap;
 };
 
 }  // namespace RGL

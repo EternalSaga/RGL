@@ -27,6 +27,7 @@ import texture_pool;        // ModelTextureIds
 import shader_registry;     // ShaderRegistry
 import gpu_cull;            // GpuCull
 import vk_indirect_commands;  // DgcCommands / DgcStaticCommands
+import picking;              // PickingService（wirePicking 签名，Phase 10 批 10.5）
 import vk_renderer;         // Renderer
 
 namespace RGL {
@@ -241,5 +242,21 @@ export void wireHotReload(entt::registry& registry);
  */
 export void wireShaderHotReload(entt::registry& registry, ShaderRegistry& pipelines,
 	RenderBackEnd& backEnd);
+
+/**
+ * GPU id 点选装配（Phase 10 批 10.5，D3；docs/phase10_plan.md §7）。
+ * 门 = `diagnostics.picking`（默认关 = 返回 nullptr 零装配）。装配 = 构造服务 +
+ * `Renderer::setPickingService` + `PickingHook`（registry ctx）双向函数桥：
+ * requestPick = eventSystem 鼠标按下（未被 imgui InputFilter 消费的事件）→ 服务
+ * 请求；takeResult = 帧边界 pickingTick 消费回读 objectSlot → 反查 MeshRef entity
+ * → 写 `SelectedObject` ctx（面板实体上下文读）。
+ * @param registry 场景 registry（hook ctx 挂点）
+ * @param resources 资源层（服务 staging）
+ * @param rts offscreen RT 缓存（服务定位 object_id RT）
+ * @param renderer 渲染器（图访问 + 服务挂点）
+ * @return 服务实例（nullptr = 门关）；所有权归调用方（main 栈，析构须早于 registry）
+ */
+export std::unique_ptr<PickingService> wirePicking(entt::registry& registry,
+	Resources& resources, RenderTargetCache& rts, Renderer& renderer);
 
 }  // namespace RGL

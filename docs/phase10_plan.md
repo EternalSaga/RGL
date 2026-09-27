@@ -1,7 +1,7 @@
 # Phase 10 实施计划：调试交互（配置热重载 + IMGUI 参数面板 + shader 热重载 + 点选取参）
 
-> **状态**：现行——**批 10.1 / 10.2a / 10.2b / 10.2c / 10.3 / 10.4 已落地（2026-09-28）**，
-> 剩 10.5（点选）/ 10.6（可选）。
+> **状态**：现行——**批 10.1 / 10.2a / 10.2b / 10.2c / 10.3 / 10.4 / 10.5 已落地（2026-09-28）**，
+> 剩 10.6（可选）。
 > 关键决策 D1–D5 已由用户拍板（见 §2），D6–D11 为主 agent 技术决策（可否决）。
 > 批次 10.1–10.6 见 §9。
 > 依据 = 2026-09-27 只读调研（worker 子 agent A–F 六节 + 主 agent 逐项复核）+ 方向讨论。
@@ -79,6 +79,7 @@ kSceneData\*"（常量已搬 `scene_data.cppm`，vkresources 0 命中）；`shad
 | D9 | imgui 引入方式 | vcpkg `imgui[core,sdl3-binding,vulkan-binding,docking-experimental]` 1.92.8，vcpkg.json platform expression 双平台同款 | 主 agent 定，可否决 |
 | D10 | id pass 进图方式 | 由 `diagnostics.picking` 门控、**编译图期**决定（非运行时开关）——默认关 ⇒ 图逐位同 ⇒ diff0；不复用 `kGBufferAttachments` 空通道（会破 BIT-IDENTICAL） | 主 agent 定，可否决 |
 | D11 | 运行时重编译 flags 单源 | 运行时 fork slangc 必须用**编译期注入的 `SLANG_FLAGS_STR` 派生串**，禁止内联重复（`RglSlang.cmake:13` 红线延伸到运行时） | 主 agent 定，可否决 |
+| D12 | RPC 实时调试通道 | **延后**（非否决）。**用户提出动机（2026-09-28 补录）**：对"不便 LLM 交互"的窗口内操作——摄像机移动、点选物体、修改 shader 参数后即时观察——外部程序发个简单 HTTP POST 即可驱动，替代终端里绕弯的交互。**当前判定**：暂缓——配置热重载（10.3）+ imgui 面板 + headless/llm_debug 截图 + `diagnostics.*` 门控探针（picking_probe 即 10.5 因窗口鼠标注入不可得而生的替代方案）已覆盖大部分分析场景。**用户保留意见**：热重载"可能不太够"（多步交互式排查如"移相机→截图→再点选→读回"文件驱动确实别扭）。**翻案条件**：出现 ≥2 次"因无编程驱动通道而绕路/造专用探针"的实录，即立项轻量 loopback HTTP 命令队列（命令收敛帧边界套用，复用 ConfigReloadHook 模式） | 用户动机 + 主 agent 判定延后 |
 
 ## 3. 参数面设计（批 10.2，D1 展开）
 
@@ -204,7 +205,7 @@ profiler 面板读数复用现成 `profiler = 0`（不开 profiler 时面板显�
 | **10.2c** 材质控件 **✅ 2026-09-28** | `AssetTable` setter + 材质条目（吃 10.2a 生成物）+ 共享实体数提示 | `asset_table.cppm`、`param_registry` | 同上 + 共享提示正确 |
 | **10.3** 配置热重载 **✅ 2026-09-28** | §5：`hot_reload` 模块 + 帧边界换入基建 + T1 清单；（T2 可选不做） | 新 `.cppm`、`main.cppm/_scene.cppm`（wireHotReload）、`ecs.cppm/_impl.cppm`（ConfigReloadHook）、`rllogger`、CMake 注入源目录 | 默认关 diff0；开 = 改源 `configs/` 下一帧生效且 build 副本不被污染；缺源目录降级关 |
 | **10.4** shader 热重载 L1 **✅ 2026-09-28** | §6：watch + fork slangc + SPV 二进制签名守卫（§6.1 偏差）+ 两阶段同槽重建 + DGC 两路句柄刷新 | 新 `.cppm`×2 + `shader_impl`、`shader.cppm` 签名解析、`shader_registry` build/commitReplacement、`vk_indirect_commands` update 入口、CMake 三宏注入 | 默认关 diff0；开 = 改注释重载无视觉变化、改逻辑下一帧生效、**改契约被拦且旧管线继续跑** |
-| **10.5** 点选取参 | §7：点击事件 + id pass 进图 + 1 texel 回读 + objectSlot 反查 + 面板实体绑定 | 图配置/id shader（新 `rgl_shader` 条目）、回读通路、`ecs` 选中 context、面板区 | 默认关 diff0；开 = 点击命中正确（含遮挡层序）、面板显示并可调该实体参数 |
+| **10.5** 点选取参 **✅ 2026-09-28** | §7：点击事件 + id pass 进图 + 1 texel 回读 + objectSlot 反查 + 面板实体绑定 | 新 `.cppm`×2（picking）、`decoratePickingPass`、`addPickingEntries` 克隆、执行器分支、`PickingHook`/`SelectedObject` ctx、面板"选中"页、`picking_probe` | 默认关 diff0；开 = 点击命中正确（含遮挡层序）、面板显示并可调该实体参数 |
 | **10.6**（可选，D4 视情况） | 反射语义扩产：range/默认值/单位入 schema → 生成语义层，注册表薄化 | schema/生成器 | 10.2b/c 行为不变（仅数据源换薄） |
 
 模块新建一律走 skill `rgl-new-module`；每批验收走 skill `rgl-verify`（headless 冒烟 +
@@ -345,6 +346,45 @@ BIT-IDENTICAL 截图回归，基线 `10b00c78c4a2d644479bb56eb35ac796bae90ada643
   管线" warn，程序继续跑；全程 VVL 0 error。`checks --strict` 0 警告（守卫解析器拆
   shader:impl 分区 + spvAbsorb/EMD 拆 helper；rlstd 补导出 sort/unordered_map/size_t/
   system）。
+
+### 10.5 实施记录（2026-09-28）
+
+- **id pass = 克隆管线重放**（非新 draw source）：`addPickingEntries` 把 model 族条目
+  逐个克隆（mesh = 原 SPV、frag = `picking.frag`（写 `DrawArgs.objectIndex+1` 进
+  r32ui）、bindings 原样 = 贴图映射空转无害），remap 表反查，非 model 条目（cube 等）
+  跳过。执行器 `executePassDraws` 第〇分支逐 opaque 段 draw 用克隆条目重放——**不走
+  cull/DGC**（遮挡由 depth 测试保证，与剔除无关），heap 全 bindless 已就位，per-draw
+  只差 push 4B。id 值 = objectSlot+1（0 = 未命中，attachment clear 0）。
+- **图装饰 = 装配层编译期门控**（D10）：`decoratePickingPass(desc)` 在
+  `compileGraphOrThrow` 内 `diagnostics.picking` 时调用——object_id r32_uint offscreen
+  附件 + picking pass 插首个带 depth 的 opaque pass 之后（depth load **只测不写**：
+  StateKit picking 段 `depthWrite=false`，不污染 transparent 段；clear 必须显式全零 =
+  VkClearValue union 下 r32ui 会拿 float 默认值 reinterpret 成垃圾）。
+- **回读三步曲**（`picking` 模块，零 entt）：frame_capture 先例——request（坐标）→
+  record（帧末 capturer 之后录 1-texel copy，CAO→TS 并保持，下帧 pass barrier 自动衔接）
+  → collect（等本帧 fence 读 u32，raw−1 = objectSlot）。
+- **输入与反查**（函数桥零依赖）：eventSystem 左键按下（已过 InputFilter = imgui 控件区
+  点击天然吞掉）→ `PickingHook.requestPick`（registry ctx，main wirePicking 装配）；
+  `pickingTick` 帧边界消费 take() → 扫 `view<MeshRef>` 反查 entity（点击触发 O(n) 一次，
+  不平行维护映射表）→ `SelectedObject` ctx → 面板"选中"页（材质五参数控件
+  `appendMaterialControls` helper 与"材质"页共用，10.2c 抽取）。
+- **实测踩坑（根因级）**：picking pass 首版回读恒 0——RenderState 默认
+  `depthCompareOp=eLess`，而 picking 重绘与 scene depth **同几何等值** → 全片元被深度
+  拒掉；修 = picking 段 `eLessOrEqual`（skybox z=1 同先例）。定位法 = frag 写常量 7
+  绕 push/接口 + 临时关 depthTest 二分。
+- **窗口鼠标注入不可得**（本环境）：SDL x11 后端在 XWayland 下卡死（picking=false 亦
+  复现 = 与本批无关）、Xvfb 无 DRI（surface 不支持）、uinput 无窗口定位手段 → 加
+  `diagnostics.picking_probe = {frame,x,y}` 配置化探针做 **headless 确定性验证**
+  （D12 翻案实录 #1/#2：探针一次启动只发一次 + 摄像机无编程通道）。
+- **D12（RPC 通道）= 延后**：用户动机补录进 §2（摄像机移动/点选/改 shader 参数的
+  HTTP POST 驱动）；本轮不实现，翻案条件 = ≥2 次绕路实录。
+- **v1 已知限制**：miss 不清空上次选中（take() 契约 = nullopt 兼"无新结果/未命中"）；
+  probe 只触发一次（扫点位需重启）；picking pass 开启态 = opaque 段每帧双份录制（CPU
+  记账：本机 CPU-bound，开点选时帧录制开销 ≈ ×1.3，调试功能可接受）。
+- **验收**：默认关 forward 截图 = 基线 `10b00c78…`（0 picking 日志）；开 = probe
+  (900,600) → raw 1495 → objectSlot 1494 → entity 1495（bistro 桌面命中，反查日志
+  齐全）、probe (640,120) 天空 → raw 0 miss 保持选中；全程 VVL 0 error；
+  `checks --strict` 0 警告。面板"选中"页视觉走查留用户（窗口注入不可得）。
 
 ## 10. 验收红线（汇总）
 

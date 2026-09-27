@@ -54,6 +54,29 @@ export struct ConfigReloadHook {
 	std::function<void()> poll;
 };
 
+/**
+ * GPU id 点选双向桥（Phase 10 批 10.5；registry context，main 在
+ * diagnostics.picking=true 时经 wirePicking 装配，缺省未 emplace = 全链 no-op）：
+ * requestPick = eventSystem 鼠标左键按下（已过 InputFilter——imgui 控件区域内的
+ * 点击不产请求）→ PickingService::request；takeResult = 帧边界 pickingTick 消费
+ * 服务回读结果（objectSlot）。两向都是 std::function 注入——**ecs 不依赖 picking
+ * 模块**（依赖方向：picking = 渲染下层，ecs 经函数桥零类型接触）。
+ */
+export struct PickingHook {
+	std::function<void(float x, float y)> requestPick;
+	std::function<std::optional<uint32_t>()> takeResult;
+};
+
+/**
+ * 点选选中的实体（Phase 10 批 10.5；registry context，pickingTick 反查写入）。
+ * entity = entt::null 表示未命中/尚未点选；面板"选中"页读 ctx 实例化该实体材质控件。
+ * 选中态不在 registry 外平行维护（ECS 规范 1）。
+ */
+export struct SelectedObject {
+	entt::entity entity = static_cast<entt::entity>(entt::null);
+	uint32_t objectSlot = 0;  // MeshRef.objectSlot 同值（raw id − 1）
+};
+
 // 中央事件轮询（唯一 SDL_PollEvent 调用点）：窗口状态（WindowExtent/AppExit）+
 // 输入事件流（InputEvents：本 system 只产事件，不做键位映射——键绑定在 Camera.keys，
 // cameraSystem 消费事件时按绑定解释，E5.4；退出/窗口状态不走事件流）

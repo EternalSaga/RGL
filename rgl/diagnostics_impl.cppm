@@ -68,6 +68,19 @@ void setDiagnostics(const DiagnosticsConfig& cfg) { diagnostics() = cfg; }
 		cfg.imgui = readBool("imgui", cfg.imgui);
 		cfg.configReload = readBool("config_reload", cfg.configReload);
 		cfg.shaderReload = readBool("shader_reload", cfg.shaderReload);
+		cfg.picking = readBool("picking", cfg.picking);
+
+		// picking_probe = { frame = 30, x = 640, y = 360 }（脚本化点选：第 frame 帧自动
+		// 请求一次 (x,y) 点选并打反查日志——headless 验证 picking 全链，无鼠标依赖）
+		if (sol::optional<sol::table> probe = root["picking_probe"]) {
+			auto num = [&probe](const char* k, uint32_t def) {
+				sol::optional<double> v = (*probe)[k];
+				return v ? static_cast<uint32_t>(*v) : def;
+			};
+			cfg.pickingProbeFrame = num("frame", 0);
+			cfg.pickingProbeX = num("x", 0);
+			cfg.pickingProbeY = num("y", 0);
+		}
 
 		// 数值门：负数 = 显式"关"哨兵（配置文件写 -1 直观）；dump_gbuf 越界 = warn + 关闭
 		auto readI64 = [&](const char* key, int64_t def) -> std::optional<int64_t> {

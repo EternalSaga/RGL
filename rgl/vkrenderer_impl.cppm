@@ -91,7 +91,8 @@ void validateRenderGraphForExecutor(const RGL::CompiledRenderGraph& graph) {
 					pass.name, pass.state));
 			return;
 		}
-		if (pass.state != "opaque" && pass.state != "skybox" && pass.state != "transparent")
+		if (pass.state != "opaque" && pass.state != "skybox" && pass.state != "transparent"
+			&& pass.state != "picking")  // Phase 10 批 10.5：id pass（克隆条目重放，StateKit 有段）
 			fail(fmt::format("render graph pass '{}' has unknown state '{}'", pass.name,
 				pass.state));
 		if (!std::ranges::any_of(kKnownDrawSources,
@@ -466,10 +467,35 @@ void Renderer::emitFrameEndOverlay(vk::raii::CommandBuffer& cmd, VkImage swapcha
 	frameEndHook(cmd, extent, swapchainView);
 }
 
+// picking 回读录制（Phase 10 批 10.5）：服务未挂 = 零调用（drawFrame 复杂度预算内
+// 收拢判空）。布局推进/未装饰图 warn 语义见 PickingService::record。
+void Renderer::pickingRecord(vk::raii::CommandBuffer& cmd) {
+	if (pickingService)
+		pickingService->record(cmd, attachmentLayouts);
+}
+
 // pass draw 三路分发：drawLight 固定全屏单 group（无 push constant）/ opaque 段 GPU culling（DGC execute 或读回重放，能力位自动切换）/ 普通段逐 draw。
+// Phase 10 批 10.5：picking pass（state="picking"）走第〇分支 = 克隆管线重放（见函数体注）。
 void Renderer::executePassDraws(vk::raii::CommandBuffer& cmd, const RgPassPlan& pass,
 	const FrameDrawList& list, uint32_t frameSlot) {
-	if (pass.kind == RgPassKind::drawLight) {
+	if (pass.state == "picking") {
+		// GPU id 点选（批 10.5，D3）：逐 opaque 段 draw 用**克隆条目**重放——heap slot
+		// 绑定/scene data 全 bindless 已就位（recordFixedDataPath 在 pass 循环前），
+		// per-draw 只差 push 的 DrawArgs(objectIndex)。不走 cull/DGC（遮挡由 depth
+		// 测试保证，点选正确性与剔除无关）；非 model 族 draw（cube 等）无克隆 = 跳过。
+		const auto [segBegin, segEnd] = segmentRange("opaque", list);
+		for (uint32_t i = segBegin; i < segEnd; ++i) {
+			const auto& call = list.calls[i];
+			auto clone = registry.pickingEntryFor(call.pipeline);
+			if (!clone)
+				continue;
+			const auto& entry = registry.entry(*clone);
+			cmd.pushDataEXT(vk::PushDataInfoEXT(entry.pushDataSet,
+				vk::HostAddressRangeConstEXT(call.pushData.data(), call.pushData.size())));
+			entry.pipeline.bindShaders(cmd);
+			cmd.drawMeshTasksEXT(call.groupCount, 1, 1);
+		}
+	} else if (pass.kind == RgPassKind::drawLight) {
 		// Phase 7 D1 / Phase 8 ①：固定全屏单 group draw（无 push constant；采样描述符
 		// baked 在 shader object 的 extra mapping，输入 RT 的 CAO→SRO 布局转换已由
 		// pass.barriers 完成）；条目按 pass.state 名解析（"light"/"tonemap"，
@@ -595,6 +621,10 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 	capturer.record(cmd, swapchainImage, extent,
 		swapchain->getFormat().format, attachmentLayouts);
 
+	// picking 回读（Phase 10 批 10.5）：请求帧录 object_id RT 1-texel → staging
+	//（布局推进/未装饰图 warn/nullptr 早退语义见方法体与 picking.cppm）
+	pickingRecord(cmd);
+
 	// ⑪.6 帧末扩展段（Phase 10 批 10.1：imgui 调试面板；**空 hook = 零调用零 barrier，
 	// 正常路径逐位不变**）。布局推进与 hook 调用体见 emitFrameEndOverlay。
 	if (frameEndHook)
@@ -619,6 +649,10 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 	// 帧内捕获收口（手术 2：块体迁 FrameCapturer::collect——等本帧 fence、搬 mapped
 	// 字节进结果；fence 不 reset（下帧 ① 照常），停顿只在请求帧，正常帧零影响）
 	capturer.collect(device, session.currentInFlightFence());
+
+	// picking 收口（批 10.5）：等本帧 fence 读回 raw id（+1 还原在 PickingService 内）
+	if (pickingService)
+		pickingService->collect(device, session.currentInFlightFence());
 
 	// ⑭⑮ 上屏 + 帧 slot 推进（手术 4：块体迁 FrameSession::present/advance——
 	// present fence 追踪、out-of-date 重建、noPresent 跳 present 语义全保留）

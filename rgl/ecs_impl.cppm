@@ -83,6 +83,12 @@ void eventSystem(entt::registry& rg) {
 				e.button = static_cast<uint8_t>(event.button.button);
 				e.pressed = true;
 				e.pos = {event.button.x, event.button.y};  // 窗口内绝对坐标（Phase 10 点选）
+				// picking 请求（Phase 10 批 10.5）：走到这里 = 已过 InputFilter（imgui
+				// 控件区域内的点击被吞），左键 = 点选；钩子未挂 = 空函数零调用
+				if (event.button.button == SDL_BUTTON_LEFT) {
+					if (auto* pk = rg.ctx().find<PickingHook>(); pk && pk->requestPick)
+						pk->requestPick(event.button.x, event.button.y);
+				}
 				events.events.push_back(e);
 				break;
 			}
@@ -399,6 +405,45 @@ void configReloadTick(entt::registry& rg) {
 	hook->poll();
 }
 
+/** picking 结果 tick（Phase 10 批 10.5；renderSystem 帧首调用，同 configReloadTick
+ *  帧边界）：消费 PickingService 回读 → objectSlot 反查 MeshRef entity（点击触发，
+ *  O(n) 扫一次可接受，不平行维护 slot→entity 映射表）→ 写 SelectedObject ctx。
+ *  钩子未挂 = 空指针早退零开销；无新结果/空像素 = 保持上次选中（v1 不做清空）。 */
+void pickingTick(entt::registry& rg) {
+	auto* hook = rg.ctx().find<PickingHook>();
+	if (!hook || !hook->takeResult)
+		return;
+	// 脚本化探针（diagnostics.picking_probe = {frame,x,y}）：第 frame 帧发一次请求
+	// ——headless 无鼠标验证全链（本帧 request → 帧末 record → 下帧此处置集）
+	static uint32_t frameCount = 0;
+	const auto& probe = diagnostics().pickingProbeFrame;
+	if (probe > 0 && hook->requestPick && frameCount++ == probe) {
+		if (auto* logger = RLLogger::getInstance())
+			logger->info("picking: probe 第 {} 帧请求 ({}, {})", probe,
+				diagnostics().pickingProbeX, diagnostics().pickingProbeY);
+		hook->requestPick(static_cast<float>(diagnostics().pickingProbeX),
+			static_cast<float>(diagnostics().pickingProbeY));
+	}
+	const auto slot = hook->takeResult();
+	if (!slot)
+		return;
+	if (!rg.ctx().contains<SelectedObject>())
+		rg.ctx().insert_or_assign<SelectedObject>(SelectedObject{});
+	auto& sel = rg.ctx().get<SelectedObject>();
+	sel.objectSlot = *slot;
+	sel.entity = static_cast<entt::entity>(entt::null);
+	for (const auto entity : rg.view<MeshRef>())
+		if (rg.get<MeshRef>(entity).objectSlot == *slot) {
+			sel.entity = entity;
+			break;
+		}
+	if (auto* logger = RLLogger::getInstance())
+		logger->info("picking: objectSlot {} → entity {}{}", *slot,
+			static_cast<std::uint32_t>(sel.entity),
+			sel.entity == static_cast<entt::entity>(entt::null)
+				? "（无匹配 MeshRef，选中保持空）" : "");
+}
+
 /** 实现流水（语义/契约见接口声明）：构建显式 system 列表（camera→animation→bounds→
  * projection→renderlist）→ 主循环：eventSystem → AppExit 判定 → dt clamp [0, 0.1s]
  * → resizeSystem（失败 = waitForIdle 后退出循环返回 Error）→ system 链 →
@@ -454,6 +499,9 @@ std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer& rende
 		// 配置热重载帧边界（Phase 10 批 10.3）：本帧任何 system/draw 之前套用变更
 		configReloadTick(rg);
 
+		// picking 结果帧边界（Phase 10 批 10.5）：消费上帧回读 → 反查 entity → ctx
+		pickingTick(rg);
+
 		float ticks = static_cast<float>(SDL_GetTicks());
 		// dt 限幅：窗口卡顿/切后台回来时防止相机瞬移
 		float dt = std::clamp((ticks - prevTicks) / 1000.0f, 0.0f, 0.1f);
@@ -503,6 +551,31 @@ std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer& rende
 		return std::unexpected(std::move(*lastError));
 	}
 	return {};
+}
+
+/** 材质五参数控件块（批 10.2c 材质页 / 批 10.5 "选中"页共用；调用方保证
+ *  matId < assets.materialSize()）。写通道 = getMaterialMut（renderListSystem 每帧
+ *  读本表写 ObjectDraw = 下一帧生效）；材质表仅注册期增长 = 引用地址稳定。 */
+void appendMaterialControls(ParamPage& page, RGL::AssetTable& assets, uint32_t matId) {
+	MaterialAsset& mat = assets.getMaterialMut(matId);
+	page.colors.push_back({.label = "基色 baseColor rgb",
+		.get = [&mat] { return glm::vec3(mat.baseColor); },
+		.set = [&mat](const glm::vec3& v) { mat.baseColor = glm::vec4(v, mat.baseColor.a); }});
+	page.sliders.push_back({.label = "不透明度 α", .minValue = 0.0f, .maxValue = 1.0f,
+		.get = [&mat] { return mat.baseColor.a; },
+		.set = [&mat](float v) { mat.baseColor.a = v; }});
+	page.sliders.push_back({.label = "roughness", .minValue = 0.0f, .maxValue = 1.0f,
+		.get = [&mat] { return mat.roughness; },
+		.set = [&mat](float v) { mat.roughness = v; }});
+	page.sliders.push_back({.label = "metallic", .minValue = 0.0f, .maxValue = 1.0f,
+		.get = [&mat] { return mat.metallic; },
+		.set = [&mat](float v) { mat.metallic = v; }});
+	page.colors.push_back({.label = "自发光 emissive",
+		.get = [&mat] { return mat.emissive; },
+		.set = [&mat](const glm::vec3& v) { mat.emissive = v; }});
+	page.sliders.push_back({.label = "alphaCutoff（MASK 生效）", .minValue = 0.0f, .maxValue = 1.0f,
+		.get = [&mat] { return mat.alphaModeMask ? mat.alphaCutoff : 0.0f; },
+		.set = [&mat](float v) { mat.alphaCutoff = v; }});
 }
 
 /** buildDebugParamPages 定义（接口注释）：页 = "渲染"（SceneEnv ctx）+ "灯光"（Light
@@ -557,7 +630,8 @@ std::vector<ParamPage> buildDebugParamPages(entt::registry& rg, RGL::AssetTable&
 	// 材质页（Phase 10 批 10.2c）：id 选择器（DebugPanelState 持久）→ 选中材质五参数
 	//（baseColor rgb+α / metallic / roughness / emissive / alphaCutoff）+ 共享实体数提示
 	//（材质值去重共享，编辑影响全部引用者——面板明示）。写通道 = getMaterialMut，
-	// renderListSystem 每帧读本表写 ObjectDraw = 下一帧生效。
+	// renderListSystem 每帧读本表写 ObjectDraw = 下一帧生效。控件块抽
+	// appendMaterialControls（批 10.5 "选中"页共用）。
 	ParamPage matPage{.name = "材质"};
 	if (auto* panel = rg.ctx().find<DebugPanelState>(); panel != nullptr && assets.materialSize() > 0) {
 		panel->materialSel = std::min(panel->materialSel, assets.materialSize() - 1);
@@ -566,34 +640,36 @@ std::vector<ParamPage> buildDebugParamPages(entt::registry& rg, RGL::AssetTable&
 			.minValue = 0, .maxValue = static_cast<int>(assets.materialSize()) - 1,
 			.get = [panel] { return static_cast<int>(panel->materialSel); },
 			.set = [panel](int v) { panel->materialSel = static_cast<uint32_t>(v); }});
-		MaterialAsset& mat = assets.getMaterialMut(sel);
 		uint32_t sharedCount = 0;
 		rg.view<MaterialRef>().each(
 			[&](const MaterialRef& m) { if (m.material == sel) ++sharedCount; });
 		matPage.texts.push_back({.text = [sel, sharedCount] {
 			return "材质 M" + std::to_string(sel) + " · 共享该材质的实体数 " +
 				std::to_string(sharedCount); }});
-		matPage.colors.push_back({.label = "基色 baseColor rgb",
-			.get = [&mat] { return glm::vec3(mat.baseColor); },
-			.set = [&mat](const glm::vec3& v) { mat.baseColor = glm::vec4(v, mat.baseColor.a); }});
-		matPage.sliders.push_back({.label = "不透明度 α", .minValue = 0.0f, .maxValue = 1.0f,
-			.get = [&mat] { return mat.baseColor.a; },
-			.set = [&mat](float v) { mat.baseColor.a = v; }});
-		matPage.sliders.push_back({.label = "roughness", .minValue = 0.0f, .maxValue = 1.0f,
-			.get = [&mat] { return mat.roughness; },
-			.set = [&mat](float v) { mat.roughness = v; }});
-		matPage.sliders.push_back({.label = "metallic", .minValue = 0.0f, .maxValue = 1.0f,
-			.get = [&mat] { return mat.metallic; },
-			.set = [&mat](float v) { mat.metallic = v; }});
-		matPage.colors.push_back({.label = "自发光 emissive",
-			.get = [&mat] { return mat.emissive; },
-			.set = [&mat](const glm::vec3& v) { mat.emissive = v; }});
-		matPage.sliders.push_back({.label = "alphaCutoff（MASK 生效）", .minValue = 0.0f, .maxValue = 1.0f,
-			.get = [&mat] { return mat.alphaModeMask ? mat.alphaCutoff : 0.0f; },
-			.set = [&mat](float v) { mat.alphaCutoff = v; }});
+		appendMaterialControls(matPage, assets, sel);
 	}
 
 	out.push_back(std::move(matPage));
+
+	// "选中"页（Phase 10 批 10.5，D5 点选实体上下文）：SelectedObject ctx（pickingTick
+	// 反查写入）→ 实体信息行 + 该实体材质五参数（appendMaterialControls 复用，编辑
+	// 影响共享该材质的全部实体——同材质页语义）。未选中/钩子未挂 = 空页提示。
+	ParamPage selPage{.name = "选中"};
+	if (auto* picked = rg.ctx().find<SelectedObject>();
+		picked && picked->entity != static_cast<entt::entity>(entt::null)) {
+		const auto entity = picked->entity;
+		const auto slot = picked->objectSlot;
+		const uint32_t matId = rg.get<MaterialRef>(entity).material;
+		selPage.texts.push_back({.text = [slot, matId] {
+			return "点中 objectSlot " + std::to_string(slot) + " → 材质 M"
+				+ std::to_string(matId); }});
+		if (matId < assets.materialSize())
+			appendMaterialControls(selPage, assets, matId);
+	} else {
+		selPage.texts.push_back({.text = [] {
+			return std::string("未选中——picking 开启后左键点击模型（面板外区域）"); }});
+	}
+	out.push_back(std::move(selPage));
 	return out;
 }
 

@@ -24,6 +24,7 @@ export import frame_capture;  // 手术 2：帧内回读捕获器；FrameCapture
 import cull_driver;  // 手术 3：culling 帧编舞（④c 提交时序 + 双路 + 对账）迁出本类
 import frame_session;  // 手术 4：帧生命周期会话（同步对象/命令缓冲/acquire/submit/present/重建）
 import vk_indirect_commands;  // Phase 7b：DGC 命令生成（NVIDIA 路；main 按能力位条件构造）
+import picking;  // Phase 10 批 10.5：GPU id 点选服务（main 门控构造，Renderer 只挂指针）
 import vkerror;
 import diagnostics;  // no_present 诊断单例（configs/diagnostics.lua）
 
@@ -154,6 +155,22 @@ export class Renderer {
 		frameEndHook = std::move(hook);
 	}
 
+	/**
+	 * picking 服务挂点（Phase 10 批 10.5，D3；main 门控装配 = diagnostics.picking，
+	 * 缺省 nullptr = 零开销）。非空时执行器：picking pass 走克隆管线重放分支
+	 *（executePassDraws）+ 帧末 record（capturer.record 后）+ submit 后 collect。
+	 * 生命周期 = 装配方（main）持有，须活过 Renderer。
+	 * @param svc 服务指针（nullptr = 解除）
+	 */
+	void setPickingService(PickingService* svc) { pickingService = svc; }
+
+	/**
+	 * 编译渲染图只读访问（Phase 10 批 10.5：PickingService 构造需附件表定位 object_id
+	 * slot；同 getSwapchainRef 惯例）。
+	 * @return 图 const 引用
+	 */
+	[[nodiscard]] const RGL::CompiledRenderGraph& getRenderGraphRef() const { return renderGraph; }
+
    private:
 	/**
 	 * scene data staging ring（Phase 5 批次 2，全项目首个每帧动态 GPU 数据）：
@@ -210,6 +227,12 @@ export class Renderer {
 	void executePassDraws(vk::raii::CommandBuffer& cmd, const RgPassPlan& pass,
 		const FrameDrawList& list, uint32_t frameSlot);
 	/**
+	 * picking 回读录制（Phase 10 批 10.5）：drawFrame ⑪.5 之后调用——服务未挂 =
+	 * 零调用；否则 PickingService::record（object_id RT 请求像素 1-texel → staging）。
+	 * @param cmd 本帧命令缓冲（录制期）
+	 */
+	void pickingRecord(vk::raii::CommandBuffer& cmd);
+	/**
 	 * 单个 mesh draw：push DrawArgs（pushDataEXT）→ bindShaders → drawMeshTasksEXT。
 	 * @param cmd 本帧命令缓冲（录制期）
 	 * @param call 绘制条目（pipeline / pushData / groupCount）
@@ -256,6 +279,9 @@ export class Renderer {
 	// 帧末扩展段 hook（Phase 10 批 10.1，setFrameEndHook 装配；空 = drawFrame 零调用。
 	// 不列 ctor 初始化列表——默认空 std::function，无初始化顺序约束）
 	std::function<bool(vk::raii::CommandBuffer&, vk::Extent2D, vk::ImageView)> frameEndHook;
+	// picking 服务（Phase 10 批 10.5，setPickingService 装配；nullptr = 零开销）。
+	// 非空 = 执行器 picking pass 走克隆管线重放 + 帧末 record + submit 后 collect。
+	PickingService* pickingService = nullptr;
 	// edS3：depth clip enable 动态状态能力门 + 四段 RenderState 值集合 + 状态名解析
 	//（Phase 10 批次 0 手术 1：状态表迁出至 StateKit——pass.state 词表与状态值的唯一
 	// 持有者；Phase 10 阴影新增状态集中改该模块一处）

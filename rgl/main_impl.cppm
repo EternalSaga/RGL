@@ -51,6 +51,7 @@ import profiler;         // Phase 9：帧循环 zone 收口 dump（docs/phase9_p
 import gpu_profiler;     // Phase 9.2：GPU 时间戳会话（main 栈持有 = device 生命周期内）
 import llm_debug;
 import imgui_layer;  // Phase 10 批 10.1：IMGUI 调试面板层（main 装配 = 唯一认识 imgui 的地方之一）
+import picking;  // PickingService（Phase 10 批 10.5 装配）
 import param_registry;  // DebugPanelState ctx（面板跨帧 UI 态，10.2c）
 import ecs;
 import rllogger;
@@ -222,12 +223,18 @@ void validateEnvironmentContract(const SceneConfig& scene) {
 	}
 }
 
-/** 渲染图配置加载 + 编译（错误抛 std::runtime_error）+ deferredMode 求值。 */
+/** 渲染图配置加载 + compileRenderGraph（校验 + barrier 布局链推导，错误抛 std::runtime_error）+ deferredMode 求值。
+ *  Phase 10 批 10.5：diagnostics.picking（默认关）= 编译前 decoratePickingPass 装饰
+ *  object_id pass（D10 编译图期门控——默认关不调用 = 图逐位同 diff0）。 */
 CompiledGraphResult compileGraphOrThrow(const char* path) {
 	auto graphConfig = loadRenderGraphConfig(path);
 	if (!graphConfig)
 		throw std::runtime_error(graphConfig.error().describe());
 	bool deferredMode = graphConfig->variant == RgGraphVariant::deferred;
+	if (diagnostics().picking && !decoratePickingPass(graphConfig->desc)) {
+		if (auto* logger = RLLogger::getInstance())
+			logger->warn("picking: 图形态不支持 object_id pass 装饰（无带 depth 的 opaque pass），点选不可用");
+	}
 	auto compiledGraph = compileRenderGraph(graphConfig->desc);
 	if (!compiledGraph)
 		throw std::runtime_error(fmt::format("render graph compile failed: {}",
@@ -353,6 +360,11 @@ int main() {
 		// C1：管线条目烘焙（per **unique 模型**——instancing 共享条目；addModelEntry
 		// 按 (规格,顶点 slot,纹理 slot) 组合去重兜底）
 		bakePipelineEntries(assets, configs.scene, deferredMode, shaderRegistry, vkResources, samplers, assetTable);
+		// picking 克隆条目（Phase 10 批 10.5，门 = diagnostics.picking 默认关 = 零条目
+		// 追加）：契约 = 模型条目烘焙完成后立即（克隆只认 modelEntry 位，天空盒/光等
+		// 后续条目在不在表内无关）
+		if (diagnostics().picking)
+			shaderRegistry.addPickingEntries("generated_shaders/picking.frag.spv");
 		// C2/C2b：场景实体注册（模型/cube/灯）+ 实例矩阵槽容量契约
 		registerSceneEntities(registry, assets, configs.scene, vkResources, assetTable, shaderRegistry);
 
@@ -394,6 +406,11 @@ int main() {
 		// shader 热重载（Phase 10 批 10.4）：门 = diagnostics.shader_reload（默认关）；
 		// 复用同一 ConfigReloadHook 帧边界挂点（组合追加）。需 backEnd 已装配（waitForIdle/DGC）。
 		wireShaderHotReload(registry, shaderRegistry, backEnd);
+
+		// GPU id 点选（Phase 10 批 10.5）：门 = diagnostics.picking（wirePicking 内部
+		// 判，关 = nullptr 零装配）。声明序在 backEnd 后 = Renderer 持裸指针存活契约；
+		// 声明序在 registry 块内其后 = 逆序析构先释放服务再毁 registry ctx 闭包。
+		auto pickingService = wirePicking(registry, vkResources, rtCache, backEnd.renderer);
 
 		/**
 		 * DIAG（可见窗 fault 排查）每帧回调：隐藏窗启动、frame == showAfter 时

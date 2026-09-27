@@ -221,7 +221,9 @@ Phase 9：性能观测（profiler）——先回答"CPU-bound 还是 GPU-bound"�
    单源化为前置批）。批次：10.1 imgui 骨架 ✅ / 10.2a ObjectDraw 单源化 ✅ /
    10.2b 灯曝光控件 ✅ / 10.2c 材质控件 ✅ / 10.3 配置热重载 ✅（均 2026-09-28）/
    10.4 shader 热重载 L1 ✅（2026-09-28，SPV 二进制签名守卫 + 两阶段同槽重建；顺带暴露并
-   修复 rgl_shader DEP 表 11 处 import 漏登）/ 10.5 点选（剩）/ 10.6（可选）反射语义扩产。
+   修复 rgl_shader DEP 表 11 处 import 漏登）/ 10.5 点选 ✅（2026-09-28，id pass 克隆
+   管线重放 + r32ui 回读 + SelectedObject ctx + 面板"选中"页；顺带 picking_probe 配置
+   探针 + D12 RPC 延后决策）/ 10.6（可选）反射语义扩产。
      ↓
 Phase 11：阴影（大特性，一口气；风险分层 = CSM 承诺交付 + HFTS 带退出条件的 spike；
    原编号 Phase 10，2026-09-27 因调试交互插队顺延）

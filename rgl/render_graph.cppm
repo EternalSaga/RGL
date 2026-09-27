@@ -93,7 +93,8 @@ export struct RgAttachmentDesc {
  * 词表（字符串 → vk::Format，小写下划线命名，表驱动、扩展 = impl 加一行）：
  * "inherit" = 随 swapchain 格式（执行器解析 fallback）；具名覆盖 Phase 7 G-buffer 类
  * 显式 RT 需求（rgba8_srgb/rgba8_unorm/b8g8r8a8_srgb/rgb8_srgb/rg16_snorm/rg16_unorm/
- * rgba16_sfloat/rgb16_sfloat/r32g32b32_sfloat/rgba32_sfloat/r32_sfloat/rg32_sfloat）。
+ * rgba16_sfloat/rgb16_sfloat/r32g32b32_sfloat/rgba32_sfloat/r32_sfloat/rg32_sfloat/
+ * r32_uint）。
  * @param name 格式名（小写下划线）
  * @return true = 词表内（含 "inherit"）
  */
@@ -317,6 +318,19 @@ export const RgGraphDesc& offscreenRenderGraphDesc();
  * @return deferred 图声明（引用）
  */
 export const RgGraphDesc& deferredRenderGraphDesc();
+
+/**
+ * picking pass 装饰（Phase 10 批 10.5，D3/D10）：给图追加 object-id offscreen 附件
+ * （r32_uint，clear 0 = 未命中）+ 一个 picking drawMesh pass（state="picking"、
+ * drawSource="opaque" —— 执行器以克隆管线条目重放 opaque 段，见 vkrenderer），插在
+ * **首个带 depth 输出的 opaque drawMesh pass 之后**（scene depth 已写 = 点选做 depth
+ * 测试得可见层；picking 管线侧 depthWrite=false，不污染后续 transparent 段）。
+ * 调用点 = main 装配层且 `diagnostics.picking` 门控（默认关 = 不调用 = 图逐位同，D10）。
+ * 无 depth 输出 opaque pass 的图（offscreen DIAG 变体）不支持：原样不改返回 false。
+ * @param desc 图声明（原地修改：追加 attachment + pass）
+ * @return true = 已装饰；false = 图形态不支持（desc 未被修改）
+ */
+export bool decoratePickingPass(RgGraphDesc& desc);
 
 /** G-buffer 附件契约条目（名字 + 格式串）。 */
 export struct RgGBufferDesc {

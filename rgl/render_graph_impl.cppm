@@ -436,10 +436,10 @@ std::expected<void, Error> finishPresent(CompileCtx& ctx) {
 /**
  * 格式词表（小写下划线 → vk::Format，接口注释是语义权威）：表驱动，扩展 = 加一行。
  * "inherit" 不在表内——语义 = 随 swapchain 格式，由 resolveRgFormat 单独短路。
- * @return 12 项词表（引用，静态存储）
+ * @return 13 项词表（引用，静态存储）
  */
-const std::array<std::pair<std::string_view, vk::Format>, 12>& rgFormatTable() {
-	static const std::array<std::pair<std::string_view, vk::Format>, 12> table = {
+const std::array<std::pair<std::string_view, vk::Format>, 13>& rgFormatTable() {
+	static const std::array<std::pair<std::string_view, vk::Format>, 13> table = {
 		std::pair{"rgba8_srgb", vk::Format::eR8G8B8A8Srgb},
 		std::pair{"rgba8_unorm", vk::Format::eR8G8B8A8Unorm},
 		std::pair{"b8g8r8a8_srgb", vk::Format::eB8G8R8A8Srgb},
@@ -452,6 +452,8 @@ const std::array<std::pair<std::string_view, vk::Format>, 12>& rgFormatTable() {
 		std::pair{"rgba32_sfloat", vk::Format::eR32G32B32A32Sfloat},
 		std::pair{"r32_sfloat", vk::Format::eR32Sfloat},
 		std::pair{"rg32_sfloat", vk::Format::eR32G32Sfloat},
+		// Phase 10 批 10.5：object-id attachment（picking pass 写 objectIndex+1）
+		std::pair{"r32_uint", vk::Format::eR32Uint},
 	};
 	return table;
 }
@@ -517,6 +519,38 @@ vk::ImageMemoryBarrier2 materializeBarrier(const RgBarrierPlan& plan, VkImage im
 	vk::ImageLayout oldLayout) {
 	return RGL::createImageBarrier(image, oldLayout, plan.newLayout, plan.aspect,
 		plan.srcStage, plan.dstStage, plan.srcAccess, plan.dstAccess);
+}
+
+/**
+ * decoratePickingPass 定义（契约见 render_graph.cppm 接口注释）。depth 附件名从锚点
+ * pass 的 depthWrite 输出取（不硬编码 "depth"，deferred/offscreen 变体名同约定但零
+ * 假设）；object_id clear 全零（VkClearValue union：float 0.0 与 uint32 0 同表示，
+ * r32ui 下 float 默认值 {0.1,…} 会 reinterpret 成垃圾 id，必须显式零）。
+ */
+bool decoratePickingPass(RgGraphDesc& desc) {
+	// 锚点 = 首个带 depth 输出的 opaque drawMesh pass（scene depth 已写 = picking 测深得可见层）
+	auto anchor = std::ranges::find_if(desc.passes, [](const RgPassDesc& p) {
+		return p.kind == RgPassKind::drawMesh && p.drawSource == "opaque"
+			&& std::ranges::any_of(p.outputs, [](const RgPassAttachment& o) {
+				return o.usage == RgUsage::depthWrite;
+			});
+	});
+	if (anchor == desc.passes.end())
+		return false;  // 图形态不支持（object-id pass 无 depth 可测）
+	auto depthOut = std::ranges::find_if(anchor->outputs, [](const RgPassAttachment& o) {
+		return o.usage == RgUsage::depthWrite;
+	});
+	desc.attachments.push_back(RgAttachmentDesc{
+		.name = "object_id", .kind = RgAttachmentKind::offscreen, .format = "r32_uint"});
+	desc.passes.insert(std::next(anchor), RgPassDesc{
+		.name = "picking", .state = "picking", .drawSource = "opaque",
+		.outputs = {
+			RgPassAttachment{.attachment = "object_id", .usage = RgUsage::colorWrite,
+				.loadOp = RgLoadOp::clear, .storeOp = RgStoreOp::store,
+				.clear = RgClearValue{{0.0f, 0.0f, 0.0f, 0.0f}, 1.0f}},
+			RgPassAttachment{.attachment = depthOut->attachment, .usage = RgUsage::depthWrite,
+				.loadOp = RgLoadOp::load, .storeOp = RgStoreOp::store}}});
+	return true;
 }
 
 }  // namespace RGL
