@@ -553,4 +553,78 @@ bool decoratePickingPass(RgGraphDesc& desc) {
 	return true;
 }
 
+/**
+ * decorateHighlightPass 定义（契约见 render_graph.cppm 接口注释）。depth 附件名从
+ * 首个带 depth 输出的 opaque pass 取（同 decoratePickingPass 纪律，不硬编码名字）；
+ * 颜色写既有 scene_hdr（load 保留成片，高亮 alpha 混合叠加）。插图末 = 盖在所有
+ * 已渲内容之上。
+ */
+bool decorateHighlightPass(RgGraphDesc& desc) {
+	// 插入点 = **首个采样场景色附件的 pass 之前**（forward = tonemap、deferred = tonemap、
+	// offscreen = composite blit）。高亮必须盖在全部已渲内容之上、且在色附件被搬到
+	// 上屏附件**之前**——插图末会落在 tonemap 之后，此时 scene_hdr 已无人采样，画了也白画。
+	// 场景色附件名不硬编码（kSceneHdrName），由消费 pass 的 sampleRead 输入反查——三变体
+	// 各自的名字（scene_hdr / scene_rt）自动跟随。
+	const auto hasSampleInput = [](const RgPassDesc& p) {
+		return std::ranges::any_of(p.inputs, [](const RgPassAttachment& i) {
+			return i.usage == RgUsage::sampleRead;
+		});
+	};
+	const auto hasDepthOutput = [](const RgPassDesc& p) {
+		return std::ranges::any_of(p.outputs, [](const RgPassAttachment& o) {
+			return o.usage == RgUsage::depthWrite;
+		});
+	};
+	// 插入点 = 首个「采样色附件」的消费 pass 下标（C++23 无 ranges::find_if_index，手写循环）
+	size_t consumeIdx = desc.passes.size();
+	for (size_t i = 0; i < desc.passes.size(); ++i) {
+		if (hasSampleInput(desc.passes[i])) {
+			consumeIdx = i;
+			break;
+		}
+	}
+	if (consumeIdx == desc.passes.size())
+		return false;  // 图形态不支持（无「采样色附件」的消费 pass = 无成片可叠加）
+	std::string colorAtt;
+	for (const auto& in : desc.passes[consumeIdx].inputs) {
+		if (in.usage == RgUsage::sampleRead) {
+			colorAtt = in.attachment;
+			break;
+		}
+	}
+	// depth 附件名 = 高亮插入点之前最后一个写 depth 的 pass（借它的 depth 做可见性测试，
+	// 不硬编码 "depth"，deferred/offscreen 变体名同约定但零假设）
+	size_t depthIdx = desc.passes.size();
+	for (size_t i = consumeIdx; i-- > 0;) {
+		if (hasDepthOutput(desc.passes[i])) {
+			depthIdx = i;
+			break;
+		}
+	}
+	if (depthIdx == desc.passes.size())
+		return false;  // 无 depth 可测 = 高亮会糊成一片
+	std::string depthAtt;
+	for (auto& out : desc.passes[depthIdx].outputs) {
+		if (out.usage != RgUsage::depthWrite)
+			continue;
+		depthAtt = out.attachment;
+		// 该 pass 的 depth 必须 **store**——否则（forward 图 transparent 段按「depth
+		// 后续无人用」的优化声明 dontCare）高亮读到的是未定义内容。改 storeOp 是装饰
+		// 的一部分，不改默认图（门关 = 不调用 = 图逐位同，维持 D10 的 diff0 基线）。
+		out.storeOp = RgStoreOp::store;
+		break;
+	}
+	// 写场景色（load 保留成片，alpha 混合叠加）+ depth（load；实际是否真写由 state_kit
+	// highlightState 关掉，此处 depthWrite 是「渲染深度附件」的声明位）
+	RgPassDesc highlight{.name = "highlight", .state = "highlight", .drawSource = "opaque",
+		.outputs = {
+			RgPassAttachment{.attachment = colorAtt, .usage = RgUsage::colorWrite,
+				.loadOp = RgLoadOp::load, .storeOp = RgStoreOp::store},
+			RgPassAttachment{.attachment = depthAtt, .usage = RgUsage::depthWrite,
+				.loadOp = RgLoadOp::load, .storeOp = RgStoreOp::store}}};
+	desc.passes.insert(desc.passes.begin() + static_cast<ptrdiff_t>(consumeIdx),
+		std::move(highlight));
+	return true;
+}
+
 }  // namespace RGL

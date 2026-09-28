@@ -20,6 +20,10 @@ import camera;
 
 namespace RGL {
 
+/** materialBySlot 哨兵 = 该 objectSlot 本帧无实体（批 10.7 高亮过滤表；被剔对象不在
+ *  draw list 里故读不到，留哨兵避免读到上一帧陈值）。 */
+constexpr uint32_t kNoMaterial = 0xFFFFFFFFu;
+
 // renderListSystem 定义（2026-09-02 编译提速 A 方案）：帧函数体移出接口 TU，
 // BMI 只含声明 + RenderListState；本单元是叶子边。
 
@@ -54,6 +58,9 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	state.matrices.resize(objectSlotCount, glm::mat4(1.0f));
 	state.mvps.resize(objectSlotCount, glm::mat4(1.0f));
 	state.draws.resize(objectSlotCount);
+	// 批 10.7 高亮过滤表：按 objectSlot 存材质 id（kNoMaterial = 该槽本帧无实体；
+	// 视锥剔除后不在 draw list 里故不会被读到，留哨兵免得读到陈值）
+	state.materialBySlot.assign(objectSlotCount, kNoMaterial);
 
 	// Phase 7 批次 4：CPU frustum culling——视锥 6 面从 proj·view 提取（每帧一次），逐 entity
 	// node-local 剔除球经 modelMatrix 变换到世界后测（保守：跨界判可见，绝不误剔）。
@@ -93,6 +100,9 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 			// w>0 且 alpha<w 才丢；非 MASK 写 0 = 恒不测，逐位不变）
 			draw.emissive = glm::vec4(mat.emissive, mat.alphaModeMask ? mat.alphaCutoff : 0.0f);
 			args.objectIndex = meshRef.objectSlot;  // bindless 各表下标（实例级，instancing）
+			// 批 10.7：高亮过滤键（纯 CPU 侧）。放在剔除测试**之前**——虽然被剔对象不在
+			// draw list 里读不到，但保持「表覆盖全部 objectSlot」的不变式，便于反查。
+			state.materialBySlot[meshRef.objectSlot] = matRef.material;
 			if (candidate)
 				cullArgs.push_back(args);
 			// 剔除（groupCount 守卫后：只统计真图元）——node-local 球 × modelMatrix → 世界球测 6 面
@@ -110,6 +120,14 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 		});
 
 	FrameDrawList fresh;
+	// 批 10.7 高亮通道：把 SelectedObject ctx 的选中材质 + 过滤表搬进 draw list（执行器
+	// 据此过滤）。entity==null（未选中/已取消）→ hasSelection=false，pass 零 draw。
+	if (const auto* sel = rg.ctx().find<SelectedObject>();
+		sel && sel->entity != static_cast<entt::entity>(entt::null)) {
+		fresh.hasSelection = true;
+		fresh.selectedMaterial = sel->materialId;
+	}
+	fresh.materialBySlot = std::span<const uint32_t>{state.materialBySlot};
 	for (const auto& p : opaque)
 		fresh.calls.push_back(p.call);
 	// Phase 5.5 批次 4 天空盒段：opaque 之后、透明之前（天空恒最远背景，透明在其上混合）；

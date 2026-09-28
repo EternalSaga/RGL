@@ -66,16 +66,6 @@ export struct PickingHook {
 	std::function<std::optional<uint32_t>()> takeResult;
 };
 
-/**
- * 点选选中的实体（Phase 10 批 10.5；registry context，pickingTick 反查写入）。
- * entity = entt::null 表示未命中/尚未点选；面板"选中"页读 ctx 实例化该实体材质控件。
- * 选中态不在 registry 外平行维护（ECS 规范 1）。
- */
-export struct SelectedObject {
-	entt::entity entity = static_cast<entt::entity>(entt::null);
-	uint32_t objectSlot = 0;  // MeshRef.objectSlot 同值（raw id − 1）
-};
-
 // 中央事件轮询（唯一 SDL_PollEvent 调用点）：窗口状态（WindowExtent/AppExit）+
 // 输入事件流（InputEvents：本 system 只产事件，不做键位映射——键绑定在 Camera.keys，
 // cameraSystem 消费事件时按绑定解释，E5.4；退出/窗口状态不走事件流）

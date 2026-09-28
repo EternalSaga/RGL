@@ -1,7 +1,8 @@
 # Phase 10 实施计划：调试交互（配置热重载 + IMGUI 参数面板 + shader 热重载 + 点选取参）
 
-> **状态**：历史（已归档 2026-09-28）——**批 10.1–10.6 全部落地**。Phase 10 收口；
+> **状态**：历史（已归档 2026-09-28）——**批 10.1–10.7 全部落地**。Phase 10 收口；
 > 唯一遗留 = 面板 UI 视觉走查（用户窗口验收）+ D12（RPC 通道）延后待翻案条件。
+> 批 10.7（2026-09-28 补做，点选高亮 + 选中跳页）见 §10.7 实施记录。
 > 现状权威 = AGENTS.md + next_roadmap.md；本文行号/代码引用自归档起漂移，只取设计
 > 思路与决策（D1–D12）为历史依据。
 > 关键决策 D1–D5 由用户拍板（见 §2），D6–D12 为主 agent 技术决策（可否决）。
@@ -205,6 +206,7 @@ profiler 面板读数复用现成 `profiler = 0`（不开 profiler 时面板显�
 | **10.4** shader 热重载 L1 **✅ 2026-09-28** | §6：watch + fork slangc + SPV 二进制签名守卫（§6.1 偏差）+ 两阶段同槽重建 + DGC 两路句柄刷新 | 新 `.cppm`×2 + `shader_impl`、`shader.cppm` 签名解析、`shader_registry` build/commitReplacement、`vk_indirect_commands` update 入口、CMake 三宏注入 | 默认关 diff0；开 = 改注释重载无视觉变化、改逻辑下一帧生效、**改契约被拦且旧管线继续跑** |
 | **10.5** 点选取参 **✅ 2026-09-28** | §7：点击事件 + id pass 进图 + 1 texel 回读 + objectSlot 反查 + 面板实体绑定 | 新 `.cppm`×2（picking）、`decoratePickingPass`、`addPickingEntries` 克隆、执行器分支、`PickingHook`/`SelectedObject` ctx、面板"选中"页、`picking_probe` | 默认关 diff0；开 = 点击命中正确（含遮挡层序）、面板显示并可调该实体参数 |
 | **10.6**（可选，D4 视情况）**✅ 2026-09-28** | 反射语义扩产：range/默认值/单位入 schema → 生成语义层，注册表薄化 | `rgl/param_semantics.json`（新第 7 管线数据源）+ inja 模板 + `param_semantics_generated`；面板构建拆出 `param_pages`(+impl) | 10.2b/c 行为不变（仅数据源换薄）✅ |
+| **10.7** 点选高亮 + 选中跳页 **✅ 2026-09-28** | §7 续：`highlight.frag` 克隆管线 + 高亮 pass（写既有色附件、插消费 pass 前）+ **按材质** CPU 过滤 draw + 面板选中跳页 + Esc 取消 | `rgl/shaders/highlight.frag.slang`（新，走 `rgl_shader` SPV 管线）、`shader_registry` 克隆泛化（`ClonePurpose`）、`decorateHighlightPass`、`state_kit.highlightState`、`Renderer::replayClonedPass`、`RenderListState.materialBySlot`、`SelectedObject` 迁 `scene_context` + 加 `materialId`、`DebugPanelState.pendingSelectJump` + `ParamPage.selectOnPick` | `picking=false` **BIT-IDENTICAL** ✅；开 = 点中物体琥珀高亮（同材质全部实体一起亮）+ 面板自动切"选中"页 + 共享实体数 + Esc 取消 |
 
 模块新建一律走 skill `rgl-new-module`；每批验收走 skill `rgl-verify`（headless 冒烟 +
 BIT-IDENTICAL 截图回归，基线 `10b00c78c4a2d644479bb56eb35ac796bae90ada6433178fecd3dc21f2e72d14`）。
@@ -405,6 +407,81 @@ BIT-IDENTICAL 截图回归，基线 `10b00c78c4a2d644479bb56eb35ac796bae90ada643
 - **验收**：`just reflect` 产物 13 常量全导出；默认关 forward 截图 = 基线
   `10b00c78…`；窗口 + imgui 面板（pageBuilder 每帧跑）25s 无崩溃 0 error；
   `checks --strict` 0 警告（style + doc）。
+
+### 10.7 实施记录（2026-09-28）
+
+**起因**：用户报"phase10 点选似乎没生效"。排查结论 = **点选链路一直是通的**（headless
+探针 + 窗口合成左键两轮实测均命中：`回读 raw id → objectSlot → entity`），真正原因是
+① `diagnostics.picking` 默认关；② **选中后画面零视觉反馈**——唯一反馈是面板"选中"页
+里的一行文字，而 Tab 默认停在"渲染"页，用户看不到。
+
+- **高亮 frag 走 SPV 编译管线，不新增反射管线**：`rgl/shaders/highlight.frag.slang` 经
+  `rgl_shader(highlight.frag HIGHLIGHT_FRAG_SPV model material scene)` 登记（同
+  `picking.frag` 先例）。它只 import 既有契约（model/material/scene）、**不定义新
+  struct**，故 7 条反射管线与 `generated/` 产物零变化（实测 `just reflect` 后
+  `git status` 无生成物 diff）。用户"所有 shader 都要走反射"的要求 = 每个 shader 都经
+  slangc 编译进 SPV，这一条满足。
+- **克隆机制泛化**：`addPickingEntries` → `addCloneEntries(ClonePurpose, fragSpv)`，
+  `pickingRemap` → `cloneRemap[用途][条目]`（`ClonePurpose{picking, highlight, kCount}`）。
+  新增用途只需加枚举值 + 一次调用，不动既有表与下标语义。
+- **高亮 pass 不新增附件**：写**既有**场景色附件（`loadOp=load` 保留成片，alpha 混合叠加）
+  + 既有 depth（`loadOp=load`，`state_kit.highlightState` 关 depthWrite）。
+  **插入点 = 首个「采样色附件的消费 pass」之前**（forward/deferred = tonemap 前，offscreen =
+  composite blit 前），附件名由该 pass 的 `sampleRead` 输入反查（不硬编码，三变体自动跟随）。
+  两个踩坑：① 最初按"图末"插 → 落在 tonemap **之后**，此时色附件已无人采样，高亮画了
+  也白画（图能编译过、pass 也在跑，纯视觉无效）；② 借 depth 前须把上一个写 depth 的
+  pass 的 `storeOp` 从 `dontCare` 改 `store`（forward 的 transparent 段按「depth 后续
+  无人用」声明 dontCare），否则 compile 报 "written with DontCare store but used later"。
+- **按材质过滤（方案 A，用户拍板）**：`RenderListState.materialBySlot`（按 objectSlot 存
+  材质 id，**纯 CPU 侧不进 scene data**）+ `FrameDrawList{hasSelection, selectedMaterial}`。
+  执行器 `replayClonedPass` 逐 draw 读 `pushData` 里的 `objectIndex` 查表比对（同
+  `cull_driver` 的 reinterpret 手法），命中才录。**刻意不进 GPU 契约**——避免为
+  「哪个物体被选中」新增 per-object 字节字段、触发 `ObjectDraw` 布局变更与 reflect
+  重生成。选中范围 = 同 `MaterialRef.material` 的**全部实体**（材质是共享资产，ECS 规范 5）。
+  执行器保持零 entt（选中态经 `FrameDrawList` 单通道传递，ECS 规范 4）。
+- **`SelectedObject` 从 `ecs.cppm` 迁到 `scene_context.cppm`**：`renderListSystem`（机制层）
+  每帧要读它填高亮通道，而 `ecs_impl` 已 import `render_list`——留在 ecs 会造成
+  `ecs ↔ render_list` 循环 import。`scene_context` 是叶子值类型层（`Light`/`MeshRef`/
+  `MaterialRef` 都在那），本就是它的位置。同时加 `materialId` 字段。
+- **面板跳页**：`ParamPage.selectOnPick`（构建器声明跳转目标）+ `DebugPanelState.
+  pendingSelectJump`（一次性请求位）。`imgui_layer` 传 `ImGuiTabItemFlags_SetSelected`
+  触发切换，**不认页名字符串**（跳转目标由构建器声明，渲染层零业务知识）。只在**真的
+  命中实体**时置位——miss（点空处）不发跳转，否则会因「点空」把用户从灯光页弹到空的
+  "选中"页。消费即清零，不会反复弹回。
+- **Esc 取消选中**：`eventSystem` 轮询循环内 `handleEscapeDeselect` 置
+  `SelectedObject.entity = entt::null` 即整链收口（高亮 pass 见 `hasSelection=false`
+  走零 draw；面板回落未选中提示）。与 picking 服务无关，纯 CPU 复位。
+  **位置硬约束 = 必须在 `InputFilter` 判定之前**：imgui 的 `WantCaptureKeyboard` 是
+  粘性状态（点过面板后恒为真，见 `docs/调试历史.md` "面板吞键盘"事故），放到 filter
+  之后 Esc 会被 imgui 吞掉。实现用 `if (!isEscape && filter && ...)` 单条件短路
+  （不二次调用有副作用的 helper），并把 ESC 判定抽 helper 以压低 `eventSystem`
+  认知复杂度（style-check 15 上限）。
+- **两个实测踩坑（高亮不可见）**：
+  1. **混合语义写错**：首版把 `rim` 同时乘进 rgb 与 a，而混合是标准
+     `SRC_ALPHA/ONE_MINUS_SRC_ALPHA`（`shader.cppm` colorBlend），实际贡献退化为
+     `rim²·intensity`——power=4 时除轮廓线外 rim≈0.05、rim²≈0.0025，实测点亮 1.8% 像素
+     但通道最大差仅 17/255，肉眼不可见。改 `rgb = 纯高亮色`、`a = saturate(rim)·intensity`
+     （贡献对 rim 线性）。
+  2. **纯菲涅尔只勾轮廓**：建筑墙面这类**正对相机的大平面** NdotV≈1 → rim≈0，点中后
+     正面完全无变化。加 `HIGHLIGHT_BASE_WEIGHT=0.35` 恒定基色权重（"点中即染色"），
+     轮廓光只作强化。修正后最大通道差 46 → **112/255**，肉眼清晰可见。
+- **验收**：`picking=false` **BIT-IDENTICAL**（`git stash` 基线 vs 改动同会话双构建，
+  截图逐字节相同）；开 = 差异 1.82% 像素、最大通道差 112、分布集中在点选点所在物体
+  （`match=1`，bistro 132 材质基本一对一）；headless 探针 + 窗口合成左键两轮均命中；
+  跳页链路日志验证 `probe 第 5 帧 → objectSlot 711 → entity 712 → 跳页请求被构建器消费`；
+  `checks --strict` 0 警告。
+- **补修（2026-09-28，用户实测后）**：用户报「ESC 无效 + 跳页无效」，逐条 grep 复核 11
+  个改动点后确认**两处编辑静默丢失**（编译器不报错——被替换的旧代码本就合法）：
+  `imgui_layer_impl` 的 `BeginTabItem` 未传 `SetSelected` flags、ESC 分支根本没写进
+  `eventSystem`。补齐后：窗口模式注入 Esc → 日志打出 `picking: Esc 取消选中`；
+  `picking=false` 仍 BIT-IDENTICAL；`checks --strict` 0 警告。详见
+  `docs/调试历史.md` 2026-09-28 补修条目。
+- **未做/遗留**：① 面板"选中"页**视觉走查仍未做**——本机窗口截图只能抓到前台窗口
+  （`spectacle -a` 反复抓到终端/浏览器），RGL 窗口无法置前，llm_debug 截图又在 imgui
+  绘制**之前**（AGENTS 已知限制）。跳页逻辑已用日志验证，但"看起来切过去了"需用户窗口
+  确认。② 阴影仍为 Phase 11。③ 高亮在 offscreen 变体未实测。④ 开 `picking` 时克隆条目
+  312 → 624（本机实测两条 `clone[...]` 日志），启动开销未专门计时——延后优化（见
+  `docs/调试历史.md` 2026-09-28 条目）。
 
 ## 10. 验收红线（汇总）
 

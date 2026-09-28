@@ -224,8 +224,15 @@ Phase 9：性能观测（profiler）——先回答"CPU-bound 还是 GPU-bound"�
    修复 rgl_shader DEP 表 11 处 import 漏登）/ 10.5 点选 ✅（2026-09-28，id pass 克隆
    管线重放 + r32ui 回读 + SelectedObject ctx + 面板"选中"页；顺带 picking_probe 配置
    探针 + D12 RPC 延后决策）/ 10.6 反射语义扩产 ✅（2026-09-28，param_semantics.json
-    → 第 7 条反射管线生成语义表 + 面板构建拆出 param_pages 模块）。**Phase 10 全批
-    收口**，剩 UI 视觉验收（用户）。
+    → 第 7 条反射管线生成语义表 + 面板构建拆出 param_pages 模块）/ **10.7 点选高亮 +
+    选中跳页 ✅（2026-09-28 补做）**——起因是用户报"点选没生效"，排查结论 = 链路一直
+    通（headless 探针 + 窗口合成左键两轮实测命中），真因是 `picking` 默认关 + 选中后
+    **零视觉反馈**（唯一反馈是面板"选中"页一行字，而 Tab 默认停在"渲染"页）。落
+    `highlight.frag` 克隆管线 + 高亮 pass（写既有色附件、插 tonemap **前**——插图末
+    会落在色附件被采样之后 = 画了白画）+ **按材质** CPU 过滤 draw（同材质全部实体
+    一起发光，刻意不进 scene data 契约以免触发 reflect 重生成）+ 面板自动切"选中"页
+    （`ImGuiTabItemFlags_SetSelected`，允许打断）+ Esc 取消。`picking=false`
+    BIT-IDENTICAL。**Phase 10 全批收口**，剩 UI 视觉验收（用户）。
     ↓
   **2026-09-28 增补批（Phase 10b，[phase10b_plan.md](phase10b_plan.md)，D12 翻案）**：
     11b.1 imgui 中文字体 ✅（问号根因三层：从不加载字体 + stb 不吃 CFF + 1.92 按需烘焙

@@ -77,44 +77,51 @@ namespace RGL {
 		return index;
 	}
 
-	// picking 克隆条目定义（Phase 10 批 10.5，契约见接口注释）：model 族条目逐个
-	// (mesh = 原 mesh SPV + frag = picking.frag)，bindings 原样——picking.frag 不声明
-	// descriptor，贴图映射空转无害（skybox 条目"映射未消费"既证方向）。
-	void ShaderRegistry::addPickingEntries(const std::string& fragSpvPath) {
+	// 克隆条目定义（Phase 10 批 10.5 picking / 10.7 highlight，契约见接口注释）：model 族
+	// 条目逐个 (mesh = 原 mesh SPV + frag = 传入的克隆 frag)，bindings 原样——克隆 frag
+	// 不声明的 descriptor 映射空转无害（skybox 条目"映射未消费"既证方向）。
+	void ShaderRegistry::addCloneEntries(ClonePurpose purpose, const std::string& fragSpvPath) {
+		// 用途后缀 = 克隆条目名与 spec 名的区分标记（picking / highlight）
+		const char* const suffix = purpose == ClonePurpose::picking ? "picking" : "highlight";
 		auto fragResult = RGL::loadShaderSpv(fragSpvPath);
 		if (!fragResult)
-			throw std::runtime_error(fmt::format("picking frag SPV load failed {}: {}",
+			throw std::runtime_error(fmt::format("clone frag SPV load failed {}: {}",
 				fragSpvPath, fragResult.error().describe()));
 		// 同 mesh SPV 只读一次（model 条目共享 model.mesh.spv：几十条目 → 1 次读盘）
 		std::map<std::string, std::vector<uint32_t>> meshCache;
-		pickingRemap.assign(entries.size(), kNoPickingClone);
+		// remap 第一维按用途索引（resize 覆盖「本用途首次装配」与「更高用途先装配」两种序）
+		const size_t purposeIdx = static_cast<size_t>(purpose);
+		if (cloneRemap.size() <= purposeIdx)
+			cloneRemap.resize(purposeIdx + 1);
+		std::vector<uint32_t>& remap = cloneRemap[purposeIdx];
+		remap.assign(entries.size(), kNoClone);
 		uint32_t clones = 0;
 		for (uint32_t i = 0; i < entries.size(); ++i) {
 			if (!entries[i].modelEntry)
-				continue;  // cube/天空盒/光 = mesh 输出接口非 ModelVertexOutput，picking.frag 不兼容
+				continue;  // cube/天空盒/光 = mesh 输出接口非 ModelVertexOutput，克隆 frag 不兼容
 			auto it = meshCache.find(entries[i].spec.meshSpv);
 			if (it == meshCache.end()) {
 				auto meshResult = RGL::loadShaderSpv(entries[i].spec.meshSpv);
 				if (!meshResult)
-					throw std::runtime_error(fmt::format("picking clone mesh SPV load failed: {}",
+					throw std::runtime_error(fmt::format("clone mesh SPV load failed: {}",
 						entries[i].spec.meshSpv));
 				it = meshCache.emplace(entries[i].spec.meshSpv, std::move(*meshResult)).first;
 			}
 			RGL::ShaderEffect effect{.meshStageSpv = it->second, .fragStageSpv = *fragResult};
 			auto clone = PipelineEntry{
-				.name = entries[i].name + ".picking",
+				.name = entries[i].name + "." + suffix,
 				.pipeline = RGL::RenderPipeline(device.getDevice(), effect, entries[i].bindings),
 				// spec = 克隆真实来源对（热重载基线读回 = 同一对 SPV）；name 不参与查找
-				.spec = RGL::PipelineSpec{.name = entries[i].spec.name + "_picking",
+				.spec = RGL::PipelineSpec{.name = entries[i].spec.name + "_" + suffix,
 					.meshSpv = entries[i].spec.meshSpv, .fragSpv = fragSpvPath},
 				.bindings = entries[i].bindings};
-			pickingRemap[i] = static_cast<uint32_t>(entries.size());
+			remap[i] = static_cast<uint32_t>(entries.size());
 			entries.push_back(std::move(clone));
 			++clones;
 		}
 		if (auto* logger = RLLogger::getInstance())
-			logger->info("picking: {} 条可点选管线克隆（model 族条目 × picking.frag，"
-				"objectIndex+1 写 r32ui）", clones);
+			logger->info("clone[{}]: {} 条管线克隆（model 族条目 × {}）", suffix, clones,
+				fragSpvPath);
 	}
 
 	uint32_t ShaderRegistry::addSkyEntry() {

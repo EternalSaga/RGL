@@ -374,7 +374,13 @@ void ImGuiLayer::buildParamTabs() {
 	if (!ImGui::BeginTabBar("rgl_params"))
 		return;
 	for (const ParamPage& page : pages) {
-		if (!ImGui::BeginTabItem(page.name.c_str()))
+		// 批 10.7：点选跳转——构建器给「选中」页标了 selectOnPick（一次性请求，
+		// 构建器已清零）。SetSelected 让 imgui 本帧切到该页并**打断**用户当前所在
+		// 页（点选后立刻看到该物体的材质控件，是 usability 诉求本身）。
+		const ImGuiTabItemFlags flags = page.selectOnPick
+			? ImGuiTabItemFlags_SetSelected
+			: ImGuiTabItemFlags_None;
+		if (!ImGui::BeginTabItem(page.name.c_str(), nullptr, flags))
 			continue;  // 非当前页不渲染（条目回调不跑 = 零副作用）
 		renderPageEntries(page);
 		ImGui::EndTabItem();

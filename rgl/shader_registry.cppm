@@ -18,6 +18,20 @@ import vkerror;
 namespace RGL {
 
 /**
+ * 克隆管线用途（Phase 10 批 10.5 引入 picking、10.7 加 highlight）。
+ *
+ * 两者机制完全同构：把 model 族条目的 mesh SPV 配上一个**只写固定输出、不做完整
+ * 光照**的替换 frag，录制期按 draw 重放一遍。故共用一套 remap 表（cloneRemap），
+ * 用途做第一维索引——新增用途（如将来的 outline）只需加一个枚举值 + 一次
+ * addCloneEntries 调用，不动既有表与下标语义。
+ */
+export enum class ClonePurpose : uint8_t {
+	picking = 0,    // 批 10.5：写 objectIndex+1 进 r32ui object_id（回读取 id）
+	highlight = 1,  // 批 10.7：菲涅尔边缘发光 alpha 混合叠加 scene_hdr（视觉高亮）
+	kCount = 2,     // 用途计数（remap 表第一维长度；非有效用途）
+};
+
+/**
  * 管线表一条（Phase 4 批次 2：从 vkrenderer.cppm 迁入，Vulkan 层零 entt）：
  * shader 风格名 + 其 RenderPipeline（shader object + 烘焙的 descriptor heap binding mapping）
  * + 显式 push constant 元数据（L5 解决：argsSize/pushDataSet 替代旧 "set 0 被两种 struct
@@ -123,27 +137,33 @@ export class ShaderRegistry {
 	}
 
 	/**
-	 * picking 克隆条目（Phase 10 批 10.5，D3）：把当前表**全部 model 族条目**克隆出
-	 * picking 变体——mesh SPV = 原条目 mesh、frag SPV = picking.frag（写 objectIndex+1
-	 * 进 r32ui）、bindings 原样（picking.frag 不声明 descriptor，贴图映射空转无害，
+	 * 克隆条目（Phase 10 批 10.5 picking / 10.7 highlight 共用机制）：把当前表
+	 * **全部 model 族条目**克隆出指定 frag 的变体——mesh SPV = 原条目 mesh、frag SPV
+	 * = 传入的克隆 frag、bindings 原样（克隆 frag 不声明的 descriptor 映射空转无害，
 	 * skybox 条目同先例）。非 model 条目（cube/天空盒/光 = mesh 输出接口非
-	 * ModelVertexOutput）不克隆——picking 重放路对其跳过。
+	 * ModelVertexOutput）不克隆——重放路对其跳过。
 	 * 装配时序契约 = main 于模型注册完成后调用（门 = diagnostics.picking；先于
 	 * addSkyEntry/addLightEntry = 克隆段追加在 model 条目后）；既有条目下标语义零改动。
-	 * @param fragSpvPath picking.frag SPV 相对路径（generated_shaders/ 下）
-	 * @throws std::runtime_error picking frag / model mesh SPV 读失败（装配期 fail-fast）
+	 * @param purpose 克隆用途（进 remap 表键，见 cloneEntryFor）
+	 * @param fragSpvPath 克隆 frag 的 SPV 相对路径（generated_shaders/ 下）
+	 * @throws std::runtime_error 克隆 frag / model mesh SPV 读失败（装配期 fail-fast）
 	 */
-	void addPickingEntries(const std::string& fragSpvPath);
+	void addCloneEntries(ClonePurpose purpose, const std::string& fragSpvPath);
 
 	/**
-	 * picking 克隆反查（执行器 picking 重放路逐 draw 调用）。
+	 * 克隆条目反查（执行器 picking / highlight 重放路逐 draw 调用）。
+	 * @param purpose 克隆用途
 	 * @param entry 原条目下标（DrawCall.pipeline）
-	 * @return 克隆条目下标；nullopt = 该条目不可点选（cube/天空盒/克隆条目本身）
+	 * @return 克隆条目下标；nullopt = 该条目无此用途的克隆（cube/天空盒/克隆条目本身）
 	 */
-	[[nodiscard]] std::optional<uint32_t> pickingEntryFor(uint32_t entry) const {
-		if (entry >= pickingRemap.size() || pickingRemap[entry] == kNoPickingClone)
+	[[nodiscard]] std::optional<uint32_t> cloneEntryFor(ClonePurpose purpose,
+		uint32_t entry) const {
+		if (static_cast<size_t>(purpose) >= cloneRemap.size())
 			return std::nullopt;
-		return pickingRemap[entry];
+		const auto& remap = cloneRemap[static_cast<size_t>(purpose)];
+		if (entry >= remap.size() || remap[entry] == kNoClone)
+			return std::nullopt;
+		return remap[entry];
 	}
 
 	/**
@@ -331,10 +351,11 @@ export class ShaderRegistry {
 	std::map<std::string, uint32_t> indexByName;              // 条目名 → 下标（启动期 name 解析）
 	std::map<std::tuple<std::string, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>, uint32_t> modelEntryBySlot;  // 模型条目去重表：(规格名, 顶点 slot, base 纹理 slot, normal slot, orm slot, emissive slot) → 下标
 	std::vector<PipelineEntry> entries;                       // 管线表（下标 = 绘制契约）
-	// picking 克隆反查表（批 10.5，addPickingEntries 填）：原条目下标 → 克隆条目下标，
-	// kNoPickingClone = 不可点选；调用时刻之后新增条目不在表内（天然 nullopt）
-	static constexpr uint32_t kNoPickingClone = 0xFFFFFFFFu;
-	std::vector<uint32_t> pickingRemap;
+	// 克隆反查表（批 10.5 picking / 10.7 highlight，addCloneEntries 填）：第一维 =
+	// ClonePurpose，第二维 = 原条目下标 → 克隆条目下标。kNoClone = 该条目无此用途克隆；
+	// 调用时刻之后新增条目不在表内（天然 nullopt）
+	static constexpr uint32_t kNoClone = 0xFFFFFFFFu;
+	std::vector<std::vector<uint32_t>> cloneRemap;
 };
 
 }  // namespace RGL

@@ -52,6 +52,14 @@ export class StateKit {
 		// id 归属 = 可见前表面）
 		pickingState.depthWrite = false;
 		pickingState.depthCompareOp = vk::CompareOp::eLessOrEqual;  // 与 scene depth 同面等值（eLess 全拒 = 实测踩坑）
+		// Phase 10 批 10.7：highlight pass —— depth 只测不写（与 picking 同理：被高亮物体
+		// 已在 scene depth 里，此处只借它做可见性测试）+ 开 alpha 混合（高亮是叠加在成片
+		// 上的半透明边缘光）+ 剔背面（同 transparent：双面材质若不剔，正反两面各混合一次
+		// = 边缘光翻倍）。depthCompareOp 保持 eLessOrEqual（与已渲面等值，见 picking 踩坑）。
+		highlightState.depthWrite = false;
+		highlightState.depthCompareOp = vk::CompareOp::eLessOrEqual;
+		highlightState.colorBlend = true;
+		highlightState.cullMode = vk::CullModeFlagBits::eBack;
 	}
 
 	/**
@@ -67,6 +75,7 @@ export class StateKit {
 		if (name == "light") return lightState;
 		if (name == "tonemap") return tonemapState;
 		if (name == "picking") return pickingState;
+		if (name == "highlight") return highlightState;
 		throw std::runtime_error(fmt::format(
 			"StateKit::stateFor: unknown state '{}' (executor validation bypassed)", name));
 	}
@@ -84,6 +93,7 @@ export class StateKit {
 	RenderState lightState{};       // deferred light 全屏终图（见 ctor 注）
 	RenderState tonemapState{};     // Phase 8 ①：HDR→LDR tonemap 全屏终图（与 light 同形，见 ctor 注）
 	RenderState pickingState{};     // Phase 10 批 10.5：id pass 复用 scene depth 只测不写（见 ctor 注）
+	RenderState highlightState{};   // Phase 10 批 10.7：高亮 pass 叠加成片（混合 + 剔背面，见 ctor 注）
 	bool depthClipDynamic = false;
 };
 

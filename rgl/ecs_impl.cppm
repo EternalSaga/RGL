@@ -20,6 +20,7 @@ import diagnostics;     // texel_canary 诊断单例（configs/diagnostics.lua�
 import input_probe;     // 脚本化输入探针（2026-09-28 输入链回归护栏，帧循环 tick）
 import profiler;        // Phase 9 帧相 zone（frameBegin + 帧循环拦截点，docs/phase9_plan.md）
 import gpu_canary;
+import param_registry;   // DebugPanelState（批 10.7 点选跳页请求位）
 import scene_context;
 import camera;
 import rllogger;
@@ -28,6 +29,26 @@ namespace RGL {
 
 // 帧循环各 system + renderSystem 定义（2026-09-02 编译提速 A 方案）：system 体移出
 // 接口 TU——BMI 只含 renderSystem 声明与 context struct；本单元是叶子边。
+
+/**
+ * Esc 取消点选（批 10.7；eventSystem 轮询循环内、**InputFilter 判定之前**调用）。
+ *
+ * 必须在 filter 之前判定：imgui 的 WantCaptureKeyboard 是**粘性**状态（点过面板后
+ * 恒为真，见 docs/调试历史.md "面板吞键盘"事故），若让 Esc 先过 imgui 就会被吞掉、
+ * 永远到不了这里。返回 true = 本事件是 Esc（调用方据此跳过 filter，键事件仍照常
+ * 产 InputEvents——Esc 非相机绑定键，相机自然无响应）。
+ */
+bool handleEscapeDeselect(entt::registry& rg, const SDL_Event& event) {
+	if (event.type != SDL_EVENT_KEY_DOWN || event.key.key != SDLK_ESCAPE)
+		return false;
+	// ctx 未 emplace = 无选中可清（picking 门关）
+	if (auto it = rg.ctx().find<SelectedObject>(); it != nullptr) {
+		it->entity = static_cast<entt::entity>(entt::null);
+		if (auto* logger = RLLogger::getInstance())
+			logger->info("picking: Esc 取消选中");
+	}
+	return true;
+}
 
 /**
  * 中央事件轮询（唯一 SDL_PollEvent 调用点）：把 SDL 事件流翻译进 registry context——
@@ -51,9 +72,13 @@ void eventSystem(entt::registry& rg) {
 
 	SDL_Event event;
 	while (SDL_PollEvent(&event)) {
+		// 批 10.7：Esc 取消点选**必须排在 filter 之前**（imgui WantCaptureKeyboard 是
+		// 粘性状态，放后面会被吞）——helper 只做「是不是 Esc / 清选中」，键事件仍
+		// 照常产 InputEvents（Esc 非相机绑定键，相机自然无响应）。
+		const bool isEscape = handleEscapeDeselect(rg, event);
 		// 调试 UI 先手：imgui 消费的事件不产 InputEvents（相机不响应面板拖拽）。
 		// void* = InputFilter 类型擦除约定（见 ecs.cppm InputFilter 注释）。
-		if (filter && filter->consume && filter->consume(&event)) {
+		if (!isEscape && filter && filter->consume && filter->consume(&event)) {
 			++swallowed;
 			continue;
 		}
@@ -400,6 +425,10 @@ struct FrameStatsTracker {
 
 }  // namespace
 
+/** applyPickedSlot 前置声明（定义在 pickingTick 之后——pickingTick 只做「探针 → 取回读 →
+ * 落 ctx」三步编排，落 ctx 的实体反查 + 跳页发信拆出以压低 pickingTick 认知复杂度）。 */
+void applyPickedSlot(entt::registry& rg, uint32_t slot);
+
 /** 配置热重载帧边界（Phase 10 批 10.3；renderSystem 帧首调用）：eventSystem 之后、
  * 本帧任何 system/draw 之前 = 上一帧已 submit、本帧未录制的换入点。钩子未挂
  * （config_reload 门默认关，main 不 emplace）= 空指针早退零开销。 */
@@ -410,6 +439,21 @@ void configReloadTick(entt::registry& rg) {
 	hook->poll();
 }
 
+/** 脚本化点选探针（diagnostics.picking_probe = {frame,x,y}）：第 frame 帧发一次请求
+ *  ——headless 无鼠标验证全链（本帧 request → 帧末 record → 下帧 applyPickedSlot 处置集）。
+ * 门关（frame=0）= 零行为。 */
+void pickingProbeTick(PickingHook& hook) {
+	static uint32_t frameCount = 0;
+	const auto& probe = diagnostics().pickingProbeFrame;
+	if (probe == 0 || !hook.requestPick || frameCount++ != probe)
+		return;
+	if (auto* logger = RLLogger::getInstance())
+		logger->info("picking: probe 第 {} 帧请求 ({}, {})", probe, diagnostics().pickingProbeX,
+			diagnostics().pickingProbeY);
+	hook.requestPick(static_cast<float>(diagnostics().pickingProbeX),
+		static_cast<float>(diagnostics().pickingProbeY));
+}
+
 /** picking 结果 tick（Phase 10 批 10.5；renderSystem 帧首调用，同 configReloadTick
  *  帧边界）：消费 PickingService 回读 → objectSlot 反查 MeshRef entity（点击触发，
  *  O(n) 扫一次可接受，不平行维护 slot→entity 映射表）→ 写 SelectedObject ctx。
@@ -418,35 +462,40 @@ void pickingTick(entt::registry& rg) {
 	auto* hook = rg.ctx().find<PickingHook>();
 	if (!hook || !hook->takeResult)
 		return;
-	// 脚本化探针（diagnostics.picking_probe = {frame,x,y}）：第 frame 帧发一次请求
-	// ——headless 无鼠标验证全链（本帧 request → 帧末 record → 下帧此处置集）
-	static uint32_t frameCount = 0;
-	const auto& probe = diagnostics().pickingProbeFrame;
-	if (probe > 0 && hook->requestPick && frameCount++ == probe) {
-		if (auto* logger = RLLogger::getInstance())
-			logger->info("picking: probe 第 {} 帧请求 ({}, {})", probe,
-				diagnostics().pickingProbeX, diagnostics().pickingProbeY);
-		hook->requestPick(static_cast<float>(diagnostics().pickingProbeX),
-			static_cast<float>(diagnostics().pickingProbeY));
-	}
+	pickingProbeTick(*hook);
 	const auto slot = hook->takeResult();
 	if (!slot)
 		return;
+	applyPickedSlot(rg, *slot);
+}
+
+/** 回读槽位落 SelectedObject ctx：反查 MeshRef.entity（同 objectSlot 唯一），顺带取
+ * MaterialRef 供高亮按材质过滤（批 10.7）。命中实体才发面板跳页请求（一次性）。 */
+void applyPickedSlot(entt::registry& rg, uint32_t slot) {
 	if (!rg.ctx().contains<SelectedObject>())
 		rg.ctx().insert_or_assign<SelectedObject>(SelectedObject{});
 	auto& sel = rg.ctx().get<SelectedObject>();
-	sel.objectSlot = *slot;
+	sel.objectSlot = slot;
 	sel.entity = static_cast<entt::entity>(entt::null);
+	sel.materialId = 0;
 	for (const auto entity : rg.view<MeshRef>())
-		if (rg.get<MeshRef>(entity).objectSlot == *slot) {
+		if (rg.get<MeshRef>(entity).objectSlot == slot) {
 			sel.entity = entity;
+			// 高亮按材质过滤（选中材质全部实体一起亮）——同循环取 MaterialRef，不二次遍历
+			if (rg.all_of<MaterialRef>(entity))
+				sel.materialId = rg.get<MaterialRef>(entity).material;
 			break;
 		}
+	// 批 10.7：跳页请求（构建器消费即清）。**只在真的命中实体时**置位——miss（点空处）
+	// 不发跳转，否则会因「点空」把用户从灯光页弹到空的"选中"页。
+	const bool hit = sel.entity != static_cast<entt::entity>(entt::null);
+	if (hit)
+		if (auto* panel = rg.ctx().find<DebugPanelState>())
+			panel->pendingSelectJump = true;
 	if (auto* logger = RLLogger::getInstance())
-		logger->info("picking: objectSlot {} → entity {}{}", *slot,
+		logger->info("picking: objectSlot {} → entity {}{}", slot,
 			static_cast<std::uint32_t>(sel.entity),
-			sel.entity == static_cast<entt::entity>(entt::null)
-				? "（无匹配 MeshRef，选中保持空）" : "");
+			hit ? "" : "（无匹配 MeshRef，选中保持空）");
 }
 
 /** 实现流水（语义/契约见接口声明）：构建显式 system 列表（camera→animation→bounds→

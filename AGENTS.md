@@ -130,6 +130,7 @@ CMake CXX_MODULES FILE_SET 不收纯实现单元，故"接口声明 + 分区实�
 | `render_graph` | render_graph.cppm | 纯 C++ 渲染意图图：`compileRenderGraph`（校验 + barrier 推导 + presentTransition）→ `CompiledRenderGraph`；三变体 + `kGBufferAttachments` 契约表 |
 | `render_graph_config` | render_graph_config.cppm | `configs/render_graph.lua` → `RgGraphDesc`（sol2 沙箱，缺文件回落默认） |
 | `shader_registry` | shader_registry.cppm | 管线表（零 entt）：addModelEntry/addCubeEntry/addSkyEntry/addLightEntry/bindPipelineToAsset，条目全按需建 |
+| `picking` | picking.cppm / _impl | GPU id 点选服务（批 10.5）+ **高亮 pass 装饰与按材质过滤（批 10.7）**：1-texel r32ui 回读 + `SelectedObject` ctx；highlight pass 写既有色附件插 tonemap 前 |
 | `gpu_cull` | gpu_cull.cppm | GPU culling 数据通路：CullEntry/序列/count buffer + seqStaging ring×2；recordCullPass/readCullResult（字节布局 → 深版表 + skill rgl-shader-contract） |
 | `vk_indirect_commands` | vk_indirect_commands.cppm | DGC RAII（能力门控）：`DgcCommands`（NVIDIA IES 路）/ `DgcStaticCommands`（RADV 静态路，默认关）；7 入口点全走 `vkGetDeviceProcAddr` |
 
@@ -232,8 +233,9 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
 - `docs/archive/radv_static_dgc_spike.md` — RADV 静态 shader DGC spike（功能通、慢 1.85× → 默认不开；翻盘设计底稿）
 - `docs/vulkan_extensions_2025_调研.md` — 新扩展调研 + §十二/十三 实施记录（活文档）
 - `docs/phase7_devlog.md` — Phase 7 滚动开发日志（完结后归档）
-- `docs/archive/phase10_plan.md` — Phase 10 调试交互计划（**2026-09-28 批 10.1–10.6 全落地归档**；imgui 面板/热重载/点选；决策表 D1–D12 含 D12 RPC 延后；遗留 UI 视觉走查）
+- `docs/archive/phase10_plan.md` — Phase 10 调试交互计划（**2026-09-28 批 10.1–10.7 全落地归档**；imgui 面板/热重载/点选/**点选高亮+选中跳页**；决策表 D1–D12 含 D12 RPC 延后；遗留 UI 视觉走查）
 - `docs/phase10b_plan.md` — **Phase 10b 增补批（现行，2026-09-28 全落地）**：11b.1 imgui 中文字体（系统字体探测链，MiSans Light 首选）+ 11b.2 loopback HTTP POST RPC（D12 翻案）；协议表/依赖方向/验收清单（已全绿，除 Windows 非门项）
+- `docs/shader_object_组合成本与优化预留.md` — 管线表 312 条目（bistro 基准）生成机制 + 成本账本 + 优化预留（L0 SPV 缓存 / L1 磁盘二进制缓存 / 路线级 push-index）；**优化未实施**，触发条件见其 §5.1
 - `docs/风格检查规则.md` — tools/checks 两轮扩展设计（partition/docs/现代 C++/expected 禁 throw）；工具 Python ≥3.14，规则拆 `rules_{metrics,text,doxygen}.py`
 - `docs/archive/静态审查升级路线.md` — LLVM 23 + `-Wlifetime-safety` 两阶段落地计划（vs Rust 借用检查差距结论；clangbind ABI 回归是阶段 1 最高风险）
 - `docs/archive/` — 归档索引（phase 计划含 **phase6_record.md**、ecs 审查、issue_history 总账、present_timing/教程拆解等已结题调研）

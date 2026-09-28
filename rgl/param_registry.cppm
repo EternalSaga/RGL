@@ -67,11 +67,22 @@ export struct TextEntry {
  */
 export struct DebugPanelState {
 	uint32_t materialSel = 0;  // 材质页当前材质 id（buildDebugParamPages 每帧按 materialSize 钳位）
+	// 批 10.7：点选跳转请求（一次性）。pickingTick 检出「本帧有新选中」时置位，
+	// buildParamTabs 消费后清零——不跨帧保持，故不会把用户从别的页反复弹回。
+	// 为什么不用 imgui 自己的 tab 记忆：BeginTabBar 的选中态由 imgui 内部按 label
+	// 维持，外部无法「主动切过去」，只能靠 ImGuiTabItemFlags_SetSelected 触发
+	// 一次切换（仍需知道自己想切到哪一页，故要有这个请求位）。
+	bool pendingSelectJump = false;
 };
 
 /** 参数页（面板一个 Tab 页；页名 = 参数组名，如"渲染"/"灯光"）。 */
 export struct ParamPage {
 	std::string name;
+	// 批 10.7：点选跳转目标标记——true = 「点中物体后应切到本页」。构建器在
+	// DebugPanelState.pendingSelectJump 为真时给「选中」页置位，buildParamTabs 据此
+	// 传 ImGuiTabItemFlags_SetSelected 并清零请求。放在页结构上（而非让 imgui 层
+	// 认页名字符串）= 跳转目标由构建器声明，渲染层零业务知识。
+	bool selectOnPick = false;
 	std::vector<SliderEntry> sliders;
 	std::vector<SliderIntEntry> intSliders;
 	std::vector<Color3Entry> colors;

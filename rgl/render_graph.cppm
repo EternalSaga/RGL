@@ -332,6 +332,28 @@ export const RgGraphDesc& deferredRenderGraphDesc();
  */
 export bool decoratePickingPass(RgGraphDesc& desc);
 
+/**
+ * 高亮 pass 装饰（Phase 10 批 10.7）：给图追加一个 highlight drawMesh pass
+ * （state="highlight"、drawSource="opaque" —— 执行器以克隆管线重放并**按材质过滤**
+ * opaque 段，只画选中材质的 draw，见 vkrenderer）。
+ *
+ * 与 picking pass 的三点关键差异：
+ *  1. **不新增附件**——写既有场景色附件（loadOp=load 保留已渲画面）+ 既有 depth
+ *     （loadOp=load，depthWrite=false 见 state_kit highlightState），高亮以 alpha
+ *     混合叠加在成片上。故格式/尺寸天然与被高亮内容一致，无 RT 分配开销。
+ *  2. **插在「首个采样场景色附件的 pass」之前**（forward/deferred = tonemap 前，
+ *     offscreen = composite blit 前），而非图末——图末会落在 tonemap 之后，此时色附件
+ *     已无人采样，高亮画了也不可见。附件名由消费 pass 的 sampleRead 输入反查，不硬编码。
+ *  3. 借 depth 前把上一个写 depth 的 pass 的 storeOp 从 dontCare 改成 store（forward 图
+ *     transparent 段按「depth 后续无人用」声明 dontCare）——否则高亮读到未定义内容。
+ *
+ * 调用点 = main 装配层且 `diagnostics.picking` 门控（与 picking 同门：默认关 =
+ * 不调用 = 图逐位同，维持 D10 的 BIT-IDENTICAL 基线）。
+ * @param desc 图声明（原地修改：追加 pass + 修正前一 pass 的 depth storeOp）
+ * @return true = 已装饰；false = 图形态不支持（desc 未被修改）
+ */
+export bool decorateHighlightPass(RgGraphDesc& desc);
+
 /** G-buffer 附件契约条目（名字 + 格式串）。 */
 export struct RgGBufferDesc {
 	std::string_view name;

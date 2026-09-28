@@ -46,6 +46,9 @@ rgl_shader(tonemap.frag TONEMAP_FRAG_SPV scene)
 rgl_shader(cull.comp CULL_SPV)
 # Phase 10 批次 10.5：GPU id 点选 frag（mesh 复用 model.mesh.spv；写 objectIndex+1 进 r32ui）
 rgl_shader(picking.frag PICKING_FRAG_SPV model material)
+# Phase 10 批次 10.7：点选高亮 frag（mesh 复用 model.mesh.spv；菲涅尔边缘发光 alpha 混合
+# 叠加 scene_hdr；选中范围按 materialId 在 CPU 侧过滤 draw list，本 frag 不读选中标志）
+rgl_shader(highlight.frag HIGHLIGHT_FRAG_SPV model material scene)
 # Phase 8 批次 ③b：2D 纹理 compute mip 链（独立契约 mip_gen.comp.slang 头注释，无 import 契约文件；
 # 传统 descriptor set + 经典 compute 管线，与 bindless 渲染路径隔离，见 mip_gen.cppm）
 rgl_shader(mip_gen.comp MIP_GEN_SPV)

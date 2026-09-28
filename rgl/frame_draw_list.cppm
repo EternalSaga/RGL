@@ -96,6 +96,14 @@ export struct FrameDrawList {
 	std::vector<DrawCall> calls;
 	uint32_t skyboxStart = 0;       // 无天空盒 = 与 transparentStart 重合（空段跳过）
 	uint32_t transparentStart = 0;
+	// Phase 10 批 10.7：点选高亮通道（**纯 CPU 侧**）——高亮 pass 录制期据此过滤 draw：
+	// 只画 materialBySlot[objectSlot] == selectedMaterial 的 draw，即「选中材质全部实体
+	// 一起发光」。hasSelection=false → 该 pass 零 draw 空转。
+	// 走 FrameDrawList 而非让执行器问 ECS：执行器保持零 entt 依赖（ECS 规范 4 = 渲染
+	// system 产出抽象 draw list、执行器只盲执行）。span 与 materialBySlot 同帧局部存储。
+	std::span<const uint32_t> materialBySlot;  // 按 objectSlot 索引的材质 id
+	uint32_t selectedMaterial = 0;             // 选中材质 id（hasSelection=false 时无意义）
+	bool hasSelection = false;                 // 本帧有无选中（Esc 取消 / 首帧 = false）
 	SceneFrameData sceneData;
 	// Phase 7b：GPU culling 每帧输入（render_list 与 CPU 剔除同源填充；GpuCull 未激活
 	// 时 Renderer 忽略——始终填充，零条件分支）

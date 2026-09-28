@@ -91,8 +91,10 @@ void validateRenderGraphForExecutor(const RGL::CompiledRenderGraph& graph) {
 					pass.name, pass.state));
 			return;
 		}
+		// Phase 10 批 10.5/10.7：picking（id pass）/ highlight（高亮 pass）——两者都是
+		// 克隆条目重放，StateKit 各有对应动态状态段
 		if (pass.state != "opaque" && pass.state != "skybox" && pass.state != "transparent"
-			&& pass.state != "picking")  // Phase 10 批 10.5：id pass（克隆条目重放，StateKit 有段）
+			&& pass.state != "picking" && pass.state != "highlight")
 			fail(fmt::format("render graph pass '{}' has unknown state '{}'", pass.name,
 				pass.state));
 		if (!std::ranges::any_of(kKnownDrawSources,
@@ -427,6 +429,41 @@ void Renderer::drawOne(vk::raii::CommandBuffer& cmd, const DrawCall& call) {
 	cmd.drawMeshTasksEXT(call.groupCount, 1, 1);
 }
 
+/**
+ * 克隆管线重放（Phase 10 批 10.5 picking / 10.7 highlight 共用）：逐 opaque 段 draw，
+ * 把原 draw 的管线换成指定用途的克隆条目后重录一遍。
+ *
+ * 不走 cull/DGC：可见性由 depth 测试保证（借 scene depth），点选/高亮正确性与剔除无关。
+ * 非 model 族 draw（cube/天空盒/光）无克隆条目 = 跳过。
+ *
+ * @param materialFilter kNoMaterialFilter = 不过滤（picking：整段重放）；否则只重放
+ *   materialBySlot[objectIndex] == 该材质 id 的 draw（highlight：选中材质全部实体）
+ */
+void Renderer::replayClonedPass(vk::raii::CommandBuffer& cmd, const FrameDrawList& list,
+	ClonePurpose purpose, uint32_t materialFilter) {
+	const auto [segBegin, segEnd] = segmentRange("opaque", list);
+	for (uint32_t i = segBegin; i < segEnd; ++i) {
+		const auto& call = list.calls[i];
+		if (materialFilter != kNoMaterialFilter) {
+			// objectIndex 在 pushData 里（DrawArgs 4B，同 cull_driver 的 reinterpret 手法）；
+			// 越界 = 表与 draw list 不同步（契约破裂）→ 跳该 draw 而非读越界内存
+			const auto* args = reinterpret_cast<const RGL::DrawArgs*>(call.pushData.data());
+			if (args->objectIndex >= list.materialBySlot.size())
+				continue;
+			if (list.materialBySlot[args->objectIndex] != materialFilter)
+				continue;
+		}
+		auto clone = registry.cloneEntryFor(purpose, call.pipeline);
+		if (!clone)
+			continue;
+		const auto& entry = registry.entry(*clone);
+		cmd.pushDataEXT(vk::PushDataInfoEXT(entry.pushDataSet,
+			vk::HostAddressRangeConstEXT(call.pushData.data(), call.pushData.size())));
+		entry.pipeline.bindShaders(cmd);
+		cmd.drawMeshTasksEXT(call.groupCount, 1, 1);
+	}
+}
+
 // ⑪.6 帧末扩展段（Phase 10 批 10.1，接口注释见 vkrenderer.cppm emitFrameEndOverlay）：
 // 布局推进（含追踪表更新）→ hook。src 侧按当前布局精确给（blit 写 = Transfer/TransferWrite、
 // 捕获读 = Transfer/TransferRead）；其余布局兜底全命令同步（仅调试路径付代价）。
@@ -475,7 +512,7 @@ void Renderer::pickingRecord(vk::raii::CommandBuffer& cmd) {
 }
 
 // pass draw 三路分发：drawLight 固定全屏单 group（无 push constant）/ opaque 段 GPU culling（DGC execute 或读回重放，能力位自动切换）/ 普通段逐 draw。
-// Phase 10 批 10.5：picking pass（state="picking"）走第〇分支 = 克隆管线重放（见函数体注）。
+// Phase 10 批 10.5/10.7：picking 与 highlight pass 走第〇分支 = 克隆管线重放（见函数体注）。
 void Renderer::executePassDraws(vk::raii::CommandBuffer& cmd, const RgPassPlan& pass,
 	const FrameDrawList& list, uint32_t frameSlot) {
 	if (pass.state == "picking") {
@@ -483,18 +520,14 @@ void Renderer::executePassDraws(vk::raii::CommandBuffer& cmd, const RgPassPlan& 
 		// 绑定/scene data 全 bindless 已就位（recordFixedDataPath 在 pass 循环前），
 		// per-draw 只差 push 的 DrawArgs(objectIndex)。不走 cull/DGC（遮挡由 depth
 		// 测试保证，点选正确性与剔除无关）；非 model 族 draw（cube 等）无克隆 = 跳过。
-		const auto [segBegin, segEnd] = segmentRange("opaque", list);
-		for (uint32_t i = segBegin; i < segEnd; ++i) {
-			const auto& call = list.calls[i];
-			auto clone = registry.pickingEntryFor(call.pipeline);
-			if (!clone)
-				continue;
-			const auto& entry = registry.entry(*clone);
-			cmd.pushDataEXT(vk::PushDataInfoEXT(entry.pushDataSet,
-				vk::HostAddressRangeConstEXT(call.pushData.data(), call.pushData.size())));
-			entry.pipeline.bindShaders(cmd);
-			cmd.drawMeshTasksEXT(call.groupCount, 1, 1);
-		}
+		replayClonedPass(cmd, list, ClonePurpose::picking, kNoMaterialFilter);
+	} else if (pass.state == "highlight") {
+		// 点选高亮（批 10.7）：与 picking 同机制，但**按材质过滤**——只重放选中材质的
+		// draw，故同材质全部实体一起发光（材质是共享资产，见 scene_context SelectedObject）。
+		// 过滤键 = materialBySlot[objectSlot]（renderListSystem 每帧填，纯 CPU 侧不进
+		// scene data）。无选中 = 整段跳过（本 pass 零 draw，Esc 取消即走这条）。
+		if (list.hasSelection)
+			replayClonedPass(cmd, list, ClonePurpose::highlight, list.selectedMaterial);
 	} else if (pass.kind == RgPassKind::drawLight) {
 		// Phase 7 D1 / Phase 8 ①：固定全屏单 group draw（无 push constant；采样描述符
 		// baked 在 shader object 的 extra mapping，输入 RT 的 CAO→SRO 布局转换已由

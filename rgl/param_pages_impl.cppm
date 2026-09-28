@@ -137,14 +137,28 @@ std::vector<ParamPage> buildDebugParamPages(entt::registry& rg, RGL::AssetTable&
 		const auto entity = picked->entity;
 		const auto slot = picked->objectSlot;
 		const uint32_t matId = rg.get<MaterialRef>(entity).material;
-		selPage.texts.push_back({.text = [slot, matId] {
+		// 批 10.7：共享实体数（材质是共享资产，编辑波及全部引用者——与「材质」页同一
+		// 口径明示范围；高亮也按材质染，同材质实体一起亮）
+		uint32_t sharedCount = 0;
+		rg.view<MaterialRef>().each(
+			[&](const MaterialRef& m) { if (m.material == matId) ++sharedCount; });
+		selPage.texts.push_back({.text = [slot, matId, sharedCount] {
 			return "点中 objectSlot " + std::to_string(slot) + " → 材质 M"
-				+ std::to_string(matId); }});
+				+ std::to_string(matId) + " · 共享该材质的实体数 "
+				+ std::to_string(sharedCount); }});
 		if (matId < assets.materialSize())
 			appendMaterialControls(selPage, assets, matId);
+		// 批 10.7：点选跳转——本帧有新选中时把本页标为跳转目标（消费即清零，故不会
+		// 把用户从别的页反复弹回）。imgui 层只认这个标记，不认页名字符串。
+		if (auto* panel = rg.ctx().find<DebugPanelState>();
+			panel != nullptr && panel->pendingSelectJump) {
+			selPage.selectOnPick = true;
+			panel->pendingSelectJump = false;
+		}
 	} else {
 		selPage.texts.push_back({.text = [] {
-			return std::string("未选中——picking 开启后左键点击模型（面板外区域）"); }});
+			return std::string("未选中——picking 开启后左键点击模型（面板外区域）；"
+				"Esc 取消选中"); }});
 	}
 	out.push_back(std::move(selPage));
 	return out;

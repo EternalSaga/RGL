@@ -42,6 +42,11 @@ export struct RenderListState {
 	// Phase 7b+（NV DGC 规避）：per-objectSlot 材质/几何表（scene data 尾区上传，
 	// shader readObjectDraw 消费；DrawArgs 仅剩 objectIndex）
 	std::vector<ObjectDraw> draws;
+	// Phase 10 批 10.7：per-objectSlot 材质 id 表（**纯 CPU 侧，不进 scene data**）——
+	// 高亮 pass 按材质过滤 draw（选中材质 = 该材质全部实体一起亮，非单实例）。不进
+	// GPU 契约是刻意的：避免为「哪个物体被选中」新增 per-object 字节字段、触发
+	// ObjectDraw 布局变更与 just reflect 重生成。帧局部存储，生命周期同 draws。
+	std::vector<uint32_t> materialBySlot;
 	// Phase 5.5 批次 4：天空盒 draw 的 push data（shader 不声明 push constants，
 	// 推默认零值 DrawArgs 占位——pushDataEXT 与 shader 声明无关，见 DrawCall 契约）
 	RGL::DrawArgs skyboxArgs{};

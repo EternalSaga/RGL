@@ -68,6 +68,25 @@ export struct MaterialRef {
 };
 
 /**
+ * 点选选中的实体（Phase 10 批 10.5 picking / 10.7 高亮；registry context）。
+ *
+ * 住在 scene_context 而非 ecs.cppm：renderListSystem（机制层）每帧要读它填高亮通道
+ * （FrameDrawList.hasSelection/selectedMaterial），若留在 ecs 会造成 ecs ↔ render_list
+ * 循环 import（ecs_impl 已 import render_list）。本模块是叶子值类型层，正是它的位置。
+ *
+ * entity = entt::null 表示未命中/尚未点选/Esc 已取消——面板"选中"页与高亮 pass 同看
+ * 这一个字段，不会出现「面板说有选中但画面不亮」的分裂态。
+ * materialId = 该实体引用的材质（MaterialRef.material 同值）——高亮按**材质**过滤，
+ * 故同材质全部实体一起亮（Phase 10 批 10.7 决策）。
+ * 选中态不在 registry 外平行维护（ECS 规范 1）。
+ */
+export struct SelectedObject {
+	entt::entity entity = static_cast<entt::entity>(entt::null);
+	uint32_t objectSlot = 0;  // MeshRef.objectSlot 同值（GPU 回读 raw id − 1）
+	uint32_t materialId = 0;  // MaterialRef.material 同值（高亮过滤键）
+};
+
+/**
  * 包围球（组件，挂在有包围球的 entity 上）：现状 = 模型整体球挂场景根（registerScene 写入）；
  * 聚合进 SceneBounds 由 boundsSystem 完成（ecs.cppm）。
  */

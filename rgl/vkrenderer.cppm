@@ -238,6 +238,17 @@ export class Renderer {
 	 * @param call 绘制条目（pipeline / pushData / groupCount）
 	 */
 	void drawOne(vk::raii::CommandBuffer& cmd, const DrawCall& call);
+	/** materialFilter 哨兵 = 不过滤（整段重放，picking 用）。 */
+	static constexpr uint32_t kNoMaterialFilter = 0xFFFFFFFFu;
+	/**
+	 * 克隆管线重放（Phase 10 批 10.5 picking / 10.7 highlight 共用）：逐 opaque 段 draw
+	 * 换用指定用途的克隆管线重录（不走 cull/DGC——可见性由 depth 测试保证）。
+	 * @param purpose 克隆用途（picking = 整段重放；highlight = 按材质过滤）
+	 * @param materialFilter kNoMaterialFilter = 不过滤；否则只重放该材质 id 的 draw
+	 *   （materialBySlot 越界的 draw 跳过，不读越界内存）
+	 */
+	void replayClonedPass(vk::raii::CommandBuffer& cmd, const FrameDrawList& list,
+		ClonePurpose purpose, uint32_t materialFilter);
 	/**
 	 * ⑪.6 帧末扩展段（drawFrame 仅 hook 非空时调用；契约见 setFrameEndHook）：
 	 * swapchain 任意帧末布局（直渲 = CAO / blit 变体 = TransferDst / 捕获帧 = TransferSrc）
