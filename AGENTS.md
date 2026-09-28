@@ -57,6 +57,15 @@ CMake 无独立构建目录——必须从根目录构建（`cmake -B build -S .
 - **configs 的 build 端副本会被下次 `just build` 按内容比对静默覆盖复原**——临时调试改
   `build/rgl/configs/`，别改源；被破坏的 build 副本不会自动恢复需手动拷
 - 冒烟命令、headless/llm_debug 截图流程、截图回归方法学 → skill `rgl-verify`
+- **RPC 调试通道（Phase 10b 批 11b.2，协议表 → `docs/技术概念.md §RPC 调试通道`）**：
+  门 `diagnostics.rpc` **默认关** + `rpc_port = 8788`（只绑 127.0.0.1，bind 失败降级关不崩；
+  **与 imgui 门独立 → headless 可用**）。端点速查 `GET /`（路由）、`GET /state`（相机 +
+  参数页发现，label 含中文）、`POST /camera`（`yawDegrees`/`pitchDegrees`/`fovDegrees` 一律**度**）、
+  `POST /param`（`{label,value,page?,material?}`）、`POST /shot`（返回 PNG 绝对路径；
+  llm 截图在跑 → 409）。帧边界套用 = **本帧即生效**，`/shot` 下帧结算（超时 10s/2s）
+- **凡"截 UI"验收必须外部截图**：`llm_debug` 截图发生在 `frameEndHook`（imgui 绘制）**之前**
+  → 天生不含 UI（既有事实，非回归）；imgui 面板视觉验收走窗口模式 + 外部截图工具
+  （本机 KDE Wayland：`spectacle -b -n -o <file> -d <ms>`）
 
 ## 命名规范
 
@@ -129,7 +138,8 @@ CMake CXX_MODULES FILE_SET 不收纯实现单元，故"接口声明 + 分区实�
 AppContext→DeviceContext→Swapchain→Resources→ShaderRegistry → `compileRenderGraph`（建窗后）→
 entities 循环：A0 内建几何→A1 模型顶点→A2 纹理→env 上传→C 模型注册+C2b 灯 entity →
 C3 候选表+`GpuCull` → addSkyEntry/deferred 装配 → DgcCommands/DgcStaticCommands 条件构造 →
-`Renderer` → `renderSystem`。
+`Renderer` → `wireDebugRpc`（11b.2，门 `diagnostics.rpc` 默认关 = nullptr，声明序在
+registry/assets/backEnd 之后 = 析构序其先，停机走 RAII）→ `renderSystem`。
 关键时序契约：heap 用户槽按用途段分配（几何段仍由 `AssetTable::expectedGeometrySlot` 校验，
 纹理首槽 = 白 = 纹理段首槽）；env 上传 = A2 后、addModelEntry 前；候选表迭代序与
 render_list CPU 路径完全一致；deferred 装配与 DGC 构造**先于 Renderer**。
@@ -214,7 +224,7 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
 > 每篇文档头部带状态（`现行`/`历史`/`调研`）。现状权威 = 本文件 + `next_roadmap.md`。
 
 - `docs/next_roadmap.md` — **路线图（权威）**：Phase 0–6 一段话结论 + Phase 7 进度表 + 剩余计划
-- `docs/技术概念.md` — 核心 Vulkan 模式、设计决策、§模块表 / §构建检查工具机制 / §核心运行时模块表（深版）/ §main 启动流（完整版）
+- `docs/技术概念.md` — 核心 Vulkan 模式、设计决策、§模块表 / §构建检查工具机制 / §核心运行时模块表（深版）/ §RPC 调试通道（Phase 10b）/ §main 启动流（完整版）
 - `docs/调试历史.md` — 问题修复时间线（只增不改，争议结论以此为准）
 - `docs/DESCRIPTOR_HEAP_SPEC.md` — descriptor heap 排坑记录（活文档）
 - `docs/nvidia_compatibility_report.md` — 跨驱动兼容性（三平台记录；当前机 = 9950X Raphael RDNA2 核显，非 Strix Halo）
@@ -223,6 +233,7 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
 - `docs/vulkan_extensions_2025_调研.md` — 新扩展调研 + §十二/十三 实施记录（活文档）
 - `docs/phase7_devlog.md` — Phase 7 滚动开发日志（完结后归档）
 - `docs/archive/phase10_plan.md` — Phase 10 调试交互计划（**2026-09-28 批 10.1–10.6 全落地归档**；imgui 面板/热重载/点选；决策表 D1–D12 含 D12 RPC 延后；遗留 UI 视觉走查）
+- `docs/phase10b_plan.md` — **Phase 10b 增补批（现行，2026-09-28 全落地）**：11b.1 imgui 中文字体（系统字体探测链，MiSans Light 首选）+ 11b.2 loopback HTTP POST RPC（D12 翻案）；协议表/依赖方向/验收清单（已全绿，除 Windows 非门项）
 - `docs/风格检查规则.md` — tools/checks 两轮扩展设计（partition/docs/现代 C++/expected 禁 throw）；工具 Python ≥3.14，规则拆 `rules_{metrics,text,doxygen}.py`
 - `docs/archive/静态审查升级路线.md` — LLVM 23 + `-Wlifetime-safety` 两阶段落地计划（vs Rust 借用检查差距结论；clangbind ABI 回归是阶段 1 最高风险）
 - `docs/archive/` — 归档索引（phase 计划含 **phase6_record.md**、ecs 审查、issue_history 总账、present_timing/教程拆解等已结题调研）

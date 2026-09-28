@@ -226,6 +226,18 @@ Phase 9：性能观测（profiler）——先回答"CPU-bound 还是 GPU-bound"�
    探针 + D12 RPC 延后决策）/ 10.6 反射语义扩产 ✅（2026-09-28，param_semantics.json
     → 第 7 条反射管线生成语义表 + 面板构建拆出 param_pages 模块）。**Phase 10 全批
     收口**，剩 UI 视觉验收（用户）。
+    ↓
+  **2026-09-28 增补批（Phase 10b，[phase10b_plan.md](phase10b_plan.md)，D12 翻案）**：
+    11b.1 imgui 中文字体 ✅（问号根因三层：从不加载字体 + stb 不吃 CFF + 1.92 按需烘焙
+    → `imgui[freetype]` 常开 + 系统字体探测链 MiSans Light 首选，**不进仓库**；
+    验收走窗口 + 外部截图 —— llm 截图在 `frameEndHook` 之前 → 天生不含 UI）
+    / 11b.2 loopback HTTP POST RPC ✅（`diagnostics.rpc` 默认关，`GET /` `/state` +
+    `POST /camera` `/param` `/shot`，127.0.0.1:8788，帧边界命令队列；传输 `debug_rpc`
+    + 协议执行 `debug_rpc_exec` 两模块，main 只一行装配；headless 可用 = agent 远程
+    调参/截图姿势）。验收期抓到并修掉两个真 bug（error handler 覆盖自产 4xx body /
+    responder move 后 catch 空句柄 → 恒 504，见 调试历史 2026-09-28）。
+    **验收全绿**：BIT-IDENTICAL 回归 + `checks --strict` 0 警告 + RPC 全端点与负例 +
+    中文字形目检；Windows 构建留到有环境时（非门）。
      ↓
 Phase 11：阴影（大特性，一口气；风险分层 = CSM 承诺交付 + HFTS 带退出条件的 spike；
    原编号 Phase 10，2026-09-27 因调试交互插队顺延）
