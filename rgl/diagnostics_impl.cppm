@@ -1,6 +1,7 @@
 module;
 #include <sol/sol.hpp>
 #include <fmt/format.h>
+#include <SDL3/SDL_keyboard.h>  // camera_probe 单字母键名 → SDLK 键码（SDL3 字母键码 = ASCII 大写）
 module diagnostics:impl;
 
 import diagnostics;  // clang 不给 partition impl unit 隐式 import 主接口——必须显式
@@ -34,6 +35,56 @@ static uint32_t readRpcPort(sol::table& root) {
 	if (port < 1 || port > 65535)
 		return 8788;
 	return static_cast<uint32_t>(port);
+}
+
+/** 探针表数值字段读取（缺省回落默认；同 picking_probe 解析惯例）。 */
+static uint32_t readProbeNum(const sol::table& t, const char* k, uint32_t def) {
+	sol::optional<double> v = t[k];
+	return v ? static_cast<uint32_t>(*v) : def;
+}
+
+/**
+ * camera_probe 键名解析（2026-09-28 WASD 回归护栏）：单字母不区分大小写，按 SDL3
+ * 字母键码 = ASCII 大写约定映射；非单字母 warn 并忽略（探针是调试面，配置笔误不
+ * fail-fast）。
+ * @param t camera_probe 子表
+ * @param cfg 写入目标（cameraProbeKey）
+ */
+static void readCameraProbeKey(const sol::table& t, DiagnosticsConfig& cfg) {
+	if (sol::optional<std::string> key = t["key"]) {
+		const std::string& s = *key;
+		const bool isLetter = s.size() == 1 &&
+			((s[0] >= 'a' && s[0] <= 'z') || (s[0] >= 'A' && s[0] <= 'Z'));
+		if (!isLetter) {
+			if (auto* logger = RLLogger::getInstance())
+				logger->warn("diagnostics: camera_probe.key 须为单字母（如 \"W\"），已忽略");
+		} else {
+			const char c = (s[0] >= 'a' && s[0] <= 'z') ? s[0] - 'a' + 'A' : s[0];
+			cfg.cameraProbeKey = static_cast<uint32_t>(SDLK_A + (c - 'A'));
+		}
+	}
+}
+
+/**
+ * 脚本化探针表解析（ui_click_probe / camera_probe，2026-09-28 WASD 回归护栏）：
+ * 缺表 = 全关（字段保持 0）；数值缺省回落默认（holdFrames 缺省 8）；key 解析见
+ * readCameraProbeKey。抽成小函数以守住主解析函数认知复杂度阈值。
+ * @param root 配置根表
+ * @param cfg 写入目标（uiClickProbe* / cameraProbe* 字段）
+ */
+static void readInputProbes(sol::table& root, DiagnosticsConfig& cfg) {
+	if (sol::optional<sol::table> probe = root["ui_click_probe"]) {
+		const sol::table& t = *probe;
+		cfg.uiClickProbeFrame = readProbeNum(t, "frame", 0);
+		cfg.uiClickProbeX = readProbeNum(t, "x", 0);
+		cfg.uiClickProbeY = readProbeNum(t, "y", 0);
+	}
+	if (sol::optional<sol::table> probe = root["camera_probe"]) {
+		const sol::table& t = *probe;
+		cfg.cameraProbeFrame = readProbeNum(t, "frame", 0);
+		cfg.cameraProbeHold = readProbeNum(t, "holdFrames", 8);
+		readCameraProbeKey(t, cfg);
+	}
 }
 
 /** loadDiagnosticsConfig 定义（接口注释见 diagnostics.cppm）。要点：数值门（texel_canary/dump_gbuf/texture_force_size）负数 = "关"哨兵；dump_gbuf 越界（> kGBufferAttachments 最大通道号）warn 一句并置 -1（关，不再静默改判为 0）；解析完成后打一行 info 汇总。 */
@@ -98,6 +149,9 @@ static uint32_t readRpcPort(sol::table& root) {
 			cfg.pickingProbeX = num("x", 0);
 			cfg.pickingProbeY = num("y", 0);
 		}
+
+		// 脚本化输入探针（窗口模式输入链回归，2026-09-28；见 readInputProbes 注释）
+		readInputProbes(root, cfg);
 
 		// 数值门：负数 = 显式"关"哨兵（配置文件写 -1 直观）；dump_gbuf 越界 = warn + 关闭
 		auto readI64 = [&](const char* key, int64_t def) -> std::optional<int64_t> {

@@ -35,6 +35,12 @@ export struct DiagnosticsConfig {
 	uint32_t pickingProbeFrame = 0;     // 脚本化点选探针（同 texel_canary headless 驱动方法论）：第 N 帧（1 起）自动 requestProbe(x,y) 一次；0 = 关
 	uint32_t pickingProbeX = 0;         // 探针像素列（窗口/RT 坐标）
 	uint32_t pickingProbeY = 0;         // 探针像素行
+	uint32_t uiClickProbeFrame = 0;     // 脚本化 UI 点击探针（窗口模式）：第 N 帧（0 起，同 picking_probe 实际语义）合成一次鼠标左键点击 (x,y) 灌入完整输入链；0 = 关（2026-09-28 WASD 回归场景复现用，见 docs/调试历史.md）
+	uint32_t uiClickProbeX = 0;         // 点击像素列（窗口坐标）
+	uint32_t uiClickProbeY = 0;         // 点击像素行（窗口坐标）
+	uint32_t cameraProbeFrame = 0;      // 脚本化相机键盘探针（窗口模式）：第 N 帧（0 起）按住移动键 holdFrames 帧，验证 eventSystem→InputFilter→cameraSystem 输入链并打 PASS/FAIL；0 = 关（2026-09-28 "面板吞 WASD" 回归护栏）
+	uint32_t cameraProbeKey = 0;        // 探针 SDL 键码（须为 Camera.keys 绑定的 W/A/S/D 之一；lua 里写单字母，解析期映射）
+	uint32_t cameraProbeHold = 0;       // 按键保持帧数（<1 解析期回落 8）
 	bool rpc = false;                   // Phase 10b HTTP POST RPC 通道（只绑 127.0.0.1；独立于 imgui 门，headless 可用，docs/phase10b_plan.md）
 	uint32_t rpcPort = 8788;            // RPC 监听端口（bind 失败 = 日志降级关，不崩）
 };

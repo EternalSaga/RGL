@@ -17,6 +17,7 @@ import frame_draw_list;
 import render_list;
 import runtime_config;  // LlmDebugConfig（renderSystem 参数类型）
 import diagnostics;     // texel_canary 诊断单例（configs/diagnostics.lua）
+import input_probe;     // 脚本化输入探针（2026-09-28 输入链回归护栏，帧循环 tick）
 import profiler;        // Phase 9 帧相 zone（frameBegin + 帧循环拦截点，docs/phase9_plan.md）
 import gpu_canary;
 import scene_context;
@@ -45,13 +46,17 @@ void eventSystem(entt::registry& rg) {
 	auto& exit = rg.ctx().get<AppExit>();
 	auto& events = rg.ctx().get<InputEvents>();
 	auto* filter = rg.ctx().find<InputFilter>();  // Phase 10 调试层可选挂接（main 装配；缺省 = 不过滤）
+	auto* logger = RLLogger::getInstance();
+	int swallowed = 0;  // 本帧被调试层吞没的输入事件数（debug 级可观测，2026-09-28 配套）
 
 	SDL_Event event;
 	while (SDL_PollEvent(&event)) {
 		// 调试 UI 先手：imgui 消费的事件不产 InputEvents（相机不响应面板拖拽）。
 		// void* = InputFilter 类型擦除约定（见 ecs.cppm InputFilter 注释）。
-		if (filter && filter->consume && filter->consume(&event))
+		if (filter && filter->consume && filter->consume(&event)) {
+			++swallowed;
 			continue;
+		}
 		switch (event.type) {
 			case SDL_EVENT_QUIT:
 			case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
@@ -120,6 +125,8 @@ void eventSystem(entt::registry& rg) {
 				break;
 		}
 	}
+	if (swallowed > 0 && logger)
+		logger->debug("eventSystem: 本帧 {} 个输入事件被 InputFilter（调试层）吞没", swallowed);
 }
 
 /**
@@ -499,6 +506,10 @@ std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer& rende
 
 		// picking 结果帧边界（Phase 10 批 10.5）：消费上帧回读 → 反查 entity → ctx
 		pickingTick(rg);
+
+		// 脚本化输入探针（2026-09-28 输入链回归护栏；配置门控，默认关 = 早退零开销）
+		uiClickProbeTick();
+		cameraProbeTick(rg);
 
 		float ticks = static_cast<float>(SDL_GetTicks());
 		// dt 限幅：窗口卡顿/切后台回来时防止相机瞬移
