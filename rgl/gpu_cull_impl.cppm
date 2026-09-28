@@ -288,7 +288,7 @@ void GpuCull::writeSequenceStaging(uint32_t slot, const std::vector<RGL::DrawArg
 		const uint32_t execMesh = 2 * entryTable[i].pipelineIndex + 1;
 		std::memcpy(s, &execFrag, sizeof(uint32_t));
 		std::memcpy(s + 4, &execMesh, sizeof(uint32_t));
-		std::memcpy(s + 8, &args[i], sizeof(RGL::DrawArgs));  // DrawArgs @8（36B，Phase 7b+ 去 mvp；mvp 走 scene data 表）
+		std::memcpy(s + 8, &args[i], sizeof(RGL::DrawArgs));  // DrawArgs @8（4B 仅 objectIndex，Phase 7b+ bindless 化；mvp/材质字段走 scene data 表）
 		const uint32_t meshCmd[3] = {entryTable[i].groupCount, 1, 1};
 		std::memcpy(s + 108, meshCmd, sizeof(meshCmd));  // meshCmd @108 基值（GPU 覆盖 x）
 	}
@@ -358,7 +358,7 @@ void GpuCull::recordCullPass(vk::raii::CommandBuffer& cmd, const CullFrameInput&
 	cmd.bindSamplerHeapEXT(vk::BindHeapInfoEXT(
 		samplerRange, 0, resources.getSamplerReservedRangeSize()));
 
-	// dispatch（64 线程/group；push constant = CullFrameInput 164B ≤ maxPushDataSize）
+	// dispatch（64 线程/group；push constant = CullFrameInput 100B ≤ maxPushDataSize）
 	std::array<vk::ShaderStageFlagBits, 1> stages = {vk::ShaderStageFlagBits::eCompute};
 	std::array<vk::ShaderEXT, 1> handles = {*cullShader};
 	cmd.bindShadersEXT(stages, handles);

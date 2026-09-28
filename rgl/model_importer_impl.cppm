@@ -29,8 +29,8 @@ namespace RGL {
 
 /**
  * per-primitive 块映射（Phase 4 批次 2 分块拼接）：chunk = 所属 16MB 块下标，
- * offset = 该 primitive 首顶点在块内的字节偏移（进 push constant DrawArgs.vertexOffset，
- * model.mesh.slang Load 前缀）。
+ * offset = 该 primitive 首顶点在块内的字节偏移（进 scene data ObjectDraw 表的
+ * vertexOffset（Phase 7b+；原 push constant DrawArgs.vertexOffset），model.mesh.slang Load 前缀）。
  */
 struct ChunkPrim { uint32_t chunk; uint32_t offset; };
 

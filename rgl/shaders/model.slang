@@ -27,8 +27,9 @@ struct ModelVertexOutput
 };
 
 // push constant 契约已移至 material.slang（Phase 4 统一 DrawArgs 超集，所有风格共享；
-// model 风格消费 mvp/totalTriangles/vertexOffset/baseColor，roughnessMetallic 由
-// model_pbr 占位 frag 预留、Phase 5 光照消费）——本契约只拥有 buffer slot 段 +
+// Phase 7b+ 起 push 只剩 objectIndex，model 风格经它读 scene data 表取
+// mvp/totalTriangles/vertexOffset/baseColor，roughnessMetallic 同表由
+// model_pbr 消费）——本契约只拥有 buffer slot 段 +
 // ModelVertex 顶点布局（schema 单一真相源）+ kTrianglesPerGroup 常量；
 // model.mesh.slang / model.frag.slang 同时 import model + material。
 

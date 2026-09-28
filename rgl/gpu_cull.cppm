@@ -42,7 +42,8 @@ export struct CullEntry {
 static_assert(sizeof(CullEntry) == 60, "CullEntry layout drifted from cull.comp.slang");
 
 /** 输出序列步长（120B：execSlot 2×u32（@0 frag / @4 mesh——DGC EXECUTION_SET token 按
- * shaderStages 位 LSB→MSB 读 u32 数组）+ DrawArgs 100（@8）+
+ * shaderStages 位 LSB→MSB 读 u32 数组）+ DrawArgs 槽区（@8..108 共 100B 保留宽度，
+ * DrawArgs 本身 Phase 7b+ 起 4B = 仅 objectIndex，其余 96B 空置不写）+
  * VkDrawMeshTasksIndirectCommandEXT 12（@108）；cull.comp.slang / DGC layout token
  * 偏移同源）。读回重放路只消费可见性（@108.x）与 CPU 侧 cullArgs——execSlot 仅
  * DGC 路消费（值 = 2×pipelineIndex / 2×pipelineIndex+1，execution set 下标约定见

@@ -16,7 +16,7 @@ import gpu_profiler;  // Phase 9.2：cull CB 时间戳（cull 区域与主 CB gp
 import vk_indirect_commands;
 import shader_registry;
 import frame_draw_list;
-import material_types_generated;  // DrawArgs（对账 objectIndex@96 映射 CPU draw + 重放 push 源）
+import material_types_generated;  // DrawArgs（对账 objectIndex 映射 CPU draw + 重放 push 源）
 import VmaRaii;
 
 namespace RGL {

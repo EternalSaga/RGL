@@ -4,7 +4,7 @@
 //
 // 职责：把基础序列（固定槽、candidate 序，cull kernel 已写可见性）展开为 N 条
 // per-管线条目"满槽孔洞流"：
-//   stream[j][i] = candidate i ∈ 条目 j 且可见 → 拷基础行 @8..120（DrawArgs + meshCmd）
+//   stream[j][i] = candidate i ∈ 条目 j 且可见 → 拷基础行 @8..120（DrawArgs 槽区 + meshCmd）
 //                  否则 → meshCmd @108..120 写零（x=0 = NV/RADV 均原生 no-op）
 // 条目内顺序 = candidate 序（确定性——原子分桶会破坏，spike 不采用）；
 // sequenceCountAddress 全条目复用 count buffer @4（= candidate 数）。

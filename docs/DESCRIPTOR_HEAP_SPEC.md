@@ -179,7 +179,7 @@ cmd.pipelineBarrier2(/* buffer barrier: eTransfer/eTransferWrite → eAllGraphic
 // ④ 逐 pass：beginRendering → 动态状态 → 逐 draw → endRendering
 cmd.beginRendering(renderingInfo);
 // ... viewport, scissor, depth, ...
-// pushData 逐 draw 发（DrawArgs 含 per-primitive 索引/偏移），故在 pass 内
+// pushData 逐 draw 发（DrawArgs = per-primitive objectIndex，mvp/偏移走 scene data 表），故在 pass 内
 cmd.pushDataEXT(vk::PushDataInfoEXT(0, vk::HostAddressRangeConstEXT(&data, sizeof(data))));
 cmd.bindShadersEXT(stages, shaders);
 cmd.drawMeshTasksEXT(groupCount, 1, 1);

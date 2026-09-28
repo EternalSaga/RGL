@@ -404,7 +404,7 @@ DGC 路与重放路消费**同一份序列**（CPU args + GPU 可见性），两
   registry 条目 + cullArgs[i] push + drawMeshTasks）。
 - **5c-2 DGC 模块**（NVIDIA 路径，本机能力门控不激活）：`vk_indirect_commands.cppm`
   （`DgcCommands` RAII：layout 3 token = EXECUTION_SET@0（u32×2：frag@2j, mesh@2j+1，
-  per stage-bit LSB→MSB）+ PUSH_DATA@8（100B DrawArgs，`VkPushConstantRange` MESH|FRAG）+
+  per stage-bit LSB→MSB）+ PUSH_DATA@8（本批次 100B DrawArgs，`VkPushConstantRange` MESH|FRAG；2026-09-10 bindless 化后 4B）+
   DRAW_MESH_TASKS@108（action，最后）；indirectStride=120B；execution set SHADER_OBJECTS
   capacity=2×条目数（2j=frag/2j+1=mesh，unique-index VU）；preprocess buffer 经
   `vkGetGeneratedCommandsMemoryRequirementsEXT` + 原生 `vkAllocateMemory`（绕 VMA，
@@ -415,14 +415,18 @@ DGC 路与重放路消费**同一份序列**（CPU args + GPU 可见性），两
   main 条件构造 `DgcCommands`（graphicsIndirect && cull active），catch 回落重放。
 - **5d 文档**（本条目 + research 勘误 + roadmap + AGENTS）。
 
-### 布局契约（当前值，static_assert 锁定）
+### 布局契约（本批次落地时值，static_assert 锁定；**2026-09-10 起 DrawArgs 已 bindless 化为 4B**，见表末注）
 
 | buffer | 布局 | 说明 |
 |---|---|---|
 | CullEntry 表 | 60B×N | center@0 radius@12 objectSlot@16 pipelineIndex@20 groupCount@24 totalTriangles@28 vertexOffset@32 baseColor@36 rm@52 |
-| 序列 | **120B**×N | execSlotFrag@0（2×pipelineIndex）/ execSlotMesh@4（2×pipelineIndex+1）/ DrawArgs@8（100B）/ meshCmd@108（x=groupCount\|0 或 0, y=z=1） |
-| CullPush | 100B | planes[6]@0 + sequenceCount@96（viewProj 已移除——mvp 不经 push，CPU 预算进 args） |
-| count buffer | 64B | visible@0（InterlockedAdd 累计）+ total@4（thread0 写 push.sequenceCount）；DGC sequenceCountAddress = BDA+4 |
+| 序列 | **120B**×N | execSlotFrag@0（2×pipelineIndex）/ execSlotMesh@4（2×pipelineIndex+1）/ DrawArgs@8（本批次 100B 超集；**2026-09-10 起 4B 仅 objectIndex，@8..108 槽区宽度不变**）/ meshCmd@108（x=groupCount\|0 或 0, y=z=1） |
+| CullPush | 100B | planes[6]@0 + sequenceCount@96（viewProj 已移除——mvp 不经 push，本批次 CPU 预算进 args；**2026-09-10 起改走 scene data per-object 表**） |
+| count buffer | 64B | total@4（thread0 写 push.sequenceCount）+ @0 保留未用（本批次的 visible@0 InterlockedAdd 已删，2026-09-15）；DGC sequenceCountAddress = BDA+4 |
+
+> 后续演进：本批次 100B push 在 NVIDIA RTX 5090 上按序列数挂死（≈112 条崩），同日经
+> DrawArgs bindless 化（去 mvp → 36B → 终态 4B）修复，详见 `docs/调试历史.md` 2026-09-10 条目
+> 与 `rgl/shaders/material.slang` 头注释。
 
 ### 踩坑
 

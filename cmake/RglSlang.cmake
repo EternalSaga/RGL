@@ -4,12 +4,12 @@
 # ─── Scalar Block Layout 项目策略（Phase 4 定案）────────────────────────────
 # 所有 slangc 编译（反射 + SPV）统一加 -fvk-use-scalar-layout：push constant 用
 # scalar（C 自然）布局而非 GLSL 标准布局。收益：C++ struct（glm 自然对齐 4）与
-# shader 逐字段偏移天然一致、零 padding、DrawArgs 100B（标准布局下需 112B + 2 段
-# padding）。前提：scalarBlockLayout feature 已启用（features_config.json，
+# shader 逐字段偏移天然一致、零 padding、DrawArgs（Phase 4 时 100B——标准布局下需 112B + 2 段
+# padding；Phase 7b+ bindless 化后 4B 仅 objectIndex，策略不变）。前提：scalarBlockLayout feature 已启用（features_config.json，
 # VkPhysicalDeviceVulkan12Features，validateFeatures 校验）——feature 未启用时
 # scalar 布局的 push constant 行为未定义。
 # 唯一声明点 = SLANG_FLAGS：反射与 SPV 任何一处 flag 不一致 = 运行时布局错配的隐蔽
-# bug（如仅 SPV 侧丢 flag → 反射 100B 与 SPV 标准布局 112B 错配，零报错）。
+# bug（如仅 SPV 侧丢 flag → 反射按 scalar 而 SPV 标准布局错配（当年 100B vs 112B），零报错）。
 # 新增 slangc 调用点必须引用本变量，禁止内联重复（generator 的 standardLayoutInfo
 # 同步为 scalar 对齐，tools/generator.cppm，并用反射 binding.offset 交叉校验）。
 include_guard()

@@ -3,14 +3,15 @@
 // gpu_cull.cppm CullEntry / 序列布局，本文件字面量必须一致，scene.slang 先例）
 //
 // **数据分工（BIT-IDENTICAL 契约）**：序列的 execSlot/DrawArgs/meshCmd 基值由 CPU 每帧
-// 写进 seq staging（mvp = CPU 算——GPU 若自算 mvp，FMA 收缩序与 CPU 无位级契约，
+// 写进 seq staging（mvp 同为 CPU 算、现进 scene data per-object 表——GPU 若自算 mvp，FMA 收缩序与 CPU 无位级契约，
 // 叶缘光栅 ±1 LSB 不可控）；GPU 只覆盖可见性：meshCmd.x@108（groupCount 或 0 = no-op）
 // 与 count（@0 保留未用（旧 visible atomicAdd 无人清零已删，2026-09-15）| @4 total
 // 每帧 thread0 写，DGC sequenceCountAddress 指向 @4；可见数 = CPU 读回序列 meshCmd 位统计）。
 // DGC 执行路与读回重放路消费同一序列内容（CPU args + GPU 可见性），跨平台位级一致。
 //
 // 矩阵约定（无行/列主序歧义）：对象矩阵按"内存 chunk j = 数学列 j"处理（C++ 侧 glm
-// 列主序 + DrawArgs.mvp 生产契约已证），世界球用列组合展开（scene.slang worldPos 同款）
+// 列主序 + MVP 生产契约已证——Phase 7b+ 后该值进 scene data per-object 表，原 DrawArgs.mvp），
+// 世界球用列组合展开（scene.slang worldPos 同款）
 // ——不依赖 Slang 矩阵构造函数 / operator[] 语义。
 //
 // 数据布局（与 gpu_cull.cppm static_assert 同源）：
@@ -25,7 +26,8 @@
 //     @0   execSlotFrag u32（= 2×pipelineIndex，CPU 写；DGC EXECUTION_SET token 第 1 位
 //          = FRAGMENT 阶段——shaderStages 位 LSB→MSB）
 //     @4   execSlotMesh u32（= 2×pipelineIndex+1，CPU 写；token 第 2 位 = MESH 阶段）
-//     @8   DrawArgs 100B（CPU 写，material.slang 契约）
+//     @8   DrawArgs 4B（仅 objectIndex；CPU 写，material.slang 契约——@8..108 槽区
+//          保留 100B 宽度以维持 120B 步长，余 96B 空置不读）
 //     @108 meshCmd 12B（CPU 写基值 x=groupCount y=z=1；**GPU 覆盖 x**）
 //   count (binding 3)：@0 保留未用（旧 visible atomicAdd 无人清零已删，2026-09-15）
 //     | @4 total u32（thread0 每帧写 push.sequenceCount——DGC sequenceCountAddress

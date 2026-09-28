@@ -21,7 +21,8 @@
 //        （DrawArgs.objectIndex = MeshRef.objectSlot，实例级槽，Phase 6 instancing）
 //   @262272 灯数组（lights.slang）
 //   @262800 per-object MVP 表：mat4 列主序 × 4096，[objectIndex] = proj·view·world
-//        （Phase 7b+ NV DGC 规避：DrawArgs 去 mvp 后 push 36B < NV 驱动 84B 挂死阈值；
+//        （Phase 7b+ NV DGC 规避：DrawArgs 去 mvp（当时 push 36B，后 bindless 化终态 4B）
+//          < NV 驱动 84B 挂死阈值；
 //          CPU 每帧写，值 = 原 DrawArgs.mvp 位级一致；基址 = 128+4096×64+528，
 //          vkresources kSceneDataMvpTableOffset 同值——字面量同步，无反射端）
 //   @524944 per-object 材质/几何表：stride 48 × 4096，[objectIndex]（Phase 7b+ 续：

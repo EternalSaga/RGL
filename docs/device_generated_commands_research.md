@@ -172,7 +172,7 @@ layout 规则：offset 单调不减、4 字节对齐、action token 必须最后
 
 ```
 [0]  EXECUTION_SET   (shader object 模式, stages = MESH|FRAGMENT)  → 数据: u32[] 每 stage-bit 一个索引（LSB→MSB：@0=frag slot, @4=mesh slot，共 8B）
-[8]  PUSH_DATA       (offset 对齐 4)                              → 数据: RGL::DrawArgs（100B，逐序列独立 MVP/材质参数；非 64B——DrawArgs 超集含 baseColor/rm/objectIndex）
+[8]  PUSH_DATA       (offset 对齐 4)                              → 数据: RGL::DrawArgs（**现 4B = 仅 objectIndex**；2026-09-10 bindless 化前是 100B 超集、逐序列带 MVP/材质参数——非 64B，超集含 baseColor/rm/objectIndex。@8..108 槽区 100B 宽度不变，余 96B 空置）
 [108] DRAW_MESH_TASKS (action token, 必须最后)                    → 数据: VkDrawMeshTasksIndirectCommandEXT
 indirectStride = 120B（≥ 各 token 数据总长；NVIDIA 无上限；RADV 上限 2048B）
 ```
@@ -182,11 +182,11 @@ indirectStride = 120B（≥ 各 token 数据总长；NVIDIA 无上限；RADV 上
 **帧流程**（culling → 执行，实施版）：
 
 ```
-① CPU 预写：seqStaging（MAPPED ring×2）逐 candidate 写 execSlot(2j/2j+1) + DrawArgs（CPU 算 mvp）+ meshCmd(x=groupCount)
+① CPU 预写：seqStaging（MAPPED ring×2）逐 candidate 写 execSlot(2j/2j+1) + DrawArgs(4B objectIndex；mvp 等改走 scene data per-object 表) + meshCmd(x=groupCount)
    → staging→sequence 拷贝（cull pass 内）
 ② culling compute dispatch（cull.comp.slang，push 100B = planes[6]+sequenceCount）
    输入: CullEntry 表 + 对象矩阵表（全量刷新，见 devlog 矩阵表陈值 bug）
-   输出: 序列 meshCmd.x（可见=groupCount / 不可见=0）+ count buffer（visible@0, total@4）
+   输出: 序列 meshCmd.x（可见=groupCount / 不可见=0）+ count buffer（total@4；@0 保留未用）
 ③ barrier: COMPUTE_SHADER → COMMAND_PREPROCESS（eCommandPreprocessEXT）
 ④ vkCmdPreprocessGeneratedCommandsEXT（sequenceCountAddress=0 → 用 maxSequenceCount）
 ⑤ render pass 内 vkCmdExecuteGeneratedCommandsEXT（VK_TRUE, sequenceCountAddress=count BDA+4）→ 设备端发出 N 个 mesh draw

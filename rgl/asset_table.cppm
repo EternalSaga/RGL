@@ -58,7 +58,8 @@ export struct MeshAsset {
 	                                                 //   0 = 不渲染。renderListSystem 每帧零推导零分支直接取）
 	uint32_t pipelineIndex = kInvalidPipelineIndex;   // 管线表下标（ShaderRegistry::addModelEntry / bindPipelineToAsset 写入）
 	uint32_t vertexOffset = 0;                        // 拼接顶点 buffer 内 per-primitive 字节偏移（Phase 4 批次 2；
-	                                                 //   进 push constant 的 DrawArgs.vertexOffset，model.mesh.slang Load 前缀；cube = 0）
+	                                                 //   Phase 7b+ 起进 scene data ObjectDraw 表（model.mesh.slang readObjectDraw
+	                                                 //   取 od.vertexOffset 做 Load 前缀，不再走 push constant）；cube = 0）
 	// 索引 buffer（批次 3：cube 资产带索引；模型 primitive 去索引展开 = nullopt）
 	std::optional<VmaBuffer> indexBuffer;
 	std::optional<uint32_t> indexHeapSlot;

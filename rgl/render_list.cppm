@@ -4,7 +4,7 @@ module;
 export module render_list;
 
 import rlstd;
-import material_types_generated;  // Phase 4：统一 DrawArgs 超集（scalar 布局 100B，Phase 5 +objectIndex）
+import material_types_generated;  // Phase 4：统一 DrawArgs 超集（Phase 4 时 scalar 100B，Phase 7b+ 起 4B = 仅 objectIndex）
 import scene_forward_types_generated;  // 前向头 SceneLight + ObjectDraw（Phase 10 批 10.2a 单源化）
 import frame_draw_list;
 import vk_resources;
@@ -22,7 +22,8 @@ namespace RGL {
 /**
  * 每帧 push constant 存储（帧数据：活过 renderSystem 循环，DrawCall 的 span 指向其中；
  * vkCmdPushDataEXT 录制时读取，只要求内存活到录制结束）。
- * Phase 4 归一（H1 解决）：单一统一 DrawArgs 超集（material_types_generated，scalar 布局 100B）
+ * Phase 4 归一（H1 解决）：单一统一 DrawArgs 超集（material_types_generated，Phase 4 时
+ * scalar 布局 100B；Phase 7b+ bindless 化后 4B 仅剩 objectIndex，见 args 注释）
  * ——删旧 cube 单例(64B) + model 每资产(96B，Phase 5 前) 双容器与 AssetKind 分支。
  * Phase 6 instancing：args/matrices 按 **objectSlot**（MeshRef.objectSlot，实例级——同
  * asset 多实例各持独立变换；容量 = NextObjectSlot.next，main 启动期契约检查
@@ -54,9 +55,10 @@ export struct RenderListState {
  * 路径）。
  *
  * Phase 4 归一：统一 DrawArgs 超集（所有 shader 风格共享同一布局，material.slang 单一真相源，
- * scalar 布局 100B）——单一写入路径写满字段，零 AssetKind 分支（旧 cube 64B / model 96B
- * 双 struct 分支删除，ecs_compliance_review H1 注记解决）。各风格只消费自己需要的字段
- *（未读字段无害）：cube 只读 mvp（每顶点色），model 读 mvp/totalTriangles/baseColor。
+ * Phase 4 时 scalar 布局 100B；Phase 7b+ bindless 化后 push 只剩 objectIndex 4B）——单一写入
+ * 路径，零 AssetKind 分支（旧 cube 64B / model 96B
+ * 双 struct 分支删除，ecs_compliance_review H1 注记解决）。各风格经 objectIndex 进 scene data
+ * 表取自己要的字段（cube 取 mvp 每顶点色；model 取 mvp/totalTriangles/vertexOffset/baseColor）。
  * groupCount 经资产静态字段（MeshAsset.groupCount，上传期按 shader 契约派生，D6）：
  * model=ceil(tri/kTrianglesPerGroup)、cube=1 固定单 group、0=不渲染——每帧零推导零分支。
  * vertexOffset 经资产静态字段（MeshAsset.vertexOffset，批次 2 拼接顶点 buffer per-primitive

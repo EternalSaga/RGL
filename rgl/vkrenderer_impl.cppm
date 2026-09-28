@@ -32,7 +32,7 @@ import VmaRaii;
 import frame_draw_list;
 import model_types_generated;
 import lights_types_generated;
-import material_types_generated;  // DrawArgs（GPU culling 对账经 objectIndex@96 映射 CPU draw）
+import material_types_generated;  // DrawArgs（GPU culling 对账经 objectIndex 映射 CPU draw）
 import features;
 import render_graph;
 

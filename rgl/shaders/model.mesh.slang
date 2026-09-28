@@ -1,5 +1,6 @@
 import model;
-import material;  // 统一 push constant（Phase 4：DrawArgs 超集，model 风格消费 totalTriangles/baseColor）
+import material;  // 统一 push constant（Phase 4：DrawArgs 超集；Phase 7b+ push 仅 objectIndex，
+                  // totalTriangles/baseColor 等经 scene data ObjectDraw 表读取）
 import scene;     // Phase 7b+：readObjectMvp（binding 3 scene data，mvp 从 heap 读不走 push）
 
 // 无 task stage：一次 mesh 调用 = 一个 group，group 序号 = SV_GroupID.x
@@ -41,7 +42,8 @@ void main(
     if (ti < vertexCount) {
         uint vertexIndex = firstTriangle * 3 + ti;
         // 拼接顶点 buffer（Phase 4 批次 2）：本 primitive 在拼接 buffer 内的字节偏移
-        //（DrawArgs.vertexOffset，CPU 端 renderListSystem 经资产表 MeshAsset.vertexOffset 写入）
+        //（ObjectDraw.vertexOffset，Phase 7b+ 走 scene data 表；值源 = CPU 端 renderListSystem
+        // 经资产表 MeshAsset.vertexOffset 写入）
         uint byteOffset = od.vertexOffset + vertexIndex * kVertexStride;
         float3 pos = asfloat(modelVertexBuffer.Load3(byteOffset));         // @0
         float3 nrm = asfloat(modelVertexBuffer.Load3(byteOffset + 12));   // @12

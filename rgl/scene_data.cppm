@@ -70,7 +70,8 @@ export inline constexpr uint32_t kSceneDataLightArrayBytes = 16u + kMaxLights * 
 
 /** Phase 7b+（NV DGC 规避）：per-object MVP 表区（追加于灯数组之后——既有各区基址
  * 逐字节不动 diff0）。CPU 每帧写（值 = 原 DrawArgs.mvp，位级一致），shader
- * scene.slang readObjectMvp 按 objectIndex 读——DrawArgs 去 mvp 字段后 push 36B，
+ * scene.slang readObjectMvp 按 objectIndex 读——DrawArgs 去 mvp 字段后 push 36B（当时值，
+ * 后 bindless 化终态 4B，见 kSceneDataDrawTableOffset），
  * 绕 NV DGC PUSH token >83B 多序列挂死（见 docs/调试历史）。
  * 基址 = 灯数组尾（262272 + 528 = 262800，scene.slang 字面量同值）。 */
 export inline constexpr uint32_t kSceneDataMvpTableOffset =
