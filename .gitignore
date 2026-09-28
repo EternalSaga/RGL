@@ -387,7 +387,8 @@ FodyWeavers.xsd
 !assest/**/*.obj
 !assest/**/*.jpg
 
-.vscode/settings.json
+# 本地编辑器配置（含 settings/扩展/任务等，整目录不入库）
+.vscode/
 
 /.continue/
 # rgl/generated/*.cppm 纳入版本控制（2026-09-02 编译提速）：反射产物作为已提交代码，全新构建不再
@@ -399,3 +400,12 @@ build_min/
 # local assets / scratch (2026-09-09)
 Bistro_v5_2/
 novel-ignore-it/
+
+# 本机 vulkaninfo 输出（400KB+ 实测快照，见 nvidia_compatibility_report 同类文件）
+VP_VULKANINFO_*.json
+
+# script_spike 构建产物（`./build.sh` 可重建；源 = README/build.sh/main.cpp/script.cpp/spike_api.cppm 已跟踪）
+script_spike/host
+script_spike/script.so
+script_spike/spike_api.o
+script_spike/spike_api.pcm
