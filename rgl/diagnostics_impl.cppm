@@ -20,6 +20,22 @@ DiagnosticsConfig& diagnostics() {
 /** setDiagnostics 定义：整体赋值到单例。 */
 void setDiagnostics(const DiagnosticsConfig& cfg) { diagnostics() = cfg; }
 
+/**
+ * rpc_port 解析（Phase 10b 批 11b.2）：缺省 / 越界（1..65535 之外）= 8788 回落，
+ * 调试面配置笔误不 fail-fast。抽成小函数以守住主解析函数的认知复杂度阈值。
+ * @param root 配置根表
+ * @return 合法端口
+ */
+static uint32_t readRpcPort(sol::table& root) {
+	sol::optional<double> value = root["rpc_port"];
+	if (!value)
+		return 8788;
+	const auto port = static_cast<int64_t>(*value);
+	if (port < 1 || port > 65535)
+		return 8788;
+	return static_cast<uint32_t>(port);
+}
+
 /** loadDiagnosticsConfig 定义（接口注释见 diagnostics.cppm）。要点：数值门（texel_canary/dump_gbuf/texture_force_size）负数 = "关"哨兵；dump_gbuf 越界（> kGBufferAttachments 最大通道号）warn 一句并置 -1（关，不再静默改判为 0）；解析完成后打一行 info 汇总。 */
 [[nodiscard]] std::expected<DiagnosticsConfig, Error> loadDiagnosticsConfig(std::string_view path) {
 	auto* logger = RLLogger::getInstance();
@@ -69,6 +85,7 @@ void setDiagnostics(const DiagnosticsConfig& cfg) { diagnostics() = cfg; }
 		cfg.configReload = readBool("config_reload", cfg.configReload);
 		cfg.shaderReload = readBool("shader_reload", cfg.shaderReload);
 		cfg.picking = readBool("picking", cfg.picking);
+		cfg.rpc = readBool("rpc", cfg.rpc);
 
 		// picking_probe = { frame = 30, x = 640, y = 360 }（脚本化点选：第 frame 帧自动
 		// 请求一次 (x,y) 点选并打反查日志——headless 验证 picking 全链，无鼠标依赖）
@@ -105,6 +122,8 @@ void setDiagnostics(const DiagnosticsConfig& cfg) { diagnostics() = cfg; }
 			std::max<int64_t>(0, readI64("frame_stats", 0).value_or(0)));
 		cfg.profiler = static_cast<uint32_t>(
 			std::max<int64_t>(0, readI64("profiler", 0).value_or(0)));
+
+		cfg.rpcPort = readRpcPort(root);
 
 		if (auto* lg = RLLogger::getInstance())
 			lg->info("diagnostics: no_vvl={} no_present={} vtx_canary={} texel_canary={} "

@@ -52,6 +52,11 @@
       ]
     },
     {
+      "name": "cpp-httplib",
+      "version>=": "0.53.0",
+      "default-features": false
+    },
+    {
       "name": "entt",
       "version>=": "3.14.0"
     },

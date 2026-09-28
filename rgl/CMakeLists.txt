@@ -116,6 +116,13 @@ target_link_libraries(rgl
 find_package(imgui CONFIG REQUIRED)
 target_link_libraries(rgl PRIVATE imgui::imgui)
 
+# ─── Phase 10b 批 11b.2：HTTP POST RPC 调试通道（cpp-httplib header-only 同步版 +
+# nlohmann_json；头仅被 debug_rpc_impl 与 main_scene 的 GMF include，引擎其余模块零
+# HTTP/JSON 依赖；features 见 vcpkg.json —— cpp-httplib 关 default-features 免拉 brotli）───
+find_package(httplib CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
+target_link_libraries(rgl PRIVATE httplib::httplib nlohmann_json::nlohmann_json)
+
 # ─── 图像编解码（image_codec 模块：libpng 简单 API + libjpeg(-turbo) + FreeImage .hdr）───
 # vcpkg 静态库的依赖闭包经各 target 的 INTERFACE_LINK_LIBRARIES 传递（freeimage::FreeImage
 # 自带完整依赖清单）；ZLIB::ZLIB 显式收尾（libpng/libjpeg 的 INTERFACE 未带 zlib，静态

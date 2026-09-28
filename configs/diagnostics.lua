@@ -18,4 +18,6 @@ return {
     config_reload = false,  -- Phase 10 批 10.3 配置热重载（true=帧边界轮询源 configs/：scene.lua spin/exposure/env 强度、camera.lua 调参、log_level.json；imgui 开关本身需重启，见 docs/archive/phase10_plan.md）
     shader_reload = false,  -- Phase 10 批 10.4 shader 热重载 L1（true=帧边界 fork slangc 全量重编源 rgl/shaders/ 并同签名守卫换入；接口契约变化保留旧管线提示重启；slangc/源目录缺失降级关，见 docs/archive/phase10_plan.md）
     picking = false,  -- Phase 10 批 10.5 GPU id 点选（true=编译图期追加 object_id pass：r32ui 写 objectIndex+1，点选回读 1 texel 反查 entity 进面板；默认关=图逐位同，见 docs/archive/phase10_plan.md）
+    rpc = false,      -- Phase 10b HTTP POST RPC 调试通道（true=帧边界命令队列，仅绑 127.0.0.1；GET /state 发现参数，POST /camera /param /shot；独立于 imgui 门，headless 可用，见 docs/phase10b_plan.md）
+    rpc_port = 8788,  -- RPC 监听端口（bind 失败只降级关，不崩）
 }

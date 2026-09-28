@@ -52,6 +52,8 @@ import gpu_profiler;     // Phase 9.2：GPU 时间戳会话（main 栈持有 = d
 import llm_debug;
 import imgui_layer;  // Phase 10 批 10.1：IMGUI 调试面板层（main 装配 = 唯一认识 imgui 的地方之一）
 import picking;  // PickingService（Phase 10 批 10.5 装配）
+import debug_rpc;       // DebugRpcServer（Phase 10b 批 11b.2 传输层：帧循环后显式 stop）
+import debug_rpc_exec;  // wireDebugRpc（11b.2 执行层 + 装配，门 = diagnostics.rpc 默认关）
 import param_registry;  // DebugPanelState ctx（面板跨帧 UI 态，10.2c）
 import param_pages;  // buildDebugParamPages（参数页构建器，批 10.6 自 ecs 拆出）
 import ecs;
@@ -413,6 +415,13 @@ int main() {
 		// 判，关 = nullptr 零装配）。声明序在 backEnd 后 = Renderer 持裸指针存活契约；
 		// 声明序在 registry 块内其后 = 逆序析构先释放服务再毁 registry ctx 闭包。
 		auto pickingService = wirePicking(registry, vkResources, rtCache, backEnd.renderer);
+
+		// HTTP POST RPC 调试通道（Phase 10b 批 11b.2，docs/phase10b_plan.md）：门 =
+		// diagnostics.rpc（默认关；与 imgui 门独立，headless 也可用）。门关 / bind 失败
+		// 都降级 nullptr。声明序在 registry/assets/backEnd 之后 = 析构序其先 →
+		// try 块退出（帧循环已结束，configReloadTick 不会再跑）时 ~DebugRpcServer =
+		// stop() 收口：关监听线程、在途请求全 503，闭包里的裸服务指针绝不越权。
+		auto debugRpc = wireDebugRpc(registry, assetTable, backEnd.renderer, pre.llmEnabled);
 
 		/**
 		 * DIAG（可见窗 fault 排查）每帧回调：隐藏窗启动、frame == showAfter 时
