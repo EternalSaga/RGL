@@ -47,7 +47,8 @@
       "features": [
         "sdl3-binding",
         "vulkan-binding",
-        "docking-experimental"
+        "docking-experimental",
+        "freetype"
       ]
     },
     {

@@ -30,6 +30,78 @@ void checkVkResult(VkResult err) {
 		logger->error("imgui backend: VkResult={}", static_cast<int>(err));
 }
 
+// ─── 面板字体（Phase 10b 批 11b.1；docs/phase10b_plan.md §2/§4）──────────────────
+
+/**
+ * 系统字体探测链（D2，命中即停；仅运行时读系统字体，**不进仓库**）：
+ * 用户指定 `ui_font` 前置 → **MiSans Light 首选（用户指定）** → MiSans Regular →
+ * Noto Sans CJK（Debian / Fedora-Arch 两路径；CFF 轮廓 = 必须开 `imgui[freetype]`，
+ * 否则加载即失败）→ 文泉驿正黑 → Windows 微软雅黑/黑体（msyh 是 TrueType，两轮廓
+ * FreeType 都吃）。全 miss = 回落 imgui 内建 13px 字体（中文仍问号，只 warn 不崩）。
+ */
+constexpr const char* kUiFontCandidates[] = {
+	"/usr/share/fonts/misans/MiSans-Light.ttf",
+	"/usr/share/fonts/misans/MiSans-Regular.ttf",
+	"/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+	"/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+	"/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+	"C:/Windows/Fonts/msyh.ttc",
+	"C:/Windows/Fonts/simhei.ttf",
+};
+
+/**
+ * 加载面板字体到默认图集（首个成功字体 = 默认字体，imgui 1.92 按需烘焙字形，
+ * **无需指定 glyph ranges**——GetGlyphRanges* 已 obsolete，D4）。
+ *
+ * `ImFontConfig::Flags |= ImFontFlags_NoLoadError` 是探测的前提：缺文件/读失败时
+ * imgui 默认 `IM_ASSERT_USER_ERROR`（Debug 构建 = abort），带此 flag 则返回 NULL
+ * 由本函数继续试下一个候选（契约：调用方检查返回值）。
+ *
+ * @param io imgui IO（Fonts = 默认图集）
+ * @param configuredPath configs/runtime.lua 的 ui_font（空 = 直接走探测链）
+ * @param fontSize 字号 px（非正数回落 18；写进 ImFont::LegacySize，1.92 由
+ *   `style.FontSizeBase <= 0` 分支采纳为渲染字号）
+ * @param logger 日志（显式路径失败 warn / 命中 info / 全 miss warn）
+ * @return true = 图集里加进了某个字体
+ */
+bool loadUiFont(ImGuiIO& io, std::string_view configuredPath, float fontSize,
+	RLLogger* logger) {
+	const float size = fontSize > 0.0f ? fontSize : 18.0f;
+	ImFontConfig cfg;
+	cfg.Flags |= ImFontFlags_NoLoadError;
+	auto tryPath = [&io, size, &cfg](std::string_view path) -> ImFont* {
+		if (path.empty())
+			return nullptr;
+		return io.Fonts->AddFontFromFileTTF(std::string(path).c_str(), size, &cfg);
+	};
+
+	ImFont* font = tryPath(configuredPath);
+	std::string hit;
+	if (font) {
+		hit = configuredPath;
+	} else {
+		if (!configuredPath.empty() && logger)
+			logger->warn("imgui: ui_font 指定字体加载失败（{}），转系统探测链",
+				std::string(configuredPath));
+		for (const char* candidate : kUiFontCandidates) {
+			font = tryPath(candidate);
+			if (font) {
+				hit = candidate;
+				break;
+			}
+		}
+	}
+	if (!font) {
+		if (logger)
+			logger->warn("imgui: 系统字体全 miss（ui_font=\"{}\"），回落内建字体——"
+				"非 ASCII 文本显示为问号", std::string(configuredPath));
+		return false;
+	}
+	if (logger)
+		logger->info("imgui: 面板字体 {} @ {:.0f}px", hit, size);
+	return true;
+}
+
 // ─── 参数条目 widget（Phase 10 批 10.2b）：每帧从源同步临时值 → widget → 编辑才写回
 //（get 每帧跑 = 配置热重载/外部改动自动反映）；label 帧间稳定 = imgui id 稳定 ───
 
@@ -87,8 +159,9 @@ void renderPageEntries(const ParamPage& page) {
 /** 析构兜底：未显式 shutdown（异常路径）也不泄漏 imgui context。 */
 ImGuiLayer::~ImGuiLayer() { shutdown(); }
 
-/** ImGuiLayer::init 定义（接口注释）：ctx → SDL3 后端 → Vulkan 后端（dynamic rendering）。 */
-bool ImGuiLayer::init(AppContext& app, DeviceContext& device, Swapchain& swapchain, SDLWindow& window) {
+/** ImGuiLayer::init 定义（接口注释）：ctx → 字体（探测链）→ SDL3 后端 → Vulkan 后端（dynamic rendering）。 */
+bool ImGuiLayer::init(AppContext& app, DeviceContext& device, Swapchain& swapchain, SDLWindow& window,
+	std::string_view fontPath, float fontSize) {
 	auto* logger = RLLogger::getInstance();
 	if (initialized)
 		return true;
@@ -104,6 +177,10 @@ bool ImGuiLayer::init(AppContext& app, DeviceContext& device, Swapchain& swapcha
 	io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;     // vcpkg docking-experimental 构建
 	io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 	ImGui::StyleColorsDark();
+
+	// 面板字体（Phase 10b 批 11b.1）：图集首字体 = 默认字体；1.92 字形按需烘焙，
+	// 字体加载失败只回落内建字体（loadUiFont 内已 warn），不阻断后端 init。
+	loadUiFont(io, fontPath, fontSize, logger);
 
 	if (!ImGui_ImplSDL3_InitForVulkan(static_cast<SDL_Window*>(window))) {
 		if (logger)

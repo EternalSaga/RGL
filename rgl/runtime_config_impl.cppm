@@ -59,7 +59,21 @@ static void parseLlm(sol::table& root, LlmDebugConfig& llm) {
 	}
 }
 
-/** loadRuntimeConfig 定义（接口注释见 runtime_config.cppm）：headless/headless_size/win_size/show_after/present_mode 逐一可选解析 + parseLlm。 */
+/**
+ * imgui 面板字体字段解析（Phase 10b 批 11b.1）：ui_font 空串 = 系统字体探测链；
+ * ui_font_size 非正 = 配置笔误/缺省，回落默认 18（纯显示项，不 fail-fast）。
+ * 抽成小函数以守住主解析函数的认知复杂度阈值。
+ * @param root 配置根表
+ * @param cfg 输出（只写 uiFont / uiFontSize 两字段）
+ */
+static void readUiFont(sol::table& root, RuntimeConfig& cfg) {
+	if (sol::optional<std::string> uiFont = root["ui_font"])
+		cfg.uiFont = *uiFont;
+	if (sol::optional<double> size = root["ui_font_size"]; size && *size > 0.0)
+		cfg.uiFontSize = static_cast<float>(*size);
+}
+
+/** loadRuntimeConfig 定义（接口注释见 runtime_config.cppm）：headless/headless_size/win_size/show_after/present_mode/ui_font 逐一可选解析 + parseLlm。 */
 [[nodiscard]] std::expected<RuntimeConfig, Error> loadRuntimeConfig(std::string_view path) {
 	auto* logger = RLLogger::getInstance();
 
@@ -127,6 +141,8 @@ static void parseLlm(sol::table& root, LlmDebugConfig& llm) {
 		}
 
 		parseLlm(root, cfg.llm);
+
+		readUiFont(root, cfg);  // imgui 面板字体（Phase 10b 批 11b.1）
 		return cfg;
 	} catch (const std::exception& e) {
 		return std::unexpected(Error{ErrorCode::ConfigLoadFailed,

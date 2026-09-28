@@ -46,13 +46,18 @@ export class ImGuiLayer {
 	/**
 	 * 建 imgui context + SDL3/Vulkan 后端（main 装配唯一调用点，帧循环开始前）。
 	 * 任一步失败 = 回滚已建部分 + 日志 + false（调用方按"无 UI 继续跑"降级）。
+	 * 字体在 context 建成后、后端 init 前加载（探测链见 impl kUiFontCandidates；
+	 * docs/phase10b_plan.md 批 11b.1）。
 	 * @param app 实例层（instance 句柄）
 	 * @param device 设备层（device/graphics queue/family）
 	 * @param swapchain 交换链（color format + imageCount）
 	 * @param window SDL 窗口（sdl3-binding 事件挂钩）
+	 * @param fontPath 面板字体路径（configs runtime.lua ui_font；空 = 自动探测链）
+	 * @param fontSize 面板字号 px（非正数 = 回落 18）
 	 * @return 成功 = active() 变 true
 	 */
-	bool init(AppContext& app, DeviceContext& device, Swapchain& swapchain, SDLWindow& window);
+	bool init(AppContext& app, DeviceContext& device, Swapchain& swapchain, SDLWindow& window,
+		std::string_view fontPath = {}, float fontSize = 18.0f);
 
 	/** 后端反初始化 + DestroyContext（幂等；main 正常路径显式调，析构兜底）。 */
 	void shutdown();

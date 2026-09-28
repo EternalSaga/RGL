@@ -387,7 +387,8 @@ int main() {
 		//（UI 渲染段，布局推进由执行器负责，契约见 setFrameEndHook 注释）。
 		RGL::ImGuiLayer imguiLayer;
 		if (!pre.headless && RGL::diagnostics().imgui && pre.window
-			&& imguiLayer.init(vkInstance, vkDevice, vkSwapchain, *pre.window)) {
+			&& imguiLayer.init(vkInstance, vkDevice, vkSwapchain, *pre.window,
+				configs.runtime.uiFont, configs.runtime.uiFontSize)) {
 			registry.ctx().get<InputFilter>().consume = [layer = &imguiLayer](const void* e) {
 				return layer->handleEvent(e);
 			};

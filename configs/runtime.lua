@@ -18,6 +18,13 @@ return {
     -- "fifo"      = eFifo（vsync 阻塞、帧率 = 刷新率；present_timing 双模式对比测量用）
     present_mode = "immediate",
 
+    -- imgui 面板字体（Phase 10b 批 11b.1，仅 diagnostics.imgui=true 时生效）：
+    -- ui_font = 字体文件绝对路径，空 = 自动探测链（MiSans Light → MiSans → Noto CJK
+    -- → 文泉驿 → Windows 微软雅黑/黑体，链表见 imgui_layer_impl kUiFontCandidates）；
+    -- 中文渲染需系统字体有对应字形 + imgui[freetype]（CFF 轮廓，如 Noto CJK）。
+    ui_font = "",
+    ui_font_size = 18.0,   -- 字号 px（imgui 内建 13 太挤；Light 字重发虚就调大或改用 MiSans-Regular）
+
     -- llm_debug 一次性截图（agent 自主工作：渲染 → 截图 → 退出）：
     -- 截图只改 llm_debug 开关（true/false）；file/size/delay_frames 常驻 llm_shot。
     -- 相机位置不在本文件——编辑 camera.lua 顶层 position/target/fovDegrees。

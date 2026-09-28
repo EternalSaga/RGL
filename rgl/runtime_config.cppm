@@ -44,6 +44,10 @@ export struct RuntimeConfig {
 	int showAfter = -1;               // DIAG：隐藏窗启动、第 N 帧后显示（-1 = 立即显示）
 	PresentModePref presentMode = PresentModePref::immediate;  // 窗口 present 模式（headless 忽略）
 	LlmDebugConfig llm;
+	// imgui 面板字体（Phase 10b 批 11b.1）：路径空 = 自动探测链（imgui_layer_impl
+	// kUiFontCandidates，MiSans Light 首选）；字号 <=0 = 回落 18px。仅 imgui 门开时用。
+	std::string uiFont;
+	float uiFontSize = 18.0f;
 };
 
 /**
