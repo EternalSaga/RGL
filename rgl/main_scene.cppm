@@ -313,7 +313,7 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 				asset.groupCount, asset.triangleCount, asset.vertexOffset,
 				mat.baseColor, glm::vec2(mat.roughness, mat.metallic)});
 		});
-	// 静态 shader DGC 路选路（spike，docs/radv_static_dgc_spike.md）：IES 路缺席
+	// 静态 shader DGC 路选路（spike，docs/archive/radv_static_dgc_spike.md）：IES 路缺席
 	// （非 graphicsIndirect）但全集含 MESH 且 diagnostics.dgcStatic 开 → per-entry 流
 	// 随 GpuCull 分配（fanout kernel 输出）。N = 此刻管线表条目数——sky/light 条目在
 	// 其后加入、非 candidate，DgcStaticCommands 必须用同一数保证流布局一致。

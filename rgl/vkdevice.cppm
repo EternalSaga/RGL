@@ -19,7 +19,7 @@ namespace RGL {
  * 派生；culling 子系统据此选路——Phase 7b，见 docs/device_generated_commands_research.md）。
  * @note 本机 RADV（Strix Halo 26.2.1）实测 binding 子集仅 COMPUTE——IES 逐序列换 shader 路
  * 不可用，但 graphics 执行路径驱动已实现 → staticGraphicsIndirect 走静态 shader 路
- * （docs/radv_static_dgc_spike.md）；两者皆无才读回重放（phase7_devlog 批次 5 语义）。
+ * （docs/archive/radv_static_dgc_spike.md）；两者皆无才读回重放（phase7_devlog 批次 5 语义）。
  * NVIDIA binding 子集全开（含 MESH/FRAGMENT）→ 恒走 IES 路。
  */
 export struct DgcSupport {
@@ -29,7 +29,7 @@ export struct DgcSupport {
 	 * 全集（supportedIndirectCommandsShaderStages）含 MESH：静态 shader DGC 路可用
 	 * （layout 去 EXECUTION_SET token + pNext 挂 VkGeneratedCommandsShaderInfoEXT，
 	 * 每管线一次 Execute——RADV 实现了 graphics 执行、只缺逐序列 binding，spec 无子集
-	 * 要求，见 docs/radv_static_dgc_spike.md §2）。graphicsIndirect 优先级更高。
+	 * 要求，见 docs/archive/radv_static_dgc_spike.md §2）。graphicsIndirect 优先级更高。
 	 */
 	bool staticGraphicsIndirect = false;
 	uint32_t maxIndirectShaderObjectCount = 0;  ///< execution set 容量上限（DgcCommands 构造期校验）
@@ -205,7 +205,7 @@ export class DeviceContext {
 	 * dgcSupport 成员）。判据 = 研究文档 §3.3：graphics 侧可用 = shader binding 子集含
 	 * MESH|FRAGMENT（execution set 逐序列换 shader + mesh draw 序列）；compute 侧 = 含
 	 * COMPUTE（DISPATCH 序列）；静态 shader 路 = **全集**含 MESH|FRAGMENT（RADV graphics
-	 * 执行已实现、只缺逐序列 binding，docs/radv_static_dgc_spike.md）。
+	 * 执行已实现、只缺逐序列 binding，docs/archive/radv_static_dgc_spike.md）。
 	 * @param physicalDevice 待查询的物理设备
 	 * @return 派生能力位（本机 RADV 预期 {false, true, true}，NVIDIA 预期 {true, true, true}）
 	 */

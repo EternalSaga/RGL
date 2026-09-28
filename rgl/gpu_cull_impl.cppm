@@ -96,7 +96,7 @@ void GpuCull::createCullBuffers(vk::raii::Device& device) {
 		countBuffer = std::move(*cntResult);
 	}
 
-	// per-entry 满槽孔洞流（静态 shader DGC 路，docs/radv_static_dgc_spike.md §3.2；
+	// per-entry 满槽孔洞流（静态 shader DGC 路，docs/archive/radv_static_dgc_spike.md §3.2；
 	// 仅启用时建——NV/重放路零开销）
 	if (nEntryStreams > 0) {
 		vk::BufferCreateInfo fi{};
@@ -235,7 +235,7 @@ void GpuCull::createCullShaders(vk::raii::Device& device) {
 	cullShader = std::move(shaders[0]);
 
 	// stream fanout shader object（静态 DGC 路；3 binding：0=table 1=sequences(ro) 2=streams(rw)，
-	// heap 映射同款模式——仅启用时建，docs/radv_static_dgc_spike.md §3.3）
+	// heap 映射同款模式——仅启用时建，docs/archive/radv_static_dgc_spike.md §3.3）
 	if (nEntryStreams > 0) {
 		auto fanResult = loadShaderSpv("generated_shaders/stream_fanout.comp.spv");
 		if (!fanResult)

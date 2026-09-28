@@ -52,7 +52,7 @@ rgl_shader(mip_gen.comp MIP_GEN_SPV)
 # Phase 8 批次 ④b：GGX 预滤波 env cubemap compute（独立契约 env_prefilter.comp.slang 头注释，
 # 无 import 契约文件；descriptor heap + shader object，mip_gen 变体，见 env_prefilter.cppm）
 rgl_shader(env_prefilter.comp ENV_PREFILTER_SPV)
-# 静态 shader DGC spike：per-entry 序列流扇出（独立契约 kernel 头注释，docs/radv_static_dgc_spike.md）
+# 静态 shader DGC spike：per-entry 序列流扇出（独立契约 kernel 头注释，docs/archive/radv_static_dgc_spike.md）
 rgl_shader(stream_fanout.comp STREAM_FANOUT_SPV)
 
 # tinygltf_impl.cpp：tinygltf C++ API 实现 TU（v3 非 header-only，见该文件头注释）。

@@ -19,7 +19,7 @@ namespace RGL {
 // light 槽无法钉编译期偏移，同 slotTexture 模式），字节布局的单一真相源（shader 端
 // scene.slang 字面量必须一致，kTrianglesPerGroup 先例——无反射端对应）：
 //   @0   SceneLight（48B：direction/eyePos/color/ambient 各 vec3，C API 反射生成，
-//        见 scene_forward_types_generated / docs/slang_api_reflection_research.md）
+//        见 scene_forward_types_generated / docs/archive/slang_api_reflection_research.md）
 //   @48  Phase 5.5 env 参数（原 16B 保留区启用）：envIntensity float + envMipRange
 //        float（= mipLevels−1，0 = 无环境）+ 8B 留白——scene.slang/env.slang 字面量一致
 //   @64  Phase 5.5 批次 4 skyboxInvViewProj（mat4 列主序 = inverse(proj·view)，

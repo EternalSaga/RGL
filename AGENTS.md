@@ -207,7 +207,7 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
   anv 均 false → 重放；RADV 静态 shader 模式 spike 功能通但性能亏 1.85× → `diagnostics.dgc_static` 门默认关。
   CPU 剔除保留为兜底 + 每帧对账基准（reconcile 不一致告警不中断）；mvp 由 CPU 算进 scene data per-object
   表（GPU float4x4 FMA 收缩序与 glm 无位级契约，保 forward diff0）。驱动级细节/历史
-  → `docs/radv_static_dgc_spike.md` / `docs/nvidia_compatibility_report.md` / `docs/device_generated_commands_research.md` / 调试历史 2026-09-10
+  → `docs/archive/radv_static_dgc_spike.md` / `docs/nvidia_compatibility_report.md` / `docs/device_generated_commands_research.md` / 调试历史 2026-09-10
 
 ## 其他文档
 
@@ -219,12 +219,12 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
 - `docs/DESCRIPTOR_HEAP_SPEC.md` — descriptor heap 排坑记录（活文档）
 - `docs/nvidia_compatibility_report.md` — 跨驱动兼容性（三平台记录；当前机 = 9950X Raphael RDNA2 核显，非 Strix Halo）
 - `docs/device_generated_commands_research.md` — GPU culling 双驱动实测（Phase 7b 依据）
-- `docs/radv_static_dgc_spike.md` — RADV 静态 shader DGC spike（功能通、慢 1.85× → 默认不开；翻盘设计底稿）
+- `docs/archive/radv_static_dgc_spike.md` — RADV 静态 shader DGC spike（功能通、慢 1.85× → 默认不开；翻盘设计底稿）
 - `docs/vulkan_extensions_2025_调研.md` — 新扩展调研 + §十二/十三 实施记录（活文档）
 - `docs/phase7_devlog.md` — Phase 7 滚动开发日志（完结后归档）
 - `docs/archive/phase10_plan.md` — Phase 10 调试交互计划（**2026-09-28 批 10.1–10.6 全落地归档**；imgui 面板/热重载/点选；决策表 D1–D12 含 D12 RPC 延后；遗留 UI 视觉走查）
 - `docs/风格检查规则.md` — tools/checks 两轮扩展设计（partition/docs/现代 C++/expected 禁 throw）；工具 Python ≥3.14，规则拆 `rules_{metrics,text,doxygen}.py`
-- `docs/静态审查升级路线.md` — LLVM 23 + `-Wlifetime-safety` 两阶段落地计划（vs Rust 借用检查差距结论；clangbind ABI 回归是阶段 1 最高风险）
+- `docs/archive/静态审查升级路线.md` — LLVM 23 + `-Wlifetime-safety` 两阶段落地计划（vs Rust 借用检查差距结论；clangbind ABI 回归是阶段 1 最高风险）
 - `docs/archive/` — 归档索引（phase 计划含 **phase6_record.md**、ecs 审查、issue_history 总账、present_timing/教程拆解等已结题调研）
 - 离线 Vulkan 文档（优先在线检索被 Cloudflare 拦截时）：本地克隆 `/home/robin/program/Vulkan-Docs`（v1.4.360）。**注意**：spec 比系统头/loader（v357）新，结构体字段以系统头为准，spec 只作语义依据
 - 最小复现/验证子项目（独立 CMake，结论已吸收进主工程与 archive）：`min_mesh_crash/`（NVIDIA mesh shader 必带 `NO_TASK_SHADER_BIT_EXT` 根因，见其 README）、`heap_texture_spike/`（heap 纹理三驱动 PASS + 步长取 max，见其 README + archive/heap_texture_research.md）

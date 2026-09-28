@@ -27,7 +27,7 @@ set(RGL_GENERATED_CPPM "")
 # 调用：rgl_reflect_slang(<slang 相对 rgl/> <schema 相对 rgl/> <module_name>)
 # 产物 = generated/<module_name>.cppm；模板固定 types_cppm.inja。
 # 5 条 slang 管线统一走 reflection_tool slang 子命令（链接 libslang.so 直接查 C API，
-# 不消费 JSON 中间层——见 docs/slang_api_reflection_research.md）。struct 布局 = 编译器
+# 不消费 JSON 中间层——见 docs/archive/slang_api_reflection_research.md）。struct 布局 = 编译器
 # 实查真值（逐字段 offsetof static_assert），schema 降为提取清单 + 交叉校验期望值。
 # 每条 = 单一 COMMAND（原 slangc + validate + generate 三步合一）。
 function(rgl_reflect_slang slang_rel schema_rel module_name)

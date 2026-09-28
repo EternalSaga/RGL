@@ -9,7 +9,7 @@ description: 修改 Slang 着色器契约与反射管线——just reflect、sca
 
 - `rgl/shaders/` 下的 Slang → SPV 输出到 `build/rgl/generated_shaders/`（CMake `compile_slang()` 构建时编译；运行时相对路径读取）
 - **反射管线显式触发（C API 路径，2026-09-10 起）**：`generated/*.cppm` + `reflection_manifest.txt` 为**已提交产物**，只在改契约后 `just reflect` 重生成并随改动提交；构建开头 `reflection_check` 比对输入 SHA1，忘跑 = FATAL 指路。共 **7 条管线**（types/model/material/lights/scene_forward 反射生成 + features/param_semantics 模板生成；旧文档"5 条"系 scene_forward 2026-09-10 加入后未同步，"6 条"系批 10.6 param_semantics 加入后未同步），Profile `sm_6_6+spirv_1_6` + capability `spvDescriptorHeapEXT`
-- **5 条 slang 管线走 `reflection_tool slang` 子命令**（链接 libslang.so 直接查 C API，**不产 JSON 中间层**）：struct 布局 = 编译器实查真值（逐字段 offsetof static_assert），schema 降为提取清单 + 交叉校验期望值。详见 `docs/slang_api_reflection_research.md`
+- **5 条 slang 管线走 `reflection_tool slang` 子命令**（链接 libslang.so 直接查 C API，**不产 JSON 中间层**）：struct 布局 = 编译器实查真值（逐字段 offsetof static_assert），schema 降为提取清单 + 交叉校验期望值。详见 `docs/archive/slang_api_reflection_research.md`
 - **Scalar Block Layout（定案）**：所有 slangc 编译（反射 + SPV 两处 flag **必须一致**）统一 `-fvk-use-scalar-layout`——C++（glm 自然对齐）与 shader 逐字段偏移天然一致零 padding（`DrawArgs` 4B）。前提 `scalarBlockLayout` feature（features_config.json + validateFeatures）
 - **bindless 原则**：push constant 冻结在"纯索引"级别（Phase 7b+ 起 `DrawArgs` 仅 `objectIndex` 4B，不再扩）——场景级/每帧变化的数据（光照、对象矩阵、MVP、材质、env 参数、灯数组）一律进 descriptor heap（scene data）
 
@@ -25,5 +25,5 @@ description: 修改 Slang 着色器契约与反射管线——just reflect、sca
 | `shaders/deferred_geometry.frag` + `light.mesh/frag` | deferred 路线：4-MRT G-buffer 写入（oct 法线）/ 全屏大三角逐灯 GGX + **简化 IBL**（env 采样替换常 ambient，与 model_pbr_ibl 逐式相同）+ **skybox 背景合成**（天空像素 = position 清 0，重建射线采 env）；env 走 light pass binding 9/10（4/5 被 G-buffer 占）；`kGBufferAttachments` 表定格式 |
 | `shaders/model_schema.lua` `constants` | 契约常量单一真相源（`kTrianglesPerGroup` 等 → 生成 constexpr）；`HeapSlotGeometryBase` = 用户槽区起点 = 几何段基址 |
 | `rgl/builtin_geometry.cppm` | **内建几何契约**（架构债务 1 方案 B）：cube 等程序化几何的上传/注册，与 gltf 同路；`vk_resources` 不认识任何内容 |
-| `shaders/cull.comp.slang` + `rgl/gpu_cull.cppm` | **GPU culling 契约**（Phase 7b）：CullEntry 60B / 序列 120B（execSlot 2j/2j+1 + DrawArgs@8(4B) + meshCmd@108）/ CullPush 100B（planes[6]+sequenceCount）/ count 64B（total@4，@0 保留未用）；CPU 算 mvp 进 scene data per-object 表、GPU 只写可见性（保 forward diff0）；DGC 序列契约见 `vk_indirect_commands.cppm` + `docs/device_generated_commands_research.md` §4.4。静态 DGC 路追加 `shaders/stream_fanout.comp.slang`（per-entry 满槽孔洞流扇出，`dgc_static` 门控，见 `docs/radv_static_dgc_spike.md`） |
+| `shaders/cull.comp.slang` + `rgl/gpu_cull.cppm` | **GPU culling 契约**（Phase 7b）：CullEntry 60B / 序列 120B（execSlot 2j/2j+1 + DrawArgs@8(4B) + meshCmd@108）/ CullPush 100B（planes[6]+sequenceCount）/ count 64B（total@4，@0 保留未用）；CPU 算 mvp 进 scene data per-object 表、GPU 只写可见性（保 forward diff0）；DGC 序列契约见 `vk_indirect_commands.cppm` + `docs/device_generated_commands_research.md` §4.4。静态 DGC 路追加 `shaders/stream_fanout.comp.slang`（per-entry 满槽孔洞流扇出，`dgc_static` 门控，见 `docs/archive/radv_static_dgc_spike.md`） |
 | `configs/*.lua` | 运行时配置（sol2 沙箱，字段可选回落默认）；**与 `shaders/*_schema.lua`（build 时契约）是两套机制，勿混** |

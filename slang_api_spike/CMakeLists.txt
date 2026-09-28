@@ -1,6 +1,6 @@
 # ─── Slang C API 反射 spike（独立 CMake，不进主构建）──────────────────────────
 # 调研：链接 libslang.so（预构建包自带）经 C API 直接查询非资源 struct 布局，
-# 替代 slangc CLI → JSON 中间层。见 docs/slang_api_reflection_research.md。
+# 替代 slangc CLI → JSON 中间层。见 docs/archive/slang_api_reflection_research.md。
 #
 # 构建：cmake -B build -S . && cmake --build build
 # 运行：./build/slang_api_spike test_struct.slang SceneLight GpuLightLike

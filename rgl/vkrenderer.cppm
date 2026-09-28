@@ -90,7 +90,7 @@ export class Renderer {
 	 *   （候选表空）时 drawFrame 全路径不碰 culling = 行为中性）
 	 * @param dgc DGC 命令生成子系统（Phase 7b NVIDIA 路；main 仅 graphicsIndirect=true
 	 *   时构造，否则 null → 看 dgcStatic / 读回重放）
-	 * @param dgcStatic 静态 shader DGC 路（RADV spike，docs/radv_static_dgc_spike.md；
+	 * @param dgcStatic 静态 shader DGC 路（RADV spike，docs/archive/radv_static_dgc_spike.md；
 	 *   main 按 staticGraphicsIndirect + diagnostics.dgcStatic 条件构造，null = 关）
 	 */
 	Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RGL::Resources& vkResources,

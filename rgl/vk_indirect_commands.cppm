@@ -119,7 +119,7 @@ export class DgcCommands {
 };
 
 /**
- * 静态 shader DGC 路（spike：docs/radv_static_dgc_spike.md）——面向"graphics 执行已实现、
+ * 静态 shader DGC 路（spike：docs/archive/radv_static_dgc_spike.md）——面向"graphics 执行已实现、
  * 只缺 per-sequence shader 绑定"的设备（RADV：binding 子集仅 COMPUTE，但全集 14 stage 含
  * MESH|FRAGMENT，且 pNext 静态 shader 无子集要求，spec VU-11080）。与 DgcCommands 的差异：
  *   - layout 2 token（无 EXECUTION_SET）：@8 PUSH_DATA（DrawArgs 4B）+ @108 DRAW_MESH_TASKS；

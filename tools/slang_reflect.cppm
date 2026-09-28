@@ -15,7 +15,7 @@ import rllogger;
 namespace RGL {
 
 // Slang C API 反射封装（替代 slangc CLI → JSON 中间层）。
-// 调研结论见 docs/slang_api_reflection_research.md。核心能力：查非资源 struct 的
+// 调研结论见 docs/archive/slang_api_reflection_research.md。核心能力：查非资源 struct 的
 // 编译器**实际**布局（size/align/字段偏移/字段类型，含跨模块）+ push constant 元素
 // struct + 全局资源 binding。flags 与 rgl/CMakeLists.txt SLANG_FLAGS 逐字一致
 //（-fvk-use-scalar-layout 是布局关键，经 processCommandLineArguments 原样传入）。

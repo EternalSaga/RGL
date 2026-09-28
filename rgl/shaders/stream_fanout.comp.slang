@@ -1,5 +1,5 @@
 // Phase 7b+（spike）：静态 shader DGC 的 per-entry 序列流扇出 kernel
-// （docs/radv_static_dgc_spike.md §3.3）。独立契约（本头注释 + gpu_cull.cppm C++ 侧），
+// （docs/archive/radv_static_dgc_spike.md §3.3）。独立契约（本头注释 + gpu_cull.cppm C++ 侧），
 // 不接反射管线；字节偏移 = kCullSequenceStride 布局，cull.comp.slang 先例。
 //
 // 职责：把基础序列（固定槽、candidate 序，cull kernel 已写可见性）展开为 N 条

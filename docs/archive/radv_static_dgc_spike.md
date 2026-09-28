@@ -76,7 +76,7 @@ cull dispatch 之后追加一个 compute dispatch（仅静态模式；普通模�
 ```
 grid = (ceil(cand/64), N, 1)；thread (i,j)：
   table@20 pipelineIndex ≠ j 或 sequences[i].meshCmd.x == 0 → 流[j][i] 写 12B 零（x=0）
-  否则 → 流[j][i] ← sequences[i] 拷 @8..120（DrawArgs 100B + meshCmd 12B）
+  否则 → 流[j][i] ← sequences[i] 拷 @8..120（DrawArgs 槽区 100B + meshCmd 12B；DrawArgs 本体 4B，@12..107 空置）
 binding：0 = cullTable(ro) / 2 = sequences(ro) / 新增 4 = streams(rw)（allocSlot + heap 映射）
 ```
 

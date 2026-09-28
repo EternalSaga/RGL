@@ -233,7 +233,7 @@ DGC 路与重放路消费同一序列。详见 `phase7_devlog.md` 2026-09-09 条
 - **2026-09-10 补（静态模式）**："RADV graphics 不可用"对**静态 shader 模式**不成立——layout 去
   EXECUTION_SET token + pNext `VkGeneratedCommandsShaderInfoEXT` 只受全集约束（VU-10241/11080），
   RADV 执行路径已实现；本机 spike 功能石锤通（VVL 零 error + 1px tie 级回归，见
-  `docs/radv_static_dgc_spike.md`），但满槽孔洞实现 preprocess ×N 导致 **慢重放路 1.85×** →
+  `docs/archive/radv_static_dgc_spike.md`），但满槽孔洞实现 preprocess ×N 导致 **慢重放路 1.85×** →
   默认不开（`diagnostics.dgc_static` 门控保留）；翻盘前提 = 紧凑分桶 + 去同步等待。
 - **扩展年轻**：EXT rev 1，VVL 校验覆盖未验证（引入后需留意静默通过，参照 `docs/nvidia_compatibility_report.md` 第五节 VVL 静默教训）；
 - **preprocess buffer**：新增一块 device-local buffer（大小由 `vkGetGeneratedCommandsMemoryRequirementsEXT` 决定，与 maxSequenceCount 成正比），VMA 分配即可；

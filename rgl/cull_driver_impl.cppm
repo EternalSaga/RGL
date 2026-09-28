@@ -108,7 +108,7 @@ void CullDriver::executeOpaqueSegment(vk::raii::CommandBuffer& cmd, const FrameD
 		dgc->bindInitialShaders(cmd);
 		dgc->recordExecute(cmd, gpuCull->sequenceAddress(), gpuCull->countTotalAddress(), frameSlot);
 	} else if (dgcStatic && dgcStatic->active()) {
-		// 静态 shader DGC 路（RADV spike，docs/radv_static_dgc_spike.md）：每管线条目一次
+		// 静态 shader DGC 路（RADV spike，docs/archive/radv_static_dgc_spike.md）：每管线条目一次
 		// Execute（pNext 静态 frag+mesh，无 EXECUTION_SET token → 无需 bindInitialShaders）。
 		// 序列 = GpuCull fanout 满槽孔洞流（条目内 candidate 序；孔洞 x=0 = RADV 原生跳过）；
 		// sequenceCount 全条目复用 count buffer @4（= candidate 数，GPU 写）

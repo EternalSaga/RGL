@@ -105,7 +105,7 @@ present/waitStage 派生）；drawFrame 手写布局转换清零、pass 循环�
 | **2** Light pass + sampleRead 接线 | SAMPLED_IMAGE 描述符入 heap、全屏 light pass GGX、forward/deferred 切换（选路已转 render_graph.lua variant，2026-09-08）、**refine 残二完成**（2026-09-10：light pass 简化 IBL + skybox 背景合成，见下 refine 注） | **✅ 完成** | （无——refine 残二已销） |
 | **3** 多灯 + 灯数据并入反射（D3） | 第 4 条反射管线 `GpuLight`、scene data 尾区灯数组 @262272（头不动保 forward diff0）、`lights` 配置、逐灯循环 + 点光衰减、**灯 entity 化**（2026-09-10，`Light` 组件 + `index` 正序契约，ECS 规范 3）、**前向头 `SceneLight` 入反射**（2026-09-10，第 6 条 `scene_forward` 管线，双源消除） | **✅ 完成** | shadow map（→ Phase 11） |
 | **4** CPU frustum culling | 逐图元 node-local `CullSphere`、Gribb-Harman 6 面（z∈[0,1]）、可见统计 | **✅ 核心完成** | 真 AABB（现球近似，够 frustum） |
-| **5** GPU culling / DGC | `vk_indirect_commands`、compute cull、IES/静态/读回重放三路、CPU 剔除降兜底+对账 | **✅ 核心完成**（2026-09-09；2026-09-10 三驱动 + 静态 spike 全运行时验证） | 静态 DGC 默认关（满槽实现慢 1.85×，翻盘 = 紧凑分桶 + 去同步等待，`docs/radv_static_dgc_spike.md`） |
+| **5** GPU culling / DGC | `vk_indirect_commands`、compute cull、IES/静态/读回重放三路、CPU 剔除降兜底+对账 | **✅ 核心完成**（2026-09-09；2026-09-10 三驱动 + 静态 spike 全运行时验证） | 静态 DGC 默认关（满槽实现慢 1.85×，翻盘 = 紧凑分桶 + 去同步等待，`docs/archive/radv_static_dgc_spike.md`） |
 | **6** 文档销账 | 批次 2 refine + 灯 entity 化 + 批次 5 收尾 + 前向头反射 + C API 工具升级的文档同步（devlog/research/roadmap/AGENTS/调试历史） | **✅ 完成**（2026-09-10） | （无——Phase 7 全项销账） |
 
 **净结论**：延迟渲染单灯核心 + 多灯 + **GPU culling（7b）** 跑通——deferred 逐灯循环（定向+点光、
@@ -117,7 +117,7 @@ per-light 颜色、距离衰减）headless 零 VVL error；forward 只读 `light
 **2026-09-10 更新**：三驱动运行时全验证（NV DGC execute 石锤 + 两 AMD/Intel 画像补测），
 静态 shader DGC spike 功能通（本机 Strix Halo，VVL 零 error + 1px tie 级回归）但满槽实现
 慢重放 1.85× → 默认关（`dgc_static` 门控）——详见 调试历史 2026-09-10 条目群 +
- `docs/radv_static_dgc_spike.md`。**批次 2 refine 完结**：deferred light pass 简化 IBL
+ `docs/archive/radv_static_dgc_spike.md`。**批次 2 refine 完结**：deferred light pass 简化 IBL
  （env 采样替换常 ambient）+ skybox 背景合成（天空像素采 env）——deferred 与 forward IBL
  路线视觉对齐，forward BIT-IDENTICAL 不变（md5 一致），deferred 新基线稳定 + VVL 零 error。
  **前向头双源消除 + 反射工具升级（2026-09-10）**：`SceneLight` 经 Slang C API 实查布局入

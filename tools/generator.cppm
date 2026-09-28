@@ -290,7 +290,7 @@ export std::string renderTemplate(const nlohmann::json& data,
 	return env.render_file(templatePath, data);
 }
 
-// ─── Slang C API 反射生成（替代 JSON 中间层，见 docs/slang_api_reflection_research.md）───
+// ─── Slang C API 反射生成（替代 JSON 中间层，见 docs/archive/slang_api_reflection_research.md）───
 // 交叉校验：API 实查布局（编译器真值）vs schema 声明（期望值）。不等 = 漂移，致命。
 
 // vertexLayout 交叉校验：size==stride + 逐属性 name/offset/cppType 一致

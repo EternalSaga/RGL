@@ -32,7 +32,7 @@ export class CullDriver {
 	 * @param vkGpuCull culling 数据通路（nullptr = culling 不存在）
 	 * @param vkDgc DGC 命令生成 IES 路（nullptr = 非 NVIDIA 全 DGC 路；优先级最高）
 	 * @param vkDgcStatic 静态 shader DGC 路（nullptr = 关；RADV spike，
-	 *   docs/radv_static_dgc_spike.md——IES 路缺席时接管 opaque 段，两者皆 null 走重放）
+	 *   docs/archive/radv_static_dgc_spike.md——IES 路缺席时接管 opaque 段，两者皆 null 走重放）
 	 * @param framesInFlight 帧 slot 数（= Renderer::MAX_FRAMES_IN_FLIGHT，cull CB 按 slot 分配）
 	 */
 	CullDriver(RGL::DeviceContext& vkDevice, RGL::GpuCull* vkGpuCull, RGL::DgcCommands* vkDgc,

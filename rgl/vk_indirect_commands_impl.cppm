@@ -260,7 +260,7 @@ void DgcCommands::recordExecute(vk::raii::CommandBuffer& cmd, VkDeviceAddress se
 	pfnCmdExecute(*cmd, VK_FALSE, &info);  // 隐式 preprocess（驱动内部生成+同步）
 }
 
-// ─── DgcStaticCommands（spike：docs/radv_static_dgc_spike.md）─────────────────
+// ─── DgcStaticCommands（spike：docs/archive/radv_static_dgc_spike.md）─────────────────
 
 DgcStaticCommands::DgcStaticCommands(RGL::DeviceContext& vkDevice, const RGL::ShaderRegistry& registry,
 	uint32_t vkMaxSequenceCount, uint32_t vkEntryCount, uint32_t framesInFlight)
