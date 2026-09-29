@@ -4,6 +4,7 @@ import scene;
 import env;
 import normalmap;
 import lights;
+import shadow;   // Phase 11 批 11.2：级联阴影采样（binding 12/13，与 deferred light.frag 共用）
 
 // Phase 8 植被专属 shader（forward-only，L2）：model_pbr_ibl 派生，新增**背光透射 SSS**。
 // 叶片是薄半透叶片（thin translucent leaf），背光时光穿透叶肉使其透亮且高饱和——这是植被
@@ -105,12 +106,16 @@ float4 main(ModelVertexOutput input, bool frontFace : SV_IsFrontFace) : SV_Targe
     // 仍出"油亮"湿感，探针置 0 后 matte 自然——薄叶蜡质层无可分辨环境像，diffuse+透射即主体）。
 
     // 直接光多灯循环 + 背光透射（透射项 = 叶片被光照亮背面时的透光）
+    // Phase 11 批 11.2：阴影因子。只乘**直接光**（环境光 IBL 不受阴影影响——它无方向，只以为
+    // 背景提供背景调；自发光不乘）。透射项也一起乘：与 deferred light.frag 的 shadeLightVeg
+    // 口径一致（那里 shadeLightVeg 是 shadeDirect+shadeTransmit 合成后再乘）——两路同款。
+    const float shadowFactor = sampleShadow1Tap(P, N);
     uint n = readLightCount();
     if (n == 0)
     {
         float3 L = -light.direction;
         color += light.color * (shadeDirect(N, V, albedo, metallic, roughness, L)
-            + shadeTransmit(N, V, albedo, L));
+            + shadeTransmit(N, V, albedo, L)) * shadowFactor;
     }
     else
     {
@@ -133,7 +138,7 @@ float4 main(ModelVertexOutput input, bool frontFace : SV_IsFrontFace) : SV_Targe
             if (atten <= 0.0)
                 continue;
             color += atten * gl.color.rgb * (shadeDirect(N, V, albedo, metallic, roughness, L)
-                + shadeTransmit(N, V, albedo, L));
+                + shadeTransmit(N, V, albedo, L)) * shadowFactor;
         }
     }
     float3 emissive = od.emissive.rgb * emissiveTexture.Sample(baseColorSampler, input.uv).rgb;

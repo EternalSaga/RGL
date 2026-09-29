@@ -51,7 +51,10 @@ void collectShadowCasters(const RGL::MeshAsset& asset, const RGL::MaterialAsset&
     // blend 体投出的影子会看不到遮挡体的背面（收下来只多花一遍光流，还会在透明体上留
     // 不可见的脊影）；MASK 背面本就被 alpha 消掉，不影响。
     // 不过过 GPU culling：候选表按**主视罞**建立，用它会漏掉靠谱面屋顶的投影体。
-    if (asset.shadowPipelineIndex == kInvalidPipelineIndex || mat.alphaModeBlend
+    // 门控（diagnostics.shadow_pass）在**最前**：关时不产出任何 draw ——图里的阴影 pass
+    // 仍然运行（清 4 MB 深度），但无光梲化开销，且采样端因 enabled=0 直连返回全亮。
+    if (!diagnostics().shadowPass || asset.shadowPipelineIndex == kInvalidPipelineIndex
+        || mat.alphaModeBlend
         || glm::length(worldCenter - sphere.center) > sphere.radius + worldRadius)
         return;
     for (uint32_t c = 0; c < kActiveShadowCascades; ++c) {

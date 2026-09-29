@@ -1,6 +1,7 @@
 import scene;    // binding 3：sceneData + SceneLight/readSceneLight（共享 eyePos/ambient）
 import lights;   // 多灯：readLightCount/readGpuLight（lights 内部亦 import scene）
 import sky;      // skybox 射线重建：skyClipToWorld（读 @64 invViewProj）——skybox 背景合成
+import shadow;   // Phase 11 批 11.2：级联阴影采样（binding 12/13，与 forward 三个光照风格共用）
 
 // Phase 7 D1：deferred light pass —— 全屏逐灯光照，读 G-buffer 4+1 RT 重建 albedo/法线/
 // 世界位置/metal-rough，套用与 model_pbr.frag **逐式相同**的简化 PBR（GGX Cook-Torrance）。
@@ -189,14 +190,19 @@ float4 main(LightInput input) : SV_Target0
         color = shared.ambient * albedo * (1.0 - metallic);
     }
 
+    // Phase 11 批 11.2：阴影因子。**与 forward 三个光照风格同体**（同一份 shadow.slang）——
+    // 两路只要有一路接了就是 11.0c 那个“只有一路有”的破口，D1 对拍会直接拆线。
+    // 只乘直接光（环境光 IBL 无方向 → 不乘；自发光不乘）。
+    const float shadowFactor = sampleShadow1Tap(P, N);
     uint n = readLightCount();
     if (n == 0)
     {
         // count=0 回落 @0 头单灯（与 forward model_pbr_ibl/model_light/model_vegetation 同款；
         // shadeLightVeg 已含植被透射项 ≈ forward 回落的 shadeDirect+shadeTransmit）
         float3 L0 = -shared.direction;
-        color += isVeg ? shadeLightVeg(N, V, albedo, roughness, L0, shared.color, 1.0)
-                       : shadeLight(N, V, albedo, metallic, roughness, L0, shared.color, 1.0);
+        color += (isVeg ? shadeLightVeg(N, V, albedo, roughness, L0, shared.color, 1.0)
+                        : shadeLight(N, V, albedo, metallic, roughness, L0, shared.color, 1.0))
+            * shadowFactor;
     }
     else
     {
@@ -219,9 +225,10 @@ float4 main(LightInput input) : SV_Target0
             if (atten <= 0.0)
                 continue;
             if (isVeg)
-                color += shadeLightVeg(N, V, albedo, roughness, L, gl.color.rgb, atten);
+                color += shadeLightVeg(N, V, albedo, roughness, L, gl.color.rgb, atten) * shadowFactor;
             else
-                color += shadeLight(N, V, albedo, metallic, roughness, L, gl.color.rgb, atten);
+                color += shadeLight(N, V, albedo, metallic, roughness, L, gl.color.rgb, atten)
+                    * shadowFactor;
         }
     }
     // Phase 8 剩余批次 B：自发光相加（deferred_geometry SV_Target4 写入的第 5 G-buffer 通道，

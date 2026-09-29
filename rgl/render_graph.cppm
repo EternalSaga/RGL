@@ -498,4 +498,21 @@ export std::expected<uint32_t, Error> ensureSceneHdrSlot(
 export std::expected<uint32_t, Error> ensureAoSlot(
 	RenderTargetCache& rts, Swapchain& swapchain);
 
+/**
+ * Phase 11 批 11.2：阴影图 RT（d32_sfloat depthOffscreen，aspect = eDepth）并返回其
+ * SAMPLED_IMAGE 堆槽。extent = 2·mapSize（候逇 4 级 2×2 图集，切到 4 级时不需重建描述绑定）。
+ *
+ * **为何启动期必须建（而不是由 drawFrame 的 ensureOffscreenAttachments 顺手建）**：光照管线条目
+ * 在启动期就把这个堆槽烘进 binding mapping，而堆槽号是 drawFrame 里首次 ensure 时才分配的——
+ * 推荐顺序是先建实现。这与 ensureAoSlot / ensureSceneHdrSlot 同轴（启动期先领槽，每帧
+ * ensure 命中缓存复用）。
+ *
+ * 消费方 = 全部光照管线条目（forward 模型条目 + deferred light 条目）的 binding 12/13，
+ * 与 shadow.slang 的声明成对。
+ * @param rts RT 缓存（ensure/heapSlot）
+ * @param mapSize 单块边长（图集整幅 = 2·mapSize）
+ * @return 阴影图的 SAMPLED_IMAGE heap 槽；Error = RT 创建 / 槽分配失败
+ */
+export std::expected<uint32_t, Error> ensureShadowMapSlot(RenderTargetCache& rts, uint32_t mapSize);
+
 }  // namespace RGL

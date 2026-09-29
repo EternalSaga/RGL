@@ -23,10 +23,10 @@ rgl_shader(model_pbr.frag MODEL_PBR_FRAG_SPV model material scene)
 rgl_shader(model_phong.frag MODEL_PHONG_FRAG_SPV model material scene)
 # Phase 5.5：IBL 路线（model_pbr + 环境 cubemap 采样替换常 ambient；env.slang 契约）
 # Phase 8 ③a：normal 贴图导数 TBN（normalmap.slang 契约，binding 6/7 消费）
-rgl_shader(model_pbr_ibl.frag MODEL_PBR_IBL_FRAG_SPV model material scene env normalmap lights)
+rgl_shader(model_pbr_ibl.frag MODEL_PBR_IBL_FRAG_SPV model material scene env normalmap lights shadow)
 # Phase 8 植被/光源专属 frag（forward-only；mesh 复用 model.mesh.spv，import 契约同 model_pbr_ibl）
-rgl_shader(model_vegetation.frag MODEL_VEGETATION_FRAG_SPV model material scene env normalmap lights)
-rgl_shader(model_light.frag MODEL_LIGHT_FRAG_SPV model material scene env normalmap lights)
+rgl_shader(model_vegetation.frag MODEL_VEGETATION_FRAG_SPV model material scene env normalmap lights shadow)
+rgl_shader(model_light.frag MODEL_LIGHT_FRAG_SPV model material scene env normalmap lights shadow)
 # Phase 5.5 批次 4：天空盒（全屏大三角 mesh + clip→world 射线采 env cubemap frag）
 rgl_shader(skybox.mesh SKYBOX_MESH_SPV sky scene)
 rgl_shader(skybox.frag SKYBOX_FRAG_SPV sky scene env)
@@ -39,7 +39,7 @@ rgl_shader(deferred_geometry_vegetation.frag DEFERRED_GEOM_VEG_FRAG_SPV deferred
 rgl_shader(deferred_geometry_light.frag DEFERRED_GEOM_LIGHT_FRAG_SPV deferred_geometry.frag model material scene normalmap)
 # Phase 7 D1：light pass（全屏大三角 mesh + 采样 G-buffer 的 deferred 光照 frag）
 rgl_shader(light.mesh LIGHT_MESH_SPV)
-rgl_shader(light.frag LIGHT_FRAG_SPV scene lights sky)
+rgl_shader(light.frag LIGHT_FRAG_SPV scene lights sky shadow)
 # Phase 11 批 11.2：级联阴影 depth-only 管线。mesh 自带 8B push（objectIndex +
 # cascadeIndex）——**不 import material.slang**：共享的 4B DrawArgs 契约不能为阴影多加一个
 # 字段（改了 = 1591 条模型条目全重建），故阴影管线自带 push 块。frag 空壳（无输出）。

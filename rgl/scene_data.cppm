@@ -146,6 +146,16 @@ static_assert(kSceneDataIrradianceOffset % 16 == 0, "irradiance region must stay
 export inline constexpr float kShadowDepthBias = 0.0015f;        // NDC 深度域
 export inline constexpr float kShadowNormalOffsetScale = 1.5f;   // texel 数
 
+/**
+ * 当前**生效**的级联数（与 scene data 区容量 kSceneShadowCascadeCount = 4 **分离**）。
+ *
+ * 为何分离：区容量是一次性预留（避免加级联时再动尾部基址），而本值是“本帧确实画出与采样哪些级”。
+ * 切换到 4 级 = 改这一行（图装饰插 4 个 pass + CPU 分级剔除 + 采样端分界距）。
+ * 定义放在本模块（与 kShadowMapSize 同居）是为了让 render_graph_rtslot / main_scene 等不引入
+ * scene_context（后者拉 entt，让纯资源模块依赖它不合适）。
+ */
+export inline constexpr uint32_t kActiveShadowCascades = 1;
+
 export inline constexpr uint32_t kShadowMapSize = 1024;
 
 export inline constexpr uint32_t kSceneShadowCascadeCount = 4;

@@ -42,6 +42,25 @@ import rllogger;
 
 namespace RGL {
 
+namespace {
+
+/** deferred light 条目的阴影描述槽（Phase 11 批 11.2）。为何抽出成函数而不内联：它为
+ *  assembleBackEnd 多了一个返回值分支（认知复杂度 +1，已触 15 阈值）。
+ * 与 bakePipelineEntries 里的同名 ensure 幂等（按名缓存，同尺寸/格式 → 同槽，不重建图）。
+ * @param rtCache RT 缓存
+ * @return 阴影图 SAMPLED_IMAGE 堆槽（light 条目 binding 12）
+ * @throws std::runtime_error RT 创建 / 槽分配失败
+ */
+uint32_t deferredShadowSlotOf(RenderTargetCache& rtCache) {
+	auto slot = ensureShadowMapSlot(rtCache, kShadowMapSize);
+	if (!slot)
+		throw std::runtime_error(fmt::format("deferred: 阴影图 RT 创建失败: {}",
+			slot.error().describe()));
+	return *slot;
+}
+
+}  // namespace
+
 /** A0 内建 cube + A1 解析/顶点上传（全几何槽先于任何纹理槽）+ A2 纹理上传。 */
 UploadedAssets uploadModelAssets(DeviceContext& device, Resources& resources,
 	SamplerLibrary& samplers, AssetTable& assets, const SceneConfig& scene) {
@@ -130,8 +149,16 @@ void uploadEnvironment(Resources& resources, Environment& env, DeviceContext& de
 /** C1 管线条目烘焙（per unique 模型；风格派生 + 条目去重 + DIAG 分布日志）。 */
 void bakePipelineEntries(UploadedAssets& uploaded, const SceneConfig& scene, bool deferredMode,
 						 ShaderRegistry& pipelines, Resources&, SamplerLibrary& samplers,
-						 AssetTable& assetTable) {
+						 AssetTable& assetTable, RenderTargetCache& rtCache) {
 	const uint32_t samplerSlot = samplers.ensureShared();
+	// Phase 11 批 11.2：阴影图槽必须在**模型条目烘焙之前**领掉（堆槽号由 ensure 时分配，
+	// 烘焙后再拿到就太晚）。与 env 槽同轴（AGENTS：环境上传 = A2 后、addModelEntry 前）。
+	// 无条件建（不看 diagnostics.shadow_pass）——光照管线无条件烘这个槽。
+	// assembleHdrAoChain 里的同名 ensure 是幂等的（deferred light 条目用）。
+	auto shadowSlot = ensureShadowMapSlot(rtCache, kShadowMapSize);
+	if (!shadowSlot)
+		throw std::runtime_error(
+			fmt::format("阴影图 RT 创建失败: {}", shadowSlot.error().describe()));
 	for (auto& um : uploaded.models) {
 		auto& model = *um.model;
 		const auto& texIds = um.textureIds;
@@ -175,7 +202,7 @@ void bakePipelineEntries(UploadedAssets& uploaded, const SceneConfig& scene, boo
 				assetTable.getTexture(texIds.normal[i]).heapSlot,
 				assetTable.getTexture(texIds.orm[i]).heapSlot,
 				assetTable.getTexture(texIds.emissive[i]).heapSlot,
-				samplerSlot);
+				samplerSlot, *shadowSlot, samplers.ensurePointSampler());
 			pipelines.bindToAsset(id, entryIdx);
 			// Phase 11 批 11.2：阴影 depth-only 管线条目。按 vertexSlot 去重（addShadowEntry
 			// 内部有表）——bistro 1591 个 primitive 共用约 8 个拼接块槽 → 仅 8 条目。
@@ -331,6 +358,13 @@ void assembleHdrAoChain(Swapchain& swapchain, Resources& resources,
 	if (!depthSlot)
 		throw std::runtime_error(
 			fmt::format("深度采样槽分配失败: {}", depthSlot.error().describe()));
+	// Phase 11 批 11.2：阴影图槽。**无条件建**（不看 diagnostics.shadow_pass）——光照管线条目
+	// 无条件烘焙它（否则开关时描述绑定的图从未被任何 pass 转布局 = 采样就报 VVL）。
+	// 门控在渲染侧：关时阴影段零 draw，图内全 1.0 = 无遮挡 → 成片逐位不变。
+	auto shadowSlot = ensureShadowMapSlot(rtCache, kShadowMapSize);
+	if (!shadowSlot)
+		throw std::runtime_error(
+			fmt::format("阴影图 RT 创建失败: {}", shadowSlot.error().describe()));
 	// ao / tonemap 条目下标由 Renderer 构造期按名 pipelineIndex("ao"/"tonemap") 取
 	[[maybe_unused]] auto aoIdx = pipelines.addAoEntry(*depthSlot, samplers.ensurePointSampler());
 	[[maybe_unused]] auto tonemapIdx = pipelines.addTonemapEntry(
@@ -395,7 +429,7 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 		// light 条目下标由 Renderer 构造期按名 pipelineIndex("light") 取，此处仅需触发建条目
 		[[maybe_unused]] auto lightIdx = pipelines.addLightEntry(
 			(*gbSlots)[0], (*gbSlots)[1], (*gbSlots)[2], (*gbSlots)[3], (*gbSlots)[4],
-			samplers.ensureShared());
+			samplers.ensureShared(), deferredShadowSlotOf(rtCache), samplers.ensurePointSampler());
 	}
 	assembleHdrAoChain(swapchain, resources, samplers, rtCache, pipelines);
 

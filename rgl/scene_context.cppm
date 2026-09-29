@@ -222,10 +222,10 @@ export inline Bounds frustumBoundingSphere(const glm::mat4& viewProj) {
  *
  * **为何区分两个常量**：`kSceneShadowCascadeCount`（定义在 scene_data.cppm，**不在此复制**）
  * 是 **scene data 区容量**（一次性预留 4 槽，避免后续加级联时再动尾部基址）；
- * 本常量 `kActiveShadowCascades` 是**本帧实际渲染与采样用到的级数**。两者分离后，“预留 4 槽但只画
- * 1 级”才是一行配置。切换本身是**一行**（详见 phase11_plan.md §10 级联切分记录）。
+ * `kActiveShadowCascades`（定义在 scene_data.cppm，**不在此复制**）是**本帧实际渲染与采样用到的级数**。
+ * 两者分离后，“预留 4 槽但只画 1 级”才是一行配置（详见 phase11_plan.md §10）。
  */
-export inline constexpr uint32_t kActiveShadowCascades = 1;  // 当前生效级数（切分未做）
+// 当前生效级数 = scene_data::kActiveShadowCascades（定义在那里，不在此复制）
 
 /** 阴影 pass 名（图内通用名，不带分块号）。 */
 export inline std::string_view shadowPassName() { return "shadow"; }

@@ -21,7 +21,7 @@ namespace RGL {
 
 	uint32_t ShaderRegistry::addModelEntry(const std::string& specName, uint32_t vertexSlot,
 			uint32_t textureSlot, uint32_t normalSlot, uint32_t ormSlot, uint32_t emissiveSlot,
-			uint32_t samplerSlot) {
+			uint32_t samplerSlot, uint32_t shadowMapSlot, uint32_t shadowSamplerSlot) {
 		const auto key = std::make_tuple(specName, vertexSlot, textureSlot, normalSlot, ormSlot, emissiveSlot);
 		// 按 (规格, 顶点 slot, base 纹理 slot, normal slot, orm slot, emissive slot) 六元组组合
 		// 去重：同组合返回既有条目（不重复建 shader object）
@@ -61,6 +61,14 @@ namespace RGL {
 		b.extra.push_back({.binding = 6, .sampler = false, .heapSlot = normalSlot});
 		b.extra.push_back({.binding = 7, .sampler = false, .heapSlot = ormSlot});
 		b.extra.push_back({.binding = 8, .sampler = false, .heapSlot = emissiveSlot});
+		// Phase 11 批 11.2：阴影图（binding 12）+ 专用 NEAREST sampler（binding 13）。**无条件烘焙**
+		// ——不能看 diagnostics.shadow_pass：光照管线条目一旦少了这个描述槽，开关时
+		// 图不存在就会在采样侧报 VVL。unlit / phong 等不 import shadow.slang 的风格不声明
+		// 它们 → 空转（既证无害，同 binding 4/5 对不 import env 的风格）。
+		b.extra.push_back({.binding = 12, .sampler = false, .heapSlot = shadowMapSlot});
+		b.extra.push_back({.binding = 13, .sampler = true,
+			.samplerHeapOffset = static_cast<vk::DeviceSize>(shadowSamplerSlot)
+				* res.getSamplerHeap().getDescriptorSize()});
 		auto entry = PipelineEntry{
 			.name = fmt::format("{}.v{}.t{}.n{}.o{}.e{}", specName, vertexSlot, textureSlot, normalSlot,
 				ormSlot, emissiveSlot),
@@ -156,7 +164,7 @@ namespace RGL {
 
 	uint32_t ShaderRegistry::addLightEntry(uint32_t albedoSlot, uint32_t normalSlot,
 			uint32_t positionSlot, uint32_t metalRoughSlot, uint32_t emissiveSlot,
-			uint32_t samplerSlot) {
+			uint32_t samplerSlot, uint32_t shadowMapSlot, uint32_t shadowSamplerSlot) {
 		if (auto idx = pipelineIndex("light"))
 			return *idx;
 		const RGL::PipelineSpec* spec = findSpec("light");
@@ -194,6 +202,12 @@ namespace RGL {
 			b.extra.push_back({.binding = 10, .sampler = true, .samplerHeapOffset = 0});
 		}
 		b.extra.push_back({.binding = 11, .sampler = false, .heapSlot = emissiveSlot});
+		// Phase 11 批 11.2：阴影图 12 + 专用 sampler 13（与 forward 模型条目**同号** →
+		// shadow.slang 才能作为两条光照路共用的契约，否则同一份采样代码要复制两份）。
+		b.extra.push_back({.binding = 12, .sampler = false, .heapSlot = shadowMapSlot});
+		b.extra.push_back({.binding = 13, .sampler = true,
+			.samplerHeapOffset = static_cast<vk::DeviceSize>(shadowSamplerSlot)
+				* res.getSamplerHeap().getDescriptorSize()});
 		auto entry = PipelineEntry{.name = "light",
 			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b),
 			.spec = *spec, .bindings = b};

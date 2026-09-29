@@ -186,11 +186,15 @@ export class ShaderRegistry {
 	 * @param ormSlot ORM 贴图 SAMPLED_IMAGE heap 槽（binding 7；无贴图 = 白纹理槽）
 	 * @param emissiveSlot emissive 贴图 SAMPLED_IMAGE heap 槽（binding 8；无贴图 = 白纹理槽）
 	 * @param samplerSlot 共享 sampler 的 sampler heap 槽（binding 2，ensureSharedSampler 产物）
+	 * @param shadowMapSlot 阴影图 SAMPLED_IMAGE 槽（**binding 12**，Phase 11 批 11.2；无条件烘焙，
+	 *        因此不声明 shadow.slang 的风格也不会误用）
+	 * @param shadowSamplerSlot 阴影专用 NEAREST sampler 槽（**binding 13**；不能用共享的 LINEAR，
+	 *        深度格式无 filterable 能力）
 	 * @return 条目下标（新组合 = entries 追加）
 	 */
 	[[nodiscard]] uint32_t addModelEntry(const std::string& specName, uint32_t vertexSlot,
 		uint32_t textureSlot, uint32_t normalSlot, uint32_t ormSlot, uint32_t emissiveSlot,
-		uint32_t samplerSlot);
+		uint32_t samplerSlot, uint32_t shadowMapSlot, uint32_t shadowSamplerSlot);
 
 	/**
 	 * 天空盒管线条目（Phase 5.5 批次 4）：单条目（env 槽全局单例，无组合去重需求）。
@@ -215,11 +219,13 @@ export class ShaderRegistry {
 	 * @param metalRoughSlot G-buffer metalRough RT 槽（binding 7）
 	 * @param emissiveSlot G-buffer emissive RT 槽（binding 11，RGBA16F）
 	 * @param samplerSlot 共享 sampler 的 sampler heap 槽（binding 8，sampler 映射）
+	 * @param shadowMapSlot 阴影图 SAMPLED_IMAGE 槽（**binding 12**，与 forward 模型条目同号）
+	 * @param shadowSamplerSlot 阴影专用 NEAREST sampler 槽（**binding 13**）
 	 * @return 条目下标；规格缺失抛 runtime_error
 	 */
 	[[nodiscard]] uint32_t addLightEntry(uint32_t albedoSlot, uint32_t normalSlot,
 		uint32_t positionSlot, uint32_t metalRoughSlot, uint32_t emissiveSlot,
-		uint32_t samplerSlot);
+		uint32_t samplerSlot, uint32_t shadowMapSlot, uint32_t shadowSamplerSlot);
 
 	/**
 	 * Phase 8 批次 ①：tonemap pass 管线条目（单条目，仿 addLightEntry）。spec = "tonemap"

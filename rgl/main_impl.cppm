@@ -243,16 +243,16 @@ CompiledGraphResult compileGraphOrThrow(const char* path) {
 		if (auto* logger = RLLogger::getInstance())
 			logger->warn("highlight: 图形态不支持高亮 pass 装饰（无带 depth 的 opaque pass），选中无视觉高亮");
 	}
-	// Phase 11 批 11.2 基建：阴影 depth-only pass 装饰（图首插 shadow pass + shadow_map
-	// 深度 RT）。当前阴影段为空 = 零 draw，画面逐位不变；本门只用于验证 depth-only pass
-	// 基建全链（RT / 屏障 / 独立 extent / 状态）。默认关，沿用 D10 图装饰门控纪律。
-	if (diagnostics().shadowPass) {
-		decorateShadowPass(graphConfig->desc, kShadowMapSize);
-		if (auto* logger = RLLogger::getInstance())
-			logger->info("shadow_pass: 已装饰 depth-only 阴影 pass（{}² {}，{} 级；"
-					"段内 draw = 投影体，目前无采样消费者 → 画面逐位不变）",
-				kShadowMapSize, kShadowMapFormat, kActiveShadowCascades);
-	}
+	// Phase 11 批 11.2：阴影 pass 装饰**无条件**（不再由 diagnostics 门控）。原因（实测驱动）：
+	// 光照管线条目**无条件把阴影图的描述槽烘焙进去**，所以图里必须无条件地有这张图
+	// 与其布局链（否则开关时描述绑定的图从未被任何 pass 转换布局 → 采样它就报 VVL）。
+	// 门控改到渲染侧：关时阴影段**零 draw**（只清 4 MB 深度，近乎免费），图内全是
+	// 1.0 = 无遮挡 → 采样结果恒为全亮 → 成片逐位不变。
+	decorateShadowPass(graphConfig->desc, kShadowMapSize);
+	if (auto* logger = RLLogger::getInstance())
+		logger->info("shadow_pass: 已装饰 depth-only 阴影 pass（{}² {}，{} 级；投影体清单由 "
+			"diagnostics.shadow_pass 门控，关时段内零 draw = 画面逐位不变）",
+			kShadowMapSize, kShadowMapFormat, kActiveShadowCascades);
 	auto compiledGraph = compileRenderGraph(graphConfig->desc);
 	if (!compiledGraph)
 		throw std::runtime_error(fmt::format("render graph compile failed: {}",
@@ -379,7 +379,8 @@ int main() {
 
 		// C1：管线条目烘焙（per **unique 模型**——instancing 共享条目；addModelEntry
 		// 按 (规格,顶点 slot,纹理 slot) 组合去重兜底）
-		bakePipelineEntries(assets, configs.scene, deferredMode, shaderRegistry, vkResources, samplers, assetTable);
+		bakePipelineEntries(assets, configs.scene, deferredMode, shaderRegistry, vkResources, samplers,
+			assetTable, rtCache);
 		// 克隆管线条目（Phase 10 批 10.5 picking / 10.7 highlight，门 = diagnostics.picking
 		// 默认关 = 零条目追加）：契约 = 模型条目烘焙完成后立即（克隆只认 modelEntry 位，
 		// 天空盒/光等后续条目在不在表内无关）。两个用途同门——高亮依赖点选出结果，

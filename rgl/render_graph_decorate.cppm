@@ -159,6 +159,16 @@ bool decorateShadowPass(RgGraphDesc& desc, uint32_t mapSize) {
 			.usage = RgUsage::depthWrite, .loadOp = RgLoadOp::clear,
 			.storeOp = RgStoreOp::store}},
 	});
+	// 消费方声明：把阴影图作为 sampleRead 输入接到**光照 pass**。不接的话编译器不会为它
+	// 生成 DSAO → ShaderReadOnly 的布局转换，采样端就会报 VVL。
+	// 为何按 state 而不是按 pass 名：forward 图的光照在 opaque/transparent 段（state 就是
+	// "opaque"/"transparent"），deferred 图的光照在 light pass（state="light"）——三个 state 名在两种图
+	// 里都是语义角色，而 pass 名不同图变（forward "opaque" vs deferred "geometry"）。
+	static constexpr std::array<std::string_view, 3> kShadowLitStates{"opaque", "transparent", "light"};
+	for (auto& pass : desc.passes)
+		if (std::ranges::any_of(kShadowLitStates, [&](std::string_view s) { return pass.state == s; }))
+			pass.inputs.push_back(RgPassAttachment{.attachment = std::string{kShadowMapName},
+				.usage = RgUsage::sampleRead, .loadOp = RgLoadOp::load, .storeOp = RgStoreOp::store});
 	return true;
 }
 

@@ -169,7 +169,8 @@ export void uploadEnvironment(Resources& resources, Environment& env, DeviceCont
  */
 export void bakePipelineEntries(UploadedAssets& uploaded, const SceneConfig& scene, bool deferredMode,
 								ShaderRegistry& pipelines, Resources& resources,
-								SamplerLibrary& samplers, AssetTable& assets);
+								SamplerLibrary& samplers, AssetTable& assets,
+								RenderTargetCache& rtCache);
 
 /**
  * C2/C2b：场景实体注册——per **entity**：模型 entity（rootTransform = T·Rx·Ry·Rz·S，

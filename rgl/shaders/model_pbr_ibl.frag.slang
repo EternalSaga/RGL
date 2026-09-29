@@ -4,6 +4,7 @@ import scene;     // 场景级 bindless 数据（Phase 5：光照 + 对象矩阵
 import env;       // 环境 cubemap（Phase 5.5：binding 4/5 + readEnvParams）
 import normalmap; // Phase 8 方案 A：normal 贴图标准 TBN + DX flip-G 解码（binding 6/7 消费）
 import lights;    // Phase 8 ③：前向多灯循环（sceneData 尾区 GpuLight[]，无新绑定）
+import shadow;   // Phase 11 批 11.2：级联阴影采样（binding 12/13，与 deferred light.frag 共用）
 
 // Phase 5.5：简化 PBR + IBL。direct light = 简化 Cook-Torrance；IBL 环境项 Phase 8 ④a 升级
 // 为完整版（漫反射 SH9 辐照度 + 镜面 split-sum），direct light 项 Phase 8 ③ 升级为多灯循环
@@ -83,10 +84,14 @@ float4 main(ModelVertexOutput input, bool frontFace : SV_IsFrontFace) : SV_Targe
     // Phase 8 ③：直接光多灯循环（与 deferred light.frag 同源）。灯数组 = scene data 尾区
     // GpuLight[]；point（type=1）线性衰减 1-dist/range、dir（type=0）无衰减。count=0 回落
     // @0 头单灯（无显式 Light entity 的旧默认场景行为，保直接光不丢）。
+    // Phase 11 批 11.2：阴影因子。只乘**直接光**（环境光 IBL 不受阴影影响 —— 它是无方向
+    // 的，只以为环境光提供背景调；自发光也不乘）。不透明体（blend）不进阴影
+    // pass（见 render_list_impl::collectShadowCasters），故这里不需要考虑半透明。
+    const float shadowFactor = sampleShadow1Tap(P, N);
     uint n = readLightCount();
     if (n == 0)
     {
-        color += light.color * shadeDirect(N, V, albedo, metallic, roughness, -light.direction);
+        color += light.color * shadeDirect(N, V, albedo, metallic, roughness, -light.direction) * shadowFactor;
     }
     else
     {
@@ -108,7 +113,7 @@ float4 main(ModelVertexOutput input, bool frontFace : SV_IsFrontFace) : SV_Targe
             }
             if (atten <= 0.0)
                 continue;
-            color += atten * gl.color.rgb * shadeDirect(N, V, albedo, metallic, roughness, L);
+            color += atten * gl.color.rgb * shadeDirect(N, V, albedo, metallic, roughness, L) * shadowFactor;
         }
     }
     // Phase 8 ③：自发光（emissiveFactor × emissiveTexture，HDR 叠加，tonemap 链收；无 emissive 材质 = 恒黑）

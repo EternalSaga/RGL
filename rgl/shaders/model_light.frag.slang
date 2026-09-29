@@ -4,6 +4,7 @@ import scene;
 import env;
 import normalmap;
 import lights;
+import shadow;   // Phase 11 批 11.2：级联阴影采样（binding 12/13，与 deferred light.frag 共用）
 
 // Phase 8 光源本色 shader（forward-only）：bistro 灯具材质（emissive 非零：串灯/路灯/店招/
 // 聚光玻璃）路由到本 shader。
@@ -81,10 +82,13 @@ float4 main(ModelVertexOutput input, bool frontFace : SV_IsFrontFace) : SV_Targe
     float3 color = (irradiance / 3.14159265 * albedo * (1.0 - metallic)
         + envSpec * envBrdfFactor(NdotV, roughness, F0)) * env.intensity;
 
+    // Phase 11 批 11.2：阴影因子（只乘直接光；环境光/自发光不乘）。
+    const float shadowFactor = sampleShadow1Tap(P, N);
     uint n = readLightCount();
     if (n == 0)
     {
-        color += light.color * shadeDirect(N, V, albedo, metallic, roughness, -light.direction);
+        color += light.color * shadeDirect(N, V, albedo, metallic, roughness, -light.direction)
+            * shadowFactor;
     }
     else
     {
@@ -106,7 +110,8 @@ float4 main(ModelVertexOutput input, bool frontFace : SV_IsFrontFace) : SV_Targe
             }
             if (atten <= 0.0)
                 continue;
-            color += atten * gl.color.rgb * shadeDirect(N, V, albedo, metallic, roughness, L);
+            color += atten * gl.color.rgb * shadeDirect(N, V, albedo, metallic, roughness, L)
+                * shadowFactor;
         }
     }
 

@@ -9,6 +9,7 @@ import rllogger;
 import vkerror;
 import vk_swapchain;
 import render_target_cache;
+import scene_data;  // kShadowMapSize（图集整幅 = 2·mapSize）
 
 namespace RGL {
 
@@ -90,6 +91,31 @@ std::expected<uint32_t, Error> ensureAoSlot(
 			fmt::format("ao RT has no sample descriptor slot")});
 	if (auto* logger = RLLogger::getInstance())
 		logger->info("ao (R8): {}x{} slot {}", extent.width, extent.height, *slot);
+	return *slot;
+}
+
+/**
+ * Phase 11 批 11.2（接口注释见 render_graph.cppm ensureShadowMapSlot）：阴影图 RT + 采样堆槽。
+ * 尺寸 = 2·mapSize（候逇 4 级 2×2 图集；当前 kActiveShadowCascades=1 时也只用左上那一块，
+ * 但分辨率一开始就固定在 2·mapSize，切到 4 级时不需重建描述绑定）。
+ * aspect = eDepth（深度档）→ RT 缓存使用路径走深度分支（usage DEPTH_STENCIL|SAMPLED，
+ * view 的 aspectMask = eDepth）。**启动期必须建**：光照管线条目无条件烘焙这个堆槽，
+ * 而 drawFrame 内的 ensureOffscreenAttachments 命中同名缓存条目复用（尺寸/格式一致 → 不重建）。
+ */
+std::expected<uint32_t, Error> ensureShadowMapSlot(RenderTargetCache& rts, uint32_t mapSize) {
+	const std::string name{std::string{kShadowMapName}.c_str()};
+	const vk::Format format = resolveRgFormat(std::string{kShadowMapFormat}, vk::Format::eUndefined);
+	const vk::Extent2D extent{mapSize * 2u, mapSize * 2u};
+	auto rt = rts.ensure(name, extent, format, vk::ImageAspectFlagBits::eDepth);
+	if (!rt)
+		return std::unexpected(std::move(rt).error());
+	auto slot = rts.heapSlot(name);
+	if (!slot)
+		return std::unexpected(Error{ErrorCode::Unknown,
+			fmt::format("shadow_map RT '{}' has no sample descriptor slot", name)});
+	if (auto* logger = RLLogger::getInstance())
+		logger->info("shadow_map (D32, eDepth): {}x{} slot {} (图集，{} 级共享)",
+			extent.width, extent.height, *slot, kActiveShadowCascades);
 	return *slot;
 }
 
