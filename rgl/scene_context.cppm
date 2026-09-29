@@ -219,11 +219,15 @@ export inline Bounds frustumBoundingSphere(const glm::mat4& view, const glm::mat
 	// （AABB 随 yaw 变，实测还比精确球大 16%）。闭式解既不碰符号约定也不碰姿态。
 	const float A = proj[2][2];
 	const float B = proj[3][2];
-	if (A >= 0.0f || B >= 0.0f || A < -1.0f)
-		return Bounds{glm::vec3{0.0f}, 0.0f};  // 非透视/退化 proj（正交 A=0；奇异防御）
+	// 有效透视（RH_ZO，f > n > 0）：w 行 = (0,0,−1,0)、A = f/(n−f) ∈ (−∞,−1)、B = A·n < 0。
+	// **踩过的坑**（5a-7 首版）：把 `A < −1` 当退化条件写——恰好把所有正常透视判成退化，
+	// 半径恒 0 → 全体积单位阵 → 小物件阴影全灭（恒等阵伪影还姿态无关，把对拍指标全骗过）。
+	// 正确退化 = 正交（w 行非 −1）或反推 near/far 不成序（含 A=−1 除零 → far=∞ 被序判挡下）。
+	if (proj[2][3] != -1.0f || B >= 0.0f || A >= 0.0f)
+		return Bounds{glm::vec3{0.0f}, 0.0f};
 	const float nearPlane = B / A;
 	const float farPlane = B / (1.0f + A);
-	if (!(farPlane > nearPlane))
+	if (!(farPlane > nearPlane) || !(nearPlane > 0.0f))
 		return Bounds{glm::vec3{0.0f}, 0.0f};
 	const float tanHalf = 1.0f / proj[1][1];
 	const float aspect = proj[1][1] / proj[0][0];

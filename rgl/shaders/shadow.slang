@@ -37,15 +37,21 @@ float sampleShadow1Tap(float3 worldPos, float3 N)
     if (params.z < 0.5)
         return 1.0;  // 总开关关：全亮（与 tonemap 的 ao.strength=0 旁路同款）
 
-    // ① 选级联：按片元到 eyePos 的**平方距离**（eyePos 在 scene data @12，与 SceneLight 同源）
-    // 对比 splits = 每级远截止的平方距离；超出全部 3 个分界则落末级（末级 splits 写 1e9，
-    // 故永远不会越界到不存在的级）。
-    const float distSq = dot(worldPos - readSceneLight().eyePos, worldPos - readSceneLight().eyePos);
+    // ① 选级联：按片元的**视深**（沿相机 forward 的深度），与 CPU 切分口径**完全一致**——
+    //   级联切片是按视深切的子视锥（projWithDepthRange 只改深度行）。若按径向距离选级，
+    //   屏幕边缘/底部片元（径向 > 视深）会被分到更深的级，而它的视深落在该级子视锥之外
+    //   → 出块 → 全亮旁路 → 边缘处没影子。
+    //   forward 从 skyboxInvViewProj（@64）第 2 列取：invVP 第 2 列 = invV·(0,0,p,0)
+    //   = p·(view +z 的世界方向) = −p·forward（w=0 无平移项混入）→ 取反归一化即 forward。
+    //   splits = 每级远截止（线性视深）；末级写 1e9，永远不会越界到不存在的级。
+    const float3 eyePos = readSceneLight().eyePos;
+    const float3 forward = -normalize(asfloat(sceneData.Load4(96)).xyz);
+    const float depth = dot(worldPos - eyePos, forward);
     const float4 splits = readCascadeSplits();
     uint cascade = 0u;
-    if (distSq > splits.x * splits.x) cascade = 1u;
-    if (distSq > splits.y * splits.y) cascade = 2u;
-    if (distSq > splits.z * splits.z) cascade = 3u;
+    if (depth > splits.x) cascade = 1u;
+    if (depth > splits.y) cascade = 2u;
+    if (depth > splits.z) cascade = 3u;
 
     // ② normal offset：沿法线把采样点外推 k 个 texel。这是抗 acne 的**主力**手段——
     // 比 depthBias 稳（不改深度比较值 = 不引入 peter-panning 与深度非线性敏感度），

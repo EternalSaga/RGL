@@ -280,9 +280,14 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	//   用同一对量化值——两处必须同源。
 	const float shadowNear = quantizeShadowDistance(viewProj.nearPlane);
 	const float shadowFar = quantizeShadowDistance(viewProj.farPlane);
+	// 级 0 的近平面用**固定小值**而非量化 near：自适应 near（下限实测 0.05）量化后可能
+	// 抬高到 0.125，视深落在 [0.05, 0.125) 的近处片元（选级 = c0）会掉出子视锥 → 出块
+	// 全亮旁路 → 脚下没影子。固定 0.02 恒低于任何自适应值，且姿态无关（不引入游动）。
+	static constexpr float kShadowNearFloor = 0.02f;
 	std::array<Bounds, kActiveShadowCascades> cascadeSpheres{};
 	for (uint32_t c = 0; c < kActiveShadowCascades; ++c) {
-		const float nearC = c == 0 ? shadowNear : cascadeSplitDistance(shadowNear, shadowFar, c - 1u, kActiveShadowCascades);
+		const float nearC = c == 0 ? kShadowNearFloor
+			: cascadeSplitDistance(shadowNear, shadowFar, c - 1u, kActiveShadowCascades);
 		const float farC = cascadeSplitDistance(shadowNear, shadowFar, c, kActiveShadowCascades);
 		cascadeSpheres[c] = frustumBoundingSphere(viewProj.view,
 			projWithDepthRange(viewProj.proj, nearC, farC));
