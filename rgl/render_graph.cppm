@@ -44,12 +44,18 @@ namespace RGL {
  * 附件种类：
  * - swapchain：后缓冲（image/view 由执行器录制期按 imageIndex 解析）；
  * - depth：深度图（Resources 持有）；
- * - offscreen：图属 transient RT（执行器按名确保分配；帧末布局跨帧追踪）。
+ * - offscreen：图属 transient RT（执行器按名确保分配；帧末布局跨帧追踪）；
+ * - depthOffscreen：图属**深度** RT（阴影图类，批 11.2 基建）。与 offscreen 同为"执行器
+ *   按名 ensure"，但三点不同，故不复用同一 kind：① 格式只收深度格式词表
+ *   （offscreen 只收颜色词表——两侧各锁一侧，把"颜色 view 指向深度图"这类 invalid usage
+ *   挡在编译期）；② aspect = eDepth（屏障 / view / 描述符全链走深度面）；③ 可带独立
+ *   extent（见 `RgAttachmentDesc::extent`），阴影图分辨率与窗口解耦。
  */
 export enum class RgAttachmentKind : uint8_t {
 	swapchain,  // 后缓冲（image/view 由执行器录制期按 imageIndex 解析）
 	depth,      // 深度图（Resources 持有）
 	offscreen,  // 图属 transient RT（执行器按名确保分配；帧末布局跨帧追踪）
+	depthOffscreen,  // 图属深度 RT（阴影图类；深度词表 + eDepth aspect + 可独立 extent）
 };
 
 /**
@@ -78,14 +84,19 @@ export struct RgClearValue {
 
 /**
  * 附件声明（RgGraphDesc.attachments 元素）：name 全局唯一（编译产物中的 slot 下标）；
- * kind 决定资源来源；format 仅 offscreen 可取词表具名格式，swapchain/depth 必须 "inherit"
- *（格式由执行器固定，compile 校验）。
+ * kind 决定资源来源；format 仅 offscreen/depthOffscreen 可取词表具名格式（各查各表），
+ * swapchain/depth 必须 "inherit"（格式由执行器固定，compile 校验）。
  */
 export struct RgAttachmentDesc {
 	std::string name;
 	RgAttachmentKind kind = RgAttachmentKind::swapchain;
 	std::string format = "inherit";  // "inherit" = 随 swapchain/depth 现有格式；
 	                                 // offscreen 可用具名格式（词表见 isKnownRgFormat）
+	// 图属 RT（offscreen / depthOffscreen）专属尺寸：{0,0} = 跟随 swapchain extent
+	// （scene_hdr / G-buffer / ao 全是这一档，随窗口重建）；非 0 = **独立分辨率**。
+	// 阴影图必须走独立档——把阴影图绑在窗口尺寸上是错的（窗口缩一半阴影 texel 跟着变，
+	// 且每次 resize 白白重建整张阴影图）。swapchain/depth 附件必须留 {0,0}（compile 校验）。
+	std::array<uint32_t, 2> extent{0u, 0u};
 };
 
 /**
@@ -100,12 +111,31 @@ export struct RgAttachmentDesc {
  */
 export bool isKnownRgFormat(const std::string& name);
 /**
- * 执行器物化 vk::Format："inherit"→inheritFallback，具名→词表映射值。
- * @param name 格式名（调用方保证已 isKnownRgFormat）
+ * 执行器物化 vk::Format："inherit"→inheritFallback，具名→词表映射值（颜色词表
+ * `rgFormatTable` 未命中再查深度词表 `kDepthRgFormats`，两表分立见其注释）。
+ * @param name 格式名（调用方保证已 isKnownRgFormat / isKnownDepthRgFormat）
  * @param inheritFallback "inherit" 的替代格式（通常 = swapchain 格式）
  * @return 物化格式；漏网（未校验）返回 eUndefined
  */
 export vk::Format resolveRgFormat(const std::string& name, vk::Format inheritFallback);
+
+/**
+ * **深度**附件格式词表成员判定（kind=depthOffscreen 专用；与 isKnownRgFormat 的
+ * **颜色**词表刻意分成两张表）：若把 d32_sfloat 塞进通用词表，`kind=offscreen` 就能声明
+ * 深度格式 → RT 缓存按颜色建它（COLOR_ATTACHMENT 用途 + eColor aspect view）= invalid
+ * usage，而且只有 VVL 抓得到。两表分立让"offscreen 恒颜色 / depthOffscreen 恒深度"
+ * 成为编译期可校验的不变式。
+ *
+ * 词表（实现侧 rgDepthFormatTable，与颜色词表同样住在 impl——`vk::Format::eXxx` 枚举常量
+ * 在模块接口分区里**不可见**：rlvk 的 GMF 头是"可达但名字不可见"，写出来直接编译报错）：
+ *   "d32_sfloat"（主用档，与主深度图同格式；Vulkan **没有** D32_UNORM 这个格式）/
+ *   "d16_unorm"（省带宽档，多级 cascade 用）。
+ * 选格式注意：**采样侧不可过滤**（深度格式非 filterable），阴影采样必须用 NEAREST
+ * sampler（同 ao 的教训，见 sampler_library::ensurePointSampler）。
+ * @param name 格式名（小写下划线）
+ * @return true = 深度词表内（"inherit" **不算**——深度 RT 必须显式给格式）
+ */
+export bool isKnownDepthRgFormat(const std::string& name);
 
 /**
  * pass 内一条附件引用（RgPassDesc.outputs/inputs 元素）：attachment 名引用
@@ -192,15 +222,20 @@ export constexpr RgAttachmentSlot kRgNoAttachment = 0xFFFFFFFFu;
 
 /**
  * 编译后的附件记录（slot = 向量下标）：kind/format 透传声明，aspect 按 kind
- * 推导（depth → eDepth，其余 → eColor）；frameStartDiscard 定帧首写是否走
- * "内容丢弃"规则（swapchain/depth = true；offscreen = false 需跨帧追踪布局）。
+ * 推导（depth/depthOffscreen → eDepth，其余 → eColor）；frameStartDiscard 定帧首写
+ * 是否走"内容丢弃"规则（swapchain/depth/depthOffscreen = true；offscreen = false 需
+ * 跨帧追踪布局）。
  */
 export struct RgCompiledAttachment {
 	std::string name;
 	RgAttachmentKind kind = RgAttachmentKind::swapchain;
 	std::string format = "inherit";
+	// 独立 RT 尺寸透传（0 = 跟随 swapchain）：执行器装配 RT 时消费（批 11.2 阴影图）。
+	// 非图属 RT 恒 {0,0}（registerAttachment 已校验）。
+	std::array<uint32_t, 2> extent{0u, 0u};
 	vk::ImageAspectFlags aspect = {};
-	// 帧首写是否走"内容丢弃"规则（swapchain/depth = true；offscreen = false 需追踪布局）
+	// 帧首写是否走"内容丢弃"规则（swapchain/depth/depthOffscreen = true；offscreen = false
+	// 需追踪布局。depthOffscreen 归"丢弃"档：阴影图每帧整幅 clear，无跨帧内容依赖）
 	bool frameStartDiscard = false;
 };
 
@@ -362,6 +397,36 @@ export bool decoratePickingPass(RgGraphDesc& desc);
  * @return true = 已装饰；false = 图形态不支持（desc 未被修改）
  */
 export bool decorateHighlightPass(RgGraphDesc& desc);
+
+/**
+ * 阴影深度图附件契约（单一真相源，Phase 11 批 11.2 基建）——shadow pass 写的
+ * depthOffscreen RT。消费方 = decorateShadowPass（图声明）+ 执行器 RT 装配 +
+ * 后续阴影采样侧（批 11.2 剩余部分）。
+ */
+export inline constexpr std::string_view kShadowMapName = "shadow_map";
+export inline constexpr std::string_view kShadowMapFormat = "d32_sfloat";
+/** 阴影图整幅边长（与窗口分辨率**无关**，这是 depthOffscreen 存在的理由）。当前 1 级
+ *  cascade = 整幅；4 级走 2×2 tile 时本值仍是图集整幅边长（每 tile = 本值/2）。 */
+export constexpr uint32_t kShadowMapSize = 1024u;
+
+/**
+ * 阴影 pass 装饰（Phase 11 批 11.2 基建，2026-09-29）：追加 `shadow_map`
+ * （kind=depthOffscreen，格式/尺寸 = kShadowMapFormat/kShadowMapSize）+ 一个 **depth-only**
+ * drawMesh pass（state="shadow"、drawSource="shadow"），插在**图首**——阴影深度不依赖相机
+ * 深度，放最前使 barrier 推导最短，且保证它先于任何读阴影图的 pass。
+ *
+ * **当前状态（诚实声明）**：`drawSource="shadow"` 段目前是**空段**（FrameDrawList 尚无阴影
+ * 段，见 vkrenderer segmentRange），即该 pass 只建附件 / 清深度 / 零 draw → **画面逐位不变**。
+ * 本函数的交付物是"渲染图能表达 depth-only pass"这条基建（新 kind + 深度词表 + eDepth
+ * 屏障 + 独立 extent + 状态词表，全链 BIT-IDENTICAL 验证），深度-only 管线与阴影采样
+ * 归批 11.2 剩余部分。
+ *
+ * 调用点 = main_impl::compileGraphOrThrow，`diagnostics.shadow_pass` 门控
+ * （默认关 = 不调用 = 图逐位同，沿用 D10 纪律）。
+ * @param desc 图声明（原地修改：追加 attachment + 图首插 pass）
+ * @return true = 已装饰（任何图形态均支持：不读既有拓扑，只前插）
+ */
+export bool decorateShadowPass(RgGraphDesc& desc);
 
 /** G-buffer 附件契约条目（名字 + 格式串）。 */
 export struct RgGBufferDesc {

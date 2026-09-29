@@ -133,4 +133,32 @@ bool decorateHighlightPass(RgGraphDesc& desc) {
 	return true;
 }
 
+/**
+ * decorateShadowPass 定义（契约见 render_graph.cppm 接口注释，含"当前段内零 draw、
+ * 画面逐位不变"的诚实声明）。与 picking / highlight 两个装饰的关键差别：**不需要**
+ * 按角色反查——阴影 pass 自为一体（自带专属深度附件），既不读既有拓扑也不借既有附件，
+ * 故任何图形态（forward / deferred / offscreen）都直接适用，前插即可。
+ */
+bool decorateShadowPass(RgGraphDesc& desc) {
+	desc.attachments.push_back(RgAttachmentDesc{
+		.name = std::string{kShadowMapName},
+		.kind = RgAttachmentKind::depthOffscreen,
+		.format = std::string{kShadowMapFormat},
+		.extent = {kShadowMapSize, kShadowMapSize},  // 独立分辨率，与窗口解耦
+	});
+	// 图首插入（不是图末）：① 阴影深度不依赖相机深度，放最前 barrier 链最短；
+	// ② 天然先于所有要读阴影图的 pass（光照 pass 无论在哪都是它的后继）。
+	// clear 1.0 = "无遮挡"（与主深度图同约定：glm 零到一深度，1.0 = far）。
+	desc.passes.insert(desc.passes.begin(), RgPassDesc{
+		.name = "shadow",
+		.kind = RgPassKind::drawMesh,
+		.state = "shadow",
+		.drawSource = "shadow",
+		.outputs = {RgPassAttachment{.attachment = std::string{kShadowMapName},
+			.usage = RgUsage::depthWrite, .loadOp = RgLoadOp::clear,
+			.storeOp = RgStoreOp::store}},
+	});
+	return true;
+}
+
 }  // namespace RGL

@@ -23,7 +23,7 @@ namespace RGL {
  */
 export struct RtAttachment {
 	RGL::VmaImage image;  // offscreen RT 图（extent/format 漂移时重建）
-	std::optional<vk::raii::ImageView> view;  // RT 颜色 view（随 image 同步重建）
+	std::optional<vk::raii::ImageView> view;  // RT view（aspect 随 ensure 参数：颜色 / 深度）
 	vk::Extent2D extent{};  // 图 extent（重建命中判断条件之一）
 	vk::Format format = vk::Format::eUndefined;  // v341 raii::ImageView 无 getFormat，自建记录
 	// 重建计数：extent/format 漂移换新图（真实布局回 Undefined）——消费方
@@ -62,15 +62,24 @@ export class RenderTargetCache {
 	/**
 	 * 幂等创建（或 extent/format 失配时重建）一个 offscreen RT，返回 map 节点稳定指针
 	 *（std::expected 不支持引用类型，AGENTS 规范）。行为契约见 RtAttachment 注释。
+	 *
+	 * **深度 RT（批 11.2 基建）**：aspect = eDepth 时三处随深度面走——① image usage 用
+	 * `DEPTH_STENCIL_ATTACHMENT | SAMPLED`（**不加** transfer 两端：深度格式对 transfer
+	 * 的支持按格式而异，且本缓存无需求，多要一个 flag 就多一份驱动差异面）；② RT view 与
+	 * 采样 view 的 subresourceRange.aspectMask = eDepth（漏这一步 = 颜色 view 指向深度图，
+	 * invalid usage）；③ 采样描述符 layout 仍 eShaderReadOnlyOptimal（深度**独占**格式允许
+	 * 该布局，与主深度图的 SSAO 采样描述符同约定，见 Resources::writeDepthSampleDescriptor）。
 	 * @param name attachment 名（缓存 key；同名同 extent 同格式命中复用——
 	 *   drawFrame 图循环按图声明每帧调用）
-	 * @param extent RT extent（= swapchain extent）
-	 * @param format RT 格式（调用点解析，"inherit" = swapchain 格式）
+	 * @param extent RT extent（= swapchain extent，或图属独立尺寸如阴影图）
+	 * @param format RT 格式（调用点解析，"inherit" = swapchain 格式；深度档走 kDepthRgFormats）
+	 * @param aspect view aspect（eColor 默认 = 既有颜色 RT 行为逐位不变；eDepth = 深度 RT）
 	 * @return 稳定指针（extent/format 漂移重建：waitIdle 后换 image/view、generation+1、
 	 *   采样槽号不变；Error = VMA 图像创建 / allocSlot / 槽地址查询失败）
 	 */
 	[[nodiscard]] std::expected<RtAttachment*, Error> ensure(const std::string& name,
-		vk::Extent2D extent, vk::Format format);
+		vk::Extent2D extent, vk::Format format,
+		vk::ImageAspectFlags aspect = vk::ImageAspectFlagBits::eColor);
 
 	/** @return RT 的 SAMPLED_IMAGE heap 槽号（ensure 首建分配、跨 resize
 	 * 复用，管线 baked 永久有效）；尚未 ensure 的 RT 名 → nullopt（调用方须先 ensure
@@ -103,7 +112,9 @@ export class RenderTargetCache {
  * 见体内注释）；forward/offscreen 图不 bind 此槽 = 无副作用（行为中性）。
  */
 inline std::expected<RtAttachment*, Error> RenderTargetCache::ensure(
-		const std::string& name, vk::Extent2D extent, vk::Format format) {
+		const std::string& name, vk::Extent2D extent, vk::Format format,
+		vk::ImageAspectFlags aspect) {
+		const bool isDepth = aspect == vk::ImageAspectFlagBits::eDepth;
 		auto& descriptorHeap = kernel.getDescriptorHeap();
 		auto it = rtAttachments.find(name);
 		if (it != rtAttachments.end() && it->second.extent == extent &&
@@ -124,10 +135,15 @@ inline std::expected<RtAttachment*, Error> RenderTargetCache::ensure(
 		info.tiling = vk::ImageTiling::eOptimal;
 		info.initialLayout = vk::ImageLayout::eUndefined;
 		// 消费面：colorWrite（渲入）+ transferRead/Write（blit 两端）+ sampleRead
-		//（shader 采样，后处理类图预留）
-		info.usage = vk::ImageUsageFlagBits::eColorAttachment |
-			vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst |
-			vk::ImageUsageFlagBits::eSampled;
+		//（shader 采样，后处理类图预留）。深度档（批 11.2 阴影图）：DEPTH_STENCIL_ATTACHMENT
+		// + SAMPLED，**不申请 transfer 两端**（深度格式的 transfer 支持按格式而异，
+		// 且本缓存对深度 RT 无 blit 需求——少要一个 flag 少一分驱动差异面）
+		info.usage = isDepth
+			? (vk::ImageUsageFlagBits::eDepthStencilAttachment
+				  | vk::ImageUsageFlagBits::eSampled)
+			: (vk::ImageUsageFlagBits::eColorAttachment
+				  | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst
+				  | vk::ImageUsageFlagBits::eSampled);
 		VmaAllocationCreateInfo alloc{};
 		alloc.usage = VMA_MEMORY_USAGE_AUTO;
 		auto imageResult = kernel.getAllocator().createImage(info, alloc);
@@ -144,7 +160,7 @@ inline std::expected<RtAttachment*, Error> RenderTargetCache::ensure(
 		viewInfo.image = slot.image.image;
 		viewInfo.viewType = vk::ImageViewType::e2D;
 		viewInfo.format = format;
-		viewInfo.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+		viewInfo.subresourceRange = {aspect, 0, 1, 0, 1};
 		slot.view.emplace(device.getDevice(), viewInfo);
 
 		// Phase 7 gap ④：写 SAMPLED_IMAGE 描述符供 deferred light pass 采样。首建 allocSlot Runtime，
@@ -161,7 +177,7 @@ inline std::expected<RtAttachment*, Error> RenderTargetCache::ensure(
 		slot.sampleViewCreate.image = slot.image.image;
 		slot.sampleViewCreate.viewType = vk::ImageViewType::e2D;
 		slot.sampleViewCreate.format = format;
-		slot.sampleViewCreate.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+		slot.sampleViewCreate.subresourceRange = {aspect, 0, 1, 0, 1};
 		slot.imageDesc = vk::ImageDescriptorInfoEXT{};
 		slot.imageDesc.pView = &slot.sampleViewCreate;  // v341 契约：pView 指 create info（非 VkImageView）
 		slot.imageDesc.layout = vk::ImageLayout::eShaderReadOnlyOptimal;

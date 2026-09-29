@@ -243,7 +243,10 @@ CSM/HFTS 共同硬前提。
       **代码未接**：阴影 pass 尚不存在，无消费者的扩展不预先请求（接入口 = 批 11.2 第 3 步）
 - [ ] 批 11.2：CSM 4 级 + PCSS；GPU ≤ 3 ms
 - [ ] 批 11.3：HFTS spike 出结论（做 / 收手二选一）
-- [ ] BIT-IDENTICAL 基线重建（新默认值已改视觉基线）
+- [x] BIT-IDENTICAL **新基线已建立（2026-09-29）**：默认配置 + 默认机位 + llm_debug 路径，
+      forward `md5 7a87251793dba125…`（sha256 `2ebb1f33036bc003…`）。同会话连跑两次逐位相同；
+      deferred `md5 1139acb4e29fb2cb…`，与 forward 差异 >8 的像素 **0.0%**、均值差 0.17
+      （= 批 11.0c 关掉 emission 4× 破口后的 D1 对等实测）。旧 forward 基线 `10b00c78…` 作废。
 - [ ] 跨驱动（NVIDIA / Intel）复测
 
 ---
@@ -447,3 +450,45 @@ extendedDynamicState3ExtraPrimitiveOverestimationSize = false
 2. **GPU 预算**：Phase 9 基线是 GPU 侧余量 ≈3.1 ms/帧、**CPU 侧无余量**。
    阴影 depth pass 是纯 GPU 光栅，283 万三角形重跑一遍是大头——**先用 1 级 cascade 实测
    单遍成本**，再决定 4 级是否可行（4 级不等于 4×：远处 cascade 可用粗 texel + 剔掉大部分几何）。
+
+
+---
+
+## 11. 批 11.2 基建落地记录（2026-09-29，§10.2 步骤 1-4）
+
+§10.2 的五步里**前四步已落地并逐位验证**，第五步（深度-only 管线）留给后续。
+
+### 11.1 改了什么（按 §10.2 清单对号）
+
+| 步骤 | 落地 | 备注 |
+|---|---|---|
+| ① 新 kind `depthOffscreen` | `render_graph.cppm` 枚举 + `aspectOf`/`isDepthKind`/`isRtBackedKind` + 深度格式词表 `rgDepthFormatTable` | **两表刻意分立**（颜色 `rgFormatTable` / 深度 `rgDepthFormatTable`）：合并后 `offscreen` 就能声明深度格式 → RT 缓存建出 `COLOR_ATTACHMENT` 用途 + `eColor` view = invalid usage，只有 VVL 抓得到 |
+| ② 放开 B1 | `precheckDrawPass` 改成"至少一个写附件"，并补对偶校验（一个写都没有 = 空 pass 仍拒） | 对偶校验是防"放宽"变成"全放开" |
+| ③ 执行器侧 | `SlotResolver` 四 kind 穷尽 + **`renderAreaFor`**（pass 的渲染区域）；`ensureOffscreenAttachments` 两类 RT 分流 + 独立 extent；RT 缓存 `ensure(..., aspect)`（深度档 usage/view aspect 走深度面） | 独立 extent 是新增能力：阴影图不能绑窗口尺寸 |
+| ④ shadow pass 本体 | `decorateShadowPass`（图首插）+ `StateKit::shadowState` + `segmentRange("shadow")` 空段 + `diagnostics.shadow_pass` 门 | **段内零 draw**（FrameDrawList 尚无阴影段）→ 画面逐位不变，这是刻意的中间态 |
+| ⑤ 深度-only 管线 | **未做** | 归后续 |
+
+### 11.2 实施中撞到的三件事（都不在原设计里）
+
+1. **`vk::Format::eD32Unorm` 根本不存在**。Vulkan 的深度格式是 `D16_UNORM` / `D32_SFLOAT` /
+   `D24_UNORM_S8_UINT` / `D32_SFLOAT_S8_UINT`。写错时 clang 报的是
+   `missing '#include <vulkan/vulkan_enums.hpp>'; 'eD16Unorm' must be declared before it is used`
+   —— 报的是**另一个**存在的枚举，把人往"模块里枚举常量不可见"的方向带偏（我确实先被带偏了，
+   去查了 rlstd 导出面）。**教训**：看到 "X must be declared before it is used" 且 note 指向
+   一个你没写过的名字，先怀疑**自己写错了**，再怀疑模块可见性。
+2. **零色附件的 pass 会让色态动态命令报 VVL**：`vkCmdSetColorBlendEnableEXT(): attachmentCount
+   must be greater than 0`（`setColorWriteMaskEXT` 同）。修法 = `applyDynamicState` 在
+   `colorAttachmentCount == 0` 时**整段跳过色态**（本来就无对象可作用）。既有 pass count ≥1
+   逐位不变。
+3. **`vk::Format` 枚举常量在模块接口分区不可用**（rlvk 的 GMF 头"可达但名字不可见"），
+   所以深度格式词表**不能**做成接口的 `inline constexpr`（同 rlstd 必须导出"完整可用面"那类坑的
+   Vulkan 版）——只能住在 impl，接口只暴露 `isKnownDepthRgFormat` + 复用 `resolveRgFormat`。
+
+### 11.3 验证（基线见 §6 的新基线条目）
+
+| 项 | 结果 |
+|---|---|
+| `just checks --strict` | 0 警告 / 100 个 .cppm |
+| `shadow_pass=false` 截图 md5 | `7a87251793dba1254a9a863683b4dd9f` = **与新基线全等**（基建对默认路径零影响） |
+| `shadow_pass=true` 45 s 冒烟 | 0 校验层报错、0 error 级日志；截图 md5 **与基线全等**（零 draw pass 对画面中性，符合设计） |
+| selfCheck | 新增 10 个样本（5 拓扑 + 5 结构断言）全绿，钉住：depth-only pass 可编译、两表分立、独立 extent 只对图属 RT 开放、空 pass 仍拒、装饰产物 = 图首 pass + depthOffscreen 附件、编译产物 aspect/extent/discard/plan.depth/colors 全部符合预期 |

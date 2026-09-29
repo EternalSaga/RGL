@@ -64,10 +64,19 @@ bool isReadUsage(RgUsage u) {
 	return u == RgUsage::sampleRead || u == RgUsage::transferRead;
 }
 
-/** 附件 kind → aspect mask（depth → eDepth，其余 → eColor）。 */
+/** 附件 kind → aspect mask（depth / depthOffscreen → eDepth，其余 → eColor）。 */
 vk::ImageAspectFlags aspectOf(RgAttachmentKind kind) {
-	return kind == RgAttachmentKind::depth ? vk::ImageAspectFlagBits::eDepth
-					       : vk::ImageAspectFlagBits::eColor;
+	return kind == RgAttachmentKind::depth || kind == RgAttachmentKind::depthOffscreen
+		       ? vk::ImageAspectFlagBits::eDepth
+		       : vk::ImageAspectFlagBits::eColor;
+}
+/** 是否"图属 RT"（执行器按名 ensure 的两类：颜色 offscreen + 深度 depthOffscreen）。 */
+bool isRtBackedKind(RgAttachmentKind kind) {
+	return kind == RgAttachmentKind::offscreen || kind == RgAttachmentKind::depthOffscreen;
+}
+/** 是否深度类附件（主深度图 / 图属深度 RT）——clearValue 取 depth 分量、aspect 走深度面。 */
+bool isDepthKind(RgAttachmentKind kind) {
+	return kind == RgAttachmentKind::depth || kind == RgAttachmentKind::depthOffscreen;
 }
 
 /** 统一错误构造：ErrorCode::RenderGraphInvalid + message。 */
@@ -116,7 +125,48 @@ struct CompileCtx {
 	}
 };
 
-/** ① 单 attachment 校验与落图：空名 / 重名 / swapchain 计数 / 按 kind 格式词表（offscreen 词表、余 inherit）→ 名字→slot + 图记录 + 游标。@return 失败带定位 Error */
+/**
+ * ① 附件格式按 kind 校验：**两表分立**——offscreen 查颜色词表、depthOffscreen 查深度词表
+ * （不合并的原因见 render_graph.cppm::isKnownDepthRgFormat 注释）；swapchain/depth 的格式
+ * 由执行器固定，只认 "inherit"。@return 失败带定位 Error
+ */
+std::expected<void, Error> validateAttachmentFormat(const RgAttachmentDesc& att) {
+	if (att.kind == RgAttachmentKind::offscreen) {
+		if (!isKnownRgFormat(att.format))
+			return std::unexpected(rgError(fmt::format(
+				"render graph: attachment '{}' has unknown format '{}'", att.name, att.format)));
+		return {};
+	}
+	if (att.kind == RgAttachmentKind::depthOffscreen) {
+		if (!isKnownDepthRgFormat(att.format))
+			return std::unexpected(rgError(fmt::format(
+				"render graph: depth attachment '{}' needs a depth format "
+				"(d32_sfloat / d16_unorm), got '{}'",
+				att.name, att.format)));
+		return {};
+	}
+	if (att.format != "inherit")
+		return std::unexpected(rgError(fmt::format(
+			"render graph: {} attachment '{}' must use format 'inherit' (got '{}')",
+			att.kind == RgAttachmentKind::swapchain ? "swapchain" : "depth", att.name,
+			att.format)));
+	return {};
+}
+
+/**
+ * ① 独立 extent 按 kind 校验：只对图属 RT（offscreen / depthOffscreen）开放——swapchain
+ * 尺寸由 surface 定、主深度图随 swapchain 重建（Resources 持有），给它们填尺寸 = 声明一个
+ * 执行器不会遵守的意图。@return 失败带定位 Error
+ */
+std::expected<void, Error> validateAttachmentExtent(const RgAttachmentDesc& att) {
+	if (isRtBackedKind(att.kind) || (att.extent[0] == 0u && att.extent[1] == 0u))
+		return {};
+	return std::unexpected(rgError(fmt::format(
+		"render graph: {} attachment '{}' must leave extent {{0,0}} (follows swapchain)",
+		att.kind == RgAttachmentKind::swapchain ? "swapchain" : "depth", att.name)));
+}
+
+/** ① 单 attachment 校验与落图：空名 / 重名 / swapchain 计数 / 格式（validateAttachmentFormat）/ 尺寸（validateAttachmentExtent）→ 名字→slot + 图记录 + 游标。@return 失败带定位 Error */
 std::expected<void, Error> registerAttachment(const RgAttachmentDesc& att, CompileCtx& ctx) {
 	if (att.name.empty())
 		return std::unexpected(rgError("render_graph: attachment with empty name"));
@@ -127,25 +177,19 @@ std::expected<void, Error> registerAttachment(const RgAttachmentDesc& att, Compi
 			rgError(fmt::format("render_graph: duplicate attachment name '{}'", att.name)));
 	if (att.kind == RgAttachmentKind::swapchain && ++ctx.swapchainCount > 1)
 		return std::unexpected(rgError("render_graph: more than one swapchain attachment"));
-	// 格式校验：offscreen 允许 "inherit" 或词表具名格式（Phase 7 G-buffer 显式
-	// RT / Phase 8 scene_hdr）；swapchain/depth 的格式由执行器固定，只认 "inherit"
-	if (att.kind == RgAttachmentKind::offscreen) {
-		if (!isKnownRgFormat(att.format))
-			return std::unexpected(rgError(fmt::format(
-				"render graph: attachment '{}' has unknown format '{}'", att.name, att.format)));
-	} else if (att.format != "inherit") {
-		return std::unexpected(rgError(fmt::format(
-			"render graph: {} attachment '{}' must use format 'inherit' (got '{}')",
-			att.kind == RgAttachmentKind::swapchain ? "swapchain" : "depth", att.name,
-			att.format)));
-	}
+	if (auto r = validateAttachmentFormat(att); !r)
+		return std::unexpected(std::move(r).error());
+	if (auto r = validateAttachmentExtent(att); !r)
+		return std::unexpected(std::move(r).error());
 	ctx.graph.attachments.push_back(RgCompiledAttachment{
 		.name = att.name,
 		.kind = att.kind,
 		.format = att.format,
+		.extent = att.extent,  // 独立 RT 尺寸透传（执行器装配消费；非图属 RT 恒 {0,0}）
 		.aspect = aspectOf(att.kind),
-		// 帧首丢弃规则：swapchain/depth 每帧内容按 loadOp 重建（现 ④ 的
-		// oldLayout=eUndefined 约定）；offscreen 持久图必须追踪真实布局
+		// 帧首丢弃规则：swapchain/depth/depthOffscreen 每帧内容按 loadOp 重建（现 ④ 的
+		// oldLayout=eUndefined 约定；阴影图每帧整幅 clear 亦归此档）；
+		// offscreen 持久图必须追踪真实布局
 		.frameStartDiscard = att.kind != RgAttachmentKind::offscreen,
 	});
 	ctx.slots.emplace_back();
@@ -160,19 +204,24 @@ std::expected<void, Error> registerAttachments(const RgGraphDesc& desc, CompileC
 	return {};
 }
 
-/** drawMesh pass 预检：state/drawSource 必填、恰有 colorWrite、depthWrite ≤1、读只 sampleRead、写只渲染类。 */
+/** drawMesh pass 预检：state/drawSource 必填、至少一个写附件（color 或 depth）、depthWrite ≤1、读只 sampleRead、写只渲染类。 */
 std::expected<void, Error> precheckDrawPass(const RgPassDesc& pass) {
 	if (pass.state.empty() || pass.drawSource.empty())
 		return std::unexpected(rgError(fmt::format(
 			"render_graph: draw pass '{}' requires non-empty state and drawSource", pass.name)));
 	const bool hasColor = std::ranges::any_of(
 		pass.outputs, [](const auto& a) { return a.usage == RgUsage::colorWrite; });
-	if (!hasColor)
-		return std::unexpected(rgError(fmt::format(
-			"render_graph: draw pass '{}' has no colorWrite output", pass.name)));
 	uint32_t depthWrites = 0;
 	for (const auto& a : pass.outputs)
 		if (a.usage == RgUsage::depthWrite) ++depthWrites;
+	// 原规则是"必须有 colorWrite"，把 **depth-only pass 整个挡在门外**（阴影深度 pass
+	// 只写深度、不写色，批 11.2 硬阻塞 B1，见 docs/phase11_plan.md §10.1）。放宽为
+	// "至少一个写附件"，并保留对偶校验：一个写都没有 = 空 pass，没有可渲染对象，
+	// 让它在这里报错而不是到 GPU 上静默跑一趟 begin/endRendering。
+	if (!hasColor && depthWrites == 0)
+		return std::unexpected(rgError(fmt::format(
+			"render_graph: draw pass '{}' has no write output (need colorWrite or depthWrite)",
+			pass.name)));
 	if (depthWrites > 1)
 		return std::unexpected(rgError(fmt::format(
 			"render_graph: draw pass '{}' has {} depthWrite outputs (max 1)", pass.name,
@@ -259,11 +308,11 @@ std::expected<RgAttachmentSlot, Error> validatePassRef(const RgPassDesc& pass,
 			"feedback or duplicate role)",
 			pass.name, a.attachment)));
 	const auto& compiled = ctx.graph.attachments[slot];
-	// usage 与 kind 匹配：**写**角色上 depth 附件只能 depthWrite、非 depth 附件不能
-	// depthWrite；**读**角色（sampleRead）不受此约束——depth 作被采样源是合法形态
-	// （Phase 11 批 11.4：ao pass 采深度）。非 depth 附件读 sampleRead 仍由
-	// precheckFullscreenPass / precheckBlitPass 各自限定。
-	if (a.usage == RgUsage::depthWrite && compiled.kind != RgAttachmentKind::depth)
+	// usage 与 kind 匹配：**写**角色上 depth 附件（主深度图或图属深度 RT）只能 depthWrite、
+	// 非深度附件不能 depthWrite；**读**角色（sampleRead）不受此约束——depth 作被采样源是
+	// 合法形态（Phase 11 批 11.4：ao pass 采深度；批 11.2：阴影图亦由光照 pass 采）。
+	// 非 depth 附件读 sampleRead 仍由 precheckFullscreenPass / precheckBlitPass 各自限定。
+	if (a.usage == RgUsage::depthWrite && !isDepthKind(compiled.kind))
 		return std::unexpected(rgError(fmt::format(
 			"render_graph: pass '{}' depthWrites non-depth attachment '{}'", pass.name,
 			a.attachment)));
@@ -273,8 +322,8 @@ std::expected<RgAttachmentSlot, Error> validatePassRef(const RgPassDesc& pass,
 		return std::unexpected(rgError(fmt::format(
 			"render_graph: pass '{}' reads '{}' before any write in the frame", pass.name,
 			a.attachment)));
-	// blit 两端不得是 depth 附件
-	if (pass.kind == RgPassKind::blit && compiled.kind == RgAttachmentKind::depth)
+	// blit 两端不得是深度类附件（transfer 与深度面 layout/aspect 语义不兼容）
+	if (pass.kind == RgPassKind::blit && isDepthKind(compiled.kind))
 		return std::unexpected(rgError(fmt::format(
 			"render_graph: blit pass '{}' cannot touch depth attachment '{}'", pass.name,
 			a.attachment)));
@@ -316,7 +365,7 @@ void planBeginRenderingEntry(const RgPassDesc& pass, const RgPassAttachment& a,
 		ap.layout = target.layout;
 		ap.loadOp = toVkLoad(a.loadOp);
 		ap.storeOp = toVkStore(a.storeOp);
-		ap.clearValue = compiled.kind == RgAttachmentKind::depth
+		ap.clearValue = isDepthKind(compiled.kind)
 			? vk::ClearValue{vk::ClearDepthStencilValue{a.clear.depth, 0u}}
 			: vk::ClearValue{std::array<float, 4>{a.clear.color}};
 		if (a.usage == RgUsage::depthWrite)
@@ -472,14 +521,40 @@ bool isKnownRgFormat(const std::string& name) {
 		[&](const auto& entry) { return entry.first == name; });
 }
 
-/** resolveRgFormat 定义（接口注释见 render_graph.cppm）："inherit"→fallback，具名→表查，漏网 eUndefined（不可达）。 */
+/**
+ * 深度附件格式词表（kind=depthOffscreen 专用；与 rgFormatTable 颜色词表**分立**的原因见
+ * render_graph.cppm::isKnownDepthRgFormat 注释）。与颜色词表同住在实现单元：
+ * `vk::Format::eXxx` 枚举常量在模块接口分区不可见（rlvk GMF 头可达但名字不可见）。
+ */
+const std::array<std::pair<std::string_view, vk::Format>, 2>& rgDepthFormatTable() {
+	static const std::array<std::pair<std::string_view, vk::Format>, 2> table = {
+		// 主用档 = 与主深度图同格式（D32_SFLOAT 是 Vulkan 保证存在的深度格式；
+		// **没有 D32_UNORM 这个格式**——写错时 clang 的"did you mean eD16Unorm"极易误导，
+		// 2026-09-29 实测踩过）。精度对单级 1024² cascade 足够。
+		std::pair{"d32_sfloat", vk::Format::eD32Sfloat},
+		std::pair{"d16_unorm", vk::Format::eD16Unorm},  // 省带宽档（多级 cascade 的省内存选择）
+	};
+	return table;
+}
+
+/** isKnownDepthRgFormat 定义（接口注释见 render_graph.cppm）：深度词表 any_of（"inherit" 不算）。 */
+bool isKnownDepthRgFormat(const std::string& name) {
+	return std::ranges::any_of(rgDepthFormatTable(),
+		[&](const auto& entry) { return entry.first == name; });
+}
+
+/** resolveRgFormat 定义（接口注释见 render_graph.cppm）："inherit"→fallback，具名先查颜色
+ *  词表再查深度词表（kDepthRgFormats），漏网 eUndefined（调用方保证已 isKnown*）。 */
 vk::Format resolveRgFormat(const std::string& name, vk::Format inheritFallback) {
 	if (name == "inherit")
 		return inheritFallback;
 	for (const auto& [text, format] : rgFormatTable())
 		if (text == name)
 			return format;
-	return vk::Format::eUndefined;  // 不可达（调用方保证已 isKnownRgFormat）
+	for (const auto& [text, format] : rgDepthFormatTable())
+		if (text == name)
+			return format;
+	return vk::Format::eUndefined;  // 不可达（调用方保证已 isKnown*Format）
 }
 
 /** compileRenderGraph 定义（接口注释见 render_graph.cppm）：五步 = ①registerAttachments ②precheckPass ③④planPassUses（barrier + beginRendering 条目）+ advanceCursors（游标/store 完整性）⑤finishPresent。 */

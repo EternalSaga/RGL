@@ -69,8 +69,11 @@ void validateRenderGraphForExecutor(const RGL::CompiledRenderGraph& graph) {
 	if (depthRefs != 1)
 		fail(fmt::format("render graph must reference exactly one depth attachment (got {})",
 			depthRefs));
-	static constexpr std::array<const char*, 3> kKnownDrawSources{"opaque", "skybox",
-		"transparent"};
+	static constexpr std::array<const char*, 4> kKnownDrawSources{"opaque", "skybox",
+		"transparent",
+		// 批 11.2 基建：阴影段。当前 FrameDrawList 还没有阴影段（空段，见 segmentRange），
+		// 即 shadow pass 零 draw、画面逐位不变——深度-only 管线归批 11.2 剩余部分
+		"shadow"};
 	// 单 pass 可解析性校验（三形态：blit 两端齐 / drawLight state 在词表 / draw state+
 	// drawSource 名字表）。手术 6：提为 lambda 降宿主认知复杂度——fail 经捕获共用、
 	// 错误消息逐字不变；continue → return（lambda 内提前结束本 pass 校验语义等价）。
@@ -93,8 +96,12 @@ void validateRenderGraphForExecutor(const RGL::CompiledRenderGraph& graph) {
 		}
 		// Phase 10 批 10.5/10.7：picking（id pass）/ highlight（高亮 pass）——两者都是
 		// 克隆条目重放，StateKit 各有对应动态状态段
-		if (pass.state != "opaque" && pass.state != "skybox" && pass.state != "transparent"
-			&& pass.state != "picking" && pass.state != "highlight")
+		// 状态名词表（与 StateKit 键集合同步）：三成员 + picking / highlight（批 10.5 /
+		// 10.7，克隆条目重放）+ shadow（批 11.2 基建，depth-only pass）
+		static constexpr std::array<const char*, 6> kKnownStates{"opaque", "skybox",
+			"transparent", "picking", "highlight", "shadow"};
+		if (!std::ranges::any_of(kKnownStates,
+				[&](const char* s) { return pass.state == s; }))
 			fail(fmt::format("render graph pass '{}' has unknown state '{}'", pass.name,
 				pass.state));
 		if (!std::ranges::any_of(kKnownDrawSources,
@@ -118,6 +125,10 @@ std::pair<uint32_t, uint32_t> segmentRange(std::string_view drawSource,
 	const uint32_t size = static_cast<uint32_t>(list.calls.size());
 	if (drawSource == "opaque") return {0, list.skyboxStart};
 	if (drawSource == "skybox") return {list.skyboxStart, list.transparentStart};
+	// 批 11.2 基建：阴影段还没有生产者（FrameDrawList 无阴影段）→ **空段**。必须显式
+	// 列在 transparent 兜底**之前**：兜底返回 {transparentStart, size}，漏这一条就等于
+	// 让 shadow pass 把透明段再画一遍（画进深度图 = 静默错渲染）。
+	if (drawSource == "shadow") return {0u, 0u};
 	return {list.transparentStart, size};
 }
 
@@ -129,11 +140,12 @@ struct SlotResolver {
 	const std::vector<RtAttachment*>& offscreenRt;
 	std::vector<vk::ImageLayout>& layouts;
 	vk::raii::CommandBuffer& cmd;
-	/** slot → VkImage（三 kind 穷尽）。 */
+	/** slot → VkImage（四 kind 穷尽）。 */
 	VkImage imageForSlot(RgAttachmentSlot slot) const {
 		switch (attachments[slot].kind) {
 			case RgAttachmentKind::swapchain: return swapchainImage;
 			case RgAttachmentKind::depth: return depthImage;
+			case RgAttachmentKind::depthOffscreen:  // 阴影图类：同走 RT 缓存
 			case RgAttachmentKind::offscreen: return offscreenRt[slot]->image.image;
 		}
 		return VK_NULL_HANDLE;  // 不可达（穷尽），消 warning
@@ -143,9 +155,21 @@ struct SlotResolver {
 		switch (attachments[slot].kind) {
 			case RgAttachmentKind::swapchain: return swapchainView;
 			case RgAttachmentKind::depth: return depthView;
+			case RgAttachmentKind::depthOffscreen:  // 阴影图类：同走 RT 缓存
 			case RgAttachmentKind::offscreen: return **offscreenRt[slot]->view;  /* optional 解引用 + raii handle */
 		}
 		return VK_NULL_HANDLE;
+	}
+	/**
+	 * 本 pass 的渲染区域（viewport/scissor + beginRendering.renderArea 用）。
+	 * 默认 = swapchain extent（既有全部 pass 逐位不变）；**例外**：深度写入的是
+	 * depthOffscreen（阴影图）时用该 RT 自己的 extent——阴影图分辨率与窗口解耦，
+	 * 若这里仍用窗口尺寸，viewport 会与 renderArea 不一致（贴图比例错 + 边缘漏画）。
+	 */
+	vk::Extent2D renderAreaFor(const RgPassPlan& pass, vk::Extent2D fallback) const {
+		if (!pass.depth || attachments[pass.depth->slot].kind != RgAttachmentKind::depthOffscreen)
+			return fallback;
+		return offscreenRt[pass.depth->slot]->extent;
 	}
 	/** 物化 + 发射一组 attachment barrier（单 DependencyInfo 批量）；oldLayout = 帧首丢弃（eUndefined）或跨帧/帧内追踪值，发射后推进 layouts 追踪。 */
 	void emitBarriers(std::span<const RgBarrierPlan> barriers) {
@@ -407,10 +431,18 @@ std::expected<void, Error> Renderer::ensureOffscreenAttachments(vk::Extent2D ext
 	std::vector<uint64_t> rtGenerations(renderGraph.attachments.size(), 0);
 	for (uint32_t s = 0; s < renderGraph.attachments.size(); ++s) {
 		const auto& att = renderGraph.attachments[s];
-		if (att.kind != RgAttachmentKind::offscreen)
+		// 图属 RT 两类同走本缓存（批 11.2 基建）：offscreen = 颜色档，
+		// depthOffscreen = 深度档（阴影图，aspect 随格式走深度面）
+		const bool depthRt = att.kind == RgAttachmentKind::depthOffscreen;
+		if (!depthRt && att.kind != RgAttachmentKind::offscreen)
 			continue;
 		const auto fmt = RGL::resolveRgFormat(att.format, swapchain->getFormat().format);
-		auto rtResult = rtCache->ensure(att.name, extent, fmt);
+		// 尺寸：声明了独立 extent 就用它，否则跟随 swapchain。阴影图必须独立——绑在窗口
+		// 尺寸上会让阴影 texel 密度随窗口变，且每次 resize 白白重建整张图
+		const vk::Extent2D rtExtent{att.extent[0] != 0u ? att.extent[0] : extent.width,
+			att.extent[1] != 0u ? att.extent[1] : extent.height};
+		auto rtResult = rtCache->ensure(att.name, rtExtent, fmt,
+			depthRt ? vk::ImageAspectFlagBits::eDepth : vk::ImageAspectFlagBits::eColor);
 		if (!rtResult)
 			return std::unexpected(std::move(rtResult).error());
 		offscreenRt[s] = *rtResult;
@@ -636,11 +668,15 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 			gpuProfilerEnd(cmd);  // blit 无渲染段，pass 时间戳就地收口
 			continue;
 		}
-		beginPassRendering(cmd, slots, pass, extent);
+		// 本 pass 的渲染区域：普通 pass = 窗口尺寸（逐位不变），写 depthOffscreen（阴影图）
+		// 的 pass = 该 RT 自己的 extent（分辨率与窗口解耦，见 SlotResolver::renderAreaFor）
+		const auto passExtent = slots.renderAreaFor(pass, extent);
+		beginPassRendering(cmd, slots, pass, passExtent);
 		// 动态状态在 draw 时采样（spec chapters/shaders.adoc "Setting State"），与
 		// bindShadersEXT 先后无约束；段首各 applyDynamicState 一次（Phase 5 语义，
-		// 状态对象经 pass.state 名解析——opaque/skybox/transparent 三成员不变）
-		RGL::applyDynamicState(cmd, extent.width, extent.height,
+		// 状态对象经 pass.state 名解析——opaque/skybox/transparent 三成员不变；
+		// viewport/scissor 尺寸随 passExtent，与上面 beginRendering.renderArea 同源）
+		RGL::applyDynamicState(cmd, passExtent.width, passExtent.height,
 			stateKit.stateFor(pass.state), stateKit.depthClipDynamicEnabled(),
 			static_cast<uint32_t>(pass.colors.size()));
 		// draw 三路分发（手术 6：提为 executePassDraws 私有方法——drawLight 全屏 /

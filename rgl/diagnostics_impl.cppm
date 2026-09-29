@@ -136,6 +136,7 @@ static void readInputProbes(sol::table& root, DiagnosticsConfig& cfg) {
 		cfg.configReload = readBool("config_reload", cfg.configReload);
 		cfg.shaderReload = readBool("shader_reload", cfg.shaderReload);
 		cfg.picking = readBool("picking", cfg.picking);
+		cfg.shadowPass = readBool("shadow_pass", cfg.shadowPass);
 		cfg.rpc = readBool("rpc", cfg.rpc);
 
 		// picking_probe = { frame = 30, x = 640, y = 360 }（脚本化点选：第 frame 帧自动
