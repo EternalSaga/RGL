@@ -147,6 +147,43 @@ float4 worldTangent(ObjectMatrix m, float4 t)
 // 卷积常数（Karis/Green 辐照度 A 因子：π·l0 + 2π/3·l1 + π/4·l2）在求值里施加，CPU 侧只投影
 // radiance（texture_pool::projectRadianceSH9，基函数与本处逐式一致，两端必须同步）。
 // 基函数与 CPU shBasis 严格相同（real SH，归一化常数烘焙）。
+// ── Phase 11 批 11.2：级联阴影（光空间 VP + 采样参数）──
+//
+// 尾区基址 @721696（= 辐照度区尾，与 scene_data.cppm kSceneDataShadowMatrixOffset
+// 钉死两侧）。区内布局（本文件字面量 = C++ 侧手写同源，改一侧必编译失账）：
+//   @721696 + cascade*64  mat4 光空间 VP（kSceneShadowCascadeCount = 4 槽）
+//   @721952  vec4 级联分界远距（对 eyePos 的平方距离，选级用）
+//   @721968  vec4 各级阴影图 texel 世界尺寸（2·r/mapSize，normal offset 用）
+//   @721984  vec4 (depthBias, normalOffsetScale, enabled, 保留)
+ObjectMatrix readShadowViewProj(uint cascadeIndex)
+{
+    uint base = 721696u + cascadeIndex * 64u;
+    ObjectMatrix m;
+    m.c0 = asfloat(sceneData.Load4(base));
+    m.c1 = asfloat(sceneData.Load4(base + 16u));
+    m.c2 = asfloat(sceneData.Load4(base + 32u));
+    m.c3 = asfloat(sceneData.Load4(base + 48u));
+    return m;
+}
+
+float4 readCascadeSplits()
+{
+    return asfloat(sceneData.Load4(721952u));
+}
+
+float4 readCascadeTexelSizes()
+{
+    return asfloat(sceneData.Load4(721968u));
+}
+
+// (x = NDC 深度偏置、y = normal offset 系数（以 texel 为单位）、z = 总开关、w 保留。
+// 关闭时仍读一下（uniform 读代价极低）但不取抽样 —— 图仍在图里、布局链完整
+// （否则会报"采样未转换布局的图"）。
+float4 readShadowParams()
+{
+    return asfloat(sceneData.Load4(721984u));
+}
+
 float3 irradianceSH(float3 n)
 {
     uint base = 721552u;  // kSceneDataIrradianceOffset（vkresources.cppm 字面量同步）

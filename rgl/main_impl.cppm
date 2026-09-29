@@ -249,8 +249,9 @@ CompiledGraphResult compileGraphOrThrow(const char* path) {
 	if (diagnostics().shadowPass) {
 		decorateShadowPass(graphConfig->desc, kShadowMapSize);
 		if (auto* logger = RLLogger::getInstance())
-			logger->info("shadow_pass: 已装饰 depth-only 阴影 pass（{}² {}，段内零 draw = 画面不变）",
-				kShadowMapSize, kShadowMapFormat);
+			logger->info("shadow_pass: 已装饰 depth-only 阴影 pass（{}² {}，{} 级；"
+					"段内 draw = 投影体，目前无采样消费者 → 画面逐位不变）",
+				kShadowMapSize, kShadowMapFormat, kActiveShadowCascades);
 	}
 	auto compiledGraph = compileRenderGraph(graphConfig->desc);
 	if (!compiledGraph)

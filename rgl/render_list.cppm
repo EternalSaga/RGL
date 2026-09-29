@@ -50,6 +50,11 @@ export struct RenderListState {
 	// Phase 5.5 批次 4：天空盒 draw 的 push data（shader 不声明 push constants，
 	// 推默认零值 DrawArgs 占位——pushDataEXT 与 shader 声明无关，见 DrawCall 契约）
 	RGL::DrawArgs skyboxArgs{};
+	// Phase 11 批 11.2：阴影段 push data（ShadowDrawArgs 8B，索引 = 分块号 × objectSlot）。
+	// 每帧只写一次且值不随时间变（objectIndex 永丸、cascadeIndex 永丸）——
+	// 故只 resize 不重填：resize 保留已有内容（对同一场景的相邻帧不会丢值）。
+	// 但仍保留“每帧重填”的可读性：下方渲染时明确赋 cascadeIndex，不依赖初始值。
+	std::vector<RGL::ShadowDrawArgs> shadowArgs;
 	// Phase 7 批次 4：CPU frustum culling 可见统计（renderListSystem 每帧填；可见/剔除计数）
 	uint32_t visibleCount = 0;
 	uint32_t culledCount = 0;

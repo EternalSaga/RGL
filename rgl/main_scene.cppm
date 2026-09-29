@@ -177,6 +177,11 @@ void bakePipelineEntries(UploadedAssets& uploaded, const SceneConfig& scene, boo
 				assetTable.getTexture(texIds.emissive[i]).heapSlot,
 				samplerSlot);
 			pipelines.bindToAsset(id, entryIdx);
+			// Phase 11 批 11.2：阴影 depth-only 管线条目。按 vertexSlot 去重（addShadowEntry
+			// 内部有表）——bistro 1591 个 primitive 共用约 8 个拼接块槽 → 仅 8 条目。
+			// 无条件分支：门控关时条目与 shadowCalls 都为空，GPU 产生一个未被引用的管线
+			// 条目（零成本；AGENTS「条目全按需建」纪律）。
+			pipelines.bindShadowToAsset(id, pipelines.addShadowEntry(assetTable.get(id).heapSlot));
 		};
 		// DIAG（configs/diagnostics.lua style_dist；Phase 4 批次 3 风格分布核查）：
 		// per-primitive 风格（unlit/pbr）+ 规格名分布。（lambda 独立计分）

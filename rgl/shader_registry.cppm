@@ -251,6 +251,33 @@ export class ShaderRegistry {
 	[[nodiscard]] uint32_t addAoEntry(uint32_t depthSlot, uint32_t samplerSlot);
 
 	/**
+	 * Phase 11 批 11.2：阴影 depth-only 管线条目。spec = "shadow"（shadow.mesh.spv + 空壳
+	 * shadow.frag.spv）。
+	 *
+	 * **为何按 vertexSlot 去重而不按六元组**：模型条目要区分 baseColor/normal/orm/
+	 * emissive 四个纹理槽，而阴影 mesh 只读 modelVertexBuffer（binding 0）与 sceneData（binding 3）
+	 * ——纹理槽外的一切都不消费，因此唯一变量就是 vertexSlot。
+	 * 每个 16MB 拼接块一个槽 → bistro 约 8 个条目（而不是 1591 个）。
+	 *
+	 * **为何不经模型条目的组合去重表**：阴影管线不读纹理逻辑（只读位置），
+	 * 不存在“同纹理槽但纹理槽不同”的需求；新建独立去重表会让“两套不同的去重键”
+	 * 同时存在（模型空闲槽为什么不能用阴影空闲槽——两者绑的不是同一个纹理 buffer）。
+	 *
+	 * binding 映射：0 = 顶点 buffer 槽；1 = 索引槽（占位，shadow mesh 不声明 = 空转）；
+	 * 3 = scene data（VP 区 + 对象矩阵表 + ObjectDraw 表）。**不纹理 / 不 sampler / 不 env**
+	 * ——因为 shadow mesh/frag 两个文件都不声明它们，烘焙了也是空转（既证无害）。
+	 * @param vertexSlot 顶点 buffer heap 槽（binding 0）
+	 * @return 条目下标（同槽重复调用返回既有下标）
+	 */
+	[[nodiscard]] uint32_t addShadowEntry(uint32_t vertexSlot);
+
+	/** 给模型资产回填阴影管线条目（启动期一次，与 bindToAsset 同节奏）。
+	 * @param assetId 资产记录 id
+	 * @param entryIdx addShadowEntry 返回的条目下标
+	 */
+	void bindShadowToAsset(uint32_t assetId, uint32_t entryIdx);
+
+	/**
 	 * 内建几何管线条目（架构债务 1 方案 B）：spec = "cube"，binding mapping = 传入资产记录的
 	 * 顶点/索引 heap 槽（无纹理/无 scene data = cube 形态，binding 0 = 顶点槽、
 	 * binding 1 落索引槽——非 textured 形态）。
@@ -357,6 +384,11 @@ export class ShaderRegistry {
 				"generated_shaders/tonemap.frag.spv"};  // mesh 复用全屏大三角（Phase 8 ①）
 			return &defaultTonemap;
 		}
+		if (std::strcmp(name, "shadow") == 0) {
+			static const RGL::PipelineSpec defaultShadow{
+				"shadow", "generated_shaders/shadow.mesh.spv", "generated_shaders/shadow.frag.spv"};
+			return &defaultShadow;
+		}
 		if (std::strcmp(name, "ao") == 0) {
 			static const RGL::PipelineSpec defaultAo{
 				"ao", "generated_shaders/light.mesh.spv",
@@ -374,6 +406,8 @@ export class ShaderRegistry {
 	std::map<std::string, RGL::PipelineSpec> styles;          // 风格名 → SPV 规格（scene.lua）
 	std::map<std::string, uint32_t> indexByName;              // 条目名 → 下标（启动期 name 解析）
 	std::map<std::tuple<std::string, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>, uint32_t> modelEntryBySlot;  // 模型条目去重表：(规格名, 顶点 slot, base 纹理 slot, normal slot, orm slot, emissive slot) → 下标
+	// 阴影条目去重表：唯一变量 = vertexSlot（见 addShadowEntry 注释）
+	std::map<uint32_t, uint32_t> shadowEntryBySlot;
 	std::vector<PipelineEntry> entries;                       // 管线表（下标 = 绘制契约）
 	// 克隆反查表（批 10.5 picking / 10.7 highlight，addCloneEntries 填）：第一维 =
 	// ClonePurpose，第二维 = 原条目下标 → 克隆条目下标。kNoClone = 该条目无此用途克隆；

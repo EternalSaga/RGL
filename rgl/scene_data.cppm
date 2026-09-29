@@ -132,6 +132,20 @@ static_assert(kSceneDataIrradianceOffset % 16 == 0, "irradiance region must stay
  * 2048 是一行改值的旋钮：内存 4→16 MB，GPU 成本只随**被光栅化的几何量**增长，
  * 不随贴图尺寸增长。
  */
+/**
+ * 阴影偏置默认值（Phase 11 批 11.2，look-dev 目标值，可通过后续 RPC 调参覆盖）。
+ *
+ * - `kShadowDepthBias`：**NDC 深度域**的常数偏置。为何不用光深 bias 推导出来的世界尺寸：
+ *   正交投影的深度是**线性**的（无透视组归一化敏感度），NDC 偏置 × (深度范围/世界尺寸)
+ *   = 常数。直接给 NDC 值使 bias 在**u8ddd离变化时自动缩放**（远处阴影图深度精度低、
+ *   近处高）——这正是我们要的行为，不需要再乘世界尺寸。
+ * - `kShadowNormalOffsetScale`：法线外推的 texel 数。acne 的**主手段**（bias 只是补丁）。1.5 是常见甜点：
+ *   小于 1 接近不足一个纹素 → 自遮挡仍发生（黑斑）；大于 2.5 接触阴影明显回撤。
+ *   剩余常数的含义见 shadow.slang 采样函数注释。
+ */
+export inline constexpr float kShadowDepthBias = 0.0015f;        // NDC 深度域
+export inline constexpr float kShadowNormalOffsetScale = 1.5f;   // texel 数
+
 export inline constexpr uint32_t kShadowMapSize = 1024;
 
 export inline constexpr uint32_t kSceneShadowCascadeCount = 4;
@@ -140,6 +154,20 @@ export inline constexpr uint32_t kSceneDataShadowMatrixOffset =
 export inline constexpr uint32_t kSceneDataShadowMatrixBytes =
 	kSceneShadowCascadeCount * static_cast<uint32_t>(sizeof(glm::mat4));
 static_assert(kSceneDataShadowMatrixOffset % 16 == 0, "shadow matrix region must stay 16B aligned");
+
+/** 阴影采样参数子区（跟在 VP 区之后，各 16B）。三个 vec4 与 scene.slang 逐字面量同源：
+ *  - 分界远距（x4）：每级级联的远截止平方距离，光照 shader 按片元刷实际距离选级；
+ *  - texel 世界尺寸（x4）：2·r/mapSize，normal offset 与偏置的世界尺度换算必需；
+ *  - 参数：(x = NDC 深度偏置、y = normal offset 系数（texel 单位）、z = 总开关、w 保留)。
+ * 为何单独一个子区而不拼进 VP 区：VP 是每槽 64B 矩阵，拼会破坏“区容量 = 固定槽数×stride”的简单不变式，
+ * 而参数是一段量级元数据（改 bias 不需动矩阵区）。 */
+export inline constexpr uint32_t kSceneDataShadowSplitsOffset = kSceneDataShadowMatrixOffset
+	+ kSceneDataShadowMatrixBytes;
+export inline constexpr uint32_t kSceneDataShadowTexelOffset = kSceneDataShadowSplitsOffset + 16u;
+export inline constexpr uint32_t kSceneDataShadowParamsOffset = kSceneDataShadowSplitsOffset + 32u;
+export inline constexpr uint32_t kSceneDataShadowAuxBytes = 48u;  // 分界远距 16 + texel 尺寸 16 + 参数 16
+static_assert(kSceneDataShadowSplitsOffset == 721952 && kSceneDataShadowParamsOffset == 721984,
+	"scene.slang shadow sampling literals drifted from scene_data.cppm offsets");
 // 与 scene.slang 的字面量基址钉死（两侧手写同步点，改一侧必编译失败）
 static_assert(kSceneDataShadowMatrixOffset == 721696,
 	"scene.slang readShadowViewProj literal 721696 out of sync with kSceneDataShadowMatrixOffset");
@@ -153,7 +181,8 @@ export inline constexpr vk::DeviceSize kSceneDataBytes =
 	+ vk::DeviceSize{kSceneMatrixCapacity} * kSceneMatrixStride
 	+ vk::DeviceSize{kSceneMatrixCapacity} * kSceneDrawStride
 	+ kSceneDataIrradianceBytes
-	+ kSceneDataShadowMatrixBytes;
+	+ kSceneDataShadowMatrixBytes
+	+ kSceneDataShadowAuxBytes;
 
 /**
  * SceneData buffer 服务（2026-09-19 架构债务续账步骤 1：原 Resources::ensureSceneData/

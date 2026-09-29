@@ -496,6 +496,55 @@ extendedDynamicState3ExtraPrimitiveOverestimationSize = false
 
 ---
 
+## 12.5 批 11.2 · 5a-2：阴影 pass 真正画出内容（depth-only 管线 + 投影体清单）
+
+基建（§11）后的第一步实实上线：阴影 pass 从“零 draw”变成“真的在光空间里光梲化几何”。
+
+### 12.5.1 落地内容
+
+| 项 | 内容 |
+|---|---|
+| `shadow.mesh.slang` | depth-only mesh；**自带 8B push** `ShadowDrawArgs{objectIndex, cascadeIndex}`（不 import material.slang）；只输出 `position`（不带 5 个无人消费的 varying）；变换链 = `readObjectMatrix` → `readShadowViewProj`（两段列组合，不预先在 CPU 乘进 VP） |
+| `shadow.frag.slang` | 空壳（无输出）——动态渲染里 depth-only pass 仍需一个 frag stage |
+| `addShadowEntry(vertexSlot)` | 去重键 = **vertexSlot 单一变量**（阴影 mesh 只读顶点 buffer + sceneData，不消费纹理）→ bistro 1591 primitive 共用约 8 个拼接块槽 = **8 条目而非 1591** |
+| `MeshAsset::shadowPipelineIndex` | 独立字段（不复用 `pipelineIndex`：两者绑的不是同一个纹理 buffer，去重键也不同） |
+| `FrameDrawList::shadowCalls` | **独立向量**，不拼进 `calls`（后者的段边界被 GPU culling 的候选序对账强依赖） |
+| `segmentRange` → `segmentSpan` | 改返回 `span`（两个段不共用索引空间）；阴影段名用**前缀匹配**（`"shadow"`），执行器拓扑校验同步改前缀匹配（两处分开写 = 拓扑允许未知 drawSource 静默落到 transparent 段 = 静默多画透明） |
+| 投影体剔除 | 世界球 × **光空间拟合球**（不是主视罞！）；只收不透明材质；**不过过 GPU culling**（候选表按主视罞建立，用它会漏掉靠谱面屋顶的投影体） |
+| scene data 子区 | 分界远距 / 各级 texel 世界尺寸 / 参数（depthBias, normalOffset, enabled）3 个 vec4，追在 VP 区之后（基址 721952/721968/721984，两侧字面量 static_assert 钉死） |
+
+### 12.5.2 为何阴影 mesh 不能复用 `material.slang` 的 DrawArgs
+
+DrawArgs 是 1591 条模型管线共享的 4B 推理契约（`material.slang` 单一真相源）。阴影需要多一个 `cascadeIndex`，而改那份共亮契约
+= 整表重建。故阴影管线**自带 push 块**（仍然只装纯索引，符合 bindless 原则）。体积几何与牌展示
+两类管线各自带推理块已有先例（`cull.comp` / `mip_gen.comp`）。
+
+### 12.5.3 验证
+
+| 项 | 结果 |
+|---|---|
+| `just checks --strict` | 0 警告 / 100 个 .cppm（doc-check 1006 声明） |
+| `shadow_pass=false` 截图 md5 | `7a87251793dba1254a9a863683b4dd9f` = **与基线全等** |
+| `shadow_pass=true` 截图 md5 | **与基线全等**（尚无采样消费者 → 阴影图内容不能影响成片，**这正是验证点**） |
+| `shadow_pass=true` VVL | 0 校验层报错、0 error 级日志 |
+| **GPU 实测（关门开 + profiler）** | 阴影 pass **1.627 ms**（p95 1.79）vs opaque 2.662 ms；`gpu.frame` 2.98 → **4.451 ms** |
+
+> “阴影 pass 真的画了”的确证方式：**GPU 时间戳区间**。无采样时它只能证明“没报错”，
+> 而 1.63 ms 的光梲化时间直接证明 2.8M 三角形确实渲染过了。
+
+### 12.5.4 预算弹性（实测结论，非计划）
+
+本机 Phase 9 判定的 GPU 侧余量约 **3.1 ms/帧**。单级阴影 pass 占 **1.63 ms** ——
+剩余约 1.5 ms。这直接决定了后续设计的上限：
+
+- **4 级全量绘制不可行**（4 × 1.63 = 6.5 ms，超预算 2 倍）。级联必须带**每级光空间剔除**，
+  且需实测验证总量落在预算内；
+- frag 侧 4 抽头 PCF 的开销还要从这 1.5 ms 里出（未实测，见 5a-3 记录）。
+
+---
+
+---
+
 ## 12. 批 11.2 · 5a-1 落地记录：scene data 阴影 VP 区 + 单级光空间矩阵
 
 ### 12.1 做了什么

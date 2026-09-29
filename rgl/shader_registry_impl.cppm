@@ -276,6 +276,38 @@ namespace RGL {
 		return index;
 	}
 
+	/** addShadowEntry 实现（契约见接口注释）。去重键 = vertexSlot。 */
+	uint32_t ShaderRegistry::addShadowEntry(uint32_t vertexSlot) {
+		if (const auto it = shadowEntryBySlot.find(vertexSlot); it != shadowEntryBySlot.end())
+			return it->second;
+		const RGL::PipelineSpec* spec = findSpec("shadow");
+		if (!spec)
+			throw std::runtime_error("pipeline spec not found: shadow");
+		RGL::PipelineBindings b{};
+		b.descriptorSize = res.getDescriptorHeap().getDescriptorSize();
+		b.slotVertex = vertexSlot;  // binding 0 = 顶点 buffer 槽（modelVertexBuffer 真正消费）
+		b.slotIndex = vertexSlot;   // binding 1 = 占位（shadow mesh 不声明 = 空转，同 light/ao 条目做法）
+		b.slotSceneData = sceneData.ensure();  // binding 3 = scene data（VP 区/对象矩阵/ObjectDraw）
+		b.hasSceneData = true;
+		// textured=false → 不烘焙 binding 1 的 baseColor 形态（上面 slotIndex 占位即此）；
+		// 不烘焙 env（612）、不纹理纹理槽（6-8）——两个 shader 文件均未声明它们。
+		auto entry = PipelineEntry{.name = fmt::format("shadow.v{}", vertexSlot),
+			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b),
+			.spec = *spec, .bindings = b};
+		const uint32_t index = static_cast<uint32_t>(entries.size());
+		indexByName[entry.name] = index;
+		shadowEntryBySlot[vertexSlot] = index;
+		entries.push_back(std::move(entry));
+		if (auto* logger = RLLogger::getInstance())
+			logger->debug("pipeline entry: shadow.v{} (vertex slot {}) → 下标 {}", vertexSlot,
+				vertexSlot, index);
+		return index;
+	}
+
+	void ShaderRegistry::bindShadowToAsset(uint32_t assetId, uint32_t entryIdx) {
+		assets.bindShadowPipeline(assetId, entryIdx);
+	}
+
 	uint32_t ShaderRegistry::addCubeEntry(uint32_t meshAssetId) {
 		if (auto idx = pipelineIndex("cube"))
 			return *idx;

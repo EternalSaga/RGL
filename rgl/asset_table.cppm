@@ -63,6 +63,12 @@ export struct MeshAsset {
 	// 索引 buffer（批次 3：cube 资产带索引；模型 primitive 去索引展开 = nullopt）
 	std::optional<VmaBuffer> indexBuffer;
 	std::optional<uint32_t> indexHeapSlot;
+	// Phase 11 批 11.2：阴影 depth-only 管线条目下标（ShaderRegistry::addShadowEntry 返回，
+	// main 经 bindShadowToAsset 写回）。为何单独一个而不复用 pipelineIndex：两者绑的不是同一个
+	// 纹理 buffer ——pipelineIndex 指向“读纹理 + 纹理槽”的模型管线，阴影管线只读顶点，
+	// 且两者的去重键不同（模型按六元组、阴影按 vertexSlot）。
+	// kInvalidPipelineIndex = 未回填（门控不开时 renderListSystem 跳过阴影段）。
+	uint32_t shadowPipelineIndex = kInvalidPipelineIndex;
 };
 
 /**
@@ -145,6 +151,8 @@ export class AssetTable {
 	[[nodiscard]] const MeshAsset& get(uint32_t id) const { return meshes[id]; }
 	/** 写回管线条目引用（ShaderRegistry::addModelEntry / bindPipelineToAsset 在创建管线条目后调用）。 */
 	void setPipelineIndex(uint32_t id, uint32_t pipelineIndex) { meshes[id].pipelineIndex = pipelineIndex; }
+	/** 写回阴影管线条目引用（ShaderRegistry::addShadowEntry 后由 bindShadowToAsset 调用）。 */
+	void bindShadowPipeline(uint32_t id, uint32_t entryIdx) { meshes[id].shadowPipelineIndex = entryIdx; }
 	/**
 	 * 注册带索引 mesh 资产（内建几何：顶点 + 索引双 buffer/双 slot，架构债务 1 方案 B 后由
 	 * builtin_geometry 上传路径调用——Resources 不再创建 cube buffer）。

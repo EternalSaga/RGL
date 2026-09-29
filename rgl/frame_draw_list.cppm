@@ -31,6 +31,24 @@ export struct DrawCall {
 };
 
 /**
+ * 阴影 pass 的 push constant（Phase 11 批 11.2，8B，与 DrawArgs 不共用块）。
+ *
+ * **为何不直接给 DrawArgs 加一个 cascadeIndex 字段**：DrawArgs 是 material.slang
+ * 的全局共享契约（9B1 条模型管线条目全部按它烘焙 binding mapping，改布局
+ * = 整表重建）；而阴影只需多带一个索引。两者的区别在 shader 侧已有例子（体积几何
+ * 与牌展示两类管线各自带推理块）。
+ *
+ * 两个字段都是**纯索引**（AGENTS bindless 原则）：objectIndex 索 scene data 各
+ * per-object 表（与 DrawArgs.objectIndex 同值），cascadeIndex 索阴影 VP 区槽。
+ */
+export struct ShadowDrawArgs {
+	uint32_t objectIndex = 0;   // 与 DrawArgs.objectIndex 同值（MeshRef.objectSlot）
+	uint32_t cascadeIndex = 0;  // 阴影图分块号（对应 shadow.mapDrawSource 名后缀）
+};
+static_assert(sizeof(ShadowDrawArgs) == 8,
+	"ShadowDrawArgs layout drifted from shadow.mesh.slang ShadowDrawArgs (scalar layout)");
+
+/**
  * 场景级每帧动态数据（Phase 5 批次 2，bindless）：渲染 system 产出、drawFrame 消费——
  * CPU 写 staging[currentFrame] + 录制期 vkCmdCopyBuffer 拷进 scene data buffer
  *（布局契约见 scene.slang SceneLight / scene_forward_types_generated）。objectMatrices 按
@@ -77,6 +95,14 @@ export struct SceneFrameData {
 	// kSceneShadowCascadeCount（一次留够 4 槽，见 scene_data.cppm 该区注释）；5a-1 只写
 	// [0]（单级、拟合场景包围球、相机无关 = 无爬行），[1..3] 留单位阵（尚无消费者）。
 	std::array<glm::mat4, kSceneShadowCascadeCount> shadowViewProj{};
+	// 阴影采样参数（scene data 尾区子区，基址见 scene_data.cppm
+	// kSceneDataShadowSplitsOffset；shadow.slang 逐字面量对应）：
+	//  · shadowSplits —— 每级远截止平方距离（选级用；当前未切分 = 全小值、全落级 0）
+	//  · shadowTexelSizes —— 每级阴影图 texel 的世界尺寸（2·r/mapSize，normal offset 用）
+	//  · shadowParams —— (x=depthBias, y=normalOffsetScale, z=总开关, w=保留)
+	glm::vec4 shadowSplits{1e9f, 1e9f, 1e9f, 1e9f};
+	glm::vec4 shadowTexelSizes{};
+	glm::vec4 shadowParams{};
 };
 
 /**
@@ -105,6 +131,12 @@ export struct FrameDrawList {
 	std::vector<DrawCall> calls;
 	uint32_t skyboxStart = 0;       // 无天空盒 = 与 transparentStart 重合（空段跳过）
 	uint32_t transparentStart = 0;
+	// Phase 11 批 11.2：阴影段（**独立向量，不属于 calls**）。为什么不拼进 calls：
+	// calls 的段边界（skyboxStart / transparentStart）被 GPU culling 的候选序对账与
+	// cull_driver 重放路强依赖（采样候选表 = CPU opaque 段序），插一个新段就要重新对账；
+	// 而阴影段的可见集与主视野不同（下方“源几何”备注），属于独立通道。
+	// drawSource = "shadow" + 分块号字符串（见 scene_context::shadowDrawSource）。
+	std::vector<DrawCall> shadowCalls;
 	// Phase 10 批 10.7：点选高亮通道（**纯 CPU 侧**）——高亮 pass 录制期据此过滤 draw：
 	// 只画 materialBySlot[objectSlot] == selectedMaterial 的 draw，即「选中材质全部实体
 	// 一起发光」。hasSelection=false → 该 pass 零 draw 空转。
@@ -122,5 +154,29 @@ export struct FrameDrawList {
 	// 值——序列 CPU 侧全量装配）；重放/DGC 消费 = 与 CPU drawOne 位级同源的 DrawArgs。
 	std::vector<RGL::DrawArgs> cullArgs;
 };
+
+/**
+ * FrameDrawList 段名 → draw 序列（段名 = 机械映射，返回 span 而非下标区间）。
+ *
+ * **为何改 span**：阴影段存在独立向量 FrameDrawList::shadowCalls 里（见该字段注释：不拼进
+ * calls 是为了不打破 GPU culling 的候选序对账契约），二者不共用索引空间 → 一个统一的
+ * span 返回值比“返回下标对、由调用点自己取对应向量”不容易错。
+ * @param drawSource 段名（"opaque" / "skybox" / "transparent" / "shadow0..3"）
+ * @param list 每帧绘制列表
+ * @return 该段的 draw 序列（空段 = 空 span，无特判）
+ */
+export std::span<const DrawCall> segmentSpan(std::string_view drawSource,
+	const FrameDrawList& list) {
+	if (drawSource == "opaque")
+		return {list.calls.data(), list.skyboxStart};
+	if (drawSource == "skybox")
+		return {list.calls.data() + list.skyboxStart, list.transparentStart - list.skyboxStart};
+	// 阴影段：独立向量 + 名字串前缀匹配（"shadow" / "shadow0" / "shadow2" …都命中同一段）。
+	// 先判前缀再退到 transparent 兼容分支：退容分支返回【transparentStart, size)。
+	// 漏掉前缀判断等于让 shadow pass 把透明段再画一遍进阴影图（静默错渲染）。
+	if (drawSource.starts_with("shadow"))
+		return list.shadowCalls;
+	return {list.calls.data() + list.transparentStart, list.calls.size() - list.transparentStart};
+}
 
 }  // namespace RGL

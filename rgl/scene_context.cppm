@@ -218,6 +218,29 @@ export inline Bounds frustumBoundingSphere(const glm::mat4& viewProj) {
 }
 
 /**
+ * Phase 11 批 11.2：级联数量与当前生效级数。
+ *
+ * **为何区分两个常量**：`kSceneShadowCascadeCount`（定义在 scene_data.cppm，**不在此复制**）
+ * 是 **scene data 区容量**（一次性预留 4 槽，避免后续加级联时再动尾部基址）；
+ * 本常量 `kActiveShadowCascades` 是**本帧实际渲染与采样用到的级数**。两者分离后，“预留 4 槽但只画
+ * 1 级”才是一行配置。切换本身是**一行**（详见 phase11_plan.md §10 级联切分记录）。
+ */
+export inline constexpr uint32_t kActiveShadowCascades = 1;  // 当前生效级数（切分未做）
+
+/** 阴影 pass 名（图内通用名，不带分块号）。 */
+export inline std::string_view shadowPassName() { return "shadow"; }
+
+/** 阴影 pass 的 drawSource（FrameDrawList 段名 = "shadow" + 分块号）。
+ *  分块号进字符串而不是固定 4 个名字面量：执行器的拓扑校验与 segmentSpan 都走
+ *  同一条“前缀匹配”路径，kActiveShadowCascades 从 1 改 4 时无需动任何词表。
+ * @param cascade 分块号
+ * @return 段名（小字符串，调用点在图编译/录制期即消耗）
+ */
+export inline std::string shadowDrawSource(uint32_t cascade) {
+	return "shadow" + std::to_string(cascade);
+}
+
+/**
  * Phase 11 批 11.2：定向光的**单级**光空间 VP 矩阵（阴影图用，列主序 proj·view）。
  *
  * **拟合目标 = 相机视锥的包围球**（frustumBoundingSphere），不是场景包围球。这一点是

@@ -1,6 +1,7 @@
 module render_graph:decorate;
 
-import render_graph;  // clang 不给 partition 实现单元隐式 import 主接口——必须显式
+import render_graph;
+import scene_context;  // shadowPassName / shadowDrawSource（阴影 pass 名与段名的单一来源）  // clang 不给 partition 实现单元隐式 import 主接口——必须显式
 import rlstd;
 
 // 诊断装饰 pass（2026-09-29 自 render_graph_impl 拆出，解该文件 500 代码行红线）：

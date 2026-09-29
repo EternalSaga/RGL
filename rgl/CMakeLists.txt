@@ -40,6 +40,12 @@ rgl_shader(deferred_geometry_light.frag DEFERRED_GEOM_LIGHT_FRAG_SPV deferred_ge
 # Phase 7 D1：light pass（全屏大三角 mesh + 采样 G-buffer 的 deferred 光照 frag）
 rgl_shader(light.mesh LIGHT_MESH_SPV)
 rgl_shader(light.frag LIGHT_FRAG_SPV scene lights sky)
+# Phase 11 批 11.2：级联阴影 depth-only 管线。mesh 自带 8B push（objectIndex +
+# cascadeIndex）——**不 import material.slang**：共享的 4B DrawArgs 契约不能为阴影多加一个
+# 字段（改了 = 1591 条模型条目全重建），故阴影管线自带 push 块。frag 空壳（无输出）。
+# shadow.slang（采样契约，被 forward/deferred 两条光照路 import）无新结构体 → 不需单独反射管线。
+rgl_shader(shadow.mesh SHADOW_MESH_SPV model scene)
+rgl_shader(shadow.frag SHADOW_FRAG_SPV)
 # Phase 8 批次 ①：HDR tonemap frag（mesh 复用 light.mesh.spv；import scene 读 @56 曝光）
 rgl_shader(tonemap.frag TONEMAP_FRAG_SPV scene)
 # Phase 11 批 11.4：SSAO frag（mesh 复用 light.mesh.spv 全屏大三角；import scene 读

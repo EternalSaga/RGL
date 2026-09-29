@@ -29,7 +29,7 @@ import gpu_profiler;  // Phase 9.2：GPU 时间戳钩子（读回归并进 9.1 �
 import diagnostics;
 import vulkan_utils;
 import VmaRaii;
-import frame_draw_list;
+import frame_draw_list;  // segmentSpan（段名 → draw 序列）
 import model_types_generated;
 import lights_types_generated;
 import material_types_generated;  // DrawArgs（GPU culling 对账经 objectIndex 映射 CPU draw）
@@ -69,11 +69,13 @@ void validateRenderGraphForExecutor(const RGL::CompiledRenderGraph& graph) {
 	if (depthRefs != 1)
 		fail(fmt::format("render graph must reference exactly one depth attachment (got {})",
 			depthRefs));
-	static constexpr std::array<const char*, 4> kKnownDrawSources{"opaque", "skybox",
-		"transparent",
-		// 批 11.2 基建：阴影段。当前 FrameDrawList 还没有阴影段（空段，见 segmentRange），
-		// 即 shadow pass 零 draw、画面逐位不变——深度-only 管线归批 11.2 剩余部分
-		"shadow"};
+	// 阴影段名 = "shadow" + 分块号（scene_context::shadowDrawSource）。不列入本词表：
+	// 分块号可变（kActiveShadowCascades 1→4），写死字面量会在切级联时漏校验。
+	// 改用前缀匹配（与 segmentSpan 同一条路径）——两处必须同步，否则拓扑允许未知
+	// drawSource 静默落到 transparent 段上（=静默多画一遍透明）。
+	const auto isKnownDrawSource = [](std::string_view s) {
+		return s == "opaque" || s == "skybox" || s == "transparent" || s.starts_with("shadow");
+	};
 	// 单 pass 可解析性校验（三形态：blit 两端齐 / drawLight state 在词表 / draw state+
 	// drawSource 名字表）。手术 6：提为 lambda 降宿主认知复杂度——fail 经捕获共用、
 	// 错误消息逐字不变；continue → return（lambda 内提前结束本 pass 校验语义等价）。
@@ -104,32 +106,12 @@ void validateRenderGraphForExecutor(const RGL::CompiledRenderGraph& graph) {
 				[&](const char* s) { return pass.state == s; }))
 			fail(fmt::format("render graph pass '{}' has unknown state '{}'", pass.name,
 				pass.state));
-		if (!std::ranges::any_of(kKnownDrawSources,
-				[&](const char* s) { return pass.drawSource == s; }))
+		if (!isKnownDrawSource(pass.drawSource))
 			fail(fmt::format("render graph pass '{}' has unknown drawSource '{}'", pass.name,
 				pass.drawSource));
 	};
 	for (const auto& pass : graph.passes)
 		validatePass(pass);
-}
-
-/**
- * FrameDrawList 段边界 → [begin, end)（drawSource 名 = 段名的机械映射，
- * 段序契约 = FrameDrawList 注释：opaque | skybox | transparent）。
- * @param drawSource 段名（"opaque" / "skybox" / 其余按 "transparent"）
- * @param list 每帧绘制列表（skyboxStart / transparentStart 边界 + calls）
- * @return calls 内的半开区间 [begin, end)
- */
-std::pair<uint32_t, uint32_t> segmentRange(std::string_view drawSource,
-	const FrameDrawList& list) {
-	const uint32_t size = static_cast<uint32_t>(list.calls.size());
-	if (drawSource == "opaque") return {0, list.skyboxStart};
-	if (drawSource == "skybox") return {list.skyboxStart, list.transparentStart};
-	// 批 11.2 基建：阴影段还没有生产者（FrameDrawList 无阴影段）→ **空段**。必须显式
-	// 列在 transparent 兜底**之前**：兜底返回 {transparentStart, size}，漏这一条就等于
-	// 让 shadow pass 把透明段再画一遍（画进深度图 = 静默错渲染）。
-	if (drawSource == "shadow") return {0u, 0u};
-	return {list.transparentStart, size};
 }
 
 /** attachment slot → VkImage/View 解析 + barrier 物化发射（手术 6：drawFrame 内 imageForSlot/viewForSlot/emitBarriers 三个 lambda 改造为文件内 struct——搬移非重写、逐条命令等价；持 swapchain/depth 句柄 + offscreenRt + 追踪布局表引用 + 本帧 cmd，生命周期 = drawFrame 一次调用）。 */
@@ -317,9 +299,15 @@ void Renderer::createSceneStaging(RGL::Resources& vkResources) {
 	std::memcpy(stage + kSceneDataAoOffset, &list.sceneData.aoStrength, sizeof(float));
 	// Phase 5.5 批次 4：skyboxInvViewProj 写 @64（sky.slang skyClipToWorld 消费）
 	std::memcpy(stage + kSceneDataSkyOffset, &list.sceneData.skyInvViewProj, sizeof(glm::mat4));
-	// Phase 11 批 11.2：阴影光空间 VP 区（尾区追加，4 槽；5a-1 只用 [0]）
+	// Phase 11 批 11.2：阴影光空间 VP 区（尾区追加，4 槽）+ 采样参数子区（3 个 vec4）
 	std::memcpy(stage + kSceneDataShadowMatrixOffset, list.sceneData.shadowViewProj.data(),
 		kSceneDataShadowMatrixBytes);
+	std::memcpy(stage + kSceneDataShadowSplitsOffset, &list.sceneData.shadowSplits,
+		sizeof(glm::vec4));
+	std::memcpy(stage + kSceneDataShadowTexelOffset, &list.sceneData.shadowTexelSizes,
+		sizeof(glm::vec4));
+	std::memcpy(stage + kSceneDataShadowParamsOffset, &list.sceneData.shadowParams,
+		sizeof(glm::vec4));
 	const auto matricesBytes = list.sceneData.objectMatrices.size() * sizeof(glm::mat4);
 	if (matricesBytes > kSceneMatrixCapacity * kSceneMatrixStride)
 		return std::unexpected(Error{ErrorCode::Unknown,
@@ -478,9 +466,8 @@ void Renderer::drawOne(vk::raii::CommandBuffer& cmd, const DrawCall& call) {
  */
 void Renderer::replayClonedPass(vk::raii::CommandBuffer& cmd, const FrameDrawList& list,
 	ClonePurpose purpose, uint32_t materialFilter) {
-	const auto [segBegin, segEnd] = segmentRange("opaque", list);
-	for (uint32_t i = segBegin; i < segEnd; ++i) {
-		const auto& call = list.calls[i];
+	const auto seg = segmentSpan("opaque", list);
+	for (const auto& call : seg) {
 		if (materialFilter != kNoMaterialFilter) {
 			// objectIndex 在 pushData 里（DrawArgs 4B，同 cull_driver 的 reinterpret 手法）；
 			// 越界 = 表与 draw list 不同步（契约破裂）→ 跳该 draw 而非读越界内存
@@ -578,9 +565,8 @@ void Renderer::executePassDraws(vk::raii::CommandBuffer& cmd, const RgPassPlan& 
 		// 能力位自动切换，重放顺序契约见其类注释）
 		cullDriver.executeOpaqueSegment(cmd, list, registry, frameSlot);
 	} else {
-		const auto [segBegin, segEnd] = segmentRange(pass.drawSource, list);
-		for (uint32_t i = segBegin; i < segEnd; ++i)
-			drawOne(cmd, list.calls[i]);
+		for (const auto& call : segmentSpan(pass.drawSource, list))
+			drawOne(cmd, call);
 	}
 }
 
