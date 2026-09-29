@@ -259,7 +259,12 @@ Phase 11：阴影（大特性，一口气；风险分层 = CSM 承诺交付 + HF
     默认 0.5，强度 0 逐位旁路）。计划与实际偏差（判据改了、11.0c 未做）见
     [phase11_plan.md](phase11_plan.md) §8；排障细节见 调试历史 2026-09-29。
   ① 保守光栅化基建（VK_EXT_conservative_rasterization，RADV 26.2.1 已实测可用 rev 1）：
-     深度写入保守化（重叠三角形不留缝）——CSM/HFTS 共同硬前提
+     深度写入保守化（重叠三角形不留缝）——CSM/HFTS 共同硬前提。
+     **能力边界已实测（2026-09-29，phase11_plan.md §9）**：OVERESTIMATE 基线语义可用，
+     但 `maxExtraPrimitiveOverestimationSize = 0` = **没有外扩（fattening）余量**，
+     漏光只能靠 normal offset + slope-scaled depth bias；好在
+     `extendedDynamicState3ConservativeRasterizationMode = true` → 走 DynamicState，
+     不为它加管线条目
   ② CSM（Cascaded Shadow Maps）先行【承诺交付】：depth-only 阴影深度 pass（mesh 管线
      新条目类型，无材质分叉）+ 4 级 cascade + PCSS 采样；**光锥剔除复用 ④c GPU culling
      模式**（现 GPU cull 只剔相机视锥，阴影 pass 需按光锥重跑一遍 culling dispatch）；

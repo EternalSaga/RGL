@@ -238,7 +238,9 @@ CSM/HFTS 共同硬前提。
 - [x] 批 11.4（新增）：SSAO 落地，默认 strength 0.5；`strength=0` 在三个 shader 版本间
       截图 sha256 相同（逐位旁路成立）；GPU 代价 1.5%（128 → 125 fps）
 - [x] 湿面：`pack.py` 的 `WET_ROUGHNESS_SCALE`；资产侧结果与 RPC 逐材质验证**逐位一致**
-- [ ] 批 11.1：保守光栅化 RADV 实测通过
+- [~] 批 11.1：保守光栅化 RADV 能力**已实测**（§9）—— OVERESTIMATE 基线可用、
+      `maxExtraPrimitiveOverestimationSize = 0` 无外扩余量、可走 DynamicState3。
+      **代码未接**：阴影 pass 尚不存在，无消费者的扩展不预先请求（接入口 = 批 11.2 第 3 步）
 - [ ] 批 11.2：CSM 4 级 + PCSS；GPU ≤ 3 ms
 - [ ] 批 11.3：HFTS spike 出结论（做 / 收手二选一）
 - [ ] BIT-IDENTICAL 基线重建（新默认值已改视觉基线）
@@ -341,3 +343,107 @@ effective = 0.163 × ORM.G(0.737) ≈ **0.12**（水膜）。**平台期实测**
   同时把 `decorateHighlightPass` 的消费点判定收紧为**只匹配色附件** —— 否则 ao 会被
   误当消费点，colorAtt 取到 `"depth"` 与 depthAtt 撞名，编译期报
   `references attachment 'depth' more than once`。
+
+---
+
+## 9. 批 11.1 调查：保守光栅化在 RADV 上的真实能力（2026-09-29，vulkaninfo 实测）
+
+原计划写"VK_EXT_conservative_rasterization，RADV 26.2.1 已实测可用 rev 1"——**这句不完整，
+会误导 批 11.2**，补实测属性表：
+
+```
+VkPhysicalDeviceConservativeRasterizationPropertiesEXT:
+    primitiveOverestimationSize                  = 0
+    maxExtraPrimitiveOverestimationSize          = 0
+    conservativePointAndLineRasterization        = false
+    degenerateTrianglesRasterized                = true
+    degenerateLinesRasterized                    = false
+    fullyCoveredFragmentShaderInputVariable      = true
+    conservativeRasterizationPostDepthCoverage   = true
+（VK_EXT_conservative_rasterization : extension revision 1）
+extendedDynamicState3ConservativeRasterizationMode    = true
+extendedDynamicState3ExtraPrimitiveOverestimationSize = false
+```
+
+### 结论
+
+1. **要的能力有**：`OVERESTIMATE` 模式的基线语义 = "fragment 方形与三角形**有重叠就出
+   fragment**"（而非默认像元中心测试）。这正是阴影深度 pass 要的"共面三角形之间不留缝"，
+   且 `primitiveOverestimationSize = 0` 不妨碍它——该值是在基线之上**再加**的量。
+2. **要不到的能力要说清楚**：`maxExtraPrimitiveOverestimationSize = 0` → **无法再把三角形
+   外扩**。所以"加粗 fattening 挡薄几何/双面片漏光"这条路在 RADV 上没有硬件支持，
+   CSM 设计**不得依赖它**。（`extendedDynamicState3ExtraPrimitiveOverestimationSize`
+   同样是 false，动态状态也救不了。）
+3. **架构契合点是动态状态**：`extendedDynamicState3ConservativeRasterizationMode = true`
+   → 保守模式可以走 **DynamicState**，与本项目既有的 ShaderObject + DynamicState 路线一致，
+   **不需要**为阴影 pass 新增管线条目（管线表在 bistro 基准下已有 312 条，见
+   `shader_object_组合成本与优化预留.md`）。
+4. `conservativeRasterizationPostDepthCoverage = true` 是 CSM 之后若要做
+   **early-Z 的 HFTS/FTIZB 路线**（批 11.3）的又一个前提，顺带确认它成立。
+
+### 对 批 11.2 的直接影响（写进设计前置）
+
+- 阴影深度 pass 用 `OVERESTIMATE` + extraSize=0，**只当作"无缝"用，不要当作"加宽"用**；
+- 漏光问题改用 **normal offset（阴影着色期沿法线偏移采样点）+ slope-scaled depth bias**
+  组合解决，这是 RADV 上唯一可用的手段；
+- **保守模式只在阴影 pass 开**：主 pass 开 OVERESTIMATE 会让像素边缘多写深度，而 ao pass
+  正是**读深度重建世界坐标**——两者相互作用属于不必要的风险面。
+
+---
+
+## 10. 批 11.2 CSM 实施设计（2026-09-29 定稿；两个硬阻塞 + 最小改动清单）
+
+### 10.1 先说结论：现在的渲染图**表达不出**阴影 pass，两处硬阻塞
+
+不是"加个 pass 就行"。逐条实测/读码确认（锚点为 2026-09-29 的 `文件:行号`）：
+
+| # | 阻塞 | 位置 | 症状 |
+|---|---|---|---|
+| **B1** | **depth-only pass 被拒**：drawMesh pass 必须有 colorWrite | `render_graph_impl.cppm:169-172`（`precheckDrawPass`） | 阴影 pass 只写深度、不写色 → 编译期直接报 `draw pass 'shadow' has no colorWrite output` |
+| **B2** | **depthWrite 只允许 `kind=depth`，而 `kind=depth` 恒等于 Resources 持有的**交换链尺寸主深度图 | 校验 `render_graph_impl.cppm:265-269`；解析 `vkrenderer_impl.cppm:136`（`case depth: return depthImage`）与 `:145`（`depthView`） | 阴影图需要**独立尺寸**（如 2048²，与窗口无关）、**独立生命周期**（跨帧存活给 light pass 采样）、可选**数组/图集**承载 4 级 cascade —— 现在的 `kind=depth` 一条通道表达不了 |
+
+`RgAttachmentKind` 现仅三值：`swapchain / depth / offscreen`（`render_graph.cppm:49-53`）。
+
+### 10.2 最小改动清单（按依赖顺序，每步可独立验收）
+
+1. **新 kind `depthOffscreen`**（图属 transient 深度 RT，归 RenderTargetCache 而非 Resources）：
+   - `render_graph.cppm:49` 枚举 + 三行职责注释；
+   - `render_graph_impl.cppm` 的 `aspectForKind`（kind→aspect）**必须返回 `eDepth`** ——
+     漏了就是"屏障用 eColor 转深度图"，RADV 上表现为随机黑块，最难查；
+   - `registerAttachment` 的按 kind 格式词表校验：`depthOffscreen` 只收深度格式；
+   - `rgFormatTable`（`render_graph_impl.cppm:444`，现 14 项）补 `d32_unorm`（主用）与
+     `d16_unorm`（低带宽档）两个词；
+   - `validatePassRef` 的 B2 判据放宽为"`depthWrite` 允许 `depth` 或 `depthOffscreen`"。
+2. **放开 B1**：`precheckDrawPass` 改成"至少一个写附件"（colorWrite **或** depthWrite），
+   并把"无 colorWrite 的 drawMesh pass 必须有 depthWrite"作为对偶校验，避免空 pass 蒙混过关。
+3. **执行器侧**：`SlotResolver::imageForSlot / viewForSlot` 加 `depthOffscreen` 分支
+   （`vkrenderer_impl.cppm:136/145` 旁）；RenderTargetCache 需支持深度格式 +
+   **`eDepth` aspect 的 view**（采样侧只用 depth aspect，别把 stencil 带进来）。
+   注意 `beginPassRendering` 的 depth 条目目前只认 `pass.depth`——要让它从 colors/depth
+   计划里按 kind 取（阴影 pass 的 depth 就是它的 `depthOffscreen` 附件）。
+4. **shadow pass 本体**：`kind=drawMesh`、`drawSource="shadow"`、**必须是图内第一个 pass**
+   （不依赖相机深度，且放最前可让 barrier 推导最简单）；
+   `outputs = { shadow_map depthWrite load=clear(1.0) store=store }`，无 color 附件。
+5. **cascade 数组**：首选**单张 2D 图集**（4 级 = 2×2 tile，viewport/scissor 切换）而非
+   image array —— 后者要 per-layer 描述符，descriptor heap 路线上更别扭；图集还能一次
+   clear。texel snapping 在 tile 内做（否则相机平移时阴影" crawling"）。
+
+### 10.3 与既有子系统的接点（都能复用，别新造）
+
+| 需求 | 复用点 |
+|---|---|
+| 光锥剔除（阴影 pass 要按光锥而非视锥重跑一遍） | `CullDriver` 的 ④c 编舞（`cull_driver.cppm`：dispatch→preprocess→同帧等待→readCull→reconcile），新增第二组候选序列即可 |
+| depth-only 的管线 | 阴影 pass **无材质分叉**：一条 depth-only 条目 + mesh 管线（顶点变换复用 `model.mesh.slang`） |
+| pass 状态 | `StateKit` 新增 `shadowState`（depthCompare=LESS、depthWrite=true、cull 前背面**朝光**需另议——见下） |
+| 保守光栅 | DynamicState3（§9 结论 3），不进管线表 |
+| 阴影采样 | 走 scene data 或独立 heap 槽；**注意 D1 对等**：forward 的 `model_light.frag.slang` 与 deferred 的 `deferred_geometry_light.frag.slang` 都要接，否则重演批 11.0c 那种"只有一路有"的破口 |
+
+### 10.4 两个必须提前定的取舍
+
+1. **背面剔除方向**：阴影 pass 剔前壁还是后壁？剔后壁（常规）在薄壳/单面片上漏光；
+   剔前壁（front-face culling）压掉 peter-panning 但在闭合体上把自身内部投进阴影。
+   **配合 §9 结论 2（RADV 无 fattening 余量）**，建议：阴影 pass **不剔**（双面）+
+   **normal offset** 采样 + slope-scaled depth bias，三件套一起调；
+2. **GPU 预算**：Phase 9 基线是 GPU 侧余量 ≈3.1 ms/帧、**CPU 侧无余量**。
+   阴影 depth pass 是纯 GPU 光栅，283 万三角形重跑一遍是大头——**先用 1 级 cascade 实测
+   单遍成本**，再决定 4 级是否可行（4 级不等于 4×：远处 cascade 可用粗 texel + 剔掉大部分几何）。
