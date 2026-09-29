@@ -255,10 +255,10 @@ CSM/HFTS 共同硬前提。
       21.5% 像素全变暗；四组基线重测（§6）；性能重测 1/2/4 级 = **2.21 / 4.02 / 7.10 ms** →
       定案 1 级依据更强。排查全程 → `docs/阴影失效排查.md` + `docs/调试历史.md`
 - [ ] 批 11.3：HFTS spike 出结论（做 / 收手二选一）
-- [x] BIT-IDENTICAL **基线已建立（2026-09-29 阴影修复后重测，同日 5a-6 切 4 级、5a-7 稳定化再迁移；5a-4 旧 on 态基线作废）**：默认配置 + 默认机位 + llm_debug（级联数 = `kActiveShadowCascades`，现 4）：
+- [x] BIT-IDENTICAL **基线已建立（2026-09-29 阴影修复后重测，同日 5a-6 切 4 级、5a-7 稳定化再迁移；5a-4 旧 on 态基线作废）**：默认机位 + llm_debug（级联数 = `kActiveShadowCascades`，现 4）。**5a-9 起 `shadow_pass` 默认开**，故下表 on 组 = 缺省配置、off 组 = 显式关门（回归对照，画面应逐位等于旧基线）：
       | 配置 | md5 |
       |---|---|
-      | forward，`shadow_pass=false`（**默认**） | `4f9801d5699d60fef6342b80c6d0d278`（**与旧基线全等**——门控关路径未受修复影响） |
+      | forward，`shadow_pass=false`（5a-9 起为显式关门） | `4f9801d5699d60fef6342b80c6d0d278`（**与旧基线全等**——门控关路径未受修复影响） |
       | forward，`shadow_pass=true` | `6011842c61669c4b6e787e85cac3ff4a`（5a-8c；同会话两次连跑逐位相同；历次作废：`03357546…`/`7257ae0f…`/`b856e4a6…`/`297c999f…`/`b415fbe1…`/`e128666c…`/`72b6e512…`） |
       | deferred，`shadow_pass=false` | `269e7e4c6195acb18ab7b774a0c8f11c`（**与旧基线全等**） |
       | deferred，`shadow_pass=true` | `3831572ebf36d6b01a70efefcb5508ea`（5a-8c；历次作废：`86b62107…`/`a7a845fc…`/`fe3693ef…`/`4ea80001…`/`aa7fdf17…`/`94b892a3…`） | 
@@ -807,6 +807,21 @@ extendedDynamicState3ExtraPrimitiveOverestimationSize = false
   替代手动越界分支（`ShadowMap.cpp:1258-1326`）；各向异性 normal bias（`surface_shadowing.glsl:51-55`）；
   更紧的 fit（视锥 ∩ 场景盒凸包的 2D AABB，`ShadowMap.cpp:609-649` + `894-1021`）——最大单项画质
   提升但改动大，列为 Phase 12 候选。
+
+---
+
+## 12.14 批 11.2 · 5a-9：shadowFar 淡出（Filament 同款）+ `shadow_pass` 默认开
+
+承接 5a-8c（用户验收通过）。两项：**① 末级距离淡出**、**② 阴影门默认开**。
+
+| 项 | 内容 |
+|---|---|
+| 淡出 | `shadow.slang` ⑦：`atten = saturate(k·(1 − t²))`，`t = depth / shadowFar`，返回 `lerp(1, pcf, atten)`。k=4 → 视深 < 0.866·shadowFar 全影、最后 13% 平滑收亮；`t ≥ 1` 时 atten=0，与"出块=全亮"旁路**连续**（本改动全部意义）。口径同 Filament（`surface_light_directional.fs:66-71` + `ColorPassDescriptorSet.cpp:315-317`），k 取 4 而非 Filament 的 10（我们尾巴更宽，覆盖量化远界的跳变） |
+| 传参 | `shadowParams.w` 从"预留 0"改为承载 `shadowFar`（`fillShadowData`）——复用既有 vec4 保留槽，**零 schema 改动、无需 `just reflect`**。Slang 无 `mix` 内建（编译期 `undefined identifier 'mix'`），本文件族统一 `lerp` |
+| 门默认 | `configs/diagnostics.lua` + `rgl/diagnostics.cppm` 的 `shadowPass` 默认改 true（缺 config 的回落路径也走有影）；关门路径保留为回归对照（画面逐位不变） |
+| 验证 | **管道阳性测试**（关键）：当前 `shadowFar ≡ 相机远平面`（切在几何之外），默认机位与街道机位实测差异 **0 px**——为区分"没影响"与"没接上"，临时 k 改 1 → 默认机位 **5.998% 像素、只变亮 0 变暗**（淡出特征签名）。基线 forward on `6011842c…` / deferred on `3831572e…`（与 5a-8c 逐位相同，符合"当前不可见"预期）；off 组不变；D1 0.005%；开关对拍 9.909% 全变暗；0 error；`just checks --strict` 0 警告 |
+| 定位 | 这条改动**今天不改变任何像素**，它是"将来把 shadowFar 调短换性能"（Phase 9 GPU 余量 3.1ms 的主要 lever）的必需件——那时末级远界落在画面中间，没有淡出就是硬边。k 不是画质旋钮：k 调小会把远处合法阴影整体压暗（全局强度斜坡 ≠ 边界处理） |
+| 同步 | 三轮阴影踩坑固化为 `rgl-verify` skill 的「阴影验收判据」7 条：① 阳性锚点（指定物体必须有影）② 机位对必含**同 position 纯转向** ③ 必含**远离相机、跨越多级**的取景（5a-8c 的坏路径被最小级联的盒整个罩住）④ 定位优先三色哨兵（出块按 uv.x/uv.y/ndc.z 分色 + 级号编亮度）⑤ 恒等式日志是指纹 ⑥ 每条新逻辑要有阳性测试（0 差异 ≠ 生效）⑦ 注释里的数学断言要有探针钉住 |
 
 ---
 

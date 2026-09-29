@@ -49,7 +49,8 @@ void fillShadowData(FrameDrawList& out, float shadowNear, float shadowFar,
     // **必须用与 CPU 切片同源的量化 n/f**（renderListSystem 传入）——阈值与内容错位 =
     // 片元选到不覆盖自己的级 → 边界处阴影随相机闪跳。
     // texelSizes = 2·r/块边长，每级各自从自己的球推。
-    // params = (depthBias, normalOffsetScale, enabled, 保留)；enabled 由门控 diagnostics 驱动。
+    // params = (depthBias, normalOffsetScale, enabled, shadowFar)；enabled 由门控 diagnostics
+    // 驱动，shadowFar 供采样端做末级淡出（5a-9，见下方填写处）。
     // atlas = (图集边长, 单块边长, 分块列数, 保留)，采样端把分块 uv 叠图集用。
     const float kNoFar = 1e9f;
     const uint32_t cols = shadowAtlasColumns(kActiveShadowCascades);
@@ -69,8 +70,11 @@ void fillShadowData(FrameDrawList& out, float shadowNear, float shadowFar,
     }
     out.sceneData.shadowSplits = splits;
     out.sceneData.shadowTexelSizes = texels;
+    // params = (depthBias, normalOffsetScale, enabled, shadowFar)。**w 从"预留 0"改为
+    // shadowFar**（5a-9）：采样端用它做末级距离淡出（shadow.slang ⑦，Filament 同款），
+    // 消掉"超出级联覆盖 → 出块旁路全亮"的硬边。传的是**量化后**的远界，与 splits/切片同源。
     out.sceneData.shadowParams = {kShadowDepthBias, kShadowNormalOffsetScale,
-        diagnostics().shadowPass ? 1.0f : 0.0f, 0.0f};
+        diagnostics().shadowPass ? 1.0f : 0.0f, shadowFar};
     // 列数与图装饰的 extent 同源（shadowAtlasColumns）——两处不同步 = 采样端把块叠到错位置
     out.sceneData.shadowAtlas = {static_cast<float>(kShadowMapSize),
         static_cast<float>(shadowTileSize(cols)), static_cast<float>(cols), 0.0f};

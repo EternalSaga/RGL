@@ -10,6 +10,14 @@
 // 结论：12/13 在**两条路上都空闲**，故取 12/13，让 shadow.slang 成为一个真正共用的契约
 // （若两条路取不同号，同一份采样代码就得复制两份 = D1 破口的老路）。
 //
+// **shadowFar 淡出强度 k**（5a-9）：atten = saturate(k·(1 − t²))，t = depth / shadowFar。
+//   k=4 → t < 0.866 全影、最后 13% 距离平滑收尾；Filament 用 10（最后 5%），我们取更宽的
+//   尾巴以覆盖量化远界的跳变。**当前 shadowFar ≡ 相机远平面**（切在几何之外），故默认机位
+//   与街道机位实测差异 0 px —— 它是"将来把 shadowFar 调短换性能"（Phase 9 余量 3.1ms 的
+//   主要 lever）时的必需件：那时远界落在画面中间，没有淡出就是一条硬边。管道阳性测试：
+//   k 临时改 1 → 默认机位 5.998% 像素**只变亮 0 变暗**（淡出特征签名）。
+static const float kShadowFarFadeK = 4.0;
+
 // 深度图用 eDepth aspect 采样（RT 缓存 ensure(..., eDepth) 建 view）。sampler 用
 // **SamplerLibrary::ensurePointSampler**（NEAREST + CLAMP_TO_EDGE），不用 ensureShared 的 LINEAR：
 // D32Sfloat 在 Vulkan 里无 filterable 能力，linear 采样深度 = invalid usage。
@@ -76,7 +84,9 @@ float sampleShadow1Tap(float3 worldPos, float3 N)
     const float3 ndc = clip.xyz / clip.w;  // 正交投影下 w 恒 1，仍写除法保持与 sky 同款
     const float2 uvTile = float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);   // y 翻转（framebuffer 原点在左上）
 
-    // ④ 出块返回全亮：级联边界外 / 深度范围外不产生阴影（否则图集边缘拉出长条伪影）
+    // ④ 出块返回全亮：级联边界外 / 深度范围外不产生阴影（否则图集边缘拉出长条伪影）。
+    //   与 ⑦ 淡出的关系：出块在**远处**与"淡出已收到 0"同值（1.0），两侧连续无硬边；
+    //   近处出块（真出 bug 时）仍是硬亮斑——那是要修 bug，不是淡出能盖的。
     if (uvTile.x < 0.0 || uvTile.x > 1.0 || uvTile.y < 0.0 || uvTile.y > 1.0 || ndc.z > 1.0)
         return 1.0;
 
@@ -102,5 +112,18 @@ float sampleShadow1Tap(float3 worldPos, float3 N)
     // SamplerState 是普通采样器（非比较采样器），故手动比较：返回 1 = 受光
     const float4 lit = float4(ref <= d0 ? 1.0 : 0.0, ref <= d1 ? 1.0 : 0.0,
         ref <= d2 ? 1.0 : 0.0, ref <= d3 ? 1.0 : 0.0);
-    return dot(lit, 0.25);
+    // ⑦ shadowFar 淡出（5a-9）：末级切片只覆盖到 shadowFar（= 量化后的相机远平面），
+    //   再远处走"出块=全亮"旁路 = **硬切齐刷刷断掉**（用户最早报的那类硬边）。这里按
+    //   Filament 的做法（surface_light_directional.fs:66-71 + ColorPassDescriptorSet.cpp:315）
+    //   在归一化视深上做二次淡出：atten = saturate(k·(1 − t²))，t = depth / shadowFar。
+    //   k=4 → t < 0.866 全影（近中景零变化），最后 13% 距离平滑收到全亮；t ≥ 1 时
+    //   atten = 0，与旁路返回值 1.0 **连续**（不留硬边）。
+    //   params.w = shadowFar（世界单位，fillShadowData 填）；≤0 = 不淡出（防御）。
+    //   为何放 params.w 而非新开 vec4：params 原就留了 w 槽（历史遗留），复用零 schema 改动。
+    const float shadowFar = params.w;
+    if (shadowFar <= 0.0)
+        return dot(lit, 0.25);
+    const float t = depth / shadowFar;
+    const float atten = saturate(kShadowFarFadeK * (1.0 - t * t));
+    return lerp(1.0, dot(lit, 0.25), atten);  // Slang 无 mix 内建（同文件族用 lerp）
 }
