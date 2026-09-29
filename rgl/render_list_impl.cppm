@@ -37,26 +37,32 @@ struct Pending {
  * 每帧填阴影 scene data（尾区阴影 VP 区 + 4 个 vec4 采样参数子区）。抽出函数体的原因同
  * collectShadowCasters / fillLightData：函数代码行阈值按函数 extent 计算（内嵌 lambda 也计入），不拆就过阈。
  * @param out 出参：本帧 draw list（写 sceneData.shadowViewProj / Splits / TexelSizes / Params / Atlas）
- * @param light 主灯（取 direction 算光空间方向）
  * @param viewProj 当帧 viewProj（取 near/far 做切分；两者同源——projectionSystem 写入）
- * @param spheres 每级光空间拟合球（与上方剔除用同一批，先算球再同时用于剔除与矩阵）
+ * @param volumes 各级光空间体（VP + XY 半宽；与剔除用同一批，先建体再同时用于剔除与矩阵）
  */
-void fillShadowData(FrameDrawList& out, const Light& light, const ViewProjection& viewProj,
-    std::span<const Bounds> spheres) {
+void fillShadowData(FrameDrawList& out, const ViewProjection& viewProj,
+    std::span<const ShadowVolume> volumes) {
     for (uint32_t c = 0; c < kActiveShadowCascades; ++c)
-        out.sceneData.shadowViewProj[c] = directionalShadowMatrix(light, spheres[c], kShadowMapSize);
+        out.sceneData.shadowViewProj[c] = volumes[c].viewProj;
     // splits = 每级远截止（采样端拿它选级；末级写 1e9 = “没有更远的级”，下级比较不会被越过）
     // texelSizes = 2·r/mapSize，每级各自从自己的球推。
     // params = (depthBias, normalOffsetScale, enabled, 保留)；enabled 由门控 diagnostics 驱动。
     // atlas = (图集边长, 单块边长, 分块列数, 保留)，采样端把分块 uv 叠图集用。
     const float kNoFar = 1e9f;
     const uint32_t cols = shadowAtlasColumns(kActiveShadowCascades);
-    glm::vec4 splits{0.0f}, texels{0.0f};
+    // **未生效的槽也必须写 kNoFar，不能留 0**：采样端选级是三段无条件比较
+    // （distSq > splits[i]² 则进第 i+1 级），而 distSq 对任何真实片元都 > 0 —— 留 0 会被
+    // 判成"已越过这一级的分界"，把片元一路推到最后一个槽。生效 1 级时若 splits =
+    // {1e9, 0, 0, 0}，全场景都会落到 3 号槽，而它的光空间 VP 从未被写过（零矩阵）
+    // → clip.w = 0 → ndc = 0/0 = NaN → 阴影因子恒 0（实测：整个广场全黑，与机位无关）。
+    // 这里让"没生效的级"分界恒为无穷远 = 永远选不中，shader 侧无需知道生效级数。
+    glm::vec4 splits{kNoFar, kNoFar, kNoFar, kNoFar};
+    glm::vec4 texels{0.0f};
     for (uint32_t c = 0; c < kActiveShadowCascades; ++c) {
         splits[c] = c + 1u < kActiveShadowCascades
             ? cascadeSplitDistance(viewProj.nearPlane, viewProj.farPlane, c, kActiveShadowCascades)
             : kNoFar;
-        texels[c] = spheres[c].radius * 2.0f / static_cast<float>(shadowTileSize(cols));
+        texels[c] = volumes[c].xyRadius * 2.0f / static_cast<float>(shadowTileSize(cols));
     }
     out.sceneData.shadowSplits = splits;
     out.sceneData.shadowTexelSizes = texels;
@@ -65,46 +71,103 @@ void fillShadowData(FrameDrawList& out, const Light& light, const ViewProjection
     // 列数与图装饰的 extent 同源（shadowAtlasColumns）——两处不同步 = 采样端把块叠到错位置
     out.sceneData.shadowAtlas = {static_cast<float>(kShadowMapSize),
         static_cast<float>(shadowTileSize(cols)), static_cast<float>(cols), 0.0f};
+
 }
 
+/** 阴影投影体候选：实体遍历内先攒，循环结束后才定光空间体。
+ *
+ * 为何要两段：光空间盒的 Z 下界依赖**全部投影体**的 AABB，而剔除要用这个盒 —— 顺序上
+ * 必须先知道盒才能判"谁在盒内"。若在实体循环里边走边剔（像原来那样），盒就还没成形。
+ * 候选表只存 5 个标量，1591 个 primitive 也只有几十 KB。
+ */
+struct ShadowCandidate {
+	glm::vec3 center;     // 世界球心
+	float radius;         // 世界球半径
+	uint32_t objectSlot;  // = MeshRef.objectSlot（push.objectIndex）
+	uint32_t pipeline;    // = asset.shadowPipelineIndex
+	uint32_t groups;      // = asset.groupCount
+};
+
 /**
- * 阴影投影体采集（在主视棱剔除**之前**调用）。抽成独立函数而非孤入子：样式检查的函数代码行
- * 阈值按 **函数 extent 计算（含内嵌 lambda）**——孤光并不能把体重从 renderListSystem 的 120 行阈值里带走。
- * @param asset 资产记录（取 shadowPipelineIndex / groupCount）
- * @param mat 材质记录（取 alphaModeBlend）
- * @param worldCenter/worldRadius 该图元的世界包围球
- * @param objectSlot 实例级槽（scene data 各表下标）
- * @param cascadeSpheres 每级光空间拟合球（与该级剔除用同一个）
- * @param objectSlotCount shadowArgs 的分块 stride（分块号 × objectSlotCount + slot）
- * @param shadowArgs 出参：填 ShadowDrawArgs（帧局部存储，生命周期同 DrawCall.pushData）
- * @param out 出参：候选 draw（按实体迭代序保持确定性）
+ * 收集阴影投影体候选（实体遍历内调用，只判材质/门控，不做级联剔除）。
+ * 只收**不透明**材质：blend 体投出的影子会看不到遮挡体的背面（收下来只多花一遍光流，
+ * 还会在透明体上留不可见的脊影）；MASK 背面本就被 alpha 消掉，不影响。
+ * 不过 GPU culling：候选表按**主视棱**建立，用它会漏掉视野外屋顶的投影体。
+ * 门控（diagnostics.shadowPass）在**最前**：关时不产出任何 draw——图里的阴影 pass 仍然运行
+ * （清深度），但无光栅化开销，且采样端因 enabled=0 直接返回全亮。
+ * @param asset 该实体的网格资产（取 shadowPipelineIndex / groupCount）
+ * @param mat 该实体绑定的材质（判 blend）
+ * @param worldCenter 图元世界球心
+ * @param worldRadius 图元世界球半径
+ * @param objectSlot 该实体的 per-object 槽号
+ * @param out 候选表（追加）
  */
 void collectShadowCasters(const RGL::MeshAsset& asset, const RGL::MaterialAsset& mat,
     const glm::vec3& worldCenter, float worldRadius, uint32_t objectSlot,
-    std::span<const Bounds> cascadeSpheres, uint32_t objectSlotCount,
-    std::vector<RGL::ShadowDrawArgs>& shadowArgs,
-    std::array<std::vector<Pending>, kActiveShadowCascades>& out) {
-    // 只收**不透明**材质：blend 体投出的影子会看不到遮挡体的背面（收下来只多花一遍光流，
-    // 还会在透明体上留不可见的脊影）；MASK 背面本就被 alpha 消掉，不影响。
-    // 不过过 GPU culling：候选表按**主视棱**建立，用它会漏掉靠谱面屋顶的投影体。
-    // 门控（diagnostics.shadow_pass）在**最前**：关时不产出任何 draw——图里的阴影 pass 仍然运行
-    // （清 4 MB 深度），但无光梲化开销，且采样端因 enabled=0 直接返回全亮。
+    std::vector<ShadowCandidate>& out) {
     if (!diagnostics().shadowPass || asset.shadowPipelineIndex == kInvalidPipelineIndex
         || mat.alphaModeBlend)
         return;
-    // 逐级判定：世界球与该级光空间球相交 → 该图元能影响该级图内任意点。**一个图元可以落多级**（大物体跨越多个
-    // 切片）——这正是每级剔除能把总量压在单级之上的原因：4 级全量 = 4 × 单级，而实测上
-    // 大多数对象只落在至少一级。
-    for (uint32_t c = 0; c < kActiveShadowCascades; ++c) {
-        const Bounds& sphere = cascadeSpheres[c];
-        if (glm::length(worldCenter - sphere.center) > sphere.radius + worldRadius)
-            continue;
-        auto& sargs = shadowArgs[static_cast<size_t>(c) * objectSlotCount + objectSlot];
-        sargs.objectIndex = objectSlot;
-        sargs.cascadeIndex = c;
-        out[c].push_back(Pending{RGL::DrawCall{asset.shadowPipelineIndex,
-            std::as_bytes(std::span<const RGL::ShadowDrawArgs>{&sargs, 1}), asset.groupCount}, 0.0f});
-    }
+    out.push_back(ShadowCandidate{worldCenter, worldRadius, objectSlot,
+        asset.shadowPipelineIndex, asset.groupCount});
+}
+
+/**
+ * 候选 × 逐级光空间体 → 阴影 draw 清单（级主序，级内实体迭代序）。
+ * 一个图元可以落多级（大物体跨越多个切片）——这正是逐级剔除能把总量压在单级之上的原因。
+ * @param cands 投影体候选表
+ * @param volumes 各级光空间体（判定用；XY 收紧、Z 覆盖全部投影体）
+ * @param objectSlotCount shadowArgs 的分块 stride（分块号 × objectSlotCount + slot）
+ * @param shadowArgs 出参：填 ShadowDrawArgs（帧局部存储，生命周期同 DrawCall.pushData）
+ * @param out 出参：逐级 draw 清单
+ */
+void emitShadowCasters(std::span<const ShadowCandidate> cands,
+    std::span<const ShadowVolume> volumes, uint32_t objectSlotCount,
+    std::vector<RGL::ShadowDrawArgs>& shadowArgs,
+    std::array<std::vector<Pending>, kActiveShadowCascades>& out) {
+    for (const auto& cd : cands)
+        for (uint32_t c = 0; c < kActiveShadowCascades; ++c) {
+            if (!casterInShadowVolume(volumes[c], cd.center, cd.radius))
+                continue;
+            auto& sargs = shadowArgs[static_cast<size_t>(c) * objectSlotCount + cd.objectSlot];
+            sargs.objectIndex = cd.objectSlot;
+            sargs.cascadeIndex = c;
+            out[c].push_back(Pending{RGL::DrawCall{cd.pipeline,
+                std::as_bytes(std::span<const RGL::ShadowDrawArgs>{&sargs, 1}), cd.groups}, 0.0f});
+        }
+}
+
+/**
+ * 建逐级光空间体并逐级剔除出阴影 draw（返回体供 fillShadowData 写 scene data）。
+ * 抽出来的原因：renderListSystem 的代码行与认知复杂度已顶到阈值，而这块自成一体。
+ *
+ * Z 界取自**全部候选的世界 AABB** —— 这正是"盒要装得下投影体"落到代码的地方。漏了它
+ * 就会退回只按切片球建盒，楼房整批被剔、没人往阴影图里画（实测阴影开关只差 0.016%
+ * 像素，等于没开）。无候选时 AABB 退化成一个点：盒只剩受光面那层，但也没有任何 draw
+ * 要画，等价于无阴影。
+ * @param light 主灯（光空间基）
+ * @param slices 各级子视锥包围球（定 XY 半宽）
+ * @param cands 投影体候选
+ * @param objectSlotCount shadowArgs 分块 stride
+ * @param shadowArgs 出参：填 ShadowDrawArgs
+ * @param out 出参：逐级 draw 清单
+ * @return 各级光空间体
+ */
+std::array<ShadowVolume, kActiveShadowCascades> buildShadowVolumes(const Light& light,
+    const std::array<Bounds, kActiveShadowCascades>& slices,
+    std::span<const ShadowCandidate> cands, uint32_t objectSlotCount,
+    std::vector<RGL::ShadowDrawArgs>& shadowArgs,
+    std::array<std::vector<Pending>, kActiveShadowCascades>& out) {
+	glm::vec3 casterMin{0.0f}, casterMax{0.0f};
+	for (const auto& cd : cands) {
+		casterMin = glm::min(casterMin, cd.center - cd.radius);
+		casterMax = glm::max(casterMax, cd.center + cd.radius);
+	}
+	std::array<ShadowVolume, kActiveShadowCascades> volumes{};
+	for (uint32_t c = 0; c < kActiveShadowCascades; ++c)
+		volumes[c] = buildShadowVolume(light, slices[c], casterMin, casterMax, kShadowMapSize);
+	emitShadowCasters(cands, volumes, objectSlotCount, shadowArgs, out);
+	return volumes;
 }
 
 /**
@@ -190,6 +253,12 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	// 视锥剔除后不在 draw list 里故不会被读到，留哨兵免得读到陈值）
 	state.materialBySlot.assign(objectSlotCount, kNoMaterial);
 
+	// fresh 提前声明：光空间体要用主灯方向（fillLightData），而灯原本在循环后才取 ——
+	// 故把 fillLightData 提到循环前，fresh 也得先于它存在。
+	FrameDrawList fresh;
+	// 阴影投影体候选（循环内攒，循环后配光空间体再逐级剔除，见 ShadowCandidate 注释）
+	std::vector<ShadowCandidate> shadowCandidates;
+
 	// Phase 7 批次 4：CPU frustum culling——视锥 6 面从 proj·view 提取（每帧一次），逐 entity
 	// node-local 剔除球经 modelMatrix 变换到世界后测（保守：跨界判可见，绝不误剔）。
 	const Frustum frustum = extractFrustum(viewProj.proj * viewProj.view);
@@ -253,8 +322,8 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 			const float scale = std::max({glm::length(glm::vec3(modelMatrix[0])),
 				glm::length(glm::vec3(modelMatrix[1])), glm::length(glm::vec3(modelMatrix[2]))});
 			const float worldRadius = cull.radius * scale;
-			collectShadowCasters(asset, mat, wc, worldRadius, meshRef.objectSlot, cascadeSpheres,
-				objectSlotCount, state.shadowArgs, shadowCasters);
+			collectShadowCasters(asset, mat, wc, worldRadius, meshRef.objectSlot,
+				shadowCandidates);
 			if (!sphereInFrustum(frustum, wc, worldRadius))
 				return;
 			const RGL::DrawCall call{
@@ -265,7 +334,11 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 			bucket.push_back(Pending{call, glm::dot(d, d)});  // 距离²（免 sqrt，排序单调等价）
 		});
 
-	FrameDrawList fresh;
+	// 主灯（阴影矩阵要它的方向）—— 提到此处：光空间体必须在剔除之前成形
+	const Light primary = fillLightData(rg, camera.position, fresh);
+
+	const std::array<ShadowVolume, kActiveShadowCascades> shadowVolumes = buildShadowVolumes(
+		primary, cascadeSpheres, shadowCandidates, objectSlotCount, state.shadowArgs, shadowCasters);
 	// 批 10.7 高亮通道：把 SelectedObject ctx 的选中材质 + 过滤表搬进 draw list（执行器
 	// 据此过滤）。entity==null（未选中/已取消）→ hasSelection=false，pass 零 draw。
 	if (const auto* sel = rg.ctx().find<SelectedObject>();
@@ -309,7 +382,6 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 
 	// scene data（Phase 5 批次 2）：光方向归一化、color×intensity 预乘、eyePos=相机世界位置；
 	// 对象矩阵表 span 指向 state.matrices（帧局部存储，drawFrame 录制期拷进 staging）
-	const Light primary = fillLightData(rg, camera.position, fresh);
 	// Phase 5.5 env 参数（scene data 头 @48）+ 天空盒 clip→world 矩阵（@64，
 	// inverse(proj·view) 每帧一次——glm 列主序，shader 端列组合读）
 	fresh.sceneData.envParams = {env.intensity, env.mipRange};
@@ -318,7 +390,7 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	// Phase 8 批次 ④a：漫反射辐照度 SH9（env 加载期算好存 Resources，此处每帧拷入）
 	fresh.sceneData.irradianceSH = envService.getIrradianceSH();
 	fresh.sceneData.skyInvViewProj = glm::inverse(viewProj.proj * viewProj.view);
-	fillShadowData(fresh, primary, viewProj, cascadeSpheres);
+	fillShadowData(fresh, viewProj, shadowVolumes);
 	fresh.sceneData.objectMatrices = std::span<const glm::mat4>{state.matrices};
 	fresh.sceneData.objectMvps = std::span<const glm::mat4>{state.mvps};
 	fresh.sceneData.objectDraws = std::span<const ObjectDraw>{state.draws};

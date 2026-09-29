@@ -1,9 +1,11 @@
 module;
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
-// lookAt / ortho 属 gtc/matrix_transform.hpp（Phase 11 批 11.2 directionalShadowMatrix 用；
+// lookAt / ortho 属 gtc/matrix_transform.hpp（Phase 11 批 11.2 buildShadowVolume 用；
 // 与 camera.cppm 同一处 include——GMF 头可达但名字不可见，不加就是"no member named"）
 #include <glm/gtc/matrix_transform.hpp>
+// glm::inverse 属 gtc/matrix_inverse.hpp（frustumBoundingSphere 的 NDC→世界反投影用）
+#include <glm/gtc/matrix_inverse.hpp>
 export module scene_context;
 
 import rlstd;
@@ -196,25 +198,43 @@ export struct Light {
 };
 
 /**
- * Phase 11 批 11.2：由视锥求**包围球**（Eberly 增量法；平面约定沿 extractFrustum：
- * 内侧 = dot(n, x) + d ≥ 0）。视锥的 6 个平面逐步把球心推到满足全部约束、半径取被
- * 触及时的距离——不追求最小球（对阴影贴图覆盖而言无差别），但保证**整个视锥在球内**。
- * @param viewProj 相机 view·proj（列主序，glm 约定）
- * @return {center, radius}；退化视锥（矩阵全 0 等）返回半径 0
+ * Phase 11 批 11.2：由视锥求**包围球**。视锥 8 角取世界 AABB 再取外接球——
+ * 不追求最小球（对阴影贴图覆盖而言无差别），但保证**整个视锥在球内**。
+ * @param viewProj 相机 view·proj（列主序，glm 约定；本函数内部求逆做 NDC→世界反投影）
+ * @return {center, radius}；退化视锥（逆不存在等）返回半径 0
  */
 export inline Bounds frustumBoundingSphere(const glm::mat4& viewProj) {
-	const Frustum f = extractFrustum(viewProj);
-	glm::vec3 center{0.0f};
-	float radius = 0.0f;
-	for (const auto& plane : f.planes) {
-		const glm::vec3 n{plane.x, plane.y, plane.z};
-		const float dist = glm::dot(n, center) + plane.w;
-		if (dist > radius) {           // 该平面把球顶出内侧 → 沿法线推球心、半径跟涨
-			center += n * (dist - radius);
-			radius = dist;
-		}
+	// 视锥 8 角 → 世界 AABB → 外接球。
+	//
+	// **为何改成 AABB 法**：本函数的契约是"整个视锥在球内"，**不追求最小球**（见上）。
+	// Eberly 增量法要求调用方的平面约定与它一致，而这里 extractFrustum 用的是
+	// "内侧 = dot(n,x)+d ≥ 0"、sphereInFrustum 同样是 ≥ 0，增量法却是 ≤ 0 那套写法 ——
+	// 两套约定混用会把球心推向内侧深处、半径长不大，算出的球装不下视锥
+	// （2026-09-29 实测：近距离机位 r 只有 1.25，而该视锥远平面角点距球心 2.0；
+	//  视锥边缘的建筑整批落在球外被逐级剔除丢掉 → 阴影图整幅 clear → 广场一个投影都没有）。
+	// 试过"取负把约定转回去"，结果半径直接被推成 0（更糟）。AABB 法不依赖任何符号约定，
+	// 半径只比最小球大约 10% 量级 —— 而本用途（阴影贴图覆盖 + texel 尺寸）完全不在乎这点余量。
+	//
+	// **两条反投影约定**（2026-09-29 二次踩坑，GLM 探针钉死，见 docs/调试历史.md）：
+	// ① NDC 角点回世界必须乘 **inverse(viewProj)**——第一版误用了正向矩阵，对任何机位
+	//    远平面角恒有 w = −1 < 0 → 走退化早退 → 半径恒 0（阴影照样全没）；
+	// ② 本项目 GLM 编译为 **depth zero-to-one**（rgl/CMakeLists.txt:105），NDC z 值域是
+	//    [0,1] 而非 [-1,1]——近角取 0、远角取 1。角点在视锥内 ⇒ 反投影 w = −z_eye > 0 恒成立，
+	//    残余的 w ≤ 0 判只挡真退化（奇异矩阵）。
+	// 修好后实测（复现机位，near=0.05/far=2.197）：r = 2.4017 ≥ 远角距球心 2.0074，包住 ✓。
+	const glm::mat4 invViewProj = glm::inverse(viewProj);
+	const glm::vec3 kFar{1e30f};
+	glm::vec3 lo{kFar}, hi{-kFar};
+	for (int corner = 0; corner < 8; ++corner) {
+		const glm::vec4 world = invViewProj * glm::vec4((corner & 1) ? 1.0f : -1.0f,
+			(corner & 2) ? 1.0f : -1.0f, (corner & 4) ? 1.0f : 0.0f, 1.0f);
+		if (world.w <= 0.0f)
+			return Bounds{glm::vec3{0.0f}, 0.0f};  // 退化视锥（角点回到相机后方）
+		const glm::vec3 corner3 = glm::vec3{world} / world.w;
+		lo = glm::min(lo, corner3);
+		hi = glm::max(hi, corner3);
 	}
-	return Bounds{center, radius};
+	return Bounds{(lo + hi) * 0.5f, 0.5f * glm::length(hi - lo)};
 }
 
 /**
@@ -289,59 +309,78 @@ export inline glm::mat4 projWithDepthRange(const glm::mat4& proj, float newNear,
 	return out;
 }
 
-/**
- * Phase 11 批 11.2：定向光的**光空间 VP 矩阵**（阴影图用，列主序 proj·view），拟合球由调用方给定。
+/** 一级阴影的**光空间体**：正交盒。XY 由该级切片球定（紧），Z 覆盖**全部投影体**。
  *
- * ## 拟合目标
- * 传入的 `sphere` 必须是**该级子视锥的包围球**（级联切分后每级一个，且与剔除用同一个球——
- * 先算球再同时用于两处才不会因重复计算而不一致）。为什么是视锥球而不是场景包围球，是实测决定的：
- * bistro 的 SceneBounds radius = **116.26**（整条运河 + 街景都在里面），而真正要投影阴影的
- * 微缩街景模型只占其中一小块；按场景球拟合则 texel = 2·116.26/1024 = **0.227 世界单位**，
- * 整个模型只摊到 ~88 个 texel，阴影必然糊成一团。
- *
- * ## 正交框
- * 正交半边长取球半径 r：包围球的正交投影是半径 r 的圆盘，故恰好全覆盖（球面采样实测
- * x/y ∈ [-1,1]、z ∈ [0.25,0.75]）。near/far 取 0/4r 覆盖球在视空间的 z ∈ [r, 3r]；
- * 多出来的深度范围在正交投影下**无精度代价**（深度线性），故不收紧。眼点退到球心外 2r。
- * up 向量在光近乎竖直时切到 +Z，避免 lookAt 叉积退化。
- *
- * ## texel 吸附
- * 拟合框随相机移动，若不吸附，阴影边缘每帧都会"爬行"（shimmering）。做法 = 把球心投到 NDC →
- * 换算成 texel 坐标 → 四舍五入 → 反算成光空间平移量 → 乘在矩阵**投影之前**。只动 x/y
- * （z 不吸附：深度是线性的，吸附无意义）。
- *
- * @param light 定向光（只取 direction = 光→场景 的照射方向；点光无意义）
- * @param sphere 光空间拟合球（与该级剔除用同一个）
- * @param mapSize 单块阴影图边长（texel 吸附用）
- * @return 光空间 VP；退化视锥（半径 ≤ 0）时返回单位阵
+ * 为何必须把两者拆开（2026-09-29 修 bug 的要点）：盒的 XY 决定影子落在哪、贴多大，
+ * 所以要贴着受光面收紧；而 Z 必须够深，装下所有**能照到这片受光面**的投影体。
+ * 建筑比受光面高得多，只按视锥切片拟合的球（近距离机位下 r 仅 1.25）压根装不下它们
+ * —— 那些图元会在剔除阶段被丢掉，于是没人往阴影图里画，整个广场一个投影都没有
+ * （实测：阴影开关对拍只差 149 像素 / 0.016%，等于阴影没开）。
+ * 另：光空间正交投影下影子沿光方向平移，**XY 不变**——所以盒的 XY 只需覆盖受光面，
+ * 盒外投影体照不进盒内，无需为它们扩 XY。这是能把 XY 收紧的前提。
  */
-export inline glm::mat4 directionalShadowMatrix(const Light& light, const Bounds& sphere,
-	uint32_t mapSize) {
-	const float r = sphere.radius;
+export struct ShadowVolume {
+	glm::mat4 viewProj;  // 阴影 mesh 与采样端共用（同一矩阵，否则深度比较无意义）
+	glm::mat4 view;      // 仅剔除用：世界球心 → 光空间（XY 相对切片中心为 0）
+	float xyRadius;      // 光空间 XY 半宽 = 切片球半径
+	float eyeOffset;     // 眼点 = 切片中心 − 光向·eyeOffset
+	float tMin, tMax;    // 沿光轴深度范围（相对切片中心，t = dot(P − 切片中心, 光向)）
+};
+
+/**
+ * 建一级阴影的光空间正交盒。
+ * @param light 主光（取 direction 定光空间基；只取方向，位置由 eyeOffset 定）
+ * @param slice 该级子视锥的包围球（定 XY 半宽与受光面深度范围 [−r, r]）
+ * @param casterMin 全部投影体世界 AABB 的最小角（定 Z 下界）
+ * @param casterMax 全部投影体世界 AABB 的最大角（定 Z 上界）
+ * @param mapSize 阴影图整幅边长（texel 吸附用）
+ * @return 光空间体（slice.radius ≤ 0 时退化为零半径体 = 谁都进不来 = 无阴影）
+ */
+export inline ShadowVolume buildShadowVolume(const Light& light, const Bounds& slice,
+	const glm::vec3& casterMin, const glm::vec3& casterMax, uint32_t mapSize) {
+	const float r = slice.radius;
 	if (r <= 0.0f)
-		return glm::mat4{1.0f};  // 退化视锥：无阴影可投，返回单位阵而非 NaN
-	const glm::vec3 dir = glm::normalize(light.direction);
-	const glm::vec3 up = (dir.y > 0.99f || dir.y < -0.99f) ? glm::vec3{0.0f, 0.0f, 1.0f}
+		return ShadowVolume{glm::mat4{1.0f}, glm::mat4{1.0f}, 0.0f, 0.0f, 0.0f, 0.0f};
+	const glm::vec3 d = glm::normalize(light.direction);
+	const glm::vec3 up = (d.y > 0.99f || d.y < -0.99f) ? glm::vec3{0.0f, 0.0f, 1.0f}
 							   : glm::vec3{0.0f, 1.0f, 0.0f};
-	const glm::mat4 view = glm::lookAt(sphere.center - dir * (r * 2.0f), sphere.center, up);
-	const glm::mat4 proj = glm::ortho(-r, r, -r, r, 0.0f, r * 4.0f);
-	const glm::mat4 vp = proj * view;
-	// texel 吸附：NDC → texel 网格取整 → 反算光空间平移（NDC 差 × r = 光空间偏移，因 ortho
-	// 把 [-r, r] 映到 [-1, 1]）。**平移必须加在投影之前**（proj·T·view）——加在投影之后
-	// （translate·proj·view）的话偏移量是裁剪空间单位，等于把位移放大了一倍半边长，实测把视锥
-	// 角点顶到 NDC 1.43（越界）。这是本函数唯一一处易错顺序。
-	const glm::vec4 clip = vp * glm::vec4(sphere.center, 1.0f);
+	// 沿光轴取并：受光面占 [−r, r]（切片球），投影体占其 AABB 在光轴上的投影。
+	// pad 一点余量，避免投影体正好压在近/远平面上被裁掉。
+	const float pad = r * 0.02f;
+	const float tMin = std::min(-r, glm::dot(casterMin - slice.center, d)) - pad;
+	const float tMax = std::max(r, glm::dot(casterMax - slice.center, d)) + pad;
+	const float eyeOffset = -tMin;
+	const glm::mat4 view = glm::lookAt(slice.center - d * eyeOffset, slice.center, up);
+	const glm::mat4 proj = glm::ortho(-r, r, -r, r, 0.0f, tMax - tMin);
+	// texel 吸附：平移必须加在投影**之前**（proj·T·view）——加在之后是裁剪空间单位，
+	// 等于把位移放大了一倍半边长（5a-1 实测把视锥角点顶到 NDC 1.43 越界，教训全文 →
+	// docs/调试历史.md 2026-09-29 ⑧）。
+	const glm::vec4 clip = proj * view * glm::vec4(slice.center, 1.0f);
 	const glm::vec2 ndc = glm::vec2(clip) / clip.w;
 	const glm::vec2 snapped = (glm::round((ndc * 0.5f + 0.5f) * static_cast<float>(mapSize))
 				 + glm::vec2(0.5f))
 		/ static_cast<float>(mapSize) * 2.0f - glm::vec2(1.0f);
-	return proj * glm::translate(glm::mat4{1.0f}, glm::vec3((snapped - ndc) * r, 0.0f)) * view;
+	return ShadowVolume{proj * glm::translate(glm::mat4{1.0f},
+		glm::vec3((snapped - ndc) * r, 0.0f)) * view,
+		view, r, eyeOffset, tMin, tMax};
 }
 
-/** 同上，但拟合球由调用方自己从 viewProj 求（单级用法：整个视锥一个球）。 */
-export inline glm::mat4 directionalShadowMatrix(const Light& light,
-	const glm::mat4& viewProj, uint32_t mapSize) {
-	return directionalShadowMatrix(light, frustumBoundingSphere(viewProj), mapSize);
+/**
+ * 投影体是否影响该级光空间体（逐级剔除）。判据 = 图元世界球投到光空间后与盒相交。
+ * @param v 该级光空间体
+ * @param worldCenter 图元世界球心
+ * @param worldRadius 图元世界球半径
+ * @return true = 该图元要画进这一级的阴影图
+ */
+export inline bool casterInShadowVolume(const ShadowVolume& v, const glm::vec3& worldCenter,
+	float worldRadius) {
+	const glm::vec3 ls = glm::vec3(v.view * glm::vec4(worldCenter, 1.0f));
+	// XY：球在垂直于光向的平面上的投影仍是同半径圆盘，故直接用 ±worldRadius
+	if (std::abs(ls.x) > v.xyRadius + worldRadius || std::abs(ls.y) > v.xyRadius + worldRadius)
+		return false;
+	// Z：view 把切片中心放在眼点前方 eyeOffset 处（view.z = −eyeOffset），故 t = −ls.z − eyeOffset
+	const float t = -ls.z - v.eyeOffset;
+	return t + worldRadius > v.tMin && t - worldRadius < v.tMax;
 }
 
 /**

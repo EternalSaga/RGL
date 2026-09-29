@@ -122,7 +122,7 @@ static_assert(kSceneDataIrradianceOffset % 16 == 0, "irradiance region must stay
  */
 /**
  * 阴影图边长（**单一真相源**，Phase 11 批 11.2）。两个消费方：① 视锥包围球拟合的
- * texel 吸附（scene_context::directionalShadowMatrix）；② 图声明里 depthOffscreen
+ * texel 吸附（scene_context::buildShadowVolume）；② 图声明里 depthOffscreen
  * 附件的独立 extent（render_graph::decorateShadowPass —— 常量由调用方 main_impl 传入，
  * 图模块本身不认识 scene_data 契约）。
  *
