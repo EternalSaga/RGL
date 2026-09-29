@@ -62,7 +62,15 @@ CMake 无独立构建目录——必须从根目录构建（`cmake -B build -S .
   **与 imgui 门独立 → headless 可用**）。端点速查 `GET /`（路由）、`GET /state`（相机 +
   参数页发现，label 含中文）、`POST /camera`（`yawDegrees`/`pitchDegrees`/`fovDegrees` 一律**度**）、
   `POST /param`（`{label,value,page?,material?}`）、`POST /shot`（返回 PNG 绝对路径；
-  llm 截图在跑 → 409）。帧边界套用 = **本帧即生效**，`/shot` 下帧结算（超时 10s/2s）
+  llm 截图在跑 → 409）。帧边界套用 = **本帧即生效**，`/shot` 下帧结算（超时 10s/2s）。
+  批 11.0e 补两项：① `POST /camera` 传 `target` 时 fps 模式**反推 yaw/pitch**
+  （`cameraAimAt`，与 `readCameraPlacement` 同约定）而非拒绝，显式给角度则尊重显式值；
+  ② 启动在 bind 前用 httplib Client **探测**（1s 超时），连得上 = 已有监听者 → error + 不启动
+  （`SO_REUSEPORT` 会让多实例静默共存）。故 RPC 起跑前仍须 `pgrep -cx rgl` 确认无残留
+- **"哪个材质占这块屏幕"用加法闪色定位**：材质页改 **emissive**（加法）再截图差分，
+  **不要改 baseColor**（乘法：纹理本身就暗的表面 ×红后变化 < 阈值 → 暗面被整体漏判，
+  2026-09-29 因此走错三次，见 `docs/调试历史.md`）。比较亮度口径用**同材质内的比值**
+  （如阴影/受光），跨图跨时刻的全局百分位不可比
 - **凡"截 UI"验收必须外部截图**：`llm_debug` 截图发生在 `frameEndHook`（imgui 绘制）**之前**
   → 天生不含 UI（既有事实，非回归）；imgui 面板视觉验收走窗口模式 + 外部截图工具
   （本机 KDE Wayland：`spectacle -b -n -o <file> -d <ms>`）
@@ -211,6 +219,16 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
   skybox 背景在 deferred light pass 内合成（非独立 pass）
 - **Phase 6 渲染图边界**：线性 pass 序（无拓扑排序/fusion/aliasing）；执行器 state/drawSource 只认
   opaque/skybox/transparent/light 四个名字；单 swapchain attachment；多线程录制不做
+  （批 11.4 起另有 ao/tonemap 两个全屏 state，由 `kFullscreenPassStates` 登记）
+- **Phase 11 批 11.4 SSAO 三条固有边界**：① **depth-only → 法线贴图细节看不见**（鹅卵石缝
+  是法线贴图，深度图上是一整片平面 → 开阔地面 AO 恒 1.000，不是 bug）；② 屏幕空间螺旋采样
+  无投影 range check（scene data 头只有 `invViewProj`）→ 前景轮廓外一圈 AO 光晕；
+  ③ 施加点在 tonemap 合成处，**连直接光一起压**（forward 无 G-buffer 的唯一对等位置）。
+  AO pass 常驻图内、`ao.strength=0` 逐位旁路（`lerp(1,x,0)≡1.0`），故不产生额外基线成本
+- **湿面只加高光不压暗**（批 11.0 补修）：`_Wet` 材质 `roughnessFactor=0.163` → effective 0.12
+  （水膜）。实测 roughness 0.12 是**平台期**（无 SSR，只能反射 IBL 高 mip 的均匀天空辉光），
+  且真实湿面应同时压暗漫反射而这里没做 → 湿区略"亮而奶"。补它需 per-material wetness 分量
+  进 scene data（draw data schema 扩列 = 反射管线改动），列 Phase 12 候选
 - **灯契约（现行）**：`Light` 组件 + `index` = 列表位正序（画不画 = 实体有无；forward 读 index 0 = 主光，
   延迟按 index 落槽）；`SceneLight`（前向头）/`GpuLight`（灯数组）布局均走 C API 反射生成，无手写双源
 - **GPU culling（Phase 7b）现状**：默认 = compute culling + **读回重放**（三驱动均跑 culling compute，

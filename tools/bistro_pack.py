@@ -26,6 +26,9 @@ import sys, os, json, struct, subprocess, tempfile, math
 # do not need to store it. Degenerate/uv-less primitives fall back to Frisvad analytic
 # basis so every baked vertex gets a unit tangent perpendicular to its normal.
 EMISSIVE_STRENGTH = 4.0   # look-dev; engine loader premultiplies into emissiveFactor
+# Wet-pavement roughness 缩放（2026-09-29）：effective = 本值 × ORM.G(0.737) ≈ 0.12（水膜）。
+# 逐条依据见下方 roughnessFactor 处的注释。
+WET_ROUGHNESS_SCALE = 0.163
 ALPHA_CUTOFF = 0.5        # glTF default
 
 if len(sys.argv) < 4:
@@ -70,7 +73,23 @@ for m in materials:
         p["metallicRoughnessTexture"] = {"index": spec_idx}
         m["occlusionTexture"] = {"index": spec_idx}
         p["metallicFactor"] = 1.0
-        p["roughnessFactor"] = 1.0
+        # Wet-pavement look-dev (2026-09-29): Bistro 的 *_Specular.dds 是 16x16 常量
+        # (0,188,0) -> ORM 的 G 通道恒 0.737，**wet 与 dry 材质的 PBR 参数逐字节相同**
+        # （README/README 未发布湿面数据，官方参考图是 Falcor 路径追踪）。湿沥青/湿石板
+        # 的物理近似 = 一层水膜 = roughness 大幅下降，于是这里给名字含 "_Wet" 的材质
+        # 一个 roughness 缩放：effective = WET_ROUGHNESS_SCALE * 0.737 = 0.12。
+        #
+        # 为什么是 0.12 而非更镜面：实测路面带 p90 在 effective roughness
+        # 0.221 / 0.120 / 0.059 三档分别是 197.0 / 197.3 / 197.0 —— **0.12 就到平台期**。
+        # 因为没有 SSR/局部反射，能被反射的只有 IBL cubemap 的高 mip（近似均匀天空辉光），
+        # 再锐化也反射不出任何新信息。这是无 SSR 的已知代价，不是调参没调到位。
+        #
+        # 已知残留偏差（未做，需 shader 侧 wetness 通道）：真实湿面会**同时**压暗漫反射
+        # （水填进微观凹凸），这里只加高光、不压暗，故湿区整体比官方略"亮而奶"，
+        # 缺湿面特有的暗部对比。补它需要 per-material 的 wetness 分量进 scene data
+        # （draw data schema 扩列 = 反射管线改动），列 Phase 12 候选。
+        p["roughnessFactor"] = (WET_ROUGHNESS_SCALE if "_Wet" in (m.get("name") or "")
+                                else 1.0)
     if p.get("baseColorTexture"): referenced.add(p["baseColorTexture"]["index"])
     if m.get("normalTexture"): referenced.add(m["normalTexture"]["index"])
     # emissiveTexture 同样要收：漏了则贴图不打包，且 step 5 的索引 remap 拿不到映射，

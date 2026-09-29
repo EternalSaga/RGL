@@ -253,6 +253,11 @@ Phase 11：阴影（大特性，一口气；风险分层 = CSM 承诺交付 + HF
     私有方法，详见 docs/调试历史.md 2026-09-10）。阴影特性归属预置：新 pass 种类 →
     render_graph + ⑤ pass 循环；per-cascade 光锥剔除 → CullDriver（复用 ④c 编舞）；
     depth-only pass 状态 → StateKit 新增条目；不再往 drawFrame 塞步骤。
+  **前置批 11.0 + 11.4 已完成（2026-09-29）**：绿光源（`pack.py` emissive remap 漏补）、
+    湿面（`_Wet` 材质 roughnessFactor → effective 0.12）、"背光面过暗"（env 0.2→1.0 /
+    sun 15→12 / exp 1.2→1.0，同材质阴影/受光线性比 0.0022 → 0.037）、SSAO（depth-only，
+    默认 0.5，强度 0 逐位旁路）。计划与实际偏差（判据改了、11.0c 未做）见
+    [phase11_plan.md](phase11_plan.md) §8；排障细节见 调试历史 2026-09-29。
   ① 保守光栅化基建（VK_EXT_conservative_rasterization，RADV 26.2.1 已实测可用 rev 1）：
      深度写入保守化（重叠三角形不留缝）——CSM/HFTS 共同硬前提
   ② CSM（Cascaded Shadow Maps）先行【承诺交付】：depth-only 阴影深度 pass（mesh 管线
