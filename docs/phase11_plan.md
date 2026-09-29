@@ -255,16 +255,16 @@ CSM/HFTS 共同硬前提。
       21.5% 像素全变暗；四组基线重测（§6）；性能重测 1/2/4 级 = **2.21 / 4.02 / 7.10 ms** →
       定案 1 级依据更强。排查全程 → `docs/阴影失效排查.md` + `docs/调试历史.md`
 - [ ] 批 11.3：HFTS spike 出结论（做 / 收手二选一）
-- [x] BIT-IDENTICAL **基线已建立（2026-09-29 阴影修复后重测，同日 5a-6 切 4 级再迁移；5a-4 旧 on 态基线作废）**：默认配置 + 默认机位 + llm_debug（级联数 = `kActiveShadowCascades`，现 4）：
+- [x] BIT-IDENTICAL **基线已建立（2026-09-29 阴影修复后重测，同日 5a-6 切 4 级、5a-7 稳定化再迁移；5a-4 旧 on 态基线作废）**：默认配置 + 默认机位 + llm_debug（级联数 = `kActiveShadowCascades`，现 4）：
       | 配置 | md5 |
       |---|---|
       | forward，`shadow_pass=false`（**默认**） | `4f9801d5699d60fef6342b80c6d0d278`（**与旧基线全等**——门控关路径未受修复影响） |
-      | forward，`shadow_pass=true` | `297c999f5105fb27b85f237c55d32370`（4 级；同会话两次连跑逐位相同；1 级值 `b415fbe1…`、坏态值 `e128666c…`/`72b6e512…` 均作废） |
+      | forward，`shadow_pass=true` | `b856e4a62781d6c5c9e79863fa61e35d`（5a-7；同会话两次连跑逐位相同；历次作废：`297c999f…`/`b415fbe1…`/`e128666c…`/`72b6e512…`） |
       | deferred，`shadow_pass=false` | `269e7e4c6195acb18ab7b774a0c8f11c`（**与旧基线全等**） |
-      | deferred，`shadow_pass=true` | `4ea80001fef695ecdcd8d7d8a5003d5d`（4 级；1 级值 `aa7fdf17…`、坏态值 `94b892a3…` 均作废） | 
+      | deferred，`shadow_pass=true` | `fe3693ef401d3539b3ef20e711cd5e59`（5a-7；历次作废：`4ea80001…`/`aa7fdf17…`/`94b892a3…`） | 
 
-      D1 对拍（开阴影，4 级）= forward vs deferred：>8 差异像素 **0.005%**、均值差同 1 级档。
-      开关对拍（默认机位）= **11.22% 像素、100% 变暗 0 变亮**（1 级为 8.75%，4 级远级覆盖更全）。
+      D1 对拍（开阴影）= forward vs deferred：>8 差异像素 **0.005%**（各版本一致）。
+      开关对拍（默认机位，5a-7）= **6.17% 像素、100% 变暗 0 变亮**。
       **旧基线 `7a872517…`（forward）/ `1139acb4…`（deferred）作废**：差异原因 = 新增 `* shadowFactor`
       乘法改变了编译器的 FMA 合约，实测差异 **1 个像素 / 1 LSB**（详见 §12.6.3）。
 - [ ] 跨驱动（NVIDIA / Intel）复测
@@ -722,6 +722,24 @@ extendedDynamicState3ExtraPrimitiveOverestimationSize = false
 | 根因 | `decorateShadowPass` 写 `loadOp = c==0 ? clear : load`，理由"clear 会洗掉邻块"是**对动态渲染的误解**——clear 只作用本 pass renderArea（= 自己的分块子矩形，5a-4 起 viewport 同源）。结果块 1..3 **永不初始化**，采到未定义内存（实测 ≈0）。1 级"块=整幅"恰好掩盖 |
 | 修法 | 每级都 `loadOp = clear`（各清各块，互不重叠）；selfCheck 不钉 loadOp，零连带动 |
 | 验证 | 复现机位画面正常且影缘更锐；默认机位开关对拍 11.22% 全变暗；D1 0.005%；0 error；四组基线见 §6 |
+
+---
+
+## 12.10 批 11.2 · 5a-7：阴影随视角"游动"修复（闭式拟合球 + 距离量化 + snap 格）
+
+用户实测（4 级）：机位平移 0.06，井盖阴影时有时无。临时日志证实**各级拟合球半径随相机
+连续变化**（c0 0.2140→0.2209）→ 光空间投影逐帧缩放滑移。三根源与修法：
+
+| 根源 | 修法（scene_context / render_list_impl） |
+|---|---|
+| AABB 法姿态依赖（世界 AABB 随 yaw 变，且比精确球大 16%） | `frustumBoundingSphere(view, proj)` 闭式精确外接球：球心视轴 `zc`、`r=√((f−zc)²+rf²)`，n/f 从 proj 深度行反推（RH_ZO `n=B/A, f=B/(1+A)`）——**姿态无关、不碰平面符号约定**；r×1.001 防 float32 角点出球 |
+| 自适应 near/far 连续变（两机位 f=1.3813 vs 1.4345） | `quantizeShadowDistance`（1/8 格向上取整），CPU 切片与 shader splits **同用量化值**；同桶内 r/splits 完全恒定 |
+| snap 格传图集整幅 2048 而块实为 1024（半纹素吸附 → PCF 抖） | 传 `shadowTileSize(cols)` |
+
+验证：报障两机位 + 中点三图井盖阴影一致（修复前互相矛盾）；开关对拍 6.17% 全变暗
+（面积小于修前属预期：量化后 splits 外移 + 球收紧）；D1 0.005%；0 error；基线迁移见 §6。
+排查与探针教训全文 → `docs/调试历史.md` 5a-7 条目（**探针再次抓到推导错误**：角点离轴距
+误写 `√(1+1/a²)`，自检断言当场暴露）。
 
 
 ---

@@ -4,7 +4,7 @@ module;
 // lookAt / ortho 属 gtc/matrix_transform.hpp（Phase 11 批 11.2 buildShadowVolume 用；
 // 与 camera.cppm 同一处 include——GMF 头可达但名字不可见，不加就是"no member named"）
 #include <glm/gtc/matrix_transform.hpp>
-// glm::inverse 属 gtc/matrix_inverse.hpp（frustumBoundingSphere 的 NDC→世界反投影用）
+// glm::inverse 属 gtc/matrix_inverse.hpp（frustumBoundingSphere 的视轴球心 → 世界变换用）
 #include <glm/gtc/matrix_inverse.hpp>
 export module scene_context;
 
@@ -198,43 +198,56 @@ export struct Light {
 };
 
 /**
- * Phase 11 批 11.2：由视锥求**包围球**。视锥 8 角取世界 AABB 再取外接球——
- * 不追求最小球（对阴影贴图覆盖而言无差别），但保证**整个视锥在球内**。
- * @param viewProj 相机 view·proj（列主序，glm 约定；本函数内部求逆做 NDC→世界反投影）
- * @return {center, radius}；退化视锥（逆不存在等）返回半径 0
+ * Phase 11 批 11.2：由视锥求**精确外接球**（闭式解）。视锥 8 角共球、球心在视轴上——
+ * 结果只依赖 near/far/fov/aspect，**与相机姿态（yaw/pitch/位置）完全无关**，这是阴影
+ * 稳定性的关键：半径随相机连续变化 = 光空间投影逐帧缩放 = 影子在地面上"游动"
+ * （2026-09-29 用户实测：机位平移 0.06，井盖阴影时有时无）。
+ * 8 角都在球面上 → 这就是最小外接球，保证**整个视锥在球内**。
+ * @param view 相机 view（球心视空间 → 世界用其逆）
+ * @param proj 相机 proj（级联子视锥的深度重映射已烘在里面的形态；透视专用）
+ * @return {center, radius}；退化 proj（正交/奇异）返回半径 0
  */
-export inline Bounds frustumBoundingSphere(const glm::mat4& viewProj) {
-	// 视锥 8 角 → 世界 AABB → 外接球。
+export inline Bounds frustumBoundingSphere(const glm::mat4& view, const glm::mat4& proj) {
+	// 闭式解（GLM 探针验证 4 组参数 8 角距 ≡ r，含本项目的 RH_ZO 与重映射子 proj）：
+	// 视空间角点 (±z·tanHalf·aspect, ±z·tanHalf, −z) 到视轴上球心 (0,0,−zc) 等距 →
+	//   zc = (f² − n² + rf² − rn²) / (2(f − n))，r = √((f − zc)² + rf²)。
+	// near/far 从 proj 深度行反推（RH_ZO：ndc.z = −A − B/z_eye，A=proj[2][2]、B=proj[3][2]
+	// → n = B/A、f = B/(1+A)），fov/aspect = 1/proj[1][1] 与 proj[1][1]/proj[0][0]。
 	//
-	// **为何改成 AABB 法**：本函数的契约是"整个视锥在球内"，**不追求最小球**（见上）。
-	// Eberly 增量法要求调用方的平面约定与它一致，而这里 extractFrustum 用的是
-	// "内侧 = dot(n,x)+d ≥ 0"、sphereInFrustum 同样是 ≥ 0，增量法却是 ≤ 0 那套写法 ——
-	// 两套约定混用会把球心推向内侧深处、半径长不大，算出的球装不下视锥
-	// （2026-09-29 实测：近距离机位 r 只有 1.25，而该视锥远平面角点距球心 2.0；
-	//  视锥边缘的建筑整批落在球外被逐级剔除丢掉 → 阴影图整幅 clear → 广场一个投影都没有）。
-	// 试过"取负把约定转回去"，结果半径直接被推成 0（更糟）。AABB 法不依赖任何符号约定，
-	// 半径只比最小球大约 10% 量级 —— 而本用途（阴影贴图覆盖 + texel 尺寸）完全不在乎这点余量。
-	//
-	// **两条反投影约定**（2026-09-29 二次踩坑，GLM 探针钉死，见 docs/调试历史.md）：
-	// ① NDC 角点回世界必须乘 **inverse(viewProj)**——第一版误用了正向矩阵，对任何机位
-	//    远平面角恒有 w = −1 < 0 → 走退化早退 → 半径恒 0（阴影照样全没）；
-	// ② 本项目 GLM 编译为 **depth zero-to-one**（rgl/CMakeLists.txt:105），NDC z 值域是
-	//    [0,1] 而非 [-1,1]——近角取 0、远角取 1。角点在视锥内 ⇒ 反投影 w = −z_eye > 0 恒成立，
-	//    残余的 w ≤ 0 判只挡真退化（奇异矩阵）。
-	// 修好后实测（复现机位，near=0.05/far=2.197）：r = 2.4017 ≥ 远角距球心 2.0074，包住 ✓。
-	const glm::mat4 invViewProj = glm::inverse(viewProj);
-	const glm::vec3 kFar{1e30f};
-	glm::vec3 lo{kFar}, hi{-kFar};
-	for (int corner = 0; corner < 8; ++corner) {
-		const glm::vec4 world = invViewProj * glm::vec4((corner & 1) ? 1.0f : -1.0f,
-			(corner & 2) ? 1.0f : -1.0f, (corner & 4) ? 1.0f : 0.0f, 1.0f);
-		if (world.w <= 0.0f)
-			return Bounds{glm::vec3{0.0f}, 0.0f};  // 退化视锥（角点回到相机后方）
-		const glm::vec3 corner3 = glm::vec3{world} / world.w;
-		lo = glm::min(lo, corner3);
-		hi = glm::max(hi, corner3);
-	}
-	return Bounds{(lo + hi) * 0.5f, 0.5f * glm::length(hi - lo)};
+	// **前两版的教训**（→ docs/调试历史.md 5a-5/5a-6）：Eberly 增量法与 extractFrustum
+	// 平面符号约定混用 → 球装不下视锥；改 8 角世界 AABB 法修好正确性但引入姿态依赖
+	// （AABB 随 yaw 变，实测还比精确球大 16%）。闭式解既不碰符号约定也不碰姿态。
+	const float A = proj[2][2];
+	const float B = proj[3][2];
+	if (A >= 0.0f || B >= 0.0f || A < -1.0f)
+		return Bounds{glm::vec3{0.0f}, 0.0f};  // 非透视/退化 proj（正交 A=0；奇异防御）
+	const float nearPlane = B / A;
+	const float farPlane = B / (1.0f + A);
+	if (!(farPlane > nearPlane))
+		return Bounds{glm::vec3{0.0f}, 0.0f};
+	const float tanHalf = 1.0f / proj[1][1];
+	const float aspect = proj[1][1] / proj[0][0];
+	const float cornerScale = tanHalf * std::sqrt(aspect * aspect + 1.0f);  // 角点离轴距/深度
+	const float rn = nearPlane * cornerScale;
+	const float rf = farPlane * cornerScale;
+	const float zc = (farPlane * farPlane - nearPlane * nearPlane + rf * rf - rn * rn)
+		 / (2.0f * (farPlane - nearPlane));
+	// ×1.001 余量：float32 下"8 角距 = r"只在舍入内竞争（探针大 near/far 比时相对误差
+	// ~1e-5），阴影侧的保守方向是宁大勿小（大 = 多收投影体，小 = 漏画）。
+	const float radius = std::sqrt((farPlane - zc) * (farPlane - zc) + rf * rf) * 1.001f;
+	const glm::vec4 center = glm::inverse(view) * glm::vec4(0.0f, 0.0f, -zc, 1.0f);
+	return Bounds{glm::vec3{center} / center.w, radius};
+}
+
+/**
+ * 阴影级联切分用的距离量化（向上取整到 1/8 格）。自适应 near/far 随相机移动**连续**变化
+ * （实测两机位 f=1.3813 vs 1.4345）→ 闭式球半径仍连续变 → 影子游动的另一半根源。
+ * 量化后小幅移动落同一桶 → 半径/splits **完全恒定**；跨桶瞬间跳一次（≤12.5% 半径，
+ * 离散且低频，肉眼是"分辨率变细/粗"而非"影子滑动"）。CPU 建切片与 shader 选级阈值
+ * 必须同用量化值（render_list_impl 两处同源调用），否则选级与内容错位。
+ */
+export inline float quantizeShadowDistance(float d) {
+	return std::ceil(d * 8.0f) * 0.125f;
 }
 
 /**

@@ -37,15 +37,18 @@ struct Pending {
  * 每帧填阴影 scene data（尾区阴影 VP 区 + 4 个 vec4 采样参数子区）。抽出函数体的原因同
  * collectShadowCasters / fillLightData：函数代码行阈值按函数 extent 计算（内嵌 lambda 也计入），不拆就过阈。
  * @param out 出参：本帧 draw list（写 sceneData.shadowViewProj / Splits / TexelSizes / Params / Atlas）
- * @param viewProj 当帧 viewProj（取 near/far 做切分；两者同源——projectionSystem 写入）
+ * @param shadowNear/shadowFar **量化后**的切分深度界（与 renderListSystem 建切片同源——
+ *   splits 阈值与级联内容错位 = 边界处阴影闪跳）
  * @param volumes 各级光空间体（VP + XY 半宽；与剔除用同一批，先建体再同时用于剔除与矩阵）
  */
-void fillShadowData(FrameDrawList& out, const ViewProjection& viewProj,
+void fillShadowData(FrameDrawList& out, float shadowNear, float shadowFar,
     std::span<const ShadowVolume> volumes) {
     for (uint32_t c = 0; c < kActiveShadowCascades; ++c)
         out.sceneData.shadowViewProj[c] = volumes[c].viewProj;
     // splits = 每级远截止（采样端拿它选级；末级写 1e9 = “没有更远的级”，下级比较不会被越过）
-    // texelSizes = 2·r/mapSize，每级各自从自己的球推。
+    // **必须用与 CPU 切片同源的量化 n/f**（renderListSystem 传入）——阈值与内容错位 =
+    // 片元选到不覆盖自己的级 → 边界处阴影随相机闪跳。
+    // texelSizes = 2·r/块边长，每级各自从自己的球推。
     // params = (depthBias, normalOffsetScale, enabled, 保留)；enabled 由门控 diagnostics 驱动。
     // atlas = (图集边长, 单块边长, 分块列数, 保留)，采样端把分块 uv 叠图集用。
     const float kNoFar = 1e9f;
@@ -54,13 +57,13 @@ void fillShadowData(FrameDrawList& out, const ViewProjection& viewProj,
     // （distSq > splits[i]² 则进第 i+1 级），而 distSq 对任何真实片元都 > 0 —— 留 0 会被
     // 判成"已越过这一级的分界"，把片元一路推到最后一个槽。生效 1 级时若 splits =
     // {1e9, 0, 0, 0}，全场景都会落到 3 号槽，而它的光空间 VP 从未被写过（零矩阵）
-    // → clip.w = 0 → ndc = 0/0 = NaN → 阴影因子恒 0（实测：整个广场全黑，与机位无关）。
+    // → clip.w = 0 → 0/0 = NaN → 阴影因子恒 0（实测：整个广场全黑，与机位无关）。
     // 这里让"没生效的级"分界恒为无穷远 = 永远选不中，shader 侧无需知道生效级数。
     glm::vec4 splits{kNoFar, kNoFar, kNoFar, kNoFar};
     glm::vec4 texels{0.0f};
     for (uint32_t c = 0; c < kActiveShadowCascades; ++c) {
         splits[c] = c + 1u < kActiveShadowCascades
-            ? cascadeSplitDistance(viewProj.nearPlane, viewProj.farPlane, c, kActiveShadowCascades)
+            ? cascadeSplitDistance(shadowNear, shadowFar, c, kActiveShadowCascades)
             : kNoFar;
         texels[c] = volumes[c].xyRadius * 2.0f / static_cast<float>(shadowTileSize(cols));
     }
@@ -164,8 +167,11 @@ std::array<ShadowVolume, kActiveShadowCascades> buildShadowVolumes(const Light& 
 		casterMax = glm::max(casterMax, cd.center + cd.radius);
 	}
 	std::array<ShadowVolume, kActiveShadowCascades> volumes{};
+	// snap 格 = **实际块边长**（不是图集整幅）：4 级时块 1024，按 2048 网格吸附 = 吸附到
+	// 半纹素位置，PCF 抽头随相机跨纹素边界 → 影缘抖动（5a-6 排查时埋的雷，游动修复一并拆）。
+	const uint32_t snapGrid = shadowTileSize(shadowAtlasColumns(kActiveShadowCascades));
 	for (uint32_t c = 0; c < kActiveShadowCascades; ++c)
-		volumes[c] = buildShadowVolume(light, slices[c], casterMin, casterMax, kShadowMapSize);
+		volumes[c] = buildShadowVolume(light, slices[c], casterMin, casterMax, snapGrid);
 	emitShadowCasters(cands, volumes, objectSlotCount, shadowArgs, out);
 	return volumes;
 }
@@ -263,19 +269,23 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	// node-local 剔除球经 modelMatrix 变换到世界后测（保守：跨界判可见，绝不误剔）。
 	const Frustum frustum = extractFrustum(viewProj.proj * viewProj.view);
 	// Phase 11 批 11.2：级联光空间拟合球（每级一个，与对应 VP 同源）。
-	// ① 每级的拟合目标 = 该级**子视棱**的包围球（按实用切分的近远平分区间重建子 proj →
-	//   取包围球），**不是场景包围球**：后者实测半径 116.26（整条运河 + 街景）会把 texel 摊到 0.227
-	//   世界单位，比单级视棱算差一个数量级。
-	// ② 剔除用它而不用主视棱：投影体可以在当前视野之外（机位后的楼房照出来的阴影落在可见区内）
-	//   ——按主视棱剔会漏掉它们，影子就会在场景中“活着”抬头。
+	// ① 每级的拟合目标 = 该级**子视锥**的精确外接球（闭式解，见 frustumBoundingSphere），
+	//   **不是场景包围球**：后者实测半径 116.26（整条运河 + 街景）会把 texel 摊到 0.227
+	//   世界单位，比单级视锥算差一个数量级。
+	// ② 剔除用它而不用主视锥：投影体可以在当前视野之外（机位后的楼房照出来的阴影落在可见区内）
+	//   ——按主视锥剔会漏掉它们，影子就会在场景中"活着"抬头。
+	// ③ 切分深度界先**量化**（quantizeShadowDistance）：自适应 near/far 随相机连续变 →
+	//   不量化则半径/splits 逐帧连续变 → 光空间投影缩放滑移 = 影子随视角"游动"
+	//   （2026-09-29 用户实测：井盖阴影随相机平移时有时无）。fillShadowData 的 splits
+	//   用同一对量化值——两处必须同源。
+	const float shadowNear = quantizeShadowDistance(viewProj.nearPlane);
+	const float shadowFar = quantizeShadowDistance(viewProj.farPlane);
 	std::array<Bounds, kActiveShadowCascades> cascadeSpheres{};
 	for (uint32_t c = 0; c < kActiveShadowCascades; ++c) {
-		const float n = viewProj.nearPlane;
-		const float f = viewProj.farPlane;
-		const float nearC = c == 0 ? n : cascadeSplitDistance(n, f, c - 1u, kActiveShadowCascades);
-		const float farC = cascadeSplitDistance(n, f, c, kActiveShadowCascades);
-		cascadeSpheres[c] = frustumBoundingSphere(
-			projWithDepthRange(viewProj.proj, nearC, farC) * viewProj.view);
+		const float nearC = c == 0 ? shadowNear : cascadeSplitDistance(shadowNear, shadowFar, c - 1u, kActiveShadowCascades);
+		const float farC = cascadeSplitDistance(shadowNear, shadowFar, c, kActiveShadowCascades);
+		cascadeSpheres[c] = frustumBoundingSphere(viewProj.view,
+			projWithDepthRange(viewProj.proj, nearC, farC));
 	}
 
 	// Phase 7b：cullArgs 逐 candidate 填充（candidate 序 = main C3 表序——同 view 迭代序 +
@@ -390,7 +400,7 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	// Phase 8 批次 ④a：漫反射辐照度 SH9（env 加载期算好存 Resources，此处每帧拷入）
 	fresh.sceneData.irradianceSH = envService.getIrradianceSH();
 	fresh.sceneData.skyInvViewProj = glm::inverse(viewProj.proj * viewProj.view);
-	fillShadowData(fresh, viewProj, shadowVolumes);
+	fillShadowData(fresh, shadowNear, shadowFar, shadowVolumes);
 	fresh.sceneData.objectMatrices = std::span<const glm::mat4>{state.matrices};
 	fresh.sceneData.objectMvps = std::span<const glm::mat4>{state.mvps};
 	fresh.sceneData.objectDraws = std::span<const ObjectDraw>{state.draws};
