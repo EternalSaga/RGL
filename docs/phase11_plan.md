@@ -259,12 +259,13 @@ CSM/HFTS 共同硬前提。
       | 配置 | md5 |
       |---|---|
       | forward，`shadow_pass=false`（**默认**） | `4f9801d5699d60fef6342b80c6d0d278`（**与旧基线全等**——门控关路径未受修复影响） |
-      | forward，`shadow_pass=true` | `0335754625eb971b7a95887ac92a0c14`（5a-8b；同会话两次连跑逐位相同；历次作废：`7257ae0f…`/`b856e4a6…`/`297c999f…`/`b415fbe1…`/`e128666c…`/`72b6e512…`） |
+      | forward，`shadow_pass=true` | `6011842c61669c4b6e787e85cac3ff4a`（5a-8c；同会话两次连跑逐位相同；历次作废：`03357546…`/`7257ae0f…`/`b856e4a6…`/`297c999f…`/`b415fbe1…`/`e128666c…`/`72b6e512…`） |
       | deferred，`shadow_pass=false` | `269e7e4c6195acb18ab7b774a0c8f11c`（**与旧基线全等**） |
-      | deferred，`shadow_pass=true` | `86b6210756b94d7ced9093470cf871db`（5a-8b；历次作废：`a7a845fc…`/`fe3693ef…`/`4ea80001…`/`aa7fdf17…`/`94b892a3…`） | 
+      | deferred，`shadow_pass=true` | `3831572ebf36d6b01a70efefcb5508ea`（5a-8c；历次作废：`86b62107…`/`a7a845fc…`/`fe3693ef…`/`4ea80001…`/`aa7fdf17…`/`94b892a3…`） | 
 
       D1 对拍（开阴影）= forward vs deferred：>8 差异像素 **0.005%**（各版本一致）。
-      开关对拍（默认机位，5a-8b）= **6.00% 像素、100% 变暗 0 变亮**。
+      开关对拍（默认机位，5a-8c）= **9.91% 像素、100% 变暗 0 变亮**（5a-8b 时 6.00%——
+      差额正是「选级错 → 远处永远走全亮旁路」而本该有影的那部分）。
       ⚠ 5a-7 时代的"6.17%"与"三机位一致"是在 guard 反了导致的**单位阵伪影**上测的
       （伪影恰好姿态无关且全变暗，把指标全骗过）——勘误与小物件阴影锚点 →
       `docs/调试历史.md` 5a-8 条目。
@@ -776,6 +777,36 @@ extendedDynamicState3ExtraPrimitiveOverestimationSize = false
 | 验证 | 报障两机位井盖阴影一致（都有影）；街道机位小物件影子全在；开关对拍 6.00% 全变暗；D1 0.005%；0 error；基线 forward on `03357546…` / deferred on `86b62107…`（off 不变） |
 | 教训 | ① "AABB 角点 = 方向极值"是几何里最常见的隐性假设——沿任意方向取盒极值必须 support function（或改用球，无角点假设）；② 恒等式日志是根因指纹：两个不该恒等的量恒等 = 某分支从未生效；③ 游动验收必须含**同 position 纯转向**机位对（5a-8 的三机位只验了平移，两姿态恰好同桶同层级）；④ 探针自坑：view 是 world→view，重构世界点要 `inverse(view)` |
 
+
+---
+
+## 12.13 批 11.2 · 5a-8c：级联选级的 forward 提取整个是错的（"远处没影子 + 影子边缘前移"真根因）
+
+用户报（5a-8b 后）：街道机位推进时**远处的影子边缘往前移动**。可视化哨兵一步定位：拱门内那条
+整条远街是「出块」色 → 那一带从未采到阴影图，一直走"出块=全亮"旁路；把级号编进哨兵后看到
+它选中的是 **c0**（最小盒）→ 视深算错。探针复现 shader 取法：`-normalize(Load4(96).xyz)`
+（注释称"w=0 无平移项混入"）实测 **w = 7.76 ≠ 0**，与真 forward 点积 **−0.43**。
+
+| 项 | 内容 |
+|---|---|
+| 修复 | `shadow.slang` 选级 forward 改 `normalize(cross(Load4(80).xyz, Load4(64).xyz))`：invVP 第 0/1 列 ∝ 相机右/上向量（透视只贡献正标量），叉积即 forward，对任意 pitch/yaw 精确。探针 500 组随机机位：dot 最小 0.9999998、视深误差 4.8e-7；旧口径 462/500 失效 |
+| 为何长期没暴露 | 视深错 → 绝大多数片元判"未越过 split0" → 全落 c0 小盒 → 盒外一律全亮：**画面 ~90% 区域从没采过阴影图**，只有贴相机窄带有影。5a-8 井盖机位贴地近，整体落在 c0 盒内 → 指标全绿而 bug 全程在场 |
+| 验证 | 出块哨兵图远街由"出块"变"块内"；用户两机位远街恢复建筑/地面影；井盖两机位对无回归；开关对拍 9.91% 全变暗（5a-8b 时 6.00%，差额即本该有影的那部分）；D1 0.005%；0 error；基线 forward on `6011842c…` / deferred on `3831572e…`（off 不变） |
+| 教训 | ① 注释里的"数学断言"要按探针核对（"w=0"这句正是根因的直接来源）；② GLM `m[col][row]` 与"内存第 c 个 vec4"不是一回事——Load4(64+16c) 取的是**第 c 列**；③ **只在一小块区域生效的 bug 最会骗指标**，验收必须专门挑"远离相机、跨越多级"的取景；④ 出块旁路再按 uv.x/uv.y/ndc.z 三因分色，比读数值日志更快定位到"选错级" |
+
+### 与 Filament 的对照（本地 checkout 调研结论）
+
+- Filament **有** CSM（`CONFIG_MAX_SHADOW_CASCADES = 4`，`ShadowMapManager.cpp:1041-1076` 逐级
+  `updateNearFarPlanes` 就地改写相机投影的近远面），与我们同路线；它默认 1 级。
+- 它的近平面正是"全体 casters 沿光轴极值"（`ShadowMap.cpp:839`、`1212-1229`）——即 5a-8b 已修的
+  support function 那一版；它的 XY 用 receivers 的 2D 界。
+- 选级用视空间 z（`surface_getters.fs:132-137`），与我们 `dot(P-eye, forward)` 等价；它同样
+  **不从 invVP 反推相机方向**，而是从 view 矩阵第 3 行取（`surface_light_directional.fs:66-68`）。
+- 值得后续借鉴（按性价比）：**shadowFar 二次淡出**（`surface_light_directional.fs:66-71` +
+  `ColorPassDescriptorSet.cpp:315-317`）替掉我们"出块=硬切全亮"；1-texel 全亮边 + scissor clamp
+  替代手动越界分支（`ShadowMap.cpp:1258-1326`）；各向异性 normal bias（`surface_shadowing.glsl:51-55`）；
+  更紧的 fit（视锥 ∩ 场景盒凸包的 2D AABB，`ShadowMap.cpp:609-649` + `894-1021`）——最大单项画质
+  提升但改动大，列为 Phase 12 候选。
 
 ---
 

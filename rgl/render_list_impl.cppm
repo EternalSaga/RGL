@@ -292,7 +292,6 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 		cascadeSpheres[c] = frustumBoundingSphere(viewProj.view,
 			projWithDepthRange(viewProj.proj, nearC, farC));
 	}
-
 	// Phase 7b：cullArgs 逐 candidate 填充（candidate 序 = main C3 表序——同 view 迭代序 +
 	// 同守卫：pipelineIndex 有效 / groupCount>0 / 不透明；透明留 CPU 排序路径不入候选）
 	std::vector<RGL::DrawArgs> cullArgs;

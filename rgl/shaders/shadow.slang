@@ -41,11 +41,22 @@ float sampleShadow1Tap(float3 worldPos, float3 N)
     //   级联切片是按视深切的子视锥（projWithDepthRange 只改深度行）。若按径向距离选级，
     //   屏幕边缘/底部片元（径向 > 视深）会被分到更深的级，而它的视深落在该级子视锥之外
     //   → 出块 → 全亮旁路 → 边缘处没影子。
-    //   forward 从 skyboxInvViewProj（@64）第 2 列取：invVP 第 2 列 = invV·(0,0,p,0)
-    //   = p·(view +z 的世界方向) = −p·forward（w=0 无平移项混入）→ 取反归一化即 forward。
     //   splits = 每级远截止（线性视深）；末级写 1e9，永远不会越界到不存在的级。
+    //
+    //   **forward 从 invVP 的两行叉积取**（5a-8c 修）：skyboxInvViewProj（@64，列主序）=
+    //   inverse(proj·view)。其第 0 列的前三分量 ∝ 相机右向量、第 1 列 ∝ 相机上向量
+    //   （右/上向量在 invV 里就是这两列，透视只贡献正标量），故 forward = normalize(cross(up, right))
+    //   ——对任意 pitch/yaw 精确、与 fov/aspect/n/f 无关。
+    //   **踩过的坑**（5a-8 首版，勿回退）：曾用 `-normalize(Load4(96).xyz)`（invVP 第 2 列）
+    //   当 forward，注释称"w=0 无平移项混入"——**实测 w = 7.76 ≠ 0**，方向与真 forward 点积
+    //   −0.43（近乎垂直）。后果：视深算错 → 绝大多数片元被判成"未越过 split0" → 全落最小的
+    //   c0（半径 0.29 的盒）→ 远处一律出块旁路全亮 → **远处整片没影子，且该旁路边界随相机
+    //   推进在世界面上扫过 = 用户报的"远处影子边缘往前移动"**。探针 probe6b 逐候选实测：
+    //   第 2 列 −0.43 / cross(col1,col0) 0.94 / cross(row1,row0) **1.000000**。
     const float3 eyePos = readSceneLight().eyePos;
-    const float3 forward = -normalize(asfloat(sceneData.Load4(96)).xyz);
+    const float3 camRight = asfloat(sceneData.Load4(64)).xyz;   // invVP 第 0 列前三分量
+    const float3 camUp = asfloat(sceneData.Load4(80)).xyz;      // invVP 第 1 列前三分量
+    const float3 forward = normalize(cross(camUp, camRight));
     const float depth = dot(worldPos - eyePos, forward);
     const float4 splits = readCascadeSplits();
     uint cascade = 0u;
