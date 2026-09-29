@@ -152,8 +152,12 @@ return {
         dir = "skybox/rainbow",
         faces = { "rainbow_ft.png", "rainbow_bk.png", "rainbow_up.png",
                   "rainbow_dn.png", "rainbow_rt.png", "rainbow_lf.png" },
-        intensity = 0.2,      -- env 强度（④a 后 = SH 卷积全量天空辐照，p50≈4 的天空 π 卷积
-                              -- ≈13；1.0 时天光 ≈14× 太阳光 = 影面全蓝，0.2 重校准见调试历史）
+        intensity = 1.0,      -- env 强度（④a 后 = SH 卷积全量天空辐照，p50≈4 的天空 π 卷积
+                              -- ≈13；1.0 时天光 ≈14× 太阳光 = 影面全蓝，故历史一度压到 0.2）。
+                              -- **2026-09-29 按"同材质阴影/受光比"重标定回 1.0**：0.2 时阴影面
+                              -- 只有受光的 0.2%（线性域）——墙面 albedo 浅灰 150 却渲成 p50=13，
+                              -- 即"楼房背光面过暗"的根因。户外散射光合理带 0.03~0.10，
+                              -- 1.0 实测 0.037，1.3 起过曝。IBL 通路本身无故障（env 响应单调线性）。
         skybox = true,
     },
 
@@ -161,12 +165,25 @@ return {
     light = {
         direction = { 0.5, -0.75, -0.45 },  -- 照射方向（消费时归一化；从相机侧上方照）
         color = { 1.0, 0.98, 0.95 },
-        intensity = 15.0,
+        intensity = 12.0,  -- 2026-09-29：15→12。env 抬到 1.0 后天空补光变足，太阳相对降一档
+                           -- 保住对比（扫描表：sun12/env1.0/exp1.0 → 墙阴影 46、饱和 0.26%）
         ambient = { 0.25, 0.25, 0.28 },
     },
 
     spin = false,  -- 场景整体时间旋转（true 便于肉眼判断渲染对错；false 静止便于排查遮挡）
     cube = false,  -- 是否渲染硬编码 cube（Phase 1 遗留，原点 ±0.5，与模型互穿时建议关掉）
-    exposure = 1.2,  -- tonemap 曝光（ACES 前线性倍率，缺省 1.0 = 直通；env 0.2 重配比分
-                     -- 后按亮度回提，2026-09-13 调试历史：真正元凶是 ambient/sun 配比非曝光）
+    exposure = 1.0,  -- tonemap 曝光（ACES 前线性倍率，缺省 1.0 = 直通）。2026-09-29：1.2→1.0。
+                     -- env 从 0.2 抬到 1.0 后画面整体亮度本就上来，曝光回到中性 1.0，
+                     -- 避免双重提亮把全图推到过曝区（饱和像素 0.78%→0.26%）。
+
+    -- Phase 11 批 11.4：SSAO（ambient occlusion）施加强度。ao pass（state="ao"）读深度
+    -- 重建世界坐标算**可见度**（1 = 通透）写 r8_unorm RT，tonemap 以 lerp(1, ao, strength)
+    -- 在曝光前相乘。strength = 0 → 逐位旁路（实测三个 shader 版本间 strength=0 截图 sha256
+    -- 相同 = BIT-IDENTICAL 基线成立）；0..1 之间连续可调。
+    -- 0.5 = 2026-09-29 Bistro 外景 look-dev 值：灌木体块/雨篷接触/踏板车接地的分离感出来
+    -- 而不过火（1.0 时深色立面与灌木被压得太死）。
+    -- 半径/采样数/增益等**形状**参数是 ao.frag.slang 内的常量（look-dev 值），不走配置。
+    ao = {
+        strength = 0.5,
+    },
 }

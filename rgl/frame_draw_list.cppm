@@ -45,6 +45,9 @@ export struct SceneFrameData {
 	// Phase 8 收尾：tonemap 曝光（scene data 头 @56 保留区，tonemap.frag 直读；
 	// ACES 前线性倍率，1.0 = 直通旧行为）
 	float exposure = 1.0f;
+	// Phase 11 批 11.4：SSAO 施加强度（scene data 头 @60，头部保留区最后一格；
+	// tonemap.frag `lerp(1, ao, strength)` 的 strength，0 = 逐位旁路）
+	float aoStrength = 0.0f;
 	// Phase 8 批次 ④a：漫反射辐照度 radiance SH9（scene data 尾区 kSceneDataIrradianceOffset，
 	// 9×vec4 .xyz=系数，scene.slang irradiance(N) 消费）；renderListSystem 每帧从
 	// Resources::getEnvIrradianceSH 填。

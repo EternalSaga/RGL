@@ -23,12 +23,24 @@ RgPassAttachment writeAtt(std::string name, RgUsage usage, RgLoadOp load, RgStor
 		.storeOp = store, .clear = clear};
 }
 
-/** tonemap pass 速构（Phase 8 ①：forward/deferred 共用拓扑尾段——采 scene_hdr 写 swapchain）。 */
+/** tonemap pass 速构（Phase 8 ①：forward/deferred 共用拓扑尾段——采 scene_hdr + ao 写
+ * swapchain）。ao 输入对无 ao pass 的图（offscreen 变体不装配）无害：本速构只被
+ * forward/deferred 使用，二者都有 ao pass。 */
 RgPassDesc tonemapPass() {
 	return RgPassDesc{.name = "tonemap", .kind = RgPassKind::drawLight, .state = "tonemap",
 		.outputs = {writeAtt("swapchain", RgUsage::colorWrite, RgLoadOp::clear, RgStoreOp::store)},
 		.inputs = {writeAtt(std::string{kSceneHdrName}, RgUsage::sampleRead, RgLoadOp::load,
-			RgStoreOp::store)}};
+				RgStoreOp::store),
+			writeAtt(std::string{kAoName}, RgUsage::sampleRead, RgLoadOp::load,
+				RgStoreOp::store)}};
+}
+
+/** ao pass 速构（Phase 11 批 11.4：forward/deferred 共用——采 depth 写 ao RT，置 tonemap 前）。 */
+RgPassDesc aoPass() {
+	return RgPassDesc{.name = "ao", .kind = RgPassKind::drawLight, .state = "ao",
+		.outputs = {writeAtt(std::string{kAoName}, RgUsage::colorWrite, RgLoadOp::clear,
+			RgStoreOp::store, RgClearValue{{0.0f, 0.0f, 0.0f, 0.0f}, 1.0f})},
+		.inputs = {writeAtt("depth", RgUsage::sampleRead, RgLoadOp::load, RgStoreOp::store)}};
 }
 
 }  // namespace
@@ -56,6 +68,8 @@ const RgGraphDesc& defaultRenderGraphDesc() {
 					RgAttachmentDesc{.name = std::string{kSceneHdrName},
 						.kind = RgAttachmentKind::offscreen,
 						.format = std::string{kSceneHdrFormat}},
+					RgAttachmentDesc{.name = std::string{kAoName},
+						.kind = RgAttachmentKind::offscreen, .format = std::string{kAoFormat}},
 				},
 			.passes =
 				{
@@ -68,7 +82,8 @@ const RgGraphDesc& defaultRenderGraphDesc() {
 					RgPassDesc{.name = "transparent", .state = "transparent",
 						.drawSource = "transparent",
 						.outputs = {hdrOut(RgLoadOp::load, RgStoreOp::store),
-							depthOut(RgLoadOp::load, RgStoreOp::dontCare)}},
+							depthOut(RgLoadOp::load, RgStoreOp::store)}},
+					aoPass(),
 					tonemapPass(),
 				},
 		};
@@ -139,6 +154,8 @@ const RgGraphDesc& deferredRenderGraphDesc() {
 					RgAttachmentDesc{.name = std::string{kSceneHdrName},
 						.kind = RgAttachmentKind::offscreen,
 						.format = std::string{kSceneHdrFormat}},
+					RgAttachmentDesc{.name = std::string{kAoName},
+						.kind = RgAttachmentKind::offscreen, .format = std::string{kAoFormat}},
 				},
 		};
 		RgPassDesc geometry{.name = "geometry", .state = "opaque", .drawSource = "opaque"};
@@ -162,7 +179,7 @@ const RgGraphDesc& deferredRenderGraphDesc() {
 		// Phase 8 ①：light 不再直写 swapchain——渲入 scene_hdr（tonemap 上屏）
 		light.outputs.push_back(writeAtt(std::string{kSceneHdrName}, RgUsage::colorWrite,
 			RgLoadOp::clear, RgStoreOp::store));
-		d.passes = {std::move(geometry), std::move(light), tonemapPass()};
+		d.passes = {std::move(geometry), std::move(light), aoPass(), tonemapPass()};
 		return d;
 	}();
 	return desc;
@@ -291,6 +308,25 @@ void selfCheckDefaultMidPass(const RgPassPlan& mid, std::vector<std::string>& fa
 		failures.push_back("default: mid color load should be Load");
 }
 
+/** selfCheck：默认图 ao 段（Phase 11 批 11.4）kind/state + **深度转换**断言。
+ *
+ * 深度那条是 SSAO 能工作的硬前提：ao pass 以 sampleRead 读 depth，编译器须把布局从
+ * eDepthStencilAttachmentOptimal 转到 eShaderReadOnlyOptimal。漏这条转换 = ao 采到未
+ * 转换的深度（RADV 上表现为整屏 AO 恒 0 或校验层报错），且像素结果不会崩、很难目检发现。 */
+void selfCheckDefaultAoPass(const RgPassPlan& ao, std::vector<std::string>& failures) {
+	if (ao.kind != RgPassKind::drawLight || ao.state != "ao")
+		failures.push_back("default: ao pass should be drawLight/ao");
+	if (ao.colors.size() != 1)
+		failures.push_back("default: ao pass should have exactly one color target");
+	const auto depth = std::ranges::find_if(ao.barriers, [](const auto& b) {
+		return b.aspect == vk::ImageAspectFlagBits::eDepth;
+	});
+	if (depth == ao.barriers.end())
+		failures.push_back("default: ao pass lacks a depth layout transition");
+	else if (depth->newLayout != vk::ImageLayout::eShaderReadOnlyOptimal)
+		failures.push_back("default: ao pass depth must transition to ShaderReadOnly");
+}
+
 /** selfCheck：默认图末段（tonemap）kind/state 断言。 */
 void selfCheckDefaultLastPass(const RgPassPlan& last, std::vector<std::string>& failures) {
 	if (last.kind != RgPassKind::drawLight || last.state != "tonemap")
@@ -314,18 +350,21 @@ void selfCheckFormats(std::vector<std::string>& failures) {
 
 /** selfCheck 后半：默认图结构断言（barrier 形态/present 转换）+ 格式词表断言（各段拆 selfCheckDefault* / selfCheckFormats，本函数只做编排、保 push 顺序）。 */
 void selfCheckStructure(std::vector<std::string>& failures) {
-	// 结构断言（Phase 8 ①后默认图 = 4 pass）：首 pass（opaque）两条帧首转换——
-	// scene_hdr（offscreen = 追踪布局非 discard，声明序在前）+ depth（discard）；
-	// skybox 段对 color/depth 各一条 identity barrier（跨 render pass 实例 LOAD
-	// 执行依赖，old==new 合法）；present 转换来自 tonemap 段的 swapchain
-	// colorWrite（CAO→PresentSrc）
+	// 结构断言（Phase 11 批 11.4 后默认图 = 5 pass：opaque → skybox → transparent →
+	// **ao** → tonemap）：首 pass（opaque）两条帧首转换—— scene_hdr（offscreen = 追踪
+	// 布局非 discard，声明序在前）+ depth（discard）；skybox 段对 color/depth 各一条
+	// identity barrier（跨 render pass 实例 LOAD 执行依赖，old==new 合法）；present
+	// 转换来自 tonemap 段的 swapchain colorWrite（CAO→PresentSrc）。
+	// ao 段（index 3）额外断言 depth 走 sampleRead 转换（eDepthStencilAttachmentOptimal
+	// → eShaderReadOnlyOptimal）——这条是 SSAO 能工作的前提，漏了 = ao 读到未转换的深度。
 	const auto& g = defaultRenderGraph();
-	if (g.passes.size() != 4)
-		failures.push_back("default: expected 4 passes");
-	if (g.passes.size() == 4) {
+	if (g.passes.size() != 5)
+		failures.push_back("default: expected 5 passes");
+	if (g.passes.size() == 5) {
 		selfCheckDefaultFirstPass(g.passes[0], failures);
 		selfCheckDefaultMidPass(g.passes[1], failures);
-		selfCheckDefaultLastPass(g.passes[3], failures);
+		selfCheckDefaultAoPass(g.passes[3], failures);
+		selfCheckDefaultLastPass(g.passes[4], failures);
 	}
 	if (!g.presentTransition ||
 		g.presentTransition->newLayout != vk::ImageLayout::ePresentSrcKHR)

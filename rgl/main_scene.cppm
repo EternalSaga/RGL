@@ -287,6 +287,51 @@ void registerSceneEntities(entt::registry& registry, const UploadedAssets& asset
 	}
 }
 
+/**
+ * HDR 累加链 + SSAO 装配（Phase 8 批次 ① / Phase 11 批 11.4；assembleBackEnd 私有调用）。
+ *
+ * 装四样东西，顺序即依赖：
+ *   1. scene_hdr RT（rgba16_sfloat）+ 其 SAMPLED_IMAGE 堆槽；
+ *   2. ao RT（r8_unorm）+ 其堆槽；
+ *   3. 深度图 SAMPLED_IMAGE 堆槽（ensureDepthSampleSlot；深度图 usage 自本批起含 eSampled）；
+ *   4. ao 条目（binding 4 = 深度槽 / 5 = **AO 专用 point sampler**）+ tonemap 条目
+ *      （4 = scene_hdr / 5 = 共享 sampler / **6 = ao 槽**）。
+ *      ao 不能用共享 sampler：共享那份是 LINEAR + mipmap LINEAR，而 D32Sfloat 深度图
+ *      不可过滤（invalid usage），且深度插值无物理意义——见 SamplerLibrary::ensurePointSampler。
+ *
+ * 为何无条件建（不分 forward/deferred）：forward/deferred 两图都含 ao + tonemap pass；
+ * offscreen DIAG 变体图两者都不含，条目闲置无害（管线表条目不绑定即零成本）。
+ *
+ * 槽号契约：RT 槽与深度槽都在两个 add*Entry **之前**领——槽号一经 bake 进管线 binding
+ * 即终身有效；后续 resize 换图只重写描述符内容（RenderTargetCache::ensure / 
+ * Resources::recreateDepthImage），绑定不失效。
+ *
+ * @param swapchain 交换链层（RT extent）
+ * @param resources 资源层（深度采样槽）
+ * @param samplers 共享 sampler（ao/tonemap 的 binding 5）
+ * @param rtCache RT 缓存（ensure/heapSlot）
+ * @param pipelines 管线表（建 ao/tonemap 条目）
+ */
+void assembleHdrAoChain(Swapchain& swapchain, Resources& resources,
+	SamplerLibrary& samplers, RenderTargetCache& rtCache, ShaderRegistry& pipelines) {
+	auto hdrSlot = ensureSceneHdrSlot(rtCache, swapchain);
+	if (!hdrSlot)
+		throw std::runtime_error(
+			fmt::format("scene_hdr RT 创建失败: {}", hdrSlot.error().describe()));
+	auto aoSlot = ensureAoSlot(rtCache, swapchain);
+	if (!aoSlot)
+		throw std::runtime_error(
+			fmt::format("ao RT 创建失败: {}", aoSlot.error().describe()));
+	auto depthSlot = resources.ensureDepthSampleSlot();
+	if (!depthSlot)
+		throw std::runtime_error(
+			fmt::format("深度采样槽分配失败: {}", depthSlot.error().describe()));
+	// ao / tonemap 条目下标由 Renderer 构造期按名 pipelineIndex("ao"/"tonemap") 取
+	[[maybe_unused]] auto aoIdx = pipelines.addAoEntry(*depthSlot, samplers.ensurePointSampler());
+	[[maybe_unused]] auto tonemapIdx = pipelines.addTonemapEntry(
+		*hdrSlot, *aoSlot, samplers.ensureShared());
+}
+
 /** C3 候选表 + GpuCull + skybox + deferred + HDR + DGC + Renderer（装配时序见接口注释）。 */
 RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resources& resources,
 	SceneDataService& sceneData, SamplerLibrary& samplers, Environment& env,
@@ -347,16 +392,7 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 			(*gbSlots)[0], (*gbSlots)[1], (*gbSlots)[2], (*gbSlots)[3], (*gbSlots)[4],
 			samplers.ensureShared());
 	}
-	// Phase 8 批次 ①：HDR 累加链——scene_hdr RT + tonemap 条目（forward/deferred 图都含
-	// tonemap pass，无条件建；offscreen DIAG 变体图不含 = 条目闲置无害）。时序同
-	// G-buffer：deferred 含 G-buffer，scene_hdr 同走运行时段、DGC/Renderer 之前。
-	auto hdrSlot = ensureSceneHdrSlot(rtCache, swapchain);
-	if (!hdrSlot)
-		throw std::runtime_error(
-			fmt::format("scene_hdr RT 创建失败: {}", hdrSlot.error().describe()));
-	// tonemap 条目下标由 Renderer 构造期按名 pipelineIndex("tonemap") 取
-	[[maybe_unused]] auto tonemapIdx = pipelines.addTonemapEntry(
-		*hdrSlot, samplers.ensureShared());
+	assembleHdrAoChain(swapchain, resources, samplers, rtCache, pipelines);
 
 	// Phase 7b：DGC 命令生成（NVIDIA 路）：仅 graphicsIndirect 能力时构造（RADV =
 	// compute only → null → Renderer 读回重放路）。管线表定后建（execution set
@@ -454,6 +490,7 @@ void wireHotReload(entt::registry& registry) {
 		registry.ctx().get<SceneSpin>().speed = cfg->spin ? 1.0f : 0.0f;
 		auto& env = registry.ctx().get<SceneEnv>();
 		env.exposure = cfg->exposure;
+		env.aoStrength = cfg->aoStrength;  // Phase 11 批 11.4：SSAO 强度（热重载同路）
 		env.intensity = cfg->environment.intensity;  // env 未上传时 mipRange=0 = shader 端无贡献，安全
 		if (logger)
 			logger->info("hot_reload: scene.lua 已套用 spin={} exposure={} env_intensity={}（entities/灯不热载）",

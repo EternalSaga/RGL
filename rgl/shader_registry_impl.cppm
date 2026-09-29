@@ -210,7 +210,8 @@ namespace RGL {
 	// Phase 8 批次 ①：tonemap pass 条目（仿 addLightEntry 单条目形态）。import scene
 	// 仅读 @56 曝光（configs/scene.lua exposure），hasSceneData = true；extra 仅
 	// scene_hdr 采样槽 + 共享 sampler。执行器 drawLight 分支按 state 名 "tonemap" 取本条目。
-	uint32_t ShaderRegistry::addTonemapEntry(uint32_t sceneHdrSlot, uint32_t samplerSlot) {
+	uint32_t ShaderRegistry::addTonemapEntry(uint32_t sceneHdrSlot, uint32_t aoSlot,
+		uint32_t samplerSlot) {
 		if (auto idx = pipelineIndex("tonemap"))
 			return *idx;
 		const RGL::PipelineSpec* spec = findSpec("tonemap");
@@ -221,13 +222,15 @@ namespace RGL {
 		b.descriptorSize = descriptorSize;
 		b.slotVertex = 0;   // binding 0/1 占位（tonemap mesh = light.mesh 全屏大三角，不声明顶点）
 		b.slotIndex = 1;
-		b.slotSceneData = sceneData.ensure();  // binding 3：@56 曝光
+		b.slotSceneData = sceneData.ensure();  // binding 3：@56 曝光 + @60 AO 强度
 		b.hasSceneData = true;
 		const uint32_t samplerHeapOffset =
 			samplerSlot * res.getSamplerHeap().getDescriptorSize();
 		b.extra = {
 			{.binding = 4, .sampler = false, .heapSlot = sceneHdrSlot},
 			{.binding = 5, .sampler = true, .samplerHeapOffset = samplerHeapOffset},
+			// Phase 11 批 11.4：ao 遮蔽量（施加强度 0 时逐位旁路，绑定恒在）
+			{.binding = 6, .sampler = false, .heapSlot = aoSlot},
 		};
 		auto entry = PipelineEntry{.name = "tonemap",
 			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b),
@@ -236,8 +239,40 @@ namespace RGL {
 		indexByName[entry.name] = index;
 		entries.push_back(std::move(entry));
 		if (auto* logger = RLLogger::getInstance())
-			logger->debug("pipeline entry: tonemap (scene_hdr slot {}) → 下标 {}", sceneHdrSlot,
-				index);
+			logger->debug(
+				"pipeline entry: tonemap (scene_hdr slot {}, ao slot {}) → 下标 {}",
+				sceneHdrSlot, aoSlot, index);
+		return index;
+	}
+
+	uint32_t ShaderRegistry::addAoEntry(uint32_t depthSlot, uint32_t samplerSlot) {
+		if (auto idx = pipelineIndex("ao"))
+			return *idx;
+		const RGL::PipelineSpec* spec = findSpec("ao");
+		if (!spec)
+			throw std::runtime_error("pipeline spec not found: ao");
+		const uint32_t descriptorSize = res.getDescriptorHeap().getDescriptorSize();
+		RGL::PipelineBindings b{};
+		b.descriptorSize = descriptorSize;
+		b.slotVertex = 0;   // binding 0/1 占位（ao mesh = light.mesh 全屏大三角，不声明顶点）
+		b.slotIndex = 1;
+		b.slotSceneData = sceneData.ensure();  // binding 3：@12 eyePos + @64 invViewProj
+		b.hasSceneData = true;
+		const uint32_t samplerHeapOffset =
+			samplerSlot * res.getSamplerHeap().getDescriptorSize();
+		b.extra = {
+			// 深度图（eDepth aspect，usage 含 eSampled——见 Resources::createDepthImage）
+			{.binding = 4, .sampler = false, .heapSlot = depthSlot},
+			{.binding = 5, .sampler = true, .samplerHeapOffset = samplerHeapOffset},
+		};
+		auto entry = PipelineEntry{.name = "ao",
+			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b),
+			.spec = *spec, .bindings = b};
+		const uint32_t index = static_cast<uint32_t>(entries.size());
+		indexByName[entry.name] = index;
+		entries.push_back(std::move(entry));
+		if (auto* logger = RLLogger::getInstance())
+			logger->debug("pipeline entry: ao (depth slot {}) → 下标 {}", depthSlot, index);
 		return index;
 	}
 

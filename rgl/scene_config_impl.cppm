@@ -334,6 +334,9 @@ void parseDeferredStyles(sol::table root, SceneConfig& cfg) {
 		readBool(root, "spin", cfg.spin);
 		readBool(root, "cube", cfg.showCube);
 		readFloat(root, "exposure", cfg.exposure);  // Phase 8 收尾：tonemap 曝光（可选，1.0 = 直通）
+		// Phase 11 批 11.4：SSAO 强度（可选段 ao.strength，0 = 逐位旁路）
+		if (sol::table ao = root["ao"]; ao.valid() && ao.is<sol::table>())
+			readFloat(ao, "strength", cfg.aoStrength);
 
 		if (auto r = parseEntities(root, cfg); !r)
 			return std::unexpected(r.error());

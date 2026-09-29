@@ -9,17 +9,33 @@
 //   （CPU 真相源 vkresources.cppm kSceneDataExposureOffset；configs/scene.lua
 //   顶层 exposure 每帧经 SceneFrameData 上传——原写死 kExposure 的"调参再走
 //   配置"预留兑现）。
+//
+// Phase 11 批 11.4 追加 AO 施加：binding 6 = ao pass（state="ao"）产出的 R8 遮蔽量，
+//   lerp(1, ao, strength) 相乘后再进 ACES。strength 读 scene data @60（头部保留区
+//   最后一格，CPU 真相源 scene_data.cppm kSceneDataAoOffset；configs/scene.lua 的
+//   ao.strength 每帧经 SceneFrameData 上传）。**strength=0 时 lerp 位级 = 1.0**，
+//   故默认配置逐位等于加 AO 之前（BIt-IDENTICAL 基线不受影响）。
+//   施加点选在合成（此处）而非材质着色器：forward 无 G-buffer，AO 只在 opaque+skybox
+//   之后产出，写在 tonemap 是唯一能对两变体一视同仁的位置（D1 对等）。代价 = AO 会
+//   连直接光一起压（见 docs/phase11_plan.md 批 11.4 的偏差说明）。
 
 import scene;  // sceneData buffer（binding 3，仅 Load(56)）
 
 [[vk::binding(4, 0)]] Texture2D<float4> sceneHdrTex;
 [[vk::binding(5, 0)]] SamplerState hdrSampler;
+[[vk::binding(6, 0)]] Texture2D<float> aoTex;  // SSAO **可见度**（r8_unorm，ao pass 产出，1=通透）
 
 // 曝光（ACES 输入前的线性倍率）：scene data @56，configs/scene.lua exposure，
 // 1.0 = 直通（默认，与旧写死常量逐位一致）。
 float readExposure()
 {
     return asfloat(sceneData.Load(56));
+}
+
+// AO 施加强度：scene data @60，configs/scene.lua ao.strength，0 = 逐位旁路。
+float readAoStrength()
+{
+    return asfloat(sceneData.Load(60));
 }
 
 // Narkowicz 2015 "ACES Filmic Tone Mapping Curve" 近似（per-channel 有理二次式，
@@ -59,6 +75,12 @@ struct TonemapInput
 float4 main(TonemapInput input) : SV_Target
 {
     float3 hdr = sceneHdrTex.Sample(hdrSampler, input.uv).rgb;
+    // AO 在曝光**之前**相乘：遮蔽是入射光的衰减，属物理量，曝光是显示映射。
+    // aoTex 与 sceneHdrTex 同为 1:1 framebuffer 对齐，hdrSampler（linear/mipLod 0）
+    // 采 R8 可见度与采 HDR 图同条件——AO 本身已逐像素算好，无需额外滤波。
+    // 注意 ao 是**可见度乘数**（1=不遮蔽）：strength=1 且 ao=0 才会压成全黑。
+    const float ao = aoTex.Sample(hdrSampler, input.uv).r;
+    hdr *= lerp(1.0, ao, readAoStrength());
     float3 mapped = acesTonemap(hdr * readExposure());
     return float4(mapped, 1.0);
 }

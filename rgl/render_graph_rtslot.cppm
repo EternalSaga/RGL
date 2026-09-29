@@ -70,4 +70,27 @@ std::expected<uint32_t, Error> ensureSceneHdrSlot(
 	return *slot;
 }
 
+/**
+ * Phase 11 批 11.4（接口注释见 render_graph.cppm）：名字/格式 = kAoName/kAoFormat
+ * 契约常量（与 forward/deferred 图描述共享，无漂移）；extent = 当前 swapchain；
+ * ensure + heapSlot（r8_unorm 自带 COLOR_ATTACHMENT|SAMPLED usage）。启动期一次
+ * （main 在 scene_hdr 槽之后、addTonemapEntry 之前）。
+ */
+std::expected<uint32_t, Error> ensureAoSlot(
+		RenderTargetCache& rts, Swapchain& swapchain) {
+	const std::string name{std::string{kAoName}.c_str()};
+	const vk::Extent2D extent = swapchain.getExtent();
+	const vk::Format format = resolveRgFormat(std::string{kAoFormat}, vk::Format::eUndefined);
+	auto rt = rts.ensure(name, extent, format);
+	if (!rt)
+		return std::unexpected(std::move(rt).error());
+	auto slot = rts.heapSlot(name);
+	if (!slot)
+		return std::unexpected(Error{ErrorCode::Unknown,
+			fmt::format("ao RT has no sample descriptor slot")});
+	if (auto* logger = RLLogger::getInstance())
+		logger->info("ao (R8): {}x{} slot {}", extent.width, extent.height, *slot);
+	return *slot;
+}
+
 }  // namespace RGL

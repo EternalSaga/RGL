@@ -44,12 +44,18 @@ export inline constexpr uint32_t kSceneDataEnvOffset = sizeof(SceneLight);
 /** tonemap 曝光（scene data 头 @56，env 16B 之后的保留区；tonemap.frag Load(56) 直读，
  *  ACES 前线性倍率，1.0 = 直通）。 */
 export inline constexpr uint32_t kSceneDataExposureOffset = 56;
+/** Phase 11 批 11.4：SSAO 施加强度（scene data 头 @60，头部保留区**最后一格**，不新增区、
+ *  不动任何既有偏移——@64 才是 invViewProj）。tonemap.frag Load(60) 直读，
+ * `lerp(1, ao, strength)` 的 strength：0 = 逐位旁路（默认，BIT-IDENTICAL 基线）。 */
+export inline constexpr uint32_t kSceneDataAoOffset = 60;
 /** Phase 5.5 批次 4：skyboxInvViewProj mat4 列主序 @64（inverse(proj·view)，sky.slang
  * skyClipToWorld 的 Load4(64/80/96/112) 字面量必须与本值一致）。 */
 export inline constexpr uint32_t kSceneDataSkyOffset = 64;
 export inline constexpr uint32_t kSceneDataHeaderBytes = 128;   // light 48 + env 16（含曝光 4B@56）+ sky invVP 64
 static_assert(kSceneDataEnvOffset == 48 && kSceneDataSkyOffset == 64 &&
 	kSceneDataExposureOffset == kSceneDataEnvOffset + sizeof(glm::vec2) &&
+	kSceneDataAoOffset == kSceneDataEnvOffset + 3 * sizeof(float) &&
+	kSceneDataAoOffset + sizeof(float) == kSceneDataSkyOffset &&
 	kSceneDataSkyOffset + sizeof(glm::mat4) == kSceneDataHeaderBytes);
 /** mat4 列主序 stride：派生自 sizeof(glm::mat4) 而非裸字面量（C++ 侧漂移即编译失败；
  * shader 端 scene.slang 的字面量 64u 须与本值一致——无反射端对应，见 scene.slang 头注释）。 */

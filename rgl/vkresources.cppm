@@ -86,7 +86,30 @@ export class Resources {
 		if (!result) return std::unexpected(std::move(result).error());
 		depthImage = std::move(*result);
 		depthImageView = vk::raii::ImageView(vkDevice.getDevice(), buildDepthView(*depthImage));
+		if (depthSampleSlot != kNoDepthSampleSlot)  // SSAO 槽已领（startup 早于首次 resize）
+			writeDepthSampleDescriptor();
 		return {};
+	}
+
+	/**
+	 * 深度图采样描述符槽（Phase 11 批 11.4 SSAO）：把 depthImageView 以
+	 * SAMPLED_IMAGE（eDepth aspect）写进 resource heap 的 Runtime 段槽，供 ao.frag
+	 * 读深度重建世界坐标。**幂等**（二次调用返回同槽号），槽号终身有效——resize 换图
+	 * 时由 recreateDepthImage 重写描述符，已 bake 进管线条目的 binding 不失效。
+	 * @return 槽号；Error = 槽段耗尽 / 描述符地址解析失败
+	 */
+	[[nodiscard]] std::expected<uint32_t, Error> ensureDepthSampleSlot() {
+		if (depthSampleSlot != kNoDepthSampleSlot)
+			return depthSampleSlot;
+		auto slot = allocSlot(RGL::SlotSegment::Runtime, "depth.sample");
+		if (!slot)
+			return std::unexpected(std::move(slot).error());
+		depthSampleSlot = *slot;
+		if (auto addr = descriptorHeap.getSlotCpuAddress(depthSampleSlot); !addr)
+			return std::unexpected(std::move(addr).error());
+		else
+			writeDepthSampleDescriptor();
+		return depthSampleSlot;
 	}
 
 	/** @return resource heap const 引用（VmaDescriptorHeap：BDA buffer 视为连续描述符槽
@@ -177,6 +200,33 @@ export class Resources {
 	}
 
    private:
+	/** 深度图采样槽"未领取"哨兵（kNoDepthSampleSlot 与 allocSlot 段容量无关的独立值）。 */
+	static constexpr uint32_t kNoDepthSampleSlot = 0xFFFFFFFFu;
+
+	/**
+	 * 把当前 depthImageView 写进 depthSampleSlot 槽（SAMPLED_IMAGE / eDepth aspect）。
+	 * 描述符指针链（pView 指 create info，v341 契约）存于成员，随 recreateDepthImage
+	 * 换图后重写——槽号不变，故已 bake 的管线 binding 永久有效。
+	 */
+	void writeDepthSampleDescriptor() {
+		depthSampleViewCreate = vk::ImageViewCreateInfo{};
+		depthSampleViewCreate.image = *depthImage;
+		depthSampleViewCreate.viewType = vk::ImageViewType::e2D;
+		depthSampleViewCreate.format = vk::Format::eD32Sfloat;
+		depthSampleViewCreate.subresourceRange = {vk::ImageAspectFlagBits::eDepth, 0, 1, 0, 1};
+		depthSampleImageDesc = vk::ImageDescriptorInfoEXT{};
+		depthSampleImageDesc.pView = &depthSampleViewCreate;  // v341：pView 指 create info
+		depthSampleImageDesc.layout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		depthSampleResourceDesc = vk::ResourceDescriptorInfoEXT{};
+		depthSampleResourceDesc.type = vk::DescriptorType::eSampledImage;
+		depthSampleResourceDesc.data.pImage = &depthSampleImageDesc;
+		const auto addr = descriptorHeap.getSlotCpuAddress(depthSampleSlot);
+		if (!addr)
+			return;  // 槽地址解析失败 = heap 契约破损；启动期路径，此处不抛（见调用点）
+		vkDevice.getDevice().writeResourceDescriptorsEXT(depthSampleResourceDesc,
+			vk::HostAddressRangeEXT{*addr, descriptorHeap.getDescriptorSize()});
+	}
+
 	/**
 	 * 创建深度图（eD32Sfloat，单采样，eDepthStencilAttachment，VMA 专用内存）。
 	 * @param allocator VMA 分配器
@@ -222,6 +272,13 @@ export class Resources {
 	RGL::VmaAllocatorRAII allocator;  // VMA 分配器（BDA flag，见 impl 构造器）；全部 buffer/image/heap 经它创建
 	RGL::VmaImage depthImage;  // 深度图（eD32Sfloat；swapchain resize 后重建，重建前 waitIdle）
 	vk::raii::ImageView depthImageView;  // 深度图 view（raii，不可拷贝——成员初始化列表构造；与 depthImage 同步重建）
+	/** SSAO 深度采样槽（Runtime 段，kNoDepthSampleSlot = 未领）；槽号终身有效，
+	 * recreateDepthImage 后经 writeDepthSampleDescriptor 重写指向新 view。 */
+	uint32_t depthSampleSlot = kNoDepthSampleSlot;
+	/** 深度采样描述符指针链（pView 指 create info，v341 契约——故存值不存指针）。 */
+	vk::ImageViewCreateInfo depthSampleViewCreate{};
+	vk::ImageDescriptorInfoEXT depthSampleImageDesc{};
+	vk::ResourceDescriptorInfoEXT depthSampleResourceDesc{};
 	RGL::VmaDescriptorHeap descriptorHeap;  // resource heap（用户槽 = 三段 allocSlot，布局契约见构造器注释）
 	RGL::VmaDescriptorHeap samplerHeap;  // Phase 3：OpTypeSampler 独立 heap
 	/** 三段 slot 分配器：每段独立 [begin, next, end) 游标，跨段不抢占。 */

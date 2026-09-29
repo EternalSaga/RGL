@@ -182,6 +182,7 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	// inverse(proj·view) 每帧一次——glm 列主序，shader 端列组合读）
 	fresh.sceneData.envParams = {env.intensity, env.mipRange};
 	fresh.sceneData.exposure = env.exposure;  // Phase 8 收尾：tonemap 曝光 @56
+	fresh.sceneData.aoStrength = env.aoStrength;  // Phase 11 批 11.4：SSAO 强度 @60
 	// Phase 8 批次 ④a：漫反射辐照度 SH9（env 加载期算好存 Resources，此处每帧拷入）
 	fresh.sceneData.irradianceSH = envService.getIrradianceSH();
 	fresh.sceneData.skyInvViewProj = glm::inverse(viewProj.proj * viewProj.view);

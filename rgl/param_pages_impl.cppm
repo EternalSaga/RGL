@@ -59,6 +59,12 @@ std::vector<ParamPage> buildDebugParamPages(entt::registry& rg, RGL::AssetTable&
 		.speed = semantics::kEnvExposure.speed,
 		.get = [&env] { return env.exposure; },
 		.set = [&env](float v) { env.exposure = v; }});
+	// Phase 11 批 11.4：SSAO 强度（ao.strength → scene data @60；0 = 逐位旁路）
+	renderPage.sliders.push_back({.label = std::string(semantics::kAoStrength.label),
+		.minValue = semantics::kAoStrength.minValue, .maxValue = semantics::kAoStrength.maxValue,
+		.speed = semantics::kAoStrength.speed,
+		.get = [&env] { return env.aoStrength; },
+		.set = [&env](float v) { env.aoStrength = v; }});
 	renderPage.sliders.push_back({.label = std::string(semantics::kEnvIntensity.label),
 		.minValue = semantics::kEnvIntensity.minValue, .maxValue = semantics::kEnvIntensity.maxValue,
 		.speed = semantics::kEnvIntensity.speed,

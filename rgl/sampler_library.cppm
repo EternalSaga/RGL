@@ -69,6 +69,49 @@ export class SamplerLibrary {
 		return sharedSamplerSlot;
 	}
 
+	/**
+	 * 屏幕空间 point sampler（Phase 11 批 11.4，AO 专用）：**NEAREST + 无 mipmap +
+	 * CLAMP_TO_EDGE**，写 sampler heap 的第二个可用槽（= reservedSlots + 1）。
+	 *
+	 * 为何不能复用 ensureShared 的共享 sampler：
+	 *   ① 共享 sampler 是 LINEAR + mipmap LINEAR，而 **D32Sfloat 深度图在 Vulkan 里
+	 *      不可过滤**（depth/stencil 格式无 filterable 能力）——用 linear sampler 采样
+	 *      深度是 invalid usage，驱动行为未定义；
+	 *   ② AO 必须 point 采样：深度是**逐像素可见性数据**，插值出来的深度没有物理意义
+	 *      （会在物体轮廓上产生假的中间深度），而且 AO 采样核的抖动本身就要求硬取样；
+	 *   ③ REPEAT wrap 对屏幕空间坐标同样有害（uv 越界会绕回另一侧采到无关像素）。
+	 * AO 逐像素算好遮蔽量、无需滤波，故此 sampler 只被 ao.frag 消费。
+	 * 幂等（首次调用写入，之后返回既有槽号）。
+	 * @return AO point sampler 在 sampler heap 的槽号
+	 */
+	[[nodiscard]] uint32_t ensurePointSampler() {
+		if (pointSamplerReady)
+			return pointSamplerSlot;
+		const auto& samplerHeap = kernel.getSamplerHeap();
+		vk::SamplerCreateInfo info{};
+		info.magFilter = vk::Filter::eNearest;
+		info.minFilter = vk::Filter::eNearest;
+		info.mipmapMode = vk::SamplerMipmapMode::eNearest;  // 单 mip 图，实际恒 level 0
+		info.addressModeU = vk::SamplerAddressMode::eClampToEdge;  // 屏幕空间采样，边缘钳制
+		info.addressModeV = vk::SamplerAddressMode::eClampToEdge;
+		info.addressModeW = vk::SamplerAddressMode::eClampToEdge;
+		info.anisotropyEnable = false;  // Bool32 隐转（rlvk 不导出 vk::False 常量）
+		info.compareEnable = false;  // Bool32 隐转（rlvk 不导出 vk::False 常量）
+		info.minLod = 0.0f;
+		info.maxLod = 0.0f;  // 硬钳 level 0：不给驱动任何 mip 选择的余地
+		info.unnormalizedCoordinates = false;  // Bool32 隐转（rlvk 不导出 vk::False 常量）
+		info.borderColor = vk::BorderColor::eIntTransparentBlack;
+		pointSamplerSlot = samplerHeap.getReservedSlots() + 1;
+		auto slotAddr = samplerHeap.getSlotCpuAddress(pointSamplerSlot);
+		if (!slotAddr)
+			throw std::runtime_error(slotAddr.error().describe());
+		vk::HostAddressRangeEXT dst{*slotAddr, samplerHeap.getDescriptorSize()};
+		pointSamplerCreateInfo = info;
+		device.getDevice().writeSamplerDescriptorsEXT(pointSamplerCreateInfo, dst);
+		pointSamplerReady = true;
+		return pointSamplerSlot;
+	}
+
 	/** @return mip 链生成器（Phase 8 ③b；启动期一次性基础设施，构造于本对象构造期）。
 	 * uploadTexture 2D 路径经它把 mip 链（level ≥1）录进该纹理的上传 CB：UNORM =
 	 * compute 链（descriptor heap + shader object，须先经 ensureMipGenReady 建齐 level
@@ -118,6 +161,11 @@ export class SamplerLibrary {
 	vk::SamplerCreateInfo samplerCreateInfo{};
 	uint32_t sharedSamplerSlot = 0;   // 共享 sampler 在 sampler heap 的槽号（ensureShared 启动期写入）
 	bool sharedSamplerReady = false;  // 共享 sampler 就绪标记（ensureShared 幂等守卫）
+	// AO point sampler（Phase 11 批 11.4）：槽 = reservedSlots + 1（紧邻共享 sampler），
+	// create info 稳定存储（与共享 sampler 同生命周期理由）
+	vk::SamplerCreateInfo pointSamplerCreateInfo{};
+	uint32_t pointSamplerSlot = 0;
+	bool pointSamplerReady = false;
 };
 
 }  // namespace RGL

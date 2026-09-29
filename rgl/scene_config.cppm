@@ -79,6 +79,9 @@ export struct SceneConfig {
 	std::vector<Light> lights;             // Phase 7 D3：多灯（scene.lua lights 列表；空则 loadSceneConfig 回落合成 [light]）
 	EnvironmentConfig environment;         // Phase 5.5：环境贴图（scene.lua environment 段，可选缺省）
 	float exposure = 1.0f;                 // Phase 8 收尾：tonemap 曝光（scene.lua 顶层 exposure，ACES 前线性倍率，1.0 = 直通）
+	// Phase 11 批 11.4：SSAO 施加强度（scene.lua ao 段 ao.strength，进 scene data @60；
+	// 0 = 逐位旁路。半径/采样数等形状参数在 ao.frag.slang 内为常量，不走配置）
+	float aoStrength = 0.0f;
 };
 
 /**

@@ -223,14 +223,32 @@ export class ShaderRegistry {
 
 	/**
 	 * Phase 8 批次 ①：tonemap pass 管线条目（单条目，仿 addLightEntry）。spec = "tonemap"
-	 *（mesh 复用 light.mesh.spv 全屏大三角 + ACES frag）。binding：0/1 占位 + extra：
-	 * 4 → scene_hdr RT 的 SAMPLED_IMAGE 堆槽、5 → 共享 sampler。不 import scene（不读
-	 * scene data，曝光写在 shader 常量）。前提 = scene_hdr RT 已 ensureSceneHdrSlot。幂等。
+	 *（mesh 复用 light.mesh.spv 全屏大三角 + ACES frag）。binding：0/1 占位 + 3 sceneData
+	 *（@56 曝光 / Phase 11 批 11.4 起 @60 AO 强度）+ extra：4 → scene_hdr RT 的
+	 * SAMPLED_IMAGE 堆槽、5 → 共享 sampler、**6 → ao RT 的 SAMPLED_IMAGE 堆槽**
+	 * （r8_unorm 遮蔽量；施加强度 0 时逐位旁路，故该绑定恒在不影响基线）。
+	 * 前提 = scene_hdr / ao 两个 RT 已 ensure + 领槽。幂等。
 	 * @param sceneHdrSlot scene_hdr RT 的 SAMPLED_IMAGE heap 槽（binding 4）
+	 * @param aoSlot ao RT（r8_unorm）的 SAMPLED_IMAGE heap 槽（binding 6）
 	 * @param samplerSlot 共享 sampler 的 sampler heap 槽（binding 5）
 	 * @return 条目下标；规格缺失抛 runtime_error
 	 */
-	[[nodiscard]] uint32_t addTonemapEntry(uint32_t sceneHdrSlot, uint32_t samplerSlot);
+	[[nodiscard]] uint32_t addTonemapEntry(uint32_t sceneHdrSlot, uint32_t aoSlot,
+		uint32_t samplerSlot);
+
+	/**
+	 * Phase 11 批 11.4：SSAO pass 管线条目（单条目，仿 addTonemapEntry）。spec = "ao"
+	 *（mesh 复用 light.mesh.spv 全屏大三角 + depth-only SSAO frag）。binding：0/1 占位
+	 * + 3 sceneData（@12 eyePos / @64 invViewProj 做深度↔世界坐标重建）+ extra：
+	 * 4 → 深度图的 SAMPLED_IMAGE 堆槽（eDepth aspect）、5 → 共享 sampler（须 point
+	 * 采样，由 AO 条目自行声明，与模型条目的 linear 共享槽不冲突——同一 sampler 描述符
+	 * 对全屏 1:1 采样等价）。前提 = 深度图 usage 含 eSampled 且已领采样槽
+	 * （Resources::ensureDepthSampleSlot）。幂等。
+	 * @param depthSlot 深度图 SAMPLED_IMAGE heap 槽（binding 4）
+	 * @param samplerSlot 共享 sampler 的 sampler heap 槽（binding 5）
+	 * @return 条目下标；规格缺失抛 runtime_error
+	 */
+	[[nodiscard]] uint32_t addAoEntry(uint32_t depthSlot, uint32_t samplerSlot);
 
 	/**
 	 * 内建几何管线条目（架构债务 1 方案 B）：spec = "cube"，binding mapping = 传入资产记录的
@@ -338,6 +356,12 @@ export class ShaderRegistry {
 				"tonemap", "generated_shaders/light.mesh.spv",
 				"generated_shaders/tonemap.frag.spv"};  // mesh 复用全屏大三角（Phase 8 ①）
 			return &defaultTonemap;
+		}
+		if (std::strcmp(name, "ao") == 0) {
+			static const RGL::PipelineSpec defaultAo{
+				"ao", "generated_shaders/light.mesh.spv",
+				"generated_shaders/ao.frag.spv"};  // mesh 复用全屏大三角（同 tonemap/light）
+			return &defaultAo;
 		}
 		return nullptr;
 	}

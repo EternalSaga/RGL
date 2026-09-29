@@ -30,6 +30,10 @@ return {
         { name = "swapchain", kind = "swapchain" },
         { name = "depth", kind = "depth" },
         { name = "scene_hdr", kind = "offscreen", format = "rgba16_sfloat" },
+        -- Phase 11 批 11.4：SSAO 遮蔽量（r8_unorm）。ao pass（state="ao"）读 depth
+        -- 写本图，tonemap 采样施加（configs/scene.lua 的 ao.strength 控强度，
+        -- 0 = 逐位旁路，故加这张图不改变既有输出）。
+        { name = "ao", kind = "offscreen", format = "r8_unorm" },
     },
     passes = {
         { name = "opaque", state = "opaque", draws = "opaque",
@@ -47,7 +51,17 @@ return {
         { name = "transparent", state = "transparent", draws = "transparent",
           outputs = {
               { attachment = "scene_hdr", usage = "colorWrite", load = "load", store = "store" },
-              { attachment = "depth", usage = "depthWrite", load = "load", store = "dontCare" },
+              -- store（勿改回 dontCare）：Phase 11 批 11.4 起 ao pass 以 sampleRead 读 depth，
+              -- 编译器有"后续使用的写必须 store"校验，dontCare 会直接编译失败
+              { attachment = "depth", usage = "depthWrite", load = "load", store = "store" },
+          } },
+        { name = "ao", kind = "drawLight", state = "ao",
+          outputs = {
+              { attachment = "ao", usage = "colorWrite", load = "clear", store = "store",
+                clear = { 0, 0, 0, 0 } },
+          },
+          inputs = {
+              { attachment = "depth", usage = "sampleRead" },
           } },
         { name = "tonemap", kind = "drawLight", state = "tonemap",
           outputs = {
@@ -55,6 +69,7 @@ return {
           },
           inputs = {
               { attachment = "scene_hdr", usage = "sampleRead" },
+              { attachment = "ao", usage = "sampleRead" },
           } },
     },
 }

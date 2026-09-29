@@ -137,6 +137,31 @@ export glm::vec3 cameraUp(const Camera& camera) {
 }
 
 /**
+ * 由 position→target 反推朝向（fps 模式专用换算）：写入 target 并按
+ * `fwd = target - position` 推出 yaw/pitch。
+ *
+ * 动机：fps 模式的 view 只由 yaw/pitch 推导（见 cameraView），`target` 单独写不产生
+ * 任何画面变化——"改了 target 却没转视角"。凡是"给 target 就该看向它"的写入路径
+ * （llm_debug 机位、RPC `POST /camera`）都必须过这层换算。
+ * 约定与 `camera_config` 的初始机位读取一致（camera_config_impl.cppm
+ * readCameraPlacement），故两条路径反推结果相同。
+ *
+ * 不改 `up`：trackball 的 up 由 lookAt 携带、fps 的 up 由 yaw/pitch 推导，
+ * 两条路径都不需要反推 up。
+ * @param camera 写入目标（position 须已定，target/yaw/pitch 被写）
+ * @param target 期望看向的点
+ */
+export void cameraAimAt(Camera& camera, const glm::vec3& target) {
+	camera.target = target;
+	glm::vec3 fwd = target - camera.position;
+	if (glm::length(fwd) <= 1e-6f)
+		return;  // target 与 position 重合 = 退化，朝向保持不变
+	fwd = glm::normalize(fwd);
+	camera.pitch = std::asin(std::clamp(fwd.y, -1.0f, 1.0f));
+	camera.yaw = std::atan2(-fwd.x, -fwd.z);
+}
+
+/**
  * 相机 view 矩阵（列主序，world→view）。
  * Trackball：lookAt(position, target, 携带 up)，视线恒指向 target（极点无奇异）；
  * Fps：用 yaw/pitch 推导的 forward/up 做 lookAt，target 不参与（自由飞行）。

@@ -69,7 +69,11 @@ std::expected<RGL::VmaImage, Error> Resources::createDepthImage(RGL::VmaAllocato
 		depthImageInfo.arrayLayers = 1;
 		depthImageInfo.samples = vk::SampleCountFlagBits::e1;
 		depthImageInfo.tiling = vk::ImageTiling::eOptimal;
-		depthImageInfo.usage = vk::ImageUsageFlagBits::eDepthStencilAttachment;
+		depthImageInfo.usage = vk::ImageUsageFlagBits::eDepthStencilAttachment |
+			// Phase 11 批 11.4 SSAO：ao.frag 以 SAMPLED_IMAGE 读深度重建世界坐标
+			//（见 Resources::ensureDepthSampleSlot）。此前无任何 shader 采深度，
+			// 故本 flag 增量为纯行为中性（不改变既有渲染结果）。
+			vk::ImageUsageFlagBits::eSampled;
 
 		VmaAllocationCreateInfo depthAllocInfo{};
 		depthAllocInfo.usage = VMA_MEMORY_USAGE_AUTO;

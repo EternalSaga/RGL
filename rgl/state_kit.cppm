@@ -11,10 +11,10 @@ namespace RGL {
 /**
  * pass 动态状态表（Phase 10 批次 0 手术 1：自 Renderer 摘出）。
  *
- * 持有五种命名状态的值集合 + edS3 能力门。状态名（"opaque"/"skybox"/
- * "transparent"/"light"/"tonemap"）= render_graph pass.state 的词表，与本类键集合
- * 同步（Renderer 构造期 validateRenderGraphForExecutor 校验图内名字全部可解析）。
- * Phase 10 阴影将新增状态条目（depth-only pass 等）——增改集中在本类一处。
+ * 持有八种命名状态的值集合 + edS3 能力门。状态名（"opaque"/"skybox"/
+ * "transparent"/"light"/"tonemap"/"ao"/"picking"/"highlight"）= render_graph pass.state
+ * 的词表，与本类键集合同步（Renderer 构造期 validateRenderGraphForExecutor 校验图内
+ * 名字全部可解析）。Phase 10 阴影将新增状态条目（depth-only pass 等）——增改集中在本类一处。
  * viewport/scissor 依赖窗口尺寸，不在状态内（applyDynamicState 参数传入）。
  */
 export class StateKit {
@@ -47,6 +47,11 @@ export class StateKit {
 		tonemapState.depthTest = false;
 		tonemapState.depthWrite = false;
 		tonemapState.cullMode = vk::CullModeFlagBits::eNone;
+		// Phase 11 批 11.4：ao pass —— 与 tonemap 同形（全屏终图、**不挂深度附件**
+		// （深度只作 sampleRead 输入，渲染期不参与深度测试/写入）、绕序不剔、不混合）。
+		aoState.depthTest = false;
+		aoState.depthWrite = false;
+		aoState.cullMode = vk::CullModeFlagBits::eNone;
 		// Phase 10 批 10.5：picking pass —— depth **只测不写**（复用 scene depth 得可见层，
 		// 不污染后续 transparent 段）；其余 = opaque 同（cull 后端面剔与 opaque 一致即可，
 		// id 归属 = 可见前表面）
@@ -65,7 +70,8 @@ export class StateKit {
 	/**
 	 * 图 pass.state 名 → 动态状态（Renderer 构造期校验保证图内名字全部可解析，
 	 * 未知名 = 校验遗漏的编程错误，抛出）。
-	 * @param name 状态名（"opaque"/"skybox"/"transparent"/"light"/"tonemap"）
+	 * @param name 状态名（"opaque"/"skybox"/"transparent"/"light"/"tonemap"/"ao"/
+	 *   "picking"/"highlight"）
 	 * @return 状态 const 引用（成员存储，录制期 applyDynamicState 消费）
 	 */
 	[[nodiscard]] const RenderState& stateFor(std::string_view name) const {
@@ -74,6 +80,7 @@ export class StateKit {
 		if (name == "transparent") return transparentState;
 		if (name == "light") return lightState;
 		if (name == "tonemap") return tonemapState;
+		if (name == "ao") return aoState;
 		if (name == "picking") return pickingState;
 		if (name == "highlight") return highlightState;
 		throw std::runtime_error(fmt::format(
@@ -92,6 +99,7 @@ export class StateKit {
 	RenderState skyboxState{};      // 大三角 z=1 只在空像素通过（见 ctor 注）
 	RenderState lightState{};       // deferred light 全屏终图（见 ctor 注）
 	RenderState tonemapState{};     // Phase 8 ①：HDR→LDR tonemap 全屏终图（与 light 同形，见 ctor 注）
+	RenderState aoState{};          // Phase 11 批 11.4：SSAO 全屏终图（与 tonemap 同形，见 ctor 注）
 	RenderState pickingState{};     // Phase 10 批 10.5：id pass 复用 scene depth 只测不写（见 ctor 注）
 	RenderState highlightState{};   // Phase 10 批 10.7：高亮 pass 叠加成片（混合 + 剔背面，见 ctor 注）
 	bool depthClipDynamic = false;

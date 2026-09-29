@@ -108,6 +108,27 @@ bool DebugRpcServer::start(std::string host, int port) {
 			respondBody(res, errorBody("unknown route"));
 	});
 
+	// bind 前探端口：cpp-httplib 在 Linux 启用 SO_REUSEPORT，多实例可同时"bind 成功"，
+	// 而连接由内核按四元组哈希分流到不同进程——症状是请求随机打到别的实例、画面与
+	// 预期机位对不上，且两边日志都显示"监听成功"（2026-09-29 实测三实例同时在跑）。
+	// 这里先用一次带超时的探测请求占位：能连上 = 已有监听者（多半是另一个 rgl 实例），
+	// 直接拒绝启动并说清原因，胜过静默分流。回包内容不解析，只看连不连得上。
+	{
+		httplib::Client probe(host, port);
+		probe.set_connection_timeout(std::chrono::seconds(1));
+		probe.set_read_timeout(std::chrono::seconds(1));
+		const auto res = probe.Get("/");
+		if (res) {
+			if (auto* logger = RLLogger::getInstance())
+				logger->error(
+					"debug_rpc: {}:{} 已有进程在监听（HTTP {}），本次不启动 RPC 通道。"
+					"多实例共存会让请求被内核分流（cpp-httplib 的 SO_REUSEPORT）；"
+					"请先停掉旧实例（pgrep -cx rgl）",
+					host, port, res->status);
+			return false;
+		}
+	}
+
 	// bind 同步做 = 返回值可信（端口占用/无权限 → 调用方日志降级关，不崩）
 	if (!p->server.bind_to_port(host, port)) {
 		if (auto* logger = RLLogger::getInstance())

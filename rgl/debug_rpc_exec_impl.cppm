@@ -57,6 +57,7 @@ nlohmann::json rpcRoutesJson(uint32_t frame) {
  * 相机姿态快照（/state 内嵌 + /camera 回显；角度字段一律**度**，与 camera.lua
  * `fovDegrees` 同语义）。生效字段随 mode 而异：trackball 看 position/target/up，
  * fps 看 position/yaw/pitch（见 cameraView），另一组字段照样回显。
+ * fps 下的 `target` 经 cameraAimAt 与 yaw/pitch 保持一致（写入即换算朝向）。
  */
 nlohmann::json rpcCameraJson(const Camera& cam) {
 	return nlohmann::json{
@@ -187,6 +188,26 @@ RpcOutcome rpcHandleState(RpcWiring& w) {
 }
 
 /**
+ * `mode` 字段套用（仅 rpcHandleCamera 内部使用）：trackball/fps 两档，缺字段不改，
+ * 未知值 → nullopt 交调用方转 400。
+ * @param body 请求体对象
+ * @param cam 写入目标（仅命中已知值时改）
+ * @return 已知 mode = true；未知 mode = false
+ */
+bool rpcApplyCameraMode(const nlohmann::json& body, Camera& cam) {
+	if (!body.contains("mode"))
+		return true;
+	const std::string mode = body.at("mode").get<std::string>();
+	if (mode == "trackball")
+		cam.mode = CameraMode::Trackball;
+	else if (mode == "fps")
+		cam.mode = CameraMode::Fps;
+	else
+		return false;
+	return true;
+}
+
+/**
  * POST /camera：任意子集套用（缺字段不改；形状错 → 400）。
  * 直接写 `Camera` ctx —— cameraSystem 只在有输入时改姿态，帧首套用本帧即生效。
  * @param w 装配态
@@ -197,18 +218,20 @@ RpcOutcome rpcHandleCamera(RpcWiring& w, const nlohmann::json& body) {
 	if (!body.is_object())
 		return rpcFail(400, "body must be a JSON object");
 	auto& cam = w.registry.ctx().get<Camera>();
-	if (body.contains("mode")) {
-		const std::string mode = body.at("mode").get<std::string>();
-		if (mode == "trackball") {
-			cam.mode = CameraMode::Trackball;
-		} else if (mode == "fps") {
-			cam.mode = CameraMode::Fps;
-		} else {
-			return rpcFail(400, "mode must be \"trackball\" or \"fps\"");
-		}
-	}
+	if (!rpcApplyCameraMode(body, cam))
+		return rpcFail(400, "mode must be \"trackball\" or \"fps\"");
+	// position 必须先于 target：fps 下的朝向反推要用到新 position
 	if (body.contains("position")) cam.position = rpcVec3(body, "position");
-	if (body.contains("target")) cam.target = rpcVec3(body, "target");
+	if (body.contains("target")) {
+		// fps 模式的 view 只看 yaw/pitch（cameraView），照直写 target 是死写入——回显会
+		// 显示"已生效"而画面不动。故 fps 下（未显式给 yaw/pitch 时）走 cameraAimAt 反推，
+		// 与 camera_config 初始机位同一约定。显式给了 yawDegrees/pitchDegrees 则尊重显式值。
+		const bool explicitAngles = body.contains("yawDegrees") || body.contains("pitchDegrees");
+		if (cam.mode == CameraMode::Fps && !explicitAngles)
+			cameraAimAt(cam, rpcVec3(body, "target"));
+		else
+			cam.target = rpcVec3(body, "target");
+	}
 	if (body.contains("up")) cam.up = rpcVec3(body, "up");
 	if (body.contains("yawDegrees")) cam.yaw = glm::radians(body.at("yawDegrees").get<float>());
 	if (body.contains("pitchDegrees"))

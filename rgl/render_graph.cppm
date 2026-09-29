@@ -142,7 +142,8 @@ export enum class RgPassKind : uint8_t {
  * 执行器构造期按 state 名解析管线条目，图内 drawLight pass 的 state 必须在此表内
  *（validateRenderGraphForExecutor 校验）。
  */
-export inline constexpr std::array<std::string_view, 2> kFullscreenPassStates{"light", "tonemap"};
+export inline constexpr std::array<std::string_view, 3> kFullscreenPassStates{"light", "ao",
+	"tonemap"};
 
 /**
  * Phase 8 批次 ①：HDR 累加链附件契约（单一真相源）——forward/deferred 图的颜色目标
@@ -152,6 +153,14 @@ export inline constexpr std::array<std::string_view, 2> kFullscreenPassStates{"l
  */
 export inline constexpr std::string_view kSceneHdrName = "scene_hdr";
 export inline constexpr std::string_view kSceneHdrFormat = "rgba16_sfloat";
+
+/**
+ * Phase 11 批 11.4：SSAO 附件契约（单一真相源）——ao 遮蔽量 RT（r8_unorm offscreen），
+ * ao pass（state="ao"）写、tonemap pass 采样施加。消费方 = forward/deferred 图描述 +
+ * ensureAoSlot（启动期建 RT + 采样堆槽）+ addTonemapEntry（烘焙 binding 6）。
+ */
+export inline constexpr std::string_view kAoName = "ao";
+export inline constexpr std::string_view kAoFormat = "r8_unorm";
 
 /**
  * pass 声明（RgGraphDesc.passes 元素）：name 必填；kind 定执行语义；
@@ -411,6 +420,17 @@ export std::expected<std::array<uint32_t, 5>, Error> ensureDeferredGBufferSlots(
  * @return scene_hdr 的 SAMPLED_IMAGE heap 槽；Error = RT 创建 / 槽分配失败
  */
 export std::expected<uint32_t, Error> ensureSceneHdrSlot(
+	RenderTargetCache& rts, Swapchain& swapchain);
+
+/**
+ * Phase 11 批 11.4：确保 SSAO 遮蔽量 RT（名字/格式 = kAoName/kAoFormat 单一真相源，
+ * r8_unorm offscreen）并返回其 SAMPLED_IMAGE 堆槽（addTonemapEntry 烘焙 binding 6）。
+ * 调用时序同 ensureSceneHdrSlot（其后），且**必须早于** addTonemapEntry。
+ * @param rts RT 缓存（ensure/heapSlot）
+ * @param swapchain 交换链层（extent）
+ * @return ao RT 的 SAMPLED_IMAGE heap 槽；Error = RT 创建 / 槽分配失败
+ */
+export std::expected<uint32_t, Error> ensureAoSlot(
 	RenderTargetCache& rts, Swapchain& swapchain);
 
 }  // namespace RGL

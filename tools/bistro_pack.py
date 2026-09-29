@@ -2,6 +2,9 @@
 # assimp .gltf (dds-by-uri) -> conformant PBR .glb (embedded PNG).
 # Rule: BaseColor->baseColorTexture(sRGB), Normal->normalTexture(flip-G DX->GL),
 #       Specular(R:AO G:rough B:metal)->metallicRoughnessTexture + occlusionTexture.
+# Emissive fix (2026-09-29): emissiveTexture was in NEITHER the referenced set NOR the
+# index-remap loop, so emissive images were never packed and the stale index pointed at a
+# re-ordered image (Bistro's 1x1 constant _Specular.dds (0,188,0) -> green emissive).
 # Metadata backfill (2026-09-13): assimp FBX importer drops Source2 blend/double-sided
 # semantics (output = 132x OPAQUE, doubleSided=0), but leaf-texture alpha cutouts and
 # material names (".DoubleSided") survive -> restore STANDARD glTF fields here:
@@ -70,6 +73,10 @@ for m in materials:
         p["roughnessFactor"] = 1.0
     if p.get("baseColorTexture"): referenced.add(p["baseColorTexture"]["index"])
     if m.get("normalTexture"): referenced.add(m["normalTexture"]["index"])
+    # emissiveTexture 同样要收：漏了则贴图不打包，且 step 5 的索引 remap 拿不到映射，
+    # emissiveTexture.index 会保留旧下标、指向重排后的另一张图（Bistro 的
+    # *_Specular.dds 是 1x1 常量 (0,188,0) → 自发光纯绿，2026-09-29 实测 10 个材质受害）
+    if m.get("emissiveTexture"): referenced.add(m["emissiveTexture"]["index"])
     if spec_idx is not None: referenced.add(spec_idx)
 
 # 2b. Shared BIN tail allocator: geometry (padded to 4) + tangent chunks + png chunks.
@@ -254,6 +261,8 @@ for m in materials:
         p["metallicRoughnessTexture"]["index"] = old2new[p["metallicRoughnessTexture"]["index"]]
     if m.get("normalTexture") and m["normalTexture"]["index"] in old2new:
         m["normalTexture"]["index"] = old2new[m["normalTexture"]["index"]]
+    if m.get("emissiveTexture") and m["emissiveTexture"]["index"] in old2new:
+        m["emissiveTexture"]["index"] = old2new[m["emissiveTexture"]["index"]]
     if m.get("occlusionTexture") and m["occlusionTexture"]["index"] in old2new:
         m["occlusionTexture"]["index"] = old2new[m["occlusionTexture"]["index"]]
 g["images"] = new_images

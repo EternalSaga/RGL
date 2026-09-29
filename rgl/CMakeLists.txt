@@ -42,6 +42,9 @@ rgl_shader(light.mesh LIGHT_MESH_SPV)
 rgl_shader(light.frag LIGHT_FRAG_SPV scene lights sky)
 # Phase 8 批次 ①：HDR tonemap frag（mesh 复用 light.mesh.spv；import scene 读 @56 曝光）
 rgl_shader(tonemap.frag TONEMAP_FRAG_SPV scene)
+# Phase 11 批 11.4：SSAO frag（mesh 复用 light.mesh.spv 全屏大三角；import scene 读
+# @12 eyePos + @64 invViewProj 做深度↔世界坐标重建；binding 4 深度图 / 5 point sampler）
+rgl_shader(ao.frag AO_FRAG_SPV scene)
 # Phase 7b（批次 5）：GPU culling compute（独立契约 cull.comp.slang 头注释，无 import 契约文件）
 rgl_shader(cull.comp CULL_SPV)
 # Phase 10 批次 10.5：GPU id 点选 frag（mesh 复用 model.mesh.spv；写 objectIndex+1 进 r32ui）
