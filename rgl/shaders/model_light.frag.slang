@@ -110,12 +110,13 @@ float4 main(ModelVertexOutput input, bool frontFace : SV_IsFrontFace) : SV_Targe
         }
     }
 
-    // ② emission look-dev：strength=4.0（C 批次回填的 look-dev 猜值）对白天场景过强——实测
-    //    路灯 baseColor=纯黑、绿 100% 来自 emissive 绿纹理，od.emissive=0.5×4=2.0 乘绿纹理后
-    //    绿通道 1.47，若独占像素 = 纯绿霓虹。金属球版是黑金属底把绿压暗了才"看着还行"。
-    //    本 shader 按 1/strength 把 emission 还原到 glTF 原值 0.5（=strength 语义的"未加强"），
-    //    灯罩显 emissive 本色 + 保留玻璃反射（F0=0.04），白天不发光成霓虹。forward-only 不碰 D1。
+    // ② 自发光：emissiveFactor（assets 侧 = glTF 原值 0.5，批 11.0c 已把 pack 的
+    //    EMISSIVE_STRENGTH 从 4.0 归位到 1.0）× emissiveTexture，HDR 叠加。
+    //    此前这里有个 `* (1.0/4.0)` —— 用来抵消 pack 回填的 4.0 猜值。一来一回虽然
+    //    净效果正确（= 0.5），但**只有 forward 有**：deferred 的 model_pbr_ibl.frag.slang
+    //    与共用的 model_vegetation.frag.slang 都是原样加 → 两条路径自发光差 4 倍 = D1 破口。
+    //    归位后三条路径同值，forward 逐位不变（4.0 与 0.25 都是 2 的幂，乘法精确）。
     float3 emission = od.emissive.rgb * emissiveTexture.Sample(baseColorSampler, input.uv).rgb;
-    color += emission * (1.0 / 4.0);
+    color += emission;
     return float4(color, alpha);
 }

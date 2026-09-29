@@ -25,7 +25,14 @@ import sys, os, json, struct, subprocess, tempfile, math
 # engine loader derives it per-triangle from the uv Jacobian sign, so we deliberately
 # do not need to store it. Degenerate/uv-less primitives fall back to Frisvad analytic
 # basis so every baked vertex gets a unit tangent perpendicular to its normal.
-EMISSIVE_STRENGTH = 4.0   # look-dev; engine loader premultiplies into emissiveFactor
+# 自发光强度（2026-09-29 由 4.0 归位到 1.0，见下）：
+#   曾经填 4.0（官方 Falcor 强度未在 .pyscene/README 公布，纯猜值），而 forward 的
+#   model_light.frag.slang 又用 `emission * (1.0/4.0)` 把它除回去 —— 一来一回正好抵消，
+#   净效果 = glTF 原值 0.5。那个 ×1/4 的代价是**只有 forward 有**：deferred 的
+#   model_pbr_ibl.frag.slang 与共用的 model_vegetation.frag.slang 都是原样加，
+#   于是同一份资产在两条路径上自发光差 4 倍 = D1 对等破口（批 11.0c 修掉）。
+#   1.0 = 不加强（= glTF 原值语义），三条路径同值，对等成立。
+EMISSIVE_STRENGTH = 1.0   # engine loader premultiplies into emissiveFactor
 # Wet-pavement roughness 缩放（2026-09-29）：effective = 本值 × ORM.G(0.737) ≈ 0.12（水膜）。
 # 逐条依据见下方 roughnessFactor 处的注释。
 WET_ROUGHNESS_SCALE = 0.163
