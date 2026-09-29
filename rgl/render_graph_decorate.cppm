@@ -157,7 +157,10 @@ bool decorateShadowPass(RgGraphDesc& desc, uint32_t mapSize) {
 	// 图首插入 N 个 pass（一级一个），各渲染图集里自己那一块子矩形。插图首（不是图末）：
 	// ① 阴影深度不依赖相机深度，放最前 barrier 链最短；② 天然先于所有要读它的 pass。
 	for (uint32_t c = 0; c < kActiveShadowCascades; ++c) {
-		// 分块之间 loadOp = load（不 clear）——保留已写的其他分块。清值 1.0 = 无遮挡。
+		// 每级都 loadOp = clear：**动态渲染的 clear 只作用于本 pass 的 renderArea**
+		// （= 自己的分块子矩形，见 RgPassDesc::viewport 注），分块互不重叠 → 清不到别级。
+		// 若误按"clear 会洗掉整幅"只清级 0（2026-09-29 4 级首测即此坑），块 1..N 永不初始化
+		// → 采到未定义深度（实测 ≈0 → 全判影，画面整幅加深 60% 像素）。清值 1.0 = 无遮挡。
 		desc.passes.insert(desc.passes.begin() + static_cast<long>(c), RgPassDesc{
 			.name = std::string{shadowPassName()} + (c == 0 ? "" : std::to_string(c)),
 			.kind = RgPassKind::drawMesh,
@@ -165,7 +168,7 @@ bool decorateShadowPass(RgGraphDesc& desc, uint32_t mapSize) {
 			.drawSource = shadowDrawSource(c),
 			.viewport = shadowTile(c, tile, cols),
 			.outputs = {RgPassAttachment{.attachment = std::string{kShadowMapName},
-				.usage = RgUsage::depthWrite, .loadOp = c == 0 ? RgLoadOp::clear : RgLoadOp::load,
+				.usage = RgUsage::depthWrite, .loadOp = RgLoadOp::clear,
 				.storeOp = RgStoreOp::store}},
 		});
 	}

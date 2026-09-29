@@ -137,7 +137,7 @@ static_assert(kSceneDataIrradianceOffset % 16 == 0, "irradiance region must stay
  *
  * - `kShadowDepthBias`：**NDC 深度域**的常数偏置。为何不用光深 bias 推导出来的世界尺寸：
  *   正交投影的深度是**线性**的（无透视组归一化敏感度），NDC 偏置 × (深度范围/世界尺寸)
- *   = 常数。直接给 NDC 值使 bias 在**u8ddd离变化时自动缩放**（远处阴影图深度精度低、
+ *   = 常数。直接给 NDC 值使 bias 在**距离变化时自动缩放**（远处阴影图深度精度低、
  *   近处高）——这正是我们要的行为，不需要再乘世界尺寸。
  * - `kShadowNormalOffsetScale`：法线外推的 texel 数。acne 的**主手段**（bias 只是补丁）。1.5 是常见甜点：
  *   小于 1 接近不足一个纹素 → 自遮挡仍发生（黑斑）；大于 2.5 接触阴影明显回撤。
@@ -149,37 +149,29 @@ export inline constexpr float kShadowNormalOffsetScale = 1.5f;   // texel 数
 /**
  * 当前**生效**的级联数（与 scene data 区容量 kSceneShadowCascadeCount = 4 **分离**）。
  *
- * 为何分离：区容量是一次性预留（避免加级联时再动尾部基址），而本值是“本帧确实画出与采样哪些级”。
- * 切换到 4 级 = 改这一行（图装饰插 4 个 pass + CPU 分级剔除 + 采样端分界距）。
- * 定义放在本模块是为了让 render_list / render_list_impl 等不引入
- * scene_context（后者拉 entt，让纯资源模块依赖它不合适）。
- */
-/**
- * 当前**生效**的级联数（与 scene data 区容量 kSceneShadowCascadeCount = 4 **分离**）。
- *
  * 为何分离：区容量是一次性预留（避免加级联时再动尾部基址），而本值是“本帧确实画出与采样
  * 哪些级”。切换 = 改这一行（图装饰插 N 个 pass + CPU 逐级剔除 + 采样端选级）。
  *
- * ## 实测定案（非计划）
+ * ## 实测定案（非计划；2026-09-29 5a-5 修复后重测）
  * 本机 GPU 侧余量约 **3.1 ms/帧**（Phase 9 判定）。bistro 阴影各级开销（GPU 时间戳，1280×720）：
  *
  * | 生效级数 | 各级 GPU 时间 | 合计 | 占 3.1 ms 余量 |
  * |---|---|---|---|
- * | **1** | 1.70 | **1.70 ms** | **55%** |
- * | 2 | 1.70 + 1.26 | 2.95 ms | 95% |
- * | 4 | 1.72 + 1.37 + 1.18 + 0.97 | 5.24 ms | **169%（超预算）** |
+ * | 1 | 2.21 | **2.21 ms** | 71% |
+ * | 2 | 2.11 + 1.91 | **4.02 ms** | 130%（超预算） |
+ * | **4** | 1.10 + 2.17 + 1.91 + 1.91 | **7.10 ms** | **229%** |
  *
- * 为何逐级剔除只把 4 级从 4×1.7=6.8 压到 5.24 ms（级间递减可见）而压不到 ~1.5×：默认机位是**俯视
- * 微缩街景**，整个模型在视线方向上基本同一个深度带（俯视 = 模型高度尚与相机距离可比），
- * 而每级子视锥的**包围球都很大**（切片面横向很宽）→ 大多数对象落在每一级里。
+ * 逐级剔除：级 0 收益明显（近切片球小 → 1.10 ms），级 1-3 各 ≈ 单级全量——默认机位是**俯视
+ * 微缩街景**，整个模型在视线方向上基本同一个深度带，远切片包围球又大 → 大多数对象落在每一级里。
  *
- * 故默认定 1 级。机制与切分已全部落地（图集 + 逐级剔除 + 采样端选级），不是卡在架构上；
- * 换大场景（长距离视野）或本机接下来有更大 GPU 余量时，直接改它即可。
+ * **定 4 级 = 画质优先的显式取舍**（2026-09-29 用户拍板：1 级 2048² 单块下投影分辨率不够，
+ * 4 级近块 texel 尺寸减半）。代价 = gpu.frame 5.05 → 10.05 ms（帧率仍高于 vsync，实测无掉帧
+ * 感知则接受）。换回 1 级 = 改这一行；机制（图集 + 逐级剔除 + 采样端选级）全部常驻。
  *
  * 定义放在本模块是为了让 render_list / render_list_impl / render_graph_rtslot 等不引入
  * scene_context（后者拉 entt，让纯资源模块依赖它不合适）。
  */
-export inline constexpr uint32_t kActiveShadowCascades = 1;
+export inline constexpr uint32_t kActiveShadowCascades = 4;
 
 export inline constexpr uint32_t kSceneShadowCascadeCount = 4;
 export inline constexpr uint32_t kSceneDataShadowMatrixOffset =
