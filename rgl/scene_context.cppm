@@ -346,11 +346,21 @@ export struct ShadowVolume {
 
 /**
  * 建一级阴影的光空间正交盒。
+ *
+ * **texel 吸附是世界锚定的**（5a-8b 重写）：把切片球心在固定光基
+ * （s = d×up 归一、u = s×d、d = 光向——三个轴只依赖太阳方向，与世界原点一样恒定）下的
+ * 三坐标各 round 到 `2r/mapSize` 格点，再建盒。此前版本吸附的是"中心在自己盒里的 NDC"
+ * ——恒等于 (0,0)——等于没吸：盒跟着视锥球心走，**相机原地转视角**时球心
+ * （= eye + forward·zc）绕 eye 划半径 zc 的弧，一次扫过几十个 texel → 纹素格整体
+ * 在世界里滑 → 影子随视角游动（5a-8 只修掉了平移分量，旋转分量被这条恒等吸附掩盖）。
+ * 三轴全吸（含光轴 z）：z 不吸则 eyeOffset/tMin/tMax 连滑 → 深度量化格漂 → 自阴影
+ * 边缘同一步伐呼吸。吸附后体参数只经 `c'` 依赖姿态，而 `c'` 在格内恒定 → 完全恒定。
+ *
  * @param light 主光（取 direction 定光空间基；只取方向，位置由 eyeOffset 定）
  * @param slice 该级子视锥的包围球（定 XY 半宽与受光面深度范围 [−r, r]）
  * @param casterMin 全部投影体世界 AABB 的最小角（定 Z 下界）
  * @param casterMax 全部投影体世界 AABB 的最大角（定 Z 上界）
- * @param mapSize 阴影图整幅边长（texel 吸附用）
+ * @param mapSize 该级图块边长（texel 吸附格距 = 2r/mapSize）
  * @return 光空间体（slice.radius ≤ 0 时退化为零半径体 = 谁都进不来 = 无阴影）
  */
 export inline ShadowVolume buildShadowVolume(const Light& light, const Bounds& slice,
@@ -361,25 +371,35 @@ export inline ShadowVolume buildShadowVolume(const Light& light, const Bounds& s
 	const glm::vec3 d = glm::normalize(light.direction);
 	const glm::vec3 up = (d.y > 0.99f || d.y < -0.99f) ? glm::vec3{0.0f, 0.0f, 1.0f}
 							   : glm::vec3{0.0f, 1.0f, 0.0f};
+	// 世界锚定的光空间基（与 glm::lookAt(eye, eye+d, up) 的行向量基同序）：
+	const glm::vec3 s = glm::normalize(glm::cross(d, up));
+	const glm::vec3 u = glm::cross(s, d);
+	const float texel = 2.0f * r / static_cast<float>(mapSize);
+	// 三轴 round 到格点，位移 ≤ 半 texel（±pad r·0.02 远大于它，覆盖性不破）。
+	const glm::vec3 snappedCenter = slice.center + s * (std::round(glm::dot(slice.center, s) / texel) * texel - glm::dot(slice.center, s))
+		+ u * (std::round(glm::dot(slice.center, u) / texel) * texel - glm::dot(slice.center, u))
+		+ d * (std::round(glm::dot(slice.center, d) / texel) * texel - glm::dot(slice.center, d));
 	// 沿光轴取并：受光面占 [−r, r]（切片球），投影体占其 AABB 在光轴上的投影。
 	// pad 一点余量，避免投影体正好压在近/远平面上被裁掉。
+	// **踩过的坑**（5a-8b）：把"世界 AABB 最小角"当光轴最远点——`dot(casterMin, d)` 取到
+	// 最小值要求 d 分量全正；太阳 d.y<0 时真正的极值角是 (x 按符号取 min/max, **y 取
+	// max**, z 按符号取 min/max)（support function）。用错角的后果：tMin 恒被 −r 支配
+	// （实测 eyeOffset 恒 = r·1.02），比切片球顶高的建筑整批被近平面裁掉不画 → 它罩到的
+	// 那块地面"有没有影子"取决于受光片元落在哪一级（各级 −r 不同），旋转视角换级 →
+	// 影子忽明忽暗（= 用户报的"游动"）。
 	const float pad = r * 0.02f;
-	const float tMin = std::min(-r, glm::dot(casterMin - slice.center, d)) - pad;
-	const float tMax = std::max(r, glm::dot(casterMax - slice.center, d)) + pad;
+	const glm::vec3 casterFar(d.x >= 0.0f ? casterMin.x : casterMax.x,
+		d.y >= 0.0f ? casterMin.y : casterMax.y,
+		d.z >= 0.0f ? casterMin.z : casterMax.z);
+	const glm::vec3 casterNear(d.x >= 0.0f ? casterMax.x : casterMin.x,
+		d.y >= 0.0f ? casterMax.y : casterMin.y,
+		d.z >= 0.0f ? casterMax.z : casterMin.z);
+	const float tMin = std::min(-r, glm::dot(casterFar - snappedCenter, d)) - pad;
+	const float tMax = std::max(r, glm::dot(casterNear - snappedCenter, d)) + pad;
 	const float eyeOffset = -tMin;
-	const glm::mat4 view = glm::lookAt(slice.center - d * eyeOffset, slice.center, up);
+	const glm::mat4 view = glm::lookAt(snappedCenter - d * eyeOffset, snappedCenter, up);
 	const glm::mat4 proj = glm::ortho(-r, r, -r, r, 0.0f, tMax - tMin);
-	// texel 吸附：平移必须加在投影**之前**（proj·T·view）——加在之后是裁剪空间单位，
-	// 等于把位移放大了一倍半边长（5a-1 实测把视锥角点顶到 NDC 1.43 越界，教训全文 →
-	// docs/调试历史.md 2026-09-29 ⑧）。
-	const glm::vec4 clip = proj * view * glm::vec4(slice.center, 1.0f);
-	const glm::vec2 ndc = glm::vec2(clip) / clip.w;
-	const glm::vec2 snapped = (glm::round((ndc * 0.5f + 0.5f) * static_cast<float>(mapSize))
-				 + glm::vec2(0.5f))
-		/ static_cast<float>(mapSize) * 2.0f - glm::vec2(1.0f);
-	return ShadowVolume{proj * glm::translate(glm::mat4{1.0f},
-		glm::vec3((snapped - ndc) * r, 0.0f)) * view,
-		view, r, eyeOffset, tMin, tMax};
+	return ShadowVolume{proj * view, view, r, eyeOffset, tMin, tMax};
 }
 
 /**
