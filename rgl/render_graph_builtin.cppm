@@ -187,6 +187,11 @@ const RgGraphDesc& deferredRenderGraphDesc() {
 
 namespace {
 
+/** selfCheck 用的阴影图边长（**刻意不硬绑生产值**：本组断言验的是"独立尺寸从声明透传到
+ *  编译产物"这条通路，填任何非零值都能验出；生产值 = scene_data::kShadowMapSize，由
+ *  main_impl 传给 decorateShadowPass）。 */
+constexpr uint32_t kSelfCheckShadowSize = 1024u;
+
 /**
  * selfCheck（Phase 11 批 11.2 基建）：**depth-only pass 拓扑**样本（与 selfCheckTopology
  * 分开是因为它连同 5 个样本把后者顶过了 120 代码行红线）。五条各锁一处"编译能过、
@@ -216,7 +221,7 @@ void selfCheckDepthOnlyTopology(std::vector<std::string>& failures) {
 	expectOk("depth-only pass", RgGraphDesc{
 		.attachments = {RgAttachmentDesc{.name = std::string{kShadowMapName},
 			.kind = RgAttachmentKind::depthOffscreen, .format = std::string{kShadowMapFormat},
-			.extent = {kShadowMapSize, kShadowMapSize}}},
+			.extent = {kSelfCheckShadowSize, kSelfCheckShadowSize}}},
 		.passes = {RgPassDesc{.name = "shadow", .state = "shadow", .drawSource = "shadow",
 			.outputs = {shadowOut()}}},
 	});
@@ -480,7 +485,7 @@ void selfCheckShadowCompiled(const CompiledRenderGraph& graph,
 	} else {
 		if (att->aspect != vk::ImageAspectFlagBits::eDepth)
 			failures.push_back("shadow: shadow_map aspect should be eDepth (barriers would use eColor)");
-		if (att->extent[0] != kShadowMapSize || att->extent[1] != kShadowMapSize)
+		if (att->extent[0] != kSelfCheckShadowSize || att->extent[1] != kSelfCheckShadowSize)
 			failures.push_back("shadow: shadow_map independent extent not propagated");
 		if (!att->frameStartDiscard)
 			failures.push_back("shadow: shadow_map should be in the frame-start-discard class");
@@ -500,7 +505,7 @@ void selfCheckShadowCompiled(const CompiledRenderGraph& graph,
 /** selfCheck 驱动：装饰 → 编译 → 两侧断言（拆两半是为守住单函数认知复杂度红线）。 */
 void selfCheckShadowPass(std::vector<std::string>& failures) {
 	auto desc = defaultRenderGraphDesc();
-	if (!decorateShadowPass(desc)) {
+	if (!decorateShadowPass(desc, kSelfCheckShadowSize)) {
 		failures.push_back("shadow: decorateShadowPass returned false");
 		return;
 	}

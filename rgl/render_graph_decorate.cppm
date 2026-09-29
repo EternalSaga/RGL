@@ -139,12 +139,12 @@ bool decorateHighlightPass(RgGraphDesc& desc) {
  * 按角色反查——阴影 pass 自为一体（自带专属深度附件），既不读既有拓扑也不借既有附件，
  * 故任何图形态（forward / deferred / offscreen）都直接适用，前插即可。
  */
-bool decorateShadowPass(RgGraphDesc& desc) {
+bool decorateShadowPass(RgGraphDesc& desc, uint32_t mapSize) {
 	desc.attachments.push_back(RgAttachmentDesc{
 		.name = std::string{kShadowMapName},
 		.kind = RgAttachmentKind::depthOffscreen,
 		.format = std::string{kShadowMapFormat},
-		.extent = {kShadowMapSize, kShadowMapSize},  // 独立分辨率，与窗口解耦
+		.extent = {mapSize, mapSize},  // 独立分辨率，与窗口解耦（边长由调用方给）
 	});
 	// 图首插入（不是图末）：① 阴影深度不依赖相机深度，放最前 barrier 链最短；
 	// ② 天然先于所有要读阴影图的 pass（光照 pass 无论在哪都是它的后继）。

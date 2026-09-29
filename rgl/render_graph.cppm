@@ -405,9 +405,6 @@ export bool decorateHighlightPass(RgGraphDesc& desc);
  */
 export inline constexpr std::string_view kShadowMapName = "shadow_map";
 export inline constexpr std::string_view kShadowMapFormat = "d32_sfloat";
-/** 阴影图整幅边长（与窗口分辨率**无关**，这是 depthOffscreen 存在的理由）。当前 1 级
- *  cascade = 整幅；4 级走 2×2 tile 时本值仍是图集整幅边长（每 tile = 本值/2）。 */
-export constexpr uint32_t kShadowMapSize = 1024u;
 
 /**
  * 阴影 pass 装饰（Phase 11 批 11.2 基建，2026-09-29）：追加 `shadow_map`
@@ -424,9 +421,12 @@ export constexpr uint32_t kShadowMapSize = 1024u;
  * 调用点 = main_impl::compileGraphOrThrow，`diagnostics.shadow_pass` 门控
  * （默认关 = 不调用 = 图逐位同，沿用 D10 纪律）。
  * @param desc 图声明（原地修改：追加 attachment + 图首插 pass）
+ * @param mapSize 阴影图边长（调用方传入 scene_data::kShadowMapSize —— 图模块不认识
+ *        scene data 契约，故不做隐式依赖；1 级 cascade = 整幅，将来 4 级走 2×2 tile
+ *        时本值是图集整幅边长、每 tile = 本值/2）
  * @return true = 已装饰（任何图形态均支持：不读既有拓扑，只前插）
  */
-export bool decorateShadowPass(RgGraphDesc& desc);
+export bool decorateShadowPass(RgGraphDesc& desc, uint32_t mapSize);
 
 /** G-buffer 附件契约条目（名字 + 格式串）。 */
 export struct RgGBufferDesc {

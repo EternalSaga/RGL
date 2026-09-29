@@ -110,15 +110,50 @@ export inline constexpr uint32_t kSceneDataIrradianceOffset =
 export inline constexpr uint32_t kSceneDataIrradianceBytes = 144;  // 9×vec4=144（16B 对齐）
 static_assert(kSceneDataIrradianceOffset % 16 == 0, "irradiance region must stay 16B aligned");
 
+/**
+ * Phase 11 批 11.2：级联阴影**光空间 VP 矩阵区**（追加于辐照度区之后——既有各区基址
+ * 逐字节不动，沿用 Phase 8 ④a 的追加法）。区内容 = `kSceneShadowCascadeCount` 个 mat4
+ * 列主序，索引 = cascade 号，相对基址 + 64×i。
+ *
+ * **为什么一次就预留 4 槽**：cascade 是"同一张阴影图上的 4 个视口分块"，每块一张 VP。
+ * 先写 1 槽、后续再加 3 槽 = 再动一次尾部基址 + 改两侧手写字面量，而这类"加区域"的
+ * 最省事形态就是**一次留够**。本次（5a-1）只写 [0]（单级，拟合场景包围球），
+ * [1..3] 留单位阵——尚无消费者。
+ */
+/**
+ * 阴影图边长（**单一真相源**，Phase 11 批 11.2）。两个消费方：① 视锥包围球拟合的
+ * texel 吸附（scene_context::directionalShadowMatrix）；② 图声明里 depthOffscreen
+ * 附件的独立 extent（render_graph::decorateShadowPass —— 常量由调用方 main_impl 传入，
+ * 图模块本身不认识 scene_data 契约）。
+ *
+ * **1024 的来由**：正交半边长 = 视锥包围球半径 r → texel 世界尺寸 = 2r/1024。实测
+ * bistro 的 r 随机位在 ~10（近景微缩模型）到 ~116（默认俯视全场景）之间浮动，故
+ * texel 在 0.02~0.23 之间；近景够用、远景偏糊（级联切分正是为此，见 phase11_plan §10）。
+ * 2048 是一行改值的旋钮：内存 4→16 MB，GPU 成本只随**被光栅化的几何量**增长，
+ * 不随贴图尺寸增长。
+ */
+export inline constexpr uint32_t kShadowMapSize = 1024;
+
+export inline constexpr uint32_t kSceneShadowCascadeCount = 4;
+export inline constexpr uint32_t kSceneDataShadowMatrixOffset =
+	kSceneDataIrradianceOffset + kSceneDataIrradianceBytes;
+export inline constexpr uint32_t kSceneDataShadowMatrixBytes =
+	kSceneShadowCascadeCount * static_cast<uint32_t>(sizeof(glm::mat4));
+static_assert(kSceneDataShadowMatrixOffset % 16 == 0, "shadow matrix region must stay 16B aligned");
+// 与 scene.slang 的字面量基址钉死（两侧手写同步点，改一侧必编译失败）
+static_assert(kSceneDataShadowMatrixOffset == 721696,
+	"scene.slang readShadowViewProj literal 721696 out of sync with kSceneDataShadowMatrixOffset");
+
 /** scene data buffer 总字节数 = 头 128 + 对象矩阵表 + 灯数组区 + MVP 表 + 材质表 +
- * 辐照度 SH9 区（= 721696B，编译期派生）；SceneDataService::ensure 的分配尺寸与
+ * 辐照度 SH9 区 + 阴影 VP 区（= 721952B，编译期派生）；SceneDataService::ensure 的分配尺寸与
  * drawFrame 每帧 staging 拷贝区尺寸均为本值（vkrenderer.cppm ⑥.5）。 */
 export inline constexpr vk::DeviceSize kSceneDataBytes =
 	kSceneDataHeaderBytes + vk::DeviceSize{kSceneMatrixCapacity} * kSceneMatrixStride
 	+ kSceneDataLightArrayBytes
 	+ vk::DeviceSize{kSceneMatrixCapacity} * kSceneMatrixStride
 	+ vk::DeviceSize{kSceneMatrixCapacity} * kSceneDrawStride
-	+ kSceneDataIrradianceBytes;
+	+ kSceneDataIrradianceBytes
+	+ kSceneDataShadowMatrixBytes;
 
 /**
  * SceneData buffer 服务（2026-09-19 架构债务续账步骤 1：原 Resources::ensureSceneData/

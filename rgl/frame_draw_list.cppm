@@ -7,6 +7,7 @@ import vk_resources;
 import lights_types_generated;
 import material_types_generated;  // DrawArgs（Phase 7b cullArgs：GPU culling 候选 args）
 import scene_forward_types_generated;  // 前向头 SceneLight（C API 反射生成，替换原 LightDataGpu）
+import scene_data;  // kSceneShadowCascadeCount（阴影 VP 区容量；单向依赖：scene_data 不认识本模块）
 
 namespace RGL {
 
@@ -71,6 +72,11 @@ export struct SceneFrameData {
 	// 该区不写。forward 仍走 .light（@0 头单灯），二者独立填。
 	uint32_t lightCount = 0;
 	std::array<GpuLight, kMaxLights> lightArray{};
+	// Phase 11 批 11.2：级联阴影光空间 VP（scene data 尾区 kSceneDataShadowMatrixOffset，
+	// 索引 = cascade 号，列主序，shader scene.slang readShadowViewProj 消费）。区容量 =
+	// kSceneShadowCascadeCount（一次留够 4 槽，见 scene_data.cppm 该区注释）；5a-1 只写
+	// [0]（单级、拟合场景包围球、相机无关 = 无爬行），[1..3] 留单位阵（尚无消费者）。
+	std::array<glm::mat4, kSceneShadowCascadeCount> shadowViewProj{};
 };
 
 /**

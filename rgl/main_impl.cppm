@@ -247,7 +247,7 @@ CompiledGraphResult compileGraphOrThrow(const char* path) {
 	// 深度 RT）。当前阴影段为空 = 零 draw，画面逐位不变；本门只用于验证 depth-only pass
 	// 基建全链（RT / 屏障 / 独立 extent / 状态）。默认关，沿用 D10 图装饰门控纪律。
 	if (diagnostics().shadowPass) {
-		decorateShadowPass(graphConfig->desc);
+		decorateShadowPass(graphConfig->desc, kShadowMapSize);
 		if (auto* logger = RLLogger::getInstance())
 			logger->info("shadow_pass: 已装饰 depth-only 阴影 pass（{}² {}，段内零 draw = 画面不变）",
 				kShadowMapSize, kShadowMapFormat);

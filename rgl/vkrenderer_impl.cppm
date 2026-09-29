@@ -317,6 +317,9 @@ void Renderer::createSceneStaging(RGL::Resources& vkResources) {
 	std::memcpy(stage + kSceneDataAoOffset, &list.sceneData.aoStrength, sizeof(float));
 	// Phase 5.5 批次 4：skyboxInvViewProj 写 @64（sky.slang skyClipToWorld 消费）
 	std::memcpy(stage + kSceneDataSkyOffset, &list.sceneData.skyInvViewProj, sizeof(glm::mat4));
+	// Phase 11 批 11.2：阴影光空间 VP 区（尾区追加，4 槽；5a-1 只用 [0]）
+	std::memcpy(stage + kSceneDataShadowMatrixOffset, list.sceneData.shadowViewProj.data(),
+		kSceneDataShadowMatrixBytes);
 	const auto matricesBytes = list.sceneData.objectMatrices.size() * sizeof(glm::mat4);
 	if (matricesBytes > kSceneMatrixCapacity * kSceneMatrixStride)
 		return std::unexpected(Error{ErrorCode::Unknown,

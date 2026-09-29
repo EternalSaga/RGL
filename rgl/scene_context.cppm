@@ -1,6 +1,9 @@
 module;
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
+// lookAt / ortho 属 gtc/matrix_transform.hpp（Phase 11 批 11.2 directionalShadowMatrix 用；
+// 与 camera.cppm 同一处 include——GMF 头可达但名字不可见，不加就是"no member named"）
+#include <glm/gtc/matrix_transform.hpp>
 export module scene_context;
 
 import rlstd;
@@ -191,6 +194,77 @@ export struct Light {
 	float range = 0.0f;
 	uint32_t type = 0;                          // 0=定向，1=点光
 };
+
+/**
+ * Phase 11 批 11.2：由视锥求**包围球**（Eberly 增量法；平面约定沿 extractFrustum：
+ * 内侧 = dot(n, x) + d ≥ 0）。视锥的 6 个平面逐步把球心推到满足全部约束、半径取被
+ * 触及时的距离——不追求最小球（对阴影贴图覆盖而言无差别），但保证**整个视锥在球内**。
+ * @param viewProj 相机 view·proj（列主序，glm 约定）
+ * @return {center, radius}；退化视锥（矩阵全 0 等）返回半径 0
+ */
+export inline Bounds frustumBoundingSphere(const glm::mat4& viewProj) {
+	const Frustum f = extractFrustum(viewProj);
+	glm::vec3 center{0.0f};
+	float radius = 0.0f;
+	for (const auto& plane : f.planes) {
+		const glm::vec3 n{plane.x, plane.y, plane.z};
+		const float dist = glm::dot(n, center) + plane.w;
+		if (dist > radius) {           // 该平面把球顶出内侧 → 沿法线推球心、半径跟涨
+			center += n * (dist - radius);
+			radius = dist;
+		}
+	}
+	return Bounds{center, radius};
+}
+
+/**
+ * Phase 11 批 11.2：定向光的**单级**光空间 VP 矩阵（阴影图用，列主序 proj·view）。
+ *
+ * **拟合目标 = 相机视锥的包围球**（frustumBoundingSphere），不是场景包围球。这一点是
+ * 实测决定的：bistro 场景的 SceneBounds radius = **116.26**（整条运河 + 街景都在里面），
+ * 而真正要投影阴影的微缩街景模型只占其中一小块。若按场景球拟合，单级阴影图的 texel
+ * 尺寸 = 2·116.26/1024 = **0.227 世界单位** → 整个模型只摊到 ~88 个 texel，阴影必然糊
+ * 成一团。改拟合视锥后 texel 随相机拉近而变细（实测同场景近景约 0.02~0.05 量级，
+ * 差一个数量级）。级联切分（本函数只出第 0 级）正是为了兼顾远景。
+ *
+ * **texel 吸附**：拟合框随相机移动，若不吸附，阴影边缘每帧都会"爬行"（shimmering）。
+ * 做法 = 把球心投到 NDC → 换算成 texel 坐标 → 四舍五入 → 反算成光空间平移量 →
+ * 乘在矩阵左侧。只动 x/y（z 不吸附：深度是线性的，吸附无意义）。
+ *
+ * 正交半边长取球半径 r：包围球的正交投影是半径 r 的圆盘，故恰好全覆盖（球面采样实测
+ * x/y ∈ [-1,1]、z ∈ [0.25,0.75]）。near/far 取 0/4r 覆盖球在视空间的 z ∈ [r, 3r]；
+ * 多出来的深度范围在正交投影下**无精度代价**（深度线性），故不收紧。
+ *
+ * up 向量在光近乎竖直时切到 +Z，避免 lookAt 叉积退化。
+ *
+ * @param light 定向光（只取 direction = 光→场景 的照射方向；点光无意义）
+ * @param viewProj 相机 view·proj（拟合来源）
+ * @param mapSize 阴影图边长（texel 吸附用）
+ * @return 光空间 VP；视锥退化（半径 ≤ 0）时返回单位阵
+ */
+export inline glm::mat4 directionalShadowMatrix(const Light& light,
+	const glm::mat4& viewProj, uint32_t mapSize) {
+	const Bounds sphere = frustumBoundingSphere(viewProj);
+	const float r = sphere.radius;
+	if (r <= 0.0f)
+		return glm::mat4{1.0f};  // 退化视锥：无阴影可投，返回单位阵而非 NaN
+	const glm::vec3 dir = glm::normalize(light.direction);
+	const glm::vec3 up = (dir.y > 0.99f || dir.y < -0.99f) ? glm::vec3{0.0f, 0.0f, 1.0f}
+							   : glm::vec3{0.0f, 1.0f, 0.0f};
+	const glm::mat4 view = glm::lookAt(sphere.center - dir * (r * 2.0f), sphere.center, up);
+	const glm::mat4 proj = glm::ortho(-r, r, -r, r, 0.0f, r * 4.0f);
+	const glm::mat4 vp = proj * view;
+	// texel 吸附：NDC → texel 网格取整 → 反算光空间平移（NDC 差 × r = 光空间偏移，
+	// 因 ortho 把 [-r, r] 映到 [-1, 1]）。**平移必须加在投影之前**（proj·T·view）——
+	// 加在投影之后（translate·proj·view）的话偏移量是裁剪空间单位，等于把位移放大了一倍
+	// 半边长，实测把视锥角点顶到 NDC 1.43（越界）。这是本函数唯一一处易错顺序。
+	const glm::vec4 clip = vp * glm::vec4(sphere.center, 1.0f);
+	const glm::vec2 ndc = glm::vec2(clip) / clip.w;
+	const glm::vec2 snapped = (glm::round((ndc * 0.5f + 0.5f) * static_cast<float>(mapSize))
+				 + glm::vec2(0.5f))
+		/ static_cast<float>(mapSize) * 2.0f - glm::vec2(1.0f);
+	return proj * glm::translate(glm::mat4{1.0f}, glm::vec3((snapped - ndc) * r, 0.0f)) * view;
+}
 
 /**
  * 环境贴图参数（registry context，Phase 5.5；main 启动期从 configs/scene.lua

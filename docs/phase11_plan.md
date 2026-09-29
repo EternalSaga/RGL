@@ -492,3 +492,64 @@ extendedDynamicState3ExtraPrimitiveOverestimationSize = false
 | `shadow_pass=false` 截图 md5 | `7a87251793dba1254a9a863683b4dd9f` = **与新基线全等**（基建对默认路径零影响） |
 | `shadow_pass=true` 45 s 冒烟 | 0 校验层报错、0 error 级日志；截图 md5 **与基线全等**（零 draw pass 对画面中性，符合设计） |
 | selfCheck | 新增 10 个样本（5 拓扑 + 5 结构断言）全绿，钉住：depth-only pass 可编译、两表分立、独立 extent 只对图属 RT 开放、空 pass 仍拒、装饰产物 = 图首 pass + depthOffscreen 附件、编译产物 aspect/extent/discard/plan.depth/colors 全部符合预期 |
+
+
+---
+
+## 12. 批 11.2 · 5a-1 落地记录：scene data 阴影 VP 区 + 单级光空间矩阵
+
+### 12.1 做了什么
+
+| 项 | 内容 |
+|---|---|
+| scene data 尾区 | 追加 `kSceneShadowMatrixOffset = 721696`（= 辐照度区尾）、容量 `kSceneShadowCascadeCount = 4` 槽 × 64B。**沿用 Phase 8 ④a 的追加法 → 既有各区基址逐字节不动**（头 128 / 矩阵表 128 / 灯 262272 / MVP 262800 / draw 524944 / 辐照度 721552 全部不动） |
+| 单一真相源 | `kShadowMapSize = 1024` 放在 **scene_data.cppm**（不是 render_graph）：两个消费方是"视锥拟合的 texel 吸附"与"图附件 extent"，后者由 `main_impl` 显式传参进 `decorateShadowPass(desc, mapSize)`，图模块因此不必 import scene data 契约 |
+| CPU 每帧写 | `renderListSystem` 填 `sceneData.shadowViewProj[0]`，`Renderer::writeSceneStaging` memcpy 整区（4 槽一次写，[1..3] 留单位阵） |
+| 矩阵构造 | `scene_context::frustumBoundingSphere`（Eberly 增量法，平面约定沿 `extractFrustum`）+ `directionalShadowMatrix(light, viewProj, mapSize)` |
+
+### 12.2 拟合目标为什么不是场景包围球（实测决定）
+
+初版按 `SceneBounds` 拟合，读运行期日志才发现问题：
+
+```
+gltf_loader_impl.cppm:583  bounds center=(14.367052, 8.558889, 2.984644) radius=116.26
+```
+
+**场景包围球半径 116.26**（整条运河 + 街景都在里面），而要投影阴影的微缩街景模型只是其中
+一小块 → 单级 texel = 2·116.26/1024 = **0.227 世界单位**，整个模型只摊到 ~88 个 texel，
+阴影必然糊成一团。改拟合**视锥包围球**后，texel 随相机拉近而变细（近景约 0.02~0.05
+量级，差一个数量级）。
+
+代价（写进注释，别当没看见）：单级拟合视锥 = **阴影图只覆盖可视区**，
+落在视锥外的投影几何没有阴影；级联切分正是为了兼顾远景。
+
+### 12.3 两个自己踩的坑（都是"看起来对、其实错一位"）
+
+1. **texel 吸附的平移加错了空间**。偏移量是**光视空间**单位（ortho 把 [-r,r] 映到
+   [-1,1]，故 NDC 差 × r），但我最初写成 `translate(delta) * (proj·view)` —— 那是
+   **裁剪空间**单位，等于把位移放大了一个正交半边长。探针实测把视锥角点顶到
+   NDC **1.43**（越界，阴影图边缘会丢几何）。改成 `proj·translate(delta)·view` 后
+   max|s.xy| = 0.95，落回 [-1,1]。
+   > 顺带一条判据：这种"只差一个矩阵因子顺序"的错误，**肉眼看阴影图只会觉得
+   > "边缘有点怪"，不会报错**。所以这类几何必须用"点投影回 NDC 看是否在 [-1,1]³"来验，
+   > 不要靠看图。
+
+2. **验证脚本自己写错，比被验的代码错两次**。先用 numpy 复刻 GLM 的 `lookAt`+`ortho`
+   自检，出现"覆盖失败"——排查后是我把 view 矩阵平移项的行序写反了；改完仍失败，
+   再查发现 numpy 的 `ortho` 与 `lookAt` 深度约定不自洽（一个右、一个左）。
+   > **教训**：验证数学时**直接链项目真实的 GLM 头**写个小探针（g++ + vcpkg include，
+   > 30 行、秒级），比在 Python 里复刻一份"差不多的实现"可靠得多——复刻版会把
+   > **自己的 bug** 误判成 **被测代码的 bug**，进而改坏本来正确的代码。
+
+### 12.4 验证（真实 GLM 探针 `/tmp/opencode/glmprobe/probe2.cpp`）
+
+| 判据 | 结果 |
+|---|---|
+| 视锥 8 角点全部落在 [-1,1]×[-1,1]×[0,1] | 近/中/远三档全绿（max\|s.xy\| = 0.949 / 0.925 / 0.953） |
+| 爬行（吸附有效性） | 相机平移 0.0005（= 0.001 texel）→ 固定世界点在光空间漂移 **0.027 texel** ≪ 1 → 无整 texel 跳变 |
+| 球面覆盖（球拟合版另测） | 球心 NDC 精确 (0,0,0.5)、球面 x/y ∈ [-1,1]、z ∈ [0.25,0.75]（5 用例含 up 退化/近水平光） |
+| 项目侧 | `just checks --strict` 0 警告 / 100 cppm；默认路径 md5 = 基线；`shadow_pass=true` 0 VVL 0 error |
+
+> 判据说明：爬行**不**用"矩阵逐位相同"衡量——球拟合的半边长 r 会随相机距离微变
+> （那是"阴影呼吸"，幅度与 r 的相对变化同阶，肉眼不可见）；真正刺眼的是**整 texel 跳变**，
+> 吸附就是为消掉它。量法 = 固定世界点在光空间的位移 / texel 尺寸。

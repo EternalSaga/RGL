@@ -12,6 +12,7 @@ import material_types_generated;
 import lights_types_generated;
 import scene_forward_types_generated;  // 前向头 SceneLight（C API 反射生成，替换原 LightDataGpu）
 import frame_draw_list;
+import scene_data;  // kShadowMapSize（阴影图边长；单向依赖）
 import vk_resources;
 import environment;  // Environment（irradianceSH，架构债务续账步骤 3）
 import asset_table;
@@ -186,6 +187,12 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	// Phase 8 批次 ④a：漫反射辐照度 SH9（env 加载期算好存 Resources，此处每帧拷入）
 	fresh.sceneData.irradianceSH = envService.getIrradianceSH();
 	fresh.sceneData.skyInvViewProj = glm::inverse(viewProj.proj * viewProj.view);
+	// Phase 11 批 11.2：单级阴影光空间 VP（scene data 尾区阴影 VP 区 [0] 槽）。拟合目标 =
+	// 相机视锥包围球（不是场景包围球：实测场景半径 116 会把 texel 摊到 0.227 世界单位，
+	// 差一个数量级；完整取舍见 scene_context::directionalShadowMatrix）。[1..3] 保持默认
+	// 单位阵（级联未做，尚无消费者）。
+	fresh.sceneData.shadowViewProj[0] = directionalShadowMatrix(primary, viewProj.proj * viewProj.view,
+		kShadowMapSize);
 	fresh.sceneData.objectMatrices = std::span<const glm::mat4>{state.matrices};
 	fresh.sceneData.objectMvps = std::span<const glm::mat4>{state.mvps};
 	fresh.sceneData.objectDraws = std::span<const ObjectDraw>{state.draws};
