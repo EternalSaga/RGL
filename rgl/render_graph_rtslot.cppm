@@ -105,7 +105,7 @@ std::expected<uint32_t, Error> ensureAoSlot(
 std::expected<uint32_t, Error> ensureShadowMapSlot(RenderTargetCache& rts, uint32_t mapSize) {
 	const std::string name{std::string{kShadowMapName}.c_str()};
 	const vk::Format format = resolveRgFormat(std::string{kShadowMapFormat}, vk::Format::eUndefined);
-	const vk::Extent2D extent{mapSize * 2u, mapSize * 2u};
+	const vk::Extent2D extent{mapSize, mapSize};  // 整幅固定（同装饰），块边长 = 整幅/列数
 	auto rt = rts.ensure(name, extent, format, vk::ImageAspectFlagBits::eDepth);
 	if (!rt)
 		return std::unexpected(std::move(rt).error());
@@ -114,8 +114,10 @@ std::expected<uint32_t, Error> ensureShadowMapSlot(RenderTargetCache& rts, uint3
 		return std::unexpected(Error{ErrorCode::Unknown,
 			fmt::format("shadow_map RT '{}' has no sample descriptor slot", name)});
 	if (auto* logger = RLLogger::getInstance())
-		logger->info("shadow_map (D32, eDepth): {}x{} slot {} (图集，{} 级共享)",
-			extent.width, extent.height, *slot, kActiveShadowCascades);
+		logger->info("shadow_map (D32, eDepth): {}x{} slot {} (图集 {}×{} 块，块边长 {}，{} 级共享)",
+			extent.width, extent.height, *slot, shadowAtlasColumns(kActiveShadowCascades),
+			shadowAtlasColumns(kActiveShadowCascades),
+			shadowTileSize(shadowAtlasColumns(kActiveShadowCascades)), kActiveShadowCascades);
 	return *slot;
 }
 

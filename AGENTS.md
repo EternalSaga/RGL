@@ -130,7 +130,7 @@ CMake CXX_MODULES FILE_SET 不收纯实现单元，故"接口声明 + 分区实�
 | `vk_device` | vkdevice.cppm | PhysicalDevice 选择、QueueFamilyManager、Device、CommandPools、FeatureChain |
 | `vk_swapchain` | vkswapchain.cppm | Surface、Swapchain、ImageView[] format/extent/presentMode |
 | `vk_resources` | vkresources.cppm | VMA 分配器、depth、resource/sampler VmaDescriptorHeap、descriptor heap 用户槽三段分配器（geometry / texture / runtime） |
-| `vk_renderer` | vkrenderer.cppm | **盲执行器**：`drawFrame(CompiledRenderGraph)`（零 entt）= beginFrame→writeSceneStaging→cullDriver→recordFixedDataPath→pass 循环（SlotResolver/stateKit/executePassDraws 三路分发）→capture→present→submit；构造期 `validateRenderGraphForExecutor` fail-fast |
+| `vk_renderer` | vkrenderer.cppm / _impl / _passrec | **盲执行器**：`drawFrame(CompiledRenderGraph)`（零 entt）= beginFrame→writeSceneStaging→cullDriver→recordFixedDataPath→pass 循环（SlotResolver/stateKit/executePassDraws 三路分发）→capture→present→submit；构造期 `validateRenderGraphForExecutor` fail-fast |
 | `frame_session` | frame_session.cppm | 帧生命周期会话：双 fence 同步 + 每帧 CB + beginFrame/submit/present/advance + swapchain/depth 重建 |
 | `frame_capture` | frame_capture.cppm | 帧内回读捕获器（llm_debug 截图载体）：request/record/collect 三步曲 |
 | `cull_driver` | cull_driver.cppm | GPU culling 帧编舞：`runFrame`（dispatch→preprocess→同帧等待→readCull→reconcile）+ `executeOpaqueSegment` 三路分发（IES DGC / 静态 DGC / 读回重放） |

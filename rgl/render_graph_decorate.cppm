@@ -1,7 +1,8 @@
 module render_graph:decorate;
 
 import render_graph;
-import scene_context;  // shadowPassName / shadowDrawSource（阴影 pass 名与段名的单一来源）  // clang 不给 partition 实现单元隐式 import 主接口——必须显式
+import scene_context;  // shadowPassName / shadowDrawSource（阴影 pass 名与段名的单一来源）
+import scene_data;     // kActiveShadowCascades / kShadowMapSize  // clang 不给 partition 实现单元隐式 import 主接口——必须显式
 import rlstd;
 
 // 诊断装饰 pass（2026-09-29 自 render_graph_impl 拆出，解该文件 500 代码行红线）：
@@ -141,29 +142,36 @@ bool decorateHighlightPass(RgGraphDesc& desc) {
  * 故任何图形态（forward / deferred / offscreen）都直接适用，前插即可。
  */
 bool decorateShadowPass(RgGraphDesc& desc, uint32_t mapSize) {
+	const uint32_t cols = shadowAtlasColumns(kActiveShadowCascades);
+	const uint32_t tile = shadowTileSize(cols);
 	desc.attachments.push_back(RgAttachmentDesc{
 		.name = std::string{kShadowMapName},
 		.kind = RgAttachmentKind::depthOffscreen,
 		.format = std::string{kShadowMapFormat},
-		.extent = {mapSize, mapSize},  // 独立分辨率，与窗口解耦（边长由调用方给）
+		// 图集整幅 = 列数×mapSize（列数跟**生效级数**走，见 shadowAtlasColumns）。独立分辨率，与窗口解耦。
+		// 为何不固定 2×2：图集整幅决定每块的实际分辨率，固定 2×2 意味着只用 1 级时
+		// 白占 3/4 画布、阴影分辨率从 2048² 降到 1024²。切到更多级时整幅变 → 新图/新槽在启动期重建
+		// （ensureShadowMapSlot 已在烘管线条目之前用同一公式算出同一尺寸 → 命中缓存，不重建）。
+		.extent = {mapSize, mapSize},
 	});
-	// 图首插入（不是图末）：① 阴影深度不依赖相机深度，放最前 barrier 链最短；
-	// ② 天然先于所有要读阴影图的 pass（光照 pass 无论在哪都是它的后继）。
-	// clear 1.0 = "无遮挡"（与主深度图同约定：glm 零到一深度，1.0 = far）。
-	desc.passes.insert(desc.passes.begin(), RgPassDesc{
-		.name = "shadow",
-		.kind = RgPassKind::drawMesh,
-		.state = "shadow",
-		.drawSource = "shadow",
-		.outputs = {RgPassAttachment{.attachment = std::string{kShadowMapName},
-			.usage = RgUsage::depthWrite, .loadOp = RgLoadOp::clear,
-			.storeOp = RgStoreOp::store}},
-	});
-	// 消费方声明：把阴影图作为 sampleRead 输入接到**光照 pass**。不接的话编译器不会为它
-	// 生成 DSAO → ShaderReadOnly 的布局转换，采样端就会报 VVL。
-	// 为何按 state 而不是按 pass 名：forward 图的光照在 opaque/transparent 段（state 就是
-	// "opaque"/"transparent"），deferred 图的光照在 light pass（state="light"）——三个 state 名在两种图
-	// 里都是语义角色，而 pass 名不同图变（forward "opaque" vs deferred "geometry"）。
+	// 图首插入 N 个 pass（一级一个），各渲染图集里自己那一块子矩形。插图首（不是图末）：
+	// ① 阴影深度不依赖相机深度，放最前 barrier 链最短；② 天然先于所有要读它的 pass。
+	for (uint32_t c = 0; c < kActiveShadowCascades; ++c) {
+		// 分块之间 loadOp = load（不 clear）——保留已写的其他分块。清值 1.0 = 无遮挡。
+		desc.passes.insert(desc.passes.begin() + static_cast<long>(c), RgPassDesc{
+			.name = std::string{shadowPassName()} + (c == 0 ? "" : std::to_string(c)),
+			.kind = RgPassKind::drawMesh,
+			.state = "shadow",
+			.drawSource = shadowDrawSource(c),
+			.viewport = shadowTile(c, tile, cols),
+			.outputs = {RgPassAttachment{.attachment = std::string{kShadowMapName},
+				.usage = RgUsage::depthWrite, .loadOp = c == 0 ? RgLoadOp::clear : RgLoadOp::load,
+				.storeOp = RgStoreOp::store}},
+		});
+	}
+	// 消费方声明：把阴影图作为 sampleRead 输入接到**光照 pass**。不接的话编译器不会为它生成
+	// DSAO → ShaderReadOnly 的布局转换，采样端就会报 VVL。按 state 而不是按 pass 名：forward 图的光照在
+	// opaque/transparent 段，deferred 图的光照在 light pass（state="light"）——三个 state 名在两种图里都是语义角色。
 	static constexpr std::array<std::string_view, 3> kShadowLitStates{"opaque", "transparent", "light"};
 	for (auto& pass : desc.passes)
 		if (std::ranges::any_of(kShadowLitStates, [&](std::string_view s) { return pass.state == s; }))

@@ -204,6 +204,13 @@ export struct RgPassDesc {
 	std::string state;       // RenderState 名（"opaque"/"skybox"/"transparent"…名字字符串，零 handle）
 	                         // 执行器解析；drawMesh 必填，blit 忽略
 	std::string drawSource;  // FrameDrawList 段名（"opaque"/"skybox"/"transparent"）；drawMesh 必填
+	// 本 pass 的渲染区域（viewport + scissor）相对附件原点的偏移 / 尺寸。
+	// 默认 {0,0,0,0} = 跟随本 pass 的渲染区域（交易窗口尺寸，或写 depthOffscreen 时
+	// 该 RT 自己的 extent）——**既有 pass 逐位不变**。
+	// 用途：阴影图集的 4 个分块（各一级一个 pass）同临一张图、各只渲染自己那一块
+	// 子矩形——每个 pass 一张图 = 4 张独立图 + 4 套附件/堆槽/绑定（而 forward/deferred
+	// 两路要各绑 4 个 = 8 个端）。子矩形同时是 **renderArea**（限定 clear 与渲染区）。
+	std::array<uint32_t, 4> viewport{0u, 0u, 0u, 0u};  // {x, y, w, h}；w == 0 = 跟随渲染区域
 	std::vector<RgPassAttachment> outputs;
 	std::vector<RgPassAttachment> inputs;
 };
@@ -281,6 +288,7 @@ export struct RgPassPlan {
 	std::string state;
 	std::string drawSource;
 	std::vector<RgBarrierPlan> barriers;  // 本 pass 前发射（单 DependencyInfo 批量）
+	std::array<uint32_t, 4> viewport{0u, 0u, 0u, 0u};  // 见 RgPassDesc::viewport（{0,0,0,0} = 跟随渲染区域）
 	std::vector<RgAttachmentPlan> colors;  // 顺序 = Lua outputs 中 colorWrite 序 = color index
 	std::optional<RgAttachmentPlan> depth;
 	std::optional<RgAttachmentSlot> blitSource;
@@ -406,6 +414,53 @@ export bool decorateHighlightPass(RgGraphDesc& desc);
 export inline constexpr std::string_view kShadowMapName = "shadow_map";
 export inline constexpr std::string_view kShadowMapFormat = "d32_sfloat";
 
+/**
+ * 阴影图**图集整幅**（边长）——固定不随级联数变，分块边长 = 整幅/列数。
+ *
+ * 定义在本模块（而非 scene_data）是为了让 render_graph 这个**纯意图模块**不拉 vk_resources（场景数据布局无需
+ * 知道阴影图多大），也让它与 kShadowMapName / kShadowMapFormat 住成同一组契约。
+ * 2048 = 单级时的整幅（= 最高分辨率）；加级联后每块变细（见 shadowAtlasColumns）。
+ */
+export inline constexpr uint32_t kShadowMapSize = 2048;
+
+/** 级联分块在 2×2 图集上的子矩形（视口 + renderArea）。
+ *  N=4 时图集 2S×2S，四块各 S×S：cascade0 (0,0) / 1 (S,0) / 2 (0,S) / 3 (S,S)。
+ *  采样端用同一块置把光空间 uv 叠上来（shadow.slang readShadowAtlas）——两侧必须同源，改一处即可。
+ *  @param c 分块号
+ *  @param tileSize 单块边长
+ *  @return {x, y, w, h}（与 RgPassDesc::viewport 同布局）
+ */
+/** 图集整幅（永远 kShadowMapSize，不随级数变）。图集 = 列数×列数块，每块边长 = 整幅/列数。
+ *
+ * ## 为何总预算固定、而不跟级数走
+ * 总纹素预算固定 = **加级联的代价是每块变细，不是白占画布**。
+ * - 1 级：1 块 = 整幅（2048²）——分辨率最高；
+ * - 4 级：4 块 = 1024² 每块，远级变粗但覆盖范围变大（这正是 CSM 的本意）。
+ * 另外本场景开销**顶点主导**（实测：2.8M 三角形的光梲化），图尺寸对时间影响极小，
+ * 所以额外分辨率几乎免费——这也是为何无需在级联间做分辨率取舍。
+ *
+ * @param count 生效级数
+ * @return 列数（1 → 1，2 → 2，3/4 → 2） */
+export inline uint32_t shadowAtlasColumns(uint32_t count) {
+	return count <= 1u ? 1u : 2u;
+}
+
+/** 单块边长 = 图集整幅 / 列数。与 shadowTile 的 tileSize 参同源，采样端从 scene data 拿它算块内 uv → 图集 uv。
+ * @param cols 图集列数（shadowAtlasColumns）
+ * @return 单块边长（像素） */
+export inline uint32_t shadowTileSize(uint32_t cols) {
+	return kShadowMapSize / cols;
+}
+
+/** 级联分块在图集上的子矩形（视口 + renderArea）。与采样端的块内 uv → 图集 uv 叠映（shadow.slang
+ *  readShadowAtlas）同源；分块排布 = 列号 c%cols / 行号 c/cols。
+ *  @param c 分块号
+ *  @param tileSize 单块边长
+ *  @param cols 图集列数（shadowAtlasColumns）
+ *  @return {x, y, w, h}（与 RgPassDesc::viewport 同布局） */
+export std::array<uint32_t, 4> shadowTile(uint32_t c, uint32_t tileSize, uint32_t cols) {
+	return {tileSize * (c % cols), tileSize * (c / cols), tileSize, tileSize};
+}
 /**
  * 阴影 pass 装饰（Phase 11 批 11.2 基建，2026-09-29）：追加 `shadow_map`
  * （kind=depthOffscreen，格式/尺寸 = kShadowMapFormat/kShadowMapSize）+ 一个 **depth-only**

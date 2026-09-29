@@ -271,6 +271,10 @@ void projectionSystem(entt::registry& rg) {
 		glm::perspective(camera.fov,
 			static_cast<float>(extent.width) / static_cast<float>(extent.height),
 			nearPlane, farPlane);
+	// Phase 11 批 11.2：写回实际生效的 near/far（级联切分用；自适应值不等于
+	// camera.nearPlane/farPlane，外部若直接拿 camera 的会切错分界）
+	viewProj.nearPlane = nearPlane;
+	viewProj.farPlane = farPlane;
 }
 
 

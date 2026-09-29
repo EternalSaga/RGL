@@ -96,8 +96,10 @@ export struct RenderState {
  * spec 要求相关 set 命令在 draw 之前调用即可（draw 时采样），与 bindShadersEXT
  * 的先后无约束。
  * @param cmd 命令缓冲（录制期）
- * @param width 视口宽
- * @param height 视口高（viewport y = height、h = -height：Vulkan 坐标原点左上）
+ * @param area 渲染区域矩形（viewport + scissor）。**Phase 11 批 11.2 从 (width, height) 改为 rect**：
+ *        阴影图集分块需要偏移原点（不是全部从 (0,0) 开始）；传全尺寸两参数就不够用。
+ *        传 {0,0,w,h} 时与旧两参数形式**逐位一致**（见 @param 说明的 y 翻转）
+ * @param area 视口：viewport y = area.y + area.h、h = -area.h（Vulkan 坐标原点左上）
  * @param state 状态值集合
  * @param depthClipDynamic edS3 能力门：true = 设备支持 extendedDynamicState3DepthClipEnable，
  *        才 setDepthClipEnableEXT；false = 扩展缺失，保持管线默认（干净 no-op，不 set）
@@ -108,13 +110,15 @@ export struct RenderState {
  *        （2026-09-29 实测：`vkCmdSetColorBlendEnableEXT(): attachmentCount must be
  *        greater than 0`），而没有色附件时这些状态本就无对象可作用。
  */
-export void applyDynamicState(vk::raii::CommandBuffer& cmd, uint32_t width, uint32_t height,
+export void applyDynamicState(vk::raii::CommandBuffer& cmd, const vk::Rect2D& area,
 	const RenderState& state, bool depthClipDynamic = false, uint32_t colorAttachmentCount = 1) {
-	// Viewport & scissor
-	vk::Viewport viewport(0.0f, static_cast<float>(height),
-		static_cast<float>(width), -static_cast<float>(height),
-		0.0f, 1.0f);
-	vk::Rect2D scissor({0, 0}, {width, height});
+	// Viewport & scissor（y 翻转：Vulkan 视口原点在左上，NDC y=+1 对应 area.y）
+	const float x = static_cast<float>(area.offset.x);
+	const float yTop = static_cast<float>(area.offset.y + area.extent.height);
+	const float w = static_cast<float>(area.extent.width);
+	const float h = static_cast<float>(area.extent.height);
+	vk::Viewport viewport(x, yTop, w, -h, 0.0f, 1.0f);
+	vk::Rect2D scissor(area.offset, area.extent);
 	cmd.setViewportWithCount(viewport);
 	cmd.setScissorWithCount(scissor);
 

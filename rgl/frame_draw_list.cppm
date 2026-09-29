@@ -103,6 +103,9 @@ export struct SceneFrameData {
 	glm::vec4 shadowSplits{1e9f, 1e9f, 1e9f, 1e9f};
 	glm::vec4 shadowTexelSizes{};
 	glm::vec4 shadowParams{};
+	// · shadowAtlas —— (图集边长, 单块边长, 分块列数, 保留)；shadow.slang 用它把级联块的
+	// 光空间 uv 叠到图集上（与图装饰的分块子矩形同源）。
+	glm::vec4 shadowAtlas{2048.0f, 1024.0f, 2.0f, 0.0f};
 };
 
 /**
@@ -137,6 +140,20 @@ export struct FrameDrawList {
 	// 而阴影段的可见集与主视野不同（下方“源几何”备注），属于独立通道。
 	// drawSource = "shadow" + 分块号字符串（见 scene_context::shadowDrawSource）。
 	std::vector<DrawCall> shadowCalls;
+	// 阴影段的**分块边界**（kSceneShadowCascadeCount + 1 个）：boundaries[0] = 0，boundaries[c+1] = 级 c 的段尾。
+	// 为何不用 4 个独立向量：这 4 段在**同一张图集**上、为 4 个 pass 交替渲染，
+	// 序号连续才是自然的；拼一个向量 + 边界数组与 calls/transparentStart 的现有风格一致。
+	// 长度固定为 kSceneShadowCascadeCount + 1，未启用的级区间为空（段边界相等 → 该 pass 零 draw）。
+	std::array<uint32_t, kSceneShadowCascadeCount + 1> shadowBoundaries{};
+
+	/** 阴影第 c 级的 draw 序列（c 超出已启用级数时返回空 span）。
+	 *  @param c 分块号（受控于 boundaries 长度 = 区容量）
+	 *  @return 该级的 draw 序列 */
+	[[nodiscard]] std::span<const DrawCall> shadowSegment(uint32_t c) const {
+		if (c + 1u >= shadowBoundaries.size() || shadowBoundaries[c] >= shadowBoundaries[c + 1])
+			return {};
+		return {shadowCalls.data() + shadowBoundaries[c], shadowBoundaries[c + 1] - shadowBoundaries[c]};
+	}
 	// Phase 10 批 10.7：点选高亮通道（**纯 CPU 侧**）——高亮 pass 录制期据此过滤 draw：
 	// 只画 materialBySlot[objectSlot] == selectedMaterial 的 draw，即「选中材质全部实体
 	// 一起发光」。hasSelection=false → 该 pass 零 draw 空转。
@@ -155,6 +172,27 @@ export struct FrameDrawList {
 	std::vector<RGL::DrawArgs> cullArgs;
 };
 
+/** 执行器可识别的 drawSource 段名。阴影段名 = "shadow" + 分块号
+ *  （scene_context::shadowDrawSource），故用**前缀匹配**：分块号可变（kActiveShadowCascades 1→4），
+ *  写死字面量会在切级联时漏校验。与 segmentSpan 走同一条路径——两处必须同步，
+ *  否则拓扑允许未知 drawSource 静默落到 transparent 段上（= 静默多画一遍透明体）。
+ */
+export bool isKnownDrawSource(std::string_view s) {
+	return s == "opaque" || s == "skybox" || s == "transparent" || s.starts_with("shadow");
+}
+
+/** 从阴影段名里解析分块号（"shadow" → 0，"shadow2" → 2；非 shadow 前缀 → 0，调用点保证只在
+ *  阴影分支上调用）。不用 from_chars（rlstd 不导出它），手扫后缀数字。 */
+uint32_t shadowCascadeOf(std::string_view drawSource) {
+	uint32_t v = 0;
+	for (char ch : drawSource) {
+		if (ch < '0' || ch > '9')
+			continue;
+		v = v * 10u + static_cast<uint32_t>(ch - '0');
+	}
+	return v;
+}
+
 /**
  * FrameDrawList 段名 → draw 序列（段名 = 机械映射，返回 span 而非下标区间）。
  *
@@ -171,11 +209,11 @@ export std::span<const DrawCall> segmentSpan(std::string_view drawSource,
 		return {list.calls.data(), list.skyboxStart};
 	if (drawSource == "skybox")
 		return {list.calls.data() + list.skyboxStart, list.transparentStart - list.skyboxStart};
-	// 阴影段：独立向量 + 名字串前缀匹配（"shadow" / "shadow0" / "shadow2" …都命中同一段）。
+	// 阴影段：独立向量 + 名字串前缀匹配，**后缀是分块号**（"shadow" = 0）。
 	// 先判前缀再退到 transparent 兼容分支：退容分支返回【transparentStart, size)。
 	// 漏掉前缀判断等于让 shadow pass 把透明段再画一遍进阴影图（静默错渲染）。
 	if (drawSource.starts_with("shadow"))
-		return list.shadowCalls;
+		return list.shadowSegment(shadowCascadeOf(drawSource));
 	return {list.calls.data() + list.transparentStart, list.calls.size() - list.transparentStart};
 }
 

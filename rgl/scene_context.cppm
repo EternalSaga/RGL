@@ -241,33 +241,82 @@ export inline std::string shadowDrawSource(uint32_t cascade) {
 }
 
 /**
- * Phase 11 批 11.2：定向光的**单级**光空间 VP 矩阵（阴影图用，列主序 proj·view）。
+ * Phase 11 批 11.2：**实用切分**与阴影矩阵构造。
  *
- * **拟合目标 = 相机视锥的包围球**（frustumBoundingSphere），不是场景包围球。这一点是
- * 实测决定的：bistro 场景的 SceneBounds radius = **116.26**（整条运河 + 街景都在里面），
- * 而真正要投影阴影的微缩街景模型只占其中一小块。若按场景球拟合，单级阴影图的 texel
- * 尺寸 = 2·116.26/1024 = **0.227 世界单位** → 整个模型只摊到 ~88 个 texel，阴影必然糊
- * 成一团。改拟合视锥后 texel 随相机拉近而变细（实测同场景近景约 0.02~0.05 量级，
- * 差一个数量级）。级联切分（本函数只出第 0 级）正是为了兼顾远景。
+ * ## 切分方案：**practical split**（对数分布与等伽分布的 50/50 混合）
+ * 两种纯空间分布都不可用：等伽分布让近处切片极薄（texel 粗得看不出阴影），
+ * 对数分布让远处切片过薄（远景几个像素里没有一级级联）。mix = 0.5 是常见甜点。
  *
- * **texel 吸附**：拟合框随相机移动，若不吸附，阴影边缘每帧都会"爬行"（shimmering）。
- * 做法 = 把球心投到 NDC → 换算成 texel 坐标 → 四舍五入 → 反算成光空间平移量 →
- * 乘在矩阵左侧。只动 x/y（z 不吸附：深度是线性的，吸附无意义）。
+ * ## 为何不从 proj 矩阵反推 near/far 而是直接拿 ViewProjection::nearPlane/farPlane
+ * 二者等价（它们就是 projectionSystem 实际生效的值），但 proj 矩阵反推需要一组奇性算术，
+ * 而它不带来任何额外精度（直接拿字段不会漂）。字段由 projectionSystem 写入 = 与 proj 同源，不会漂。
  *
+ * @param near 当前近截面
+ * @param far 当前远截面
+ * @param cascade 级号（0..count-1）
+ * @param count 总级数
+ * @return 该级的远截止平方距离
+ */
+export inline float cascadeSplitDistance(float near, float far, uint32_t cascade, uint32_t count) {
+	if (cascade + 1u >= count)
+		return far;
+	const float fN = cascade / static_cast<float>(count);
+	const float fN1 = (cascade + 1u) / static_cast<float>(count);
+	const float logSplit = near * std::pow(far / near, fN);
+	const float uniSplit = near + (far - near) * fN1;
+	return logSplit * (1.0f - 0.5f) + uniSplit * 0.5f;
+}
+
+/**
+ * Phase 11 批 11.2：把 proj 的近远平面换成另一对（供级联子视锥用）。
+ *
+ * GLM 零到一深度的透视 proj 深度映射为 `ndc = -A + B/t`（t = 视空间深度），
+ * 其中 `A = proj[2][2] = f/(n-f)`、`B = proj[3][2] = -f·n/(f-n) = A·n`。只要把这两个系数换成
+ * 新的 (n', f') 就得到与原视雾 **完全一致**的子视锥（x/y 分布不变，只换深度映射）。
+ * 直接从矩阵反推需要额外的奇性分布，而这里直接重建两个系数——**且不会因为原矩阵其他部分的
+ * 数值差异而静默算错**。
+ *
+ * @param proj 当前投影矩阵（仅读索引 2/3 的 z 行）
+ * @param newNear 新近截面
+ * @param newFar 新远截面
+ * @return 新投影矩阵
+ */
+export inline glm::mat4 projWithDepthRange(const glm::mat4& proj, float newNear, float newFar) {
+	glm::mat4 out = proj;
+	const float A = newFar / (newNear - newFar);   // = f'/(n'-f')，与 GLM 透视同形
+	out[2][2] = A;
+	out[3][2] = A * newNear;                        // = A·n' = B'
+	return out;
+}
+
+/**
+ * Phase 11 批 11.2：定向光的**光空间 VP 矩阵**（阴影图用，列主序 proj·view），拟合球由调用方给定。
+ *
+ * ## 拟合目标
+ * 传入的 `sphere` 必须是**该级子视锥的包围球**（级联切分后每级一个，且与剔除用同一个球——
+ * 先算球再同时用于两处才不会因重复计算而不一致）。为什么是视锥球而不是场景包围球，是实测决定的：
+ * bistro 的 SceneBounds radius = **116.26**（整条运河 + 街景都在里面），而真正要投影阴影的
+ * 微缩街景模型只占其中一小块；按场景球拟合则 texel = 2·116.26/1024 = **0.227 世界单位**，
+ * 整个模型只摊到 ~88 个 texel，阴影必然糊成一团。
+ *
+ * ## 正交框
  * 正交半边长取球半径 r：包围球的正交投影是半径 r 的圆盘，故恰好全覆盖（球面采样实测
  * x/y ∈ [-1,1]、z ∈ [0.25,0.75]）。near/far 取 0/4r 覆盖球在视空间的 z ∈ [r, 3r]；
- * 多出来的深度范围在正交投影下**无精度代价**（深度线性），故不收紧。
- *
+ * 多出来的深度范围在正交投影下**无精度代价**（深度线性），故不收紧。眼点退到球心外 2r。
  * up 向量在光近乎竖直时切到 +Z，避免 lookAt 叉积退化。
  *
+ * ## texel 吸附
+ * 拟合框随相机移动，若不吸附，阴影边缘每帧都会"爬行"（shimmering）。做法 = 把球心投到 NDC →
+ * 换算成 texel 坐标 → 四舍五入 → 反算成光空间平移量 → 乘在矩阵**投影之前**。只动 x/y
+ * （z 不吸附：深度是线性的，吸附无意义）。
+ *
  * @param light 定向光（只取 direction = 光→场景 的照射方向；点光无意义）
- * @param viewProj 相机 view·proj（拟合来源）
- * @param mapSize 阴影图边长（texel 吸附用）
- * @return 光空间 VP；视锥退化（半径 ≤ 0）时返回单位阵
+ * @param sphere 光空间拟合球（与该级剔除用同一个）
+ * @param mapSize 单块阴影图边长（texel 吸附用）
+ * @return 光空间 VP；退化视锥（半径 ≤ 0）时返回单位阵
  */
-export inline glm::mat4 directionalShadowMatrix(const Light& light,
-	const glm::mat4& viewProj, uint32_t mapSize) {
-	const Bounds sphere = frustumBoundingSphere(viewProj);
+export inline glm::mat4 directionalShadowMatrix(const Light& light, const Bounds& sphere,
+	uint32_t mapSize) {
 	const float r = sphere.radius;
 	if (r <= 0.0f)
 		return glm::mat4{1.0f};  // 退化视锥：无阴影可投，返回单位阵而非 NaN
@@ -277,16 +326,22 @@ export inline glm::mat4 directionalShadowMatrix(const Light& light,
 	const glm::mat4 view = glm::lookAt(sphere.center - dir * (r * 2.0f), sphere.center, up);
 	const glm::mat4 proj = glm::ortho(-r, r, -r, r, 0.0f, r * 4.0f);
 	const glm::mat4 vp = proj * view;
-	// texel 吸附：NDC → texel 网格取整 → 反算光空间平移（NDC 差 × r = 光空间偏移，
-	// 因 ortho 把 [-r, r] 映到 [-1, 1]）。**平移必须加在投影之前**（proj·T·view）——
-	// 加在投影之后（translate·proj·view）的话偏移量是裁剪空间单位，等于把位移放大了一倍
-	// 半边长，实测把视锥角点顶到 NDC 1.43（越界）。这是本函数唯一一处易错顺序。
+	// texel 吸附：NDC → texel 网格取整 → 反算光空间平移（NDC 差 × r = 光空间偏移，因 ortho
+	// 把 [-r, r] 映到 [-1, 1]）。**平移必须加在投影之前**（proj·T·view）——加在投影之后
+	// （translate·proj·view）的话偏移量是裁剪空间单位，等于把位移放大了一倍半边长，实测把视锥
+	// 角点顶到 NDC 1.43（越界）。这是本函数唯一一处易错顺序。
 	const glm::vec4 clip = vp * glm::vec4(sphere.center, 1.0f);
 	const glm::vec2 ndc = glm::vec2(clip) / clip.w;
 	const glm::vec2 snapped = (glm::round((ndc * 0.5f + 0.5f) * static_cast<float>(mapSize))
 				 + glm::vec2(0.5f))
 		/ static_cast<float>(mapSize) * 2.0f - glm::vec2(1.0f);
 	return proj * glm::translate(glm::mat4{1.0f}, glm::vec3((snapped - ndc) * r, 0.0f)) * view;
+}
+
+/** 同上，但拟合球由调用方自己从 viewProj 求（单级用法：整个视锥一个球）。 */
+export inline glm::mat4 directionalShadowMatrix(const Light& light,
+	const glm::mat4& viewProj, uint32_t mapSize) {
+	return directionalShadowMatrix(light, frustumBoundingSphere(viewProj), mapSize);
 }
 
 /**
@@ -331,6 +386,12 @@ export struct SceneSpin {
 export struct ViewProjection {
 	glm::mat4 view{1.0f};
 	glm::mat4 proj{1.0f};
+	// Phase 11 批 11.2：当前投影 near/far（**由 projectionSystem 写入**，不是配置原值）。
+	// 为何需要：级联切分要按近远平分这个当前尺寸的远距区间，而 proj 矩阵里深度
+	// 映射的系数反推出来需要知道它对应哪个 near/far（见 scene_context::projDepthRange）。
+	// 自适应 near/far（按场景包围球与相机距离嵌）所以**不能直接拿 camera.nearPlane/farPlane**。
+	float nearPlane = 0.05f;
+	float farPlane = 1000.0f;
 };
 
 }  // namespace RGL

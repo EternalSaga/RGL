@@ -151,12 +151,35 @@ export inline constexpr float kShadowNormalOffsetScale = 1.5f;   // texel 数
  *
  * 为何分离：区容量是一次性预留（避免加级联时再动尾部基址），而本值是“本帧确实画出与采样哪些级”。
  * 切换到 4 级 = 改这一行（图装饰插 4 个 pass + CPU 分级剔除 + 采样端分界距）。
- * 定义放在本模块（与 kShadowMapSize 同居）是为了让 render_graph_rtslot / main_scene 等不引入
+ * 定义放在本模块是为了让 render_list / render_list_impl 等不引入
+ * scene_context（后者拉 entt，让纯资源模块依赖它不合适）。
+ */
+/**
+ * 当前**生效**的级联数（与 scene data 区容量 kSceneShadowCascadeCount = 4 **分离**）。
+ *
+ * 为何分离：区容量是一次性预留（避免加级联时再动尾部基址），而本值是“本帧确实画出与采样
+ * 哪些级”。切换 = 改这一行（图装饰插 N 个 pass + CPU 逐级剔除 + 采样端选级）。
+ *
+ * ## 实测定案（非计划）
+ * 本机 GPU 侧余量约 **3.1 ms/帧**（Phase 9 判定）。bistro 阴影各级开销（GPU 时间戳，1280×720）：
+ *
+ * | 生效级数 | 各级 GPU 时间 | 合计 | 占 3.1 ms 余量 |
+ * |---|---|---|---|
+ * | **1** | 1.70 | **1.70 ms** | **55%** |
+ * | 2 | 1.70 + 1.26 | 2.95 ms | 95% |
+ * | 4 | 1.72 + 1.37 + 1.18 + 0.97 | 5.24 ms | **169%（超预算）** |
+ *
+ * 为何逐级剔除只把 4 级从 4×1.7=6.8 压到 5.24 ms（级间递减可见）而压不到 ~1.5×：默认机位是**俯视
+ * 微缩街景**，整个模型在视线方向上基本同一个深度带（俯视 = 模型高度尚与相机距离可比），
+ * 而每级子视锥的**包围球都很大**（切片面横向很宽）→ 大多数对象落在每一级里。
+ *
+ * 故默认定 1 级。机制与切分已全部落地（图集 + 逐级剔除 + 采样端选级），不是卡在架构上；
+ * 换大场景（长距离视野）或本机接下来有更大 GPU 余量时，直接改它即可。
+ *
+ * 定义放在本模块是为了让 render_list / render_list_impl / render_graph_rtslot 等不引入
  * scene_context（后者拉 entt，让纯资源模块依赖它不合适）。
  */
 export inline constexpr uint32_t kActiveShadowCascades = 1;
-
-export inline constexpr uint32_t kShadowMapSize = 1024;
 
 export inline constexpr uint32_t kSceneShadowCascadeCount = 4;
 export inline constexpr uint32_t kSceneDataShadowMatrixOffset =
@@ -175,8 +198,10 @@ export inline constexpr uint32_t kSceneDataShadowSplitsOffset = kSceneDataShadow
 	+ kSceneDataShadowMatrixBytes;
 export inline constexpr uint32_t kSceneDataShadowTexelOffset = kSceneDataShadowSplitsOffset + 16u;
 export inline constexpr uint32_t kSceneDataShadowParamsOffset = kSceneDataShadowSplitsOffset + 32u;
-export inline constexpr uint32_t kSceneDataShadowAuxBytes = 48u;  // 分界远距 16 + texel 尺寸 16 + 参数 16
-static_assert(kSceneDataShadowSplitsOffset == 721952 && kSceneDataShadowParamsOffset == 721984,
+export inline constexpr uint32_t kSceneDataShadowAtlasOffset = kSceneDataShadowSplitsOffset + 48u;
+export inline constexpr uint32_t kSceneDataShadowAuxBytes = 64u;  // 分界远距/texel/参数/图集各 16
+static_assert(kSceneDataShadowSplitsOffset == 721952 && kSceneDataShadowParamsOffset == 721984
+	&& kSceneDataShadowAtlasOffset == 722000,
 	"scene.slang shadow sampling literals drifted from scene_data.cppm offsets");
 // 与 scene.slang 的字面量基址钉死（两侧手写同步点，改一侧必编译失败）
 static_assert(kSceneDataShadowMatrixOffset == 721696,

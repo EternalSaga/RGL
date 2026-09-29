@@ -38,6 +38,8 @@ float sampleShadow1Tap(float3 worldPos, float3 N)
         return 1.0;  // 总开关关：全亮（与 tonemap 的 ao.strength=0 旁路同款）
 
     // ① 选级联：按片元到 eyePos 的**平方距离**（eyePos 在 scene data @12，与 SceneLight 同源）
+    // 对比 splits = 每级远截止的平方距离；超出全部 3 个分界则落末级（末级 splits 写 1e9，
+    // 故永远不会越界到不存在的级）。
     const float distSq = dot(worldPos - readSceneLight().eyePos, worldPos - readSceneLight().eyePos);
     const float4 splits = readCascadeSplits();
     uint cascade = 0u;
@@ -52,19 +54,28 @@ float sampleShadow1Tap(float3 worldPos, float3 N)
     const float texel = texelSizes[cascade];
     const float3 offsetPos = worldPos + N * (texel * params.y);
 
-    // ③ 投影到光空间 → uv + 参考深度
+    // ③ 投影到光空间 → **块内** uv + 参考深度
     const float4 clip = clipPos(readShadowViewProj(cascade), offsetPos);
     const float3 ndc = clip.xyz / clip.w;  // 正交投影下 w 恒 1，仍写除法保持与 sky 同款
-    const float2 uv = float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    const float2 uvTile = float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);   // y 翻转（framebuffer 原点在左上）
 
-    // ④ 出图返回全亮：级联边界外 / 深度范围外不产生阴影（否则图集边缘拉出长条伪影）
-    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || ndc.z > 1.0)
+    // ④ 出块返回全亮：级联边界外 / 深度范围外不产生阴影（否则图集边缘拉出长条伪影）
+    if (uvTile.x < 0.0 || uvTile.x > 1.0 || uvTile.y < 0.0 || uvTile.y > 1.0 || ndc.z > 1.0)
         return 1.0;
 
-    // ⑤ 4 抽头 PCF（2×2，偏移半个纹素）：单抽头的阶梯状阴影边在 1024² 图上肉眼可见，
-    // 4 抽头是"看不出锯齿"与"不多花 4 倍采样"的平衡点。偏移量用 texel 常量而非屏幕导数，
-    // 因为 texelSizes 是 scene data 里的 uniform（每帧一样）而不是按像素变化的；用 ddx/ddy 会在分支内未定义
-    //（同 ao.frag 批 11.4 的教训）。
+    // ⑤ 块内 uv → 图集 uv。4 级共用一张 2×2 图集，每级占一块（readShadowAtlas 从 scene data
+    // 取图集/块边长与列数，**不在本文件写死**——改图集尺寸只改 C++ 一处）。tile 排布与图装饰的
+    // shadowTile 同款：cascade c → (c%cols, c/cols)。
+    const float4 atlas = readShadowAtlas();
+    const float cols = atlas.z;
+    const uint colsU = uint(cols);
+    const float2 tile = float2(float(cascade % colsU), float(cascade / colsU));
+    const float2 uv = (tile + uvTile) * atlas.y / atlas.x;
+
+    // ⑥ 4 抽头 PCF（2×2，偏移半个纹素）：单抽头的阶梯状阴影边在 1024² 块上肉眼可见，
+    // 4 抽头是"看不出锯齿"与"不多花 4 倍采样"的平衡点。偏移量用 texel 常量而非屏幕导数：
+    // texelSizes 是 scene data 里的 uniform（每帧一样）而不是按像素变化的；用 ddx/ddy 会在分支内
+    // 未定义（同 ao.frag 批 11.4 的教训）。
     const float2 o = float2(texel * 0.5, texel * 0.5);
     const float ref = ndc.z - params.x;
     const float d0 = shadowMap.Sample(shadowSampler, uv + float2(-o.x, -o.y));

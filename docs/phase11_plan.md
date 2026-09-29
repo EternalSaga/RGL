@@ -245,15 +245,18 @@ CSM/HFTS 共同硬前提。
       共 4 处**（同一份 `shadow.slang`，binding 12/13）。阴影已出现；GPU 实测阴影 pass **1.621 ms**
       + 4 抽头 PCF **+0.005 ms**（噪声级），`gpu.frame` 2.98 → **4.454 ms**。D1 对拍（开阴影）
       >8 差异像素 **0.005%**
-- [ ] 批 11.2：**4 级切分**（必带每级光空间剔除，否则 4×1.62 = 6.5 ms 超预算 2 倍）
+- [x] 批 11.2 **5a-4（§12.7 已落地）**：4 级切分全套机制 = practical split + `projWithDepthRange` 子视锥
+      + 逐级光空间剔除 + 图集（整幅固定 2048²，块边长 = 整幅/列数）+ 执行器 per-pass viewport。
+      **实测定案：1/2/4 级 = 1.70 / 2.95 / 5.24 ms**（GPU 余量 3.1 ms）→ **默认 1 级**。机制全在，不是卡在架构上；
+      一行 `kActiveShadowCascades` 即可切。为何默认 1 级：俯视微缩场景全模型同一深度带 + 每级包围球都大 → 逐级剔除只把 4 级从 6.8 压到 5.24 ms
 - [ ] 批 11.3：HFTS spike 出结论（做 / 收手二选一）
 - [x] BIT-IDENTICAL **基线已建立（2026-09-29，5a-3 后一次迁移）**：默认配置 + 默认机位 + llm_debug：
       | 配置 | md5 |
       |---|---|
-      | forward，`shadow_pass=false`（**默认**） | `4f9801d5699d60fef6342b80c6d0d278`（同会话两次连跑逐位相同） |
-      | forward，`shadow_pass=true` | `72b6e512e9a95da3b65aa8716cd96147` |
+      | forward，`shadow_pass=false`（**默认**） | `4f9801d5699d60fef6342b80c6d0d278`（同会话两次连跑逐位相同；5a-4 后仍与旧基线全等） |
+      | forward，`shadow_pass=true` | `e128666c17ede927ec05ac7fcb3ed530`（5a-3 时为 `72b6e512…`，因 normal offset 与实际块边长对齐而修正，见 §12.7.5） |
       | deferred，`shadow_pass=false` | `269e7e4c6195acb18ab7b774a0c8f11c` |
-      | deferred，`shadow_pass=true` | `b63ec369e188b9772b8b04eb432d4979` |
+      | deferred，`shadow_pass=true` | `94b892a360ec8e522441381a3f9b2e53` |
 
       D1 对拍（开阴影）= forward vs deferred：>8 差异像素 **0.005%**、均值差 0.077。
       **旧基线 `7a872517…`（forward）/ `1139acb4…`（deferred）作废**：差异原因 = 新增 `* shadowFactor`
@@ -573,6 +576,68 @@ extendedDynamicState3ExtraPrimitiveOverestimationSize = false
 
 结论：级联必须带**每级光空间剔除**（每级只画与该级切面相交的投影体），并实测总量落在预算内。
 另一个可选项是把每级图尺寸降到 512²（图集 1024²）——但本场景的开销是**顶点主导**，降图尺寸不能减少几何，只会降低质量。
+
+---
+
+## 12.7 批 11.2 · 5a-4：4 级级联切分落地（机制全在，**默认 1 级**= 实测定案）
+
+5a-2/5a-3 把单级阴影打通；本增量把 4 级的**全套机制**落地并逐项实测。
+
+### 12.7.1 落地内容
+
+| 项 | 内容 |
+|---|---|
+| 切分方案 | **practical split**（对数 50% + 等距 50%）。两种纯空间分布都不可用：等距让近处切片极薄（texel 粗到看不出阴影），对数让远处切片过薄 |
+| 子视锥 | `projWithDepthRange`：GLM 零到一透视的深度映射是 `ndc = -A + B/t`（`A = proj[2][2]`、`B = proj[3][2] = A·n`），换掉这两个系数即得与原视锥**完全一致**的子视锥。**用真实 GLM 头写探针验过**：NDC xy 偏差 0.00e+00，深度端点 t=n1→0.000000、t=f1→1.000000 |
+| 每级拟合 | `frustumBoundingSphere(projWithDepthRange(proj, n_c, f_c) * view)`，与该级剔除**共用同一个球**（先算球再两处用，不会不一致） |
+| 逐级剔除 | 世界球 × **该级**光空间球。`collectShadowCasters` 收 `std::array<vector<Pending>, N>`（**逐级向量**：采样端按段名后缀取子段，扁平序必须是级主序），填 `shadowBoundaries` |
+| 图集 | 一张 `depthOffscreen`，**整幅固定 = 2048²**（`kShadowMapSize`，与 `kShadowMapName`/`kShadowMapFormat` 同住 render_graph 接口），列数 = `shadowAtlasColumns(N)`，**块边长 = 整幅/列数** |
+| 每级一个 pass | N 个 shadow pass 交替代写同一张图，各画自己那块子矩形（`RgPassDesc::viewport` 新字段） |
+| 采样端选级 | 按片元到 eyePos 的**平方距离**比 `splits`（每级远截止平方），块内 uv → 图集 uv 由 `readShadowAtlas` 叠（列数/块边长都从 scene data 来，**不在 shader 写死**） |
+
+### 12.7.2 执行器新增 per-pass viewport
+
+图集分块要求"一个 pass 只渲染图集的一块"。`RgPassDesc`/`RgPassPlan` 加 `viewport{x,y,w,h}`
+（`{0,0,0,0}` = 跟随渲染区域，**既有全部 pass 逐位不变**），`SlotResolver::renderAreaFor`
+（Extent2D）随之改为 `renderRectFor`（Rect2D），`applyDynamicState` 的 `(width, height)` 改为
+`(Rect2D)`。传 `{0,0,w,h}` 时与旧两参形式**逐位一致**（y 翻转：`viewport(x, y+h, w, -h)`）。
+
+### 12.7.3 为什么图集整幅固定 2048²、块边长随列数变
+
+**加级联的代价是每块变细，不是白占画布。** 若图集固定 2×2，只用 1 级时 3/4 画布闲置、
+阴影分辨率从 2048² 掉到 1024²（实测可见差异 6% 像素）。固定整幅后：1 级 = 1 块 2048²
+（最高分辨率），4 级 = 4 块 1024²（远级变粗但覆盖范围变大 = CSM 本意）。
+另外本场景开销**顶点主导**（2.8M 三角形的光栅化），图尺寸对时间影响极小 —— 也不必在级联间做分辨率取舍。
+
+### 12.7.4 实测定案：默认 1 级
+
+| 生效级数 | 各级 GPU 时间 | 合计 | 占 3.1 ms 余量 |
+|---|---|---|---|
+| **1（默认）** | 1.70 | **1.70 ms** | **55%** |
+| 2 | 1.70 + 1.26 | 2.95 ms | 95% |
+| 4 | 1.72 + 1.37 + 1.18 + 0.97 | 5.24 ms | **169%（超预算）** |
+
+**逐级剔除为什么救不回来**：级间递减可见（1.72→0.97），说明剔除生效；但默认机位是**俯视微缩街景**，
+整个模型在视线方向上基本同一个深度带（俯视 = 模型高度尚与相机距离可比），而每级子视锥的
+**包围球都很大**（切片面横向很宽）→ 大多数对象落在每一级里。4 级只从 4×1.7=6.8 压到 5.24 ms。
+
+故默认定 1 级。**机制与切分已全部落地，不是卡在架构上** —— 换场景（长距离远景）或本机接下
+来有更大 GPU 余量时，改 `kActiveShadowCascades` 一行即可。
+
+### 12.7.5 验证
+
+| 项 | 结果 |
+|---|---|
+| `just checks --strict` | 0 警告 / 101 个 .cppm（doc-check 1020 声明） |
+| selfCheck | 阴影断言更新并**加严**：级数 == `kActiveShadowCascades`、每级 tile viewport、viewport 透传到 plan、**必须有屏障把 shadow_map 转成 ShaderReadOnly**（= 消费方 sampleRead 声明在位，否则采样报 VVL）、图集整幅 == `kShadowMapSize` |
+| 门控关（默认） | forward md5 `4f9801d5…`，**逐位等于 5a-3 基线**，两次连跑一致；0 VVL / 0 error |
+| 门控开 | forward `e128666c…`、deferred `94b892a3…`；双双 0 VVL / 0 error |
+| **D1 对拍（开阴影）** | >8 差异像素 **50 / 921600 = 0.005%**，均值差 0.070（5a-3 为 0.005% / 0.077，同档） |
+| 4 级实跑 | 0 VVL / 0 error，阴影正确出画面；比 1 级多 6.1% 像素差异、均值 3.97（画质有提升但不显著，代价 3.4×） |
+
+> 门控开时 md5 与 5a-3 不同是**预期的画质修正**：5a-3 的图集整幅 2048² 但 `texelSizes` 按
+> `mapSize=1024` 算，normal offset 偏小一半；现在块边长就是 2048，offset 与实际纹素尺寸对齐。
+
 
 ---
 

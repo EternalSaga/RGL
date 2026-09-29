@@ -2,7 +2,8 @@ module;
 #include <fmt/format.h>
 module render_graph:builtin;
 
-import render_graph;  // clang 不给 partition impl unit 隐式 import 主接口——必须显式
+import render_graph;
+import scene_data;  // kActiveShadowCascades（阴影切分级数）  // clang 不给 partition impl unit 隐式 import 主接口——必须显式
 import rlstd;
 import rlvk;
 import vkerror;
@@ -462,6 +463,23 @@ bool selfCheckShadowDecorate(const RgGraphDesc& desc, std::vector<std::string>& 
 	});
 	if (!hasAtt)
 		failures.push_back("shadow: decorateShadowPass should append a depthOffscreen shadow_map");
+	// 级联分块（批 11.2 阴影切分）：图首应有 kActiveShadowCascades 个 shadow pass，每个各占图集里自己
+	// 那一块子矩形。数量不对 = 某级永远不被渲染；子矩形不对 = 那级会裁到
+	// 刦尽那一块的光空间（或与相邻级重叠）。
+	size_t nShadow = 0;
+	for (const auto& p : desc.passes)
+		if (p.state == "shadow")
+			++nShadow;
+	if (nShadow != kActiveShadowCascades)
+		failures.push_back(fmt::format("shadow: expected {} shadow passes, got {}",
+			kActiveShadowCascades, nShadow));
+	for (size_t c = 0; c < nShadow; ++c) {
+		const std::array<uint32_t, 4> want = shadowTile(static_cast<uint32_t>(c),
+				shadowTileSize(shadowAtlasColumns(kActiveShadowCascades)),
+				shadowAtlasColumns(kActiveShadowCascades));
+		if (desc.passes[c].viewport != want)
+			failures.push_back(fmt::format("shadow: cascade {} tile viewport mismatch", c));
+	}
 	return hasAtt;
 }
 
@@ -485,8 +503,9 @@ void selfCheckShadowCompiled(const CompiledRenderGraph& graph,
 	} else {
 		if (att->aspect != vk::ImageAspectFlagBits::eDepth)
 			failures.push_back("shadow: shadow_map aspect should be eDepth (barriers would use eColor)");
+		// 图集整幅 = 列数×mapSize（列数跟生效级数走）——断它是否与装饰端同源（不得写死成 2·mapSize）
 		if (att->extent[0] != kSelfCheckShadowSize || att->extent[1] != kSelfCheckShadowSize)
-			failures.push_back("shadow: shadow_map independent extent not propagated");
+			failures.push_back("shadow: shadow_map atlas extent (fixed mapSize) not propagated");
 		if (!att->frameStartDiscard)
 			failures.push_back("shadow: shadow_map should be in the frame-start-discard class");
 	}
@@ -500,6 +519,24 @@ void selfCheckShadowCompiled(const CompiledRenderGraph& graph,
 		failures.push_back("shadow: shadow pass has no depth plan (shadow map not attached)");
 	if (!plan->colors.empty())
 		failures.push_back("shadow: depth-only pass should have no color attachment plan");
+	// 子矩形必须从 RgPassDesc 透传到编译产物（执行器的 viewport/scissor + renderArea 全按它走；
+	// 丢了就是整张图被渲染 4 次，后 3 次把前面的结果清掉）
+	if (plan->viewport != shadowTile(0, shadowTileSize(shadowAtlasColumns(kActiveShadowCascades)),
+		shadowAtlasColumns(kActiveShadowCascades)))
+		failures.push_back("shadow: cascade 0 tile viewport not propagated to plan");
+	// 消费方声明（sampleRead 接到光照 pass）必须存在，否则编译器不会为阴影图生成
+	// DSAO → ShaderReadOnly 布局转换，采样端报 VVL
+	// RgCompiledAttachment 无 slot 字段（槽号 = 它在 attachments 里的下标），barrier 里的 attachment 就是这个下标
+	const size_t attSlot = static_cast<size_t>(att - graph.attachments.begin());
+	const bool lit = att != graph.attachments.end() && std::ranges::any_of(graph.passes,
+		[&](const RgPassPlan& p) {
+			return std::ranges::any_of(p.barriers, [&](const RgBarrierPlan& br) {
+				return br.attachment == attSlot
+					&& br.newLayout == vk::ImageLayout::eShaderReadOnlyOptimal; });
+		});
+	if (!lit)
+		failures.push_back("shadow: no barrier transitions shadow_map to ShaderReadOnly "
+			"(sampleRead input missing from lighting pass -> sampling would trip VVL)");
 }
 
 /** selfCheck 驱动：装饰 → 编译 → 两侧断言（拆两半是为守住单函数认知复杂度红线）。 */

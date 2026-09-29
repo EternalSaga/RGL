@@ -155,6 +155,7 @@ float4 worldTangent(ObjectMatrix m, float4 t)
 //   @721952  vec4 级联分界远距（对 eyePos 的平方距离，选级用）
 //   @721968  vec4 各级阴影图 texel 世界尺寸（2·r/mapSize，normal offset 用）
 //   @721984  vec4 (depthBias, normalOffsetScale, enabled, 保留)
+//   @722000  vec4 (图集边长, 单块边长, 分块列数, 保留)
 ObjectMatrix readShadowViewProj(uint cascadeIndex)
 {
     uint base = 721696u + cascadeIndex * 64u;
@@ -182,6 +183,13 @@ float4 readCascadeTexelSizes()
 float4 readShadowParams()
 {
     return asfloat(sceneData.Load4(721984u));
+}
+
+// (图集边长, 单块边长, 分块列数, 保留)——采样端把级联块的光空间 uv 叠到图集上
+// 用。两个长度都从 C++ 传下来（不在本文件写死）——改图集尺寸时只要改 C++ 一处。
+float4 readShadowAtlas()
+{
+    return asfloat(sceneData.Load4(722000u));
 }
 
 float3 irradianceSH(float3 n)

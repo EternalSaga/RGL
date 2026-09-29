@@ -573,6 +573,7 @@ std::expected<CompiledRenderGraph, Error> compileRenderGraph(const RgGraphDesc& 
 		plan.kind = pass.kind;
 		plan.state = pass.state;
 		plan.drawSource = pass.drawSource;
+		plan.viewport = pass.viewport;  // Phase 11 批 11.2：图集分块子矩形（默认全零 = 跟随）
 
 		std::vector<std::pair<RgAttachmentSlot, RgUsage>> thisPassUses;
 		if (auto r = planPassUses(pass, ctx, plan, thisPassUses); !r)
