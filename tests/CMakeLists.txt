@@ -34,6 +34,12 @@
 # 头文件约定：doctest 是第三方头，走 GMF include（见各测试文件顶部）。
 
 find_package(doctest CONFIG REQUIRED)
+# 设备级用例（[gpu] tag）要真设备：Vulkan / VMA / SDL3 / imgui 的 find_package
+# 在这里补一遍（rgl/CMakeLists.txt 里的那些在它自己作用域，不传递到兄弟目录）。
+find_package(Vulkan REQUIRED)
+find_package(VulkanMemoryAllocator CONFIG REQUIRED)
+find_package(SDL3 CONFIG REQUIRED)
+find_package(imgui CONFIG REQUIRED)
 
 set(RGL_TEST_SOURCES
     test_main.cppm              # DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN + main()
@@ -42,6 +48,10 @@ set(RGL_TEST_SOURCES
     test_scene_config.cppm      # 四份配置解析契约
     test_camera.cppm            # 相机数学
     test_cube_geometry.cppm     # 内建 cube 顶点/索引契约
+    test_state_kit.cppm         # 四段 RenderState 表 + stateFor 分派（纯逻辑）
+    test_render_graph.cppm      # 图编译：校验 / barrier 推导 / 装饰 / RT slot
+    test_device_primitives.cppm      # [gpu] 回读原语：clear 逐像素 / 整数回环 / UNORM 量化 / 拷贝保真
+    test_device_primitives_impl.cppm # 设备夹具实现（partition impl unit）
 )
 
 # ─── 测试支撑模块 ─────────────────────────────────────────────────────────
@@ -68,8 +78,30 @@ target_sources(rgl_tests PUBLIC
     FILES ${RGL_TEST_SOURCES}
 )
 target_compile_features(rgl_tests PRIVATE cxx_std_23)
-# rlcore 的 PUBLIC 传递 rlstd/rllogger/glm/EnTT/sol2/lua + GLM 深度约定宏
-target_link_libraries(rgl_tests PUBLIC rgl_test_support rlbase)
+# 链接面：rlbase 之外**也**链 rlgfx/rlscene/rlframe（批 12.2d）。
+#
+# 为什么不只链 rlbase（那样测试二进制里 Vulkan 符号恒 0，看起来更干净）：
+# **「import rlvk」是编译期依赖，「需要一个 VkDevice」才是运行期依赖**，两者不是一回事。
+# render_graph / state_kit / frame_draw_list 都 import rlvk（要 `vk::Format` 等类型），
+# 但它们的逻辑是纯计算 —— compileRenderGraph 推导 barrier、StateKit 搭四段状态表，
+# 一个设备都不碰。把它们挡在门外等于"因为类型依赖里有 Vulkan，所以不许测"，
+# 那正是 12.1→12.2c 一直在纠正的那个混淆。
+#
+# 代价（明确记录，不假装没有）：测试二进制现在**链接**了 Vulkan/SDL3/VMA/imgui，
+# `nm` 不再是 0。保住的是**运行期**性质 —— 默认的 `just test` 只跑无 tag 的用例，
+# 那批一条设备路径都不碰，仍是毫秒级；需要设备的那批标 `[gpu]`，由 `just test-all` 显式跑。
+# 判别 = doctest tag，不是链接面。
+target_link_libraries(rgl_tests
+    PUBLIC rgl_test_support rlbase rlgfx rlscene rlframe
+    PRIVATE Vulkan::Vulkan GPUOpen::VulkanMemoryAllocator SDL3::SDL3 imgui::imgui)
+# 图像编解码/tinygltf 随 rlbase 传递（静态库 PRIVATE 链接经 $<LINK_ONLY:…> 保序），
+# 这里不重复列出。
+
+# 设备级用例的开关：默认 `just test` 跑无 tag 子集（无 GPU、无窗口、毫秒级）；
+# `just test-all` 加 --gpu 跑全部，含 [gpu] 用例。
+# 刻意**不做**"无设备就 skip"——静默跳过是假绿，正是本项目反复吃亏的那类事
+# （"上次跑过"≠"这次验的是同一组输入"）。[gpu] 用例在无设备机器上必须**响亮失败**。
+target_compile_definitions(rgl_tests PRIVATE RGL_TESTS_HAVE_GPU_TESTS=1)
 
 # 测试代码不纳入 source_checks（tools/checks 扫的是 rgl/）：doctest 宏会触发大量
 # 误报（GMF 白名单、行数阈值、函数长度对 TEST_CASE 全是噪声）。测试代码的质量由
