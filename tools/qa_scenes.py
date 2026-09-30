@@ -1165,9 +1165,12 @@ def build_scene(scene: Scene) -> tuple[bytes, str, dict]:
         "coordinateSystem": "Y-up, meters, world coords baked into vertices (nodes identity)",
         "mapping": ("piece order == flattened globalPrimitiveIndex == meshIndex == nodeIndex "
                     "== materialIndex (1 piece = 1 mesh = 1 primitive = 1 material)"),
-        "objectIds": ("deliberately ABSENT: objectID = runtime global objectSlot counter; "
-                      "harness reverse-maps color <-> objectID from the object_id attachment "
-                      "(commit 79fc778) once per harness session"),
+        "objectIds": ("deliberately ABSENT: objectID = runtime global objectSlot counter. "
+                      "imgqa names ids by mapping order (id == primitiveIndex + 1, verified "
+                      "2026-09-30: ids 1..9 contiguous) and uses closed-form predicted chroma "
+                      "as a WEAK validator only -- raw color nearest-neighbor is NOT reliable: "
+                      "ACES saturation shifts chroma by 0.1-0.15, same magnitude as inter-piece "
+                      "chroma distance (far_cube mis-mapped to ground in first attempt)"),
         "cameras": scene.cameras,
         "pieces": [],
     }

@@ -59,3 +59,6 @@ add_custom_command(
         "${CMAKE_CURRENT_BINARY_DIR}/templates"
     COMMENT "Copying inja templates to build directory..."
 )
+
+# imgqa：区域归因图像判据工具箱（EXCLUDE_FROM_ALL 继承本目录；just imgqa 显式构建）
+add_subdirectory(imgqa)

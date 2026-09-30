@@ -151,6 +151,13 @@ analytic:
 analytic-selftest:
     @python tools/analytic_ref.py --selftest
 
+# imgqa —— 区域归因的图像判据工具箱（C++ + vcpkg；判据的区域来自几何：objectID 反解
+# 可见 piece / 闭式解逐面预测 vs 观测亮度簇 / 开关影响域；promoted 晋升线见 check）。
+# 例：just imgqa selftest | just imgqa attribution --camera near_anchor | just imgqa faces --piece anchor_cube_near
+imgqa *ARGS="":
+    @cmake --build {{ BUILD }} --target imgqa
+    {{ BUILD }}/tools/imgqa/imgqa {{ ARGS }}
+
 
 # 重跑 7 条反射管线（改动 shaders/*.slang / *_schema.lua / tools/templates /
 # features_config.json / param_semantics.json 后必须执行；产物 rgl/generated/ 已入版本控制需随

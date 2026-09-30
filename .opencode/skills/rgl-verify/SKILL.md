@@ -1,6 +1,6 @@
 ---
 name: rgl-verify
-description: 运行 RGL 程序做 headless 冒烟、llm_debug 截图多模态读图、BIT-IDENTICAL 截图回归比对。触发词：运行、冒烟、截图、验证渲染、回归、headless、llm_debug、dump_gbuf。也适用于排查 "Log config file not found" 等启动问题。
+description: 运行 RGL 程序做 headless 冒烟、llm_debug 截图多模态读图、BIT-IDENTICAL 截图回归比对、imgqa 区域归因判据。触发词：运行、冒烟、截图、验证渲染、回归、headless、llm_debug、dump_gbuf、图像判据、归属/可见性/影响域、闭式解预测、黑面/没画还是没着色。也适用于排查 "Log config file not found" 等启动问题。
 ---
 
 # RGL 运行验证（冒烟 / 截图 / 回归）
@@ -45,6 +45,30 @@ llm_debug 截图 = drawFrame 帧内回读 swapchain 后缓冲（present 前拷�
 ## 截图回归方法学（2026-09-08）
 
 BIT-IDENTICAL 比对须**同会话双构建**（`git stash` 基线构建 vs 改动构建）；跨日/跨全量重建存在 ±1 LSB 叶缘噪声（增量 .o vs 全量 codegen 微差，见 `docs/调试历史.md` 2026-09-08 条目）。
+
+## imgqa —— 区域归因的图像判据工具箱（Phase 12 批 12.3，排查渲染问题的**默认起手**）
+
+`tools/imgqa/`（C++ + vcpkg，`just imgqa <子命令>`）。它不是"两图算一个数"——**判据的区域来自几何**：
+objectID 附件反解可见 piece，闭式解（GGX+ACES+sRGB 逐式转录，独立第二实现）给逐面预测，
+失败信息直接点名"哪个 piece 的哪簇像素不对"而不是"SSIM 0.93"。
+
+**何时抄它**（比目视/数值日志优先）：怀疑"画了没着色 vs 根本没画"、验证某 feature 的影响范围、
+问"这块像素该是多少"、改着色链后的定位。**子命令**：
+- `selftest` —— 判据/闭式解转录/解码器自检（无引擎，毫秒级；闭式解锚点=实机截图实测字节）
+- `attribution [--glb X.glb] [--camera 名]` —— 机位下每个 piece：像素数/线性亮度分位数/暗像素占比/色度；可见集=下游判据的求值域
+- `faces --piece 名 [--shadow] [--env]` —— 六面闭式解预测（观测域字节）vs 观测亮度簇；解释不了的簇=发现
+- `switch --allow-piece a,b` —— 开关影响域：域外**必须逐位为零** + 域内必须确实变了（两条对偶，堵"0 差异"的两种解释）
+- `check [--promoted]` / `refuse [ssim|...]` / `note "事后真相"`
+
+**三条硬约束（工具替你守，但写新判据时你也要守）**：① 判据只在 objectID 反解出的**可见集**上求值；
+② 统计一律线性域，比较域=观测域（预测字节先过完整显示链，ACES 有通道串扰没有比例关系）；
+③ 每次真实调用 `note` 回填真相——晋升凭据在 `qa/log/imgqa_calls.jsonl`，判据晋升四条：真实
+bug/变异上变红过、跨 ≥20 次无关改动不误报、容差有理由、有反向用例。**SSIM/PSNR/全局 epsilon
+是登记过的反模式**（`imgqa refuse` 会给理由），别重新发明。
+
+**已知边界**：亮度聚类 gap=0.02 会把亮度相近的两面并成一簇，并簇对"每簇可解释"假通过——
+并簇时人工看面预测表（如 −X=0.2376 vs +Z=0.2221）；id↔piece 用 primitiveIndex+1 顺序假设 +
+闭式解色度弱校验（纯颜色最近邻不可靠：ACES 饱和移位与 piece 间色度距离同量级，实测踩过）。
 
 ## 阴影验收判据（2026-09-29 三轮踩坑固化，Phase 11 批 11.2）
 

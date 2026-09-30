@@ -42,6 +42,9 @@ Git for Windows（`sh.exe` 在 PATH）；命令同名，默认 clang++ + Ninja�
 `run-igpu/run-dgpu` 不可用（Linux prime 专用），NVIDIA 直接 `just run`。
 **vcpkg**：`vcpkg.json` 用 platform expressions 按 OS 启用 features（Linux `sdl3[vulkan,wayland]` /
 Windows `sdl3[vulkan]`）；同一依赖可出现两次用 `"platform"` 字段区分。
+**工具语言纪律（2026-09-30 用户拍板，三机测试）**：要依赖的工具一律 **C++ + vcpkg**（先例：
+inja 弃 jinja、imgqa 链 opencv4）；**留在 Python 的工具只准 stdlib-only**（qa_scenes.py /
+analytic_ref.py），不引入任何需要 pip 的依赖。
 
 CMake 无独立构建目录——必须从根目录构建（`cmake -B build -S .`）。产物: `build/rgl/rgl`（Windows 加 `.exe`）、`build/tests/rgl_tests`（单元测试；`tests/` 是 EXCLUDE_FROM_ALL 子目录，故**不进 `just build`**，`just test` 显式构建其 target）。
 构建内置检查步骤（均只警告不阻断）：`reflection_check`（反射产物 SHA1 护栏，与编译并行）、
@@ -60,6 +63,7 @@ CMake 无独立构建目录——必须从根目录构建（`cmake -B build -S .
 | 单元测试层 | `tests/`（doctest，C++20 modules） | **纯函数/契约**：阴影级联几何、相机数学、glTF 解析、四份配置 loader、反射字节布局、内建 cube 几何、**`state_kit` 九段状态表**、**`render_graph` 编译（校验/barrier/装饰）**。**无 GPU 无窗口，毫秒级** | `just test` |
 | 设备原语层 | `tests/` 的 `TEST_SUITE("gpu")` | **后端原语 golden**：clear 色逐像素、R32_UINT 魔数整数回环、UNORM 量化取整（0.5→128）、image↔buffer 逐字节保真 + 行序 | `just test-all` / `just test-gpu` |
 | 闭式解探针 | `tools/analytic_ref.py` + `qa/configs/analytic/` | 「某像素**该**是多少」的独立第二实现（GGX + ACES + 硬件 sRGB 逐式复刻），与实机截图逐字节对拍。**不需要基线图像** | `just analytic` / `just analytic-selftest` |
+| 区域归因判据 | `tools/imgqa/`（C++ + vcpkg，**不进 ALL**） | objectID 反解可见 piece + 闭式解逐面预测 vs 观测亮度簇 + 开关影响域（域外逐位为零）+ 反模式登记（ssim 等有理由的拒绝）。**排查渲染问题的默认起手** | `just imgqa selftest` / `attribution` / `faces` / `switch`（判据晋升与台账纪律 → `tools/imgqa/imgqa.h` 头注释 + skill rgl-verify） |
 | 进程级集成层 | `qa/`（批 12.2 起**部分落地**：`configs/analytic/` 探针配置） | 图像/场景级：程序化小场景 + RPC 驱动 + OpenCV 量化 | 场景生成 `tools/qa_scenes.py`；量化 harness 未落地 |
 
 ### 分流靠 doctest **测试套件**，不是 tag 也不是链接面（批 12.2d）
