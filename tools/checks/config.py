@@ -88,6 +88,21 @@ FORBIDDEN_EDGES = {
     "ecs": {"llm_debug"},
 }
 
+# ─── 库分层闭合（批 12.2d；规则 = rules_layers.lib_layering_checks）──────────────
+# 与 rgl/CMakeLists.txt 的五份清单**同源**：清单顺序即层级序（0 = 最底层）。
+# 判据只有一条「import 边只能同层或向下」，它把「rlbase 整层无设备依赖」间接包住
+# ——设备依赖（rlvk / VmaRaii / vulkan_utils）都住在 rlgfx，低层 import 不到。
+# 改名/加库时这里与 CMakeLists 必须同步；不同步的后果是规则**静默失效**，
+# 故 rules_layers 在读不到清单时直接报 error 而不是返回空。
+LIB_LAYER_LIST_VARS = (
+    "RGL_BASE_MODULE_SOURCES",
+    "RGL_GFX_MODULE_SOURCES",
+    "RGL_SCENE_MODULE_SOURCES",
+    "RGL_FRAME_MODULE_SOURCES",
+    "RGL_APP_MODULE_SOURCES",
+)
+LIB_LAYER_ORDER = ("rlbase", "rlgfx", "rlscene", "rlframe", "rgl")
+
 # ─── 模块优先（rgl/ 下 .h/.hpp/.hh 全禁，.cpp 仅单头库实现单元）─────────────────
 # （tinygltf/VMA 是单头 C 库，实现宏只能放普通 .cpp——既有例外，勿删；
 #  入口 = main.cppm 模块实现单元（module main;，main() 合法于实现单元），

@@ -53,6 +53,7 @@ from config import (DEFAULT_COGNITIVE_ERROR_THRESHOLD, DEFAULT_COGNITIVE_THRESHO
 from fs import read_text
 from rules_doxygen import interface_declared_names, rule_doxygen
 from rules_metrics import evaluate_metrics
+from rules_layers import lib_layering_checks
 from rules_text import (docs_status_checks, forbidden_vulkan_checks,
                         modern_cpp_checks, text_checks)
 from models import Thresholds, Warning
@@ -200,6 +201,7 @@ def main() -> None:
         warnings.extend(forbidden_vulkan_checks())
         warnings.extend(modern_cpp_checks())
         warnings.extend(docs_status_checks())
+        warnings.extend(lib_layering_checks())
 
     doc_warnings: list[Warning] = []
     doc_checked = doc_unverified = doc_skipped = 0
