@@ -352,18 +352,6 @@ static std::string resolvePrimitiveIndices(const tinygltf::Model& gltf, int mesh
 }
 
 /**
- * Frisvad 2012 解析正交基切线（无 TANGENT 属性资产的兜底；与 bistro_pack.py 的
- * degenerate 分支同式）：返回单位 tangent ⟂ 单位 n，奇点 (0,0,-1) 显式处理。
- */
-static glm::vec3 frisvadTangent(const glm::vec3& n) {
-	if (n.z < -0.9999999f)
-		return glm::vec3(0.0f, -1.0f, 0.0f);
-	const float a = 1.0f / (1.0f - n.z);
-	const float b = -n.x * n.y * a;
-	return glm::normalize(glm::vec3(1.0f - n.x * n.x * a, b, -n.x));
-}
-
-/**
  * 三角形 UV Jacobian 手性 w（expandPrimitive 切线填充抽出）：s1×s2 的 det 符号
  *（glTF core TANGENT 不含 w，spec 约定从几何推断；bistro UV 手性 92% 为负——
  * DirectX Y-down 传统）。

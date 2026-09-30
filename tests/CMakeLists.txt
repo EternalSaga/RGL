@@ -49,7 +49,8 @@ set(RGL_TEST_SOURCES
     test_camera.cppm            # 相机数学
     test_cube_geometry.cppm     # 内建 cube 顶点/索引契约
     test_state_kit.cppm         # 四段 RenderState 表 + stateFor 分派（纯逻辑）
-    test_render_graph.cppm      # 图编译：校验 / barrier 推导 / 装饰 / RT slot
+    test_render_graph.cppm       # 图编译：校验 / barrier 推导 / 装饰 / RT slot
+    test_frisvad_tangent.cppm    # Frisvad 切线兜底：轴向/±Z 奇点/随机有限性（黑面 bug 回归）
     test_device_primitives.cppm      # [gpu] 回读原语：clear 逐像素 / 整数回环 / UNORM 量化 / 拷贝保真
     test_device_primitives_impl.cppm # 设备夹具实现（partition impl unit）
 )

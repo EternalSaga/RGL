@@ -152,7 +152,11 @@ def frisvad(n):
     sing = nz < -0.9999999
     out[sing] = (0.0, -1.0, 0.0)
     reg = ~sing
-    a = 1.0 / (1.0 - nz[reg])           # nz < -0.9999999 excluded => 1-nz <= ~2, > 0 safe
+    # 2026-10-01 修（黑面 bug 同源，两版记忆公式都已证伪）：
+    # ① 原式 1/(1-nz) 奇点在 nz=+1（guard 守的是 -1，方向反了）→ nz=+1 顶点得 NaN 切线；
+    # ② -1/(nz+1) NaN 安全但正交性错（靠 shader 端 Gram-Schmidt 兜）。
+    # 真式 a = 1/(1+nz)：构造即单位长且 ⟂ n（worst |dot| 2e-14），奇点 -1 已被 sing 排除。
+    a = 1.0 / (1.0 + nz[reg])
     b = -nx[reg] * ny[reg] * a
     out[reg, 0] = 1.0 - nx[reg] * nx[reg] * a
     out[reg, 1] = b

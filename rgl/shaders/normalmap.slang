@@ -42,6 +42,10 @@ float3 decodeNormalDx(float4 texel)
  * 导数参与 → 根除 ③a 导数 TBN 的 det→0 白噪点。
  * 中性 normal 贴图不动点：texTangent=(0,0,1) → 返回值 = worldN，与切线基无关
  *（无 normal 贴图 primitive 绑中性纹理，loader 的 Frisvad 兜底值因此无害）。
+ * ⚠️ 该"无关"声明对 **NaN** 切线不成立：0×NaN = NaN 会污染整面（2026-10-01 黑面
+ * bug，调试历史）。刻意**不在这里吞 NaN**（如 `!(tlen > 1e-6)` 形态）——NaN 进来
+ * 就该渲染成显眼的整面黑让探针当场抓到，静默回落顶点法线 = 把数据 bug 伪装成
+ * 合理光照（沉默跳过 = 假绿）。数据正确性由 loader 侧单测钉住（test_frisvad_tangent）。
  * @param worldN 世界空间顶点法线（归一化）
  * @param worldT 世界空间切线 xyz + 手性 ±1（worldTangent() 输出）
  * @param texTangent 解码后的切线空间法线（decodeNormalDx 产物，已 flip-G + Z 重建）

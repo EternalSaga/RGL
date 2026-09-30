@@ -78,6 +78,38 @@ export struct GltfModel {
  * @return 解析好的 GltfModel；任一 primitive 缺必需属性/数据畸形 → 整体失败
  *         （返回 GltfLoadFailed，不带部分结果）
  */
+/**
+ * Frisvad 2012 解析正交基切线（无 TANGENT 属性资产的兜底；与 bistro_pack.py 的
+ * degenerate 分支同式）：返回单位 tangent ⟂ 单位 n。
+ * 式 = `a = 1/(1 + n.z)`，t = (1 − n.x²·a, −n.x·n.y·a, −n.x)——**构造即单位长**
+ * （10⁵ 随机球面样本数值验证 worst |dot(n,t)| = 2e-14、worst |len−1| = 7e-13，
+ * 轴向精确）。奇点在 n.z = −1，由 guard 显式回落 (0,−1,0)。
+ * ⚠️ 两个已证伪的"记忆公式"（都别再抄回去，单测会红）：
+ * ① `1/(1 − n.z)`（2026-10-01 前的仓库原式）——奇点搬到 +1 而 guard 守的是 −1 →
+ *   法线恰 (0,0,1) 的顶点得 **NaN 切线** → shader TBN 0×NaN 污染 → 受光面整面纯黑
+ *   （黑面 bug，调试历史 2026-10-01）；
+ * ② `-1/(n.z + 1)`——NaN 安全但**正交性错**（n=(1,0,0) 处 dot=0.89，靠 shader 端
+ *   Gram-Schmidt 兜住才不会出事，不满足本函数自身的 ⟂ 契约）。
+ * 导出供单测钉住（tests/test_frisvad_tangent.cppm，变异红线：改回任一旧式必红）。
+ */
+export inline glm::vec3 frisvadTangent(const glm::vec3& n) {
+	if (n.z < -0.9999999f)
+		return glm::vec3(0.0f, -1.0f, 0.0f);
+	const float a = 1.0f / (1.0f + n.z);
+	const float b = -n.x * n.y * a;
+	return glm::normalize(glm::vec3(1.0f - n.x * n.x * a, b, -n.x));
+}
+
+/**
+ * 加载 glTF / glTF-Binary：每个 mesh 的每个 primitive 展开为一个 GltfPrimitive
+ *（POSITION/NORMAL 必需 + TEXCOORD_0 可选（D9，缺失 → 白纹理）+ 去索引展开 +
+ * baseColorFactor/baseColorTexture/alphaMode + 纹理源数据 bufferData/images）。
+ * 节点世界矩阵经层级 TRS + 父链合成（nodeWorld；环防御 = 残留退化 local + warn）。
+ * 实现体在 gltf_loader_impl.cppm（tinygltf 解析 + accessor 读取 helper）。
+ * @param path 文件路径（.gltf / .glb）
+ * @return 解析好的 GltfModel；任一 primitive 缺必需属性/数据畸形 → 整体失败
+ *         （返回 GltfLoadFailed，不带部分结果）
+ */
 export [[nodiscard]] std::expected<GltfModel, Error> loadGltfModel(const std::string& path);
 
 }  // namespace RGL
