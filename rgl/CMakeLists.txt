@@ -77,15 +77,141 @@ rgl_shader(stream_fanout.comp STREAM_FANOUT_SPV)
 # 实现"形状（同 ecs/ecs_impl 惯例）；经 FILE_SET 编译为模块 TU 并纳入
 # source_checks（tools/checks/）全规则管理。
 get_property(RGL_SPV GLOBAL PROPERTY RGL_SPV_OUTPUTS)
-add_executable(rgl vam_impl.cpp tinygltf_impl.cpp ${RGL_SPV})
+
+# ═══════════════════════════════════════════════════════════════════════════
+# rlcore —— 「无 Vulkan 依赖的引擎内核」静态库（2026-09-30 批 12.1）
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# ## 为什么抽
+#
+# 起因是自动化测试（tests/ + qa/）：单元测试要 import 引擎的纯函数模块（阴影级联
+# 几何、glTF 解析、四份配置 loader……），而 `rgl` 是**可执行文件**——它的
+# CXX_MODULES FILE_SET 只有它自己能 import，测试无法复用。唯一出路是把模块搬进
+# 库。而"搬哪些"不该随手挑：判据是**传递依赖闭包里有没有 Vulkan**。
+#
+# ## 成员判据（唯一）
+#
+# 模块 m 属于 rlcore ⟺ m 的 import 闭包（递归）不含 rlvk / VmaRaii / vk_* / VmaBuffer
+# / QueueFamilyManager。当前闭包 = 30 个模块（脚本口径见 tests/ 头注释与
+# `just checks` 的 libcore 规则，后者会在闭包漂移时报错）。
+#
+# 三条硬约束（违反即构建失败或链接失败，不会静默劣化）：
+#   1. **分区同 target**：模块 X 的接口单元与 `X:impl` / `X:scene` 等分区实现单元
+#      必须同 target。故 `shader`（接口脏）与 `shader:impl`（干净）**都留在 rgl**。
+#   2. **不 import Vulkan 叶子**：闭包检查由 `just checks --only style` 的
+#      `libcore_closure` 规则兜（人工漏登记时立刻报）。
+#   3. **rgl 的 GLOB 减去本列表**：rlcore 的清单是"哪些模块属于库"的**唯一真相源**，
+#      rgl 拿 GLOB 结果 list(REMOVE_ITEM) 掉它。新增模块默认落 rgl（安全默认），
+#      要进库必须显式登记——避免"手滑把 Vulkan 模块拖进库"。
+#
+# ## 收益
+#
+# ① 单元测试直接 import 真实引擎模块（同一次编译产物，不是重编一份）；
+# ② 库边界即依赖方向的**机器可查表达**：rlcore 链接Vk 栈 = 立刻链接失败；
+# ③ 静态库按需链接——实测消费者只 import scene_context 时，rlcore 里那些带
+#    未定义符号的 Vulkan 模块**不会**被拉进测试二进制（已验证 nm 干净）。
+#    这正是"抽库但测试仍然轻量"的关键。
+#
+# 命名沿用 rlstd / rllogger 的 r 前缀族（rl = RGL library）。
+# ═══════════════════════════════════════════════════════════════════════════
+
+set(RGL_CORE_MODULE_SOURCES
+    # ── 值类型与纯数学（无任何外部依赖）──
+    "${CMAKE_CURRENT_SOURCE_DIR}/scene_context.cppm"      # ECS 组件 + 视锥/级联/阴影几何
+    "${CMAKE_CURRENT_SOURCE_DIR}/cube.cppm"               # 内建 cube 顶点/索引
+    "${CMAKE_CURRENT_SOURCE_DIR}/vkerror.cppm"            # Error 类型
+    "${CMAKE_CURRENT_SOURCE_DIR}/gbuffer_contract.cppm"   # G-buffer 契约表（2026-09-30 从 render_graph 抽出）
+    # ── 相机 ──
+    "${CMAKE_CURRENT_SOURCE_DIR}/camera.cppm"
+    # ── 四份配置解析（scene/camera/runtime/diagnostics）──
+    "${CMAKE_CURRENT_SOURCE_DIR}/camera_config.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/camera_config_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/scene_config.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/scene_config_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/runtime_config.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/runtime_config_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/diagnostics.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/diagnostics_impl.cppm"
+    # ── 资产解析（glTF 638 行 + 图像编解码）──
+    "${CMAKE_CURRENT_SOURCE_DIR}/gltf_loader.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/gltf_loader_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/image_codec.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/image_codec_impl.cppm"
+    # ── 调试/诊断设施（Phase 9/10 的无 GPU 部分）──
+    "${CMAKE_CURRENT_SOURCE_DIR}/profiler.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/profiler_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/hot_reload.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/input_probe.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/param_registry.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/debug_rpc.cppm"           # RPC 传输层（httplib）
+    "${CMAKE_CURRENT_SOURCE_DIR}/debug_rpc_impl.cppm"
+    # ── 反射生成物（字节布局 static_assert 宿主）──
+    "${CMAKE_CURRENT_SOURCE_DIR}/generated/types_generated.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/generated/material_types_generated.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/generated/lights_types_generated.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/generated/model_types_generated.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/generated/scene_forward_types_generated.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/generated/param_semantics_generated.cppm"
+)
+
+# rlcore 的第三方依赖（**故意不含 Vulkan / SDL3 / VMA / imgui**——那层是 rgl 的）
+find_package(glm CONFIG REQUIRED)
+find_package(EnTT CONFIG REQUIRED)
+find_package(Sol2 CONFIG REQUIRED)
+find_package(unofficial-lua CONFIG REQUIRED)
+find_package(httplib CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
+find_package(libpng CONFIG REQUIRED)
+find_package(libjpeg-turbo CONFIG REQUIRED)
+find_package(freeimage CONFIG REQUIRED)
+find_package(ZLIB REQUIRED)
+# tinygltf 是 header-only 且该 vcpkg port 不导出 CMake target：find_path 取头文件目录。
+# SYSTEM = -isystem——第三方头内警告不进本项目 -Werror 面。
+find_path(TINYGLTF_INCLUDE_DIRS tiny_gltf.h REQUIRED)
+
+add_library(rlcore STATIC tinygltf_impl.cpp)
+target_sources(rlcore PUBLIC
+    FILE_SET CXX_MODULES
+    FILES ${RGL_CORE_MODULE_SOURCES}
+)
+target_compile_features(rlcore PUBLIC cxx_std_23)
+# GLM 深度约定必须与 rgl 一致（zero-to-one + 弧度）：frustumBoundingSphere 的近远
+# 反推、projWithDepthRange 全依赖这两个宏。不一致 = 测试在测另一个函数。
+target_compile_definitions(rlcore PUBLIC GLM_FORCE_DEPTH_ZERO_TO_ONE GLM_FORCE_RADIANS)
+target_include_directories(rlcore SYSTEM PUBLIC ${TINYGLTF_INCLUDE_DIRS})
+target_link_libraries(rlcore
+    PUBLIC
+        rlstd
+        rllogger
+        glm::glm
+        EnTT::EnTT
+        sol2::sol2
+        lua
+    PRIVATE
+        httplib::httplib
+        nlohmann_json::nlohmann_json
+        PNG::PNG
+        libjpeg-turbo::jpeg-static
+        freeimage::FreeImage
+        ZLIB::ZLIB
+)
+# 反射生成物是 rlcore 的 FILE_SET 成员 → 反射产物必须先于它就绪（同 rgl 的护栏）
+add_dependencies(rlcore reflection_check)
+
+# rgl 可执行文件：vam_impl（VMA 编译单元）+ SPV 产物 + **剩余**模块（GLOB 减去 rlcore）
+add_executable(rgl vam_impl.cpp ${RGL_SPV})
 
 # 模块 TU：rgl/ 根下全部 .cppm（CONFIGURE_DEPENDS：新增文件重跑 configure 自动纳入，
-# 2026-09-23 瘦身定案 1B）+ 反射生成物（RglReflection 提供的显式清单）。
+# 2026-09-23 瘦身定案 1B）**减去 rlcore 已收走的那批**（见上方 rlcore 头注释约束 3）
+# + 反射生成物（RglReflection 提供的显式清单）。
 file(GLOB RGL_MODULE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cppm")
+list(REMOVE_ITEM RGL_MODULE_SOURCES ${RGL_CORE_MODULE_SOURCES})
 target_sources(rgl PUBLIC
     FILE_SET CXX_MODULES
     FILES ${RGL_MODULE_SOURCES} ${RGL_GENERATED_CPPM}
 )
+# rlcore 的模块在库这一侧；rgl 侧只 import 它们的 BMI，不重复编译
+target_link_libraries(rgl PRIVATE rlcore)
 
 add_dependencies(rgl reflection_check)
 # 源码检查必须等编译产物就绪（libclang 读半写 BMI 会 crash，坑 4c，
@@ -93,15 +219,9 @@ add_dependencies(rgl reflection_check)
 add_dependencies(source_checks rgl)
 
 find_package(Vulkan REQUIRED)
-find_package(glm CONFIG REQUIRED)
-find_package(EnTT CONFIG REQUIRED)
-find_package(Sol2 CONFIG REQUIRED)
-find_package(unofficial-lua CONFIG REQUIRED)
-# tinygltf 是 header-only 且该 vcpkg port 不导出 CMake target：find_path 取头文件目录。
-# SYSTEM = -isystem——第三方头内警告不进本项目 -Werror 面。
-find_path(TINYGLTF_INCLUDE_DIRS tiny_gltf.h REQUIRED)
-target_include_directories(rgl SYSTEM PRIVATE ${TINYGLTF_INCLUDE_DIRS})
-target_link_libraries(rgl PRIVATE Vulkan::Vulkan rllogger glm::glm EnTT::EnTT sol2::sol2 lua rlstd)
+
+# rlstd/rllogger/glm/EnTT/sol2/lua 经 rlcore 的 PUBLIC 传递；此处只补 Vulkan 侧的直接依赖
+target_link_libraries(rgl PRIVATE Vulkan::Vulkan)
 target_compile_definitions(rgl PRIVATE GLM_FORCE_DEPTH_ZERO_TO_ONE GLM_FORCE_RADIANS)
 # Phase 10 批 10.3 配置热重载：监视**源树** configs/（D7——build 副本会被 just build
 # 内容比对静默覆盖复原，监听它无意义）；运行期路径不存在 = warn + 关（优雅降级）

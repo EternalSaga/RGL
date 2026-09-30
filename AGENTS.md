@@ -30,6 +30,7 @@ just reflect             # 重跑 7 条反射管线（改动 shader 契约/schem
 just checks / doc-check / style-check [--strict]  # 源码检查统一入口（tools/checks/main.py，--only style|doc；每次 just build 已随 source_checks 目标跑、只警告；红线清单见 skill rgl-new-module）
 just run                 # 运行
 just run-igpu / run-dgpu / run-intel   # 强制核显 / NVIDIA prime 独显 / Intel anv
+just test                # 单元测试（tests/，**无 GPU 无窗口**，毫秒级；先构建 rgl_tests 再跑）
 just clean / clean-all / all           # 增量清理 / 删 build 目录 / clean-all+build-release
 ```
 
@@ -39,13 +40,59 @@ Git for Windows（`sh.exe` 在 PATH）；命令同名，默认 clang++ + Ninja�
 **vcpkg**：`vcpkg.json` 用 platform expressions 按 OS 启用 features（Linux `sdl3[vulkan,wayland]` /
 Windows `sdl3[vulkan]`）；同一依赖可出现两次用 `"platform"` 字段区分。
 
-CMake 无独立构建目录——必须从根目录构建（`cmake -B build -S .`）。产物: `build/rgl/rgl`（Windows 加 `.exe`）。
+CMake 无独立构建目录——必须从根目录构建（`cmake -B build -S .`）。产物: `build/rgl/rgl`（Windows 加 `.exe`）、`build/tests/rgl_tests`（单元测试；`tests/` 是 EXCLUDE_FROM_ALL 子目录，故**不进 `just build`**，`just test` 显式构建其 target）。
 构建内置检查步骤（均只警告不阻断）：`reflection_check`（反射产物 SHA1 护栏，与编译并行）、
 `source_checks`（样式 + Doxygen 单入口，`tools/checks/`，2026-09-23 合并；**依赖 rgl 编译完成后
 才跑**——libclang 读半写 BMI 会崩，勿删该 add_dependencies）。样式侧 2026-09-24 扩展两轮
 （partition 结构 / docs 状态头 / 现代 C++ 护栏 / expected 禁 throw）→ `docs/风格检查规则.md`；
 同日工具现代化（**Python ≥3.14**，`rules.py` 拆 metrics/text/doxygen + `models`/`fs`，警告 =
 `NamedTuple`）。两者内部机制（缓存、并发、已知坑）→ `docs/技术概念.md §构建检查工具机制`；tools/ 工具链说明 → 同文件 §构建工具。
+
+## 测试体系（Phase 12 批 12.1 起）
+
+**两层，边界按"要不要 GPU"划**：
+
+| 层 | 位置 | 覆盖 | 入口 |
+|---|---|---|---|
+| 单元测试层 | `tests/`（doctest，C++20 modules） | **纯函数/契约**：阴影级联几何、相机数学、glTF 解析、四份配置 loader、反射字节布局、内建 cube 几何。**无 GPU 无窗口，毫秒级** | `just test` |
+| 进程级集成层 | `qa/`（**规划中，批 12.2+**） | 图像/场景级：程序化小场景 + RPC 驱动 + OpenCV 量化 | 尚未落地 |
+
+### rlcore —— 「无 Vulkan 依赖闭包」静态库（rlstd/rllogger 之后第三个库）
+
+单元测试要 import 引擎的纯函数模块，而 `rgl` 是**可执行文件**（其 CXX_MODULES FILE_SET 只有它自己
+能 import），所以模块必须住进库里。成员判据唯一：**import 闭包（递归）不含 rlvk / VmaRaii / vk_* /
+VmaBuffer / QueueFamilyManager**。当前 30 个模块，清单是 `rgl/CMakeLists.txt` 的 `RGL_CORE_MODULE_SOURCES`
+（**唯一真相源**；`rgl` 拿 GLOB 结果 `list(REMOVE_ITEM)` 掉它 → 新增模块默认落 rgl = 安全默认）。
+
+三条硬约束（违反即构建/链接失败，不静默劣化）：
+1. **分区同 target**：模块 X 的接口与 `X:impl` 等分区实现单元必须同 target。故 `shader`（接口脏）
+   与 `shader:impl`（干净）**都留在 rgl**。
+2. 库若链上 Vulkan 栈 = 立刻链接失败（依赖方向由此变成机器可查的）。
+3. 静态库**按需链接**——消费者只 import `scene_context` 时，rlcore 里带未定义符号的 Vulkan 模块
+   **不进**测试二进制（已实测 nm 干净）。故 `rgl_tests` 只 ~240KB。
+
+新增模块想进库：先按 `tests/CMakeLists.txt` 头注释的判据自查（**"只看直接 import 不够，要顺闭包走"**——
+`render_graph` 自己只 import 4 个，但 `vk_swapchain` / `render_target_cache` 各自拖整个 Vulkan 栈），
+再把源文件加进 `RGL_CORE_MODULE_SOURCES`。**要测 rlcore 之外的模块**（render_graph / shader_registry /
+vk_* …）不要往 `tests/` 硬塞（会把 Vulkan 栈拖进测试二进制），走 `qa/` 的进程级集成测试。
+已按此判据被排除的模块**不是遗漏**，理由逐条写在 `rgl/CMakeLists.txt` 的 rlcore 头注释里。
+
+### 写测试的硬纪律（从 ~90 条历史 bug 换来的）
+
+- **阳性锚点**：每条断言先问"如果这段代码从未生效，这条断言会绿吗"。会绿 = 无效断言，必须重写。
+  对照：`5a-7` 的半径恒 0 恒等阵伪影同时骗过了稳定性与开关对拍两类判据。
+- **反向用例**：guard / 早退分支必须配一条"不该触发"的用例，否则无法区分"没触发"与"坏掉了"。
+- **确定性**：随机性只用 `tests/test_support.cppm` 的 `Lcg` + 写死种子，禁 `rand()`/`random_device`
+  （真随机的失败无法重跑，"上次跑过"≠"这次验的是同一组输入"）。
+- **测试代码的 bug 和被测代码的 bug 症状一模一样**：`test_support::frustumCorners` 首版把
+  `inverse(view*proj)` 写成 `inverse(proj*view)`——与 5a-5「NDC 角点乘正向矩阵」同症状，
+  且在 `view = identity` 下**恰好正确**（两种顺序此时相同），换真机位才炸。故：**辅助函数也要有
+  独立判据**，且判据的数值噪声必须**远小于**它要检测的信号（该函数世界空间版在 near/far=2.5e4 时
+  float32 反投影误差 0.28%，直接淹没信号 → 判据改到视空间做，无矩阵求逆故无病态）。
+- **验证靠变异测试**：改坏被测数据（翻绕序 / 越界索引 / 复原 5a-8 的 guard / 复原 5a-8b 的
+  support function 错）逐个确认测试变红——"测试通过"不等于"测试有效"。
+- 单测结果以 `just test` 为准（它先构建再跑）；**直接跑 `build/tests/rgl_tests` 可能拿到陈旧二进制**
+  （子 agent 委派时踩过：改完测试文件没重建就报"全通过"）。
 
 ## 运行要点
 

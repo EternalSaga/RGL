@@ -503,13 +503,21 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 void wireHotReload(entt::registry& registry) {
 	if (!diagnostics().configReload)
 		return;  // 总开关默认关 = 零行为变化（红线）
+	// 监视源：RGL_CONFIG_DIR 覆盖时优先（测试用一次性配置目录），否则回退编译期源树
+	// configs/（D7——build 副本会被 just build 覆盖复原，监听它无意义）。
+	// env 已设 = 该目录由调用方负责存在性与生命周期。
+	std::filesystem::path sourceDir;
+	if (const char* dir = std::getenv("RGL_CONFIG_DIR"); dir && *dir) {
+		sourceDir = dir;
+	} else {
 #ifdef RGL_SOURCE_CONFIG_DIR
-	const std::filesystem::path sourceDir{RGL_SOURCE_CONFIG_DIR};
+		sourceDir = RGL_SOURCE_CONFIG_DIR;
 #else
-	if (auto* logger = RLLogger::getInstance())
-		logger->warn("hot_reload: 编译期未注入 RGL_SOURCE_CONFIG_DIR，热重载关闭");
-	return;
+		if (auto* logger = RLLogger::getInstance())
+			logger->warn("hot_reload: 编译期未注入 RGL_SOURCE_CONFIG_DIR，热重载关闭");
+		return;
 #endif
+	}
 	std::error_code ec;
 	if (!std::filesystem::is_directory(sourceDir, ec)) {
 		if (auto* logger = RLLogger::getInstance())

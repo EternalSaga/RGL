@@ -100,6 +100,7 @@ bool DebugRpcServer::start(std::string host, int port) {
 	p->server.Post("/camera", serve);
 	p->server.Post("/param", serve);
 	p->server.Post("/shot", serve);
+	p->server.Post("/quit", serve);
 	// httplib 对**所有** status≥400 都回调 error handler（返回值只控制 range 应用），
 	// 故必须只补空体：我们 handler 自产的 400/404/409/503/504 载荷不能被覆盖。
 	// 非空体 = 已有语义（自家 dispatch 或 httplib 自置），空体 = httplib 兜的 404/405/431 等。

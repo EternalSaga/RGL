@@ -101,6 +101,15 @@ build:
     @python -c "import os,sys,subprocess; b='{{ BUILD }}'; \
         (subprocess.call(['cmake','--build',b,'--parallel','{{ NPROC }}']) if os.path.exists(os.path.join(b,'build.ninja')) else (print('Error: Run just config first.'), sys.exit(1)))"
 
+# 单元测试（tests/，批 12.1）：纯函数/契约层，**无 GPU 无窗口**，毫秒级。
+# 被测模块来自 rlcore 静态库（rgl/CMakeLists.txt 的"无 Vulkan 依赖闭包"），与引擎同
+# 一次编译产物。tests 是 EXCLUDE_FROM_ALL 的子目录，故这里要显式构建其 target。
+# 透传参数给 doctest：just test -- --test-case="*级联*" / -s（打印成功断言）
+test *ARGS="":
+    @cmake --build {{ BUILD }} --target rgl_tests
+    {{ BUILD }}/tests/rgl_tests {{ ARGS }}
+
+
 # 重跑 7 条反射管线（改动 shaders/*.slang / *_schema.lua / tools/templates /
 # features_config.json / param_semantics.json 后必须执行；产物 rgl/generated/ 已入版本控制需随
 # 改动一并提交，否则 reflection_check 守卫会拦构建）

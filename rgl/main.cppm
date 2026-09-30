@@ -40,6 +40,25 @@ export struct StartupConfigs {
 };
 
 /**
+ * 配置目录（相对 CWD）。**默认 `"configs"`**；环境变量 `RGL_CONFIG_DIR` 可覆盖为
+ * 另一目录（绝对或相对 CWD 均可），供自动化测试把配置放到一次性目录里跑——
+ * 既有做法是改 `build/rgl/configs/` 副本，但那份会被下次 `just build` 按内容比对
+ * 静默覆盖复原（见 cmake/RglRuntimeAssets.cmake），测试与 build 互相污染。
+ *
+ * **只覆盖配置目录**：资产路径（`models/` `env/` `skybox/` `generated_shaders/`）
+ * 仍按 CWD 相对解析，契约不变（见 AGENTS.md「CWD 必须是 build/rgl/」）。
+ * @return 配置目录路径（不带尾分隔符；env 未设 = `"configs"`）
+ */
+export std::string configDir();
+
+/**
+ * 配置文件完整路径 = `configDir() + "/" + fileName`。
+ * @param fileName 配置文件名（如 `"scene.lua"`）
+ * @return 拼接后的路径字符串
+ */
+export std::string configPath(const char* fileName);
+
+/**
  * 加载四份启动配置（camera/scene/runtime/diagnostics）并应用诊断单例（setDiagnostics
  * 必须先于一切 GPU 对象构造——vkinstance 建 instance 时读 no_vvl）。
  * @return 空 optional = 任一配置加载失败（错误已在本函数内日志）

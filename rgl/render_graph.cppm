@@ -6,6 +6,13 @@ import vkerror;
 import vk_swapchain;  // Swapchain&（rtslot 装配分区取 extent，架构债务续账步骤 2）
 import render_target_cache;  // RenderTargetCache&（G-buffer/scene_hdr 装配，架构债务续账步骤 2）
 
+// G-buffer 契约表转出口：表本体住在叶子模块 gbuffer_contract（纯 constexpr，无 Vulkan
+// 类型），本模块 `export import` 转出，使既有消费方（render_graph_* 分区 /
+// frame_capture_impl / shader_registry）**零改动**继续经 render_graph 拿到它。
+// 为什么不直接让它们各自 import gbuffer_contract：那要在 6 个文件里加 import，
+// 而"经 render_graph 拿"是既有约定（表与图编译器同源可读）；转出口让两条路都通。
+export import gbuffer_contract;
+
 // Phase 6：渲染意图图（声明 → 编译 → 执行三层中的"编译"层）。
 //
 // 定位：纯 C++ 数据结构 + GraphCompiler，零 Lua、零 entt、零 Vulkan 句柄——
@@ -483,26 +490,7 @@ export std::array<uint32_t, 4> shadowTile(uint32_t c, uint32_t tileSize, uint32_
  */
 export bool decorateShadowPass(RgGraphDesc& desc, uint32_t mapSize);
 
-/** G-buffer 附件契约条目（名字 + 格式串）。 */
-export struct RgGBufferDesc {
-	std::string_view name;
-	std::string_view format;
-};
-/**
- * Phase 7 D1：G-buffer 附件契约表（**单一真相源**）——消费方 =
- * deferredRenderGraphDesc（geometry outputs / light inputs 按本表顺序生成）、
- * vkresources ensureDeferredGBufferSlots、drawFrame 帧内捕获（dump_gbuf）。
- * 格式串 = isKnownRgFormat 词表可解析名（resolveRgFormat 物化）。
- * 顺序即 light.frag binding 4-7 + 尾部 11 = emissive（albedo/normal/position/metalrough/emissive——Phase 8
- * 剩余批次 B 加第 5 通道 emissive，RGBA16F 保 HDR 域）与 diagnostics.lua dump_gbuf 通道号。
- */
-export inline constexpr std::array<RgGBufferDesc, 5> kGBufferAttachments{{
-	{"gbuffer_albedo", "rgba8_srgb"},
-	{"gbuffer_normal", "rg16_snorm"},
-	{"gbuffer_position", "rgba32_sfloat"},
-	{"gbuffer_metalrough", "rgba8_unorm"},
-	{"gbuffer_emissive", "rgba16_sfloat"},
-}};
+/** G-buffer 附件契约条目 + 契约表（名字 + 格式串）——已移入叶子模块 gbuffer_contract。 */
 
 /**
  * 编译期自检（无 GPU）：构造合法/非法图样本跑 compileRenderGraph，返回全部

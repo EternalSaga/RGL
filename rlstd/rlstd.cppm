@@ -45,6 +45,7 @@ export module rlstd;
 // （std::uint32_t 与 ::uint32_t 是同类型 typedef，与残留 GMF include 并存的
 // 重声明合法。）
 export using std::uint8_t;
+
 export using std::uint16_t;
 export using std::uint32_t;
 export using std::uint64_t;
@@ -52,6 +53,14 @@ export using std::int32_t;
 export using std::int64_t;
 export using std::size_t;
 
+// <cmath> 常用名补齐（2026-09-30，批 12.1 建 rlcore 时暴露）：sqrt/ceil/round/abs/
+// acos/atan/cos/exp/log/tan/fabs 此前**从未导出**——rgl/scene_context.cppm 里的
+// std::sqrt/std::ceil/std::round 是靠它自己 GMF 的 `#include <glm/glm.hpp>` 传递进来的
+// <cmath> 才可见的（模块 GMF 的名字在本模块 purview 可见但**不导出**），所以
+// 「rlstd 必须导出完整可用面」这条纪律在这些名字上一直是破的——只是全库 102 个 TU
+// 都恰好 include 了 glm，没人写过一个不 include glm 却用它们的 TU。rlcore 的测试 TU
+// 正是那种 TU，第一次把这个问题顶出来。
+// 下方 std 命名空间块里已有的（floor/fmod/sin/pow/asin/atan2/max/min）不重复导出。
 export namespace std {
 using std::array;
 using std::asin;
@@ -103,6 +112,17 @@ using std::runtime_error;
 using std::set;
 using std::shared_ptr;
 using std::sin;
+using std::sqrt;   // 2026-09-30 补（批 12.1）：见下方 <cmath> 补齐说明
+using std::ceil;
+using std::round;
+using std::abs;    // 整数重载来自 <cstdlib>，浮点重载来自 <cmath>，两者都在本模块 GMF
+using std::fabs;
+using std::acos;
+using std::atan;
+using std::cos;
+using std::exp;
+using std::log;
+using std::tan;
 using std::source_location;
 using std::sort;
 using std::span;

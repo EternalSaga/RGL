@@ -50,7 +50,8 @@ void rpcReject(const RpcResponder& responder, int status, std::string message) {
 /** GET / 路由表（agent 据此发现端点；frame = 装配态帧计数，纯观测）。 */
 nlohmann::json rpcRoutesJson(uint32_t frame) {
 	return nlohmann::json{{"ok", true}, {"frame", frame},
-		{"routes", {"GET /", "GET /state", "POST /camera", "POST /param", "POST /shot"}}};
+		{"routes", {"GET /", "GET /state", "POST /camera", "POST /param", "POST /shot",
+			"POST /quit"}}};
 }
 
 /**
@@ -333,7 +334,24 @@ void rpcSettleShot(RpcWiring& w) {
 }
 
 /**
- * POST 路由（`/camera`、`/param`、`/shot`；body 解析在此，畸形 = 400）。
+ * POST /quit：置 `AppExit.requested` = 帧循环正常收尾退出（**下个帧边界**生效）。
+ *
+ * 为什么需要（自动化测试）：llm_debug 一进程一张图即退，RPC `/shot` 可连拍但进程
+ * 不自停——测试 harness 只能靠 SIGTERM 杀，那会打断 present/in-flight 且拿不到
+ * profiler 收口输出（`profilerDump` 在帧循环之后）。走 AppExit = 与用户关窗完全
+ * 同一条干净退出路径。
+ *
+ * 应答先兑现再置位：`AppExit` 在帧首判定，置位后本帧 HTTP 线程仍要拿到 200。
+ * @param w 装配态
+ */
+RpcOutcome rpcHandleQuit(RpcWiring& w) {
+	auto& exit = w.registry.ctx().get<AppExit>();
+	exit.requested = true;
+	return rpcOk({{"ok", true}, {"frame", w.frame}});
+}
+
+/**
+ * POST 路由（`/camera`、`/param`、`/shot`、`/quit`；body 解析在此，畸形 = 400）。
  * 异常由 rpcDispatch 的 try 统一转 400/500 —— 本函数在它的 try 内被调用。
  * @param w 装配态
  * @param request 原始请求
@@ -360,6 +378,11 @@ void rpcDispatchPost(RpcWiring& w, const RpcRequest& request, RpcResponder respo
 	}
 	if (request.path == "/shot") {
 		rpcHandleShot(w, body, std::move(responder));
+		return;
+	}
+	if (request.path == "/quit") {
+		// body 恒可解析（上面已兜 400），本端点无参
+		reply(rpcHandleQuit(w));
 		return;
 	}
 	reply(rpcFail(404, fmt::format("unknown route: {}", request.path)));

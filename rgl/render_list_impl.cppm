@@ -293,8 +293,13 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 		const float nearC = c == 0 ? kShadowNearFloor
 			: cascadeSplitDistance(shadowNear, shadowFar, c - 1u, kActiveShadowCascades);
 		const float farC = cascadeSplitDistance(shadowNear, shadowFar, c, kActiveShadowCascades);
+		// nearC/farC **直接传进去**，不从子 proj 反解（2026-09-30 批 12.1 单测抓出）：
+		// float32 RH_ZO 透视矩阵在 near/far ≳1e3 时就编不准 far，反解误差被比值线性
+		// 放大到超过拟合球的保守余量 → 球装不下子视锥。而这两个值就在上面，是真值。
+		// 与 projWithDepthRange 的既有理由同源（"直接拿字段不会漂"）。见
+		// scene_context::frustumBoundingSphere 的 4 参重载注释。
 		cascadeSpheres[c] = frustumBoundingSphere(viewProj.view,
-			projWithDepthRange(viewProj.proj, nearC, farC));
+			projWithDepthRange(viewProj.proj, nearC, farC), nearC, farC);
 	}
 	// Phase 7b：cullArgs 逐 candidate 填充（candidate 序 = main C3 表序——同 view 迭代序 +
 	// 同守卫：pipelineIndex 有效 / groupCount>0 / 不透明；透明留 CPU 排序路径不入候选）

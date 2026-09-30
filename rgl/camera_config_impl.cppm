@@ -21,6 +21,14 @@ namespace RGL {
  * 键名（configs/camera.lua 的 keys 字段值）→ SDL 键码（仅 loadCameraConfig 内部使用）。
  * 单字母/数字不区分大小写（A-Z / 0-9）；方向键用 Up/Down/Left/Right；另有
  * Space/Enter（"Return" 同义）。无法识别 → nullopt（配置错误，调用方报错退出）。
+ *
+ * ⚠️ **SDL3 的字母键码是 ASCII 小写连续块**：`SDLK_A == 0x61 == 'a'`
+ * （SDL_keycode.h:108），`SDLK_Z == 0x7a`。所以下面 `SDLK_A + (c - 'A')` 是把
+ * 'A'..'Z' 映射到**连续的** 'a'..'z' 块——这个算式依赖的正是"连续"这条不变量。
+ * 数字键同理（`SDLK_1 == 0x31 == '1'`，落在数字自身的 ASCII 位上）。
+ * 旧注释曾写"SDL3 字母键码 = ASCII 大写"，与头文件不符，功能却一直对（因为算式
+ * 只用到连续性，不用到大小写）。**别把基准改成 0x41**——那会全错。
+ *
  * @param name 键名字符串
  * @return SDL 键码；无法识别返回 nullopt
  */
@@ -28,6 +36,7 @@ namespace RGL {
 	if (name.size() == 1) {
 		const char c = static_cast<char>(std::toupper(static_cast<unsigned char>(name[0])));
 		if (c >= 'A' && c <= 'Z')
+			// 依赖 SDLK_A..SDLK_Z 连续（见上方注释）
 			return static_cast<uint32_t>(SDLK_A + (c - 'A'));
 		if (c >= '0' && c <= '9')
 			return static_cast<uint32_t>(SDLK_0 + (c - '0'));

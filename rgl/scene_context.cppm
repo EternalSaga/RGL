@@ -197,12 +197,21 @@ export struct Light {
 	uint32_t type = 0;                          // 0=定向，1=点光
 };
 
+/** 前置声明：4 参版定义在 2 参版之后（2 参版委派给它，故需先见声明）。 */
+export inline Bounds frustumBoundingSphere(const glm::mat4& view, const glm::mat4& proj,
+	float nearPlane, float farPlane);
+
 /**
- * Phase 11 批 11.2：由视锥求**精确外接球**（闭式解）。视锥 8 角共球、球心在视轴上——
- * 结果只依赖 near/far/fov/aspect，**与相机姿态（yaw/pitch/位置）完全无关**，这是阴影
- * 稳定性的关键：半径随相机连续变化 = 光空间投影逐帧缩放 = 影子在地面上"游动"
- * （2026-09-29 用户实测：机位平移 0.06，井盖阴影时有时无）。
- * 8 角都在球面上 → 这就是最小外接球，保证**整个视锥在球内**。
+ * 由 proj **反解** near/far 求视锥精确外接球（闭式解）。
+ *
+ * 视锥 8 角共球、球心在视轴上——结果只依赖 near/far/fov/aspect，**与相机姿态
+ * （yaw/pitch/位置）完全无关**，这是阴影稳定性的关键：半径随相机连续变化 =
+ * 光空间投影逐帧缩放 = 影子在地面上"游动"（2026-09-29 用户实测：机位平移 0.06，
+ * 井盖阴影时有时无）。8 角都在球面上 → 这就是最小外接球，保证**整个视锥在球内**。
+ *
+ * ⚠️ **精度契约弱于 4 参重载**（大 near/far 比下反解 far 不可靠，见函数体注释）。
+ * 新代码请直接用 4 参版。
+ *
  * @param view 相机 view（球心视空间 → 世界用其逆）
  * @param proj 相机 proj（级联子视锥的深度重映射已烘在里面的形态；透视专用）
  * @return {center, radius}；退化 proj（正交/奇异）返回半径 0
@@ -217,29 +226,72 @@ export inline Bounds frustumBoundingSphere(const glm::mat4& view, const glm::mat
 	// **前两版的教训**（→ docs/调试历史.md 5a-5/5a-6）：Eberly 增量法与 extractFrustum
 	// 平面符号约定混用 → 球装不下视锥；改 8 角世界 AABB 法修好正确性但引入姿态依赖
 	// （AABB 随 yaw 变，实测还比精确球大 16%）。闭式解既不碰符号约定也不碰姿态。
-	const float A = proj[2][2];
-	const float B = proj[3][2];
+	// **精度（2026-09-30 批 12.1 单测抓出，见 tests/test_shadow_geometry
+	// 「frustumBoundingSphere 覆盖性」）**：本 2 参版**从矩阵反解** near/far，在大
+	// near/far 比下不可靠。`far = B/(1+A)` 里 `1+A` 是两个 ~1 的数相减，而**相消
+	// 发生在 glm::perspective 把 A 存进 float32 矩阵的那一刻**：A ≈ −1 − 2n/f，
+	// float32 在 1.0 附近的间隔 1.19e-7 ⟹ 1+A 的相对误差 ≈ 1.19e-7·f/(2n)，被比值
+	// 线性放大。实测 near/far=8e4 时反解 far 偏小 0.4%，超过下面 ×1.001 的保守余量
+	// ⟹ 球装不下真视锥（欠覆盖 0.49%）。
+	//
+	// 下面把反解放 double **修不了**它（信息在更上游就没了），只把"矩阵自身舍入
+	// 之后"的残余挪到 double。**真解是别反解**——见 4 参重载：调用方本来就有真值。
+	// 保留本 2 参版是因为它语义自洽（只吃矩阵），但**精度契约按 4 参版定**。
+	const double A = proj[2][2];
+	const double B = proj[3][2];
 	// 有效透视（RH_ZO，f > n > 0）：w 行 = (0,0,−1,0)、A = f/(n−f) ∈ (−∞,−1)、B = A·n < 0。
 	// **踩过的坑**（5a-7 首版）：把 `A < −1` 当退化条件写——恰好把所有正常透视判成退化，
 	// 半径恒 0 → 全体积单位阵 → 小物件阴影全灭（恒等阵伪影还姿态无关，把对拍指标全骗过）。
 	// 正确退化 = 正交（w 行非 −1）或反推 near/far 不成序（含 A=−1 除零 → far=∞ 被序判挡下）。
-	if (proj[2][3] != -1.0f || B >= 0.0f || A >= 0.0f)
+	if (proj[2][3] != -1.0f || B >= 0.0 || A >= 0.0)
 		return Bounds{glm::vec3{0.0f}, 0.0f};
-	const float nearPlane = B / A;
-	const float farPlane = B / (1.0f + A);
+	const double nearPlane = B / A;
+	const double farPlane = B / (1.0 + A);
+	if (!(farPlane > nearPlane) || !(nearPlane > 0.0))
+		return Bounds{glm::vec3{0.0f}, 0.0f};
+	return frustumBoundingSphere(view, proj, static_cast<float>(nearPlane),
+		static_cast<float>(farPlane));
+}
+
+/**
+ * 由**显式** near/far 求视锥精确外接球（**首选入口**，2026-09-30 批 12.1 新增）。
+ *
+ * ## 为什么要有这个重载
+ *
+ * 见 2 参版的精度说明：矩阵反解 far 的误差被 near/far 比线性放大（float32 RH_ZO
+ * 透视矩阵在比值 ≳1e3 时就编不准 far，≳1e4 时误差超过保守余量）。而**调用方本来
+ * 就有真值**——级联切片用 `projWithDepthRange(proj, nearC, farC)` 造子矩阵，
+ * `nearC/farC` 就在同一行代码里（render_list_impl 的级联循环）。
+ *
+ * 这与 `projWithDepthRange` 的既有理由一字不差（"直接拿字段不会漂；反推需要一组
+ * 奇性算术，且不带来任何额外精度"）——本项目早就在那条路上走了，唯独
+ * `frustumBoundingSphere` 还在反解。
+ *
+ * @param view 相机 view（球心视空间 → 世界用其逆）
+ * @param proj 投影矩阵（**只取 fov/aspect 两行 + 透视性判定**，不用于反解 near/far）
+ * @param nearPlane 近平面距离（真值）
+ * @param farPlane 远平面距离（真值）
+ * @return {center, radius}；非透视 proj 或 near/far 不成序返回半径 0
+ */
+export inline Bounds frustumBoundingSphere(const glm::mat4& view, const glm::mat4& proj,
+	float nearPlane, float farPlane) {
+	// 透视性判定仍看矩阵的 w 行（proj 的固有性质，与 near/far 反解无关）
+	if (proj[2][3] != -1.0f)
+		return Bounds{glm::vec3{0.0f}, 0.0f};
 	if (!(farPlane > nearPlane) || !(nearPlane > 0.0f))
 		return Bounds{glm::vec3{0.0f}, 0.0f};
-	const float tanHalf = 1.0f / proj[1][1];
-	const float aspect = proj[1][1] / proj[0][0];
-	const float cornerScale = tanHalf * std::sqrt(aspect * aspect + 1.0f);  // 角点离轴距/深度
-	const float rn = nearPlane * cornerScale;
-	const float rf = farPlane * cornerScale;
-	const float zc = (farPlane * farPlane - nearPlane * nearPlane + rf * rf - rn * rn)
-		 / (2.0f * (farPlane - nearPlane));
-	// ×1.001 余量：float32 下"8 角距 = r"只在舍入内竞争（探针大 near/far 比时相对误差
-	// ~1e-5），阴影侧的保守方向是宁大勿小（大 = 多收投影体，小 = 漏画）。
-	const float radius = std::sqrt((farPlane - zc) * (farPlane - zc) + rf * rf) * 1.001f;
-	const glm::vec4 center = glm::inverse(view) * glm::vec4(0.0f, 0.0f, -zc, 1.0f);
+	const double n = nearPlane, f = farPlane;
+	const double tanHalf = 1.0 / static_cast<double>(proj[1][1]);
+	const double aspect = static_cast<double>(proj[1][1]) / static_cast<double>(proj[0][0]);
+	const double cornerScale = tanHalf * std::sqrt(aspect * aspect + 1.0);  // 角点离轴距/深度
+	const double rn = n * cornerScale;
+	const double rf = f * cornerScale;
+	const double zc = (f * f - n * n + rf * rf - rn * rn) / (2.0 * (f - n));
+	// ×1.001 余量：留给 float32 下"8 角距 = r"的舍入竞争（探针 ~1e-5 量级）；
+	// 阴影侧的保守方向是宁大勿小（大 = 多收投影体，小 = 漏画）。
+	// near/far 已是真值，这个余量不必再承担"盖反解相消误差"的职责。
+	const float radius = static_cast<float>(std::sqrt((f - zc) * (f - zc) + rf * rf) * 1.001);
+	const glm::vec4 center = glm::inverse(view) * glm::vec4(0.0f, 0.0f, static_cast<float>(-zc), 1.0f);
 	return Bounds{glm::vec3{center} / center.w, radius};
 }
 

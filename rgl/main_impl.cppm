@@ -89,28 +89,43 @@ void rglAftermathDumpCb(const void* data, uint32_t size, void*) {
 
 namespace RGL {
 
+/** 配置目录（RGL_CONFIG_DIR env 覆盖；契约见 main.cppm configDir 注释）。 */
+std::string configDir() {
+	const char* dir = std::getenv("RGL_CONFIG_DIR");  // std::getenv 经 import rlstd（rlstd.cppm 已导出）
+	return (dir && *dir) ? std::string(dir) : std::string("configs");
+}
+
+/** 配置文件路径拼接（configDir + 尾分隔符按需 + 文件名）。 */
+std::string configPath(const char* fileName) {
+	std::string dir = configDir();
+	if (!dir.empty() && dir.back() != '/' && dir.back() != '\\')
+		dir.push_back('/');
+	dir += fileName;
+	return dir;
+}
+
 /** 四配置加载（错误日志在内）+ setDiagnostics（先于一切 GPU 对象构造）。 */
 std::optional<StartupConfigs> loadAllConfigs() {
-	auto cameraResult = loadCameraConfig("configs/camera.lua");
+	auto cameraResult = loadCameraConfig(configPath("camera.lua").c_str());
 	if (!cameraResult) {
 		auto* logger = RLLogger::getInstance();
 		if (logger) logger->error("错误: {}", cameraResult.error().describe());
 		return std::nullopt;
 	}
-	auto sceneResult = loadSceneConfig("configs/scene.lua");
+	auto sceneResult = loadSceneConfig(configPath("scene.lua").c_str());
 	if (!sceneResult) {
 		auto* logger = RLLogger::getInstance();
 		if (logger) logger->error("错误: {}", sceneResult.error().describe());
 		return std::nullopt;
 	}
 	// 2026-09-08 env→配置：runtime.lua（运行/窗口模式）+ diagnostics.lua（诊断开关单例）
-	auto runtimeResult = loadRuntimeConfig("configs/runtime.lua");
+	auto runtimeResult = loadRuntimeConfig(configPath("runtime.lua").c_str());
 	if (!runtimeResult) {
 		auto* logger = RLLogger::getInstance();
 		if (logger) logger->error("错误: {}", runtimeResult.error().describe());
 		return std::nullopt;
 	}
-	auto diagResult = loadDiagnosticsConfig("configs/diagnostics.lua");
+	auto diagResult = loadDiagnosticsConfig(configPath("diagnostics.lua").c_str());
 	if (!diagResult) {
 		auto* logger = RLLogger::getInstance();
 		if (logger) logger->error("错误: {}", diagResult.error().describe());
@@ -350,7 +365,7 @@ int main() {
 		// 报错退出（Renderer 构造校验器兜底执行器可解析性）。
 		// Phase 7 路线选路（2026-09-08 env→配置）：顶层 variant = "forward"(默认)/
 		// "deferred"/"offscreen"——后两者为内建 exclusive 图变体（覆盖文件 passes）
-		auto graphResult = compileGraphOrThrow("configs/render_graph.lua");
+		auto graphResult = compileGraphOrThrow(configPath("render_graph.lua").c_str());
 		const bool deferredMode = graphResult.deferredMode;
 		// 图来源/规模观测（排"配置没生效"类问题：pass 数与 configs/render_graph.lua 对账）
 		if (auto* logger = RLLogger::getInstance())

@@ -23,7 +23,11 @@ export struct WindowExtent {
 
 /**
  * 退出请求（registry context，eventSystem 在 QUIT/窗口关闭请求（CLOSE_REQUESTED）事件写入；
- * 帧循环判定。ESC 不处理——退出只走窗口级事件）
+ * 帧循环判定。ESC 不处理——退出只走窗口级事件）。
+ *
+ * **写者不止 eventSystem**：RPC `POST /quit` 也写本字段（自动化测试收尾——与用户
+ * 关窗走同一条干净退出路径，能拿到帧循环之后的 profiler 收口输出；SIGTERM 杀进程
+ * 打断 present/in-flight 且拿不到）。
  */
 export struct AppExit {
 	bool requested = false;

@@ -35,3 +35,6 @@ add_subdirectory("./logger")
 # 构建不再付工具链 ~14s 串行前缀。
 add_subdirectory(tools EXCLUDE_FROM_ALL)
 add_subdirectory(rgl)
+# 单元测试层（Phase 12 批 12.1）：纯函数/契约测试，无 GPU 无窗口。EXCLUDE_FROM_ALL
+# ——不进默认构建序列（测试不是引擎产物，AGENTS.md「rgl 不认识测试」），`just test` 显式构建。
+add_subdirectory(tests EXCLUDE_FROM_ALL)

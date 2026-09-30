@@ -1,14 +1,21 @@
 module;
 #include <sol/sol.hpp>
 #include <fmt/format.h>
-#include <SDL3/SDL_keyboard.h>  // camera_probe 单字母键名 → SDLK 键码（SDL3 字母键码 = ASCII 大写）
+#include <SDL3/SDL_keyboard.h>  // camera_probe 单字母键名 → SDLK 键码
+// ⚠️ SDL3 的字母键码是 **ASCII 小写连续块**：SDLK_A = 0x61 = 'a'（实测 SDL_keycode.h:108，
+// 不是大写 0x41）。旧注释写"= ASCII 大写"是错的，功能却一直正确——因为
+// camera_config_impl::keyNameToSdlKey 用 `SDLK_A + (c - 'A')` 把 'A'..'Z' 映射到
+// **连续的** 'a'..'z' 块（见该函数注释）。别把那个算式"修正"成 0x41 基准。
 module diagnostics:impl;
 
 import diagnostics;  // clang 不给 partition impl unit 隐式 import 主接口——必须显式
 import rlstd;
 import rllogger;
 import vkerror;
-import render_graph;  // kGBufferAttachments（dump_gbuf 越界闸门按表判界；render_graph 不依赖本模块，无环）
+import gbuffer_contract;  // kGBufferAttachments（dump_gbuf 越界闸门按表判界）。**刻意不 import
+	// render_graph**：表是纯 constexpr 数据，2026-09-30 抽到叶子模块 gbuffer_contract，
+	// 避免"配置解析器 → 渲染后端"这条反向依赖边（AGENTS.md 分层原则；也正是它一度
+	// 让本模块无法进单元测试——链上它就得链整个 Vulkan 栈）。
 
 namespace RGL {
 
@@ -166,7 +173,7 @@ static void readInputProbes(sol::table& root, DiagnosticsConfig& cfg) {
 		cfg.textureForceSize = static_cast<uint32_t>(
 			std::max<int64_t>(0, readI64("texture_force_size", 0).value_or(0)));
 		cfg.dumpGbuf = static_cast<int>(readI64("dump_gbuf", -1).value_or(-1));
-		constexpr int kMaxGbufChannel = static_cast<int>(kGBufferAttachments.size()) - 1;
+		constexpr int kMaxGbufChannel = kGBufferChannelCount - 1;
 		if (cfg.dumpGbuf > kMaxGbufChannel) {
 			if (logger)
 				logger->warn("diagnostics: dump_gbuf={} 超出 G-buffer 通道数（0..{}），已关闭",

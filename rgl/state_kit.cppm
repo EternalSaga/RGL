@@ -29,7 +29,11 @@ export class StateKit {
 		// 透明段状态（Phase 5）：不透明段之外的差异三项——不写深度 + 开 alpha 混合 +
 		// 背面剔除。cull 必要：关深度写后封闭网格（如 glTF 盒）的正反两面同屏各混合
 		// 一次 = 有效 alpha 翻倍（实测 0.25 → 1-(1-0.25)²=0.4375）；剔除背面后
-		// 每像素单层混合，alpha 语义正确（opaque 段保持 eNone——硬编码 cube 绕序未验证）
+		// 每像素单层混合，alpha 语义正确。
+		// opaque 段保持 eNone：**绕序已于批 12.1 核验**（tests/test_cube_geometry.cppm：
+		// 内建 cube 的法线朝内，从外面看是背面）。故本段 eBack 剔掉的是朝外面、
+		// 保留内部面——封闭网格轮廓与"单层混合"目标都仍达成，但**带纹理的透明体会
+		// 显示内侧**。glTF 资产绕序由外部数据决定，本段不因 cube 的绕序而改变语义。
 		transparentState.depthWrite = false;
 		transparentState.colorBlend = true;
 		transparentState.cullMode = vk::CullModeFlagBits::eBack;
