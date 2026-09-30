@@ -23,8 +23,9 @@ namespace {
 
 /**
  * 捕获回读每像素字节数（仅可能出现的格式：swapchain 候选 4B/像素系 + A2B10G10R10=4B +
- * HDR FP16=8B + G-buffer 词表 rgba32_sfloat=16B，其余 8bit×4/rg16×2 = 4B）。
- * @param f 捕获格式（swapchain format 或 G-buffer RT format）
+ * HDR FP16=8B + G-buffer 词表 rgba32_sfloat=16B + object_id 的 r32_uint=4B，
+ * 其余 8bit×4/rg16×2 = 4B）。
+ * @param f 捕获格式（swapchain format 或 G-buffer / 具名附件 RT format）
  * @return 每像素字节数（4 / 8 / 16）
  */
 uint32_t captureBpp(vk::Format f) {
@@ -76,7 +77,7 @@ void FrameCapturer::record(vk::raii::CommandBuffer& cmd, VkImage swapchainImage,
 	// ⑪.5 帧内捕获（llm_debug 回读，frame_capture 契约）：请求帧在 presentTransition
 	// 前插回读拷贝（布局推进语义见接口 record 注释）。
 	// acquire 超时跳帧的 return 在本段之前 = 请求保持 pending 至真正录制的帧。
-	if (captureRequest == -2)
+	if (captureRequest == -2 && captureRequestName.empty())
 		return;
 	auto slotOfName = [&](const std::string& n) -> RgAttachmentSlot {
 		for (uint32_t s = 0; s < graph.attachments.size(); ++s)
@@ -93,7 +94,8 @@ void FrameCapturer::record(vk::raii::CommandBuffer& cmd, VkImage swapchainImage,
 		dep.setImageMemoryBarriers(b);
 		cmd.pipelineBarrier2(dep);
 	};
-	auto copyOut = [&](VkImage image, uint32_t w, uint32_t h, vk::Format format, int channel) {
+	auto copyOut = [&](VkImage image, uint32_t w, uint32_t h, vk::Format format, int channel,
+						  std::string attachmentName) {
 		const uint32_t bpp = captureBpp(format);
 		const VkDeviceSize bytes = static_cast<VkDeviceSize>(w) * h * bpp;
 		if (!ensureCaptureStaging(bytes))
@@ -105,7 +107,8 @@ void FrameCapturer::record(vk::raii::CommandBuffer& cmd, VkImage swapchainImage,
 		region.imageExtent = {w, h, 1};
 		::vkCmdCopyImageToBuffer(*cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 			*captureStaging, 1, &region);
-		captureInFlight = FrameCapture{w, h, format, channel, bytes, {}};
+		captureInFlight = FrameCapture{.width = w, .height = h, .format = format,
+			.gbufChannel = channel, .attachmentName = attachmentName, .bytes = bytes, .pixels = {}};
 		captureArmed = true;
 		return true;
 	};
@@ -121,7 +124,7 @@ void FrameCapturer::record(vk::raii::CommandBuffer& cmd, VkImage swapchainImage,
 					vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderRead,
 					vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead);
 				if (copyOut(rt->image.image, rt->extent.width, rt->extent.height,
-				        rt->format, captureRequest))
+				        rt->format, captureRequest, {}))
 					barrier(rt->image.image, vk::ImageLayout::eTransferSrcOptimal, from,
 						vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead,
 						vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderRead);
@@ -141,10 +144,37 @@ void FrameCapturer::record(vk::raii::CommandBuffer& cmd, VkImage swapchainImage,
 			            : vk::AccessFlagBits2::eColorAttachmentWrite,
 			vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead);
 		if (copyOut(swapchainImage, swapchainExtent.width, swapchainExtent.height,
-		        swapchainFormat, -1))
+		        swapchainFormat, -1, {}))
 			layouts[swapchainSlot] = vk::ImageLayout::eTransferSrcOptimal;
 	};
-	if (captureRequest >= 0)
+	// 具名附件分支（captureRequestName 非空，批 12.2）：QA 层的 object_id 全分辨率 dump。
+	// 与 G-buffer 分支的差别在**依赖覆盖**——G-buffer 附件帧末必被 light pass 采样过
+	// （src = 着色器读），而 object_id 的最后写者是 picking pass 的**颜色附件写**且
+	// 无人采样。通用具名路径面对的是"任意附件"，不能假定它一定被采样过，故取两个
+	// stage/access 的并集（调试期一次性成本可忽略，换掉一整类 WAW 漏声明）。
+	// 追踪表原值进出（转回 from）——本路径不接管布局，下游按追踪值继续推导。
+	auto recordNamedAttachment = [&] {
+		const std::string name = captureRequestName;
+		const auto slot = slotOfName(name);
+		if (auto* rt = slot != kRgNoAttachment ? rts.find(name) : nullptr) {
+			const auto from = layouts[slot];
+			barrier(rt->image.image, from, vk::ImageLayout::eTransferSrcOptimal,
+				vk::PipelineStageFlagBits2::eColorAttachmentOutput
+					| vk::PipelineStageFlagBits2::eFragmentShader,
+				vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eShaderRead,
+				vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead);
+			if (copyOut(rt->image.image, rt->extent.width, rt->extent.height, rt->format, -1, name))
+				barrier(rt->image.image, vk::ImageLayout::eTransferSrcOptimal, from,
+					vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead,
+					vk::PipelineStageFlagBits2::eColorAttachmentOutput
+						| vk::PipelineStageFlagBits2::eFragmentShader,
+					vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eShaderRead);
+		} else if (auto logger = RLLogger::getInstance())
+			logger->warn("frame capture: 附件 '{}' 不存在（未装饰的图 / 门未开？）", name);
+	};
+	if (!captureRequestName.empty())
+		recordNamedAttachment();
+	else if (captureRequest >= 0)
 		recordGBuffer();
 	else if (swapchainSlot != kRgNoAttachment)
 		recordSwapchain();

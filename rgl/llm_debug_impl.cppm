@@ -141,10 +141,29 @@ void convRgba32Sfloat(const uint8_t* src, uint8_t* out, size_t px) {
 }
 
 /**
+ * R32_UINT（object_id，Phase 12 批 12.2）→ RGBA8：raw u32 像素 id **无损**编进
+ * RGB24（小端字节序直接取前 3 字节，alpha 恒 255），不做 gamma / clamp。
+ *
+ * 为什么要有这个编码而不是让 QA 直接读裸 u32：回读产物唯一的落盘出口是 PNG
+ * （`writeCapturePng`），而 QA 层拿到图后要能**逐像素精确解码** id——"这个 primitive
+ * 覆盖了多少像素"是图像断言的锚点，容不得有损。
+ *
+ * **24 位上限**：id ≥ 2²⁴ 会静默回绕（高位丢弃）。当前图最大 objectIndex 来自
+ * 场景 primitive 数（bistro 1591），离 1677 万极远；但若将来出现百万级 primitive 的
+ * 场景，这条编码就不再有效——届时改走多图分片或 16bit 双图，不要在这里加"截断"分支。
+ */
+void convR32Uint(const uint8_t* src, uint8_t* out, size_t px) {
+	for (size_t i = 0; i < px; ++i)
+		std::memcpy(out + i * 4, src + i * 4, 3);  // R=id[7:0] G=[15:8] B=[23:16]
+}
+
+/**
  * 回读原格式 → RGBA8（行紧凑 stride 4；alpha 恒 255，输出初值即 255 白）。
  * gbufRaw = dump_gbuf 诊断直读（无 gamma）。覆盖 = swapchain 候选格式
  *（sdl3window selectFormat）+ G-buffer 词表 4 格式（albedo/metalRough 与
- * srgb/unorm 用例共用，normal rg16_snorm / position rgba32_sfloat 专用用例）；
+ * srgb/unorm 用例共用，normal rg16_snorm / position rgba32_sfloat 专用用例）+
+ * object_id 的 r32_uint（批 12.2 QA 锚点源；**与 gbufRaw 无关**——id 是编码不是颜色，
+ * 既不过 gamma 也不 clamp，见 convR32Uint）；
  * 表外 = 返回空（调用方报错，不静默出图）。逐格式转换见上方 conv* 辅助。
  * @param cap 本帧捕获产物（width/height/format/pixels 原格式行紧凑）
  * @param gbufRaw true = dump_gbuf 直读通道（线性 clamp，不做 sRGB 编码）
@@ -179,6 +198,9 @@ std::vector<uint8_t> toRgba8(const Renderer::FrameCapture& cap, bool gbufRaw) {
 		case vk::Format::eR32G32B32A32Sfloat:  // GB position：世界坐标 clamp 显示
 			convRgba32Sfloat(src, out.data(), px);
 			return out;
+		case vk::Format::eR32Uint:  // object_id（批 12.2 QA 锚点源）：raw id 无损编进 RGB24
+			convR32Uint(src, out.data(), px);
+			return out;
 		default:
 			return {};
 	}
@@ -187,8 +209,8 @@ std::vector<uint8_t> toRgba8(const Renderer::FrameCapture& cap, bool gbufRaw) {
 }  // namespace
 
 /** 实现流水（语义/契约见接口声明）：takeFrameCapture（无产物 = Error）→
- * toRgba8（gbufRaw 由 gbufChannel 判定）→ 路径解析（gbuffer_N.png / cfg.file /
- * 时间戳名）→ create_directories + image_codec::writePng → 返回绝对路径。 */
+ * toRgba8（gbufRaw 由 gbufChannel 判定）→ 路径解析（gbuffer_N.png / attach_<名>.png /
+ * cfg.file / 时间戳名）→ create_directories + image_codec::writePng → 返回绝对路径。 */
 std::expected<std::string, Error> writeCapturePng(RGL::Renderer& renderer, const LlmDebugConfig& cfg) {
 	auto* logger = RLLogger::getInstance();
 	auto cap = renderer.takeFrameCapture();
@@ -206,12 +228,16 @@ std::expected<std::string, Error> writeCapturePng(RGL::Renderer& renderer, const
 	std::filesystem::path relPath;
 	if (gbufRaw)
 		relPath = fmt::format("screenshots/gbuffer_{}.png", cap->gbufChannel);
-	else if (cfg.file.empty())
+	else if (!cfg.file.empty())
+		relPath = cfg.file;  // 显式路径优先（RPC 永远给；命名附件的默认名只是兜底）
+	else if (!cap->attachmentName.empty())
+		// 具名附件（批 12.2 QA）：object_id 走这条。llm_debug 一次性截图无 attachment，
+		// 故此分支实际只服务"没给 file 的具名捕获"。
+		relPath = fmt::format("screenshots/attach_{}.png", cap->attachmentName);
+	else
 		relPath = fmt::format("screenshots/llm_{}.png",
 			std::chrono::duration_cast<std::chrono::seconds>(
 				std::chrono::system_clock::now().time_since_epoch()).count());
-	else
-		relPath = cfg.file;
 	std::error_code ec;
 	std::filesystem::create_directories(relPath.parent_path(), ec);
 	if (!writePng(relPath.string(), cap->width, cap->height, rgba.data())) {

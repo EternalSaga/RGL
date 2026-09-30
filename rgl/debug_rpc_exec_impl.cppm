@@ -281,7 +281,8 @@ RpcOutcome rpcHandleParam(RpcWiring& w, const nlohmann::json& body) {
  * 解析全在 `requestFrameCapture` 与 responder 移交**之前**完成 → 后续抛异常
  * 仍由 rpcDispatch 转 400，不会留下半提交状态。
  * @param w 装配态
- * @param body 请求体对象（`file?` 相对路径、`gbuf?` G-buffer 通道）
+ * @param body 请求体对象（`file?` 相对路径、`gbuf?` G-buffer 通道、`attachment?` 附件名
+ *   ——后两者互斥，同时给 = 400）
  * @param responder 跨帧响应句柄（移交给 w.pendingShot）
  */
 void rpcHandleShot(RpcWiring& w, const nlohmann::json& body, RpcResponder responder) {
@@ -303,6 +304,25 @@ void rpcHandleShot(RpcWiring& w, const nlohmann::json& body, RpcResponder respon
 	int gbuf = -1;
 	if (body.contains("gbuf"))
 		gbuf = body.at("gbuf").get<int>();
+	// attachment（批 12.2）：按名捕获，QA 层取 object_id 全分辨率。与 gbuf 互斥——
+	// 两者都是"回读哪个源"，同时给必是客户端 bug，静默取一个会拍出用户没要的那张图。
+	if (body.contains("attachment")) {
+		if (body.contains("gbuf")) {
+			rpcReject(responder, 400, "'attachment' and 'gbuf' are mutually exclusive");
+			return;
+		}
+		const auto name = body.at("attachment").get<std::string>();
+		if (name.empty()) {
+			rpcReject(responder, 400, "'attachment' must be a non-empty name");
+			return;
+		}
+		if (file.empty())
+			file = fmt::format("screenshots/attach_{}.png", name);
+		w.renderer.requestFrameCapture(name);
+		w.pendingShotFile = std::move(file);
+		w.pendingShot = std::move(responder);
+		return;
+	}
 	if (file.empty())
 		file = fmt::format("screenshots/rpc_{}.png", ++w.shotSeq);
 

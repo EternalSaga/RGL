@@ -22,6 +22,7 @@ export struct FrameCapture {
 	uint32_t height = 0;
 	vk::Format format = vk::Format::eUndefined;
 	int gbufChannel = -1;          // >=0 = G-buffer 直读（dump_gbuf）；-1 = swapchain 后缓冲
+	std::string attachmentName;    // 非空 = 按附件名捕获（object_id）；空 = 后缓冲 / G-buffer
 	VkDeviceSize bytes = 0;
 	std::vector<uint8_t> pixels;   // 原格式回读（行紧凑），消费方转 RGBA8
 };
@@ -53,13 +54,48 @@ export class FrameCapturer {
 	 * @param gbufChannel -1 = swapchain 后缓冲；>=0 = G-buffer 通道号（dump_gbuf，
 	 *   deferred 图专属，前向图无对应 RT 时跳过并留 warn）
 	 */
-	void request(int gbufChannel = -1) { captureRequest = gbufChannel; }
+	void request(int gbufChannel = -1) {
+		captureRequest = gbufChannel;
+		captureRequestName.clear();  // 覆盖互斥：与 requestAttachment 二者只留其一
+	}
+
+	/**
+	 * drawFrame 前调用（**按附件名**捕获，Phase 12 批 12.2）：目前唯一消费方是
+	 * 自动化 QA 层要的 `object_id`（picking pass 产物，r32_uint）——把 picking 的
+	 * 1-texel 回读扩成**全分辨率** dump，让图像断言有可精确解码的锚点（"该 primitive
+	 * 覆盖了多少像素"），不必依赖人眼或机器学习。
+	 *
+	 * 与 `request` 互斥且**覆盖**语义一致（同帧连取最后一个）：置本请求时清掉
+	 * `request` 的通道选择，反之亦然。
+	 *
+	 * 布局安全性：record 点在 `pickingRecord` **之前**（vkrenderer_passrec ⑪.5 vs
+	 * picking 段），故 object_id 此刻仍是 picking pass 写完的
+	 * `ColorAttachmentOptimal`，source 依赖取"颜色附件写"。摘录
+	 * `PickingService::record` 留下的 `TransferSrcOptimal` 不会被本路径看到。
+	 * @param name 编译后图里的附件名（如 `PickingService` 的 `kObjectIdAttachmentName`）；
+	 *   图中无此附件 / RT 未建时 record 期 warn 一次并跳过（不静默出图）
+	 */
+	void requestAttachment(std::string_view name) {
+		captureRequestName = name;
+		captureRequest = -2;
+	}
 
 	/**
 	 * drawFrame 后调用（fence 已在 collect 内等待）。
+	 *
+	 * **取走即清请求**（Phase 12 批 12.2 修的既有缺陷）：此前 `captureRequest` 挂上后
+	 * 永不复位，`record` 每帧都录一条回读。llm_debug 路径靠"每帧重新 request"（ecs
+	 * `requestBeforeDraw`）且截完即退，把这个问题盖住了；RPC `/shot` 让进程继续跑，
+	 * 于是**第一张之后每帧都在做全分辨率回读**（1280×720 r32_uint ≈ 3.7MB/帧）。
+	 * 清在 take 而非 record：record 未命中（acquire 跳帧）时请求须保持 pending 重试。
+	 * `dump_gbuf` 的连续直读语义不受影响——它每帧重新 request。
 	 * @return 本帧捕获产物；空 = 本帧无捕获产物
 	 */
-	std::optional<FrameCapture> take() { return std::move(captureResult); }
+	std::optional<FrameCapture> take() {
+		captureRequest = -2;
+		captureRequestName.clear();
+		return std::move(captureResult);
+	}
 
 	/**
 	 * 本帧是否已产出捕获（acquire 超时跳帧时 drawFrame 不录拷贝、请求保持 pending，
@@ -107,6 +143,7 @@ export class FrameCapturer {
 	const RGL::CompiledRenderGraph& graph;
 	uint32_t swapchainSlot = kRgNoAttachment;  // 构造期从图定位（捕获读写其布局追踪值）
 	int captureRequest = -2;                    // -2 = 无请求；-1 = 后缓冲；>=0 = GB 通道号
+	std::string captureRequestName;             // 非空 = 按附件名捕获（优先于 captureRequest）
 	bool captureArmed = false;                  // 本请求帧已录拷贝（submit 后等待搬移）
 	FrameCapture captureInFlight;               // 录制期元数据（bytes/extent/format/channel）
 	std::optional<FrameCapture> captureResult;  // take() 消费

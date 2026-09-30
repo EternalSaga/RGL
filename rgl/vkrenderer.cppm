@@ -132,6 +132,14 @@ export class Renderer {
 	 */
 	void requestFrameCapture(int gbufChannel = -1) { capturer.request(gbufChannel); }
 	/**
+	 * drawFrame 前调用：请求**按附件名**回读（转发 FrameCapturer::requestAttachment）。
+	 * Phase 12 批 12.2 为 QA 层加的出口——目前唯一消费方是 `object_id` 全分辨率
+	 * dump（picking 的 1-texel 回读不够图像断言用）。与 requestFrameCapture(int)
+	 * 互斥且覆盖：谁后调谁生效。
+	 * @param name 编译后图里的附件名（如 `kObjectIdAttachmentName`）
+	 */
+	void requestFrameCapture(std::string_view name) { capturer.requestAttachment(name); }
+	/**
 	 * drawFrame 后调用（fence 已在收口阶段等待）。
 	 * @return 本帧捕获产物；空 = 本帧无捕获产物
 	 */
