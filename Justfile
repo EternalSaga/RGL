@@ -101,13 +101,55 @@ build:
     @python -c "import os,sys,subprocess; b='{{ BUILD }}'; \
         (subprocess.call(['cmake','--build',b,'--parallel','{{ NPROC }}']) if os.path.exists(os.path.join(b,'build.ninja')) else (print('Error: Run just config first.'), sys.exit(1)))"
 
-# 单元测试（tests/，批 12.1）：纯函数/契约层，**无 GPU 无窗口**，毫秒级。
-# 被测模块来自 rlcore 静态库（rgl/CMakeLists.txt 的"无 Vulkan 依赖闭包"），与引擎同
-# 一次编译产物。tests 是 EXCLUDE_FROM_ALL 的子目录，故这里要显式构建其 target。
+# 单元测试（tests/）：**默认只跑无设备子集**（无 GPU、无窗口、毫秒级）。
+#
+# 批 12.2d 起链接面是全部四层（rlbase/rlscene/rlframe + rlgfx），因为
+# **「import rlvk」是编译期依赖、「需要一个 VkDevice」才是运行期依赖**——
+# render_graph / state_kit 都 import rlvk 却一个设备都不碰，没理由不让它们进
+# 无 GPU 子集。分流靠 **doctest 测试套件**（不是链接面、也不是 tag：本项目
+# doctest 2.5.3 的 TEST_CASE 宏只接受一个参数，tag 形态不存在）：
+#   设备级用例写在 TEST_SUITE("gpu") { … } 里 → 本命令自动排除
+# 代价（明确记录）：测试二进制现在**链接**了 Vulkan/SDL3/VMA，nm 不再为 0。
+# tests 是 EXCLUDE_FROM_ALL 的子目录，故这里要显式构建其 target。
 # 透传参数给 doctest：just test -- --test-case="*级联*" / -s（打印成功断言）
 test *ARGS="":
     @cmake --build {{ BUILD }} --target rgl_tests
+    {{ BUILD }}/tests/rgl_tests --test-suite-exclude=gpu {{ ARGS }}
+
+# 全部单元测试（含 gpu 套件：真设备 + VK_LAYER_KHRONOS_validation）。
+# **无设备时这些用例是 FAIL 不是 SKIP**——静默跳过 = 假绿，正是本项目反复吃亏的
+# 「上次跑过」≠「这次验的是同一组输入」。要验的是回读链路本身，没设备就没有答案。
+test-all *ARGS="":
+    @cmake --build {{ BUILD }} --target rgl_tests
     {{ BUILD }}/tests/rgl_tests {{ ARGS }}
+
+# 只跑设备级用例（回读原语层；改帧捕获 / 附件回读 / 格式编码后用）
+test-gpu *ARGS="":
+    @cmake --build {{ BUILD }} --target rgl_tests
+    {{ BUILD }}/tests/rgl_tests --test-suite=gpu {{ ARGS }}
+
+# 闭式解探针（批 12.2d）：算「某个像素**该**是多少」，与实机渲染逐字节对拍。
+# 不需要基线图像，也不比 SSIM——它抓的是整条链的数值系统性偏移。
+#
+# 引擎侧**零改动**：链上每一项都已有配置门（env.intensity / skybox / light.ambient /
+# ao.strength / exposure / diagnostics.shadowPass），全套见
+# qa/configs/analytic/scene.lua 的逐项注释。原计划加的 `analytic = true` 开关
+# 经实测判定为多余，理由写在 tools/analytic_ref.py 头部。
+analytic:
+    @cmake --build {{ BUILD }} --target rgl
+    @python tools/qa_scenes.py --out {{ BUILD }}/rgl/models --only cornell_box
+    @python -c "import os,subprocess,sys; \
+        b='{{ BUILD }}/rgl'; d='{{ justfile_directory() }}/qa/configs/analytic'; \
+        exe='rgl.exe' if os.name=='nt' else 'rgl'; \
+        os.chdir(b); os.environ['RGL_CONFIG_DIR']=os.path.abspath(d); \
+        subprocess.run([os.path.join('.', exe)], check=False, timeout=120)"
+    @python tools/analytic_ref.py --probe {{ BUILD }}/rgl/screenshots/analytic_probe.png 640 360 \
+        --light -0.642788 0.0 0.766044
+
+# 闭式解参考实现自检（纯 Python，毫秒级，不跑 GPU）：矩阵约定 + 退化点手算对账 +
+# sRGB 拐点连续 + ACES 形状 + PNG 读路径 5 种 filter 往返
+analytic-selftest:
+    @python tools/analytic_ref.py --selftest
 
 
 # 重跑 7 条反射管线（改动 shaders/*.slang / *_schema.lua / tools/templates /

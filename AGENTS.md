@@ -30,7 +30,10 @@ just reflect             # 重跑 7 条反射管线（改动 shader 契约/schem
 just checks / doc-check / style-check [--strict]  # 源码检查统一入口（tools/checks/main.py，--only style|doc；每次 just build 已随 source_checks 目标跑、只警告；红线清单见 skill rgl-new-module）
 just run                 # 运行
 just run-igpu / run-dgpu / run-intel   # 强制核显 / NVIDIA prime 独显 / Intel anv
-just test                # 单元测试（tests/，**无 GPU 无窗口**，毫秒级；先构建 rgl_tests 再跑）
+just test                # 单元测试（tests/，**无 GPU 无窗口**，毫秒级；排除 gpu 套件）
+just test-all / test-gpu # 含设备级原语用例（要真设备 + VVL；无设备**FAIL 不 SKIP**）
+just analytic            # 闭式解探针：算像素「该是多少」并与实机截图逐字节对拍（要 GPU）
+just analytic-selftest   # 闭式解参考实现自检（纯 Python，毫秒级，不跑 GPU）
 just clean / clean-all / all           # 增量清理 / 删 build 目录 / clean-all+build-release
 ```
 
@@ -50,12 +53,30 @@ CMake 无独立构建目录——必须从根目录构建（`cmake -B build -S .
 
 ## 测试体系（Phase 12 批 12.1 起）
 
-**两层，边界按"要不要 GPU"划**：
+**三层，边界按"要不要 GPU / 要不要窗口"划**：
 
 | 层 | 位置 | 覆盖 | 入口 |
 |---|---|---|---|
-| 单元测试层 | `tests/`（doctest，C++20 modules） | **纯函数/契约**：阴影级联几何、相机数学、glTF 解析、四份配置 loader、反射字节布局、内建 cube 几何。**无 GPU 无窗口，毫秒级** | `just test` |
-| 进程级集成层 | `qa/`（**规划中，批 12.2+**） | 图像/场景级：程序化小场景 + RPC 驱动 + OpenCV 量化 | 尚未落地 |
+| 单元测试层 | `tests/`（doctest，C++20 modules） | **纯函数/契约**：阴影级联几何、相机数学、glTF 解析、四份配置 loader、反射字节布局、内建 cube 几何、**`state_kit` 九段状态表**、**`render_graph` 编译（校验/barrier/装饰）**。**无 GPU 无窗口，毫秒级** | `just test` |
+| 设备原语层 | `tests/` 的 `TEST_SUITE("gpu")` | **后端原语 golden**：clear 色逐像素、R32_UINT 魔数整数回环、UNORM 量化取整（0.5→128）、image↔buffer 逐字节保真 + 行序 | `just test-all` / `just test-gpu` |
+| 闭式解探针 | `tools/analytic_ref.py` + `qa/configs/analytic/` | 「某像素**该**是多少」的独立第二实现（GGX + ACES + 硬件 sRGB 逐式复刻），与实机截图逐字节对拍。**不需要基线图像** | `just analytic` / `just analytic-selftest` |
+| 进程级集成层 | `qa/`（批 12.2 起**部分落地**：`configs/analytic/` 探针配置） | 图像/场景级：程序化小场景 + RPC 驱动 + OpenCV 量化 | 场景生成 `tools/qa_scenes.py`；量化 harness 未落地 |
+
+### 分流靠 doctest **测试套件**，不是 tag 也不是链接面（批 12.2d）
+
+本项目 doctest 2.5.3 的 `TEST_CASE` 宏**只接受一个参数**——tag 形态在该构建里不存在
+（`grep -E '^#define TEST_CASE' build/vcpkg_installed/*/include/doctest/doctest.h`
+实测只有 `TEST_CASE(name)`）。设备级用例写进 `TEST_SUITE("gpu") { … }`，靠一等公民的
+套件过滤分流：`just test` = `--test-suite-exclude=gpu`，`just test-all` = 全跑。
+
+**`rgl_tests` 现在链全部四层**（`rlbase rlgfx rlscene rlframe` + Vulkan/VMA/SDL3/imgui）。
+为什么不只链 `rlbase`（旧状态，当时 `nm` 里 Vulkan 符号为 0）：
+**「import rlvk」是编译期依赖，「需要一个 VkDevice」才是运行期依赖**，两者不等价。
+`render_graph` / `state_kit` 都 import rlvk（要 `vk::Format` 等类型）却一个设备都不碰，
+把它们挡在门外等于"因为类型依赖里有 Vulkan 所以不许测"——那正是 12.1→12.2c 一路在纠正的
+混淆。**代价如实记录**：测试二进制现在链接了 Vulkan，`nm` 不再是 0；保住的是**运行期**
+性质（默认子集一条设备路径都不碰，仍是毫秒级）。
+设备级用例在无设备机器上**必须 FAIL 不 SKIP**——静默跳过 = 假绿。
 
 ### 引擎四库分层（rlstd/rllogger 之后新增四个库）
 
@@ -76,8 +97,12 @@ CMake 无独立构建目录——必须从根目录构建（`cmake -B build -S .
 | `rlframe` | frame_session/frame_capture/picking/cull_driver/gpu_cull/gpu_canary/present_timing/vk_indirect_commands/vk_renderer/imgui_layer/debug_rpc_exec/llm_debug/shader_registry/shader_hot_reload/ecs/param_pages | 全部 |
 | `rgl` | `main` `main:impl` `main:scene` —— 含 `main()`，必须留可执行文件 | — |
 
-依赖只向下，出现逆向 import 立刻链接失败。清单在 `rgl/CMakeLists.txt` 的
-`RGL_{BASE,GFX,SCENE,FRAME,APP}_MODULE_SOURCES`。
+依赖只向下，出现逆向 import 立刻链接失败。**这条现在机器可验**：
+`tools/checks/rules_layers.py` 以那五份清单为唯一真相源，扫全部 `.cppm`（**含分区实现
+单元**）的 import 边，报「低层 import 高层」为 error 级警告；清单名对不上导致规则
+可能静默失效时也报 error（失效不出声 = 「零警告」会被读成「分层干净」）。
+旧问法「这个模块 import 了 Vulkan 吗」已废——它只盯一个名字，既误伤 `render_graph`
+这类不碰设备的模块，又抓不到「低层 import 了同层外的其它模块」这种真正的越界。
 
 **新增模块的流程**：加进职责归属正确的那份清单 → configure 期**归属完整性闸门**会核对
 「磁盘上每个 .cppm 恰好登记一次」，漏登记即 `FATAL_ERROR` 点名报错（刻意不用「GLOB 后减掉
@@ -95,10 +120,6 @@ CMake 无独立构建目录——必须从根目录构建（`cmake -B build -S .
   「零逆向边」是假的——四库划分第一次尝试就被它坑了，漏掉 `param_pages:impl → ecs`，
   编译期才炸。正确口径见 `rgl/CMakeLists.txt` 头注释（110 模块 / 790 条边，从源码正则直抽）。
 
-**测试二进制**：`rgl_tests` 链 `rlbase`（约 1.9MB，主要是 sol2/lua 配置 loader + spdlog 静态
-链入），**Vulkan 符号 0**（nm 实测）——静态库按需链接，其余库的 Vulkan 模块不进二进制。
-故 `just test` 保持「无 GPU 无窗口、毫秒级」。
-
 ### 写测试的硬纪律（从 ~90 条历史 bug 换来的）
 
 - **阳性锚点**：每条断言先问"如果这段代码从未生效，这条断言会绿吗"。会绿 = 无效断言，必须重写。
@@ -115,6 +136,20 @@ CMake 无独立构建目录——必须从根目录构建（`cmake -B build -S .
   support function 错）逐个确认测试变红——"测试通过"不等于"测试有效"。
 - 单测结果以 `just test` 为准（它先构建再跑）；**直接跑 `build/tests/rgl_tests` 可能拿到陈旧二进制**
   （子 agent 委派时踩过：改完测试文件没重建就报"全通过"）。
+- **断言要照源码写，不照记忆写**（批 12.2d：一轮测试里写出过 10 处「我以为的行为」，全部
+  是错的）：`shadow` 段并没有把 `colorWriteMask` 清零（它压根不挂颜色附件）；`RgUsage` 不叫
+  `shaderRead` 而叫 `sampleRead`；`resolveRgFormat` 的 fallback **只服务 `"inherit"`**，未知名
+  返回 `eUndefined`；`decorateShadowPass` **无条件返回 true**（没有 mapSize 守卫）；ACES 的
+  「输出增幅小于输入倍数」根本不成立（filmic 曲线增益先升后降）。**先读实现再写期望**，
+  否则写出来的是「测试在教引擎怎么改」而不是「测试在验引擎做了什么」。
+- **判据工具自己要有自检**：闭式解探针的 PNG 读图器配了「5 种 filter 各编一行 → 读回 →
+  逐像素比对」的往返自检。不测这段，一旦编码器写出非 0 filter，读图器会静默读错像素，
+  而"闭式解不符"会被一路归因到着色链上——那是最贵的一种假线索。
+- **modules 下 `std::initializer_list` 不从 `import` 带进来**：要用 `for (x : {a, b})` 或
+  `extent = {w,h,1}`，本 TU 的 GMF 里**必须有一个真 STL 头**（如 `#include <initializer_list>`）。
+  只 include doctest 不够。症状很有欺骗性：花括号推不出类型后退化成 void，报
+  「ambiguous with void」或「initializer_list was not found」，离真因两跳。
+  同目录用 `<cmath>` 的测试文件是**巧合受益者**，不是范例。
 
 ## 运行要点
 
