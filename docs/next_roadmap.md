@@ -286,6 +286,14 @@ Phase 11：阴影（大特性，一口气；风险分层 = CSM 承诺交付 + HF
      - HFTS 原文（Wyman SIGGRAPH 2016，cwyman.org/abstracts/sig2016_hfts.pdf）+ Story 2015 原文
      - github.com/strexicious/izb-on（实验参考，非生产级）
     ↓
+    ↓
+Phase 12：测试体系（**补立计划** 2026-09-30，[phase12_plan.md](phase12_plan.md)）——
+   12.1–12.3 滚动落地：tests/ 单测层（113 用例无 GPU 毫秒级）+ 设备原语层 +
+   闭式解探针 + **imgqa**（C++，区域归因判据：objectID 反解可见 piece / 闭式解逐面
+   预测 / 开关影响域域外恰为 0；反模式登记 ssim 等；排查渲染问题默认起手）。
+   剩余按缺口清单排：12.3b 闭式解收单源+switch 首战 / 12.3c 变异测试晋升 /
+   12.4 三机跨机（字节锚点每机登记制）/ 12.5 qa_scenes C++ 重写 / 12.6 收尾。
+    ↓
 远期候选：完整 IBL（prefiltered + BRDF LUT）、MASK alphaTest、OIT（imgui 已升格为 Phase 10，2026-09-27）
 ```
 
