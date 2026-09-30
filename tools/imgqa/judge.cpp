@@ -41,6 +41,14 @@ const std::vector<JudgmentInfo>& registeredJudgments()
         {"dead-branch-scan",
             "无容差：恒等即恒等。「两个本该不同的量恒等 = 其中一个分支从未生效」。",
             {"调试纪律：恒等式日志是指纹"}, false},
+        {"determinism",
+            "无容差：同配置重跑必须逐位相同。任何差异（未初始化内存、同步时序、顺序抖动）"
+            "都会让一切「域外恰为 0」判据失去意义——它是域判据的前置，不是另一条域判据。",
+            {"AGENTS.md 测量纪律：单实例串行（并行双实例曾污染帧率测量）"}, false},
+        {"probe-pixel",
+            "±2 LSB：ACES 多项式 float64 转录 vs 着色器 float32 + 8bit 量化取整"
+            "（沿用 12.2d-c 实机对拍实测）；再大就该当失败看待，不能靠放宽阈值混过去。",
+            {"闭式解探针实测零误差（批 12.2d-c，analytic_ref.py 时代）"}, false},
     };
     return kAll;
 }
@@ -53,10 +61,32 @@ const JudgmentInfo& info(const char* name)
             return j;
     throw std::runtime_error(std::string("判据未注册: ") + name);
 }
-Verdict mk(const char* name, bool ok, std::string observed)
+}  // namespace
+
+Verdict verdictFor(const char* name, bool ok, std::string observed)
 {
     const auto& j = info(name);
     return Verdict{name, ok, std::move(observed), j.whyTol, j.guards, j.promoted};
+}
+
+namespace {
+/// 任一通道不同的 8UC1 掩码。**不要**用 cv::reduce(axis=0) 合并通道——reduce 对多
+/// 通道输入按通道独立归约、输出仍是多通道，countNonZero 直接断言 cn==1 炸（switch
+/// 判据首战抓到，此前零实战）。
+cv::Mat anyChannelDiff(const cv::Mat& a, const cv::Mat& b)
+{
+    cv::Mat d;
+    cv::compare(a, b, d, cv::CMP_NE);
+    std::vector<cv::Mat> chs;
+    cv::split(d, chs);
+    cv::Mat any = chs[0];
+    for (size_t i = 1; i < chs.size(); ++i)
+        cv::bitwise_or(any, chs[i], any);
+    return any;
+}
+Verdict mk(const char* name, bool ok, std::string observed)
+{
+    return verdictFor(name, ok, std::move(observed));
 }
 }  // namespace
 
@@ -148,10 +178,7 @@ Verdict judgeSwitchDomain(const Frame& base, const Frame& alt, const cv::Mat& al
 {
     // 「开关对拍」强化版。弱版只问 on/off 是不是只变暗，5a-7 的恒 0 伪影同时骗过它和
     // 稳定性对拍——弱版没约束变化的**位置**。本判据约束位置：域外任何一位不同 = 旁路泄漏。
-    cv::Mat diffMask;
-    cv::compare(base.bgr, alt.bgr, diffMask, cv::CMP_NE);
-    cv::Mat anyDiff;
-    cv::reduce(diffMask, anyDiff, 0, cv::REDUCE_MAX, CV_8U);  // 任一通道不同
+    cv::Mat anyDiff = anyChannelDiff(base.bgr, alt.bgr);
     cv::Mat outside, inside;
     cv::bitwise_and(anyDiff, ~allowed, outside);
     cv::bitwise_and(anyDiff, allowed, inside);
@@ -165,18 +192,33 @@ Verdict judgeSwitchDomain(const Frame& base, const Frame& alt, const cv::Mat& al
 
 Verdict judgeDeadBranch(const Frame& base, const Frame& alt, const cv::Mat& mask,
     const std::string& label)
-{
+{    // 对偶于 switch-impact-domain：那条管「不该变的地方没变」，这条管「该变的地方
+    // 没变」。两条合起来才堵住「0 差异」的两种解释（没影响 vs 没接上）。
     // 对偶于 switch-impact-domain：那条管「不该变的地方没变」，这条管「该变的地方
     // 没变」。两条合起来才堵住「0 差异」的两种解释（没影响 vs 没接上）。
-    cv::Mat diffMask, inMask;
-    cv::compare(base.bgr, alt.bgr, diffMask, cv::CMP_NE);
-    cv::Mat anyDiff;
-    cv::reduce(diffMask, anyDiff, 0, cv::REDUCE_MAX, CV_8U);
-    cv::bitwise_and(anyDiff, mask, inMask);
+    cv::Mat inMask;
+    cv::bitwise_and(anyChannelDiff(base.bgr, alt.bgr), mask, inMask);
     const bool same = cv::countNonZero(inMask) == 0;
     return mk("dead-branch-scan", !same,
         label + ": 区域 " + std::to_string(cv::countNonZero(mask)) + + "px 两次采集"
             + (same ? "完全相同 ← 该改动从未生效" : "不同"));
+}
+
+Verdict judgeDeterminism(const Frame& a, const Frame& b)
+{
+    // 前置判据：同配置两次采集必须逐位相同（颜色面 + id 面都查——id 抖了区域统计
+    // 一样完蛋）。尺寸不等直接算失败，不玩「差不多」。
+    if (a.bgr.size() != b.bgr.size() || a.ids.size() != b.ids.size())
+        return mk("determinism", false, "两次采集尺寸不同");
+    const int colorDiff = cv::countNonZero(anyChannelDiff(a.bgr, b.bgr));
+    // 输出 Mat 不复用：3 通道的旧壳接 1 通道 compare 会留 3 通道 → countNonZero 炸
+    // （OpenCV 4.12 实测，本轮真实踩过）。
+    cv::Mat idDiff;
+    cv::compare(a.ids, b.ids, idDiff, cv::CMP_NE);
+    const int idDiffN = cv::countNonZero(idDiff);
+    return mk("determinism", colorDiff == 0 && idDiffN == 0,
+        "同配置重跑：颜色差 " + std::to_string(colorDiff) + "px，id 差 "
+        + std::to_string(idDiffN) + "px");
 }
 
 const std::map<std::string, std::string>& antiPatterns()

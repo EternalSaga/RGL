@@ -124,13 +124,19 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
         + " }\n");
 
     assertKeys("scene.lua",
-        {"entities", "environment", "light", "spin", "cube", "exposure", "ao"},
+        {"entities", "styles", "environment", "light", "spin", "cube", "exposure", "ao"},
         knownRootKeys("rgl/scene_config_impl.cppm"));
     const auto j3 = [](std::array<double, 3> a) {
         return std::to_string(a[0]) + ", " + std::to_string(a[1]) + ", " + std::to_string(a[2]);
     };
     writeFile(outDir + "/scene.lua",
         "return {\n    entities = { { type = \"model\", file = \"models/" + o.glb + "\" } },\n"
+        // styles 必须显式写（switch 首战抓到的静默坑）：缺表回落默认 pbr→model_pbr，
+        // 而 model_pbr.frag **不 import shadow/env**——shadow_pass 与 env 开关全部
+        // 退化为逐位相同的假象（投影侧照画、采样侧不存在）。model_pbr_ibl 在
+        // env=0/shadow=off 下直接光与 model_pbr 逐式相同（IBL 项 ×intensity=0 归零），
+        // 闭式解前提不破。表同主配置 configs/scene.lua。
+          "    styles = { unlit = \"model\", pbr = \"model_pbr_ibl\" },\n"
         "    environment = { hdr = \"env/san_giuseppe_bridge_4k.hdr\", hdr_size = 2048,\n"
         "      intensity = "
             + std::to_string(o.envIntensity) + ", skybox = " + lb(o.skybox) + " },\n"
@@ -257,6 +263,50 @@ Engine::~Engine()
     } catch (...) {
     }
     impl_->killTree();
+}
+
+void runEngineOnce(const std::string& configDir, int timeoutSec)
+{
+    // 单实例纪律与 Engine 同款（见 Engine 构造处注释——pgrep 用 returncode，别拿
+    // `-c` 的 stdout "0" 判真假）。
+    if (std::system("pgrep -x rgl >/dev/null 2>&1") == 0)
+        throw std::runtime_error(
+            "已有 rgl 进程在跑。imgqa 要求单实例——并行实例会互相遮挡合成，同时扭曲画面与帧率");
+
+    const std::string bin = buildRglDir() + "/rgl";
+    const std::string logPath = buildRglDir() + "/imgqa_run.log";
+    const pid_t pid = ::fork();
+    if (pid < 0)
+        throw std::runtime_error("fork 失败");
+    if (pid == 0) {
+        if (::chdir(buildRglDir().c_str()) != 0)
+            _exit(120);
+        if (freopen(logPath.c_str(), "wb", stdout) == nullptr)
+            _exit(121);
+        dup2(fileno(stdout), fileno(stderr));
+        setenv("RGL_CONFIG_DIR", configDir.c_str(), 1);
+        execl(bin.c_str(), "rgl", static_cast<char*>(nullptr));
+        _exit(127);
+    }
+    // llm_debug 截图模式下引擎自己退（llm_shot 拍完收工）；提前退 = 配置错，
+    // 必须当场报错附日志——探针排查里"引擎没起来"被当成"闭式解不符"是最贵的假线索。
+    const auto deadline = std::chrono::steady_clock::now()
+        + std::chrono::seconds(timeoutSec);
+    while (std::chrono::steady_clock::now() < deadline) {
+        int st = 0;
+        if (waitpid(pid, &st, WNOHANG) == pid) {
+            if (st != 0)
+                throw std::runtime_error("引擎退出 status=" + std::to_string(st)
+                    + "，见 " + logPath);
+            return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    }
+    ::kill(pid, SIGTERM);
+    int st = 0;
+    ::waitpid(pid, &st, 0);
+    throw std::runtime_error("引擎 " + std::to_string(timeoutSec)
+        + "s 未退出（llm_shot 未生效？配置未含 llm_debug），见 " + logPath);
 }
 
 }  // namespace RGL::imgqa

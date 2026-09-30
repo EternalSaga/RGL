@@ -171,6 +171,12 @@ void prepareLinear(Frame& f);
 [[nodiscard]] Frame captureFrame(Engine& eng, const Engine::Camera& cam,
     const std::string& tag);
 
+/// 一次性跑引擎到自然退出（llm_debug 截图模式专用：qa/configs/analytic 那套配置
+/// llm_debug=true + rpc=false，与 Engine 的 RPC 形态互斥——llm 截图在跑时 /shot 会
+/// 409，是引擎既有约定，工具迁就配置而不是反过来）。单实例纪律同 Engine。
+/// 非零退出抛异常并附日志路径（对着超时猜死因是排查时间的黑洞）。
+void runEngineOnce(const std::string& configDir, int timeoutSec = 180);
+
 struct ManifestPiece {
     std::string name;
     int32_t primitiveIndex = -1;  // manifest mapping 声明：piece 序 == globalPrimitiveIndex
@@ -263,6 +269,12 @@ struct JudgmentInfo {
     const cv::Mat& allowed);
 [[nodiscard]] Verdict judgeDeadBranch(const Frame& base, const Frame& alt,
     const cv::Mat& mask, const std::string& label);
+/// 同配置重跑必须逐位相同（color + id 两通道面）。这是 switch-impact-domain 的
+/// **前置判据**：非确定性在场时「域外恰为 0」永远不成立，会把引擎噪声归因到被测开关上。
+[[nodiscard]] Verdict judgeDeterminism(const Frame& a, const Frame& b);
+
+/// 按注册表信息造 Verdict（容差理由/钉住条目从注册表单点取，判据实现里不手抄）。
+[[nodiscard]] Verdict verdictFor(const char* name, bool ok, std::string observed);
 
 /// 反模式登记（负面知识也是工具的一部分）：装一条但**拒绝执行**，比不装更好——
 /// 否则下一个会话的我（或别人）会重新发明它。拒绝比缺失更能传达判断。
@@ -282,7 +294,13 @@ int cmdRefuse(const std::string& name);
 int cmdAttribution(const std::string& glb, const std::string& camera);
 int cmdFaces(const std::string& glb, const std::string& piece, bool shadowPass,
     bool envOn);
-int cmdSwitch(const std::string& glb, const std::string& camera, const std::string& allowPiece);
+int cmdSwitch(const std::string& glb, const std::string& camera, const std::string& allowPiece,
+    bool envOn);
+/// 闭式解探针（12.3b 接替 analytic_ref.py --probe）：跑 qa/configs/analytic 固定配置
+/// （llm_debug 截图模式，**非** RPC——那份配置本身是契约，六门逐项关掉写在注释里），
+/// 对指定像素出「该是多少 vs 实际是多少」。l = 指向光源方向（不是 direction）。
+int cmdProbe(const std::string& configDir, int x, int y, Vec3 albedo, double roughness,
+    double metallic, Vec3 l, double intensity, int tol, bool lightOverride = false);
 
 }  // namespace RGL::imgqa
 

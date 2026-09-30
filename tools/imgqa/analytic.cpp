@@ -1,4 +1,5 @@
-// 闭式解：analytic_ref.py 的 C++ 转录（逐式对账 shader；Python 版将由本文件接替后删除）。
+// 闭式解：analytic_ref.py 的 C++ 转录（逐式对账 shader；Python 原版已于 12.3b 退役删除，
+// 本文件是唯一参考实现——「两处转录互相矛盾」的 D1 双源债就此清偿）。
 // 独立第二实现——不 import 引擎任何代码。锚点见 selftest.cpp（本机 RADV 实测）。
 #include "imgqa.h"
 

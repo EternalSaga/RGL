@@ -128,28 +128,18 @@ test-gpu *ARGS="":
     @cmake --build {{ BUILD }} --target rgl_tests
     {{ BUILD }}/tests/rgl_tests --test-suite=gpu {{ ARGS }}
 
-# 闭式解探针（批 12.2d）：算「某个像素**该**是多少」，与实机渲染逐字节对拍。
-# 不需要基线图像，也不比 SSIM——它抓的是整条链的数值系统性偏移。
+# 闭式解探针：算「某个像素**该**是多少」，与实机渲染逐字节对拍。不需要基线图像，
+# 也不比 SSIM——它抓的是整条链的数值系统性偏移。
 #
 # 引擎侧**零改动**：链上每一项都已有配置门（env.intensity / skybox / light.ambient /
-# ao.strength / exposure / diagnostics.shadowPass），全套见
-# qa/configs/analytic/scene.lua 的逐项注释。原计划加的 `analytic = true` 开关
-# 经实测判定为多余，理由写在 tools/analytic_ref.py 头部。
+# ao.strength / exposure / diagnostics.shadow_pass），全套见 qa/configs/analytic/scene.lua
+# 的逐项注释。原计划加的 `analytic = true` 开关经实测判定为多余。
+# 12.3b 起由 imgqa probe 接管（原 tools/analytic_ref.py 退役删除；参考实现移入 imgqa
+# judge.cpp，闭式解与字节判据同一份代码、同一次编译）。
 analytic:
-    @cmake --build {{ BUILD }} --target rgl
+    @cmake --build {{ BUILD }} --target imgqa rgl
     @python tools/qa_scenes.py --out {{ BUILD }}/rgl/models --only cornell_box
-    @python -c "import os,subprocess,sys; \
-        b='{{ BUILD }}/rgl'; d='{{ justfile_directory() }}/qa/configs/analytic'; \
-        exe='rgl.exe' if os.name=='nt' else 'rgl'; \
-        os.chdir(b); os.environ['RGL_CONFIG_DIR']=os.path.abspath(d); \
-        subprocess.run([os.path.join('.', exe)], check=False, timeout=120)"
-    @python tools/analytic_ref.py --probe {{ BUILD }}/rgl/screenshots/analytic_probe.png 640 360 \
-        --light -0.642788 0.0 0.766044
-
-# 闭式解参考实现自检（纯 Python，毫秒级，不跑 GPU）：矩阵约定 + 退化点手算对账 +
-# sRGB 拐点连续 + ACES 形状 + PNG 读路径 5 种 filter 往返
-analytic-selftest:
-    @python tools/analytic_ref.py --selftest
+    {{ BUILD }}/tools/imgqa/imgqa probe
 
 # imgqa —— 区域归因的图像判据工具箱（C++ + vcpkg；判据的区域来自几何：objectID 反解
 # 可见 piece / 闭式解逐面预测 vs 观测亮度簇 / 开关影响域；promoted 晋升线见 check）。

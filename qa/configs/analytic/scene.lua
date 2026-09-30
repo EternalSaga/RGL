@@ -1,7 +1,8 @@
 -- 分析探针场景（批 12.2d）：**直接光之外的每一项都归零或关掉**。
 --
--- 配套参考实现 = tools/analytic_ref.py（把 shadeDirect + ACES + 硬件 sRGB 独立复刻一遍，
--- 作为交叉校验的第二实现）。跑法：just analytic。
+-- 配套参考实现 = imgqa probe（把 shadeDirect + ACES + 硬件 sRGB 独立复刻一遍，作为
+-- 交叉校验的第二实现；12.3b 起接替已删除的 tools/analytic_ref.py）。跑法：
+--   ./build/tools/imgqa/imgqa probe   （--light 覆写会连引擎配置一起改，见 cmdProbe）
 -- 实测（本机 RADV，2026-09-30）：**逐字节零误差**命中——退化光向 (0,0,-1) 下
 -- 屏幕中心 = (113,56,249)，40° 倾斜光下 = (88,43,244)。
 -- 刻意用 **40° 倾斜光**而不是垂直光：垂直光下 N≡V≡L 使 D/F/G 退化成常数，
@@ -15,6 +16,9 @@
 --   diagnostics.shadowPass = false → 阴影因子恒 1
 -- 剩下的只有：color = lightColor × NdotL × (albedo/π + GGX_spec)
 return {
+    -- 显式钉住交付风格（缺表回落 model_pbr = 非交付路径——12.3b 查实：探针此前一直
+    -- 测的是非交付 frag；12.3b 调试中曾被 git checkout 误毁，此为恢复重钉）
+    styles = { unlit = "model", pbr = "model_pbr_ibl" },
     entities = {
         { type = "model", file = "models/cornell_box.glb" },
     },

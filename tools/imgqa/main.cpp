@@ -2,6 +2,7 @@
 #include "imgqa.h"
 
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -187,7 +188,7 @@ int cmdFaces(const std::string& glb, const std::string& pieceName, bool shadowPa
 
 // ── switch：开关影响域。域外必须逐位为零 + 域内必须确实变了（两条对偶）──
 int cmdSwitch(const std::string& glb, const std::string& camera,
-    const std::string& allowPiecesCsv)
+    const std::string& allowPiecesCsv, bool envOn)
 {
     const std::string stem = glb.substr(0, glb.find_last_of('.'));
     const Manifest man = loadManifest(stem);
@@ -195,22 +196,27 @@ int cmdSwitch(const std::string& glb, const std::string& camera,
     if (it == man.cameras.end())
         throw std::runtime_error("机位不存在: " + camera);
 
-    Frame fOn, fOff;
+    Frame fOn, fOff, fOff2;
     {
         ProfileOpts o;
         o.glb = glb;
         o.shadowPass = true;
+        // env 开关 = 对照组用：analytic 光照（env=0）下阴影该是纯黑（无补光），
+        // 若 on/off 零差异只发生在 analytic 而 env=1 下有影，分叉就在光照配置。
+        o.envIntensity = envOn ? 1.0 : 0.0;
         makeProfile(projectRoot() + "/build/imgqa_profile_sw_on", o);
         Engine eng(projectRoot() + "/build/imgqa_profile_sw_on");
         fOn = captureFrame(eng, it->second, "sw_on");
     }
-    {
+    for (int pass = 0; pass < 2; ++pass) {
         ProfileOpts o;
         o.glb = glb;
         o.shadowPass = false;
+        o.envIntensity = envOn ? 1.0 : 0.0;
         makeProfile(projectRoot() + "/build/imgqa_profile_sw_off", o);
         Engine eng(projectRoot() + "/build/imgqa_profile_sw_off");
-        fOff = captureFrame(eng, it->second, "sw_off");
+        (pass == 0 ? fOff : fOff2) = captureFrame(eng, it->second,
+            pass == 0 ? "sw_off" : "sw_off2");
     }
 
     const Attribution at = attribute(fOn, man);
@@ -221,14 +227,107 @@ int cmdSwitch(const std::string& glb, const std::string& camera,
     while (std::getline(ss, name, ',')) {
         cv::bitwise_or(allowed, dilateMask(maskOfPiece(fOn, at, name), 3), allowed);
     }
+    // 前置判据先跑：同配置（shadow off）两次采集若不等，后面所有「域外恰为 0」
+    // 都无从谈起——先把引擎非确定性从嫌疑链里排除，域 FAIL 才可信地归因到开关。
+    const Verdict v0 = judgeDeterminism(fOff, fOff2);
     const Verdict v1 = judgeSwitchDomain(fOn, fOff, allowed);
     const Verdict v2 = judgeDeadBranch(fOn, fOff, allowed,
         "shadow_pass on/off 在 [" + allowPiecesCsv + "] 上");
-    std::cout << "  " << v1.line() << "\n  " << v2.line() << "\n";
+    std::cout << "  " << v0.line() << "\n  " << v1.line() << "\n  " << v2.line() << "\n";
     std::printf("\n  容差理由: %s\n", v1.whyTol.c_str());
     logCall("switch", {{"glb", glb}, {"camera", camera}, {"allow", allowPiecesCsv}},
-        {v1, v2});
-    return (v1.ok && v2.ok) ? 0 : 1;
+        {v0, v1, v2});
+    return (v0.ok && v1.ok && v2.ok) ? 0 : 1;
+}
+
+// ── probe：闭式解探针（12.3b 接替 analytic_ref.py --probe；配置即契约）──
+int cmdProbe(const std::string& configDir, int x, int y, Vec3 albedo, double roughness,
+    double metallic, Vec3 l, double intensity, int tol, bool lightOverride)
+{
+    // 探针配置 qa/configs/analytic 是**冻结的已知量集合**：六个门逐项关掉写在配置
+    // 注释里，着色链塌成闭式可解。默认模式工具不重写这份配置，只消费它。
+    // 显式 --light/--intensity（lightOverride）：整目录复制到 build/rgl/imgqa_probe_profile
+    // 后**只改副本**的 light 块（direction = -L）。不接这根线时 --light 改预测不改渲染，
+    // 等于自欺判据——2026-10-01 黑面调查同日修复（此前该选项只动预测侧）。
+    std::string runDir = configDir;
+    if (lightOverride)
+    {
+        namespace fs = std::filesystem;
+        const fs::path dst = fs::path(projectRoot()) / "build/rgl/imgqa_probe_profile";
+        std::error_code ec;
+        fs::remove_all(dst, ec);
+        fs::create_directories(dst);
+        for (const auto& e : fs::directory_iterator(configDir))
+            fs::copy_file(e.path(), dst / e.path().filename(), fs::copy_options::overwrite_existing);
+        const auto num = [](double v) {
+            char buf[32];
+            std::snprintf(buf, sizeof buf, "%.9g", v);
+            return std::string(buf);
+        };
+        std::ifstream in(dst / "scene.lua");
+        std::string txt((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        const size_t lp = txt.find("light = {");
+        const size_t dp = lp == std::string::npos ? lp : txt.find("direction = {", lp);
+        const size_t de = dp == std::string::npos ? dp : txt.find('}', dp);
+        const size_t ip = dp == std::string::npos ? dp : txt.find("intensity = ", dp);
+        const size_t ie = ip == std::string::npos ? ip : txt.find_first_of(",\n}", ip);
+        if (lp == std::string::npos || dp == std::string::npos || de == std::string::npos
+            || ip == std::string::npos || ie == std::string::npos)
+            throw std::runtime_error("scene.lua 里定位不到 light 块（--light 覆写要求 direction/intensity 齐备）");
+        txt.replace(dp, de - dp + 1,
+            "direction = { " + num(-l.x) + ", " + num(-l.y) + ", " + num(-l.z) + " }");
+        const size_t ip2 = txt.find("intensity = ", dp);  // 前一次 replace 可能挪了偏移
+        const size_t ie2 = txt.find_first_of(",\n}", ip2);
+        txt.replace(ip2, ie2 - ip2, "intensity = " + num(intensity));
+        std::ofstream(dst / "scene.lua") << txt;
+        runDir = dst.string();
+    }
+    runEngineOnce(runDir);
+    const std::string png = projectRoot() + "/build/rgl/screenshots/analytic_probe.png";
+    const cv::Mat bgr = readPngBgr(png);
+    if (x < 0 || y < 0 || x >= bgr.cols || y >= bgr.rows)
+        throw std::runtime_error("探针像素越界: (" + std::to_string(x) + ","
+            + std::to_string(y) + ") vs " + std::to_string(bgr.cols) + "x"
+            + std::to_string(bgr.rows));
+
+    // 适用范围（承 Python 版模块头）：探针面无纹理/无 normal map、法线轴对齐，
+    // 相机正视 ⟹ N=V=(0,0,1)。任何一项被改写过，先改这里的前提再谈着色链。
+    const Vec3 linear = shadeDirect({0, 0, 1}, {0, 0, 1}, l, albedo, roughness, metallic,
+        {intensity, intensity, intensity});
+    const auto want = toBytes(linear);
+    const cv::Vec3b px = bgr.at<cv::Vec3b>(y, x);  // OpenCV BGR 序
+    const std::array<int, 3> got{px[2], px[1], px[0]};
+    const std::array<int, 3> diff{
+        std::abs(got[0] - want[0]), std::abs(got[1] - want[1]), std::abs(got[2] - want[2])};
+    const bool ok = diff[0] <= tol && diff[1] <= tol && diff[2] <= tol;
+
+    std::printf("探针 (%d,%d)  配置=%s%s\n", x, y, runDir.c_str(),
+        lightOverride ? "（light 覆写副本）" : "");
+    std::printf("  N=V=(0,0,1)  L=(%.6f,%.6f,%.6f)  albedo=(%.2f,%.2f,%.2f)"
+        "  rough=%.2f metal=%.2f  I=%.1f\n",
+        l.x, l.y, l.z, albedo.x, albedo.y, albedo.z, roughness, metallic, intensity);
+    std::printf("  线性预测 = (%.6f, %.6f, %.6f)\n", linear.x, linear.y, linear.z);
+    std::printf("  预测字节 = (%d, %d, %d)\n", want[0], want[1], want[2]);
+    std::printf("  实际字节 = (%d, %d, %d)\n", got[0], got[1], got[2]);
+    std::printf("  差       = (%d, %d, %d)   （阈值 %d）\n", diff[0], diff[1], diff[2], tol);
+    const Verdict v = verdictFor("probe-pixel", ok,
+        "(" + std::to_string(x) + "," + std::to_string(y) + ") 预测("
+        + std::to_string(want[0]) + "," + std::to_string(want[1]) + ","
+        + std::to_string(want[2]) + ") vs 实际(" + std::to_string(got[0]) + ","
+        + std::to_string(got[1]) + "," + std::to_string(got[2]) + ")");
+    std::cout << "  " << v.line() << "\n";
+    if (!ok) {
+        std::printf("  归因顺序（先怀疑前提，再怀疑引擎）：\n"
+                    "    ① 探针面是否真的无纹理 / 无 normal map（适用范围）\n"
+                    "    ② N/V/L 是否真如假设（机位与光向是否被相机模式改写过）\n"
+                    "    ③ normalFiltering 是否抬了 roughness（平面正视图应为 0 方差）\n"
+                    "    ④ 六个配置门是否都真的关上了（少关一项就少一个已知量）\n"
+                    "    ⑤ 以上都排除了，才轮到怀疑着色链\n");
+    }
+    logCall("probe", {{"config", configDir}, {"xy", std::to_string(x) + "," + std::to_string(y)},
+        {"light", std::to_string(l.x) + "," + std::to_string(l.y) + "," + std::to_string(l.z)},
+        {"tol", std::to_string(tol)}}, {v});
+    return v.ok ? 0 : 1;
 }
 
 int cmdCheck(bool onlyPromoted)
@@ -287,7 +386,8 @@ void printUsage()
         "  refuse [name]                              列/触发反模式拒绝（ssim 等有理由的禁止）\n"
         "  attribution [--glb X.glb] [--camera 名]    机位下谁被画了/占多少/多亮/谁全黑\n"
         "  faces [--glb X.glb] --piece 名              闭式解逐面预测 vs 观测亮度簇\n"
-        "  switch [--glb X.glb] [--camera 名] [--allow-piece a,b]  开关影响域 + 死分支\n"
+        "  switch [--glb X.glb] [--camera 名] [--allow-piece a,b]  开关影响域 + 死分支（含确定性前置）\n"
+        "  probe [--x 640] [--y 360] [--light Lx,Ly,Lz] [--tol 2]  闭式解探针：该是多少 vs 实际是多少\n"
         "  note \"事后真相\"                             回填最后一条调用记录（晋升凭据）\n");
 }
 
@@ -320,7 +420,28 @@ int main(int argc, char** argv)
         if (cmd == "switch")
             return cmdSwitch(P.get(args, "--glb", "shadow_rig.glb"),
                 P.get(args, "--camera", "near_anchor"),
-                P.get(args, "--allow-piece", "ground"));
+                P.get(args, "--allow-piece", "ground"), P.has(args, "--env"));
+        if (cmd == "probe") {
+            const auto parse3 = [](const std::string& s) {
+                std::array<double, 3> v{0, 0, 0};
+                std::stringstream ss(s);
+                std::string tok;
+                for (size_t i = 0; i < 3 && std::getline(ss, tok, ','); ++i)
+                    v[i] = std::stod(tok);
+                return v;
+            };
+            // --light = **指向光源**的方向 L（不是 scene.lua 的 direction）。默认值
+            // 与 qa/configs/analytic 的 direction = (0.642788,0,-0.766044) 配对。
+            const auto a = parse3(P.get(args, "--albedo", "0,0,1"));
+            const auto lv = parse3(P.get(args, "--light", "-0.642788,0,0.766044"));
+            return cmdProbe(projectRoot() + "/" + P.get(args, "--config", "qa/configs/analytic"),
+                std::stoi(P.get(args, "--x", "640")), std::stoi(P.get(args, "--y", "360")),
+                {a[0], a[1], a[2]}, std::stod(P.get(args, "--rough", "0.9")),
+                std::stod(P.get(args, "--metal", "0")), {lv[0], lv[1], lv[2]},
+                std::stod(P.get(args, "--intensity", "12")),
+                std::stoi(P.get(args, "--tol", "2")),
+                P.has(args, "--light") || P.has(args, "--intensity"));
+        }
         if (cmd == "note") {
             std::string text;
             for (size_t i = 1; i < args.size(); ++i)

@@ -18,14 +18,15 @@
 | 12.2d-b | `2d8abe0` | tests 链接面扩到全四层 + 66→118 用例 |
 | 12.2d-c | `f95d5f9` | 闭式解探针 `analytic_ref.py`（GGX+ACES+sRGB 逐式转录 + qa/configs/analytic/） |
 | 12.2d-d | `0c35457` | 入口（test/test-all/test-gpu/analytic）+ 文档收口 |
-| 12.3 | `ca18627` | **imgqa**（C++ + vcpkg）区域归因判据工具箱：selftest 26 条 / 判据五条全 advisory / 反模式登记 / 调用台账 / skill 钩子。首战：「anchor_cube_near +Z 黑面」**三配置两机位不复现**（±0.002 亮度）；纯颜色反解被实测推翻 → 顺序命名 + 闭式解色度弱校验（→ 调试历史 2026-09-30） |
+| 12.3 | `ca18627` | **imgqa**（C++ + vcpkg）区域归因判据工具箱：selftest 26 条 / 判据五条全 advisory / 反模式登记 / 调用台账 / skill 钩子。首战：「anchor_cube_near +Z 黑面」**三配置两机位不复现**（±0.002 亮度）；纯颜色反解被实测推翻 → 顺序命名 + 闭式解色度弱校验（→ 调试历史 2026-09-30）。⚠️ 本行「不复现」已被 12.3b 勘误：当时测量面走 styles 缺表回落 model_pbr（→ 调试历史 2026-10-01） |
+| 12.3b | （本提交） | 闭式解收单源（删 analytic_ref.py，probe 接替 + `--light/--intensity` 接线修复）+ **黑面 bug 定案修复**：Frisvad 切线奇点号写反 → 法线 +Z 面 NaN → 受光面纯黑（loader + bistro_pack 修复 + 单测 `test_frisvad_tangent`，→ 调试历史 2026-10-01）。switch 首战三项全绿（域外变化归因 = 物体间合法互投影，全名单域外恰 0）；texel canary 台账化（白 + 中性法线）。probe 变异 4/4（正对光 / 背光黑 / L⊥N 黑 / 默认 40°）逐字节 PASS |
 
 ## 缺口 / 债务清单（按"何时必须还"排序）
 
 | # | 债 | 性质 | 还的批次 |
 |---|---|---|---|
-| D1 | **闭式解双源**：`analytic_ref.py`（Python）与 `imgqa/analytic.cpp`（C++）是同一物理的两份转录，各自带锚点各带自检。将来一处改动另一处静默脱钩 = 两个"真相"互相矛盾时无人可仲裁。12.3 已定死删除条件 = `imgqa probe` 接替 `just analytic` | 自己刚欠的，越新越便宜 | 12.3b |
-| D2 | **`switch` / `dead-branch-scan` 判据零实战**：命令实现了但从没真跑过；台账仅 2 条。没实战的判据是库存不是判据 | 库存 | 12.3b |
+| ~~D1~~ ✅ | ~~**闭式解双源**：`analytic_ref.py`（Python）与 `imgqa/analytic.cpp`（C++）是同一物理的两份转录，各自带锚点各带自检。将来一处改动另一处静默脱钩 = 两个"真相"互相矛盾时无人可仲裁~~ **12.3b 清偿**：analytic_ref.py 已删，`imgqa probe` 接替 `just analytic`，参考实现只剩 analytic.cpp 一份 | — | ~~12.3b~~ ✔ |
+| D2（半）| **`switch` / `dead-branch-scan` 判据零实战**：~~从未真跑过~~ **12.3b 已实战 shadow_pass on/off 两轮**（determinism / impact-domain / dead-branch 三项全绿 + 域外归因，台账已回填）；② `ao.strength` 0↔0.5 轮 + AO 域 K 定标并入 12.3c | 库存（剩 AO 轮） | 12.3c |
 | D3 | **字节级锚点 = 押本机 RADV**：imgqa selftest 锚点（(113,56,249) 等）来自本机 RADV 实测；NVIDIA/Intel 的 float32 着色链（FMA 收缩、取整）与 RADV 无位级契约 → 换机 selftest 必红，且会被误读成"转录坏了"。**用户核心场景就是三机测试，这是唯一结构性问题** | 结构性 | 12.4 |
 | D4 | **机位撑不起逐面判据**：near_anchor 可见 9/9，但 far_cube 420 px / distant_marker 36 px——面级聚类需要单面 ~10⁴ px；`switch --allow-piece` 的影响域同样要求 piece 够大 | 判据精度 | 12.3c 前置 |
 | D5 | **变异测试未做**：晋升四条件（→ imgqa.h 头注释）要求"真实 bug / 变异上变红过"，五条判据一条变异证据都没有 → 全卡 advisory。单测纪律"测试通过≠测试有效"对判据同样成立 | 判据有效性 | 12.3c |
@@ -36,14 +37,22 @@
 
 ## 计划批次
 
-### 12.3b — 闭式解收单源 + switch 首战（小，一个会话）
+### 12.3b — 闭式解收单源 + switch 首战（**已完成**，含计划外黑面定案）
 - `imgqa probe`：接 analytic_ref.py 的对拍职责（复用 qa/configs/analytic/ 模板与
   RPC 截图通路，闭式解已在 analytic.cpp）；`just analytic` 改指 imgqa；
-  **删 analytic_ref.py**（其 PNG 5-filter 往返自检已移植 imgqa selftest）。
-- `switch` 真跑两轮：① `shadow_pass` on/off；② `ao.strength` 0↔0.5——正向锚点现成
-  （lerp(1,x,0)≡1.0 ⟹ strength=0 逐位旁路，域外必须恰为 0）。台账落 2 条。
-- **验收**：`just analytic` 绿（C++ 路）；`grep -r analytic_ref` 全仓 0 残留；
-  `imgqa check` 台账 ≥4 条；`just test` 113/113。
+  **删 analytic_ref.py**（其 PNG 5-filter 往返自检已移植 imgqa selftest）。✔
+- `switch` 真跑两轮：① `shadow_pass` on/off ✔（三项全绿；域外 3381px 归因 =
+  near_post/near_cylinder/mid_cube 合法互投影，默认 allow 名单只含 ground；
+  全名单下域外**恰 0**）；② `ao.strength` 0↔0.5 + AO 域 K 定标 → 并入 12.3c。
+- **计划外（主线）**：styles 钉 model_pbr_ibl 后 probe 不绿 → 两天排查 → **黑面 bug
+  定案 = Frisvad 切线奇点号写反**（n.z=+1 → NaN 切线 → TBN 污染 → 受光面纯黑；
+  loader + bistro_pack 修复 + 新单测 test_frisvad_tangent；shader 端刻意不吞 NaN，
+  → 调试历史 2026-10-01）。
+  排查中另修：probe `--light/--intensity` 只改预测不改渲染的自欺接线；texel canary
+  台账化（白 + 中性法线，「白活 ≠ 全活」实证）。
+- **验收**：`just analytic` 绿（C++ 路）✔；`grep -rn analytic_ref` 代码零残留（仅存
+  出处注释与历史记录）✔；`imgqa check` 台账增 4 条（probe×2 / switch 全名单+note）✔；
+  `just test` 113/113 ✔；probe 变异 4/4（含背光黑两负例）✔。
 
 ### 12.3c — 机位补齐 + 变异测试（小-中）
 - 前置（D4）：shadow_rig manifest cameras 增补——每个 piece 至少一个"占屏 ≥10⁴ px"
