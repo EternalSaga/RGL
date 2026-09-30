@@ -79,51 +79,80 @@ rgl_shader(stream_fanout.comp STREAM_FANOUT_SPV)
 get_property(RGL_SPV GLOBAL PROPERTY RGL_SPV_OUTPUTS)
 
 # ═══════════════════════════════════════════════════════════════════════════
-# rlcore —— 「无 Vulkan 依赖的引擎内核」静态库（2026-09-30 批 12.1）
+# 引擎四库分层（2026-09-30 批 12.2c）—— rlbase / rlgfx / rlscene / rlframe
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# ## 为什么抽
+# ## 为什么抽库
 #
-# 起因是自动化测试（tests/ + qa/）：单元测试要 import 引擎的纯函数模块（阴影级联
-# 几何、glTF 解析、四份配置 loader……），而 `rgl` 是**可执行文件**——它的
-# CXX_MODULES FILE_SET 只有它自己能 import，测试无法复用。唯一出路是把模块搬进
-# 库。而"搬哪些"不该随手挑：判据是**传递依赖闭包里有没有 Vulkan**。
+# 起因是自动化测试（tests/ + qa/）：测试要 import 引擎模块，而 `rgl` 是**可执行
+# 文件**——它的 CXX_MODULES FILE_SET 只有它自己能 import，测试无法复用。模块必须
+# 住进库。
 #
-# ## 成员判据（唯一）
+# ## 为什么按功能分四层，而不是一个内核库
 #
-# 模块 m 属于 rlcore ⟺ m 的 import 闭包（递归）不含 rlvk / VmaRaii / vk_* / VmaBuffer
-# / QueueFamilyManager。当前闭包 = 30 个模块（脚本口径见 tests/ 头注释与
-# `just checks` 的 libcore 规则，后者会在闭包漂移时报错）。
+# 批 12.1 先做的是「rlcore = import 闭包不含 Vulkan 的模块」，靠一张 73 项排除清单
+# + 逐项理由维护。实测那条判据**把两件事混成了一条**：
+#   · 它禁掉的是「import Vulkan」这个**动作**
+#   · 它想守的是「能不能不建设备就测」这个**能力**
+# 两者不等价，于是产生大量连坐：`frame_draw_list` / `render_list` / `render_graph` /
+# `scene_data` 各自只因为借了一个资源句柄就把整个 Vulkan 栈拖进来（源码注释自称
+# 「架构债务续账」）。逐条算过「切断这条边后闭包还含不含 Vulkan 根」：**13 条里 12 条
+# 是徒劳的**（vk_resources 是枢纽、VmaRaii 在它后面），只有 param_pages→asset_table
+# 一条切了会变干净 —— 而那也不必切断，把 param_pages 挪到它逻辑所属的层即可。
 #
-# 三条硬约束（违反即构建失败或链接失败，不会静默劣化）：
-#   1. **分区同 target**：模块 X 的接口单元与 `X:impl` / `X:scene` 等分区实现单元
-#      必须同 target。故 `shader`（接口脏）与 `shader:impl`（干净）**都留在 rgl**。
-#   2. **不 import Vulkan 叶子**：闭包检查由 `just checks --only style` 的
-#      `libcore_closure` 规则兜（人工漏登记时立刻报）。
-#   3. **rgl 的 GLOB 减去本列表**：rlcore 的清单是"哪些模块属于库"的**唯一真相源**，
-#      rgl 拿 GLOB 结果 list(REMOVE_ITEM) 掉它。新增模块默认落 rgl（安全默认），
-#      要进库必须显式登记——避免"手滑把 Vulkan 模块拖进库"。
+# 所以顺序反过来：**库边界照现有的真实结构（资源枢纽）划，不追求「更纯」**。该不该
+# 上设备测试由它实际需不需要设备决定，不由边界好不好看决定。
 #
-# ## 收益
+# ## 划分依据（机器验证，非手拍）
 #
-# ① 单元测试直接 import 真实引擎模块（同一次编译产物，不是重编一份）；
-# ② 库边界即依赖方向的**机器可查表达**：rlcore 链接Vk 栈 = 立刻链接失败；
-# ③ 静态库按需链接——实测消费者只 import scene_context 时，rlcore 里那些带
-#    未定义符号的 Vulkan 模块**不会**被拉进测试二进制（已验证 nm 干净）。
-#    这正是"抽库但测试仍然轻量"的关键。
+# 从源码正则直抽完整 import 图（110 模块 / 790 条边），跑「归属完整性 + 库间
+# 逆向边 + GPU 需求」三查。⚠️ **不要**用 modern_vulkan_tutorial/tools/explore 的
+# model.json 做这件事：实测它漏 326 条 import 边（294 条来自 `module X:impl;`
+# 分区实现单元，占 90%），用它验证出来的「零逆向边」是假的——本文件第一次尝试就
+# 被它坑了，漏掉 param_pages:impl → ecs，编译期才炸。
 #
-# 命名沿用 rlstd / rllogger 的 r 前缀族（rl = RGL library）。
+# 为消掉逆向边做的调整（都是**移动归属，零代码改动**）：
+#   · `param_pages` base→scene→**frame**：它读 ECS 组件（SelectedObject ctx）写材质
+#     资产，逻辑上就属 ECS/app 层；先试 scene 才发现 impl 还 import ecs，而 ecs 因
+#     **接口**就 import vk_renderer 只能留 frame，故最终在 frame。这是完整图上
+#     唯一一条需要跟着上移的边。
+#   · `mip_gen` scene→gfx：GPU compute 原语，sampler_library 与 texture_upload 都要。
+#   · `ecs` scene→frame：同上的接口依赖。
+#
+# ## 分层与收益
+#
+#   rlbase(30 文件/22 模块) 值类型·数学·四份配置 loader·glTF·图像编解码·反射产物
+#                      ·profiler·RPC 传输·param_registry
+#        │  **整层 import 闭包不含 rlvk/VmaRaii/QueueFamilyManager —— 无 GPU 无窗口即可测**
+#   rlgfx(22/18)  Vulkan 抽象 + 实例/设备/交换链/资源/采样器/状态表
+#   rlscene(22/16) 场景数据·渲染图·环境·纹理·模型·draw list
+#   rlframe(33/18) 帧生命周期·捕获·拾取·剔除·帧循环 ECS·调试面·面板页
+#        │
+#   rgl(3/3)     main / main:impl / main:scene —— **含 main()，必须留可执行文件**
+#
+# 收益：
+# ① 单元测试直接 import 真实引擎模块（同一次编译产物，不重编一份）；
+# ② **「rlbase 无设备依赖」由库边界直接保证**，不再需要闭包判据 + 排除清单去维护；
+# ③ 库边界即依赖方向的机器可查表达：出现逆向 import 立刻链接失败；
+# ④ 静态库按需链接——消费者只 import scene_context 时，其余库的 Vulkan 模块不进
+#    测试二进制（实测 nm 干净）。
+#
+# 命名沿用 rlstd / rllogger 的 rl 前缀族（rl = RGL library）。
+#
+# ⚠️ include 面 / 编译宏的归属判据 = **哪个库拥有用它的那个 TU**，不是"谁在用它"。
+#   批 12.2c 在这两处各踩一次：imgui 头挂在 rlgfx 而唯一 include 它的是 rlframe 的
+#   imgui_layer_impl；RGL_SLANGC_PATH 宏留在 rgl 而用它的 shader_hot_reload* 已搬进
+#   rlframe。后者症状极偏：`#ifdef` 落进 #else 分支（那里是 return，编译期仍继续
+#   解析）→ 后面某行报 "undeclared identifier 'ec'"。
 # ═══════════════════════════════════════════════════════════════════════════
 
-set(RGL_CORE_MODULE_SOURCES
-    # ── 值类型与纯数学（无任何外部依赖）──
-    "${CMAKE_CURRENT_SOURCE_DIR}/scene_context.cppm"      # ECS 组件 + 视锥/级联/阴影几何
-    "${CMAKE_CURRENT_SOURCE_DIR}/cube.cppm"               # 内建 cube 顶点/索引
-    "${CMAKE_CURRENT_SOURCE_DIR}/vkerror.cppm"            # Error 类型
-    "${CMAKE_CURRENT_SOURCE_DIR}/gbuffer_contract.cppm"   # G-buffer 契约表（2026-09-30 从 render_graph 抽出）
-    # ── 相机 ──
+set(RGL_BASE_MODULE_SOURCES
+    # ── 纯值 / 数学 / 配置解析 / 资产解析 —— **整层无设备依赖** ──
     "${CMAKE_CURRENT_SOURCE_DIR}/camera.cppm"
-    # ── 四份配置解析（scene/camera/runtime/diagnostics）──
+    "${CMAKE_CURRENT_SOURCE_DIR}/cube.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/vkerror.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/gbuffer_contract.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/scene_context.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/camera_config.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/camera_config_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/scene_config.cppm"
@@ -132,20 +161,17 @@ set(RGL_CORE_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/runtime_config_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/diagnostics.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/diagnostics_impl.cppm"
-    # ── 资产解析（glTF 638 行 + 图像编解码）──
     "${CMAKE_CURRENT_SOURCE_DIR}/gltf_loader.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/gltf_loader_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/image_codec.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/image_codec_impl.cppm"
-    # ── 调试/诊断设施（Phase 9/10 的无 GPU 部分）──
     "${CMAKE_CURRENT_SOURCE_DIR}/profiler.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/profiler_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/hot_reload.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/input_probe.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/param_registry.cppm"
-    "${CMAKE_CURRENT_SOURCE_DIR}/debug_rpc.cppm"           # RPC 传输层（httplib）
+    "${CMAKE_CURRENT_SOURCE_DIR}/debug_rpc.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/debug_rpc_impl.cppm"
-    # ── 反射生成物（字节布局 static_assert 宿主）──
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/types_generated.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/material_types_generated.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/lights_types_generated.cppm"
@@ -153,6 +179,136 @@ set(RGL_CORE_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/scene_forward_types_generated.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/param_semantics_generated.cppm"
 )
+
+set(RGL_GFX_MODULE_SOURCES
+    # ── Vulkan 抽象 + 实例 / 设备 / 交换链 / 资源 / 采样器 / 状态表 ──
+    "${CMAKE_CURRENT_SOURCE_DIR}/rlvk.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/VmaBuffer.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/utils.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/sdl3window.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/QueueFamilyManager.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/features.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/generated/features_generated.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shader.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shader_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/state_kit.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/gpu_profiler.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/gpu_profiler_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/vkinstance.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/vkdevice.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/vkswapchain.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/vkresources.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/vkresources_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/render_target_cache.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/sampler_library.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/mip_gen.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/mip_gen_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/asset_table.cppm"
+)
+
+set(RGL_SCENE_MODULE_SOURCES
+    # ── 场景数据 / 渲染图 / 环境 / 纹理 / 模型 / draw list ──
+    "${CMAKE_CURRENT_SOURCE_DIR}/scene_data.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/render_graph.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/render_graph_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/render_graph_builtin.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/render_graph_decorate.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/render_graph_rtslot.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/render_graph_config.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/render_graph_config_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/environment.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/env_prefilter.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/env_prefilter_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/texture_upload.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/texture_upload_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/texture_upload_cubemap.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/texture_pool.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/model_importer.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/model_importer_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/builtin_geometry.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/builtin_geometry_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/render_list.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/render_list_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/frame_draw_list.cppm"
+)
+
+set(RGL_FRAME_MODULE_SOURCES
+    # ── 帧生命周期 / 捕获 / 拾取 / 剔除 / 帧循环 ECS / 调试面 / 面板页 ──
+    "${CMAKE_CURRENT_SOURCE_DIR}/frame_session.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/frame_session_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/frame_capture.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/frame_capture_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/picking.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/picking_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/cull_driver.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/cull_driver_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/gpu_cull.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/gpu_cull_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/gpu_canary.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/gpu_canary_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/present_timing.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/present_timing_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/vk_indirect_commands.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/vk_indirect_commands_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/vkrenderer.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/vkrenderer_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/vkrenderer_passrec.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/imgui_layer.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/imgui_layer_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/debug_rpc_exec.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/debug_rpc_exec_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/llm_debug.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/llm_debug_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shader_registry.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shader_registry_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shader_hot_reload.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shader_hot_reload_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/ecs.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/ecs_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/param_pages.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/param_pages_impl.cppm"
+)
+
+set(RGL_APP_MODULE_SOURCES
+    # ── 入口 —— 含 main()，**必须**留在可执行文件 ──
+    "${CMAKE_CURRENT_SOURCE_DIR}/main.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/main_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/main_scene.cppm"
+)
+
+# ── 归属完整性闸门（configure 期，违反即 FATAL_ERROR）────────────────────
+# 新增 .cppm 后若忘了登记到某个库，这里**点名报错**。刻意不用「GLOB 后减掉已登记」
+# 的老做法：那时新文件会静默落进 rgl，而现在 rgl 只该有 main* —— 静默落进去等于
+# 把一个 Vulkan 模块编进入口，错误一路漂到链接期才炸，且症状与真因无关。
+# 「忘登记」在这里是**响亮失败**，这比任何默认落点都安全。
+file(GLOB RGL_ALL_MODULE_FILES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/generated/*.cppm")
+set(RGL_REGISTERED_MODULE_FILES
+    ${RGL_BASE_MODULE_SOURCES} ${RGL_GFX_MODULE_SOURCES}
+    ${RGL_SCENE_MODULE_SOURCES} ${RGL_FRAME_MODULE_SOURCES} ${RGL_APP_MODULE_SOURCES})
+list(REMOVE_DUPLICATES RGL_REGISTERED_MODULE_FILES)
+set(_unregistered "")
+foreach(_f IN LISTS RGL_ALL_MODULE_FILES)
+    get_filename_component(_abs "${_f}" ABSOLUTE)
+    if(NOT _abs IN_LIST RGL_REGISTERED_MODULE_FILES)
+        list(APPEND _unregistered "${_f}")
+    endif()
+endforeach()
+if(_unregistered)
+    string(REPLACE ";" "\n    " _pretty "${_unregistered}")
+    message(FATAL_ERROR
+        "以下 .cppm 未登记到任何引擎库（rlbase/rlgfx/rlscene/rlframe/rgl）：\n"
+        "    ${_pretty}\n"
+        "请把它加进 rgl/CMakeLists.txt 中职责归属正确的那一份清单。新增模块时先问"
+        "「它需不需要 Vulkan 设备」——不需要的进 rlbase（该层保证无设备可测）。")
+endif()
+list(LENGTH RGL_ALL_MODULE_FILES _n_all)
+list(LENGTH RGL_REGISTERED_MODULE_FILES _n_reg)
+if(NOT _n_all EQUAL _n_reg)
+    message(FATAL_ERROR "模块归属数量不符：磁盘上 ${_n_all} 个，登记 ${_n_reg} 个（清单里有文件已不存在？）")
+endif()
+
 
 # rlcore 的第三方依赖（**故意不含 Vulkan / SDL3 / VMA / imgui**——那层是 rgl 的）
 find_package(glm CONFIG REQUIRED)
@@ -169,17 +325,48 @@ find_package(ZLIB REQUIRED)
 # SYSTEM = -isystem——第三方头内警告不进本项目 -Werror 面。
 find_path(TINYGLTF_INCLUDE_DIRS tiny_gltf.h REQUIRED)
 
-add_library(rlcore STATIC tinygltf_impl.cpp)
-target_sources(rlcore PUBLIC
+
+# NVIDIA Aftermath GPU crash dump（诊断能力，编译期开关；默认关，排查 NV 崩溃时开）
+# 用法：just config 前设 RGL_AFTERMATH=ON，或 cmake -DRGL_AFTERMATH=ON
+option(RGL_AFTERMATH "Enable NVIDIA Aftermath GPU crash dumps (Linux/NVIDIA only)" OFF)
+if(RGL_AFTERMATH AND UNIX AND NOT APPLE)
+    set(AFTERMATH_SDK_DIR "${CMAKE_SOURCE_DIR}/../Aftermath")
+    target_include_directories(rlgfx PUBLIC "${AFTERMATH_SDK_DIR}/include")
+    target_link_libraries(rlgfx PUBLIC "${AFTERMATH_SDK_DIR}/lib/x64/libGFSDK_Aftermath_Lib.x64.so")
+    target_compile_definitions(rlgfx PUBLIC RGL_AFTERMATH=1)
+endif()
+# ── 第三方依赖（分层 find_package，各库只拿自己用得到的）────────────────────
+find_package(glm CONFIG REQUIRED)
+find_package(EnTT CONFIG REQUIRED)
+find_package(Sol2 CONFIG REQUIRED)
+find_package(unofficial-lua CONFIG REQUIRED)
+find_package(httplib CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
+find_package(libpng CONFIG REQUIRED)
+find_package(libjpeg-turbo CONFIG REQUIRED)
+find_package(freeimage CONFIG REQUIRED)
+find_package(ZLIB REQUIRED)
+# tinygltf 是 header-only 且该 vcpkg port 不导出 CMake target：find_path 取头文件目录。
+# SYSTEM = -isystem——第三方头内警告不进本项目 -Werror 面。
+find_path(TINYGLTF_INCLUDE_DIRS tiny_gltf.h REQUIRED)
+find_package(Vulkan REQUIRED)
+find_package(SDL3 CONFIG REQUIRED)
+find_package(VulkanMemoryAllocator CONFIG REQUIRED)
+find_package(imgui CONFIG REQUIRED)
+
+# ── rlbase：整层无设备依赖（闭包不含 rlvk / VmaRaii / QueueFamilyManager）────
+add_library(rlbase STATIC tinygltf_impl.cpp)
+target_sources(rlbase PUBLIC
     FILE_SET CXX_MODULES
-    FILES ${RGL_CORE_MODULE_SOURCES}
+    FILES ${RGL_BASE_MODULE_SOURCES}
 )
-target_compile_features(rlcore PUBLIC cxx_std_23)
-# GLM 深度约定必须与 rgl 一致（zero-to-one + 弧度）：frustumBoundingSphere 的近远
+target_compile_features(rlbase PUBLIC cxx_std_23)
+# GLM 深度约定必须与上层一致（zero-to-one + 弧度）：frustumBoundingSphere 的近远
 # 反推、projWithDepthRange 全依赖这两个宏。不一致 = 测试在测另一个函数。
-target_compile_definitions(rlcore PUBLIC GLM_FORCE_DEPTH_ZERO_TO_ONE GLM_FORCE_RADIANS)
-target_include_directories(rlcore SYSTEM PUBLIC ${TINYGLTF_INCLUDE_DIRS})
-target_link_libraries(rlcore
+# PUBLIC = 沿 rlbase→rlgfx→rlscene→rlframe 逐层传递。
+target_compile_definitions(rlbase PUBLIC GLM_FORCE_DEPTH_ZERO_TO_ONE GLM_FORCE_RADIANS)
+target_include_directories(rlbase SYSTEM PUBLIC ${TINYGLTF_INCLUDE_DIRS})
+target_link_libraries(rlbase
     PUBLIC
         rlstd
         rllogger
@@ -195,23 +382,63 @@ target_link_libraries(rlcore
         freeimage::FreeImage
         ZLIB::ZLIB
 )
-# 反射生成物是 rlcore 的 FILE_SET 成员 → 反射产物必须先于它就绪（同 rgl 的护栏）
-add_dependencies(rlcore reflection_check)
+# 反射生成物在 rlbase 的 FILE_SET 里 → 反射产物必须先于它就绪
+add_dependencies(rlbase reflection_check)
+
+# ── rlgfx：Vulkan 抽象 + 设备 / 资源。vam_impl 是 VmaRaii 模块的实现 TU ─────
+# include 面归属：SDL3 头由 sdl3window.cppm（vulkan_window，本库）的 GMF include；
+# imgui 头由 imgui_layer_impl.cppm（**rlframe**）的 GMF include → 必须挂 rlframe。
+add_library(rlgfx STATIC vam_impl.cpp)
+target_sources(rlgfx PUBLIC
+    FILE_SET CXX_MODULES
+    FILES ${RGL_GFX_MODULE_SOURCES}
+)
+target_link_libraries(rlgfx
+    PUBLIC rlbase Vulkan::Vulkan
+    PRIVATE GPUOpen::VulkanMemoryAllocator SDL3::SDL3)
+add_dependencies(rlgfx reflection_check)   # features_generated 在本库
+
+# ── rlscene：场景数据 / 渲染图 / 资产 ─────────────────────────────────────
+add_library(rlscene STATIC)
+target_sources(rlscene PUBLIC
+    FILE_SET CXX_MODULES
+    FILES ${RGL_SCENE_MODULE_SOURCES}
+)
+target_link_libraries(rlscene PUBLIC rlbase rlgfx)
+add_dependencies(rlscene reflection_check)
+
+# ── rlframe：帧执行 / ECS 帧循环 / 调试面 / 面板页 ─────────────────────────
+add_library(rlframe STATIC)
+target_sources(rlframe PUBLIC
+    FILE_SET CXX_MODULES
+    FILES ${RGL_FRAME_MODULE_SOURCES}
+)
+# imgui 的 include 面在本库（imgui_layer_impl.cppm 的 GMF）——见 rlgfx 段注
+target_link_libraries(rlframe
+    PUBLIC rlbase rlgfx rlscene
+    PRIVATE imgui::imgui httplib::httplib nlohmann_json::nlohmann_json)
+# Phase 10 批 10.4 shader 热重载（L1）：fork slangc 重编源树 shaders/ 所需三件套
+# （D11：flags = SLANG_FLAGS_STR 同源派生串，与构建期 SPV 编译 flag 恒一致；
+#  路径/flags 缺失 = wireShaderHotReload 降级关并日志）。归属 **本库**：
+#  grep 核对仅 shader_hot_reload / shader_hot_reload:impl 使用这三个宏。
+target_compile_definitions(rlframe PRIVATE
+	"RGL_SLANGC_PATH=\"${SLANGC_EXECUTABLE}\""
+	"RGL_SLANG_FLAGS=\"${SLANG_FLAGS_STR}\""
+	"RGL_SOURCE_SHADER_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/shaders\"")
+add_dependencies(rlframe reflection_check)
+
 
 # rgl 可执行文件：vam_impl（VMA 编译单元）+ SPV 产物 + **剩余**模块（GLOB 减去 rlcore）
-add_executable(rgl vam_impl.cpp ${RGL_SPV})
-
-# 模块 TU：rgl/ 根下全部 .cppm（CONFIGURE_DEPENDS：新增文件重跑 configure 自动纳入，
-# 2026-09-23 瘦身定案 1B）**减去 rlcore 已收走的那批**（见上方 rlcore 头注释约束 3）
-# + 反射生成物（RglReflection 提供的显式清单）。
-file(GLOB RGL_MODULE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cppm")
-list(REMOVE_ITEM RGL_MODULE_SOURCES ${RGL_CORE_MODULE_SOURCES})
+# ── rgl 可执行文件：SPV 产物 + 入口模块（main*，含 main()）─────────────────
+# 入口**只能**住这里：CMake CXX_MODULES FILE_SET 只有本 target 能 import 自己的
+# 模块，且 main() 合法于分区实现单元。
+add_executable(rgl ${RGL_SPV})
 target_sources(rgl PUBLIC
     FILE_SET CXX_MODULES
-    FILES ${RGL_MODULE_SOURCES} ${RGL_GENERATED_CPPM}
+    FILES ${RGL_APP_MODULE_SOURCES}
 )
-# rlcore 的模块在库这一侧；rgl 侧只 import 它们的 BMI，不重复编译
-target_link_libraries(rgl PRIVATE rlcore)
+target_link_libraries(rgl PRIVATE rlframe)
+target_compile_features(rgl PRIVATE cxx_std_23)
 
 add_dependencies(rgl reflection_check)
 # 源码检查必须等编译产物就绪（libclang 读半写 BMI 会 crash，坑 4c，
@@ -247,32 +474,3 @@ target_link_libraries(rgl
 # 引擎其余模块零 imgui 依赖）───
 find_package(imgui CONFIG REQUIRED)
 target_link_libraries(rgl PRIVATE imgui::imgui)
-
-# ─── Phase 10b 批 11b.2：HTTP POST RPC 调试通道（cpp-httplib header-only 同步版 +
-# nlohmann_json；头仅被 debug_rpc_impl 与 main_scene 的 GMF include，引擎其余模块零
-# HTTP/JSON 依赖；features 见 vcpkg.json —— cpp-httplib 关 default-features 免拉 brotli）───
-find_package(httplib CONFIG REQUIRED)
-find_package(nlohmann_json CONFIG REQUIRED)
-target_link_libraries(rgl PRIVATE httplib::httplib nlohmann_json::nlohmann_json)
-
-# ─── 图像编解码（image_codec 模块：libpng 简单 API + libjpeg(-turbo) + FreeImage .hdr）───
-# vcpkg 静态库的依赖闭包经各 target 的 INTERFACE_LINK_LIBRARIES 传递（freeimage::FreeImage
-# 自带完整依赖清单）；ZLIB::ZLIB 显式收尾（libpng/libjpeg 的 INTERFACE 未带 zlib，静态
-# 链接顺序要求 zlib 在消费者之后）。
-find_package(libpng CONFIG REQUIRED)
-find_package(libjpeg-turbo CONFIG REQUIRED)
-find_package(freeimage CONFIG REQUIRED)
-find_package(ZLIB REQUIRED)
-target_link_libraries(rgl PRIVATE PNG::PNG libjpeg-turbo::jpeg-static freeimage::FreeImage ZLIB::ZLIB)
-
-# NVIDIA Aftermath GPU crash dump（诊断能力，编译期开关；默认关，排查 NV 崩溃时开）
-# 用法：just config 前设 RGL_AFTERMATH=ON，或 cmake -DRGL_AFTERMATH=ON
-option(RGL_AFTERMATH "Enable NVIDIA Aftermath GPU crash dumps (Linux/NVIDIA only)" OFF)
-if(RGL_AFTERMATH AND UNIX AND NOT APPLE)
-    set(AFTERMATH_SDK_DIR "${CMAKE_SOURCE_DIR}/../Aftermath")
-    target_include_directories(rgl PRIVATE "${AFTERMATH_SDK_DIR}/include")
-    target_link_libraries(rgl PRIVATE "${AFTERMATH_SDK_DIR}/lib/x64/libGFSDK_Aftermath_Lib.x64.so")
-    target_compile_definitions(rgl PRIVATE RGL_AFTERMATH=1)
-endif()
-
-target_compile_features(rgl PRIVATE cxx_std_23)

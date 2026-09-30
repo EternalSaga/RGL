@@ -57,25 +57,47 @@ CMake 无独立构建目录——必须从根目录构建（`cmake -B build -S .
 | 单元测试层 | `tests/`（doctest，C++20 modules） | **纯函数/契约**：阴影级联几何、相机数学、glTF 解析、四份配置 loader、反射字节布局、内建 cube 几何。**无 GPU 无窗口，毫秒级** | `just test` |
 | 进程级集成层 | `qa/`（**规划中，批 12.2+**） | 图像/场景级：程序化小场景 + RPC 驱动 + OpenCV 量化 | 尚未落地 |
 
-### rlcore —— 「无 Vulkan 依赖闭包」静态库（rlstd/rllogger 之后第三个库）
+### 引擎四库分层（rlstd/rllogger 之后新增四个库）
 
-单元测试要 import 引擎的纯函数模块，而 `rgl` 是**可执行文件**（其 CXX_MODULES FILE_SET 只有它自己
-能 import），所以模块必须住进库里。成员判据唯一：**import 闭包（递归）不含 rlvk / VmaRaii / vk_* /
-VmaBuffer / QueueFamilyManager**。当前 30 个模块，清单是 `rgl/CMakeLists.txt` 的 `RGL_CORE_MODULE_SOURCES`
-（**唯一真相源**；`rgl` 拿 GLOB 结果 `list(REMOVE_ITEM)` 掉它 → 新增模块默认落 rgl = 安全默认）。
+单元测试要 import 引擎模块，而 `rgl` 是**可执行文件**（其 CXX_MODULES FILE_SET 只有它自己
+能 import），所以模块必须住进库。批 12.1 先做的是「rlcore = import 闭包不含 Vulkan」，
+12.2c 改成**按功能分四层**——因为那条闭包判据**把两件事混成了一条**：它禁的是
+「import Vulkan」这个**动作**，想守的是「能不能不建设备就测」这个**能力**，两者不等价。
+实测它造成大量连坐（`frame_draw_list` / `render_list` / `render_graph` / `scene_data` 各自
+只因借了一个资源句柄就拖进整个 Vulkan 栈，源码注释自称「架构债务续账」），而逐条算过
+「切断这条边后闭包还含不含 Vulkan 根」：**13 条里 12 条是徒劳的**（`vk_resources` 是枢纽、
+`VmaRaii` 在它后面）。
 
-三条硬约束（违反即构建/链接失败，不静默劣化）：
-1. **分区同 target**：模块 X 的接口与 `X:impl` 等分区实现单元必须同 target。故 `shader`（接口脏）
-   与 `shader:impl`（干净）**都留在 rgl**。
-2. 库若链上 Vulkan 栈 = 立刻链接失败（依赖方向由此变成机器可查的）。
-3. 静态库**按需链接**——消费者只 import `scene_context` 时，rlcore 里带未定义符号的 Vulkan 模块
-   **不进**测试二进制（已实测 nm 干净）。故 `rgl_tests` 只 ~240KB。
+| 库 | 内容 | 需设备 |
+|---|---|---|
+| `rlbase` | 值类型/数学/四份配置 loader/glTF/图像编解码/反射产物/profiler/RPC 传输/param_registry | **0/30** ← 整层无设备依赖 |
+| `rlgfx` | `rlvk` `VmaRaii` vulkan_utils vulkan_window queue_family_manager features shader state_kit gpu_profiler vk_instance/vk_device/vk_swapchain/vk_resources render_target_cache sampler_library mip_gen asset_table | 全部 |
+| `rlscene` | scene_data render_graph\* render_graph_config environment env_prefilter mip_gen 的消费侧 texture_\* model_importer builtin_geometry render_list frame_draw_list | 全部 |
+| `rlframe` | frame_session/frame_capture/picking/cull_driver/gpu_cull/gpu_canary/present_timing/vk_indirect_commands/vk_renderer/imgui_layer/debug_rpc_exec/llm_debug/shader_registry/shader_hot_reload/ecs/param_pages | 全部 |
+| `rgl` | `main` `main:impl` `main:scene` —— 含 `main()`，必须留可执行文件 | — |
 
-新增模块想进库：先按 `tests/CMakeLists.txt` 头注释的判据自查（**"只看直接 import 不够，要顺闭包走"**——
-`render_graph` 自己只 import 4 个，但 `vk_swapchain` / `render_target_cache` 各自拖整个 Vulkan 栈），
-再把源文件加进 `RGL_CORE_MODULE_SOURCES`。**要测 rlcore 之外的模块**（render_graph / shader_registry /
-vk_* …）不要往 `tests/` 硬塞（会把 Vulkan 栈拖进测试二进制），走 `qa/` 的进程级集成测试。
-已按此判据被排除的模块**不是遗漏**，理由逐条写在 `rgl/CMakeLists.txt` 的 rlcore 头注释里。
+依赖只向下，出现逆向 import 立刻链接失败。清单在 `rgl/CMakeLists.txt` 的
+`RGL_{BASE,GFX,SCENE,FRAME,APP}_MODULE_SOURCES`。
+
+**新增模块的流程**：加进职责归属正确的那份清单 → configure 期**归属完整性闸门**会核对
+「磁盘上每个 .cppm 恰好登记一次」，漏登记即 `FATAL_ERROR` 点名报错（刻意不用「GLOB 后减掉
+已登记」——那会让新文件静默落进 `rgl`，而那里只该有 `main*`）。判据只有一个：
+**这段逻辑需不需要一个 VkDevice 才能跑**。不需要 → 属 `rlbase`，就该能在 `just test` 里测；
+需要 → 设备级测试或 `qa/`。
+
+⚠️ **两条踩过的坑**（都在 `rgl/CMakeLists.txt` 有注释）：
+- **include 面 / 编译宏的归属判据 = 哪个库拥有用它的那个 TU**，不是"谁在用它"。imgui 头挂
+  `rlgfx` 而唯一 include 它的是 `rlframe` 的 `imgui_layer_impl`；`RGL_SLANGC_PATH` 留 `rgl`
+  而用它的 `shader_hot_reload*` 已搬进 `rlframe` → `#ifdef` 落进 `#else`（那里是 return，
+  编译期仍继续解析）→ 后面某行报 `undeclared identifier 'ec'`，**症状离真因三跳**。
+- **不要用 `modern_vulkan_tutorial/tools/explore/data/model.json` 做依赖分析**：实测它漏
+  326 条 import 边（**294 条来自 `module X:impl;` 分区实现单元，占 90%**）。用它验证出来的
+  「零逆向边」是假的——四库划分第一次尝试就被它坑了，漏掉 `param_pages:impl → ecs`，
+  编译期才炸。正确口径见 `rgl/CMakeLists.txt` 头注释（110 模块 / 790 条边，从源码正则直抽）。
+
+**测试二进制**：`rgl_tests` 链 `rlbase`（约 1.9MB，主要是 sol2/lua 配置 loader + spdlog 静态
+链入），**Vulkan 符号 0**（nm 实测）——静态库按需链接，其余库的 Vulkan 模块不进二进制。
+故 `just test` 保持「无 GPU 无窗口、毫秒级」。
 
 ### 写测试的硬纪律（从 ~90 条历史 bug 换来的）
 
