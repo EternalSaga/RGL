@@ -63,7 +63,20 @@ set(RGL_TEST_SOURCES
     test_shadow_forward.cppm     # shadow.slang 选级 forward 提取式数学恒等（invVP 列叉积，5a-8c 回归，12.3d-C）
     test_device_primitives.cppm      # gpu 套件回读原语：clear 逐像素 / 整数回环 / UNORM 量化 / 拷贝保真
     test_device_primitives_impl.cppm # 设备夹具实现（partition impl unit）
+    test_conservative_mesh.cppm      # gpu 套件 11.3-1b 成败门：保守光栅 × mesh shader × RADV（含 EDS3 动态态）
+    test_izb_create.cppm             # gpu 套件 11.3-1c：IZB grid-of-lists 原子创建 + early-Z priming
 )
+
+# ─── 11.3-1b 探针 SPIR-V（izb_spike mesh/frag，测试专用不入引擎 SPV 面）──────
+# 复用 cmake/RglSlang.cmake（SLANG_FLAGS 唯一声明点，勿在此内联 flag）；本目录
+# include 后 GEN_DIR = build/tests/generated_shaders，与引擎产物分目录。
+# 产物经 target_sources 挂进 rgl_tests 依赖（与 rgl 可执行挂 SPV 同款做法）。
+include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/RglSlang.cmake)
+compile_slang("${CMAKE_CURRENT_SOURCE_DIR}/shaders/izb_spike.mesh.slang" IZB_SPIKE_MESH_SPV)
+compile_slang("${CMAKE_CURRENT_SOURCE_DIR}/shaders/izb_spike.frag.slang" IZB_SPIKE_FRAG_SPV)
+# 11.3-1c：IZB 创建 + priming compute（grid-of-lists spike）
+compile_slang("${CMAKE_CURRENT_SOURCE_DIR}/shaders/izb_create.comp.slang" IZB_CREATE_SPV)
+compile_slang("${CMAKE_CURRENT_SOURCE_DIR}/shaders/izb_prime.comp.slang" IZB_PRIME_SPV)
 
 # ─── 测试支撑模块 ─────────────────────────────────────────────────────────
 # doctest 头（GMF）+ 共享断言宏 + **确定性采样器**。确定性是硬要求：历史教训
@@ -89,6 +102,9 @@ target_sources(rgl_tests PUBLIC
     FILES ${RGL_TEST_SOURCES}
 )
 target_compile_features(rgl_tests PRIVATE cxx_std_23)
+# 探针 SPV 挂进依赖（add_executable 之后；与 rgl 可执行挂 SPV 同款做法）
+target_sources(rgl_tests PRIVATE ${IZB_SPIKE_MESH_SPV} ${IZB_SPIKE_FRAG_SPV}
+    ${IZB_CREATE_SPV} ${IZB_PRIME_SPV})
 # 链接面：rlbase 之外**也**链 rlgfx/rlscene/rlframe（批 12.2d）。
 #
 # 为什么不只链 rlbase（那样测试二进制里 Vulkan 符号恒 0，看起来更干净）：
@@ -115,6 +131,8 @@ target_link_libraries(rgl_tests
 # 刻意**不做**"无设备就 skip"——静默跳过是假绿，正是本项目反复吃亏的那类事
 # （"上次跑过"≠"这次验的是同一组输入"）。[gpu] 用例在无设备机器上必须**响亮失败**。
 target_compile_definitions(rgl_tests PRIVATE RGL_TESTS_HAVE_GPU_TESTS=1)
+# 1b 探针 SPIR-V 绝对路径（构建产物目录；测试读文件建 shader module，spv 缺失 = 响亮失败）
+target_compile_definitions(rgl_tests PRIVATE RGL_TEST_SHADER_DIR="${CMAKE_CURRENT_BINARY_DIR}/generated_shaders")
 
 # 测试代码不纳入 source_checks（tools/checks 扫的是 rgl/）：doctest 宏会触发大量
 # 误报（GMF 白名单、行数阈值、函数长度对 TEST_CASE 全是噪声）。测试代码的质量由

@@ -24,6 +24,7 @@ export using FeatureChainTail = vk::PhysicalDeviceDeviceGeneratedCommandsFeature
 // 且 feature 置位；optional_extensions = 无 feature 结构的纯扩展位（仅探测扩展可用性）。
 export struct OptionalFeatureSupport {
     bool depthClipEnable = false;
+    bool conservativeRasterizationDynamic = false;
     bool depthClipBase = false;
     bool robustBufferAccess2 = false;
     bool nullDescriptor = false;
@@ -49,6 +50,10 @@ export OptionalFeatureSupport queryOptionalFeatures(const vk::raii::PhysicalDevi
     if (extensionAvailable(device, VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME)) {
         auto f_depthClipEnable = device.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT>();
         s.depthClipEnable = f_depthClipEnable.get<vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT>().extendedDynamicState3DepthClipEnable != 0;
+    }
+    if (extensionAvailable(device, VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME)) {
+        auto f_conservativeRasterizationDynamic = device.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT>();
+        s.conservativeRasterizationDynamic = f_conservativeRasterizationDynamic.get<vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT>().extendedDynamicState3ConservativeRasterizationMode != 0;
     }
     if (extensionAvailable(device, VK_EXT_DEPTH_CLIP_ENABLE_EXTENSION_NAME)) {
         auto f_depthClipBase = device.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceDepthClipEnableFeaturesEXT>();

@@ -21,7 +21,9 @@ module;
  *                  恰有 3 个"缺一"组合覆盖三处 &&）
  *   getDeviceExtensions      ：可选追加项的 if 条件改写（如 depthClipEnable 门控删掉
  *                  → 无条件追加）→ "默认 opt 无 edS3"反向用例红；present_timing 组
- *                  的 all-or-nothing 破坏（移一个出 if）→ "缺一"用例红
+ *                  的 all-or-nothing 破坏（移一个出 if）→ "缺一"用例红；
+ *                  conservativeRasterizationDynamic 的 || 条件删掉 →
+ *                  "保守动态位单独抬 edS3"用例红（EDS3 缺席）
  *   无参 getDeviceExtensions ：9 项必需清单删一项 → size==9 红（换名 → has() 红）
  */
 #include <doctest/doctest.h>
@@ -130,6 +132,16 @@ TEST_CASE("getDeviceExtensions(opt)：depth clip 两位各自门控各自扩展�
 		CHECK(has(exts, VK_EXT_DEPTH_CLIP_ENABLE_EXTENSION_NAME));
 		CHECK(exts.size() == kRequired.size() + 2);
 	}
+}
+
+TEST_CASE("getDeviceExtensions(opt)：保守光栅动态位单独抬 edS3 底座（批 11.3 1b）") {
+	// EDS3 底座从"只有 depthClip 用"变两位共用：删 || 条件 → 本用例红（EDS3 缺席）。
+	OptionalFeatureSupport opt;
+	opt.conservativeRasterizationDynamic = true;
+	const auto exts = getDeviceExtensions(opt);
+	CHECK(has(exts, VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME));
+	CHECK_FALSE(has(exts, VK_EXT_DEPTH_CLIP_ENABLE_EXTENSION_NAME));  // 不连带旧扩展
+	CHECK(exts.size() == kRequired.size() + 1);
 }
 
 TEST_CASE("getDeviceExtensions(opt)：robustness2 两 bit 共一条、calibrated EXT 独立追加") {

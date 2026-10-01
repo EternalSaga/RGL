@@ -254,6 +254,8 @@ export class DeviceContext {
 		// 独立结构体（非 StructureChain 管理）：显式钉死 sType，不依赖 hpp 默认构造器
 		f.sType = vk::StructureType::ePhysicalDeviceExtendedDynamicState3FeaturesEXT;
 		f.extendedDynamicState3DepthClipEnable = opt.depthClipEnable ? VK_TRUE : VK_FALSE;
+		f.extendedDynamicState3ConservativeRasterizationMode =
+			opt.conservativeRasterizationDynamic ? VK_TRUE : VK_FALSE;  // 批 11.3 1b：保守光栅模式动态化（IZB pass 用）
 		return f;
 	}
 
@@ -334,7 +336,9 @@ export class DeviceContext {
 		// 与本链接同源一致（都按 optionalFeatures）。
 		void* optHead = nullptr;
 		if (optionalFeatures.depthClipBase) { depthClipBaseFeature.pNext = optHead; optHead = &depthClipBaseFeature; }
-		if (optionalFeatures.depthClipEnable) { eds3Feature.pNext = optHead; optHead = &eds3Feature; }
+		if (optionalFeatures.depthClipEnable || optionalFeatures.conservativeRasterizationDynamic) {
+			eds3Feature.pNext = optHead; optHead = &eds3Feature;  // 与 getDeviceExtensions 的 EDS3 底座条件同源
+		}
 		if (optionalFeatures.robustBufferAccess2 || optionalFeatures.nullDescriptor) {
 			robustness2Feature.pNext = optHead; optHead = &robustness2Feature;
 		}

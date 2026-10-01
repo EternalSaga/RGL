@@ -58,6 +58,7 @@ using vk::CompareOp;
 using vk::ComponentSwizzle;
 using vk::CompositeAlphaFlagBitsKHR;
 using vk::ComputePipelineCreateInfo;
+using vk::ConservativeRasterizationModeEXT;  // 批 11.3-1b 保守光栅（tests + 后续 izb pass）
 using vk::CullModeFlagBits;
 using vk::DebugUtilsMessageSeverityFlagBitsEXT;
 using vk::DebugUtilsMessageTypeFlagBitsEXT;
@@ -65,6 +66,7 @@ using vk::DebugUtilsMessageTypeFlagsEXT;
 using vk::DebugUtilsMessengerCallbackDataEXT;
 using vk::DebugUtilsMessengerCreateInfoEXT;
 using vk::DependencyInfo;
+using vk::DescriptorBufferInfo;  // 批 11.3-1c：测试侧 SSBO 描述符
 using vk::DescriptorImageInfo;
 using vk::DescriptorPoolCreateFlagBits;
 using vk::DescriptorPoolCreateInfo;
@@ -84,6 +86,7 @@ using vk::DeviceDiagnosticsConfigFlagsNV;       // RGL_AFTERMATH 诊断
 using vk::DeviceQueueCreateFlags;
 using vk::DeviceQueueCreateInfo;
 using vk::DeviceSize;
+using vk::DynamicState;  // 批 11.3-1b：eConservativeRasterizationModeEXT 进动态名单
 using vk::Extent2D;
 using vk::Extent3D;
 using vk::Fence;
@@ -95,6 +98,7 @@ using vk::Format;
 using vk::FormatFeatureFlagBits;
 using vk::FormatFeatureFlags;
 using vk::FrontFace;
+using vk::GraphicsPipelineCreateInfo;  // 批 11.3-1b：测试侧传统管线（mesh + 保守光栅状态）
 using vk::HostAddressRangeConstEXT;
 using vk::HostAddressRangeEXT;
 using vk::Image;
@@ -124,10 +128,12 @@ using vk::MemoryMapFlags;
 using vk::MemoryPropertyFlagBits;
 using vk::MemoryPropertyFlags;
 using vk::MemoryRequirements;
+using vk::Offset2D;
 using vk::Offset3D;
 using vk::PastPresentationTimingEXT;          // Phase 9.3 present_timing 结果项
 using vk::PastPresentationTimingInfoEXT;      // Phase 9.3 collect 输入描述
 using vk::PastPresentationTimingPropertiesEXT;  // Phase 9.3 collect 输出缓冲描述
+using vk::PhysicalDeviceConservativeRasterizationPropertiesEXT;  // 批 11.3-1b：§9 能力 golden
 using vk::PhysicalDeviceDepthClipEnableFeaturesEXT;
 using vk::PhysicalDeviceDescriptorBufferFeaturesEXT;
 using vk::PhysicalDeviceDescriptorHeapFeaturesEXT;
@@ -155,10 +161,19 @@ using vk::PhysicalDeviceVulkan12Features;
 using vk::PhysicalDeviceVulkan13Features;
 using vk::PhysicalDeviceVulkan14Features;
 using vk::PipelineBindPoint;
+using vk::PipelineColorBlendAttachmentState;  // 批 11.3-1b：测试侧传统管线（下同）
+using vk::PipelineColorBlendStateCreateInfo;
+using vk::PipelineDynamicStateCreateInfo;
 using vk::PipelineLayoutCreateInfo;
+using vk::PipelineMultisampleStateCreateInfo;
+using vk::PipelineRasterizationConservativeStateCreateInfoEXT;
+using vk::PipelineRasterizationStateCreateInfo;
+using vk::PipelineRenderingCreateInfo;
+using vk::PipelineShaderStageCreateFlags;
 using vk::PipelineShaderStageCreateInfo;
 using vk::PipelineStageFlagBits2;
 using vk::PipelineStageFlags2;
+using vk::PipelineViewportStateCreateInfo;  // 批 11.3-1b
 using vk::PolygonMode;
 using vk::PresentId2KHR;                      // Phase 9.3 present id pNext
 using vk::PresentInfoKHR;

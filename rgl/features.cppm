@@ -108,8 +108,8 @@ export bool depthClipDynamicSupported(const OptionalFeatureSupport& opt) {
  */
 export std::vector<const char*> getDeviceExtensions(const OptionalFeatureSupport& opt) {
 	auto extensions = kDeviceExtensions();
-	if (opt.depthClipEnable)
-		extensions.push_back(VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME);
+	if (opt.depthClipEnable || opt.conservativeRasterizationDynamic)
+		extensions.push_back(VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME);  // 底座：depthClip 动态化与保守光栅动态模式共用（批 11.3 1b）
 	if (opt.depthClipBase)  // edS3 的 depth clip 动态化以旧扩展为底座（VUID-07451，
 		extensions.push_back(VK_EXT_DEPTH_CLIP_ENABLE_EXTENSION_NAME);  // 两者须同开）
 	if (opt.robustBufferAccess2 || opt.nullDescriptor)  // 与 vkdevice 条件链接同源

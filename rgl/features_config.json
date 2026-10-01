@@ -46,6 +46,7 @@
     ],
     "optional_features": [
         {"vk_type": "vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT", "path": "extendedDynamicState3DepthClipEnable", "field": "depthClipEnable", "extension": "VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME"},
+        {"vk_type": "vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT", "path": "extendedDynamicState3ConservativeRasterizationMode", "field": "conservativeRasterizationDynamic", "extension": "VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME"},
         {"vk_type": "vk::PhysicalDeviceDepthClipEnableFeaturesEXT", "path": "depthClipEnable", "field": "depthClipBase", "extension": "VK_EXT_DEPTH_CLIP_ENABLE_EXTENSION_NAME"},
         {"vk_type": "vk::PhysicalDeviceRobustness2FeaturesKHR", "path": "robustBufferAccess2", "field": "robustBufferAccess2", "extension": "VK_KHR_ROBUSTNESS_2_EXTENSION_NAME"},
         {"vk_type": "vk::PhysicalDeviceRobustness2FeaturesKHR", "path": "nullDescriptor", "field": "nullDescriptor", "extension": "VK_KHR_ROBUSTNESS_2_EXTENSION_NAME"},
