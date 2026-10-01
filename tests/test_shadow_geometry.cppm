@@ -2,6 +2,8 @@ module;
 #include <doctest/doctest.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/matrix_inverse.hpp>  // glm::inverse（B6 从 v.view 恢复吸附中心）
+#include <initializer_list>            // 必须：modules 下 std::initializer_list 不从 import 带进来
 
 // 阴影几何回归测试（批 12.1 · B1）——把 Phase 11 批 11.2 的 5a-3→5a-9 七轮排障
 // 固化成断言。被测对象全在 rgl/scene_context.cppm（rlcore 成员，纯函数，零 GPU）。
@@ -569,25 +571,124 @@ TEST_CASE("buildShadowVolume：退化输入返回零半径体（谁都不进得�
 	CHECK(casterInShadowVolume(v, glm::vec3{0.0f}, 0.5f));
 }
 
-TEST_CASE("buildShadowVolume：texel 吸附是世界锚定的（换吸附策略会让影子随视角游动）") {
-	// 5a-8b 的另一半：吸附中心必须建在**固定光基**的三坐标上。若改成"在自己盒里的
-	// NDC 吸附"（恒等于 (0,0)），等于没吸——盒跟着视锥球心走。
-	// 判据：同一 (light, slice, 投影体) 在**不同相机姿态**下，吸附后的盒参数只依赖
-	// 球心在世界里的位置，故同一 slice 中心下，**两次调用的 tMin/tMax/eyeOffset 逐位相同**。
-	const auto proj = makeProj({60.0f, 16.0f / 16.0f, 0.1f, 100.0f});
-	const Bounds slice = frustumBoundingSphere(makeView(kPoses[0], 5.0f), proj);
-	const Aabb box{glm::vec3{-2.0f, -1.0f, -2.0f}, glm::vec3{2.0f, 3.0f, 2.0f}};
-	const ShadowVolume a = buildShadowVolume(kSunDown, slice, box.lo, box.hi, 1024);
-	const ShadowVolume b = buildShadowVolume(kSunDown, slice, box.lo, box.hi, 1024);
-	INFO(a.tMin << " " << a.tMax << " " << a.eyeOffset);
-	expectNear(b.tMin, a.tMin, 0.0, 0.0);
-	expectNear(b.tMax, a.tMax, 0.0, 0.0);
-	expectNear(b.eyeOffset, a.eyeOffset, 0.0, 0.0);
-	// 吸附步长 = 2r/mapSize：tMin/tMax 相对 pad(r·0.02) 的量级应远大于单格，
-	// 否则"吸附"实际上没起作用（历史：恒等吸附 = 快照无位移）。
-	const float texel = 2.0f * slice.radius / 1024.0f;
-	INFO(texel);
-	CHECK(texel > 0.0f);
+TEST_CASE("buildShadowVolume：texel 吸附世界锚定且真实发生（批 12.3d 重写——旧版'同参调两次'是恒真断言）") {
+	// 历史（5a-8 / 5a-8b）：吸附曾是"在自己盒里的 NDC 吸附"= 恒 (0,0) = 没吸 →
+	// 盒跟着视锥球心走 → 影子随视角游动。本用例旧版把**同一组实参**调
+	// buildShadowVolume 两次比逐位相同——任何纯函数都满足，恒等吸附/相位漂移
+	// 都不会让它红，12.3d 整条重写。
+	//
+	// 契约（scene_context.cppm:402-455 文档注释 + 实文）：
+	//   光基 d = normalize(light.direction)，up = (|d.y|>0.99 ? +Z : +Y)，
+	//   s = normalize(cross(d,up))、u = cross(s,d) —— 世界固定（只依赖太阳方向）；
+	//   格距 texel = 2r/mapSize（mapSize 实参 = **块**边长 shadowTileSize(cols)，非图集整幅）；
+	//   球心 c 的三轴坐标（c·s / c·u / c·d）各 round 到格点 → c'，每轴位移 ≤ 半 texel；
+	//   tMin = min(−r, dot(casterFar−c', d)) − 0.02r；tMax = max(r, dot(casterNear−c', d)) + 0.02r；
+	//   eyeOffset = −tMin；eye = c' − d·eyeOffset。"世界锚定"= 吸附格不含 eye/视锥中心项。
+	//
+	// 真判据两路（信号/噪声比全部探针实测，标在各断言旁）：
+	//   ① 同格两路：两个**独立构造、互不相同**的球心落进**同一**吸附格 → 盒参数一致
+	//     （浮点噪声内）；恒等吸附会把两路按其光轴投影差（0.9 texel）整体错开 → 红。
+	//   ② 契约重算：期望值 = 测试侧 double 按上式独立取整重排，断言输出 == 重算；
+	//     再从 v.view 恢复 c' 校验"格相位 = texel 整数倍"+ 位移界（<1 texel 且真实移动）。
+	//     恒等吸附（历史形态，"按自身中心吸附"与之等价）与相位改锚都红。
+	const auto proj = makeProj({60.0f, 1.0f, 0.1f, 100.0f});
+	constexpr uint32_t mapSize = 1024u;
+	// 两条姿态路径（pose0 / pose2，同 proj）：半径姿态无关（5a-7 主判据，组 1 已独立
+	// 钉死）⇒ 两路 texel 逐位相同，这里断言之；球心随姿态不同 = 各自独立推导产出。
+	const Bounds sA = frustumBoundingSphere(makeView(kPoses[0], 5.0f), proj);
+	const Bounds sB = frustumBoundingSphere(makeView(kPoses[2], 5.0f), proj);
+	REQUIRE(sA.radius > 0.0f);
+	CHECK(sB.radius == sA.radius);  // 逐位：同 proj ⇒ 同半径 ⇒ 同 texel（姿态无关）
+	// 高塔（y 顶 400）保证 tMin 由 caster 分支支配（探针：dot = −349.7 ≪ −r = −83.4），
+	// 吸附位移全额传导进 tMin/eyeOffset；若 −r 分支支配，min() 会把吸附遮蔽、判据退化
+	// ——这正是 5a-8b"高塔被近平面裁掉"的同款输入形态。
+	const Aabb tower{glm::vec3{-0.5f, -1.0f, -0.5f}, glm::vec3{0.5f, 400.0f, 0.5f}};
+
+	// —— 测试侧独立重算（double，按上文字契约，不调被测函数、不抄实现重组）——
+	const glm::dvec3 d = glm::normalize(glm::dvec3(kSunDown.direction));
+	const glm::dvec3 up = (d.y > 0.99 || d.y < -0.99) ? glm::dvec3{0.0, 0.0, 1.0} : glm::dvec3{0.0, 1.0, 0.0};
+	const glm::dvec3 s = glm::normalize(glm::cross(d, up));
+	const glm::dvec3 u = glm::cross(s, d);
+	const double texel = 2.0 * static_cast<double>(sA.radius) / static_cast<double>(mapSize);
+	// c → c'：世界固定光基三轴 round 到格点（格锚在世界原点，无 eye/视锥中心项）
+	const auto snapGrid = [&](const glm::dvec3& c) {
+		return (s * std::round(glm::dot(c, s) / texel) + u * std::round(glm::dot(c, u) / texel)
+			+ d * std::round(glm::dot(c, d) / texel)) * texel;
+	};
+	// c' → 期望盒参数（caster 两端 = support function 按光向分量符号取角）
+	const auto expectVolume = [&](const glm::dvec3& snapped) {
+		const glm::dvec3 casterFar{
+			d.x >= 0.0 ? static_cast<double>(tower.lo.x) : static_cast<double>(tower.hi.x),
+			d.y >= 0.0 ? static_cast<double>(tower.lo.y) : static_cast<double>(tower.hi.y),
+			d.z >= 0.0 ? static_cast<double>(tower.lo.z) : static_cast<double>(tower.hi.z)};
+		const glm::dvec3 casterNear{
+			d.x >= 0.0 ? static_cast<double>(tower.hi.x) : static_cast<double>(tower.lo.x),
+			d.y >= 0.0 ? static_cast<double>(tower.hi.y) : static_cast<double>(tower.lo.y),
+			d.z >= 0.0 ? static_cast<double>(tower.hi.z) : static_cast<double>(tower.lo.z)};
+		const double r = static_cast<double>(sA.radius);
+		const double pad = r * 0.02;
+		const double tMin = std::min(-r, glm::dot(casterFar - snapped, d)) - pad;
+		const double tMax = std::max(r, glm::dot(casterNear - snapped, d)) + pad;
+		return std::array<double, 3>{tMin, tMax, -tMin};  // eyeOffset = −tMin
+	};
+
+	// —— ② 输出 == 契约重算 + 格相位 + 位移界（两条姿态路径的球心各跑一遍）——
+	for (const Bounds& slice : {sA, sB}) {
+		const ShadowVolume v = buildShadowVolume(kSunDown, slice, tower.lo, tower.hi, mapSize);
+		const glm::dvec3 g = snapGrid(glm::dvec3(slice.center));
+		const auto [tMin, tMax, eyeOffset] = expectVolume(g);
+		INFO("center=(" << slice.center.x << "," << slice.center.y << "," << slice.center.z
+					 << ") r=" << slice.radius << " texel=" << texel);
+		// 容差 max(1e-4, 1e-6·|期望|)≈3.5e-4：float32 实现 vs double 重算的实测噪声
+		// ≤2.5e-5（14 倍余量）。信号：变异 a（恒等吸附）ΔtMin = 4.9e-2 / 1.1e-2（两路），
+		// 变异 b（格锚改 casterMin）ΔtMin = 8.4e-3 → 全部 ≥24 倍红。
+		expectNear(v.tMin, tMin, 1e-6, 1e-4);
+		expectNear(v.tMax, tMax, 1e-6, 1e-4);
+		expectNear(v.eyeOffset, eyeOffset, 1e-6, 1e-4);
+		// 吸附真实发生且有界：位移范型 < 1 texel（理论上界 √3/2 texel），且确实动了
+		// （探针 sA 0.53 / sB 0.18 texel；下限 0.05 防"输入恰好踩格点"让恒等吸附蒙混）
+		const double disp = glm::length(g - glm::dvec3(slice.center));
+		CHECK(disp <= 1.0 * texel);
+		CHECK(disp >= 0.05 * texel);
+		// 格相位：从输出 v.view 恢复吸附中心（契约 eye = c'−d·eyeOffset ⇒
+		// c' = view⁻¹·(0,0,−eyeOffset)），其三轴光基坐标必为 **texel 整数倍**——
+		// "格世界固定"的可观测形态。恢复噪声实测 ≤1.2e-4 texel，容差 2e-3（16 倍）；
+		// 变异 a 残差 0.23~0.37 texel、变异 b 相移 0.051 texel → 红。
+		const glm::dmat4 invView = glm::inverse(glm::dmat4(v.view));
+		const glm::dvec3 cSnap =
+			glm::dvec3(invView * glm::dvec4(0.0, 0.0, -static_cast<double>(v.eyeOffset), 1.0));
+		const double phase[3] = {
+			std::abs(glm::dot(cSnap, s) / texel - std::round(glm::dot(cSnap, s) / texel)),
+			std::abs(glm::dot(cSnap, u) / texel - std::round(glm::dot(cSnap, u) / texel)),
+			std::abs(glm::dot(cSnap, d) / texel - std::round(glm::dot(cSnap, d) / texel))};
+		for (int axis = 0; axis < 3; ++axis) {
+			INFO("轴 " << axis << " 相位残差(texel) = " << phase[axis]);
+			CHECK(phase[axis] < 2e-3);
+		}
+		// 恢复中心 == 重算中心（把"吸附到哪个格点"本身也钉住；噪声 2.0e-5 绝对，容差 1.6e-3）
+		CHECK(glm::length(cSnap - g) < 1e-2 * texel);
+	}
+
+	// —— ① 同格两路：两个独立构造的不同球心落进同一吸附格 → 同一个盒 ——
+	// 以 sA.center 吸到的格点 gA 为中心，沿三轴各 ±0.45 texel 对称放两球心：同格，
+	// 但光轴投影差 0.9 texel。世界锚定吸附下两次输出逐参数一致（噪声实测：tMin 差
+	// 恰为 0，view 平移列 ≤7.6e-6；容差 2.9e-4~3.5e-4）；恒等吸附把 tMin/eyeOffset/
+	// view 平移全额错开 0.147（≈420 倍容差）——旧版"同参调两次"检测不到这一形态。
+	const glm::dvec3 gA = snapGrid(glm::dvec3(sA.center));
+	const glm::dvec3 off = (s + u + d) * (0.45 * texel);
+	const Bounds c1{glm::vec3(gA + off), sA.radius};
+	const Bounds c2{glm::vec3(gA - off), sA.radius};
+	// 非退化 sanity：两路输入必须真的不同（否则本判据退化为旧版的同参自比）
+	REQUIRE(glm::length(c1.center - c2.center) > 1.0f * static_cast<float>(texel));
+	const ShadowVolume v1 = buildShadowVolume(kSunDown, c1, tower.lo, tower.hi, mapSize);
+	const ShadowVolume v2 = buildShadowVolume(kSunDown, c2, tower.lo, tower.hi, mapSize);
+	expectNear(v2.tMin, v1.tMin, 1e-6, 1e-4);
+	expectNear(v2.tMax, v1.tMax, 1e-6, 1e-4);
+	expectNear(v2.eyeOffset, v1.eyeOffset, 1e-6, 1e-4);
+	for (int i = 0; i < 4; ++i) {
+		INFO("view 平移列 [" << i << "]");
+		expectNear(static_cast<double>(v2.view[3][i]), static_cast<double>(v1.view[3][i]), 1e-6, 1e-4);
+	}
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

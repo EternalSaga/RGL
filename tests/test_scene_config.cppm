@@ -119,6 +119,22 @@ TEST_CASE("scene_config：空表 return {} → 各字段 = 默认值，且 entit
 	expectNear(r->lights[0].intensity, 3.0, 0.0, 1e-6);
 }
 
+TEST_CASE("scene_config：显式 exposure = 2.5 被解析（回落断言的正向对照，批 12.3d · B1）") {
+	// 实文（scene_config_impl.cppm:336）：readFloat(root, "exposure", cfg.exposure)——
+	// Phase 8 收尾的 tonemap 曝光，可选字段，1.0 = 直通。前面两条只钉过"缺省回落 1.0"
+	// （:92/:104），本条钉"显式值真的被写进来"：解析 key 名若漂移，cfg.exposure 保持
+	// 默认 1.0，本断言红（变异红线：key "exposure" 改成别的 → 红）。
+	TempLua f("sc_exposure", "return { exposure = 2.5 }\n");
+	auto r = loadSceneConfig(f.pathStr());
+	REQUIRE(r.has_value());
+	expectNear(r->exposure, 2.5, 0.0, 1e-6);  // 2.5 float 精确可表示，只给绝对阈
+	// 阳性对照的反方向：exposure 命中后 loader 并未提前返回——同表其它字段仍走各自契约
+	// （缺段的回落合成照常：aoStrength 默认 0、spin 默认 true、entities 合成 [cube]）。
+	expectNear(r->aoStrength, 0.0, 0.0, 1e-6);
+	CHECK(r->spin == true);
+	CHECK(r->entities.size() == 1);
+}
+
 TEST_CASE("scene_config：entities 列表解析（type/file/position/rotation/scale，rotation 度原样透传）") {
 	TempLua f("sc_entities", R"lua(
 return {
@@ -623,6 +639,24 @@ TEST_CASE("diagnostics：rpc_port 越界回落 8788（0/70000），合法值原�
 		REQUIRE(r2.has_value());  // warn 不报错
 		CHECK(r2->cameraProbeKey == 0u);   // 非法键被忽略
 		CHECK(r2->cameraProbeHold == 8u);  // **实际行为**：缺省回落 8
+	}
+}
+
+TEST_CASE("diagnostics：dgc_static 空表回落 = false（默认关）+ 显式 true 被解析（批 12.3d · B2）") {
+	// 契约（diagnostics.cppm:28）：RADV 静态 shader DGC spike 门**默认关**（实测性能亏
+	// 1.85×，docs/archive/radv_static_dgc_spike.md）。解析实文（diagnostics_impl.cppm:141）：
+	// cfg.dgcStatic = readBool("dgc_static", cfg.dgcStatic)——缺失回落 = 结构体默认值。
+	{  // 空表 → false（变异红线：结构体默认翻成 true → 红）
+		TempLua f("dg_dgc_def", "return {}\n");
+		auto r = loadDiagnosticsConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->dgcStatic == false);
+	}
+	{  // 显式 true 生效（变异红线：bool 解析恒读默认 / key "dgc_static" 漂移 → 红）
+		TempLua f("dg_dgc_on", "return { dgc_static = true }\n");
+		auto r = loadDiagnosticsConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->dgcStatic == true);
 	}
 }
 

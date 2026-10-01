@@ -769,6 +769,49 @@ TEST_CASE("反向用例：decorateHighlightPass 两种不支持形态都返回 f
     }
 }
 
+TEST_CASE("decorateHighlightPass：采样**深度**的全屏 pass（ao 形态）不算色消费者（批 12.3d · B4）") {
+    // sampledColorName（render_graph_decorate.cppm:41-46）必须排除 kind=depth 的 sampleRead：
+    // ao pass（Phase 11 批 11.4）也以 sampleRead 读 depth，若只看 usage 会把它误当"成片消费
+    // 者" → highlight 的 colorAtt 与借来的 depthAtt 同为 "depth" → 同 pass 引用同一附件两次，
+    // 编译报 "references attachment 'depth' more than once"（源码注释点名这条撞名史）。
+    // 图形态照 defaultRenderGraphDesc 的 aoPass()/tonemapPass()（render_graph_builtin.cppm:40-45）。
+    // **精确语义**（isColorAttachment 实文 :22-26）：只排除 RgAttachmentKind::depth；
+    // depthOffscreen（shadow_map 那类）仍按色处理——本条钉 depth 排除分支，不外推到 depthOffscreen。
+    RgGraphDesc d;
+    d.attachments = {swapchainAtt(), depthAtt(), offscreenAtt("scene", "rgba16_sfloat"),
+        offscreenAtt("ao", "r8_unorm")};
+    d.passes = {
+        RgPassDesc{.name = "opaque", .kind = RgPassKind::drawMesh, .state = "opaque",
+            .drawSource = "opaque",
+            .outputs = {colorOut("scene"), depthOut("depth", RgLoadOp::clear, RgStoreOp::dontCare)}},
+        RgPassDesc{.name = "ao", .kind = RgPassKind::drawLight, .state = "ao",
+            .outputs = {colorOut("ao")}, .inputs = {sampleIn("depth")}},
+        RgPassDesc{.name = "tonemap", .kind = RgPassKind::drawLight, .state = "tonemap",
+            .outputs = {colorOut("swapchain")}, .inputs = {sampleIn("scene")}},
+    };
+    REQUIRE(decorateHighlightPass(d));
+    REQUIRE(d.passes.size() == 4);
+    // 插入点 = **首个色消费者 tonemap 之前**，与"无 ao pass"的基线图一致：只读 depth 的
+    // ao 不得把插入点提前到它之前（变异红线：sampledColorName 去掉 depth 排除 →
+    // ao 被判消费者 → 顺序变 opaque/highlight/ao/tonemap → 红）。
+    CHECK(d.passes[0].name == "opaque");
+    CHECK(d.passes[1].name == "ao");
+    CHECK(d.passes[2].name == "highlight");
+    CHECK(d.passes[3].name == "tonemap");
+    // highlight 写场景色 scene（load 保留成片）+ 借 depth——两个输出附件名互不撞车
+    REQUIRE(d.passes[2].outputs.size() == 2);
+    CHECK(d.passes[2].outputs[0].attachment == "scene");
+    CHECK(d.passes[2].outputs[0].usage == RgUsage::colorWrite);
+    CHECK(d.passes[2].outputs[0].loadOp == RgLoadOp::load);
+    CHECK(d.passes[2].outputs[1].attachment == "depth");
+    // 借的 depth 来自 opaque（插入点前反查：先扫 ao——它无 depthWrite 输出——再到 opaque），
+    // 其 storeOp 被装饰就地改写 dontCare → store
+    CHECK(d.passes[0].outputs[1].storeOp == RgStoreOp::store);
+    // 装饰后的图能编译（撞名形态是编译期硬错误，必须把"不撞"钉成绿）
+    INFO(errOf(compileRenderGraph(d)));
+    CHECK(compileRenderGraph(d).has_value());
+}
+
 TEST_CASE("decorateShadowPass：图首插 kActiveShadowCascades 个 pass + 阴影图附件") {
     RgGraphDesc d = minimalGraph();
     const size_t before = d.passes.size();
@@ -779,6 +822,20 @@ TEST_CASE("decorateShadowPass：图首插 kActiveShadowCascades 个 pass + 阴�
     CHECK(d.passes[0].state == "shadow");
     if (kActiveShadowCascades > 1)
         CHECK(d.passes[1].name == "shadow1");  // 级 0 无后缀，级 ≥1 带序号
+    // 每一级的 depth 输出 loadOp = **clear**（批 12.3d · B3，"各清各块"契约）：动态渲染的
+    // clear 只作用于本 pass 的 renderArea（= 自己的分块子矩形，viewport 由下一条 TEST_CASE
+    // 钉住）→ 分块互不重叠、清不到别级。若误改成 load（2026-09-29 4 级首测即"只清级 0"
+    // 的坑，decorate cppm:160-163 注释点名）：块 1..N 永不初始化 → 采到未定义深度
+    // （实测 ≈0 → 全判影，画面 60% 像素加深）。clear 值走默认 = 深度 1.0 = 无遮挡。
+    for (uint32_t c = 0; c < kActiveShadowCascades; ++c) {
+        INFO("cascade " << c);
+        REQUIRE(d.passes[c].outputs.size() == 1);
+        const RgPassAttachment& out = d.passes[c].outputs[0];
+        CHECK(out.attachment == std::string{kShadowMapName});
+        CHECK(out.usage == RgUsage::depthWrite);
+        CHECK(out.loadOp == RgLoadOp::clear);   // 变异红线：clear→load → 红
+        CHECK(out.storeOp == RgStoreOp::store);
+    }
     // 消费方接线：state ∈ {opaque, transparent, light} 的 pass 拿到阴影图 sampleRead 输入
     //（不接的话编译器不生成 DSAO→ShaderReadOnly 的转换，采样端报 VVL）
     const RgPassDesc* opaque = nullptr;
