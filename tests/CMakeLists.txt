@@ -65,6 +65,7 @@ set(RGL_TEST_SOURCES
     test_device_primitives_impl.cppm # 设备夹具实现（partition impl unit）
     test_conservative_mesh.cppm      # gpu 套件 11.3-1b 成败门：保守光栅 × mesh shader × RADV（含 EDS3 动态态）
     test_izb_create.cppm             # gpu 套件 11.3-1c：IZB grid-of-lists 原子创建 + early-Z priming
+    test_izb_mask.cppm               # gpu 套件 11.3-1d：光空间保守光栅 × IZB 走链 mask 判定
 )
 
 # ─── 11.3-1b 探针 SPIR-V（izb_spike mesh/frag，测试专用不入引擎 SPV 面）──────
@@ -77,6 +78,9 @@ compile_slang("${CMAKE_CURRENT_SOURCE_DIR}/shaders/izb_spike.frag.slang" IZB_SPI
 # 11.3-1c：IZB 创建 + priming compute（grid-of-lists spike）
 compile_slang("${CMAKE_CURRENT_SOURCE_DIR}/shaders/izb_create.comp.slang" IZB_CREATE_SPV)
 compile_slang("${CMAKE_CURRENT_SOURCE_DIR}/shaders/izb_prime.comp.slang" IZB_PRIME_SPV)
+# 11.3-1d：光空间遮挡三角（mesh）× IZB 走链 mask（frag）
+compile_slang("${CMAKE_CURRENT_SOURCE_DIR}/shaders/izb_mask.mesh.slang" IZB_MASK_MESH_SPV)
+compile_slang("${CMAKE_CURRENT_SOURCE_DIR}/shaders/izb_mask.frag.slang" IZB_MASK_FRAG_SPV)
 
 # ─── 测试支撑模块 ─────────────────────────────────────────────────────────
 # doctest 头（GMF）+ 共享断言宏 + **确定性采样器**。确定性是硬要求：历史教训
@@ -104,7 +108,7 @@ target_sources(rgl_tests PUBLIC
 target_compile_features(rgl_tests PRIVATE cxx_std_23)
 # 探针 SPV 挂进依赖（add_executable 之后；与 rgl 可执行挂 SPV 同款做法）
 target_sources(rgl_tests PRIVATE ${IZB_SPIKE_MESH_SPV} ${IZB_SPIKE_FRAG_SPV}
-    ${IZB_CREATE_SPV} ${IZB_PRIME_SPV})
+    ${IZB_CREATE_SPV} ${IZB_PRIME_SPV} ${IZB_MASK_MESH_SPV} ${IZB_MASK_FRAG_SPV})
 # 链接面：rlbase 之外**也**链 rlgfx/rlscene/rlframe（批 12.2d）。
 #
 # 为什么不只链 rlbase（那样测试二进制里 Vulkan 符号恒 0，看起来更干净）：
