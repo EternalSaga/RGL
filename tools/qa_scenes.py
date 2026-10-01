@@ -48,7 +48,7 @@
 # shadow_rig 另有级联跨距自证与影包络覆盖断言）→ 全过才写盘。
 # 任何一项失败 = 打错误列表、非零退出、坏文件不落盘。
 #
-# ## 三个场景的诚实定位
+# ## 四个场景的诚实定位
 #
 # - cornell_box：**只是 Cornell box 的几何**。真正的标志性特征是面光源 + 颜色溢出，
 #   本引擎没有面光源（只有方向光 + 环境 cubemap，见 configs/scene.lua light 段），
@@ -57,6 +57,8 @@
 # - shadow_rig：最重要。按 skill rgl-verify「阴影验收判据」硬要求 1-3 设计（阳性锚点 /
 #   跨级联分布 / 远景取景），逐物体的失效模式在场景函数注释里。
 # - d1_parity：forward / deferred 两路对拍（D1 指标）用的中等面数 + 材质混合 + 自发光面板。
+# - izb_rig：FTIZB/IZB 硬阴影 spike 装置（docs/hfts_izb_plan.md 批 1a）——厚度梯
+#   0.4→0.02 m + 接触柱 + 穿插杆 + 叠影三分带；判据 = izb_shadow 开关 A/B 对拍。
 
 import argparse
 import json
@@ -625,10 +627,228 @@ def scene_d1_parity() -> Scene:
     return s
 
 
+# ---------------------------------------------------------------------------
+# 场景 4：izb_rig —— FTIZB/IZB 硬阴影 spike 装置（docs/hfts_izb_plan.md 批 1a）
+# ---------------------------------------------------------------------------
+# 设计哲学与 shadow_rig 同构：判据「边界免疫」。CSM 级联 texel 尺寸是运行时自适应量
+# （near/far 随相机与包围球漂移），manifest 里预测"这根杆必亚 texel"= 会绿 = 无效断言。
+# 所以本 rig 给的是**四组探针 + A/B 对拍**（izb_shadow 关=CSM / 开=IZB，同机位同帧），
+# 让图像回答「细影去哪了」，构建期只断言几何事实（包络/相交/三分区存在性）。
+#
+# 四组探针（逐一对应 FTIZB 能力点）：
+#   a) 厚度梯 bar_thick/mid/thin/hair（截面 0.4/0.15/0.05/0.02 m，均 6 m 长、均 y=2.0）：
+#      同高同长只差截面。粗档 = 参照（任何路线都对），细档 = CSM 走样/丢失区，
+#      IZB 卖点 = 任意距离画锐。ladder 机位一排同框对比。
+#   b) 接触探柱 post_contact：截面 0.04 m 细柱**立在地面**（底面 y 精确 = 0），影从
+#      根部连续过渡到 h·off 偏移端——peter-panning / 漏光缝 / 双黑带的检测器。
+#   c) 穿插探杆 bar_mounted：X 向 0.3 m 方杆在 y=4.5 穿过主立柱，其影带横穿立柱影带
+#      ——交叠线 = 两独立遮挡体逐 texel 求交的探针（IZB 链表 ≥2 节点 + 可见性 AND）。
+#   d) 叠影探杆 stack_pair_lo/hi（平行 X 向 0.1 m 杆，y=1.0 / 2.5）：两条影带在地面
+#      错落成「受光 | 单叠 | 双叠」三分带。硬阴影下双叠=单叠（二值），该区现在的价值
+#      是 IZB 链表长度 ≥2 的**代码路径覆盖阳性锚点**；PCSS 时代（阶段 3）它变成半影
+#      过渡的视觉判据。两杆互不遮挡（构建期断言：互相不在对方的 toward-light 推导图内）。
+#
+# 浮动杆（无物理支撑）——QA 装置非场景美术，honesty 声明。
+# 构建期断言集（A1–A8，见函数体内注释）：包络被地面覆盖 / 包络两两不相交（除声明对，
+# 且声明对**必须真相交**——排除集不许是摆设）/ 影不落他人身上 / 穿插为真 / 触地为真 /
+# 梯子公平性（同高同长、截面严格递减）/ 三分区各 ≥4cm 可测 / 叠影杆自身受光。
+
+GROUND_HALF_IZB = 60.0
+
+def _slab_shadow_band_z(rect, y_bottom: float, y_top: float):
+    """水平 X 向薄杆（rect = XZ footprint，底 y_bottom 顶 y_top）的地面影带 z 区间。
+    方向光投影：地面 z = z_obj + SHADOW_OFF.z · y_obj（z_obj ∈ rect z 区间，取两端）。"""
+    return (rect[2] + SHADOW_OFF[1] * y_top, rect[3] + SHADOW_OFF[1] * y_bottom)
+
+
+def _slab_shadow_band_x(rect, y_bottom: float, y_top: float):
+    """X 向薄杆地面影带 x 区间（与 z 版同一投影式：地面 x = x_obj + SHADOW_OFF.x · y_obj）。"""
+    return (rect[0] + SHADOW_OFF[0] * y_bottom, rect[1] + SHADOW_OFF[0] * y_top)
+
+
+def _toward_light_hull(rect, dy: float):
+    """rect 沿「朝光方向」抬升 dy 后的 XZ 位置（遮挡测试用：A 顶向光推 dy 会不会够到 B）。
+    光源方向 (-2/3, +1, +3/5) 每单位 y：x 减 2/3、z 加 3/5。"""
+    dx, dz = -SHADOW_OFF[0] * dy, -SHADOW_OFF[1] * dy
+    return (rect[0] + dx, rect[1] + dx, rect[2] + dz, rect[3] + dz)
+
+
+def scene_izb_rig() -> Scene:
+    s = Scene(
+        name="izb_rig",
+        purpose="FTIZB/IZB 硬阴影 spike 装置：厚度梯（0.4→0.02 m）+ 接触阴影 + 穿插影线 + 叠影链表（docs/hfts_izb_plan.md 批 1a）",
+        honesty=("浮动杆无物理支撑（QA 装置，非美术）。影带坐标是按默认光向的**几何设计值**，"
+                 "不是渲染逐像素契约——CSM 级联 texel 尺寸运行时自适应，正确用法 = izb_shadow "
+                 "开关 A/B 对拍 + imgqa 影响域（域外恰为 0），不是拿预测坐标逐像素比。"
+                 "锚点前提 = 默认光向（scene.lua SUN）；RPC 改光后一切坐标须按新光向重算。"),
+        cameras={
+            "hero": {"position": [0.0, 8.0, 34.0], "target": [0.0, 1.0, 0.0],
+                     "fovDegrees": 55.0,
+                     "note": "立柱组全景：穿插杆 + 叠影对 + 接触柱 + 梯子前两档"},
+            "ladder": {"position": [4.0, 5.0, 20.0], "target": [40.0, 0.5, 6.0],
+                       "fovDegrees": 60.0,
+                       "note": "厚度梯对比取景：4 根同长同高、截面 0.4→0.02，影全落受光地面"},
+            "contact": {"position": [-13.5, 1.0, 9.5], "target": [-14.0, 0.4, 6.0],
+                        "fovDegrees": 40.0,
+                        "note": "接触阴影特写：柱根影连续性（peter-panning / 漏光缝探针）"},
+            "stack_zoom": {"position": [14.0, 4.0, 12.5], "target": [14.0, 0.0, 9.45],
+                           "fovDegrees": 45.0,
+                           "note": "叠影三分带俯视（带坐标设计值见 stackDesign）"},
+        },
+        cascade_camera=None,  # 场景仅数十米，跨级联不是本 rig 的断言对象（那是 shadow_rig 职责）
+        extra={
+            "defaultLight": {"direction": list(SUN), "intensity": 12.0,
+                             "source": "configs/scene.lua light 段（全部影位移判据的前提）"},
+            "shadowOffsetPerMeterOfHeight": [SHADOW_OFF[0], SHADOW_OFF[1]],
+            "thicknessLadder": [
+                {"name": "bar_thick", "sectionMeters": 0.4, "heightMeters": 2.0},
+                {"name": "bar_mid", "sectionMeters": 0.15, "heightMeters": 2.0},
+                {"name": "bar_thin", "sectionMeters": 0.05, "heightMeters": 2.0},
+                {"name": "bar_hair", "sectionMeters": 0.02, "heightMeters": 2.0},
+            ],
+            "stackDesign": {
+                "note": ("两平行杆影带的 z 区间设计值（构建期精确算出，进 manifest 供 harness "
+                         "定位三分带；运行时 CSM 会量化/走样它们——那正是要 A/B 看的）"),
+                "bandLo": None,   # 构建期回填
+                "bandHi": None,   # 构建期回填
+            },
+            "declaredOverlaps": [["pillar", "bar_mounted"], ["stack_pair_lo", "stack_pair_hi"]],
+            "note": "高度 h 的顶点影落点 = 基座 + h*(2/3, -3/5)（+X,-Z）；浮动杆影 = footprint 平移，"
+                    "立柱/触地柱影 = 包络（footprint ∪ 平移 footprint）",
+        },
+    )
+    P = s.pieces.append
+    gh = GROUND_HALF_IZB
+
+    P(Piece("ground", quad((-gh, 0.0, -gh), (0.0, 0.0, 2 * gh), (2 * gh, 0.0, 0.0)),
+            PAL["yellow"], roughness=0.9, radial=False, closed=False,
+            intent="公共影接收面（亮黄非近白，同材质影/光比口径）；四组探针的影全部落在其上"))
+    P(Piece("pillar", cylinder(0.0, 0.0, 0.0, 0.5, 6.0, 24),
+            PAL["red"], roughness=0.7,
+            intent="主遮挡柱 r=0.5 h=6：曲面遮挡体 + 大影包络基线；bar_mounted 的穿插对象"))
+    P(Piece("bar_mounted", box(0.0, 4.5, 0.0, 4.0, 0.3, 0.3),
+            PAL["blue"], roughness=0.6,
+            intent="穿插探杆：X 向 4 m 方杆 y=4.5 穿过主柱（构建期断言真相交）；"
+                   "其影带横穿立柱影带 = 两遮挡体影交叠线（IZB 逐 texel 求交探针）"))
+
+    # 厚度梯：同 y=2.0 同 6 m 长，截面 0.4→0.02 严格递减（构建期断言公平性）。
+    # 间距 ≥6 m：影包络两两分离（构建期断言），ladder 机位一眼排开。
+    ladder = [
+        ("bar_thick", 12.0, 0.4, PAL["orange"], "X"),
+        ("bar_mid", 22.0, 0.15, PAL["green"], "Z"),
+        ("bar_thin", 32.0, 0.05, PAL["cyan"], "X"),
+        ("bar_hair", 42.0, 0.02, PAL["magenta"], "X"),
+    ]
+    for name, xc, sec, color, axis in ladder:
+        sx, sz = (6.0, sec) if axis == "X" else (sec, 6.0)
+        P(Piece(name, box(xc, 2.0, 6.0, sx, sec, sz), color, roughness=0.6,
+                intent=f"厚度梯档 截面={sec} m（{'沿X' if axis == 'X' else '沿Z'}）：影宽 = 截面，"
+                       f"细档 CSM 走样/丢失区，IZB 必须画锐；粗档=参照档"))
+
+    P(Piece("post_contact", box(-14.0, 1.25, 6.0, 0.04, 2.5, 0.04),
+            PAL["azure"], roughness=0.6,
+            intent="接触探柱：截面 0.04 m 立在地面（底 y 精确=0，构建期断言）；根部影必须"
+                   "与柱连续——peter-panning / 漏光缝 / 接触双黑带的阳性探针"))
+
+    # 叠影对：0.1 m 截面，y=1.0 / 2.5，z 错开使两影带部分重叠成三分带。
+    P(Piece("stack_pair_lo", box(14.0, 1.0, 10.0, 6.0, 0.1, 0.1),
+            PAL["purple"], roughness=0.6,
+            intent="叠影探杆·低（y=1.0）：与 high 的影带组成 受光|单叠|双叠 三分带；"
+                   "双叠区 = IZB 链表长度 ≥2 的代码路径覆盖锚点（构建期断言两杆互不遮挡）"))
+    P(Piece("stack_pair_hi", box(14.0, 2.5, 11.0, 6.0, 0.1, 0.1),
+            PAL["chartreuse"], roughness=0.6,
+            intent="叠影探杆·高（y=2.5）：高杆影带前移 1.5 m 与低杆影带部分重叠（三分带）"))
+
+    # ---- 构建期断言（A1–A8）：口头承诺不算数，坏了构建失败 ----------------
+    # footprint / 包络高度全部**从几何本体推导**（不手抄坐标表——手抄表与几何是双份
+    # 真相源，改几何忘改表 = 断言静默空转）。包络 = footprint ∪ footprint+off·h_top
+    # （保守上界：立柱/触地柱的真实影即此；浮动杆真实影更窄，用包络判「不相交」只会
+    # 过于严格不会漏报，安全方向正确）。
+    ground_rect = (-gh, gh, -gh, gh)
+    declared = {frozenset(d) for d in s.extra["declaredOverlaps"]}
+    rects, hull_h, yext = {}, {}, {}
+    for p in s.pieces:
+        if p.name == "ground":
+            continue
+        pos = p.geom.positions
+        rects[p.name] = (min(v[0] for v in pos), max(v[0] for v in pos),
+                         min(v[2] for v in pos), max(v[2] for v in pos))
+        yext[p.name] = (min(v[1] for v in pos), max(v[1] for v in pos))
+        hull_h[p.name] = yext[p.name][1]
+    hulls = {k: _rect_hull(rects[k], hull_h[k]) for k in rects}
+
+    # A1 全部保守包络被地面覆盖
+    for k, hull in hulls.items():
+        assert _rect_contains(ground_rect, hull), f"izb_rig: {k} 影包络 {hull} 出地面"
+    # A2 包络两两不相交，除声明重叠对；且声明对必须真相交（排除集不许空转）
+    names = sorted(rects)
+    for i, a in enumerate(names):
+        for b in names[i + 1:]:
+            overlap = _rect_overlap(hulls[a], hulls[b])
+            if frozenset((a, b)) in declared:
+                assert overlap, f"izb_rig: 声明重叠对 ({a},{b}) 实际不相交——探针设计失效"
+            else:
+                assert not overlap, f"izb_rig: ({a},{b}) 影包络意外相交（对拍会被污染）"
+    # A3 任何遮挡体 footprint 不落他人影包络内（声明对豁免）——影只落在裸地面
+    for a in names:
+        for b in names:
+            if a != b and frozenset((a, b)) not in declared:
+                assert not _rect_overlap(hulls[a], rects[b]), \
+                    f"izb_rig: {a} 的影包络压上 {b} 本体"
+    # A4 穿插为真：bar_mounted footprint 与柱 footprint 相交，且 y 区间真在柱身内（几何实测）
+    assert _rect_overlap(rects["pillar"], rects["bar_mounted"]), "izb_rig: bar_mounted 没穿柱"
+    barys = [v[1] for v in next(p for p in s.pieces if p.name == "bar_mounted").geom.positions]
+    assert 0.0 < min(barys) and max(barys) < 6.0, "izb_rig: bar_mounted 高度超出柱身"
+    # A5 触地为真：post_contact 底面 y 精确 = 0
+    post = next(p for p in s.pieces if p.name == "post_contact")
+    ymin = min(v[1] for v in post.geom.positions)
+    assert ymin == 0.0, f"izb_rig: post_contact 底面 y={ymin} 非精确接地"
+    # A6 梯子公平性：同高（bbox y 中心 = 2.0）+ 截面严格递减（从几何实测，不是口头常量）
+    secs = [sec for _, _, sec, _, _ in ladder]
+    assert all(secs[i] > secs[i + 1] for i in range(len(secs) - 1)), "izb_rig: 截面非严格递减"
+    for name, _, _, _, _ in ladder:
+        ys = [v[1] for v in next(p for p in s.pieces if p.name == name).geom.positions]
+        assert abs((min(ys) + max(ys)) / 2.0 - 2.0) < 1e-9, f"izb_rig: {name} 不在 y=2.0 平面"
+    # A7 叠影三分带存在且各 ≥4 cm（可测性下限；<4 cm 时 1080p 特写机位 <10 px，判据噪声吞信号）
+    band_lo = _slab_shadow_band_z(rects["stack_pair_lo"], *yext["stack_pair_lo"])
+    band_hi = _slab_shadow_band_z(rects["stack_pair_hi"], *yext["stack_pair_hi"])
+    lo_only = (band_lo[0], min(band_hi[0], band_lo[1]))
+    both = (max(band_lo[0], band_hi[0]), min(band_lo[1], band_hi[1]))
+    hi_only = (max(band_lo[1], band_hi[0]), band_hi[1])
+    for label, (z0, z1) in (("lo_only", lo_only), ("both", both), ("hi_only", hi_only)):
+        assert z1 - z0 >= 0.04, \
+            f"izb_rig: 三分带 {label} 宽 {z1 - z0:.3f} m < 0.04 m（不可测）"
+    # A8 叠影杆自身受光：两杆互相不在对方的 toward-light 推导图内；柱也够不到它们
+    assert not _rect_overlap(_toward_light_hull(
+        rects["stack_pair_lo"],
+        yext["stack_pair_hi"][0] - yext["stack_pair_lo"][1]),
+        rects["stack_pair_hi"]), "izb_rig: lo 遮住了 hi（三分区不成立）"
+    for k in ("stack_pair_lo", "stack_pair_hi"):
+        pillar_reach = _toward_light_hull(rects[k], yext["pillar"][1] - hull_h[k])
+        assert not _rect_overlap(pillar_reach, rects["pillar"]), \
+            f"izb_rig: {k} 在柱影里（叠影区不在受光地面上）"
+
+    s.extra["stackDesign"]["bandLo"] = [band_lo[0], band_lo[1]]
+    s.extra["stackDesign"]["bandHi"] = [band_hi[0], band_hi[1]]
+    xband_lo = _slab_shadow_band_x(rects["stack_pair_lo"], *yext["stack_pair_lo"])
+    xband_hi = _slab_shadow_band_x(rects["stack_pair_hi"], *yext["stack_pair_hi"])
+    x_span = (max(xband_lo[0], xband_hi[0]), min(xband_lo[1], xband_hi[1]))
+    assert x_span[1] - x_span[0] >= 1.0, \
+        f"izb_rig: 双叠 cell x 交叠宽 {x_span[1] - x_span[0]:.2f} m < 1 m（样本不足）"
+    s.extra["stackDesign"]["zones"] = {
+        "lo_only_z": [lo_only[0], lo_only[1]],
+        "double_stack_z": [both[0], both[1]],
+        "hi_only_z": [hi_only[0], hi_only[1]],
+        "x_span": [x_span[0], x_span[1]],  # 两杆影带 x 区间之交（构建期由几何计算）
+    }
+    return s
+
+
 SCENES = {
     "cornell_box": scene_cornell_box,
     "shadow_rig": scene_shadow_rig,
     "d1_parity": scene_d1_parity,
+    "izb_rig": scene_izb_rig,
 }
 
 
@@ -1221,7 +1441,7 @@ def build_scene(scene: Scene) -> tuple[bytes, str, dict]:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
-        description="程序化 QA 场景生成器（cornell_box / shadow_rig / d1_parity）。"
+        description="程序化 QA 场景生成器（cornell_box / shadow_rig / d1_parity / izb_rig）。"
                     "输出默认落 build/qa_scenes/（gitignore 内；引擎 CWD=build/rgl/，"
                     "harness 用绝对路径或拷入 build/rgl/models/ 加载）。")
     ap.add_argument("--out", default="build/qa_scenes", help="输出目录（默认 build/qa_scenes）")
