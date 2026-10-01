@@ -77,3 +77,30 @@ function(rgl_shader src out_var)
     set(${out_var} "${_spv}" PARENT_SCOPE)
     set_property(GLOBAL APPEND PROPERTY RGL_SPV_OUTPUTS "${_spv}")
 endfunction()
+
+# 门控变体编译（批 11.3-1e 红线终态）：同一 .slang 编两份——**无 -D 的原版逐位不变** +
+# `-D<DEFINE>` 的变体版（产物 <name>_<DEFINE>.spv）。门关闭时引擎选原版 = 新代码连
+# 「源码出现在编译单元里」的编译扰动都不存在（slang 对函数边界/SSA 的重排会改变 fp
+# 融合形态，运行时 flag 分支挡不住逐位漂移——2026-10-02 实测 105401 像素教训）。
+# 调用：rgl_shader_defined(<name> <OUT_VAR> <DEFINE> [<DEP>...])
+function(rgl_shader_defined src out_var define_name)
+    set(deps "")
+    foreach(d IN LISTS ARGN)
+        list(APPEND deps "${CMAKE_CURRENT_SOURCE_DIR}/shaders/${d}.slang")
+    endforeach()
+    get_filename_component(SHADER_ABS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/${src}.slang" ABSOLUTE)
+    get_filename_component(SHADER_DIR ${SHADER_ABS} DIRECTORY)
+    string(REPLACE ".slang" "_${define_name}.spv" SPV_NAME "${src}.slang")
+    set(OUTPUT_SPV "${GEN_DIR}/${SPV_NAME}")
+    add_custom_command(
+        OUTPUT ${OUTPUT_SPV}
+        COMMAND ${SLANGC_EXECUTABLE} ${SHADER_ABS} ${SLANG_FLAGS} -D${define_name}
+                -I "${SHADER_DIR}"
+                -o ${OUTPUT_SPV}
+        DEPENDS ${SHADER_ABS} ${deps}
+        COMMENT "Slangc variant ${define_name}: ${SHADER_FULL_NAME} -> ${SPV_NAME}"
+        VERBATIM
+    )
+    set(${out_var} "${OUTPUT_SPV}" PARENT_SCOPE)
+    set_property(GLOBAL APPEND PROPERTY RGL_SPV_OUTPUTS "${OUTPUT_SPV}")
+endfunction()

@@ -12,6 +12,7 @@ import shader;
 import scene_config;
 import material_types_generated;
 import vkerror;
+import diagnostics;  // 批 11.3-1e：light 管线条目按 izb_shadow 门选 spec 变体
 import asset_table;
 
 namespace RGL {
@@ -167,7 +168,10 @@ namespace RGL {
 			uint32_t samplerSlot, uint32_t shadowMapSlot, uint32_t shadowSamplerSlot) {
 		if (auto idx = pipelineIndex("light"))
 			return *idx;
-		const RGL::PipelineSpec* spec = findSpec("light");
+		// 批 11.3-1e 红线终态：门 = 选 spec 变体（IZB 消费版 frag SPV），不是运行时 flag 分支
+		// ——slang 对源码差异的 fp 重排会让「门关 flag=0」也逐位漂移（2026-10-02 实测教训）。
+		const bool izbGate = diagnostics().izbShadow;
+		const RGL::PipelineSpec* spec = findSpec(izbGate ? "light_izb" : "light");
 		if (!spec)
 			throw std::runtime_error("pipeline spec not found: light");
 		const uint32_t descriptorSize = res.getDescriptorHeap().getDescriptorSize();
@@ -208,9 +212,10 @@ namespace RGL {
 		b.extra.push_back({.binding = 13, .sampler = true,
 			.samplerHeapOffset = static_cast<vk::DeviceSize>(shadowSamplerSlot)
 				* res.getSamplerHeap().getDescriptorSize()});
-		// 批 11.3-1e：IZB mask 位图 14（**无条件绑定** = VVL 静态活性，门关读 Resources
-		// 发号时写好的 16B 零 fallback；消费开关 = scene data IZB 区 flag，见 light.frag）
-		{
+		// 批 11.3-1e：IZB mask 位图 14（仅门开变体声明该 binding = VVL 静态活性须绑；
+		// 门关原版 frag 无 binding 14 = 不占槽不绑定）。门关也预写 16B 零 fallback 于
+		// 发号处（Resources::ensureIzbSlots），防门开首帧 IzbShadow 构造前的时序坑。
+		if (izbGate) {
 			auto izb = res.ensureIzbSlots();
 			if (!izb)
 				throw std::runtime_error("light entry: izb slots: " + izb.error().describe());

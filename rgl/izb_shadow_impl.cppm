@@ -417,6 +417,29 @@ void IzbShadow::drainReadback() {
 	if (auto* lg = RLLogger::getInstance())
 		lg->info("izb: dump cells={} empty={} n1={} n2={} n3+={} maxChain={} nodes={} shadowed={}",
 			cells, empty, n1, n2, n3, maxChain, nodes, shadowed);
+	dumpMaskPpm(maskWords, static_cast<uint32_t>(extent.width), static_cast<uint32_t>(extent.height));
+}
+
+// 批 11.3-1e 判据工具：mask 位图导出 PGM（w×h 0/255，行 = fb 行）——与 llm_debug
+// 截图目检对位（阴影带结构应落在遮挡体光源侧地面）。固定覆盖写，dump 帧后有效。
+void IzbShadow::dumpMaskPpm(const uint32_t* words, uint32_t w, uint32_t h) {
+	// C stdio：模块环境里 ofstream << 的输出被污染成指针序列（首挂实录，原因未追——
+	// 判据工具走最朴素的 stdio 保证可读性）
+	auto* f = std::fopen("izb_mask.ppm", "wb");
+	if (!f)
+		return;
+	const auto hdr = "P6\n" + std::to_string(w) + " " + std::to_string(h) + "\n255\n";
+	std::fwrite(hdr.data(), 1, hdr.size(), f);
+	std::vector<uint8_t> row(static_cast<size_t>(w) * 3);
+	for (uint32_t y = 0; y < h; ++y) {
+		for (uint32_t x = 0; x < w; ++x) {
+			const uint32_t pid = y * w + x;
+			const bool occl = (words[pid >> 5] >> (pid & 31)) & 1u;
+			row[x * 3] = row[x * 3 + 1] = row[x * 3 + 2] = occl ? 0 : 255;
+		}
+		std::fwrite(row.data(), 1, row.size(), f);
+	}
+	std::fclose(f);
 }
 
 }  // namespace RGL

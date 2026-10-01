@@ -275,7 +275,14 @@ void Renderer::replayIzbMaskSegment(vk::raii::CommandBuffer& cmd, const FrameDra
 	izbShadow->beginMaskPass(cmd);
 	const vk::Rect2D gridRect{{0, 0}, {gridDim, gridDim}};
 	RGL::applyDynamicState(cmd, gridRect, stateKit.stateFor("izb_mask"),
-		stateKit.depthClipDynamicEnabled(), 0, stateKit.conservativeDynamicEnabled());
+		stateKit.depthClipDynamicEnabled(), 0);
+	// 保守光栅（EDS3 动态位）：**只在 mask pass 内 set、出 pass 立即复原 DISABLED**
+	// ——不在 applyDynamicState 里给所有 pass 写（RADV 显式 DISABLED ≠ 从不 set，
+	// 会污染 shadow 光栅红线，2026-10-02 复盘）；能力缺失 = 永不 set = 逐位不变
+	const bool conservative = stateKit.conservativeDynamicEnabled()
+		&& stateKit.stateFor("izb_mask").conservative;
+	if (conservative)
+		cmd.setConservativeRasterizationModeEXT(vk::ConservativeRasterizationModeEXT::eOverestimate);
 	for (const auto& call : seg) {
 		if (call.pushData.size() < sizeof(ShadowDrawArgs))
 			continue;  // 契约破裂防御（同 replayClonedPass 的越界跳策略）
@@ -292,6 +299,10 @@ void Renderer::replayIzbMaskSegment(vk::raii::CommandBuffer& cmd, const FrameDra
 		entry.pipeline.bindShaders(cmd);
 		cmd.drawMeshTasksEXT(call.groupCount, 1, 1);
 	}
+	// OVERESTIMATE 复原必须在 mask pass 内（动态态命令不可出 renderpass；light/tonemap
+	// 继承 DISABLED = 与默认等值，实测该路径无红线扰动）
+	if (conservative)
+		cmd.setConservativeRasterizationModeEXT(vk::ConservativeRasterizationModeEXT::eDisabled);
 	izbShadow->endMaskPass(cmd);
 }
 
@@ -554,7 +565,7 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 		// viewport/scissor 尺寸随 passExtent，与上面 beginRendering.renderArea 同源）
 		RGL::applyDynamicState(cmd, renderRect,
 			stateKit.stateFor(pass.state), stateKit.depthClipDynamicEnabled(),
-			static_cast<uint32_t>(pass.colors.size()), stateKit.conservativeDynamicEnabled());
+			static_cast<uint32_t>(pass.colors.size()));
 		// draw 三路分发（手术 6：提为 executePassDraws 私有方法——drawLight 全屏 /
 		// opaque GPU-culling / 普通段逐 draw）
 		executePassDraws(cmd, pass, list, frameSlot);

@@ -52,6 +52,28 @@ export struct PipelineEntry {
 };
 
 /**
+ * light 管线 spec（普通 / IZB 消费变体；findSpec 默认表 helper，批 11.3-1e 拆出控复杂度）。
+ * IZB 变体 = 同一 light.frag.slang 的 -DIZB_CONSUME 编译产物（rgl_shader_defined）；
+ * 门关选原版 = 原版 SPV 逐位不变（红线构造性保证）。
+ * @param name spec 名
+ * @return 命中 light/light_izb = spec 指针；否则 nullptr
+ */
+inline const PipelineSpec* findLightSpec(const char* name) {
+	const bool izb = std::strcmp(name, "light_izb") == 0;
+	if (izb) {
+		static const PipelineSpec defaultLightIzb{
+			"light_izb", "generated_shaders/light.mesh.spv",
+			"generated_shaders/light.frag_IZB_CONSUME.spv"};
+		return &defaultLightIzb;
+	}
+	if (std::strcmp(name, "light") != 0)
+		return nullptr;
+	static const PipelineSpec defaultLight{
+		"light", "generated_shaders/light.mesh.spv", "generated_shaders/light.frag.spv"};
+	return &defaultLight;
+}
+
+/**
  * 管线表（Phase 4：从 Renderer 迁出，零 entt——只认 slot/资产 id，不认场景实体）：
  *   条目全部按需动态加入：模型 = addModelEntry、内建 cube = addCubeEntry（架构债务 1：
  *   slot 经传入的资产记录取，Resources 不认识 cube）、天空盒 = addSkyEntry、
@@ -62,6 +84,7 @@ export struct PipelineEntry {
  * 渲染 system 经资产记录的 pipelineIndex（数值）取条目，录制路径零字符串查找（E2.4）。
  * 条目下标写回资产记录经 bindToAsset / bindPipelineToAsset（启动期一次）。
  */
+
 export class ShaderRegistry {
    public:
 	/**
@@ -397,11 +420,8 @@ export class ShaderRegistry {
 				"generated_shaders/deferred_geometry_light.frag.spv"};
 			return &defaultDeferredGeomLight;
 		}
-		if (std::strcmp(name, "light") == 0) {
-			static const RGL::PipelineSpec defaultLight{
-				"light", "generated_shaders/light.mesh.spv", "generated_shaders/light.frag.spv"};
-			return &defaultLight;
-		}
+		if (const RGL::PipelineSpec* light = RGL::findLightSpec(name))
+			return light;
 		if (std::strcmp(name, "tonemap") == 0) {
 			static const RGL::PipelineSpec defaultTonemap{
 				"tonemap", "generated_shaders/light.mesh.spv",

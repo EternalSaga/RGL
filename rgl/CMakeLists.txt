@@ -40,6 +40,8 @@ rgl_shader(deferred_geometry_light.frag DEFERRED_GEOM_LIGHT_FRAG_SPV deferred_ge
 # Phase 7 D1：light pass（全屏大三角 mesh + 采样 G-buffer 的 deferred 光照 frag）
 rgl_shader(light.mesh LIGHT_MESH_SPV)
 rgl_shader(light.frag LIGHT_FRAG_SPV scene lights sky shadow)
+# 批 11.3-1e：IZB 消费变体（-DIZB_CONSUME；门关选原版 = 逐位红线构造性保证，见 RglSlang.cmake）
+rgl_shader_defined(light.frag LIGHT_IZB_FRAG_SPV IZB_CONSUME scene lights sky shadow)
 # Phase 11 批 11.2：级联阴影 depth-only 管线。mesh 自带 8B push（objectIndex +
 # cascadeIndex）——**不 import material.slang**：共享的 4B DrawArgs 契约不能为阴影多加一个
 # 字段（改了 = 1591 条模型条目全重建），故阴影管线自带 push 块。frag 空壳（无输出）。

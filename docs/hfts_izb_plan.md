@@ -287,6 +287,11 @@ render_graph 零改动版**。
 - 实测（bistro deferred）：门开 = IZB-only 硬影**位置与 CSM 一致**（建筑暗面/墙面
   大块/檐下；树冠与广场 IZB 更aggressive = 逐像素判定对细几何的特性，v1 已知）；
   门关 = 基线逐位；默认 forward 门关闭零 izb 构造、VVL 全程零错误。
+- **性能记录（§4.4 口径，2026-10-02 bistro deferred 720p，profiler window 5，未优化 v1）**：
+  `gpu.frame` 9.47 → 10.63 ms（**IZB 总成本 +1.17 ms**）；light zone 0.27 → 1.64 ms
+  （sandwich = create 921600 线程 + prime G² + **mask 重放 shadow0 段全量 meshlet**
+  ——重放是成本大头，正是论文预剔除优化的目标位；shadow 各级 zone 无扰动）。
+  不设 ms 门（用户拍板），数字供阶段 2 优化基线。
 - **1e 未完项**：forward z-prepass（需条件性图插 pass + draw 代价×2，列白天批次）；
   izb_rig 三分带闭式对拍；imgqa attribution 影响域；bias/grid 调参。
 

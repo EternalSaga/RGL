@@ -61,6 +61,10 @@ public:
 	/** 上一帧 dump 的收割（帧首调用；fence 已过、映射可读）：无 pending 零开销。 */
 	void drainReadback();
 
+	/** mask 位图导出 PPM（批 11.3-1e 判据工具，dump 帧写 izb_mask.ppm；白=未遮
+	 *  黑=遮——与 llm_debug 截图目检对位）。 */
+	static void dumpMaskPpm(const uint32_t* words, uint32_t w, uint32_t h);
+
 	/**
 	 * 构造期钉死的像素分辨率（深度图尺寸 = swapchain extent；漂移由调用方重建）。
 	 * @return 本实例的 extent

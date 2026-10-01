@@ -112,8 +112,7 @@ export struct RenderState {
  *        greater than 0`），而没有色附件时这些状态本就无对象可作用。
  */
 export void applyDynamicState(vk::raii::CommandBuffer& cmd, const vk::Rect2D& area,
-	const RenderState& state, bool depthClipDynamic = false, uint32_t colorAttachmentCount = 1,
-	bool conservativeDynamic = false) {
+	const RenderState& state, bool depthClipDynamic = false, uint32_t colorAttachmentCount = 1) {
 	// Viewport & scissor（y 翻转：Vulkan 视口原点在左上，NDC y=+1 对应 area.y）
 	const float x = static_cast<float>(area.offset.x);
 	const float yTop = static_cast<float>(area.offset.y + area.extent.height);
@@ -128,13 +127,11 @@ export void applyDynamicState(vk::raii::CommandBuffer& cmd, const vk::Rect2D& ar
 	cmd.setPolygonModeEXT(state.polygonMode);
 	cmd.setCullMode(state.cullMode);
 	cmd.setFrontFace(state.frontFace);
-	// 批 11.3-1d：保守光栅模式（EDS3 动态位门控；**能力缺失 = 永不 set = 逐位不变**。
-	// 能力在场时每个 pass 都显式写值（非 mask pass = DISABLED），防 OVERESTIMATE
-	// 经 sticky 动态态泄漏到后续 pass）
-	if (conservativeDynamic)
-		cmd.setConservativeRasterizationModeEXT(state.conservative
-			? vk::ConservativeRasterizationModeEXT::eOverestimate
-			: vk::ConservativeRasterizationModeEXT::eDisabled);
+	// 批 11.3 红线教训（2026-10-02 复盘）：曾在此加 conservativeDynamic 参数给**每个
+	// pass** 显式写 conservative 模式——RADV 上「显式 set DISABLED」并非与「从不 set」
+	// 逐位等价（污染 shadow 光栅 → CSM 影轮廓漂移），且「门开=门关」红线对这种共享
+	// 代码污染天然瞎。正确形态 = IZB mask pass 内部一次性 set + 出 pass 复原（见
+	// vkrenderer_passrec replayIzbMaskSegment）。
 	cmd.setRasterizerDiscardEnable(state.rasterizerDiscard);
 	cmd.setDepthBiasEnable(state.depthBiasEnable);
 	cmd.setDepthBias(state.depthBiasScale, state.depthBiasSlope, 0.0f);

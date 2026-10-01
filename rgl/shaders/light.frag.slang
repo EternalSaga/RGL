@@ -33,8 +33,11 @@ import shadow;   // Phase 11 批 11.2：级联阴影采样（binding 12/13，与
 [[vk::binding(9, 0)]] TextureCube<float4> envMapL;
 [[vk::binding(10, 0)]] SamplerState envSamplerL;
 [[vk::binding(11, 0)]] Texture2D<float4> emissiveTex;
-// 批 11.3-1e：IZB 近场硬阴影位图（1 bit/帧缓冲像素，izb_mask.frag 写；heap 槽
-// **无条件绑定**（VVL 静态活性），消费开关 = scene data IZB 区 flag，关 = 不读值）
+// 批 11.3-1e：IZB 消费 = **变体编译**——以下整块只存在于 -DIZB_CONSUME 变体 SPV
+// （rgl_shader_defined，registry 按 izb_shadow 门选 spec）。无 -D 原版 = 1e 之前
+// token 流 = 门关逐位红线构造性保证（运行时 flag 分支挡不住 slang 对源码差异的
+// fp 重排——2026-10-02 实测 105401 像素漂移教训）。
+#ifdef IZB_CONSUME
 [[vk::binding(14, 0)]] ByteAddressBuffer izbMask;
 
 // IZB 消费（批 11.3-1e）：方向光硬阴影因子（**替换语义** v1）。消费区 @722016
@@ -52,6 +55,7 @@ float izbShadowFactor(float3 P, float3 N, float2 uv)
     const uint pid = uint(uv.y * izb.z) * uint(izb.y) + uint(uv.x * izb.y);
     return (izbMask.Load(pid >> 5u) & (1u << (pid & 31u))) != 0u ? 0.0 : 1.0;
 }
+#endif
 
 // env 参数（scene data @48 intensity / @52 mipRange，env.slang readEnvParams 同款布局直读）
 struct EnvParamsL
@@ -213,7 +217,11 @@ float4 main(LightInput input) : SV_Target0
     // 两路只要有一路接了就是 11.0c 那个“只有一路有”的破口，D1 对拍会直接拆线。
     // 只乘直接光（环境光 IBL 无方向 → 不乘；自发光不乘）。
     // 批 11.3-1e：× IZB 近场硬阴影（cascade-0 mask；门/flag 关 = ×1.0 逐位旁路）。
+#ifdef IZB_CONSUME
     const float shadowFactor = izbShadowFactor(P, N, uv);
+#else
+    const float shadowFactor = sampleShadow1Tap(P, N);
+#endif
     uint n = readLightCount();
     if (n == 0)
     {
