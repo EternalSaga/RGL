@@ -362,6 +362,9 @@ find_package(ZLIB REQUIRED)
 # SYSTEM = -isystem——第三方头内警告不进本项目 -Werror 面。
 find_path(TINYGLTF_INCLUDE_DIRS tiny_gltf.h REQUIRED)
 find_package(Vulkan REQUIRED)
+# loader 守卫（2026-10-02 事故：vcpkg 自 build 的 feature-reduced loader 劫持 RUNPATH
+# = 窗口模式 wayland_surface 缺失，headless 免疫故测试全绿）——见文件头注释。
+include(${PROJECT_SOURCE_DIR}/cmake/RglVulkanLoaderGuard.cmake)
 find_package(SDL3 CONFIG REQUIRED)
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
