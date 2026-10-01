@@ -19,6 +19,7 @@ legacy（旧 OpenGL 项目）已于 2026-09-08 删除，历史思路参考见 gi
   （改 `rgl/shaders/`、`*_schema.lua`、`generated/` 前必读）
 - **`rgl-new-module`** — 新建/拆分 `.cppm`、rlstd/GMF 细则、impl partition 三条坑、检查工具规则红线
 - **`rgl-test-discipline`** — 写测试硬纪律全量（阳性锚点/变异红线/沉淀地址/modules 坑；写单测、加用例、收账调试历史前必读）
+- **`rgl-doc-placement`** — 改 AGENTS.md 前的归宿裁决五问（测试/护栏/skill/AGENTS/docs）+ 先补目的地再删源 + 入册前实测（**拟向 AGENTS 增删任何段落前必读**）
 
 ## 构建
 
