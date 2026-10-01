@@ -3,6 +3,13 @@
 > **状态**：现行（已解决问题总账；AGENTS.md「已知问题」节只保留**未解决**项）。
 > 已解决的问题（根因、排查过程、教训）归档于此。
 > 每条指向权威全文记录（同目录或现行文档）。时间倒序。
+>
+> **沉淀地址（批 12.3d 全量裁决）**：H1 edS3 → GUARD+TEST: features.cppm
+> `depthClipDynamicSupported` 双条件门已于 12.3d-A 真实落地（此前本文件 L25
+> "门改双条件"的声称与代码不符，现代码就范，矛盾收口）；H3 cottage 越界读 ①
+> → TEST: tests/test_gltf_texcoord.cppm（手构 GLB 全链回归，12.3d-C）；
+> H5 纹理 UAF → GUARD: texel canary 已知值台账（12.3b 落地）；
+> H2/H4/H6/H7/H8 → DOC（决策记录/勘误/负知识，写不出断言，全文即归宿）。
 
 ## 2026-09-02 深夜 · edS3 depthClip "VVL 误报"结论推翻：实为 app 漏启用旧扩展 feature（已修复）
 

@@ -19,7 +19,8 @@
 | 12.2d-c | `f95d5f9` | 闭式解探针 `analytic_ref.py`（GGX+ACES+sRGB 逐式转录 + qa/configs/analytic/） |
 | 12.2d-d | `0c35457` | 入口（test/test-all/test-gpu/analytic）+ 文档收口 |
 | 12.3 | `ca18627` | **imgqa**（C++ + vcpkg）区域归因判据工具箱：selftest 26 条 / 判据五条全 advisory / 反模式登记 / 调用台账 / skill 钩子。首战：「anchor_cube_near +Z 黑面」**三配置两机位不复现**（±0.002 亮度）；纯颜色反解被实测推翻 → 顺序命名 + 闭式解色度弱校验（→ 调试历史 2026-09-30）。⚠️ 本行「不复现」已被 12.3b 勘误：当时测量面走 styles 缺表回落 model_pbr（→ 调试历史 2026-10-01） |
-| 12.3b | （本提交） | 闭式解收单源（删 analytic_ref.py，probe 接替 + `--light/--intensity` 接线修复）+ **黑面 bug 定案修复**：Frisvad 切线奇点号写反 → 法线 +Z 面 NaN → 受光面纯黑（loader + bistro_pack 修复 + 单测 `test_frisvad_tangent`，→ 调试历史 2026-10-01）。switch 首战三项全绿（域外变化归因 = 物体间合法互投影，全名单域外恰 0）；texel canary 台账化（白 + 中性法线）。probe 变异 4/4（正对光 / 背光黑 / L⊥N 黑 / 默认 40°）逐字节 PASS |
+| 12.3b | `4e19d34`+`e8be52a` | 闭式解收单源（删 analytic_ref.py，probe 接替 + `--light/--intensity` 接线修复）+ **黑面 bug 定案修复**：Frisvad 切线奇点号写反 → 法线 +Z 面 NaN → 受光面纯黑（loader + bistro_pack 修复 + 单测 `test_frisvad_tangent`，→ 调试历史 2026-10-01）。switch 首战三项全绿（域外变化归因 = 物体间合法互投影，全名单域外恰 0）；texel canary 台账化（白 + 中性法线）。probe 变异 4/4（正对光 / 背光黑 / L⊥N 黑 / 默认 40°）逐字节 PASS |
+| 12.3c/d-A…E | `fe846c5` `ea4f49c` `3bacf4a` `e9022f3` + d-E（沉淀回填提交） | **12.3d 调试历史全量裁决**（D10 清偿）：researcher×2 盘点 44 条目 → worker×4 串行落地（阴影/灯数据族接缝测试、五小缺口、snap 恒真断言重写、GLB 手构全链回归、invVP 数学契约、depthClip 双门落地、stale SPV 双护栏）→ 主 agent 逐批独立变异抽验（4 形态全红全还原）+ 36+8 条目沉淀地址回填。just test 116→143。→ §12.3d 执行记录 |
 
 ## 缺口 / 债务清单（按"何时必须还"排序）
 
@@ -34,7 +35,7 @@
 | D7 | **qa/ 层定位悬空**：AGENTS.md 表里"进程级集成层……量化 harness 未落地"已过时——imgqa 就是那个 harness（RPC 驱动 + OpenCV 量化 + 台账）。该裁掉这行悬空定位而不是"再建一个" | 账目 | 12.6 |
 | D8 | **Windows 侧 imgqa 未验证**：opencv4 在 Windows vcpkg 从未编译过（此前全项目无人链接）；首编时长可能不可接受 → 需要 cmake 开关或 vcpkg feature 兜底 | 跨机 | 12.4 |
 | D9 | 调试历史 Phase 12 相关条目分散（12.2/12.3 结论散在 AGENTS.md / 提交信息 / imgqa.h 注释） | 卫生 | 12.6 |
-| D10 | **调试历史未裁决（知识转化率）**：`调试历史.md`（1700+ 行）与 `archive/issue_history.md` 记录"曾发生"，但只有收账时作者记得的部分转化成了测试/护栏——Frisvad 黑面的毫秒级断言本可以早存在两个月（12.3b 两天 GPU 排查 vs 4 行单测）。文档只记录不阻止；防线 = 测试 + 工具护栏，文档应收缩到"不可机制化残渣"（硬件观察 / 决策记录 / 负知识） | 结构性 | 12.3d（拆多批执行，跨机项 DEFER 并 12.4） |
+| D10 | ~~调试历史未裁决~~ **12.3d 清偿**：36+8 条目全量裁决回填沉淀地址（四 worker 批落地 12 项 TEST/GUARD 缺口 + 1 条弱测试重写 + 2 处文档矛盾收口）；DEFER 项移交见 §12.3d 尾 | — | ✔ |
 
 ## 计划批次
 
@@ -86,6 +87,51 @@
 
 **分批原则**：按被测对象归属切（同一库的测试共享构建），不按年代切；
 护栏类（如 stale SPV mtime 检查、RPC 起跑探测）单独一批进 tools/。
+
+**拆批（researcher 两轮盘点后定稿，worker 串行执行、主 agent 逐批质检）**：
+
+盘点结论：44 条目中约半数不变量**已被现有测试钉住**（核对属实，只欠沉淀地址回填）；
+DEFER（跨机）= **0 条**——DGC/NVIDIA 系列全是硬件观察或已闭环，非待验不变量。
+待执行四批：
+
+| 批 | 内容 | 关键难点 |
+|---|---|---|
+| **d-A** 阴影/灯数据族 + 能力门 | ① `fillShadowData` 契约（未生效级 splits=1e9 / 量化同源 / params.w）② `fillLightData` 按 index 落槽（乱序 entity→槽位、primary=0、kMaxLights 截断）③ depthClip **双条件门落地**（issue_history L25 声称 vs 代码单 bit 的矛盾以代码就范——`eds3 && base`，RADV 行为不变）+ features 真值表测试（含 presentTimingSupported/getDeviceExtensions） | ①② 需测试接缝（匿名 namespace → 接口导出）；接缝形态主 agent 先定 |
+| **d-B** 小缺口 + 弱测试修复 | ① exposure 非默认值解析 ② dgc_static 默认门 ③ shadow pass loadOp=clear 断言 ④ depth-only 消费者反向用例（ao 不被 highlight 误判）⑤ expectedGeometrySlot 纯逻辑 ⑥ **snap"世界锚定"测试重写**——现存用例是恒等输入比对（注释声称换姿态、实参相同），必须改成姿态无关判据 + 变异"NDC 中心吸附"验红 | ⑥ 是"测试值得怀疑"的实锤案例，质检重点 |
+| **d-C** glTF 越界读回归 + 数学契约 | ① gltf uv 步长 idx*2（cottage 越界 bug）——测试内手构最小 GLB（JSON+BIN chunk 字节串）走 loadGltfModel 全链，断言 uv 精确值 ② invVP 列叉积 forward 提取式（5a-8c）数学断言（随机 500 组，变异"第 2 列取反"必红） | ① GLB fixture 构造量 ~100 行；② 断言的是数学同一性，注释指回 shader 行 |
+| **d-D** 工具护栏（GUARD 债） | ① slang import ⊆ rgl_shader() DEP 表构建期检查（stale SPV 根因护栏，E1④/E16④）② imgqa probe 起跑核 SPV 新鲜度（mtime 轻版）③ `.slang` 红线扫描（StructuredBuffer 顶点/索引禁令）评估——先读 skill rgl-new-module 红线清单，能否加规则由主 agent 裁 | ① 落 cmake/RglSlang.cmake 还是 tools/checks 需权衡（构建期 vs 检查期）|
+
+**DEFER 并 12.3c**：AO 0↔0.5 switch 轮（E6b）、选级端到端跨级远景机位（E12②）。
+**DEFER 并 12.6**：RPC loopback 测试（E2③④，"有真实痛点才补"边界内）。
+**主 agent 终批 d-E**：全条目沉淀地址回填 + 调试历史收缩（被测试/护栏完全吸收的条目
+删除，git history 即档案；终态 = 真正难测的教训）+ H1 矛盾裁决记录 + 变异抽验。
+
+### 12.3d 执行记录（**已完成**，researcher×2 + worker×4 串行，主 agent 逐批质检）
+
+**盘点结论**（researcher 两轮，覆盖核对全部实测）：44 条目中约半数不变量**早已被
+现有测试/护栏钉住**（只欠沉淀地址回填）；完全无覆盖的不变量 7 项；DEFER（跨机）**0 条**。
+两处"文档撒谎/测试摆设"实锤：① issue_history L25 双条件门声称 vs 代码单 bit；
+② snap"世界锚定"用例 = 同参调两次的恒真断言。
+
+**落地**（每批 worker 交付后主 agent 独立变异抽验，形态与 worker 所验不同）：
+- **d-A** `fe846c5`：fillShadowData/fillLightData 接缝导出 + 10 用例（splits 哨兵/
+  落槽/预乘）；depthClip 双条件门真实落地（矛盾①以代码就范收口）+ features 真值表。
+- **d-B** `ea4f49c`：exposure/dgc_static/loadOp=clear/depth-only 反向/expectedGeometrySlot
+  五缺口 + 矛盾②整条重写（契约 double 独立重算 + 同格两路 + 格相位恢复校验，
+  信号/噪声比实测标注；主 agent 变异 round→floor 验红）。
+- **d-C** `3bacf4a`：手构最小 GLB 全链回归（cottage 越界读）+ invVP 提取式数学同一性
+  500 姿态（主 agent 跨流误读变异验红）；副产物：normalize(vec4) 后截断 ≠ 截断后
+  normalize（差 1%，复刻注释）。
+- **d-D** `e9022f3`：stale SPV 双护栏——`tools/check_shader_deps.py`（DEP ⊇ import
+  传递闭包 + StructuredBuffer 全禁红线，构建期恒跑）+ imgqa `checkShadersFresh()`
+  （逐 spv 比自身源闭包 mtime，清单由前者每次构建写出 = 图真相源单点）。
+- **d-E**（本提交）：36+8 条目沉淀地址全量回填；调试历史头部改写终态声明——
+  **本文件只留教训不留事实**，"现在保证成立什么"的权威口径转移到 tests/ 与
+  tools/checks/；issue_history 头部加裁决指针。
+
+**遗留移交**：AO 0↔0.5 轮 + 选级端到端远景机位 → 12.3c；RPC loopback → 12.6。
+**验收**：just test 143/143（本批 +27 用例）· checks 0 警告 · probe 逐字节 PASS ·
+主 agent 独立变异 4 形态全红全还原。
 
 ### 12.4 — 三机跨机（中，需要另外两台的人手）
 - D3 方案：字节锚点 → **每机登记表**（`imgqa selftest --record-anchor` 生成该机
