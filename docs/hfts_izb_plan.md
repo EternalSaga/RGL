@@ -267,17 +267,24 @@ render_graph 零改动版**。
   （light.frag 读 mask 位 → 该灯贡献衰减 + forward z-prepass + D1 对拍 +
   imgqa attribution 影响域）。
 
-**1e 消费接线（2026-10-02 凌晨落地，deferred 端到端）**：
-- **替换语义 v1**（重要实测决策）：`light.frag` 的 `izbShadowFactor(P,N,uv)`——flag=0
-  → 原样 `sampleShadow1Tap`（CSM 路径**逐位透传** = 门关红线，截图=基线 byte-identical
-  实测）；flag=1 → cascade-0 IZB mask 接管方向光阴影（范围外 = 1.0 无影）。
-  **相乘方案被实测否决**：同一太阳下 IZB 遮挡集 ⊆ CSM 遮挡集 → 相乘画面零差异
-  （门开=门关逐位一致）；补集判别（未遮像素清零）+177815 像素反证通路全通。
+**1e 消费接线（2026-10-02 凌晨落地，deferred 端到端；终态 = 变体编译，见下）**：
+- **红线终态 = shader 变体编译（重要方法论定案）**：`light.frag.slang` 单源双 SPV——
+  无 -D 原版 + `-DIZB_CONSUME` 变体（`rgl_shader_defined`），registry 按 `izb_shadow` 门
+  选 spec（`findLightSpec`），binding 14 仅变体绑定。**首版运行时 flag 分支被实测推翻**：
+  flag=0 → 原样 `sampleShadow1Tap` 语义等价，但 slang 对源码差异（函数边界/SSA）的
+  fp 重排让门关输出对老基线漂移 **105401 像素**——当时的「门关=基线 PASS」是
+  **同 build 自比同真**（izb_1e_off 与 iz_b_v1_off 同二进制），跨二进制二分
+  （5b843e3 checkout 复跑 = 老基线可信 → 回退 light.frag 消费点即恢复）才定位真凶。
+  **定案：shader 门控唯一正确形态 = 变体编译；「门关逐位」红线必须跨二进制对老基线。**
+- 消费语义 = **替换语义 v1**（变体内）：flag（scene data @722016，首帧时序回落 CSM）
+  → cascade-0 IZB mask 接管方向光阴影（范围外 = 1.0 无影）。**相乘方案被实测否决**：
+  同一太阳下 IZB 遮挡集 ⊆ CSM 遮挡集 → 相乘画面零差异；补集判别 +177815 像素反证
+  通路全通。
 - 消费区：scene data 尾 `kSceneDataIzbOffset @722016`（flag,W,H,r），
   `writeSceneStaging` 按 `izbShadow` 门写；light.frag 字面量由 static_assert 钉死。
-- **binding 14 无条件绑定**（VVL 静态活性：声明即需有效 descriptor）= Resources
-  发号时给 mask 槽写 16B **零 fallback**（IzbShadow 构造后覆写同槽真位图）。
-  判别技巧：fallback 改全 1 探针 → 门开画面不变 = light 读的是真 buffer 非 fallback。
+- **binding 14 仅变体声明+绑定**（原版无此 binding = 不占槽）；Resources 发号时仍写
+  16B 零 fallback 到 mask 槽（防门开首帧 IzbShadow 构造前的时序坑，门关零成本）。
+  判别技巧（fallback 全 1 探针等）见调试历史 2026-10-02。
 - **跨 render pass barrier（首挂真凶）**：mask frag atomic 写 → light.frag 读之间
   无隐式依赖，**VVL 不报错但 light 读恒 0**（现象 = 门关门开逐位一致、flag 硬置
   判别却生效）。`endMaskPass` 内补 allGraphics/shaderWrite→shaderRead；
