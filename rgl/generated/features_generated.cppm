@@ -84,6 +84,7 @@ export FeatureChain buildRequestedFeatures() {
     FeatureChain chain{};
     chain.get<vk::PhysicalDeviceFeatures2>().features.robustBufferAccess = VK_TRUE;
     chain.get<vk::PhysicalDeviceFeatures2>().features.shaderInt64 = VK_TRUE;
+    chain.get<vk::PhysicalDeviceFeatures2>().features.fragmentStoresAndAtomics = VK_TRUE;
     chain.get<vk::PhysicalDeviceVulkan11Features>().shaderDrawParameters = VK_TRUE;
     chain.get<vk::PhysicalDeviceVulkan11Features>().multiview = VK_TRUE;
     chain.get<vk::PhysicalDeviceVulkan11Features>().storageBuffer16BitAccess = VK_TRUE;
@@ -124,6 +125,10 @@ export [[nodiscard]] std::expected<void, Error> validateFeatures(
     if (!supported.get<vk::PhysicalDeviceFeatures2>().features.shaderInt64) {
         return std::unexpected(Error{ErrorCode::FeatureUnavailable,
             fmt::format("Required feature not supported by device: {}", "shaderInt64")});
+    }
+    if (!supported.get<vk::PhysicalDeviceFeatures2>().features.fragmentStoresAndAtomics) {
+        return std::unexpected(Error{ErrorCode::FeatureUnavailable,
+            fmt::format("Required feature not supported by device: {}", "fragmentStoresAndAtomics")});
     }
     if (!supported.get<vk::PhysicalDeviceVulkan11Features>().shaderDrawParameters) {
         return std::unexpected(Error{ErrorCode::FeatureUnavailable,

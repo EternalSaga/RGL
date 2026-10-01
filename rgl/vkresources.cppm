@@ -23,6 +23,23 @@ export enum class SlotSegment : uint8_t {
 };
 
 /**
+ * IZB 四描述符槽号（批 11.3-1d 后半，`Resources::ensureIzbSlots` 发号）。
+ * 哨兵 = 全 0xFFFFFFFF（未领）；槽号终身稳定（管线条目 bake 依赖，见 ensureIzbSlots 注释）。
+ */
+export struct IzbSlots {
+	uint32_t head = 0xFFFFFFFFu;    ///< head[cell]（uint[G²]，NONE 哨兵）
+	uint32_t nodes = 0xFFFFFFFFu;   ///< 节点 16B/像素 (u, v, lightDepth, next)
+	uint32_t primed = 0xFFFFFFFFu;  ///< early-Z 每 cell 最大光深度（1e 消费）
+	uint32_t mask = 0xFFFFFFFFu;    ///< 遮挡位图 1 bit/屏幕像素（izb_mask.frag 写）
+
+	/**
+	 * 四槽是否均已发放。
+	 * @return true = ensureIzbSlots 已完成发放
+	 */
+	[[nodiscard]] bool allocated() const { return head != 0xFFFFFFFFu; }
+};
+
+/**
  * GPU 资源内核（main 启动流初始化层构造顺序第 4 站：AppContext→DeviceContext→Swapchain→
  * Resources→ShaderRegistry→Renderer，见 main_impl.cppm）：持有 VmaAllocatorRAII + 深度图/
  * view + 两个 descriptor heap（resource / sampler，VK_EXT_descriptor_heap）。
@@ -110,6 +127,29 @@ export class Resources {
 		else
 			writeDepthSampleDescriptor();
 		return depthSampleSlot;
+	}
+
+	/**
+	 * IZB 四描述符槽（批 11.3-1d 后半）：head/nodes/primed/mask 的 Runtime 段槽号。
+	 * **只发号不写描述符**（内容 = IzbShadow 的 buffer，随 extent 重建换 BDA 重写同槽）
+	 * ——槽号必须终身稳定：管线条目（addIzbMaskEntry）启动期 bake 槽号，早于且晚于
+	 * 任意次 IzbShadow 重建。幂等。
+	 * @return 四槽号；Error = 槽段耗尽
+	 */
+	[[nodiscard]] std::expected<IzbSlots, Error> ensureIzbSlots() {
+		if (izbSlots.allocated())
+			return izbSlots;
+		struct { uint32_t* dst; const char* name; } takes[] = {
+			{&izbSlots.head, "izb.head"}, {&izbSlots.nodes, "izb.nodes"},
+			{&izbSlots.primed, "izb.primed"}, {&izbSlots.mask, "izb.mask"},
+		};
+		for (auto& take : takes) {
+			auto slot = allocSlot(RGL::SlotSegment::Runtime, take.name);
+			if (!slot)
+				return std::unexpected(std::move(slot).error());
+			*take.dst = *slot;
+		}
+		return izbSlots;
 	}
 
 	/** @return resource heap const 引用（VmaDescriptorHeap：BDA buffer 视为连续描述符槽
@@ -275,6 +315,8 @@ export class Resources {
 	/** SSAO 深度采样槽（Runtime 段，kNoDepthSampleSlot = 未领）；槽号终身有效，
 	 * recreateDepthImage 后经 writeDepthSampleDescriptor 重写指向新 view。 */
 	uint32_t depthSampleSlot = kNoDepthSampleSlot;
+	/** IZB 四槽号（批 11.3-1d 后半，ensureIzbSlots 发号；内容描述符由 IzbShadow 写）。 */
+	IzbSlots izbSlots{};
 	/** 深度采样描述符指针链（pView 指 create info，v341 契约——故存值不存指针）。 */
 	vk::ImageViewCreateInfo depthSampleViewCreate{};
 	vk::ImageDescriptorInfoEXT depthSampleImageDesc{};

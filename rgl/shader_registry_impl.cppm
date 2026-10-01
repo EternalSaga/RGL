@@ -322,6 +322,42 @@ namespace RGL {
 		assets.bindShadowPipeline(assetId, entryIdx);
 	}
 
+	// 批 11.3-1d 后半：IZB mask 条目（契约见接口注释；vertexSlot 去重同 shadow）。
+	uint32_t ShaderRegistry::addIzbMaskEntry(uint32_t vertexSlot) {
+		if (const auto it = izbMaskEntryBySlot.find(vertexSlot); it != izbMaskEntryBySlot.end())
+			return it->second;
+		const RGL::PipelineSpec* spec = findSpec("izb_mask");
+		if (!spec)
+			throw std::runtime_error("pipeline spec not found: izb_mask");
+		auto slots = res.ensureIzbSlots();
+		if (!slots)
+			throw std::runtime_error("izb_mask entry: " + slots.error().describe());
+		RGL::PipelineBindings b{};
+		b.descriptorSize = res.getDescriptorHeap().getDescriptorSize();
+		b.slotVertex = vertexSlot;   // binding 0（mesh 消费 modelVertexBuffer）
+		b.slotIndex = vertexSlot;    // binding 1 = 占位（两 stage 不声明，同 shadow 做法）
+		b.slotSceneData = sceneData.ensure();  // binding 3（readObjectDraw/Matrix/ShadowViewProj）
+		b.hasSceneData = true;
+		// 5/6/7 = IZB head/nodes/mask（frag 声明；mesh 不声明 = 空转无害）
+		b.extra.push_back({.binding = 5, .heapSlot = slots->head});
+		b.extra.push_back({.binding = 6, .heapSlot = slots->nodes});
+		b.extra.push_back({.binding = 7, .heapSlot = slots->mask});
+		auto entry = PipelineEntry{.name = fmt::format("izb_mask.v{}", vertexSlot),
+			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b),
+			.argsSize = 12,  // ShadowDrawArgs 8B + gridDim 4B（重放点拼接）
+			.spec = *spec, .bindings = b};
+		const uint32_t index = static_cast<uint32_t>(entries.size());
+		indexByName[entry.name] = index;
+		izbMaskEntryBySlot[vertexSlot] = index;
+		entries.push_back(std::move(entry));
+		return index;
+	}
+
+	std::optional<uint32_t> ShaderRegistry::izbMaskEntryFor(uint32_t vertexSlot) const {
+		const auto it = izbMaskEntryBySlot.find(vertexSlot);
+		return it != izbMaskEntryBySlot.end() ? std::optional{it->second} : std::nullopt;
+	}
+
 	uint32_t ShaderRegistry::addCubeEntry(uint32_t meshAssetId) {
 		if (auto idx = pipelineIndex("cube"))
 			return *idx;

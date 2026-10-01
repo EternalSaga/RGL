@@ -40,6 +40,26 @@ struct IzbPrimePush {
 
 constexpr uint32_t kNone = 0xFFFFFFFFu;
 
+/** 位图 popcount（mask dump 被遮像素数统计；Kernighan 循环免 <bit> 依赖面）。 */
+size_t popcountWords(const uint32_t* words, size_t count) {
+	size_t total = 0;
+	for (size_t w = 0; w < count; ++w)
+		for (uint32_t x = words[w]; x != 0; x &= x - 1)
+			++total;
+	return total;
+}
+
+/** 单 cell 链游走：返回 {长度, 完好}（步数上限 cap = 像素数，触顶 = 坏链自证）。 */
+std::pair<size_t, bool> walkChainAt(const uint32_t* nodeData, uint32_t head, size_t cap) {
+	size_t len = 0;
+	uint32_t h = head;
+	while (h != kNone && len <= cap) {
+		++len;
+		h = nodeData[h * 4 + 3];
+	}
+	return {len, h == kNone};
+}
+
 /** 单 buffer 的 sync2 barrier（录制 + 执行；本模块内多条同构 barrier 的公共体）。 */
 void bufferBarrier(vk::raii::CommandBuffer& cmd, vk::Buffer buffer,
 	vk::PipelineStageFlags2 srcStage, vk::AccessFlags2 srcAccess,
@@ -153,9 +173,14 @@ IzbShadow::IzbShadow(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
 		vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst, "izb.head");
 	nodesBuffer = makeDevBuf(nodeBytes, vk::BufferUsageFlagBits::eTransferSrc, "izb.nodes");
 	primedBuffer = makeDevBuf(headBytes, {}, "izb.primed");
+	// mask 位图：⌈pixels/32⌉ word（FillBuffer 要求 4B 对齐天然满足）
+	const auto maskBytes = (static_cast<vk::DeviceSize>(pixels) + 31) / 32 * 4;
+	maskBuffer = makeDevBuf(maskBytes,
+		vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst,
+		"izb.mask");
 
-	// head+nodes 联合回读 ring（直方图要游走链：光有 head 数不出链长）
-	const auto dumpBytes = headBytes + nodeBytes;
+	// head+nodes+mask 联合回读 ring（直方图要游走链 + 统计遮挡位）
+	const auto dumpBytes = headBytes + nodeBytes + maskBytes;
 	for (uint32_t s = 0; s < 2; ++s) {
 		vk::BufferCreateInfo si{};
 		si.size = dumpBytes;
@@ -172,15 +197,14 @@ IzbShadow::IzbShadow(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
 		stagingMapped[s] = sad.pMappedData;
 	}
 
-	const auto takeSlot = [&](const char* name) -> uint32_t {
-		auto slot = resources->allocSlot(RGL::SlotSegment::Runtime, name);
-		if (!slot)
-			throw std::runtime_error(fmt::format("izb: {}", slot.error().describe()));
-		return *slot;
-	};
-	headSlot = takeSlot("izb.head");
-	nodesSlot = takeSlot("izb.nodes");
-	primedSlot = takeSlot("izb.primed");
+	// 槽号 = Resources 发放（终身稳定，管线条目 bake 依赖）；描述符内容随本实例写
+	auto slots = resources->ensureIzbSlots();
+	if (!slots)
+		throw std::runtime_error(fmt::format("izb: slots: {}", slots.error().describe()));
+	headSlot = slots->head;
+	nodesSlot = slots->nodes;
+	primedSlot = slots->primed;
+	maskSlot = slots->mask;
 	// 深度采样描述符与 SSAO 共用（同 view 同布局；ensure 幂等，先到先写）
 	{
 		auto depth = resources->ensureDepthSampleSlot();
@@ -206,6 +230,7 @@ IzbShadow::IzbShadow(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
 	writeDesc(headBuffer, headBytes, headSlot);
 	writeDesc(nodesBuffer, nodeBytes, nodesSlot);
 	writeDesc(primedBuffer, headBytes, primedSlot);
+	writeDesc(maskBuffer, maskBytes, maskSlot);
 
 	const uint32_t descriptorSize = resources->getDescriptorHeap().getDescriptorSize();
 	createShader.emplace(makeMappedCompute(dev, "generated_shaders/izb_create.comp.spv",
@@ -294,16 +319,44 @@ void IzbShadow::recordDumpCopy(vk::raii::CommandBuffer& cmd) {
 	bufferBarrier(cmd, *nodesBuffer, vk::PipelineStageFlagBits2::eComputeShader,
 		vk::AccessFlagBits2::eShaderWrite,
 		vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead);
-	// head → staging[0..headB)，nodes → staging[headB..)
+	bufferBarrier(cmd, *maskBuffer, vk::PipelineStageFlagBits2::eAllGraphics,
+		vk::AccessFlagBits2::eShaderWrite,
+		vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead);
+	// head → staging[0..headB)，nodes → staging[headB..)，mask → 尾段
 	// （VkBufferCopy 的 size 必须显式——VK_WHOLE_SIZE 此字段非法，VVL 实录）
+	const auto maskB = (static_cast<vk::DeviceSize>(extent.width) * extent.height + 31) / 32 * 4;
 	VkBufferCopy c0{0, 0, headB};
 	::vkCmdCopyBuffer(*cmd, *headBuffer, *staging[slot], 1, &c0);
 	VkBufferCopy c1{0, headB, nodeB};
 	::vkCmdCopyBuffer(*cmd, *nodesBuffer, *staging[slot], 1, &c1);
+	VkBufferCopy c2{0, headB + nodeB, maskB};
+	::vkCmdCopyBuffer(*cmd, *maskBuffer, *staging[slot], 1, &c2);
 	bufferBarrier(cmd, *staging[slot], vk::PipelineStageFlagBits2::eTransfer,
 		vk::AccessFlagBits2::eTransferWrite,
 		vk::PipelineStageFlagBits2::eHost, vk::AccessFlagBits2::eHostRead);
 	dumpPending[slot] = true;
+}
+
+void IzbShadow::beginMaskPass(vk::raii::CommandBuffer& cmd) {
+	// mask hazard 簿记：上次写 = 上一帧本 pass 的 frag atomic（同队列执行序天然有序，
+	// barrier 按 bookkeeping 补齐）→ FillBuffer 清 0 → 本帧 frag atomic 写
+	bufferBarrier(cmd, *maskBuffer, vk::PipelineStageFlagBits2::eAllGraphics,
+		vk::AccessFlagBits2::eShaderWrite,
+		vk::PipelineStageFlagBits2::eAllCommands, vk::AccessFlagBits2::eMemoryWrite);
+	::vkCmdFillBuffer(*cmd, *maskBuffer, 0, VK_WHOLE_SIZE, 0u);
+	bufferBarrier(cmd, *maskBuffer, vk::PipelineStageFlagBits2::eAllCommands,
+		vk::AccessFlagBits2::eMemoryWrite,
+		vk::PipelineStageFlagBits2::eAllGraphics, vk::AccessFlagBits2::eShaderWrite);
+	// 零附件动态渲染（frag 只写 mask SSBO；viewport/scissor = G×G 由调用方
+	// applyDynamicState 设——引擎负 viewport 口径自动生效，frag 侧 cell.y 翻转匹配）
+	vk::RenderingInfo rendering{};
+	rendering.renderArea = vk::Rect2D{vk::Offset2D{0, 0}, vk::Extent2D{gridDim, gridDim}};
+	rendering.layerCount = 1;
+	cmd.beginRendering(rendering);
+}
+
+void IzbShadow::endMaskPass(vk::raii::CommandBuffer& cmd) {
+	cmd.endRendering();  // 本版本 raii 无 DependencyInfo 形参重载（帧内无需跨 pass 同步依赖）
 }
 
 void IzbShadow::drainReadback() {
@@ -318,24 +371,17 @@ void IzbShadow::drainReadback() {
 	const auto* nodeData = reinterpret_cast<const uint32_t*>(
 		static_cast<const std::byte*>(stagingMapped[slot]) + cells * 4);
 
-	// 单 cell 链游走：返回 {长度, 完好}（步数上限 = 像素数，触顶 = 坏链自证）
-	const auto walkChain = [&](uint32_t head) -> std::pair<size_t, bool> {
-		size_t len = 0;
-		uint32_t h = head;
-		while (h != kNone && len <= pixels) {
-			++len;
-			h = nodeData[h * 4 + 3];
-		}
-		return {len, h == kNone};
-	};
-
 	size_t empty = 0, n1 = 0, n2 = 0, n3 = 0, nodes = 0, maxChain = 0;
+	// mask 位图 popcount = 被遮像素数（阳性锚点——场景有阳关必有被遮像素）
+	const auto* maskWords = reinterpret_cast<const uint32_t*>(
+		static_cast<const std::byte*>(stagingMapped[slot]) + cells * 4 + pixels * 16);
+	const size_t shadowed = popcountWords(maskWords, (pixels + 31) / 32);
 	for (size_t c = 0; c < cells; ++c) {
 		if (headData[c] == kNone) {
 			++empty;
 			continue;
 		}
-		const auto [len, ok] = walkChain(headData[c]);
+		const auto [len, ok] = walkChainAt(nodeData, headData[c], pixels);
 		if (!ok) {
 			if (auto* lg = RLLogger::getInstance())
 				lg->error("izb: cell {} 链长触顶（坏链/环！）", c);
@@ -351,8 +397,8 @@ void IzbShadow::drainReadback() {
 			++n3;
 	}
 	if (auto* lg = RLLogger::getInstance())
-		lg->info("izb: dump cells={} empty={} n1={} n2={} n3+={} maxChain={} nodes={}",
-			cells, empty, n1, n2, n3, maxChain, nodes);
+		lg->info("izb: dump cells={} empty={} n1={} n2={} n3+={} maxChain={} nodes={} shadowed={}",
+			cells, empty, n1, n2, n3, maxChain, nodes, shadowed);
 }
 
 }  // namespace RGL

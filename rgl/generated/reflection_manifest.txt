@@ -14,7 +14,7 @@ d802efb5c74a1c26fb92276b32477f6fa148b72e  rgl/shaders/lights_schema.lua
 c017d30a55d349bb734f082bdc81bff712da7cdb  rgl/shaders/scene.slang
 3667405f72481d5138144ac7551f9a76fc71640d  rgl/shaders/scene_forward_schema.lua
 69ebae222b5acfa4efbef3230e7f24fbff769ecd  tools/templates/types_cppm.inja
-8084844d8c8b8b341eac86b1518007a8793ed215  rgl/features_config.json
+5a8995e2a338910ae34312be8455c032aaba8a26  rgl/features_config.json
 da1def94ebf981fe36da38e31d7baf178a38b095  tools/templates/features_cppm.inja
 a23392c91c61f85b11ec254b3f934792ed9a02f1  rgl/param_semantics.json
 bea192a811bf3d98992a548e32b9a5c3a23df225  tools/templates/param_semantics_cppm.inja

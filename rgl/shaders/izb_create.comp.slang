@@ -51,8 +51,11 @@ void main(uint3 tid : SV_DispatchThreadID)
         (py + 0.5f) / push.pixelH * 2.0 - 1.0);
     const float4 w = push.invVPM[0] * ndc.x + push.invVPM[1] * ndc.y
         + push.invVPM[2] * d + push.invVPM[3];
-    const float4 ls = push.lightVP[0] * w.x + push.lightVP[1] * w.y
-        + push.lightVP[2] * w.z + push.lightVP[3] * w.w;
+    // 透视除法（**必须**：invVPM·ndc 得齐次世界坐标，不除 w = 沿视射线缩放的假点，
+    // 节点 uv/深度落进畸变空间——与 mask mesh 的真实 world 不同空间，edge 判据全灭。
+    // 判别路径：dbg2 仅深度 221 偶然命中、加 edge 归零。首挂实录进调试历史）
+    const float4 ls = push.lightVP[0] * (w.x / w.w) + push.lightVP[1] * (w.y / w.w)
+        + push.lightVP[2] * (w.z / w.w) + push.lightVP[3];
 
     const float2 uv = ls.xy * 0.5 + 0.5;
     if (uv.x < 0.0 || uv.x >= 1.0 || uv.y < 0.0 || uv.y >= 1.0)

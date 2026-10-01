@@ -238,7 +238,36 @@ BIT-IDENTICAL 基线不受扰）。
    双面）；级联 = v1 仅 cascade 0。
 6. 消费（1e）：deferred light.frag 读 mask bit → 乘到该灯贡献；forward 走 z-prepass。
 
-**1d 光空间保守光栅 pass + mask 写入**，izb_rig 上首次出硬影。
+**1d 后半（2026-10-02 凌晨落地）：mask pass（光空间保守光栅）——render_list 与
+render_graph 零改动版**。
+- 形态：sandwich 内 **create/prime 之后接 mask pass**——`beginRendering`（**零附件**、
+  renderArea = G×G）+ `izb_mask` 动态态（OVERESTIMATE 保守/双面/无深度）+ **shadow0
+  段逐 draw 重放**（投影体与 push 复用阴影段，尾缀 gridDim = 12B push）。段空 =
+  warn-once（mask 依赖 shadow_pass 开启）。
+- 管线：`izb_mask.mesh.slang`（shadow.mesh 镜像 + **平摊三顶点 (uv, lightDepth)**
+  ——mesh 顶点逐三角独立，三顶点写同一份整三角数据）+ `izb_mask.frag.slang`
+  （FTIZB 判定：节点 uv 的 2D barycentric inside + **节点位置插值光深度** 严格 >
+  + bias 2e-4；bit = 屏幕像素 ID「地址即像素」，`InterlockedOr` 位图）。
+- 描述符：`Resources::ensureIzbSlots()` **四槽号终身稳定**（管线条目启动期 bake，
+  跨 IzbShadow 重建不变）；条目 `addIzbMaskEntry`（vertexSlot 去重，extra 5/6/7）。
+- 保守光栅：EDS3 动态位（`conservativeModeDynamicSupported` → StateKit 门 →
+  `applyDynamicState` 第 6 参；**能力在场时每 pass 显式写值防 sticky 泄漏**）。
+  核心 feature `fragmentStoresAndAtomics` 补进 features_config.json（reflect）。
+- **实测阳性锚点**（bistro deferred G=512）：`shadowed=33707 / nodes=232820`
+  （14.5% 被遮，maxChain=170）；VVL 零错误；**门开（mask 已产出）截图与门关
+  byte-identical**（消费未接红线，重构前后双验）。
+- **w 除法坑（首挂真凶，调试历史收账）**：izb_create 反投影 `invVPM·ndc` 未
+  `w/=w.w` → 节点 uv/深度落进沿视射线缩放的假空间，与 mask mesh 的真实 world
+  不同空间 → inside 判据全灭。判别路径三层假象：①「head 置位 221」证明管线通
+  但掩盖判据问题；② 三态计数把 occl/inside 写进**相邻像素位**（`2u<<(h&31)`）
+  互相污染读出 154483 假命中；③ 深度-only「221」也是巧合集。**教训：判别位必须
+  用独立 counter（固定字），别复用位图挪位**。修后 nodes 304122→232820
+  （uv 过滤更准）。
+- **1d 收口状态**：create/prime/mask 全通 + dump 判据；**1e = 消费接线**
+  （light.frag 读 mask 位 → 该灯贡献衰减 + forward z-prepass + D1 对拍 +
+  imgqa attribution 影响域）。
+
+**1d 光空间保守光栅 pass + mask 写入**：✅ 已完成（上文）；「izb_rig 出硬影」= 1e 消费后。
 
 **1e 消费接入 + forward z-prepass**，D1 对拍（forward vs deferred 的 izb 阴影），
 BIT-IDENTICAL 对拍（红线 1）。

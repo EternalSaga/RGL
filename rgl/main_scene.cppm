@@ -209,6 +209,10 @@ void bakePipelineEntries(UploadedAssets& uploaded, const SceneConfig& scene, boo
 			// 无条件分支：门控关时条目与 shadowCalls 都为空，GPU 产生一个未被引用的管线
 			// 条目（零成本；AGENTS「条目全按需建」纪律）。
 			pipelines.bindShadowToAsset(id, pipelines.addShadowEntry(assetTable.get(id).heapSlot));
+			// 批 11.3-1d 后半：IZB mask 条目（门关零创建；重放点经 vertexSlot 反查，
+			// 不挂资产——同 vertexSlot 去重）
+			if (diagnostics().izbShadow)
+				static_cast<void>(pipelines.addIzbMaskEntry(assetTable.get(id).heapSlot));
 		};
 		// DIAG（configs/diagnostics.lua style_dist；Phase 4 批次 3 风格分布核查）：
 		// per-primitive 风格（unlit/pbr）+ 规格名分布。（lambda 独立计分）

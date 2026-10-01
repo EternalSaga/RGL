@@ -29,6 +29,7 @@ import diagnostics;
 import vulkan_utils;  // createImageBarrier（物化用）
 import VmaRaii;
 import frame_draw_list;  // isKnownDrawSource / segmentSpan（段名 → draw 序列）
+import scene_context;  // shadowDrawSource（IZB mask 重放段名单一来源，批 11.3-1d）
 import material_types_generated;  // DrawArgs
 import lights_types_generated;
 import features;
@@ -254,6 +255,44 @@ void Renderer::izbLightPassPre(vk::raii::CommandBuffer& cmd, const RgPassPlan& p
 		IzbFrameInput{list.sceneData.skyInvViewProj, list.sceneData.shadowViewProj[0]},
 		attachmentLayouts[static_cast<size_t>(depthAttSlot)],
 		diagnostics().izbDumpFrame != 0 && izbFrameNo == diagnostics().izbDumpFrame);
+	replayIzbMaskSegment(cmd, list);
+}
+
+// IZB mask pass（批 11.3-1d 后半）：beginRendering(G×G 零附件) + izb_mask 动态态
+// （OVERESTIMATE/双面/无深度）+ shadow0 段逐 draw 重放——管线条目按 vertexSlot
+// 换 izb_mask 形态，push = ShadowDrawArgs 8B 原样 + gridDim 4B（render_list 零改动）。
+void Renderer::replayIzbMaskSegment(vk::raii::CommandBuffer& cmd, const FrameDrawList& list) {
+	const auto seg = segmentSpan(shadowDrawSource(0), list);
+	if (seg.empty()) {
+		if (!izbMaskSegmentWarned) {
+			izbMaskSegmentWarned = true;
+			if (auto* lg = RLLogger::getInstance())
+				lg->warn("izb: shadow0 段为空（shadow_pass 关或无投影体）→ mask 无内容");
+		}
+		return;
+	}
+	const uint32_t gridDim = izbShadow->getGridDim();
+	izbShadow->beginMaskPass(cmd);
+	const vk::Rect2D gridRect{{0, 0}, {gridDim, gridDim}};
+	RGL::applyDynamicState(cmd, gridRect, stateKit.stateFor("izb_mask"),
+		stateKit.depthClipDynamicEnabled(), 0, stateKit.conservativeDynamicEnabled());
+	for (const auto& call : seg) {
+		if (call.pushData.size() < sizeof(ShadowDrawArgs))
+			continue;  // 契约破裂防御（同 replayClonedPass 的越界跳策略）
+		const auto maskIdx =
+			registry.izbMaskEntryFor(registry.entry(call.pipeline).bindings.slotVertex);
+		if (!maskIdx)
+			continue;  // 门关（条目未建）
+		const auto& entry = registry.entry(*maskIdx);
+		std::array<std::byte, 12> push{};
+		std::ranges::copy_n(call.pushData.begin(), 8, push.begin());
+		*reinterpret_cast<uint32_t*>(push.data() + 8) = gridDim;
+		cmd.pushDataEXT(vk::PushDataInfoEXT(entry.pushDataSet,
+			vk::HostAddressRangeConstEXT(push.data(), push.size())));
+		entry.pipeline.bindShaders(cmd);
+		cmd.drawMeshTasksEXT(call.groupCount, 1, 1);
+	}
+	izbShadow->endMaskPass(cmd);
 }
 
 // offscreen attachment RT 幂等 ensure（批次 4；extent 随 resize 重建含 waitIdle，录制期调用安全；format 经词表解析，"inherit"=swapchain 格式、具名=显式 RT）。出参 offscreenRt 按 slot 填（非 offscreen 槽留 null）。
@@ -515,7 +554,7 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 		// viewport/scissor 尺寸随 passExtent，与上面 beginRendering.renderArea 同源）
 		RGL::applyDynamicState(cmd, renderRect,
 			stateKit.stateFor(pass.state), stateKit.depthClipDynamicEnabled(),
-			static_cast<uint32_t>(pass.colors.size()));
+			static_cast<uint32_t>(pass.colors.size()), stateKit.conservativeDynamicEnabled());
 		// draw 三路分发（手术 6：提为 executePassDraws 私有方法——drawLight 全屏 /
 		// opaque GPU-culling / 普通段逐 draw）
 		executePassDraws(cmd, pass, list, frameSlot);

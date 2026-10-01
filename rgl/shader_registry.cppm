@@ -277,6 +277,24 @@ export class ShaderRegistry {
 	 */
 	[[nodiscard]] uint32_t addShadowEntry(uint32_t vertexSlot);
 
+	/**
+	 * 批 11.3-1d 后半：IZB mask pass 管线条目（spec = "izb_mask"：光空间 mesh +
+	 * 走链 frag）。形态 = addShadowEntry 镜像（vertexSlot 去重 + scene data），
+	 * 追加 extra bindings：5/6/7 → IZB head/nodes/mask 堆槽（Resources::
+	 * ensureIzbSlots 稳定槽号；描述符内容由 IzbShadow 构造时写）。
+	 * argsSize = 12（ShadowDrawArgs 8B + gridDim 4B，重放点拼接）。
+	 * @param vertexSlot 顶点 buffer heap 槽（binding 0）
+	 * @return 管线条目下标
+	 */
+	[[nodiscard]] uint32_t addIzbMaskEntry(uint32_t vertexSlot);
+
+	/**
+	 * mask 条目查询（重放点：shadow draw 的条目 → vertexSlot → mask 条目）。
+	 * @param vertexSlot 顶点槽（entry.bindings.slotVertex）
+	 * @return 条目下标；nullopt = 该顶点槽未建 mask 条目（门关或资产缺）
+	 */
+	[[nodiscard]] std::optional<uint32_t> izbMaskEntryFor(uint32_t vertexSlot) const;
+
 	/** 给模型资产回填阴影管线条目（启动期一次，与 bindToAsset 同节奏）。
 	 * @param assetId 资产记录 id
 	 * @param entryIdx addShadowEntry 返回的条目下标
@@ -395,6 +413,12 @@ export class ShaderRegistry {
 				"shadow", "generated_shaders/shadow.mesh.spv", "generated_shaders/shadow.frag.spv"};
 			return &defaultShadow;
 		}
+		if (std::strcmp(name, "izb_mask") == 0) {
+			static const RGL::PipelineSpec defaultIzbMask{
+				"izb_mask", "generated_shaders/izb_mask.mesh.spv",
+				"generated_shaders/izb_mask.frag.spv"};
+			return &defaultIzbMask;
+		}
 		if (std::strcmp(name, "ao") == 0) {
 			static const RGL::PipelineSpec defaultAo{
 				"ao", "generated_shaders/light.mesh.spv",
@@ -414,6 +438,8 @@ export class ShaderRegistry {
 	std::map<std::tuple<std::string, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>, uint32_t> modelEntryBySlot;  // 模型条目去重表：(规格名, 顶点 slot, base 纹理 slot, normal slot, orm slot, emissive slot) → 下标
 	// 阴影条目去重表：唯一变量 = vertexSlot（见 addShadowEntry 注释）
 	std::map<uint32_t, uint32_t> shadowEntryBySlot;
+	// 批 11.3-1d：IZB mask 条目表（vertexSlot → 条目下标；izbMaskEntryFor 消费）
+	std::map<uint32_t, uint32_t> izbMaskEntryBySlot;
 	std::vector<PipelineEntry> entries;                       // 管线表（下标 = 绘制契约）
 	// 克隆反查表（批 10.5 picking / 10.7 highlight，addCloneEntries 填）：第一维 =
 	// ClonePurpose，第二维 = 原条目下标 → 克隆条目下标。kNoClone = 该条目无此用途克隆；

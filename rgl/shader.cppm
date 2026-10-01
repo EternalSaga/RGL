@@ -71,6 +71,7 @@ export struct RenderState {
 	vk::CullModeFlagBits cullMode = vk::CullModeFlagBits::eNone;
 	vk::FrontFace frontFace = vk::FrontFace::eCounterClockwise;
 	bool rasterizerDiscard = false;
+	bool conservative = false;  // 批 11.3-1d：OVERESTIMATE 保守光栅（IZB mask pass；EDS3 动态位，缺能力时 applyDynamicState 不 set = 行为不变）
 	bool depthBiasEnable = false;
 	float depthBiasSlope = 0.0f;
 	float depthBiasScale = 0.0f;
@@ -111,7 +112,8 @@ export struct RenderState {
  *        greater than 0`），而没有色附件时这些状态本就无对象可作用。
  */
 export void applyDynamicState(vk::raii::CommandBuffer& cmd, const vk::Rect2D& area,
-	const RenderState& state, bool depthClipDynamic = false, uint32_t colorAttachmentCount = 1) {
+	const RenderState& state, bool depthClipDynamic = false, uint32_t colorAttachmentCount = 1,
+	bool conservativeDynamic = false) {
 	// Viewport & scissor（y 翻转：Vulkan 视口原点在左上，NDC y=+1 对应 area.y）
 	const float x = static_cast<float>(area.offset.x);
 	const float yTop = static_cast<float>(area.offset.y + area.extent.height);
@@ -126,6 +128,13 @@ export void applyDynamicState(vk::raii::CommandBuffer& cmd, const vk::Rect2D& ar
 	cmd.setPolygonModeEXT(state.polygonMode);
 	cmd.setCullMode(state.cullMode);
 	cmd.setFrontFace(state.frontFace);
+	// 批 11.3-1d：保守光栅模式（EDS3 动态位门控；**能力缺失 = 永不 set = 逐位不变**。
+	// 能力在场时每个 pass 都显式写值（非 mask pass = DISABLED），防 OVERESTIMATE
+	// 经 sticky 动态态泄漏到后续 pass）
+	if (conservativeDynamic)
+		cmd.setConservativeRasterizationModeEXT(state.conservative
+			? vk::ConservativeRasterizationModeEXT::eOverestimate
+			: vk::ConservativeRasterizationModeEXT::eDisabled);
 	cmd.setRasterizerDiscardEnable(state.rasterizerDiscard);
 	cmd.setDepthBiasEnable(state.depthBiasEnable);
 	cmd.setDepthBias(state.depthBiasScale, state.depthBiasSlope, 0.0f);

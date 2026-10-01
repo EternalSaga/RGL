@@ -279,6 +279,9 @@ export class Renderer {
 	 *  pass 写完；layout 进出同值 = 追踪表零漂移）。其余 pass 零命令。 */
 	void izbLightPassPre(vk::raii::CommandBuffer& cmd, const RgPassPlan& pass,
 		const FrameDrawList& list);
+	/** 批 11.3-1d 后半：光空间 mask pass（零附件 G×G + izb_mask 态 + shadow0 段
+	 *  重放，push 尾缀 gridDim；shadow0 段空 = warn-once 跳过）。 */
+	void replayIzbMaskSegment(vk::raii::CommandBuffer& cmd, const FrameDrawList& list);
 	// recreateSwapchainAndDepth（swapchain+depth 重建）已随手术 4 迁 FrameSession。
 	RGL::DeviceContext& vkDevice;  // 设备层引用（队列 / 命令池 / fence 等待 / 能力探测）
 	RGL::Swapchain* swapchain;      // 交换链层（main 持有，析构序在 Renderer 之后）
@@ -333,6 +336,7 @@ export class Renderer {
 	// docs/hfts_izb_plan.md）。extent 变化重建（重建前 waitIdle，同 RT 缓存规则）。
 	std::unique_ptr<RGL::IzbShadow> izbShadow;
 	uint32_t izbFrameNo = 0;   ///< 帧计数（izb_dump_frame 比对，1 起）
+	bool izbMaskSegmentWarned = false;  ///< shadow0 段空 warn-once（mask 依赖投影体）
 	int32_t depthAttSlot = -1; ///< 图内 depth 附件 slot（IZB sandwich 读布局追踪表用）
 
 	// scene data staging ring（Phase 5 批次 2，见 createSceneStaging；slot 数 =

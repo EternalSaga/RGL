@@ -25,7 +25,8 @@ export class StateKit {
 	 * @param depthClipEnable edS3 能力门（DeviceContext 启动期一次探测；false =
 	 *   扩展缺失，applyDynamicState 内 no-op 干净降级——"扩展缺失不 set"原则）
 	 */
-	explicit StateKit(bool depthClipEnable) : depthClipDynamic(depthClipEnable) {
+	explicit StateKit(bool depthClipEnable, bool conservativeDynamic = false)
+		: depthClipDynamic(depthClipEnable), conservativeDynamic(conservativeDynamic) {
 		// 透明段状态（Phase 5）：不透明段之外的差异三项——不写深度 + 开 alpha 混合 +
 		// 背面剔除。cull 必要：关深度写后封闭网格（如 glTF 盒）的正反两面同屏各混合
 		// 一次 = 有效 alpha 翻倍（实测 0.25 → 1-(1-0.25)²=0.4375）；剔除背面后
@@ -80,6 +81,14 @@ export class StateKit {
 		shadowState.depthWrite = true;
 		shadowState.depthCompareOp = vk::CompareOp::eLess;
 		shadowState.cullMode = vk::CullModeFlagBits::eNone;
+		// 批 11.3-1d：IZB mask pass —— 零附件光空间重放（viewport = 光网格 G×G）：
+		// 无深度测试/写入（遮挡判定在 frag 走链，光栅只出覆盖）、双面（投影体背面也
+		// 遮光）、**OVERESTIMATE 保守覆盖**（FTIZB 正确性命门：cell 被三角"擦边"必须
+		// 出 fragment，判定精度由 edge test 收，1d spike 判据③' 钉死）。
+		izbMaskState.depthTest = false;
+		izbMaskState.depthWrite = false;
+		izbMaskState.cullMode = vk::CullModeFlagBits::eNone;
+		izbMaskState.conservative = true;
 	}
 
 	/**
@@ -99,6 +108,7 @@ export class StateKit {
 		if (name == "picking") return pickingState;
 		if (name == "highlight") return highlightState;
 		if (name == "shadow") return shadowState;
+		if (name == "izb_mask") return izbMaskState;
 		throw std::runtime_error(fmt::format(
 			"StateKit::stateFor: unknown state '{}' (executor validation bypassed)", name));
 	}
@@ -108,6 +118,12 @@ export class StateKit {
 	 * @return true = 设备支持 extendedDynamicState3DepthClipEnable，逐 pass 可 set
 	 */
 	[[nodiscard]] bool depthClipDynamicEnabled() const { return depthClipDynamic; }
+
+	/**
+	 * 批 11.3-1d：EDS3 保守光栅模式动态位能力门（applyDynamicState 第 6 参消费）。
+	 * @return true = 设备启用 extendedDynamicState3ConservativeRasterizationMode
+	 */
+	[[nodiscard]] bool conservativeDynamicEnabled() const { return conservativeDynamic; }
 
    private:
 	RenderState opaqueState{};      // 默认值 = cube 的 opaque 状态（全默认）
@@ -119,7 +135,9 @@ export class StateKit {
 	RenderState pickingState{};     // Phase 10 批 10.5：id pass 复用 scene depth 只测不写（见 ctor 注）
 	RenderState highlightState{};   // Phase 10 批 10.7：高亮 pass 叠加成片（混合 + 剔背面，见 ctor 注）
 	RenderState shadowState{};      // Phase 11 批 11.2：阴影 depth-only pass（写 depthOffscreen，见 ctor 注）
+	RenderState izbMaskState{};     // 批 11.3-1d：IZB mask 光空间重放（零附件 + 保守覆盖，见 ctor 注）
 	bool depthClipDynamic = false;
+	bool conservativeDynamic = false;  ///< 批 11.3-1d：EDS3 保守光栅动态位能力门
 };
 
 }  // namespace RGL

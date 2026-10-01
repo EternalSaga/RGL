@@ -57,6 +57,9 @@ rgl_shader(cull.comp CULL_SPV)
 # 消费侧 = vk_renderer 门控 sandwich，docs/hfts_izb_plan.md）
 rgl_shader(izb_create.comp IZB_CREATE_SPV)
 rgl_shader(izb_prime.comp IZB_PRIME_SPV)
+# 批 11.3-1d 后半：光空间保守光栅 mask pass（mesh 形态 = shadow.mesh 镜像 + 平摊三 uv）
+rgl_shader(izb_mask.mesh IZB_MASK_MESH_SPV model scene)
+rgl_shader(izb_mask.frag IZB_MASK_FRAG_SPV)
 # Phase 10 批次 10.5：GPU id 点选 frag（mesh 复用 model.mesh.spv；写 objectIndex+1 进 r32ui）
 rgl_shader(picking.frag PICKING_FRAG_SPV model material)
 # Phase 10 批次 10.7：点选高亮 frag（mesh 复用 model.mesh.spv；菲涅尔边缘发光 alpha 混合

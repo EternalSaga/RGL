@@ -66,6 +66,21 @@ public:
 	 * @return 本实例的 extent
 	 */
 	[[nodiscard]] vk::Extent2D getExtent() const { return extent; }
+	/** 光空间网格边长 G（mask pass viewport 同源）。 @return gridDim */
+	[[nodiscard]] uint32_t getGridDim() const { return gridDim; }
+	/** 光空间网格像素数 G²（beginRendering renderArea 用）。 @return G×G */
+	[[nodiscard]] vk::Extent2D getGridExtent() const { return {gridDim, gridDim}; }
+
+	/**
+	 * mask pass 录制体（1d 后半；sandwich 内 create/prime 之后 begin，Renderer
+	 * applyDynamicState + 重放 shadow0 段 draws，然后 end）。
+	 * begin = FillBuffer 清 mask（1 bit/像素）+ hazard barrier + beginRendering
+	 * （**零附件**、renderArea = G×G）；end = endRendering。
+	 * @param cmd 命令缓冲（heap 已绑定）
+	 */
+	void beginMaskPass(vk::raii::CommandBuffer& cmd);
+	/** mask pass 收尾（beginMaskPass 的配平 endRendering）。 */
+	void endMaskPass(vk::raii::CommandBuffer& cmd);
 
 private:
 	/**
@@ -86,6 +101,7 @@ private:
 	RGL::VmaBuffer headBuffer;    ///< G² uint（NONE 哨兵；每帧 FillBuffer 清）
 	RGL::VmaBuffer nodesBuffer;   ///< W·H × 16B (u, v, lightDepth, next)
 	RGL::VmaBuffer primedBuffer;  ///< G² float
+	RGL::VmaBuffer maskBuffer;    ///< ⌈W·H/32⌉ word 位图（1 bit/像素 = 被遮；mask pass 写）
 	RGL::VmaBuffer staging[2];    ///< head 回读 ring（host-visible mapped）
 	void* stagingMapped[2] = {nullptr, nullptr};
 	bool dumpPending[2] = {false, false};
@@ -94,6 +110,7 @@ private:
 	uint32_t headSlot = 0;
 	uint32_t nodesSlot = 0;
 	uint32_t primedSlot = 0;
+	uint32_t maskSlot = 0;
 	uint32_t depthSlot = 0;
 
 	// raii 无默认构造（工程红线），optional 承载「构造期分步初始化」

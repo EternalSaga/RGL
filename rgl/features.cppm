@@ -98,6 +98,18 @@ export bool depthClipDynamicSupported(const OptionalFeatureSupport& opt) {
 }
 
 /**
+ * 批 11.3-1d：保守光栅模式动态化能力门（EDS3 conservativeRasterizationDynamic，
+ * 无旧扩展 base——EDS3 结构本身即 base，vkdevice 链与 depthClip 两位共用同装）。
+ * 消费：StateKit 门 + applyDynamicState 第 6 参（IZB mask pass OVERESTIMATE，
+ * RADV maxExtraPrimitiveOverestimationSize=0 → 软件 dilation 路线，1b 实测）。
+ * @param opt queryOptionalFeatures 探测结果
+ * @return true = 设备已启用 EDS3 保守光栅模式动态位
+ */
+export bool conservativeModeDynamicSupported(const OptionalFeatureSupport& opt) {
+	return opt.conservativeRasterizationDynamic;
+}
+
+/**
  * 设备创建用的必需 + 可选扩展列表。可选扩展：仅在对应 optional feature 探测可用时
  * 追加。扩展启用与 feature 置位同源（queryOptionalFeatures 先查扩展可用再读 feature
  * 字段，缺一即 false = 整体 no-op），故此处按 OptionalFeatureSupport 位逐项追加即可——
