@@ -247,4 +247,4 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
 - `docs/archive/阴影失效排查.md` — Phase 11 批 11.2 阴影失效排查交接日志（**已解决归档**，权威结论 = 调试历史 2026-09-29 条目）
 - `docs/archive/` — 归档索引（phase 计划含 **phase6_record.md**、ecs 审查、issue_history 总账、present_timing/教程拆解等已结题调研）
 - 离线 Vulkan 文档（优先在线检索被 Cloudflare 拦截时）：本地克隆 `/home/robin/program/Vulkan-Docs`（v1.4.360）。**注意**：spec 比系统头/loader（v357）新，结构体字段以系统头为准，spec 只作语义依据
-- 最小复现/验证子项目（独立 CMake，结论已吸收进主工程与 archive）：`min_mesh_crash/`（NVIDIA mesh shader 必带 `NO_TASK_SHADER_BIT_EXT` 根因，见其 README）、`heap_texture_spike/`（heap 纹理三驱动 PASS + 步长取 max，见其 README + archive/heap_texture_research.md）
+- 最小复现/验证子项目（独立 CMake）：`script_spike/`（脚本长期线 P0，见 `docs/脚本长期规划.md`）；`min_mesh_crash/` 与 `heap_texture_spike/` 已删除（`516cf5a`，墓碑 = `docs/archive/*_已删除.md`；根因/三驱动结论在 `docs/archive/issue_history.md` / `heap_texture_research.md`，代码见 git history）

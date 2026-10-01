@@ -90,7 +90,7 @@ DrawArgs 超集 + 零 AssetKind 分支）；④ 管线表 392 条未去重（Pha
 （TASK stage 绑 NULL 时必需），NVIDIA 驱动遵守契约查 task shader 空指针 → Xid 13 → engine
 reset。VVL 查不出来是 spec 漏洞（VUID 08694 需 taskShader+meshShader 双 feature）。
 **全文**：[nvidia_compatibility_report.md](../nvidia_compatibility_report.md) 第五/八节 +
-[min_mesh_crash/README.md](../../min_mesh_crash/README.md)。
+完整复现代码 = git history `min_mesh_crash/`（`516cf5a` 删除；墓碑 [min_mesh_crash_已删除.md](min_mesh_crash_已删除.md)）。
 
 ## 2026-08-27 · spike "RADV 只映射组合 OpTypeSampledImage" = shader 声明错误
 

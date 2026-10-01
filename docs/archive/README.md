@@ -20,6 +20,8 @@
 | [phase10_plan.md](phase10_plan.md) | 已完成 | Phase 10 调试交互实施计划（2026-09-27 立、09-28 批 10.1–10.6 全落地：imgui 骨架/ObjectDraw 单源化/参数注册表/材质控件/配置热重载/shader 热重载 L1/GPU id 点选/反射语义扩产；决策表 D1–D12） | 遗留：UI 视觉走查（用户）+ **D12 RPC 通道 = 延后**（翻案条件见 §2 决策表）；阴影已顺移 Phase 11 |
 | [shader_reflection_plan.md](shader_reflection_plan.md) | 历史 | Phase 0 反射设计规划（实现现状 = tools/ 三模块 + 5 条反射管线，见 AGENTS.md） | 正文与现状代码不一致处以后者为准 |
 | [heap_texture_research.md](heap_texture_research.md) | 调研 | descriptor heap 纹理采样预研（三驱动 × 5 变体全 PASS）+ UAF 排查全过程 | **§八"RADV 只映射组合绑定"被 §九 推翻**（标量 Texture2D<float> splat）；**§十"4K 黑屏 = high VA 56 位定性"被 §12.6 改写**（同根 TexturePool UAF 复用）；§十一 状态漂移同根 |
+| [min_mesh_crash_已删除.md](min_mesh_crash_已删除.md) | 历史 | `min_mesh_crash/` 子项目归档墓碑（`516cf5a` 删除；根因结论 = issue_history 2026-08-17 条目 + nvidia_compatibility_report §十，代码 = git history） | 无 |
+| [heap_texture_spike_已删除.md](heap_texture_spike_已删除.md) | 历史 | `heap_texture_spike/` 子项目归档墓碑（`516cf5a` 删除；结论 = heap_texture_research.md，代码 = git history） | 无 |
 | [ecs_compliance_review.md](ecs_compliance_review.md) | 历史 | ECS 五条设计规范（现行摘要在 AGENTS.md）+ 2026-08-24 合规审查 + 逐条处置记录 | 五项 ECS 债 2026-08-30 全清（处置记录为时点快照） |
 | [present_timing_research.md](present_timing_research.md) | 调研 | VK_EXT_present_timing 预研（决策 = 暂不引入；结论已吸收进 技术概念.md Present Mode 节） | 真实帧 pacing 需求出现时按第六节步骤执行 |
 | [教程拆解发现_20260902.md](教程拆解发现_20260902.md) | 已修复 | 兄弟教程双实现对账查出 5 项（GGX epsilon/mesh 减法/契约检查/ambient/intensity 语义），2026-09-03 全部落地 | 各修复已附代码注释指针（4 处 shader 引本文件 archive 路径） |

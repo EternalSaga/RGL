@@ -149,7 +149,7 @@ canary 答"GPU 还活着吗"，masked fault 答"GPU 干了坏事但驱动帮你�
 
 ### 案例 A：NO_TASK_SHADER 缺 flag（NVIDIA 610.57.04，**已闭环**）
 
-- 形态（`min_mesh_crash/README.md:13`）：不带 `NO_TASK_SHADER_BIT_EXT` 的 mesh shader
+- 形态（原 `min_mesh_crash/` README，`516cf5a` 删除 → `docs/archive/min_mesh_crash_已删除.md`）：不带 `NO_TASK_SHADER_BIT_EXT` 的 mesh shader
   对象契约上须配有效 task shader → NV 驱动 draw 时按 "task→mesh" 查到**空指针**
   → **GPU page fault at VA=0x0** → engine reset → `VK_ERROR_DEVICE_LOST`
 - 当时证据：dmesg/Aftermath（`engine reset occurred: true`）+ 最小复现 + 契约推理
@@ -233,7 +233,7 @@ canary 答"GPU 还活着吗"，masked fault 答"GPU 干了坏事但驱动帮你�
 
 - `docs/vulkan_extensions_2025_调研.md` §L54/L126-127 —— 本文的方向前身
 - `docs/archive/heap_texture_research.md` §11/§12.6 —— 案例 C 全过程与勘误
-- `min_mesh_crash/README.md` —— 案例 A 最小复现
+- `docs/archive/min_mesh_crash_已删除.md` —— 案例 A 最小复现墓碑（原 `min_mesh_crash/` 子项目 `516cf5a` 删除，代码见 git history）
 - `docs/调试历史.md` 2026-09-10 两条 —— 案例 B（含未闭环存疑段）
 - `docs/nvidia_compatibility_report.md` —— 案例 A 跨驱动记录（其中机器表述待勘误）
 - `docs/技术概念.md §构建检查工具机制` / `docs/风格检查规则.md` —— 无关，但本文状态头
