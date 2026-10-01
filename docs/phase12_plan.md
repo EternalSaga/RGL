@@ -125,9 +125,17 @@ DEFER（跨机）= **0 条**——DGC/NVIDIA 系列全是硬件观察或已闭�
 - **d-D** `e9022f3`：stale SPV 双护栏——`tools/check_shader_deps.py`（DEP ⊇ import
   传递闭包 + StructuredBuffer 全禁红线，构建期恒跑）+ imgqa `checkShadersFresh()`
   （逐 spv 比自身源闭包 mtime，清单由前者每次构建写出 = 图真相源单点）。
-- **d-E**（本提交）：36+8 条目沉淀地址全量回填；调试历史头部改写终态声明——
+- **d-E**（`2ee3bcc` + `36a4896`）：36+8 条目沉淀地址全量回填；随后**全量删减
+  1806→985 行**（-45%）——只删"已机制化事实"（每段删除前复核承载点实文），
+  误诊叙事/负知识/方法论/症状指纹/勘误链全保留（约 260 行整段逐字保护）；
+  悬空指针 7 项处置、行号指针清零；调试历史头部改写终态声明——
   **本文件只留教训不留事实**，"现在保证成立什么"的权威口径转移到 tests/ 与
-  tools/checks/；issue_history 头部加裁决指针。
+  tools/checks/，这里回答"当初为什么错、错在哪一步被抓住"；
+  issue_history 头部加裁决指针。
+- **d-F**（`6da61e3`，用户追加）：AGENTS.md 瘦身 376→249——硬纪律十条迁新 skill
+  `rgl-test-discipline`、运行要点迁 rgl-verify/技术概念（先补目的地再删源）、
+  过时 4 处修正（alphaTest 已落地/prefiltered 已落地/九段/0-30 口径）、
+  内部重复删除、文档索引补漏、阴影失效排查归档。
 
 **遗留移交**：AO 0↔0.5 轮 + 选级端到端远景机位 → 12.3c；RPC loopback → 12.6。
 **验收**：just test 143/143（本批 +27 用例）· checks 0 警告 · probe 逐字节 PASS ·
