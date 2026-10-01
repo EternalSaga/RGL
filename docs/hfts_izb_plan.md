@@ -301,6 +301,17 @@ render_graph 零改动版**。
   不设 ms 门（用户拍板），数字供阶段 2 优化基线。
 - **1e 未完项**：forward z-prepass（需条件性图插 pass + draw 代价×2，列白天批次）；
   izb_rig 三分带闭式对拍；imgqa attribution 影响域；bias/grid 调参。
+- **1e 已知异常（干净二进制实测，hair 贴脸机位，02:55 收账 = 观察确凿、根因待昼查）**：
+  mask = **上半屏全宽置位**（453274 ≈ y<340 全排，边界锐利横带）+ 下半全零 +
+  无杆影带结构；IZB 画面该带不黑（light 读该 mask 却不见对应影 = 天空行走
+  skybox 分支不受 shadowFactor，带内地面部分应黑未黑 = 消费时序/pid 还需查一层）。
+  候选机制（未逐一证伪）：① 120m 大地面三角（rig 独有；bistro 地面=meshlet 小片
+  无此象）在 cascade-0 外的投影/重心外推令 inTri&&occl 大面积误真 ② nodeD 与
+  三角 dF 的 ndc/光空间深度口径在远端分叉 ③ 消费侧 pid/帧时序。**ladder 机位
+  （同一 rig 场景、无大地面视角）A/B 与 CSM 逐位一致** = 主几何通路正确的强交叉
+  验证，异常局限于贴地掠射视角。
+  **判据工具新增**：dump 帧写 `izb_mask.ppm`（白=未遮 黑=遮，fb 行序）——mask
+  空间结构 vs 截图目检直接对位，比 count 数字锐利得多。
 
 **1d 光空间保守光栅 pass + mask 写入**：✅ 已完成（上文）；「izb_rig 出硬影」= 1e 消费后。
 
