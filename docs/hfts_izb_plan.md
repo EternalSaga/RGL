@@ -197,6 +197,47 @@ BIT-IDENTICAL 基线不受扰）。
   全量 descriptor heap**（用户槽 runtime 段），老式 bindless 引擎禁入 →
   `docs/DESCRIPTOR_HEAP_SPEC.md`；已钉 `test_izb_create.cppm` 文件头。
 
+**1d 前半（2026-10-01 深夜落地）：IZB 创建/priming 进引擎（rlgfx `izb_shadow` 模块）**。
+- 形态：图外 compute sandwich，录在 **deferred 图 `drawLight "light"` pass 头部**
+  （深度已由 geometry pass 写完）；深度 layout 进出同值 = 渲染图布局追踪表零漂移。
+  门 = `diagnostics.izb_shadow`（默认 false）：**门关 = IzbShadow 恒不构造**
+  （零分配零命令）；forward 图无 drawLight pass 天然不触发（z-prepass 两路接 = 1e）。
+- 数据 = `vk_resources` 全量 heap Runtime 段 3 槽（izb.head/nodes/primed）+
+  **深度采样描述符与 SSAO 共用 `ensureDepthSampleSlot`**（同 view 同 RO 布局）；
+  shader object = heap mapping（gpu_cull 同款）；每帧 `vkCmdFillBuffer` 清 head。
+- 光空间 = **cascade-0 `shadowViewProj`**（正交 → 窗口 z 天然线性、深度比较仿射不变
+  → 无需 near/far；与 CSM 光向同源）。**v1 语义 = 近场 IZB**：cascade-0 范围外像素
+  不建节点（HFTS 远场分区 = 阶段 3）。节点 payload 收编 uv：16B = (u, v, lightDepth,
+  next)（mask pass 的 edge 判定直读，spike 的独立 pixelUV SSBO 取消）。
+- 实测（bistro deferred 1280×720，`izb_dump_frame` 阳性锚点）：G=512 →
+  cells 262144：empty 239584 / n1 1515 / n2 989 / n3+ 20056，**maxChain 162，
+  nodes 304122**，无坏链；G=64 对照 → 同 nodes、maxChain 2704（grid 参数真生效，
+  节点数几何不变）。VVL 零错误；**门开截图与门关 byte-identical**（mask 消费未接
+  = 画面不变红线实证，llm_debug 帧 8 对拍）。
+- 首跑 VVL 三连坑（均已注释钉 `izb_shadow_impl.cppm`，调试历史 2026-10-01 收账）：
+  ① BDA 必须 `createBufferWithAddress`（普通 `createBuffer` 的 `getDeviceAddress()`
+  恒 0 = 写描述符 "address is zero"）；② `vkCmdFillBuffer` 要 `eTransferDst`；
+  ③ `VkBufferCopy.size` 不吃 `VK_WHOLE_SIZE`（要显式字节数）+ nodes 是 dump 拷贝
+  **源**（`eTransferSrc`，注释曾写反）。
+- 直方图对论文 Fig.4 口径：bistro/cascade-0 的 n3+ 占非空 cell 92% ≫ 论文理想值——
+  因 cascade-0 半径小（~数米）把大量近场几何压进 512² 同 cell；**结论 = v1 的
+  cascade-0 网格密度不够或范围该放大**，mask pass 落地后用 §4.4 预算口径一起定参。
+
+**1d 后半（待做）mask pass（光空间保守光栅）实现 checklist**：
+1. 管线 = mesh（光空间 MVP）+ frag（走链判定）+ `RASTERIZATION_MODE_OVERESTIMATE`
+   （EDS3 动态态，能力位 1b 已接）；shadow pass 的 depth-only 段是形态先例
+   （`ShadowDrawArgs` / 图集子矩形 viewport / drawSource "shadow*"）。
+2. 负 viewport 口径必须继承 `shader.cppm` `applyDynamicState` 的 `vk::Viewport(x,
+   yTop, w, -h)` 唯一补偿（1b 结论：mesh 输出 clip 是 D3D12 口径 +Y 向下）——
+   tests spike 已按同款验证过（`test_izb_mask.cppm` 判据③' 钉住）。
+3. mask 载体 = SSBO 原子（bit = 三角），pass 零附件 beginRendering（0 color）或 1
+   texel 占位；viewport = 光网格 G×G。
+4. frag 判定语义 golden = `test_izb_mask.cppm`（2D 棱柱三边同号 + texel 中心插值
+   深度；OVER/DISABLED 对拍已实证保守专属正对与 edge 拒斥）。
+5. 投影体来源 = opaque 段 DrawArgs 全量重放（同 shadow casters 思路，cullMode 关或
+   双面）；级联 = v1 仅 cascade 0。
+6. 消费（1e）：deferred light.frag 读 mask bit → 乘到该灯贡献；forward 走 z-prepass。
+
 **1d 光空间保守光栅 pass + mask 写入**，izb_rig 上首次出硬影。
 
 **1e 消费接入 + forward z-prepass**，D1 对拍（forward vs deferred 的 izb 阴影），
