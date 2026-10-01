@@ -286,7 +286,10 @@ Phase 11：阴影（大特性，一口气；风险分层 = CSM 承诺交付 + HF
      - "Conservative Z-Prepass for FTIZB"（Tokuyoshi 2018）——性能加速
      - 《Irregular Z-buffer Shadows》assassin-plus.github.io（2025-03）——最新教程式 walkthrough
      - HFTS 原文（Wyman SIGGRAPH 2016，cwyman.org/abstracts/sig2016_hfts.pdf）+ Story 2015 原文
-     - github.com/strexicious/izb-on（实验参考，非生产级）
+     - github.com/strexicious/izb-on（实验参考，非生产级；2026-10-01 核实：13 commits，作者已弃坑）
+     - **执行计划（2026-10-01 调研定稿）→ `docs/hfts_izb_plan.md`**：论文全文结论 /
+       项目 gap / 架构方案 / 分阶段 1a–1e / 收手判据；验收分批 = 阶段 1 只验正确性
+       （无 ms 门），预算口径阶段 2 实测后定（见其 §4.4，替代上文 X=3 ms 口径）
     ↓
     ↓
 Phase 12：测试体系（**补立计划** 2026-09-30，[phase12_plan.md](phase12_plan.md)）——

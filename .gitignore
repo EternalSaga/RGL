@@ -409,3 +409,4 @@ script_spike/host
 script_spike/script.so
 script_spike/spike_api.o
 script_spike/spike_api.pcm
+docs/参考资料/*.pdf

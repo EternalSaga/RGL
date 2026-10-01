@@ -206,7 +206,11 @@ CSM/HFTS 共同硬前提。
 
 ### 批 11.3 — HFTS/IzB spike（带退出条件，非承诺项）
 
-见 `next_roadmap.md` §Phase 11 ③（FTIZB 优先，达不到即收手）。
+见 `next_roadmap.md` §Phase 11 ③（FTIZB 优先，达不到即收手）。**2026-10-01 调研定稿**：
+四篇论文全文结论（FTIZB 六 pass / HFTS 混合 / Tokuyoshi 预剔除 ~6×）+ 开源现状
+（**无可抄**）+ 项目 gap + 架构方案（图内 2 光栅 pass + 图外 IZB 创建 dispatch）+
+分阶段 1a–1e + 收手判据 → **执行计划 `docs/hfts_izb_plan.md`（本批权威载体）**。
+口径变化：阶段 1 只验正确性不设 ms 门，预算口径阶段 2 实测后定（替代原 X=3 ms）。
 
 ---
 
@@ -254,7 +258,7 @@ CSM/HFTS 共同硬前提。
       剔除体解耦 ShadowVolume / 反投影正向矩阵+ZO 角点）。**阴影真实出现**：复现机位开关对拍
       21.5% 像素全变暗；四组基线重测（§6）；性能重测 1/2/4 级 = **2.21 / 4.02 / 7.10 ms** →
       定案 1 级依据更强。排查全程 → `docs/archive/阴影失效排查.md` + `docs/调试历史.md`
-- [ ] 批 11.3：HFTS spike 出结论（做 / 收手二选一）
+- [ ] 批 11.3：HFTS spike 出结论（做 / 收手二选一；执行计划 → `docs/hfts_izb_plan.md`）
 - [x] BIT-IDENTICAL **基线已建立（2026-09-29 阴影修复后重测，同日 5a-6 切 4 级、5a-7 稳定化再迁移；5a-4 旧 on 态基线作废）**：默认机位 + llm_debug（级联数 = `kActiveShadowCascades`，现 4）。**5a-9 起 `shadow_pass` 默认开**，故下表 on 组 = 缺省配置、off 组 = 显式关门（回归对照，画面应逐位等于旧基线）：
       | 配置 | md5 |
       |---|---|
@@ -931,3 +935,24 @@ gltf_loader_impl.cppm:583  bounds center=(14.367052, 8.558889, 2.984644) radius=
 > 判据说明：爬行**不**用"矩阵逐位相同"衡量——球拟合的半边长 r 会随相机距离微变
 > （那是"阴影呼吸"，幅度与 r 的相对变化同阶，肉眼不可见）；真正刺眼的是**整 texel 跳变**，
 > 吸附就是为消掉它。量法 = 固定世界点在光空间的位移 / texel 尺寸。
+
+---
+
+## 13. 批 11.3 · 调研定稿（2026-10-01）：HFTS/FTIZB 全文通读 + 开源面查清 + 实施方案
+
+四篇论文原文通读（FTIZB 2015 I3D / 2016 TVCG / HFTS 2016 / Tokuyoshi 2018）+ 开源面
+查清 + 项目 gap 复核。**权威载体 = `docs/hfts_izb_plan.md`**，本节只记决策结论：
+
+1. **开源无可抄**：NVIDIA ShadowWorks 闭源；`strexicious/izb-on` 13 commits 作者弃坑
+   （仅结构示意）；论文附 GLSL 示例无公开下载。→ 自研，参考 = 论文伪代码 +
+   Tokuyoshi HLSL 片段。
+2. **架构定案**：图内 2 光栅 pass（forward z-prepass、光空间保守光栅）+ 图外 1 个
+   IZB 创建 dispatch——与"compute 全在图外"既有不变式一致，**不新增 render_graph
+   pass kind**。
+3. **验收分批**（用户拍板）：阶段 1 只验正确性**不设 ms 门**（izb_rig 程序化场景 +
+   Bistro 目检），预算口径阶段 2 实测后定 → 替代 roadmap 原 X=3 ms 口径
+   （3.1 ms 余量已被 4 级 CSM 7.10 ms 吃穿，原口径失效）。
+4. **成败门 = 保守光栅 × mesh shader × RADV 组合验证**（项目从未实测，论文是传统
+   GL 管线）；fallback = 软件保守光栅，仍不行即收手。
+5. 场景生成一致性契约（manifest 单一真相源 / 字节可复现 / 与 12.5 C++ 重写不并行）
+   → 计划文档 §4.5。
