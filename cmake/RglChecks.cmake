@@ -1,4 +1,5 @@
-# ─── 构建期源码检查（source_checks，样式 + Doxygen，只警告不阻断）─────────────
+# ─── 构建期源码检查（source_checks：样式 + Doxygen；shader_dep_check：DEP 表 +
+# slang 红线；均只警告不阻断）─────────────────────────────────────────────────
 # 由 rgl/CMakeLists.txt include。单 target ALL 跑 tools/checks/main.py：
 # 每个 .cppm 一次 libclang parse（Indexer 穿透 export，样式指标与 doc 声明表
 # 共享同一 AST 与同一缓存 build/checks_cache），纯文本规则主进程直读源码。
@@ -35,3 +36,20 @@ add_custom_target(source_checks ALL
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/checks/main.py
             --build-dir ${CMAKE_BINARY_DIR}
     COMMENT "源码检查：样式 + Doxygen（警告不阻断）")
+
+# ─── shader_dep_check（批 12.3d-D1/D3，只警告不阻断）─────────────────────────
+# rgl_shader() 的 DEP 手工登记漏登 = stale SPV 静默残留根因（调试历史 2026-08-27 /
+# 2026-09-28 批 10.4 / 2026-10-01）。本目标每次构建跑 tools/check_shader_deps.py：
+#   R1 每个 target 的 import 传递闭包 ⊆（主源 + 已登记 DEP），漏登点名报错；
+#   R3 任何 .slang 出现 StructuredBuffer（含 RW/Append/Consume）= 红线（全库零使用，
+#      无豁免清单；调试历史「灰屏」stride 静默错位）。
+# 形态 = 无 OUTPUT 的 custom target → 恒执行（与 reflection_check/source_checks 一致）；
+# 脚本 stdlib-only、只读源树不依赖编译产物 → add_dependencies(rgl shader_dep_check)
+# （rgl/CMakeLists.txt）使其先于/并行于编译跑。默认恒 exit 0（醒目 ERROR 行不阻断，
+# 先例 source_checks；--strict 供手动/CI 拿非零码）。
+# 副作用：--emit-manifest 写 build/rgl/shader_deps.txt（spv→源闭包清单），供 imgqa
+# D2 守卫 checkShadersFresh() 逐 spv 比 mtime（图真相源单点在本脚本）。
+add_custom_target(shader_dep_check ALL
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_shader_deps.py
+            --emit-manifest ${CMAKE_BINARY_DIR}/rgl/shader_deps.txt
+    COMMENT "Shader DEP 表检查：import 闭包 ⊆ DEP + StructuredBuffer 红线（警告不阻断）")

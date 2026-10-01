@@ -3,7 +3,7 @@
 # 模块分解（2026-09-23 瘦身）：
 #   cmake/RglSlang.cmake         SLANG_FLAGS 契约 + compile_slang/rgl_shader
 #   cmake/RglReflection.cmake    反射管线 + reflect/reflection_check
-#   cmake/RglChecks.cmake        source_checks（样式 + Doxygen）
+#   cmake/RglChecks.cmake        source_checks（样式 + Doxygen）+ shader_dep_check（DEP 表）
 #   cmake/RglRuntimeAssets.cmake configs/models/skybox/env 拷贝
 include(${CMAKE_SOURCE_DIR}/cmake/RglSlang.cmake)
 include(${CMAKE_SOURCE_DIR}/cmake/RglReflection.cmake)
@@ -441,6 +441,9 @@ target_link_libraries(rgl PRIVATE rlframe)
 target_compile_features(rgl PRIVATE cxx_std_23)
 
 add_dependencies(rgl reflection_check)
+# shader DEP 表检查（批 12.3d-D1）：脚本只读源树，与编译并行（挂法同 reflection_check，
+# 详见 cmake/RglChecks.cmake 内注释）。
+add_dependencies(rgl shader_dep_check)
 # 源码检查必须等编译产物就绪（libclang 读半写 BMI 会 crash，坑 4c，
 # 详见 cmake/RglChecks.cmake 头注释）。
 add_dependencies(source_checks rgl)

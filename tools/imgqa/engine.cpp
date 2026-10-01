@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <regex>
+#include <sstream>
 #include <stdexcept>
 #include <thread>
 
@@ -86,6 +87,70 @@ void assertKeys(const std::string& fileName, const std::set<std::string>& emitte
 }
 
 const char* lb(bool v) { return v ? "true" : "false"; }
+
+/// D2（批 12.3d）：SPV 新鲜度守卫（mtime 轻版，不核内容）。**所有引擎驱动路径的
+/// 统一护**（Engine 构造 + runEngineOnce 起点都调）——"改了 .slang 没构建就测量"
+/// 与并行实例污染同级（探针在旧着色器上下判据 = 最贵的假线索）。
+///
+/// 口径：**逐 spv** 只比"它自己的源闭包"（清单 build/rgl/shader_deps.txt，由每次
+/// 构建的 shader_dep_check 目标生成，见 tools/check_shader_deps.py）。刻意不是
+/// "最新 .slang vs 最旧 .spv" 的全局比较——增量构建只重编受影响 spv，无关 spv
+/// （如 light.mesh.spv）必然比刚改的 .slang 旧，全局口径会让每次增量构建后恒红。
+/// 边界：.spv 目录不存在/为空 = 从未构建 → 跳过（后续引擎启动失败兜底）；清单缺失
+/// 但 spv 在场 = 构建状态与守卫不同步 → **报错不出声**（失效静默会被读成"新鲜度已检查"）。
+void checkShadersFresh()
+{
+    const fs::path spvDir = fs::path(buildRglDir()) / "generated_shaders";
+    std::error_code ec;
+    bool anySpv = false;
+    for (const auto& e : fs::directory_iterator(spvDir, ec))
+        if (!ec && e.is_regular_file(ec) && e.path().extension() == ".spv") {
+            anySpv = true;
+            break;
+        }
+    if (!anySpv)
+        return;
+
+    const fs::path manifest = fs::path(buildRglDir()) / "shader_deps.txt";
+    if (!fs::exists(manifest))
+        throw std::runtime_error(
+            "SPV 新鲜度无法判定：build/rgl/shader_deps.txt 缺失（正常构建随 shader_dep_check "
+            "目标生成）。先 just build 重新生成后重跑。");
+
+    std::ifstream in(manifest);
+    if (!in)
+        throw std::runtime_error("读不到 " + manifest.string());
+    std::string stale;
+    int shown = 0;
+    for (std::string line; std::getline(in, line);) {
+        if (line.empty() || line[0] == '#')
+            continue;
+        std::istringstream cols(line);
+        std::string spvName;
+        cols >> spvName;
+        const fs::path spv = spvDir / spvName;
+        const auto spvT = fs::last_write_time(spv, ec);
+        if (ec)
+            continue;  // 该 spv 未构建（如 target 新加未编译）：引擎启动失败兜底
+        for (std::string depRel; cols >> depRel;) {
+            const auto depT = fs::last_write_time(fs::path(projectRoot()) / depRel, ec);
+            if (ec || depT <= spvT)
+                continue;
+            if (++shown <= 5) {
+                if (shown > 1)
+                    stale += "\n";
+                stale += "  " + depRel + " 新于 " + spvName;
+            }
+        }
+    }
+    if (shown) {
+        if (shown > 5)
+            stale += "\n  …（共 " + std::to_string(shown) + " 对）";
+        throw std::runtime_error(
+            "SPV 疑似过期（测量会跑在旧着色器上）：\n" + stale
+            + "\n  修复：just build（重编 SPV；改 shader 契约/schema 再 just reflect）后重跑");
+    }
+}
 }  // namespace
 
 std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
@@ -170,6 +235,8 @@ struct Engine::Impl {
 
 Engine::Engine(std::string profileDir, int port) : impl_(new Impl{.profileDir = profileDir, .port = port})
 {
+    // 新鲜度守卫先于一切（所有引擎驱动路径统一受护，见 checkShadersFresh 注释）。
+    checkShadersFresh();
     // 单实例纪律：pgrep 用 returncode 判存在。**不要**拿 `pgrep -c` 的 stdout 判真假
     // ——没找到时它打印 "0"，非空 → 误判成"有残留"而永远拒跑（本轮真实踩过）。
     if (std::system("pgrep -x rgl >/dev/null 2>&1") == 0)
@@ -267,6 +334,8 @@ Engine::~Engine()
 
 void runEngineOnce(const std::string& configDir, int timeoutSec)
 {
+    // 新鲜度守卫先于一切（与 Engine 构造同一条，见 checkShadersFresh 注释）。
+    checkShadersFresh();
     // 单实例纪律与 Engine 同款（见 Engine 构造处注释——pgrep 用 returncode，别拿
     // `-c` 的 stdout "0" 判真假）。
     if (std::system("pgrep -x rgl >/dev/null 2>&1") == 0)

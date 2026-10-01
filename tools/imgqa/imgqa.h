@@ -123,6 +123,7 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& opts);
 
 /// 引擎进程：起 headless、RPC 驱动、干净退出。单实例纪律 = 起跑前 pgrep，有残留拒跑
 /// （并行实例互相遮挡合成，会把画面与帧率双双扭曲，AGENTS.md 测量教训同源）。
+/// 起跑前先过 SPV 新鲜度守卫（.slang 比其所属 spv 新 = 疑似 stale 拒跑，批 12.3d-D2）。
 class Engine {
 public:
     explicit Engine(std::string profileDir, int port = 8788);
@@ -173,7 +174,8 @@ void prepareLinear(Frame& f);
 
 /// 一次性跑引擎到自然退出（llm_debug 截图模式专用：qa/configs/analytic 那套配置
 /// llm_debug=true + rpc=false，与 Engine 的 RPC 形态互斥——llm 截图在跑时 /shot 会
-/// 409，是引擎既有约定，工具迁就配置而不是反过来）。单实例纪律同 Engine。
+/// 409，是引擎既有约定，工具迁就配置而不是反过来）。单实例纪律同 Engine；
+/// 起跑前先过 SPV 新鲜度守卫（同 Engine，批 12.3d-D2）。
 /// 非零退出抛异常并附日志路径（对着超时猜死因是排查时间的黑洞）。
 void runEngineOnce(const std::string& configDir, int timeoutSec = 180);
 
