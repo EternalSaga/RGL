@@ -208,6 +208,14 @@ namespace RGL {
 		b.extra.push_back({.binding = 13, .sampler = true,
 			.samplerHeapOffset = static_cast<vk::DeviceSize>(shadowSamplerSlot)
 				* res.getSamplerHeap().getDescriptorSize()});
+		// 批 11.3-1e：IZB mask 位图 14（**无条件绑定** = VVL 静态活性，门关读 Resources
+		// 发号时写好的 16B 零 fallback；消费开关 = scene data IZB 区 flag，见 light.frag）
+		{
+			auto izb = res.ensureIzbSlots();
+			if (!izb)
+				throw std::runtime_error("light entry: izb slots: " + izb.error().describe());
+			b.extra.push_back({.binding = 14, .sampler = false, .heapSlot = izb->mask});
+		}
 		auto entry = PipelineEntry{.name = "light",
 			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b),
 			.spec = *spec, .bindings = b};

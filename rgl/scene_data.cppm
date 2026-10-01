@@ -192,6 +192,14 @@ export inline constexpr uint32_t kSceneDataShadowTexelOffset = kSceneDataShadowS
 export inline constexpr uint32_t kSceneDataShadowParamsOffset = kSceneDataShadowSplitsOffset + 32u;
 export inline constexpr uint32_t kSceneDataShadowAtlasOffset = kSceneDataShadowSplitsOffset + 48u;
 export inline constexpr uint32_t kSceneDataShadowAuxBytes = 64u;  // 分界远距/texel/参数/图集各 16
+
+/** IZB 消费区（批 11.3-1e，shadow aux 之后 16B）：(x = 消费开关 1/0、y = 像素 W、
+ *  z = 像素 H、w 保留)。Renderer 在 writeSceneStaging 尾部按 izb_shadow 门写；
+ *  light.frag 字面量消费（static_assert 钉死同步）。flag=0 时因子恒 1 = 逐位旁路。 */
+export inline constexpr uint32_t kSceneDataIzbOffset = kSceneDataShadowAtlasOffset + 16u;
+export inline constexpr uint32_t kSceneDataIzbBytes = 16u;
+static_assert(kSceneDataIzbOffset == 722016,
+	"light.frag izb 字面量 722016 与 scene_data.cppm 失去同步");
 static_assert(kSceneDataShadowSplitsOffset == 721952 && kSceneDataShadowParamsOffset == 721984
 	&& kSceneDataShadowAtlasOffset == 722000,
 	"scene.slang shadow sampling literals drifted from scene_data.cppm offsets");
@@ -209,7 +217,8 @@ export inline constexpr vk::DeviceSize kSceneDataBytes =
 	+ vk::DeviceSize{kSceneMatrixCapacity} * kSceneDrawStride
 	+ kSceneDataIrradianceBytes
 	+ kSceneDataShadowMatrixBytes
-	+ kSceneDataShadowAuxBytes;
+	+ kSceneDataShadowAuxBytes
+	+ kSceneDataIzbBytes;
 
 /**
  * SceneData buffer 服务（2026-09-19 架构债务续账步骤 1：原 Resources::ensureSceneData/

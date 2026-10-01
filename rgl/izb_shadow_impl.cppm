@@ -197,14 +197,18 @@ IzbShadow::IzbShadow(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
 		stagingMapped[s] = sad.pMappedData;
 	}
 
-	// 槽号 = Resources 发放（终身稳定，管线条目 bake 依赖）；描述符内容随本实例写
-	auto slots = resources->ensureIzbSlots();
-	if (!slots)
-		throw std::runtime_error(fmt::format("izb: slots: {}", slots.error().describe()));
-	headSlot = slots->head;
-	nodesSlot = slots->nodes;
-	primedSlot = slots->primed;
-	maskSlot = slots->mask;
+	// IZB 四描述符槽（Resources 发放终身稳定，管线条目 bake 依赖；mask 的 fallback
+	// 描述符由 Resources 发号时写零 buffer——light.frag binding 14 **无条件绑定**，
+	// 门关读 fallback）；描述符内容随本实例写
+	{
+		auto slots = resources->ensureIzbSlots();
+		if (!slots)
+			throw std::runtime_error(fmt::format("izb: slots: {}", slots.error().describe()));
+		headSlot = slots->head;
+		nodesSlot = slots->nodes;
+		primedSlot = slots->primed;
+		maskSlot = slots->mask;
+	}
 	// 深度采样描述符与 SSAO 共用（同 view 同布局；ensure 幂等，先到先写）
 	{
 		auto depth = resources->ensureDepthSampleSlot();
@@ -338,10 +342,18 @@ void IzbShadow::recordDumpCopy(vk::raii::CommandBuffer& cmd) {
 }
 
 void IzbShadow::beginMaskPass(vk::raii::CommandBuffer& cmd) {
-	// mask hazard 簿记：上次写 = 上一帧本 pass 的 frag atomic（同队列执行序天然有序，
-	// barrier 按 bookkeeping 补齐）→ FillBuffer 清 0 → 本帧 frag atomic 写
-	bufferBarrier(cmd, *maskBuffer, vk::PipelineStageFlagBits2::eAllGraphics,
+	// head/nodes：compute 写（create）→ 本 pass frag 读，跨 pass 边界显式同步
+	bufferBarrier(cmd, *headBuffer, vk::PipelineStageFlagBits2::eComputeShader,
 		vk::AccessFlagBits2::eShaderWrite,
+		vk::PipelineStageFlagBits2::eAllGraphics, vk::AccessFlagBits2::eShaderRead);
+	bufferBarrier(cmd, *nodesBuffer, vk::PipelineStageFlagBits2::eComputeShader,
+		vk::AccessFlagBits2::eShaderWrite,
+		vk::PipelineStageFlagBits2::eAllGraphics, vk::AccessFlagBits2::eShaderRead);
+	// mask hazard 簿记：上次写 = 上一帧本 pass 的 frag atomic、上次读 = 上一帧
+	// light.frag（同队列执行序天然有序，barrier 按 bookkeeping 补齐；src 含读 =
+	// fill 覆写前的 WAR 同步）→ FillBuffer 清 0 → 本帧 frag atomic 写
+	bufferBarrier(cmd, *maskBuffer, vk::PipelineStageFlagBits2::eAllGraphics,
+		vk::AccessFlagBits2::eShaderWrite | vk::AccessFlagBits2::eShaderRead,
 		vk::PipelineStageFlagBits2::eAllCommands, vk::AccessFlagBits2::eMemoryWrite);
 	::vkCmdFillBuffer(*cmd, *maskBuffer, 0, VK_WHOLE_SIZE, 0u);
 	bufferBarrier(cmd, *maskBuffer, vk::PipelineStageFlagBits2::eAllCommands,
@@ -357,6 +369,12 @@ void IzbShadow::beginMaskPass(vk::raii::CommandBuffer& cmd) {
 
 void IzbShadow::endMaskPass(vk::raii::CommandBuffer& cmd) {
 	cmd.endRendering();  // 本版本 raii 无 DependencyInfo 形参重载（帧内无需跨 pass 同步依赖）
+	// 批 11.3-1e：mask frag atomic 写 → light.frag Load 读——**两个 render pass 之间
+	// 无隐式依赖**，必须显式同步（VVL 不报错 ≠ 数据可见：首挂实录 = 无此 barrier 时
+	// light 读恒 0，画面与门关逐位一致）
+	bufferBarrier(cmd, *maskBuffer, vk::PipelineStageFlagBits2::eAllGraphics,
+		vk::AccessFlagBits2::eShaderWrite,
+		vk::PipelineStageFlagBits2::eAllGraphics, vk::AccessFlagBits2::eShaderRead);
 }
 
 void IzbShadow::drainReadback() {

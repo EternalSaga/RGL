@@ -149,6 +149,36 @@ export class Resources {
 				return std::unexpected(std::move(slot).error());
 			*take.dst = *slot;
 		}
+		// mask 槽 fallback 描述符（批 11.3-1e）：light.frag binding 14 **无条件绑定**
+		// （VVL 静态活性），门关 = IzbShadow 不构造时读 16B 零 buffer（flag 分支也
+		// 不读值，但 descriptor 必须有效）。IzbShadow 构造时以真位图覆写同槽。
+		if (!izbMaskFallback) {
+			vk::BufferCreateInfo fi{};
+			fi.size = 16;
+			fi.usage = vk::BufferUsageFlagBits::eStorageBuffer
+				| vk::BufferUsageFlagBits::eShaderDeviceAddress;
+			fi.sharingMode = vk::SharingMode::eExclusive;
+			VmaAllocationCreateInfo fa{};
+			fa.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+			fa.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
+			VmaAllocationInfo fad{};
+			auto buf = allocator.createBufferWithAddress(vkDevice.getDevice(), fi, fa, &fad);
+			if (!buf)
+				return std::unexpected(std::move(buf).error());
+			auto* bytes = static_cast<std::byte*>(fad.pMappedData);
+			for (uint32_t i = 0; i < 16; ++i)
+				bytes[i] = std::byte{};
+			vk::DeviceAddressRangeEXT range{buf->getDeviceAddress(), 16};
+			vk::ResourceDescriptorInfoEXT desc{};
+			desc.type = vk::DescriptorType::eStorageBuffer;
+			desc.data.pAddressRange = &range;
+			auto addr = descriptorHeap.getSlotCpuAddress(izbSlots.mask);
+			if (!addr)
+				return std::unexpected(std::move(addr).error());
+			vkDevice.getDevice().writeResourceDescriptorsEXT(desc,
+				vk::HostAddressRangeEXT{*addr, descriptorHeap.getDescriptorSize()});
+			izbMaskFallback = std::move(*buf);
+		}
 		return izbSlots;
 	}
 
@@ -317,6 +347,9 @@ export class Resources {
 	uint32_t depthSampleSlot = kNoDepthSampleSlot;
 	/** IZB 四槽号（批 11.3-1d 后半，ensureIzbSlots 发号；内容描述符由 IzbShadow 写）。 */
 	IzbSlots izbSlots{};
+	/** mask 槽 fallback 零 buffer（批 11.3-1e，ensureIzbSlots 发号时创建；
+	 *  light.frag binding 14 无条件绑定的兜底，IzbShadow 构造后覆写同槽描述符）。 */
+	std::optional<RGL::VmaBuffer> izbMaskFallback;
 	/** 深度采样描述符指针链（pView 指 create info，v341 契约——故存值不存指针）。 */
 	vk::ImageViewCreateInfo depthSampleViewCreate{};
 	vk::ImageDescriptorInfoEXT depthSampleImageDesc{};

@@ -218,6 +218,15 @@ void Renderer::createSceneStaging(RGL::Resources& vkResources) {
 		sizeof(glm::vec4));
 	std::memcpy(stage + kSceneDataShadowAtlasOffset, &list.sceneData.shadowAtlas,
 		sizeof(glm::vec4));
+	// 批 11.3-1e：IZB 消费区 (flag, W, H, 保留)——light.frag izbNearShadow 消费。
+	// flag = izbShadow 已构造（门关恒空 = 全 0 → ×1.0 逐位旁路）；W/H = mask 位图行距
+	{
+		const auto ext = izbShadow ? izbShadow->getExtent() : vk::Extent2D{};
+		const std::array<float, 4> izbRegion = izbShadow
+			? std::array{1.0f, static_cast<float>(ext.width), static_cast<float>(ext.height), 0.0f}
+			: std::array{0.0f, 0.0f, 0.0f, 0.0f};
+		std::memcpy(stage + kSceneDataIzbOffset, izbRegion.data(), sizeof(izbRegion));
+	}
 	const auto matricesBytes = list.sceneData.objectMatrices.size() * sizeof(glm::mat4);
 	if (matricesBytes > kSceneMatrixCapacity * kSceneMatrixStride)
 		return std::unexpected(Error{ErrorCode::Unknown,
