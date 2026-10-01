@@ -221,6 +221,41 @@ void Renderer::recordFixedDataPath(vk::raii::CommandBuffer& cmd, uint32_t frameS
 		resources->getSamplerReservedRangeSize()));
 }
 
+// 11.3-1d IZB 帧首段（声明注释见 vkrenderer.cppm）。deferred 图判据 = 存在
+// drawLight "light" pass；重建前 waitIdle（旧 buffer 可能被上一帧命令引用，RT 缓存
+// 同款规则）。门关 = 本函数不被进入（izbShadow 恒空 + 单布尔判断）。
+void Renderer::izbPreFrame() {
+	if (izbShadow)
+		izbShadow->drainReadback();
+	++izbFrameNo;
+	if (!diagnostics().izbShadow)
+		return;
+	const bool deferred = std::ranges::any_of(renderGraph.passes,
+		[](const RgPassPlan& p) { return p.kind == RgPassKind::drawLight && p.state == "light"; });
+	const auto depthIt = std::ranges::find_if(renderGraph.attachments,
+		[](const auto& a) { return a.kind == RgAttachmentKind::depth; });
+	if (!deferred || depthIt == renderGraph.attachments.end())
+		return;
+	depthAttSlot = static_cast<int32_t>(depthIt - renderGraph.attachments.begin());
+	const auto extent = swapchain->getExtent();
+	if (!izbShadow || izbShadow->getExtent() != extent) {
+		vkDevice.getDevice().waitIdle();
+		izbShadow = std::make_unique<RGL::IzbShadow>(
+			vkDevice, *resources, extent, diagnostics().izbGrid);
+	}
+}
+
+// 11.3-1d IZB sandwich（声明注释见 vkrenderer.cppm；门关 = izbShadow 恒空早退）。
+void Renderer::izbLightPassPre(vk::raii::CommandBuffer& cmd, const RgPassPlan& pass,
+	const FrameDrawList& list) {
+	if (!izbShadow || pass.kind != RgPassKind::drawLight || pass.state != "light")
+		return;
+	izbShadow->recordFrame(cmd,
+		IzbFrameInput{list.sceneData.skyInvViewProj, list.sceneData.shadowViewProj[0]},
+		attachmentLayouts[static_cast<size_t>(depthAttSlot)],
+		diagnostics().izbDumpFrame != 0 && izbFrameNo == diagnostics().izbDumpFrame);
+}
+
 // offscreen attachment RT 幂等 ensure（批次 4；extent 随 resize 重建含 waitIdle，录制期调用安全；format 经词表解析，"inherit"=swapchain 格式、具名=显式 RT）。出参 offscreenRt 按 slot 填（非 offscreen 槽留 null）。
 std::expected<void, Error> Renderer::ensureOffscreenAttachments(vk::Extent2D extent,
 	std::vector<RtAttachment*>& offscreenRt) {
@@ -415,6 +450,9 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 	// 私有方法，命令流逐条不变）
 	recordFixedDataPath(cmd, frameSlot);
 
+	// 11.3-1d IZB 帧首段（dump 收割 + 门控构造/重建；门关 = 一次布尔判断）
+	izbPreFrame();
+
 	// ⑤ pass 循环（执行序 = 图线性序，Phase 6）：attachment barrier（布局链推导物化）
 	// → beginRendering（逐 pass 附件）→ applyDynamicState(pass.state) → 段内逐 draw
 	// （pass.drawSource）→ endRendering。执行器盲消费——barrier/load/store/布局全部来自
@@ -440,6 +478,9 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 	for (const auto& pass : renderGraph.passes) {
 		gpuProfilerBegin(cmd, pass.name);  // Phase 9.2：pass 时间戳（barrier 段计入）
 		slots.emitBarriers(pass.barriers);
+		// 11.3-1d IZB 创建 sandwich（图外 compute，录在 deferred light pass 头部；
+		// 门关 = izbShadow 恒空，本调用零命令，判据全在方法体内）
+		izbLightPassPre(cmd, pass, list);
 		// blit pass（批次 4，offscreen 图变体的 composite）：transferRead 源 → transferWrite
 		// 目标整幅拷贝（1:1 同尺寸同格式，LINEAR = 精确拷贝）；两端布局转换已由 pass.barriers
 		// 完成（scene_rt CAO→TransferSrc、swapchain 帧首 Undefined→TransferDst），无绘制、

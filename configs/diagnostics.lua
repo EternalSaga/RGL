@@ -22,6 +22,14 @@ return {
     rpc = false,      -- Phase 10b HTTP POST RPC 调试通道（true=帧边界命令队列，仅绑 127.0.0.1；GET /state 发现参数，POST /camera /param /shot；独立于 imgui 门，headless 可用，见 docs/phase10b_plan.md）
     rpc_port = 8788,  -- RPC 监听端口（bind 失败只降级关，不崩）
 
+    -- 批 11.3 HFTS/FTIZB 硬阴影（docs/hfts_izb_plan.md）：**默认关 = 零构造零命令，画面逐位不变**。
+    -- izb_shadow=true 仅在 deferred 变体生效：light pass 前图外 dispatch IZB 创建 + priming
+    -- （深度源 = 本帧深度图，光空间 = cascade-0 viewProj，近场 v1）；forward 无 drawLight pass
+    -- 天然不触发（z-prepass 两路接 = 批 1e）。mask 消费未接 = 开门画面不变（1d 只建数据）。
+    izb_shadow = false,
+    izb_grid = 512,       -- 光空间网格边长 G（clamp [64, 2048]）
+    izb_dump_frame = 0,   -- 第 N 帧（1 起）回读 head 直方图打日志（N+1 帧输出）——冒烟阳性锚点；0 = 关
+
     -- 脚本化输入探针（窗口模式输入链回归护栏，2026-09-28 "面板吞 WASD" 事故配套；
     -- 同 picking_probe 方法论，默认关 = 零行为变化；帧号 0 起）：
     -- ui_click_probe = { frame = 30, x = 100, y = 120 },          -- 第 N 帧合成一次鼠标左键点击 (x,y)

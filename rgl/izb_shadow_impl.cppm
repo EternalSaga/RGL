@@ -1,0 +1,358 @@
+module;
+#include <vulkan/vulkan.h>  // VK_* 宏/C 函数（rlvk 不含宏）+ VK_QUEUE_FAMILY_IGNORED
+#include <vk_mem_alloc.h>   // VmaAllocationCreateInfo / VMA_MEMORY_USAGE_*（VmaRaii 的 C 面）
+#include <glm/glm.hpp>
+#include <fmt/format.h>
+module izb_shadow:impl;
+
+import izb_shadow;  // clang 不给 partition impl unit 隐式 import 主接口——必须显式
+import rlstd;
+import rlvk;
+import rllogger;
+import vkerror;
+import vk_device;
+import vk_resources;
+import VmaRaii;
+import shader;  // loadShaderSpv（izb_create/izb_prime.comp.slang）
+
+namespace RGL {
+
+namespace {
+
+/** IzbCreatePush —— 与 izb_create.comp.slang 同名 struct 逐字段一致（glm 列主序
+ *  mat4 = 4×float4 连续 = shader 侧 float4[4]；总 144B ≤ maxPushDataSize）。 */
+struct IzbCreatePush {
+	glm::mat4 invVPM;
+	glm::mat4 lightVP;
+	int32_t pixelW;
+	int32_t pixelH;
+	int32_t gridDim;
+	float emptyDepth;
+};
+
+/** IzbPrimePush —— 与 izb_prime.comp.slang 同名 struct 逐字段一致。 */
+struct IzbPrimePush {
+	int32_t gridDim;
+	int32_t pixelTotal;
+	int32_t pad0;
+	int32_t pad1;
+};
+
+constexpr uint32_t kNone = 0xFFFFFFFFu;
+
+/** 单 buffer 的 sync2 barrier（录制 + 执行；本模块内多条同构 barrier 的公共体）。 */
+void bufferBarrier(vk::raii::CommandBuffer& cmd, vk::Buffer buffer,
+	vk::PipelineStageFlags2 srcStage, vk::AccessFlags2 srcAccess,
+	vk::PipelineStageFlags2 dstStage, vk::AccessFlags2 dstAccess) {
+	vk::BufferMemoryBarrier2 b{};
+	b.srcStageMask = srcStage;
+	b.srcAccessMask = srcAccess;
+	b.dstStageMask = dstStage;
+	b.dstAccessMask = dstAccess;
+	b.buffer = buffer;
+	b.size = VK_WHOLE_SIZE;
+	vk::DependencyInfo dep{};
+	dep.setBufferMemoryBarriers(b);
+	cmd.pipelineBarrier2(dep);
+}
+
+/** 深度图（eDepth aspect 单 level/layer）布局转换 barrier（sandwich 进/出两条共用）。 */
+void depthLayoutBarrier(vk::raii::CommandBuffer& cmd, vk::Image image,
+	vk::ImageLayout from, vk::ImageLayout to,
+	vk::PipelineStageFlags2 srcStage, vk::AccessFlags2 srcAccess,
+	vk::PipelineStageFlags2 dstStage, vk::AccessFlags2 dstAccess) {
+	vk::ImageMemoryBarrier2 b{};
+	b.srcStageMask = srcStage;
+	b.srcAccessMask = srcAccess;
+	b.dstStageMask = dstStage;
+	b.dstAccessMask = dstAccess;
+	b.oldLayout = from;
+	b.newLayout = to;
+	b.image = image;
+	b.subresourceRange = {vk::ImageAspectFlagBits::eDepth, 0, 1, 0, 1};
+	b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	vk::DependencyInfo dep{};
+	dep.setImageMemoryBarriers(b);
+	cmd.pipelineBarrier2(dep);
+}
+
+/**
+ * heap 映射的 compute shader object（gpu_cull_impl::createCullShaders 同款模式）：
+ * binding→heap 槽一对一；push constant 无需映射条目（heap 下 push data 区自动供给）。
+ */
+vk::raii::ShaderEXT makeMappedCompute(vk::raii::Device& dev, const char* spvPath,
+	const std::vector<std::pair<uint32_t, uint32_t>>& bindingToSlot, uint32_t descriptorSize) {
+	auto spvResult = loadShaderSpv(spvPath);
+	if (!spvResult)
+		throw std::runtime_error(spvResult.error().describe());
+	const auto spv = std::move(*spvResult);
+
+	std::vector<VkDescriptorSetAndBindingMappingEXT> mappings;
+	mappings.reserve(bindingToSlot.size());
+	for (const auto& [binding, slot] : bindingToSlot) {
+		VkDescriptorSetAndBindingMappingEXT m{};
+		m.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
+		m.descriptorSet = 0;
+		m.firstBinding = binding;
+		m.bindingCount = 1;
+		m.resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
+		m.source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
+		m.sourceData.constantOffset.heapOffset = slot * descriptorSize;
+		m.sourceData.constantOffset.heapArrayStride = descriptorSize;
+		mappings.push_back(m);
+	}
+	VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{};
+	mappingInfo.sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT;
+	mappingInfo.mappingCount = static_cast<uint32_t>(mappings.size());
+	mappingInfo.pMappings = mappings.data();
+
+	VkShaderCreateInfoEXT raw{};
+	raw.sType = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT;
+	raw.pNext = &mappingInfo;
+	raw.flags = VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT;
+	raw.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+	raw.codeType = VK_SHADER_CODE_TYPE_SPIRV_EXT;
+	raw.codeSize = spv.size() * sizeof(uint32_t);
+	raw.pCode = spv.data();
+	raw.pName = "main";
+	vk::ShaderCreateInfoEXT createInfo(raw);
+	auto shaders = dev.createShadersEXT(std::vector<vk::ShaderCreateInfoEXT>{createInfo});
+	return std::move(shaders[0]);
+}
+
+}  // namespace
+
+IzbShadow::IzbShadow(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
+	vk::Extent2D extent_, uint32_t gridDim_)
+	: deviceCtx(&vkDevice), resources(&vkResources), extent(extent_), gridDim(gridDim_) {
+	auto& dev = vkDevice.getDevice();
+	const uint32_t pixels = extent.width * extent.height;
+	const auto headBytes = static_cast<vk::DeviceSize>(gridDim) * gridDim * 4;
+	const auto nodeBytes = static_cast<vk::DeviceSize>(pixels) * 16;
+
+	const auto makeDevBuf = [&](vk::DeviceSize bytes, vk::BufferUsageFlags extra,
+	                             const char* name) -> RGL::VmaBuffer {
+		vk::BufferCreateInfo bi{};
+		bi.size = bytes;
+		bi.usage = vk::BufferUsageFlagBits::eStorageBuffer
+			| vk::BufferUsageFlagBits::eShaderDeviceAddress | extra;
+		bi.sharingMode = vk::SharingMode::eExclusive;
+		VmaAllocationCreateInfo ai{};
+		ai.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+		// createBufferWithAddress（gpu_cull 同款）：普通 createBuffer 不查询 BDA，
+		// getDeviceAddress() 恒 0（首跑 VVL 实录：写描述符 address is zero）
+		auto r = resources->getAllocator().createBufferWithAddress(dev, bi, ai);
+		if (!r)
+			throw std::runtime_error(fmt::format("izb: {} buffer: {}", name, r.error().describe()));
+		return std::move(*r);
+	};
+	// head：eTransferSrc = dump 拷贝源；eTransferDst = 每帧 vkCmdFillBuffer 清哨兵。
+	// nodes 也要 eTransferSrc（dump 帧同为拷贝源——首跑 VVL 实录纠正的注释错误）
+	headBuffer = makeDevBuf(headBytes,
+		vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst, "izb.head");
+	nodesBuffer = makeDevBuf(nodeBytes, vk::BufferUsageFlagBits::eTransferSrc, "izb.nodes");
+	primedBuffer = makeDevBuf(headBytes, {}, "izb.primed");
+
+	// head+nodes 联合回读 ring（直方图要游走链：光有 head 数不出链长）
+	const auto dumpBytes = headBytes + nodeBytes;
+	for (uint32_t s = 0; s < 2; ++s) {
+		vk::BufferCreateInfo si{};
+		si.size = dumpBytes;
+		si.usage = vk::BufferUsageFlagBits::eTransferDst;
+		si.sharingMode = vk::SharingMode::eExclusive;
+		VmaAllocationCreateInfo sa{};
+		sa.usage = VMA_MEMORY_USAGE_GPU_TO_CPU;
+		sa.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
+		VmaAllocationInfo sad{};
+		auto r = resources->getAllocator().createBuffer(si, sa, &sad);
+		if (!r)
+			throw std::runtime_error(fmt::format("izb: staging: {}", r.error().describe()));
+		staging[s] = std::move(*r);
+		stagingMapped[s] = sad.pMappedData;
+	}
+
+	const auto takeSlot = [&](const char* name) -> uint32_t {
+		auto slot = resources->allocSlot(RGL::SlotSegment::Runtime, name);
+		if (!slot)
+			throw std::runtime_error(fmt::format("izb: {}", slot.error().describe()));
+		return *slot;
+	};
+	headSlot = takeSlot("izb.head");
+	nodesSlot = takeSlot("izb.nodes");
+	primedSlot = takeSlot("izb.primed");
+	// 深度采样描述符与 SSAO 共用（同 view 同布局；ensure 幂等，先到先写）
+	{
+		auto depth = resources->ensureDepthSampleSlot();
+		if (!depth)
+			throw std::runtime_error(depth.error().describe());
+		depthSlot = *depth;
+	}
+
+	// 描述符写入（eStorageBuffer + BDA 全范围——gpu_cull::writeHeapDescriptors 同款）
+	const auto writeDesc = [&](const RGL::VmaBuffer& buf, vk::DeviceSize size, uint32_t slot) {
+		vk::DeviceAddressRangeEXT range{buf.getDeviceAddress(), size};
+		vk::ResourceDescriptorInfoEXT desc{};
+		desc.type = vk::DescriptorType::eStorageBuffer;
+		desc.data.pAddressRange = &range;
+		auto addr = resources->getDescriptorHeap().getSlotCpuAddress(slot);
+		if (!addr)
+			throw std::runtime_error(addr.error().describe());
+		vk::HostAddressRangeEXT dst{*addr, resources->getDescriptorHeap().getDescriptorSize()};
+		dev.writeResourceDescriptorsEXT(
+			std::array<vk::ResourceDescriptorInfoEXT, 1>{desc},
+			std::array<vk::HostAddressRangeEXT, 1>{dst});
+	};
+	writeDesc(headBuffer, headBytes, headSlot);
+	writeDesc(nodesBuffer, nodeBytes, nodesSlot);
+	writeDesc(primedBuffer, headBytes, primedSlot);
+
+	const uint32_t descriptorSize = resources->getDescriptorHeap().getDescriptorSize();
+	createShader.emplace(makeMappedCompute(dev, "generated_shaders/izb_create.comp.spv",
+		{{0, headSlot}, {1, nodesSlot}, {2, depthSlot}}, descriptorSize));
+	primeShader.emplace(makeMappedCompute(dev, "generated_shaders/izb_prime.comp.spv",
+		{{0, headSlot}, {1, nodesSlot}, {3, primedSlot}}, descriptorSize));
+
+	if (auto* lg = RLLogger::getInstance())
+		lg->info("izb: 开门 grid={} extent={}x{} head={}B nodes={}B（cascade-0 近场 v1，"
+			"mask 消费未接=画面不变）",
+			gridDim, extent.width, extent.height, headBytes, nodeBytes);
+}
+
+void IzbShadow::recordFrame(vk::raii::CommandBuffer& cmd, const IzbFrameInput& input,
+	vk::ImageLayout depthCurrentLayout, bool dumpHead) {
+	const auto depthImage = *resources->getDepthImage();
+
+	// ① 深度 layout → SHADER_READ_ONLY（生产者 = 此前全部图形深度写/shader 读）
+	depthLayoutBarrier(cmd, depthImage, depthCurrentLayout,
+		vk::ImageLayout::eShaderReadOnlyOptimal,
+		vk::PipelineStageFlagBits2::eAllGraphics,
+		vk::AccessFlagBits2::eDepthStencilAttachmentWrite | vk::AccessFlagBits2::eShaderRead,
+		vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderRead);
+
+	// ② 清 head（NONE 哨兵 = 「地址即像素 ID」布局的帧初始化；节点数组无需清：
+	// 旧节点从新 head 不可达）。FillBuffer 要 eTransferDst（VVL 实录）
+	::vkCmdFillBuffer(*cmd, *headBuffer, 0, VK_WHOLE_SIZE, static_cast<uint32_t>(kNone));
+	bufferBarrier(cmd, *headBuffer, vk::PipelineStageFlagBits2::eAllCommands,
+		vk::AccessFlagBits2::eMemoryWrite,
+		vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderWrite);
+
+	// ③④⑤ create →（链 barrier）→ prime
+	recordCreateDispatch(cmd, input);
+	bufferBarrier(cmd, *headBuffer, vk::PipelineStageFlagBits2::eComputeShader,
+		vk::AccessFlagBits2::eShaderWrite,
+		vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderRead);
+	bufferBarrier(cmd, *nodesBuffer, vk::PipelineStageFlagBits2::eComputeShader,
+		vk::AccessFlagBits2::eShaderWrite,
+		vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderRead);
+	recordPrimeDispatch(cmd);
+
+	// ⑥ 深度 layout 还原（进出同值 = 渲染图布局追踪表零漂移）
+	depthLayoutBarrier(cmd, depthImage, vk::ImageLayout::eShaderReadOnlyOptimal,
+		depthCurrentLayout,
+		vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderRead,
+		vk::PipelineStageFlagBits2::eAllGraphics,
+		vk::AccessFlagBits2::eDepthStencilAttachmentWrite | vk::AccessFlagBits2::eShaderRead);
+
+	// ⑦ dump（可选）+ 帧奇偶推进
+	if (dumpHead)
+		recordDumpCopy(cmd);
+	parity ^= 1u;
+}
+
+void IzbShadow::recordCreateDispatch(vk::raii::CommandBuffer& cmd, const IzbFrameInput& input) {
+	// heap 已由 ⑦ 绑定；bindShadersEXT 与 graphics pipeline 绑定互斥——light pass 的
+	// draw 侧 bindShaders 在其后（drawOne 逐 draw 绑），天然安全
+	std::array<vk::ShaderStageFlagBits, 1> stages = {vk::ShaderStageFlagBits::eCompute};
+	std::array<vk::ShaderEXT, 1> handles = {*createShader};
+	cmd.bindShadersEXT(stages, handles);
+	const IzbCreatePush push{
+		input.invViewProj, input.lightViewProj,
+		static_cast<int32_t>(extent.width), static_cast<int32_t>(extent.height),
+		static_cast<int32_t>(gridDim), 1.0f};
+	cmd.pushDataEXT(vk::PushDataInfoEXT(0, vk::HostAddressRangeConstEXT(&push, sizeof(push))));
+	cmd.dispatch((extent.width * extent.height + 63u) / 64u, 1, 1);
+}
+
+void IzbShadow::recordPrimeDispatch(vk::raii::CommandBuffer& cmd) {
+	std::array<vk::ShaderStageFlagBits, 1> stages = {vk::ShaderStageFlagBits::eCompute};
+	std::array<vk::ShaderEXT, 1> handles = {*primeShader};
+	cmd.bindShadersEXT(stages, handles);
+	const IzbPrimePush push{static_cast<int32_t>(gridDim),
+		static_cast<int32_t>(extent.width * extent.height), 0, 0};
+	cmd.pushDataEXT(vk::PushDataInfoEXT(0, vk::HostAddressRangeConstEXT(&push, sizeof(push))));
+	cmd.dispatch((gridDim * gridDim + 63u) / 64u, 1, 1);
+}
+
+void IzbShadow::recordDumpCopy(vk::raii::CommandBuffer& cmd) {
+	const uint32_t slot = parity;
+	const auto headB = static_cast<VkDeviceSize>(gridDim) * gridDim * 4;
+	const auto nodeB = static_cast<VkDeviceSize>(extent.width) * extent.height * 16;
+	bufferBarrier(cmd, *headBuffer, vk::PipelineStageFlagBits2::eComputeShader,
+		vk::AccessFlagBits2::eShaderWrite,
+		vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead);
+	bufferBarrier(cmd, *nodesBuffer, vk::PipelineStageFlagBits2::eComputeShader,
+		vk::AccessFlagBits2::eShaderWrite,
+		vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead);
+	// head → staging[0..headB)，nodes → staging[headB..)
+	// （VkBufferCopy 的 size 必须显式——VK_WHOLE_SIZE 此字段非法，VVL 实录）
+	VkBufferCopy c0{0, 0, headB};
+	::vkCmdCopyBuffer(*cmd, *headBuffer, *staging[slot], 1, &c0);
+	VkBufferCopy c1{0, headB, nodeB};
+	::vkCmdCopyBuffer(*cmd, *nodesBuffer, *staging[slot], 1, &c1);
+	bufferBarrier(cmd, *staging[slot], vk::PipelineStageFlagBits2::eTransfer,
+		vk::AccessFlagBits2::eTransferWrite,
+		vk::PipelineStageFlagBits2::eHost, vk::AccessFlagBits2::eHostRead);
+	dumpPending[slot] = true;
+}
+
+void IzbShadow::drainReadback() {
+	const uint32_t slot = parity ^ 1u;  // 上一帧 recordFrame 用的槽
+	if (!dumpPending[slot])
+		return;
+	dumpPending[slot] = false;
+
+	const size_t cells = static_cast<size_t>(gridDim) * gridDim;
+	const size_t pixels = static_cast<size_t>(extent.width) * extent.height;
+	const auto* headData = static_cast<const uint32_t*>(stagingMapped[slot]);
+	const auto* nodeData = reinterpret_cast<const uint32_t*>(
+		static_cast<const std::byte*>(stagingMapped[slot]) + cells * 4);
+
+	// 单 cell 链游走：返回 {长度, 完好}（步数上限 = 像素数，触顶 = 坏链自证）
+	const auto walkChain = [&](uint32_t head) -> std::pair<size_t, bool> {
+		size_t len = 0;
+		uint32_t h = head;
+		while (h != kNone && len <= pixels) {
+			++len;
+			h = nodeData[h * 4 + 3];
+		}
+		return {len, h == kNone};
+	};
+
+	size_t empty = 0, n1 = 0, n2 = 0, n3 = 0, nodes = 0, maxChain = 0;
+	for (size_t c = 0; c < cells; ++c) {
+		if (headData[c] == kNone) {
+			++empty;
+			continue;
+		}
+		const auto [len, ok] = walkChain(headData[c]);
+		if (!ok) {
+			if (auto* lg = RLLogger::getInstance())
+				lg->error("izb: cell {} 链长触顶（坏链/环！）", c);
+			continue;
+		}
+		nodes += len;
+		maxChain = std::max(maxChain, len);
+		if (len == 1)
+			++n1;
+		else if (len == 2)
+			++n2;
+		else
+			++n3;
+	}
+	if (auto* lg = RLLogger::getInstance())
+		lg->info("izb: dump cells={} empty={} n1={} n2={} n3+={} maxChain={} nodes={}",
+			cells, empty, n1, n2, n3, maxChain, nodes);
+}
+
+}  // namespace RGL

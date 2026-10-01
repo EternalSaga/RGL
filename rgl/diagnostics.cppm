@@ -32,6 +32,9 @@ export struct DiagnosticsConfig {
 	bool configReload = false;          // Phase 10 批 10.3 配置热重载总开关（帧边界轮询源 configs/：scene/camera/log_level 的 T1 字段；imgui 面板开关本身不可热载=需重建后端，docs/archive/phase10_plan.md）
 	bool shaderReload = false;          // Phase 10 批 10.4 shader 热重载 L1（帧边界 fork slangc 重编源 shaders/ + 同签名守卫换入；slangc/flags/源目录缺失降级关，docs/archive/phase10_plan.md）
 	bool picking = false;               // Phase 10 批 10.5 GPU id 点选（编译图期装饰 object_id pass，D10 默认关 = 图逐位同；面板点中实体 → 参数上下文，docs/archive/phase10_plan.md）
+	bool izbShadow = false;             // 批 11.3-1d：HFTS/FTIZB 硬阴影（deferred 图外 IZB 创建 dispatch；**默认关 = 零构造零命令，画面逐位不变**，docs/hfts_izb_plan.md）
+	uint32_t izbGrid = 512;             // 光空间 IZB 网格边长 G（izb_grid；clamp [64, 2048]）
+	uint32_t izbDumpFrame = 0;          // 第 N 帧（1 起）回读 head 直方图打日志（izb_dump_frame；0=关）——1d 冒烟阳性锚点，N+1 帧输出
 	bool shadowPass = true;             // Phase 11 批 11.2：定向光 CSM 阴影总开关（**5a-9 起默认开**，configs/diagnostics.lua 同值）。true = 图首 4 个 depth-only shadow pass 画投影体进 2048² 图集（4 级各占 1024² 块）+ 采样端 4 抽头 PCF + 末级 shadowFar 淡出；false = 阴影段零 draw + 采样端 enabled=0 全亮 → 画面逐位不变（回归对照用）。本默认值与 config 同为"开"：缺文件回落也走有影路径（早期"段内零 draw = 逐位不变"的中间态已结束，见 docs/phase11_plan.md §10/§12.8）
 	uint32_t pickingProbeFrame = 0;     // 脚本化点选探针（同 texel_canary headless 驱动方法论）：第 N 帧（1 起）自动 requestProbe(x,y) 一次；0 = 关
 	uint32_t pickingProbeX = 0;         // 探针像素列（窗口/RT 坐标）

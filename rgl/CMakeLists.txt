@@ -53,6 +53,10 @@ rgl_shader(tonemap.frag TONEMAP_FRAG_SPV scene)
 rgl_shader(ao.frag AO_FRAG_SPV scene)
 # Phase 7b（批次 5）：GPU culling compute（独立契约 cull.comp.slang 头注释，无 import 契约文件）
 rgl_shader(cull.comp CULL_SPV)
+# 批 11.3-1d：FTIZB IZB 创建 + priming（独立契约，头注释即布局真相；heap + shader object，
+# 消费侧 = vk_renderer 门控 sandwich，docs/hfts_izb_plan.md）
+rgl_shader(izb_create.comp IZB_CREATE_SPV)
+rgl_shader(izb_prime.comp IZB_PRIME_SPV)
 # Phase 10 批次 10.5：GPU id 点选 frag（mesh 复用 model.mesh.spv；写 objectIndex+1 进 r32ui）
 rgl_shader(picking.frag PICKING_FRAG_SPV model material)
 # Phase 10 批次 10.7：点选高亮 frag（mesh 复用 model.mesh.spv；菲涅尔边缘发光 alpha 混合
@@ -200,6 +204,8 @@ set(RGL_GFX_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/vkswapchain.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/vkresources.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/vkresources_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/izb_shadow.cppm"        # 批 11.3-1d：FTIZB IZB 数据层（图外 compute，门控构造）
+    "${CMAKE_CURRENT_SOURCE_DIR}/izb_shadow_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/render_target_cache.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/sampler_library.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/mip_gen.cppm"

@@ -1,0 +1,104 @@
+module;
+#include <glm/glm.hpp>
+export module izb_shadow;
+
+import rlstd;
+import rlvk;
+import vk_device;
+import vk_resources;
+import VmaRaii;
+
+namespace RGL {
+
+/**
+ * IZB 每帧输入（批 11.3-1d；调用点从 FrameDrawList 取：skyInvViewProj + shadowViewProj[0]）。
+ *
+ * 光空间 = cascade-0 阴影 viewProj（正交 → 窗口 z 天然线性；与 CSM 光向同源，
+ * 深度比较是仿射不变的 → 不需要 near/far，v1 语义见 docs/hfts_izb_plan.md §4.1-1d）。
+ */
+export struct IzbFrameInput {
+	glm::mat4 invViewProj{1.0f};  ///< scene data @64（clip→world）
+	glm::mat4 lightViewProj{1.0f}; ///< shadowViewProj[cascade0]（world→光 ndc）
+};
+
+/**
+ * FTIZB 硬阴影的 IZB 数据层（批 11.3-1d；docs/hfts_izb_plan.md）。
+ *
+ * 图外 compute（cull/gpu_cull 编舞先例，render_graph 无 compute kind）：
+ * 深度图（与 SSAO 共用 depthSampleSlot）→ 光空间 grid-of-lists（head/nodes，
+ * 「地址即像素 ID」布局 = tests/test_izb_create.cppm 护栏同款）+ early-Z priming。
+ *
+ * 生命周期 = Renderer 的 deferred 路线 + diagnostics.izbShadow 开门时存在；
+ * **门关 = 本对象根本不被构造**（逐位旁路红线：零分配零命令）。
+ * 消费侧（光空间保守光栅 mask pass）= 1d 下半程；1d 本模块只建数据，画面不变。
+ *
+ * 描述符铁纪律（2026-10-01 用户拍板）：全部走 Resources 全量 descriptor heap
+ * 用户槽（Runtime 段），老式 DescriptorPool 禁入（docs/DESCRIPTOR_HEAP_SPEC.md）。
+ */
+export class IzbShadow {
+public:
+	/**
+	 * @param vkDevice 设备（shader object / barrier / fill 用 getDevice()）
+	 * @param resources descriptor heap + depthSampleSlot（SSAO 同款深度采样描述符共享）
+	 * @param extent 像素分辨率（深度图尺寸；resize 由调用方重建本对象）
+	 * @param gridDim 光空间网格边长 G（diagnostics.izb_grid）
+	 */
+	IzbShadow(RGL::DeviceContext& vkDevice, RGL::Resources& resources,
+		vk::Extent2D extent, uint32_t gridDim);
+
+	/**
+	 * 图外 sandwich（录在 light pass 的 pass 循环迭代顶部）：
+	 * 深度 layout→RO → FillBuffer 清 head → create dispatch → 链 barrier → prime
+	 * dispatch → 深度 layout 还原（进出同值 = 渲染图布局追踪表不可见，零漂移）。
+	 * @param cmd pass 循环所在命令缓冲（heap 已由 ⑦ 绑定）
+	 * @param input 本帧矩阵（见 IzbFrameInput）
+	 * @param depthCurrentLayout 深度图当前布局（追踪表读出，还原目标）
+	 * @param dumpHead true = 本帧 head→staging 拷贝（下一帧 drainReadback 打日志）
+	 */
+	void recordFrame(vk::raii::CommandBuffer& cmd, const IzbFrameInput& input,
+		vk::ImageLayout depthCurrentLayout, bool dumpHead);
+
+	/** 上一帧 dump 的收割（帧首调用；fence 已过、映射可读）：无 pending 零开销。 */
+	void drainReadback();
+
+	/**
+	 * 构造期钉死的像素分辨率（深度图尺寸 = swapchain extent；漂移由调用方重建）。
+	 * @return 本实例的 extent
+	 */
+	[[nodiscard]] vk::Extent2D getExtent() const { return extent; }
+
+private:
+	/**
+	 * 光空间数据两个 compute dispatch 的录制体（recordFrame 拆分；heap 已绑定前提）：
+	 * create = 深度→IZB 链插入；prime = early-Z 每 cell 最大深度。
+	 */
+	void recordCreateDispatch(vk::raii::CommandBuffer& cmd, const IzbFrameInput& input);
+	/** early-Z priming dispatch（语义护栏 = tests/test_izb_create.cppm 判据⑤）。 */
+	void recordPrimeDispatch(vk::raii::CommandBuffer& cmd);
+	/** head+nodes → staging[parity]（dump 帧专用；含 compute→transfer→host barrier 对）。 */
+	void recordDumpCopy(vk::raii::CommandBuffer& cmd);
+
+	RGL::DeviceContext* deviceCtx = nullptr;
+	RGL::Resources* resources = nullptr;
+	vk::Extent2D extent{};
+	uint32_t gridDim = 0;
+
+	RGL::VmaBuffer headBuffer;    ///< G² uint（NONE 哨兵；每帧 FillBuffer 清）
+	RGL::VmaBuffer nodesBuffer;   ///< W·H × 16B (u, v, lightDepth, next)
+	RGL::VmaBuffer primedBuffer;  ///< G² float
+	RGL::VmaBuffer staging[2];    ///< head 回读 ring（host-visible mapped）
+	void* stagingMapped[2] = {nullptr, nullptr};
+	bool dumpPending[2] = {false, false};
+	uint32_t parity = 0;
+
+	uint32_t headSlot = 0;
+	uint32_t nodesSlot = 0;
+	uint32_t primedSlot = 0;
+	uint32_t depthSlot = 0;
+
+	// raii 无默认构造（工程红线），optional 承载「构造期分步初始化」
+	std::optional<vk::raii::ShaderEXT> createShader;
+	std::optional<vk::raii::ShaderEXT> primeShader;
+};
+
+}  // namespace RGL

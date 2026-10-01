@@ -144,6 +144,7 @@ static void readInputProbes(sol::table& root, DiagnosticsConfig& cfg) {
 		cfg.shaderReload = readBool("shader_reload", cfg.shaderReload);
 		cfg.picking = readBool("picking", cfg.picking);
 		cfg.shadowPass = readBool("shadow_pass", cfg.shadowPass);
+		cfg.izbShadow = readBool("izb_shadow", cfg.izbShadow);
 		cfg.rpc = readBool("rpc", cfg.rpc);
 
 		// picking_probe = { frame = 30, x = 640, y = 360 }（脚本化点选：第 frame 帧自动
@@ -184,6 +185,12 @@ static void readInputProbes(sol::table& root, DiagnosticsConfig& cfg) {
 			std::max<int64_t>(0, readI64("frame_stats", 0).value_or(0)));
 		cfg.profiler = static_cast<uint32_t>(
 			std::max<int64_t>(0, readI64("profiler", 0).value_or(0)));
+
+		// 批 11.3 IZB 数值门（izb_shadow=true 才有意义；clamp 防手滑建巨型缓冲）
+		cfg.izbGrid = static_cast<uint32_t>(std::clamp<int64_t>(
+			readI64("izb_grid", cfg.izbGrid).value_or(cfg.izbGrid), 64, 2048));
+		cfg.izbDumpFrame = static_cast<uint32_t>(std::max<int64_t>(
+			0, readI64("izb_dump_frame", 0).value_or(0)));
 
 		cfg.rpcPort = readRpcPort(root);
 

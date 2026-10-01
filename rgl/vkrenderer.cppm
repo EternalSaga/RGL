@@ -25,6 +25,7 @@ import cull_driver;  // 手术 3：culling 帧编舞（④c 提交时序 + 双�
 import frame_session;  // 手术 4：帧生命周期会话（同步对象/命令缓冲/acquire/submit/present/重建）
 import vk_indirect_commands;  // Phase 7b：DGC 命令生成（NVIDIA 路；main 按能力位条件构造）
 import picking;  // Phase 10 批 10.5：GPU id 点选服务（main 门控构造，Renderer 只挂指针）
+import izb_shadow;  // 批 11.3-1d：FTIZB 硬阴影 IZB 数据层（门控构造；门关 = 指针恒空）
 import vkerror;
 import diagnostics;  // no_present 诊断单例（configs/diagnostics.lua）
 
@@ -269,6 +270,15 @@ export class Renderer {
 	 */
 	void emitFrameEndOverlay(vk::raii::CommandBuffer& cmd, VkImage swapchainImage,
 		vk::ImageView swapchainView, vk::Extent2D extent);
+	/** 批 11.3-1d IZB 帧首段（drawFrame 调用）：收割上帧 dump + 帧计数 + 门开时
+	 *  构造/重建 IzbShadow（deferred 判据 + extent 漂移重建前 waitIdle）。门关 =
+	 *  仅剩一次布尔判断（izbShadow 恒空）。 */
+	void izbPreFrame();
+	/** 批 11.3-1d：pass 循环头部的 IZB sandwich——仅 deferred light pass
+	 *  （drawLight "light"）且 izbShadow 非空时录 create+prime（深度已由 geometry
+	 *  pass 写完；layout 进出同值 = 追踪表零漂移）。其余 pass 零命令。 */
+	void izbLightPassPre(vk::raii::CommandBuffer& cmd, const RgPassPlan& pass,
+		const FrameDrawList& list);
 	// recreateSwapchainAndDepth（swapchain+depth 重建）已随手术 4 迁 FrameSession。
 	RGL::DeviceContext& vkDevice;  // 设备层引用（队列 / 命令池 / fence 等待 / 能力探测）
 	RGL::Swapchain* swapchain;      // 交换链层（main 持有，析构序在 Renderer 之后）
@@ -318,6 +328,12 @@ export class Renderer {
 	// descriptor heap 的 GPU 地址（VmaDescriptorHeap 管理的"描述符槽位数组"，
 	// 对齐细节见 VmaBuffer.cppm）
 	vk::DeviceAddress heapAddress = 0;
+	// 批 11.3-1d：FTIZB 硬阴影 IZB 数据层（门 = diagnostics().izbShadow 且图含
+	// drawLight "light" pass；**门关 = 恒 nullptr，零分配零命令逐位不变**，
+	// docs/hfts_izb_plan.md）。extent 变化重建（重建前 waitIdle，同 RT 缓存规则）。
+	std::unique_ptr<RGL::IzbShadow> izbShadow;
+	uint32_t izbFrameNo = 0;   ///< 帧计数（izb_dump_frame 比对，1 起）
+	int32_t depthAttSlot = -1; ///< 图内 depth 附件 slot（IZB sandwich 读布局追踪表用）
 
 	// scene data staging ring（Phase 5 批次 2，见 createSceneStaging；slot 数 =
 	// FrameSession::kFramesInFlight，与帧 slot 一一对应）
