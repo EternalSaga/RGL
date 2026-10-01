@@ -64,6 +64,9 @@ float sampleShadow1Tap(float3 worldPos, float3 N)
     const float3 eyePos = readSceneLight().eyePos;
     const float3 camRight = asfloat(sceneData.Load4(64)).xyz;   // invVP 第 0 列前三分量
     const float3 camUp = asfloat(sceneData.Load4(80)).xyz;      // invVP 第 1 列前三分量
+    // ⚠️ 本提取式（cross(col1,col0)）的数学同一性由 tests/test_shadow_forward.cppm
+    // 钉住（500 随机姿态 dot≥1−1e-5；错误形态 −col2 / 叉积倒序 / 偏移互换各验红）——
+    // 改动本式必须同步该测试（12.3d-C）。
     const float3 forward = normalize(cross(camUp, camRight));
     const float depth = dot(worldPos - eyePos, forward);
     const float4 splits = readCascadeSplits();

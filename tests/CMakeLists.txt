@@ -55,6 +55,8 @@ set(RGL_TEST_SOURCES
     test_render_list_light.cppm  # fillLightData 落槽契约：按 index 落槽/计数封顶/重复 index（12.3d）
     test_features_gates.cppm     # 能力门真值表：depthClip 双条件/presentTiming 三合一/扩展清单（12.3d）
     test_asset_table.cppm        # AssetTable::expectedGeometrySlot 槽号算术契约（12.3d）
+    test_gltf_texcoord.cppm      # glTF TEXCOORD_0 vec2 步长 + 去索引展开（手构 GLB，2026-08-30 越界读回归，12.3d-C）
+    test_shadow_forward.cppm     # shadow.slang 选级 forward 提取式数学恒等（invVP 列叉积，5a-8c 回归，12.3d-C）
     test_device_primitives.cppm      # [gpu] 回读原语：clear 逐像素 / 整数回环 / UNORM 量化 / 拷贝保真
     test_device_primitives_impl.cppm # 设备夹具实现（partition impl unit）
 )
