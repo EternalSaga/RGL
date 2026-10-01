@@ -33,54 +33,6 @@ struct Pending {
 	float distanceSq = 0.0f;
 };
 
-/**
- * 每帧填阴影 scene data（尾区阴影 VP 区 + 4 个 vec4 采样参数子区）。抽出函数体的原因同
- * collectShadowCasters / fillLightData：函数代码行阈值按函数 extent 计算（内嵌 lambda 也计入），不拆就过阈。
- * @param out 出参：本帧 draw list（写 sceneData.shadowViewProj / Splits / TexelSizes / Params / Atlas）
- * @param shadowNear/shadowFar **量化后**的切分深度界（与 renderListSystem 建切片同源——
- *   splits 阈值与级联内容错位 = 边界处阴影闪跳）
- * @param volumes 各级光空间体（VP + XY 半宽；与剔除用同一批，先建体再同时用于剔除与矩阵）
- */
-void fillShadowData(FrameDrawList& out, float shadowNear, float shadowFar,
-    std::span<const ShadowVolume> volumes) {
-    for (uint32_t c = 0; c < kActiveShadowCascades; ++c)
-        out.sceneData.shadowViewProj[c] = volumes[c].viewProj;
-    // splits = 每级远截止（采样端拿它选级；末级写 1e9 = “没有更远的级”，下级比较不会被越过）
-    // **必须用与 CPU 切片同源的量化 n/f**（renderListSystem 传入）——阈值与内容错位 =
-    // 片元选到不覆盖自己的级 → 边界处阴影随相机闪跳。
-    // texelSizes = 2·r/块边长，每级各自从自己的球推。
-    // params = (depthBias, normalOffsetScale, enabled, shadowFar)；enabled 由门控 diagnostics
-    // 驱动，shadowFar 供采样端做末级淡出（5a-9，见下方填写处）。
-    // atlas = (图集边长, 单块边长, 分块列数, 保留)，采样端把分块 uv 叠图集用。
-    const float kNoFar = 1e9f;
-    const uint32_t cols = shadowAtlasColumns(kActiveShadowCascades);
-    // **未生效的槽也必须写 kNoFar，不能留 0**：采样端选级是三段无条件比较
-    // （distSq > splits[i]² 则进第 i+1 级），而 distSq 对任何真实片元都 > 0 —— 留 0 会被
-    // 判成"已越过这一级的分界"，把片元一路推到最后一个槽。生效 1 级时若 splits =
-    // {1e9, 0, 0, 0}，全场景都会落到 3 号槽，而它的光空间 VP 从未被写过（零矩阵）
-    // → clip.w = 0 → 0/0 = NaN → 阴影因子恒 0（实测：整个广场全黑，与机位无关）。
-    // 这里让"没生效的级"分界恒为无穷远 = 永远选不中，shader 侧无需知道生效级数。
-    glm::vec4 splits{kNoFar, kNoFar, kNoFar, kNoFar};
-    glm::vec4 texels{0.0f};
-    for (uint32_t c = 0; c < kActiveShadowCascades; ++c) {
-        splits[c] = c + 1u < kActiveShadowCascades
-            ? cascadeSplitDistance(shadowNear, shadowFar, c, kActiveShadowCascades)
-            : kNoFar;
-        texels[c] = volumes[c].xyRadius * 2.0f / static_cast<float>(shadowTileSize(cols));
-    }
-    out.sceneData.shadowSplits = splits;
-    out.sceneData.shadowTexelSizes = texels;
-    // params = (depthBias, normalOffsetScale, enabled, shadowFar)。**w 从"预留 0"改为
-    // shadowFar**（5a-9）：采样端用它做末级距离淡出（shadow.slang ⑦，Filament 同款），
-    // 消掉"超出级联覆盖 → 出块旁路全亮"的硬边。传的是**量化后**的远界，与 splits/切片同源。
-    out.sceneData.shadowParams = {kShadowDepthBias, kShadowNormalOffsetScale,
-        diagnostics().shadowPass ? 1.0f : 0.0f, shadowFar};
-    // 列数与图装饰的 extent 同源（shadowAtlasColumns）——两处不同步 = 采样端把块叠到错位置
-    out.sceneData.shadowAtlas = {static_cast<float>(kShadowMapSize),
-        static_cast<float>(shadowTileSize(cols)), static_cast<float>(cols), 0.0f};
-
-}
-
 /** 阴影投影体候选：实体遍历内先攒，循环结束后才定光空间体。
  *
  * 为何要两段：光空间盒的 Z 下界依赖**全部投影体**的 AABB，而剔除要用这个盒 —— 顺序上
@@ -180,14 +132,57 @@ std::array<ShadowVolume, kActiveShadowCascades> buildShadowVolumes(const Light& 
 	return volumes;
 }
 
+}  // namespace
+
 /**
- * 每帧填灯数据（scene data 头单灯 + 尾区灯数组），并返回主灯。抽出函数体的原因同
- * collectShadowCasters：函数代码行阈值按函数 extent 计算（内嵌 lambda 也计入），不拆就过阈。
- * @param rg 引擎（读 Light 组件）
- * @param eyePos 相机世界位置（头单灯 eyePos 字段）
- * @param out 出参：本帧 draw list（写 sceneData.light / lightCount / lightArray）
- * @return 主灯（Light.index == 0；无灯 entity 时 = 默认 Light{}）——阴影矩阵与
- *         ambient 也要它（主灯 = 页面主光源）
+ * 定义（接口声明与 @param 契约见 render_list.cppm；12.3d 接缝 = shadowPassEnabled
+ * 显式入参取代内部 diagnostics() 单例读取，调用点传 diagnostics().shadowPass）。
+ */
+void fillShadowData(FrameDrawList& out, float shadowNear, float shadowFar,
+    std::span<const ShadowVolume> volumes, bool shadowPassEnabled) {
+    // 抽出函数体的原因同 collectShadowCasters / fillLightData：函数代码行阈值按函数
+    // extent 计算（内嵌 lambda 也计入），不拆就过阈。
+    for (uint32_t c = 0; c < kActiveShadowCascades; ++c)
+        out.sceneData.shadowViewProj[c] = volumes[c].viewProj;
+    // splits = 每级远截止（采样端拿它选级；末级写 1e9 = “没有更远的级”，下级比较不会被越过）
+    // **必须用与 CPU 切片同源的量化 n/f**（renderListSystem 传入）——阈值与内容错位 =
+    // 片元选到不覆盖自己的级 → 边界处阴影随相机闪跳。
+    // texelSizes = 2·r/块边长，每级各自从自己的球推。
+    // params = (depthBias, normalOffsetScale, enabled, shadowFar)；enabled 由门控 diagnostics
+    // 驱动（12.3d 起经 shadowPassEnabled 显式传入），shadowFar 供采样端做末级淡出
+    // （5a-9，见下方填写处）。
+    // atlas = (图集边长, 单块边长, 分块列数, 保留)，采样端把分块 uv 叠图集用。
+    const float kNoFar = 1e9f;
+    const uint32_t cols = shadowAtlasColumns(kActiveShadowCascades);
+    // **未生效的槽也必须写 kNoFar，不能留 0**：采样端选级是三段无条件比较
+    // （distSq > splits[i]² 则进第 i+1 级），而 distSq 对任何真实片元都 > 0 —— 留 0 会被
+    // 判成"已越过这一级的分界"，把片元一路推到最后一个槽。生效 1 级时若 splits =
+    // {1e9, 0, 0, 0}，全场景都会落到 3 号槽，而它的光空间 VP 从未被写过（零矩阵）
+    // → clip.w = 0 → 0/0 = NaN → 阴影因子恒 0（实测：整个广场全黑，与机位无关）。
+    // 这里让"没生效的级"分界恒为无穷远 = 永远选不中，shader 侧无需知道生效级数。
+    glm::vec4 splits{kNoFar, kNoFar, kNoFar, kNoFar};
+    glm::vec4 texels{0.0f};
+    for (uint32_t c = 0; c < kActiveShadowCascades; ++c) {
+        splits[c] = c + 1u < kActiveShadowCascades
+            ? cascadeSplitDistance(shadowNear, shadowFar, c, kActiveShadowCascades)
+            : kNoFar;
+        texels[c] = volumes[c].xyRadius * 2.0f / static_cast<float>(shadowTileSize(cols));
+    }
+    out.sceneData.shadowSplits = splits;
+    out.sceneData.shadowTexelSizes = texels;
+    // params = (depthBias, normalOffsetScale, enabled, shadowFar)。**w 从"预留 0"改为
+    // shadowFar**（5a-9）：采样端用它做末级距离淡出（shadow.slang ⑦，Filament 同款），
+    // 消掉"超出级联覆盖 → 出块旁路全亮"的硬边。传的是**量化后**的远界，与 splits/切片同源。
+    out.sceneData.shadowParams = {kShadowDepthBias, kShadowNormalOffsetScale,
+        shadowPassEnabled ? 1.0f : 0.0f, shadowFar};
+    // 列数与图装饰的 extent 同源（shadowAtlasColumns）——两处不同步 = 采样端把块叠到错位置
+    out.sceneData.shadowAtlas = {static_cast<float>(kShadowMapSize),
+        static_cast<float>(shadowTileSize(cols)), static_cast<float>(cols), 0.0f};
+}
+
+/**
+ * 定义（接口声明与 @param 契约见 render_list.cppm；12.3d 起导出为接缝，测试栈上
+ * registry 直打，不必经完整 renderListSystem）。
  */
 Light fillLightData(entt::registry& rg, const glm::vec3& eyePos, FrameDrawList& out) {
 	// 灯 entity 化（Phase 7，ECS 规范 3）：灯 = entity（Light 组件），画不画 = 实体有无。
@@ -219,8 +214,6 @@ Light fillLightData(entt::registry& rg, const glm::vec3& eyePos, FrameDrawList& 
 	}
 	return primary;
 }
-
-}  // namespace
 
 
 /** materialBySlot 哨兵 = 该 objectSlot 本帧无实体（批 10.7 高亮过滤表；被剔对象不在
@@ -413,7 +406,7 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	// Phase 8 批次 ④a：漫反射辐照度 SH9（env 加载期算好存 Resources，此处每帧拷入）
 	fresh.sceneData.irradianceSH = envService.getIrradianceSH();
 	fresh.sceneData.skyInvViewProj = glm::inverse(viewProj.proj * viewProj.view);
-	fillShadowData(fresh, shadowNear, shadowFar, shadowVolumes);
+	fillShadowData(fresh, shadowNear, shadowFar, shadowVolumes, diagnostics().shadowPass);
 	fresh.sceneData.objectMatrices = std::span<const glm::mat4>{state.matrices};
 	fresh.sceneData.objectMvps = std::span<const glm::mat4>{state.mvps};
 	fresh.sceneData.objectDraws = std::span<const ObjectDraw>{state.draws};

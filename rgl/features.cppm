@@ -84,6 +84,20 @@ export bool presentTimingSupported(const OptionalFeatureSupport& opt) {
 }
 
 /**
+ * edS3 depthClip 动态状态**双条件能力门**（同 presentTimingSupported 家族）：
+ * extendedDynamicState3DepthClipEnable 只是把旧扩展的 depth clip 静态状态"动态化"，
+ * VUID-vkCmdSetDepthClipEnableEXT-depthClipEnable-07451 查的是旧扩展
+ * VK_EXT_depth_clip_enable 的 depthClipEnable feature——只暴露 edS3 而无 base 的驱动上
+ * 单条件放行 = 调用违 VUID（docs/archive/issue_history.md 2026-09 条目拍板"缺一即不调，
+ * 干净降级"；vkrenderer 构造消费本门喂 StateKit，vkdevice 侧两 feature 结构条件链接同源）。
+ * @param opt queryOptionalFeatures 探测结果
+ * @return true = edS3 动态位与旧扩展 base 位齐备（才可动态调 vkCmdSetDepthClipEnableEXT）
+ */
+export bool depthClipDynamicSupported(const OptionalFeatureSupport& opt) {
+	return opt.depthClipEnable && opt.depthClipBase;
+}
+
+/**
  * 设备创建用的必需 + 可选扩展列表。可选扩展：仅在对应 optional feature 探测可用时
  * 追加。扩展启用与 feature 置位同源（queryOptionalFeatures 先查扩展可用再读 feature
  * 字段，缺一即 false = 整体 no-op），故此处按 OptionalFeatureSupport 位逐项追加即可——

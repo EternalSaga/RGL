@@ -133,7 +133,9 @@ Renderer::Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RG
 	  capturer(vkResources, rtCache, this->renderGraph),
 	  // edS3 能力门 + 四段状态值（Phase 10 批次 0 手术 1：状态表迁 StateKit，
 	  // transparent/skybox/light 的差异值语义注释随迁 state_kit.cppm ctor）
-	  stateKit(vkDevice.getOptionalFeatures().depthClipEnable),
+	  // 双条件门（12.3d 就范于 issue_history 声明）：eds3 && depth_clip_enable base，
+	  // 缺 base 时动态调 vkCmdSetDepthClipEnableEXT 违 VUID-07451（见 features.cppm）
+	  stateKit(depthClipDynamicSupported(vkDevice.getOptionalFeatures())),
 	  // 帧生命周期会话（手术 4）：四套同步对象 + 每帧命令缓冲 + swapchain/depth 重建，
 	  // 构造期即建（原 createSyncObjects/allocateCommandBuffers 移入其 ctor）
 	  session(vkDevice, vkSwapchain, vkResources, diagnostics().noPresent),
