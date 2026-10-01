@@ -163,7 +163,7 @@ export struct RgPassAttachment {
  * - drawMesh：执行 FrameDrawList 段（drawSource → 段边界映射由执行器完成）；
  * - blit：transferRead input → transferWrite output 整幅拷贝（无绘制）；
  * - drawLight（Phase 7 D1 / Phase 8 ①泛化）：固定全屏单 group draw——执行器按
- *   **state 名**绑定预建管线条目（词表 = "light"/"tonemap"，见 kFullscreenPassStates），
+ *   **state 名**绑定预建管线条目（词表 = "light"/"ao"/"tonemap"，见 kFullscreenPassStates），
  *   不走 FrameDrawList 段；outputs 恰一 colorWrite、inputs = sampleRead（barrier 自动）。
  */
 export enum class RgPassKind : uint8_t {
@@ -175,7 +175,7 @@ export enum class RgPassKind : uint8_t {
 
 /**
  * drawLight kind 的 state 词表（单一真相源）：state 名同时是 ShaderRegistry 固定条目名
- *（"light" = deferred 逐灯 GGX，"tonemap" = HDR→LDR ACES）与 StateKit 状态名——
+ *（"light" = deferred 逐灯 GGX，"ao" = 屏幕空间环境光遮蔽，"tonemap" = HDR→LDR ACES）与 StateKit 状态名——
  * 执行器构造期按 state 名解析管线条目，图内 drawLight pass 的 state 必须在此表内
  *（validateRenderGraphForExecutor 校验）。
  */

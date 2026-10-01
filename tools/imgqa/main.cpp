@@ -1,4 +1,4 @@
-// imgqa CLI。子命令：selftest / check / refuse / attribution / faces / switch / note。
+// imgqa CLI。子命令：selftest / check / refuse / attribution / faces / switch / probe / note。
 #include "imgqa.h"
 
 #include <cstdio>

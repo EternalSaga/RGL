@@ -1,6 +1,6 @@
 # Phase 10b 调试交互增补批：imgui 中文字体 + HTTP POST RPC
 
-> **状态**：现行（实施计划，2026-09-28 立；覆盖两件事：① imgui 面板中文显示为问号的修复、
+> **状态**：现行（2026-09-28 全落地，§6 验收清单实测全过；覆盖两件事：① imgui 面板中文显示为问号的修复、
 > ② 轻量 loopback HTTP POST RPC（= [archive/phase10_plan.md](archive/phase10_plan.md) 决策表
 > **D12 翻案落地**，翻案条件"≥2 次因无编程驱动通道而绕路"已由用户 2026-09-28 主动提出达成）。
 > 本批是 Phase 11（阴影）开工前的插队小批；结论回写 [next_roadmap.md](next_roadmap.md) 与

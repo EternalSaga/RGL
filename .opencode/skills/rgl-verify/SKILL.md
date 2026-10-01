@@ -69,6 +69,7 @@ objectID 附件反解可见 piece，闭式解（GGX+ACES+sRGB 逐式转录，独
 - `attribution [--glb X.glb] [--camera 名]` —— 机位下每个 piece：像素数/线性亮度分位数/暗像素占比/色度；可见集=下游判据的求值域
 - `faces --piece 名 [--shadow] [--env]` —— 六面闭式解预测（观测域字节）vs 观测亮度簇；解释不了的簇=发现
 - `switch --allow-piece a,b` —— 开关影响域：域外**必须逐位为零** + 域内必须确实变了（两条对偶，堵"0 差异"的两种解释）
+- `probe [--x 640] [--y 360] [--light Lx,Ly,Lz] [--tol 2]` —— 闭式解探针：某像素**该**是多少 vs 实机截图逐字节对拍（`just analytic` = 本命令 + `qa/configs/analytic/` 固定配置；12.3b 起接替已退役的 analytic_ref.py）
 - `check [--promoted]` / `refuse [ssim|...]` / `note "事后真相"`
 
 **三条硬约束（工具替你守，但写新判据时你也要守）**：① 判据只在 objectID 反解出的**可见集**上求值；

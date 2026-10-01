@@ -78,7 +78,7 @@ void validateRenderGraphForExecutor(const RGL::CompiledRenderGraph& graph) {
 			return;
 		}
 		// Phase 7 D1 / Phase 8 ①泛化：drawLight = 固定全屏 draw（无 drawSource/段），
-		// state 必在 kFullscreenPassStates 词表（"light"/"tonemap"）
+		// state 必在 kFullscreenPassStates 词表（"light"/"ao"/"tonemap"）
 		if (pass.kind == RgPassKind::drawLight) {
 			if (!std::ranges::any_of(kFullscreenPassStates,
 					[&](std::string_view s) { return pass.state == s; }))

@@ -36,7 +36,7 @@ just test                # 单元测试（tests/，**无 GPU 无窗口**，毫�
 just test-all / test-gpu # 含设备级原语用例（要真设备 + VVL；无设备**FAIL 不 SKIP**）
 just analytic            # 闭式解探针：算像素「该是多少」并与实机截图逐字节对拍（要 GPU；
                          #   12.3b 起 = imgqa probe，Python 参考实现已退役）
-just imgqa <子命令>       # 区域归因判据工具箱：selftest/attribution/faces/switch/check（判据纪律 → skill rgl-verify）
+just imgqa <子命令>       # 区域归因判据工具箱：selftest/attribution/faces/switch/check/probe（判据纪律 → skill rgl-verify）
 just clean / clean-all / all           # 增量清理 / 删 build 目录 / clean-all+build-release
 ```
 
@@ -68,7 +68,7 @@ CMake 无独立构建目录——必须从根目录构建（`cmake -B build -S .
 `TEST_SUITE("gpu") { … }`，靠一等公民的套件过滤分流：`just test` = `--test-suite-exclude=gpu`，`just test-all` = 全跑。
 
 **`rgl_tests` 现在链全部四层**（`rlbase rlgfx rlscene rlframe` + Vulkan/VMA/SDL3/imgui）：决策结论 =
-「import rlvk」是编译期依赖，「需要一个 VkDevice」才是运行期依赖，两者不等价（`render_graph`/`state_kit` 都 import rlvk 却一个设备都不碰）；代价如实记录 = 测试二进制链了 Vulkan（`nm` 不再是 0），保住的是**运行期**性质（默认子集一条设备路径都不碰，仍是毫秒级）；设备级用例在无设备机器上**必须 FAIL 不 SKIP**——静默跳过 = 假绿。"为什么不只链 rlbase"细节 → `tests/CMakeLists.txt` 头注释。
+「import rlvk」是编译期依赖，「需要一个 VkDevice」才是运行期依赖，两者不等价（`render_graph`/`state_kit` 都 import rlvk 却一个设备都不碰）；代价如实记录 = 测试二进制链了 Vulkan（`nm` 不再是 0），保住的是**运行期**性质（默认子集一条设备路径都不碰，仍是毫秒级）；设备级用例在无设备机器上**必须 FAIL 不 SKIP**——静默跳过 = 假绿。"为什么不只链 rlbase"细节 → `tests/CMakeLists.txt`（链接面注释，头注释有指针）。
 
 ### 引擎四库分层（rlstd/rllogger 之后新增四个库）
 
@@ -84,7 +84,7 @@ CMake 无独立构建目录——必须从根目录构建（`cmake -B build -S .
 依赖只向下，出现逆向 import 立刻链接失败，**现在机器可验**：`tools/checks/rules_layers.py` 以那五份清单为唯一真相源，扫全部 `.cppm`（**含分区实现单元**）的 import 边，报「低层 import 高层」为 error 级警告；规则可能静默失效时也报 error（失效不出声 = 「零警告」会被读成「分层干净」）。旧问法「这个模块 import 了 Vulkan 吗」已废。
 **新增模块的流程**：加进职责归属正确的那份清单 → configure 期**归属完整性闸门**核对「磁盘上每个 .cppm 恰好登记一次」，漏登记即 `FATAL_ERROR` 点名（刻意不用「GLOB 后减掉已登记」——那会让新文件静默落进 `rgl`，而那里只该有 `main*`）。判据只有一个：**这段逻辑需不需要一个 VkDevice 才能跑**——不需要 → 属 `rlbase`，就该能在 `just test` 里测；需要 → 设备级测试或 `qa/`。
 
-⚠️ 两条踩过的坑（include 面/编译宏归属判据 = 哪个库拥有用它的那个 TU，不是"谁在用它"；勿用 model.json 做依赖分析）→ `rgl/CMakeLists.txt` 头注释 L108-112 / L142-146 已一字不差承载。
+⚠️ 两条踩过的坑（include 面/编译宏归属判据 = 哪个库拥有用它的那个 TU，不是"谁在用它"；勿用 model.json 做依赖分析）→ `rgl/CMakeLists.txt` 头注释已一字不差承载（"model.json"与"include 面/编译宏的归属判据"两个 ⚠️ 段）。
 
 ### 写测试的硬纪律（全量十条 + 12.3d 新规 → skill `rgl-test-discipline`）
 
@@ -131,7 +131,7 @@ CMake 无独立构建目录——必须从根目录构建（`cmake -B build -S .
 
 ## 模块结构（C++20 modules, .cppm）
 
-**实现细节以各 `.cppm` 文件头注释为权威**，Phase 演进史见 `docs/next_roadmap.md`；
+**实现细节以各 `.cppm` 文件头注释为权威**，Phase 0–7 演进史见 `docs/next_roadmap.md`（Phase 8+ 见各 `phase*_plan.md`）；
 工具/数据/生成模块速览 → `docs/技术概念.md §模块表`；下表深版职责 → 同文件 §核心运行时模块表（深版）。
 此处只留初始化层骨架（构造顺序 = main 启动流顺序）：
 
@@ -197,14 +197,14 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
 
 > 只列**未解决问题**与标「现行」的**契约**。已解决问题（根因/误诊复盘）见 `docs/archive/issue_history.md`。
 
-- **Phase 9 性能基线与判定（2026-09-27 收口）**：本机 forward 1280×720 = **CPU-bound**（profiler 判定行 `frame=7.10ms cpu.record=7.03ms gpu.frame=2.98ms`）→ ④c"cull 读回延后一帧"**否决**、⑤"帧率上限"**当前不需要**（CPU 限速 ≈141 fps 低于 165 Hz，`drop` 双零）；给阴影（现 Phase 11）的硬基线 = **GPU 侧余量 ≈3.1 ms/帧，CPU 侧无余量**。未收口：`drawFrame` 内 ~93% CPU 时间无子 zone（提帧率下一步 = 补子 zone，纯插桩，可选批 9.5）、present_timing 跨机（NVIDIA / Intel anv）复测未做。全文 → `docs/phase9_plan.md` §10；present_timing 本机形态限制（只 advertise stage-local 域）→ `docs/调试历史.md` 2026-09-27 条目。
+- **Phase 9 性能基线与判定（2026-09-27 收口）**：本机 forward 1280×720 = **CPU-bound**（profiler 判定行 `frame=7.10ms cpu.record=7.03ms gpu.frame=2.98ms`）→ ④c"cull 读回延后一帧"**否决**、⑤"帧率上限"**当前不需要**（CPU 限速 ≈141 fps 低于 165 Hz，`drop` 双零）；给阴影（Phase 11）的硬基线 = **GPU 侧余量 ≈3.1 ms/帧，CPU 侧无余量**。未收口：`drawFrame` 内 ~93% CPU 时间无子 zone（提帧率下一步 = 补子 zone，纯插桩，可选批 9.5）、present_timing 跨机（NVIDIA / Intel anv）复测未做。全文 → `docs/phase9_plan.md` §10；present_timing 本机形态限制（只 advertise stage-local 域）→ `docs/调试历史.md` 2026-09-27 条目。
 - `computeCommandPool`/`transferCommandPool`/`computeQueue`/`transferQueue` 已创建但保留给未来使用
 - **VMA + zero-init 冲突**：VMA 对 BDA buffer 自动加内部 DEVICE_ADDRESS flags，与用户 ZERO_INITIALIZE pNext 必撞——该扩展已回退，真实需求走原生 `vkAllocateMemory` 绕 VMA（`docs/vulkan_extensions_2025_调研.md` §十二/§13.1）
 - **Phase 5 光照/透明近似**：世界法线 mat3 直乘（假定均匀缩放）；透明排序 per-primitive 距离²（非 OIT）且开背面剔除（非封闭几何会剔掉一面）。留 Phase 7+
 - **Phase 5.5 IBL/天空盒近似**：BRDF LUT 仍无（prefiltered 已 Phase 8 ④b GGX 预滤波落地，`env_prefilter.cppm`）；mip blit NEAREST（sRGB LINEAR 违 VUID-00239）；单环境贴图；大三角 z=1 依赖 depth clear + LEQUAL；**light/env 两个 intensity 语义不对称**（light CPU 预乘、env shader 端乘，亮度跨路线不可直接对比）。简化 IBL forward/deferred 逐式相同；skybox 背景在 deferred light pass 内合成（非独立 pass）
-- **Phase 6 渲染图边界**：线性 pass 序（无拓扑排序/fusion/aliasing）；执行器 state/drawSource 只认
-  opaque/skybox/transparent/light 四个名字；单 swapchain attachment；多线程录制不做
-  （批 11.4 起另有 ao/tonemap 两个全屏 state，由 `kFullscreenPassStates` 登记）
+- **Phase 6 渲染图边界**：线性 pass 序（无拓扑排序/fusion/aliasing）；执行器 state 分派认
+  `state_kit` 全部九个名字（`stateFor`），drawSource 名表 = opaque/skybox/transparent/shadow*，
+  全屏 pass 词表 = `kFullscreenPassStates`（light/ao/tonemap）；单 swapchain attachment；多线程录制不做
 - **Phase 11 批 11.4 SSAO 三条固有边界**：① **depth-only → 法线贴图细节看不见**（鹅卵石缝
   是法线贴图，深度图上是一整片平面 → 开阔地面 AO 恒 1.000，不是 bug）；② 屏幕空间螺旋采样
   无投影 range check（scene data 头只有 `invViewProj`）→ 前景轮廓外一圈 AO 光晕；
@@ -221,9 +221,9 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
 
 ## 其他文档
 
-> 每篇文档头部带状态（`现行`/`历史`/`调研`）。现状权威 = 本文件 + `next_roadmap.md`。
+> 每篇文档头部带状态（`现行`/`历史`/`调研`）。现状权威 = 本文件；下一步路由 → 各 phase 计划文件（当前 `docs/phase12_plan.md`）。
 
-- `docs/next_roadmap.md` — **路线图（权威）**：Phase 0–6 一段话结论 + Phase 7 进度表 + 剩余计划
+- `docs/next_roadmap.md` — **路线图（历史）**：Phase 0–7 结论存档（Phase 8+ 执行记录见各 `phase*_plan.md`；下一步路由 → 当前 `phase12_plan.md`）
 - `docs/技术概念.md` — 核心 Vulkan 模式、设计决策、§构建（Windows 前置与 vcpkg）/ §模块表 / §构建检查工具机制 / §核心运行时模块表（深版）/ §RPC 调试通道（Phase 10b，端点速查）/ §main 启动流（完整版）
 - `docs/调试历史.md` — 问题修复时间线（只增不改，争议结论以此为准）
 - `docs/phase8_plan.md` — Phase 8 Bistro 打磨（HDR / HDR env / 纹理接缝 / 灯光）实施计划与验收

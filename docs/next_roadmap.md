@@ -1,12 +1,12 @@
 # RGL 路线图
 
-> **状态**：现行（开发路线图；**Phase 7 完成（2026-09-10）**：D1 延迟单灯 `70ce9d1` + D3 多灯/反射 +
+> **状态**：历史（Phase 0–7 开发路线图存档；**Phase 7 完成（2026-09-10）**：D1 延迟单灯 `70ce9d1` + D3 多灯/反射 +
 > 批次 4 CPU culling + 批次 5=7b GPU culling/DGC + 批次 2 refine（IBL+skybox）+ 灯 entity 化 +
 > **前向头 SceneLight 入反射（Slang C API 工具升级，双源消除）+ 批次 6 销账**；
 > 并行工作流 = **批次 0 Renderer 拆分完成（2026-09-10，drawFrame 577→291，5 模块摘出，
 > BIT-IDENTICAL；旧称 "Phase 10 批次 0"，属阴影 Phase 前置，现随阴影归 Phase 11）** + 架构债务 1+2 修复
 > （scene→scene_context / cube 出内核，
-> 见 [架构债务-依赖方向审计.md](架构债务-依赖方向审计.md)，`b1788e0`）；下一节点 = Phase 8）
+> 见 [架构债务-依赖方向审计.md](架构债务-依赖方向审计.md)，`b1788e0`）；下一步路由 → 各 phase 计划文件，当前 `phase12_plan.md`）
 >
 > **阶段号重排（2026-09-27）**：**Phase 10 = 调试交互**（配置热重载 + IMGUI 参数面板 + shader 热重载
 > + 点选取参，计划 = [phase10_plan.md](archive/phase10_plan.md)）插队，**阴影整体顺延为 Phase 11**。
@@ -18,7 +18,7 @@ Phase 0–6 已全部完成（各阶段结论一段话归档于下，实施细�
 
 ---
 
-## 核心原则（现行）
+## 核心原则（当时定案；原则 5 后有更新，见条内注）
 
 1. **反射是 build tool，不是 runtime component**。反射结果只输出为 `.cppm`，渲染代码经 `import`
    消费，永不依赖反射系统实现。
@@ -27,6 +27,8 @@ Phase 0–6 已全部完成（各阶段结论一段话归档于下，实施细�
 4. **逐步推进**。每阶段稳定后再进入下一阶段。
 5. **bindless 原则**（Phase 5 定案，推翻"push constant 传递轻量"）：push constant 冻结在
    "mvp + 索引"级别，场景级/每帧变化数据一律进 descriptor heap（scene data）。
+   **（Phase 7b+ 已更新**：DrawArgs 缩到纯索引 `objectIndex` 4B，mvp 迁入 scene data per-object 表；
+   现行口径见 AGENTS.md「已知问题 → GPU culling」与 skill `rgl-shader-contract`。）
 
 ## C++ 风格备忘（遗留方向）
 

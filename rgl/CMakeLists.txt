@@ -73,8 +73,9 @@ rgl_shader(stream_fanout.comp STREAM_FANOUT_SPV)
 #
 # main.cppm（主接口：启动流 helper 声明 + 轻量 struct）+ main_scene.cppm（module
 # main:scene; 重函数定义）+ main_impl.cppm（module main:impl; 轻函数 + main()）
-# ——2026-09-14 由 main.cpp 转来：CMake FILE_SET 不收纯实现单元，故"接口声明 + 分区
-# 实现"形状（同 ecs/ecs_impl 惯例）；经 FILE_SET 编译为模块 TU 并纳入
+# ——2026-09-14 由 main.cpp 转来：CMake FILE_SET 不收**无 module 声明的裸实现文件**
+#（旧 main.cpp），故"接口声明 + 分区实现"形状（同 ecs/ecs_impl 惯例；分区实现单元
+# main_impl/main_scene 本身与接口同登记 FILE_SET）；经 FILE_SET 编译为模块 TU 并纳入
 # source_checks（tools/checks/）全规则管理。
 get_property(RGL_SPV GLOBAL PROPERTY RGL_SPV_OUTPUTS)
 

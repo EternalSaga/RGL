@@ -9,7 +9,7 @@ description: 新建或拆分 C++20 模块 (.cppm)——rlstd/GMF include 细则�
 
 1. `.cppm`（禁 .hpp/.cpp 头文件对；rgl/ 禁 .h/.hpp/.hh，.cpp 仅单头库实现单元
    tinygltf_impl/vam_impl；入口 = main 模块三件套：main.cppm 接口 + main_impl/main_scene
-   分区实现——CMake FILE_SET 不收纯实现单元）；导出包裹在 `namespace RGL { ... }` 内
+   分区实现——分区实现单元与接口同登记 FILE_SET；FILE_SET 不收**无 module 声明的裸实现文件**（旧 main.cpp））；导出包裹在 `namespace RGL { ... }` 内
 2. STL 走 `import rlstd;`（不在 GMF `#include` STL）；Vulkan C++ 头一律 `import rlvk;`（新用 vk:: 名报 "not visible" → 补一行 `export using` 保持字典序）；仅用 `VK_*` 宏/C 函数的文件可额外 `#include <vulkan/vulkan.h>`（core 量级 ~0.4s）
 3. 函数体 >100 行 → 拆 `xxx_impl.cppm`（`module xxx:impl;`）
 4. CMake 与接口同登记 FILE_SET
@@ -42,7 +42,7 @@ description: 新建或拆分 C++20 模块 (.cppm)——rlstd/GMF include 细则�
 - 成员自然命名：无 `_`/`m_` 前缀、无 `_` 后缀
 - 分层：`ZERO_ENTT_MODULES` 名单不 import ecs 且 GMF 不 include `<entt>`；点名禁止 import 边 `FORBIDDEN_EDGES`（名单见 `tools/checks/config.py`）；禁内部头 `#include "`
 - GMF `#include <STL>` 白名单：只许 ranges/filesystem/chrono，余走 import rlstd
-- 禁用旧式 Vulkan API：经典 descriptor pool / pipeline object / render pass / push constants / 输入装配（`bindVertexBuffers*`/`VkVertexInput*` 等，mesh shader 路线封死经典 IA；`*` = 前缀匹配 token）（项目已全面 descriptor heap / shader object / dynamic rendering / mesh shader；护栏名单 `FORBIDDEN_VULKAN_APIS`，标识符边界匹配；**勿把现代机制写成前缀串**——`vkCmdBindDescriptorBuffersEXT` 是 descriptor buffer 当代用法）
+- 禁用旧式 Vulkan API：经典 descriptor pool / pipeline object / render pass / CPU 端 push constants（`vkCmdPushConstants`；shader 端 `[[vk::push_constant]]` 属性保留、CPU 端一律 `vkCmdPushDataEXT`，见 skill `rgl-shader-contract`）/ 输入装配（`bindVertexBuffers*`/`VkVertexInput*` 等，mesh shader 路线封死经典 IA；`*` = 前缀匹配 token）（项目已全面 descriptor heap / shader object / dynamic rendering / mesh shader；护栏名单 `FORBIDDEN_VULKAN_APIS`，标识符边界匹配；**勿把现代机制写成前缀串**——`vkCmdBindDescriptorBuffersEXT` 是 descriptor buffer 当代用法）
 - 模块结构（2026-09-24）：partition 实现单元禁 `export` 声明、须显式 `import` 主接口、`#include` 只许 GMF、`vulkan/vulkan.hpp` 仅 `rlvk.cppm`（见 `docs/风格检查规则.md` §1）
 - 现代 C++ 护栏（同日）：`goto`/`friend`/RTTI/`typedef`/裸 `NULL`/裸 `enum`/`malloc`/`printf`/`std::cout` 零违规回归；裸 `new`/`delete` 仅 `NEW_DELETE_EXEMPT`（`VmaBuffer.cppm`）；`using namespace` 仅入口、`export namespace` 仅 rlvk；返回 `std::expected` 的函数体内禁 `throw`（折中版 A，提示非构造路径用 expected）（§2）
 - `docs/**.md` 前 10 行须有状态行 `> **状态**：…`（§1.5）
