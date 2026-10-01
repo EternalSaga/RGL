@@ -29,6 +29,7 @@
 | [架构债务-Resources职责拆分.md](架构债务-Resources职责拆分.md) | 已完成 | Resources 职责拆分（2026-09-19 完成：SceneData/RenderTargetCache/Environment/SamplerLibrary/AssetTable 拆出，allocSlot 三段化） | 无 |
 | [架构债务-依赖方向审计.md](架构债务-依赖方向审计.md) | 已完成 | 依赖方向审计（2026-09-08：债务 1 方案 B + 债务 2 已修，债务 3 缓行——`vk_resources` 不添第四种角色） | 无 |
 | [静态审查升级路线.md](静态审查升级路线.md) | 现行 | LLVM 23 + `-Wlifetime-safety` 两阶段落地计划（2026-09-24 定稿，尚未实施，等系统 LLVM 23；改 `tools/checks` clangbind 前先读） | 无 |
+| [阴影失效排查.md](阴影失效排查.md) | 已解决 | Phase 11 批 11.2 阴影失效排查交接日志（2026-09-29 同日收口；权威结论 = 调试历史 2026-09-29 条目，本文留档排查过程与哨兵定位手段） | 无 |
 
 ## 已解决问题总账
 

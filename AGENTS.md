@@ -14,10 +14,11 @@ legacy（旧 OpenGL 项目）已于 2026-09-08 删除，历史思路参考见 gi
 
 ## 项目 Skills（按需加载，命中触发词先 skill 工具读取）
 
-- **`rgl-verify`** — 运行环境、headless 冒烟、llm_debug 截图、BIT-IDENTICAL 截图回归（改渲染后验证必用）
+- **`rgl-verify`** — 运行环境、headless 冒烟、llm_debug 截图、BIT-IDENTICAL 截图回归、材质定位（加法闪色）、截 UI（外部截图）、测量纪律（改渲染后验证必用）
 - **`rgl-shader-contract`** — 反射管线 / `just reflect` / scalar layout / bindless / 关键契约文件位置表
   （改 `rgl/shaders/`、`*_schema.lua`、`generated/` 前必读）
 - **`rgl-new-module`** — 新建/拆分 `.cppm`、rlstd/GMF 细则、impl partition 三条坑、检查工具规则红线
+- **`rgl-test-discipline`** — 写测试硬纪律全量（阳性锚点/变异红线/沉淀地址/modules 坑；写单测、加用例、收账调试历史前必读）
 
 ## 构建
 
@@ -34,25 +35,17 @@ just test                # 单元测试（tests/，**无 GPU 无窗口**，毫�
 just test-all / test-gpu # 含设备级原语用例（要真设备 + VVL；无设备**FAIL 不 SKIP**）
 just analytic            # 闭式解探针：算像素「该是多少」并与实机截图逐字节对拍（要 GPU；
                          #   12.3b 起 = imgqa probe，Python 参考实现已退役）
+just imgqa <子命令>       # 区域归因判据工具箱：selftest/attribution/faces/switch/check（判据纪律 → skill rgl-verify）
 just clean / clean-all / all           # 增量清理 / 删 build 目录 / clean-all+build-release
 ```
 
-**Windows (NVIDIA + LLVM 22)**：前置 LLVM 22、Vulkan SDK（slangc）、just、vcpkg（已 bootstrap）、
-Git for Windows（`sh.exe` 在 PATH）；命令同名，默认 clang++ + Ninja、triplet `x64-windows-static`，
-`run-igpu/run-dgpu` 不可用（Linux prime 专用），NVIDIA 直接 `just run`。
-**vcpkg**：`vcpkg.json` 用 platform expressions 按 OS 启用 features（Linux `sdl3[vulkan,wayland]` /
-Windows `sdl3[vulkan]`）；同一依赖可出现两次用 `"platform"` 字段区分。
+**Windows 前置（LLVM 22/Vulkan SDK/vcpkg）与 vcpkg platform expressions** → `docs/技术概念.md §构建（Windows 前置与 vcpkg）`。
 **工具语言纪律（2026-09-30 用户拍板，三机测试）**：要依赖的工具一律 **C++ + vcpkg**（先例：
 inja 弃 jinja、imgqa 链 opencv4）；**留在 Python 的工具只准 stdlib-only**（qa_scenes.py），
 不引入任何需要 pip 的依赖。
 
 CMake 无独立构建目录——必须从根目录构建（`cmake -B build -S .`）。产物: `build/rgl/rgl`（Windows 加 `.exe`）、`build/tests/rgl_tests`（单元测试；`tests/` 是 EXCLUDE_FROM_ALL 子目录，故**不进 `just build`**，`just test` 显式构建其 target）。
-构建内置检查步骤（均只警告不阻断）：`reflection_check`（反射产物 SHA1 护栏，与编译并行）、
-`source_checks`（样式 + Doxygen 单入口，`tools/checks/`，2026-09-23 合并；**依赖 rgl 编译完成后
-才跑**——libclang 读半写 BMI 会崩，勿删该 add_dependencies）。样式侧 2026-09-24 扩展两轮
-（partition 结构 / docs 状态头 / 现代 C++ 护栏 / expected 禁 throw）→ `docs/风格检查规则.md`；
-同日工具现代化（**Python ≥3.14**，`rules.py` 拆 metrics/text/doxygen + `models`/`fs`，警告 =
-`NamedTuple`）。两者内部机制（缓存、并发、已知坑）→ `docs/技术概念.md §构建检查工具机制`；tools/ 工具链说明 → 同文件 §构建工具。
+构建内置检查步骤（均只警告不阻断）：`reflection_check`（反射产物 SHA1 护栏，与编译并行）+ `source_checks`（样式 + Doxygen 单入口 `tools/checks/`；**红线：依赖 rgl 编译完成后才跑——libclang 读半写 BMI 会崩，勿删该 add_dependencies**）。两者内部机制（缓存/并发/已知坑）→ `docs/技术概念.md §构建检查工具机制`；样式规则清单 → `docs/风格检查规则.md`。
 
 ## 测试体系（Phase 12 批 12.1 起）
 
@@ -70,125 +63,42 @@ CMake 无独立构建目录——必须从根目录构建（`cmake -B build -S .
 
 ### 分流靠 doctest **测试套件**，不是 tag 也不是链接面（批 12.2d）
 
-本项目 doctest 2.5.3 的 `TEST_CASE` 宏**只接受一个参数**——tag 形态在该构建里不存在
-（`grep -E '^#define TEST_CASE' build/vcpkg_installed/*/include/doctest/doctest.h`
-实测只有 `TEST_CASE(name)`）。设备级用例写进 `TEST_SUITE("gpu") { … }`，靠一等公民的
-套件过滤分流：`just test` = `--test-suite-exclude=gpu`，`just test-all` = 全跑。
+本项目 doctest 2.5.3 的 `TEST_CASE` 宏**只接受一个参数**（tag 形态在该构建里不存在）；设备级用例写进
+`TEST_SUITE("gpu") { … }`，靠一等公民的套件过滤分流：`just test` = `--test-suite-exclude=gpu`，`just test-all` = 全跑。
 
-**`rgl_tests` 现在链全部四层**（`rlbase rlgfx rlscene rlframe` + Vulkan/VMA/SDL3/imgui）。
-为什么不只链 `rlbase`（旧状态，当时 `nm` 里 Vulkan 符号为 0）：
-**「import rlvk」是编译期依赖，「需要一个 VkDevice」才是运行期依赖**，两者不等价。
-`render_graph` / `state_kit` 都 import rlvk（要 `vk::Format` 等类型）却一个设备都不碰，
-把它们挡在门外等于"因为类型依赖里有 Vulkan 所以不许测"——那正是 12.1→12.2c 一路在纠正的
-混淆。**代价如实记录**：测试二进制现在链接了 Vulkan，`nm` 不再是 0；保住的是**运行期**
-性质（默认子集一条设备路径都不碰，仍是毫秒级）。
-设备级用例在无设备机器上**必须 FAIL 不 SKIP**——静默跳过 = 假绿。
+**`rgl_tests` 现在链全部四层**（`rlbase rlgfx rlscene rlframe` + Vulkan/VMA/SDL3/imgui）：决策结论 =
+「import rlvk」是编译期依赖，「需要一个 VkDevice」才是运行期依赖，两者不等价（`render_graph`/`state_kit` 都 import rlvk 却一个设备都不碰）；代价如实记录 = 测试二进制链了 Vulkan（`nm` 不再是 0），保住的是**运行期**性质（默认子集一条设备路径都不碰，仍是毫秒级）；设备级用例在无设备机器上**必须 FAIL 不 SKIP**——静默跳过 = 假绿。"为什么不只链 rlbase"细节 → `tests/CMakeLists.txt` 头注释。
 
 ### 引擎四库分层（rlstd/rllogger 之后新增四个库）
 
-单元测试要 import 引擎模块，而 `rgl` 是**可执行文件**（其 CXX_MODULES FILE_SET 只有它自己
-能 import），所以模块必须住进库。批 12.1 先做的是「rlcore = import 闭包不含 Vulkan」，
-12.2c 改成**按功能分四层**——因为那条闭包判据**把两件事混成了一条**：它禁的是
-「import Vulkan」这个**动作**，想守的是「能不能不建设备就测」这个**能力**，两者不等价。
-实测它造成大量连坐（`frame_draw_list` / `render_list` / `render_graph` / `scene_data` 各自
-只因借了一个资源句柄就拖进整个 Vulkan 栈，源码注释自称「架构债务续账」），而逐条算过
-「切断这条边后闭包还含不含 Vulkan 根」：**13 条里 12 条是徒劳的**（`vk_resources` 是枢纽、
-`VmaRaii` 在它后面）。
+`rgl` 是**可执行文件**（`main` `main:impl` `main:scene` 三单元含 `main()`，必须留可执行文件；其 CXX_MODULES FILE_SET 只有它自己能 import），故可测模块必须住进库。批 12.1 先用「import 闭包不含 Vulkan」判据，12.2c 改判为**按功能分四层**——那条闭包判据把「import Vulkan」这个**动作**与「能不能不建设备就测」这个**能力**混成一条（实测 13 条切边里 12 条徒劳，vk_resources 是枢纽）。
 
-| 库 | 内容 | 需设备 |
+| 库 | 内容（模块清单以 `rgl/CMakeLists.txt` 五份清单为唯一真相源） | 需设备 |
 |---|---|---|
-| `rlbase` | 值类型/数学/四份配置 loader/glTF/图像编解码/反射产物/profiler/RPC 传输/param_registry | **0/30** ← 整层无设备依赖 |
+| `rlbase` | 值类型/数学/四份配置 loader/glTF/图像编解码/反射产物/profiler/RPC 传输/param_registry | **0（整层无设备依赖）** |
 | `rlgfx` | `rlvk` `VmaRaii` vulkan_utils vulkan_window queue_family_manager features shader state_kit gpu_profiler vk_instance/vk_device/vk_swapchain/vk_resources render_target_cache sampler_library mip_gen asset_table | 全部 |
 | `rlscene` | scene_data render_graph\* render_graph_config environment env_prefilter mip_gen 的消费侧 texture_\* model_importer builtin_geometry render_list frame_draw_list | 全部 |
 | `rlframe` | frame_session/frame_capture/picking/cull_driver/gpu_cull/gpu_canary/present_timing/vk_indirect_commands/vk_renderer/imgui_layer/debug_rpc_exec/llm_debug/shader_registry/shader_hot_reload/ecs/param_pages | 全部 |
-| `rgl` | `main` `main:impl` `main:scene` —— 含 `main()`，必须留可执行文件 | — |
 
-依赖只向下，出现逆向 import 立刻链接失败。**这条现在机器可验**：
-`tools/checks/rules_layers.py` 以那五份清单为唯一真相源，扫全部 `.cppm`（**含分区实现
-单元**）的 import 边，报「低层 import 高层」为 error 级警告；清单名对不上导致规则
-可能静默失效时也报 error（失效不出声 = 「零警告」会被读成「分层干净」）。
-旧问法「这个模块 import 了 Vulkan 吗」已废——它只盯一个名字，既误伤 `render_graph`
-这类不碰设备的模块，又抓不到「低层 import 了同层外的其它模块」这种真正的越界。
+依赖只向下，出现逆向 import 立刻链接失败，**现在机器可验**：`tools/checks/rules_layers.py` 以那五份清单为唯一真相源，扫全部 `.cppm`（**含分区实现单元**）的 import 边，报「低层 import 高层」为 error 级警告；规则可能静默失效时也报 error（失效不出声 = 「零警告」会被读成「分层干净」）。旧问法「这个模块 import 了 Vulkan 吗」已废。
+**新增模块的流程**：加进职责归属正确的那份清单 → configure 期**归属完整性闸门**核对「磁盘上每个 .cppm 恰好登记一次」，漏登记即 `FATAL_ERROR` 点名（刻意不用「GLOB 后减掉已登记」——那会让新文件静默落进 `rgl`，而那里只该有 `main*`）。判据只有一个：**这段逻辑需不需要一个 VkDevice 才能跑**——不需要 → 属 `rlbase`，就该能在 `just test` 里测；需要 → 设备级测试或 `qa/`。
 
-**新增模块的流程**：加进职责归属正确的那份清单 → configure 期**归属完整性闸门**会核对
-「磁盘上每个 .cppm 恰好登记一次」，漏登记即 `FATAL_ERROR` 点名报错（刻意不用「GLOB 后减掉
-已登记」——那会让新文件静默落进 `rgl`，而那里只该有 `main*`）。判据只有一个：
-**这段逻辑需不需要一个 VkDevice 才能跑**。不需要 → 属 `rlbase`，就该能在 `just test` 里测；
-需要 → 设备级测试或 `qa/`。
+⚠️ 两条踩过的坑（include 面/编译宏归属判据 = 哪个库拥有用它的那个 TU，不是"谁在用它"；勿用 model.json 做依赖分析）→ `rgl/CMakeLists.txt` 头注释 L108-112 / L142-146 已一字不差承载。
 
-⚠️ **两条踩过的坑**（都在 `rgl/CMakeLists.txt` 有注释）：
-- **include 面 / 编译宏的归属判据 = 哪个库拥有用它的那个 TU**，不是"谁在用它"。imgui 头挂
-  `rlgfx` 而唯一 include 它的是 `rlframe` 的 `imgui_layer_impl`；`RGL_SLANGC_PATH` 留 `rgl`
-  而用它的 `shader_hot_reload*` 已搬进 `rlframe` → `#ifdef` 落进 `#else`（那里是 return，
-  编译期仍继续解析）→ 后面某行报 `undeclared identifier 'ec'`，**症状离真因三跳**。
-- **不要用 `modern_vulkan_tutorial/tools/explore/data/model.json` 做依赖分析**：实测它漏
-  326 条 import 边（**294 条来自 `module X:impl;` 分区实现单元，占 90%**）。用它验证出来的
-  「零逆向边」是假的——四库划分第一次尝试就被它坑了，漏掉 `param_pages:impl → ecs`，
-  编译期才炸。正确口径见 `rgl/CMakeLists.txt` 头注释（110 模块 / 790 条边，从源码正则直抽）。
+### 写测试的硬纪律（全量十条 + 12.3d 新规 → skill `rgl-test-discipline`）
 
-### 写测试的硬纪律（从 ~90 条历史 bug 换来的）
-
-- **阳性锚点**：每条断言先问"如果这段代码从未生效，这条断言会绿吗"。会绿 = 无效断言，必须重写。
-  对照：`5a-7` 的半径恒 0 恒等阵伪影同时骗过了稳定性与开关对拍两类判据。
-- **反向用例**：guard / 早退分支必须配一条"不该触发"的用例，否则无法区分"没触发"与"坏掉了"。
-- **确定性**：随机性只用 `tests/test_support.cppm` 的 `Lcg` + 写死种子，禁 `rand()`/`random_device`
-  （真随机的失败无法重跑，"上次跑过"≠"这次验的是同一组输入"）。
-- **测试代码的 bug 和被测代码的 bug 症状一模一样**：`test_support::frustumCorners` 首版把
-  `inverse(view*proj)` 写成 `inverse(proj*view)`——与 5a-5「NDC 角点乘正向矩阵」同症状，
-  且在 `view = identity` 下**恰好正确**（两种顺序此时相同），换真机位才炸。故：**辅助函数也要有
-  独立判据**，且判据的数值噪声必须**远小于**它要检测的信号（该函数世界空间版在 near/far=2.5e4 时
-  float32 反投影误差 0.28%，直接淹没信号 → 判据改到视空间做，无矩阵求逆故无病态）。
-- **验证靠变异测试**：改坏被测数据（翻绕序 / 越界索引 / 复原 5a-8 的 guard / 复原 5a-8b 的
-  support function 错）逐个确认测试变红——"测试通过"不等于"测试有效"。
-- **每条测试带「变异红线」声明**（批 12.3d 起）：文件注释里写清"哪个变异让我红"；
-  答不出 = 摆设，不配进门。范例 = `tests/test_frisvad_tangent.cppm`（双变异当场验红）。
-- **调试历史条目带「沉淀地址」**（批 12.3d 起）：收账时裁决三选一——`TEST: <路径>` /
-  `GUARD: <机制>` / `DOC: <理由>`（硬件观察/决策记录/负知识才准留纯文档）。
-  文档只记录不阻止，防线是测试和护栏；`调试历史.md` 的终态 = 不可机制化残渣。
-- 单测结果以 `just test` 为准（它先构建再跑）；**直接跑 `build/tests/rgl_tests` 可能拿到陈旧二进制**
-  （子 agent 委派时踩过：改完测试文件没重建就报"全通过"）。
-- **断言要照源码写，不照记忆写**（批 12.2d：一轮测试里写出过 10 处「我以为的行为」，全部
-  是错的）：`shadow` 段并没有把 `colorWriteMask` 清零（它压根不挂颜色附件）；`RgUsage` 不叫
-  `shaderRead` 而叫 `sampleRead`；`resolveRgFormat` 的 fallback **只服务 `"inherit"`**，未知名
-  返回 `eUndefined`；`decorateShadowPass` **无条件返回 true**（没有 mapSize 守卫）；ACES 的
-  「输出增幅小于输入倍数」根本不成立（filmic 曲线增益先升后降）。**先读实现再写期望**，
-  否则写出来的是「测试在教引擎怎么改」而不是「测试在验引擎做了什么」。
-- **判据工具自己要有自检**：闭式解探针的 PNG 读图器配了「5 种 filter 各编一行 → 读回 →
-  逐像素比对」的往返自检。不测这段，一旦编码器写出非 0 filter，读图器会静默读错像素，
-  而"闭式解不符"会被一路归因到着色链上——那是最贵的一种假线索。
-- **modules 下 `std::initializer_list` 不从 `import` 带进来**：要用 `for (x : {a, b})` 或
-  `extent = {w,h,1}`，本 TU 的 GMF 里**必须有一个真 STL 头**（如 `#include <initializer_list>`）。
-  只 include doctest 不够。症状很有欺骗性：花括号推不出类型后退化成 void，报
-  「ambiguous with void」或「initializer_list was not found」，离真因两跳。
-  同目录用 `<cmath>` 的测试文件是**巧合受益者**，不是范例。
+一句话版：每条断言要有**阳性锚点**（代码从未生效它会绿吗）· guard/早退分支配**反向用例** · 随机性只用 `Lcg` + 写死种子 ·
+**辅助函数也要独立判据**（判据噪声远小于信号）· **验证靠变异测试**（"测试通过"≠"测试有效"）· 每条测试带**「变异红线」声明**（12.3d）·
+调试历史条目带**「沉淀地址」** `TEST`/`GUARD`/`DOC` 三选一（12.3d）· 断言**照源码写**不照记忆、期望值出处**独立于实现**（数学契约/闭式解/实机实测，12.3d）·
+判据工具自己要有自检 · 单测结果以 `just test` 为准（先构建；直接跑二进制可能拿陈旧二进制）。
 
 ## 运行要点
 
-- **CWD 必须是 `build/rgl/`**（相对路径读 `configs/` 与 `generated_shaders/*.spv`）；RADV 下
-  Mesa ≥26.2.3 起 `VK_EXT_descriptor_heap` 默认 advertise，无需 `RADV_EXPERIMENTAL`
-- **运行模式全配置化**：`configs/runtime.lua`（headless/llm_debug/窗口）、`configs/diagnostics.lua`
-  （诊断开关）、`configs/render_graph.lua`（`variant` 选 forward/deferred/offscreen）；
-  仅驱动级 env 保留，由 `just run-*` 注入
-- **configs 的 build 端副本会被下次 `just build` 按内容比对静默覆盖复原**——临时调试改
-  `build/rgl/configs/`，别改源；被破坏的 build 副本不会自动恢复需手动拷
-- 冒烟命令、headless/llm_debug 截图流程、截图回归方法学 → skill `rgl-verify`
-- **RPC 调试通道（Phase 10b 批 11b.2，协议表 → `docs/技术概念.md §RPC 调试通道`）**：
-  门 `diagnostics.rpc` **默认关** + `rpc_port = 8788`（只绑 127.0.0.1，bind 失败降级关不崩；
-  **与 imgui 门独立 → headless 可用**）。端点速查 `GET /`（路由）、`GET /state`（相机 +
-  参数页发现，label 含中文）、`POST /camera`（`yawDegrees`/`pitchDegrees`/`fovDegrees` 一律**度**）、
-  `POST /param`（`{label,value,page?,material?}`）、`POST /shot`（返回 PNG 绝对路径；
-  llm 截图在跑 → 409）。帧边界套用 = **本帧即生效**，`/shot` 下帧结算（超时 10s/2s）。
-  批 11.0e 补两项：① `POST /camera` 传 `target` 时 fps 模式**反推 yaw/pitch**
-  （`cameraAimAt`，与 `readCameraPlacement` 同约定）而非拒绝，显式给角度则尊重显式值；
-  ② 启动在 bind 前用 httplib Client **探测**（1s 超时），连得上 = 已有监听者 → error + 不启动
-  （`SO_REUSEPORT` 会让多实例静默共存）。故 RPC 起跑前仍须 `pgrep -cx rgl` 确认无残留
-- **"哪个材质占这块屏幕"用加法闪色定位**：材质页改 **emissive**（加法）再截图差分，
-  **不要改 baseColor**（乘法：纹理本身就暗的表面 ×红后变化 < 阈值 → 暗面被整体漏判，
-  2026-09-29 因此走错三次，见 `docs/调试历史.md`）。比较亮度口径用**同材质内的比值**
-  （如阴影/受光），跨图跨时刻的全局百分位不可比
-- **凡"截 UI"验收必须外部截图**：`llm_debug` 截图发生在 `frameEndHook`（imgui 绘制）**之前**
-  → 天生不含 UI（既有事实，非回归）；imgui 面板视觉验收走窗口模式 + 外部截图工具
-  （本机 KDE Wayland：`spectacle -b -n -o <file> -d <ms>`）
+- **CWD 必须是 `build/rgl/`**（相对路径读 configs/ 与 spv）· 运行模式全配置化（runtime/diagnostics/render_graph.lua）· build 端 configs 副本被 `just build` 按内容比对静默覆盖复原（临时调试改副本别改源）；
+  运行环境细节、冒烟命令、headless/llm_debug 截图流程、截图回归方法学 → skill `rgl-verify`
+- **RPC 调试通道**（端点速查 / 线程时序 / cameraAimAt 反推与启动探测 → `docs/技术概念.md §RPC 调试通道`）：
+  门 `diagnostics.rpc` **默认关** + `rpc_port = 8788`（只绑 127.0.0.1；与 imgui 门独立 → headless 可用）；起跑前 `pgrep -cx rgl` 确认无残留
+- "哪个材质占这块屏幕"用**加法闪色**（改 emissive 不改 baseColor）· "截 UI"验收**必须外部截图** → skill `rgl-verify`
 
 ## 命名规范
 
@@ -198,24 +108,9 @@ CMake 无独立构建目录——必须从根目录构建（`cmake -B build -S .
 
 ## 代码规范
 
-### 模块优先
-新代码**必须** C++20 modules（`.cppm`），非 `.hpp/.cpp` 头文件对；入口 `import` 导入，不在模块外
-`#include` 项目内部头文件。新建/拆分的完整 checklist → skill `rgl-new-module`。
-入口也是模块（2026-09-14 起，纳入源码检查全规则）：`main.cppm`（`export module main;`
-接口：启动流 helper 声明 + 轻量 struct）+ `main_impl.cppm`（`module main:impl;`：轻函数 +
-`main()`，main 合法于分区实现单元）+ `main_scene.cppm`（`module main:scene;`：重函数定义）——
-CMake CXX_MODULES FILE_SET 不收纯实现单元，故"接口声明 + 分区实现"形状（同 ecs/ecs_impl）。
-
-### 优先使用 rlstd 代替 #include STL
-`.cppm` 一律 `import rlstd;` 取 STL 类型，GMF 不 `#include` STL（例外仅 `<ranges>/<filesystem>/<chrono>`）；
-第三方头之外的 Vulcan C++ 头一律 `import rlvk;`；GMF 要收敛（GMF 解析是模块编译耗时大头）。
-新加 STL 名先补 `rlstd.cppm`——**rlstd 必须导出"完整可用面"（含自由运算符/begin/end 等，BMI 不带自由
-运算符）**，细则与坑 → skill `rgl-new-module`。
-
-### 接口瘦身：大函数体放 partition implementation unit
-重模块（函数体 >100 行）拆 `xxx_impl.cppm`（`module xxx:impl;`，CMake 与接口同登记 FILE_SET）：
-**接口 = 声明 + 轻量类型 + 文档注释，实现 = 叶子单元**。三条坑（实现单元显式 `import xxx;`、
-实现侧不带 `export`、默认实参只写接口）→ skill `rgl-new-module`。
+- **模块优先**：新代码**必须** C++20 modules（`.cppm`），非 `.hpp/.cpp` 头文件对；入口 `import` 导入，不在模块外 `#include` 项目内部头文件。入口也是模块三件套：`main.cppm`（接口：启动流 helper 声明 + 轻量 struct）+ `main_impl.cppm`（`module main:impl;`，含 `main()`）+ `main_scene.cppm`（`module main:scene;` 重函数）。新建/拆分完整 checklist → skill `rgl-new-module`。
+- **优先使用 rlstd 代替 #include STL**：`.cppm` 一律 `import rlstd;` 取 STL 类型，GMF 不 `#include` STL（例外仅 `<ranges>/<filesystem>/<chrono>`），第三方头之外的 Vulcan C++ 头一律 `import rlvk;`（GMF 要收敛，解析是模块编译耗时大头）；新加 STL 名先补 `rlstd.cppm`——**rlstd 必须导出"完整可用面"（含自由运算符/begin/end 等，BMI 不带自由运算符）**。细则与坑 → skill `rgl-new-module`。
+- **接口瘦身：大函数体放 partition implementation unit**：重模块（函数体 >100 行）拆 `xxx_impl.cppm`（`module xxx:impl;`，CMake 与接口同登记 FILE_SET）：**接口 = 声明 + 轻量类型 + 文档注释，实现 = 叶子单元**。三条坑（实现单元显式 `import xxx;`、实现侧不带 `export`、默认实参只写接口）→ skill `rgl-new-module`。
 
 ### 函数式 Ranges
 优先 C++23 `std::ranges`：视图适配器、`std::ranges::for_each` 替换原始循环、链式组合避免中间容器。
@@ -249,7 +144,7 @@ CMake CXX_MODULES FILE_SET 不收纯实现单元，故"接口声明 + 分区实�
 | `frame_session` | frame_session.cppm | 帧生命周期会话：双 fence 同步 + 每帧 CB + beginFrame/submit/present/advance + swapchain/depth 重建 |
 | `frame_capture` | frame_capture.cppm | 帧内回读捕获器（llm_debug 截图载体）：request/record/collect 三步曲 |
 | `cull_driver` | cull_driver.cppm | GPU culling 帧编舞：`runFrame`（dispatch→preprocess→同帧等待→readCull→reconcile）+ `executeOpaqueSegment` 三路分发（IES DGC / 静态 DGC / 读回重放） |
-| `state_kit` | state_kit.cppm | pass 动态状态表：四段 RenderState（opaque/transparent/skybox/light）+ `stateFor(name)` |
+| `state_kit` | state_kit.cppm | pass 动态状态表：九段 RenderState（opaque/transparent/skybox/light/tonemap/ao/picking/highlight/shadow）+ `stateFor(name)` |
 | `render_graph` | render_graph.cppm | 纯 C++ 渲染意图图：`compileRenderGraph`（校验 + barrier 推导 + presentTransition）→ `CompiledRenderGraph`；三变体 + `kGBufferAttachments` 契约表 |
 | `render_graph_config` | render_graph_config.cppm | `configs/render_graph.lua` → `RgGraphDesc`（sol2 沙箱，缺文件回落默认） |
 | `shader_registry` | shader_registry.cppm | 管线表（零 entt）：addModelEntry/addCubeEntry/addSkyEntry/addLightEntry/bindPipelineToAsset，条目全按需建 |
@@ -258,15 +153,8 @@ CMake CXX_MODULES FILE_SET 不收纯实现单元，故"接口声明 + 分区实�
 | `vk_indirect_commands` | vk_indirect_commands.cppm | DGC RAII（能力门控）：`DgcCommands`（NVIDIA IES 路）/ `DgcStaticCommands`（RADV 静态路，默认关）；7 入口点全走 `vkGetDeviceProcAddr` |
 
 **main 启动流**（main_impl.cppm；完整版 → `docs/技术概念.md §main 启动流`；析构 = 构造逆序 RAII）：
-加载四类配置 + `renderGraphSelfCheck` → 建窗（headless 不建）→ 栈上 `entt::registry` →
-AppContext→DeviceContext→Swapchain→Resources→ShaderRegistry → `compileRenderGraph`（建窗后）→
-entities 循环：A0 内建几何→A1 模型顶点→A2 纹理→env 上传→C 模型注册+C2b 灯 entity →
-C3 候选表+`GpuCull` → addSkyEntry/deferred 装配 → DgcCommands/DgcStaticCommands 条件构造 →
-`Renderer` → `wireDebugRpc`（11b.2，门 `diagnostics.rpc` 默认关 = nullptr，声明序在
-registry/assets/backEnd 之后 = 析构序其先，停机走 RAII）→ `renderSystem`。
-关键时序契约：heap 用户槽按用途段分配（几何段仍由 `AssetTable::expectedGeometrySlot` 校验，
-纹理首槽 = 白 = 纹理段首槽）；env 上传 = A2 后、addModelEntry 前；候选表迭代序与
-render_list CPU 路径完全一致；deferred 装配与 DGC 构造**先于 Renderer**。
+加载四类配置 + `renderGraphSelfCheck` → 建窗（headless 不建）→ 栈上 `entt::registry` → AppContext→DeviceContext→Swapchain→Resources→ShaderRegistry → `compileRenderGraph`（建窗后）→ entities 循环（A0 内建几何→A1 模型顶点→A2 纹理→env 上传→C 模型注册 + C2b 灯 entity）→ C3 候选表 + `GpuCull` → addSkyEntry/deferred 装配 → DgcCommands/DgcStaticCommands 条件构造 → `Renderer` → `wireDebugRpc` → `renderSystem`。
+关键时序契约：heap 用户槽按用途段分配（几何段仍由 `AssetTable::expectedGeometrySlot` 校验，纹理首槽 = 白 = 纹理段首槽）；env 上传 = A2 后、addModelEntry 前；候选表迭代序与 render_list CPU 路径完全一致；deferred 装配与 DGC 构造**先于 Renderer**。
 
 ### 构造依赖图
 
@@ -288,9 +176,7 @@ SDLWindow → AppContext → DeviceContext → Swapchain → Resources → Rende
 
 ## 着色器编译
 
-Slang → SPV 构建时编译到 `build/rgl/generated_shaders/`。硬规则：**改 shader 契约/schema/模板后必须
-`just reflect` 并随改动提交生成产物**（`generated/*.cppm` 是已提交产物，构建开头 SHA1 护栏比对）；
-slangc 反射与 SPV 两处 scalar layout flag 必须一致；push constant 冻结在纯索引级别。
+Slang → SPV 构建时编译到 `build/rgl/generated_shaders/`。硬规则：**改 shader 契约/schema/模板后必须 `just reflect` 并随改动提交生成产物**（`generated/*.cppm` 是已提交产物，构建开头 SHA1 护栏比对）。
 完整流程、bindless 原则、关键契约文件位置表（DrawArgs/scene.slang 字节布局等）→ skill `rgl-shader-contract`。
 
 ## 隐式扩展依赖
@@ -308,30 +194,13 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
 
 ## 已知问题
 
-> 只列**未解决**项。已解决问题（根因/误诊复盘）见 `docs/archive/issue_history.md`。
+> 只列**未解决问题**与标「现行」的**契约**。已解决问题（根因/误诊复盘）见 `docs/archive/issue_history.md`。
 
-- **Phase 9 性能基线与判定（2026-09-27 收口）**：本机 forward 1280×720 = **CPU-bound**
-  （profiler 判定行 `frame=7.10ms cpu.record=7.03ms gpu.frame=2.98ms`）→ ④c"cull 读回延后
-  一帧"**否决**、⑤"帧率上限"**当前不需要**（CPU 限速 ≈141 fps 低于 165 Hz，两 present 模式
-  `drop` 双零）；给阴影（现 Phase 11）的硬基线 = **GPU 侧余量 ≈3.1 ms/帧，CPU 侧无余量**。未收口：
-  `drawFrame` 内 ~93% CPU 时间无子 zone（可选批 9.5 补插桩）、跨机 NVIDIA/Intel 复测。
-  全文 = `docs/phase9_plan.md` §10；present_timing 本机形态限制（只 advertise stage-local 域、
-  跨 stage 历元不一致）= `docs/调试历史.md` 2026-09-27 条目。
-- **窗口测量纪律（同日教训）**：帧率/present timing 类测量**必须单实例串行**——起后台跑后，
-  在下一次起跑前须确认前一进程已退出（`pgrep` + 日志终值行双检）。并行两实例会互相遮挡
-  合成，把 stage 可得性与帧率双双扭曲（本项目曾据此得出"85% 白渲"的错误结论并已勘误，
-  见 `docs/调试历史.md` "并行双实例污染测量"）。用户关窗 = 该次长跑作废，不得只取关窗前片段。
+- **Phase 9 性能基线与判定（2026-09-27 收口）**：本机 forward 1280×720 = **CPU-bound**（profiler 判定行 `frame=7.10ms cpu.record=7.03ms gpu.frame=2.98ms`）→ ④c"cull 读回延后一帧"**否决**、⑤"帧率上限"**当前不需要**（CPU 限速 ≈141 fps 低于 165 Hz，`drop` 双零）；给阴影（现 Phase 11）的硬基线 = **GPU 侧余量 ≈3.1 ms/帧，CPU 侧无余量**。未收口：`drawFrame` 内 ~93% CPU 时间无子 zone（提帧率下一步 = 补子 zone，纯插桩，可选批 9.5）、present_timing 跨机（NVIDIA / Intel anv）复测未做。全文 → `docs/phase9_plan.md` §10；present_timing 本机形态限制（只 advertise stage-local 域）→ `docs/调试历史.md` 2026-09-27 条目。
 - `computeCommandPool`/`transferCommandPool`/`computeQueue`/`transferQueue` 已创建但保留给未来使用
-- **Phase 9 profiler 未收口项**：`drawFrame` 内 ~93% CPU 时间无子 zone（提帧率的下一步 =
-  补子 zone，纯插桩，可选批 9.5）；present_timing 跨机（NVIDIA / Intel anv）复测未做
-- **VMA + zero-init 冲突**：VMA 对 BDA buffer 自动加内部 DEVICE_ADDRESS flags，与用户 ZERO_INITIALIZE
-  pNext 必撞——该扩展已回退，真实需求走原生 `vkAllocateMemory` 绕 VMA（`docs/vulkan_extensions_2025_调研.md` §十二/§13.1）
-- **Phase 5 光照/透明近似**：MASK alphaTest 未实现；世界法线 mat3 直乘（假定均匀缩放）；透明排序
-  per-primitive 距离²（非 OIT）且开背面剔除（非封闭几何会剔掉一面）。留 Phase 7+
-- **Phase 5.5 IBL/天空盒近似**：无 prefiltered/BRDF LUT；mip blit NEAREST（sRGB LINEAR 违 VUID-00239）；
-  单环境贴图；大三角 z=1 依赖 depth clear + LEQUAL；**light/env 两个 intensity 语义不对称**
-  （light CPU 预乘、env shader 端乘，亮度跨路线不可直接对比）。简化 IBL forward/deferred 逐式相同；
-  skybox 背景在 deferred light pass 内合成（非独立 pass）
+- **VMA + zero-init 冲突**：VMA 对 BDA buffer 自动加内部 DEVICE_ADDRESS flags，与用户 ZERO_INITIALIZE pNext 必撞——该扩展已回退，真实需求走原生 `vkAllocateMemory` 绕 VMA（`docs/vulkan_extensions_2025_调研.md` §十二/§13.1）
+- **Phase 5 光照/透明近似**：世界法线 mat3 直乘（假定均匀缩放）；透明排序 per-primitive 距离²（非 OIT）且开背面剔除（非封闭几何会剔掉一面）。留 Phase 7+
+- **Phase 5.5 IBL/天空盒近似**：BRDF LUT 仍无（prefiltered 已 Phase 8 ④b GGX 预滤波落地，`env_prefilter.cppm`）；mip blit NEAREST（sRGB LINEAR 违 VUID-00239）；单环境贴图；大三角 z=1 依赖 depth clear + LEQUAL；**light/env 两个 intensity 语义不对称**（light CPU 预乘、env shader 端乘，亮度跨路线不可直接对比）。简化 IBL forward/deferred 逐式相同；skybox 背景在 deferred light pass 内合成（非独立 pass）
 - **Phase 6 渲染图边界**：线性 pass 序（无拓扑排序/fusion/aliasing）；执行器 state/drawSource 只认
   opaque/skybox/transparent/light 四个名字；单 swapchain attachment；多线程录制不做
   （批 11.4 起另有 ao/tonemap 两个全屏 state，由 `kFullscreenPassStates` 登记）
@@ -344,25 +213,26 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
   （水膜）。实测 roughness 0.12 是**平台期**（无 SSR，只能反射 IBL 高 mip 的均匀天空辉光），
   且真实湿面应同时压暗漫反射而这里没做 → 湿区略"亮而奶"。补它需 per-material wetness 分量
   进 scene data（draw data schema 扩列 = 反射管线改动），列 Phase 12 候选
-- **灯契约（现行）**：`Light` 组件 + `index` = 列表位正序（画不画 = 实体有无；forward 读 index 0 = 主光，
-  延迟按 index 落槽）；`SceneLight`（前向头）/`GpuLight`（灯数组）布局均走 C API 反射生成，无手写双源
-- **GPU culling（Phase 7b）现状**：默认 = compute culling + **读回重放**（三驱动均跑 culling compute，
-  无开关）；DGC execute 仅 NVIDIA graphicsIndirect=true 可走，本机 RADV（9950X Raphael RDNA2）与 Intel
-  anv 均 false → 重放；RADV 静态 shader 模式 spike 功能通但性能亏 1.85× → `diagnostics.dgc_static` 门默认关。
-  CPU 剔除保留为兜底 + 每帧对账基准（reconcile 不一致告警不中断）；mvp 由 CPU 算进 scene data per-object
-  表（GPU float4x4 FMA 收缩序与 glm 无位级契约，保 forward diff0）。驱动级细节/历史
-  → `docs/archive/radv_static_dgc_spike.md` / `docs/nvidia_compatibility_report.md` / `docs/device_generated_commands_research.md` / 调试历史 2026-09-10
+- **灯契约（现行）**：`Light` 组件 + `index` = 列表位正序（画不画 = 实体有无；forward 读 index 0 = 主光，延迟按 index 落槽）；`SceneLight`（前向头）/`GpuLight`（灯数组）布局均走 C API 反射生成，无手写双源
+- **GPU culling（Phase 7b）现状（现行）**：默认 = compute culling + **读回重放**（三驱动均跑 culling compute，无开关）；DGC execute 仅 NVIDIA graphicsIndirect=true 可走，本机 RADV（9950X Raphael RDNA2）与 Intel anv 均 false → 重放；RADV 静态 shader 模式 spike 功能通但性能亏 1.85× → `diagnostics.dgc_static` 门默认关。
+  CPU 剔除保留为兜底 + 每帧对账基准（reconcile 不一致告警不中断）；mvp 由 CPU 算进 scene data per-object 表（GPU float4x4 FMA 收缩序与 glm 无位级契约，保 forward diff0）。
+  驱动级细节/历史 → `docs/archive/radv_static_dgc_spike.md` / `docs/nvidia_compatibility_report.md` / 调试历史 2026-09-10
 
 ## 其他文档
 
 > 每篇文档头部带状态（`现行`/`历史`/`调研`）。现状权威 = 本文件 + `next_roadmap.md`。
 
 - `docs/next_roadmap.md` — **路线图（权威）**：Phase 0–6 一段话结论 + Phase 7 进度表 + 剩余计划
-- `docs/技术概念.md` — 核心 Vulkan 模式、设计决策、§模块表 / §构建检查工具机制 / §核心运行时模块表（深版）/ §RPC 调试通道（Phase 10b）/ §main 启动流（完整版）
+- `docs/技术概念.md` — 核心 Vulkan 模式、设计决策、§构建（Windows 前置与 vcpkg）/ §模块表 / §构建检查工具机制 / §核心运行时模块表（深版）/ §RPC 调试通道（Phase 10b，端点速查）/ §main 启动流（完整版）
 - `docs/调试历史.md` — 问题修复时间线（只增不改，争议结论以此为准）
+- `docs/phase8_plan.md` — Phase 8 Bistro 打磨（HDR / HDR env / 纹理接缝 / 灯光）实施计划与验收
+- `docs/phase9_plan.md` — Phase 9 性能观测（Profiler）批次记录；§10 = 性能判定全文（CPU-bound 结论）、§11 = 跨机复测遗留
+- `docs/phase11_plan.md` — Phase 11 阴影 + 前置修复批（11.0 光照质感 / 11.2 阴影 / 11.4 SSAO）计划与执行记录
+- `docs/phase12_plan.md` — Phase 12 测试体系账本（批次史 + 缺口 D1–D9 + 12.3d 调试历史全量裁决执行记录）
 - `docs/DESCRIPTOR_HEAP_SPEC.md` — descriptor heap 排坑记录（活文档）
 - `docs/nvidia_compatibility_report.md` — 跨驱动兼容性（三平台记录；当前机 = 9950X Raphael RDNA2 核显，非 Strix Halo）
 - `docs/device_generated_commands_research.md` — GPU culling 双驱动实测（Phase 7b 依据）
+- `docs/device_fault_调研.md` — VK_(EXT|KHR)_device_fault 的 device lost 诊断调研（**未实施**）
 - `docs/archive/radv_static_dgc_spike.md` — RADV 静态 shader DGC spike（功能通、慢 1.85× → 默认不开；翻盘设计底稿）
 - `docs/vulkan_extensions_2025_调研.md` — 新扩展调研 + §十二/十三 实施记录（活文档）
 - `docs/phase7_devlog.md` — Phase 7 滚动开发日志（完结后归档）
@@ -370,7 +240,10 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
 - `docs/phase10b_plan.md` — **Phase 10b 增补批（现行，2026-09-28 全落地）**：11b.1 imgui 中文字体（系统字体探测链，MiSans Light 首选）+ 11b.2 loopback HTTP POST RPC（D12 翻案）；协议表/依赖方向/验收清单（已全绿，除 Windows 非门项）
 - `docs/shader_object_组合成本与优化预留.md` — 管线表 312 条目（bistro 基准）生成机制 + 成本账本 + 优化预留（L0 SPV 缓存 / L1 磁盘二进制缓存 / 路线级 push-index）；**优化未实施**，触发条件见其 §5.1
 - `docs/风格检查规则.md` — tools/checks 两轮扩展设计（partition/docs/现代 C++/expected 禁 throw）；工具 Python ≥3.14，规则拆 `rules_{metrics,text,doxygen}.py`
+- `docs/脚本长期规划.md` — 脚本长期线（独立于 Phase 编号；P0 spike 已通，`script_spike/`）
+- `docs/快捷键配置.md` — Zed 编辑器快捷键/任务/调试配置说明（与代码无关）
 - `docs/archive/静态审查升级路线.md` — LLVM 23 + `-Wlifetime-safety` 两阶段落地计划（vs Rust 借用检查差距结论；clangbind ABI 回归是阶段 1 最高风险）
+- `docs/archive/阴影失效排查.md` — Phase 11 批 11.2 阴影失效排查交接日志（**已解决归档**，权威结论 = 调试历史 2026-09-29 条目）
 - `docs/archive/` — 归档索引（phase 计划含 **phase6_record.md**、ecs 审查、issue_history 总账、present_timing/教程拆解等已结题调研）
 - 离线 Vulkan 文档（优先在线检索被 Cloudflare 拦截时）：本地克隆 `/home/robin/program/Vulkan-Docs`（v1.4.360）。**注意**：spec 比系统头/loader（v357）新，结构体字段以系统头为准，spec 只作语义依据
 - 最小复现/验证子项目（独立 CMake，结论已吸收进主工程与 archive）：`min_mesh_crash/`（NVIDIA mesh shader 必带 `NO_TASK_SHADER_BIT_EXT` 根因，见其 README）、`heap_texture_spike/`（heap 纹理三驱动 PASS + 步长取 max，见其 README + archive/heap_texture_research.md）

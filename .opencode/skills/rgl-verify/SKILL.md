@@ -41,10 +41,21 @@ llm_debug 截图 = drawFrame 帧内回读 swapchain 后缓冲（present 前拷�
 - 相机位置 = `camera.lua` 顶层 position/target/fovDegrees
 - 截图尺寸 = swapchain extent（headless 跟随 llm_shot.size）
 - 诊断直读 G-buffer 通道 = `diagnostics.lua` `dump_gbuf=0..3`
+- **凡"截 UI"验收必须外部截图**：`llm_debug` 截图发生在 `frameEndHook`（imgui 绘制）**之前**
+  → 天生不含 UI（既有事实，非回归）；imgui 面板视觉验收走窗口模式 + 外部截图工具
+  （本机 KDE Wayland：`spectacle -b -n -o <file> -d <ms>`）
 
 ## 截图回归方法学（2026-09-08）
 
 BIT-IDENTICAL 比对须**同会话双构建**（`git stash` 基线构建 vs 改动构建）；跨日/跨全量重建存在 ±1 LSB 叶缘噪声（增量 .o vs 全量 codegen 微差，见 `docs/调试历史.md` 2026-09-08 条目）。
+
+## 测量纪律（帧率 / present timing，2026-09-27 教训）
+
+帧率/present timing 类测量**必须单实例串行**——起后台跑后，在下一次起跑前须确认前一进程已退出（`pgrep` + 日志终值行双检）。并行两实例会互相遮挡合成，把 stage 可得性与帧率双双扭曲（本项目曾据此得出"85% 白渲"的错误结论并已勘误，见 `docs/调试历史.md` "并行双实例污染测量"）。用户关窗 = 该次长跑作废，不得只取关窗前片段。
+
+## 材质定位（加法闪色，2026-09-29 教训）
+
+"哪个材质占这块屏幕"用**加法闪色**定位：材质页改 **emissive**（加法）再截图差分，**不要改 baseColor**（乘法：纹理本身就暗的表面 ×红后变化 < 阈值 → 暗面被整体漏判，2026-09-29 因此走错三次，见 `docs/调试历史.md`）。比较亮度口径用**同材质内的比值**（如阴影/受光），跨图跨时刻的全局百分位不可比。
 
 ## imgqa —— 区域归因的图像判据工具箱（Phase 12 批 12.3，排查渲染问题的**默认起手**）
 
