@@ -267,6 +267,29 @@ render_graph 零改动版**。
   （light.frag 读 mask 位 → 该灯贡献衰减 + forward z-prepass + D1 对拍 +
   imgqa attribution 影响域）。
 
+**1e 消费接线（2026-10-02 凌晨落地，deferred 端到端）**：
+- **替换语义 v1**（重要实测决策）：`light.frag` 的 `izbShadowFactor(P,N,uv)`——flag=0
+  → 原样 `sampleShadow1Tap`（CSM 路径**逐位透传** = 门关红线，截图=基线 byte-identical
+  实测）；flag=1 → cascade-0 IZB mask 接管方向光阴影（范围外 = 1.0 无影）。
+  **相乘方案被实测否决**：同一太阳下 IZB 遮挡集 ⊆ CSM 遮挡集 → 相乘画面零差异
+  （门开=门关逐位一致）；补集判别（未遮像素清零）+177815 像素反证通路全通。
+- 消费区：scene data 尾 `kSceneDataIzbOffset @722016`（flag,W,H,r），
+  `writeSceneStaging` 按 `izbShadow` 门写；light.frag 字面量由 static_assert 钉死。
+- **binding 14 无条件绑定**（VVL 静态活性：声明即需有效 descriptor）= Resources
+  发号时给 mask 槽写 16B **零 fallback**（IzbShadow 构造后覆写同槽真位图）。
+  判别技巧：fallback 改全 1 探针 → 门开画面不变 = light 读的是真 buffer 非 fallback。
+- **跨 render pass barrier（首挂真凶）**：mask frag atomic 写 → light.frag 读之间
+  无隐式依赖，**VVL 不报错但 light 读恒 0**（现象 = 门关门开逐位一致、flag 硬置
+  判别却生效）。`endMaskPass` 内补 allGraphics/shaderWrite→shaderRead；
+  `beginMaskPass` 一并补 head/nodes 的 compute 写→frag 读 + fill 前 WAR（src 含读）。
+- pid 口径：mask bit = izb_create 的 py·W+px（fb 行）；light.frag 用 uv 反解
+  （light.mesh uv 契约 = fb 归一化 y 上→下）**免翻转**，且零 mesh 契约改动。
+- 实测（bistro deferred）：门开 = IZB-only 硬影**位置与 CSM 一致**（建筑暗面/墙面
+  大块/檐下；树冠与广场 IZB 更aggressive = 逐像素判定对细几何的特性，v1 已知）；
+  门关 = 基线逐位；默认 forward 门关闭零 izb 构造、VVL 全程零错误。
+- **1e 未完项**：forward z-prepass（需条件性图插 pass + draw 代价×2，列白天批次）；
+  izb_rig 三分带闭式对拍；imgqa attribution 影响域；bias/grid 调参。
+
 **1d 光空间保守光栅 pass + mask 写入**：✅ 已完成（上文）；「izb_rig 出硬影」= 1e 消费后。
 
 **1e 消费接入 + forward z-prepass**，D1 对拍（forward vs deferred 的 izb 阴影），
