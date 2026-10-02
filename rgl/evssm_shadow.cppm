@@ -40,7 +40,8 @@ export class EvssmShadow {
 	 * @param mapSize    阴影图集整幅边长（2048，= kShadowMapSize）
 	 * @param cols       级联分块列数（shadowAtlasColumns）
 	 * @param mipLevels  矩链级数（8 = 探针口径；含 mip0）
-	 * @param exponent   EVSM 指数 c（5.5，Filament PCSS 定值）
+	 * @param exponent   EVSM 指数 c（默认 = kEvssmExponent 唯一权威源；消费端经
+	 *        scene data 常量块同源，勿传其他值）
 	 * @param shadowMapSlot 阴影图集采样 heap 槽（ensureShadowMapSlot 结果，只读复用）
 	 * @param momentsSampleSlot 矩图 sampled 槽（Resources::ensureEvssmSampleSlot 发号，
 	 *        binding 15 已 bake 此槽号——本构造以真 view **覆写**同槽描述符，同 IzbShadow
@@ -71,7 +72,7 @@ export class EvssmShadow {
 	uint32_t mapSize = 0;
 	uint32_t cols = 0;
 	uint32_t mipLevels = 0;
-	float exponent = 5.5f;
+	float exponent = kEvssmExponent;  // vk_resources 唯一权威源（scene data 常量块同源下发）
 	uint32_t shadowMapSlot = 0;
 	uint32_t sampleSlot = 0;                 // 全 mip sampled（binding 15）
 	std::vector<uint32_t> mipSlots;          // 每 mip storage 槽（size = mipLevels）

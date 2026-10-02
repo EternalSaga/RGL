@@ -143,7 +143,8 @@ float pcssCoverage(float2 uv, float refZ, float texelWorld, float bias,
 //     固定半纹素 inset 在粗 mip 会漏进邻块垃圾数据）。
 // 成本：1 搜索 + 5 滤波 = 6 次矩采样（对照 PCF 4 次深度采样）；矩图集 linear 可过滤。
 
-static const float kEvssmExponent = 5.5;    // c：fp16 上限 exp(2c)≤65504 双约束定值（Filament）
+// c（EVSM 指数）不再是本文件字面量：经 scene data 常量块由 host kEvssmExponent
+// （vk_resources 唯一权威源）下发，readShadowEvssmExponent() 读——生产/消费/fallback 同源。
 static const float kEvssmLbr = 0.1;         // light-bleed reduction（Filament 默认同值）
 static const float kEvssmEpsilon = 0.002;   // 动态方差地板系数（evaluateEVSM EPSILON_MULTIPLIER）
 
@@ -166,7 +167,8 @@ float chebyshevUpperBound(float2 moments, float depth, float minVariance, float 
 float evaluateEvssm(float4 moments, float zReceiver)
 {
     const float depth = zReceiver * 2.0 - 1.0;
-    const float pw = exp(kEvssmExponent * depth);
+    const float c = readShadowEvssmExponent();
+    const float pw = exp(c * depth);
     const float p = chebyshevUpperBound(moments.xy, pw, kEvssmEpsilon * (pw * pw), kEvssmLbr);
     const float nw = -1.0 / pw;
     const float n = chebyshevUpperBound(moments.zw, nw, kEvssmEpsilon * (nw * nw), kEvssmLbr);
@@ -194,7 +196,8 @@ float evssmCoverage(float2 uv, float refZ, float texelWorld,
     // 平均遮挡深度解码（Filament 逐式）：z̄ = exp(c(2zB−1)) ← moments.z = −1/z̄。
     // 空块（far 最大矩）解码 zBlocker≈1 → clamp 到 refZ → 比值为 0 → 全亮自然成立。
     const float negMoment = max(-searchMoments.z, 1e-8);
-    const float zBlocker = clamp((log(negMoment) / -kEvssmExponent + 1.0) * 0.5, 0.0, refZ);
+    const float zBlocker = clamp((log(negMoment) / -readShadowEvssmExponent() + 1.0) * 0.5, 0.0,
+        refZ);
 
     // —— STEP 2：半影估计（Δz 世界米 × 半坡）+ soft clamp（纹素域，见头注）——
     const float dzWorld = max((refZ - zBlocker) / coeff, 0.0);

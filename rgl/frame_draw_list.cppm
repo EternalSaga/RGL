@@ -114,6 +114,11 @@ export struct SceneFrameData {
 	//   半影半径上限[图集纹素], 矩链最大 mip）。只有 -DEVSSM_SOFT 变体消费（scene.slang
 	//   readShadowEvssm @722048）；原版 SPV 不读本区 = 门关红线。
 	glm::vec4 shadowEvssm{0.00465f, 24.0f, 48.0f, 7.0f};
+	// · shadowEvssmConst —— 批 11.6 EVSSM 常量 vec4（x = EVSM 指数 c，yzw 留白）。只有
+	//   -DEVSSM_SOFT 变体消费（scene.slang readShadowEvssmExponent @722064）；原版 SPV
+	//   不读本区 = 门关红线。值 = vk_resources kEvssmExponent（唯一权威源，
+	//   生产/消费/fallback 三方同源——禁在此写死字面量）。
+	glm::vec4 shadowEvssmConst{kEvssmExponent, 0.0f, 0.0f, 0.0f};
 };
 
 /**

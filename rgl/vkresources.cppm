@@ -18,8 +18,9 @@ namespace RGL {
 /** EVSM 指数 c（批 11.6 EVSSM，**唯一权威源**）：矩编码 z = exp(c·(2d−1))。
  *  定值 5.5 由 RGBA16F 上限双约束 exp(2c) ≤ 65504 决定（Filament PCSS 同值，
  *  docs/evssm_plan.md §1）。消费方：EvssmShadow push constant（moments compute）、
- *  fallback far 最大矩（ensureEvssmSampleSlot 下方）；shadow.slang 消费端当前为
- *  字面量 5.5，正收编为经 scene data 常量块下发（双源红线，本批下一 commit 消除）。 */
+ *  fallback far 最大矩（ensureEvssmSampleSlot 下方）；shadow.slang 消费端经
+ *  scene data 常量块（kSceneDataEvssmConstOffset，readShadowEvssmExponent）取本值
+ *  ——shader 侧写字面量即双源红线。 */
 export inline constexpr float kEvssmExponent = 5.5f;
 
 /** descriptor heap 用户槽用途段（段间隔离，段内单调分配）。 */

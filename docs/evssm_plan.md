@@ -136,7 +136,9 @@ sampler2DArray + RT 缓存改造）推迟为后续优化：
 - 消费 = shadow.slang 新变体 `-DEVSSM_SOFT`（O(1) mip 搜索 + soft clamp +
   quincunx 5 抽头，Filament 公式直抄）；变体组合 = forward×3 + light×{base,izb}×EVSSM
   （rgl_shader_defined2 已备）；
-- scene data 新 vec4 区 @722048（半坡 tan(θ/2) / 搜索半径 / 半影上限）；配置
+- scene data 新 EVSSM 块 32B @722048：参数 vec4（半坡 tan(θ/2) / 搜索半径 / 半影上限 /
+  最大 mip）+ 常量 vec4 @722064（x = EVSM 指数 c，host kEvssmExponent 唯一权威源下发，
+  生产/消费/fallback 三方同源）；配置
   门 `shadow_evssm`（与冻结的 shadow_pcss 分立），数值键复用 pcss_*；
 - 代价 = 比 Filament 融合式多一遍 D32 读 + 矩写（探针估 ~+0.1 ms），换掉的
   是 RT 缓存/graph/executor 三大件零改动 + 门关红线构造性保证不新增暴露面。

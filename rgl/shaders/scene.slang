@@ -208,6 +208,13 @@ float4 readShadowEvssm()
     return asfloat(sceneData.Load4(722048u));
 }
 
+// 批 11.6 EVSSM 常量 vec4（kSceneDataEvssmConstOffset；x = EVSM 指数 c，yzw 留白）。
+// c 由 host kEvssmExponent 下发——生产/消费/fallback 三方同源，此处禁写字面量。
+float readShadowEvssmExponent()
+{
+    return asfloat(sceneData.Load(722064u));
+}
+
 float3 irradianceSH(float3 n)
 {
     uint base = 721552u;  // kSceneDataIrradianceOffset（vkresources.cppm 字面量同步）

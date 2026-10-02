@@ -2,7 +2,8 @@
 // shadow pass 零改动；docs/evssm_plan.md §4.1）。正交光深度线性 → 矩 = 深度纯函数。
 //
 // 矩组 = Filament computeDepthMomentsVSM 同款：z = exp(c·(2d−1))，
-// moments = (z, z², −1/z, 1/z²)。c=5.5（fp16 上限 exp(2c)≤65504，Filament PCSS 定值）
+// moments = (z, z², −1/z, 1/z²)。c 经 push.exponent 由 host kEvssmExponent 下发
+// （唯一权威源；定值 5.5 由 fp16 上限 exp(2c)≤65504 双约束决定，Filament PCSS 同值）
 // → z∈[0.0041, 244.7]、z²≤59874 ≤ fp16 max，逐分量天然不溢出。
 // 空 texel（深度=1.0 far clear）→ 恰为 far 面最大矩——Filament「clear=最大矩」
 // 语义由派生天然成立，无需特判 clear 路径。
