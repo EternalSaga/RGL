@@ -25,7 +25,7 @@
 -- Phase 8 批次 ①：HDR 累加链——opaque/skybox/transparent 渲入 scene_hdr
 --（rgba16_sfloat offscreen RT），tonemap pass（drawLight）ACES 上屏 swapchain。
 return {
-    variant = "forward",   -- "forward" | "deferred" | "offscreen"
+    variant = "deferred",   -- "forward" | "deferred" | "offscreen"
     attachments = {
         { name = "swapchain", kind = "swapchain" },
         { name = "depth", kind = "depth" },
