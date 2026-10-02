@@ -47,8 +47,11 @@ void main(uint3 tid : SV_DispatchThreadID)
     if (d >= push.emptyDepth || d <= 0.0)  // far miss / 无效深度 → 无节点
         return;
 
+    // ndc.y 必须走引擎口径（负 viewport：fb 行 0 = 顶 = ndc.y +1，ao.frag
+    // worldFromDepth 同款 `1 - uv*2`）——写成 ndc 直式 (py/H*2−1) 会把世界重建
+    // 上下镜像，节点 uv 落进错误世界点 = mask 几何整体错位（2026-10-02 实测）。
     const float2 ndc = float2((px + 0.5f) / push.pixelW * 2.0 - 1.0,
-        (py + 0.5f) / push.pixelH * 2.0 - 1.0);
+        1.0 - (py + 0.5f) / push.pixelH * 2.0);
     const float4 w = push.invVPM[0] * ndc.x + push.invVPM[1] * ndc.y
         + push.invVPM[2] * d + push.invVPM[3];
     // 透视除法（**必须**：invVPM·ndc 得齐次世界坐标，不除 w = 沿视射线缩放的假点，
