@@ -10,8 +10,10 @@
 // （偏置 2e-4 ndc ≈ 毫米级；正确性判据 = 1e 的 imgqa 对拍，spike 无同面用例）。
 //
 // y 向口径：fb 行 = 上→下（mesh 出 D3D 口径 y + 引擎负 viewport 补偿后的标准
-// Vulkan fb），而 izb_create 的 uv.y 走 ndc 直式（下→上）→ **cell.y = G-1-fb.y**
-// （唯一一次翻转在这钉死；对拍若整图上下镜像 = 这里翻错）。
+// Vulkan fb），而光空间 uv = ndc*0.5+0.5 走 y-up（glm 惯例）→ fb 行 0（顶）↔
+// uv.y=1 → **cell.y = G-1-fb.y**（此翻转只关乎 mask 自身光栅与 cell 索引的映射；
+// create 侧屏幕 ndc 口径见 izb_create.comp.slang——2026-10-02 曾因 create 用
+// ndc 直式致世界重建上下镜像 = 几何整体错位，本翻转与之无关、保留）。
 //
 // 平摊属性：uvA/uvB/uvC = 本三角三顶点 (uv.xy, lightDepth.z)——三顶点写同一份
 // （mesh 顶点逐三角独立），provoking 取值即整三角。
