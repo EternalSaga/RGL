@@ -40,13 +40,16 @@ import shadow;   // Phase 11 批 11.2：级联阴影采样（binding 12/13，与
 #ifdef IZB_CONSUME
 [[vk::binding(14, 0)]] ByteAddressBuffer izbMask;
 
-// IZB 消费（批 11.3-1e）：方向光硬阴影因子（**替换语义** v1）。消费区 @722016
+// IZB 消费（批 11.3-1e，v1.5 起含覆盖外回落）：方向光硬阴影因子。消费区 @722016
 // （scene_data.cppm kSceneDataIzbOffset static_assert 钉死）= (flag, W, H, r)。
 // flag=0 → 原样 sampleShadow1Tap（CSM 路径**逐位透传** = 门关红线）；flag=1 →
 // cascade-0 IZB mask 接管方向光阴影（bit = 帧缓冲像素，与 izb_create 的 py·W+px
-// 同向免翻转；范围外无节点 = 1.0 = 无影，v1 近场语义）。替换而非相乘的实测依据：
-// 同一太阳下 IZB 遮挡集 ⊆ CSM 遮挡集，相乘画面零差异（补集判别 +177815 像素反证
-// 通路全通）。uv = light.mesh fb 归一化 y 上→下。
+// 同向免翻转）。**patch 语义（v1.5，2026-10-02 用户拍板①）**：P 的光空间 uv 出
+// cascade-0 盒 → 回落 sampleShadow1Tap（CSM 软影兜底）而非返回 1.0——c0 盒贴相机
+// （CSM 本职），旧「界外无影」让影区边界随相机扫动 = 用户所见"影子游动"（swim 判据
+// 结案，调试历史 2026-10-02 补账）；回落把边界变成硬→软过渡，影子永不整体消失。
+// 替换而非相乘的实测依据：同一太阳下 IZB 遮挡集 ⊆ CSM 遮挡集，相乘画面零差异
+// （补集判别 +177815 像素反证通路全通）。uv = light.mesh fb 归一化 y 上→下。
 float izbShadowFactor(float3 P, float3 N, float2 uv)
 {
     // ⚠️ 两处编译期陷阱（2026-10-02「门开无影」根因，SPV 反汇编实录）：
@@ -57,6 +60,10 @@ float izbShadowFactor(float3 P, float3 N, float2 uv)
     //    同口径）——传字索引 pid>>5 会被再 ÷4，读位置偏 4 倍。
     const float4 izb = asfloat(sceneData.Load4(722016u));
     if (izb.x < 0.5)
+        return sampleShadow1Tap(P, N);
+    // 覆盖测试与 izb_create 同源：cascade-0 光空间（正交 w=1）；P = G-buffer 世界位
+    const float2 luv = clipPos(readShadowViewProj(0u), P).xy * 0.5 + 0.5;
+    if (luv.x < 0.0 || luv.x >= 1.0 || luv.y < 0.0 || luv.y >= 1.0)
         return sampleShadow1Tap(P, N);
     const uint pid = uint(uv.y * izb.z) * uint(izb.y) + uint(uv.x * izb.y);
     return (izbMask.Load((pid >> 5u) * 4u) & (1u << (pid & 31u))) != 0u ? 0.0 : 1.0;
