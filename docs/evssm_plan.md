@@ -23,17 +23,23 @@ backlog，经典 PCSS（批 11.5，`af5811a` 冻结）= 零内存 fallback。
      `ShadowSample_EVSSM`（O(1) mip blocker 搜索 + 半影估计 + LOD quincunx）、
      `ShadowMapManager.cpp`（动态 maxSearchRadius / 参数打包）。
 
-## 1. EVSSM 原理三步（对照 surface_shadowing.fs 实测读）
+## 1. EVSSM 原理四步（对照 Filament 实测读，11.6a 已核完）
 
-1. **O(1) blocker 搜索**：搜索半径（世界）= 光源半径 × 接收面深度 → 换算 texel →
-   `searchLod = log2(radius)` → **一次** `textureLod` 读 mip 矩 → 指数解码
-   `zBlocker = (log(negMoment)/−c + 1)·0.5`。泊松搜索漏检细杆的问题不存在
-   （mip 是硬件过滤的 min/矩）。
-2. **半影估计**：`pureGeometricRatio = (zRecv − zBlocker) × 投影参数` ×
-   penumbraRatioScale（美术乘子）；**soft clamp**：超过 maxPenumbraRatio 部分
-   `max + 1 − exp(−(r−max))` 指数收束（不硬切，免等高模糊带）。
-3. **滤波**：`idealLod = log2(penumbraWidthTexels)`（硬件 mip 当高斯核）+
-   5 抽头 quincunx（或 1 抽头 −0.86 补偿 / 9 抽头 + 旋转噪声）——宽核免费。
+1. **矩写入**（`surface_depth_main.fs: computeDepthMomentsVSM`）：
+   `z = exp(c·depth)` → 矩 = `(z, z², −1/z, 1/z²)` 写 RGBA16F；
+   **解析方差** `+c²·z²·¼(dFdx²+dFdy²)`（用屏幕导数把纹素内深度斜率折进二阶矩，
+   VSM 抗 acne 的正解，替代 bias）；`min(·, MAX_MOMENT)` 防溢出；centroid 防 MSAA。
+2. **指数 c**（`computeDynamicVsmExponent`）：PCSS/EVSSM 路 = **固定 5.5**——
+   fp16 上限 `exp(2c) ≤ 65504` 与安全下限双约束直给，无动态项。
+3. **mip 生成**（`vsmMipmap.mat`）：**自定义 2×2 box filter texelFetch**——GPU
+   硬件 bilinear 精度不够（矩对插值精度极敏感），矩的平均 = 合法 EVSM 粗 mip；
+   clear 值 = **far 面深度的最大矩**（不是 0！Chebyshev 快路 `depth ≤ m1 → 全亮` 依赖）。
+4. **O(1) blocker 搜索 + 半影 + 滤波**（`surface_shadowing.fs`）：搜索半径（世界）
+   = 光源半径 × 深度 → `searchLod = log2(texels)` → **一次** textureLod 读矩 →
+   指数解码 `zBlocker`；`pureGeometricRatio = (zRecv−zBlocker)×投影参数×ratioScale`
+   过 **soft clamp**（`max+1−exp(−(r−max))`）；滤波 = `idealLod=log2(半影宽)`
+   硬件 mip 当高斯核 + quincunx 5 抽头（1 抽头 −0.86 补偿 / 9 抽头 +旋转噪声）。
+   Chebyshev 上界 + LBR + 动态方差地板（`ε·(w²)` 链式导出）在 `evaluateEVSM`。
 
 ## 2. 分轴质量对比（裁决依据，勿再重推）
 
@@ -48,29 +54,40 @@ backlog，经典 PCSS（批 11.5，`af5811a` 冻结）= 零内存 fallback。
 结论：EVSSM ≈ HFTS 的**只有软影三轴**；细杆轴 EVSSM 反而弱于两者 →
 **IZB（近场细影）+ EVSSM（远场软影）**组合成立（= HFTS 混合本意的等价实现）。
 
-## 3. 三只拦路虎（我们侧特有，Filament 作业抄不到，= spike 内容）
+## 3. 三只拦路虎（我们侧特有，Filament 作业抄不到；11.6a/b 已核实两处）
 
-1. **图集布局硬伤**：我们 = 2048² 单 2D 纹理 2×2 分块（`shadowAtlasColumns`）；
-   mip 降采样会**跨级联块混合 = 级联互染**。Filament 用 sampler2DArray
-   （每级联一层）。改 texture array（4×1024² 层）牵动：RT 缓存
-   （`render_target_cache`）的 eDepth 建法、图装饰 shadow pass 的 attachment、
-   shadow.slang 的图集 uv 数学（`readShadowAtlas` 契约）、IZB priming 是否读
-   阴影深度（待核：IZB 深度源 = G-buffer 场景深度，理论不受影响，须验证）。
-2. **深度 pass 改矩写入**：现 shadow.frag 空壳 depth-only；EVSM 要 frag 写
-   指数矩到 RGBA16F 色 attachment（深度 attachment 保留做 depth test/early-Z）。
-   图装饰 + RT 格式 + 清值（矩清 0/清 e^?，对照 Filament clear 语义）。
-3. **RADV iGPU 带宽账**：2048² RGBA16F = 32MB（现 D32 16MB）+ mip 链 +33% +
-   **每帧 8 级矩生成**。本机 = 9950X Raphael 核显（共享内存带宽）。
-   Phase 9 的 CPU-bound 结论帮不上——这是 GPU 带宽/写压力，spike 必须实测。
+1. **图集布局硬伤 → 改动面已列**：现 = 2048² 单 2D 纹理 2×2 分块
+   （`render_graph.cppm` kShadowMapName/Format/Size 契约组，格式已是字符串常量
+   `"d32_sfloat"`）；mip 降采样会**跨级联块混合 = 级联互染**，必须转
+   sampler2DArray（4×1024² 层 + 8 mip）。有利因素：**阴影段本来就是 4 个独立
+   pass**（每级一个，tile viewport）→ array 化 = 每 pass 改 attach 第 c 层，
+   拓扑不动。改动点：① RT 缓存 depthOffscreen 建法 → colorOffscreen
+   RGBA16F+depth 附件对 + array + mipLevels=8；② 图装饰 shadow pass RT 装配
+   （color+depth 双附件）；③ 执行器（vkrenderer）RT 装配；④ descriptor heap
+   对 sampled 2D array image 的支持（**未核实，剩余最大项**）；⑤ shadow.slang
+   `Texture2D→Texture2DArray` + `readShadowAtlas` 契约退役（EVSSM 变体内）。
+   **IZB 已核不吃亏**：izb_create 深度源 = 场景深度图（D32，与 SSAO 共用
+   depthSampleSlot），非 shadow map——格式切换零影响。**heap 支持已核**：
+   descriptor heap 走 imageView 透传（env cubemap 走同条路进 heap 有先例），
+   硬编码点 = RT 缓存 view 创建（`render_target_cache.cppm:161/178` e2D）+
+   mip_gen e2D——改动为常规加 kind，非 heap 工程项目。
+2. **深度 pass 改矩写入**：现 shadow.frag 空壳 depth-only → EVSSM frag 写
+   `computeDepthMomentsVSM` 到 RGBA16F color 附件（depth 附件保留做 depth test/
+   early-Z）；**clear 语义 = far 面最大矩**（非 0，Chebyshev 快路依赖）——RT 缓存
+   clear 路径要支持 float 色值；mip 生成 = 每级一个 box-filter pass 进图
+   （线性图可容纳，32 pass 上界，light pass 前）。
+3. **RADV iGPU 带宽账（未测 = 11.6c）**：2048² RGBA16F = 32MB（现 D32 16MB）+
+   mip 链 +33% + 每帧 8 级矩生成。本机 = Raphael 核显共享带宽，Phase 9
+   CPU-bound 结论帮不上。探针 = 临时 pass 分配同规格 array + 每帧全链降采样，
+   `frame_stats` 量帧增量；判据数值探针后拍板。
 
 ## 4. 批 11.6 spike 批次拆分（先小后大，全部门后）
 
-- [ ] 11.6a 作业细读补全：vsmMipmap.mat 降采样核 + surface_depth_main 矩写入
-      公式 + ShadowMapManager 的 clear/LBR/方差参数 → 本文档 §1 展开成公式表。
-- [ ] 11.6b 图集 array 化改动面清单（一页纸，含 IZB priming 深度源核实）。
-- [ ] 11.6c **带宽探针**：临时 pass 分配 4×1024² RGBA16F array + 每帧 8 级
-      矩降采样，`frame_stats` 量帧增量（真机 RADV）。判据：增量 ≤ 阴影画质
-      预算（对齐 §hfts_izb_plan 4.4 口径精神，软门数值 spike 后拍板）。
+- [x] 11.6a 作业细读补全（本文档 §1 公式表已入：矩写入/解析方差/c=5.5/
+      box-filter mip/clear=最大矩/Chebyshev+LBR）。
+- [x] 11.6b 图集 array 化改动面清单（本文档 §3.1 五点；IZB 深度源已核 =
+      场景深度不受影响；**剩余未核 = descriptor heap 对 sampled 2D array 的支持**）。
+- [ ] 11.6c **带宽探针**（§3.3；= 下一刀）。
 - [ ] 11.6d 观感三版对比（同机位 llm_debug 截图）：经典 PCSS（解冻 11.5 门）/
       EVSSM 最小可用版 / 现行 PCF——多模态读图 + 半影宽度闭式测量
       （Δz×0.0093 锚，测量基建 = 11.5 计划中的 imgqa 判据，届时补建）。
