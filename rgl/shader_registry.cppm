@@ -213,11 +213,16 @@ export class ShaderRegistry {
 	 *        因此不声明 shadow.slang 的风格也不会误用）
 	 * @param shadowSamplerSlot 阴影专用 NEAREST sampler 槽（**binding 13**；不能用共享的 LINEAR，
 	 *        深度格式无 filterable 能力）
+	 * @param evssmMapSlot EVSSM 矩图 SAMPLED_IMAGE 槽（**binding 15**，批 11.6d-2；无条件
+	 *        bake（同 binding 12 纪律），门关 = -DEVSSM_SOFT 变体不存在、binding 不声明 =
+	 *        空转无害；binding 16 = 矩 sampler **复用本条目共享 LINEAR sampler**（矩图集
+	 *        linear 过滤 = mip 高斯核；uv 恒 clamp 在块内 → wrap 模式无关））
 	 * @return 条目下标（新组合 = entries 追加）
 	 */
 	[[nodiscard]] uint32_t addModelEntry(const std::string& specName, uint32_t vertexSlot,
 		uint32_t textureSlot, uint32_t normalSlot, uint32_t ormSlot, uint32_t emissiveSlot,
-		uint32_t samplerSlot, uint32_t shadowMapSlot, uint32_t shadowSamplerSlot);
+		uint32_t samplerSlot, uint32_t shadowMapSlot, uint32_t shadowSamplerSlot,
+		uint32_t evssmMapSlot);
 
 	/**
 	 * 天空盒管线条目（Phase 5.5 批次 4）：单条目（env 槽全局单例，无组合去重需求）。
@@ -244,11 +249,14 @@ export class ShaderRegistry {
 	 * @param samplerSlot 共享 sampler 的 sampler heap 槽（binding 8，sampler 映射）
 	 * @param shadowMapSlot 阴影图 SAMPLED_IMAGE 槽（**binding 12**，与 forward 模型条目同号）
 	 * @param shadowSamplerSlot 阴影专用 NEAREST sampler 槽（**binding 13**）
+	 * @param evssmMapSlot EVSSM 矩图 SAMPLED_IMAGE 槽（**binding 15**，批 11.6d-2；
+	 *        无条件 bake + binding 16 复用本条目 LINEAR sampler，细则见 addModelEntry）
 	 * @return 条目下标；规格缺失抛 runtime_error
 	 */
 	[[nodiscard]] uint32_t addLightEntry(uint32_t albedoSlot, uint32_t normalSlot,
 		uint32_t positionSlot, uint32_t metalRoughSlot, uint32_t emissiveSlot,
-		uint32_t samplerSlot, uint32_t shadowMapSlot, uint32_t shadowSamplerSlot);
+		uint32_t samplerSlot, uint32_t shadowMapSlot, uint32_t shadowSamplerSlot,
+		uint32_t evssmMapSlot);
 
 	/**
 	 * Phase 8 批次 ①：tonemap pass 管线条目（单条目，仿 addLightEntry）。spec = "tonemap"
@@ -358,24 +366,26 @@ export class ShaderRegistry {
 	static RGL::ShaderEffect loadShaderEffect(const RGL::PipelineSpec& spec);
 
 	/**
-	 * 按名查找 pipeline 规格 + PCSS 变体替换（批 11.5，唯一入口 = 本函数，findSpecBase 为回落体）：
-	 * 门 diagnostics().shadowPcss = 开且 fragSpv 属阴影采样 frag（前缀 ∈ model_pbr_ibl /
-	 * model_vegetation / model_light / light.frag*——最后一个也覆盖 IZB 变体，拼接结果
-	 * light.frag_IZB_CONSUME_PCSS_SOFT.spv 与 rgl_shader_defined2 命名同源）时换 _PCSS_SOFT
-	 * 变体路径。门关原样透传指针 = 原版 SPV（红线构造性保证，同 1e IZB 门 = 选 spec 变体）。
+	 * 按名查找 pipeline 规格 + 软阴影变体替换（批 11.5/11.6，唯一入口 = 本函数，
+	 * findSpecBase 为回落体）：门 shadowEvssm 优先、其次 shadowPcss，且 fragSpv 属阴影
+	 * 采样 frag（前缀 ∈ model_pbr_ibl / model_vegetation / model_light / light.frag*——
+	 * 最后一个也覆盖 IZB 变体，拼接结果 light.frag_IZB_CONSUME_EVSSM_SOFT.spv 与
+	 * rgl_shader_defined2 命名同源）时换对应 _EVSSM_SOFT / _PCSS_SOFT 变体路径。
+	 * 两门全关原样透传指针 = 原版 SPV（红线构造性保证，同 1e IZB 门 = 选 spec 变体）。
 	 * @param name 规格名
 	 * @return 规格 const 指针（styles 表命中或默认回落，可能已换变体）；未知名 = nullptr
 	 */
 	const RGL::PipelineSpec* findSpec(const char* name) const {
-		return pcssVariantSpec(findSpecBase(name));
+		return softShadowVariantSpec(findSpecBase(name));
 	}
 
 	/**
-	 * PCSS 变体 spec 查表/建表（批 11.5；实现在 impl unit——需要 diagnostics()）。
+	 * 软阴影变体 spec 查表/建表（批 11.5/11.6；实现在 impl unit——需要 diagnostics()）。
 	 * @param base findSpecBase 结果（可空）
-	 * @return 门关/非阴影消费 frag → base；否则 fragSpv 插 _PCSS_SOFT 的缓存 spec
+	 * @return 两门全关/非阴影消费 frag → base；否则 fragSpv 插 _EVSSM_SOFT（门优先）
+	 *         或 _PCSS_SOFT 的缓存 spec
 	 */
-	const RGL::PipelineSpec* pcssVariantSpec(const RGL::PipelineSpec* base) const;
+	const RGL::PipelineSpec* softShadowVariantSpec(const RGL::PipelineSpec* base) const;
 
 	/** 回落查表体（批 11.5 起为 findSpec 的内部底座：scene.lua styles 命中或默认回落词表
 	 *  cube / model / model_pbr / model_phong / model_pbr_ibl / skybox / deferred_geometry×3 /

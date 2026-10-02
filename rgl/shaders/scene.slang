@@ -200,6 +200,14 @@ float4 readShadowPcss()
     return asfloat(sceneData.Load4(722032u));
 }
 
+// 批 11.6 EVSSM 参数区（kSceneDataEvssmOffset 字面量同步）：
+// (半坡 tan(θ/2), 搜索半径[图集纹素 mip0 域], 半影半径上限[图集纹素], 矩链最大 mip)。
+// 只有 -DEVSSM_SOFT 变体引用（shadow.slang），原版 SPV 不读本区（门关红线构造性保证）。
+float4 readShadowEvssm()
+{
+    return asfloat(sceneData.Load4(722048u));
+}
+
 float3 irradianceSH(float3 n)
 {
     uint base = 721552u;  // kSceneDataIrradianceOffset（vkresources.cppm 字面量同步）

@@ -34,6 +34,7 @@ import material_types_generated;  // DrawArgs
 import lights_types_generated;
 import features;
 import render_graph;
+import evssm_shadow;  // 批 11.6d-2：EvssmShadow（门控构造，make_unique 需完整类型）
 
 namespace RGL {
 
@@ -259,6 +260,57 @@ void Renderer::izbLightPassPre(vk::raii::CommandBuffer& cmd, const RgPassPlan& p
 		diagnostics().izbDumpFrame != 0 && izbFrameNo >= diagnostics().izbDumpFrame
 			&& (izbFrameNo - diagnostics().izbDumpFrame) % 30 == 0);
 	replayIzbMaskSegment(cmd, list);
+}
+
+// 批 11.6d-2 EVSSM 帧首段（声明注释见 vkrenderer.cppm；门关 = 一次布尔判断早退）。
+// 两条 warn-once 走文件级 helper（assembleBackEnd 复杂度红线先例：分支不入函数体）。
+namespace {
+/** warn-once 日志（批 11.6d-2，EvssmShadow 两条依赖告警共用；flag = 调用方 static）。
+ *  @param flag 已告警标志（首次调用后置位）
+ *  @param msg 告警文本 */
+void evssmWarnOnce(bool& flag, const char* msg) {
+	if (flag)
+		return;
+	flag = true;
+	if (auto* logger = RLLogger::getInstance())
+		logger->warn("{}", msg);
+}
+}  // namespace
+
+void Renderer::evssmPreFrame() {
+	if (evssmShadow || !diagnostics().shadowEvssm || !diagnostics().shadowPass)
+		return;
+	const bool deferred = std::ranges::any_of(renderGraph.passes,
+		[](const RgPassPlan& p) { return p.kind == RgPassKind::drawLight && p.state == "light"; });
+	if (!deferred) {
+		static bool warnedNonDeferred = false;
+		evssmWarnOnce(warnedNonDeferred,
+			"shadow_evssm=true 但非 deferred 变体：EVSSM v1 仅接 deferred light pass"
+			"（forward 消费点在 geometry pass，sandwich 未接），EvssmShadow 不构造");
+		return;
+	}
+	// 阴影图槽 = RT 缓存按名查（启动期 ensureShadowMapSlot 无条件建，deferred 判据
+	// 在其后）；矩图 sampled 槽 = Resources 预发号（binding 15 已 bake 同号）。
+	const auto shadowSlot = rtCache->heapSlot(std::string{kShadowMapName}.c_str());
+	const auto momentsSlot = resources->ensureEvssmSampleSlot();
+	if (!shadowSlot || !momentsSlot) {
+		static bool warnedNoSlots = false;
+		evssmWarnOnce(warnedNoSlots,
+			"EvssmShadow 依赖缺失（shadow map slot / moments slot），EVSSM 关闭");
+		return;
+	}
+	vkDevice.getDevice().waitIdle();  // 热开门（RPC 拨开关）路径保护，同 IzbShadow 重建规则
+	evssmShadow = std::make_unique<RGL::EvssmShadow>(
+		vkDevice, *resources, kShadowMapSize,
+		shadowAtlasColumns(kActiveShadowCascades), kEvssmMipLevels, 5.5f,
+		*shadowSlot, *momentsSlot);
+}
+
+// 批 11.6d-2：EVSSM sandwich（与 izbLightPassPre 同位；门空早退 = 零命令）。
+void Renderer::evssmLightPassPre(vk::raii::CommandBuffer& cmd, const RgPassPlan& pass) {
+	if (!evssmShadow || pass.kind != RgPassKind::drawLight || pass.state != "light")
+		return;
+	evssmShadow->recordFrame(cmd);
 }
 
 // IZB mask pass（批 11.3-1d 后半）：beginRendering(G×G 零附件) + izb_mask 动态态
@@ -505,6 +557,7 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 
 	// 11.3-1d IZB 帧首段（dump 收割 + 门控构造/重建；门关 = 一次布尔判断）
 	izbPreFrame();
+	evssmPreFrame();
 
 	// ⑤ pass 循环（执行序 = 图线性序，Phase 6）：attachment barrier（布局链推导物化）
 	// → beginRendering（逐 pass 附件）→ applyDynamicState(pass.state) → 段内逐 draw
@@ -534,6 +587,7 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 		// 11.3-1d IZB 创建 sandwich（图外 compute，录在 deferred light pass 头部；
 		// 门关 = izbShadow 恒空，本调用零命令，判据全在方法体内）
 		izbLightPassPre(cmd, pass, list);
+		evssmLightPassPre(cmd, pass);
 		// blit pass（批次 4，offscreen 图变体的 composite）：transferRead 源 → transferWrite
 		// 目标整幅拷贝（1:1 同尺寸同格式，LINEAR = 精确拷贝）；两端布局转换已由 pass.barriers
 		// 完成（scene_rt CAO→TransferSrc、swapchain 帧首 Undefined→TransferDst），无绘制、

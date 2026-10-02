@@ -209,6 +209,14 @@ export inline constexpr uint32_t kSceneDataPcssOffset = kSceneDataIzbOffset + kS
 export inline constexpr uint32_t kSceneDataPcssBytes = 16u;
 static_assert(kSceneDataPcssOffset == 722032,
 	"scene.slang readShadowPcss literal 722032 与 scene_data.cppm 失去同步");
+
+/** 批 11.6 EVSSM 参数 vec4（(半坡 tan(θ/2), 搜索半径[图集纹素], 半影上限[图集纹素],
+ *  矩链最大 mip)）。只有 -DEVSSM_SOFT 变体消费（shadow.slang readShadowEvssm 字面量
+ *  static_assert 同步，同 11.5 门关红线构造性保证）。 */
+export inline constexpr uint32_t kSceneDataEvssmOffset = kSceneDataPcssOffset + kSceneDataPcssBytes;
+export inline constexpr uint32_t kSceneDataEvssmBytes = 16u;
+static_assert(kSceneDataEvssmOffset == 722048,
+	"scene.slang readShadowEvssm literal 722048 与 scene_data.cppm 失去同步");
 static_assert(kSceneDataShadowSplitsOffset == 721952 && kSceneDataShadowParamsOffset == 721984
 	&& kSceneDataShadowAtlasOffset == 722000,
 	"scene.slang shadow sampling literals drifted from scene_data.cppm offsets");
@@ -228,7 +236,8 @@ export inline constexpr vk::DeviceSize kSceneDataBytes =
 	+ kSceneDataShadowMatrixBytes
 	+ kSceneDataShadowAuxBytes
 	+ kSceneDataIzbBytes
-	+ kSceneDataPcssBytes;
+	+ kSceneDataPcssBytes
+	+ kSceneDataEvssmBytes;
 
 /**
  * SceneData buffer 服务（2026-09-19 架构债务续账步骤 1：原 Resources::ensureSceneData/

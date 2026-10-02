@@ -23,6 +23,7 @@ return {
     pcss_sun_degrees = 0.53,   -- 太阳视直径（度；物理真值 0.53；写大 = 艺术化夸张半影，clamp [0,5]）
     pcss_search_radius = 16.0, -- blocker 搜索半径上限（图集纹素，clamp [1,64]；越大半影找回越远、全亮早退越慢）
     pcss_max_penumbra = 32.0,  -- 半影半径上限（图集纹素，clamp [1,64]；成本与糊度护栏）
+    shadow_evssm = false,  -- 批 11.6：EVSSM 远场软阴影（true = 构造 EvssmShadow 矩图链（图外 compute 从 D32 派生矩 + 7 级 per-tile box mip）+ 阴影采样 frag 换 -DEVSSM_SOFT 变体（O(1) mip 搜索 + soft clamp + quincunx，Filament 同款）；数值键复用 pcss_*；false = 零构造零变体 **逐位不变** = 红线，见 docs/evssm_plan.md）
     rpc = false,      -- Phase 10b HTTP POST RPC 调试通道（true=帧边界命令队列，仅绑 127.0.0.1；GET /state 发现参数，POST /camera /param /shot；独立于 imgui 门，headless 可用，见 docs/phase10b_plan.md）
     rpc_port = 8788,  -- RPC 监听端口（bind 失败只降级关，不崩）
 

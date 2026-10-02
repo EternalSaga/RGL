@@ -26,6 +26,7 @@ import frame_session;  // 手术 4：帧生命周期会话（同步对象/命令
 import vk_indirect_commands;  // Phase 7b：DGC 命令生成（NVIDIA 路；main 按能力位条件构造）
 import picking;  // Phase 10 批 10.5：GPU id 点选服务（main 门控构造，Renderer 只挂指针）
 import izb_shadow;  // 批 11.3-1d：FTIZB 硬阴影 IZB 数据层（门控构造；门关 = 指针恒空）
+import evssm_shadow;  // 批 11.6d-2：EVSSM 矩图数据层（同门控模式；门关 = 指针恒空）
 import vkerror;
 import diagnostics;  // no_present 诊断单例（configs/diagnostics.lua）
 
@@ -279,6 +280,15 @@ export class Renderer {
 	 *  pass 写完；layout 进出同值 = 追踪表零漂移）。其余 pass 零命令。 */
 	void izbLightPassPre(vk::raii::CommandBuffer& cmd, const RgPassPlan& pass,
 		const FrameDrawList& list);
+	/** 批 11.6d-2 EVSSM 帧首段（drawFrame 调用，与 izbPreFrame 同位）：门开时构造
+	 *  EvssmShadow（需 deferred light pass + 阴影图 RT 已在 + shadow_pass 开）。
+	 *  门关 = 一次布尔判断零分配（evssmShadow 恒空 = 逐位红线）。
+	 *  ⚠️ v1 边界 = 仅 deferred：forward 的矩消费在 geometry pass（sandwich 未接），
+	 *  forward + 门开 = warn-once 不构造（变体采样读 fallback 零矩 = 全亮，无害）。 */
+	void evssmPreFrame();
+	/** 批 11.6d-2：pass 循环头部 EVSSM sandwich（与 izbLightPassPre 同位）——仅
+	 *  deferred light pass 录矩派生 + 7 级 mip 链（图外 compute，其余 pass 零命令）。 */
+	void evssmLightPassPre(vk::raii::CommandBuffer& cmd, const RgPassPlan& pass);
 	/** 批 11.3-1d 后半：光空间 mask pass（零附件 G×G + izb_mask 态 + shadow0 段
 	 *  重放，push 尾缀 gridDim；shadow0 段空 = warn-once 跳过）。 */
 	void replayIzbMaskSegment(vk::raii::CommandBuffer& cmd, const FrameDrawList& list);
@@ -335,6 +345,9 @@ export class Renderer {
 	// drawLight "light" pass；**门关 = 恒 nullptr，零分配零命令逐位不变**，
 	// docs/hfts_izb_plan.md）。extent 变化重建（重建前 waitIdle，同 RT 缓存规则）。
 	std::unique_ptr<RGL::IzbShadow> izbShadow;
+	// 批 11.6d-2：EVSSM 矩图数据层（门 = diagnostics().shadowEvssm 且 deferred 且
+	// shadow_pass；**门关 = 恒 nullptr，零分配零命令逐位不变**，同 izbShadow）。
+	std::unique_ptr<RGL::EvssmShadow> evssmShadow;
 	uint32_t izbFrameNo = 0;   ///< 帧计数（izb_dump_frame 比对，1 起）
 	bool izbMaskSegmentWarned = false;  ///< shadow0 段空 warn-once（mask 依赖投影体）
 	int32_t depthAttSlot = -1; ///< 图内 depth 附件 slot（IZB sandwich 读布局追踪表用）

@@ -49,6 +49,13 @@ rgl_shader_defined(model_vegetation.frag MODEL_VEGETATION_PCSS_FRAG_SPV PCSS_SOF
 rgl_shader_defined(model_light.frag MODEL_LIGHT_PCSS_FRAG_SPV PCSS_SOFT model material scene env normalmap lights shadow)
 rgl_shader_defined(light.frag LIGHT_PCSS_FRAG_SPV PCSS_SOFT scene lights sky shadow)
 rgl_shader_defined2(light.frag LIGHT_IZB_PCSS_FRAG_SPV IZB_CONSUME PCSS_SOFT scene lights sky shadow)
+# 批 11.6d-2：EVSSM 远场软阴影变体（-DEVSSM_SOFT；同 4 个阴影采样 frag + IZB 组合，
+# 门控模式同 11.5。两门同开 = shadow.slang 内 EVSSM 优先分支）
+rgl_shader_defined(model_pbr_ibl.frag MODEL_PBR_IBL_EVSSM_FRAG_SPV EVSSM_SOFT model material scene env normalmap lights shadow)
+rgl_shader_defined(model_vegetation.frag MODEL_VEGETATION_EVSSM_FRAG_SPV EVSSM_SOFT model material scene env normalmap lights shadow)
+rgl_shader_defined(model_light.frag MODEL_LIGHT_EVSSM_FRAG_SPV EVSSM_SOFT model material scene env normalmap lights shadow)
+rgl_shader_defined(light.frag LIGHT_EVSSM_FRAG_SPV EVSSM_SOFT scene lights sky shadow)
+rgl_shader_defined2(light.frag LIGHT_IZB_EVSSM_FRAG_SPV IZB_CONSUME EVSSM_SOFT scene lights sky shadow)
 # Phase 11 批 11.2：级联阴影 depth-only 管线。mesh 自带 8B push（objectIndex +
 # cascadeIndex）——**不 import material.slang**：共享的 4B DrawArgs 契约不能为阴影多加一个
 # 字段（改了 = 1591 条模型条目全重建），故阴影管线自带 push 块。frag 空壳（无输出）。

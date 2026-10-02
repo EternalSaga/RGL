@@ -118,13 +118,15 @@ void runOnce(vk::raii::Device& dev, const vk::raii::CommandPool& pool, VkQueue q
 
 EvssmShadow::EvssmShadow(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
 	uint32_t mapSize_, uint32_t cols_, uint32_t mipLevels_, float exponent_,
-	uint32_t shadowMapSlot_)
+	uint32_t shadowMapSlot_, uint32_t momentsSampleSlot_)
 	: deviceCtx(&vkDevice), resources(&vkResources), mapSize(mapSize_), cols(cols_),
-	  mipLevels(mipLevels_), exponent(exponent_), shadowMapSlot(shadowMapSlot_) {
+	  mipLevels(mipLevels_), exponent(exponent_), shadowMapSlot(shadowMapSlot_),
+	  sampleSlot(momentsSampleSlot_) {
 	auto& dev = vkDevice.getDevice();
 	const uint32_t descSize = static_cast<uint32_t>(resources->getDescriptorHeap().getDescriptorSize());
 
-	// ── heap 槽：每 mip 一个 storage 视图槽 + 一个全 mip sampled 槽（Runtime 段）──
+	// ── heap 槽：每 mip 一个 storage 视图槽（本模块自有）；sampled 全 mip 槽 =
+	// Resources 预发号（binding 15 启动期已 bake 槽号，此处覆写真描述符）──
 	mipSlots.reserve(mipLevels);
 	for (uint32_t i = 0; i < mipLevels; ++i) {
 		auto slot = resources->allocSlot(RGL::SlotSegment::Runtime, "evssm.moments.mip");
@@ -133,11 +135,6 @@ EvssmShadow::EvssmShadow(RGL::DeviceContext& vkDevice, RGL::Resources& vkResourc
 				slot.error().describe()));
 		mipSlots.push_back(*slot);
 	}
-	auto sample = resources->allocSlot(RGL::SlotSegment::Runtime, "evssm.moments.sample");
-	if (!sample)
-		throw std::runtime_error(
-			fmt::format("EvssmShadow: sampled 槽领取失败: {}", sample.error().describe()));
-	sampleSlot = *sample;
 
 	// ── 矩图：mapSize² RGBA16F，mipLevels 级，STORAGE|SAMPLED，全程 GENERAL ──
 	vk::ImageCreateInfo ii{};

@@ -10,6 +10,10 @@ import VmaRaii;
 
 namespace RGL {
 
+/** EVSSM 矩链级数（含 mip0；= 探针口径 11.6c。消费端 maxMipLevel = 本值−1，
+ *  scene data shadowEvssm.w 由 render_list 从本常量导出——禁双源写死 7）。 */
+export inline constexpr uint32_t kEvssmMipLevels = 8;
+
 /**
  * EVSSM 软阴影的矩图数据层（批 11.6d；docs/evssm_plan.md §4.1 C 方案）。
  *
@@ -38,10 +42,13 @@ export class EvssmShadow {
 	 * @param mipLevels  矩链级数（8 = 探针口径；含 mip0）
 	 * @param exponent   EVSM 指数 c（5.5，Filament PCSS 定值）
 	 * @param shadowMapSlot 阴影图集采样 heap 槽（ensureShadowMapSlot 结果，只读复用）
+	 * @param momentsSampleSlot 矩图 sampled 槽（Resources::ensureEvssmSampleSlot 发号，
+	 *        binding 15 已 bake 此槽号——本构造以真 view **覆写**同槽描述符，同 IzbShadow
+	 *        mask 槽模式；重建换图重写同槽）
 	 */
 	EvssmShadow(RGL::DeviceContext& vkDevice, RGL::Resources& resources,
 		uint32_t mapSize, uint32_t cols, uint32_t mipLevels, float exponent,
-		uint32_t shadowMapSlot);
+		uint32_t shadowMapSlot, uint32_t momentsSampleSlot);
 
 	/**
 	 * 图外 sandwich（录在 light pass 迭代顶部、izb sandwich 同款位置）：

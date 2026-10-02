@@ -22,7 +22,8 @@ namespace RGL {
 
 	uint32_t ShaderRegistry::addModelEntry(const std::string& specName, uint32_t vertexSlot,
 			uint32_t textureSlot, uint32_t normalSlot, uint32_t ormSlot, uint32_t emissiveSlot,
-			uint32_t samplerSlot, uint32_t shadowMapSlot, uint32_t shadowSamplerSlot) {
+			uint32_t samplerSlot, uint32_t shadowMapSlot, uint32_t shadowSamplerSlot,
+			uint32_t evssmMapSlot) {
 		const auto key = std::make_tuple(specName, vertexSlot, textureSlot, normalSlot, ormSlot, emissiveSlot);
 		// 按 (规格, 顶点 slot, base 纹理 slot, normal slot, orm slot, emissive slot) 六元组组合
 		// 去重：同组合返回既有条目（不重复建 shader object）
@@ -69,6 +70,14 @@ namespace RGL {
 		b.extra.push_back({.binding = 12, .sampler = false, .heapSlot = shadowMapSlot});
 		b.extra.push_back({.binding = 13, .sampler = true,
 			.samplerHeapOffset = static_cast<vk::DeviceSize>(shadowSamplerSlot)
+				* res.getSamplerHeap().getDescriptorSize()});
+		// 批 11.6d-2：EVSSM 矩图集 15 + 矩 sampler 16（**无条件 bake**，同 binding 12 纪律；
+		// 门关 = -DEVSSM_SOFT 变体不存在、binding 不声明 = 空转无害，binding 4/5 既证先例）。
+		// binding 16 复用本条目共享 LINEAR sampler（矩图集过滤 = mip 高斯核要 linear；
+		// uv 恒 clamp 块内 → wrap 模式无关）。
+		b.extra.push_back({.binding = 15, .sampler = false, .heapSlot = evssmMapSlot});
+		b.extra.push_back({.binding = 16, .sampler = true,
+			.samplerHeapOffset = static_cast<vk::DeviceSize>(samplerSlot)
 				* res.getSamplerHeap().getDescriptorSize()});
 		auto entry = PipelineEntry{
 			.name = fmt::format("{}.v{}.t{}.n{}.o{}.e{}", specName, vertexSlot, textureSlot, normalSlot,
@@ -165,7 +174,8 @@ namespace RGL {
 
 	uint32_t ShaderRegistry::addLightEntry(uint32_t albedoSlot, uint32_t normalSlot,
 			uint32_t positionSlot, uint32_t metalRoughSlot, uint32_t emissiveSlot,
-			uint32_t samplerSlot, uint32_t shadowMapSlot, uint32_t shadowSamplerSlot) {
+			uint32_t samplerSlot, uint32_t shadowMapSlot, uint32_t shadowSamplerSlot,
+			uint32_t evssmMapSlot) {
 		if (auto idx = pipelineIndex("light"))
 			return *idx;
 		// 批 11.3-1e 红线终态：门 = 选 spec 变体（IZB 消费版 frag SPV），不是运行时 flag 分支
@@ -211,6 +221,12 @@ namespace RGL {
 		b.extra.push_back({.binding = 12, .sampler = false, .heapSlot = shadowMapSlot});
 		b.extra.push_back({.binding = 13, .sampler = true,
 			.samplerHeapOffset = static_cast<vk::DeviceSize>(shadowSamplerSlot)
+				* res.getSamplerHeap().getDescriptorSize()});
+		// 批 11.6d-2：EVSSM 矩图集 15 + 矩 sampler 16（无条件 bake + 复用共享 LINEAR，
+		// 细则见 addModelEntry 同名注释）。
+		b.extra.push_back({.binding = 15, .sampler = false, .heapSlot = evssmMapSlot});
+		b.extra.push_back({.binding = 16, .sampler = true,
+			.samplerHeapOffset = static_cast<vk::DeviceSize>(samplerSlot)
 				* res.getSamplerHeap().getDescriptorSize()});
 		// 批 11.3-1e：IZB mask 位图 14（仅门开变体声明该 binding = VVL 静态活性须绑；
 		// 门关原版 frag 无 binding 14 = 不占槽不绑定）。门关也预写 16B 零 fallback 于
@@ -421,14 +437,19 @@ void ShaderRegistry::bindPipelineToAsset(const char* name, uint32_t assetId) {
 	}
 
 /**
- * 批 11.5：PCSS 变体 spec 查表/建表（门 = diagnostics().shadowPcss；门关原样返回 =
- * 原版 SPV 红线构造性保证，同 addLightEntry 的 1e 模式——运行时 flag 分支会被 slang
- * fp 重排坑穿，2026-10-02 实测教训）。阴影消费 frag 恰 4 文件（rgl_shader_defined
- * 声明面同源）；"light.frag" 前缀同时覆盖 light.frag 与 light.frag_IZB_CONSUME.spv，
- * 后者插 _PCSS_SOFT = light.frag_IZB_CONSUME_PCSS_SOFT.spv = rgl_shader_defined2 命名。
+ * 批 11.5/11.6：软阴影变体 spec 查表/建表（门 = diagnostics().shadowEvssm 优先、
+ * 其次 shadowPcss；两门全关原样返回 = 原版 SPV 红线构造性保证，同 addLightEntry 的
+ * 1e 模式——运行时 flag 分支会被 slang fp 重排坑穿，2026-10-02 实测教训）。
+ * 阴影消费 frag 恰 4 文件（rgl_shader_defined 声明面同源）；"light.frag" 前缀同时覆盖
+ * light.frag 与 light.frag_IZB_CONSUME.spv，后者插后缀 = ..._IZB_CONSUME_EVSSM_SOFT.spv
+ * = rgl_shader_defined2 命名。两门同开 = EVSSM（11.5 冻结件让位，不叠后缀——
+ * _PCSS_SOFT_EVSSM_SOFT 变体不存在，shadow.slang 内 EVSSM 分支优先）。
  */
-const RGL::PipelineSpec* ShaderRegistry::pcssVariantSpec(const RGL::PipelineSpec* base) const {
-	if (!base || !diagnostics().shadowPcss)
+const RGL::PipelineSpec* ShaderRegistry::softShadowVariantSpec(const RGL::PipelineSpec* base) const {
+	if (!base)
+		return base;
+	const bool evssm = diagnostics().shadowEvssm;
+	if (!evssm && !diagnostics().shadowPcss)
 		return base;
 	const std::string_view path{base->fragSpv};
 	const auto slash = path.find_last_of("/\\");
@@ -445,8 +466,9 @@ const RGL::PipelineSpec* ShaderRegistry::pcssVariantSpec(const RGL::PipelineSpec
 		return &it->second;
 	RGL::PipelineSpec variant = *base;
 	const auto dot = variant.fragSpv.rfind(".spv");
-	variant.fragSpv.insert(dot == std::string::npos ? variant.fragSpv.size() : dot, "_PCSS_SOFT");
-	variant.name = base->name + "_pcss";
+	variant.fragSpv.insert(dot == std::string::npos ? variant.fragSpv.size() : dot,
+		evssm ? "_EVSSM_SOFT" : "_PCSS_SOFT");
+	variant.name = base->name + (evssm ? "_evssm" : "_pcss");
 	return &variantSpecs.emplace(base->fragSpv, std::move(variant)).first->second;
 }
 

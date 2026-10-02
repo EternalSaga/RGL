@@ -59,6 +59,16 @@ uint32_t deferredShadowSlotOf(RenderTargetCache& rtCache) {
 	return *slot;
 }
 
+/** EVSSM 矩图槽（批 11.6d-2）：发号 + 失败抛出收进 helper（assembleBackEnd 复杂度
+ *  红线先例：调用点零分支）。幂等（bakePipelineEntries 已发过号则直接复用同号）。 */
+uint32_t evssmMomentsSlotOf(Resources& resources) {
+	auto slot = resources.ensureEvssmSampleSlot();
+	if (!slot)
+		throw std::runtime_error(
+			fmt::format("EVSSM 矩图槽发号失败: {}", slot.error().describe()));
+	return *slot;
+}
+
 }  // namespace
 
 /** A0 内建 cube + A1 解析/顶点上传（全几何槽先于任何纹理槽）+ A2 纹理上传。 */
@@ -148,7 +158,7 @@ void uploadEnvironment(Resources& resources, Environment& env, DeviceContext& de
 
 /** C1 管线条目烘焙（per unique 模型；风格派生 + 条目去重 + DIAG 分布日志）。 */
 void bakePipelineEntries(UploadedAssets& uploaded, const SceneConfig& scene, bool deferredMode,
-						 ShaderRegistry& pipelines, Resources&, SamplerLibrary& samplers,
+						 ShaderRegistry& pipelines, Resources& resources, SamplerLibrary& samplers,
 						 AssetTable& assetTable, RenderTargetCache& rtCache) {
 	const uint32_t samplerSlot = samplers.ensureShared();
 	// Phase 11 批 11.2：阴影图槽必须在**模型条目烘焙之前**领掉（堆槽号由 ensure 时分配，
@@ -159,6 +169,10 @@ void bakePipelineEntries(UploadedAssets& uploaded, const SceneConfig& scene, boo
 	if (!shadowSlot)
 		throw std::runtime_error(
 			fmt::format("阴影图 RT 创建失败: {}", shadowSlot.error().describe()));
+	// 批 11.6d-2：EVSSM 矩图槽条目烘焙前发号（binding 15 **无条件 bake**，shadowSlot
+	// 同纪律；门关 = -DEVSSM_SOFT 变体不声明该 binding = 空转无害，真描述符由
+	// EvssmShadow 构造时覆写同槽）。幂等，失败处理收 evssmMomentsSlotOf。
+	const uint32_t evssmSlot = evssmMomentsSlotOf(resources);
 	for (auto& um : uploaded.models) {
 		auto& model = *um.model;
 		const auto& texIds = um.textureIds;
@@ -202,7 +216,7 @@ void bakePipelineEntries(UploadedAssets& uploaded, const SceneConfig& scene, boo
 				assetTable.getTexture(texIds.normal[i]).heapSlot,
 				assetTable.getTexture(texIds.orm[i]).heapSlot,
 				assetTable.getTexture(texIds.emissive[i]).heapSlot,
-				samplerSlot, *shadowSlot, samplers.ensurePointSampler());
+				samplerSlot, *shadowSlot, samplers.ensurePointSampler(), evssmSlot);
 			pipelines.bindToAsset(id, entryIdx);
 			// Phase 11 批 11.2：阴影 depth-only 管线条目。按 vertexSlot 去重（addShadowEntry
 			// 内部有表）——bistro 1591 个 primitive 共用约 8 个拼接块槽 → 仅 8 条目。
@@ -431,9 +445,13 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 			throw std::runtime_error(
 				fmt::format("deferred: G-buffer RT 创建失败: {}", gbSlots.error().describe()));
 		// light 条目下标由 Renderer 构造期按名 pipelineIndex("light") 取，此处仅需触发建条目
+		// 批 11.6d-2：EVSSM 矩图槽（binding 15 无条件 bake，同 shadowSlot 纪律；
+		// 失败处理收 helper，见 evssmMomentsSlotOf）
+		const uint32_t evssmSlot = evssmMomentsSlotOf(resources);
 		[[maybe_unused]] auto lightIdx = pipelines.addLightEntry(
 			(*gbSlots)[0], (*gbSlots)[1], (*gbSlots)[2], (*gbSlots)[3], (*gbSlots)[4],
-			samplers.ensureShared(), deferredShadowSlotOf(rtCache), samplers.ensurePointSampler());
+			samplers.ensureShared(), deferredShadowSlotOf(rtCache), samplers.ensurePointSampler(),
+			evssmSlot);
 	}
 	assembleHdrAoChain(swapchain, resources, samplers, rtCache, pipelines);
 

@@ -147,6 +147,7 @@ static void readInputProbes(sol::table& root, DiagnosticsConfig& cfg) {
 		cfg.izbShadow = readBool("izb_shadow", cfg.izbShadow);
 		// 批 11.5：PCSS（门 = 变体选择，非运行时 flag——slang fp 重排教训同 1e，门关必须原版 SPV）
 		cfg.shadowPcss = readBool("shadow_pcss", cfg.shadowPcss);
+		cfg.shadowEvssm = readBool("shadow_evssm", cfg.shadowEvssm);
 		auto readF64 = [&](const char* key, double def) {
 			sol::optional<double> v = root[key];
 			return v ? *v : def;

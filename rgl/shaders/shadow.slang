@@ -31,7 +31,7 @@ static const float kShadowFarFadeK = 4.0;
 
 import scene;  // binding 3：sceneData + readShadowViewProj / readCascadeSplits / readShadowParams
 
-#ifdef PCSS_SOFT
+#if defined(PCSS_SOFT) || defined(EVSSM_SOFT)
 // 批 11.5：本 slangc 不自动提供 gl_FragCoord（实测 E30015；__system_value 亦移除），
 // 经 glsl 兼容模块取（`public in vec4 gl_FragCoord : SV_Position`）。门关不 import =
 // 原版编译单元 token 流零变化。
@@ -40,6 +40,13 @@ import glsl;
 
 [[vk::binding(12, 0)]] Texture2D<float> shadowMap;  // eDepth aspect（cascade 0）
 [[vk::binding(13, 0)]] SamplerState shadowSampler;  // NEAREST point sampler（非比较采样器，见头注）
+#ifdef EVSSM_SOFT
+// 批 11.6：矩图集（EvssmShadow 图外 compute 派生；全 mip 链 view、GENERAL；
+// 逐 tile 手动 mip 链的对齐论证 = docs/evssm_plan.md §4.1）。15/16 = 两路皆空的高号段
+// （14 已被 IZB 占，续排；门关不声明 = 原版资源接口零变化 = 红线构造性保证）。
+[[vk::binding(15, 0)]] Texture2D momentsAtlas;
+[[vk::binding(16, 0)]] SamplerState momentsSampler;  // LINEAR + CLAMP_TO_EDGE（mip 当高斯核）
+#endif
 
 #ifdef PCSS_SOFT
 // ============================================================================
@@ -119,6 +126,106 @@ float pcssCoverage(float2 uv, float refZ, float texelWorld, float bias,
 }
 #endif
 
+#ifdef EVSSM_SOFT
+// ============================================================================
+// 批 11.6：EVSSM 远场软阴影（指数矩 + O(1) mip 搜索 + soft clamp 半影 + 硬件 mip
+// 高斯核 + quincunx 5 抽头）。#ifdef 门 = 门关编译不过这段 = 原版逐位不变（红线
+// 构造性保证，同 11.5）。公式直抄 Filament surface_shadowing.fs 的
+// ShadowSample_EVSSM（DIRECTIONAL 路）+ evaluateEVSM（ELVSM 双侧矩）。适配差异
+// （docs/evssm_plan.md §4.1 C 方案）：
+//   · 矩源 = 图外 compute 从 D32 图集派生（正交深度线性），采样 = 2D 图集 + 逐 tile
+//     手动 mip 链（tile 边界各层级恒对齐 → box 过滤零互染），非 sampler2DArray；
+//   · 解析方差（屏幕导数把纹素内斜率折进二阶矩）**不加**——矩在 compute 侧生成无
+//     导数可用；抗 acne = 既有 normal offset + depth bias + LBR（v1 口径）；
+//   · 半影上限 soft clamp 在**图集纹素域**（配置语义 pcss_max_penumbra 复用），
+//     非 Filament 的无量纲 ratio 域——艺术角色相同、单位对美术友好；
+//   · per-tap clamp inset 随 targetLod 放大（mip L 硬件 bilinear 读 ±2^(L−1) 纹素，
+//     固定半纹素 inset 在粗 mip 会漏进邻块垃圾数据）。
+// 成本：1 搜索 + 5 滤波 = 6 次矩采样（对照 PCF 4 次深度采样）；矩图集 linear 可过滤。
+
+static const float kEvssmExponent = 5.5;    // c：fp16 上限 exp(2c)≤65504 双约束定值（Filament）
+static const float kEvssmLbr = 0.1;         // light-bleed reduction（Filament 默认同值）
+static const float kEvssmEpsilon = 0.002;   // 动态方差地板系数（evaluateEVSM EPSILON_MULTIPLIER）
+
+/** Chebyshev 上界 + 动态方差地板 + LBR（evaluateEVSM 内联件逐式转写）。 */
+float chebyshevUpperBound(float2 moments, float depth, float minVariance, float lbr)
+{
+    const float variance = max(moments.y - moments.x * moments.x, minVariance);
+    const float d = depth - moments.x;
+    const float pMax = variance / (variance + d * d);
+    return saturate((pMax - lbr) / (1.0 - lbr));
+}
+
+/** ELVSM 双侧矩评估（矩 = (z, z², −1/z, 1/z²)，z = exp(c·(2d−1))；zReceiver = 光深度 [0,1]）。 */
+float evaluateEvssm(float4 moments, float zReceiver)
+{
+    const float depth = zReceiver * 2.0 - 1.0;
+    const float pw = exp(kEvssmExponent * depth);
+    const float p = chebyshevUpperBound(moments.xy, pw, kEvssmEpsilon * (pw * pw), kEvssmLbr);
+    const float nw = -1.0 / pw;
+    const float n = chebyshevUpperBound(moments.zw, nw, kEvssmEpsilon * (nw * nw), kEvssmLbr);
+    return min(p, n);
+}
+
+/** EVSSM 主流程（uv = 图集 uv，refZ = 含 bias 比较深度，texelWorld = 本块世界纹素，
+ *  atlas/lightVP/tile 与 pcssCoverage 同源）。返回 1 = 全亮。 */
+float evssmCoverage(float2 uv, float refZ, float texelWorld,
+    float4 atlas, ObjectMatrix lightVP, float2 tile)
+{
+    const float4 evp = readShadowEvssm();  // (半坡 tan(θ/2), 搜索半径[纹素], 半影上限[纹素], 最大 mip)
+    const float maxMip = evp.w;
+    const float halfUv = atlas.y / atlas.x;
+    const float invAtlas = 1.0 / atlas.x;
+    const float coeff = abs(lightVP.c2.z);  // 正交深度行 = 1/(f−n)（PCSS 头注同款换算）
+
+    // —— STEP 1：O(1) blocker 搜索（DIRECTIONAL：光锥随级联深度张开）——
+    //   distanceToNearPlane = 归一化光深度 × (f−n) = 米制入深；搜索半径（世界）= 半坡 × 入深。
+    const float distNear = refZ / coeff;
+    float searchTexels = evp.x * distNear / texelWorld;
+    searchTexels = min(searchTexels, evp.y);  // 上限护栏（Filament maxSearchRadius 同职）
+    const float searchLod = clamp(log2(max(searchTexels, 1.0)), 0.0, maxMip);
+    const float4 searchMoments = momentsAtlas.SampleLevel(momentsSampler, uv, searchLod);
+    // 平均遮挡深度解码（Filament 逐式）：z̄ = exp(c(2zB−1)) ← moments.z = −1/z̄。
+    // 空块（far 最大矩）解码 zBlocker≈1 → clamp 到 refZ → 比值为 0 → 全亮自然成立。
+    const float negMoment = max(-searchMoments.z, 1e-8);
+    const float zBlocker = clamp((log(negMoment) / -kEvssmExponent + 1.0) * 0.5, 0.0, refZ);
+
+    // —— STEP 2：半影估计（Δz 世界米 × 半坡）+ soft clamp（纹素域，见头注）——
+    const float dzWorld = max((refZ - zBlocker) / coeff, 0.0);
+    const float penumbraTexels = dzWorld * evp.x / texelWorld;
+    const float penumbraSquashed = penumbraTexels <= evp.z
+        ? penumbraTexels
+        : evp.z + 1.0 - exp(-(penumbraTexels - evp.z));
+
+    // —— STEP 3：半影滤波（5 抽头 quincunx，中心 0.5 + 四角 0.125；lod 偏置 −1 =
+    //    Filament TAPS==5 式：靠空间抽头重建形状，绕过 mip 极端压缩）——
+    const float idealLod = log2(max(penumbraSquashed, 1.0)) - 1.0;
+    const float targetLod = clamp(idealLod, 0.0, maxMip);
+    const float lodDeficit = exp2(max(idealLod - targetLod, 0.0));
+
+    // 旋转 + 锚点抖动（哈希角 = PCSS 分支同式，屏幕稳定、确定性可复现）。
+    const float2 fc = gl_FragCoord.xy;  // import glsl（门见文件头注）
+    const float ang = 6.28318531 * fract(sin(dot(fc, float2(12.9898, 78.233))) * 43758.54531);
+    const float2 cs = float2(cos(ang), sin(ang));
+    const float2 r = penumbraSquashed * invAtlas * 0.5 * lodDeficit;
+    const float2 rotX = float2(cs.x * r.x, cs.y * r.x);
+    const float2 rotY = float2(-cs.y * r.y, cs.x * r.y);
+    const float inset = 0.5 * exp2(targetLod) * invAtlas;
+    const float2 lo = tile * halfUv + float2(inset);
+    const float2 hi = lo + halfUv - float2(2.0 * inset);
+    const float2 anchor = clamp(uv, lo, hi);
+
+    const float4 c4 = momentsAtlas.SampleLevel(momentsSampler, anchor, targetLod);
+    const float4 k1 = momentsAtlas.SampleLevel(momentsSampler, clamp(anchor + rotX + rotY, lo, hi), targetLod);
+    const float4 k2 = momentsAtlas.SampleLevel(momentsSampler, clamp(anchor + rotX - rotY, lo, hi), targetLod);
+    const float4 k3 = momentsAtlas.SampleLevel(momentsSampler, clamp(anchor - rotX + rotY, lo, hi), targetLod);
+    const float4 k4 = momentsAtlas.SampleLevel(momentsSampler, clamp(anchor - rotX - rotY, lo, hi), targetLod);
+    const float4 finalMoments = c4 * 0.5 + (k1 + k2 + k3 + k4) * 0.125;
+
+    return evaluateEvssm(finalMoments, refZ);
+}
+#endif
+
 // 各向同性单次比较采样（4 抽头 PCF 在此展开，见下）。返回 1 = 全亮，0 = 全遮。
 //
 // **uv 的 y 翻转**：光空间 NDC 的 y 向上（+1 顶），framebuffer 采样 uv 的 y 向下（0 顶），
@@ -188,11 +295,24 @@ float sampleShadow1Tap(float3 worldPos, float3 N)
     const float2 uv = (tile + uvTile) * atlas.y / atlas.x;
 
     // ⑥⑦ 采样 + 淡出：原版 = 4 抽头 PCF；PCSS_SOFT 变体 = blocker 搜索 + 变半径加权
-    //   PCF（批 11.5，pcssCoverage 头注）。**刻意保持两分支各自完整持有 ⑥+⑦**——
+    //   PCF（批 11.5，pcssCoverage 头注）；EVSSM_SOFT 变体 = 指数矩 O(1) 搜索 + quincunx
+    //   （批 11.6，evssmCoverage 头注；两门同开 = EVSSM 优先，11.5 冻结件让位）。
+    //   **刻意保持各分支完整持有 ⑥+⑦**——
     //   曾把 ⑦ 提为共享汇合（litCoverage）即破坏原版 SPV 逐位（两次 dot 合一次 →
     //   OpConstantComposite 少一份 → 全文件 id 重排实测）。门关预处理后 token 流 =
     //   原版一字不差，才成立红线构造性保证。
-#ifdef PCSS_SOFT
+#ifdef EVSSM_SOFT
+    const float ref = ndc.z - params.x;
+    const float litEvssm = evssmCoverage(uv, ref, texel, atlas,
+        readShadowViewProj(cascade), tile);
+    // ⑦ 淡出（与原版逐式同；EVSSM 分支复制件，见上注）
+    const float shadowFarEvssm = params.w;
+    if (shadowFarEvssm <= 0.0)
+        return litEvssm;
+    const float tEvssm = depth / shadowFarEvssm;
+    const float attenEvssm = saturate(kShadowFarFadeK * (1.0 - tEvssm * tEvssm));
+    return lerp(1.0, litEvssm, attenEvssm);
+#elif defined(PCSS_SOFT)
     const float ref = ndc.z - params.x;
     const float litCoverage = pcssCoverage(uv, ref, texel, params.x, atlas,
         readShadowViewProj(cascade), tile);

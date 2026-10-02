@@ -19,6 +19,7 @@ import asset_table;
 import scene_context;
 import camera;
 import render_graph;  // shadowAtlasColumns（图集列数，与装饰 extent 同源）
+import evssm_shadow;  // kEvssmMipLevels（矩链级数；scene data w 从常量导出，禁双源写死）
 import diagnostics;  // diagnostics().shadowPass（阴影总开关）
 
 namespace RGL {
@@ -184,6 +185,13 @@ void fillShadowData(FrameDrawList& out, float shadowNear, float shadowFar,
     out.sceneData.shadowPcss = {2.0f * std::tan(halfAngle),
         static_cast<float>(diagnostics().pcssSearchRadius),
         static_cast<float>(diagnostics().pcssMaxPenumbra), 0.0f};
+    // 批 11.6 EVSSM 参数（只有 -DEVSSM_SOFT 变体读）：x = 半坡 tan(θ/2)（与 pcss 同数值键，
+    // EVSSM 消费半坡而非全宽系数）；y/z = 搜索半径/半影上限（图集纹素 mip0 域）；
+    // w = 矩链最大 mip（EvssmShadow 8 级链固定 7，docs/evssm_plan.md §3.1）。
+    out.sceneData.shadowEvssm = {std::tan(halfAngle),
+        static_cast<float>(diagnostics().pcssSearchRadius),
+        static_cast<float>(diagnostics().pcssMaxPenumbra),
+        static_cast<float>(RGL::kEvssmMipLevels - 1u)};
 }
 
 /**

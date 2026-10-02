@@ -110,6 +110,10 @@ export struct SceneFrameData {
 	//   半影半径上限[图集纹素], 保留）。只有 -DPCSS_SOFT 变体消费（scene.slang readShadowPcss
 	//   @722032）；原版 SPV 不读本区 = 门关红线。默认值 = diagnostics 默认（tan(0.53° 全宽)、16、32）
 	glm::vec4 shadowPcss{0.00925f, 16.0f, 32.0f, 0.0f};
+	// · shadowEvssm —— 批 11.6 EVSSM 参数（半坡 tan(θ/2), 搜索半径[图集纹素 mip0 域],
+	//   半影半径上限[图集纹素], 矩链最大 mip）。只有 -DEVSSM_SOFT 变体消费（scene.slang
+	//   readShadowEvssm @722048）；原版 SPV 不读本区 = 门关红线。
+	glm::vec4 shadowEvssm{0.00465f, 24.0f, 48.0f, 7.0f};
 };
 
 /**

@@ -182,6 +182,93 @@ export class Resources {
 		return izbSlots;
 	}
 
+	/**
+	 * EVSSM 矩图采样槽号（批 11.6d-2，ensureIzbSlots 同盘：只发号不写描述符——
+	 * 内容 = EvssmShadow 的矩图，其构造时以真 view 覆写同槽；重建换图重写同槽）。
+	 * 槽号终身稳定（管线条目 binding 15 启动期 bake）。幂等。
+	 * 门关 = 槽存在但 variant SPV 不声明 binding 15 = 空转无害（binding 4/5 既证先例）。
+	 * @return 槽号；Error = 槽段耗尽
+	 */
+	[[nodiscard]] std::expected<uint32_t, Error> ensureEvssmSampleSlot() {
+		if (evssmSampleSlot != kNoEvssmSampleSlot)
+			return evssmSampleSlot;
+		auto slot = allocSlot(RGL::SlotSegment::Runtime, "evssm.moments");
+		if (!slot)
+			return std::unexpected(std::move(slot).error());
+		evssmSampleSlot = *slot;
+		// fallback 描述符（izbMaskFallback 同思路，批 11.3-1e）：-DEVSSM_SOFT 变体
+		// **静态**声明 binding 15（VVL 静态活性），而 EvssmShadow 仅在门开 + deferred +
+		// shadow pass 时构造——forward 等配置组合下槽也必须有效。1×1 RGBA16F 零图：
+		// 零矩 → Chebyshev p≈0 = 全亮（无害默认值；NaN 不可能——矩全零无 0/0）。
+		if (!evssmFallback) {
+			vk::ImageCreateInfo fi{};
+			fi.imageType = vk::ImageType::e2D;
+			fi.format = vk::Format::eR16G16B16A16Sfloat;
+			fi.extent = vk::Extent3D(1, 1, 1);
+			fi.mipLevels = 1;
+			fi.arrayLayers = 1;
+			fi.samples = vk::SampleCountFlagBits::e1;
+			fi.tiling = vk::ImageTiling::eOptimal;
+			fi.usage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst;
+			fi.sharingMode = vk::SharingMode::eExclusive;
+			VmaAllocationCreateInfo fa{};
+			fa.usage = VMA_MEMORY_USAGE_AUTO;
+			auto img = allocator.createImage(fi, fa);
+			if (!img)
+				return std::unexpected(std::move(img).error());
+			evssmFallback = std::move(*img);
+			// 一次性：UNDEFINED→GENERAL + clear 零 + 保持 GENERAL（descriptor 声明
+			// GENERAL，采样 GENERAL 合法——与 EvssmShadow 矩图同布局策略）
+			auto cmdBufs = vkDevice.getDevice().allocateCommandBuffers(
+				{*vkDevice.getGraphicsCommandPool(), vk::CommandBufferLevel::ePrimary, 1});
+			auto& cmd = cmdBufs[0];
+			cmd.begin({});
+			vk::ImageMemoryBarrier2 toGeneral{};
+			toGeneral.srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe;
+			toGeneral.dstStageMask = vk::PipelineStageFlagBits2::eTransfer;
+			toGeneral.dstAccessMask = vk::AccessFlagBits2::eTransferWrite;
+			toGeneral.oldLayout = vk::ImageLayout::eUndefined;
+			toGeneral.newLayout = vk::ImageLayout::eGeneral;
+			toGeneral.image = evssmFallback->image;
+			toGeneral.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+			vk::DependencyInfo dep{};
+			dep.setImageMemoryBarriers(toGeneral);
+			cmd.pipelineBarrier2(dep);
+			cmd.clearColorImage(evssmFallback->image, vk::ImageLayout::eGeneral,
+				vk::ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f),
+				vk::ImageSubresourceRange{vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1});
+			cmd.end();
+			vk::raii::Fence fence(vkDevice.getDevice(), vk::FenceCreateInfo{});
+			const VkCommandBuffer raw = *cmd;
+			VkSubmitInfo si{};
+			si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+			si.commandBufferCount = 1;
+			si.pCommandBuffers = &raw;
+			if (::vkQueueSubmit(vkDevice.getGraphicsQueue(), 1, &si, *fence) != VK_SUCCESS)
+				return std::unexpected(Error{ErrorCode::VulkanError, "EVSSM fallback 提交失败"});
+			if (vkDevice.getDevice().waitForFences(std::array<vk::Fence, 1>{*fence}, true, UINT64_MAX)
+				!= vk::Result::eSuccess)
+				return std::unexpected(Error{ErrorCode::VulkanError, "EVSSM fallback fence 超时"});
+			vk::ImageViewCreateInfo viewCreate{};
+			viewCreate.image = evssmFallback->image;
+			viewCreate.viewType = vk::ImageViewType::e2D;
+			viewCreate.format = vk::Format::eR16G16B16A16Sfloat;
+			viewCreate.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+			vk::ImageDescriptorInfoEXT imgDesc{};
+			imgDesc.pView = &viewCreate;
+			imgDesc.layout = vk::ImageLayout::eGeneral;
+			vk::ResourceDescriptorInfoEXT resDesc{};
+			resDesc.type = vk::DescriptorType::eSampledImage;
+			resDesc.data.pImage = &imgDesc;
+			const auto addr = descriptorHeap.getSlotCpuAddress(evssmSampleSlot);
+			if (!addr)
+				return std::unexpected(std::move(addr).error());
+			vkDevice.getDevice().writeResourceDescriptorsEXT(resDesc,
+				vk::HostAddressRangeEXT{*addr, descriptorHeap.getDescriptorSize()});
+		}
+		return evssmSampleSlot;
+	}
+
 	/** @return resource heap const 引用（VmaDescriptorHeap：BDA buffer 视为连续描述符槽
 	 * 数组，步长 = max(buffer, image) descriptorSize 运行时查询）；Renderer 每帧绑定，
 	 * 内容层经 allocSlot + getSlotCpuAddress 写描述符。 */
@@ -272,6 +359,8 @@ export class Resources {
    private:
 	/** 深度图采样槽"未领取"哨兵（kNoDepthSampleSlot 与 allocSlot 段容量无关的独立值）。 */
 	static constexpr uint32_t kNoDepthSampleSlot = 0xFFFFFFFFu;
+	/** EVSSM 矩图采样槽"未领取"哨兵（批 11.6d-2，同 kNoDepthSampleSlot 惯例）。 */
+	static constexpr uint32_t kNoEvssmSampleSlot = 0xFFFFFFFFu;
 
 	/**
 	 * 把当前 depthImageView 写进 depthSampleSlot 槽（SAMPLED_IMAGE / eDepth aspect）。
@@ -347,6 +436,12 @@ export class Resources {
 	uint32_t depthSampleSlot = kNoDepthSampleSlot;
 	/** IZB 四槽号（批 11.3-1d 后半，ensureIzbSlots 发号；内容描述符由 IzbShadow 写）。 */
 	IzbSlots izbSlots{};
+	/** EVSSM 矩图采样槽号（批 11.6d-2，ensureEvssmSampleSlot 发号；binding 15 无条件
+	 * bake；真描述符由 EvssmShadow 构造时覆写，门关 = variant 不声明 = 空转）。 */
+	uint32_t evssmSampleSlot = kNoEvssmSampleSlot;
+	/** EVSSM 矩图槽 fallback 1×1 RGBA16F 零图（批 11.6d-2，发号时创建，同
+	 * izbMaskFallback 思路：variant 静态活性 vs EvssmShadow 条件构造的缺口兜底）。 */
+	std::optional<RGL::VmaImage> evssmFallback;
 	/** mask 槽 fallback 零 buffer（批 11.3-1e，ensureIzbSlots 发号时创建；
 	 *  light.frag binding 14 无条件绑定的兜底，IzbShadow 构造后覆写同槽描述符）。 */
 	std::optional<RGL::VmaBuffer> izbMaskFallback;
