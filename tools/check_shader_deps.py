@@ -47,6 +47,10 @@ ROOT = Path(__file__).resolve().parent.parent
 CMAKE_FILE = ROOT / "rgl" / "CMakeLists.txt"
 SHADERS_DIR = ROOT / "rgl" / "shaders"
 
+# slang 内建模块（编进 slangc，非 shaders/ 下文件）：glsl = GLSL 兼容层（本构建取
+# gl_FragCoord 只能 import glsl，11.5/11.6 实测），不得算「未解析边」= 误报白名单。
+SLANG_BUILTIN_MODULES = {"glsl"}
+
 # rgl_shader 调用（先剥 # 注释——CMakeLists L14 的用法示例行本身就是个"调用"形态）。
 # 实参形态（见 cmake/RglSlang.cmake）：rgl_shader(<src 短名> <OUT_VAR> [<DEP 短名>...])，
 # 短名相对 shaders/、不带 .slang 扩展（可含 .frag/.mesh/.comp 等点段）。
@@ -122,6 +126,8 @@ def closure_of(main: Path) -> tuple[set[Path], dict[Path, tuple[Path, str, int]]
     while queue:
         cur = queue.popleft()
         for ref, quoted, line in import_refs(cur):
+            if not quoted and ref in SLANG_BUILTIN_MODULES:
+                continue
             tgt = resolve_import(ref, quoted, cur)
             if tgt is None:
                 unresolved.append((cur, line, ref))

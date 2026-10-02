@@ -147,9 +147,15 @@ static const float kEvssmExponent = 5.5;    // c：fp16 上限 exp(2c)≤65504 �
 static const float kEvssmLbr = 0.1;         // light-bleed reduction（Filament 默认同值）
 static const float kEvssmEpsilon = 0.002;   // 动态方差地板系数（evaluateEVSM EPSILON_MULTIPLIER）
 
-/** Chebyshev 上界 + 动态方差地板 + LBR（evaluateEVSM 内联件逐式转写）。 */
+/** Chebyshev 上界 + 动态方差地板 + LBR（evaluateEVSM 内联件逐式转写）。
+ *  ⚠️ 快路（depth ≤ moments.x → 1.0）是**语义必需**不是性能优化（forward fallback
+ *  实测坐实，2026-10-02）：无它则「receiver 严格在所有 caster 之前」与「receiver
+ *  在 caster 之后」给出同向的 ≈0（d² 对负 d 同样增长）= 全亮区反而判全暗。
+ *  返回值语义 = **受光量**（1 = 全亮）。 */
 float chebyshevUpperBound(float2 moments, float depth, float minVariance, float lbr)
 {
+    if (depth <= moments.x)
+        return 1.0;  // 快路：receiver 在均值深度之前 = 全亮（Filament 同款，LBR 前返回）
     const float variance = max(moments.y - moments.x * moments.x, minVariance);
     const float d = depth - moments.x;
     const float pMax = variance / (variance + d * d);

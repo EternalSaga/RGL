@@ -15,6 +15,13 @@ import vkerror;
 
 namespace RGL {
 
+/** EVSM 指数 c（批 11.6 EVSSM，**唯一权威源**）：矩编码 z = exp(c·(2d−1))。
+ *  定值 5.5 由 RGBA16F 上限双约束 exp(2c) ≤ 65504 决定（Filament PCSS 同值，
+ *  docs/evssm_plan.md §1）。消费方：EvssmShadow push constant（moments compute）、
+ *  fallback far 最大矩（ensureEvssmSampleSlot 下方）；shadow.slang 消费端当前为
+ *  字面量 5.5，正收编为经 scene data 常量块下发（双源红线，本批下一 commit 消除）。 */
+export inline constexpr float kEvssmExponent = 5.5f;
+
 /** descriptor heap 用户槽用途段（段间隔离，段内单调分配）。 */
 export enum class SlotSegment : uint8_t {
 	Geometry,  // 内建几何与模型顶点块（AssetTable::expectedGeometrySlot 契约段）
@@ -198,8 +205,13 @@ export class Resources {
 		evssmSampleSlot = *slot;
 		// fallback 描述符（izbMaskFallback 同思路，批 11.3-1e）：-DEVSSM_SOFT 变体
 		// **静态**声明 binding 15（VVL 静态活性），而 EvssmShadow 仅在门开 + deferred +
-		// shadow pass 时构造——forward 等配置组合下槽也必须有效。1×1 RGBA16F 零图：
-		// 零矩 → Chebyshev p≈0 = 全亮（无害默认值；NaN 不可能——矩全零无 0/0）。
+		// shadow pass 时构造——forward 等配置组合下槽也必须有效。
+		// ⚠️ fallback 内容 = **far 面最大矩 (e^c, e^2c, −e^−c, e^−2c)**，不是零！
+		// 「无遮挡 = 全亮」的数学身份就是最大矩：receiver pw ≤ e^c 恒成立 → Chebyshev
+		// 快路（depth ≤ moments.x）命中 → 受光量 1。零矩是反方向（m0=0 → d=pw>0
+		// 处处成立 → 恒暗），forward 门开实测 176821 px **变暗**坐实（2026-10-02；
+		// 本注释初版写「零矩=全亮」是错的）。矩值由 kEvssmExponent（本文件顶部，
+		// 唯一权威源）现场推导，无字面量。
 		if (!evssmFallback) {
 			vk::ImageCreateInfo fi{};
 			fi.imageType = vk::ImageType::e2D;
@@ -217,8 +229,9 @@ export class Resources {
 			if (!img)
 				return std::unexpected(std::move(img).error());
 			evssmFallback = std::move(*img);
-			// 一次性：UNDEFINED→GENERAL + clear 零 + 保持 GENERAL（descriptor 声明
-			// GENERAL，采样 GENERAL 合法——与 EvssmShadow 矩图同布局策略）
+			// 一次性：UNDEFINED→GENERAL + clear **far 面最大矩** + 保持 GENERAL
+			// （descriptor 声明 GENERAL，采样 GENERAL 合法——与 EvssmShadow 矩图同布局策略）
+			const float zFar = std::exp(kEvssmExponent);  // e^c ≈ 244.69
 			auto cmdBufs = vkDevice.getDevice().allocateCommandBuffers(
 				{*vkDevice.getGraphicsCommandPool(), vk::CommandBufferLevel::ePrimary, 1});
 			auto& cmd = cmdBufs[0];
@@ -235,7 +248,7 @@ export class Resources {
 			dep.setImageMemoryBarriers(toGeneral);
 			cmd.pipelineBarrier2(dep);
 			cmd.clearColorImage(evssmFallback->image, vk::ImageLayout::eGeneral,
-				vk::ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f),
+				vk::ClearColorValue(zFar, zFar * zFar, -1.0f / zFar, 1.0f / (zFar * zFar)),
 				vk::ImageSubresourceRange{vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1});
 			cmd.end();
 			vk::raii::Fence fence(vkDevice.getDevice(), vk::FenceCreateInfo{});
