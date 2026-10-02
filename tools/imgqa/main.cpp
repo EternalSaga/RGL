@@ -347,7 +347,7 @@ int cmdIzb(const std::string& glb, const std::string& camera)
 // 对 B 场做平移搜索（±20cm）——**最优平移 = 影子在世界里滑了多少**。
 // 重投影基向量若与引擎有出入只会把两帧**同样地**翘曲，平移差不受影响（漂移
 // 量测自洽）；格内多数票消除像素级抖动。
-int cmdSwim(const std::string& glb, const std::string& camera, double dx, bool izb)
+int cmdSwim(const std::string& glb, const std::string& camera, double dx, bool izb, bool evssm)
 {
     const std::string stem = glb.substr(0, glb.find_last_of('.'));
     const Manifest man = loadManifest(stem);
@@ -361,6 +361,7 @@ int cmdSwim(const std::string& glb, const std::string& camera, double dx, bool i
         o.shadowPass = true;
         o.variant = "deferred";
         o.izbShadow = izb;
+        o.evssmShadow = evssm;
         makeProfile(projectRoot() + "/build/imgqa_profile_swim", o);
         Engine eng(projectRoot() + "/build/imgqa_profile_swim");
         return captureFrame(eng, cam, tag);
@@ -663,7 +664,7 @@ int main(int argc, char** argv)
         if (cmd == "swim")
             return cmdSwim(P.get(args, "--glb", "izb_rig.glb"),
                 P.get(args, "--camera", "ladder"), std::stod(P.get(args, "--dx", "0.06")),
-                P.has(args, "--izb"));
+                P.has(args, "--izb"), P.has(args, "--evssm"));
         if (cmd == "probe") {
             const auto parse3 = [](const std::string& s) {
                 std::array<double, 3> v{0, 0, 0};

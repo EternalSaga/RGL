@@ -188,7 +188,7 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
         "texel_canary", "dump_gbuf", "style_dist", "tex_dist", "texture_force_size",
         "texture_force_white", "texture_force_unorm", "profiler", "imgui", "config_reload",
         "shader_reload", "picking", "rpc", "rpc_port", "shadow_pass", "izb_shadow",
-        "izb_grid", "izb_dump_frame"};
+        "shadow_evssm", "izb_grid", "izb_dump_frame"};
     assertKeys("diagnostics.lua", diagKeys, knownRootKeys("rgl/diagnostics_impl.cppm"));
     writeFile(outDir + "/diagnostics.lua",
         std::string(
@@ -199,6 +199,7 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
             "  picking = ")
         + lb(o.picking) + ", rpc = true, rpc_port = 8788,\n  shadow_pass = " + lb(o.shadowPass)
         + ", izb_shadow = " + lb(o.izbShadow)
+        + ", shadow_evssm = " + lb(o.evssmShadow)
         + ", izb_dump_frame = " + std::to_string(o.izbDumpFrame) + " }\n");
 
     assertKeys("scene.lua",

@@ -115,6 +115,7 @@ struct ProfileOpts {
     double aoStrength = 0.0;
     bool shadowPass = false;
     bool izbShadow = false;                // diagnostics.izb_shadow（izb 消费域判据）
+    bool evssmShadow = false;              // diagnostics.shadow_evssm（批 11.6d swim 判据）
     int izbDumpFrame = 0;                  // diagnostics.izb_dump_frame（>0：N 帧起每 30 帧覆盖写 izb_mask.ppm）
     std::string variant;                   // "" = 模板默认（forward）；"deferred" 等 = 拷贝后重写 variant 行
     std::array<double, 3> lightDir{0.5, -0.75, -0.45};
