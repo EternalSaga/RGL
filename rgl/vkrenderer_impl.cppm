@@ -175,8 +175,9 @@ Renderer::Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RG
 			if (p.kind == RgPassKind::drawLight && !fullscreenPipelineIdx.contains(p.state))
 				throw std::runtime_error(fmt::format(
 					"Renderer: render graph has drawLight pass (state '{}') but no matching "
-					"pipeline entry (main must add{}Entry before Renderer)",
-					p.state, p.state == "light" ? "Light" : "Tonemap"));
+					"pipeline entry (main must build it: addLightEntry / addAoEntry / "
+					"addTonemapEntry, per state)",
+					p.state));  // 原三元式只认 light/tonemap 两名，ao 缺条目会误报 Tonemap
 		createSceneStaging(vkResources);  // 同步对象/命令缓冲已随手术 4 迁 FrameSession ctor
 	}
 // （captureBpp / Renderer::ensureCaptureStaging 已随手术 2 迁 frame_capture_impl.cppm）

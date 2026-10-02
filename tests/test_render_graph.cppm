@@ -781,6 +781,33 @@ TEST_CASE("segmentSpan 覆盖 kAllDrawSources 每个段名（表 ↔ if 链的�
     CHECK(unknown.data() == list.calls.data() + 3);
 }
 
+TEST_CASE("graphHasDeferredLight：deferred 的「图事实」判据（三张内建图 + 两个反例）") {
+    // 收口原 IZB / EVSSM 各写一份逐字相同的 any_of（vkrenderer_passrec 两处）。
+    // 语义 = 图事实（有没有人在跑 deferred 光照），**不是**配置层的 variant——
+    // 两者不等价正是本判据存在的理由（自定义 Lua 图可在 forward 变体下手写 light pass）。
+    // 变异红线：判据的 kind 侧或 state 侧任一半被删 → 下面两条反例立刻变 true 而红。
+    const auto passesOf = [](const RgGraphDesc& d) {
+        auto g = compileRenderGraph(d);
+        REQUIRE(g.has_value());
+        return g->passes;
+    };
+    CHECK(graphHasDeferredLight(passesOf(defaultRenderGraphDesc())) == false);   // forward HDR
+    CHECK(graphHasDeferredLight(passesOf(offscreenRenderGraphDesc())) == false); // blit 变体
+    CHECK(graphHasDeferredLight(passesOf(deferredRenderGraphDesc())) == true);   // 内建 deferred
+
+    // 反例 1：drawMesh 写 state="light" —— kind 不对，不算（且执行器 state 词表也不认它）
+    RgGraphDesc meshLight = minimalGraph();
+    meshLight.passes[0].state = "light";
+    CHECK(graphHasDeferredLight(passesOf(meshLight)) == false);
+
+    // 反例 2：只有 tonemap 的 drawLight（终图不是 deferred 光照消费方）
+    RgGraphDesc d = minimalGraph();
+    d.passes.push_back(RgPassDesc{
+        .name = "tonemap", .kind = RgPassKind::drawLight, .state = "tonemap",
+        .outputs = {colorOut("swapchain")}});
+    CHECK(graphHasDeferredLight(passesOf(d)) == false);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // 组 8：三个装饰函数（行为以 rgl/render_graph_decorate.cppm 为准）
 // ═══════════════════════════════════════════════════════════════════════════

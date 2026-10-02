@@ -326,6 +326,20 @@ export struct CompiledRenderGraph {
 };
 
 /**
+ * **图事实层**判据：编译图里是否有 deferred 光照 pass（`kind == drawLight` 且
+ * `state == kDeferredLightState`）。
+ *
+ * 它与配置层的 `RgGraphVariant::deferred` **是两件事**（2026-10-02 收口：此前
+ * IZB 与 EVSSM 各写一份逐字相同的 `any_of` 现推）：消费方要的是"有没有人在跑 deferred
+ * 光照 / 有没有 G-buffer 可消费"，不是"配置里 variant 写了什么"——自定义 Lua 图可以在
+ * forward 变体下手写 light pass。两个真相源的分歧交给 gate_lint 交叉校验
+ * （docs/gate_lint_plan.md §3-A），**不在这里抹平**。
+ * @param passes 编译图 pass 序列（`CompiledRenderGraph::passes`）
+ * @return true = 图里有 deferred 光照 pass
+ */
+export bool graphHasDeferredLight(std::span<const RgPassPlan> passes);
+
+/**
  * 物化：语义计划 + 执行器解析出的 image/oldLayout → ImageMemoryBarrier2
  *（oldLayout 由执行器按 plan.oldLayoutDiscard 给 eUndefined 或跨帧/帧内追踪值）。
  * @param plan 编译产出的语义 barrier 计划

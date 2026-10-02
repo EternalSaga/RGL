@@ -7,6 +7,7 @@ import rlstd;
 import rlvk;
 import vkerror;
 import vulkan_utils;  // createImageBarrier（物化用）
+import pass_vocabulary;  // kDeferredLightState
 
 namespace RGL {
 
@@ -601,6 +602,14 @@ vk::ImageMemoryBarrier2 materializeBarrier(const RgBarrierPlan& plan, VkImage im
 	vk::ImageLayout oldLayout) {
 	return RGL::createImageBarrier(image, oldLayout, plan.newLayout, plan.aspect,
 		plan.srcStage, plan.dstStage, plan.srcAccess, plan.dstAccess);
+}
+
+/** graphHasDeferredLight 定义（接口注释见 render_graph.cppm：图事实层判据，收口原
+ *  IZB / EVSSM 两处逐字相同的 any_of）。 */
+bool graphHasDeferredLight(std::span<const RgPassPlan> passes) {
+	return std::ranges::any_of(passes, [](const RgPassPlan& p) {
+		return p.kind == RgPassKind::drawLight && p.state == kDeferredLightState;
+	});
 }
 
 }  // namespace RGL

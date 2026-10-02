@@ -100,6 +100,14 @@ consteval auto namesInScope() {
 }  // namespace detail
 
 /**
+ * deferred 光照 pass 的 state 名（fullscreenPass 档里唯一带"图事实语义"的一个：
+ * 「图里有没有 deferred 光照 pass」= 有没有 `drawLight` + 本名，见
+ * render_graph::graphHasDeferredLight）。IZB / EVSSM / dump_gbuf 三类消费方判据
+ * 都读它，故从字面量升为具名常量（比较侧用它，构造侧仍写字面量以便阅读）。
+ */
+export inline constexpr std::string_view kDeferredLightState = "light";
+
+/**
  * drawMesh pass 的合法 state 子集（派生自 kAllPassStates，scope = meshPass）——
  * 执行器 validateRenderGraphForExecutor 校验 drawMesh pass 的 state 用本表。
  */
@@ -149,6 +157,11 @@ export constexpr bool isFullscreenPassState(std::string_view name) {
 			return true;
 	return false;
 }
+
+// 具名常量与词表的绑定（改名时**编译不过**，而不是留下一个恒 false 的静默死判据）。
+static_assert(isKnownStateName(kDeferredLightState)
+		&& isFullscreenPassState(kDeferredLightState),
+	"kDeferredLightState 必须是 kAllPassStates 里的 fullscreenPass 档状态名");
 
 // 同名同数校验（StateKit 用它做 static_assert）。三个函数各管一段，合成一条判据；
 // 用 `export { }` 包一块是因为 doc 检查的"可跳过 template 引入行"只认行首

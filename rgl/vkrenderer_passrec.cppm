@@ -232,8 +232,7 @@ void Renderer::izbPreFrame() {
 	++izbFrameNo;
 	if (!diagnostics().izbShadow)
 		return;
-	const bool deferred = std::ranges::any_of(renderGraph.passes,
-		[](const RgPassPlan& p) { return p.kind == RgPassKind::drawLight && p.state == "light"; });
+	const bool deferred = graphHasDeferredLight(renderGraph.passes);
 	const auto depthIt = std::ranges::find_if(renderGraph.attachments,
 		[](const auto& a) { return a.kind == RgAttachmentKind::depth; });
 	if (!deferred || depthIt == renderGraph.attachments.end())
@@ -280,8 +279,7 @@ void evssmWarnOnce(bool& flag, const char* msg) {
 void Renderer::evssmPreFrame() {
 	if (evssmShadow || !diagnostics().shadowEvssm || !diagnostics().shadowPass)
 		return;
-	const bool deferred = std::ranges::any_of(renderGraph.passes,
-		[](const RgPassPlan& p) { return p.kind == RgPassKind::drawLight && p.state == "light"; });
+	const bool deferred = graphHasDeferredLight(renderGraph.passes);
 	if (!deferred) {
 		static bool warnedNonDeferred = false;
 		evssmWarnOnce(warnedNonDeferred,
