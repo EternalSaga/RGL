@@ -55,6 +55,7 @@ uint32_t findMemoryType(const vk::raii::PhysicalDevice& phys, uint32_t requireme
 uint32_t bytesPerPixel(vk::Format f) {
     switch (f) {
         case vk::Format::eR32Uint:
+        case vk::Format::eR32Sfloat:  // 11.3 补账：izb 引擎契约测试的深度输入（实测用过才入册）
         case vk::Format::eR8G8B8A8Unorm:
         case vk::Format::eR8G8B8A8Srgb:
         case vk::Format::eB8G8R8A8Unorm:

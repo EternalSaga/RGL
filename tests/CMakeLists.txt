@@ -66,6 +66,7 @@ set(RGL_TEST_SOURCES
     test_conservative_mesh.cppm      # gpu 套件 11.3-1b 成败门：保守光栅 × mesh shader × RADV（含 EDS3 动态态）
     test_izb_create.cppm             # gpu 套件 11.3-1c：IZB grid-of-lists 原子创建 + early-Z priming
     test_izb_mask.cppm               # gpu 套件 11.3-1d：光空间保守光栅 × IZB 走链 mask 判定
+    test_izb_engine_contract.cppm    # gpu 套件 11.3 补账：引擎真 SPV 的 ndc 口径/字节偏移/guard 契约
 )
 
 # ─── 11.3-1b 探针 SPIR-V（izb_spike mesh/frag，测试专用不入引擎 SPV 面）──────
@@ -137,6 +138,12 @@ target_link_libraries(rgl_tests
 target_compile_definitions(rgl_tests PRIVATE RGL_TESTS_HAVE_GPU_TESTS=1)
 # 1b 探针 SPIR-V 绝对路径（构建产物目录；测试读文件建 shader module，spv 缺失 = 响亮失败）
 target_compile_definitions(rgl_tests PRIVATE RGL_TEST_SHADER_DIR="${CMAKE_CURRENT_BINARY_DIR}/generated_shaders")
+# 11.3 补账：引擎**真产物**目录（izb_engine_contract 测的就是这份 SPV 本体——测
+# spike 副本会重演「两份实现漂移」的 1c 盲区，2026-10-02 ndc 镜像 bug 实证）。
+target_compile_definitions(rgl_tests PRIVATE RGL_ENGINE_SHADER_DIR="${CMAKE_BINARY_DIR}/rgl/generated_shaders")
+# 引擎 SPV 由 rgl 目标的 slang 规则产出：rgl_tests 直接依赖它，否则 `just test-gpu`
+# 单测目标时拿到陈旧 SPV（"改完 shader 没重建就报全通过"的 modules 环境坑同款）。
+add_dependencies(rgl_tests rgl)
 
 # 测试代码不纳入 source_checks（tools/checks 扫的是 rgl/）：doctest 宏会触发大量
 # 误报（GMF 白名单、行数阈值、函数长度对 TEST_CASE 全是噪声）。测试代码的质量由
