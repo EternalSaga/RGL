@@ -111,6 +111,30 @@ CPU-bound（record 7.03 ms）——实施批必量录制增量，必要时合批
       （Δz×0.0093 锚，测量基建 = 11.5 计划中的 imgqa 判据，届时补建）。
 - [ ] 11.6 转正裁决：EVSSM 进默认路径 or 保持门后 or 回退经典 PCSS。
 
+### 4.1 实施形态定案（2026-10-02，11.6d 权威路线）
+
+**C 方案 = 矩由 compute 从 D32 阴影图派生**，Filament 阵型（光栅直写矩 +
+sampler2DArray + RT 缓存改造）推迟为后续优化：
+
+- shadow pass **零改动**（depth-only D32 图集原样，正交深度本就线性）；
+  矩 = 图外 compute（IZB 同类编舞，dispatch 基建/槽位/转换全部有先例）：
+  ① moments_from_depth（读 D32 各 tile → 写 RGBA16F mip0，Filament 同款
+  `z=exp(c·(2d−1))` 矩组 + far 像素=最大矩天然成立，无需特判 clear）
+  ② 7 级 per-tile box 降采样（探针已证 tile 边界对齐、dispatch z=tile 即可，
+  不跨块互染）；
+- 矩图 = 2048² RGBA16F mipLevels=8 单纹理（非 array——per-tile 手动 mip 链，
+  采样端 textureLod + 块内 0.5 texel inset）；
+- 消费 = shadow.slang 新变体 `-DEVSSM_SOFT`（O(1) mip 搜索 + soft clamp +
+  quincunx 5 抽头，Filament 公式直抄）；变体组合 = forward×3 + light×{base,izb}×EVSSM
+  （rgl_shader_defined2 已备）；
+- scene data 新 vec4 区 @722048（半坡 tan(θ/2) / 搜索半径 / 半影上限）；配置
+  门 `shadow_evssm`（与冻结的 shadow_pcss 分立），数值键复用 pcss_*；
+- 代价 = 比 Filament 融合式多一遍 D32 读 + 矩写（探针估 ~+0.1 ms），换掉的
+  是 RT 缓存/graph/executor 三大件零改动 + 门关红线构造性保证不新增暴露面。
+
+**机器注脚更新**：探针机 8060S STRIX_HALO 已由用户确认（三机轮换常态，
+AGENTS 已定「机器不著书」纪律）；Raphael/NVIDIA 跨机复测仍列遗留。
+
 ## 5. 红线与纪律
 
 - 门关逐位 = 老红线（批 11.5 已把「门关 = 选原版 SPV 变体」机制建成，
@@ -123,4 +147,5 @@ CPU-bound（record 7.03 ms）——实施批必量录制增量，必要时合批
 ## 6. 已知遗留（未排期，登记勿丢）
 
 - 11.5 冻结件未写测试（fallback 定位，转正时补：半影宽度闭式 + swim 扩展）。
-- 源树 configs 测试态改动（`izb_shadow=true`、`variant=deferred`）待用户处置。
+- ~~源树 configs 测试态改动待处置~~ → 已转正（`c05b2bd`：variant=deferred、
+  izb_shadow=true、pcss_* 四键默认关）。

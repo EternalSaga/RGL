@@ -95,6 +95,9 @@ CMake 无独立构建目录——必须从根目录构建（`cmake -B build -S .
 
 ## 运行要点
 
+- **工作机器不著书**（2026-10-02 用户拍板：三台机器轮换，一台干完换一台测）：开工先认设备
+  （启动日志 deviceName / vkinfo）；本文与 docs 里的性能数字均**绑特定机器**，跨机先复测再对比。
+
 - **CWD 必须是 `build/rgl/`**（相对路径读 configs/ 与 spv）· 运行模式全配置化（runtime/diagnostics/render_graph.lua）· build 端 configs 副本被 `just build` 按内容比对静默覆盖复原（临时调试改副本别改源）；
   运行环境细节、冒烟命令、headless/llm_debug 截图流程、截图回归方法学 → skill `rgl-verify`
 - **RPC 调试通道**（端点速查 / 线程时序 / cameraAimAt 反推与启动探测 → `docs/技术概念.md §RPC 调试通道`）：
@@ -215,7 +218,7 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
   且真实湿面应同时压暗漫反射而这里没做 → 湿区略"亮而奶"。补它需 per-material wetness 分量
   进 scene data（draw data schema 扩列 = 反射管线改动），列 Phase 12 候选
 - **灯契约（现行）**：`Light` 组件 + `index` = 列表位正序（画不画 = 实体有无；forward 读 index 0 = 主光，延迟按 index 落槽）；`SceneLight`（前向头）/`GpuLight`（灯数组）布局均走 C API 反射生成，无手写双源
-- **GPU culling（Phase 7b）现状（现行）**：默认 = compute culling + **读回重放**（三驱动均跑 culling compute，无开关）；DGC execute 仅 NVIDIA graphicsIndirect=true 可走，本机 RADV（9950X Raphael RDNA2）与 Intel anv 均 false → 重放；RADV 静态 shader 模式 spike 功能通但性能亏 1.85× → `diagnostics.dgc_static` 门默认关。
+- **GPU culling（Phase 7b）现状（现行）**：默认 = compute culling + **读回重放**（三驱动均跑 culling compute，无开关）；DGC execute 仅 NVIDIA graphicsIndirect=true 可走，RADV 与 Intel anv 实测均 false（机器归属见 nvidia_compatibility_report）→ 重放；RADV 静态 shader 模式 spike 功能通但性能亏 1.85× → `diagnostics.dgc_static` 门默认关。
   CPU 剔除保留为兜底 + 每帧对账基准（reconcile 不一致告警不中断）；mvp 由 CPU 算进 scene data per-object 表（GPU float4x4 FMA 收缩序与 glm 无位级契约，保 forward diff0）。
   驱动级细节/历史 → `docs/archive/radv_static_dgc_spike.md` / `docs/nvidia_compatibility_report.md` / 调试历史 2026-09-10
 
@@ -233,7 +236,7 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
 - `docs/hfts_izb_plan.md` — HFTS/FTIZB 调研与实施计划（批 11.3 权威载体：论文结论 / 开源现状 / 项目 gap / 分阶段 1a–1e + 收手判据；§4.3 = 2026-10-02 路线改道记录）
 - `docs/evssm_plan.md` — **EVSSM 软阴影（批 11.6，现行）**：Filament EVSSM 作业清单 / 分轴质量对比 / 三只拦路虎 / spike 批次拆分（远场软影权威路线，HFTS 已降级 backlog）
 - `docs/DESCRIPTOR_HEAP_SPEC.md` — descriptor heap 排坑记录（活文档）
-- `docs/nvidia_compatibility_report.md` — 跨驱动兼容性（三平台记录；当前机 = 9950X Raphael RDNA2 核显，非 Strix Halo）
+- `docs/nvidia_compatibility_report.md` — 跨驱动兼容性（三平台记录；**不写"本机"是哪台**——三机轮换，开工前看启动日志 deviceName 确认）
 - `docs/device_generated_commands_research.md` — GPU culling 双驱动实测（Phase 7b 依据）
 - `docs/device_fault_调研.md` — VK_(EXT|KHR)_device_fault 的 device lost 诊断调研（**未实施**）
 - `docs/archive/radv_static_dgc_spike.md` — RADV 静态 shader DGC spike（功能通、慢 1.85× → 默认不开；翻盘设计底稿）
