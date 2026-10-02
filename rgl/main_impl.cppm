@@ -34,6 +34,7 @@ import vk_renderer;
 import frame_draw_list;
 import render_graph;
 import render_graph_config;
+import gate_lint;  // 门组合自检（启动期一次，docs/gate_lint_plan.md §3-C）
 import scene_config;
 import gltf_loader;
 import model_importer;
@@ -249,14 +250,18 @@ CompiledGraphResult compileGraphOrThrow(const char* path) {
 	if (!graphConfig)
 		throw std::runtime_error(graphConfig.error().describe());
 	bool deferredMode = graphConfig->variant == RgGraphVariant::deferred;
+	// 装饰失败 warn 留在装饰期（失败与否 = 装饰函数对图形态的判定结果，lint 复刻判据
+	// = 影子模型，防腐条款 1）；消息带锚点定义，让「为什么没插进去」不用读代码。
 	if (diagnostics().picking && !decoratePickingPass(graphConfig->desc)) {
 		if (auto* logger = RLLogger::getInstance())
-			logger->warn("picking: 图形态不支持 object_id pass 装饰（无带 depth 的 opaque pass），点选不可用");
+			logger->warn("picking: 图形态不支持 object_id pass 装饰（锚点 = 首个 drawSource=opaque "
+				"且输出 depth 的 drawMesh pass，未找到），点选不可用");
 	}
 	// 批 10.7：高亮 pass 装饰（写既有 scene_hdr + depth，插图末；同门 = 默认关不调用）
 	if (diagnostics().picking && !decorateHighlightPass(graphConfig->desc)) {
 		if (auto* logger = RLLogger::getInstance())
-			logger->warn("highlight: 图形态不支持高亮 pass 装饰（无带 depth 的 opaque pass），选中无视觉高亮");
+			logger->warn("highlight: 图形态不支持高亮 pass 装饰（锚点 = 首个采样场景色附件的 pass "
+				"之前，且其前须有 depth 写者可借），选中无视觉高亮");
 	}
 	// Phase 11 批 11.2：阴影 pass 装饰**无条件**（不再由 diagnostics 门控）。原因（实测驱动）：
 	// 光照管线条目**无条件把阴影图的描述槽烘焙进去**，所以图里必须无条件地有这张图
@@ -272,7 +277,29 @@ CompiledGraphResult compileGraphOrThrow(const char* path) {
 	if (!compiledGraph)
 		throw std::runtime_error(fmt::format("render graph compile failed: {}",
 			compiledGraph.error().describe()));
-	return CompiledGraphResult{std::move(*compiledGraph), deferredMode};
+	return CompiledGraphResult{std::move(*compiledGraph), deferredMode, graphConfig->variant};
+}
+
+/**
+ * 门组合自检（gate_lint 批 §3-C，docs/gate_lint_plan.md）：启动期跑一次全量表。
+ * 门在进程内不可变（setDiagnostics 全仓仅此一处运行期调用）→ 结论对全程权威。
+ * 时序契约 = compileGraphOrThrow 之后（要图事实）、GPU 大对象装配之前（findings
+ * 早于一切渲染日志，先于问题现场）。lint **不阻止启动**（诊断门不该让程序起不来）。
+ * @param runtime runtime.lua 产物（headless / llm_debug 两个消费前提）
+ * @param device 设备上下文（staticGraphicsIndirect 能力事实）
+ * @param graphResult 编译图产物（passes = 图事实；variant = 配置意图，交叉校验）
+ */
+void runGateLint(const RuntimeConfig& runtime, const DeviceContext& device,
+	const CompiledGraphResult& graphResult) {
+	GateEnv gateEnv;
+	gateEnv.headless = runtime.headless;
+	gateEnv.llmCapture = runtime.llm.enabled;
+	gateEnv.staticGraphicsIndirect = device.getDgcSupport().staticGraphicsIndirect;
+	const auto findings = lintDiagnosticsGates(diagnostics(), DiagnosticsConfig{},
+		graphResult.graph.passes, graphResult.variant, gateEnv);
+	const uint32_t errors = logGateFindings(findings);
+	if (auto* logger = RLLogger::getInstance())
+		logger->info("gate_lint: {} findings ({} error)", findings.size(), errors);
 }
 
 }  // namespace RGL
@@ -371,6 +398,8 @@ int main() {
 		if (auto* logger = RLLogger::getInstance())
 			logger->info("RenderGraph: {} attachments / {} passes compiled",
 				graphResult.graph.attachments.size(), graphResult.graph.passes.size());
+		// 门组合自检（gate_lint 批，docs/gate_lint_plan.md §3-C）
+		runGateLint(configs.runtime, vkDevice, graphResult);
 		// Renderer 构造下移至 deferred G-buffer RT / light 管线就绪之后（deferred 模式需在构造前
 		// addLightEntry 供 Renderer 取 light 管线下标）；compiledGraph 此时保持存活（下方 move 进 Renderer）
 

@@ -248,6 +248,8 @@ set(RGL_SCENE_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/render_graph_rtslot.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/render_graph_config.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/render_graph_config_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/gate_lint.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/gate_lint_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/environment.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/env_prefilter.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/env_prefilter_impl.cppm"

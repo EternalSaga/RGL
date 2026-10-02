@@ -14,6 +14,7 @@ import scene_config;        // SceneConfig
 import runtime_config;      // RuntimeConfig
 import vulkan_window;       // SDLWindow
 import render_graph;        // CompiledRenderGraph
+import render_graph_config;  // RgGraphVariant（CompiledGraphResult.variant，gate_lint 交叉校验）
 import vk_device;           // DeviceContext
 import vk_swapchain;        // Swapchain
 import vk_resources;        // Resources
@@ -65,10 +66,12 @@ export std::string configPath(const char* fileName);
  */
 export std::optional<StartupConfigs> loadAllConfigs();
 
-/** 渲染意图图编译产物（图 + deferred 路线标志，按 variant 求值）。 */
+/** 渲染意图图编译产物（图 + deferred 路线标志 + 路线意图枚举，按 variant 求值）。
+ *  variant 随产物带出供 gate_lint 交叉校验（意图 vs 图事实，docs/gate_lint_plan.md §3-A）。 */
 export struct CompiledGraphResult {
 	CompiledRenderGraph graph;
 	bool deferredMode = false;
+	RgGraphVariant variant = RgGraphVariant::forward;
 };
 
 /**

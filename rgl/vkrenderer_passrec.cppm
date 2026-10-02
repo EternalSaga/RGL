@@ -235,6 +235,8 @@ void Renderer::izbPreFrame() {
 	const bool deferred = graphHasDeferredLight(renderGraph.passes);
 	const auto depthIt = std::ranges::find_if(renderGraph.attachments,
 		[](const auto& a) { return a.kind == RgAttachmentKind::depth; });
+	// 非 deferred 在此静默早退是**合法运行期形态**（图判定不该在录制路径打日志）；
+	// 「izb_shadow=true 配了却必然无效」由 gate_lint 启动期 error 喊（R-02，2026-10-02）。
 	if (!deferred || depthIt == renderGraph.attachments.end())
 		return;
 	depthAttSlot = static_cast<int32_t>(depthIt - renderGraph.attachments.begin());
@@ -279,14 +281,11 @@ void evssmWarnOnce(bool& flag, const char* msg) {
 void Renderer::evssmPreFrame() {
 	if (evssmShadow || !diagnostics().shadowEvssm || !diagnostics().shadowPass)
 		return;
-	const bool deferred = graphHasDeferredLight(renderGraph.passes);
-	if (!deferred) {
-		static bool warnedNonDeferred = false;
-		evssmWarnOnce(warnedNonDeferred,
-			"shadow_evssm=true 但非 deferred 变体：EVSSM v1 仅接 deferred light pass"
-			"（forward 消费点在 geometry pass，sandwich 未接），EvssmShadow 不构造");
+	// 非 deferred 组合由 gate_lint 启动期 error（R-03，2026-10-02 从这里的 warn-once
+	// 迁走——不走到这一帧就永远不喊的病灶收口）；运行期早退保留（消费点在 deferred
+	// light pass，判据不变）。
+	if (!graphHasDeferredLight(renderGraph.passes))
 		return;
-	}
 	// 阴影图槽 = RT 缓存按名查（启动期 ensureShadowMapSlot 无条件建，deferred 判据
 	// 在其后）；矩图 sampled 槽 = Resources 预发号（binding 15 已 bake 同号）。
 	const auto shadowSlot = rtCache->heapSlot(std::string{kShadowMapName}.c_str());
@@ -297,7 +296,9 @@ void Renderer::evssmPreFrame() {
 			"EvssmShadow 依赖缺失（shadow map slot / moments slot），EVSSM 关闭");
 		return;
 	}
-	vkDevice.getDevice().waitIdle();  // 热开门（RPC 拨开关）路径保护，同 IzbShadow 重建规则
+	vkDevice.getDevice().waitIdle();  // 矩图链构造不得与在飞帧重叠（preFrame 首构造可能跑在
+	// GPU 执行上一帧期间），同 IzbShadow 重建规则。旧注释称「热开门（RPC 拨开关）」
+	// 已不成立：setDiagnostics 全仓仅启动期一处调用，门进程内不可变（2026-10-02 核对）。
 	evssmShadow = std::make_unique<RGL::EvssmShadow>(
 		vkDevice, *resources, kShadowMapSize,
 		shadowAtlasColumns(kActiveShadowCascades), kEvssmMipLevels, 5.5f,
