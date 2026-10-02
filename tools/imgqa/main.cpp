@@ -1,13 +1,18 @@
-// imgqa CLI。子命令：selftest / check / refuse / attribution / faces / switch / izb / probe / note。
+// imgqa CLI。子命令：selftest / check / refuse / attribution / faces / switch / izb / swim / probe / note。
 #include "imgqa.h"
 
 #include <cstdio>
+#include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <map>
 #include <sstream>
 #include <string>
+
+#include <glm/glm.hpp>
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -336,6 +341,139 @@ int cmdIzb(const std::string& glb, const std::string& camera)
     return (vAnchor.ok && vDomain.ok && vConsume.ok) ? 0 : 1;
 }
 
+// ── swim：影子世界空间游动量测（同场景两机位，静态太阳下影场必须世界不变）────
+// 判据不是屏幕观感相关（视差会淹没它，5a-7 时代 1D 剖面互相关实测被骗）：
+// 把两帧的地面像素各自重投影回世界 y=0 平面、栅格化 2cm 格的受光/遮阴影场，
+// 对 B 场做平移搜索（±20cm）——**最优平移 = 影子在世界里滑了多少**。
+// 重投影基向量若与引擎有出入只会把两帧**同样地**翘曲，平移差不受影响（漂移
+// 量测自洽）；格内多数票消除像素级抖动。
+int cmdSwim(const std::string& glb, const std::string& camera, double dx, bool izb)
+{
+    const std::string stem = glb.substr(0, glb.find_last_of('.'));
+    const Manifest man = loadManifest(stem);
+    const auto it = man.cameras.find(camera);
+    if (it == man.cameras.end())
+        throw std::runtime_error("机位不存在: " + camera);
+
+    const auto captureGround = [&](const Engine::Camera& cam, const std::string& tag) {
+        ProfileOpts o;
+        o.glb = glb;
+        o.shadowPass = true;
+        o.variant = "deferred";
+        o.izbShadow = izb;
+        makeProfile(projectRoot() + "/build/imgqa_profile_swim", o);
+        Engine eng(projectRoot() + "/build/imgqa_profile_swim");
+        return captureFrame(eng, cam, tag);
+    };
+    Engine::Camera camB = it->second;
+    camB.position[0] += dx;
+    camB.target[0] += dx;
+    const Frame fA = captureGround(it->second, "swim_a");
+    const Frame fB = captureGround(camB, "swim_b");
+
+    const auto groundField = [](const Frame& f, const Manifest& m) {
+        const Attribution at = attribute(f, m);
+        const cv::Mat gnd = maskOfPiece(f, at, "ground");
+        // 阴影阈值 = 地面亮度 p95 × 0.3（env=0 解析光照：受光亮/遮黑双峰，居中判）
+        std::vector<double> vals;
+        for (int y = 0; y < gnd.rows; ++y)
+            for (int x = 0; x < gnd.cols; ++x)
+                if (gnd.at<uint8_t>(y, x))
+                    vals.push_back(f.luma.at<double>(y, x));
+        if (vals.size() < 1000)
+            throw std::runtime_error("地面像素过少，机位无效？");
+        std::sort(vals.begin(), vals.end());
+        const double thr = vals[static_cast<size_t>(vals.size() * 0.95)] * 0.3;
+        // 重投影（引擎口径：fb 行 0 ↔ ndc.y +1；fov 竖直，x 乘 aspect）
+        const glm::vec3 pos(f.camera.position[0], f.camera.position[1], f.camera.position[2]);
+        const glm::vec3 tgt(f.camera.target[0], f.camera.target[1], f.camera.target[2]);
+        const glm::vec3 fw = glm::normalize(tgt - pos);
+        const glm::vec3 rt = glm::normalize(glm::cross(fw, glm::vec3(0.f, 1.f, 0.f)));
+        const glm::vec3 up = glm::cross(rt, fw);
+        const double tanH = std::tan(f.camera.fovDegrees * 3.14159265358979 / 360.0);
+        const double aspect = static_cast<double>(f.bgr.cols) / f.bgr.rows;
+        std::map<std::pair<int, int>, int> votes;
+        for (int y = 0; y < gnd.rows; ++y)
+            for (int x = 0; x < gnd.cols; ++x) {
+                if (!gnd.at<uint8_t>(y, x))
+                    continue;
+                const double nx = (x + 0.5) / f.bgr.cols * 2.0 - 1.0;
+                const double ny = 1.0 - (y + 0.5) / f.bgr.rows * 2.0;
+                const glm::vec3 dir = glm::normalize(fw
+                    + rt * static_cast<float>(nx * tanH * aspect)
+                    + up * static_cast<float>(ny * tanH));
+                if (std::abs(dir.y) < 1e-6)
+                    continue;
+                const double t = -pos.y / dir.y;
+                if (t <= 0 || t > 5000.0)
+                    continue;
+                const glm::vec3 w = pos + dir * static_cast<float>(t);
+                const auto cell = std::make_pair(static_cast<int>(std::floor(w.x / 0.05)),
+                    static_cast<int>(std::floor(w.z / 0.05)));
+                votes[cell] += f.luma.at<double>(y, x) < thr ? 1 : -1;
+            }
+        std::map<std::pair<int, int>, bool> field;
+        for (const auto& [c, v] : votes)
+            if (std::abs(v) >= 2)  // 格内至少 2 票同向（5cm 格 ≈ 3~4 像素，边缘半格噪声丢弃）
+                field[c] = v > 0;
+        return field;
+    };
+    const auto fieldA = groundField(fA, man);
+    const auto fieldB = groundField(fB, man);
+
+    // 零位移失配 = 主判据；FAIL 才做平移搜索量化"滑了多少"（候选覆盖率以零位移
+    // 共同格数为基准，防止把低覆盖的角落平移当最优解——首跑 48 格教训）
+    int mismatchAt0 = 0, common0 = 0;
+    for (const auto& [c, sh] : fieldA) {
+        const auto b = fieldB.find(c);
+        if (b == fieldB.end())
+            continue;
+        ++common0;
+        if (b->second != sh)
+            ++mismatchAt0;
+    }
+    std::printf("  影场格 A=%zu B=%zu 共同=%d（5cm 格）；零位移失配 %d = %.2f%%\n",
+        fieldA.size(), fieldB.size(), common0, mismatchAt0,
+        100.0 * mismatchAt0 / std::max(1, common0));
+    int bestX = 0, bestZ = 0;
+    size_t bestMismatch = static_cast<size_t>(mismatchAt0);
+    if (mismatchAt0 > std::max(20, common0 / 200)) {
+        size_t bestN = 0;
+        for (int sz = -10; sz <= 10; ++sz)
+            for (int sx = -10; sx <= 10; ++sx) {
+                size_t mm = 0, n = 0;
+                for (const auto& [c, sh] : fieldA) {
+                    const auto b = fieldB.find({c.first + sx, c.second + sz});
+                    if (b == fieldB.end())
+                        continue;
+                    ++n;
+                    if (b->second != sh)
+                        ++mm;
+                }
+                if (n < static_cast<size_t>(common0) * 8 / 10)
+                    continue;  // 覆盖率不足，该候选不可信
+                if (mm < bestMismatch || (mm == bestMismatch && n > bestN)) {
+                    bestMismatch = mm;
+                    bestN = n;
+                    bestX = sx;
+                    bestZ = sz;
+                }
+            }
+    }
+    std::printf("  最优平移 (%d, %d) 格 = (%.0f, %.0f) cm，失配 %zu\n", bestX, bestZ,
+        bestX * 5.0, bestZ * 5.0, bestMismatch);
+    const bool still = mismatchAt0 <= std::max(20, common0 / 200);
+    const Verdict v = verdictFor("shadow-swim", still,
+        "机位平移 " + std::to_string(dx) + " m：影场零位移失配 "
+            + std::to_string(mismatchAt0) + "/" + std::to_string(common0)
+            + "（阈 max(20, 共同/200)），漂移估计 (" + std::to_string(bestX * 5) + ", "
+            + std::to_string(bestZ * 5) + ") cm");
+    std::cout << "  " << v.line() << "\n";
+    logCall("swim", {{"glb", glb}, {"camera", camera}, {"dx", std::to_string(dx)},
+        {"izb", izb ? "on" : "off"}}, {v});
+    return v.ok ? 0 : 1;
+}
+
 // ── probe：闭式解探针（12.3b 接替 analytic_ref.py --probe；配置即契约）──
 int cmdProbe(const std::string& configDir, int x, int y, Vec3 albedo, double roughness,
     double metallic, Vec3 l, double intensity, int tol, bool lightOverride)
@@ -484,6 +622,7 @@ void printUsage()
         "  faces [--glb X.glb] --piece 名              闭式解逐面预测 vs 观测亮度簇\n"
         "  switch [--glb X.glb] [--camera 名] [--allow-piece a,b]  开关影响域 + 死分支（含确定性前置）\n"
         "  izb [--glb izb_rig.glb] [--camera ladder]  IZB 消费域：mask↔画面寻址一致性（三子判据）\n"
+        "  swim [--glb izb_rig.glb] [--camera ladder] [--dx 0.06] [--izb]  影场世界不变量：机位平移后重投影比影场（0 位移）\n"
         "  probe [--x 640] [--y 360] [--light Lx,Ly,Lz] [--tol 2]  闭式解探针：该是多少 vs 实际是多少\n"
         "  note \"事后真相\"                             回填最后一条调用记录（晋升凭据）\n");
 }
@@ -521,6 +660,10 @@ int main(int argc, char** argv)
         if (cmd == "izb")
             return cmdIzb(P.get(args, "--glb", "izb_rig.glb"),
                 P.get(args, "--camera", "ladder"));
+        if (cmd == "swim")
+            return cmdSwim(P.get(args, "--glb", "izb_rig.glb"),
+                P.get(args, "--camera", "ladder"), std::stod(P.get(args, "--dx", "0.06")),
+                P.has(args, "--izb"));
         if (cmd == "probe") {
             const auto parse3 = [](const std::string& s) {
                 std::array<double, 3> v{0, 0, 0};
