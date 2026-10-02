@@ -1,5 +1,6 @@
 module;
 #include <doctest/doctest.h>
+#include <algorithm>   // std::ranges::count（回显全量条目计数；先例 test_evssm_math.cppm）
 #include <glm/glm.hpp>
 #include <filesystem>  // 临时 lua 落盘（AGENTS.md GMF 例外清单成员）
 
@@ -672,6 +673,101 @@ TEST_CASE("diagnostics：setDiagnostics → diagnostics() 单例往返（main �
 	// 还原全默认，避免污染同进程其它用例（单例 = 进程级状态，谁改谁负责收尾）
 	setDiagnostics(DiagnosticsConfig{});
 	CHECK(diagnostics().frameStats == 0u);
+}
+
+namespace {
+bool containsKey(const std::vector<std::string>& v, std::string_view k) {
+	for (const auto& s : v)
+		if (s == k)
+			return true;
+	return false;
+}
+}  // namespace
+
+TEST_CASE("diagnostics 回显覆盖率护栏：解析器读过的键集合 == 回显表键集合（双向）") {
+	// 回显此前是手写子集（38 门只列 ~11 个，连默认开的 shadow_pass 都不出现）。
+	// 本用例是防漂移护栏（docs/gate_lint_plan.md §3-B）：两个方向都断——
+	//   回显表删一行 / 解析器漏记一键 / 两处任一侧改拼写 → set 相等立刻红。
+	// 探针子表字段只在表存在时才被读 → 测试文件写全三张探针表。
+	// 变异红线：kGateEcho 删任一条目或 readBool/readF64/readI64 删记录行 → 本用例红。
+	TempLua f("dg_keys", R"lua(
+return {
+  picking_probe = { frame = 0, x = 0, y = 0 },
+  ui_click_probe = { frame = 0, x = 0, y = 0 },
+  camera_probe = { frame = 0, key = "W", holdFrames = 8 },
+}
+)lua");
+	DiagnosticsKeyTrace trace;
+	auto r = loadDiagnosticsConfig(f.pathStr(), &trace);
+	REQUIRE(r.has_value());
+	const auto echo = diagnosticsEchoKeys();
+	CHECK(echo.size() == 38u);            // 钉死门数：加门不更新回显表 → 这里先红
+	CHECK(trace.read.size() == 38u);      // 解析器恰好读一遍（重复读 = 记录点放错层）
+	for (const auto& k : echo)
+		CHECK(containsKey(trace.read, k));    // 回显有而解析器不读 = 陈旧键
+	for (const auto& k : trace.read)
+		CHECK(containsKey(echo, k));          // 解析器读而回显不列 = 撒谎行（原病灶）
+}
+
+TEST_CASE("diagnostics 未知键：拼错的顶层键被记录且不在读集（lint 判据成立）；正确键不误报") {
+	TempLua f("dg_typo", "return { no_vvvl = true, shadow_pas = true, no_vvl = true }\n");
+	DiagnosticsKeyTrace trace;
+	auto r = loadDiagnosticsConfig(f.pathStr(), &trace);
+	REQUIRE(r.has_value());
+	CHECK(trace.present.size() == 3u);
+	CHECK(containsKey(trace.present, "no_vvvl"));
+	CHECK(containsKey(trace.present, "shadow_pas"));
+	// 反向用例（常错的 lint = 被静音的 lint）：拼写正确的键必须**在**读集里，
+	// 探针表名本身不算未知键（前缀 = 子表字段键的表名前缀）
+	CHECK(containsKey(trace.read, "no_vvl"));
+	CHECK_FALSE(containsKey(trace.read, "no_vvvl"));
+	CHECK_FALSE(containsKey(trace.read, "shadow_pas"));
+	// 解析本身不受影响：正确键照常生效
+	CHECK(r->noVvl == true);
+}
+
+TEST_CASE("diagnostics 未知键（探针子表）：探针表名不算未知键——前缀判据的正向对照") {
+	// 若判据写成「回显键名全名 == 顶层键」，三张探针表名会全被误报（子表字段的
+	// 回显拼写是 `表名.字段`）。本用例钉住「表名 → 前缀命中 → 不喊」。
+	TempLua f("dg_probetab", "return { picking_probe = { frame = 5 }, rpc_port = 9999 }\n");
+	DiagnosticsKeyTrace trace;
+	auto r = loadDiagnosticsConfig(f.pathStr(), &trace);
+	REQUIRE(r.has_value());
+	REQUIRE(trace.present.size() == 2u);
+	for (const auto& key : trace.present) {
+		// 与 lintUnknownDiagnosticsKeys 同判据：任一回显键名的 `.` 前缀 == 键 → 已知
+		// （判据的表 = 回显表本身，不另立名单）
+		bool known = false;
+		for (const auto& e : diagnosticsEchoKeys())
+			if (std::string_view{e}.substr(0, std::string_view{e}.find('.')) == key)
+				known = true;
+		CHECK(known);  // known = false 会被解析器 warn，但 warn 测不到——这里测判据本体
+	}
+	CHECK(r->rpcPort == 9999u);  // 合法值照常生效（lint 不改解析结果）
+}
+
+TEST_CASE("diagnostics 回显 describe：全默认 = 空串；改动只列改动门（info 差集语义）；debug 全量") {
+	const DiagnosticsConfig d;
+	// 反向用例：全默认一个都不喊（configs 写满默认值不狂喊的实现基础）
+	CHECK(describeDiagnosticsGates(d, d).empty());
+	DiagnosticsConfig c;
+	c.izbShadow = true;
+	c.dumpGbuf = 2;
+	c.shadowPass = false;  // 默认开的门**关掉**才是偏离（开着的默认值不是偏离）
+	const std::string s = describeDiagnosticsGates(c, d);
+	CHECK(s.find("izb_shadow=true") != std::string::npos);
+	CHECK(s.find("dump_gbuf=2") != std::string::npos);
+	CHECK(s.find("shadow_pass=false") != std::string::npos);
+	CHECK(s.find("no_vvl") == std::string::npos);       // 未动的门不出现
+	CHECK(s.find("texel_canary") == std::string::npos); // 未动的哨兵门不出现
+	const std::string all = describeAllDiagnosticsGates(d);
+	// 全量表 = 38 段 `k=v`（空格分隔），抽查首、中、尾与两个特殊格式条目
+	CHECK(std::ranges::count(all, '=') == 38);
+	CHECK(all.find("no_vvl=false") != std::string::npos);
+	CHECK(all.find("shadow_pass=true") != std::string::npos);
+	CHECK(all.find("texel_canary=off") != std::string::npos);  // MAX 哨兵出可读文本
+	CHECK(all.find("camera_probe.key=none") != std::string::npos);
+	CHECK(all.find("camera_probe.holdFrames=0") != std::string::npos);
 }
 
 }  // namespace RGL

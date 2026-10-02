@@ -66,11 +66,51 @@ export DiagnosticsConfig& diagnostics();
 export void setDiagnostics(const DiagnosticsConfig& cfg);
 
 /**
+ * 解析器键轨迹（2026-10-02 门回显派生的覆盖率护栏输入，docs/gate_lint_plan.md §3-B）：
+ * 记录解析器**实际读过**的键与 Lua 文件里**实际出现**的顶层键。两个用途：
+ *   ① 单测断言「读过的键集合 == 回显表键集合」——漏一个方向都红（回显抄漏 = 撒谎行，
+ *      回显多写 = 陈旧键）；
+ *   ② 未知键检查：文件里出现而解析器不读 = 拼错的键，今天**完全静默**。
+ * 键名书写与 Lua 路径一致，子表字段用 `表名.字段`（如 `camera_probe.key`）。
+ */
+export struct DiagnosticsKeyTrace {
+	std::vector<std::string> read;     ///< 解析器读过的键（含未出现在文件里的——解析器总是全量问一遍）
+	std::vector<std::string> present;  ///< 文件里实际出现的顶层键名（子表只记表名）
+};
+
+/**
+ * 回显表的全部键名（与 `DiagnosticsKeyTrace::read` 同拼写）——单测据此做覆盖率断言，
+ * 表本体在实现单元（格式化要用 fmt，不把 fmt 拉进本模块接口）。
+ * @return 键名列表（顺序 = 回显顺序）
+ */
+export std::vector<std::string> diagnosticsEchoKeys();
+
+/**
+ * 门回显：只列**偏离默认值**的门（`key=value` 空格分隔）——启动日志 `info` 级用。
+ * 基准 = 入参 `defaults`（调用方传 `DiagnosticsConfig{}`），不是"文件里写了没有"：
+ * `configs/diagnostics.lua` 显式写着 30 个键且多数等于默认值，按"写了"喊就是噪音。
+ * @param cfg 解析后的配置
+ * @param defaults 比较基准（默认构造 = 全默认）
+ * @return 一行文本；全默认时返回空串（调用方据此跳过打印）
+ */
+export std::string describeDiagnosticsGates(const DiagnosticsConfig& cfg,
+	const DiagnosticsConfig& defaults);
+
+/**
+ * 门回显：全量 38 键（`debug` 级用；排障时"这台机器的门到底是什么状态"的一行真相）。
+ * @param cfg 解析后的配置
+ * @return 一行文本（`key=value` 空格分隔，顺序 = 回显表顺序）
+ */
+export std::string describeAllDiagnosticsGates(const DiagnosticsConfig& cfg);
+
+/**
  * 从 Lua 加载诊断配置（sol2 沙箱同 camera_config：缺文件 = 全默认 + warn；类型错误 = unexpected）。
  * 纯解析（不触碰单例），main 负责 setDiagnostics(*result)。
  * @param path 配置文件路径
+ * @param trace 可选出参：键轨迹（覆盖率护栏与未知键 lint 的输入；传 nullptr = 不记录）
  * @return 解析好的 DiagnosticsConfig；脚本/类型错误返回 ConfigLoadFailed
  */
-export [[nodiscard]] std::expected<DiagnosticsConfig, Error> loadDiagnosticsConfig(std::string_view path);
+export [[nodiscard]] std::expected<DiagnosticsConfig, Error> loadDiagnosticsConfig(
+	std::string_view path, DiagnosticsKeyTrace* trace = nullptr);
 
 }  // namespace RGL
