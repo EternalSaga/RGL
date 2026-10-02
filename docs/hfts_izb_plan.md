@@ -315,6 +315,16 @@ render_graph 零改动版**。
   over-estimation（v1 调参域，`izb_mask.ppm` 直接看遮带宽度）。
   **判据工具新增**：dump 帧写 `izb_mask.ppm`（白=未遮 黑=遮，fb 行序）——mask
   空间结构 vs 截图目检直接对位，比 count 数字锐利得多。
+- **补账结案（2026-10-02 上午，用户复测推动）**：「门开无影」三重根因全修毕——消费端
+  漏 `asfloat()`（ConvertUToF 陷阱）+ 字节偏移口径（`Load(pid>>5)` 缺 ×4）、生产端
+  izb_create 屏幕 ndc.y 走错口径（世界重建上下镜像）。**「hair 掠射上半屏全遮异常」
+  = ndc 镜像的产物，随修消解**（stack「阳性」= 稠密假绿，教训入调试历史）。守卫就位：
+  `test_izb_engine_contract`（引擎真 SPV 闭式，变异验红×2）+ imgqa `izb`（mask↔画面
+  三判据）+ imgqa `swim`（影场世界不变量）+ `slang_load_bitcast_checks`（静态规则）。
+  **「影子随相机游动」结案 = 非 5a-7 回归**：swim 实测 CSM·rig·0.06m 漂移 0/63835、
+  IZB·rig·2m 漂移 1/55614（机制世界稳定）、IZB·bistro 街景·0.06m 影区重心滑 43%——
+  即 v1「cascade-0 近场」语义的 patch 边界扫过（街景 c0 仅 r=0.25 光盒贴相机）。
+  修法待拍板：覆盖外回落 CSM（推荐）/ 换挂 c3 / 阶段 2 多网格。
 
 **1d 光空间保守光栅 pass + mask 写入**：✅ 已完成（上文）；「izb_rig 出硬影」= 1e 消费后。
 

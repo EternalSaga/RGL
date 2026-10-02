@@ -12,6 +12,7 @@ description: 修改 Slang 着色器契约与反射管线——just reflect、sca
 - **5 条 slang 管线走 `reflection_tool slang` 子命令**（链接 libslang.so 直接查 C API，**不产 JSON 中间层**）：struct 布局 = 编译器实查真值（逐字段 offsetof static_assert），schema 降为提取清单 + 交叉校验期望值。详见 `docs/archive/slang_api_reflection_research.md`
 - **Scalar Block Layout（定案）**：所有 slangc 编译（反射 + SPV 两处 flag **必须一致**）统一 `-fvk-use-scalar-layout`——C++（glm 自然对齐）与 shader 逐字段偏移天然一致零 padding（`DrawArgs` 4B）。前提 `scalarBlockLayout` feature（features_config.json + validateFeatures）
 - **bindless 原则**：push constant 冻结在"纯索引"级别（Phase 7b+ 起 `DrawArgs` 仅 `objectIndex` 4B，不再扩）——场景级/每帧变化的数据（光照、对象矩阵、MVP、材质、env 参数、灯数组）一律进 descriptor heap（scene data）。**端侧拆分**：shader 端保留 `[[vk::push_constant]]` 属性（`material.slang`），CPU 端经 `vkCmdPushDataEXT` 供给——`vkCmdPushConstants` 与 descriptor heap 互斥，该 CPU API 被 source_checks 护栏禁用（见 skill `rgl-new-module` 红线）
+- **scene data / ByteAddressBuffer 数值契约（守卫已就位，无需背细则）**：浮点读数 `asfloat()` 位转、Load/Store 偏移=字节、屏幕→世界 ndc 走引擎口径（fb 行 0 ↔ +1）——回归由 `slang_load_bitcast_checks`（source_checks）+ `tests/test_izb_engine_contract.cppm`（引擎真 SPV 闭式）+ imgqa `izb`/`swim` 判据拦截；根因史 → 调试历史 2026-10-02 补账条目
 
 ## 关键文件位置（契约与接缝）
 
