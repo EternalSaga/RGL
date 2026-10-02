@@ -87,7 +87,25 @@ backlog，经典 PCSS（批 11.5，`af5811a` 冻结）= 零内存 fallback。
       box-filter mip/clear=最大矩/Chebyshev+LBR）。
 - [x] 11.6b 图集 array 化改动面清单（本文档 §3.1 五点；IZB 深度源已核 =
       场景深度不受影响；**剩余未核 = descriptor heap 对 sampled 2D array 的支持**）。
-- [ ] 11.6c **带宽探针**（§3.3；= 下一刀）。
+- [x] 11.6c **带宽探针**（2026-10-02 实测收口，数据如下）。
+
+### 11.6c 实测数据（RADV STRIX_HALO / 8060S，150 帧 compute-only，探针 = /tmp/opencode/evssm_probe.{slang,cpp} 一次性件不入库）
+
+| 负载（4×1024²，链=8 mip box） | 吞吐 | 逐帧 fence |
+|---|---|---|
+| EVSSM 全链（矩写 33.5MB + 降采样链，计 ~89MB 名义流量） | **0.387 ms/帧** | 0.456 ms |
+| 矩写 only | 0.056 ms | 0.097 ms |
+| D32 等量写基线（R32F 16.8MB） | 0.049 ms | 0.089 ms |
+
+**判据结论：带宽放行**——EVSSM 全链净增 ≈ +0.34 ms/帧，Phase 9 GPU 余量
+3.1 ms 吃 ~11%。**诚实注脚**：① 名义 601 GB/s 超 LPDDR5X 物理规格 → 纯写被
+缓存/压缩吸收，绝对 GB/s 不可作 DRAM 账，**只有相对比较可信**；② 本机是
+8060S（Strix Halo）——与 AGENTS「本机 = 9950X Raphael」表述冲突，**机器身份
+待用户确认**；Raphael（带宽低档）线性外推 ×2–3 ≈ 0.7–1.1 ms 仍在余量内，
+跨机复测列入实施批（同 Phase 9 §11 遗留合并做）。
+**新顾虑 = CPU 侧**：8 mip × 4 层 ≈ 28–32 额外 dispatch/pass，本项目
+CPU-bound（record 7.03 ms）——实施批必量录制增量，必要时合批（单次 dispatch
+循环多 mip 或用 subpass 式层级打包）。
 - [ ] 11.6d 观感三版对比（同机位 llm_debug 截图）：经典 PCSS（解冻 11.5 门）/
       EVSSM 最小可用版 / 现行 PCF——多模态读图 + 半影宽度闭式测量
       （Δz×0.0093 锚，测量基建 = 11.5 计划中的 imgqa 判据，届时补建）。
