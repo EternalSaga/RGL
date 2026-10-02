@@ -106,6 +106,10 @@ export struct SceneFrameData {
 	// · shadowAtlas —— (图集边长, 单块边长, 分块列数, 保留)；shadow.slang 用它把级联块的
 	// 光空间 uv 叠到图集上（与图装饰的分块子矩形同源）。
 	glm::vec4 shadowAtlas{2048.0f, 1024.0f, 2.0f, 0.0f};
+	// · shadowPcss —— 批 11.5 PCSS 参数（半影全宽系数 2·tan(θ/2), blocker 搜索半径[图集纹素],
+	//   半影半径上限[图集纹素], 保留）。只有 -DPCSS_SOFT 变体消费（scene.slang readShadowPcss
+	//   @722032）；原版 SPV 不读本区 = 门关红线。默认值 = diagnostics 默认（tan(0.53° 全宽)、16、32）
+	glm::vec4 shadowPcss{0.00925f, 16.0f, 32.0f, 0.0f};
 };
 
 /**

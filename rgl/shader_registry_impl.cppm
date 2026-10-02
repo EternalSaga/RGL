@@ -420,4 +420,34 @@ void ShaderRegistry::bindPipelineToAsset(const char* name, uint32_t assetId) {
 		assets.setPipelineIndex(assetId, *idx);
 	}
 
+/**
+ * 批 11.5：PCSS 变体 spec 查表/建表（门 = diagnostics().shadowPcss；门关原样返回 =
+ * 原版 SPV 红线构造性保证，同 addLightEntry 的 1e 模式——运行时 flag 分支会被 slang
+ * fp 重排坑穿，2026-10-02 实测教训）。阴影消费 frag 恰 4 文件（rgl_shader_defined
+ * 声明面同源）；"light.frag" 前缀同时覆盖 light.frag 与 light.frag_IZB_CONSUME.spv，
+ * 后者插 _PCSS_SOFT = light.frag_IZB_CONSUME_PCSS_SOFT.spv = rgl_shader_defined2 命名。
+ */
+const RGL::PipelineSpec* ShaderRegistry::pcssVariantSpec(const RGL::PipelineSpec* base) const {
+	if (!base || !diagnostics().shadowPcss)
+		return base;
+	const std::string_view path{base->fragSpv};
+	const auto slash = path.find_last_of("/\\");
+	const std::string_view file = slash == std::string_view::npos ? path : path.substr(slash + 1);
+	static constexpr std::array<std::string_view, 4> kShadowConsumers{
+		"model_pbr_ibl.frag", "model_vegetation.frag", "model_light.frag", "light.frag"};
+	bool consumer = false;
+	for (const auto prefix : kShadowConsumers)
+		consumer = consumer || file.starts_with(prefix);
+	if (!consumer)
+		return base;
+	static std::map<std::string, RGL::PipelineSpec> variantSpecs;  // key = 原版 fragSpv（启动期单线程）
+	if (auto it = variantSpecs.find(base->fragSpv); it != variantSpecs.end())
+		return &it->second;
+	RGL::PipelineSpec variant = *base;
+	const auto dot = variant.fragSpv.rfind(".spv");
+	variant.fragSpv.insert(dot == std::string::npos ? variant.fragSpv.size() : dot, "_PCSS_SOFT");
+	variant.name = base->name + "_pcss";
+	return &variantSpecs.emplace(base->fragSpv, std::move(variant)).first->second;
+}
+
 }  // namespace RGL

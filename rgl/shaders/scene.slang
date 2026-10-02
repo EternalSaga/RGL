@@ -192,6 +192,14 @@ float4 readShadowAtlas()
     return asfloat(sceneData.Load4(722000u));
 }
 
+// 批 11.5 PCSS 参数区（kSceneDataPcssOffset 字面量同步）：
+// (半影全宽系数 2·tan(θ/2), blocker 搜索半径[图集纹素], 半影半径上限[图集纹素], 保留)。
+// 只有 -DPCSS_SOFT 变体引用（shadow.slang），原版 SPV 不读本区。
+float4 readShadowPcss()
+{
+    return asfloat(sceneData.Load4(722032u));
+}
+
 float3 irradianceSH(float3 n)
 {
     uint base = 721552u;  // kSceneDataIrradianceOffset（vkresources.cppm 字面量同步）

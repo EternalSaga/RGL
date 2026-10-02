@@ -42,6 +42,13 @@ rgl_shader(light.mesh LIGHT_MESH_SPV)
 rgl_shader(light.frag LIGHT_FRAG_SPV scene lights sky shadow)
 # 批 11.3-1e：IZB 消费变体（-DIZB_CONSUME；门关选原版 = 逐位红线构造性保证，见 RglSlang.cmake）
 rgl_shader_defined(light.frag LIGHT_IZB_FRAG_SPV IZB_CONSUME scene lights sky shadow)
+# 批 11.5：PCSS 接触硬化软阴影变体（-DPCSS_SOFT；阴影采样 frag 恰 4 个文件——grep "import shadow"。
+# 门关选原版 = 逐位红线构造性保证；IZB×PCSS 组合 = 双 define（registry 拼接顺序 = 此处顺序））
+rgl_shader_defined(model_pbr_ibl.frag MODEL_PBR_IBL_PCSS_FRAG_SPV PCSS_SOFT model material scene env normalmap lights shadow)
+rgl_shader_defined(model_vegetation.frag MODEL_VEGETATION_PCSS_FRAG_SPV PCSS_SOFT model material scene env normalmap lights shadow)
+rgl_shader_defined(model_light.frag MODEL_LIGHT_PCSS_FRAG_SPV PCSS_SOFT model material scene env normalmap lights shadow)
+rgl_shader_defined(light.frag LIGHT_PCSS_FRAG_SPV PCSS_SOFT scene lights sky shadow)
+rgl_shader_defined2(light.frag LIGHT_IZB_PCSS_FRAG_SPV IZB_CONSUME PCSS_SOFT scene lights sky shadow)
 # Phase 11 批 11.2：级联阴影 depth-only 管线。mesh 自带 8B push（objectIndex +
 # cascadeIndex）——**不 import material.slang**：共享的 4B DrawArgs 契约不能为阴影多加一个
 # 字段（改了 = 1591 条模型条目全重建），故阴影管线自带 push 块。frag 空壳（无输出）。

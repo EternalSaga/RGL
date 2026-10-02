@@ -31,8 +31,93 @@ static const float kShadowFarFadeK = 4.0;
 
 import scene;  // binding 3：sceneData + readShadowViewProj / readCascadeSplits / readShadowParams
 
+#ifdef PCSS_SOFT
+// 批 11.5：本 slangc 不自动提供 gl_FragCoord（实测 E30015；__system_value 亦移除），
+// 经 glsl 兼容模块取（`public in vec4 gl_FragCoord : SV_Position`）。门关不 import =
+// 原版编译单元 token 流零变化。
+import glsl;
+#endif
+
 [[vk::binding(12, 0)]] Texture2D<float> shadowMap;  // eDepth aspect（cascade 0）
 [[vk::binding(13, 0)]] SamplerState shadowSampler;  // NEAREST point sampler（非比较采样器，见头注）
+
+#ifdef PCSS_SOFT
+// ============================================================================
+// 批 11.5：PCSS 接触硬化软阴影（blocker search + 变半径加权 PCF），#ifdef 门 =
+// 门关编译不过这段 = 原版 4 抽头路径逐位不变（红线构造性保证，同 1e IZB 变体）。
+//
+// 物理：太阳视直径 θ（非零）→ 影边有半影，**全宽 = Δz·2tan(θ/2)**（Δz = 遮挡体→接收面
+// 光深度差）→ 灯根（Δz≈0）锐、尖端软 = 接触硬化。CSM 固定 PCF 半径给不了（灯根也糊）。
+// 换算零新数据：Δz_world = Δz_ndc / |lightVP.c2.z|（正交深度行 = 1/(f−n)）；1 图集纹素
+// = texelSizes[cascade] 世界单位（fillShadowData 同源）。参数经 readShadowPcss()。
+//
+// ⚠️ 加权窗口设计教训（首版自查推翻的方案，勿回退）：**线性化窗口不能取 Δz**——自表面
+// 纹素深度恰好落在 ref 间断点上（差 ≈ bias），Δz 量级的窗口会把「搜索半径内、阴影外」的
+// 全亮地面所有自采样抽成 0.5 = 每个遮挡体周围一圈 50% 灰带。软化只来自**空间半径**
+// （半影 = 泊松盘内「遮挡纹素占比」），深度窗口只取 ≈2×bias 做纹素边缘抗锯齿。
+//
+// 成本：全亮早退 = 12 采样（画面多数像素）；遮蔽区 = 12 搜索 + 12 滤波（旧 PCF = 4）。
+// tile 边界：采样 uv clamp 到本级块内（邻块 = 别的 cascade 深度 = 垃圾数据），块边缘
+// 圆核退化为 clamp 核（罕见，可接受）。确定性：固定泊松盘 + FragCoord 哈希旋转（无随机
+// 状态 = 断言可复现，rgl-test-discipline）。
+static const float2 kPoisson12[12] = {
+    float2(-0.326, -0.406), float2(-0.840, -0.074), float2(-0.696, 0.457),
+    float2(-0.203, 0.621),  float2(0.962, -0.195),  float2(0.473, -0.480),
+    float2(0.519, 0.767),   float2(0.185, -0.893),  float2(0.507, 0.064),
+    float2(0.896, 0.412),   float2(-0.322, -0.933), float2(-0.792, -0.598),
+};
+
+/** PCSS 主流程（uv = 图集 uv，refZ = 含 bias 比较深度，texelWorld = 本块世界纹素，
+ *  bias = NDC 深度偏置（加权窗基准），atlas/lightVP/tile 见调用处）。返回 1 = 全亮。 */
+float pcssCoverage(float2 uv, float refZ, float texelWorld, float bias,
+    float4 atlas, ObjectMatrix lightVP, float2 tile)
+{
+    const float4 pcss = readShadowPcss();
+    // 逐像素旋转（哈希角，屏幕稳定；同泊松旋转去采样纹理惯例）。
+    // ⚠️ gl_FragCoord 经 import glsl（本 slangc 不自动提供，见文件头注）。
+    const float2 fc = gl_FragCoord.xy;
+    const float ang = 6.28318531 * fract(sin(dot(fc, float2(12.9898, 78.233))) * 43758.54531);
+    const float2 cs = float2(cos(ang), sin(ang));
+    const float halfUv = atlas.y / atlas.x;               // 单块边长（图集 uv 单位）
+    const float2 lo = tile * halfUv + float2(0.5 / atlas.x);
+    const float2 hi = lo + halfUv - float2(1.0 / atlas.x);
+    const float invAtlas = 1.0 / atlas.x;
+
+    // ① blocker 搜索（半径 = pcss.y 纹素）
+    float blockerSum = 0.0;
+    int blockerCnt = 0;
+    for (int i = 0; i < 12; ++i) {
+        const float2 p = kPoisson12[i] * (pcss.y * invAtlas);
+        const float2 off = float2(p.x * cs.x - p.y * cs.y, p.x * cs.y + p.y * cs.x);
+        const float d = shadowMap.Sample(shadowSampler, clamp(uv + off, lo, hi));
+        if (d < refZ) { blockerSum += d; blockerCnt += 1; }
+    }
+    if (blockerCnt == 0)
+        return 1.0;  // 全亮早退（与 4 抽头 PCF 全亮值同 → ⑦ 淡出阶段逐值等）
+
+    // ② 半影半径（texel）：Δz_world·2tan(θ/2)/2 ÷ 世界纹素；下限 1 纹素 ≈ 旧 PCF 软化
+    //    基底；上限 pcss.z 用 **soft clamp**（Filament EVSSM 同款 squash：超限部分指数
+    //    衰减而非硬切——硬 clamp 会在超限区糊出一条等高模糊带，soft 版平滑收束）
+    const float avgBlocker = blockerSum / float(blockerCnt);
+    const float dzWorld = max((refZ - avgBlocker) / abs(lightVP.c2.z), 0.0);
+    const float penumbraRaw = dzWorld * pcss.x * 0.5 / texelWorld;
+    const float penumbraSquashed = penumbraRaw <= pcss.z
+        ? penumbraRaw
+        : pcss.z + 1.0 - exp(-(penumbraRaw - pcss.z));
+    const float radiusUv = clamp(penumbraSquashed, 1.0, pcss.z * 1.5) * invAtlas;
+
+    // ③ 变半径加权 PCF（窗口 ≈ 2×bias：自采样 d ≈ ref+bias → 恒全亮，见头注教训）
+    const float w = max(2.0 * bias, 1e-5);
+    float litSum = 0.0;
+    for (int i = 0; i < 12; ++i) {
+        const float2 p = kPoisson12[i] * radiusUv;
+        const float2 off = float2(p.x * cs.x - p.y * cs.y, p.x * cs.y + p.y * cs.x);
+        const float d = shadowMap.Sample(shadowSampler, clamp(uv + off, lo, hi));
+        litSum += saturate((d - refZ) / w + 0.5);
+    }
+    return litSum * (1.0 / 12.0);
+}
+#endif
 
 // 各向同性单次比较采样（4 抽头 PCF 在此展开，见下）。返回 1 = 全亮，0 = 全遮。
 //
@@ -102,6 +187,23 @@ float sampleShadow1Tap(float3 worldPos, float3 N)
     const float2 tile = float2(float(cascade % colsU), float(cascade / colsU));
     const float2 uv = (tile + uvTile) * atlas.y / atlas.x;
 
+    // ⑥⑦ 采样 + 淡出：原版 = 4 抽头 PCF；PCSS_SOFT 变体 = blocker 搜索 + 变半径加权
+    //   PCF（批 11.5，pcssCoverage 头注）。**刻意保持两分支各自完整持有 ⑥+⑦**——
+    //   曾把 ⑦ 提为共享汇合（litCoverage）即破坏原版 SPV 逐位（两次 dot 合一次 →
+    //   OpConstantComposite 少一份 → 全文件 id 重排实测）。门关预处理后 token 流 =
+    //   原版一字不差，才成立红线构造性保证。
+#ifdef PCSS_SOFT
+    const float ref = ndc.z - params.x;
+    const float litCoverage = pcssCoverage(uv, ref, texel, params.x, atlas,
+        readShadowViewProj(cascade), tile);
+    // ⑦ 淡出（与原版逐式同；PCSS 分支复制件，见上注）
+    const float shadowFarPcss = params.w;
+    if (shadowFarPcss <= 0.0)
+        return litCoverage;
+    const float tPcss = depth / shadowFarPcss;
+    const float attenPcss = saturate(kShadowFarFadeK * (1.0 - tPcss * tPcss));
+    return lerp(1.0, litCoverage, attenPcss);
+#else
     // ⑥ 4 抽头 PCF（2×2，偏移半个纹素）：单抽头的阶梯状阴影边在 1024² 块上肉眼可见，
     // 4 抽头是"看不出锯齿"与"不多花 4 倍采样"的平衡点。偏移量用 texel 常量而非屏幕导数：
     // texelSizes 是 scene data 里的 uniform（每帧一样）而不是按像素变化的；用 ddx/ddy 会在分支内
@@ -129,4 +231,5 @@ float sampleShadow1Tap(float3 worldPos, float3 N)
     const float t = depth / shadowFar;
     const float atten = saturate(kShadowFarFadeK * (1.0 - t * t));
     return lerp(1.0, dot(lit, 0.25), atten);  // Slang 无 mix 内建（同文件族用 lerp）
+#endif
 }

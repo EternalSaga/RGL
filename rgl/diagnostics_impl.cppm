@@ -145,6 +145,15 @@ static void readInputProbes(sol::table& root, DiagnosticsConfig& cfg) {
 		cfg.picking = readBool("picking", cfg.picking);
 		cfg.shadowPass = readBool("shadow_pass", cfg.shadowPass);
 		cfg.izbShadow = readBool("izb_shadow", cfg.izbShadow);
+		// 批 11.5：PCSS（门 = 变体选择，非运行时 flag——slang fp 重排教训同 1e，门关必须原版 SPV）
+		cfg.shadowPcss = readBool("shadow_pcss", cfg.shadowPcss);
+		auto readF64 = [&](const char* key, double def) {
+			sol::optional<double> v = root[key];
+			return v ? *v : def;
+		};
+		cfg.pcssSunDegrees = std::clamp(readF64("pcss_sun_degrees", cfg.pcssSunDegrees), 0.0, 5.0);
+		cfg.pcssSearchRadius = std::clamp(readF64("pcss_search_radius", cfg.pcssSearchRadius), 1.0, 64.0);
+		cfg.pcssMaxPenumbra = std::clamp(readF64("pcss_max_penumbra", cfg.pcssMaxPenumbra), 1.0, 64.0);
 		cfg.rpc = readBool("rpc", cfg.rpc);
 
 		// picking_probe = { frame = 30, x = 640, y = 360 }（脚本化点选：第 frame 帧自动

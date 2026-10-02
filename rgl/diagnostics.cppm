@@ -36,6 +36,10 @@ export struct DiagnosticsConfig {
 	uint32_t izbGrid = 512;             // 光空间 IZB 网格边长 G（izb_grid；clamp [64, 2048]）
 	uint32_t izbDumpFrame = 0;          // 第 N 帧起每 30 帧回读 head 直方图打日志 + 覆盖写 izb_mask.ppm（izb_dump_frame；0=关）——1d 冒烟阳性锚点，N+1 帧起输出
 	bool shadowPass = true;             // Phase 11 批 11.2：定向光 CSM 阴影总开关（**5a-9 起默认开**，configs/diagnostics.lua 同值）。true = 图首 4 个 depth-only shadow pass 画投影体进 2048² 图集（4 级各占 1024² 块）+ 采样端 4 抽头 PCF + 末级 shadowFar 淡出；false = 阴影段零 draw + 采样端 enabled=0 全亮 → 画面逐位不变（回归对照用）。本默认值与 config 同为"开"：缺文件回落也走有影路径（早期"段内零 draw = 逐位不变"的中间态已结束，见 docs/phase11_plan.md §10/§12.8）
+	bool shadowPcss = false;            // 批 11.5：PCSS 接触硬化软阴影（门 = 选 -DPCSS_SOFT 变体 frag SPV，同 1e IZB 红线构造性保证：关 = 原版 4 抽头 PCF 逐位不变；开 = blocker 搜索 + 变半径加权 PCF，半影宽 = Δz·tanθ 物理接触硬化）
+	double pcssSunDegrees = 0.53;       // 太阳视直径（度；物理真值 0.53，写大 = 艺术化夸张半影；clamp [0, 5]）
+	double pcssSearchRadius = 16.0;     // blocker 搜索半径上限（图集纹素；clamp [1, 64]，成本护栏）
+	double pcssMaxPenumbra = 32.0;      // 半影半径上限（图集纹素；clamp [1, 64]，成本护栏）
 	uint32_t pickingProbeFrame = 0;     // 脚本化点选探针（同 texel_canary headless 驱动方法论）：第 N 帧（1 起）自动 requestProbe(x,y) 一次；0 = 关
 	uint32_t pickingProbeX = 0;         // 探针像素列（窗口/RT 坐标）
 	uint32_t pickingProbeY = 0;         // 探针像素行

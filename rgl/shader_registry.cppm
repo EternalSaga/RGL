@@ -358,13 +358,29 @@ export class ShaderRegistry {
 	static RGL::ShaderEffect loadShaderEffect(const RGL::PipelineSpec& spec);
 
 	/**
-	 * 按名查找 pipeline 规格（scene.lua 缺条目时回落默认 SPV 路径，同原 Renderer 行为）。
-	 * 回落词表：cube / model / model_pbr / model_phong / model_pbr_ibl / skybox /
-	 * deferred_geometry / light（各指向 generated_shaders/ 下对应 mesh/frag SPV）。
+	 * 按名查找 pipeline 规格 + PCSS 变体替换（批 11.5，唯一入口 = 本函数，findSpecBase 为回落体）：
+	 * 门 diagnostics().shadowPcss = 开且 fragSpv 属阴影采样 frag（前缀 ∈ model_pbr_ibl /
+	 * model_vegetation / model_light / light.frag*——最后一个也覆盖 IZB 变体，拼接结果
+	 * light.frag_IZB_CONSUME_PCSS_SOFT.spv 与 rgl_shader_defined2 命名同源）时换 _PCSS_SOFT
+	 * 变体路径。门关原样透传指针 = 原版 SPV（红线构造性保证，同 1e IZB 门 = 选 spec 变体）。
 	 * @param name 规格名
-	 * @return 规格 const 指针（styles 表命中或默认回落）；未知名 = nullptr
+	 * @return 规格 const 指针（styles 表命中或默认回落，可能已换变体）；未知名 = nullptr
 	 */
 	const RGL::PipelineSpec* findSpec(const char* name) const {
+		return pcssVariantSpec(findSpecBase(name));
+	}
+
+	/**
+	 * PCSS 变体 spec 查表/建表（批 11.5；实现在 impl unit——需要 diagnostics()）。
+	 * @param base findSpecBase 结果（可空）
+	 * @return 门关/非阴影消费 frag → base；否则 fragSpv 插 _PCSS_SOFT 的缓存 spec
+	 */
+	const RGL::PipelineSpec* pcssVariantSpec(const RGL::PipelineSpec* base) const;
+
+	/** 回落查表体（批 11.5 起为 findSpec 的内部底座：scene.lua styles 命中或默认回落词表
+	 *  cube / model / model_pbr / model_phong / model_pbr_ibl / skybox / deferred_geometry×3 /
+	 *  light×2 / tonemap / ao / shadow / izb_mask；不含 PCSS 变体替换）。 */
+	const RGL::PipelineSpec* findSpecBase(const char* name) const {
 		auto it = styles.find(name);
 		if (it != styles.end())
 			return &it->second;

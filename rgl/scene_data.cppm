@@ -200,6 +200,15 @@ export inline constexpr uint32_t kSceneDataIzbOffset = kSceneDataShadowAtlasOffs
 export inline constexpr uint32_t kSceneDataIzbBytes = 16u;
 static_assert(kSceneDataIzbOffset == 722016,
 	"light.frag izb 字面量 722016 与 scene_data.cppm 失去同步");
+
+/** PCSS 参数区（批 11.5，IZB 区之后 16B）：(x = 半影全宽系数 2·tan(θ/2)（θ = 太阳视直径，
+ *  半影全宽 = Δz·x）、y = blocker 搜索半径（图集纹素）、z = 半影半径上限（图集纹素）、w 保留)。
+ *  fillShadowData 按 diagnostics 填；**只有 -DPCSS_SOFT 变体读**（原版 SPV 不引用本区 =
+ *  门关红线构造性保证，scene.slang readShadowPcss 字面量 static_assert 钉死）。 */
+export inline constexpr uint32_t kSceneDataPcssOffset = kSceneDataIzbOffset + kSceneDataIzbBytes;
+export inline constexpr uint32_t kSceneDataPcssBytes = 16u;
+static_assert(kSceneDataPcssOffset == 722032,
+	"scene.slang readShadowPcss literal 722032 与 scene_data.cppm 失去同步");
 static_assert(kSceneDataShadowSplitsOffset == 721952 && kSceneDataShadowParamsOffset == 721984
 	&& kSceneDataShadowAtlasOffset == 722000,
 	"scene.slang shadow sampling literals drifted from scene_data.cppm offsets");
@@ -218,7 +227,8 @@ export inline constexpr vk::DeviceSize kSceneDataBytes =
 	+ kSceneDataIrradianceBytes
 	+ kSceneDataShadowMatrixBytes
 	+ kSceneDataShadowAuxBytes
-	+ kSceneDataIzbBytes;
+	+ kSceneDataIzbBytes
+	+ kSceneDataPcssBytes;
 
 /**
  * SceneData buffer 服务（2026-09-19 架构债务续账步骤 1：原 Resources::ensureSceneData/

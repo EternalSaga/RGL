@@ -104,3 +104,28 @@ function(rgl_shader_defined src out_var define_name)
     set(${out_var} "${OUTPUT_SPV}" PARENT_SCOPE)
     set_property(GLOBAL APPEND PROPERTY RGL_SPV_OUTPUTS "${OUTPUT_SPV}")
 endfunction()
+
+# 双 define 变体（批 11.5：IZB×PCSS 组合，如 light.frag_IZB_CONSUME_PCSS_SOFT.spv）。
+# define 拼接顺序 = 参数顺序，与 registry 侧路径拼接约定一致（先 IZB 后 PCSS）。
+# 调用：rgl_shader_defined2(<name> <OUT_VAR> <DEFINE_A> <DEFINE_B> [<DEP>...])
+function(rgl_shader_defined2 src out_var define_a define_b)
+    set(deps "")
+    foreach(d IN LISTS ARGN)
+        list(APPEND deps "${CMAKE_CURRENT_SOURCE_DIR}/shaders/${d}.slang")
+    endforeach()
+    get_filename_component(SHADER_ABS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/${src}.slang" ABSOLUTE)
+    get_filename_component(SHADER_DIR ${SHADER_ABS} DIRECTORY)
+    string(REPLACE ".slang" "_${define_a}_${define_b}.spv" SPV_NAME "${src}.slang")
+    set(OUTPUT_SPV "${GEN_DIR}/${SPV_NAME}")
+    add_custom_command(
+        OUTPUT ${OUTPUT_SPV}
+        COMMAND ${SLANGC_EXECUTABLE} ${SHADER_ABS} ${SLANG_FLAGS} -D${define_a} -D${define_b}
+                -I "${SHADER_DIR}"
+                -o ${OUTPUT_SPV}
+        DEPENDS ${SHADER_ABS} ${deps}
+        COMMENT "Slangc variant ${define_a}+${define_b}: ${src} -> ${SPV_NAME}"
+        VERBATIM
+    )
+    set(${out_var} "${OUTPUT_SPV}" PARENT_SCOPE)
+    set_property(GLOBAL APPEND PROPERTY RGL_SPV_OUTPUTS "${OUTPUT_SPV}")
+endfunction()

@@ -178,6 +178,12 @@ void fillShadowData(FrameDrawList& out, float shadowNear, float shadowFar,
     // 列数与图装饰的 extent 同源（shadowAtlasColumns）——两处不同步 = 采样端把块叠到错位置
     out.sceneData.shadowAtlas = {static_cast<float>(kShadowMapSize),
         static_cast<float>(shadowTileSize(cols)), static_cast<float>(cols), 0.0f};
+    // 批 11.5 PCSS 参数（只有 -DPCSS_SOFT 变体读，原版 SPV 不引用 = 门关红线）：
+    // 半影全宽系数取 2·tan(θ/2)（θ = 太阳视直径；小角下 ≈ tanθ，物理定义用半角式）。
+    const float halfAngle = static_cast<float>(diagnostics().pcssSunDegrees) * 0.01745329252f * 0.5f;
+    out.sceneData.shadowPcss = {2.0f * std::tan(halfAngle),
+        static_cast<float>(diagnostics().pcssSearchRadius),
+        static_cast<float>(diagnostics().pcssMaxPenumbra), 0.0f};
 }
 
 /**
