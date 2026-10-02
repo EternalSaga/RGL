@@ -10,7 +10,7 @@ description: 运行 RGL 程序做 headless 冒烟、llm_debug 截图多模态读
 - **CWD 必须是 `build/rgl/`**：程序按相对路径读取 `configs/` 和 `generated_shaders/*.spv`，其他目录启动报 "Log config file not found"
 - Mesa ≥26.2.3：RADV 无条件 advertise `VK_EXT_descriptor_heap`，**无需** `RADV_EXPERIMENTAL=heap`（`just run*` 也不再注入）
 - 运行时资源由构建自动同步：`configs/` 增量拷贝（`copy_if_different`，改 config 后 `just build` 即生效；**新增** config 文件需 `just config`）；SPV 直接编译到 `build/rgl/generated_shaders/`
-- **build 端 configs 副本会被下次 `just build` 按内容比对静默覆盖复原**——调试临时改 `build/rgl/configs/`（副本），调试完 `just build` 复原；别改仓库源文件
+- **build 端 configs 副本 = `copy_if_different`（只源更新才覆盖）**——调试临时改 `build/rgl/configs/`（副本），调试完**手动** `cp configs/*.lua build/rgl/configs/` 复原（改副本不会触发覆盖，`just build` 不清理陈旧副本内容）；别改仓库源文件
 - 启动期 DGC 选路可直接看 log：`DGC path: device=... -> ...`
 
 ## 运行模式全配置化（环境变量→配置文件，2026-09-08）
@@ -28,7 +28,7 @@ llm_debug 截图 = drawFrame 帧内回读 swapchain 后缓冲（present 前拷�
 
 ## agent 冒烟
 
-1. 改 `build/rgl/configs/runtime.lua` 为 `headless = true`（build 副本临时改，下次 `just build` 自动复原）
+1. 改 `build/rgl/configs/runtime.lua` 为 `headless = true`（build 副本临时改；不自动复原，跑完手动 cp 回）
 2. `cd build/rgl && timeout 8 ./rgl`
 3. 正常应零 `[error]`；deferred 路线另改 build 副本 `render_graph.lua` 的 `variant="deferred"`
 
@@ -36,7 +36,7 @@ llm_debug 截图 = drawFrame 帧内回读 swapchain 后缓冲（present 前拷�
 
 1. build 副本 `configs/runtime.lua` 改 `headless=true` + `llm_debug=true`
 2. 直接跑二进制 → 延迟 N 帧存 PNG（路径打日志）并退出 → 读图
-3. `just build` 复原配置
+3. `cp configs/*.lua build/rgl/configs/` 复原配置（改源后 `just build` 才会自动覆盖副本）
 
 - 相机位置 = `camera.lua` 顶层 position/target/fovDegrees
 - 截图尺寸 = swapchain extent（headless 跟随 llm_shot.size）

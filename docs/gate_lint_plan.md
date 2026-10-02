@@ -1,4 +1,5 @@
-> **状态**：现行（2026-10-02 立项，计划已定，实施中）
+> **状态**：已落地（2026-10-02 立项并当日收口，commit `55e4b67`→`ebf5042`→`bee4f7a`→`3d80fa1`；
+> 与计划的两处偏差记录在文末「执行偏差」）
 > 一句话：把「门组合无效」与「装配顺序契约」里**能被静态判定的那部分**变成启动期可执行检查，
 > 并把门回显从手抄子集改成派生 + 覆盖率护栏。不做 main 装配序列的影子哨兵（§2 非目标）。
 
@@ -164,3 +165,24 @@ TAA 视角（立项时按它演算过）：TAA 必然插一个**采样场景色�
 | 回显表成员指针形态与 Doxygen/style 检查打架 | 先小步试编译；退路 = 回显表用 `{键名, std::function<std::string(const Cfg&)>}`（多一次分配，但只在启动期） |
 | `KeyTrace` 记录影响解析路径 | 记录发生在启动期一次、38 个键量级；解析器返回值不变（`KeyTrace` 出参/侧信道，不进 `DiagnosticsConfig`，不污染数据体） |
 | lint 表覆盖率护栏做不到"编译期" | 退到测试期断言（38 门逐个查），已足够：加门时 `just test` 红 = 同一个提醒效果，只是晚到测试阶段 |
+
+## 8. 执行偏差（落地当日记，与上文设计不一致处以此为准）
+
+1. **回显表形态**（§3-B.2）：未用「成员指针 + 通用格式化」，实际 =
+   `{键名, 非捕获 lambda → 函数指针}`；「偏离默认」按**格式化后字符串**比较差集
+   （门全是标量，零类型机制；成员指针形态反而要为 bool/整/浮点各写分发）。
+2. **GateEnv 字段砍半**（§3-C）：`sourceConfigsAvailable` / `slangcAvailable` /
+   `graphicsIndirect` 删除——源 configs 目录 / slangc 缺失时
+   `wireHotReload` / `ShaderHotReloader::init` **已有各自降级 warn**，lint 重复喊
+   = 影子真相源（违反自家防腐条款 1 的精神）。`dgc_static` 判据只需
+   `staticGraphicsIndirect` 一个能力位。
+3. **§3-D #4 未整条迁移**：picking/highlight 装饰失败 warn **留在装饰期**
+   （失败与否 = 装饰函数对图形态的判定结果；lint 复刻锚点判据 = 影子模型）。
+   实际处置 = 消息改为自带锚点定义（"为什么没插进去"不再需要读代码）。
+4. **回显打印位置在解析器内**（替代此前手写 11 键 info 行的原位），不在 main
+   ——与 lint findings 打印（`runGateLint`，图编译后）相隔一条 RenderGraph 行，
+   「相邻打印」按此满足。
+5. 附带收获：`loadDiagnosticsConfig` 拆分 `applyScalarGates` +
+   `applyProbeAndNumericGates`（阈值倒逼，纯搬运）；`kDeferredLightState` 具名常量 +
+   `static_assert` 与词表绑定；`vkrenderer_impl` 的 drawLight 缺条目消息修掉
+   ao 误报 Tonemap 的三元式。

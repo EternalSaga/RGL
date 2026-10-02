@@ -98,7 +98,7 @@ CMake 无独立构建目录——必须从根目录构建（`cmake -B build -S .
 - **工作机器不著书**（2026-10-02 用户拍板：三台机器轮换，一台干完换一台测）：开工先认设备
   （启动日志 deviceName / vkinfo）；本文与 docs 里的性能数字均**绑特定机器**，跨机先复测再对比。
 
-- **CWD 必须是 `build/rgl/`**（相对路径读 configs/ 与 spv）· 运行模式全配置化（runtime/diagnostics/render_graph.lua）· build 端 configs 副本被 `just build` 按内容比对静默覆盖复原（临时调试改副本别改源）；
+- **CWD 必须是 `build/rgl/`**（相对路径读 configs/ 与 spv）· 运行模式全配置化（runtime/diagnostics/render_graph.lua）· build 端 configs 副本 = `copy_if_different`（**只源更新才覆盖**；改副本调试不会自动复原——复原靠 `cp configs/*.lua build/rgl/configs/` 或 touch 源，2026-10-02 实测纠正旧表述"静默覆盖复原"）；
   运行环境细节、冒烟命令、headless/llm_debug 截图流程、截图回归方法学 → skill `rgl-verify`
 - **RPC 调试通道**（端点速查 / 线程时序 / cameraAimAt 反推与启动探测 → `docs/技术概念.md §RPC 调试通道`）：
   门 `diagnostics.rpc` **默认关** + `rpc_port = 8788`（只绑 127.0.0.1；与 imgui 门独立 → headless 可用）；起跑前 `pgrep -cx rgl` 确认无残留
@@ -236,6 +236,7 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
 - `docs/phase9_plan.md` — Phase 9 性能观测（Profiler）批次记录；§10 = 性能判定全文（CPU-bound 结论）、§11 = 跨机复测遗留
 - `docs/phase11_plan.md` — Phase 11 阴影 + 前置修复批（11.0 光照质感 / 11.2 阴影 / 11.4 SSAO）计划与执行记录
 - `docs/phase12_plan.md` — Phase 12 测试体系账本（批次史 + 缺口 D1–D9 + 12.3d 调试历史全量裁决执行记录）
+- `docs/gate_lint_plan.md` — **门配置自检（现行机制的权威载体）**：38 门申报规则表 + 回显派生 + 覆盖率护栏；加诊断门/改门语义前看（§4 分级判据 + §5 三条防腐条款 + §8 执行偏差）
 - `docs/hfts_izb_plan.md` — HFTS/FTIZB 调研与实施计划（批 11.3 权威载体：论文结论 / 开源现状 / 项目 gap / 分阶段 1a–1e + 收手判据；§4.3 = 2026-10-02 路线改道记录）
 - `docs/evssm_plan.md` — **EVSSM 软阴影（批 11.6，现行）**：Filament EVSSM 作业清单 / 分轴质量对比 / 三只拦路虎 / spike 批次拆分（远场软影权威路线，HFTS 已降级 backlog）
 - `docs/DESCRIPTOR_HEAP_SPEC.md` — descriptor heap 排坑记录（活文档）
