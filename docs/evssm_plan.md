@@ -99,13 +99,22 @@ backlog，经典 PCSS（批 11.5，`af5811a` 冻结）= 零内存 fallback。
 
 **判据结论：带宽放行**——EVSSM 全链净增 ≈ +0.34 ms/帧，Phase 9 GPU 余量
 3.1 ms 吃 ~11%。**诚实注脚**：① 名义 601 GB/s 超 LPDDR5X 物理规格 → 纯写被
-缓存/压缩吸收，绝对 GB/s 不可作 DRAM 账，**只有相对比较可信**；② 本机是
-8060S（Strix Halo）——与 AGENTS「本机 = 9950X Raphael」表述冲突，**机器身份
-待用户确认**；Raphael（带宽低档）线性外推 ×2–3 ≈ 0.7–1.1 ms 仍在余量内，
+缓存/压缩吸收，绝对 GB/s 不可作 DRAM 账，**只有相对比较可信**；② 探针机 =
+8060S（Strix Halo，用户已确认；三机轮换常态，跨机数字先复测再比——AGENTS
+「机器不著书」纪律）；Raphael（带宽低档）线性外推 ×2–3 ≈ 0.7–1.1 ms 仍在余量内，
 跨机复测列入实施批（同 Phase 9 §11 遗留合并做）。
 **新顾虑 = CPU 侧**：8 mip × 4 层 ≈ 28–32 额外 dispatch/pass，本项目
 CPU-bound（record 7.03 ms）——实施批必量录制增量，必要时合批（单次 dispatch
 循环多 mip 或用 subpass 式层级打包）。
+- [x] 11.6d-1/2 **实施落地**（`a2892ad` 骨架 + `d9859c6` 全链接线，C 方案，全门后）：
+      EvssmShadow 模块（矩图 2048²×8mip RGBA16F 全程 GENERAL）+ 两 compute
+      （moments_from_depth / 逐级 box 降采样）+ shadow.slang `-DEVSSM_SOFT` 变体
+      （Filament O(1) 搜索 + ELVSM + quincunx 直抄，适配差异三处见其头注）+
+      binding 15/16 heap bake + fallback 零矩兜底。验收：门关逐位；阳性锚点①管线活
+      （off→on 3.04% 变暗主导）②参数敏感（IZB 关后 sun 10× 砖墙影边肉眼软化）；
+      VVL 零报。**v1 边界三条**（遗留见 §6）：仅 deferred（forward sandwich 未接，
+      门开=warn-once 走 fallback）；IZB 同开硬影乘法主导（近/远混接送给 11.6e）；
+      quincunx 5 抽头边缘毛刺（噪声质量 = v2 调优项，Filament 用 IG noise 同款形态）。
 - [ ] 11.6d 观感三版对比（同机位 llm_debug 截图）：经典 PCSS（解冻 11.5 门）/
       EVSSM 最小可用版 / 现行 PCF——多模态读图 + 半影宽度闭式测量
       （Δz×0.0093 锚，测量基建 = 11.5 计划中的 imgqa 判据，届时补建）。
@@ -149,3 +158,11 @@ AGENTS 已定「机器不著书」纪律）；Raphael/NVIDIA 跨机复测仍列�
 - 11.5 冻结件未写测试（fallback 定位，转正时补：半影宽度闭式 + swim 扩展）。
 - ~~源树 configs 测试态改动待处置~~ → 已转正（`c05b2bd`：variant=deferred、
   izb_shadow=true、pcss_* 四键默认关）。
+- **EVSSM v1 边界三条**（`d9859c6` 落地时记）：① forward 路 sandwich 未接
+  （消费点在 geometry pass，门开 = warn-once 不构造、采样读 fallback 零矩全亮）；
+  ② IZB 同开 = 硬影乘法主导，「IZB 近场细影 + EVSSM 远场软影」的距离混接未做
+  （= 11.6e 主题，混接带公式 + 与 shadowFar 淡出的关系一并设计）；
+  ③ quincunx 5 抽头边缘毛刺（哈希旋转角噪声），Filament 有 IG noise / −0.86 单抽头 /
+  9 抽头三档可换——转正前观感调优项。
+- **CPU 录制增量未测**：EVSSM sandwich = 8 dispatch/帧（1 moments + 7 mip），
+  本项目 CPU-bound——转正裁决前跑 profiler 对比（frame/record zone 增量）。
