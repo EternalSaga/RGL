@@ -45,6 +45,8 @@ import rlvk;
 import render_graph;
 import vkerror;  // Error（compileRenderGraph 的 expected 失败侧）
 import scene_data;  // kActiveShadowCascades（render_graph 内部用它，但不 re-export）
+import pass_vocabulary;  // kAllPassStates / kMeshPassStates / kFullscreenPassStates / kAllDrawSources
+import frame_draw_list;  // FrameDrawList / segmentSpan（段名词表的映射侧）
 
 namespace RGL {
 namespace {
@@ -633,18 +635,150 @@ TEST_CASE("blit 变体：swapchainWaitStage = Transfer，blit 两端被解析成
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 组 7：全屏 pass 状态名表
+// 组 7：pass 词表（pass_vocabulary）——派生子集 / 两档互斥红线 / 段名↔segmentSpan
 // ═══════════════════════════════════════════════════════════════════════════
 
-TEST_CASE("kFullscreenPassStates 恰含 light / tonemap / ao 三个") {
-    // 这张表是「哪些 state 是全屏终图」的单一真相源（state_kit 里对应三段形态）。
-    // 少一个 = 该 pass 在图校验 / 执行器校验里不被承认为全屏。
+// 期望值写成**字面量**（出处 = 契约本身，不抄被测的派生代码）：改词表 = 本组红，
+// 那是刻意的——名单变动必须是有意识的决定。
+constexpr std::array<std::string_view, 6> kExpectMesh{"opaque", "skybox", "transparent",
+    "picking", "highlight", "shadow"};
+constexpr std::array<std::string_view, 3> kExpectFullscreen{"light", "ao", "tonemap"};
+constexpr std::array<std::string_view, 1> kExpectInternal{"izb_mask"};
+
+/** name 数组 → 集合（比较用；kAllPassStates 走 scope 过滤后也汇成它）。 */
+std::set<std::string_view> toSet(std::span<const std::string_view> names) {
+    return {names.begin(), names.end()};
+}
+
+/** internal 档名字集合（按 scope 现算——与「派生子集」不同的第二条路径，用来验派生）。 */
+std::set<std::string_view> namesInInternal() {
+    std::set<std::string_view> out;
+    for (const auto& e : kAllPassStates)
+        if (e.scope == RgStateScope::internal)
+            out.insert(e.name);
+    return out;
+}
+
+TEST_CASE("kAllPassStates = 十名、无重复、每名恰属一档") {
+    // 计数写死 = 「加一个状态」必须是显式决定（本项目的口径漂移正是从多一个名字
+    // 而四处口径没人改开始的：izb_mask 落地时单测/Lua 头注释/AGENTS 三处都没跟）。
+    REQUIRE(kAllPassStates.size() == 10);
+    // 无重复 + 每名都能被自己那一档承认（档判据与表自洽）。
+    for (const auto& e : kAllPassStates) {
+        INFO("state = " << e.name);
+        uint32_t hits = 0;
+        for (const auto& f : kAllPassStates)
+            if (f.name == e.name)
+                ++hits;
+        CHECK(hits == 1);
+        const bool inSomeScope = isMeshPassState(e.name) || isFullscreenPassState(e.name)
+            || e.scope == RgStateScope::internal;
+        CHECK(inSomeScope);
+    }
+}
+
+TEST_CASE("kFullscreenPassStates 恰含 light / tonemap / ao 三个（派生自 fullscreenPass 档）") {
+    // 这张表决定「哪些 state 是全屏终图」：少一个 = 该 pass 在图校验里不被承认为
+    // 全屏，多一个 = kind 与 state 串味的图被放行。现由 kAllPassStates 派生，
+    // 故这条同时在验派生机制本身（namesInScope 填错/漏填都会红）。
     REQUIRE(kFullscreenPassStates.size() == 3);
-    const std::set<std::string_view> s{
-        kFullscreenPassStates.begin(), kFullscreenPassStates.end()};
-    CHECK(s.count("light") == 1);
-    CHECK(s.count("tonemap") == 1);
-    CHECK(s.count("ao") == 1);
+    CHECK(toSet(kFullscreenPassStates) == toSet(kExpectFullscreen));
+}
+
+TEST_CASE("kMeshPassStates 恰含六个（三主段 + picking / highlight / shadow）") {
+    REQUIRE(kMeshPassStates.size() == 6);
+    CHECK(toSet(kMeshPassStates) == toSet(kExpectMesh));
+}
+
+TEST_CASE("两档 state 词表互斥、并起来 = 全表减 internal（**防扁平化红线**）") {
+    // 为什么单独一条：执行器按 pass.kind 分档校验 state。若有人为了"少写代码"把两档
+    // 并成一张 kAllPassStates 直接判，`kind=drawLight, state="opaque"` 就会通过校验，
+    // 而 drawLight 分支随后按 state 名去 registry 取预建全屏条目 → 深处崩溃或静默不画。
+    // 本条把"两档必须是真分区"钉成断言：交集空 + 并集恰好是全表减 internal。
+    const auto mesh = toSet(kMeshPassStates);
+    const auto full = toSet(kFullscreenPassStates);
+    for (const auto& n : mesh) {
+        INFO("同时出现在两档的名字 = " << n);
+        CHECK(full.count(n) == 0);  // 非空 = 档已塌成一张
+    }
+    std::set<std::string_view> unionMeshFull(mesh.begin(), mesh.end());
+    unionMeshFull.insert(full.begin(), full.end());
+    std::set<std::string_view> expectUnion(kExpectMesh.begin(), kExpectMesh.end());
+    expectUnion.insert(kExpectFullscreen.begin(), kExpectFullscreen.end());
+    CHECK(unionMeshFull == expectUnion);  // 两档并集必须正好是"能上图的九名"
+    CHECK(unionMeshFull.size() + kExpectInternal.size() == kAllPassStates.size());
+}
+
+TEST_CASE("izb_mask 属 internal 档：两档图校验都不认（反向用例）") {
+    // 反向用例（不触发的分支也要有"不该触发"的用据）：izb_mask 由执行器硬编码录制
+    // 路径直接 stateFor，不是一张图上的 pass。若有人把它塞进 meshPass 档，这里红；
+    // 后果是"图里可以写 state=izb_mask"——而没有任何执行器路径会去录它（静默少一块）。
+    CHECK(isKnownStateName("izb_mask"));  // StateKit 侧承认（stateFor 能解析）
+    CHECK_FALSE(isMeshPassState("izb_mask"));
+    CHECK_FALSE(isFullscreenPassState("izb_mask"));
+    CHECK(namesInInternal() == toSet(kExpectInternal));
+}
+
+TEST_CASE("kAllDrawSources 段名词表 + isKnownDrawSource 的精确/前缀两式") {
+    // shadow 是**前缀档**：分块号可变（kActiveShadowCascades 1→4），写死字面量会在
+    // 切级联时漏校验。前缀档的宽松面如实记录（照源码写，不照期望写）：任何 "shadow"
+    // 开头的名字都算合法，"shadowmap" 也放行，解析不出数字时落 0 级。
+    REQUIRE(kAllDrawSources.size() == 4);
+    CHECK(isKnownDrawSource("opaque"));
+    CHECK(isKnownDrawSource("skybox"));
+    CHECK(isKnownDrawSource("transparent"));
+    CHECK(isKnownDrawSource("shadow"));    // 无后缀 = 0 级
+    CHECK(isKnownDrawSource("shadow13"));  // 前缀档
+    CHECK(isKnownDrawSource("shadowmap")); // 前缀档的宽松面（放行）
+    CHECK_FALSE(isKnownDrawSource(""));
+    CHECK_FALSE(isKnownDrawSource("Opaque"));    // 大小写敏感
+    CHECK_FALSE(isKnownDrawSource("opaques"));   // 精确档不做前缀
+    CHECK_FALSE(isKnownDrawSource("light"));     // state 名不是段名
+}
+
+TEST_CASE("segmentSpan 覆盖 kAllDrawSources 每个段名（表 ↔ if 链的漂移闸门）") {
+    // 词表回答"段名合法吗"，**段名 → 哪一段 draw** 是 segmentSpan 的 if 链——两者不
+    // 共享机制。把每个合法段名喂进链里逐段比对（含 shadow 前缀 → 对应级），链里
+    // 写错边界 / 漏一条前缀分支都会红（漏前缀 = shadow pass 拿到 transparent 段 =
+    // 把透明体画进阴影图）。
+    FrameDrawList list;
+    for (uint32_t i = 0; i < 6; ++i)
+        list.calls.push_back(DrawCall{.pipeline = i, .pushData = {}, .groupCount = 1u});
+    list.skyboxStart = 2;       // opaque = [0,2)
+    list.transparentStart = 3;  // skybox = [2,3)、transparent = [3,6)
+    for (uint32_t c = 0; c < kSceneShadowCascadeCount; ++c)
+        list.shadowCalls.push_back(DrawCall{.pipeline = 100 + c, .pushData = {}, .groupCount = 1u});
+    for (uint32_t c = 0; c < list.shadowBoundaries.size(); ++c)
+        list.shadowBoundaries[c] = c;  // 每级各 1 个 draw
+
+    // expectBegin ≥ 100 → 取自 shadowCalls（下标 = 级号），否则取自 calls。
+    const auto segOf = [&list](std::string_view src) { return segmentSpan(src, list); };
+    const auto expectSpan = [&list](uint32_t begin, uint32_t size) {
+        return begin < 100
+            ? std::span<const DrawCall>{list.calls.data() + begin, size}
+            : std::span<const DrawCall>{list.shadowCalls.data() + (begin - 100), size};
+    };
+    const auto check = [&](std::string_view src, uint32_t begin, uint32_t size) {
+        INFO("drawSource = " << src);
+        const auto expect = expectSpan(begin, size);
+        const auto got = segOf(src);
+        CHECK(got.size() == expect.size());
+        CHECK(got.data() == expect.data());  // 边界错 = 数据指针错
+        if (!expect.empty())
+            CHECK(got[0].pipeline == expect[0].pipeline);
+    };
+    check("opaque", 0, 2);
+    check("skybox", 2, 1);
+    check("transparent", 3, 3);
+    check("shadow", 100, 1);  // 无后缀 = 0 级
+    check("shadow2", 102, 1);
+    check("shadow3", 103, 1);
+
+    // **兜底分支的危险面**（图校验必须拦未知段名的理由）：不认识的段名不报错，
+    // 而是返回 transparent 段——静默多画一遍透明体。
+    const auto unknown = segOf("nosuchsegment");
+    CHECK(unknown.size() == 3);
+    CHECK(unknown.data() == list.calls.data() + 3);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

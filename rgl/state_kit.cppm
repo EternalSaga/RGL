@@ -5,18 +5,23 @@ export module state_kit;
 import rlstd;
 import rlvk;
 import shader;
+import pass_vocabulary;  // kAllPassStates（状态名词表单一真相源）+ stateNamesCoverAll
 
 namespace RGL {
 
 /**
  * pass 动态状态表（Phase 10 批次 0 手术 1：自 Renderer 摘出）。
  *
- * 持有九种命名状态的值集合 + edS3 能力门。状态名（"opaque"/"skybox"/
- * "transparent"/"light"/"tonemap"/"ao"/"picking"/"highlight"/"shadow"）= render_graph
- * pass.state 的词表，与本类键集合同步（Renderer 构造期 validateRenderGraphForExecutor
- * 校验图内名字全部可解析）。Phase 11 阴影新增 shadow 条目（depth-only pass）——增改集中在
- * 本类一处。viewport/scissor 依赖窗口尺寸，不在状态内（applyDynamicState 参数传入；
- * 批 11.2 起 viewport 尺寸随 pass 渲染区域走，阴影图用其独立分辨率）。
+ * 持有十种命名状态的**值集合** + edS3 能力门。状态名 = pass_vocabulary 的
+ * `kAllPassStates`（单一真相源：名字与类别都在那张表，本类的键集合由
+ * `stateNamesCoverAll` 在编译期与它绑定）；图侧"哪些名字合法"按类别分档校验
+ * （Renderer 构造期 validateRenderGraphForExecutor）。viewport/scissor 依赖窗口尺寸，
+ * 不在状态内（applyDynamicState 参数传入；批 11.2 起 viewport 尺寸随 pass 渲染区域走，
+ * 阴影图用其独立分辨率）。
+ *
+ * **加一个状态的流程**：pass_vocabulary 表加一行（含 scope）→ 本类加成员 + ctor 里
+ * 写值 + kStateSlots 加一条。漏了最后一条 = static_assert 编译不过（本类曾与执行器
+ * 词表、单测、Lua 头注释各抄一份名单，批 11.3-1d 加 izb_mask 时就漏了四处）。
  */
 export class StateKit {
    public:
@@ -94,21 +99,16 @@ export class StateKit {
 	/**
 	 * 图 pass.state 名 → 动态状态（Renderer 构造期校验保证图内名字全部可解析，
 	 * 未知名 = 校验遗漏的编程错误，抛出）。
-	 * @param name 状态名（"opaque"/"skybox"/"transparent"/"light"/"tonemap"/"ao"/
-	 *   "picking"/"highlight"）
+	 *
+	 * 表驱动（2026-10-02）：名字集合 = pass_vocabulary::kAllPassStates，编译期由
+	 * `stateNamesCoverAll` 绑定（本表加名 / 词表加名而另一侧没跟 = 编译不过）。
+	 * @param name 状态名（全量词表见 pass_vocabulary::kAllPassStates）
 	 * @return 状态 const 引用（成员存储，录制期 applyDynamicState 消费）
 	 */
 	[[nodiscard]] const RenderState& stateFor(std::string_view name) const {
-		if (name == "opaque") return opaqueState;
-		if (name == "skybox") return skyboxState;
-		if (name == "transparent") return transparentState;
-		if (name == "light") return lightState;
-		if (name == "tonemap") return tonemapState;
-		if (name == "ao") return aoState;
-		if (name == "picking") return pickingState;
-		if (name == "highlight") return highlightState;
-		if (name == "shadow") return shadowState;
-		if (name == "izb_mask") return izbMaskState;
+		for (const auto& slot : kStateSlots)
+			if (slot.name == name)
+				return this->*(slot.state);
 		throw std::runtime_error(fmt::format(
 			"StateKit::stateFor: unknown state '{}' (executor validation bypassed)", name));
 	}
@@ -138,6 +138,33 @@ export class StateKit {
 	RenderState izbMaskState{};     // 批 11.3-1d：IZB mask 光空间重放（零附件 + 保守覆盖，见 ctor 注）
 	bool depthClipDynamic = false;
 	bool conservativeDynamic = false;  ///< 批 11.3-1d：EDS3 保守光栅动态位能力门
+
+	/** 状态名 → 成员存储（stateFor 表驱动查表用；名字侧真相在 pass_vocabulary）。 */
+	struct StateSlot {
+		std::string_view name;
+		const RenderState StateKit::* state;
+	};
+
+	/**
+	 * 名字 ↔ 成员指针表（顺序 = kAllPassStates 声明序，长度由词表定）。
+	 * 与词表的同名同数由下面的 static_assert 保证：**加状态名忘了在这里登记
+	 * （或反之）= 编译不过**，不再是"运行到那条 pass 才抛 / 永远走不到的死名"。
+	 */
+	static constexpr std::array<StateSlot, kAllPassStates.size()> kStateSlots{{
+		{"opaque", &StateKit::opaqueState},
+		{"skybox", &StateKit::skyboxState},
+		{"transparent", &StateKit::transparentState},
+		{"picking", &StateKit::pickingState},
+		{"highlight", &StateKit::highlightState},
+		{"shadow", &StateKit::shadowState},
+		{"light", &StateKit::lightState},
+		{"ao", &StateKit::aoState},
+		{"tonemap", &StateKit::tonemapState},
+		{"izb_mask", &StateKit::izbMaskState},
+	}};
+	static_assert(stateNamesCoverAll(kStateSlots),
+		"StateKit::kStateSlots 与 pass_vocabulary::kAllPassStates 必须同名同数"
+		"（加状态 = 两处各一行；词表还决定它被哪档图校验承认）");
 };
 
 }  // namespace RGL

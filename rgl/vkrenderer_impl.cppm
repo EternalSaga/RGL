@@ -29,7 +29,8 @@ import gpu_profiler;  // Phase 9.2：GPU 时间戳钩子（读回归并进 9.1 �
 import diagnostics;
 import vulkan_utils;
 import VmaRaii;
-import frame_draw_list;  // isKnownDrawSource / segmentSpan（段名 → draw 序列）
+import frame_draw_list;  // segmentSpan（段名 → draw 序列）
+import pass_vocabulary;  // 词表单一真相源：kMeshPassStates / kFullscreenPassStates / kAllDrawSources
 import model_types_generated;
 import lights_types_generated;
 import material_types_generated;  // DrawArgs（GPU culling 对账经 objectIndex 映射 CPU draw）
@@ -61,13 +62,38 @@ void validateRenderGraphForExecutor(const RGL::CompiledRenderGraph& graph) {
 	if (depthRefs != 1)
 		fail(fmt::format("render graph must reference exactly one depth attachment (got {})",
 			depthRefs));
-	// drawSource 词表 = frame_draw_list::isKnownDrawSource（**单一真相源**：三个精确段名
-	// + 可变分块号的 "shadow" 前缀，与 segmentSpan 同一条路径）。本函数曾手抄一份语义
-	// 相同的本地 lambda 遮蔽它——两份真相并列，改一处漏一处 = 拓扑允许未知 drawSource
-	// 静默落到 transparent 段上（= 静默多画一遍透明体）。
+	// 词表 = 叶子模块 **pass_vocabulary**（单一真相源；本文件此前手抄过一份与
+	// isKnownDrawSource 同义的本地 lambda，也自持一份 kKnownStates 字面量——两份真相
+	// 并列，改一处漏一处）。state 名按 pass.kind **分档**判：drawMesh → meshPass 档、
+	// drawLight → fullscreenPass 档。分档不可并成一张扁平表：并集会让 kind 与 state
+	// 串味的 pass（如 drawLight 配 "opaque"）通过校验，而 drawLight 分支随后按 state 名
+	// 去 registry 取预建全屏条目 → 放行 = 更深处崩溃或静默不画。
+	// izb_mask 属 internal 档（图外硬编码录制路径直接 stateFor），两档都不认它。
+	// 段名判 isKnownDrawSource；未知段名若不拦，segmentSpan 兜底分支返回 transparent 段
+	// = 静默多画一遍透明体。
+	auto listNames = [](const auto& names) {
+		std::string out;
+		for (const auto n : names) {
+			if (!out.empty())
+				out += " / ";
+			out += n;
+		}
+		return out;
+	};
+	auto listSources = [] {
+		std::string out;
+		for (const auto& p : kAllDrawSources) {
+			if (!out.empty())
+				out += " / ";
+			out += p.name;
+			if (p.match == RgDrawSourceMatch::prefix)
+				out += '*';  // 前缀档：标出 "shadow" 承 shadow0 / shadow1 / ...
+		}
+		return out;
+	};
 	// 单 pass 可解析性校验（三形态：blit 两端齐 / drawLight state 在词表 / draw state+
-	// drawSource 名字表）。手术 6：提为 lambda 降宿主认知复杂度——fail 经捕获共用、
-	// 错误消息逐字不变；continue → return（lambda 内提前结束本 pass 校验语义等价）。
+	// drawSource 名字表）。手术 6：提为 lambda 降宿主认知复杂度——fail 经捕获共用；
+	// continue → return（lambda 内提前结束本 pass 校验语义等价）。
 	auto validatePass = [&](const RgPassPlan& pass) {
 		if (pass.kind == RgPassKind::blit) {
 			if (!pass.blitSource || !pass.blitTarget)
@@ -75,29 +101,23 @@ void validateRenderGraphForExecutor(const RGL::CompiledRenderGraph& graph) {
 			return;
 		}
 		// Phase 7 D1 / Phase 8 ①泛化：drawLight = 固定全屏 draw（无 drawSource/段），
-		// state 必在 kFullscreenPassStates 词表（"light"/"ao"/"tonemap"）
+		// state 必在 fullscreenPass 档（同时是 registry 固定条目名）
 		if (pass.kind == RgPassKind::drawLight) {
-			if (!std::ranges::any_of(kFullscreenPassStates,
-					[&](std::string_view s) { return pass.state == s; }))
+			if (!isFullscreenPassState(pass.state))
 				fail(fmt::format(
-					"render graph fullscreen pass '{}' has state '{}' (expected one of the "
-					"kFullscreenPassStates vocabulary)",
-					pass.name, pass.state));
+					"render graph fullscreen pass '{}' has state '{}' (expected one of: {})",
+					pass.name, pass.state, listNames(kFullscreenPassStates)));
 			return;
 		}
 		// Phase 10 批 10.5/10.7：picking（id pass）/ highlight（高亮 pass）——两者都是
-		// 克隆条目重放，StateKit 各有对应动态状态段
-		// 状态名词表（与 StateKit 键集合同步）：三成员 + picking / highlight（批 10.5 /
-		// 10.7，克隆条目重放）+ shadow（批 11.2 基建，depth-only pass）
-		static constexpr std::array<const char*, 6> kKnownStates{"opaque", "skybox",
-			"transparent", "picking", "highlight", "shadow"};
-		if (!std::ranges::any_of(kKnownStates,
-				[&](const char* s) { return pass.state == s; }))
-			fail(fmt::format("render graph pass '{}' has unknown state '{}'", pass.name,
-				pass.state));
+		// 克隆条目重放，StateKit 各有对应动态状态段；成员清单见 kMeshPassStates
+		if (!isMeshPassState(pass.state))
+			fail(fmt::format("render graph pass '{}' has unknown state '{}' (expected one of: {})",
+				pass.name, pass.state, listNames(kMeshPassStates)));
 		if (!isKnownDrawSource(pass.drawSource))
-			fail(fmt::format("render graph pass '{}' has unknown drawSource '{}'", pass.name,
-				pass.drawSource));
+			fail(fmt::format(
+				"render graph pass '{}' has unknown drawSource '{}' (expected one of: {})",
+				pass.name, pass.drawSource, listSources()));
 	};
 	for (const auto& pass : graph.passes)
 		validatePass(pass);

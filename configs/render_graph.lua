@@ -7,8 +7,11 @@
 -- attachments: kind = "swapchain" | "depth" | "offscreen"（帧首丢弃规则：
 --   swapchain/depth 每帧内容按 load 重建；offscreen 持久图跨帧追踪布局）
 -- passes:      线性序 = 执行序；kind = "draw"（默认，画 FrameDrawList 段）| "blit"
---   | "drawLight"（固定全屏单 group draw，state 选条目："light"/"tonemap"）
---   state = 动态状态名（"opaque"/"skybox"/"transparent"/"tonemap"），draws = 绘制段名
+--   | "drawLight"（固定全屏单 group draw，state 名 = 该 kind 那档词表的条目名）
+--   state = 动态状态名、draws = 绘制段名 —— **全部合法值见 rgl/pass_vocabulary.cppm**
+--   （kAllPassStates 按 kind 分两档：draw 认 meshPass 档、drawLight 认 fullscreenPass 档；
+--    draws 段名 = kAllDrawSources，"shadow" 是前缀档承 shadow0..3）。本注释刻意不抄名单，
+--    抄一份就漂移一份（izb_mask 落地时这里就漏改成谎言行）；写错的启动报错列出合法值
 --   outputs/inputs 条目: usage = colorWrite | depthWrite | sampleRead |
 --   transferRead | transferWrite；load = "clear"|"load"，store = "store"|"dontCare"；
 --   clear = {r,g,b,a}（颜色）/ clearDepth = f（深度），缺省 = 0.1 灰背景 / 1.0 远平面

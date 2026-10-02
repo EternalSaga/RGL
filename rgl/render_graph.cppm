@@ -163,8 +163,9 @@ export struct RgPassAttachment {
  * - drawMesh：执行 FrameDrawList 段（drawSource → 段边界映射由执行器完成）；
  * - blit：transferRead input → transferWrite output 整幅拷贝（无绘制）；
  * - drawLight（Phase 7 D1 / Phase 8 ①泛化）：固定全屏单 group draw——执行器按
- *   **state 名**绑定预建管线条目（词表 = "light"/"ao"/"tonemap"，见 kFullscreenPassStates），
- *   不走 FrameDrawList 段；outputs 恰一 colorWrite、inputs = sampleRead（barrier 自动）。
+ *   **state 名**绑定预建管线条目（该 kind 的 state 词表 = pass_vocabulary 的
+ *   fullscreenPass 档），不走 FrameDrawList 段；outputs 恰一 colorWrite、
+ *   inputs = sampleRead（barrier 自动）。
  */
 export enum class RgPassKind : uint8_t {
 	drawMesh,  // 执行 FrameDrawList 段（drawSource → 段边界映射由执行器完成）
@@ -173,14 +174,13 @@ export enum class RgPassKind : uint8_t {
 	drawLight,
 };
 
-/**
- * drawLight kind 的 state 词表（单一真相源）：state 名同时是 ShaderRegistry 固定条目名
- *（"light" = deferred 逐灯 GGX，"ao" = 屏幕空间环境光遮蔽，"tonemap" = HDR→LDR ACES）与 StateKit 状态名——
- * 执行器构造期按 state 名解析管线条目，图内 drawLight pass 的 state 必须在此表内
- *（validateRenderGraphForExecutor 校验）。
- */
-export inline constexpr std::array<std::string_view, 3> kFullscreenPassStates{"light", "ao",
-	"tonemap"};
+// pass.state / pass.draws 两个字符串字段的**全部合法值**已迁入叶子模块
+// pass_vocabulary（2026-10-02）：state 名 = `kAllPassStates` 按 `RgStateScope` 分档
+// 派生出 `kMeshPassStates`（drawMesh 用）与 `kFullscreenPassStates`（drawLight 用；
+// state 名同时是 ShaderRegistry 固定条目名——"light" = deferred 逐灯 GGX、
+// "ao" = 屏幕空间环境光遮蔽、"tonemap" = HDR→LDR ACES，执行器构造期按名取条目）；
+// 段名 = `kAllDrawSources`。两档校验不可并成一张扁平表（否则 kind 与 state 串味的
+// 图会放行到执行器深处）——理由与红线写在那张表的头注释里。
 
 /**
  * Phase 8 批次 ①：HDR 累加链附件契约（单一真相源）——forward/deferred 图的颜色目标
@@ -201,16 +201,16 @@ export inline constexpr std::string_view kAoFormat = "r8_unorm";
 
 /**
  * pass 声明（RgGraphDesc.passes 元素）：name 必填；kind 定执行语义；
- * state = RenderState 名（"opaque"/"skybox"/"transparent"…名字字符串，零 handle，
- * 执行器解析；drawMesh 必填，blit 忽略）；drawSource = FrameDrawList 段名
- *（"opaque"/"skybox"/"transparent"；drawMesh 必填）。outputs = 写角色、inputs = 读角色。
+ * state = RenderState 名（名字字符串，零 handle，执行器解析；drawMesh 必填，blit 忽略；
+ * 合法值 = pass_vocabulary 按 kind 分档的 state 子集）；drawSource = FrameDrawList 段名
+ *（drawMesh 必填；合法值 = kAllDrawSources）。outputs = 写角色、inputs = 读角色。
  */
 export struct RgPassDesc {
 	std::string name;
 	RgPassKind kind = RgPassKind::drawMesh;
-	std::string state;       // RenderState 名（"opaque"/"skybox"/"transparent"…名字字符串，零 handle）
-	                         // 执行器解析；drawMesh 必填，blit 忽略
-	std::string drawSource;  // FrameDrawList 段名（"opaque"/"skybox"/"transparent"）；drawMesh 必填
+	std::string state;       // RenderState 名（名字字符串，零 handle，执行器解析）；
+	                         // drawMesh 必填，blit 忽略；合法值见 pass_vocabulary::kAllPassStates
+	std::string drawSource;  // FrameDrawList 段名（合法值见 pass_vocabulary::kAllDrawSources）；drawMesh 必填
 	// 本 pass 的渲染区域（viewport + scissor）相对附件原点的偏移 / 尺寸。
 	// 默认 {0,0,0,0} = 跟随本 pass 的渲染区域（交易窗口尺寸，或写 depthOffscreen 时
 	// 该 RT 自己的 extent）——**既有 pass 逐位不变**。

@@ -185,14 +185,12 @@ export struct FrameDrawList {
 	std::vector<RGL::DrawArgs> cullArgs;
 };
 
-/** 执行器可识别的 drawSource 段名。阴影段名 = "shadow" + 分块号
- *  （scene_context::shadowDrawSource），故用**前缀匹配**：分块号可变（kActiveShadowCascades 1→4），
- *  写死字面量会在切级联时漏校验。与 segmentSpan 走同一条路径——两处必须同步，
- *  否则拓扑允许未知 drawSource 静默落到 transparent 段上（= 静默多画一遍透明体）。
- */
-export bool isKnownDrawSource(std::string_view s) {
-	return s == "opaque" || s == "skybox" || s == "transparent" || s.starts_with("shadow");
-}
+// 执行器可识别的 drawSource 段名 = pass_vocabulary::isKnownDrawSource（**单一真相源**
+// = kAllDrawSources：三个精确段名 + 可变分块号的 "shadow" 前缀，分块号可变
+// kActiveShadowCascades 1→4，写死字面量会在切级联时漏校验）。本模块只负责
+// **段名 → draw 序列**的映射（下方 segmentSpan）；"合法吗"归词表，图校验里判。
+// ⚠️ 本模块的 if 链与那张表不共享机制（表判合法、链做映射）——漂移由
+// tests/test_render_graph.cppm 的「segmentSpan 覆盖 kAllDrawSources」用例拦。
 
 /** 从阴影段名里解析分块号（"shadow" → 0，"shadow2" → 2；非 shadow 前缀 → 0，调用点保证只在
  *  阴影分支上调用）。不用 from_chars（rlstd 不导出它），手扫后缀数字。 */

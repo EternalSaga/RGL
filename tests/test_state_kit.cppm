@@ -1,8 +1,8 @@
 module;
 /**
- * test_state_kit —— StateKit 九段动态状态表（批 12.2d）
+ * test_state_kit —— StateKit 十段动态状态表（批 12.2d）
  *
- * 为什么值得测：StateKit 是**执行器与着色器之间唯一的状态契约面**。九段里有好几处
+ * 为什么值得测：StateKit 是**执行器与着色器之间唯一的状态契约面**。十段里有好几处
  * 「反直觉但有理由」的设定（skybox 用 LEQUAL、picking 用 LEQUAL 而非 LESS、transparent
  * 剔背面、shadow depth-only 且双面写入），它们一旦被改动，症状是画面慢慢变得不对而
  * 没有任何报错——正是本项目最贵的那类 bug（阴影链 5a-3→5a-9 七轮里有若干轮是状态
@@ -11,21 +11,37 @@ module;
  * 本模块 import rlvk（RenderState 里全是 vk:: 枚举），但**不需要任何 VkDevice**：
  * 构造与查表都是纯内存操作。故它能在 `just test`（无 GPU 子集）里跑。
  *
+ * ## 状态名从哪来（2026-10-02）
+ *
+ * 名字不再在本文件抄一份名单：全量词表 = `pass_vocabulary::kAllPassStates`，本文件的
+ * `kAllNames` 由它派生。历史上「加一个状态改五处」漏改四处（izb_mask 落地时本文件的
+ * 名单少一名、两份 Lua 头注释与 AGENTS 的"九段"口径同时变谎言行），派生是把这个
+ * 口径绑死的两环之一（另一环是 StateKit 里的 static_assert）。
+ *
  * ## 一条与直觉相反的事实（本文件的核心发现之一）
  *
- * 九段**不是**九种不同形态，只有四种。把 (cullMode, depthCompareOp, depthTest,
+ * 十段**不是**十种不同形态，只有五种。把 (cullMode, depthCompareOp, depthTest,
  * depthWrite, colorBlend) 取成指纹后实际分组是：
  *
- *   A = opaque / shadow        : None, Less, 测, 写, 不混
- *   B = light / tonemap / ao   : None, Less, 不测, 不写, 不混
- *   C = skybox / picking       : None, LEQ,  测, 不写, 不混
- *   D = transparent            : Back, Less, 测, 不写, 混
- *   E = highlight              : Back, LEQ,  测, 不写, 混
+ *   A = opaque / shadow              : None, Less, 测, 写, 不混
+ *   B = light / tonemap / ao / izb_mask : None, Less, 不测, 不写, 不混
+ *   C = skybox / picking             : None, LEQ,  测, 不写, 不混
+ *   D = transparent                  : Back, Less, 测, 不写, 混
+ *   E = highlight                    : Back, LEQ,  测, 不写, 混
  *
- * 「九段两两不同」是**错的**（tonemap/ao 与 light 同形、picking 与 skybox 同形、
- * shadow 与 opaque 同形）。真正的不变量是**地址**：stateFor 返回各成员存储的引用，
- * 九个名字必须映射到九个不同对象，否则执行器改一段会连带改另一段。故「九段不同」
- * 改成断言地址互异 + 指纹分组如上。
+ * 「十段两两不同」是**错的**（tonemap/ao 与 light 同形、picking 与 skybox 同形、
+ * shadow 与 opaque 同形、izb_mask 与 light 同形）。真正的不变量是**地址**：stateFor
+ * 返回各成员存储的引用，十个名字必须映射到十个不同对象，否则执行器改一段会连带改
+ * 另一段。故「十段不同」改成断言地址互异 + 指纹分组如上。
+ *
+ * ## 变异红线（哪个变异让我红）
+ *
+ * - 把 `kStateSlots` 删一条 / 名字写错 → **编译失败**（StateKit 的 static_assert）；
+ *   把 static_assert 也删掉 → 本文件"词表每个名字都能解析"红（抛异常）。
+ * - 把 `izb_mask` 的形态改成与 light 不同（例：depthTest=true）→ 组 9"五种形态"红。
+ * - 把任一成员指针指错（`{"ao", &StateKit::lightState}`）→ 地址互异红（两名字同址）。
+ * - 词表加名而本文件不动 → 派生的 kAllNames 自动跟上（这正是派生的目的）；
+ *   词表**改名**（如 ao→ssao）→ 组 4 的逐段字面断言红。
  */
 #include <doctest/doctest.h>
 #include <initializer_list>  // 必须：modules 下 std::initializer_list 不从 import rlstd 带进来
@@ -39,6 +55,7 @@ import rlstd;
 import rlvk;
 import state_kit;
 import shader;  // RenderState
+import pass_vocabulary;  // kAllPassStates（状态名词表单一真相源；本文件的名单由它派生）
 
 namespace RGL {
 namespace {
@@ -68,14 +85,20 @@ void checkSameState(const RenderState& got, const RenderState& want, const char*
 
 constexpr RenderState kDefaults{};  // 全默认
 
-/** 状态指纹（只取描述形态的 5 个字段；其余 14 个字段九段全同，另由逐字段比对覆盖）。 */
+/** 状态指纹（只取描述形态的 5 个字段；其余 14 个字段十段全同，另由逐字段比对覆盖）。 */
 std::array<int, 5> fingerprint(const RenderState& s) {
     return {static_cast<int>(s.cullMode), static_cast<int>(s.depthCompareOp),
         s.depthTest ? 1 : 0, s.depthWrite ? 1 : 0, s.colorBlend ? 1 : 0};
 }
 
-constexpr std::array<std::string_view, 9> kAllNames{
-    "opaque", "skybox", "transparent", "light", "tonemap", "ao", "picking", "highlight", "shadow"};
+/** 全量状态名（**派生**自 pass_vocabulary::kAllPassStates——本文件不再抄名单）。 */
+consteval auto deriveNames() {
+    std::array<std::string_view, kAllPassStates.size()> out{};
+    for (uint32_t i = 0; i < kAllPassStates.size(); ++i)
+        out[i] = kAllPassStates[i].name;
+    return out;
+}
+constexpr auto kAllNames = deriveNames();
 
 }  // namespace
 
@@ -226,24 +249,49 @@ TEST_CASE("shadow 段：depth-only，LESS 写光视最近深度 + cull=None 双�
 // 组 7：stateFor 分派 —— 地址互异 + 未知名抛异常
 // ═══════════════════════════════════════════════════════════════════════════
 
-TEST_CASE("stateFor 九个名字映射到九个**不同**的存储对象（地址互异）") {
+TEST_CASE("stateFor 十个名字映射到十个**不同**的存储对象（地址互异）") {
     const StateKit kit{true};
     // 契约是「返回成员存储的引用」。若某两个名字映射到同一成员，执行器改一段会
     // 连带改另一段——而两者形态本就不同（见分组测试），症状是画面局部错乱无报错。
     // 这里断言的是**地址**不是值：值相同是合法的（tonemap/ao 与 light 就同形）。
-    std::array<const RenderState*, 9> addrs{};
-    for (size_t i = 0; i < kAllNames.size(); ++i) {
+    // 表驱动后这条同时在验 kStateSlots 的成员指针没指错（两个名字同址即红）。
+    std::array<const RenderState*, kAllNames.size()> addrs{};
+    for (uint32_t i = 0; i < kAllNames.size(); ++i) {
         INFO("state = " << kAllNames[i]);
         addrs[i] = &kit.stateFor(kAllNames[i]);
     }
-    for (size_t i = 0; i < addrs.size(); ++i)
-        for (size_t j = i + 1; j < addrs.size(); ++j) {
+    for (uint32_t i = 0; i < addrs.size(); ++i)
+        for (uint32_t j = i + 1; j < addrs.size(); ++j) {
             INFO("compare " << kAllNames[i] << " vs " << kAllNames[j]);
             CHECK(addrs[i] != addrs[j]);
         }
 }
 
-TEST_CASE("九段实际只有五种形态（分组如实记录，防有人悄悄加一段而静默扩面）") {
+TEST_CASE("词表每个名字都能解析（派生口径 + internal 段也在 stateFor 键集合）") {
+    const StateKit kit{true};
+    // 词表 ↔ 实现侧的**双向**覆盖：编译期有 StateKit 的 static_assert 拦（删一条
+    // kStateSlots 直接编译不过），本条是它的运行期镜像——static_assert 被删时这里红，
+    // 而不是留下"某个名字永远走不到的死状态"。
+    for (const auto n : kAllNames) {
+        INFO("state = " << n);
+        CHECK_NOTHROW(static_cast<void>(kit.stateFor(n)));
+    }
+    // 计数写死 = 加一个状态必须是显式决定（历史上 izb_mask 落地时本文件名单少一名，
+    // AGENTS 与两份 Lua 头注释的"九段"口径同时变谎言行）。
+    CHECK(kAllNames.size() == 10);
+    // internal 档（izb_mask）**不走图但必须能被 stateFor 解析**：执行器有硬编码录制
+    // 路径直接按名取它（vkrenderer_passrec 的 IZB mask）。它的独有形态是 conservative
+    // =true（FTIZB 保守覆盖命门）——十段里只有它有，正反两面一起钉。
+    CHECK(kit.stateFor("izb_mask").conservative == true);
+    for (const auto n : kAllNames) {
+        if (n == "izb_mask")
+            continue;
+        INFO("state = " << n);
+        CHECK(kit.stateFor(n).conservative == false);
+    }
+}
+
+TEST_CASE("十段实际只有五种形态（分组如实记录，防有人悄悄加一段而静默扩面）") {
     // 文件头那份分组表就是从这条断言的期望反推出来的。分组数若变化，说明有人动过
     // 某段的状态——那时**先问是不是有意的**，再改这条。
     const StateKit kit{true};

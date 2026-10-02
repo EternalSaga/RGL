@@ -179,6 +179,7 @@ set(RGL_BASE_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/cube.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/vkerror.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/gbuffer_contract.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/pass_vocabulary.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/scene_context.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/camera_config.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/camera_config_impl.cppm"

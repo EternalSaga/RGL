@@ -28,7 +28,7 @@ import gpu_profiler;
 import diagnostics;
 import vulkan_utils;  // createImageBarrier（物化用）
 import VmaRaii;
-import frame_draw_list;  // isKnownDrawSource / segmentSpan（段名 → draw 序列）
+import frame_draw_list;  // segmentSpan（段名 → draw 序列）
 import scene_context;  // shadowDrawSource（IZB mask 重放段名单一来源，批 11.3-1d）
 import material_types_generated;  // DrawArgs
 import lights_types_generated;
