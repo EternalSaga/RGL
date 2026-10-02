@@ -114,6 +114,9 @@ struct ProfileOpts {
     double exposure = 1.0;
     double aoStrength = 0.0;
     bool shadowPass = false;
+    bool izbShadow = false;                // diagnostics.izb_shadow（izb 消费域判据）
+    int izbDumpFrame = 0;                  // diagnostics.izb_dump_frame（>0：N 帧起每 30 帧覆盖写 izb_mask.ppm）
+    std::string variant;                   // "" = 模板默认（forward）；"deferred" 等 = 拷贝后重写 variant 行
     std::array<double, 3> lightDir{0.5, -0.75, -0.45};
     double lightIntensity = 12.0;
     bool picking = true;                   // object_id 附件 = 区域归因的根基

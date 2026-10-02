@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <regex>
+#include <iterator>
 #include <sstream>
 #include <stdexcept>
 #include <thread>
@@ -160,6 +161,16 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
     // swapchain 附件 → 启动失败，实测踩过）。
     fs::copy_file(profileTemplate() + "/render_graph.lua", outDir + "/render_graph.lua",
         fs::copy_options::overwrite_existing);
+    // variant 重写（izb 判据要 deferred；模板默认 forward）：只动 variant 行的字符串值
+    if (!o.variant.empty()) {
+        std::ifstream in(outDir + "/render_graph.lua");
+        std::string rg((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        static const std::regex variantRx(R"(variant\s*=\s*"[^"]*")");
+        if (!std::regex_search(rg, variantRx))
+            throw std::runtime_error("render_graph.lua 模板无 variant 行，无法重写");
+        const std::string out = std::regex_replace(rg, variantRx, "variant = \"" + o.variant + "\"");
+        writeFile(outDir + "/render_graph.lua", out);
+    }
     for (const char* j : {"log_level.json", "shaderRefLogLevel.json"})
         fs::copy_file(profileTemplate() + "/" + j, outDir + "/" + j,
             fs::copy_options::overwrite_existing);
@@ -176,7 +187,8 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
     const std::set<std::string> diagKeys = {"no_vvl", "no_hdr", "no_present", "vtx_canary",
         "texel_canary", "dump_gbuf", "style_dist", "tex_dist", "texture_force_size",
         "texture_force_white", "texture_force_unorm", "profiler", "imgui", "config_reload",
-        "shader_reload", "picking", "rpc", "rpc_port", "shadow_pass"};
+        "shader_reload", "picking", "rpc", "rpc_port", "shadow_pass", "izb_shadow",
+        "izb_grid", "izb_dump_frame"};
     assertKeys("diagnostics.lua", diagKeys, knownRootKeys("rgl/diagnostics_impl.cppm"));
     writeFile(outDir + "/diagnostics.lua",
         std::string(
@@ -186,7 +198,8 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
             "  profiler = 0, imgui = false, config_reload = false, shader_reload = false,\n"
             "  picking = ")
         + lb(o.picking) + ", rpc = true, rpc_port = 8788,\n  shadow_pass = " + lb(o.shadowPass)
-        + " }\n");
+        + ", izb_shadow = " + lb(o.izbShadow)
+        + ", izb_dump_frame = " + std::to_string(o.izbDumpFrame) + " }\n");
 
     assertKeys("scene.lua",
         {"entities", "styles", "environment", "light", "spin", "cube", "exposure", "ao"},

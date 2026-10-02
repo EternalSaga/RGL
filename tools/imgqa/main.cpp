@@ -1,4 +1,4 @@
-// imgqa CLI。子命令：selftest / check / refuse / attribution / faces / switch / probe / note。
+// imgqa CLI。子命令：selftest / check / refuse / attribution / faces / switch / izb / probe / note。
 #include "imgqa.h"
 
 #include <cstdio>
@@ -9,6 +9,7 @@
 #include <sstream>
 #include <string>
 
+#include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
 namespace RGL::imgqa {
@@ -240,6 +241,101 @@ int cmdSwitch(const std::string& glb, const std::string& camera,
     return (v0.ok && v1.ok && v2.ok) ? 0 : 1;
 }
 
+// ── izb：IZB 消费域判据（mask↔画面寻址一致性；11.3 补账 B）─────────────────
+// CSM 基线截图 vs IZB 门开截图 + izb_mask.ppm（门开跑内 dump 产出）三方对拍：
+//   锚点   |变暗| ≥ 下限（消费链路活着——2026-10-02 字节偏移 bug 下恒 0）
+//   域内   变暗 ⊆ dilate(mask遮,2)（IZB 不许在 mask 判受光处画影——ndc 镜像 bug 红）
+//   消费   mask遮 ∩ CSM受光 ⊆ dilate(变暗,2)（mask 有货必须落到画面——消费断链红）
+// 变亮集（CSM 遮而 IZB 放）只报不判：v1 近场语义下远场 CSM 影被拆属预期。
+int cmdIzb(const std::string& glb, const std::string& camera)
+{
+    const std::string stem = glb.substr(0, glb.find_last_of('.'));
+    const Manifest man = loadManifest(stem);
+    const auto it = man.cameras.find(camera);
+    if (it == man.cameras.end())
+        throw std::runtime_error("机位不存在: " + camera);
+
+    Frame fCsm, fIzb;
+    {
+        ProfileOpts o;
+        o.glb = glb;
+        o.shadowPass = true;  // CSM 基线；mask 重放的 shadow0 段也依赖此门
+        o.variant = "deferred";  // IZB 仅 deferred 生效（forward 无 drawLight pass）
+        makeProfile(projectRoot() + "/build/imgqa_profile_izb_csm", o);
+        Engine eng(projectRoot() + "/build/imgqa_profile_izb_csm");
+        fCsm = captureFrame(eng, it->second, "izb_csm");
+    }
+    {
+        ProfileOpts o;
+        o.glb = glb;
+        o.shadowPass = true;
+        o.variant = "deferred";
+        o.izbShadow = true;
+        o.izbDumpFrame = 5;
+        makeProfile(projectRoot() + "/build/imgqa_profile_izb_on", o);
+        // 删陈旧 ppm（首跑实锤：dump 不生效时旧文件会伪装成"本轮产物"）
+        std::filesystem::remove(std::filesystem::path(projectRoot()) / "build/rgl/izb_mask.ppm");
+        Engine eng(projectRoot() + "/build/imgqa_profile_izb_on");
+        fIzb = captureFrame(eng, it->second, "izb_on");
+    }
+    // mask PPM（遮挡=黑）→ 8UC1（遮=255）；尺寸必须与截图一致（extent 失配 = 采集错帧）
+    const std::string ppm = projectRoot() + "/build/rgl/izb_mask.ppm";
+    cv::Mat gray = cv::imread(ppm, cv::IMREAD_GRAYSCALE);
+    if (gray.empty())
+        throw std::runtime_error("izb_mask.ppm 不存在/读失败（izb_dump_frame 未生效？）");
+    if (gray.size() != fIzb.bgr.size())
+        throw std::runtime_error("mask 与截图 extent 不符: " + std::to_string(gray.cols)
+            + "x" + std::to_string(gray.rows));
+    cv::Mat shadowed;
+    cv::threshold(gray, shadowed, 127, 255, cv::THRESH_BINARY_INV);
+
+    const auto sumCh = [](const cv::Mat& bgr) {
+        cv::Mat f;
+        bgr.convertTo(f, CV_32S);
+        std::vector<cv::Mat> ch;
+        cv::split(f, ch);
+        cv::Mat s;
+        cv::add(ch[0], ch[1], s);
+        cv::add(s, ch[2], s);
+        return s;
+    };
+    const cv::Mat sC = sumCh(fCsm.bgr);
+    const cv::Mat d = sumCh(fIzb.bgr) - sC;
+    cv::Mat darkened, brightened, litCsm;
+    cv::compare(d, cv::Scalar(-30), darkened, cv::CMP_LT);
+    cv::compare(d, cv::Scalar(30), brightened, cv::CMP_GT);
+    cv::compare(sC, cv::Scalar(90), litCsm, cv::CMP_GE);  // CSM 下受光（和≥90）
+
+    cv::Mat darkIn = darkened.clone();
+    cv::bitwise_and(darkIn, dilateMask(shadowed, 2), darkIn);
+    cv::Mat darkOut = darkened - darkIn;  // 域外变暗 = 寻址错
+    cv::Mat req;
+    cv::bitwise_and(shadowed, litCsm, req);  // mask 遮 ∧ CSM 受光 → 必须变暗
+    cv::Mat reqDil = req.clone();
+    cv::bitwise_and(reqDil, dilateMask(darkened, 2), reqDil);
+    cv::Mat unconsumed = req - reqDil;
+
+    const int64_t nDark = cv::countNonZero(darkened);
+    const int64_t nDarkOut = cv::countNonZero(darkOut);
+    const int64_t nReq = cv::countNonZero(req);
+    const int64_t nUncons = cv::countNonZero(unconsumed);
+    const int64_t nBright = cv::countNonZero(brightened);
+
+    const Verdict vAnchor = verdictFor("izb-consume-domain", nDark >= 500,
+        "锚点：变暗 " + std::to_string(nDark) + " px（下限 500）");
+    const Verdict vDomain = verdictFor("izb-consume-domain", nDarkOut == 0,
+        "变暗域 ⊆ dilate(mask,2)：域外 " + std::to_string(nDarkOut) + " px（要求恰 0）");
+    const Verdict vConsume = verdictFor("izb-consume-domain", nUncons == 0,
+        "mask∩受光 ⊆ dilate(变暗,2)：未消费 " + std::to_string(nUncons) + "/"
+            + std::to_string(nReq) + " px（要求恰 0）");
+    std::cout << "  " << vAnchor.line() << "\n  " << vDomain.line() << "\n  "
+        << vConsume.line() << "\n";
+    std::printf("\n  INFO 变亮（CSM 遮而 IZB 放，v1 近场语义）: %lld px\n",
+        static_cast<long long>(nBright));
+    logCall("izb", {{"glb", glb}, {"camera", camera}}, {vAnchor, vDomain, vConsume});
+    return (vAnchor.ok && vDomain.ok && vConsume.ok) ? 0 : 1;
+}
+
 // ── probe：闭式解探针（12.3b 接替 analytic_ref.py --probe；配置即契约）──
 int cmdProbe(const std::string& configDir, int x, int y, Vec3 albedo, double roughness,
     double metallic, Vec3 l, double intensity, int tol, bool lightOverride)
@@ -387,6 +483,7 @@ void printUsage()
         "  attribution [--glb X.glb] [--camera 名]    机位下谁被画了/占多少/多亮/谁全黑\n"
         "  faces [--glb X.glb] --piece 名              闭式解逐面预测 vs 观测亮度簇\n"
         "  switch [--glb X.glb] [--camera 名] [--allow-piece a,b]  开关影响域 + 死分支（含确定性前置）\n"
+        "  izb [--glb izb_rig.glb] [--camera ladder]  IZB 消费域：mask↔画面寻址一致性（三子判据）\n"
         "  probe [--x 640] [--y 360] [--light Lx,Ly,Lz] [--tol 2]  闭式解探针：该是多少 vs 实际是多少\n"
         "  note \"事后真相\"                             回填最后一条调用记录（晋升凭据）\n");
 }
@@ -421,6 +518,9 @@ int main(int argc, char** argv)
             return cmdSwitch(P.get(args, "--glb", "shadow_rig.glb"),
                 P.get(args, "--camera", "near_anchor"),
                 P.get(args, "--allow-piece", "ground"), P.has(args, "--env"));
+        if (cmd == "izb")
+            return cmdIzb(P.get(args, "--glb", "izb_rig.glb"),
+                P.get(args, "--camera", "ladder"));
         if (cmd == "probe") {
             const auto parse3 = [](const std::string& s) {
                 std::array<double, 3> v{0, 0, 0};

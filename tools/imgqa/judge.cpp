@@ -49,6 +49,15 @@ const std::vector<JudgmentInfo>& registeredJudgments()
             "±2 LSB：ACES 多项式 float64 转录 vs 着色器 float32 + 8bit 量化取整"
             "（沿用 12.2d-c 实机对拍实测）；再大就该当失败看待，不能靠放宽阈值混过去。",
             {"闭式解探针实测零误差（批 12.2d-c，analytic_ref.py 时代）"}, false},
+        {"izb-consume-domain",
+            "变暗阈 = 三通道和差 >30：rig 调色板 albedo（≥0.5）× 方向光 12 → 影差远大于 30"
+            "（ladder 首跑实测：变暗 4705/域外 0/未消费 0）；域容差 = dilate(mask,2px)：mask "
+            "与截图同帧同源，2px 只吸收保守光栅的过估边（mask 侧只会多遮不会少遮，方向安全）。"
+            "三条子判据：锚点（变暗集非空 = 消费活着）、变暗域 ⊆ mask（寻址对得上）、mask∩受光 "
+            "⊆ 变暗域（有遮必消费）。⚠️ 边界：本判据 mask↔画面**同源**，生产者侧几何错（ndc "
+            "镜像类）会同步污染 mask 与画面 → 本判据不可见，那半边由 test_izb_engine_contract"
+            "（A1 闭式）钉；mask vs manifest 预测影包络（生产者端到端）= 已识别扩展，未做。",
+            {"2026-10-02 消费端字节偏移 ÷4 bug（门开无影）→ 锚点+消费两红——本判据设计原型即那次手工对拍"}, false},
     };
     return kAll;
 }

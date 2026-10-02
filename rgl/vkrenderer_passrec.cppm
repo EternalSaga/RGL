@@ -254,7 +254,10 @@ void Renderer::izbLightPassPre(vk::raii::CommandBuffer& cmd, const RgPassPlan& p
 	izbShadow->recordFrame(cmd,
 		IzbFrameInput{list.sceneData.skyInvViewProj, list.sceneData.shadowViewProj[0]},
 		attachmentLayouts[static_cast<size_t>(depthAttSlot)],
-		diagnostics().izbDumpFrame != 0 && izbFrameNo == diagnostics().izbDumpFrame);
+		// N 帧起每 30 帧转一次（ppm 覆盖写 + 直方图日志行）——一次性判等会被 RPC
+		// 截图时序甩开（imgqa izb 判据要求 mask 与截图同相机状态，机位是 RPC 后设的）
+		diagnostics().izbDumpFrame != 0 && izbFrameNo >= diagnostics().izbDumpFrame
+			&& (izbFrameNo - diagnostics().izbDumpFrame) % 30 == 0);
 	replayIzbMaskSegment(cmd, list);
 }
 
