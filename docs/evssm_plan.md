@@ -160,11 +160,31 @@ AGENTS 已定「机器不著书」纪律）；Raphael/NVIDIA 跨机复测仍列�
 - 11.5 冻结件未写测试（fallback 定位，转正时补：半影宽度闭式 + swim 扩展）。
 - ~~源树 configs 测试态改动待处置~~ → 已转正（`c05b2bd`：variant=deferred、
   izb_shadow=true、pcss_* 四键默认关）。
-- **EVSSM v1 边界三条**（`d9859c6` 落地时记）：① forward 路 sandwich 未接
-  （消费点在 geometry pass，门开 = warn-once 不构造、采样读 fallback 零矩全亮）；
+- **EVSSM v1 边界三条**（`d9859c6` 落地时记；① fallback 语义已于 2026-10-02 修复更正）：
+  ① forward 路 sandwich 未接（消费点在 geometry pass，门开 = warn-once 不构造、采样读
+  fallback = **far 面最大矩全亮**——初版零矩是恒暗方向、已修，见调试历史 2026-10-02）；
   ② IZB 同开 = 硬影乘法主导，「IZB 近场细影 + EVSSM 远场软影」的距离混接未做
   （= 11.6e 主题，混接带公式 + 与 shadowFar 淡出的关系一并设计）；
   ③ quincunx 5 抽头边缘毛刺（哈希旋转角噪声），Filament 有 IG noise / −0.86 单抽头 /
   9 抽头三档可换——转正前观感调优项。
+- **热开热关 = 设计无路径**（2026-10-02 核实收口）：diagnostics.lua 不在 hot_reload
+  监视清单（只盯 scene/camera/log_level）、RPC `/param` 只写参数页、面板无勾——门仅
+  启动期生效；若将来要热切需变体 rebake + EvssmShadow 析构时序一起设计，勿误测。
+- **显存账**：矩图 RGBA16F 2048²×8 mip ≈ **44.7 MB**（mip 链 ×4/3）+ 9 heap 槽 +
+  1×1 far 矩 fallback ≈ 4B。转正评审计入。
+- **switch 影响域判据未跑**：imgqa switch 绑 shadow_rig 场景件（本机缺 manifest）；
+  EVSSM 影响域 ≈ 全接收面、piece 归因增益有限——门关零影响红线 + 生效域阳性
+  （off→on 18.16% 变）+ 确定性已覆盖其核心诉求，转正前如需再补 rig。
+
+## 6.1 收尾验证记录（2026-10-02，本机 = 8060S STRIX_HALO，跨机先复测）
+
+- **多帧长跑**：headless（无 llm_debug）EVSSM×IZB 双开 45s 连续跑帧（CPU 采样实证
+  ~56% 占核），0 error 0 warning，SIGTERM 干净退出（残留进程按 pgrep 纪律清理）。
+- **swim×EVSSM**（imgqa `swim --evssm`，izb_rig ladder dx=0.06）：EVSSM 单开失配
+  5/63714、双开 0/63595，均 PASS——mip 搜索跳 lod 无世界游动。
+- **确定性**：同配置两独立进程（修复版 vs 双源重构版）截图**逐字节一致**；
+  门关基线多轮逐位。
+- **单测**：`tests/test_evssm_math.cppm` 6 用例 + 变异双向验红（删快路 2 红 /
+  min→max 1 红）；`just test` 150 全过。
 - **CPU 录制增量未测**：EVSSM sandwich = 8 dispatch/帧（1 moments + 7 mip），
   本项目 CPU-bound——转正裁决前跑 profiler 对比（frame/record zone 增量）。
