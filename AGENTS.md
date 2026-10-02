@@ -56,7 +56,7 @@ CMake 无独立构建目录——必须从根目录构建（`cmake -B build -S .
 
 | 层 | 位置 | 覆盖 | 入口 |
 |---|---|---|---|
-| 单元测试层 | `tests/`（doctest，C++20 modules） | **纯函数/契约**：阴影级联几何、相机数学、glTF 解析、四份配置 loader、反射字节布局、内建 cube 几何、**`state_kit` 九段状态表**、**`render_graph` 编译（校验/barrier/装饰）**。**无 GPU 无窗口，毫秒级** | `just test` |
+| 单元测试层 | `tests/`（doctest，C++20 modules） | **纯函数/契约**：阴影级联几何、相机数学、glTF 解析、四份配置 loader、反射字节布局、内建 cube 几何、**`state_kit` 十段状态表 + `pass_vocabulary` 词表分区**、**`render_graph` 编译（校验/barrier/装饰）**。**无 GPU 无窗口，毫秒级** | `just test` |
 | 设备原语层 | `tests/` 的 `TEST_SUITE("gpu")` | **后端原语 golden**：clear 色逐像素、R32_UINT 魔数整数回环、UNORM 量化取整（0.5→128）、image↔buffer 逐字节保真 + 行序 | `just test-all` / `just test-gpu` |
 | 闭式解探针 | `tools/imgqa/`（probe 子命令）+ `qa/configs/analytic/` | 「某像素**该**是多少」的独立第二实现（GGX + ACES + 硬件 sRGB 逐式复刻，与引擎共享真机锚点），与实机截图逐字节对拍。**不需要基线图像**（12.3b 接替 analytic_ref.py） | `just analytic` |
 | 区域归因判据 | `tools/imgqa/`（C++ + vcpkg，**不进 ALL**） | objectID 反解可见 piece + 闭式解逐面预测 vs 观测亮度簇 + 开关影响域（域外逐位为零）+ 反模式登记（ssim 等有理由的拒绝）。**排查渲染问题的默认起手** | `just imgqa selftest` / `attribution` / `faces` / `switch`（判据晋升与台账纪律 → `tools/imgqa/imgqa.h` 头注释 + skill rgl-verify） |
@@ -148,7 +148,7 @@ CMake 无独立构建目录——必须从根目录构建（`cmake -B build -S .
 | `frame_session` | frame_session.cppm | 帧生命周期会话：双 fence 同步 + 每帧 CB + beginFrame/submit/present/advance + swapchain/depth 重建 |
 | `frame_capture` | frame_capture.cppm | 帧内回读捕获器（llm_debug 截图载体）：request/record/collect 三步曲 |
 | `cull_driver` | cull_driver.cppm | GPU culling 帧编舞：`runFrame`（dispatch→preprocess→同帧等待→readCull→reconcile）+ `executeOpaqueSegment` 三路分发（IES DGC / 静态 DGC / 读回重放） |
-| `state_kit` | state_kit.cppm | pass 动态状态表：九段 RenderState（opaque/transparent/skybox/light/tonemap/ao/picking/highlight/shadow）+ `stateFor(name)` |
+| `state_kit` | state_kit.cppm | pass 动态状态表：十段 RenderState + `stateFor(name)`（表驱动；名字与分档的真相源 = `pass_vocabulary`，值语义在此） |
 | `render_graph` | render_graph.cppm | 纯 C++ 渲染意图图：`compileRenderGraph`（校验 + barrier 推导 + presentTransition）→ `CompiledRenderGraph`；三变体 + `kGBufferAttachments` 契约表 |
 | `render_graph_config` | render_graph_config.cppm | `configs/render_graph.lua` → `RgGraphDesc`（sol2 沙箱，缺文件回落默认） |
 | `shader_registry` | shader_registry.cppm | 管线表（零 entt）：addModelEntry/addCubeEntry/addSkyEntry/addLightEntry/bindPipelineToAsset，条目全按需建 |
@@ -205,9 +205,12 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
 - **VMA + zero-init 冲突**：VMA 对 BDA buffer 自动加内部 DEVICE_ADDRESS flags，与用户 ZERO_INITIALIZE pNext 必撞——该扩展已回退，真实需求走原生 `vkAllocateMemory` 绕 VMA（`docs/vulkan_extensions_2025_调研.md` §十二/§13.1）
 - **Phase 5 光照/透明近似**：世界法线 mat3 直乘（假定均匀缩放）；透明排序 per-primitive 距离²（非 OIT）且开背面剔除（非封闭几何会剔掉一面）。留 Phase 7+
 - **Phase 5.5 IBL/天空盒近似**：BRDF LUT 仍无（prefiltered 已 Phase 8 ④b GGX 预滤波落地，`env_prefilter.cppm`）；mip blit NEAREST（sRGB LINEAR 违 VUID-00239）；单环境贴图；大三角 z=1 依赖 depth clear + LEQUAL；**light/env 两个 intensity 语义不对称**（light CPU 预乘、env shader 端乘，亮度跨路线不可直接对比）。简化 IBL forward/deferred 逐式相同；skybox 背景在 deferred light pass 内合成（非独立 pass）
-- **Phase 6 渲染图边界**：线性 pass 序（无拓扑排序/fusion/aliasing）；执行器 state 分派认
-  `state_kit` 全部九个名字（`stateFor`），drawSource 名表 = opaque/skybox/transparent/shadow*，
-  全屏 pass 词表 = `kFullscreenPassStates`（light/ao/tonemap）；单 swapchain attachment；多线程录制不做
+- **Phase 6 渲染图边界**：线性 pass 序（无拓扑排序/fusion/aliasing）；两个图字符串字段的
+  词表单一真相源 = **`pass_vocabulary`**（`kAllPassStates` 按 scope 分档：drawMesh 认
+  meshPass 档 6 名、drawLight 认 fullscreenPass 档 3 名 = `kFullscreenPassStates`，
+  `izb_mask` 属 internal 档不走图；段名 = `kAllDrawSources`，shadow 是前缀档）——
+  **两档不可并成扁平表**（并集会让 kind 与 state 串味的图放行到执行器深处）；
+  单 swapchain attachment；多线程录制不做
 - **Phase 11 批 11.4 SSAO 三条固有边界**：① **depth-only → 法线贴图细节看不见**（鹅卵石缝
   是法线贴图，深度图上是一整片平面 → 开阔地面 AO 恒 1.000，不是 bug）；② 屏幕空间螺旋采样
   无投影 range check（scene data 头只有 `invViewProj`）→ 前景轮廓外一圈 AO 光晕；

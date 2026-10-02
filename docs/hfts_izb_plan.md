@@ -122,8 +122,13 @@ BIT-IDENTICAL 基线不受扰）。
    与 ao pass 读深度重建世界坐标相互作用，属不必要风险面（phase11 §9 同款结论）。
 3. **`maxExtraPrimitiveOverestimationSize = 0`（RADV 实测）= 无硬件 fattening**：
    漏光对策走插入侧/光栅侧的 1-texel dilation（软件实现），**不得**依赖硬件外扩。
-4. 新增 state `"izb"` 后 state_kit 九段变十段 → 落地时同步更新单测状态表用例与
-   `AGENTS.md` 测试体系表的"九段"口径（实现期待办，勿忘）。
+4. 新增 state `"izb_mask"`（实际落地名，非草案的 `"izb"`）后 state_kit 九段变十段 →
+   **口径已收口（2026-10-02）**：状态名词表迁入单一真相源叶子模块 `pass_vocabulary`
+   （`izb_mask` = `internal` 档 = 不走图，由执行器硬编码录制路径直接 `stateFor`），
+   单测状态名改为由词表派生、`AGENTS.md` 与 `docs/技术概念.md` 口径改十段。
+   本条待办的性质也随之作废——不再是"记得同步四处"（当年就漏了四处），而是同步不了：
+   StateKit `static_assert`（词表 ↔ 实现同名同数）+ `tests/test_render_graph.cppm`
+   的档位分区用例。
 
 ---
 
