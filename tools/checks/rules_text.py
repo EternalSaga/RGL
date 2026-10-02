@@ -369,3 +369,41 @@ def forbidden_vulkan_checks() -> list[Warning]:
                 if rx.search(line):
                     warnings.append(Warning(rel, lineno, f"{tok}——{FORBIDDEN_VULKAN_MSG}"))
     return warnings
+
+
+# ─── 纯文本：.slang ByteAddressBuffer 位转纪律（回归护栏）────────────────────
+
+# 文件内声明的字节寻址缓冲变量名（Load/Store 返回 uint 位模式）
+_BAB_DECL_RX = re.compile(r"\b(?:RW)?ByteAddressBuffer\s+(\w+)\s*;")
+# floatN 名 = ... buf.Load...( 且整行无 asfloat —— 裸赋值 = slang 生成
+# ConvertUToF（数值转换非位转），静默出错（2026-10-02 IZB「门开无影」根因①）
+_BAB_BARE_LOAD_RX_TMPL = r"\bfloat[234]?\s+\w+\s*=\s*[^;]*\b{name}\.Load[234]?\s*\("
+
+
+def slang_load_bitcast_checks() -> list[Warning]:
+    """rgl/shaders/*.slang：floatN 直接 = ByteAddressBuffer.Load…（无 asfloat）→ 警告。
+
+    缓冲名 = **全仓 .slang 声明的并集**（sceneData 声明在 scene.slang、经 import
+    跨文件使用——只收本文件声明会漏掉主犯，首版实测踩过）。同名异型（如某文件把
+    同名声明成 Texture2D）理论上会误报，全仓现状无此撞名；撞了再收紧。
+    StructuredBuffer 全仓未用（用了会带模板参数 <T>，正则不匹配）。
+    跨行赋值不追（本仓 shader 无此写法，出现即漏报——lint 取窄不误报是自觉取舍）。
+    """
+    warnings: list[Warning] = []
+    srcs = {}
+    for rel in rgl_tree_files(".slang"):
+        src = read_text(Path(ROOT) / rel)
+        if src is not None:
+            srcs[rel] = src
+    names = {n for src in srcs.values() for n in _BAB_DECL_RX.findall(src)}
+    rxs = [re.compile(tmpl.format(name=n)) for n, tmpl in
+        ((n, _BAB_BARE_LOAD_RX_TMPL) for n in names)]
+    for rel, src in srcs.items():
+        for lineno, line in enumerate(strip_comments(src).splitlines(), 1):
+            if "asfloat" in line:
+                continue
+            if any(rx.search(line) for rx in rxs):
+                warnings.append(Warning(rel, lineno,
+                    "ByteAddressBuffer.Load 返回 uint 位模式——floatN 裸赋值会被 slang "
+                    "降低成 ConvertUToF（数值转换非位转，静默出错）；须 asfloat(buf.Load…)"))
+    return warnings
