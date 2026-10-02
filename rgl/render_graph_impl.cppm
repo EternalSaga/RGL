@@ -167,6 +167,21 @@ std::expected<void, Error> validateAttachmentExtent(const RgAttachmentDesc& att)
 		att.kind == RgAttachmentKind::swapchain ? "swapchain" : "depth", att.name)));
 }
 
+/** ① 历史附件按 kind 校验：跨帧历史只对图属颜色 RT（offscreen）开放——swapchain/depth
+ *  内容由执行器按帧重建（present 后缓冲未定义、深度图每帧 clear），"上一帧内容"这个
+ *  概念对它们不成立；depthOffscreen（阴影图）同理每帧整幅 clear。@return 失败带定位 Error */
+std::expected<void, Error> validateAttachmentHistory(const RgAttachmentDesc& att) {
+	if (!att.history)
+		return {};
+	if (att.kind != RgAttachmentKind::offscreen)
+		return std::unexpected(rgError(fmt::format(
+			"render_graph: history=true requires kind=offscreen, but attachment '{}' is {}",
+			att.name, att.kind == RgAttachmentKind::swapchain      ? "swapchain"
+			: att.kind == RgAttachmentKind::depth ? "depth"
+		                                          : "depthOffscreen")));
+	return {};
+}
+
 /** ① 单 attachment 校验与落图：空名 / 重名 / swapchain 计数 / 格式（validateAttachmentFormat）/ 尺寸（validateAttachmentExtent）→ 名字→slot + 图记录 + 游标。@return 失败带定位 Error */
 std::expected<void, Error> registerAttachment(const RgAttachmentDesc& att, CompileCtx& ctx) {
 	if (att.name.empty())
@@ -182,6 +197,8 @@ std::expected<void, Error> registerAttachment(const RgAttachmentDesc& att, Compi
 		return std::unexpected(std::move(r).error());
 	if (auto r = validateAttachmentExtent(att); !r)
 		return std::unexpected(std::move(r).error());
+	if (auto r = validateAttachmentHistory(att); !r)
+		return std::unexpected(std::move(r).error());
 	ctx.graph.attachments.push_back(RgCompiledAttachment{
 		.name = att.name,
 		.kind = att.kind,
@@ -192,6 +209,7 @@ std::expected<void, Error> registerAttachment(const RgAttachmentDesc& att, Compi
 		// oldLayout=eUndefined 约定；阴影图每帧整幅 clear 亦归此档）；
 		// offscreen 持久图必须追踪真实布局
 		.frameStartDiscard = att.kind != RgAttachmentKind::offscreen,
+		.history = att.history,  // 跨帧历史（planBarrier 帧首 src 提档的依据）
 	});
 	ctx.slots.emplace_back();
 	return {};
@@ -317,9 +335,11 @@ std::expected<RgAttachmentSlot, Error> validatePassRef(const RgPassDesc& pass,
 		return std::unexpected(rgError(fmt::format(
 			"render_graph: pass '{}' depthWrites non-depth attachment '{}'", pass.name,
 			a.attachment)));
-	// 读前置：本帧尚无写入的 attachment 不可读（跨帧历史复用——TAA 类——
-	// 骨架版不支持，留后续）
-	if (isReadUsage(a.usage) && !ctx.slots[slot].everWritten)
+	// 读前置：本帧尚无写入的 attachment 不可读。**跨帧历史附件豁免**——"本帧未写先读"
+	// 正是 history 的语义（读的是上一帧留下的内容；论证与红线见
+	// RgAttachmentDesc::history 注释与 docs/taa_plan.md §2 gap ①）。非 history 附件
+	// 的规则逐字不变（既有 "read before write" 负例继续有效）。
+	if (isReadUsage(a.usage) && !ctx.slots[slot].everWritten && !compiled.history)
 		return std::unexpected(rgError(fmt::format(
 			"render_graph: pass '{}' reads '{}' before any write in the frame", pass.name,
 			a.attachment)));
@@ -349,8 +369,19 @@ void planBarrier(const RgPassAttachment& a, RgAttachmentSlot slot,
 			barrier.srcAccess = prev.access;
 		} else {
 			barrier.oldLayoutDiscard = compiled.frameStartDiscard;
-			barrier.srcStage = vk::PipelineStageFlagBits2::eTopOfPipe;
-			barrier.srcAccess = vk::AccessFlagBits2::eNone;
+			// **帧间分析（TAA 历史图的关键一条）**：普通 offscreen 帧首用 TopOfPipe/eNone
+			// 够用（本帧必先写后读，无跨 submission 依赖）。history 附件的帧首用是**读**，
+			// 读的内容由**上一帧的 submission** 写入：kFramesInFlight=2 下两帧可重叠，
+			// 而 spec 明确 submission order 本身不建执行/内存依赖、同队列 batch
+			// "begin in submission order but may complete out of order"。
+			// pipeline barrier 的 first scope = "submitted to the same queue before it"
+			// 的命令（跨 submission），故 AllCommands/MemoryWrite 足以建立跨帧 RAW 依赖；
+			// TopOfPipe/eNone 则一条都不建立。
+			barrier.srcStage =
+				compiled.history ? vk::PipelineStageFlagBits2::eAllCommands
+				                 : vk::PipelineStageFlagBits2::eTopOfPipe;
+			barrier.srcAccess = compiled.history ? vk::AccessFlagBits2::eMemoryWrite
+			                                     : vk::AccessFlagBits2::eNone;
 		}
 		plan.barriers.push_back(barrier);
 	}
@@ -448,6 +479,22 @@ std::expected<void, Error> advanceCursors(const CompiledRenderGraph& graph,
 	return {};
 }
 
+/**
+ * ⑤ 历史附件完整性：声明 history=true 的附件**必须被某个 pass 写过**，否则它永远
+ * 读的是未初始化内存（"跨帧历史"名不存 — 每帧读同一份垃圾）。这条只能编译期抓
+ * （运行期读未初始化 VA 不报错，只是画面是噪声/黑）。
+ * @return 失败带定位 Error（首个未写历史附件点名）
+ */
+std::expected<void, Error> checkHistoryAttachmentsWritten(const CompileCtx& ctx) {
+	for (size_t slot = 0; slot < ctx.graph.attachments.size(); ++slot)
+		if (ctx.graph.attachments[slot].history && !ctx.slots[slot].everWritten)
+			return std::unexpected(rgError(fmt::format(
+				"render_graph: history attachment '{}' is never written by any pass "
+				"(cross-frame history needs a writer to carry into the next frame)",
+				ctx.graph.attachments[slot].name)));
+	return {};
+}
+
 /** ⑤ 帧末 present 转换 + swapchainWaitStage 派生（swapchain 最后 usage 必须是写）。 */
 std::expected<void, Error> finishPresent(CompileCtx& ctx) {
 	if (ctx.swapchainCount != 1)
@@ -486,78 +533,6 @@ std::expected<void, Error> finishPresent(CompileCtx& ctx) {
 
 }  // namespace
 
-/**
- * 格式词表（小写下划线 → vk::Format，接口注释是语义权威）：表驱动，扩展 = 加一行。
- * "inherit" 不在表内——语义 = 随 swapchain 格式，由 resolveRgFormat 单独短路。
- * @return 14 项词表（引用，静态存储）
- */
-const std::array<std::pair<std::string_view, vk::Format>, 14>& rgFormatTable() {
-	static const std::array<std::pair<std::string_view, vk::Format>, 14> table = {
-		std::pair{"rgba8_srgb", vk::Format::eR8G8B8A8Srgb},
-		std::pair{"rgba8_unorm", vk::Format::eR8G8B8A8Unorm},
-		std::pair{"b8g8r8a8_srgb", vk::Format::eB8G8R8A8Srgb},
-		std::pair{"rgb8_srgb", vk::Format::eR8G8B8Srgb},
-		std::pair{"rg16_snorm", vk::Format::eR16G16Snorm},
-		std::pair{"rg16_unorm", vk::Format::eR16G16Unorm},
-		std::pair{"rgba16_sfloat", vk::Format::eR16G16B16A16Sfloat},
-		std::pair{"rgb16_sfloat", vk::Format::eR16G16B16Sfloat},
-		std::pair{"r32g32b32_sfloat", vk::Format::eR32G32B32Sfloat},
-		std::pair{"rgba32_sfloat", vk::Format::eR32G32B32A32Sfloat},
-		std::pair{"r32_sfloat", vk::Format::eR32Sfloat},
-		std::pair{"rg32_sfloat", vk::Format::eR32G32Sfloat},
-		// Phase 10 批 10.5：object-id attachment（picking pass 写 objectIndex+1）
-		std::pair{"r32_uint", vk::Format::eR32Uint},
-		// Phase 11 批 11.4：SSAO 遮蔽量（ao pass 写、tonemap 采；单通道 8bit 足够——
-		// 强度曲线已在 shader 端 pow(·,2) 压过，8bit 量化误差 <0.4%）
-		std::pair{"r8_unorm", vk::Format::eR8Unorm},
-	};
-	return table;
-}
-
-/** isKnownRgFormat 定义（接口注释见 render_graph.cppm）："inherit" 短路 + 词表 any_of。 */
-bool isKnownRgFormat(const std::string& name) {
-	if (name == "inherit")
-		return true;
-	return std::ranges::any_of(rgFormatTable(),
-		[&](const auto& entry) { return entry.first == name; });
-}
-
-/**
- * 深度附件格式词表（kind=depthOffscreen 专用；与 rgFormatTable 颜色词表**分立**的原因见
- * render_graph.cppm::isKnownDepthRgFormat 注释）。与颜色词表同住在实现单元：
- * `vk::Format::eXxx` 枚举常量在模块接口分区不可见（rlvk GMF 头可达但名字不可见）。
- */
-const std::array<std::pair<std::string_view, vk::Format>, 2>& rgDepthFormatTable() {
-	static const std::array<std::pair<std::string_view, vk::Format>, 2> table = {
-		// 主用档 = 与主深度图同格式（D32_SFLOAT 是 Vulkan 保证存在的深度格式；
-		// **没有 D32_UNORM 这个格式**——写错时 clang 的"did you mean eD16Unorm"极易误导，
-		// 2026-09-29 实测踩过）。精度对单级 1024² cascade 足够。
-		std::pair{"d32_sfloat", vk::Format::eD32Sfloat},
-		std::pair{"d16_unorm", vk::Format::eD16Unorm},  // 省带宽档（多级 cascade 的省内存选择）
-	};
-	return table;
-}
-
-/** isKnownDepthRgFormat 定义（接口注释见 render_graph.cppm）：深度词表 any_of（"inherit" 不算）。 */
-bool isKnownDepthRgFormat(const std::string& name) {
-	return std::ranges::any_of(rgDepthFormatTable(),
-		[&](const auto& entry) { return entry.first == name; });
-}
-
-/** resolveRgFormat 定义（接口注释见 render_graph.cppm）："inherit"→fallback，具名先查颜色
- *  词表再查深度词表（kDepthRgFormats），漏网 eUndefined（调用方保证已 isKnown*）。 */
-vk::Format resolveRgFormat(const std::string& name, vk::Format inheritFallback) {
-	if (name == "inherit")
-		return inheritFallback;
-	for (const auto& [text, format] : rgFormatTable())
-		if (text == name)
-			return format;
-	for (const auto& [text, format] : rgDepthFormatTable())
-		if (text == name)
-			return format;
-	return vk::Format::eUndefined;  // 不可达（调用方保证已 isKnown*Format）
-}
-
 /** compileRenderGraph 定义（接口注释见 render_graph.cppm）：五步 = ①registerAttachments ②precheckPass ③④planPassUses（barrier + beginRendering 条目）+ advanceCursors（游标/store 完整性）⑤finishPresent。 */
 std::expected<CompiledRenderGraph, Error> compileRenderGraph(const RgGraphDesc& desc) {
 	CompileCtx ctx;
@@ -584,6 +559,9 @@ std::expected<CompiledRenderGraph, Error> compileRenderGraph(const RgGraphDesc& 
 		if (auto r = advanceCursors(ctx.graph, ctx.slots, passIdx, thisPassUses); !r)
 			return std::unexpected(std::move(r).error());
 	}
+
+	if (auto r = checkHistoryAttachmentsWritten(ctx); !r)
+		return std::unexpected(std::move(r).error());
 
 	if (auto r = finishPresent(ctx); !r)
 		return std::unexpected(std::move(r).error());

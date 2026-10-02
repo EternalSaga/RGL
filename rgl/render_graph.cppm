@@ -104,6 +104,14 @@ export struct RgAttachmentDesc {
 	// 阴影图必须走独立档——把阴影图绑在窗口尺寸上是错的（窗口缩一半阴影 texel 跟着变，
 	// 且每次 resize 白白重建整张阴影图）。swapchain/depth 附件必须留 {0,0}（compile 校验）。
 	std::array<uint32_t, 2> extent{0u, 0u};
+	// **跨帧历史附件**（TAA 类；仅 kind=offscreen 合法，compile 校验）：语义 =
+	// "本帧第一手读它时，读的是**上一帧留下的内容**"。三处后果（都在 compile 落实）：
+	//   ① 豁免"读前置"校验（普通附件本帧未写先读 = 报错，历史附件必须允许）；
+	//   ② 帧内必须至少有一个 pass 写它（否则永远读未初始化图，只能编译期抓）；
+	//   ③ 帧首读它的 barrier src 从 TopOfPipe/eNone 提到 **AllCommands/MemoryWrite**
+	//      ——跨 submission 的 RAW 依赖（kFramesInFlight=2 下帧 N 与 N-1 可重叠，
+	//      TopOfPipe 不建立任何依赖；论证见 docs/taa_plan.md §2 gap ①）。
+	bool history = false;
 };
 
 /**
@@ -200,6 +208,22 @@ export inline constexpr std::string_view kAoName = "ao";
 export inline constexpr std::string_view kAoFormat = "r8_unorm";
 
 /**
+ * 批 12.6 TAA：时域历史链两附件契约（单一真相源）。
+ *  - `kTaaOutName` = 本帧 TAA 结果（taa pass 写、tonemap 采）；
+ *  - `kTaaHistName` = **跨帧历史**（history=true：taa pass 首手读它拿上一帧结果，
+ *    帧末 `taa_commit`(kind=blit) 把 taa_out 整幅拷回它）。
+ * 两者同格式（与 scene_hdr 同为 rgba16_sfloat——TAA 在 tonemap 之前的线性 HDR 域）。
+ * 消费方 = decorateTaaPass（图声明）+ ensureTaaSlots（启动期建 RT + 采样堆槽）+
+ * addTaaEntry / addTonemapEntry（烘 binding）。
+ */
+export inline constexpr std::string_view kTaaOutName = "taa_out";
+export inline constexpr std::string_view kTaaHistName = "taa_hist";
+export inline constexpr std::string_view kTaaFormat = "rgba16_sfloat";
+/** TAA pass 名与 commit pass 名（图内唯一；装饰器与消费方共用，避免字面量漂移）。 */
+export inline constexpr std::string_view kTaaPassName = "taa";
+export inline constexpr std::string_view kTaaCommitPassName = "taa_commit";
+
+/**
  * pass 声明（RgGraphDesc.passes 元素）：name 必填；kind 定执行语义；
  * state = RenderState 名（名字字符串，零 handle，执行器解析；drawMesh 必填，blit 忽略；
  * 合法值 = pass_vocabulary 按 kind 分档的 state 子集）；drawSource = FrameDrawList 段名
@@ -251,6 +275,9 @@ export struct RgCompiledAttachment {
 	// 帧首写是否走"内容丢弃"规则（swapchain/depth/depthOffscreen = true；offscreen = false
 	// 需追踪布局。depthOffscreen 归"丢弃"档：阴影图每帧整幅 clear，无跨帧内容依赖）
 	bool frameStartDiscard = false;
+	// 跨帧历史附件（透传 RgAttachmentDesc::history；true ⟺ kind==offscreen）。
+	// 消费方 = planBarrier（帧首 barrier src 提档）+ 执行器 RT 装配（历史图不得 discard）。
+	bool history = false;
 };
 
 /**
@@ -503,6 +530,31 @@ export std::array<uint32_t, 4> shadowTile(uint32_t c, uint32_t tileSize, uint32_
  * @return true = 已装饰（任何图形态均支持：不读既有拓扑，只前插）
  */
 export bool decorateShadowPass(RgGraphDesc& desc, uint32_t mapSize);
+
+/**
+ * **TAA 图装饰（批 12.6）**：往图里插入时域历史链的三件套，返回 false = 图形态不支持。
+ *
+ * 产物形状（角色反查，forward / deferred 两变体通用，纪律同本模块 picking / highlight）：
+ *  ① 两个附件：`taa_out`（offscreen rgba16_sfloat，本帧 TAA 结果）+
+ *     `taa_hist`（同上但 **history=true**，跨帧历史）；
+ *  ② `taa` pass（kind=drawLight、state="taa"）插在**最终上屏消费者之前**——即"写 swapchain
+ *     且 sampleRead 色附件"的那个 pass（两条路线都是 tonemap）。读 scene_hdr + depth +
+ *     `taa_hist`，写 `taa_out`；
+ *  ③ 把该消费者的色输入从 `scene_hdr` **改写为 `taa_out`**（tonemap 因此吃时域滤波结果）；
+ *  ④ 帧末追加 `taa_commit`（kind=blit）：`taa_out` → `taa_hist` 整幅拷贝，
+ *     使下一帧的 `taa_hist` = 本帧结果。
+ *
+ * 为何用"两图 + 帧末 copy"而不是单图原地：同 pass 读写同图 = feedback loop（编译期拒 +
+ * Vulkan 非法）；静态图（启动期编译一次）也不能逐帧换附件角色。copy 代价 = 一次全屏
+ * RGBA16F blit。双图奇偶交替可省掉它，但要执行器支持按帧跳 pass（侵入大）→ 记债
+ * `docs/taa_plan.md` §7 第 4 条。
+ *
+ * 与 picking / highlight 装饰的次序契约：本装饰**必须最后调**（在 highlight 之后），
+ * 否则 highlight 插进 taa 与 tonemap 之间会让高亮吃不到时域滤波。
+ * @param desc 图声明（原地修改）
+ * @return true = 已装饰；false = 图里没有"写 swapchain 且采色"的 pass（DIAG offscreen 变体）
+ */
+export bool decorateTaaPass(RgGraphDesc& desc);
 
 /** G-buffer 附件契约条目 + 契约表（名字 + 格式串）——已移入叶子模块 gbuffer_contract。 */
 

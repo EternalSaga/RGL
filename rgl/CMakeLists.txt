@@ -243,6 +243,7 @@ set(RGL_SCENE_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/scene_data.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/render_graph.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/render_graph_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/render_graph_formats.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/render_graph_builtin.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/render_graph_decorate.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/render_graph_rtslot.cppm"

@@ -183,4 +183,71 @@ bool decorateShadowPass(RgGraphDesc& desc, uint32_t mapSize) {
 	return true;
 }
 
+/**
+ * decorateTaaPass 定义（契约见 render_graph.cppm 接口注释：三件套 = 两附件 +
+ * taa pass + 帧末 commit blit；消费者输入改写的角色反查纪律同 picking / highlight）。
+ */
+bool decorateTaaPass(RgGraphDesc& desc) {
+	// 锚点 = 「写 swapchain 且 sampleRead 色附件」的 pass（两条路线都是 tonemap）。
+	// 刻意要求"写 swapchain"：offscreen DIAG 变体用 blit 上屏（transferRead 不是
+	// sampleRead）→ 本装饰返回 false，TAA 不参与该图形态。
+	const auto swapIt = std::ranges::find(desc.attachments, RgAttachmentKind::swapchain,
+		&RgAttachmentDesc::kind);
+	if (swapIt == desc.attachments.end())
+		return false;
+	std::optional<size_t> consumerIdx;
+	for (size_t i = 0; i < desc.passes.size() && !consumerIdx; ++i) {
+		const auto& p = desc.passes[i];
+		const bool writesSwapchain = std::ranges::any_of(p.outputs,
+			[&](const RgPassAttachment& o) { return o.attachment == swapIt->name; });
+		if (writesSwapchain && sampledColorName(desc, p))
+			consumerIdx = i;
+	}
+	if (!consumerIdx)
+		return false;
+	auto colorAtt = sampledColorName(desc, desc.passes[*consumerIdx]);  // 上一步已保证有值
+	auto depthAtt = borrowDepthFromPriorWriter(desc, *consumerIdx);
+	if (!depthAtt)
+		return false;  // 无可重投影的深度 = TAA 无从谈起
+
+	desc.attachments.push_back(RgAttachmentDesc{
+		.name = std::string{kTaaOutName}, .kind = RgAttachmentKind::offscreen,
+		.format = std::string{kTaaFormat}});
+	desc.attachments.push_back(RgAttachmentDesc{
+		.name = std::string{kTaaHistName}, .kind = RgAttachmentKind::offscreen,
+		.format = std::string{kTaaFormat},
+		// 跨帧历史：本帧首手读它拿上一帧结果（读前置豁免 + 帧首 barrier src 提档，
+		// 语义见 RgAttachmentDesc::history）。本附件由帧末 taa_commit 写入 →
+		// 「必须被写」的编译期校验亦成立。
+		.history = true});
+
+	desc.passes.insert(desc.passes.begin() + static_cast<long>(*consumerIdx), RgPassDesc{
+		.name = std::string{kTaaPassName}, .kind = RgPassKind::drawLight, .state = "taa",
+		.outputs = {RgPassAttachment{.attachment = std::string{kTaaOutName},
+			.usage = RgUsage::colorWrite, .loadOp = RgLoadOp::clear, .storeOp = RgStoreOp::store}},
+		// 输入序 = barrier 发射序：先成片与深度（本帧刚写），最后历史（帧首跨帧读）
+		.inputs = {
+			RgPassAttachment{.attachment = *colorAtt, .usage = RgUsage::sampleRead},
+			RgPassAttachment{.attachment = *depthAtt, .usage = RgUsage::sampleRead},
+			RgPassAttachment{.attachment = std::string{kTaaHistName},
+				.usage = RgUsage::sampleRead}}});
+
+	// 消费者的色输入换成时域结果（taa_out）——tonemap 因此吃 TAA 输出而非原始成片
+	for (auto& in : desc.passes[*consumerIdx + 1].inputs)
+		if (in.attachment == *colorAtt && in.usage == RgUsage::sampleRead) {
+			in.attachment = std::string{kTaaOutName};
+			break;
+		}
+
+	// 帧末：taa_out → taa_hist 整幅拷贝（历史提交）。放图末使本帧所有对 taa_out 的读
+	// （= tonemap）先于提交完成；下一帧的跨帧读由 history 帧首 barrier 建立依赖。
+	desc.passes.push_back(RgPassDesc{
+		.name = std::string{kTaaCommitPassName}, .kind = RgPassKind::blit,
+		.outputs = {RgPassAttachment{.attachment = std::string{kTaaHistName},
+			.usage = RgUsage::transferWrite}},
+		.inputs = {RgPassAttachment{.attachment = std::string{kTaaOutName},
+			.usage = RgUsage::transferRead}}});
+	return true;
+}
+
 }  // namespace RGL

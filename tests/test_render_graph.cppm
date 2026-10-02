@@ -1050,4 +1050,192 @@ TEST_CASE("decorateShadowPass 的一条**隐式耦合**：extent 用入参 mapSi
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// 组 9：跨帧历史附件（批 12.6 TAA）——读前置豁免 + 帧间 barrier 提档
+// ═══════════════════════════════════════════════════════════════════════════
+
+RgAttachmentDesc historyAtt(std::string name = "hist") {
+    return RgAttachmentDesc{.name = std::move(name), .kind = RgAttachmentKind::offscreen,
+        .format = "rgba16_sfloat", .history = true};
+}
+
+/**
+ * 历史链最小图：opaque 写 src+depth → tonemap **读历史** 写 swapchain → blit 把 src 提交回历史。
+ * 形状与 decorateTaaPass 的产物同构（taa_hist 被读在前、写在后，跨帧靠帧首 barrier）。
+ */
+RgGraphDesc historyGraph(bool history = true) {
+    auto d = minimalGraph();
+    d.attachments.push_back(offscreenAtt("src"));
+    auto h = historyAtt();
+    h.history = history;
+    d.attachments.push_back(h);
+    d.passes[0].outputs = {colorOut("src"), depthOut("depth")};  // opaque 不再写 swapchain
+    d.passes.push_back(RgPassDesc{.name = "tonemap", .kind = RgPassKind::drawLight,
+        .state = "tonemap", .outputs = {colorOut("swapchain")}, .inputs = {sampleIn("hist")}});
+    d.passes.push_back(RgPassDesc{.name = "commit", .kind = RgPassKind::blit,
+        .outputs = {RgPassAttachment{.attachment = "hist", .usage = RgUsage::transferWrite}},
+        .inputs = {RgPassAttachment{.attachment = "src", .usage = RgUsage::transferRead}}});
+    return d;
+}
+
+TEST_CASE("history 附件：帧内未写先读**合法**，且帧首 barrier 提档成跨 submission 的真依赖") {
+    // 阳性锚点：把 history 标志摘掉本图必须编译失败（组 4 的「读先于写」负例即其反面）；
+    // 若豁免写成「无脑放行一切读」，本用例仍然绿 —— 所以同时断言 barrier 的 src：
+    // 提档（AllCommands/MemoryWrite）才是真生效的证据，光"编译过"不是。
+    const auto g = compileRenderGraph(historyGraph(/*history=*/true));
+    INFO(errOf(g));
+    REQUIRE(g.has_value());
+    const auto hist = slotOf(*g, "hist");
+    REQUIRE(hist != kRgNoAttachment);
+    REQUIRE(g->attachments[hist].history == true);      // 声明透传到编译产物
+
+    const RgPassPlan* tone = nullptr;
+    for (const auto& p : g->passes)
+        if (p.name == "tonemap") tone = &p;
+    REQUIRE(tone != nullptr);
+    const auto* b = barrierFor(*tone, hist);
+    REQUIRE(b != nullptr);
+    // ① src 必须是**真依赖**（TopOfPipe/eNone 一条依赖都不建立 = 跨帧读到旧帧/垃圾）
+    CHECK(b->srcStage == vk::PipelineStageFlagBits2::eAllCommands);   // 变异红线：→TopOfPipe 红
+    CHECK(b->srcAccess == vk::AccessFlagBits2::eMemoryWrite);         // 变异红线：→eNone 红
+    // ② 布局**不得丢弃**：eUndefined 意味着每帧把历史内容当未初始化丢掉（TAA 永无历史）
+    CHECK(b->oldLayoutDiscard == false);
+    CHECK(b->newLayout == vk::ImageLayout::eShaderReadOnlyOptimal);
+    // 反向配对：同一张图里**非 history** 的 swapchain 帧首 barrier 仍是 TopOfPipe/eNone
+    //（防「一刀切把帧首 src 全提档」的变异——那会让基线图的 barrier 静默变贵）
+    const auto swap = slotOf(*g, "swapchain");
+    const auto* bs = barrierFor(*tone, swap);
+    REQUIRE(bs != nullptr);
+    CHECK(bs->srcStage == vk::PipelineStageFlagBits2::eTopOfPipe);
+    CHECK(bs->srcAccess == vk::AccessFlagBits2::eNone);
+}
+
+TEST_CASE("history 的两条反向用例：非 history 同形图仍被拒；history 但无人写也被拒") {
+    // ① 同形态但 history=false → 必须报「read before write」（豁免只认 history，不是放行一切）
+    const auto gOff = compileRenderGraph(historyGraph(/*history=*/false));
+    CHECK_FALSE(gOff.has_value());
+    CHECK(errOf(gOff).find("read") != std::string::npos);
+    // ② history 但图里没有任何 pass 写它 → 永远读未初始化内存，只能编译期抓
+    RgGraphDesc d;
+    d.attachments = {swapchainAtt(), depthAtt(), historyAtt()};
+    d.passes = {RgPassDesc{.name = "tonemap", .kind = RgPassKind::drawLight,
+        .state = "tonemap", .outputs = {colorOut("swapchain")}, .inputs = {sampleIn("hist")}}};
+    const auto gNoWriter = compileRenderGraph(d);
+    INFO(errOf(gNoWriter));
+    CHECK_FALSE(gNoWriter.has_value());
+    CHECK(errOf(gNoWriter).find("never written") != std::string::npos);
+}
+
+TEST_CASE("history 只能挂在 offscreen 上（swapchain/depth/depthOffscreen 声明历史 = 拒绝）") {
+    // 只放这一个附件、零 pass：kind 校验在注册阶段就开火，不会被别的规则抢先/稀释。
+    // 格式按各 kind 的合法值填（否则先撞「格式」那条 guard，测不到 history guard）。
+    for (const auto [kind, format] : {std::pair{RgAttachmentKind::swapchain, "inherit"},
+             {RgAttachmentKind::depth, "inherit"}, {RgAttachmentKind::depthOffscreen, "d32_sfloat"}}) {
+        RgGraphDesc d;
+        auto att = historyAtt("hist");
+        att.kind = kind;
+        att.format = format;
+        if (kind == RgAttachmentKind::depthOffscreen)
+            att.extent = {1024u, 1024u};
+        d.attachments = {att};
+        const auto g = compileRenderGraph(d);
+        INFO("kind=" << static_cast<int>(kind) << " err=" << errOf(g));
+        CHECK_FALSE(g.has_value());
+        CHECK(errOf(g).find("history") != std::string::npos);
+    }
+    // 反向配对：同一条声明挂到 offscreen 上必须通过（否则上面三条可能只是图本身非法）
+    CHECK(compileRenderGraph(historyGraph(/*history=*/true)).has_value());
+}
+
+TEST_CASE("decorateTaaPass 产物形状：两附件 + taa pass 插在 tonemap 前 + 消费者输入改写 + 帧末 commit") {
+    // 图形态 = 两条路线的公共骨架：opaque 写 depth+scene_hdr，tonemap 采 scene_hdr 写 swapchain
+    RgGraphDesc d;
+    d.attachments = {swapchainAtt(), depthAtt(), offscreenAtt("scene_hdr", "rgba16_sfloat")};
+    d.passes = {
+        RgPassDesc{.name = "opaque", .kind = RgPassKind::drawMesh, .state = "opaque",
+            .drawSource = "opaque", .outputs = {colorOut("scene_hdr"), depthOut("depth")}},
+        RgPassDesc{.name = "tonemap", .kind = RgPassKind::drawLight, .state = "tonemap",
+            .outputs = {colorOut("swapchain")}, .inputs = {sampleIn("scene_hdr")}},
+    };
+    REQUIRE(decorateTaaPass(d));
+
+    // 附件：taa_out（普通 offscreen）+ taa_hist（history）
+    const auto histIt = std::ranges::find(d.attachments, std::string{kTaaHistName},
+        &RgAttachmentDesc::name);
+    const auto outIt = std::ranges::find(d.attachments, std::string{kTaaOutName},
+        &RgAttachmentDesc::name);
+    REQUIRE(histIt != d.attachments.end());
+    REQUIRE(outIt != d.attachments.end());
+    CHECK(histIt->history == true);   // 变异红线：漏 history → 编译期即被「读先于写」打死
+    CHECK(outIt->history == false);
+    CHECK(histIt->format == std::string{kTaaFormat});
+
+    // pass 序：taa 紧邻 tonemap 之前，帧末是 taa_commit(blit)
+    size_t taaIdx = d.passes.size(), toneIdx = d.passes.size();
+    for (size_t i = 0; i < d.passes.size(); ++i) {
+        if (d.passes[i].name == kTaaPassName) taaIdx = i;
+        if (d.passes[i].state == "tonemap") toneIdx = i;
+    }
+    REQUIRE(taaIdx != d.passes.size());
+    CHECK(taaIdx + 1 == toneIdx);     // 变异红线：插到 tonemap 之后 → 滤波结果上不了屏
+    CHECK(d.passes[taaIdx].kind == RgPassKind::drawLight);
+    CHECK(d.passes[taaIdx].state == "taa");
+    CHECK(d.passes.back().kind == RgPassKind::blit);
+    CHECK(d.passes.back().name == std::string{kTaaCommitPassName});
+
+    // taa pass 的输入 = 成片 + 深度 + 历史；输出 = taa_out
+    const auto& taa = d.passes[taaIdx];
+    REQUIRE(taa.outputs.size() == 1);
+    CHECK(taa.outputs[0].attachment == std::string{kTaaOutName});
+    for (std::string_view want : {"scene_hdr", "depth", "taa_hist"}) {
+        const bool has = std::ranges::any_of(taa.inputs,
+            [&](const RgPassAttachment& a) { return a.attachment == want && a.usage == RgUsage::sampleRead; });
+        INFO(want);
+        CHECK(has);
+    }
+    // 消费者的色输入被改写成 taa_out，且**不再**直接读 scene_hdr
+    const auto& tone = d.passes[toneIdx];
+    CHECK(std::ranges::any_of(tone.inputs,
+        [&](const RgPassAttachment& a) { return a.attachment == std::string{kTaaOutName}; }));
+    CHECK_FALSE(std::ranges::any_of(tone.inputs,
+        [&](const RgPassAttachment& a) { return a.attachment == "scene_hdr"; }));
+
+    // 整图能编译（阳性锚点：装饰产物必须自洽，任何一处形状错这里就红）
+    const auto g = compileRenderGraph(d);
+    INFO(errOf(g));
+    REQUIRE(g.has_value());
+    // 历史图帧首 barrier 提档（装饰产物真的拿到了跨帧依赖，而不只是"图里有这附件"）
+    const RgPassPlan* compiledTaa = nullptr;
+    for (const auto& p : g->passes)
+        if (p.name == kTaaPassName) compiledTaa = &p;
+    REQUIRE(compiledTaa != nullptr);
+    const auto* b = barrierFor(*compiledTaa, slotOf(*g, std::string{kTaaHistName}));
+    REQUIRE(b != nullptr);
+    CHECK(b->srcStage == vk::PipelineStageFlagBits2::eAllCommands);
+    CHECK(b->srcAccess == vk::AccessFlagBits2::eMemoryWrite);
+}
+
+TEST_CASE("decorateTaaPass 的图形态门槛：没有「写 swapchain 且采色」的 pass → 返回 false 且不动图") {
+    // offscreen DIAG 变体用 blit 上屏（transferRead ≠ sampleRead）→ 不支持。
+    // 反向配对：加一个采色写 swapchain 的 pass 就必须返回 true（否则这条门槛可能是恒 false）。
+    RgGraphDesc d;
+    d.attachments = {swapchainAtt(), depthAtt(), offscreenAtt("scene_rt", "rgba16_sfloat")};
+    d.passes = {
+        RgPassDesc{.name = "opaque", .kind = RgPassKind::drawMesh, .state = "opaque",
+            .drawSource = "opaque", .outputs = {colorOut("scene_rt"), depthOut("depth")}},
+        RgPassDesc{.name = "composite", .kind = RgPassKind::blit,
+            .outputs = {RgPassAttachment{.attachment = "swapchain", .usage = RgUsage::transferWrite}},
+            .inputs = {RgPassAttachment{.attachment = "scene_rt", .usage = RgUsage::transferRead}}},
+    };
+    const size_t attsBefore = d.attachments.size();
+    const size_t passesBefore = d.passes.size();
+    CHECK_FALSE(decorateTaaPass(d));
+    CHECK(d.attachments.size() == attsBefore);   // 失败路径不得留下半成品附件
+    CHECK(d.passes.size() == passesBefore);
+
+    d.passes.push_back(RgPassDesc{.name = "tonemap", .kind = RgPassKind::drawLight,
+        .state = "tonemap", .outputs = {colorOut("swapchain")}, .inputs = {sampleIn("scene_rt")}});
+    CHECK(decorateTaaPass(d));
+}
+
 }  // namespace RGL
