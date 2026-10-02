@@ -362,6 +362,17 @@ mask bit→R8 覆盖率 + 太阳盘 5 采样（中心 + 四向 r 偏移，多遮
 r→0 自动退化回 v1 硬影，不依赖 PCSS 也不依赖阶段 2 预算达标，闭式判据可锚
 （半影宽度梯度 = Δz×0.0093）。两路线届时二选一。
 
+**路线改道（2026-10-02 深夜用户拍板，权威）**：同日夜发现 Filament 现行
+ShadowType::PCSS 已于 2026-07 整体重写为 **EVSSM**（指数矩 + 8 级 mip 的
+O(1) blocker 搜索 + LOD quincunx，生产级作业），经典 poisson PCSS 被其官方
+替换；批 11.5 经典 PCSS 全套机制已建成但**冻结不转正**（`af5811a`，门关红线
+实证，降级零内存 fallback 候选）。阶段 3 远场软影目标改为 **EVSSM**
+（批 11.6 spike 先行 → **docs/evssm_plan.md** 为权威载体）；**HFTS 研究降级
+backlog**——分轴对比（同文件 §1.3 + evssm_plan）显示 HFTS 无可替代的
+height field 地形自影轴在本项目建筑场景基本无用，而 EVSSM 的 mip 稀释弱点
+恰是 IZB 实测强项（细杆锐影 CSM 全丢、IZB 独有 4705px）——**IZB（近场细影）
++ EVSSM（远场软影）= 本路线对 HFTS 混合本意的等价实现**。
+
 ### 4.4 预算口径（2026-10-01 拍板）
 
 - roadmap 原 `X = 3 ms` 是 Phase 9（无阴影）时代的余量；现 4 级 CSM 已花 7.10 ms，
