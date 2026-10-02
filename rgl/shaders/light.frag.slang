@@ -49,11 +49,17 @@ import shadow;   // Phase 11 批 11.2：级联阴影采样（binding 12/13，与
 // 通路全通）。uv = light.mesh fb 归一化 y 上→下。
 float izbShadowFactor(float3 P, float3 N, float2 uv)
 {
-    const float4 izb = sceneData.Load4(722016u);
+    // ⚠️ 两处编译期陷阱（2026-10-02「门开无影」根因，SPV 反汇编实录）：
+    // ① sceneData 浮点读数必须 asfloat()（项目惯例，本文件 EnvParamsL 同款）——
+    //    裸 Load4 赋 float4 被 slang 降低成 ConvertUToF（位模式当整数转浮点），
+    //    W/H 变 1e9 量级 = pid 恒溢出 OOB 读零；flag 位模式碰巧 ≥0.5 掩盖症状。
+    // ② ByteAddressBuffer.Load 参数 = 字节偏移（与 izb_mask.frag InterlockedOr
+    //    同口径）——传字索引 pid>>5 会被再 ÷4，读位置偏 4 倍。
+    const float4 izb = asfloat(sceneData.Load4(722016u));
     if (izb.x < 0.5)
         return sampleShadow1Tap(P, N);
     const uint pid = uint(uv.y * izb.z) * uint(izb.y) + uint(uv.x * izb.y);
-    return (izbMask.Load(pid >> 5u) & (1u << (pid & 31u))) != 0u ? 0.0 : 1.0;
+    return (izbMask.Load((pid >> 5u) * 4u) & (1u << (pid & 31u))) != 0u ? 0.0 : 1.0;
 }
 #endif
 

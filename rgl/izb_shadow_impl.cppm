@@ -244,7 +244,7 @@ IzbShadow::IzbShadow(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
 
 	if (auto* lg = RLLogger::getInstance())
 		lg->info("izb: 开门 grid={} extent={}x{} head={}B nodes={}B（cascade-0 近场 v1，"
-			"mask 消费未接=画面不变）",
+			"light pass 消费 IZB_CONSUME 变体）",
 			gridDim, extent.width, extent.height, headBytes, nodeBytes);
 }
 
