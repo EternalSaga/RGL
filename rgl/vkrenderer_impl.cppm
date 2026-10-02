@@ -61,13 +61,10 @@ void validateRenderGraphForExecutor(const RGL::CompiledRenderGraph& graph) {
 	if (depthRefs != 1)
 		fail(fmt::format("render graph must reference exactly one depth attachment (got {})",
 			depthRefs));
-	// 阴影段名 = "shadow" + 分块号（scene_context::shadowDrawSource）。不列入本词表：
-	// 分块号可变（kActiveShadowCascades 1→4），写死字面量会在切级联时漏校验。
-	// 改用前缀匹配（与 segmentSpan 同一条路径）——两处必须同步，否则拓扑允许未知
-	// drawSource 静默落到 transparent 段上（=静默多画一遍透明）。
-	const auto isKnownDrawSource = [](std::string_view s) {
-		return s == "opaque" || s == "skybox" || s == "transparent" || s.starts_with("shadow");
-	};
+	// drawSource 词表 = frame_draw_list::isKnownDrawSource（**单一真相源**：三个精确段名
+	// + 可变分块号的 "shadow" 前缀，与 segmentSpan 同一条路径）。本函数曾手抄一份语义
+	// 相同的本地 lambda 遮蔽它——两份真相并列，改一处漏一处 = 拓扑允许未知 drawSource
+	// 静默落到 transparent 段上（= 静默多画一遍透明体）。
 	// 单 pass 可解析性校验（三形态：blit 两端齐 / drawLight state 在词表 / draw state+
 	// drawSource 名字表）。手术 6：提为 lambda 降宿主认知复杂度——fail 经捕获共用、
 	// 错误消息逐字不变；continue → return（lambda 内提前结束本 pass 校验语义等价）。
