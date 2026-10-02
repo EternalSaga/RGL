@@ -69,6 +69,9 @@ rgl_shader(izb_prime.comp IZB_PRIME_SPV)
 # 批 11.3-1d 后半：光空间保守光栅 mask pass（mesh 形态 = shadow.mesh 镜像 + 平摊三 uv）
 rgl_shader(izb_mask.mesh IZB_MASK_MESH_SPV model scene)
 rgl_shader(izb_mask.frag IZB_MASK_FRAG_SPV)
+# 批 11.6d-1：EVSSM 矩派生链（图外 compute，C 方案；docs/evssm_plan.md §4.1）
+rgl_shader(evssm_moments.comp EVSSM_MOMENTS_SPV)
+rgl_shader(evssm_downsample.comp EVSSM_DOWN_SPV)
 # Phase 10 批次 10.5：GPU id 点选 frag（mesh 复用 model.mesh.spv；写 objectIndex+1 进 r32ui）
 rgl_shader(picking.frag PICKING_FRAG_SPV model material)
 # Phase 10 批次 10.7：点选高亮 frag（mesh 复用 model.mesh.spv；菲涅尔边缘发光 alpha 混合
@@ -218,6 +221,8 @@ set(RGL_GFX_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/vkresources_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/izb_shadow.cppm"        # 批 11.3-1d：FTIZB IZB 数据层（图外 compute，门控构造）
     "${CMAKE_CURRENT_SOURCE_DIR}/izb_shadow_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/evssm_shadow.cppm"      # 批 11.6d-1：EVSSM 矩图数据层（图外 compute，门控构造）
+    "${CMAKE_CURRENT_SOURCE_DIR}/evssm_shadow_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/render_target_cache.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/sampler_library.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/mip_gen.cppm"

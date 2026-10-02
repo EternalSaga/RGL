@@ -1,0 +1,79 @@
+module;
+#include <glm/glm.hpp>
+export module evssm_shadow;
+
+import rlstd;
+import rlvk;
+import vk_device;
+import vk_resources;
+import VmaRaii;
+
+namespace RGL {
+
+/**
+ * EVSSM 软阴影的矩图数据层（批 11.6d；docs/evssm_plan.md §4.1 C 方案）。
+ *
+ * 图外 compute（IzbShadow 同族编舞，render_graph 无 compute kind）：
+ * 阴影图集 D32（PCF 同槽只读）→ RGBA16F 矩图 mip0（Filament 矩组
+ * z=exp(c·(2d−1))）→ 7 级 per-tile box 降采样链（免 sampler2DArray 的对齐论证
+ * = 11.6b）。shadow pass / RT 缓存 / graph **零改动**。
+ *
+ * 生命周期 = Renderer 在 diagnostics.shadowEvssm 开门时构造；
+ * **门关 = 本对象根本不被构造**（逐位旁路红线，同 izb_shadow）。
+ *
+ * 布局策略：矩图全程 GENERAL（探针 /tmp/opencode/evssm_probe 已证 RADV 可行），
+ * 帧内零 layout 转移；跨阶段依赖用**全局 stage/access barrier**（无需 image 句柄
+ * ——阴影图归属 RT 缓存，本模块只有其 heap 槽）。
+ *
+ * 描述符铁纪律（2026-10-01 用户拍板）：全部 Resources descriptor heap 用户槽
+ * （Runtime 段），老式 DescriptorPool 禁入（docs/DESCRIPTOR_HEAP_SPEC.md）。
+ */
+export class EvssmShadow {
+   public:
+	/**
+	 * @param vkDevice   设备层
+	 * @param resources  descriptor heap（9 槽领取 + 描述符写入）
+	 * @param mapSize    阴影图集整幅边长（2048，= kShadowMapSize）
+	 * @param cols       级联分块列数（shadowAtlasColumns）
+	 * @param mipLevels  矩链级数（8 = 探针口径；含 mip0）
+	 * @param exponent   EVSM 指数 c（5.5，Filament PCSS 定值）
+	 * @param shadowMapSlot 阴影图集采样 heap 槽（ensureShadowMapSlot 结果，只读复用）
+	 */
+	EvssmShadow(RGL::DeviceContext& vkDevice, RGL::Resources& resources,
+		uint32_t mapSize, uint32_t cols, uint32_t mipLevels, float exponent,
+		uint32_t shadowMapSlot);
+
+	/**
+	 * 图外 sandwich（录在 light pass 迭代顶部、izb sandwich 同款位置）：
+	 * 全局 barrier（graphics→compute，覆盖阴影图 depth-write→本 pass read）
+	 * → moments dispatch → 逐级 downsample（级间 compute→compute barrier）
+	 * → 收尾 barrier（compute→fragment，light pass 采样前）。
+	 * @param cmd pass 循环所在命令缓冲（heap 已绑定）
+	 */
+	void recordFrame(vk::raii::CommandBuffer& cmd);
+
+	/** 矩图采样槽（全 mip 链 view，GENERAL；= d-2 消费变体 binding 15 烘焙用）。 */
+	[[nodiscard]] uint32_t getMomentsSlot() const { return sampleSlot; }
+	/** 矩链级数（消费端 maxMipLevel 参数）。 */
+	[[nodiscard]] uint32_t getMipLevels() const { return mipLevels; }
+
+   private:
+	struct PushImpl;  // 两个 push 布局在 impl unit（避免接口拖宏）
+	DeviceContext* deviceCtx = nullptr;
+	Resources* resources = nullptr;
+	uint32_t mapSize = 0;
+	uint32_t cols = 0;
+	uint32_t mipLevels = 0;
+	float exponent = 5.5f;
+	uint32_t shadowMapSlot = 0;
+	uint32_t sampleSlot = 0;                 // 全 mip sampled（binding 15）
+	std::vector<uint32_t> mipSlots;          // 每 mip storage 槽（size = mipLevels）
+	// view create info 常驻（描述符 heap 语义 = pView 指 create info，随槽存活）
+	std::vector<vk::ImageViewCreateInfo> mipViewCreates;
+	std::optional<vk::ImageViewCreateInfo> sampleViewCreate;
+	RGL::VmaImage momentsImage;
+	std::optional<vk::raii::ShaderEXT> momentsShader;
+	std::vector<vk::raii::ShaderEXT> downShaders;  // index = level−1（level 1..mipLevels−1）
+};
+
+}  // namespace RGL
