@@ -107,6 +107,49 @@ float3 clipToAabb(float3 c, float3 p, float3 mn, float3 mx)
     return c + d * tMax;
 }
 
+// ── 历史采样：精确 4×4 Catmull-Rom（16 次整数 Load）──
+// 为什么不能双线性：**历史就是累积图**，每帧一次双线性重采样 = 老贡献被反复低通，糊度**逐帧
+// 复利**。实测（phase13 §1.5）：糊度随历史年龄单调上升（feedback 1.0/0.5/0.12/0.02 →
+// +0.1/−27.3/−49.7/−57.0%），而正确的相位平均只该 −24.2% 且对 feedback 不敏感。
+// 为什么不是「4 次双线性折叠 CR」（= Slang sampleBiquadric 那类技巧，本版本无该内建）：
+// **CR 有负瓣**，双线性抽头权重恒 ∈[0,1]，数学上表示不了负瓣 → 不是 CR（Python 对拍暴力
+// 4×4 CR 最大误差 0.146 实测否决）。故 16 次 Load 精确求值。
+float3 sampleHistoryCatmullRom(float2 uv)
+{
+    uint pxW, pxH, mLvl;
+    historyTex.GetDimensions(0u, pxW, pxH, mLvl);
+    const float2 texel = 1.0 / float2(float(pxW), float(pxH));
+    const float2 p = uv / texel - 0.5;              // 纹素中心坐标系（纹素 i 中心在 i+0.5）
+    const int2 b = int2(floor(p));
+    const float2 t = p - float2(b);
+
+    float wx[4], wy[4];
+    [unroll]
+    for (int i = 0; i < 4; ++i)
+    {
+        const float2 a = t + 1.0 - float2(i);       // 到抽头 b−1+i 的有向距离 ∈ (−2, 2]
+        const float2 m = abs(a), a2 = a * a, a3 = a2 * a;
+        // Catmull-Rom 核 k(m)：m≤1 → 1.5m³−2.5m²+1；1<m<2 → −0.5m³+2.5m²−4m+2
+        wx[i] = select(m.x > 1.0, -0.5 * a3.x + 2.5 * a2.x - 4.0 * m.x + 2.0,
+                                  1.5 * a3.x - 2.5 * a2.x + 1.0);
+        wy[i] = select(m.y > 1.0, -0.5 * a3.y + 2.5 * a2.y - 4.0 * m.y + 2.0,
+                                  1.5 * a3.y - 2.5 * a2.y + 1.0);
+    }
+    float3 acc = 0.0;
+    [unroll]
+    for (int j = 0; j < 4; ++j)
+    {
+        [unroll]
+        for (int i = 0; i < 4; ++i)
+        {
+            const int2 q = clamp(b - 1 + int2(i, j), int2(0, 0),
+                                 int2(int(pxW) - 1, int(pxH) - 1));
+            acc += wx[i] * wy[j] * historyTex.Load(int3(q, 0)).rgb;
+        }
+    }
+    return acc;
+}
+
 [shader("fragment")]
 float4 main(TaaInput input) : SV_Target
 {
@@ -157,7 +200,7 @@ float4 main(TaaInput input) : SV_Target
     // 全图直方图只多出**一个**混合级（历史只渗进 12%，永不继续累积）。
     // 推论：f=0 ⇒ 输出 = 裁剪后的**历史**（完全丢本帧的退化反馈环），不是「无滤波」；
     // 要做「只抖不滤」的消融请用 f=1（imgqa temporal 的 S1 组）。
-    const float3 hist = saturate(historyTex.SampleLevel(linearSampler, prevUv, 0.0).rgb);
+    const float3 hist = saturate(sampleHistoryCatmullRom(prevUv).rgb);
     const float3 clipped = fromReinhard(clipToAabb(centroid, toReinhard(hist), mn, mx));
     return float4(lerp(clipped, cur, params.x), 1.0);
 }
