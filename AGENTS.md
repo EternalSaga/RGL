@@ -227,15 +227,17 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
 
 ## 其他文档
 
-> 每篇文档头部带状态（`现行`/`历史`/`调研`）。现状权威 = 本文件；下一步路由 → 各 phase 计划文件（当前 `docs/phase12_plan.md`）。
+> 每篇文档头部带状态（`现行`/`历史`/`调研`）。现状权威 = 本文件；下一步路由 → 各 phase 计划文件（当前 `docs/phase13_plan.md`；测试体系账本仍看 `docs/phase12_plan.md`）。
 
-- `docs/next_roadmap.md` — **路线图（历史）**：Phase 0–7 结论存档（Phase 8+ 执行记录见各 `phase*_plan.md`；下一步路由 → 当前 `phase12_plan.md`）
+- `docs/next_roadmap.md` — **路线图（历史）**：Phase 0–7 结论存档（Phase 8+ 执行记录见各 `phase*_plan.md`；下一步路由 → 当前 `docs/phase13_plan.md`）
 - `docs/技术概念.md` — 核心 Vulkan 模式、设计决策、§构建（Windows 前置与 vcpkg）/ §模块表 / §构建检查工具机制 / §核心运行时模块表（深版）/ §RPC 调试通道（Phase 10b，端点速查）/ §main 启动流（完整版）
 - `docs/调试历史.md` — 问题修复时间线（只增不改，争议结论以此为准）
 - `docs/phase8_plan.md` — Phase 8 Bistro 打磨（HDR / HDR env / 纹理接缝 / 灯光）实施计划与验收
 - `docs/phase9_plan.md` — Phase 9 性能观测（Profiler）批次记录；§10 = 性能判定全文（CPU-bound 结论）、§11 = 跨机复测遗留
 - `docs/phase11_plan.md` — Phase 11 阴影 + 前置修复批（11.0 光照质感 / 11.2 阴影 / 11.4 SSAO）计划与执行记录
 - `docs/phase12_plan.md` — Phase 12 测试体系账本（批次史 + 缺口 D1–D9 + 12.3d 调试历史全量裁决执行记录）
+- `docs/phase13_plan.md` — **Phase 13 TAA 收口（现行，下一步从这里读）**：为什么还要一个 phase（T2/T3 验收被"历史每帧销毁"bug **空洞满足**、判据全跑在合成靶 + env 关闭、默认关无性能账）/ 批次 13.0–13.4 + 每条验收判据 / 记债继承表（AO 在 TAA 后、无 velocity buffer、YCoCg 盒）
+- `docs/taa_plan.md` — **TAA 时域抗锯齿（T0–T4 判据收口 2026-10-03；收口与画质 → `phase13_plan.md`）**：两条硬约束（§0，全走 descriptor heap + 跨帧分析三件事）/ Filament 作业表 / 四个 gap 逐条设计（跨帧历史附件是核心闸门）/ jitter 注入点决策 / §7 = 机制与踩坑账（第 11/12 条 = 根因）
 - `docs/gate_lint_plan.md` — **门配置自检（现行机制的权威载体）**：38 门申报规则表 + 回显派生 + 覆盖率护栏；加诊断门/改门语义前看（§4 分级判据 + §5 三条防腐条款 + §8 执行偏差）
 - `docs/hfts_izb_plan.md` — HFTS/FTIZB 调研与实施计划（批 11.3 权威载体：论文结论 / 开源现状 / 项目 gap / 分阶段 1a–1e + 收手判据；§4.3 = 2026-10-02 路线改道记录）
 - `docs/evssm_plan.md` — **EVSSM 软阴影（批 11.6，现行）**：Filament EVSSM 作业清单 / 分轴质量对比 / 三只拦路虎 / spike 批次拆分（远场软影权威路线，HFTS 已降级 backlog）
