@@ -209,4 +209,23 @@ TEST_CASE("aa_target：合成的 GltfModel 与形状表一致（模型路消费�
 		}
 }
 
+TEST_CASE("aa_target：阶梯杆常量是 imgqa 探针的第二份声明——改这里必须同步探针（绊线）") {
+	// 为什么要这条：`tools/imgqa/aa_coverage.h`（逐杆覆盖率对拍闭式）**不链 rgl 库、不能
+	// import 本模块**，只能重抄一份杆表。重抄就有漂移风险，而漂移的后果是"探针量的是想象中的
+	// 靶"——比没有探针更糟（假绿）。故把常量钉死：改 `rgl/aa_target.cppm` 不改探针 → 本条红，
+	// 失败消息点名同步目的地。
+	// ⚠ 下面这些字面量**必须与 tools/imgqa/aa_coverage.h 逐字相同**（那边是抄的一方）。
+	CHECK(aaTarget::kLadderRods == 12u);
+	CHECK(aaTarget::kLadderX0 == -0.95f);
+	CHECK(aaTarget::kLadderDx == 0.05f);
+	CHECK(aaTarget::kLadderY == 0.34f);
+	CHECK(aaTarget::kLadderHeight == 0.42f);
+	CHECK(aaTarget::kLadderWMin == 0.0015f);
+	CHECK(aaTarget::kLadderWMax == 0.015f);
+	// 采集机位（探针按它做世界→屏幕投影；机位常量漂了 = 探针量错位置，静默且致命）
+	CHECK(kCamZ == 2.0);
+	CHECK(kFovRad == 0.78539816339744831);
+	CHECK(kViewHeight == 720.0);
+}
+
 }  // namespace RGL

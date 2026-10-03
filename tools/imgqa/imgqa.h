@@ -377,6 +377,14 @@ int cmdProbe(const std::string& configDir, int x, int y, Vec3 albedo, double rou
 /// @param variant 渲染路线（默认 forward）
 int cmdTemporal(int pairs, int warm, const std::string& variant);
 
+/// 逐杆覆盖率对拍闭式（批 12.6 T4，docs/taa_plan.md §7 第 10 条）：单帧量阶梯杆的
+/// 「黑度积分 vs 投影宽度」，TAA 关应当被二值覆盖量化破坏、TAA 开应当贴合闭式。
+/// 与采集时序无关（这是它优于逐帧差的地方）。
+/// @param variant 渲染路线（默认 forward）
+/// @param warm    预热帧数（feedback=0.88 的时间常数 ≈8.3 帧，预热不足会把初始黑历史
+///                的残差算成覆盖率——判收敛必须靠调这个参数做对照，见 plan §7 第 10 条）
+int cmdAaCoverage(const std::string& variant, int warm);
+
 }  // namespace RGL::imgqa
 
 #endif

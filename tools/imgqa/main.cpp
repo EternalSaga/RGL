@@ -625,6 +625,7 @@ void printUsage()
         "  izb [--glb izb_rig.glb] [--camera ladder]  IZB 消费域：mask↔画面寻址一致性（三子判据）\n"
         "  swim [--glb izb_rig.glb] [--camera ladder] [--dx 0.06] [--izb]  影场世界不变量：机位平移后重投影比影场（0 位移）\n"
         "  probe [--x 640] [--y 360] [--light Lx,Ly,Lz] [--tol 2]  闭式解探针：该是多少 vs 实际是多少\n"
+        "  aa-coverage [--variant forward]  逐杆覆盖率对拍闭式：单帧量「黑度积分 vs 投影宽度」（批 12.6 T4）\n"
         "  temporal [--pairs 32] [--warm 32] [--variant forward]  TAA 时域阳性锚点：静止机位 + jitter，连续帧突发逐帧差（批 12.6 T4）\n"
         "  note \"事后真相\"                             回填最后一条调用记录（晋升凭据）\n");
 }
@@ -690,6 +691,8 @@ int main(int argc, char** argv)
         if (cmd == "temporal")
             return cmdTemporal(std::stoi(P.get(args, "--pairs", "32")),
                 std::stoi(P.get(args, "--warm", "32")), P.get(args, "--variant", ""));
+        if (cmd == "aa-coverage")
+            return cmdAaCoverage(P.get(args, "--variant", ""), std::stoi(P.get(args, "--warm", "32")));
         if (cmd == "note") {
             std::string text;
             for (size_t i = 1; i < args.size(); ++i)

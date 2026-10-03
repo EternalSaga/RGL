@@ -1,6 +1,7 @@
 // 自检：判据自己要有判据。**断言全部照实测/源码写，不照记忆写**（本项目纪律：
 // 「我以为的行为」一轮写出过 10 处，全部是错的）。闭式解锚点来源逐条注明。
 #include "imgqa.h"
+#include "aa_coverage.h"
 
 #include <algorithm>
 #include <cmath>
@@ -263,6 +264,36 @@ void testTemporalDiff(Checker& c)
     }
 }
 
+void testAaCoverage(Checker& c)
+{
+    // 覆盖率反解自检：整条判据都压在 1 − aces⁻¹(luma) 上，它错则全错。
+    for (const double x : {0.0, 0.05, 0.35, 0.5, 1.0, 2.0}) {
+        const double y = acesTonemap(Vec3{x, x, x}).x;
+        const double back = invAces(y);
+        c.chk("invAces 往返", std::abs(back - x) < 1e-9, std::to_string(back));
+    }
+    // 单调性（反解靠二分，非单调就是我把曲线抄错了）
+    c.chk("ACES 正向单调", acesTonemap(Vec3{0.4, 0.4, 0.4}).x
+            < acesTonemap(Vec3{0.6, 0.6, 0.6}).x);
+    // 闭式：全黑列覆盖率 = 1、白板 = 0（真机上"全黑列贡献 1.07 列"是这条的实测版）
+    const double covBlack = 1.0 - invAces(acesTonemap(Vec3{0.0, 0.0, 0.0}).x);
+    const double covWhite = 1.0 - invAces(acesTonemap(Vec3{1.0, 1.0, 1.0}).x);
+    c.chk("覆盖率端点：全黑=1 / 白板=0",
+        std::abs(covBlack - 1.0) < 1e-9 && std::abs(covWhite) < 1e-9,
+        std::to_string(covBlack) + " " + std::to_string(covWhite));
+    // 期望表：宽度单调增 + 投影宽闭式（px/m = 720/(2·2·tan22.5°) = 434.55）
+    const auto rods = ladderExpectations();
+    c.chk("阶梯杆表：12 根且宽度单调增", rods.size() == kLadderRods, "");
+    bool mono = true;
+    for (size_t i = 1; i < rods.size(); ++i)
+        mono = mono && rods[i].widthPx > rods[i - 1].widthPx;
+    c.chk("阶梯杆表：投影宽单调增", mono, "");
+    c.chk("阶梯杆表：首杆亚像素 / 末杆超像素（闭式 0.652 / 6.518 列）",
+        std::abs(rods.front().widthPx - 0.652) < 0.01
+            && std::abs(rods.back().widthPx - 6.518) < 0.01,
+        std::to_string(rods.front().widthPx) + " " + std::to_string(rods.back().widthPx));
+}
+
 void testKeyValidation(Checker& c)
 {
     // 键名校验器自己也要有用例：真实解析器源码里必须能抽到 picking / shadow_pass / rpc
@@ -301,6 +332,7 @@ int cmdSelftest()
     testAnalytic(c);
     testRegistry(c);
     testTemporalDiff(c);
+    testAaCoverage(c);
     testKeyValidation(c);
     std::printf("%s：%d 条失败\n", c.bad ? "自检失败" : "自检通过", c.bad);
     return c.bad ? 1 : 0;

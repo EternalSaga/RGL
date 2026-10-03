@@ -15,7 +15,8 @@ add_executable(imgqa
     image.cpp
     judge.cpp
     selftest.cpp
-    temporal.cpp)
+    temporal.cpp
+    aa_coverage.cpp)
 
 target_compile_features(imgqa PRIVATE cxx_std_23)
 target_include_directories(imgqa PRIVATE ${OpenCV_INCLUDE_DIRS})
