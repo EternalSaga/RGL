@@ -265,7 +265,7 @@ float3 envBrdfFactor(float NoV, float roughness, float3 F0)
 // ── 批 12.6 TAA（时域抗锯齿）尾区 ──
 //
 // 基址与 C++ 侧 scene_data.cppm kSceneDataTaa* 手写同源（两侧 static_assert 钉死）：
-//   @722080  mat4 prevViewProj —— 上一帧**未抖** proj·view
+//   @722080  mat4 prevViewProj —— 上一帧**抖动后** proj·view（口径 = 渲染出历史图的那个矩阵）
 //   @722144  mat4 motionPrevFromCur —— prevSpin · inverse(curSpin)（spin 关 = 单位阵）
 //   @722208  vec4 (feedback, historyValid, jitterX px, jitterY px)
 //

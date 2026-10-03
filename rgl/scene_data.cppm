@@ -232,11 +232,15 @@ static_assert(kSceneDataShadowMatrixOffset == 721696,
 	"scene.slang readShadowViewProj literal 721696 out of sync with kSceneDataShadowMatrixOffset");
 
 /** 批 12.6 TAA 区（EVSSM 常量 vec4 之后 144B，三段子区）：
- *  - `kSceneDataTaaOffset`（mat4, 64B）= 上一帧**未抖**的 proj·view。重投影公式：
- *      world = (sceneData@64 skyInvViewProj) · clip(uv, depth)   ← **抖动后**的逆矩阵
- *      prevClip = prevViewProj · (motionPrevFromCur · world)     ← 未抖矩阵（历史图是像素中心对齐的）
- *    两侧矩阵口径不同是**刻意的**：深度缓冲由抖动后矩阵产出，重建必须配套；
- *    历史图存的是「本像素中心的累积估计」，投影回去必须用未抖矩阵（Filament 同法）。
+ *  - `kSceneDataTaaOffset`（mat4, 64B）= 上一帧**抖动后**的 proj·view。重投影公式：
+ *      world = (sceneData@64 skyInvViewProj) · clip(uv, depth)   ← 本帧抖动后的逆矩阵
+ *      prevClip = prevViewProj · (motionPrevFromCur · world)     ← 上一帧抖动后的矩阵
+ *    两侧各用**自己那一帧的抖动后**矩阵（不是「口径不统一」，而是「两边都是渲染出各自
+ *    那张图的那个矩阵」）：深度缓冲由抖动后矩阵产出 ⇒ 重建必须配套；历史图由 taa_out
+ *    逐像素 1:1 拷来、内容同样是抖动投影渲的 ⇒ 查找必须用**渲染出它的那个**矩阵。
+ *    ⚠ 这里曾长期存「未抖」那份（理由写作「历史图是像素中心对齐的」）——把「像素中心
+ *    对齐」误读成「在未抖网格里」。后果 = 采样点系统性偏 -jitter_prev（±0.5px 且每帧
+ *    随机变），静止机位实测 S1/S2 = 0.48×（开滤波逐帧差反而**翻倍**）。批 12.6 T4。
  *  - `kSceneDataTaaMotionOffset`（mat4, 64B）= `prevSpin · inverse(curSpin)`。本项目的
  *    运动源是 SceneSpin「全场景同一旋转矩阵」，所以一个 mat4 就**精确**补偿物体运动
  *    （Filament 纯深度重投影假设世界静止，动场景必拖影；RGL 这里没有这个 gap）。

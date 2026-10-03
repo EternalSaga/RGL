@@ -546,7 +546,7 @@ export struct ViewProjection {
  */
 export struct TaaState {
 	// ── 簿记（上一帧位姿，taaSystem 帧尾推进）──
-	glm::mat4 prevViewProj{1.0f};  ///< 上一帧**未抖** proj·view
+	glm::mat4 prevViewProj{1.0f};  ///< 上一帧**抖动后** proj·view（与历史图内容同口径）
 	glm::mat4 prevSpin{1.0f};      ///< 上一帧 SceneSpin::matrix
 	glm::vec3 prevCamPos{};
 	glm::vec3 prevForward{0.0f, 0.0f, -1.0f};

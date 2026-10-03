@@ -7,8 +7,8 @@
 //   → 世界坐标重建（scene data @64 invViewProj，**抖动后**矩阵，与深度同口径）
 //   → 场景运动补偿（motion = prevSpin·inverse(curSpin)，全场景同一旋转 ⇒ 一条 mat4
 //     即精确补偿，优于逐物体运动矢量）
-//   → 投到上一帧（prevViewProj = 上一帧**未抖**矩阵，两侧口径统一 ⇒ 历史查找位不漂
-//     jitter）→ 双线性采历史（binding 5）
+//   → 投到上一帧（prevViewProj = 上一帧**抖动后**矩阵 = 渲染出历史图的那个矩阵；历史内容
+//     本就长在抖动后的屏幕系上，用未抖那份会系统性偏掉 -jitter_prev）→ 双线性采历史（binding 5）
 //   → 邻域裁剪（box5 AABB，Reinhard 域压 HDR 闪烁）→ 与历史混（feedback 常量）。
 //
 // ── 算法出处（抄 Filament antiAliasing/taa/taa.mat，逐项对齐）──
@@ -150,7 +150,14 @@ float4 main(TaaInput input) : SV_Target
     centroid *= 0.2;
 
     // ── 历史裁剪 + 混合 ──
+    // ⚠ **参数序 = feedback 是「本帧权重」**（configs/scene.lua taa.feedback 的文档口径 +
+    // Filament `mix(history, filtered, feedback)` 同序）：本帧 0.12 / 历史 0.88 ⇒ ≈19 帧
+    // 收敛。写成 lerp(cur, hist, f) 会把权重反过来（本帧 0.88），累积窗塌到 ≈1.14 帧 =
+    // 时域滤波名存实亡。批 12.6 T4 的阳性锚点实测抓到：A/F = 1.01×（闭式预测 3.95×）、
+    // 全图直方图只多出**一个**混合级（历史只渗进 12%，永不继续累积）。
+    // 推论：f=0 ⇒ 输出 = 裁剪后的**历史**（完全丢本帧的退化反馈环），不是「无滤波」；
+    // 要做「只抖不滤」的消融请用 f=1（imgqa temporal 的 S1 组）。
     const float3 hist = saturate(historyTex.SampleLevel(linearSampler, prevUv, 0.0).rgb);
     const float3 clipped = fromReinhard(clipToAabb(centroid, toReinhard(hist), mn, mx));
-    return float4(lerp(cur, clipped, params.x), 1.0);
+    return float4(lerp(clipped, cur, params.x), 1.0);
 }

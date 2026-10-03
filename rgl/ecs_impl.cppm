@@ -284,7 +284,7 @@ void projectionSystem(entt::registry& rg) {
  *
  * 干三件事：① 把亚像素抖动注进 `ViewProjection::proj`（未抖那份存 projUnjittered）；
  * ② 判本帧历史可用性（首帧 / resize / 相机跳切 ⇒ false ⇒ shader 逐位旁路）；
- * ③ 算本帧 scene data 载荷（上一帧未抖 viewProj + 全场景刚体运动补偿矩阵）并推进簿记。
+ * ③ 算本帧 scene data 载荷（上一帧**抖动后** viewProj + 全场景刚体运动补偿矩阵）并推进簿记。
  *
  * **门红线**：`env.taaEnabled == false` 时完全不碰 `proj`（不是「加 0」而是不调用）
  * ⇒ 下游 objectMvps / @64 / 剔除 逐位不变。
@@ -320,7 +320,13 @@ void taaSystem(entt::registry& rg) {
 	taa.historyValid = taaHistoryUsable(env.taaEnabled, taa.frameIndex, taa.prevExtent, now,
 		taa.prevCamPos, camPos, taa.prevForward, forward, bounds.radius);
 
-	// ③ 本帧载荷。prevViewProj = 上一帧**未抖** proj·view（历史图按像素中心对齐）；
+	// ③ 本帧载荷。prevViewProj = 上一帧**抖动后** proj·view —— 口径必须跟历史图的
+	// **内容**一致：taa_hist 由 taa_out 逐像素 1:1 拷来，而 taa_out 的颜色输入是抖动投影
+	// 渲的 ⇒ 历史图按「第 t 帧抖动后」的屏幕系索引。存未抖那份会让采样点系统性偏掉
+	// -jitter_t（±0.5px 且每帧随机变），静止机位下也照样搅动历史。批 12.6 T4 实测抓到：
+	// S1/S2 = 0.48×（开滤波逐帧差反而**翻倍**，闭式该是 3.95×）。
+	// ⚠ 旧注释写的「两侧口径统一 ⇒ 历史查找位不漂 jitter」是把「历史图是像素中心对齐的」
+	// 误读成「历史图在未抖网格里」——像素中心对齐 ≠ 未抖网格对齐。
 	// motion = prevSpin·inverse(curSpin)：把「本帧世界坐标」刚体搬回「上一帧世界坐标」
 	// ——本项目全场景共用一个旋转矩阵，所以一条 mat4 就是**精确**补偿（不是近似）。
 	taa.payloadPrevViewProj = taa.prevViewProj;
@@ -330,7 +336,10 @@ void taaSystem(entt::registry& rg) {
 			: glm::mat4{1.0f};
 
 	// ④ 簿记推进（必须在 ②③ 之后；下游 renderListSystem 读的是 payload*）
-	taa.prevViewProj = viewProj.projUnjittered * viewProj.view;
+	// 存**抖动后**那份（此刻 viewProj.proj 已含本帧 jitter）⇒ 下一帧拿到的正是
+	// 「渲染出这张历史图的那个矩阵」。门关时 proj 未被碰过 ⇒ 与未抖那份逐位相同 ⇒
+	// 门红线（关 = 基线逐位不变）自动成立，jitter_scale=0 时同理。
+	taa.prevViewProj = viewProj.proj * viewProj.view;
 	taa.prevSpin = spin.matrix;
 	taa.prevCamPos = camPos;
 	taa.prevForward = forward;

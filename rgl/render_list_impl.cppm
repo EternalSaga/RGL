@@ -244,12 +244,13 @@ constexpr uint32_t kNoMaterial = 0xFFFFFFFFu;
  * 批 12.6 TAA 的 scene data 载荷（尾区 @722080 / @722144 / @722208，生产端在此、
  * 消费端 = taa.frag.slang；字节布局与「两侧口径」见 scene_data.cppm kSceneDataTaa* 注释）。
  *
- * 一句话版：`prevViewProj` = 上一帧**未抖** proj·view；`motion` = prevSpin·inverse(curSpin)
+ * 一句话版：`prevViewProj` = 上一帧**抖动后** proj·view（口径跟历史图内容一致）；
+ * `motion` = prevSpin·inverse(curSpin)
  * （全场景同一旋转 ⇒ 一个 mat4 精确补偿物体运动，spin 关 = 单位阵）；
  * `params` = (feedback, historyValid, jitterX px, jitterY px)，historyValid=0 时
  * taa.frag 直接输出本帧 = **逐位旁路**。
- * 注意 `skyInvViewProj`（上一行填）用的是**抖动后** proj——重建世界坐标的半边是它，
- * 投回上一帧的半边是这里的 prevViewProj，两者口径不同是刻意的。
+ * `skyInvViewProj`（上一行填）与本帧的 prevViewProj 都是**抖动后**口径，只是分别属于
+ * 「本帧」与「上一帧」——重建世界坐标的半边是它，投回上一帧的半边是 prevViewProj。
  */
 void fillTaaData(FrameDrawList& out, const ViewProjection& viewProj, const SceneEnv& env,
 	const TaaState& taa) {
