@@ -148,6 +148,18 @@ public:
     /// 拍一张。attachment=nullptr = 后缓冲；否则具名附件（"object_id"）。返回 PNG 绝对路径。
     [[nodiscard]] std::string shot(const std::string& tag, const char* attachment = nullptr);
 
+    /// 连续采 n 帧（POST /shotburst）——**时域差分唯一合法的采集口**。
+    /// 与 shot() 的区别不是「省几次往返」：`/shot` 每张落在哪一帧取决于 HTTP 请求与
+    /// 帧首钩子的先后（= 墙钟），相邻两张根本不是相邻两帧，逐帧差于是测的是随机相位窗
+    /// （实测同一个量随预热长度差 3 倍）。`/shotburst` 的「下一张」由引擎在帧首结算
+    /// 钩子里自己登记（该钩子先于 drawFrame）⇒ 采集落在连续的第 N..N+n-1 帧上。
+    /// @param dir 引擎 CWD（build/rgl）下的输出目录
+    /// @param n 张数（≥1）
+    /// @param prefix 文件名前缀（引擎写 `<prefix>%03d.png`）
+    /// @return 引擎回显的绝对路径，顺序 = 帧序
+    [[nodiscard]] std::vector<std::string> shotBurst(const std::string& dir, uint32_t n,
+        const std::string& prefix = "f");
+
 private:
     struct Impl;
     Impl* impl_;
@@ -356,14 +368,14 @@ int cmdSwitch(const std::string& glb, const std::string& camera, const std::stri
 int cmdProbe(const std::string& configDir, int x, int y, Vec3 albedo, double roughness,
     double metallic, Vec3 l, double intensity, int tol, bool lightOverride = false);
 
-/// 时域阳性锚点（批 12.6 T4，docs/taa_plan.md §6）：细线靶（`aa_target`）+ RPC 亚像素
-/// 微动，量「相邻帧逐像素差」在 TAA 关/开两态下的比值。两条都要成立（缺"关态非零" =
-/// 判据无信号，缺"开态降一个量级" = 时域累积没干活）。
-/// @param stepPx 每帧 yaw 造成的像素位移（默认 0.35；须远小于跳切阈值 45°）
-/// @param pairs 相邻帧对数（shots = pairs + 1）
+/// 时域阳性锚点（批 12.6 T4，docs/taa_plan.md §6）：细线靶（`aa_target`）+ **静止机位**，
+/// 量「相邻帧逐像素差」在「只抖不滤（feedback=1）」与「滤波（feedback=0.12）」两态下的
+/// 比值（另配 TAA 全关的确定性地板组）。三条硬判据，理由见 temporal.cpp 头注释。
+/// 采集走 `/shotburst`（连续 N 帧）——用 `/shot` 逐张拍不出任何结论。
+/// @param pairs 相邻帧对数（shots = pairs + 1；内部向上对齐到抖动周期 16 的整数倍）
 /// @param warm 每次采集前的预热帧数（TAA 历史收敛，feedback=0.12 ⇒ ≈19 帧）
 /// @param variant 渲染路线（默认 forward）
-int cmdTemporal(double stepPx, int pairs, int warm, const std::string& variant);
+int cmdTemporal(int pairs, int warm, const std::string& variant);
 
 }  // namespace RGL::imgqa
 

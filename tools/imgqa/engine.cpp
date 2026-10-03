@@ -345,6 +345,30 @@ std::string Engine::shot(const std::string& tag, const char* attachment)
     return p.string();
 }
 
+std::vector<std::string> Engine::shotBurst(const std::string& dir, uint32_t n,
+    const std::string& prefix)
+{
+    json body{{"dir", dir}, {"n", static_cast<int>(n)}, {"prefix", prefix}};
+    auto res = impl_->http->Post("/shotburst", body.dump(), "application/json");
+    if (!res)
+        throw std::runtime_error(
+            "POST /shotburst 无响应（引擎没起来，或用的是没有该端点的旧构建）");
+    if (res->status != 200)
+        throw std::runtime_error(
+            "POST /shotburst 失败 " + std::to_string(res->status) + ": " + res->body);
+    const json out = json::parse(res->body);
+    auto files = out.at("files").get<std::vector<std::string>>();
+    // 少交一张就是采集不完整——宁可抛，也不要拿缺帧的序列去算相邻帧差（那会把
+    // 「跨了两帧」悄悄当成「跨了一帧」，正是本端点要修的那个 bug 的翻版）。
+    if (files.size() != n)
+        throw std::runtime_error("/shotburst 只交了 " + std::to_string(files.size()) + "/"
+            + std::to_string(n) + " 张");
+    for (const auto& f : files)
+        if (!fs::exists(f))
+            throw std::runtime_error("/shotburst 返回的路径不存在: " + f);
+    return files;
+}
+
 Engine::~Engine()
 {
     try {

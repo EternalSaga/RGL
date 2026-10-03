@@ -12,8 +12,10 @@ namespace RGL {
 
 namespace {
 
-/** 超时表（docs/phase10b_plan.md D12）：`/shot` 帧首请求 → 下帧结算，给 10s；其余 2s。 */
+/** 超时表（docs/phase10b_plan.md D12）：`/shot` 帧首请求 → 下帧结算，给 10s；其余 2s。
+ * `/shotburst` 的应答要等**整批**交齐才兑现（n 上限 1024 帧 + 逐张写盘），故单独一档。 */
 constexpr std::chrono::milliseconds kTimeoutShot{10000};
+constexpr std::chrono::milliseconds kTimeoutBurst{120000};
 constexpr std::chrono::milliseconds kTimeoutDefault{2000};
 
 /**
@@ -100,6 +102,7 @@ bool DebugRpcServer::start(std::string host, int port) {
 	p->server.Post("/camera", serve);
 	p->server.Post("/param", serve);
 	p->server.Post("/shot", serve);
+	p->server.Post("/shotburst", serve);
 	p->server.Post("/quit", serve);
 	// httplib 对**所有** status≥400 都回调 error handler（返回值只控制 range 应用），
 	// 故必须只补空体：我们 handler 自产的 400/404/409/503/504 载荷不能被覆盖。
@@ -209,7 +212,9 @@ RpcReply DebugRpcServer::awaitReply(const RpcRequest& request) {
 		p->queue.push_back(Impl::Pending{request, reply});
 	}
 
-	const auto timeout = request.path == "/shot" ? kTimeoutShot : kTimeoutDefault;
+	const auto timeout = request.path == "/shot"
+	    ? kTimeoutShot
+	    : (request.path == "/shotburst" ? kTimeoutBurst : kTimeoutDefault);
 	if (future.wait_for(timeout) != std::future_status::ready) {
 		// 尽力撤单：还躺在队列里就丢弃（已交 applier 的撤不掉——晚一步套用，无害）
 		std::lock_guard<std::mutex> lock(p->mutex);

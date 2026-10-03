@@ -15,19 +15,26 @@
 // 增益，可以直接拿一阶 IIR 的闭式对拍。移动机位那两组降级为参考值（见 antiPatterns 的
 // `moving-camera-l1-ratio`）。
 //
-// ## 三条硬判据 + 两条参考
+// ## 三条硬判据（全部静止机位）
 //
 //   S0 TAA 关 静止             → 引擎确定性地板（≠0 则一切比值是噪声比噪声）
 //   S1 TAA 开 feedback=1 静止   → 只抖不滤 = 闪烁本体（**阳性锚点**：必须非零）
 //   S2 TAA 开 feedback=.12 静止 → 滤波后（S1/S2 = 时域累积抑制，对拍闭式）
-//   M0/M1 TAA 关/开 微动        → 端到端参考值，只报不判
+//
+// 采集一律走 `/shotburst`（连续 N 帧，引擎在帧首结算钩子里自己登记下一张）。用 `/shot`
+// 逐张拍**测不出东西**：每张落在哪一帧取决于 HTTP 请求与帧首钩子的先后（= 墙钟），
+// 相邻两张根本不是相邻两帧——实测同一个量随预热长度差 3 倍（docs/taa_plan.md §7 第 8 条）。
 //
 // 区域来自 objectID（本工具地基纪律：判据的区域来自几何，不来自图像）；统计一律在
 // sRGB 解码后的线性 luma 域做。
 //
-// 机位运动（M 组）= **绕 up 轴定角 yaw**（不是平移机位）：像素位移与深度无关，且是刚体
-// 相机运动，`prevViewProj` 重投影能精确对齐。平移 dolly 会让 9m 外栅栏的单帧位移只剩
-// 近处的 22%，信号随深度衰减；SceneSpin 速度不可配（~1°/帧，远超亚像素档）更不能用。
+// 为什么**没有**「微动机位」组：逐帧改机位唯一的配置驱动来源是 SceneSpin，而它是
+// `angle += speed * dt`（按帧时长累积）⇒ 每帧角度本身随帧时长漂，测不出可复现的数。
+// 要做微动激励得先加一条「按帧索引驱动」的相机运动（帧号而非 dt 的函数），那是新引擎
+// 面，而这条判据已被登记为反模式（`moving-camera-l1-ratio`）——不值得。
+// 机位若将来要动，正确形态 = 绕 up 轴**定角** yaw：像素位移与深度无关，且是刚体相机
+// 运动，`prevViewProj` 重投影能精确对齐（平移 dolly 会让 9m 外栅栏的单帧位移只剩近处
+// 的 22%，信号随深度衰减）。
 #include "imgqa.h"
 
 #include <algorithm>
@@ -36,6 +43,7 @@
 #include <iostream>
 #include <limits>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include <opencv2/core.hpp>
@@ -75,10 +83,8 @@ struct RunResult {
 };
 
 RunResult runSequence(const std::string& dir, bool taa, double feedback, double jitterScale,
-    const std::string& variant, double stepPx, int shots, int warm, bool moving,
-    const std::string& tag)
+    const std::string& variant, int shots, int warm, const std::string& tag)
 {
-    std::string lastShot;
     ProfileOpts o;
     o.entitiesLua = "{ type = \"aa_target\" }";  // 内存合成靶，无 glb 文件
     o.envIntensity = 0.0;                        // 背景 = 常量 clear 色，零时域噪声
@@ -96,32 +102,32 @@ RunResult runSequence(const std::string& dir, bool taa, double feedback, double 
 
     Engine eng(dir);
     RunResult r;
-    // 预热：每步一次 /shot（**setCamera 本身不推进帧**，靠拍图强制推进；预热不拍就
-    // 不知道引擎到底走了几帧，TAA 的 ≈19 帧收敛就成了许愿）。
-    for (int i = 0; i < warm; ++i) {
-        eng.setCamera(yawCam(moving ? stepPx * i : 0.0));
-        lastShot = eng.shot(tag + "_w");
-    }
+    eng.setCamera(yawCam(0.0));  // S 组：机位一次钉死，全程不动（唯一变化 = jitter 相位）
+
+    // 预热：一次突发走完 warm 帧（图不要，只为让 TAA 历史收敛）。用突发而不是 warm 次
+    // /shot 的理由不是省往返——是「到底走了几帧」从此确定，不再看墙钟脸色。
+    // 路径刻意丢弃：这里要的是「帧真的走了」，不是产物（异常仍会抛出，不会静默少走）。
+    std::ignore = eng.shotBurst("screenshots", static_cast<uint32_t>(warm), tag + "_w");
+
+    // 被测量：**连续 shots 帧**。必须走 /shotburst——/shot 相邻两张不是相邻两帧
+    // （每张落在哪帧取决于 HTTP 请求与帧首钩子先后），逐帧差会退化成随机相位窗。
+    const auto files = eng.shotBurst("screenshots", static_cast<uint32_t>(shots), tag + "_c");
     std::vector<Frame> seq;
-    seq.reserve(static_cast<size_t>(shots));
-    for (int i = 0; i < shots; ++i) {
-        const double px = moving ? stepPx * (warm + i) : 0.0;
-        eng.setCamera(yawCam(px));
-        Frame f;
-        f.camera = yawCam(px);
-        lastShot = eng.shot(tag + "_c" + std::to_string(i));
-        f.bgr = readPngBgr(lastShot);
-        prepareLinear(f);
-        seq.push_back(std::move(f));
+    seq.reserve(files.size());
+    for (const auto& f : files) {
+        Frame fr;
+        fr.camera = yawCam(0.0);
+        fr.bgr = readPngBgr(f);
+        prepareLinear(fr);
+        seq.push_back(std::move(fr));
     }
-    // object_id **最后拍**：夹在序列中间会多走一帧，破坏"相邻帧"这个被测量本身。
-    // 拍完把机位退回首帧，mask 与序列首图对齐。
-    eng.setCamera(yawCam(moving ? stepPx * warm : 0.0));
+
+    // object_id 单张即可（区域不需要连续性）；机位与序列同一，故 mask 与序列同帧形态。
     const cv::Mat ids = decodeObjectId(readPngBgr(eng.shot(tag + "_id", "object_id")));
     r.idPixels = cv::countNonZero(ids);
     cv::Mat interior;
     cv::compare(ids, 0, interior, cv::CMP_NE);  // ids 是 CV_32SC1 ⟹ 直接 8UC1
-    const cv::Mat m = dilateMask(interior, 3);  // 3px：吸收 jitter ±0.5px + 机位扫动
+    const cv::Mat m = dilateMask(interior, 3);  // 3px：吸收 jitter ±0.5px 的相位漂移
     // 逐帧差用**外扩**mask（边缘像素才是被测量所在），中间调用**未外扩**的靶内部
     // （外扩圈会把背景 clear 色算成中间调，见 imgqa.h 声明处 ⚠）。
     r.stat = temporalDiffStat(seq, m, interior);
@@ -213,7 +219,7 @@ TemporalStat temporalDiffStat(const std::vector<Frame>& shots, const cv::Mat& ma
     return s;
 }
 
-int cmdTemporal(double stepPx, int pairs, int warm, const std::string& variant)
+int cmdTemporal(int pairs, int warm, const std::string& variant)
 {
     // jitter 是 Halton **周期 16 的周期信号**，且周期内的帧间跳变幅度极不均匀
     // （|h(3)-h(4)| = 0.875px，而 |h(8)-h(9)| = 0.5px）。若只采任意 8 个连续帧对，测的
@@ -232,39 +238,35 @@ int cmdTemporal(double stepPx, int pairs, int warm, const std::string& variant)
 
     const int shots = pairs + 1;
     const std::string root = projectRoot() + "/build";
-    std::printf("细线靶时域锚点：%d×%d  yaw %.3f px/帧  预热 %d 帧  帧对 %d  variant=%s\n\n",
-        kSize[0], kSize[1], stepPx, warm, pairs, variant.empty() ? "forward" : variant.c_str());
+    std::printf("细线靶时域锚点：%d×%d  静止机位  预热 %d 帧  帧对 %d  variant=%s\n\n",
+        kSize[0], kSize[1], warm, pairs, variant.empty() ? "forward" : variant.c_str());
 
-    // ── 采集矩阵（S = 静止机位，M = 微动机位）────────────────────────────────
-    // 判据只建立在 **S 组**上。理由（本轮实测换来的，别再走回头路）：
+    // ── 采集矩阵（S = 静止机位；三组全是静止机位）────────────────────────────
+    // 判据只建立在静止机位上。理由（本轮实测换来的，别再走回头路）：
     //   时域滤波能压的是「同一视点、不同采样相位」的估计差；它**压不掉**「视点真的动了」
     //   引起的画面变化（那部分是正确影像，重投影后照样要变）。而 L1 逐帧差对模糊近似
     //   **守恒**——把一次满幅翻转摊成 3 个像素各差一点，均值几乎不变。故匀速扫动下
-    //   再正确的 TAA 也测不出抑制（实测 A/F 只有 1.2×，而闭式该是 3.95×——不是引擎的
-    //   错，是激励选错了）。
-    //   S 组把运动项彻底摘掉：平均视点恒定，唯一变化 = jitter 的采样相位。此时
+    //   再正确的 TAA 也测不出抑制（实测只有 1.2×，而闭式该是 3.95×——不是引擎的错，
+    //   是激励选错了；已登记反模式 `moving-camera-l1-ratio`）。
+    //   静止机位把运动项彻底摘掉：平均视点恒定，唯一变化 = jitter 的采样相位。此时
     //   feedback=1 的消融组（S1）与默认组（S2）**输入统计完全相同**，比值就是时域
     //   累积本身的增益，可直接对拍闭式。
-    //     S0  TAA 关 静止            → 引擎确定性地板（硬判据：恰为 0）
-    //     S1  TAA 开 feedback=1 静止  → **只抖不滤** = 闪烁本体（硬判据：非零 = 阳性锚点）
-    //     S2  TAA 开 feedback=.12 静止 → 滤波后（硬判据：S1/S2 ≥ 3.0，闭式 3.95）
-    //     M0  TAA 关 微动            ┐ 端到端参考值，**只报不判**（理由见 antiPatterns
-    //     M1  TAA 开 默认   微动      ┘ 的 moving-camera-l1-ratio 条目）
-    RunResult S0, S1, S2, M0, M1;
+    //     S0  TAA 关 静止             → 引擎确定性地板（硬判据：恰为 0）
+    //     S1  TAA 开 feedback=1 静止   → **只抖不滤** = 闪烁本体（硬判据：非零 = 阳性锚点）
+    //     S2  TAA 开 feedback=.12 静止  → 滤波后（硬判据：S1/S2 ≥ 3.0，闭式 ≈11×）
+    //   ⚠ 没有「微动机位」组：逐帧改机位唯一的配置驱动来源是 SceneSpin，而它是
+    //   `angle += speed * dt`（按帧时长累积）⇒ 每帧角度本身就不确定，测不出可复现的数。
+    RunResult S0, S1, S2;
     try {
-        S0 = runSequence(root + "/imgqa_taa_s0", false, 0.12, 1.0, variant, stepPx, shots,
-            warm, false, "taas0");
+        S0 = runSequence(root + "/imgqa_taa_s0", false, 0.12, 1.0, variant, shots, warm,
+            "taas0");
         // ⚠ 消融组是 **feedback=1**（输出 = 本帧），不是 0。写成 0 会得到「输出 = 裁剪后的
         // 历史」= 完全丢弃本帧的退化反馈环，它反而**更**依赖重投影，测出来的不是闪烁本体
         // （本轮真实踩过：fb=0 时 S1 会随 prevViewProj 口径变化，而"无滤波"本不该依赖历史）。
-        S1 = runSequence(root + "/imgqa_taa_s1", true, 1.0, 1.0, variant, stepPx, shots, warm,
-            false, "taas1");
-        S2 = runSequence(root + "/imgqa_taa_s2", true, 0.12, 1.0, variant, stepPx, shots,
-            warm, false, "taas2");
-        M0 = runSequence(root + "/imgqa_taa_m0", false, 0.12, 1.0, variant, stepPx, shots,
-            warm, true, "taam0");
-        M1 = runSequence(root + "/imgqa_taa_m1", true, 0.12, 1.0, variant, stepPx, shots,
-            warm, true, "taam1");
+        S1 = runSequence(root + "/imgqa_taa_s1", true, 1.0, 1.0, variant, shots, warm,
+            "taas1");
+        S2 = runSequence(root + "/imgqa_taa_s2", true, 0.12, 1.0, variant, shots, warm,
+            "taas2");
     } catch (const std::exception& e) {
         std::printf("  采集失败: %s\n", e.what());
         return 2;
@@ -279,16 +281,12 @@ int cmdTemporal(double stepPx, int pairs, int warm, const std::string& variant)
     row("S0 TAA关        静止", S0.stat);
     row("S1 TAA开 fb=1   静止（只抖不滤）", S1.stat);
     row("S2 TAA开 fb=.12 静止（滤波）", S2.stat);
-    row("M0 TAA关        微动", M0.stat);
-    row("M1 TAA开 默认    微动", M1.stat);
 
     const auto ratioOf = [](double a, double b) {
         return b > 0.0 ? a / b : std::numeric_limits<double>::infinity();
     };
     const double rSup = ratioOf(S1.stat.meanAbsDiff, S2.stat.meanAbsDiff);
-    const double rE2E = ratioOf(M0.stat.meanAbsDiff, M1.stat.meanAbsDiff);
     std::printf("\n  判据  时域累积抑制 S1/S2 = %.2f×（闭式 ≈11×，下限 3.0×）\n", rSup);
-    std::printf("  参考  端到端微动 M0/M1 = %.2f×（L1 对模糊守恒 → 只报不判）\n", rE2E);
     std::printf("  参考  空间抗锯齿：中间调 S0 %.2f%% → S2 %.2f%%\n",
         S0.stat.edgeSoftness * 100.0, S2.stat.edgeSoftness * 100.0);
 
@@ -313,15 +311,12 @@ int cmdTemporal(double stepPx, int pairs, int warm, const std::string& variant)
     for (const auto& v : vs)
         std::printf("\n  [%s] 容差理由: %s\n", v.name.c_str(), v.whyTol.c_str());
 
-    logCall("temporal", {{"step_px", std::to_string(stepPx)},
-               {"pairs", std::to_string(pairs)}, {"warm", std::to_string(warm)},
+    logCall("temporal", {{"pairs", std::to_string(pairs)}, {"warm", std::to_string(warm)},
                {"variant", variant.empty() ? "forward" : variant},
                {"S0_off_stay", d6(S0.stat.meanAbsDiff)},
-               {"S1_fb0_stay", d6(S1.stat.meanAbsDiff)},
+               {"S1_fb1_stay", d6(S1.stat.meanAbsDiff)},
                {"S2_fb12_stay", d6(S2.stat.meanAbsDiff)},
-               {"M0_off_move", d6(M0.stat.meanAbsDiff)},
-               {"M1_on_move", d6(M1.stat.meanAbsDiff)},
-               {"S1_over_S2", d2(rSup)}, {"M0_over_M1", d2(rE2E)},
+               {"S1_over_S2", d2(rSup)},
                {"soft_S0", d2(S0.stat.edgeSoftness * 100.0)},
                {"soft_S2", d2(S2.stat.edgeSoftness * 100.0)}},
         vs);

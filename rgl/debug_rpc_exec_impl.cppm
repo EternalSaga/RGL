@@ -51,7 +51,7 @@ void rpcReject(const RpcResponder& responder, int status, std::string message) {
 nlohmann::json rpcRoutesJson(uint32_t frame) {
 	return nlohmann::json{{"ok", true}, {"frame", frame},
 		{"routes", {"GET /", "GET /state", "POST /camera", "POST /param", "POST /shot",
-			"POST /quit"}}};
+			"POST /shotburst", "POST /quit"}}};
 }
 
 /**
@@ -173,6 +173,18 @@ struct RpcWiring {
 	Renderer& renderer;
 	const bool llmActive;                    // llm 截图模式在跑（/shot 会抢帧 → 拒）
 	std::optional<RpcResponder> pendingShot;  // 在途 /shot（跨帧响应句柄）
+	// ── /shotburst（批 12.6 T4）：连续 N 帧一次性采集 ──
+	// 为什么必须有它：`/shot` 是「帧首收单、本帧回读」，两次 HTTP 之间引擎自由跑帧，
+	// 跨了几帧**看墙钟时序** ⟹ 时域差分（相邻帧差）测的其实是随机相位窗，不可复现。
+	// 突发端点把「下一张」的请求挂在**帧首结算钩子里**（该钩子先于 drawFrame），于是
+	// 采集落在连续的第 N、N+1、N+2… 帧上，连续性由帧循环保证，与 HTTP 时序无关。
+	std::optional<RpcResponder> pendingBurst;  ///< 在途 /shotburst（与 pendingShot 互斥）
+	std::string burstDir;                      ///< 输出目录（相对 CWD）
+	std::string burstPrefix = "burst_";        ///< 文件名前缀
+	int burstGbuf = -1;                        ///< 回读源（-1 = swapchain 后缓冲）
+	uint32_t burstRemaining = 0;               ///< 还差几张（0 = 本批已交齐）
+	uint32_t burstIndex = 0;                   ///< 下一张的序号（文件名后缀）
+	std::vector<std::string> burstFiles;       ///< 已写盘的绝对路径（完成时在应答里回显）
 	std::string pendingShotFile;              // 期望 PNG 相对路径（gbuf 通道路径由写盘方定）
 	uint32_t shotSeq = 0;                     // 缺省文件名序号（screenshots/rpc_<N>.png）
 	uint32_t frame = 0;                       // 帧计数（/state 与根路由回显，纯观测）
@@ -332,11 +344,93 @@ void rpcHandleShot(RpcWiring& w, const nlohmann::json& body, RpcResponder respon
 }
 
 /**
+ * POST /shotburst：登记「连续 N 帧」采集（应答在最后一张写盘后才兑现）。
+ *
+ * 与 `/shot` 的**本质**区别不是省了几次往返，而是连续性：`/shot` 每张的帧号取决于
+ * 请求落在帧首钩子前还是后（= 墙钟），`/shotburst` 的「下一张」由帧首结算钩子自己登记
+ * （见 `rpcSettleShot`），该钩子先于 drawFrame ⟹ 第 N、N+1、N+2… 帧逐张采集。
+ * 时域差分（相邻帧差）只有后者测得准（`imgqa temporal`，docs/taa_plan.md §7 第 8 条）。
+ *
+ * @param w 装配态
+ * @param body 请求体对象（`n` 必填 ≥1、`dir` 必填输出目录、`prefix?` 文件名前缀、
+ *   `gbuf?` 回读通道；`n` 越界或类型错 = 400）
+ * @param responder 跨帧响应句柄（移交给 w.pendingBurst）
+ */
+void rpcHandleShotBurst(RpcWiring& w, const nlohmann::json& body, RpcResponder responder) {
+	if (!body.is_object()) {
+		rpcReject(responder, 400, "body must be a JSON object");
+		return;
+	}
+	if (w.llmActive) {
+		rpcReject(responder, 409, "/shotburst unavailable: llm_debug capture mode is running");
+		return;
+	}
+	// 与 /shot 抢同一个回读槽：同时挂两种采集 = 客户端 bug，静默排队会拍出错位的图
+	if (w.pendingShot) {
+		rpcReject(responder, 409, "a /shot is still pending");
+		return;
+	}
+	if (w.pendingBurst) {
+		rpcReject(responder, 409, "another /shotburst is still pending");
+		return;
+	}
+	if (!body.contains("n") || !body.at("n").is_number_integer() || body.at("n").get<int>() < 1
+		|| body.at("n").get<int>() > 1024) {
+		rpcReject(responder, 400, "'n' must be an integer in [1, 1024]");
+		return;
+	}
+	if (!body.contains("dir") || !body.at("dir").is_string()
+		|| body.at("dir").get<std::string>().empty()) {
+		rpcReject(responder, 400, "'dir' must be a non-empty path");
+		return;
+	}
+	w.burstDir = body.at("dir").get<std::string>();
+	if (body.contains("prefix"))
+		w.burstPrefix = body.at("prefix").get<std::string>();
+	w.burstGbuf = body.contains("gbuf") ? body.at("gbuf").get<int>() : -1;
+	w.burstRemaining = static_cast<uint32_t>(body.at("n").get<int>());
+	w.burstIndex = 0;
+	w.burstFiles.clear();
+
+	w.renderer.requestFrameCapture(w.burstGbuf);  // 第一张 = 本帧 drawFrame 回读
+	w.pendingBurst = std::move(responder);
+}
+
+/**
  * /shot 跨帧结算（帧首、drain 之前调用）：捕获产物就绪 → 写 PNG → 兑现响应。
  * 未就绪 = 保持 pending（acquire 超时跳帧时请求保持 pending 重试，同 llm_debug）。
+ *
+ * **突发分支先走**（与单张互斥，不会两边都活）：写完一张就在**本钩子**里登记下一张——
+ * 本钩子先于 drawFrame，所以登记立刻作用在本帧，这就是「连续 N 帧」的全部机制。
  * @param w 装配态
  */
 void rpcSettleShot(RpcWiring& w) {
+	if (w.pendingBurst) {
+		if (!w.renderer.hasFrameCapture())
+			return;  // 本帧无产物（acquire 跳帧）：请求保持 pending，下个帧边界重试
+		LlmDebugConfig shot;
+		shot.file = fmt::format("{}/{}{:03d}.png", w.burstDir, w.burstPrefix, w.burstIndex);
+		auto file = writeCapturePng(w.renderer, shot);
+		if (!file) {
+			auto responder = std::move(*w.pendingBurst);
+			w.pendingBurst.reset();
+			w.burstRemaining = 0;
+			rpcReject(responder, 500, file.error().message);
+			return;
+		}
+		++w.burstIndex;
+		w.burstFiles.push_back(*file);
+		if (--w.burstRemaining == 0) {
+			auto responder = std::move(*w.pendingBurst);
+			w.pendingBurst.reset();
+			responder.resolve(200,
+				rpcOk({{"ok", true}, {"count", w.burstIndex}, {"files", w.burstFiles}})
+					.body.dump());
+			return;
+		}
+		w.renderer.requestFrameCapture(w.burstGbuf);  // 下一张 = 本帧（连续，不跨 HTTP）
+		return;
+	}
 	if (!w.pendingShot)
 		return;
 	if (!w.renderer.hasFrameCapture())
@@ -398,6 +492,10 @@ void rpcDispatchPost(RpcWiring& w, const RpcRequest& request, RpcResponder respo
 	}
 	if (request.path == "/shot") {
 		rpcHandleShot(w, body, std::move(responder));
+		return;
+	}
+	if (request.path == "/shotburst") {
+		rpcHandleShotBurst(w, body, std::move(responder));
 		return;
 	}
 	if (request.path == "/quit") {
