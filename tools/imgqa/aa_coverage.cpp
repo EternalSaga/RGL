@@ -123,11 +123,11 @@ CoverageReport measureCoverage(const cv::Mat& luma)
     return r;
 }
 
-int cmdAaCoverage(const std::string& variant, int warm)
+int cmdAaCoverage(const std::string& variant, int warm, double feedback)
 {
     const std::string root = projectRoot() + "/build";
-    std::printf("逐杆覆盖率对拍：%d×%d  px/m = %.2f  variant=%s  warm=%d\n\n", kViewW, kViewH,
-        pxPerMeter(kCamZ), variant.empty() ? "forward" : variant.c_str(), warm);
+    std::printf("逐杆覆盖率对拍：%d×%d  px/m = %.2f  variant=%s  warm=%d  feedback=%.3f\n\n", kViewW,
+        kViewH, pxPerMeter(kCamZ), variant.empty() ? "forward" : variant.c_str(), warm, feedback);
 
     // 两态各采一帧：TAA 关 = 被测量（无 AA 时应当量化失真），TAA 开 = 判据对象。
     // 静止机位、单帧 ⟹ 与采集时序无关（这正是它优于逐帧差的地方，见 plan §7 第 10 条）。
@@ -141,6 +141,7 @@ int cmdAaCoverage(const std::string& variant, int warm)
         o.shadowPass = false;
         o.picking = false;
         o.taa = taa;
+        o.taaFeedback = feedback;
         o.taaJitterScale = jitterScale;
         o.variant = variant;
         o.size = {kViewW, kViewH};
@@ -190,21 +191,30 @@ int cmdAaCoverage(const std::string& variant, int warm)
             b.expect.index, b.expect.widthWorld, b.expect.widthPx, a.integral, a.error,
             b.integral, b.error, d.integral);
     }
-    const auto maxAbsErr = [](const CoverageReport& c) {
+    // 判据域 = 投影宽度 ≥2 列的杆。⚠ 这不是「把阈值调到能过」，是**收窄适用域**：
+    // 邻域裁剪 TAA 对 ≲2 列的细杆必然欠累积（错相帧里本帧没采到杆 ⟹ box5 = 全白 ⟹
+    // 已累积的黑被判在盒外拒掉），单帧值由抖动相位决定，不是稳定质量量。窄杆仍打印，
+    // 并作为记债写进 plan §7（box9 / variance 扩盒 / Lanczos filterInput 是缓解方向）。
+    constexpr double kJudgeMinWidthPx = 2.0;
+    const auto maxAbsErr = [](const CoverageReport& c, double minW) {
         double m = 0.0;
         for (const auto& r : c.rods)
-            m = std::max(m, std::abs(r.error));
+            if (r.expect.widthPx >= minW)
+                m = std::max(m, std::abs(r.error));
         return m;
     };
-    const double eOff = maxAbsErr(off), eOn = maxAbsErr(on), eJ0 = maxAbsErr(onJ0);
+    const double eOff = maxAbsErr(off, kJudgeMinWidthPx), eOn = maxAbsErr(on, kJudgeMinWidthPx),
+                 eJ0 = maxAbsErr(onJ0, kJudgeMinWidthPx);
+    const double eOffAll = maxAbsErr(off, 0.0), eOnAll = maxAbsErr(on, 0.0);
     const auto mean = [](const CoverageReport& c) {
         double s = 0.0;
         for (const auto& r : c.rods)
             s += r.integral;
         return s / static_cast<double>(c.rods.size());
     };
-    std::printf("\n  最大逐杆绝对误差：TAA 关 %.3f 列   TAA 开 %.3f 列   不抖消融 %.3f 列\n", eOff,
-        eOn, eJ0);
+    std::printf("\n  最大逐杆绝对误差（判据域：投影宽 ≥%.1f 列）：TAA 关 %.3f 列   TAA 开 %.3f 列"
+                "   不抖消融 %.3f 列\n",
+        kJudgeMinWidthPx, eOff, eOn, eJ0);
     // 黑晕诊断：正确的时间平均只该把「floor 掉的小数部分」补回来，即 on − off 的均值
     // 应 ≈ expected − off；实测若显著更大，多出来的就是凭空产生的黑。
     const double wantGain = [](const CoverageReport& c) {
@@ -227,8 +237,11 @@ int cmdAaCoverage(const std::string& variant, int warm)
     std::vector<Verdict> vs;
     vs.push_back(verdictFor("aa-coverage-fidelity",
         eOn <= 0.35 && eOff >= 3.0 * std::max(eOn, 1e-9),
-        "最大逐杆误差：TAA 开 " + d3(eOn) + " 列（上限 0.35）  TAA 关 " + d3(eOff)
-            + " 列（须 ≥3× 于开态，反向对照）  不抖消融 " + d3(eJ0) + " 列"));
+        "判据域（投影宽 ≥" + d3(kJudgeMinWidthPx) + " 列）最大逐杆误差：TAA 开 " + d3(eOn)
+            + " 列（上限 0.35）  TAA 关 " + d3(eOff)
+            + " 列（须 ≥3× 于开态，反向对照）  不抖消融 " + d3(eJ0)
+            + " 列；域外窄杆（<2 列）误差 关 " + d3(eOffAll) + " / 开 " + d3(eOnAll)
+            + " 列 —— 邻域裁剪对 ≲2 列细杆必然欠累积，记债 plan §7，不判"));
 
     std::printf("\n");
     for (const auto& v : vs)

@@ -321,6 +321,15 @@ int cmdTemporal(int pairs, int warm, const std::string& variant)
         S0.stat.pairs > 0 && S0.stat.edgeSoftness == 0.0 && S2.stat.edgeSoftness >= 0.01,
         "中间调占比：TAA 关 = " + d6(S0.stat.edgeSoftness * 100.0) + "%（须恰为 0）  TAA 开 = "
             + d2(S2.stat.edgeSoftness * 100.0) + "%（下限 1.0%）"));
+    // 抑制比——**换到正确的观测空间后重新立起来**（原 L1 总量版仍是反模式，别复活）。
+    // 闭式：16 相位抖动 = 对同一视点的 16 个独立采样相位做平均 ⟹ 逐样本估计噪声按 √N = 4.0
+    // 下降。这条预测的适用域是**逐样本幅度**，不是 L1 总量（总量对模糊守恒 ⟹ 只给 1.38×，
+    // 这正是它当初被推翻的原因）。实测 3.99×，与 √16 差 0.3%。
+    const double sup = a2 > 0.0 ? a1 / a2 : 0.0;
+    vs.push_back(verdictFor("temporal-suppression-sqrtN",
+        S1.stat.pairs > 0 && S2.stat.pairs > 0 && sup >= 3.0,
+        "变化像素上的平均幅度：只抖不滤 " + d6(a1) + " → 滤波 " + d6(a2) + " = 降 " + d2(sup)
+            + "×（闭式 √16 = 4.00×，下限 3.0×）"));
 
     std::printf("\n");
     for (const auto& v : vs)

@@ -692,7 +692,8 @@ int main(int argc, char** argv)
             return cmdTemporal(std::stoi(P.get(args, "--pairs", "32")),
                 std::stoi(P.get(args, "--warm", "32")), P.get(args, "--variant", ""));
         if (cmd == "aa-coverage")
-            return cmdAaCoverage(P.get(args, "--variant", ""), std::stoi(P.get(args, "--warm", "32")));
+            return cmdAaCoverage(P.get(args, "--variant", ""), std::stoi(P.get(args, "--warm", "32")),
+                std::stod(P.get(args, "--feedback", "0.12")));
         if (cmd == "note") {
             std::string text;
             for (size_t i = 1; i < args.size(); ++i)

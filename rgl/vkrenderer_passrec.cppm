@@ -364,8 +364,10 @@ void Renderer::replayIzbMaskSegment(vk::raii::CommandBuffer& cmd, const FrameDra
 std::expected<void, Error> Renderer::ensureOffscreenAttachments(vk::Extent2D extent,
 	std::vector<RtAttachment*>& offscreenRt) {
 	offscreenRt.assign(renderGraph.attachments.size(), nullptr);
-	// RT 重建检测：generation 变化（新图布局 Undefined）→ 同步重置 attachmentLayouts，否则下帧首 barrier oldLayout 失配（resize 必现）
-	std::vector<uint64_t> rtGenerations(renderGraph.attachments.size(), 0);
+	// RT 重建检测：generation 变化（新图布局 Undefined）→ 同步重置 attachmentLayouts，否则下帧首 barrier oldLayout 失配（resize 必现）。
+	// ⚠ rtGenerations 是**成员**（跨帧快照），不是本函数的局部量——见 vkrenderer.cppm 成员
+	// 注释：局部量每帧归零会让本判断恒真，把每个 offscreen 附件每帧抹成 eUndefined，
+	// 摧毁唯一的跨帧消费者 taa_hist（批 12.6 T4 实测：TAA 历史恒黑）。
 	for (uint32_t s = 0; s < renderGraph.attachments.size(); ++s) {
 		const auto& att = renderGraph.attachments[s];
 		// 图属 RT 两类同走本缓存（批 11.2 基建）：offscreen = 颜色档，

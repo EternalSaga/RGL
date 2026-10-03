@@ -146,6 +146,9 @@ Renderer::Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RG
 	  // 全迁 CullDriver，构造期即分配 cull CB（inactive = 不分配，行为中性与摘出前一致）
 	  cullDriver(vkDevice, vkGpuCull, vkDgc, vkDgcStatic, FrameSession::kFramesInFlight),
 	  attachmentLayouts(this->renderGraph.attachments.size(), vk::ImageLayout::eUndefined),
+	  // RT generation 跨帧快照（批 12.6 T4）：初值 0 = 「还没见过任何 RT」，首帧 ensure 后
+	  // 记下真实 generation，此后只在重建（+1）那一次才重置布局追踪
+	  rtGenerations(this->renderGraph.attachments.size(), 0),
 	  // 帧内捕获器（手术 2）：持资源层 + 编译图引用，构造期自图定位 swapchain slot
 	  capturer(vkResources, rtCache, this->renderGraph),
 	  // edS3 能力门 + 四段状态值（Phase 10 批次 0 手术 1：状态表迁 StateKit，

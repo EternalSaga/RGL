@@ -313,6 +313,14 @@ export class Renderer {
 	// 不查询）；录制期随每条物化 barrier 更新为 plan.newLayout。
 	//（Phase 4 前 DIAG RGL_OFFSCREEN 的 offscreenLayout 单变量泛化为逐 slot 表）
 	std::vector<vk::ImageLayout> attachmentLayouts;
+	// 批 12.6 T4：RT generation 的**跨帧**快照（按图 slot 索引，与 attachmentLayouts 同
+	// 生命周期）。⚠ **必须是成员，不能是 ensureOffscreenAttachments 的局部量**：局部量每帧
+	// 归零，而 RT 首建即 generation=1（`ensure` 的早退只挡「尺寸/格式没变」，首建必走
+	// generation+1），于是 `generation != 0` **恒真** ⟹ 每帧把每个 offscreen 附件的追踪布局
+	// 抹成 eUndefined = 每帧声明「内容可丢弃」。本帧先写后读的 RT 无感（那正是帧首丢弃的
+	// 语义），但**跨帧历史会在被读到之前销毁**——批 12.6 T4 实测：taa_hist 每帧
+	// `Undefined -> ShaderReadOnlyOptimal`，TAA 历史恒黑、时域滤波名存实亡。
+	std::vector<uint64_t> rtGenerations;
 	// 帧内捕获（Phase 10 批次 0 手术 2）：请求状态 + 回读缓冲 + record/collect 三步曲
 	// 全迁 RGL::FrameCapturer（frame_capture 模块，构造期自图定位 swapchain slot）。
 	// 声明位置 = 原 capture 成员块（attachmentLayouts 之后、stateKit 之前），

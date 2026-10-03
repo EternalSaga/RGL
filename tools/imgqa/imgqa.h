@@ -383,7 +383,9 @@ int cmdTemporal(int pairs, int warm, const std::string& variant);
 /// @param variant 渲染路线（默认 forward）
 /// @param warm    预热帧数（feedback=0.88 的时间常数 ≈8.3 帧，预热不足会把初始黑历史
 ///                的残差算成覆盖率——判收敛必须靠调这个参数做对照，见 plan §7 第 10 条）
-int cmdAaCoverage(const std::string& variant, int warm);
+/// @param feedback scene.lua `taa.feedback`（默认 0.12）。**消融用**：=1 时输出 = 本帧
+///                ⇒ TAA 开应与关**逐位相同**（一条免费的恒等式检查，见 plan §7 第 11 条）
+int cmdAaCoverage(const std::string& variant, int warm, double feedback);
 
 }  // namespace RGL::imgqa
 
