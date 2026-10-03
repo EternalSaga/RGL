@@ -96,9 +96,9 @@ namespace {
 std::expected<SceneEntityDesc, Error> parseEntityItem(sol::table item, int i) {
 	SceneEntityDesc ent;
 	readStr(item, "type", ent.type);
-	if (ent.type != "model" && ent.type != "cube")
+	if (ent.type != "model" && ent.type != "cube" && ent.type != "aa_target")
 		return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
-			fmt::format("scene config: entities[{}] unknown type '{}' (want model|cube)",
+			fmt::format("scene config: entities[{}] unknown type '{}' (want model|cube|aa_target)",
 				i, ent.type)});
 	readStr(item, "file", ent.file);
 	if (ent.type == "model" && ent.file.empty())
@@ -117,7 +117,7 @@ std::expected<SceneEntityDesc, Error> parseEntityItem(sol::table item, int i) {
 
 /**
  * entities 段解析（Phase 6 批次 5：场景构成数据驱动列表，非空 = 权威；缺段 =
- * 回落旧 model/cube 字段合成，既有配置零改动等价）。type "model"|"cube"，
+ * 回落旧 model/cube 字段合成，既有配置零改动等价）。type "model"|"cube"|"aa_target"，
  * transform 全可选（position/rotation 欧拉角度/scale 均匀）。
  * @param root 配置根表
  * @param cfg 目标配置（读 modelPath/showCube 做缺段合成，写 entities）

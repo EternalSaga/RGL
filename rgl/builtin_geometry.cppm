@@ -29,6 +29,11 @@ namespace RGL {
  * @param vkDevice 设备层（VMA buffer 创建 / 描述符写入）
  * @param res 资源层（VMA 分配器 + 资产表 + 统一 slot 分配器）
  * @return 资产 id；失败 Error（VMA buffer 创建 / slot 越界 / 几何槽布局漂移，见 impl）
+ * ⚠ **容量上限 = 8 顶点 / 12 三角形，且不可扩**：`cube.mesh.slang` 把两者写死，
+ * `AssetTable::addIndexedMesh` 的 groupCount 恒 1（批 12.6 T4 实测：喂更大的网格
+ * 不报错，第 13 个三角形起**静默截断**——截图只剩一个角，最难查的一类假线索）。
+ * 需要更复杂的程序化几何请走**模型路**（内存合成 `GltfModel` → `uploadModelMeshes`，
+ * 细线抗锯齿靶 `aa_target.cppm` 即先例），别给本函数加参数。
  */
 export [[nodiscard]] std::expected<uint32_t, Error> uploadBuiltinCube(
 	RGL::DeviceContext& vkDevice, RGL::Resources& res, RGL::AssetTable& assets);

@@ -19,6 +19,7 @@ import sampler_library;  // SamplerLibrary（架构债务续账步骤 4a/4b）
 import environment;  // Environment（架构债务续账步骤 3）
 import render_target_cache;  // RenderTargetCache（架构债务续账步骤 2）
 import gltf_loader;
+import aa_target;  // aaTargetModel()/kModelKey（细线抗锯齿靶内存合成，批 12.6 T4）
 import model_importer;
 import texture_pool;
 import scene_config;
@@ -93,20 +94,29 @@ UploadedAssets uploadModelAssets(DeviceContext& device, Resources& resources,
 	// entity（独立 Transform + 独立实例矩阵槽 objectSlot）。资产与实例分离（ECS 规范 5）
 	//（per-file 上传 lambda 独立计分）
 	auto uploadModelFile = [&](const SceneEntityDesc& ent) {
-		if (ent.type != "model")
+		// 批 12.6 T4：aa_target = **内存合成**的 GltfModel（aa_target.cppm），键固定、
+		// 与真模型走同一条去重/上传/注册路——不在 UploadedAssets 另立字段（那 = 第二份真相）
+		const bool target = ent.type == "aa_target";
+		if (ent.type != "model" && !target)
 			return;
-		if (auto [it, inserted] = out.modelOf.emplace(ent.file, out.models.size()); !inserted) {
+		const std::string key = target ? std::string(aaTarget::kModelKey) : ent.file;
+		if (auto [it, inserted] = out.modelOf.emplace(key, out.models.size()); !inserted) {
 			out.models[it->second].instances++;
 			return;  // 同文件已上传（instancing 共享资产）
 		}
-		auto modelResult = loadGltfModel(ent.file);
-		if (!modelResult)
-			throw std::runtime_error(modelResult.error().describe());
-		auto mesh = std::make_unique<GltfModel>(std::move(*modelResult));
+		std::unique_ptr<GltfModel> mesh;
+		if (target)
+			mesh = std::make_unique<GltfModel>(aaTargetModel());  // 零文件依赖、零新 shader
+		else {
+			auto modelResult = loadGltfModel(ent.file);
+			if (!modelResult)
+				throw std::runtime_error(modelResult.error().describe());
+			mesh = std::make_unique<GltfModel>(std::move(*modelResult));
+		}
 		auto assetIdsResult = uploadModelMeshes(device, resources, assets, *mesh);
 		if (!assetIdsResult)
 			throw std::runtime_error(assetIdsResult.error().describe());
-		out.models.push_back(UploadedModel{.file = ent.file, .model = std::move(mesh),
+		out.models.push_back(UploadedModel{.file = key, .model = std::move(mesh),
 			.assetIds = std::move(*assetIdsResult), .instances = 1});
 	};
 	for (const auto& ent : scene.entities)
@@ -287,10 +297,13 @@ void registerSceneEntities(entt::registry& registry, const UploadedAssets& asset
 	};
 	// C2：场景实体注册（per **entity**——同文件各实例独立 rootTransform/矩阵槽；
 	// 材质经 addMaterial find-or-add 去重，重复注册返回既有 id）
+	// 批 12.6 T4：aa_target 与 model 同路（差别只在去重键 = 合成模型的固定键）
 	for (const auto& ent : scene.entities) {
-		if (ent.type != "model")
+		const bool target = ent.type == "aa_target";
+		if (ent.type != "model" && !target)
 			continue;
-		auto& um = assets.models[assets.modelOf.at(ent.file)];
+		auto& um = assets.models[assets.modelOf.at(
+			target ? std::string(aaTarget::kModelKey) : ent.file)];
 		registerScene(registry, *um.model, std::span<const uint32_t>(um.assetIds),
 			std::span<const uint32_t>(um.textureIds.base), resources, table,
 			makeRootTransform(ent));

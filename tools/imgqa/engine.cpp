@@ -202,20 +202,35 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
         + ", shadow_evssm = " + lb(o.evssmShadow)
         + ", izb_dump_frame = " + std::to_string(o.izbDumpFrame) + " }\n");
 
-    assertKeys("scene.lua",
-        {"entities", "styles", "environment", "light", "spin", "cube", "exposure", "ao"},
-        knownRootKeys("rgl/scene_config_impl.cppm"));
+    std::set<std::string> sceneKeys
+        = {"entities", "styles", "environment", "light", "spin", "cube", "exposure", "ao"};
+    if (o.taa)
+        sceneKeys.insert("taa");  // 只在真要开的时候写这段（缺段 = 全默认即「关」）
+    assertKeys("scene.lua", sceneKeys, knownRootKeys("rgl/scene_config_impl.cppm"));
     const auto j3 = [](std::array<double, 3> a) {
         return std::to_string(a[0]) + ", " + std::to_string(a[1]) + ", " + std::to_string(a[2]);
     };
+    // entities：默认一份 glb；entitiesLua 非空 = 整条由调用侧给（内建合成靶 aa_target
+    // 没有 glb 文件）。拼错 type 不会静默——parseEntityItem 直接启动报错列合法值。
+    const std::string entities = o.entitiesLua.empty()
+        ? "    entities = { { type = \"model\", file = \"models/" + o.glb + "\" } },\n"
+        : "    entities = { " + o.entitiesLua + " },\n";
+    // TAA 段（批 12.6）：enabled + feedback + jitter_scale，其余走引擎默认（运动补偿开）
+    // ——写出来的键越少，漂移面越小。两个消融开关各有用途：jitter_scale=0 = 只留时域
+    // 累积；feedback=1 = 只抖不滤（输出 = 本帧，temporal 的阳性锚点组。别写 0——0 是
+    // 「只要裁剪后的历史、完全丢本帧」的退化反馈环，测出来的不是闪烁本体）。
+    const std::string taa = o.taa
+        ? "    taa = { enabled = true, feedback = " + std::to_string(o.taaFeedback)
+              + ", jitter_scale = " + std::to_string(o.taaJitterScale) + " },\n"
+        : "";
     writeFile(outDir + "/scene.lua",
-        "return {\n    entities = { { type = \"model\", file = \"models/" + o.glb + "\" } },\n"
+        "return {\n" + entities
         // styles 必须显式写（switch 首战抓到的静默坑）：缺表回落默认 pbr→model_pbr，
         // 而 model_pbr.frag **不 import shadow/env**——shadow_pass 与 env 开关全部
         // 退化为逐位相同的假象（投影侧照画、采样侧不存在）。model_pbr_ibl 在
         // env=0/shadow=off 下直接光与 model_pbr 逐式相同（IBL 项 ×intensity=0 归零），
         // 闭式解前提不破。表同主配置 configs/scene.lua。
-          "    styles = { unlit = \"model\", pbr = \"model_pbr_ibl\" },\n"
+          + "    styles = { unlit = \"model\", pbr = \"model_pbr_ibl\" },\n"
         "    environment = { hdr = \"env/san_giuseppe_bridge_4k.hdr\", hdr_size = 2048,\n"
         "      intensity = "
             + std::to_string(o.envIntensity) + ", skybox = " + lb(o.skybox) + " },\n"
@@ -223,7 +238,8 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
             + j3(o.lightDir) + " }, color = { 1.0, 1.0, 1.0 },\n      intensity = "
             + std::to_string(o.lightIntensity) + ", ambient = { " + j3(o.ambient) + " } },\n"
             + "    spin = false, cube = false, exposure = " + std::to_string(o.exposure)
-            + ",\n    ao = { strength = " + std::to_string(o.aoStrength) + " },\n}\n");
+            + ",\n    ao = { strength = " + std::to_string(o.aoStrength) + " },\n"
+            + taa + "}\n");
     return outDir;
 }
 
@@ -259,6 +275,8 @@ Engine::Engine(std::string profileDir, int port) : impl_(new Impl{.profileDir = 
 
     const std::string bin = buildRglDir() + "/rgl";
     impl_->logPath = buildRglDir() + "/imgqa_run.log";
+    std::fflush(stdout);  // fork 前 flush，理由见 runEngineOnce 同处注释
+    std::fflush(stderr);
     const pid_t pid = ::fork();
     if (pid < 0)
         throw std::runtime_error("fork 失败");
@@ -358,6 +376,11 @@ void runEngineOnce(const std::string& configDir, int timeoutSec)
 
     const std::string bin = buildRglDir() + "/rgl";
     const std::string logPath = buildRglDir() + "/imgqa_run.log";
+    // **fork 前必须 flush**：子进程 freopen(stdout) 会关闭并冲刷继承来的 stdio 缓冲，
+    // 父进程尚未落盘的输出会被子进程再打一遍（实测：表头打 5 份 = 4 次 fork + 1 次
+    // 父进程退出）。管道下 stdout 是全缓冲，所以只在重定向到文件/终端时才复现。
+    std::fflush(stdout);
+    std::fflush(stderr);
     const pid_t pid = ::fork();
     if (pid < 0)
         throw std::runtime_error("fork 失败");

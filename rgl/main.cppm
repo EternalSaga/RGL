@@ -165,6 +165,8 @@ export struct UploadedAssets {
 	std::vector<UploadedModel> models;
 	std::map<std::string, size_t> modelOf;  // file → models 下标
 	std::optional<uint32_t> cubeAsset;      // 内建 cube 资产（entities 含 cube 时）
+	// 批 12.6 T4 细线靶**不在此另立字段**：它是内存合成的 GltfModel，走的就是 models
+	// 那条去重表（键 = aaTarget::kModelKey），字段化 = 第二份真相。
 };
 
 /**

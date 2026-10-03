@@ -118,6 +118,10 @@ struct ProfileOpts {
     bool evssmShadow = false;              // diagnostics.shadow_evssm（批 11.6d swim 判据）
     int izbDumpFrame = 0;                  // diagnostics.izb_dump_frame（>0：N 帧起每 30 帧覆盖写 izb_mask.ppm）
     std::string variant;                   // "" = 模板默认（forward）；"deferred" 等 = 拷贝后重写 variant 行
+    bool taa = false;                      // scene.lua `taa.enabled`（**图形态**开关，批 12.6）
+    double taaFeedback = 0.12;             // scene.lua `taa.feedback`（= 本帧权重；**1** = 只抖不滤 = 消融组；0 = 「只要历史」的退化环，勿用）
+    double taaJitterScale = 1.0;           // scene.lua `taa.jitter_scale`（0 = 只留时域累积，去抖动）
+    std::string entitiesLua;               // 非空 = 整条 entities 行由它给（内建合成靶无 glb 文件）
     std::array<double, 3> lightDir{0.5, -0.75, -0.45};
     double lightIntensity = 12.0;
     bool picking = true;                   // object_id 附件 = 区域归因的根基
@@ -279,6 +283,50 @@ struct JudgmentInfo {
 /// **前置判据**：非确定性在场时「域外恰为 0」永远不成立，会把引擎噪声归因到被测开关上。
 [[nodiscard]] Verdict judgeDeterminism(const Frame& a, const Frame& b);
 
+// ── 时域差分（批 12.6 T4：TAA 阳性锚点的度量本体）────────────────────────────
+//
+// 与上面所有判据的**根本差别**：这里比较的不是"两次采集"，而是**同一会话内的相邻帧**。
+// 其余判据默认"画面是静态真值"，本判据默认"画面在动，动的幅度才是被测量"。
+//
+// 为什么相邻帧差是 TAA 的正确观测量：细杆这类亚像素宽度的高对比边缘，光栅化按像素中心
+// 判覆盖 ⇒ 机位亚像素移动时覆盖状态**硬翻转**（不是渐变）= 闪烁。TAA 的作用正是把不同
+// 采样相位的估计在时域上平均掉。所以"关 TAA 逐帧差大、开 TAA 逐帧差小一个量级"就是
+// "时域累积确实在生效"的像素级证据（docs/taa_plan.md §6 硬判据）。
+//
+// ⚠ 两个会让这条判据变成假绿的设计错误（都写进实现注释，勿删）：
+//  ① **静止机位下 TAA 关 = 逐位相同 = 零信号**。必须有亚像素运动在场，且运动由
+//     **本工具制造**（RPC 微动），不是引擎自带（SceneSpin 速度不可配、~1°/帧 = 远超
+//     亚像素档，重投影都救不回来）。
+//  ② **匀速运动的单调分量时域 IIR 滤不掉**（稳态下输出斜率 = 输入斜率）。能压下去的
+//     只有"同一视点下不同采样相位的估计差"——前提是**重投影把运动本身对齐掉了**。
+//     故机位运动必须是重投影能精确处理的**刚体相机运动**（本项目 = 纯 yaw 转角，
+//     像素位移与深度无关；平移 dolly 会让远处栅栏的单帧位移只剩 0.08px，信号随深度衰减）。
+
+/// 相邻帧差分统计（mask 内、**线性域** luma；文件头硬约束第 2 条）。
+struct TemporalStat {
+    double meanAbsDiff = 0.0;      ///< 逐帧对 |Δluma| 均值的平均（主测量）
+    double maxAbsDiff = 0.0;       ///< 单像素单帧对最大值（看有没有离群爆点）
+    double changedFraction = 0.0;  ///< mask 内"任一字节不同"的像素占比（跨帧对取最大）
+    double edgeSoftness = 0.0;     ///< mask 内 0.05<luma<0.95 的占比（跨帧均值）
+    int64_t maskPixels = 0;
+    int pairs = 0;
+};
+/// shots 必须**同机位序列的相邻帧**（本工具 = 等步长 yaw），且都已 prepareLinear。
+/// mask 为空 = 全图。少于 2 帧 ⟹ pairs=0（统计量无定义，调用侧按失败处理）。
+///
+/// `edgeSoftness`（中间调占比）与其余三条量的是**不同轴**：逐帧差量"时域稳不稳"，
+/// 它量"空间上有没有真的把边缘摊开"。加它的理由 = 一次真实歧义：A/F≈1.0 有两种解释
+/// （① TAA 完全没干活；② TAA 在抗锯齿，但相邻帧差被"相机真的动了"的运动项主导），
+/// 逐帧差本身分不了这两种，中间调占比能分（②会让它显著上升）。
+///
+/// ⚠ 带**必须按实测白电平取**，不许写死 [0.05,0.95]：靶的白件经 ACES 后落在 ~0.8 而非
+/// 1.0（observedLuma 是 sRGB 解回来的线性值），写死的带会把整块白板算成"中间调"——
+/// 实测首版就是这样 83% 恒饱和、什么也分不出来。现取 [0.15·max, 0.85·max]。
+/// @param softMask 中间调统计用的区域（调用侧给**未外扩**的靶内部；外扩圈会把背景
+///                 clear 色 ~0.11 算进来）。空 = 复用 mask。
+[[nodiscard]] TemporalStat temporalDiffStat(const std::vector<Frame>& shots,
+    const cv::Mat& mask, const cv::Mat& softMask = {});
+
 /// 按注册表信息造 Verdict（容差理由/钉住条目从注册表单点取，判据实现里不手抄）。
 [[nodiscard]] Verdict verdictFor(const char* name, bool ok, std::string observed);
 
@@ -307,6 +355,15 @@ int cmdSwitch(const std::string& glb, const std::string& camera, const std::stri
 /// 对指定像素出「该是多少 vs 实际是多少」。l = 指向光源方向（不是 direction）。
 int cmdProbe(const std::string& configDir, int x, int y, Vec3 albedo, double roughness,
     double metallic, Vec3 l, double intensity, int tol, bool lightOverride = false);
+
+/// 时域阳性锚点（批 12.6 T4，docs/taa_plan.md §6）：细线靶（`aa_target`）+ RPC 亚像素
+/// 微动，量「相邻帧逐像素差」在 TAA 关/开两态下的比值。两条都要成立（缺"关态非零" =
+/// 判据无信号，缺"开态降一个量级" = 时域累积没干活）。
+/// @param stepPx 每帧 yaw 造成的像素位移（默认 0.35；须远小于跳切阈值 45°）
+/// @param pairs 相邻帧对数（shots = pairs + 1）
+/// @param warm 每次采集前的预热帧数（TAA 历史收敛，feedback=0.12 ⇒ ≈19 帧）
+/// @param variant 渲染路线（默认 forward）
+int cmdTemporal(double stepPx, int pairs, int warm, const std::string& variant);
 
 }  // namespace RGL::imgqa
 

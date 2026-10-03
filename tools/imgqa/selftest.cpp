@@ -163,6 +163,106 @@ void testRegistry(Checker& c)
     }
 }
 
+void testTemporalDiff(Checker& c)
+{
+    // 判据工具自检（纪律：判据工具自己要有判据）。这里**不调引擎**，用合成帧把
+    // temporalDiffStat 的四条性质逐个钉死，每条都配反向用例。
+    const auto mk = [](int n, double v) {
+        Frame f;
+        f.bgr = cv::Mat(n, n, CV_8UC3, cv::Scalar(7, 7, 7));
+        f.luma = cv::Mat(n, n, CV_64FC1, cv::Scalar(v));
+        return f;
+    };
+    const cv::Mat all = cv::Mat(8, 8, CV_8UC1, cv::Scalar(255));
+
+    // ① 阴性对照：完全相同的帧必须给**恰为 0**（不是"接近 0"）。浮点 absdiff 同值
+    //    相减恒 0，任何非零 = 统计面混进了未初始化数据。
+    {
+        std::vector<Frame> s{mk(8, 0.3), mk(8, 0.3), mk(8, 0.3)};
+        const TemporalStat t = temporalDiffStat(s, all);
+        c.chk("时域：同帧序列差恰为 0", t.meanAbsDiff == 0.0 && t.changedFraction == 0.0,
+            std::to_string(t.meanAbsDiff));
+        c.chk("时域：帧对数 = 帧数-1", t.pairs == 2, std::to_string(t.pairs));
+    }
+    // ② 区域纪律（本工具的地基）：mask 外再大的变化也不算。
+    {
+        // 两帧只在**右 5 列**不同（左 3 列逐位相同）；mask 只留左 3 列。
+        const auto mkSplit = [](double rightLuma, uchar rightByte) {
+            Frame f;
+            f.bgr = cv::Mat(8, 8, CV_8UC3, cv::Scalar(7, 7, 7));
+            f.bgr(cv::Rect(3, 0, 5, 8)).setTo(cv::Scalar(rightByte, rightByte, rightByte));
+            f.luma = cv::Mat(8, 8, CV_64FC1, cv::Scalar(0.0));
+            f.luma(cv::Rect(3, 0, 5, 8)) = cv::Scalar(rightLuma);
+            return f;
+        };
+        std::vector<Frame> s{mkSplit(0.0, 7), mkSplit(0.9, 200)};
+        cv::Mat mask = cv::Mat::zeros(8, 8, CV_8UC1);
+        mask(cv::Rect(0, 0, 3, 8)).setTo(255);
+        const TemporalStat in = temporalDiffStat(s, mask);
+        const TemporalStat out = temporalDiffStat(s, all);
+        c.chk("时域：mask 外的变化不计入（区域来自几何）",
+            in.meanAbsDiff == 0.0 && in.changedFraction == 0.0, std::to_string(in.meanAbsDiff));
+        // 闭式：mask 全图时只有 5/8 的像素差 0.9 ⟹ 均值 0.5625
+        c.chk("阳性锚点：同一数据全图求值 = 闭式 0.5625（否则②是恒真）",
+            std::abs(out.meanAbsDiff - 0.5625) < 1e-12, std::to_string(out.meanAbsDiff));
+        c.chk("阳性锚点：全图变化像素占比 = 闭式 0.625（5/8 列变了）",
+            out.changedFraction == 0.625, std::to_string(out.changedFraction));
+    }
+    // ③ 闭式期望：mask 全图、luma 0 → 0.25 → 0.25 ⟹ 两帧对差 0.25 与 0 ⟹ 均值 0.125。
+    {
+        std::vector<Frame> s{mk(8, 0.0), mk(8, 0.25), mk(8, 0.25)};
+        const TemporalStat t = temporalDiffStat(s, all);
+        c.chk("时域：均值 = 闭式 0.125", std::abs(t.meanAbsDiff - 0.125) < 1e-12,
+            std::to_string(t.meanAbsDiff));
+        c.chk("时域：最大值 = 闭式 0.25", std::abs(t.maxAbsDiff - 0.25) < 1e-12,
+            std::to_string(t.maxAbsDiff));
+    }
+    // ④ 无定义输入不出数（少于 2 帧 / 空 mask）——出数就会被当成"测到了 0"。
+    {
+        std::vector<Frame> one{mk(8, 0.1)};
+        c.chk("时域：单帧无定义", temporalDiffStat(one, all).pairs == 0);
+        c.chk("时域：空 mask 无定义",
+            temporalDiffStat(std::vector<Frame>{mk(8, 0.1), mk(8, 0.2)},
+                cv::Mat::zeros(8, 8, CV_8UC1))
+                    .meanAbsDiff
+                == 0.0);
+        c.chk("时域：空 mask 参数 = 全图（不是 0）",
+            temporalDiffStat(std::vector<Frame>{mk(8, 0.0), mk(8, 0.5)}, cv::Mat())
+                    .meanAbsDiff
+                > 0.0);
+    }
+    // ⑤ 中间调占比（空间抗锯齿在场性）：带按**实测白电平**取，故必须有一组"整体缩放
+    //    后结论不变"的用例——首版把带写死成 [0.05,0.95]，而靶的白件经 ACES 只到 ~0.8
+    //    ⟹ 整块白板被算成中间调、83% 恒饱和，什么也分不出来（真实踩过的假判据）。
+    {
+        const auto split = [](double top, double bottom) {
+            Frame f;
+            f.bgr = cv::Mat(8, 8, CV_8UC3, cv::Scalar(7, 7, 7));
+            f.luma = cv::Mat(8, 8, CV_64FC1, cv::Scalar(bottom));
+            f.luma(cv::Rect(0, 0, 8, 4)) = cv::Scalar(top);
+            return f;
+        };
+        const Frame bw = split(1.0, 0.0);
+        c.chk("中间调：纯黑白 = 恰为 0",
+            temporalDiffStat(std::vector<Frame>{bw}, all).edgeSoftness == 0.0,
+            std::to_string(temporalDiffStat(std::vector<Frame>{bw}, all).edgeSoftness));
+        const Frame mid = split(1.0, 0.5);
+        c.chk("中间调：一半在带内 = 闭式 0.5",
+            std::abs(temporalDiffStat(std::vector<Frame>{mid}, all).edgeSoftness - 0.5)
+                < 1e-12,
+            std::to_string(temporalDiffStat(std::vector<Frame>{mid}, all).edgeSoftness));
+        const Frame scaled = split(0.8, 0.4);  // 整体 ×0.8（= 引擎里 ACES 压过的白）
+        c.chk("中间调：带随实测白电平缩放（×0.8 后仍 0.5，钉死'不许写死带'）",
+            std::abs(temporalDiffStat(std::vector<Frame>{scaled}, all).edgeSoftness - 0.5)
+                < 1e-12,
+            std::to_string(temporalDiffStat(std::vector<Frame>{scaled}, all).edgeSoftness));
+        c.chk("中间调：softMask 空的区域不计入（背景 clear 不进统计）",
+            temporalDiffStat(std::vector<Frame>{mid}, all, cv::Mat::zeros(8, 8, CV_8UC1))
+                    .edgeSoftness
+                == 0.0);
+    }
+}
+
 void testKeyValidation(Checker& c)
 {
     // 键名校验器自己也要有用例：真实解析器源码里必须能抽到 picking / shadow_pass / rpc
@@ -200,6 +300,7 @@ int cmdSelftest()
     testClusters(c);
     testAnalytic(c);
     testRegistry(c);
+    testTemporalDiff(c);
     testKeyValidation(c);
     std::printf("%s：%d 条失败\n", c.bad ? "自检失败" : "自检通过", c.bad);
     return c.bad ? 1 : 0;

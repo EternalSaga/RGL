@@ -625,6 +625,7 @@ void printUsage()
         "  izb [--glb izb_rig.glb] [--camera ladder]  IZB 消费域：mask↔画面寻址一致性（三子判据）\n"
         "  swim [--glb izb_rig.glb] [--camera ladder] [--dx 0.06] [--izb]  影场世界不变量：机位平移后重投影比影场（0 位移）\n"
         "  probe [--x 640] [--y 360] [--light Lx,Ly,Lz] [--tol 2]  闭式解探针：该是多少 vs 实际是多少\n"
+        "  temporal [--step-px 0.35] [--pairs 8] [--warm 24] [--variant forward]  TAA 时域阳性锚点：细线靶亚像素微动逐帧差（批 12.6 T4）\n"
         "  note \"事后真相\"                             回填最后一条调用记录（晋升凭据）\n");
 }
 
@@ -686,6 +687,10 @@ int main(int argc, char** argv)
                 std::stoi(P.get(args, "--tol", "2")),
                 P.has(args, "--light") || P.has(args, "--intensity"));
         }
+        if (cmd == "temporal")
+            return cmdTemporal(std::stod(P.get(args, "--step-px", "0.35")),
+                std::stoi(P.get(args, "--pairs", "8")),
+                std::stoi(P.get(args, "--warm", "24")), P.get(args, "--variant", ""));
         if (cmd == "note") {
             std::string text;
             for (size_t i = 1; i < args.size(); ++i)

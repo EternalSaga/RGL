@@ -180,6 +180,7 @@ set(RGL_BASE_MODULE_SOURCES
     # ── 纯值 / 数学 / 配置解析 / 资产解析 —— **整层无设备依赖** ──
     "${CMAKE_CURRENT_SOURCE_DIR}/camera.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/cube.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/aa_target.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/vkerror.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/gbuffer_contract.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/pass_vocabulary.cppm"
