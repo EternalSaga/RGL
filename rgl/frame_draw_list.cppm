@@ -119,6 +119,13 @@ export struct SceneFrameData {
 	//   不读本区 = 门关红线。值 = vk_resources kEvssmExponent（唯一权威源，
 	//   生产/消费/fallback 三方同源——禁在此写死字面量）。
 	glm::vec4 shadowEvssmConst{kEvssmExponent, 0.0f, 0.0f, 0.0f};
+	// ── 批 12.6 TAA（时域抗锯齿）三件套，scene data 尾区 @722080 / @722144 / @722208 ──
+	// 语义与「抖动后逆矩阵重建 / 未抖矩阵投回上一帧」的口径差别见 scene_data.cppm
+	// kSceneDataTaa* 区注释；生产者 = ecs taaSystem。
+	// 默认值 = **完全旁路**（params.y historyValid = 0 → taa.frag 直接输出本帧）。
+	glm::mat4 taaPrevViewProj{1.0f};
+	glm::mat4 taaMotion{1.0f};  ///< prevSpin · inverse(curSpin)（spin 关 = 单位阵）
+	glm::vec4 taaParams{0.0f};  ///< (feedback, historyValid, jitterX px, jitterY px)
 };
 
 /**

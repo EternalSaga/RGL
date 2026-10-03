@@ -240,6 +240,25 @@ constexpr uint32_t kNoMaterial = 0xFFFFFFFFu;
 /** 实现流水（语义/契约见接口声明）：cull 分桶（opaque/transparent，Pending 暂存）
  * → 可见统计 → 段装配（opaque → skybox 单 draw → transparent 稳定排序）
  * → scene data 填充 → 写 ctx。 */
+/**
+ * 批 12.6 TAA 的 scene data 载荷（尾区 @722080 / @722144 / @722208，生产端在此、
+ * 消费端 = taa.frag.slang；字节布局与「两侧口径」见 scene_data.cppm kSceneDataTaa* 注释）。
+ *
+ * 一句话版：`prevViewProj` = 上一帧**未抖** proj·view；`motion` = prevSpin·inverse(curSpin)
+ * （全场景同一旋转 ⇒ 一个 mat4 精确补偿物体运动，spin 关 = 单位阵）；
+ * `params` = (feedback, historyValid, jitterX px, jitterY px)，historyValid=0 时
+ * taa.frag 直接输出本帧 = **逐位旁路**。
+ * 注意 `skyInvViewProj`（上一行填）用的是**抖动后** proj——重建世界坐标的半边是它，
+ * 投回上一帧的半边是这里的 prevViewProj，两者口径不同是刻意的。
+ */
+void fillTaaData(FrameDrawList& out, const ViewProjection& viewProj, const SceneEnv& env,
+	const TaaState& taa) {
+	out.sceneData.taaPrevViewProj = taa.payloadPrevViewProj;
+	out.sceneData.taaMotion = taa.payloadMotion;
+	out.sceneData.taaParams = {env.taaFeedback, taa.historyValid ? 1.0f : 0.0f,
+		viewProj.jitterPx.x, viewProj.jitterPx.y};
+}
+
 void renderListSystem(entt::registry& rg, RGL::Resources&,
 	RGL::Environment& envService, const RGL::AssetTable& assets, RenderListState& state) {
 	auto& list = rg.ctx().get<FrameDrawList>();
@@ -247,6 +266,7 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	const auto& spin = rg.ctx().get<SceneSpin>();
 	const auto& camera = rg.ctx().get<Camera>();
 	const auto& env = rg.ctx().get<SceneEnv>();  // Phase 5.5（天空盒 draw 生成 + env 参数）
+	const auto& taa = rg.ctx().get<TaaState>();  // 批 12.6（帧间载荷；taaSystem 本帧已算好）
 
 	std::vector<Pending> opaque;
 	std::vector<Pending> transparent;
@@ -420,6 +440,8 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	// Phase 8 批次 ④a：漫反射辐照度 SH9（env 加载期算好存 Resources，此处每帧拷入）
 	fresh.sceneData.irradianceSH = envService.getIrradianceSH();
 	fresh.sceneData.skyInvViewProj = glm::inverse(viewProj.proj * viewProj.view);
+	// 批 12.6 TAA 载荷（三矩阵/参数，细节见 fillTaaData）
+	fillTaaData(fresh, viewProj, env, taa);
 	fillShadowData(fresh, shadowNear, shadowFar, shadowVolumes, diagnostics().shadowPass);
 	fresh.sceneData.objectMatrices = std::span<const glm::mat4>{state.matrices};
 	fresh.sceneData.objectMvps = std::span<const glm::mat4>{state.mvps};

@@ -95,6 +95,36 @@ std::expected<uint32_t, Error> ensureAoSlot(
 }
 
 /**
+ * 批 12.6（接口注释见 render_graph.cppm）：两幅同格式全屏 RT（taa_out / taa_hist），
+ * 名字/格式 = kTaaOutName/kTaaHistName/kTaaFormat 契约常量。usage 无需扩展：RT 缓存
+ * 色图自带 COLOR_ATTACHMENT|TRANSFER_SRC|TRANSFER_DST|SAMPLED（帧末 taa_commit blit
+ * 与 taa pass 采样都在其内）。启动期仅 TAA 开启时调用一次；每帧 drawFrame 的
+ * ensureOffscreenAttachments 命中同名缓存复用。
+ */
+std::expected<std::array<uint32_t, 2>, Error> ensureTaaSlots(
+		RenderTargetCache& rts, Swapchain& swapchain) {
+	const vk::Extent2D extent = swapchain.getExtent();
+	const vk::Format format = resolveRgFormat(std::string{kTaaFormat}, vk::Format::eUndefined);
+	std::array<uint32_t, 2> slots{};
+	const std::array<std::string, 2> names{
+		std::string{kTaaOutName}, std::string{kTaaHistName}};
+	for (uint32_t i = 0; i < 2u; ++i) {
+		auto rt = rts.ensure(names[i], extent, format);
+		if (!rt)
+			return std::unexpected(std::move(rt).error());
+		auto slot = rts.heapSlot(names[i]);
+		if (!slot)
+			return std::unexpected(Error{ErrorCode::Unknown,
+				fmt::format("taa RT '{}' has no sample descriptor slot", names[i])});
+		slots[i] = *slot;
+	}
+	if (auto* logger = RLLogger::getInstance())
+		logger->info("taa (RGBA16F): {}x{} out slot {} / hist slot {}",
+			extent.width, extent.height, slots[0], slots[1]);
+	return slots;
+}
+
+/**
  * Phase 11 批 11.2（接口注释见 render_graph.cppm ensureShadowMapSlot）：阴影图 RT + 采样堆槽。
  * 尺寸 = 2·mapSize（候逇 4 级 2×2 图集；当前 kActiveShadowCascades=1 时也只用左上那一块，
  * 但分辨率一开始就固定在 2·mapSize，切到 4 级时不需重建描述绑定）。

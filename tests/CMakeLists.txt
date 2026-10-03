@@ -54,6 +54,7 @@ set(RGL_TEST_SOURCES
     test_cube_geometry.cppm     # 内建 cube 顶点/索引契约
     test_state_kit.cppm         # 十段 RenderState 表 + stateFor 分派（纯逻辑）
     test_render_graph.cppm       # 图编译：校验 / barrier 推导 / 装饰 / RT slot
+    test_taa_jitter.cppm         # TAA 纯函数层：Halton / jitter→投影闭式解 / 跳切与历史判据（批 12.6）
     test_gate_lint.cppm          # 门组合自检：38 门申报表 + variant 交叉校验（gate_lint 批）
     test_frisvad_tangent.cppm    # Frisvad 切线兜底：轴向/±Z 奇点/随机有限性（黑面 bug 回归）
     test_render_list_shadow.cppm # fillShadowData 尾区契约：splits 哨兵/VP 拷贝/texel/params 两态（12.3d）

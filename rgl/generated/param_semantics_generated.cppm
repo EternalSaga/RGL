@@ -37,6 +37,8 @@ export struct Drag3Meta {
 
 export inline constexpr SliderMeta kEnvExposure{"曝光 exposure", 0.0f, 4.0f, 0.01f};
 export inline constexpr SliderMeta kAoStrength{"AO 强度 ao.strength", 0.0f, 1.0f, 0.01f};
+export inline constexpr SliderMeta kTaaFeedback{"TAA 记忆 taa.feedback", 0.0f, 1.0f, 0.01f};
+export inline constexpr SliderMeta kTaaJitterScale{"TAA 抖动幅度 taa.jitter_scale", 0.0f, 2.0f, 0.01f};
 export inline constexpr SliderMeta kEnvIntensity{"env 强度", 0.0f, 10.0f, 0.01f};
 export inline constexpr SliderMeta kEnvMipRange{"env mip 范围", 0.0f, 16.0f, 0.1f};
 export inline constexpr SliderMeta kLightIntensity{"强度 L", 0.0f, 20.0f, 0.05f};

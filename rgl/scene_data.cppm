@@ -231,6 +231,28 @@ static_assert(kSceneDataShadowSplitsOffset == 721952 && kSceneDataShadowParamsOf
 static_assert(kSceneDataShadowMatrixOffset == 721696,
 	"scene.slang readShadowViewProj literal 721696 out of sync with kSceneDataShadowMatrixOffset");
 
+/** 批 12.6 TAA 区（EVSSM 常量 vec4 之后 144B，三段子区）：
+ *  - `kSceneDataTaaOffset`（mat4, 64B）= 上一帧**未抖**的 proj·view。重投影公式：
+ *      world = (sceneData@64 skyInvViewProj) · clip(uv, depth)   ← **抖动后**的逆矩阵
+ *      prevClip = prevViewProj · (motionPrevFromCur · world)     ← 未抖矩阵（历史图是像素中心对齐的）
+ *    两侧矩阵口径不同是**刻意的**：深度缓冲由抖动后矩阵产出，重建必须配套；
+ *    历史图存的是「本像素中心的累积估计」，投影回去必须用未抖矩阵（Filament 同法）。
+ *  - `kSceneDataTaaMotionOffset`（mat4, 64B）= `prevSpin · inverse(curSpin)`。本项目的
+ *    运动源是 SceneSpin「全场景同一旋转矩阵」，所以一个 mat4 就**精确**补偿物体运动
+ *    （Filament 纯深度重投影假设世界静止，动场景必拖影；RGL 这里没有这个 gap）。
+ *    spin 关 = 单位阵。
+ *  - `kSceneDataTaaParamsOffset`（vec4, 16B）= (x = feedback 历史权重, y = historyValid 1/0,
+ *    z = jitterX 像素, w = jitterY 像素)。y=0 时 shader 直接输出本帧 = **逐位旁路**
+ *    （首帧 / resize / 相机跳切走这条，同 ao.strength=0 的旁路纪律）。
+ * 消费端 = taa.frag.slang 字面量（两侧 static_assert 钉死同步）。 */
+export inline constexpr uint32_t kSceneDataTaaOffset = kSceneDataEvssmConstOffset + 16u;
+export inline constexpr uint32_t kSceneDataTaaMotionOffset = kSceneDataTaaOffset + 64u;
+export inline constexpr uint32_t kSceneDataTaaParamsOffset = kSceneDataTaaOffset + 128u;
+export inline constexpr uint32_t kSceneDataTaaBytes = 144u;
+static_assert(kSceneDataTaaOffset == 722080 && kSceneDataTaaMotionOffset == 722144
+	&& kSceneDataTaaParamsOffset == 722208,
+	"scene.slang taa literals drifted from scene_data.cppm offsets");
+
 /** scene data buffer 总字节数 = 头 128 + 对象矩阵表 + 灯数组区 + MVP 表 + 材质表 +
  * 辐照度 SH9 区 + 阴影 VP 区（= 721952B，编译期派生）；SceneDataService::ensure 的分配尺寸与
  * drawFrame 每帧 staging 拷贝区尺寸均为本值（vkrenderer.cppm ⑥.5）。 */
@@ -244,7 +266,8 @@ export inline constexpr vk::DeviceSize kSceneDataBytes =
 	+ kSceneDataShadowAuxBytes
 	+ kSceneDataIzbBytes
 	+ kSceneDataPcssBytes
-	+ kSceneDataEvssmBytes;
+	+ kSceneDataEvssmBytes
+	+ kSceneDataTaaBytes;
 
 /**
  * SceneData buffer 服务（2026-09-19 架构债务续账步骤 1：原 Resources::ensureSceneData/

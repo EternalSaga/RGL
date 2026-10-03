@@ -82,6 +82,14 @@ export struct SceneConfig {
 	// Phase 11 批 11.4：SSAO 施加强度（scene.lua ao 段 ao.strength，进 scene data @60；
 	// 0 = 逐位旁路。半径/采样数等形状参数在 ao.frag.slang 内为常量，不走配置）
 	float aoStrength = 0.0f;
+	// ── 批 12.6 TAA（时域抗锯齿，scene.lua `taa` 段）──
+	// enabled 是**图形态**开关（decorateTaaPass 是否调用，启动期读一次）：默认关 =
+	// 图里没有 taa/taa_commit pass ⇒ 与基线逐位不变（比「pass 常驻 + shader 旁路」更强，
+	// 因为连 jitter 注入与一次全屏 blit 都不发生）。其余三项是每帧运行参数。
+	bool taaEnabled = false;
+	float taaFeedback = 0.12f;          ///< 本帧权重（Filament 默认同值 ⇒ ≈19 帧收敛）
+	float taaJitterScale = 1.0f;        ///< 抖动幅度倍率（1 = ±0.5 像素）
+	bool taaMotionCompensation = true;  ///< prevSpin 刚体补偿（关 = 纯相机重投影）
 };
 
 /**

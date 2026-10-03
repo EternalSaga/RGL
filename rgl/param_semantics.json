@@ -11,6 +11,8 @@
     "sliders": [
         { "key": "EnvExposure",    "label": "曝光 exposure",            "min": 0.0, "max": 4.0,  "speed": 0.01 },
         { "key": "AoStrength",     "label": "AO 强度 ao.strength",      "min": 0.0, "max": 1.0,  "speed": 0.01 },
+        { "key": "TaaFeedback",    "label": "TAA 记忆 taa.feedback",     "min": 0.0, "max": 1.0,  "speed": 0.01 },
+        { "key": "TaaJitterScale", "label": "TAA 抖动幅度 taa.jitter_scale", "min": 0.0, "max": 2.0,  "speed": 0.01 },
         { "key": "EnvIntensity",   "label": "env 强度",                 "min": 0.0, "max": 10.0, "speed": 0.01 },
         { "key": "EnvMipRange",    "label": "env mip 范围",             "min": 0.0, "max": 16.0, "speed": 0.1 },
         { "key": "LightIntensity", "label": "强度 L",                   "min": 0.0, "max": 20.0, "speed": 0.05 },

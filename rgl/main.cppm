@@ -72,6 +72,9 @@ export struct CompiledGraphResult {
 	CompiledRenderGraph graph;
 	bool deferredMode = false;
 	RgGraphVariant variant = RgGraphVariant::forward;
+	/// 批 12.6：TAA 装饰是否落图（门开且图形态支持）。装配层据此决定 TAA RT/条目
+	/// 是否领建——装饰失败（offscreen 变体）时条目建了也无人执行，不如整套不建。
+	bool taaDecorated = false;
 };
 
 /**
@@ -143,8 +146,10 @@ export void validateEnvironmentContract(const SceneConfig& scene);
  * 加载 configs/render_graph.lua + compileRenderGraph（校验 + barrier 布局链推导，任何图
  * 错误启动期抛 std::runtime_error）+ variant 求值 deferredMode（Phase 7 路线选路：
  * forward(默认)/deferred/offscreen——后两者为内建 exclusive 图变体）。
+ * @param taaEnabled 批 12.6：configs/scene.lua taa.enabled（true = decorateTaaPass，
+ *        结果随 CompiledGraphResult::taaDecorated 带回；offscreen 变体装饰失败 = false）
  */
-export CompiledGraphResult compileGraphOrThrow(const char* path);
+export CompiledGraphResult compileGraphOrThrow(const char* path, bool taaEnabled);
 
 /** 按 file 去重的已上传模型（instancing：同文件一次解析一次上传，entities 共享资产）。 */
 export struct UploadedModel {
@@ -232,7 +237,8 @@ export RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain
 									 SceneDataService& sceneData, SamplerLibrary& samplers, Environment& env,
 									 RenderTargetCache& rtCache, AssetTable& assets,
 									 ShaderRegistry& pipelines, CompiledRenderGraph&& graph,
-									 entt::registry& registry, const SceneConfig& scene, bool deferredMode);
+									 entt::registry& registry, const SceneConfig& scene, bool deferredMode,
+									 bool taaDecorated = false);
 
 /**
  * 配置热重载装配（Phase 10 批 10.3；docs/archive/phase10_plan.md §5）。门 =

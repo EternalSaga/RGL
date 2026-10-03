@@ -319,6 +319,44 @@ namespace RGL {
 		return index;
 	}
 
+	/** addTaaEntry 实现（契约见接口注释；批 12.6，仿 addTonemapEntry 三步曲）。 */
+	uint32_t ShaderRegistry::addTaaEntry(uint32_t colorSlot, uint32_t historySlot,
+			uint32_t depthSlot, uint32_t samplerSlot, uint32_t pointSlot) {
+		if (auto idx = pipelineIndex("taa"))
+			return *idx;
+		const RGL::PipelineSpec* spec = findSpec("taa");
+		if (!spec)
+			throw std::runtime_error("pipeline spec not found: taa");
+		const uint32_t descriptorSize = res.getDescriptorHeap().getDescriptorSize();
+		RGL::PipelineBindings b{};
+		b.descriptorSize = descriptorSize;
+		b.slotVertex = 0;   // binding 0/1 占位（taa mesh = light.mesh.spv 全屏大三角）
+		b.slotIndex = 1;
+		b.slotSceneData = sceneData.ensure();  // binding 3：@722080 起 TAA 尾区 + @64 重建
+		b.hasSceneData = true;
+		const uint32_t samplerHeapOffset =
+			samplerSlot * res.getSamplerHeap().getDescriptorSize();
+		const uint32_t pointHeapOffset =
+			pointSlot * res.getSamplerHeap().getDescriptorSize();
+		b.extra = {
+			{.binding = 4, .sampler = false, .heapSlot = colorSlot},
+			{.binding = 5, .sampler = false, .heapSlot = historySlot},
+			{.binding = 6, .sampler = false, .heapSlot = depthSlot},
+			{.binding = 7, .sampler = true, .samplerHeapOffset = samplerHeapOffset},
+			{.binding = 8, .sampler = true, .samplerHeapOffset = pointHeapOffset},
+		};
+		auto entry = PipelineEntry{.name = "taa",
+			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b),
+			.spec = *spec, .bindings = b};
+		const uint32_t index = static_cast<uint32_t>(entries.size());
+		indexByName[entry.name] = index;
+		entries.push_back(std::move(entry));
+		if (auto* logger = RLLogger::getInstance())
+			logger->debug("pipeline entry: taa (color slot {}, history slot {}) → 下标 {}",
+				colorSlot, historySlot, index);
+		return index;
+	}
+
 	/** addShadowEntry 实现（契约见接口注释）。去重键 = vertexSlot。 */
 	uint32_t ShaderRegistry::addShadowEntry(uint32_t vertexSlot) {
 		if (const auto it = shadowEntryBySlot.find(vertexSlot); it != shadowEntryBySlot.end())

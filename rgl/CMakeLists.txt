@@ -67,6 +67,9 @@ rgl_shader(tonemap.frag TONEMAP_FRAG_SPV scene)
 # Phase 11 批 11.4：SSAO frag（mesh 复用 light.mesh.spv 全屏大三角；import scene 读
 # @12 eyePos + @64 invViewProj 做深度↔世界坐标重建；binding 4 深度图 / 5 point sampler）
 rgl_shader(ao.frag AO_FRAG_SPV scene)
+# 批 12.6 TAA：时域滤波 frag（mesh 复用 light.mesh.spv；import scene 读 @64 invViewProj
+# + TAA 尾区 @722080；binding 4 本帧色 / 5 历史 / 6 深度 / 7 线性 sampler / 8 point sampler）
+rgl_shader(taa.frag TAA_FRAG_SPV scene)
 # Phase 7b（批次 5）：GPU culling compute（独立契约 cull.comp.slang 头注释，无 import 契约文件）
 rgl_shader(cull.comp CULL_SPV)
 # 批 11.3-1d：FTIZB IZB 创建 + priming（独立契约，头注释即布局真相；heap + shader object，
@@ -180,6 +183,7 @@ set(RGL_BASE_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/vkerror.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/gbuffer_contract.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/pass_vocabulary.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/taa_jitter.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/scene_context.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/camera_config.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/camera_config_impl.cppm"

@@ -288,6 +288,26 @@ export class ShaderRegistry {
 	[[nodiscard]] uint32_t addAoEntry(uint32_t depthSlot, uint32_t samplerSlot);
 
 	/**
+	 * 批 12.6 TAA pass 管线条目（单条目，仿 addTonemapEntry；门默认关不被调用 =
+	 * 条目表逐位不变）。spec = "taa"（mesh 复用 light.mesh.spv 全屏大三角 + 时域滤波
+	 * frag）。binding：0/1 占位 + 3 sceneData（@722080 prevViewProj / @722144 motion /
+	 * @722208 params / @64 invViewProj 深度重建）+ extra：4 → 本帧 scene_hdr RT 的
+	 * SAMPLED_IMAGE 堆槽、5 → taa_hist RT 的 SAMPLED_IMAGE 堆槽、6 → 深度图堆槽
+	 * （重投影的世界坐标来源）、7 → 共享 sampler（历史亚像素查找取 LINEAR；本帧色
+	 * 在像素中心采样与点采等价）、8 → **point sampler**（D32Sfloat 深度不可过滤，
+	 * 同 addAoEntry 的理由）。
+	 * 前提 = 两个 TAA RT 已 ensure + 领槽（ensureTaaSlots）+ 深度采样槽已领。幂等。
+	 * @param colorSlot 本帧场景色（scene_hdr）SAMPLED_IMAGE heap 槽（binding 4）
+	 * @param historySlot taa_hist RT 的 SAMPLED_IMAGE heap 槽（binding 5）
+	 * @param depthSlot 深度图 SAMPLED_IMAGE heap 槽（binding 6，同 ao 条目复用同槽）
+	 * @param samplerSlot 共享 sampler 的 sampler heap 槽（binding 7）
+	 * @param pointSlot point sampler 的 sampler heap 槽（binding 8，ensurePointSampler）
+	 * @return 条目下标；规格缺失抛 runtime_error
+	 */
+	[[nodiscard]] uint32_t addTaaEntry(uint32_t colorSlot, uint32_t historySlot,
+		uint32_t depthSlot, uint32_t samplerSlot, uint32_t pointSlot);
+
+	/**
 	 * Phase 11 批 11.2：阴影 depth-only 管线条目。spec = "shadow"（shadow.mesh.spv + 空壳
 	 * shadow.frag.spv）。
 	 *
@@ -389,7 +409,7 @@ export class ShaderRegistry {
 
 	/** 回落查表体（批 11.5 起为 findSpec 的内部底座：scene.lua styles 命中或默认回落词表
 	 *  cube / model / model_pbr / model_phong / model_pbr_ibl / skybox / deferred_geometry×3 /
-	 *  light×2 / tonemap / ao / shadow / izb_mask；不含 PCSS 变体替换）。 */
+	 *  light×2 / tonemap / ao / taa / shadow / izb_mask；不含 PCSS 变体替换）。 */
 	const RGL::PipelineSpec* findSpecBase(const char* name) const {
 		auto it = styles.find(name);
 		if (it != styles.end())
@@ -448,29 +468,22 @@ export class ShaderRegistry {
 		}
 		if (const RGL::PipelineSpec* light = RGL::findLightSpec(name))
 			return light;
-		if (std::strcmp(name, "tonemap") == 0) {
-			static const RGL::PipelineSpec defaultTonemap{
-				"tonemap", "generated_shaders/light.mesh.spv",
-				"generated_shaders/tonemap.frag.spv"};  // mesh 复用全屏大三角（Phase 8 ①）
-			return &defaultTonemap;
-		}
-		if (std::strcmp(name, "shadow") == 0) {
-			static const RGL::PipelineSpec defaultShadow{
-				"shadow", "generated_shaders/shadow.mesh.spv", "generated_shaders/shadow.frag.spv"};
-			return &defaultShadow;
-		}
-		if (std::strcmp(name, "izb_mask") == 0) {
-			static const RGL::PipelineSpec defaultIzbMask{
-				"izb_mask", "generated_shaders/izb_mask.mesh.spv",
-				"generated_shaders/izb_mask.frag.spv"};
-			return &defaultIzbMask;
-		}
-		if (std::strcmp(name, "ao") == 0) {
-			static const RGL::PipelineSpec defaultAo{
-				"ao", "generated_shaders/light.mesh.spv",
-				"generated_shaders/ao.frag.spv"};  // mesh 复用全屏大三角（同 tonemap/light）
-			return &defaultAo;
-		}
+		// 尾部词表（tonemap/shadow/izb_mask/ao/taa）：批 12.6 起表驱动查表——旧 if 链
+		// 每加一词控制复杂度 +1（taa 加进来正撞 16>15 红线），表长不受此税。
+		static const std::array<RGL::PipelineSpec, 5> kTailSpecs{{
+			{"tonemap", "generated_shaders/light.mesh.spv",
+				"generated_shaders/tonemap.frag.spv"},  // mesh 复用全屏大三角（Phase 8 ①）
+			{"shadow", "generated_shaders/shadow.mesh.spv", "generated_shaders/shadow.frag.spv"},
+			{"izb_mask", "generated_shaders/izb_mask.mesh.spv",
+				"generated_shaders/izb_mask.frag.spv"},
+			{"ao", "generated_shaders/light.mesh.spv",
+				"generated_shaders/ao.frag.spv"},  // mesh 复用全屏大三角（同 tonemap/light）
+			{"taa", "generated_shaders/light.mesh.spv",
+				"generated_shaders/taa.frag.spv"},  // mesh 复用全屏大三角（同 tonemap/ao）
+		}};
+		for (const auto& s : kTailSpecs)
+			if (std::strcmp(s.name.c_str(), name) == 0)
+				return &s;
 		return nullptr;
 	}
 

@@ -488,6 +488,13 @@ export struct SceneEnv {
 	// Phase 11 批 11.4：SSAO 施加强度（scene.lua ao.strength；搭本 ctx 同路上传
 	// scene data @60，tonemap.frag 的 lerp(1, ao, strength) 消费；0 = 逐位旁路）
 	float aoStrength = 0.0f;
+	// ── 批 12.6 TAA 运行参数（configs/scene.lua `taa` 段，同 aoStrength 的搭车路）──
+	// enabled 决定**图形态**（decorateTaaPass 是否调用，启动期读一次）+ 每帧是否抖动；
+	// feedback/jitterScale/motionCompensation 每帧进 scene data @722208，imgui 可调。
+	bool taaEnabled = false;
+	float taaFeedback = 0.12f;   ///< 本帧权重（Filament 默认 0.12 ⇒ ≈19 帧收敛）
+	float taaJitterScale = 1.0f;  ///< 抖动幅度倍率（1 = ±0.5px）
+	bool taaMotionCompensation = true;  ///< 是否用 prevSpin 补偿全场景旋转
 	// Phase 5.5 批次 4 天空盒：enabled = env 已上传且 scene.lua environment.skybox=true；
 	// pipeline = ShaderRegistry "skybox" 条目下标（main 启动期 addSkyEntry 后回填；
 	// 0xFFFFFFFF = 未建条目——renderListSystem 见 enabled 但 pipeline 无效 = 契约漂移）
@@ -520,6 +527,36 @@ export struct ViewProjection {
 	// 自适应 near/far（按场景包围球与相机距离嵌）所以**不能直接拿 camera.nearPlane/farPlane**。
 	float nearPlane = 0.05f;
 	float farPlane = 1000.0f;
+	// ── 批 12.6 TAA ──
+	// `proj` = 本帧**实际渲染用**的投影（TAA 开时含亚像素抖动）。刻意抖在 proj 上：
+	// 下游 objectMvps / skyInvViewProj(@64) / frustum 剔除 / picking / IZB 全部自动传染，
+	// 与抖动后的深度缓冲天然自洽（AO/IZB 用 @64 重建世界坐标因此不需知道 jitter）。
+	// `projUnjittered` = 未抖那份，供重投影把世界点投回**上一帧的像素中心**。
+	// TAA 关：两者相同、jitterPx = 0（projectionSystem 根本不碰 proj ⇒ 逐位不变）。
+	glm::mat4 projUnjittered{1.0f};
+	glm::vec2 jitterPx{0.0f};  ///< 本帧抖动（像素单位，±0.5 档），进 scene data @722208.zw
+};
+
+/**
+ * TAA 帧间状态（registry context，批 12.6；main 启动期 emplace，**taaSystem** 每帧
+ * 先读后推进——它是本项目第一个跨帧 CPU 状态，与 GPU 侧 history 附件同生死）。
+ *
+ * 帧序（同一帧内）：① 用 prev* 算本帧 scene data 载荷 + 历史可用性 → ② 把本帧值写回
+ * prev* 供下一帧。跳切/首帧/resize ⇒ `historyValid = false`（shader 走逐位旁路）。
+ */
+export struct TaaState {
+	// ── 簿记（上一帧位姿，taaSystem 帧尾推进）──
+	glm::mat4 prevViewProj{1.0f};  ///< 上一帧**未抖** proj·view
+	glm::mat4 prevSpin{1.0f};      ///< 上一帧 SceneSpin::matrix
+	glm::vec3 prevCamPos{};
+	glm::vec3 prevForward{0.0f, 0.0f, -1.0f};
+	glm::ivec2 prevExtent{0, 0};   ///< resize 检测（RT 重建 ⇒ 历史作废）
+	uint32_t frameIndex = 0;       ///< jitter 序列游标（跳切**不**重置：抖动相位连续无副作用）
+	// ── 本帧载荷（taaSystem 先算、renderListSystem 后读；与簿记**分开存**：同一字段
+	//    既当载荷又当簿记，就会把「谁先读谁后推进」写成隐式时序耦合）──
+	glm::mat4 payloadPrevViewProj{1.0f};
+	glm::mat4 payloadMotion{1.0f};  ///< prevSpin·inverse(curSpin)（关补偿 = 单位阵）
+	bool historyValid = false;      ///< 本帧历史可否复用（false = shader 输出本帧）
 };
 
 }  // namespace RGL

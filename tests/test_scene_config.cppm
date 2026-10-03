@@ -136,6 +136,33 @@ TEST_CASE("scene_config：显式 exposure = 2.5 被解析（回落断言的正�
 	CHECK(r->entities.size() == 1);
 }
 
+TEST_CASE("scene_config：taa 段解析（批 12.6；缺段默认关 + 显式四键逐项命中）") {
+	// 缺段 = 全默认（门关画像）。变异红线：taaEnabled 默认被翻成 true → 首条断言红；
+	// enabled 是启动期图形态开关，默认漂移 = 基线不再是基线。
+	{
+		TempLua f("sc_taa_absent", "return {}\n");
+		auto r = loadSceneConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->taaEnabled == false);
+		expectNear(r->taaFeedback, 0.12, 0.0, 1e-6);   // Filament 同值（≈19 帧收敛）
+		expectNear(r->taaJitterScale, 1.0, 0.0, 1e-6);
+		CHECK(r->taaMotionCompensation == true);
+	}
+	// 显式命中（snake_case 键名 = 契约）。变异红线：任一 key 打错（如 jitterScale）→
+	// 对应字段保持默认 → 本条红——与上面 exposure 正向对照同一手法。
+	{
+		TempLua f("sc_taa_on",
+			"return { taa = { enabled = true, feedback = 0.3, jitter_scale = 0.5, "
+			"motion_compensation = false } }\n");
+		auto r = loadSceneConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->taaEnabled == true);
+		expectNear(r->taaFeedback, 0.3, 1e-4, 0.0);
+		expectNear(r->taaJitterScale, 0.5, 0.0, 1e-6);
+		CHECK(r->taaMotionCompensation == false);
+	}
+}
+
 TEST_CASE("scene_config：entities 列表解析（type/file/position/rotation/scale，rotation 度原样透传）") {
 	TempLua f("sc_entities", R"lua(
 return {

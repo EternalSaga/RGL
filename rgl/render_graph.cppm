@@ -608,6 +608,19 @@ export std::expected<uint32_t, Error> ensureAoSlot(
 	RenderTargetCache& rts, Swapchain& swapchain);
 
 /**
+ * 批 12.6 TAA：确保 taa_out / taa_hist 两块 RT（格式 = kTaaFormat 契约常量单一真相源，
+ * rgba16_sfloat offscreen）并各领 SAMPLED_IMAGE 堆槽。
+ * 调用时序同 ensureSceneHdrSlot，且**必须早于** addTaaEntry——槽号一经烘进管线 binding
+ * 即终身有效，resize 换图只重写描述符内容（RenderTargetCache::ensure）。
+ * 仅 TAA 开启时调用（门默认关 = 不领槽 = 堆槽布局与基线零差异）。
+ * @param rts RT 缓存（ensure/heapSlot）
+ * @param swapchain 交换链层（extent）
+ * @return {taa_out 槽, taa_hist 槽}（addTaaEntry 的 binding 4/5）；Error = 建图失败
+ */
+export std::expected<std::array<uint32_t, 2>, Error> ensureTaaSlots(
+	RenderTargetCache& rts, Swapchain& swapchain);
+
+/**
  * Phase 11 批 11.2：阴影图 RT（d32_sfloat depthOffscreen，aspect = eDepth）并返回其
  * SAMPLED_IMAGE 堆槽。extent = 2·mapSize（候逇 4 级 2×2 图集，切到 4 级时不需重建描述绑定）。
  *

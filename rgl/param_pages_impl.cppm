@@ -65,6 +65,18 @@ std::vector<ParamPage> buildDebugParamPages(entt::registry& rg, RGL::AssetTable&
 		.speed = semantics::kAoStrength.speed,
 		.get = [&env] { return env.aoStrength; },
 		.set = [&env](float v) { env.aoStrength = v; }});
+	// 批 12.6 TAA 运行参数（图形态 = 启动期 taa.enabled 定，UI 只调"混多强/抖多大"；
+	// enabled 不进 UI：会话内翻它会出现「抖了但图里没滤波」的半开态）。
+	renderPage.sliders.push_back({.label = std::string(semantics::kTaaFeedback.label),
+		.minValue = semantics::kTaaFeedback.minValue, .maxValue = semantics::kTaaFeedback.maxValue,
+		.speed = semantics::kTaaFeedback.speed,
+		.get = [&env] { return env.taaFeedback; },
+		.set = [&env](float v) { env.taaFeedback = v; }});
+	renderPage.sliders.push_back({.label = std::string(semantics::kTaaJitterScale.label),
+		.minValue = semantics::kTaaJitterScale.minValue, .maxValue = semantics::kTaaJitterScale.maxValue,
+		.speed = semantics::kTaaJitterScale.speed,
+		.get = [&env] { return env.taaJitterScale; },
+		.set = [&env](float v) { env.taaJitterScale = v; }});
 	renderPage.sliders.push_back({.label = std::string(semantics::kEnvIntensity.label),
 		.minValue = semantics::kEnvIntensity.minValue, .maxValue = semantics::kEnvIntensity.maxValue,
 		.speed = semantics::kEnvIntensity.speed,

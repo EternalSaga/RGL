@@ -229,6 +229,41 @@ TEST_CASE("第二次使用同一附件的 barrier：oldLayoutDiscard 转 false �
     CHECK(b2->newLayout == vk::ImageLayout::eShaderReadOnlyOptimal);
 }
 
+TEST_CASE("跨布局读→读必须发 barrier（TAA taa_out 首例）；同布局读→读保持不发") {
+    // 实机 VVL 抓出的洞（2026-10-03）：旧 planBarrier 对「读→读」整体跳过，但
+    // sampleRead(SRO) → transferRead(TsrcOptimal) 两次读的**目标布局不同**，跳过 =
+    // 执行器按追踪布局 SRO 记 vkCmdBlitImage → layout mismatch（TAA 的 taa_out→
+    // taa_commit 是本图形态首例）。反向对照：同布局读→读（sampleRead→sampleRead）
+    // 依旧不发（identity barrier 无意义，且旧行为逐位不变）。
+    RgGraphDesc d;
+    d.attachments = {swapchainAtt(), offscreenAtt("tmp", "rgba16_sfloat"),
+        offscreenAtt("p3_rt", "rgba16_sfloat")};
+    d.passes = {
+        RgPassDesc{.name = "p1", .kind = RgPassKind::drawMesh, .state = "opaque",
+            .drawSource = "opaque", .outputs = {colorOut("tmp")}},
+        RgPassDesc{.name = "p2", .kind = RgPassKind::drawLight, .state = "tonemap",
+            .outputs = {colorOut("swapchain", RgLoadOp::load)}, .inputs = {sampleIn("tmp")}},
+        RgPassDesc{.name = "p3", .kind = RgPassKind::drawLight, .state = "tonemap",
+            .outputs = {colorOut("p3_rt", RgLoadOp::clear)}, .inputs = {sampleIn("tmp")}},
+        RgPassDesc{.name = "commit", .kind = RgPassKind::blit,
+            .outputs = {RgPassAttachment{.attachment = "swapchain",
+                .usage = RgUsage::transferWrite}},
+            .inputs = {RgPassAttachment{.attachment = "tmp",
+                .usage = RgUsage::transferRead}}},
+    };
+    const auto g = compileRenderGraph(d);
+    INFO(errOf(g));
+    REQUIRE(g.has_value());
+    // p3（tmp 的第二次 sampleRead）：同布局 → **无** barrier
+    CHECK(barrierFor(g->passes[2], slotOf(*g, "tmp")) == nullptr);
+    // commit（transferRead）：跨布局 → **必须**有一条，src = 上次 sampleRead 的读侧
+    const auto* bb = barrierFor(g->passes[3], slotOf(*g, "tmp"));
+    REQUIRE(bb != nullptr);  // 变异红线：planBarrier 退回「读→读整体跳过」→ 本条红
+    CHECK(bb->newLayout == vk::ImageLayout::eTransferSrcOptimal);
+    CHECK(bb->srcStage == vk::PipelineStageFlagBits2::eAllGraphics);
+    CHECK(bb->oldLayoutDiscard == false);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // 组 2：格式词表
 // ═══════════════════════════════════════════════════════════════════════════
@@ -642,7 +677,7 @@ TEST_CASE("blit 变体：swapchainWaitStage = Transfer，blit 两端被解析成
 // 那是刻意的——名单变动必须是有意识的决定。
 constexpr std::array<std::string_view, 6> kExpectMesh{"opaque", "skybox", "transparent",
     "picking", "highlight", "shadow"};
-constexpr std::array<std::string_view, 3> kExpectFullscreen{"light", "ao", "tonemap"};
+constexpr std::array<std::string_view, 4> kExpectFullscreen{"light", "ao", "taa", "tonemap"};
 constexpr std::array<std::string_view, 1> kExpectInternal{"izb_mask"};
 
 /** name 数组 → 集合（比较用；kAllPassStates 走 scope 过滤后也汇成它）。 */
@@ -659,10 +694,10 @@ std::set<std::string_view> namesInInternal() {
     return out;
 }
 
-TEST_CASE("kAllPassStates = 十名、无重复、每名恰属一档") {
+TEST_CASE("kAllPassStates = 十一名、无重复、每名恰属一档") {
     // 计数写死 = 「加一个状态」必须是显式决定（本项目的口径漂移正是从多一个名字
     // 而四处口径没人改开始的：izb_mask 落地时单测/Lua 头注释/AGENTS 三处都没跟）。
-    REQUIRE(kAllPassStates.size() == 10);
+    REQUIRE(kAllPassStates.size() == 11);
     // 无重复 + 每名都能被自己那一档承认（档判据与表自洽）。
     for (const auto& e : kAllPassStates) {
         INFO("state = " << e.name);
@@ -677,11 +712,11 @@ TEST_CASE("kAllPassStates = 十名、无重复、每名恰属一档") {
     }
 }
 
-TEST_CASE("kFullscreenPassStates 恰含 light / tonemap / ao 三个（派生自 fullscreenPass 档）") {
+TEST_CASE("kFullscreenPassStates 恰含 light / ao / taa / tonemap 四个（派生自 fullscreenPass 档）") {
     // 这张表决定「哪些 state 是全屏终图」：少一个 = 该 pass 在图校验里不被承认为
     // 全屏，多一个 = kind 与 state 串味的图被放行。现由 kAllPassStates 派生，
     // 故这条同时在验派生机制本身（namesInScope 填错/漏填都会红）。
-    REQUIRE(kFullscreenPassStates.size() == 3);
+    REQUIRE(kFullscreenPassStates.size() == 4);
     CHECK(toSet(kFullscreenPassStates) == toSet(kExpectFullscreen));
 }
 
@@ -705,7 +740,7 @@ TEST_CASE("两档 state 词表互斥、并起来 = 全表减 internal（**防扁
     unionMeshFull.insert(full.begin(), full.end());
     std::set<std::string_view> expectUnion(kExpectMesh.begin(), kExpectMesh.end());
     expectUnion.insert(kExpectFullscreen.begin(), kExpectFullscreen.end());
-    CHECK(unionMeshFull == expectUnion);  // 两档并集必须正好是"能上图的九名"
+    CHECK(unionMeshFull == expectUnion);  // 两档并集必须正好是"能上图的十名"
     CHECK(unionMeshFull.size() + kExpectInternal.size() == kAllPassStates.size());
 }
 

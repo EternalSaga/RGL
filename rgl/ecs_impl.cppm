@@ -3,6 +3,7 @@ module;
 #include <SDL3/SDL_events.h>
 #include <entt/entt.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/matrix_inverse.hpp>  // taaSystem 的 spin inverse（GMF include 不随 import 可见）
 #include <ranges>
 module ecs:impl;
 
@@ -22,6 +23,7 @@ import profiler;        // Phase 9 帧相 zone（frameBegin + 帧循环拦截点
 import gpu_canary;
 import param_registry;   // DebugPanelState（批 10.7 点选跳页请求位）
 import scene_context;
+import taa_jitter;  // 批 12.6 TAA：halton 抖动 / jitter→投影 / 跳切判据（纯函数层）
 import camera;
 import rllogger;
 
@@ -275,6 +277,65 @@ void projectionSystem(entt::registry& rg) {
 	// camera.nearPlane/farPlane，外部若直接拿 camera 的会切错分界）
 	viewProj.nearPlane = nearPlane;
 	viewProj.farPlane = farPlane;
+}
+
+/**
+ * TAA 帧间 system（批 12.6；顺序 = projection 之后、renderlist 之前）。
+ *
+ * 干三件事：① 把亚像素抖动注进 `ViewProjection::proj`（未抖那份存 projUnjittered）；
+ * ② 判本帧历史可用性（首帧 / resize / 相机跳切 ⇒ false ⇒ shader 逐位旁路）；
+ * ③ 算本帧 scene data 载荷（上一帧未抖 viewProj + 全场景刚体运动补偿矩阵）并推进簿记。
+ *
+ * **门红线**：`env.taaEnabled == false` 时完全不碰 `proj`（不是「加 0」而是不调用）
+ * ⇒ 下游 objectMvps / @64 / 剔除 逐位不变。
+ *
+ * 抖动为什么加在 proj 而不是各消费方：见 ViewProjection::jitterPx 注释（一处抖，
+ * 深度缓冲与所有重建该深度的消费者自动同口径）。
+ * @param rg registry（读 SceneEnv/SceneSpin/Camera/WindowExtent/SceneBounds/ViewProjection，
+ *        读写 TaaState）
+ */
+void taaSystem(entt::registry& rg) {
+	auto& viewProj = rg.ctx().get<ViewProjection>();
+	auto& taa = rg.ctx().get<TaaState>();
+	const auto& env = rg.ctx().get<SceneEnv>();
+	const auto& spin = rg.ctx().get<SceneSpin>();
+	const auto& camera = rg.ctx().get<Camera>();
+	const auto& extent = rg.ctx().get<WindowExtent>();
+	const auto& bounds = rg.ctx().get<SceneBounds>();
+
+	viewProj.projUnjittered = viewProj.proj;  // projectionSystem 刚写的就是未抖那份
+	const glm::ivec2 now{static_cast<int>(extent.width), static_cast<int>(extent.height)};
+	const auto camPos = camera.position;
+	const auto forward = cameraForward(camera);
+
+	// ① 抖动注入（关 = 不调用 applyProjectionJitter ⇒ proj 逐位不变）
+	viewProj.jitterPx =
+		env.taaEnabled ? taaJitterPixels(taa.frameIndex, env.taaJitterScale) : glm::vec2{0.0f};
+	if (env.taaEnabled)
+		viewProj.proj = applyProjectionJitter(viewProj.proj, viewProj.jitterPx,
+			{static_cast<float>(extent.width), static_cast<float>(extent.height)});
+
+	// ② 历史可用性（判据本体 = taaHistoryUsable 纯函数，单测覆盖）。
+	// **帧序契约**：本段必须在推进簿记之前算（用的还是上一帧的值）。
+	taa.historyValid = taaHistoryUsable(env.taaEnabled, taa.frameIndex, taa.prevExtent, now,
+		taa.prevCamPos, camPos, taa.prevForward, forward, bounds.radius);
+
+	// ③ 本帧载荷。prevViewProj = 上一帧**未抖** proj·view（历史图按像素中心对齐）；
+	// motion = prevSpin·inverse(curSpin)：把「本帧世界坐标」刚体搬回「上一帧世界坐标」
+	// ——本项目全场景共用一个旋转矩阵，所以一条 mat4 就是**精确**补偿（不是近似）。
+	taa.payloadPrevViewProj = taa.prevViewProj;
+	taa.payloadMotion =
+		(env.taaMotionCompensation && taa.historyValid)
+			? taa.prevSpin * glm::inverse(spin.matrix)
+			: glm::mat4{1.0f};
+
+	// ④ 簿记推进（必须在 ②③ 之后；下游 renderListSystem 读的是 payload*）
+	taa.prevViewProj = viewProj.projUnjittered * viewProj.view;
+	taa.prevSpin = spin.matrix;
+	taa.prevCamPos = camPos;
+	taa.prevForward = forward;
+	taa.prevExtent = now;
+	++taa.frameIndex;
 }
 
 
@@ -533,12 +594,14 @@ std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer& rende
 
 	// system 顺序（数据流契约）：
 	//   camera（InputEvents→Camera，消费即清空）→ animation（SceneSpin）→ bounds（Bounds→SceneBounds）
-	//   → projection（Camera+SceneBounds+WindowExtent→ViewProjection）→ renderlist（→FrameDrawList）
+	//   → projection（Camera+SceneBounds+WindowExtent→ViewProjection）→ taa（抖动注入 +
+	//   帧间簿记，批 12.6）→ renderlist（→FrameDrawList）
 	std::vector<FrameSystem> systems{
 		{"camera",     [](entt::registry& rg, float dt) { cameraSystem(rg, dt); }},
 		{"animation",  [](entt::registry& rg, float dt) { animationSystem(rg, dt); }},
 		{"bounds",     [](entt::registry& rg, float) { boundsSystem(rg); }},
 		{"projection", [](entt::registry& rg, float) { projectionSystem(rg); }},
+		{"taa",        [](entt::registry& rg, float) { taaSystem(rg); }},
 		{"renderlist", [&](entt::registry& rg, float) { renderListSystem(rg, resources, renderer.getEnvironmentRef(), assets, renderListState); }},
 	};
 

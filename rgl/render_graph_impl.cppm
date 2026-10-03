@@ -351,11 +351,18 @@ std::expected<RgAttachmentSlot, Error> validatePassRef(const RgPassDesc& pass,
 	return slot;
 }
 
-/** ③ barrier 计划生成：读→读无需同步；其余（帧首 / 写后读 / 读后写 / 写后写）生成一条转换（同布局的写→写跨 pass 实例也发——identity barrier 合法，为 dynamic rendering 跨实例 LOAD 提供执行依赖）。 */
+/** ③ barrier 计划生成：**同布局**读→读无需同步；其余（帧首 / 写后读 / 读后写 / 写后写 /
+ *  跨布局读→读）生成一条转换（同布局的写→写跨 pass 实例也发——identity barrier 合法，
+ *  为 dynamic rendering 跨实例 LOAD 提供执行依赖）。
+ *  跨布局读→读（T0 前不存在、TAA 的 taa_out 首例：tonemap sampleRead(SRO) →
+ *  taa_commit transferRead(TsrcOptimal)）虽无数据 hazard，但**布局必须转换**——跳过
+ *  会让执行器按追踪布局 SRO 记 blit，VVL 报 layout mismatch（实测踩中）。 */
 void planBarrier(const RgPassAttachment& a, RgAttachmentSlot slot,
 	const RgCompiledAttachment& compiled, const UsageInfo& target, const SlotState& state,
 	RgPassPlan& plan) {
-	if (!(state.lastUse && isReadUsage(*state.lastUse) && isReadUsage(a.usage))) {
+	const bool sameLayoutRead = state.lastUse && isReadUsage(*state.lastUse)
+		&& isReadUsage(a.usage) && usageInfo(*state.lastUse).layout == target.layout;
+	if (!sameLayoutRead) {
 		RgBarrierPlan barrier{};
 		barrier.attachment = slot;
 		barrier.aspect = compiled.aspect;

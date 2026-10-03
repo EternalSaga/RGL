@@ -242,10 +242,56 @@ void validateEnvironmentContract(const SceneConfig& scene) {
 	}
 }
 
+/**
+ * SceneEnv + TaaState context 装配（main 启动流调用；三处配置读取收一处，main 保持
+ * 在 120 行红线内）。
+ *
+ * - **SceneEnv**（Phase 5.5）：曝光（Phase 8 收尾）与 SSAO 强度（批 11.4）都与 env
+ *   开关无关（任何变体的图都有 tonemap / ao pass），故在此直填；env cubemap 自身的
+ *   intensity/mipRange/skybox 由 env 上传成功后回填（见 main_scene 的装配函数）。
+ * - **TaaState**（批 12.6）= 本项目第一个**跨帧 CPU context**（与 GPU 侧 `taa_hist`
+ *   附件同生死）；默认值语义 = 「首帧无历史」（frameIndex 0 ⇒ historyValid false ⇒
+ *   shader 逐位旁路）。运行参数（feedback / jitterScale / motionCompensation）搭
+ *   SceneEnv 同路，imgui 参数页可调（同 aoStrength 先例）。
+ *   `taaEnabled` 在这里只是**每帧抖动**开关，**图形态**由 compileGraphOrThrow 的
+ *   decorateTaaPass 决定——两处读同一配置键，缺一就会出现「抖了但没滤波」或
+ *   「有 pass 但没抖动」的半开状态。
+ * @param rg 场景 registry（ViewProjection 等基础 ctx 已 emplace）
+ * @param scene configs/scene.lua 产物
+ */
+void wireSceneEnvContexts(entt::registry& rg, const SceneConfig& scene) {
+	auto& env = rg.ctx().emplace<SceneEnv>();
+	env.exposure = scene.exposure;
+	env.aoStrength = scene.aoStrength;
+	env.taaEnabled = scene.taaEnabled;
+	env.taaFeedback = scene.taaFeedback;
+	env.taaJitterScale = scene.taaJitterScale;
+	env.taaMotionCompensation = scene.taaMotionCompensation;
+	rg.ctx().emplace<TaaState>();
+}
+
 /** 渲染图配置加载 + compileRenderGraph（校验 + barrier 布局链推导，错误抛 std::runtime_error）+ deferredMode 求值。
  *  Phase 10 批 10.5：diagnostics.picking（默认关）= 编译前 decoratePickingPass 装饰
  *  object_id pass（D10 编译图期门控——默认关不调用 = 图逐位同 diff0）。 */
-CompiledGraphResult compileGraphOrThrow(const char* path) {
+/**
+ * 批 12.6 TAA 图装饰（compileGraphOrThrow 尾段调用；抽函数控复杂度）。
+ * 关（默认）= 不调 decorateTaaPass = 图逐位不变；开但图形态不支持（offscreen DIAG
+ * 变体用 blit 上屏，无「写 swapchain 且采色」的 pass）= warn + 返回 false，
+ * 装配层据 false 整套不建 TAA RT/条目（条目建了也无人执行）。
+ * @return 是否真正装饰落图
+ */
+bool decorateTaaOrWarn(RgGraphDesc& desc, bool taaEnabled) {
+	if (!taaEnabled)
+		return false;
+	if (decorateTaaPass(desc))
+		return true;
+	if (auto* logger = RLLogger::getInstance())
+		logger->warn("taa: 图形态不支持 TAA 装饰（锚点 = 写 swapchain 且采样场景色的 pass，"
+			"offscreen 变体用 blit 上屏故不支持），本次运行无时域抗锯齿");
+	return false;
+}
+
+CompiledGraphResult compileGraphOrThrow(const char* path, bool taaEnabled) {
 	auto graphConfig = loadRenderGraphConfig(path);
 	if (!graphConfig)
 		throw std::runtime_error(graphConfig.error().describe());
@@ -273,11 +319,16 @@ CompiledGraphResult compileGraphOrThrow(const char* path) {
 		logger->info("shadow_pass: 已装饰 depth-only 阴影 pass（{}² {}，{} 级；投影体清单由 "
 			"diagnostics.shadow_pass 门控，关时段内零 draw = 画面逐位不变）",
 			kShadowMapSize, kShadowMapFormat, kActiveShadowCascades);
+	// 批 12.6 TAA 装饰**必须最后**（在 picking / highlight / shadow 之后）：它把
+	// 「写 swapchain 且采色」的 pass（tonemap）的输入换成时域结果，若 highlight 后插
+	// 就会落在 taa 与 tonemap 之间而吃不到滤波。默认关 = 不装饰 = 图逐位不变（D10 纪律）。
+	const bool taaDecorated = decorateTaaOrWarn(graphConfig->desc, taaEnabled);
 	auto compiledGraph = compileRenderGraph(graphConfig->desc);
 	if (!compiledGraph)
 		throw std::runtime_error(fmt::format("render graph compile failed: {}",
 			compiledGraph.error().describe()));
-	return CompiledGraphResult{std::move(*compiledGraph), deferredMode, graphConfig->variant};
+	return CompiledGraphResult{std::move(*compiledGraph), deferredMode, graphConfig->variant,
+		taaDecorated};
 }
 
 /**
@@ -360,10 +411,7 @@ int main() {
 		registry.ctx().emplace<ViewProjection>();
 		registry.ctx().emplace<FrameDrawList>();
 		registry.ctx().emplace<NextObjectSlot>();  // Phase 6 instancing：实例矩阵槽分配器
-		registry.ctx().emplace<SceneEnv>();  // Phase 5.5：环境参数（env 上传成功后回填，见下）
-		registry.ctx().get<SceneEnv>().exposure = configs.scene.exposure;  // Phase 8 收尾：tonemap 曝光（与 env 开关无关）
-	// Phase 11 批 11.4：SSAO 强度（与 env 开关无关：ao pass 不读 env）
-	registry.ctx().get<SceneEnv>().aoStrength = configs.scene.aoStrength;
+		wireSceneEnvContexts(registry, configs.scene);  // SceneEnv（曝光/AO/TAA）+ TaaState
 
 		AppContext vkInstance(pre.window.get(), pre.headless);
 		DeviceContext vkDevice(vkInstance);
@@ -392,7 +440,8 @@ int main() {
 		// 报错退出（Renderer 构造校验器兜底执行器可解析性）。
 		// Phase 7 路线选路（2026-09-08 env→配置）：顶层 variant = "forward"(默认)/
 		// "deferred"/"offscreen"——后两者为内建 exclusive 图变体（覆盖文件 passes）
-		auto graphResult = compileGraphOrThrow(configPath("render_graph.lua").c_str());
+		auto graphResult = compileGraphOrThrow(configPath("render_graph.lua").c_str(),
+			configs.scene.taaEnabled);
 		const bool deferredMode = graphResult.deferredMode;
 		// 图来源/规模观测（排"配置没生效"类问题：pass 数与 configs/render_graph.lua 对账）
 		if (auto* logger = RLLogger::getInstance())
@@ -441,7 +490,8 @@ int main() {
 		// C3 GPU culling 候选表 + GpuCull + skybox + deferred G-buffer/HDR + DGC + Renderer
 		//（装配时序契约见 assembleBackEnd 接口注释；graph 在此 move 进 Renderer）
 		auto backEnd = assembleBackEnd(vkDevice, vkSwapchain, vkResources, sceneData, samplers, env, rtCache, assetTable, shaderRegistry,
-			std::move(graphResult.graph), registry, configs.scene, deferredMode);
+			std::move(graphResult.graph), registry, configs.scene, deferredMode,
+			graphResult.taaDecorated);
 
 		// Phase 9.2：GPU 时间戳会话（声明序在 backEnd/vkDevice 后 = 析构序其先，
 		// query pool 不越过 device 生命周期——GPU 资源所有权规则；profiler=0 /

@@ -53,13 +53,13 @@ export struct RgStateName {
 };
 
 /**
- * pass.state 全量状态名词表（**单一真相源**，10 条）——键集合 = StateKit::stateFor
+ * pass.state 全量状态名词表（**单一真相源**，11 条）——键集合 = StateKit::stateFor
  * 能解析的名字集合（static_assert 绑定）；按 scope 派生出图校验用的两个子集。
  *
  * 加一个状态 = 本表加一行 + StateKit 加成员与实现（漏实现编译不过）；
  * Lua 配置侧与文档不再各自抄名单（写错的启动报错会列出合法值）。
  */
-export inline constexpr std::array<RgStateName, 10> kAllPassStates{{
+export inline constexpr std::array<RgStateName, 11> kAllPassStates{{
 	{"opaque", RgStateScope::meshPass},
 	{"skybox", RgStateScope::meshPass},
 	{"transparent", RgStateScope::meshPass},
@@ -68,6 +68,7 @@ export inline constexpr std::array<RgStateName, 10> kAllPassStates{{
 	{"shadow", RgStateScope::meshPass},        // 批 11.2：depth-only 阴影 pass
 	{"light", RgStateScope::fullscreenPass},
 	{"ao", RgStateScope::fullscreenPass},      // 批 11.4：SSAO 全屏终图
+	{"taa", RgStateScope::fullscreenPass},      // 批 12.6：时域滤波全屏 pass（与 ao 同形）
 	{"tonemap", RgStateScope::fullscreenPass},
 	{"izb_mask", RgStateScope::internal},      // 批 11.3-1d：图外硬编码录制（红线 2）
 }};

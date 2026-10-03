@@ -361,9 +361,12 @@ void registerSceneEntities(entt::registry& registry, const UploadedAssets& asset
  * @param samplers 共享 sampler（ao/tonemap 的 binding 5）
  * @param rtCache RT 缓存（ensure/heapSlot）
  * @param pipelines 管线表（建 ao/tonemap 条目）
+ * @param taaDecorated 批 12.6：TAA 已装饰落图（启动期 decorateTaaPass 结果）。true =
+ *        追加 taa_out/taa_hist RT + taa 条目，且 tonemap 色槽烘 taa_out；false = 逐位不变
  */
 void assembleHdrAoChain(Swapchain& swapchain, Resources& resources,
-	SamplerLibrary& samplers, RenderTargetCache& rtCache, ShaderRegistry& pipelines) {
+	SamplerLibrary& samplers, RenderTargetCache& rtCache, ShaderRegistry& pipelines,
+	bool taaDecorated) {
 	auto hdrSlot = ensureSceneHdrSlot(rtCache, swapchain);
 	if (!hdrSlot)
 		throw std::runtime_error(
@@ -385,8 +388,27 @@ void assembleHdrAoChain(Swapchain& swapchain, Resources& resources,
 			fmt::format("阴影图 RT 创建失败: {}", shadowSlot.error().describe()));
 	// ao / tonemap 条目下标由 Renderer 构造期按名 pipelineIndex("ao"/"tonemap") 取
 	[[maybe_unused]] auto aoIdx = pipelines.addAoEntry(*depthSlot, samplers.ensurePointSampler());
+	// 批 12.6 TAA（门默认关 = taaDecorated false = 本段整体跳过 = 槽/条目零变化）：
+	// ① 两幅 TAA RT 在 addTaaEntry 之前领槽（同 scene_hdr 契约：槽号烘进 binding，
+	//    resize 只重写描述符）；② **tonemap 的色输入槽换成 taa_out**——描述符绑定
+	//    是启动期烘死的（binding → 固定 heap 槽），图上的输入名改写只管 barrier，
+	//    真正把"tonemap 读哪张图"换掉的是这里换烘焙槽号（两条通道必须同时换，
+	//    漏一条 = 读旧图或布局链错）。
+	std::optional<std::array<uint32_t, 2>> taaSlots;
+	if (taaDecorated) {
+		auto slots = ensureTaaSlots(rtCache, swapchain);
+		if (!slots)
+			throw std::runtime_error(
+				fmt::format("TAA RT 创建失败: {}", slots.error().describe()));
+		taaSlots = *slots;
+	}
 	[[maybe_unused]] auto tonemapIdx = pipelines.addTonemapEntry(
-		*hdrSlot, *aoSlot, samplers.ensureShared());
+		taaSlots ? (*taaSlots)[0] : *hdrSlot, *aoSlot, samplers.ensureShared());
+	if (taaDecorated) {
+		[[maybe_unused]] auto taaIdx = pipelines.addTaaEntry(
+			*hdrSlot, (*taaSlots)[1], *depthSlot, samplers.ensureShared(),
+			samplers.ensurePointSampler());
+	}
 }
 
 /** C3 候选表 + GpuCull + skybox + deferred + HDR + DGC + Renderer（装配时序见接口注释）。 */
@@ -394,7 +416,8 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 	SceneDataService& sceneData, SamplerLibrary& samplers, Environment& env,
 	RenderTargetCache& rtCache, AssetTable& assets,
 							  ShaderRegistry& pipelines, CompiledRenderGraph&& graph,
-							  entt::registry& registry, const SceneConfig& scene, bool deferredMode) {
+							  entt::registry& registry, const SceneConfig& scene, bool deferredMode,
+	bool taaDecorated) {
 	// C3：GPU culling 候选表（Phase 7b 批次 5）：candidate = 不透明 primitive。
 	// 守卫与迭代序和 render_list CPU 路径**完全一致**（同 view、同守卫）——GPU 输出
 	// 固定槽非紧凑，重放序与 CPU opaque 段序逐位一致（截图 BIT-IDENTICAL 前提）。
@@ -453,7 +476,7 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 			samplers.ensureShared(), deferredShadowSlotOf(rtCache), samplers.ensurePointSampler(),
 			evssmSlot);
 	}
-	assembleHdrAoChain(swapchain, resources, samplers, rtCache, pipelines);
+	assembleHdrAoChain(swapchain, resources, samplers, rtCache, pipelines, taaDecorated);
 
 	// Phase 7b：DGC 命令生成（NVIDIA 路）：仅 graphicsIndirect 能力时构造（RADV =
 	// compute only → null → Renderer 读回重放路）。管线表定后建（execution set

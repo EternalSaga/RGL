@@ -261,3 +261,40 @@ float3 envBrdfFactor(float NoV, float roughness, float3 F0)
         + (-0.701261 + 8.016208 * x + -17.080260 * x * x + 9.950964 * x * x * x) * y * y * y;
     return F0 * A + B;
 }
+
+// ── 批 12.6 TAA（时域抗锯齿）尾区 ──
+//
+// 基址与 C++ 侧 scene_data.cppm kSceneDataTaa* 手写同源（两侧 static_assert 钉死）：
+//   @722080  mat4 prevViewProj —— 上一帧**未抖** proj·view
+//   @722144  mat4 motionPrevFromCur —— prevSpin · inverse(curSpin)（spin 关 = 单位阵）
+//   @722208  vec4 (feedback, historyValid, jitterX px, jitterY px)
+//
+// 矩阵口径提醒（改动前必读）：重建世界坐标要用 sceneData@64 的 skyInvViewProj，它是
+// **抖动后** proj·view 的逆（与深度缓冲配套）；投回上一帧用这里的**未抖**矩阵。
+// historyValid = 0 时 taa.frag 直接输出本帧（逐位旁路，首帧/resize/跳切走这条）。
+ObjectMatrix readTaaPrevViewProj()
+{
+    uint base = 722080u;  // kSceneDataTaaOffset
+    ObjectMatrix m;
+    m.c0 = asfloat(sceneData.Load4(base));
+    m.c1 = asfloat(sceneData.Load4(base + 16u));
+    m.c2 = asfloat(sceneData.Load4(base + 32u));
+    m.c3 = asfloat(sceneData.Load4(base + 48u));
+    return m;
+}
+
+ObjectMatrix readTaaMotion()
+{
+    uint base = 722144u;  // kSceneDataTaaMotionOffset
+    ObjectMatrix m;
+    m.c0 = asfloat(sceneData.Load4(base));
+    m.c1 = asfloat(sceneData.Load4(base + 16u));
+    m.c2 = asfloat(sceneData.Load4(base + 32u));
+    m.c3 = asfloat(sceneData.Load4(base + 48u));
+    return m;
+}
+
+float4 readTaaParams()
+{
+    return asfloat(sceneData.Load4(722208u));  // kSceneDataTaaParamsOffset
+}
