@@ -286,8 +286,21 @@ int cmdTemporal(int pairs, int warm, const std::string& variant)
         return b > 0.0 ? a / b : std::numeric_limits<double>::infinity();
     };
     const double rSup = ratioOf(S1.stat.meanAbsDiff, S2.stat.meanAbsDiff);
-    std::printf("\n  判据  时域累积抑制 S1/S2 = %.2f×（闭式 ≈11×，下限 3.0×）\n", rSup);
-    std::printf("  参考  空间抗锯齿：中间调 S0 %.2f%% → S2 %.2f%%\n",
+    // S1/S2 **只报不判**（已登记反模式 `screen-space-l1-frame-diff`）：屏幕空间 L1 逐帧差
+    // 量不出抑制比——边缘摊开后「单像素幅度降」被「变化像素数涨」抵消，乘积近似守恒。
+    // 下面把这两个分量打出来，是为了让**指纹**可见（比值 ≈ 1 时能一眼看出是守恒而不是没干活）。
+    const auto amp = [](const TemporalStat& s) {
+        return s.changedFraction > 0.0 ? s.meanAbsDiff / s.changedFraction : 0.0;
+    };
+    const double a1 = amp(S1.stat), a2 = amp(S2.stat);
+    std::printf("\n  参考  抑制比 S1/S2 = %.2f×（**不判**，理由见反模式 screen-space-l1-frame-diff）\n",
+        rSup);
+    std::printf("        L1 守恒指纹：单像素幅度 %.3f → %.3f（降 %.2f×）被变化像素 %.2f%% → "
+        "%.2f%%（涨 %.2f×）抵消\n",
+        a1, a2, a2 > 0.0 ? a1 / a2 : 0.0, S1.stat.changedFraction * 100.0,
+        S2.stat.changedFraction * 100.0,
+        S1.stat.changedFraction > 0.0 ? S2.stat.changedFraction / S1.stat.changedFraction : 0.0);
+    std::printf("  判据  空间抗锯齿：中间调 S0 %.2f%% → S2 %.2f%%\n",
         S0.stat.edgeSoftness * 100.0, S2.stat.edgeSoftness * 100.0);
 
     std::vector<Verdict> vs;
@@ -300,10 +313,14 @@ int cmdTemporal(int pairs, int warm, const std::string& variant)
             + d2(S1.stat.changedFraction * 100.0) + "%（下限 0.5%）；靶 mask "
             + std::to_string(S1.stat.maskPixels) + "px，id 面 "
             + std::to_string(S1.idPixels) + "px"));
-    vs.push_back(verdictFor("temporal-taa-suppression",
-        S1.stat.meanAbsDiff > 0.0 && S2.stat.meanAbsDiff > 0.0 && rSup >= 3.0,
-        "S1/S2 = " + d2(rSup) + "×（下限 3.0×）；S1 = " + d6(S1.stat.meanAbsDiff)
-            + "  S2 = " + d6(S2.stat.meanAbsDiff)));
+    // 硬判据换成「空间抗锯齿在场」：TAA 关时靶**恰好二值**（实测全图只有 3 个亮度级
+    // = 无 MSAA 的光栅化是二值覆盖），TAA 开则必须出现中间调。两条互为阴阳：
+    // S0 == 0 是反向对照（没有它，「中间调变多」可能只是靶本来就糊），
+    // S2 > 0 是阳性锚点（没有它，「S0 为 0」可能只是靶根本没画）。
+    vs.push_back(verdictFor("temporal-aa-presence",
+        S0.stat.pairs > 0 && S0.stat.edgeSoftness == 0.0 && S2.stat.edgeSoftness >= 0.01,
+        "中间调占比：TAA 关 = " + d6(S0.stat.edgeSoftness * 100.0) + "%（须恰为 0）  TAA 开 = "
+            + d2(S2.stat.edgeSoftness * 100.0) + "%（下限 1.0%）"));
 
     std::printf("\n");
     for (const auto& v : vs)
