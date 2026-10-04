@@ -258,6 +258,29 @@ void fillTaaData(FrameDrawList& out, const ViewProjection& viewProj, const Scene
 	out.sceneData.taaMotion = taa.payloadMotion;
 	out.sceneData.taaParams = {env.taaFeedback, taa.historyValid ? 1.0f : 0.0f,
 		viewProj.jitterPx.x, viewProj.jitterPx.y};
+	// 批 13.2 基空间输出：偏移 = **本帧内容位移**（`O_t(x) = F_t(x − c_t)` ⟹ 消费端按
+	// `+c_t` 采样即落回基网格）。`c_t` 与 `jitterPx` 的换算（逐轴符号不同，勿凭直觉写）：
+	//   `applyProjectionJitter` 给 `proj[2][0/1]` 加 `−2j/extent` ⟹ `Δndc = (+2jx/W, +2jy/H)`
+	//   （clip.w = −v.z 带来一次翻号，`taa_jitter.cppm` 推导段）；
+	//   x：ndc → 列 = (ndc.x+1)/2·W，不翻 ⟹ **列位移 = +jx**；
+	//   y：本引擎用**负高视口**（`shader.cppm::applyDynamicState`「NDC y=+1 对应 area.y」）
+	//      ⟹ ndc.y=+1 落在**首行**，行 = (1−ndc.y)/2·H 再翻一次 ⟹ **行位移 = −jy**。
+	// ⟹ `c_t = (+jitterPx.x, −jitterPx.y)`。⚠ `tools/imgqa/temporal.cpp::jitterDeltaPx` 返回的
+	//   是它的**相反数** `(−jx, +jy)`——那不是矛盾：探针的 `freeShift` 语义为 `frame(p) = ref(p + d)`
+	//   ⟹ d = −c_t（2026-10-04 已把两边注释统一到口径名，别再写「图像位移」这种歧义词）。
+	//   **裁决已下（2026-10-04 实测）**：门开态游动 0.060px（门关 0.643px、闭式 0.667px）——
+	//   本处符号若反，采样偏移 = −c_t ⟹ 游动**翻倍**到 ~1.33px 而非归零（20 倍差，不会被噪声
+	//   掩盖）⟹ `(+jitterPx.x, −jitterPx.y)` 是对的，判据 = `imgqa taa-swim` 的
+	//   `temporal-base-space`（阳性锚点 = 同次运行门关态仍 0.643px）。
+	// 门（`taa.base_space`）判定**只在这一处**：门关时写全 0，tonemap 的 `uv + 0` 逐位 = `uv`。
+	// 刻意**不**与 `historyValid` 关联——首帧/跳切那几帧 taa_out 的内容仍是抖动投影渲出来的
+	// （shader 早退只是「不混历史」，不是「不抖」），那些帧同样要偏移，否则同一场画面会
+	// 一半在基空间一半在抖动空间。也不与 `taaEnabled` 关联：TAA 关时 `jitterPx` 恒 0
+	// （taaSystem 不调 applyProjectionJitter），加不加偏移逐位相同；但门标志位照写，
+	// shader 侧不依赖那个巧合。
+	out.sceneData.taaResolveOffset = env.taaBaseSpace
+		? glm::vec4{viewProj.jitterPx.x, -viewProj.jitterPx.y, 1.0f, 0.0f}
+		: glm::vec4{0.0f};
 }
 
 void renderListSystem(entt::registry& rg, RGL::Resources&,

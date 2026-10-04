@@ -85,11 +85,21 @@ export struct SceneConfig {
 	// ── 批 12.6 TAA（时域抗锯齿，scene.lua `taa` 段）──
 	// enabled 是**图形态**开关（decorateTaaPass 是否调用，启动期读一次）：默认关 =
 	// 图里没有 taa/taa_commit pass ⇒ 与基线逐位不变（比「pass 常驻 + shader 旁路」更强，
-	// 因为连 jitter 注入与一次全屏 blit 都不发生）。其余三项是每帧运行参数。
+	// 因为连 jitter 注入与一次全屏 blit 都不发生）。其余各项是每帧运行参数。
 	bool taaEnabled = false;
 	float taaFeedback = 0.12f;          ///< 本帧权重（Filament 默认同值 ⇒ ≈19 帧收敛）
 	float taaJitterScale = 1.0f;        ///< 抖动幅度倍率（1 = ±0.5 像素）
 	bool taaMotionCompensation = true;  ///< prevSpin 刚体补偿（关 = 纯相机重投影）
+	// 批 13.2 **基空间输出**（un-jittered resolve，`taa.base_space`）：把 TAA 输出从抖动空间
+	// 搬回基网格。机制：`O_t(x) = F_t(x − c_t)` ⟹ 相邻两帧是精确平移 `|c_t − c_{t−1}|`
+	// （实测 0.717px 均值），**与 feedback 无关** ⟹ 时域累积原理上消不掉它，只能改输出口径。
+	// 实现 = 最终消费处（tonemap）按 `+c_t` 偏移采样 taa_out 与 AO（FSR2 / XeSS / TAAU / TSU
+	// 同族做法）。**每帧运行参数**（不是图形态）：历史仍留在抖动空间，taa.frag 一行不改。
+	// 默认 **true**（2026-10-04 批 13.2 拍板）：门开实测游动 0.643px → **0.060px**（10.7×），
+	// 且 `aa-coverage` 0.138 → **0.119 列**、`temporal-suppression-sqrtN` 3.51 → **6.75×**
+	// 两条抗锯齿口径**不退化反略优**（数字 → docs/phase13_plan.md §1.10 + 调试历史 2026-10-04）。
+	// 门关 = 偏移恒 0 = 逐位回到批 13.1e 行为（红线，证据见 tonemap.frag.slang 头注释）。
+	bool taaBaseSpace = true;
 };
 
 /**

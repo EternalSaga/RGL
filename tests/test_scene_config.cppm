@@ -136,7 +136,7 @@ TEST_CASE("scene_config：显式 exposure = 2.5 被解析（回落断言的正�
 	CHECK(r->entities.size() == 1);
 }
 
-TEST_CASE("scene_config：taa 段解析（批 12.6；缺段默认关 + 显式四键逐项命中）") {
+TEST_CASE("scene_config：taa 段解析（批 12.6；缺段默认关 + 显式键逐项命中）") {
 	// 缺段 = 全默认（门关画像）。变异红线：taaEnabled 默认被翻成 true → 首条断言红；
 	// enabled 是启动期图形态开关，默认漂移 = 基线不再是基线。
 	{
@@ -147,19 +147,34 @@ TEST_CASE("scene_config：taa 段解析（批 12.6；缺段默认关 + 显式四
 		expectNear(r->taaFeedback, 0.12, 0.0, 1e-6);   // Filament 同值（≈19 帧收敛）
 		expectNear(r->taaJitterScale, 1.0, 0.0, 1e-6);
 		CHECK(r->taaMotionCompensation == true);
+		// 批 13.1f：base_space 默认**开**（游动 0.643 → 0.060px 实测后拍板）。变异红线：
+		// 默认被翻成 false → 本条红（默认值 = 交付画像的一部分，漂移不会被任何判据抓到，
+		// 因为所有判据都在显式写键的 profile 上跑，只有这条断言覆盖「不写键」这条路）。
+		CHECK(r->taaBaseSpace == true);
 	}
 	// 显式命中（snake_case 键名 = 契约）。变异红线：任一 key 打错（如 jitterScale）→
 	// 对应字段保持默认 → 本条红——与上面 exposure 正向对照同一手法。
+	// ⚠ base_space 这里**显式写 false**：默认是 true，只写「显式 true 命中」测不出
+	//   「键名拼错时静默回落默认」——键名打错与不写键在只测 true 的写法下**不可区分**。
 	{
 		TempLua f("sc_taa_on",
 			"return { taa = { enabled = true, feedback = 0.3, jitter_scale = 0.5, "
-			"motion_compensation = false } }\n");
+			"motion_compensation = false, base_space = false } }\n");
 		auto r = loadSceneConfig(f.pathStr());
 		REQUIRE(r.has_value());
 		CHECK(r->taaEnabled == true);
 		expectNear(r->taaFeedback, 0.3, 1e-4, 0.0);
 		expectNear(r->taaJitterScale, 0.5, 0.0, 1e-6);
 		CHECK(r->taaMotionCompensation == false);
+		CHECK(r->taaBaseSpace == false);  // 与默认相反方向的命中（见上）
+	}
+	// 反方向命中：默认 true 时「显式 true」是恒真的，所以这条的价值不在断言本身，而在
+	// 它与上一条**合起来**把 {默认, 显式真, 显式假} 三个取值钉死——任一处写反必有一条红。
+	{
+		TempLua f("sc_taa_bs_on", "return { taa = { base_space = true } }\n");
+		auto r = loadSceneConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->taaBaseSpace == true);
 	}
 }
 

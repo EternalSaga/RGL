@@ -231,7 +231,7 @@ static_assert(kSceneDataShadowSplitsOffset == 721952 && kSceneDataShadowParamsOf
 static_assert(kSceneDataShadowMatrixOffset == 721696,
 	"scene.slang readShadowViewProj literal 721696 out of sync with kSceneDataShadowMatrixOffset");
 
-/** 批 12.6 TAA 区（EVSSM 常量 vec4 之后 144B，三段子区）：
+/** 批 12.6 TAA 区（EVSSM 常量 vec4 之后 160B，四段子区；末段 16B 为批 13.2 追加）：
  *  - `kSceneDataTaaOffset`（mat4, 64B）= 上一帧**抖动后**的 proj·view。重投影公式：
  *      world = (sceneData@64 skyInvViewProj) · clip(uv, depth)   ← 本帧抖动后的逆矩阵
  *      prevClip = prevViewProj · (motionPrevFromCur · world)     ← 上一帧抖动后的矩阵
@@ -248,13 +248,31 @@ static_assert(kSceneDataShadowMatrixOffset == 721696,
  *  - `kSceneDataTaaParamsOffset`（vec4, 16B）= (x = feedback 历史权重, y = historyValid 1/0,
  *    z = jitterX 像素, w = jitterY 像素)。y=0 时 shader 直接输出本帧 = **逐位旁路**
  *    （首帧 / resize / 相机跳切走这条，同 ao.strength=0 的旁路纪律）。
+ *  - `kSceneDataTaaResolveOffset`（vec4, 16B）= 批 13.2 基空间输出偏移（见其自身注释）。
  * 消费端 = taa.frag.slang 字面量（两侧 static_assert 钉死同步）。 */
 export inline constexpr uint32_t kSceneDataTaaOffset = kSceneDataEvssmConstOffset + 16u;
 export inline constexpr uint32_t kSceneDataTaaMotionOffset = kSceneDataTaaOffset + 64u;
 export inline constexpr uint32_t kSceneDataTaaParamsOffset = kSceneDataTaaOffset + 128u;
-export inline constexpr uint32_t kSceneDataTaaBytes = 144u;
+/**
+ * 批 13.2 基空间输出（un-jittered resolve）：最终消费处（tonemap）要加的**采样偏移**
+ * （vec4 = x/y = 偏移像素，z = 门标志 1/0，w 保留）。
+ *
+ * 为什么需要它（一句话）：TAA 输出长在**抖动空间**——静止机位下收敛后 `O_t(x) = F_t(x − c_t)`
+ * （c_t = 本帧「内容位移」，与 jitterPx 逐轴换算见 `render_list_impl.cppm::fillTaaData`），
+ * 于是相邻两帧是精确平移 `|c_t − c_{t−1}|`（实测 0.717px 均值），**与 feedback 无关**
+ * ⟹ 时域累积在原理上消不掉它。要消只能改输出口径：消费端按 `+c_t` 偏移采样即得基空间 `F_t(x)`。
+ *
+ * 为什么是「CPU 算好偏移、shader 只管加」而不是「shader 读 jitterPx 自己判门」：
+ * 门（`taa.base_space`）与「本帧抖了多少」是两件事，把判定留在 CPU 一处，shader 侧就
+ * **没有门逻辑**——门关时本区恒为 (0,0,0,0)，`uv + 0` 逐位 = `uv`（IEEE：`0·t = 0`、
+ * `x + 0 = x`，编译器折成 FMA 也成立：`fma(0,t,uv) = uv`）⟹ 门关红线是构造性的。
+ * z 分量是**显式**门标志：shader 见 z<0.5 直接原样返回 uv，不依赖「偏移恰好为 0」
+ * 这个巧合（TAA 整体关闭时 j 恒 0，但那是巧合不是门）。
+ */
+export inline constexpr uint32_t kSceneDataTaaResolveOffset = kSceneDataTaaOffset + 144u;
+export inline constexpr uint32_t kSceneDataTaaBytes = 160u;
 static_assert(kSceneDataTaaOffset == 722080 && kSceneDataTaaMotionOffset == 722144
-	&& kSceneDataTaaParamsOffset == 722208,
+	&& kSceneDataTaaParamsOffset == 722208 && kSceneDataTaaResolveOffset == 722224,
 	"scene.slang taa literals drifted from scene_data.cppm offsets");
 
 /** scene data buffer 总字节数 = 头 128 + 对象矩阵表 + 灯数组区 + MVP 表 + 材质表 +

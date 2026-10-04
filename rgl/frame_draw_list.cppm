@@ -119,13 +119,18 @@ export struct SceneFrameData {
 	//   不读本区 = 门关红线。值 = vk_resources kEvssmExponent（唯一权威源，
 	//   生产/消费/fallback 三方同源——禁在此写死字面量）。
 	glm::vec4 shadowEvssmConst{kEvssmExponent, 0.0f, 0.0f, 0.0f};
-	// ── 批 12.6 TAA（时域抗锯齿）三件套，scene data 尾区 @722080 / @722144 / @722208 ──
+	// ── 批 12.6 TAA（时域抗锯齿）帧间载荷，scene data 尾区 @722080 / @722144 / @722208
+	//   （+ 批 13.2 基空间输出偏移 @722224）──
 	// 语义与「抖动后逆矩阵重建 / 未抖矩阵投回上一帧」的口径差别见 scene_data.cppm
 	// kSceneDataTaa* 区注释；生产者 = ecs taaSystem。
 	// 默认值 = **完全旁路**（params.y historyValid = 0 → taa.frag 直接输出本帧）。
 	glm::mat4 taaPrevViewProj{1.0f};
 	glm::mat4 taaMotion{1.0f};  ///< prevSpin · inverse(curSpin)（spin 关 = 单位阵）
 	glm::vec4 taaParams{0.0f};  ///< (feedback, historyValid, jitterX px, jitterY px)
+	// · taaResolveOffset —— 批 13.2 基空间输出：最终消费处（tonemap）的采样偏移
+	//   (x, y = 像素, z = taa.base_space 门 1/0, w 保留)，scene data 尾区 @722224。
+	//   默认值 = **门关**（全 0）⇒ tonemap 采样坐标逐位不变（BIT-IDENTICAL 基线）。
+	glm::vec4 taaResolveOffset{0.0f};
 };
 
 /**

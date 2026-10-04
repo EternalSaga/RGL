@@ -495,6 +495,10 @@ export struct SceneEnv {
 	float taaFeedback = 0.12f;   ///< 本帧权重（Filament 默认 0.12 ⇒ ≈19 帧收敛）
 	float taaJitterScale = 1.0f;  ///< 抖动幅度倍率（1 = ±0.5px）
 	bool taaMotionCompensation = true;  ///< 是否用 prevSpin 补偿全场景旋转
+	// 批 13.2 基空间输出（`taa.base_space`）：true ⟹ 每帧把「本帧内容位移」写进 scene data
+	// @722224，tonemap 按它偏移采样 taa_out 与 AO（把输出从抖动空间搬回基网格）。
+	// 唯一消费者 = tonemap；历史与 taa.frag 完全不认识它。false = 该区恒 0 = 逐位不变。
+	bool taaBaseSpace = false;
 	// Phase 5.5 批次 4 天空盒：enabled = env 已上传且 scene.lua environment.skybox=true；
 	// pipeline = ShaderRegistry "skybox" 条目下标（main 启动期 addSkyEntry 后回填；
 	// 0xFFFFFFFF = 未建条目——renderListSystem 见 enabled 但 pipeline 无效 = 契约漂移）

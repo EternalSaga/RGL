@@ -268,6 +268,7 @@ float3 envBrdfFactor(float NoV, float roughness, float3 F0)
 //   @722080  mat4 prevViewProj —— 上一帧**抖动后** proj·view（口径 = 渲染出历史图的那个矩阵）
 //   @722144  mat4 motionPrevFromCur —— prevSpin · inverse(curSpin)（spin 关 = 单位阵）
 //   @722208  vec4 (feedback, historyValid, jitterX px, jitterY px)
+//   @722224  vec4 (resolveOffsetX px, resolveOffsetY px, baseSpace 门 1/0, 保留)  —— 批 13.2
 //
 // 矩阵口径提醒（改动前必读）：重建世界坐标要用 sceneData@64 的 skyInvViewProj，它是
 // **抖动后** proj·view 的逆（与深度缓冲配套）；投回上一帧用这里的**未抖**矩阵。
@@ -297,4 +298,12 @@ ObjectMatrix readTaaMotion()
 float4 readTaaParams()
 {
     return asfloat(sceneData.Load4(722208u));  // kSceneDataTaaParamsOffset
+}
+
+// 批 13.2 基空间输出（un-jittered resolve）：最终消费处（tonemap.frag）要加的采样偏移。
+// (x,y) = 像素单位偏移，z = `taa.base_space` 门标志（1/0），w 保留。语义、口径与
+// 「为什么偏移由 CPU 算好」全在 scene_data.cppm kSceneDataTaaResolveOffset 的注释里。
+float4 readTaaResolveOffset()
+{
+    return asfloat(sceneData.Load4(722224u));  // kSceneDataTaaResolveOffset
 }
