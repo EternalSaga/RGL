@@ -254,7 +254,7 @@ void Renderer::createSceneStaging(RGL::Resources& vkResources) {
 	std::memcpy(stage + kSceneDataTaaOffset, &list.sceneData.taaPrevViewProj, sizeof(glm::mat4));
 	std::memcpy(stage + kSceneDataTaaMotionOffset, &list.sceneData.taaMotion, sizeof(glm::mat4));
 	std::memcpy(stage + kSceneDataTaaParamsOffset, &list.sceneData.taaParams, sizeof(glm::vec4));
-	std::memcpy(stage + kSceneDataTaaResolveOffset, &list.sceneData.taaResolveOffset,
+	std::memcpy(stage + kSceneDataTaaPrevContentShiftOffset, &list.sceneData.taaPrevContentShift,
 		sizeof(glm::vec4));  // 批 13.2 基空间输出偏移（门关 = 全 0 → tonemap 逐位不变）
 	// 批 11.3-1e：IZB 消费区 (flag, W, H, 保留)——light.frag izbNearShadow 消费。
 	// flag = izbShadow 已构造（门关恒空 = 全 0 → ×1.0 逐位旁路）；W/H = mask 位图行距

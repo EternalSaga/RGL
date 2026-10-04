@@ -265,13 +265,17 @@ float3 envBrdfFactor(float NoV, float roughness, float3 F0)
 // ── 批 12.6 TAA（时域抗锯齿）尾区 ──
 //
 // 基址与 C++ 侧 scene_data.cppm kSceneDataTaa* 手写同源（两侧 static_assert 钉死）：
-//   @722080  mat4 prevViewProj —— 上一帧**抖动后** proj·view（口径 = 渲染出历史图的那个矩阵）
+//   @722080  mat4 prevViewProj —— 上一帧**抖动后** proj·view（产出**抖动网格**坐标）
 //   @722144  mat4 motionPrevFromCur —— prevSpin · inverse(curSpin)（spin 关 = 单位阵）
-//   @722208  vec4 (feedback, historyValid, jitterX px, jitterY px)
-//   @722224  vec4 (resolveOffsetX px, resolveOffsetY px, baseSpace 门 1/0, 保留)  —— 批 13.2
+//   @722208  vec4 (feedback, historyValid, 本帧内容位移 c_t 的 x/y px)
+//   @722224  vec4 (上一帧内容位移 c_{t−1} 的 x/y px, 保留, 保留)  —— 批 13.5
 //
-// 矩阵口径提醒（改动前必读）：重建世界坐标要用 sceneData@64 的 skyInvViewProj，它是
-// **抖动后** proj·view 的逆（与深度缓冲配套）；投回上一帧用这里的**未抖**矩阵。
+// 矩阵口径提醒（改动前必读，全量推导 → scene_data.cppm kSceneDataTaa* 区注释）：
+//   · 重建世界坐标用 sceneData@64 的 skyInvViewProj，它是**抖动后** proj·view 的逆（与深度配套）；
+//   · 投回上一帧用这里的 prevViewProj（**也是抖动后**），产出**抖动网格**坐标；
+//   · 批 13.5 起历史住**基空间** ⟹ 上一步的抖动网格坐标要**减 c_{t−1}** 才对齐历史。
+//     ⚠ 这三条**成对**：prevViewProj 的口径与「减不减 c_{t−1}」必须二选一配套，
+//       都做或都不做都会让静止机位 0.667px 游动原样回来。
 // historyValid = 0 时 taa.frag 直接输出本帧（逐位旁路，首帧/resize/跳切走这条）。
 ObjectMatrix readTaaPrevViewProj()
 {
@@ -295,15 +299,18 @@ ObjectMatrix readTaaMotion()
     return m;
 }
 
+// (x = feedback 本帧权重, y = historyValid 1/0, z/w = **本帧内容位移 c_t** 像素)。
+// ⚠ zw 自批 13.5 起被 taa.frag 真读（输入侧 un-jitter）；此前装 jitterPx 但从未被读。
+// 口径 = `taa_jitter.cppm::contentShiftPx` = `(+jx, −jy)`，**不是** jitterPx（差一个 y 轴翻号）。
 float4 readTaaParams()
 {
     return asfloat(sceneData.Load4(722208u));  // kSceneDataTaaParamsOffset
 }
 
-// 批 13.2 基空间输出（un-jittered resolve）：最终消费处（tonemap.frag）要加的采样偏移。
-// (x,y) = 像素单位偏移，z = `taa.base_space` 门标志（1/0），w 保留。语义、口径与
-// 「为什么偏移由 CPU 算好」全在 scene_data.cppm kSceneDataTaaResolveOffset 的注释里。
-float4 readTaaResolveOffset()
+// 批 13.5 历史基空间修正：**上一帧内容位移 c_{t−1}** 像素（x/y，z/w 保留）。
+// 用途：prevViewProj 产出的是抖动网格坐标，减本值才落到基空间历史网格。
+// 语义与「为什么偏移由 CPU 算好」全在 scene_data.cppm kSceneDataTaaPrevContentShiftOffset 注释里。
+float4 readTaaPrevContentShift()
 {
-    return asfloat(sceneData.Load4(722224u));  // kSceneDataTaaResolveOffset
+    return asfloat(sceneData.Load4(722224u));  // kSceneDataTaaPrevContentShiftOffset
 }

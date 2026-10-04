@@ -1,7 +1,8 @@
 module;
 #include <doctest/doctest.h>
 #include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>  // glm::perspective（被测函数就是给它加列平移）
+#include <glm/gtc/matrix_transform.hpp>  // glm::perspective（被测函数就是给它加列平移）/ glm::lookAt
+#include <glm/gtc/matrix_inverse.hpp>    // glm::inverse（批 13.5 用例复刻 shader 的 worldFromDepth）
 #include <algorithm>  // std::max（initializer_list 版）/ std::abs
 #include <cmath>
 #include <set>
@@ -9,8 +10,9 @@ module;
 /**
  * test_taa_jitter —— 批 12.6 TAA 的纯函数层（rgl/taa_jitter.cppm，rlbase）
  *
- * 被测 = Halton 抖动序列、jitter→投影矩阵注入、相机跳切判据、历史可用性判据。
- * 这四件事全都不需要 VkDevice（AGENTS 分层判据），却直接决定 TAA 是「真生效」还是
+ * 被测 = Halton 抖动序列、jitter→投影矩阵注入、相机跳切判据、历史可用性判据、
+ *        批 13.5 基空间累积的坐标口径不变量（`contentShiftPx` + 历史重投影闭环）。
+ * 这些全都不需要 VkDevice（AGENTS 分层判据），却直接决定 TAA 是「真生效」还是
  * 「静默不生效」：抖动幅度写错 2 倍、jitter 只加到 x、判据恒 true/false —— 画面
  * 都可能只是"看起来还行"，必须靠闭式解钉住。
  *
@@ -39,6 +41,18 @@ glm::vec2 projectPixel(const glm::mat4& proj, glm::vec3 viewPos, glm::vec2 exten
 	const glm::vec4 clip = proj * glm::vec4(viewPos, 1.0f);
 	const glm::vec2 ndc{clip.x / clip.w, clip.y / clip.w};
 	return {(ndc.x * 0.5f + 0.5f) * extent.x, (ndc.y * 0.5f + 0.5f) * extent.y};
+}
+
+/**
+ * 引擎**光栅化**像素口径（≠ 上面 `projectPixel` 的数学口径，**别混用**）。
+ * 本引擎视口是**负高**——`shader.cppm:123` `vk::Viewport(x, yTop, w, -h, 0.0f, 1.0f)`
+ *（2026-10-04 实地核实源码，不是照抄注释）⟹ ndc.y 增大 = framebuffer 行**减小**
+ * ⟹ 行 = (1 − ndc.y)/2·H。shader 侧 `worldFromDepth` 用的正是 `ndc.y = 1 − uv.y·2`，互逆。
+ * 上面 `projectPixel` 不翻 y，因为它测的是**矩阵列平移本身**（不涉视口）——两者不矛盾，
+ * 但**凡涉及「内容位移」一律用本函数**：用 `projectPixel` 会得出 `(+jx, +jy)` 这个错答案。
+ */
+glm::vec2 enginePixelFromNdc(glm::vec2 ndc, glm::vec2 extent) {
+	return {(ndc.x * 0.5f + 0.5f) * extent.x, (1.0f - ndc.y) * 0.5f * extent.y};
 }
 
 }  // namespace
@@ -189,6 +203,116 @@ TEST_CASE("taaHistoryUsable：首帧 / 关 / resize / 跳切四类失效，配�
     // 首帧判据是 frameIndex == 0 而非「prevExtent 无效」——钉住这条约定，
     // 否则改成 prev-extent 哨兵判定时这里会静默变绿
     CHECK(usable(true, 1u, {0, 0}, {0, 0}, pos));
+}
+
+/**
+ * 批 13.5 基空间累积的**核心不变量**：静止机位下，历史采样点必须逐位落回本像素。
+ *
+ * 为什么这条判据值得写（阳性锚点自问）：整次改造只动了「三个 uv 用哪个」这一件事——
+ * 输入 un-jitter 的 `baseUv`、重建世界坐标用的 uv、历史修正减的 c_{t−1}。**三处任一处
+ * 符号或口径写错，画面都仍然"看起来像 TAA"**（只是静止机位下历史偏 ≤0.5px 且随相位变
+ * = 用户报障的 shimmer 原样保留）。本用例把「静止机位 ⟹ 历史点采样」这个**架构契约**
+ * 直接钉成断言，且期望值是**推导出来的闭式**（不是跑一遍实现记下来的数）。
+ *
+ * 记号：基网格位置 β；抖动后渲染 ⟹ 世界点 w 出现在像素 β(w) + c（`c = contentShiftPx`）。
+ * 输出像素 p 混合的是 `cur = I_t(p + c_t) = F(p)` ⟹ 它代表**基位置 p** ⟹ 重建必须解出
+ * β(w) = p 的那个 w（喂 baseUv = p + c_t 进抖动后逆矩阵），历史要落在 β_{t−1}(w)。
+ * 静止机位 ⟹ β_{t−1}(w) = β_t(w) = p ⟹ **prevUvBase == p**（点采样，零重采样）。
+ *
+ * 变异红线（每条反向用例钉一个**具体的**失败形态，缺一条就有一个洞没人看）：
+ *  ① 不减 c_{t−1}（= 改造前的形态）⟹ 误差恰为 **+c_{t−1}**；
+ *  ② 减两次（= 「prevViewProj 改存未抖、shader 侧仍减 c」这个成对约束被破的形态）
+ *     ⟹ 误差恰为 **−c_{t−1}**；
+ *  ③ 重建喂 `input.uv` 而非 `baseUv`（**主 agent 本次实测写错过的地方**）⟹ 误差恰为
+ *     **−c_t**。此条 2026-10-04 是先写出用例、才发现 shader 里真有这个错。
+ * 三条都断**带符号的闭式值**，不是「非零」——只断非零的话，符号写反照样绿。
+ *
+ * ⚠ **本用例的边界（别高估它）**：它验的是**坐标代数**，即在 C++ 里重新推导一遍这套
+ * 公式并确认自洽；它**不读 `taa.frag.slang` 一个字节**。所以「shader 里把 `baseUv` 写成
+ * `input.uv`」**不会**让本用例变红——shader 侧的守门人是 `imgqa` 的门开/门关 A/B
+ * （`taa.base_space` 就是为此保留的内置开关），不是这里。
+ * 本用例真正的价值：把「`c_{t−1}` 而非 `δ_t`」「重建喂 `baseUv` 而非 `input.uv`」这两个
+ * **推导层面**的坑钉成可执行结论——本次实施就是靠它先发现 shader 写错了（§3.1），
+ * 若没有它，那个错只会在画面上表现为"改完还是有点抖"，无从归因。
+ * 变异实测（2026-10-04）：`cPrev` 取反 → 62 条红；重建改喂 `uv` → 93 条红。非空转。
+ */
+TEST_CASE("批 13.5 静止机位不变量：历史采样落回本像素；三条反向各钉一个闭式偏移") {
+    const glm::vec2 extent{1920.0f, 1080.0f};
+    const glm::mat4 view = glm::lookAt(glm::vec3{0.0f, 0.0f, 0.0f},
+        glm::vec3{0.0f, 0.0f, -1.0f}, glm::vec3{0.0f, 1.0f, 0.0f});
+    const glm::mat4 proj = glm::perspective(glm::radians(60.0f), extent.x / extent.y, 0.05f, 100.0f);
+    const glm::vec4 world{1.3f, -0.7f, -4.2f, 1.0f};  // 相机前方的世界点
+
+    // 覆盖整个 Halton 周期（16 个相位对），顺带钉住「结论与相位无关」
+    for (uint32_t phase = 0; phase < 16u; ++phase) {
+        const glm::vec2 jCur = taaJitterPixels(phase);
+        const glm::vec2 jPrev = taaJitterPixels(phase + 1u);
+        const glm::mat4 vpCur = applyProjectionJitter(proj, jCur, extent) * view;
+        const glm::mat4 vpPrev = applyProjectionJitter(proj, jPrev, extent) * view;
+        const glm::vec2 cCur = contentShiftPx(jCur);
+        const glm::vec2 cPrev = contentShiftPx(jPrev);
+
+        // ① 本帧：世界点 → 抖动后 clip → 输出像素 p（= shader 的 input.uv）与 ndc 深度
+        const glm::vec4 clip = vpCur * world;
+        const glm::vec3 ndcDepth{clip.x / clip.w, clip.y / clip.w, clip.z / clip.w};
+        const glm::vec2 uv = enginePixelFromNdc({ndcDepth.x, ndcDepth.y}, extent) / extent;
+
+        // ② shader 侧重建：baseUv + 深度 →（**抖动后**逆矩阵）→ 世界坐标。
+        //    逐式复刻 taa.frag::worldFromDepth（ndc.y = 1 − uv.y·2），只是 uv 换成 baseUv
+        const glm::vec2 baseUv = uv + cCur / extent;
+        const glm::vec4 clipIn{baseUv.x * 2.0f - 1.0f, 1.0f - baseUv.y * 2.0f, ndcDepth.z, 1.0f};
+        const glm::vec4 rebuilt4 = glm::inverse(vpCur) * clipIn;
+        const glm::vec3 rebuilt{rebuilt4.x / rebuilt4.w, rebuilt4.y / rebuilt4.w,
+            rebuilt4.z / rebuilt4.w};
+        // 容差纪律：本用例全部用**绝对阈（像素 / 世界单位）**，不用相对阈——
+        // ① 主断言期望值是 0，`expectNear` 的文档明写「期望值接近 0 时必须给绝对阈」
+        //   （否则 scale 退到 1e-12，任何有限误差都算红）；
+        // ② 反向断言的期望值 |c| 最小可到 ~0.02px，相对阈会把它压到 2e-5px，
+        //   低于 float32 走 4×4 逆的噪声（实测 ~2e-4px）= 会因精度而红。
+        // 5e-3px = 信号（≥0.02px）的 1/4、噪声（2e-4px）的 25 倍，两头都留余量。
+        constexpr double kPx = 5e-3;    // 像素
+        constexpr double kWorld = 1e-2; // 世界单位（float32 逆矩阵往返的实测地板，见下）
+
+        // 先确认模拟器本身自洽（否则下面的断言在测模拟器、不是在测契约）。
+        // 判**误差模长**而非逐分量：逐分量对 `world.y = -0.7` 这种小分量用相对阈会失真，
+        // 用绝对阈又得为每个分量单独定标。地板 = float32 走 4×4 逆往返的实测值
+        //（16 个相位扫下来最大 2.1e-3 世界单位 ≈ 本深度处 0.47px），取 1e-2 留 5× 余量。
+        // ⚠ 这个地板**不限制**下面的像素断言：那三条判的是 `prevUv − uv` 这类**差分**，
+        //   重建误差在两边共模、相减即消。所以像素容差可以定到 5e-3px 而不自相矛盾。
+        testing::expectNear(static_cast<double>(glm::length(rebuilt - glm::vec3(world))),
+            0.0, 0.0, kWorld);
+
+        // ③ 投到上一帧（**抖动后**矩阵）→ 抖动网格坐标 → 减 c_{t−1} 落回基空间
+        const glm::vec4 prevClip = vpPrev * glm::vec4(rebuilt, 1.0f);
+        const glm::vec2 prevUv = enginePixelFromNdc(
+            {prevClip.x / prevClip.w, prevClip.y / prevClip.w}, extent) / extent;
+        const glm::vec2 prevUvBase = prevUv - cPrev / extent;
+
+        // 主断言：静止机位 ⟹ 历史落在**本像素**（CR 权重因此退化成 (0,1,0,0) = 点采样）
+        testing::expectNear((prevUvBase.x - uv.x) * extent.x, 0.0, 0.0, kPx);
+        testing::expectNear((prevUvBase.y - uv.y) * extent.y, 0.0, 0.0, kPx);
+
+        // 反向 ①：不减 c_{t−1} ⟹ 恰偏 +c_{t−1}（改造前每帧的历史重采样量，闭式均值 0.667px）
+        testing::expectNear((prevUv.x - uv.x) * extent.x, cPrev.x, 0.0, kPx);
+        testing::expectNear((prevUv.y - uv.y) * extent.y, cPrev.y, 0.0, kPx);
+
+        // 反向 ②：减两次 ⟹ 恰偏 −c_{t−1}
+        testing::expectNear((prevUvBase.x - cPrev.x / extent.x - uv.x) * extent.x,
+            -cPrev.x, 0.0, kPx);
+        testing::expectNear((prevUvBase.y - cPrev.y / extent.y - uv.y) * extent.y,
+            -cPrev.y, 0.0, kPx);
+
+        // 反向 ③：重建喂 input.uv（不喂 baseUv）⟹ 恰偏 −c_t
+        const glm::vec4 clipBuggy{uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f, ndcDepth.z, 1.0f};
+        const glm::vec4 buggy4 = glm::inverse(vpCur) * clipBuggy;
+        const glm::vec3 buggyWorld{buggy4.x / buggy4.w, buggy4.y / buggy4.w, buggy4.z / buggy4.w};
+        const glm::vec4 buggyPrevClip = vpPrev * glm::vec4(buggyWorld, 1.0f);
+        const glm::vec2 buggyUv = enginePixelFromNdc(
+            {buggyPrevClip.x / buggyPrevClip.w, buggyPrevClip.y / buggyPrevClip.w}, extent)
+            / extent;  // ⚠ 必须 / extent：enginePixelFromNdc 返回**像素**，断言要的是 uv
+        testing::expectNear((buggyUv.x - cPrev.x / extent.x - uv.x) * extent.x, -cCur.x, 0.0, kPx);
+        testing::expectNear((buggyUv.y - cPrev.y / extent.y - uv.y) * extent.y, -cCur.y, 0.0, kPx);
+    }
 }
 
 }  // namespace RGL

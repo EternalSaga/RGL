@@ -19,36 +19,31 @@
 //   之后产出，写在 tonemap 是唯一能对两变体一视同仁的位置（D1 对等）。代价 = AO 会
 //   连直接光一起压（见 docs/phase11_plan.md 批 11.4 的偏差说明）。
 //
-// ── 批 13.2 基空间输出（un-jittered resolve，门 `taa.base_space`）──
-// 症状与机制（全案 → docs/phase13_plan.md §1.9 + 调试历史 2026-10-03/10-04）：TAA 的
-// 输出**长在抖动空间**——静止机位下收敛后 `O_t(x) = F_t(x − c_t)`（c_t = 本帧内容位移），
-// 于是相邻两帧是精确平移 `|c_t − c_{t−1}|`（实测 0.717px 均值 / 1.051px 最大，闭式满幅
-// 0.667px），**与 feedback 无关** ⟹ 时域累积在原理上消不掉它，只能改输出口径。
-// 本 pass 就是那个输出口径：按 `+c_t` 偏移采样即得 `F_t(x)`，落回基网格，游动从定义上消失。
-// 同族做法 = FSR2 / XeSS / Unity TAAU / Unreal TSU（抖动渲染 → 累积 → resolve 到输出网格）。
+// ── 批 13.5：本 pass **不再**做 un-jitter（批 13.2 的 `taa.base_space` 已删除）──
+// 批 13.2 曾在这里按 `+c_t` 偏移采样 `taa_out` 与 `aoTex`，把 TAA 输出从抖动空间搬回基空间。
+// 那是**只修显示那一半**：历史仍住抖动空间 ⟹ 累积内部每帧按 `δ_t` 亚像素重采样 ⟹
+// 「固定频率 + 固定位置」的 16 帧周期 shimmer 原样留在交付画面里（实测 9.22% 像素 >2LSB）。
+// 批 13.5 把 un-jitter **前移到 taa pass 的输入侧** ⟹ `taa_out` 天然就是基空间 ⟹ 本 pass
+// 回到朴素 `input.uv`。**若在此处重新加偏移 = 双重 un-jitter，比 13.2 之前更糟。**
+// 全案 → `docs/taa_history_space_plan.md`；核选型实测数据 → `taa.frag.slang` 输入侧注释。
 //
-// **为什么折进本 pass 的采样坐标 = 零额外 pass**（先核实 pass 序再动手）：真实执行序 =
-// opaque → skybox → transparent → ao → **taa** → **tonemap** → taa_commit(blit)。
-// `decorateTaaPass` 把 taa pass 插在「写 swapchain 且 sampleRead 色附件」的 pass 之前，
-// 并把那个 pass（= 本 tonemap）的色输入从 scene_hdr **改写成 taa_out**；taa_commit 只是
-// 帧末 taa_out → taa_hist 的整幅拷贝（blit 带不了偏移采样，但它不是输出口径）。
-// ⟹ 本 pass 本来就是全屏 1:1 消费 taa_out 的唯一最终消费者，偏移折进它的采样坐标
-//    不增加任何 pass、不增加任何纹理。
-//
-// **抖动空间纹理表**（凡在此表者必须**一起**偏移，否则色彩与 AO 错开半像素）：
-//   ┌ 纹理（binding）        ─ 为什么在抖动空间 ─────────────────────────────┐
-//   │ sceneHdrTex (4)  恒在抖动空间：TAA 开 = taa_out（抖动投影渲的成片时域累积），
-//   │                  TAA 关 = scene_hdr（同样由抖动投影渲，只是 c_t 恒 0）
-//   │ aoTex (6)        恒在抖动空间：ao pass 以 1:1 像素位置读**抖动后的深度**算遮蔽量，
-//   │                  其像素网格与 sceneHdrTex 同源
+// **纹理空间现状**（批 13.5 起三者**都在基空间**，无需任何偏移）：
+//   ┌ 纹理（binding）  ─ 空间 ─────────────────────────────────────────────┐
+//   │ sceneHdrTex (4)  基空间：TAA 开 = taa_out（输入侧已 un-jitter 的时域累积）；
+//   │                  TAA 关 = scene_hdr（c_t 恒 0，抖动空间 == 基空间）
+//   │ aoTex (6)        抖动空间（ao pass 以 1:1 像素位置读**抖动后**深度算遮蔽量）
 //   └──────────────────────────────────────────────────────────────────────┘
+// ⚠ **aoTex 与 sceneHdrTex 自批 13.5 起不同空间**（差一个 c_t ≤0.5px）。批 13.2 时代两者
+//   同在抖动空间、共用同一个偏移 uv 所以对齐；现在 sceneHdrTex 搬走了而 AO 没有。
+//   刻意**不**给 AO 补偏移：AO 是低频遮蔽场（相位差 ≤0.5px 的错位在 8bit 上不可见，
+//   且 `imgqa ao-noise` 实测交付颗粒 0.203 LSB < 1 量化步长），而补偏移要给本 pass
+//   加一次内容位移查询 + 一个 saturate 钳位。**已登记的独立议题**：AO 在 TAA 之后施加
+//   ⟹ 不被时域滤波（→ `还债总账.md` 债-39，含「TAA 开时 AO 随相位变化从未被量化」的告警）。
 // **基空间纹理（禁止偏移）**：swapchain 本身（输出网格）、imgui/UI 覆盖层（另走 imgui
 // pass，直接画 swapchain）、object_id（picking 与抖动同口径，不经本 pass）。
 // 深度不进本 pass（tonemap 不采深度），无需处理。
 //
-// **门关红线**：`readTaaResolveOffset().z < 0.5`（= `taa.base_space` 关，CPU 侧写全 0）
-// ⟹ 走**原样返回 uv** 这条分支，采样坐标与本文件改动前逐位相同（不是「加 0」，是不调用
-// 偏移计算——同 ao.strength=0 的旁路纪律，但更强）。
+// **红线**：本 pass 的采样坐标自批 13.5 起与「TAA 关」时的本文件逐位相同（`input.uv`）。
 
 import scene;  // sceneData buffer（binding 3：Load(56) 曝光 / Load(60) AO 强度 / @722224 偏移）
 
@@ -67,44 +62,6 @@ float readExposure()
 float readAoStrength()
 {
     return asfloat(sceneData.Load(60));
-}
-
-// ── 基空间输出：把「本帧内容位移」换算成 uv 偏移（批 13.2，见文件头注释）──
-// 门关（`taa.base_space = false` ⟹ CPU 写全 0 ⟹ z = 0）时**原样返回 uv**，
-// 采样坐标与本文件加此函数之前逐位相同（红线）。
-float2 baseSpaceUv(float2 uv)
-{
-    const float4 r = readTaaResolveOffset();  // (offsetX px, offsetY px, 门 1/0, 保留)
-    if (r.z < 0.5)
-        return uv;
-    uint w, h, lvl;
-    sceneHdrTex.GetDimensions(0u, w, h, lvl);
-    // ⚠ 必须显式钳回 [0,1]：共享 sampler 的 wrap 是 **REPEAT**（`sampler_library.cppm`
-    // 平铺 UV 定案，bistro 49.5% primitive 越界 [0,1]），而屏幕空间 uv 越界绕回 = 最外
-    // 一圈采到**对侧**像素（1px 宽的假边）。钳到 [0,1] 等价于 CLAMP_TO_EDGE——双线性核
-    // 对 [0,1] 内的亚像素越界本就把取数钳到边缘纹素，不改内部像素一个 bit。
-    return saturate(uv + float2(r.x, r.y) / float2(float(w), float(h)));
-}
-
-// ── 基空间重采样核 = 双线性（选型结论；备选核的实测数据在下面，别再重新试一遍）──
-// 曾实现并实测过精确 4×4 Catmull-Rom（16 次整数 Load，与 `taa.frag.slang::
-// sampleHistoryCatmullRom` 同核），**否决**。本机 bistro 1280×720、交付配置 + 用户机位、
-// fb=.12 js=1、2026-10-04：
-//   梯度能量（真实场景，越高越锐）  门关 0.038272 ｜ 门开双线性 **0.034843** ｜ CR 0.036999
-//   `imgqa aa-coverage` 域内最大误差 门关 0.138 列 ｜ 门开双线性 **0.119 列** ｜ CR 0.181 列
-//   黑晕「凭空多黑」                门关 0.026 列 ｜ 门开双线性 0.016 列 ｜ CR **−0.030 列**
-// ⟹ CR 确实更锐（+6.2% 梯度），但在**本项目已登记的抗锯齿判据**上退化（0.119 → 0.181 列，
-//   比门关基线 0.138 还差），且「凭空多黑」翻成**负号** = 负瓣在黑白边界造出振铃（杆边凭空
-//   变亮）。双线性两个口径都优于门关基线。梯度能量这条**没有闭式参考**，单看它会得出相反
-//   结论——与 `taa_plan` §7 第 10 条同一课：拿没有闭式的量当主判据，结论随量的选择翻转。
-//   故按有闭式的那条（逐杆覆盖率对拍闭式）定案 = **双线性**。
-// 代价如实记录：相对「TAA 关」的梯度能量保留率 71.8% → 65.4%（糊倍数 1.39× → 1.53×，
-//   resolve 自己再加约 9.8% 糊）。它**不逐帧复利**——偏移只加在最终消费处，历史仍留在抖动
-//   空间、每帧不被重采样（复利糊化的教训 = phase13 §1.6，已修，勿倒退）。
-
-float3 sampleHdrBaseSpace(float2 uv)
-{
-    return sceneHdrTex.Sample(hdrSampler, uv).rgb;
 }
 
 // Narkowicz 2015 "ACES Filmic Tone Mapping Curve" 近似（per-channel 有理二次式，
@@ -143,11 +100,12 @@ struct TonemapInput
 [shader("fragment")]
 float4 main(TonemapInput input) : SV_Target
 {
-    // 采样坐标 = 基空间偏移后的 uv（门关时逐位 = input.uv，见 baseSpaceUv）。
-    // ⚠ 两张抖动空间纹理**必须用同一个 uv**（sceneHdrTex 与 aoTex 同网格，见文件头
-    //   「抖动空间纹理表」）——分开算会因浮点结合序差出亚像素错位。
-    const float2 uv = baseSpaceUv(input.uv);
-    float3 hdr = sampleHdrBaseSpace(uv);
+    // 采样坐标 = **朴素 input.uv**（批 13.5：taa_out 已在 taa pass 输入侧落回基空间，
+    // 本 pass 不再偏移；此处再加偏移 = 双重 un-jitter，见文件头）。
+    // ⚠ sceneHdrTex 与 aoTex 自批 13.5 起**不同空间**（差 c_t ≤0.5px），刻意不补偏移，
+    //   理由与已登记议题 → 文件头「纹理空间现状」段（债-39）。
+    const float2 uv = input.uv;
+    float3 hdr = sceneHdrTex.Sample(hdrSampler, uv).rgb;
     // AO 在曝光**之前**相乘：遮蔽是入射光的衰减，属物理量，曝光是显示映射。
     // aoTex 与 sceneHdrTex 同为 1:1 framebuffer 对齐，hdrSampler（linear/mipLod 0）
     // 采 R8 可见度与采 HDR 图同条件——AO 本身已逐像素算好，无需额外滤波。

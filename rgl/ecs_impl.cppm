@@ -373,9 +373,16 @@ void taaSystem(entt::registry& rg) {
 	// S1/S2 = 0.48×（开滤波逐帧差反而**翻倍**，闭式该是 3.95×）。
 	// ⚠ 旧注释写的「两侧口径统一 ⇒ 历史查找位不漂 jitter」是把「历史图是像素中心对齐的」
 	// 误读成「历史图在未抖网格里」——像素中心对齐 ≠ 未抖网格对齐。
+	// 🔵 **批 13.5 补充（读改动前必读）**：本裁决**仍然成立、未被反转**——本字段至今产出
+	//   **抖动网格**上的坐标。变的是**下游**：历史图自 13.5 起住在**基空间**（输入侧已
+	//   un-jitter），故 shader 拿到抖动网格坐标后要**减一帧内容位移 c_{t−1}** 才落到基网格
+	//   （`taa.frag.slang` 的 prevUv 修正）。⟹ **两处必须成对**：把本字段改成未抖 = 采样点
+	//   少减一次 c_{t−1} = 系统性偏 c_{t−1}（静止机位 0.667px 游动原样回来）。
+	//   若将来改存未抖那份，**必须同时删掉 shader 侧的减法**，二选一，不可都做也不可都不做。
 	// motion = prevSpin·inverse(curSpin)：把「本帧世界坐标」刚体搬回「上一帧世界坐标」
 	// ——本项目全场景共用一个旋转矩阵，所以一条 mat4 就是**精确**补偿（不是近似）。
 	taa.payloadPrevViewProj = taa.prevViewProj;
+	taa.payloadPrevContentShift = taa.prevContentShift;
 	taa.payloadMotion =
 		(env.taaMotionCompensation && taa.historyValid)
 			? taa.prevSpin * glm::inverse(spin.matrix)
@@ -386,6 +393,9 @@ void taaSystem(entt::registry& rg) {
 	// 「渲染出这张历史图的那个矩阵」。门关时 proj 未被碰过 ⇒ 与未抖那份逐位相同 ⇒
 	// 门红线（关 = 基线逐位不变）自动成立，jitter_scale=0 时同理。
 	taa.prevViewProj = viewProj.proj * viewProj.view;
+	// 内容位移与 prevViewProj **同生同灭**：它俩是同一件事（「渲染出上一帧那张图的变换」）
+	// 的矩阵表达与平移表达。TAA 关 / jitter_scale=0 ⇒ jitterPx = 0 ⇒ c = 0 ⇒ 减法逐位恒等。
+	taa.prevContentShift = contentShiftPx(viewProj.jitterPx);
 	taa.prevSpin = spin.matrix;
 	taa.prevCamPos = camPos;
 	taa.prevForward = forward;

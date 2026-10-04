@@ -74,6 +74,33 @@ export glm::mat4 applyProjectionJitter(glm::mat4 proj, glm::vec2 jitterPx,
 }
 
 /**
+ * 抖动量 → **内容位移** `c`（像素单位）。
+ *
+ * 定义（唯一口径，别再造同义词）：抖动后渲染出的图像内容整体平移 `+c`，
+ * 即 `I_t(x) = F(x − c)`，`F` = 未抖（基）网格上的理想图像。
+ *
+ * 推导（逐轴符号不同，**勿凭直觉写**）：
+ *   `applyProjectionJitter` 给 `proj[2][0/1]` 加 `−2j/extent`，而 `clip.w = −v.z` 翻一次号
+ *   ⟹ `Δndc = (+2jx/W, +2jy/H)`；
+ *   x：ndc → 列 = (ndc.x+1)/2·W，不翻 ⟹ **列位移 = +jx**；
+ *   y：本引擎用**负高视口**（`shader.cppm::applyDynamicState`「NDC y=+1 对应 area.y」）
+ *      ⟹ ndc.y=+1 落在**首行**，行 = (1−ndc.y)/2·H 再翻一次 ⟹ **行位移 = −jy**。
+ * ⟹ `c = (+jx, −jy)`。
+ *
+ * ⚠ 上面 `applyProjectionJitter` 的注释说「y 不需额外翻向」——那说的是**矩阵运算本身**，
+ *   翻向发生在其后的 ndc→视口映射里。**内容位移口径以本函数为准**（两者不矛盾，但连读易错）。
+ * ⚠ `tools/imgqa/temporal.cpp::jitterDeltaPx` 返回的是本函数的**相反数** `(−jx, +jy)`——
+ *   不是矛盾：探针 `freeShift` 语义为 `frame(p) = ref(p + d)` ⟹ `d = −c`。
+ *
+ * **实测背书**（2026-10-04，`imgqa taa-swim`）：本符号若反，采样偏移 = `−c_t` ⟹ 静止机位游动
+ * 从 **0.060px** 变 **~1.33px**（闭式 0.667px，20 倍差，不会被噪声掩盖）。逐轴符号亦被该结果
+ * 钉住——若只有 y 反了，游动不会归零到 0.060px。
+ */
+export glm::vec2 contentShiftPx(glm::vec2 jitterPx) {
+	return {jitterPx.x, -jitterPx.y};
+}
+
+/**
  * 相机「跳切」判据（相邻两帧位姿突变 ⇒ 上一帧历史不可复用）。
  *
  * 重投影能修的是**连续**运动；不连续（传送 / 切镜头）时上一帧的像素对应的世界点

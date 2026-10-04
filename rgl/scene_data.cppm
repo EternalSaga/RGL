@@ -231,48 +231,67 @@ static_assert(kSceneDataShadowSplitsOffset == 721952 && kSceneDataShadowParamsOf
 static_assert(kSceneDataShadowMatrixOffset == 721696,
 	"scene.slang readShadowViewProj literal 721696 out of sync with kSceneDataShadowMatrixOffset");
 
-/** 批 12.6 TAA 区（EVSSM 常量 vec4 之后 160B，四段子区；末段 16B 为批 13.2 追加）：
+/** 批 12.6 TAA 区（EVSSM 常量 vec4 之后 160B，四段子区；末段 16B 自批 13.5 改义）：
+ *
+ *  🔵 **批 13.5 的架构变更（读整段前先看这条）**：历史附件 `taa_hist` 自批 13.5 起住在
+ *  **基空间**（无抖动网格），不再住抖动空间。做法 = taa.frag 把**本帧**输入按 c_t 做
+ *  un-jitter 重建后再进时域混合 ⟹ 混合结果天然基空间 ⟹ 历史不再每帧被亚像素重采样
+ *  （静止机位下重采样偏移恒 0）。这修掉「固定频率 + 固定位置」的 16 帧周期边缘 shimmer。
+ *  全案 → `docs/taa_history_space_plan.md`。**本区四段载荷的字节布局与偏移全部未变。**
+ *
  *  - `kSceneDataTaaOffset`（mat4, 64B）= 上一帧**抖动后**的 proj·view。重投影公式：
  *      world = (sceneData@64 skyInvViewProj) · clip(uv, depth)   ← 本帧抖动后的逆矩阵
  *      prevClip = prevViewProj · (motionPrevFromCur · world)     ← 上一帧抖动后的矩阵
  *    两侧各用**自己那一帧的抖动后**矩阵（不是「口径不统一」，而是「两边都是渲染出各自
- *    那张图的那个矩阵」）：深度缓冲由抖动后矩阵产出 ⇒ 重建必须配套；历史图由 taa_out
- *    逐像素 1:1 拷来、内容同样是抖动投影渲的 ⇒ 查找必须用**渲染出它的那个**矩阵。
+ *    那张图的那个矩阵」）：深度缓冲由抖动后矩阵产出 ⇒ 重建必须配套。
  *    ⚠ 这里曾长期存「未抖」那份（理由写作「历史图是像素中心对齐的」）——把「像素中心
  *    对齐」误读成「在未抖网格里」。后果 = 采样点系统性偏 -jitter_prev（±0.5px 且每帧
  *    随机变），静止机位实测 S1/S2 = 0.48×（开滤波逐帧差反而**翻倍**）。批 12.6 T4。
+ *    🔵 **批 13.5：本裁决仍然成立、未被反转**，但**理由变了，且多了一条成对约束**：
+ *      · 本字段产出的是**抖动网格**上的坐标 = `β_{t−1}(w) + c_{t−1}`（β = 基网格位置）。
+ *      · 历史现在住基空间 ⟹ taa.frag 拿到后要**减 `kSceneDataTaaPrevContentShiftOffset`**
+ *        才落到 `β_{t−1}(w)`。
+ *      · ⟹ **两处成对、二选一**：要么「本字段抖动后 + shader 减 c_{t−1}」（现行），要么
+ *        「本字段未抖 + shader 不减」（Filament 形态）。**都做 = 多减一次 c_{t−1}，
+ *        都不做 = 少减一次 c_{t−1}**，两种都让静止机位 0.667px 游动原样回来。
+ *        改一侧必须同时改另一侧。
  *  - `kSceneDataTaaMotionOffset`（mat4, 64B）= `prevSpin · inverse(curSpin)`。本项目的
  *    运动源是 SceneSpin「全场景同一旋转矩阵」，所以一个 mat4 就**精确**补偿物体运动
  *    （Filament 纯深度重投影假设世界静止，动场景必拖影；RGL 这里没有这个 gap）。
  *    spin 关 = 单位阵。
- *  - `kSceneDataTaaParamsOffset`（vec4, 16B）= (x = feedback 历史权重, y = historyValid 1/0,
- *    z = jitterX 像素, w = jitterY 像素)。y=0 时 shader 直接输出本帧 = **逐位旁路**
+ *  - `kSceneDataTaaParamsOffset`（vec4, 16B）= (x = feedback 本帧权重, y = historyValid 1/0,
+ *    z/w = **本帧内容位移 c_t** 像素)。y=0 时 shader 直接输出本帧 = **逐位旁路**
  *    （首帧 / resize / 相机跳切走这条，同 ao.strength=0 的旁路纪律）。
- *  - `kSceneDataTaaResolveOffset`（vec4, 16B）= 批 13.2 基空间输出偏移（见其自身注释）。
+ *    🔵 批 13.5：zw 此前装 `jitterPx` 但 **shader 从未读**（死载荷）；现改装 c_t 并**真读**
+ *    （输入侧 un-jitter）。⚠ 两者差一个 y 轴翻号（`c = (+jx, −jy)`，见
+ *    `taa_jitter.cppm::contentShiftPx`），照旧口径读会错一整轴。
+ *  - `kSceneDataTaaPrevContentShiftOffset`（vec4, 16B）= **上一帧内容位移 c_{t−1}**（批 13.5）。
  * 消费端 = taa.frag.slang 字面量（两侧 static_assert 钉死同步）。 */
 export inline constexpr uint32_t kSceneDataTaaOffset = kSceneDataEvssmConstOffset + 16u;
 export inline constexpr uint32_t kSceneDataTaaMotionOffset = kSceneDataTaaOffset + 64u;
 export inline constexpr uint32_t kSceneDataTaaParamsOffset = kSceneDataTaaOffset + 128u;
 /**
- * 批 13.2 基空间输出（un-jittered resolve）：最终消费处（tonemap）要加的**采样偏移**
- * （vec4 = x/y = 偏移像素，z = 门标志 1/0，w 保留）。
+ * 批 13.5 历史基空间修正：**上一帧内容位移** c_{t−1}（vec4 = x/y = 像素，z/w 保留）。
+ * 偏移 @722224 = 复用批 13.2「基空间输出」删除后空出的槽 ⟹ **零布局变更**（static_assert 不变）。
  *
- * 为什么需要它（一句话）：TAA 输出长在**抖动空间**——静止机位下收敛后 `O_t(x) = F_t(x − c_t)`
- * （c_t = 本帧「内容位移」，与 jitterPx 逐轴换算见 `render_list_impl.cppm::fillTaaData`），
- * 于是相邻两帧是精确平移 `|c_t − c_{t−1}|`（实测 0.717px 均值），**与 feedback 无关**
- * ⟹ 时域累积在原理上消不掉它。要消只能改输出口径：消费端按 `+c_t` 偏移采样即得基空间 `F_t(x)`。
+ * 为什么需要它（一句话）：批 13.2 只把**显示**搬回基空间（在 tonemap 加 `+c_t` 采样偏移），
+ * 而**累积**那一半没动——历史图仍住抖动空间 ⟹ 静止机位下每帧按 `δ_t = c_t − c_{t−1}`
+ * （闭式均值 0.667px）亚像素重采样历史 ⟹ 输出对 16 帧抖动相位是周期函数、且只在边缘响应
+ * = 用户报障的「固定频率 + 固定位置」shimmer；老贡献被反复重采样 = 比理想参考还糊 1.5 倍。
+ * 批 13.5 把 un-jitter 从 tonemap **前移到 taa 的输入侧** ⟹ 混合结果天然基空间 ⟹ 历史
+ * 不再被亚像素重采样（静止机位偏移恒 0）⟹ 两个症状同源一起消。
+ * tonemap 侧的 `+c_t` 偏移随之删除（留着 = 双重 un-jitter，比改前更糟）。全案 →
+ * `docs/taa_history_space_plan.md`。
  *
- * 为什么是「CPU 算好偏移、shader 只管加」而不是「shader 读 jitterPx 自己判门」：
- * 门（`taa.base_space`）与「本帧抖了多少」是两件事，把判定留在 CPU 一处，shader 侧就
- * **没有门逻辑**——门关时本区恒为 (0,0,0,0)，`uv + 0` 逐位 = `uv`（IEEE：`0·t = 0`、
- * `x + 0 = x`，编译器折成 FMA 也成立：`fma(0,t,uv) = uv`）⟹ 门关红线是构造性的。
- * z 分量是**显式**门标志：shader 见 z<0.5 直接原样返回 uv，不依赖「偏移恰好为 0」
- * 这个巧合（TAA 整体关闭时 j 恒 0，但那是巧合不是门）。
+ * 为什么偏移仍由 CPU 算好、shader 只管减：与批 13.2 同理由（把口径判定留在 CPU 一处）。
+ * 本字段**无门标志位**——它不是门，是数据：TAA 关 / `jitter_scale=0` ⇒ `jitterPx = 0`
+ * ⇒ 本字段全 0 ⇒ shader 的 `prevUv − 0` 逐位 = `prevUv`（IEEE：`x − 0 = x`，折成 FMA 亦成立）
+ * ⟹ 门红线是**构造性**的，不需要显式门标志。
  */
-export inline constexpr uint32_t kSceneDataTaaResolveOffset = kSceneDataTaaOffset + 144u;
+export inline constexpr uint32_t kSceneDataTaaPrevContentShiftOffset = kSceneDataTaaOffset + 144u;
 export inline constexpr uint32_t kSceneDataTaaBytes = 160u;
 static_assert(kSceneDataTaaOffset == 722080 && kSceneDataTaaMotionOffset == 722144
-	&& kSceneDataTaaParamsOffset == 722208 && kSceneDataTaaResolveOffset == 722224,
+	&& kSceneDataTaaParamsOffset == 722208 && kSceneDataTaaPrevContentShiftOffset == 722224,
 	"scene.slang taa literals drifted from scene_data.cppm offsets");
 
 /** scene data buffer 总字节数 = 头 128 + 对象矩阵表 + 灯数组区 + MVP 表 + 材质表 +

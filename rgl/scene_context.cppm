@@ -495,10 +495,14 @@ export struct SceneEnv {
 	float taaFeedback = 0.12f;   ///< 本帧权重（Filament 默认 0.12 ⇒ ≈19 帧收敛）
 	float taaJitterScale = 1.0f;  ///< 抖动幅度倍率（1 = ±0.5px）
 	bool taaMotionCompensation = true;  ///< 是否用 prevSpin 补偿全场景旋转
-	// 批 13.2 基空间输出（`taa.base_space`）：true ⟹ 每帧把「本帧内容位移」写进 scene data
-	// @722224，tonemap 按它偏移采样 taa_out 与 AO（把输出从抖动空间搬回基网格）。
-	// 唯一消费者 = tonemap；历史与 taa.frag 完全不认识它。false = 该区恒 0 = 逐位不变。
-	bool taaBaseSpace = false;
+	// 批 13.5 基空间累积（`taa.base_space`，语义于批 13.5 改义 → scene_config.cppm 同名字段
+	// 注释）：true ⟹ 每帧把「本帧内容位移 c_t」写进 scene data @722208.zw、把「上一帧内容
+	// 位移 c_{t−1}」写进 @722224，由 **taa.frag** 消费（输入侧 un-jitter + 历史对齐）。
+	// 唯一消费者 = taa.frag（批 13.2 时代是 tonemap）；tonemap 与 taa_commit 不认识它。
+	// false = 两区恒 0 = 逐位回到改前 `base_space = false` 形态（A/B 对照点）。
+	// ⚠ 默认值与 SceneConfig 的**生效默认**对齐（true）。曾写 false 而 main 总从 config 覆盖
+	//   ⟹ 直接构造 SceneEnv 的测试拿到 false、生产拿到 true = 谎言行（2026-10-04 清点发现）。
+	bool taaBaseSpace = true;
 	// Phase 5.5 批次 4 天空盒：enabled = env 已上传且 scene.lua environment.skybox=true；
 	// pipeline = ShaderRegistry "skybox" 条目下标（main 启动期 addSkyEntry 后回填；
 	// 0xFFFFFFFF = 未建条目——renderListSystem 见 enabled 但 pipeline 无效 = 契约漂移）
@@ -551,6 +555,7 @@ export struct ViewProjection {
 export struct TaaState {
 	// ── 簿记（上一帧位姿，taaSystem 帧尾推进）──
 	glm::mat4 prevViewProj{1.0f};  ///< 上一帧**抖动后** proj·view（与历史图内容同口径）
+	glm::vec2 prevContentShift{};  ///< 上一帧**内容位移** c_{t−1}（像素；= 历史图自己那帧的位移）
 	glm::mat4 prevSpin{1.0f};      ///< 上一帧 SceneSpin::matrix
 	glm::vec3 prevCamPos{};
 	glm::vec3 prevForward{0.0f, 0.0f, -1.0f};
@@ -559,6 +564,7 @@ export struct TaaState {
 	// ── 本帧载荷（taaSystem 先算、renderListSystem 后读；与簿记**分开存**：同一字段
 	//    既当载荷又当簿记，就会把「谁先读谁后推进」写成隐式时序耦合）──
 	glm::mat4 payloadPrevViewProj{1.0f};
+	glm::vec2 payloadPrevContentShift{};  ///< 本帧载荷 = 上一帧内容位移（历史基空间修正用）
 	glm::mat4 payloadMotion{1.0f};  ///< prevSpin·inverse(curSpin)（关补偿 = 单位阵）
 	bool historyValid = false;      ///< 本帧历史可否复用（false = shader 输出本帧）
 };

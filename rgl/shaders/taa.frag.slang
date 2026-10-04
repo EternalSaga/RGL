@@ -2,14 +2,26 @@
 // mesh 复用 light.mesh.spv（全屏大三角，uv = framebuffer 对齐 1:1，同 tonemap/ao），
 // state="taa"，执行器经 state 名解析管线条目（decorateTaaPass 插在 tonemap 之前）。
 //
-// ── 数据流 ──
+// ── 数据流（批 13.5 起：历史住**基空间**）──
 //   本帧色（binding 4，jitter 投影渲出）+ 深度（binding 6，与 jitter 投影配套）
-//   → 世界坐标重建（scene data @64 invViewProj，**抖动后**矩阵，与深度同口径）
+//   → **输入侧 un-jitter**（按本帧内容位移 c_t 双线性重建到基网格；批 13.5，见 main 内注释）
+//   → 世界坐标重建（scene data @64 invViewProj，**抖动后**矩阵，与深度同口径 —— 深度缓冲
+//     是抖动投影渲的，这一半边**不**跟着搬基空间）
 //   → 场景运动补偿（motion = prevSpin·inverse(curSpin)，全场景同一旋转 ⇒ 一条 mat4
 //     即精确补偿，优于逐物体运动矢量）
-//   → 投到上一帧（prevViewProj = 上一帧**抖动后**矩阵 = 渲染出历史图的那个矩阵；历史内容
-//     本就长在抖动后的屏幕系上，用未抖那份会系统性偏掉 -jitter_prev）→ 双线性采历史（binding 5）
+//   → 投到上一帧（prevViewProj = 上一帧**抖动后**矩阵 ⟹ 产出**抖动网格**坐标）
+//   → **减 c_{t−1} 落回基空间历史网格**（批 13.5；与上一行的「抖动后」口径成对）
+//   → Catmull-Rom 采历史（binding 5；静止机位下采样偏移恒 0 ⟹ 实际退化为点采样）
 //   → 邻域裁剪（box5 AABB，Reinhard 域压 HDR 闪烁）→ 与历史混（feedback 常量）。
+//
+// ── 为什么历史必须住基空间（批 13.5 根因，别再改回去）──
+//   改前：历史 = 上一帧 taa_out 逐像素 1:1 拷来，内容长在抖动空间 ⟹ 静止机位下每帧按
+//   `δ_t = c_t − c_{t−1}`（闭式均值 0.667px）亚像素重采样历史。Halton 周期 16 ⟹ `δ_t` 只取
+//   16 个离散值、且只依赖相位不依赖内容 ⟹ **输出对相位是 16 周期函数**，而重采样误差只在
+//   高频处响应 ⟹ 钉死在几何边缘 = 用户报障的「固定频率 + 固定位置」shimmer（实测交付相邻帧
+//   9.22% 像素 >2LSB）；老贡献被反复重采样 ⟹ 比理想 16 相位超采样还糊 1.5 倍（梯度比 0.671）。
+//   改后：抖动在进入累积**之前**被消化 ⟹ 混合发生在基空间 ⟹ 静止机位历史零重采样。
+//   Filament 同构（输入侧 Lanczos un-jitter + 两侧无抖矩阵），全案 → `docs/taa_history_space_plan.md`。
 //
 // ── 算法出处（抄 Filament antiAliasing/taa/taa.mat，逐项对齐）──
 //   · 邻域 min/max（box5 十字邻域）+ 历史点沿线段裁到 AABB（Lottes line clip，
@@ -191,22 +203,69 @@ float3 sampleHistoryCatmullRom(float2 uv)
 [shader("fragment")]
 float4 main(TaaInput input) : SV_Target
 {
-    const float4 params = readTaaParams();  // (feedback, historyValid, jitterX, jitterY)
-    const float3 cur = colorTex.Sample(linearSampler, input.uv).rgb;
-
-    // 逐位旁路早退（首帧 / resize / 跳切；见头注释"逐位旁路"段）
-    if (params.y < 0.5)
-        return float4(cur, 1.0);
-
-    // ── 邻域 AABB（box5 十字：中心 + 上下左右，Reinhard 域）──
-    // ⚠ texel 必须先于出画判据取到：出画判据要**半个纹容差**（见下）。
+    const float4 params = readTaaParams();  // (feedback, historyValid, c_t.x px, c_t.y px)
+    // ⚠ texel 必须先于一切采样取到：un-jitter 与出画判据都要它。
     uint pxW, pxH, mLvl;
     colorTex.GetDimensions(0u, pxW, pxH, mLvl);
     const float2 texel = 1.0 / float2(float(pxW), float(pxH));
 
+    // ── 输入侧 un-jitter（批 13.5）：把本帧从抖动网格搬到基网格 ──
+    // 抖动后渲染的图像内容整体平移 +c_t（`I_t(x) = F(x − c_t)`）⟹ 按 `+c_t` 采样即落回
+    // 基网格。**这是本 pass 时域稳定性的来源**：混合从此发生在基空间，历史不再每帧被
+    // 亚像素重采样（静止机位下历史采样偏移恒 0）⟹ 16 帧周期固定位置 shimmer 的成因消失。
+    // 核 = **双线性**（4 tap，权重恒 ∈[0,1]）。刻意不用 CR/Lanczos：输入侧重建每帧只做一次、
+    // 不叠加，低通不复利；但**负瓣振铃会进历史并在历史里累积**。
+    // 【实测背书，原样搬自批 13.2 的 resolve 核选型（同一族问题，数据勿丢）】
+    //   本机 bistro 1280×720、交付配置 + 用户机位、fb=.12 js=1、2026-10-04：
+    //     梯度能量（越高越锐）    不重采样 0.038272 ｜ 双线性 **0.034843** ｜ CR 0.036999
+    //     `imgqa aa-coverage` 域内最大误差  0.138 列 ｜ 双线性 **0.119 列** ｜ CR 0.181 列
+    //     黑晕「凭空多黑」        0.026 列 ｜ 双线性 0.016 列 ｜ CR **−0.030 列**
+    //   ⟹ CR 确实更锐（+6.2% 梯度），但在**本项目已登记的抗锯齿判据**上退化（0.119 → 0.181，
+    //     比不重采样基线 0.138 还差），且「凭空多黑」翻成**负号** = 负瓣在黑白边界造振铃。
+    //     梯度能量这条**没有闭式参考**，单看它会得出相反结论（`taa_plan` §7 第 10 条同一课：
+    //     拿没有闭式的量当主判据，结论随量的选择翻转）。故按有闭式的那条定案 = **双线性**。
+    // ⚠ **必须显式 saturate 钳回 [0,1]**：共享 sampler 的 wrap 是 **REPEAT**
+    //   （`sampler_library.cppm` 平铺 UV 定案，bistro 49.5% primitive 越界 [0,1]），而
+    //   屏幕空间 uv 越界绕回 = 最外一圈采到**对侧**像素（1px 宽的假边）。|c_t| ≤ 0.5px
+    //   ⟹ baseUv 最多越界半纹，正好触发。钳到 [0,1] 等价 CLAMP_TO_EDGE，双线性核对
+    //   [0,1] 内的亚像素越界本就把取数钳到边缘纹素，**不改内部像素一个 bit**。
+    //   （此坑原载于批 13.2 tonemap resolve 注释，随 un-jitter 前移一并搬来；
+    //    邻域盒的 ±1 texel 抽头**不**钳——改前就如此，钳了会动基线。）
+    const float2 baseUv = saturate(input.uv + params.zw * texel);
+    const float3 cur = colorTex.Sample(linearSampler, baseUv).rgb;
+
+    // 逐位旁路早退（首帧 / resize / 跳切；见头注释"逐位旁路"段）
+    // ⚠ 返回的是**已 un-jitter** 那份，不是原始抖动帧：taa_out 每帧都 blit 进 taa_hist 当
+    //   下一帧历史，早退帧若留在抖动空间，下一帧就会拿抖动空间图当基空间历史用（偏 c_{t−1}）。
+    if (params.y < 0.5)
+        return float4(cur, 1.0);
+
+    // ── 邻域 AABB（box5 十字：中心 + 上下左右，Reinhard 域）──
+    // 抽头绕 **baseUv**（不是 input.uv）：盒要与 cur/历史同处基空间，否则盒是抖动系的、
+    // 被裁的值是基系的 ⟹ 裁剪边界系统性偏 c_t（批 13.5 前两者都在抖动空间，无此问题）。
+    float3 mn = 1.0, mx = 0.0, centroid = 0.0;
+    const int2 offs[5] = { {0, 0}, {1, 0}, {-1, 0}, {0, 1}, {0, -1} };
+    for (int i = 0; i < 5; ++i)
+    {
+        const float3 t = clampHdr(colorTex.SampleLevel(linearSampler,
+            baseUv + float2(offs[i]) * texel, 0.0).rgb);
+        const float3 r = toReinhard(t);
+        mn = min(mn, r);
+        mx = max(mx, r);
+        centroid += r;
+    }
+    centroid *= 0.2;
+
     // ── 重投影：本帧像素 → 上一帧屏幕 uv ──
+    // ⚠ **uv 用 baseUv，不是 input.uv**（批 13.5，写错就白改）：混合用的颜色 `cur` 取自
+    //   baseUv ⟹ 输出像素 input.uv 代表的是**基位置 input.uv**；而深度按 input.uv 取是
+    //   对的（它就是本像素的表面深度），但**重建用的 uv 必须是基位置**——抖动投影下
+    //   「基位置 β 的世界点」出现在像素 β + c_t，故喂 baseUv = input.uv + c_t 才解出
+    //   基位置 = input.uv 的那个世界点。喂 input.uv 会解出基位置 = input.uv − c_t 的世界点
+    //   ⟹ 历史整体偏 c_t（≤0.5px 且随相位变）⟹ shimmer 只是换个形式，没消掉。
+    //   （单测 `test_taa_jitter` 的「静止机位历史落回本像素」不变量就是为这条而写。）
     const float depth = depthTex.Load(int3(input.position.xy, 0)).r;
-    float3 world = worldFromDepth(input.uv, depth);
+    float3 world = worldFromDepth(baseUv, depth);
     float4 worldPrev = float4(world, 1.0);
     if (depth < 1.0)  // 天空不随场景自旋（motion 是场景旋转补偿）
         worldPrev = mulM(readTaaMotion(), worldPrev);
@@ -216,28 +275,24 @@ float4 main(TaaInput input) : SV_Target
     const float2 prevNdc = prevClip.xy / prevClip.w;
     // ndc → uv 与 worldFromDepth 的 y 翻转互逆：uv.y = (1 − ndc.y)/2
     const float2 prevUv = float2(prevNdc.x * 0.5 + 0.5, (1.0 - prevNdc.y) * 0.5);
+    // ── 基空间对齐（批 13.5）──
+    // prevViewProj 是**抖动后**矩阵 ⟹ 上面的 prevUv 落在上一帧的**抖动**网格上
+    // （= β_{t−1}(w) + c_{t−1}，β = 基网格位置），而历史图自批 13.5 起住**基空间**（按 β
+    // 索引）⟹ 减 c_{t−1} 才对齐。静止机位下这一步把历史采样偏移从 c_{t−1} 拉回 **0**
+    //（改前：每帧按 δ_t 亚像素重采样历史 = 「固定频率 + 固定位置」shimmer 的成因）。
+    // ⚠ 与 prevViewProj 的「抖动后」口径**成对**：把它改成未抖矩阵就必须删掉本行
+    //   （否则 = 多减一次 c_{t−1}，同样错）。见 scene.slang / scene_data.cppm 同段警告。
+    const float2 prevUvBase = prevUv - readTaaPrevContentShift().xy * texel;
     // 出画判据带**半个纹容差**：uv 的合法域是纹素中心 [0.5·texel, 1 − 0.5·texel]，
     // 而判据原来写的是 [0,1] —— 最外一圈的纹素中心本来就"出界"半个纹，于是**整列 x=1279
     // 或整行 y=0** 被误拒（mode 8 诊断图实测，交付配置 + 用户机位 js=1：旧判据逐帧拒
     // 0…2199 像素、17 帧均值 0.086%，命中集合随抖动相位在最外一行/最外一列之间切换；
     // 半纹判据下同一序列 **逐帧恒为 0**）。半纹 = 「重投影仍落在最外圈纹素之内」的最紧
     // 正确边界；再宽就会把真正的出画（clamp 边缘拿错像素）放进来。
+    // ⚠ 判据跑在 **prevUvBase**（历史真正被索引的坐标）上，不是抖动网格的 prevUv。
     const float2 outTol = 0.5 * texel;
-    if (any(prevUv < -outTol) || any(prevUv > 1.0 + outTol))
+    if (any(prevUvBase < -outTol) || any(prevUvBase > 1.0 + outTol))
         return float4(cur, 1.0);  // 出画（本帧视锥外）：clamp 边缘 = 拿错像素，拒绝
-
-    float3 mn = 1.0, mx = 0.0, centroid = 0.0;
-    const int2 offs[5] = { {0, 0}, {1, 0}, {-1, 0}, {0, 1}, {0, -1} };
-    for (int i = 0; i < 5; ++i)
-    {
-        const float3 t = clampHdr(colorTex.SampleLevel(linearSampler,
-            input.uv + float2(offs[i]) * texel, 0.0).rgb);
-        const float3 r = toReinhard(t);
-        mn = min(mn, r);
-        mx = max(mx, r);
-        centroid += r;
-    }
-    centroid *= 0.2;
 
     // ── 历史裁剪 + 混合 ──
     // ⚠ **参数序 = feedback 是「本帧权重」**（configs/scene.lua taa.feedback 的文档口径 +
@@ -247,7 +302,9 @@ float4 main(TaaInput input) : SV_Target
     // 全图直方图只多出**一个**混合级（历史只渗进 12%，永不继续累积）。
     // 推论：f=0 ⇒ 输出 = 裁剪后的**历史**（完全丢本帧的退化反馈环），不是「无滤波」；
     // 要做「只抖不滤」的消融请用 f=1（imgqa temporal 的 S1 组）。
-    const float3 hist = clampHdr(sampleHistoryCatmullRom(prevUv).rgb);
+    // 批 13.5 后：静止机位下 prevUvBase 恒等于本像素中心 ⟹ CR 权重退化成 (0,1,0,0)
+    // = **点采样**（这正是「历史不再被反复低通」的算术表达，也是糊度应回落的原因）。
+    const float3 hist = clampHdr(sampleHistoryCatmullRom(prevUvBase).rgb);
     const float3 histR = toReinhard(hist);
 
     const float3 clipped = fromReinhard(clipToAabb(centroid, histR, mn, mx));

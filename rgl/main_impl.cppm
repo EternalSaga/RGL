@@ -298,7 +298,7 @@ void wireSceneEnvContexts(entt::registry& rg, const SceneConfig& scene) {
 	env.taaFeedback = scene.taaFeedback;
 	env.taaJitterScale = scene.taaJitterScale;
 	env.taaMotionCompensation = scene.taaMotionCompensation;
-	env.taaBaseSpace = scene.taaBaseSpace;  // 批 13.2 基空间输出（唯一消费者 = tonemap）
+	env.taaBaseSpace = scene.taaBaseSpace;  // 批 13.5 基空间累积（唯一消费者 = taa.frag）
 	rg.ctx().emplace<TaaState>();
 }
 

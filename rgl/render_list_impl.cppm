@@ -21,6 +21,7 @@ import camera;
 import render_graph;  // shadowAtlasColumns（图集列数，与装饰 extent 同源）
 import evssm_shadow;  // kEvssmMipLevels（矩链级数；scene data w 从常量导出，禁双源写死）
 import diagnostics;  // diagnostics().shadowPass（阴影总开关）
+import taa_jitter;    // contentShiftPx（内容位移口径唯一出处；批 13.5 起 fillTaaData 要用）
 
 namespace RGL {
 
@@ -244,43 +245,42 @@ constexpr uint32_t kNoMaterial = 0xFFFFFFFFu;
  * 批 12.6 TAA 的 scene data 载荷（尾区 @722080 / @722144 / @722208，生产端在此、
  * 消费端 = taa.frag.slang；字节布局与「两侧口径」见 scene_data.cppm kSceneDataTaa* 注释）。
  *
- * 一句话版：`prevViewProj` = 上一帧**抖动后** proj·view（口径跟历史图内容一致）；
+ * 一句话版：`prevViewProj` = 上一帧**抖动后** proj·view（产出**抖动网格**坐标，
+ * 由 taa.frag 减 `prevContentShift` 落回基空间历史网格）；
  * `motion` = prevSpin·inverse(curSpin)
  * （全场景同一旋转 ⇒ 一个 mat4 精确补偿物体运动，spin 关 = 单位阵）；
- * `params` = (feedback, historyValid, jitterX px, jitterY px)，historyValid=0 时
- * taa.frag 直接输出本帧 = **逐位旁路**。
+ * `params` = (feedback, historyValid, **本帧内容位移 c_t** x/y px)，historyValid=0 时
+ * taa.frag 直接输出本帧（已 un-jitter 那份）= **逐位旁路**。
  * `skyInvViewProj`（上一行填）与本帧的 prevViewProj 都是**抖动后**口径，只是分别属于
  * 「本帧」与「上一帧」——重建世界坐标的半边是它，投回上一帧的半边是 prevViewProj。
  */
 void fillTaaData(FrameDrawList& out, const ViewProjection& viewProj, const SceneEnv& env,
 	const TaaState& taa) {
+	// 内容位移口径的唯一出处 = `taa_jitter.cppm::contentShiftPx`（逐轴符号推导 + 实测背书
+	// 全在那儿；此处**不再重复推导**，重复的推导必然漂移成两个版本）。
+	// 门 `taa.base_space` 关 ⇒ 写 0 ⇒ shader 的 `baseUv` 逐位 = `input.uv`（见下方门注释）。
+	const glm::vec2 contentShift
+		= env.taaBaseSpace ? contentShiftPx(viewProj.jitterPx) : glm::vec2{0.0f};
 	out.sceneData.taaPrevViewProj = taa.payloadPrevViewProj;
 	out.sceneData.taaMotion = taa.payloadMotion;
+	// zw = **本帧内容位移 c_t**。⚠ 批 13.5 起 taa.frag 真读它做输入侧 un-jitter；
+	// 此前这里写的是 jitterPx 而 shader 从不读 = 死载荷（口径差一个 y 轴翻号，读了就错）。
 	out.sceneData.taaParams = {env.taaFeedback, taa.historyValid ? 1.0f : 0.0f,
-		viewProj.jitterPx.x, viewProj.jitterPx.y};
-	// 批 13.2 基空间输出：偏移 = **本帧内容位移**（`O_t(x) = F_t(x − c_t)` ⟹ 消费端按
-	// `+c_t` 采样即落回基网格）。`c_t` 与 `jitterPx` 的换算（逐轴符号不同，勿凭直觉写）：
-	//   `applyProjectionJitter` 给 `proj[2][0/1]` 加 `−2j/extent` ⟹ `Δndc = (+2jx/W, +2jy/H)`
-	//   （clip.w = −v.z 带来一次翻号，`taa_jitter.cppm` 推导段）；
-	//   x：ndc → 列 = (ndc.x+1)/2·W，不翻 ⟹ **列位移 = +jx**；
-	//   y：本引擎用**负高视口**（`shader.cppm::applyDynamicState`「NDC y=+1 对应 area.y」）
-	//      ⟹ ndc.y=+1 落在**首行**，行 = (1−ndc.y)/2·H 再翻一次 ⟹ **行位移 = −jy**。
-	// ⟹ `c_t = (+jitterPx.x, −jitterPx.y)`。⚠ `tools/imgqa/temporal.cpp::jitterDeltaPx` 返回的
-	//   是它的**相反数** `(−jx, +jy)`——那不是矛盾：探针的 `freeShift` 语义为 `frame(p) = ref(p + d)`
-	//   ⟹ d = −c_t（2026-10-04 已把两边注释统一到口径名，别再写「图像位移」这种歧义词）。
-	//   **裁决已下（2026-10-04 实测）**：门开态游动 0.060px（门关 0.643px、闭式 0.667px）——
-	//   本处符号若反，采样偏移 = −c_t ⟹ 游动**翻倍**到 ~1.33px 而非归零（20 倍差，不会被噪声
-	//   掩盖）⟹ `(+jitterPx.x, −jitterPx.y)` 是对的，判据 = `imgqa taa-swim` 的
-	//   `temporal-base-space`（阳性锚点 = 同次运行门关态仍 0.643px）。
-	// 门（`taa.base_space`）判定**只在这一处**：门关时写全 0，tonemap 的 `uv + 0` 逐位 = `uv`。
-	// 刻意**不**与 `historyValid` 关联——首帧/跳切那几帧 taa_out 的内容仍是抖动投影渲出来的
-	// （shader 早退只是「不混历史」，不是「不抖」），那些帧同样要偏移，否则同一场画面会
-	// 一半在基空间一半在抖动空间。也不与 `taaEnabled` 关联：TAA 关时 `jitterPx` 恒 0
-	// （taaSystem 不调 applyProjectionJitter），加不加偏移逐位相同；但门标志位照写，
-	// shader 侧不依赖那个巧合。
-	out.sceneData.taaResolveOffset = env.taaBaseSpace
-		? glm::vec4{viewProj.jitterPx.x, -viewProj.jitterPx.y, 1.0f, 0.0f}
-		: glm::vec4{0.0f};
+		contentShift.x, contentShift.y};
+	// ── 批 13.5 基空间累积（门 `taa.base_space`，**语义已改义**）──
+	// 旧义（批 13.2）：在 tonemap 加 `+c_t` 采样偏移把**输出**搬回基空间（只修显示那一半）。
+	// 新义（批 13.5）：在 **taa pass 的输入侧**做 un-jitter + 历史 c_{t−1} 修正 ⟹ **累积**
+	//   发生在基空间、历史不再每帧被亚像素重采样。tonemap 侧的偏移已删（留着 = 双重 un-jitter）。
+	// 门判定**只在这一处**（shader 侧无门逻辑）：门关 ⇒ 两个载荷全写 0 ⇒ `baseUv` 逐位 =
+	// `input.uv`、`prevUvBase` 逐位 = `prevUv`（IEEE：`x + 0 = x`、`x − 0 = x`，折成 FMA 亦
+	// 成立）⟹ 门关态 = **改前的 `base_space = false` 形态**（输出在抖动空间 + 历史每帧重采样），
+	// 是一个**合法的 A/B 对照点**：门开/门关之差 = 本次架构改造的净效果（同构建可测）。
+	// 刻意**不**与 historyValid 关联：首帧/跳切那几帧 taa_out 的内容同样已 un-jitter
+	// （shader 早退只是「不混历史」，不是「不搬基空间」），下一帧拿它当历史时同样要减
+	// c_{t−1}；若此时写 0，同一场画面会一半在基空间一半在抖动空间。
+	// TAA 关 / jitter_scale=0 ⇒ jitterPx = 0 ⇒ 门开门关逐位相同（门红线自动成立）。
+	const glm::vec2 histShift = env.taaBaseSpace ? taa.payloadPrevContentShift : glm::vec2{0.0f};
+	out.sceneData.taaPrevContentShift = {histShift, 0.0f, 0.0f};
 }
 
 void renderListSystem(entt::registry& rg, RGL::Resources&,
