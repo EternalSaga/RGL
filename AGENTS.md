@@ -31,6 +31,7 @@ just build               # 增量编译（需先 config）；just build-release 
 just reflect             # 重跑 7 条反射管线（改动 shader 契约/schema/模板后必须，见 skill rgl-shader-contract）
 just checks / doc-check / style-check [--strict]  # 源码检查统一入口（tools/checks/main.py，--only style|doc；每次 just build 已随 source_checks 目标跑、只警告；红线清单见 skill rgl-new-module）
 just run                 # 运行
+just smoke / just shot   # agent 一次性 headless 冒烟 / 截图（配置走 RGL_CONFIG_DIR，**不碰 configs 副本**；判据与现场回显 → skill rgl-verify）
 just run-igpu / run-dgpu / run-intel   # 强制核显 / NVIDIA prime 独显 / Intel anv
 just test                # 单元测试（tests/，**无 GPU 无窗口**，毫秒级；排除 gpu 套件）
 just test-all / test-gpu # 含设备级原语用例（要真设备 + VVL；无设备**FAIL 不 SKIP**）
@@ -228,6 +229,7 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
 ## 其他文档
 
 > 每篇文档头部带状态（`现行`/`历史`/`调研`）。现状权威 = 本文件；下一步路由 → 各 phase 计划文件（当前 `docs/phase13_plan.md`；测试体系账本仍看 `docs/phase12_plan.md`）。
+> 本节与 `docs/` 由 source_checks **双向对账**（docs 漏索引 / 本节悬空指针即警告，规则 `agents_doc_index_checks`）——新建 docs 不在此挂号会被构建点名。
 
 - `docs/next_roadmap.md` — **路线图（历史）**：Phase 0–7 结论存档（Phase 8+ 执行记录见各 `phase*_plan.md`；下一步路由 → 当前 `docs/phase13_plan.md`）
 - `docs/技术概念.md` — 核心 Vulkan 模式、设计决策、§构建（Windows 前置与 vcpkg）/ §模块表 / §构建检查工具机制 / §核心运行时模块表（深版）/ §RPC 调试通道（Phase 10b，端点速查）/ §main 启动流（完整版）
