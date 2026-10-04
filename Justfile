@@ -216,6 +216,20 @@ run:
         os.chdir(b); \
         subprocess.call([os.path.join('.', exe)])"  # './' 前缀：Python 3.12+ 起无路径分隔符的相对名改走 PATH 搜索（裸名 = FileNotFoundError）
 
+# agent 冒烟 / 截图（一次性配置，**不碰 build/rgl/configs 副本**）：配置铺到
+# build/rgl/.smoke/ 经 RGL_CONFIG_DIR 注入，跑完没有"需要复原"的状态；开头回显
+# 主机 / GPU / DGC 选路 / 二进制与 SPV 新鲜度 / 副本是否脏（三机轮换先认设备）。
+# 判据 = 真出一帧（llm_debug 截图），errors 抓 [error] 级日志行（含 VVL VUID）。
+#   just smoke                                  冒烟（PASS/FAIL + errors/warnings 计数）
+#   just smoke --variant deferred               换渲染路线冒烟
+#   just shot --name foo --size 1600x900        截图 → build/rgl/screenshots/foo.png
+#   just smoke --from-build                     以 build 副本现场为配置基准（默认基准 = 仓库 configs/）
+smoke *ARGS="":
+    @python tools/smoke.py smoke {{ ARGS }}
+
+shot *ARGS="":
+    @python tools/smoke.py shot {{ ARGS }}
+
 # 核显运行（Linux AMD 集显，原生渲染，无 offload）
 # 必须用 VK_DRIVER_FILES 隐藏 NVIDIA ICD —— 设备评分器默认选 dGPU（分数更高）
 run-igpu:

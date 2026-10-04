@@ -42,9 +42,11 @@ export struct StartupConfigs {
 
 /**
  * 配置目录（相对 CWD）。**默认 `"configs"`**；环境变量 `RGL_CONFIG_DIR` 可覆盖为
- * 另一目录（绝对或相对 CWD 均可），供自动化测试把配置放到一次性目录里跑——
- * 既有做法是改 `build/rgl/configs/` 副本，但那份会被下次 `just build` 按内容比对
- * 静默覆盖复原（见 cmake/RglRuntimeAssets.cmake），测试与 build 互相污染。
+ * 另一目录（绝对或相对 CWD 均可），供自动化测试把配置放到一次性目录里跑（现成使用者 =
+ * `tools/smoke.py`，入口 `just smoke` / `just shot`；imgqa 的 profile 目录同款）。
+ * 反面做法是改 `build/rgl/configs/` 副本：那份**不会**被下次 `just build` 自动复原
+ * （`copy_if_different` 只在源更新时才覆盖，见 cmake/RglRuntimeAssets.cmake），于是
+ * 配置出现两个真相源且"忘复原"是静默的——本 env 覆盖正是为绕开它而存在。
  *
  * **只覆盖配置目录**：资产路径（`models/` `env/` `skybox/` `generated_shaders/`）
  * 仍按 CWD 相对解析，契约不变（见 AGENTS.md「CWD 必须是 build/rgl/」）。

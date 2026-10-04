@@ -1,6 +1,6 @@
 ---
 name: rgl-verify
-description: 运行 RGL 程序做 headless 冒烟、llm_debug 截图多模态读图、BIT-IDENTICAL 截图回归比对、imgqa 区域归因判据。触发词：运行、冒烟、截图、验证渲染、回归、headless、llm_debug、dump_gbuf、图像判据、归属/可见性/影响域、闭式解预测、黑面/没画还是没着色。也适用于排查 "Log config file not found" 等启动问题。
+description: 运行 RGL 程序做 headless 冒烟、llm_debug 截图多模态读图、BIT-IDENTICAL 截图回归比对、imgqa 区域归因判据。触发词：运行、冒烟、just smoke、just shot、截图、验证渲染、回归、headless、llm_debug、RGL_CONFIG_DIR、配置副本、认设备/哪台机器、dump_gbuf、图像判据、归属/可见性/影响域、闭式解预测、黑面/没画还是没着色。也适用于排查 "Log config file not found" 等启动问题。
 ---
 
 # RGL 运行验证（冒烟 / 截图 / 回归）
@@ -10,7 +10,7 @@ description: 运行 RGL 程序做 headless 冒烟、llm_debug 截图多模态读
 - **CWD 必须是 `build/rgl/`**：程序按相对路径读取 `configs/` 和 `generated_shaders/*.spv`，其他目录启动报 "Log config file not found"
 - Mesa ≥26.2.3：RADV 无条件 advertise `VK_EXT_descriptor_heap`，**无需** `RADV_EXPERIMENTAL=heap`（`just run*` 也不再注入）
 - 运行时资源由构建自动同步：`configs/` 增量拷贝（`copy_if_different`，改 config 后 `just build` 即生效；**新增** config 文件需 `just config`）；SPV 直接编译到 `build/rgl/generated_shaders/`
-- **build 端 configs 副本 = `copy_if_different`（只源更新才覆盖）**——调试临时改 `build/rgl/configs/`（副本），调试完**手动** `cp configs/*.lua build/rgl/configs/` 复原（改副本不会触发覆盖，`just build` 不清理陈旧副本内容）；别改仓库源文件
+- **build 端 configs 副本 = `copy_if_different`（只源更新才覆盖）**——临时改副本调试**不会自动复原**（`just build` 不清理陈旧副本内容），要复原得 `cp configs/*.lua build/rgl/configs/`；这就是"双源"，**一次性跑别碰副本**，用 `just smoke` / `just shot`（走 `RGL_CONFIG_DIR`，见下节）
 - 启动期 DGC 选路可直接看 log：`DGC path: device=... -> ...`
 
 ## 运行模式全配置化（环境变量→配置文件，2026-09-08）
@@ -26,17 +26,34 @@ runtime.lua `headless=true` 脱 SDL/compositor（`vkCreateHeadlessSurfaceEXT`）
 llm_debug 截图 = drawFrame 帧内回读 swapchain 后缓冲（present 前拷贝，真实上屏内容）；headless+llm 时 main 契约令 headless_size 跟随 llm_shot.size。
 坑：v357 结构体无 width/height/format 字段、须显式 `VK_KHR_surface`、无 `eImmediate`（用 `eFifo`）。
 
-## agent 冒烟
+## agent 冒烟 / 截图：`just smoke` / `just shot`（2026-10-03 起的一键入口）
 
-1. 改 `build/rgl/configs/runtime.lua` 为 `headless = true`（build 副本临时改；不自动复原，跑完手动 cp 回）
-2. `cd build/rgl && timeout 8 ./rgl`
-3. 正常应零 `[error]`；deferred 路线另改 build 副本 `render_graph.lua` 的 `variant="deferred"`
+```bash
+just smoke                                # headless 出一帧，报 errors/warnings + 设备现场
+just smoke --variant deferred             # 换渲染路线
+just shot --name foo --size 1600x900      # 截图 → build/rgl/screenshots/foo.png（读它）
+just smoke --from-build                   # 配置基准 = build 副本现场（默认 = 仓库 configs/）
+```
 
-## llm_debug 截图（多模态读图）
+`tools/smoke.py`（stdlib-only）把一次性配置铺到 `build/rgl/.smoke/` 并用 **`RGL_CONFIG_DIR`**
+注入（引擎契约：只覆盖配置目录，资产仍按 CWD 相对）——**不改任何配置副本，因此没有
+"跑完要复原"的状态**。旧做法（手改 `build/rgl/configs/runtime.lua` 再 `cp` 回来）已废弃：
+那份副本是双源，忘复原是静默的。
 
-1. build 副本 `configs/runtime.lua` 改 `headless=true` + `llm_debug=true`
-2. 直接跑二进制 → 延迟 N 帧存 PNG（路径打日志）并退出 → 读图
-3. `cp configs/*.lua build/rgl/configs/` 复原配置（改源后 `just build` 才会自动覆盖副本）
+工具替你守的判据（写脚本时也要守）：
+
+- **冒烟 = 真出一帧**：两条子命令都走 `llm_debug` 截图（smoke 的探针图随 staging 丢弃），
+  于是"进程活着"与"渲染链跑通"不是两回事，也不靠超时猜渲染完了没。
+- **errors 计数 = `[error]` 级日志行**（引擎 error 与 VVL VUID 同级别，见 `rgl/utils.cppm`
+  vulkanDebugCallback 的 severity 映射）；有 error 行即 FAIL（退出码 1）。
+- **阳性锚点**：日志缺 `headless 模式` 行 = FAIL（否则本次跑的是一次交互窗，判据全废）；
+  PNG 尺寸 ≠ 启动日志 `Swapchain extent` = FAIL；`--size` 请求值未生效 = FAIL。
+- **起跑前**：`pgrep -x rgl` 有残留直接拒跑（并行实例污染画面与计时）；SPV 陈旧
+  （比 `build/rgl/shader_deps.txt` 的源闭包旧）与二进制早于源 → 打"注意"行。
+- **现场回显**：主机 / GPU / DGC 选路 / git 现场 / build 副本是否脏——三机轮换先认设备。
+
+需要工具表达不了的配置（相机机位、scene.lua 场景构成）：改**仓库** `configs/` 后
+`just build` 再跑（默认基准就是它），或改 build 副本后用 `--from-build` 跑现场。
 
 - 相机位置 = `camera.lua` 顶层 position/target/fovDegrees
 - 截图尺寸 = swapchain extent（headless 跟随 llm_shot.size）

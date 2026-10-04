@@ -32,6 +32,8 @@ return {
     -- 就永远不覆盖（2026-10-03 实测踩坑：某次冒烟删了 scene.lua 的 environment 块，之后
     -- 每次运行都没天穹，排查时先被当成代码回归）。冒烟完请立刻复原：
     --   cp configs/*.lua build/rgl/configs/     （或 touch configs/<改过的那个源文件>）
+    -- 首选别走这条路：`just smoke` / `just shot` 用 RGL_CONFIG_DIR 跑一次性配置
+    -- （tools/smoke.py），不碰本文件也不碰副本，因此没有需要复原的状态。
     llm_debug = false,
     llm_shot = {
         file = "screenshots/llm_debug.png",
