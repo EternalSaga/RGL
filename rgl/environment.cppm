@@ -57,11 +57,16 @@ export class Environment {
 
 	/**
 	 * Phase 5.5 sky/env sampler：linear mipmap（mipmapMode=LINEAR + maxLod=mipLevels−1），
-	 * slot = sampler heap reserved + 1（共享 sampler 之后第二槽，capacity reserved+8 足够）。
-	 * 幂等（SamplerLibrary::ensureShared 同模式）。不动共享 sampler——模型纹理路径零影响。
+	 * 槽号经台账申报（归属者 "sampler.skyEnv"）。
+	 *
+	 * ⚠ 本 sampler 的 **maxLod = mipLevels−1 是 GGX 预滤波 mip 链唯一的入口**。2026-10-04
+	 * 之前它与 AO 的 point sampler 各自算出同一个 `reservedSlots + 1`，被后写的 maxLod=0
+	 * 覆写 ⟹ 所有 roughness 都在采样 mip0，`env.mipRange` 扫 0..20 画面逐字节不变。
+	 * 护栏 = `Resources::claimSamplerSlot`（不同归属者结构上不可能同槽）。
+	 * 幂等（同 owner 重复领返回同一槽）。不动共享 sampler——模型纹理路径零影响。
 	 * maxLod 烘焙进描述符 → 调用点须已知环境贴图 mip 级数（env 上传期）。
 	 * @param mipLevels 环境贴图 mip 级数（maxLod = mipLevels−1）
-	 * @return sky sampler 在 sampler heap 的槽号（reservedSlots + 1）
+	 * @return sky sampler 在 sampler heap 的槽号（台账发放）
 	 */
 	[[nodiscard]] uint32_t ensureSkySampler(uint32_t mipLevels) {
 		if (skySamplerReady)
@@ -80,7 +85,10 @@ export class Environment {
 		info.maxLod = static_cast<float>(mipLevels - 1);
 		info.unnormalizedCoordinates = false;  // Bool32 隐转（rlvk 不导出 vk::False 常量）
 		info.borderColor = vk::BorderColor::eIntTransparentBlack;
-		skySamplerSlot = samplerHeap.getReservedSlots() + 1;
+		auto slot = kernel.claimSamplerSlot("sampler.skyEnv");
+		if (!slot)
+			throw std::runtime_error(slot.error().describe());
+		skySamplerSlot = *slot;
 		auto slotAddr = samplerHeap.getSlotCpuAddress(skySamplerSlot);
 		if (!slotAddr)
 			throw std::runtime_error(slotAddr.error().describe());
@@ -134,9 +142,9 @@ export class Environment {
 	SamplerLibrary& samplers;  // 共享 sampler 库引用（prefilter init 共用）
 	RGL::EnvPrefilter envPrefilter;  // Phase 8 ④b：GGX 预滤波 env cubemap 生成器（heap + shader object，启动期一次性）
 	bool envPrefilterBound = false;  // env-prefilter heap 引用已注入标记（ensurePrefilterReady 首建守卫；幂等）
-	// Phase 5.5：sky/env sampler（第二槽，ensureSkySampler 幂等写入）+ 环境 cubemap 单例
+	// Phase 5.5：sky/env sampler（台账申报槽，ensureSkySampler 幂等写入）+ 环境 cubemap 单例
 	vk::SamplerCreateInfo skySamplerCreateInfo{};  // create info 稳定存储（同 SamplerLibrary 规则）
-	uint32_t skySamplerSlot = 0;  // sky sampler 槽号（= reservedSlots + 1）
+	uint32_t skySamplerSlot = 0;  // sky sampler 槽号（Resources::claimSamplerSlot 发放）
 	bool skySamplerReady = false;  // sky sampler 就绪标记（ensureSkySampler 幂等守卫）
 	std::optional<TextureAsset> envAsset;  // env cubemap 单例（nullopt = 未上传环境；场景级资产，见 emplace 注释）
 	std::array<glm::vec4, 9> envIrradianceSH{};  // Phase 8 ④a：环境漫反射 radiance SH9（env 加载期算，见 setIrradianceSH）

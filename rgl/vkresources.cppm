@@ -12,6 +12,7 @@ import vk_instance;
 import vk_device;
 import vk_swapchain;
 import vkerror;
+import slot_ledger;  // sampler heap 用户槽申报制台账（2026-10-04 槽相撞事故护栏，纯逻辑在 rlbase）
 
 namespace RGL {
 
@@ -344,6 +345,39 @@ export class Resources {
 	/** @return 指定用途段的起始槽号（如纹理段首槽 = 白纹理契约槽）。 */
 	[[nodiscard]] uint32_t segmentBegin(SlotSegment segment) const { return segmentBegins[segmentIndex(segment)]; }
 
+	/**
+	 * sampler heap 用户槽**申报制**领槽（2026-10-04 env sampler 槽相撞事故的护栏）。
+	 *
+	 * 旧形态是各使用者自己算 `reservedSlots + N`：`Environment::ensureSkySampler` 与
+	 * `SamplerLibrary::ensurePointSampler` 双双算出 `+1`，两处注释都自称"共享 sampler 之后
+	 * 第二槽"，谁都没错、撞了没人管；而两个 ensure* 的幂等守卫让**后写者永久赢** ⟹ env
+	 * 镜面项拿到 AO 的 NEAREST + maxLod=0 sampler，GGX 预滤波 mip 链从未被采样（判据：
+	 * `env.mipRange` 扫 0..20 画面逐字节不变，而同一次 memcpy 里的 `env.intensity` 活得好
+	 * 好的）。根因是形态不是笔误，所以这里换机制：**归属者只报名字，槽号由台账发**，
+	 * 不同 owner 结构上不可能拿到同一个槽。台账本体 = `slot_ledger`（rlbase，有单测）。
+	 *
+	 * 幂等：同一 owner 重复领返回同一槽（调用方的 `if (ready) return slot;` 守卫因此
+	 * 只是省一次描述符写入，不再承担防相撞职责）。
+	 * @param owner 归属者名（进日志、区分大小写整串比较，如 "sampler.skyEnv"）
+	 * @return 绝对槽号；容量耗尽 → DescriptorSlotOutOfBounds 并打 error 日志（**不静默**）
+	 */
+	[[nodiscard]] std::expected<uint32_t, Error> claimSamplerSlot(std::string_view owner) {
+		auto slot = samplerSlots.claimSlot(owner);
+		if (!slot) {
+			if (auto* logger = RLLogger::getInstance())
+				logger->error("sampler heap 领槽失败（owner={}，已发放 {} / 容量 {}）：{}",
+					owner, samplerSlots.used(), samplerSlots.capacity(), slot.error().message);
+			return slot;
+		}
+		if (auto* logger = RLLogger::getInstance())
+			logger->info("sampler heap slot {} := {}（台账现 {} 项：{}）",
+				*slot, owner, samplerSlots.used(), samplerSlots.describe());
+		return slot;
+	}
+
+	/** @return sampler heap 槽位台账全表摘要（启动末尾回归比对用；"shared→0 skyEnv→1 …"）。 */
+	[[nodiscard]] std::string samplerSlotTable() const { return samplerSlots.describe(); }
+
    private:
 	/** @return 驱动保留槽位数（用户槽起点，三段分配器基址；NVIDIA 3024 /
 	 * RADV·Intel 0，见 createDescriptorHeap）。 */
@@ -479,6 +513,9 @@ export class Resources {
 	vk::ResourceDescriptorInfoEXT depthSampleResourceDesc{};
 	RGL::VmaDescriptorHeap descriptorHeap;  // resource heap（用户槽 = 三段 allocSlot，布局契约见构造器注释）
 	RGL::VmaDescriptorHeap samplerHeap;  // Phase 3：OpTypeSampler 独立 heap
+	/** sampler heap 用户槽申报制台账（2026-10-04 槽相撞护栏）。基址/容量在构造期从
+	 * samplerHeap 取（reserved 区不可用），此后只由 claimSamplerSlot 追加。 */
+	RGL::SlotLedger samplerSlots;
 	/** 三段 slot 分配器：每段独立 [begin, next, end) 游标，跨段不抢占。 */
 	static constexpr size_t kSlotSegmentCount = 3;
 	std::array<uint32_t, kSlotSegmentCount> segmentBegins{};

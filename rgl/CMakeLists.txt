@@ -183,6 +183,7 @@ set(RGL_BASE_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/aa_target.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/vkerror.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/gbuffer_contract.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/slot_ledger.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/pass_vocabulary.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/taa_jitter.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/scene_context.cppm"

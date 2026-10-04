@@ -14,6 +14,7 @@ import vk_instance;
 import vk_device;
 import vk_swapchain;
 import vkerror;
+import slot_ledger;  // samplerSlots 成员的构造（SlotLedger 构造非默认，须在初始化列表给基址/容量）
 
 namespace RGL {
 
@@ -40,7 +41,12 @@ Resources::Resources(RGL::AppContext& vkInstance, RGL::DeviceContext& vkDevice, 
 		  depthImage(createDepthImage(allocator, vkSwapchain.getExtent()).value()),
 		  depthImageView(vkDevice.getDevice(), buildDepthView(*depthImage)),
 		  descriptorHeap(createDescriptorHeap().value()),
-		  samplerHeap(createSamplerHeap().value()) {
+		  samplerHeap(createSamplerHeap().value()),
+		  // sampler heap 用户槽台账：基址 = reservedSlots（驱动保留区 [0, reserved) 声明为
+		  // 不可用），容量 = capacity − reservedSlots（当前驱动 = 8 个用户槽）。成员声明序在
+		  // samplerHeap 之后 ⟹ 此处读它已构造完成。
+		  samplerSlots(samplerHeap.getReservedSlots(),
+			  samplerHeap.getCapacity() - samplerHeap.getReservedSlots()) {
 		initializeSlotSegments(reservedSlots());
 		// 内核不创建任何内容资产（架构债务 1 方案 B）：几何（内建 cube / gltf 模型）、
 		// 纹理、scene data、RT 采样槽全部由内容层经 allocSlot 按用途段领取
@@ -133,8 +139,10 @@ std::expected<RGL::VmaDescriptorHeap, Error> Resources::createDescriptorHeap() {
 /**
  * 背景与容量构成见接口注释。实现：步长 = samplerDescriptorSize（运行时查询）；
  * reservedSlots = ceil(minSamplerHeapReservedRange / 步长)（NVIDIA = 512B → 16 槽 @32B，
- * RADV/Intel = 0）；capacity = reserved + 8（固定小裕量：共享 / sky sampler 各一槽，
- * 余量充足）；实测值打日志。
+ * RADV/Intel = 0）；capacity = reserved + 8（固定小裕量：用户槽由 `Resources::claimSamplerSlot`
+ * 申报发放，现行归属者 3 个 = 共享 LINEAR / AO point / sky env，余量 5）；实测值打日志。
+ * ⚠ 裕量随归属者数涨，领不到时 claimSamplerSlot 打 error + 返回 Error（不静默越界），
+ * 改这里的同时记得看启动日志的 sampler heap 台账行。
  */
 std::expected<RGL::VmaDescriptorHeap, Error> Resources::createSamplerHeap() {
 		auto props = vkDevice.getPhysicalDevice().getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDescriptorHeapPropertiesEXT>();

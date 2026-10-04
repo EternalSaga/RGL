@@ -15,7 +15,8 @@ namespace RGL {
  * Resources::ensureSharedSampler / ensureMipGenReady + MipGen 实例整体搬出——REPEAT wrap
  * 决策与 mip 链基建是**内容策略**，不是资源内核职责）。
  * 生命周期：main 栈对象，构造于 Resources 之后、一切纹理上传（uploadTexture 链）与
- * 管线烘焙之前。sampler heap 首槽契约（slot = reservedSlots）与原实现逐字节一致。
+ * 管线烘焙之前。**槽号不再自算**（2026-10-04）：两个 sampler 均经
+ * `Resources::claimSamplerSlot(归属者名)` 申报领槽，台账保证不同归属者永不拿到同一槽。
  */
 export class SamplerLibrary {
    public:
@@ -48,7 +49,7 @@ export class SamplerLibrary {
 	 * sampler create info 存成员（稳定存储）：本机 RADV 写时即解析
 	 *（docs/archive/heap_texture_research.md §12.2，"采样期解引用"旧归因已证伪），
 	 * 但 spec 允许驱动延迟解释，生命周期须覆盖运行期。
-	 * @return 共享 sampler 在 sampler heap 的槽号（首个可用槽 = reservedSlots）
+	 * @return 共享 sampler 在 sampler heap 的槽号（台账首个发放项，现行启动顺序下 = reservedSlots）
 	 */
 	[[nodiscard]] uint32_t ensureShared() {
 		if (sharedSamplerReady)
@@ -77,7 +78,13 @@ export class SamplerLibrary {
 		info.maxLod = 20.0f;
 		info.unnormalizedCoordinates = false;  // Bool32 隐转（rlvk 不导出 vk::False 常量）
 		info.borderColor = vk::BorderColor::eIntTransparentBlack;
-		sharedSamplerSlot = samplerHeap.getReservedSlots();
+		// 槽号由台账发（不再自算 reservedSlots）——见 Resources::claimSamplerSlot 头注释：
+		// 自算形态下本类与 Environment 曾各自算出 reservedSlots+1 并相撞，幂等守卫让后写者
+		// 永久赢，env 镜面项因此丢了 mip 选择。台账按归属者发号，相撞在结构上不可能。
+		auto slot = kernel.claimSamplerSlot("sampler.shared");
+		if (!slot)
+			throw std::runtime_error(slot.error().describe());
+		sharedSamplerSlot = *slot;
 		auto slotAddr = samplerHeap.getSlotCpuAddress(sharedSamplerSlot);
 		if (!slotAddr)
 			throw std::runtime_error(slotAddr.error().describe());
@@ -91,7 +98,7 @@ export class SamplerLibrary {
 
 	/**
 	 * 屏幕空间 point sampler（Phase 11 批 11.4，AO 专用）：**NEAREST + 无 mipmap +
-	 * CLAMP_TO_EDGE**，写 sampler heap 的第二个可用槽（= reservedSlots + 1）。
+	 * CLAMP_TO_EDGE**，槽号经台账申报（归属者 "sampler.aoPoint"）。
 	 *
 	 * 为何不能复用 ensureShared 的共享 sampler：
 	 *   ① 共享 sampler 是 LINEAR + mipmap LINEAR，而 **D32Sfloat 深度图在 Vulkan 里
@@ -121,7 +128,14 @@ export class SamplerLibrary {
 		info.maxLod = 0.0f;  // 硬钳 level 0：不给驱动任何 mip 选择的余地
 		info.unnormalizedCoordinates = false;  // Bool32 隐转（rlvk 不导出 vk::False 常量）
 		info.borderColor = vk::BorderColor::eIntTransparentBlack;
-		pointSamplerSlot = samplerHeap.getReservedSlots() + 1;
+		// 槽号由台账发（归属者 "sampler.aoPoint"）。⚠ 本 sampler 的语义（NEAREST + maxLod=0）
+		// 对单 mip 屏幕空间图是**正确**的，2026-10-04 那次事故的错处只在槽号——它曾与
+		// Environment 的 sky sampler 算出同一个 reservedSlots+1，把 env 的 LINEAR + maxLod=10
+		// 覆写掉。改的是发号，不是这里的参数，别顺手"统一"成 LINEAR。
+		auto slot = kernel.claimSamplerSlot("sampler.aoPoint");
+		if (!slot)
+			throw std::runtime_error(slot.error().describe());
+		pointSamplerSlot = *slot;
 		auto slotAddr = samplerHeap.getSlotCpuAddress(pointSamplerSlot);
 		if (!slotAddr)
 			throw std::runtime_error(slotAddr.error().describe());
@@ -181,7 +195,7 @@ export class SamplerLibrary {
 	vk::SamplerCreateInfo samplerCreateInfo{};
 	uint32_t sharedSamplerSlot = 0;   // 共享 sampler 在 sampler heap 的槽号（ensureShared 启动期写入）
 	bool sharedSamplerReady = false;  // 共享 sampler 就绪标记（ensureShared 幂等守卫）
-	// AO point sampler（Phase 11 批 11.4）：槽 = reservedSlots + 1（紧邻共享 sampler），
+	// AO point sampler（Phase 11 批 11.4）：槽号经台账申报（"sampler.aoPoint"），
 	// create info 稳定存储（与共享 sampler 同生命周期理由）
 	vk::SamplerCreateInfo pointSamplerCreateInfo{};
 	uint32_t pointSamplerSlot = 0;

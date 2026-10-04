@@ -14,6 +14,11 @@ float4 main(SkyVertexOutput input) : SV_Target
     float4 far = skyClipToWorld(float4(input.ndc, 1.0, 1.0));
     float4 near = skyClipToWorld(float4(input.ndc, 0.0, 1.0));
     float3 dir = normalize(far.xyz / far.w - near.xyz / near.w);
-    float3 color = envMap.Sample(envSampler, dir).rgb;
+    // **显式 mip0**（2026-10-05）：env 立方图 mip 1..L−1 是 GGX 预滤波（按 roughness 糊，
+    // env_prefilter.comp.slang:25），不是分辨率金字塔 ⟹ 隐式 `Sample()` 会按方向向量偏导
+    // 选到非零 mip，把天穹按粗糙度糊掉（朝天机位全图梯度 5.939 → 3.024，−49%）。
+    // 与 deferred light.frag.slang 的天穹分支**同步改**——两路经 shader_registry 共用同一个
+    // sky sampler，只改一路会破坏 D1 两路对等（那条对等是这条改动的判据）。
+    float3 color = envMap.SampleLevel(envSampler, dir, 0.0).rgb;
     return float4(color, 1.0);
 }

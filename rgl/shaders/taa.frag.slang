@@ -345,6 +345,19 @@ float4 main(TaaInput input) : SV_Target
     const float3 hist = clampHdr(sampleHistoryCatmullRom(prevUvBase).rgb);
     const float3 histR = toReinhard(hist);
 
+    // ── 【实测裁决 2026-10-05】实验 M4「本帧上界夹」= 否决，勿再实现 ──
+    // 症状（= HEAD 1a15240 的债-40：白点不是「边缘闪」，是本帧 HDR firefly 从不被裁剪）：
+    //   glint 亮进历史后，即使本帧已经不亮，历史仍把它带回来；box5 AABB 拦不住——glint
+    //   自己就在邻域中心抽头里，盒被它自己撑大。M4 改问「历史值是否超过**本帧该邻域的
+    //   最大值**」（与盒无关），半径走 scene data 实验区。
+    // 半径 2 实测（bistro 1280×720 湿面机位，TAA 开）：
+    //   L≥250 0.48557% → 0.04178%（**−93%**，看着很好），但 **meanL 99.21 → 80.29（−19%）**、
+    //   门板机位 meanL 131.4 → 107.6（−18%）、grain>2 32.19 → 50.82、>20 9.077 → 16.78、
+    //   >64 1.824 → 4.039、**phase-lock 43 → 194**（全变差）。
+    // ⟹ 那 93% 是**整体压暗 19% 换来的**，不是裁剪变准。机制：把历史夹到本帧邻域最大值
+    //   = 系统性拒绝「比本帧亮的合法累积」，TAA 退化成"本帧直出 + 压暗"。半径 1 上一轮
+    //   已否决（glint 的峰值相位是 2×2 块，邻域自己就亮），放大支撑只是把"拒绝历史"做得
+    //   更狠，不是更准。**这条是"遮"且遮不干净。**
     const float3 clipped = fromReinhard(clipToAabb(centroid, histR, mn, mx));
     return float4(lerp(clipped, cur, params.x), 1.0);
 }

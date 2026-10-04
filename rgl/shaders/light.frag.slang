@@ -186,18 +186,29 @@ float4 main(LightInput input) : SV_Target0
     // ② skybox 背景合成：天空像素 = G-buffer position 清 0（无几何，dot(P,P)=0）。
     // 重建世界射线（与 forward skybox.frag 同式：near/far 两点差，免 resolution）采 env。
     // uv→ndc：light.mesh 写 uv=(ndc.x*0.5+0.5, 0.5-ndc.y*0.5)（framebuffer Y 翻转）→ 反解。
-    // env 采样必须在 sky/几何分支**之前**（全 quad 活跃）：隐式 LOD 采样放在分支内时，
-    // 天空/几何混 quad 的几何 lane 提前 return = partial quad 偏导未定义 → 边界天空像素
-    // mip 漂移（2026-09-13 对拍石锤；red-probe 证实差异像素全走 sky 分支、SampleLevel(0)
-    // 全局变差证实 forward 隐式 LOD ≠ 固定 mip）。方向向量的偏导与几何无关 = 等价 forward
-    // skybox pass（其天空盒大三角覆盖全屏恒全 quad）。不乘 env.intensity——forward
-    // skybox.frag 输出裸 env radiance（intensity 是 IBL 光照标定系数不是显示增益，
-    // 本分支曾乘 intensity，②续重校准 0.2 起破坏 D1，本次一并以 forward 为准移除）。
+    // env 采样必须在 sky/几何分支**之前**（全 quad 活跃）。**这条约束的历史前提与现行理由**：
+    // ① 历史（2026-09-13）：本行当时是隐式 `Sample()`，隐式 LOD 放进分支会让天空/几何混
+    //    quad 的几何 lane 提前 return = partial quad 偏导未定义 → 边界天空像素 mip 漂移
+    //   （对拍石锤 + red-probe 证实差异像素全走 sky 分支）。
+    // ② 现行（2026-10-05）：本行已改 `SampleLevel(…, 0.0)`，**显式 LOD 不取偏导**，①的
+    //    机制在结构上不存在了。位置仍留在分支前，只剩"两路共用一条语句、少一份重复"的理由。
+    // ⚠ **改写自一条曾被当成普适结论的旧断言**（原文：「SampleLevel(0) 全局变差证实
+    //    forward 隐式 LOD ≠ 固定 mip」）。那条对拍的**前提**是「deferred 隐式 LOD、forward
+    //    固定 mip」两路**不对称**——彼时 env sampler 槽号与 AO point sampler 相撞
+    //   （`getReservedSlots()+1` 双写，AO 的 maxLod=0 后写覆盖），deferred 的隐式 `Sample()`
+    //    实际被钳在 mip0，于是"改成 SampleLevel(0)"改变的是**唯一那一路的对称性**，
+    //    测到的"变差"是**打破不对称**的结果，不是"隐式 LOD 等价于某个固定 mip"的证据。
+    //    槽号相撞 2026-10-05 修好后，两路都拿到真 mip 链，隐式 LOD 会按方向向量偏导
+    //    选到非零 mip ⟹ 天穹糊 49%（全图梯度 5.939 → 3.024）。**结论：天穹必须显式 mip0，
+    //    且两路同时改才对称**（forward skybox.frag 同步）。判据 = D1 两路对等。
     float2 ndc = float2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
     float4 far  = skyClipToWorld(float4(ndc, 1.0, 1.0));
     float4 near = skyClipToWorld(float4(ndc, 0.0, 1.0));
     float3 dir  = normalize(far.xyz / far.w - near.xyz / near.w);
-    float3 envSky = envMapL.Sample(envSamplerL, dir).rgb;
+    // 天穹 = **锐利**环境辐射。env 立方图 mip 1..L−1 是 GGX 预滤波（按 roughness 糊，
+    // env_prefilter.comp.slang:25「level 0 = sharp 源不生成，1..L−1 生成」），**不是**
+    // 分辨率金字塔 ⟹ 任何隐式 LOD 拿到的都是"按粗糙度糊"的结果，天穹必显式取 mip0。
+    float3 envSky = envMapL.SampleLevel(envSamplerL, dir, 0.0).rgb;
     if (dot(P, P) < 1e-10)
     {
         if (env.mipRange > 0.0)

@@ -62,6 +62,7 @@ set(RGL_TEST_SOURCES
     test_render_list_light.cppm  # fillLightData 落槽契约：按 index 落槽/计数封顶/重复 index（12.3d）
     test_features_gates.cppm     # 能力门真值表：depthClip 双条件/presentTiming 三合一/扩展清单（12.3d）
     test_asset_table.cppm        # AssetTable::expectedGeometrySlot 槽号算术契约（12.3d）
+    test_slot_ledger.cppm        # sampler heap 申报制领槽：幂等 / 不同 owner 不同槽 / 超容量不越界（2026-10-04 槽相撞事故护栏）
     test_gltf_texcoord.cppm      # glTF TEXCOORD_0 vec2 步长 + 去索引展开（手构 GLB，2026-08-30 越界读回归，12.3d-C）
     test_shadow_forward.cppm     # shadow.slang 选级 forward 提取式数学恒等（invVP 列叉积，5a-8c 回归，12.3d-C）
     test_evssm_math.cppm         # EVSSM 消费端公式数学契约（快路/零矩/far 矩恒等/单调/LBR，11.6d bug 回归）
