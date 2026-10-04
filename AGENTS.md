@@ -216,7 +216,11 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
   是法线贴图，深度图上是一整片平面 → 开阔地面 AO 恒 1.000，不是 bug）；② 屏幕空间螺旋采样
   无投影 range check（scene data 头只有 `invViewProj`）→ 前景轮廓外一圈 AO 光晕；
   ③ 施加点在 tonemap 合成处，**连直接光一起压**（forward 无 G-buffer 的唯一对等位置）。
-  AO pass 常驻图内、`ao.strength=0` 逐位旁路（`lerp(1,x,0)≡1.0`），故不产生额外基线成本
+  AO pass 常驻图内、`ao.strength=0` 逐位旁路（`lerp(1,x,0)≡1.0`），故不产生额外基线成本。
+  **AO 噪点已量化结案（2026-10-04，判据 `imgqa ao-noise`）：别再把它当"噪点闪烁"的嫌疑**——
+  AO 场本身噪（1.310 LSB）但交付 8bit 面颗粒 0.203 LSB < 1 量化步长 = 不可见，且 TAA 关时
+  AO 逐帧静止（shader 无帧号输入 ⟹ 静态机位连拍必然逐位相同，量不到时域）；可见形态是
+  **屏幕锚定的相机移动爬行**，机制指纹指向**导数重建**（掠射 σ 5.14×）不是施加点
 - **湿面只加高光不压暗**（批 11.0 补修）：`_Wet` 材质 `roughnessFactor=0.163` → effective 0.12
   （水膜）。实测 roughness 0.12 是**平台期**（无 SSR，只能反射 IBL 高 mip 的均匀天空辉光），
   且真实湿面应同时压暗漫反射而这里没做 → 湿区略"亮而奶"。补它需 per-material wetness 分量
