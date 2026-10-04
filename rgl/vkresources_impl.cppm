@@ -154,4 +154,64 @@ std::expected<RGL::VmaDescriptorHeap, Error> Resources::createSamplerHeap() {
 			heapProps.samplerHeapAlignment);
 	}
 
+/**
+ * 显存账（批 9.5 观测面，声明注释见接口）。三行：总量 / 逐 heap / 逐内存类型。
+ * 数据源 vmaCalculateStatistics（VMA 全块遍历，只准启动期调用）；heap 的 usage/budget
+ * 走 vmaGetHeapBudgets（VK_EXT_memory_budget 缺位时两者为 0，不是"没占显存"）。
+ * 刻意不用 vmaBuildStatsString：整棵 JSON 树（含每块每空洞）进日志既读不动也没法回归。
+ */
+void Resources::logMemoryStats(std::string_view stage) const {
+	auto* logger = RLLogger::getInstance();
+	if (!logger)
+		return;
+	const VmaAllocator alloc = allocator.get();
+	if (!alloc)
+		return;  // 分配器未建（理论不可达：Resources 构造即建）
+
+	VmaTotalStatistics st{};
+	vmaCalculateStatistics(alloc, &st);
+	constexpr double mib = 1024.0 * 1024.0;
+	logger->info("vma[{}]: total blocks={} blockBytes={:.2f}MiB allocations={} allocBytes={:.2f}MiB "
+		"unusedRanges={} unusedBytes={:.2f}MiB largestAlloc={:.2f}MiB",
+		stage, st.total.statistics.blockCount,
+		static_cast<double>(st.total.statistics.blockBytes) / mib,
+		st.total.statistics.allocationCount,
+		static_cast<double>(st.total.statistics.allocationBytes) / mib,
+		st.total.unusedRangeCount,
+		static_cast<double>(st.total.statistics.blockBytes - st.total.statistics.allocationBytes) / mib,
+		static_cast<double>(st.total.allocationSizeMax) / mib);
+
+	const VkPhysicalDeviceMemoryProperties* memProps = nullptr;
+	vmaGetMemoryProperties(alloc, &memProps);
+	const uint32_t heapCount = memProps ? memProps->memoryHeapCount : 0u;
+	std::vector<VmaBudget> budgets(heapCount);
+	if (heapCount > 0)
+		vmaGetHeapBudgets(alloc, budgets.data());
+	for (uint32_t h = 0; h < heapCount; ++h) {
+		const auto& hs = st.memoryHeap[h].statistics;
+		if (hs.blockBytes == 0)
+			continue;  // 未使用的 heap 不打
+		logger->info("vma[{}]:   heap{} blockBytes={:.2f}MiB allocBytes={:.2f}MiB budgetUsage={:.2f}MiB budget={:.2f}MiB",
+			stage, h, static_cast<double>(hs.blockBytes) / mib,
+			static_cast<double>(hs.allocationBytes) / mib,
+			static_cast<double>(budgets[h].usage) / mib,
+			static_cast<double>(budgets[h].budget) / mib);
+	}
+	const uint32_t typeCount = memProps ? memProps->memoryTypeCount : 0u;
+	for (uint32_t t = 0; t < typeCount; ++t) {
+		const auto& ts = st.memoryType[t].statistics;
+		if (ts.blockBytes == 0)
+			continue;  // 空内存类型不打（本机一般只 DEVICE_LOCAL 一两类）
+		VkMemoryPropertyFlags flags = 0;
+		vmaGetMemoryTypeProperties(alloc, t, &flags);
+		logger->info("vma[{}]:   type{} heap{} {}{} blocks={} allocs={} blockBytes={:.2f}MiB allocBytes={:.2f}MiB",
+			stage, t, memProps->memoryTypes[t].heapIndex,
+			(flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ? "DEV_LOCAL" : "HOST_ONLY",
+			(flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) ? " HOST_VISIBLE" : "",
+			ts.blockCount, ts.allocationCount,
+			static_cast<double>(ts.blockBytes) / mib,
+			static_cast<double>(ts.allocationBytes) / mib);
+	}
+}
+
 }  // namespace RGL

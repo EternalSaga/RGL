@@ -527,6 +527,8 @@ void profilerPushCounter(const CounterRecord& rec) {
 	slot.counters.push_back(rec);
 }
 
+uint64_t profilerNowNs() { return nowNs(); }
+
 void profilerDump() {
 	auto& st = state();
 	if (st.window == 0 || st.slots.empty() || st.dumped)

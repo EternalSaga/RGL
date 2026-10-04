@@ -26,6 +26,7 @@ import frame_capture;
 import cull_driver;
 import frame_session;
 import gpu_profiler;  // Phase 9.2：GPU 时间戳钩子（读回归并进 9.1 同报告 gpu 轨）
+import profiler;      // 批 9.5：writeSceneStaging 的 drawFrame 子段 zone
 import diagnostics;
 import vulkan_utils;
 import VmaRaii;
@@ -218,6 +219,7 @@ void Renderer::createSceneStaging(RGL::Resources& vkResources) {
 	std::expected<void, Error> Renderer::writeSceneStaging(const FrameDrawList& list,
 		uint32_t frameSlot) {
 	// ③.5 scene data 上传（Phase 5 批次 2；手术 5：块体提为私有方法，语义零改动）。
+	auto z = zone("drawFrame.staging");  // 批 9.5 观测：scene data 逐字段 memcpy 进 mapped 块
 	auto* stage = static_cast<std::byte*>(sceneStaging[frameSlot].getMappedData());
 	std::memcpy(stage, &list.sceneData.light, sizeof(SceneLight));
 	// Phase 5.5：env 参数写 @48（light 48B 之后、64B 头内——与 objectMatrices 区无重叠）

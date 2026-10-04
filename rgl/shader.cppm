@@ -1,11 +1,13 @@
 module;
 #include <vulkan/vulkan.h>  // VK_* 宏/C 函数（rlvk 不含宏；C 头解析 ~0.4s）
+#include <chrono>           // RenderPipeline 创建耗时（批 9.5 启动基线；GMF 例外清单成员）
 #include <fmt/format.h>
 export module shader;
 
 import rlstd;
 import rlvk;
 import vkerror;
+import profiler;  // 批 9.5：applyDynamicState 的 vkcmd.count 计数（rlbase，只向下依赖）
 
 namespace RGL {
 
@@ -179,6 +181,15 @@ export void applyDynamicState(vk::raii::CommandBuffer& cmd, const vk::Rect2D& ar
 		cmd.setColorWriteMaskEXT(0, writeMasks);
 	}
 	cmd.setLogicOpEnableEXT(state.logicOp);
+	// 批 9.5 vkcmd.count 口径：本函数 = 每 pass 一次的动态状态命令块。18 = 无条件 18 条
+	// （viewport/scissor/polygonMode/cullMode/frontFace/rasterizerDiscard/depthBiasEnable/
+	// depthBias/depthTest/depthWrite/depthCompareOp/depthBoundsTest/stencilTest/
+	// rasterizationSamples/sampleMask/alphaToCoverage/alphaToOne/logicOpEnable），
+	// 条件三项与各 if 同判据。**改上面的分支必须同步改这里**（漏改 = 计数悄悄失真）。
+	profilerAddCommands(18u
+		+ (depthClipDynamic ? 1u : 0u)
+		+ (state.colorBlend && colorAttachmentCount > 0 ? 1u : 0u)
+		+ (colorAttachmentCount > 0 ? 2u : 0u));
 }
 
 /**
@@ -216,6 +227,40 @@ export struct PipelineBindings {
 	// sampler=true → sourceData 走 sampler heap 字节偏移；false → resource heap slot×descriptorSize。
 	std::vector<PipelineExtraBinding> extra;
 };
+
+/**
+ * shader object 创建统计（批 9.5 观测面 = 条目/启动基线的唯一数据源）。
+ *
+ * RenderPipeline 是 VkShaderEXT 的**唯一生产者**（每实例一次 vkCreateShadersEXT、
+ * 固定 mesh + frag 两个句柄），故本处计数即"管线表条目数 / 句柄数 / 创建总耗时 /
+ * binding mapping 条数"四个数——docs/shader_object_组合成本与优化预留.md 的旧基线
+ * （312 条目 / 1252 句柄 / ≈2.3s，2026-09-28 forward + picking 临时开）由此转为可复测。
+ *
+ * ⚠ 口径 = **累计构造次数**（含 shader 热重载换入的新条目），不是"当前存活条目数"；
+ * 启动基线在帧循环前读一次即等于条目表大小。
+ */
+export struct ShaderObjectStats {
+	uint64_t pipelines = 0;  // RenderPipeline 构造次数（启动期 = 管线表条目数）
+	uint64_t handles = 0;    // VkShaderEXT 句柄数（恒 = 2 × pipelines）；**只含管线表**——
+	                         // mip_gen / env_prefilter 的 compute shader object 直接调
+	                         // vkCreateShadersEXT、不走本类，不在本账内
+	uint64_t mappings = 0;   // binding mapping 条数累计（条目爆炸的第二维度）
+	uint64_t createNs = 0;   // vkCreateShadersEXT 累计 wall clock（ns）
+};
+
+/** shader object 创建统计累加器（inline 函数局部静态 = 跨 TU 唯一实例）。 */
+namespace shaderStatsDetail {
+	/** @return 可写统计单例（RenderPipeline 构造期自增；读侧走 shaderObjectStats）。 */
+	inline ShaderObjectStats& mutableStats() {
+		static ShaderObjectStats s;
+		return s;
+	}
+}
+
+/** @return shader object 创建统计快照（见 ShaderObjectStats 口径说明）。 */
+export inline ShaderObjectStats shaderObjectStats() {
+	return shaderStatsDetail::mutableStats();
+}
 
 /**
  * RenderPipeline：纯 shader object 包装（mesh + frag 两个 VkShaderEXT + 烘焙的
@@ -328,7 +373,16 @@ export class RenderPipeline {
 		vk::ShaderCreateInfoEXT fragCreateInfo(fragCreateInfoRaw);
 
 		std::vector<vk::ShaderCreateInfoEXT> createInfos = {meshCreateInfo, fragCreateInfo};
+		// 批 9.5 观测：条目/句柄/mapping 计数 + vkCreateShadersEXT wall clock（口径见
+		// ShaderObjectStats 注释）。纯计数，不改任何创建参数。
+		const auto createBegin = std::chrono::steady_clock::now();
 		auto shaders = device.createShadersEXT(createInfos);
+		auto& stats = shaderStatsDetail::mutableStats();
+		++stats.pipelines;
+		stats.handles += 2;  // mesh + frag（本函数唯一句柄产出点）
+		stats.mappings += mappingCount;
+		stats.createNs += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+			std::chrono::steady_clock::now() - createBegin).count());
 		meshShader = std::move(shaders[0]);
 		fragShader = std::move(shaders[1]);
 	}

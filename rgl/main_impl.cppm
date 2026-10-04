@@ -30,6 +30,7 @@ import environment;  // Environment（架构债务续账步骤 3）
 import render_target_cache;  // RenderTargetCache（架构债务续账步骤 2）
 import asset_table;
 import shader_registry;
+import shader;  // 批 9.5：shaderObjectStats()（条目/句柄/创建耗时启动基线）
 import vk_renderer;
 import frame_draw_list;
 import render_graph;
@@ -382,6 +383,41 @@ void runGateLint(const RuntimeConfig& runtime, const DeviceContext& device,
 		logger->info("gate_lint: {} findings ({} error)", findings.size(), errors);
 }
 
+/**
+ * 启动基线两行（批 9.5 观测面；调用点 = 全部 GPU 资源装配完、进帧循环前）。
+ *
+ * 立这两行的动机：① 全仓此前**没有任何显存总量读数**（vmaBuildStatsString /
+ * GetHeapStatistics / CalcAllocationStats 零命中，VMA 泄漏检测未开），各 RT 预算只
+ * 散在四份文档注释里（EVSSM 44.7MB / 阴影图集 16MB / …）→ 先做成可回归的启动日志；
+ * ② shader object 条目基线（312 条目 / 1252 句柄 / ≈2.3s）是 2026-09-28 那次
+ * forward + picking 临时开运行的数，此后加了 TAA/EVSSM binding 且默认路改 deferred，
+ * 条目数与 mapping 条数都可能漂移——CONSTANT_OFFSET 那条债的收益（顶点块调大 →
+ * 条目 312→≈132）没有现行基线就无法评估。
+ *
+ * 纯读统计，不改任何状态；开销 = VMA 全块遍历一次 + 计数器读取，启动期一次可忽略。
+ * 顶点块数另有现成日志行（model_importer_impl.cppm "model: N primitives → M 块"），
+ * 本行的 geometrySlots = 几何段总槽数（模型块 + 内建几何顶点/索引槽）。
+ * @param res 资源层（VMA 分配器宿主）
+ * @param registry 管线表（条目数读数）
+ * @param assets 资产表（几何槽计数读数）
+ */
+void logStartupBaseline(const Resources& res, const ShaderRegistry& registry,
+	const AssetTable& assets) {
+	res.logMemoryStats("startup");
+	auto* logger = RLLogger::getInstance();
+	if (!logger)
+		return;
+	const auto so = shaderObjectStats();
+	logger->info(
+		"shader_object baseline: registryEntries={} pipelinesCreated={} handles={} mappings={} "
+		"createTotal={:.2f}s avgPerEntry={:.2f}ms geometrySlots={}",
+		registry.entriesView().size(), so.pipelines, so.handles, so.mappings,
+		static_cast<double>(so.createNs) / 1e9,
+		so.pipelines ? static_cast<double>(so.createNs) / 1e6 / static_cast<double>(so.pipelines)
+			: 0.0,
+		assets.getGeometrySlotCount());
+}
+
 }  // namespace RGL
 
 /**
@@ -586,6 +622,10 @@ int main() {
 				}
 			};
 		}
+		// ===== 批 9.5 观测：启动基线两行（显存账 + shader object 条目账）=====
+		// 动机与口径见 logStartupBaseline 注释（纯读统计，不改任何状态）。
+		logStartupBaseline(vkResources, shaderRegistry, assetTable);
+
 		// llm 截图消费回调（ecs 不 import llm_debug——依赖图叶子解耦，2026-09-02）：
 		// main 是唯一知道 writeCapturePng 的地方，config 指针绑进 lambda。截图内容 =
 		// drawFrame 帧内回读的本帧真实输出（vkrenderer FrameCapture，2026-09-08 离屏重渲退役）

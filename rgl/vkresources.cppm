@@ -294,6 +294,20 @@ export class Resources {
 	/** @return VMA 分配器 const 引用（const 重载，与下方非 const 重载同一对象）；
 	 * 创建 GPU 资源走非 const 重载。 */
 	const RGL::VmaAllocatorRAII& getAllocator() const { return allocator; }
+	/**
+	 * 显存账（批 9.5 观测面）：把"谁吃了多少显存"打成**可回归的启动日志**，而不是散在
+	 * 四份文档注释里的预算数字（EVSSM 44.7MB / 阴影图集 16MB / …）。
+	 *
+	 * 三行：① 总量（VkDeviceMemory 块数 / 块字节 / 分配字节 / 空洞）② 逐 heap
+	 * （含 VK_EXT_memory_budget 的 usage/budget，缺扩展时为 0）③ 逐内存类型
+	 * （只打非空类型，带 property flags 位）。数据源 = `vmaCalculateStatistics`
+	 * （比 `vmaBuildStatsString` 的整棵 JSON 树紧凑，且无需 vmaFreeStatsString）。
+	 *
+	 * 成本：VMA 侧全块遍历（"slower to calculate"），**只准启动期/显式诊断调用，
+	 * 禁止进帧循环**。
+	 * @param stage 标签（进日志前缀，如 "startup" / "after-frame1"）
+	 */
+	void logMemoryStats(std::string_view stage) const;
 	/** @return resource heap 保留区偏移，恒 0：reserved 槽始终在 heap 头部
 	 * [0, reservedSlots)（VmaDescriptorHeap 布局，docs/DESCRIPTOR_HEAP_SPEC.md §九.2）。 */
 	vk::DeviceSize getReservedRangeOffset() const { return 0; }

@@ -113,6 +113,82 @@ export struct CounterRecord {
 export void profilerPushCounter(const CounterRecord& rec);
 
 /**
+ * 帧命令累加器（批 9.5 观测面，phase9_plan 点名的"下一步头寸"）：录制期在**命令发射点**
+ * 累加，帧末 profilerFlushFrameCounters 一次性落成 `draw.count` / `vkcmd.count` 两条
+ * CounterRecord（复用上面 CounterRecord 机制，零新存储 / 零新聚合面）。
+ *
+ * 实现刻意落在**接口单元**：profiler_impl.cppm 已顶到文件代码行红线（500），再加就报。
+ * 本模块接口单元有先例 = shader.cppm 的 loadShaderSpv / applyDynamicState。
+ *
+ * 设计约束（观察者效应）：累加器是**每 pass / 每循环一次**的粗粒度调用（不是每 draw 一次），
+ * 单次成本 = 一次整数加，profiler 关时也只是累加到恒被清零的计数器上。
+ *
+ * 计数口径（vkcmd.count 是**已计数发射点覆盖**的口径，不是驱动侧真值）：
+ * - `draw.count` = 本帧 `vkCmdDrawMeshTasksEXT` 发射次数（四路全计：普通段 drawOne /
+ *   GPU culling 读回重放 / drawLight 全屏 / IZB mask 重放；picking/highlight 克隆同计）。
+ *   DGC execute 路（NVIDIA）draw 数在 CPU 侧不可见 → 不计，本机（RADV）不走该路。
+ * - `vkcmd.count` = 上述每次 draw 记 3 条（pushDataEXT + bindShadersEXT + drawMeshTasksEXT）
+ *   + barrier / beginRendering / endRendering / blit / applyDynamicState / 固定数据通路段
+ *   逐条实计。**未计残项**（量级 O(passes)，非 O(draws)）：cull CB 内命令、IZB/EVSSM 图外
+ *   compute dispatch、capturer/picking 回读段、imgui 帧末段。
+ */
+export void profilerAddDraws(uint32_t n);
+/** @see profilerAddDraws 命令口径说明 */
+export void profilerAddCommands(uint32_t n);
+/**
+ * 帧末收口（drawFrame 录制完毕处调用一次）：把本帧累加值推成两条 CounterRecord 并清零。
+ * profiler 关 = profilerPushCounter 自身静默丢，累加器也每帧被清零（不泄漏、不增长）。
+ */
+export void profilerFlushFrameCounters();
+
+/** steady_clock 当前时刻（ns）——外部记录/计数回填时间轴用（批 9.5 帧命令计数）。 */
+export uint64_t profilerNowNs();
+
+namespace {
+/** 本帧 draw 累加（profilerAddDraws 写、profilerFlushFrameCounters 清零）。 */
+uint64_t g_frameDraws = 0;
+/** 本帧 vkCmd 累加（口径见 profilerAddDraws 注释）。 */
+uint64_t g_frameCommands = 0;
+/** 每次 mesh draw 的命令数（pushDataEXT + bindShadersEXT + drawMeshTasksEXT）。 */
+constexpr uint64_t kCommandsPerDraw = 3;
+/** counter 名（静态字面量 = CounterRecord.name 生命周期要求）。 */
+constexpr std::string_view kCounterDraws = "draw.count";
+/** @see kCounterDraws */
+constexpr std::string_view kCounterCommands = "vkcmd.count";
+}  // namespace
+
+/**
+ * profilerAddDraws 定义（口径见其声明注释）。三个入口**刻意不加 inline**：定义留在本接口
+ * 单元（先例 = shader.cppm 的 loadShaderSpv），importer 只见声明 → 匿名命名空间累加器
+ * 不构成 TU-local 暴露（-WTU-local-entity-exposure）。
+ * @param n 本次发射的 draw 条数
+ */
+void profilerAddDraws(uint32_t n) {
+	g_frameDraws += n;
+	g_frameCommands += kCommandsPerDraw * n;  // 每 draw 的三条命令同处发射
+}
+
+/**
+ * profilerAddCommands 定义（口径见 profilerAddDraws 声明注释）。
+ * @param n 本次发射的 vkCmd 条数
+ */
+void profilerAddCommands(uint32_t n) { g_frameCommands += n; }
+
+/** profilerFlushFrameCounters 定义（口径见其声明注释）：取数 → 清零 → 推两条计数。 */
+void profilerFlushFrameCounters() {
+	const uint64_t frame = profilerCurrentFrame();
+	const uint64_t ts = profilerNowNs();
+	const uint64_t draws = g_frameDraws;
+	const uint64_t commands = g_frameCommands;
+	g_frameDraws = 0;
+	g_frameCommands = 0;
+	profilerPushCounter(CounterRecord{.frame = frame, .tsNs = ts, .value = draws,
+		.name = kCounterDraws});
+	profilerPushCounter(CounterRecord{.frame = frame, .tsNs = ts, .value = commands,
+		.name = kCounterCommands});
+}
+
+/**
  * 收口 dump（renderSystem 返回后调用一次）：写 profiles/trace_<epoch>.json（Perfetto
  * 主报告）+ profiles/stats_<epoch>.json（每 zone 聚合 + 帧时长分布）+ rllogger 摘要。
  * profiler = 0 时静默 no-op；写盘失败仅 warn——诊断路径不得改变程序结果。

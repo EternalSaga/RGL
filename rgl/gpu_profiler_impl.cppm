@@ -246,8 +246,10 @@ GpuProfiler*& bound() {
 void bindGpuProfiler(GpuProfiler* profiler) { bound() = profiler; }
 
 void gpuProfilerFrameBegin(vk::raii::CommandBuffer& cmd, uint32_t slot) {
-	if (GpuProfiler* g = bound())
+	if (GpuProfiler* g = bound()) {
+		auto z = zone("drawFrame.gpuStamp");  // 批 9.5 观测：query 读回归并（滞后 2 帧）+ 复位
 		g->frameBegin(cmd, slot);
+	}
 }
 
 void gpuProfilerCullBegin(vk::raii::CommandBuffer& cmd) {

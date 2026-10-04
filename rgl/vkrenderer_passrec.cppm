@@ -25,6 +25,7 @@ import frame_capture;
 import cull_driver;
 import frame_session;
 import gpu_profiler;
+import profiler;  // 批 9.5：drawFrame 内 CPU 子 zone + 帧命令计数（phase9_plan 点名头寸）
 import diagnostics;
 import vulkan_utils;  // createImageBarrier（物化用）
 import VmaRaii;
@@ -107,6 +108,7 @@ struct SlotResolver {
 		vk::DependencyInfo depInfo;
 		depInfo.setImageMemoryBarriers(materialized);
 		cmd.pipelineBarrier2(depInfo);
+		profilerAddCommands(1);  // 批 9.5：本函数每次调用恰发 1 条 vkCmdPipelineBarrier2
 		for (const auto& plan : barriers)
 			layouts[plan.attachment] = plan.newLayout;
 	}
@@ -144,6 +146,7 @@ void beginPassRendering(vk::raii::CommandBuffer& cmd, const SlotResolver& slots,
 	if (depthInfo)
 		renderingInfo.setPDepthAttachment(&*depthInfo);
 	cmd.beginRendering(renderingInfo);
+	profilerAddCommands(1);  // 批 9.5：每 pass 恰 1 条 vkCmdBeginRendering
 }
 
 }  // namespace
@@ -154,6 +157,7 @@ void beginPassRendering(vk::raii::CommandBuffer& cmd, const SlotResolver& slots,
 
 // ④⑥⑥.5⑦ 数据通路固定段（heap barrier → scene staging 拷贝/屏障 → heap/sampler heap 绑定，Phase 6 起不入图——非 attachment 状态同步；旧 color/depth attachment barrier 已由图 passes[0].barriers 推导发射、与此处 heap barrier 相互独立、命令流先后对换无语义影响）
 void Renderer::recordFixedDataPath(vk::raii::CommandBuffer& cmd, uint32_t frameSlot) {
+	auto z = zone("drawFrame.dataPath");  // 批 9.5 观测：heap barrier + staging 拷贝 + heap 绑定
 	// ⑥ Descriptor heap 同步：描述符此前由 vkWriteResourceDescriptorsEXT 写进
 	// CPU mapped 区域（vkresources.cppm），GPU 读取前需要 host write →
 	// resource heap read 的内存 barrier。eHost stage 不能在 render pass 内部使用，
@@ -175,6 +179,9 @@ void Renderer::recordFixedDataPath(vk::raii::CommandBuffer& cmd, uint32_t frameS
 	vk::DependencyInfo heapDepInfo{};
 	heapDepInfo.setMemoryBarriers(heapBarrier);
 	cmd.pipelineBarrier2(heapDepInfo);
+	// 批 9.5 vkcmd.count 口径：本函数固定段 = heap barrier 1 + [staging 拷贝 + barrier] 2
+	// + heap/sampler heap 绑定 2（改本函数命令流须同步改这里的计数）。
+	uint32_t fixedCmds = 1;
 
 	// ⑥.5 scene data staging → device buffer 拷贝（Phase 5 批次 2）+ Transfer 写 →
 	// 图形阶段 shader 读 barrier（storage buffer 的写/读即使同 cmd 也须显式依赖，
@@ -196,6 +203,7 @@ void Renderer::recordFixedDataPath(vk::raii::CommandBuffer& cmd, uint32_t frameS
 			vk::DependencyInfo sceneDepInfo;
 			sceneDepInfo.setBufferMemoryBarriers(sceneBarrier);
 			cmd.pipelineBarrier2(sceneDepInfo);
+			fixedCmds += 2;  // 批 9.5：vkCmdCopyBuffer + vkCmdPipelineBarrier2
 		}
 	}
 
@@ -221,12 +229,14 @@ void Renderer::recordFixedDataPath(vk::raii::CommandBuffer& cmd, uint32_t frameS
 		samplerHeapRange,
 		0,
 		resources->getSamplerReservedRangeSize()));
+	profilerAddCommands(fixedCmds + 2);  // 批 9.5：+2 = bindResourceHeapEXT + bindSamplerHeapEXT
 }
 
 // 11.3-1d IZB 帧首段（声明注释见 vkrenderer.cppm）。deferred 图判据 = 存在
 // drawLight "light" pass；重建前 waitIdle（旧 buffer 可能被上一帧命令引用，RT 缓存
 // 同款规则）。门关 = 本函数不被进入（izbShadow 恒空 + 单布尔判断）。
 void Renderer::izbPreFrame() {
+	auto z = zone("drawFrame.izbPre");  // 批 9.5 观测：IZB 帧首段（dump 收割 + 门控重建）
 	if (izbShadow)
 		izbShadow->drainReadback();
 	++izbFrameNo;
@@ -279,6 +289,7 @@ void evssmWarnOnce(bool& flag, const char* msg) {
 }  // namespace
 
 void Renderer::evssmPreFrame() {
+	auto z = zone("drawFrame.evssmPre");  // 批 9.5 观测：EVSSM 帧首段（门 = shadow_evssm）
 	if (evssmShadow || !diagnostics().shadowEvssm || !diagnostics().shadowPass)
 		return;
 	// 非 deferred 组合由 gate_lint 启动期 error（R-03，2026-10-02 从这里的 warn-once
@@ -337,6 +348,7 @@ void Renderer::replayIzbMaskSegment(vk::raii::CommandBuffer& cmd, const FrameDra
 		&& stateKit.stateFor("izb_mask").conservative;
 	if (conservative)
 		cmd.setConservativeRasterizationModeEXT(vk::ConservativeRasterizationModeEXT::eOverestimate);
+	uint32_t maskDraws = 0;  // 批 9.5：本段 draw 数（循环外一次性入账，热循环只多一次自增）
 	for (const auto& call : seg) {
 		if (call.pushData.size() < sizeof(ShadowDrawArgs))
 			continue;  // 契约破裂防御（同 replayClonedPass 的越界跳策略）
@@ -352,7 +364,9 @@ void Renderer::replayIzbMaskSegment(vk::raii::CommandBuffer& cmd, const FrameDra
 			vk::HostAddressRangeConstEXT(push.data(), push.size())));
 		entry.pipeline.bindShaders(cmd);
 		cmd.drawMeshTasksEXT(call.groupCount, 1, 1);
+		++maskDraws;
 	}
+	profilerAddDraws(maskDraws);  // 批 9.5：IZB mask 重放段（= shadow0 全量重放的 draw 数）
 	// OVERESTIMATE 复原必须在 mask pass 内（动态态命令不可出 renderpass；light/tonemap
 	// 继承 DISABLED = 与默认等值，实测该路径无红线扰动）
 	if (conservative)
@@ -363,6 +377,7 @@ void Renderer::replayIzbMaskSegment(vk::raii::CommandBuffer& cmd, const FrameDra
 // offscreen attachment RT 幂等 ensure（批次 4；extent 随 resize 重建含 waitIdle，录制期调用安全；format 经词表解析，"inherit"=swapchain 格式、具名=显式 RT）。出参 offscreenRt 按 slot 填（非 offscreen 槽留 null）。
 std::expected<void, Error> Renderer::ensureOffscreenAttachments(vk::Extent2D extent,
 	std::vector<RtAttachment*>& offscreenRt) {
+	auto z = zone("drawFrame.offscreen");  // 批 9.5 观测：offscreen RT 幂等 ensure（稳态 = 查表）
 	offscreenRt.assign(renderGraph.attachments.size(), nullptr);
 	// RT 重建检测：generation 变化（新图布局 Undefined）→ 同步重置 attachmentLayouts，否则下帧首 barrier oldLayout 失配（resize 必现）。
 	// ⚠ rtGenerations 是**成员**（跨帧快照），不是本函数的局部量——见 vkrenderer.cppm 成员
@@ -415,6 +430,7 @@ void Renderer::drawOne(vk::raii::CommandBuffer& cmd, const DrawCall& call) {
 void Renderer::replayClonedPass(vk::raii::CommandBuffer& cmd, const FrameDrawList& list,
 	ClonePurpose purpose, uint32_t materialFilter) {
 	const auto seg = segmentSpan("opaque", list);
+	uint32_t clonedDraws = 0;  // 批 9.5：实际发出的 draw 数（跳过项不计）
 	for (const auto& call : seg) {
 		if (materialFilter != kNoMaterialFilter) {
 			// objectIndex 在 pushData 里（DrawArgs 4B，同 cull_driver 的 reinterpret 手法）；
@@ -433,7 +449,9 @@ void Renderer::replayClonedPass(vk::raii::CommandBuffer& cmd, const FrameDrawLis
 			vk::HostAddressRangeConstEXT(call.pushData.data(), call.pushData.size())));
 		entry.pipeline.bindShaders(cmd);
 		cmd.drawMeshTasksEXT(call.groupCount, 1, 1);
+		++clonedDraws;
 	}
+	profilerAddDraws(clonedDraws);  // 批 9.5：picking/highlight 克隆重放段（门默认关 = 0）
 }
 
 // ⑪.6 帧末扩展段（Phase 10 批 10.1，接口注释见 vkrenderer.cppm emitFrameEndOverlay）：
@@ -441,6 +459,7 @@ void Renderer::replayClonedPass(vk::raii::CommandBuffer& cmd, const FrameDrawLis
 // 捕获读 = Transfer/TransferRead）；其余布局兜底全命令同步（仅调试路径付代价）。
 void Renderer::emitFrameEndOverlay(vk::raii::CommandBuffer& cmd, VkImage swapchainImage,
 	vk::ImageView swapchainView, vk::Extent2D extent) {
+	auto z = zone("drawFrame.overlay");  // 批 9.5 观测：imgui 帧末段（headless 无 hook ≈ 0）
 	if (extent.width == 0 || extent.height == 0)
 		return;
 	RgAttachmentSlot uiSwapchainSlot = kRgNoAttachment;
@@ -479,6 +498,7 @@ void Renderer::emitFrameEndOverlay(vk::raii::CommandBuffer& cmd, VkImage swapcha
 // picking 回读录制（Phase 10 批 10.5）：服务未挂 = 零调用（drawFrame 复杂度预算内
 // 收拢判空）。布局推进/未装饰图 warn 语义见 PickingService::record。
 void Renderer::pickingRecord(vk::raii::CommandBuffer& cmd) {
+	auto z = zone("drawFrame.picking");  // 批 9.5 观测：门 = diagnostics.picking（默认关 ≈ 0）
 	if (pickingService)
 		pickingService->record(cmd, attachmentLayouts);
 }
@@ -507,13 +527,17 @@ void Renderer::executePassDraws(vk::raii::CommandBuffer& cmd, const RgPassPlan& 
 		// 构造期校验过必命中）
 		registry.entry(fullscreenPipelineIdx.at(pass.state)).pipeline.bindShaders(cmd);
 		cmd.drawMeshTasksEXT(1, 1, 1);
+		profilerAddDraws(1);  // 批 9.5：drawLight 档（light/tonemap/ao/taa）恒 1 draw
 	} else if (pass.drawSource == "opaque" && cullDriver.active()) {
 		// GPU culling 路（手术 3：双路提交迁 CullDriver::executeOpaqueSegment——
 		// DGC execute（NVIDIA）/ 读回重放（RADV，args = CPU 位级真相源 → BIT-IDENTICAL）
 		// 能力位自动切换，重放顺序契约见其类注释）
 		cullDriver.executeOpaqueSegment(cmd, list, registry, frameSlot);
 	} else {
-		for (const auto& call : segmentSpan(pass.drawSource, list))
+		const auto seg = segmentSpan(pass.drawSource, list);
+		// 批 9.5：整段一次性入账（每 pass 一次调用，不是每 draw 一次——观察者效应约束）
+		profilerAddDraws(static_cast<uint32_t>(seg.size()));
+		for (const auto& call : seg)
 			drawOne(cmd, call);
 	}
 }
@@ -521,6 +545,10 @@ void Renderer::executePassDraws(vk::raii::CommandBuffer& cmd, const RgPassPlan& 
 std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 		// ①②③ 帧会话开场（Phase 10 批次 0 手术 4：双 fence wait/reset + acquire 分类 +
 		// 命令缓冲 begin 全迁 FrameSession::beginFrame；skipped/recreated = 本帧不渲染）
+		// 批 9.5 观测（phase9_plan 点名"drawFrame 内 ~95% CPU 时间无子 zone"）：黑洞各段一律
+		// zone 化，命名统一 "drawFrame." 前缀 → **未归因 = drawFrame − Σ 前缀段 − 四个原有
+		// 子段（fenceWait/acquire/submit/present）**，可直接从 stats JSON 算出。zone 埋点尽量
+		// 落在**被调方法首行**（本函数有 100 代码行红线，逐段加花括号必超）。
 		auto start = session.beginFrame();
 		if (!start)
 			return std::unexpected(start.error());
@@ -536,16 +564,21 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 	// 主段复位记入主 CB 头（cull 段复位在 cull CB，两段不相交）+ gpu.frame 跨度起点
 	//（覆盖 staging→capture 全录制段；error return 天残的未闭合区域由该槽下一次
 	// frameBegin 复位，不进报告）
+	// 批 9.5：本行的 query 读回成本由 zone "drawFrame.gpuStamp" 覆盖（在 gpuProfilerFrameBegin 内）
 	gpuProfilerFrameBegin(cmd, frameSlot);
 	gpuProfilerBegin(cmd, "gpu.frame");
 
 	// ③.5 scene data 上传（Phase 5 批次 2；手术 5：块体提为 writeSceneStaging 私有方法）
+	// 批 9.5：zone "drawFrame.staging" 在 writeSceneStaging 首行
 	if (auto r = writeSceneStaging(list, frameSlot); !r)
 		return std::unexpected(std::move(r).error());
 
 	// ④c GPU culling 数据通路（Phase 7b 批次 5；手术 3：块体迁 CullDriver::runFrame——
 	// cull CB 录制/提交/同帧同步等待/读回/对账 + fence 与主 CB 共用的时序契约见其类注释）
+	// 批 9.5：本段内含一次**无限超时** waitForFences（Phase 9 当年落在未归因段里从未被量过），
+	// 其单独 zone = cull.fenceWait，见 cull_driver_impl.cppm::runFrame。
 	if (cullDriver.active()) {
+		auto z = zone("drawFrame.cull");
 		if (auto r = cullDriver.runFrame(frameSlot, frame, list,
 				sceneStaging[frameSlot], session.currentInFlightFence()); !r)
 			return std::unexpected(std::move(r).error());
@@ -554,9 +587,11 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 	// ④⑥⑥.5⑦ 数据通路固定段（heap barrier + scene staging 拷贝/屏障 + heap/sampler heap
 	// 绑定，Phase 6 起不入图——非 attachment 状态同步；手术 6：块体提为 recordFixedDataPath
 	// 私有方法，命令流逐条不变）
+	// 批 9.5：zone "drawFrame.dataPath" 在 recordFixedDataPath 首行
 	recordFixedDataPath(cmd, frameSlot);
 
 	// 11.3-1d IZB 帧首段（dump 收割 + 门控构造/重建；门关 = 一次布尔判断）
+	// 批 9.5：两个图外帧首段各自成 zone（drawFrame.izbPre / drawFrame.evssmPre）
 	izbPreFrame();
 	evssmPreFrame();
 
@@ -574,6 +609,7 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 
 	// offscreen attachment RT（批次 4）：幂等 ensure + generation 漂移重置布局（手术 6：
 	// 块体提为 ensureOffscreenAttachments 私有方法）
+	// 批 9.5：zone "drawFrame.offscreen" 在 ensureOffscreenAttachments 首行
 	std::vector<RtAttachment*> offscreenRt;
 	if (auto r = ensureOffscreenAttachments(extent, offscreenRt); !r)
 		return std::unexpected(std::move(r).error());
@@ -582,7 +618,12 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 	SlotResolver slots{renderGraph.attachments, swapchainImage, swapchainView, depthImage,
 		depthView, offscreenRt, attachmentLayouts, cmd};
 
+	// 批 9.5：CPU 侧逐 pass zone（GPU 侧 9.2 早有同名时间戳，CPU 侧此前整块无计时）。
+	// label 直接复用 pass.name（RgPassPlan.name 是 std::string，活在编译图里 ≥ dump，满足
+	// ZoneRecord.name 生命周期要求）→ 热循环零分配零字符串构造，profiler 关时只多一次分支。
+	// stats JSON 里按 kind=cpu / kind=gpu 区分同名两侧（Perfetto 也天然分轨）。
 	for (const auto& pass : renderGraph.passes) {
+		auto z = zone(pass.name);
 		gpuProfilerBegin(cmd, pass.name);  // Phase 9.2：pass 时间戳（barrier 段计入）
 		slots.emitBarriers(pass.barriers);
 		// 11.3-1d IZB 创建 sandwich（图外 compute，录在 deferred light pass 头部；
@@ -610,6 +651,7 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 				VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dstImage,
 				VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
 				reinterpret_cast<const VkImageBlit*>(&blitRegion), VK_FILTER_LINEAR);
+			profilerAddCommands(1);  // 批 9.5：blit pass 恰 1 条 vkCmdBlitImage
 			gpuProfilerEnd(cmd);  // blit 无渲染段，pass 时间戳就地收口
 			continue;
 		}
@@ -628,37 +670,44 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 		// opaque GPU-culling / 普通段逐 draw）
 		executePassDraws(cmd, pass, list, frameSlot);
 		cmd.endRendering();
+		profilerAddCommands(1);  // 批 9.5：每 pass 恰 1 条 vkCmdEndRendering
 		gpuProfilerEnd(cmd);  // Phase 9.2：pass 时间戳收口（render 段完整窗口）
 	}
 
 	// ⑪.5 帧内捕获（Phase 10 批次 0 手术 2：块体迁 FrameCapturer::record——后缓冲/
 	// GB 通道两分支的布局追踪推进语义见 frame_capture.cppm 声明注释）。
 	// acquire 超时跳帧的 return 在本段之前 = 请求保持 pending 至真正录制的帧。
+	// 批 9.5：zone "drawFrame.capture" / "drawFrame.collect" 分别在 FrameCapturer::record /
+	// ::collect 首行（collect 内含本帧 fence 等待 = 真截图帧才有的大段）。
 	capturer.record(cmd, swapchainImage, extent,
 		swapchain->getFormat().format, attachmentLayouts);
 
 	// picking 回读（Phase 10 批 10.5）：请求帧录 object_id RT 1-texel → staging
 	//（布局推进/未装饰图 warn/nullptr 早退语义见方法体与 picking.cppm）
-	pickingRecord(cmd);
+	pickingRecord(cmd);  // 批 9.5：zone "drawFrame.picking" 在 pickingRecord 首行
 
 	// ⑪.6 帧末扩展段（Phase 10 批 10.1：imgui 调试面板；**空 hook = 零调用零 barrier，
 	// 正常路径逐位不变**）。布局推进与 hook 调用体见 emitFrameEndOverlay。
 	if (frameEndHook)
-		emitFrameEndOverlay(cmd, swapchainImage, swapchainView, extent);
+		emitFrameEndOverlay(cmd, swapchainImage, swapchainView, extent);  // zone 在其首行
 
 	// ⑫ swapchain → PresentSrcKHR（图 presentTransition——src 阶段/访问由最后
 	// usage 推导：直渲 = CAO 写、blit 上屏 = Transfer 写，等价旧手工分支；
 	// 无 swapchain 写入的离屏图 = nullopt 跳过）
-	if (renderGraph.presentTransition)
-		slots.emitBarriers(std::span<const RgBarrierPlan>{&*renderGraph.presentTransition, 1});
+	{
+		auto z = zone("drawFrame.cmdEnd");  // 批 9.5：present barrier + gpu.frame 收口 + CB end
+		if (renderGraph.presentTransition)
+			slots.emitBarriers(std::span<const RgBarrierPlan>{&*renderGraph.presentTransition, 1});
 
-	gpuProfilerEnd(cmd);  // Phase 9.2：gpu.frame 收口（终点 eAllCommands = 全命令完成）
+		gpuProfilerEnd(cmd);  // Phase 9.2：gpu.frame 收口（终点 eAllCommands = 全命令完成）
 
-	// 录制完毕
-	cmd.end();
+		// 录制完毕
+		cmd.end();
+	}
 
 	// ⑬ 提交（手术 4：块体迁 FrameSession::submit——waitStage = 图派生 swapchain
 	// 首用阶段；DEVICE_LOST → Error 退出帧循环，其余失败留观测）
+	// 批 9.5：CPU 成本由原有 zone "submit" 覆盖（在 FrameSession::submit 首行）
 	if (auto r = session.submit(renderGraph.swapchainWaitStage); !r)
 		return std::unexpected(std::move(r).error());
 
@@ -672,9 +721,12 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 
 	// ⑭⑮ 上屏 + 帧 slot 推进（手术 4：块体迁 FrameSession::present/advance——
 	// present fence 追踪、out-of-date 重建、noPresent 跳 present 语义全保留）
+	// 批 9.5：CPU 成本由原有 zone "present" 覆盖（在 FrameSession::present 首行）
 	if (auto r = session.present(); !r)
 		return std::unexpected(std::move(r).error());
 	session.advance();
+
+	profilerFlushFrameCounters();  // 批 9.5：draw.count / vkcmd.count 落账（关 = 静默丢）
 
 	return {};
 }

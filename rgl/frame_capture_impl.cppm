@@ -13,6 +13,7 @@ import render_target_cache;  // RenderTargetCache（架构债务续账步骤 2�
 import render_graph;
 import VmaRaii;
 import vulkan_utils;
+import profiler;  // 批 9.5：drawFrame.capture / drawFrame.collect 子段 zone
 
 namespace RGL {
 
@@ -82,6 +83,7 @@ void FrameCapturer::record(vk::raii::CommandBuffer& cmd, VkImage swapchainImage,
 	// ⑪.5 帧内捕获（llm_debug 回读，frame_capture 契约）：请求帧在 presentTransition
 	// 前插回读拷贝（布局推进语义见接口 record 注释）。
 	// acquire 超时跳帧的 return 在本段之前 = 请求保持 pending 至真正录制的帧。
+	auto z = zone("drawFrame.capture");  // 批 9.5 观测：无请求帧 = 首行早退，≈ 0
 	if (captureRequest == -2 && captureRequestName.empty())
 		return;
 	auto slotOfName = [&](const std::string& n) -> RgAttachmentSlot {
@@ -190,6 +192,7 @@ void FrameCapturer::collect(vk::raii::Device& device, vk::Fence inFlightFence) {
 	// 帧内捕获收口：同步等本帧命令（含回读拷贝）完成，把 mapped 字节搬进结果。
 	// fence 不在此 reset（下帧 ① waitAll 对已信号 fence 立即通过 + 照常 reset，语义不变）；
 	// 停顿只发生在捕获请求帧（llm 一次性截图），正常帧零影响。
+	auto z = zone("drawFrame.collect");  // 批 9.5 观测：本帧 fence 等待 + mapped 搬运（请求帧才大）
 	if (!captureArmed)
 		return;
 	(void)device.waitForFences(inFlightFence, VK_TRUE,

@@ -13,6 +13,7 @@ import vk_device;
 import vk_resources;
 import gpu_cull;
 import gpu_profiler;  // Phase 9.2：cull CB 时间戳（cull 区域与主 CB gpu.frame 同槽配对）
+import profiler;      // 批 9.5：cull 四段 CPU zone（cull.fenceWait = Phase 9 从未量过的那次同步）
 import vk_indirect_commands;
 import shader_registry;
 import frame_draw_list;
@@ -55,35 +56,48 @@ std::expected<void, Error> CullDriver::runFrame(uint32_t frameSlot, uint64_t fra
 	// 立即 reset（vkdQueueSubmit 要求 fence 非 signaled 态——主 CB 稍后重新挂同一 fence），
 	// 帧 N+2 的 ① 对主 CB submit 信号后的 fence 照常 wait/reset。
 	auto& ccmd = cullCommandBuffers[frameSlot];
-	ccmd.reset();
-	ccmd.begin(vk::CommandBufferBeginInfo{});
-	gpuProfilerCullBegin(ccmd);  // Phase 9.2：cull 段复位（本 CB 先执行）+ cull 起点时间戳
-	auto cullInput = list.cullInput;  // 值拷贝：sequenceCount 由本处填（render_list 不感知 GPU 表）
-	cullInput.sequenceCount = gpuCull->candidateCount();
-	// 序列 CPU 侧基值（execSlot + DrawArgs + meshCmd 基值；args 序 = candidate 序
-	// 契约校验在 writeSequenceStaging 内——size 不符即抛）
-	gpuCull->writeSequenceStaging(frameSlot, list.cullArgs);
-	gpuCull->recordCullPass(ccmd, cullInput, sceneStaging, frameSlot);
-	gpuProfilerEnd(ccmd);  // Phase 9.2：cull CB 终点时间戳（dispatch+barrier 完整窗口）
-	ccmd.end();
-
-	VkCommandBuffer ccb = *ccmd;
-	VkSubmitInfo cullSubmit{};
-	cullSubmit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-	cullSubmit.commandBufferCount = 1;
-	cullSubmit.pCommandBuffers = &ccb;
-	const VkResult cullSubmitResult = ::vkQueueSubmit(device.getGraphicsQueue(), 1,
-		&cullSubmit, inFlightFence);
-	if (cullSubmitResult != VK_SUCCESS) {
-		auto logger = RLLogger::getInstance();
-		if (logger)
-			logger->error("Renderer: cull submit failed (frame {}): {}", frame,
-				vk::to_string(vk::Result{cullSubmitResult}));
-		return std::unexpected(Error{ErrorCode::Unknown,
-			fmt::format("cull submit failed: {}", vk::to_string(vk::Result{cullSubmitResult}))});
+	{
+		auto z = zone("cull.record");  // 批 9.5：cull CB 录制 + 序列 CPU 侧 staging 装配
+		ccmd.reset();
+		ccmd.begin(vk::CommandBufferBeginInfo{});
+		gpuProfilerCullBegin(ccmd);  // Phase 9.2：cull 段复位（本 CB 先执行）+ cull 起点时间戳
+		auto cullInput = list.cullInput;  // 值拷贝：sequenceCount 由本处填（render_list 不感知 GPU 表）
+		cullInput.sequenceCount = gpuCull->candidateCount();
+		// 序列 CPU 侧基值（execSlot + DrawArgs + meshCmd 基值；args 序 = candidate 序
+		// 契约校验在 writeSequenceStaging 内——size 不符即抛）
+		gpuCull->writeSequenceStaging(frameSlot, list.cullArgs);
+		gpuCull->recordCullPass(ccmd, cullInput, sceneStaging, frameSlot);
+		gpuProfilerEnd(ccmd);  // Phase 9.2：cull CB 终点时间戳（dispatch+barrier 完整窗口）
+		ccmd.end();
 	}
-	const vk::Result cullWaitResult = device_.waitForFences(
-		inFlightFence, VK_TRUE, std::numeric_limits<uint64_t>::max());
+
+	{
+		auto z = zone("cull.submit");  // 批 9.5：cull CB 入队（信号 inFlightFence）
+		VkCommandBuffer ccb = *ccmd;
+		VkSubmitInfo cullSubmit{};
+		cullSubmit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+		cullSubmit.commandBufferCount = 1;
+		cullSubmit.pCommandBuffers = &ccb;
+		const VkResult cullSubmitResult = ::vkQueueSubmit(device.getGraphicsQueue(), 1,
+			&cullSubmit, inFlightFence);
+		if (cullSubmitResult != VK_SUCCESS) {
+			auto logger = RLLogger::getInstance();
+			if (logger)
+				logger->error("Renderer: cull submit failed (frame {}): {}", frame,
+					vk::to_string(vk::Result{cullSubmitResult}));
+			return std::unexpected(Error{ErrorCode::Unknown,
+				fmt::format("cull submit failed: {}", vk::to_string(vk::Result{cullSubmitResult}))});
+		}
+	}
+
+	// 批 9.5（本次观测任务的**头号数字**）：这次无限超时同步等待自 Phase 9 起一直落在
+	// 未归因段里、从未被量过——而 Phase 9 正是用"cull GPU 只 14µs"否决了"读回延后一帧"。
+	// 单独成 zone 才能复核那条否决（详见 docs/phase9_plan.md §10）。
+	const vk::Result cullWaitResult = [&] {
+		auto z = zone("cull.fenceWait");
+		return device_.waitForFences(inFlightFence, VK_TRUE,
+			std::numeric_limits<uint64_t>::max());
+	}();
 	if (cullWaitResult != vk::Result::eSuccess) {
 		auto logger = RLLogger::getInstance();
 		if (logger)
@@ -92,10 +106,14 @@ std::expected<void, Error> CullDriver::runFrame(uint32_t frameSlot, uint64_t fra
 		return std::unexpected(Error{ErrorCode::DeviceLost,
 			fmt::format("cull fence wait failed: {}", vk::to_string(cullWaitResult))});
 	}
-	// fence 已信号 → 重置（主 CB submit 重新挂；已信号 fence 再挂 = VU 违例）
-	device_.resetFences(inFlightFence);
-	gpuCull->readCullResult(frameSlot);
-	reconcile(list);
+	{
+		// 批 9.5：fence 复位 + mapped 读回 + 与 CPU 剔除逐帧全量对账（reconcile 是纯 CPU
+		// 多重集比对，候选 1591 量级——它此前也埋在未归因段里）
+		auto z = zone("cull.readback");
+		device_.resetFences(inFlightFence);  // fence 已信号 → 重置（主 CB submit 重新挂）
+		gpuCull->readCullResult(frameSlot);
+		reconcile(list);
+	}
 	return {};
 }
 
@@ -107,6 +125,9 @@ void CullDriver::executeOpaqueSegment(vk::raii::CommandBuffer& cmd, const FrameD
 		// token 布局要求执行 CB 上先绑 execution set 初始 shader 态
 		dgc->bindInitialShaders(cmd);
 		dgc->recordExecute(cmd, gpuCull->sequenceAddress(), gpuCull->countTotalAddress(), frameSlot);
+		// 批 9.5：本路 draw 数在 CPU 侧不可知（可见位由 GPU 写），draw.count 记 0；
+		// 命令数 = bindInitialShaders + executeGeneratedCommands = 2。本机（RADV）不走此路。
+		profilerAddCommands(2);
 	} else if (dgcStatic && dgcStatic->active()) {
 		// 静态 shader DGC 路（RADV spike，docs/archive/radv_static_dgc_spike.md）：每管线条目一次
 		// Execute（pNext 静态 frag+mesh，无 EXECUTION_SET token → 无需 bindInitialShaders）。
@@ -118,10 +139,13 @@ void CullDriver::executeOpaqueSegment(vk::raii::CommandBuffer& cmd, const FrameD
 		for (uint32_t j = 0; j < dgcStatic->entryCount(); ++j)
 			dgcStatic->recordExecute(cmd, j, streamsBase + entryStreamBytes * j,
 				gpuCull->countTotalAddress(), frameSlot);
+		// 批 9.5：每管线条目一次 vkCmdExecuteGeneratedCommandsEXT；draw 数同上不进 draw.count
+		profilerAddCommands(dgcStatic->entryCount());
 	} else {
 		// 读回重放（RADV 路）：逐 candidate 按可见位重放——candidate 序 =
 		// CPU opaque 段序（顺序契约），args = CPU 位级真相源（list.cullArgs，
 		// 与 drawOne 的 pushData 同值）→ 截图 BIT-IDENTICAL
+		uint32_t replayed = 0;  // 批 9.5：可见位重放的 draw 数（循环外一次性入账）
 		for (uint32_t i = 0; i < gpuCull->candidateCount(); ++i) {
 			if (!gpuCull->isVisible(i))
 				continue;
@@ -133,7 +157,9 @@ void CullDriver::executeOpaqueSegment(vk::raii::CommandBuffer& cmd, const FrameD
 					sizeof(RGL::DrawArgs))));
 			entry.pipeline.bindShaders(cmd);
 			cmd.drawMeshTasksEXT(e.groupCount, 1, 1);
+			++replayed;
 		}
+		profilerAddDraws(replayed);
 	}
 }
 
