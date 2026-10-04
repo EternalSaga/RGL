@@ -14,11 +14,24 @@ namespace RGL {
 
 /**
  * 窗口尺寸（registry context，eventSystem 在 resize 事件写入；projectionSystem/resizeSystem 读）。
+ * **口径 = 窗口物理像素**（与 swapchain extent 同口径——resizeSystem 拿两者比较，口径不同即误判）；
+ * Wayland 分数缩放下与 SDL「逻辑点」尺寸不同，见 ecs_impl eventSystem。
  * 无 needsResize 标志：resizeSystem 比较本值与 swapchain 实际尺寸（派生状态不存标志位）。
  */
 export struct WindowExtent {
 	uint32_t width = 800;
 	uint32_t height = 600;
+};
+
+/**
+ * 窗口像素尺寸查询钩子（registry context，main 建窗时装配；headless 未装配 = 窗口不存在，
+ * 也恒无 SDL 窗口事件）：eventSystem 收到 WINDOW_RESIZED / WINDOW_PIXEL_SIZE_CHANGED 后经
+ * 本钩子**重新查询**像素尺寸写 WindowExtent——不信任事件携带的 data1/2（RESIZED 带逻辑点、
+ * PIXEL_SIZE_CHANGED 带像素，分数缩放下两者不同，而 swapchain/projection 口径是像素）。
+ * std::function 注入 = ecs 不依赖窗口模块（与 PickingHook/InputFilter 同款类型擦除）。
+ */
+export struct WindowPixelQuery {
+	std::function<std::optional<std::array<int, 2>>()> pixels = nullptr;
 };
 
 /**

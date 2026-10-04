@@ -94,6 +94,8 @@ export class Swapchain {
 		if (auto* logger = RLLogger::getInstance())
 			logger->info("Swapchain present mode: {}{}", vk::to_string(presentMode),
 				headless ? " (headless)" : "");
+		// 渲染网格保真度可观测（2026-10-03，机制与踩坑见 logRenderGridFidelity 注释）
+		logRenderGridFidelity(headless, window, extent);
 		// 批 9.3：激活时设结果队列容量 + 打激活日志（未激活 = no-op，零噪声）
 		setupPresentTiming();
 	}
@@ -361,6 +363,90 @@ export class Swapchain {
 		if (result != vk::Result::eSuccess && logger)
 			logger->warn("vkSetSwapchainPresentTimingQueueSizeEXT({}) -> {}",
 				queueCapacity, vk::to_string(result));
+	}
+
+	/**
+	 * 渲染网格保真度可观测（2026-10-03）：交换链 extent 按**物理像素**创建
+	 *（SDLWindow::getSwapchainExtend → pixelSize），这里把它与 SDL 逻辑窗尺寸、比值、
+	 * windowScale 一并打出——「渲染缓冲 ≠ 屏幕像素网格」必须一眼可见。分数缩放桌面下
+	 * 若像素尺寸 == 逻辑尺寸而 scale ≠ 1，合成器会替我们放大整张缓冲：画面非 1:1，
+	 * 且按渲染像素定义的抖动/闪烁随该倍数放大（实测 KDE scale 1.75 时 TAA 游动
+	 * 0.717 渲染像素 → 屏幕上 1.26 面板像素）。
+	 * 两条**独立**判据取「或」触发 warning（任一 ≠ 1 即算缩放）：① SDL window scale（客户端
+	 * 视角，SDL_GetWindowDisplayScale）；② 显示模式推算 scale = 当前显示模式物理尺寸 ÷ 显示
+	 * 边界逻辑尺寸（显示层视角）。两来源都打进 info 日志——不一致本身就是信息（客户端与合成器
+	 * 对缩放的认知不同）。
+	 * ⚠ 本机实测（KDE Wayland scale 1.75，SDL 3.4.14）：默认配置下 SDL 对窗口 scale **失明**
+	 * （windowScale=1.000 且 pixels==logical），单靠判据①会**假阴性**；但判据②仍报真实缩放——
+	 * 关键坑：Wayland 下 SDL_GetCurrentDisplayMode 的 w/h 是**逻辑**尺寸（本机 1463×914，非物理
+	 * 2560×1600），故「物理尺寸」= mode.w × pixel_density（本机 pixel_density=1.750），再除
+	 * bounds.w（逻辑 1463）= 1.75，与 hint 报的 windowScale 吻合。设 SDL_VIDEO_WAYLAND_SCALE_TO_DISPLAY=1
+	 * 后两来源对调（windowScale=1.75、推算=1.0），warning 由①触发（阳性锚点）。
+	 * **根因归属（实测，勿再怀疑桌面配置）**：KWin 已 advertise
+	 * `wp_fractional_scale_manager_v1`（自写 wayland 客户端枚举全局实测），`wl_output.scale=2`；
+	 * 是 SDL 3.4.14 Wayland 后端收了分数缩放（拿它算显示几何）却**从不按它给缓冲**——
+	 * `nm --defined-only libSDL3.a` 里没有任何 `wp_viewporter_set_destination` /
+	 * `wl_surface_set_buffer_scale` 定义。故改桌面「缩放格式」无效；出路 = 引擎自己按倍率建
+	 * 交换链 + 对 SDL 自建的 wp_viewport（`SDL_PROP_WINDOW_WAYLAND_VIEWPORT_POINTER`，
+	 * 实测非空且 SDL 从不写它）调 set_destination。
+	 * headless（无 SDL 窗口，extent = headless_size 配置）只打一行 extent，零 SDL 调用、零噪声。
+	 * @param headless headless 模式（true 时不碰 SDL 窗口）
+	 * @param window SDL 窗口（非 headless 必非空——类不变式，构造期已解引用）
+	 * @param swapchainExtent 本交换链实际 extent（可能经 min/maxImageExtent 钳制）
+	 */
+	static void logRenderGridFidelity(bool headless, RGL::SDLWindow* window,
+		vk::Extent2D swapchainExtent) {
+		auto* logger = RLLogger::getInstance();
+		if (!logger)
+			return;
+		if (headless) {
+			logger->info("Swapchain extent: {}x{} (headless, headless_size config)",
+				swapchainExtent.width, swapchainExtent.height);
+			return;
+		}
+		int logicalW = 0, logicalH = 0;
+		SDL_GetWindowSize(*window, &logicalW, &logicalH);
+		// 不用结构化绑定取 array：跨模块 TU 里 std::tuple_size  specialization 不可见
+		//（clang modules 已知坑，本文件实测报 "binds to 1 element"），下标访问等价
+		const auto px = window->pixelSize();
+		const int pixelW = px[0], pixelH = px[1];
+		// 来源①：SDL 窗口 scale（客户端视角；KDE Wayland 默认配置实测失明返 1.000）
+		const float windowScale = SDL_GetWindowDisplayScale(*window);
+		// 来源②：显示模式推算 scale = 当前显示模式**物理**尺寸 ÷ 显示边界**逻辑**尺寸。
+		// Wayland 下 SDL_GetCurrentDisplayMode 的 w/h 是逻辑尺寸（本机 1463，非物理 2560），
+		// 物理 = mode.w × pixel_density（SDL 文档：scale converting size to pixels），本机
+		// (1463×1.75)/1463 = 1.75——客户端对窗口 scale 失明时它是唯一能报出缩放的来源
+		float displayScale = 1.0f;
+		if (const SDL_DisplayID display = SDL_GetDisplayForWindow(*window); display != 0) {
+			SDL_Rect bounds{};
+			const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(display);
+			if (mode && SDL_GetDisplayBounds(display, &bounds) && bounds.w > 0)
+				displayScale = static_cast<float>(mode->w) * mode->pixel_density
+					/ static_cast<float>(bounds.w);
+		}
+		const float ratioW = logicalW > 0 ? static_cast<float>(swapchainExtent.width) / static_cast<float>(logicalW) : 0.0f;
+		const float ratioH = logicalH > 0 ? static_cast<float>(swapchainExtent.height) / static_cast<float>(logicalH) : 0.0f;
+		logger->info("Swapchain extent: {}x{} (SDL logical {}x{}, buffer/logical ratio {:.2f}x{:.2f},"
+			" windowScale={:.3f}, displayScale(mode/bounds)={:.3f})",
+			swapchainExtent.width, swapchainExtent.height, logicalW, logicalH, ratioW, ratioH,
+			windowScale, displayScale);
+		// scale ≠ 1 判据留 1% 容差（浮点，1.00 附近不误报）；像素==逻辑 = 合成器缩放已坐实。
+		// 两来源取「或」：客户端失明（windowScale=1）时靠 displayScale 兜住假阴性（本机默认配置）
+		const bool windowScaleNeOne = windowScale < 0.99f || windowScale > 1.01f;
+		const bool displayScaleNeOne = displayScale < 0.99f || displayScale > 1.01f;
+		if (pixelW == logicalW && pixelH == logicalH && (windowScaleNeOne || displayScaleNeOne))
+			logger->warn("Render buffer {}x{} equals SDL logical window size while scale is"
+				" windowScale={:.3f} / displayScale(mode/bounds)={:.3f} -- the compositor will"
+				" upscale it: image is NOT 1:1 and pixel-defined temporal instability is"
+				" amplified by that factor. Cause is SDL, not the desktop: its Wayland backend"
+				" receives the fractional scale (uses it for display geometry) but never sizes"
+				" the buffer by it -- no wp_viewporter_set_destination / wl_surface_set_buffer_scale"
+				" call exists in the library, so changing the desktop scale format does NOT help"
+				" (KWin already advertises wp_fractional_scale_manager_v1, measured). Workaround"
+				" today: set desktop scaling to 1.00. Real fix: size the swapchain by the scale and"
+				" set the destination of SDL's own wp_viewport"
+				" (SDL_PROP_WINDOW_WAYLAND_VIEWPORT_POINTER, non-null and never written by SDL).",
+				pixelW, pixelH, windowScale, displayScale);
 	}
 
 

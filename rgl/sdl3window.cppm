@@ -223,9 +223,27 @@ export class SDLWindow {
 	}
 
 	/**
+	 * 窗口**物理像素尺寸**（SDL_GetWindowSizeInPixels，实时查询不缓存）。
+	 * 为什么是像素而不是逻辑点（SDL_GetWindowSize）：Wayland 分数缩放 / Windows 高 DPI 下
+	 * logical ≠ physical，交换链必须按显示面板的物理像素建——按逻辑点建 = 让合成器/系统
+	 * 替我们放大，画面糊，且「按渲染像素定义的抖动/闪烁」随该倍数一起被放大
+	 *（实测 KDE scale 1.75 时 TAA 游动 0.717 渲染像素 → 屏幕上 1.26 面板像素）。
+	 * ⚠ 本机现状（KDE Wayland scale 1.75，SDL 3.4.14 实测）：SDL 报 pixels == logical
+	 *（windowScale=1.0，客户端拿不到缩放后的缓冲尺寸）→ 本改动今天在本机是 **no-op**；
+	 * 待系统给出 pixels = scale × logical（如 KDE「缩放格式」改分数/优先整数），引擎自动吃得到。
+	 * @return {宽, 高} 物理像素（SDL 查询失败 = 0x0，调用方兜底）
+	 */
+	std::array<int, 2> pixelSize() const {
+		int w = 0, h = 0;
+		SDL_GetWindowSizeInPixels(window, &w, &h);
+		return {w, h};
+	}
+
+	/**
 	 * 确定交换链 extent：currentExtent.width == UINT32_MAX（surface 处于"尺寸待定"态，
-	 * 常见于可 resize 窗口）时取 SDL 窗口当前尺寸并 clamp 到 [minImageExtent,
-	 * maxImageExtent]；否则直接用 currentExtent。
+	 * 常见于可 resize 窗口）时取窗口**物理像素尺寸**（pixelSize；不用逻辑点——理由见其
+	 * 注释：合成器缩放桌面下 logical ≠ physical）并 clamp 到 [minImageExtent,
+	 * maxImageExtent]；否则直接用 currentExtent（surface 已按物理像素给出）。
 	 * @param surfaceCapabilities surface 能力（调用方每次重建前查询）
 	 * @return 交换链 extent（resize 后重建 swapchain 用）
 	 */
@@ -235,8 +253,7 @@ export class SDLWindow {
 		if (surfaceCapabilities.currentExtent.width != std::numeric_limits<uint32_t>::max()) {
 			swapchainExtent = surfaceCapabilities.currentExtent;
 		} else {
-			int w, h;
-			SDL_GetWindowSize(window, &w, &h);
+			const auto [w, h] = pixelSize();
 			swapchainExtent.width = std::clamp(static_cast<uint32_t>(w),
 				surfaceCapabilities.minImageExtent.width,
 				surfaceCapabilities.maxImageExtent.width);

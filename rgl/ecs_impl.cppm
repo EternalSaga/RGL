@@ -53,6 +53,29 @@ bool handleEscapeDeselect(entt::registry& rg, const SDL_Event& event) {
 }
 
 /**
+ * 窗口 resize 事件的 extent 解析（eventSystem 的 RESIZED / PIXEL_SIZE_CHANGED 共用）：
+ * 经 WindowPixelQuery 钩子**重新查询**像素尺寸写回——不信任事件携带的 data1/2
+ *（RESIZED 带逻辑点、PIXEL_SIZE_CHANGED 带像素，Wayland 分数缩放下两者不同，而
+ * swapchain/projection 口径是像素；同一次拖拽两条事件都会发，重查询幂等无害）。
+ * 钩子未装配 / 查询结果非正 = 回落事件值（headless 兜底——headless 无 SDL 窗口恒不进本分支）。
+ * @param rg registry（读 WindowPixelQuery，可未装配）
+ * @param extent 写回目标（WindowExtent context）
+ * @param event 触发本分支的 SDL 窗口事件（回落数据源）
+ */
+void applyWindowResizeExtent(entt::registry& rg, WindowExtent& extent, const SDL_Event& event) {
+	auto* query = rg.ctx().find<WindowPixelQuery>();
+	const std::optional<std::array<int, 2>> px =
+		(query && query->pixels) ? query->pixels() : std::nullopt;
+	if (px && (*px)[0] > 0 && (*px)[1] > 0) {
+		extent.width = static_cast<uint32_t>((*px)[0]);
+		extent.height = static_cast<uint32_t>((*px)[1]);
+	} else {
+		extent.width = static_cast<uint32_t>(event.window.data1);
+		extent.height = static_cast<uint32_t>(event.window.data2);
+	}
+}
+
+/**
  * 中央事件轮询（唯一 SDL_PollEvent 调用点）：把 SDL 事件流翻译进 registry context——
  * 窗口状态（WindowExtent/AppExit 直接写入，不走事件流）+ 输入事件流（InputEvents：
  * 本 system 只产事件，不做键位映射——键绑定在 Camera.keys，cameraSystem 消费事件时
@@ -90,8 +113,10 @@ void eventSystem(entt::registry& rg) {
 				exit.requested = true;
 				break;
 			case SDL_EVENT_WINDOW_RESIZED:
-				extent.width = static_cast<uint32_t>(event.window.data1);
-				extent.height = static_cast<uint32_t>(event.window.data2);
+			case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+				// extent 口径 = 窗口**物理像素**（与 swapchain extent 同口径）；重查不取事件值，
+				// 两事件都接的理由与兜底 → applyWindowResizeExtent
+				applyWindowResizeExtent(rg, extent, event);
 				break;
 			case SDL_EVENT_KEY_DOWN: {
 				InputEvent e;
@@ -193,6 +218,12 @@ std::expected<void, Error> resizeSystem(entt::registry& rg, RGL::Swapchain& swap
 	if (!result) {
 		return std::unexpected(std::move(result).error());
 	}
+	// 重建成功可观测（2026-10-03）：swapchain extent 是 clamp 后值，与窗口像素并打——
+	// 两者不等 = surface 可达范围钳制生效，拖窗口时一眼看到重建与最终尺寸
+	if (auto* logger = RLLogger::getInstance())
+		logger->info("resizeSystem: swapchain rebuilt to {}x{} (window pixel extent {}x{})",
+			swapchain.getExtent().width, swapchain.getExtent().height,
+			extent.width, extent.height);
 	return {};
 }
 

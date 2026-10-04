@@ -205,10 +205,38 @@ std::optional<PreWindow> prepareWindow(const StartupConfigs& configs) {
 	pre.diagShow = pre.showAfter >= 0 && !pre.headless;
 	pre.window = createAppWindow(runtime, pre.llmEnabled, pre.headless,
 		pre.headlessW, pre.headlessH);
-	pre.extentW = pre.headless ? pre.headlessW : static_cast<uint32_t>(pre.window->getWidth());
-	pre.extentH = pre.headless ? pre.headlessH : static_cast<uint32_t>(pre.window->getHeight());
+	// WindowExtent 初值口径 = 窗口**物理像素**（与 swapchain extent 同口径——不同则首帧
+	// resizeSystem 误判不匹配、recreate 又得同值返回 false = 假 "clamped" 告警）。
+	// 像素查询失败（0x0）回落创建尺寸；headless 无窗口用配置尺寸
+	if (pre.headless) {
+		pre.extentW = pre.headlessW;
+		pre.extentH = pre.headlessH;
+	} else {
+		auto px = pre.window->pixelSize();
+		if (px[0] <= 0 || px[1] <= 0)
+			px = {pre.window->getWidth(), pre.window->getHeight()};
+		pre.extentW = static_cast<uint32_t>(px[0]);
+		pre.extentH = static_cast<uint32_t>(px[1]);
+	}
 	pre.llm = pre.llmEnabled ? &runtime.llm : nullptr;
 	return pre;
+}
+
+/**
+ * 窗口相关 registry context 装配（main 启动流，替代原 emplace 行以控 main 行数）：
+ * ① WindowExtent 初值 = prepareWindow 实测的窗口**物理像素**尺寸（headless = 配置尺寸）；
+ * ② WindowPixelQuery 查询钩子（eventSystem resize 重查 extent 用；headless 窗口为空 =
+ *   不装配 = 兜底走事件值，且 headless 恒无 SDL 窗口事件。像素口径理由 → ecs.cppm）。
+ * @param rg 场景 registry（写入 context）
+ * @param pre 建窗派生量（extent 初值 + 窗口指针，headless 窗口为空）
+ */
+void wireWindowContexts(entt::registry& rg, const PreWindow& pre) {
+	rg.ctx().emplace<WindowExtent>(pre.extentW, pre.extentH);
+	if (!pre.window)
+		return;
+	SDLWindow* window = pre.window.get();
+	rg.ctx().emplace<WindowPixelQuery>(WindowPixelQuery{
+		[window] { return std::optional{window->pixelSize()}; }});
 }
 
 /** push data 容量契约检查（超限抛 std::runtime_error）。 */
@@ -398,7 +426,7 @@ int main() {
 		// WindowExtent/AppExit（ecs.cppm）、SceneSpin/SceneBounds/ViewProjection（scene.cppm）、
 		// FrameDrawList（vkrenderer.cppm，渲染 system 产出、drawFrame 消费）、
 		// InputEvents/CameraState（camera.cppm，输入事件流 + 相机自管 level 状态）
-		registry.ctx().emplace<WindowExtent>(pre.extentW, pre.extentH);
+		wireWindowContexts(registry, pre);
 		registry.ctx().emplace<AppExit>();
 		registry.ctx().emplace<Camera>(std::move(configs.camera.camera));
 		registry.ctx().emplace<InputEvents>();

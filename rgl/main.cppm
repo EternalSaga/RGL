@@ -86,7 +86,7 @@ export struct PreWindow {
 	bool llmEnabled = false;
 	bool headless = false;
 	uint32_t headlessW = 0, headlessH = 0;  // 已按 llm 契约对齐
-	uint32_t extentW = 0, extentH = 0;      // WindowExtent 初值（headless 用配置，窗口用实测）
+	uint32_t extentW = 0, extentH = 0;      // WindowExtent 初值（headless 用配置，窗口用实测像素尺寸）
 	int showAfter = -1;
 	bool diagShow = false;                  // show_after 诊断门控（showAfter ≥ 0 且非 headless）
 	const LlmDebugConfig* llm = nullptr;  // llm 配置指针（llmEnabled 时非空）
