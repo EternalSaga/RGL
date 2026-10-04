@@ -316,6 +316,18 @@ void Renderer::evssmPreFrame() {
 		*shadowSlot, *momentsSlot);
 }
 
+// 批 9.5 补：显存账的**懒构造盲区**修补。logStartupBaseline 在帧循环之前打统计，而
+// IzbShadow / EvssmShadow 都是首帧 drawFrame 内懒构造（izbPreFrame / evssmPreFrame）
+// ⟹ startup 那次统计系统性漏掉这两个模块的全部资源（实测：开/关 shadow_evssm 的
+// vma[startup] 逐字节相同）。此处在两个 preFrame 之后补打一次，让显存账真的含它们。
+// 一次性；抽成方法而非内联 if 是为了不把 drawFrame 的认知复杂度推过 15 红线。
+void Renderer::logFirstFrameMemory() {
+	if (memStatsLogged)
+		return;
+	memStatsLogged = true;
+	resources->logMemoryStats("first_frame");
+}
+
 // 批 11.6d-2：EVSSM sandwich（与 izbLightPassPre 同位；门空早退 = 零命令）。
 void Renderer::evssmLightPassPre(vk::raii::CommandBuffer& cmd, const RgPassPlan& pass) {
 	if (!evssmShadow || pass.kind != RgPassKind::drawLight || pass.state != "light")
@@ -594,6 +606,7 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 	// 批 9.5：两个图外帧首段各自成 zone（drawFrame.izbPre / drawFrame.evssmPre）
 	izbPreFrame();
 	evssmPreFrame();
+	logFirstFrameMemory();
 
 	// ⑤ pass 循环（执行序 = 图线性序，Phase 6）：attachment barrier（布局链推导物化）
 	// → beginRendering（逐 pass 附件）→ applyDynamicState(pass.state) → 段内逐 draw

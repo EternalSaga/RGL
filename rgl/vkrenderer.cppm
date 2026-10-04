@@ -289,6 +289,11 @@ export class Renderer {
 	/** 批 11.6d-2：pass 循环头部 EVSSM sandwich（与 izbLightPassPre 同位）——仅
 	 *  deferred light pass 录矩派生 + 7 级 mip 链（图外 compute，其余 pass 零命令）。 */
 	void evssmLightPassPre(vk::raii::CommandBuffer& cmd, const RgPassPlan& pass);
+	/** 批 9.5 补：首帧补打一次显存统计（`vma[first_frame]`）。动机 = IzbShadow /
+	 *  EvssmShadow 均首帧懒构造，而 `logStartupBaseline` 在帧循环之前 ⟹ `vma[startup]`
+	 *  不含这两个模块的资源（实测开/关 shadow_evssm 的 startup 统计逐字节相同）。
+	 *  进程内只打一次（`vmaCalculateStatistics` 遍历全分配，有开销）。 */
+	void logFirstFrameMemory();
 	/** 批 11.3-1d 后半：光空间 mask pass（零附件 G×G + izb_mask 态 + shadow0 段
 	 *  重放，push 尾缀 gridDim；shadow0 段空 = warn-once 跳过）。 */
 	void replayIzbMaskSegment(vk::raii::CommandBuffer& cmd, const FrameDrawList& list);
@@ -358,6 +363,7 @@ export class Renderer {
 	std::unique_ptr<RGL::EvssmShadow> evssmShadow;
 	uint32_t izbFrameNo = 0;   ///< 帧计数（izb_dump_frame 比对，1 起）
 	bool izbMaskSegmentWarned = false;  ///< shadow0 段空 warn-once（mask 依赖投影体）
+	bool memStatsLogged = false;        ///< 显存基线只打一次（首帧懒建资源入账用）
 	int32_t depthAttSlot = -1; ///< 图内 depth 附件 slot（IZB sandwich 读布局追踪表用）
 
 	// scene data staging ring（Phase 5 批次 2，见 createSceneStaging；slot 数 =
