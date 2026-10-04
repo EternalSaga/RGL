@@ -268,7 +268,7 @@ float3 envBrdfFactor(float NoV, float roughness, float3 F0)
 //   @722080  mat4 prevViewProj —— 上一帧**抖动后** proj·view（产出**抖动网格**坐标）
 //   @722144  mat4 motionPrevFromCur —— prevSpin · inverse(curSpin)（spin 关 = 单位阵）
 //   @722208  vec4 (feedback, historyValid, 本帧内容位移 c_t 的 x/y px)
-//   @722224  vec4 (上一帧内容位移 c_{t−1} 的 x/y px, 保留, 保留)  —— 批 13.5
+//   @722224  vec4 (上一帧内容位移 c_{t−1} 的 x/y px, **AO 已施加标志** z, 保留)  —— 批 13.5/13.6
 //
 // 矩阵口径提醒（改动前必读，全量推导 → scene_data.cppm kSceneDataTaa* 区注释）：
 //   · 重建世界坐标用 sceneData@64 的 skyInvViewProj，它是**抖动后** proj·view 的逆（与深度配套）；
@@ -299,6 +299,14 @@ ObjectMatrix readTaaMotion()
     return m;
 }
 
+// AO 施加强度：scene data @60，configs/scene.lua ao.strength，0 = 逐位旁路。
+// ⚠ 自批 13.6 起有**两个**消费者（taa.frag 施加 / tonemap 按标志施加），故从 tonemap 的
+//   局部函数**抬进本模块**——同一个 @60 字面量写两处必然漂移（本项目反复踩过）。
+float readAoStrength()
+{
+    return asfloat(sceneData.Load(60u));
+}
+
 // (x = feedback 本帧权重, y = historyValid 1/0, z/w = **本帧内容位移 c_t** 像素)。
 // ⚠ zw 自批 13.5 起被 taa.frag 真读（输入侧 un-jitter）；此前装 jitterPx 但从未被读。
 // 口径 = `taa_jitter.cppm::contentShiftPx` = `(+jx, −jy)`，**不是** jitterPx（差一个 y 轴翻号）。
@@ -307,10 +315,20 @@ float4 readTaaParams()
     return asfloat(sceneData.Load4(722208u));  // kSceneDataTaaParamsOffset
 }
 
-// 批 13.5 历史基空间修正：**上一帧内容位移 c_{t−1}** 像素（x/y，z/w 保留）。
+// 批 13.5 历史基空间修正：**上一帧内容位移 c_{t−1}** 像素（x/y）+ 批 13.6 AO 施加点标志（z）。
 // 用途：prevViewProj 产出的是抖动网格坐标，减本值才落到基空间历史网格。
 // 语义与「为什么偏移由 CPU 算好」全在 scene_data.cppm kSceneDataTaaPrevContentShiftOffset 注释里。
 float4 readTaaPrevContentShift()
 {
     return asfloat(sceneData.Load4(722224u));  // kSceneDataTaaPrevContentShiftOffset
+}
+
+// 批 13.6：AO 是否**已由 taa pass 施加**（1/0）。= 1 ⟹ tonemap 必须跳过自己的 AO 乘法，
+// 否则双施；= 0 ⟹ tonemap 照旧施加（TAA 不在图里时的唯一施加点）。
+// ⚠ 该标志由 CPU 侧写**实际图形态**（decorateTaaPass 的返回值），**不是**配置键 taa.enabled
+//   ——offscreen 变体配置开了 TAA 也装饰失败，若拿配置派生就会「taa pass 不存在 + tonemap
+//   又跳过」= AO 一次都不施加。零布局变更（复用 .z 保留位，static_assert 不变）。
+float readTaaAoApplied()
+{
+    return asfloat(sceneData.Load(722224u + 8u));  // kSceneDataTaaPrevContentShiftOffset + z
 }

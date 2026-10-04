@@ -221,16 +221,30 @@ bool decorateTaaPass(RgGraphDesc& desc) {
 		// 「必须被写」的编译期校验亦成立。
 		.history = true});
 
-	desc.passes.insert(desc.passes.begin() + static_cast<long>(*consumerIdx), RgPassDesc{
+	RgPassDesc taaPass{
 		.name = std::string{kTaaPassName}, .kind = RgPassKind::drawLight, .state = "taa",
 		.outputs = {RgPassAttachment{.attachment = std::string{kTaaOutName},
 			.usage = RgUsage::colorWrite, .loadOp = RgLoadOp::clear, .storeOp = RgStoreOp::store}},
-		// 输入序 = barrier 发射序：先成片与深度（本帧刚写），最后历史（帧首跨帧读）
+		// 输入序 = barrier 发射序：先成片与深度（本帧刚写），再 AO（本帧 ao pass 刚写），
+		// 最后历史（帧首跨帧读）
 		.inputs = {
 			RgPassAttachment{.attachment = *colorAtt, .usage = RgUsage::sampleRead},
-			RgPassAttachment{.attachment = *depthAtt, .usage = RgUsage::sampleRead},
-			RgPassAttachment{.attachment = std::string{kTaaHistName},
-				.usage = RgUsage::sampleRead}}});
+			RgPassAttachment{.attachment = *depthAtt, .usage = RgUsage::sampleRead}}};
+	// 批 13.6：AO 施加点搬进 taa pass ⟹ 本 pass 现在**采样** ao 附件，必须声明 sampleRead
+	// 输入——否则编译器不为它生成 ColorAttachmentOptimal → ShaderReadOnly 的布局转换，
+	// 采样端直接报 VVL（同 decorateShadowPass 里阴影图那条教训）。
+	// ⚠ 位置在**色输入之后**：`sampledColorName` 取「首个 sampleRead 色附件」，而 AO 也是
+	//   色附件——排在前面会让 highlight / taa 两处装饰把 AO 误认成场景色。
+	// 按附件**存在性**判（无 ao pass 的图形态零假设跳过），不假设变体。
+	for (const auto& att : desc.attachments)
+		if (att.name == std::string{kAoName}) {
+			taaPass.inputs.push_back(
+				RgPassAttachment{.attachment = att.name, .usage = RgUsage::sampleRead});
+			break;
+		}
+	taaPass.inputs.push_back(RgPassAttachment{
+		.attachment = std::string{kTaaHistName}, .usage = RgUsage::sampleRead});
+	desc.passes.insert(desc.passes.begin() + static_cast<long>(*consumerIdx), std::move(taaPass));
 
 	// 消费者的色输入换成时域结果（taa_out）——tonemap 因此吃 TAA 输出而非原始成片
 	for (auto& in : desc.passes[*consumerIdx + 1].inputs)

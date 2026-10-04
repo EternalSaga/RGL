@@ -1250,6 +1250,75 @@ TEST_CASE("decorateTaaPass 产物形状：两附件 + taa pass 插在 tonemap �
     CHECK(b->srcAccess == vk::AccessFlagBits2::eMemoryWrite);
 }
 
+TEST_CASE("批 13.6：AO 施加点搬进 taa pass ⟹ 必须声明 ao 输入，且不得抢走「首个色附件」锚点") {
+    // 【为什么这条值得单测】AO 在 taa pass 内施加 ⟹ 本 pass 开始**采样** ao 附件。图里少声明
+    // 这条边 = 编译器不生成 ColorAttachmentOptimal → ShaderReadOnly 的布局转换 ⟹ 症状只在
+    // 真机 VVL 上出现（无设备单测子集抓不到），所以这条边得由单测钉住。
+    // 【另一半风险更阴】ao 附件也是**色**附件，而 picking / highlight / taa 三处装饰都按
+    // 「首个 sampleRead 色附件」反查场景色（decorateHighlightPass::sampledColorName）
+    // ⟹ ao 一旦排到 scene_hdr 前面，高亮 pass 会把 AO 图当场景色去写 = 画面直接花掉。
+    auto build = [](bool withAo) {
+        RgGraphDesc d;
+        d.attachments = {swapchainAtt(), depthAtt(),
+            offscreenAtt("scene_hdr", "rgba16_sfloat")};
+        if (withAo)
+            d.attachments.push_back(offscreenAtt("ao"));  // r8_unorm = kAoFormat
+        d.passes = {
+            RgPassDesc{.name = "opaque", .kind = RgPassKind::drawMesh, .state = "opaque",
+                .drawSource = "opaque", .outputs = {colorOut("scene_hdr"), depthOut("depth")}},
+        };
+        if (withAo)
+            d.passes.push_back(RgPassDesc{.name = "ao", .kind = RgPassKind::drawLight,
+                .state = "ao", .outputs = {colorOut("ao")}, .inputs = {sampleIn("depth")}});
+        d.passes.push_back(RgPassDesc{.name = "tonemap", .kind = RgPassKind::drawLight,
+            .state = "tonemap", .outputs = {colorOut("swapchain")},
+            .inputs = {sampleIn("scene_hdr")}});
+        return d;
+    };
+    auto firstColorOf = [](const RgPassDesc& p) -> std::string {
+        for (const auto& a : p.inputs)
+            if (a.usage == RgUsage::sampleRead && a.attachment != "depth")
+                return a.attachment;
+        return {};
+    };
+
+    RgGraphDesc d = build(/*withAo=*/true);
+    REQUIRE(decorateTaaPass(d));
+    const auto it = std::ranges::find(d.passes, std::string{kTaaPassName}, &RgPassDesc::name);
+    REQUIRE(it != d.passes.end());
+
+    // ① 阳性锚点：taa pass 采 ao。删掉 decorateTaaPass 里那段 push_back → 本行红。
+    CHECK(std::ranges::any_of(it->inputs, [&](const RgPassAttachment& a) {
+        return a.attachment == std::string{kAoName} && a.usage == RgUsage::sampleRead; }));
+    // 变异红线：删掉 AO 输入声明 → ① 红（真机表现 = 采样未转布局，VVL 报 VUID-VkCmdDraw*）
+    // ② 锚点顺序：首个 sampleRead 色附件**仍是** scene_hdr。
+    // 变异红线：把 AO 排到 inputs 首位 → 本行红（真机表现 = 高亮/装饰锚到 AO 图上，画面花）
+    CHECK(firstColorOf(*it) == "scene_hdr");
+    // 且 AO 排在深度之后、历史之前（输入序 = barrier 发射序：AO 是本帧刚写的色附件）
+    const auto idxOf = [&](std::string_view n) {
+        size_t i = 0;
+        for (; i < it->inputs.size(); ++i)
+            if (it->inputs[i].attachment == n) break;
+        return i;
+    };
+    CHECK(idxOf("depth") < idxOf(std::string_view{kAoName}));
+    CHECK(idxOf(std::string_view{kAoName}) < idxOf(std::string_view{kTaaHistName}));
+
+    // ③ 反向配对：**没有** ao 附件的图形态不得凭空声明它（漏了存在性判断 → 这里会拿到一条
+    // 指向不存在附件的输入；而"无 ao 图仍能编译"这条 guard 若写成"永远不加 AO"也会让 ① 红）
+    RgGraphDesc d2 = build(/*withAo=*/false);
+    REQUIRE(decorateTaaPass(d2));
+    const auto it2 = std::ranges::find(d2.passes, std::string{kTaaPassName}, &RgPassDesc::name);
+    REQUIRE(it2 != d2.passes.end());
+    CHECK_FALSE(std::ranges::any_of(it2->inputs,
+        [&](const RgPassAttachment& a) { return a.attachment == std::string{kAoName}; }));
+
+    // ④ 整图编译通过（阳性锚点：装饰产物自洽，布局链推得出来）
+    const auto g = compileRenderGraph(d);
+    INFO(errOf(g));
+    REQUIRE(g.has_value());
+}
+
 TEST_CASE("decorateTaaPass 的图形态门槛：没有「写 swapchain 且采色」的 pass → 返回 false 且不动图") {
     // offscreen DIAG 变体用 blit 上屏（transferRead ≠ sampleRead）→ 不支持。
     // 反向配对：加一个采色写 swapchain 的 pass 就必须返回 true（否则这条门槛可能是恒 false）。

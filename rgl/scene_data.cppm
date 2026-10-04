@@ -265,13 +265,15 @@ static_assert(kSceneDataShadowMatrixOffset == 721696,
  *    🔵 批 13.5：zw 此前装 `jitterPx` 但 **shader 从未读**（死载荷）；现改装 c_t 并**真读**
  *    （输入侧 un-jitter）。⚠ 两者差一个 y 轴翻号（`c = (+jx, −jy)`，见
  *    `taa_jitter.cppm::contentShiftPx`），照旧口径读会错一整轴。
- *  - `kSceneDataTaaPrevContentShiftOffset`（vec4, 16B）= **上一帧内容位移 c_{t−1}**（批 13.5）。
- * 消费端 = taa.frag.slang 字面量（两侧 static_assert 钉死同步）。 */
+ *  - `kSceneDataTaaPrevContentShiftOffset`（vec4, 16B）= **上一帧内容位移 c_{t−1}**（批 13.5）
+ *    + **AO 已施加标志**（z，批 13.6）。
+ * 消费端 = taa.frag.slang / tonemap.frag.slang 字面量（两侧 static_assert 钉死同步）。 */
 export inline constexpr uint32_t kSceneDataTaaOffset = kSceneDataEvssmConstOffset + 16u;
 export inline constexpr uint32_t kSceneDataTaaMotionOffset = kSceneDataTaaOffset + 64u;
 export inline constexpr uint32_t kSceneDataTaaParamsOffset = kSceneDataTaaOffset + 128u;
 /**
- * 批 13.5 历史基空间修正：**上一帧内容位移** c_{t−1}（vec4 = x/y = 像素，z/w 保留）。
+ * 批 13.5 历史基空间修正：**上一帧内容位移** c_{t−1}（vec4 = x/y = 像素，**z = 批 13.6 AO
+ * 施加点标志**，w 保留）。
  * 偏移 @722224 = 复用批 13.2「基空间输出」删除后空出的槽 ⟹ **零布局变更**（static_assert 不变）。
  *
  * 为什么需要它（一句话）：批 13.2 只把**显示**搬回基空间（在 tonemap 加 `+c_t` 采样偏移），
@@ -287,6 +289,15 @@ export inline constexpr uint32_t kSceneDataTaaParamsOffset = kSceneDataTaaOffset
  * 本字段**无门标志位**——它不是门，是数据：TAA 关 / `jitter_scale=0` ⇒ `jitterPx = 0`
  * ⇒ 本字段全 0 ⇒ shader 的 `prevUv − 0` 逐位 = `prevUv`（IEEE：`x − 0 = x`，折成 FMA 亦成立）
  * ⟹ 门红线是**构造性**的，不需要显式门标志。
+ *
+ * ⚠ **但 z 是个例外，它确实是标志位**（批 13.6 AO 施加点搬进 taa pass）：
+ * `z = 1` ⟹ AO 已由 taa pass 施加，tonemap **必须**跳过自己的 AO 乘法（否则双施）；
+ * `z = 0` ⟹ taa pass 不在图里，tonemap 照旧施加（TAA 关时的唯一施加点）。
+ * 写入方 = `fillTaaData`，取值 = **实际图形态**（`decorateTaaPass` 的返回值，经
+ * `SceneEnv::taaAoApplied`），**不是配置键 `taa.enabled`**——offscreen 变体配置开了 TAA
+ * 也会装饰失败（`decorateTaaOrWarn` 返回 false），拿配置派生就会「taa pass 不存在 + tonemap
+ * 又跳过」= AO 一次都不施加。两个分支位精确（`lerp(x,1,1) ≡ 1.0`、`lerp(x,1,0) ≡ x`）
+ * ⟹ TAA 关时 tonemap 逐位不变（门红线）。
  */
 export inline constexpr uint32_t kSceneDataTaaPrevContentShiftOffset = kSceneDataTaaOffset + 144u;
 export inline constexpr uint32_t kSceneDataTaaBytes = 160u;

@@ -321,7 +321,7 @@ namespace RGL {
 
 	/** addTaaEntry 实现（契约见接口注释；批 12.6，仿 addTonemapEntry 三步曲）。 */
 	uint32_t ShaderRegistry::addTaaEntry(uint32_t colorSlot, uint32_t historySlot,
-			uint32_t depthSlot, uint32_t samplerSlot, uint32_t pointSlot) {
+			uint32_t depthSlot, uint32_t samplerSlot, uint32_t pointSlot, uint32_t aoSlot) {
 		if (auto idx = pipelineIndex("taa"))
 			return *idx;
 		const RGL::PipelineSpec* spec = findSpec("taa");
@@ -344,6 +344,8 @@ namespace RGL {
 			{.binding = 6, .sampler = false, .heapSlot = depthSlot},
 			{.binding = 7, .sampler = true, .samplerHeapOffset = samplerHeapOffset},
 			{.binding = 8, .sampler = true, .samplerHeapOffset = pointHeapOffset},
+			// 批 13.6：AO 施加点搬进本 pass（时域滤波之前）——与 tonemap 条目复用同一个 ao 槽
+			{.binding = 9, .sampler = false, .heapSlot = aoSlot},
 		};
 		auto entry = PipelineEntry{.name = "taa",
 			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b),

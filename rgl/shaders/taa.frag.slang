@@ -4,7 +4,9 @@
 //
 // ── 数据流（批 13.5 起：历史住**基空间**）──
 //   本帧色（binding 4，jitter 投影渲出）+ 深度（binding 6，与 jitter 投影配套）
+//   + AO 可见度（binding 9，批 13.6）
 //   → **输入侧 un-jitter**（按本帧内容位移 c_t 双线性重建到基网格；批 13.5，见 main 内注释）
+//   → **乘 AO**（批 13.6；采 baseUv + 线性采，两条纪律见 main 内注释）
 //   → 世界坐标重建（scene data @64 invViewProj，**抖动后**矩阵，与深度同口径 —— 深度缓冲
 //     是抖动投影渲的，这一半边**不**跟着搬基空间）
 //   → 场景运动补偿（motion = prevSpin·inverse(curSpin)，全场景同一旋转 ⇒ 一条 mat4
@@ -43,7 +45,11 @@
 //     快速甩头时天空鬼影靠 AABB 裁剪兜；
 //   · 历史无双线性深度，遮挡边缘的 disocclusion 靠颜色 AABB 拒绝（无 motion-vector
 //     dilation），边缘允许 1 帧量级的残影；
-//   · AO 施加在 tonemap（本 pass 之后）⇒ AO 噪声不被时域滤波（计划书设计边界）。
+//   · **AO 自批 13.6 起在本 pass 施加**（时域滤波之前，与 Filament 同构）⇒ AO 会被时域
+//     糊一点，这是**设计意图**不是缺陷（Filament 靠半分辨率 + 重模糊 + 时域平均三件配合才
+//     敢把 AO 做糊，本项目只有第三件）。改前 AO 在 tonemap（本 pass 之后）= 噪声零平均，
+//     实测占残余 shimmer 62%。与 Filament 仍存的 gap：它只把 AO 乘间接光（IBL），我们全乘
+//     ⟹ 边缘 AO 剧变会撑大本 pass 的邻域盒、历史被过度裁剪（债-39 续账）。
 //
 // ── 本批实测**否决**的两条候选（批 13.1e，别再照抄一遍）──
 //   症状「box5 邻域盒退化 ⟹ clipToAabb 恒返回 centroid ⟹ 固定 5 抽头空间糊 + 时域零累积」
@@ -67,6 +73,7 @@ import scene;  // sceneData buffer（binding 3：@64 invViewProj + TAA 尾区 @7
 [[vk::binding(6, 0)]] Texture2D<float>  depthTex;    // 本帧深度（D32Sfloat，eDepth aspect）
 [[vk::binding(7, 0)]] SamplerState linearSampler;    // 共享 sampler（历史亚像素查找）
 [[vk::binding(8, 0)]] SamplerState pointSampler;     // 深度不可过滤（同 ao.frag 理由）
+[[vk::binding(9, 0)]] Texture2D<float> aoTex;        // SSAO 可见度（r8_unorm，ao pass 产出，1=通透）
 
 struct TaaInput
 {
@@ -200,6 +207,19 @@ float3 sampleHistoryCatmullRom(float2 uv)
     return acc;
 }
 
+/**
+ * 批 13.6：本帧成片 × AO 可见度 = **时域滤波的真正输入**（AO 已烘进去，与 Filament 的
+ * color pass 输出同构）。邻域盒与本帧值都必须走它，否则盒是 AO-前的、被裁的值是 AO-后的
+ * ⟹ 遮蔽边缘会把本帧值裁出盒外（改前两者天然一致：中心抽头恒等于 cur）。
+ * ⚠ 采样纪律两条缺一不可，推导见 main 内「AO 施加点」段（① uv 传基空间坐标
+ *   ② 必须线性采——点采会让 AO 随相位跳纹素，时域平均不掉）。
+ */
+float3 sampleSceneAo(float2 uv, float aoStrength)
+{
+    const float ao = aoTex.SampleLevel(linearSampler, uv, 0.0).r;
+    return colorTex.SampleLevel(linearSampler, uv, 0.0).rgb * lerp(1.0, ao, aoStrength);
+}
+
 [shader("fragment")]
 float4 main(TaaInput input) : SV_Target
 {
@@ -232,7 +252,23 @@ float4 main(TaaInput input) : SV_Target
     //   （此坑原载于批 13.2 tonemap resolve 注释，随 un-jitter 前移一并搬来；
     //    邻域盒的 ±1 texel 抽头**不**钳——改前就如此，钳了会动基线。）
     const float2 baseUv = saturate(input.uv + params.zw * texel);
-    const float3 cur = colorTex.Sample(linearSampler, baseUv).rgb;
+    // ── 批 13.6：AO 施加点搬进本 pass（= 时域滤波**之前**），tonemap 同帧跳过 ──
+    // 【为什么搬】AO 值在深度不连续处随抖动相位剧变 = **真实锯齿**，而抖动 + 时域平均正是消
+    //   它的工具。改前 AO 乘在 tonemap（本 pass **之后**）⟹ 一点没被平均：实测占残余 shimmer
+    //   62%（AO 开 6.899% / AO 关 2.639%），且按梯度分层 **100% 住在边缘**（边缘带 29.6% /
+    //   平坦区 0.088%）。Filament 同构：AO 在 color pass 内（`details/Renderer.cpp:1190` SSAO
+    //   → `:1370` Color Pass → `:1426` 才起后处理/TAA）。全案 → docs/taa_history_space_plan.md。
+    // 【两条采样纪律，少一条 = 白搬】
+    //   ① **采 baseUv 不采 input.uv**：aoTex 纹素 q 装的是**抖动像素 q** 的遮蔽量 = 基位置
+    //      q − c_t 的遮蔽量 ⟹ 要基位置 p 的 AO 必须采 p + c_t。采 input.uv 会引入一个**随相位
+    //      变的 ≤0.5px 错位** = 把刚消掉的相位相关量从输入侧重新塞回来。
+    //   ② **线性采，不点采**：baseUv 是分数坐标，点采会随相位**跳纹素** ⟹ AO 仍是相位阶跃
+    //      函数，EMA 收不拢；线性采把它变成相位的连续函数才谈得上被平均。
+    //      （批 13.5b 在 ao.frag 里搬 baseUv 之所以**零指标收益**，根因就是它只能点采——
+    //       D32Sfloat 深度不可过滤。AO 是 r8_unorm，可过滤，本条才成立。两者别混为一谈。）
+    // strength = 0 时 lerp(1, ao, 0) ≡ 1.0（IEEE 精确）⟹ 逐位旁路，与 ao pass 侧同一技巧。
+    const float aoStrength = readAoStrength();
+    const float3 cur = sampleSceneAo(baseUv, aoStrength);
 
     // 逐位旁路早退（首帧 / resize / 跳切；见头注释"逐位旁路"段）
     // ⚠ 返回的是**已 un-jitter** 那份，不是原始抖动帧：taa_out 每帧都 blit 进 taa_hist 当
@@ -247,8 +283,10 @@ float4 main(TaaInput input) : SV_Target
     const int2 offs[5] = { {0, 0}, {1, 0}, {-1, 0}, {0, 1}, {0, -1} };
     for (int i = 0; i < 5; ++i)
     {
-        const float3 t = clampHdr(colorTex.SampleLevel(linearSampler,
-            baseUv + float2(offs[i]) * texel, 0.0).rgb);
+        // ⚠ 走 sampleSceneAo 而不是裸 colorTex（批 13.6）：被裁的值是 AO-后的，盒也必须是
+        //   AO-后的，否则遮蔽边缘会把本帧值裁出盒外。改前两者天然一致（中心抽头恒等于 cur），
+        //   AO 搬进来后这份一致性得自己维持。抽头 uv **不** saturate（改前就如此）。
+        const float3 t = clampHdr(sampleSceneAo(baseUv + float2(offs[i]) * texel, aoStrength));
         const float3 r = toReinhard(t);
         mn = min(mn, r);
         mx = max(mx, r);

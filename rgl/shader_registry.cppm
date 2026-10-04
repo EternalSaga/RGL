@@ -295,17 +295,20 @@ export class ShaderRegistry {
 	 * SAMPLED_IMAGE 堆槽、5 → taa_hist RT 的 SAMPLED_IMAGE 堆槽、6 → 深度图堆槽
 	 * （重投影的世界坐标来源）、7 → 共享 sampler（历史亚像素查找取 LINEAR；本帧色
 	 * 在像素中心采样与点采等价）、8 → **point sampler**（D32Sfloat 深度不可过滤，
-	 * 同 addAoEntry 的理由）。
-	 * 前提 = 两个 TAA RT 已 ensure + 领槽（ensureTaaSlots）+ 深度采样槽已领。幂等。
+	 * 同 addAoEntry 的理由）、9 → **ao RT 的 SAMPLED_IMAGE 堆槽**（批 13.6：AO 施加点搬进
+	 * taa pass = 时域滤波**之前**，与 Filament 同构；tonemap 据 scene data @722224.z 跳过）。
+	 * 前提 = 两个 TAA RT 已 ensure + 领槽（ensureTaaSlots）+ 深度采样槽已领 + ao RT 已领槽。
+	 * 幂等。
 	 * @param colorSlot 本帧场景色（scene_hdr）SAMPLED_IMAGE heap 槽（binding 4）
 	 * @param historySlot taa_hist RT 的 SAMPLED_IMAGE heap 槽（binding 5）
 	 * @param depthSlot 深度图 SAMPLED_IMAGE heap 槽（binding 6，同 ao 条目复用同槽）
 	 * @param samplerSlot 共享 sampler 的 sampler heap 槽（binding 7）
 	 * @param pointSlot point sampler 的 sampler heap 槽（binding 8，ensurePointSampler）
+	 * @param aoSlot ao RT 的 SAMPLED_IMAGE heap 槽（binding 9，同 tonemap 条目复用同槽）
 	 * @return 条目下标；规格缺失抛 runtime_error
 	 */
 	[[nodiscard]] uint32_t addTaaEntry(uint32_t colorSlot, uint32_t historySlot,
-		uint32_t depthSlot, uint32_t samplerSlot, uint32_t pointSlot);
+		uint32_t depthSlot, uint32_t samplerSlot, uint32_t pointSlot, uint32_t aoSlot);
 
 	/**
 	 * Phase 11 批 11.2：阴影 depth-only 管线条目。spec = "shadow"（shadow.mesh.spv + 空壳

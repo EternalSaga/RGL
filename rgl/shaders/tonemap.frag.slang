@@ -27,23 +27,24 @@
 // 回到朴素 `input.uv`。**若在此处重新加偏移 = 双重 un-jitter，比 13.2 之前更糟。**
 // 全案 → `docs/taa_history_space_plan.md`；核选型实测数据 → `taa.frag.slang` 输入侧注释。
 //
-// **纹理空间现状**（批 13.5 起三者**都在基空间**，无需任何偏移）：
+// **纹理空间现状**（批 13.6 起本 pass **不再需要**空间概念——两条路径各自都同空间）：
 //   ┌ 纹理（binding）  ─ 空间 ─────────────────────────────────────────────┐
 //   │ sceneHdrTex (4)  基空间：TAA 开 = taa_out（输入侧已 un-jitter 的时域累积）；
 //   │                  TAA 关 = scene_hdr（c_t 恒 0，抖动空间 == 基空间）
-//   │ aoTex (6)        抖动空间（ao pass 以 1:1 像素位置读**抖动后**深度算遮蔽量）
+//   │ aoTex (6)        抖动空间；**仅在 TAA 关时读本图**（此时 jitterPx = 0 ⟹ c_t 恒 0
+//   │                  ⟹ 抖动空间 == 基空间，与 sceneHdrTex 天然对齐）
 //   └──────────────────────────────────────────────────────────────────────┘
-// ⚠ **aoTex 与 sceneHdrTex 自批 13.5 起不同空间**（差一个 c_t ≤0.5px）。批 13.2 时代两者
-//   同在抖动空间、共用同一个偏移 uv 所以对齐；现在 sceneHdrTex 搬走了而 AO 没有。
-//   刻意**不**给 AO 补偏移：AO 是低频遮蔽场（相位差 ≤0.5px 的错位在 8bit 上不可见，
-//   且 `imgqa ao-noise` 实测交付颗粒 0.203 LSB < 1 量化步长），而补偏移要给本 pass
-//   加一次内容位移查询 + 一个 saturate 钳位。**已登记的独立议题**：AO 在 TAA 之后施加
-//   ⟹ 不被时域滤波（→ `还债总账.md` 债-39，含「TAA 开时 AO 随相位变化从未被量化」的告警）。
+// 批 13.5 曾在此登记「aoTex 与 sceneHdrTex 差一个 c_t ≤0.5px 且刻意不补偏移」的议题；
+// 批 13.6 把 AO 施加点搬进 taa pass 后**该议题在本 pass 消失**：TAA 开 = 本 pass 根本不读
+// AO（flag 跳过，见 main 内注释），错位问题连同它的两条采样纪律一起搬到 `taa.frag.slang`
+// （那边 AO 采 baseUv + 线性采）；TAA 关 = c_t 恒 0，本来就没有错位。
+// 与 Filament 仍存的 gap（AO 只乘间接光、我们全乘）→ `还债总账.md` 债-39。
 // **基空间纹理（禁止偏移）**：swapchain 本身（输出网格）、imgui/UI 覆盖层（另走 imgui
 // pass，直接画 swapchain）、object_id（picking 与抖动同口径，不经本 pass）。
 // 深度不进本 pass（tonemap 不采深度），无需处理。
 //
-// **红线**：本 pass 的采样坐标自批 13.5 起与「TAA 关」时的本文件逐位相同（`input.uv`）。
+// **红线**：本 pass 的采样坐标自批 13.5 起与「TAA 关」时的本文件逐位相同（`input.uv`）；
+// 批 13.6 的 AO 门控 `lerp(x, 1, 0) ≡ x` 位精确 ⟹ TAA 关时本 pass 整体逐位不变。
 
 import scene;  // sceneData buffer（binding 3：Load(56) 曝光 / Load(60) AO 强度 / @722224 偏移）
 
@@ -58,11 +59,7 @@ float readExposure()
     return asfloat(sceneData.Load(56));
 }
 
-// AO 施加强度：scene data @60，configs/scene.lua ao.strength，0 = 逐位旁路。
-float readAoStrength()
-{
-    return asfloat(sceneData.Load(60));
-}
+// AO 施加强度 = `scene.slang::readAoStrength()`（批 13.6 起 taa.frag 也要它，已抬进模块）。
 
 // Narkowicz 2015 "ACES Filmic Tone Mapping Curve" 近似（per-channel 有理二次式，
 // RRT+ODT 的曲线拟合；输出仍在显示线性域，交给 sRGB attachment 硬件编码）。
@@ -111,7 +108,12 @@ float4 main(TonemapInput input) : SV_Target
     // 采 R8 可见度与采 HDR 图同条件——AO 本身已逐像素算好，无需额外滤波。
     // 注意 ao 是**可见度乘数**（1=不遮蔽）：strength=1 且 ao=0 才会压成全黑。
     const float ao = aoTex.Sample(hdrSampler, uv).r;
-    hdr *= lerp(1.0, ao, readAoStrength());
+    // 批 13.6：AO 施加点已搬进 taa pass（= 时域滤波**之前**）。本 pass 只在 **taa pass 不在
+    // 图里**时施加（flag = 0），否则双施。flag 由 CPU 写**实际图形态**（不是配置键 taa.enabled
+    // ——offscreen 变体装饰失败时它仍为 true，拿配置派生会双跳成零施）。
+    // 两个分支都位精确：lerp(x, 1, 1) ≡ 1.0、lerp(x, 1, 0) ≡ x ⟹ TAA 关时本行逐位 = 改前
+    // （门红线：TAA 关截图 sha256 必须不变）。
+    hdr *= lerp(lerp(1.0, ao, readAoStrength()), 1.0, readTaaAoApplied());
     float3 mapped = acesTonemap(hdr * readExposure());
     return float4(mapped, 1.0);
 }

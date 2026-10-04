@@ -503,6 +503,13 @@ export struct SceneEnv {
 	// ⚠ 默认值与 SceneConfig 的**生效默认**对齐（true）。曾写 false 而 main 总从 config 覆盖
 	//   ⟹ 直接构造 SceneEnv 的测试拿到 false、生产拿到 true = 谎言行（2026-10-04 清点发现）。
 	bool taaBaseSpace = true;
+	// 批 13.6 AO 施加点标志（scene data @722224.z）：true ⟹ AO 已由 **taa pass** 施加，
+	// tonemap 跳过（否则双施）；false ⟹ taa pass 不在图里，tonemap 是唯一施加点。
+	// ⚠ 取值 = **实际图形态**（`decorateTaaPass` 返回值，main 启动期回填），**不是**上面的
+	//   `taaEnabled` 配置键：offscreen 变体配置开了 TAA 也会装饰失败，拿配置派生 = AO
+	//   一次都不施加。也**不得**做成 imgui 滑杆（图形态启动期定死，运行期改会让标志与
+	//   图脱钩 = 双施或零施）。
+	bool taaAoApplied = false;
 	// Phase 5.5 批次 4 天空盒：enabled = env 已上传且 scene.lua environment.skybox=true；
 	// pipeline = ShaderRegistry "skybox" 条目下标（main 启动期 addSkyEntry 后回填；
 	// 0xFFFFFFFF = 未建条目——renderListSystem 见 enabled 但 pipeline 无效 = 契约漂移）

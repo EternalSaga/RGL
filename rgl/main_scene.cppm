@@ -420,7 +420,7 @@ void assembleHdrAoChain(Swapchain& swapchain, Resources& resources,
 	if (taaDecorated) {
 		[[maybe_unused]] auto taaIdx = pipelines.addTaaEntry(
 			*hdrSlot, (*taaSlots)[1], *depthSlot, samplers.ensureShared(),
-			samplers.ensurePointSampler());
+			samplers.ensurePointSampler(), *aoSlot);
 	}
 }
 
@@ -431,6 +431,11 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 							  ShaderRegistry& pipelines, CompiledRenderGraph&& graph,
 							  entt::registry& registry, const SceneConfig& scene, bool deferredMode,
 	bool taaDecorated) {
+	// 批 13.6：AO 施加点标志 = **实际图形态**（`decorateTaaPass` 结果），**不是**配置键
+	// `taa.enabled`。true ⟹ AO 已由 taa pass 施加（时域滤波之前），tonemap 跳过；false ⟹ taa
+	// pass 不在图里（含 offscreen 变体：配置开了 TAA 但装饰失败），AO 留在 tonemap 施加。
+	// 取错源 = AO 双施或零施。消费者 = scene data @722224.z → fillTaaData / tonemap.frag。
+	registry.ctx().get<SceneEnv>().taaAoApplied = taaDecorated;
 	// C3：GPU culling 候选表（Phase 7b 批次 5）：candidate = 不透明 primitive。
 	// 守卫与迭代序和 render_list CPU 路径**完全一致**（同 view、同守卫）——GPU 输出
 	// 固定槽非紧凑，重放序与 CPU opaque 段序逐位一致（截图 BIT-IDENTICAL 前提）。
