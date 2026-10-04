@@ -1,7 +1,7 @@
 ---
 description: 轻量调研 scouts。用于简单项目调研任务：整理归纳代码信息、对给定上下文做简易归纳、定位代码位置、查找文档位置。只读，不改代码、不跑命令。当主 agent 需要一次廉价的检索/归纳而非真正工程实现时委派给它。
 mode: subagent
-model: gentoo9950x/Qwen3.8:27b
+model: Strata:flash-next
 temperature: 0.2
 permission:
   read: allow

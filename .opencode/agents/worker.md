@@ -1,7 +1,7 @@
 ---
 description: 持久执行工人。接收主 agent 委派的具体工程任务（实现/调试/重构/验证），具备 build 级读写与命令执行能力。当主 agent 需要分摊一项可独立验收的工程任务、且希望执行者卡住时向主 agent 求助而不是放弃时，使用它。
 mode: subagent
-model: gentoo9950x/Qwen3.8:flash-next
+model: Strata:flash-next
 permission:
   edit: allow
   bash: allow
