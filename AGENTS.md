@@ -244,6 +244,7 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
 - `docs/phase11_plan.md` — Phase 11 阴影 + 前置修复批（11.0 光照质感 / 11.2 阴影 / 11.4 SSAO）计划与执行记录
 - `docs/phase12_plan.md` — Phase 12 测试体系账本（批次史 + 缺口 D1–D9 + 12.3d 调试历史全量裁决执行记录）
 - `docs/phase13_plan.md` — **Phase 13 TAA 收口（现行，下一步从这里读）**：为什么还要一个 phase（T2/T3 验收被"历史每帧销毁"bug **空洞满足**、判据全跑在合成靶 + env 关闭、默认关无性能账）/ 批次 13.0–13.4 + 每条验收判据 / 记债继承表（AO 在 TAA 后、无 velocity buffer、YCoCg 盒）
+- `docs/taa_history_space_plan.md` — **TAA 历史坐标空间改造（现行，2026-10-04 立，未开工）**：根因 = 历史住在**抖动空间** ⟹ 静止机位每帧按 `δ_t` 亚像素重采样历史 ⟹「固定频率+固定位置」shimmer（Filament 把历史放**基空间**、抖动在进入累积前消化，静态相机下历史**点采样零重采样**）/ 三步原子改动 + 载荷零扩列裁决 / **⚠ 批 12.6 T4 的「未抖 prevViewProj 是错的」裁决要反转，注释须写成条件式**
 - `docs/taa_plan.md` — **TAA 时域抗锯齿（T0–T4 判据收口 2026-10-03；收口与画质 → `phase13_plan.md`）**：两条硬约束（§0，全走 descriptor heap + 跨帧分析三件事）/ Filament 作业表 / 四个 gap 逐条设计（跨帧历史附件是核心闸门）/ jitter 注入点决策 / §7 = 机制与踩坑账（第 11/12 条 = 根因）
 - `docs/gate_lint_plan.md` — **门配置自检（现行机制的权威载体）**：38 门申报规则表 + 回显派生 + 覆盖率护栏；加诊断门/改门语义前看（§4 分级判据 + §5 三条防腐条款 + §8 执行偏差）
 - `docs/hfts_izb_plan.md` — HFTS/FTIZB 调研与实施计划（批 11.3 权威载体：论文结论 / 开源现状 / 项目 gap / 分阶段 1a–1e + 收手判据；§4.3 = 2026-10-02 路线改道记录）
