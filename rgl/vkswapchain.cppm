@@ -382,13 +382,17 @@ export class Swapchain {
 	 * 2560×1600），故「物理尺寸」= mode.w × pixel_density（本机 pixel_density=1.750），再除
 	 * bounds.w（逻辑 1463）= 1.75，与 hint 报的 windowScale 吻合。设 SDL_VIDEO_WAYLAND_SCALE_TO_DISPLAY=1
 	 * 后两来源对调（windowScale=1.75、推算=1.0），warning 由①触发（阳性锚点）。
-	 * **根因归属（实测，勿再怀疑桌面配置）**：KWin 已 advertise
-	 * `wp_fractional_scale_manager_v1`（自写 wayland 客户端枚举全局实测），`wl_output.scale=2`；
-	 * 是 SDL 3.4.14 Wayland 后端收了分数缩放（拿它算显示几何）却**从不按它给缓冲**——
-	 * `nm --defined-only libSDL3.a` 里没有任何 `wp_viewporter_set_destination` /
-	 * `wl_surface_set_buffer_scale` 定义。故改桌面「缩放格式」无效；出路 = 引擎自己按倍率建
-	 * 交换链 + 对 SDL 自建的 wp_viewport（`SDL_PROP_WINDOW_WAYLAND_VIEWPORT_POINTER`，
-	 * 实测非空且 SDL 从不写它）调 set_destination。
+	 * **根因归属（2026-10-04 协议报文重测修正，勿再怀疑桌面配置）**：KWin 已 advertise
+	 * `wp_fractional_scale_manager_v1` 并下发 `wp_fractional_scale_v1.preferred_scale(210)`
+	 *（=210/120=**1.75**），且 **SDL 自己就发** `wp_viewport.set_destination(逻辑宽,逻辑高)`。
+	 * 缓冲给多大**只取决于窗口有没有 SDL_WINDOW_HIGH_PIXEL_DENSITY**：不开 → 缓冲 = 逻辑尺寸
+	 * 被合成器放大 1.75（糊）；开 → 缓冲 = 逻辑×1.75，映射到同一 destination = **精确 1:1**。
+	 * ⟹ 本函数当年判"SDL 收了分数缩放却从不按它给缓冲""SDL 从不写那个 viewport"**两处皆错**，
+	 * 由它推出的"出路 = 引擎自己对 viewport 调 set_destination"**不需要做**。
+	 * 那条 `nm --defined-only libSDL3.a` 找不到 `wp_viewporter_set_destination` 的论证是
+	 * **方法学错误**：SDL 直接 `wl_proxy_marshal`，协议生成函数根本不参与链接，
+	 * `--defined-only` 查不到是必然，证不了任何事。要证协议行为请用 `WAYLAND_DEBUG=1`。
+	 * 修复与 UI 侧三条连带改动 → `调试历史.md` 2026-10-04「Wayland 175% 缩放」条。
 	 * headless（无 SDL 窗口，extent = headless_size 配置）只打一行 extent，零 SDL 调用、零噪声。
 	 * @param headless headless 模式（true 时不碰 SDL 窗口）
 	 * @param window SDL 窗口（非 headless 必非空——类不变式，构造期已解引用）

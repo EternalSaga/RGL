@@ -76,6 +76,22 @@ void applyWindowResizeExtent(entt::registry& rg, WindowExtent& extent, const SDL
 }
 
 /**
+ * 左键点选请求（eventSystem 内联逻辑提出，控 eventSystem 认知复杂度）。
+ * **坐标换算在此**：SDL 鼠标事件是逻辑点，而点选回读的 objectID 附件按**帧缓冲像素**
+ * 索引 ⟹ 乘 WindowScale（未装配 = 1.0，等价于无缩放/无窗口路径）。脚本化探针
+ * pickingProbeTick 直接以像素坐标调钩子，故不经此处（否则会被二次缩放）。
+ * 钩子未挂 = 零调用（与原内联写法等价）。
+ */
+void requestPickAtCursor(entt::registry& rg, float logicalX, float logicalY) {
+	auto* pk = rg.ctx().find<PickingHook>();
+	if (!pk || !pk->requestPick)
+		return;
+	const auto* scale = rg.ctx().find<WindowScale>();
+	const float s = scale ? scale->value : 1.0f;
+	pk->requestPick(logicalX * s, logicalY * s);
+}
+
+/**
  * 中央事件轮询（唯一 SDL_PollEvent 调用点）：把 SDL 事件流翻译进 registry context——
  * 窗口状态（WindowExtent/AppExit 直接写入，不走事件流）+ 输入事件流（InputEvents：
  * 本 system 只产事件，不做键位映射——键绑定在 Camera.keys，cameraSystem 消费事件时
@@ -137,13 +153,12 @@ void eventSystem(entt::registry& rg) {
 				e.type = InputEvent::Type::MouseButton;
 				e.button = static_cast<uint8_t>(event.button.button);
 				e.pressed = true;
-				e.pos = {event.button.x, event.button.y};  // 窗口内绝对坐标（Phase 10 点选）
+				e.pos = {event.button.x, event.button.y};  // 窗口内绝对坐标 = **逻辑点**（Phase 10 点选）
 				// picking 请求（Phase 10 批 10.5）：走到这里 = 已过 InputFilter（imgui
-				// 控件区域内的点击被吞），左键 = 点选；钩子未挂 = 空函数零调用
-				if (event.button.button == SDL_BUTTON_LEFT) {
-					if (auto* pk = rg.ctx().find<PickingHook>(); pk && pk->requestPick)
-						pk->requestPick(event.button.x, event.button.y);
-				}
+				// 控件区域内的点击被吞），左键 = 点选；逻辑点→帧缓冲像素的换算在 helper 内
+				//（e.pos 保持逻辑点口径，与 SDL 事件一致；像素口径只给点选用）
+				if (event.button.button == SDL_BUTTON_LEFT)
+					requestPickAtCursor(rg, event.button.x, event.button.y);
 				events.events.push_back(e);
 				break;
 			}

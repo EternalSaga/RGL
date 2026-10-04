@@ -101,8 +101,19 @@ export class ImGuiLayer {
 	void buildPanels();
 	/** 渲染参数页（pageBuilder 非空时；TabItem per page，条目 = Slider/ColorEdit3/Drag3）。 */
 	void buildParamTabs();
+	/** 把 imgui 坐标系钉成帧缓冲像素（每帧覆盖后端值；为什么必须 → impl 注释）。 */
+	void useFramebufferPixelSpace(vk::Extent2D extent);
+	/** UI 缩放观测（首帧回显 + 漂移告警；为什么必须在覆盖前调用 → impl 注释）。 */
+	void observeUiScale(vk::Extent2D extent);
 
 	bool initialized = false;
+	// UI 缩放观测：首帧是否已回显 / 漂移是否已告警过（observeUiScale；理由见 impl）
+	bool coordLogged = false;
+	bool scaleDriftWarned = false;
+	// 窗口内容缩放倍数（SDLWindow::displayScale；分数缩放桌面 = 1.75，普通屏 = 1.0）。
+	// 字号按它烘焙，使 UI 在分数缩放下保持**物理尺寸与清晰度**（否则帧缓冲变大而
+	// 字号不变 = UI 相对变小且字形被拉伸发糊）。
+	float uiScale = 1.0f;
 	// 后端 init 后仍持有指针（pColorAttachmentFormats），必须比后端活得久；
 	// VkFormat{} = 0 = VK_FORMAT_UNDEFINED（枚举子不经 rlvk using 传播，用零值等价）
 	VkFormat uiColorFormat = VkFormat{};

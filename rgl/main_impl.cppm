@@ -238,6 +238,8 @@ void wireWindowContexts(entt::registry& rg, const PreWindow& pre) {
 	SDLWindow* window = pre.window.get();
 	rg.ctx().emplace<WindowPixelQuery>(WindowPixelQuery{
 		[window] { return std::optional{window->pixelSize()}; }});
+	// 鼠标逻辑点 → 帧缓冲像素的换算倍数（点选口径；为什么必须换算 → ecs.cppm WindowScale）
+	rg.ctx().emplace<WindowScale>(WindowScale{window->displayScale()});
 }
 
 /** push data 容量契约检查（超限抛 std::runtime_error）。 */

@@ -35,6 +35,18 @@ export struct WindowPixelQuery {
 };
 
 /**
+ * 窗口内容缩放倍数（registry context，main 建窗时装配 = SDLWindow::displayScale）。
+ * 为什么需要它：SDL 鼠标事件坐标恒为**逻辑点**（实测：同一物理指针位置下，开/关
+ * SDL_WINDOW_HIGH_PIXEL_DENSITY 回读值逐位相同，不随 pixels 变），而点选回读的是
+ * **帧缓冲像素**上的 objectID 附件 ⟹ 两个坐标空间必须换算，否则分数缩放桌面
+ *（本机 KDE Wayland 1.75）下点选整体偏 scale 倍——点窗口右下角会采样到窗外。
+ * imgui 侧的同类换算在 ImGuiLayer::handleEvent（那边 UI 坐标系被钉成像素）。
+ */
+export struct WindowScale {
+	float value = 1.0f;
+};
+
+/**
  * 退出请求（registry context，eventSystem 在 QUIT/窗口关闭请求（CLOSE_REQUESTED）事件写入；
  * 帧循环判定。ESC 不处理——退出只走窗口级事件）。
  *

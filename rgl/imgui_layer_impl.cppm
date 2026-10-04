@@ -214,9 +214,27 @@ bool ImGuiLayer::init(AppContext& app, DeviceContext& device, Swapchain& swapcha
 	//（滑条拖拽等，g.ActiveId 非空）。
 	ImGui::StyleColorsDark();
 
+	// 窗口内容缩放（分数缩放桌面 = 1.75）
+	uiScale = window.displayScale();
+
+	// **UI 工作在帧缓冲像素空间**（不用 imgui SDL3 后端的经典 retina 模型）。
+	// 实测本机 KDE Wayland scale 1.75 首帧：后端给 io.DisplaySize=800x600（逻辑）、
+	// io.DisplayFramebufferScale=1.750 ⟹ 字形按 18 逻辑 px 烘焙却按 31.5 物理 px 绘制
+	// = **拉伸发糊**（截图实测字形边缘呈灰坡）。
+	// 走过的弯路（勿再试）：`style.FontScaleDpi = scale` —— 1.92 里它**连布局一起放大**
+	//（实测 UI 整体变大号，而字形锐度仅 +4% 梯度），不是"只放大烘焙、保持布局"。
+	// 现方案 = 自己把坐标系钉成像素：① DisplaySize = 帧缓冲像素 + FramebufferScale = 1
+	//（见 renderFrame，每帧覆盖后端值）② 字号与样式同倍缩放（本处）③ 鼠标 ×scale
+	//（见 handleEvent；SDL 事件坐标恒为逻辑点，实测同物理指针位置下开/关
+	// HIGH_PIXEL_DENSITY 回读值逐位相同）。三者缺一即"UI 变大 / 偏 1.75 倍 / 仍糊"。
+	ImGui::GetStyle().FontScaleDpi = 1.0f;
+	ImGui::GetStyle().ScaleAllSizes(uiScale);  // 只缩放 spacing/padding/thickness，不缩放字体
+
 	// 面板字体（Phase 10b 批 11b.1）：图集首字体 = 默认字体；1.92 字形按需烘焙，
 	// 字体加载失败只回落内建字体（loadUiFont 内已 warn），不阻断后端 init。
-	loadUiFont(io, fontPath, fontSize, logger);
+	// 字号 ×uiScale：UI 坐标系已钉成帧缓冲像素（理由见上），故字号也要按物理像素给，
+	// 否则分数缩放桌面下 UI 相对变小（本机 1.75 ⟹ 18 会变成"看起来 10.3"）。
+	loadUiFont(io, fontPath, fontSize * uiScale, logger);
 
 	if (!ImGui_ImplSDL3_InitForVulkan(static_cast<SDL_Window*>(window))) {
 		if (logger)
@@ -289,12 +307,55 @@ void ImGuiLayer::shutdown() {
 	ImGui::DestroyContext();
 }
 
+/** 该事件是否带需要换算到像素空间的鼠标坐标（SDL_Event::type 是 Uint32，非枚举类型）。 */
+bool isScalableMouseEvent(Uint32 type) {
+	return type == SDL_EVENT_MOUSE_MOTION || type == SDL_EVENT_MOUSE_BUTTON_DOWN
+		|| type == SDL_EVENT_MOUSE_BUTTON_UP || type == SDL_EVENT_MOUSE_WHEEL;
+}
+
+/**
+ * 把鼠标事件坐标从 SDL **逻辑点**换算到 imgui 的**帧缓冲像素**空间（就地改，调用方传副本）。
+ * 绝对坐标与相对位移都换：前者决定命中，后者进 io.MouseDelta（拖拽控件用它算增量，
+ * 漏换 = 拖动手感差 scale 倍）。wheel 的 mouse_x/y 同样参与 hover 判定，一并换。
+ * 字段名坑：SDL3 的相对增量是 `xrel/yrel`（不是 dx/dy）。
+ */
+void scaleEventMousePos(SDL_Event& e, float scale) {
+	switch (e.type) {
+		case SDL_EVENT_MOUSE_MOTION:
+			e.motion.x *= scale;
+			e.motion.y *= scale;
+			e.motion.xrel *= scale;
+			e.motion.yrel *= scale;
+			break;
+		case SDL_EVENT_MOUSE_BUTTON_DOWN:
+		case SDL_EVENT_MOUSE_BUTTON_UP:
+			e.button.x *= scale;
+			e.button.y *= scale;
+			break;
+		case SDL_EVENT_MOUSE_WHEEL:
+			e.wheel.mouse_x *= scale;
+			e.wheel.mouse_y *= scale;
+			break;
+		default:
+			break;  // isScalableMouseEvent 已过滤，此处兜底不动
+	}
+}
+
 /** ImGuiLayer::handleEvent 定义（接口注释）：WantCapture 门；窗口生命周期事件恒放行。 */
 bool ImGuiLayer::handleEvent(const void* sdlEvent) {
 	if (!initialized || !sdlEvent)
 		return false;
 	const auto* event = static_cast<const SDL_Event*>(sdlEvent);
-	ImGui_ImplSDL3_ProcessEvent(event);
+	// 鼠标坐标换算（UI 坐标系 = 帧缓冲像素，而 SDL 鼠标恒为逻辑点 → 理由见
+	// scaleEventMousePos）。**只改副本**：调用方 eventSystem 拿到的原始事件保持逻辑口径，
+	// 引擎其它消费方（相机拖拽等）不受影响。
+	if (uiScale != 1.0f && isScalableMouseEvent(event->type)) {
+		SDL_Event scaled = *event;
+		scaleEventMousePos(scaled, uiScale);
+		ImGui_ImplSDL3_ProcessEvent(&scaled);
+	} else {
+		ImGui_ImplSDL3_ProcessEvent(event);
+	}
 	ImGuiIO& io = ImGui::GetIO();
 	switch (event->type) {
 		case SDL_EVENT_MOUSE_MOTION:
@@ -312,6 +373,52 @@ bool ImGuiLayer::handleEvent(const void* sdlEvent) {
 	}
 }
 
+/**
+ * UI 缩放观测（每帧调用，内部一次性）：① 首帧回显 imgui 认为自己在哪个坐标空间；
+ * ② 缩放漂移告警。
+ * **必须在 useFramebufferPixelSpace 之前调用**——此刻后端 io.DisplaySize 还是它自己设的
+ * **逻辑**尺寸，`extent / DisplaySize` 才是后端看到的缩放。
+ * 为什么需要②：字号与样式在 init 期按 uiScale 烘焙，运行中改桌面缩放（或窗口拖到另一块
+ * 不同缩放的屏）不会重烘焙 ⟹ 会**静默**画错尺寸的 UI。宁可 warn 也不静默。
+ */
+void ImGuiLayer::observeUiScale(vk::Extent2D extent) {
+	const ImGuiIO& io = ImGui::GetIO();
+	const float backendScale = io.DisplaySize.x > 0.0f
+		? static_cast<float>(extent.width) / io.DisplaySize.x
+		: 1.0f;
+	if (!coordLogged) {
+		coordLogged = true;
+		if (auto* logger = RLLogger::getInstance())
+			logger->info(
+				"imgui[首帧]: swapchain extent={}x{}  后端 io.DisplaySize={:.0f}x{:.0f}  "
+				"io.DisplayFramebufferScale={:.3f}x{:.3f}  uiScale={:.3f}（UI 坐标系已钉成像素）",
+				extent.width, extent.height, io.DisplaySize.x, io.DisplaySize.y,
+				io.DisplayFramebufferScale.x, io.DisplayFramebufferScale.y, uiScale);
+		return;
+	}
+	const float drift = backendScale - uiScale;
+	if (!scaleDriftWarned && (drift > 0.01f || -drift > 0.01f)) {
+		scaleDriftWarned = true;
+		if (auto* logger = RLLogger::getInstance())
+			logger->warn(
+				"imgui: 桌面缩放已变（烘焙 {:.3f} → 现 {:.3f}），UI 尺寸/清晰度会不对；"
+				"重启引擎生效（运行中重烘焙字体未实现）", uiScale, backendScale);
+	}
+}
+
+/**
+ * 把 imgui 坐标系钉成**帧缓冲像素**，覆盖 SDL3 后端的经典 retina 模型
+ *（它给 DisplaySize=逻辑 + DisplayFramebufferScale=scale ⟹ 字形按逻辑 px 烘焙、
+ * 按物理 px 绘制 = 拉伸发糊）。必须每帧覆盖：后端在自己的 NewFrame 里重设这两个值。
+ * 配套另两条（缺一即"UI 变大 / 鼠标偏 scale 倍 / 仍糊"）：字号与样式缩放 → init；
+ * 鼠标坐标 ×scale → handleEvent。
+ */
+void ImGuiLayer::useFramebufferPixelSpace(vk::Extent2D extent) {
+	ImGuiIO& io = ImGui::GetIO();
+	io.DisplaySize = ImVec2(static_cast<float>(extent.width), static_cast<float>(extent.height));
+	io.DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
+}
+
 /** ImGuiLayer::renderFrame 定义（接口注释）：空 draw data 早退（不浪费 begin/end）。 */
 bool ImGuiLayer::renderFrame(vk::raii::CommandBuffer& cmd, vk::Extent2D extent,
 	vk::ImageView swapchainView) {
@@ -319,6 +426,8 @@ bool ImGuiLayer::renderFrame(vk::raii::CommandBuffer& cmd, vk::Extent2D extent,
 		return false;
 	ImGui_ImplSDL3_NewFrame();
 	ImGui_ImplVulkan_NewFrame();
+	observeUiScale(extent);  // 必须排在下一行之前（要读后端未覆盖前的值）
+	useFramebufferPixelSpace(extent);
 	ImGui::NewFrame();
 	buildPanels();
 	ImGui::Render();

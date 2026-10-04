@@ -83,7 +83,20 @@ export class SDLWindow {
 	}
 
 	/**
-	 * 创建窗口（SDL_Init(VIDEO|EVENTS) + SDL_CreateWindow；窗口标志 = VULKAN|RESIZABLE）。
+	 * 创建窗口（SDL_Init(VIDEO|EVENTS) + SDL_CreateWindow；
+	 * 窗口标志 = VULKAN|RESIZABLE|**HIGH_PIXEL_DENSITY**）。
+	 *
+	 * **为什么必须 HIGH_PIXEL_DENSITY**（2026-10-04 协议报文实测，勿再退回）：不开它，SDL 把
+	 * 缓冲尺寸钳成**逻辑点**，而它仍把 `wp_viewport.set_destination` 设成逻辑尺寸 ⟹ 合成器
+	 * 替我们把缓冲**放大** scale 倍上屏 = 画面糊、非 1:1，且"按渲染像素定义的抖动/闪烁"
+	 * 随该倍数一起被放大。本机 KDE Wayland scale 1.75 实测（WAYLAND_DEBUG=1）：
+	 * `wp_fractional_scale_v1.preferred_scale(210)`（=210/120=1.75）+
+	 * `wp_viewport.set_destination(800,600)`；不开 → 缓冲 800×600 映射到 1400×1050 物理
+	 * （放大 1.75），开了 → 缓冲 **1400×1050** 映射到同一目标（**精确 1:1**）。
+	 * 旧注释曾判"SDL 收了分数缩放却从不按它给缓冲、SDL 从不写那个 viewport"——**两处皆错**：
+	 * SDL 会按分数缩放给缓冲（前提就是本 flag），且它自己就发 set_destination。
+	 * 代价 = 渲染像素 ×scale²（1.75 ⟹ ×3.06），纯 GPU 侧；X11/XWayland 下本 flag 无效
+	 *（实测 pixels 恒 = 逻辑），故 XWayland 不是"清晰"的退路。
 	 * @param width 窗口创建宽度
 	 * @param height 窗口创建高度
 	 * @param title 窗口标题
@@ -105,7 +118,8 @@ export class SDLWindow {
 
 		// hidden（llm_debug 模式）：窗口存在但永不映射上屏——surface/instance 扩展/
 		// 队列选择全链路照常，只绕过"显示"；compositor 须存活（息屏可以，suspend 不行）
-		SDL_WindowFlags flags = SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE;
+		SDL_WindowFlags flags = SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE
+			| SDL_WINDOW_HIGH_PIXEL_DENSITY;
 		if (hidden)
 			flags |= SDL_WINDOW_HIDDEN;
 		SDL_Window* wnd = SDL_CreateWindow(title.c_str(), width, height, flags);
@@ -228,15 +242,27 @@ export class SDLWindow {
 	 * logical ≠ physical，交换链必须按显示面板的物理像素建——按逻辑点建 = 让合成器/系统
 	 * 替我们放大，画面糊，且「按渲染像素定义的抖动/闪烁」随该倍数一起被放大
 	 *（实测 KDE scale 1.75 时 TAA 游动 0.717 渲染像素 → 屏幕上 1.26 面板像素）。
-	 * ⚠ 本机现状（KDE Wayland scale 1.75，SDL 3.4.14 实测）：SDL 报 pixels == logical
-	 *（windowScale=1.0，客户端拿不到缩放后的缓冲尺寸）→ 本改动今天在本机是 **no-op**；
-	 * 待系统给出 pixels = scale × logical（如 KDE「缩放格式」改分数/优先整数），引擎自动吃得到。
+	 * ⚠ 前提是本窗建时带了 SDL_WINDOW_HIGH_PIXEL_DENSITY（理由与协议报文实测 → create()）：
+	 * 本机 KDE Wayland scale 1.75 下带 flag 实返 pixels = 1400×1050（= 逻辑 × 1.75）；
+	 * 不带则 pixels == logical（合成器替我们放大，糊）。X11/XWayland 下 flag 无效，恒 pixels == 逻辑。
 	 * @return {宽, 高} 物理像素（SDL 查询失败 = 0x0，调用方兜底）
 	 */
 	std::array<int, 2> pixelSize() const {
 		int w = 0, h = 0;
 		SDL_GetWindowSizeInPixels(window, &w, &h);
 		return {w, h};
+	}
+
+	/**
+	 * 窗口内容缩放倍数（SDL_GetWindowDisplayScale，客户端视角）。
+	 * 与 pixelSize 同前提：带 HIGH_PIXEL_DENSITY 时本机 KDE Wayland 实返 **1.750**，不带 flag
+	 * 时 SDL 对本窗口失明返 1.000。UI 层按它烘焙字号与样式，使 UI 在分数缩放桌面下保持
+	 * **物理尺寸不变**（否则帧缓冲变大而字号不变 = UI 相对变小 57%）。
+	 * @return 缩放倍数（查询失败回落 1.0 = UI 退化为未缩放）
+	 */
+	float displayScale() const {
+		const float s = SDL_GetWindowDisplayScale(window);
+		return s > 0.0f ? s : 1.0f;
 	}
 
 	/**
