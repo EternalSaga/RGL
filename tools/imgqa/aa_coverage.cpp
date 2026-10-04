@@ -123,11 +123,13 @@ CoverageReport measureCoverage(const cv::Mat& luma)
     return r;
 }
 
-int cmdAaCoverage(const std::string& variant, int warm, double feedback)
+int cmdAaCoverage(const std::string& variant, int warm, double feedback, bool baseSpace)
 {
     const std::string root = projectRoot() + "/build";
-    std::printf("逐杆覆盖率对拍：%d×%d  px/m = %.2f  variant=%s  warm=%d  feedback=%.3f\n\n", kViewW,
-        kViewH, pxPerMeter(kCamZ), variant.empty() ? "forward" : variant.c_str(), warm, feedback);
+    std::printf("逐杆覆盖率对拍：%d×%d  px/m = %.2f  variant=%s  warm=%d  feedback=%.3f  "
+        "base_space=%s\n\n",
+        kViewW, kViewH, pxPerMeter(kCamZ), variant.empty() ? "forward" : variant.c_str(), warm,
+        feedback, baseSpace ? "开" : "关");
 
     // 两态各采一帧：TAA 关 = 被测量（无 AA 时应当量化失真），TAA 开 = 判据对象。
     // 静止机位、单帧 ⟹ 与采集时序无关（这正是它优于逐帧差的地方，见 plan §7 第 10 条）。
@@ -143,6 +145,7 @@ int cmdAaCoverage(const std::string& variant, int warm, double feedback)
         o.taa = taa;
         o.taaFeedback = feedback;
         o.taaJitterScale = jitterScale;
+        o.taaBaseSpace = baseSpace;  // 批 13.2（taa=false 的那组无消费者，值无意义）
         o.variant = variant;
         o.size = {kViewW, kViewH};
         const std::string dir = root + "/imgqa_aacov_" + tag;

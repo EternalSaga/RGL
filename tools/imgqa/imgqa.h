@@ -107,6 +107,30 @@ struct FacePrediction {
 ///   ② 键名对着**引擎解析器源码**校验（`shadowPass` 是 C++ 字段名，lua 键是
 ///      `shadow_pass`——拼错键 = 静默用默认值 = 在默认值上下判据，拒绝）。
 struct ProfileOpts {
+    /// **交付配置模式**（批 13.1e）：非空 = 以该目录（仓库 `configs/`）里的 *.lua / *.json
+    /// 为基底**整份拷贝**，之后只覆写三处：`runtime.lua` 的 headless、`diagnostics.lua` 的
+    /// rpc、`scene.lua` 的 taa 块（enabled / feedback / jitter_scale）。其余一律不动。
+    ///
+    /// 为什么必须有这条：判据跑在**合成 profile** 上得出的绿不算绿。`temporal-identity`
+    /// 就是这么假绿了一整轮——合成 profile + 默认机位上残差 0.016/255（绿），同一判据换到
+    /// 交付配置 + 用户机位上是 **mad 1.688/255、逐像素最大 37、10.37% 像素 >2LSB**（红）。
+    /// 差异不是噪声而是**另一个场景**：交付配置是 `variant = "deferred"` + `scale = 0.01`
+    /// + izb_shadow + env/skybox/AO 全开，合成 profile 是 forward + 默认机位。
+    /// ⚠ 本模式生效时 `glb` / `envIntensity` / `skybox` / `aoStrength` / `shadowPass` /
+    ///   `lightDir` / `lightIntensity` / `exposure` / `picking` **全部被忽略**（真相在交付
+    ///   配置里，工具再抄一份就是第二份真相）；`variant` 留空 = 尊重交付配置自己写的路线。
+    std::string deliveryConfigDir;
+    /// 可选机位（**写进 profile 的 camera.lua**，从第 1 帧生效）。false = 不动 camera.lua。
+    ///
+    /// 为什么不能只靠 `Engine::setCamera`（RPC）：RPC 落在引擎已经跑了几帧之后，而那些帧是用
+    /// camera.lua 的机位渲染的，**已经进了 TAA 历史**；历史按 (1−feedback) = 0.88/帧 衰减，
+    /// 两个机位朝向差得远时污染要几十帧才洗掉。实测（交付配置 + 报障机位）：只发 RPC、预热
+    /// 32 帧的 T3 恒等式残差 0.100/255 且逐帧仍在降（0.1208 → 0.100），机位从第 1 帧就对上的
+    /// 同一场景同一配置只有 **0.0226** —— 差 4.4 倍，全部来自采集时序（参考图本身逐位相同）。
+    bool hasCamera = false;
+    std::array<double, 3> cameraPosition{0.0, 0.0, 0.0};
+    std::array<double, 3> cameraTarget{0.0, 0.0, 0.0};
+    double cameraFov = 45.0;
     std::string glb;                       // models/ 下的场景文件
     double envIntensity = 0.0;
     bool skybox = false;
@@ -121,6 +145,11 @@ struct ProfileOpts {
     bool taa = false;                      // scene.lua `taa.enabled`（**图形态**开关，批 12.6）
     double taaFeedback = 0.12;             // scene.lua `taa.feedback`（= 本帧权重；**1** = 只抖不滤 = 消融组；0 = 「只要历史」的退化环，勿用）
     double taaJitterScale = 1.0;           // scene.lua `taa.jitter_scale`（0 = 只留时域累积，去抖动）
+    /// 批 13.2：scene.lua `taa.base_space`（true = 最终消费处按内容偏移重采样，把输出从
+    /// **抖动空间**搬回**基空间**）。false = 现行为（输出在抖动空间，游动 = 相邻帧抖动差）。
+    /// ⚠ 本工具所有「游动 = 抖动差」的判据（`temporal-swim-pixels` / `temporal-jitter-*`）
+    ///   钉的都是**门关**口径；门开态由 `temporal-base-space` 单独判（见其容差理由）。
+    bool taaBaseSpace = false;
     std::string entitiesLua;               // 非空 = 整条 entities 行由它给（内建合成靶无 glb 文件）
     std::array<double, 3> lightDir{0.5, -0.75, -0.45};
     double lightIntensity = 12.0;
@@ -375,7 +404,10 @@ int cmdProbe(const std::string& configDir, int x, int y, Vec3 albedo, double rou
 /// @param pairs 相邻帧对数（shots = pairs + 1；内部向上对齐到抖动周期 16 的整数倍）
 /// @param warm 每次采集前的预热帧数（TAA 历史收敛，feedback=0.12 ⇒ ≈19 帧）
 /// @param variant 渲染路线（默认 forward）
-int cmdTemporal(int pairs, int warm, const std::string& variant);
+/// @param baseSpace 批 13.2 `taa.base_space`（true = 输出在**基空间**）。⚠ 门开态下
+///                S1（只抖不滤）的逐帧差不再由游动主导 ⟹ **S1/S2 比值失去原口径**，
+///                两态都要跑才能解释数字（见 temporal.cpp 头注释「基空间口径」段）。
+int cmdTemporal(int pairs, int warm, const std::string& variant, bool baseSpace = false);
 
 /// 逐杆覆盖率对拍闭式（批 12.6 T4，docs/taa_plan.md §7 第 10 条）：单帧量阶梯杆的
 /// 「黑度积分 vs 投影宽度」，TAA 关应当被二值覆盖量化破坏、TAA 开应当贴合闭式。
@@ -385,7 +417,27 @@ int cmdTemporal(int pairs, int warm, const std::string& variant);
 ///                的残差算成覆盖率——判收敛必须靠调这个参数做对照，见 plan §7 第 10 条）
 /// @param feedback scene.lua `taa.feedback`（默认 0.12）。**消融用**：=1 时输出 = 本帧
 ///                ⇒ TAA 开应与关**逐位相同**（一条免费的恒等式检查，见 plan §7 第 11 条）
-int cmdAaCoverage(const std::string& variant, int warm, double feedback);
+/// @param baseSpace 批 13.2 `taa.base_space`（true = 输出在基空间）。判据域内的黑度积分
+///                是**单帧**量，门开态把它从「抖动空间的一帧」换成「重采样到基网格的一帧」，
+///                数字会动 ⟹ 两态都要跑（门关 = 0.138 列的历史读数口径）。
+int cmdAaCoverage(const std::string& variant, int warm, double feedback,
+    bool baseSpace = false);
+
+/// 真实场景 TAA **游动**量测（批 13.1b，phase13 §1.6 末的未定案）。
+/// 不问「逐帧差大不大」（那条路已被 `screen-space-l1-frame-diff` 登记为反模式），
+/// 改问一个有唯一答案的几何问题：**逐帧差能不能被一个全局亚像素位移几乎完全解释？**
+/// 只有「整幅平移」会让对齐后残差塌到近零；「逐像素独立闪烁」（历史被拒 ⟹ 输出退化成
+/// 单帧的抖动采样）对齐后残差**不降**。两种解释在此分道，且不需要任何参考图。
+/// 三组：T0 TAA 关（地板）· T1 TAA 开 feedback=1（**量具自身的阳性锚点**：按构造必须
+/// 整幅平移，且位移须命中 Halton 闭式预测）· T2 TAA 开 feedback=.12（被测量）。
+/// 批 13.2 追加两组：**T5** = T2 + `taa.base_space`（门开态，判据 `temporal-base-space`
+/// 的主体，阳性锚点 = 同一次运行里的 T2 门关读数仍等于闭式抖动差）；**T6** = T5 的
+/// feedback=1 版（无累积，逐帧差应塌到「重光栅化覆盖翻转」地板，用来把「重采样本身
+/// 引入的帧间差」与「游动」分开）。
+/// @param pairs 相邻帧对数（内部向上对齐到抖动周期 16 的整数倍）
+/// @param warm  预热帧数（历史收敛）
+/// @param variant 渲染路线（默认 forward）
+int cmdTaaSwim(int pairs, int warm, const std::string& variant);
 
 }  // namespace RGL::imgqa
 

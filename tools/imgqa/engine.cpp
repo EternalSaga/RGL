@@ -9,6 +9,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <regex>
 #include <iterator>
 #include <sstream>
@@ -51,6 +52,37 @@ void writeFile(const fs::path& p, const std::string& text)
     out << text;
 }
 
+/**
+ * 替换 lua 里**第一条以 `key` 开头的未注释行**的整行值（行尾注释一并丢掉——这是生成出来的
+ * profile 副本，不是仓库配置，留着解释新值的旧注释更坏）。
+ *
+ * 为什么手写行扫描而不是 `std::regex`：`std::regex` 的 ECMAScript **没有 multiline**，`^` 只
+ * 匹配整个输入的开头，`(?m)` 前缀会直接语法错。行首是空白但不允许是 `--`：camera.lua 里
+ * 排着一整列注释掉的备选机位，那些必须原样留着。
+ */
+void subLuaLine(std::string& text, const std::string& key, const std::string& value,
+    const std::string& where)
+{
+    std::istringstream in(text);
+    std::ostringstream out;
+    std::string line;
+    bool hit = false;
+    while (std::getline(in, line)) {
+        const auto first = line.find_first_not_of(" \t");
+        if (!hit && first != std::string::npos && line.compare(first, key.size(), key) == 0
+            && line.substr(first, 2) != "--") {
+            const bool comma = line.find(',') != std::string::npos;
+            out << std::string(first, ' ') << key << " = " << value << (comma ? "," : "") << "\n";
+            hit = true;
+            continue;
+        }
+        out << line << "\n";
+    }
+    if (!hit)
+        throw std::runtime_error(where + " 里没有未注释的 " + key + " 行");
+    text = out.str();
+}
+
 /// 从**引擎解析器源码**抽「配置解析器认识的根级键」。
 /// 不手抄白名单：手抄的会和解析器一起漂移，最后变成"看起来在检查其实什么都没检查"
 /// ——那比不检查更糟。两种读取形态都要覆盖（实测各配置模块用的不一样，只覆盖一种会
@@ -88,6 +120,53 @@ void assertKeys(const std::string& fileName, const std::set<std::string>& emitte
 }
 
 const char* lb(bool v) { return v ? "true" : "false"; }
+
+/// 交付配置模式：把 `key = <旧值>,` 一行的**值**换成新值（只认第一处，且必须找到）。
+/// 找不到就抛——静默不替换 = 判据跑在**交付配置的原值**上而工具以为改了，
+/// 与「拼错键 = 静默用默认值」同罪（makeProfile 头注释）。
+void replaceValue(std::string& text, const std::string& file, const std::string& key,
+    const std::string& newValue)
+{
+    const std::string head = key + " = ";
+    const auto at = text.find(head);
+    if (at == std::string::npos)
+        throw std::runtime_error("交付配置 " + file + " 里没有键 `" + key
+            + "`——覆写失败，拒绝在旧值上下判据");
+    const auto eol = text.find_first_of(",\n", at + head.size());
+    if (eol == std::string::npos)
+        throw std::runtime_error("交付配置 " + file + " 的键 `" + key + "` 形状不认识");
+    text.replace(at + head.size(), eol - (at + head.size()), newValue);
+}
+
+/// 交付配置模式：整段替换 `scene.lua` 的 `taa = { ... },` 块为显式三键。
+/// 缺块就在 `return {` 之后插一段——**不静默跳过**（跳过 = 判据跑在「TAA 关」的配置上，
+/// 恒等式会因「pass 根本不在图里」而平凡成立 = 最阴的假绿）。
+void rewriteTaaBlock(std::string& scene, bool enabled, double feedback, double jitterScale,
+    bool baseSpace)
+{
+    std::ostringstream blk;
+    blk << "    taa = {\n        enabled = " << lb(enabled) << ",\n        feedback = "
+        << std::setprecision(6) << feedback << ",\n        jitter_scale = " << jitterScale
+        << ",\n        base_space = " << lb(baseSpace) << ",\n    },\n";
+    const auto begin = scene.find("\n    taa = {");
+    if (begin != std::string::npos) {
+        // 块收尾是 `\n    }` 再加**可选逗号**（交付配置里 taa 是 return 表最后一项，带逗号）。
+        // 逗号必须一起吃掉——留一个孤零零的 `,` 在 `}` 前 = Lua 语法错（实测踩过：
+        // `scene.lua:235: unexpected symbol near ','`）。
+        const auto end = scene.find("\n    }", begin);
+        if (end == std::string::npos)
+            throw std::runtime_error("交付配置 scene.lua 的 taa 块没有收尾，无法覆写");
+        std::string::size_type len = 6;  // == std::string_view("\n    }").size()
+        if (end + len < scene.size() && scene[end + len] == ',')
+            ++len;
+        scene.replace(begin, end - begin + len, "\n" + blk.str());
+        return;
+    }
+    const auto head = scene.find("return {");
+    if (head == std::string::npos)
+        throw std::runtime_error("交付配置 scene.lua 不是 `return {` 形状，无法注入 taa 块");
+    scene.insert(head + 8, "\n" + blk.str());
+}
 
 /// D2（批 12.3d）：SPV 新鲜度守卫（mtime 轻版，不核内容）。**所有引擎驱动路径的
 /// 统一护**（Engine 构造 + runEngineOnce 起点都调）——"改了 .slang 没构建就测量"
@@ -157,6 +236,69 @@ void checkShadersFresh()
 std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
 {
     fs::create_directories(outDir);
+    // ── 交付配置模式（批 13.1e）：基底 = 仓库 configs/，只覆写 headless / rpc / taa ──
+    // 判据必须在**用户实际跑的那份配置**上求值（ProfileOpts::deliveryConfigDir 的注释里
+    // 记着这条是怎么用一轮假绿换来的）。刻意**不**在这里重抄 env/ao/shadow/light：
+    // 那些键的真相在交付配置里，工具再抄一份就是第二份真相，会漂移。
+    if (!o.deliveryConfigDir.empty()) {
+        std::error_code ec;
+        int copied = 0;
+        for (fs::directory_iterator it(o.deliveryConfigDir, ec), e; it != e; it.increment(ec)) {
+            if (!it->is_regular_file(ec))
+                continue;
+            const std::string ext = it->path().extension().string();
+            if (ext != ".lua" && ext != ".json")
+                continue;
+            fs::copy_file(it->path(), fs::path(outDir) / it->path().filename(),
+                fs::copy_options::overwrite_existing);
+            ++copied;
+        }
+        if (copied == 0)
+            throw std::runtime_error("交付配置目录里没有 .lua/.json: " + o.deliveryConfigDir);
+
+        std::string rt = readFile(outDir + "/runtime.lua");
+        replaceValue(rt, "runtime.lua", "headless", "true");
+        replaceValue(rt, "runtime.lua", "llm_debug", "false");  // RPC 形态与 llm 截图互斥
+        writeFile(outDir + "/runtime.lua", rt);
+
+        std::string dg = readFile(outDir + "/diagnostics.lua");
+        replaceValue(dg, "diagnostics.lua", "rpc", "true");
+        replaceValue(dg, "diagnostics.lua", "rpc_port", std::to_string(8788));
+        writeFile(outDir + "/diagnostics.lua", dg);
+
+        std::string sc = readFile(outDir + "/scene.lua");
+        rewriteTaaBlock(sc, o.taa, o.taaFeedback, o.taaJitterScale, o.taaBaseSpace);
+        writeFile(outDir + "/scene.lua", sc);
+
+        // 机位写进 camera.lua（**从第 1 帧生效**，理由见 ProfileOpts::hasCamera 的注释）
+        if (o.hasCamera) {
+            std::string cam = readFile(outDir + "/camera.lua");
+            const auto vec = [](const std::array<double, 3>& a) {
+                std::ostringstream s;
+                s.precision(9);
+                s << "{ " << a[0] << ", " << a[1] << ", " << a[2] << " }";
+                return s.str();
+            };
+            std::ostringstream fov;
+            fov.precision(9);
+            fov << o.cameraFov;
+            subLuaLine(cam, "position", vec(o.cameraPosition), "camera.lua");
+            subLuaLine(cam, "target", vec(o.cameraTarget), "camera.lua");
+            subLuaLine(cam, "fovDegrees", fov.str(), "camera.lua");
+            writeFile(outDir + "/camera.lua", cam);
+        }
+
+        // variant 覆写是**可选**的：留空 = 尊重交付配置自己写的路线（交付默认 deferred）。
+        if (!o.variant.empty()) {
+            std::string rg = readFile(outDir + "/render_graph.lua");
+            static const std::regex variantRx(R"(variant\s*=\s*"[^"]*")");
+            if (!std::regex_search(rg, variantRx))
+                throw std::runtime_error("交付配置 render_graph.lua 无 variant 行，无法覆写");
+            writeFile(outDir + "/render_graph.lua",
+                std::regex_replace(rg, variantRx, "variant = \"" + o.variant + "\""));
+        }
+        return outDir;
+    }
     // render_graph.lua 定义图本身，**必须整份拷**（只给 {variant=...} 得 0 个
     // swapchain 附件 → 启动失败，实测踩过）。
     fs::copy_file(profileTemplate() + "/render_graph.lua", outDir + "/render_graph.lua",
@@ -203,7 +345,8 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
         + ", izb_dump_frame = " + std::to_string(o.izbDumpFrame) + " }\n");
 
     std::set<std::string> sceneKeys
-        = {"entities", "styles", "environment", "light", "spin", "cube", "exposure", "ao"};
+        = {"entities", "styles", "material_styles", "deferred_styles", "environment", "light",
+           "spin", "cube", "exposure", "ao"};
     if (o.taa)
         sceneKeys.insert("taa");  // 只在真要开的时候写这段（缺段 = 全默认即「关」）
     assertKeys("scene.lua", sceneKeys, knownRootKeys("rgl/scene_config_impl.cppm"));
@@ -215,23 +358,38 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
     const std::string entities = o.entitiesLua.empty()
         ? "    entities = { { type = \"model\", file = \"models/" + o.glb + "\" } },\n"
         : "    entities = { " + o.entitiesLua + " },\n";
-    // TAA 段（批 12.6）：enabled + feedback + jitter_scale，其余走引擎默认（运动补偿开）
-    // ——写出来的键越少，漂移面越小。两个消融开关各有用途：jitter_scale=0 = 只留时域
-    // 累积；feedback=1 = 只抖不滤（输出 = 本帧，temporal 的阳性锚点组。别写 0——0 是
-    // 「只要裁剪后的历史、完全丢本帧」的退化反馈环，测出来的不是闪烁本体）。
+    // TAA 段（批 12.6）：enabled + feedback + jitter_scale（+ 批 13.2 base_space），
+    // 其余走引擎默认（运动补偿开）——写出来的键越少，漂移面越小。两个消融开关各有用途：
+    // jitter_scale=0 = 只留时域累积；feedback=1 = 只抖不滤（输出 = 本帧，temporal 的阳性
+    // 锚点组。别写 0——0 是「只要裁剪后的历史、完全丢本帧」的退化反馈环，测出来的不是
+    // 闪烁本体）。
     const std::string taa = o.taa
         ? "    taa = { enabled = true, feedback = " + std::to_string(o.taaFeedback)
-              + ", jitter_scale = " + std::to_string(o.taaJitterScale) + " },\n"
+              + ", jitter_scale = " + std::to_string(o.taaJitterScale)
+              + ", base_space = " + lb(o.taaBaseSpace) + " },\n"
         : "";
+    // styles 必须显式写（switch 首战抓到的静默坑）：缺表回落默认 pbr→model_pbr，
+    // 而 model_pbr.frag **不 import shadow/env**——shadow_pass 与 env 开关全部
+    // 退化为逐位相同的假象（投影侧照画、采样侧不存在）。model_pbr_ibl 在
+    // env=0/shadow=off 下直接光与 model_pbr 逐式相同（IBL 项 ×intensity=0 归零），
+    // 闭式解前提不破。
+    // 表 = **交付配置 configs/scene.lua 的全量四风格 + 材质名连连看**（13.1b 补：此前只写
+    // unlit/pbr 两条，bistro 的 `light`/`vegetation` 材质直接启动失败
+    // "style not in scene.lua styles: light"；缺 material_styles 则 Emissive/Foliage
+    // 全落 pbr = 测的不是交付路径）。对无这些材质的探针场景（cornell_box / aa_target）
+    // 逐位 inert——连连看按材质名命中，探针场景无命中项。
+    const std::string styles =
+        "    styles = { unlit = \"model\", pbr = \"model_pbr_ibl\", vegetation = "
+        "\"model_vegetation\", light = \"model_light\" },\n"
+        "    material_styles = { { pattern = \"Emissive\", style = \"light\" },\n"
+        "      { pattern = \"Foliage\", style = \"vegetation\" } },\n"
+        "    deferred_styles = { vegetation = \"deferred_geometry_vegetation\",\n"
+        "      light = \"deferred_geometry_light\" },\n";
     writeFile(outDir + "/scene.lua",
         "return {\n" + entities
-        // styles 必须显式写（switch 首战抓到的静默坑）：缺表回落默认 pbr→model_pbr，
-        // 而 model_pbr.frag **不 import shadow/env**——shadow_pass 与 env 开关全部
-        // 退化为逐位相同的假象（投影侧照画、采样侧不存在）。model_pbr_ibl 在
-        // env=0/shadow=off 下直接光与 model_pbr 逐式相同（IBL 项 ×intensity=0 归零），
-        // 闭式解前提不破。表同主配置 configs/scene.lua。
-          + "    styles = { unlit = \"model\", pbr = \"model_pbr_ibl\" },\n"
-        "    environment = { hdr = \"env/san_giuseppe_bridge_4k.hdr\", hdr_size = 2048,\n"
+          + styles
+        // 环境（intensity / skybox 由 ProfileOpts 给；env 文件与交付配置同一张 .hdr）
+          + "    environment = { hdr = \"env/san_giuseppe_bridge_4k.hdr\", hdr_size = 2048,\n"
         "      intensity = "
             + std::to_string(o.envIntensity) + ", skybox = " + lb(o.skybox) + " },\n"
           "    light = { direction = { "
