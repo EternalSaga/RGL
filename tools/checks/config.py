@@ -181,6 +181,12 @@ VULKAN_HPP_INCLUDE_FILES = {"rgl/rlvk.cppm"}
 # docs/** 状态头：文件前 N 行内须出现状态行（`> **状态**` / 行首 `状态：` 等）
 DOCS_STATUS_MAX_LINES = 10
 
+# AGENTS.md 文档索引双向对账（rules_text.agents_doc_index_checks，§1.6）：
+# 索引豁免目录——archive/ 的索引由 docs/archive/README.md 承载（AGENTS 只指到目录），
+# 参考资料/ 是文献目录（其 README 自带清单，且不是"开工要路由的文档"）。
+AGENTS_FILE = "AGENTS.md"
+AGENTS_INDEX_EXEMPT_DIRS = ("docs/archive/", "docs/参考资料/")
+
 # 现代 C++ 零违规回归护栏：(正则, 提示)——剥注释后按行匹配（rules_text.modern_cpp_checks）
 MODERN_BANNED = [
     (r"\bgoto\b", "禁 goto——用结构化控制流"),

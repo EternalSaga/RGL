@@ -3,15 +3,16 @@
 
 - text_checks：A3 分层零 entt + 点名禁止 import 边 + 模块优先（rgl/ 禁 .h/.hpp/.hh、
   .cpp 白名单、禁内部头 #include "）+ GMF STL 白名单 + 模块结构四条
-- modern_cpp_checks / docs_status_checks / forbidden_vulkan_checks：见各自 docstring
-  与 docs/风格检查规则.md §1–§2
+- modern_cpp_checks / docs_status_checks / forbidden_vulkan_checks /
+  agents_doc_index_checks：见各自 docstring 与 docs/风格检查规则.md §1–§2
 """
 
 import re
 from pathlib import Path
 from typing import NamedTuple
 
-from config import (ALLOWED_CPP, DOCS_STATUS_MAX_LINES, EXCLUDE_FILES,
+from config import (ALLOWED_CPP, AGENTS_FILE, AGENTS_INDEX_EXEMPT_DIRS,
+                    DOCS_STATUS_MAX_LINES, EXCLUDE_FILES,
                     EXPORT_NAMESPACE_EXEMPT, FORBIDDEN_EDGES,
                     FORBIDDEN_VULKAN_APIS, FORBIDDEN_VULKAN_MSG, MODERN_BANNED,
                     NEW_DELETE_EXEMPT, ROOT, STL_GMF_EXCEPTIONS, STL_HEADERS,
@@ -256,6 +257,50 @@ def docs_status_checks() -> list[Warning]:
         warnings.append(Warning(rel, 1,
             f"缺状态行——docs 头部前 {DOCS_STATUS_MAX_LINES} 行须有 "
             f"`> **状态**：现行/历史/调研/…`（见 AGENTS.md 其他文档）"))
+    return warnings
+
+
+# ─── AGENTS.md 文档索引双向对账（§1.6）───────────────────────────────────────
+
+# AGENTS 正文里指向 docs 的相对路径串（含中文名与 §引用前的路径）
+_AGENTS_DOC_PATH_RX = re.compile(r"docs/[0-9A-Za-z_\u4e00-\u9fff./\-]*\.md")
+
+
+def agents_doc_index_checks() -> list[Warning]:
+    """AGENTS.md「其他文档」与 docs/ **双向**对账——同一份清单在两处维护 = 双源漂移。
+
+    **正查**（漏索引）：docs/ 下每个 .md（除 AGENTS_INDEX_EXEMPT_DIRS）的文件名须出现在
+    AGENTS.md。漏索引的代价不是"少一行"而是**新会话永远找不到它**：AGENTS 是 agent 唯一
+    的开机路由表，没被索引的文档等于不存在（实测：执行中的 docs/taa_plan.md 全仓 0 处
+    AGENTS 引用，而 AGENTS 把"下一步"指向了 phase12_plan）。
+    按**文件名**匹配而非整路径：AGENTS 既写 `docs/x.md` 也写裸 `x.md`（§引用形如
+    `技术概念.md §RPC` 不该被要求带目录前缀）；docs/ 非豁免文件基名唯一（实测），不致误配。
+
+    **反查**（悬空指针）：AGENTS 里写出的 `docs/**.md` 磁盘上须存在——文档撒谎比缺文档更贵，
+    error 级。通配写法（`docs/archive/*_已删除.md`）不作单文件判定。
+
+    AGENTS.md 读不到 → error 级**出声**而不是静默通过（"零警告"会被读成"索引干净"，
+    同 rules_layers.py 失效也报 error 的取向）。
+    """
+    agents = read_text(Path(ROOT) / AGENTS_FILE)
+    if agents is None:
+        return [Warning(AGENTS_FILE, 1,
+            f"读不到 {AGENTS_FILE}——文档索引对账**无法执行**（这不是「索引干净」）", "error")]
+    warnings: list[Warning] = []
+    for rel in docs_markdown_files():
+        if any(rel.startswith(d) for d in AGENTS_INDEX_EXEMPT_DIRS):
+            continue
+        if rel.rsplit("/", 1)[-1] not in agents:
+            warnings.append(Warning(rel, 1,
+                "未入 AGENTS.md「其他文档」索引——新会话按 AGENTS 路由找不到本文档；"
+                "已结题就搬进 docs/archive/ 并同步其 README"))
+    for path in sorted(set(_AGENTS_DOC_PATH_RX.findall(agents))):
+        if "*" in path or "~" in path:
+            continue
+        if not (Path(ROOT) / path).exists():
+            warnings.append(Warning(AGENTS_FILE, 1,
+                f"索引里的 {path} 磁盘上不存在——悬空指针（先补目的地再修指针，"
+                "见 skill rgl-doc-placement）", "error"))
     return warnings
 
 

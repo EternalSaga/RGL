@@ -46,6 +46,11 @@ description: 修改 AGENTS.md 前的归宿裁决——新知识先问"能不能�
 
 ## 反模式（本项目踩过的）
 
+- **新建 `docs/*.md` 不在 AGENTS「其他文档」挂号** → 对新会话等于该文档不存在。
+  现已机制化：`agents_doc_index_checks`（source_checks 内）双向对账——docs 漏索引 = warning、
+  AGENTS 指向不存在的 docs 路径 = error。豁免仅 `docs/archive/` 与 `docs/参考资料/`
+  （名单 `tools/checks/config.py:AGENTS_INDEX_EXEMPT_DIRS`）。
+
 - 把裁决树的 1/2/3 答案写进 AGENTS"已知问题"节 → 三机三个月后它变成谎言行。
 - "已知问题"节混装"现行契约" → 节头口径与内容自相矛盾（收口方式：节头明说
   "只列未解决问题与标『现行』的契约"）。
