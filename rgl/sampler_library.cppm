@@ -2,6 +2,7 @@ export module sampler_library;
 
 import rlstd;
 import rlvk;
+import rllogger;  // 共享 sampler 各向异性实机参数打点（2026-10-03 AF 启用）
 import vkerror;
 import vk_device;
 import vk_resources;  // 架构债务续账步骤 4a：sampler 内容策略从内核拆出——服务向内核引 sampler heap，单向
@@ -27,14 +28,23 @@ export class SamplerLibrary {
 
 	/**
 	 * 共享 sampler（批次 1：owner 从 TexturePool 构造移入，架构债务续账步骤 4a 再移入本类）：
-	 * 一份 sampler 描述符（linear + mipmap LINEAR + **REPEAT**，maxLod=20）写
-	 * sampler heap 首个可用槽，全模型管线映射指向同一槽。wrap 定案 REPEAT（2026-09-13，
+	 * 一份 sampler 描述符（linear + mipmap LINEAR + **REPEAT**，maxLod=20，设备支持时开
+	 * **各向异性过滤**，上限 min(16, 物理 maxSamplerAnisotropy)）写 sampler heap 首个可用槽，
+	 * 全模型管线映射指向同一槽。wrap 定案 REPEAT（2026-09-13，
 	 * 见调试历史）：bistro 49.5% primitive 平铺 UV 越界 [0,1]（最大 V 跨度 ~77000），
 	 * CLAMP 把越界钳成边缘纹素拉平 = 大片纯色块；glb 405 sampler 全空 = glTF 默认
 	 * REPEAT，工程单 sampler 与之对齐。Phase 8 ③b 起 2D 纹理带
 	 * compute mip 链（mip_gen）——采样自动用 mip（maxLod 20 覆盖 ≤2^20 纹理链长，
 	 * Vulkan 按各图实际 mip 范围钳制，单 sampler 通吃不同尺寸）。幂等（首次调用写入，
 	 * 之后返回既有槽号）；调用点 = 创建 textured 管线前（main 启动期）。
+	 * 各向异性（2026-10-03 拍板启用）：bistro 地面/长廊是**掠射面**，无 AF 时远景纹理
+	 * 质量与稳定性都差——三线性只沿各向同性单轴平均，沿各向异性椭圆陡轴分辨率尽失（糊），
+	 * 且 mip 选择随相机微动整档跳变（闪）。开关跟随 core 可选特性探测
+	 * （features_config.json optional_features，设备不支持 = 保持关，不得硬开——
+	 * 启用未 enable 的特性是 UB）；maxAnisotropy 取 min(16, 物理上限)：驱动对超上限值
+	 * 静默钳制（VU 00651 要求落 [1, maxSamplerAnisotropy]），16 是桌面常见上限，显式取
+	 * min 不赌钳制。AF 只参与隐式 LOD 选择与过滤，mip_gen 的 SampleLevel 显式级采样
+	 * 不受影响。
 	 * sampler create info 存成员（稳定存储）：本机 RADV 写时即解析
 	 *（docs/archive/heap_texture_research.md §12.2，"采样期解引用"旧归因已证伪），
 	 * 但 spec 允许驱动延迟解释，生命周期须覆盖运行期。
@@ -51,7 +61,17 @@ export class SamplerLibrary {
 		info.addressModeU = vk::SamplerAddressMode::eRepeat;
 		info.addressModeV = vk::SamplerAddressMode::eRepeat;
 		info.addressModeW = vk::SamplerAddressMode::eClampToEdge;
-		info.anisotropyEnable = false;  // Bool32 隐转（rlvk 不导出 vk::False 常量）
+		// 各向异性（理由见本函数头注释）：开关 = core 可选特性探测位（createDevice 已按
+		// 同一探测位 enable），上限显式夹到物理 limits.maxSamplerAnisotropy 以内
+		const bool anisotropy = device.getOptionalFeatures().samplerAnisotropy;
+		const float deviceMaxAnisotropy
+			= device.getPhysicalDevice().getProperties().limits.maxSamplerAnisotropy;
+		info.anisotropyEnable = anisotropy;  // Bool32 隐转（rlvk 不导出 vk::False 常量）
+		if (anisotropy)
+			info.maxAnisotropy = std::min(16.0f, deviceMaxAnisotropy);
+		if (auto logger = RLLogger::getInstance())
+			logger->info("Shared sampler: anisotropyEnable={} maxAnisotropy={} (device maxSamplerAnisotropy={})",
+				anisotropy, info.maxAnisotropy, deviceMaxAnisotropy);
 		info.compareEnable = false;  // Bool32 隐转（rlvk 不导出 vk::False 常量）
 		info.minLod = 0.0f;
 		info.maxLod = 20.0f;

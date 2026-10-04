@@ -348,6 +348,11 @@ export class DeviceContext {
 		}
 		featuresChain.get<RGL::FeatureChainTail>().pNext = optHead;
 
+		// core 可选特性（与上面 optional 扩展结构的条件链接不同：VkPhysicalDeviceFeatures2
+		// 本身就是 required 链头，无需挂链，按探测结果直接置位）：不支持 = 恒 FALSE，
+		// 消费侧按 getOptionalFeatures() 降级（samplerAnisotropy → SamplerLibrary 不开 AF）。
+		if (optionalFeatures.samplerAnisotropy)
+			featuresChain.get<vk::PhysicalDeviceFeatures2>().features.samplerAnisotropy = VK_TRUE;
 
 		vk::DeviceCreateInfo deviceCreateInfo{};
 		deviceCreateInfo.setPNext(&featuresChain.get<vk::PhysicalDeviceFeatures2>());
@@ -385,6 +390,8 @@ export class DeviceContext {
 			}
 			logger->info("Device optional features: depthClipEnable={}",
 				optionalFeatures.depthClipEnable);
+			logger->info("Device optional features: samplerAnisotropy={} (core 位，命中则共享 sampler 开 AF)",
+				optionalFeatures.samplerAnisotropy);
 			logger->info("Device optional features: robustBufferAccess2={} nullDescriptor={}",
 				optionalFeatures.robustBufferAccess2, optionalFeatures.nullDescriptor);
 			logger->info("Device optional ext: calibratedTimestamps={} (Phase 9.2 GPU 时间戳)",

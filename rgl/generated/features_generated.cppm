@@ -21,8 +21,10 @@ export using FeatureChain = vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::
 export using FeatureChainTail = vk::PhysicalDeviceDeviceGeneratedCommandsFeaturesEXT;
 
 // 可选 feature 支持位：queryOptionalFeatures 探测后填。optional_features = 扩展可用
-// 且 feature 置位；optional_extensions = 无 feature 结构的纯扩展位（仅探测扩展可用性）。
+// 且 feature 置位（extension = null 的条目为 core 可选特性，无扩展门）；
+// optional_extensions = 无 feature 结构的纯扩展位（仅探测扩展可用性）。
 export struct OptionalFeatureSupport {
+    bool samplerAnisotropy = false;
     bool depthClipEnable = false;
     bool conservativeRasterizationDynamic = false;
     bool depthClipBase = false;
@@ -44,9 +46,13 @@ namespace {
     }
 }
 
-// 探测设备对各 optional feature 的支持（扩展可用 且 feature 字段置位）。
+// 探测设备对各 optional feature 的支持。两类条目：extension 非 null = 扩展特性（扩展可用
+// 且 feature 字段置位）；extension = null = core 可选特性（VkPhysicalDeviceFeatures 里的
+// core 位，无扩展门，直查 VkPhysicalDeviceFeatures2——vk_type 必须是 Features2 本身，
+// 本分支不使用 vk_type，勿与 required 链的 Features2 条目混用语义）。
 export OptionalFeatureSupport queryOptionalFeatures(const vk::raii::PhysicalDevice& device) {
     OptionalFeatureSupport s;
+    s.samplerAnisotropy = device.getFeatures2().features.samplerAnisotropy != 0;  // 零参重载 = 纯 core 位
     if (extensionAvailable(device, VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME)) {
         auto f_depthClipEnable = device.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT>();
         s.depthClipEnable = f_depthClipEnable.get<vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT>().extendedDynamicState3DepthClipEnable != 0;
