@@ -6,6 +6,17 @@
 
 ## §1 结论速览
 
+> **📊 基线已重测（2026-10-04，批 9.5 顺带；下表 312/626/1252/2.3s 是 2026-09-28 那次
+> forward + picking 临时开的运行，已过期）**：现行配置（deferred + 4 级阴影 + IZB + AO）实测
+> **376 条目 / 376 pipelines / 752 句柄 / 4358 mappings / 纯 `vkCreateShadersEXT` 1.13s
+> （3.01 ms/条）/ 30 顶点块**。基线现由 `logStartupBaseline()` **每次启动自动打日志**
+> （`shader_object baseline: registryEntries=… handles=… mappings=… createTotal=…`），
+> 不必再靠翻旧日志。⚠ **两个数不可直接比**：旧 2.3s 是**日志时间戳差（含 SPV 读盘）**，
+> 新 1.13s 是纯创建调用；条目 312→376 的增量来自此后新增的 TAA(binding 4-8) 与
+> EVSSM(15/16) 相关条目。**"条目爆炸"这条债的痛点（启动时间）实测比文档记载的轻**——
+> 但 376 条目 / 752 句柄 / 752 DGC 槽的结构性成本仍在，根因（§4）未变。
+> 全文 → `调试历史.md` 2026-10-04、`docs/还债总账.md` 债-04/债-23。
+
 当前场景（`models/bistro_exterior.glb`，1591 primitive / 132 材质 / 395 图片）的管线表：
 
 | 项 | 数量 | 来源 |

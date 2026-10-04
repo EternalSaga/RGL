@@ -372,6 +372,20 @@ Phase 9 的原始问题"CPU-bound 还是 GPU-bound"就此收口：**CPU 侧**。
 归因边界须写明：`drawFrame` 内部未插桩，cull 编舞的 CPU 成本落在结论 4 的未归因段里；
 但"延后一帧读回"并不减少 CPU 总工作量，而 CPU 总量本身已是瓶颈 → 无收益，否决。
 
+> **🔴 本结论在现行配置下机制性失效（2026-10-04 批 9.5 插桩后实测推翻，见 `调试历史.md`）**：
+> ① **判据里的"CPU `fenceWait` 5 µs"是错的那把 fence**——它是 `FrameSession::beginFrame` 的
+> `fenceWait`（`frame_session_impl.cppm:94`，2026-10-04 实测 0.006ms = 6µs，与当年 5µs 同量级同
+> 名同点位），**cull 自己的 `waitForFences` 当时根本没有 zone**（`cull_driver_impl.cppm:85-86`）。
+> 现在给它单独成段：**`cull.fenceWait` = 11.047 ms = `cpu.record` 的 41.2%**，占 `drawFrame.cull`
+> 的 99.1%（其余三段 record/submit/readback 合计 0.096ms）。**量级差两千倍。**
+> ② 否决理由"不减少 CPU 总工作量"**用错了判据**——这次等待是 **stall 不是 work**：cull CB 排在
+> 上一帧主 CB 之后 ⟹ 该等待 = CPU 等 GPU 排空上一帧（实测 11.05ms 与 `gpu.frame` 10.89ms 同阶），
+> 它把 CPU 与 GPU 强制串行，于是 `frame ≈ cpu.record + gpu.frame` 而不是 `max(...)`。
+> 去掉它 cpu.record ≈ 15.7ms（仍 > gpu.frame ⟹ 仍 CPU-bound），但 frame 有望从 28.6ms 降到 ~16ms。
+> ③ 本结论**不是永久否决**，重审前提是"读回延后一帧"会改渲染语义（用上一帧可见集）并破
+> BIT-IDENTICAL 重放契约 ⟹ 属渲染改动，超出批 9.5 观测范围，**未动**。备选路（同帧语义不变）：
+> 把 cull CB 提到主 CB **之前**提交，能否解串行**未验证**。→ 债-30（`docs/还债总账.md`）
+
 **结论 3｜⑤ 帧率上限 / present mode 可配置化：当前不需要**。两条独立证据：① 单实例下
 eImmediate 与 FIFO 的帧墙钟/IPD 分布在噪声内重合（avg 7.10/7.10，p50 6.91/6.91）；
 ② 两模式 `drop` 计数均为 **0**，即没有 present 拿不到像素 stage 时间戳。根因 = CPU-bound
@@ -388,6 +402,23 @@ Phase 10 阴影若把成本推向 GPU 侧、使 `gpu.frame` 反超大过 `cpu.re
 SlotResolver / executePassDraws / cull 编舞 / descriptor heap 写）。故 Phase 10 之前若要提
 帧率，第一步是往 `drawFrame` 内部补子 zone（纯插桩、零渲染改动），而不是先动 GPU 侧或先动
 cull。此项列为**批 9.5（可选，插桩-only）**。
+
+> **勘误 + 清偿（2026-10-04 批 9.5 已做，本结论的"不可归因"已不成立）**：
+> ① **口径错一处**：`renderlist`（0.07ms，2026-10-04 实测 0.121ms）是帧循环 system 循环里的
+> **兄弟段**（`ecs_impl.cppm:685`），不是 `drawFrame` 子段。真实子段更少 ⟹ 未归因不是"~93%"
+> 而是 **95.6%**。同类：`taa` zone 也是 system 兄弟段，**不是 pass**（deferred 图 8 个 pass =
+> shadow/shadow1/shadow2/shadow3/geometry/light/ao/tonemap）。
+> ② **批 9.5 已落地**：`drawFrame` 内 23 个子段（含逐 pass CPU zone 复用 `pass.name` 零分配、
+> cull 编舞拆 record/submit/fenceWait/readback 四段）+ `draw.count`/`vkcmd.count` 计数器
+> （`CounterRecord` 机制复用，零新机制）。**未归因 95.6% → 0.02%**（实测 Σ 子段 26.788 vs
+> drawFrame 26.793ms）。观察者效应 +0.053ms（+0.20%），profiler 关时交付逐位不变（sha256 全等）。
+> ③ **归因后的结论与"录制慢"这个直觉相反**：现行配置 cpu.record 26.79ms 里 **41.2% 是
+> `cull.fenceWait` 这个 stall**（见结论 2 勘误），**57.1% 是 8 个 pass 的录制**（其中 4 级阴影
+> 10.10ms = 37.7%），而"命令条数本身"没那么重要——实测 `draw.count = 6942`、`vkcmd.count = 21035`
+> （min=max 完全确定），**比调研的估算 9500/28000 分别低 37%/33%**。配置轴 A/B：关阴影 →
+> draw 1574 / cmd 4912 / cpu.record 7.94ms（**4 级阴影独占 5368 draws、16123 条命令 77%、
+> 19.06ms CPU 71%**）；IZB mask 重放 = 341 draws，恰等于 shadow0 的隐含 draw 数（印证"重放
+> shadow0 全量"）。全文 → `调试历史.md` 2026-10-04、`docs/还债总账.md` 债-01/02/20。
 
 **结论 5｜给 Phase 10 阴影的基线数值**（= `next_roadmap.md` 里"X 由 Phase 9 profiler 定基线"
 的答案）：GPU 帧跨度 **2.98 ms**（其中 `opaque` 2.92 ms = 98%，其余 pass 合计 <0.1 ms），

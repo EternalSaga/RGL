@@ -235,6 +235,7 @@ slangc（`cmake/SlangFetch.cmake` FetchContent pin v2026.16 + sha256；Windows �
 > 每篇文档头部带状态（`现行`/`历史`/`调研`）。现状权威 = 本文件；下一步路由 → 各 phase 计划文件（当前 `docs/phase13_plan.md`；测试体系账本仍看 `docs/phase12_plan.md`）。
 > 本节与 `docs/` 由 source_checks **双向对账**（docs 漏索引 / 本节悬空指针即警告，规则 `agents_doc_index_checks`）——新建 docs 不在此挂号会被构建点名。
 
+- `docs/还债总账.md` — **全项目技术债唯一台账（现行，2026-10-04 立）**：债-00…债-29 逐条带出处/严重度/**测量状态**/归属批次 + §3 已否决清单（防反复重提）+ §5 主 agent 亲验记录。**主轴 = 先观测不动渲染**（拍板理由：本项目对自己现在的样子没有数）。勾账三态 = 结案/否决/降级，不许"看过一眼就算完"
 - `docs/next_roadmap.md` — **路线图（历史）**：Phase 0–7 结论存档（Phase 8+ 执行记录见各 `phase*_plan.md`；下一步路由 → 当前 `docs/phase13_plan.md`）
 - `docs/技术概念.md` — 核心 Vulkan 模式、设计决策、§构建（Windows 前置与 vcpkg）/ §模块表 / §构建检查工具机制 / §核心运行时模块表（深版）/ §RPC 调试通道（Phase 10b，端点速查）/ §main 启动流（完整版）
 - `docs/调试历史.md` — 问题修复时间线（只增不改，争议结论以此为准）
