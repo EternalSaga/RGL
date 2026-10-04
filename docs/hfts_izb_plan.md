@@ -386,10 +386,17 @@ height field 地形自影轴在本项目建筑场景基本无用，而 EVSSM 的
 
   | pass | GPU (ms) | CPU (ms) | 备注 |
   |---|---|---|---|
-  | z-prepass（forward） | 待填 | 待填 | deferred 无此项 |
-  | IZB 创建（图外 dispatch） | 待填 | 待填 | 含 bounds + priming |
-  | 光空间保守光栅 + mask | 待填 | 待填 | 主成本预期在这 |
-  | 合计 vs 现状 CSM 7.10 ms | 待填 | — | — |
+  | z-prepass（forward） | **0.000** | **0.000** | **实测 = 零成本**：`izbPreFrame` 判 deferred 才构造 ⟹ forward 下 `IzbShadow` 恒空、零 dispatch。gate_lint R-02 如期 error（但 rc=0 不阻止启动） |
+  | IZB 创建（图外 dispatch） | **+0.098** | **+0.009** | 含 bounds + priming。分离实验口径：`shadow_pass=off` 时 mask 段空 ⟹ 增量只剩 create+prime |
+  | 光空间保守光栅 + mask | **+1.478** | **+0.699** | **主成本确实在这**（占 IZB 总增量 94%）；重放 shadow0 段 = **341 draws**（= shadow0 全量，独立印证"mask 重放 shadow0"） |
+  | 合计 vs 现状 CSM 7.10 ms | **+1.576**（light zone 内）/ Δgpu.frame **+1.64** | 净录制 **+0.993** | 本机 AMD 8060S / Mesa 26.2.3、1280×720 headless、bistro、150 帧窗。⚠ `ΔdrawFrame` 是 +2.70，**多出的 +1.71 是 `cull.fenceWait` 反压不是 IZB 自身成本**（见 `调试历史.md` 债-30 段） |
+
+  > **填表记录（2026-10-04）**：四行"待填"由本轮实测清偿（worker 跑分离实验 + 主 agent 独立
+  > 跑配置轴复核：izb on/off → draw 6942/6601、gpu.frame 10.94/9.30、cpu.record 27.03/24.46，
+  > 逐项吻合）。**IZB 显存增量 +46.51 MiB**（`vma[first_frame]` 新测点；`vma[startup]` 量不到，
+  > 因 `IzbShadow` 首帧懒构造）。`izb_grid` 扫 256/512/1024/2048 **非单调**（512 与 1024 相近、
+  > 256 最差），且 draw/vkcmd 完全不随 grid 变 ⟹ 差异是 GPU 侧执行噪声，**不构成调参结论**。
+  > 全文 → `调试历史.md` 2026-10-04、`docs/还债总账.md` 债-05。
 
 - **阶段 2 定案候选口径**：① 若 IZB 定位**替换** CSM：总成本 ≤ 现状 7.10 ms；
   ② 若定位**叠加**：增量 ≤ 实测可接受值。口径在阶段 2 实测后拍板并记录于此，

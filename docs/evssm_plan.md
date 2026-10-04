@@ -188,3 +188,42 @@ AGENTS 已定「机器不著书」纪律）；Raphael/NVIDIA 跨机复测仍列�
   min→max 1 红）；`just test` 150 全过。
 - **CPU 录制增量未测**：EVSSM sandwich = 8 dispatch/帧（1 moments + 7 mip），
   本项目 CPU-bound——转正裁决前跑 profiler 对比（frame/record zone 增量）。
+
+## 6.2 成本与画质实测（2026-10-04 清偿 §6.1 两条"未测"；本机 8060S STRIX_HALO / Mesa 26.2.3）
+
+**成本**（deferred + 4 级阴影 + IZB，1280×720 headless，bistro，150 帧窗；主 agent 独立跑复核）：
+
+| 项 | CSM（现行默认） | + EVSSM | 增量 |
+|---|---|---|---|
+| `gpu.frame` | 10.94 ms | 11.37 ms | **+0.43 ms** |
+| `cpu.record` | 27.03 ms | 27.25 ms | **+0.22 ms**（§6.1 欠的"录制增量"这条到此清偿） |
+| `draw.count` / `vkcmd.count` | 6942 / 21035 | 6942 / 21035 | **零增量**（sandwich 是图外 compute，不减 draw） |
+| 显存（`vma[first_frame]`） | 2972.66 MiB | 3015.35 MiB | **+42.69 MiB** |
+
+> **⚠️ 勘误（本文件 :173）**：显存账原记"≈ **44.7 MB**"，实测 **42.69 MiB**，与闭式解
+> `2048² × 8B × 4/3 = 42.67 MiB` 吻合到块粒度（42.69）。旧值把 mip 链系数算错（32 MiB × 4/3
+> = 42.67 不是 44.7）。另记一条**观测面教训**：这个数此前**无法从日志实测**——`logMemoryStats`
+> 只在 startup 调用，而 `EvssmShadow` 是**首帧懒构造**（`evssmPreFrame`，`vkrenderer_passrec.cppm:595`）
+> ⟹ `vma[startup]` 恒不含它（实测开/关 `shadow_evssm` 的 startup 统计**逐字节相同**）。
+> 已补 `vma[first_frame]` 测点（`Renderer::logFirstFrameMemory`）。**任何"懒构造资源"的显存
+> 都不能拿 startup 统计当数**。
+
+**画质（本轮最重要、且与预期相反的一条）**：EVSSM 在现行实现下**没有把阴影变软，而是把阴影变弱**。
+两条互相独立的判据（参照 = `shadow_pass=false`，izb off 隔离滤波轴）：
+
+| 变体 | 影覆盖（变暗 >8 LSB） | 平均变暗 | 过渡带 / 深本影 比 |
+|---|---|---|---|
+| CSM（现行） | **8.70%** | 66.94 LSB | **0.521** |
+| PCSS | 7.06% | 80.05 LSB | 0.212 |
+| EVSSM | **6.76%** | 82.73 LSB | **0.163** |
+
+「带/核比」= 过渡带像素 / 深本影像元，**越小 = 边缘越硬**。EVSSM 该值**低于 CSM 3.2 倍**
+⟹ 它的边缘比 CSM **更硬**，同时影覆盖**少 22%**。即：**EVSSM 卖的那一件事（远场软影）没交付，
+代价是阴影面积缩水**。（worker 的独立判据「半影宽度 / 本影占比」同向：本影占比反升、
+半影宽度 CSM 反而最宽。）
+
+**这条不构成裁决**（转正与否是用户 + 主 agent 的画质决策，且顶在 2026-09-29 的拍板上），
+但它把 §6.1 之后"EVSSM 转正"的**举证责任反转**了：在解释清楚"为什么远场软影反而更硬"
+（候选：矩指数 5.5 / mip 搜索 lod 选择 / 消费端 `shadow.slang:313` 的 `EVSSM_SOFT` 分支实际退化）
+之前，**数字不支持转正，也不支持"门后当备选"**。→ `docs/还债总账.md` 债-17。
+
