@@ -1,0 +1,5 @@
+{
+    "console_level": "info",
+    "file_level":"debug",
+    "log_file":"logs/gllog.txt"
+}
