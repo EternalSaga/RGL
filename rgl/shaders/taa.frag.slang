@@ -32,6 +32,21 @@
 //   · 历史无双线性深度，遮挡边缘的 disocclusion 靠颜色 AABB 拒绝（无 motion-vector
 //     dilation），边缘允许 1 帧量级的残影；
 //   · AO 施加在 tonemap（本 pass 之后）⇒ AO 噪声不被时域滤波（计划书设计边界）。
+//
+// ── 本批实测**否决**的两条候选（批 13.1e，别再照抄一遍）──
+//   症状「box5 邻域盒退化 ⟹ clipToAabb 恒返回 centroid ⟹ 固定 5 抽头空间糊 + 时域零累积」
+//   是真的（机制：clipToAabb 的 tMax 对三通道取 min，单通道 mn==mx 就把整条射线钉回 t=0），
+//   但两条修法都**测不出收益**，故都不进主干：
+//     (a) extent = max(extent, K·max(center, ε))（UE4 式相对下限），K ∈ {0.02,0.05,0.1,0.2,0.4}
+//         + ε ∈ {1e-3,3e-3}；(b) 盒退化时跳过裁剪（全通道判据 / 任一通道判据，thr ∈ {1e-4,1e-3,1e-2}）。
+//   2×2 因子实验（交付配置 + 用户机位，js=0 恒等式 mad / 逐像素最大 / 白屋顶区带号差 / 闪烁抑制比）：
+//     取值域闸门旧(saturate) × {盒原样, 盒修法(b')} = 1.68808 / 1.68807，max 37 / 37，−18.506 / −18.506
+//     取值域闸门新(只夹下界) × {盒原样, 盒修法(b')} = 0.02257 / 0.02259，max 3 / 3，−0.014 / −0.014
+//   ⟹ **恒等式在 js=0 的稳态与裁剪算子无关**（收敛点由「历史怎么被夹」决定，不由「历史怎么被裁」
+//   决定），盒的两条修法在压暗区**逐位不改**。而取值域闸门一修，退化率自己塌了：任一通道退化
+//   11.299% → 1.881%、三通道全退化 7.749% → 0.010%、clip 塌回 centroid 9.799% → 0.381%
+//   （mode 9 诊断图，js=1 同相位 17 帧）。剩下的 0.38% 落在真平坦区——糊一个平坦区还是那个平坦值，
+//   所以给它加盒下限是**只付风险不拿收益**（盒变宽 = 鬼影保护变松）。诊断开关已随定案删除。
 
 import scene;  // sceneData buffer（binding 3：@64 invViewProj + TAA 尾区 @722080 起）
 
@@ -75,10 +90,28 @@ float3 worldFromDepth(float2 uv, float depth)
 
 // ── Reinhard 域（AABB 与裁剪的工作空间；Filament taa.mat "Reinhard" 分支）──
 // x/(1+x) 把 [0,∞) 压进 [0,1)：HDR 高亮不再支配 AABB 体积；逆变换 x/(1−x) 前先钳回
-// 定义域。负通道（理论不存在于本管线成片）先 saturate——裁剪空间里非负是解线段
-// 参数法稳定性的前提。
+// 定义域。进本域之前的取值域闸门见下面 `clampHdr`——**只夹下界**（负通道理论不存在于
+// 本管线成片，但 CR 负瓣会造出来；裁剪空间里非负是解线段参数法稳定性的前提），
+// **绝不夹上界**（上界 = 把 HDR 亮部顶平，见 clampHdr 头注释的实测全案）。
 float3 toReinhard(float3 x) { return x / (1.0 + x); }
 float3 fromReinhard(float3 x) { return x / (1.0 - min(x, 0.9999)); }
+
+// ── 进 Reinhard 域之前的取值域闸门 ──
+// ⚠ **只准夹下界，不准夹上界**（批 13.1e 实测根因，2026-10-04）。本 pass 在 tonemap
+// **之前**，colorTex 与历史都是线性 HDR，通道值 ≫ 1 是常态（用户机位的白屋顶实测到 3+）。
+// 写成 saturate() 就把所有 HDR 亮部**顶平到 1.0**，于是时域不动点从 X = cur 变成
+//     X = (1−α)·1.0 + α·cur   （α = feedback）
+// —— 亮部被系统性压暗。实测（交付配置 configs/*.lua 原样 + 报障机位，js=0，64 帧收敛）：
+// 白屋顶 8.83% 像素 mean Δ = **−18.5 LSB/255**（最大 −37），而该区域**之外** mean|Δ| 只有
+// 0.059；fb=1（α=1 ⟹ 不动点 = cur）时压暗塌回 −2.4，fb=0.12 时 −18.5 —— 与上式逐条吻合。
+// 判据读数：恒等式 mad 1.688 → **0.0226**、逐像素最大 37 → **3**、dev≥2 像素 10.373% →
+// **0.0033%**（imgqa `temporal-identity`，交付配置 + 用户机位）。
+// 为什么 Reinhard 不需要上界：x/(1+x) 的定义域本来就是 [0,∞) ⟹ 值域 [0,1)，顶平恰好
+// 把它要保的高光信息全削掉。副作用还有第二条：顶平区 5 抽头全 = 1 ⟹ **邻域盒退化**，
+// 于是「盒塌回 centroid」看着像独立缺陷；实测修掉本闸门后塌缩率 9.799% → **0.381%**
+// （剩下的落在真平坦区，糊了也看不出来）。
+// 下界仍要夹：CR 有负瓣，负值进 x/(1+x) 会翻越 x=−1 奇点，且 clipToAabb 解线段要求非负。
+float3 clampHdr(float3 x) { return max(x, float3(0.0, 0.0, 0.0)); }
 
 // ── Lottes 线段裁剪（taa.mat clipAabBoxFromAabb 同款）──
 // 把点 p 沿线段 c→p 收进 AABB [mn,mx]：参数化 p(t) = c + t·(p−c)，取与盒的**首个
@@ -128,7 +161,12 @@ float3 sampleHistoryCatmullRom(float2 uv)
     for (int i = 0; i < 4; ++i)
     {
         const float2 a = t + 1.0 - float2(i);       // 到抽头 b−1+i 的有向距离 ∈ (−2, 2]
-        const float2 m = abs(a), a2 = a * a, a3 = a2 * a;
+        // ⚠ **核关于 a 是偶函数**（只依赖到纹素中心的距离），故三次项必须取 |a|：a3 = a²·|a|。
+        // 写成带符号的 a³ 会让 t=0 的权重从 (0,1,0,0) 变成 (0,1,−3,8)（Σ=6）——**恒等性破产**、
+        // 2D 直流增益 ≈36×，当时历史再经 saturate 顶到上界（取值域闸门已于批 13.1e 改成只夹
+        // 下界，见 clampHdr）⟹ 被 AABB 判成越界（phase13 §1.8）。
+        // 恒等性正是 imgqa 判据 `temporal-identity` 的算术基础（零抖动 ⇒ 输出必须逐字节 = R）。
+        const float2 m = abs(a), a2 = a * a, a3 = a2 * m;
         // Catmull-Rom 核 k(m)：m≤1 → 1.5m³−2.5m²+1；1<m<2 → −0.5m³+2.5m²−4m+2
         wx[i] = select(m.x > 1.0, -0.5 * a3.x + 2.5 * a2.x - 4.0 * m.x + 2.0,
                                   1.5 * a3.x - 2.5 * a2.x + 1.0);
@@ -160,6 +198,12 @@ float4 main(TaaInput input) : SV_Target
     if (params.y < 0.5)
         return float4(cur, 1.0);
 
+    // ── 邻域 AABB（box5 十字：中心 + 上下左右，Reinhard 域）──
+    // ⚠ texel 必须先于出画判据取到：出画判据要**半个纹容差**（见下）。
+    uint pxW, pxH, mLvl;
+    colorTex.GetDimensions(0u, pxW, pxH, mLvl);
+    const float2 texel = 1.0 / float2(float(pxW), float(pxH));
+
     // ── 重投影：本帧像素 → 上一帧屏幕 uv ──
     const float depth = depthTex.Load(int3(input.position.xy, 0)).r;
     float3 world = worldFromDepth(input.uv, depth);
@@ -172,18 +216,21 @@ float4 main(TaaInput input) : SV_Target
     const float2 prevNdc = prevClip.xy / prevClip.w;
     // ndc → uv 与 worldFromDepth 的 y 翻转互逆：uv.y = (1 − ndc.y)/2
     const float2 prevUv = float2(prevNdc.x * 0.5 + 0.5, (1.0 - prevNdc.y) * 0.5);
-    if (any(prevUv < float2(0.0, 0.0)) || any(prevUv > float2(1.0, 1.0)))
+    // 出画判据带**半个纹容差**：uv 的合法域是纹素中心 [0.5·texel, 1 − 0.5·texel]，
+    // 而判据原来写的是 [0,1] —— 最外一圈的纹素中心本来就"出界"半个纹，于是**整列 x=1279
+    // 或整行 y=0** 被误拒（mode 8 诊断图实测，交付配置 + 用户机位 js=1：旧判据逐帧拒
+    // 0…2199 像素、17 帧均值 0.086%，命中集合随抖动相位在最外一行/最外一列之间切换；
+    // 半纹判据下同一序列 **逐帧恒为 0**）。半纹 = 「重投影仍落在最外圈纹素之内」的最紧
+    // 正确边界；再宽就会把真正的出画（clamp 边缘拿错像素）放进来。
+    const float2 outTol = 0.5 * texel;
+    if (any(prevUv < -outTol) || any(prevUv > 1.0 + outTol))
         return float4(cur, 1.0);  // 出画（本帧视锥外）：clamp 边缘 = 拿错像素，拒绝
 
-    // ── 邻域 AABB（box5 十字：中心 + 上下左右，Reinhard 域）──
-    uint pxW, pxH, mLvl;
-    colorTex.GetDimensions(0u, pxW, pxH, mLvl);
-    const float2 texel = 1.0 / float2(float(pxW), float(pxH));
     float3 mn = 1.0, mx = 0.0, centroid = 0.0;
     const int2 offs[5] = { {0, 0}, {1, 0}, {-1, 0}, {0, 1}, {0, -1} };
     for (int i = 0; i < 5; ++i)
     {
-        const float3 t = saturate(colorTex.SampleLevel(linearSampler,
+        const float3 t = clampHdr(colorTex.SampleLevel(linearSampler,
             input.uv + float2(offs[i]) * texel, 0.0).rgb);
         const float3 r = toReinhard(t);
         mn = min(mn, r);
@@ -200,7 +247,9 @@ float4 main(TaaInput input) : SV_Target
     // 全图直方图只多出**一个**混合级（历史只渗进 12%，永不继续累积）。
     // 推论：f=0 ⇒ 输出 = 裁剪后的**历史**（完全丢本帧的退化反馈环），不是「无滤波」；
     // 要做「只抖不滤」的消融请用 f=1（imgqa temporal 的 S1 组）。
-    const float3 hist = saturate(sampleHistoryCatmullRom(prevUv).rgb);
-    const float3 clipped = fromReinhard(clipToAabb(centroid, toReinhard(hist), mn, mx));
+    const float3 hist = clampHdr(sampleHistoryCatmullRom(prevUv).rgb);
+    const float3 histR = toReinhard(hist);
+
+    const float3 clipped = fromReinhard(clipToAabb(centroid, histR, mn, mx));
     return float4(lerp(clipped, cur, params.x), 1.0);
 }
