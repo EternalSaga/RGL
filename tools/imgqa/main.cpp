@@ -632,6 +632,9 @@ void printUsage()
         "静止机位 + jitter，连续帧突发逐帧差（批 12.6 T4）\n"
         "  taa-swim [--pairs 32] [--warm 32] [--variant forward]  真实场景逐帧差是否=整幅亚像素"
         "平移（游动）；含基空间门（批 13.2 T5/T6）与量具阳性锚点（批 13.1b）\n"
+        "  ao-noise [--glb cornell_box.glb] [--camera front] [--variant deferred] [--strength 0.5]"
+        " [--radius 40] [--pairs 16] [--no-temporal] [--bistro]  SSAO 噪声四组量测：闭式契约区偏离 / 分布 /"
+        "亚像素爬行 / TAA 时域（同进程 /param A/B）\n"
         "  note \"事后真相\"                             回填最后一条调用记录（晋升凭据）\n");
 }
 
@@ -703,6 +706,13 @@ int main(int argc, char** argv)
         if (cmd == "taa-swim")
             return cmdTaaSwim(std::stoi(P.get(args, "--pairs", "32")),
                 std::stoi(P.get(args, "--warm", "32")), P.get(args, "--variant", ""));
+        if (cmd == "ao-noise")
+            return cmdAoNoise(P.get(args, "--glb", "cornell_box.glb"),
+                P.get(args, "--camera", "front"), P.get(args, "--variant", "deferred"),
+                std::stod(P.get(args, "--strength", "0.5")),
+                std::stoi(P.get(args, "--radius", "40")),
+                std::stoi(P.get(args, "--pairs", "16")), !P.has(args, "--no-temporal"),
+                P.has(args, "--bistro"));
         if (cmd == "note") {
             std::string text;
             for (size_t i = 1; i < args.size(); ++i)

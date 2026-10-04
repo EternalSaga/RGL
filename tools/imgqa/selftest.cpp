@@ -2,6 +2,7 @@
 // 「我以为的行为」一轮写出过 10 处，全部是错的）。闭式解锚点来源逐条注明。
 #include "imgqa.h"
 #include "aa_coverage.h"
+#include "ao_metrics.h"
 
 #include <algorithm>
 #include <cmath>
@@ -9,6 +10,8 @@
 #include <cstring>
 #include <fstream>
 #include <random>
+
+#include <opencv2/imgproc.hpp>
 
 namespace RGL::imgqa {
 
@@ -320,6 +323,181 @@ void testKeyValidation(Checker& c)
             && content.find("shadow_pass = false") != std::string::npos);
 }
 
+// ── AO 噪声判据的度量层（ao_metrics.cpp）─────────────────────────────────────────
+//
+// 每条断言的期望值都来自**闭式**（中值滤波的数学性质、集合论、整数几何计数），不来自实机
+// 截图——实机数字只能证明「与上次一样」，闭式才能证明「算子算的是我说的那个量」。
+// 每条都带**反向用例**（算子在应该无响应的地方必须无响应）与**变异红线**（我把实现改坏成
+// 哪种具体形态时，本用例会红）。
+void testAoMetrics(Checker& c)
+{
+    const cv::Size sz(64, 64);
+    const cv::Mat all = cv::Mat::ones(sz, CV_8UC1) * 255;
+
+    // ① 中值残差保线性斜坡（**主判据成立的前提**：区域里混进光滑梯度时 jitterRms 不受污染）。
+    //    闭式：5×5 窗内单调 ⟹ 中值 = 中心值 ⟹ 残差**恰为 0**。
+    {
+        cv::Mat ramp(sz.height, sz.width, CV_8UC1);
+        for (int y = 0; y < sz.height; ++y)
+            for (int x = 0; x < sz.width; ++x)
+                ramp.at<uint8_t>(y, x) = static_cast<uint8_t>(100 + x);  // +1/px
+        const RegionStat s = statRegion(ramp, all);
+        c.chk("AO 度量：线性斜坡的抖动 RMS 恰为 0（主判据不被梯度污染）", s.jitterRms == 0.0,
+            "jitterRms=" + std::to_string(s.jitterRms));
+        // 变异红线：把 medianBlur 换成 blur（均值）→ 斜坡的均值 ≠ 中心（端点处窗口被边界裁）
+        // 会出非零；换成 Laplacian 当抖动 → 直接红。
+    }
+    // ② 中值**完全抑制**单像素脉冲（闭式：25 个样本里 24 个是背景 ⟹ 中值 = 背景）。
+    //    这条钉的是「只有中值滤波能当抖动算子」：均值滤波会把脉冲摊成邻域残差。
+    {
+        cv::Mat m = cv::Mat::ones(sz, CV_8UC1) * 100;
+        m.at<uint8_t>(32, 32) = 200;
+        const RegionStat s = statRegion(m, all);
+        // 闭式：中值把脉冲从**平滑图**里完全去掉 ⟹ 残差只在脉冲本身 = 幅度 A ⟹
+        // RMS = A/√N = 100/√4096 = 1.5625（均值滤波会把脉冲摊到 25 个像素，RMS 不同）。
+        c.chk("AO 度量：单像素脉冲 → 残差 RMS = A/√N（中值而非均值，闭式）",
+            std::abs(s.jitterRms - 100.0 / std::sqrt(4096.0)) < 1e-9,
+            "jitterRms=" + std::to_string(s.jitterRms));
+        c.chk("AO 度量：同一脉冲的拉普拉斯有响应（两轴不同，缺一轴会瞎）", s.lapRms > 1.0,
+            "lapRms=" + std::to_string(s.lapRms));
+    }
+    // ③ 反向用例：逐位 255 的场（= strength 0 的附件）在**所有**噪声读数上必须是 0。
+    //    这是整条判据的零点（`ao.frag.slang:118` 的位级早退），它红了后面所有数字全部作废。
+    {
+        const RegionStat s = statRegion(all, all);
+        c.chk("AO 度量：平坦契约场的四个读数全为 0（零点）",
+            s.jitterRms == 0.0 && s.lapRms == 0.0 && s.fracBelowContract == 0.0 && s.sd == 0.0);
+        // 变异红线：`fracBelowContract` 的比较符从 `<` 写成 `<=` → 本用例立刻红（255 ≤ 255）。
+        const RegionStat h = statRegion(all, all, /*contract=*/-1.0);
+        c.chk("AO 度量：contract<0 时不统计契约偏离（底图分母走这条）", h.fracBelowContract == 0.0);
+    }
+    // ④ 契约偏离占比（闭式：一半像素 254 ⟹ 恰 0.5）。
+    {
+        cv::Mat m(sz.height, sz.width, CV_8UC1, cv::Scalar(255));
+        m(cv::Rect(0, 0, sz.width / 2, sz.height)).setTo(254);
+        const RegionStat s = statRegion(m, all);
+        c.chk("AO 度量：<255 占比 = 0.5（闭式）", std::abs(s.fracBelowContract - 0.5) < 1e-12,
+            std::to_string(s.fracBelowContract));
+    }
+    // ⑤ 字节域 A/B 的**恒定偏移**：grain 必须恰为 0、smooth 必须恰为偏移量。
+    //    闭式：median(常数) = 常数 ⟹ 残差 0。这条把「AO 把画面整体压暗」与「AO 加了颗粒」
+    //    分开的分解算子钉住——偏移是合法形状，颗粒才是噪声。
+    {
+        cv::Mat a(sz, CV_8UC3, cv::Scalar(100, 100, 100));
+        cv::Mat b(sz, CV_8UC3, cv::Scalar(95, 95, 95));
+        const ByteAB s = byteAbsDiff(a, b, all);
+        c.chk("AO 度量：恒定 5 LSB 偏移 → 颗粒项恰为 0（偏移不是噪声）", s.grainRms == 0.0,
+            "grain=" + std::to_string(s.grainRms));
+        c.chk("AO 度量：恒定偏移 → 渐变项 = 5、均值/最大 = 5",
+            std::abs(s.smoothRms - 5.0) < 1e-9 && s.mean == 5.0 && s.mx == 5.0,
+            "smooth=" + std::to_string(s.smoothRms) + " mean=" + std::to_string(s.mean)
+                + " mx=" + std::to_string(s.mx) + " changed=" + std::to_string(s.changed)
+                + " pixels=" + std::to_string(s.pixels));
+        const ByteAB r = byteAbsDiff(a, a, all);  // 反向：同一张图
+        c.chk("AO 度量：同一张图 → 全读数 0（反向用例）",
+            r.changed == 0 && r.mx == 0.0 && r.grainRms == 0.0);
+        // 变异红线：三通道若取**均值**而非最大值，暗通道会把 5 稀释；取 max 才对。
+    }
+    // ⑥ 三通道取**最大**且 16S 不饱和（闭式：+7/−9/0 → 9；反向 −250 方向也必须算出来）。
+    {
+        cv::Mat a(sz, CV_8UC3, cv::Scalar(200, 200, 200));
+        cv::Mat b(sz, CV_8UC3, cv::Scalar(193, 209, 200));  // B +7、G −9、R 0
+        c.chk("AO 度量：三通道最大 |Δ| = 9（含变暗方向，8U 饱和会读成 0）",
+            maxByteDiff(a, b, all) == 9.0, std::to_string(maxByteDiff(a, b, all)));
+        c.chk("AO 度量：同一张图的最大差 = 0（反向）", maxByteDiff(a, a, all) == 0.0);
+        // 变异红线：这里若用 `Mat::col(i)` 当第 i 通道 → Mat 缩成 64×1、按 64 列遍历越界，
+        // 本用例读到的是垃圾值（实测真机读出过 32523 这种 >255 的「字节差」）。
+    }
+    // ⑦ rmsDiff：恒定差 → 恰等于该差；mask 外的差异不得参与（闭式）。
+    {
+        cv::Mat a = cv::Mat::ones(sz, CV_8UC1) * 100;
+        cv::Mat b = cv::Mat::ones(sz, CV_8UC1) * 96;
+        c.chk("AO 度量：恒定差 4 → rmsDiff = 4（闭式）", std::abs(rmsDiff(a, b, all) - 4.0) < 1e-9,
+            std::to_string(rmsDiff(a, b, all)));
+        cv::Mat mask = cv::Mat::zeros(sz, CV_8UC1);
+        mask(cv::Rect(0, 0, sz.width, sz.height)).setTo(255);
+        b.setTo(100);  // mask 内改成无差
+        c.chk("AO 度量：mask 内的差为 0 → rmsDiff = 0（mask 外不参与）",
+            rmsDiff(a, b, mask) == 0.0);
+        cv::Mat three(sz, CV_8UC3, cv::Scalar(1, 2, 3));
+        bool threw = false;
+        try {
+            static_cast<void>(rmsDiff(three, three, all));
+        } catch (const cv::Exception&) {
+            threw = true;
+        }
+        c.chk("AO 度量：rmsDiff 收到 3 通道必须拒收（at<float> 静默读 ch0 是假绿源）", threw);
+    }
+    // ⑧ Jaccard（闭式：同集合 1、不相交 0、半重叠 |∩|/|∪| = 1/3）。
+    {
+        cv::Mat a = cv::Mat::zeros(sz, CV_8UC1), b = cv::Mat::zeros(sz, CV_8UC1);
+        a(cv::Rect(0, 0, 30, 64)).setTo(255);
+        b(cv::Rect(20, 0, 30, 64)).setTo(255);  // 交 10 列、并 50 列
+        c.chk("AO 度量：Jaccard 同集合 = 1", std::abs(jaccard(a, a, all) - 1.0) < 1e-12);
+        c.chk("AO 度量：Jaccard 半重叠 = 10/50（闭式）",
+            std::abs(jaccard(a, b, all) - 0.2) < 1e-12, std::to_string(jaccard(a, b, all)));
+        cv::Mat z = cv::Mat::zeros(sz, CV_8UC1);
+        c.chk("AO 度量：空并集 → 1（约定：无证据时不判「不重叠」）",
+            jaccard(z, z, all) == 1.0);
+    }
+    // ⑨ distToEdge 的类型是**判据的一部分**（CV_32F）。flatRegion 曾按 uint8_t 读它，
+    //    「离边界 > 40px」变成随机判据（实测契约区膨胀 2 倍、σ 从 1.3 涨到 10.9）。
+    {
+        cv::Mat ids = cv::Mat::zeros(100, 100, CV_32SC1);
+        ids(cv::Rect(30, 30, 41, 41)).setTo(1);
+        const cv::Mat dist = distToEdge(idEdges(ids));
+        c.chk("AO 度量：距离图是 CV_32F（按 8U 读就是随机判据——真实事故）",
+            dist.type() == CV_32FC1, "type=" + std::to_string(dist.type()));
+        // 整数几何闭式：41×41 的块，dist > 5 ⟹ 去掉 6 圈 ⟹ 29×29 = 841 像素。
+        const cv::Mat flat = flatRegion(ids, dist, 1, 5.0);
+        c.chk("AO 度量：契约区像素数 = 29²（整数几何闭式）",
+            cv::countNonZero(flat) == 29 * 29, std::to_string(cv::countNonZero(flat)));
+        c.chk("AO 度量：契约区不含背景（oid 过滤）",
+            cv::countNonZero(flatRegion(ids, dist, 2, 5.0)) == 0);
+        // 变异红线：把 flatRegion 改回逐行 `ptr<uint8_t>` 读 → 上面两条同时红（且第二条的
+        // 像素数会变成随机值）。这就是「区域定义不干净」最便宜的探测器。
+    }
+    // ⑩ 凹角接触环：只收「inner 且邻域贴着 outer」，且**必须**是 AND（闭式构造）。
+    {
+        cv::Mat ids = cv::Mat::zeros(100, 100, CV_32SC1);
+        ids(cv::Rect(0, 80, 100, 20)).setTo(1);   // 地面 = inner
+        ids(cv::Rect(40, 40, 20, 40)).setTo(2);   // 贴地方块 = outer
+        const cv::Mat ring = contactRing(ids, 1, {2}, 6);
+        const int n = cv::countNonZero(ring);
+        c.chk("AO 度量：接触环非空（方块脚两侧 + 正下方）", n > 0 && n < 20 * 100,
+            "n=" + std::to_string(n));
+        cv::Mat onlyInner;
+        cv::compare(ids, cv::Scalar(1), onlyInner, cv::CMP_EQ);
+        cv::Mat notInner;
+        cv::bitwise_and(ring, ~onlyInner, notInner);
+        c.chk("AO 度量：接触环 ⊆ inner（AND 写成 OR 就红——真实变异）",
+            cv::countNonZero(notInner) == 0);
+        // 反向：outer 挪到 grow 之外 → 环必须空。
+        cv::Mat far_ = ids.clone();
+        far_(cv::Rect(40, 40, 20, 40)).setTo(0);
+        far_(cv::Rect(40, 0, 20, 40)).setTo(2);  // 离地面 > 6 px
+        c.chk("AO 度量：outer 远离 grow → 环为空（反向用例）",
+            cv::countNonZero(contactRing(far_, 1, {2}, 6)) == 0);
+    }
+    // ⑪ 对齐算子 shiftX：符号约定 + 往返 + 边界补 0（爬行判据的方向全靠它）。
+    {
+        cv::Mat src = cv::Mat::zeros(10, 20, CV_8UC1);
+        src.at<uint8_t>(5, 4) = 255;
+        c.chk("AO 度量：shiftX(+3) 把标记搬到 x=7（符号约定）",
+            shiftX(src, 3).at<uint8_t>(5, 7) == 255 && shiftX(src, 3).at<uint8_t>(5, 4) == 0);
+        c.chk("AO 度量：shiftX(−3) 把标记搬到 x=1（反向符号）",
+            shiftX(src, -3).at<uint8_t>(5, 1) == 255);
+        const cv::Mat rt = shiftX(shiftX(src, 3), -3);
+        c.chk("AO 度量：+3 后 −3 逐位复原（往返；Rect 写反就红）",
+            cv::countNonZero(rt != src) == 0);
+        c.chk("AO 度量：dx=0 逐位相同（反向）", cv::countNonZero(shiftX(src, 0) != src) == 0);
+        cv::Mat edge = cv::Mat::zeros(10, 20, CV_8UC1);
+        edge.at<uint8_t>(5, 19) = 255;
+        c.chk("AO 度量：右移把边界标记推出画布（补 0，不绕回）",
+            shiftX(edge, 3).at<uint8_t>(5, 19) == 0);
+    }
+}
+
 }  // namespace
 
 int cmdSelftest()
@@ -333,6 +511,7 @@ int cmdSelftest()
     testRegistry(c);
     testTemporalDiff(c);
     testAaCoverage(c);
+    testAoMetrics(c);
     testKeyValidation(c);
     std::printf("%s：%d 条失败\n", c.bad ? "自检失败" : "自检通过", c.bad);
     return c.bad ? 1 : 0;

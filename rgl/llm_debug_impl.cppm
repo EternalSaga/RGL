@@ -141,6 +141,24 @@ void convRgba32Sfloat(const uint8_t* src, uint8_t* out, size_t px) {
 }
 
 /**
+ * R8_UNORM（ao 附件，Phase 11 批 11.4）→ RGBA8：单通道灰度**原字节**展开到 RGB，A 恒 255。
+ *
+ * 与颜色格式的根本差别：AO 是**数据不是颜色**——它已是 [0,1] 线性遮蔽量，没有 sRGB 编码
+ * 可解（过 `toSrgb` 会把 128 变成 188，读回再解一次又添取整误差），故一律 raw 直出。
+ * 观测方（tools/imgqa）要问“这个像素的 AO 字节是多少”，且判据要能分辨 12 样本螺旋的
+ * **离散台阶**（相邻台阶只差几个 LSB）⟹ 转换必须逐字节可逆。与 convR32Uint 同理：
+ * **数据格式一律 raw，不走 gamma**。
+ */
+void convR8Unorm(const uint8_t* src, uint8_t* out, size_t px) {
+	for (size_t i = 0; i < px; ++i) {
+		const uint8_t v = src[i];  // r8_unorm = 1 字节/像素
+		out[i * 4 + 0] = v;
+		out[i * 4 + 1] = v;
+		out[i * 4 + 2] = v;
+	}
+}
+
+/**
  * R32_UINT（object_id，Phase 12 批 12.2）→ RGBA8：raw u32 像素 id **无损**编进
  * RGB24（小端字节序直接取前 3 字节，alpha 恒 255），不做 gamma / clamp。
  *
@@ -163,7 +181,8 @@ void convR32Uint(const uint8_t* src, uint8_t* out, size_t px) {
  *（sdl3window selectFormat）+ G-buffer 词表 4 格式（albedo/metalRough 与
  * srgb/unorm 用例共用，normal rg16_snorm / position rgba32_sfloat 专用用例）+
  * object_id 的 r32_uint（批 12.2 QA 锚点源；**与 gbufRaw 无关**——id 是编码不是颜色，
- * 既不过 gamma 也不 clamp，见 convR32Uint）；
+ * 既不过 gamma 也不 clamp，见 convR32Uint）+ ao 附件的 r8_unorm（批 11.4 数据面，
+ * 同样 raw 直出，见 convR8Unorm）；
  * 表外 = 返回空（调用方报错，不静默出图）。逐格式转换见上方 conv* 辅助。
  * @param cap 本帧捕获产物（width/height/format/pixels 原格式行紧凑）
  * @param gbufRaw true = dump_gbuf 直读通道（线性 clamp，不做 sRGB 编码）
@@ -200,6 +219,9 @@ std::vector<uint8_t> toRgba8(const Renderer::FrameCapture& cap, bool gbufRaw) {
 			return out;
 		case vk::Format::eR32Uint:  // object_id（批 12.2 QA 锚点源）：raw id 无损编进 RGB24
 			convR32Uint(src, out.data(), px);
+			return out;
+		case vk::Format::eR8Unorm:  // ao 附件（批 11.4）：数据非颜色，raw 灰度展开（见 convR8Unorm）
+			convR8Unorm(src, out.data(), px);
 			return out;
 		default:
 			return {};

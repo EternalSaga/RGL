@@ -174,6 +174,20 @@ public:
         double fovDegrees = 60.0;
     };
     void setCamera(const Camera& cam);
+    /**
+     * 运行期改一个滑杆（POST /param）。
+     *
+     * 为什么判据必须有这根线：**跨进程 A/B 不是 A/B**。两次 `Engine` 是两次进程、两次
+     * shader 编译、两次驱动初始化，把它们的不同归因给被测开关，等于把「环境差异」当成
+     * 「被测项」。实测（ao-noise 首跑）：跨进程的 AO on/off 两张图在**契约区**里出现最大
+     * 41 LSB 的差，而 AO 场在该区最大只偏离契约 16 LSB（×strength 0.5 最多 8 LSB）——
+     * 多出来的那部分根本不是 AO。同进程内用 `/param` 翻强度，两张图之间**只隔一个 float**，
+     * 差值才是被测项。
+     * @param page 页名（如「渲染」；空 = 全页搜索）
+     * @param label 滑杆 label（真相源 = `rgl/generated/param_semantics_generated.cppm`）
+     * @param value 新值
+     */
+    void setParam(const std::string& page, const std::string& label, double value);
     /// 拍一张。attachment=nullptr = 后缓冲；否则具名附件（"object_id"）。返回 PNG 绝对路径。
     [[nodiscard]] std::string shot(const std::string& tag, const char* attachment = nullptr);
 
@@ -422,6 +436,30 @@ int cmdTemporal(int pairs, int warm, const std::string& variant, bool baseSpace 
 ///                数字会动 ⟹ 两态都要跑（门关 = 0.138 列的历史读数口径）。
 int cmdAaCoverage(const std::string& variant, int warm, double feedback,
     bool baseSpace = false);
+
+/// AO 噪声量测（Phase 13 观测任务：把「SSAO 到底噪不噪」变成有数字有图有判据）。
+///
+/// **闭式锚点（期望值出处独立于实现）**：AGENTS.md 已登记的契约「开阔地面 AO 恒 1.000」
+/// ——远离遮挡物的大平面上，depth-only SSAO 没有任何理由遮蔽（半径 0.5 m 内无遮挡候选，
+/// 且平面自遮蔽被 kDepthBias=0.03 挡掉）。AO 附件是 r8_unorm 的**可见度**，契约值即字节
+/// 255 ⟹ **契约区的偏离量就是噪声本身**，零容差、不需要基线图像。
+///
+/// 四组测量（编号与交付报告一致）：
+///   ① A/B 空间噪声：同机位 `ao.strength` 0 vs 0.5，平坦区偏离量 + 颗粒度（拉普拉斯 RMS）
+///   ② AO 场直方图 / 剖面：取值分布 + 穿过接触区的扫描线
+///   ③ 亚像素爬行：机位 yaw 整 1 像素（哈希只吃 SV_Position ⟹ 噪声贴屏幕不贴世界）
+///   ④ 时域：TAA 开态 `/shotburst` 连拍逐帧差，AO 0 vs 0.5 各一轮（平坦区 AO 关是**恰为 0**
+///      的地板，故 AO 开的读数无需比值即可归因）
+/// 外加掠射机位（候选根因 B3/B4 的角度判别：法线与核尺寸都来自屏幕空间导数）。
+///
+/// @param glb 程序化靶（默认 cornell_box.glb：纯色 + 无 TEXCOORD ⟹ 底图零空间高频）
+/// @param strength 被测 AO 强度（交付配置 = 0.5）
+/// @param radius 平坦区排除半径（像素）：距任何几何轮廓小于该值的像素，AO 有**合法**梯度，
+///               不得进契约区（阈值出处：AO 半径 0.5 m ÷ 该处米每像素 ≈ 31 px + 余量）
+/// @param pairs 时域组的相邻帧对数（向上对齐到抖动周期 16）
+/// @param doTemporal false = 跳过④（只跑静态三组，调试用）
+int cmdAoNoise(const std::string& glb, const std::string& camera, const std::string& variant,
+    double strength, int radius, int pairs, bool doTemporal, bool doBistro);
 
 /// 真实场景 TAA **游动**量测（批 13.1b，phase13 §1.6 末的未定案）。
 /// 不问「逐帧差大不大」（那条路已被 `screen-space-l1-frame-diff` 登记为反模式），

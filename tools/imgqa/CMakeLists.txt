@@ -11,6 +11,8 @@ find_package(Threads REQUIRED)
 add_executable(imgqa
     main.cpp
     analytic.cpp
+    ao_metrics.cpp
+    ao_noise.cpp
     engine.cpp
     image.cpp
     judge.cpp

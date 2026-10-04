@@ -23,15 +23,20 @@ namespace {
 
 /**
  * 捕获回读每像素字节数（仅可能出现的格式：swapchain 候选 4B/像素系 + A2B10G10R10=4B +
- * HDR FP16=8B + G-buffer 词表 rgba32_sfloat=16B + object_id 的 r32_uint=4B，
- * 其余 8bit×4/rg16×2 = 4B）。
+ * HDR FP16=8B + G-buffer 词表 rgba32_sfloat=16B + object_id 的 r32_uint=4B +
+ * ao 附件的 r8_unorm=1B，其余 8bit×4/rg16×2 = 4B）。
+ *
+ * ⚠ 漏 1B 分支不会崩、也不会报错——只会把 staging/`bytes` 按 4B 算多（拷贝本身按
+ * 格式的 texel 大小写紧，前 w×h 字节仍是对的），于是 `pixels` 尾部 3/4 是上一次捕获的
+ * 残留。今天没人读那段，但"bytes 撒谎"的诊断面迟早被下一个判据当真值读，故补全。
  * @param f 捕获格式（swapchain format 或 G-buffer / 具名附件 RT format）
- * @return 每像素字节数（4 / 8 / 16）
+ * @return 每像素字节数（1 / 4 / 8 / 16）
  */
 uint32_t captureBpp(vk::Format f) {
 	switch (f) {
 		case vk::Format::eR32G32B32A32Sfloat: return 16;
 		case vk::Format::eR16G16B16A16Sfloat: return 8;
+		case vk::Format::eR8Unorm: return 1;  // ao 附件（批 11.4）：单通道 8bit 数据
 		default: return 4;
 	}
 }

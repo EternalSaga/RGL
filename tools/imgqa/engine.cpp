@@ -484,6 +484,19 @@ void Engine::setCamera(const Camera& cam)
             + (res ? std::to_string(res->status) : "无响应"));
 }
 
+void Engine::setParam(const std::string& page, const std::string& label, double value)
+{
+    json body{{"label", label}, {"value", value}};
+    if (!page.empty())
+        body["page"] = page;
+    auto res = impl_->http->Post("/param", body.dump(), "application/json");
+    if (!res)
+        throw std::runtime_error("POST /param 无响应");
+    if (res->status != 200)
+        throw std::runtime_error("POST /param 失败 " + std::to_string(res->status) + " label="
+            + label + " page=" + page + ": " + res->body);
+}
+
 std::string Engine::shot(const std::string& tag, const char* attachment)
 {
     json body{{"file", "screenshots/imgqa_" + tag + ".png"}};
