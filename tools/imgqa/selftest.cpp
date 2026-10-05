@@ -683,6 +683,116 @@ void testTemporalResidual(Checker& c)
                 std::abs(gradEnergy(ramp, half) - expectL) < 1e-12,
                 "got=" + std::to_string(gradEnergy(ramp, half)) + " expect=" + std::to_string(expectL));
         }
+        // ⑨ 梯度图本体与梯度能量**同一算子**（分带表用本体、债-47 用均值，两者若各写一份
+        //    Sobel，「边缘带」与「梯度比」说的就不是同一张图）。变异红线：sobelAbsGrad 的
+        //    核尺寸改成 5，或 gradEnergy 不再走它 → 两条同时红。
+        {
+            const double slope = 0.1;
+            cv::Mat ramp(sz.height, sz.width, CV_64FC1);
+            for (int y = 0; y < sz.height; ++y)
+                for (int x = 0; x < sz.width; ++x)
+                    ramp.at<double>(y, x) = slope * x;
+            const cv::Mat g = sobelAbsGrad(ramp);
+            c.chk("梯度图：常量图恰为 0（零点）",
+                cv::norm(sobelAbsGrad(cv::Mat(sz, CV_64FC1, cv::Scalar(0.3))), cv::NORM_INF)
+                    == 0.0);
+            c.chk("梯度图：与 gradEnergy 同算子（均值相等，闭式 2·slope·(W−2)/W）",
+                std::abs(cv::mean(g)(0) - 2.0 * slope * (sz.width - 2) / sz.width) < 1e-12
+                    && std::abs(cv::mean(g)(0) - gradEnergy(ramp, all)) < 1e-15,
+                "mean=" + std::to_string(cv::mean(g)(0)));
+        }
+    }
+}
+
+/**
+ * 「亮度 × 梯度」二维分带（批 13.7c）的纯函数自检。
+ *
+ * 每条带「变异红线」= 把被测实现改坏成什么样子，本条会红。
+ * 期望值出处 = 手摆 fixture 的**闭式计数**（每格恰好几个像素、几个 over），不抄实现；
+ * `bandClipProxyByte` 的 240 出处 = 显示链闭式（`toBytes`，selftest 另有真机锚点）+
+ * 定阈值时的独立 Python 复算（`temporal_residual.h` 同名段）。
+ */
+void testLumaGradBands(Checker& c)
+{
+    // ① 六格计数：1×6 fixture，亮度 {10,200,250} × 梯度 {0,1} 全组合各 1 像素，
+    //    swing 除最后一格外全为 0.9（τ=0.5 之上）。闭式：每格 pixels=1、over=1（除 clip×high
+    //    为 0）、mass=0.9（除其为 0）；total=6、over=5、mass=4.5。
+    //    变异红线：亮度档 `<= tLo` → mid×low 少一格；梯度档 `>=` 写成 `>` → 两格计数搬家。
+    {
+        cv::Mat luma(1, 6, CV_64FC1), grad(1, 6, CV_64FC1), swing(1, 6, CV_64FC1);
+        const double L[6] = { 10, 10, 200, 200, 250, 250 };
+        const double G[6] = { 0, 1, 0, 1, 0, 1 };
+        const double S[6] = { 0.9, 0.9, 0.9, 0.9, 0.9, 0.0 };
+        for (int x = 0; x < 6; ++x) {
+            luma.at<double>(0, x) = L[x];
+            grad.at<double>(0, x) = G[x];
+            swing.at<double>(0, x) = S[x];
+        }
+        const BandTable t = bandTableOf(swing, luma, grad, 128.0, 240.0, 0.5, 0.5);
+        bool cellsOk = t.total == 6 && t.over == 5 && std::abs(t.mass - 4.5) < 1e-12;
+        for (int lb = 0; lb < 3 && cellsOk; ++lb)
+            for (int gb = 0; gb < 2 && cellsOk; ++gb) {
+                const BandCell& cell = t.cell[lb][gb];
+                const int64_t wantOver = (lb == 2 && gb == 1) ? 0 : 1;
+                const double wantMass = (lb == 2 && gb == 1) ? 0.0 : 0.9;
+                cellsOk = cell.pixels == 1 && cell.over == wantOver
+                    && std::abs(cell.mass - wantMass) < 1e-12;
+            }
+        c.chk("分带：六格闭式计数（share/rate/mass 三个数的分子分母各自对）", cellsOk,
+            "total=" + std::to_string(t.total) + " over=" + std::to_string(t.over));
+        // 反向用例：τ 抬到 swing 之上 ⟹ over **恰为 0**（不是「接近 0」），但像素与质量照计。
+        const BandTable hi = bandTableOf(swing, luma, grad, 128.0, 240.0, 0.5, 1e9);
+        c.chk("分带：τ 高于一切 → over 恰为 0 而 total/mass 不动（rate 的分母不是 swing）",
+            hi.over == 0 && hi.total == 6 && std::abs(hi.mass - 4.5) < 1e-12,
+            "over=" + std::to_string(hi.over));
+        // τ=0 与 swingFoldCore 同口径（「没有阈值」= 不计数，而不是「全计数」）。
+        c.chk("分带：τ=0 不计数（与 fracOverTau 同严格性）",
+            bandTableOf(swing, luma, grad, 128.0, 240.0, 0.5, 0.0).over == 0);
+    }
+    // ② 边界归属（写死并被钉住：`< tLo` 暗 / `[tLo,tHi)` 中间调 / `≥ tHi` 削顶 / `≥ gradThr` 高）。
+    //    变异红线：任一 `>=` 改 `>` 或 `<` 改 `<=` → 对应格像素数 -1，本条当场红。
+    {
+        cv::Mat luma(1, 4, CV_64FC1), grad(1, 4, CV_64FC1), swing(1, 4, CV_64FC1,
+            cv::Scalar(1.0));
+        const double L[4] = { 128.0, 240.0, 127.999, 239.999 };
+        const double G[4] = { 0.5, 0.4, 0.5, 0.5 };
+        for (int x = 0; x < 4; ++x) {
+            luma.at<double>(0, x) = L[x];
+            grad.at<double>(0, x) = G[x];
+        }
+        const BandTable t = bandTableOf(swing, luma, grad, 128.0, 240.0, 0.5, 0.5);
+        c.chk("分带：亮度=128 归中间调、=240 归近削顶、梯度=阈值归高（边界闭式）",
+            t.cell[1][1].pixels == 2 && t.cell[2][0].pixels == 1 && t.cell[0][1].pixels == 1
+                && t.cell[0][0].pixels == 0 && t.cell[2][1].pixels == 0 && t.total == 4,
+            "midHigh=" + std::to_string(t.cell[1][1].pixels)
+                + " clipLow=" + std::to_string(t.cell[2][0].pixels));
+    }
+    // ③ 前提守卫：尺子与观测量尺寸不符 = 不是同一次采集 ⟹ **不出数**（total=0）。
+    //    「表看起来完全正常但像素是错位的」是这套仪器里最贵的假绿，与 phaseAverageLuma
+    //    拒收混 extent 同一课。变异红线：去掉尺寸校验 → 本条红。
+    {
+        const cv::Mat swing = cv::Mat::ones(4, 4, CV_64FC1);
+        const cv::Mat small = cv::Mat::ones(3, 4, CV_64FC1);
+        c.chk("分带：尺子与 swing 尺寸不符 → 不出数（total=0）",
+            bandTableOf(swing, small, swing, 128.0, 240.0, 0.5, 0.5).total == 0
+                && bandTableOf(swing, swing, small, 128.0, 240.0, 0.5, 0.5).total == 0
+                && bandTableOf(cv::Mat(), cv::Mat(), cv::Mat(), 128.0, 240.0, 0.5, 0.5).total
+                    == 0,
+            "空图与错尺寸一律 total=0");
+    }
+    // ④ 近削顶阈值的闭式：byte = round(srgbEncode(ACES(lin))·255)。锚点 240（lin=3）的出处 =
+    //    定阈值时的独立 Python 复算（同链复现，见 temporal_residual.h「亮度轴」段）。
+    //    变异红线：把阈值改成写死 250 → 240 这条红；ACES 与 sRGB 顺序写反 → 全部漂。
+    {
+        c.chk("分带阈值：bandClipProxyByte(3.0) = 240（闭式反解显示链，实测定档）",
+            bandClipProxyByte(3.0) == 240, std::to_string(bandClipProxyByte(3.0)));
+        bool mono = bandClipProxyByte(0.0) == 0 && bandClipProxyByte(1.0) < 240
+            && bandClipProxyByte(2.0) < bandClipProxyByte(3.0)
+            && bandClipProxyByte(3.0) < bandClipProxyByte(8.0) && bandClipProxyByte(8.0) <= 252;
+        c.chk("分带阈值：随线性 HDR 单调、0 给 0、8 仍在肩部（≤252，未削顶）", mono,
+            "b1=" + std::to_string(bandClipProxyByte(1.0)) + " b8=" + std::to_string(bandClipProxyByte(8.0)));
+        c.chk("分带阈值：lin=1e6 已真削顶 → 255（档位的上端就是「削顶」本身）",
+            bandClipProxyByte(1e6) == 255, std::to_string(bandClipProxyByte(1e6)));
     }
 }
 
@@ -839,6 +949,7 @@ int cmdSelftest()
     testAaCoverage(c);
     testAoMetrics(c);
     testTemporalResidual(c);
+    testLumaGradBands(c);
     testTemporalFlicker(c);
     testKeyValidation(c);
     std::printf("%s：%d 条失败\n", c.bad ? "自检失败" : "自检通过", c.bad);

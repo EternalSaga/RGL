@@ -535,6 +535,9 @@ int cmdTemporal(int pairs, int warm, const std::string& variant, bool baseSpace 
 ///                → temporal_residual.cpp 头注释。
 /// @param camera 机位过滤（"all" = 三机位全跑；doorframe / wetground / doorpanel = 单跑）
 /// @param boostFloor 门开态的 `taa.static_feedback` 地板（默认 0.01 = 仓库拍板档）
+///        批 13.7c：`--bistro` 每机位另出**亮度 × 梯度二维分带**（门关 / 门开 / 差三张表，
+///        每格 share·rate·残余质量三数 + 阈值敏感性），判「残余闪烁住在高亮边还是普通边缘」；
+///        口径与判决线（跑前写死）→ `temporal_residual.h` 同名段。
 int cmdTemporalResidual(int periods, double warmMult, const std::string& variant,
     double slowFeedback, bool skipSlow, bool baseSpace = false, double staticBoostFloor = 0.0,
     bool bistro = false, const std::string& camera = "all", double boostFloor = 0.01,

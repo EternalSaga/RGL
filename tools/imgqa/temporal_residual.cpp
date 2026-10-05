@@ -99,12 +99,20 @@ cv::Mat phaseAverageLuma(const std::vector<Frame>& shots, int periods)
     return acc;
 }
 
-double gradEnergy(const cv::Mat& luma, const cv::Mat& mask)
+cv::Mat sobelAbsGrad(const cv::Mat& luma)
 {
     cv::Mat gx, gy, g;
     cv::Sobel(luma, gx, CV_64F, 1, 0, 1);
     cv::Sobel(luma, gy, CV_64F, 0, 1, 1);
     g = cv::abs(gx) + cv::abs(gy);  // MatExpr 必须先落地成 Mat 才是 InputArray
+    return g;
+}
+
+double gradEnergy(const cv::Mat& luma, const cv::Mat& mask)
+{
+    // 梯度本体只许一份实现（`sobelAbsGrad`），本函数是它的均值；selftest 的斜坡闭式
+    // （2·slope·(W−2)/W）同时钉住两者，重构不会悄悄改口径。
+    const cv::Mat g = sobelAbsGrad(luma);
     if (mask.empty())
         return cv::mean(g)(0);
     return cv::mean(g, mask)(0);
@@ -139,6 +147,45 @@ std::vector<double> valuesInMask(const cv::Mat& x, const cv::Mat& mask)
                 v.push_back(px[c]);
     }
     return v;
+}
+
+BandTable bandTableOf(const cv::Mat& swing, const cv::Mat& lumaByte, const cv::Mat& grad,
+    double tLo, double tHi, double gradThr, double tau)
+{
+    BandTable t;
+    // 尺子与观测量必须是同一次采集：尺寸不符 = 直接不出数（「表看起来正常但像素是错位的」
+    // 是这套仪器里最贵的一类失效，与 `phaseAverageLuma` 拒收混 extent 同一课）。
+    if (swing.empty() || swing.type() != CV_64FC1 || lumaByte.size() != swing.size()
+        || grad.size() != swing.size() || lumaByte.type() != CV_64FC1 || grad.type() != CV_64FC1)
+        return t;
+    for (int y = 0; y < swing.rows; ++y) {
+        const double* ps = swing.ptr<double>(y);
+        const double* pl = lumaByte.ptr<double>(y);
+        const double* pg = grad.ptr<double>(y);
+        for (int x = 0; x < swing.cols; ++x) {
+            // 边界写死：`< tLo` 暗 / `[tLo, tHi)` 中间调 / `≥ tHi` 近削顶；梯度 `≥ gradThr` 高。
+            const int lb = pl[x] < tLo ? 0 : (pl[x] < tHi ? 1 : 2);
+            const int gb = pg[x] >= gradThr ? 1 : 0;
+            BandCell& c = t.cell[lb][gb];
+            ++c.pixels;
+            ++t.total;
+            c.mass += ps[x];
+            t.mass += ps[x];
+            if (tau > 0.0 && ps[x] > tau) {  // 严格大于，与 swingFoldCore 的 fracOverTau 同口径
+                ++c.over;
+                ++t.over;
+            }
+        }
+    }
+    return t;
+}
+
+int bandClipProxyByte(double lin)
+{
+    // 绿道：灰阶输入下三通道取整后同值（ACES 的通道串扰在灰输入下不改变亮度序），而绿是
+    // Rec.709/601 的主权重。闭式出处 = `toBytes`（与 shader 逐式对应的独立第二实现）。
+    const auto b = toBytes({lin, lin, lin}, 1.0);
+    return b[1];
 }
 
 namespace {
@@ -645,6 +692,13 @@ int runStaticBoostSweep(const std::string& root, int periods, double warmMult,
 //   半间差 halfGapMax 与闭式容差 (1−α)^warm×满幅+量化项 只打印作**热身自证**（bistro 全帧 p99
 //   白电平高于合成靶，该容差在这里偏保守；超了打 ⚠ 不判红——它防的是「量到瞬态」，而 N3 恰 0
 //   已经排除了「连拍不是相位的确定性函数」里最贵的那类失效）。
+//
+// 批 13.7c 追加**亮度 × 梯度二维分带**（每机位一张门关表 + 一张门开表 + 一张差表，每格三个数：
+// share / rate>τ / 残余质量占比；另附阈值与梯度轴的敏感性）。它要回答的是现有分带口径答不了的
+// 问题——所有现有测量只按梯度分带，而梯度分不清「几何边」与「高亮边」。要判的假设、两根轴的
+// 口径与定阈值的规则（闭式反解显示链 + 实测直方图门槛）、⭐ 判决线（**跑前写死**）全文 =
+// `temporal_residual.h`「亮度 × 梯度 二维分带」段；出表代码在本文件 `reportLumaGradBands`。
+// 尺子取 N1（门关 = 用户现状）并**两态共用**，差表里 Δshare 恰为 0 就是这件事的自证。
 namespace {
 
 struct BistroRun {
@@ -653,7 +707,11 @@ struct BistroRun {
     double alpha = 0.0;
     ResidualStat stat;
     cv::Mat avg;
-    cv::Mat swingMap;  ///< 逐像素 swing（CV_64FC1）——热图输入，与 stat 同一份折叠代码写出
+    cv::Mat swingMap;  ///< 逐像素 swing（CV_64FC1）——热图与分带表的输入，与 stat 同一份折叠代码写出
+    cv::Mat byteMean;  ///< **显示域**字节亮度多帧均值（CV_64FC1，0..255）= 亮度轴的尺子
+    cv::Mat byteMax;   ///< 同上取跨帧**最大**（敏感性组：均值把「正在闪的削顶」判出档外的对照）
+    cv::Mat gradLin;   ///< 线性 luma 相位平均的梯度图 = 梯度轴的尺子（主口径）
+    cv::Mat gradByte;  ///< 显示域梯度图（敏感性组：对「高亮边」更保守的一把尺子）
     double grad = 0.0;      ///< 相位平均图的线性域梯度能量（债-47 的分子/分母）
     double byteGrad = 0.0;  ///< **显示空间**同口径（只打印：§1.5 的 0.671 是这类读数）
     double whiteLuma = 0.0, maxLuma = 0.0, quant = 0.0;
@@ -668,10 +726,12 @@ struct BistroRun {
  *
  * `taa=false` = N0 确定性地板（TAA 整个关，连 jitter 注入都不发生）；`baseSpace=false` 只服务
  * N6 诊断组（把 base_space 的 un-jitter / c_{t−1} 修正摘掉，其余不动）——两者默认值 = 交付态。
+ * `wantMaps` = 留下**逐像素图**（swing / 显示域亮度 / 两域梯度）：热图与「亮度×梯度」分带表
+ * 要它们，其余组（N0/N3/N4/N5/N6）只出标量读数，不留图省内存。
  */
 BistroRun runBistroGroup(const std::string& dir, const std::string& name, const std::string& tag,
     const BistroCam& cam, double feedback, double jitterScale, int periods, double warmMult,
-    double& tau, bool staticBoost, double staticFloor, bool wantSwingMap, bool taa = true,
+    double& tau, bool staticBoost, double staticFloor, bool wantMaps, bool taa = true,
     bool baseSpace = true)
 {
     BistroRun r;
@@ -751,11 +811,13 @@ BistroRun runBistroGroup(const std::string& dir, const std::string& name, const 
     // （跨组换 τ = frac 的跨组比较失去意义，同 aa_target 的纪律）。
     if (tau <= 0.0)
         tau = lsbLinearAtLuma(r.whiteLuma);
-    r.stat = phaseSwingStat(shots, {}, tau, periods, wantSwingMap ? &r.swingMap : nullptr);
+    r.stat = phaseSwingStat(shots, {}, tau, periods, wantMaps ? &r.swingMap : nullptr);
     r.grad = gradEnergy(r.avg, {});
     {
-        // **显示空间**同口径梯度（先 tonemap 再平均 = 红线 1 禁止的那个口径）。算出来只为打印：
-        // §1.5 的 0.671 就是这个域的读数，两个域同时出数，域选错的代价当场可见。
+        // **显示域**字节亮度多帧均值（先 tonemap 再平均 = 红线 1 禁止的那个**统计**口径）。
+        // 它在这里不是统计而是**分带尺子**：亮度轴要的就是「交付面上这块看起来多亮」，
+        // 而截图里没有线性 HDR。同一个 acc 顺带给出 byteGrad（§1.5 的 0.671 就是这类读数，
+        // 两个域同时出数，域选错的代价当场可见）。
         cv::Mat acc = cv::Mat::zeros(r.avg.size(), CV_64FC1), tmp;
         for (const auto& g : gray) {
             g.convertTo(tmp, CV_64F);
@@ -763,6 +825,18 @@ BistroRun runBistroGroup(const std::string& dir, const std::string& name, const 
         }
         acc /= static_cast<double>(gray.size());
         r.byteGrad = gradEnergy(acc, {});
+        if (wantMaps) {
+            r.byteMean = acc;
+            r.gradLin = sobelAbsGrad(r.avg);   // 梯度轴主口径（与 r.grad 同一算子）
+            r.gradByte = sobelAbsGrad(acc);    // 敏感性口径（显示域，对高亮边更保守）
+            // 跨帧**最大**：均值把「逐帧闪出 255 的真削顶像素」判出档外（偏保守方向），
+            // 最大口径是它的对照。两者结论不一致 = 亮度代理本身不稳，须报「分不出」。
+            cv::Mat mx;
+            gray.front().convertTo(mx, CV_8UC1);
+            for (const auto& g : gray)
+                cv::max(mx, g, mx);
+            mx.convertTo(r.byteMax, CV_64F);
+        }
     }
     // 在场性守卫（红线 4 的兜底）：全黑画面的残差**恰好为 0**，什么判据都会绿。
     if (r.stat.meanLuma <= 0.0)
@@ -795,6 +869,243 @@ double percentileOfMat(const cv::Mat& m, double p)
     }
     std::sort(v.begin(), v.end());
     return percentileOf(v, p);
+}
+
+// ── 批 13.7c「亮度 × 梯度」二维分带 ────────────────────────────────────────────────
+//
+// 判的假设、为什么现有分带判不了、⭐ 判决线（**跑前写死**）全文 = `temporal_residual.h`
+// 「亮度 × 梯度 二维分带」段。这里只放阈值常量与出表代码；改判决线 = 改判据，两处一起改。
+constexpr double kBandClipProxyLinear = 3.0;  ///< 近削顶 = ACES 输入 ≥3（「≫1」的下界）→ byte 240
+constexpr double kBandMidByte = 128.0;        ///< 暗/中间调 = 8bit 码字中点（显示域线性 0.2159）
+constexpr double kBandGradPct = 0.90;         ///< 高梯度 = 梯度 ≥p90（同 temporal_motion 默认）
+/// 敏感性组的削顶下界（闭式对应 ACES 输入 ≥3.0 / 5.2 / 9.0 / 真削顶 20+）
+constexpr double kBandClipSensitivity[] = { 240.0, 248.0, 252.0, 255.0 };
+/// 近削顶档的最小质量（0.02% × 921600 ≈ 184 px）；低于它该档无定义 ⟹ 判「分不出」
+constexpr double kBandMinClipMass = 0.0002;
+/// T_lo 稳定性门槛：|x−128| ≤ 8 带内质量须 < 2%（否则切在直方图尖峰上，档位不稳）
+constexpr double kBandMidSpikeCap = 0.02;
+/// 判决线的样本量门槛：B 格门关态 over-τ 像素低于它 ⟹ 不许拿噪声比噪声
+constexpr int64_t kBandMinOverForVerdict = 200;
+/// ⭐ 判决线（跑前写死，出处见头注释）：支持 = rB ≥ 1.5×rA；否证 = rB/rA ∈ [0.8, 1.25]
+constexpr double kBandSupportRatio = 1.5, kBandEqualLo = 0.8, kBandEqualHi = 1.25;
+
+/// 六行的 ASCII 标签（CJK 宽度会让 printf 的 %-Ns 错位，故表体用 ASCII + 表头图例）
+const char* const kBandRowTag[6] = {
+    "dark x low", "dark x HIGH", "mid x low", "mid x HIGH", "clip x low", "clip x HIGH" };
+constexpr int kBandRowLb[6] = { 0, 0, 1, 1, 2, 2 };
+constexpr int kBandRowGb[6] = { 0, 1, 0, 1, 0, 1 };
+
+/// 分带报告进台账的关键读数（判决线只有一条，其余是复核用的原始数）。
+struct BandReport {
+    std::string verdict = "未出";
+    double rA = 0.0;       ///< A 格（中间调×高梯度）的 rate 被压倍数 on/off
+    double rB = 0.0;       ///< B 格（近削顶×高梯度）同上
+    double bMassOff = 0.0, bMassOn = 0.0;  ///< B 格残余质量占比（门关 / 门开）
+    double tHi = 0.0;      ///< 实际用的近削顶字节下界（闭式给出）
+    double gradThr = 0.0;  ///< 实际用的梯度 p90 阈值
+    double shareDrift = 0.0;  ///< 两态带边界漂移（**须恰为 0**）
+};
+
+/// 出一张六格表（share / rate / 残余质量占比 / Σswing 占比）。
+void printBandTable(const char* title, const BandTable& t)
+{
+    std::printf("  ┌ %s\n", title);
+    std::printf("    %-13s %9s %9s %10s %9s\n", "格", "share", "rate>τ", "残余质量", "Σswing");
+    for (int i = 0; i < 6; ++i) {
+        const BandCell& c = t.cell[kBandRowLb[i]][kBandRowGb[i]];
+        const double share = t.total > 0 ? static_cast<double>(c.pixels) / t.total : 0.0;
+        const double rate = c.pixels > 0 ? static_cast<double>(c.over) / c.pixels : 0.0;
+        const double mass = t.over > 0 ? static_cast<double>(c.over) / t.over : 0.0;
+        const double m2 = t.mass > 0 ? c.mass / t.mass : 0.0;
+        std::printf("    %-13s %8s%% %8s%% %9s%% %8s%%%s\n", kBandRowTag[i],
+            d2(share * 100.0).c_str(), d2(rate * 100.0).c_str(), d2(mass * 100.0).c_str(),
+            d2(m2 * 100.0).c_str(), i == 3 ? "   ← A 普通边缘" : (i == 5 ? "   ← B 高亮边" : ""));
+    }
+    std::printf("    %-13s %8s%% %8s%% %9s%% %8s%%\n", "TOTAL", "100.00",
+        d2(t.total > 0 ? 100.0 * t.over / t.total : 0.0).c_str(), "100.00", "100.00");
+    std::printf("    （图例：dark 暗 / mid 中间调 / clip 近削顶 × low 低梯度 / HIGH 高梯度；"
+                "残余质量 = 该格 over-τ 像素占全帧的比例）\n");
+}
+
+/// 差表（门开 − 门关）。Δshare **必须恒 0** = 两态共用一把尺子的自证；非 0 = 尺子漏了。
+double printBandDiff(const BandTable& off, const BandTable& on)
+{
+    std::printf("  ┌ 差（门开 N2 − 门关 N1）\n");
+    std::printf("    %-13s %9s %9s %10s %12s\n", "格", "Δshare", "Δrate", "Δ残余质量",
+        "rate比(on/off)");
+    double maxShareDrift = 0.0;
+    for (int i = 0; i < 6; ++i) {
+        const BandCell& a = off.cell[kBandRowLb[i]][kBandRowGb[i]];
+        const BandCell& b = on.cell[kBandRowLb[i]][kBandRowGb[i]];
+        const double dShare = off.total > 0 && on.total > 0
+                ? 100.0 * (static_cast<double>(b.pixels) / on.total
+                      - static_cast<double>(a.pixels) / off.total)
+                : 0.0;
+        const double ra = a.pixels > 0 ? static_cast<double>(a.over) / a.pixels : 0.0;
+        const double rb = b.pixels > 0 ? static_cast<double>(b.over) / b.pixels : 0.0;
+        const double dMass = off.over > 0 && on.over > 0
+                ? 100.0 * (static_cast<double>(b.over) / on.over
+                      - static_cast<double>(a.over) / off.over)
+                : 0.0;
+        maxShareDrift = std::max(maxShareDrift, std::abs(dShare));
+        std::printf("    %-13s %+8s %+8s %+10s %10s%s\n", kBandRowTag[i], d2(dShare).c_str(),
+            d2(100.0 * (rb - ra)).c_str(), d2(dMass).c_str(),
+            ra > 0.0 ? d4(rb / ra).c_str() : "inf",
+            i == 3 ? "  ← A" : (i == 5 ? "  ← B（压不动 = 假设成立）" : ""));
+    }
+    return maxShareDrift;
+}
+
+/// 出两态分带表 + 差表 + 判决 + 敏感性。返回进台账的关键读数。
+BandReport reportLumaGradBands(const BistroRun& N1, const BistroRun& N2, double tau)
+{
+    BandReport rep;
+    std::printf("\n── 亮度 × 梯度 二维分带（判「残余住在高光边还是普通边缘」）──\n");
+    if (N1.byteMean.empty() || N1.gradLin.empty() || N1.swingMap.empty() || N2.swingMap.empty()) {
+        std::printf("  ✗ 缺逐像素图，分带表未出（采集侧 wantMaps 没开 = 仪器没装上）\n");
+        return rep;
+    }
+    const cv::Mat& luma = N1.byteMean;
+    const cv::Mat& grad = N1.gradLin;
+    const double n = static_cast<double>(luma.total());
+
+    // ── 先测：显示域字节亮度分布（阈值由它定，不许拍数）─────────────────────────
+    auto lv = valuesInMask(luma, {});
+    std::sort(lv.begin(), lv.end());
+    const auto massAtLeast = [&](double b) {
+        return static_cast<double>(
+                   lv.end() - std::lower_bound(lv.begin(), lv.end(), b)) / n;
+    };
+    const auto massNear = [&](double c, double w) {
+        const auto lo = std::lower_bound(lv.begin(), lv.end(), c - w);
+        const auto hi = std::upper_bound(lv.begin(), lv.end(), c + w);
+        return static_cast<double>(hi - lo) / n;
+    };
+    const double tHi = static_cast<double>(bandClipProxyByte(kBandClipProxyLinear));
+    const double tLo = kBandMidByte;
+    const double clipMass = massAtLeast(tHi);
+    const double pile255 = massAtLeast(254.999);
+    const double midSpike = massNear(tLo, 8.0);
+    std::printf("  亮度轴 = 显示域字节亮度的**多帧均值**（tonemap+sRGB 之后取 Rec.601 加权）\n");
+    std::printf("    实测分布 p50 %s · p90 %s · p99 %s · p99.9 %s · p99.99 %s（码字 0..255）\n",
+        d2(percentileOf(lv, 0.50)).c_str(), d2(percentileOf(lv, 0.90)).c_str(),
+        d2(percentileOf(lv, 0.99)).c_str(), d2(percentileOf(lv, 0.999)).c_str(),
+        d2(percentileOf(lv, 0.9999)).c_str());
+    std::printf("    255 精确堆积 %s%% · [%.0f,255) %s%% · [245,255) %s%% · [250,255) %s%%\n",
+        d4(pile255 * 100.0).c_str(), tHi, d4(massAtLeast(tHi) * 100.0).c_str(),
+        d4(massAtLeast(245.0) * 100.0).c_str(), d4(massAtLeast(250.0) * 100.0).c_str());
+    std::printf("    阈值 T_lo=%.0f（8bit 码字中点 ⟺ 显示域线性 %s ≈ 18%% 灰）· T_hi=%.0f"
+                "（**闭式**：ACES 输入 ≥%s ⟺ byte %.0f，见 bandClipProxyByte）\n",
+        tLo, d4(srgbDecode(tLo / 255.0)).c_str(), tHi, d2(kBandClipProxyLinear).c_str(), tHi);
+    std::printf("    门槛：近削顶档质量 %s%%（下限 %s%%）%s · T_lo±8 带内质量 %s%%（上限 %s%%）%s\n",
+        d4(clipMass * 100.0).c_str(), d4(kBandMinClipMass * 100.0).c_str(),
+        clipMass >= kBandMinClipMass ? "✓" : "✗ 该档无定义", d4(midSpike * 100.0).c_str(),
+        d4(kBandMidSpikeCap * 100.0).c_str(), midSpike < kBandMidSpikeCap ? "✓ 切在谷底" : "⚠ 切在尖峰");
+
+    // ── 梯度轴（分位口径复用 temporal_motion：绝对阈值是拍出来的数）──────────────
+    auto gv = valuesInMask(grad, {});
+    std::sort(gv.begin(), gv.end());
+    const double gradThr = percentileOf(gv, kBandGradPct);
+    std::printf("  梯度轴 = |Sobel_x|+|Sobel_y| 于**线性 luma 相位平均**（与 gradEnergy 同算子）\n");
+    std::printf("    高梯度 = ≥ p%.0f = %s（占 %s%%；分位而非绝对阈值的理由见头注释）\n",
+        kBandGradPct * 100.0, d4(gradThr).c_str(),
+        d2(100.0 - kBandGradPct * 100.0).c_str());
+    std::printf("  尺子 = N1（门关 = 用户现状）的 byte-mean 与线性梯度，**两态共用一把尺子**\n");
+
+    const BandTable off = bandTableOf(N1.swingMap, luma, grad, tLo, tHi, gradThr, tau);
+    const BandTable on = bandTableOf(N2.swingMap, luma, grad, tLo, tHi, gradThr, tau);
+    if (!off.valid() || !on.valid()) {
+        std::printf("  ✗ 分带表无像素（total=0），不出数\n");
+        return rep;
+    }
+    printBandTable("门关 N1（用户现状）", off);
+    printBandTable("门开 N2（taa.static_boost）", on);
+    const double drift = printBandDiff(off, on);
+    std::printf("    Δshare 最大 %s%%（**须恰为 0**：两态共用一把尺子的自证，非 0 = 差表作废）\n",
+        d4(drift).c_str());
+
+    // ── ⭐ 判决（线跑前写死，见头注释；此处只执行，不解释成新规则）───────────────
+    const BandCell& aOff = off.cell[1][1];
+    const BandCell& aOn = on.cell[1][1];
+    const BandCell& bOff = off.cell[2][1];
+    const BandCell& bOn = on.cell[2][1];
+    const auto rate = [](const BandCell& c) {
+        return c.pixels > 0 ? static_cast<double>(c.over) / c.pixels : 0.0;
+    };
+    const double rA = rate(aOff) > 0.0 ? rate(aOn) / rate(aOff) : 0.0;
+    const double rB = rate(bOff) > 0.0 ? rate(bOn) / rate(bOff) : 0.0;
+    const double bMassOff = off.over > 0 ? static_cast<double>(bOff.over) / off.over : 0.0;
+    const double bMassOn = on.over > 0 ? static_cast<double>(bOn.over) / on.over : 0.0;
+    rep.rA = rA;
+    rep.rB = rB;
+    rep.bMassOff = bMassOff;
+    rep.bMassOn = bMassOn;
+    rep.tHi = tHi;
+    rep.gradThr = gradThr;
+    std::printf("\n  ⭐ 判决（线跑前写死：支持 = rB ≥ %s×rA 且 B 残余质量上升；否证 = rB/rA ∈ [%s,%s]）\n",
+        d2(kBandSupportRatio).c_str(), d2(kBandEqualLo).c_str(), d2(kBandEqualHi).c_str());
+    std::printf("    A 中间调×高梯度 rate %s%%→%s%%（×%s）  B 近削顶×高梯度 rate %s%%→%s%%（×%s）\n",
+        d2(rate(aOff) * 100.0).c_str(), d2(rate(aOn) * 100.0).c_str(), d4(rA).c_str(),
+        d2(rate(bOff) * 100.0).c_str(), d2(rate(bOn) * 100.0).c_str(), d4(rB).c_str());
+    std::printf("    B 的残余质量占比 %s%% → %s%%（%+.2f pp）  B 门关 over-τ 像素 %lld\n",
+        d2(bMassOff * 100.0).c_str(), d2(bMassOn * 100.0).c_str(), (bMassOn - bMassOff) * 100.0,
+        static_cast<long long>(bOff.over));
+    if (bOff.over < kBandMinOverForVerdict || clipMass < kBandMinClipMass)
+        rep.verdict = "分不出（B 格样本不足 / 近削顶档无定义）";
+    else if (rate(bOff) <= 0.0 || rate(aOff) <= 0.0)
+        rep.verdict = "分不出（A 或 B 门关态 rate=0，比值无定义）";
+    else if (rB >= kBandSupportRatio * rA && bMassOn > bMassOff)
+        rep.verdict = "支持假设：残余向「近削顶×高梯度」集中，boost 压不动高亮边";
+    else if (rB >= kBandEqualLo * rA && rB <= kBandEqualHi * rA)
+        rep.verdict = "否证假设：两格等比例被压，残余不是高光专属";
+    else
+        rep.verdict = "分不出（既非等比例、也未达 1.5× 分离——看下面敏感性表定性质）";
+    std::printf("    ⟹ **%s**\n", rep.verdict.c_str());
+    // 方向自述（**不是**判决的一部分）。跑前只写死了「支持」与「等比例否证」两端，落第三支的
+    // 其实有两种：**无分离**（真·分不出）与**反向分离**（B 比 A 压得更狠）。后者对「高亮边
+    // 压不动」这条预测是否证方向，不打印出来会被「分不出」三个字读成「没有信号」。判决文字
+    // 仍按跑前的三分支，不改写。
+    std::printf("    分离方向：rB %s rA ⟹ %s（预测要求的是 rB > rA：B 比 A 压不动）\n",
+        rB < rA ? "<" : (rB > rA ? ">" : "="),
+        rB < rA ? "**B（高亮边）被压得更狠**，与预测方向相反"
+                : (rB > rA ? "B 被压得没那么狠（方向与预测一致，幅度见上）" : "两格同倍数"));
+    rep.shareDrift = drift;
+
+    // ── 敏感性（同一次采集换阈值，零额外引擎成本）───────────────────────────────
+    // 判「分不出」时的分工：换阈值后结论跟着翻 = **阈值没分开**；怎么换都不翻 = 两格同分布。
+    std::printf("\n  ── 敏感性（同一次采集换阈值；主档 = 上面那张）──\n");
+    std::printf("    %-26s %14s %14s %14s\n", "口径", "A rate ×(on/off)",
+        "B rate ×(on/off)", "B 残余质量 off→on");
+    const auto sensLine = [&](const std::string& tag, const cv::Mat& lm, const cv::Mat& gm,
+                                  double tl, double th, double gthr) {
+        const BandTable t1 = bandTableOf(N1.swingMap, lm, gm, tl, th, gthr, tau);
+        const BandTable t2 = bandTableOf(N2.swingMap, lm, gm, tl, th, gthr, tau);
+        const double a1 = rate(t1.cell[1][1]), a2 = rate(t2.cell[1][1]);
+        const double b1 = rate(t1.cell[2][1]), b2 = rate(t2.cell[2][1]);
+        const double m1 = t1.over > 0 ? static_cast<double>(t1.cell[2][1].over) / t1.over : 0.0;
+        const double m2 = t2.over > 0 ? static_cast<double>(t2.cell[2][1].over) / t2.over : 0.0;
+        std::printf("    %-26s %14s %14s %8s%% →%-7s%% (%lldpx)\n", tag.c_str(),
+            a1 > 0.0 ? d4(a2 / a1).c_str() : "inf", b1 > 0.0 ? d4(b2 / b1).c_str() : "inf",
+            d2(m1 * 100.0).c_str(), d2(m2 * 100.0).c_str(),
+            static_cast<long long>(t1.cell[2][1].over));
+    };
+    for (double th : kBandClipSensitivity)
+        sensLine("T_hi=" + d2(th) + (std::abs(th - tHi) < 0.5 ? "（主档）" : ""), luma, grad, tLo,
+            th, gradThr);
+    {
+        auto gbv = valuesInMask(N1.gradByte, {});
+        std::sort(gbv.begin(), gbv.end());
+        const double gthrByte = percentileOf(gbv, kBandGradPct);
+        sensLine("梯度轴=显示域 p90", luma, N1.gradByte, tLo, tHi, gthrByte);
+        auto gv2 = valuesInMask(grad, {});
+        std::sort(gv2.begin(), gv2.end());
+        sensLine("梯度轴=线性 p75", luma, grad, tLo, tHi, percentileOf(gv2, 0.75));
+        sensLine("梯度轴=线性 p95", luma, grad, tLo, tHi, percentileOf(gv2, 0.95));
+        sensLine("亮度轴=跨帧最大", N1.byteMax, grad, tLo, tHi, gradThr);
+        sensLine("T_lo=96", luma, grad, 96.0, tHi, gradThr);
+        sensLine("T_lo=160", luma, grad, 160.0, tHi, gradThr);
+    }
+    return rep;
 }
 
 /// 一机位的六组（N6 仅 `--diag-bs-off`）+ 出表 + 守卫 + 热图。
@@ -945,6 +1256,11 @@ int runBistroCamera(const BistroCam& cam, int periods, double warmMult, double b
         d6(tau).c_str());
     std::printf("    %s\n    %s\n", offPath.c_str(), onPath.c_str());
 
+    // 亮度 × 梯度 二维分带（判「残余住在高光边还是普通边缘」）。判决线**跑前写死**，
+    // 全文 = temporal_residual.h 同名段；这里只执行。守卫红不拦它——分带表要回答的正是
+    // 「N1/N2 这两个读数里的残余长什么样」，与反向守卫是否可达无关。
+    const BandReport band = reportLumaGradBands(N1, N2, tau);
+
     logCall("temporal-residual-bistro",
         {{"camera", cam.name}, {"periods", std::to_string(periods)},
             {"warmMult", d4(warmMult)}, {"floor", d4(boostFloor)}, {"tau", d6(tau)},
@@ -959,7 +1275,13 @@ int runBistroCamera(const BistroCam& cam, int periods, double warmMult, double b
             {"N5_max", d6(N5.stat.maxSwing)}, {"N5_px", std::to_string(N5.changedPx)},
             {"N6_ran", sixRan ? "1" : "0"}, {"N6_nonzero", sixNonZero ? "1" : "0"},
             {"swingRatio", d4(swingRatio)}, {"gradLin", d6(gradLin)},
-            {"gradDisp", d6(gradDisp)}, {"heatScale", d6(scale)}},
+            {"gradDisp", d6(gradDisp)}, {"heatScale", d6(scale)},
+            // 批 13.7c 亮度×梯度分带（判决 + 判决线两侧的原始数，事后复核用）
+            {"bandVerdict", band.verdict}, {"bandT_hi", d2(band.tHi)},
+            {"bandGradThr", d6(band.gradThr)}, {"bandShareDrift", d6(band.shareDrift)},
+            {"bandA_ratio", d4(band.rA)}, {"bandB_ratio", d4(band.rB)},
+            {"bandB_massOff", d2(band.bMassOff * 100.0)},
+            {"bandB_massOn", d2(band.bMassOn * 100.0)}},
         {});
     // 守卫汇总：G0 地板与 G2 反向都计入 rc（G0 红 = 全表读数存疑，比 G2 更严重，绝不吞）。
     // sixOk 只作归因信息，不进 rc（诊断组不是判据）。
