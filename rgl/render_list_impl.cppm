@@ -289,7 +289,11 @@ void fillTaaData(FrameDrawList& out, const ViewProjection& viewProj, const Scene
 	// ——offscreen 变体配置开了 TAA 也装饰失败，用配置派生就会「taa pass 不存在 + tonemap 又
 	// 跳过」= AO 一次都不施加。两个分支位精确（lerp(x,1,1)≡1.0 / lerp(x,1,0)≡x）
 	// ⟹ TAA 关时 tonemap 逐位不变（门红线）。本函数**无条件调用**，故门关态也保证写对 0。
-	out.sceneData.taaPrevContentShift = {histShift, env.taaAoApplied ? 1.0f : 0.0f, 0.0f};
+	// w = **历史拒收诊断门标志**（`taa.diag_reject`，默认 0 = 今天）：1 ⟹ taa.frag 把逐像素
+	// 拒收码写进 taa_out.a（RGB 一个 bit 不动；tonemap 与历史采样都只读 rgb ⟹ 交付图不变）。
+	// 本槽位原为保留 0，复用 = **零布局变更**（static_assert 不动）。
+	out.sceneData.taaPrevContentShift = {histShift, env.taaAoApplied ? 1.0f : 0.0f,
+		env.taaDiagReject ? 1.0f : 0.0f};
 }
 
 void renderListSystem(entt::registry& rg, RGL::Resources&,

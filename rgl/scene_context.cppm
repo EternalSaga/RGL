@@ -521,6 +521,13 @@ export struct SceneEnv {
 	bool taaStaticBoost = false;
 	float taaStaticFeedback = 0.01f;  ///< 静止地板（**本帧权重**；0.01 ⇒ 等效窗 ≈100 帧，扫档依据 → configs/scene.lua 注释）
 	uint32_t taaStaticRamp = 16u;     ///< 爬满帧数（默认 = 抖动周期 16，让等效窗跨过周期）
+	// 重投影消融门（`taa.reprojection`，默认 true = 逐位今天）：false ⟹ taaSystem 把
+	// 「上一帧矩阵」载荷换成本帧抖动后矩阵 + 位移清零 + motion 单位阵 ⟹ shader 的
+	// prevUvBase ≡ baseUv（历史按同基位置采样）。判据消费方 = imgqa temporal-motion M3。
+	bool taaReprojection = true;
+	// 历史拒收诊断门（`taa.diag_reject`，默认关）：true ⟹ scene data @722224.w = 1，
+	// taa.frag 把拒收码写进 taa_out.a（RGB 不动）。回读 = /shot attachment=taa_out。
+	bool taaDiagReject = false;
 	// Phase 5.5 批次 4 天空盒：enabled = env 已上传且 scene.lua environment.skybox=true；
 	// pipeline = ShaderRegistry "skybox" 条目下标（main 启动期 addSkyEntry 后回填；
 	// 0xFFFFFFFF = 未建条目——renderListSystem 见 enabled 但 pipeline 无效 = 契约漂移）
@@ -533,13 +540,39 @@ export struct SceneEnv {
  * angle/matrix）：speed=0 = 静止（configs/scene.lua 的 spin 开关）。
  * 现状承载"全场景同一旋转"（MVP = proj·view·matrix·world）；per-entity 旋转需求出现时
  * 改为写 Transform 组件，结构同构无需二次重构（ecs_compliance_review E4.1）。
+ *
+ * 帧驱动门（`spin_frame_angle`，默认 0 = 关，诊断激励专用；判据本体 =
+ * frameDrivenSpinAngle 纯函数）：门开时 angle 是**帧号的纯函数**、与帧时长无关
+ * ⟹ 角度序列跨运行可复现。dt 累积（speed·dt）每帧角度随帧时长漂，跨进程 A/B
+ * （时域判据的参考图与候选图在两个引擎进程里渲染同一机位序列）无从对齐——
+ * 理由全文写死在 tools/imgqa/temporal.cpp 头注释，本门就是它当年登记的
+ * 「要做微动激励得先加按帧索引驱动的运动」那条新引擎面。
  */
 export struct SceneSpin {
 	glm::vec3 axis{0.5f, 1.0f, 0.0f};
-	float speed = 1.0f;   // rad/s
+	float speed = 1.0f;   // rad/s（dt 累积路径；门关态唯一路径）
 	float angle = 0.0f;   // 累积角（animationSystem: angle += dt * speed）
 	glm::mat4 matrix{1.0f};  // = rotate(axis, angle)，animationSystem 每帧更新
+	// ── 帧驱动 spin（门 `spin_frame_angle`，默认 0 = 关；imgqa temporal-motion 诊断激励）──
+	float frameAngle = 0.0f;  ///< rad/帧；≠0 = 门开：angle = frameAngle·frameIndex（dt 累积停用）
+	uint32_t frameIndex = 0;  ///< animationSystem 每运行一次 +1（先加后用 ⟹ 首帧角 = frameAngle）
 };
+
+/**
+ * 帧驱动 spin 角度（门 `spin_frame_angle` 的判据本体；提纯成自由函数的先例 =
+ * taa_jitter.cppm——纯数学就该在 `just test` 里钉住）。
+ *
+ * angle = anglePerFrame · frameIndex——**无累积、无帧时长**：同一 frameIndex 在任何
+ * 运行、任何机器上给出同一角度（跨进程 A/B 对齐的唯一前提）。float32 精度账：
+ * frameIndex = 10⁴、anglePerFrame = 3.5e-3（0.2°/帧）时角 ≈35 rad，ULP ≈4e-6 rad，
+ * 对应像素位移 869px 焦距 × 4e-6 ≈ 0.003px——远低于任何可测信号，无需 double。
+ * @param anglePerFrame 每帧角增量（rad，可负 = 反向）
+ * @param frameIndex 帧号（0 起；0 帧角 = 0）
+ * @return 本帧角（rad）
+ */
+export float frameDrivenSpinAngle(float anglePerFrame, uint32_t frameIndex) {
+	return anglePerFrame * static_cast<float>(frameIndex);
+}
 
 /**
  * 每帧 view/proj（registry context，projectionSystem 由 Camera + SceneBounds + WindowExtent 推导）

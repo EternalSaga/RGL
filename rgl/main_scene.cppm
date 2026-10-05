@@ -598,6 +598,9 @@ void wireHotReload(entt::registry& registry) {
 			return;
 		}
 		registry.ctx().get<SceneSpin>().speed = cfg->spin ? 1.0f : 0.0f;
+		// 帧驱动 spin 同路热载（门默认 0 = 关；见 SceneSpin / main_impl 同段注释）
+		registry.ctx().get<SceneSpin>().frameAngle = cfg->spinFrameAngle;
+		registry.ctx().get<SceneSpin>().axis = cfg->spinAxis;
 		auto& env = registry.ctx().get<SceneEnv>();
 		env.exposure = cfg->exposure;
 		env.aoStrength = cfg->aoStrength;  // Phase 11 批 11.4：SSAO 强度（热重载同路）

@@ -191,6 +191,85 @@ TEST_CASE("scene_config：taa 段解析（批 12.6；缺段默认关 + 显式键
 	}
 }
 
+TEST_CASE("scene_config：帧驱动 spin 键（spin_frame_angle / spin_axis；默认 = 门关 = 逐位今天）") {
+	// 默认画像（门关）：spin_frame_angle = 0 且 spin_axis = (0.5,1,0) = SceneSpin.axis 现值。
+	// 变异红线：默认被翻成非 0 → 本条红（默认漂移 = 门默认开 = 基线不再是基线——
+	// 与 taaBaseSpace/static_boost 的「不写键」覆盖逻辑同族，只有这条断言覆盖缺省路径）。
+	{
+		TempLua f("sc_spinframe_absent", "return {}\n");
+		auto r = loadSceneConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		expectNear(r->spinFrameAngle, 0.0, 0.0, 1e-9);
+		expectVec(r->spinAxis, glm::vec3(0.5f, 1.0f, 0.0f));
+	}
+	// 显式命中（snake_case 键名 = 契约；轴写 up = imgqa temporal-motion 的激励形态，
+	// 与默认 (0.5,1,0) 方向相反 ⟹ 键名打错与不写键**可区分**，同 base_space 的手法）。
+	// 变异红线：readFloat/readVec3 任一键名打错 → 字段保持默认 → 本条红。
+	{
+		TempLua f("sc_spinframe_on",
+			"return { spin_frame_angle = 0.00349066, spin_axis = { 0, 1, 0 } }\n");
+		auto r = loadSceneConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		expectNear(r->spinFrameAngle, 0.00349066, 1e-6, 0.0);
+		expectVec(r->spinAxis, glm::vec3(0.0f, 1.0f, 0.0f));
+	}
+}
+
+TEST_CASE("scene_config：taa.reprojection / taa.diag_reject（默认 = 逐位今天；显式命中）") {
+	// 默认画像：reprojection = true（消融门默认不生效）、diag_reject = false（诊断门默认关）。
+	// 变异红线：默认被翻 ⟹ 本条红（门默认开 = 基线不再是基线 = 交付图被诊断码污染）。
+	{
+		TempLua f("sc_taa_repro_absent", "return {}\n");
+		auto r = loadSceneConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->taaReprojection == true);
+		CHECK(r->taaDiagReject == false);
+	}
+	// 显式命中（snake_case 键名 = 契约；两键都写**非默认方向** ⟹ 键名打错与不写键可区分）。
+	// 变异红线：readBool 任一键名打错 → 字段保持默认 → 本条红。
+	{
+		TempLua f("sc_taa_repro_on",
+			"return { taa = { reprojection = false, diag_reject = true } }\n");
+		auto r = loadSceneConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->taaReprojection == false);
+		CHECK(r->taaDiagReject == true);
+	}
+	// 反向（显式写默认值也必须命中 true/false 本身，不是「缺省回落」蒙对）
+	{
+		TempLua f("sc_taa_repro_off",
+			"return { taa = { reprojection = true, diag_reject = false } }\n");
+		auto r = loadSceneConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->taaReprojection == true);
+		CHECK(r->taaDiagReject == false);
+	}
+}
+
+TEST_CASE("camera_config：frame_yaw 帧驱动 yaw 门（默认 0 = 门关；显式命中且不碰初始朝向反推）") {
+	// 默认 = 0（门关 = 逐位今天）。变异红线：默认被翻成非 0 = 门默认开 = 交付相机自己转。
+	{
+		TempLua f("cc_frameyaw_absent", "return {}\n");
+		auto r = loadCameraConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		expectNear(r->camera.frameYaw, 0.0, 0.0, 1e-9);
+	}
+	// 显式命中 + **不干扰** position/target 反推（frame_yaw 只填自己的字段；yaw 仍由机位
+	// 反推，门推进发生在 cameraSystem，不在 loader）。反向对照：yaw 若被 frame_yaw 覆写，
+	// 本条的 yaw 断言红。
+	{
+		TempLua f("cc_frameyaw_on",
+			"return { mode = \"fps\", position = { 0, 0, 5 }, target = { 0, 0, 0 }, "
+			"frame_yaw = 0.00349066 }\n");
+		auto r = loadCameraConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		expectNear(r->camera.frameYaw, 0.00349066, 1e-6, 0.0);
+		// fps + position/target 反推：看向 −z ⟹ yaw = atan2(0, 5) = 0、pitch = 0
+		expectNear(r->camera.yaw, 0.0, 1e-6, 0.0);
+		expectNear(r->camera.pitch, 0.0, 1e-6, 0.0);
+	}
+}
+
 TEST_CASE("scene_config：entities 列表解析（type/file/position/rotation/scale，rotation 度原样透传）") {
 	TempLua f("sc_entities", R"lua(
 return {

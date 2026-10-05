@@ -108,7 +108,10 @@ void convA2B10G10R10(const uint8_t* src, uint8_t* out, size_t px) {
 	}
 }
 
-/** R16G16B16A16_SFLOAT（HDR）→ RGBA8：half→float，gbufRaw 直出 raw8 / 否则 sRGB。 */
+/** R16G16B16A16_SFLOAT（HDR）→ RGBA8：half→float，gbufRaw 直出 raw8 / 否则 sRGB。
+ * alpha = **raw8 直出**（数据不是颜色，与 convR32Uint/convR8Unorm 同纪律）：交付路径
+ * alpha 恒 1.0 → 255 = 与旧行为（out 预填 255）逐字节相同，PNG 哈希不受影响；
+ * taa_out 的拒收诊断码（`taa.diag_reject`）住在 alpha，raw 直出才可精确解码。 */
 void convRgba16Half(const uint8_t* src, uint8_t* out, size_t px, bool gbufRaw) {
 	for (size_t i = 0; i < px; ++i) {
 		for (int c = 0; c < 3; ++c) {
@@ -116,6 +119,8 @@ void convRgba16Half(const uint8_t* src, uint8_t* out, size_t px, bool gbufRaw) {
 				static_cast<uint16_t>(src[i * 8 + c * 2] | (src[i * 8 + c * 2 + 1] << 8)));
 			out[i * 4 + c] = gbufRaw ? raw8(v) : toSrgb(v);
 		}
+		out[i * 4 + 3] = raw8(halfToFloat(static_cast<uint16_t>(
+			src[i * 8 + 6] | (src[i * 8 + 7] << 8))));
 	}
 }
 

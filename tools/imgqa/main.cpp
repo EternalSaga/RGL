@@ -632,12 +632,22 @@ void printUsage()
         "静止机位 + jitter，连续帧突发逐帧差（批 12.6 T4）\n"
         "  temporal-residual [--periods 2] [--warm-multiplier 6] [--variant forward]"
         " [--slow-feedback 0.002] [--skip-slow] [--base-space] [--static-boost 0.02]"
+        " [--bistro] [--camera all] [--boost-floor 0.01]"
         "  时域**绝对**残差：静止机位连拍折"
         " (2,16,H,W) 后逐像素 max−median（线性域；补 temporal 相对比的盲区，批 13.1 主判据）。"
         " --static-boost <地板> = 批 13.7 `taa.static_boost` 变体（**只出数不判**：跑 B1–B4 四组"
-        "出门开/门关 meanSwing/p99.9/frac>τ + 梯度比；⚠ 地板 = **本帧权重**，调小 = 更信历史）\n"
+        "出门开/门关 meanSwing/p99.9/frac>τ + 梯度比；⚠ 地板 = **本帧权重**，调小 = 更信历史）。"
+        " --bistro = 批 13.7b 真实场景变体（债-48：交付配置 + 用户报障三机位 doorframe/wetground/"
+        "doorpanel，N1–N5 五组出数 + 债-47 线性域梯度比 + swing 热图；--camera 选单机位）\n"
         "  taa-swim [--pairs 32] [--warm 32] [--variant forward]  真实场景逐帧差是否=整幅亚像素"
         "平移（游动）；含基空间门（批 13.2 T5/T6）与量具阳性锚点（批 13.1b）\n"
+        "  temporal-motion [--camera doorframe] [--motion camera] [--angle 0.2] [--burst 32]"
+        " [--warm 16] [--warm-still 64] [--edge-pct 0.90]  **相机运动下 TAA 抗了什么锯齿**："
+        "--motion camera（默认）= 相机帧驱动 yaw（camera.lua frame_yaw，= 用户报障的运动源；"
+        "angle=角度×帧号，纯函数）；--motion spin = 场景旋转相机不动（债-49 鬼影仪器）。"
+        "M0–M4 对**同机位 2560×1440 超采样参考**量边缘像素线性域偏差（按帧号配对到同一视点，"
+        "故不受 `moving-camera-l1-ratio` 反模式影响）+ M1m/M4m 连拍 taa_out alpha 出**历史被拒"
+        "比例**（门 `taa.diag_reject`，RGB 逐位 = M1/M4）；只出数 + 一句判决，不改渲染\n"
         "  ao-noise [--glb cornell_box.glb] [--camera front] [--variant deferred] [--strength 0.5]"
         " [--radius 40] [--pairs 16] [--no-temporal] [--bistro]  SSAO 噪声四组量测：闭式契约区偏离 / 分布 /"
         "亚像素爬行 / TAA 时域（同进程 /param A/B）\n"
@@ -710,7 +720,17 @@ int main(int argc, char** argv)
             return cmdTemporalResidual(std::stoi(P.get(args, "--periods", "2")),
                 std::stod(P.get(args, "--warm-multiplier", "6")), P.get(args, "--variant", ""),
                 std::stod(P.get(args, "--slow-feedback", "0.002")), P.has(args, "--skip-slow"),
-                P.has(args, "--base-space"), std::stod(P.get(args, "--static-boost", "0")));
+                P.has(args, "--base-space"), std::stod(P.get(args, "--static-boost", "0")),
+                P.has(args, "--bistro"), P.get(args, "--camera", "all"),
+                std::stod(P.get(args, "--boost-floor", "0.01")), P.has(args, "--diag-bs-off"));
+        if (cmd == "temporal-motion")
+            return cmdTemporalMotion(P.get(args, "--camera", "doorframe"),
+                P.get(args, "--motion", "camera"),
+                std::stod(P.get(args, "--angle", "0.2")),
+                std::stoi(P.get(args, "--burst", "32")),
+                std::stoi(P.get(args, "--warm", "16")),
+                std::stoi(P.get(args, "--warm-still", "64")),
+                std::stod(P.get(args, "--edge-pct", "0.90")));
         if (cmd == "aa-coverage")
             return cmdAaCoverage(P.get(args, "--variant", ""), std::stoi(P.get(args, "--warm", "32")),
                 std::stod(P.get(args, "--feedback", "0.12")), P.has(args, "--base-space"));

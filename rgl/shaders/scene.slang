@@ -332,3 +332,12 @@ float readTaaAoApplied()
 {
     return asfloat(sceneData.Load(722224u + 8u));  // kSceneDataTaaPrevContentShiftOffset + z
 }
+
+// 历史拒收诊断门标志（`taa.diag_reject`，1/0，默认 0 = 今天）。= 1 ⟹ taa.frag 把逐像素
+// 「历史怎么了」码写进输出 alpha（0 收下 / 0.25 裁剪 / 0.5 盒拒收 / 0.75 重投影拒收 /
+// 1 无历史），RGB 一个 bit 不动。回读 = `POST /shot {"attachment":"taa_out"}`。
+// 零布局变更（复用 .w 保留位，static_assert 不变）。
+float readTaaDiagReject()
+{
+    return asfloat(sceneData.Load(722224u + 12u));  // kSceneDataTaaPrevContentShiftOffset + w
+}

@@ -182,6 +182,7 @@ struct RpcWiring {
 	std::string burstDir;                      ///< 输出目录（相对 CWD）
 	std::string burstPrefix = "burst_";        ///< 文件名前缀
 	int burstGbuf = -1;                        ///< 回读源（-1 = swapchain 后缓冲）
+	std::string burstAttachment;               ///< 具名附件回读（非空 = 覆盖 burstGbuf；temporal-motion 的 taa_out alpha 掩膜连拍）
 	uint32_t burstRemaining = 0;               ///< 还差几张（0 = 本批已交齐）
 	uint32_t burstIndex = 0;                   ///< 下一张的序号（文件名后缀）
 	std::vector<std::string> burstFiles;       ///< 已写盘的绝对路径（完成时在应答里回显）
@@ -344,6 +345,32 @@ void rpcHandleShot(RpcWiring& w, const nlohmann::json& body, RpcResponder respon
 }
 
 /**
+ * @brief 解析 /shotburst 的 `attachment` 字段（temporal-motion 的 taa_out 拒收掩膜连拍）。
+ *
+ * 白名单只两条：`swapchain`（= 不传，旧行为逐位不变）与 `taa_out`（具名附件回读）。
+ * 抽成独立函数的原因：把 4 个校验分支挪出 handler，认知复杂度回到红线内。
+ *
+ * @param body 请求体
+ * @param out  通过时写入附件名（未传 = 空串 = swapchain 路）
+ * @return 错误消息（空 = 通过）
+ */
+std::string parseBurstAttachment(const nlohmann::json& body, std::string& out) {
+	out.clear();
+	if (!body.contains("attachment"))
+		return {};
+	if (body.contains("gbuf"))
+		return "'attachment' and 'gbuf' are mutually exclusive";
+	if (!body["attachment"].is_string())
+		return "'attachment' must be a string";
+	out = body["attachment"].get<std::string>();
+	if (out.empty())
+		return "'attachment' must be a non-empty name";
+	if (out != "swapchain" && out != "taa_out")
+		return "'attachment' only supports swapchain | taa_out";
+	return {};
+}
+
+/**
  * POST /shotburst：登记「连续 N 帧」采集（应答在最后一张写盘后才兑现）。
  *
  * 与 `/shot` 的**本质**区别不是省了几次往返，而是连续性：`/shot` 每张的帧号取决于
@@ -353,7 +380,8 @@ void rpcHandleShot(RpcWiring& w, const nlohmann::json& body, RpcResponder respon
  *
  * @param w 装配态
  * @param body 请求体对象（`n` 必填 ≥1、`dir` 必填输出目录、`prefix?` 文件名前缀、
- *   `gbuf?` 回读通道；`n` 越界或类型错 = 400）
+ *   `gbuf?` 回读通道、`attachment?` 具名附件回读（与 gbuf 互斥；temporal-motion 取
+ *   taa_out alpha 的拒收掩膜连拍）；`n` 越界或类型错 = 400）
  * @param responder 跨帧响应句柄（移交给 w.pendingBurst）
  */
 void rpcHandleShotBurst(RpcWiring& w, const nlohmann::json& body, RpcResponder responder) {
@@ -387,12 +415,20 @@ void rpcHandleShotBurst(RpcWiring& w, const nlohmann::json& body, RpcResponder r
 	w.burstDir = body.at("dir").get<std::string>();
 	if (body.contains("prefix"))
 		w.burstPrefix = body.at("prefix").get<std::string>();
+	// attachment（temporal-motion 的 taa_out alpha 掩膜连拍）：与 gbuf 互斥，同 /shot 的约定。
+	if (auto err = parseBurstAttachment(body, w.burstAttachment); !err.empty()) {
+		rpcReject(responder, 400, err);
+		return;
+	}
 	w.burstGbuf = body.contains("gbuf") ? body.at("gbuf").get<int>() : -1;
 	w.burstRemaining = static_cast<uint32_t>(body.at("n").get<int>());
 	w.burstIndex = 0;
 	w.burstFiles.clear();
 
-	w.renderer.requestFrameCapture(w.burstGbuf);  // 第一张 = 本帧 drawFrame 回读
+	if (w.burstAttachment.empty())
+		w.renderer.requestFrameCapture(w.burstGbuf);  // 第一张 = 本帧 drawFrame 回读
+	else
+		w.renderer.requestFrameCapture(std::string_view(w.burstAttachment));
 	w.pendingBurst = std::move(responder);
 }
 
@@ -428,7 +464,11 @@ void rpcSettleShot(RpcWiring& w) {
 					.body.dump());
 			return;
 		}
-		w.renderer.requestFrameCapture(w.burstGbuf);  // 下一张 = 本帧（连续，不跨 HTTP）
+		// 下一张 = 本帧（连续，不跨 HTTP）；回读源与首张同款选择
+		if (w.burstAttachment.empty())
+			w.renderer.requestFrameCapture(w.burstGbuf);
+		else
+			w.renderer.requestFrameCapture(std::string_view(w.burstAttachment));
 		return;
 	}
 	if (!w.pendingShot)

@@ -339,6 +339,9 @@ void parseDeferredStyles(sol::table root, SceneConfig& cfg) {
 
 		readStr(root, "model", cfg.modelPath);
 		readBool(root, "spin", cfg.spin);
+		// 帧驱动 spin（诊断激励门，默认 0 = 关 = 逐位今天；判据本体 = frameDrivenSpinAngle）
+		readFloat(root, "spin_frame_angle", cfg.spinFrameAngle);
+		cfg.spinAxis = readVec3(root, "spin_axis", cfg.spinAxis);
 		readBool(root, "cube", cfg.showCube);
 		readFloat(root, "exposure", cfg.exposure);  // Phase 8 收尾：tonemap 曝光（可选，1.0 = 直通）
 		// Phase 11 批 11.4：SSAO 强度（可选段 ao.strength，0 = 逐位旁路）
@@ -358,6 +361,10 @@ void parseDeferredStyles(sol::table root, SceneConfig& cfg) {
 			readBool(taa, "static_boost", cfg.taaStaticBoost);
 			readFloat(taa, "static_feedback", cfg.taaStaticFeedback);
 			readU32(taa, "static_ramp", cfg.taaStaticRamp);
+			// 重投影消融门（默认 true = 逐位今天；关 = 历史按同基位置采样，见字段注释）
+			readBool(taa, "reprojection", cfg.taaReprojection);
+			// 历史拒收诊断门（默认关；开 = 拒收码编进 taa_out alpha，RGB 逐位不变）
+			readBool(taa, "diag_reject", cfg.taaDiagReject);
 		}
 
 		if (auto r = parseEntities(root, cfg); !r)

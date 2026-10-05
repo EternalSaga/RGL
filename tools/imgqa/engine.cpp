@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #include <chrono>
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -138,12 +139,74 @@ void replaceValue(std::string& text, const std::string& file, const std::string&
     text.replace(at + head.size(), eol - (at + head.size()), newValue);
 }
 
+/// 交付配置模式：把表值键 `key = { a, b }` 整体改写为 `key = { newContent }`。
+/// 为什么不能复用 `replaceValue`：它按第一个 `,` 或换行收尾，而表值**内部就有逗号**
+/// （`headless_size = { 1280, 720 }` ⟹ 截在 1280 后 = 留下 `720 },` = Lua 语法错）。
+/// ⚠ `newContent` 是**花括号内部**的内容（不含花括号）——上一版把开括号混进参数、函数
+/// 又补一次，写出 `headless_size = { { 2560, 1440 } }`：语法合法（嵌套表）但 loader 把
+/// [1] 当数字读 = ConfigLoadFailed，REF 超采样组整组引擎启动即退（本轮缺陷 B 的根因）。
+/// 形状自检（写出后必须匹配 `key = { <num>, <num> }`）就钉住这一类「语法合法、语义是
+/// 嵌套表」的失效——只测「正则命中数」抓不到它，命中了恰恰说明写坏了。
+void replaceTableValue(std::string& text, const std::string& file, const std::string& key,
+    const std::string& newContent)
+{
+    const std::string head = key + " = {";
+    const auto at = text.find(head);
+    if (at == std::string::npos)
+        throw std::runtime_error("交付配置 " + file + " 里没有表值键 `" + key
+            + "`——覆写失败，拒绝在旧值上下判据");
+    const auto close = text.find('}', at + head.size());
+    if (close == std::string::npos)
+        throw std::runtime_error("交付配置 " + file + " 的表值键 `" + key + "` 没有收尾");
+    text.replace(at + head.size(), close - (at + head.size()) + 1,
+        " " + newContent + " }");
+    // 写出后的形状自检：扁平数值表 `{ 数字, 数字 }`，**不许**出现嵌套花括号。
+    const std::regex flatRx(key + R"aaa(\s*=\s*\{\s*-?[0-9]+(\.[0-9]+)?\s*,\s*-?[0-9]+(\.[0-9]+)?\s*\})aaa");
+    if (!std::regex_search(text, flatRx))
+        throw std::runtime_error("交付配置 " + file + " 的 `" + key
+            + "` 改写后不是扁平数值表（疑似嵌套花括号 = 引擎 loader 会把表当数字读 = "
+              "ConfigLoadFailed）。改写前的原文片段: "
+            + text.substr(at, std::min<size_t>(64, text.size() - at)));
+}
+
+/// 交付配置模式：在**第一条未注释的 `key = ...` 行**之后插入若干行（不碰原行）。
+/// 与 `subLuaLine` 的区别 = 原行要留着（`spin = false` 是交付配置的既有键，本工具只
+/// 追加同级的诊断键）；与 `rewriteTaaBlock` 的「插到 `return {` 之后」的区别 =
+/// 插到兄弟键旁边，读生成出来的 profile 时键的归属一眼可见。
+void insertAfterKey(std::string& text, const std::string& file, const std::string& key,
+    const std::string& block)
+{
+    std::istringstream in(text);
+    std::ostringstream out;
+    std::string line;
+    bool hit = false;
+    while (std::getline(in, line)) {
+        out << line << "\n";
+        const auto first = line.find_first_not_of(" \t");
+        if (!hit && first != std::string::npos && line.compare(first, key.size(), key) == 0
+            && line.substr(first, 2) != "--"
+            // 键名边界：`spin` 不得命中同前缀的兄弟键（scene.lua 里就有 `spin_frame_angle`，
+            // 插到它后面 = 插到自己刚写的那两行之后，第二次调用直接跑偏）。
+            && (first + key.size() >= line.size()
+                || !(std::isalnum(static_cast<unsigned char>(line[first + key.size()]))
+                    || line[first + key.size()] == '_'))) {
+            out << block;
+            hit = true;
+        }
+    }
+    if (!hit)
+        throw std::runtime_error("交付配置 " + file + " 里没有未注释的 " + key
+            + " 行——诊断键无处可插，拒绝在缺键的配置上下判据");
+    text = out.str();
+}
+
 /// 交付配置模式：整段替换 `scene.lua` 的 `taa = { ... },` 块为显式三键。
 /// 缺块就在 `return {` 之后插一段——**不静默跳过**（跳过 = 判据跑在「TAA 关」的配置上，
 /// 恒等式会因「pass 根本不在图里」而平凡成立 = 最阴的假绿）。
 /// staticBoost/staticFeedback（批 13.7）：默认关 = 不写这两键（写出的键越少，漂移面越小）。
 void rewriteTaaBlock(std::string& scene, bool enabled, double feedback, double jitterScale,
-    bool baseSpace, bool staticBoost = false, double staticFeedback = 0.01)
+    bool baseSpace, bool staticBoost = false, double staticFeedback = 0.01,
+    bool motionCompensation = true, bool reprojection = true, bool diagReject = false)
 {
     std::ostringstream blk;
     blk << "    taa = {\n        enabled = " << lb(enabled) << ",\n        feedback = "
@@ -151,6 +214,16 @@ void rewriteTaaBlock(std::string& scene, bool enabled, double feedback, double j
         << ",\n        base_space = " << lb(baseSpace);
     if (staticBoost)
         blk << ",\n        static_boost = true,\n        static_feedback = " << staticFeedback;
+    // 消融/诊断开关：默认态 = 不写键（键越少漂移面越小）。
+    // motion_compensation 只关 prevSpin 场景旋转补偿（spin 模式 M3 用）；reprojection 关的是
+    // prevViewProj 相机重投影本身（相机模式 M3 用）——两者在相机运动下**不等价**，
+    // 语义 → rgl/scene_config.cppm 字段注释。
+    if (!motionCompensation)
+        blk << ",\n        motion_compensation = false";
+    if (!reprojection)
+        blk << ",\n        reprojection = false";
+    if (diagReject)
+        blk << ",\n        diag_reject = true";
     blk << ",\n    },\n";
     const auto begin = scene.find("\n    taa = {");
     if (begin != std::string::npos) {
@@ -263,6 +336,12 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
         std::string rt = readFile(outDir + "/runtime.lua");
         replaceValue(rt, "runtime.lua", "headless", "true");
         replaceValue(rt, "runtime.lua", "llm_debug", "false");  // RPC 形态与 llm 截图互斥
+        // 尺寸覆写是**可选**的（默认关：现有判据全部钉 1280×720，隐式改尺寸 = 换口径）。
+        // 表值必须走 replaceTableValue，理由见其注释（replaceValue 会截在花括号里的逗号；
+        // 而参数**不含花括号**——含了就写出嵌套表，缺陷 B 的根因，函数内有形状自检）。
+        if (o.overrideHeadlessSize)
+            replaceTableValue(rt, "runtime.lua", "headless_size",
+                std::to_string(o.size[0]) + ", " + std::to_string(o.size[1]));
         writeFile(outDir + "/runtime.lua", rt);
 
         std::string dg = readFile(outDir + "/diagnostics.lua");
@@ -272,7 +351,19 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
 
         std::string sc = readFile(outDir + "/scene.lua");
         rewriteTaaBlock(sc, o.taa, o.taaFeedback, o.taaJitterScale, o.taaBaseSpace,
-            o.taaStaticBoost, o.taaStaticFeedback);
+            o.taaStaticBoost, o.taaStaticFeedback, o.taaMotionCompensation, o.taaReprojection,
+            o.taaDiagReject);
+        // 帧驱动 spin（诊断激励门）。**只在门开时写**：不写 = 交付配置原样 = 逐位今天。
+        // 键名拼错在这里是**静默**的（scene.lua 的未知键引擎不打警告），所以消费方
+        // temporal-motion 另有在场性守卫：运动组的连拍若逐位相同 = 键没生效 = 立刻停下。
+        if (o.spinFrameAngle != 0.0) {
+            std::ostringstream spin;
+            spin << std::setprecision(9)
+                 << "    spin_frame_angle = " << o.spinFrameAngle << ",\n"
+                 << "    spin_axis = { " << o.spinAxis[0] << ", " << o.spinAxis[1] << ", "
+                 << o.spinAxis[2] << " },\n";
+            insertAfterKey(sc, "scene.lua", "spin", spin.str());
+        }
         writeFile(outDir + "/scene.lua", sc);
 
         // 机位写进 camera.lua（**从第 1 帧生效**，理由见 ProfileOpts::hasCamera 的注释）
@@ -290,6 +381,14 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
             subLuaLine(cam, "position", vec(o.cameraPosition), "camera.lua");
             subLuaLine(cam, "target", vec(o.cameraTarget), "camera.lua");
             subLuaLine(cam, "fovDegrees", fov.str(), "camera.lua");
+            // 帧驱动 yaw（相机运动激励门）。**只在门开时写**：不写 = 交付配置原样 = 逐位今天。
+            // 插到 `mode` 行旁（交付 camera.lua 里 frame_yaw 只有注释行，subLuaLine 找不到实体行）。
+            // 键名拼错在 lua 侧是**静默**的，消费方 temporal-motion 有在场性守卫兜底。
+            if (o.cameraFrameYaw != 0.0) {
+                std::ostringstream yaw;
+                yaw << std::setprecision(9) << "    frame_yaw = " << o.cameraFrameYaw << ",\n";
+                insertAfterKey(cam, "camera.lua", "mode", yaw.str());
+            }
             writeFile(outDir + "/camera.lua", cam);
         }
 
@@ -432,6 +531,38 @@ struct Engine::Impl {
     }
 };
 
+namespace {
+/**
+ * 引擎日志尾部（「配置写出来必须能被引擎接受」这条自检的**取证**部分）。
+ *
+ * 判据本体在 Engine 构造：RPC 就绪 = 引擎走完了全部配置加载（ConfigLoadFailed 抛在
+ * RPC 挂起之前）；RPC 永不就绪 / 进程提前退出 = 配置**没被接受**。此时最贵的失效是
+ * 拿着"超时"或 `strerror(status)`（对 wait status 用 strerror = 驴唇不对马嘴）去排查，
+ * 而引擎早就把 `[error] ... ConfigLoadFailed ...` 写进了日志——把尾部原样带进异常，
+ * 失效当场可读（本轮缺陷 B：REF 组 runtime.lua 被写成嵌套表，报错只有半行截断路径）。
+ */
+std::string logTail(const std::string& path, int lines = 12)
+{
+    std::ifstream in(path, std::ios::binary);
+    if (!in)
+        return "(日志读不到: " + path + ")";
+    std::vector<std::string> ring(static_cast<size_t>(lines));
+    std::string line;
+    long n = 0;
+    while (std::getline(in, line)) {
+        ring[static_cast<size_t>(n % lines)] = line;
+        ++n;
+    }
+    std::ostringstream out;
+    if (n == 0)
+        return "(日志为空)";
+    const long start = n > lines ? n : 0;
+    for (long i = start; i < n; ++i)
+        out << "\n    | " << ring[static_cast<size_t>(i % lines)];
+    return out.str();
+}
+}  // namespace
+
 Engine::Engine(std::string profileDir, int port) : impl_(new Impl{.profileDir = profileDir, .port = port})
 {
     // 新鲜度守卫先于一切（所有引擎驱动路径统一受护，见 checkShadersFresh 注释）。
@@ -467,13 +598,20 @@ Engine::Engine(std::string profileDir, int port) : impl_(new Impl{.profileDir = 
 
     // 等 RPC 就绪（引擎启动要过 shader 反射/cubemap 卷积，数秒级；期间进程可能因配置
     // 错误退出——那要立刻报错并把日志路径给出，否则排查者对着超时猜）。
+    //
+    // **「配置写出来必须能被引擎接受」的自检本体**：RPC 就绪 ⟺ 引擎走完了全部配置加载
+    // （ConfigLoadFailed 抛在 RPC 挂起之前）⟹ 本函数返回 = 写出的每个 profile 都被引擎
+    // 接受；失败 = 配置没被接受，异常必须带日志尾部（logTail 注释：缺陷 B 的教训——
+    // 「只测正则命中数」的自检恰恰放过了「语法合法但语义是嵌套表」的写坏形态）。
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
     while (std::chrono::steady_clock::now() < deadline) {
         int st = 0;
         if (waitpid(pid, &st, WNOHANG) == pid) {
             impl_->pid = -1;
-            throw std::runtime_error("引擎提前退出（status=" + std::to_string(st) + "），见 "
-                + impl_->logPath + "\n  末行: " + std::string(std::strerror(st)));
+            throw std::runtime_error("引擎提前退出（exit="
+                + std::to_string(WIFEXITED(st) ? WEXITSTATUS(st) : -1) + ", signal="
+                + std::to_string(WIFSIGNALED(st) ? WTERMSIG(st) : 0)
+                + "）= 写出的配置没被引擎接受，见 " + impl_->logPath + logTail(impl_->logPath));
         }
         if (impl_->http->Get("/"))
             return;
@@ -481,7 +619,7 @@ Engine::Engine(std::string profileDir, int port) : impl_(new Impl{.profileDir = 
     }
     impl_->killTree();
     throw std::runtime_error("RPC 端口 " + std::to_string(port) + " 60s 未就绪，见 "
-        + impl_->logPath);
+        + impl_->logPath + logTail(impl_->logPath));
 }
 
 void Engine::setCamera(const Camera& cam)
@@ -564,10 +702,18 @@ void Engine::advanceFrames(uint32_t n, int timeoutSec)
 }
 
 std::vector<std::string> Engine::shotBurst(const std::string& dir, uint32_t n,
-    const std::string& prefix)
+    const std::string& prefix, const std::string& attachment)
 {
     json body{{"dir", dir}, {"n", static_cast<int>(n)}, {"prefix", prefix}};
+    if (!attachment.empty())
+        body["attachment"] = attachment;  // 具名附件连拍（temporal-motion 的 taa_out alpha 掩膜）
+    // **读超时按张数放大**：/shotburst 的响应在最后一张写完才兑现 ⟹ 响应时间 = N×(帧时间 +
+    // PNG 编码)。2560×1440 的 REF 组单张编码实测数百毫秒 ⟹ 32 张远超客户端默认 20s，
+    // 症状是「POST /shotburst 无响应」（其实是客户端先挂断，引擎随后正常返回）。
+    // 预算 8s/张（≈ 默认 20s 的 12 倍余量），上限 10 分钟；其它端点保持 20s（它们慢 = 真卡死）。
+    impl_->http->set_read_timeout(std::min(600, std::max(20, static_cast<int>(n) * 8)), 0);
     auto res = impl_->http->Post("/shotburst", body.dump(), "application/json");
+    impl_->http->set_read_timeout(20, 0);
     if (!res)
         throw std::runtime_error(
             "POST /shotburst 无响应（引擎没起来，或用的是没有该端点的旧构建）");

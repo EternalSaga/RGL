@@ -94,9 +94,12 @@ struct ResidualStat {
  * @param shots 必须**恰好** periods×16 帧、同尺寸、已 prepareLinear（不足就抛，不出数）
  * @param mask  求值区域（空 = 全图）。区域纪律：判据的区域来自几何（objectID 外扩 3px）
  * @param tau   `fracOverTau` 的分母阈值；**各组必须同一个 τ**，否则 frac 跨组不可比
+ * @param swingMap 非空 = 顺带写出逐像素 swing 图（CV_64FC1，与帧同尺寸；mask 外为 0）。
+ *                热图（`--bistro` 的肉眼证据）与统计**必须同源**——同一份折叠代码写两份输出，
+ *                杜绝「图上不闪而数说闪」（或反之）的口径漂移。
  */
 [[nodiscard]] ResidualStat phaseSwingStat(const std::vector<Frame>& shots, const cv::Mat& mask,
-    double tau, int periods);
+    double tau, int periods, cv::Mat* swingMap = nullptr);
 
 /// 相位平均图（线性 luma，全图）= 连拍逐像素均值 = 16 列的均值（每列样本数相同）。
 /// 收敛正确性判据的**两边共用这一个算子**：分子 = TAA 收敛连拍的相位平均，分母 = 同场景
@@ -139,5 +142,37 @@ struct ResidualStat {
  *  3. 单调递增 ⟹ `maxLin` 取 mask 内最大 luma 就是**上界**，与像素具体落在哪个字节无关。
  */
 [[nodiscard]] double maxLsbStepUpTo(double maxLin);
+
+// ── 区域统计小工具（本层与 `temporal_motion.cpp` **共用同一份实现**）───────────────
+// 为什么从匿名 namespace 提出来：这两条是「分位」与「mask 内取值」的唯一口径。
+// 留在匿名 namespace 里，新判据想要 p90 边缘带就只能再抄一份——两份 percentile
+// 的分位取法（`p*n` 下标 vs 插值）一旦不同，两条判据的「边缘」就不是同一个区域，
+// 而这种漂移不会让任何一条变红。先例 = 本文件头注释写的「同一算子只许一份实现」。
+
+/// 升序样本的 p 分位（白电平 / p99.9 / 边缘带阈值用）。空集给 0。
+[[nodiscard]] double percentileOf(const std::vector<double>& sorted, double p);
+
+/// mask 内（空 = 全图）的单通道图取值，**未排序**（调用侧自己 sort 后再喂 percentileOf）。
+[[nodiscard]] std::vector<double> valuesInMask(const cv::Mat& x, const cv::Mat& mask);
+
+/// bistro 用户报障机位（**仓库资产**，改坐标 = 改口径）。
+///
+/// 提到本头 = 单一真相源：`temporal-residual --bistro` 与 `temporal-motion` 必须打在
+/// **同一个机位**上，否则「静止机位的残差」与「运动机位的边缘偏差」说的是两幅画面。
+/// 坐标 = 2026-10-05 凌晨量具（/tmp 里的 Python，机器重启随 tmpfs 没了）从会话记录原样捞回。
+/// doorframe = 用户报障机位（门框缝隙 / 门板斜边 / 窗棂的 1px 高亮细线）；
+/// wetground = 湿润地面成区颗粒；doorpanel = 旧门板白点。
+struct BistroCam {
+    const char* name;
+    std::array<double, 3> position;
+    std::array<double, 3> target;
+    double fov;
+};
+
+inline const BistroCam kBistroCams[] = {
+    {"doorframe", {-0.115745, 0.030675, 0.005653}, {-0.259691, 0.043088, 0.235251}, 45.0},
+    {"wetground", {-0.157946, 0.054863, 0.014969}, {-0.030544, -0.117198, -0.202296}, 45.0},
+    {"doorpanel", {-0.047810, 0.068143, 0.046978}, {-0.223579, 0.014183, 0.116858}, 45.0},
+};
 
 }  // namespace RGL::imgqa

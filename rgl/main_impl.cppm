@@ -303,7 +303,27 @@ void wireSceneEnvContexts(entt::registry& rg, const SceneConfig& scene) {
 	env.taaStaticBoost = scene.taaStaticBoost;
 	env.taaStaticFeedback = scene.taaStaticFeedback;
 	env.taaStaticRamp = scene.taaStaticRamp;
+	// 重投影消融 + 历史拒收诊断（均默认 = 逐位今天；语义 → SceneEnv 字段注释）
+	env.taaReprojection = scene.taaReprojection;
+	env.taaDiagReject = scene.taaDiagReject;
 	rg.ctx().emplace<TaaState>();
+}
+
+/**
+ * SceneSpin（全场景同一旋转）——scene.lua 三键 → registry context 的映射。
+ *
+ * 抽 helper 的直接原因 = `main()` 的 120 行红线，顺手把「配置 → 旋转态」收成一处。
+ * 三键里 `spin_frame_angle` / `spin_axis` 是**诊断激励门**（默认 0 = 关 = 逐位今天；
+ * 判据本体 = `frameDrivenSpinAngle`），消费方 = `imgqa temporal-motion`。热重载侧的
+ * 同名映射见 main_scene.cppm::wireHotReload（与 `spin` 键的既有做法一致）。
+ * @param rg 场景 registry（尚未 emplace SceneSpin）
+ * @param scene configs/scene.lua 产物
+ */
+void wireSceneSpinContext(entt::registry& rg, const SceneConfig& scene) {
+	auto& spin = rg.ctx().emplace<SceneSpin>();
+	spin.speed = scene.spin ? 1.0f : 0.0f;  // 0 = 静止（configs/scene.lua 的 spin 开关）
+	spin.frameAngle = scene.spinFrameAngle;  // rad/帧；0 = 帧驱动门关（dt 累积路径照旧）
+	spin.axis = scene.spinAxis;              // 默认 (0.5,1,0) = SceneSpin 现值
 }
 
 /** 渲染图配置加载 + compileRenderGraph（校验 + barrier 布局链推导，错误抛 std::runtime_error）+ deferredMode 求值。
@@ -476,8 +496,7 @@ int main() {
 		registry.ctx().emplace<InputFilter>();  // Phase 10 调试层输入先手过滤器（imgui 装配；缺省空 = 不过滤）
 		registry.ctx().emplace<DebugPanelState>();  // 面板跨帧 UI 态（材质选择器等，10.2c）
 		registry.ctx().emplace<CameraState>();
-		auto& spin = registry.ctx().emplace<SceneSpin>();
-		spin.speed = configs.scene.spin ? 1.0f : 0.0f;  // 0 = 静止（configs/scene.lua 的 spin 开关）
+		wireSceneSpinContext(registry, configs.scene);  // SceneSpin（dt 累积 + 帧驱动门）
 		registry.ctx().emplace<SceneBounds>();
 		registry.ctx().emplace<ViewProjection>();
 		registry.ctx().emplace<FrameDrawList>();

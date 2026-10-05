@@ -55,7 +55,34 @@ export struct Camera {
 	float trackballSensitivity = 0.005f;
 	float zoomSpeed = 0.03f;
 	KeyBindings keys;  // 键位绑定（configs/camera.lua 的 keys 字段，E5.4：键位是数据不是硬编码）
+	// ── 帧驱动 yaw（camera.lua `frame_yaw`，rad/帧；0 = 门关 = 逐位今天）──
+	// 诊断激励门（消费方 = imgqa temporal-motion）：yaw = yawBase + frameYaw·帧号 的
+	// **纯函数**（frameDrivenCameraYaw，先例 = scene_context 的 frameDrivenSpinAngle）——
+	// 跨运行/跨进程可复现的相机运动，dt 累积随帧时长漂 = 对齐根本不存在
+	// （tools/imgqa/temporal.cpp 头注释）。为什么必须是绕 up 轴定角 yaw：刚体相机运动
+	// 的像素位移与深度无关（u′=(u+tanθ)/(1−u·tanθ)，只依赖屏位不依赖深度），
+	// prevViewProj 重投影能精确对齐；平移 dolly 的位移 ∝1/深度，远处信号衰减。
+	// ⚠ 仅 fps 模式生效（trackball 的 view 由 position/target 推导，yaw 是死字段）；
+	//   门开时拖拽改朝向会被下一帧的纯函数值覆盖（诊断激励刻意压过交互，非 bug）。
+	float frameYaw = 0.0f;       ///< rad/帧；≠0 = 门开
+	float yawBase = 0.0f;        ///< 基准朝向（cameraSystem 自动重定基，见 applyFrameDrivenYaw）
+	uint32_t yawFrameIndex = 0;  ///< cameraSystem 每帧 +1（先加后用 ⟹ 首帧偏转 = frameYaw）
 };
+
+/**
+ * 帧驱动 yaw（门 `frame_yaw` 的判据本体；提纯函数的先例 = frameDrivenSpinAngle）。
+ *
+ * yaw = yawBase + yawPerFrame·frameIndex——无累积、无帧时长：同一 frameIndex 在任何
+ * 运行给出同一朝向（跨进程 A/B 对齐的唯一前提）。float32 精度账同 frameDrivenSpinAngle：
+ * 10⁴ 帧 × 3.5e-3 rad/帧 ≈ 35 rad，ULP ≈4e-6 rad ≈ 0.003px，远低于可测信号。
+ * @param yawBase 基准朝向（rad）
+ * @param yawPerFrame 每帧角增量（rad，可负 = 反向）
+ * @param frameIndex 帧号（0 起；0 帧 = 基准）
+ * @return 本帧 yaw（rad）
+ */
+export float frameDrivenCameraYaw(float yawBase, float yawPerFrame, uint32_t frameIndex) {
+	return yawBase + yawPerFrame * static_cast<float>(frameIndex);
+}
 
 /**
  * 输入事件（eventSystem 产生，cameraSystem 消费即清空）：
@@ -344,12 +371,36 @@ void applyMovement(Camera& camera, const CameraState& state, float wheel, float 
 }
 
 /**
+ * 帧驱动 yaw 推进（门 `frame_yaw`，默认 0 = 本函数首行早退 = yaw 逐位今天）。
+ *
+ * 重定基判据 = 「yaw ≠ 纯函数期望值」：任何外部写入（RPC `POST /camera`、初始帧
+ * yawBase 尚为 0 的自举）都会在下一次 cameraSystem 被识别并以外部值重定基——
+ * 写入方**无需知道本门存在**（RPC 处理器 / 热重载零改动）。重定基后跨进程仍只差
+ * 一个**常数帧偏移**（RPC 落在第几帧由启动时序决定），temporal-motion 的逐帧
+ * argmin 对齐正是为此而设。等式两侧同式计算 ⟹ 门开且无外部写入时逐位相等，
+ * float 比较无容差是刻意的（有容差 = 微小真实写入被吞，对齐偏移里混进亚帧漂移）。
+ * @param camera 读写 yaw/yawBase/yawFrameIndex
+ */
+void applyFrameDrivenYaw(Camera& camera) {
+	if (camera.frameYaw == 0.0f)
+		return;  // 门关：不进任何算术（门红线）
+	const float expected
+		= frameDrivenCameraYaw(camera.yawBase, camera.frameYaw, camera.yawFrameIndex);
+	if (camera.yaw != expected)
+		camera.yawBase = camera.yaw
+			- frameDrivenCameraYaw(0.0f, camera.frameYaw, camera.yawFrameIndex);
+	camera.yawFrameIndex += 1u;
+	camera.yaw = frameDrivenCameraYaw(camera.yawBase, camera.frameYaw, camera.yawFrameIndex);
+}
+
+/**
  * 相机 system（每帧一次，system 链首位：camera→animation→bounds→projection→renderlist）：
  * 1) 消费 InputEvents（消费即清空）：键/鼠标按键 → CameraState level 状态，
  *    MouseDelta/Wheel → 本帧增量；
  * 2) 拖拽旋转（Fps = 右键，Trackball = 左键），增量限幅后按模式分发；
  * 3) pitch 每帧 clamp 到 ±89°（防万向翻转）；
- * 4) 移动（WASD 平移 / 滚轮缩放）。
+ * 4) 移动（WASD 平移 / 滚轮缩放）；
+ * 5) 帧驱动 yaw（门 `frame_yaw`，默认关；见 applyFrameDrivenYaw）。
  * @param rg registry（读写 ctx 中的 Camera/CameraState/InputEvents）
  * @param dt 帧间隔（秒，调用方已限幅到 0.1s）
  */
@@ -369,6 +420,8 @@ export void cameraSystem(entt::registry& rg, float dt) {
 	camera.pitch = std::clamp(camera.pitch, -kPitchLimit, kPitchLimit);
 
 	applyMovement(camera, state, frame.wheel, dt);
+
+	applyFrameDrivenYaw(camera);  // 门 `frame_yaw`（默认 0 = 早退，yaw 逐位不变）
 }
 
 

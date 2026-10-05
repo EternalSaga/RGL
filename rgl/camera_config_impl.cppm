@@ -151,10 +151,10 @@ void readCameraPlacement(sol::table root, Camera& camera) {
 }
 
 /**
- * fovDegrees/near/far 标量字段读取（仅 loadCameraConfig 内部使用）：缺字段回落
+ * fovDegrees/near/far/frame_yaw 标量字段读取（仅 loadCameraConfig 内部使用）：缺字段回落
  * camera 当前值；fov 度转弧度。
  * @param root 配置根表
- * @param camera 写入目标（fov/nearPlane/farPlane）
+ * @param camera 写入目标（fov/nearPlane/farPlane/frameYaw）
  */
 void readCameraScalars(sol::table root, Camera& camera) {
 	sol::optional<float> fov = root["fovDegrees"];
@@ -166,6 +166,10 @@ void readCameraScalars(sol::table root, Camera& camera) {
 	sol::optional<float> farV = root["far"];
 	if (farV)
 		camera.farPlane = *farV;
+	// 帧驱动 yaw（诊断激励门，默认 0 = 关 = 逐位今天；判据本体 = frameDrivenCameraYaw）
+	sol::optional<float> frameYaw = root["frame_yaw"];
+	if (frameYaw)
+		camera.frameYaw = *frameYaw;
 }
 
 /**

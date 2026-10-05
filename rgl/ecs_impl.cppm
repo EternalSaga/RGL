@@ -248,11 +248,22 @@ std::expected<void, Error> resizeSystem(entt::registry& rg, RGL::Swapchain& swap
  * 启动期转成 speed）。现状承载"全场景同一旋转"（renderListSystem 乘进各
  * MVP）；per-entity 旋转需求出现时改写 Transform 组件，结构同构，无需二次重构
  *（ecs_compliance_review E4.1）。
+ *
+ * 帧驱动门（`spin_frame_angle` ≠ 0，默认关）：门开走 angle = 帧号纯函数
+ * （frameDrivenSpinAngle，单测钉），dt 累积停用——时域判据要跨进程渲染**同一帧序列**，
+ * dt 累积随帧时长漂、测不出可复现的数（tools/imgqa/temporal.cpp 头注释）。
+ * 门红线：frameAngle = 0（默认）时本分支不进，门关路径与今天逐位相同。
  * @param rg registry（读写 SceneSpin）
- * @param dt 帧间隔（秒，调用方已限幅到 0.1s）
+ * @param dt 帧间隔（秒，调用方已限幅到 0.1s；门开时不消费）
  */
 void animationSystem(entt::registry& rg, float dt) {
 	auto& spin = rg.ctx().get<SceneSpin>();
+	if (spin.frameAngle != 0.0f) {  // 帧驱动门（默认 0 = 关）
+		spin.frameIndex += 1u;
+		spin.angle = frameDrivenSpinAngle(spin.frameAngle, spin.frameIndex);
+		spin.matrix = glm::rotate(glm::mat4(1.0f), spin.angle, spin.axis);
+		return;
+	}
 	if (spin.speed == 0.0f) {
 		return;
 	}
@@ -403,6 +414,21 @@ void taaSystem(entt::registry& rg) {
 		(env.taaMotionCompensation && taa.historyValid)
 			? taa.prevSpin * glm::inverse(spin.matrix)
 			: glm::mat4{1.0f};
+	// 重投影消融门（`taa.reprojection`，默认 true = 本分支不进 = 逐位今天）。
+	// 关 = 三份载荷联合改成本帧恒等形态：prevViewProj := **本帧抖动后** viewProj（此刻
+	// viewProj.proj 已含本帧 jitter，与 @64 的 invViewProj 配套）+ 位移清零 + motion 单位阵
+	// ⟹ shader 端 prevUvBase ≡ baseUv（world 由 (baseUv, depth) 经 invViewProj 重建、再被
+	// 同一矩阵投影回去，浮点上也是同一对矩阵，采样点落回**同基位置**）。
+	// 相机运动激励下历史错位 = 每帧像素位移 ⟹ 读数必须显著变差（temporal-motion 的 M3
+	// 阳性锚点）；静止机位下 prevViewProj ≡ 本帧矩阵 ⟹ 关与不关逐位相同。
+	// ⚠ 勿与 `motion_compensation` 混淆：那条只关 prevSpin 场景旋转补偿，相机动、spin 关
+	//   时它是恒等阵 = 消融无效（这正是 temporal-motion 从 spin 换相机激励后必须新增本门
+	//   的原因，见 tools/imgqa/temporal_motion.cpp 头注释）。
+	if (!env.taaReprojection) {
+		taa.payloadPrevViewProj = viewProj.proj * viewProj.view;
+		taa.payloadPrevContentShift = glm::vec2{0.0f};
+		taa.payloadMotion = glm::mat4{1.0f};
+	}
 
 	// ④ 簿记推进（必须在 ②③ 之后；下游 renderListSystem 读的是 payload*）
 	// 存**抖动后**那份（此刻 viewProj.proj 已含本帧 jitter）⇒ 下一帧拿到的正是

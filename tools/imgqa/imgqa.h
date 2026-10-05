@@ -155,6 +155,35 @@ struct ProfileOpts {
     /// **调小 = 更信历史**）。只在 temporal-residual 的 `--static-boost` 变体里置位。
     bool taaStaticBoost = false;
     double taaStaticFeedback = 0.01;   ///< scene.lua `taa.static_feedback`（本帧权重地板）
+    /// scene.lua `taa.motion_compensation`（prevSpin 刚体补偿）。默认 true = **不写键**
+    /// （写出的键越少漂移面越小，同 static_boost 的做法）；false = 显式写 `false`。
+    /// ⚠ 它只关**场景旋转补偿**：spin 激励下历史错位 = 被测项（`--motion spin` 的 M3）；
+    ///   **相机运动下它是恒等阵 = 关与不关逐位相同**，消融相机重投影必须用 `taaReprojection`。
+    bool taaMotionCompensation = true;
+    /// scene.lua `taa.reprojection`（prevViewProj 相机重投影消融门）。默认 true = 不写键；
+    /// false = 历史按「同基位置」采样（prevViewProj := 本帧矩阵 + 位移清零 + motion 单位阵）。
+    /// `temporal-motion --motion camera` 的 M3 用它——相机在动时这条路才真正被走到。
+    bool taaReprojection = true;
+    /// scene.lua `taa.diag_reject`（历史拒收诊断门，默认关）。开 = taa.frag 把逐像素
+    /// 「历史怎么了」码编进 taa_out 的 alpha（0 收下 / 0.25 盒裁剪 / 0.5 盒拒收 /
+    /// 0.75 重投影拒收 / 1 无历史），RGB 逐位不变；回读 = shotBurst(attachment="taa_out")。
+    bool taaDiagReject = false;
+    /// 帧驱动 spin（scene.lua `spin_frame_angle`，rad/帧）。0 = **不写键** = 门关 = 逐位今天。
+    /// ≠0 时同时写 `spin_axis`（`spinAxis`）——运动必须是绕 up 轴的定角 yaw（刚体、
+    /// prevSpin 重投影能精确对齐；理由全文 = `temporal.cpp` 头注释）。
+    /// ⚠ spin 转的是**场景**（相机不动）⟹ prevViewProj 恒定、相机重投影路不被走到；
+    ///   量「相机运动的 TAA」必须用 `cameraFrameYaw`。消费方 = `temporal-motion --motion spin`。
+    double spinFrameAngle = 0.0;
+    std::array<double, 3> spinAxis{0.0, 1.0, 0.0};
+    /// **相机**帧驱动 yaw（camera.lua `frame_yaw`，rad/帧）。0 = 不写键 = 门关 = 逐位今天。
+    /// ≠0 ⟹ yaw = 基准 + frame_yaw·帧号（纯函数，跨进程可复现；基准被 RPC 写入时自动重定基
+    /// ⟹ 跨进程只差常数帧偏移，由 temporal-motion 的 argmin 对齐吸收）。绕 up 轴定角 yaw 的
+    /// 像素位移与深度无关（刚体相机运动，prevViewProj 重投影精确对齐；平移 dolly 位移 ∝1/深度
+    /// 远处信号衰减——`temporal.cpp` 头注释当年登记的理由）。消费方 = `temporal-motion` 默认模式。
+    double cameraFrameYaw = 0.0;
+    /// 交付配置模式下**覆写 `runtime.lua::headless_size` 为 `size`**（默认 false = 不动，
+    /// 现有判据全部钉 1280×720，隐式改尺寸 = 换口径）。`temporal-motion` 的超采样参考组用。
+    bool overrideHeadlessSize = false;
     std::string entitiesLua;               // 非空 = 整条 entities 行由它给（内建合成靶无 glb 文件）
     std::array<double, 3> lightDir{0.5, -0.75, -0.45};
     double lightIntensity = 12.0;
@@ -214,17 +243,21 @@ public:
      */
     void advanceFrames(uint32_t n, int timeoutSec = 300);
 
-    /// 连续采 n 帧（POST /shotburst）——**时域差分唯一合法的采集口**。
-    /// 与 shot() 的区别不是「省几次往返」：`/shot` 每张落在哪一帧取决于 HTTP 请求与
-    /// 帧首钩子的先后（= 墙钟），相邻两张根本不是相邻两帧，逐帧差于是测的是随机相位窗
-    /// （实测同一个量随预热长度差 3 倍）。`/shotburst` 的「下一张」由引擎在帧首结算
-    /// 钩子里自己登记（该钩子先于 drawFrame）⇒ 采集落在连续的第 N..N+n-1 帧上。
-    /// @param dir 引擎 CWD（build/rgl）下的输出目录
-    /// @param n 张数（≥1）
-    /// @param prefix 文件名前缀（引擎写 `<prefix>%03d.png`）
-    /// @return 引擎回显的绝对路径，顺序 = 帧序
+    /**
+     * 连续采 n 帧（POST /shotburst）——**时域差分唯一合法的采集口**。
+     * 与 shot() 的区别不是「省几次往返」：`/shot` 每张落在哪一帧取决于 HTTP 请求与
+     * 帧首钩子的先后（= 墙钟），相邻两张根本不是相邻两帧，逐帧差于是测的是随机相位窗
+     * （实测同一个量随预热长度差 3 倍）。`/shotburst` 的「下一张」由引擎在帧首结算
+     * 钩子里自己登记（该钩子先于 drawFrame）⇒ 采集落在连续的第 N..N+n-1 帧上。
+     * @param dir 引擎 CWD（build/rgl）下的输出目录
+     * @param n 张数（≥1）
+     * @param prefix 文件名前缀（引擎写 `<prefix>%03d.png`）
+     * @param attachment 非空 = 连拍**具名附件**（如 `taa_out`：temporal-motion 取历史
+     *                   拒收 alpha 掩膜）；空 = swapchain 后缓冲
+     * @return 引擎回显的绝对路径，顺序 = 帧序
+     */
     [[nodiscard]] std::vector<std::string> shotBurst(const std::string& dir, uint32_t n,
-        const std::string& prefix = "f");
+        const std::string& prefix = "f", const std::string& attachment = "");
 
 private:
     struct Impl;
@@ -464,8 +497,65 @@ int cmdTemporal(int pairs, int warm, const std::string& variant, bool baseSpace 
 ///                模式：跑「fb=1 参考 / fb=.12 门关 / fb=.12 门开 / 门开+js=0 反向」四组，
 ///                **只出数不判**——⑤ 的带是门关口径、刻意设计成修复落地后应当变红，判它 =
 ///                把「变好」判成「不合格」；默认 0 = 现行 7 条判据，门关口径不变）。
+/// @param bistro 批 13.7b `--bistro`（债-48 主体）：换**交付配置 + 用户报障机位**（bistro 三机位，
+///                坐标 = 本文件 kBistroCams 的仓库资产）重测门关 vs 门开绝对残差 + 债-47 的
+///                **线性域**梯度比 + 逐像素 swing 热图。**只出数不判** + 两条量具守卫
+///                （doorframe 门关阳性锚点挂零 = 立刻停下；门开 js=0 反向 = 恰为 0，非零时
+///                由 N5「js=0 门关」对照归因）。口径差异（全帧区域 / base_space 钉 true）
+///                → temporal_residual.cpp 头注释。
+/// @param camera 机位过滤（"all" = 三机位全跑；doorframe / wetground / doorpanel = 单跑）
+/// @param boostFloor 门开态的 `taa.static_feedback` 地板（默认 0.01 = 仓库拍板档）
 int cmdTemporalResidual(int periods, double warmMult, const std::string& variant,
-    double slowFeedback, bool skipSlow, bool baseSpace = false, double staticBoostFloor = 0.0);
+    double slowFeedback, bool skipSlow, bool baseSpace = false, double staticBoostFloor = 0.0,
+    bool bistro = false, const std::string& camera = "all", double boostFloor = 0.01,
+    bool diagBsOff = false);
+
+/**
+ * **相机运动下 TAA 到底抗了什么锯齿**（Phase 13 诊断判据；只出数 + 一句判决，不改渲染）。
+ *
+ * 与 `temporal-residual` 的分工：那条量的是**静止机位**的绝对残差（同相位折叠），
+ * 本条量的是**运动机位**的交付图离「没有锯齿该长什么样」有多远——后者需要一个参考，
+ * 而参考由**同机位序列的 2× 超采样渲染**给出（2560×1440 + TAA 关 → 线性域 2×2 面积
+ * 平均降到 1280×720）。主指标 = 候选图与参考在**边缘像素**上的线性域偏差。
+ *
+ * ⚠ 本条**不是**反模式 `moving-camera-l1-ratio`（那条拒的是「运动序列逐帧 L1 之比」=
+ * 把「相机真的动了」的运动项当成被测量）。本条的偏差是**逐帧对齐到同一视点**之后
+ * 再量的（对齐 = 帧号纯函数 + 全帧 L1 argmin，见 temporal_motion.cpp 头注释），
+ * 量的对象是「同一视点的两次不同估计差多少」，与逐帧 L1 不是一回事。
+ *
+ * 运动源（`--motion`）：
+ *   camera（**默认**）= 相机帧驱动 yaw（camera.lua `frame_yaw`）——用户报障的就是相机在动；
+ *   spin              = 场景帧驱动旋转（scene.lua `spin_frame_angle`，相机不动）——债-49
+ *                        「静止机位 + 动物」的鬼影仪器，保留但**不是**本判据的默认口径。
+ *
+ * 组（每组一个引擎进程；只差被测项）：
+ *   M0 TAA 关 + 运动   → **地板**（无 AA 的单帧光栅，锯齿全在）
+ *   M1 TAA 开 + 运动   → **被测**（交付态：base_space=true 引擎默认）
+ *   M2 M1 + base_space=false → 历史住抖动空间的对照（读数附「按闭式 c_t 去抖」修正）
+ *   M3 重投影消融 —— **按运动源选门**：camera 模式 = `reprojection=false`（prevViewProj
+ *      重投影本身被关，历史按同基位置采样）；spin 模式 = `motion_compensation=false`
+ *      （prevSpin 补偿关）。⚠ 相机运动下 motion_compensation 是恒等阵 = 消融无效，
+ *      故 camera 模式另跑 M3x = motion_compensation=false 作**恒等对照**（应 ≈ M1）。
+ *   M4 TAA 开 + 静止   → 「有 AA 该长什么样」的参照（同配置、机位不动）
+ *   REFm / REFs        → 上面两组运动/静止各自的 2560×1440 超采样参考（TAA 关）
+ *   M1m / M4m          → M1/M4 + `diag_reject=true`，连拍 **taa_out 附件**取 alpha =
+ *                        逐像素「历史怎么了」掩膜（0 收下 / 0.25 盒裁剪 / 0.5 盒拒收 /
+ *                        0.75 重投影拒收 / 1 无历史）→ 历史被拒比例（RGB 逐位 = M1/M4）
+ *
+ * 判决口径（R = dev(M1)/dev(M0)，边缘带上）：R ≥ 0.9 ⟹ 运动下 TAA **等于没抗锯齿**；
+ * R ≤ 0.7 且明显差于 M4 ⟹ 生效但受固有边界限制；中间 = 部分生效。**两种结论都照实说。**
+ *
+ * @param camera 机位（doorframe / wetground / doorpanel，坐标 = 仓库资产 kBistroCams）
+ * @param motion 运动源："camera"（默认）或 "spin"
+ * @param angleDeg 每帧角（度/帧，默认 0.2；0.2° ≈ 门框处 3–5px/帧）
+ * @param burst 每组连拍帧数（/shotburst 逐帧连续，非逐张 /shot）
+ * @param warm 运动组热身帧数（空转不写盘；运动格**不适用**「≥6/α 收敛」——历史本来
+ *             就在被内容变化刷新，回显帧数即可）
+ * @param warmStill M4 静止组热身帧数（≥6/α=50 对齐周期 ⟹ 默认 64）
+ * @param edgePercentile 边缘掩码的梯度分位（默认 0.90 = 梯度最高的 10% 像素带）
+ */
+int cmdTemporalMotion(const std::string& camera, const std::string& motion, double angleDeg,
+    int burst, int warm, int warmStill, double edgePercentile);
 
 /// 逐杆覆盖率对拍闭式（批 12.6 T4，docs/taa_plan.md §7 第 10 条）：单帧量阶梯杆的
 /// 「黑度积分 vs 投影宽度」，TAA 关应当被二值覆盖量化破坏、TAA 开应当贴合闭式。

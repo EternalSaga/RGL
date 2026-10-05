@@ -55,6 +55,8 @@ set(RGL_TEST_SOURCES
     test_state_kit.cppm         # 十段 RenderState 表 + stateFor 分派（纯逻辑）
     test_render_graph.cppm       # 图编译：校验 / barrier 推导 / 装饰 / RT slot
     test_taa_jitter.cppm         # TAA 纯函数层：Halton / jitter→投影闭式解 / 跳切与历史判据（批 12.6）
+    test_scene_spin.cppm         # 帧驱动 spin 角闭式（门 spin_frame_angle 判据本体，跨进程 A/B 对齐的地基）
+    test_camera_frame_yaw.cppm   # 帧驱动相机 yaw 闭式（门 frame_yaw 判据本体，temporal-motion 相机运动激励的地基）
     test_aa_target.cppm          # 细线抗锯齿靶几何：数据自洽 / "确实细"载体判据（批 12.6 T4）
     test_gate_lint.cppm          # 门组合自检：38 门申报表 + variant 交叉校验（gate_lint 批）
     test_frisvad_tangent.cppm    # Frisvad 切线兜底：轴向/±Z 奇点/随机有限性（黑面 bug 回归）

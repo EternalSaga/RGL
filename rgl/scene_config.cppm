@@ -74,6 +74,13 @@ export struct SceneConfig {
 	std::vector<std::pair<std::string, std::string>> materialRules;
 	std::map<std::string, std::string> deferredStyleMap;  // 风格名→deferred 规格名（缺省风格 = deferred_geometry）
 	bool spin = true;                      // 场景整体时间旋转（便于肉眼判断渲染对错）
+	// ── 帧驱动 spin（scene.lua `spin_frame_angle` / `spin_axis`，诊断激励门，默认 = 逐位今天）──
+	// spin_frame_angle ≠ 0 = 门开：angle 按帧号定步推进（纯函数，见 SceneSpin 注释），
+	// dt 累积停用；spin_axis 覆写旋转轴（默认 (0.5,1,0) = 今天）。imgqa temporal-motion
+	// 用它造**跨进程可复现**的相机运动激励（绕 up 轴定角 yaw：刚体运动、prevSpin 重投影
+	// 精确对齐；dt 累积随帧时长漂 = 不可复现，tools/imgqa/temporal.cpp 头注释）。
+	float spinFrameAngle = 0.0f;           // rad/帧（0 = 门关）
+	glm::vec3 spinAxis{0.5f, 1.0f, 0.0f};  // 旋转轴（默认 = SceneSpin.axis 现值）
 	bool showCube = true;                  // 是否渲染硬编码 cube（Phase 1 遗留；模型在场时通常关掉）
 	Light light;                           // Phase 5 批次 2：定向光（scene.lua light 段，可选回落默认）
 	std::vector<Light> lights;             // Phase 7 D3：多灯（scene.lua lights 列表；空则 loadSceneConfig 回落合成 [light]）
@@ -117,6 +124,22 @@ export struct SceneConfig {
 	bool taaStaticBoost = false;
 	float taaStaticFeedback = 0.01f;  ///< 静止地板（**本帧权重**；0.01 ⇒ 等效窗 ≈100 帧，扫档依据 → configs/scene.lua 注释）
 	uint32_t taaStaticRamp = 16u;     ///< 连续静止多少帧爬满地板（= 抖动周期 kTaaJitterPeriod）
+	// ── 重投影消融门（scene.lua `taa.reprojection`，默认 true = 逐位今天）──
+	// false = **完全不重投影**：历史按「同基位置」采样（载荷 prevViewProj := 本帧抖动后
+	// viewProj、prevContentShift := 0、motion := 单位阵 ⟹ prevUvBase ≡ baseUv）。
+	// 与 `motion_compensation` 的分工：那条只关 **prevSpin 场景旋转补偿**（相机不动、
+	// spin 关时它是恒等阵 = 关与不关逐位相同）；本条关的是 **prevViewProj 相机重投影**
+	// 本身——相机运动激励下唯一有意义的重投影消融（消费方 = imgqa temporal-motion 的 M3）。
+	// 静止机位下 prevViewProj ≡ 本帧矩阵 ⟹ 本门关与不关逐位相同（对照组免费成立）。
+	bool taaReprojection = true;
+	// ── 历史拒收诊断门（scene.lua `taa.diag_reject`，默认**关**）──
+	// 开 = taa.frag 把逐像素「历史怎么了」编进 **taa_out 的 alpha 通道**（0=原样收下 /
+	// 0.25=被邻域盒裁剪 / 0.5=塌回邻域盒 centroid=拒收 / 0.75=重投影出画拒收 /
+	// 1=本帧无历史），经 `POST /shot {"attachment":"taa_out"}` 回读取数。
+	// RGB 一个 bit 不动（tonemap 只读 rgb、历史采样只读 rgb）⟹ 交付图逐位不变；
+	// 门关 = alpha 恒 1.0 = 今天。要回答的问题：「α 调多小都不用的像素，是不是历史被
+	// 邻域盒拒收了」（docs/phase13_plan.md §1.7 的 98.3% 恒拒有前科，根因 CR 核奇偶性）。
+	bool taaDiagReject = false;
 };
 
 /**

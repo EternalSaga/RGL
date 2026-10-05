@@ -224,6 +224,14 @@ float3 sampleSceneAo(float2 uv, float aoStrength)
 float4 main(TaaInput input) : SV_Target
 {
     const float4 params = readTaaParams();  // (feedback, historyValid, c_t.x px, c_t.y px)
+    // 历史拒收诊断门（`taa.diag_reject`，默认 0 = 一切 alpha 恒 1.0 = 今天）：开 = 把
+    // 「本像素的历史怎么了」编进输出 alpha（RGB 一个 bit 不动，tonemap / 历史采样只读 rgb）：
+    //   0.0 = 原样收下（histR 在邻域盒内）｜ 0.25 = 被盒裁剪（部分保留）
+    //   0.5 = **塌回邻域盒 centroid = 拒收**（clipToAabb 返回 c，历史贡献变成本帧邻域均值
+    //         ⟹ 输出 ≈ 本帧，α 调多小都没用——「窗棂残余闪烁」假设的判据本体）
+    //   0.75 = 重投影出画拒收（w≤0 / 出界）｜ 1.0 = 本帧无历史（historyValid 旁路）
+    // 回读 = `POST /shot {"attachment":"taa_out"}`（alpha 经 raw8 直出，不走 gamma）。
+    const float diag = readTaaDiagReject();
     // ⚠ texel 必须先于一切采样取到：un-jitter 与出画判据都要它。
     uint pxW, pxH, mLvl;
     colorTex.GetDimensions(0u, pxW, pxH, mLvl);
@@ -274,7 +282,7 @@ float4 main(TaaInput input) : SV_Target
     // ⚠ 返回的是**已 un-jitter** 那份，不是原始抖动帧：taa_out 每帧都 blit 进 taa_hist 当
     //   下一帧历史，早退帧若留在抖动空间，下一帧就会拿抖动空间图当基空间历史用（偏 c_{t−1}）。
     if (params.y < 0.5)
-        return float4(cur, 1.0);
+        return float4(cur, 1.0);  // alpha 1.0 同时是诊断码「本帧无历史」（与门关值同值，消费方按组别解读）
 
     // ── 邻域 AABB（box5 十字：中心 + 上下左右，Reinhard 域）──
     // 抽头绕 **baseUv**（不是 input.uv）：盒要与 cur/历史同处基空间，否则盒是抖动系的、
@@ -309,7 +317,7 @@ float4 main(TaaInput input) : SV_Target
         worldPrev = mulM(readTaaMotion(), worldPrev);
     const float4 prevClip = mulM(readTaaPrevViewProj(), worldPrev);
     if (prevClip.w <= 0.0)  // 上一帧相机背后：无历史可言
-        return float4(cur, 1.0);
+        return float4(cur, diag > 0.5 ? 0.75 : 1.0);  // 诊断码 0.75 = 重投影拒收
     const float2 prevNdc = prevClip.xy / prevClip.w;
     // ndc → uv 与 worldFromDepth 的 y 翻转互逆：uv.y = (1 − ndc.y)/2
     const float2 prevUv = float2(prevNdc.x * 0.5 + 0.5, (1.0 - prevNdc.y) * 0.5);
@@ -330,7 +338,7 @@ float4 main(TaaInput input) : SV_Target
     // ⚠ 判据跑在 **prevUvBase**（历史真正被索引的坐标）上，不是抖动网格的 prevUv。
     const float2 outTol = 0.5 * texel;
     if (any(prevUvBase < -outTol) || any(prevUvBase > 1.0 + outTol))
-        return float4(cur, 1.0);  // 出画（本帧视锥外）：clamp 边缘 = 拿错像素，拒绝
+        return float4(cur, diag > 0.5 ? 0.75 : 1.0);  // 出画（本帧视锥外）：clamp 边缘 = 拿错像素，拒绝
 
     // ── 历史裁剪 + 混合 ──
     // ⚠ **参数序 = feedback 是「本帧权重」**（configs/scene.lua taa.feedback 的文档口径 +
@@ -359,5 +367,17 @@ float4 main(TaaInput input) : SV_Target
     //   已否决（glint 的峰值相位是 2×2 块，邻域自己就亮），放大支撑只是把"拒绝历史"做得
     //   更狠，不是更准。**这条是"遮"且遮不干净。**
     const float3 clipped = fromReinhard(clipToAabb(centroid, histR, mn, mx));
-    return float4(lerp(clipped, cur, params.x), 1.0);
+    // 诊断 alpha（门关 = 恒 1.0 = 今天；RGB 的 lerp 一个 bit 不动）。
+    // 「拒收」判据 = clipToAabb **恰返回 centroid**（塌缩分支逐位返回 c，见其函数体两条
+    // return c；此时历史贡献 = 本帧邻域均值 ⟹ 输出 ≈ 本帧，α 无意义）。
+    // 「收下」判据 = histR 逐通道在盒内（**不能**拿 clipped == histR 判：c + d·1.0 在浮点
+    // 上不逐位等于 p，盒内也会被判成裁剪——实测过的浮点陷阱）。
+    float alpha = 1.0;
+    if (diag > 0.5)
+    {
+        const bool accepted = all(histR >= mn) && all(histR <= mx);
+        const bool collapsed = all(clipped == centroid);
+        alpha = accepted ? 0.0 : (collapsed ? 0.5 : 0.25);
+    }
+    return float4(lerp(clipped, cur, params.x), alpha);
 }

@@ -45,6 +45,7 @@
 #include <vector>
 
 #include <opencv2/core.hpp>
+#include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
 namespace RGL::imgqa {
@@ -109,9 +110,6 @@ double gradEnergy(const cv::Mat& luma, const cv::Mat& mask)
     return cv::mean(g, mask)(0);
 }
 
-namespace {
-
-/// mask 内单通道图的 p 分位（白电平 / p99.9 用）。输入须已升序。
 double percentileOf(const std::vector<double>& sorted, double p)
 {
     if (sorted.empty())
@@ -120,6 +118,30 @@ double percentileOf(const std::vector<double>& sorted, double p)
         static_cast<size_t>(p * static_cast<double>(sorted.size())));
     return sorted[i];
 }
+
+std::vector<double> valuesInMask(const cv::Mat& x, const cv::Mat& mask)
+{
+    std::vector<double> v;
+    if (mask.empty()) {
+        v.reserve(x.total());
+        for (int y = 0; y < x.rows; ++y) {
+            const double* px = x.ptr<double>(y);
+            v.insert(v.end(), px, px + x.cols);
+        }
+        return v;
+    }
+    v.reserve(static_cast<size_t>(std::max<int64_t>(1, cv::countNonZero(mask))));
+    for (int y = 0; y < x.rows; ++y) {
+        const double* px = x.ptr<double>(y);
+        const uchar* pm = mask.ptr<uchar>(y);
+        for (int c = 0; c < x.cols; ++c)
+            if (pm[c])
+                v.push_back(px[c]);
+    }
+    return v;
+}
+
+namespace {
 
 /// 折叠 + swing 的**唯一实现**（线性 luma 判据与显示空间报告共用同一份代码，杜绝两套口径漂移）。
 /// `at(i, y, x)` 取第 i 帧在 (y,x) 的值并折成 double。
@@ -130,7 +152,8 @@ struct SwingCore {
 };
 
 template <class At>
-SwingCore swingFoldCore(const cv::Size& sz, const cv::Mat& m, double tau, int periods, At&& at)
+SwingCore swingFoldCore(const cv::Size& sz, const cv::Mat& m, double tau, int periods, At&& at,
+    cv::Mat* swingOut = nullptr)
 {
     SwingCore s;
     const int perHalf = periods / 2;
@@ -139,6 +162,8 @@ SwingCore swingFoldCore(const cv::Size& sz, const cv::Mat& m, double tau, int pe
     swings.reserve(static_cast<size_t>(std::max<int64_t>(1, cv::countNonZero(m))));
     double sumSwing = 0.0, sumVal = 0.0, halfSum = 0.0;
     int64_t overTau = 0;
+    if (swingOut)
+        *swingOut = cv::Mat::zeros(sz, CV_64F);  // mask 外保持 0（区域纪律在图上同样成立）
     for (int y = 0; y < sz.height; ++y) {
         const uchar* pm = m.ptr<uchar>(y);
         for (int x = 0; x < sz.width; ++x) {
@@ -171,6 +196,8 @@ SwingCore swingFoldCore(const cv::Size& sz, const cv::Mat& m, double tau, int pe
             if (tau > 0.0 && swing > tau)
                 ++overTau;
             s.mx = std::max(s.mx, swing);
+            if (swingOut)
+                swingOut->at<double>(y, x) = swing;
         }
     }
     s.pixels = static_cast<int64_t>(swings.size());
@@ -186,32 +213,10 @@ SwingCore swingFoldCore(const cv::Size& sz, const cv::Mat& m, double tau, int pe
     return s;
 }
 
-std::vector<double> valuesInMask(const cv::Mat& x, const cv::Mat& mask)
-{
-    std::vector<double> v;
-    if (mask.empty()) {
-        v.reserve(x.total());
-        for (int y = 0; y < x.rows; ++y) {
-            const double* px = x.ptr<double>(y);
-            v.insert(v.end(), px, px + x.cols);
-        }
-        return v;
-    }
-    v.reserve(static_cast<size_t>(std::max<int64_t>(1, cv::countNonZero(mask))));
-    for (int y = 0; y < x.rows; ++y) {
-        const double* px = x.ptr<double>(y);
-        const uchar* pm = mask.ptr<uchar>(y);
-        for (int c = 0; c < x.cols; ++c)
-            if (pm[c])
-                v.push_back(px[c]);
-    }
-    return v;
-}
-
 }  // namespace
 
 ResidualStat phaseSwingStat(const std::vector<Frame>& shots, const cv::Mat& mask, double tau,
-    int periods)
+    int periods, cv::Mat* swingMap)
 {
     ResidualStat s;
     // phaseAverageLuma 顺带把三条前提钉死：张数 = 整数个周期、尺寸一致、已 prepareLinear。
@@ -229,7 +234,8 @@ ResidualStat phaseSwingStat(const std::vector<Frame>& shots, const cv::Mat& mask
         return s;  // 无定义：不给「空区域测得 0」出数的机会（区域纪律）
 
     const auto c = swingFoldCore(avg.size(), m, tau, periods,
-        [&shots](size_t i, int y, int x) { return shots[i].luma.at<double>(y, x); });
+        [&shots](size_t i, int y, int x) { return shots[i].luma.at<double>(y, x); },
+        swingMap);
     s.meanSwing = c.mean;
     s.p999Swing = c.p999;
     s.maxSwing = c.mx;
@@ -324,6 +330,13 @@ std::string d2(double v)
 {
     char b[32];
     std::snprintf(b, sizeof b, "%.2f", v);
+    return b;
+}
+/// 科学计数（守卫行用：`== 0` 判据的"实际是多少"必须在 6 位小数下显示为 0 时仍可判读）
+std::string dExp(double v)
+{
+    char b[24];
+    std::snprintf(b, sizeof b, "%.3e", v);
     return b;
 }
 
@@ -586,13 +599,412 @@ int runStaticBoostSweep(const std::string& root, int periods, double warmMult,
 
 }  // namespace
 
+// ── 批 13.7b `--bistro` 变体：**真实场景** bistro（债-48 主体，**只出数不判** + 两条量具守卫）──
+//
+// 为什么必须有这条（一句话版）：合成靶 aa_target 是 LDR 黑白细杆，交付档 `frac>64LSB` 本来就是
+// 0，症状幅度比 bistro 的 HDR 高亮细线低一个量级 ⟹「meanSwing 降 7.2×」推不出「门框缝隙没了」。
+// 本变体在**交付配置**（deferred + env/skybox/IBL/AO/shadow 全开）+ **用户报障机位**上重测
+// 门关 vs 门开（`taa.static_boost`）的绝对残差，并顺带出债-47：`phaseAverageLuma` 梯度能量比
+// 的**线性域**读数（`docs/phase13_plan.md` §1.5 的 0.671 是显示空间旧账，本处只出数、改判由
+// 主 agent 记账，本工具不动那份文档）。
+//
+// 与 aa_target profile 的三处口径差异（每处都是被迫的，读数字前必读）：
+//   ① 配置 = `deliveryConfigDir` 模式（红线 4：合成副本不覆盖 env/skybox 路径，bistro 的 HDR
+//      高亮细线正是本症状的激励源）。variant 留空 = 尊重交付的 deferred；`base_space` **钉真**
+//      ——引擎默认 true（`scene_config.cppm::SceneConfig::taaBaseSpace`，批 13.5 起 = 交付态），
+//      而 `ProfileOpts::taaBaseSpace` 默认 false 是批 13.2 的旧口径且 `rewriteTaaBlock` 会
+//      **显式写键**，不钉 = 静默换场景。
+//   ② 区域 = **全帧**：交付配置 `diagnostics.picking = false`（object_id pass 不在图里），
+//      打开它 = 改图形态 = 不再是交付路径。aa_target 的「objectID 内部外扩 3px」是为排除
+//      常量 clear 背景；bistro 画面几乎被几何填满，全帧就是「交付了什么」的最直白区域。
+//      ⚠ 因此 bistro 的数与 aa_target 的数**不可直接比**（区域不同），可比的是算子、域、τ 定义。
+//   ③ 机位 = `ProfileOpts::hasCamera` 写进 profile 的 camera.lua（**第 1 帧生效**；RPC 的
+//      `setCamera` 只是幂等重发，理由全文见 `ProfileOpts::hasCamera` 注释）。
+//
+// 每机位五组（只差被测项；编号 N 与 aa_target 的 R/B 错开防混读；N5 为后补的归因对照）：
+//   N1 fb=.12 js=1 门关   → 被测（用户现状）+ **定 τ**（五组共用）+ 阳性锚点的载体
+//   N2 fb=.12 js=1 门开   → 被测（`static_boost`，地板 = `--boost-floor`，默认 0.01）
+//   N3 fb=.12 js=0 门开   → **反向**：js=0 + 静止机位 ⟹ 首帧起历史 = 本帧（EMA 不动点，
+//        与 α 无关）⟹ 输出逐帧逐位相同 ⟹ 残差必须**恰为 0**；非零 = boost 接错地方或引擎
+//        有第二时域源，该机位 N1/N2 的读数一并作废
+//   N5 fb=.12 js=0 门关   → 反向**对照**（α=.12 无 boost）：N3 非零时用它归因——doorframe
+//        实测 bistro 在 js=0 有 8px×1LSB 的奇偶帧交替地板（与 boost 无关；机制候选 =
+//        jitterPx=(halton−0.5)·0 的**零符号**随相位翻，详见 G2 注释）
+//   N0 TAA 全关           → **确定性地板**（`determinism` 在 bistro 交付配置上的实例化）：
+//        连拍必须逐位相同；非零 ⟹ 非确定性在 TAA 之外，全表读数存疑（G0，见 runBistroCamera）
+//   N6（--diag-bs-off）   → js=0 门开但 base_space 关：把 N3 的翻转归因到 base_space 路径还是
+//        jitter 注入/裁剪盒等公共路径
+//   N4 fb=1  js=1 门关   → 梯度参考（理想 16 相位平均；**必须门关**——boost 会把 fb=1 也压到
+//        地板，「只抖不滤」的参考语义就没了，同 B1 的理由）
+//
+// 两条守卫（不是质量判据，是「量具还活着吗」；质量结论本轮**只出数不判**，口径同
+// `--static-boost` 变体先例——判据 ⑤ 的带是门关口径，拿门开读数撞它 = 把「变好」判成「不合格」）：
+//   G1 阳性锚点：doorframe 门关 frac(swing>τ) ≥ 1%（与 aa_target 锚点同常量 `kAnchorFracFloor`）。
+//      用户肉眼看得见闪烁是既成事实，量出来接近 0 = 量具坏了 ⟹ **立刻停下**（rc=2），不跑其余机位。
+//   G2 反向：N3 的 meanSwing / maxSwing **恰为 0**（无容差，机制见上）。
+//   半间差 halfGapMax 与闭式容差 (1−α)^warm×满幅+量化项 只打印作**热身自证**（bistro 全帧 p99
+//   白电平高于合成靶，该容差在这里偏保守；超了打 ⚠ 不判红——它防的是「量到瞬态」，而 N3 恰 0
+//   已经排除了「连拍不是相位的确定性函数」里最贵的那类失效）。
+namespace {
+
+struct BistroRun {
+    std::string name;
+    int warm = 0;
+    double alpha = 0.0;
+    ResidualStat stat;
+    cv::Mat avg;
+    cv::Mat swingMap;  ///< 逐像素 swing（CV_64FC1）——热图输入，与 stat 同一份折叠代码写出
+    double grad = 0.0;      ///< 相位平均图的线性域梯度能量（债-47 的分子/分母）
+    double byteGrad = 0.0;  ///< **显示空间**同口径（只打印：§1.5 的 0.671 是这类读数）
+    double whiteLuma = 0.0, maxLuma = 0.0, quant = 0.0;
+    double byteMaxVsFirst = 0.0, changedVsFirst = 0.0;
+    int64_t changedPx = 0;  ///< 与首帧任一通道不同的像素数（跨帧取最大）——1LSB 级失效要**精确数**
+    cv::Size frameSize;
+};
+
+/**
+ * 一组 bistro 采集。红线逐条落点：分辨率自证（红线 1）、热身空转（红线 2）、
+ * `prepareLinear` 复用（红线 3）、交付配置（红线 4）。
+ *
+ * `taa=false` = N0 确定性地板（TAA 整个关，连 jitter 注入都不发生）；`baseSpace=false` 只服务
+ * N6 诊断组（把 base_space 的 un-jitter / c_{t−1} 修正摘掉，其余不动）——两者默认值 = 交付态。
+ */
+BistroRun runBistroGroup(const std::string& dir, const std::string& name, const std::string& tag,
+    const BistroCam& cam, double feedback, double jitterScale, int periods, double warmMult,
+    double& tau, bool staticBoost, double staticFloor, bool wantSwingMap, bool taa = true,
+    bool baseSpace = true)
+{
+    BistroRun r;
+    r.name = name;
+
+    ProfileOpts o;
+    o.deliveryConfigDir = projectRoot() + "/configs";  // 红线 4（口径差异①）
+    o.hasCamera = true;                                // 机位第 1 帧生效（口径差异③）
+    o.cameraPosition = cam.position;
+    o.cameraTarget = cam.target;
+    o.cameraFov = cam.fov;
+    o.taa = taa;
+    o.taaFeedback = feedback;
+    o.taaJitterScale = jitterScale;
+    o.taaBaseSpace = baseSpace;  // 交付态 = 引擎默认 true（口径差异①，勿改默认）
+    o.taaStaticBoost = staticBoost;
+    o.taaStaticFeedback = staticFloor;
+    makeProfile(dir, o);
+
+    // 热身 = ⌈warmMult/α⌉ 对齐到抖动周期；门开态 α = **地板**（爬满 ramp 后 feedback 恒 =
+    // static_floor，按 0.12 热身 = 把画面冻在瞬态上读「更好」的假绿）。红线 2。TAA 关无历史。
+    r.alpha = taa ? std::clamp(staticBoost ? staticFloor : feedback, 1e-6, 1.0) : 1.0;
+    const int warmRaw = static_cast<int>(std::ceil(warmMult / r.alpha));
+    r.warm = ((warmRaw + kResidualPeriod - 1) / kResidualPeriod) * kResidualPeriod;
+
+    const int frames = kResidualPeriod * periods;
+    Engine eng(dir);
+    eng.setCamera({cam.position, cam.target, cam.fov});
+    eng.advanceFrames(static_cast<uint32_t>(r.warm));  // 空转不写盘（红线 2）
+    const auto files = eng.shotBurst("screenshots", static_cast<uint32_t>(frames), tag + "_c");
+
+    std::vector<Frame> shots;
+    shots.reserve(files.size());
+    std::vector<cv::Mat> gray;  ///< 显示空间报告用（判据不读它，同 Run 的注释）
+    gray.reserve(files.size());
+    cv::Mat first;
+    for (size_t i = 0; i < files.size(); ++i) {
+        Frame f;
+        f.camera = {cam.position, cam.target, cam.fov};
+        f.bgr = readPngBgr(files[i]);
+        if (i == 0)
+            first = f.bgr.clone();
+        else {
+            cv::Mat d;
+            cv::absdiff(first, f.bgr, d);
+            r.byteMaxVsFirst = std::max(r.byteMaxVsFirst, cv::norm(d, cv::NORM_INF));
+            const int64_t ch = cv::countNonZero(anyChannelDiff(first, f.bgr));
+            r.changedPx = std::max(r.changedPx, ch);
+            r.changedVsFirst =
+                std::max(r.changedVsFirst, static_cast<double>(ch) / static_cast<double>(
+                                                       f.bgr.total()));
+        }
+        cv::Mat g;
+        cv::cvtColor(f.bgr, g, cv::COLOR_BGR2GRAY);
+        gray.push_back(std::move(g));
+        prepareLinear(f);  // 红线 3：复用，不另写解码
+        f.bgr.release();
+        f.lin.release();
+        shots.push_back(std::move(f));
+    }
+    // 红线 1 自证：残差是逐像素计数/均值，换分辨率 = 换口径（实测湿面 720p vs 1440p ≈ 4× 像素数）。
+    r.frameSize = shots.front().luma.size();
+    std::printf("  [%s] 帧 %dx%d（红线 1 自证）\n", name.c_str(), r.frameSize.width,
+        r.frameSize.height);
+    if (r.frameSize != cv::Size(kSize[0], kSize[1]))
+        throw std::runtime_error(name + "：帧尺寸 " + std::to_string(r.frameSize.width) + "x"
+            + std::to_string(r.frameSize.height) + " ≠ " + std::to_string(kSize[0]) + "x"
+            + std::to_string(kSize[1]) + "——残差口径按 720p 钉，换分辨率即换口径");
+
+    r.avg = phaseAverageLuma(shots, periods);
+    auto vals = valuesInMask(r.avg, {});  // 区域 = 全帧（口径差异②）
+    std::sort(vals.begin(), vals.end());
+    r.whiteLuma = percentileOf(vals, 0.99);
+    r.maxLuma = vals.empty() ? 0.0 : vals.back();
+    r.quant = maxLsbStepUpTo(r.maxLuma);
+    // τ 是**场景×机位**属性（白电平处 1 个显示 LSB）不是组属性 ⟹ N1 定一次，四组共用
+    // （跨组换 τ = frac 的跨组比较失去意义，同 aa_target 的纪律）。
+    if (tau <= 0.0)
+        tau = lsbLinearAtLuma(r.whiteLuma);
+    r.stat = phaseSwingStat(shots, {}, tau, periods, wantSwingMap ? &r.swingMap : nullptr);
+    r.grad = gradEnergy(r.avg, {});
+    {
+        // **显示空间**同口径梯度（先 tonemap 再平均 = 红线 1 禁止的那个口径）。算出来只为打印：
+        // §1.5 的 0.671 就是这个域的读数，两个域同时出数，域选错的代价当场可见。
+        cv::Mat acc = cv::Mat::zeros(r.avg.size(), CV_64FC1), tmp;
+        for (const auto& g : gray) {
+            g.convertTo(tmp, CV_64F);
+            cv::add(acc, tmp, acc);
+        }
+        acc /= static_cast<double>(gray.size());
+        r.byteGrad = gradEnergy(acc, {});
+    }
+    // 在场性守卫（红线 4 的兜底）：全黑画面的残差**恰好为 0**，什么判据都会绿。
+    if (r.stat.meanLuma <= 0.0)
+        throw std::runtime_error(name + "：画面是黑的（meanLuma=" + d6(r.stat.meanLuma)
+            + "）——交付配置坏了？全零的残差不是「稳定」，是「没画」");
+    return r;
+}
+
+/// 热图：逐像素 swing → INFERNO 8bit。**scale 必须门关/门开共用**——各图各自拉伸 =
+/// 「看起来更闪」的把戏，肉眼比对当场失效。返回实际用的 scale（回显进 stdout）。
+double writeSwingHeat(const std::string& path, const cv::Mat& swing, double scale)
+{
+    cv::Mat d;
+    swing.convertTo(d, CV_8UC1, 255.0 / std::max(scale, 1e-12));  // saturate cast = 截到 [0,255]
+    cv::Mat heat;
+    cv::applyColorMap(d, heat, cv::COLORMAP_INFERNO);
+    if (!cv::imwrite(path, heat))
+        throw std::runtime_error("热图写入失败: " + path);
+    return scale;
+}
+
+/// 全帧 swing 图的 p 分位（共用 scale 从它来）。
+double percentileOfMat(const cv::Mat& m, double p)
+{
+    std::vector<double> v;
+    v.reserve(m.total());
+    for (int y = 0; y < m.rows; ++y) {
+        const double* px = m.ptr<double>(y);
+        v.insert(v.end(), px, px + m.cols);
+    }
+    std::sort(v.begin(), v.end());
+    return percentileOf(v, p);
+}
+
+/// 一机位的六组（N6 仅 `--diag-bs-off`）+ 出表 + 守卫 + 热图。
+/// 返回 0 = 守卫全过；1 = 某守卫红；2 = 采集失败/锚点中止。
+int runBistroCamera(const BistroCam& cam, int periods, double warmMult, double boostFloor,
+    const std::string& shotDir, bool diagBsOff)
+{
+    double tau = 0.0;
+    std::vector<BistroRun> runs;
+    const std::string pre = "rb" + std::string(1, cam.name[0]);
+    const std::string dir = projectRoot() + "/build/imgqa_resbis_" + cam.name;
+    // G0 确定性地板（TAA 整个关 = 连 jitter 注入都不发生）：静止机位连拍必须**逐位相同**。
+    // 这是 `determinism` 地板在 bistro 交付配置上的实例化。它非零 ⟹ 非确定性在 TAA 之外
+    // （更底层的引擎/驱动问题），本表所有读数存疑；它为零而 N3/N5 非零 ⟹ 非确定性住在
+    // **TAA 特性内**（jitter 注入 proj 的 ±0.0 / 历史裁剪盒 / base_space 的 un-jitter·c_t）。
+    // τ 用局部 throwaway（地板组的白电平不参与判据 τ，τ 一律由 N1 定）。
+    BistroRun n0;
+    {
+        double tau0 = 0.0;
+        try {
+            n0 = runBistroGroup(dir + "_n0", "N0 TAA关(地板)", pre + "n0", cam, 0.12, 1.0, periods,
+                warmMult, tau0, false, boostFloor, false, false);
+        } catch (const std::exception& e) {
+            std::printf("  %s N0 采集失败: %s\n", cam.name, e.what());
+            return 2;
+        }
+    }
+    const bool floorOk = n0.byteMaxVsFirst == 0.0 && n0.changedPx == 0 && n0.stat.meanSwing == 0.0;
+    std::printf("\n── %s ──\n", cam.name);
+    std::printf("  %s G0 确定性地板（N0 TAA关）：与首帧 %2.0fLSB / %lldpx / meanSwing %s"
+                "（判据 = **恰为 0**）\n",
+        floorOk ? "✓" : "✗", n0.byteMaxVsFirst, static_cast<long long>(n0.changedPx),
+        d6(n0.stat.meanSwing).c_str());
+    try {
+        runs.push_back(runBistroGroup(dir + "_n1",
+            "N1 门关 fb=.12 js=1", pre + "n1", cam, 0.12, 1.0, periods, warmMult, tau, false,
+            boostFloor, true));
+        // G1 阳性锚点（只钉 doorframe——用户报障机位是既成事实；其余机位接近 0 如实打印）。
+        if (std::string(cam.name) == "doorframe" && runs[0].stat.fracOverTau < kAnchorFracFloor) {
+            std::printf(
+                "\n  ✗ 阳性锚点挂零：doorframe 门关 frac(swing>τ) = %s%% < %s%%。\n"
+                "    用户肉眼看得见闪烁是既成事实，量出来接近 0 = **量具坏了**（或症状在此口径下\n"
+                "    根本不存在——那也是要紧的负结果）。立刻停下，不跑其余机位，不出任何门开结论。\n",
+                d2(runs[0].stat.fracOverTau * 100.0).c_str(), d2(kAnchorFracFloor * 100.0).c_str());
+            return 2;
+        }
+        runs.push_back(runBistroGroup(projectRoot() + "/build/imgqa_resbis_" + cam.name + "_n2",
+            "N2 门开 fb=.12 js=1", pre + "n2", cam, 0.12, 1.0, periods, warmMult, tau, true,
+            boostFloor, true));
+        runs.push_back(runBistroGroup(projectRoot() + "/build/imgqa_resbis_" + cam.name + "_n3",
+            "N3 反向 fb=.12 js=0", pre + "n3", cam, 0.12, 0.0, periods, warmMult, tau, true,
+            boostFloor, false));
+        runs.push_back(runBistroGroup(projectRoot() + "/build/imgqa_resbis_" + cam.name + "_n5",
+            "N5 反向对照 js=0门关", pre + "n5", cam, 0.12, 0.0, periods, warmMult, tau, false,
+            boostFloor, false));
+        runs.push_back(runBistroGroup(projectRoot() + "/build/imgqa_resbis_" + cam.name + "_n4",
+            "N4 梯度参考 fb=1", pre + "n4", cam, 1.0, 1.0, periods, warmMult, tau, false,
+            boostFloor, false));
+    } catch (const std::exception& e) {
+        std::printf("  %s 采集失败: %s\n", cam.name, e.what());
+        return 2;
+    }
+    const BistroRun& N1 = runs[0];
+    const BistroRun& N2 = runs[1];
+    const BistroRun& N3 = runs[2];
+    const BistroRun& N5 = runs[3];  // 反向**对照**：js=0 且 boost 关（α=.12）
+    const BistroRun& N4 = runs[4];
+
+    std::printf("  τ = %s（N1 定，各组共用）白电平 p99 = %s  量化项 = %s\n", d6(tau).c_str(),
+        d6(N1.whiteLuma).c_str(), d6(N1.quant).c_str());
+    for (const auto& r : runs) {
+        // 半间差闭式容差 = IIR 尾巴 (1−α)^warm × 满幅 + 一格真实跨度（热身自证，见头注释）。
+        const double tol =
+            std::pow(1.0 - r.alpha, static_cast<double>(r.warm)) * std::max(1e-9, N1.whiteLuma)
+                + N1.quant;
+        std::printf("  %-18s 热身 %5d  meanSwing %-9s p99.9 %-9s max %-9s frac>τ %6.2f%%  "
+                    "半间差max %s%s%s  与首帧 %2.0fLSB/%lldpx\n",
+            r.name.c_str(), r.warm, d6(r.stat.meanSwing).c_str(), d6(r.stat.p999Swing).c_str(),
+            d6(r.stat.maxSwing).c_str(), r.stat.fracOverTau * 100.0,
+            d6(r.stat.halfGapMax).c_str(), r.stat.halfGapMax > tol ? "（>容差 " : "（≤容差 ",
+            d6(tol).c_str(), r.byteMaxVsFirst, static_cast<long long>(r.changedPx));
+    }
+    const double swingRatio =
+        N1.stat.meanSwing > 0.0 ? N2.stat.meanSwing / N1.stat.meanSwing : 0.0;
+    std::printf("  门开/门关：meanSwing ×%s（%s→%s）  p99.9 %s→%s  frac>τ %s%%→%s%%\n",
+        d4(swingRatio).c_str(), d6(N1.stat.meanSwing).c_str(), d6(N2.stat.meanSwing).c_str(),
+        d6(N1.stat.p999Swing).c_str(), d6(N2.stat.p999Swing).c_str(),
+        d2(N1.stat.fracOverTau * 100.0).c_str(), d2(N2.stat.fracOverTau * 100.0).c_str());
+    const double gradLin = N4.grad > 0.0 ? N1.grad / N4.grad : 0.0;
+    const double gradDisp = N4.byteGrad > 0.0 ? N1.byteGrad / N4.byteGrad : 0.0;
+    std::printf("  债-47 梯度能量比（N1 收敛 / N4 理想 16 相位平均）：**线性域 %s** ｜ 显示域 %s\n",
+        d6(gradLin).c_str(), d6(gradDisp).c_str());
+    std::printf("    （§1.5 旧账 0.671 = 显示空间读数；aa_target 同口径 显示 0.669 ↔ 线性 0.985。"
+                "本行只出数，改判由主 agent 记账）\n");
+
+    // G2 反向守卫：js=0 + 静止 ⟹ 首帧起历史 = 本帧（EMA 不动点）⟹ 残差**恰为 0**，无容差。
+    // 非零时先归因再下结论：N5（js=0 且 boost **关**）是同场景的地板对照。doorframe 两轮实测
+    // （PIL 复核）：N3 = **8 个固定像素 × 1 LSB、奇偶帧两态交替**（偶帧=首帧，奇帧翻），7/8 个
+    // 落在强边缘（|∇luma| 47–115 vs 全图中值 4.5）且是暗部（luma 13–32）；N5（无 boost）同现
+    // （7px，maxSwing 反而更大）⟹ 地板与 boost 无关。机制候选 = `jitter_scale=0` 时
+    // jitterPx = (halton−0.5)·0 = **±0.0**，其符号随 Halton 相位逐帧交替（实测奇偶结构与之吻合），
+    // 经 `proj[2][0] -= 2jx/W` 进入投影矩阵 ⟹ 恰压在边上的片元 tie-break 逐帧翻。N0（TAA 全关）
+    // 与 N6（base_space 关）两个对照负责把「TAA 特性内 vs 之外」「base_space 路径 vs 公共路径」
+    // 定死。⚠ 本注释早期版本写过「固定 ~1255 像素集」= 自写 PNG 解码器的伪影，已用 PIL 推翻。
+    const bool revOk = N3.stat.meanSwing == 0.0 && N3.stat.maxSwing == 0.0;
+    const bool revFloor = N5.stat.meanSwing == 0.0 && N5.stat.maxSwing == 0.0;
+    std::printf("  %s 反向守卫（N3 门开 js=0）：meanSwing %s maxSwing %s 变化 %lldpx"
+                "（期望**恰为 0**）\n",
+        revOk ? "✓" : "✗", dExp(N3.stat.meanSwing).c_str(), dExp(N3.stat.maxSwing).c_str(),
+        static_cast<long long>(N3.changedPx));
+    std::printf("  %s 反向对照（N5 门关 js=0，α=.12）：meanSwing %s maxSwing %s 变化 %lldpx"
+                "（地板参照：非零 ⟹ js=0 残差地板是**场景/驱动**的，非 boost 引入）\n",
+        revFloor ? "✓" : "⚠", dExp(N5.stat.meanSwing).c_str(), dExp(N5.stat.maxSwing).c_str(),
+        static_cast<long long>(N5.changedPx));
+    if (!revOk && !revFloor)
+        std::printf("    ⚠ 两态同现（门关地板 %s vs 门开 %s）⟹ 归因 = 引擎 js=0 既有 tie-flip，"
+                    "「恰为 0」红线在 bistro 上不可达（合成靶 aa_target 的 R3/B4 是 0，场景不同）；"
+                    "N1/N2 读数**不作废**但守卫保持红，处置由主 agent 判\n",
+            d6(N5.stat.maxSwing).c_str(), d6(N3.stat.maxSwing).c_str());
+    if (!revOk && revFloor)
+        std::printf("    ✗ N3 非零而 N5（无 boost 同 js=0）恰为 0 ⟹ **boost 自己引入了第二时域源**，"
+                    "本机位 N1/N2 门开读数作废\n");
+
+    // N6 诊断（`--diag-bs-off`）：js=0 门开但 **base_space 关**——摘掉 un-jitter 与 c_{t−1}
+    // 修正、其余（jitter 注入 proj、历史裁剪盒、EMA）不动。N3 非零而 N6 恰 0 ⟹ 翻转住在
+    // base_space 路径；N6 同非零 ⟹ 住在两者共用部分（jitter 注入 proj 的 ±0.0 / 历史裁剪盒）。
+    bool sixRan = false, sixOk = false, sixNonZero = false;
+    if (diagBsOff) {
+        double tau6 = tau;  // τ 已非零，不会被 N6 覆写
+        const BistroRun N6 = runBistroGroup(dir + "_n6", "N6 诊断 js=0 bs关", pre + "n6", cam,
+            0.12, 0.0, periods, warmMult, tau6, true, boostFloor, false, true, false);
+        sixRan = true;
+        sixOk = N6.stat.meanSwing == 0.0 && N6.stat.maxSwing == 0.0;
+        sixNonZero = !sixOk;
+        std::printf("  %s N6 诊断（js=0 门开 base_space关）：meanSwing %s maxSwing %s %lldpx"
+                    "（与 N3 对比归因：N3 非零而 N6 恰 0 = 翻转在 base_space 路径）\n",
+            sixOk ? "✓" : "⚠", d6(N6.stat.meanSwing).c_str(), d6(N6.stat.maxSwing).c_str(),
+            static_cast<long long>(N6.changedPx));
+    }
+
+    // 热图：门关/门开共用 scale（门关 swing 的 p99.9，截顶显示；各图各自拉伸 = 把戏）。
+    const double scale = std::max(percentileOfMat(N1.swingMap, 0.999), 1e-12);
+    const std::string offPath = shotDir + "/" + cam.name + "_swing_boost-off.png";
+    const std::string onPath = shotDir + "/" + cam.name + "_swing_boost-on.png";
+    writeSwingHeat(offPath, N1.swingMap, scale);
+    writeSwingHeat(onPath, N2.swingMap, scale);
+    std::printf("  热图（共用 scale = 门关 p99.9 = %s，白电平处 1 LSB τ = %s）：\n", d6(scale).c_str(),
+        d6(tau).c_str());
+    std::printf("    %s\n    %s\n", offPath.c_str(), onPath.c_str());
+
+    logCall("temporal-residual-bistro",
+        {{"camera", cam.name}, {"periods", std::to_string(periods)},
+            {"warmMult", d4(warmMult)}, {"floor", d4(boostFloor)}, {"tau", d6(tau)},
+            {"N0_floor_ok", floorOk ? "1" : "0"},
+            {"N0_px", std::to_string(n0.changedPx)},
+            {"N1_swing", d6(N1.stat.meanSwing)}, {"N1_p999", d6(N1.stat.p999Swing)},
+            {"N1_frac", d2(N1.stat.fracOverTau * 100.0)},
+            {"N2_swing", d6(N2.stat.meanSwing)}, {"N2_p999", d6(N2.stat.p999Swing)},
+            {"N2_frac", d2(N2.stat.fracOverTau * 100.0)},
+            {"N3_swing", d6(N3.stat.meanSwing)}, {"N3_max", d6(N3.stat.maxSwing)},
+            {"N3_px", std::to_string(N3.changedPx)}, {"N5_swing", d6(N5.stat.meanSwing)},
+            {"N5_max", d6(N5.stat.maxSwing)}, {"N5_px", std::to_string(N5.changedPx)},
+            {"N6_ran", sixRan ? "1" : "0"}, {"N6_nonzero", sixNonZero ? "1" : "0"},
+            {"swingRatio", d4(swingRatio)}, {"gradLin", d6(gradLin)},
+            {"gradDisp", d6(gradDisp)}, {"heatScale", d6(scale)}},
+        {});
+    // 守卫汇总：G0 地板与 G2 反向都计入 rc（G0 红 = 全表读数存疑，比 G2 更严重，绝不吞）。
+    // sixOk 只作归因信息，不进 rc（诊断组不是判据）。
+    (void)sixOk;
+    return (revOk && floorOk) ? 0 : 1;
+}
+
+int runBistroSweep(int periods, double warmMult, const std::string& camera, double boostFloor,
+    bool diagBsOff)
+{
+    std::printf("bistro 真实场景时域残差（债-48，**只出数不判**）：交付配置 configs/ 原样"
+                "（deferred + env/skybox/IBL/AO/shadow 全开 + base_space=交付默认 true）\n"
+                "  %d×%d  静止机位  折叠 (2,%d,H,W)  周期数 %d  门开地板 static_feedback=%s\n"
+                "  区域 = **全帧**（交付 picking=false 无 objectID，打开 = 改图形态；与 aa_target 的"
+                "数不可直接比，算子/域/τ 定义相同）\n",
+        kSize[0], kSize[1], kResidualPeriod, periods, d4(boostFloor).c_str());
+    const std::string shotDir = projectRoot() + "/build/rgl/screenshots";
+    int rc = 0;
+    for (const auto& cam : kBistroCams) {
+        if (camera != "all" && camera != cam.name)
+            continue;
+        const int one = runBistroCamera(cam, periods, warmMult, boostFloor, shotDir, diagBsOff);
+        if (one == 2)
+            return 2;  // 采集失败 / 锚点中止：后面的机位不跑（停下报告）
+        rc = std::max(rc, one);
+    }
+    if (rc == 0)
+        std::printf("\n全部机位：反向守卫绿、锚点在场。门开压没压住 = 看「门开/门关」行与热图，"
+                    "本命令不判（口径同 --static-boost 先例）。\n");
+    return rc;
+}
+
+}  // namespace
+
 int cmdTemporalResidual(int periods, double warmMult, const std::string& variant,
-    double slowFeedback, bool skipSlow, bool baseSpace, double staticBoostFloor)
+    double slowFeedback, bool skipSlow, bool baseSpace, double staticBoostFloor, bool bistro,
+    const std::string& camera, double boostFloor, bool diagBsOff)
 {
     if (periods < 2 || periods % 2 != 0) {
         std::printf("--periods 必须是 ≥2 的偶数（两半折叠 = 同绝对相位对照）。收到 %d\n", periods);
         return 2;
     }
+    // 批 13.7b 变体分岔（默认不进，现行 7 条判据路径逐字不变）
+    if (bistro)
+        return runBistroSweep(periods, warmMult, camera, boostFloor, diagBsOff);
     // 批 13.7 变体分岔（默认 0 = 不进，现行 7 条判据路径逐字不变）
     if (staticBoostFloor > 0.0)
         return runStaticBoostSweep(projectRoot() + "/build", periods, warmMult, variant,

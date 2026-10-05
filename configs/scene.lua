@@ -171,6 +171,13 @@ return {
     },
 
     spin = false,  -- 场景整体时间旋转（true 便于肉眼判断渲染对错；false 静止便于排查遮挡）
+    -- 帧驱动 spin（诊断激励门，默认关 = 逐位今天）：spin_frame_angle ≠ 0（rad/帧）时
+    -- angle = spin_frame_angle × 帧号（**纯函数**，与帧时长无关 ⟹ 跨进程可复现的帧序列，
+    -- 时域判据的参考图才能与候选图逐帧对齐；dt 累积随帧时长漂 = 不可复现，
+    -- tools/imgqa/temporal.cpp 头注释）。spin_axis 覆写旋转轴（默认 (0.5,1,0) = 今天；
+    -- 诊断激励用绕 up 轴 yaw = {0,1,0}）。消费方 = imgqa temporal-motion。
+    -- spin_frame_angle = 0.0,
+    -- spin_axis = { 0.5, 1.0, 0.0 },
     cube = false,  -- 是否渲染硬编码 cube（Phase 1 遗留，原点 ±0.5，与模型互穿时建议关掉）
     exposure = 1.0,  -- tonemap 曝光（ACES 前线性倍率，缺省 1.0 = 直通）。2026-09-29：1.2→1.0。
                      -- env 从 0.2 抬到 1.0 后画面整体亮度本就上来，曝光回到中性 1.0，
@@ -252,6 +259,16 @@ return {
         -- feedback = 0.12,        -- 本帧权重（Filament 同默认 ⇒ ≈19 帧收敛）
         -- jitter_scale = 1.0,     -- 抖动幅度倍率，1 = ±0.5px
         -- motion_compensation = true,  -- prevSpin 刚体重投影（关 = 纯相机重投影）
+        -- reprojection = true,      -- 重投影消融门（诊断，默认开 = 逐位今天）：关 = 历史按
+        --                             -- 「同基位置」采样（prevViewProj := 本帧矩阵 + 位移清零
+        --                             -- + motion 单位阵）。相机运动激励下读数必须显著变差
+        --                             -- （imgqa temporal-motion 的 M3）；静止机位下关与不关逐位相同。
+        --                             -- ⚠ 与 motion_compensation 的分工：那条只关 prevSpin 场景旋转
+        --                             -- 补偿（相机不动时是恒等阵 = 消融无效），本条关相机重投影本身。
+        -- diag_reject = false,      -- 历史拒收诊断门（默认关）：开 = taa.frag 把逐像素「历史怎么了」
+        --                             -- 码编进 taa_out 的 alpha（0 收下 / 0.25 盒裁剪 / 0.5 盒拒收 /
+        --                             -- 0.75 重投影拒收 / 1 无历史），RGB 逐位不变。回读 =
+        --                             -- POST /shot {"attachment":"taa_out"}（消费方 = imgqa temporal-motion）。
         -- ── 批 13.7 静态机位历史权重提升（static boost，总门默认**关**）──
         -- 机制账：α=0.12 的 EMA 等效窗 ≈8 帧 < Halton(2,3) 抖动周期 16，16 帧周期分量按
         -- |H| = α/|1−(1−α)e^{−j2π/16}| = 0.312 漏过 31% ⟹ 静止机位 1px 细线「固定频率 +
