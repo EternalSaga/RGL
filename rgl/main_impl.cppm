@@ -306,6 +306,8 @@ void wireSceneEnvContexts(entt::registry& rg, const SceneConfig& scene) {
 	// 重投影消融 + 历史拒收诊断（均默认 = 逐位今天；语义 → SceneEnv 字段注释）
 	env.taaReprojection = scene.taaReprojection;
 	env.taaDiagReject = scene.taaDiagReject;
+	// 输入侧重建核（批 13.8；默认 0 = 双线性 = 逐位今天；判据消费方 = imgqa --kernel）
+	env.taaInputKernel = scene.taaInputKernel;
 	rg.ctx().emplace<TaaState>();
 }
 

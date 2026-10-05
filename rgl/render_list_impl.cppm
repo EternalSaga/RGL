@@ -294,6 +294,11 @@ void fillTaaData(FrameDrawList& out, const ViewProjection& viewProj, const Scene
 	// 本槽位原为保留 0，复用 = **零布局变更**（static_assert 不动）。
 	out.sceneData.taaPrevContentShift = {histShift, env.taaAoApplied ? 1.0f : 0.0f,
 		env.taaDiagReject ? 1.0f : 0.0f};
+	// x = **输入侧 un-jitter 的重建核选择**（`taa.input_kernel`，批 13.8；0 = 双线性 = 默认）。
+	// 本函数**无条件写**（门关 = 0），shader 侧 `k < 0.5` 走的就是改前那条 `SampleLevel`
+	// ⟹ 门关逐位不变（门红线）。为什么是配置直传而不是图形态派生：它不是「有没有这条路」
+	// 而是「同一条路用哪个核」，没有第二个真相源可对账（与 z/w 两个标志位性质不同）。
+	out.sceneData.taaInputKernel = {env.taaInputKernel, 0.0f, 0.0f, 0.0f};
 }
 
 void renderListSystem(entt::registry& rg, RGL::Resources&,

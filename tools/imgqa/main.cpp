@@ -629,8 +629,9 @@ void printUsage()
         "  izb [--glb izb_rig.glb] [--camera ladder]  IZB 消费域：mask↔画面寻址一致性（三子判据）\n"
         "  swim [--glb izb_rig.glb] [--camera ladder] [--dx 0.06] [--izb]  影场世界不变量：机位平移后重投影比影场（0 位移）\n"
         "  probe [--x 640] [--y 360] [--light Lx,Ly,Lz] [--tol 2]  闭式解探针：该是多少 vs 实际是多少\n"
-        "  aa-coverage [--variant forward] [--base-space]  逐杆覆盖率对拍闭式：单帧量「黑度积分 vs "
-        "投影宽度」（批 12.6 T4；--base-space = 批 13.2 门开态）\n"
+        "  aa-coverage [--variant forward] [--base-space] [--kernel 0]  逐杆覆盖率对拍闭式：单帧量"
+        "「黑度积分 vs 投影宽度」（批 12.6 T4；--base-space = 批 13.2 门开态；--kernel = 批 13.8"
+        " 输入侧重建核 0 双线性 / 1 CR 4×4 / 2 Lanczos3，本判据 = 核选型那条**静止态闭式**判据）\n"
         "  temporal [--pairs 32] [--warm 32] [--variant forward] [--base-space]  TAA 时域阳性锚点："
         "静止机位 + jitter，连续帧突发逐帧差（批 12.6 T4）\n"
         "  temporal-residual [--periods 2] [--warm-multiplier 6] [--variant forward]"
@@ -652,19 +653,23 @@ void printUsage()
         "故不受 `moving-camera-l1-ratio` 反模式影响）+ M1m/M4m 连拍 taa_out alpha 出**历史被拒"
         "比例**（门 `taa.diag_reject`，RGB 逐位 = M1/M4）；只出数 + 一句判决，不改渲染\n"
         "  temporal-feedback [--camera doorframe] [--angle 0.2] [--burst 32] [--edge-pct 0.90]"
-        " [--fb 0.02,0.05,0.12,0.25,0.5,0.8,1.0]  **运动态 feedback 扫描**：把「历史在非零分数"
+        " [--fb 0.02,0.05,0.12,0.25,0.5,0.8,1.0] [--kernel 0]  **运动态 feedback 扫描**：把「历史在非零分数"
         "偏移上被 CR 重采样 ⟹ 每帧一次低通、在 ≈1/α 窗内复利」这条假设变成数。fb=1 那格"
         "（零累积但仍带 jitter）拆开「累积」与「抖动」两个贡献；顺带在静止态扫 fb 出 swing，"
         "判「窗棂残余与运动失效是否同一个根」。每组回显**引擎自己报的**生效 feedback"
-        "（`GET /state`）+ 同进程 /param A/B 字节差 = 参数生效自证；只出数，不改引擎默认值\n"
+        "（`GET /state`）+ 同进程 /param A/B 字节差 = 参数生效自证；只出数，不改引擎默认值。"
+        "S0 = 静止 TAA 关地板（批 13.8 第 0 步：静止态 dev(fb=1)/dev(S0) 与运动态 R(fb=1) 同构，"
+        "两边同 ~4% ⟹ 那 4% 与运动无关）；--kernel = 批 13.8 输入侧重建核\n"
         "  temporal-flicker [--target edge] [--sweep 0.125] [--frames 32] [--halfwidth 8]"
-        " [--rowfrac 0.14] [--verbose]  **相机移动下的时间闪烁（闭式解判据）**：相机帧驱动 yaw"
+        " [--rowfrac 0.14] [--verbose] [--kernel 0]  **相机移动下的时间闪烁（闭式解判据）**：相机帧驱动 yaw"
         " 以亚像素扫速扫过 1px 高对比边缘，量「每帧最大变化」（p99.5，线性域），与**闭式解**两端"
         "对拍——理想 AA（覆盖线性斜坡）给下界、完全无 AA（阶梯整段跳变）给上界，于是 G=实测/理想"
         "与 ζ=(实测−理想)/(无AA−理想) 有绝对刻度，不靠「动得慢」刷分。--target edge = aa_target"
         " 白板左边缘（闭式适用，主判据）；--target <bistro 机位名> = 交付配置口径（闭式只作参考"
         "刻度）。TAA 开/关各一组，出 flicker(on)/flicker(off)。FFT 只作诊断打印——高频带能量比"
-        "已被闭式对照否决（混叠把锯齿变成方波），理由见 temporal_flicker.h\n"
+        "已被闭式对照否决（混叠把锯齿变成方波），理由见 temporal_flicker.h。"
+        "--kernel = 批 13.8 输入侧重建核（0 双线性 / 1 CR 4×4 / 2 Lanczos3），**只作用于 TAA 开组**"
+        "⟹ TAA 关组 = 闭式无 AA 锚点，跨核重测它必须不动（ζ 的主判据）\n"
         "  temporal-homography [--target edge] [--sweep 0.125] [--frames 16] [--out 前缀]"
         "  **精确单应 warp 的逐像素闪烁归因图**：相机做原地绕 up 轴 yaw ⟹ 像面映射是纯旋转"
         "单应（与深度无关、对整幅画面精确），由 tan(Δψ)+焦距+主点**闭式**给出——零参考图、零"
@@ -764,7 +769,8 @@ int main(int argc, char** argv)
             return cmdTemporalFeedback(P.get(args, "--camera", "doorframe"),
                 std::stod(P.get(args, "--angle", "0.2")),
                 std::stoi(P.get(args, "--burst", "32")),
-                std::stod(P.get(args, "--edge-pct", "0.90")), fbs);
+                std::stod(P.get(args, "--edge-pct", "0.90")), fbs,
+                std::stod(P.get(args, "--kernel", "0")));
         }
         if (cmd == "temporal-flicker")
             return cmdTemporalFlicker(P.get(args, "--target", "edge"),
@@ -772,7 +778,7 @@ int main(int argc, char** argv)
                 std::stoi(P.get(args, "--frames", "32")),
                 std::stod(P.get(args, "--halfwidth", "8")),
                 std::stod(P.get(args, "--rowfrac", "0.14")),
-                P.has(args, "--verbose"));
+                P.has(args, "--verbose"), std::stod(P.get(args, "--kernel", "0")));
         if (cmd == "temporal-homography")
             return cmdTemporalHomography(P.get(args, "--target", "edge"),
                 std::stod(P.get(args, "--sweep", "0.125")),
@@ -780,7 +786,8 @@ int main(int argc, char** argv)
                 P.get(args, "--out", ""));
         if (cmd == "aa-coverage")
             return cmdAaCoverage(P.get(args, "--variant", ""), std::stoi(P.get(args, "--warm", "32")),
-                std::stod(P.get(args, "--feedback", "0.12")), P.has(args, "--base-space"));
+                std::stod(P.get(args, "--feedback", "0.12")), P.has(args, "--base-space"),
+                std::stod(P.get(args, "--kernel", "0")));
         if (cmd == "taa-swim")
             return cmdTaaSwim(std::stoi(P.get(args, "--pairs", "32")),
                 std::stoi(P.get(args, "--warm", "32")), P.get(args, "--variant", ""));

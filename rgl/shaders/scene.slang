@@ -269,6 +269,7 @@ float3 envBrdfFactor(float NoV, float roughness, float3 F0)
 //   @722144  mat4 motionPrevFromCur —— prevSpin · inverse(curSpin)（spin 关 = 单位阵）
 //   @722208  vec4 (feedback, historyValid, 本帧内容位移 c_t 的 x/y px)
 //   @722224  vec4 (上一帧内容位移 c_{t−1} 的 x/y px, **AO 已施加标志** z, 保留)  —— 批 13.5/13.6
+//   @722240  vec4 (输入侧重建核选择 x, yzw 保留)  —— 批 13.8，默认 0 = 双线性 = 逐位今天
 //
 // 矩阵口径提醒（改动前必读，全量推导 → scene_data.cppm kSceneDataTaa* 区注释）：
 //   · 重建世界坐标用 sceneData@64 的 skyInvViewProj，它是**抖动后** proj·view 的逆（与深度配套）；
@@ -340,4 +341,15 @@ float readTaaAoApplied()
 float readTaaDiagReject()
 {
     return asfloat(sceneData.Load(722224u + 12u));  // kSceneDataTaaPrevContentShiftOffset + w
+}
+
+// 输入侧 un-jitter 的**重建核选择**（`taa.input_kernel`，默认 0 = 双线性 = 逐位今天）。
+// 0 = 双线性（4 抽头，权重恒 ∈[0,1]）｜ 1 = Catmull-Rom 4×4（与历史侧同一份权重实现）｜
+// 2 = Lanczos3 6×6（Filament 输入侧用的那个）。消费端 = taa.frag.slang `sampleInputColor`。
+// ⚠ 本区**新增** 16B（@722240，kSceneDataTaaBytes 160 → 176）——前四个槽的四个分量
+//   全部有主（feedback/historyValid/c_t.xy、c_{t−1}.xy/aoApplied/diagReject），无处复用。
+//   门关（0）⟹ taa.frag 走双线性分支，一个 bit 不动（红线由 `just shot` sha256 钉）。
+float readTaaInputKernel()
+{
+    return asfloat(sceneData.Load(722240u));  // kSceneDataTaaInputKernelOffset
 }

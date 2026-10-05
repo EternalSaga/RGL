@@ -140,6 +140,14 @@ export struct SceneConfig {
 	// 门关 = alpha 恒 1.0 = 今天。要回答的问题：「α 调多小都不用的像素，是不是历史被
 	// 邻域盒拒收了」（docs/phase13_plan.md §1.7 的 98.3% 恒拒有前科，根因 CR 核奇偶性）。
 	bool taaDiagReject = false;
+	// ── 输入侧 un-jitter 的**重建核选择**（scene.lua `taa.input_kernel`，批 13.8，默认 0）──
+	// 0 = 双线性（4 抽头，权重恒 ∈[0,1]，**= 改前行为，逐位不变**）/ 1 = Catmull-Rom 4×4
+	// （与历史侧同一份权重实现）/ 2 = Lanczos3 6×6（Filament 输入侧那个）。
+	// 为什么要有：批 13.2 定案双线性用的两条判据（梯度能量 / `aa-coverage`）全是**静止口径**，
+	// 运动下从未重测；本门让「换核」在同一构建里可 A/B（判据 = `imgqa temporal-flicker` 的
+	// 闭式刻度 ζ + `aa-coverage`，消费方 = imgqa `--kernel`）。核语义与实测判决 →
+	// `taa.frag.slang` 的 `sampleInputColor` 与 main 内 un-jitter 段。
+	float taaInputKernel = 0.0f;
 };
 
 /**

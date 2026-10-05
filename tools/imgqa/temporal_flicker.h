@@ -39,14 +39,17 @@ struct FlickerSeries {
 };
 
 /**
- * 起引擎采一段连拍（热身 → /shotburst）。
+ * 起引擎采一段连拍（`temporal-flicker` 与 `temporal-homography` **共用同一个采集口**——
+ * 两条判据看的是同一种激励，写两份采集代码迟早漂）。
  * @param edgeTarget true = aa_target 合成靶（闭式适用）；false = 交付配置 + bistro 机位
  * @param cam        edgeTarget = false 时给（坐标 = 仓库资产 kBistroCams）
  * @param yawRadPerFrame camera.lua `frame_yaw`（rad/帧，原地绕 up 轴 yaw）
+ * @param kernel     scene.lua `taa.input_kernel`（批 13.8 输入侧重建核：0 双线性 / 1 CR 4×4 /
+ *                   2 Lanczos3 6×6）。默认 0 = **不写键** = 引擎默认 = 已发表读数的口径
  */
 [[nodiscard]] FlickerSeries captureFlickerSeries(const std::string& dir, const std::string& name,
     const std::string& tag, bool edgeTarget, const BistroCam* cam, bool taaOn,
-    double yawRadPerFrame, int frames);
+    double yawRadPerFrame, int frames, double kernel = 0.0);
 
 /// `--target` 解析（两条判据共用）：edge = 合成靶；否则 bistro 机位名。找不到 = 抛。
 /// @param edgeTarget [out] true = 合成靶
@@ -109,8 +112,11 @@ struct FlickerAnchor {
  * @param halfWidth ROI 半宽（px）
  * @param rowFrac ROI 半高占画面高的比例
  * @param verbose 打印 ROI 均值时间序列与 Hann 半谱（诊断用）
+ * @param kernel 输入侧重建核（`taa.input_kernel`，批 13.8）：0 双线性（默认 = 已发表口径）/
+ *               1 CR 4×4 / 2 Lanczos3 6×6。**只作用于 TAA 开那一组**（TAA 关 = 没有 taa pass，
+ *               键无消费者 ⟹ 它就是本判据的闭式刻度锚点，不随核变）
  */
 int cmdTemporalFlicker(const std::string& target, double sweepPxPerFrame, int frames,
-    double halfWidth, double rowFrac, bool verbose);
+    double halfWidth, double rowFrac, bool verbose, double kernel = 0.0);
 
 }  // namespace RGL::imgqa

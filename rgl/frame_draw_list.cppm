@@ -137,6 +137,10 @@ export struct SceneFrameData {
 	///   空出的槽 ⟹ **零布局变更**）。taa.frag 把抖动网格的 prevUv 减它才落到基空间历史网格。
 	///   默认值 = 全 0 ⇒ 减法逐位恒等（TAA 关 / jitter_scale=0 走这条，BIT-IDENTICAL 基线）。
 	glm::vec4 taaPrevContentShift{0.0f};
+	/// · taaInputKernel —— 批 13.8 输入侧 un-jitter 的**重建核选择**（x = 0 双线性 / 1 CR 4×4 /
+	///   2 Lanczos3 6×6，yzw 保留），scene data @722240。默认 0 = 走改前那条 `SampleLevel`
+	///   ⟹ **逐位今天**（门红线 = `just shot` sha256）。消费者 = taa.frag `sampleInputColor`。
+	glm::vec4 taaInputKernel{0.0f};
 };
 
 /**

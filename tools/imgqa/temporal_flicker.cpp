@@ -83,7 +83,8 @@ struct Group: FlickerSeries {
  * 两条判据（flicker / homography）共用，见 temporal_flicker.h 的 FlickerSeries 注释。
  */
 FlickerSeries captureFlickerSeries(const std::string& dir, const std::string& name, const std::string& tag,
-    bool edgeTarget, const BistroCam* cam, bool taaOn, double yawRadPerFrame, int frames)
+    bool edgeTarget, const BistroCam* cam, bool taaOn, double yawRadPerFrame, int frames,
+    double kernel)
 {
     FlickerSeries g;
     g.name = name;
@@ -92,6 +93,7 @@ FlickerSeries captureFlickerSeries(const std::string& dir, const std::string& na
     o.taa = taaOn;
     o.taaFeedback = kTaaFeedback;
     o.taaJitterScale = 1.0;
+    o.taaInputKernel = kernel;  // 批 13.8 输入侧重建核（0 = 不写键 = 引擎默认 = 已发表口径）
     o.cameraFrameYaw = yawRadPerFrame;  // rad/帧（键名 = camera.lua `frame_yaw`）
     std::array<double, 3> pos = kEdgePosition;
     std::array<double, 3> tgt = kEdgeTarget;
@@ -386,7 +388,7 @@ float verticalFocalPx(int heightPx, float fovDeg)
 }
 
 int cmdTemporalFlicker(const std::string& target, double sweepPxPerFrame, int frames,
-    double halfWidth, double rowFrac, bool verbose)
+    double halfWidth, double rowFrac, bool verbose, double kernel)
 {
     if (sweepPxPerFrame <= 0.0 || sweepPxPerFrame >= 1.0) {
         std::printf("用法: imgqa temporal-flicker [--sweep 0.125] [--frames 32] [--target edge|doorframe|...]\n"
@@ -416,16 +418,23 @@ int cmdTemporalFlicker(const std::string& target, double sweepPxPerFrame, int fr
                                            : "bistro 交付配置 ROI（闭式只作**参考刻度**）");
     std::printf("  名义扫速 %g px/帧 → 每帧偏航 %s°（f=%.1fpx @ fov %g°）；帧数 %d；ROI 半宽 %gpx\n",
         sweepPxPerFrame, d5(yawDeg).c_str(), focal, kFovDeg, frames, halfWidth);
+    // 批 13.8：输入侧重建核。**只作用于 TAA 开那一组**（TAA 关 = 图里没有 taa pass，键无消费者）
+    // ⟹ TAA 关那组是「闭式无 AA 锚点」，逐次重测它 = 跨运行的可比性自证（核不该动它一根毫毛）。
+    static const char* kKernelNames[3] = { "0 双线性", "1 Catmull-Rom 4×4", "2 Lanczos3 6×6" };
+    const int kIdx = kernel < 0.5 ? 0 : (kernel < 1.5 ? 1 : 2);
+    const std::string kTag = kernel < 0.5 ? "" : ("_k" + std::to_string(kIdx));
+    std::printf("  输入侧重建核 taa.input_kernel = %s（批 13.8 A/B；只作用于 TAA 开组）\n",
+        kKernelNames[kIdx]);
 
     std::vector<Group> groups;
     for (bool on: { false, true }) {
         const std::string tag = on ? "flicker_on" : "flicker_off";
-        const std::string dir = projectRoot() + "/build/imgqa_flicker_" + tag;
+        const std::string dir = projectRoot() + "/build/imgqa_flicker_" + tag + kTag;
         std::printf("  采集 %s …\n", tag.c_str());
         try {
             Group g;
             static_cast<FlickerSeries&>(g) = captureFlickerSeries(dir, on ? "TAA 开" : "TAA 关", tag,
-                edgeTarget, cam, on, yawRad, frames);
+                edgeTarget, cam, on, yawRad, frames, kernel);
             groups.push_back(std::move(g));
         }
         catch (const std::exception& e) {

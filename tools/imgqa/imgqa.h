@@ -179,6 +179,11 @@ struct ProfileOpts {
     /// 「历史怎么了」码编进 taa_out 的 alpha（0 收下 / 0.25 盒裁剪 / 0.5 盒拒收 /
     /// 0.75 重投影拒收 / 1 无历史），RGB 逐位不变；回读 = shotBurst(attachment="taa_out")。
     bool taaDiagReject = false;
+    /// scene.lua `taa.input_kernel`（批 13.8 输入侧 un-jitter 的**重建核选择**）。
+    /// 0 = 双线性（**引擎默认 = 不写键 = 逐位今天**）/ 1 = Catmull-Rom 4×4 / 2 = Lanczos3 6×6。
+    /// ⚠ 0 时**不写键**（写出的键越少漂移面越小，同 staticBoost 的做法）；非 0 才写。
+    /// 消费方 = `temporal-flicker` / `aa-coverage` / `temporal-feedback` 的 `--kernel`。
+    double taaInputKernel = 0.0;
     /// 帧驱动 spin（scene.lua `spin_frame_angle`，rad/帧）。0 = **不写键** = 门关 = 逐位今天。
     /// ≠0 时同时写 `spin_axis`（`spinAxis`）——运动必须是绕 up 轴的定角 yaw（刚体、
     /// prevSpin 重投影能精确对齐；理由全文 = `temporal.cpp` 头注释）。
@@ -598,9 +603,12 @@ int cmdTemporalMotion(const std::string& camera, const std::string& motion, doub
  * @param burst 每组连拍帧数（≥32 且为抖动周期 16 的整数倍：静止组要相位折叠）
  * @param edgePercentile 边缘掩码的梯度分位（默认 0.90）
  * @param fbs feedback 扫描档（默认 0.02/0.05/0.12/0.25/0.5/0.8/1.0）
+ * @param kernel 批 13.8 `taa.input_kernel`（输入侧重建核：0 双线性 / 1 CR 4×4 / 2 Lanczos3）。
+ *        只作用于 TAA 开组；M0/REFm/REFs/S0（= 静止 TAA 关地板，本命令为「抖动自身代价
+ *        是不是运动专属」这个问题新增）都是 TAA 关 = 不消费本键 ⟹ 它们跨核可比。
  */
 int cmdTemporalFeedback(const std::string& camera, double angleDeg, int burst,
-    double edgePercentile, const std::vector<double>& fbs);
+    double edgePercentile, const std::vector<double>& fbs, double kernel = 0.0);
 
 /// 逐杆覆盖率对拍闭式（批 12.6 T4，docs/taa_plan.md §7 第 10 条）：单帧量阶梯杆的
 /// 「黑度积分 vs 投影宽度」，TAA 关应当被二值覆盖量化破坏、TAA 开应当贴合闭式。
@@ -613,8 +621,12 @@ int cmdTemporalFeedback(const std::string& camera, double angleDeg, int burst,
 /// @param baseSpace 批 13.2 `taa.base_space`（true = 输出在基空间）。判据域内的黑度积分
 ///                是**单帧**量，门开态把它从「抖动空间的一帧」换成「重采样到基网格的一帧」，
 ///                数字会动 ⟹ 两态都要跑（门关 = 0.138 列的历史读数口径）。
+/// @param kernel  批 13.8 `taa.input_kernel`（输入侧重建核：0 双线性 / 1 CR 4×4 / 2 Lanczos3）。
+///                本判据是**静止态那条有闭式的**判据（黑度积分 = 闭式投影宽度），批 13.2 当年
+///                就是拿它否掉 CR 的；批 13.8 拿它做「运动态新判据 ζ 选出的核在静止态是否
+///                退化」的**第二条闭式判据**（不许只看新判据换核）。TAA 关组不消费本键。
 int cmdAaCoverage(const std::string& variant, int warm, double feedback,
-    bool baseSpace = false);
+    bool baseSpace = false, double kernel = 0.0);
 
 /// AO 噪声量测（Phase 13 观测任务：把「SSAO 到底噪不噪」变成有数字有图有判据）。
 ///

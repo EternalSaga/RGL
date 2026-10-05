@@ -206,7 +206,8 @@ void insertAfterKey(std::string& text, const std::string& file, const std::strin
 /// staticBoost/staticFeedback（批 13.7）：默认关 = 不写这两键（写出的键越少，漂移面越小）。
 void rewriteTaaBlock(std::string& scene, bool enabled, double feedback, double jitterScale,
     bool baseSpace, bool staticBoost = false, double staticFeedback = 0.01,
-    bool motionCompensation = true, bool reprojection = true, bool diagReject = false)
+    bool motionCompensation = true, bool reprojection = true, bool diagReject = false,
+    double inputKernel = 0.0)
 {
     std::ostringstream blk;
     blk << "    taa = {\n        enabled = " << lb(enabled) << ",\n        feedback = "
@@ -224,6 +225,9 @@ void rewriteTaaBlock(std::string& scene, bool enabled, double feedback, double j
         blk << ",\n        reprojection = false";
     if (diagReject)
         blk << ",\n        diag_reject = true";
+    // 输入侧重建核（批 13.8）：0 = 双线性 = 引擎默认 = **不写键**（门关态与今天逐字相同）
+    if (inputKernel != 0.0)
+        blk << ",\n        input_kernel = " << std::setprecision(6) << inputKernel;
     blk << ",\n    },\n";
     const auto begin = scene.find("\n    taa = {");
     if (begin != std::string::npos) {
@@ -390,7 +394,7 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
         std::string sc = readFile(outDir + "/scene.lua");
         rewriteTaaBlock(sc, o.taa, o.taaFeedback, o.taaJitterScale, o.taaBaseSpace,
             o.taaStaticBoost, o.taaStaticFeedback, o.taaMotionCompensation, o.taaReprojection,
-            o.taaDiagReject);
+            o.taaDiagReject, o.taaInputKernel);
         // 帧驱动 spin（诊断激励门）。**只在门开时写**：不写 = 交付配置原样 = 逐位今天。
         // 键名拼错在这里是**静默**的（scene.lua 的未知键引擎不打警告），所以消费方
         // temporal-motion 另有在场性守卫：运动组的连拍若逐位相同 = 键没生效 = 立刻停下。
@@ -489,6 +493,10 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
               + (o.taaStaticBoost
                      ? ", static_boost = true, static_feedback = "
                            + std::to_string(o.taaStaticFeedback)
+                     : "")
+              // 输入侧重建核（批 13.8）：0 = 双线性 = 引擎默认 = 不写键
+              + (o.taaInputKernel != 0.0
+                     ? ", input_kernel = " + std::to_string(o.taaInputKernel)
                      : "")
               + " },\n"
         : "";

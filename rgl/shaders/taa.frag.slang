@@ -159,32 +159,18 @@ float3 clipToAabb(float3 c, float3 p, float3 mn, float3 mx)
     return c + d * tMax;
 }
 
-// ── 历史采样：精确 4×4 Catmull-Rom（16 次整数 Load）──
-// 为什么不能双线性：**历史就是累积图**，每帧一次双线性重采样 = 老贡献被反复低通，糊度**逐帧
-// 复利**。实测（phase13 §1.5）：糊度随历史年龄单调上升（feedback 1.0/0.5/0.12/0.02 →
-// +0.1/−27.3/−49.7/−57.0%），而正确的相位平均只该 −24.2% 且对 feedback 不敏感。
-// 为什么不是「4 次双线性折叠 CR」（= Slang sampleBiquadric 那类技巧，本版本无该内建）：
-// **CR 有负瓣**，双线性抽头权重恒 ∈[0,1]，数学上表示不了负瓣 → 不是 CR（Python 对拍暴力
-// 4×4 CR 最大误差 0.146 实测否决）。故 16 次 Load 精确求值。
-float3 sampleHistoryCatmullRom(float2 uv)
+// ── Catmull-Rom 一维权重（**全文件唯一一份实现**，历史侧与输入侧共用）──
+// ⚠ **核关于 a 是偶函数**（只依赖到纹素中心的距离），故三次项必须取 |a|：a3 = a²·|a|。
+// 写成带符号的 a³ 会让 t=0 的权重从 (0,1,0,0) 变成 (0,1,−3,8)（Σ=6）——**恒等性破产**、
+// 2D 直流增益 ≈36×，当时历史再经 saturate 顶到上界（取值域闸门已于批 13.1e 改成只夹
+// 下界，见 clampHdr）⟹ 被 AABB 判成越界（phase13 §1.8）。
+// 恒等性正是 imgqa 判据 `temporal-identity` 的算术基础（零抖动 ⇒ 输出必须逐字节 = R）。
+void catmullRomWeights(float2 t, out float wx[4], out float wy[4])
 {
-    uint pxW, pxH, mLvl;
-    historyTex.GetDimensions(0u, pxW, pxH, mLvl);
-    const float2 texel = 1.0 / float2(float(pxW), float(pxH));
-    const float2 p = uv / texel - 0.5;              // 纹素中心坐标系（纹素 i 中心在 i+0.5）
-    const int2 b = int2(floor(p));
-    const float2 t = p - float2(b);
-
-    float wx[4], wy[4];
     [unroll]
     for (int i = 0; i < 4; ++i)
     {
-        const float2 a = t + 1.0 - float2(i);       // 到抽头 b−1+i 的有向距离 ∈ (−2, 2]
-        // ⚠ **核关于 a 是偶函数**（只依赖到纹素中心的距离），故三次项必须取 |a|：a3 = a²·|a|。
-        // 写成带符号的 a³ 会让 t=0 的权重从 (0,1,0,0) 变成 (0,1,−3,8)（Σ=6）——**恒等性破产**、
-        // 2D 直流增益 ≈36×，当时历史再经 saturate 顶到上界（取值域闸门已于批 13.1e 改成只夹
-        // 下界，见 clampHdr）⟹ 被 AABB 判成越界（phase13 §1.8）。
-        // 恒等性正是 imgqa 判据 `temporal-identity` 的算术基础（零抖动 ⇒ 输出必须逐字节 = R）。
+        const float2 a = t + 1.0 - float2(i);  // 到抽头 b−1+i 的有向距离 ∈ (−2, 2]
         const float2 m = abs(a), a2 = a * a, a3 = a2 * m;
         // Catmull-Rom 核 k(m)：m≤1 → 1.5m³−2.5m²+1；1<m<2 → −0.5m³+2.5m²−4m+2
         wx[i] = select(m.x > 1.0, -0.5 * a3.x + 2.5 * a2.x - 4.0 * m.x + 2.0,
@@ -192,6 +178,28 @@ float3 sampleHistoryCatmullRom(float2 uv)
         wy[i] = select(m.y > 1.0, -0.5 * a3.y + 2.5 * a2.y - 4.0 * m.y + 2.0,
                                   1.5 * a3.y - 2.5 * a2.y + 1.0);
     }
+}
+
+// ── 精确 4×4 Catmull-Rom（16 次整数 Load，纹理作参数）──
+// 为什么不能双线性：**历史就是累积图**，每帧一次双线性重采样 = 老贡献被反复低通，糊度**逐帧
+// 复利**。实测（phase13 §1.5）：糊度随历史年龄单调上升（feedback 1.0/0.5/0.12/0.02 →
+// +0.1/−27.3/−49.7/−57.0%），而正确的相位平均只该 −24.2% 且对 feedback 不敏感。
+// 为什么不是「4 次双线性折叠 CR」（= Slang sampleBiquadric 那类技巧，本版本无该内建）：
+// **CR 有负瓣**，双线性抽头权重恒 ∈[0,1]，数学上表示不了负瓣 → 不是 CR（Python 对拍暴力
+// 4×4 CR 最大误差 0.146 实测否决）。故 16 次 Load 精确求值。
+// ⚠ 取数走 **整数 Load + clamp**，不是采样器 ⟹ 共享 sampler 的 wrap=REPEAT 根本不参与
+//   （输入侧换核时这条是越界风险的结构性解法，见 main 内「saturate」段）。
+float3 sampleCatmullRom(Texture2D<float4> tex, float2 uv)
+{
+    uint pxW, pxH, mLvl;
+    tex.GetDimensions(0u, pxW, pxH, mLvl);
+    const float2 texel = 1.0 / float2(float(pxW), float(pxH));
+    const float2 p = uv / texel - 0.5;              // 纹素中心坐标系（纹素 i 中心在 i+0.5）
+    const int2 b = int2(floor(p));
+    const float2 t = p - float2(b);
+
+    float wx[4], wy[4];
+    catmullRomWeights(t, wx, wy);
     float3 acc = 0.0;
     [unroll]
     for (int j = 0; j < 4; ++j)
@@ -201,10 +209,135 @@ float3 sampleHistoryCatmullRom(float2 uv)
         {
             const int2 q = clamp(b - 1 + int2(i, j), int2(0, 0),
                                  int2(int(pxW) - 1, int(pxH) - 1));
-            acc += wx[i] * wy[j] * historyTex.Load(int3(q, 0)).rgb;
+            acc += wx[i] * wy[j] * tex.Load(int3(q, 0)).rgb;
         }
     }
     return acc;
+}
+
+float3 sampleHistoryCatmullRom(float2 uv)
+{
+    return sampleCatmullRom(historyTex, uv);
+}
+
+// ── Lanczos3 一维权重（6 抽头，Filament 输入侧 un-jitter 用的那个核）──
+// L(x) = sinc(x)·sinc(x/3)（|x| < 3），L(0) = 1、非零整数处解析零点 = 0。
+// ⚠ **两条显式归零一条都不能省**：float32 的 sin(π) = 8.7e-8 ≠ 0，不显式归零则
+//   「零偏移 = 精确插值」只在 1e-7 意义上成立 ⟹ 静止机位 + jitter_scale=0 的恒等式
+//   （判据 `temporal-identity`：零抖动 ⇒ 输出逐字节 = R）**数值上破产**。x=0 那条是
+//   sinc 的可去奇点（0/0），不是可选优化。
+float lanczos3Weight(float x)
+{
+    const float ax = abs(x);
+    if (ax < 1e-5)
+        return 1.0;
+    if (ax >= 3.0)
+        return 0.0;
+    const float r = round(ax);
+    if (r >= 1.0 && abs(ax - r) < 1e-5)
+        return 0.0;  // 解析零点（见上）
+    const float px = 3.14159265358979323846 * x;
+    const float p3 = px / 3.0;
+    return (sin(px) / px) * (sin(p3) / p3);
+}
+
+// 精确 6×6 Lanczos3（36 次整数 Load + clamp，取数纪律同 sampleCatmullRom）。
+// 支撑 = 双线性的一倍半、CR 再多一圈 ⟹ 边缘 3 像素内被整数 clamp 夹住（= CLAMP_TO_EDGE）。
+float3 sampleLanczos3(Texture2D<float4> tex, float2 uv)
+{
+    uint pxW, pxH, mLvl;
+    tex.GetDimensions(0u, pxW, pxH, mLvl);
+    const float2 texel = 1.0 / float2(float(pxW), float(pxH));
+    const float2 p = uv / texel - 0.5;
+    const int2 b = int2(floor(p));
+    const float2 t = p - float2(b);
+
+    float wx[6], wy[6];
+    [unroll]
+    for (int i = 0; i < 6; ++i)
+    {
+        wx[i] = lanczos3Weight(t.x + 2.0 - float(i));  // 到抽头 b−2+i 的有向距离
+        wy[i] = lanczos3Weight(t.y + 2.0 - float(i));
+    }
+    float3 acc = 0.0;
+    [unroll]
+    for (int j = 0; j < 6; ++j)
+    {
+        [unroll]
+        for (int i = 0; i < 6; ++i)
+        {
+            const int2 q = clamp(b - 2 + int2(i, j), int2(0, 0),
+                                 int2(int(pxW) - 1, int(pxH) - 1));
+            acc += wx[i] * wy[j] * tex.Load(int3(q, 0)).rgb;
+        }
+    }
+    return acc;
+}
+
+// ── 归一化 Lanczos3（核 3）：Lanczos3 的 6 抽头截断**不是单位分割**，把直流增益钉回 1 ──
+// 解析（不是实测猜的）：Σᵢ L(t+2−i) = 1.000000 (t=0) → 0.994299 (t=0.5)，2D 可分离 ⟹
+// 直流增益最多掉 **1.14%**，且**随亚像素偏移变**。作为「把内容从一个亚像素网格搬到另一个」
+// 的重采样器这是缺陷：亮度随抖动相位泵动（每帧做一次、每帧相位不同）。归一化 = 每轴权重
+// 除以该轴权重和。
+// ⚠ 归一化**不破坏**「零偏移 = 精确插值」：t=0 时 Σw 恰为 1，除以它是恒等变换，权重仍是
+//   (0,0,1,0,0,0)。这条性质是 `temporal-identity`（零抖动 ⇒ 输出逐字节 = R）的算术基础，
+//   实测背书 = temporal-feedback 的零态锚点 F1.0js0/dev(M0)（核 2 = 0.999475、核 3 同）。
+float3 sampleLanczos3Normalized(Texture2D<float4> tex, float2 uv)
+{
+    uint pxW, pxH, mLvl;
+    tex.GetDimensions(0u, pxW, pxH, mLvl);
+    const float2 texel = 1.0 / float2(float(pxW), float(pxH));
+    const float2 p = uv / texel - 0.5;
+    const int2 b = int2(floor(p));
+    const float2 t = p - float2(b);
+
+    float wx[6], wy[6];
+    float sx = 0.0, sy = 0.0;
+    [unroll]
+    for (int i = 0; i < 6; ++i)
+    {
+        wx[i] = lanczos3Weight(t.x + 2.0 - float(i));
+        wy[i] = lanczos3Weight(t.y + 2.0 - float(i));
+        sx += wx[i];
+        sy += wy[i];
+    }
+    float3 acc = 0.0;
+    [unroll]
+    for (int j = 0; j < 6; ++j)
+    {
+        [unroll]
+        for (int i = 0; i < 6; ++i)
+        {
+            const int2 q = clamp(b - 2 + int2(i, j), int2(0, 0),
+                                 int2(int(pxW) - 1, int(pxH) - 1));
+            acc += (wx[i] / sx) * (wy[j] / sy) * tex.Load(int3(q, 0)).rgb;
+        }
+    }
+    return acc;
+}
+
+/**
+ * 批 13.8：输入侧 un-jitter 的**重建核选择**（门 `taa.input_kernel`，默认 0 = 双线性）。
+ *
+ * 为什么要有这个门：批 13.2 当年定案「双线性」用的两条判据（梯度能量 / `aa-coverage`）都是
+ * **静止口径**，运动下从没重测过；而现在有了 `imgqa temporal-flicker` 的闭式刻度 ζ。本门
+ * 存在的目的 = 让「换核」这件事能在**同一构建**里 A/B，而不是靠改代码重编。
+ *
+ * 三档：0 = 双线性（4 抽头，走采样器）｜ 1 = Catmull-Rom 4×4（复用历史侧同一份权重实现）｜
+ *       2 = Lanczos3 6×6（Filament 输入侧那个）。
+ * ⚠ **门关（0）走的是原样那一条 `SampleLevel`**，一个算术 bit 都没动（红线 = `just shot`
+ *   sha256 逐位不变）。分支值来自 scene data（uniform），不是非一致分支。
+ * ⚠ **1/2 两档的取数走整数 Load + clamp**，共享 sampler 的 wrap=REPEAT 不参与 ⟹ 越界风险
+ *   不是「更大」而是**结构性消失**（论证见 main 内 saturate 段，那条只对本门的 0 档必要）。
+ */
+float3 sampleInputColor(float2 uv)
+{
+    const float k = readTaaInputKernel();
+    if (k < 0.5)
+        return colorTex.SampleLevel(linearSampler, uv, 0.0).rgb;  // 0 = 双线性（默认 = 今天）
+    if (k < 1.5)
+        return sampleCatmullRom(colorTex, uv);  // 1 = Catmull-Rom 4×4
+    return sampleLanczos3(colorTex, uv);        // 2 = Lanczos3 6×6
 }
 
 /**
@@ -213,11 +346,14 @@ float3 sampleHistoryCatmullRom(float2 uv)
  * ⟹ 遮蔽边缘会把本帧值裁出盒外（改前两者天然一致：中心抽头恒等于 cur）。
  * ⚠ 采样纪律两条缺一不可，推导见 main 内「AO 施加点」段（① uv 传基空间坐标
  *   ② 必须线性采——点采会让 AO 随相位跳纹素，时域平均不掉）。
+ * 批 13.8：颜色那一路换走 `sampleInputColor`（核可选），**AO 那一路恒为线性采样**——
+ * AO 是 r8 光滑场，把它也换成宽核 = 把「重建核」与「AO 模糊量」两个被测项混成一个，
+ * 且批 13.6 的纪律②只要求「连续于相位」，线性采已满足。
  */
 float3 sampleSceneAo(float2 uv, float aoStrength)
 {
     const float ao = aoTex.SampleLevel(linearSampler, uv, 0.0).r;
-    return colorTex.SampleLevel(linearSampler, uv, 0.0).rgb * lerp(1.0, ao, aoStrength);
+    return sampleInputColor(uv) * lerp(1.0, ao, aoStrength);
 }
 
 [shader("fragment")]
@@ -241,8 +377,10 @@ float4 main(TaaInput input) : SV_Target
     // 抖动后渲染的图像内容整体平移 +c_t（`I_t(x) = F(x − c_t)`）⟹ 按 `+c_t` 采样即落回
     // 基网格。**这是本 pass 时域稳定性的来源**：混合从此发生在基空间，历史不再每帧被
     // 亚像素重采样（静止机位下历史采样偏移恒 0）⟹ 16 帧周期固定位置 shimmer 的成因消失。
-    // 核 = **双线性**（4 tap，权重恒 ∈[0,1]）。刻意不用 CR/Lanczos：输入侧重建每帧只做一次、
-    // 不叠加，低通不复利；但**负瓣振铃会进历史并在历史里累积**。
+    // 核 = **门 `taa.input_kernel` 选**（0 双线性 = 默认 = 逐位今天 / 1 CR 4×4 / 2 Lanczos3
+    // 6×6，见 `sampleInputColor`）。批 13.2 当年定案双线性时写下的理由（数据原样搬在下面，
+    // **勿丢**）当时是「刻意不用 CR/Lanczos」；批 13.8 把它变成可 A/B 的门，因为那两条判据
+    // 全是**静止口径**，而运动下从未重测过——现在有了闭式刻度 ζ（`imgqa temporal-flicker`）。
     // 【实测背书，原样搬自批 13.2 的 resolve 核选型（同一族问题，数据勿丢）】
     //   本机 bistro 1280×720、交付配置 + 用户机位、fb=.12 js=1、2026-10-04：
     //     梯度能量（越高越锐）    不重采样 0.038272 ｜ 双线性 **0.034843** ｜ CR 0.036999
@@ -252,6 +390,7 @@ float4 main(TaaInput input) : SV_Target
     //     比不重采样基线 0.138 还差），且「凭空多黑」翻成**负号** = 负瓣在黑白边界造振铃。
     //     梯度能量这条**没有闭式参考**，单看它会得出相反结论（`taa_plan` §7 第 10 条同一课：
     //     拿没有闭式的量当主判据，结论随量的选择翻转）。故按有闭式的那条定案 = **双线性**。
+    // 【批 13.8 运动态重决（ζ 闭式刻度 + 静止 aa-coverage 双判据）→ 本文件末尾的判决段】
     // ⚠ **必须显式 saturate 钳回 [0,1]**：共享 sampler 的 wrap 是 **REPEAT**
     //   （`sampler_library.cppm` 平铺 UV 定案，bistro 49.5% primitive 越界 [0,1]），而
     //   屏幕空间 uv 越界绕回 = 最外一圈采到**对侧**像素（1px 宽的假边）。|c_t| ≤ 0.5px
@@ -259,6 +398,14 @@ float4 main(TaaInput input) : SV_Target
     //   [0,1] 内的亚像素越界本就把取数钳到边缘纹素，**不改内部像素一个 bit**。
     //   （此坑原载于批 13.2 tonemap resolve 注释，随 un-jitter 前移一并搬来；
     //    邻域盒的 ±1 texel 抽头**不**钳——改前就如此，钳了会动基线。）
+    // ⚠ **换核（1/2 档）时这条论证重做过一遍，结论是「saturate 留着，但它不再是唯一防线」**：
+    //   ① CR/Lanczos 的取数是 **整数 Load + `clamp(q, 0, size−1)`**，**根本不经过采样器**
+    //     ⟹ wrap=REPEAT 结构性不参与，「支撑更宽 ⟹ 越界风险更大」这条在 Load 路下不成立
+    //     （整数 clamp 就是 CLAMP_TO_EDGE，且是**逐抽头**钳，比只钳中心坐标的 saturate 更紧）。
+    //   ② 但 saturate **一条都不能删**：`baseUv` 同时喂给 aoTex 的 `SampleLevel`（批 13.6
+    //     纪律①②）与 0 档的 `SampleLevel`，那两路**仍走 REPEAT 采样器**，钳没了就还是
+    //     1px 假边。③ 副作用如实记：1/2 档下邻域盒的 ±1 抽头在最外 2–3 像素由「绕回对侧」
+    //     变成「钳到边缘」——与 0 档不同，但**只在最外一圈**，且新行为才是本来的意图。
     const float2 baseUv = saturate(input.uv + params.zw * texel);
     // ── 批 13.6：AO 施加点搬进本 pass（= 时域滤波**之前**），tonemap 同帧跳过 ──
     // 【为什么搬】AO 值在深度不连续处随抖动相位剧变 = **真实锯齿**，而抖动 + 时域平均正是消
@@ -310,7 +457,10 @@ float4 main(TaaInput input) : SV_Target
     //   基位置 = input.uv 的那个世界点。喂 input.uv 会解出基位置 = input.uv − c_t 的世界点
     //   ⟹ 历史整体偏 c_t（≤0.5px 且随相位变）⟹ shimmer 只是换个形式，没消掉。
     //   （单测 `test_taa_jitter` 的「静止机位历史落回本像素」不变量就是为这条而写。）
-    const float depth = depthTex.Load(int3(input.position.xy, 0)).r;
+    // ⚠ 显式 int2：`input.position.xy` 是 float2，隐式转 int2 会出 slang warning[E30081]。
+    //   这条警告**潜伏了很久**——增量构建不重编本文件，`just build` 就一直不报（2026-10-05 记：
+    //   "just build 0 警告" 在增量下只覆盖本轮真正重编的文件，别把它当全量结论）。
+    const float depth = depthTex.Load(int3(int2(input.position.xy), 0)).r;
     float3 world = worldFromDepth(baseUv, depth);
     float4 worldPrev = float4(world, 1.0);
     if (depth < 1.0)  // 天空不随场景自旋（motion 是场景旋转补偿）

@@ -210,6 +210,9 @@ struct Spec {
     bool motionCompensation = true;
     bool reprojection = true;
     bool diagReject = false;
+    /// 批 13.8 `taa.input_kernel`（输入侧重建核：0 双线性 / 1 CR 4×4 / 2 Lanczos3）。
+    /// 默认 0 = 不写键 = 引擎默认 = 已发表 M0…M4 读数的口径。
+    double kernel = 0.0;
     double motionAngle = 0.0;  ///< rad/帧（0 = 静止）
     bool cameraMotion = true;  ///< true = 相机 frame_yaw；false = 场景 spin
     int warm = 16;
@@ -288,6 +291,7 @@ Group collectGroup(const std::string& dir, const std::string& name, const std::s
     o.taaMotionCompensation = sp.motionCompensation;
     o.taaReprojection = sp.reprojection;
     o.taaDiagReject = sp.diagReject;
+    o.taaInputKernel = sp.kernel;  // 批 13.8 输入侧重建核（0 = 不写键 = 已发表口径）
     if (sp.cameraMotion)
         o.cameraFrameYaw = sp.motionAngle;  // 默认运动源 = **相机**绕 up 轴定角 yaw
     else {
@@ -1068,7 +1072,7 @@ int cmdTemporalMotion(const std::string& cameraName, const std::string& motion,
 // 0.5% 的结论**；fb=.12 → fb=.5 的落差两轮实测 1.147× / 1.154×，比地板大两个数量级。
 
 int cmdTemporalFeedback(const std::string& cameraName, double angleDeg, int burst,
-    double edgePercentile, const std::vector<double>& fbs)
+    double edgePercentile, const std::vector<double>& fbs, double kernel)
 {
     const BistroCam* cam = nullptr;
     for (const auto& c : kBistroCams)
@@ -1116,7 +1120,9 @@ int cmdTemporalFeedback(const std::string& cameraName, double angleDeg, int burs
                 "（= 已发表 M0/M1 的视点），静止组 warm = align16(6/α)\n",
         burst, periods);
     std::printf("  配置 = 交付 configs/（deferred + env/skybox/IBL/AO/shadow 全开）；单实例；"
-                "统计一律线性域\n\n");
+                "统计一律线性域\n");
+    std::printf("  输入侧重建核 taa.input_kernel = %g（0 双线性 / 1 CR 4×4 / 2 Lanczos3；"
+                "只作用于 TAA 开组，M0/REFm/REFs/S0 = TAA 关 = 不消费本键）\n\n", kernel);
     // ── 采集（每组一个进程；串行，单实例纪律）────────────────────────────────
     //
     // ⚠⚠ **两条互相冲突的约束，取哪一条必须写下来**（本命令在这里翻过两次车，护栏都抓住了）：
@@ -1158,6 +1164,7 @@ int cmdTemporalFeedback(const std::string& cameraName, double angleDeg, int burs
         Spec s;
         s.taa = true;
         s.feedback = fb;
+        s.kernel = kernel;
         s.motionAngle = angle;
         s.warm = warmMotion;
         motion.push_back({fb, &run("F" + d2(fb) + " 运动 fb=" + d2(fb), "f" + fbTag(fb), s)});
@@ -1166,6 +1173,7 @@ int cmdTemporalFeedback(const std::string& cameraName, double angleDeg, int burs
     zs.taa = true;
     zs.feedback = 1.0;
     zs.jitterScale = 0.0;  // 零抖动 + 零累积 ⟹ 按构造 ≈ M0
+    zs.kernel = kernel;
     zs.motionAngle = angle;
     zs.warm = warmMotion;
     Group& gZero = run("F1.0js0 零态锚点（应 ≈ M0）", "zero", zs);
@@ -1185,6 +1193,7 @@ int cmdTemporalFeedback(const std::string& cameraName, double angleDeg, int burs
         Spec s;
         s.taa = true;
         s.feedback = fb;
+        s.kernel = kernel;
         s.motionAngle = 0.0;
         s.warm = warmFor(fb);
         if (std::abs(fb - 0.12) < 1e-9)
@@ -1194,6 +1203,17 @@ int cmdTemporalFeedback(const std::string& cameraName, double angleDeg, int burs
             probeHost = &g;
         still.push_back({fb, &g});
     }
+    // ── S0 = **静止 + TAA 关**（批 13.8 第 0 步的地板，缺它「运动专属」这句话没东西可对）──
+    // 为什么要这一格：运动态已发表 R(fb=1) = 1.0395 被读成「抖动自身在**运动下**贡献 +3.95%
+    // = 位置错」。但 fb=1 = 完全不累积 ⟹ 抖动买不到任何东西、而 un-jitter 那次重采样照付
+    // ⟹ fb=1 比 TAA 关差是**应该的**。要判断那 4% 是不是「运动专属」，唯一的对照就是
+    // **静止态**同一格：静止 + fb=1 vs 静止 + TAA 关。两边同参考（REFs）、同边缘带（bS）、
+    // 同 τ、同 warm 口径（64 = 静止组口径）⟹ 比值里没有跨视点项。
+    Spec s0;
+    s0.taa = false;
+    s0.motionAngle = 0.0;
+    s0.warm = 64;
+    Group& gS0 = run("S0 静止 TAA 关（静止地板）", "s0", s0);
 
     std::vector<Verdict> vs;
     // ── 守卫 1：运动激励在场（复用 `temporal-motion-excitation` 的口径与注册项）──────
@@ -1405,30 +1425,52 @@ int cmdTemporalFeedback(const std::string& cameraName, double angleDeg, int burs
         Deviation devBorrowed; ///< 边缘带来自 **REFm** = 已发表 M4 的口径（借来的掩码）
     };
     std::vector<SRow> srows;
-    for (const auto& [fb, g] : still) {
+    auto stillRow = [&](double fb, const Group& g) {
         SRow r;
         r.fb = fb;
-        r.warm = g->warm;
-        r.st = phaseSwingStat(toFrames(*g), {}, tauStill, periods, nullptr);
-        const Alignment a = alignSequence(*g, gRefs, window, false);
-        r.devAligned = measureDeviation(g->luma, gRefs, a, bS.edge, bS.flat, bS.tau);
-        r.devBorrowed = measureDeviation(g->luma, gRefs, a, bM.edge, bM.flat, bS.tau);
+        r.warm = g.warm;
+        r.st = phaseSwingStat(toFrames(g), {}, tauStill, periods, nullptr);
+        const Alignment a = alignSequence(g, gRefs, window, false);
+        r.devAligned = measureDeviation(g.luma, gRefs, a, bS.edge, bS.flat, bS.tau);
+        r.devBorrowed = measureDeviation(g.luma, gRefs, a, bM.edge, bM.flat, bS.tau);
         if (r.st.meanLuma <= 0.0)
             throw std::runtime_error("静止组画面是黑的（meanLuma=0）——「没画」不是「稳定」");
         srows.push_back(std::move(r));
-    }
+    };
+    for (const auto& [fb, g] : still)
+        stillRow(fb, *g);
+    stillRow(-1.0, gS0);  // fb = −1 哨兵 = **TAA 关**（静止地板，批 13.8 第 0 步）
     std::printf("\n── 静止态对照（窗棂残余；swing = 相位折叠 max−median，τ_swing = %s）──\n",
         d4(tauStill).c_str());
     std::printf("  %-8s %5s %10s %10s %8s %10s %8s %10s\n", "fb", "warm", "meanSwing", "p99.9",
         "frac>τ", "边缘偏差", "梯度比", "借掩码偏差");
     for (const auto& r : srows)
-        std::printf("  %-8s %5d %10s %10s %7.2f%% %10s %8.3f %10s\n", d2(r.fb).c_str(), r.warm,
-            d4(r.st.meanSwing).c_str(), d4(r.st.p999Swing).c_str(),
-            r.st.fracOverTau * 100.0, d4(r.devAligned.devEdge).c_str(), r.devAligned.gradRatio,
-            d4(r.devBorrowed.devEdge).c_str());
+        std::printf("  %-8s %5d %10s %10s %7.2f%% %10s %8.3f %10s\n",
+            r.fb < 0.0 ? "off(S0)" : d2(r.fb).c_str(), r.warm, d4(r.st.meanSwing).c_str(),
+            d4(r.st.p999Swing).c_str(), r.st.fracOverTau * 100.0, d4(r.devAligned.devEdge).c_str(),
+            r.devAligned.gradRatio, d4(r.devBorrowed.devEdge).c_str());
     std::printf("  「边缘偏差」的边缘带来自 REFs（与静止候选同视点）；「借掩码偏差」借 REFm 的掩码"
                 " = 已发表 M4 的口径（那张表的掩码算自**运动**参考首帧，比静止候选偏 ~5° ⟹ 掩码"
                 "与边缘错开、读数被稀释），两列并列出数不判谁对\n");
+
+    // ── 批 13.8 第 0 步读数：**静止态**的「抖动自身代价」= dev(S fb=1) / dev(S0) ──
+    // 与运动态 R(fb=1) 同构（那边是 dev(F1.0)/dev(M0)）。两边同 ~4% ⟹ 那 4% 是「无收益
+    // 重采样的代价」、与运动无关；静止 ~0% 而运动 4% ⟹ 才是「运动专属」。
+    {
+        const auto findRow = [&](double fb) -> const SRow* {
+            for (const auto& r : srows)
+                if (std::abs(r.fb - fb) < 1e-9)
+                    return &r;
+            return nullptr;
+        };
+        const SRow* sOff = findRow(-1.0);
+        const SRow* sOne = findRow(1.0);
+        if (sOff && sOne && sOff->devAligned.devEdge > 1e-12) {
+            const double rs = sOne->devAligned.devEdge / sOff->devAligned.devEdge;
+            std::printf("  ⭐ **第 0 步**：静止态 dev(fb=1)/dev(TAA 关) = %s"
+                        "（运动态同构读数 R(fb=1) 已发表 = 1.0395）\n", d4(rs).c_str());
+        }
+    }
 
     // ── 判决 ──────────────────────────────────────────────────────────────────
     // 只用**对齐可信**的曲线组；不可信的逐条点名（它们的大读数是对配对误差的测量）。

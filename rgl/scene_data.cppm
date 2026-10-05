@@ -231,7 +231,8 @@ static_assert(kSceneDataShadowSplitsOffset == 721952 && kSceneDataShadowParamsOf
 static_assert(kSceneDataShadowMatrixOffset == 721696,
 	"scene.slang readShadowViewProj literal 721696 out of sync with kSceneDataShadowMatrixOffset");
 
-/** 批 12.6 TAA 区（EVSSM 常量 vec4 之后 160B，四段子区；末段 16B 自批 13.5 改义）：
+/** 批 12.6 TAA 区（EVSSM 常量 vec4 之后 **176B**（原 160B，批 13.8 追加一段 16B），
+ *  五段子区；第四段 16B 自批 13.5 改义）：
  *
  *  🔵 **批 13.5 的架构变更（读整段前先看这条）**：历史附件 `taa_hist` 自批 13.5 起住在
  *  **基空间**（无抖动网格），不再住抖动空间。做法 = taa.frag 把**本帧**输入按 c_t 做
@@ -267,6 +268,8 @@ static_assert(kSceneDataShadowMatrixOffset == 721696,
  *    `taa_jitter.cppm::contentShiftPx`），照旧口径读会错一整轴。
  *  - `kSceneDataTaaPrevContentShiftOffset`（vec4, 16B）= **上一帧内容位移 c_{t−1}**（批 13.5）
  *    + **AO 已施加标志**（z，批 13.6）。
+ *  - `kSceneDataTaaInputKernelOffset`（vec4, 16B，批 13.8 新增）= x = **输入侧 un-jitter 的
+ *    重建核选择**（0 双线性 = 默认 / 1 CR 4×4 / 2 Lanczos3 6×6），yzw 保留。
  * 消费端 = taa.frag.slang / tonemap.frag.slang 字面量（两侧 static_assert 钉死同步）。 */
 export inline constexpr uint32_t kSceneDataTaaOffset = kSceneDataEvssmConstOffset + 16u;
 export inline constexpr uint32_t kSceneDataTaaMotionOffset = kSceneDataTaaOffset + 64u;
@@ -300,9 +303,23 @@ export inline constexpr uint32_t kSceneDataTaaParamsOffset = kSceneDataTaaOffset
  * ⟹ TAA 关时 tonemap 逐位不变（门红线）。
  */
 export inline constexpr uint32_t kSceneDataTaaPrevContentShiftOffset = kSceneDataTaaOffset + 144u;
-export inline constexpr uint32_t kSceneDataTaaBytes = 160u;
+/**
+ * 批 13.8 输入侧重建核选择（vec4，x = 核编号，yzw 保留）：0 = 双线性（**默认 = 逐位今天**）/
+ * 1 = Catmull-Rom 4×4 / 2 = Lanczos3 6×6。消费端 = taa.frag.slang `sampleInputColor`。
+ *
+ * 为什么要新增 16B 而不是复用槽位：前四个 vec4 的**每个分量都有主**（feedback / historyValid /
+ * c_t.xy ｜ prevViewProj 与 motion 是矩阵 ｜ c_{t−1}.xy / aoApplied / diagReject），
+ * 复用 = 造第二份真相。本区因此从 160B 扩到 176B（`kSceneDataBytes` 随之 +16B，
+ * 分配与每帧 staging 拷贝都取自本常量，无第二处硬编码）。
+ *
+ * 门红线是**构造性**的：门关（0）⟹ shader 走 `k < 0.5` 那一条 `SampleLevel`，
+ * 与改前同一条表达式，一个 bit 不动（`just shot` sha256 实测钉死）。
+ */
+export inline constexpr uint32_t kSceneDataTaaInputKernelOffset = kSceneDataTaaOffset + 160u;
+export inline constexpr uint32_t kSceneDataTaaBytes = 176u;
 static_assert(kSceneDataTaaOffset == 722080 && kSceneDataTaaMotionOffset == 722144
-	&& kSceneDataTaaParamsOffset == 722208 && kSceneDataTaaPrevContentShiftOffset == 722224,
+	&& kSceneDataTaaParamsOffset == 722208 && kSceneDataTaaPrevContentShiftOffset == 722224
+	&& kSceneDataTaaInputKernelOffset == 722240,
 	"scene.slang taa literals drifted from scene_data.cppm offsets");
 
 /** scene data buffer 总字节数 = 头 128 + 对象矩阵表 + 灯数组区 + MVP 表 + 材质表 +

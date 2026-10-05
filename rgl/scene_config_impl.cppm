@@ -365,6 +365,8 @@ void parseDeferredStyles(sol::table root, SceneConfig& cfg) {
 			readBool(taa, "reprojection", cfg.taaReprojection);
 			// 历史拒收诊断门（默认关；开 = 拒收码编进 taa_out alpha，RGB 逐位不变）
 			readBool(taa, "diag_reject", cfg.taaDiagReject);
+			// 输入侧重建核选择（批 13.8；默认 0 = 双线性 = 逐位今天；1 = CR 4×4，2 = Lanczos3）
+			readFloat(taa, "input_kernel", cfg.taaInputKernel);
 		}
 
 		if (auto r = parseEntities(root, cfg); !r)

@@ -528,6 +528,11 @@ export struct SceneEnv {
 	// 历史拒收诊断门（`taa.diag_reject`，默认关）：true ⟹ scene data @722224.w = 1，
 	// taa.frag 把拒收码写进 taa_out.a（RGB 不动）。回读 = /shot attachment=taa_out。
 	bool taaDiagReject = false;
+	// 输入侧 un-jitter 的**重建核选择**（`taa.input_kernel`，批 13.8，默认 0 = 逐位今天）：
+	// 0 = 双线性 / 1 = Catmull-Rom 4×4 / 2 = Lanczos3 6×6。scene data @722240.x，
+	// 唯一消费者 = taa.frag `sampleInputColor`。判据消费方 = imgqa `--kernel`（temporal-flicker
+	// / aa-coverage / temporal-feedback）。⚠ 非整数值按 `k<0.5` / `k<1.5` 落桶（不报错）。
+	float taaInputKernel = 0.0f;
 	// Phase 5.5 批次 4 天空盒：enabled = env 已上传且 scene.lua environment.skybox=true；
 	// pipeline = ShaderRegistry "skybox" 条目下标（main 启动期 addSkyEntry 后回填；
 	// 0xFFFFFFFF = 未建条目——renderListSystem 见 enabled 但 pipeline 无效 = 契约漂移）
