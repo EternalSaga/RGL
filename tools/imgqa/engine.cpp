@@ -310,6 +310,44 @@ void checkShadersFresh()
 }
 }  // namespace
 
+/**
+ * 机位 + 帧驱动 yaw 写进 camera.lua（**两条路径共用一份实现**）。
+ *
+ * 为什么必须共用：此前只有交付分支写，合成 profile 根本不产出 camera.lua
+ * ⟹ `ProfileOpts::hasCamera` 在合成路径上**静默失效**——`temporal.cpp` 的注释一直声称
+ * 「机位同时给两处」，实际只给了 RPC 一处，而 hasCamera 那条注释记的正是「RPC 之前的帧
+ * 已经进了 TAA 历史」这条假绿教训。写出来的键仍然只在门开时出现（不写 = 引擎默认 = 逐位今天）。
+ */
+void applyCameraLua(const std::string& outDir, const ProfileOpts& o)
+{
+    if (!o.hasCamera && o.cameraFrameYaw == 0.0)
+        return;  // 两边都没要求 ⟹ 不产出 camera.lua（保持既有合成判据的逐位行为）
+    const std::string path = outDir + "/camera.lua";
+    std::string cam = readFile(fs::exists(path) ? path : profileTemplate() + "/camera.lua");
+    if (o.hasCamera) {
+        const auto vec = [](const std::array<double, 3>& a) {
+            std::ostringstream s;
+            s.precision(9);
+            s << "{ " << a[0] << ", " << a[1] << ", " << a[2] << " }";
+            return s.str();
+        };
+        std::ostringstream fov;
+        fov.precision(9);
+        fov << o.cameraFov;
+        subLuaLine(cam, "position", vec(o.cameraPosition), "camera.lua");
+        subLuaLine(cam, "target", vec(o.cameraTarget), "camera.lua");
+        subLuaLine(cam, "fovDegrees", fov.str(), "camera.lua");
+    }
+    if (o.cameraFrameYaw != 0.0) {
+        // 插到 `mode` 行旁（两份 camera.lua 里 frame_yaw 都只有注释行，subLuaLine 找不到实体行）。
+        // 键名拼错在 lua 侧是**静默**的，消费方的「运动激励在场性」守卫兜底。
+        std::ostringstream yaw;
+        yaw << std::setprecision(9) << "    frame_yaw = " << o.cameraFrameYaw << ",\n";
+        insertAfterKey(cam, "camera.lua", "mode", yaw.str());
+    }
+    writeFile(path, cam);
+}
+
 std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
 {
     fs::create_directories(outDir);
@@ -366,32 +404,6 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
         }
         writeFile(outDir + "/scene.lua", sc);
 
-        // 机位写进 camera.lua（**从第 1 帧生效**，理由见 ProfileOpts::hasCamera 的注释）
-        if (o.hasCamera) {
-            std::string cam = readFile(outDir + "/camera.lua");
-            const auto vec = [](const std::array<double, 3>& a) {
-                std::ostringstream s;
-                s.precision(9);
-                s << "{ " << a[0] << ", " << a[1] << ", " << a[2] << " }";
-                return s.str();
-            };
-            std::ostringstream fov;
-            fov.precision(9);
-            fov << o.cameraFov;
-            subLuaLine(cam, "position", vec(o.cameraPosition), "camera.lua");
-            subLuaLine(cam, "target", vec(o.cameraTarget), "camera.lua");
-            subLuaLine(cam, "fovDegrees", fov.str(), "camera.lua");
-            // 帧驱动 yaw（相机运动激励门）。**只在门开时写**：不写 = 交付配置原样 = 逐位今天。
-            // 插到 `mode` 行旁（交付 camera.lua 里 frame_yaw 只有注释行，subLuaLine 找不到实体行）。
-            // 键名拼错在 lua 侧是**静默**的，消费方 temporal-motion 有在场性守卫兜底。
-            if (o.cameraFrameYaw != 0.0) {
-                std::ostringstream yaw;
-                yaw << std::setprecision(9) << "    frame_yaw = " << o.cameraFrameYaw << ",\n";
-                insertAfterKey(cam, "camera.lua", "mode", yaw.str());
-            }
-            writeFile(outDir + "/camera.lua", cam);
-        }
-
         // variant 覆写是**可选**的：留空 = 尊重交付配置自己写的路线（交付默认 deferred）。
         if (!o.variant.empty()) {
             std::string rg = readFile(outDir + "/render_graph.lua");
@@ -401,6 +413,8 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
             writeFile(outDir + "/render_graph.lua",
                 std::regex_replace(rg, variantRx, "variant = \"" + o.variant + "\""));
         }
+        // 机位写进 camera.lua（**从第 1 帧生效**，理由见 ProfileOpts::hasCamera 的注释）
+        applyCameraLua(outDir, o);
         return outDir;
     }
     // render_graph.lua 定义图本身，**必须整份拷**（只给 {variant=...} 得 0 个
@@ -508,6 +522,7 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
             + "    spin = false, cube = false, exposure = " + std::to_string(o.exposure)
             + ",\n    ao = { strength = " + std::to_string(o.aoStrength) + " },\n"
             + taa + "}\n");
+    applyCameraLua(outDir, o);  // 合成路径同样支持机位/帧驱动 yaw（见 applyCameraLua 注释）
     return outDir;
 }
 
@@ -644,6 +659,26 @@ void Engine::setParam(const std::string& page, const std::string& label, double 
     if (res->status != 200)
         throw std::runtime_error("POST /param 失败 " + std::to_string(res->status) + " label="
             + label + " page=" + page + ": " + res->body);
+}
+
+double Engine::paramValue(const std::string& page, const std::string& label)
+{
+    auto res = impl_->http->Get("/state");
+    if (!res || res->status != 200)
+        throw std::runtime_error(
+            "GET /state 失败: " + (res ? std::to_string(res->status) : std::string("无响应")));
+    const json out = json::parse(res->body);
+    for (const auto& p : out.at("pages")) {
+        if (!page.empty() && p.value("name", "") != page)
+            continue;
+        for (const auto& e : p.at("entries"))
+            if (e.value("label", "") == label && e.contains("value")
+                && e["value"].is_number())
+                return e["value"].get<double>();
+    }
+    // 找不到 = 滑杆被摘了 / label 改了名。宁可抛，也不要让调用侧拿到「默认值」当成回显。
+    throw std::runtime_error("GET /state 里没有数值滑杆: label=" + label
+        + " page=" + (page.empty() ? "<全页>" : page) + "（label 真相源 = 引擎生成的参数语义表）");
 }
 
 std::string Engine::shot(const std::string& tag, const char* attachment)

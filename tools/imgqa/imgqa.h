@@ -36,6 +36,17 @@
 // 3. **比较域必须是"观测域"**：观测像素是 曝光→ACES→sRGB store 之后的字节；闭式解
 //    是 pre-tonemap 线性值。ACES 有通道串扰，两个域之间没有比例关系可谈——预测值
 //    必须先走 toBytes 再 sRGB 解回来（predictFaces 里做），才能与像素同域比较。
+//
+// ## 运动态时域判据的两条方法学结论（批 13.11，`temporal-flicker` / `temporal-homography`）
+//
+// 1. **闭式解必须住在观测域**，且两端都要。相机以亚像素扫速扫过 1px 边缘时，
+//    「理想 AA」= 覆盖线性斜坡、「完全无 AA」= 阶梯，两者的每帧变化都是闭式的
+//    （`displayChain` 复用 toBytes/observedLuma）。只给上界不给下界的判据，读数没有刻度。
+//    实机对拍：TAA 关的 ρ 实测与闭式无 AA 差 **0.07%**（aa_target 白板边缘，0.125px/帧）。
+// 2. **「时间轴高频能量」不是闪烁的度量，别再试**。混叠是零阶保持，它把锯齿**变成方波**，
+//    方波的高频能量并不比锯齿大；而亚像素相位 τ 一变等于占空比一变，同一信号的带比能在
+//    [0.15, 0.60] 里乱跳，与无 AA 参考的 [0.00, 0.86] 完全重叠。2 次谐波比 A(2v)/A(v) 同理
+//    （理想 [0.45,0.69]、无 AA [0,1]）。FFT 在本工具只作诊断打印，判据用「每帧变化 ÷ 闭式理想」。
 
 #include <array>
 #include <cstdint>
@@ -222,6 +233,20 @@ public:
      * @param value 新值
      */
     void setParam(const std::string& page, const std::string& label, double value);
+
+    /**
+     * 读回引擎**当前生效**的滑杆值（`GET /state` → pages → entries → value，纯观测）。
+     *
+     * 为什么必须有这根线（feedback 扫描这轮立的红线）：**「我把它写进 lua 了」≠「引擎用了它」**。
+     * lua 侧键名拼错、解析器改了读法、env 装配被后面的赋值覆盖——三种失效在 lua 文件里都
+     * 看不出来，而参数扫描会给出一条**看起来完全合理**的曲线（参数根本没传进去时曲线是平的，
+     * 平曲线恰好会被读成「该参数无效」这个结论）。故扫描的每一组必须回显**引擎自己报出来**的
+     * 生效值，而不是回显写进 lua 的值。
+     * @param page 页名（如「渲染」；空 = 全页搜索）
+     * @param label 滑杆 label（真相源 = `rgl/generated/param_semantics_generated.cppm`）
+     */
+    [[nodiscard]] double paramValue(const std::string& page, const std::string& label);
+
     /// 拍一张。attachment=nullptr = 后缓冲；否则具名附件（"object_id"）。返回 PNG 绝对路径。
     [[nodiscard]] std::string shot(const std::string& tag, const char* attachment = nullptr);
 
@@ -556,6 +581,26 @@ int cmdTemporalResidual(int periods, double warmMult, const std::string& variant
  */
 int cmdTemporalMotion(const std::string& camera, const std::string& motion, double angleDeg,
     int burst, int warm, int warmStill, double edgePercentile);
+
+/**
+ * **运动态 feedback 扫描**（Phase 13 诊断，只出数 + 一句判决，不改引擎默认值）。
+ *
+ * 判的假设 = 「静止 + base_space 下历史采样偏移 ≈0 ⟹ CR 核退化为恒等 ⟹ 零低通；相机一动
+ * 每帧都在非零分数偏移上被 CR 重采样 ⟹ 每帧一次低通、在 ≈1/α 窗内复利 ⟹ 越攒越糊」。
+ * 可检验推论 = 边缘偏差随累积窗变长而恶化 ⟹ 运动态调大 `feedback`（= 本帧权重 = 缩短窗）
+ * 应让它回落。fb=1 那一格（零累积但**仍带 jitter**）把「累积」与「抖动」两个贡献拆开，
+ * 同时是判决 ②/③ 的分界，不许跳过。顺带在静止态扫 fb 出 swing，判「窗棂残余与运动失效
+ * 是否同一个根」。口径（分辨率 / 连拍 / 线性域 / 交付配置 / 边缘带 / τ）与
+ * `temporal-motion` 逐条同源，全量理由 = `tools/imgqa/temporal_motion.cpp` 本命令的头注释。
+ *
+ * @param camera 机位（doorframe / wetground / doorpanel）
+ * @param angleDeg 每帧角（度/帧，默认 0.2 = 与 temporal-motion 同一激励）
+ * @param burst 每组连拍帧数（≥32 且为抖动周期 16 的整数倍：静止组要相位折叠）
+ * @param edgePercentile 边缘掩码的梯度分位（默认 0.90）
+ * @param fbs feedback 扫描档（默认 0.02/0.05/0.12/0.25/0.5/0.8/1.0）
+ */
+int cmdTemporalFeedback(const std::string& camera, double angleDeg, int burst,
+    double edgePercentile, const std::vector<double>& fbs);
 
 /// 逐杆覆盖率对拍闭式（批 12.6 T4，docs/taa_plan.md §7 第 10 条）：单帧量阶梯杆的
 /// 「黑度积分 vs 投影宽度」，TAA 关应当被二值覆盖量化破坏、TAA 开应当贴合闭式。

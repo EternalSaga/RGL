@@ -3,6 +3,8 @@
 #include "imgqa.h"
 #include "aa_coverage.h"
 #include "ao_metrics.h"
+#include "temporal_flicker.h"
+#include "temporal_homography.h"
 #include "temporal_residual.h"
 
 #include <algorithm>
@@ -684,6 +686,144 @@ void testTemporalResidual(Checker& c)
     }
 }
 
+/**
+ * 运动态时域两条判据的纯函数自检（temporal-flicker / temporal-homography）。
+ *
+ * 每条带「变异红线」= 把被测实现改坏成什么样子，本条会红。
+ * 数值锚点出处：aa_target 白板左边缘实机跑（0.125px/帧，ACES 前黑=0.0987 白=0.9840，
+ * 闭式给 ρ_ideal=0.10219 / ρ_noAA=0.57451，实测 ρ=0.57490 → 差 0.07%）。
+ */
+void testTemporalFlicker(Checker& c)
+{
+    const FlickerScale s{ 0.0987f, 0.9840f };
+    const FlickerAnchor a = flickerClosedForm(0.125f, s);
+
+    // 恒等式：无 AA 端 = 阶梯的整段跳变，与扫速无关。变异红线：noAaRho 写成 chain(1) 本身。
+    c.chk("闭式·无AA 端 = chain(1)−chain(0)",
+        std::abs(a.noAaRho - (displayChain(1.0f, s) - displayChain(0.0f, s))) < 1e-9f);
+    // 实机锚点（±1%）。变异红线：displayChain 换掉 ACES 或漏掉 8bit 取整 → 两端同时漂出带。
+    c.chk("闭式·理想端 实机锚点 0.10219", std::abs(a.idealRho - 0.10219f) < 1.1e-3f,
+        std::to_string(a.idealRho));
+    c.chk("闭式·无AA 端 实机锚点 0.57451", std::abs(a.noAaRho - 0.57451f) < 5.8e-3f,
+        std::to_string(a.noAaRho));
+    // 理想必须严格低于无 AA（否则判据的分母是负的、ζ 无意义）。变异红线：max 写成 min。
+    c.chk("闭式·理想 < 无AA", a.idealRho < a.noAaRho);
+
+    // 反向用例 ①：扫速 0 = 静止 ⟹ 理想每帧变化恰为 0（不是「接近 0」）。
+    c.chk("闭式·v=0 理想端恰为 0", flickerClosedForm(0.0f, s).idealRho == 0.0f);
+    // 反向用例 ②：整数像素平移（v=1）⟹ 斜坡只是整体搬一格，与阶梯同幅 ⟹ 两端相等。
+    // 这条钉住「v≥1 没有混叠可测」的用法红线（cmd 侧拒收 v≥1 的理由）。
+    const FlickerAnchor i1 = flickerClosedForm(1.0f, s);
+    c.chk("闭式·v=1 两端相等（无混叠可测）", std::abs(i1.idealRho - i1.noAaRho) < 1e-6f,
+        std::to_string(i1.idealRho) + " vs " + std::to_string(i1.noAaRho));
+
+    // 单调性：扫速越快，理想端越接近无 AA 端 ⟹ 增益 G = noAA/ideal 单调下降。
+    // 变异红线：网格步长粗到 ≥ 扫速（上确界取不到斜坡段）→ 小 v 的 G 塌到 1。
+    double prev = 1e30;
+    for (float v: { 0.0625f, 0.125f, 0.25f, 0.5f }) {
+        const FlickerAnchor g = flickerClosedForm(v, s);
+        const double gain = g.noAaRho / static_cast<double>(g.idealRho);
+        c.chk("闭式·增益随扫速单调降", gain < prev, "v=" + std::to_string(v) + " G=" + std::to_string(gain));
+        prev = gain;
+    }
+
+    // 幅值反标定往返：观测两端 → ACES 前两端 → 再走一遍链，应回到观测两端（±1 LSB）。
+    // 变异红线：反标定二分方向写反 → 往返差一个量级。
+    const FlickerScale back = scaleFromObserved(0.0423f, 0.6172f);
+    c.chk("反标定·黑端往返 ≤1LSB", std::abs(displayChain(0.0f, back) - 0.0423f) < 1.0 / 255.0,
+        std::to_string(displayChain(0.0f, back)));
+    c.chk("反标定·白端往返 ≤1LSB", std::abs(displayChain(1.0f, back) - 0.6172f) < 1.0 / 255.0,
+        std::to_string(displayChain(1.0f, back)));
+
+    // Hann 半谱：纯正弦（整数周期）能量应集中在一个 bin；常数信号去 DC 后应无能量。
+    // Hann 主瓣 4 bin 宽（能量落在 m−1/m/m+1 三格），故判「激励 bin ±1」而不是单 bin。
+    // 变异红线：Hann 窗或去均值漏掉 → 常数信号漏出巨大 DC、正弦泄漏铺满半谱。
+    std::vector<float> sine(64), flat(64, 0.37f);
+    for (int k = 0; k < 64; ++k)
+        sine[static_cast<size_t>(k)] = 0.5f + 0.2f * std::sin(2.0f * 3.14159265358979f * 4.0f * k / 64.0f);
+    const auto sp = hannHalfSpectrum(sine);
+    const auto sf = hannHalfSpectrum(flat);
+    double tot = 0.0, lobe = 0.0;
+    for (size_t m = 1; m < sp.size(); ++m) {
+        tot += static_cast<double>(sp[m]) * sp[m];
+        if (m >= 3 && m <= 5)
+            lobe += static_cast<double>(sp[m]) * sp[m];
+    }
+    c.chk("FFT·正弦能量集中在激励主瓣", tot > 0 && lobe / tot > 0.9, std::to_string(lobe / tot));
+    // 泄漏判据（这条才是「Hann 窗在不在」的判据）：频率取**非整数 bin**（4.5），
+    // 远端（≥8 bin）能量占比 Hann 实测 0.00006、矩形窗 0.0129（差 200 倍）⟹ 阈值取 0.002。
+    // 变异红线：去掉 Hann 窗 → 本条以 1.3% 红（而整数频率的正弦两条都「完美」，故必须用 4.5）。
+    std::vector<float> half(64);
+    for (int k = 0; k < 64; ++k)
+        half[static_cast<size_t>(k)] = std::sin(2.0f * 3.14159265358979f * 4.5f * k / 64.0f);
+    const auto sh = hannHalfSpectrum(half);
+    double hTot = 0.0, hFar = 0.0;
+    for (size_t m = 1; m < sh.size(); ++m) {
+        hTot += static_cast<double>(sh[m]) * sh[m];
+        if (m >= 8)
+            hFar += static_cast<double>(sh[m]) * sh[m];
+    }
+    c.chk("FFT·Hann 远端泄漏 <0.2%", hTot > 0 && hFar / hTot < 0.002, std::to_string(hFar / hTot));
+    double flatE = 0.0;
+    for (size_t m = 1; m < sf.size(); ++m)
+        flatE += static_cast<double>(sf[m]) * sf[m];
+    c.chk("FFT·常数信号去 DC 后无能量", flatE < 1e-6, std::to_string(flatE));
+    c.chk("FFT·长度不足返回空", hannHalfSpectrum({ 1.0f, 2.0f }).empty());
+
+    // 亚像素边缘定位：覆盖 = clamp(x − 39.8) 的 1px 边（覆盖 0.5 处在 x = 40.3），应找回 ±0.1。
+    // ⚠ 位置**故意不取半整数**：取 40.5 时抛物线修正恒为 0，符号写反也测不出（首跑就是这么漏的，
+    //   变异「插值符号反号」存活）。实测该形状下正确符号误差 0.000、反号误差 0.600。
+    std::vector<float> prof(64, 0.0f);
+    for (int i = 0; i < 64; ++i)
+        prof[static_cast<size_t>(i)] = std::clamp(static_cast<float>(i) - 39.8f, 0.0f, 1.0f);
+    const float found = steepestEdgeColumn(prof);
+    c.chk("边缘定位·1px 边亚像素 ±0.1px", std::abs(found - 40.3f) < 0.1f, std::to_string(found));
+
+    // 局部扫速：主点处 = f·|dψ|；u=1 处 = 2 倍（透视修正 dx/dψ = f(1+u²)）。
+    // 变异红线：u² 项漏掉 → 偏轴机位的扫速系统性偏低，闭式锚跟着偏。
+    c.chk("局部扫速·主点 = f·dψ", std::abs(localSweepPxPerFrame(0.001f, 800.0f, 100.0f, 100.0f) - 0.8f) < 1e-5f);
+    c.chk("局部扫速·u=1 处翻倍",
+        std::abs(localSweepPxPerFrame(0.001f, 800.0f, 900.0f, 100.0f) - 1.6f) < 1e-5f);
+    c.chk("焦距·fov45 @720 = 869.1", std::abs(verticalFocalPx(720, 45.0f) - 869.1f) < 0.2f,
+        std::to_string(verticalFocalPx(720, 45.0f)));
+
+    // 逐帧差分位：同帧 ⟹ 恰为 0；整体抬 0.5 ⟹ 恰为 0.5。变异红线：ROI 行列写反。
+    cv::Mat f0 = cv::Mat::ones(8, 8, CV_64FC1) * 0.25, f1 = cv::Mat::ones(8, 8, CV_64FC1) * 0.75;
+    const cv::Rect roi(1, 1, 5, 6);
+    c.chk("帧差·同帧恰为 0", frameDeltaPercentile({ f0, f0 }, roi, 0.995) == 0.0);
+    c.chk("帧差·整体抬 0.5 = 0.5", std::abs(frameDeltaPercentile({ f0, f1 }, roi, 0.995) - 0.5) < 1e-12);
+
+    // 闭式单应：Δψ=0 ⟹ 恒等；主点是不动点；垂直线仍垂直（x′ 与 y 无关）；往返闭合。
+    // 变异红线：矩阵任一行写错 → 往返/不动点两条同时红（它们不依赖行的具体形式）。
+    const double f = 869.1, cx = 640.0, cy = 360.0, dpsi = 0.00057530;
+    const cv::Matx33d id = yawHomography(0.0, f, cx, cy);
+    c.chk("单应·Δψ=0 是恒等（差比例因子）",
+        std::abs(id(0, 0) / id(2, 2) - 1.0) < 1e-12 && std::abs(id(1, 1) / id(2, 2) - 1.0) < 1e-12
+            && std::abs(id(0, 1)) < 1e-12 && std::abs(id(2, 0)) < 1e-12);
+    const cv::Matx33d H = yawHomography(dpsi, f, cx, cy), Hi = H.inv();
+    auto map = [](const cv::Matx33d& M, double x, double y) {
+        const double w = M(2, 0) * x + M(2, 1) * y + M(2, 2);
+        return std::array<double, 2>{ (M(0, 0) * x + M(0, 1) * y + M(0, 2)) / w,
+            (M(1, 0) * x + M(1, 1) * y + M(1, 2)) / w };
+    };
+    // 主点处的位移 = f·tan(Δψ)（= 「扫速 → 每帧角」换算的逆命题，判据的立足点）。
+    // ⚠ 纯旋转单应**没有实不动点**（u′=u ⟹ t(1+u²)=0 ⟹ u=±i），首跑按「主点是不动点」
+    //   写断言被本条当场抓红——不动点是复的，别拿它当锚。
+    const double shift = map(H, cx, cy)[0] - cx;
+    c.chk("单应·主点位移 = f·tan(Δψ)", std::abs(shift - f * std::tan(dpsi)) < 1e-9,
+        std::to_string(shift));
+    c.chk("单应·主点处 y 不变", std::abs(map(H, cx, cy)[1] - cy) < 1e-9);
+    const auto p1 = map(H, 300.0, 100.0), p2 = map(H, 300.0, 600.0);
+    c.chk("单应·垂直线仍垂直", std::abs(p1[0] - p2[0]) < 1e-9);
+    const auto rt = map(Hi, map(H, 123.0, 456.0)[0], map(H, 123.0, 456.0)[1]);
+    c.chk("单应·往返闭合", std::abs(rt[0] - 123.0) < 1e-6 && std::abs(rt[1] - 456.0) < 1e-6,
+        std::to_string(rt[0]));
+    // 透视：偏离主点处同样的角度产生**更大**的像素位移（dx/dψ = f(1+u²)，localSweep 的依据）。
+    const auto off = map(H, cx + 1000.0, cy);
+    c.chk("单应·偏离主点位移更大", std::abs(off[0] - (cx + 1000.0)) > std::abs(shift) + 0.4,
+        std::to_string(off[0] - (cx + 1000.0)));
+}
+
 }  // namespace
 
 int cmdSelftest()
@@ -699,6 +839,7 @@ int cmdSelftest()
     testAaCoverage(c);
     testAoMetrics(c);
     testTemporalResidual(c);
+    testTemporalFlicker(c);
     testKeyValidation(c);
     std::printf("%s：%d 条失败\n", c.bad ? "自检失败" : "自检通过", c.bad);
     return c.bad ? 1 : 0;

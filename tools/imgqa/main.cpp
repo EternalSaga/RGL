@@ -1,6 +1,9 @@
 // imgqa CLI。子命令：selftest / check / refuse / attribution / faces / switch / izb / swim /
-// probe / temporal / temporal-residual / aa-coverage / taa-swim / note。
+// probe / temporal / temporal-residual / temporal-motion / temporal-feedback /
+// temporal-flicker / temporal-homography / aa-coverage / taa-swim / note。
 #include "imgqa.h"
+#include "temporal_flicker.h"
+#include "temporal_homography.h"
 
 #include <cstdio>
 #include <algorithm>
@@ -648,6 +651,27 @@ void printUsage()
         "M0–M4 对**同机位 2560×1440 超采样参考**量边缘像素线性域偏差（按帧号配对到同一视点，"
         "故不受 `moving-camera-l1-ratio` 反模式影响）+ M1m/M4m 连拍 taa_out alpha 出**历史被拒"
         "比例**（门 `taa.diag_reject`，RGB 逐位 = M1/M4）；只出数 + 一句判决，不改渲染\n"
+        "  temporal-feedback [--camera doorframe] [--angle 0.2] [--burst 32] [--edge-pct 0.90]"
+        " [--fb 0.02,0.05,0.12,0.25,0.5,0.8,1.0]  **运动态 feedback 扫描**：把「历史在非零分数"
+        "偏移上被 CR 重采样 ⟹ 每帧一次低通、在 ≈1/α 窗内复利」这条假设变成数。fb=1 那格"
+        "（零累积但仍带 jitter）拆开「累积」与「抖动」两个贡献；顺带在静止态扫 fb 出 swing，"
+        "判「窗棂残余与运动失效是否同一个根」。每组回显**引擎自己报的**生效 feedback"
+        "（`GET /state`）+ 同进程 /param A/B 字节差 = 参数生效自证；只出数，不改引擎默认值\n"
+        "  temporal-flicker [--target edge] [--sweep 0.125] [--frames 32] [--halfwidth 8]"
+        " [--rowfrac 0.14] [--verbose]  **相机移动下的时间闪烁（闭式解判据）**：相机帧驱动 yaw"
+        " 以亚像素扫速扫过 1px 高对比边缘，量「每帧最大变化」（p99.5，线性域），与**闭式解**两端"
+        "对拍——理想 AA（覆盖线性斜坡）给下界、完全无 AA（阶梯整段跳变）给上界，于是 G=实测/理想"
+        "与 ζ=(实测−理想)/(无AA−理想) 有绝对刻度，不靠「动得慢」刷分。--target edge = aa_target"
+        " 白板左边缘（闭式适用，主判据）；--target <bistro 机位名> = 交付配置口径（闭式只作参考"
+        "刻度）。TAA 开/关各一组，出 flicker(on)/flicker(off)。FFT 只作诊断打印——高频带能量比"
+        "已被闭式对照否决（混叠把锯齿变成方波），理由见 temporal_flicker.h\n"
+        "  temporal-homography [--target edge] [--sweep 0.125] [--frames 16] [--out 前缀]"
+        "  **精确单应 warp 的逐像素闪烁归因图**：相机做原地绕 up 轴 yaw ⟹ 像面映射是纯旋转"
+        "单应（与深度无关、对整幅画面精确），由 tan(Δψ)+焦距+主点**闭式**给出——零参考图、零"
+        "对齐搜索、零 velocity buffer。把上一帧按它搬到本帧网格，剩下的差就是「搬不动的部分」"
+        "（= 采样格移动的锯齿差 / TAA 时域滤波做的事）。同批出**往返地板** |I−H⁻¹(H·I)| 判"
+        "「是量具在响还是真闪烁」，出**解释率** 1−残差/原始帧差，出固定标尺热图 PNG（TAA 开/关"
+        "两张可直接对眼）。yaw 符号用 t 与 −t 两个闭式假设对拍取小者，两个残差都回显\n"
         "  ao-noise [--glb cornell_box.glb] [--camera front] [--variant deferred] [--strength 0.5]"
         " [--radius 40] [--pairs 16] [--no-temporal] [--bistro]  SSAO 噪声四组量测：闭式契约区偏离 / 分布 /"
         "亚像素爬行 / TAA 时域（同进程 /param A/B）\n"
@@ -731,6 +755,29 @@ int main(int argc, char** argv)
                 std::stoi(P.get(args, "--warm", "16")),
                 std::stoi(P.get(args, "--warm-still", "64")),
                 std::stod(P.get(args, "--edge-pct", "0.90")));
+        if (cmd == "temporal-feedback") {
+            std::vector<double> fbs;
+            std::stringstream fs(P.get(args, "--fb", "0.02,0.05,0.12,0.25,0.5,0.8,1.0"));
+            for (std::string t; std::getline(fs, t, ',');)
+                if (!t.empty())
+                    fbs.push_back(std::stod(t));
+            return cmdTemporalFeedback(P.get(args, "--camera", "doorframe"),
+                std::stod(P.get(args, "--angle", "0.2")),
+                std::stoi(P.get(args, "--burst", "32")),
+                std::stod(P.get(args, "--edge-pct", "0.90")), fbs);
+        }
+        if (cmd == "temporal-flicker")
+            return cmdTemporalFlicker(P.get(args, "--target", "edge"),
+                std::stod(P.get(args, "--sweep", "0.125")),
+                std::stoi(P.get(args, "--frames", "32")),
+                std::stod(P.get(args, "--halfwidth", "8")),
+                std::stod(P.get(args, "--rowfrac", "0.14")),
+                P.has(args, "--verbose"));
+        if (cmd == "temporal-homography")
+            return cmdTemporalHomography(P.get(args, "--target", "edge"),
+                std::stod(P.get(args, "--sweep", "0.125")),
+                std::stoi(P.get(args, "--frames", "16")),
+                P.get(args, "--out", ""));
         if (cmd == "aa-coverage")
             return cmdAaCoverage(P.get(args, "--variant", ""), std::stoi(P.get(args, "--warm", "32")),
                 std::stod(P.get(args, "--feedback", "0.12")), P.has(args, "--base-space"));
