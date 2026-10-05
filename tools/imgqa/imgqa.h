@@ -150,6 +150,11 @@ struct ProfileOpts {
     /// ⚠ 本工具所有「游动 = 抖动差」的判据（`temporal-swim-pixels` / `temporal-jitter-*`）
     ///   钉的都是**门关**口径；门开态由 `temporal-base-space` 单独判（见其容差理由）。
     bool taaBaseSpace = false;
+    /// 批 13.7：scene.lua `taa.static_boost`（静态机位历史权重提升，引擎侧总门默认关）。
+    /// true = 同时写 `static_feedback`（⚠ **本帧权重**地板，同 feedback 语义：
+    /// **调小 = 更信历史**）。只在 temporal-residual 的 `--static-boost` 变体里置位。
+    bool taaStaticBoost = false;
+    double taaStaticFeedback = 0.01;   ///< scene.lua `taa.static_feedback`（本帧权重地板）
     std::string entitiesLua;               // 非空 = 整条 entities 行由它给（内建合成靶无 glb 文件）
     std::array<double, 3> lightDir{0.5, -0.75, -0.45};
     double lightIntensity = 12.0;
@@ -455,8 +460,12 @@ int cmdTemporal(int pairs, int warm, const std::string& variant, bool baseSpace 
 /// @param slowFeedback 单调性轴的低端 α（默认 0.002 = 等效窗 ≈500 帧 ≫ 抖动周期 16）
 /// @param baseSpace 批 13.2 门 `taa.base_space`（true = 输出在**基空间**）。本命令用它做
 ///                **归因**：门关读数 = 整幅游动 + 闪烁，门开读数 ≈ 只剩闪烁。
+/// @param staticBoostFloor 批 13.7 门 `taa.static_boost` 的**变体开关 + 地板**（>0 = 进变体
+///                模式：跑「fb=1 参考 / fb=.12 门关 / fb=.12 门开 / 门开+js=0 反向」四组，
+///                **只出数不判**——⑤ 的带是门关口径、刻意设计成修复落地后应当变红，判它 =
+///                把「变好」判成「不合格」；默认 0 = 现行 7 条判据，门关口径不变）。
 int cmdTemporalResidual(int periods, double warmMult, const std::string& variant,
-    double slowFeedback, bool skipSlow, bool baseSpace = false);
+    double slowFeedback, bool skipSlow, bool baseSpace = false, double staticBoostFloor = 0.0);
 
 /// 逐杆覆盖率对拍闭式（批 12.6 T4，docs/taa_plan.md §7 第 10 条）：单帧量阶梯杆的
 /// 「黑度积分 vs 投影宽度」，TAA 关应当被二值覆盖量化破坏、TAA 开应当贴合闭式。

@@ -631,8 +631,11 @@ void printUsage()
         "  temporal [--pairs 32] [--warm 32] [--variant forward] [--base-space]  TAA 时域阳性锚点："
         "静止机位 + jitter，连续帧突发逐帧差（批 12.6 T4）\n"
         "  temporal-residual [--periods 2] [--warm-multiplier 6] [--variant forward]"
-        " [--slow-feedback 0.002] [--skip-slow] [--base-space]  时域**绝对**残差：静止机位连拍折"
-        " (2,16,H,W) 后逐像素 max−median（线性域；补 temporal 相对比的盲区，批 13.1 主判据）\n"
+        " [--slow-feedback 0.002] [--skip-slow] [--base-space] [--static-boost 0.02]"
+        "  时域**绝对**残差：静止机位连拍折"
+        " (2,16,H,W) 后逐像素 max−median（线性域；补 temporal 相对比的盲区，批 13.1 主判据）。"
+        " --static-boost <地板> = 批 13.7 `taa.static_boost` 变体（**只出数不判**：跑 B1–B4 四组"
+        "出门开/门关 meanSwing/p99.9/frac>τ + 梯度比；⚠ 地板 = **本帧权重**，调小 = 更信历史）\n"
         "  taa-swim [--pairs 32] [--warm 32] [--variant forward]  真实场景逐帧差是否=整幅亚像素"
         "平移（游动）；含基空间门（批 13.2 T5/T6）与量具阳性锚点（批 13.1b）\n"
         "  ao-noise [--glb cornell_box.glb] [--camera front] [--variant deferred] [--strength 0.5]"
@@ -707,7 +710,7 @@ int main(int argc, char** argv)
             return cmdTemporalResidual(std::stoi(P.get(args, "--periods", "2")),
                 std::stod(P.get(args, "--warm-multiplier", "6")), P.get(args, "--variant", ""),
                 std::stod(P.get(args, "--slow-feedback", "0.002")), P.has(args, "--skip-slow"),
-                P.has(args, "--base-space"));
+                P.has(args, "--base-space"), std::stod(P.get(args, "--static-boost", "0")));
         if (cmd == "aa-coverage")
             return cmdAaCoverage(P.get(args, "--variant", ""), std::stoi(P.get(args, "--warm", "32")),
                 std::stod(P.get(args, "--feedback", "0.12")), P.has(args, "--base-space"));

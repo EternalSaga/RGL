@@ -11,7 +11,9 @@ module;
  * test_taa_jitter —— 批 12.6 TAA 的纯函数层（rgl/taa_jitter.cppm，rlbase）
  *
  * 被测 = Halton 抖动序列、jitter→投影矩阵注入、相机跳切判据、历史可用性判据、
- *        批 13.5 基空间累积的坐标口径不变量（`contentShiftPx` + 历史重投影闭环）。
+ *        批 13.5 基空间累积的坐标口径不变量（`contentShiftPx` + 历史重投影闭环）、
+ *        批 13.7 静态机位历史权重提升（`cameraStatic` / `taaNextStaticFrames` /
+ *        `taaBoostedFeedback`——⚠ 输出是**本帧权重**，调小 = 更信历史）。
  * 这些全都不需要 VkDevice（AGENTS 分层判据），却直接决定 TAA 是「真生效」还是
  * 「静默不生效」：抖动幅度写错 2 倍、jitter 只加到 x、判据恒 true/false —— 画面
  * 都可能只是"看起来还行"，必须靠闭式解钉住。
@@ -313,6 +315,118 @@ TEST_CASE("批 13.5 静止机位不变量：历史采样落回本像素；三条
         testing::expectNear((buggyUv.x - cPrev.x / extent.x - uv.x) * extent.x, -cCur.x, 0.0, kPx);
         testing::expectNear((buggyUv.y - cPrev.y / extent.y - uv.y) * extent.y, -cCur.y, 0.0, kPx);
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 批 13.7 静态机位历史权重提升（static boost）——三个纯函数
+//
+// 期望值出处（独立于被测实现）：
+//  - 「爬满 = 逐位 floor」「归 0 = 逐位 base」= 函数注释里写死的**契约分支**（不是跑一遍
+//    实现记下来的数）；
+//  - 单调性 = mix 的数学性质（ramp ↑ 且 floor ≤ base ⟹ 值 ↓；float 乘法与加法都是
+//    单调映射，舍入不破坏非增）；
+//  - 输出 ∈ [0,1] = 「本帧权重」的数学契约（lerp 系数出 [0,1] 就是外推，画面要炸）；
+//  - 角度 epsilon 两侧用例 = cos 的单调性 + 小角闭式 cos θ ≈ 1−θ²/2（选 0.5×/2× 摆位，
+//    信号 ≥ 3.7e-5 ≫ float32 在 cos≈1 处的分辨率 6e-8，判据噪声不会淹没信号）。
+// ═══════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("cameraStatic：紧静止判据——双 epsilon 钉死，且与跳切判据划清界限") {
+    const glm::vec3 pos{1.0f, 2.0f, 3.0f};
+    const glm::vec3 fwd{0.0f, 0.0f, -1.0f};
+    // epsilon 显式传参（本函数的可测性设计）；角度取 1e-2 rad 档：0.5×/2× 两侧的
+    // cosang 与 cos(eps) 之差 ≥ 3.7e-5，远大于 float32 噪声（见节头）。
+    const float pe = 1e-3f, ae = 1e-2f;
+    // 正向：同位姿 / 亚 epsilon 平移 / 亚 epsilon 转角（0.5·ae ≈ 0.029°）
+    CHECK(cameraStatic(pos, pos, fwd, fwd, pe, ae));
+    CHECK(cameraStatic(pos, pos + glm::vec3{0.5f * pe, 0.0f, 0.0f}, fwd, fwd, pe, ae));
+    CHECK(cameraStatic(pos, pos, fwd, glm::normalize(glm::vec3{0.5f * ae, 0.0f, -1.0f}), pe, ae));
+    // 反向：超 epsilon 平移 / 超 epsilon 转角（2·ae ≈ 0.11°）
+    CHECK_FALSE(cameraStatic(pos, pos + glm::vec3{2.0f * pe, 0.0f, 0.0f}, fwd, fwd, pe, ae));
+    CHECK_FALSE(cameraStatic(pos, pos, fwd, glm::normalize(glm::vec3{2.0f * ae, 0.0f, -1.0f}),
+        pe, ae));
+    // **与跳切判据划清界限**（任务红线「别复用 cameraJumps 的阈值」的钉证）：上面那条
+    // 超 epsilon 平移远小于 0.25·r ⟹ cameraJumps 判「连续」——两个判据若共用阈值，
+    // 这条对照必红（正常拖拽 = 不跳切但**不静止**，boost 必须断供）。
+    CHECK_FALSE(cameraJumps(pos, pos + glm::vec3{2.0f * pe, 0.0f, 0.0f}, fwd, fwd, 40.0f));
+    // 退化一律「不静止」（保守 = 不 boost）：零长朝向 / 负 epsilon / NaN 位姿
+    CHECK_FALSE(cameraStatic(pos, pos, fwd, glm::vec3{0.0f}, pe, ae));
+    CHECK_FALSE(cameraStatic(pos, pos, glm::vec3{0.0f}, fwd, pe, ae));
+    CHECK_FALSE(cameraStatic(pos, pos, fwd, fwd, -1.0f, ae));
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    CHECK_FALSE(cameraStatic(pos, pos + glm::vec3{nan, 0.0f, 0.0f}, fwd, fwd, pe, ae));
+    // 变异红线：① 恒 true → 上面 6 条 CHECK_FALSE 全红；② 恒 false → 3 条 CHECK 红
+    //（`x && false` 形态变异，保参数使用）；③ 角度阈值改用 cameraJumps 的 cos 45° →
+    //  超 epsilon 转角那条 CHECK_FALSE 红；④ `!(move <= eps)` 写成 `move > eps` →
+    //  NaN 位姿那条 CHECK_FALSE 红（NaN 泄进「静止」）。
+}
+
+TEST_CASE("static boost：静止够久**恰等** floor；中途跳变**立刻**回 base；单调；配错退化安全") {
+    // ── 阳性锚点：静止足够久 ⟹ 输出**恰等于** static_feedback（== 而非「接近」；
+    // 「如果这行从未生效会绿吗」：恒返回 base 的实现下面两条全红）──
+    CHECK(taaBoostedFeedback(true, 16u, 16u, 0.12f, 0.02f) == 0.02f);
+    CHECK(taaBoostedFeedback(true, 1000u, 16u, 0.12f, 0.02f) == 0.02f);
+    // 门关 = 输入**原样**传下去（逐位门红线的函数级保证），且与计数器无关
+    CHECK(taaBoostedFeedback(false, 1000u, 16u, 0.12f, 0.02f) == 0.12f);
+    CHECK(taaBoostedFeedback(false, 0u, 16u, 0.12f, 0.02f) == 0.12f);
+    // 计数器归 0 = 逐位 base（「归 0 即今天的逐位行为」的函数级保证）
+    CHECK(taaBoostedFeedback(true, 0u, 16u, 0.12f, 0.02f) == 0.12f);
+
+    // ── 反向用例（「没拿鬼影换安静」的守卫）：中途机位跳变 ⟹ **立刻**回 base ──
+    // 逐帧驱动**生产函数**（taaNextStaticFrames 推进 + taaBoostedFeedback 映射），
+    // 不在测试里模拟规则——模拟 = 测测试自己（阳性锚点自问）。
+    uint32_t frames = 0u;
+    for (int i = 0; i < 20; ++i) {  // 连续 20 帧「历史可用且静止」
+        frames = taaNextStaticFrames(true, true, frames);
+        if (i == 14)  // 爬满前必须**严格在** (floor, base) 开区间（爬坡真的在爬）
+            CHECK(taaBoostedFeedback(true, frames, 16u, 0.12f, 0.02f) > 0.02f);
+    }
+    CHECK(taaBoostedFeedback(true, frames, 16u, 0.12f, 0.02f) == 0.02f);  // 20 ≥ 16 已爬满
+    for (int i = 0; i < 3; ++i) {  // 跳切 / resize / TAA 关（historyUsable=false 全算）
+        frames = taaNextStaticFrames(false, true, frames);
+        CHECK(taaBoostedFeedback(true, frames, 16u, 0.12f, 0.02f) == 0.12f);  // **立刻**，无衰减过程
+    }
+    // 历史可用但机位在动（cameraStill=false）同样立刻归 0；随后重新静止从 0 重爬（不念旧功）
+    frames = taaNextStaticFrames(true, false, 999u);
+    CHECK(frames == 0u);
+    frames = taaNextStaticFrames(true, true, frames);
+    CHECK(frames == 1u);
+    const float w1 = taaBoostedFeedback(true, frames, 16u, 0.12f, 0.02f);
+    CHECK(w1 < 0.12f);
+    CHECK(w1 > 0.02f);
+
+    // ── 单调性：staticFrames 递增 ⟹ 权重单调不增（逐帧断言；float 乘/加保序，可硬判）──
+    float prev = taaBoostedFeedback(true, 0u, 16u, 0.12f, 0.02f);
+    for (uint32_t n = 1; n <= 32u; ++n) {
+        const float v = taaBoostedFeedback(true, n, 16u, 0.12f, 0.02f);
+        CHECK(v <= prev);
+        prev = v;
+    }
+    CHECK(prev == 0.02f);
+
+    // ── 边界 / 配错退化安全（任务点名：rampFrames=0、floor>base，不许负数/NaN）──
+    CHECK(taaBoostedFeedback(true, 100u, 0u, 0.12f, 0.02f) == 0.12f);  // ramp=0：no-op 非 NaN
+    CHECK(taaBoostedFeedback(true, 0u, 0u, 0.12f, 0.02f) == 0.12f);
+    CHECK(taaBoostedFeedback(true, 100u, 16u, 0.12f, 0.5f) == 0.12f);  // floor>base：配错=no-op
+    CHECK(taaBoostedFeedback(true, 8u, 16u, 0.12f, 0.5f) == 0.12f);    // 爬坡中也恒 base（永不抬升）
+    CHECK(taaBoostedFeedback(true, 100u, 16u, 0.12f, -1.0f) == 0.0f);  // 负 floor 夹 0，不出负数
+    // 随机网格（Lcg 写死种子）：门开态输出恒有限且 ∈ [0,1]（本帧权重的数学契约；
+    // base/floor 覆盖负值与 >1 的配错区，ramp 含 0）
+    testing::Lcg rng(0x1307BEEFu);
+    for (int i = 0; i < 2000; ++i) {
+        const float base = static_cast<float>(rng.uniform(-0.5, 1.5));
+        const float floorV = static_cast<float>(rng.uniform(-0.5, 1.5));
+        const uint32_t n = static_cast<uint32_t>(rng.uniformInt(0, 63));
+        const uint32_t ramp = (i % 7 == 0) ? 0u : static_cast<uint32_t>(rng.uniformInt(0, 31));
+        const float v = taaBoostedFeedback(true, n, ramp, base, floorV);
+        CHECK(std::isfinite(v));
+        CHECK(v >= 0.0f);
+        CHECK(v <= 1.0f);
+    }
+    // 变异红线：① 删「爬满逐位返回 floor」分支（靠 mix 收尾）→ 前两条正锚红（float
+    // 加减不保证逐位回到 floor——变异实测见交付报告）；② mix 参数写反（更信本帧）→
+    // 正锚 + 单调性全红；③ 删 ramp==0 守卫 → 随机网格 isfinite 红（0/0=NaN）；
+    // ④ floor 夹到 [0,1] 而非 [0,base] → floor>base 两条红（配错反向抬权重）；
+    // ⑤ taaNextStaticFrames 的归 0 写成衰减（−1）→ 跳变段三条「立刻 == 0.12」红。
 }
 
 }  // namespace RGL

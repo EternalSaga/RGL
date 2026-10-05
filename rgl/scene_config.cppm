@@ -104,6 +104,19 @@ export struct SceneConfig {
 	// 默认 **true**。改前的拍板依据（游动 0.643→0.060px 等）见 docs/phase13_plan.md §1.10；
 	// 本批改义后的实测 → docs/taa_history_space_plan.md §5（待回填）。全案 → 同文件。
 	bool taaBaseSpace = true;
+	// ── 批 13.7 静态机位历史权重提升（static boost，scene.lua `taa.static_boost` 三键，
+	// 总门默认**关**）──
+	// 机位连续静止（cameraStatic 且历史可用）达 static_ramp 帧后，把**本帧权重**（feedback）
+	// 从 feedback 线性压到 static_feedback ⟹ 等效累积窗 1/floor ≫ 抖动周期 16，压掉
+	// 「固定频率 + 固定位置」的细线 shimmer（机制账 → taa_jitter.cppm static boost 节）。
+	// ⚠ static_feedback 与 feedback **同语义** = **本帧权重**（taa.frag: lerp(clipped, cur, x)）
+	//   ⟹ **调小 = 更信历史**，「提升历史」= 「调小本值」（方向红线，别翻车）。
+	// 任何跳切 / resize / TAA 关 ⟹ 计数器立刻归 0 = 回到 feedback = 今天的逐位行为。
+	// ⚠ 已知边界（待记债）：静止判据只看相机位姿、不认识场景内运动（无 velocity buffer），
+	//   静态机位 + 动物 ⟹ 累积越长鬼影越重，唯一保护 = 既有邻域盒裁剪。
+	bool taaStaticBoost = false;
+	float taaStaticFeedback = 0.01f;  ///< 静止地板（**本帧权重**；0.01 ⇒ 等效窗 ≈100 帧，扫档依据 → configs/scene.lua 注释）
+	uint32_t taaStaticRamp = 16u;     ///< 连续静止多少帧爬满地板（= 抖动周期 kTaaJitterPeriod）
 };
 
 /**

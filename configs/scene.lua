@@ -252,5 +252,24 @@ return {
         -- feedback = 0.12,        -- 本帧权重（Filament 同默认 ⇒ ≈19 帧收敛）
         -- jitter_scale = 1.0,     -- 抖动幅度倍率，1 = ±0.5px
         -- motion_compensation = true,  -- prevSpin 刚体重投影（关 = 纯相机重投影）
+        -- ── 批 13.7 静态机位历史权重提升（static boost，总门默认**关**）──
+        -- 机制账：α=0.12 的 EMA 等效窗 ≈8 帧 < Halton(2,3) 抖动周期 16，16 帧周期分量按
+        -- |H| = α/|1−(1−α)e^{−j2π/16}| = 0.312 漏过 31% ⟹ 静止机位 1px 细线「固定频率 +
+        -- 固定位置」shimmer。机位连续静止（cameraStatic 且历史可用）达 static_ramp 帧后，
+        -- 把**本帧权重**线性压到 static_feedback ⟹ 等效窗 1/floor ≫ 16。线性域已验证
+        -- 收敛值离理想 16 相位平均只差 1.5–4% 且不随窗变长恶化（不拿糊换安静）。
+        -- ⚠ 方向红线（与 feedback 同语义，主 agent 翻过一次车）：static_feedback 是
+        --   **本帧权重**（taa.frag: lerp(clipped, cur, x)）⟹ **调小 = 更信历史**，
+        --   「提升历史」= 「把本值调小」。
+        -- 任何跳切 / resize / TAA 关 ⟹ 计数器立刻归 0 = 立刻回到 feedback（不拿鬼影换安静）。
+        -- ⚠ 已知边界（待记债）：静止判据只看相机位姿、不认识场景内运动（无 velocity
+        --   buffer，唯一保护 = 既有邻域盒裁剪）——静态机位 + 动物，累积越长鬼影越重。
+        -- static_boost = false,     -- 总门（默认关 = 逐位今天的 feedback 行为）
+        -- static_feedback = 0.01,   -- 静止地板（**本帧权重**；0.01 ⇒ 等效窗 ≈100 帧）。
+        --   档位是 2026-10-05 扫出来的（aa_target 交付态 base_space=true，meanSwing / 梯度比）：
+        --   门关 0.00446/0.968 · 0.05→0.00226/0.953 · 0.02→0.00110/0.941 · 0.01→0.00062/0.932
+        --   三档梯度比全在 [0.85,1.02] 内 ⟹ 按「带内取残差最低」拍 0.01（判据变体出数，
+        --   `imgqa temporal-residual --static-boost <地板> --base-space`）。
+        -- static_ramp = 16,         -- 连续静止多少帧爬满地板（= 抖动周期 16）
     },
 }

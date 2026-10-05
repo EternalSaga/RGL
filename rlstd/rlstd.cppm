@@ -183,10 +183,19 @@ using std::ofstream;
 // libstdc++ internals：std 容器迭代器实体（__normal_iterator）定义于 __gnu_cxx，
 // 其比较运算符是 __gnu_cxx 作用域自由函数模板——不导出则 `it != c.end()` 无候选
 // （C++20 重写机制：导出 == 与 <=>，!=/<=/> 等自动可用）。
+// ⚠ libstdc++ 16（本机 2026-10-05 系统升级 GCC 16.2.1 后实测）把 __normal_iterator
+//   的比较运算符改成**类内 hidden friend**（bits/stl_iterator.h 的 friend operator==/
+//   <=>），命名空间作用域查无此名 → using 声明编译红。hidden friend 经 ADL 在调用点
+//   本就可找到（__normal_iterator 可达即可），无需导出——实测 GCC 16 下删掉这两条
+//   using 后全库 + tests 无一处「no match for operator」。
+//   版本闸门：_GLIBCXX_RELEASE < 16 才保留旧导出；非 libstdc++（MSVC STL 无 __gnu_cxx）
+//   同样跳过（此前该形态在 Windows 上本编不过，闸门顺带修这条潜在坑）。
+#if defined(__GLIBCXX__) && _GLIBCXX_RELEASE < 16
 export namespace __gnu_cxx {
 using __gnu_cxx::operator==;
 using __gnu_cxx::operator<=>;
 }  // namespace __gnu_cxx
+#endif
 
 
 export namespace std {

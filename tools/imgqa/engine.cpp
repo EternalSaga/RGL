@@ -141,13 +141,17 @@ void replaceValue(std::string& text, const std::string& file, const std::string&
 /// 交付配置模式：整段替换 `scene.lua` 的 `taa = { ... },` 块为显式三键。
 /// 缺块就在 `return {` 之后插一段——**不静默跳过**（跳过 = 判据跑在「TAA 关」的配置上，
 /// 恒等式会因「pass 根本不在图里」而平凡成立 = 最阴的假绿）。
+/// staticBoost/staticFeedback（批 13.7）：默认关 = 不写这两键（写出的键越少，漂移面越小）。
 void rewriteTaaBlock(std::string& scene, bool enabled, double feedback, double jitterScale,
-    bool baseSpace)
+    bool baseSpace, bool staticBoost = false, double staticFeedback = 0.01)
 {
     std::ostringstream blk;
     blk << "    taa = {\n        enabled = " << lb(enabled) << ",\n        feedback = "
         << std::setprecision(6) << feedback << ",\n        jitter_scale = " << jitterScale
-        << ",\n        base_space = " << lb(baseSpace) << ",\n    },\n";
+        << ",\n        base_space = " << lb(baseSpace);
+    if (staticBoost)
+        blk << ",\n        static_boost = true,\n        static_feedback = " << staticFeedback;
+    blk << ",\n    },\n";
     const auto begin = scene.find("\n    taa = {");
     if (begin != std::string::npos) {
         // 块收尾是 `\n    }` 再加**可选逗号**（交付配置里 taa 是 return 表最后一项，带逗号）。
@@ -267,7 +271,8 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
         writeFile(outDir + "/diagnostics.lua", dg);
 
         std::string sc = readFile(outDir + "/scene.lua");
-        rewriteTaaBlock(sc, o.taa, o.taaFeedback, o.taaJitterScale, o.taaBaseSpace);
+        rewriteTaaBlock(sc, o.taa, o.taaFeedback, o.taaJitterScale, o.taaBaseSpace,
+            o.taaStaticBoost, o.taaStaticFeedback);
         writeFile(outDir + "/scene.lua", sc);
 
         // 机位写进 camera.lua（**从第 1 帧生效**，理由见 ProfileOpts::hasCamera 的注释）
@@ -358,7 +363,8 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
     const std::string entities = o.entitiesLua.empty()
         ? "    entities = { { type = \"model\", file = \"models/" + o.glb + "\" } },\n"
         : "    entities = { " + o.entitiesLua + " },\n";
-    // TAA 段（批 12.6）：enabled + feedback + jitter_scale（+ 批 13.2 base_space），
+    // TAA 段（批 12.6）：enabled + feedback + jitter_scale（+ 批 13.2 base_space，
+    // + 批 13.7 static_boost/static_feedback——仅置位时写，键越少漂移面越小），
     // 其余走引擎默认（运动补偿开）——写出来的键越少，漂移面越小。两个消融开关各有用途：
     // jitter_scale=0 = 只留时域累积；feedback=1 = 只抖不滤（输出 = 本帧，temporal 的阳性
     // 锚点组。别写 0——0 是「只要裁剪后的历史、完全丢本帧」的退化反馈环，测出来的不是
@@ -366,7 +372,12 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
     const std::string taa = o.taa
         ? "    taa = { enabled = true, feedback = " + std::to_string(o.taaFeedback)
               + ", jitter_scale = " + std::to_string(o.taaJitterScale)
-              + ", base_space = " + lb(o.taaBaseSpace) + " },\n"
+              + ", base_space = " + lb(o.taaBaseSpace)
+              + (o.taaStaticBoost
+                     ? ", static_boost = true, static_feedback = "
+                           + std::to_string(o.taaStaticFeedback)
+                     : "")
+              + " },\n"
         : "";
     // styles 必须显式写（switch 首战抓到的静默坑）：缺表回落默认 pbr→model_pbr，
     // 而 model_pbr.frag **不 import shadow/env**——shadow_pass 与 env 开关全部

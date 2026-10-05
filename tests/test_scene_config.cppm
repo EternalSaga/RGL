@@ -151,6 +151,11 @@ TEST_CASE("scene_config：taa 段解析（批 12.6；缺段默认关 + 显式键
 		// 默认被翻成 false → 本条红（默认值 = 交付画像的一部分，漂移不会被任何判据抓到，
 		// 因为所有判据都在显式写键的 profile 上跑，只有这条断言覆盖「不写键」这条路）。
 		CHECK(r->taaBaseSpace == true);
+		// 批 13.7 static boost：总门默认**关**（门关 = feedback 逐位今天的值 = 基线的一部分，
+		// 同 base_space 的「不写键」覆盖逻辑）。变异红线：默认翻成 true → 本条红。
+		CHECK(r->taaStaticBoost == false);
+		expectNear(r->taaStaticFeedback, 0.01, 0.0, 1e-6);
+		CHECK(r->taaStaticRamp == 16u);
 	}
 	// 显式命中（snake_case 键名 = 契约）。变异红线：任一 key 打错（如 jitterScale）→
 	// 对应字段保持默认 → 本条红——与上面 exposure 正向对照同一手法。
@@ -159,7 +164,8 @@ TEST_CASE("scene_config：taa 段解析（批 12.6；缺段默认关 + 显式键
 	{
 		TempLua f("sc_taa_on",
 			"return { taa = { enabled = true, feedback = 0.3, jitter_scale = 0.5, "
-			"motion_compensation = false, base_space = false } }\n");
+			"motion_compensation = false, base_space = false, "
+			"static_boost = true, static_feedback = 0.05, static_ramp = 8 } }\n");
 		auto r = loadSceneConfig(f.pathStr());
 		REQUIRE(r.has_value());
 		CHECK(r->taaEnabled == true);
@@ -167,6 +173,13 @@ TEST_CASE("scene_config：taa 段解析（批 12.6；缺段默认关 + 显式键
 		expectNear(r->taaJitterScale, 0.5, 0.0, 1e-6);
 		CHECK(r->taaMotionCompensation == false);
 		CHECK(r->taaBaseSpace == false);  // 与默认相反方向的命中（见上）
+		// 批 13.7 三键的相反方向命中（默认 false/0.02/16 → 显式 true/0.05/8）：键名打错
+		// 与不写键不可区分，只有「与默认相反」的显式命中能抓（同 base_space 的手法）。
+		// 变异红线：readBool/readFloat/readU32 的任一键名打错（如 staticFeedBack）→
+		// 字段保持默认 → 本三条红。
+		CHECK(r->taaStaticBoost == true);
+		expectNear(r->taaStaticFeedback, 0.05, 1e-4, 0.0);
+		CHECK(r->taaStaticRamp == 8u);
 	}
 	// 反方向命中：默认 true 时「显式 true」是恒真的，所以这条的价值不在断言本身，而在
 	// 它与上一条**合起来**把 {默认, 显式真, 显式假} 三个取值钉死——任一处写反必有一条红。

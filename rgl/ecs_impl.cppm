@@ -366,6 +366,22 @@ void taaSystem(entt::registry& rg) {
 	taa.historyValid = taaHistoryUsable(env.taaEnabled, taa.frameIndex, taa.prevExtent, now,
 		taa.prevCamPos, camPos, taa.prevForward, forward, bounds.radius);
 
+	// ②b 静态机位历史权重提升（批 13.7，门 `taa.static_boost`，总门默认**关**）。
+	// 计数器 = taaNextStaticFrames（纯函数，单测钉）：historyValid 已覆盖「TAA 关 / 首帧 /
+	// resize」，cameraStatic 补紧的「机位没动」——⚠ **勿**用 cameraJumps 代替（那是跳切
+	// 判据，cos 45° / 0.25·r，比「静止」粗几个量级，正常拖拽不算跳切但绝不是静止）。
+	// 门红线：env.taaStaticBoost = false ⟹ taaBoostedFeedback **原样返回** env.taaFeedback
+	// ⟹ payloadFeedback = 今天的 taaParams.x（逐位不变，双构建截图实测）。
+	// ⚠ 已知边界（待记债，主 agent 记还债总账）：静止判据**只看相机位姿**，不认识场景里
+	//   的东西在动——本项目没有 velocity buffer，唯一保护 = 既有邻域盒裁剪。静态机位 +
+	//   动物 ⟹ 累积窗越长鬼影越重；本段刻意不试图解决它。
+	// ⚠ 方向红线：payloadFeedback 是**本帧权重**（taa.frag: lerp(clipped, cur, x)），
+	//   boost = 把它**调小**（更信历史）。
+	const bool still = cameraStatic(taa.prevCamPos, camPos, taa.prevForward, forward);
+	taa.staticFrames = taaNextStaticFrames(taa.historyValid, still, taa.staticFrames);
+	taa.payloadFeedback = taaBoostedFeedback(env.taaStaticBoost, taa.staticFrames,
+		env.taaStaticRamp, env.taaFeedback, env.taaStaticFeedback);
+
 	// ③ 本帧载荷。prevViewProj = 上一帧**抖动后** proj·view —— 口径必须跟历史图的
 	// **内容**一致：taa_hist 由 taa_out 逐像素 1:1 拷来，而 taa_out 的颜色输入是抖动投影
 	// 渲的 ⇒ 历史图按「第 t 帧抖动后」的屏幕系索引。存未抖那份会让采样点系统性偏掉

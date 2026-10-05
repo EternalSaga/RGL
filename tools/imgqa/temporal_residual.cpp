@@ -370,7 +370,8 @@ struct Run {
  */
 Run runGroup(const std::string& dir, const std::string& name, const std::string& tag, bool taa,
     double feedback, double jitterScale, const std::string& variant, int periods,
-    double warmMult, double& tau, bool baseSpace)
+    double warmMult, double& tau, bool baseSpace, bool staticBoost = false,
+    double staticFloor = 0.01)
 {
     Run r;
     r.name = name;
@@ -394,14 +395,20 @@ Run runGroup(const std::string& dir, const std::string& name, const std::string&
     // 闪烁。差多少 = 绝对残差里有多少是「输出住在抖动空间」这个已登记机制（`temporal-swim-pixels`
     // 说过累积压不掉它），而不是"TAA 没干活"。
     o.taaBaseSpace = baseSpace;
+    // 批 13.7 门 `taa.static_boost`（本帧权重地板；⚠ 调小 = 更信历史）。静止机位是本命令
+    // 的固有条件（机位一次钉死）⟹ 门开态热身跑满 ramp 后 feedback 恒 = staticFloor。
+    o.taaStaticBoost = staticBoost;
+    o.taaStaticFeedback = staticFloor;
     o.variant = variant;
     o.size = {kSize[0], kSize[1]};
     makeProfile(dir, o);
 
     // 热身 = ⌈warmMult/α⌉ 向上对齐到抖动周期。α = feedback（EMA 记忆长度 1/α）；TAA 关时没有
-    // 历史，一个周期纯走稳采集本身。⚠ 热身不足**不会报错**：它把画面冻在初始相位上，残差
-    // 反而更小 ⟹ 读数是「更好」的假绿，所以这里宁可多热。
-    const double alpha = taa ? std::clamp(feedback, 1e-6, 1.0) : 1.0;
+    // 历史，一个周期纯走稳采集本身。门开态 α = **地板**（爬满后生效 feedback = static_floor，
+    // 按 0.12 热身 = 热身不足 = 把画面冻在瞬态上读「更好」的假绿）。⚠ 热身不足**不会报错**，
+    // 所以这里宁可多热。
+    const double alpha =
+        taa ? std::clamp(staticBoost ? staticFloor : feedback, 1e-6, 1.0) : 1.0;
     const int warmRaw = static_cast<int>(std::ceil(warmMult / alpha));
     r.warm = ((warmRaw + kResidualPeriod - 1) / kResidualPeriod) * kResidualPeriod;
 
@@ -500,13 +507,96 @@ void printRow(const Run& r)
 
 }  // namespace
 
+// ── 批 13.7 `--static-boost <floor>` 变体：**只出数不判** ──────────────────────────
+//
+// 为什么不判（任务红线）：判据 ⑤（temporal-residual-magnitude）是**带**，其下限红 =
+// 「信号消失向」，作者刻意设计成「修复落地后应当变红」——拿 boost 后的低残差去撞门关
+// 口径的带，会把「变好了」判成「不合格」。默认判据保持门关口径（7 条不变），本变体出
+// 三档地板的 meanSwing / p99.9 / frac>τ 与收敛正确性（梯度比），选档由人判：
+// **梯度比 ∈ [0.85, 1.02]（与 ⑦ 同带）前提下取 meanSwing 最低档**。
+//
+// 四组（只差被测项，全部 aa_target 细线靶 + 静止机位）：
+//   B1 fb=1  js=1 门关 → 梯度参考（理想 16 相位平均，**必须门关**：boost 会把 fb=1 也
+//      压到地板，「只抖不滤」的参考语义就没了——这是它与 R1 的唯一区别）
+//   B2 fb=.12 js=1 门关 → 门关对照（= R2 口径）
+//   B3 fb=.12 js=1 门开 → 被测（热身按地板 α，见 runGroup）
+//   B4 fb=.12 js=0 门开 → 反向哨兵：无激励源时 boost 必须**恰为 0**（boost 只改权重值，
+//      不该引入任何第二时域源；非零 = boost 接错了地方）
+namespace {
+
+int runStaticBoostSweep(const std::string& root, int periods, double warmMult,
+    const std::string& variant, bool baseSpace, double floorVal)
+{
+    double tau = 0.0;
+    std::vector<Run> runs;
+    try {
+        runs.push_back(runGroup(root + "/imgqa_resb_b1", "B1 fb=1  js=1(梯度参考)", "resbb1",
+            true, 1.0, 1.0, variant, periods, warmMult, tau, baseSpace));
+        runs.push_back(runGroup(root + "/imgqa_resb_b2",
+            "B2 fb=.12 js=1 门关(对照)", "resbb2", true, 0.12, 1.0, variant, periods, warmMult,
+            tau, baseSpace));
+        runs.push_back(runGroup(root + "/imgqa_resb_b3",
+            "B3 fb=.12 js=1 门开 fb=" + d4(floorVal), "resbb3", true, 0.12, 1.0, variant, periods,
+            warmMult, tau, baseSpace, true, floorVal));
+        runs.push_back(runGroup(root + "/imgqa_resb_b4", "B4 fb=.12 js=0 门开(反向)", "resbb4",
+            true, 0.12, 0.0, variant, periods, warmMult, tau, baseSpace, true, floorVal));
+    } catch (const std::exception& e) {
+        std::printf("  采集失败: %s\n", e.what());
+        return 2;
+    }
+    const Run& B1 = runs[0];
+    const Run& B2 = runs[1];
+    const Run& B3 = runs[2];
+    const Run& B4 = runs[3];
+
+    std::printf("static-boost 变体（**只出数不判**）：aa_target %d×%d  静止机位  折叠 (2,%d,H,W)  "
+                "周期数 %d  地板 static_feedback=%s  base_space=%s\n",
+        kSize[0], kSize[1], kResidualPeriod, periods, d4(floorVal).c_str(),
+        baseSpace ? "开（交付态）" : "关");
+    std::printf("  ⚠ 判据 ⑤ 的带是门关口径（下限红 = 信号消失向，修复落地后**应当**变红），"
+                "本变体不判它；选档判据 = 梯度比 ∈ [0.85, 1.02]（同 ⑦）前提下 meanSwing 最低。\n");
+    std::printf("  区域 = objectID 靶内部外扩 3px（%lld px）；τ = %s（B1 定，各组共用）\n\n",
+        static_cast<long long>(B2.stat.maskPixels), d6(tau).c_str());
+    for (const auto& r : runs)
+        printRow(r);
+
+    const double gradRef = B1.grad;
+    const auto ratio = [gradRef](double g) { return gradRef > 0.0 ? g / gradRef : 0.0; };
+    std::printf("\n  收敛正确性（梯度能量比，线性域；参考 = B1 fb=1 相位平均 = %s）\n",
+        d6(gradRef).c_str());
+    std::printf("    B2 门关 比值 %s   B3 门开 比值 %s（选档前提：B3 ∈ [0.85, 1.02]）\n",
+        d6(ratio(B2.grad)).c_str(), d6(ratio(B3.grad)).c_str());
+    std::printf("    B4 反向（门开 + 零抖动）meanSwing %s  maxSwing %s（期望**恰为 0**，"
+                "非零 = boost 引入了第二时域源，本组读数作废）\n",
+        d6(B4.stat.meanSwing).c_str(), d6(B4.stat.maxSwing).c_str());
+
+    logCall("temporal-residual-static-boost",
+        {{"periods", std::to_string(periods)}, {"warmMult", d4(warmMult)},
+            {"variant", variant.empty() ? "forward" : variant},
+            {"floor", d4(floorVal)}, {"baseSpace", baseSpace ? "1" : "0"},
+            {"tau", d6(tau)}, {"B2_swing", d6(B2.stat.meanSwing)},
+            {"B3_swing", d6(B3.stat.meanSwing)}, {"B3_p999", d6(B3.stat.p999Swing)},
+            {"B3_frac", d2(B3.stat.fracOverTau * 100.0)},
+            {"B2_p999", d6(B2.stat.p999Swing)}, {"B2_frac", d2(B2.stat.fracOverTau * 100.0)},
+            {"B3_gradRatio", d6(ratio(B3.grad))}, {"B2_gradRatio", d6(ratio(B2.grad))},
+            {"B4_swing", d6(B4.stat.meanSwing)}},
+        {});
+    return 0;
+}
+
+}  // namespace
+
 int cmdTemporalResidual(int periods, double warmMult, const std::string& variant,
-    double slowFeedback, bool skipSlow, bool baseSpace)
+    double slowFeedback, bool skipSlow, bool baseSpace, double staticBoostFloor)
 {
     if (periods < 2 || periods % 2 != 0) {
         std::printf("--periods 必须是 ≥2 的偶数（两半折叠 = 同绝对相位对照）。收到 %d\n", periods);
         return 2;
     }
+    // 批 13.7 变体分岔（默认 0 = 不进，现行 7 条判据路径逐字不变）
+    if (staticBoostFloor > 0.0)
+        return runStaticBoostSweep(projectRoot() + "/build", periods, warmMult, variant,
+            baseSpace, staticBoostFloor);
     if (warmMult < 6.0)
         std::printf("⚠ --warm-multiplier %g < 6：EMA 瞬态 (1−α)^t 在 t=6/α 处还剩 0.25%%，"
                     "再小量的就是瞬态不是稳态（红线 2）\n\n",
