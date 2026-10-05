@@ -3,6 +3,7 @@
 #include "imgqa.h"
 #include "aa_coverage.h"
 #include "ao_metrics.h"
+#include "temporal_residual.h"
 
 #include <algorithm>
 #include <cmath>
@@ -498,6 +499,191 @@ void testAoMetrics(Checker& c)
     }
 }
 
+// 时域绝对残差的四个算子（`temporal_residual.h`）。合成序列的 luma 按闭式函数直接填：判据的
+// 算子只吃 `luma`，「域必须是线性」这条红线在 `prepareLinear` 里，那边由 testSrgb 钉。
+void testTemporalResidual(Checker& c)
+{
+    {
+        const cv::Size sz(8, 4);
+        const cv::Mat all = cv::Mat(sz, CV_8UC1, cv::Scalar(255));
+        const auto throws = [](auto&& fn) {
+            try { fn(); } catch (const std::exception&) { return true; }
+            return false;
+        };
+        const auto frames = [&](int periods, auto&& value) {
+            std::vector<Frame> out;
+            out.reserve(static_cast<size_t>(kResidualPeriod) * periods);
+            for (int i = 0; i < kResidualPeriod * periods; ++i) {
+                Frame f;
+                f.luma = cv::Mat(sz, CV_64FC1);
+                for (int y = 0; y < sz.height; ++y)
+                    for (int x = 0; x < sz.width; ++x)
+                        f.luma.at<double>(y, x) = value(i, x);
+                out.push_back(std::move(f));
+            }
+            return out;
+        };
+
+        // ① 零点：同一张图连拍 ⟹ 五个读数**恰为 0**。⚠ 本条对算子变异的力气最小（常数序列
+        //    在很多错实现上也是 0），它的价值是给后面所有条一个「非零即异常」的参照。
+        {
+            const auto shots = frames(2, [](int, int) { return 0.37; });
+            const ResidualStat s = phaseSwingStat(shots, all, 0.001, 2);
+            c.chk("残差：同一张图连拍 → 五个读数恰为 0（零点）",
+                s.meanSwing == 0.0 && s.p999Swing == 0.0 && s.maxSwing == 0.0
+                    && s.fracOverTau == 0.0 && s.halfGapMax == 0.0,
+                "mean=" + std::to_string(s.meanSwing) + " max=" + std::to_string(s.maxSwing));
+            c.chk("残差：meanLuma 走的是像素值不是常数（在场性守卫的输入）",
+                std::abs(s.meanLuma - 0.37) < 1e-12, std::to_string(s.meanLuma));
+        }
+        // ② 同相位折叠的**阳性面**：只有第 3 个相位亮，且每 16 帧重复一次 ⟹ 折叠后 16 列里
+        //    恰好一列 = 1、其余 = 0 ⟹ 中位数 0 ⟹ swing **恰为 1**；两半同相位 ⟹ halfGap 恰 0。
+        //    变异红线：折叠若按「连续 32 帧两两配对」而非「同相位配对」，那一列会被摊成两个
+        //    0.5 列 ⟹ swing = 0.5，本条当场红（这是全组里唯一钉住折叠口径本身的一条）。
+        {
+            const auto shots = frames(4, [](int i, int) { return (i % 16 == 3) ? 1.0 : 0.0; });
+            const ResidualStat s = phaseSwingStat(shots, all, 0.5, 4);
+            c.chk("残差：单相位离群 → swing 恰为 1（同相位折叠，闭式）",
+                s.meanSwing == 1.0 && s.maxSwing == 1.0 && s.fracOverTau == 1.0,
+                "mean=" + std::to_string(s.meanSwing));
+            c.chk("残差：两半同相位 → halfGapMax 恰为 0（折叠自检的阳性面）",
+                s.halfGapMax == 0.0, "gap=" + std::to_string(s.halfGapMax));
+        }
+        // ③ swing = max − **median**，不是 max − min。闭式：16 列 = 8×0.0 + 7×0.5 + 1×1.0
+        //    ⟹ 排序第 8、9 位 = 0.0 与 0.5 ⟹ 中位数 0.25 ⟹ swing = 1.0 − 0.25 = **0.75**；
+        //    写成 max−min 会给 1.0。这条把「为什么用 median」从注释变成了会红的断言。
+        {
+            const auto shots = frames(2, [](int i, int) {
+                const int p = i % 16;
+                return p < 8 ? 0.0 : (p < 15 ? 0.5 : 1.0);
+            });
+            const ResidualStat s = phaseSwingStat(shots, all, 0.0, 2);
+            c.chk("残差：swing = max−median（不是 max−min），闭式 0.75",
+                std::abs(s.meanSwing - 0.75) < 1e-12, "mean=" + std::to_string(s.meanSwing));
+        }
+        // ④ 区域纪律：mask 外的剧烈摆动一个都不计；同一序列换全图口径必须测得到它
+        //    （反向：防「mask 恰好全 0 / 全在别处」把一切都判成稳定）。
+        {
+            cv::Mat mask = cv::Mat::zeros(sz, CV_8UC1);
+            mask(cv::Rect(0, 0, sz.width / 2, sz.height)).setTo(255);
+            const auto shots = frames(2, [&](int i, int x) {
+                return x < sz.width / 2 ? 0.5 : ((i % 16 == 3) ? 1.0 : 0.0);
+            });
+            const ResidualStat in = phaseSwingStat(shots, mask, 0.01, 2);
+            c.chk("残差：mask 外的摆动不计入（区域纪律）",
+                in.meanSwing == 0.0 && in.maskPixels == sz.area() / 2,
+                "mean=" + std::to_string(in.meanSwing) + " px=" + std::to_string(in.maskPixels));
+            const ResidualStat full = phaseSwingStat(shots, cv::Mat(), 0.01, 2);
+            c.chk("残差：同一序列全图口径必须测到（反向用例）",
+                std::abs(full.meanSwing - 0.5) < 1e-12 && full.maskPixels == sz.area(),
+                "mean=" + std::to_string(full.meanSwing));
+            const cv::Mat none = cv::Mat::zeros(sz, CV_8UC1);
+            c.chk("残差：空区域不出数（maskPixels=0，不给「测得 0」的机会）",
+                phaseSwingStat(shots, none, 0.01, 2).maskPixels == 0);
+        }
+        // ⑤ 折叠算术的**双**闭式：value = 帧号（线性漂移）⟹ 半 A 第 p 列 = p+8、半 B = p+40
+        //    ⟹ halfGap = halfGapMax = **32**（每列都是）；两半均值 = p+24 ⟹ max 39、中位数
+        //    (31+32)/2 = 31.5 ⟹ swing = **7.5**。两个数同时命中 = 折叠/中位数/两半差三条都对。
+        {
+            const auto shots = frames(4, [](int i, int) { return static_cast<double>(i); });
+            const ResidualStat s = phaseSwingStat(shots, all, 0.0, 4);
+            c.chk("残差：线性漂移 → halfGap = halfGapMax = 32、swing = 7.5（双闭式）",
+                s.halfGap == 32.0 && s.halfGapMax == 32.0 && s.meanSwing == 7.5,
+                "gap=" + std::to_string(s.halfGap) + " swing=" + std::to_string(s.meanSwing));
+        }
+        // ⑥ 前提守卫：缺帧 / 奇周期 / 混进没 prepareLinear 或别的 extent 的帧，一律**抛**，
+        //    不许出数（「列与相位脱钩」的读数看起来完全正常，是最贵的一类假绿）。
+        {
+            const auto good = frames(2, [](int, int) { return 0.2; });
+            c.chk("相位平均：帧数不是整数周期就抛", throws([&] { (void)phaseAverageLuma(good, 3); }));
+            c.chk("相位平均：周期数 <2 就抛（奇数半没有同相位对照）",
+                throws([&] { (void)phaseAverageLuma(good, 1); }));
+            auto noLin = good;
+            noLin.push_back(Frame{});
+            c.chk("相位平均：混进没 prepareLinear 的帧就抛", throws([&] { (void)phaseAverageLuma(noLin, 2); }));
+            auto otherSize = good;
+            otherSize.back().luma = cv::Mat(cv::Size(3, 3), CV_64FC1, cv::Scalar(0.0));
+            c.chk("相位平均：混进别的 extent 就抛（两帧不是同一次采集）",
+                throws([&] { (void)phaseAverageLuma(otherSize, 2); }));
+        }
+        // ⑦ τ 闭式与真解码器对拍（**拐点以上**；`srgbDecode` 是分段函数，byte ≤ 10 走线性段）。
+        //    中心差分步长取 0.01 字节（亚 LSB），二阶误差 ~1e-7。
+        {
+            double worst = 0.0;
+            for (int b = 11; b <= 254; ++b) {
+                const double x = static_cast<double>(b) / 255.0;
+                const double d = (srgbDecode(x + 0.01 / 255.0) - srgbDecode(x - 0.01 / 255.0)) / 0.02;
+                worst = std::max(worst,
+                    std::abs(d - lsbLinearAtLuma(srgbDecode(x))) / std::max(1e-30, d));
+            }
+            c.chk("τ 闭式：拐点以上与 srgbDecode 中心差分对拍（相对误差 <1e-5）", worst < 1e-5,
+                "worst=" + std::to_string(worst));
+            c.chk("τ 闭式：lin=1 处 = 2.4/1.055/255",
+                std::abs(lsbLinearAtLuma(1.0) - 2.4 / 1.055 / 255.0) < 1e-15,
+                std::to_string(lsbLinearAtLuma(1.0)));
+            c.chk("τ 随线性电平单调递增（= 拿白电平 τ 当 mask 内上界的前提）",
+                lsbLinearAtLuma(0.05) < lsbLinearAtLuma(0.617)
+                    && lsbLinearAtLuma(0.617) < lsbLinearAtLuma(1.0));
+            // 判据真正依赖的安全性质：**不亮于 maxLin 的像素，翻一格的实际跨度都有界**。
+            // 这条看着像「按构造成立」，但它钉的是容差用 max 而不是 p99、用离散步长而不是
+            // 导数这两件事——任一件被改回去（半间差容差就会把正常读数判成结构失效）。
+            const double maxLin = srgbDecode(206.0 / 255.0);
+            const double bound = maxLsbStepUpTo(maxLin);
+            bool bounded = true;
+            for (int b = 0; b < 255; ++b) {
+                const double lo = srgbDecode(static_cast<double>(b) / 255.0);
+                if (lo > maxLin)
+                    break;
+                bounded = bounded && srgbDecode(static_cast<double>(b + 1) / 255.0) - lo <= bound;
+            }
+            c.chk("τ：不亮于 maxLin 的像素翻一格 ≤ maxLsbStepUpTo(maxLin)（容差的上界性质）",
+                bounded, "bound=" + std::to_string(bound));
+            // 离散步长与闭式导数在同一电平处应当一致（两条独立实现互相对拍，差 <1%）。
+            c.chk("τ：离散一格与闭式导数在白电平处一致（<1%）",
+                std::abs(bound / lsbLinearAtLuma(maxLin) - 1.0) < 0.01,
+                "disc=" + std::to_string(bound) + " closed=" + std::to_string(lsbLinearAtLuma(maxLin)));
+            c.chk("τ：一格跨度随电平单调（= 取最亮电平即上界的前提）",
+                maxLsbStepUpTo(0.05) < maxLsbStepUpTo(0.617)
+                    && maxLsbStepUpTo(0.617) < maxLsbStepUpTo(1.0));
+            // ⚠ 容差取 max、τ 取 p99，两者**必须**能分开：mask 里若有比 p99 更亮的高光，用 p99
+            //    当容差会低估。本条把「别把两个数合并成一个」钉住。
+            c.chk("τ：比 p99 白电平更亮的高光，一格能翻过 τ（所以容差走 max 不走 p99）",
+                maxLsbStepUpTo(0.9) > lsbLinearAtLuma(maxLin),
+                "bright=" + std::to_string(maxLsbStepUpTo(0.9)) + " tau=" + std::to_string(bound));
+            c.chk("τ：maxLin=1 时 = 1 − srgbDecode(254/255)（端点闭式）",
+                std::abs(maxLsbStepUpTo(1.0) - (1.0 - srgbDecode(254.0 / 255.0))) < 1e-15,
+                std::to_string(maxLsbStepUpTo(1.0)));
+        }
+        // ⑧ 梯度能量：常量图恰为 0（收敛正确性判据的零点）；斜坡走 Sobel 核 [−1,0,1] +
+        //    BORDER_REFLECT_101 的闭式 —— 内部 gx = 2·slope，**两列边界**反射后 gx = 0
+        //    ⟹ 均值 = 2·slope·(W−2)/W。变异红线：borderType 改成 REPLICATE 会给 1.75·slope。
+        {
+            const cv::Mat flat(sz, CV_64FC1, cv::Scalar(0.3));
+            c.chk("梯度能量：常量图恰为 0（零点）", gradEnergy(flat, all) == 0.0,
+                std::to_string(gradEnergy(flat, all)));
+            const double slope = 0.1;
+            cv::Mat ramp(sz.height, sz.width, CV_64FC1);
+            for (int y = 0; y < sz.height; ++y)
+                for (int x = 0; x < sz.width; ++x)
+                    ramp.at<double>(y, x) = slope * x;
+            const double expect = 2.0 * slope * (sz.width - 2) / sz.width;
+            c.chk("梯度能量：线性斜坡 = 2·slope·(W−2)/W（Sobel 核 + REFLECT_101 闭式）",
+                std::abs(gradEnergy(ramp, all) - expect) < 1e-12,
+                "got=" + std::to_string(gradEnergy(ramp, all)) + " expect=" + std::to_string(expect));
+            // mask 是**选择器不是裁剪器**：算子必须在整图上跑完再按 mask 取均值。fixture =
+            // 全图斜坡 + 只遮左半 ⟹ mask 内 gx = [0, 2s, 2s, 2s]（x=0 是画布边界，REFLECT_101
+            // 反射后自减为 0）⟹ 均值 = 2·slope·(Wm−1)/Wm。**变异红线**：若实现先裁剪再 Sobel，
+            // 裁剪区的右边缘会变成边界（gx=0）⟹ 均值降成 2·slope·(Wm−2)/Wm，本条当场红。
+            cv::Mat half = cv::Mat::zeros(sz, CV_8UC1);
+            half(cv::Rect(0, 0, sz.width / 2, sz.height)).setTo(255);
+            const double expectL = 2.0 * slope * (sz.width / 2 - 1) / (sz.width / 2);
+            c.chk("梯度能量：mask 是选择器不是裁剪器（闭式，Sobel 支撑跨 mask 边界）",
+                std::abs(gradEnergy(ramp, half) - expectL) < 1e-12,
+                "got=" + std::to_string(gradEnergy(ramp, half)) + " expect=" + std::to_string(expectL));
+        }
+    }
+}
+
 }  // namespace
 
 int cmdSelftest()
@@ -512,6 +698,7 @@ int cmdSelftest()
     testTemporalDiff(c);
     testAaCoverage(c);
     testAoMetrics(c);
+    testTemporalResidual(c);
     testKeyValidation(c);
     std::printf("%s：%d 条失败\n", c.bad ? "自检失败" : "自检通过", c.bad);
     return c.bad ? 1 : 0;

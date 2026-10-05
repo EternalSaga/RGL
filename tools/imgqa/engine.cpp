@@ -516,6 +516,42 @@ std::string Engine::shot(const std::string& tag, const char* attachment)
     return p.string();
 }
 
+uint32_t Engine::frameCount()
+{
+    auto res = impl_->http->Get("/");
+    if (!res || res->status != 200)
+        throw std::runtime_error("GET / 失败: " + (res ? std::to_string(res->status) : "无响应"));
+    const json out = json::parse(res->body);
+    return out.at("frame").get<uint32_t>();
+}
+
+void Engine::advanceFrames(uint32_t n, int timeoutSec)
+{
+    // 目标 = 当前计数 + n。用**相对**目标而不是绝对帧号：RPC 登记落在第几帧由启动时序决定
+    // （`temporal.cpp` 里 φ 每次启动不等的同一原因），绝对号会让热身长度本身带噪声。
+    const uint32_t target = frameCount() + n;
+    const auto deadline
+        = std::chrono::steady_clock::now() + std::chrono::seconds(timeoutSec);
+    uint32_t last = 0;
+    int stalled = 0;
+    while (true) {
+        const uint32_t now = frameCount();
+        if (now >= target)
+            return;
+        // 帧计数不推进 = 引擎卡死（不是"慢"）。静默少热身比报错贵得多：量到的是历史瞬态，
+        // 而读数看起来完全正常（画面被冻在初始相位 ⟹ 残差反而更小 = 假绿）。
+        stalled = now == last ? stalled + 1 : 0;
+        last = now;
+        if (stalled > 200)
+            throw std::runtime_error("帧计数停在 " + std::to_string(now) + "（引擎卡死？），"
+                + "热身 " + std::to_string(n) + " 帧未完成——拒绝在瞬态上下判据");
+        if (std::chrono::steady_clock::now() > deadline)
+            throw std::runtime_error("热身超时：目标帧 " + std::to_string(target) + " 停在 "
+                + std::to_string(now));
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+}
+
 std::vector<std::string> Engine::shotBurst(const std::string& dir, uint32_t n,
     const std::string& prefix)
 {

@@ -191,6 +191,24 @@ public:
     /// 拍一张。attachment=nullptr = 后缓冲；否则具名附件（"object_id"）。返回 PNG 绝对路径。
     [[nodiscard]] std::string shot(const std::string& tag, const char* attachment = nullptr);
 
+    /// 引擎装配态的帧计数（`GET /` 回显的 `frame`，纯观测；每帧在帧首钩子里 +1）。
+    /// 为什么读 `GET /` 而不是 `GET /state`：两者回显同一个计数器，而 `/state` 每次调用都
+    /// 重建**全部参数页**（`rpcHandleState` → `buildDebugParamPages`），热轮询下纯烧。
+    [[nodiscard]] uint32_t frameCount();
+
+    /**
+     * 空转推进 n 帧（**不写盘**）——长热身唯一可用的形态。
+     *
+     * 为什么必须有这根线（批 13.1，两条实测踩过的坑）：EMA 类累积的瞬态按 (1−α)^t 衰减，
+     * 热身不足量到的是**瞬态**（历史还没动起来 = 画面冻在初始相位）而不是稳态；α=0.002 要
+     * 6/α = 3000 帧。用 `/shotburst` 热身 = 写 3000 张 PNG，直接超时。本机 headless 实测
+     * ≈2500 fps（`GET /` 的 frame 计数在 5s 内走了 12593），3000 帧 ≈ 1.2s，于是 α 可以
+     * 一路推到 0.002 而整条判据仍是分钟级。
+     * @param n 要推进的帧数（相对调用时刻）
+     * @param timeoutSec 帧计数不推进 = 引擎卡死，超时抛错而不是静默少热身
+     */
+    void advanceFrames(uint32_t n, int timeoutSec = 300);
+
     /// 连续采 n 帧（POST /shotburst）——**时域差分唯一合法的采集口**。
     /// 与 shot() 的区别不是「省几次往返」：`/shot` 每张落在哪一帧取决于 HTTP 请求与
     /// 帧首钩子的先后（= 墙钟），相邻两张根本不是相邻两帧，逐帧差于是测的是随机相位窗
@@ -422,6 +440,23 @@ int cmdProbe(const std::string& configDir, int x, int y, Vec3 albedo, double rou
 ///                S1（只抖不滤）的逐帧差不再由游动主导 ⟹ **S1/S2 比值失去原口径**，
 ///                两态都要跑才能解释数字（见 temporal.cpp 头注释「基空间口径」段）。
 int cmdTemporal(int pairs, int warm, const std::string& variant, bool baseSpace = false);
+
+/// 时域**绝对**残差（批 13.1 主判据）：`temporal` 的四条钉的是相对抑制比（S1/S2 ≥ 3.0），**没有任何
+/// 一条约束"收敛后逐帧残差的绝对大小"**（同一份输出里 TAA 开仍有 20.78% 像素逐帧变化、最大
+/// 摆幅 0.535 线性 luma = 136 显示 LSB，四条全绿 = 判据盲区）。本命令在**同一张细线靶**上量
+/// 「静止机位收敛后，同一绝对抖动相位上像素还会摆多少」：连拍折成 (2,16,H,W) 后逐像素
+/// `swing = max_over_16 − median_over_16`，报 meanSwing / p99.9 / frac(swing>τ)，另加一条
+/// 收敛正确性（线性域梯度比 vs 同场景 feedback=1 的一周期相位平均）。
+/// 度量定义、三条测量红线（线性域 / 热身 ≥6/α 且不写盘 / 配置须带 environment 段）与三条锚点
+/// 的完整理由 → `temporal_residual.h` 头注释。
+/// @param periods 抖动周期数（≥2 的偶数；连拍 = periods×16 帧，两半同列 = 同绝对相位）
+/// @param warmMult 热身倍数：每组 warm = ⌈warmMult / feedback⌉ 向上对齐到周期（EMA 判据 6/α）
+/// @param variant 渲染路线（默认 forward）
+/// @param slowFeedback 单调性轴的低端 α（默认 0.002 = 等效窗 ≈500 帧 ≫ 抖动周期 16）
+/// @param baseSpace 批 13.2 门 `taa.base_space`（true = 输出在**基空间**）。本命令用它做
+///                **归因**：门关读数 = 整幅游动 + 闪烁，门开读数 ≈ 只剩闪烁。
+int cmdTemporalResidual(int periods, double warmMult, const std::string& variant,
+    double slowFeedback, bool skipSlow, bool baseSpace = false);
 
 /// 逐杆覆盖率对拍闭式（批 12.6 T4，docs/taa_plan.md §7 第 10 条）：单帧量阶梯杆的
 /// 「黑度积分 vs 投影宽度」，TAA 关应当被二值覆盖量化破坏、TAA 开应当贴合闭式。

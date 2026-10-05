@@ -1,5 +1,5 @@
 // imgqa CLI。子命令：selftest / check / refuse / attribution / faces / switch / izb / swim /
-// probe / temporal / aa-coverage / taa-swim / note。
+// probe / temporal / temporal-residual / aa-coverage / taa-swim / note。
 #include "imgqa.h"
 
 #include <cstdio>
@@ -630,6 +630,9 @@ void printUsage()
         "投影宽度」（批 12.6 T4；--base-space = 批 13.2 门开态）\n"
         "  temporal [--pairs 32] [--warm 32] [--variant forward] [--base-space]  TAA 时域阳性锚点："
         "静止机位 + jitter，连续帧突发逐帧差（批 12.6 T4）\n"
+        "  temporal-residual [--periods 2] [--warm-multiplier 6] [--variant forward]"
+        " [--slow-feedback 0.002] [--skip-slow] [--base-space]  时域**绝对**残差：静止机位连拍折"
+        " (2,16,H,W) 后逐像素 max−median（线性域；补 temporal 相对比的盲区，批 13.1 主判据）\n"
         "  taa-swim [--pairs 32] [--warm 32] [--variant forward]  真实场景逐帧差是否=整幅亚像素"
         "平移（游动）；含基空间门（批 13.2 T5/T6）与量具阳性锚点（批 13.1b）\n"
         "  ao-noise [--glb cornell_box.glb] [--camera front] [--variant deferred] [--strength 0.5]"
@@ -699,6 +702,11 @@ int main(int argc, char** argv)
         if (cmd == "temporal")
             return cmdTemporal(std::stoi(P.get(args, "--pairs", "32")),
                 std::stoi(P.get(args, "--warm", "32")), P.get(args, "--variant", ""),
+                P.has(args, "--base-space"));
+        if (cmd == "temporal-residual")
+            return cmdTemporalResidual(std::stoi(P.get(args, "--periods", "2")),
+                std::stod(P.get(args, "--warm-multiplier", "6")), P.get(args, "--variant", ""),
+                std::stod(P.get(args, "--slow-feedback", "0.002")), P.has(args, "--skip-slow"),
                 P.has(args, "--base-space"));
         if (cmd == "aa-coverage")
             return cmdAaCoverage(P.get(args, "--variant", ""), std::stoi(P.get(args, "--warm", "32")),

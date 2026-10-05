@@ -18,6 +18,7 @@ add_executable(imgqa
     judge.cpp
     selftest.cpp
     temporal.cpp
+    temporal_residual.cpp
     aa_coverage.cpp)
 
 target_compile_features(imgqa PRIVATE cxx_std_23)
