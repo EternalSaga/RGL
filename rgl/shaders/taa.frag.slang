@@ -786,5 +786,43 @@ float4 main(TaaInput input) : SV_Target
         feedback = params.x + (base - params.x) * w;
         alpha = mem;  // 载体同臂 6–9
     }
+    else if (clipMode == 11 && diag < 0.5)
+    {
+        // 11 = **把"允许动用跨帧色彩记忆"接到重投影位移上**（批 13.11 续；债-62/债-63 的出口）。
+        // 前十臂全部只读颜色距离，而债-62 的不可能性证明**自己的适用条件就写着**「响应 =
+        // f(dist, mem, ext)、**不含跨帧运动**/空间信息」——它否的是"只用颜色"这一族，门一直开着。
+        // 本项目没有 velocity buffer 是**因为不需要**：重投影是解析的（相机 prevViewProj + 场景
+        // prevSpin），`prevUvBase` 早就算好了 ⟹ 现成的屏幕位移
+        //     motion = ‖prevUvBase − baseUv‖ / texel      （单位 = 像素）
+        // ⚠ 关键在于这个量在两种情形下不是"大小不同"而是 **0 与很大**：批 13.5 把历史搬进
+        //   **基空间**后，静止机位下 prevUvBase ≡ baseUv（浮点 ~1e-7）⟹ motion **恰为 0**；
+        //   而场景/机位真动时它是好几个像素。闪烁场景与鬼影场景在这个轴上**线性可分**。
+        // 于是规则不再是"调一个折中点"，而是**给记忆加前提**：
+        //     mem = max(ext, memPrev · decay · gate),  gate = saturate(2 − motion)
+        // 两个断点都是**推的**，没有一个是扫出来的：
+        //   · `motion ≤ 1` ⟹ **可证明静止**：Halton 抖动 ±0.5px，两帧抖动差上界恰为 1px。
+        //     静止 ⟹ 记忆全开（gate=1）⟹ 与臂 8 **逐位同**（乘 1.0 精确）⟹ 闪烁侧全部读数应一 bit 不动。
+        //   · `motion ≥ 2` ⟹ 可证明非静止 ⟹ 记忆清零 ⟹ mem 退回**本帧瞬时** ext ⟹ 硬裁剪
+        //     ⟹ 鬼影侧拿臂 0 的行为（臂 0 不鬼正是因为它的盒没有记忆）。
+        //   · 中间线性，**斜坡宽度 = 1 像素 = 采样格周期**（唯一自然单位；不是自由参数）。
+        // 为什么这次不是调参：跷跷板的支点从"响应函数形状"换成了"一个在一种情形下恒为 0、
+        // 在另一种情形下恒为大的物理量"。臂 10 的 α 耦合之所以救不了鬼影，是因为 `mem` 在场景
+        // 转动时会被 `ext` 撑大 ⟹ `w` 塌成 0 ⟹ α_eff 退回 boost；**根子是记忆本身在动的时候
+        // 还在给豁免**，本臂关掉的正是这个豁免。
+        const float memPrev =
+            saturate(historyTex.SampleLevel(pointSampler, prevUvBase, 0.0).a);
+        const float decay = clipCtl.y > 0.0 ? clipCtl.y : (1.0 - 1.0 / 16.0);
+        const float3 ext3 = mx - mn;
+        const float ext = max(ext3.x, max(ext3.y, ext3.z));
+        const float gate = saturate(2.0 - length((prevUvBase - baseUv) / texel));
+        const float mem = max(ext, memPrev * decay * gate);
+        const float histL = dot(histR, float3(0.3333333));
+        const float centL = dot(centroid, float3(0.3333333));
+        const float dist = abs(histL - centL);
+        const float r = 1.0;  // 同臂 8
+        const float w = saturate((dist - mem) / (r * max(mem, 1e-6)));
+        clippedR = lerp(histR, hardR, w);
+        alpha = mem;  // 载体同臂 6–10
+    }
     return float4(lerp(fromReinhard(clippedR), cur, feedback), alpha);
 }
