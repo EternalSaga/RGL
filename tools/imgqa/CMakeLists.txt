@@ -22,6 +22,7 @@ add_executable(imgqa
     temporal_motion.cpp
     temporal_flicker.cpp
     temporal_homography.cpp
+    material_attribution.cpp
     aa_coverage.cpp)
 
 target_compile_features(imgqa PRIVATE cxx_std_23)

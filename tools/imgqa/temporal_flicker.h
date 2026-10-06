@@ -36,6 +36,26 @@ struct FlickerSeries {
     double byteMaxAdjacent = 0.0; ///< 相邻帧最大字节差（「相机真动了」的在场性自证）
     double liveFeedback = -1.0;   ///< 引擎自己回显的生效 feedback（不读 lua 写的值）
     uint32_t framePre = 0, framePost = 0;
+    /// ── 以下两张 = 「亮度 × 梯度」分带的**尺子**（`wantBands=true` 才算，`temporal-homography`
+    /// 的 `--bands` 是唯一消费者；`temporal-flicker` 不开 = 逐位今天）────────────────────
+    /// 口径与 `temporal_residual.cpp` 的 bistro 分带**逐字相同**（亮度轴 = 显示域字节亮度的
+    /// 多帧均值，梯度轴 = `sobelAbsGrad` 于线性 luma）。**唯一**被迫的差别：静止态的梯度算在
+    /// 「相位平均图」上（静止机位下那张图是干净的），移动机位**没有**这张干净图——连拍平均会把
+    /// 边缘糊掉（扫速 × 帧数的运动模糊），故梯度轴取**跨帧最大**：移动时「这个像素在边缘带上」
+    /// 的正确含义是「burst 期间有边缘扫过它」。
+    cv::Mat byteMean; ///< 显示域字节亮度（Rec.601 灰）的多帧均值，CV_64FC1，0..255
+    cv::Mat byteMax;  ///< 同上取跨帧**最大**（敏感性口径，理由见 temporal_residual.h）
+    cv::Mat gradMax;  ///< 跨帧最大的 |Sobel_x|+|Sobel_y|（线性 luma）= 梯度轴的尺子
+    /// ── 中点姿态的 objectID（材质归因用；`wantBands=true` 且 bistro 机位才采）───────────
+    /// 为什么能只拍一张：材质归因要的是「这段 burst 期间这块屏幕**是什么材质**」，而 burst
+    /// 总位移只有 扫速 × 帧数（0.5 px/帧 × 16 帧 = 8 px），与分带尺子本身的口径（byteMean 是
+    /// 同一段的均值、gradMax 是同一段的跨帧最大）**同一量级**。逐帧配 ID 反而要引入
+    /// 「/shot 落在第几帧」这个本工具无法严格控制的量。
+    /// 落位精度**实测回显**（yawErrPx），不靠推断：先标定一次 /shot 会推进多少 yaw，再预补偿。
+    cv::Mat ids;        ///< CV_32SC1；空 = 未采（合成靶没有 glb，材质名无从映射）
+    double yawErrPx = 0.0;  ///< objectID 实际落位姿态 与 中点姿态 的差（像面 px）
+    int idBestFrame = -1;   ///< 同姿态补拍的**彩色**帧在 burst 里最接近第几帧（自证落位）
+    double idBestDiff = 0.0;///< 与该帧的平均 |Δ|（线性 luma）；≈0 = 姿态逐位复现
 };
 
 /**
@@ -46,10 +66,14 @@ struct FlickerSeries {
  * @param yawRadPerFrame camera.lua `frame_yaw`（rad/帧，原地绕 up 轴 yaw）
  * @param kernel     scene.lua `taa.input_kernel`（批 13.8 输入侧重建核：0 双线性 / 1 CR 4×4 /
  *                   2 Lanczos3 6×6）。默认 0 = **不写键** = 引擎默认 = 已发表读数的口径
+ * @param wantBands  true = 顺带算「亮度 × 梯度」分带的尺子（`byteMean`/`byteMax`/`gradMax`，
+ *                   口径见 `FlickerSeries` 注释）。默认 false = 不算 = `temporal-flicker` 逐位今天
  */
 [[nodiscard]] FlickerSeries captureFlickerSeries(const std::string& dir, const std::string& name,
     const std::string& tag, bool edgeTarget, const BistroCam* cam, bool taaOn,
-    double yawRadPerFrame, int frames, double kernel = 0.0);
+    double yawRadPerFrame, int frames, double kernel = 0.0, bool wantBands = false,
+    bool wantObjectId = false, double envIntensity = 1.0, double aoStrength = 0.5,
+    bool overrideEnv = false, bool overrideAo = false);
 
 /// `--target` 解析（两条判据共用）：edge = 合成靶；否则 bistro 机位名。找不到 = 抛。
 /// @param edgeTarget [out] true = 合成靶

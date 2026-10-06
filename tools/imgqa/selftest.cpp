@@ -794,6 +794,88 @@ void testLumaGradBands(Checker& c)
         c.chk("分带阈值：lin=1e6 已真削顶 → 255（档位的上端就是「削顶」本身）",
             bandClipProxyByte(1e6) == 255, std::to_string(bandClipProxyByte(1e6)));
     }
+    // ⑤ 四数里的**胜负手**：`幅度份额 ≠ 计数份额`（批 13.9 新增，移动机位判据的主数）。
+    //    fixture（1×4，闭式手算）：mid×high 两像素 swing 0.6/0.6、clip×high 一像素 swing 3.0、
+    //    dark×low 一像素 swing 0 ⟹ total=4、over=3、mass=4.2。
+    //    闭式：mid×high 计数份额 2/3=66.67% 而幅度份额 1.2/4.2=28.57%；
+    //          clip×high 计数份额 1/3=33.33% 而幅度份额 3.0/4.2=71.43%。
+    //    ⟹ 同一张表里「像素少的那格」幅度上反而是大头 —— 只出计数份额就会把它读成「不是元凶」。
+    //    变异红线：`ampShare` 若退化成用 `over` 算（= 抄 cntShare）→ 71.43 这条当场红；
+    //              `mass` 若漏累加（恒 0）→ 两条幅度份额同时红。
+    {
+        cv::Mat luma(1, 4, CV_64FC1), grad(1, 4, CV_64FC1), swing(1, 4, CV_64FC1);
+        const double L[4] = { 200, 200, 250, 10 };
+        const double G[4] = { 1, 1, 1, 0 };
+        const double S[4] = { 0.6, 0.6, 3.0, 0.0 };
+        for (int x = 0; x < 4; ++x) {
+            luma.at<double>(0, x) = L[x];
+            grad.at<double>(0, x) = G[x];
+            swing.at<double>(0, x) = S[x];
+        }
+        const BandTable t = bandTableOf(swing, luma, grad, 128.0, 240.0, 0.5, 0.5);
+        const BandShare mid = bandShareOf(t, 1, 1);
+        const BandShare clip = bandShareOf(t, 2, 1);
+        const double k = 1e-9;
+        c.chk("四数·闭式：mid×high share 50% rate 100% 计数份额 66.67% 幅度份额 28.57%",
+            std::abs(mid.share - 0.5) < k && std::abs(mid.rate - 1.0) < k
+                && std::abs(mid.cntShare - 2.0 / 3.0) < k && std::abs(mid.ampShare - 2.0 / 7.0) < k,
+            "cnt=" + std::to_string(mid.cntShare) + " amp=" + std::to_string(mid.ampShare));
+        c.chk("四数·闭式：clip×high 计数份额 33.33% 而幅度份额 71.43%（**两者必须能不等**）",
+            std::abs(clip.share - 0.25) < k && std::abs(clip.cntShare - 1.0 / 3.0) < k
+                && std::abs(clip.ampShare - 5.0 / 7.0) < k,
+            "cnt=" + std::to_string(clip.cntShare) + " amp=" + std::to_string(clip.ampShare));
+        // 反向用例：幅度份额与计数份额**不相等**这件事本身要被钉住（相等 = 幅度轴失效）。
+        c.chk("四数·反向：同一格里幅度份额 ≠ 计数份额（退化即红，防「只出计数份额」蒙混）",
+            std::abs(clip.ampShare - clip.cntShare) > 0.3
+                && std::abs(mid.ampShare - mid.cntShare) > 0.3);
+        // 空表守卫：total=0 时四个份额一律 0（不是 NaN、不是除零崩溃）。
+        const BandTable empty = bandTableOf(swing, luma, grad, 128.0, 240.0, 0.5, 1e9);
+        const BandShare e = bandShareOf(empty, 2, 1);
+        c.chk("四数·反向：τ 高于一切 → over=0 使计数份额为 0，但幅度份额仍非 0（两轴独立）",
+            empty.over == 0 && e.cntShare == 0.0 && e.ampShare > 0.0,
+            "amp=" + std::to_string(e.ampShare));
+    }
+    // ⑥ 移动机位三分支判决（批 13.9 判决线的纯函数面）。
+    //    昨天的事故 = 真结果落进**未命名**兜底支被读成「没有信号」，故本条除了判分支归属，
+    //    还钉住「三支名字两两不同且非空」——名字撞车 = 兜底支吞掉真信号的另一种形态。
+    //    变异红线（**逐条实测过**，非声称）：支持线 `>=` 改 `>` → 踩线那条红；否证线 `<` 改 `<=`
+    //    → 计数踩线那条红。⚠ 实测同时确认：`!excessInB` 那条守卫**改坏测不出**（支持支先判，
+    //    excessInB=true 永远走不到否证支）= 防御性冗余，不是被本条保护的性质，别把它当红线。
+    {
+        const MovingBandBranch supAmp = classifyMovingBand(kMovingSupportAmpShare, 0.0, false);
+        const MovingBandBranch supExc = classifyMovingBand(0.0, 0.0, true);
+        const MovingBandBranch ref = classifyMovingBand(
+            kMovingRefuteShare - 1e-9, kMovingRefuteShare - 1e-9, false);
+        const MovingBandBranch indAmp = classifyMovingBand(0.10, 0.10, false);
+        const MovingBandBranch indCnt = classifyMovingBand(
+            kMovingRefuteShare - 1e-9, kMovingRefuteShare, false);
+        c.chk("判决线·支持：B 幅度份额恰踩 30% 线（含等号）即分支①「支持」",
+            supAmp == MovingBandBranch::Support);
+        c.chk("判决线·支持：幅度不够但超额集中在 B（rB ≥ 1.5×rA）也判分支①",
+            supExc == MovingBandBranch::Support);
+        c.chk("判决线·否证：两份额都 < 5% 且超额不向 B → 分支②「否证」",
+            ref == MovingBandBranch::Refute);
+        // 反向用例 ×2：幅度份额抬到 10%（≥5%）→ 否证支**不许**抢判；
+        // 计数份额恰好踩到 5%（不 <）→ 同样不许判否证。
+        c.chk("判决线·反向：幅度 10% / 计数踩线 → 一律分支③（否证支不许越线抢判）",
+            indAmp == MovingBandBranch::Indeterminate
+                && indCnt == MovingBandBranch::Indeterminate);
+        // 三支命名必须互不相同（未命名兜底 = 昨天翻错方向的直接原因）。
+        const std::string nSup = movingBandBranchName(MovingBandBranch::Support);
+        const std::string nRef = movingBandBranchName(MovingBandBranch::Refute);
+        const std::string nInd = movingBandBranchName(MovingBandBranch::Indeterminate);
+        c.chk("判决线·命名：三支文字两两不同且各含自己的分支号（兜底支不许与另两支同名）",
+            !nSup.empty() && nSup != nRef && nRef != nInd && nSup != nInd
+                && nSup.find("\xe2\x91\xa0") != std::string::npos
+                && nRef.find("\xe2\x91\xa1") != std::string::npos
+                && nInd.find("\xe2\x91\xa2") != std::string::npos,
+            nSup + " | " + nRef + " | " + nInd);
+        // 两条线互斥（同一输入不可能同时命中支持与否证）——判决函数是全函数。
+        c.chk("判决线·自洽：支持线与否证线在数值上不可能同时命中（30% > 5%）",
+            kMovingSupportAmpShare > kMovingRefuteShare
+                && classifyMovingBand(kMovingRefuteShare - 1e-9, 0.0, false)
+                    != classifyMovingBand(kMovingSupportAmpShare, 0.0, false));
+    }
 }
 
 /**

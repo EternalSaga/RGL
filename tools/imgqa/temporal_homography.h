@@ -28,7 +28,18 @@ namespace RGL::imgqa {
 
 /// 相机移动下的逐像素闪烁归因：精确单应 warp 上一帧，残差出热图 + 统计（TAA 开/关各一组）。
 /// @param outPrefix 非空 = 写 `<prefix>_taa_{on,off}_heat.png`（固定标尺，两组可对眼）
+/// @param bands     true = 残差图另出「亮度 × 梯度」二维分带（**机位状态 = 相机移动**）。
+///                  既有四条读数与 rc 一律不动；判决线跑前写死，见 .cpp 内同名段。
+/**
+ * @param bands    true = 出「亮度 × 梯度」六格表 **+ 材质归因表**，并启用可测性守卫闸门
+ *                 （守卫红 ⟹ 只报 Indeterminate、**rc≠0**，不出判决）
+ * @param envIntensity / aoStrength  A/B 侧（负数 = 不覆写 = 交付配置原样）。
+ *        `env.intensity=0` 关几何体 IBL、`ao.strength=0` 关 AO，两者都是 IEEE 精确旁路。
+ *        ⚠ `env.intensity=0` **不影响天穹背景**（skybox 与 light 的 envSky 分支不乘它），
+ *          所以背景会原样亮着 —— 输出里必须回显这条，否则读者会把"背景还在"读成"IBL 没关掉"。
+ */
 int cmdTemporalHomography(const std::string& target, double sweepPxPerFrame, int frames,
-    const std::string& outPrefix);
+    const std::string& outPrefix, bool bands = false, double envIntensity = -1.0,
+    double aoStrength = -1.0);
 
 }  // namespace RGL::imgqa

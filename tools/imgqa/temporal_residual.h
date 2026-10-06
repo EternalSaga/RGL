@@ -241,6 +241,17 @@ struct BandCell {
     double mass = 0.0;   ///< 该格 Σ swing（残余质量的**第二口径**：率之外还看幅度）
 };
 
+/// 六行的 ASCII 标签与展开顺序（低→高 × 低→高）。提到本头 = 静止态表与两把移动机位尺子
+/// **共用同一行序**（CJK 宽度会让 printf 的 %-Ns 错位，故表体用 ASCII + 表头图例）。
+inline const char* const kBandRowTag[6] = {
+    "dark x low", "dark x HIGH", "mid x low", "mid x HIGH", "clip x low", "clip x HIGH" };
+inline constexpr int kBandRowLb[6] = { 0, 0, 1, 1, 2, 2 };
+inline constexpr int kBandRowGb[6] = { 0, 1, 0, 1, 0, 1 };
+
+/// 敏感性组的削顶下界（闭式对应 ACES 输入 ≥3.0 / 5.2 / 9.0 / 真削顶 20+）。
+/// 提到本头 = 静止态与两把移动机位尺子**共用同一组敏感性档**（阈值不许各拍一套）。
+inline constexpr double kBandClipSensitivity[] = { 240.0, 248.0, 252.0, 255.0 };
+
 /// 亮度档（0=暗 1=中间调 2=近削顶）× 梯度档（0=低 1=高）的六格表。
 struct BandTable {
     BandCell cell[3][2];
@@ -269,6 +280,193 @@ struct BandTable {
  * 交付曝光下到不了（实测直方图随表回显）。敏感性另跑 248/252/255（lin ≥ 5.2/9.0/20）。
  */
 [[nodiscard]] int bandClipProxyByte(double lin);
+
+// ── 分带阈值（**单一出处**：静止态 `--bistro` 与两把**移动机位**尺子共用，不许在别处重拍）──
+// 每条的定法与理由见上面「亮度 × 梯度 二维分带」段；`bandClipProxyByte` 的闭式锚点被 selftest 钉住。
+inline constexpr double kBandClipProxyLinear = 3.0; ///< 近削顶 = ACES 输入 ≥3（「≫1」的下界）→ byte 240
+inline constexpr double kBandMidByte = 128.0;       ///< 暗/中间调 = 8bit 码字中点（显示域线性 0.2159）
+inline constexpr double kBandGradPct = 0.90;        ///< 高梯度 = 梯度 ≥p90（同 temporal_motion 默认）
+/// 「明显压不动」的分离倍数下限（批 13.7c 跑前写死；两把移动尺子的「超额集中在 B」沿用，不新拍）
+inline constexpr double kBandSupportRatio = 1.5;
+
+// ── 移动态 τ 的出处（2026-10-06 改定义，**两条尺子共用**）────────────────────────────
+//
+// **旧定义**：τ = 场景白电平（连拍均值线性 luma 的 p99）处 1 个显示 LSB 的线性跨度
+// （闭式 `lsbLinearAtLuma`）。它的毛病不是"闭式"，而是**闭式在错的地方**：1 个显示 LSB 是
+// 「交付面上恰好能分辨的两级」，而本判据的残差是**线性域 HDR luma 的 warp 残差**——那里
+// 1 LSB ≈ 0.0073，而实测同态往返地板（纯重采样就能造出的差）是 **0.34~0.44**，差 **46~60 倍**。
+// ⟹ 「超 τ」被地板彻底饱和（实测四率全 100.00%），分带表变成一张全 100% 的表。
+//
+// **新定义**：τ = **本次实测同态往返地板**（跨帧最大场）的 `kMovingTauFloorPct` 分位。
+// 为什么这个出处比闭式更对：地板是本测量的**零假设分布**（没有闪烁、只有重采样时残差长什么样），
+// 而"什么算超出噪声"的定义**必须**来自零假设，不能来自显示链的一个通用常数。
+// 为什么取 **p99** 而不是 p99.9/p99.99：零假设下每格的 over-τ 率恒等于 1−p（与格的面积**无关**），
+// 格间比较因此不被饱和主导；但 p 越高，小面积格（B 档常 < 1% 面积 = 720p 的 9.2k px）的期望
+// 计数越小（p99.9 时 B 档零假设期望只剩 9 px），份额数字会抖。p99 = 「1% 误报率」与
+// 「小格仍有 ~92 px 期望计数」的折中。⚠ 这条是**统计功效**的取舍，不是精度取舍，写死在此。
+inline constexpr double kMovingTauFloorPct = 0.99;
+
+// ── 移动机位分带的三分支判决（批 13.9；**跑前写死**，全文见 temporal_motion.cpp 与
+//    temporal_homography.cpp 各自头注释的「⭐ 判决线」段）───────────────────────────────
+//
+// 与静止态（批 13.7c）的**两处**口径升级，都是昨天那条真实缺口逼出来的：
+//  1. 判据的主数从「rate 比」换成 **幅度份额**（Σ残差 归一化）。`frac>τ` 是不加权像素计数：
+//     平坦中间调摆 1 LSB 与高光摆一大截各算一票，而高光是对比度最高处、同样绝对摆动**最看得见**。
+//     ⟹「我一直看到高亮在闪」与「高亮只占残余 0.5%」**可同时为真**。只有幅度份额能分辨
+//     「像素少但每像素摆动巨大」，故**只出计数份额 = 未完成**。
+//  2. 三个分支**全部命名**。昨天只给「支持」与「等比例否证」两端起了名字，真结果落在
+//     **反向分离**（B 被压得更狠）却只能报「分不出（未命名兜底支）」，读起来像「没有信号」。
+//     今天落进哪一支就照实报哪一支，**不许改判决线**。
+enum class MovingBandBranch {
+    /// 分支①「支持」：B（近削顶×高梯度）的**幅度份额** ≥ 30%，**或**正向超额集中在 B
+    /// （B 的 rate 比 ≥ 1.5 × A 的 rate 比）。⟹ 用户主张成立的方向：移动锯齿是高光专属。
+    Support,
+    /// 分支②「否证」：B 的幅度份额**与**计数份额**都** < 5%，且超额不向 B 集中。
+    /// ⟹ 移动锯齿不是高光专属。
+    Refute,
+    /// 分支③「分不出」：其余。出表处必须再报**性质**（三选一）：阈值没分开（附敏感性表）/
+    /// 两格本来同分布 / **反向分离**（超额集中在 A = 普通边缘，与用户主张方向相反）。
+    Indeterminate,
+};
+
+/// 判决线常量（**跑前写死**，出处 = 上面那段与两个 .cpp 的头注释）。
+inline constexpr double kMovingSupportAmpShare = 0.30; ///< 支持线：B 的幅度份额 ≥ 30%
+inline constexpr double kMovingRefuteShare = 0.05;     ///< 否证线：B 的幅度份额与计数份额都 < 5%
+
+/**
+ * 一格的四数。**四个都要有**（缺任何一个都会读错）：
+ * `share` 说这格多大 · `rate` 说这格内闪的比例 · `cntShare` 说全部 over-τ 像素里多少住在这格
+ * （**计数份额**，昨天口径：不加权）· `ampShare` 说全部残差**幅度**里多少住在这格
+ * （**幅度份额**，本次新增，用来堵可见性缺口）。
+ */
+struct BandShare {
+    double share = 0.0;    ///< 该格像素 / 全帧像素（面积份额）
+    double rate = 0.0;     ///< 该格 over-τ / 该格像素
+    double cntShare = 0.0; ///< 该格 over-τ / 全帧 over-τ（计数份额）
+    double ampShare = 0.0; ///< 该格 Σ残差 / 全帧 Σ残差（幅度份额）
+    int64_t pixels = 0, over = 0;
+    double mass = 0.0;
+};
+[[nodiscard]] BandShare bandShareOf(const BandTable& t, int lb, int gb);
+
+/**
+ * 出六格表（每格**四数**：share / rate>τ / 计数份额 / 幅度份额 + A/B 两格标注）。
+ *
+ * 为什么另开一份而不复用 `temporal_residual.cpp` 里那张静止态表：两列的**表头文字**不同
+ * （静止态那两张写的是「残余质量 / Σswing」，移动机位这边必须把「计数份额 / 幅度份额」这条
+ * 口径升级写在脸上，否则读表的人仍会只读第一列）。**计数只有一份实现**（`bandTableOf`），
+ * 这里只是出表；两处的表体数字口径逐字相同。
+ *
+ * @param residualName 被分带的观测量是什么（进表头，例：「warp 残差（TAA 关）」）
+ */
+void printMovingBandTable(const std::string& title, const BandTable& t,
+    const std::string& residualName);
+
+/// 三分支判决的执行（**只执行**，不解释成新规则；线在头注释里跑前写死）。
+[[nodiscard]] MovingBandBranch classifyMovingBand(
+    double ampShareB, double cntShareB, bool excessInB);
+[[nodiscard]] const char* movingBandBranchName(MovingBandBranch b);
+
+/// 「近空集」线：B 档面积份额低于此值 ⟹ 份额数字建立在极小样本上（0.5% ≈ 720p 的 4.6k px）。
+inline constexpr double kBandTinyAreaShare = 0.005;
+
+/**
+ * B 档（近削顶 × 高梯度）的**空洞性守卫** —— 判决之后必须紧跟的一句自曝。
+ *
+ * 为什么必须有（doorframe 实测逼出来的）：尺子 2 的亮度轴来自**超采样参考降采样后**的字节亮度，
+ * 1px 高亮细线在降采样里被面积平均掉 ⟹ 近削顶档**一个像素都没有**。此时「B 份额 < 5%」是
+ * **空洞成立**（前提无处落子），与「高光不闪」是两回事 —— 正是 phase13 记过的「验收被空洞满足」
+ * 那种假绿。空集与近空集分别出话，判决文字本身不改（线跑前写死），只追加性质说明。
+ *
+ * @param axisName 本尺子的亮度轴是什么（进文字，让读者知道是哪把尺子看不见）
+ */
+void printMovingBandVacuity(
+    const BandShare& bOff, const std::string& axisName, const std::string& extraNote = "");
+
+// ── 移动态「可测性」守卫（2026-10-06 用户拍板：守卫红 ⟹ 只报 Indeterminate，不出结论）──
+//
+// ## 为什么必须是**硬闸门**而不是警告
+//
+// `temporal_homography.cpp` 的 runHomography 里原本只有两条**只警告不拦截**的守卫（同态往返
+// 地板 + 反号残差）。实测后果（bistro 门框机位，sweep 0.5，2026-10-06 复现）：四条率全部
+// = **100.00%**、93.19% 像素 >1 LSB、残差贴着地板，而程序 **rc=0** 还打印了
+// 「分支②「否证」：移动锯齿不是高光专属」。一个连"残差是不是运动造成的"都没证明的测量，
+// 输出了一份看起来像结论的判决 —— 这正是 phase13 记的「验收被空洞满足」的**判决版**。
+//
+// ## 四条前提（缺一条 = 没有结论，不是"结论偏弱"）
+//
+// 1. **对齐自证**（本次的新守卫，理由见下面「为什么不是"搬到同一点"」）：把 warp 强度按
+//    α 缩放扫一遍，残差必须在 **α=1 附近取最小**、反号必须更差、且 α=0（不 warp）必须明显
+//    比 α=1 差。这三条合起来证明"残差确实是**被这次运动对齐消化掉的**"。
+// 2. **残差 > 地板**：地板 = 同态往返残差（warp 到某点再 warp 回同一点 = 真机重采样能造出的
+//    最小差）。残差贴着地板 ⟹ 量的是重采样本身，不是闪烁。
+// 3. **τ 高于地板**：τ 若低于地板，「超 τ」被地板饱和 ⟹ 占比恒 ~100%（上面实测正是如此）。
+// 4. **over-τ 率不饱和**（τ 那条的**实测**版本，直接看占比，不依赖量之间的比较）。
+//
+// ## ⚠ 为什么守卫 1 **不是**「把两帧 warp 到同一个点对拍」（本守卫第一版的设计错误，实测否决）
+//
+// 第一版把两帧各搬 Δψ/2 到中间视点对拍，要求差值塌下来。**它按构造不可能塌**：
+// 闪烁的定义就是「同一条边在**两个不同亚像素相位**上被各自独立光栅化出来的差」。
+// 把两帧几何对齐后，两张源图里那条边的**亮度差原封不动地跟着进来** ⟹ 自证值 ≈ 对照值。
+// 实测（Lanczos3 核，恒等性自检 0.000e+00 已确认核没抄错）：合成靶 edge 上只掉 **6.98%**、
+// bistro 门框只掉 **9.47%** —— 两个场景都"失败"，说明失败的是**判据**，不是场景。
+// 换句话说：这条守卫把「真有闪烁」的场景一律判成"不可测"，是**反向**的。
+//
+// 正确的问法是「**这份差值是不是被这次运动对齐消化掉的**」，而它有一个不依赖任何阈值的
+// 自证形式：残差作为 warp 强度 α 的函数必须在 α=1 处见底。α=0 就是原始帧差（没对齐），
+// α=−1 是反号；若运动是真的、闭式单应是对的，曲线就该在 α=1 见底。这条**能**绿（合成靶
+// 与 bistro 实测 resid(0)/resid(1) = 1.7 / 1.6），也**能**红（把 Δψ 写错、把符号搞反、
+// 扫速与画面都不符时当场红）。
+struct MovingGuards
+{
+    // 守卫 1：对齐自证（warp 强度扫描）
+    double residAt0 = 0.0;   ///< α=0 = 不 warp（= 原始帧差），对齐无效时的参照
+    double residAt1 = 0.0;   ///< α=1 = 按闭式 Δψ warp（= 本次残差）
+    double residAtNeg1 = 0.0;///< α=−1 = 反号假设
+    double bestAlpha = 0.0;  ///< 扫描中残差最小的 α
+    // 守卫 2：残差 vs 地板
+    double floorMean = 0.0;  ///< 地板：同态往返残差均值
+    double ratio = 0.0;      ///< residAt1/floorMean
+    // 守卫 ⓪：采集是否**活着**（2026-10-06 实测补：`env.intensity=0` 打在只吃天光的机位上
+    // 会把交付面整个关黑，帧差/残差/地板一起变 0；那不是「没有闪烁」，是「没有画面」）
+    double lumaMean = -1.0;   ///< 显示域字节亮度均值（0..255）；<0 = 本次未采（不判）
+    double byteMaxAdjacent = 0.0; ///< 相邻帧最大字节差 = 「相机真动了」的在场性自证
+    // 守卫 3/4：阈值与饱和
+    double tau = 0.0;        ///< 本次 τ
+    double tauFloor = 0.0;   ///< τ 的下界（= 本次实测地板的**中位数**）
+    double overRateAll = 0.0;///< 全帧 over-τ 率（零假设下应 ≈ 1−τ 分位，而不是 ~100%）
+    bool ok = false;         ///< 四条前提是否全过
+    std::string why;         ///< 不过时的人话原因（多条以「；」连，过则空）
+};
+
+/// 守卫 1a：α=0 的残差至少是 α=1 的多少倍才算「对齐真的消化掉了东西」。
+/// 1.5 = 与 `kBandSupportRatio` 同值同理由（本项目里「明显」一律取 1.5×，不各拍一套）。
+inline constexpr double kMovingGuardExplainRatio = 1.5;
+/// 守卫 1b：argmin 允许偏离 α=1 多远。0.25 = 半个扫速步（Δψ 的 1/4），再远就是"对不上"。
+inline constexpr double kMovingGuardAlphaTol = 0.25;
+/// 守卫 2：残差 / 地板 的最小倍数。
+inline constexpr double kMovingGuardFloorRatio = 1.5;
+/// 守卫 4：全帧 over-τ 率的**粗**上限 = 「全局饱和」的红线。
+/// 这条只干一件事：抓住旧口径那种「四率全 **100.00%**」的退化（τ 比地板低 46~60 倍时必然出现）。
+/// 为什么取 50% 而不是更严的 25%（本条第一版取 25%，实测门框机位 25.41% **贴线红**）：贴线的
+/// 阈值既抓不到新东西，又让正常读数随时可能翻红。50% 把「一半像素超」与「全都超」切开——
+/// 健康实测 ~25%、退化实测 100%，两侧都有 2 倍以上余量。
+/// ⚠ 它**不管**「单个格内饱和」——那是另一件事，由 `reportMovingBandsFromHomography` 里既有的
+///    `rateSaturated`（四格 rate 同贴 1.0 ⟹ 率比退化失效、方向不判）负责，两层不重复。
+inline constexpr double kMovingGuardMaxOverRate = 0.50;
+/// 守卫 ⓪a：交付面**平均亮度**（显示域 0..255）的下界。取 1.0 = 「八位面上连 1/255 都没有」，
+/// 只抓真死的采集，不误伤夜景（实测 `env.intensity=0` 打在门框机位：均值 = 0.00，全黑）。
+inline constexpr double kMovingGuardMinLuma = 1.0;
+/// 守卫 ⓪b：相邻帧最大字节差的下界。0 = 引擎一帧没换 / 相机根本没动（在场性自证，
+/// 出处 `temporal_flicker.cpp` 的 `byteMaxAdjacent`，与 `temporal-flicker` 同一条证据）。
+inline constexpr double kMovingGuardMinMotion = 1.0;
+
+/**
+ * @brief 守卫不过时的**唯一**合法输出：报 Indeterminate + 缺哪条前提，**不出任何分支结论**
+ *
+ * 调用方拿它当退出码（非 0）。判决线本身不改（跑前写死），这里只是**不让没资格的话说出口**。
+ */
+void printIndeterminate(const std::string& target, const MovingGuards& g);
 
 /// bistro 用户报障机位（**仓库资产**，改坐标 = 改口径）。
 ///

@@ -674,6 +674,7 @@ void printUsage()
         "--kernel = 批 13.8 输入侧重建核（0 双线性 / 1 CR 4×4 / 2 Lanczos3），**只作用于 TAA 开组**"
         "⟹ TAA 关组 = 闭式无 AA 锚点，跨核重测它必须不动（ζ 的主判据）\n"
         "  temporal-homography [--target edge] [--sweep 0.125] [--frames 16] [--out 前缀]"
+        " [--bands] [--env 1.0] [--ao 0.5]"
         "  **精确单应 warp 的逐像素闪烁归因图**：相机做原地绕 up 轴 yaw ⟹ 像面映射是纯旋转"
         "单应（与深度无关、对整幅画面精确），由 tan(Δψ)+焦距+主点**闭式**给出——零参考图、零"
         "对齐搜索、零 velocity buffer。把上一帧按它搬到本帧网格，剩下的差就是「搬不动的部分」"
@@ -786,7 +787,10 @@ int main(int argc, char** argv)
             return cmdTemporalHomography(P.get(args, "--target", "edge"),
                 std::stod(P.get(args, "--sweep", "0.125")),
                 std::stoi(P.get(args, "--frames", "16")),
-                P.get(args, "--out", ""));
+                P.get(args, "--out", ""), P.has(args, "--bands"),
+                // A/B 侧：负数 = 不覆写 = 交付配置原样（默认）。三个口径对拍才能把
+                // 「移动闪烁是 IBL 反射 / AO / 几何边 哪个驱动的」这个问题拆开。
+                std::stod(P.get(args, "--env", "-1")), std::stod(P.get(args, "--ao", "-1")));
         if (cmd == "aa-coverage")
             return cmdAaCoverage(P.get(args, "--variant", ""), std::stoi(P.get(args, "--warm", "32")),
                 std::stod(P.get(args, "--feedback", "0.12")), P.has(args, "--base-space"),

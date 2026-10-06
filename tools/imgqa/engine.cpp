@@ -139,6 +139,27 @@ void replaceValue(std::string& text, const std::string& file, const std::string&
     text.replace(at + head.size(), eol - (at + head.size()), newValue);
 }
 
+/// 交付配置模式：**限定在某个表内**改写 `key = 值`（`env.intensity` 这种）。
+/// 为什么不能直接用 `replaceValue`：`intensity` 在 scene.lua 里出现两次（`env.intensity`
+/// 与 `light.intensity`），`replaceValue` 取**第一个命中**——今天恰好是 env 那个，但那是
+/// **文档顺序**在替我们做决定。键不存在于该表内 = 抛（拒绝在旧值上下判据）。
+void replaceValueInBlock(std::string& text, const std::string& file, const std::string& block,
+    const std::string& key, const std::string& newValue)
+{
+    const std::string bhead = block + " = {";
+    const auto bpos = text.find(bhead);
+    if (bpos == std::string::npos)
+        throw std::runtime_error("交付配置 " + file + " 里没有表 `" + block + "`，无法覆写 " + key);
+    const std::string head = key + " = ";
+    const auto at = text.find(head, bpos);
+    if (at == std::string::npos)
+        throw std::runtime_error("交付配置 " + file + " 的 `" + block + "` 表里没有键 `" + key + "`");
+    const auto eol = text.find_first_of(",\n", at + head.size());
+    if (eol == std::string::npos)
+        throw std::runtime_error("交付配置 " + file + " 的键 `" + block + "." + key + "` 形状不认识");
+    text.replace(at + head.size(), eol - (at + head.size()), newValue);
+}
+
 /// 交付配置模式：把表值键 `key = { a, b }` 整体改写为 `key = { newContent }`。
 /// 为什么不能复用 `replaceValue`：它按第一个 `,` 或换行收尾，而表值**内部就有逗号**
 /// （`headless_size = { 1280, 720 }` ⟹ 截在 1280 后 = 留下 `720 },` = Lua 语法错）。
@@ -389,9 +410,28 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
         std::string dg = readFile(outDir + "/diagnostics.lua");
         replaceValue(dg, "diagnostics.lua", "rpc", "true");
         replaceValue(dg, "diagnostics.lua", "rpc_port", std::to_string(8788));
+        // ⚠ picking 覆写门在下面（同一个 dg 上继续改），所以这里**不**提前 writeFile
+
+        // 三个**显式门**（默认关 = 一个键都不多写）。开着的语义 = 这次跑的就是 A/B 的另一侧，
+        // 或需要 object_id 观测通道。见 ProfileOpts 的注释。
+        if (o.overridePicking)
+            replaceValue(dg, "diagnostics.lua", "picking", o.picking ? "true" : "false");
         writeFile(outDir + "/diagnostics.lua", dg);
 
         std::string sc = readFile(outDir + "/scene.lua");
+        if (o.overrideEnvIntensity) {
+            std::ostringstream v;
+            v << std::setprecision(9) << o.envIntensity;
+            // ⚠ 表名是 `environment`，**不是** `env`（实测第一版按 "env = {" 找，直接抛
+            //   「交付配置 scene.lua 里没有表 env」）。而键名在 shader/文档里一律叫 env，
+            //   正是这种"配置里叫 environment、口头叫 env"的错位最容易让覆写静默打偏。
+            replaceValueInBlock(sc, "scene.lua", "environment", "intensity", v.str());
+        }
+        if (o.overrideAoStrength) {
+            std::ostringstream v;
+            v << std::setprecision(9) << o.aoStrength;
+            replaceValueInBlock(sc, "scene.lua", "ao", "strength", v.str());
+        }
         rewriteTaaBlock(sc, o.taa, o.taaFeedback, o.taaJitterScale, o.taaBaseSpace,
             o.taaStaticBoost, o.taaStaticFeedback, o.taaMotionCompensation, o.taaReprojection,
             o.taaDiagReject, o.taaInputKernel);
@@ -706,6 +746,24 @@ std::string Engine::shot(const std::string& tag, const char* attachment)
     if (!fs::exists(p))
         throw std::runtime_error("/shot 返回的路径不存在: " + p.string());
     return p.string();
+}
+
+double Engine::cameraYawDegrees()
+{
+    auto res = impl_->http->Post("/camera", "{}", "application/json");
+    if (!res || res->status != 200)
+        throw std::runtime_error(
+            "POST /camera（只读回显）失败: " + (res ? std::to_string(res->status) : "无响应"));
+    return json::parse(res->body).at("camera").at("yawDegrees").get<double>();
+}
+
+void Engine::setCameraYaw(double yawDegrees)
+{
+    const json body{{"yawDegrees", yawDegrees}};
+    auto res = impl_->http->Post("/camera", body.dump(), "application/json");
+    if (!res || res->status != 200)
+        throw std::runtime_error("POST /camera(yawDegrees) 失败: "
+            + (res ? std::to_string(res->status) : "无响应"));
 }
 
 uint32_t Engine::frameCount()

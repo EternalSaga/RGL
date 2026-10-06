@@ -127,9 +127,17 @@ struct ProfileOpts {
     /// 交付配置 + 用户机位上是 **mad 1.688/255、逐像素最大 37、10.37% 像素 >2LSB**（红）。
     /// 差异不是噪声而是**另一个场景**：交付配置是 `variant = "deferred"` + `scale = 0.01`
     /// + izb_shadow + env/skybox/AO 全开，合成 profile 是 forward + 默认机位。
-    /// ⚠ 本模式生效时 `glb` / `envIntensity` / `skybox` / `aoStrength` / `shadowPass` /
-    ///   `lightDir` / `lightIntensity` / `exposure` / `picking` **全部被忽略**（真相在交付
-    ///   配置里，工具再抄一份就是第二份真相）；`variant` 留空 = 尊重交付配置自己写的路线。
+    /// ⚠ 本模式生效时 `glb` / `skybox` / `shadowPass` / `lightDir` / `lightIntensity` /
+    ///   `exposure` **全部被忽略**（真相在交付配置里，工具再抄一份就是第二份真相）；
+    ///   `variant` 留空 = 尊重交付配置自己写的路线。
+    ///
+    /// **三个例外**（`overridePicking` / `overrideEnvIntensity` / `overrideAoStrength`）：
+    /// 这三件事不是"工具再抄一份真相"，而是**A/B 实验本身**（关 IBL / 关 AO）与**测量所需的
+    /// 观测通道**（object_id 附件要 picking）。默认三个门全关 = 一个键都不多写 = 现有判据
+    /// 逐位不变；开了门才覆写，且覆写失败（键不存在）一律抛，**拒绝在旧值上下判据**。
+    bool overridePicking = false;       ///< true = 把 `diagnostics.picking` 写成 `picking`
+    bool overrideEnvIntensity = false;  ///< true = 把 `scene.lua` 的 `env.intensity` 写成 `envIntensity`
+    bool overrideAoStrength = false;    ///< true = 把 `scene.lua` 的 `ao.strength` 写成 `aoStrength`
     std::string deliveryConfigDir;
     /// 可选机位（**写进 profile 的 camera.lua**，从第 1 帧生效）。false = 不动 camera.lua。
     ///
@@ -224,6 +232,19 @@ public:
         double fovDegrees = 60.0;
     };
     void setCamera(const Camera& cam);
+
+    /**
+     * 读回引擎当前的 yaw（度）。`/camera` 的空 body = 只读回显。
+     *
+     * 为什么必须有：移动态采集用 `camera.lua frame_yaw` 驱动，yaw 是 `基准 + 每帧角 × 帧号`
+     * 的**纯函数**。要在这段运动的**中点姿态**上补拍 object_id，就得先知道基准 yaw 与当时的
+     * 帧号，才能把中点姿态算出来并用 RPC 精确落位。
+     */
+    [[nodiscard]] double cameraYawDegrees();
+
+    /// 只改 yaw（position/target/fov 不动）。RPC 写相机 = **重设基准**，之后 frame_yaw 从新基准
+    /// 继续推进 ⟹ 调用方要按「一次 /shot 会推进多少帧」预先补偿，见 captureFlickerSeries。
+    void setCameraYaw(double yawDegrees);
     /**
      * 运行期改一个滑杆（POST /param）。
      *

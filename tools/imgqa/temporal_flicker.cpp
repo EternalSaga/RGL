@@ -84,7 +84,8 @@ struct Group: FlickerSeries {
  */
 FlickerSeries captureFlickerSeries(const std::string& dir, const std::string& name, const std::string& tag,
     bool edgeTarget, const BistroCam* cam, bool taaOn, double yawRadPerFrame, int frames,
-    double kernel)
+    double kernel, bool wantBands, bool wantObjectId, double envIntensity, double aoStrength,
+    bool overrideEnv, bool overrideAo)
 {
     FlickerSeries g;
     g.name = name;
@@ -109,6 +110,25 @@ FlickerSeries captureFlickerSeries(const std::string& dir, const std::string& na
         tgt = cam->target;
         fov = cam->fov;
     }
+    // 材质归因要 object_id 附件 ⟹ diagnostics.picking 必须开。实测（2026-10-06）：开 picking
+    // **不扰动交付画面**（同机位同帧 picking 开/关截图逐位相同，921600 px 最大差 0），
+    // 所以它是一条**零侵入**的观测通道。合成靶没有 glb，材质名映射不出来，故只有 bistro 采。
+    if (wantObjectId && !edgeTarget) {
+        o.picking = true;
+        o.overridePicking = true;
+    }
+    // A/B 侧：env.intensity=0 关 IBL、ao.strength=0 关 AO。两个门都是**IEEE 精确**旁路
+    // （ao：tonemap 的 lerp(1,ao,0)≡1；env：model_pbr_ibl / light 的 diffuse+specular 都乘
+    // env.intensity）——但 ⚠ **天穹背景不受 env.intensity 影响**（skybox.frag.slang 与
+    // light.frag.slang 的 envSky 分支直接返回 env 采样、不乘 intensity），所以背景会**原样亮着**。
+    if (overrideEnv) {
+        o.envIntensity = envIntensity;
+        o.overrideEnvIntensity = true;
+    }
+    if (overrideAo) {
+        o.aoStrength = aoStrength;
+        o.overrideAoStrength = true;
+    }
     o.hasCamera = true;
     o.cameraPosition = pos;
     o.cameraTarget = tgt;
@@ -120,12 +140,42 @@ FlickerSeries captureFlickerSeries(const std::string& dir, const std::string& na
     g.liveFeedback = eng.paramValue("", kTaaFeedbackLabel);  // label 改名 ⟹ 抛，不静默
     eng.advanceFrames(static_cast<uint32_t>(kWarm));
     g.framePre = eng.frameCount();
+    // 中点姿态要能算出来，靠的是 yaw = 基准 + 每帧角 × 帧号 这个**纯函数**关系（camera.lua
+    // `frame_yaw`）。这里取 burst **之前**的 yaw 作锚点；「每帧角是不是真值」由尺子 1 的
+    // 对齐自证（残差在 α=1 见底）兜底——Δψ 错了那条守卫当场红。
+    const double yawPre = eng.cameraYawDegrees();
+    const double yawStepDeg = yawRadPerFrame * 180.0 / 3.14159265358979323846;
     const auto files = eng.shotBurst("screenshots", static_cast<uint32_t>(frames), tag + "_c");
     g.framePost = eng.frameCount();
+    cv::Mat idChk;  ///< 中点姿态补拍的彩色（落位自证用；比对**必须**等 g.luma 填完，见下面）
+    if (wantObjectId && !edgeTarget && frames >= 2) {
+        const double yawMid = yawPre + yawStepDeg * (1.0 + 0.5 * static_cast<double>(frames - 1));
+        // 标定「一次 /shot 会把 yaw 推进多少」：/shot 落在第几帧由 HTTP 时序决定，**不能假设**。
+        // 用同一种请求标定同一种请求，比数帧号可靠；标定与使用之间不夹任何别的写相机操作。
+        const double y1 = eng.cameraYawDegrees();
+        static_cast<void>(eng.shot(tag + "_calib"));
+        const double drift = eng.cameraYawDegrees() - y1;
+        eng.setCameraYaw(yawMid - drift);  // 预补偿：shot 会把 yaw 推回 yawMid
+        static_cast<void>(eng.shot(tag + "_objectid", "object_id"));
+        // 落位残差（度 → 像面 px：dx/dψ = f = (H/2)/tan(fov/2)，主点处）
+        const double fPx = static_cast<double>(kSize[1]) * 0.5
+            / std::tan(0.5 * static_cast<double>(kFovDeg) * 3.14159265358979323846 / 180.0);
+        g.yawErrPx = (eng.cameraYawDegrees() - yawMid) * 3.14159265358979323846 / 180.0 * fPx;
+        g.ids = decodeObjectId(readPngBgr(eng.shot(tag + "_objectid2", "object_id")));
+        // **落位自证**：同一姿态再补拍一张彩色，与 burst 各帧比。差最小者就是中点那一帧，
+        // 差值 ≈ 0 ⟺ 「RPC 落的姿态」与「frame_yaw 跑到中点的那一帧」是同一个姿态。
+        // 不为 0 也**不拦**（材质是慢变量，几 px 不改变归因），但必须回显，不许读者以为精确。
+        // ⚠ 这里只**拍**，比对要挪到函数末尾——`g.luma` 是后面逐帧解码时才填的，
+        //   在这里比会拿空 vector 比出「最佳帧 = −1、差 = 1e30」（实测踩过）。
+        eng.setCameraYaw(yawMid - drift);
+        idChk = readPngBgr(eng.shot(tag + "_idchk"));
+    }
     if (files.empty())
         throw std::runtime_error(name + "：/shotburst 一张都没拿到");
 
     cv::Mat prev;
+    // 分带尺子的累加器（`wantBands=false` 时一个字节都不多算，`temporal-flicker` 逐位今天）
+    cv::Mat byteSum, byteMax, gradMax;
     for (const auto& path: files) {
         cv::Mat bgr = cv::imread(path, cv::IMREAD_UNCHANGED);
         if (bgr.empty())
@@ -146,10 +196,61 @@ FlickerSeries captureFlickerSeries(const std::string& dir, const std::string& na
         Frame f;
         f.camera = { pos, tgt, fov };
         f.bgr = bgr;
-        prepareLinear(f);  // 复用，不另写解码
+        prepareLinear(f);  // 红线：复用，不另写解码
         g.luma.push_back(f.luma.clone());
+        if (wantBands) {
+            // 亮度轴 = **显示域字节**亮度的多帧均值（tonemap+sRGB 之后取 Rec.601 灰）。
+            // 为什么不是线性域：这一轴要的是「交付面上这块**看起来**是不是高光区」，而截图里
+            // 没有线性 HDR（ACES 已把 ≫1 压进 8bit）；「削顶」本来就是字节域的事件。口径与
+            // `temporal_residual.cpp` 的 bistro 分带逐字相同（同一算子只许一份实现）。
+            cv::Mat gray;
+            cv::cvtColor(f.bgr, gray, cv::COLOR_BGR2GRAY);
+            cv::Mat gd;
+            gray.convertTo(gd, CV_64FC1);
+            if (byteSum.empty()) {
+                byteSum = gd.clone();
+                byteMax = gd.clone();
+                gradMax = sobelAbsGrad(f.luma);  // 梯度轴主口径 = 线性 luma（与 gradEnergy 同算子）
+            }
+            else {
+                cv::add(byteSum, gd, byteSum);
+                cv::max(byteMax, gd, byteMax);
+                const cv::Mat g1 = sobelAbsGrad(f.luma);
+                cv::max(gradMax, g1, gradMax);  // **跨帧最大**：移动机位没有「相位平均」那张干净图
+            }
+        }
+    }
+    if (wantBands && !byteSum.empty()) {
+        byteSum /= static_cast<double>(g.luma.size());
+        g.byteMean = byteSum;
+        g.byteMax = byteMax;
+        g.gradMax = gradMax;
     }
     g.frameSize = g.luma.front().size();
+    if (!idChk.empty()) {
+        if (idChk.channels() == 4) {
+            std::vector<cv::Mat> ch;
+            cv::split(idChk, ch);
+            idChk = cv::Mat(ch[0].rows, ch[0].cols, CV_8UC3);
+            std::vector<cv::Mat> b3 = { ch[0], ch[1], ch[2] };
+            cv::merge(b3, idChk);
+        }
+        Frame fchk;
+        fchk.camera = { pos, tgt, fov };
+        fchk.bgr = idChk;
+        prepareLinear(fchk);
+        double best = 1e30;
+        for (size_t i = 0; i < g.luma.size(); ++i) {
+            cv::Mat d;
+            cv::absdiff(g.luma[i], fchk.luma, d);
+            const double v = cv::mean(d)[0];
+            if (v < best) {
+                best = v;
+                g.idBestFrame = static_cast<int>(i);
+            }
+        }
+        g.idBestDiff = best;
+    }
     return g;
 }
 

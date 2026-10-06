@@ -118,6 +118,57 @@
 // **两种结论都要照实说**——本判据不是用来证明「有 bug」的。
 // 支撑对照 = M3（消融）：它挂零 = 量具坏了（对齐/掩码/域坏掉时所有组会**一起**变成同一个
 // 无意义的数，而「M1/M0 ≈ 1」看起来仍像一个结论），整张表作废，不用它下画质结论。
+//
+// ══════════════════════════════════════════════════════════════════════════════════════
+// ## 批 13.9：【机位状态 = **相机移动**】亮度 × 梯度 二维分带（本命令 = 两把尺子里的**尺子 2**）
+//
+// ### 要判的假设（用户 2026-10-06）
+//
+// 「所有**移动**锯齿的来源都是 1px **高亮**直线；**普通边缘确实没锯齿**。」
+//
+// 昨天批 13.7c 给**静止机位**跨相位摆动加了同一套分带（判出「静止残余非高光专属」），但那条
+// 只覆盖静止态 —— 「**移动** × 亮度 × 梯度」这一格至今是空的，用户的主张既没证实也没否证。
+//
+// ### 为什么这条尺子大概最贴用户的原话
+//
+// 用户说的是「**锯齿**」。本命令已经有「候选图离『没有锯齿也不糊的 720p 图』有多远」这个
+// 定义级问题（参考 = 同机位序列 2560×1440 + TAA 关 → 线性域面积平均）。把它**逐像素化**并按
+// 亮度×梯度分带，问的就是：那些「偏离理想 720p」的像素，是不是住在近削顶×高梯度那一格？
+// 三张表：
+//   * `dev(TAA 关)` = 无 AA 单帧光栅的锯齿本体（**主表**，用户肉眼看到的就是这个）
+//   * `dev(TAA 开)` = 开 TAA 之后还剩的偏差
+//   * `max(dev(开) − dev(关), 0)` = **正向超额** = 「开 TAA 让哪里**更**偏离真值」（R=1.14 这个
+//     整体比值在二维上的展开；负的部分只报总量，不进分带 —— 分带要的是「超额住在哪」）
+//
+// ### ⚠ 分带尺子**必须来自参考图**（这条是昨天选择偏差的教训，与尺子 1 的口径差别就在这一点）
+//
+// 亮度档与梯度档都定在 **REFm（超采样那张）** 上，不定在候选上：参考定义了「这个像素**本来**
+// 是什么」，用被测量自己定档 = 用被测量选区域（批 13.7c 已因这种口径翻过一次方向）。
+// 具体：亮度轴 = REFm 显示域字节亮度的多帧均值（1440p 上求均值再 INTER_AREA 降到 720p 网格，
+// 与偏差图同网格才谈得上逐像素分带）；梯度轴 = `sobelAbsGrad(REFm.luma.front())` 的 **≥p90**
+// = **就是本命令已有的那条边缘带**（`--edge-pct 0.90`），一个阈值都不新拍。
+//
+// ### ⭐ 判决线（**2026-10-06 跑前写死**，防事后挑数；三分支全部命名）
+//
+// 记 A = 中间调×高梯度（普通几何边缘）、B = 近削顶×高梯度（假设的元凶）。
+// 主表 = `dev(TAA 关)`。每格出**四数**：share / rate>τ / **计数份额** / **幅度份额**。
+//
+// * **分支①「支持」** ⟺ B 的**幅度份额** ≥ 30%（`kMovingSupportAmpShare`）
+//   **或** 正向超额集中在 B：`rB ≥ 1.5 × rA`，`rX = rate_on(X)/rate_off(X)`
+//   （1.5 = 跑前沿用的 `kBandSupportRatio`，不新拍）。
+// * **分支②「否证」** ⟺ B 的幅度份额**与**计数份额**都** < 5%（`kMovingRefuteShare`）
+//   **且** 超额不向 B 集中。
+// * **分支③「分不出」** ⟺ 其余；出表处必须再报性质（三选一）：**阈值没分开**（附敏感性表）/
+//   **两格本来同分布** / **反向分离**（超额集中在 A = 普通边缘，与主张方向相反）。
+//
+// 三分支由 `classifyMovingBand` 执行（`temporal_residual.cpp`，两把尺子共用同一份）。
+// **幅度份额是本次新增的胜负手**：`frac>τ` 不加权，平坦中间调摆 1 LSB 与高光摆一大截各算一票，
+// 而高光是对比度最高处、同样绝对摆动最看得见 ⟹「我一直看到高亮在闪」与「高亮只占残余 0.5%」
+// 可同时为真。只出计数份额 = 未完成。
+//
+// ⚠ 本段**只出数 + 一句判决**，不产 Verdict、不进 rc：上面那三条判据（激励在场 / 对齐 / 消融）
+//   的 rc 语义不许被新表污染。既有 A/B 表与判决逐字不动。
+
 
 #include "imgqa.h"
 #include "temporal_residual.h"
@@ -221,6 +272,10 @@ struct Spec {
     /// >0 = 采集结束后做**同进程 `/param` A/B 探针**（把 feedback 改成这个值再拍一张同相位
     /// 的图）。只许跑在「静止机位 + jitter_scale>0」的组上，理由见采集处注释。
     double probeFeedback = -1.0;
+    /// true = 顺带攒「亮度 × 梯度」分带的**亮度轴尺子**（`byteMean`/`byteMax`，显示域字节亮度）。
+    /// 批 13.9 唯一消费者 = `temporal-motion` 的 REFm（分带尺子必须来自**参考图**，理由见文件头
+    /// 「批 13.9」段）。默认 false = 一字节不多算 = 其余组与 `temporal-feedback` 逐位今天。
+    bool wantBytes = false;
 };
 
 std::string d4(double v)
@@ -255,6 +310,12 @@ struct Group {
     cv::Size frameSize; ///< 统计用尺寸（参考组 = 降采样后，恒 1280×720）
     std::vector<cv::Mat> luma;
     std::vector<cv::Mat> alpha; ///< 掩膜组专用：PNG 的 alpha 通道（CV_8UC1）
+    /// 分带**亮度轴**尺子（`Spec::wantBytes` 才填）：显示域字节亮度（Rec.601 灰）的跨帧均值 /
+    /// 跨帧最大，**已降到 720p 统计网格**（与偏差图同网格才谈得上逐像素分带）。CV_64FC1，0..255。
+    cv::Mat byteMean, byteMax;
+    /// 第三把亮度轴：`byteMax` 的 **INTER_MAX** 降采样（每格峰值）。存在理由 = 面积平均会把
+    /// 1px 高亮线稀释掉（doorframe 实测近削顶档因此空集），敏感性表用它对照「看不见 vs 不闪」。
+    cv::Mat bytePeak;
     double byteMaxAdjacent = 0.0;  ///< 相邻帧最大字节差（运动激励在场性自证）
     uint32_t framePre = 0, framePost = 0;
     /// **引擎自己回显**的生效 feedback（`GET /state` 读回，不是写进 lua 的值）。
@@ -266,6 +327,42 @@ struct Group {
     double probeBytes = -1.0;
     double probeChangedPx = 0.0;  ///< 同上取「任一通道不同的像素占比」
 };
+
+/**
+ * 2×2 **峰值**池化（把原生分辨率的字节亮度轴降到统计网格）。
+ *
+ * 为什么手写：`cv::resize` 的 INTER_MAX 在 OpenCV 4.12 里**不存在**（`resize()` 只认
+ * NEAREST/AREA/LINEAR/CUBIC/LANCZOS4，其余一律 `CV_Error("Unknown interpolation method")`，
+ * 实测在 REFm 组崩过一次 rc=3）。而 INTER_AREA 是面积**平均** ⟹ 1px 高亮细线被邻居稀释
+ * （最坏 4 倍），恰好把「1px 高亮直线」这个假设的元凶从尺子上抹掉 —— 所以敏感性表需要一把
+ * 「这个统计像素的邻域里**曾经**有多亮」的轴，它必须是 max 而不是 mean。
+ *
+ * 只支持整数倍降采样（本项目 = 1440p→720p 恰好 2×）；非整数倍退回 INTER_NEAREST 并如实记录。
+ */
+cv::Mat maxPoolTo(const cv::Mat& src, cv::Size dst)
+{
+    if (src.empty() || dst.width <= 0 || dst.height <= 0 || src.cols % dst.width != 0
+        || src.rows % dst.height != 0) {
+        cv::Mat fallback;
+        cv::resize(src, fallback, dst, 0, 0, cv::INTER_NEAREST);
+        return fallback;  // 非整数倍：本函数不适用（调用方只有 2× 一条路），退回最近邻
+    }
+    const int sx = src.cols / dst.width, sy = src.rows / dst.height;
+    cv::Mat out(dst, CV_64FC1);
+    for (int y = 0; y < dst.height; ++y) {
+        double* drow = out.ptr<double>(y);
+        for (int x = 0; x < dst.width; ++x) {
+            double v = 0.0;
+            for (int dy = 0; dy < sy; ++dy) {
+                const double* r = src.ptr<double>(y * sy + dy) + x * sx;
+                for (int dx = 0; dx < sx; ++dx)
+                    v = std::max(v, r[dx]);
+            }
+            drow[x] = v;
+        }
+    }
+    return out;
+}
 
 /**
  * 跑一组：交付配置 → 起引擎 → 热身（空转不写盘）→ /shotburst 逐帧连续采集。
@@ -317,6 +414,8 @@ Group collectGroup(const std::string& dir, const std::string& name, const std::s
     g.framePost = eng.frameCount();
 
     cv::Mat prev;
+    cv::Mat byteSum, byteMax;  ///< `sp.wantBytes` 的累加器（**原生分辨率**，收尾才降网格）
+    int byteFrames = 0;
     for (size_t i = 0; i < files.size(); ++i) {
         cv::Mat img = cv::imread(files[i], cv::IMREAD_UNCHANGED);
         if (img.empty())
@@ -338,6 +437,25 @@ Group collectGroup(const std::string& dir, const std::string& name, const std::s
             g.byteMaxAdjacent = std::max(g.byteMaxAdjacent, cv::norm(d, cv::NORM_INF));
         }
         prev = bgr.clone();
+        if (sp.wantBytes) {
+            // 亮度轴尺子 = **显示域字节**亮度（tonemap+sRGB 之后取 Rec.601 灰）的跨帧均值/最大。
+            // 为什么不是线性域：这一轴要的是「交付面上这块**看起来**是不是高光区」，而截图里没有
+            // 线性 HDR（ACES 已把 ≫1 压进 8bit）；「削顶」本来就是字节域的事件。口径与
+            // `temporal_residual.cpp` 的 bistro 分带逐字相同（同一算子只许一份实现）。
+            cv::Mat gray;
+            cv::cvtColor(bgr, gray, cv::COLOR_BGR2GRAY);
+            cv::Mat gd;
+            gray.convertTo(gd, CV_64FC1);
+            if (byteSum.empty()) {
+                byteSum = gd.clone();
+                byteMax = gd.clone();
+            }
+            else {
+                cv::add(byteSum, gd, byteSum);
+                cv::max(byteMax, gd, byteMax);
+            }
+            ++byteFrames;
+        }
         if (!sp.attachment.empty())
             continue;  // 掩膜组：RGB 是 tonemap 前的 HDR 数据，不进偏差统计
         Frame f;
@@ -350,6 +468,28 @@ Group collectGroup(const std::string& dir, const std::string& name, const std::s
             cv::resize(luma, luma, cv::Size(kSize[0], kSize[1]), 0, 0, cv::INTER_AREA);
         }
         g.luma.push_back(std::move(luma));
+    }
+    if (sp.wantBytes && byteFrames > 0) {
+        // 亮度轴尺子必须与偏差图**同网格**才能逐像素分带 ⟹ 参考组（1440p）的字节均值按
+        // INTER_AREA 降到 720p。⚠ 这是「字节域的面积平均」，不是「降采样后重走显示链」；
+        // 档位只有三档（T_lo=128 / T_hi=240 的粗分），亚像素口径差别不改变归属，如实记录。
+        byteSum /= static_cast<double>(byteFrames);
+        cv::Mat mean, mx;
+        if (sp.refScale) {
+            cv::resize(byteSum, mean, cv::Size(kSize[0], kSize[1]), 0, 0, cv::INTER_AREA);
+            cv::resize(byteMax, mx, cv::Size(kSize[0], kSize[1]), 0, 0, cv::INTER_AREA);
+        }
+        else {
+            mean = byteSum;
+            mx = byteMax;
+        }
+        g.byteMean = mean;
+        g.byteMax = mx;
+        // ⚠ **第三把亮度轴**（doorframe 实测「近削顶档 = 0 像素」逼出来的敏感性口径）：
+        // INTER_AREA 是面积平均 ⟹ 1px 高亮细线被邻居稀释，恰好把假设的元凶从尺子上抹掉。
+        // 峰值轴回答「这个统计像素的邻域里**曾经**有多亮」，与主表（均值轴）的差 = 降采样
+        // 本身看不见多细的线。只作敏感性，不换主表。
+        g.bytePeak = maxPoolTo(byteMax, cv::Size(kSize[0], kSize[1]));
     }
     const bool empty = sp.attachment.empty() ? g.luma.empty() : g.alpha.empty();
     if (empty)
@@ -644,6 +784,185 @@ PhaseFit fitJitterPhase(const Group& g, const Group& ref, const Alignment& al,
 
 }  // namespace
 
+// ── 批 13.9：【机位状态 = **相机移动**】亮度 × 梯度 二维分带（尺子 2）───────────────────
+//
+// 要判的假设、三张表各是什么、尺子为什么必须来自参考图、⭐ 判决线（**跑前写死**）全文 =
+// 本文件头注释「批 13.9」段。这里只放执行代码；改判决线 = 改判据，两处一起改。
+namespace {
+
+/**
+ * 逐像素偏差图 = 跨帧平均的 `|候选 − 参考（按帧号配对到同一视点）|`（线性域，CV_64FC1）。
+ *
+ * 与 `measureDeviation` 的关系：那条把这张图**压成一个数**（边缘带上的均值），本函数保留
+ * 整张图供分带。两者是同一口径（同一配对、同一线性域、同一绝对值），只是一个求值一个成图
+ * ——「表上的边缘偏差」与「分带表里边缘带的贡献」因此必然自洽。
+ */
+cv::Mat movingDevMap(const std::vector<cv::Mat>& cand, const Group& ref, const Alignment& al)
+{
+    cv::Mat acc = cv::Mat::zeros(cand.front().size(), CV_64FC1);
+    int frames = 0;
+    for (size_t i = 0; i < cand.size() && i < ref.luma.size(); ++i) {
+        cv::Mat d;
+        cv::absdiff(cand[i], ref.luma[static_cast<size_t>(al.pairIndex[i])], d);
+        cv::add(acc, d, acc);
+        ++frames;
+    }
+    acc /= static_cast<double>(std::max(1, frames));
+    return acc;
+}
+
+/// 出三张六格表（dev 关 / dev 开 / 正向超额）+ 三分支判决 + 敏感性。返回判决文字供台账。
+std::string reportMovingBandsAgainstReference(const Group& ref, const cv::Mat& grad,
+    double gradThr, double tau, const cv::Mat& devOff, const cv::Mat& devOn,
+    const std::string& cameraName)
+{
+    std::printf("\n── 【机位状态 = **相机移动**】亮度 × 梯度 二维分带（尺子 2：对超采样参考的"
+                "逐像素偏差；机位 %s）──\n",
+        cameraName.c_str());
+    if (ref.byteMean.empty() || grad.empty() || devOff.empty()) {
+        std::printf("  ✗ 尺子缺失（REFm 的字节亮度没攒到 = 采集侧 wantBytes 没开），分带表未出\n");
+        return "未出（尺子缺失）";
+    }
+    const double tHi = static_cast<double>(bandClipProxyByte(kBandClipProxyLinear));
+    std::printf("  分带尺子**来自参考图 REFm**（超采样那张）：参考定义了「这个像素**本来**是什么」，"
+                "用被测量自己定档 = 用被测量选区域（昨天已因此翻过一次方向）\n");
+    std::printf("    亮度轴 = REFm 显示域字节亮度的多帧均值（1440p 求均值后 INTER_AREA 降到 720p）；"
+                "T_lo=%.0f · T_hi=%.0f（**闭式**：ACES 输入 ≥%s）\n",
+        kBandMidByte, tHi, d4(kBandClipProxyLinear).c_str());
+    // 梯度轴**回显实际分位**（不是写死 p90）：调用方可以 --edge-pct 改档，写死会让表说谎。
+    std::vector<double> gv = valuesInMask(grad, {});
+    std::sort(gv.begin(), gv.end());
+    const double gradPct = gv.empty() ? 0.0
+        : static_cast<double>(
+              std::lower_bound(gv.begin(), gv.end(), gradThr) - gv.begin())
+            / static_cast<double>(gv.size());
+    std::printf("    梯度轴 = sobelAbsGrad(REFm 线性 luma) ≥ %s（= 参考梯度的 p%.2f，**就是本命令"
+                "已有的那条边缘带**，一个阈值都不新拍）\n",
+        d4(gradThr).c_str(), gradPct);
+    std::printf("    τ = %s（= 上面判据用的同一个 τ，白电平 p99 处 1 个显示 LSB，闭式）\n",
+        d4(tau).c_str());
+
+    const BandTable tOff = bandTableOf(devOff, ref.byteMean, grad, kBandMidByte, tHi, gradThr, tau);
+    const BandTable tOn = bandTableOf(devOn, ref.byteMean, grad, kBandMidByte, tHi, gradThr, tau);
+    cv::Mat excess;
+    cv::subtract(devOn, devOff, excess);
+    cv::max(excess, 0.0, excess);  // **正向**超额 = 开 TAA 让这里更偏离真值；负的部分不进分带
+    const BandTable tExc = bandTableOf(excess, ref.byteMean, grad, kBandMidByte, tHi, gradThr, tau);
+    if (!tOff.valid() || !tOn.valid() || !tExc.valid()) {
+        std::printf("  ✗ 分带表无像素（total=0），不出数\n");
+        return "未出（无像素）";
+    }
+    printMovingBandTable("dev(TAA 关) —— 无 AA 单帧光栅的锯齿本体（**主表**）", tOff,
+        "对超采样参考的逐像素偏差（TAA 关）");
+    printMovingBandTable("dev(TAA 开) —— 开 TAA 之后还剩的偏差", tOn,
+        "对超采样参考的逐像素偏差（TAA 开）");
+    printMovingBandTable("max(dev(开) − dev(关), 0) —— **正向超额**：开 TAA 让哪里更偏离真值", tExc,
+        "偏差差图的正部");
+
+    const BandShare aOff = bandShareOf(tOff, 1, 1), aOn = bandShareOf(tOn, 1, 1);
+    const BandShare bOff = bandShareOf(tOff, 2, 1), bOn = bandShareOf(tOn, 2, 1);
+    const BandShare bExc = bandShareOf(tExc, 2, 1), aExc = bandShareOf(tExc, 1, 1);
+    const double rA = aOff.rate > 0.0 ? aOn.rate / aOff.rate : 0.0;
+    const double rB = bOff.rate > 0.0 ? bOn.rate / bOff.rate : 0.0;
+    const bool excessInB = rA > 0.0 && rB >= kBandSupportRatio * rA;
+    // ⚠ **率比退化闸门**（与尺子 1 同一条，实测逼出）：移动机位下 `frac>τ` 会饱和，四格 rate
+    // 双双贴 100% 时 rX 的分子分母同贴 1.0，rB/rA 只剩浮点噪声 ⟹ 饱和时**方向不判**。
+    const double kSat = 0.90;
+    const bool rateSaturated = aOff.rate > kSat && bOff.rate > kSat && aOn.rate > kSat
+        && bOn.rate > kSat;
+    // rB/rA 的相对差（判据线要求的是 ≥50% 的分离，故这个数远小于 0.5 时「方向」根本没有内容）。
+    const double relDiff = std::abs(rB - rA) / std::max({ rA, rB, 1e-12 });
+
+    // 正/负超额的**总量**（读「R=1.14 这个整体比值在二维上展开成了什么」的守恒检查）
+    const double posMass = cv::sum(excess)(0);
+    cv::Mat deficit;
+    cv::subtract(devOff, devOn, deficit);
+    cv::max(deficit, 0.0, deficit);
+    const double negMass = cv::sum(deficit)(0);
+
+    std::printf("\n  正向超额合计 Σ=%.4f ｜ 反向（开 TAA 更贴真值）合计 Σ=%.4f ｜ 净 = %+.4f"
+                "（>0 ⟺ 全帧平均上开 TAA 更偏离参考，与 R>1 同向）\n",
+        posMass, negMass, posMass - negMass);
+    std::printf("  率比 rX = rate_on(X)/rate_off(X)（该格 over-τ 比例开 TAA 后翻几倍）\n");
+    std::printf("    A 中间调×高梯度 rate %s → %s（×%s）  B 近削顶×高梯度 rate %s → %s（×%s）\n",
+        pct2(aOff.rate).c_str(), pct2(aOn.rate).c_str(), d4(rA).c_str(),
+        pct2(bOff.rate).c_str(), pct2(bOn.rate).c_str(), d4(rB).c_str());
+    std::printf("    B 幅度份额（主表 dev 关）%s ｜ B 在**正向超额**里的幅度份额 %s（面积只占 %s）"
+                "｜ A 在正向超额里的幅度份额 %s（面积占 %s）\n",
+        pct2(bOff.ampShare).c_str(), pct2(bExc.ampShare).c_str(),
+        pct2(bExc.share).c_str(), pct2(aExc.ampShare).c_str(),
+        pct2(aExc.share).c_str());
+    if (rateSaturated)
+        std::printf("    ⚠ **率比在本场景退化失效**：四格 rate 全部 > %.0f%%（`frac>τ` 饱和）⟹ rX 的"
+                    "分子分母同贴 1.0，rB/rA 的相对差只有 %s ——**方向不判**，只看幅度份额与超额表\n",
+            kSat * 100.0, d4(relDiff).c_str());
+
+    const MovingBandBranch branch
+        = classifyMovingBand(bOff.ampShare, bOff.cntShare, excessInB);
+    std::printf("\n  ⭐ 判决（线**跑前写死**：支持 = B 幅度份额 ≥ %s 或 rB ≥ %s×rA；"
+                "否证 = B 两份额都 < %s 且超额不向 B 集中）\n",
+        pct2(kMovingSupportAmpShare).c_str(), d4(kBandSupportRatio).c_str(),
+        pct2(kMovingRefuteShare).c_str());
+    std::printf("    支撑格数字：B 幅度份额 %s（支持线 %s / 否证线 %s）· B 计数份额 %s · "
+                "rB/rA = %s · 超额集中在B = %s\n",
+        pct2(bOff.ampShare).c_str(), pct2(kMovingSupportAmpShare).c_str(),
+        pct2(kMovingRefuteShare).c_str(), pct2(bOff.cntShare).c_str(),
+        rA > 0.0 ? d4(rB / rA).c_str() : "inf", excessInB ? "是" : "否");
+    std::printf("    ⟹ **%s**\n", movingBandBranchName(branch));
+    printMovingBandVacuity(bOff, "REFm 超采样参考 INTER_AREA 降到 720p 后的字节亮度均值",
+        "REFm 是 2560×1440 超采样图，亮度轴经 **INTER_AREA（面积平均）** 降到 720p 网格 ⟹ "
+        "1px 高亮细线被邻居稀释（最坏 4 倍），**假设的元凶可能正好被尺子自己抹掉**。"
+        "下面敏感性表的「亮度轴=原生格峰值」行就是量这件事的：若近削顶档在空集/非空之间翻，"
+        "则「看不见」是降采样口径问题，不是「高光不闪」");
+    // 分支③的**性质**也必须命名（昨天缺的就是这个）：方向 + 敏感性两条一起读。
+    if (rateSaturated)
+        std::printf("    分离方向：**不判**（rate 饱和；rB/rA 相对差 %s，而判据线要的是 ≥50%% 的分离"
+                    "⟹ 方向这一维在本场景没有内容）——用户主张要求 rB > rA，但本场景 rate 轴没有"
+                    "分辨力，方向问题由**幅度份额**与**正向超额表**回答\n",
+            d4(relDiff).c_str());
+    else
+        std::printf("    分离方向：rB %s rA ⟹ %s（用户主张要求的是 rB > rA：B 比 A 更压不动）\n",
+            rB < rA ? "<" : (rB > rA ? ">" : "="),
+            rB < rA ? "**反向分离**（B 比 A 压得更狠，与主张方向相反）"
+                    : (rB > rA ? "B 压得没那么狠（方向与主张一致，幅度见上）" : "两格同倍数"));
+
+    // ── 敏感性（同一次采集换阈值，零额外引擎成本）。判「分不出」时的分工：换档结论跟着翻
+    //    = **阈值没分开**；怎么换都不翻 = **两格本来同分布**。
+    std::printf("\n  ── 敏感性（同一次采集换阈值；主档 = 上面那张）──\n");
+    std::printf("    %-24s %12s %12s %16s %16s\n", "口径", "A 率比", "B 率比",
+        "B 幅度份额(dev关)", "B 幅度份额(超额)");
+    const auto sensLine = [&](const std::string& tag, const cv::Mat& lm, const cv::Mat& gm,
+                                  double tl, double th, double gthr) {
+        const BandTable o = bandTableOf(devOff, lm, gm, tl, th, gthr, tau);
+        const BandTable n = bandTableOf(devOn, lm, gm, tl, th, gthr, tau);
+        const BandTable e = bandTableOf(excess, lm, gm, tl, th, gthr, tau);
+        const BandShare a1 = bandShareOf(o, 1, 1), a2 = bandShareOf(n, 1, 1);
+        const BandShare b1 = bandShareOf(o, 2, 1), b2 = bandShareOf(n, 2, 1);
+        const double ra = a1.rate > 0.0 ? a2.rate / a1.rate : 0.0;
+        const double rb = b1.rate > 0.0 ? b2.rate / b1.rate : 0.0;
+        std::printf("    %-24s %12s %12s %15s %15s\n", tag.c_str(), d4(ra).c_str(),
+            d4(rb).c_str(), pct2(bandShareOf(o, 2, 1).ampShare).c_str(),
+            pct2(bandShareOf(e, 2, 1).ampShare).c_str());
+    };
+    for (double th : kBandClipSensitivity)
+        sensLine("T_hi=" + std::to_string(static_cast<int>(th))
+                + (std::abs(th - tHi) < 0.5 ? "（主档）" : ""),
+            ref.byteMean, grad, kBandMidByte, th, gradThr);
+    sensLine("梯度轴=线性 p75", ref.byteMean, grad, kBandMidByte, tHi,
+        percentileOf(gv, 0.75));
+    sensLine("梯度轴=线性 p95", ref.byteMean, grad, kBandMidByte, tHi, percentileOf(gv, 0.95));
+    sensLine("亮度轴=跨帧最大", ref.byteMax, grad, kBandMidByte, tHi, gradThr);
+    sensLine("亮度轴=原生格峰值", ref.bytePeak, grad, kBandMidByte, tHi, gradThr);
+    sensLine("T_lo=96", ref.byteMean, grad, 96.0, tHi, gradThr);
+    sensLine("T_lo=160", ref.byteMean, grad, 160.0, tHi, gradThr);
+    std::printf("    读法：换档后「B 幅度份额」跟着翻过 %s / %s 两条线 = **阈值没分开**；"
+                "怎么换都不翻 = **两格本来同分布**\n",
+        pct2(kMovingRefuteShare).c_str(), pct2(kMovingSupportAmpShare).c_str());
+    return movingBandBranchName(branch);
+}
+
+}  // namespace
+
 int cmdTemporalMotion(const std::string& cameraName, const std::string& motion,
     double angleDeg, int burst, int warm, int warmStill, double edgePercentile)
 {
@@ -719,6 +1038,7 @@ int cmdTemporalMotion(const std::string& cameraName, const std::string& motion,
     m4.warm = warmStill;
     Spec refm = m0;
     refm.refScale = 1;
+    refm.wantBytes = true;  // 批 13.9：分带尺子的**亮度轴**只能来自参考图（理由见文件头）
     Spec refs = m4;
     refs.taa = false;
     refs.refScale = 1;
@@ -977,13 +1297,32 @@ int cmdTemporalMotion(const std::string& cameraName, const std::string& motion,
     std::printf("  ★ 口径边界：AO 的 1440p/720p 差异是各组共用的偏差地板，只出比值结论；"
                 "spin 模式（--motion spin）另量「静止机位 + 动物」，两者不可互推\n");
 
+    // ── 批 13.9：【机位状态 = 相机移动】亮度 × 梯度 二维分带（**只出数 + 一句判决**）──────
+    // 不产 Verdict、不进 rc：上面三条判据（激励在场 / 对齐 / 消融）的 rc 语义不许被新表污染。
+    std::string bandVerdict = "未出";
+    {
+        // 差图的两边各自按**自己组**的对齐配对（与上面 devEdge 的口径一致）。两侧配对若不同，
+        // 差图里就掺进一个跨配对项 ⟹ 必须回显有多少帧配到了不同的参考帧（自曝，不藏）。
+        int pairMismatch = 0;
+        for (size_t i = 0; i < aM0.pairIndex.size() && i < aM1.pairIndex.size(); ++i)
+            pairMismatch += aM0.pairIndex[i] == aM1.pairIndex[i] ? 0 : 1;
+        std::printf("  ★ 分带用图：dev(关) 配对偏移 %+d、dev(开) 配对偏移 %+d，逐帧配对不同的有 "
+                    "%d/%zu 帧（差图里掺的跨配对项就来自这些帧）\n",
+            aM0.offset, aM1.offset, pairMismatch, aM0.pairIndex.size());
+        const cv::Mat devOffMap = movingDevMap(gM0.luma, gRefm, aM0);
+        const cv::Mat devOnMap = movingDevMap(gM1.luma, gRefm, aM1);
+        bandVerdict = reportMovingBandsAgainstReference(gRefm, grad, tauEdge, tau, devOffMap,
+            devOnMap, cameraName);
+    }
+
     logCall("temporal-motion",
         {{"camera", cameraName}, {"motion", motion},
             {"angleDeg", std::to_string(angleDeg)}, {"burst", std::to_string(burst)},
             {"warm", std::to_string(warm)}, {"warmStill", std::to_string(warmStill)},
             {"edgePct", std::to_string(edgePercentile)}, {"R", d4(R)},
             {"R_still_ref", d4(Rbest)}, {"rejectM1", d4(rsM1.rejected())},
-            {"rejectM4", d4(rsM4.rejected())}},
+            {"rejectM4", d4(rsM4.rejected())},
+            {"movingBandVerdict", bandVerdict}},
         vs);
     bool allOk = true;
     for (const auto& v : vs)
