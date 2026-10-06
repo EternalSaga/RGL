@@ -665,7 +665,14 @@ void printUsage()
         "B2/B3/B4 吃同一臂，ρ 同口径可比）；0 = 门关 = 不写键 = 交付配置原样\n"
         "  taa-swim [--pairs 32] [--warm 32] [--variant forward]  真实场景逐帧差是否=整幅亚像素"
         "平移（游动）；含基空间门（批 13.2 T5/T6）与量具阳性锚点（批 13.1b）\n"
-        "  temporal-motion [--camera doorframe] [--motion camera] [--angle 0.2] [--burst 32]"
+        "  temporal-tail [--camera brickfence] [--angle 0.3] [--burst 64] [--warm 64] [--max-lag 24]"
+" [--tau 0.05]  批 13.13 **鬼影尾长直测**（债-63 的出口）：静止机位 + 场景 spin，参考 = 同一次"
+" spin 的「TAA 关 + jitter_scale=0」渲染（基位置真值），配对 = **引擎帧计数器之差**（整数常量，"
+"**零图像配准**——`temporal-motion` 那两条常红的对齐护栏在这里根本不存在）。主指标"
+" `frac = mean|out−ref| ÷ mean|N−S|`（无量纲鬼影份额；关盒时闭式 = 1−α）。四条判决线跑前写死"
+"（pairing ≤0.02 / events ≥2000 且静止反向 ≤20 / 关盒 > 臂 0 / 长窗必须上升），**红一条即不许"
+"报臂间结论**。τ 是唯一自由阈值 ⟹ 输出自带三档敏感性表\n"
+"  temporal-motion [--camera doorframe] [--motion camera] [--angle 0.2] [--burst 32]"
         " [--warm 16] [--warm-still 64] [--edge-pct 0.90]  **相机运动下 TAA 抗了什么锯齿**："
         "--motion camera（默认）= 相机帧驱动 yaw（camera.lua frame_yaw，= 用户报障的运动源；"
         "angle=角度×帧号，纯函数）；--motion spin = 场景旋转相机不动（债-49 鬼影仪器）。"
@@ -790,6 +797,11 @@ int main(int argc, char** argv)
                 std::stod(P.get(args, "--edge-pct", "0.90")),
                 std::stod(P.get(args, "--boost", "0")), std::stod(P.get(args, "--clip", "0")),
                 std::stod(P.get(args, "--clip-soft", "1")));
+        if (cmd == "temporal-tail")
+            return cmdTemporalTail(P.get(args, "--camera", "brickfence"),
+                std::stod(P.get(args, "--angle", "0.3")), std::stoi(P.get(args, "--burst", "64")),
+                std::stoi(P.get(args, "--warm", "64")), std::stoi(P.get(args, "--max-lag", "24")),
+                std::stod(P.get(args, "--tau", "0.05")));
         if (cmd == "temporal-feedback") {
             std::vector<double> fbs;
             std::stringstream fs(P.get(args, "--fb", "0.02,0.05,0.12,0.25,0.5,0.8,1.0"));

@@ -178,6 +178,7 @@
 #include <cstdio>
 #include <initializer_list>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <set>
@@ -1983,6 +1984,314 @@ int cmdTemporalFeedback(const std::string& cameraName, double angleDeg, int burs
     bool allOk = true;
     for (const auto& v : vs)
         allOk &= v.ok;
+    return allOk ? 0 : 1;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 批 13.13 `temporal-tail`：**鬼影尾长直测**（债-63 的出口）
+// ══════════════════════════════════════════════════════════════════════════════
+//
+// ## 为什么必须有这条（问题本体）
+//
+// 整个臂族（8/9/10/11）的交付裁决原本压在 `temporal-motion --motion spin` 的鬼影读数上，
+// 而那条仪器**过不了自己的守卫**（alignment 余量 0.000065 ≪ 0.02、ablation 1.492 < 1.5），
+// `调试历史.md:2521` 早就写着「那张表不可信」⟹ 债-63：臂 0/8/9/10 的鬼影数字**全部作废**。
+// 本条是它的出口，设计目标只有一条：**整条链上不出现任何图像配准**。
+//
+// ## 为什么这里可以不对齐（而 temporal-motion 必须对齐）
+//
+// 运动源 = **场景 spin**、相机**静止** ⟹ 屏幕像素与世界格点的对应不随时间变（动的只有内容）。
+// 于是「候选第 i 帧」与「参考第 i 帧」比的是**同一个屏幕像素**，不存在两个视点要配准。
+// 跨进程的**绝对帧号偏移**由引擎自己的计数器消掉：spin 角 = `spin_frame_angle × 帧号` 是纯函数，
+// 而每组 burst 的起始帧号 = `Engine::frameCount()` 回显 ⟹ 偏移是一个**整数常量**，
+// 零阈值、零 argmin。（temporal-motion 那边相机在动，第 i 帧与第 j 帧是不同视点，只能图像
+// 配准 + 余量护栏——而那两条护栏正是它常红的地方。换运动源 = 换掉判据里最脆的那一层。）
+//
+// ## 参考 = 同一次 spin、TAA 关、**jitter_scale = 0**
+//
+// TAA 关 ⟹ 没有历史 ⟹ 每帧就是「这个像素此刻该是什么」的真值（不需要基线图像）。
+// ⚠ **参考必须关抖动**：候选开 `base_space` ⟹ 它交付的是**基位置**样本；参考若带抖动就是
+//   抖动位置渲染 ⟹ 边缘上凭空多出 ≤0.5px 错位，而 1px 高亮细线正是本判据的激励源。
+//   候选侧照旧开抖动（被测项的动力学必须真实），两边在**基位置**上对齐。
+//
+// ## 主指标 = 归一化鬼影份额 frac（无量纲）
+//
+// 「刚让开」事件 (p, j)，记 `d_j(p) = |ref_j(p) − ref_{j−1}(p)|`：
+//   `d_j > τ` **且** `d_{j−1} ≤ τ`（**刚**让开，不是一直在动）
+//   **且** `d_{j+1..j+K} ≤ τ`（让开后内容稳住；否则第 k 帧的残差混的是**新**鬼影）
+//
+//     frac = mean_j |out_j(p) − ref_j(p)|  ÷  mean |ref_j(p) − ref_{j−1}(p)|
+//
+// 分母 = 这次让开的内容变化量 `|N − S|` ⟹ frac **无量纲**、跨机位/跨场景可比，且有闭式锚点：
+// 盒全关（臂 1）时 `out_j = α·N + (1−α)·S` ⟹ **frac = 1 − α**（α = 生效的本帧权重）。
+// 盒起效就是把历史拽回盒边界 ⟹ frac < 1 − α。**越小越好，0 = 无鬼影。**
+//
+// ## 判决线（跑前写死，四条 AND；红一条就不许报结论）
+//
+//  1. `temporal-tail-pairing` **零锚点**：Z = TAA 开 + `feedback = 1` + `jitter_scale = 0`。
+//     α=1 ⟹ `lerp(·, cur, 1) ≡ cur`；抖动 0 ⟹ `baseUv ≡ input.uv` ⟹ 采样是恒等映射
+//     ⟹ Z 与参考只差一次 Reinhard 往返（<1e-3）。**线：frac(Z) ≤ 0.02**。
+//     为什么这条最硬：配对错开一帧 ⟹ spin 已把内容搬走 ⟹ frac 立刻跳到 0.3+ 量级。
+//     0.02 与 0.3 之间没有中间地带 ⟹ 它同时守「帧号配对正确」与「残差算子零点正确」。
+//  2. `temporal-tail-events` **在场性 + 反向**：spin 组让开事件数 ≥ 2000（太少 ⟹ frac 是噪声）；
+//     反向 = 把**静止**参考（spin=0）自己配自己喂进同一个算子，事件数**必须 ≤ 20**
+//     ——检测器在静止内容上点火 = 它检测的是噪声不是让开，整张表作废。
+//  3. `temporal-tail-box-load` **阳性锚点**：同 boost 下**关盒（臂 1）frac 必须 > 臂 0**。
+//     不成立 ⟹ 邻域盒在鬼影上**没承重** ⟹ 整个臂族「为压鬼影而牺牲闪烁」的前提被推翻，
+//     那时正确处置是**关盒**而不是继续修盒。这是本判据最想要的那种红。
+//  4. `temporal-tail-monotone` **量具有力气**：关盒态下把 α 从 0.12 推到 boost 0.01
+//     （唯一变量 = 窗长）frac 必须**上升**（闭式：1−α 从 0.88 → 0.99）。
+//     不升 ⟹ frac 量的不是历史长度，四条判据全绿也不许报「臂间差异」。
+//
+// ⚠ **τ 是唯一自由阈值**（默认线性 luma 0.05 ≈ 7.5 个显示 LSB）⟹ 必须出 0.02/0.05/0.10
+//    三档敏感性表；三档方向不一致 = 不许出结论。
+// ⚠ 跨进程渲染确定性不是逐位（bistro 上 `G0 确定性地板` 已知常红，1 LSB / 个位数像素，债-61）。
+//    它给 frac 加的是**加性**噪声，而分子分母都是跨十万像素的均值 ⟹ 影响在 1e-3 量级，
+//    被判决线 1 的 0.02 吸收。
+// ⚠ **单实例串行**：每组一个引擎进程，前一组没退干净不起下一组（并行双实例污染测量，已烧过）。
+
+namespace {
+
+/// 一个臂在某一 τ 下的尾长读数。
+struct TailRow {
+    std::string tag;
+    double clip = 0.0;
+    double events = 0.0;
+    double meanChange = 0.0;  ///< mean|N − S|（线性 luma，无量纲化的分母）
+    double frac = 0.0;        ///< = decay[0]，主指标
+    std::vector<double> decay;
+};
+
+/// `reveal[j]` = CV_8UC1 掩膜：第 j 帧「刚让开且之后 maxLag 帧内容稳住」的像素。空 = 无事件。
+std::vector<cv::Mat> revealMasks(const Group& ref, double tau, int maxLag)
+{
+    const int n = static_cast<int>(ref.luma.size());
+    std::vector<cv::Mat> moved(n);
+    for (int j = 1; j < n; ++j) {
+        cv::Mat d;
+        cv::absdiff(ref.luma[static_cast<size_t>(j)], ref.luma[static_cast<size_t>(j - 1)], d);
+        cv::compare(d, tau, moved[static_cast<size_t>(j)], cv::CMP_GT);
+    }
+    std::vector<cv::Mat> reveal(n);
+    for (int j = 2; j + maxLag < n; ++j) {
+        cv::Mat m = moved[static_cast<size_t>(j)] & ~moved[static_cast<size_t>(j - 1)];
+        for (int k = 1; k <= maxLag; ++k)
+            m = m & ~moved[static_cast<size_t>(j + k)];
+        if (cv::countNonZero(m) > 0)
+            reveal[static_cast<size_t>(j)] = m;
+    }
+    return reveal;
+}
+
+/// 在 `reveal` 上求归一化鬼影份额与衰减曲线。配对 = **帧计数器之差**（整数常量，零阈值）。
+TailRow measureTail(
+    const std::string& tag, double clip, const Group& ref, const Group& cand,
+    const std::vector<cv::Mat>& reveal, int maxLag)
+{
+    TailRow r;
+    r.tag = tag;
+    r.clip = clip;
+    const long off = static_cast<long>(cand.framePre) - static_cast<long>(ref.framePre);
+    const int nC = static_cast<int>(cand.luma.size());
+    const int nR = static_cast<int>(ref.luma.size());
+    std::vector<double> num(static_cast<size_t>(maxLag) + 1, 0.0);
+    double den = 0.0;
+    for (int j = 2; j + maxLag < nR; ++j) {
+        const cv::Mat& mask = reveal[static_cast<size_t>(j)];
+        if (mask.empty())
+            continue;
+        const long i = static_cast<long>(j) - off;  // 候选里同一绝对帧
+        if (i < 0 || i + maxLag >= nC)
+            continue;
+        const int W = mask.cols;
+        for (int y = 0; y < mask.rows; ++y) {
+            const uchar* mr = mask.ptr<uchar>(y);
+            const double* s = ref.luma[static_cast<size_t>(j - 1)].ptr<double>(y);
+            const double* n1 = ref.luma[static_cast<size_t>(j)].ptr<double>(y);
+            for (int x = 0; x < W; ++x)
+                if (mr[x]) {
+                    den += std::abs(n1[x] - s[x]);
+                    r.events += 1.0;
+                }
+        }
+        for (int k = 0; k <= maxLag; ++k) {
+            const cv::Mat& oc = cand.luma[static_cast<size_t>(i + k)];
+            const cv::Mat& gr = ref.luma[static_cast<size_t>(j + k)];
+            double acc = 0.0;
+            for (int y = 0; y < mask.rows; ++y) {
+                const uchar* mr = mask.ptr<uchar>(y);
+                const double* o = oc.ptr<double>(y);
+                const double* g = gr.ptr<double>(y);
+                for (int x = 0; x < W; ++x)
+                    if (mr[x])
+                        acc += std::abs(o[x] - g[x]);
+            }
+            num[static_cast<size_t>(k)] += acc;
+        }
+    }
+    if (r.events > 0.0 && den > 0.0) {
+        r.meanChange = den / r.events;
+        r.decay.resize(static_cast<size_t>(maxLag) + 1);
+        for (int k = 0; k <= maxLag; ++k)
+            r.decay[static_cast<size_t>(k)] = num[static_cast<size_t>(k)] / den;
+        r.frac = r.decay[0];
+    }
+    return r;
+}
+
+}  // namespace
+
+int cmdTemporalTail(const std::string& cameraName, double angleDeg, int burst, int warm,
+    int maxLag, double tau)
+{
+    const BistroCam* cam = nullptr;
+    for (const auto& c : kBistroCams)
+        if (cameraName == c.name)
+            cam = &c;
+    if (!cam) {
+        std::fprintf(stderr, "机位不存在: %s（可选 %s）\n", cameraName.c_str(),
+            bistroCamNames().c_str());
+        return 2;
+    }
+    if (burst < maxLag + 8)
+        throw std::runtime_error("--burst 必须 ≥ --max-lag + 8（反向/稳定窗都要帧余量）");
+    if (maxLag < 4)
+        throw std::runtime_error("--max-lag 至少 4（衰减曲线少于 4 点看不出指数）");
+
+    const double angle = angleDeg * 3.14159265358979323846 / 180.0;
+    const std::string base = projectRoot() + "/build/imgqa_tail_" + cameraName;
+
+    std::printf("=== temporal-tail：鬼影尾长直测（机位 %s，债-63 的出口）===\n", cameraName.c_str());
+    std::printf("  运动源 = 场景 spin %.3g°/帧（**相机静止** ⟹ 不需要图像配准）  burst %d  热身 %d  K %d\n"
+        "  配对 = 引擎帧计数器之差（整数常量，零阈值）  参考 = TAA 关 + jitter_scale=0（基位置真值）\n"
+        "  主指标 frac = mean|out−ref| ÷ mean|N−S|（无量纲；闭式锚点：关盒时 = 1 − α）\n",
+        angleDeg, burst, warm, maxLag);
+
+    // ── 组定义（每组一个进程，串行）─────────────────────────────────────────
+    struct Arm {
+        const char* tag;
+        double clip;
+        double feedback;
+        double boost;   ///< 0 = 不开 static_boost（α = feedback）
+        bool taa;
+        double jitter;
+        const char* role;
+    };
+    const Arm arms[] = {
+        {"Z", 0.0, 1.0, 0.01, true, 0.0, "零锚点（α=1 + 无抖动 ⟹ 应 ≡ 参考）"},
+        {"B12", 1.0, 0.12, 0.0, true, 1.0, "关盒 + 短窗（单调性低端，α=0.12）"},
+        {"A1", 1.0, 0.12, 0.01, true, 1.0, "关盒 + boost（阳性锚点的坏端）"},
+        {"A0", 0.0, 0.12, 0.01, true, 1.0, "现行盒 + boost"},
+        {"A8", 8.0, 0.12, 0.01, true, 1.0, "臂 8 + boost"},
+        {"A10", 10.0, 0.12, 0.01, true, 1.0, "臂 10 + boost"},
+        {"A11", 11.0, 0.12, 0.01, true, 1.0, "臂 11（记忆挂重投影位移）+ boost"},
+    };
+
+    auto collect = [&](const std::string& sub, bool taa, double fb, double jitter, double boost,
+                           double clip, double spinAngle, int w) {
+        Spec sp;
+        sp.taa = taa;
+        sp.feedback = fb;
+        sp.jitterScale = jitter;
+        sp.baseSpace = true;
+        sp.staticBoostFloor = boost;
+        sp.clipMode = clip;
+        sp.cameraMotion = false;  // 场景 spin，相机不动
+        sp.motionAngle = spinAngle;
+        sp.warm = w;
+        return collectGroup(base + "_" + sub, sub, "t" + sub, *cam, sp, burst);
+    };
+
+    std::printf("── 采集（串行，单实例纪律）──\n");
+    Group ref = collect("REF", false, 0.12, 0.0, 0.0, 0.0, angle, warm);
+    std::printf("  REF  帧号 [%u, %u)  尺寸 %dx%d\n", ref.framePre, ref.framePost, ref.frameSize.width,
+        ref.frameSize.height);
+
+    // τ 三档敏感性（唯一自由阈值 ⟹ 必须出表；掩膜只依赖参考，三档共用一次采集）
+    const double taus[] = {0.02, tau, 0.10};
+    std::vector<std::vector<cv::Mat>> masks;
+    for (double t : taus)
+        masks.push_back(revealMasks(ref, t, maxLag));
+
+    std::vector<std::vector<TailRow>> table(std::size(taus));
+    TailRow zero, boxOff, curBox, monoLo, monoHi;
+    for (const Arm& a : arms) {
+        Group g = collect(a.tag, a.taa, a.feedback, a.jitter, a.boost, a.clip, angle, warm);
+        std::printf("  %-4s 帧号 [%u, %u)  clip=%g fb=%g boost=%g jitter=%g\n", a.tag, g.framePre,
+            g.framePost, a.clip, a.feedback, a.boost, a.jitter);
+        for (size_t ti = 0; ti < std::size(taus); ++ti) {
+            TailRow r = measureTail(a.tag, a.clip, ref, g, masks[ti], maxLag);
+            if (taus[ti] == tau) {  // 主档留判决用的行
+                if (std::string(a.tag) == "Z") zero = r;
+                if (std::string(a.tag) == "A1") boxOff = r;
+                if (std::string(a.tag) == "A0") curBox = r;
+                if (std::string(a.tag) == "B12") monoLo = r;
+                if (std::string(a.tag) == "A1") monoHi = r;
+            }
+            table[ti].push_back(r);
+        }
+    }  // g 在此析构 ⟹ 同时最多驻留「参考 + 一个臂」（720p double × burst 很吃内存）
+
+    // ── 反向用例：静止参考自配自 ⟹ 检测器不许点火 ──────────────────────────
+    Group refs = collect("REFs", false, 0.12, 0.0, 0.0, 0.0, 0.0, warm);
+    auto revMasks = revealMasks(refs, tau, maxLag);
+    TailRow rev = measureTail("REV", 0.0, refs, refs, revMasks, maxLag);
+
+    // ── 主表 ────────────────────────────────────────────────────────────────
+    std::printf("\n── 主表（τ = %g 线性 luma ≈ %.1f 显示 LSB）──\n", tau, tau / 0.006732);
+    std::printf("  %-5s %-8s %10s %10s %8s  %s\n", "组", "clip", "事件数", "mean|N−S|",
+        "frac", "闭式 1−α / 角色");
+    for (const auto& r : table[1]) {
+        std::printf("  %-5s %-8g %10.0f %10.5f %8.4f\n", r.tag.c_str(), r.clip, r.events,
+            r.meanChange, r.frac);
+    }
+    std::printf("\n── 衰减曲线 A[k]（归一化残差，让开后第 k 帧；τ = %g）──\n", tau);
+    for (const auto& r : table[1]) {
+        std::printf("  %-5s", r.tag.c_str());
+        for (size_t k = 0; k < r.decay.size() && k < 25; ++k)
+            std::printf(" %.3f", r.decay[k]);
+        std::printf("\n");
+    }
+    std::printf("\n── τ 敏感性（三档方向必须一致）──\n");
+    std::printf("  %-5s", "组");
+    for (double t : taus)
+        std::printf(" %10s", ("τ=" + std::to_string(t)).c_str());
+    std::printf("\n");
+    for (size_t ai = 0; ai < std::size(arms); ++ai) {
+        std::printf("  %-5s", arms[ai].tag);
+        for (size_t ti = 0; ti < std::size(taus); ++ti)
+            std::printf(" %10.4f", table[ti][ai].frac);
+        std::printf("\n");
+    }
+
+    // ── 判决（四条 AND）─────────────────────────────────────────────────────
+    std::vector<Verdict> vs;
+    vs.push_back(verdictFor("temporal-tail-pairing", zero.frac <= 0.02 && zero.events > 0.0,
+        "frac(Z) = " + d4(zero.frac) + "（线 ≤ 0.02；配对错一帧会跳到 0.3+）"));
+    std::cout << "  " << vs.back().line() << "\n";
+    vs.push_back(verdictFor("temporal-tail-events",
+        curBox.events >= 2000.0 && rev.events <= 20.0,
+        "spin 事件 " + std::to_string(static_cast<long>(curBox.events)) + "（线 ≥ 2000）· 静止反向 "
+            + std::to_string(static_cast<long>(rev.events)) + "（线 ≤ 20）"));
+    std::cout << "  " << vs.back().line() << "\n";
+    vs.push_back(verdictFor("temporal-tail-box-load", boxOff.frac > curBox.frac,
+        "关盒 frac " + d4(boxOff.frac) + " vs 臂 0 " + d4(curBox.frac)
+            + "（不成立 = 盒在鬼影上没承重 ⟹ 该关盒，不是继续修盒）"));
+    std::cout << "  " << vs.back().line() << "\n";
+    vs.push_back(verdictFor("temporal-tail-monotone", monoHi.frac > monoLo.frac,
+        "关盒 α=0.12 frac " + d4(monoLo.frac) + " → boost α=0.01 frac " + d4(monoHi.frac)
+            + "（闭式 0.88 → 0.99；不升 = frac 量的不是历史长度）"));
+    std::cout << "  " << vs.back().line() << "\n";
+
+    logCall("temporal-tail",
+        {{"camera", cameraName}, {"angle", d4(angle)}, {"burst", std::to_string(burst)},
+            {"tau", d4(tau)}, {"max-lag", std::to_string(maxLag)}},
+        vs);
+    const bool allOk = std::all_of(vs.begin(), vs.end(),
+                                   [](const Verdict& v) { return v.ok; });
+    std::printf("\n  ⟹ %s\n",
+        allOk ? "四条全绿：frac 可作为鬼影判据，读上面主表比较各臂"
+              : "有判决红 ⟹ **不许报臂间结论**（先修仪器，别改判决线）");
     return allOk ? 0 : 1;
 }
 

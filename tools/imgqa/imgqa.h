@@ -648,6 +648,19 @@ int cmdTemporalMotion(const std::string& camera, const std::string& motion, doub
 int cmdTemporalFeedback(const std::string& camera, double angleDeg, int burst,
     double edgePercentile, const std::vector<double>& fbs, double kernel = 0.0);
 
+/**
+ * 批 13.13 **鬼影尾长直测**（债-63 的出口）：静止机位 + 场景 spin，参考 = 同一次 spin 的
+ * 「TAA 关 + jitter_scale=0」渲染（基位置真值），配对 = 引擎帧计数器之差（**零图像配准**）。
+ * 主指标 = 归一化鬼影份额 `frac = mean|out−ref| ÷ mean|N−S|`（无量纲；关盒时闭式 = 1 − α）。
+ * 四条判决线跑前写死（pairing / events / box-load / monotone），红一条即不许报臂间结论。
+ * 完整设计与判据出处 → `tools/imgqa/temporal_motion.cpp` 本命令头注释。
+ * @param angleDeg 场景 spin 角（度/帧，`spin_frame_angle` 纯函数）
+ * @param maxLag   衰减曲线长度 K（同时是「让开后内容必须稳住」的窗长）
+ * @param tau      「让开」阈值（线性 luma，唯一自由参数 ⟹ 输出必带三档敏感性表）
+ */
+int cmdTemporalTail(const std::string& camera, double angleDeg, int burst, int warm, int maxLag,
+    double tau);
+
 /// 逐杆覆盖率对拍闭式（批 12.6 T4，docs/taa_plan.md §7 第 10 条）：单帧量阶梯杆的
 /// 「黑度积分 vs 投影宽度」，TAA 关应当被二值覆盖量化破坏、TAA 开应当贴合闭式。
 /// 与采集时序无关（这是它优于逐帧差的地方）。
