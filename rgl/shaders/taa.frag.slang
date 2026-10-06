@@ -145,11 +145,12 @@ float3 clampHdr(float3 x) { return max(x, float3(0.0, 0.0, 0.0)); }
 // 直接塌回 c。p 已在盒内 ⇒ 返回 p（不改变历史）。
 /// 「本帧无历史 / 重投影出画」时写进 alpha 的值。
 /// 门关与不携带状态的臂 = 1.0（同时是诊断码「本帧无历史」，与门关值同值，消费方按组别解读）；
-/// **携带时域状态的臂（6 信任 / 7 记忆）= 0.0** = 状态清零 ⟹ 跳切/出画处判据全副武装。
+/// **携带时域状态的臂（6 信任 / 7 记忆 / 8 mem 门控软裁剪）= 0.0** = 状态清零 ⟹ 跳切/出画处
+/// 判据全副武装。
 /// ⚠ 方向别写反：出画正是历史无效之处，写 1.0（满信任）= 在最需要保护的时刻把保护关掉。
 float noHistoryAlpha(float mode)
 {
-    return (mode == 6.0 || mode == 7.0) ? 0.0 : 1.0;
+    return (mode == 6.0 || mode == 7.0 || mode == 8.0) ? 0.0 : 1.0;
 }
 
 float3 clipToAabb(float3 c, float3 p, float3 mn, float3 mx)
@@ -662,6 +663,46 @@ float4 main(TaaInput input) : SV_Target
         const float centL = dot(centroid, float3(0.3333333));
         clippedR = abs(histL - centL) <= mem ? histR : hardR;
         alpha = mem;
+    }
+    else if (clipMode == 8 && diag < 0.5)
+    {
+        // 8 = **mem 门控软裁剪**（批 13.11 续；专治臂 7 的极限环，判据与指纹 → `调试历史.md` §10）。
+        // 臂 7 的**判据**是对的（接受域时域不变 ⟹ 静止内容零误报，四机位 ρ 全贴闭式），
+        // 坏在**响应是硬开关**：`clipped = |histL−centL| ≤ mem ? histR : hardR`。
+        // 阈值 mem 本身是 τ = 1/(1−d) = 16 帧的衰减量 ⟹ 「**带滞后的继电器反馈**」= 教科书级
+        // 极限环发生器。实测指纹四条全中：幅度大（0.91 线性域 = 黑↔白）、面积小（278–857px =
+        // 0.03–0.09%）、对 d 不敏感（0.9/0.9375/0.9688/0.975 全在 0.4 附近）、对热身不敏感
+        // （×4 不塌 ⟹ 是吸引子不是瞬态）。
+        // 本臂**只换响应、不换判据**：以 mem 为**下界**的相对带宽 r 的线性斜坡（无量纲、与场景
+        // 亮度尺度无关），把环路增益从 ∞ 降到 ≈1/r。继电器连续化后极限环要靠增益过阈值才
+        // 能维持 ⟹ 这条是**可证伪**的。实测（2026-10-06）：超 τ 像素数 278–857 → **0**，且在
+        // r ∈ [0.25, 2] 全 range 成立 ⟹ 继电器机制坐实。
+        const float memPrev =
+            saturate(historyTex.SampleLevel(pointSampler, prevUvBase, 0.0).a);
+        // decay 的出处 = **抖动周期**（记忆覆盖一整个相位支撑集，见 §1.13 ②/⑦），非扫描值。
+        const float decay = clipCtl.y > 0.0 ? clipCtl.y : (1.0 - 1.0 / 16.0);
+        const float3 ext3 = mx - mn;
+        const float ext = max(ext3.x, max(ext3.y, ext3.z));
+        const float mem = max(ext, memPrev * decay);
+        const float histL = dot(histR, float3(0.3333333));
+        const float centL = dot(centroid, float3(0.3333333));
+        const float dist = abs(histL - centL);
+        // ⚠ **过渡带必须整个落在接受域之外** = [mem, mem·(1+r)]，**不是**对称带
+        //   [mem(1−r), mem(1+r)]。对称带实测（2026-10-06，brickfence，r = 0.25/0.5/1/2）把 ρ 从
+        //   0.0909 单调推到 0.2104，只有 r ≤ 0.5 过线且 0.5 只剩 7% 余量 ⟹ 参数成了扫出来的。
+        //   根因是**设计错误不是权衡**：零误报证明的内容是「静止内容上 dist ≤ mem」，而对称带在
+        //   dist = mem 处给 w = 0.5 = **恰好在证明要求全接受的地方裁掉一半历史**。
+        //   单边带 ⟹ 接受域内 w ≡ 0 ⟹ 静止内容与臂 7 逐位同（ρ 应 = 0.0958）、且 ρ 对 r 不敏感
+        //   ⟹ r 退化成「被拒历史多快换掉」= 鬼影侧时间常数，不再是闪烁侧参数。
+        // r = 1 是**唯一不含自由数值的取值**：过渡带宽度 = 记忆半径本身 ⟹ w = saturate(dist/mem − 1)，
+        // 公式里没有任何可调常数（实测三点 r=0.25/0.5/1.0 的 ρ = 0.0816/0.0814/0.0814，与 r 脱钩）。
+        // ⚠ r 的**下界是测出来的不是推出来的**（增益判据给不出干净常数，mem 自己在动）：实测
+        //   r ≥ 0.5 稳定（超 τ = 0 px），r = 0.25 炸回 662 px = **阳性对照**（连续化不够，环路
+        //   增益 ≈1/r 必须低于阈值）。选 r=1 = 距失效点 2× 余量、且 max swing 三点最低。
+        const float r = 1.0;  // 相对带宽 ⟹ 过渡带 = [mem, mem·(1+r)]，接受域内恒为 0
+        const float w = saturate((dist - mem) / (r * max(mem, 1e-6)));
+        clippedR = lerp(histR, hardR, w);
+        alpha = mem;  // 与臂 6/7 共用载体 ⟹ 互斥、零新附件（imgqa 侧对这三臂跳过拒收码表）
     }
     return float4(lerp(fromReinhard(clippedR), cur, params.x), alpha);
 }

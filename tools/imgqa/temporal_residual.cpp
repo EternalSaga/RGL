@@ -1511,6 +1511,12 @@ std::string clipArmName(const ClipArm& arm)
             s << "7 记忆d=" << (arm.soft > 0.0 ? std::to_string(arm.soft) : "0.5");
             return s.str();
         }
+        case 8: {
+            std::ostringstream s;
+            // 0 = 用**推导值** 1−1/16（记忆覆盖一整个抖动周期），显示成出处而不是某个小数
+            s << "8 软记忆d=" << (arm.soft > 0.0 ? std::to_string(arm.soft) : "1-1/16");
+            return s.str();
+        }
         default: return "未知臂" + std::to_string(arm.mode);
     }
 }
