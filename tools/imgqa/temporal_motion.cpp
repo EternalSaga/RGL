@@ -2029,6 +2029,11 @@ int cmdTemporalFeedback(const std::string& cameraName, double angleDeg, int burs
 // ## 判决线（跑前写死，四条 AND；红一条就不许报结论）
 //
 //  1. `temporal-tail-pairing` **零锚点**：Z = TAA 开 + `feedback = 1` + `jitter_scale = 0`。
+//     ⚠⚠ **Z 必须把 `static_boost` 关掉**（首轮实测 frac(Z)=0.199 红，根因就是给它开了 boost）：
+//     boost 的语义是「相机静止时把**本帧权重**压到地板」，而本命令相机**恒静止** ⟹ 开了 boost
+//     就等于把 `feedback = 1` **整个覆盖掉**（α 实际 = 0.01，一百帧窗）。
+//     ⟹ 通用红线：**任何想用 `feedback` 定义「无历史 / 短历史」的实验都必须显式关 boost**，
+//        否则改的是没人读的那个键（债-55 同型：读数在，读的是别的量）。
 //     α=1 ⟹ `lerp(·, cur, 1) ≡ cur`；抖动 0 ⟹ `baseUv ≡ input.uv` ⟹ 采样是恒等映射
 //     ⟹ Z 与参考只差一次 Reinhard 往返（<1e-3）。**线：frac(Z) ≤ 0.02**。
 //     为什么这条最硬：配对错开一帧 ⟹ spin 已把内容搬走 ⟹ frac 立刻跳到 0.3+ 量级。
@@ -2178,7 +2183,7 @@ int cmdTemporalTail(const std::string& cameraName, double angleDeg, int burst, i
         const char* role;
     };
     const Arm arms[] = {
-        {"Z", 0.0, 1.0, 0.01, true, 0.0, "零锚点（α=1 + 无抖动 ⟹ 应 ≡ 参考）"},
+        {"Z", 0.0, 1.0, 0.0, true, 0.0, "零锚点（α=1 + 无抖动 ⟹ 应 ≡ 参考）"},
         {"B12", 1.0, 0.12, 0.0, true, 1.0, "关盒 + 短窗（单调性低端，α=0.12）"},
         {"A1", 1.0, 0.12, 0.01, true, 1.0, "关盒 + boost（阳性锚点的坏端）"},
         {"A0", 0.0, 0.12, 0.01, true, 1.0, "现行盒 + boost"},
