@@ -301,9 +301,12 @@ void fillTaaData(FrameDrawList& out, const ViewProjection& viewProj, const Scene
 	out.sceneData.taaInputKernel = {env.taaInputKernel, 0.0f, 0.0f, 0.0f};
 	// x = **历史裁剪消融门**（`taa.clip_mode`，批 13.11；0 = 现行 = 门关），
 	// y = **软裁剪 λ**（`taa.clip_soft`，仅 mode=4 读；无量纲 = 每帧最多搬动 λ 份「到盒边界的距离」）。
+	// z = **未 boost 的本帧权重** `taa.feedback`（仅臂 10 读 = 「这个像素该给多长的窗」的下界；
+	//   其余臂一个 bit 都不读它）。⚠ 这里刻意传**未 boost** 那份：boost 后的值已在 taaParams.x，
+	//   臂 10 要的是两个端点才能插值（`mix(boost, base, w)`）。
 	// 与 input_kernel 同理：配置直传，不是图形态派生。门关（0）⟹ taa.frag 走改前那条硬裁剪，
 	// 一个 bit 不动（红线 = `just shot` sha256）。档位语义 → `scene_data.cppm` 同槽注释。
-	out.sceneData.taaClipControl = {env.taaClipMode, env.taaClipSoft, 0.0f, 0.0f};
+	out.sceneData.taaClipControl = {env.taaClipMode, env.taaClipSoft, env.taaFeedback, 0.0f};
 }
 
 void renderListSystem(entt::registry& rg, RGL::Resources&,

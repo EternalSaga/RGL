@@ -319,7 +319,8 @@ export inline constexpr uint32_t kSceneDataTaaPrevContentShiftOffset = kSceneDat
  */
 export inline constexpr uint32_t kSceneDataTaaInputKernelOffset = kSceneDataTaaOffset + 160u;
 /**
- * 批 13.11 **历史裁剪消融门**（vec4：x = clip_mode，y = clip_soft λ，zw 保留）。
+ * 批 13.11 **历史裁剪消融门**（vec4：x = clip_mode，y = clip_soft λ，**z = 未 boost 的本帧权重
+ * `taa.feedback`（仅臂 10 读）**，w 保留）。
  *
  * 要回答的问题（实测根因 → `调试历史.md` 2026-10-06）：`clipToAabb` 在 **blend 之前**替换历史，
  * 而混合是 `lerp(clipped, cur, α)` ⟹ **一次裁剪 = 一次历史重置**（历史被换成"本帧邻域盒边界"，
@@ -369,6 +370,18 @@ export inline constexpr uint32_t kSceneDataTaaInputKernelOffset = kSceneDataTaaO
  *     `dist > mem + ext` ⟹ 鬼影延迟 ≈3.5 帧（臂 7 ≈2.9 / 臂 8 ≈13.6）。
  *     判据（跑前写死）：鬼影 R ≤ 1.0（boost 开**且**交付档）**且** ρ ≤ 0.09 **且** 超 τ = 0 px，
  *     缺一不算；不算 ⟹ 单标量接受域结案，转 velocity / 深度遮挡探测。
+ *   10 **臂 8 接受域 + α 交还逐像素证据**（债-62 的第三条路；当前唯一候选交付臂）：前九臂都在
+ *     「一个标量接受域」里找平衡，而债-62 证明那是死路。本臂的观察 = **接受域之所以要同时打两份
+ *     工，是因为 α 是全画面一个数**——`taaParams.x` 由 CPU 按**相机**静止帧数算，boost 开 = 0.01
+ *     ⟹ 100 帧长窗发给每个像素，而"这个像素的历史可不可信"的证据（w）就在同一行 `lerp(clipped,
+ *     cur, α)` 里却没被用来决定 α。鬼影的真实来源因此不是"臂 8 太粘"：臂 8 boost **关**时 R =
+ *     1.347（**优于**今天 boost 关的 1.751），boost **开**才炸到 3.028 = 机位一动就按长窗洗历史。
+ *     改法 = `α_eff = mix(α_boost, α_base, w)`（**零新常数**：两个 α 是 CPU 已算好的端点，w 是
+ *     臂 8 已算好的量；`α_base` 走本槽 **z**）。结构保证：boost 只把 α 调小 ⟹ `α_eff ≥ α_boost`
+ *     恒成立 ⟹ 历史只会比臂 8 **丢得更快** ⟹ 数学上不可能让鬼影比臂 8 更差（实测若更差 = 仪器错）。
+ *     反向用例（必须逐位）：boost 关 ⟹ 两端点相等 ⟹ mix 恒等 ⟹ 与臂 8 逐位相同。
+ *     判据（跑前写死，三条 AND）：ρ ≤ 0.09（五机位 + 合成靶）**且** 折叠超 τ = 0 px **且**
+ *     鬼影 R（boost 开）≤ **1.751**（= 今天 boost 关的鬼影，口径 = 不再拿鬼影付 boost 换来的安静）。
  *
  * λ（y，仅 mode=4 读）= **无量纲时间常数**，语义 = 裁剪能以多快的速度搬动历史。
  * λ=1 在语义上退化成硬裁剪（浮点上不逐位等于 mode 0，故红线只钉 mode 0）。

@@ -1522,6 +1522,11 @@ std::string clipArmName(const ClipArm& arm)
             s << "9 mem接受+ext斜率d=" << (arm.soft > 0.0 ? std::to_string(arm.soft) : "1-1/16");
             return s.str();
         }
+        case 10: {
+            std::ostringstream s;
+            s << "10 臂8+α逐像素d=" << (arm.soft > 0.0 ? std::to_string(arm.soft) : "1-1/16");
+            return s.str();
+        }
         default: return "未知臂" + std::to_string(arm.mode);
     }
 }
@@ -1649,7 +1654,9 @@ std::vector<ClipAblRow> runBistroClipAblation(const std::string& dir, const std:
         bool refute = true;
         for (size_t i = 1; i < rows.size(); ++i)
             refute = refute && rows[i].ok && rows[i].rho >= kClipRefuteRatio * rows[0].rho;
-        std::printf("  ⭐ 汇总：ρ(臂0) = %s；**%s**\n", d4(rows[0].rho).c_str(),
+        // ⚠ 外层**不能**再包 `**`：被包的串自己带 `**否证**` / `**坐实**`，套上去会打出
+        //   `**…**否证**：…**` 这种错位的 markdown（2026-10-06 修；判据输出是要被读的东西）。
+        std::printf("  ⭐ 汇总：ρ(臂0) = %s；%s\n", d4(rows[0].rho).c_str(),
             refute ? "所有消融臂都没把 ρ 压下来 ⟹ **否证**：邻域盒不是主因，短路假设死，"
                      "必须回头查别处（不许换说法继续猜）"
                    : "至少一臂显著压下了 ρ ⟹ 邻域盒短路**坐实**为因（逐臂看上行判定）");

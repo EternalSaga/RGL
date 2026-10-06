@@ -145,12 +145,16 @@ float3 clampHdr(float3 x) { return max(x, float3(0.0, 0.0, 0.0)); }
 // 直接塌回 c。p 已在盒内 ⇒ 返回 p（不改变历史）。
 /// 「本帧无历史 / 重投影出画」时写进 alpha 的值。
 /// 门关与不携带状态的臂 = 1.0（同时是诊断码「本帧无历史」，与门关值同值，消费方按组别解读）；
-/// **携带时域状态的臂（6 信任 / 7 记忆 / 8 mem 门控软裁剪 / 9 mem 接受 + ext 斜率）= 0.0** = 状态清零
-/// ⟹ 跳切/出画处判据全副武装。
-/// ⚠ 方向别写反：出画正是历史无效之处，写 1.0（满信任）= 在最需要保护的时刻把保护关掉。
+/// **携带时域状态的臂（6 信任 / 7 记忆 / 8 mem 门控软裁剪 / 9 mem 接受 + ext 斜率 / 10 臂 8 + α
+/// 逐像素）= 0.0** = 状态清零 ⟹ 跳切/出画处判据全副武装。
+/// ⚠ 方向别写反：出画正是历史无效之处，写 1.0（满信任/满记忆）= 在最需要保护的时刻把保护关掉。
+/// ⚠ **判据写 `>= 6` 而不是 `6..9` 闭区间**（2026-10-06 实测踩过）：臂 10 忘了扩上界 ⟹ 出画像素写
+///   1.0 ⟹ 下一帧 `memPrev = 1.0` 顶满 `mem` ⟹ `w` 恒 0 = 历史全收，而 alpha **就是下一帧的 mem**
+///   （不是纯诊断通道），错一个 bit 会跨帧复利。alpha 自 6 起就是这些臂共用的时域状态载体，
+///   所以「≥ 6 一律清零」才是与机制对齐的写法；闭区间只会让每个新臂再踩一次。
 float noHistoryAlpha(float mode)
 {
-    return (mode >= 6.0 && mode <= 9.0) ? 0.0 : 1.0;
+    return mode >= 6.0 ? 0.0 : 1.0;
 }
 
 float3 clipToAabb(float3 c, float3 p, float3 mn, float3 mx)
@@ -604,6 +608,9 @@ float4 main(TaaInput input) : SV_Target
     //   实测（2026-10-06）：λ=0.1 → ρ 0.1795（闭式 0.0827、基准 0.2501）= **有效但远不够**。
     // 6 = **历史信任门**（实测**否决**，理由见该分支）｜ 7 = **标量时域 luma 膨胀**（主推）。
     float3 clippedR = hardR;
+    // 混合权重（本帧权重）。默认 = params.x（全画面一个数）；**只有臂 10 会改它** ⟹ 其余臂
+    // 逐位不变（门红线）。臂 10 的论点见其分支。
+    float feedback = params.x;
     if (clipMode == 1)
         clippedR = histR;
     else if (clipMode == 4)
@@ -731,7 +738,53 @@ float4 main(TaaInput input) : SV_Target
         // 而「平坦地面被物体让开」正是 dist 大而 ext 小 ⟹ w = 1 = 立刻清掉陈旧历史（正确方向）。
         const float w = saturate((dist - mem) / max(ext, 1e-6));
         clippedR = lerp(histR, hardR, w);
-        alpha = mem;  // 与臂 6/7/8 共用载体 ⟹ imgqa 侧对这四臂跳过拒收码表
+        alpha = mem;  // 与臂 6/7/8/9 共用载体 ⟹ imgqa 侧对这五臂跳过拒收码表
     }
-    return float4(lerp(fromReinhard(clippedR), cur, params.x), alpha);
+    else if (clipMode == 10 && diag < 0.5)
+    {
+        // 10 = **臂 8 的接受域 + 把 α 交还给逐像素证据**（批 13.11 续；债-62 的第三条路）。
+        // 前九臂全在「一个标量接受域」里找平衡，而债-62 的三角证明那是死路。本臂的观察是：
+        // **接受域之所以要同时打两份工，是因为 α 是全画面一个数。**
+        //   `params.x` 由 CPU 按**相机**静止帧数算（`taaBoostedFeedback`），boost 开 = 0.01
+        //   ⟹ 「100 帧长窗」是发给**每个像素**的，而"这个像素的历史还可不可信"的证据（w）
+        //   就在同一行 `lerp(clipped, cur, α)` 里，却没被用来决定 α。
+        // ⟹ 鬼影的真实来源不是"臂 8 太粘"，而是**机位一动就按 boost 的长窗洗历史**：臂 8 在
+        //   boost 关时 R = 1.347（**优于**今天 boost 关的 1.751），boost 开才炸到 3.028。
+        // 本臂把两份工交回各自该管的量：
+        //   · 接受域 = 臂 8 一字不改（闪烁性质原样：接受域内 w ≡ 0 ⟹ 静止内容零误报）
+        //   · 历史遗忘速度 = α_eff = mix(α_boost, α_base, w)（裁剪说"历史可信"才给长窗）
+        // **零新常数**：两个 α 都是 CPU 已经算好的量，w 是臂 8 已经算好的量。
+        // **结构保证（可自检）**：boost 只会把 α 调小 ⟹ `α_base ≥ α_boost` ⟹ 取
+        //   `base = max(clipCtl.z, params.x)` 后 `α_eff ≥ α_boost` **恒成立** ⟹ 历史只会比
+        //   臂 8 **丢得更快** ⟹ 本改动在数学上不可能让鬼影比臂 8 更差。实测若反而更差 =
+        //   仪器错，不是机制错。附带好处：clipCtl.z 万一没接上（= 0），max 兜回 params.x
+        //   ⟹ 退化成臂 8，不会退化成"无限历史"。
+        // **反向用例（机制自证，必须逐位）**：boost 关 ⟹ α_base == α_boost ⟹ mix 是恒等
+        //   ⟹ 臂 10 与臂 8 逐位相同。不逐位 = 接线错，不解释。
+        // 判据（跑前写死，三条 AND，缺一不算）：① ρ ≤ 0.09（五 bistro 机位 + 合成靶全部）
+        //   ② 折叠超 τ = 0 px（同上全部）③ 鬼影 R（boost 开，spin 靶）≤ **1.751** =
+        //   今天 boost 关的鬼影（口径 = "不再拿鬼影付 boost 换来的安静"）。
+        //   不过线 ⟹ 臂 10 否决、转 velocity / 深度遮挡探测，**不再在单标量接受域上花第三轮**。
+        const float memPrev =
+            saturate(historyTex.SampleLevel(pointSampler, prevUvBase, 0.0).a);
+        const float decay = clipCtl.y > 0.0 ? clipCtl.y : (1.0 - 1.0 / 16.0);
+        const float3 ext3 = mx - mn;
+        const float ext = max(ext3.x, max(ext3.y, ext3.z));
+        const float mem = max(ext, memPrev * decay);
+        const float histL = dot(histR, float3(0.3333333));
+        const float centL = dot(centroid, float3(0.3333333));
+        const float dist = abs(histL - centL);
+        const float r = 1.0;  // 同臂 8：过渡带宽度 = 记忆半径（唯一不含自由数值的取值）
+        const float w = saturate((dist - mem) / (r * max(mem, 1e-6)));
+        clippedR = lerp(histR, hardR, w);
+        // ⚠ **必须写成 `a + (b−a)·t`，不能写 `lerp(a, b, t)`**：Slang 把 `lerp` 降成
+        //   `a·(1−t) + b·t`，即使 a == b 也**不**逐位等于 a（两次乘法 + 一次加法各自舍入）。
+        //   实测踩过（2026-10-06）：boost 关时臂 10 与臂 8 的截图**不**逐位相同，`cmp` 报差异，
+        //   而这条正是「接线对不对」的 bit 级自证——写成减法形式后 `b == a` ⟹ `(b−a)` 恰为 `+0`
+        //   ⟹ `0·w = 0` ⟹ `a + 0 = a` **精确成立**，反向用例才成立。
+        const float base = max(clipCtl.z, params.x);
+        feedback = params.x + (base - params.x) * w;
+        alpha = mem;  // 载体同臂 6–9
+    }
+    return float4(lerp(fromReinhard(clippedR), cur, feedback), alpha);
 }

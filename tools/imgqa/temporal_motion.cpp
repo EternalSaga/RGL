@@ -1119,7 +1119,11 @@ int cmdTemporalMotion(const std::string& cameraName, const std::string& motion,
     //   （0/0.25/0.5/0.75/1）读出来是**垃圾**：mem≈0.25 的像素会被算成「盒裁剪」。这不是精度问题
     //   而是**读错量**，故整段跳过并出声——静默打出一个像模像样的百分比才是最贵的假数据。
     const int clipModeInt = static_cast<int>(clipMode + 0.5);
-    const bool alphaOccupied = (clipModeInt >= 6 && clipModeInt <= 9);
+    // ⚠ **判据与 shader 侧 `noHistoryAlpha` 同步写成 `>= 6`（开区间上界）**：闭区间 `[6, N]` 在
+    //   每加一个新臂时都会漏扩一次，而两侧漏扩的代价不对称——shader 侧漏扩臂 10 实测过：出画像素
+    //   写满记忆 ⟹ 下一帧 mem 顶满 ⟹ 历史全收（`调试历史.md` 2026-10-06）。这里漏扩则是
+    //   「读的是别的量却打出像模像样的百分比」= 假数据。alpha 自臂 6 起就是这些臂共用的载体。
+    const bool alphaOccupied = (clipModeInt >= 6);
     std::printf("\n── 历史拒收掩膜（taa_out alpha；0 收下 / 0.25 盒裁剪 / 0.5 盒拒收 / "
                 "0.75 重投影拒收 / 1 无历史）──\n");
     const RejectStats rsM1 = rejectStats(gM1m);
