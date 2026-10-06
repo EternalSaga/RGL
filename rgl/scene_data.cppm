@@ -382,6 +382,15 @@ export inline constexpr uint32_t kSceneDataTaaInputKernelOffset = kSceneDataTaaO
  *     反向用例（必须逐位）：boost 关 ⟹ 两端点相等 ⟹ mix 恒等 ⟹ 与臂 8 逐位相同。
  *     判据（跑前写死，三条 AND）：ρ ≤ 0.09（五机位 + 合成靶）**且** 折叠超 τ = 0 px **且**
  *     鬼影 R（boost 开）≤ **1.751**（= 今天 boost 关的鬼影，口径 = 不再拿鬼影付 boost 换来的安静）。
+ *   11 **记忆门控：把"允许动用跨帧色彩记忆"接到重投影位移上**（批 13.13；债-63 的出口，
+ *     判据与待办 → `phase13_plan.md` §1.14）：`motion = ‖prevUvBase − baseUv‖/texel`（像素）、
+ *     `gate = saturate(2 − motion)`、`mem = max(ext, memPrev·decay·gate)`。换轴逻辑 = 债-62 不可能性
+ *     证明的适用条件明写「不含跨帧运动信息」⟹ 门一直开着。
+ *     **可证明的那条（本臂主判据）**：批 13.5 后静止机位 `prevUvBase ≡ baseUv` ⟹ `gate` 恰 = 1.0
+ *     ⟹ `x·1.0` IEEE 精确 ⟹ **静止机位下与臂 8 逐位相同**（不是"测出来差不多"）。
+ *     🔴 两条已知缺陷（未修完，别当已解决）：① 旧注释的「`motion ≤ 1` 可证明静止」**是过强声明、
+ *     已收回**——静止时 motion 恰为 0，1px 下界是保守选择不是导出量；② `motion` 是**每帧**位移而
+ *     鬼影是整窗（≈100 帧）**累积**位移 ⟹ 慢速运动漏过去（gate 半开）。y = decay 覆盖位（同臂 8）。
  *   11 **记忆挂在重投影位移上**（债-62/债-63 的出口；当前唯一候选交付臂）：前十臂只读颜色距离，
  *     而债-62 不可能性证明的**适用条件自己写着**「不含跨帧运动信息」——门一直开着。本项目没有
  *     velocity buffer 是**因为不需要**：重投影解析（相机 prevViewProj + 场景 prevSpin）⟹

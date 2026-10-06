@@ -142,8 +142,9 @@ export struct SceneFrameData {
 	///   ⟹ **逐位今天**（门红线 = `just shot` sha256）。消费者 = taa.frag `sampleInputColor`。
 	glm::vec4 taaInputKernel{0.0f};
 	/// · taaClipControl —— 批 13.11 **历史裁剪消融门**（x = clip_mode：0 现行 / 1 关盒 /
-	///   2 绕 centroid 扩 1.5× / 3 box9 / 4 软裁剪 / … / 10 臂 8 + α 逐像素；y = 软裁剪 λ，
-	///   仅 mode=4 读；**z = 未 boost 的本帧权重，仅臂 10 读**），
+	///   2 绕 centroid 扩 1.5× / 3 box9 / 4 软裁剪 / … / 10 臂 8 + α 逐像素 / 11 记忆挂重投影位移
+	///   （判据与两条已知缺陷 → `phase13_plan.md` §1.14）；y = 软裁剪 λ（mode=4）/ decay（mode=7~11），
+	///   **z = 未 boost 的本帧权重，仅臂 10 读**），
 	///   scene data @722256。默认 0 = 现行那条硬裁剪 ⟹ **逐位今天**（门红线 = `just shot` sha256）。
 	///   为什么要有：`clipToAabb` 在 blend 之前替换历史 ⟹ 一次裁剪 = 一次历史重置，而 1px 高对比
 	///   细线的 box5 随抖动相位双峰 ⟹ 静止机位残余 97.8% 住在这条路上（`调试历史.md` 2026-10-06）。
