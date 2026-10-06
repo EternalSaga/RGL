@@ -799,9 +799,10 @@ int main(int argc, char** argv)
                 std::stod(P.get(args, "--clip-soft", "1")));
         if (cmd == "temporal-tail")
             return cmdTemporalTail(P.get(args, "--camera", "brickfence"),
-                std::stod(P.get(args, "--angle", "0.3")), std::stoi(P.get(args, "--burst", "64")),
-                std::stoi(P.get(args, "--warm", "64")), std::stoi(P.get(args, "--max-lag", "24")),
-                std::stod(P.get(args, "--tau", "0.05")));
+                std::stod(P.get(args, "--angle", "0.3")), std::stoi(P.get(args, "--burst", "96")),
+                std::stoi(P.get(args, "--warm", "64")), std::stoi(P.get(args, "--max-lag", "16")),
+                std::stod(P.get(args, "--tau", "0.05")),
+                std::stoi(P.get(args, "--margin", "8")));
         if (cmd == "temporal-feedback") {
             std::vector<double> fbs;
             std::stringstream fs(P.get(args, "--fb", "0.02,0.05,0.12,0.25,0.5,0.8,1.0"));

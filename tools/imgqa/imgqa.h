@@ -657,9 +657,11 @@ int cmdTemporalFeedback(const std::string& camera, double angleDeg, int burst,
  * @param angleDeg 场景 spin 角（度/帧，`spin_frame_angle` 纯函数）
  * @param maxLag   衰减曲线长度 K（同时是「让开后内容必须稳住」的窗长）
  * @param tau      「让开」阈值（线性 luma，唯一自由参数 ⟹ 输出必带三档敏感性表）
+ * @param margin   共用内部窗口的两端余量（帧）。窗口 = `[maxLag+margin, n-1-maxLag-margin]`，
+ *        **与帧号偏移无关** ⟹ 各臂评在逐位相同的事件集上。偏移覆盖不到 ⟹ 抛错（不静默裁帧）。
  */
 int cmdTemporalTail(const std::string& camera, double angleDeg, int burst, int warm, int maxLag,
-    double tau);
+    double tau, int margin);
 
 /// 逐杆覆盖率对拍闭式（批 12.6 T4，docs/taa_plan.md §7 第 10 条）：单帧量阶梯杆的
 /// 「黑度积分 vs 投影宽度」，TAA 关应当被二值覆盖量化破坏、TAA 开应当贴合闭式。

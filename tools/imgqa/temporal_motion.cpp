@@ -2064,6 +2064,7 @@ struct TailRow {
     double events = 0.0;
     double meanChange = 0.0;  ///< mean|N − S|（线性 luma，无量纲化的分母）
     double frac = 0.0;        ///< = decay[0]，主指标
+    long offset = 0;          ///< 与参考的 burst 起始帧号之差（回显用，超窗口会抛）
     std::vector<double> decay;
 };
 
@@ -2088,26 +2089,35 @@ std::vector<cv::Mat> revealMasks(const Group& ref, double tau, int maxLag)
     return reveal;
 }
 
-/// 在 `reveal` 上求归一化鬼影份额与衰减曲线。配对 = **帧计数器之差**（整数常量，零阈值）。
-TailRow measureTail(
-    const std::string& tag, double clip, const Group& ref, const Group& cand,
-    const std::vector<cv::Mat>& reveal, int maxLag)
+/**
+ * 在 `reveal` 上求归一化鬼影份额与衰减曲线。配对 = **帧计数器之差**（整数常量，零阈值）。
+ *
+ * ⚠ **`jlo/jhi` 必须是与偏移无关的常数区间**（首轮实测踩的坑）：各臂进程的 burst 起始帧号
+ * 不同 ⟹ 若让每臂各用自己的 `[2, nR-1-maxLag] ∩ 偏移可行域`，边界裁掉的帧数就不同
+ * ⟹ **各臂比的是不同的事件子集**（实测事件数最多差 34%）。此时 frac 的臂间比值不可解释。
+ * 内部窗口 = `[maxLag + margin, nR-1-maxLag-margin]`，对所有臂逐位相同；偏移大到覆盖不到
+ * 就是**测量错误**，抛错出声，绝不再静默裁帧（裁帧 = 把缺陷变成口径）。
+ */
+TailRow measureTail(const std::string& tag, double clip, const Group& ref, const Group& cand,
+    const std::vector<cv::Mat>& reveal, int maxLag, int jlo, int jhi)
 {
     TailRow r;
     r.tag = tag;
     r.clip = clip;
     const long off = static_cast<long>(cand.framePre) - static_cast<long>(ref.framePre);
+    r.offset = off;
     const int nC = static_cast<int>(cand.luma.size());
-    const int nR = static_cast<int>(ref.luma.size());
     std::vector<double> num(static_cast<size_t>(maxLag) + 1, 0.0);
     double den = 0.0;
-    for (int j = 2; j + maxLag < nR; ++j) {
+    for (int j = jlo; j <= jhi; ++j) {
         const cv::Mat& mask = reveal[static_cast<size_t>(j)];
         if (mask.empty())
             continue;
         const long i = static_cast<long>(j) - off;  // 候选里同一绝对帧
         if (i < 0 || i + maxLag >= nC)
-            continue;
+            throw std::runtime_error(
+                tag + "：帧号偏移 " + std::to_string(off)
+                    + " 超出内部窗口余量（burst 要加大或 --margin 要加宽；**不要改成静默裁帧**）");
         const int W = mask.cols;
         for (int y = 0; y < mask.rows; ++y) {
             const uchar* mr = mask.ptr<uchar>(y);
@@ -2147,7 +2157,7 @@ TailRow measureTail(
 }  // namespace
 
 int cmdTemporalTail(const std::string& cameraName, double angleDeg, int burst, int warm,
-    int maxLag, double tau)
+    int maxLag, double tau, int margin)
 {
     const BistroCam* cam = nullptr;
     for (const auto& c : kBistroCams)
@@ -2158,8 +2168,9 @@ int cmdTemporalTail(const std::string& cameraName, double angleDeg, int burst, i
             bistroCamNames().c_str());
         return 2;
     }
-    if (burst < maxLag + 8)
-        throw std::runtime_error("--burst 必须 ≥ --max-lag + 8（反向/稳定窗都要帧余量）");
+    if (burst < 2 * (maxLag + margin) + 2)
+        throw std::runtime_error(
+            "--burst 必须 ≥ 2×(--max-lag + --margin) + 2（内部窗口对所有臂共用，两端都要留帧）");
     if (maxLag < 4)
         throw std::runtime_error("--max-lag 至少 4（衰减曲线少于 4 点看不出指数）");
 
@@ -2212,6 +2223,13 @@ int cmdTemporalTail(const std::string& cameraName, double angleDeg, int burst, i
     std::printf("  REF  帧号 [%u, %u)  尺寸 %dx%d\n", ref.framePre, ref.framePost, ref.frameSize.width,
         ref.frameSize.height);
 
+    // **共用内部窗口**：与偏移无关的常数 j 区间 ⟹ 各臂评在逐位相同的事件集上（理由见 measureTail）
+    const int jlo = maxLag + margin;
+    const int jhi = static_cast<int>(ref.luma.size()) - 1 - maxLag - margin;
+    if (jhi <= jlo)
+        throw std::runtime_error("内部窗口为空：burst 太小或 margin 太宽");
+    std::printf("  共用事件窗口 j ∈ [%d, %d]（%d 帧，各臂逐位相同）\n", jlo, jhi, jhi - jlo + 1);
+
     // τ 三档敏感性（唯一自由阈值 ⟹ 必须出表；掩膜只依赖参考，三档共用一次采集）
     const double taus[] = {0.02, tau, 0.10};
     std::vector<std::vector<cv::Mat>> masks;
@@ -2225,7 +2243,7 @@ int cmdTemporalTail(const std::string& cameraName, double angleDeg, int burst, i
         std::printf("  %-4s 帧号 [%u, %u)  clip=%g fb=%g boost=%g jitter=%g\n", a.tag, g.framePre,
             g.framePost, a.clip, a.feedback, a.boost, a.jitter);
         for (size_t ti = 0; ti < std::size(taus); ++ti) {
-            TailRow r = measureTail(a.tag, a.clip, ref, g, masks[ti], maxLag);
+            TailRow r = measureTail(a.tag, a.clip, ref, g, masks[ti], maxLag, jlo, jhi);
             if (taus[ti] == tau) {  // 主档留判决用的行
                 if (std::string(a.tag) == "Z") zero = r;
                 if (std::string(a.tag) == "A1") boxOff = r;
@@ -2240,15 +2258,15 @@ int cmdTemporalTail(const std::string& cameraName, double angleDeg, int burst, i
     // ── 反向用例：静止参考自配自 ⟹ 检测器不许点火 ──────────────────────────
     Group refs = collect("REFs", false, 0.12, 0.0, 0.0, 0.0, 0.0, warm);
     auto revMasks = revealMasks(refs, tau, maxLag);
-    TailRow rev = measureTail("REV", 0.0, refs, refs, revMasks, maxLag);
+    TailRow rev = measureTail("REV", 0.0, refs, refs, revMasks, maxLag, jlo, jhi);
 
     // ── 主表 ────────────────────────────────────────────────────────────────
     std::printf("\n── 主表（τ = %g 线性 luma ≈ %.1f 显示 LSB）──\n", tau, tau / 0.006732);
-    std::printf("  %-5s %-8s %10s %10s %8s  %s\n", "组", "clip", "事件数", "mean|N−S|",
-        "frac", "闭式 1−α / 角色");
+    std::printf("  %-5s %-8s %10s %10s %8s %6s\n", "组", "clip", "事件数", "mean|N−S|", "frac",
+        "帧偏移");
     for (const auto& r : table[1]) {
-        std::printf("  %-5s %-8g %10.0f %10.5f %8.4f\n", r.tag.c_str(), r.clip, r.events,
-            r.meanChange, r.frac);
+        std::printf("  %-5s %-8g %10.0f %10.5f %8.4f %6ld\n", r.tag.c_str(), r.clip, r.events,
+            r.meanChange, r.frac, r.offset);
     }
     std::printf("\n── 衰减曲线 A[k]（归一化残差，让开后第 k 帧；τ = %g）──\n", tau);
     for (const auto& r : table[1]) {
