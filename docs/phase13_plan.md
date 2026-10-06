@@ -518,6 +518,53 @@ motion = ‖prevUvBase − baseUv‖ / texel ;  gate = saturate(2 − motion) ; 
 - 起跑前 **`pgrep -cx rgl` 是"确认"不是"清场"**——`pkill` 会杀掉用户正在看的实例（本轮实测杀过一次）。
 - 改 `configs/scene.lua`（源）会触发 `copy_if_different` **覆盖用户 build 副本的调试态**（本轮踩过）。
 
+## 1.15 批 13.14（2026-10-07）：**臂 11 定稿 + 删 `static_boost` 的「模式」**（用户拍板，未开工）
+
+### 已做
+
+`configs/scene.lua` 交付默认改成 `clip_mode = 11`（消融参照值 0/1/2/… 留在注释里）。
+定稿依据 → `调试历史.md` 批 13.13：静止机位与臂 8 **逐位相同**（可证明）⟹ ρ 0.0814 全覆盖；
+鬼影 frac **0.342 vs 臂 8/10 的 0.647（低 47%）**且尾会散。
+
+### 拍板的是哪种「删 boost」（重要：两种读法结果相反）
+
+**删的是「模式」，不是「长窗」**：删掉相机静止探测器 + 爬升坡道 + 地板这套机制，
+把长窗**直接写进基础 `feedback = 0.01`**。只剩一个 α ⟹ **没有动静跳变**（用户点名的
+「动/静之间的感官变化」由此消除，而不是靠调参压掉）。
+
+⚠ 另一条读法（字面删干净、α 恒 0.12）**已被实测否决并当面告知用户**：
+臂 11 + boost 关 = brickfence meanSwing 0.002841 / 超 1LSB **7.29%**，比用户判过「闪烁严重」的
+交付态（0.001772 / 2.38%）还差 1.6×（可见像素 3.1×）。**臂 11 的安静是 boost 给的**
+（ρ = 0.0814 = boost 单独 12.3×，盒只贡献 2.5×）。别因为「boost 是我们自己加的」就把它当噪声删掉。
+
+### 改动面（18 个文件，grep `static_boost|staticBoost|staticFeedback|static_feedback|staticRamp|static_ramp`）
+
+- 引擎：`rgl/taa_jitter.cppm`（静止判定 + 坡道计数器）、`rgl/scene_context.cppm`、
+  `rgl/scene_config.cppm` + `scene_config_impl.cppm`（三个键的 loader）、
+  `rgl/render_list_impl.cppm`（写生效 feedback 的地方）、`rgl/ecs_impl.cppm`
+- 测试：`tests/test_scene_config.cppm`（三键的解析用例要删/改）、`tests/test_taa_jitter.cppm`
+  （**坡道/静止判定的用例是这条机制的守卫，删机制就要一起删用例，别留悬空断言**）
+- 工具：`tools/imgqa/{engine.h 声明在 imgqa.h, judge.cpp, main.cpp, temporal_motion.cpp,
+  temporal_residual.cpp/.h}` —— ⚠ `--static-boost` / `--boost-floor` 是**判据参数**，
+  删了机制这些参数就失去被测对象：`temporal-residual` 的 N1/N2 两态（门关/门开）会塌成一组，
+  **ρ 这个主指标随之不存在**。⟹ 要么把 ρ 改成「α=0.01 vs α=0.12 的显式对照」，
+  要么保留参数但注明它现在只改 `feedback`。**这一步必须想清楚再动，否则判据静默失效。**
+- 文档：`configs/scene.lua`、`docs/还债总账.md`、本文件、`docs/调试历史.md`
+
+### 动完之后必须重测的（红线有变，别照抄旧基线）
+
+1. **`clip_mode = 0` 逐位不变**这条仍然可测，但**不再是交付态** —— 要显式写 `clip_mode = 0` 去测。
+   旧基线哈希 `1b379e74…` 是「TAA 开 + clip_mode 0」的交付图，**改默认后必然变**，
+   要重新立「TAA 开 + clip_mode 11 + α=0.01」的新基线。
+2. **TAA 关 = 逐位不变**（真正的门红线）**不受影响**，必须复测。
+3. **运动鬼影**：α 恒 0.01 ⟹ 机位运动时也吃 100 帧窗，比今天（运动时 α=0.12）**更鬼**。
+   赌的是臂 11 的 gate 在运动时关掉记忆能兑住。**仪器现成**：
+   `imgqa temporal-tail`（静止机位 + spin）量场景运动；**机位运动**这条它量不到
+   （相机动了就需要配准，回到 `temporal-motion` 那套常红护栏）⟹ 要么先补一个相机运动版尾长，
+   要么这一条先靠肉眼 A/B（用户已证明是可靠的鬼影探测器）。
+4. 闪烁侧：`imgqa temporal-residual --base-space` 六机位 + 合成靶，判据线 ρ ≤ 0.09 **口径失效**
+   （ρ 的定义就是门开/门关之比，机制删了就没这个比）⟹ 换成「α=0.01 的绝对残差 ≤ 今天门开读数」。
+
 ## 2. 批次拆分与验收判据
 
 | 批 | 内容 | 验收判据（每条带阳性锚点 / 反向用例） |
