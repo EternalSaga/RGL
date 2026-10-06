@@ -180,6 +180,151 @@ BandTable bandTableOf(const cv::Mat& swing, const cv::Mat& lumaByte, const cv::M
     return t;
 }
 
+RejectFraction rejectFractionOf(const cv::Mat& alpha8)
+{
+    RejectFraction f;
+    if (alpha8.empty() || alpha8.type() != CV_8UC1)
+        return f;  // 空图 / 非单通道 = 不出数（调用侧的「五桶之和 = 1」自检会抓）
+    const double n = static_cast<double>(alpha8.total());
+    int64_t c[5] = { 0, 0, 0, 0, 0 };
+    for (int y = 0; y < alpha8.rows; ++y) {
+        const uint8_t* p = alpha8.ptr<uint8_t>(y);
+        for (int x = 0; x < alpha8.cols; ++x)
+            ++c[p[x] < 32 ? 0 : (p[x] < 96 ? 1 : (p[x] < 160 ? 2 : (p[x] < 224 ? 3 : 4)))];
+    }
+    f.accepted = c[0] / n;
+    f.clipped = c[1] / n;
+    f.collapsed = c[2] / n;
+    f.reproject = c[3] / n;
+    f.noHistory = c[4] / n;
+    return f;
+}
+
+/// 拒收帧数 → 交叉表档位（0 / 1–2 / 3–8 / 9–16 / 17+）。
+/// **唯一口径**：`rejectCrossTab` 与 `suppressionByRejectBin` 共用它，否则两张表的「档」
+/// 不是同一个区域，而跨表的差值正是判据读的东西。
+int rejectBinIndexOf(int32_t r)
+{
+    return r <= 0 ? 0 : (r <= 2 ? 1 : (r <= 8 ? 2 : (r <= 16 ? 3 : 4)));
+}
+
+double emaTransmittance(double alpha, int k, int period)
+{
+    if (period <= 0 || k < 0 || alpha <= 0.0)
+        return 0.0;
+    const double w = 2.0 * 3.14159265358979323846 * static_cast<double>(k)
+        / static_cast<double>(period);
+    // |1 − (1−α)e^{−jw}|，实部/虚部分开（k=0 时虚部为 0、实部为 α ⟹ |H| = 1 = DC 增益，
+    // 这条是自检钉的边界之一）。
+    const double re = 1.0 - (1.0 - alpha) * std::cos(w);
+    const double im = (1.0 - alpha) * std::sin(w);
+    return alpha / std::hypot(re, im);
+}
+
+double emaSuppressionRatio(double alphaOn, double alphaOff, int k, int period)
+{
+    const double off = emaTransmittance(alphaOff, k, period);
+    return off > 0.0 ? emaTransmittance(alphaOn, k, period) / off : 0.0;
+}
+
+SuppressionTable suppressionByRejectBin(const cv::Mat& swingOn, const cv::Mat& swingOff,
+    const cv::Mat& rejectFrames)
+{
+    SuppressionTable t;
+    // 前提守卫（同 `rejectCrossTab`）：三者必须同尺寸同一次采集，否则**不出数**。
+    if (swingOn.empty() || swingOff.empty() || rejectFrames.empty() || swingOn.type() != CV_64FC1
+        || swingOff.type() != CV_64FC1 || rejectFrames.type() != CV_32SC1
+        || swingOn.size() != swingOff.size() || rejectFrames.size() != swingOn.size())
+        return t;
+    double massOff[6] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+    double massOn[6] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+    int64_t px[6] = { 0, 0, 0, 0, 0, 0 };
+    for (int y = 0; y < swingOn.rows; ++y) {
+        const double* pon = swingOn.ptr<double>(y);
+        const double* poff = swingOff.ptr<double>(y);
+        const int32_t* pr = rejectFrames.ptr<int32_t>(y);
+        for (int x = 0; x < swingOn.cols; ++x) {
+            const int b = rejectBinIndexOf(pr[x]);
+            massOff[b] += poff[x];
+            massOn[b] += pon[x];
+            ++px[b];
+            massOff[5] += poff[x];
+            massOn[5] += pon[x];
+            ++px[5];
+        }
+    }
+    for (int b = 0; b < 6; ++b) {
+        BinSuppression& s = b < 5 ? t.bin[b] : t.total;
+        s.pixels = px[b];
+        s.swingOff = px[b] > 0 ? massOff[b] / static_cast<double>(px[b]) : 0.0;
+        s.swingOn = px[b] > 0 ? massOn[b] / static_cast<double>(px[b]) : 0.0;
+        s.rho = s.swingOff > 0.0 ? s.swingOn / s.swingOff : 0.0;
+    }
+    t.valid = px[5] > 0;
+    return t;
+}
+
+RejectCrossTab rejectCrossTab(const cv::Mat& rejectFrames, const cv::Mat& swing, double tau)
+{
+    RejectCrossTab t;
+    // 前提守卫（同 `bandTableOf`）：两侧必须同尺寸同一次采集，否则**不出数**。
+    // 「表看起来完全正常但像素是错位的」是这套仪器里最贵的假绿。
+    if (rejectFrames.empty() || swing.empty() || swing.type() != CV_64FC1
+        || rejectFrames.type() != CV_32SC1 || rejectFrames.size() != swing.size())
+        return t;
+    for (int y = 0; y < swing.rows; ++y) {
+        const double* ps = swing.ptr<double>(y);
+        const int32_t* pr = rejectFrames.ptr<int32_t>(y);
+        for (int x = 0; x < swing.cols; ++x) {
+            const int32_t r = pr[x];
+            const int b = rejectBinIndexOf(r);
+            RejectBinCell& c = t.bin[b];
+            ++c.pixels;
+            ++t.total;
+            c.mass += ps[x];
+            t.mass += ps[x];
+            if (tau > 0.0 && ps[x] > tau) {  // 严格大于，与 fracOverTau / bandTableOf 同口径
+                ++c.over;
+                ++t.over;
+            }
+        }
+    }
+    return t;
+}
+
+RejectBranch classifyReject(const RejectCrossTab& t, double bin0Share)
+{
+    if (!t.valid() || bin0Share < kRejectMinBin0Share)
+        return RejectBranch::Indeterminate;  // 没有「老实累积」的对照 ⟹ 不许比
+    const double rAll = static_cast<double>(t.over) / static_cast<double>(t.total);
+    const double r0 = t.bin[0].pixels > 0
+            ? static_cast<double>(t.bin[0].over) / static_cast<double>(t.bin[0].pixels)
+            : 0.0;
+    if (rAll <= 0.0)
+        return RejectBranch::Indeterminate;  // 全帧不闪 = 本判据无从判起
+    const double m3p = t.mass > 0.0
+            ? (t.bin[2].mass + t.bin[3].mass + t.bin[4].mass) / t.mass
+            : 0.0;
+    if (r0 <= kRejectAnchorQuiet * rAll && m3p >= kRejectMassLine)
+        return RejectBranch::Support;
+    if (r0 >= kRejectRefuteSame * rAll)
+        return RejectBranch::Refute;
+    return RejectBranch::Indeterminate;
+}
+
+const char* rejectBranchName(RejectBranch b)
+{
+    switch (b) {
+    case RejectBranch::Support:
+        return "支持：残余住在「历史被盒夹过」的像素上（α 调多小都没用）";
+    case RejectBranch::Refute:
+        return "否证：0 拒收档与全帧同率 ⟹ 残余 = EMA 泄漏，与邻域盒无关";
+    case RejectBranch::Indeterminate:
+        return "分不出";
+    }
+    return "分不出";
+}
+
 int bandClipProxyByte(double lin)
 {
     // 绿道：灰阶输入下三通道取整后同值（ACES 的通道串扰在灰输入下不改变亮度序），而绿是
@@ -195,6 +340,10 @@ namespace {
 struct SwingCore {
     double mean = 0.0, p999 = 0.0, mx = 0.0, fracOver = 0.0;
     double halfGap = 0.0, halfGapMax = 0.0, meanValue = 0.0;
+    /// 「同相位两半差 > τ」的**像素数**。⚠ 只有 `halfGapMax` 是不够的：max 分不出
+    /// 「1 个像素抖 0.9」与「1 万个像素抖 0.9」，而这两者的结论完全相反（一个是 PNG 平局翻转
+    /// 噪声地板，一个是真机制）。2026-10-06 实测踩过：臂 7 的半间差max 冲到 0.91，没有计数就只能猜。
+    int64_t halfGapOverPx = 0;
     int64_t pixels = 0;
 };
 
@@ -217,6 +366,7 @@ SwingCore swingFoldCore(const cv::Size& sz, const cv::Mat& m, double tau, int pe
             if (!pm[x])
                 continue;
             double colSum = 0.0;
+            double pxGapMax = 0.0;  // 本像素跨 16 相位的最大「两半同相位差」
             for (int p = 0; p < kResidualPeriod; ++p) {
                 double a = 0.0, b = 0.0;
                 for (int k = 0; k < perHalf; ++k) {
@@ -230,7 +380,10 @@ SwingCore swingFoldCore(const cv::Size& sz, const cv::Mat& m, double tau, int pe
                 const double g = std::abs(v0[p] - v1[p]);
                 halfSum += g;
                 s.halfGapMax = std::max(s.halfGapMax, g);
+                pxGapMax = std::max(pxGapMax, g);
             }
+            if (pxGapMax > tau)
+                ++s.halfGapOverPx;
             // 16 个数的中位数 = 排序后第 8、9 位取平均。nth_element(nth=+8) 保证 *mid 是
             // 第 9 小、且 [begin,mid) 全 ≤ 它 ⟹ 第 8 小 = 前半段的**最大**（不是最小）。
             const auto mid = v.begin() + kResidualPeriod / 2;
@@ -289,6 +442,7 @@ ResidualStat phaseSwingStat(const std::vector<Frame>& shots, const cv::Mat& mask
     s.fracOverTau = c.fracOver;
     s.halfGap = c.halfGap;
     s.halfGapMax = c.halfGapMax;
+    s.halfGapOverPx = c.halfGapOverPx;
     s.meanLuma = c.meanValue;
     return s;
 }
@@ -431,7 +585,7 @@ struct Run {
 Run runGroup(const std::string& dir, const std::string& name, const std::string& tag, bool taa,
     double feedback, double jitterScale, const std::string& variant, int periods,
     double warmMult, double& tau, bool baseSpace, bool staticBoost = false,
-    double staticFloor = 0.01)
+    double staticFloor = 0.01, const ClipArm& arm = {})
 {
     Run r;
     r.name = name;
@@ -459,6 +613,10 @@ Run runGroup(const std::string& dir, const std::string& name, const std::string&
     // 的固有条件（机位一次钉死）⟹ 门开态热身跑满 ramp 后 feedback 恒 = staticFloor。
     o.taaStaticBoost = staticBoost;
     o.taaStaticFeedback = staticFloor;
+    // 批 13.11 消融臂透传到合成靶：「修法不得是 bistro 专用」这条护栏要求**同一臂在
+    // aa_target 上同向**，所以靶侧也必须能开臂（0 = 门关 = 不写键 = 逐位今天）。
+    o.taaClipMode = arm.mode;
+    o.taaClipSoft = arm.soft;
     o.variant = variant;
     o.size = {kSize[0], kSize[1]};
     makeProfile(dir, o);
@@ -556,10 +714,11 @@ Run runGroup(const std::string& dir, const std::string& name, const std::string&
 void printRow(const Run& r)
 {
     std::printf("  %-24s 热身 %5d  meanSwing %-9s p99.9 %-9s max %-8s frac>τ %5.2f%%  "
-                "半间差 %8s/%-8s  与首帧 %2.0fLSB/%5.2f%%\n",
+                "半间差 %8s/%-8s **超τ %lldpx**  与首帧 %2.0fLSB/%5.2f%%\n",
         r.name.c_str(), r.warm, d6(r.stat.meanSwing).c_str(), d6(r.stat.p999Swing).c_str(),
         d6(r.stat.maxSwing).c_str(), r.stat.fracOverTau * 100.0, d6(r.stat.halfGap).c_str(),
-        d6(r.stat.halfGapMax).c_str(), r.byteMaxVsFirst, r.changedVsFirst * 100.0);
+        d6(r.stat.halfGapMax).c_str(), static_cast<long long>(r.stat.halfGapOverPx),
+        r.byteMaxVsFirst, r.changedVsFirst * 100.0);
     std::printf("  %-24s 显示域（只报不判）meanSwing %-7s p99.9 %-6s max %-5s frac>1LSB %5.2f%%\n",
         "", d4(r.byteMeanSwing).c_str(), d2(r.byteP999).c_str(), d2(r.byteMax).c_str(),
         r.byteFrac * 100.0);
@@ -585,7 +744,7 @@ void printRow(const Run& r)
 namespace {
 
 int runStaticBoostSweep(const std::string& root, int periods, double warmMult,
-    const std::string& variant, bool baseSpace, double floorVal)
+    const std::string& variant, bool baseSpace, double floorVal, const ClipArm& arm = {})
 {
     double tau = 0.0;
     std::vector<Run> runs;
@@ -594,12 +753,12 @@ int runStaticBoostSweep(const std::string& root, int periods, double warmMult,
             true, 1.0, 1.0, variant, periods, warmMult, tau, baseSpace));
         runs.push_back(runGroup(root + "/imgqa_resb_b2",
             "B2 fb=.12 js=1 门关(对照)", "resbb2", true, 0.12, 1.0, variant, periods, warmMult,
-            tau, baseSpace));
+            tau, baseSpace, false, 0.01, arm));
         runs.push_back(runGroup(root + "/imgqa_resb_b3",
             "B3 fb=.12 js=1 门开 fb=" + d4(floorVal), "resbb3", true, 0.12, 1.0, variant, periods,
-            warmMult, tau, baseSpace, true, floorVal));
+            warmMult, tau, baseSpace, true, floorVal, arm));
         runs.push_back(runGroup(root + "/imgqa_resb_b4", "B4 fb=.12 js=0 门开(反向)", "resbb4",
-            true, 0.12, 0.0, variant, periods, warmMult, tau, baseSpace, true, floorVal));
+            true, 0.12, 0.0, variant, periods, warmMult, tau, baseSpace, true, floorVal, arm));
     } catch (const std::exception& e) {
         std::printf("  采集失败: %s\n", e.what());
         return 2;
@@ -617,6 +776,15 @@ int runStaticBoostSweep(const std::string& root, int periods, double warmMult,
                 "本变体不判它；选档判据 = 梯度比 ∈ [0.85, 1.02]（同 ⑦）前提下 meanSwing 最低。\n");
     std::printf("  区域 = objectID 靶内部外扩 3px（%lld px）；τ = %s（B1 定，各组共用）\n\n",
         static_cast<long long>(B2.stat.maskPixels), d6(tau).c_str());
+    // ⚠ **口径守卫（2026-10-06 实测踩过）**：本变体的 `base_space` 默认**关**，而交付态是**开**。
+    //   关掉时历史住在抖动空间 ⟹ 残差被「每帧亚像素重采样历史」的复利糊化（批 13.1a/13.5 已修机制）
+    //   主导，它会盖过、甚至**反向扭曲**裁剪臂的效应：同一对臂在关/开两口径下，`frac>τ` 与梯度比的
+    //   好坏方向**相反**（关：frac 17.9%→30.4% 变差、梯度比 0.722→0.596 变糊；开：2.01%→0.03% 变好、
+    //   0.932→1.011 变锐）。跨口径比较无效，故只要「消融臂 ≠ 0 且 base_space 关」就出声。
+    if (!baseSpace && arm.mode > 0.5)
+        std::printf("  🔴 **口径警告**：base_space=**关**（非交付态）却带着消融臂 mode=%d —— 本表量的"
+                    "主要是复利糊化，不是裁剪效应，方向可能是**反的**。判修法请用 `--base-space`。\n",
+            static_cast<int>(arm.mode + 0.5));
     for (const auto& r : runs)
         printRow(r);
 
@@ -732,7 +900,7 @@ struct BistroRun {
 BistroRun runBistroGroup(const std::string& dir, const std::string& name, const std::string& tag,
     const BistroCam& cam, double feedback, double jitterScale, int periods, double warmMult,
     double& tau, bool staticBoost, double staticFloor, bool wantMaps, bool taa = true,
-    bool baseSpace = true)
+    bool baseSpace = true, const ClipArm& arm = {})
 {
     BistroRun r;
     r.name = name;
@@ -749,6 +917,8 @@ BistroRun runBistroGroup(const std::string& dir, const std::string& name, const 
     o.taaBaseSpace = baseSpace;  // 交付态 = 引擎默认 true（口径差异①，勿改默认）
     o.taaStaticBoost = staticBoost;
     o.taaStaticFeedback = staticFloor;
+    o.taaClipMode = arm.mode;    // 批 13.11 消融臂（0 = 门关 = 不写键 = 交付配置原样）
+    o.taaClipSoft = arm.soft;
     makeProfile(dir, o);
 
     // 热身 = ⌈warmMult/α⌉ 对齐到抖动周期；门开态 α = **地板**（爬满 ramp 后 feedback 恒 =
@@ -843,6 +1013,218 @@ BistroRun runBistroGroup(const std::string& dir, const std::string& name, const 
         throw std::runtime_error(name + "：画面是黑的（meanLuma=" + d6(r.stat.meanLuma)
             + "）——交付配置坏了？全零的残差不是「稳定」，是「没画」");
     return r;
+}
+
+// ── 批 13.10：历史拒收 × 残余 的因果交叉表（判「boost 压不住」是不是邻域盒）──────────────
+//
+// 假设、口径三条、⭐ 判决线（跑前写死）全文 = `temporal_residual.h`「历史拒收 × 残余」段。
+// 本处只放采集与出表；分桶与交叉计数是**共用算子**（`rejectFractionOf` / `rejectCrossTab`）。
+struct BistroReject {
+    std::string name;
+    int frames = 0;
+    RejectFraction frac{};  ///< 五桶占比（帧均）
+    cv::Mat nAny;           ///< 每像素「历史被动过（≠收下）」的帧数（CV_32SC1）
+    cv::Mat nCollapse;      ///< 每像素「塌回邻域盒 centroid = 拒收」的帧数
+};
+
+/**
+ * 一组「历史拒收」采集：与 N1/N2 **只差 `diag_reject` 一个键**（RGB 逐位不变，见
+ * `taa.frag.slang` 诊断 alpha 段），连拍取 **taa_out 附件**的 alpha 码。
+ *
+ * 热身与 α 的口径与 `runBistroGroup` 逐字相同（门开态 α = 地板）——拒收模式**依赖历史状态**，
+ * 热身不足读到的是瞬态的盒行为，不是稳态的。
+ */
+BistroReject runBistroRejectGroup(const std::string& dir, const std::string& name,
+    const std::string& tag, const BistroCam& cam, double feedback, int periods, double warmMult,
+    double staticFloor, bool staticBoost)
+{
+    BistroReject r;
+    r.name = name;
+
+    ProfileOpts o;
+    o.deliveryConfigDir = projectRoot() + "/configs";
+    o.hasCamera = true;
+    o.cameraPosition = cam.position;
+    o.cameraTarget = cam.target;
+    o.cameraFov = cam.fov;
+    o.taa = true;
+    o.taaFeedback = feedback;
+    o.taaJitterScale = 1.0;
+    o.taaBaseSpace = true;
+    o.taaStaticBoost = staticBoost;
+    o.taaStaticFeedback = staticFloor;
+    o.taaDiagReject = true;  // ← 与被测组唯一的差别（RGB 逐位不变）
+    makeProfile(dir, o);
+
+    const double alpha = std::clamp(staticBoost ? staticFloor : feedback, 1e-6, 1.0);
+    const int warmRaw = static_cast<int>(std::ceil(warmMult / alpha));
+    const int warm = ((warmRaw + kResidualPeriod - 1) / kResidualPeriod) * kResidualPeriod;
+
+    Engine eng(dir);
+    eng.setCamera({cam.position, cam.target, cam.fov});
+    eng.advanceFrames(static_cast<uint32_t>(warm));
+    const auto files = eng.shotBurst("screenshots", static_cast<uint32_t>(kResidualPeriod * periods),
+        tag + "_c", "taa_out");
+
+    for (size_t i = 0; i < files.size(); ++i) {
+        cv::Mat img = cv::imread(files[i], cv::IMREAD_UNCHANGED);
+        if (img.empty() || img.channels() != 4)
+            throw std::runtime_error(name + "：taa_out 附件读不到或不是 BGRA: " + files[i]);
+        cv::Mat ch[4];
+        cv::split(img, ch);
+        const RejectFraction f = rejectFractionOf(ch[3]);
+        r.frac.accepted += f.accepted;
+        r.frac.clipped += f.clipped;
+        r.frac.collapsed += f.collapsed;
+        r.frac.reproject += f.reproject;
+        r.frac.noHistory += f.noHistory;
+        cv::Mat m, mi;
+        if (i == 0) {
+            r.nAny = cv::Mat::zeros(ch[3].size(), CV_32SC1);
+            r.nCollapse = cv::Mat::zeros(ch[3].size(), CV_32SC1);
+        }
+        // ≥32 = 不是「原样收下」（0 码）。掩膜是 0/255 的 CV_8U，**必须换算成 0/1 再累加**
+        // （直接 `+=` 会把每帧记成 255 帧，且类型不符当场抛）。
+        cv::compare(ch[3], 32, m, cv::CMP_GE);
+        m.convertTo(mi, CV_32SC1, 1.0 / 255.0);
+        r.nAny += mi;
+        // [96,160) = 塌回邻域盒 centroid（0.5 码）= 「历史贡献变成本帧邻域均值」的那一档。
+        cv::Mat lo, hi, both;
+        cv::compare(ch[3], 96, lo, cv::CMP_GE);
+        cv::compare(ch[3], 160, hi, cv::CMP_LT);
+        cv::bitwise_and(lo, hi, both);
+        both.convertTo(mi, CV_32SC1, 1.0 / 255.0);
+        r.nCollapse += mi;
+        ++r.frames;
+        // 在场性守卫（同交付组）：全黑画面的拒收码照样能读，但那张图不是「交付了什么」。
+        cv::Mat gray;
+        cv::cvtColor(img, gray, cv::COLOR_BGRA2GRAY);
+        if (cv::mean(gray)[0] <= 1.0)
+            throw std::runtime_error(name + "：taa_out 画面是黑的——交付配置坏了？");
+    }
+    if (r.frames == 0)
+        throw std::runtime_error(name + "：连拍 0 帧（/shotburst 没出图）");
+    // 自检 1（判据工具自己要有自检）：五桶是**划分** ⟹ 之和必须 = 帧数。
+    const double sum = r.frac.accepted + r.frac.clipped + r.frac.collapsed + r.frac.reproject
+        + r.frac.noHistory;
+    if (std::abs(sum - static_cast<double>(r.frames)) > 1e-6)
+        throw std::runtime_error(name + "：五桶之和 = " + d6(sum) + " ≠ 帧数 "
+            + std::to_string(r.frames) + "——分桶代码坏了，读数无效");
+    r.frac.accepted /= r.frames;
+    r.frac.clipped /= r.frames;
+    r.frac.collapsed /= r.frames;
+    r.frac.reproject /= r.frames;
+    r.frac.noHistory /= r.frames;
+    // 自检 2（阳性锚点）：门没生效 = alpha 恒 1.0 = 全桶「无历史」。历史在热身 16 帧后必然
+    // 有效 ⟹ noHistory > 0.5 只可能是 `diag_reject` 键没生效（键名/载荷/alpha 任一环断了）。
+    if (r.frac.noHistory > 0.5)
+        throw std::runtime_error(name + "：掩膜全桶「无历史」(noHistory = " + d6(r.frac.noHistory)
+            + "）——diag_reject 没生效，拒收读数无效");
+    return r;
+}
+
+/// 出表后的关键读数（进台账，事后复核判决用）。
+struct RejectReport {
+    bool ok = false;
+    double r0 = 0.0, rAll = 0.0, m3p = 0.0, bin0Share = 0.0;
+    int branch = 2;  ///< 0 支持 / 1 否证 / 2 分不出
+    double collapsed = 0.0, clipped = 0.0;
+    // 抑制保真度（闭式锚定主判据；只在门开那次算）
+    bool fidelityRan = false, fidelityPass = false;
+    double rho = 0.0, rhoStar = 0.0, line = 0.0, bin0Rho = 0.0;
+};
+
+/**
+ * 出拒收交叉表 + 逐档抑制比 + 执行两条判决线（两条都**跑前写死**在头注释；这里只执行）。
+ *
+ * @param swingOn  门开态的逐像素 swing（`--reject` 用它做交叉表）
+ * @param swingOff 门关态的逐像素 swing（抑制比的分母；同一次采集）
+ * @param alphaOn  门开态的**本帧权重**（= `static_feedback`）。**>0 才出抑制比与主判据**
+ *                 （门关那次没有「压」这个动作，比无可比）
+ * @param alphaOff 门关态的本帧权重（= `feedback`）
+ */
+RejectReport reportRejectAttribution(const BistroReject& R, const cv::Mat& swingOn,
+    const cv::Mat& swingOff, double tau, const std::string& camName, double alphaOn,
+    double alphaOff)
+{
+    std::printf("\n── 历史拒收 × 残余 交叉表（%s｜连拍 %d 帧取 taa_out alpha；τ = %s）──\n",
+        camName.c_str(), R.frames, d6(tau).c_str());
+    RejectReport rep;
+    rep.collapsed = R.frac.collapsed;
+    rep.clipped = R.frac.clipped;
+    std::printf("  五桶（帧均占比）：收下 %s%% · 盒裁剪 %s%% · **塌回 centroid %s%%** · "
+                "重投影拒收 %s%% · 无历史 %s%%\n",
+        d2(R.frac.accepted * 100.0).c_str(), d2(R.frac.clipped * 100.0).c_str(),
+        d2(R.frac.collapsed * 100.0).c_str(), d2(R.frac.reproject * 100.0).c_str(),
+        d2(R.frac.noHistory * 100.0).c_str());
+    const RejectCrossTab t = rejectCrossTab(R.nAny, swingOn, tau);
+    if (!t.valid()) {
+        std::printf("  ✗ 交叉表未出（swing 与拒收图尺寸/类型不符 = 不是同一次采集）\n");
+        return rep;
+    }
+    rep.ok = true;
+    static const char* const kBinTag[5] = {
+        "0 全程收下", "1-2 偶发", "3-8", "9-16", "17+" };
+    const SuppressionTable sup = suppressionByRejectBin(swingOn, swingOff, R.nAny);
+    const double n = static_cast<double>(t.total);
+    std::printf("  ┌ 每像素「%d 帧里有几帧历史被动过」× swing（ρ = 门开/门关平均 swing）\n",
+        R.frames);
+    std::printf("    %-13s %9s %9s %10s %10s %10s\n", "档", "share", "rate>τ", "残余质量",
+        "Σswing", "ρ 抑制比");
+    for (int i = 0; i < 5; ++i) {
+        const RejectBinCell& c = t.bin[i];
+        std::printf("    %-13s %8s%% %8s%% %9s%% %8s%% %10s%s\n", kBinTag[i],
+            d2(100.0 * c.pixels / n).c_str(),
+            d2(c.pixels > 0 ? 100.0 * c.over / c.pixels : 0.0).c_str(),
+            d2(t.over > 0 ? 100.0 * c.over / t.over : 0.0).c_str(),
+            d2(t.mass > 0 ? 100.0 * c.mass / t.mass : 0.0).c_str(),
+            sup.valid ? d4(sup.bin[i].rho).c_str() : "n/a",
+            i == 0 ? "   ← 纯 EMA 档（ρ 的闭式期望 = ρ*）" : "");
+    }
+    const double rAll = t.total > 0 ? static_cast<double>(t.over) / n : 0.0;
+    const double r0 = t.bin[0].pixels > 0
+            ? static_cast<double>(t.bin[0].over) / static_cast<double>(t.bin[0].pixels)
+            : 0.0;
+    const double m3p = t.mass > 0.0
+            ? (t.bin[2].mass + t.bin[3].mass + t.bin[4].mass) / t.mass
+            : 0.0;
+    const double bin0Share = t.bin[0].pixels / n;
+    const RejectBranch br = classifyReject(t, bin0Share);
+    std::printf("  ⭐ 归因判决（跑前写死：支持 = r0 ≤ %s×rAll 且 m3p ≥ %s；否证 = r0 ≥ %s×rAll）\n",
+        d2(kRejectAnchorQuiet).c_str(), d2(kRejectMassLine).c_str(), d2(kRejectRefuteSame).c_str());
+    std::printf("    r0 = %s%%  rAll = %s%%（r0/rAll = %s）  m3p = %s%%  0 档面积 = %s%%%s\n",
+        d2(r0 * 100.0).c_str(), d2(rAll * 100.0).c_str(),
+        rAll > 0.0 ? d4(r0 / rAll).c_str() : "n/a", d2(m3p * 100.0).c_str(),
+        d2(bin0Share * 100.0).c_str(),
+        bin0Share < kRejectMinBin0Share ? "  ⚠ 低于门槛 5% ⟹ 无「老实累积」对照" : "");
+    std::printf("    ⟹ **%s**\n", rejectBranchName(br));
+    rep.r0 = r0;
+    rep.rAll = rAll;
+    rep.m3p = m3p;
+    rep.bin0Share = bin0Share;
+    rep.branch = br == RejectBranch::Support ? 0 : (br == RejectBranch::Refute ? 1 : 2);
+
+    // ── 主判据：抑制保真度（闭式锚定，`temporal-residual-boost-fidelity`）──
+    // 线 = 1.5 × ρ*，ρ* = |H(α_on)|/|H(α_off)| 由**配置的 α** 运行时算（改档位自动自适应）。
+    if (alphaOn > 0.0 && sup.valid) {
+        rep.fidelityRan = true;
+        rep.bin0Rho = sup.bin[0].rho;
+        rep.rho = sup.total.rho;
+        rep.rhoStar = emaSuppressionRatio(alphaOn, alphaOff);
+        rep.line = kBoostFidelityLine * rep.rhoStar;
+        rep.fidelityPass = rep.rho <= rep.line;
+        std::printf("  ⭐ 抑制保真度（主判据，跑前写死：ρ ≤ %s × ρ*；ρ* = |H(α=%.4g)|/|H(α=%.4g)|）\n",
+            d2(kBoostFidelityLine).c_str(), alphaOn, alphaOff);
+        std::printf("    ρ = %s（%s→%s）  ρ* 闭式 = %s  线 = %s  ⟹ **%s**（超线 %s×）\n",
+            d4(rep.rho).c_str(), d6(sup.total.swingOff).c_str(), d6(sup.total.swingOn).c_str(),
+            d4(rep.rhoStar).c_str(), d4(rep.line).c_str(),
+            rep.fidelityPass ? "PASS" : "FAIL", d4(rep.rho / rep.line).c_str());
+        std::printf("    内部阳性锚点：0 档 ρ = %s（闭式期望 %s，偏 %s×）⟹ 绿例就在同一帧里，"
+                    "本判据不是永远红的摆设\n",
+            d4(rep.bin0Rho).c_str(), d4(rep.rhoStar).c_str(),
+            rep.rhoStar > 0.0 ? d4(rep.bin0Rho / rep.rhoStar).c_str() : "n/a");
+    }
+    return rep;
 }
 
 /// 热图：逐像素 swing → INFERNO 8bit。**scale 必须门关/门开共用**——各图各自拉伸 =
@@ -1100,10 +1482,172 @@ BandReport reportLumaGradBands(const BistroRun& N1, const BistroRun& N2, double 
     return rep;
 }
 
-/// 一机位的六组（N6 仅 `--diag-bs-off`）+ 出表 + 守卫 + 热图。
+/// 一机位的六组（N6 仅 `--diag-bs-off`；N7/N8 仅 `--reject`）+ 出表 + 守卫 + 热图。
 /// 返回 0 = 守卫全过；1 = 某守卫红；2 = 采集失败/锚点中止。
+std::string clipArmName(const ClipArm& arm)
+{
+    switch (static_cast<int>(arm.mode + 0.5)) {
+        case 0: return "0 现行";
+        case 1: return "1 关盒";
+        case 2: return "2 扩1.5×";
+        case 3: return "3 box9";
+        case 4: {
+            std::ostringstream s;
+            s << "4 软λ=" << arm.soft;
+            return s.str();
+        }
+        case 5: {
+            std::ostringstream s;
+            s << "5 扩" << arm.soft << "×";
+            return s.str();
+        }
+        case 6: {
+            std::ostringstream s;
+            s << "6 信任γ=" << (arm.soft > 0.0 ? std::to_string(arm.soft) : "1/16");
+            return s.str();
+        }
+        case 7: {
+            std::ostringstream s;
+            s << "7 记忆d=" << (arm.soft > 0.0 ? std::to_string(arm.soft) : "0.5");
+            return s.str();
+        }
+        default: return "未知臂" + std::to_string(arm.mode);
+    }
+}
+
+/**
+ * 逐臂跑「门关 / 门开」两组并**当场出表**（长跑中途可读，不是一次性在最后打印）。
+ * τ 由臂 0 的门关组定、全臂共用（与 `runBistroCamera` 同口径：跨臂比的是同一把尺子）。
+ * 臂内 α：门关 = feedback 0.12、门开 = 地板；热身按各自 α 算（红线 2，门开态按地板热身）。
+ */
+std::vector<ClipAblRow> runBistroClipAblation(const std::string& dir, const std::string& pre,
+    const BistroCam& cam, int periods, double warmMult, double boostFloor,
+    const std::vector<ClipArm>& arms)
+{
+    std::vector<ClipAblRow> rows;
+    double tau = 0.0;
+    std::printf("\n── 历史裁剪消融 A/B（%s｜每臂两组：门关 fb=.12 / 门开 boost=%.3g；"
+                "τ 由臂 0 门关定，全臂共用）──\n",
+        cam.name, boostFloor);
+    std::printf("  判决线（**跑前写死**，见 temporal_residual.h 同名常量）：\n"
+                "    ① 因果坐实 = ρ ≤ %s×ρ* 且 frac>τ 相对臂 0 降 ≥ %sx\n"
+                "    ② 否证     = 所有消融臂 ρ ≥ %s×ρ(臂0) ⟹ 盒不是主因\n"
+                "    ③ 通用性   = 逐机位 / 逐靶方向一致（只有报障机位降 = 场景特异 = 不算修好）\n",
+        d2(kBoostFidelityLine).c_str(), d2(kClipCausalFracDrop).c_str(),
+        d2(kClipRefuteRatio).c_str());
+    // ⚠ **面积与尾巴可以反向动**（2026-10-06 在 aa_target 上撞见的口径告警，写在这里防误读）：
+    // 关盒让 `frac>τ`（面积）**升**而 p99.9（尾巴）**降 3×**——长窗累积把「少数像素大幅跳」换成
+    // 「多数像素小幅漂」。两者量的不是同一件事：尾巴 = 用户报的「数得清的闪」，面积 = 1 LSB
+    // 边缘的可见面积。所以「修得掉可见症状」这条线**两栏都要看**，任一单独当判据都会误判。
+    std::printf("  ⚠ frac>τ 是**面积**、p999 是**尾巴**，二者可反向（长窗把少数大幅跳换成多数"
+                "小幅漂）；判「修没修掉」两栏一起读\n");
+    // **锐度分母**：同次运行的 fb=1（完全不累积）= 理想 16 相位平均的梯度能量。
+    // 没有它，「尾巴降 20×」可以纯靠"更糊了"拿到（ρ 是比值糊不动它，但可见症状的改善会被糊虚报）。
+    // ── ⚠ 护栏的**方向**（第一版写反，2026-10-06，被自己的数据抓出来）──
+    // 读数 = 本臂相位平均图梯度能量 ÷ fb=1 相位平均图。于是：
+    //   **< 1 = 比理想 16 相位平均更糊** ⟹ 这才是「靠糊换安静」的方向；
+    //   **> 1 = 比它更锐**，**不是作弊**：base_space 下每份贡献先 un-jitter 再累积，EMA 收敛到
+    //     的是**基空间点采样**，而 fb=1 参考是 16 个亚像素偏移的**盒平均**（≈1px 模糊）。
+    // 实测（brickfence，门开）：现行 0.828 · 关盒 1.133 ⟹ **今天的裁剪正在往图里注入模糊**
+    //   （裁剪把历史换成 centroid = 5 抽头空间均值，boost 下裁剪事件权重 1−α ≈ 99%）——
+    //   同一个 bug 的第二条代价：静止机位下交付的是糊图。
+    // ⟹ 反作弊只查**变糊**这一侧，且以「不比臂 0 更糊」为准（臂 0 自己就偏糊；拿 1.0 当红线
+    //    会把合法修法误杀）。
+    double gradRef = 0.0;
+    try {
+        const BistroRun ref = runBistroGroup(dir + "_ref", "参考 fb=1（梯度分母）", pre + "ref",
+            cam, 1.0, 1.0, periods, warmMult, tau, false, boostFloor, false);
+        gradRef = ref.grad;
+    } catch (const std::exception& e) {
+        std::printf("  ✗ 锐度分母组采集失败: %s ⟹ 本表无法排除「靠糊换安静」，作废\n", e.what());
+        return rows;
+    }
+    std::printf("  锐度分母 = fb=1 相位平均图线性域梯度能量 %s（锐度比 **<1 = 更糊 = 作弊方向**、"
+                ">1 = 比 16 相位平均更锐 = 基空间 EMA 的性质；只罚「比臂 0 低 >%s」）\n",
+        d6(gradRef).c_str(), d2(kBlurTolerance).c_str());
+    std::printf("  %-11s %9s %9s %7s %7s %7s %7s%% %7s%% %8s %8s %7s %7s  %s\n", "臂", "swingOff",
+        "swingOn", "ρ", "线", "vs今天", "fracOff", "fracOn", "p999Off", "p999On", "锐Off", "锐On",
+        "判定");
+    for (size_t i = 0; i < arms.size(); ++i) {
+        ClipAblRow r;
+        r.arm = arms[i];
+        const std::string nm = clipArmName(r.arm);
+        const std::string idx = "_" + std::to_string(i);
+        try {
+            // ⚠ **两态必须吃同一臂**：ρ 是「同一裁剪行为下，boost 压掉几倍」。若门关固定在
+            // 臂 0、门开换臂，ρ 的分母就跟着臂变，跨臂不可比（表会看着漂亮但答不了问题）。
+            // 「本臂 vs 今天」是另一个数 = swingOn[臂X] / swingOn[臂0]，表里另算。
+            const BistroRun off = runBistroGroup(dir + "_off" + idx, "臂" + nm + " 门关",
+                pre + "off" + idx, cam, 0.12, 1.0, periods, warmMult, tau, false, boostFloor,
+                false, true, true, r.arm);
+            const BistroRun on = runBistroGroup(dir + "_on" + idx, "臂" + nm + " 门开",
+                pre + "on" + idx, cam, 0.12, 1.0, periods, warmMult, tau, true, boostFloor,
+                false, true, true, r.arm);
+            r.swingOff = off.stat.meanSwing;
+            r.swingOn = on.stat.meanSwing;
+            r.rho = r.swingOff > 0.0 ? r.swingOn / r.swingOff : 0.0;
+            r.rhoStar = emaSuppressionRatio(boostFloor, 0.12);
+            r.line = kBoostFidelityLine * r.rhoStar;
+            r.fracOff = off.stat.fracOverTau;
+            r.fracOn = on.stat.fracOverTau;
+            r.p999Off = off.stat.p999Swing;
+            r.p999On = on.stat.p999Swing;
+            r.gradOff = gradRef > 0.0 ? off.grad / gradRef : 0.0;
+            r.gradOn = gradRef > 0.0 ? on.grad / gradRef : 0.0;
+            r.ok = true;
+        } catch (const std::exception& e) {
+            std::printf("  %-11s ✗ 采集失败: %s\n", nm.c_str(), e.what());
+            rows.push_back(r);
+            return rows;
+        }
+        rows.push_back(r);
+        const std::string vsToday = i == 0 || rows[0].swingOn <= 0.0 ? "—"
+            : d4(r.swingOn / rows[0].swingOn);
+        std::printf("  %-11s %9s %9s %7s %7s %7s %6s%% %6s%% %8s %8s %7s %7s  ", nm.c_str(),
+            d6(r.swingOff).c_str(), d6(r.swingOn).c_str(), d4(r.rho).c_str(), d4(r.line).c_str(),
+            vsToday.c_str(), d2(r.fracOff * 100.0).c_str(), d2(r.fracOn * 100.0).c_str(),
+            d4(r.p999Off).c_str(), d4(r.p999On).c_str(), d4(r.gradOff).c_str(),
+            d4(r.gradOn).c_str());
+        if (i == 0)
+            std::printf("（基准）\n");
+        else {
+            // 三条都得报：ρ（机制）· 可见症状（面积 + 尾巴）· 锐度（**只罚变糊侧**）。
+            const bool rhoOk = r.rho <= r.line;
+            const bool fracOk = rows[0].fracOn > 0.0
+                && r.fracOn <= rows[0].fracOn / kClipCausalFracDrop;
+            const bool blurCheat = r.gradOn < rows[0].gradOn - kBlurTolerance
+                || r.gradOff < rows[0].gradOff - kBlurTolerance;
+            std::printf("%s%s%s\n", rhoOk ? "ρ达闭式 " : "",
+                fracOk ? "**症状降(面积)** " : (rhoOk ? "面积未达4× " : "未达标 "),
+                blurCheat ? "**比今天更糊 = 靠糊换安静，不算修好**" : "");
+        }
+    }
+    if (rows.size() > 1 && rows[0].ok) {
+        // **在场性守卫**（债-55 的教训：参数写进去了但没生效，注释写了、代码没做、判据没红）：
+        // scene.lua 的未知键引擎**不报错**，所以"键没生效"必须由判据自己抓——所有臂的
+        // 读数与臂 0 **逐位相同** = 键根本没进引擎（拼错 / 载荷断链），整表作废。
+        bool identical = true;
+        for (size_t i = 1; i < rows.size(); ++i)
+            identical = identical && rows[i].ok
+                && rows[i].swingOn == rows[0].swingOn && rows[i].swingOff == rows[0].swingOff;
+        if (identical) {
+            std::printf("  ✗ **所有臂读数与臂 0 逐位相同** ⟹ `taa.clip_mode` 没生效"
+                        "（键名 / 载荷 / 配置注入断链），本表作废（在场性守卫，债-55）\n");
+            return rows;
+        }
+        bool refute = true;
+        for (size_t i = 1; i < rows.size(); ++i)
+            refute = refute && rows[i].ok && rows[i].rho >= kClipRefuteRatio * rows[0].rho;
+        std::printf("  ⭐ 汇总：ρ(臂0) = %s；**%s**\n", d4(rows[0].rho).c_str(),
+            refute ? "所有消融臂都没把 ρ 压下来 ⟹ **否证**：邻域盒不是主因，短路假设死，"
+                     "必须回头查别处（不许换说法继续猜）"
+                   : "至少一臂显著压下了 ρ ⟹ 邻域盒短路**坐实**为因（逐臂看上行判定）");
+    }
+    return rows;
+}
+
 int runBistroCamera(const BistroCam& cam, int periods, double warmMult, double boostFloor,
-    const std::string& shotDir, bool diagBsOff)
+    const std::string& shotDir, bool diagBsOff, bool reject, const ClipArm& arm = {})
 {
     double tau = 0.0;
     std::vector<BistroRun> runs;
@@ -1131,10 +1675,15 @@ int runBistroCamera(const BistroCam& cam, int periods, double warmMult, double b
                 "（判据 = **恰为 0**）\n",
         floorOk ? "✓" : "✗", n0.byteMaxVsFirst, static_cast<long long>(n0.changedPx),
         d6(n0.stat.meanSwing).c_str());
+    // ⚠ 消融臂只加在 N1/N2（门关/门开）——N0/N3/N4/N5 是**反向守卫与梯度参考**，
+    //   让它们也吃臂 = 守卫自己被被测改动污染，那就不是守卫了（债-55 型：键生效在错误的组上）。
+    if (arm.mode > 0.5)
+        std::printf("  ⚠ 消融臂 mode=%d soft=%s **只加在 N1/N2**；N0/N3/N4/N5 保持基线\n",
+            static_cast<int>(arm.mode + 0.5), d4(arm.soft).c_str());
     try {
         runs.push_back(runBistroGroup(dir + "_n1",
             "N1 门关 fb=.12 js=1", pre + "n1", cam, 0.12, 1.0, periods, warmMult, tau, false,
-            boostFloor, true));
+            boostFloor, true, true, true, arm));
         // G1 阳性锚点（只钉 doorframe——用户报障机位是既成事实；其余机位接近 0 如实打印）。
         if (std::string(cam.name) == "doorframe" && runs[0].stat.fracOverTau < kAnchorFracFloor) {
             std::printf(
@@ -1146,7 +1695,7 @@ int runBistroCamera(const BistroCam& cam, int periods, double warmMult, double b
         }
         runs.push_back(runBistroGroup(projectRoot() + "/build/imgqa_resbis_" + cam.name + "_n2",
             "N2 门开 fb=.12 js=1", pre + "n2", cam, 0.12, 1.0, periods, warmMult, tau, true,
-            boostFloor, true));
+            boostFloor, true, true, true, arm));
         runs.push_back(runBistroGroup(projectRoot() + "/build/imgqa_resbis_" + cam.name + "_n3",
             "N3 反向 fb=.12 js=0", pre + "n3", cam, 0.12, 0.0, periods, warmMult, tau, true,
             boostFloor, false));
@@ -1174,11 +1723,12 @@ int runBistroCamera(const BistroCam& cam, int periods, double warmMult, double b
             std::pow(1.0 - r.alpha, static_cast<double>(r.warm)) * std::max(1e-9, N1.whiteLuma)
                 + N1.quant;
         std::printf("  %-18s 热身 %5d  meanSwing %-9s p99.9 %-9s max %-9s frac>τ %6.2f%%  "
-                    "半间差max %s%s%s  与首帧 %2.0fLSB/%lldpx\n",
+                    "半间差max %s%s%s **超τ %lldpx**  与首帧 %2.0fLSB/%lldpx\n",
             r.name.c_str(), r.warm, d6(r.stat.meanSwing).c_str(), d6(r.stat.p999Swing).c_str(),
             d6(r.stat.maxSwing).c_str(), r.stat.fracOverTau * 100.0,
             d6(r.stat.halfGapMax).c_str(), r.stat.halfGapMax > tol ? "（>容差 " : "（≤容差 ",
-            d6(tol).c_str(), r.byteMaxVsFirst, static_cast<long long>(r.changedPx));
+            d6(tol).c_str(), static_cast<long long>(r.stat.halfGapOverPx), r.byteMaxVsFirst,
+            static_cast<long long>(r.changedPx));
     }
     const double swingRatio =
         N1.stat.meanSwing > 0.0 ? N2.stat.meanSwing / N1.stat.meanSwing : 0.0;
@@ -1253,6 +1803,32 @@ int runBistroCamera(const BistroCam& cam, int periods, double warmMult, double b
     // 「N1/N2 这两个读数里的残余长什么样」，与反向守卫是否可达无关。
     const BandReport band = reportLumaGradBands(N1, N2, tau);
 
+    // 批 13.10：历史拒收 × 残余 交叉表（`--reject`）。它要回答的是本命令此前**答不了**的问题：
+    // 门开把 meanSwing 压到 ×0.25，但纯 EMA 数学的下界是 ×0.082（|H| 比）——**压不满的那部分
+    // 住在哪**。判决线跑前写死 = `temporal_residual.h`「历史拒收 × 残余」段。
+    RejectReport rejOff, rejOn;
+    if (reject) {
+        try {
+            // 两次调用喂**同一对 swing**（门开 N2 / 门关 N1），差别只在**分档用的拒收图**：
+            // N7 按门关态（α=.12）的盒行为分档、N8 按门开态分档。主判据只在门开那次出
+            // （alphaOn>0），门关那次没有「压」这个动作，比无可比。
+            rejOff = reportRejectAttribution(
+                runBistroRejectGroup(dir + "_rejoff", "N7 拒收码 门关", pre + "n7", cam, 0.12,
+                    periods, warmMult, boostFloor, false),
+                N2.swingMap, N1.swingMap, tau, std::string(cam.name) + " · 分档 = 门关 N1（fb=.12）",
+                0.0, 0.12);
+            rejOn = reportRejectAttribution(
+                runBistroRejectGroup(dir + "_rejon", "N8 拒收码 门开", pre + "n8", cam, 0.12,
+                    periods, warmMult, boostFloor, true),
+                N2.swingMap, N1.swingMap, tau,
+                std::string(cam.name) + " · 分档 = 门开 N8（static boost，用户现状）", boostFloor,
+                0.12);
+        } catch (const std::exception& e) {
+            std::printf("\n  ✗ 拒收交叉表采集失败: %s\n", e.what());
+            return 2;
+        }
+    }
+
     logCall("temporal-residual-bistro",
         {{"camera", cam.name}, {"periods", std::to_string(periods)},
             {"warmMult", d4(warmMult)}, {"floor", d4(boostFloor)}, {"tau", d6(tau)},
@@ -1273,16 +1849,105 @@ int runBistroCamera(const BistroCam& cam, int periods, double warmMult, double b
             {"bandGradThr", d6(band.gradThr)}, {"bandShareDrift", d6(band.shareDrift)},
             {"bandA_ratio", d4(band.rA)}, {"bandB_ratio", d4(band.rB)},
             {"bandB_massOff", d2(band.bMassOff * 100.0)},
-            {"bandB_massOn", d2(band.bMassOn * 100.0)}},
+            {"bandB_massOn", d2(band.bMassOn * 100.0)},
+            // 批 13.10 拒收交叉表（`--reject` 才跑；未跑 = 空串）
+            {"rejOffBranch", reject ? std::to_string(rejOff.branch) : ""},
+            {"rejOff_r0OverAll", reject ? d4(rejOff.rAll > 0 ? rejOff.r0 / rejOff.rAll : -1.0) : ""},
+            {"rejOff_m3p", reject ? d4(rejOff.m3p) : ""},
+            {"rejOff_collapse", reject ? d4(rejOff.collapsed) : ""},
+            {"rejOff_clip", reject ? d4(rejOff.clipped) : ""},
+            {"rejOnBranch", reject ? std::to_string(rejOn.branch) : ""},
+            {"rejOn_r0OverAll", reject ? d4(rejOn.rAll > 0 ? rejOn.r0 / rejOn.rAll : -1.0) : ""},
+            {"rejOn_m3p", reject ? d4(rejOn.m3p) : ""},
+            {"rejOn_collapse", reject ? d4(rejOn.collapsed) : ""},
+            {"rejOn_clip", reject ? d4(rejOn.clipped) : ""},
+            // 主判据（闭式锚定抑制保真度）
+            {"fidRan", reject ? "1" : "0"},
+            {"fidPass", reject ? (rejOn.fidelityPass ? "1" : "0") : ""},
+            {"fidRho", reject ? d6(rejOn.rho) : ""},
+            {"fidRhoStar", reject ? d6(rejOn.rhoStar) : ""},
+            {"fidLine", reject ? d6(rejOn.line) : ""},
+            {"fidBin0Rho", reject ? d6(rejOn.bin0Rho) : ""}},
         {});
     // 守卫汇总：G0 地板与 G2 反向都计入 rc（G0 红 = 全表读数存疑，比 G2 更严重，绝不吞）。
     // sixOk 只作归因信息，不进 rc（诊断组不是判据）。
     (void)sixOk;
+    // 主判据红 ⟹ rc=1（`temporal-residual-boost-fidelity`，线跑前写死）。它与两条守卫同级别：
+    // 都是「这条命令的结论不许被读成通过」。
+    if (reject && rejOn.fidelityRan && !rejOn.fidelityPass) {
+        std::printf("\n  ✗ 主判据 `temporal-residual-boost-fidelity` **FAIL**：ρ = %s > 线 %s"
+                    "（ρ* 闭式 %s，超 %s×）\n    ⟹ static boost 的抑制没到闭式的 2/3，差额住在被"
+                    "邻域盒夹过的像素上（见上表 ρ 列）\n",
+            d4(rejOn.rho).c_str(), d4(rejOn.line).c_str(), d4(rejOn.rhoStar).c_str(),
+            d4(rejOn.rho / rejOn.line).c_str());
+        return 1;
+    }
     return (revOk && floorOk) ? 0 : 1;
 }
 
+/**
+ * 批 13.11 **消融 A/B 的机位循环**（`--clip-abl`）。默认臂集 = 现行 + 四条消融/修法臂：
+ * 关盒（天花板参照）/ 扩 1.5×（债-60 重测臂）/ box9（空间加宽）/ 软裁剪 λ=0.3 与 0.1（修法臂）。
+ * 每臂两组（门关 + 门开），判决线跑前写死在 `runBistroClipAblation`。
+ */
+int runBistroClipAblSweep(int periods, double warmMult, const std::string& camera,
+    double boostFloor, double onlyMode = 0.0, double onlySoft = 1.0)
+{
+    // 臂集（第四轮 = **修法验证**，2026-10-06）：0 基准 · 1 关盒（闭式天花板）·
+    // 7 标量时域 luma 膨胀 decay ∈ {0.5 推导值, 0.25, 0.75}。⚠ **decay 扫 3× 是"平台期"护栏**：
+    // 修法若靠某个调出来的常数，只会在一个值上好看；三档同向 = 机制在起作用，不是常数拟合场景。
+    // （前三轮已定的臂不重跑：扩 1.5/3/6/12× 与 box9 证伪、软裁剪 λ=0.1 有效但差 2.2×、
+    //   信任门三档 γ 只动 3–5% 否决 —— 全见调试历史 2026-10-06。）
+    // `--clip-abl --clip <mode>` = **只跑 {0, mode} 两臂**：跨机位 / 跨靶的通用性复核要的是
+    // 「同一臂在别的场景上同向」，不是重扫参数；全臂集在 4 个机位上要 100 分钟，会没人跑。
+    std::vector<ClipArm> arms = {
+        { 0.0, 1.0 }, { 1.0, 1.0 }, { 7.0, 0.0 }, { 7.0, 0.25 }, { 7.0, 0.75 } };
+    if (onlyMode > 0.0) {
+        // ⚠ mode 6/7 的 `--clip-soft` 是**时间常数覆盖位**，而它的缺省值 1.0 有具体含义且危险：
+        //   mode 6 → γ_up=1（一次收下就满信任）；mode 7 → decay=1（**记忆永不衰减** = 盒单调涨到
+        //   满量程 = 等价关盒）。1.0 在这里不是用户意图而是"没给参数" ⟹ 映射成 0 = 用推导值。
+        double soft = onlySoft;
+        if ((onlyMode == 6.0 || onlyMode == 7.0) && soft == 1.0) {
+            soft = 0.0;
+            std::printf("  （--clip-soft 未给 ⟹ 用推导时间常数，不是缺省值 1.0）\n");
+        }
+        arms = {{ 0.0, 1.0 }, { onlyMode, soft }};
+    }
+    std::printf("bistro 历史裁剪消融 A/B（批 13.11）：交付配置原样，逐臂只差 `taa.clip_mode`"
+                "（门关 fb=.12 / 门开 static_feedback=%s）\n  %d×%d  静止机位  周期数 %d\n",
+        d4(boostFloor).c_str(), kSize[0], kSize[1], periods);
+    int rc = 0;
+    for (const auto& cam : kBistroCams) {
+        if (camera != "all" && camera != cam.name)
+            continue;
+        const auto rows = runBistroClipAblation(
+            projectRoot() + "/build/imgqa_clipabl_" + cam.name, "abl" + std::string(cam.name),
+            cam, periods, warmMult, boostFloor, arms);
+        std::vector<std::pair<std::string, std::string>> args = {
+            { "camera", cam.name }, { "floor", d4(boostFloor) }, { "periods", std::to_string(periods) }
+        };
+        for (const auto& r : rows) {
+            const std::string k = clipArmName(r.arm);
+            args.emplace_back(k + "_rho", r.ok ? d6(r.rho) : "fail");
+            args.emplace_back(k + "_fracOn", r.ok ? d4(r.fracOn * 100.0) : "");
+            args.emplace_back(k + "_swingOn", r.ok ? d6(r.swingOn) : "");
+        }
+        logCall("temporal-residual-clip-abl", args, {});
+        if (!rows.empty() && !rows.back().ok)
+            return 2;
+        // 在场性守卫红 ⟹ rc=2（读数全同 = 键没生效 = 本表作废，见 runBistroClipAblation）
+        bool identical = rows.size() > 1;
+        for (size_t i = 1; i < rows.size(); ++i)
+            identical = identical && rows[i].ok && rows[i].swingOn == rows[0].swingOn
+                     && rows[i].swingOff == rows[0].swingOff;
+        if (identical)
+            return 2;
+    }
+    return rc;
+}
+
 int runBistroSweep(int periods, double warmMult, const std::string& camera, double boostFloor,
-    bool diagBsOff)
+    bool diagBsOff, bool reject, const ClipArm& arm = {})
 {
     std::printf("bistro 真实场景时域残差（债-48，**只出数不判**）：交付配置 configs/ 原样"
                 "（deferred + env/skybox/IBL/AO/shadow 全开 + base_space=交付默认 true）\n"
@@ -1295,7 +1960,8 @@ int runBistroSweep(int periods, double warmMult, const std::string& camera, doub
     for (const auto& cam : kBistroCams) {
         if (camera != "all" && camera != cam.name)
             continue;
-        const int one = runBistroCamera(cam, periods, warmMult, boostFloor, shotDir, diagBsOff);
+        const int one = runBistroCamera(cam, periods, warmMult, boostFloor, shotDir, diagBsOff,
+            reject, arm);
         if (one == 2)
             return 2;  // 采集失败 / 锚点中止：后面的机位不跑（停下报告）
         rc = std::max(rc, one);
@@ -1310,19 +1976,38 @@ int runBistroSweep(int periods, double warmMult, const std::string& camera, doub
 
 int cmdTemporalResidual(int periods, double warmMult, const std::string& variant,
     double slowFeedback, bool skipSlow, bool baseSpace, double staticBoostFloor, bool bistro,
-    const std::string& camera, double boostFloor, bool diagBsOff)
+    const std::string& camera, double boostFloor, bool diagBsOff, bool reject, bool clipAbl,
+    double clipMode, double clipSoft)
 {
     if (periods < 2 || periods % 2 != 0) {
         std::printf("--periods 必须是 ≥2 的偶数（两半折叠 = 同绝对相位对照）。收到 %d\n", periods);
         return 2;
     }
+    // `--reject` 只在 bistro 变体里实现（拒收码要交付配置的 taa_out 附件 + 全帧区域口径）。
+    // **当场拒**而不是静默忽略：一个被吃掉的键 = 「我加了 --reject」这句话没有意义
+    // （同本仓「camelCase 静默回落」那条债的处置方向）。
+    if (reject && !bistro) {
+        std::printf("--reject 只在 --bistro 变体里实现（要交付配置的 taa_out 附件通道 + 全帧区域"
+                    "口径）；合成靶路径未接，**拒绝静默忽略该键**。加 --bistro 或去掉 --reject。\n");
+        return 2;
+    }
+    // 批 13.11 消融臂：`--clip-abl` 是 bistro 侧的逐臂 A/B；`--clip <mode>` 是透传（两条路径都吃）。
+    const ClipArm arm{clipMode, clipSoft};
+    if (clipAbl && !bistro) {
+        std::printf("--clip-abl 只在 --bistro 变体里实现；合成靶侧请用 --static-boost <地板> "
+                    "--clip <mode>（B2/B3/B4 三组吃同一臂，ρ 同口径可比）。\n");
+        return 2;
+    }
     // 批 13.7b 变体分岔（默认不进，现行 7 条判据路径逐字不变）
-    if (bistro)
-        return runBistroSweep(periods, warmMult, camera, boostFloor, diagBsOff);
+    if (bistro) {
+        if (clipAbl)
+            return runBistroClipAblSweep(periods, warmMult, camera, boostFloor, clipMode, clipSoft);
+        return runBistroSweep(periods, warmMult, camera, boostFloor, diagBsOff, reject, arm);
+    }
     // 批 13.7 变体分岔（默认 0 = 不进，现行 7 条判据路径逐字不变）
     if (staticBoostFloor > 0.0)
-        return runStaticBoostSweep(projectRoot() + "/build", periods, warmMult, variant,
-            baseSpace, staticBoostFloor);
+        return runStaticBoostSweep(projectRoot() + "/build", periods, warmMult, variant, baseSpace,
+            staticBoostFloor, arm);
     if (warmMult < 6.0)
         std::printf("⚠ --warm-multiplier %g < 6：EMA 瞬态 (1−α)^t 在 t=6/α 处还剩 0.25%%，"
                     "再小量的就是瞬态不是稳态（红线 2）\n\n",

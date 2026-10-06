@@ -308,6 +308,9 @@ void wireSceneEnvContexts(entt::registry& rg, const SceneConfig& scene) {
 	env.taaDiagReject = scene.taaDiagReject;
 	// 输入侧重建核（批 13.8；默认 0 = 双线性 = 逐位今天；判据消费方 = imgqa --kernel）
 	env.taaInputKernel = scene.taaInputKernel;
+	// 历史裁剪消融门（批 13.11；默认 0 = 现行 = 逐位今天；判据消费方 = imgqa --clip）
+	env.taaClipMode = scene.taaClipMode;
+	env.taaClipSoft = scene.taaClipSoft;
 	rg.ctx().emplace<TaaState>();
 }
 

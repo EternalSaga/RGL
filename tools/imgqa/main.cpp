@@ -645,7 +645,24 @@ void printUsage()
         "doorpanel，N1–N5 五组出数 + 债-47 线性域梯度比 + swing 热图；--camera 选单机位）。"
         "批 13.7c 每机位另出**亮度 × 梯度二维分带**（门关/门开/差三张表，每格 share·rate·"
         "残余质量三数 + 敏感性），判「残余闪烁住在高亮边还是普通边缘」；判决线跑前写死，"
-        "全文见 temporal_residual.h 同名段\n"
+        "全文见 temporal_residual.h 同名段。"
+        " `--reject` = 批 13.10 每机位另出**历史拒收 × 残余交叉表**（门 `taa.diag_reject` 开、连拍"
+        " taa_out alpha；按「32 帧里有几帧历史被邻域盒动过」分档 × swing + **逐档抑制比 ρ**），判"
+        "「static boost 压不满的那部分残余是不是 `clipToAabb` 夹历史」——0 档（全程收下）= 纯 EMA "
+        "泄漏对照，其 ρ 必须 ≈ 闭式 ρ*（**内部阳性锚点**：绿例就在同一帧里）。"
+        "并出**主判据 `temporal-residual-boost-fidelity`**：`ρ ≤ 1.5×ρ*`，ρ* = |H(α_floor)|/|H(α_fb)| "
+        "由配置的 α 运行时现算（改档位自动自适应；|H| 跨谐波只散布 5% ⟹ 与内容无关）。**FAIL 即 "
+        "rc=1**（与两条守卫同级：本命令的结论不许被读成通过）。判决线跑前写死，见同名头注释段\n"
+        " `--clip-abl` = 批 13.11 **历史裁剪因果 A/B**（门 `taa.clip_mode`）：逐臂跑「门关/门开」"
+        "两组，出每臂 ρ 并对闭式线判。臂集 = 0 现行 / 1 关盒（短路天花板参照）/ 2 绕 centroid 扩"
+        " 1.5×（债-60 重测臂）/ 3 box9（空间加宽）/ 4 软裁剪 λ（修法臂：历史每帧最多搬动 λ 份"
+        "「到盒边界的距离」= 弹簧不是墙）/ 5 绕 centroid 扩 K×（K = `--clip-soft`，量「盒差几倍」）。"
+        "**每臂带锐度对照**（梯度比 vs 同次 fb=1 参考；出 [0.85,1.02] 带 = 靠糊换安静 = 不算修好）。"
+        "三条线跑前写死：① **坐实** = ρ ≤ 1.5ρ* 且 "
+        "frac>τ 相对臂 0 降 ≥4×；② **否证** = 所有臂 ρ ≥ 0.8×ρ(臂0) ⟹ 盒不是主因；③ **通用性** = "
+        "逐机位 / 逐靶方向一致（只有报障机位降 = 场景特异 = 不算修好）\n"
+        " `--clip <mode> [--clip-soft λ]` = 单臂透传（合成靶侧配 `--static-boost <地板>` 用，"
+        "B2/B3/B4 吃同一臂，ρ 同口径可比）；0 = 门关 = 不写键 = 交付配置原样\n"
         "  taa-swim [--pairs 32] [--warm 32] [--variant forward]  真实场景逐帧差是否=整幅亚像素"
         "平移（游动）；含基空间门（批 13.2 T5/T6）与量具阳性锚点（批 13.1b）\n"
         "  temporal-motion [--camera doorframe] [--motion camera] [--angle 0.2] [--burst 32]"
@@ -655,6 +672,11 @@ void printUsage()
         "M0–M4 对**同机位 2560×1440 超采样参考**量边缘像素线性域偏差（按帧号配对到同一视点，"
         "故不受 `moving-camera-l1-ratio` 反模式影响）+ M1m/M4m 连拍 taa_out alpha 出**历史被拒"
         "比例**（门 `taa.diag_reject`，RGB 逐位 = M1/M4）；只出数 + 一句判决，不改渲染\n"
+        " `--boost <地板> --clip <mode> [--clip-soft x]` = 批 13.11 **鬼影 × 裁剪消融**：spin 下"
+        "相机静止 ⟹ `static_boost` 真生效 ⟹ 进入 债-49 风险区（静止机位 + 场景内运动 + 长窗）。"
+        "跨臂比 dev(M1)/dev(M0) 即「放宽盒要付多少鬼影」。**阳性锚点 = 关盒（臂 1）必须显著变差**；"
+        "不变差 = 邻域盒在鬼影上根本没承重，就不必为它付静止闪烁的代价。默认两键都不写 = "
+        "已发表 M0–M4 读数逐位不变\n"
         "  temporal-feedback [--camera doorframe] [--angle 0.2] [--burst 32] [--edge-pct 0.90]"
         " [--fb 0.02,0.05,0.12,0.25,0.5,0.8,1.0] [--kernel 0]  **运动态 feedback 扫描**：把「历史在非零分数"
         "偏移上被 CR 重采样 ⟹ 每帧一次低通、在 ≈1/α 窗内复利」这条假设变成数。fb=1 那格"
@@ -755,7 +777,9 @@ int main(int argc, char** argv)
                 std::stod(P.get(args, "--slow-feedback", "0.002")), P.has(args, "--skip-slow"),
                 P.has(args, "--base-space"), std::stod(P.get(args, "--static-boost", "0")),
                 P.has(args, "--bistro"), P.get(args, "--camera", "all"),
-                std::stod(P.get(args, "--boost-floor", "0.01")), P.has(args, "--diag-bs-off"));
+                std::stod(P.get(args, "--boost-floor", "0.01")), P.has(args, "--diag-bs-off"),
+                P.has(args, "--reject"), P.has(args, "--clip-abl"),
+                std::stod(P.get(args, "--clip", "0")), std::stod(P.get(args, "--clip-soft", "1")));
         if (cmd == "temporal-motion")
             return cmdTemporalMotion(P.get(args, "--camera", "doorframe"),
                 P.get(args, "--motion", "camera"),
@@ -763,7 +787,9 @@ int main(int argc, char** argv)
                 std::stoi(P.get(args, "--burst", "32")),
                 std::stoi(P.get(args, "--warm", "16")),
                 std::stoi(P.get(args, "--warm-still", "64")),
-                std::stod(P.get(args, "--edge-pct", "0.90")));
+                std::stod(P.get(args, "--edge-pct", "0.90")),
+                std::stod(P.get(args, "--boost", "0")), std::stod(P.get(args, "--clip", "0")),
+                std::stod(P.get(args, "--clip-soft", "1")));
         if (cmd == "temporal-feedback") {
             std::vector<double> fbs;
             std::stringstream fs(P.get(args, "--fb", "0.02,0.05,0.12,0.25,0.5,0.8,1.0"));

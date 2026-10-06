@@ -550,6 +550,10 @@ void testTemporalResidual(Checker& c)
                 "mean=" + std::to_string(s.meanSwing));
             c.chk("残差：两半同相位 → halfGapMax 恰为 0（折叠自检的阳性面）",
                 s.halfGapMax == 0.0, "gap=" + std::to_string(s.halfGapMax));
+            // 计数口径的反向锚点：max = 0 时**超 τ 的像素数必须也是 0**（若计数写成"≥"或按相位
+            // 而非按像素累加，这条会给出 16 或 16×像素数，而不是 0）。
+            c.chk("残差：halfGapOverPx 按**像素**计数（同相位 → 恰为 0，反向锚点）",
+                s.halfGapOverPx == 0, "overPx=" + std::to_string(s.halfGapOverPx));
         }
         // ③ swing = max − **median**，不是 max − min。闭式：16 列 = 8×0.0 + 7×0.5 + 1×1.0
         //    ⟹ 排序第 8、9 位 = 0.0 与 0.5 ⟹ 中位数 0.25 ⟹ swing = 1.0 − 0.25 = **0.75**；
@@ -592,6 +596,12 @@ void testTemporalResidual(Checker& c)
             c.chk("残差：线性漂移 → halfGap = halfGapMax = 32、swing = 7.5（双闭式）",
                 s.halfGap == 32.0 && s.halfGapMax == 32.0 && s.meanSwing == 7.5,
                 "gap=" + std::to_string(s.halfGap) + " swing=" + std::to_string(s.meanSwing));
+            // 计数口径的阳性锚点：τ=0 且每像素 gap=32 ⟹ **每个像素都超**（=maskPixels）。
+            // 若计数误按「像素×相位」累加，这里会给出 16×，当场红。
+            c.chk("残差：halfGapOverPx = maskPixels（τ=0 且逐像素都超，阳性锚点）",
+                s.halfGapOverPx == s.maskPixels,
+                "overPx=" + std::to_string(s.halfGapOverPx) + " mask="
+                    + std::to_string(s.maskPixels));
         }
         // ⑥ 前提守卫：缺帧 / 奇周期 / 混进没 prepareLinear 或别的 extent 的帧，一律**抛**，
         //    不许出数（「列与相位脱钩」的读数看起来完全正常，是最贵的一类假绿）。
@@ -1018,6 +1028,183 @@ void testTemporalFlicker(Checker& c)
 
 }  // namespace
 
+void testRejectCrossTab(Checker& c)
+{
+    // ① 五桶分档的边界（码值中点 32/96/160/224，raw8 舍入 ±1 被吸收）。
+    //    变异红线：任一边界 `32` 改 `31`、或 `<` 改 `<=` → 对应码字搬家，本条当场红。
+    {
+        cv::Mat a(1, 10, CV_8UC1);
+        const uchar v[10] = { 0, 31, 32, 95, 96, 159, 160, 223, 224, 255 };
+        for (int x = 0; x < 10; ++x)
+            a.at<uchar>(0, x) = v[x];
+        const RejectFraction f = rejectFractionOf(a);
+        c.chk("拒收：五桶边界（0/31 收下 · 32/95 盒裁剪 · 96/159 塌回 · 160/223 重投影 · 224+ 无历史）",
+            std::abs(f.accepted - 0.2) < 1e-12 && std::abs(f.clipped - 0.2) < 1e-12
+                && std::abs(f.collapsed - 0.2) < 1e-12 && std::abs(f.reproject - 0.2) < 1e-12
+                && std::abs(f.noHistory - 0.2) < 1e-12,
+            "acc=" + std::to_string(f.accepted));
+        // 五桶必须是**划分**（和恰为 1）——调用侧的自检就靠这条数学事实。
+        c.chk("拒收：五桶之和恰为 1（划分；调用侧「和 = 帧数」自检的前提）",
+            std::abs(f.accepted + f.clipped + f.collapsed + f.reproject + f.noHistory - 1.0)
+                    < 1e-12,
+            "");
+        // 反向用例：空图 / 类型不符 ⟹ 全 0（**不出数**，而不是「全收下」那种看着正常的假绿）。
+        const RejectFraction e = rejectFractionOf(cv::Mat());
+        const cv::Mat wrongType(2, 2, CV_32SC1, cv::Scalar(0));
+        c.chk("拒收：空图与非 CV_8UC1 一律全 0（不出数 ≠ 全收下）",
+            e.accepted == 0.0 && e.noHistory == 0.0 && rejectFractionOf(wrongType).accepted == 0.0,
+            "");
+    }
+    // ② 交叉表五档的边界（0 / 1–2 / 3–8 / 9–16 / 17+）+ τ 严格大于。
+    //    变异红线：档位边界 `<= 2` 改 `< 2` → 1 帧档搬家；`>` 改 `>=` → τ 上的像素少计。
+    {
+        cv::Mat r(1, 10, CV_32SC1), s(1, 10, CV_64FC1);
+        const int32_t rv[10] = { 0, 0, 1, 2, 3, 8, 9, 16, 17, 32 };
+        const double sv[10] = { 0.9, 0.0, 0.9, 0.0, 0.9, 0.0, 0.9, 0.0, 0.9, 0.0 };
+        for (int x = 0; x < 10; ++x) {
+            r.at<int32_t>(0, x) = rv[x];
+            s.at<double>(0, x) = sv[x];
+        }
+        const RejectCrossTab t = rejectCrossTab(r, s, 0.5);
+        bool ok = t.total == 10 && t.over == 5 && std::abs(t.mass - 4.5) < 1e-12
+            && t.bin[0].pixels == 2 && t.bin[1].pixels == 2 && t.bin[2].pixels == 2
+            && t.bin[3].pixels == 2 && t.bin[4].pixels == 2;
+        ok = ok && t.bin[0].over == 1 && t.bin[1].over == 1 && t.bin[4].over == 1
+            && std::abs(t.bin[0].mass - 0.9) < 1e-12;
+        c.chk("拒收交叉表：五档闭式计数（share/rate/mass 的分子分母各自对）", ok,
+            "total=" + std::to_string(t.total) + " over=" + std::to_string(t.over));
+        // 反向用例：τ 抬到 swing 之上 ⟹ over **恰为 0**，但像素与质量照计（rate 的分母不是 swing）。
+        const RejectCrossTab hi = rejectCrossTab(r, s, 1e9);
+        c.chk("拒收交叉表：τ 高于一切 → over 恰为 0 而 total/mass 不动",
+            hi.over == 0 && hi.total == 10 && std::abs(hi.mass - 4.5) < 1e-12,
+            "over=" + std::to_string(hi.over));
+        // 前提守卫：两侧尺寸/类型不符 = 不是同一次采集 ⟹ **不出数**（同 bandTableOf）。
+        const cv::Mat small = cv::Mat::ones(4, 4, CV_32SC1);
+        const cv::Mat swingBig = cv::Mat::ones(5, 4, CV_64FC1);
+        c.chk("拒收交叉表：尺寸/类型不符 → total=0（错位像素不出表）",
+            rejectCrossTab(small, swingBig, 0.5).total == 0
+                && rejectCrossTab(cv::Mat(), cv::Mat(), 0.5).total == 0
+                && rejectCrossTab(small, small, 0.5).total == 0,  // 两侧同尺寸但类型错
+            "");
+    }
+    // ③ 判决三分支（线跑前写死：支持 = r0 ≤ 0.20×rAll 且 m3p ≥ 0.50；否证 = r0 ≥ 0.80×rAll）。
+    //   fixture 直接搭 RejectCrossTab（不经过 rejectCrossTab），把「判决」与「计数」分开钉。
+    {
+        auto make = [](int64_t b0px, int64_t b0over, double m3, int64_t total) {
+            RejectCrossTab t;
+            t.total = total;
+            t.bin[0].pixels = b0px;
+            t.bin[0].over = b0over;
+            t.mass = 1.0;
+            t.bin[2].mass = m3;
+            return t;
+        };
+        // 支持：0 档 1000/10000 像素只 1 个 over（r0/rAll 远小于 0.2），质量 0.6 住在 ≥3 档。
+        RejectCrossTab sup = make(1000, 1, 0.6, 10000);
+        sup.over = 500;  // rAll = 5%，r0 = 0.1% ⟹ 比值 0.02
+        c.chk("拒收判决：0 档安静 + 质量住 ≥3 档 ⟹ 支持",
+            classifyReject(sup, 0.1) == RejectBranch::Support, "");
+        // 否证：0 档与全帧同率（r0 = 5% = rAll）。
+        RejectCrossTab ref = make(1000, 50, 0.1, 10000);
+        ref.over = 500;
+        c.chk("拒收判决：0 档与全帧同率 ⟹ 否证（残余 = EMA 泄漏，动盒是白动）",
+            classifyReject(ref, 0.1) == RejectBranch::Refute, "");
+        // 灰带：0 档率居中（r0/rAll = 0.5）⟹ 分不出（不许硬掰成任一端）。
+        RejectCrossTab mid = make(1000, 25, 0.6, 10000);
+        mid.over = 500;
+        c.chk("拒收判决：灰带（r0/rAll = 0.5）⟹ 分不出",
+            classifyReject(mid, 0.1) == RejectBranch::Indeterminate, "");
+        // 前置门槛（反向用例）：0 档面积 < 5% ⟹ **没有「老实累积」的对照**，即使数字像支持也不许判。
+        c.chk("拒收判决：0 档面积不足 5% ⟹ 分不出（无对照不许比）",
+            classifyReject(sup, 0.01) == RejectBranch::Indeterminate, "");
+        // 空表 / 全帧不闪 ⟹ 分不出（无从判起，而不是「支持」）。
+        c.chk("拒收判决：空表与 rAll=0 ⟹ 分不出",
+            classifyReject(RejectCrossTab{}, 0.5) == RejectBranch::Indeterminate
+                && [&] {
+                       RejectCrossTab z = make(1000, 0, 0.6, 10000);
+                       return classifyReject(z, 0.1) == RejectBranch::Indeterminate;
+                   }(),
+            "");
+    }
+}
+
+void testBoostFidelity(Checker& c)
+{
+    // ① 闭式传递 |H(α,k)| 的三条数学边界 + 一条**文档锚点**。
+    //    变异红线：把 `hypot(re,im)` 改成 `abs(re)+abs(im)` → 锚点 0.3115 → 0.3155 红；
+    //    把 α 与 (1−α) 写反（本仓在 feedback 语义上翻过一次车）→ DC 增益不再是 1，红。
+    {
+        c.chk("闭式 |H|：DC 增益 k=0 必须恰为 1（任何 α；EMA 不改直流）",
+            std::abs(emaTransmittance(0.12, 0) - 1.0) < 1e-12
+                && std::abs(emaTransmittance(0.01, 0) - 1.0) < 1e-12,
+            "");
+        c.chk("闭式 |H|：α=1（完全不累积）必须恰为 1（输出 = 输入，无滤波）",
+            std::abs(emaTransmittance(1.0, 1) - 1.0) < 1e-12
+                && std::abs(emaTransmittance(1.0, 8) - 1.0) < 1e-12,
+            "");
+        // 文档锚点：configs/scene.lua 与 phase13 头注释写的「α=0.12 漏过 31%」。
+        c.chk("闭式 |H|(0.12,k=1) = 0.3115（文档锚点 0.312，configs/scene.lua taa 段）",
+            std::abs(emaTransmittance(0.12, 1) - 0.3115) < 5e-4,
+            std::to_string(emaTransmittance(0.12, 1)));
+        // 方向红线：本帧权重调**大** = 更信本帧 = 漏得更多。
+        c.chk("闭式 |H| 对 α 单调增（本帧权重越大漏越多；方向反了整条判据反向）",
+            emaTransmittance(0.01, 1) < emaTransmittance(0.12, 1)
+                && emaTransmittance(0.12, 1) < emaTransmittance(0.5, 1),
+            "");
+    }
+    // ② 抑制比 ρ*：恒等 = 1、方向、以及**形状无关性**（本判据成立的地基）。
+    //    变异红线：把 period 写死成 8 → 跨谐波散布从 5% 跳到 >40%，本条红。
+    {
+        c.chk("抑制比 ρ*(α,α) 恰为 1（同档比自己 = 没压；判据的分母分子同式）",
+            std::abs(emaSuppressionRatio(0.12, 0.12) - 1.0) < 1e-12, "");
+        c.chk("抑制比 ρ*(0.01,0.12) = 0.0827（闭式；= 12.1× 抑制）",
+            std::abs(emaSuppressionRatio(0.01, 0.12) - 0.0827) < 5e-4,
+            std::to_string(emaSuppressionRatio(0.01, 0.12)));
+        c.chk("抑制比方向：floor 抬到 0.05 → ρ* 变大（压得更少）",
+            emaSuppressionRatio(0.05, 0.12) > emaSuppressionRatio(0.01, 0.12), "");
+        double lo = 1e9, hi = 0.0;
+        for (int k = 1; k <= 8; ++k) {
+            const double r = emaSuppressionRatio(0.01, 0.12, k);
+            lo = std::min(lo, r);
+            hi = std::max(hi, r);
+        }
+        // 5.0% 散布 ⟹ 「细线是方波还是尖峰」不影响这条线。放宽到 6% 只兜浮点，不留给人调。
+        c.chk("抑制比跨谐波散布 ≤ 6%（k=1..8；形状无关性 = 本判据不需要知道内容）",
+            hi / lo <= 1.06, "spread=" + std::to_string(hi / lo));
+    }
+    // ③ 逐档抑制比表：闭式 fixture（每档两态平均已知）+ 前提守卫 + 除零。
+    //    变异红线：档位口径与 rejectCrossTab 分家（改本函数的 rejectBinIndexOf 调用）→ 搬家红。
+    {
+        cv::Mat on(1, 5, CV_64FC1), off(1, 5, CV_64FC1), r(1, 5, CV_32SC1);
+        const int32_t rv[5] = { 0, 1, 4, 12, 20 };
+        const double onv[5] = { 0.01, 0.10, 0.10, 0.10, 0.10 };
+        const double offv[5] = { 0.20, 0.10, 0.20, 0.10, 0.10 };
+        for (int x = 0; x < 5; ++x) {
+            r.at<int32_t>(0, x) = rv[x];
+            on.at<double>(0, x) = onv[x];
+            off.at<double>(0, x) = offv[x];
+        }
+        const SuppressionTable t = suppressionByRejectBin(on, off, r);
+        bool ok = t.valid && t.total.pixels == 5 && t.bin[0].pixels == 1
+            && std::abs(t.bin[0].rho - 0.05) < 1e-12   // 0.01/0.20
+            && std::abs(t.bin[1].rho - 1.0) < 1e-12    // 0.10/0.10
+            && std::abs(t.bin[2].rho - 0.5) < 1e-12    // 0.10/0.20
+            && std::abs(t.total.rho - (0.41 / 0.70)) < 1e-12;  // 面积加权的平均之比
+        c.chk("逐档抑制比：五档 + 全帧闭式（ρ 是「平均之比」不是「比的平均」）", ok,
+            "total rho=" + std::to_string(t.total.rho));
+        // 反向用例：swingOff 全 0（门关不闪）⟹ ρ = 0 而不是 NaN/inf（除零守卫）。
+        const SuppressionTable z = suppressionByRejectBin(on, cv::Mat::zeros(1, 5, CV_64FC1), r);
+        c.chk("逐档抑制比：分母为 0 → ρ = 0（不产 NaN，「门关不闪」不能被读成无穷好）",
+            z.valid && std::isfinite(z.total.rho) && z.total.rho == 0.0, "");
+        // 前提守卫：三者尺寸/类型不符 ⟹ 不出数。
+        c.chk("逐档抑制比：尺寸或类型不符 → valid=false（错位像素不出表）",
+            !suppressionByRejectBin(on, off, cv::Mat::ones(3, 5, CV_32SC1)).valid
+                && !suppressionByRejectBin(cv::Mat(), cv::Mat(), cv::Mat()).valid
+                && !suppressionByRejectBin(on, off, cv::Mat::ones(1, 5, CV_8UC1)).valid,
+            "");
+    }
+}
+
 int cmdSelftest()
 {
     Checker c;
@@ -1032,6 +1219,8 @@ int cmdSelftest()
     testAoMetrics(c);
     testTemporalResidual(c);
     testLumaGradBands(c);
+    testRejectCrossTab(c);
+    testBoostFidelity(c);
     testTemporalFlicker(c);
     testKeyValidation(c);
     std::printf("%s：%d 条失败\n", c.bad ? "自检失败" : "自检通过", c.bad);

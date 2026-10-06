@@ -60,6 +60,13 @@
 //   2×2 因子实验（交付配置 + 用户机位，js=0 恒等式 mad / 逐像素最大 / 白屋顶区带号差 / 闪烁抑制比）：
 //     取值域闸门旧(saturate) × {盒原样, 盒修法(b')} = 1.68808 / 1.68807，max 37 / 37，−18.506 / −18.506
 //     取值域闸门新(只夹下界) × {盒原样, 盒修法(b')} = 0.02257 / 0.02259，max 3 / 3，−0.014 / −0.014
+//   ⚠ **本否决的适用范围 = js=0 稳态，不得推广到闪烁**（批 13.11 复核，2026-10-06）：上面贴出的
+//     读数全是 **js=0 恒等式**口径，而 js=0 时相机静止、**没有相位变化** ⟹ 该判据对「输出随抖动
+//     相位移动」这条机制**结构性失明**（它量收敛点，闪烁量的是收敛点随相位怎么动）。注释里提到
+//     的「闪烁抑制比」未贴读数，按现有记录无法声称它看见了闪烁。批 13.11 用闭式锚定比值 ρ 重测
+//     （`imgqa temporal-residual --clip-abl`）：关盒 ρ = 0.0804 vs 闭式 ρ* = 0.0827 ⟹ **裁剪确实是
+//     静止闪烁的主因**，与"盒的修法没用"并不矛盾（矛盾的是当年把它读成了"裁剪不影响时域累积"）。
+//     「盒变宽 = 鬼影保护变松 ⟹ 只付风险不拿收益」这句同理只在"量不到收益"时成立。
 //   ⟹ **恒等式在 js=0 的稳态与裁剪算子无关**（收敛点由「历史怎么被夹」决定，不由「历史怎么被裁」
 //   决定），盒的两条修法在压暗区**逐位不改**。而取值域闸门一修，退化率自己塌了：任一通道退化
 //   11.299% → 1.881%、三通道全退化 7.749% → 0.010%、clip 塌回 centroid 9.799% → 0.381%
@@ -136,6 +143,15 @@ float3 clampHdr(float3 x) { return max(x, float3(0.0, 0.0, 0.0)); }
 // 把点 p 沿线段 c→p 收进 AABB [mn,mx]：参数化 p(t) = c + t·(p−c)，取与盒的**首个
 // 出盒交点**（离 p 最近的进入参数 tMax）。c 本身出盒（邻域噪声/centroid 数值）时
 // 直接塌回 c。p 已在盒内 ⇒ 返回 p（不改变历史）。
+/// 「本帧无历史 / 重投影出画」时写进 alpha 的值。
+/// 门关与不携带状态的臂 = 1.0（同时是诊断码「本帧无历史」，与门关值同值，消费方按组别解读）；
+/// **携带时域状态的臂（6 信任 / 7 记忆）= 0.0** = 状态清零 ⟹ 跳切/出画处判据全副武装。
+/// ⚠ 方向别写反：出画正是历史无效之处，写 1.0（满信任）= 在最需要保护的时刻把保护关掉。
+float noHistoryAlpha(float mode)
+{
+    return (mode == 6.0 || mode == 7.0) ? 0.0 : 1.0;
+}
+
 float3 clipToAabb(float3 c, float3 p, float3 mn, float3 mx)
 {
     const float3 d = p - c;
@@ -363,9 +379,16 @@ float4 main(TaaInput input) : SV_Target
     // 历史拒收诊断门（`taa.diag_reject`，默认 0 = 一切 alpha 恒 1.0 = 今天）：开 = 把
     // 「本像素的历史怎么了」编进输出 alpha（RGB 一个 bit 不动，tonemap / 历史采样只读 rgb）：
     //   0.0 = 原样收下（histR 在邻域盒内）｜ 0.25 = 被盒裁剪（部分保留）
-    //   0.5 = **塌回邻域盒 centroid = 拒收**（clipToAabb 返回 c，历史贡献变成本帧邻域均值
-    //         ⟹ 输出 ≈ 本帧，α 调多小都没用——「窗棂残余闪烁」假设的判据本体）
+    //         ⟹ **本桶才是「α 调多小都没用」的出处**：裁剪后的历史值 = 本帧 5 抽头邻域盒的
+    //         **边界**（本帧相位的函数），α 再小也只是「本帧的函数」再乘个小权重
+    //         ⟹ 累积被**短路**（不是"历史被拒"，是"历史变成了本帧"）
+    //   0.5 = **塌回邻域盒 centroid = 拒收**（clipToAabb 返回 c，历史贡献变成本帧邻域均值）
     //   0.75 = 重投影出画拒收（w≤0 / 出界）｜ 1.0 = 本帧无历史（historyValid 旁路）
+    // ⚠ 归因改判（2026-10-06，实测，**本注释此前把这条挂在 0.5 上是错的**）：用户报障机位
+    //   （`imgqa temporal-residual --bistro --camera brickfence --reject`）五桶实测
+    //   「塌回 centroid = **0.00%**、盒裁剪 = **6.60%**」⟹ 病灶在 **0.25** 不在 0.5。
+    //   且短路是**部分**的（被夹档抑制比 ρ ≈ 0.30–0.35 而非 1 = 未夹帧仍在累积）。
+    //   全案 → `调试历史.md` 2026-10-06 / 债-59。
     // 回读 = `POST /shot {"attachment":"taa_out"}`（alpha 经 raw8 直出，不走 gamma）。
     const float diag = readTaaDiagReject();
     // ⚠ texel 必须先于一切采样取到：un-jitter 与出画判据都要它。
@@ -429,13 +452,21 @@ float4 main(TaaInput input) : SV_Target
     // ⚠ 返回的是**已 un-jitter** 那份，不是原始抖动帧：taa_out 每帧都 blit 进 taa_hist 当
     //   下一帧历史，早退帧若留在抖动空间，下一帧就会拿抖动空间图当基空间历史用（偏 c_{t−1}）。
     if (params.y < 0.5)
-        return float4(cur, 1.0);  // alpha 1.0 同时是诊断码「本帧无历史」（与门关值同值，消费方按组别解读）
+        // alpha：门关/非信任臂 = 1.0（同时是诊断码「本帧无历史」，与门关值同值）；
+        // 信任门（mode 6）= **0.0** = 跳切/首帧后信任清零（裁剪重新全副武装），否则跳切瞬间
+        // 会继承上一段画面的高信任 ⟹ 鬼影保护在最需要的时刻缺席。
+        return float4(cur, noHistoryAlpha(readTaaClipControl().x));
 
     // ── 邻域 AABB（box5 十字：中心 + 上下左右，Reinhard 域）──
-    // 抽头绕 **baseUv**（不是 input.uv）：盒要与 cur/历史同处基空间，否则盒是抖动系的、
-    // 被裁的值是基系的 ⟹ 裁剪边界系统性偏 c_t（批 13.5 前两者都在抖动空间，无此问题）。
+    // 消融门 `taa.clip_mode`（批 13.11；0 = 默认 = **逐位今天**，下面两个 if 都不进）：
+    // 3 = box9（3×3 重算盒）。⚠ 默认那条 5 抽头循环**一字不动**，box9 走独立分支——
+    //   把两条揉进一个循环会改累加序（centroid 是求和均值），门红线就没了。
+    const float4 clipCtl = readTaaClipControl();
+    const int clipMode = int(clipCtl.x + 0.5);
     float3 mn = 1.0, mx = 0.0, centroid = 0.0;
     const int2 offs[5] = { {0, 0}, {1, 0}, {-1, 0}, {0, 1}, {0, -1} };
+    // 抽头绕 **baseUv**（不是 input.uv）：盒要与 cur/历史同处基空间，否则盒是抖动系的、
+    // 被裁的值是基系的 ⟹ 裁剪边界系统性偏 c_t（批 13.5 前两者都在抖动空间，无此问题）。
     for (int i = 0; i < 5; ++i)
     {
         // ⚠ 走 sampleSceneAo 而不是裸 colorTex（批 13.6）：被裁的值是 AO-后的，盒也必须是
@@ -448,6 +479,37 @@ float4 main(TaaInput input) : SV_Target
         centroid += r;
     }
     centroid *= 0.2;
+    if (clipMode == 3)
+    {
+        mn = 1.0;
+        mx = 0.0;
+        centroid = 0.0;
+        for (int dy = -1; dy <= 1; ++dy)
+        {
+            for (int dx = -1; dx <= 1; ++dx)
+            {
+                const float3 t = clampHdr(sampleSceneAo(baseUv + float2(dx, dy) * texel, aoStrength));
+                const float3 r = toReinhard(t);
+                mn = min(mn, r);
+                mx = max(mx, r);
+                centroid += r;
+            }
+        }
+        centroid *= (1.0 / 9.0);
+    }
+    // 2 = 绕 centroid 把盒扩 1.5×（§1.7「尺寸不是杠杆」的重测臂：那条结论跑在 CR 核写成
+    // 奇函数、历史被乘 36 的坏构建上，`hist` 本身是错的 ⟹ 已降为「未证」= 债-60）。
+    // 5 = 绕 centroid 扩 **K×**（K = clipCtl.y，**参数化扩盒臂**）。为什么要有 5：首轮实测
+    //   （2026-10-06）1.5× 与 box9 都几乎无效（ρ 0.2501→0.22/0.21）而关盒精确命中闭式
+    //   （ρ = 0.0804 vs ρ* = 0.0827）⟹ 被夹历史不是「差一点出盒」而是「出盒很远」。本臂扫 K
+    //   就是为了量「盒到底差多少倍」——那是时域膨胀 β 的设计输入，不是拿来当修法交付的
+    //   （静态大盒 = 鬼影保护同样没了）。
+    if (clipMode == 2 || clipMode == 5)
+    {
+        const float k = clipMode == 2 ? 1.5 : max(clipCtl.y, 1.0);
+        mn = centroid + (mn - centroid) * k;
+        mx = centroid + (mx - centroid) * k;
+    }
 
     // ── 重投影：本帧像素 → 上一帧屏幕 uv ──
     // ⚠ **uv 用 baseUv，不是 input.uv**（批 13.5，写错就白改）：混合用的颜色 `cur` 取自
@@ -488,7 +550,8 @@ float4 main(TaaInput input) : SV_Target
     // ⚠ 判据跑在 **prevUvBase**（历史真正被索引的坐标）上，不是抖动网格的 prevUv。
     const float2 outTol = 0.5 * texel;
     if (any(prevUvBase < -outTol) || any(prevUvBase > 1.0 + outTol))
-        return float4(cur, diag > 0.5 ? 0.75 : 1.0);  // 出画（本帧视锥外）：clamp 边缘 = 拿错像素，拒绝
+        return float4(cur, diag > 0.5 ? 0.75 : noHistoryAlpha(readTaaClipControl().x));
+        // 出画（本帧视锥外）：clamp 边缘 = 拿错像素，拒绝历史
 
     // ── 历史裁剪 + 混合 ──
     // ⚠ **参数序 = feedback 是「本帧权重」**（configs/scene.lua taa.feedback 的文档口径 +
@@ -516,18 +579,89 @@ float4 main(TaaInput input) : SV_Target
     //   = 系统性拒绝「比本帧亮的合法累积」，TAA 退化成"本帧直出 + 压暗"。半径 1 上一轮
     //   已否决（glint 的峰值相位是 2×2 块，邻域自己就亮），放大支撑只是把"拒绝历史"做得
     //   更狠，不是更准。**这条是"遮"且遮不干净。**
-    const float3 clipped = fromReinhard(clipToAabb(centroid, histR, mn, mx));
+    const float3 hardR = clipToAabb(centroid, histR, mn, mx);
     // 诊断 alpha（门关 = 恒 1.0 = 今天；RGB 的 lerp 一个 bit 不动）。
     // 「拒收」判据 = clipToAabb **恰返回 centroid**（塌缩分支逐位返回 c，见其函数体两条
     // return c；此时历史贡献 = 本帧邻域均值 ⟹ 输出 ≈ 本帧，α 无意义）。
     // 「收下」判据 = histR 逐通道在盒内（**不能**拿 clipped == histR 判：c + d·1.0 在浮点
     // 上不逐位等于 p，盒内也会被判成裁剪——实测过的浮点陷阱）。
+    // ⚠ 码口径 = **硬裁剪**结果，与 `clip_mode` 的 1/4 臂无关（那两臂盒没变、只是响应不同）
+    //   ⟹ 拒收交叉表跨臂可比：它答的是「本像素的盒本会怎么判」，不是「本臂实际做了什么」。
+    //   （2/3 两臂改的就是盒本身，码跟着盒走才是本意。）
     float alpha = 1.0;
     if (diag > 0.5)
     {
         const bool accepted = all(histR >= mn) && all(histR <= mx);
-        const bool collapsed = all(clipped == centroid);
+        const bool collapsed = all(hardR == centroid);
         alpha = accepted ? 0.0 : (collapsed ? 0.5 : 0.25);
     }
-    return float4(lerp(clipped, cur, params.x), alpha);
+    // ── 消融/修法臂（批 13.11；mode 0 = 走 else 分支 = **逐位今天**）──
+    // 1 = 关盒（短路效应的天花板参照）｜ 4 = **软裁剪**：历史每帧最多走完「到盒边界距离」的
+    // λ 分之一（弹簧不是墙）。为什么软裁剪打的是根因：硬裁剪把「一次相位相关的误判」放大成
+    // **整份历史重置**（`lerp(clipped, cur, α)` 里 clipped 的权重是 1−α），软裁剪把它压成
+    // λ 分之一 ⟹ 注入的相位依赖方差 ∝ (p·λ)，而真鬼影仍收敛，只是慢 1/λ 帧。
+    //   实测（2026-10-06）：λ=0.1 → ρ 0.1795（闭式 0.0827、基准 0.2501）= **有效但远不够**。
+    // 6 = **历史信任门**（实测**否决**，理由见该分支）｜ 7 = **标量时域 luma 膨胀**（主推）。
+    float3 clippedR = hardR;
+    if (clipMode == 1)
+        clippedR = histR;
+    else if (clipMode == 4)
+        clippedR = histR + (hardR - histR) * clipCtl.y;
+    else if (clipMode == 6 && diag < 0.5)
+    {
+        // 6 = **历史信任门**（修法臂，批 13.11）。把「本位置的盒最近有多常判收下」存进
+        //   taa_out.a（由既有 taa_out→taa_hist 帧末 blit 携带 ⟹ **零新附件、零新 pass**），
+        //   用它调制裁剪的**咬合深度**：clipped = lerp(hist, hardClip, 1 − trust)。
+        //   trust = 1 → 完全不裁（数值上就是臂 1）；trust = 0 → **逐位今天的硬裁剪**。
+        // 🔴 **实测否决（2026-10-06，brickfence）**：三档 γ_up ∈ {0.03, 1/16, 0.125} 只把 ρ 从
+        //   0.2501 拖到 0.2457/0.2422/0.2385（3–5%），且**按 γ 单调**（⟹ 通道是活的，不是断链；
+        //   真断链会逐位相同、被在场性守卫抓住）。根因是**机制的内生矛盾**：平衡点
+        //   t* ≈ γ_up·p /(γ_up·p + γ_dn·(1−p))，而**需要救的像素正是通过率 p 低的那批** ⟹ t* 低
+        //   ⟹ 咬合不松；γ_dn 为了鬼影保护必须快塌，进一步压低这批像素的信任。**换轴，见臂 7。**
+        // 更新**非对称**（收下慢升、裁剪快塌）：
+        //   收下 → trust += γ_up·(1−trust)   γ_up = 1/16，出处 = **抖动周期**：相位没走完
+        //     一个周期，"误报率"根本无从估计（这不是可调超参，是采样论下的最短窗）
+        //   裁剪 → trust *= (1−γ_dn)          γ_dn = 0.5（≈2 帧塌到 1/4），出处 = 鬼影保护必须在
+        //     **最短累积窗**（交付 α=0.12 ⇒ ≈8 帧）的一小部分内恢复，否则鬼影先于保护出现
+        // 为什么这是**通用**修法而不是 bistro 补丁：单帧信息**原理上**分不开「合法的亚像素细线」
+        //   与「陈旧历史」——两者在单帧里逐字节同形（这正是扩盒/box9 被证伪的原因：它们想在
+        //   单帧里解决一个时域问题）。要分开只能引入时域状态，而"这个位置最近有多常通过本测试"
+        //   就是**本测试自己的误报率**，与内容、与场景、与机位都无关。
+        const float trustPrev =
+            saturate(historyTex.SampleLevel(pointSampler, prevUvBase, 0.0).a);
+        const bool accepted = all(histR >= mn) && all(histR <= mx);
+        const float gUp = clipCtl.y > 0.0 ? clipCtl.y : (1.0 / 16.0);  // y = 扫描覆盖位
+        const float trust = accepted ? lerp(trustPrev, 1.0, gUp) : trustPrev * 0.5;
+        clippedR = lerp(histR, hardR, 1.0 - trust);
+        alpha = trust;  // 通道载体 = 交付中间图的 alpha（tonemap 只读 rgb，历史 blit 全 4 通道）
+    }
+    else if (clipMode == 7 && diag < 0.5)
+    {
+        // 7 = **标量时域 luma 膨胀**（修法臂，批 13.11；与臂 6 共用 alpha 载体 ⟹ 互斥、零新附件）。
+        // 换轴：臂 6 折扣「测试该不该信」，本臂**扩大测试的接受域**——问的不是"要不要信这次裁剪"，
+        //   而是"这个亮度**近几帧有没有在这里出现过**"：
+        //       mem = max(本帧邻域盒的 luma 跨度, mem_prev · decay)
+        //       收下 ⟺ |histLuma − centroidLuma| ≤ mem
+        // 为什么它没有臂 6 的内生矛盾：臂 6 的信任平衡点 t* ≈ γ_up·p/(γ_up·p + γ_dn·(1−p))，
+        //   需要救的像素正是通过率 p 低的那批 ⟹ t* 低 ⟹ 咬合不松（实测三档 γ 只动 3–5%，
+        //   且按 γ 单调 = 通道是活的、机制是弱的）。本臂的 mem 由**实际出现过的跨度**撑大，
+        //   与通过率无关：砖缝这种"本帧 5 抽头全落在暗面（ext≈0）、而合法历史是中间灰"的像素，
+        //   mem 会被上一帧"抽头里有亮砖"的大 ext 撑住 ⟹ 历史被收下。
+        // 同时它**不是关盒**：mem 有界（≤ 近几帧真实出现过的跨度），一个亮物体离开后 ext 塌回
+        //   背景、mem 按 decay 几何衰减 ⟹ 几帧后鬼影因其**距离超过记忆**而被拒——这是距离判据，
+        //   不像臂 6 只调咬合深度、不管历史偏离多远。
+        // decay = 0.5 的出处（**无量纲**，非扫描所得）：鬼影保护须在最短路累积窗（交付 α=0.12
+        //   ⇒ ≈8 帧）的一小部分内恢复 ⟹ 记忆长度取 ≈2 帧。y = 覆盖位，仅供扫描护栏用。
+        const float memPrev = saturate(historyTex.SampleLevel(pointSampler, prevUvBase, 0.0).a);
+        const float decay = clipCtl.y > 0.0 ? clipCtl.y : 0.5;
+        const float3 ext3 = mx - mn;  // 盒的逐通道跨度（Reinhard 域），取最大当标量 slack
+        const float ext = max(ext3.x, max(ext3.y, ext3.z));
+        const float mem = max(ext, memPrev * decay);
+        // luma 用 Reinhard 域等权均值：本臂只要求**同一域内可比**，不是显示亮度
+        const float histL = dot(histR, float3(0.3333333));
+        const float centL = dot(centroid, float3(0.3333333));
+        clippedR = abs(histL - centL) <= mem ? histR : hardR;
+        alpha = mem;
+    }
+    return float4(lerp(fromReinhard(clippedR), cur, params.x), alpha);
 }

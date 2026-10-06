@@ -270,6 +270,7 @@ float3 envBrdfFactor(float NoV, float roughness, float3 F0)
 //   @722208  vec4 (feedback, historyValid, 本帧内容位移 c_t 的 x/y px)
 //   @722224  vec4 (上一帧内容位移 c_{t−1} 的 x/y px, **AO 已施加标志** z, 保留)  —— 批 13.5/13.6
 //   @722240  vec4 (输入侧重建核选择 x, yzw 保留)  —— 批 13.8，默认 0 = 双线性 = 逐位今天
+//   @722256  vec4 (历史裁剪消融门 x, 软裁剪 λ y, zw 保留)  —— 批 13.11，默认 0 = 逐位今天
 //
 // 矩阵口径提醒（改动前必读，全量推导 → scene_data.cppm kSceneDataTaa* 区注释）：
 //   · 重建世界坐标用 sceneData@64 的 skyInvViewProj，它是**抖动后** proj·view 的逆（与深度配套）；
@@ -352,4 +353,17 @@ float readTaaDiagReject()
 float readTaaInputKernel()
 {
     return asfloat(sceneData.Load(722240u));  // kSceneDataTaaInputKernelOffset
+}
+
+/**
+ * 历史裁剪消融门（`taa.clip_mode` / `taa.clip_soft`，批 13.11）。
+ * x = clip_mode（0 现行 = **逐位今天** / 1 关盒 / 2 绕 centroid 扩 1.5× / 3 box9 / 4 软裁剪），
+ * y = 软裁剪 λ（仅 mode=4 读；**无量纲** = 每帧最多走完「到盒边界距离」的 λ 分之一）。
+ * 消费端 = taa.frag.slang 历史裁剪段。为什么这条门存在（clip 在 blend 之前 ⟹ 一次裁剪 =
+ * 一次历史重置 ⟹ 相位依赖方差 100% 注入输出）→ `scene_data.cppm` 同槽注释与
+ * `docs/调试历史.md` 2026-10-06。
+ */
+float4 readTaaClipControl()
+{
+    return asfloat(sceneData.Load4(722256u));  // kSceneDataTaaClipControlOffset
 }

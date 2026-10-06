@@ -276,6 +276,13 @@ struct Spec {
     /// 批 13.9 唯一消费者 = `temporal-motion` 的 REFm（分带尺子必须来自**参考图**，理由见文件头
     /// 「批 13.9」段）。默认 false = 一字节不多算 = 其余组与 `temporal-feedback` 逐位今天。
     bool wantBytes = false;
+    /// 批 13.11：>0 = 开 `taa.static_boost`（地板 = **本帧权重**）。默认 0 = 不写键 = 交付态。
+    /// spin 模式下相机静止 ⟹ boost 真生效 ⟹ 进入 债-49 风险区（静止机位 + 场景内运动 + 长窗）。
+    double staticBoostFloor = 0.0;
+    /// 批 13.11 **历史裁剪消融臂**（`taa.clip_mode` / `taa.clip_soft`）。默认 0 = 不写键 = 交付态。
+    /// 语义 → `rgl/scene_data.cppm` kSceneDataTaaClipControlOffset。
+    double clipMode = 0.0;
+    double clipSoft = 1.0;
 };
 
 std::string d4(double v)
@@ -389,6 +396,13 @@ Group collectGroup(const std::string& dir, const std::string& name, const std::s
     o.taaReprojection = sp.reprojection;
     o.taaDiagReject = sp.diagReject;
     o.taaInputKernel = sp.kernel;  // 批 13.8 输入侧重建核（0 = 不写键 = 已发表口径）
+    // 批 13.11 鬼影 × 裁剪消融（默认全关 = 不写键 = 已发表 M0…M4 读数逐位不变）。
+    // ⚠ 全部以 `o.taa` 为条件：TAA 关的组（M0/REFm/REFs）没有历史，写这些键是空操作，
+    //   但会让「参考组 = 交付配置原样」这条自证失效 ⟹ 一个字节都不多写。
+    o.taaStaticBoost = o.taa && sp.staticBoostFloor > 0.0;
+    o.taaStaticFeedback = sp.staticBoostFloor;
+    o.taaClipMode = o.taa ? sp.clipMode : 0.0;
+    o.taaClipSoft = sp.clipSoft;
     if (sp.cameraMotion)
         o.cameraFrameYaw = sp.motionAngle;  // 默认运动源 = **相机**绕 up 轴定角 yaw
     else {
@@ -581,24 +595,16 @@ RejectStats rejectStats(const Group& g)
 {
     RejectStats s;
     for (const auto& a : g.alpha) {
-        const double n = a.total();
-        cv::Mat b;
-        // 每帧先算**本帧**的四个累积分位（f0≤f1≤f2≤f3），再作差进桶。
-        // ⚠ 别拿累加器作差（实测踩过：`leClipped - s.accepted` 在第 2 帧起减的是「前若干帧
-        // 之和」，盒裁剪直接变成 −1388% 这种物理上不可能的数）。
-        cv::compare(a, 32, b, cv::CMP_LT);
-        const double f0 = static_cast<double>(cv::countNonZero(b)) / n;
-        cv::compare(a, 96, b, cv::CMP_LT);
-        const double f1 = static_cast<double>(cv::countNonZero(b)) / n;
-        cv::compare(a, 160, b, cv::CMP_LT);
-        const double f2 = static_cast<double>(cv::countNonZero(b)) / n;
-        cv::compare(a, 224, b, cv::CMP_LT);
-        const double f3 = static_cast<double>(cv::countNonZero(b)) / n;
-        s.accepted += f0;
-        s.clipped += f1 - f0;
-        s.collapsed += f2 - f1;
-        s.reproject += f3 - f2;
-        s.noHistory += 1.0 - f3;
+        // 分桶口径**唯一出处** = `rejectFractionOf`（temporal_residual.h）。曾经这里是手写的
+        // 四次 `cv::compare` + 作差，写错过一次（拿累加器作差 → 盒裁剪 −1388%）；现在那类错误
+        // 结构上消失，且与 `temporal-residual --reject` 的交叉表**共用同一把尺子**——两份分桶
+        // 的边界一旦不同，两条判据的「拒收」就不是同一件事，而这种漂移不会让任何一条变红。
+        const RejectFraction f = rejectFractionOf(a);
+        s.accepted += f.accepted;
+        s.clipped += f.clipped;
+        s.collapsed += f.collapsed;
+        s.reproject += f.reproject;
+        s.noHistory += f.noHistory;
         ++s.frames;
     }
     // 自检（判据工具自己要有自检）：五桶是**划分** ⟹ 占比之和必须为 1。
@@ -964,15 +970,16 @@ std::string reportMovingBandsAgainstReference(const Group& ref, const cv::Mat& g
 }  // namespace
 
 int cmdTemporalMotion(const std::string& cameraName, const std::string& motion,
-    double angleDeg, int burst, int warm, int warmStill, double edgePercentile)
+    double angleDeg, int burst, int warm, int warmStill, double edgePercentile, double boostFloor,
+    double clipMode, double clipSoft)
 {
     const BistroCam* cam = nullptr;
     for (const auto& c : kBistroCams)
         if (cameraName == c.name)
             cam = &c;
     if (!cam) {
-        std::fprintf(stderr, "机位不存在: %s（可选 doorframe / wetground / doorpanel）\n",
-            cameraName.c_str());
+        std::fprintf(stderr, "机位不存在: %s（可选 %s）\n", cameraName.c_str(),
+            bistroCamNames().c_str());
         return 2;
     }
     if (motion != "camera" && motion != "spin") {
@@ -1008,6 +1015,16 @@ int cmdTemporalMotion(const std::string& cameraName, const std::string& motion,
     else
         std::printf("  M3 = motion_compensation=false（关 prevSpin 场景旋转补偿）\n"
                     "  ⚠ spin 转**场景**、相机不动 ⟹ prevViewProj 恒定 ⟹ 相机重投影路不被走到\n\n");
+    // 批 13.11 消融开关回显（默认全关时**不打**——已发表读数的输出文本也要逐字不变）
+    if (boostFloor > 0.0 || clipMode != 0.0) {
+        const std::string floorTxt =
+            boostFloor > 0.0 ? std::to_string(boostFloor) : std::string("关");
+        std::printf("  ⚠ 消融开关：static_boost 地板 = %s（本帧权重）· clip_mode = %g\n"
+                    "     spin 下相机静止 ⟹ boost **真生效** ⟹ 这就是 债-49 风险区（静止机位 +\n"
+                    "     场景内运动 + 长窗）。跨臂读 dev(M1)/dev(M0)：关盒（臂 1）不显著变差\n"
+                    "     = 邻域盒在鬼影上**没承重**，就不必为它付静止闪烁的代价。\n",
+            floorTxt.c_str(), clipMode);
+    }
 
     // ── 采集（每组一个进程；串行，单实例纪律）────────────────────────────────
     std::printf("── 采集 ──\n");
@@ -1024,6 +1041,12 @@ int cmdTemporalMotion(const std::string& cameraName, const std::string& motion,
     m0.warm = warm;
     Spec m1 = m0;
     m1.taa = true;
+    // 批 13.11 鬼影 × 裁剪消融：只给 **TAA 开**的组设（m2/m3/m3x/m4/m1m/m4m 全由 m1 复制派生
+    // ⟹ 一处生效全覆盖）。TAA 关的组（M0/REFm/REFs）没有历史，臂对它们是空操作。
+    // 默认（0 / 0）= 不写键 = 交付态 = 已发表 M0…M4 读数逐位不变。
+    m1.staticBoostFloor = boostFloor;
+    m1.clipMode = clipMode;
+    m1.clipSoft = clipSoft;
     Spec m2 = m1;
     m2.baseSpace = false;
     Spec m3 = m1;
@@ -1091,22 +1114,33 @@ int cmdTemporalMotion(const std::string& cameraName, const std::string& motion,
     }
 
     // ── 历史拒收掩膜（`taa.diag_reject` → taa_out alpha；RGB 逐位 = M1/M4）────
+    // ⚠ **alpha 载体冲突（债-55 型事故：读数在，读的是别的量）**：臂 6 / 臂 7 把 taa_out 的 alpha
+    //   征用成自己的时域状态载体（`taa.frag.slang` 里 `alpha = trust` / `alpha = mem`）⟹ 拒收码表
+    //   （0/0.25/0.5/0.75/1）读出来是**垃圾**：mem≈0.25 的像素会被算成「盒裁剪」。这不是精度问题
+    //   而是**读错量**，故整段跳过并出声——静默打出一个像模像样的百分比才是最贵的假数据。
+    const int clipModeInt = static_cast<int>(clipMode + 0.5);
+    const bool alphaOccupied = (clipModeInt == 6 || clipModeInt == 7);
     std::printf("\n── 历史拒收掩膜（taa_out alpha；0 收下 / 0.25 盒裁剪 / 0.5 盒拒收 / "
                 "0.75 重投影拒收 / 1 无历史）──\n");
     const RejectStats rsM1 = rejectStats(gM1m);
     const RejectStats rsM4 = rejectStats(gM4m);
-    assertMaskAlive("M1m", rsM1);
-    assertMaskAlive("M4m", rsM4);
     auto echoMask = [&](const char* tag, const RejectStats& s) {
         std::printf("  %-3s 收下 %s · 盒裁剪 %s · **盒拒收 %s** · 重投影拒收 %s · 无历史 %s"
                     "  ⟹ 历史被拒合计 %s\n",
             tag, pct2(s.accepted).c_str(), pct2(s.clipped).c_str(), pct2(s.collapsed).c_str(),
             pct2(s.reproject).c_str(), pct2(s.noHistory).c_str(), pct2(s.rejected()).c_str());
     };
-    echoMask("M1", rsM1);
-    echoMask("M4", rsM4);
-    std::printf("  ⚠ 读法：M1 的边缘像素若大多住在「盒拒收」桶 ⟹ 历史根本没进混合，"
-                "α（feedback/static_boost）调多小都没用——「窗棂残余」与「相机运动失效」同判\n");
+    if (alphaOccupied) {
+        std::printf("  **本臂跳过**：clip_mode = %d 把 alpha 征用成时域状态载体 ⟹ 拒收码表读出来"
+                    "是垃圾（读了就是读错量）\n", clipModeInt);
+    } else {
+        assertMaskAlive("M1m", rsM1);
+        assertMaskAlive("M4m", rsM4);
+        echoMask("M1", rsM1);
+        echoMask("M4", rsM4);
+        std::printf("  ⚠ 读法：M1 的边缘像素若大多住在「盒拒收」桶 ⟹ 历史根本没进混合，"
+                    "α（feedback/static_boost）调多小都没用——「窗棂残余」与「相机运动失效」同判\n");
+    }
 
     // ── 区域与阈值（口径来自 REF，不来自候选 ⟹ 各候选共用一把尺子）──────────
     // 边缘带 = 参考线性 luma 梯度 ≥ p90（top 10%）。为什么用分位而不是绝对阈值：
@@ -1290,10 +1324,14 @@ int cmdTemporalMotion(const std::string& cameraName, const std::string& motion,
         std::printf("  ★ 恒等对照：M3x（关 spin 补偿）= %s，M3x/M1 = %s（按论证应 ≈ 1.00："
                     "spin 补偿矩阵在相机运动下是恒等阵）\n",
             d4(devM3x).c_str(), d2(devM3x / std::max(devM1, 1e-12)).c_str());
-    std::printf("  ★ 历史被拒合计：M1 %s · M4 %s（掩膜 = taa_out alpha，RGB 逐位 = M1/M4；"
-                "「拒」= 盒拒收 + 重投影出画，**不含**盒裁剪 M1 %s / M4 %s = 部分保留）\n",
-        pct2(rsM1.rejected()).c_str(), pct2(rsM4.rejected()).c_str(),
-        pct2(rsM1.clipped).c_str(), pct2(rsM4.clipped).c_str());
+    if (!alphaOccupied)
+        std::printf("  ★ 历史被拒合计：M1 %s · M4 %s（掩膜 = taa_out alpha，RGB 逐位 = M1/M4；"
+                    "「拒」= 盒拒收 + 重投影出画，**不含**盒裁剪 M1 %s / M4 %s = 部分保留）\n",
+            pct2(rsM1.rejected()).c_str(), pct2(rsM4.rejected()).c_str(),
+            pct2(rsM1.clipped).c_str(), pct2(rsM4.clipped).c_str());
+    else
+        std::printf("  ★ 历史被拒合计：**本臂不可读**（alpha 被 clip_mode = %d 征用，见上方掩膜段）\n",
+            clipModeInt);
     std::printf("  ★ 口径边界：AO 的 1440p/720p 差异是各组共用的偏差地板，只出比值结论；"
                 "spin 模式（--motion spin）另量「静止机位 + 动物」，两者不可互推\n");
 
@@ -1418,8 +1456,8 @@ int cmdTemporalFeedback(const std::string& cameraName, double angleDeg, int burs
         if (cameraName == c.name)
             cam = &c;
     if (!cam) {
-        std::fprintf(stderr, "机位不存在: %s（可选 doorframe / wetground / doorpanel）\n",
-            cameraName.c_str());
+        std::fprintf(stderr, "机位不存在: %s（可选 %s）\n", cameraName.c_str(),
+            bistroCamNames().c_str());
         return 2;
     }
     if (burst < 32 || burst % static_cast<int>(kJitterPeriod) != 0)

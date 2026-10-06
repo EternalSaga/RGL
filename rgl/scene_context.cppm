@@ -533,6 +533,14 @@ export struct SceneEnv {
 	// 唯一消费者 = taa.frag `sampleInputColor`。判据消费方 = imgqa `--kernel`（temporal-flicker
 	// / aa-coverage / temporal-feedback）。⚠ 非整数值按 `k<0.5` / `k<1.5` 落桶（不报错）。
 	float taaInputKernel = 0.0f;
+	// ── **历史裁剪消融门**（scene.lua `taa.clip_mode` / `taa.clip_soft`，批 13.11，默认 0 = 逐位今天）──
+	// clip_mode：0 现行（box5 + 硬裁剪）/ 1 关盒 / 2 绕 centroid 扩 1.5× / 3 box9 / 4 软裁剪。
+	// clip_soft（仅 mode=4）= **无量纲**时间常数：历史每帧最多走完「到盒边界距离」的 λ 分之一。
+	//   ⚠ 选值安全线：鬼影衰减 ≈ 1/λ 帧 vs 累积窗 ≈ 1/α 帧——**λ < α 时盒不再是鬼影刹车**。
+	// 为什么存在（根因：clip 在 blend 之前 ⟹ 一次裁剪 = 一次历史重置 ⟹ 相位依赖方差 100% 注入）
+	// → `调试历史.md` 2026-10-06；档位全量语义 → `scene_data.cppm` kSceneDataTaaClipControlOffset。
+	float taaClipMode = 0.0f;
+	float taaClipSoft = 1.0f;
 	// Phase 5.5 批次 4 天空盒：enabled = env 已上传且 scene.lua environment.skybox=true；
 	// pipeline = ShaderRegistry "skybox" 条目下标（main 启动期 addSkyEntry 后回填；
 	// 0xFFFFFFFF = 未建条目——renderListSystem 见 enabled 但 pipeline 无效 = 契约漂移）

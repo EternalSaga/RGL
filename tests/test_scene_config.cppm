@@ -246,6 +246,45 @@ TEST_CASE("scene_config：taa.reprojection / taa.diag_reject（默认 = 逐位�
 	}
 }
 
+TEST_CASE("scene_config：taa.clip_mode / taa.clip_soft（批 13.11 消融门；默认 = 逐位今天）") {
+	// 默认画像：clip_mode = 0（现行硬裁剪 = 交付行为）、clip_soft = 1.0（λ 只在 mode=4 被读，
+	// 默认值本身不参与像素）。变异红线：默认被翻成非 0 ⟹ 本条红 = 门默认开 = 基线不再是基线。
+	{
+		TempLua f("sc_taa_clip_absent", "return {}\n");
+		auto r = loadSceneConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->taaClipMode == 0.0f);
+		expectNear(r->taaClipSoft, 1.0f, 0.0, 1e-6);
+	}
+	// 显式命中（两键都写**非默认方向** ⟹ 键名打错与不写键可区分）。
+	// 变异红线：readFloat 的键名打错（clip_mode ↔ clip_soft 打串是本仓加相邻键时的真实风险）
+	// ⟹ 字段保持默认 ⟹ 本条红。
+	{
+		TempLua f("sc_taa_clip_on", "return { taa = { clip_mode = 4, clip_soft = 0.1 } }\n");
+		auto r = loadSceneConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->taaClipMode == 4.0f);
+		expectNear(r->taaClipSoft, 0.1f, 1e-6, 0.0f);
+	}
+	// **两键互不越界**（反向用例的正题）：只写一个键，另一个必须**纹丝不动**停在默认。
+	// 变异红线：把第二行 readFloat 的目标字段写成第一个（cfg.taaClipMode）→ 只写 clip_soft
+	// 那条会把它灌进 clip_mode → 本条红。
+	{
+		TempLua f("sc_taa_clip_only_mode", "return { taa = { clip_mode = 2 } }\n");
+		auto r = loadSceneConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->taaClipMode == 2.0f);
+		expectNear(r->taaClipSoft, 1.0f, 0.0, 1e-6);
+	}
+	{
+		TempLua f("sc_taa_clip_only_soft", "return { taa = { clip_soft = 0.25 } }\n");
+		auto r = loadSceneConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->taaClipMode == 0.0f);
+		expectNear(r->taaClipSoft, 0.25f, 1e-6, 0.0f);
+	}
+}
+
 TEST_CASE("camera_config：frame_yaw 帧驱动 yaw 门（默认 0 = 门关；显式命中且不碰初始朝向反推）") {
 	// 默认 = 0（门关 = 逐位今天）。变异红线：默认被翻成非 0 = 门默认开 = 交付相机自己转。
 	{

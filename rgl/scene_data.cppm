@@ -270,6 +270,8 @@ static_assert(kSceneDataShadowMatrixOffset == 721696,
  *    + **AO 已施加标志**（z，批 13.6）。
  *  - `kSceneDataTaaInputKernelOffset`（vec4, 16B，批 13.8 新增）= x = **输入侧 un-jitter 的
  *    重建核选择**（0 双线性 = 默认 / 1 CR 4×4 / 2 Lanczos3 6×6），yzw 保留。
+ *  - `kSceneDataTaaClipControlOffset`（vec4, 16B，批 13.11 新增）= (x = **历史裁剪消融门**,
+ *    y = 软裁剪 λ)，zw 保留；0 = 逐位今天。
  * 消费端 = taa.frag.slang / tonemap.frag.slang 字面量（两侧 static_assert 钉死同步）。 */
 export inline constexpr uint32_t kSceneDataTaaOffset = kSceneDataEvssmConstOffset + 16u;
 export inline constexpr uint32_t kSceneDataTaaMotionOffset = kSceneDataTaaOffset + 64u;
@@ -316,10 +318,48 @@ export inline constexpr uint32_t kSceneDataTaaPrevContentShiftOffset = kSceneDat
  * 与改前同一条表达式，一个 bit 不动（`just shot` sha256 实测钉死）。
  */
 export inline constexpr uint32_t kSceneDataTaaInputKernelOffset = kSceneDataTaaOffset + 160u;
-export inline constexpr uint32_t kSceneDataTaaBytes = 176u;
+/**
+ * 批 13.11 **历史裁剪消融门**（vec4：x = clip_mode，y = clip_soft λ，zw 保留）。
+ *
+ * 要回答的问题（实测根因 → `调试历史.md` 2026-10-06）：`clipToAabb` 在 **blend 之前**替换历史，
+ * 而混合是 `lerp(clipped, cur, α)` ⟹ **一次裁剪 = 一次历史重置**（历史被换成"本帧邻域盒边界"，
+ * 权重 1−α）。1px 高对比细线的 box5 在 16 个抖动相位间**双峰**（有杆 / 没杆）⟹ "历史是否被重置"
+ * 由相位决定 ⟹ 相位依赖方差以 100% 权重注入输出。实测：门开态盒裁剪 6.60% 帧均面积扛着
+ * **97.8%** 残余质量，而 `塌回 centroid` 恰 **0.00%**。
+ *
+ * 档位（0 = 默认 = **逐位今天**；1/2/3 是消融臂，4 是修法臂）：
+ *   0 现行（box5 + 硬裁剪）
+ *   1 关盒（历史不裁 = 短路的**天花板**参照）
+ *   2 绕 centroid 扩 1.5×（§1.7「尺寸不是杠杆」的**重测臂**——那条结论跑在 CR 核奇函数的坏构建上）
+ *   3 box9（3×3 邻域 = 空间加宽臂；⚠ 合成靶竖直杆上零区分力，只有真场景/斜向靶量得出）
+ *   4 **软裁剪**（弹簧不是墙：历史每帧最多走完「到盒边界距离」的 λ 分之一）
+ *   5 绕 centroid 扩 **K×**（K = y，参数化扩盒扫描臂；量「盒差多少倍」用，**不是交付修法**）
+ *   6 **历史信任门**（🔴 实测**否决** 2026-10-06：三档 γ_up 只动 3–5%。内生矛盾 = 信任平衡点
+ *     t* ≈ γ_up·p/(γ_up·p + γ_dn·(1−p))，而需要救的像素正是通过率 p 低的那批 ⟹ t* 低）：
+ *     把「本位置最近有多常通过本测试」存进 taa_out.a（既有 blit 携带 ⟹ 零新附件），按
+ *     `lerp(hist, hardClip, 1−trust)` 调制裁剪咬合深度。γ_up = 1/16（= 抖动周期）、γ_dn = 0.5。
+ *     y = γ_up 覆盖位（扫 γ_up 用，0 = 用 1/16）。⚠ 与 `diag_reject` 互斥（抢同一个 alpha）：
+ *     diag 开时本臂退化成臂 0。为什么单帧信息原理上分不开「细线」与「鬼影」→ taa.frag 同段注释。
+ *   7 **标量时域 luma 膨胀**（主推修法）：同一个 alpha 载体改存"记忆"——
+ *     `mem = max(本帧盒 luma 跨度, mem_prev · decay)`，收下 ⟺ `|histLuma − centroidLuma| ≤ mem`。
+ *     问的是"这个亮度近几帧在这里出现过没有"，**扩大接受域**而非折扣测试 ⟹ 没有臂 6 的矛盾；
+ *     且是**距离**判据（mem 有界于近几帧真实跨度）⟹ 不是关盒：物体离开后 mem 几何衰减，
+ *     鬼影因距离超过记忆而被拒。decay = 0.5（≈2 帧记忆，须远短于最短路累积窗 1/α ≈ 8 帧），
+ *     y = decay 覆盖位（仅供扫描护栏）。同样与 `diag_reject` 互斥。
+ *
+ * λ（y，仅 mode=4 读）= **无量纲时间常数**，语义 = 裁剪能以多快的速度搬动历史。
+ * λ=1 在语义上退化成硬裁剪（浮点上不逐位等于 mode 0，故红线只钉 mode 0）。
+ * ⚠ 安全线：鬼影衰减 ≈ 1/λ 帧，累积窗 ≈ 1/α 帧——**λ < α 时盒不再是鬼影刹车**
+ * （那时鬼影由混合决定，= 债-49 的风险区）。选值必须有这条对照，不许扫出来。
+ *
+ * 门红线**构造性**：mode=0 ⟹ shader 走改前那一条表达式（盒构造循环与裁剪调用一个 bit 不动），
+ * 红线由 `just shot` sha256 钉。本区因此从 176B 扩到 192B。
+ */
+export inline constexpr uint32_t kSceneDataTaaClipControlOffset = kSceneDataTaaOffset + 176u;
+export inline constexpr uint32_t kSceneDataTaaBytes = 192u;
 static_assert(kSceneDataTaaOffset == 722080 && kSceneDataTaaMotionOffset == 722144
 	&& kSceneDataTaaParamsOffset == 722208 && kSceneDataTaaPrevContentShiftOffset == 722224
-	&& kSceneDataTaaInputKernelOffset == 722240,
+	&& kSceneDataTaaInputKernelOffset == 722240 && kSceneDataTaaClipControlOffset == 722256,
 	"scene.slang taa literals drifted from scene_data.cppm offsets");
 
 /** scene data buffer 总字节数 = 头 128 + 对象矩阵表 + 灯数组区 + MVP 表 + 材质表 +

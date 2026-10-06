@@ -299,6 +299,11 @@ void fillTaaData(FrameDrawList& out, const ViewProjection& viewProj, const Scene
 	// ⟹ 门关逐位不变（门红线）。为什么是配置直传而不是图形态派生：它不是「有没有这条路」
 	// 而是「同一条路用哪个核」，没有第二个真相源可对账（与 z/w 两个标志位性质不同）。
 	out.sceneData.taaInputKernel = {env.taaInputKernel, 0.0f, 0.0f, 0.0f};
+	// x = **历史裁剪消融门**（`taa.clip_mode`，批 13.11；0 = 现行 = 门关），
+	// y = **软裁剪 λ**（`taa.clip_soft`，仅 mode=4 读；无量纲 = 每帧最多搬动 λ 份「到盒边界的距离」）。
+	// 与 input_kernel 同理：配置直传，不是图形态派生。门关（0）⟹ taa.frag 走改前那条硬裁剪，
+	// 一个 bit 不动（红线 = `just shot` sha256）。档位语义 → `scene_data.cppm` 同槽注释。
+	out.sceneData.taaClipControl = {env.taaClipMode, env.taaClipSoft, 0.0f, 0.0f};
 }
 
 void renderListSystem(entt::registry& rg, RGL::Resources&,

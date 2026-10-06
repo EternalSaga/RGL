@@ -79,6 +79,9 @@ struct ResidualStat {
     double tau = 0.0;         ///< 阈值：一个显示 LSB 在靶白电平处的线性跨度（闭式，见 lsbLinearAtLuma）
     double halfGap = 0.0;     ///< 同相位两半 |Δ| 的均值（收敛/确定性自检，非被测项）
     double halfGapMax = 0.0;  ///< 同上取最大
+    /// 同相位两半差 > τ 的**像素数**（`halfGapMax` 是 max，分不出「1 个像素」与「1 万个像素」，
+    /// 而这两种结论相反：前者是 8bit 平局翻转噪声地板，后者是真机制。两个一起读才作数）
+    int64_t halfGapOverPx = 0;
     double meanLuma = 0.0;    ///< 在场性守卫：画面不是黑的（红线 3）
 };
 
@@ -468,13 +471,201 @@ inline constexpr double kMovingGuardMinMotion = 1.0;
  */
 void printIndeterminate(const std::string& target, const MovingGuards& g);
 
+// ── 历史拒收 × 残余 的因果交叉表（批 13.10；用户报障「static boost 开仍闪」的归因）────────
+//
+// ## 要判的假设
+//
+// `taa.static_boost` 把本帧权重压到 0.01（等效窗 ≈100 帧）之后，砖块亮缝 / 窗棂细线**仍在闪**。
+// 纯 EMA 数学给的下界是**已知**的：16 帧周期分量在本帧权重 α 处的传递
+// `|H| = α/|1−(1−α)e^{−j2π/16}|` 在 α=0.01 是 **0.0256**、α=0.12 是 **0.312** ⟹ 若每个像素都在
+// 老实累积，meanSwing 该降 **12.2×**（brickfence 实测只降 **4.0×**、p99.9 只降 2.5×）。
+// 差额指向 `taa.frag.slang` 里一条**与 α 无关**的路径：`clipToAabb` 把历史夹到本帧邻域盒
+// （诊断码 0.25）甚至塌回 centroid（0.5）⟹ 被夹的「历史」本身就是本帧的函数 ⟹ shader 注释
+// 原话「α 调多小都没用」。本表 = 那句话的**实测版本**（注释早就写了假设，从来没人量过）。
+//
+// ## 口径（三条，每条都是被迫的）
+//
+//  1. **拒收码来自引擎本体**（门 `taa.diag_reject` → `taa_out` 的 alpha，raw8 直出），不是从
+//     图像反推。RGB 逐位不变（`taa.frag.slang` 的诊断 alpha 段），所以拒收组与交付组是**同一
+//     幅画面**的两种读法，像素一一对齐。
+//  2. **交叉表的一侧是逐像素帧计数**，不是「本帧是否拒收」：抖动周期 16、连拍 32 帧 ⟹ 一根
+//     1px 细线只要有一半相位被夹，它就**必然**在 swing 里留痕。分档因此按「32 帧里有几帧历史
+//     被动过」，`0` 档 = 「全程原样收下」= **纯 EMA 泄漏档**（它必须安静，否则本假设死）。
+//     ⚠ 两组是**不同进程**，绝对起始相位可差常数帧 ⟹ 本表**不做逐帧配对**，只做「计数 → 分档」
+//     （两半各含整数个周期，计数对相位平移不敏感）。
+//  3. 求值域 = 全帧（与 `--bistro` 的残差同区域口径），τ = 同一次运行的 N1 τ（跨组共用）。
+//
+// ## ⭐ 判决线（**2026-10-06 跑前写死**，防事后挑数）
+//
+// 记 `r0` = 0 档（全程收下）的 rate>τ、`rAll` = 全帧 rate>τ、`m3p` = 「≥3 拒收帧」三档合计的
+// **残余质量占比**（Σswing 口径，理由同 `MovingBandBranch` 的幅度份额升级）。
+//
+// * **支持「盒裁剪/拒收是残余主因」** ⟺ `r0 ≤ 0.20 × rAll` **且** `m3p ≥ 0.50`。
+//   （0 档安静 = 老实累积的地方确实不闪；质量住在被夹的像素上 = 差额不是 EMA 泄漏。）
+// * **否证（残余 = EMA 泄漏，与盒无关）** ⟺ `r0 ≥ 0.80 × rAll`。
+//   ⟹ 修法只在「α 还能不能更低 / 历史侧还能不能更准」，**动邻域盒是白动**。
+// * 其余 = **分不出**（如实报，不硬掰）。
+// * 前置门槛：0 档像素 < 全帧 5% ⟹ 直接判「分不出（0 档样本不足，没有『老实累积』的对照）」。
+//
+// 0.20 / 0.80 与 0.50 的理由：0.20 = 「安静」的下界（本项目「明显」一律取 1.5×，这里要的是
+// **反向**判据，取 5× 分离 = 0.20，比 1.5× 更保守，因为 0 档面积通常 >90%，稍有泄漏就会被面积
+// 稀释）；0.80 = 「与全帧无异」的容差（±25% 的等价形式，同 `kBandEqualLo/Hi` 的量级）；0.50 =
+// 「多数」的最低含义。三条线之间的灰带如实报分不出。
+struct RejectFraction {
+    double accepted = 0.0;   ///< 历史原样收下（alpha 0）
+    double clipped = 0.0;    ///< 被邻域盒裁剪、部分保留（0.25）
+    double collapsed = 0.0;  ///< 塌回邻域盒 centroid = 拒收（0.5）
+    double reproject = 0.0;  ///< 重投影出画拒收（0.75）
+    double noHistory = 0.0;  ///< 本帧无历史（1.0）
+};
+
+/**
+ * 单帧拒收码图（CV_8UC1，raw8 直出的 alpha）→ 五桶占比（和恰为 1）。
+ *
+ * **唯一口径**：`temporal_motion.cpp::rejectStats` 与本文件的交叉表**共用这一份**分桶
+ * （先例 = 分带常量提到本头；两份分桶代码的边界一旦不同，两条判据的「拒收」就不是同一件事，
+ * 而这种漂移不会让任何一条变红）。分桶边界取码值中点（32/96/160/224），raw8 舍入 ±1 被吸收。
+ */
+[[nodiscard]] RejectFraction rejectFractionOf(const cv::Mat& alpha8);
+
+/// 交叉表的一格（三个数缺一不可，理由同 `BandCell`）。
+struct RejectBinCell {
+    int64_t pixels = 0;
+    int64_t over = 0;   ///< 该档内 `swing > tau` 的像素数
+    double mass = 0.0;  ///< 该档 Σswing
+};
+
+/// 「N 帧里有几帧历史被动过」五档交叉表：0 / 1–2 / 3–8 / 9–16 / 17+。
+struct RejectCrossTab {
+    RejectBinCell bin[5];
+    int64_t total = 0;  ///< 参与计数的像素数（尺寸不符 = 0，见 .cpp 前提守卫）
+    int64_t over = 0;
+    double mass = 0.0;
+    [[nodiscard]] bool valid() const { return total > 0; }
+};
+
+/**
+ * 拒收帧数 × 逐像素 swing 的交叉计数。
+ *
+ * @param rejectFrames 每像素「历史被动过（≠收下）」的帧数（CV_32SC1，与 swing 同尺寸）
+ * @param swing        同一次 `--bistro` 采集的逐像素 swing（CV_64FC1，线性 luma）
+ * 尺寸不符 / 空图 ⟹ `total = 0`（**不出数**，同 `bandTableOf` 的前提守卫）。
+ */
+[[nodiscard]] RejectCrossTab rejectCrossTab(const cv::Mat& rejectFrames, const cv::Mat& swing,
+    double tau);
+
+/// 判决线常量（**跑前写死**，出处 = 上面那段）。
+inline constexpr double kRejectAnchorQuiet = 0.20;  ///< 支持线：0 档 rate ≤ 0.20 × 全帧 rate
+inline constexpr double kRejectRefuteSame = 0.80;   ///< 否证线：0 档 rate ≥ 0.80 × 全帧 rate
+inline constexpr double kRejectMassLine = 0.50;     ///< 支持线：≥3 拒收帧三档的残余质量 ≥ 50%
+inline constexpr double kRejectMinBin0Share = 0.05; ///< 前置门槛：0 档面积下限（否则无对照）
+
+/// 判决三分支（命名齐三条，防批 13.7c 那种「落进未命名兜底支」）。
+enum class RejectBranch { Support, Refute, Indeterminate };
+[[nodiscard]] RejectBranch classifyReject(const RejectCrossTab& t, double bin0Share);
+[[nodiscard]] const char* rejectBranchName(RejectBranch b);
+
+/// EMA（**本帧权重** α，与 `taa.feedback` 同语义）对 16 帧周期分量的传递幅度
+/// `|H(α,k)| = α / |1 − (1−α)·e^{−j2πk/P}|`。
+///
+/// 这是「累积窗该压掉多少闪烁」的**闭式**，不是拟合出来的曲线：静止机位 + 固定抖动 ⟹ 输入
+/// 对帧号是**严格 P 周期**的（Halton 周期 `kResidualPeriod`），EMA 是线性时不变滤波 ⟹ 输出
+/// 同周期、每个谐波乘 `|H|`。
+[[nodiscard]] double emaTransmittance(double alpha, int k = 1, int period = kResidualPeriod);
+
+/**
+ * 闭式**抑制比** `ρ* = |H(α_on, k)| / |H(α_off, k)|`（static boost 该把残差压到几分之一）。
+ *
+ * ⭐ 本判据能成立靠的是一条实测出来的**形状无关性**：ρ* 跨谐波 k=1..8 只散布 **5.0%**
+ * （0.0787–0.0827，α 0.12→0.01）。所以「一根 1px 细线的闪烁是方波还是尖峰」根本不影响这条线
+ * ——任何老实累积的像素都必须被压到 ρ* 附近，与内容无关。
+ * ⚠ 它是 **EMA 专属**的地板，不是普适下界：换成 16 抽头时域盒式平均能压到更低，而本判据是
+ * **上界**（`ρ ≤ 线`），换更强的滤波只会更绿 ⟹ 不存在「把判据逼到调阈值」的死角。
+ * ⚠ α 从**配置**读（`feedback` / `static_feedback`），线随档位自动自适应，改档位不必重拍阈值。
+ */
+[[nodiscard]] double emaSuppressionRatio(double alphaOn, double alphaOff, int k = 1,
+    int period = kResidualPeriod);
+
+/// 判决线（**2026-10-06 跑前写死**）：`ρ ≤ 1.5 × ρ*`。1.5 = 本项目「明显」统一常量
+/// （`kBandSupportRatio` 同值同理由）。语义 = 「至少得把闭式差距的 2/3 补上」，
+/// 不是噪声余量（本命令运行间噪声 ≤0.3%，远小于此）。
+inline constexpr double kBoostFidelityLine = 1.5;
+
+/**
+ * 批 13.11 **历史裁剪消融臂**（门 `taa.clip_mode` / `taa.clip_soft`）。默认 = 门关 = 逐位今天。
+ *
+ * 档位（权威语义 → `rgl/scene_data.cppm` kSceneDataTaaClipControlOffset）：
+ * 0 现行 / 1 关盒（短路天花板参照）/ 2 绕 centroid 扩 1.5× / 3 box9 / 4 软裁剪（λ = soft）
+ * / 5 绕 centroid 扩 K×（K = soft，参数化扩盒扫描臂）。
+ */
+struct ClipArm {
+    double mode = 0.0;
+    double soft = 1.0;
+};
+
+/// 消融臂的显示名（表头与台账都用它，别在多处手写字符串）。实现 = 本文件匿名空间内
+/// （只有本 TU 用；声明放头文件会与匿名空间定义**同名歧义**，实测踩过）。
+
+/// A/B 判决线（**2026-10-06 跑前写死**，跑完不许改口径）：
+/// ① 因果坐实 = 某臂 `ρ ≤ kBoostFidelityLine × ρ*` **且** `frac>τ` 相对臂 0 降 ≥ 4×
+///    （4× = 门关 9.99% → 现状 2.38% 的再 1/5；「肉眼不再数得清」量级，不是可调 epsilon）。
+/// ② 否证 = **所有**消融臂 `ρ ≥ 0.8 × ρ(臂0)` ⟹ 盒不是主因，短路假设死，必须回头查别处。
+/// ③ 通用性 = 逐机位/逐靶**方向一致**（只有报障机位降 = 场景特异 = 不算修好）。
+inline constexpr double kClipCausalFracDrop = 4.0;
+inline constexpr double kClipRefuteRatio = 0.8;
+/// 锐度反作弊容差（**只罚变糊这一侧**，方向论证 → `runBistroClipAblation` 内注释）：
+/// 本臂梯度比低于臂 0 超过本值 = 「靠糊换安静」= 该臂不算修好。0.03 ≫ 读数噪声（≪0.005）。
+inline constexpr double kBlurTolerance = 0.03;
+
+struct BistroCam;  ///< 前置声明（定义在本文件下方机位表处；本命令的 A/B 以它为入参）
+
+/**
+ * 批 13.11 **因果 A/B**（`--clip-abl`）：同一机位、同一构建，逐臂跑「门关 / 门开」两组，
+ * 出每臂的 ρ（对闭式线判）、`frac>τ`、p99.9，并执行上面三条线。
+ */
+struct ClipAblRow {
+    ClipArm arm;
+    double rho = 0.0, rhoStar = 0.0, line = 0.0;
+    double swingOff = 0.0, swingOn = 0.0;
+    double fracOff = 0.0, fracOn = 0.0;  ///< frac>τ（门关 / 门开）
+    double p999Off = 0.0, p999On = 0.0;  ///< 尾巴（**交付默认是门关**，两态都要）
+    /// 锐度对照（**堵「靠糊换安静」这个洞**）：本臂相位平均图的线性域梯度能量 ÷
+    /// 同次运行的 fb=1 参考（= 理想 16 相位平均）。带 [0.85, 1.02] = 既有选档口径。
+    /// ⚠ 没有这两列，「尾巴降 20×」完全可以靠"更糊了"拿到——ρ 是比值，糊不动它，
+    ///   但可见症状的改善会被糊虚报。首轮（2026-10-06）就漏了这两列。
+    double gradOff = 0.0, gradOn = 0.0;
+    bool ok = false;
+};
+
+/// 一个档（或全帧）的两态平均 swing 与抑制比。
+struct BinSuppression {
+    double swingOff = 0.0;  ///< 门关（α=feedback）平均 swing
+    double swingOn = 0.0;   ///< 门开（α=static_floor）平均 swing
+    double rho = 0.0;       ///< swingOn/swingOff（0 档的闭式期望 = ρ*）
+    int64_t pixels = 0;
+};
+
+/// 逐拒收档的**抑制比**表（+ 全帧）。这是「判据能不能绿」的**内部阳性锚点**：
+/// 0 档（全程收下）必须 ρ ≈ ρ*，被夹档 ρ → 1。绿例与红例在**同一帧**里，判据不可能
+/// 是「永远红的摆设」，也不必去别的场景借一个绿。
+/// 两侧 swing 必须同尺寸（同一次 `--bistro` 的 N1/N2），否则 `valid = false`。
+struct SuppressionTable {
+    BinSuppression bin[5];
+    BinSuppression total;
+    bool valid = false;
+};
+[[nodiscard]] SuppressionTable suppressionByRejectBin(const cv::Mat& swingOn,
+    const cv::Mat& swingOff, const cv::Mat& rejectFrames);
+
 /// bistro 用户报障机位（**仓库资产**，改坐标 = 改口径）。
 ///
 /// 提到本头 = 单一真相源：`temporal-residual --bistro` 与 `temporal-motion` 必须打在
 /// **同一个机位**上，否则「静止机位的残差」与「运动机位的边缘偏差」说的是两幅画面。
 /// 坐标 = 2026-10-05 凌晨量具（/tmp 里的 Python，机器重启随 tmpfs 没了）从会话记录原样捞回。
 /// doorframe = 用户报障机位（门框缝隙 / 门板斜边 / 窗棂的 1px 高亮细线）；
-/// wetground = 湿润地面成区颗粒；doorpanel = 旧门板白点。
+/// wetground = 湿润地面成区颗粒；doorpanel = 旧门板白点；
+/// brickfence = 2026-10-06 用户报障机位（**`static_boost` 开仍闪**：砖块墙面 + 窗户围栏），
+///   坐标 = 用户 `camera_saved` 日志原样（mode=fps，fov 45）。
 struct BistroCam {
     const char* name;
     std::array<double, 3> position;
@@ -486,6 +677,17 @@ inline const BistroCam kBistroCams[] = {
     {"doorframe", {-0.115745, 0.030675, 0.005653}, {-0.259691, 0.043088, 0.235251}, 45.0},
     {"wetground", {-0.157946, 0.054863, 0.014969}, {-0.030544, -0.117198, -0.202296}, 45.0},
     {"doorpanel", {-0.047810, 0.068143, 0.046978}, {-0.223579, 0.014183, 0.116858}, 45.0},
+    {"brickfence", {-0.185123, 0.087174, -0.088511}, {-0.322725, 0.158539, -0.395969}, 45.0},
 };
+
+/// 机位名清单（**从表现拼，绝不手写**——登记 brickfence 时两处手写清单当场过时，
+/// 报错误导排查者以为机位没接上）。
+[[nodiscard]] inline std::string bistroCamNames()
+{
+    std::string n;
+    for (const auto& c : kBistroCams)
+        n += (n.empty() ? std::string() : std::string(" / ")) + c.name;
+    return n;
+}
 
 }  // namespace RGL::imgqa

@@ -221,34 +221,38 @@ void insertAfterKey(std::string& text, const std::string& file, const std::strin
     text = out.str();
 }
 
-/// 交付配置模式：整段替换 `scene.lua` 的 `taa = { ... },` 块为显式三键。
+/// 交付配置模式：整段替换 `scene.lua` 的 `taa = { ... },` 块为显式键。
 /// 缺块就在 `return {` 之后插一段——**不静默跳过**（跳过 = 判据跑在「TAA 关」的配置上，
 /// 恒等式会因「pass 根本不在图里」而平凡成立 = 最阴的假绿）。
-/// staticBoost/staticFeedback（批 13.7）：默认关 = 不写这两键（写出的键越少，漂移面越小）。
-void rewriteTaaBlock(std::string& scene, bool enabled, double feedback, double jitterScale,
-    bool baseSpace, bool staticBoost = false, double staticFeedback = 0.01,
-    bool motionCompensation = true, bool reprojection = true, bool diagReject = false,
-    double inputKernel = 0.0)
+/// ⚠ 入参曾是 11 个位置参数（批 13.11 加 clip 门时到 13 个）——**改成直传 ProfileOpts**：
+///   诊断键越加越多，位置参数是「加一个键改三处 + 中间默认值可能被跳过」的漂移面。
+/// 约定：**默认态 = 不写键**（写出的键越少，漂移面越小；门关态与交付配置逐字相同）。
+void rewriteTaaBlock(std::string& scene, const ProfileOpts& o)
 {
     std::ostringstream blk;
-    blk << "    taa = {\n        enabled = " << lb(enabled) << ",\n        feedback = "
-        << std::setprecision(6) << feedback << ",\n        jitter_scale = " << jitterScale
-        << ",\n        base_space = " << lb(baseSpace);
-    if (staticBoost)
-        blk << ",\n        static_boost = true,\n        static_feedback = " << staticFeedback;
+    blk << "    taa = {\n        enabled = " << lb(o.taa) << ",\n        feedback = "
+        << std::setprecision(6) << o.taaFeedback << ",\n        jitter_scale = "
+        << o.taaJitterScale << ",\n        base_space = " << lb(o.taaBaseSpace);
+    if (o.taaStaticBoost)
+        blk << ",\n        static_boost = true,\n        static_feedback = "
+            << o.taaStaticFeedback;
     // 消融/诊断开关：默认态 = 不写键（键越少漂移面越小）。
     // motion_compensation 只关 prevSpin 场景旋转补偿（spin 模式 M3 用）；reprojection 关的是
     // prevViewProj 相机重投影本身（相机模式 M3 用）——两者在相机运动下**不等价**，
     // 语义 → rgl/scene_config.cppm 字段注释。
-    if (!motionCompensation)
+    if (!o.taaMotionCompensation)
         blk << ",\n        motion_compensation = false";
-    if (!reprojection)
+    if (!o.taaReprojection)
         blk << ",\n        reprojection = false";
-    if (diagReject)
+    if (o.taaDiagReject)
         blk << ",\n        diag_reject = true";
     // 输入侧重建核（批 13.8）：0 = 双线性 = 引擎默认 = **不写键**（门关态与今天逐字相同）
-    if (inputKernel != 0.0)
-        blk << ",\n        input_kernel = " << std::setprecision(6) << inputKernel;
+    if (o.taaInputKernel != 0.0)
+        blk << ",\n        input_kernel = " << std::setprecision(6) << o.taaInputKernel;
+    // 历史裁剪消融门（批 13.11）：0 = 现行 = **不写键**。λ 只在 mode=4 有意义（一起写）。
+    if (o.taaClipMode != 0.0)
+        blk << ",\n        clip_mode = " << std::setprecision(6) << o.taaClipMode
+            << ",\n        clip_soft = " << std::setprecision(6) << o.taaClipSoft;
     blk << ",\n    },\n";
     const auto begin = scene.find("\n    taa = {");
     if (begin != std::string::npos) {
@@ -432,9 +436,7 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
             v << std::setprecision(9) << o.aoStrength;
             replaceValueInBlock(sc, "scene.lua", "ao", "strength", v.str());
         }
-        rewriteTaaBlock(sc, o.taa, o.taaFeedback, o.taaJitterScale, o.taaBaseSpace,
-            o.taaStaticBoost, o.taaStaticFeedback, o.taaMotionCompensation, o.taaReprojection,
-            o.taaDiagReject, o.taaInputKernel);
+        rewriteTaaBlock(sc, o);
         // 帧驱动 spin（诊断激励门）。**只在门开时写**：不写 = 交付配置原样 = 逐位今天。
         // 键名拼错在这里是**静默**的（scene.lua 的未知键引擎不打警告），所以消费方
         // temporal-motion 另有在场性守卫：运动组的连拍若逐位相同 = 键没生效 = 立刻停下。
@@ -537,6 +539,12 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
               // 输入侧重建核（批 13.8）：0 = 双线性 = 引擎默认 = 不写键
               + (o.taaInputKernel != 0.0
                      ? ", input_kernel = " + std::to_string(o.taaInputKernel)
+                     : "")
+              // 历史裁剪消融门（批 13.11）：0 = 现行 = 不写键。合成靶也要能跑——
+              // 「修法不得是 bistro 专用」这条护栏要求同一臂在合成靶上同向。
+              + (o.taaClipMode != 0.0
+                     ? ", clip_mode = " + std::to_string(o.taaClipMode) + ", clip_soft = "
+                           + std::to_string(o.taaClipSoft)
                      : "")
               + " },\n"
         : "";

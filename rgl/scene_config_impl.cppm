@@ -367,6 +367,9 @@ void parseDeferredStyles(sol::table root, SceneConfig& cfg) {
 			readBool(taa, "diag_reject", cfg.taaDiagReject);
 			// 输入侧重建核选择（批 13.8；默认 0 = 双线性 = 逐位今天；1 = CR 4×4，2 = Lanczos3）
 			readFloat(taa, "input_kernel", cfg.taaInputKernel);
+			// 历史裁剪消融门（批 13.11；默认 0 = 现行 = 逐位今天）。λ 只在 mode=4 时被读。
+			readFloat(taa, "clip_mode", cfg.taaClipMode);
+			readFloat(taa, "clip_soft", cfg.taaClipSoft);
 		}
 
 		if (auto r = parseEntities(root, cfg); !r)

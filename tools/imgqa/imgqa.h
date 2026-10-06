@@ -192,6 +192,11 @@ struct ProfileOpts {
     /// ⚠ 0 时**不写键**（写出的键越少漂移面越小，同 staticBoost 的做法）；非 0 才写。
     /// 消费方 = `temporal-flicker` / `aa-coverage` / `temporal-feedback` 的 `--kernel`。
     double taaInputKernel = 0.0;
+    /// 批 13.11 **历史裁剪消融门**（scene.lua `taa.clip_mode` / `taa.clip_soft`）。
+    /// 0 = 现行 = **不写键**（门关态与交付配置逐字相同）。档位语义 → `rgl/scene_data.cppm`
+    /// kSceneDataTaaClipControlOffset。消费方 = `imgqa temporal-residual --clip-abl`。
+    double taaClipMode = 0.0;
+    double taaClipSoft = 1.0;
     /// 帧驱动 spin（scene.lua `spin_frame_angle`，rad/帧）。0 = **不写键** = 门关 = 逐位今天。
     /// ≠0 时同时写 `spin_axis`（`spinAxis`）——运动必须是绕 up 轴的定角 yaw（刚体、
     /// prevSpin 重投影能精确对齐；理由全文 = `temporal.cpp` 头注释）。
@@ -562,7 +567,8 @@ int cmdTemporal(int pairs, int warm, const std::string& variant, bool baseSpace 
 int cmdTemporalResidual(int periods, double warmMult, const std::string& variant,
     double slowFeedback, bool skipSlow, bool baseSpace = false, double staticBoostFloor = 0.0,
     bool bistro = false, const std::string& camera = "all", double boostFloor = 0.01,
-    bool diagBsOff = false);
+    bool diagBsOff = false, bool reject = false, bool clipAbl = false, double clipMode = 0.0,
+    double clipSoft = 1.0);
 
 /**
  * **相机运动下 TAA 到底抗了什么锯齿**（Phase 13 诊断判据；只出数 + 一句判决，不改渲染）。
@@ -607,9 +613,17 @@ int cmdTemporalResidual(int periods, double warmMult, const std::string& variant
  *             就在被内容变化刷新，回显帧数即可）
  * @param warmStill M4 静止组热身帧数（≥6/α=50 对齐周期 ⟹ 默认 64）
  * @param edgePercentile 边缘掩码的梯度分位（默认 0.90 = 梯度最高的 10% 像素带）
+ * @param boostFloor 批 13.11：>0 = 打开 `taa.static_boost` 并把地板设为本值（**本帧权重**）。
+ *        spin 模式下相机静止 ⟹ boost 真的会生效 ⟹ 这正是 债-49 的风险区（静止机位 + 场景内
+ *        运动 + 超长累积窗）。默认 0 = 不写键 = 交付态 = 已发表 M0…M4 读数口径。
+ * @param clipMode / clipSoft 批 13.11 **历史裁剪消融臂**（`taa.clip_mode` / `taa.clip_soft`）。
+ *        默认 0 = 不写键 = 交付态。用途 = 量「放宽盒要付多少鬼影」：同一命令、同一构建、同一
+ *        激励，只换臂 ⟹ dev(M1)/dev(M0) 的跨臂差就是鬼影代价。阳性锚点 = **关盒（臂 1）必须
+ *        显著变差**；若不变差，说明邻域盒在鬼影上**根本没承重**，那就不必为它保留闪烁代价。
  */
 int cmdTemporalMotion(const std::string& camera, const std::string& motion, double angleDeg,
-    int burst, int warm, int warmStill, double edgePercentile);
+    int burst, int warm, int warmStill, double edgePercentile, double boostFloor = 0.0,
+    double clipMode = 0.0, double clipSoft = 1.0);
 
 /**
  * **运动态 feedback 扫描**（Phase 13 诊断，只出数 + 一句判决，不改引擎默认值）。
