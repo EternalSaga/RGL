@@ -1119,7 +1119,7 @@ int cmdTemporalMotion(const std::string& cameraName, const std::string& motion,
     //   （0/0.25/0.5/0.75/1）读出来是**垃圾**：mem≈0.25 的像素会被算成「盒裁剪」。这不是精度问题
     //   而是**读错量**，故整段跳过并出声——静默打出一个像模像样的百分比才是最贵的假数据。
     const int clipModeInt = static_cast<int>(clipMode + 0.5);
-    const bool alphaOccupied = (clipModeInt >= 6 && clipModeInt <= 8);
+    const bool alphaOccupied = (clipModeInt >= 6 && clipModeInt <= 9);
     std::printf("\n── 历史拒收掩膜（taa_out alpha；0 收下 / 0.25 盒裁剪 / 0.5 盒拒收 / "
                 "0.75 重投影拒收 / 1 无历史）──\n");
     const RejectStats rsM1 = rejectStats(gM1m);

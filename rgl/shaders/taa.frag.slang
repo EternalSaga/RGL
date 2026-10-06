@@ -145,12 +145,12 @@ float3 clampHdr(float3 x) { return max(x, float3(0.0, 0.0, 0.0)); }
 // 直接塌回 c。p 已在盒内 ⇒ 返回 p（不改变历史）。
 /// 「本帧无历史 / 重投影出画」时写进 alpha 的值。
 /// 门关与不携带状态的臂 = 1.0（同时是诊断码「本帧无历史」，与门关值同值，消费方按组别解读）；
-/// **携带时域状态的臂（6 信任 / 7 记忆 / 8 mem 门控软裁剪）= 0.0** = 状态清零 ⟹ 跳切/出画处
-/// 判据全副武装。
+/// **携带时域状态的臂（6 信任 / 7 记忆 / 8 mem 门控软裁剪 / 9 mem 接受 + ext 斜率）= 0.0** = 状态清零
+/// ⟹ 跳切/出画处判据全副武装。
 /// ⚠ 方向别写反：出画正是历史无效之处，写 1.0（满信任）= 在最需要保护的时刻把保护关掉。
 float noHistoryAlpha(float mode)
 {
-    return (mode == 6.0 || mode == 7.0 || mode == 8.0) ? 0.0 : 1.0;
+    return (mode >= 6.0 && mode <= 9.0) ? 0.0 : 1.0;
 }
 
 float3 clipToAabb(float3 c, float3 p, float3 mn, float3 mx)
@@ -703,6 +703,35 @@ float4 main(TaaInput input) : SV_Target
         const float w = saturate((dist - mem) / (r * max(mem, 1e-6)));
         clippedR = lerp(histR, hardR, w);
         alpha = mem;  // 与臂 6/7 共用载体 ⟹ 互斥、零新附件（imgqa 侧对这三臂跳过拒收码表）
+    }
+    else if (clipMode == 9 && diag < 0.5)
+    {
+        // 9 = **接受半径用 mem（粘）、响应斜率用 ext（快）**（批 13.11 续；债-62 的修法）。
+        // 臂 7/8 的教训是「一个名字两种量」：mem 一份标量在打两份冲突的工——闪烁要它**粘且宽**
+        // （覆盖 16 个相位的支撑集），鬼影要它**快且窄**（几帧内清掉陈旧历史）。响应函数取硬端
+        // （臂 7）治得了鬼影但起极限环，取粘端（臂 8）闪烁到闭式但鬼影≈关盒（R 3.028）。
+        // 本臂把两份工**拆给两个已经算好的量**：
+        //   · 接受判据 = `dist ≤ mem`（与臂 7/8 一字不改 ⟹ 闪烁性质原样保留，接受域内 w ≡ 0）
+        //   · 斜坡宽度 = `ext`（**本帧**盒 luma 跨度，不粘）⟹ 物体离开后 ext 塌回背景的小跨度
+        //     ⟹ 斜坡自动变紧 ⟹ 鬼影快速移除；静止边缘 ext 大 ⟹ 斜坡宽 ⟹ 环路增益低 ⟹ 不振荡。
+        // 定量预测（跑前写死，d = 1−1/16）：完全替换的条件从臂 8 的 `dist > 2·mem` 变成
+        //   `dist > mem + ext` ⟹ 鬼影移除延迟 ≈3.5 帧（臂 7 ≈2.9、臂 8 ≈13.6）⟹ 应接近臂 7。
+        // 判据：鬼影 R ≤ 1.0（boost 开**且**交付档）**同时** ρ ≤ 0.09 **且** 折叠超 τ = 0 px，
+        //   三条缺一不算；不算 ⟹ 单标量接受域结案，转 velocity / 深度遮挡探测。
+        const float memPrev =
+            saturate(historyTex.SampleLevel(pointSampler, prevUvBase, 0.0).a);
+        const float decay = clipCtl.y > 0.0 ? clipCtl.y : (1.0 - 1.0 / 16.0);
+        const float3 ext3 = mx - mn;
+        const float ext = max(ext3.x, max(ext3.y, ext3.z));
+        const float mem = max(ext, memPrev * decay);
+        const float histL = dot(histR, float3(0.3333333));
+        const float centL = dot(centroid, float3(0.3333333));
+        const float dist = abs(histL - centL);
+        // 分母取 ext（**不含自由常数**，k = 1）：ext → 0 的平坦像素上 dist 也 → 0，
+        // 而「平坦地面被物体让开」正是 dist 大而 ext 小 ⟹ w = 1 = 立刻清掉陈旧历史（正确方向）。
+        const float w = saturate((dist - mem) / max(ext, 1e-6));
+        clippedR = lerp(histR, hardR, w);
+        alpha = mem;  // 与臂 6/7/8 共用载体 ⟹ imgqa 侧对这四臂跳过拒收码表
     }
     return float4(lerp(fromReinhard(clippedR), cur, params.x), alpha);
 }

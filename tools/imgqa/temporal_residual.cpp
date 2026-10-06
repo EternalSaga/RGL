@@ -1517,6 +1517,11 @@ std::string clipArmName(const ClipArm& arm)
             s << "8 软记忆d=" << (arm.soft > 0.0 ? std::to_string(arm.soft) : "1-1/16");
             return s.str();
         }
+        case 9: {
+            std::ostringstream s;
+            s << "9 mem接受+ext斜率d=" << (arm.soft > 0.0 ? std::to_string(arm.soft) : "1-1/16");
+            return s.str();
+        }
         default: return "未知臂" + std::to_string(arm.mode);
     }
 }
