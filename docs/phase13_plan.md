@@ -446,10 +446,35 @@ motion = ‖prevUvBase − baseUv‖ / texel ;  gate = saturate(2 − motion) ; 
 - **未接线清单**：`configs/scene.lua` 臂表 / `scene_data.cppm` 权威档位表 / `frame_draw_list.cppm` /
   imgqa `clipArmName` 的 `case 11`（现在会打"未知臂11"）。`alphaOccupied` 已是 `>= 6` ⟹ 自动覆盖。
 
+### 臂 11 首轮实测（2026-10-06，接线补全后立刻跑的两条）
+
+**主判据（bit 级反向用例）—— 绿**：静止机位 + 静止场景，`llm_shot` 第 8 帧截图 `sha256` 逐位比对：
+
+| boost | 臂 8 | 臂 11 | 判定 |
+|---|---|---|---|
+| 关 | `65f04766232f9c04` | `65f04766232f9c04` | **逐位相同** ✅ |
+| 开 | `9971ee86a3c154e3` | `9971ee86a3c154e3` | **逐位相同** ✅ |
+
+⟹ `gate = saturate(2 − 0) = 1.0` 与 `x · 1.0` 的 IEEE 精确性**在真机上兑现**，
+不是纸面推导。**含义要说准**：臂 11 在静止机位下**就是臂 8**，因此它继承的是**臂 8** 的闪烁行为
+（不是臂 10 的——臂 10 改 α，臂 11 不改）。
+
+**阳性锚点（防空洞绿）—— 绿**：静止机位 + **场景自旋**（`spin = true` + `spin_frame_angle = 0.01`，
+帧号纯函数 ⟹ 跨进程可复现），同帧号截图：臂 8 `14d2881e20eb5352` ≠ 臂 11 `359edc4e003b4d45`
+⟹ **gate 真的点火**，臂 11 不是"永远走臂 8 的死代码"。
+（这条锚点是必需的：没有它，"逐位相同"有两种解释——机制不生效 vs 机制恒等。）
+
+复现：配置目录 `/tmp/opencode/rev{8,11}`（boost 关）、`rev{8,11}b`（boost 开）、
+`rev{8,11}spin`；跑法 `cd build/rgl && RGL_CONFIG_DIR=/tmp/opencode/<d> timeout 180 ./rgl`
+→ `screenshots/rl_taaon.png`。**注意 tmpfs，日志与图不可长期依赖。**
+
 ### 路线（一层一层验，别叠）
 
-1. **接线臂 11 + 跑它自己声明的强项**：静止机位 + 静止场景 ⟹ **与臂 8 逐位相同**（`cmp` 直接判，
-   不看阈值）。红 = 机制不成立，当场停。再跑 spin 看 gate 分布与鬼影（缺陷 2 是否漏）。
+1. ~~接线臂 11 + 跑它自己声明的强项~~ **✅ 已做（见上表，两条全绿）**。
+   **下一步（本批未完）**：臂 11 + boost 开的**闪烁 ρ** 还没量——它 ≡ 臂 8，而**臂 8 + boost 开这个
+   组合从未测过**（历史只测过 boost 关的臂 8 = 0.002841/7.29%，与 boost 开的臂 10 = 0.000231/0.60%）。
+   判据沿用预注册线 **ρ ≤ 0.09**（brickfence / report1 起步，五机位 + 合成靶全覆盖），
+   对照锚 = 臂 10 已验收的 **0.0814 / 0.0792**。再跑 spin 看 gate 分布与鬼影（缺陷 2 是否漏）。
 2. **臂 12 = 逐像素累积计数驱动 α（本帧权重 = 1/N，N 在历史作废时归零）** —— 依据 = UE TSR：
    "The History Sample Count is **per** … pixel"、"minimum contribution of the current frame …
    **This is 1 / History Sample Count**"。**它取代 `static_boost`，不是与它并存**：长累积变成
