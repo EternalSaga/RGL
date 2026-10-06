@@ -1532,12 +1532,6 @@ std::string clipArmName(const ClipArm& arm)
             s << "11 记忆挂重投影位移d=" << (arm.soft > 0.0 ? std::to_string(arm.soft) : "1-1/16");
             return s.str();
         }
-        case 11: {
-            std::ostringstream s;
-            s << "11 记忆门控(motion 位移)d="
-              << (arm.soft > 0.0 ? std::to_string(arm.soft) : "1-1/16");
-            return s.str();
-        }
         default: return "未知臂" + std::to_string(arm.mode);
     }
 }

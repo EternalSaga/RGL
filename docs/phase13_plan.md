@@ -443,8 +443,11 @@ motion = ‖prevUvBase − baseUv‖ / texel ;  gate = saturate(2 − motion) ; 
   "motion 恰为 0 ⟺ 静止"，阈值可以紧好几个量级。
 - 🔴 **缺陷 2：`motion` 是每帧位移，鬼影是整个窗（≈100 帧）累积位移**。慢速运动每帧 1.5px 落在
   斜坡上（gate≈0.5）但 100 帧累积 150px ⟹ 记忆半开 = 洞。**可测**：spin 下打 gate 分布 + 鬼影。
-- **未接线清单**：`configs/scene.lua` 臂表 / `scene_data.cppm` 权威档位表 / `frame_draw_list.cppm` /
-  imgqa `clipArmName` 的 `case 11`（现在会打"未知臂11"）。`alphaOccupied` 已是 `>= 6` ⟹ 自动覆盖。
+- **未接线清单（✅ 已补，但补出一条自纠）**：`configs/scene.lua` 臂表 / `scene_data.cppm` 权威档位表 /
+  `frame_draw_list.cppm` 三处确实缺 11，已补。**imgqa `clipArmName` 是我误报**——它本来就有 `case 11`，
+  我再加一份直接 duplicate case 编译失败（`just build` 不编 imgqa，直到显式建 target 才炸）。
+  ⟹ **grep 不命中 ≠ 不存在**；且**改 imgqa 必须 `cmake --build build --target imgqa` 显式建**。
+  `alphaOccupied` 已是 `>= 6` ⟹ 自动覆盖。
 
 ### 臂 11 首轮实测（2026-10-06，接线补全后立刻跑的两条）
 
@@ -477,6 +480,14 @@ motion = ‖prevUvBase − baseUv‖ / texel ;  gate = saturate(2 − motion) ; 
    |---|---|---|---|---|
    | brickfence | **0.0814**（0.002841→0.000231） | **0 px** | 7.29% → **0.60%** | ✅ |
    | report1 | **0.0790**（0.002065→0.000163） | **0 px** | 3.95% → **0.41%** | ✅ |
+   | doorframe | **0.0728**（0.002709→0.000197） | 0 px | 6.64% → **0.32%** | ✅ |
+   | wetground | **0.0780**（0.013908→0.001085） | 0 px | 25.60% → **2.75%** | ✅ |
+   | doorpanel | **0.0759**（0.003678→0.000279） | 0 px | 9.90% → **0.21%** | ✅ |
+   | 合成靶 `aa_target` | 5 条判据全 PASS（含 `jitter_scale=0` 反向锚点 = **恰为 0**） | — | — | ✅ |
+
+   **用户肉眼验收（`report2` 机位，`static_boost=true` + `clip_mode=11`，手动晃机）**：
+   **静止无闪烁 · 未见鬼影 · 左右轻微转动仅轻微闪烁（大幅改善）**。
+   `report2` 已登记进 `kBistroCams`（肉眼结论必须能在同一机位复现）。
 
    **与臂 10 已验收读数逐位对齐**（brickfence 0.0814 完全相同；report1 0.0790 vs 记的 0.0792）。
    机制上本该如此：静止机位下臂 11 ≡ 臂 8（bit 级已证），而臂 10 的 α 耦合在这两个机位上
