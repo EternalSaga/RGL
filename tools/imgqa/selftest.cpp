@@ -176,6 +176,44 @@ void testRegistry(Checker& c)
     }
 }
 
+/// stillOpen 里的「具体名字」判据：至少一对反引号、其间不是空白。空话（"其他方法仍然可用"）
+/// 写不出名字 ⟹ 这一条就是「不许写空话」的机器判据（作用域写宽付过两天学费，见 judge.cpp）。
+bool hasBacktickedName(const char* s)
+{
+    if (s == nullptr)
+        return false;
+    const char* open = std::strchr(s, '`');
+    if (open == nullptr)
+        return false;
+    const char* close = std::strchr(open + 1, '`');
+    if (close == nullptr)
+        return false;
+    for (const char* p = open + 1; p != close; ++p)
+        if (*p != ' ' && *p != '\t')
+            return true;
+    return false;
+}
+
+void testAntiPatterns(Checker& c)
+{
+    // 反模式登记必须是**带作用域的结构化登记**，不是一段散文。三格各有机器判据：
+    //   ① why 非空（被否的是什么）② stillOpen 非空且 >20 字符（未被否的部分不许敷衍）
+    //   ③ stillOpen 必须点名具体命令/判据（反引号包裹）——"其他方法仍可用"过不了这条。
+    // ⚠ ②是 std::strlen（**字节**）判据：8 个汉字（24 字节）的空话过得了 ②，只有 ③ 拦得住
+    //   ——变异实测过（stillOpen = "其他方法仍然可用" ⟹ 仅 ③ 红）。两条不是冗余。
+    // 前提守卫同 testRegistry：登记表若为空，下面三条对空循环**恒真** = 假绿。
+    const auto& anti = antiPatterns();
+    c.chk("反模式登记表非空（否则下面三条恒真是假绿）", !anti.empty(), std::to_string(anti.size()));
+    for (const auto& [name, a] : anti) {
+        c.chk("每条反模式必须有 why（被否的是什么）", a.why != nullptr && a.why[0] != '\0',
+            name.c_str());
+        c.chk("每条反模式必须写 stillOpen 且 >20 字符",
+            a.stillOpen != nullptr && std::strlen(a.stillOpen) > 20, name.c_str());
+        c.chk("每条反模式的 stillOpen 必须点名具体命令/判据（反引号名）",
+            hasBacktickedName(a.stillOpen), name.c_str());
+    }
+}
+
 void testTemporalDiff(Checker& c)
 {
     // 判据工具自检（纪律：判据工具自己要有判据）。这里**不调引擎**，用合成帧把
@@ -1376,6 +1414,7 @@ int cmdSelftest()
     testClusters(c);
     testAnalytic(c);
     testRegistry(c);
+    testAntiPatterns(c);
     testTemporalDiff(c);
     testAaCoverage(c);
     testAoMetrics(c);

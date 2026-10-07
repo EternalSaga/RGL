@@ -569,12 +569,25 @@ int cmdCheck()
     return 0;
 }
 
+/// 一条反模式的三格（作用域 / 为什么被否 / 未被否的部分）。列表与单条共用同一份打印，
+/// 免得两处格式漂移。**三格都要打**：只打 why 就还是「一段散文」，而作用域与未被否的部分
+/// 正是 `screen-space-l1-frame-diff` 付过两天学费才要治的那两格。
+static void printAntiFields(const AntiPatternInfo& a)
+{
+    std::printf("        作用域：%s\n        为什么被否：%s\n        未被否（仍然要用）：%s\n",
+        antiScopeName(a.scope), a.why, a.stillOpen);
+}
+
 int cmdRefuse(const std::string& name)
 {
     if (name.empty()) {
-        std::printf("已登记的反模式（都会导致错误结论，故工具**主动拒绝**）：\n\n");
-        for (const auto& [k, v] : antiPatterns())
-            std::printf("  %s\n        %s\n\n", k.c_str(), v.c_str());
+        std::printf("已登记的反模式（都会导致错误结论，故工具**主动拒绝**）。"
+                    "「未被否」那格是红线之外的部分——别连带不做：\n\n");
+        for (const auto& e : antiPatterns()) {
+            std::printf("  %s\n", e.second.name);
+            printAntiFields(e.second);
+            std::printf("\n");
+        }
         return 0;
     }
     std::string key = name;
@@ -583,12 +596,13 @@ int cmdRefuse(const std::string& name)
     const auto it = ap.find(key);
     if (it == ap.end()) {
         std::printf("未登记的反模式：%s\n已登记：", name.c_str());
-        for (const auto& [k, v] : ap)
-            std::printf("%s ", k.c_str());
+        for (const auto& e : ap)
+            std::printf("%s ", e.first.c_str());
         std::printf("\n");
         return 2;
     }
-    std::printf("✗ 反模式 `%s` 被拒绝：\n        %s\n", key.c_str(), it->second.c_str());
+    std::printf("✗ 反模式 `%s` 被拒绝：\n", key.c_str());
+    printAntiFields(it->second);
     return 2;
 }
 

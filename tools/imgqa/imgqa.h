@@ -494,9 +494,31 @@ struct TemporalStat {
 /// 按注册表信息造 Verdict（容差理由/钉住条目从注册表单点取，判据实现里不手抄）。
 [[nodiscard]] Verdict verdictFor(const char* name, bool ok, std::string observed);
 
+/// 一条反模式**否掉的是哪一层**——必填、无默认值（漏填或把 why 串位 → 编译不过）。
+/// 立规出处 = `screen-space-l1-frame-diff` 自己记的学费：作用域写宽一格（把「算子被否」
+/// 写成「激励被否」），防腐条款就连带冻掉后来真正需要的激励（实测冻掉两天）。
+enum class AntiScope {
+    Operator,  ///< 否的是「怎么算」（算子 / 度量 / 容差形态）
+    Stimulus,  ///< 否的是「怎么激励 / 怎么采集」
+    Domain,    ///< 否的是「在哪些像素 / 几何上断言」（论域选择）
+    Baseline,  ///< 否的是「拿什么当参考」（跨日 golden 之类）
+};
+
+/// 一条反模式的结构化登记。`stillOpen` 与 `why` **同权重**：只写"否了什么"会被读成
+/// "这一片都别碰"——没被提到 = 被禁止。故必须正面写出未被否、仍然在用的那条路。
+struct AntiPatternInfo {
+    const char* name;
+    AntiScope scope;        ///< 排第 2 位且无默认值：漏填 → const char* 转不进 enum → 编译失败
+    const char* why;        ///< 被否的是什么、为什么（历史记录，含后续更新，不删）
+    const char* stillOpen;  ///< **未被否的部分**（selftest 强制它含反引号包裹的具体名字）
+};
+
 /// 反模式登记（负面知识也是工具的一部分）：装一条但**拒绝执行**，比不装更好——
 /// 否则下一个会话的我（或别人）会重新发明它。拒绝比缺失更能传达判断。
-[[nodiscard]] const std::map<std::string, std::string>& antiPatterns();
+[[nodiscard]] const std::map<std::string, AntiPatternInfo>& antiPatterns();
+
+/// AntiScope 的中文口径（`imgqa refuse` 打印用；单一真相源在 judge.cpp）。
+[[nodiscard]] const char* antiScopeName(AntiScope scope);
 
 // ── 调用记录（判据可信度的一手数据：哪条判据真在排查里被调用、事后看对不对）──
 void logCall(const std::string& cmd, const std::vector<std::pair<std::string, std::string>>& args,

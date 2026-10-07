@@ -751,41 +751,69 @@ Verdict judgeDeterminism(const Frame& a, const Frame& b)
         + std::to_string(idDiffN) + "px");
 }
 
-const std::map<std::string, std::string>& antiPatterns()
+const char* antiScopeName(AntiScope scope)
 {
-    // 装一条但**拒绝执行**，比不装更好：否则下一个会话的我（或别人）会重新发明它。
-    static const std::map<std::string, std::string> kAnti = {
-        {"ssim",
+    switch (scope) {
+        case AntiScope::Operator:  return "算子（否的是「怎么算」：算子/度量/容差形态）";
+        case AntiScope::Stimulus:  return "激励（否的是「怎么激励 / 怎么采集」）";
+        case AntiScope::Domain:    return "论域（否的是「在哪些像素 / 几何上断言」）";
+        case AntiScope::Baseline:  return "参考（否的是「拿什么当参考」）";
+    }
+    return "?";
+}
+
+namespace {
+/// 反模式登记表。四格顺序 = name, scope, why, stillOpen。
+///
+/// **名字只写一次**：`antiPatterns()` 的 map 键从 `name` 取，键与条目名漂移在构造上不可能
+/// （把键再抄一遍就是第二份真相，本批次要治的正是这个）。
+///
+/// 每条三格：scope（否掉的是哪一层）+ why（历史记录，含后续更新，**不删**）+
+/// stillOpen（**未被否的部分**）。stillOpen 不是装饰：`screen-space-l1-frame-diff` 为
+/// "没被提到 = 被禁止"付过两天学费（原文末段），而当时的修法是往同一段散文再打一层补丁。
+/// 分工（两次变异实测）：**编译器管"有没有"** —— 漏填 scope（把 why 串到第 2 格）= const
+/// char* 转不进 enum class；漏填 stillOpen = `-Wmissing-field-initializers` 在 -Werror 下
+/// 一样是 error。两条都**编译失败**，不是自检红。**selftest 管"是不是空话"** —— stillOpen
+/// 非空、够长、且必须含反引号包裹的具体命令/判据名（`testAntiPatterns`）。
+constexpr std::array<AntiPatternInfo, 8> kAntiAll = {{
+        {"ssim", AntiScope::Operator,
             "结构相似度不作主门（Filament 调研推翻原计划：其全库无 SSIM/PSNR/FLIP）。"
             "理由是判据性质：SSIM 把「整幅」当一个样本，失败时既说不出**哪块**错、也说不出"
             "错在亮度还是几何；且它有告警饱和——错得越多分母越稳。替代 = 闭式解锚点 + "
             "归属区域统计（本工具）+ 开关影响域。"
             "2026-10-03 再裁决（用户提议「红线回归改 PSNR/SSIM」后否决）：截图回归的比对"
             "算子同样固定为**逐位相同**——逐位是零容差 A/B 算子，红线防的正是「泄漏一点点」；"
-            "且现机制从不存 golden（同会话双构建），PSNR 那条拒绝理由在现机制里并不存在。"},
-        {"psnr",
+            "且现机制从不存 golden（同会话双构建），PSNR 那条拒绝理由在现机制里并不存在。",
+            "被否的是「拿 SSIM 当比对算子」，**不是「不许比较」**：截图回归的比对算子固定为**逐位相同**（本条 2026-10-03 再裁决原文），替代算子全在用 = `probe` 的闭式解锚点、`attribution` / `faces` 的归属区域统计、`switch` 的开关影响域。"},
+        {"psnr", AntiScope::Operator,
             "PSNR 需要一张参考图，而本项目**跨日 ±1 LSB 噪声**使 golden 存不过一天"
-            "（docs/调试历史.md 2026-09-08）。它把「多少像素差了多少」压成一个数，方向信息全丢。"},
-        {"global-epsilon",
+            "（docs/调试历史.md 2026-09-08）。它把「多少像素差了多少」压成一个数，方向信息全丢。",
+            "被否的是 PSNR 这个算子，**不是「与参考对拍」这件事**：`probe` 拿闭式解当参考逐字节对拍、`aa-coverage` 拿投影宽度 w 当参考，两者都不存 golden（正是本条给的第二个选项）。"},
+        {"global-epsilon", AntiScope::Operator,
             "全局容差同时**漏掉大的、冤枉小的**。纪律：容差必须来自**为什么会差**（float32 "
-            "多项式？8bit 取整？跨驱动 dither？）。写不出理由的判据就是还没想清楚，不该存在。"},
-        {"assert-invisible-geometry",
+            "多项式？8bit 取整？跨驱动 dither？）。写不出理由的判据就是还没想清楚，不该存在。",
+            "被否的是「一个全局 epsilon 通吃」，**不是「不许有容差」**：每条判据各自带理由的容差全在用（如 `probe-pixel` 的 ±2 LSB、`face-clusters-explained` 的簇间隙 0.02），`check` 逐条打印这些理由。"},
+        {"assert-invisible-geometry", AntiScope::Domain,
             "对「该取景下其实看不见的几何」下断言 = 恒真 = 会绿 = 无效断言。先 attribute "
-            "反解可见集，判据只在可见集上求值。"},
-        {"cross-day-golden",
+            "反解可见集，判据只在可见集上求值。",
+            "被否的是论域选错（对看不见的几何下断言），**不是「不许对几何下断言」**：`attribution` 反解出可见集之后，`faces` 逐面、`switch` 逐 piece 的断言照下，只是求值域换成可见集。"},
+        {"cross-day-golden", AntiScope::Baseline,
             "存一张基线隔日比 = 把驱动/编译器 codegen 微差当成「渲染变了」。本项目历史上"
-            "因此连续作废 7 次基线。要么同会话双构建，要么根本不要 golden。"},
-        {"eyeball-only",
-            "纯目视不可复现、不可回归。目视用来**发现**问题，发现后必须落成判据。"},
-        {"moving-camera-l1-ratio",
+            "因此连续作废 7 次基线。要么同会话双构建，要么根本不要 golden。",
+            "被否的是「隔日基线」这个参考，**不是「不许有参考」**：同会话双构建逐位比对仍是红线回归的正解，闭式解参考（`probe`、`aa-coverage`）根本不存图，因此天然不受跨日 ±1 LSB 噪声影响。"},
+        {"eyeball-only", AntiScope::Operator,
+            "纯目视不可复现、不可回归。目视用来**发现**问题，发现后必须落成判据。",
+            "被否的是「只目视就当结论」，**目视用来发现问题仍然有效且是常规入口**（本条原文即如此）：`llm_debug` 截图读图负责发现，落点必须是 `attribution` / `faces` / `switch` / `probe` 这类判据。"},
+        {"moving-camera-l1-ratio", AntiScope::Operator,
             "「匀速微动机位下，开/关 TAA 的逐帧差之比降一个量级」不能当判据（plan §6 初稿"
             "就这么写的，实测对正确实现也只有 1.2×）。两条独立理由：① 时域滤波压的是「同"
             "视点不同相位」的估计差，压不掉「视点真的动了」的正确画面变化；② L1 逐帧差对"
             "模糊近似**守恒**——边缘摊开会让更多像素各差一点，均值几乎不变（实测：变化像素"
             "3.10%→5.54% 而幅度 0.53→0.245，乘积不变）。替代 = 静止机位 + jitter 激励 + "
             "feedback=1 消融组（imgqa temporal 的 S 组），比值可对拍一阶 IIR 闭式。"
-            "⚠ 该替代方案本身也已被推翻（同一个 L1 守恒病根），见 `screen-space-l1-frame-diff`。"},
-        {"screen-space-l1-frame-diff",
+            "⚠ 该替代方案本身也已被推翻（同一个 L1 守恒病根），见 `screen-space-l1-frame-diff`。",
+            "被否的是「L1 总量比值」这个**算子**，**移动机位这个激励没有被否**：它现在天天在跑 = `temporal-motion`（默认运动源就是相机帧驱动 yaw）、`temporal-flicker`、`temporal-homography`。**别拿本条劝退它们**。"},
+        {"screen-space-l1-frame-diff", AntiScope::Operator,
             "上一条的替代方案（静止机位 + jitter + 屏幕空间 L1 逐帧差）**同样不能当抑制比"
             "判据**，同一个病根换个激励没逃掉：jitter 让采样网格每帧动 ±0.5px，「相邻帧的"
             "同一屏幕像素」量的仍是**不同世界点**上的估计差 = 梯度 × 网格位移；边缘摊开后"
@@ -807,8 +835,20 @@ const std::map<std::string, std::string>& antiPatterns()
             "（变化像素**占比** + 幅度分层 + 闭式 ρ*）= `temporal-residual-*` 家族，也是唯一抓到"
             "批 13.10/13.11「静止机位仍闪」根因的判据。**登记反模式必须写明被否的是算子还是激励**"
             "——作用域写宽一格，防腐条款就连带冻掉后来真正需要的激励"
-            "（同纪律见 skill `rgl-test-discipline` §负知识的作用域）。"},
-    };
+            "（同纪律见 skill `rgl-test-discipline` §负知识的作用域）。",
+            "被否的是「屏幕空间 L1 总量」这个**算子**，**静止机位 + jitter 这个激励没有被否**：它是 `temporal-residual-*` 家族的地基，也是唯一抓到批 13.10/13.11「静止机位仍闪」根因的判据；抑制比换了算子后重立为 `temporal-suppression-sqrtN`。"},
+}};
+}  // namespace
+
+const std::map<std::string, AntiPatternInfo>& antiPatterns()
+{
+    // 装一条但**拒绝执行**，比不装更好：否则下一个会话的我（或别人）会重新发明它。
+    static const std::map<std::string, AntiPatternInfo> kAnti = [] {
+        std::map<std::string, AntiPatternInfo> m;
+        for (const auto& a : kAntiAll)
+            m.emplace(a.name, a);
+        return m;
+    }();
     return kAnti;
 }
 
