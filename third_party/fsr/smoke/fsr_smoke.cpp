@@ -17,6 +17,7 @@
 
 #include <vulkan/vulkan.h>
 
+#include <algorithm>
 #include <cstdarg>
 #include <cmath>
 #include <csignal>
@@ -276,10 +277,11 @@ float halfToFloat(uint16_t h)
     return f;
 }
 
-// 回读一张 R16G16_FLOAT 图的中心像素。调用方负责队列已 idle。
-void readBackHalf2Center(VkCtx& c, const Image& im, float& outX, float& outY)
+// 回读整张图到 CPU（调用方负责队列已 idle）。bpp = 每像素字节数，如 R16G16_FLOAT=4、
+// R16G16B16A16_FLOAT=8。返回原始位模式，调用方按格式解（half 用上面的 halfToFloat）。
+std::vector<uint8_t> readBackImage(VkCtx& c, const Image& im, uint32_t bpp)
 {
-    const VkDeviceSize bytes = VkDeviceSize(im.w) * im.h * 4;   // 2 × half
+    const VkDeviceSize bytes = VkDeviceSize(im.w) * im.h * bpp;
     VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     bci.size  = bytes;
     bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
@@ -309,7 +311,7 @@ void readBackHalf2Center(VkCtx& c, const Image& im, float& outX, float& outY)
     VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     check(vkBeginCommandBuffer(cb, &bi), "回读 vkBeginCommandBuffer");
-    VkBufferImageCopy reg{};                       // bufferRowLength=0 ⟹ 行紧排（4B/像素，满足 4B 对齐）
+    VkBufferImageCopy reg{};                       // bufferRowLength=0 ⟹ 行紧排（满足 4B 行对齐）
     reg.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     reg.imageExtent      = {im.w, im.h, 1};
     vkCmdCopyImageToBuffer(cb, im.image, VK_IMAGE_LAYOUT_GENERAL, buf, 1, &reg);
@@ -319,16 +321,26 @@ void readBackHalf2Center(VkCtx& c, const Image& im, float& outX, float& outY)
     check(vkQueueSubmit(c.queue, 1, &si, nullptr), "回读 vkQueueSubmit");
     check(vkQueueWaitIdle(c.queue), "回读 vkQueueWaitIdle");
 
+    std::vector<uint8_t> out(bytes);
     void* p = nullptr;
     check(vkMapMemory(c.device, mem, 0, VK_WHOLE_SIZE, 0, &p), "vkMapMemory");
-    const uint16_t* px = static_cast<const uint16_t*>(p) + (size_t(im.h / 2) * im.w + im.w / 2) * 2;
-    outX = halfToFloat(px[0]);
-    outY = halfToFloat(px[1]);
+    std::memcpy(out.data(), p, size_t(bytes));
     vkUnmapMemory(c.device, mem);
     vkDestroyBuffer(c.device, buf, nullptr);
     vkFreeMemory(c.device, mem, nullptr);
     vkFreeCommandBuffers(c.device, c.pool, 1, &cb);
+    return out;
 }
+
+// 取第 index 个像素的第 ch 个 half 通道（行主序）。channels ∈ {2,4}。
+inline float halfChannelAt(const std::vector<uint8_t>& px, size_t index, uint32_t channels, uint32_t ch)
+{
+    const uint16_t* h = reinterpret_cast<const uint16_t*>(px.data());
+    return halfToFloat(h[index * channels + ch]);
+}
+
+
+
 
 
 // FfxSurfaceFormat → VkFormat 的映射在文件下方（toVkFormat），createImage 之前声明。
@@ -486,7 +498,8 @@ int main(int argc, char** argv)
     log("backend interface OK");
 
     FfxFsr3UpscalerContextDescription cd{};
-    cd.flags           = FFX_FSR3UPSCALER_ENABLE_HIGH_DYNAMIC_RANGE | FFX_FSR3UPSCALER_ENABLE_DEBUG_CHECKING;
+    cd.flags           = FFX_FSR3UPSCALER_ENABLE_HIGH_DYNAMIC_RANGE | FFX_FSR3UPSCALER_ENABLE_DEBUG_CHECKING
+                           | FFX_FSR3UPSCALER_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION;
     cd.maxRenderSize   = {renderW, renderH};
     cd.maxUpscaleSize  = {outW, outH};
     cd.backendInterface = backend;
@@ -542,7 +555,8 @@ int main(int argc, char** argv)
     VkCommandBuffer        cb = VK_NULL_HANDLE;
     check(vkAllocateCommandBuffers(c.device, &cai, &cb), "vkAllocateCommandBuffers");
 
-    auto dispatchFrame = [&](int frame, bool reset, FfxFloatCoords2D mvScale = {1.0f, 1.0f})
+    auto dispatchFrame = [&](int frame, bool reset, FfxFloatCoords2D mvScale = {1.0f, 1.0f},
+                               FfxFloatCoords2D jitter = {0.0f, 0.0f})
     {
         VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -558,7 +572,7 @@ int main(int argc, char** argv)
         dd.dilatedMotionVectors = rDilatedMv;
         dd.reconstructedPrevNearestDepth = rReconDepth;
         dd.output         = rOutput;
-        dd.jitterOffset   = {0.0f, 0.0f};
+        dd.jitterOffset   = jitter;
         dd.motionVectorScale = mvScale;   // (1,1) = 输入按「像素」计，见 docs/FSR输入契约.md §1
         dd.renderSize     = {renderW, renderH};
         dd.upscaleSize    = {outW, outH};
@@ -620,8 +634,10 @@ int main(int argc, char** argv)
 
             dispatchFrame(100, /*reset=*/true);
 
-            float gx = 0.0f, gy = 0.0f;
-            readBackHalf2Center(c, dilatedMv, gx, gy);
+            const auto mvPx = readBackImage(c, dilatedMv, 4);   // R16G16_FLOAT = 4 B/px
+            const size_t center = size_t(dilatedMv.h / 2) * dilatedMv.w + dilatedMv.w / 2;
+            const float gx = halfChannelAt(mvPx, center, 2, 0);
+            const float gy = halfChannelAt(mvPx, center, 2, 1);
             const float wantX = sign * expect, wantY = 0.0f;
             // 容差按 R16G16_FLOAT 的精度给：0.0125 附近 half 的间隔约 6e-6，放 1e-3 已极宽
             const bool okX = std::fabs(gx - wantX) < 1e-3f;
@@ -635,6 +651,64 @@ int main(int argc, char** argv)
                 "[fsr-smoke] FAIL: 速度场口径对账 %d 条不符。分母若为 upscaleSize 会得到 %.6f"
                 "（期望 %.6f）；符号不符 = 链路上有隐藏取负。口径出处 → docs/FSR输入契约.md §1\n",
                 bad, dxPx / float(outW), expect);
+            return 1;
+        }
+    }
+
+    // ── 契约探针：jitter 进入速度场的符号（批 14.2 判据 ②③；口径 → docs/FSR输入契约.md §3）
+    // 为什么用这条而不是「量输出图里边缘的位移」：jitter 的**合法范围只有 ±0.5 px**
+    // （Halton 生成器值域，host 在 ffx_fsr3upscaler.cpp:219-221 还会对 >1.0 告警），
+    // 预测位移 ≤1 显示像素，而重建滤波器本身的量化就有 ~2 px —— 实测扫 jitter 时
+    // j=+2 与 j=+4 给出同一个值、|j|=8 直接测不到边缘。**那个仪器是坏的**，撤掉了。
+    //
+    // 这条走 jitter cancellation：开启 flag 后 `mv_uv -= (previousJitter − curJitter)/targetSize`
+    // （ffx_fsr3upscaler.cpp:1002-1006 + callbacks_glsl.h:375-377），而 mv_uv 会写进
+    // dilatedMotionVectors ⟹ **可以直接精确回读**，不受滤波器影响。
+    // 输入 mv=0 ⟹ 回读值 = −(prev − cur)/renderSize，把符号、分母、以及
+    // 「previous 到底是上一帧的 jitter」三件事一次钉死。
+    {
+        const float jy = 0.5f;                       // 合法范围上限
+        int   bad  = 0;
+        bool  first = true;
+        for (float cur : {0.0f, jy, -jy})
+        {
+            // 源速度清零、深度清常量（膨胀取本像素，无歧义）
+            VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+            bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+            check(vkBeginCommandBuffer(cb, &bi), "jit vkBegin");
+            VkClearColorValue z{};
+            z.float32[0] = 0.0f; clearImageTo(c, cb, motion, z);
+            z.float32[0] = 0.5f; clearImageTo(c, cb, depth,  z);
+            check(vkEndCommandBuffer(cb), "jit vkEnd");
+            VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+            si.commandBufferCount = 1; si.pCommandBuffers = &cb;
+            check(vkQueueSubmit(c.queue, 1, &si, nullptr), "jit submit");
+            check(vkQueueWaitIdle(c.queue), "jit wait");
+
+            dispatchFrame(300, /*reset=*/first, {1.0f, 1.0f}, {0.0f, cur});
+            first = false;
+
+            // 期望：stored = −(prev − cur)/renderH，prev 是**上一轮**传进来的 jitter
+            static float prev = 0.0f;
+            const float prevUsed = prev;
+            const float want = -(prevUsed - cur) / float(renderH);
+            prev = cur;
+
+            const auto px = readBackImage(c, dilatedMv, 4);
+            const size_t center = size_t(dilatedMv.h / 2) * dilatedMv.w + dilatedMv.w / 2;
+            const float gx = halfChannelAt(px, center, 2, 0);
+            const float gy = halfChannelAt(px, center, 2, 1);
+            const bool okX = std::fabs(gx) < 1e-5f;
+            const bool okY = std::fabs(gy - want) < 1e-5f;
+            log("probe jitter: prev=%+.2f cur=%+.2f → dilatedMV (%.6f, %.6f)，期望 (0, %.6f) %s",
+                prevUsed, cur, gx, gy, want, (okX && okY) ? "OK" : "**FAIL**");
+            if (!okX || !okY) ++bad;
+        }
+        if (bad) {
+            std::fprintf(stderr,
+                "[fsr-smoke] FAIL: jitter cancellation 对账 %d 条不符。口径 = "
+                "mv_uv -= (previousJitter - curJitter)/motionVectorsTargetSize，"
+                "出处 → docs/FSR输入契约.md §3\n", bad);
             return 1;
         }
     }

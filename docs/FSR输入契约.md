@@ -72,8 +72,40 @@
 |---|---|---|
 | 类型 | `FfxFloatCoords2D`（两个 float），host 侧**原样拷进 CB，不做任何归一化** | `ffx_fsr3upscaler.h:202`、`ffx_fsr3upscaler.cpp:945-946` ✅ |
 | 单位 | **渲染像素**（官方原文：in unit pixel space）；Halton 生成器值域 ±0.5 像素 | `ffx_fsr3upscaler.h:502-503`、`ffx_fsr3upscaler.cpp:1338-1339` ✅ |
+| **合法范围** | **±0.5 px 是工作点**，host 对 `abs(jitter) > 1.0` 告警（`:219-221`）。超出后重建滤波器的行为**不在设计范围内**，别拿它做实验变量 | `ffx_fsr3upscaler.cpp:219-221` ✅ |
 | UV 化的分母 | 一律 `RenderSize()` / `PreviousFrameRenderSize()`，**没有一处用 `UpscaleSize()`** | `accumulate.h:110`、`luma_instability.h:77-78`、`shading_change.h:52`、`prepare_reactivity.h:243` ✅ |
 | 上一帧值 | 每帧**无条件**移位得到，与 reset 无关 | `ffx_fsr3upscaler.cpp:943-944` ✅ |
+
+### 实测钉死的：jitter 进速度场的符号与分母
+
+开 `ENABLE_MOTION_VECTORS_JITTER_CANCELLATION` 后 `mv_uv -= (previousJitter − curJitter)/motionVectorsTargetSize`，
+而 `mv_uv` 会写进 `dilatedMotionVectors` ⟹ **可以精确回读，不经过重建滤波器**。输入 mv=0 时
+回读值就是 `−(prev − cur)/renderSize`。RADV 实机（`just fsr-smoke`）：
+
+| prev | cur | 回读 y | 预测 `−(prev−cur)/360` |
+|---|---|---|---|
+| 0 | +0.5 | **+0.001389** | +0.001389 ✅ |
+| +0.5 | −0.5 | **−0.002777** | −0.002778 ✅ |
+
+一次钉死四件事：公式、**符号**、分母 = `renderSize`（y 用 360 不是 720）、以及
+`previous` 确实是上一帧传入的 jitter。变异（期望符号取反）→ 2 条 FAIL、rc=1。
+
+### ⚠ 一个**无效仪器**的记录（14.5 别再建第二次）
+
+最初的思路是「造一条水平边缘，扫 jitter，量输出图里边缘的位移」。跑出来是废的：
+
+| jitter (render px) | −8 | −4 | −2 | 0 | +2 | +4 | +8 |
+|---|---|---|---|---|---|---|---|
+| 输出边缘行（display px） | 测不到 | 361.5 | 361.5 | 359.75 | 357.5 | 357.5 | 测不到 |
+
+三个致命问题：① **±8 px 超出合法范围 16 倍**（工作点 ±0.5），行为本就不在设计内；
+② 在合法量级上预测位移 ≤1 显示像素，而**重建滤波器自身的量化就有 ~2 px**（j=+2 与 +4 同值）；
+③ |j|=8 时边缘直接测不出来。
+
+对照组是干净的（同一套测量代码，jitter=0 扫色边缘：s=+4 → +8.00、s=+8 → +16.00，
+斜率恰为 upscale 倍数 2）⟹ **坏的不是测量代码，是被测的量选错了**。
+⟹ 结论：**jitter 符号要在 cancellation 这条可精确回读的路径上测**，不要在输出图上测。
+输出图侧只留下一个**定性**佐证：jitter 增大时边缘单调**负向**移动，与 `uv + j/H` 一致。
 
 ### Y 轴符号：源码里裁决不了，几何上能推死
 
@@ -93,7 +125,9 @@ jitterY = -2.0f * jitterY / renderHeight;      // ← 只有这里取负
 - FSR 算的正是 `fUv + (jitterOffset)/(W,H)`。
 
 ⟹ **两边相等的唯一解：`dispatch.jitterOffset` 传原始 Halton 值（未取负的那个）**，
-Y 的负号只属于投影矩阵，它存在的意义就是抵消 NDC-Y-up 与 UV-Y-down。⬜ 待实机反向用例背书。
+Y 的负号只属于投影矩阵，它存在的意义就是抵消 NDC-Y-up 与 UV-Y-down。
+**实机佐证**：jitter 增大 → 输出内容单调负向移动（定性），且 cancellation 路径的符号
+已精确对拍（见下）。⬜ accumulate 路径的**定量**判据仍缺（原因见「无效仪器」一节）。
 
 ## 4. reset
 
@@ -133,8 +167,8 @@ Y 的负号只属于投影矩阵，它存在的意义就是抵消 NDC-Y-up 与 U
 |---|---|---|
 | 速度场单位 / `motionVectorScale` 该填什么 / 分母是谁 | 喂常量 MV + 回读 `dilatedMotionVectors`（我们分配、可直接读） | ✅ **已对拍**：分母 = renderSize；scale 是分子；像素输入填 (1,1)。变异（期望改成 upscaleSize）验过会 FAIL |
 | 速度场**符号** | 同上，±dx 各一次 | ✅ **已对拍**：链路上无隐藏取负。方向语义（`uv + mv`）是源码事实，两者合起来把符号钉死 |
-| jitter Y 符号 | 单帧 jitter + 无运动，量输出相对 jitter=0 基线的位移方向 | ⬜ 未做（§3 只有几何推导，**推导不算验收**） |
+| jitter 的符号 / 分母 / previous 语义 | 开 jitter cancellation，mv 输入清零，回读 `dilatedMotionVectors` = `−(prev−cur)/renderSize` | ✅ **已对拍（精确）**：+0.5→+0.001389、prev=+0.5/cur=−0.5→−0.002777。变异（符号取反）2 条 FAIL。**accumulate 路径的定量判据仍缺**，原因见 §3「无效仪器」 |
 | depth inverted / infinite | 合成深度靶，对 `GetViewSpaceDepth` 闭式解 | ⬜ 未做 |
 
 **「读源码认为一致」不算验收**（phase14_plan §2 批 14.2 判据 ②）。**14.2 未收口**：
-四条里两条已实机钉死，jitter 与 depth 两条还欠。
+四条里三条已实机钉死，depth 那条还欠（jitter 的 accumulate 路径只有定性佐证）。
