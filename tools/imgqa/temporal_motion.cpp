@@ -3312,16 +3312,22 @@ constexpr int kStepProbes[] = { 0, 1, 2, 4, 8, 12, 16, 24, 32, 48, 64, 96, 128, 
 constexpr double kStepTauSweep[] = { 0.01, 0.02, 0.05 };
 
 /**
- * 首帧低于该值 = 这一刀被引擎 `cameraJumps` 当跳切切了（历史作废 ⟹ 残影恒 0 = 假绿）。
- * 纯 EMA 预测 ghost(0) = 1 − α = 0.99，与 0 之间没有中间地带。
+ * 首帧残影的下限见判决线②（`temporal-tail-step-stimulus`）。
+ *
+ * 🔴 这里**曾经**是一个 `kStepStimulusLine = 0.5` 常量 + 「门关臂」的注释，两处都错：
+ * ① 挂错了臂（`clip_mode = 0` 带默认 5 抽头盒，不是无裁剪）；② 阈值 0.5 是照着错的
+ * 预测（1−α）拍的。现在预测挂在 E 臂上，是尖锐的 0.99，线取 0.9。
  */
-inline constexpr double kStepStimulusLine = 0.5;
 
-/// 一个阶跃臂 = 三跑（A / B∞ / 阶跃）。`clipMode` 0 = 门关 = 纯 EMA 闭式锚。
+/// 一个阶跃臂 = 三跑（A / B∞ / 阶跃）。
+/// `clipMode` 1 = **关盒**（唯一无裁剪档；⚠ 0 不是关盒，0 带默认 5 抽头十字盒）。
+/// `reprojection` false = 历史按屏幕坐标原样取（⟹ `hist(p) = out_{n−1}(p)` 精确）——
+/// 闭式锚**必须**用它，理由见 `emitStepVerdicts` 第 ③ 条。
 struct StepArm {
     const char* tag;
     double clipMode;
     double feedback;
+    bool reprojection = true;
 };
 
 /// 一跑的产物：连拍的线性 luma（收敛跑 = 收敛段）。
@@ -3399,6 +3405,7 @@ StepRun captureStepRun(const std::string& dir, const std::string& name, const st
     o.taaFeedback = sp.feedback;
     o.taaJitterScale = sp.jitterScale;  // 本仪器恒 0（理由见段头【为什么 jitter 恒 0】）
     o.taaBaseSpace = sp.baseSpace;
+    o.taaReprojection = sp.reprojection;  // 闭式锚臂 = false（纯屏幕空间 EMA）
     o.taaClipMode = sp.taa ? sp.clipMode : 0.0;
     o.taaClipSoft = sp.clipSoft;
     makeProfile(dir, o);
@@ -3564,7 +3571,7 @@ void printStepCurve(const StepCurve& c)
  * 这次误读本身成了本判据存在的理由的一个例证：**没有闭式锚，"0.015" 会被读成"鬼影没了"。**
  */
 int emitStepVerdicts(const std::string& cameraName, double stepDist, int burst, double tau,
-    int margin, const StepCurve& zero, const StepCurve& open, const StepCurve& boxed,
+    int margin, const StepCurve& zero, const StepCurve& ema, const StepCurve& boxed,
     const StepCurve& delivery)
 {
     constexpr double kAlpha = 0.01;
@@ -3579,46 +3586,49 @@ int emitStepVerdicts(const std::string& cameraName, double stepDist, int burst, 
     std::cout << "  " << vs.back().line() << "\n";
 
     // ② 激励在场 = **历史真的活过了这一刀**。引擎的 `cameraJumps` 一旦判跳切就把历史作废，
-    //    残影当场归零 = 满分假绿，除本条没有任何暴露途径。只在关盒臂上才是这个预测。
-    const double g0 = open.g.empty() ? 0.0 : open.g.front();
-    vs.push_back(verdictFor("temporal-tail-step-stimulus", g0 >= kStepStimulusLine,
-        "关盒臂 ghost(0) = " + d4(g0) + "（线 ≥ " + d2(kStepStimulusLine)
-            + "；无裁剪 ⟹ 纯 EMA 预测 1−α = " + d2(1.0 - kAlpha)
+    //    残影当场归零 = 满分假绿，除本条没有任何暴露途径。
+    //    E 臂（关盒 + **无重投影**）下预测是**尖锐**的：hist 按屏幕坐标原样搬 ⟹
+    //    out_0 = 0.99·A + 0.01·B ⟹ ghost(0) = 0.99。线取 0.9（留量给 PNG 量化与掩膜边缘）。
+    const double g0 = ema.g.empty() ? 0.0 : ema.g.front();
+    vs.push_back(verdictFor("temporal-tail-step-stimulus", g0 >= 0.9,
+        "闭式锚臂 ghost(0) = " + d4(g0) + "（线 ≥ 0.900；无裁剪 + 无重投影 ⟹ 预测 1−α = "
+            + d2(1.0 - kAlpha)
             + "。掉到 0 = 这一刀被引擎当**跳切**切了，历史作废，整表作废）· 掩膜 "
-            + d2(open.maskShare * 100.0) + "% · 平移 " + d4(stepDist) + " 世界单位"));
+            + d2(ema.maskShare * 100.0) + "% · 平移 " + d4(stepDist) + " 世界单位"));
     std::cout << "  " << vs.back().line() << "\n";
 
-    // ③ 闭式锚 = 仪器自证：关盒 ⟹ out_n = (1−α)ⁿ·A + (1−(1−α)ⁿ)·B∞ ⟹ ghost(n) = (1−α)ⁿ
+    // ③ 闭式锚 = 仪器自证：E 臂 ⟹ out_n = (1−α)ⁿ·A + (1−(1−α)ⁿ)·B∞ ⟹ ghost(n) = (1−α)ⁿ
     //    **精确** ⟹ AUC = Σ = (1−(1−α)^N)/α。用 AUC 而不是 n₅₀：AUC 吃整条曲线，
-    //    任何"历史中途被重置/α 没生效"都会把它拉离闭式，而 n₅₀ 只看一个穿越点。
+    //    任何「历史中途被重置 / α 没生效」都会把它拉离闭式，而 n₅₀ 只看一个穿越点。
     const double aucClosed = (1.0 - std::pow(1.0 - kAlpha, static_cast<double>(burst))) / kAlpha;
     vs.push_back(verdictFor("temporal-tail-step-ema-anchor",
-        open.auc >= 0.8 * aucClosed && open.auc <= 1.2 * aucClosed,
-        "关盒 AUC = " + d2(open.auc) + " 帧·全对比度（闭式 (1−(1−α)^N)/α = " + d2(aucClosed)
-            + "，N=" + std::to_string(burst) + "，线 ±20%）· n₅₀ = " + d2(open.n50) + "（闭式 "
-            + d2(std::log(0.5) / std::log(1.0 - kAlpha)) + "）· 不命中 = 历史通道上还有别的东西在动"));
+        ema.auc >= 0.9 * aucClosed && ema.auc <= 1.1 * aucClosed,
+        "闭式锚臂 AUC = " + d2(ema.auc) + " 帧·全对比度（闭式 (1−(1−α)^N)/α = " + d2(aucClosed)
+            + "，N=" + std::to_string(burst) + "，线 ±10%）· ghost(0) = " + d4(g0)
+            + " · 不命中 = 历史通道上还有别的东西在动"));
     std::cout << "  " << vs.back().line() << "\n";
 
     // ④ 主判据（**结论，不是守卫**）：交付臂（臂 11）的残影总量必须显著少于现行默认盒（臂 0）。
     //    线 0.7 = 「至少兑掉三成」，与本项目「明显」常量 1.5 互为倒数口径。
-    //    ≥ 0.9 ⟹ 臂 11 在去遮挡处**没有**比现行盒更好（锁死假说的形态：盒一旦把大块夹掉，
-    //    剩下的混合历史落在盒内 ⟹ `w` 塌成 0 ⟹ 两臂行为一致，只剩 α 在洗）。
+    //    > 1 ⟹ 交付臂**更鬼**。首轮实测就是这个方向，而且机制对得上：瞬切后机位静止 ⟹
+    //    `motion` 恰为 0 ⟹ `gate = 1` ⟹ `mem = max(ext, memPrev·decay)` 是**被撑大的记忆**
+    //    ⟹ 接受盒比臂 0 的瞬时 5 抽头盒更宽 ⟹ 夹得更松。
     const double ratio = boxed.auc > 0.0 ? delivery.auc / boxed.auc : 0.0;
     vs.push_back(verdictFor("temporal-tail-step-clip-holds",
         boxed.auc > 0.0 && ratio <= 0.7,
         "AUC 交付(臂11)/现行盒(臂0) = " + d2(delivery.auc) + " / " + d2(boxed.auc) + " = "
-            + d4(ratio) + "（线 ≤ 0.7 = 记忆门在去遮挡处多兑掉三成；≥ 0.9 = 两臂一致，"
-            "盒对已混进盒内的历史停火）· 参照：完全无裁剪 = " + d2(open.auc)
-            + " 帧 ⟹ 盒族本身兑掉了 " + d2(100.0 * (1.0 - boxed.auc / (open.auc > 0.0 ? open.auc : 1.0)))
-            + "%\n       可见鬼影总量：交付 " + d2(delivery.visAuc) + " 帧·满掩膜 vs 现行盒 "
-            + d2(boxed.visAuc) + " vs 无裁剪 " + d2(open.visAuc)));
+            + d4(ratio) + "（线 ≤ 0.7 = 记忆门在去遮挡处多兑掉三成；> 1 = 交付臂**更鬼**）\n"
+            "       归因：闭式锚（无裁剪+无重投影）= " + d2(ema.auc) + " 帧 ⟹ 重投影+盒族共兑掉 "
+            + d2(100.0 * (1.0 - boxed.auc / (ema.auc > 0.0 ? ema.auc : 1.0)))
+            + "%（R 行 = 只开重投影的单独贡献）\n       可见鬼影总量：交付 " + d2(delivery.visAuc)
+            + " 帧·满掩膜 vs 现行盒 " + d2(boxed.visAuc) + " vs 闭式锚 " + d2(ema.visAuc)));
     std::cout << "  " << vs.back().line() << "\n";
 
     logCall("temporal-tail",
         { { "camera", cameraName }, { "motion", "step" }, { "step", d4(stepDist) },
             { "burst", std::to_string(burst) }, { "tau", d4(tau) },
-            { "margin", std::to_string(margin) }, { "mask-share", d4(open.maskShare) },
-            { "auc-open", d2(open.auc) }, { "auc-boxed", d2(boxed.auc) },
+            { "margin", std::to_string(margin) }, { "mask-share", d4(ema.maskShare) },
+            { "auc-ema", d2(ema.auc) }, { "auc-boxed", d2(boxed.auc) },
             { "auc-delivery", d2(delivery.auc) }, { "visauc-delivery", d2(delivery.visAuc) } },
         vs);
     const bool allOk = std::all_of(vs.begin(), vs.end(), [](const Verdict& v) { return v.ok; });
@@ -3628,11 +3638,14 @@ int emitStepVerdicts(const std::string& cameraName, double stepDist, int burst, 
     return allOk ? 0 : 1;
 }
 
-/// 阶跃臂的热身 = ⌈6/α⌉（EMA 判据）向上对齐到抖动周期；α=1 的零锚臂 16 帧就够。
-/// `warm > 0` = CLI 显式覆写（调试用，覆写后闭式锚大概率不中，那是刻意的可观察性）。
-int stepWarmFor(double alpha, int overrideWarm)
+/// 阶跃臂的热身 = **`⌈6/α⌉`（EMA 判据）与 CLI `--warm` 取大**，向上对齐到抖动周期。
+/// 🔴 为什么是**取大**而不是「CLI 给了就覆写」：`--warm` 默认值 64 是本子命令三个
+/// `--motion` 模式共用的，若「> 0 即覆写」，α=0.01 的臂就**永远**只热身 64 帧
+/// （EMA 判据要 600）——首轮实测正是如此，且它伪装得极好：抖动关断下静止机位的收敛
+/// 帧本来就是不动点，参考图完全正确，只有「历史攒了多久」这一件事被悄悄改了。
+int stepWarmFor(double alpha, int warmFloor)
 {
-    const int w = overrideWarm > 0 ? overrideWarm : static_cast<int>(std::ceil(6.0 / alpha));
+    const int w = std::max(warmFloor, static_cast<int>(std::ceil(6.0 / alpha)));
     return static_cast<int>(
         (static_cast<uint32_t>(w) + kJitterPeriod - 1) / kJitterPeriod * kJitterPeriod);
 }
@@ -3646,6 +3659,7 @@ Spec stepSpecFor(const StepArm& a, int warm)
     sp.jitterScale = 0.0;
     sp.baseSpace = true;  // 交付态
     sp.clipMode = a.clipMode;
+    sp.reprojection = a.reprojection;
     sp.warm = warm;
     return sp;
 }
@@ -3698,14 +3712,20 @@ int cmdTemporalTailStep(const std::string& cameraName, double stepDist, int burs
     std::printf("平移阶跃：沿 right 轴移 %s 世界单位（target 同步平移 = 纯横移不转朝向）\n",
         d4(dist).c_str());
 
-    // 四臂。Z = 零锚（α=1 ⟹ 无历史）；X1 = **关盒**（`clip_mode = 1`，唯一无裁剪臂 ⟹
-    // ②③ 两条闭式锚挂在它上面）；C0 = 现行默认盒（5 抽头十字盒，**不是**没有裁剪）；
-    // C11 = 交付（记忆门挂重投影位移）。
+    // 五臂。Z = 零锚（α=1 ⟹ 无历史）。
+    // E  = **闭式锚**：关盒 + **重投影关** ⟹ `hist(p) ≡ out_{n−1}(p)` 精确 ⟹
+    //      `ghost(n) = (1−α)ⁿ` 精确 ⟹ AUC 有闭式。它是**尺子的刻度**，不参与臂间比较。
+    //      ⚠ 为什么必须关重投影：0.01 世界单位的平移在像素上是 ~12px，重投影开着时
+    //      `A(p+12px) ≈ B(p)` 对非去遮挡像素成立 ⟹ 那部分变化被重投影"解释掉" ⟹
+    //      `ghost(0)` 实测只有 0.271（= **去遮挡份额**，本身是个好数，但不是 EMA 闭式）。
+    // R  = 关盒 + 重投影开 = 「重投影单独兑掉了多少」的归因参照。
+    // C0 = 现行默认盒（5 抽头十字盒，**不是**没有裁剪）；C11 = 交付（记忆门挂重投影位移）。
     const std::vector<StepArm> arms = {
-        { "Z", 11.0, 1.0 },
-        { "X1", 1.0, 0.01 },
-        { "C0", 0.0, 0.01 },
-        { "C11", 11.0, 0.01 },
+        { "Z", 11.0, 1.0, true },
+        { "E", 1.0, 0.01, false },
+        { "R", 1.0, 0.01, true },
+        { "C0", 0.0, 0.01, true },
+        { "C11", 11.0, 0.01, true },
     };
     std::vector<StepCurve> main;
     std::vector<std::vector<double>> sens;
@@ -3728,8 +3748,8 @@ int cmdTemporalTailStep(const std::string& cameraName, double stepDist, int burs
     }
     std::printf("\n");
 
-    return emitStepVerdicts(cameraName, dist, burst, tau, margin, main[0], main[1], main[2],
-        main[3]);
+    return emitStepVerdicts(cameraName, dist, burst, tau, margin, main[0], main[1], main[3],
+        main[4]);
 }
 
 }  // namespace RGL::imgqa

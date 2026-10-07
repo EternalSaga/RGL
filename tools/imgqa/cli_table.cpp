@@ -258,6 +258,15 @@ std::vector<SubcommandSpec> specsResidualAndMotion()
             false,
             "",
         },
+    };
+}
+
+/// 尾长与运动族。批 13.15 从 `specsResidualAndMotion` 拆出——加进 `--motion step` 的四条判决线
+/// 说明后原函数撞「单函数 < 120 代码行」，而拆缝正好是语义缝：上面那条是**静止机位残差 + 游动**，
+/// 这两条是**运动下的鬼影**。
+std::vector<SubcommandSpec> specsTailAndMotion()
+{
+    return {
         /* temporal-tail */
         SubcommandSpec{
             "temporal-tail",
@@ -285,10 +294,14 @@ std::vector<SubcommandSpec> specsResidualAndMotion()
                 " **Z 组**（jitter 0 + α=1）**借主角度的 φ** 量，frac ≤ 0.02（⚠ 两处坑：不能用 δ=0 的 φ，那会让 Δ ≡ 0 ⟹ 0/0 兜底成 0 = 空断言；也不能拿 "
                 "jitter=1 的臂当零点，它的相位平均收敛值比无抖动参考真的更糊，那是**地板** ≈0.13，不是零点）；④ **gate 断点** = `臂11 − 臂0` 低角度侧显著为正"
                 "（洞在场）、高角度侧 ≈ 0（gate 关门后臂 11 退回臂 0）。断点位置是**推出来的**不是扫出来的 ⟹ 阳性锚点不是拟合",
-                "`--motion step` 的四条（批 13.15，债-63 真鬼影量具；每臂三跑 = A 收敛 / B∞ 收敛 / A→B 瞬切）：① **零锚** = α=1 臂 max ghost(n) ≤ 0.02（无历史 ⟹ 残差恰为 0）；② **激励在场"
-                " = 历史活过了这一刀** = 门关臂 ghost(0) ≥ 0.5（纯 EMA 预测 0.99；掉到 0 = 引擎 `cameraJumps` 把这一刀当跳切切了、历史作废 = 满分假绿）；③ **闭式锚 = 仪器自证** = 门关"
-                " n₅₀ 落在 `ln0.5/ln0.99` = 69 帧 ±20%（门关时 `out = α·B + (1−α)·A` ⟹ `ghost(n) = (1−α)ⁿ` 精确）；④ **主判据** = n₅₀(臂11)/n₅₀(臂0) ≤ 0.7 才算裁剪在去遮挡处兑住，"
-                "≥ 0.9 = **锁死确认**（邻域盒对已混进盒内的历史停火，唯一洗掉它的东西就是 α）",
+                "`--motion step` 的四条（批 13.15，债-63 真鬼影量具；每臂三跑 = A 收敛 / B∞ 收敛 / A→B 瞬切，`jitter_scale` 恒 0）："
+                "**主指标 = AUC = Σ ghost(n)**，单位「帧·全对比度」= 屏幕上陈旧内容的总量（🔴 不是 n₅₀：盒生效时 "
+                "ghost(0) 第一帧就掉到 0.015 量级 ⟹ 曲线永远碰不到 0.5 ⟹ n₅₀ 对带盒的臂**不存在**）。五臂 = Z（α=1 零锚）/ "
+                "E（**闭式锚**：关盒 + 重投影关 ⟹ `ghost(n) = (1−α)ⁿ` 精确）/ R（关盒 + 重投影开 = 重投影单独贡献）/ C0（现行 5 "
+                "抽头盒）/ C11（交付）。判决线：① **零锚** = Z 的 max ghost(n) ≤ 0.02；② **历史活过了这一刀** = E 的 "
+                "ghost(0) ≥ 0.9（预测 1−α = 0.99 尖锐；掉到 0 = 引擎 `cameraJumps` 把这一刀当跳切切了 = 满分假绿）；③ **闭式锚"
+                "= 仪器自证** = E 的 AUC 落在 `(1−(1−α)^N)/α` ±10%；④ **主判据** = AUC(C11)/AUC(C0) ≤ 0.7 才算记忆门在去遮挡处"
+                "多兑掉三成（> 1 = 交付臂**更鬼**）",
             },
             false,
             "",
@@ -434,6 +447,7 @@ std::vector<SubcommandSpec> allSpecs()
     append(specsMetaAndRig());
     append(specsSwimAndProbe());
     append(specsResidualAndMotion());
+    append(specsTailAndMotion());
     append(specsFlickerAndNoise());
     return table;
 }
