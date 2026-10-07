@@ -59,6 +59,26 @@
 | 该产物每帧无条件清空 | 清值随 inverted 翻转（`bInverted ? 0.f : 1.f`），**不在 reset 分支内** | `:1071-1076` ✅ |
 | `DEPTH_INVERTED` 改什么 | ① 9 点邻域找最近深度的比较方向；② 重建上一帧最近深度的**原子归约算子**（标准 min / 反转 max）；③ `deviceToViewDepth` 查表 | `prepare_inputs.h:96-102`、`callbacks_glsl.h:656-660`、`ffx_fsr3upscaler.cpp:732-747` ✅ |
 | `DEPTH_INFINITE` 改什么 | **shader 侧零条件编译分支**；全部效果 = `deviceToViewDepth[0..1]` 查表选择 + 两条 debug 告警 | `:711`、`:732-747` ✅ |
+
+### 实测钉死的：「最近」的方向
+
+`StoreDilatedDepth(iPxPos, depthExtents.fNearest)`（`prepare_inputs.h:145`），而 `dilatedDepth`
+**由我们分配** ⟹ 可回读。靶 = 上半 0.2（近）/ 下半 1.0（远）的水平分层
+（`vkCmdClearColorImage` 没有矩形概念，得用区域拷贝造）。RADV 实机（`just fsr-smoke`）：
+
+| 取样点 | 不开 flag（本配置） | **开 `DEPTH_INVERTED`** |
+|---|---|---|
+| 近区内部 row 172 | 0.2000 ✅ | 0.2000 |
+| 远区内部 row 188 | 1.0000 ✅ | 1.0000 |
+| **分界线下方第一行 row 180** | **0.2000** ✅ | **1.0000** ← 反向用例 |
+| 分界线上方最后一行 row 179 | 0.2000 ✅ | 1.0000 |
+
+⟹ 非 inverted 时 `fNearest` = 9 点邻域**最小** device depth（min 胜，跨分界线把近值拉进远区）；
+开 inverted 后同一行读到 1.0（max 胜）。**两档给出相反答案 ⟹ 这条判据不是空断言**，
+同时把 §2 表里「inverted 改什么」从「读源码」升级成「实测」。
+
+**我们的配置**：标准 Vulkan 深度 [0,1]、0=近、1=远、有限远平面 ⟹ **两个 flag 都不开**，
+`cameraNear/cameraFar` 传投影矩阵真值。
 | 唯一的线性化函数 | `GetViewSpaceDepth(d) = e / (d − c)`，系数来自上面的查表；**不存在** `ConvertToDepth` / `LinearizeDepth` | `common.h:309-320` ✅ |
 | near/far | 先取 min/max 再按 inverted 交换，注释明说「与参数谁大谁小无关，由 flag 决定变换」 | `:713-722` ✅ |
 
@@ -167,8 +187,12 @@ Y 的负号只属于投影矩阵，它存在的意义就是抵消 NDC-Y-up 与 U
 |---|---|---|
 | 速度场单位 / `motionVectorScale` 该填什么 / 分母是谁 | 喂常量 MV + 回读 `dilatedMotionVectors`（我们分配、可直接读） | ✅ **已对拍**：分母 = renderSize；scale 是分子；像素输入填 (1,1)。变异（期望改成 upscaleSize）验过会 FAIL |
 | 速度场**符号** | 同上，±dx 各一次 | ✅ **已对拍**：链路上无隐藏取负。方向语义（`uv + mv`）是源码事实，两者合起来把符号钉死 |
-| jitter 的符号 / 分母 / previous 语义 | 开 jitter cancellation，mv 输入清零，回读 `dilatedMotionVectors` = `−(prev−cur)/renderSize` | ✅ **已对拍（精确）**：+0.5→+0.001389、prev=+0.5/cur=−0.5→−0.002777。变异（符号取反）2 条 FAIL。**accumulate 路径的定量判据仍缺**，原因见 §3「无效仪器」 |
-| depth inverted / infinite | 合成深度靶，对 `GetViewSpaceDepth` 闭式解 | ⬜ 未做 |
+| jitter 的符号 / 分母 / previous 语义 | 开 jitter cancellation，mv 输入清零，回读 `dilatedMotionVectors` = `−(prev−cur)/renderSize` | ✅ **已对拍（精确）**：+0.5→+0.001389、prev=+0.5/cur=−0.5→−0.002777。变异（符号取反）2 条 FAIL。⚠ accumulate 路径的**定量**判据缺（原因见 §3「无效仪器」），该路径只有定性佐证 |
+| depth「最近」方向 | 水平分层深度靶 + 回读 `dilatedDepth`，判据 = 分界线下方第一行 | ✅ **已对拍 + 真反向用例**：不开 flag 读到 0.2000，开 `DEPTH_INVERTED` 读到 **1.0000**（rc=1）。两档相反 ⟹ 非空断言 |
 
-**「读源码认为一致」不算验收**（phase14_plan §2 批 14.2 判据 ②）。**14.2 未收口**：
-四条里三条已实机钉死，depth 那条还欠（jitter 的 accumulate 路径只有定性佐证）。
+**「读源码认为一致」不算验收**（phase14_plan §2 批 14.2 判据 ②）——四条全部有实机对拍，
+符号项全部有反向用例（MV ±dx、jitter 期望取反变异、depth 真开 inverted flag）。
+
+**残留一条，明确记着**：jitter 在 `accumulate.h:110` 那条路径上的**定量**判据没做出来
+（合法量级低于重建滤波器量化，见 §3）。14.5 接线时若发现画面整体偏移半像素级别的问题，
+**第一嫌疑是它，不是速度场**。

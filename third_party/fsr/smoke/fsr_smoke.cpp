@@ -140,6 +140,7 @@ debugCb(VkDebugUtilsMessageSeverityFlagBitsEXT sev, VkDebugUtilsMessageTypeFlags
     return VK_FALSE;
 }
 
+
 // FfxSurfaceFormat → VkFormat。只需要 FSR3-upscaler 实际会要的那几个；命中不了
 // 直接退出——静默退回 UNDEFINED 就是第一版 VVL 报一片的根因（image view 格式未定义
 // → 所有 storage 特性位为 0 → 一串 VUID 连带炸）。
@@ -248,6 +249,18 @@ void clearImageTo(VkCtx& c, VkCommandBuffer cb, const Image& im, VkClearColorVal
     r.levelCount     = 1;
     r.layerCount     = 1;              // ⚠ 0 是非法值（vendor 自己就在 :4223 踩了这个，见 PATCHES.md）
     vkCmdClearColorImage(cb, im.image, VK_IMAGE_LAYOUT_GENERAL, &v, 1, &r);
+}
+
+// 把 src 的整块内容拷进 dst 的第 [dstRow0, dstRow1) 行。用途：造「上半近、下半远」的深度靶
+// ——vkCmdClearColorImage 没有矩形区域概念，清不出分层深度。
+void copyImageRows(VkCtx& c, VkCommandBuffer cb, const Image& src, Image& dst, uint32_t dstRow0, uint32_t rows)
+{
+    VkImageCopy r{};
+    r.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    r.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    r.dstOffset      = {0, int32_t(dstRow0), 0};
+    r.extent         = {dst.w, rows, 1};
+    vkCmdCopyImage(cb, src.image, VK_IMAGE_LAYOUT_GENERAL, dst.image, VK_IMAGE_LAYOUT_GENERAL, 1, &r);
 }
 
 // IEEE 754 half → float。dilatedMotionVectors 是 R16G16_FLOAT，回读要自己解
@@ -709,6 +722,72 @@ int main(int argc, char** argv)
                 "[fsr-smoke] FAIL: jitter cancellation 对账 %d 条不符。口径 = "
                 "mv_uv -= (previousJitter - curJitter)/motionVectorsTargetSize，"
                 "出处 → docs/FSR输入契约.md §3\n", bad);
+            return 1;
+        }
+    }
+
+    // ── 契约探针：depth 的「最近」方向（批 14.2 判据 ②；口径 → docs/FSR输入契约.md §2）
+    // 本 context **没开** DEPTH_INVERTED / DEPTH_INFINITE ⟹ 非反转、有限远平面，
+    // 「最近」= device depth 最小（prepare_inputs.h:100-104），且 StoreDilatedDepth 存的就是
+    // 这个 fNearest（:145）。dilatedDepth 由我们分配 ⟹ 可回读。
+    // 靶：上半 0.2（近）、下半 1.0（远）。分界线**下面第一行**是判据——
+    //   非反转（min 胜）→ 被上面拉成 0.2；若方向反了（max 胜）→ 保持 1.0。
+    // 两个方向给出不同答案，所以这条不是「读源码认为一致」。
+    {
+        const uint32_t half = depth.h / 2;
+        Image nearSrc;
+        createImage(c, nearSrc, depth.w, depth.h, FFX_SURFACE_FORMAT_R32_FLOAT, su);
+        {
+            VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+            bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+            check(vkBeginCommandBuffer(cb, &bi), "near vkBegin");
+            VkClearColorValue n{}; n.float32[0] = 0.2f;
+            clearImageTo(c, cb, nearSrc, n);
+            check(vkEndCommandBuffer(cb), "near vkEnd");
+            VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+            si.commandBufferCount = 1; si.pCommandBuffers = &cb;
+            check(vkQueueSubmit(c.queue, 1, &si, nullptr), "near submit");
+            check(vkQueueWaitIdle(c.queue), "near wait");
+        }
+        {
+            VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+            bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+            check(vkBeginCommandBuffer(cb, &bi), "depth vkBegin");
+            VkClearColorValue far{}; far.float32[0] = 1.0f;
+            clearImageTo(c, cb, depth, far);                       // 全场远
+            copyImageRows(c, cb, nearSrc, depth, 0, half);         // 上半改成近
+            check(vkEndCommandBuffer(cb), "depth vkEnd");
+            VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+            si.commandBufferCount = 1; si.pCommandBuffers = &cb;
+            check(vkQueueSubmit(c.queue, 1, &si, nullptr), "depth submit");
+            check(vkQueueWaitIdle(c.queue), "depth wait");
+        }
+        dispatchFrame(400, /*reset=*/true);
+
+        const auto px = readBackImage(c, dilatedDepth, 4);         // R32_FLOAT
+        const auto at = [&](uint32_t y) {
+            const float* f = reinterpret_cast<const float*>(px.data());
+            return f[size_t(y) * dilatedDepth.w + dilatedDepth.w / 2];
+        };
+        struct { const char* what; uint32_t row; float want; } cases[] = {
+            { "近区内部",        half - 8, 0.2f },
+            { "远区内部",        half + 8, 1.0f },
+            { "分界线下方第一行", half,     0.2f },   // ← 判据：方向反了会是 1.0
+            { "分界线上方最后一行", half - 1, 0.2f },
+        };
+        int bad = 0;
+        for (auto& cs : cases) {
+            const float got = at(cs.row);
+            const bool ok = std::fabs(got - cs.want) < 1e-3f;
+            log("probe depth: %-22s row=%u → %.4f，期望 %.4f %s", cs.what, cs.row, got, cs.want,
+                ok ? "OK" : "**FAIL**");
+            if (!ok) ++bad;
+        }
+        if (bad) {
+            std::fprintf(stderr,
+                "[fsr-smoke] FAIL: depth「最近」方向对账 %d 条不符。非 inverted 时 fNearest = "
+                "9 点邻域最小 device depth（prepare_inputs.h:100-104,145）；分界线下方第一行"
+                "读到 1.0 = 方向反了（当成 inverted 在跑）。出处 → docs/FSR输入契约.md §2\n", bad);
             return 1;
         }
     }
