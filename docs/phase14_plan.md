@@ -345,6 +345,66 @@ taa.frag.slang:530-540   depth = depthTex.Load(像素)
 ② TAA 门改吃场（判据 ④，**预期不翻案**，理由见上面"修正二"）；③ imgqa 臂 14 注册。
 **红线**：`velocity_field` 关 = 逐位不变（已实测，机制 = 图里没有这个 pass）。
 
+### 1.11 批 14.4b A 档护栏已落地（2026-10-08 晨实测；**含对 plan/债-72 一条理由的修正**）
+
+#### 修正一：逐帧的**图附件**布局 sandwich 全项目只有 **IZB 一处**，不是"IZB + EVSSM 两处"
+
+plan 与债-72 把 EVSSM 与 FSR 并列为图外布局用户。实测：
+
+- `EvssmShadow` 的 `eUndefined → eGeneral` 在**建图期**（`evssm_shadow_impl.cppm:165-166`），
+  不是逐帧 sandwich，且不碰 `Renderer::attachmentLayouts`。
+- 其余自发 `CmdPipelineBarrier2` 的模块（env_prefilter / mip_gen / texture_upload(+cubemap) /
+  gpu_canary）里 **`oldLayout` / `newLayout` 一次都没出现**——图布局转换必须填这两个字段，
+  ⟹ 它们的 barrier 全是 buffer / 全局 memory barrier，不做任何 image 布局转换。
+
+⟹ A 档护栏的**现状作用域 = IZB 一处**；14.5 的 FSR 是**第二个**。B 档（挂号声明）的真实
+收益面因此比 plan 估的小一个量级：**建议 14.5 之后重新裁决 B 档是否还值得做**（只有两个
+用户时，"照抄 IZB 的先例"可能比"给图加一套声明机制"更便宜）。
+
+#### 修正二：「布局漂移 VVL 抓不到」这条**理由不成立**——护栏的价值要换成另外三条
+
+plan 判据 ② 与债-72 都写着"布局漂移 VVL 不报，所以靠护栏"。做阳性锚点时实测：把 IZB 的
+还原 barrier 删掉，**VVL 确实报了**——
+
+```
+vkCmdPipelineBarrier2(): pImageMemoryBarriers[1].image cannot transition the layout of
+aspect=2, level=0, layer=0 from VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+when the previous known layout is VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+```
+
+VVL 自己维护 per-image 的 last-known layout，而图外模块发的 barrier 它**看得见**，
+于是执行器下一次拿旧 `oldLayout` 转布局时矛盾就暴露。所以"VVL 抓不到"是**说过头了**。
+
+护栏仍然要留，但理由换成这三条（都不是"VVL 抓不到"）：
+
+1. **归因**：VVL 报在**执行器下一次 barrier 那个无辜调用点**，要人反推"是谁没还原"；
+   护栏直接点名肇事模块并给出进入/离开布局（实测输出 `进入 = 3，离开 = 5，追踪表 = 3`）。
+2. **不依赖调试层**：VVL 只在 validation 开启时存在，护栏在交付配置里也在。
+3. **早一帧**：VVL 要等到下一次有人 barrier 这个 image 才响。
+
+⚠ **这不等于债-72 作废**：VVL 覆盖的是"barrier 的 `oldLayout` 与 VVL 已知布局矛盾"这一支。
+漂移之后若**再没人** barrier 这个 image（那就确实无害），或漂移发生在 VVL 不建模的维度
+（跨 submission / queue family 所有权），VVL 不响。债-72 仍然开放，但**引用它时别再写
+"VVL 抓不到"**，写上面三条。
+
+#### A 档机制（已落地，判据三条全过）
+
+`depthLayoutBarrier` **返回它实际写入的布局** → `IzbShadow::recordFrame` 把两条深度 barrier
+串成 `depth = barrier(..., depth, ...)` 链并返回 → `Renderer::izbLightPassPre` 拿返回值与
+`attachmentLayouts[depthAttSlot]` 比对，不符即 `logger->error`。
+
+**机关在"返回值由发命令那一处产出"**：若让 `recordFrame` 自己写个局部量记布局，那个量与
+barrier 的 `to` 参数就是两个独立事实——删掉还原 barrier 而忘了改局部量，护栏永远为真。
+"把约定变断言"最容易做成的就是这种**假护栏**（断言的输入必须来自被断言的那个事实本身）。
+
+- **判据 ①（阳性锚点）**：删掉还原 barrier 的变异 → 护栏响 3 次（每帧一次），
+  消息带进入/离开/追踪表三个值。**非空转已验**。
+- **判据 ②（反向）**：现状 `izb_shadow = true`（默认开、每帧都过护栏）→ **0 条**漂移告警。
+  ⚠ 这条只有在确认 IZB 真在跑时才有意义（先查启动行 `izb: 开门 grid=512`，否则"0 误报"
+  是空转出来的）。
+- **判据 ③（红线）**：护栏只读不写命令 → 截图与基线**逐位相同**。
+- **B 档未做**（本批只做 A 档，与 plan 一致）。
+
 ## 2. 批次拆分与验收判据
 
 > 顺序按「失败最便宜」排，不是按依赖最紧排。**14.1 与 14.3 可并行**（14.3 不碰 FSR）。
@@ -357,7 +417,7 @@ taa.frag.slang:530-540   depth = depthTex.Load(像素)
 | ~~**14.2**~~ ✅ **已收口 2026-10-08** | **输入面研究（只出文档，不改渲染）**：`jitterOffset` / `motionVectors` / `depth` / `reset` 四个量的**单位、坐标系、符号、采样时刻**逐条与 FSR 源码对拍，写成表；顺带定 `ENABLE_DEPTH_INVERTED` / `_DEPTH_INFINITE` / `_MOTION_VECTORS_JITTER_CANCELLATION` / `_DISPLAY_RESOLUTION_MOTION_VECTORS` 的取值 | 用户方向第二条。**这是本项目第三次栽在"参考/闭式的观测坐标系与被测项不一致"的位置**（`phase13_plan` §1.6 撤回条、§1.17 结论 5 的 φ 反号）——先定口径再写代码 | ① 一张四行表，每行给「FSR 要的口径 / 我们现在的口径 / 差什么 / 差值怎么验」——✅ `docs/FSR输入契约.md`；② **每条差值有一条可跑的对拍**（合成靶或解析式），不接受"读源码认为一致" —— ✅ 四条全部实机对拍（载体 = `just fsr-smoke` 的三条契约探针，常驻非常驻可选）；③ 符号项必须有**反向用例**（符号取反必须更差）—— ✅ MV ±dx、jitter 期望取反变异、depth **真开 `DEPTH_INVERTED`** 后判据行 0.2000→1.0000。**残留**：jitter 在 accumulate 路径的定量判据做不出来（合法量级 ±0.5 px 低于重建滤波器量化），已记为 14.5 第一嫌疑 |
 | ~~**14.3**~~ ✅ **已收口 2026-10-08** | **内部分辨率与窗口拉伸解耦**：现在 render extent ≡ swapchain extent ≡ 窗口像素（`Resources` 深度图 extent = swapchain extent；全仓**无 `renderScale` 概念**，只有 `vkswapchain.cppm` 的 `windowScale` 诊断）。加一个独立的 render extent，与 swapchain extent、与债-37 的 HPD 分数缩放三者正交 | 用户方向第四条。**它是 FSR 的硬前置，但本身独立可验收、且净收益**（DRS / 性能实验都缺它）；与 14.1 并行 | ① `renderScale ∈ {1.0, 0.75, 0.5}` 下画面正确、resize 不崩、imgui 与**点选**不受影响（债-37 三条连带不许回退）—— ✅ 三档实机出图（0.5 档读图：内容/取景/比例正确，仅整体变软 = 双线性放大预期）；imgui 恒在后缓冲像素、点选两级换算收口，债-37 三条连带无回退（renderScale=1 时比值恰为 1）；**live resize 未手工验证**，改为把取整/钳制写成单测断言覆盖；② `renderScale = 1.0` 时**逐位等于**今天的基线（红线）—— ✅ 1280×720 与 1600×900 两档与开工前基线逐位相同（同会话增量构建），且**结构上**成立：图形状与 renderScale 无关（§1.9）；③ 截图/判据口径显式记录 render extent（否则 imgqa 所有像素类判据静默换含义）—— ✅ 启动日志 + 截图成功日志 + RPC `/state` 新增 `render` 段 + `just shot` 网格行；`--render-scale` **核对引擎实际生效值**（变异验红：请求 0.1 → 钳到 0.25 → FAIL）；④ Wayland 175% 缩放下实测一次 —— ⚠ **未做**（本机无 Wayland 会话）；默认档行为逐位同前，风险仅在显式改档。**收口记录** → §1.9 |
 | **14.4** 🕳 **进行中**（纯函数层 + pass 侧已落地） | **逐像素速度场**（债-71 / 债-35，**本 phase 最大的一块**）：compute pass 由两帧相机矩阵 + `depthTex` 解析算出每像素速度（本项目唯一运动是全局刚体 ⟹ 便宜），输出 FSR 口径的 `motionVectors`；同时把 TAA 的重投影从"全局矩阵"改成"读这张场" | 用户方向第三条。**它是天花板唯一的出口**，且能独立验收（不必等 FSR 接完）——臂 14 = 门改吃真实逐像素速度 ⟹ 直接问跷跷板是否松绑 | ① 速度场与**独立解析参考**逐像素对拍（含 pitch；用 `temporal_yaw_remap` 那套带 pitch 的金标准，2.3e-13px）；② **阳性锚点** = 静止机位必须恒 0；③ **反向用例** = 符号取反必须让 §1.22 的 R 变差；④ 用它重跑 `temporal-tail --motion step` 与 `temporal-motion`，报 R 是否 < 1（**这是"运动中 TAA 有害"能不能翻案的判决**） |
-| **14.4b** | **图外资源挂号 + 布局对账护栏**（FSR 前置，见 §1.7）。做两档、明确不做第三档：**A 护栏**（便宜）= 图外 pass 进出点比对 `attachmentLayouts[slot]` 与预期值，不符即 error 出声，把"进出同值"从**约定**变**断言**；**B 挂号**（中等）= `RgGraphDesc` 增加 external-use 声明（attachment × usage × 插在哪个 pass 之后/之前），GraphCompiler 据此把 barrier 并入计划，`IzbShadow` / `EvssmShadow` / FSR 三处不再手写 **image** barrier；**C 不做** = buffer 侧依赖自动推导（图只跟 image attachment，加进去 = 半个 memory manager） | **排在 14.5 之前**：FSR 是第三个图外 compute，先立护栏再扩面，否则 14.5 的 VVL 判据要替"约定"背锅，而债-32 已经证明这类缺口 VVL 不报 | ① **阳性锚点** = 故意让某图外 pass 不还原布局 ⟹ 护栏必须 error（**变异验过非空转**）；② **反向** = 现状全绿（护栏零误报，否则等于没有）；③ 红线 = 画面逐位不变（护栏只读不写命令）；④ B 档做完 = `izb_shadow_impl.cppm:256,280` 两处 `depthLayoutBarrier` 删除且画面逐位不变 |
+| **14.4b** ✅ **A 档已落地**（B 档待 14.5 后重裁，见 §1.11） | **图外资源挂号 + 布局对账护栏**（FSR 前置，见 §1.7）。做两档、明确不做第三档：**A 护栏**（便宜）= 图外 pass 进出点比对 `attachmentLayouts[slot]` 与预期值，不符即 error 出声，把"进出同值"从**约定**变**断言**；**B 挂号**（中等）= `RgGraphDesc` 增加 external-use 声明（attachment × usage × 插在哪个 pass 之后/之前），GraphCompiler 据此把 barrier 并入计划，`IzbShadow` / `EvssmShadow` / FSR 三处不再手写 **image** barrier；**C 不做** = buffer 侧依赖自动推导（图只跟 image attachment，加进去 = 半个 memory manager） | **排在 14.5 之前**：FSR 是第三个图外 compute，先立护栏再扩面，否则 14.5 的 VVL 判据要替"约定"背锅，而债-32 已经证明这类缺口 VVL 不报 | ① **阳性锚点** = 故意让某图外 pass 不还原布局 ⟹ 护栏必须 error（**变异验过非空转**）；② **反向** = 现状全绿（护栏零误报，否则等于没有）；③ 红线 = 画面逐位不变（护栏只读不写命令）；④ B 档做完 = `izb_shadow_impl.cppm:256,280` 两处 `depthLayoutBarrier` 删除且画面逐位不变 |
 | **14.5** | **FSR 接线**：落位 = **图外 compute 编舞**（`RgPassKind` 只有 `drawMesh/blit/drawLight`，**无 compute kind**；先例 = IzbShadow / EvssmShadow，见 `evssm_shadow.cppm:20`）。HDR 域位置 = **tonemap 之前**（scene_hdr@render res → FSR → hdr@display res → tonemap → swapchain），`ENABLE_HIGH_DYNAMIC_RANGE` 开 | 唯一架构决策，先写死再动手，免得中途返工 | ① **FSR 关 = 逐位不变**（与 TAA 同款红线，用基线配置）；② VVL 零报错（含跨 submission 依赖与布局链——债-32 那条"图外编舞"的坑）；⚠ **布局漂移 VVL 抓不到**（布局本身合法，症状隔一整帧），这一项靠 **14.4b 的护栏**，不是靠 VVL；③ 显存账新增"外部分配器"科目且**闭合断言重新有意义**；④ 本批**只点亮、不调参**，`NATIVEAA` + `renderScale=1.0` 起步 |
 | **14.6** | **判据迁移**：直接复用（`temporal-tail --motion step` 含闭式锚臂 E、`temporal-motion` 的 M0/M1/M2/M3x 消融族、理想 N 相位平均参考、往返地板、`aa-coverage`、`temporal` 的 ρ 对闭式、alignment/ablation 两条**元判据**）／换口径（ρ 六机位表：**算子留、阈值全重立**，闭式 ρ\*=0.0827 是 EMA 的闭式，FSR 不是 EMA）／随 TAA 作废（`clip_mode` 臂族、gate 断点锚点、`diag_reject` alpha 解码） | 用户方向最后一条"跑一堆 imgqa"的前置。**不先分类就会拿 TAA 的阈值判 FSR** | ① 三张清单落到 `imgqa` 的判据注册表（**不在文档里抄清单**，抄名单反模式）；② 每条"复用"项跑一次并记录新基线；③ 每条"作废"项**先确认不是护栏**（债-68 三条件） |
 | **14.7** | **旋钮调参**：§1.6 那 5 个 configure key × 三轴判据（静止闪烁 / 平移阶跃鬼影 / 运动中 R） | 有判据才有旋钮；顺序必须在 14.6 之后 | 每个 key 给一张扫描表 + **一次消融证明它真的在动**（阳性锚点），并写清代价轴 |

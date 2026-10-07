@@ -54,8 +54,14 @@ public:
 	 * @param input 本帧矩阵（见 IzbFrameInput）
 	 * @param depthCurrentLayout 深度图当前布局（追踪表读出，还原目标）
 	 * @param dumpHead true = 本帧 head→staging 拷贝（下一帧 drainReadback 打日志）
+	 * @return **离开时深度图真实所处的布局**（由实际发出的 barrier 逐跳推进，不是复述
+	 *         入参）。调用方（`Renderer::izbLightPassPre`）拿它与渲染图布局追踪表比对，
+	 *         不符即 error 出声 —— 批 14.4b A 档护栏，把「进出同值」从约定变断言。
+	 *         逐帧的**图附件**布局 sandwich 全项目只有这一处（EVSSM 的 eUndefined→eGeneral
+	 *         是建图期一次性、其余自发 barrier 模块只动自己的图不碰图附件），
+	 *         所以本函数也是 14.5 FSR sandwich 要照抄的**唯一**先例。
 	 */
-	void recordFrame(vk::raii::CommandBuffer& cmd, const IzbFrameInput& input,
+	vk::ImageLayout recordFrame(vk::raii::CommandBuffer& cmd, const IzbFrameInput& input,
 		vk::ImageLayout depthCurrentLayout, bool dumpHead);
 
 	/** 上一帧 dump 的收割（帧首调用；fence 已过、映射可读）：无 pending 零开销。 */

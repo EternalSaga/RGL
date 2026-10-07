@@ -67,13 +67,28 @@ void Renderer::izbLightPassPre(vk::raii::CommandBuffer& cmd, const RgPassPlan& p
 	const FrameDrawList& list) {
 	if (!izbShadow || pass.kind != RgPassKind::drawLight || pass.state != "light")
 		return;
-	izbShadow->recordFrame(cmd,
+	// 批 14.4b A 档护栏：图外 sandwich 的「进出同值」从**约定**变**断言**。
+	// 为什么必须有：追踪表 `attachmentLayouts` 的唯一写者就是执行器自己，图外模块发的
+	// barrier 它一概不知 ⟹ 漂移后执行器下一跳会拿**错的 oldLayout** 去转布局，而 VVL
+	// **不报**（漂移后的布局本身合法，只是与表不符），症状隔一整帧才现（债-72）。
+	// 14.5 的 FSR 是第二个这样的 sandwich，先在这里把模式立起来。
+	const auto depthSlotIdx = static_cast<size_t>(depthAttSlot);
+	const auto trackedLayout = attachmentLayouts[depthSlotIdx];
+	const auto leftLayout = izbShadow->recordFrame(cmd,
 		IzbFrameInput{list.sceneData.skyInvViewProj, list.sceneData.shadowViewProj[0]},
-		attachmentLayouts[static_cast<size_t>(depthAttSlot)],
+		trackedLayout,
 		// N 帧起每 30 帧转一次（ppm 覆盖写 + 直方图日志行）——一次性判等会被 RPC
 		// 截图时序甩开（imgqa izb 判据要求 mask 与截图同相机状态，机位是 RPC 后设的）
 		diagnostics().izbDumpFrame != 0 && izbFrameNo >= diagnostics().izbDumpFrame
 			&& (izbFrameNo - diagnostics().izbDumpFrame) % 30 == 0);
+	if (leftLayout != trackedLayout) {
+		if (auto* logger = RLLogger::getInstance())
+			logger->error("izb: 深度附件布局漂移 —— 进入 = {}，离开 = {}，追踪表 = {}。"
+				"渲染图不知道这次转换，下一跳会拿错的 oldLayout 转布局（VVL 不报，"
+				"症状隔一整帧）；recordFrame 的返回值必须由实际发出的 barrier 推进",
+				static_cast<uint32_t>(trackedLayout), static_cast<uint32_t>(leftLayout),
+				static_cast<uint32_t>(trackedLayout));
+	}
 	replayIzbMaskSegment(cmd, list);
 }
 

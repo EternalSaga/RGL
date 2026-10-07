@@ -76,8 +76,16 @@ void bufferBarrier(vk::raii::CommandBuffer& cmd, vk::Buffer buffer,
 	cmd.pipelineBarrier2(dep);
 }
 
-/** 深度图（eDepth aspect 单 level/layer）布局转换 barrier（sandwich 进/出两条共用）。 */
-void depthLayoutBarrier(vk::raii::CommandBuffer& cmd, vk::Image image,
+/**
+ * 深度图（eDepth aspect 单 level/layer）布局转换 barrier（sandwich 进/出两条共用）。
+ *
+ * **返回 `to`**（批 14.4b A 档护栏的机关所在）：调用方把它接进一条 `layout = barrier(...)`
+ * 链，`recordFrame` 末尾返回的就是"最后一条深度 barrier 实际写成的布局"。
+ * 若返回 void、调用方另写一个局部量记布局，那个量与 barrier 的 `to` 参数**是两个独立事实**
+ * ——删掉还原 barrier 而忘了改局部量，护栏就永远为真（这正是"把约定变断言"最容易做成的
+ * 假护栏）。让**发命令的那一处**顺带产出断言的输入，两者不可能各说各话。
+ */
+vk::ImageLayout depthLayoutBarrier(vk::raii::CommandBuffer& cmd, vk::Image image,
 	vk::ImageLayout from, vk::ImageLayout to,
 	vk::PipelineStageFlags2 srcStage, vk::AccessFlags2 srcAccess,
 	vk::PipelineStageFlags2 dstStage, vk::AccessFlags2 dstAccess) {
@@ -95,6 +103,7 @@ void depthLayoutBarrier(vk::raii::CommandBuffer& cmd, vk::Image image,
 	vk::DependencyInfo dep{};
 	dep.setImageMemoryBarriers(b);
 	cmd.pipelineBarrier2(dep);
+	return to;
 }
 
 /**
@@ -248,12 +257,19 @@ IzbShadow::IzbShadow(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
 			gridDim, extent.width, extent.height, headBytes, nodeBytes);
 }
 
-void IzbShadow::recordFrame(vk::raii::CommandBuffer& cmd, const IzbFrameInput& input,
-	vk::ImageLayout depthCurrentLayout, bool dumpHead) {
+vk::ImageLayout IzbShadow::recordFrame(vk::raii::CommandBuffer& cmd,
+	const IzbFrameInput& input, vk::ImageLayout depthCurrentLayout, bool dumpHead) {
 	const auto depthImage = *resources->getDepthImage();
+	// 布局链（批 14.4b）：`depth` 恒等于"深度图此刻真实所处的布局"，每一步都由**实际发出的
+	// barrier** 的返回值推进。调用方拿返回值与追踪表比对 ⟹ 漂移立刻出声。
+	// ⚠ 本护栏与 VVL **不是互斥而是分工**（14.4b 实测修正，别照抄旧理由）：删掉还原 barrier
+	//   的变异里两者**都**响——VVL 报在"执行器下一次 barrier"那个**无辜调用点**（要人反推
+	//   是谁没还原），本护栏报在**肇事模块**并直接给出进入/离开布局；且 VVL 只在调试层在场
+	//   时存在。详见 docs/phase14_plan.md §1.11。
+	vk::ImageLayout depth = depthCurrentLayout;
 
 	// ① 深度 layout → SHADER_READ_ONLY（生产者 = 此前全部图形深度写/shader 读）
-	depthLayoutBarrier(cmd, depthImage, depthCurrentLayout,
+	depth = depthLayoutBarrier(cmd, depthImage, depth,
 		vk::ImageLayout::eShaderReadOnlyOptimal,
 		vk::PipelineStageFlagBits2::eAllGraphics,
 		vk::AccessFlagBits2::eDepthStencilAttachmentWrite | vk::AccessFlagBits2::eShaderRead,
@@ -276,8 +292,8 @@ void IzbShadow::recordFrame(vk::raii::CommandBuffer& cmd, const IzbFrameInput& i
 		vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderRead);
 	recordPrimeDispatch(cmd);
 
-	// ⑥ 深度 layout 还原（进出同值 = 渲染图布局追踪表零漂移）
-	depthLayoutBarrier(cmd, depthImage, vk::ImageLayout::eShaderReadOnlyOptimal,
+	// ⑥ 深度 layout 还原（进出同值 = 渲染图布局追踪表零漂移；返回值即护栏的断言输入）
+	depth = depthLayoutBarrier(cmd, depthImage, vk::ImageLayout::eShaderReadOnlyOptimal,
 		depthCurrentLayout,
 		vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderRead,
 		vk::PipelineStageFlagBits2::eAllGraphics,
@@ -287,6 +303,7 @@ void IzbShadow::recordFrame(vk::raii::CommandBuffer& cmd, const IzbFrameInput& i
 	if (dumpHead)
 		recordDumpCopy(cmd);
 	parity ^= 1u;
+	return depth;
 }
 
 void IzbShadow::recordCreateDispatch(vk::raii::CommandBuffer& cmd, const IzbFrameInput& input) {
