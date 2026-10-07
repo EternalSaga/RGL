@@ -14,7 +14,7 @@ Vulkan 现代特性学习项目。Mesh shader 渲染管线，使用 ShaderObject
 
 - **`rgl-verify`** — 运行环境、headless 冒烟、llm_debug 截图、BIT-IDENTICAL 回归、**什么能并行**、材质定位（加法闪色）、imgqa 判据（改渲染后验证必用）
 - **`rgl-shader-contract`** — 反射管线 / `just reflect` / scalar layout / bindless / 关键契约文件位置表（改 `rgl/shaders/`、`*_schema.lua`、`generated/` 前必读）
-- **`rgl-new-module`** — 新建/拆分 `.cppm`、rlstd/GMF 细则、impl partition 三条坑
+- **`rgl-new-module`** — 新建/拆分 `.cppm`、rlstd/GMF 细则、impl partition 分层原则
 - **`rgl-test-discipline`** — 写测试硬纪律（阳性锚点/变异红线/沉淀地址/modules 坑；写单测、加用例、收账调试历史前必读）
 - **`rgl-doc-placement`** — 改 AGENTS.md 前的归宿裁决五问 + **抄名单反模式**（**拟向 AGENTS 增删任何段落前必读**）
 
@@ -38,8 +38,8 @@ just imgqa <子命令>       # 区域归因判据工具箱（子命令与默认�
 just clean / clean-all / all           # 增量清理 / 删 build 目录 / clean-all+build-release
 ```
 
-- **CMake 无独立构建目录**——必须从根目录构建（`cmake -B build -S .`）。产物：`build/rgl/rgl`、
-  `build/tests/rgl_tests`（`tests/` 是 EXCLUDE_FROM_ALL，故**不进 `just build`**）。
+- **CMake 无独立构建目录**——必须从根目录构建（`cmake -B build -S .`）。`tests/` 是
+  EXCLUDE_FROM_ALL，故**不进 `just build`**（要 `just test` 自己拉）。
 - **构建内置两个检查步骤**（均只警告不阻断）：`reflection_check`（反射产物 SHA1 护栏，与编译并行）
   + `source_checks`（样式 + Doxygen 单入口 `tools/checks/`；**红线：依赖 rgl 编译完成后才跑——
   libclang 读半写 BMI 会崩，勿删该 add_dependencies**）。规则参数唯一真相源 = `tools/checks/config.py`，
@@ -70,8 +70,7 @@ just clean / clean-all / all           # 增量清理 / 删 build 目录 / clean
 
 ### 引擎四库分层
 
-`rgl` 是**可执行文件**（含 `main()`），故可测模块必须住进库。`rlbase` = 值类型/数学/配置 loader/
-glTF/图像编解码/反射产物/profiler/RPC 传输/param_registry（**整层无设备依赖**）；`rlgfx`/`rlscene`/
+可测逻辑必须住进库（不能留在 `main` 里）。`rlbase` = **整层无设备依赖**；`rlgfx` / `rlscene` /
 `rlframe` = 设备级。
 
 - **模块清单以 `rgl/CMakeLists.txt` 五份清单为唯一真相源**（本文件不抄模块名——抄一次漂一次）。
@@ -97,26 +96,24 @@ glTF/图像编解码/反射产物/profiler/RPC 传输/param_registry（**整层�
   `rpc_port = 8788`（只绑 127.0.0.1；与 imgui 门独立 → headless 可用）；起跑前 `pgrep -cx rgl` 确认无残留
 - "哪个材质占这块屏幕"用**加法闪色**（改 emissive 不改 baseColor）· "截 UI"验收**必须外部截图** → skill `rgl-verify`
 
-## 命名规范
+## 命名与代码风格
 
-**所有 C++ 符号均在 `namespace RGL` 中**，模块导出包裹 `namespace RGL { ... }`；跨模块引用统一
-`RGL::` 前缀。入口用 `using namespace RGL;`。
+**所有 C++ 符号均在 `namespace RGL` 中**（模块导出包裹 `namespace RGL { ... }`，跨模块引用统一
+`RGL::` 前缀，入口用 `using namespace RGL;`）。优先 C++23 `std::ranges`：视图适配器、
+`std::ranges::for_each` 替换原始循环、链式组合避免中间容器。
+
+> 成员命名（不加 `_`/`m_`）、Doxygen 块、模块结构、现代 C++ 禁用项等**由 source_checks 点名到
+> 文件:行号，本文件不重述**——`just build` 每次自动跑。
 
 ## 代码规范
 
-- **模块优先**：新代码**必须** C++20 modules（`.cppm`），非 `.hpp/.cpp` 头文件对；不在模块外
-  `#include` 项目内部头文件。入口 = 模块三件套（`main.cppm` 接口 + `main_impl` / `main_scene`）。
-- **rlstd 优先**：`.cppm` 一律 `import rlstd;` 取 STL 类型，GMF 不 `#include` STL（例外仅
-  `<ranges>/<filesystem>/<chrono>`）；Vulkan C++ 头一律 `import rlvk;`。新加 STL 名先补 `rlstd.cppm`。
-- **接口瘦身**：重模块（函数体 >100 行）拆 `xxx_impl.cppm`——**接口 = 声明 + 轻量类型 + 文档注释，实现 = 叶子单元**。
+- **模块优先**：新代码**必须** C++20 modules（`.cppm`），不在模块外 `#include` 项目内部头文件。
+- **rlstd / rlvk 优先**：`.cppm` 一律 `import rlstd;` 取 STL 类型、`import rlvk;` 取 Vulkan C++ 头，
+  GMF 不 `#include` STL（例外仅 `<ranges>`/`<filesystem>`/`<chrono>`）。**缺名去补 `rlstd.cppm` /
+  `rlvk.cppm` 的 `export using`，而不是在本文件加头**——这是唯一不显然的一步。
 
-三条的完整 checklist、rlstd 可用面细则、impl partition 三条坑 → skill `rgl-new-module`。
-
-### 函数式 Ranges
-优先 C++23 `std::ranges`：视图适配器、`std::ranges::for_each` 替换原始循环、链式组合避免中间容器。
-
-### 成员变量命名
-成员自然命名，不加 `_`/`m_` 前缀后缀（`int count;` ✅）。
+扩展名、Doxygen、>100 行该拆 impl、分层 import 方向**由 source_checks 点名**，此处不写。
+完整 checklist 与 impl partition 细则 → skill `rgl-new-module`。
 
 ### ECS 设计规范
 场景代码（ecs/scene/model_importer + 相关 system）必须符合五条规范（逐条处置记录：`docs/archive/ecs_compliance_review.md`）：
@@ -133,7 +130,7 @@ glTF/图像编解码/反射产物/profiler/RPC 传输/param_registry（**整层�
 新增运行时模块插对应位置）；**实现细节仍以各 `.cppm` 文件头注释为权威**。工具/数据/生成模块速览
 → 同文件 §模块表；深版启动流 → 同文件 §main 启动流。
 
-**构造顺序骨架**（= main 启动流顺序 = import 依赖方向；析构 = 构造逆序 RAII）：
+**构造顺序骨架**（= main 启动流顺序 = import 依赖方向）：
 
 ```
 SDLWindow → AppContext → DeviceContext → Swapchain → Resources → ShaderRegistry
@@ -147,13 +144,14 @@ SDLWindow → AppContext → DeviceContext → Swapchain → Resources → Shade
   `docs/技术概念.md §main 启动流`（完整版，本文件不维护副本）
 - **依赖图原则**：只允许下层 import 上层，**配置模块不依赖执行模块**（camera_config 不 import llm_debug）、**ecs 不依赖 llm_debug**（截图经回调）——假边会让慢模块进入本不该等它的编译前置。
 
-### 重要成员生命周期规则
+### 生命周期红线（编译器**不管**的那两类）
 
-- **`vk::raii::*` 对象必须通过成员初始化列表初始化**，绝不在函数体内初始化（默认构造函数已删除）
-- **成员声明顺序必须与初始化依赖顺序一致**；凡被 `CreateInfo` 的 `pApplicationInfo`/`pNext` 引用的
-  结构，必须是**类成员**而非栈上临时量（悬空 = 未定义行为，先例 `vkinstance`/`vkdevice`）
+- **CreateInfo 的 `pApplicationInfo` / `pNext` 引用的结构必须是类成员**，不能是构造期栈上临时量——
+  悬空指针不报错，实例化时才炸（先例 `vkinstance` / `vkdevice`）。
 - **GPU 资源所有权**：长生命周期 GPU 资源（纹理 BO/描述符存储）不得声明在 main() 局部块内——
-  块尾析构 = 第 0 帧起 GPU 采样已释放 VA（UAF，见 `docs/archive/issue_history.md`）
+  块尾析构 = 第 0 帧起 GPU 采样已释放 VA（UAF，见 `docs/archive/issue_history.md`）。
+
+> `vk::raii::*` 默认构造已删除、成员初始化顺序（`-Wreorder`）**编译器直接报错**，本文件不写。
 
 ## 着色器编译
 
@@ -167,11 +165,6 @@ Slang → SPV 构建时编译到 `build/rgl/generated_shaders/`。硬规则：**
 vk_indirect_commands 显式使用）外**均无显式使用但被其他已启用扩展隐式依赖，不可随意删除**；
 `vkinstance.cppm` 的 `VK_EXT_SWAPCHAIN_COLOR_SPACE` 同理。**KHR/EXT 别名**：
 `VkSwapchainPresentFenceInfoKHR/EXT` 是同一结构（typedef alias），代码用 EXT。
-
-## 外部依赖
-
-经父 CMake 链接：`rlstd`（STL 模块库）、`rllogger`（+spdlog）、glm（**depth zero-to-one + 弧度制**）、
-SDL3、VulkanMemoryAllocator、slangc（`cmake/SlangFetch.cmake` FetchContent pin + sha256；Windows 优先 Vulkan SDK 自带）。
 
 ## 已知问题
 

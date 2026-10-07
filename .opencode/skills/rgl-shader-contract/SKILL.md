@@ -28,6 +28,11 @@ description: 修改 Slang 着色器契约与反射管线——just reflect、sca
   数值契约回归由 `slang_load_bitcast_checks`（source_checks）+ `tests/test_izb_engine_contract.cppm`
   + imgqa `izb`/`swim` 判据拦截。
 
+- **glm 两个 define 改的是"静默错"（写错不报错，只在新机位上崩）**：`GLM_FORCE_RADIANS` 使
+  `glm::radians()` 退化成**恒等函数**（配置字段叫 `fovDegrees`，角度→弧度须手动换算）、
+  `GLM_FORCE_DEPTH_ZERO_TO_ONE` 使 clip z∈`[0,1]`（线性深度重建 / shadow map 比较口径）。
+  细则以 `rgl/camera.cppm` 与 `rgl/scene_context.cppm` 的头注释为准，相机数学回归 = `tests/test_camera.cppm`。
+
 ## 关键文件位置（契约与接缝）
 
 | 位置 | 说明 |
