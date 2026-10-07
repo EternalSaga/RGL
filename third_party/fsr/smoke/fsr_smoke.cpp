@@ -251,6 +251,158 @@ void clearImageTo(VkCtx& c, VkCommandBuffer cb, const Image& im, VkClearColorVal
     vkCmdClearColorImage(cb, im.image, VK_IMAGE_LAYOUT_GENERAL, &v, 1, &r);
 }
 
+/**
+ * 造一张**真实深度格式**的图（`VK_FORMAT_D32_SFLOAT`），用于契约探针 4。
+ *
+ * 与 `createImage` 的差别只有一处但正是探针的主题：`createImage` 的 VkFormat 由
+ * `toVkFormat(ffxFormat)` 决定，而 FSR 的 `FfxSurfaceFormat` 枚举里**没有深度格式**
+ * ⟹ 用它建出来的"深度图"其实是 R32_FLOAT **颜色**图（探针 3 就是这么建的，够用且
+ * 更简单，因为它只验「最近」方向）。真实渲染器只有一张深度 = `eD32Sfloat` +
+ * `eDepth` aspect，而 FSR 给 app 资源建 view 时 **format / aspect 全取自我们填的
+ * `FfxResourceDescription`，不看 image 本体**（`ffx_vk.cpp:2799` 取 format、`:2804`
+ * 取 aspect；`getImageAspect` 只认 `FFX_RESOURCE_USAGE_DEPTHTARGET`，否则一律 COLOR，
+ * `:781-788`；`R32_FLOAT + DEPTHTARGET` 才映射成 `VK_FORMAT_D32_SFLOAT`，`:808-813`）。
+ * 官方**零格式校验** ⟹ 填错不报错、只出画面。所以这条必须实测。
+ *
+ * `ffxFormat` 仍填 `R32_FLOAT`：那正是 FSR 侧要求的"申报口径"（配合 DEPTHTARGET 才会
+ * 被映射成 D32 + DEPTH aspect），底层 VkImage 却是真的 D32_SFLOAT ⟹ 一旦映射不对，
+ * `vkCreateImageView` 就会因格式不兼容而失败，或被 VVL 抓住（白名单外即 FAIL）。
+ *
+ * 布局沿用本文件既有纪律推到 GENERAL（见 `createImage` 内注释）：探针的主题是**格式与
+ * aspect**，布局接线归渲染图 + 14.4b 护栏，不在这里预演。
+ */
+void createDepthImage(VkCtx& c, Image& out, uint32_t w, uint32_t h)
+{
+    out.ffxFormat = FFX_SURFACE_FORMAT_R32_FLOAT;   // 申报口径，见函数头
+    VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    ci.imageType     = VK_IMAGE_TYPE_2D;
+    ci.format        = VK_FORMAT_D32_SFLOAT;        // ← 探针本体：真实深度格式
+    ci.extent        = {w, h, 1};
+    ci.mipLevels     = 1;
+    ci.arrayLayers   = 1;
+    ci.samples       = VK_SAMPLE_COUNT_1_BIT;
+    ci.tiling        = VK_IMAGE_TILING_OPTIMAL;
+    // usage 与渲染器真实深度图一致（vkresources_impl.cppm:80-84 是 ATTACHMENT|SAMPLED，
+    // 这里多给 TRANSFER_DST 只为建图后能直接清值）
+    ci.usage         = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+                       VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    ci.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+    ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    out.fmt = ci.format;
+    out.w   = w;
+    out.h   = h;
+    check(vkCreateImage(c.device, &ci, nullptr, &out.image), "vkCreateImage(depth)");
+
+    VkMemoryRequirements req{};
+    vkGetImageMemoryRequirements(c.device, out.image, &req);
+    VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    ai.allocationSize = req.size;
+    VkPhysicalDeviceMemoryProperties mp{};
+    vkGetPhysicalDeviceMemoryProperties(c.phys, &mp);
+    bool found = false;
+    for (uint32_t i = 0; i < mp.memoryTypeCount && !found; ++i)
+        if ((req.memoryTypeBits & (1u << i)) &&
+            (mp.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT))
+        {
+            ai.memoryTypeIndex = i;
+            found              = true;
+        }
+    if (!found) die("no DEVICE_LOCAL memory type for depth");
+    check(vkAllocateMemory(c.device, &ai, nullptr, &out.mem), "vkAllocateMemory(depth)");
+    check(vkBindImageMemory(c.device, out.image, out.mem, 0), "vkBindImageMemory(depth)");
+
+    // UNDEFINED → GENERAL（`createImage` 同款一次性推进，理由见其内注释）。
+    // ⚠ aspect 与 `createImage` 不同：深度格式图必须填 DEPTH_BIT，填 COLOR_BIT 会被
+    //   VVL 立刻点名——而这正是本探针要验的"aspect 从哪来"在**我们这一侧**的镜像教训。
+    //   不先转就 clear 也是违规（clear 不接受 UNDEFINED 布局）。
+    VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    cai.commandPool        = c.pool;
+    cai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cai.commandBufferCount = 1;
+    VkCommandBuffer tcb    = VK_NULL_HANDLE;
+    check(vkAllocateCommandBuffers(c.device, &cai, &tcb), "vkAllocateCommandBuffers(depth)");
+    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    check(vkBeginCommandBuffer(tcb, &bi), "vkBeginCommandBuffer(depth)");
+    VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    b.dstAccessMask       = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+    b.oldLayout           = VK_IMAGE_LAYOUT_UNDEFINED;
+    b.newLayout           = VK_IMAGE_LAYOUT_GENERAL;
+    b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.image               = out.image;
+    b.subresourceRange    = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+    vkCmdPipelineBarrier(tcb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         0, 0, nullptr, 0, nullptr, 1, &b);
+    check(vkEndCommandBuffer(tcb), "vkEndCommandBuffer(depth)");
+    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    si.commandBufferCount = 1;
+    si.pCommandBuffers    = &tcb;
+    check(vkQueueSubmit(c.queue, 1, &si, nullptr), "vkQueueSubmit(depth)");
+    check(vkQueueWaitIdle(c.queue), "vkQueueWaitIdle(depth)");
+}
+
+/**
+ * 把深度图上传成「上半 0.2（近）/ 下半 1.0（远）」的分层靶。
+ *
+ * 为什么走 buffer→image 拷贝而不是清：`vkCmdClearDepthStencilImage` 的 `pRanges` 收的是
+ * **VkImageSubresourceRange 数组**（不是矩形！矩形是 `vkCmdClearAttachments`，那要 render
+ * pass），所以两条 clear 路径都给不出"半幅"。`vkCmdCopyBufferToImage` 带
+ * `aspectMask = DEPTH_BIT` 可以直接写 D32_SFLOAT（4B/texel，行紧排满足默认 4B 行对齐），
+ * 一次调用就把分层写进去——比"render pass + clear attachments"轻得多。
+ * ⚠ aspect 必须是 DEPTH_BIT：对深度格式图填 COLOR_BIT 是 VVL 立刻点名的违规。
+ */
+void uploadDepthLayers(VkCtx& c, VkCommandBuffer cb, const Image& im, float topValue,
+                      float bottomValue, VkBuffer* outBuf, VkDeviceMemory* outMem)
+{
+    const uint32_t half = im.h / 2;
+    const VkDeviceSize bytes = VkDeviceSize(im.w) * im.h * 4;
+    std::vector<float> host(size_t(im.w) * im.h);
+    for (uint32_t y = 0; y < im.h; ++y)
+        for (uint32_t x = 0; x < im.w; ++x)
+            host[size_t(y) * im.w + x] = y < half ? topValue : bottomValue;
+
+    VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bci.size  = bytes;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    VkBuffer buf = VK_NULL_HANDLE;
+    check(vkCreateBuffer(c.device, &bci, nullptr, &buf), "depthSrc vkCreateBuffer");
+    VkMemoryRequirements req{};
+    vkGetBufferMemoryRequirements(c.device, buf, &req);
+    VkPhysicalDeviceMemoryProperties mp{};
+    vkGetPhysicalDeviceMemoryProperties(c.phys, &mp);
+    uint32_t mt = 0xFFFFFFFFu;
+    for (uint32_t i = 0; i < mp.memoryTypeCount; ++i)
+        if ((req.memoryTypeBits & (1u << i)) &&
+            (mp.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) &&
+            (mp.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT))
+        { mt = i; break; }
+    if (mt == 0xFFFFFFFFu) die("深度上传需要 host-visible coherent 内存类型");
+    VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    mai.allocationSize  = req.size;
+    mai.memoryTypeIndex = mt;
+    VkDeviceMemory mem = VK_NULL_HANDLE;
+    check(vkAllocateMemory(c.device, &mai, nullptr, &mem), "depthSrc vkAllocateMemory");
+    check(vkBindBufferMemory(c.device, buf, mem, 0), "depthSrc vkBindBufferMemory");
+    void* mapped = nullptr;
+    check(vkMapMemory(c.device, mem, 0, bytes, 0, &mapped), "depthSrc vkMapMemory");
+    std::memcpy(mapped, host.data(), size_t(bytes));
+    vkUnmapMemory(c.device, mem);
+
+    VkBufferImageCopy reg{};                       // bufferRowLength=0 ⟹ 行紧排
+    reg.imageSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};   // ← DEPTH，不是 COLOR
+    reg.imageExtent      = {im.w, im.h, 1};
+    vkCmdCopyBufferToImage(cb, buf, im.image, VK_IMAGE_LAYOUT_GENERAL, 1, &reg);
+
+    // ⚠ **不在这里销毁** buf/mem：它们此刻仍被正在录制的 cb 引用，就地销毁会让整条命令
+    //   缓冲进入 invalid state（VVL `VUID-vkEndCommandBuffer-commandBuffer-00059`，实测
+    //   连带 `radv: GPUVM fault` + `VK_ERROR_DEVICE_LOST`——第一版就是这么写的，VVL 一条
+    //   把它抓个正着）。由调用方在 submit + wait **之后**回收。
+    *outBuf = buf;
+    *outMem = mem;
+}
+
 // 把 src 的整块内容拷进 dst 的第 [dstRow0, dstRow1) 行。用途：造「上半近、下半远」的深度靶
 // ——vkCmdClearColorImage 没有矩形区域概念，清不出分层深度。
 void copyImageRows(VkCtx& c, VkCommandBuffer cb, const Image& src, Image& dst, uint32_t dstRow0, uint32_t rows)
@@ -788,6 +940,80 @@ int main(int argc, char** argv)
                 "[fsr-smoke] FAIL: depth「最近」方向对账 %d 条不符。非 inverted 时 fNearest = "
                 "9 点邻域最小 device depth（prepare_inputs.h:100-104,145）；分界线下方第一行"
                 "读到 1.0 = 方向反了（当成 inverted 在跑）。出处 → docs/FSR输入契约.md §2\n", bad);
+            return 1;
+        }
+    }
+
+    // ── 契约探针 4：真实**深度格式**能不能喂进去（批 14.5 前置）──
+    // 上面探针 3 用的是 R32_FLOAT **颜色**图当深度——它验的是「最近」方向，与深度格式
+    // 无关，所以**真实深度格式这条路径此前一条探针都没跑过**，而 14.5 要接的恰恰是它：
+    // 渲染器唯一的深度 = eD32Sfloat + eDepth aspect（vkresources_impl.cppm:74,99）。
+    //
+    // 为什么必须实测而不是读源码"认为一致"：FSR 给 app 资源建 view 时 format/aspect
+    // **全取自我们填的 FfxResourceDescription**（ffx_vk.cpp:2799/:2804），且
+    // `getImageAspect` 只认 `FFX_RESOURCE_USAGE_DEPTHTARGET`、否则一律 COLOR（:781-788）。
+    // 官方零格式校验 ⟹ **填错不报错、只出画面**（docs/FSR输入契约.md 的同一病灶），
+    // 而判据 ②「VVL 零报错」在这里也未必响——所以判据得自己造。
+    //
+    // 判据形态 = 探针 3 的同一张分层靶搬到真实深度图上，**期望值完全相同**：
+    // 若 FSR 侧 view 的 format/aspect 映射不对，轻则 `vkCreateImageView` 格式不兼容
+    // 直接失败（check 抓），重则读到全 0 / 读到未定义内容（下面 4 条期望值抓——
+    // 读到全 0 时"远区内部 = 1.0"必红，读到全 1 时"近区内部 = 0.2"与"分界线下方 = 0.2"必红）。
+    // ⟹ 两条相反方向都有用例覆盖，不是"没输出 = 没问题"。
+    {
+        const uint32_t half = depth.h / 2;
+        Image depthReal;
+        createDepthImage(c, depthReal, depth.w, depth.h);
+        {
+            VkBuffer srcBuf = VK_NULL_HANDLE;
+            VkDeviceMemory srcMem = VK_NULL_HANDLE;
+            VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+            bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+            check(vkBeginCommandBuffer(cb, &bi), "depthReal vkBegin");
+            uploadDepthLayers(c, cb, depthReal, 0.2f, 1.0f, &srcBuf, &srcMem);  // 上半近、下半远
+            check(vkEndCommandBuffer(cb), "depthReal vkEnd");
+            VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+            si.commandBufferCount = 1; si.pCommandBuffers = &cb;
+            check(vkQueueSubmit(c.queue, 1, &si, nullptr), "depthReal submit");
+            check(vkQueueWaitIdle(c.queue), "depthReal wait");
+            vkDestroyBuffer(c.device, srcBuf, nullptr);   // 回收必须在 wait 之后
+            vkFreeMemory(c.device, srcMem, nullptr);
+        }
+        // 换掉深度输入再 dispatch：DEPTHTARGET 是**申报**"这是深度"的唯一途径
+        // （不申报 ⟹ FSR 按 COLOR 建 view ⟹ 在 D32_SFLOAT 上建 COLOR aspect view = 格式不兼容）。
+        const FfxResource savedDepth = rDepth;
+        rDepth = wrap(depthReal, FfxResourceUsage(FFX_RESOURCE_USAGE_READ_ONLY |
+                                                 FFX_RESOURCE_USAGE_DEPTHTARGET));
+        dispatchFrame(500, /*reset=*/true);
+        rDepth = savedDepth;
+
+        const auto px = readBackImage(c, dilatedDepth, 4);
+        const auto at = [&](uint32_t y) {
+            const float* f = reinterpret_cast<const float*>(px.data());
+            return f[size_t(y) * dilatedDepth.w + dilatedDepth.w / 2];
+        };
+        struct { const char* what; uint32_t row; float want; } cases[] = {
+            { "近区内部",          half - 8, 0.2f },
+            { "远区内部",          half + 8, 1.0f },
+            { "分界线下方第一行",  half,     0.2f },
+            { "分界线上方最后一行", half - 1, 0.2f },
+        };
+        int bad = 0;
+        for (auto& cs : cases) {
+            const float got = at(cs.row);
+            const bool ok = std::fabs(got - cs.want) < 1e-3f;
+            log("probe depthFmt(D32Sfloat+DEPTHTARGET): %-22s row=%u → %.4f，期望 %.4f %s",
+                cs.what, cs.row, got, cs.want, ok ? "OK" : "**FAIL**");
+            if (!ok) ++bad;
+        }
+        if (bad) {
+            std::fprintf(stderr,
+                "[fsr-smoke] FAIL: 真实深度格式（D32_SFLOAT + FFX_RESOURCE_USAGE_DEPTHTARGET）"
+                "对账 %d 条不符。FSR 给 app 资源建 view 的 format/aspect 全取自我们填的 "
+                "FfxResourceDescription（ffx_vk.cpp:2799/:2804），且只认 DEPTHTARGET 才给 "
+                "DEPTH aspect（:781-788）、R32_FLOAT+DEPTHTARGET 才映射成 D32_SFLOAT"
+                "（:808-813）。读到全 0 = view 读不到内容；读到全 1 = 当成远平面。"
+                "接线时深度输入必须带 DEPTHTARGET。出处 → docs/FSR输入契约.md §2\n", bad);
             return 1;
         }
     }

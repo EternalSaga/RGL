@@ -86,6 +86,24 @@
 无穷远 = device depth 0.0f」，但**全 vendor 树只有定义、没有任何调用点**（已复核）。
 拿它当现行契约就是读了一行不会执行的代码。
 
+### 实测钉死的：**真实深度格式怎么申报**（批 14.5 前置探针，2026-10-08）
+
+上面那条探针用的是 `R32_FLOAT` **颜色**图当深度——它只验方向，**真实深度格式这条路径
+此前一条探针都没跑过**，而 14.5 要接的恰恰是它（渲染器唯一深度 = `eD32Sfloat` +
+`eDepth` aspect）。补的第 4 条探针把同一张分层靶搬到真 `VK_FORMAT_D32_SFLOAT` 图上，
+RADV 实机结论：
+
+| 结论 | 依据 |
+|---|---|
+| **深度输入必须申报 `FFX_RESOURCE_USAGE_DEPTHTARGET`**，格式串仍填 `FFX_SURFACE_FORMAT_R32_FLOAT` | 只有这个 usage 位会让 `getImageAspect` 给 `DEPTH_BIT`（`ffx_vk.cpp:781-788`），且 `R32_FLOAT + DEPTHTARGET` 才映射成 `VK_FORMAT_D32_SFLOAT`（`:808-813`）；view 的 format/aspect **全取自我们填的 `FfxResourceDescription`，FSR 不看 image 本体**（`:2799` `:2804`） |
+| 🔴 **漏申报的后果不是"静默出错"而是 VVL 响**：摘掉该位实测 **7 条白名单外 VVL 报错** | 变异实测（`just fsr-smoke`）。⟹ 本行修正本文档反复引用的那条担心「官方零格式校验 ⟹ 填错不报错、只出画面」：**格式串填错**确实不校验，但 **aspect 填错这一支 VVL 抓得到**（在 D32_SFLOAT 上建 COLOR aspect view 是硬违规）。判据 ②「VVL 零报错」在这里**有效**，不必另造 |
+| 申报正确 ⟹ FSR 读真深度图与读 R32F 颜色图**结果逐位相同**（4 条期望值全中） | 探针 3 与探针 4 用同一张靶、同一组期望值，两条都 PASS |
+| 造分层深度靶**不能**用 `vkCmdClearDepthStencilImage` | 它的 `pRanges` 收的是 **`VkImageSubresourceRange` 数组**，不是矩形（矩形在 `vkCmdClearAttachments`，那要 render pass）。本探针改走 `vkCmdCopyBufferToImage` + `aspectMask = DEPTH_BIT`（D32_SFLOAT 4B/texel，行紧排满足默认 4B 行对齐） |
+
+**探针非空转已变异验红两条**：① 摘掉 `DEPTHTARGET` → 7 条 VVL；② 分层靶上下对调 → 4 条
+期望里 2 条不符（另 2 条因 9 点邻域取 min 在分界线两侧各吃掉一行而恰好仍中——**这正是
+判据要放 4 个点而不是 1 个的原因**：单点判据在这种靶上会被邻域膨胀蒙混过去）。
+
 ## 3. jitterOffset
 
 | 项 | 口径 | 出处 |
