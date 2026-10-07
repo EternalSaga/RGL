@@ -503,6 +503,23 @@ const std::vector<JudgmentInfo>& temporalTailStepJudgments()
             "参照，④ 的比值会被误读成「裁剪只省了一点」。",
             {"tools/imgqa/temporal_motion.cpp `emitStepVerdicts` 第 4 条；"
              "rgl/shaders/taa.frag.slang 臂 11 分支；docs/还债总账.md 债-63"},},
+        {"temporal-tail-step-arm13-fixes", JudgmentFamily::TemporalMotion,
+            "**修法验收（批 13.15b，臂 13 = 臂 11 + α 也吃 gate）**。两条 **AND**，缺一条即红：\n"
+            "**(a) 鬼影侧要真的赢**：`AUC(臂13) ≤ 0.7 × AUC(臂0)` —— 与 ④ 给臂 11 定的**同一条**线，"
+            "不给新臂放水。预期 ≈ 0：去遮挡**就发生在 `motion` 大的那一帧** ⟹ 那一帧 `gate = 0` "
+            "⟹ `α_eff = 1` ⟹ 历史当场冲掉 ⟹ 后面没有能拖出来的东西。\n"
+            "**(b) 闪烁侧不许动**：臂 13 与臂 11 在两个**静止收敛态**（A / B∞）上的最大逐像素偏离 "
+            "≤ 0.02。理论值是 **0 精确**：`gate = saturate(2 − motion)`，只要 `motion < 1px` 就有 "
+            "`2 − motion > 1` ⟹ saturate **精确返回 1.0** ⟹ `1 − gate` 恰为 `+0` ⟹ `α_eff ≡ α_long`"
+            "（前提：写成 `a + (b−a)·t`，不能写 `lerp`）。线取跨进程确定性地板（1 LSB ≈ 4e-3）的 5 倍。\n"
+            "🔴 **(b) 是本判据的全部价值**：只测 (a) 的话「把 α 恒置 1」也满分，而那是**关掉 TAA**。"
+            "一条只判「鬼影变小」的判据会奖励「不再做时域平均」这个退化解 —— 这是本项目反复踩的"
+            "「判据可被退化解满足」形态，本条用「另一侧必须逐位不变」把退化解堵死。\n"
+            "⚠ (b) 不是 bit 级判据（跨进程本就不逐位，债-61）；真正的 bit 级红线走 `just shot` "
+            "同会话双构建。本条是**量级**检查：要抓的是「某个像素上 α 被换了个数」那种 1e-1 错。\n"
+            "⚠ 同样只在 ①②③ 三条守卫全绿时才有意义。",
+            {"tools/imgqa/temporal_motion.cpp `emitStepVerdicts` 第 5 条与 `staticDiff`；"
+             "rgl/shaders/taa.frag.slang 臂 13 分支；docs/phase13_plan.md §1.21"},},
     };
     return kPart;
 }

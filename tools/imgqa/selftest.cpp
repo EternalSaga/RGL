@@ -206,7 +206,7 @@ void testJudgmentFamilies(Checker& c)
     // 单测对拍 2.3e-13px 全绿仍漏掉 yaw 反号，那一半只有实机数据守得住。
     // 47 → 51 = 批 13.15 `temporal-tail --motion step`（债-63 真鬼影量具）四条：零锚 /
     // 历史存活（防 `cameraJumps` 跳切假绿）/ 闭式锚 / 主判据。
-    c.chk("判据总数 == 51（族拆分最容易掉条目）", all.size() == 51, std::to_string(all.size()));
+    c.chk("判据总数 == 52（族拆分最容易掉条目）", all.size() == 52, std::to_string(all.size()));
     size_t n[4] = {0, 0, 0, 0};
     for (const auto& j : all) {
         switch (j.family) {

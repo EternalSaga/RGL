@@ -3352,6 +3352,11 @@ struct StepCurve {
     /// 那种尾巴 AUC 看不见，本条看得见）。
     double visAuc = 0.0;
     double n50 = -1.0, n5 = -1.0;  ///< 只对**关盒**臂有定义（带盒臂恒 −1，见上）
+    /// 与**臂 11** 在两个静止收敛态（A / B∞）上的最大逐像素差（线性 luma）。
+    /// 臂 13 的「闪烁轴逐位不变」应当让它落在**跨进程确定性地板**量级（1 LSB ≈ 4e-3）。
+    /// ⚠ 这不是 bit 级判据（跨进程本来就不逐位，债-61）；真正的 bit 级红线走 `just shot`
+    ///   同会话双构建。本字段是**量级**检查：它要抓的是「差了一个 α」那种 1e-1 量级的错。
+    double staticDiff = -1.0;
 };
 
 /**
@@ -3542,6 +3547,8 @@ void printStepCurve(const StepCurve& c)
         d2(c.visAuc).c_str());
     if (c.n50 >= 0.0)
         std::printf("  n₅₀ %s  n₅ %s", d2(c.n50).c_str(), d2(c.n5).c_str());
+    if (c.staticDiff >= 0.0)
+        std::printf("  静止侧偏离臂11 %s", d4(c.staticDiff).c_str());
     std::printf("\n");
     std::printf("       ghost(n):");
     for (int n : kStepProbes) {
@@ -3572,7 +3579,7 @@ void printStepCurve(const StepCurve& c)
  */
 int emitStepVerdicts(const std::string& cameraName, double stepDist, int burst, double tau,
     int margin, const StepCurve& zero, const StepCurve& ema, const StepCurve& boxed,
-    const StepCurve& delivery)
+    const StepCurve& delivery, const StepCurve& fix)
 {
     constexpr double kAlpha = 0.01;
     std::vector<Verdict> vs;
@@ -3624,17 +3631,41 @@ int emitStepVerdicts(const std::string& cameraName, double stepDist, int burst, 
             + " 帧·满掩膜 vs 现行盒 " + d2(boxed.visAuc) + " vs 闭式锚 " + d2(ema.visAuc)));
     std::cout << "  " << vs.back().line() << "\n";
 
+    // ⑤ **修法验收（批 13.15b，臂 13 = 债-69 的出口）**：两条 AND，一条都不能少。
+    //    (a) 鬼影侧要真的赢：`AUC(臂13) ≤ 0.7 × AUC(臂0)`（= ④ 给臂 11 定的同一条线，
+    //        不是给臂 13 放水）。预期 ≈0：去遮挡**就发生在 `motion` 大的那一帧** ⟹ 那一帧
+    //        `gate = 0` ⟹ α = 1 ⟹ 历史当场冲掉 ⟹ 后面没有能拖出来的东西。
+    //    (b) 闪烁侧**不许动**：`staticDiff(臂13, 臂11) ≤ 0.02`。理论值是 **0 精确**
+    //        （`motion < 1px` ⟹ `2 − motion > 1` ⟹ saturate 精确返回 1.0 ⟹ `1 − gate = +0`
+    //        ⟹ `α_eff ≡ α_long`）。线取 0.02 ≈ 跨进程确定性地板（1 LSB ≈ 4e-3，债-61）的 5 倍，
+    //        留量给 PNG 量化；它要抓的是「α 被换了个数」那种 **1e-1** 量级的接线错。
+    //    🔴 (b) 是本判据的全部价值所在：只测 (a) 的话，「把 α 恒置 1」也满分，而那是关掉 TAA。
+    const bool fixAuc = boxed.auc > 0.0 && fix.auc <= 0.7 * boxed.auc;
+    const bool fixStatic = fix.staticDiff >= 0.0 && fix.staticDiff <= 0.02;
+    vs.push_back(verdictFor("temporal-tail-step-arm13-fixes", fixAuc && fixStatic,
+        "臂 13（α 也吃 gate）鬼影 AUC = " + d2(fix.auc) + "（线 ≤ 0.7 × 现行盒 "
+            + d2(0.7 * boxed.auc) + "）· 静止侧与臂 11 最大偏离 = " + d4(fix.staticDiff)
+            + "（线 ≤ 0.02，理论 0 精确；> 0.02 = 闪烁轴被动了，本臂的『免费』前提不成立）\n"
+            "       可见鬼影总量：臂13 " + d2(fix.visAuc) + " vs 臂11 " + d2(delivery.visAuc)
+            + " vs 现行盒 " + d2(boxed.visAuc) + " 帧·满掩膜"));
+    std::cout << "  " << vs.back().line() << "\n";
+
     logCall("temporal-tail",
         { { "camera", cameraName }, { "motion", "step" }, { "step", d4(stepDist) },
             { "burst", std::to_string(burst) }, { "tau", d4(tau) },
             { "margin", std::to_string(margin) }, { "mask-share", d4(ema.maskShare) },
             { "auc-ema", d2(ema.auc) }, { "auc-boxed", d2(boxed.auc) },
-            { "auc-delivery", d2(delivery.auc) }, { "visauc-delivery", d2(delivery.visAuc) } },
+            { "auc-delivery", d2(delivery.auc) }, { "visauc-delivery", d2(delivery.visAuc) },
+            { "auc-fix", d2(fix.auc) }, { "staticdiff-fix", d4(fix.staticDiff) } },
         vs);
+    // 🔴 守卫与结论**分开判**（本轮踩过：④ 红时打印「先修仪器」是错的——④ 是结论本身）。
+    //    ①②③ 红 = 仪器坏了 ⟹ 臂间数字一个都不许报。
+    //    ④⑤ 红 = 仪器好、结论难看 ⟹ 那正是要报的东西，改判决线才是事故。
+    const bool guardsOk = vs[0].ok && vs[1].ok && vs[2].ok;
+    std::printf("\n  ⟹ %s\n", guardsOk
+            ? "守卫全绿：仪器可信，④⑤ 的比值即臂间结论本身（红 = 结论，不是仪器坏）"
+            : "守卫红 ⟹ **不许报臂间结论**（先修仪器，别改判决线）");
     const bool allOk = std::all_of(vs.begin(), vs.end(), [](const Verdict& v) { return v.ok; });
-    std::printf("\n  ⟹ %s\n", allOk
-            ? "全绿：AUC 可作为鬼影判据（④ 的比值就是臂间结论本身）"
-            : "有判决红 ⟹ **不许报臂间结论**（先修仪器，别改判决线）");
     return allOk ? 0 : 1;
 }
 
@@ -3668,6 +3699,9 @@ Spec stepSpecFor(const StepArm& a, int warm)
 struct StepArmResult {
     StepCurve main;
     std::vector<double> sens;
+    /// 两个**静止**收敛态（A / B∞）。臂 13 的「闪烁轴逐位不变」= 这两个与臂 11 的两个
+    /// 应当只差跨进程确定性地板（`convergedRef` 返回独立 Mat，可安全跨臂持有）。
+    cv::Mat aRef, bRef;
 };
 
 StepArmResult collectStepArm(const std::string& dir, const BistroCam& from, const BistroCam& to,
@@ -3682,6 +3716,8 @@ StepArmResult collectStepArm(const std::string& dir, const BistroCam& from, cons
 
     StepArmResult out;
     out.main = stepCurveOf(a, aRef, bRef, rs, tau, margin);
+    out.aRef = aRef;
+    out.bRef = bRef;
     // τ 敏感性：主判决只读主 τ，其余两档只打印（τ 是唯一自由阈值 ⟹ 结论不能依赖它）。
     for (double t : kStepTauSweep) {
         const StepCurve s = std::abs(t - tau) < 1e-12
@@ -3693,6 +3729,20 @@ StepArmResult collectStepArm(const std::string& dir, const BistroCam& from, cons
 }
 
 }  // namespace
+
+/// 两幅静止收敛态的**最大**逐像素偏离（线性 luma）。
+/// 为什么取 max 不取均值：这条要抓的是「某个像素上 α 被换了个数」= 局部 1e-1 量级错，
+/// 均值会被大面积的 0 稀释掉。跨进程地板（债-61）= 1 LSB ≈ 4e-3。
+double staticDiff(const cv::Mat& a, const cv::Mat& b)
+{
+    if (a.empty() || b.empty() || a.size() != b.size())
+        return -1.0;
+    cv::Mat d;
+    cv::absdiff(a, b, d);
+    double mx = 0.0;
+    cv::minMaxLoc(d, nullptr, &mx);
+    return mx;
+}
 
 int cmdTemporalTailStep(const std::string& cameraName, double stepDist, int burst, int warm,
     double tau, int margin)
@@ -3712,7 +3762,7 @@ int cmdTemporalTailStep(const std::string& cameraName, double stepDist, int burs
     std::printf("平移阶跃：沿 right 轴移 %s 世界单位（target 同步平移 = 纯横移不转朝向）\n",
         d4(dist).c_str());
 
-    // 五臂。Z = 零锚（α=1 ⟹ 无历史）。
+    // 六臂。Z = 零锚（α=1 ⟹ 无历史）。
     // E  = **闭式锚**：关盒 + **重投影关** ⟹ `hist(p) ≡ out_{n−1}(p)` 精确 ⟹
     //      `ghost(n) = (1−α)ⁿ` 精确 ⟹ AUC 有闭式。它是**尺子的刻度**，不参与臂间比较。
     //      ⚠ 为什么必须关重投影：0.01 世界单位的平移在像素上是 ~12px，重投影开着时
@@ -3720,20 +3770,31 @@ int cmdTemporalTailStep(const std::string& cameraName, double stepDist, int burs
     //      `ghost(0)` 实测只有 0.271（= **去遮挡份额**，本身是个好数，但不是 EMA 闭式）。
     // R  = 关盒 + 重投影开 = 「重投影单独兑掉了多少」的归因参照。
     // C0 = 现行默认盒（5 抽头十字盒，**不是**没有裁剪）；C11 = 交付（记忆门挂重投影位移）。
+    // C13 = 批 13.15b 候选（债-69 修法：α 也吃 gate）。它与 C11 的两个**静止**收敛态
+    //      应当只差确定性地板 ⟹ 顺手把「闪烁轴逐位不变」也量了（见 staticDiff）。
     const std::vector<StepArm> arms = {
         { "Z", 11.0, 1.0, true },
         { "E", 1.0, 0.01, false },
         { "R", 1.0, 0.01, true },
         { "C0", 0.0, 0.01, true },
         { "C11", 11.0, 0.01, true },
+        { "C13", 13.0, 0.01, true },
     };
     std::vector<StepCurve> main;
     std::vector<std::vector<double>> sens;
+    std::vector<cv::Mat> aRefs, bRefs;
     for (const StepArm& a : arms) {
         StepArmResult r = collectStepArm(dir, *base, camB, a, burst, warm, tau, margin);
         main.push_back(std::move(r.main));
         sens.push_back(std::move(r.sens));
+        aRefs.push_back(std::move(r.aRef));
+        bRefs.push_back(std::move(r.bRef));
     }
+    // 臂 13 vs 臂 11 在静止侧的偏离（= 「α 吃 gate」这条线在 motion < 1px 时是否**真的**没动）。
+    // ⚠ 跨进程 ⟹ 不是 bit 级判据（债-61 地板 = 1 LSB ≈ 4e-3 线性）；要抓的是 1e-1 量级的接线错。
+    const size_t n11 = 4, n13 = 5;
+    main[n13].staticDiff = std::max(staticDiff(aRefs[n11], aRefs[n13]),
+        staticDiff(bRefs[n11], bRefs[n13]));
 
     std::printf("\n── 平移阶跃残影衰减（τ=%s，腐蚀 %d px，连拍 %d 帧）──\n",
         d2(tau * 100.0).c_str(), margin, burst);
@@ -3749,7 +3810,7 @@ int cmdTemporalTailStep(const std::string& cameraName, double stepDist, int burs
     std::printf("\n");
 
     return emitStepVerdicts(cameraName, dist, burst, tau, margin, main[0], main[1], main[3],
-        main[4]);
+        main[4], main[5]);
 }
 
 }  // namespace RGL::imgqa
