@@ -384,6 +384,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
         append(temporalTailBoostJudgments());
         append(temporalTailGuardJudgments());
         append(temporalTailCameraJudgments());
+        append(temporalTailStepJudgments());
         append(temporalFeedbackClosureJudgments());
         append(attachmentJudgments());
         return v;

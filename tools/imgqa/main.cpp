@@ -639,7 +639,7 @@ bool isRigCommand(const std::string& cmd)
 }
 
 /**
- * `temporal-tail` 的 spin / camera 分派（批 13.14a）。
+ * `temporal-tail` 的 spin / camera / step 分派（批 13.14a / 批 13.15）。
  *
  * 抽成独立函数的理由有二：① `dispatchTemporal` 的认知复杂度已到上限；② 更要紧的是
  * **拼错 `--motion` 必须报错**，不能静默回落 spin——否则「以为跑了机位运动、实际拿到
@@ -648,10 +648,13 @@ bool isRigCommand(const std::string& cmd)
 int dispatchTemporalTail(const Args& P)
 {
     const std::string motion = P.get("--motion");
-    if (motion != "camera" && motion != "spin") {
-        std::fprintf(stderr, "--motion 只认 camera / spin（收到 %s）\n", motion.c_str());
+    if (motion != "camera" && motion != "spin" && motion != "step") {
+        std::fprintf(stderr, "--motion 只认 camera / spin / step（收到 %s）\n", motion.c_str());
         return 2;
     }
+    if (motion == "step")
+        return cmdTemporalTailStep(P.get("--camera"), P.number("--step"), P.integer("--burst"),
+            P.integer("--warm"), P.number("--tau"), P.integer("--margin"));
     if (motion == "camera")
         return cmdTemporalTailCamera(P.get("--camera"), P.number("--angle"),
             P.number("--gate-angle"), P.integer("--burst"), P.integer("--warm"),

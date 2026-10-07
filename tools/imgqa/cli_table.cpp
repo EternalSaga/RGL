@@ -269,7 +269,8 @@ std::vector<SubcommandSpec> specsResidualAndMotion()
             "判决线跑前写死，**红一条即不许报臂间结论**。τ 是唯一自由阈值 ⟹ 输出自带三档敏感性表",
             {
                 FlagSpec{"--camera", "brickfence", nullptr, FlagKind::String},
-                FlagSpec{"--motion", "spin", "spin（默认）= 场景旋转相机不动（既有六机位读数的口径）；camera = 相机帧驱动 yaw（批 13.14a，机位运动鬼影）", FlagKind::String},
+                FlagSpec{"--motion", "spin", "spin（默认）= 静止机位 + 场景 spin（既有六机位读数的口径）；camera = 相机帧驱动 yaw（批 13.14a，机位运动稳态份额）；step = **平移阶跃残影衰减**（批 13.15，唯一能去遮挡的激励；`frame_yaw` 是原地纯旋转 ⟹ 无视差 ⟹ 无鬼影）", FlagKind::String},
+                FlagSpec{"--step", "0.02", "仅 --motion step：A→B 平移距离（世界单位，沿相机 right 轴纯横移）。⚠ 上限受引擎跳切判据 `cameraJumps` 管（位移 > 0.25·sceneRadius ⟹ 历史作废 = 假绿），由判决线 `temporal-tail-step-stimulus` 当场抓", FlagKind::Number},
                 FlagSpec{"--angle", "0.3", nullptr, FlagKind::Number},
                 FlagSpec{"--gate-angle", "0", "仅 --motion camera：gate 断点的高档角度（度/帧），用来把每帧像素位移扫过 `gate = saturate(2 − motion)` 的推导断点 2px；0 = 跳过判决线 4", FlagKind::Number},
                 FlagSpec{"--burst", "96", nullptr, FlagKind::Number},
@@ -284,6 +285,10 @@ std::vector<SubcommandSpec> specsResidualAndMotion()
                 " **Z 组**（jitter 0 + α=1）**借主角度的 φ** 量，frac ≤ 0.02（⚠ 两处坑：不能用 δ=0 的 φ，那会让 Δ ≡ 0 ⟹ 0/0 兜底成 0 = 空断言；也不能拿 "
                 "jitter=1 的臂当零点，它的相位平均收敛值比无抖动参考真的更糊，那是**地板** ≈0.13，不是零点）；④ **gate 断点** = `臂11 − 臂0` 低角度侧显著为正"
                 "（洞在场）、高角度侧 ≈ 0（gate 关门后臂 11 退回臂 0）。断点位置是**推出来的**不是扫出来的 ⟹ 阳性锚点不是拟合",
+                "`--motion step` 的四条（批 13.15，债-63 真鬼影量具；每臂三跑 = A 收敛 / B∞ 收敛 / A→B 瞬切）：① **零锚** = α=1 臂 max ghost(n) ≤ 0.02（无历史 ⟹ 残差恰为 0）；② **激励在场"
+                " = 历史活过了这一刀** = 门关臂 ghost(0) ≥ 0.5（纯 EMA 预测 0.99；掉到 0 = 引擎 `cameraJumps` 把这一刀当跳切切了、历史作废 = 满分假绿）；③ **闭式锚 = 仪器自证** = 门关"
+                " n₅₀ 落在 `ln0.5/ln0.99` = 69 帧 ±20%（门关时 `out = α·B + (1−α)·A` ⟹ `ghost(n) = (1−α)ⁿ` 精确）；④ **主判据** = n₅₀(臂11)/n₅₀(臂0) ≤ 0.7 才算裁剪在去遮挡处兑住，"
+                "≥ 0.9 = **锁死确认**（邻域盒对已混进盒内的历史停火，唯一洗掉它的东西就是 α）",
             },
             false,
             "",

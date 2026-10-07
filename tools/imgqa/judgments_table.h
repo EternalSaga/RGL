@@ -41,6 +41,11 @@ namespace RGL::imgqa {
 /// gate 断点。与上面两族的差别 = 成立条件不同（spin 下臂 11 的 `gate` 恒 1.0，进不了斜坡区）。
 [[nodiscard]] const std::vector<JudgmentInfo>& temporalTailCameraJudgments();
 
+/// 运动族 · **平移阶跃**残影衰减（批 13.15，4 条）：零锚 / 历史存活 / 闭式锚 / 裁剪兑住没有。
+/// 与上面那条的差别 = **激励带视差**（`frame_yaw` 是原地纯旋转 ⟹ 无去遮挡 ⟹ 量不到鬼影），
+/// 本族是本项目第一条真正量「让开的内容回不来」的判据。
+[[nodiscard]] const std::vector<JudgmentInfo>& temporalTailStepJudgments();
+
 /// 运动族 · feedback 与闭式回扣（5 条）：参数活性 / 零态 / 回扣 / 闪烁闭式 / 单应解释。
 [[nodiscard]] const std::vector<JudgmentInfo>& temporalFeedbackClosureJudgments();
 

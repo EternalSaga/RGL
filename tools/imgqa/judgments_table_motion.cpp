@@ -440,4 +440,68 @@ const std::vector<JudgmentInfo>& temporalFeedbackClosureJudgments()
     return kPart;
 }
 
+const std::vector<JudgmentInfo>& temporalTailStepJudgments()
+{
+    static const std::vector<JudgmentInfo> kPart = {
+        {"temporal-tail-step-zero", JudgmentFamily::TemporalMotion,
+            "**零锚点 = 阶跃仪器的地基**（批 13.15，债-63 真鬼影量具）。Z 臂 = `feedback = 1`：\n"
+            "`lerp(·, cur, 1) ≡ cur` ⟹ 阶跃后每一帧**就是** B∞ ⟹ `ghost(n) ≡ 0`。\n"
+            "**线：max ghost(n) ≤ 0.02**。非零 ⟹ 分子算子或参考构造坏了（B∞ 取错机位、把两跑之间"
+            "的系统差算进残差、掩膜算错等）。0.02 与「一整个遮挡物的颜色」（≈1）之间没有中间地带。\n"
+            "⚠ 本条与 `temporal-tail-pairing` 是**两台不同仪器**的零锚：那条守的是帧号配对（连续运动），"
+            "本条守的是「收敛参考的构造」+「掩膜分母」（阶跃）。它俩不互相覆盖。",
+            {"tools/imgqa/temporal_motion.cpp `temporal-tail --motion step` 段头【协议】；"
+             "docs/还债总账.md 债-63"},},
+        {"temporal-tail-step-stimulus", JudgmentFamily::TemporalMotion,
+            "**历史真的活过了这一刀**——本仪器唯一一条会造假绿的坑的守卫。\n"
+            "引擎有跳切判据 `cameraJumps`（`rgl/taa_jitter.cppm`）：单帧位移 > 0.25·`sceneRadius` 或"
+            "视线夹角 > 45° ⟹ `taaHistoryUsable` 返回 false ⟹ `taa.frag` 走 `params.y < 0.5` 早退 = "
+            "**历史直接作废** ⟹ 残影恒 0 = **满分假绿**（看起来「鬼影被完全消掉了」）。\n"
+            "imgqa 拿不到 CPU 侧的 `bounds.radius` ⟹ 不读阈值，改成**当场量**：关盒臂 "
+            "`ghost(0) ≥ 0.5`（无裁剪 ⟹ 纯 EMA 预测 = 1 − α = 0.99，与 0 之间没有中间地带）。\n"
+            "🔴 **必须挂在关盒臂（`clip_mode = 1`）上，不能挂在 `clip_mode = 0` 上**。首轮实测就踩了"
+            "这个：`clip_mode = 0` **不是没有裁剪**，它带默认那条 5 抽头十字盒 ⟹ 去遮挡处第一帧历史"
+            "就被夹进当前邻域盒 ⟹ `ghost(0)` 实测 0.012–0.019 且**不随平移步长变**（0.003→0.03 全平）"
+            "。当时把它读成「历史被跳切切了」，实际是**盒在正常工作**。教训形态：**预测错了先怀疑"
+            "预测的适用条件，别急着怀疑机制**。\n"
+            "⚠ 本条红的时候先减小 `--step`，不要动判决线；也不要改成读引擎内部量——「量得到」正是"
+            "这台仪器存在的理由。",
+            {"rgl/taa_jitter.cppm `cameraJumps` / `taaHistoryUsable`；"
+             "rgl/shaders/taa.frag.slang `params.y < 0.5` 早退 + 默认 5 抽头盒分支；"
+             "tools/imgqa/temporal_motion.cpp `kStepStimulusLine`"},},
+        {"temporal-tail-step-ema-anchor", JudgmentFamily::TemporalMotion,
+            "**仪器自证（闭式锚）**：关盒（`clip_mode = 1`）时没有邻域盒 ⟹ `out_n = (1−α)ⁿ·A + "
+            "(1−(1−α)ⁿ)·B∞` ⟹ `ghost(n) = (1−α)ⁿ` **精确** ⟹ 主指标 `AUC = Σ ghost(n) = "
+            "(1−(1−α)^N)/α`（α=0.01、N=224 ⟹ 89.3 帧·全对比度）。\n"
+            "**线：AUC 落在闭式 ±20%**。不命中 = 历史通道上还有别的东西在动（α 没生效、历史被中途"
+            "重置、掩膜把臂间系统差算进来），此时**整表作废**，任何臂间结论都是在噪声上盖结论。\n"
+            "🔴 **主指标为什么是 AUC 而不是 n₅₀**（实测逼出来的口径变更）：盒**生效**时 `ghost(0)` "
+            "第一帧就掉到 0.015 量级 ⟹ 曲线永远碰不到 0.5 ⟹ **n₅₀ 对带盒的臂不存在**（返回 −1）。"
+            "AUC 无阈值、单调、吃整条曲线，且关盒态有闭式——一个统计量同时满足「所有臂都有定义」和"
+            "「有一个臂能被闭式钉死」，这是 n₅₀ 做不到的。\n"
+            "⚠ 本条与 `temporal-tail-monotone`（spin 版）是同一类「量具有没有力气」的守卫，但口径不同："
+            "那条判 frac 随窗长上升（相对），本条判**绝对帧数**命中闭式。绝对数能钉住相对数钉不住的东西："
+            "「ghost 的自变量到底是不是帧」。",
+            {"tools/imgqa/temporal_motion.cpp `temporal-tail --motion step` 段头【闭式锚点】"
+             "与 `StepCurve::auc` 注释"},},
+        {"temporal-tail-step-clip-holds", JudgmentFamily::TemporalMotion,
+            "**主判据（结论，不是守卫）**：交付臂（`clip_mode = 11`）的残影总量必须显著少于**现行默认"
+            "盒**（`clip_mode = 0`，注意它不是「没裁剪」）。\n"
+            "**线：AUC(臂11) / AUC(臂0) ≤ 0.7** = 记忆门在去遮挡处比现行盒多兑掉三成。\n"
+            "**≥ 0.9 = 两臂一致**，形态上对应「锁死」假说：盒一旦把大块历史夹进当前邻域盒，剩下的"
+            "是**已经混进盒内**的历史 ⟹ `w = saturate((dist−mem)/mem)` 塌成 0 ⟹ 裁剪**停火** ⟹ 两臂"
+            "行为相同，唯一还能洗掉它的东西就是 α。这条若红，说明臂 11 的 `gate` 对本激励**无从发力**"
+            "（瞬切后机位静止 ⟹ `motion` 恰为 0 ⟹ `gate = 1`），要修的是「慢速平移」那条轴。\n"
+            "⚠ 只在 ①②③ 三条守卫全绿时才有意义（零锚 / 历史存活 / 闭式命中）。\n"
+            "⚠ **论域边界**：本条 = **瞬切后机位静止** ⟹ 臂 11 的 `gate = saturate(2 − motion)` 恒 "
+            "1.0（记忆门全开）= 最坏情形。连续慢速平移（每帧 < 2px，同样门开）与快速平移（门关）两个"
+            "工作点本条都不覆盖，别把本条读成「臂 11 在运动下没用」。\n"
+            "⚠ 同时打印**完全无裁剪**（关盒）的 AUC 作参照，它给出「盒族本身兑掉了多少」——没有这个"
+            "参照，④ 的比值会被误读成「裁剪只省了一点」。",
+            {"tools/imgqa/temporal_motion.cpp `emitStepVerdicts` 第 4 条；"
+             "rgl/shaders/taa.frag.slang 臂 11 分支；docs/还债总账.md 债-63"},},
+    };
+    return kPart;
+}
+
 }  // namespace RGL::imgqa

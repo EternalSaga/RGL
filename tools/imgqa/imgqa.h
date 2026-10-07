@@ -740,6 +740,34 @@ int cmdTemporalTail(const std::string& camera, double angleDeg, int burst, int w
 int cmdTemporalTailCamera(const std::string& camera, double angleDeg, double gateAngleDeg,
     int burst, int warm, double tau, int margin);
 
+/**
+ * 批 13.15 **平移阶跃鬼影衰减**（`temporal-tail --motion step`，债-63 的真鬼影量具）。
+ *
+ * 存在的理由 = 前两台仪器**结构上量不到鬼影**：`temporal-residual` 的机位在整组里钉死
+ * （唯一运动是抖动），`--motion camera` 是原地纯旋转 ⟹ 两者都**无视差、无去遮挡**，
+ * 而鬼影的定义就是「让开的内容回不来」（→ `phase13_plan.md` §1.17 结论 6）。
+ *
+ * 协议（每臂三跑）：① 在机位 A 收敛到历史稳定 → ② 同机位连拍 = `A` 参考 →
+ * ③ 在机位 B 收敛 = `B∞` 参考 → ④ 在 A 热身后**中途 `POST /camera` 瞬切到 B** 再连拍。
+ * 主指标 = 掩膜上的**归一化残影衰减曲线** `ghost(n) = mean|f_n − B∞| ÷ mean|A − B∞|`，
+ * 报 n₅₀ / n₅（掉到 50% / 5% 的帧数）。闭式锚点：门关（臂 0）时 `out = α·B + (1−α)·A`
+ * ⟹ `ghost(n) = (1−α)ⁿ` **精确** ⟹ n₅₀ = `ln0.5/ln0.99` = **69 帧**。
+ *
+ * 两条与 `--motion camera` 不同的口径，都是刻意的（理由写在 .cpp 头注释）：
+ * **`jitter_scale` 恒 0**（换成「静止机位 ⟹ 收敛帧逐位相同」这条更强的零点），
+ * 以及配对 = **我自己写的位姿序列**（零图像配准，同设计红线）。
+ *
+ * @param stepDist  A→B 的**平移**距离（世界单位，沿相机 right 轴纯横移；0 视同默认）。
+ *        ⚠ 上限受引擎跳切判据 `cameraJumps` 管：位移 > 0.25·sceneRadius ⟹ 历史直接作废
+ *        ⟹ 残影恒 0 = 假绿。该风险由判决线「激励在场」当场抓（见 `temporal-tail-step-stimulus`）。
+ * @param burst     阶跃后连拍帧数（须 ≥ 2× 期望 n₅₀ 才谈得上报 n₅）
+ * @param warm      收敛帧数（0 = 用 `⌈6/α⌉` 的 EMA 判据并向上对齐到抖动周期）
+ * @param tau       掩膜阈值（线性 luma，唯一自由参数 ⟹ 输出自带三档敏感性表）
+ * @param margin    掩膜**向内腐蚀**的像素数（排掉「新内容从画外入画」，那不是鬼影）
+ */
+int cmdTemporalTailStep(const std::string& camera, double stepDist, int burst, int warm,
+    double tau, int margin);
+
 /// 逐杆覆盖率对拍闭式（批 12.6 T4，docs/taa_plan.md §7 第 10 条）：单帧量阶梯杆的
 /// 「黑度积分 vs 投影宽度」，TAA 关应当被二值覆盖量化破坏、TAA 开应当贴合闭式。
 /// 与采集时序无关（这是它优于逐帧差的地方）。
