@@ -220,6 +220,19 @@
 | **14.7** | **旋钮调参**：§1.6 那 5 个 configure key × 三轴判据（静止闪烁 / 平移阶跃鬼影 / 运动中 R） | 有判据才有旋钮；顺序必须在 14.6 之后 | 每个 key 给一张扫描表 + **一次消融证明它真的在动**（阳性锚点），并写清代价轴 |
 | **14.8** | **VMA 裁决**：默认**不改**，只补账本科目。改那 4 处 `vkAllocateMemory` 的触发条件（任一）：① 外部分配器条数让 `maxMemoryAllocationCount` 逼近上限；② 预算/OOM 需要统一降级；③ 显存账科目精度不够用 | 见 §1.5。**账本口径问题用账本解决，不用 patch 解决** | 若不动：显存日志里 FSR 的 VRAM 有独立一行且 `logMemoryStats` 的闭合断言重新成立（口径写明"含外部分配器 X MiB"） |
 
+> **14.4b 落点已勘察（2026-10-08 夜，别按"便宜"估）**：
+> - **图内侧有单一真相源**：`usage → {layout, stage, access}` 查表在 `render_graph_impl` 的
+>   `usageInfo`，跨帧布局 = `Renderer::attachmentLayouts`（`vkrenderer.cppm:320`，执行器跨帧追踪、
+>   RT generation 变化时重置）。⟹ 图内 attachment 的布局不是缺口。
+> - **缺口在图外，且不止 plan 里点名的三处**：自己发 `vkCmdPipelineBarrier2` 的模块实测有
+>   **12 个**（env_prefilter / mip_gen / texture_upload(+cubemap) / gpu_canary / izb_shadow /
+>   evssm_shadow / frame_capture / imgui_layer …）。
+> - ⚠ **A 档的落点不是"在执行器加一条断言"**：`attachmentLayouts` 的**唯一写者就是执行器自己**，
+>   图外模块改了布局它并不知道 ⟹ 执行器处的值"自洽但陈旧"，在那里比对**检不出带外修改**。
+>   真正的断言点是**图外模块发 barrier 之前**：它要能读到 `attachmentLayouts[slot]` 并声明自己的预期。
+>   ⟹ 先要定的是**接口**（Renderer 暴露什么查询/断言入口、12 个模块里哪些必须接），再谈护栏。
+>   这一格定错，A 档会做成一条永远为真的断言——正是 §2 判据①"变异验过非空转"要防的形态。
+
 ---
 
 ## 3. 红线与纪律
