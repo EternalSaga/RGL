@@ -2,7 +2,8 @@
 
 判定顺序（evaluate_metrics）：文件行 → 逐函数[行/认知/瘦身/expected throw] →
 成员命名；同 (rel,line) 并列时保持此相对顺序——排序在 main 里按 (rel,line)
-稳定排。阈值经 types.Thresholds 传入。
+稳定排。阈值经 types.Thresholds 传入；规则开关经 disabled 参数（工具侧关
+impl_slim，默认空集不影响 rgl 侧）。
 """
 
 from pathlib import Path
@@ -82,15 +83,22 @@ def rule_expected_throw(rel: str, fn: FunctionMetrics) -> list[Warning]:
     return []
 
 
-def evaluate_metrics(rel: str, metrics: FileMetrics,
-                     thresholds: Thresholds) -> list[Warning]:
-    """单文件全部 libclang 指标规则（顺序见模块 docstring）。"""
+def evaluate_metrics(rel: str, metrics: FileMetrics, thresholds: Thresholds,
+                     disabled: frozenset[str] = frozenset()) -> list[Warning]:
+    """单文件全部 libclang 指标规则（顺序见模块 docstring）。
+
+    @param disabled 关闭的规则名集合（去掉 rule_ 前缀的名字）。**默认空集 = rgl 侧
+        行为一字不变**。工具侧传 config.TOOL_DISABLED_RULES（当前只有 impl_slim：
+        接口瘦身是 C++20 modules 语义，对纯 .cpp 工具无意义）。可关的名字目前
+        只有 impl_slim——其余规则（行/认知/命名/expected）对工具代码同样成立。
+    """
     warnings = rule_file_lines(rel, metrics, thresholds.file)
     for fn in metrics["functions"]:
         warnings += rule_function_lines(rel, fn, thresholds.func)
         warnings += rule_cognitive(rel, fn, thresholds.cognitive,
                                    thresholds.cognitive_error)
-        warnings += rule_impl_slim(rel, fn, thresholds.impl)
+        if "impl_slim" not in disabled:
+            warnings += rule_impl_slim(rel, fn, thresholds.impl)
         warnings += rule_expected_throw(rel, fn)
     warnings += rule_member_naming(rel, metrics["fields"])
     return warnings

@@ -36,6 +36,30 @@ DEFAULT_COGNITIVE_THRESHOLD = 15
 DEFAULT_COGNITIVE_ERROR_THRESHOLD = 30
 DEFAULT_IMPL_THRESHOLD = 100
 
+# ─── 工具侧（tools/）样式检查（批次 A：imgqa 纳入样式规则）──────────────────────
+# 工具单元 = compile_commands 里落在 TOOL_UNIT_PREFIXES 下、后缀在 TOOL_UNIT_SUFFIXES
+# 里的编译命令（imgqa 是 EXCLUDE_FROM_ALL 的 C++ 工具，configure 期仍导出编译命令，
+# 故 checks 无需 imgqa 被构建就能解析它——它的命令里没有 -fmodule-file，不依赖 BMI）。
+# **Doxygen 规则不纳入工具侧**：imgqa 的注释是散文式不是 Doxygen 式，套 doc 规则 =
+# 265 条 d2/d4/d6 噪声（打印 helper 各缺 5 份注释），main.py 的 doc 段跳过工具单元。
+TOOL_UNIT_PREFIXES = ("tools/imgqa/",)
+TOOL_UNIT_SUFFIXES = (".cpp", ".h")
+
+# 工具侧阈值：起步与 rgl 现值对齐，但**各写一份**（后续单独收紧工具侧时不牵动 rgl，
+# 反之亦然）。impl 阈值对工具侧无意义（impl_slim 已关），故不列。
+TOOL_FILE_THRESHOLD = 500
+TOOL_FUNC_THRESHOLD = 120
+TOOL_COGNITIVE_THRESHOLD = 15
+TOOL_COGNITIVE_ERROR_THRESHOLD = 30
+
+# 工具侧关闭的规则名（evaluate_metrics 的 disabled 参数消费；名字 = 规则函数名去掉
+# rule_ 前缀）。impl_slim 的消息是「迁入 xxx_impl.cppm（接口 BMI 不含函数体）」——
+# C++20 modules 专属语义，对纯 .cpp 工具无意义（实测套上去 = 24 条纯噪声）。
+TOOL_DISABLED_RULES = frozenset({"impl_slim"})
+
+# 工具侧样式基线（「只准降不准升」，非阻断）：{文件: 允许条数} + 便于人读的总数。
+# 处置上升 = 拆函数/拆文件；下调基线 = main.py --update-tool-baseline。
+TOOL_BASELINE_FILE = "tools/checks/tool_baseline.json"
 
 # ─── libclang 游标 kind 拼写集合（clang_getCursorKindSpelling 返回串，LLVM 22 实查）──
 

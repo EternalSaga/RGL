@@ -1,0 +1,21 @@
+{
+  "_comment": "工具侧（tools/imgqa）样式基线：每个文件允许的样式警告条数。只准降不准升——上升的处置是拆函数/拆文件，不是改这里的数字。下调后用 `python3 tools/checks/main.py --update-tool-baseline` 重写本文件。",
+  "total": 74,
+  "files": {
+    "tools/imgqa/aa_coverage.cpp": 2,
+    "tools/imgqa/analytic.cpp": 0,
+    "tools/imgqa/ao_metrics.cpp": 1,
+    "tools/imgqa/ao_noise.cpp": 3,
+    "tools/imgqa/engine.cpp": 5,
+    "tools/imgqa/image.cpp": 1,
+    "tools/imgqa/judge.cpp": 3,
+    "tools/imgqa/main.cpp": 6,
+    "tools/imgqa/material_attribution.cpp": 2,
+    "tools/imgqa/selftest.cpp": 7,
+    "tools/imgqa/temporal.cpp": 5,
+    "tools/imgqa/temporal_flicker.cpp": 5,
+    "tools/imgqa/temporal_homography.cpp": 7,
+    "tools/imgqa/temporal_motion.cpp": 12,
+    "tools/imgqa/temporal_residual.cpp": 15
+  }
+}

@@ -170,6 +170,18 @@ doc-check *ARGS="":
 style-check *ARGS="":
     @python "{{ WORKSPACE }}/tools/checks/main.py" --build-dir "{{ BUILD }}" --only style {{ ARGS }}
 
+# 构建 imgqa 再跑 checks。为什么需要这条：imgqa 是 EXCLUDE_FROM_ALL，`just build`
+# 根本不编它，编译失败会一直躺着，直到某个人显式跑 `just imgqa` / `just analytic`
+# 才发现（真实踩过：`clipArmName` 与 `case 11` 撞 duplicate case，潜伏到下次 analytic
+# 才炸）。改完 tools/imgqa 就 `just build-tools`，把「编译不过」压回当轮。
+#
+# 注意方向：**checks 本身不去编译 imgqa**——source_checks 是 just build 的内建步骤，
+# 检查步骤里再触发编译会形成递归并拖慢每次构建。checks 只要 compile_commands.json
+# 里的编译命令（configure 期即导出），imgqa 未构建也能解析它。
+build-tools:
+    @cmake --build {{ BUILD }} --target imgqa
+    just checks
+
 # 全量编译基准: clean-all + config + 计时编译
 profile:
     just clean-all

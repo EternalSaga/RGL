@@ -25,7 +25,14 @@ def expand_at(entry):
     """展开命令里的 @response file（modmap）→ raw token 列表。
 
     @response file 是构建产物；clean 后尚未编译时不存在 → 返回 None（未就绪），
-    调用方据此跳过而非崩溃（坑 4b）。"""
+    调用方据此跳过而非崩溃（坑 4b）。
+
+    **例外 `entry["at_optional"]`（批次 A：工具侧）**：imgqa 不用 modules，它的
+    @response（.modmap）实测是 **0 字节空文件**——"不存在"与"存在但为空"对 libclang
+    完全等价。而 imgqa 是 EXCLUDE_FROM_ALL（`just build` 不编它），若照坑 4b 一律判
+    未就绪，工具侧样式护栏就在**最常见的调用形态**（每次构建都跑 checks、imgqa 从没
+    编过）下静默空转。故此类单元缺 @response 时丢弃该 token 继续解析。
+    带 modules 的单元**绝不许**打这个标记——它们的 modmap 里就是 -fmodule-file 本体。"""
     raw = []
     for a in shlex.split(entry["command"], posix=os.name != "nt"):
         if a.startswith("@"):
@@ -33,6 +40,8 @@ def expand_at(entry):
             if not os.path.isabs(rf):
                 rf = os.path.join(entry["directory"], rf)
             if not os.path.exists(rf):
+                if entry.get("at_optional"):
+                    continue
                 return None
             with open(rf, encoding="utf-8") as f:
                 raw.extend(shlex.split(f.read().strip()))
@@ -61,7 +70,9 @@ def abs_module_files(raw, directory):
 def bmi_ready(entry):
     """libclang 检查是否可用：@modmap 存在 + 全部 -fmodule-file BMI 存在。
 
-    clean 后首次构建产物尚未生成 → False，主进程跳过 libclang 解析（纯文本规则不受影响）。"""
+    clean 后首次构建产物尚未生成 → False，主进程跳过 libclang 解析（纯文本规则不受影响）。
+    `entry["at_optional"]`（工具侧 imgqa）只豁免 @modmap 存在性，**不豁免** BMI 存在性
+    ——判据见 expand_at 注释（imgqa 没有 -fmodule-file，所以它没有可豁免的 BMI）。"""
     raw = expand_at(entry)
     if raw is None:
         return False

@@ -13,6 +13,13 @@ SHA 键；schema = metrics.py 文件头，CACHE_VERSION 随结构演进）：
   行为对账记录见 docs/调试历史.md 同日条目）。impl 单元接口已声明函数的
   定义处不重复要求注释（真相源 = 声明处）。
 
+工具侧（批次 A：tools/imgqa 纳入样式规则）：工具单元走**独立阈值集**、关掉 impl_slim
+（C++20 modules 接口瘦身语义，对纯 .cpp 无意义），且 **Doxygen 规则跳过工具单元**
+（imgqa 注释是散文式，套 doc 规则 = 265 条噪声）。存量钉死在 tool_baseline.json
+「只准降不准升」（机制 → tool_baseline.py）；汇总单列一行报告工具侧，让 rgl 侧
+「0 警告」这个既有性质仍然一眼可读。`--strict` 走**棘轮**：工具侧存量不夺非零码，
+只有基线上升才红——否则 `just checks --strict` 0 警告这条验收仪式从此永久作废。
+
 竞态契约（坑 4c）：本工具与编译并行会读到 ninja 半写的 BMI/.modmap →
 libclang crash / parse NULL。主防线 = CMake 侧 add_dependencies(source_checks rgl)
 （构建产物就绪后才跑检查）；worker 内 bmi_stable 双采样 + 1/2/4s 退避重试兜底
@@ -28,8 +35,10 @@ TOK_COMMENT/CACHE_VERSION 等常量 → config.py；Warning/阈值 → models.py
                                  [--workers N] [--file-threshold N] [--func-threshold N]
                                  [--cognitive-threshold N] [--cognitive-error-threshold N]
                                  [--impl-threshold N] [--max-gap N] [--methods]
-                                 [--strict] [--verbose]
+                                 [--strict] [--verbose] [--update-tool-baseline]
 （--methods 为兼容旧调用的 no-op：方法检查现已恒开）
+（--file-threshold/--func-threshold/--cognitive-* 显式传时 rgl 与工具侧**同步生效**，
+  不传则各用各的默认；--update-tool-baseline 用当前条数重写工具侧基线）
 """
 
 import argparse
@@ -49,7 +58,10 @@ from clangbind import find_libclang
 from cmdclean import bmi_ready
 from config import (DEFAULT_COGNITIVE_ERROR_THRESHOLD, DEFAULT_COGNITIVE_THRESHOLD,
                     DEFAULT_FILE_THRESHOLD, DEFAULT_FUNC_THRESHOLD,
-                    DEFAULT_IMPL_THRESHOLD, EXCLUDE_FILES, EXCLUDE_SUBDIRS, ROOT)
+                    DEFAULT_IMPL_THRESHOLD, EXCLUDE_FILES, EXCLUDE_SUBDIRS, ROOT,
+                    TOOL_COGNITIVE_ERROR_THRESHOLD, TOOL_COGNITIVE_THRESHOLD,
+                    TOOL_DISABLED_RULES, TOOL_FILE_THRESHOLD, TOOL_FUNC_THRESHOLD,
+                    TOOL_UNIT_PREFIXES, TOOL_UNIT_SUFFIXES)
 from fs import read_text
 from rules_doxygen import interface_declared_names, rule_doxygen
 from rules_metrics import evaluate_metrics
@@ -58,6 +70,8 @@ from rules_text import (agents_doc_index_checks, docs_status_checks,
                         forbidden_vulkan_checks, slang_load_bitcast_checks,
                         modern_cpp_checks, text_checks)
 from models import Thresholds, Warning
+from tool_baseline import compare as compare_baseline
+from tool_baseline import load_baseline, write_baseline
 from worker import _pool_results
 
 
@@ -82,21 +96,37 @@ def load_db(build_dir: str) -> tuple[dict[str, dict], str | None]:
     return by_file, driver
 
 
-def select_units(by_file: dict[str, dict]) -> list[tuple[str, dict]]:
-    """db 条目 → 待检 .cppm 单元 [(rel, entry)]（排除 generated/ 与 EXCLUDE_FILES）。"""
-    units = []
+def select_units(by_file: dict[str, dict]) -> list[tuple[str, dict, bool]]:
+    """db 条目 → 待检单元 [(rel, entry, is_tool)]（排除 generated/ 与 EXCLUDE_FILES）。
+
+    两类单元（is_tool 区分，下游三处行为不同：阈值集 / 规则开关 / doc 规则跳过）：
+    - rgl 单元 = `.cppm` 且路径含 `/rgl/`（generated/ 与 EXCLUDE_FILES 除外）；
+    - 工具单元 = 落在 config.TOOL_UNIT_PREFIXES 下、后缀在 TOOL_UNIT_SUFFIXES 里
+      （批次 A：tools/imgqa 的 15 个 .cpp TU；`.h` 现在没有独立编译命令，列上是为了
+      将来把头挂进 target 时不用改代码）。
+    两侧共用排除项，语义一致。
+    """
+    units: list[tuple[str, dict, bool]] = []
+    root = Path(ROOT).resolve()
     for full in sorted(by_file):
-        if not full.endswith(".cppm"):
-            continue
         norm = full.replace(os.sep, "/")
-        if "/rgl/" not in norm:
+        try:
+            rel = Path(full).resolve().relative_to(root).as_posix()
+        except ValueError:
+            continue  # 仓库外的编译命令（vcpkg 生成物等）不检
+        is_tool = (rel.startswith(TOOL_UNIT_PREFIXES)
+                   and rel.endswith(TOOL_UNIT_SUFFIXES))
+        if not is_tool and not (full.endswith(".cppm") and "/rgl/" in norm):
             continue
+        if is_tool:
+            # imgqa 的 @response(.modmap) 实测 0 字节且它没有 -fmodule-file，故允许缺失
+            # （否则 imgqa 从未构建的树上工具侧护栏整体空转）——机制见 cmdclean.expand_at
+            by_file[full]["at_optional"] = True
         if any(x in norm for x in EXCLUDE_SUBDIRS):
             continue
-        rel = Path(full).resolve().relative_to(Path(ROOT).resolve()).as_posix()
         if rel in EXCLUDE_FILES:
             continue
-        units.append((rel, by_file[full]))
+        units.append((rel, by_file[full], is_tool))
     return units
 
 
@@ -125,10 +155,35 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--methods", action="store_true",
                     help="兼容旧调用的 no-op（方法检查已恒开）")
     ap.add_argument("--strict", action="store_true",
-                    help="有警告时 exit 1（默认只警告不阻断）")
+                    help="有警告时 exit 1（默认只警告不阻断）。工具侧（tools/）存量由"
+                         "基线豁免、不夺非零码，只有**基线上升/未登记**才变红（棘轮）")
     ap.add_argument("--verbose", action="store_true",
                     help="附加输出认知复杂度 top 6 函数（调阈值/sanity check 用）")
+    ap.add_argument("--update-tool-baseline", action="store_true",
+                    help="用当前工具侧条数重写 tool_baseline.json（样式警告降了之后收账；"
+                         "上升时**不要**用它，那是拆函数的活儿）")
     return ap.parse_args()
+
+
+def tool_thresholds(args: argparse.Namespace) -> Thresholds:
+    """工具侧阈值集。
+
+    不传 CLI 时用 config.TOOL_*（起步与 rgl 现值一致）；**显式传了就两侧同步生效**
+    ——阳性锚点靠这个性质：`--cognitive-threshold 200` 必须能看见工具侧条数掉下来，
+    否则"阈值接到了工具单元上"这件事无法验证。impl 阈值无意义（impl_slim 已关）。
+    """
+    def pick(cli: int, rgl_default: int, tool_default: int) -> int:
+        return tool_default if cli == rgl_default else cli
+
+    return Thresholds(
+        file=pick(args.file_threshold, DEFAULT_FILE_THRESHOLD, TOOL_FILE_THRESHOLD),
+        func=pick(args.func_threshold, DEFAULT_FUNC_THRESHOLD, TOOL_FUNC_THRESHOLD),
+        cognitive=pick(args.cognitive_threshold, DEFAULT_COGNITIVE_THRESHOLD,
+                       TOOL_COGNITIVE_THRESHOLD),
+        cognitive_error=pick(args.cognitive_error_threshold,
+                             DEFAULT_COGNITIVE_ERROR_THRESHOLD,
+                             TOOL_COGNITIVE_ERROR_THRESHOLD),
+        impl=DEFAULT_IMPL_THRESHOLD)
 
 
 def main() -> None:
@@ -153,11 +208,17 @@ def main() -> None:
                             capture_output=True, text=True).stdout.strip()
 
     units = select_units(by_file)
+    tool_rels = {rel for rel, _e, is_tool in units if is_tool}
+    tool_total = len(tool_rels)
+    rgl_total = len(units) - tool_total
 
     # 预检构建产物（坑 4b）：clean 后首次构建 modmap/BMI 尚未生成，未就绪的跳过
     # libclang 解析——纯文本规则（分层/模块优先/STL 白名单）不受影响照常跑。
-    ready = [u for u in units if bmi_ready(u[1])]
-    notready = len(units) - len(ready)
+    # 工具单元（.cpp）的命令里没有 -fmodule-file，只 @ 自己的（空）modmap。
+    ready = [(rel, entry) for rel, entry, _t in units if bmi_ready(entry)]
+    ready_rels = {rel for rel, _e in ready}
+    rgl_notready = sum(1 for rel, _e, is_tool in units
+                       if not is_tool and rel not in ready_rels)
 
     ctx = {"root": ROOT, "build": build, "libclang": libclang,
            "cache_dir": os.path.join(build, "checks_cache"),
@@ -166,30 +227,45 @@ def main() -> None:
     os.makedirs(ctx["scratch_dir"], exist_ok=True)
     os.makedirs(ctx["cache_dir"], exist_ok=True)
 
+    tool_th = tool_thresholds(args)
     metrics_by_rel = {}
     warnings: list[Warning] = []
+    tool_warnings: list[Warning] = []
     errors: list[tuple[str, str]] = []
+    tool_errors: list[tuple[str, str]] = []
     hits = parsed = skipped_notready_err = 0
+    tool_counts: dict[str, int] = {}   # rel → 当前样式条数（基线比对的输入）
     cog_top: list[tuple[int, str, int, str]] = []
     try:
         pool_iter = _pool_results(ctx, ready, args.workers)
         for rel, metrics, how in pool_iter:
+            is_tool = rel in tool_rels
             if metrics is None:
+                bucket = tool_errors if is_tool else errors
                 if how.startswith("skip:"):
-                    skipped_notready_err += 1
-                    errors.append((rel, "跳过（产物未就绪）: " + how[5:]))
+                    if not is_tool:
+                        skipped_notready_err += 1
+                    bucket.append((rel, "跳过（产物未就绪）: " + how[5:]))
                 else:
-                    errors.append((rel, how[len("error:"):]))
+                    bucket.append((rel, how[len("error:"):]))
                 continue
-            if how == "cache":
-                hits += 1
-            else:
-                parsed += 1
+            if not is_tool:  # 工具侧不单独计缓存命中（汇总行只报条数/基线）
+                if how == "cache":
+                    hits += 1
+                else:
+                    parsed += 1
             metrics_by_rel[rel] = metrics
-            if run_style:
+            if not run_style:
+                continue
+            if is_tool:
+                # 工具侧：独立阈值集 + 关掉 impl_slim（modules 专属语义）
+                found = evaluate_metrics(rel, metrics, tool_th, TOOL_DISABLED_RULES)
+                tool_warnings.extend(found)
+                tool_counts[rel] = len(found)
+            else:
                 warnings.extend(evaluate_metrics(rel, metrics, thresholds))
-            for fn in metrics["functions"]:
-                cog_top.append((fn["cognitive"], rel, fn["line"], fn["name"]))
+                for fn in metrics["functions"]:
+                    cog_top.append((fn["cognitive"], rel, fn["line"], fn["name"]))
     except BrokenProcessPool:
         # libclang worker 进程猝死（段错误/OOM）：本批未消费文件整体跳过（警告语义不
         # 阻断构建——2026-09-11 教训：pool 崩溃 traceback 会让 ninja 误判检查目标
@@ -206,15 +282,34 @@ def main() -> None:
         warnings.extend(agents_doc_index_checks())
         warnings.extend(lib_layering_checks())
 
+    # 工具侧基线（只准降不准升）：--update-tool-baseline 先重写再比对（必然持平）。
+    # 未解析的 TU 不参与比对，其基线条数原样保留（否则 clean 后一跑就把基线清零）。
+    baseline_warnings: list[Warning] = []
+    tool_report = None
+    if run_style and tool_total:
+        if args.update_tool_baseline:
+            merged = {k: v for k, v in load_baseline().items()
+                      if os.path.exists(os.path.join(ROOT, k))}
+            merged.update(tool_counts)
+            path = write_baseline(merged)
+            print(f"[style-check] 工具侧基线已重写: {sum(merged.values())} 条 / "
+                  f"{len(merged)} 个文件 → {os.path.relpath(path, ROOT)}")
+        tool_report = compare_baseline(tool_counts, load_baseline(),
+                                       unparsed=tool_total - len(tool_counts))
+        baseline_warnings = tool_report.warnings
+
     doc_warnings: list[Warning] = []
     doc_checked = doc_unverified = doc_skipped = 0
     if run_doc:
+        # 工具单元不吃 doc 规则（imgqa 注释是散文式，265 条 d2/d4/d6 噪声）——
+        # 声明名表与求值两处都要排除，否则工具单元会混进 iface_names 与计数。
+        doc_rels = [r for r in metrics_by_rel if r not in tool_rels]
         # 第一遍：接口单元声明名表（impl 定义处跨查豁免用）
         iface_names = {}
-        for rel, m in metrics_by_rel.items():
+        for rel in doc_rels:
             if not rel.endswith("_impl.cppm"):
-                iface_names[rel] = interface_declared_names(m)
-        for rel in sorted(metrics_by_rel):
+                iface_names[rel] = interface_declared_names(metrics_by_rel[rel])
+        for rel in sorted(doc_rels):
             src = read_text(Path(ROOT) / rel)
             if src is None:
                 continue
@@ -230,16 +325,21 @@ def main() -> None:
             doc_unverified += u
             doc_skipped += s
 
-    style_warnings = warnings if run_style else []
-    if run_style:
-        for w in sorted(style_warnings, key=lambda x: (x.rel, x.line)):
+    def emit(ws: list[Warning], tag: str) -> None:
+        """按 (rel,line) 稳定序打印警告；error 级红粗体辣眼高亮（强制 ANSI，ninja
+        捕获输出也可见；仍不阻断构建）。"""
+        for w in sorted(ws, key=lambda x: (x.rel, x.line)):
             loc = f"{w.rel}:{w.line}" if w.line else w.rel
             if w.severity == "error":
-                # 红粗体辣眼高亮（强制 ANSI，ninja 捕获输出也可见；仍不阻断构建）
-                print(f"\033[1;31m[style-check-ERROR] {loc}: {w.msg}\033[0m")
+                print(f"\033[1;31m[{tag}-ERROR] {loc}: {w.msg}\033[0m")
             else:
-                print(f"[style-check] {loc}: {w.msg}")
-    for rel, err in errors:
+                print(f"[{tag}] {loc}: {w.msg}")
+
+    style_warnings = warnings if run_style else []
+    if run_style:
+        emit(style_warnings, "style-check")
+        emit(tool_warnings + baseline_warnings, "style-check")
+    for rel, err in errors + tool_errors:
         print(f"[checks] {rel}: 检查失败（跳过）: {err}")
     if run_doc:
         for w in sorted(doc_warnings, key=lambda x: (x.rel, x.line)):
@@ -250,20 +350,52 @@ def main() -> None:
             print(f"[style-check]   {cog:3d}  {rel}:{line}  {name}")
     if run_style:
         n_err = sum(1 for w in style_warnings if w.severity == "error")
-        skipped_note = f"、产物未就绪跳过 {notready}" if notready else ""
+        skipped_note = f"、产物未就绪跳过 {rgl_notready}" if rgl_notready else ""
         err_note = f"（其中 ERROR {n_err}）" if n_err else ""
-        print(f"[style-check] 汇总: {len(style_warnings)} 警告{err_note} / {len(units)} 个 .cppm"
+        print(f"[style-check] 汇总: {len(style_warnings)} 警告{err_note} / {rgl_total} 个 .cppm"
               f"（缓存命中 {hits}、解析 {parsed}、失败 {len(errors)}{skipped_note}）")
-        if notready:
+        if rgl_notready:
             print("[style-check] 提示: 跳过 = modmap/BMI 构建产物缺失（clean 后首次构建属正常，"
                   "与编译并行时尚未生成）；本次仅跑纯文本规则，编译完成后重跑即全量生效")
+        if tool_total and tool_report:
+            # 工具侧单列一行：rgl 侧「0 警告」是既有性质，不被工具侧存量污染
+            cur, allowed = tool_report.current, tool_report.allowed
+            compared, unparsed = tool_report.compared, tool_report.unparsed
+            n_tool_err = sum(1 for w in tool_warnings + baseline_warnings
+                             if w.severity == "error")
+            err_note_tool = f"（其中 ERROR {n_tool_err}）" if n_tool_err else ""
+            if compared == 0:
+                # 一个都没解析成（imgqa 从未构建 → modmap 缺失）：绝不许读成
+                # 「基线 0，持平」——没数不是零，那是假绿的镜像
+                state = f"未比对：{unparsed} 个 TU 未解析"
+            else:
+                delta = cur - allowed
+                trend = ("持平" if delta == 0 else
+                         f"上升 {delta}" if delta > 0 else f"可下调 {-delta}")
+                state = (f"基线 {allowed}，{trend}"
+                         + (f"，未解析 {unparsed}（未比对）" if unparsed else ""))
+            label = "、".join(p.rstrip("/") for p in TOOL_UNIT_PREFIXES)
+            print(f"[style-check] 工具侧（{label}）: "
+                  f"{len(tool_warnings)} 警告{err_note_tool} / {tool_total} 个 TU"
+                  f"（{state}）")
+            if unparsed:
+                print("[style-check] 工具侧提示: 未解析 = imgqa 的 .modmap 尚未生成"
+                      "（编译命令里没有 -fmodule-file，但 bmi_ready 要 @response 文件在）"
+                      "——跑 just build-tools 后即生效")
     if run_doc:
         print(f"[doc-check] 汇总: {len(doc_warnings)} 警告 / {doc_checked} 声明已检查"
               f"（{doc_unverified} 行号未验证、{doc_skipped} 接口已声明跳过），"
-              f"{len(units)} 个 .cppm")
-    all_warns = (style_warnings if run_style else []) + \
-                (doc_warnings if run_doc else [])
-    sys.exit(1 if (args.strict and (all_warns or errors)) else 0)
+              f"{rgl_total} 个 .cppm")
+    # --strict 的计数面（**棘轮**，不是"全部警告"）：`just checks --strict` 0 警告是本项目
+    # 历次批次的验收仪式（phase10b/11 多处以此收账）。工具侧一次性纳入时存量 74 条，
+    # 若把它计入，这条仪式从此永久红，往后每条验收都得解释例外——仪式作废比没有仪式更贵。
+    # 故：工具侧**存量**由基线豁免（照常打印，只是不夺非零码），**基线上升/未登记**
+    # （error 级）照样让 --strict 变红——棘轮只挡倒退，不挡历史。
+    # 「可下调」（warning 级）不计数：降了是好事，非零码会惩罚正确的行为。
+    strict_warns = (style_warnings if run_style else []) + (doc_warnings if run_doc else [])
+    if run_style:
+        strict_warns += [w for w in baseline_warnings if w.severity == "error"]
+    sys.exit(1 if (args.strict and (strict_warns or errors or tool_errors)) else 0)
 
 
 if __name__ == "__main__":
