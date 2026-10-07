@@ -271,7 +271,8 @@ static_assert(kSceneDataShadowMatrixOffset == 721696,
  *  - `kSceneDataTaaInputKernelOffset`（vec4, 16B，批 13.8 新增）= x = **输入侧 un-jitter 的
  *    重建核选择**（0 双线性 = 默认 / 1 CR 4×4 / 2 Lanczos3 6×6），yzw 保留。
  *  - `kSceneDataTaaClipControlOffset`（vec4, 16B，批 13.11 新增）= (x = **历史裁剪消融门**,
- *    y = 软裁剪 λ)，zw 保留；0 = 逐位今天。
+ *    y = 软裁剪 λ, z = **臂 10 的短窗端点**（常量 1.0；批 13.14b 起不再 = `taa.feedback`，
+ *    否则与 `taaParams.x` 同值 ⟹ 臂 10 退化成臂 8，见债-66）, w 保留)；0 = 逐位今天。
  * 消费端 = taa.frag.slang / tonemap.frag.slang 字面量（两侧 static_assert 钉死同步）。 */
 export inline constexpr uint32_t kSceneDataTaaOffset = kSceneDataEvssmConstOffset + 16u;
 export inline constexpr uint32_t kSceneDataTaaMotionOffset = kSceneDataTaaOffset + 64u;
