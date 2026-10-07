@@ -558,12 +558,26 @@ int cmdCheck()
 {
     // 判据一律 advisory：这里打印的两样（容差理由 + guard 出处）**就是**它的可信度凭据，
     // 每条都有、由 imgqa selftest 强制（晋升机制已删，理由 → docs/还债总账.md 债-08）。
-    std::printf("判据注册表（共 %zu 条，一律 advisory）：\n\n", registeredJudgments().size());
-    for (const auto& j : registeredJudgments()) {
-        std::printf("  %s\n", j.name);
-        std::printf("             容差理由：%s\n", j.whyTol);
-        for (const auto& g : j.guards)
-            std::printf("             钉住：%s\n", g.c_str());
+    //
+    // **按族分组，不留扁平输出**：族 = 成立条件的分组。静止机位族与运动族的比值口径不同
+    // （前者要求平均视点恒定），扁平清单正好把"这条判据能不能和那条比数"这件事藏起来。
+    const auto& all = registeredJudgments();
+    std::printf("判据注册表（共 %zu 条，一律 advisory，按族分组）：\n", all.size());
+    for (const auto family : {JudgmentFamily::Foundation, JudgmentFamily::TemporalStatic,
+                            JudgmentFamily::TemporalMotion, JudgmentFamily::Attachment}) {
+        size_t count = 0;
+        for (const auto& j : all)
+            count += j.family == family;
+        std::printf("\n══ %s（%zu 条）\n   成立条件：%s\n\n", judgmentFamilyTitle(family), count,
+            judgmentFamilyCondition(family));
+        for (const auto& j : all) {
+            if (j.family != family)
+                continue;
+            std::printf("  %s\n", j.name);
+            std::printf("             容差理由：%s\n", j.whyTol);
+            for (const auto& g : j.guards)
+                std::printf("             钉住：%s\n", g.c_str());
+        }
     }
     std::printf("\n（本命令只列注册表；实际求值需要引擎，见 attribution / faces / switch）\n");
     return 0;

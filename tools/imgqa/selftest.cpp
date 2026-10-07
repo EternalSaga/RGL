@@ -194,6 +194,34 @@ bool hasBacktickedName(const char* s)
     return false;
 }
 
+/// 族拆分的护栏：拆表最容易出的三种事故（掉条目 / 复制粘贴出重名 / 全塞一族）。
+void testJudgmentFamilies(Checker& c)
+{
+    const auto& all = registeredJudgments();
+    // 43 是**当前**条数，写死它才有牙：族拆分/合并时漏接一个子表，这里立刻红。
+    c.chk("判据总数 == 43（族拆分最容易掉条目）", all.size() == 43, std::to_string(all.size()));
+    size_t n[4] = {0, 0, 0, 0};
+    for (const auto& j : all) {
+        switch (j.family) {
+            case JudgmentFamily::Foundation: ++n[0]; break;
+            case JudgmentFamily::TemporalStatic: ++n[1]; break;
+            case JudgmentFamily::TemporalMotion: ++n[2]; break;
+            case JudgmentFamily::Attachment: ++n[3]; break;
+        }
+    }
+    const std::string detail
+        = "地基" + std::to_string(n[0]) + " 静止" + std::to_string(n[1]) + " 运动"
+        + std::to_string(n[2]) + " 附件" + std::to_string(n[3]);
+    // 编译器管"漏填族"（const char* 转不进 enum），这条管"族字段白加"——全塞一族。
+    c.chk("四个族都非空（全塞一族 = 族字段是装饰）",
+        n[0] > 0 && n[1] > 0 && n[2] > 0 && n[3] > 0, detail);
+    std::set<std::string> names;
+    for (const auto& j : all)
+        names.insert(j.name);
+    c.chk("判据名全局唯一（防拆分时复制粘贴出重复条目）", names.size() == all.size(),
+        std::to_string(names.size()) + " 个唯一名 / " + std::to_string(all.size()) + " 条");
+}
+
 void testAntiPatterns(Checker& c)
 {
     // 反模式登记必须是**带作用域的结构化登记**，不是一段散文。三格各有机器判据：
@@ -1414,6 +1442,7 @@ int cmdSelftest()
     testClusters(c);
     testAnalytic(c);
     testRegistry(c);
+    testJudgmentFamilies(c);
     testAntiPatterns(c);
     testTemporalDiff(c);
     testAaCoverage(c);

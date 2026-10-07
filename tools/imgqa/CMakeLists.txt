@@ -20,6 +20,11 @@ add_executable(imgqa
     engine.cpp
     image.cpp
     judge.cpp
+    # 判据契约表（批次 C3）：按族拆两个 TU + judgments_table.h 声明。拆文件是护栏逼的
+    # （表体 558 代码行 > 单文件 500；TemporalStatic 198 / TemporalMotion 269 > 单函数 120），
+    # 族 = 成立条件分组，拼接顺序只在 judgments_table.cpp 的 registeredJudgments()。
+    judgments_table.cpp
+    judgments_table_motion.cpp
     selftest.cpp
     temporal.cpp
     temporal_residual.cpp

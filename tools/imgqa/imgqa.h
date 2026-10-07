@@ -424,13 +424,27 @@ struct Verdict {
     [[nodiscard]] std::string line() const;
 };
 
-/// 判据元信息注册表（check 子命令打印用；求值函数在 commands.cpp 直接调用）。
+/// 判据族 = **成立条件的分组**，不是主题分类。扁平清单让"这条判据属于哪一族、它的成立
+/// 条件是什么"只能靠读 564 行散文；而两族时域判据的比值口径根本不同（见下面 condition）。
+enum class JudgmentFamily {
+    Foundation,      ///< 地基：可见集 / 闭式解 / 确定性 / 影响域 / 影场不变量
+    TemporalStatic,  ///< 静止机位 + jitter：要求**平均视点恒定**，比值才是时域累积的增益
+    TemporalMotion,  ///< 运动 / 残余 / 鬼影 / feedback：视点真的在动，比值口径与上一族不同
+    Attachment,      ///< 附件消费域：IZB / AO「这张附件被谁消费」
+};
+
+/// 判据元信息注册表（check 子命令按族分组打印用；求值函数在 commands.cpp 直接调用）。
 struct JudgmentInfo {
     const char* name;
+    JudgmentFamily family;               ///< 排第 2 位且无默认值：漏填 → const char* 转不进 enum → 编译失败
     const char* whyTol;                  // 每条必填（>20 字符的**理由**，selftest 强制）
     std::vector<std::string> guards;     // 每条至少一条真实 bug/变异出处（selftest 强制）
 };
 [[nodiscard]] const std::vector<JudgmentInfo>& registeredJudgments();
+
+/// 族的中文标题 / **成立条件**（`imgqa check` 分组输出的口径单一真相源，在 judgments_table.cpp）。
+[[nodiscard]] const char* judgmentFamilyTitle(JudgmentFamily family);
+[[nodiscard]] const char* judgmentFamilyCondition(JudgmentFamily family);
 
 // 具体判据（实现分散，声明集中）：
 [[nodiscard]] Verdict judgeVisibility(const Frame& f, const Attribution& at,
