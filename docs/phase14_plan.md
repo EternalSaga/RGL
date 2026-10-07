@@ -429,7 +429,7 @@ view 时 format/aspect **全取自我们填的 `FfxResourceDescription`**（`ffx
    编舞」在 FSR 这一侧的粒度就是**一整块**：我们只能决定它插在命令缓冲的哪个位置、外面包什么
    barrier，**不能**挑它内部 pass 的顺序或插自己的命令进去。
 2. **`RenderTargetCache` 建的图不能当 FSR 的输出**：RT 缓存的 usage =
-   `ColorAttachment|TransferSrc|TransferDst|Sampled`（`render_target_cache_impl.cppm:143-146`），
+   `ColorAttachment|TransferSrc|TransferDst|Sampled`（`render_target_cache.cppm:141-146`），
    **没有 `STORAGE`**；而 FSR 的 output 落 `uavResources`（`writeonly image2D`）⟹ 必须自己建图。
    ⚠ 别照抄 `ensureVelocitySlot`。
 3. **`ffx_fsr3upscaler_vk` target 已存在**（STATIC，`third_party/fsr/CMakeLists.txt:27`，
@@ -463,6 +463,56 @@ view 时 format/aspect **全取自我们填的 `FfxResourceDescription`**（`ffx
    {`FVELOCITYFACTOR`, `FREACTIVENESSSCALE`, `FSHADINGCHANGESCALE`, `FACCUMULATIONADDEDPERFRAME`,
    `FMINDISOCCLUSIONACCUMULATION`}（`ffx_fsr3upscaler.h:176-183`），写入 API
    `ffxFsr3UpscalerSetConstant`（`:587`）。批 14.6 的"调参"目前**没有任何现成接线**可改。
+
+#### 14.5 动手前的两条硬结论（一条翻掉我此前的判断、一条是我方唯一的静默雷）
+
+**① FSR 自己插 layout barrier——不需要手工 sandwich**（此前我读组件层零调用
+`fpResourceBarrier` 就下了「FSR 从不做布局转换」的结论，**错了**：VK 后端在
+`executeGpuJobCompute`（`ffx_vk.cpp:3806`）里**逐绑定点自动排**——texture UAV →
+`UNORDERED_ACCESS`（= `VK_IMAGE_LAYOUT_GENERAL`，`:1068-1069`）、texture SRV →
+`COMPUTE_READ`（= `VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL`，`:1070-1073`），
+经 `addBarrier`（`:1237`）排入、`flushBarriers`（`:1305`）随 job 发出。
+⟹ 契约变成：**SRV 输入要处于 SRO、UAV 输出要处于 GENERAL**，而
+`ffxGetResourceVK(..., state)` 传的 state 是**记账种子**——`addBarrier` 只在
+`currentState != newState` 时发，**种子填错 ⟹ 首个 barrier 被跳过 ⟹ shader 在错误布局下读写**。
+好消息：布局漂移 VVL 抓得到（14.4b 已实测 VVL 维护 per-image last-known layout），
+所以这条不是静默雷，但**种子必须填真实布局**这条纪律要守住。
+
+**② 🔴 挂点处唯一不达标的输入是 velocity RT：它在 `COLOR_ATTACHMENT_OPTIMAL`，不是 SRO。**
+`decorateVelocityPass` 刻意不接任何下游（`render_graph_decorate.cppm:305-311`：只有
+`colorWrite` 输出 + depth `sampleRead` 输入），velocity slot 的最后一条 barrier 就是它自己的
+写 barrier（`newLayout = CAO`），而 `attachmentLayouts` 是**跨帧持久**成员
+（`vkrenderer.cppm:321`）且 velocity 是 offscreen（`frameStartDiscard = false`）
+⟹ 布局**停在 CAO 且下帧继续被当 oldLayout 用**。对照：scene_hdr/taa_out 与深度在挂点**已经**
+是 SRO（tonemap 的 `sampleRead` barrier 在 `vkrenderer_passrec.cppm:482` 已物化；深度由 ao pass
+转 SRO，之后 velocity/taa 的「同布局读→读」不再发 barrier）。
+**两种修法各带一个不报错的雷**：
+
+| 修法 | 雷 |
+|---|---|
+| 图外自己发 CAO→SRO | **必须同时写 `attachmentLayouts[velocitySlot]`**，否则下帧 velocity 写 barrier 的 oldLayout 失配 = 债-72 形态（症状隔一整帧、报错点无辜） |
+| 改图给 tonemap 加 velocity `sampleRead` 输入让编译器发 barrier | **必须 append 在既有 inputs 之后**：`sampledColorName` 取「**首个** sampleRead 色附件」（`render_graph_decorate.cppm:41-46`），而 `decorateTaaPass` 正是用它决定换哪个输入 ⟹ velocity 排前面会让 TAA 去换 velocity。**TAA 关时不报错，TAA 开时静默错渲染** |
+
+**③ 我方接口面（勘察 + 逐条复核，全部有先例或纯增量）**
+- **私有常驻图照抄 `EvssmShadow`**（`evssm_shadow_impl.cppm:139-174`）：`eStorage|eSampled` +
+  `DEDICATED_MEMORY` + 一次性 CB `UNDEFINED→GENERAL` + 此后帧内零转移；**GENERAL 常驻图可以被
+  sampled descriptor 采**（`imgDesc.layout = eGeneral`，`:181`）本项目已在跑——这正好是 FSR
+  要的 UAV 布局。分配入口 `Resources::getAllocator().createImage(...)`（`vkresources.cppm:298`）。
+  持有位置 = `Renderer` 的 `unique_ptr` 成员，首帧 `*PreFrame()` 懒构造 + 构造前 `waitIdle()`
+  （`vkrenderer_offgraph.cppm:110-136`）。⚠ 别照抄 `ensureVelocitySlot`（走 RT 缓存，无 STORAGE）。
+- **exposure 图不存在，纯新增**：曝光在本项目是 scene data 偏移 56 的**标量**
+  （`scene_data.cppm:46` → `tonemap.frag.slang:57-60` 的 `asfloat(sceneData.Load(56))`），
+  全仓 `eR32Sfloat` 只在格式词表出现过一次。FSR 要的 1×1 R32_FLOAT 图 = 建图 + 每帧搬标量，无先例。
+- **`cameraNear/cameraFar` 必须取 `ViewProjection::nearPlane/farPlane`**
+  （`scene_context.cppm:589-590`），**不能取 `Camera::nearPlane/farPlane`**——
+  `projectionSystem` 做自适应 near/far（按场景包围球）并把**实际生效值写回** ViewProjection
+  （`ecs_impl.cppm:349-363`，注释原文「外部若直接拿 camera 的会切错分界」）。
+  `cameraFovAngleVertical` = `Camera::fov`，**弧度**（`camera.cppm:49`，`GLM_FORCE_RADIANS`）。
+- **门放 `runtime.lua`**（与 `velocity_field` 同形，7 处链路照抄 `velocity_field`）：
+  runtime.lua 的门**不在 gate_lint 覆盖面内**（`gate_lint_impl.cppm` 里 velocity/taa/render_scale
+  零命中）⟹ 零 lint 改动。放 diagnostics.lua 则要四处同步 + 把两个测试里的 `38u` 改 `39u`。
+  「FSR 依赖 velocity」的现成表达 = 新增 `fsrDecorated` 标志，判据取**实际图形态**
+  （`门开 && velocityDecorated`），**别拿配置键当判据**（AO 施加点的先例，`main_scene.cppm:437-441`）。
 
 #### 落点（勘察 + 复核后的结论，动手时照此）
 
