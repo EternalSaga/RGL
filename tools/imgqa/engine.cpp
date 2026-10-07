@@ -233,9 +233,6 @@ void rewriteTaaBlock(std::string& scene, const ProfileOpts& o)
     blk << "    taa = {\n        enabled = " << lb(o.taa) << ",\n        feedback = "
         << std::setprecision(6) << o.taaFeedback << ",\n        jitter_scale = "
         << o.taaJitterScale << ",\n        base_space = " << lb(o.taaBaseSpace);
-    if (o.taaStaticBoost)
-        blk << ",\n        static_boost = true,\n        static_feedback = "
-            << o.taaStaticFeedback;
     // 消融/诊断开关：默认态 = 不写键（键越少漂移面越小）。
     // motion_compensation 只关 prevSpin 场景旋转补偿（spin 模式 M3 用）；reprojection 关的是
     // prevViewProj 相机重投影本身（相机模式 M3 用）——两者在相机运动下**不等价**，
@@ -522,8 +519,7 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
     const std::string entities = o.entitiesLua.empty()
         ? "    entities = { { type = \"model\", file = \"models/" + o.glb + "\" } },\n"
         : "    entities = { " + o.entitiesLua + " },\n";
-    // TAA 段（批 12.6）：enabled + feedback + jitter_scale（+ 批 13.2 base_space，
-    // + 批 13.7 static_boost/static_feedback——仅置位时写，键越少漂移面越小），
+    // TAA 段（批 12.6）：enabled + feedback + jitter_scale + base_space（批 13.2），
     // 其余走引擎默认（运动补偿开）——写出来的键越少，漂移面越小。两个消融开关各有用途：
     // jitter_scale=0 = 只留时域累积；feedback=1 = 只抖不滤（输出 = 本帧，temporal 的阳性
     // 锚点组。别写 0——0 是「只要裁剪后的历史、完全丢本帧」的退化反馈环，测出来的不是
@@ -532,10 +528,6 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
         ? "    taa = { enabled = true, feedback = " + std::to_string(o.taaFeedback)
               + ", jitter_scale = " + std::to_string(o.taaJitterScale)
               + ", base_space = " + lb(o.taaBaseSpace)
-              + (o.taaStaticBoost
-                     ? ", static_boost = true, static_feedback = "
-                           + std::to_string(o.taaStaticFeedback)
-                     : "")
               // 输入侧重建核（批 13.8）：0 = 双线性 = 引擎默认 = 不写键
               + (o.taaInputKernel != 0.0
                      ? ", input_kernel = " + std::to_string(o.taaInputKernel)

@@ -29,12 +29,16 @@ namespace RGL::imgqa {
 /// 运动族 · 残余（6 条）：相位折叠 / 锚点 / 抖动关断 / 幅度 / 单调 / 收敛。
 [[nodiscard]] const std::vector<JudgmentInfo>& temporalResidualJudgments();
 
-/// 运动族 · 鬼影尾长与 static boost（8 条）：boost 保真 / 运动激励 / 对齐 / 消融 / 尾配对 /
-/// 尾事件 / 盒载荷 / 尾单调。
+/// 运动族 · 鬼影尾长与长短窗（4 条）：窗抑制保真 / 运动激励 / 对齐 / 消融。
 [[nodiscard]] const std::vector<JudgmentInfo>& temporalTailBoostJudgments();
 
-/// 运动族 · **机位运动**稳态份额（批 13.14a，3 条）：闭式刻度 / 静止塌缩 / gate 断点。
-/// 与上面那族的差别 = 成立条件不同（spin 下臂 11 的 `gate` 恒 1.0，进不了斜坡区）。
+/// 运动族 · 尾长仪器护栏（4 条）：尾零锚 / 尾事件 / 盒载荷 / 尾单调。
+/// 四条全绿只说明「尺子有
+/// 力气」，**不**构成画质结论（每条正文末尾各写着这句）。
+[[nodiscard]] const std::vector<JudgmentInfo>& temporalTailGuardJudgments();
+
+/// 运动族 · **机位运动**稳态份额（批 13.14a，4 条）：φ 符号标定 / α 非劣性 / 静止塌缩 /
+/// gate 断点。与上面两族的差别 = 成立条件不同（spin 下臂 11 的 `gate` 恒 1.0，进不了斜坡区）。
 [[nodiscard]] const std::vector<JudgmentInfo>& temporalTailCameraJudgments();
 
 /// 运动族 · feedback 与闭式回扣（5 条）：参数活性 / 零态 / 回扣 / 闪烁闭式 / 单应解释。

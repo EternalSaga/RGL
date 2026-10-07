@@ -669,14 +669,13 @@ int dispatchTemporal(const std::string& cmd, const Args& P)
     if (cmd == "temporal-residual")
         return cmdTemporalResidual(P.integer("--periods"), P.number("--warm-multiplier"),
             P.get("--variant"), P.number("--slow-feedback"), P.has("--skip-slow"),
-            P.has("--base-space"), P.number("--static-boost"), P.has("--bistro"),
-            P.get("--camera"), P.number("--boost-floor"), P.has("--diag-bs-off"),
-            P.has("--reject"), P.has("--clip-abl"), P.number("--clip"),
-            P.number("--clip-soft"));
+            P.has("--base-space"), P.has("--long-feedback"), P.has("--bistro"), P.get("--camera"),
+            P.number("--long-feedback"), P.has("--diag-bs-off"), P.has("--reject"),
+            P.has("--clip-abl"), P.number("--clip"), P.number("--clip-soft"));
     if (cmd == "temporal-motion")
         return cmdTemporalMotion(P.get("--camera"), P.get("--motion"), P.number("--angle"),
             P.integer("--burst"), P.integer("--warm"), P.integer("--warm-still"),
-            P.number("--edge-pct"), P.number("--boost"), P.number("--clip"),
+            P.number("--edge-pct"), P.number("--long-feedback"), P.number("--clip"),
             P.number("--clip-soft"));
     if (cmd == "temporal-tail")
         return dispatchTemporalTail(P);

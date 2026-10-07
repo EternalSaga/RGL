@@ -278,9 +278,8 @@ struct Spec {
     /// 批 13.9 唯一消费者 = `temporal-motion` 的 REFm（分带尺子必须来自**参考图**，理由见文件头
     /// 「批 13.9」段）。默认 false = 一字节不多算 = 其余组与 `temporal-feedback` 逐位今天。
     bool wantBytes = false;
-    /// 批 13.11：>0 = 开 `taa.static_boost`（地板 = **本帧权重**）。默认 0 = 不写键 = 交付态。
-    /// spin 模式下相机静止 ⟹ boost 真生效 ⟹ 进入 债-49 风险区（静止机位 + 场景内运动 + 长窗）。
-    double staticBoostFloor = 0.0;
+    // 批 13.11 曾有 `staticBoostFloor`（`static_boost` 地板）；批 13.14b 删 boost 后长窗档
+    // 直接写 `feedback`（= 下面的 feedback 字段本身），字段随之删除。
     /// 批 13.11 **历史裁剪消融臂**（`taa.clip_mode` / `taa.clip_soft`）。默认 0 = 不写键 = 交付态。
     /// 语义 → `rgl/scene_data.cppm` kSceneDataTaaClipControlOffset。
     double clipMode = 0.0;
@@ -410,10 +409,9 @@ Group collectGroup(const std::string& dir, const std::string& name, const std::s
     o.taaDiagReject = sp.diagReject;
     o.taaInputKernel = sp.kernel;  // 批 13.8 输入侧重建核（0 = 不写键 = 已发表口径）
     // 批 13.11 鬼影 × 裁剪消融（默认全关 = 不写键 = 已发表 M0…M4 读数逐位不变）。
-    // ⚠ 全部以 `o.taa` 为条件：TAA 关的组（M0/REFm/REFs）没有历史，写这些键是空操作，
+    // ⚠ clip 两键以 `o.taa` 为条件：TAA 关的组（M0/REFm/REFs）没有历史，写这些键是空操作，
     //   但会让「参考组 = 交付配置原样」这条自证失效 ⟹ 一个字节都不多写。
-    o.taaStaticBoost = o.taa && sp.staticBoostFloor > 0.0;
-    o.taaStaticFeedback = sp.staticBoostFloor;
+    //   （长窗档不再有独立键：批 13.14b 删 static boost 后它 = `sp.feedback` 本身。）
     o.taaClipMode = o.taa ? sp.clipMode : 0.0;
     o.taaClipSoft = sp.clipSoft;
     if (sp.cameraMotion)
@@ -992,8 +990,8 @@ std::string reportMovingBandsAgainstReference(const Group& ref, const cv::Mat& g
 }  // namespace
 
 int cmdTemporalMotion(const std::string& cameraName, const std::string& motion,
-    double angleDeg, int burst, int warm, int warmStill, double edgePercentile, double boostFloor,
-    double clipMode, double clipSoft)
+    double angleDeg, int burst, int warm, int warmStill, double edgePercentile,
+    double longFeedback, double clipMode, double clipSoft)
 {
     const BistroCam* cam = nullptr;
     for (const auto& c : kBistroCams)
@@ -1038,14 +1036,14 @@ int cmdTemporalMotion(const std::string& cameraName, const std::string& motion,
         std::printf("  M3 = motion_compensation=false（关 prevSpin 场景旋转补偿）\n"
                     "  ⚠ spin 转**场景**、相机不动 ⟹ prevViewProj 恒定 ⟹ 相机重投影路不被走到\n\n");
     // 批 13.11 消融开关回显（默认全关时**不打**——已发表读数的输出文本也要逐字不变）
-    if (boostFloor > 0.0 || clipMode != 0.0) {
-        const std::string floorTxt =
-            boostFloor > 0.0 ? std::to_string(boostFloor) : std::string("关");
-        std::printf("  ⚠ 消融开关：static_boost 地板 = %s（本帧权重）· clip_mode = %g\n"
-                    "     spin 下相机静止 ⟹ boost **真生效** ⟹ 这就是 债-49 风险区（静止机位 +\n"
+    if (longFeedback > 0.0 || clipMode != 0.0) {
+        const std::string longTxt =
+            longFeedback > 0.0 ? std::to_string(longFeedback) : std::string("关（沿用 .12）");
+        std::printf("  ⚠ 消融开关：长窗档 α（覆写 feedback）= %s · clip_mode = %g\n"
+                    "     spin 下相机静止 ⟹ 长窗**全程生效** ⟹ 这就是 债-49 风险区（静止机位 +\n"
                     "     场景内运动 + 长窗）。跨臂读 dev(M1)/dev(M0)：关盒（臂 1）不显著变差\n"
                     "     = 邻域盒在鬼影上**没承重**，就不必为它付静止闪烁的代价。\n",
-            floorTxt.c_str(), clipMode);
+            longTxt.c_str(), clipMode);
     }
 
     // ── 采集（每组一个进程；串行，单实例纪律）────────────────────────────────
@@ -1065,8 +1063,10 @@ int cmdTemporalMotion(const std::string& cameraName, const std::string& motion,
     m1.taa = true;
     // 批 13.11 鬼影 × 裁剪消融：只给 **TAA 开**的组设（m2/m3/m3x/m4/m1m/m4m 全由 m1 复制派生
     // ⟹ 一处生效全覆盖）。TAA 关的组（M0/REFm/REFs）没有历史，臂对它们是空操作。
-    // 默认（0 / 0）= 不写键 = 交付态 = 已发表 M0…M4 读数逐位不变。
-    m1.staticBoostFloor = boostFloor;
+    // 默认（0 / 0）= 不覆写不写键 = 交付态 = 已发表 M0…M4 读数逐位不变。
+    // 长窗档 = **覆写 feedback**（批 13.14b 删 static boost 后 α 恒 = feedback，没有第二个旋钮）。
+    if (longFeedback > 0.0)
+        m1.feedback = longFeedback;
     m1.clipMode = clipMode;
     m1.clipSoft = clipSoft;
     Spec m2 = m1;
@@ -1165,7 +1165,7 @@ int cmdTemporalMotion(const std::string& cameraName, const std::string& motion,
         echoMask("M1", rsM1);
         echoMask("M4", rsM4);
         std::printf("  ⚠ 读法：M1 的边缘像素若大多住在「盒拒收」桶 ⟹ 历史根本没进混合，"
-                    "α（feedback/static_boost）调多小都没用——「窗棂残余」与「相机运动失效」同判\n");
+                    "α（= feedback）调多小都没用——「窗棂残余」与「相机运动失效」同判\n");
     }
 
     // ── 区域与阈值（口径来自 REF，不来自候选 ⟹ 各候选共用一把尺子）──────────
@@ -1435,11 +1435,11 @@ int cmdTemporalMotion(const std::string& cameraName, const std::string& motion,
 //
 // ## 顺带：静止态窗棂残余是不是同一个根
 //
-// 静止态 boost 后 frac(swing>τ) 仍有 1.61%。若判成 ③，两者很可能是同一个根（窗棂 =
+// 静止态长窗（α=0.01）后 frac(swing>τ) 仍有 1.61%。若判成 ③，两者很可能是同一个根（窗棂 =
 // 亚像素细结构，对抖动相位最敏感）。对照 = 静止态也扫 fb（0.02/0.12/0.5/1），看 swing 随 fb 的
 // **方向与幅度**是否与运动态同比例：同比例 ⟹ 支持统一解释；反向或幅度差一个量级 ⟹ 否证。
 // 0.5 也在静止档里：交付建议若是「运动态把 fb 抬到 0.5」，必须能回答「静止态会不会被一起抬」
-// ——fb 是同一个字段，不 gate 住就一起被抬，而静止态的窗棂恰恰靠**长窗**（static_feedback=0.01）压。
+// ——fb 是同一个字段，不 gate 住就一起被抬，而静止态的窗棂恰恰靠**长窗**（feedback=0.01）压。
 // swing 口径 = `phaseSwingStat`（同 `temporal-residual --bistro` 的 N1/N2；τ 由静止组自己
 // 定、各组共用，与运动表的 τ 是两个数，别混读）。
 //
@@ -1590,7 +1590,7 @@ int cmdTemporalFeedback(const std::string& cameraName, double angleDeg, int burs
     std::vector<std::pair<double, Group*>> still;
     Group* probeHost = nullptr;  // 同进程 /param A/B 探针的宿主（必须是静止 + js>0 组）
     // 静止档里带上 0.5 = 运动态的带内最优：交付建议若是「运动态把 fb 抬到 0.5」，必须能
-    // 回答「那静止态会不会被搞坏」——静止态的窗棂残余靠**长窗**压（static_feedback=0.01），
+    // 回答「那静止态会不会被搞坏」——静止态的窗棂残余靠**长窗**压（feedback=0.01），
     // 而 fb 是同一个字段，不 gate 住就会一起被抬。
     for (const double fb : {0.02, 0.12, 0.5, 1.0}) {
         Spec s;
@@ -2050,11 +2050,11 @@ int cmdTemporalFeedback(const std::string& cameraName, double angleDeg, int burs
 // ## 判决线（跑前写死，四条 AND；红一条就不许报结论）
 //
 //  1. `temporal-tail-pairing` **零锚点**：Z = TAA 开 + `feedback = 1` + `jitter_scale = 0`。
-//     ⚠⚠ **Z 必须把 `static_boost` 关掉**（首轮实测 frac(Z)=0.199 红，根因就是给它开了 boost）：
-//     boost 的语义是「相机静止时把**本帧权重**压到地板」，而本命令相机**恒静止** ⟹ 开了 boost
-//     就等于把 `feedback = 1` **整个覆盖掉**（α 实际 = 0.01，一百帧窗）。
-//     ⟹ 通用红线：**任何想用 `feedback` 定义「无历史 / 短历史」的实验都必须显式关 boost**，
-//        否则改的是没人读的那个键（债-55 同型：读数在，读的是别的量）。
+//     ⚠⚠ **Z 的 α 必须真的 = 1**（历史红线，批 13.14b 前踩过：首轮实测 frac(Z)=0.199 红，
+//     根因是当年那个 static boost 机制把「相机静止时的**本帧权重**」压到地板，而本命令相机
+//     **恒静止** ⟹ `feedback = 1` 被整个覆盖（α 实际 = 地板值，一百帧窗）。机制已删，
+//     红线随之结案；留话防复发：**任何用 `feedback` 定义「无历史 / 短历史」的实验，都要先
+//     确认没有第二个旋钮在覆写 α**（债-55 同型：读数在，读的是别的量）。
 //     α=1 ⟹ `lerp(·, cur, 1) ≡ cur`；抖动 0 ⟹ `baseUv ≡ input.uv` ⟹ 采样是恒等映射
 //     ⟹ Z 与参考只差一次 Reinhard 往返（<1e-3）。**线：frac(Z) ≤ 0.02**。
 //     为什么这条最硬：配对错开一帧 ⟹ spin 已把内容搬走 ⟹ frac 立刻跳到 0.3+ 量级。
@@ -2062,10 +2062,10 @@ int cmdTemporalFeedback(const std::string& cameraName, double angleDeg, int burs
 //  2. `temporal-tail-events` **在场性 + 反向**：spin 组让开事件数 ≥ 2000（太少 ⟹ frac 是噪声）；
 //     反向 = 把**静止**参考（spin=0）自己配自己喂进同一个算子，事件数**必须 ≤ 20**
 //     ——检测器在静止内容上点火 = 它检测的是噪声不是让开，整张表作废。
-//  3. `temporal-tail-box-load` **阳性锚点**：同 boost 下**关盒（臂 1）frac 必须 > 臂 0**。
+//  3. `temporal-tail-box-load` **阳性锚点**：同窗档下**关盒（臂 1）frac 必须 > 臂 0**。
 //     不成立 ⟹ 邻域盒在鬼影上**没承重** ⟹ 整个臂族「为压鬼影而牺牲闪烁」的前提被推翻，
 //     那时正确处置是**关盒**而不是继续修盒。这是本判据最想要的那种红。
-//  4. `temporal-tail-monotone` **量具有力气**：关盒态下把 α 从 0.12 推到 boost 0.01
+//  4. `temporal-tail-monotone` **量具有力气**：关盒态下把 α 从短窗 0.12 推到长窗 0.01
 //     （唯一变量 = 窗长）frac 必须**上升**（闭式：1−α 从 0.88 → 0.99）。
 //     不升 ⟹ frac 量的不是历史长度，四条判据全绿也不许报「臂间差异」。
 //
@@ -2208,30 +2208,28 @@ int cmdTemporalTail(const std::string& cameraName, double angleDeg, int burst, i
     struct Arm {
         const char* tag;
         double clip;
-        double feedback;
-        double boost;   ///< 0 = 不开 static_boost（α = feedback）
+        double feedback; ///< 生效 α 就是它（批 13.14b 删掉第二个旋钮之后）
         bool taa;
         double jitter;
         const char* role;
     };
     const Arm arms[] = {
-        {"Z", 0.0, 1.0, 0.0, true, 0.0, "零锚点（α=1 + 无抖动 ⟹ 应 ≡ 参考）"},
-        {"B12", 1.0, 0.12, 0.0, true, 1.0, "关盒 + 短窗（单调性低端，α=0.12）"},
-        {"A1", 1.0, 0.12, 0.01, true, 1.0, "关盒 + boost（阳性锚点的坏端）"},
-        {"A0", 0.0, 0.12, 0.01, true, 1.0, "现行盒 + boost"},
-        {"A8", 8.0, 0.12, 0.01, true, 1.0, "臂 8 + boost"},
-        {"A10", 10.0, 0.12, 0.01, true, 1.0, "臂 10 + boost"},
-        {"A11", 11.0, 0.12, 0.01, true, 1.0, "臂 11（记忆挂重投影位移）+ boost"},
+        {"Z", 0.0, 1.0, true, 0.0, "零锚点（α=1 + 无抖动 ⟹ 应 ≡ 参考）"},
+        {"B12", 1.0, 0.12, true, 1.0, "关盒 + 短窗（单调性低端，α=0.12）"},
+        {"A1", 1.0, 0.01, true, 1.0, "关盒 + 长窗（阳性锚点的坏端）"},
+        {"A0", 0.0, 0.01, true, 1.0, "现行盒 + 长窗"},
+        {"A8", 8.0, 0.01, true, 1.0, "臂 8 + 长窗"},
+        {"A10", 10.0, 0.01, true, 1.0, "臂 10 + 长窗"},
+        {"A11", 11.0, 0.01, true, 1.0, "臂 11（记忆挂重投影位移）+ 长窗"},
     };
 
-    auto collect = [&](const std::string& sub, bool taa, double fb, double jitter, double boost,
-                           double clip, double spinAngle, int w) {
+    auto collect = [&](const std::string& sub, bool taa, double fb, double jitter, double clip,
+                           double spinAngle, int w) {
         Spec sp;
         sp.taa = taa;
         sp.feedback = fb;
         sp.jitterScale = jitter;
         sp.baseSpace = true;
-        sp.staticBoostFloor = boost;
         sp.clipMode = clip;
         sp.cameraMotion = false;  // 场景 spin，相机不动
         sp.motionAngle = spinAngle;
@@ -2240,7 +2238,7 @@ int cmdTemporalTail(const std::string& cameraName, double angleDeg, int burst, i
     };
 
     std::printf("── 采集（串行，单实例纪律）──\n");
-    Group ref = collect("REF", false, 0.12, 0.0, 0.0, 0.0, angle, warm);
+    Group ref = collect("REF", false, 0.12, 0.0, 0.0, angle, warm);
     std::printf("  REF  帧号 [%u, %u)  尺寸 %dx%d\n", ref.framePre, ref.framePost, ref.frameSize.width,
         ref.frameSize.height);
 
@@ -2260,9 +2258,9 @@ int cmdTemporalTail(const std::string& cameraName, double angleDeg, int burst, i
     std::vector<std::vector<TailRow>> table(std::size(taus));
     TailRow zero, boxOff, curBox, monoLo, monoHi;
     for (const Arm& a : arms) {
-        Group g = collect(a.tag, a.taa, a.feedback, a.jitter, a.boost, a.clip, angle, warm);
-        std::printf("  %-4s 帧号 [%u, %u)  clip=%g fb=%g boost=%g jitter=%g\n", a.tag, g.framePre,
-            g.framePost, a.clip, a.feedback, a.boost, a.jitter);
+        Group g = collect(a.tag, a.taa, a.feedback, a.jitter, a.clip, angle, warm);
+        std::printf("  %-4s 帧号 [%u, %u)  clip=%g fb=%g jitter=%g\n", a.tag, g.framePre,
+            g.framePost, a.clip, a.feedback, a.jitter);
         for (size_t ti = 0; ti < std::size(taus); ++ti) {
             TailRow r = measureTail(a.tag, a.clip, ref, g, masks[ti], maxLag, jlo, jhi);
             if (taus[ti] == tau) {  // 主档留判决用的行
@@ -2277,7 +2275,7 @@ int cmdTemporalTail(const std::string& cameraName, double angleDeg, int burst, i
     }  // g 在此析构 ⟹ 同时最多驻留「参考 + 一个臂」（720p double × burst 很吃内存）
 
     // ── 反向用例：静止参考自配自 ⟹ 检测器不许点火 ──────────────────────────
-    Group refs = collect("REFs", false, 0.12, 0.0, 0.0, 0.0, 0.0, warm);
+    Group refs = collect("REFs", false, 0.12, 0.0, 0.0, 0.0, warm);
     auto revMasks = revealMasks(refs, tau, maxLag);
     TailRow rev = measureTail("REV", 0.0, refs, refs, revMasks, maxLag, jlo, jhi);
 
@@ -2323,7 +2321,7 @@ int cmdTemporalTail(const std::string& cameraName, double angleDeg, int burst, i
             + "（不成立 = 盒在鬼影上没承重 ⟹ 该关盒，不是继续修盒）"));
     std::cout << "  " << vs.back().line() << "\n";
     vs.push_back(verdictFor("temporal-tail-monotone", monoHi.frac > monoLo.frac,
-        "关盒 α=0.12 frac " + d4(monoLo.frac) + " → boost α=0.01 frac " + d4(monoHi.frac)
+        "关盒 α=0.12 frac " + d4(monoLo.frac) + " → 长窗 α=0.01 frac " + d4(monoHi.frac)
             + "（闭式 0.88 → 0.99；不升 = frac 量的不是历史长度）"));
     std::cout << "  " << vs.back().line() << "\n";
 
@@ -2378,7 +2376,7 @@ int cmdTemporalTail(const std::string& cameraName, double angleDeg, int burst, i
 // ## 判决线（跑前写死，四条 AND；红一条就不许报臂间结论）
 //
 //  1. `temporal-tail-pairing` **零锚点**：Z = TAA 开 + `feedback=1` + `jitter_scale=0`
-//     + **boost 关**。α=1 ⟹ `lerp(·,cur,1) ≡ cur`；抖动 0 ⟹ 采样是恒等映射
+//     α=1 ⟹ `lerp(·,cur,1) ≡ cur`；抖动 0 ⟹ 采样是恒等映射
 //     ⟹ Z 与参考只差一次 Reinhard 往返。**线：frac(Z) ≤ 0.02**。
 //     相机运动下这条**更硬**：配对错一帧 ⟹ yaw 已转过 ⟹ frac 立刻跳。
 //  2. `temporal-tail-smear-closed-form` **闭式锚点**：关盒短窗（B12）frac 必须落在
@@ -2540,7 +2538,6 @@ struct SmearArm {
     const char* tag;
     double clip;
     double feedback;
-    double boost;
     bool taa;
     double jitter;
 };
@@ -2561,6 +2558,13 @@ struct SmearAngle {
     double rawDelta = 0.0;
     /// 与 `rawDelta` **同口径**（内缩区无条件均值）但**带 φ** 的 mean|ref_j − ref_{j−1}∘φ|。
     double alignedDelta = 0.0;
+    /// 🔴 **往返地板** `mean|I − φ⁻¹(φ(I))|`（同口径：内缩区无条件均值）。`temporal-homography`
+    /// 的判据里早就有这一列（"与残差同量级 ⟹ 单看残差会把量具当闪烁"），建这台仪器时**漏抄**，
+    /// 于是 `alignedΔ` 剩下的部分到底是**重采样误差**还是**内容差**无从分辨。
+    /// 判读：`alignedΔ ≈ 往返地板` ⟹ 这条链上**没有可归因的时域残差**，此时任何臂间结论都是在读
+    /// 双线性插值（纯旋转激励下尤其可能——见 `docs/phase13_plan.md` §1.17 结论 6）。
+    /// ⚠ 必须是**往返**：单程 `|I − φ(I)|` 量的是「平移后的边缘差」（≈ `rawDelta`），不是插值误差。
+    double roundtripFloor = 0.0;
     /// **自标定刻度**（按 τ 档）：「恰好过期一帧」的 frac 值
     /// = `Σ mean(Δ², gate) / Σ mean(Δ, gate)`。
     /// 🔴 为什么需要它：Δ 加权份额的分母是 `Σ Δ`，所以「候选 = 过期一帧的参考」给出的
@@ -2585,6 +2589,42 @@ struct SmearAngle {
     cv::Mat inner;                ///< 内缩掩膜
 };
 
+/// 三档 τ 里的**主档**下标（`collectSmearAngle` 固定产出 `{τ/2, τ, τ·2}`）。
+/// 提到文件作用域：主角度组、静态组、gate 组三处都要取同一档，各写一份 `1` 迟早漂。
+constexpr size_t kMainTau = 1;
+
+/// 除零安全的比值。写成函数而不是各处内联三元：这类守卫本该只有一份，而打表函数的
+/// 认知复杂度上限很紧（style-check 点名的是 `printSmearTables`）。
+double safeRatio(double num, double den) { return den > 0.0 ? num / den : 0.0; }
+
+/// 「分母那一整块被搬掉了百分之几」，分母为 0 时给 **0**（不是 100——rawΔ=0 是「画面没动」，
+/// 把它打成「φ 搬掉 100%」会被读成映射完美，方向正好反了）。
+double percentRemoved(double num, double den) { return den > 0.0 ? 100.0 * (1.0 - num / den) : 0.0; }
+
+/// 取主档读数（`oneFrameFrac` 在「所有帧都被内缩掉」的极端 burst 下会空）。默认值给调用方。
+double mainTauValue(const std::vector<double>& v, double fallback)
+{
+    return v.size() > kMainTau ? v[kMainTau] : fallback;
+}
+
+/// 往返地板 `mean|I − φ⁻¹(φ(I))|`（口径与 `rawDelta`/`alignedDelta` 一致：内缩区无条件均值）。
+/// 抽成独立函数的理由：① `collectSmearAngle` 只管编排（style-check 的认知复杂度上限）；
+/// ② 这一列从此可以脱离主表被单独复用（例如给 `--motion spin` 也配一把同样的插值尺子）。
+double roundtripFloorOf(const Group& ref, const YawMap& fwd, const YawMap& back, int jlo, int jhi,
+    const cv::Mat& inner)
+{
+    double rt = 0.0;
+    long n = 0;
+    for (int j = jlo; j <= jhi; ++j) {
+        const cv::Mat& src = ref.luma[static_cast<size_t>(j)];
+        cv::Mat d;
+        cv::absdiff(src, remapWith(remapWith(src, fwd), back), d);
+        rt += cv::mean(d, inner)[0];
+        ++n;
+    }
+    return n > 0 ? rt / static_cast<double>(n) : 0.0;
+}
+
 /**
  * 一档角度的采集 + 三档 τ 测量。**采集只做一次**（τ 只是换权重门）。
  *
@@ -2604,7 +2644,6 @@ SmearAngle collectSmearAngle(const std::string& base, const BistroCam& cam, int 
         sp.feedback = a.feedback;
         sp.jitterScale = a.jitter;
         sp.baseSpace = true;
-        sp.staticBoostFloor = a.boost;
         sp.clipMode = a.clip;
         sp.cameraMotion = true;  // ← 与 spin 版唯一的采集差异：**动的是相机**
         sp.motionAngle = yaw;
@@ -2618,9 +2657,9 @@ SmearAngle collectSmearAngle(const std::string& base, const BistroCam& cam, int 
     groups.reserve(arms.size());
     for (const SmearArm& a : arms) {
         groups.push_back(collect(a, angleRad));
-        std::printf("  %-5s 帧号 [%u, %u)  taa=%d clip=%g fb=%g boost=%g jitter=%g\n", a.tag,
+        std::printf("  %-5s 帧号 [%u, %u)  taa=%d clip=%g fb=%g jitter=%g\n", a.tag,
             groups.back().framePre, groups.back().framePost, static_cast<int>(a.taa), a.clip,
-            a.feedback, a.boost, a.jitter);
+            a.feedback, a.jitter);
     }
     const Group& ref = groups.front();
     if (arms.front().taa)
@@ -2652,6 +2691,12 @@ SmearAngle collectSmearAngle(const std::string& base, const BistroCam& cam, int 
         static_cast<double>(map.mapX.at<float>(sz.height / 2, sz.width / 2)) - sz.width / 2.0,
         static_cast<double>(map.mapY.at<float>(sz.height / 2, sz.width / 2)) - sz.height / 2.0);
     const cv::Mat inner = smearInnerMask(sz, map.maxShiftPx, burst);
+
+    // 往返地板 `|I − φ⁻¹(φ(I))|`（见 `SmearAngle::roundtripFloor`）。用**参考帧**算（与臂无关）
+    // ⟹ 每个角度只算一次。逆映射取 `H.inv()` 而不是再构造一次 `H(−δ)`，是为了让「往返」在数值上
+    // **恰好**是同一个映射的正逆——若哪天 `yawRemapHomography` 不再是群元素，这一列会突然变大，
+    // 本身就是有效哨兵。
+    out.roundtripFloor = roundtripFloorOf(ref, map, buildYawMap(H.inv(), sz), out.jlo, out.jhi, inner);
 
     // ── **配对偏移 = 引擎回显的 yaw 之差 ÷ 实测每帧角**（不是帧计数器之差！）──────────
     // 首轮实测：`framePre` 之差在各臂间是 −12…−1，而绝对偏移宽扫的 argmin 落在 0 附近
@@ -2768,11 +2813,16 @@ void printSmearTables(const std::vector<SmearArm>& arms, const SmearAngle& a, do
     // 读数有单位」。
     if (a.byTau.size() >= 2 && !a.byTau[1].empty()) {
         std::printf("  在场性：rawΔ %.6f（不带 φ）vs alignedΔ %.6f（带 φ）⟹ φ 搬掉 %.1f%%\n",
-            a.rawDelta, a.alignedDelta,
-            a.rawDelta > 0.0 ? 100.0 * (1.0 - a.alignedDelta / a.rawDelta) : 0.0);
+            a.rawDelta, a.alignedDelta, percentRemoved(a.alignedDelta, a.rawDelta));
         std::printf("  ⟹ rawΔ≈0 = 画面没动（`frame_yaw` 没生效）；alignedΔ>rawΔ = φ 比恒等还差\n");
+        // 🔴 往返地板与 alignedΔ 的比值决定**这台仪器在这台机器上有没有东西可量**：≈1 ⟹ alignedΔ
+        //    全是双线性插值误差。`temporal-homography` 的教训原话：「与残差同量级 ⟹ 单看残差会把
+        //    量具当闪烁」。本机位仪器首轮没有这一列，于是「所有臂 ≈ 0.76 帧」被当成鬼影读了三轮。
+        std::printf("  往返地板 |I−φ⁻¹(φ(I))| = %.6f ⟹ alignedΔ 高出地板 %.2f×"
+            "（≈1 ⟹ 剩下的全是重采样误差，**无可归因时域残差**，臂间结论 = 读插值）\n",
+            a.roundtripFloor, safeRatio(a.alignedDelta, a.roundtripFloor));
         std::printf("  刻度：「恰好过期一帧」≡ %.6f ⟹ 下表「几帧」列 = frac ÷ 它 = **相当于几帧过期历史**\n",
-            a.oneFrameFrac.size() > 1 ? a.oneFrameFrac[1] : 0.0);
+            mainTauValue(a.oneFrameFrac, 0.0));
     }
     std::printf("  %-5s %10s %12s %10s %12s %12s %14s\n", "臂", "clip", "frac", "几帧", "meanΔ",
         "meanResid", "样本数");
@@ -2904,6 +2954,61 @@ double printSmearPhiCalibration(const SmearAngle& a, double mapAngleRad)
 }  // namespace
 
 /**
+ * δ=0 反向组（**借主角度的 φ**）的采集 + 「运动归因」表。
+ *
+ * 🔴 **必须与主角度组同臂**（本轮补 B12/B01）。理由：无条件残差里有一块与运动无关的
+ * **jitter 相位平均模糊**，而它**随窗长增长**（窗越长平均得越糊）——实测 `meanResid` 从
+ * B12 的 0.0288 涨到 B01 的 0.0430（+49%），而同一时间 Δ 加权口径只涨 7%。⟹ 不**逐臂**减掉
+ * 「同臂 δ=0」就把**模糊**当成了**鬼影**。只放 A0 的旧版能出地板，但减不了 B 族，于是 α 轴
+ * 完全没法归因（这正是 `1−α` 那条线在两个角度都被证伪的机制）。
+ * ⚠ 查找按 **tag** 不按位置：加臂时位置索引会**静默错位**（拿到隔壁臂的地板去减）。
+ */
+struct StaticBaseline {
+    std::vector<SmearArm> arms;
+    SmearAngle stat;
+    const SmearRow& row(const std::string& tag) const
+    {
+        for (size_t i = 1; i < arms.size(); ++i)
+            if (arms[i].tag == tag)
+                return stat.byTau[kMainTau][i - 1];
+        throw std::runtime_error("静态臂不存在: " + tag);
+    }
+    /// 运动归因 = 主角度 frac − 同臂 δ=0 frac。δ=0 组借的是**同一个 φ** ⟹ 两组的 Δ 逐帧同式、
+    /// 门同式、内缩同式 ⟹ 相减**同口径**，减掉的正是「画面没动时也有的那部分」。
+    double attrFrac(const SmearRow& r) const { return r.frac - row(r.tag).frac; }
+};
+
+StaticBaseline collectStaticBaseline(const std::string& base, const BistroCam& cam, int burst,
+    int warm, double mainRad, double tau, int margin,
+    const std::vector<const SmearRow*>& mainRows)
+{
+    StaticBaseline sb;
+    sb.arms = {
+        { "REF", 0.0, 0.12, false, 0.0 },
+        { "Z", 0.0, 1.0, true, 0.0 },    ///< **零点锚**：jitter 0 + α=1
+        { "A0", 0.0, 0.01, true, 1.0 },  ///< 现行盒 + 长窗（旧版唯一的地板臂）
+        { "B12", 1.0, 0.12, true, 1.0 }, ///< α 轴低端的 δ=0 对照（本轮新增）
+        { "B01", 1.0, 0.01, true, 1.0 }, ///< α 轴高端的 δ=0 对照（本轮新增）
+    };
+    // 🔴 采集用 **0**（相机静止），映射用 **mainRad**（借主角度的 φ）。见 collectSmearAngle 头注释。
+    sb.stat = collectSmearAngle(base, cam, burst, warm, 0.0, mainRad, tau, margin, sb.arms, "s");
+    std::printf("\n── 运动归因（主角度 frac − 同臂 δ=0 frac；δ=0 借同一份 φ）──\n");
+    std::printf("  %-5s %12s %12s %12s %24s\n", "臂", "frac(主)", "frac(δ=0)", "归因",
+        "meanResid 主 / δ=0");
+    for (const SmearRow* r : mainRows) {
+        const SmearRow& s = sb.row(r->tag);
+        std::printf("  %-5s %12.6f %12.6f %12.6f %12.6f / %.6f\n", r->tag.c_str(), r->frac, s.frac,
+            sb.attrFrac(*r), r->meanResid, s.meanResid);
+    }
+    // **分子零点对照**：δ=0 组的 meanResid 是「相机不动时 out 离参考多远」，它是主角度组
+    // 读数的**加性底**。两者同量级 ⟹ 相机运动根本没被量进去，分子量的是别的东西。
+    std::printf("\n── 分子零点/地板对照（meanResid，与 Δ 无关）──\n");
+    std::printf("  零点锚 Z(δ=0) %.6f · 地板 A0(δ=0) %.6f\n", sb.row("Z").meanResid,
+        sb.row("A0").meanResid);
+    return sb;
+}
+
+/**
  * 判决线 4 的**数据侧**：在高角度档再采一组（臂 0 / 臂 11）并打对照表。
  *
  * 切出 `cmdTemporalTailCamera` 的理由：本函数只依赖「两臂的帧数 + 中心位移」，把它留在
@@ -2916,18 +3021,25 @@ struct GateBreakpoint {
     double mainDiff = 0.0;                   ///< 主角度档 `frac(臂11) − frac(臂0)`（几帧过期历史）
     double highDiff = 0.0;                   ///< `--gate-angle` 档同一差值
     double mainMotion = 0.0, highMotion = 0.0; ///< 两档的中心位移（px/帧）
+    /// 🔴 **无条件**内缩残差（线性亮度），与 Δ 加权的 `mainDiff/highDiff` 是**两条不同口径**。
+    /// 实测（brickfence 0.742px，gate=1）：Δ 加权差 −0.0026 帧（**看不见门**），而
+    /// `meanResid` 臂11/臂0 = 0.030474/0.021105 = **1.444**。原因见 §1.17 结论 6：原地纯旋转
+    /// 无视差 ⟹ 无去遮挡 ⟹ Δ 加权把质量全压在「普通运动边缘」上，而门多出来的那部分落在
+    /// **平坦区的时间平均模糊**。两臂只差 `clip_mode`（jitter/α/模糊地板全同）
+    /// ⟹ 这个比值本身就是**干净的门在场性**，不需要 δ=0 归因。
+    double mainResid0 = 0.0, mainResid11 = 0.0;
+    double highResid0 = 0.0, highResid11 = 0.0;
 };
 
 GateBreakpoint collectGateBreakpoint(const std::string& base, const BistroCam& cam, int burst,
     int warm, double tau, int margin, double gateRad, double lowArm0, double lowArm11,
-    double mainCenterShiftPx)
+    double mainCenterShiftPx, double mainResid0, double mainResid11)
 {
-    constexpr size_t kMainTau = 1;  ///< = taus[1]（主档），与 `collectSmearAngle` 的三档顺序绑定
     GateBreakpoint out;
     const std::vector<SmearArm> gateArms = {
-        { "REF", 0.0, 0.12, 0.0, false, 0.0 },
-        { "A0", 0.0, 0.01, 0.0, true, 1.0 },
-        { "A11", 11.0, 0.01, 0.0, true, 1.0 },
+        { "REF", 0.0, 0.12, false, 0.0 },
+        { "A0", 0.0, 0.01, true, 1.0 },
+        { "A11", 11.0, 0.01, true, 1.0 },
     };
     const SmearAngle high
         = collectSmearAngle(base, cam, burst, warm, gateRad, gateRad, tau, margin, gateArms, "h");
@@ -2938,20 +3050,148 @@ GateBreakpoint collectGateBreakpoint(const std::string& base, const BistroCam& c
         gateAt(mainCenterShiftPx), gateSide(mainCenterShiftPx));
     std::printf("  高角度档：中心 %gpx → gate %g（%s）\n", high.centerShiftPx,
         gateAt(high.centerShiftPx), gateSide(high.centerShiftPx));
-    std::printf("  %-8s %14s %14s %14s\n", "档", "臂0(帧)", "臂11(帧)", "差 11−0");
+    // 🔴 **两条口径并排打**，因为它们的结论相反（见 `GateBreakpoint` 注释）：Δ 加权「几帧」列
+    //    对门**失明**（纯旋转无去遮挡），无条件残差列才看得见门。只打一条必然误读。
+    std::printf("  %-6s %10s %10s %10s %12s %12s %10s\n", "档", "臂0(帧)", "臂11(帧)", "差 11−0",
+        "resid 臂0", "resid 臂11", "比 11/0");
     const SmearRow& h0 = high.byTau[kMainTau][0];
     const SmearRow& h11 = high.byTau[kMainTau][1];
-    const double hu = high.oneFrameFrac.size() > kMainTau ? high.oneFrameFrac[kMainTau] : 0.0;
+    const double hu = mainTauValue(high.oneFrameFrac, 0.0);
     const auto hf = [&](const SmearRow& r) { return hu > 0.0 ? r.frac / hu : 0.0; };
-    std::printf("  %-8s %14.2f %14.2f %14.2f\n", "高角度", hf(h0), hf(h11), hf(h11) - hf(h0));
-    std::printf("  %-8s %14.2f %14.2f %14.2f\n", "低角度", lowArm0, lowArm11, lowArm11 - lowArm0);
+    std::printf("  %-6s %10.2f %10.2f %10.4f %12.6f %12.6f %10.3f\n", "门关侧", hf(h0), hf(h11),
+        hf(h11) - hf(h0), h0.meanResid, h11.meanResid, safeRatio(h11.meanResid, h0.meanResid));
+    std::printf("  %-6s %10.2f %10.2f %10.4f %12.6f %12.6f %10.3f\n", "门开侧", lowArm0, lowArm11,
+        lowArm11 - lowArm0, mainResid0, mainResid11, safeRatio(mainResid11, mainResid0));
     out.mainDiff = lowArm11 - lowArm0;
     out.highDiff = hf(h11) - hf(h0);
     out.mainMotion = mainCenterShiftPx;
     out.highMotion = high.centerShiftPx;
+    out.mainResid0 = mainResid0;
+    out.mainResid11 = mainResid11;
+    out.highResid0 = h0.meanResid;
+    out.highResid11 = h11.meanResid;
     out.ran = true;
     return out;
 }
+
+/**
+ * 判决发射（四条判据 + jsonl 落账 + rc）。切出 `cmdTemporalTailCamera` 的理由：判决线必须
+ * **一处可读**（改线不漏打），而主函数还要管采集编排与打表——两件事挤在一起时先炸的是
+ * 认知复杂度上限（style-check 点名），拆它是拆职责不是拆语句。
+ */
+struct CameraReadings {
+    const SmearAngle& main;       ///< 主角度组
+    const StaticBaseline& sb;     ///< δ=0 反向组（借主角度 φ）
+    const SmearRow &zero, &boxShort, &boxLong;
+    const SmearRow &staticZero, &staticFloor;
+    double unit;                  ///< 「恰好过期一帧」刻度
+    double phiScale;              ///< φ 标定扫描的 argmin
+    const GateBreakpoint& gate;
+};
+
+/// gate 断点的**分侧计算**（判决本身留在 `emitCameraVerdicts`，线要一处可读）。
+/// 🔴 分侧**按实测 gate 值**，不按 CLI 参数名。本轮的坑：主角度取 0.09°/帧 = 中心 1.34px，
+/// 落在斜坡 `[1,2]` **中间**（gate 0.66），而参数名叫「低角度侧」——于是把斜坡中当门全开读，
+/// 阳性锚点会被读成「洞不存在」。谁开谁关由 `gateAt()` 判。
+struct GateSides {
+    double openDiff = 0.0, closedDiff = 0.0;       ///< Δ 加权口径（几帧过期历史）
+    double openResidRatio = 0.0, closedResidRatio = 0.0; ///< 无条件残差 臂11/臂0
+    double openMotion = 0.0, closedMotion = 0.0;
+    bool brackets = false;  ///< 两档是否**真的**夹住斜坡（开侧 ≤1px、关侧 ≥2px）
+};
+
+GateSides gateSidesOf(const GateBreakpoint& g)
+{
+    const bool mainOpens = gateAt(g.mainMotion) >= gateAt(g.highMotion);
+    GateSides s;
+    s.openDiff = mainOpens ? g.mainDiff : g.highDiff;
+    s.closedDiff = mainOpens ? g.highDiff : g.mainDiff;
+    s.openResidRatio = safeRatio(mainOpens ? g.mainResid11 : g.highResid11,
+        mainOpens ? g.mainResid0 : g.highResid0);
+    s.closedResidRatio = safeRatio(mainOpens ? g.highResid11 : g.mainResid11,
+        mainOpens ? g.highResid0 : g.mainResid0);
+    s.openMotion = mainOpens ? g.mainMotion : g.highMotion;
+    s.closedMotion = mainOpens ? g.highMotion : g.mainMotion;
+    // ⚠ 比的是 **motion**，不是 `gateAt(motion)`——后者返回 gate 值 ∈ [0,1]，拿它跟 2.0 比会
+    //   恒假（首轮就把它读成「两档没夹住」，而同一张表上面明明印着 gate 1.000/0.000）。
+    s.brackets = s.openMotion <= 1.0 && s.closedMotion >= 2.0;
+    return s;
+}
+
+int emitCameraVerdicts(const std::string& cameraName, double angleDeg, double gateAngleDeg,
+    int burst, double tau, const CameraReadings& r)
+{
+    std::vector<Verdict> vs;
+    // φ 符号标定放在**第一条**：它是其余三条的前提——φ 反号 ⟹ Δ 分母里全是系统错位，
+    // 下面三条的读数会一起变得"看起来可解释"（首轮正是如此：pairing/collapse 全绿，
+    // 而 gate 断点被稀释掉、α 下界撞线）。红的时候先修 φ，别碰判决线。
+    vs.push_back(verdictFor("temporal-tail-phi-sign", r.phiScale > 0.5 && r.phiScale < 1.5,
+        "φ 标定扫描 argmin = " + d2(r.phiScale)
+            + "（线 = +1；−1 = 符号反了，0 = 映射没生效）· alignedΔ " + d4(r.main.alignedDelta)
+            + " vs rawΔ " + d4(r.main.rawDelta) + "，比值 " + d4(r.main.rawDelta > 0.0 ? r.main.alignedDelta / r.main.rawDelta : 0.0)
+            + "（>1 ⟹ φ 比恒等映射还差，是反号的定量指纹）"));
+    std::cout << "  " << vs.back().line() << "\n";
+    vs.push_back(verdictFor("temporal-tail-pairing", r.zero.frac <= 0.02 && r.zero.events > 0.0,
+        "frac(Z) = " + d4(r.zero.frac) + "（线 ≤ 0.02；相机运动下配对错一帧立刻跳）"));
+    std::cout << "  " << vs.back().line() << "\n";
+    // 判决线 2（**重设计，取代 `temporal-tail-smear-alpha-monotone`**）：13.14b 要的是
+    // 「α 恒写 0.01 不比 0.12 更鬼」的**非劣性**，不是「窗越长必须越鬼」。旧的
+    // 「≥ 1−α = 0.88 帧」下界在**两个角度都被证伪**（0.7565 @2.97px / 0.7588 @1.34px），
+    // 机制见上面「运动归因」：去遮挡处的历史本来就是**上一帧**写进去的，与窗长无关
+    // ⟹ Δ 加权鬼影对 α 几乎不响应是**物理**，不是仪器坏。而无条件残差那 +49% 是
+    // **jitter 相位平均模糊**（随窗长增长），不减掉同臂 δ=0 就会把它当成鬼影。
+    const double aShort = r.sb.attrFrac(r.boxShort), aLong = r.sb.attrFrac(r.boxLong)
+        , aZero = std::abs(r.sb.attrFrac(r.zero));
+    vs.push_back(verdictFor("temporal-tail-alpha-noninferior",
+        aShort > 0.0 && aLong <= 1.5 * aShort && aShort > 4.0 * aZero && r.boxShort.events > 1000.0,
+        "归因鬼影 短窗(α=.12) = " + d4(aShort) + " · 长窗(α=.01，13.14b 拟交付) = " + d4(aLong)
+            + " · 比值 " + d4(aShort > 0.0 ? aLong / aShort : 0.0)
+            + "（线 ≤ 1.5 = 本项目「明显」常量；2-tap 无累积参考 1.125）· 零锚归因 " + d4(aZero)
+            + "（线：短窗 > 4× 它）· 样本 " + std::to_string(static_cast<long>(r.boxShort.events))
+            + " · 单位「一帧过期」= " + d4(r.unit)));
+    std::cout << "  " << vs.back().line() << "\n";
+    vs.push_back(verdictFor("temporal-tail-static-collapse",
+        r.staticZero.frac <= 0.02 && r.staticZero.events > 1000.0,
+        "零点锚 Z(δ=0) frac = " + d4(r.staticZero.frac)
+            + "（线 ≤ 0.02，同 spin 版 pairing 口径；不塌 = φ 或配对在造信号）· 样本 "
+            + std::to_string(static_cast<long>(r.staticZero.events))
+            + " · 地板 A0(δ=0) = " + d4(r.staticFloor.frac) + "（相位平均，非零是对的）"));
+    std::cout << "  " << vs.back().line() << "\n";
+    if (r.gate.ran) {
+        const GateSides s = gateSidesOf(r.gate);
+        // 🔴 判据口径 = **无条件残差比**，不是 Δ 加权差。理由（§1.17 结论 6）：`frame_yaw` 是原地
+        //    纯旋转 ⟹ 无视差 ⟹ 无去遮挡 ⟹ Δ 加权把质量全压在普通运动边缘上，而臂 11 多出来的那
+        //    部分是**平坦区的时间平均模糊**，Δ 加权下测不出（实测 −0.0026 帧，而残差比 1.444）。
+        //    本判据契约写的是「判门确实在起作用」⟹ 该用**看得见门**的口径。两臂只差 `clip_mode`
+        //    （jitter/α/模糊地板全同）⟹ 比值无需 δ=0 归因即干净。
+        // 线：② 门开侧 ≥ 1.15（方向由门的表达式定死：开记忆 ⟹ 历史更多 ⟹ 离单帧参考更远；
+        //        1.15 比跨进程确定性地板高四个量级）；③ 门关侧更靠近 1（gate=0 ⟹ `mem` 退回
+        //        本帧瞬时 `ext` ⟹ 硬裁剪 ⟹ 臂 11 拿臂 0 的行为）。
+        vs.push_back(verdictFor("temporal-tail-gate-breakpoint",
+            s.brackets && s.openResidRatio >= 1.15
+                && std::abs(s.closedResidRatio - 1.0) < std::abs(s.openResidRatio - 1.0),
+            "门开侧 " + d4(s.openMotion) + "px（gate " + d2(gateAt(s.openMotion))
+                + "）resid 臂11/臂0 = " + d4(s.openResidRatio) + "（线 ≥ 1.15 = 门在场）· 门关侧 "
+                + d4(s.closedMotion) + "px（gate " + d2(gateAt(s.closedMotion)) + "）= "
+                + d4(s.closedResidRatio) + "（线 |·−1| < 门开侧 = 退回臂 0）· Δ 加权口径"
+                + "（**对门失明**，仅打印）" + d4(s.openDiff) + " / " + d4(s.closedDiff) + " 帧"
+                + (s.brackets ? "" : " ⟹ **两档没夹住斜坡 [1,2]px**，本判据无从谈起")));
+        std::cout << "  " << vs.back().line() << "\n";
+    }
+
+    logCall("temporal-tail",
+        {{"camera", cameraName}, {"motion", "camera"}, {"angle", d4(angleDeg)},
+            {"gate-angle", d4(gateAngleDeg)}, {"burst", std::to_string(burst)},
+            {"tau", d4(tau)}, {"center-shift-px", d4(r.main.centerShiftPx)},
+            {"max-shift-px", d4(r.main.maxShiftPx)}},
+        vs);
+    const bool allOk = std::all_of(vs.begin(), vs.end(), [](const Verdict& v) { return v.ok; });
+    std::printf("\n  ⟹ %s\n", allOk
+            ? "全绿：frac 可作为机位运动鬼影判据，读主表与 gate 断点对照"
+            : "有判决红 ⟹ **不许报臂间结论**（先修仪器，别改判决线）");
+    return allOk ? 0 : 1;
+}
+
 
 int cmdTemporalTailCamera(const std::string& cameraName, double angleDeg, double gateAngleDeg,
     int burst, int warm, double tau, int margin)
@@ -2969,17 +3209,17 @@ int cmdTemporalTailCamera(const std::string& cameraName, double angleDeg, double
     const std::string base = projectRoot() + "/build/imgqa_tailcam_" + cameraName;
 
     // arms[0] = 参考（TAA 关 + 无抖动 = 基位置真值）。Z = 零锚点（α=1 + 无抖动）。
-    // 🔴 **本表就是 13.14b 的交付对照**：α 轴用 `feedback` **直接给**（B12 vs B01），不用
-    // `static_boost` —— 首轮实测 B12 与「B12 + boost」的 frac 与 meanResid **逐位相同**
-    // （0.0649 / 0.028841），机制上也本该如此：机位在动 ⟹ 静止探测器不点火 ⟹ boost 恒不生效。
-    // 这既是「boost 在运动下是死代码」的证据，也是它该删的理由之一。
+    // 🔴 **本表就是 13.14b 的交付对照**：α 轴用 `feedback` **直接给**（B12 vs B01）。长窗曾经
+    // 由 static boost 的地板提供 —— 首轮实测「B12」与「B12 + boost」的 frac 与 meanResid
+    // **逐位相同**（0.0649 / 0.028841），机制上也本该如此：机位在动 ⟹ 静止探测器不点火
+    // ⟹ boost 恒不生效。这既是「它在运动下是死代码」的证据，也是它该删的理由之一。
     const std::vector<SmearArm> arms = {
-        { "REF", 0.0, 0.12, 0.0, false, 0.0 },
-        { "Z", 0.0, 1.0, 0.0, true, 0.0 },
-        { "B12", 1.0, 0.12, 0.0, true, 1.0 },   ///< α 轴低端（关盒 + 短窗）
-        { "B01", 1.0, 0.01, 0.0, true, 1.0 },   ///< α 轴高端（关盒 + 长窗 = 13.14b 拟交付 α）
-        { "A0", 0.0, 0.01, 0.0, true, 1.0 },    ///< 现行盒 + 长窗
-        { "A11", 11.0, 0.01, 0.0, true, 1.0 },  ///< 臂 11（记忆挂重投影位移）+ 长窗
+        { "REF", 0.0, 0.12, false, 0.0 },
+        { "Z", 0.0, 1.0, true, 0.0 },
+        { "B12", 1.0, 0.12, true, 1.0 },  ///< α 轴低端（关盒 + 短窗）
+        { "B01", 1.0, 0.01, true, 1.0 },  ///< α 轴高端（关盒 + 长窗 = 13.14b 拟交付 α）
+        { "A0", 0.0, 0.01, true, 1.0 },   ///< 现行盒 + 长窗
+        { "A11", 11.0, 0.01, true, 1.0 }, ///< 臂 11（记忆挂重投影位移）+ 长窗
     };
     const auto indexOf = [&](const char* tag) {
         for (size_t i = 1; i < arms.size(); ++i)
@@ -2991,7 +3231,6 @@ int cmdTemporalTailCamera(const std::string& cameraName, double angleDeg, double
     const double mainRad = angleDeg * pi / 180.0;
     const SmearAngle main = collectSmearAngle(base, *cam, burst, warm, mainRad, mainRad, tau,
         margin, arms, "m");
-    const size_t kMainTau = 1;  ///< = taus[1]（主档），与 `collectSmearAngle` 里的三档顺序绑定
     const auto& row = main.byTau[kMainTau];
     const SmearRow& zero = row[static_cast<size_t>(indexOf("Z"))];
     const SmearRow& boxShort = row[static_cast<size_t>(indexOf("B12"))];
@@ -2999,7 +3238,7 @@ int cmdTemporalTailCamera(const std::string& cameraName, double angleDeg, double
     const SmearRow& arm0 = row[static_cast<size_t>(indexOf("A0"))];
     const SmearRow& arm11 = row[static_cast<size_t>(indexOf("A11"))];
     /// 主指标单位：「恰好过期一帧」的 frac（见 `SmearAngle::oneFrameFrac`）
-    const double unit = main.oneFrameFrac.size() > kMainTau ? main.oneFrameFrac[kMainTau] : 0.0;
+    const double unit = mainTauValue(main.oneFrameFrac, 0.0);
     const auto frames = [&](const SmearRow& r) { return unit > 0.0 ? r.frac / unit : 0.0; };
 
     std::printf("\n── 相机运动 %.4g°/帧 ──\n", angleDeg);
@@ -3007,101 +3246,24 @@ int cmdTemporalTailCamera(const std::string& cameraName, double angleDeg, double
     printSmearDiagnostics(arms, main, tau);
     const double phiScale = printSmearPhiCalibration(main, mainRad);
 
-    // ── 判决线 3：**反向** = 相机静止（δ=0）但**沿用主角度的映射与权重门** ──────────
-    // 为什么不能直接用 δ=0 的映射：δ=0 ⟹ φ=恒等 ⟹ 静止画面的 Δ ≡ 0 ⟹ frac = 0/0
-    // 被兜底成 0，**什么也没证明**。借主角度的 φ 后，Δ 变成「画面平移 3px 后的边缘」
-    // = 鬼影本该出现的位置，于是「分子必须塌」才是真判据（同时证明 φ 本身不造信号）。
-    // 两臂各有分工，**缺一不可**（第一版只放 A0，于是把「零点」和「地板」混成了一个数）：
-    //   Z  = jitter 0 + α=1 ⟹ 输出 ≡ 本帧 ⟹ 静止时**必须** ≈ 0（spin 版实测 1.08e-4）。
-    //        这是唯一的**零点锚**：它不塌 = φ 或配对在造信号。
-    //   A0 = jitter 1 + α=0.01 ⟹ 静止时的收敛输出 = **16 个抖动相位的平均**，比无抖动参考
-    //        真的更糊（边缘差 ≈ 半个像素）。那是**地板不是零点**，量级实测 ≈ 0.13
-    //        （≈ 0.5px 模糊 ÷ 3px 位移）。它的用处 = 给主角度各臂一个**同口径加性底**，
-    //        臂间差才可信；拿它当零点是**把地板当 bug**。
-    const std::vector<SmearArm> staticArms = {
-        { "REF", 0.0, 0.12, 0.0, false, 0.0 },
-        { "Z", 0.0, 1.0, 0.0, true, 0.0 },
-        { "A0", 0.0, 0.01, 0.0, true, 1.0 },
-    };
-    // 🔴 采集用 **0**（相机静止），映射用 **mainRad**（借主角度的 φ）。见 collectSmearAngle 头注释。
-    const SmearAngle stat = collectSmearAngle(base, *cam, burst, warm, 0.0, mainRad, tau, margin,
-        staticArms, "s");
-    const SmearRow& staticZero = stat.byTau[kMainTau][0];  ///< **零点锚**：jitter 0 + α=1
-    const SmearRow& staticFloor = stat.byTau[kMainTau][1]; ///< **地板**：jitter 1 的相位平均糊
-    // **分子零点对照**：δ=0 组的 meanResid 是「相机不动时 out 离参考多远」，它是主角度组
-    // 读数的**加性底**。两者同量级 ⟹ 相机运动根本没被量进去，分子量的是别的东西。
-    std::printf("\n── 分子零点/地板对照（meanResid，与 Δ 无关）──\n");
-    std::printf("  零点锚 Z(δ=0) %.6f · 地板 A0(δ=0) %.6f\n", staticZero.meanResid,
-        staticFloor.meanResid);
-    std::printf("  主角度 Z %.6f · A0 %.6f（各自减掉同臂 δ=0 值才是运动归因部分）\n",
-        zero.meanResid, arm0.meanResid);
+    // ── 判决线 3/5：**反向** = 相机静止（δ=0）但**沿用主角度的映射与权重门** ──────────
+    // 为什么不能直接用 δ=0 的映射：δ=0 ⟹ φ=恒等 ⟹ 静止画面的 Δ ≡ 0 ⟹ frac = 0/0 被兜底成 0，
+    // **什么也没证明**。借主角度的 φ 后，Δ 变成「画面平移若干像素后的边缘」= 鬼影本该出现的
+    // 位置，于是「分子必须塌」才是真判据（同时证明 φ 本身不造信号）。
+    // 🔴 静态组与主角度组**同臂**的理由见 `collectStaticBaseline` 头注释。
+    const StaticBaseline sb = collectStaticBaseline(base, *cam, burst, warm, mainRad, tau, margin,
+        { &zero, &arm0, &boxShort, &boxLong });
+    const SmearRow& staticZero = sb.row("Z");
+    const SmearRow& staticFloor = sb.row("A0");
 
     // ── 判决线 4：**gate 断点**（本仪器存在的理由）──────────────────────────────
     const GateBreakpoint gate = gateAngleDeg > 0.0
         ? collectGateBreakpoint(base, *cam, burst, warm, tau, margin, gateAngleDeg * pi / 180.0,
-            frames(arm0), frames(arm11), main.centerShiftPx)
+            frames(arm0), frames(arm11), main.centerShiftPx, arm0.meanResid, arm11.meanResid)
         : GateBreakpoint {};
 
-    std::vector<Verdict> vs;
-    // φ 符号标定放在**第一条**：它是其余三条的前提——φ 反号 ⟹ Δ 分母里全是系统错位，
-    // 下面三条的读数会一起变得"看起来可解释"（首轮正是如此：pairing/collapse 全绿，
-    // 而 gate 断点被稀释掉、α 下界撞线）。红的时候先修 φ，别碰判决线。
-    vs.push_back(verdictFor("temporal-tail-phi-sign", phiScale > 0.5 && phiScale < 1.5,
-        "φ 标定扫描 argmin = " + d2(phiScale)
-            + "（线 = +1；−1 = 符号反了，0 = 映射没生效）· alignedΔ " + d4(main.alignedDelta)
-            + " vs rawΔ " + d4(main.rawDelta) + "，比值 " + d4(main.rawDelta > 0.0 ? main.alignedDelta / main.rawDelta : 0.0)
-            + "（>1 ⟹ φ 比恒等映射还差，是反号的定量指纹）"));
-    std::cout << "  " << vs.back().line() << "\n";
-    vs.push_back(verdictFor("temporal-tail-pairing", zero.frac <= 0.02 && zero.events > 0.0,
-        "frac(Z) = " + d4(zero.frac) + "（线 ≤ 0.02；相机运动下配对错一帧立刻跳）"));
-    std::cout << "  " << vs.back().line() << "\n";
-    vs.push_back(verdictFor("temporal-tail-smear-alpha-monotone",
-        frames(boxShort) >= 0.8 && frames(boxLong) > frames(boxShort) && boxShort.events > 1000.0,
-        "关盒短窗 = " + d4(frames(boxShort)) + " 帧过期历史（推导下界 1−α = 0.88）· 关盒长窗 = "
-            + d4(frames(boxLong)) + " 帧（线：必须 > 短窗）· 样本 "
-            + std::to_string(static_cast<long>(boxShort.events))
-            + " · 单位「一帧过期」= " + d4(unit)));
-    std::cout << "  " << vs.back().line() << "\n";
-    vs.push_back(verdictFor("temporal-tail-static-collapse",
-        staticZero.frac <= 0.02 && staticZero.events > 1000.0,
-        "零点锚 Z(δ=0) frac = " + d4(staticZero.frac)
-            + "（线 ≤ 0.02，同 spin 版 pairing 口径；不塌 = φ 或配对在造信号）· 样本 "
-            + std::to_string(static_cast<long>(staticZero.events))
-            + " · 地板 A0(δ=0) = " + d4(staticFloor.frac) + "（相位平均，非零是对的）"));
-    std::cout << "  " << vs.back().line() << "\n";
-    if (gate.ran) {
-        // 🔴 分侧**按实测 gate 值**，不按 CLI 参数名。本轮的坑：主角度取 0.09°/帧 = 中心
-        //   1.34px，落在斜坡 `[1,2]` **中间**（gate 0.66），而参数名叫「低角度侧」——于是
-        //   把斜坡中当门全开读，阳性锚点会被读成「洞不存在」。谁开谁关由 `gateAt()` 判。
-        const bool mainOpens = gateAt(gate.mainMotion) >= gateAt(gate.highMotion);
-        const double openDiff = mainOpens ? gate.mainDiff : gate.highDiff;
-        const double closedDiff = mainOpens ? gate.highDiff : gate.mainDiff;
-        const double openMotion = mainOpens ? gate.mainMotion : gate.highMotion;
-        const double closedMotion = mainOpens ? gate.highMotion : gate.mainMotion;
-        // 两档必须**真的夹住斜坡**：开侧 motion ≤ 1px（gate = 1），关侧 ≥ 2px（gate = 0）。
-        // 不夹住 ⟹ 本判据无从谈起，直接红并给出该给的角度（不许拿斜坡中的读数下结论）。
-        const bool brackets = gateAt(openMotion) <= 1.0 && gateAt(closedMotion) >= 2.0;
-        vs.push_back(verdictFor("temporal-tail-gate-breakpoint",
-            brackets && openDiff > 0.02 && std::abs(closedDiff) < std::abs(openDiff),
-            "门开侧 " + d4(openMotion) + "px（gate " + d2(gateAt(openMotion)) + "）臂11−臂0 = "
-                + d4(openDiff) + " 帧（线 > 0.02 = 洞在场）· 门关侧 " + d4(closedMotion)
-                + "px（gate " + d2(gateAt(closedMotion)) + "）= " + d4(closedDiff)
-                + "（线 |·| < 门开侧 = 退回臂 0）"
-                + (brackets ? "" : " ⟹ **两档没夹住斜坡 [1,2]px**，本判据无从谈起")));
-        std::cout << "  " << vs.back().line() << "\n";
-    }
-
-    logCall("temporal-tail",
-        {{"camera", cameraName}, {"motion", "camera"}, {"angle", d4(angleDeg)},
-            {"gate-angle", d4(gateAngleDeg)}, {"burst", std::to_string(burst)},
-            {"tau", d4(tau)}, {"center-shift-px", d4(main.centerShiftPx)},
-            {"max-shift-px", d4(main.maxShiftPx)}},
-        vs);
-    const bool allOk = std::all_of(vs.begin(), vs.end(), [](const Verdict& v) { return v.ok; });
-    std::printf("\n  ⟹ %s\n", allOk
-            ? "全绿：frac 可作为机位运动鬼影判据，读主表与 gate 断点对照"
-            : "有判决红 ⟹ **不许报臂间结论**（先修仪器，别改判决线）");
-    return allOk ? 0 : 1;
+    return emitCameraVerdicts(cameraName, angleDeg, gateAngleDeg, burst, tau,
+        { main, sb, zero, boxShort, boxLong, staticZero, staticFloor, unit, phiScale, gate });
 }
 
 }  // namespace RGL::imgqa

@@ -358,7 +358,8 @@ const char* judgmentFamilyCondition(JudgmentFamily family)
                    "输入统计完全相同，比值才是时域累积本身的增益（可拿一阶 IIR / sqrt(N) 闭式对拍）。"
                    "视点一旦真的移动，这个前提就没了 ⟹ 比值口径换到下一族，别跨族比数。";
         case JudgmentFamily::TemporalMotion:
-            return "视点或场景**真的在动**（相机帧驱动 yaw / spin / static boost 的历史窗）。"
+            return "视点或场景**真的在动**（相机帧驱动 yaw / spin），或长窗档（α=0.01）把运动项摊进"
+                   "≈100 帧窗。"
                    "运动项是正确影像、TAA 压不掉 ⟹ 本族不用「静止两组比值」那套口径，改用相位折叠、"
                    "闭式 ρ*、尾长与事件计数；同一台机器上两族的数不可互换解释。";
         case JudgmentFamily::Attachment:
@@ -381,6 +382,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
         append(temporalStaticJitterSpaceJudgments());
         append(temporalResidualJudgments());
         append(temporalTailBoostJudgments());
+        append(temporalTailGuardJudgments());
         append(temporalTailCameraJudgments());
         append(temporalFeedbackClosureJudgments());
         append(attachmentJudgments());

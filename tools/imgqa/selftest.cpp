@@ -1380,8 +1380,8 @@ void testCliArgsBehavior(Checker& c)
     c.chk("--ao 默认 -1（同上，帮助文本曾写 0.5）", homo.number("--ao") == -1.0,
         homo.get("--ao"));
     const Args resid(noargs, *findSubcommand("temporal-residual"));
-    c.chk("--static-boost 默认 0（帮助文本曾写 0.02）", resid.number("--static-boost") == 0.0,
-        resid.get("--static-boost"));
+    c.chk("--long-feedback 默认 0.01（长窗档 = 仓库拍板值；批 13.14b 前这一档藏在 static boost 地板里）",
+        resid.number("--long-feedback") == 0.01, resid.get("--long-feedback"));
 
     // ── 显式值覆盖默认值；没给的保持默认 ──
     const Args given({"--burst", "8"}, *tail);

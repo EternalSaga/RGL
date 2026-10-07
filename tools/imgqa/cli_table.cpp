@@ -206,15 +206,15 @@ std::vector<SubcommandSpec> specsResidualAndMotion()
         /* temporal-residual */
         SubcommandSpec{
             "temporal-residual",
-            "时域**绝对**残差：静止机位连拍折 (2,16,H,W) 后逐像素 max−median（线性域；补 temporal 相对比的盲区，批 13.1 主判据）。 --static-boost <地板>"
-            " = 批 13.7 `taa.static_boost` 变体（**只出数不判**：跑 B1–B4 四组出门开/门关 meanSwing/p99.9/frac>τ + 梯度比；⚠ 地板 ="
-            " **本帧权重**，调小 = 更信历史）。 --bistro = 批 13.7b 真实场景变体（债-48：交付配置 + 用户报障三机位"
+            "时域**绝对**残差：静止机位连拍折 (2,16,H,W) 后逐像素 max−median（线性域；补 temporal 相对比的盲区，批 13.1 主判据）。 --long-feedback <档>"
+            " = 批 13.7 长短窗变体（**只出数不判**：跑 B1–B4 四组出短窗/长窗 meanSwing/p99.9/frac>τ + 梯度比；短窗档恒 = 0.12，长窗档 = 本旗标的，"
+            "⚠ 档 = **本帧权重**，调小 = 更信历史）。 --bistro = 批 13.7b 真实场景变体（债-48：交付配置 + 用户报障三机位"
             " doorframe/wetground/doorpanel，N1–N5 五组出数 + 债-47 线性域梯度比 + swing 热图；--camera 选单机位）。批 13.7c 每机位另出**亮度"
-            " × 梯度二维分带**（门关/门开/差三张表，每格 share·rate·残余质量三数 + 敏感性），判「残余闪烁住在高亮边还是普通边缘」；判决线跑前写死，全文见"
+            " × 梯度二维分带**（短窗/长窗/差三张表，每格 share·rate·残余质量三数 + 敏感性），判「残余闪烁住在高亮边还是普通边缘」；判决线跑前写死，全文见"
             " temporal_residual.h 同名段。 `--reject` = 批 13.10 每机位另出**历史拒收 × 残余交叉表**（门 `taa.diag_reject` 开、连拍"
-            " taa_out alpha；按「32 帧里有几帧历史被邻域盒动过」分档 × swing + **逐档抑制比 ρ**），判「static boost 压不满的那部分残余是不是 `clipToAabb`"
+            " taa_out alpha；按「32 帧里有几帧历史被邻域盒动过」分档 × swing + **逐档抑制比 ρ**），判「长窗压不满的那部分残余是不是 `clipToAabb`"
             " 夹历史」——0 档（全程收下）= 纯 EMA 泄漏对照，其 ρ 必须 ≈ 闭式 ρ*（**内部阳性锚点**：绿例就在同一帧里）。并出**主判据"
-            " `temporal-residual-boost-fidelity`**：`ρ ≤ 1.5×ρ*`，ρ* = |H(α_floor)|/|H(α_fb)| 由配置的 α"
+            " `temporal-residual-window-fidelity`**：`ρ ≤ 1.5×ρ*`，ρ* = |H(α_long)|/|H(α_short)| 由配置的 α"
             " 运行时现算（改档位自动自适应；|H| 跨谐波只散布 5% ⟹ 与内容无关）。**FAIL 即 rc=1**（与两条守卫同级：本命令的结论不许被读成通过）。判决线跑前写死，见同名头注释段",
             {
                 FlagSpec{"--periods", "2", nullptr, FlagKind::Number},
@@ -223,10 +223,9 @@ std::vector<SubcommandSpec> specsResidualAndMotion()
                 FlagSpec{"--slow-feedback", "0.002", nullptr, FlagKind::Number},
                 FlagSpec{"--skip-slow", nullptr, nullptr, FlagKind::Bool},
                 FlagSpec{"--base-space", nullptr, nullptr, FlagKind::Bool},
-                FlagSpec{"--static-boost", "0", "批 13.7 taa.static_boost 变体（**只出数不判**）；⚠ 地板 = **本帧权重**，调小 = 更信历史", FlagKind::Number},
+                FlagSpec{"--long-feedback", "0.01", "批 13.7 长短窗变体的**长窗档** taa.feedback（**只出数不判**，短窗档恒 = 0.12）；合成靶侧：显式给出本旗 = 进 B1–B4 变体；⚠ 档 = **本帧权重**，调小 = 更信历史", FlagKind::Number, true},
                 FlagSpec{"--bistro", nullptr, nullptr, FlagKind::Bool},
                 FlagSpec{"--camera", "all", nullptr, FlagKind::String},
-                FlagSpec{"--boost-floor", "0.01", nullptr, FlagKind::Number},
                 FlagSpec{"--diag-bs-off", nullptr, nullptr, FlagKind::Bool},
                 FlagSpec{"--reject", nullptr, "批 13.10 每机位另出**历史拒收 × 残余交叉表**（门 taa.diag_reject 开）", FlagKind::Bool},
                 FlagSpec{"--clip-abl", nullptr, "批 13.11 **历史裁剪因果 A/B**（门 taa.clip_mode）：逐臂跑「门关/门开」两组，出每臂 ρ 并对闭式线判", FlagKind::Bool},
@@ -239,7 +238,7 @@ std::vector<SubcommandSpec> specsResidualAndMotion()
                 " 弹簧不是墙）/ 5 绕 centroid 扩 K×（K = `--clip-soft`，量「盒差几倍」）。**每臂带锐度对照**（梯度比 vs 同次 fb=1 参考；出 [0.85,1.02] 带"
                 " = 靠糊换安静 = 不算修好）。三条线跑前写死：① **坐实** = ρ ≤ 1.5ρ* 且 frac>τ 相对臂 0 降 ≥4×；② **否证** = 所有臂 ρ ≥ 0.8×ρ(臂0) ⟹"
                 " 盒不是主因；③ **通用性** = 逐机位 / 逐靶方向一致（只有报障机位降 = 场景特异 = 不算修好）",
-                "`--clip <mode> [--clip-soft λ]` = 单臂透传（合成靶侧配 `--static-boost <地板>` 用，B2/B3/B4 吃同一臂，ρ 同口径可比）；0 = 门关 ="
+                "`--clip <mode> [--clip-soft λ]` = 单臂透传（合成靶侧配 `--long-feedback <档>` 用，B2/B3/B4 吃同一臂，ρ 同口径可比）；0 = 门关 ="
                 " 不写键 = 交付配置原样",
             },
             false,
@@ -304,13 +303,13 @@ std::vector<SubcommandSpec> specsResidualAndMotion()
                 FlagSpec{"--warm", "16", nullptr, FlagKind::Number},
                 FlagSpec{"--warm-still", "64", nullptr, FlagKind::Number},
                 FlagSpec{"--edge-pct", "0.90", nullptr, FlagKind::Number},
-                FlagSpec{"--boost", "0", "批 13.11 鬼影 × 裁剪消融的 static_boost 地板；默认不写 = 已发表 M0–M4 读数逐位不变", FlagKind::Number},
+                FlagSpec{"--long-feedback", "0", "批 13.11 鬼影 × 裁剪消融的**长窗档覆写**：>0 = 把 TAA 开组的 taa.feedback 覆写为本值（α 恒 = 本值）；默认 0 = 不覆写不写键 = 已发表 M0–M4 读数逐位不变", FlagKind::Number},
                 FlagSpec{"--clip", "0", nullptr, FlagKind::Number},
                 FlagSpec{"--clip-soft", "1", nullptr, FlagKind::Number},
             },
             {
-                "`--boost <地板> --clip <mode> [--clip-soft x]` = 批 13.11 **鬼影 × 裁剪消融**：spin 下相机静止 ⟹ `static_boost` 真生效"
-                " ⟹ 进入 债-49 风险区（静止机位 + 场景内运动 + 长窗）。跨臂比 dev(M1)/dev(M0) 即「放宽盒要付多少鬼影」。**阳性锚点 = 关盒（臂 1）必须显著变差**；不变差 ="
+                "`--long-feedback <档> --clip <mode> [--clip-soft x]` = 批 13.11 **鬼影 × 裁剪消融**：spin 下相机静止 ⟹ 长窗全程生效"
+                " ⟹ 进入 债-49 风险区（静止机位 + 场景内运动 + 超长累积窗）。跨臂比 dev(M1)/dev(M0) 即「放宽盒要付多少鬼影」。**阳性锚点 = 关盒（臂 1）必须显著变差**；不变差 ="
                 " 邻域盒在鬼影上根本没承重，就不必为它付静止闪烁的代价。默认两键都不写 = 已发表 M0–M4 读数逐位不变",
             },
             false,

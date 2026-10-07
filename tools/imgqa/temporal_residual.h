@@ -204,13 +204,13 @@ struct ResidualStat {
 // ## ⭐ 判决线（**2026-10-06 跑前写死**，防事后挑数）
 //
 // 记 A = 中间调×高梯度（普通几何边缘）、B = 近削顶×高梯度（假设的元凶），
-// `rX = rate_on(X) / rate_off(X)`（该格的「被压倍数」，越小 = boost 压得越狠）。
+// `rX = rate_on(X) / rate_off(X)`（该格的「被压倍数」，越小 = 长窗档压得越狠）。
 //
-// * **支持假设**（boost 压不掉高亮边 ⟹ 残余向「近削顶×高梯度」集中）⟺ `rB ≥ 1.5 × rA`
+// * **支持假设**（长窗档压不掉高亮边 ⟹ 残余向「近削顶×高梯度」集中）⟺ `rB ≥ 1.5 × rA`
 //   **且** B 的 residual mass share 上升。
 // * **否证假设**（两格等比例被压 ⟹ 残余不是高光专属）⟺ `rB / rA ∈ [0.8, 1.25]`。
 // * 其余 = **分不出**（须再看敏感性表区分「阈值没分开」与「两格本来同分布」）。
-// * 前置门槛：B 格在门关态的 over-τ 像素 < 200 ⟹ 直接判「分不出（B 格样本不足）」，
+// * 前置门槛：B 格在短窗态的 over-τ 像素 < 200 ⟹ 直接判「分不出（B 格样本不足）」，
 //   不许拿噪声比噪声。
 //
 // 1.5 与 ±25% 的理由：本命令被判读数的运行间噪声 ≤0.3%（本文件头「可复现性」），但分带表是
@@ -221,7 +221,7 @@ struct ResidualStat {
 //
 // 三机位的 `rB/rA` 全部 **< 1**（doorframe 0.63 / wetground 0.42 / doorpanel 0.34），且 B 的
 // residual mass share 三机位**全部下降**（0.24→0.09 / 1.14→0.53 / 0.94→0.26）⟹ 上面那条预测
-// 「残余向近削顶×高梯度集中」**方向为假**：boost 恰恰是把高亮边压得最狠的一格（B 比 A 多压
+// 「残余向近削顶×高梯度集中」**方向为假**：长窗档恰恰是把高亮边压得最狠的一格（B 比 A 多压
 // 1.6–3×）。按跑前写死的三分支，它落的是第三支（既非等比例、也未达 1.5× 的**正向**分离）——
 // 跑前只写了「等比例」这一种否证形态，没给「反向分离」起名，这是预登记的缺口，故出表处另打
 // 一行**方向自述**（不改判决文字）。方向在 T_hi∈{240,248,252}、梯度轴∈{显示 p90, 线性 p75/p90/
@@ -471,11 +471,12 @@ inline constexpr double kMovingGuardMinMotion = 1.0;
  */
 void printIndeterminate(const std::string& target, const MovingGuards& g);
 
-// ── 历史拒收 × 残余 的因果交叉表（批 13.10；用户报障「static boost 开仍闪」的归因）────────
+// ── 历史拒收 × 残余 的因果交叉表（批 13.10；用户报障「长窗档开仍闪」的归因）──────────────
 //
 // ## 要判的假设
 //
-// `taa.static_boost` 把本帧权重压到 0.01（等效窗 ≈100 帧）之后，砖块亮缝 / 窗棂细线**仍在闪**。
+// 长窗档把本帧权重压到 0.01（等效窗 ≈100 帧；历史：这一档曾由 `static_boost` 给出，
+// 批 13.14b 后 = 显式 `feedback`）之后，砖块亮缝 / 窗棂细线**仍在闪**。
 // 纯 EMA 数学给的下界是**已知**的：16 帧周期分量在本帧权重 α 处的传递
 // `|H| = α/|1−(1−α)e^{−j2π/16}|` 在 α=0.01 是 **0.0256**、α=0.12 是 **0.312** ⟹ 若每个像素都在
 // 老实累积，meanSwing 该降 **12.2×**（brickfence 实测只降 **4.0×**、p99.9 只降 2.5×）。
@@ -574,14 +575,16 @@ enum class RejectBranch { Support, Refute, Indeterminate };
 [[nodiscard]] double emaTransmittance(double alpha, int k = 1, int period = kResidualPeriod);
 
 /**
- * 闭式**抑制比** `ρ* = |H(α_on, k)| / |H(α_off, k)|`（static boost 该把残差压到几分之一）。
+ * 闭式**抑制比** `ρ* = |H(α_on, k)| / |H(α_off, k)|`（长窗档该把残差压到几分之一；
+ * α_on = 长窗档、α_off = 短窗档）。
  *
  * ⭐ 本判据能成立靠的是一条实测出来的**形状无关性**：ρ* 跨谐波 k=1..8 只散布 **5.0%**
  * （0.0787–0.0827，α 0.12→0.01）。所以「一根 1px 细线的闪烁是方波还是尖峰」根本不影响这条线
  * ——任何老实累积的像素都必须被压到 ρ* 附近，与内容无关。
  * ⚠ 它是 **EMA 专属**的地板，不是普适下界：换成 16 抽头时域盒式平均能压到更低，而本判据是
  * **上界**（`ρ ≤ 线`），换更强的滤波只会更绿 ⟹ 不存在「把判据逼到调阈值」的死角。
- * ⚠ α 从**配置**读（`feedback` / `static_feedback`），线随档位自动自适应，改档位不必重拍阈值。
+ * ⚠ α 从**配置**读（长短窗两档 `feedback`，批 13.14b 前长窗档在 `static_feedback` 里），
+ * 线随档位自动自适应，改档位不必重拍阈值。
  */
 [[nodiscard]] double emaSuppressionRatio(double alphaOn, double alphaOff, int k = 1,
     int period = kResidualPeriod);
@@ -589,6 +592,8 @@ enum class RejectBranch { Support, Refute, Indeterminate };
 /// 判决线（**2026-10-06 跑前写死**）：`ρ ≤ 1.5 × ρ*`。1.5 = 本项目「明显」统一常量
 /// （`kBandSupportRatio` 同值同理由）。语义 = 「至少得把闭式差距的 2/3 补上」，
 /// 不是噪声余量（本命令运行间噪声 ≤0.3%，远小于此）。
+/// ⚠ 名字里的 boost = 历史：判据曾名 `temporal-residual-boost-fidelity`，批 13.14b 随引擎删
+/// boost 改名为 `temporal-residual-window-fidelity`，**线本身一字未动**，常量名保留以免台账断链。
 inline constexpr double kBoostFidelityLine = 1.5;
 
 /**
@@ -608,7 +613,7 @@ struct ClipArm {
 
 /// A/B 判决线（**2026-10-06 跑前写死**，跑完不许改口径）：
 /// ① 因果坐实 = 某臂 `ρ ≤ kBoostFidelityLine × ρ*` **且** `frac>τ` 相对臂 0 降 ≥ 4×
-///    （4× = 门关 9.99% → 现状 2.38% 的再 1/5；「肉眼不再数得清」量级，不是可调 epsilon）。
+///    （4× = 短窗 9.99% → 现状 2.38% 的再 1/5；「肉眼不再数得清」量级，不是可调 epsilon）。
 /// ② 否证 = **所有**消融臂 `ρ ≥ 0.8 × ρ(臂0)` ⟹ 盒不是主因，短路假设死，必须回头查别处。
 /// ③ 通用性 = 逐机位/逐靶**方向一致**（只有报障机位降 = 场景特异 = 不算修好）。
 inline constexpr double kClipCausalFracDrop = 4.0;
@@ -620,15 +625,15 @@ inline constexpr double kBlurTolerance = 0.03;
 struct BistroCam;  ///< 前置声明（定义在本文件下方机位表处；本命令的 A/B 以它为入参）
 
 /**
- * 批 13.11 **因果 A/B**（`--clip-abl`）：同一机位、同一构建，逐臂跑「门关 / 门开」两组，
+ * 批 13.11 **因果 A/B**（`--clip-abl`）：同一机位、同一构建，逐臂跑「短窗 / 长窗」两组，
  * 出每臂的 ρ（对闭式线判）、`frac>τ`、p99.9，并执行上面三条线。
  */
 struct ClipAblRow {
     ClipArm arm;
     double rho = 0.0, rhoStar = 0.0, line = 0.0;
     double swingOff = 0.0, swingOn = 0.0;
-    double fracOff = 0.0, fracOn = 0.0;  ///< frac>τ（门关 / 门开）
-    double p999Off = 0.0, p999On = 0.0;  ///< 尾巴（**交付默认是门关**，两态都要）
+    double fracOff = 0.0, fracOn = 0.0;  ///< frac>τ（短窗 / 长窗）
+    double p999Off = 0.0, p999On = 0.0;  ///< 尾巴（两态都要；13.14b 后**交付 α=0.01 = 长窗档**）
     /// 锐度对照（**堵「靠糊换安静」这个洞**）：本臂相位平均图的线性域梯度能量 ÷
     /// 同次运行的 fb=1 参考（= 理想 16 相位平均）。带 [0.85, 1.02] = 既有选档口径。
     /// ⚠ 没有这两列，「尾巴降 20×」完全可以靠"更糊了"拿到——ρ 是比值，糊不动它，
@@ -639,8 +644,8 @@ struct ClipAblRow {
 
 /// 一个档（或全帧）的两态平均 swing 与抑制比。
 struct BinSuppression {
-    double swingOff = 0.0;  ///< 门关（α=feedback）平均 swing
-    double swingOn = 0.0;   ///< 门开（α=static_floor）平均 swing
+    double swingOff = 0.0;  ///< 短窗（α=0.12）平均 swing
+    double swingOn = 0.0;   ///< 长窗（α=`--long-feedback`）平均 swing
     double rho = 0.0;       ///< swingOn/swingOff（0 档的闭式期望 = ρ*）
     int64_t pixels = 0;
 };
@@ -664,7 +669,8 @@ struct SuppressionTable {
 /// 坐标 = 2026-10-05 凌晨量具（/tmp 里的 Python，机器重启随 tmpfs 没了）从会话记录原样捞回。
 /// doorframe = 用户报障机位（门框缝隙 / 门板斜边 / 窗棂的 1px 高亮细线）；
 /// wetground = 湿润地面成区颗粒；doorpanel = 旧门板白点；
-/// brickfence = 2026-10-06 用户报障机位（**`static_boost` 开仍闪**：砖块墙面 + 窗户围栏），
+/// brickfence = 2026-10-06 用户报障机位（**长窗档 α=0.01 仍闪**——当时由 `static_boost` 给出，
+/// 批 13.14b 后 = 显式 `feedback`；砖块墙面 + 窗户围栏），
 ///   坐标 = 用户 `camera_saved` 日志原样（mode=fps，fov 45）。
 struct BistroCam {
     const char* name;
@@ -685,7 +691,8 @@ inline const BistroCam kBistroCams[] = {
     {"report1", {-0.240498, 0.112888, -0.106188}, {-0.166224, 0.121830, -0.500087}, 45.0},
     // 2026-10-06 用户**第三次报障/首次验收**机位（`[camera_saved]` 原文坐标）。与 report1 相邻但
     // 不是同一视角（位置差 0.014 / 0.010 / 0.012），**不能假设 report1 的结论自动覆盖**。
-    // 用户肉眼（`clip_mode = 11` + `static_boost = true`，手动晃机）：**静止无闪烁 · 未见鬼影 ·
+    // 用户肉眼（`clip_mode = 11` + 长窗档 α=0.01——当时由 `static_boost = true` 给出，手动晃机）：
+    // **静止无闪烁 · 未见鬼影 ·
     // 左右轻微转动仅轻微闪烁（较此前大幅改善）**。本表登记 = 让这条肉眼结论有可复现的数。
     {"report2", {-0.245181, 0.102938, -0.093967}, {-0.140388, 0.130429, -0.481145}, 45.0},
 };

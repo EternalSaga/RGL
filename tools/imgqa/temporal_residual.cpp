@@ -584,8 +584,7 @@ struct Run {
  */
 Run runGroup(const std::string& dir, const std::string& name, const std::string& tag, bool taa,
     double feedback, double jitterScale, const std::string& variant, int periods,
-    double warmMult, double& tau, bool baseSpace, bool staticBoost = false,
-    double staticFloor = 0.01, const ClipArm& arm = {})
+    double warmMult, double& tau, bool baseSpace, const ClipArm& arm = {})
 {
     Run r;
     r.name = name;
@@ -609,10 +608,6 @@ Run runGroup(const std::string& dir, const std::string& name, const std::string&
     // 闪烁。差多少 = 绝对残差里有多少是「输出住在抖动空间」这个已登记机制（`temporal-swim-pixels`
     // 说过累积压不掉它），而不是"TAA 没干活"。
     o.taaBaseSpace = baseSpace;
-    // 批 13.7 门 `taa.static_boost`（本帧权重地板；⚠ 调小 = 更信历史）。静止机位是本命令
-    // 的固有条件（机位一次钉死）⟹ 门开态热身跑满 ramp 后 feedback 恒 = staticFloor。
-    o.taaStaticBoost = staticBoost;
-    o.taaStaticFeedback = staticFloor;
     // 批 13.11 消融臂透传到合成靶：「修法不得是 bistro 专用」这条护栏要求**同一臂在
     // aa_target 上同向**，所以靶侧也必须能开臂（0 = 门关 = 不写键 = 逐位今天）。
     o.taaClipMode = arm.mode;
@@ -621,12 +616,10 @@ Run runGroup(const std::string& dir, const std::string& name, const std::string&
     o.size = {kSize[0], kSize[1]};
     makeProfile(dir, o);
 
-    // 热身 = ⌈warmMult/α⌉ 向上对齐到抖动周期。α = feedback（EMA 记忆长度 1/α）；TAA 关时没有
-    // 历史，一个周期纯走稳采集本身。门开态 α = **地板**（爬满后生效 feedback = static_floor，
-    // 按 0.12 热身 = 热身不足 = 把画面冻在瞬态上读「更好」的假绿）。⚠ 热身不足**不会报错**，
-    // 所以这里宁可多热。
-    const double alpha =
-        taa ? std::clamp(staticBoost ? staticFloor : feedback, 1e-6, 1.0) : 1.0;
+    // 热身 = ⌈warmMult/α⌉ 向上对齐到抖动周期。α = feedback（EMA 记忆长度 1/α；长短窗两档
+    // 都是**显式写进 feedback 的 α**，批 13.14b 删 static boost 后没有第二个权重源）；
+    // TAA 关时没有历史，一个周期纯走稳采集本身。⚠ 热身不足**不会报错**，所以这里宁可多热。
+    const double alpha = taa ? std::clamp(feedback, 1e-6, 1.0) : 1.0;
     const int warmRaw = static_cast<int>(std::ceil(warmMult / alpha));
     r.warm = ((warmRaw + kResidualPeriod - 1) / kResidualPeriod) * kResidualPeriod;
 
@@ -726,25 +719,28 @@ void printRow(const Run& r)
 
 }  // namespace
 
-// ── 批 13.7 `--static-boost <floor>` 变体：**只出数不判** ──────────────────────────
+// ── 批 13.7 合成靶**长短窗对照**变体（`--long-feedback` 显式给出即进）：**只出数不判** ────────
 //
 // 为什么不判（任务红线）：判据 ⑤（temporal-residual-magnitude）是**带**，其下限红 =
-// 「信号消失向」，作者刻意设计成「修复落地后应当变红」——拿 boost 后的低残差去撞门关
-// 口径的带，会把「变好了」判成「不合格」。默认判据保持门关口径（7 条不变），本变体出
-// 三档地板的 meanSwing / p99.9 / frac>τ 与收敛正确性（梯度比），选档由人判：
+// 「信号消失向」，作者刻意设计成「修复落地后应当变红」——拿长窗档的低残差去撞短窗口径
+// 的带，会把「变好了」判成「不合格」。默认判据保持短窗口径（7 条不变），本变体出
+// 两档的 meanSwing / p99.9 / frac>τ 与收敛正确性（梯度比），选档由人判：
 // **梯度比 ∈ [0.85, 1.02]（与 ⑦ 同带）前提下取 meanSwing 最低档**。
 //
-// 四组（只差被测项，全部 aa_target 细线靶 + 静止机位）：
-//   B1 fb=1  js=1 门关 → 梯度参考（理想 16 相位平均，**必须门关**：boost 会把 fb=1 也
-//      压到地板，「只抖不滤」的参考语义就没了——这是它与 R1 的唯一区别）
-//   B2 fb=.12 js=1 门关 → 门关对照（= R2 口径）
-//   B3 fb=.12 js=1 门开 → 被测（热身按地板 α，见 runGroup）
-//   B4 fb=.12 js=0 门开 → 反向哨兵：无激励源时 boost 必须**恰为 0**（boost 只改权重值，
-//      不该引入任何第二时域源；非零 = boost 接错了地方）
+// 历史：本变体曾由 `--static-boost <地板>` 驱动（批 13.7，长窗藏在 `static_boost` 的
+// `static_feedback` 地板里）；批 13.14b 删 boost 后长窗档 = 显式 `feedback`，α 语义不变。
+//
+// 四组（只差被测项，全部 aa_target 细线靶 + 静止机位；短窗 = fb 0.12，长窗 = `--long-feedback`）：
+//   B1 fb=1     js=1 → 梯度参考（理想 16 相位平均；长窗档**不碰它**——把 fb=1 也压到长窗，
+//      「只抖不滤」的参考语义就没了，同旧 boost 时代 B1 必须门关的理由）
+//   B2 短窗 .12 js=1 → 短窗对照（= R2 口径）
+//   B3 长窗 α  js=1 → 被测（热身按长窗 α，见 runGroup）
+//   B4 长窗 α  js=0 → 反向哨兵：无激励源时长窗必须**恰为 0**（长窗只改权重值，
+//      不该引入任何第二时域源；非零 = 长窗档接错了地方）
 namespace {
 
-int runStaticBoostSweep(const std::string& root, int periods, double warmMult,
-    const std::string& variant, bool baseSpace, double floorVal, const ClipArm& arm = {})
+int runWindowSweep(const std::string& root, int periods, double warmMult,
+    const std::string& variant, bool baseSpace, double longFeedback, const ClipArm& arm = {})
 {
     double tau = 0.0;
     std::vector<Run> runs;
@@ -752,13 +748,14 @@ int runStaticBoostSweep(const std::string& root, int periods, double warmMult,
         runs.push_back(runGroup(root + "/imgqa_resb_b1", "B1 fb=1  js=1(梯度参考)", "resbb1",
             true, 1.0, 1.0, variant, periods, warmMult, tau, baseSpace));
         runs.push_back(runGroup(root + "/imgqa_resb_b2",
-            "B2 fb=.12 js=1 门关(对照)", "resbb2", true, 0.12, 1.0, variant, periods, warmMult,
-            tau, baseSpace, false, 0.01, arm));
+            "B2 短窗 fb=.12 js=1(对照)", "resbb2", true, 0.12, 1.0, variant, periods, warmMult,
+            tau, baseSpace, arm));
         runs.push_back(runGroup(root + "/imgqa_resb_b3",
-            "B3 fb=.12 js=1 门开 fb=" + d4(floorVal), "resbb3", true, 0.12, 1.0, variant, periods,
-            warmMult, tau, baseSpace, true, floorVal, arm));
-        runs.push_back(runGroup(root + "/imgqa_resb_b4", "B4 fb=.12 js=0 门开(反向)", "resbb4",
-            true, 0.12, 0.0, variant, periods, warmMult, tau, baseSpace, true, floorVal, arm));
+            "B3 长窗 fb=" + d4(longFeedback) + " js=1", "resbb3", true, longFeedback, 1.0, variant,
+            periods, warmMult, tau, baseSpace, arm));
+        runs.push_back(runGroup(root + "/imgqa_resb_b4",
+            "B4 长窗 fb=" + d4(longFeedback) + " js=0(反向)", "resbb4",
+            true, longFeedback, 0.0, variant, periods, warmMult, tau, baseSpace, arm));
     } catch (const std::exception& e) {
         std::printf("  采集失败: %s\n", e.what());
         return 2;
@@ -768,11 +765,11 @@ int runStaticBoostSweep(const std::string& root, int periods, double warmMult,
     const Run& B3 = runs[2];
     const Run& B4 = runs[3];
 
-    std::printf("static-boost 变体（**只出数不判**）：aa_target %d×%d  静止机位  折叠 (2,%d,H,W)  "
-                "周期数 %d  地板 static_feedback=%s  base_space=%s\n",
-        kSize[0], kSize[1], kResidualPeriod, periods, d4(floorVal).c_str(),
+    std::printf("长短窗对照变体（**只出数不判**）：aa_target %d×%d  静止机位  折叠 (2,%d,H,W)  "
+                "周期数 %d  长窗档 α=%s  短窗档 α=0.12  base_space=%s\n",
+        kSize[0], kSize[1], kResidualPeriod, periods, d4(longFeedback).c_str(),
         baseSpace ? "开（交付态）" : "关");
-    std::printf("  ⚠ 判据 ⑤ 的带是门关口径（下限红 = 信号消失向，修复落地后**应当**变红），"
+    std::printf("  ⚠ 判据 ⑤ 的带是短窗口径（下限红 = 信号消失向，修复落地后**应当**变红），"
                 "本变体不判它；选档判据 = 梯度比 ∈ [0.85, 1.02]（同 ⑦）前提下 meanSwing 最低。\n");
     std::printf("  区域 = objectID 靶内部外扩 3px（%lld px）；τ = %s（B1 定，各组共用）\n\n",
         static_cast<long long>(B2.stat.maskPixels), d6(tau).c_str());
@@ -792,16 +789,20 @@ int runStaticBoostSweep(const std::string& root, int periods, double warmMult,
     const auto ratio = [gradRef](double g) { return gradRef > 0.0 ? g / gradRef : 0.0; };
     std::printf("\n  收敛正确性（梯度能量比，线性域；参考 = B1 fb=1 相位平均 = %s）\n",
         d6(gradRef).c_str());
-    std::printf("    B2 门关 比值 %s   B3 门开 比值 %s（选档前提：B3 ∈ [0.85, 1.02]）\n",
+    std::printf("    B2 短窗 比值 %s   B3 长窗 比值 %s（选档前提：B3 ∈ [0.85, 1.02]）\n",
         d6(ratio(B2.grad)).c_str(), d6(ratio(B3.grad)).c_str());
-    std::printf("    B4 反向（门开 + 零抖动）meanSwing %s  maxSwing %s（期望**恰为 0**，"
-                "非零 = boost 引入了第二时域源，本组读数作废）\n",
+    std::printf("    B4 反向（长窗档 + 零抖动）meanSwing %s  maxSwing %s（期望**恰为 0**，"
+                "非零 = 长窗档引入了第二时域源，本组读数作废）\n",
         d6(B4.stat.meanSwing).c_str(), d6(B4.stat.maxSwing).c_str());
 
-    logCall("temporal-residual-static-boost",
+    // 🔴 标签曾名 `temporal-residual-static-boost`（批 13.7 起）。批 13.14b 删 boost 后长窗档
+    // 改由显式 `--long-feedback` 给出，标签同步换成中性名——**机器可读的身份里不许留已删机制**
+    // （`qa/log/imgqa_calls.jsonl` 是只增历史：旧条目保留旧标签，那正是它们当时的真相；
+    //  分界 = 本 commit，跨分界按标签查数要知道这里换过名）。键 `floor` 同步 → `longFeedback`。
+    logCall("temporal-residual-window",
         {{"periods", std::to_string(periods)}, {"warmMult", d4(warmMult)},
             {"variant", variant.empty() ? "forward" : variant},
-            {"floor", d4(floorVal)}, {"baseSpace", baseSpace ? "1" : "0"},
+            {"longFeedback", d4(longFeedback)}, {"baseSpace", baseSpace ? "1" : "0"},
             {"tau", d6(tau)}, {"B2_swing", d6(B2.stat.meanSwing)},
             {"B3_swing", d6(B3.stat.meanSwing)}, {"B3_p999", d6(B3.stat.p999Swing)},
             {"B3_frac", d2(B3.stat.fracOverTau * 100.0)},
@@ -819,7 +820,8 @@ int runStaticBoostSweep(const std::string& root, int periods, double warmMult,
 // 为什么必须有这条（一句话版）：合成靶 aa_target 是 LDR 黑白细杆，交付档 `frac>64LSB` 本来就是
 // 0，症状幅度比 bistro 的 HDR 高亮细线低一个量级 ⟹「meanSwing 降 7.2×」推不出「门框缝隙没了」。
 // 本变体在**交付配置**（deferred + env/skybox/IBL/AO/shadow 全开）+ **用户报障机位**上重测
-// 门关 vs 门开（`taa.static_boost`）的绝对残差，并顺带出债-47：`phaseAverageLuma` 梯度能量比
+// 短窗 vs 长窗（两档显式 `feedback`，历史：长窗档曾由 `static_boost` 给出，批 13.14b 已删）
+// 的绝对残差，并顺带出债-47：`phaseAverageLuma` 梯度能量比
 // 的**线性域**读数（`docs/phase13_plan.md` §1.5 的 0.671 是显示空间旧账，本处只出数、改判由
 // 主 agent 记账，本工具不动那份文档）。
 //
@@ -836,37 +838,39 @@ int runStaticBoostSweep(const std::string& root, int periods, double warmMult,
 //   ③ 机位 = `ProfileOpts::hasCamera` 写进 profile 的 camera.lua（**第 1 帧生效**；RPC 的
 //      `setCamera` 只是幂等重发，理由全文见 `ProfileOpts::hasCamera` 注释）。
 //
-// 每机位五组（只差被测项；编号 N 与 aa_target 的 R/B 错开防混读；N5 为后补的归因对照）：
-//   N1 fb=.12 js=1 门关   → 被测（用户现状）+ **定 τ**（五组共用）+ 阳性锚点的载体
-//   N2 fb=.12 js=1 门开   → 被测（`static_boost`，地板 = `--boost-floor`，默认 0.01）
-//   N3 fb=.12 js=0 门开   → **反向**：js=0 + 静止机位 ⟹ 首帧起历史 = 本帧（EMA 不动点，
-//        与 α 无关）⟹ 输出逐帧逐位相同 ⟹ 残差必须**恰为 0**；非零 = boost 接错地方或引擎
+// 每机位五组（只差被测项；编号 N 与 aa_target 的 R/B 错开防混读；N5 为后补的归因对照。
+// 短窗档 = fb 0.12，长窗档 = `--long-feedback`，默认 0.01）：
+//   N1 短窗 fb=.12 js=1   → 被测（用户现状的对照端）+ **定 τ**（五组共用）+ 阳性锚点的载体
+//   N2 长窗 fb=<档> js=1  → 被测（长窗档，α = `--long-feedback`，默认 0.01；历史：这一档曾由
+//        `static_boost` 的地板给出，批 13.14b 后直接写 `feedback`）
+//   N3 长窗 js=0          → **反向**：js=0 + 静止机位 ⟹ 首帧起历史 = 本帧（EMA 不动点，
+//        与 α 无关）⟹ 输出逐帧逐位相同 ⟹ 残差必须**恰为 0**；非零 = 长窗档接错地方或引擎
 //        有第二时域源，该机位 N1/N2 的读数一并作废
-//   N5 fb=.12 js=0 门关   → 反向**对照**（α=.12 无 boost）：N3 非零时用它归因——doorframe
-//        实测 bistro 在 js=0 有 8px×1LSB 的奇偶帧交替地板（与 boost 无关；机制候选 =
+//   N5 短窗 js=0          → 反向**对照**（α=.12 无长窗）：N3 非零时用它归因——doorframe
+//        实测 bistro 在 js=0 有 8px×1LSB 的奇偶帧交替地板（与窗档无关；机制候选 =
 //        jitterPx=(halton−0.5)·0 的**零符号**随相位翻，详见 G2 注释）
 //   N0 TAA 全关           → **确定性地板**（`determinism` 在 bistro 交付配置上的实例化）：
 //        连拍必须逐位相同；非零 ⟹ 非确定性在 TAA 之外，全表读数存疑（G0，见 runBistroCamera）
-//   N6（--diag-bs-off）   → js=0 门开但 base_space 关：把 N3 的翻转归因到 base_space 路径还是
+//   N6（--diag-bs-off）   → 长窗 js=0 但 base_space 关：把 N3 的翻转归因到 base_space 路径还是
 //        jitter 注入/裁剪盒等公共路径
-//   N4 fb=1  js=1 门关   → 梯度参考（理想 16 相位平均；**必须门关**——boost 会把 fb=1 也压到
-//        地板，「只抖不滤」的参考语义就没了，同 B1 的理由）
+//   N4 fb=1  js=1         → 梯度参考（理想 16 相位平均；**长窗档不碰它**——把 fb=1 也压到
+//        长窗，「只抖不滤」的参考语义就没了，同 B1 的理由）
 //
 // 两条守卫（不是质量判据，是「量具还活着吗」；质量结论本轮**只出数不判**，口径同
-// `--static-boost` 变体先例——判据 ⑤ 的带是门关口径，拿门开读数撞它 = 把「变好」判成「不合格」）：
-//   G1 阳性锚点：doorframe 门关 frac(swing>τ) ≥ 1%（与 aa_target 锚点同常量 `kAnchorFracFloor`）。
+// 合成靶长短窗变体先例——判据 ⑤ 的带是短窗口径，拿长窗读数撞它 = 把「变好」判成「不合格」）：
+//   G1 阳性锚点：doorframe 短窗 frac(swing>τ) ≥ 1%（与 aa_target 锚点同常量 `kAnchorFracFloor`）。
 //      用户肉眼看得见闪烁是既成事实，量出来接近 0 = 量具坏了 ⟹ **立刻停下**（rc=2），不跑其余机位。
 //   G2 反向：N3 的 meanSwing / maxSwing **恰为 0**（无容差，机制见上）。
 //   半间差 halfGapMax 与闭式容差 (1−α)^warm×满幅+量化项 只打印作**热身自证**（bistro 全帧 p99
 //   白电平高于合成靶，该容差在这里偏保守；超了打 ⚠ 不判红——它防的是「量到瞬态」，而 N3 恰 0
 //   已经排除了「连拍不是相位的确定性函数」里最贵的那类失效）。
 //
-// 批 13.7c 追加**亮度 × 梯度二维分带**（每机位一张门关表 + 一张门开表 + 一张差表，每格三个数：
+// 批 13.7c 追加**亮度 × 梯度二维分带**（每机位一张短窗表 + 一张长窗表 + 一张差表，每格三个数：
 // share / rate>τ / 残余质量占比；另附阈值与梯度轴的敏感性）。它要回答的是现有分带口径答不了的
 // 问题——所有现有测量只按梯度分带，而梯度分不清「几何边」与「高亮边」。要判的假设、两根轴的
 // 口径与定阈值的规则（闭式反解显示链 + 实测直方图门槛）、⭐ 判决线（**跑前写死**）全文 =
 // `temporal_residual.h`「亮度 × 梯度 二维分带」段；出表代码在本文件 `reportLumaGradBands`。
-// 尺子取 N1（门关 = 用户现状）并**两态共用**，差表里 Δshare 恰为 0 就是这件事的自证。
+// 尺子取 N1（短窗 = 用户现状的对照端）并**两态共用**，差表里 Δshare 恰为 0 就是这件事的自证。
 namespace {
 
 struct BistroRun {
@@ -899,7 +903,7 @@ struct BistroRun {
  */
 BistroRun runBistroGroup(const std::string& dir, const std::string& name, const std::string& tag,
     const BistroCam& cam, double feedback, double jitterScale, int periods, double warmMult,
-    double& tau, bool staticBoost, double staticFloor, bool wantMaps, bool taa = true,
+    double& tau, bool wantMaps, bool taa = true,
     bool baseSpace = true, const ClipArm& arm = {})
 {
     BistroRun r;
@@ -915,15 +919,14 @@ BistroRun runBistroGroup(const std::string& dir, const std::string& name, const 
     o.taaFeedback = feedback;
     o.taaJitterScale = jitterScale;
     o.taaBaseSpace = baseSpace;  // 交付态 = 引擎默认 true（口径差异①，勿改默认）
-    o.taaStaticBoost = staticBoost;
-    o.taaStaticFeedback = staticFloor;
     o.taaClipMode = arm.mode;    // 批 13.11 消融臂（0 = 门关 = 不写键 = 交付配置原样）
     o.taaClipSoft = arm.soft;
     makeProfile(dir, o);
 
-    // 热身 = ⌈warmMult/α⌉ 对齐到抖动周期；门开态 α = **地板**（爬满 ramp 后 feedback 恒 =
-    // static_floor，按 0.12 热身 = 把画面冻在瞬态上读「更好」的假绿）。红线 2。TAA 关无历史。
-    r.alpha = taa ? std::clamp(staticBoost ? staticFloor : feedback, 1e-6, 1.0) : 1.0;
+    // 热身 = ⌈warmMult/α⌉ 对齐到抖动周期；α = **写进 feedback 的那一档**（长短窗两档都是显式
+    // α，长窗档按长窗热身——按 0.12 热身长窗 = 把画面冻在瞬态上读「更好」的假绿）。红线 2。
+    // TAA 关无历史。
+    r.alpha = taa ? std::clamp(feedback, 1e-6, 1.0) : 1.0;
     const int warmRaw = static_cast<int>(std::ceil(warmMult / r.alpha));
     r.warm = ((warmRaw + kResidualPeriod - 1) / kResidualPeriod) * kResidualPeriod;
 
@@ -1015,7 +1018,7 @@ BistroRun runBistroGroup(const std::string& dir, const std::string& name, const 
     return r;
 }
 
-// ── 批 13.10：历史拒收 × 残余 的因果交叉表（判「boost 压不住」是不是邻域盒）──────────────
+// ── 批 13.10：历史拒收 × 残余 的因果交叉表（判「长窗压不住」是不是邻域盒）────────────
 //
 // 假设、口径三条、⭐ 判决线（跑前写死）全文 = `temporal_residual.h`「历史拒收 × 残余」段。
 // 本处只放采集与出表；分桶与交叉计数是**共用算子**（`rejectFractionOf` / `rejectCrossTab`）。
@@ -1031,12 +1034,11 @@ struct BistroReject {
  * 一组「历史拒收」采集：与 N1/N2 **只差 `diag_reject` 一个键**（RGB 逐位不变，见
  * `taa.frag.slang` 诊断 alpha 段），连拍取 **taa_out 附件**的 alpha 码。
  *
- * 热身与 α 的口径与 `runBistroGroup` 逐字相同（门开态 α = 地板）——拒收模式**依赖历史状态**，
+ * 热身与 α 的口径与 `runBistroGroup` 逐字相同（α = 写进 feedback 的那一档）——拒收模式**依赖历史状态**，
  * 热身不足读到的是瞬态的盒行为，不是稳态的。
  */
 BistroReject runBistroRejectGroup(const std::string& dir, const std::string& name,
-    const std::string& tag, const BistroCam& cam, double feedback, int periods, double warmMult,
-    double staticFloor, bool staticBoost)
+    const std::string& tag, const BistroCam& cam, double feedback, int periods, double warmMult)
 {
     BistroReject r;
     r.name = name;
@@ -1051,12 +1053,10 @@ BistroReject runBistroRejectGroup(const std::string& dir, const std::string& nam
     o.taaFeedback = feedback;
     o.taaJitterScale = 1.0;
     o.taaBaseSpace = true;
-    o.taaStaticBoost = staticBoost;
-    o.taaStaticFeedback = staticFloor;
     o.taaDiagReject = true;  // ← 与被测组唯一的差别（RGB 逐位不变）
     makeProfile(dir, o);
 
-    const double alpha = std::clamp(staticBoost ? staticFloor : feedback, 1e-6, 1.0);
+    const double alpha = std::clamp(feedback, 1e-6, 1.0);
     const int warmRaw = static_cast<int>(std::ceil(warmMult / alpha));
     const int warm = ((warmRaw + kResidualPeriod - 1) / kResidualPeriod) * kResidualPeriod;
 
@@ -1129,7 +1129,7 @@ struct RejectReport {
     double r0 = 0.0, rAll = 0.0, m3p = 0.0, bin0Share = 0.0;
     int branch = 2;  ///< 0 支持 / 1 否证 / 2 分不出
     double collapsed = 0.0, clipped = 0.0;
-    // 抑制保真度（闭式锚定主判据；只在门开那次算）
+    // 抑制保真度（闭式锚定主判据；只在长窗档那次算）
     bool fidelityRan = false, fidelityPass = false;
     double rho = 0.0, rhoStar = 0.0, line = 0.0, bin0Rho = 0.0;
 };
@@ -1137,11 +1137,11 @@ struct RejectReport {
 /**
  * 出拒收交叉表 + 逐档抑制比 + 执行两条判决线（两条都**跑前写死**在头注释；这里只执行）。
  *
- * @param swingOn  门开态的逐像素 swing（`--reject` 用它做交叉表）
- * @param swingOff 门关态的逐像素 swing（抑制比的分母；同一次采集）
- * @param alphaOn  门开态的**本帧权重**（= `static_feedback`）。**>0 才出抑制比与主判据**
- *                 （门关那次没有「压」这个动作，比无可比）
- * @param alphaOff 门关态的本帧权重（= `feedback`）
+ * @param swingOn  长窗档的逐像素 swing（`--reject` 用它做交叉表）
+ * @param swingOff 短窗档的逐像素 swing（抑制比的分母；同一次采集）
+ * @param alphaOn  长窗档的**本帧权重**（= `--long-feedback`）。**>0 才出抑制比与主判据**
+ *                 （短窗档那次没有「压」这个动作，比无可比）
+ * @param alphaOff 短窗档的本帧权重（= 0.12）
  */
 RejectReport reportRejectAttribution(const BistroReject& R, const cv::Mat& swingOn,
     const cv::Mat& swingOff, double tau, const std::string& camName, double alphaOn,
@@ -1167,7 +1167,7 @@ RejectReport reportRejectAttribution(const BistroReject& R, const cv::Mat& swing
         "0 全程收下", "1-2 偶发", "3-8", "9-16", "17+" };
     const SuppressionTable sup = suppressionByRejectBin(swingOn, swingOff, R.nAny);
     const double n = static_cast<double>(t.total);
-    std::printf("  ┌ 每像素「%d 帧里有几帧历史被动过」× swing（ρ = 门开/门关平均 swing）\n",
+    std::printf("  ┌ 每像素「%d 帧里有几帧历史被动过」× swing（ρ = 长窗/短窗平均 swing）\n",
         R.frames);
     std::printf("    %-13s %9s %9s %10s %10s %10s\n", "档", "share", "rate>τ", "残余质量",
         "Σswing", "ρ 抑制比");
@@ -1204,8 +1204,9 @@ RejectReport reportRejectAttribution(const BistroReject& R, const cv::Mat& swing
     rep.bin0Share = bin0Share;
     rep.branch = br == RejectBranch::Support ? 0 : (br == RejectBranch::Refute ? 1 : 2);
 
-    // ── 主判据：抑制保真度（闭式锚定，`temporal-residual-boost-fidelity`）──
-    // 线 = 1.5 × ρ*，ρ* = |H(α_on)|/|H(α_off)| 由**配置的 α** 运行时算（改档位自动自适应）。
+    // ── 主判据：抑制保真度（闭式锚定，`temporal-residual-window-fidelity`）──
+    // 线 = 1.5 × ρ*，ρ* = |H(α_on)|/|H(α_off)| 由**配置的 α** 运行时算（改档位自动自适应）；
+    // 下标 on/off = **长窗/短窗**两档（变量名沿用采集侧的 swingOn/swingOff，语义同）。
     if (alphaOn > 0.0 && sup.valid) {
         rep.fidelityRan = true;
         rep.bin0Rho = sup.bin[0].rho;
@@ -1227,7 +1228,7 @@ RejectReport reportRejectAttribution(const BistroReject& R, const cv::Mat& swing
     return rep;
 }
 
-/// 热图：逐像素 swing → INFERNO 8bit。**scale 必须门关/门开共用**——各图各自拉伸 =
+/// 热图：逐像素 swing → INFERNO 8bit。**scale 必须短窗/长窗共用**——各图各自拉伸 =
 /// 「看起来更闪」的把戏，肉眼比对当场失效。返回实际用的 scale（回显进 stdout）。
 double writeSwingHeat(const std::string& path, const cv::Mat& swing, double scale)
 {
@@ -1263,7 +1264,7 @@ double percentileOfMat(const cv::Mat& m, double p)
 constexpr double kBandMinClipMass = 0.0002;
 /// T_lo 稳定性门槛：|x−128| ≤ 8 带内质量须 < 2%（否则切在直方图尖峰上，档位不稳）
 constexpr double kBandMidSpikeCap = 0.02;
-/// 判决线的样本量门槛：B 格门关态 over-τ 像素低于它 ⟹ 不许拿噪声比噪声
+/// 判决线的样本量门槛：B 格短窗态 over-τ 像素低于它 ⟹ 不许拿噪声比噪声
 constexpr int64_t kBandMinOverForVerdict = 200;
 /// ⭐ 静止态判决线（批 13.7c 跑前写死，出处见头注释）：支持 = rB ≥ 1.5×rA；否证 = rB/rA ∈ [0.8,1.25]
 /// （1.5 = 头文件里的 `kBandSupportRatio`，两把移动尺子的「超额集中在 B」沿用同一个数）
@@ -1274,7 +1275,7 @@ struct BandReport {
     std::string verdict = "未出";
     double rA = 0.0;       ///< A 格（中间调×高梯度）的 rate 被压倍数 on/off
     double rB = 0.0;       ///< B 格（近削顶×高梯度）同上
-    double bMassOff = 0.0, bMassOn = 0.0;  ///< B 格残余质量占比（门关 / 门开）
+    double bMassOff = 0.0, bMassOn = 0.0;  ///< B 格残余质量占比（短窗 / 长窗）
     double tHi = 0.0;      ///< 实际用的近削顶字节下界（闭式给出）
     double gradThr = 0.0;  ///< 实际用的梯度 p90 阈值
     double shareDrift = 0.0;  ///< 两态带边界漂移（**须恰为 0**）
@@ -1301,10 +1302,10 @@ void printBandTable(const char* title, const BandTable& t)
                 "残余质量 = 该格 over-τ 像素占全帧的比例）\n");
 }
 
-/// 差表（门开 − 门关）。Δshare **必须恒 0** = 两态共用一把尺子的自证；非 0 = 尺子漏了。
+/// 差表（长窗 − 短窗）。Δshare **必须恒 0** = 两态共用一把尺子的自证；非 0 = 尺子漏了。
 double printBandDiff(const BandTable& off, const BandTable& on)
 {
-    std::printf("  ┌ 差（门开 N2 − 门关 N1）\n");
+    std::printf("  ┌ 差（长窗 N2 − 短窗 N1）\n");
     std::printf("    %-13s %9s %9s %10s %12s\n", "格", "Δshare", "Δrate", "Δ残余质量",
         "rate比(on/off)");
     double maxShareDrift = 0.0;
@@ -1384,7 +1385,7 @@ BandReport reportLumaGradBands(const BistroRun& N1, const BistroRun& N2, double 
     std::printf("    高梯度 = ≥ p%.0f = %s（占 %s%%；分位而非绝对阈值的理由见头注释）\n",
         kBandGradPct * 100.0, d4(gradThr).c_str(),
         d2(100.0 - kBandGradPct * 100.0).c_str());
-    std::printf("  尺子 = N1（门关 = 用户现状）的 byte-mean 与线性梯度，**两态共用一把尺子**\n");
+    std::printf("  尺子 = N1（短窗 = 用户现状的对照端）的 byte-mean 与线性梯度，**两态共用一把尺子**\n");
 
     const BandTable off = bandTableOf(N1.swingMap, luma, grad, tLo, tHi, gradThr, tau);
     const BandTable on = bandTableOf(N2.swingMap, luma, grad, tLo, tHi, gradThr, tau);
@@ -1392,8 +1393,8 @@ BandReport reportLumaGradBands(const BistroRun& N1, const BistroRun& N2, double 
         std::printf("  ✗ 分带表无像素（total=0），不出数\n");
         return rep;
     }
-    printBandTable("门关 N1（用户现状）", off);
-    printBandTable("门开 N2（taa.static_boost）", on);
+    printBandTable("短窗 N1（用户现状的对照端）", off);
+    printBandTable("长窗 N2（长窗档 α）", on);
     const double drift = printBandDiff(off, on);
     std::printf("    Δshare 最大 %s%%（**须恰为 0**：两态共用一把尺子的自证，非 0 = 差表作废）\n",
         d4(drift).c_str());
@@ -1421,15 +1422,15 @@ BandReport reportLumaGradBands(const BistroRun& N1, const BistroRun& N2, double 
     std::printf("    A 中间调×高梯度 rate %s%%→%s%%（×%s）  B 近削顶×高梯度 rate %s%%→%s%%（×%s）\n",
         d2(rate(aOff) * 100.0).c_str(), d2(rate(aOn) * 100.0).c_str(), d4(rA).c_str(),
         d2(rate(bOff) * 100.0).c_str(), d2(rate(bOn) * 100.0).c_str(), d4(rB).c_str());
-    std::printf("    B 的残余质量占比 %s%% → %s%%（%+.2f pp）  B 门关 over-τ 像素 %lld\n",
+    std::printf("    B 的残余质量占比 %s%% → %s%%（%+.2f pp）  B 短窗 over-τ 像素 %lld\n",
         d2(bMassOff * 100.0).c_str(), d2(bMassOn * 100.0).c_str(), (bMassOn - bMassOff) * 100.0,
         static_cast<long long>(bOff.over));
     if (bOff.over < kBandMinOverForVerdict || clipMass < kBandMinClipMass)
         rep.verdict = "分不出（B 格样本不足 / 近削顶档无定义）";
     else if (rate(bOff) <= 0.0 || rate(aOff) <= 0.0)
-        rep.verdict = "分不出（A 或 B 门关态 rate=0，比值无定义）";
+        rep.verdict = "分不出（A 或 B 短窗态 rate=0，比值无定义）";
     else if (rB >= kBandSupportRatio * rA && bMassOn > bMassOff)
-        rep.verdict = "支持假设：残余向「近削顶×高梯度」集中，boost 压不动高亮边";
+        rep.verdict = "支持假设：残余向「近削顶×高梯度」集中，长窗档压不动高亮边";
     else if (rB >= kBandEqualLo * rA && rB <= kBandEqualHi * rA)
         rep.verdict = "否证假设：两格等比例被压，残余不是高光专属";
     else
@@ -1537,19 +1538,20 @@ std::string clipArmName(const ClipArm& arm)
 }
 
 /**
- * 逐臂跑「门关 / 门开」两组并**当场出表**（长跑中途可读，不是一次性在最后打印）。
- * τ 由臂 0 的门关组定、全臂共用（与 `runBistroCamera` 同口径：跨臂比的是同一把尺子）。
- * 臂内 α：门关 = feedback 0.12、门开 = 地板；热身按各自 α 算（红线 2，门开态按地板热身）。
+ * 逐臂跑「短窗 / 长窗」两组并**当场出表**（长跑中途可读，不是一次性在最后打印）。
+ * τ 由臂 0 的短窗组定、全臂共用（与 `runBistroCamera` 同口径：跨臂比的是同一把尺子）。
+ * 臂内 α：短窗 = feedback 0.12、长窗 = `--long-feedback`；热身按各自 α 算（红线 2，
+ * 长窗档按长窗 α 热身）。
  */
 std::vector<ClipAblRow> runBistroClipAblation(const std::string& dir, const std::string& pre,
-    const BistroCam& cam, int periods, double warmMult, double boostFloor,
+    const BistroCam& cam, int periods, double warmMult, double longFeedback,
     const std::vector<ClipArm>& arms)
 {
     std::vector<ClipAblRow> rows;
     double tau = 0.0;
-    std::printf("\n── 历史裁剪消融 A/B（%s｜每臂两组：门关 fb=.12 / 门开 boost=%.3g；"
-                "τ 由臂 0 门关定，全臂共用）──\n",
-        cam.name, boostFloor);
+    std::printf("\n── 历史裁剪消融 A/B（%s｜每臂两组：短窗 fb=.12 / 长窗 fb=%.3g；"
+                "τ 由臂 0 短窗定，全臂共用）──\n",
+        cam.name, longFeedback);
     std::printf("  判决线（**跑前写死**，见 temporal_residual.h 同名常量）：\n"
                 "    ① 因果坐实 = ρ ≤ %s×ρ* 且 frac>τ 相对臂 0 降 ≥ %sx\n"
                 "    ② 否证     = 所有消融臂 ρ ≥ %s×ρ(臂0) ⟹ 盒不是主因\n"
@@ -1569,15 +1571,15 @@ std::vector<ClipAblRow> runBistroClipAblation(const std::string& dir, const std:
     //   **< 1 = 比理想 16 相位平均更糊** ⟹ 这才是「靠糊换安静」的方向；
     //   **> 1 = 比它更锐**，**不是作弊**：base_space 下每份贡献先 un-jitter 再累积，EMA 收敛到
     //     的是**基空间点采样**，而 fb=1 参考是 16 个亚像素偏移的**盒平均**（≈1px 模糊）。
-    // 实测（brickfence，门开）：现行 0.828 · 关盒 1.133 ⟹ **今天的裁剪正在往图里注入模糊**
-    //   （裁剪把历史换成 centroid = 5 抽头空间均值，boost 下裁剪事件权重 1−α ≈ 99%）——
+    // 实测（brickfence，长窗档）：现行 0.828 · 关盒 1.133 ⟹ **今天的裁剪正在往图里注入模糊**
+    //   （裁剪把历史换成 centroid = 5 抽头空间均值，长窗下裁剪事件权重 1−α ≈ 99%）——
     //   同一个 bug 的第二条代价：静止机位下交付的是糊图。
     // ⟹ 反作弊只查**变糊**这一侧，且以「不比臂 0 更糊」为准（臂 0 自己就偏糊；拿 1.0 当红线
     //    会把合法修法误杀）。
     double gradRef = 0.0;
     try {
         const BistroRun ref = runBistroGroup(dir + "_ref", "参考 fb=1（梯度分母）", pre + "ref",
-            cam, 1.0, 1.0, periods, warmMult, tau, false, boostFloor, false);
+            cam, 1.0, 1.0, periods, warmMult, tau, false);
         gradRef = ref.grad;
     } catch (const std::exception& e) {
         std::printf("  ✗ 锐度分母组采集失败: %s ⟹ 本表无法排除「靠糊换安静」，作废\n", e.what());
@@ -1595,19 +1597,19 @@ std::vector<ClipAblRow> runBistroClipAblation(const std::string& dir, const std:
         const std::string nm = clipArmName(r.arm);
         const std::string idx = "_" + std::to_string(i);
         try {
-            // ⚠ **两态必须吃同一臂**：ρ 是「同一裁剪行为下，boost 压掉几倍」。若门关固定在
-            // 臂 0、门开换臂，ρ 的分母就跟着臂变，跨臂不可比（表会看着漂亮但答不了问题）。
+            // ⚠ **两态必须吃同一臂**：ρ 是「同一裁剪行为下，长窗档压掉几倍」。若短窗固定在
+            // 臂 0、长窗换臂，ρ 的分母就跟着臂变，跨臂不可比（表会看着漂亮但答不了问题）。
             // 「本臂 vs 今天」是另一个数 = swingOn[臂X] / swingOn[臂0]，表里另算。
-            const BistroRun off = runBistroGroup(dir + "_off" + idx, "臂" + nm + " 门关",
-                pre + "off" + idx, cam, 0.12, 1.0, periods, warmMult, tau, false, boostFloor,
-                false, true, true, r.arm);
-            const BistroRun on = runBistroGroup(dir + "_on" + idx, "臂" + nm + " 门开",
-                pre + "on" + idx, cam, 0.12, 1.0, periods, warmMult, tau, true, boostFloor,
-                false, true, true, r.arm);
+            const BistroRun off = runBistroGroup(dir + "_off" + idx, "臂" + nm + " 短窗",
+                pre + "off" + idx, cam, 0.12, 1.0, periods, warmMult, tau, false, true, true,
+                r.arm);
+            const BistroRun on = runBistroGroup(dir + "_on" + idx, "臂" + nm + " 长窗",
+                pre + "on" + idx, cam, longFeedback, 1.0, periods, warmMult, tau, false, true,
+                true, r.arm);
             r.swingOff = off.stat.meanSwing;
             r.swingOn = on.stat.meanSwing;
             r.rho = r.swingOff > 0.0 ? r.swingOn / r.swingOff : 0.0;
-            r.rhoStar = emaSuppressionRatio(boostFloor, 0.12);
+            r.rhoStar = emaSuppressionRatio(longFeedback, 0.12);
             r.line = kBoostFidelityLine * r.rhoStar;
             r.fracOff = off.stat.fracOverTau;
             r.fracOn = on.stat.fracOverTau;
@@ -1669,7 +1671,7 @@ std::vector<ClipAblRow> runBistroClipAblation(const std::string& dir, const std:
     return rows;
 }
 
-int runBistroCamera(const BistroCam& cam, int periods, double warmMult, double boostFloor,
+int runBistroCamera(const BistroCam& cam, int periods, double warmMult, double longFeedback,
     const std::string& shotDir, bool diagBsOff, bool reject, const ClipArm& arm = {})
 {
     double tau = 0.0;
@@ -1686,7 +1688,7 @@ int runBistroCamera(const BistroCam& cam, int periods, double warmMult, double b
         double tau0 = 0.0;
         try {
             n0 = runBistroGroup(dir + "_n0", "N0 TAA关(地板)", pre + "n0", cam, 0.12, 1.0, periods,
-                warmMult, tau0, false, boostFloor, false, false);
+                warmMult, tau0, false, false);
         } catch (const std::exception& e) {
             std::printf("  %s N0 采集失败: %s\n", cam.name, e.what());
             return 2;
@@ -1698,36 +1700,34 @@ int runBistroCamera(const BistroCam& cam, int periods, double warmMult, double b
                 "（判据 = **恰为 0**）\n",
         floorOk ? "✓" : "✗", n0.byteMaxVsFirst, static_cast<long long>(n0.changedPx),
         d6(n0.stat.meanSwing).c_str());
-    // ⚠ 消融臂只加在 N1/N2（门关/门开）——N0/N3/N4/N5 是**反向守卫与梯度参考**，
+    // ⚠ 消融臂只加在 N1/N2（短窗/长窗）——N0/N3/N4/N5 是**反向守卫与梯度参考**，
     //   让它们也吃臂 = 守卫自己被被测改动污染，那就不是守卫了（债-55 型：键生效在错误的组上）。
     if (arm.mode > 0.5)
         std::printf("  ⚠ 消融臂 mode=%d soft=%s **只加在 N1/N2**；N0/N3/N4/N5 保持基线\n",
             static_cast<int>(arm.mode + 0.5), d4(arm.soft).c_str());
     try {
         runs.push_back(runBistroGroup(dir + "_n1",
-            "N1 门关 fb=.12 js=1", pre + "n1", cam, 0.12, 1.0, periods, warmMult, tau, false,
-            boostFloor, true, true, true, arm));
+            "N1 短窗 fb=.12 js=1", pre + "n1", cam, 0.12, 1.0, periods, warmMult, tau, true, true,
+            true, arm));
         // G1 阳性锚点（只钉 doorframe——用户报障机位是既成事实；其余机位接近 0 如实打印）。
         if (std::string(cam.name) == "doorframe" && runs[0].stat.fracOverTau < kAnchorFracFloor) {
             std::printf(
-                "\n  ✗ 阳性锚点挂零：doorframe 门关 frac(swing>τ) = %s%% < %s%%。\n"
+                "\n  ✗ 阳性锚点挂零：doorframe 短窗 frac(swing>τ) = %s%% < %s%%。\n"
                 "    用户肉眼看得见闪烁是既成事实，量出来接近 0 = **量具坏了**（或症状在此口径下\n"
-                "    根本不存在——那也是要紧的负结果）。立刻停下，不跑其余机位，不出任何门开结论。\n",
+                "    根本不存在——那也是要紧的负结果）。立刻停下，不跑其余机位，不出任何长窗结论。\n",
                 d2(runs[0].stat.fracOverTau * 100.0).c_str(), d2(kAnchorFracFloor * 100.0).c_str());
             return 2;
         }
         runs.push_back(runBistroGroup(projectRoot() + "/build/imgqa_resbis_" + cam.name + "_n2",
-            "N2 门开 fb=.12 js=1", pre + "n2", cam, 0.12, 1.0, periods, warmMult, tau, true,
-            boostFloor, true, true, true, arm));
+            "N2 长窗 fb=" + d4(longFeedback) + " js=1", pre + "n2", cam, longFeedback, 1.0,
+            periods, warmMult, tau, true, true, true, arm));
         runs.push_back(runBistroGroup(projectRoot() + "/build/imgqa_resbis_" + cam.name + "_n3",
-            "N3 反向 fb=.12 js=0", pre + "n3", cam, 0.12, 0.0, periods, warmMult, tau, true,
-            boostFloor, false));
+            "N3 反向 长窗 js=0", pre + "n3", cam, longFeedback, 0.0, periods, warmMult, tau,
+            false));
         runs.push_back(runBistroGroup(projectRoot() + "/build/imgqa_resbis_" + cam.name + "_n5",
-            "N5 反向对照 js=0门关", pre + "n5", cam, 0.12, 0.0, periods, warmMult, tau, false,
-            boostFloor, false));
+            "N5 反向对照 js=0短窗", pre + "n5", cam, 0.12, 0.0, periods, warmMult, tau, false));
         runs.push_back(runBistroGroup(projectRoot() + "/build/imgqa_resbis_" + cam.name + "_n4",
-            "N4 梯度参考 fb=1", pre + "n4", cam, 1.0, 1.0, periods, warmMult, tau, false,
-            boostFloor, false));
+            "N4 梯度参考 fb=1", pre + "n4", cam, 1.0, 1.0, periods, warmMult, tau, false));
     } catch (const std::exception& e) {
         std::printf("  %s 采集失败: %s\n", cam.name, e.what());
         return 2;
@@ -1735,7 +1735,7 @@ int runBistroCamera(const BistroCam& cam, int periods, double warmMult, double b
     const BistroRun& N1 = runs[0];
     const BistroRun& N2 = runs[1];
     const BistroRun& N3 = runs[2];
-    const BistroRun& N5 = runs[3];  // 反向**对照**：js=0 且 boost 关（α=.12）
+    const BistroRun& N5 = runs[3];  // 反向**对照**：js=0 且短窗（α=.12）
     const BistroRun& N4 = runs[4];
 
     std::printf("  τ = %s（N1 定，各组共用）白电平 p99 = %s  量化项 = %s\n", d6(tau).c_str(),
@@ -1755,7 +1755,7 @@ int runBistroCamera(const BistroCam& cam, int periods, double warmMult, double b
     }
     const double swingRatio =
         N1.stat.meanSwing > 0.0 ? N2.stat.meanSwing / N1.stat.meanSwing : 0.0;
-    std::printf("  门开/门关：meanSwing ×%s（%s→%s）  p99.9 %s→%s  frac>τ %s%%→%s%%\n",
+    std::printf("  长窗/短窗：meanSwing ×%s（%s→%s）  p99.9 %s→%s  frac>τ %s%%→%s%%\n",
         d4(swingRatio).c_str(), d6(N1.stat.meanSwing).c_str(), d6(N2.stat.meanSwing).c_str(),
         d6(N1.stat.p999Swing).c_str(), d6(N2.stat.p999Swing).c_str(),
         d2(N1.stat.fracOverTau * 100.0).c_str(), d2(N2.stat.fracOverTau * 100.0).c_str());
@@ -1767,57 +1767,58 @@ int runBistroCamera(const BistroCam& cam, int periods, double warmMult, double b
                 "本行只出数，改判由主 agent 记账）\n");
 
     // G2 反向守卫：js=0 + 静止 ⟹ 首帧起历史 = 本帧（EMA 不动点）⟹ 残差**恰为 0**，无容差。
-    // 非零时先归因再下结论：N5（js=0 且 boost **关**）是同场景的地板对照。doorframe 两轮实测
+    // 非零时先归因再下结论：N5（js=0 且短窗 α=.12）是同场景的地板对照。doorframe 两轮实测
     // （PIL 复核）：N3 = **8 个固定像素 × 1 LSB、奇偶帧两态交替**（偶帧=首帧，奇帧翻），7/8 个
-    // 落在强边缘（|∇luma| 47–115 vs 全图中值 4.5）且是暗部（luma 13–32）；N5（无 boost）同现
-    // （7px，maxSwing 反而更大）⟹ 地板与 boost 无关。机制候选 = `jitter_scale=0` 时
+    // 落在强边缘（|∇luma| 47–115 vs 全图中值 4.5）且是暗部（luma 13–32）；N5（短窗）同现
+    // （7px，maxSwing 反而更大）⟹ 地板与窗档无关。机制候选 = `jitter_scale=0` 时
     // jitterPx = (halton−0.5)·0 = **±0.0**，其符号随 Halton 相位逐帧交替（实测奇偶结构与之吻合），
     // 经 `proj[2][0] -= 2jx/W` 进入投影矩阵 ⟹ 恰压在边上的片元 tie-break 逐帧翻。N0（TAA 全关）
     // 与 N6（base_space 关）两个对照负责把「TAA 特性内 vs 之外」「base_space 路径 vs 公共路径」
     // 定死。⚠ 本注释早期版本写过「固定 ~1255 像素集」= 自写 PNG 解码器的伪影，已用 PIL 推翻。
     const bool revOk = N3.stat.meanSwing == 0.0 && N3.stat.maxSwing == 0.0;
     const bool revFloor = N5.stat.meanSwing == 0.0 && N5.stat.maxSwing == 0.0;
-    std::printf("  %s 反向守卫（N3 门开 js=0）：meanSwing %s maxSwing %s 变化 %lldpx"
+    std::printf("  %s 反向守卫（N3 长窗 js=0）：meanSwing %s maxSwing %s 变化 %lldpx"
                 "（期望**恰为 0**）\n",
         revOk ? "✓" : "✗", dExp(N3.stat.meanSwing).c_str(), dExp(N3.stat.maxSwing).c_str(),
         static_cast<long long>(N3.changedPx));
-    std::printf("  %s 反向对照（N5 门关 js=0，α=.12）：meanSwing %s maxSwing %s 变化 %lldpx"
-                "（地板参照：非零 ⟹ js=0 残差地板是**场景/驱动**的，非 boost 引入）\n",
+    std::printf("  %s 反向对照（N5 短窗 js=0，α=.12）：meanSwing %s maxSwing %s 变化 %lldpx"
+                "（地板参照：非零 ⟹ js=0 残差地板是**场景/驱动**的，非长窗档引入）\n",
         revFloor ? "✓" : "⚠", dExp(N5.stat.meanSwing).c_str(), dExp(N5.stat.maxSwing).c_str(),
         static_cast<long long>(N5.changedPx));
     if (!revOk && !revFloor)
-        std::printf("    ⚠ 两态同现（门关地板 %s vs 门开 %s）⟹ 归因 = 引擎 js=0 既有 tie-flip，"
+        std::printf("    ⚠ 两态同现（短窗地板 %s vs 长窗 %s）⟹ 归因 = 引擎 js=0 既有 tie-flip，"
                     "「恰为 0」红线在 bistro 上不可达（合成靶 aa_target 的 R3/B4 是 0，场景不同）；"
                     "N1/N2 读数**不作废**但守卫保持红，处置由主 agent 判\n",
             d6(N5.stat.maxSwing).c_str(), d6(N3.stat.maxSwing).c_str());
     if (!revOk && revFloor)
-        std::printf("    ✗ N3 非零而 N5（无 boost 同 js=0）恰为 0 ⟹ **boost 自己引入了第二时域源**，"
-                    "本机位 N1/N2 门开读数作废\n");
+        std::printf("    ✗ N3 非零而 N5（短窗同 js=0）恰为 0 ⟹ **长窗档自己引入了第二时域源**，"
+                    "本机位 N1/N2 长窗读数作废\n");
 
-    // N6 诊断（`--diag-bs-off`）：js=0 门开但 **base_space 关**——摘掉 un-jitter 与 c_{t−1}
+    // N6 诊断（`--diag-bs-off`）：长窗 js=0 但 **base_space 关**——摘掉 un-jitter 与 c_{t−1}
     // 修正、其余（jitter 注入 proj、历史裁剪盒、EMA）不动。N3 非零而 N6 恰 0 ⟹ 翻转住在
     // base_space 路径；N6 同非零 ⟹ 住在两者共用部分（jitter 注入 proj 的 ±0.0 / 历史裁剪盒）。
     bool sixRan = false, sixOk = false, sixNonZero = false;
     if (diagBsOff) {
         double tau6 = tau;  // τ 已非零，不会被 N6 覆写
         const BistroRun N6 = runBistroGroup(dir + "_n6", "N6 诊断 js=0 bs关", pre + "n6", cam,
-            0.12, 0.0, periods, warmMult, tau6, true, boostFloor, false, true, false);
+            longFeedback, 0.0, periods, warmMult, tau6, false, true, false);
         sixRan = true;
         sixOk = N6.stat.meanSwing == 0.0 && N6.stat.maxSwing == 0.0;
         sixNonZero = !sixOk;
-        std::printf("  %s N6 诊断（js=0 门开 base_space关）：meanSwing %s maxSwing %s %lldpx"
+        std::printf("  %s N6 诊断（js=0 长窗 base_space关）：meanSwing %s maxSwing %s %lldpx"
                     "（与 N3 对比归因：N3 非零而 N6 恰 0 = 翻转在 base_space 路径）\n",
             sixOk ? "✓" : "⚠", d6(N6.stat.meanSwing).c_str(), d6(N6.stat.maxSwing).c_str(),
             static_cast<long long>(N6.changedPx));
     }
 
-    // 热图：门关/门开共用 scale（门关 swing 的 p99.9，截顶显示；各图各自拉伸 = 把戏）。
+    // 热图：短窗/长窗共用 scale（短窗 swing 的 p99.9，截顶显示；各图各自拉伸 = 把戏）。
     const double scale = std::max(percentileOfMat(N1.swingMap, 0.999), 1e-12);
     const std::string offPath = shotDir + "/" + cam.name + "_swing_boost-off.png";
     const std::string onPath = shotDir + "/" + cam.name + "_swing_boost-on.png";
     writeSwingHeat(offPath, N1.swingMap, scale);
     writeSwingHeat(onPath, N2.swingMap, scale);
-    std::printf("  热图（共用 scale = 门关 p99.9 = %s，白电平处 1 LSB τ = %s）：\n", d6(scale).c_str(),
+    std::printf("  热图（共用 scale = 短窗 p99.9 = %s，白电平处 1 LSB τ = %s；文件名 boost-off/on "
+                "= 历史遗留，语义 = 短窗/长窗）：\n", d6(scale).c_str(),
         d6(tau).c_str());
     std::printf("    %s\n    %s\n", offPath.c_str(), onPath.c_str());
 
@@ -1827,24 +1828,24 @@ int runBistroCamera(const BistroCam& cam, int periods, double warmMult, double b
     const BandReport band = reportLumaGradBands(N1, N2, tau);
 
     // 批 13.10：历史拒收 × 残余 交叉表（`--reject`）。它要回答的是本命令此前**答不了**的问题：
-    // 门开把 meanSwing 压到 ×0.25，但纯 EMA 数学的下界是 ×0.082（|H| 比）——**压不满的那部分
+    // 长窗把 meanSwing 压到 ×0.25，但纯 EMA 数学的下界是 ×0.082（|H| 比）——**压不满的那部分
     // 住在哪**。判决线跑前写死 = `temporal_residual.h`「历史拒收 × 残余」段。
     RejectReport rejOff, rejOn;
     if (reject) {
         try {
-            // 两次调用喂**同一对 swing**（门开 N2 / 门关 N1），差别只在**分档用的拒收图**：
-            // N7 按门关态（α=.12）的盒行为分档、N8 按门开态分档。主判据只在门开那次出
-            // （alphaOn>0），门关那次没有「压」这个动作，比无可比。
+            // 两次调用喂**同一对 swing**（长窗 N2 / 短窗 N1），差别只在**分档用的拒收图**：
+            // N7 按短窗态（α=.12）的盒行为分档、N8 按长窗态分档。主判据只在长窗那次出
+            // （alphaOn>0），短窗那次没有「压」这个动作，比无可比。
             rejOff = reportRejectAttribution(
-                runBistroRejectGroup(dir + "_rejoff", "N7 拒收码 门关", pre + "n7", cam, 0.12,
-                    periods, warmMult, boostFloor, false),
-                N2.swingMap, N1.swingMap, tau, std::string(cam.name) + " · 分档 = 门关 N1（fb=.12）",
+                runBistroRejectGroup(dir + "_rejoff", "N7 拒收码 短窗", pre + "n7", cam, 0.12,
+                    periods, warmMult),
+                N2.swingMap, N1.swingMap, tau, std::string(cam.name) + " · 分档 = 短窗 N1（fb=.12）",
                 0.0, 0.12);
             rejOn = reportRejectAttribution(
-                runBistroRejectGroup(dir + "_rejon", "N8 拒收码 门开", pre + "n8", cam, 0.12,
-                    periods, warmMult, boostFloor, true),
+                runBistroRejectGroup(dir + "_rejon", "N8 拒收码 长窗", pre + "n8", cam,
+                    longFeedback, periods, warmMult),
                 N2.swingMap, N1.swingMap, tau,
-                std::string(cam.name) + " · 分档 = 门开 N8（static boost，用户现状）", boostFloor,
+                std::string(cam.name) + " · 分档 = 长窗 N8（长窗档，用户现状）", longFeedback,
                 0.12);
         } catch (const std::exception& e) {
             std::printf("\n  ✗ 拒收交叉表采集失败: %s\n", e.what());
@@ -1854,7 +1855,7 @@ int runBistroCamera(const BistroCam& cam, int periods, double warmMult, double b
 
     logCall("temporal-residual-bistro",
         {{"camera", cam.name}, {"periods", std::to_string(periods)},
-            {"warmMult", d4(warmMult)}, {"floor", d4(boostFloor)}, {"tau", d6(tau)},
+            {"warmMult", d4(warmMult)}, {"longFeedback", d4(longFeedback)}, {"tau", d6(tau)},
             {"N0_floor_ok", floorOk ? "1" : "0"},
             {"N0_px", std::to_string(n0.changedPx)},
             {"N1_swing", d6(N1.stat.meanSwing)}, {"N1_p999", d6(N1.stat.p999Swing)},
@@ -1895,11 +1896,11 @@ int runBistroCamera(const BistroCam& cam, int periods, double warmMult, double b
     // 守卫汇总：G0 地板与 G2 反向都计入 rc（G0 红 = 全表读数存疑，比 G2 更严重，绝不吞）。
     // sixOk 只作归因信息，不进 rc（诊断组不是判据）。
     (void)sixOk;
-    // 主判据红 ⟹ rc=1（`temporal-residual-boost-fidelity`，线跑前写死）。它与两条守卫同级别：
+    // 主判据红 ⟹ rc=1（`temporal-residual-window-fidelity`，线跑前写死）。它与两条守卫同级别：
     // 都是「这条命令的结论不许被读成通过」。
     if (reject && rejOn.fidelityRan && !rejOn.fidelityPass) {
-        std::printf("\n  ✗ 主判据 `temporal-residual-boost-fidelity` **FAIL**：ρ = %s > 线 %s"
-                    "（ρ* 闭式 %s，超 %s×）\n    ⟹ static boost 的抑制没到闭式的 2/3，差额住在被"
+        std::printf("\n  ✗ 主判据 `temporal-residual-window-fidelity` **FAIL**：ρ = %s > 线 %s"
+                    "（ρ* 闭式 %s，超 %s×）\n    ⟹ 长窗档的抑制没到闭式的 2/3，差额住在被"
                     "邻域盒夹过的像素上（见上表 ρ 列）\n",
             d4(rejOn.rho).c_str(), d4(rejOn.line).c_str(), d4(rejOn.rhoStar).c_str(),
             d4(rejOn.rho / rejOn.line).c_str());
@@ -1911,10 +1912,10 @@ int runBistroCamera(const BistroCam& cam, int periods, double warmMult, double b
 /**
  * 批 13.11 **消融 A/B 的机位循环**（`--clip-abl`）。默认臂集 = 现行 + 四条消融/修法臂：
  * 关盒（天花板参照）/ 扩 1.5×（债-60 重测臂）/ box9（空间加宽）/ 软裁剪 λ=0.3 与 0.1（修法臂）。
- * 每臂两组（门关 + 门开），判决线跑前写死在 `runBistroClipAblation`。
+ * 每臂两组（短窗 + 长窗），判决线跑前写死在 `runBistroClipAblation`。
  */
 int runBistroClipAblSweep(int periods, double warmMult, const std::string& camera,
-    double boostFloor, double onlyMode = 0.0, double onlySoft = 1.0)
+    double longFeedback, double onlyMode = 0.0, double onlySoft = 1.0)
 {
     // 臂集（第四轮 = **修法验证**，2026-10-06）：0 基准 · 1 关盒（闭式天花板）·
     // 7 标量时域 luma 膨胀 decay ∈ {0.5 推导值, 0.25, 0.75}。⚠ **decay 扫 3× 是"平台期"护栏**：
@@ -1937,17 +1938,17 @@ int runBistroClipAblSweep(int periods, double warmMult, const std::string& camer
         arms = {{ 0.0, 1.0 }, { onlyMode, soft }};
     }
     std::printf("bistro 历史裁剪消融 A/B（批 13.11）：交付配置原样，逐臂只差 `taa.clip_mode`"
-                "（门关 fb=.12 / 门开 static_feedback=%s）\n  %d×%d  静止机位  周期数 %d\n",
-        d4(boostFloor).c_str(), kSize[0], kSize[1], periods);
+                "（短窗 fb=.12 / 长窗 fb=%s）\n  %d×%d  静止机位  周期数 %d\n",
+        d4(longFeedback).c_str(), kSize[0], kSize[1], periods);
     int rc = 0;
     for (const auto& cam : kBistroCams) {
         if (camera != "all" && camera != cam.name)
             continue;
         const auto rows = runBistroClipAblation(
             projectRoot() + "/build/imgqa_clipabl_" + cam.name, "abl" + std::string(cam.name),
-            cam, periods, warmMult, boostFloor, arms);
+            cam, periods, warmMult, longFeedback, arms);
         std::vector<std::pair<std::string, std::string>> args = {
-            { "camera", cam.name }, { "floor", d4(boostFloor) }, { "periods", std::to_string(periods) }
+            { "camera", cam.name }, { "floor", d4(longFeedback) }, { "periods", std::to_string(periods) }
         };
         for (const auto& r : rows) {
             const std::string k = clipArmName(r.arm);
@@ -1969,41 +1970,55 @@ int runBistroClipAblSweep(int periods, double warmMult, const std::string& camer
     return rc;
 }
 
-int runBistroSweep(int periods, double warmMult, const std::string& camera, double boostFloor,
+int runBistroSweep(int periods, double warmMult, const std::string& camera, double longFeedback,
     bool diagBsOff, bool reject, const ClipArm& arm = {})
 {
     std::printf("bistro 真实场景时域残差（债-48，**只出数不判**）：交付配置 configs/ 原样"
                 "（deferred + env/skybox/IBL/AO/shadow 全开 + base_space=交付默认 true）\n"
-                "  %d×%d  静止机位  折叠 (2,%d,H,W)  周期数 %d  门开地板 static_feedback=%s\n"
+                "  %d×%d  静止机位  折叠 (2,%d,H,W)  周期数 %d  短窗档 α=0.12  长窗档 α=%s\n"
                 "  区域 = **全帧**（交付 picking=false 无 objectID，打开 = 改图形态；与 aa_target 的"
                 "数不可直接比，算子/域/τ 定义相同）\n",
-        kSize[0], kSize[1], kResidualPeriod, periods, d4(boostFloor).c_str());
+        kSize[0], kSize[1], kResidualPeriod, periods, d4(longFeedback).c_str());
     const std::string shotDir = projectRoot() + "/build/rgl/screenshots";
     int rc = 0;
     for (const auto& cam : kBistroCams) {
         if (camera != "all" && camera != cam.name)
             continue;
-        const int one = runBistroCamera(cam, periods, warmMult, boostFloor, shotDir, diagBsOff,
+        const int one = runBistroCamera(cam, periods, warmMult, longFeedback, shotDir, diagBsOff,
             reject, arm);
         if (one == 2)
             return 2;  // 采集失败 / 锚点中止：后面的机位不跑（停下报告）
         rc = std::max(rc, one);
     }
     if (rc == 0)
-        std::printf("\n全部机位：反向守卫绿、锚点在场。门开压没压住 = 看「门开/门关」行与热图，"
-                    "本命令不判（口径同 --static-boost 先例）。\n");
+        std::printf("\n全部机位：反向守卫绿、锚点在场。长窗压没压住 = 看「长窗/短窗」行与热图，"
+                    "本命令不判（口径同合成靶长短窗变体先例）。\n");
     return rc;
 }
 
 }  // namespace
 
 int cmdTemporalResidual(int periods, double warmMult, const std::string& variant,
-    double slowFeedback, bool skipSlow, bool baseSpace, double staticBoostFloor, bool bistro,
-    const std::string& camera, double boostFloor, bool diagBsOff, bool reject, bool clipAbl,
+    double slowFeedback, bool skipSlow, bool baseSpace, bool windowAbl, bool bistro,
+    const std::string& camera, double longFeedback, bool diagBsOff, bool reject, bool clipAbl,
     double clipMode, double clipSoft)
 {
     if (periods < 2 || periods % 2 != 0) {
         std::printf("--periods 必须是 ≥2 的偶数（两半折叠 = 同绝对相位对照）。收到 %d\n", periods);
+        return 2;
+    }
+    // 🔴 **长窗档必须严格短于短窗端 0.12**（批 13.14b 把这一档从 bool `--static-boost` 换成了
+    // 数值 `--long-feedback`，于是多出一条**必然绿**的自欺路径）：若 `longFeedback == 0.12`，
+    // 两臂在引擎侧是**同一个配置** ⟹ ρ = swingOn/swingOff ≡ 1，而闭式
+    // `ρ* = emaSuppressionRatio(0.12, 0.12) = 1`（selftest 里就钉着这条）⟹ 线 = 1.5×1 = 1.5
+    // ⟹ **ρ = 1 ≤ 1.5 恒绿**。`> 0.12` 更糟：ρ* > 1 把线抬得更高，而「长窗」其实更短。
+    // ⟹ 与其留一条会绿的空判据，不如当场拒（同本文件 `--reject` / `--clip-abl` 的处置方向：
+    // **被吃掉的键与被污染的答案，成本一样高**）。
+    if ((bistro || windowAbl) && !(longFeedback > 0.0 && longFeedback < 0.12)) {
+        std::printf("--long-feedback 必须落在 (0, 0.12)：0.12 是短窗端（B2 / N1 写死），"
+                    "两档相同 ⟹ ρ ≡ 1 且 ρ* ≡ 1 ⟹ 线 1.5 **必绿**，判据失去内容。"
+                    "收到 %g。默认 0.01 = 仓库拍板的长窗档。\n",
+            longFeedback);
         return 2;
     }
     // `--reject` 只在 bistro 变体里实现（拒收码要交付配置的 taa_out 附件 + 全帧区域口径）。
@@ -2017,20 +2032,21 @@ int cmdTemporalResidual(int periods, double warmMult, const std::string& variant
     // 批 13.11 消融臂：`--clip-abl` 是 bistro 侧的逐臂 A/B；`--clip <mode>` 是透传（两条路径都吃）。
     const ClipArm arm{clipMode, clipSoft};
     if (clipAbl && !bistro) {
-        std::printf("--clip-abl 只在 --bistro 变体里实现；合成靶侧请用 --static-boost <地板> "
+        std::printf("--clip-abl 只在 --bistro 变体里实现；合成靶侧请用 --long-feedback <档> "
                     "--clip <mode>（B2/B3/B4 三组吃同一臂，ρ 同口径可比）。\n");
         return 2;
     }
     // 批 13.7b 变体分岔（默认不进，现行 7 条判据路径逐字不变）
     if (bistro) {
         if (clipAbl)
-            return runBistroClipAblSweep(periods, warmMult, camera, boostFloor, clipMode, clipSoft);
-        return runBistroSweep(periods, warmMult, camera, boostFloor, diagBsOff, reject, arm);
+            return runBistroClipAblSweep(
+                periods, warmMult, camera, longFeedback, clipMode, clipSoft);
+        return runBistroSweep(periods, warmMult, camera, longFeedback, diagBsOff, reject, arm);
     }
-    // 批 13.7 变体分岔（默认 0 = 不进，现行 7 条判据路径逐字不变）
-    if (staticBoostFloor > 0.0)
-        return runStaticBoostSweep(projectRoot() + "/build", periods, warmMult, variant, baseSpace,
-            staticBoostFloor, arm);
+    // 批 13.7 变体分岔（`--long-feedback` 显式给出才进，现行 7 条判据路径逐字不变）
+    if (windowAbl)
+        return runWindowSweep(projectRoot() + "/build", periods, warmMult, variant, baseSpace,
+            longFeedback, arm);
     if (warmMult < 6.0)
         std::printf("⚠ --warm-multiplier %g < 6：EMA 瞬态 (1−α)^t 在 t=6/α 处还剩 0.25%%，"
                     "再小量的就是瞬态不是稳态（红线 2）\n\n",

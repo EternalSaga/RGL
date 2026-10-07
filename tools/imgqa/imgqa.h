@@ -168,13 +168,8 @@ struct ProfileOpts {
     /// ⚠ 本工具所有「游动 = 抖动差」的判据（`temporal-swim-pixels` / `temporal-jitter-*`）
     ///   钉的都是**门关**口径；门开态由 `temporal-base-space` 单独判（见其容差理由）。
     bool taaBaseSpace = false;
-    /// 批 13.7：scene.lua `taa.static_boost`（静态机位历史权重提升，引擎侧总门默认关）。
-    /// true = 同时写 `static_feedback`（⚠ **本帧权重**地板，同 feedback 语义：
-    /// **调小 = 更信历史**）。只在 temporal-residual 的 `--static-boost` 变体里置位。
-    bool taaStaticBoost = false;
-    double taaStaticFeedback = 0.01;   ///< scene.lua `taa.static_feedback`（本帧权重地板）
     /// scene.lua `taa.motion_compensation`（prevSpin 刚体补偿）。默认 true = **不写键**
-    /// （写出的键越少漂移面越小，同 static_boost 的做法）；false = 显式写 `false`。
+    /// （写出的键越少漂移面越小，同其余诊断键的做法）；false = 显式写 `false`。
     /// ⚠ 它只关**场景旋转补偿**：spin 激励下历史错位 = 被测项（`--motion spin` 的 M3）；
     ///   **相机运动下它是恒等阵 = 关与不关逐位相同**，消融相机重投影必须用 `taaReprojection`。
     bool taaMotionCompensation = true;
@@ -188,7 +183,7 @@ struct ProfileOpts {
     bool taaDiagReject = false;
     /// scene.lua `taa.input_kernel`（批 13.8 输入侧 un-jitter 的**重建核选择**）。
     /// 0 = 双线性（**引擎默认 = 不写键 = 逐位今天**）/ 1 = Catmull-Rom 4×4 / 2 = Lanczos3 6×6。
-    /// ⚠ 0 时**不写键**（写出的键越少漂移面越小，同 staticBoost 的做法）；非 0 才写。
+    /// ⚠ 0 时**不写键**（写出的键越少漂移面越小，同其余诊断键的做法）；非 0 才写。
     /// 消费方 = `temporal-flicker` / `aa-coverage` / `temporal-feedback` 的 `--kernel`。
     double taaInputKernel = 0.0;
     /// 批 13.11 **历史裁剪消融门**（scene.lua `taa.clip_mode` / `taa.clip_soft`）。
@@ -609,24 +604,27 @@ int cmdTemporal(int pairs, int warm, const std::string& variant, bool baseSpace 
 /// @param slowFeedback 单调性轴的低端 α（默认 0.002 = 等效窗 ≈500 帧 ≫ 抖动周期 16）
 /// @param baseSpace 批 13.2 门 `taa.base_space`（true = 输出在**基空间**）。本命令用它做
 ///                **归因**：门关读数 = 整幅游动 + 闪烁，门开读数 ≈ 只剩闪烁。
-/// @param staticBoostFloor 批 13.7 门 `taa.static_boost` 的**变体开关 + 地板**（>0 = 进变体
-///                模式：跑「fb=1 参考 / fb=.12 门关 / fb=.12 门开 / 门开+js=0 反向」四组，
-///                **只出数不判**——⑤ 的带是门关口径、刻意设计成修复落地后应当变红，判它 =
-///                把「变好」判成「不合格」；默认 0 = 现行 7 条判据，门关口径不变）。
+/// @param windowAbl 批 13.7 变体的**开关**（合成靶长短窗对照，`--long-feedback` 显式给出即
+///                true = 进变体模式：跑「fb=1 参考 / 短窗 .12 / 长窗档 / 长窗档+js=0 反向」
+///                四组，**只出数不判**——⑤ 的带是短窗口径、刻意设计成修复落地后应当变红，判它 =
+///                把「变好」判成「不合格」；false = 现行 7 条判据，短窗口径不变）。
+///                历史：本变体曾由 `--static-boost <地板>` 驱动（批 13.7），批 13.14b 删
+///                static boost 后长窗档直接用 `feedback` 显式表达，开关并入 `--long-feedback`。
 /// @param bistro 批 13.7b `--bistro`（债-48 主体）：换**交付配置 + 用户报障机位**（bistro 三机位，
-///                坐标 = 本文件 kBistroCams 的仓库资产）重测门关 vs 门开绝对残差 + 债-47 的
+///                坐标 = 本文件 kBistroCams 的仓库资产）重测短窗 vs 长窗绝对残差 + 债-47 的
 ///                **线性域**梯度比 + 逐像素 swing 热图。**只出数不判** + 两条量具守卫
-///                （doorframe 门关阳性锚点挂零 = 立刻停下；门开 js=0 反向 = 恰为 0，非零时
-///                由 N5「js=0 门关」对照归因）。口径差异（全帧区域 / base_space 钉 true）
+///                （doorframe 短窗阳性锚点挂零 = 立刻停下；长窗 js=0 反向 = 恰为 0，非零时
+///                由 N5「js=0 短窗」对照归因）。口径差异（全帧区域 / base_space 钉 true）
 ///                → temporal_residual.cpp 头注释。
 /// @param camera 机位过滤（"all" = 三机位全跑；doorframe / wetground / doorpanel = 单跑）
-/// @param boostFloor 门开态的 `taa.static_feedback` 地板（默认 0.01 = 仓库拍板档）
-///        批 13.7c：`--bistro` 每机位另出**亮度 × 梯度二维分带**（门关 / 门开 / 差三张表，
+/// @param longFeedback **长窗档**的 `taa.feedback`（默认 0.01 = 仓库拍板档；短窗档恒 = 0.12）。
+///        历史：这一档曾藏在 `static_feedback` 里，批 13.14b 删 boost 后直接写 `feedback`。
+///        批 13.7c：`--bistro` 每机位另出**亮度 × 梯度二维分带**（短窗 / 长窗 / 差三张表，
 ///        每格 share·rate·残余质量三数 + 阈值敏感性），判「残余闪烁住在高亮边还是普通边缘」；
 ///        口径与判决线（跑前写死）→ `temporal_residual.h` 同名段。
 int cmdTemporalResidual(int periods, double warmMult, const std::string& variant,
-    double slowFeedback, bool skipSlow, bool baseSpace = false, double staticBoostFloor = 0.0,
-    bool bistro = false, const std::string& camera = "all", double boostFloor = 0.01,
+    double slowFeedback, bool skipSlow, bool baseSpace = false, bool windowAbl = false,
+    bool bistro = false, const std::string& camera = "all", double longFeedback = 0.01,
     bool diagBsOff = false, bool reject = false, bool clipAbl = false, double clipMode = 0.0,
     double clipSoft = 1.0);
 
@@ -673,16 +671,17 @@ int cmdTemporalResidual(int periods, double warmMult, const std::string& variant
  *             就在被内容变化刷新，回显帧数即可）
  * @param warmStill M4 静止组热身帧数（≥6/α=50 对齐周期 ⟹ 默认 64）
  * @param edgePercentile 边缘掩码的梯度分位（默认 0.90 = 梯度最高的 10% 像素带）
- * @param boostFloor 批 13.11：>0 = 打开 `taa.static_boost` 并把地板设为本值（**本帧权重**）。
- *        spin 模式下相机静止 ⟹ boost 真的会生效 ⟹ 这正是 债-49 的风险区（静止机位 + 场景内
- *        运动 + 超长累积窗）。默认 0 = 不写键 = 交付态 = 已发表 M0…M4 读数口径。
+ * @param longFeedback 批 13.11：**长窗档覆写**（>0 = 把 TAA 开组的 `taa.feedback` 覆写为本值，
+ *        即 α 恒 = 本值）。spin 模式下相机静止 ⟹ 长窗全程生效 ⟹ 这正是 债-49 风险区（静止机位 +
+ *        场景内运动 + 超长累积窗）。默认 0 = 不覆写 = 交付态 = 已发表 M0…M4 读数口径。
+ *        历史：本开关曾驱动 `static_boost` 地板（批 13.11），批 13.14b 删 boost 后直接覆写 `feedback`。
  * @param clipMode / clipSoft 批 13.11 **历史裁剪消融臂**（`taa.clip_mode` / `taa.clip_soft`）。
  *        默认 0 = 不写键 = 交付态。用途 = 量「放宽盒要付多少鬼影」：同一命令、同一构建、同一
  *        激励，只换臂 ⟹ dev(M1)/dev(M0) 的跨臂差就是鬼影代价。阳性锚点 = **关盒（臂 1）必须
  *        显著变差**；若不变差，说明邻域盒在鬼影上**根本没承重**，那就不必为它保留闪烁代价。
  */
 int cmdTemporalMotion(const std::string& camera, const std::string& motion, double angleDeg,
-    int burst, int warm, int warmStill, double edgePercentile, double boostFloor = 0.0,
+    int burst, int warm, int warmStill, double edgePercentile, double longFeedback = 0.0,
     double clipMode = 0.0, double clipSoft = 1.0);
 
 /**
