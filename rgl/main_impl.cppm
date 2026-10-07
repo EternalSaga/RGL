@@ -299,10 +299,6 @@ void wireSceneEnvContexts(entt::registry& rg, const SceneConfig& scene) {
 	env.taaJitterScale = scene.taaJitterScale;
 	env.taaMotionCompensation = scene.taaMotionCompensation;
 	env.taaBaseSpace = scene.taaBaseSpace;  // 批 13.5 基空间累积（唯一消费者 = taa.frag）
-	// 批 13.7 static boost 三键（总门默认关 = 逐位今天行为；语义/方向红线 → SceneEnv 字段注释）
-	env.taaStaticBoost = scene.taaStaticBoost;
-	env.taaStaticFeedback = scene.taaStaticFeedback;
-	env.taaStaticRamp = scene.taaStaticRamp;
 	// 重投影消融 + 历史拒收诊断（均默认 = 逐位今天；语义 → SceneEnv 字段注释）
 	env.taaReprojection = scene.taaReprojection;
 	env.taaDiagReject = scene.taaDiagReject;

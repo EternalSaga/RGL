@@ -256,7 +256,10 @@ return {
     -- 三者都还没落地成基准 = 债-46。
     taa = {
         enabled = false,
-        -- feedback = 0.12,        -- 本帧权重（Filament 同默认 ⇒ ≈19 帧收敛）
+        -- feedback = 0.01,        -- 本帧权重（taa.frag: lerp(clipped, cur, x) ⟹ **调小 =
+        --                             -- 更信历史**；0.01 ⇒ 等效累积窗 ≈100 帧）。原 static
+        --                             -- boost 的静止地板现在是**唯一档位**（boost 机制已删）。
+        --                             -- 扫档依据 → rgl/scene_config.cppm `taaFeedback` 注释。
         -- jitter_scale = 1.0,     -- 抖动幅度倍率，1 = ±0.5px
         -- motion_compensation = true,  -- prevSpin 刚体重投影（关 = 纯相机重投影）
         -- reprojection = true,      -- 重投影消融门（诊断，默认开 = 逐位今天）：关 = 历史按
@@ -269,25 +272,6 @@ return {
         --                             -- 码编进 taa_out 的 alpha（0 收下 / 0.25 盒裁剪 / 0.5 盒拒收 /
         --                             -- 0.75 重投影拒收 / 1 无历史），RGB 逐位不变。回读 =
         --                             -- POST /shot {"attachment":"taa_out"}（消费方 = imgqa temporal-motion）。
-        -- ── 批 13.7 静态机位历史权重提升（static boost，总门默认**关**）──
-        -- 机制账：α=0.12 的 EMA 等效窗 ≈8 帧 < Halton(2,3) 抖动周期 16，16 帧周期分量按
-        -- |H| = α/|1−(1−α)e^{−j2π/16}| = 0.312 漏过 31% ⟹ 静止机位 1px 细线「固定频率 +
-        -- 固定位置」shimmer。机位连续静止（cameraStatic 且历史可用）达 static_ramp 帧后，
-        -- 把**本帧权重**线性压到 static_feedback ⟹ 等效窗 1/floor ≫ 16。线性域已验证
-        -- 收敛值离理想 16 相位平均只差 1.5–4% 且不随窗变长恶化（不拿糊换安静）。
-        -- ⚠ 方向红线（与 feedback 同语义，主 agent 翻过一次车）：static_feedback 是
-        --   **本帧权重**（taa.frag: lerp(clipped, cur, x)）⟹ **调小 = 更信历史**，
-        --   「提升历史」= 「把本值调小」。
-        -- 任何跳切 / resize / TAA 关 ⟹ 计数器立刻归 0 = 立刻回到 feedback（不拿鬼影换安静）。
-        -- ⚠ 已知边界（待记债）：静止判据只看相机位姿、不认识场景内运动（无 velocity
-        --   buffer，唯一保护 = 既有邻域盒裁剪）——静态机位 + 动物，累积越长鬼影越重。
-        -- static_boost = false,     -- 总门（默认关 = 逐位今天的 feedback 行为）
-        -- static_feedback = 0.01,   -- 静止地板（**本帧权重**；0.01 ⇒ 等效窗 ≈100 帧）。
-        --   档位是 2026-10-05 扫出来的（aa_target 交付态 base_space=true，meanSwing / 梯度比）：
-        --   门关 0.00446/0.968 · 0.05→0.00226/0.953 · 0.02→0.00110/0.941 · 0.01→0.00062/0.932
-        --   三档梯度比全在 [0.85,1.02] 内 ⟹ 按「带内取残差最低」拍 0.01（判据变体出数，
-        --   `imgqa temporal-residual --static-boost <地板> --base-space`）。
-        -- static_ramp = 16,         -- 连续静止多少帧爬满地板（= 抖动周期 16）
         -- ── 历史裁剪消融门（批 13.11，默认 clip_mode=0 = **逐位今天**）──
         -- 根因（`调试历史.md` 2026-10-06 实测）：`clipToAabb` 在 **blend 之前**替换历史，而混合是
         -- `lerp(clipped, cur, α)` ⟹ **一次裁剪 = 一次历史重置**（clipped 的权重是 1−α）。1px 高对比

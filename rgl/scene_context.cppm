@@ -492,7 +492,7 @@ export struct SceneEnv {
 	// enabled 决定**图形态**（decorateTaaPass 是否调用，启动期读一次）+ 每帧是否抖动；
 	// feedback/jitterScale/motionCompensation 每帧进 scene data @722208，imgui 可调。
 	bool taaEnabled = false;
-	float taaFeedback = 0.12f;   ///< 本帧权重（Filament 默认 0.12 ⇒ ≈19 帧收敛）
+	float taaFeedback = 0.01f;   ///< 本帧权重（0.01 ⇒ 等效累积窗 ≈100 帧，扫档依据 → scene_config.cppm 同名字段）
 	float taaJitterScale = 1.0f;  ///< 抖动幅度倍率（1 = ±0.5px）
 	bool taaMotionCompensation = true;  ///< 是否用 prevSpin 补偿全场景旋转
 	// 批 13.5 基空间累积（`taa.base_space`，语义于批 13.5 改义 → scene_config.cppm 同名字段
@@ -510,17 +510,6 @@ export struct SceneEnv {
 	//   一次都不施加。也**不得**做成 imgui 滑杆（图形态启动期定死，运行期改会让标志与
 	//   图脱钩 = 双施或零施）。
 	bool taaAoApplied = false;
-	// ── 批 13.7 静态机位历史权重提升（scene.lua `taa.static_boost` 三键，总门默认**关**）──
-	// 连续「机位静止（cameraStatic）且历史可用」达 taaStaticRamp 帧 ⟹ 把**本帧权重**从
-	// taaFeedback 线性压到 taaStaticFeedback（映射 = taaBoostedFeedback 纯函数，单测钉）。
-	// ⚠ 方向红线：taaStaticFeedback 与 taaFeedback **同语义** = **本帧权重**
-	//   （taa.frag: lerp(clipped, cur, x)）⟹ **调小 = 更信历史**（主 agent 本轮翻过一次车）。
-	// 总门关 ⟹ taaSystem 把 env.taaFeedback **原样**写进载荷 = 今天的逐位行为（门红线）。
-	// ⚠ 已知边界（待记债）：静止判据只看相机位姿、不认识场景内运动（本项目无 velocity
-	//   buffer，唯一保护 = 既有邻域盒裁剪）——静态机位 + 动物 ⟹ 累积越长鬼影越重。
-	bool taaStaticBoost = false;
-	float taaStaticFeedback = 0.01f;  ///< 静止地板（**本帧权重**；0.01 ⇒ 等效窗 ≈100 帧，扫档依据 → configs/scene.lua 注释）
-	uint32_t taaStaticRamp = 16u;     ///< 爬满帧数（默认 = 抖动周期 16，让等效窗跨过周期）
 	// 重投影消融门（`taa.reprojection`，默认 true = 逐位今天）：false ⟹ taaSystem 把
 	// 「上一帧矩阵」载荷换成本帧抖动后矩阵 + 位移清零 + motion 单位阵 ⟹ shader 的
 	// prevUvBase ≡ baseUv（历史按同基位置采样）。判据消费方 = imgqa temporal-motion M3。
@@ -625,22 +614,12 @@ export struct TaaState {
 	glm::vec3 prevForward{0.0f, 0.0f, -1.0f};
 	glm::ivec2 prevExtent{0, 0};   ///< resize 检测（RT 重建 ⇒ 历史作废）
 	uint32_t frameIndex = 0;       ///< jitter 序列游标（跳切**不**重置：抖动相位连续无副作用）
-	// 批 13.7 static boost 簿记：连续「机位静止（cameraStatic）且历史可用」的帧数。
-	// 任何跳切 / resize / TAA 关 / 机位移动 ⟹ **立刻归 0**（推进 = taaNextStaticFrames
-	// 纯函数，单测钉）。刻意住 TaaState（本 ctx 已是「跨帧 CPU 状态」的唯一真相源），
-	// 不新开平行 ctx（AGENTS ECS 规范第 1 条：registry 是场景唯一数据源）。
-	uint32_t staticFrames = 0;
 	// ── 本帧载荷（taaSystem 先算、renderListSystem 后读；与簿记**分开存**：同一字段
 	//    既当载荷又当簿记，就会把「谁先读谁后推进」写成隐式时序耦合）──
 	glm::mat4 payloadPrevViewProj{1.0f};
 	glm::vec2 payloadPrevContentShift{};  ///< 本帧载荷 = 上一帧内容位移（历史基空间修正用）
 	glm::mat4 payloadMotion{1.0f};  ///< prevSpin·inverse(curSpin)（关补偿 = 单位阵）
 	bool historyValid = false;      ///< 本帧历史可否复用（false = shader 输出本帧）
-	/// 本帧载荷 = **生效 feedback**（scene data @722208.x = taaParams.x = **本帧权重**，
-	/// taa.frag: lerp(clipped, cur, x)）。= taaBoostedFeedback(env.taaStaticBoost,
-	/// staticFrames, ...)；门 `taa.static_boost` 关（默认）⟹ **原样 = env.taaFeedback**
-	/// （逐位门红线）。imgui 滑杆仍写 env.taaFeedback（= boost 的 base），本字段只承载其输出。
-	float payloadFeedback = 0.12f;
 };
 
 }  // namespace RGL

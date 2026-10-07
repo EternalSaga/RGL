@@ -265,11 +265,10 @@ void fillTaaData(FrameDrawList& out, const ViewProjection& viewProj, const Scene
 	out.sceneData.taaMotion = taa.payloadMotion;
 	// zw = **本帧内容位移 c_t**。⚠ 批 13.5 起 taa.frag 真读它做输入侧 un-jitter；
 	// 此前这里写的是 jitterPx 而 shader 从不读 = 死载荷（口径差一个 y 轴翻号，读了就错）。
-	// x = **生效 feedback**（批 13.7 起 = taa.payloadFeedback，static boost 的输出；门
-	// `taa.static_boost` 关（默认）⟹ payloadFeedback **原样 = env.taaFeedback** ⟹ 本行
-	// 逐位不变（门红线）。⚠ x 是**本帧权重**（taa.frag: lerp(clipped, cur, x)），
-	// boost 的方向 = 把它**调小**（更信历史），别搞反。
-	out.sceneData.taaParams = {taa.payloadFeedback, taa.historyValid ? 1.0f : 0.0f,
+	// x = **本帧权重**（= env.taaFeedback，imgui 滑杆写的就是它；批 13.14b 删掉静态机位
+	// 权重提升后没有中间镜像，直接取 env）。⚠ 方向红线：taa.frag: lerp(clipped, cur, x)
+	// ⟹ **调小 = 更信历史**，别搞反。
+	out.sceneData.taaParams = {env.taaFeedback, taa.historyValid ? 1.0f : 0.0f,
 		contentShift.x, contentShift.y};
 	// ── 批 13.5 基空间累积（门 `taa.base_space`，**语义已改义**）──
 	// 旧义（批 13.2）：在 tonemap 加 `+c_t` 采样偏移把**输出**搬回基空间（只修显示那一半）。

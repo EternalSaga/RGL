@@ -58,13 +58,6 @@ void readBool(sol::table table, const char* key, bool& into) {
 		into = *v;
 }
 
-/** 顶层表取 uint32 字段（缺失/负数 = no-op 回落现值；lua 无负数下界，越界负值直接忽略）。 */
-void readU32(sol::table table, const char* key, uint32_t& into) {
-	sol::optional<int64_t> v = table[key];
-	if (v && *v >= 0)
-		into = static_cast<uint32_t>(*v);
-}
-
 /** defaultSceneConfig 定义（接口注释见 scene_config.cppm）：六条内建 pipeline + styles {unlit,pbr} + spin。 */
 SceneConfig defaultSceneConfig() {
 	SceneConfig cfg;
@@ -356,11 +349,6 @@ void parseDeferredStyles(sol::table root, SceneConfig& cfg) {
 			readBool(taa, "motion_compensation", cfg.taaMotionCompensation);
 			// 批 13.2 基空间输出（键名对齐引擎侧 lua 惯例：snake_case）
 			readBool(taa, "base_space", cfg.taaBaseSpace);
-			// 批 13.7 静态机位历史权重提升（static boost；总门默认关 = 逐位今天行为）。
-			// ⚠ static_feedback 是**本帧权重**（同 feedback 语义）：调小 = 更信历史。
-			readBool(taa, "static_boost", cfg.taaStaticBoost);
-			readFloat(taa, "static_feedback", cfg.taaStaticFeedback);
-			readU32(taa, "static_ramp", cfg.taaStaticRamp);
 			// 重投影消融门（默认 true = 逐位今天；关 = 历史按同基位置采样，见字段注释）
 			readBool(taa, "reprojection", cfg.taaReprojection);
 			// 历史拒收诊断门（默认关；开 = 拒收码编进 taa_out alpha，RGB 逐位不变）
