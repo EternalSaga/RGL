@@ -765,6 +765,17 @@ double Engine::cameraYawDegrees()
     return json::parse(res->body).at("camera").at("yawDegrees").get<double>();
 }
 
+EngineCameraPose Engine::cameraPoseDegrees()
+{
+    auto res = impl_->http->Post("/camera", "{}", "application/json");
+    if (!res || res->status != 200)
+        throw std::runtime_error(
+            "POST /camera（只读回显姿态）失败: " + (res ? std::to_string(res->status) : "无响应"));
+    const json cam = json::parse(res->body).at("camera");
+    return { cam.at("yawDegrees").get<double>(), cam.at("pitchDegrees").get<double>(),
+        cam.at("fovDegrees").get<double>() };
+}
+
 void Engine::setCameraYaw(double yawDegrees)
 {
     const json body{{"yawDegrees", yawDegrees}};

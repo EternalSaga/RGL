@@ -2,8 +2,9 @@
 //
 // 条目正文（容差理由 / guard 出处）是**判据契约**，逐字搬自 judge.cpp 的 registeredJudgments()，
 // 本批次只搬位置 + 加族字段，未改一字（对拍方法见批次 C3 交付）。
-// 本族单族 269 代码行，按语义段切成三个函数（102 / 110 / 57），每段 < 120（护栏阈值）。
-// 拼接顺序由 judgments_table.cpp 的 registeredJudgments() 决定（= 判据现行顺序）。
+// 本族按语义段切成**四个**函数（护栏阈值 = 单函数 120 代码行；具体条数见 `judgments_table.h`
+// 各声明的注释，本文件不抄——抄一次漂一次）。拼接顺序由 judgments_table.cpp 的
+// registeredJudgments() 决定（= 判据现行顺序）。
 
 #include "judgments_table.h"
 
@@ -202,8 +203,12 @@ const std::vector<JudgmentInfo>& temporalTailBoostJudgments()
             "spin 已经把内容搬走 ⟹ frac 立刻跳到 **0.3+ 量级**。0.02 与 0.3 之间没有中间地带，"
             "所以这条同时守两件最容易悄悄坏掉的事：**帧号配对正确** 与 **残差算子零点正确**。\n"
             "⚠ 跨进程渲染确定性不是逐位（bistro 上 `G0 确定性地板` 已知常红，1 LSB / 个位数像素，"
-            "债-61）；它给 frac 加的是加性噪声，分子分母都是跨十万像素的均值 ⟹ 1e-3 量级，被 0.02 吸收。",
+            "债-61）；它给 frac 加的是加性噪声，分子分母都是跨十万像素的均值 ⟹ 1e-3 量级，被 0.02 吸收。\n"
+            "🔴 **本条被 `--motion spin` 与 `--motion camera` 共用**（批 13.14a）。相机运动下它"
+            "**更硬**：配对错开一帧 ⟹ yaw 已转过一整帧 ⟹ 参考与候选根本不在同一视点，"
+            "而分子是**同帧同视点**比较 ⟹ frac 立刻跳。",
             {"tools/imgqa/temporal_motion.cpp `temporal-tail` 头注释「判决线（跑前写死）」第 1 条；"
+             "tools/imgqa/temporal_motion.cpp `cmdTemporalTailCamera` 头注释「判决线」第 1 条；"
              "docs/还债总账.md 债-63"},},
         {"temporal-tail-events", JudgmentFamily::TemporalMotion,
             "**在场性 + 反向**（两条对偶，堵「0 事件」的两种解释）。\n"
@@ -231,6 +236,104 @@ const std::vector<JudgmentInfo>& temporalTailBoostJudgments()
             "也**不许**报「臂 X 比臂 Y 鬼影小」——那是在噪声上盖结论。\n"
             "⚠ 本条不判 TAA 好不好（长窗本来就该鬼影更重），只判本量具有没有力气。",
             {"tools/imgqa/temporal_motion.cpp `temporal-tail` 头注释「判决线」第 4 条"},},
+    };
+    return kPart;
+}
+
+/**
+ * 批 13.14a `temporal-tail --motion camera`（机位运动稳态份额）的四条判决契约。
+
+ * 从 `temporalTailBoostJudgments()` 里**单独切一个函数**：护栏是直接原因（单函数 < 120 代码行），
+ * 但语义上也该切——上面那族判的是「静止机位 + 场景 spin」，本族判的是「机位运动」，
+ * **成立条件不同**（spin 下臂 11 的 `gate` 恒 1.0，本族的存在理由就是量那个进不了斜坡区的洞）。
+ * 唯一两模式共用的是 `temporal-tail-pairing`，它留在上面那族不动。
+ */
+const std::vector<JudgmentInfo>& temporalTailCameraJudgments()
+{
+    static const std::vector<JudgmentInfo> kPart = {
+        // ── 批 13.14a `--motion camera`（机位运动稳态份额）新增四条 ──────────────
+        {"temporal-tail-phi-sign", JudgmentFamily::TemporalMotion,
+            "**仪器前提，排在第一条**（`--motion camera`）：解析映射 φ 的**符号与尺度**由实机数据"
+            "标定——扫映射角度的倍数 `{−2,−1,−0.5,0,0.5,1,1.5,2}`，报**无条件** `alignedΔ`，"
+            "取 argmin。**线：argmin = +1**（容差取开区间 `(0.5, 1.5)`，即只许落在 ±1 与 ±0.5/+2 "
+            "之间，方向错一档就红）。\n"
+            "🔴 **本条是从一次真实的静默错误里长出来的**：`yawRemapHomography` 曾把相机基写成"
+            " `R_y(yaw)·R_x(pitch)`，而该矩阵第三列是 `−cameraForward`（z 轴朝后）；拿它配"
+            " `u = cx + c[0]/c[2]·f` 等价于把正确映射共轭 `diag(1,1,−1)` ⟹ **yaw 静默反号，其余"
+            "全对**（恒等性、pitch 修正、yaw 无关性统统照过）。首轮实机读数 `alignedΔ = 1.29 ×"
+            " rawΔ`（对齐后**比完全不对齐还差**），量级正好对上「净 2δ 位移」的帧差。\n"
+            "为什么单测拦不住、只能由本条守：`selftest` 的金标准当时与实现**共用同一个朝后的基**"
+            " ⟹ 对拍 2.3e-13px 全绿。⟹ **自搭金标准只钉「实现 == 我的模型」，钉不了「模型 =="
+            " 引擎」**；那一半只有实机数据能裁决（同形态的实机对拍先例 = "
+            "`temporal-homography-explained` 的「符号对拍：t 与 −t 两个闭式假设的残差都回显」）。\n"
+            "⚠ 本条红 ⟹ 其余三条的 Δ 分母不可信（φ 反号把系统错位混进 Δ，臂间真差被稀释），"
+            "**先修 φ，不许改判决线**。⚠ 只读 argmin 不读曲率：图像差值对位移**饱和**，"
+            "argmin 附近曲线本就不对称。",
+            {"tools/imgqa/temporal_motion.cpp `printSmearPhiCalibration` 头注释（含首轮 argmin ="
+              " −1 与 1.29× 的定量指纹）；tools/imgqa/temporal_yaw_remap.cpp 头注释「静默符号错」"
+              "一节；tools/imgqa/selftest.cpp 变异红线表「yaw 增量反号」行"},},
+        {"temporal-tail-smear-alpha-monotone", JudgmentFamily::TemporalMotion,
+            "**灵敏度锚点 + 单位定义**（`--motion camera`）。主指标单位 = **「相当于几帧过期历史」**：\n"
+            "`帧 = frac / 一帧过期刻度`，而刻度 `= Σ mean(Δ²,gate) / Σ mean(Δ,gate)` 由**参考自身**算出"
+            "（候选 = `ref_{j−1}∘φ` 时分子恒等于 Δ，但 Δ 加权份额给出的不是 1 而是 `Σ Δ²/Σ Δ`"
+            "——不除掉它读数就没有单位）。于是 0 = 与参考逐位相同、1 = 恰好一帧过期、≫1 = 长窗累积，"
+            "**与场景内容无关 ⟹ 跨机位可比**。\n"
+            "🔴 **本条取代首版的「闭式 1−α」预注册，且取代理由是推导错误不是放宽**：首版假设历史"
+            "**不被重投影**（`out = α Σ(1−α)^k N_{j−k}∘φ^k` ⟹ `frac = 1−α`）。但引擎**默认开重投影**"
+            "（`Spec::reprojection/motionCompensation = true`）⟹ `N_{j−k}∘φ^k ≈ N_j` ⟹ **`out ≈ ref`、"
+            "frac ≈ 0 才是对的**。首版实测 0.0649 撞上这条线，量的是我的模型错，不是仪器坏。\n"
+            "**重投影正常时 TAA 在屏幕空间不产生运动模糊**——它把历史搬到内容现在的位置再平均；"
+            "机位运动的鬼影只住在**去遮挡处**，而 `Δ = |ref_j − ref_{j−1}∘φ|` 正是去遮挡探测器。\n"
+            "**线（两条 AND）**：① 关盒短窗 `帧 ≥ 0.8`。推导：`out = α·cur + (1−α)·stale` ⟹ "
+            "`|out−ref| = (1−α)·过期量`，而 Δ 门内的过期量 ≥ 1 帧 ⟹ 下界 `1−α = 0.88`，留一点余量取 0.8。"
+            "② 关盒**长**窗 > 短窗（窗越长累积过期越久）——这条是灵敏度锚点：不成立 ⟹ 本仪器分辨不了 "
+            "α，也就分辨不了 13.14b 要做的「α 恒 0.01」。\n"
+            "⚠ 本条不判 TAA 好坏，判的是**读数有没有单位、仪器分不分得出 α**。",
+            {"tools/imgqa/temporal_motion.cpp `cmdTemporalTailCamera` 判决线 2 与"
+             "`SmearAngle::oneFrameFrac` 注释；docs/phase13_plan.md §1.16 第 4 条（已标注被取代）"},},
+        {"temporal-tail-static-collapse", JudgmentFamily::TemporalMotion,
+            "**零点锚**（`--motion camera`）：相机静止（δ=0）的 **Z 组**（`jitter_scale=0` +\n"
+            "`feedback=1` ⟹ 输出 ≡ 本帧）喂进同一个算子，frac 必须塌到 ≈0。\n"
+            "**线：frac(Z, δ=0) ≤ 0.02**（与 `--motion spin` 的 `temporal-tail-pairing` 同口径，"
+            "那边实测 1.08e-4）。\n"
+            "不塌 = φ 或帧号配对在**造信号**——此时所有臂的 frac 都带一个共同的加性底，"
+            "臂间差异仍然看起来可解释，是本类仪器最阴的假绿形态。\n"
+            "🔴 **两条实现细节就是这条的全部价值**：\n"
+            " 1. 反向组必须**借主角度的 φ**，不能用 δ=0 的 φ。用 δ=0 的 φ ⟹ 恒等映射 ⟹ 静止"
+            "画面的 Δ ≡ 0 ⟹ `frac = 0/0` 被兜底成 0 ⟹ **一条永远绿的空断言**（第一版就踩在"
+            "这里，靠「样本数 > 1000」这条副断言才暴露：δ=0 时 Δ > τ 的像素数为 0）。\n"
+            " 2. 零点锚**必须是 jitter=0 的 Z**，不能是 jitter=1 的常规臂。jitter=1 + 长窗在静止"
+            "画面上的收敛输出 = **16 个抖动相位的平均**，比无抖动参考真的更糊（边缘差 ≈ 半个"
+            "像素）；首轮实测它的 frac = 0.1286 ≈ 0.5px ÷ 3px，**那是地板不是零点**，拿它当"
+            "零点会把正确的仪器判成坏（第一版定的线是 `frac ≤ 0.05` 喂 A0，就是这么错的）。\n"
+            "⟹ 本条同时输出地板读数 `A0(δ=0)`：它是主角度各臂的**同口径加性底**——报臂间差"
+            "时用它，报绝对份额时减掉它。",
+            {"tools/imgqa/temporal_motion.cpp `cmdTemporalTailCamera` 判决线 3 的实现处注释"
+             "（含首轮 0.1286 地板误读）；docs/phase13_plan.md §1.16 第 6 条"},},
+        {"temporal-tail-gate-breakpoint", JudgmentFamily::TemporalMotion,
+            "**阳性锚点，且是这台仪器存在的唯一理由**（`--motion camera`）。\n"
+            "臂 11 的记忆门 `gate = saturate(2 − motion)` 里 `motion` 是**每帧**位移，而鬼影是整个"
+            "窗（≈100 帧）的**累积**位移 ⟹ 慢速运动每帧 1.5px 落在斜坡上（gate≈0.5）但 100 帧"
+            "累积 150px ⟹ **记忆半开 = 洞**（§1.14 缺陷 2）。而 **spin 模式下相机不动 ⟹"
+            " `prevUvBase ≡ baseUv` ⟹ gate 恒 1.0**（那正是「静止机位与臂 8 逐位相同」的机制）"
+            "⟹ spin 版仪器**原理上进不了斜坡区**。\n"
+            "**线（三条 AND）**：① 两档必须**真的夹住斜坡**——门开侧 `motion ≤ 1px`（gate = 1）"
+            "且门关侧 `motion ≥ 2px`（gate = 0）；② 门开侧 `frac(臂11) − frac(臂0) > 0.02`"
+            "（洞在场）；③ 门关侧绝对值 < 门开侧（gate 关门 ⟹ `mem` 退回本帧瞬时 `ext` ⟹ 硬裁剪"
+            " ⟹ 臂 11 拿臂 0 的行为）。\n"
+            "🔴 **分侧按实测 `gate = saturate(2 − motion)` 判，不按 CLI 参数名**，且 ① 是硬守卫。"
+            "本轮的坑：`saturate(2 − motion)` 的**斜坡宽 1px**（`=1` 要 motion ≤ 1、`=0` 要 ≥ 2），"
+            "而「低角度侧」取在 0.09°/帧 = 中心 **1.34px** = **斜坡中间**（gate 0.66），不是斜坡"
+            "**下方**。拿它当门全开读，阳性锚点会被读成「洞不存在」。⟹ 采样点落在哪一侧现在每次"
+            "运行都打在表上（`gateSide()`），不夹住斜坡直接红并点名。**「比断点小」≠「门开着」。**\n"
+            "🔴 断点位置是**从门的表达式推出来的**，不是扫出来的 ⟹ 它是阳性锚点不是拟合。\n"
+            "为什么现在必须有：批 13.14 把 α 恒写 0.01（删 `static_boost` 的模式）的全部赌注，"
+            "就压在「gate 在运动时关掉记忆能兑住长窗」上（§1.15 第 3 条）。**没有这台仪器，"
+            "13.14 改完无法验收。**\n"
+            "⚠ 门关侧不判「frac 必须小」——机位运动快的时候长窗本来就鬼，判的是"
+            "**臂 11 与臂 0 的差**消失，即门确实在起作用。",
+            {"tools/imgqa/temporal_motion.cpp `cmdTemporalTailCamera` 头注释「判决线」第 4 条；"
+             "docs/phase13_plan.md §1.14 缺陷 2、§1.15 第 3 条、§1.16「13.14 拆 a/b」"},},
     };
     return kPart;
 }

@@ -220,6 +220,14 @@ struct ProfileOpts {
 };
 std::string makeProfile(const std::string& outDir, const ProfileOpts& opts);
 
+/// 引擎回显的相机姿态（度）。批 13.14a 相机运动版尾长的**解析**映射与配对都靠它——
+/// 见 `Engine::cameraPoseDegrees()` 的两条理由（pitch 进映射、yaw 定配对）。
+struct EngineCameraPose {
+    double yawDegrees = 0.0;
+    double pitchDegrees = 0.0;
+    double fovDegrees = 0.0;
+};
+
 /// 引擎进程：起 headless、RPC 驱动、干净退出。单实例纪律 = 起跑前 pgrep，有残留拒跑
 /// （并行实例互相遮挡合成，会把画面与帧率双双扭曲，AGENTS.md 测量教训同源）。
 /// 起跑前先过 SPV 新鲜度守卫（.slang 比其所属 spv 新 = 疑似 stale 拒跑，批 12.3d-D2）。
@@ -245,6 +253,25 @@ public:
      * 帧号，才能把中点姿态算出来并用 RPC 精确落位。
      */
     [[nodiscard]] double cameraYawDegrees();
+
+    /**
+     * 读回引擎当前的相机姿态（度）——一次空 body `POST /camera` 拿全三个字段。
+     *
+     * 为什么必须有（批 13.14a 相机运动版尾长）：
+     *  - **pitch**：分母要**解析**的帧间像素映射，而该映射依赖 pitch（`frame_yaw` 动的是
+     *    yaw、pitch 不变 ⟹ 旋转轴是世界 Y 不是相机 up，pitch ≈ 12° 时忽略它会错
+     *    0.485px/帧、pitch ≈ −34° 的机位错 1.43px/帧）。从 position/target 反解 pitch
+     *    等于**复制引擎公式**（会漂），故走 RPC 读回。
+     *  - **yaw**：配对偏移的**唯一可靠来源**。首轮实测 `framePre` 之差在各组间是
+     *    −12…−1，而绝对偏移宽扫的 argmin 落在 0 附近 ⟹ **渲染帧计数器不是 yaw 帧索引**。
+     *    而 yaw 本身是 `yawBase + frameYaw·帧号` 的纯函数，且 burst 前后各读一次就得到
+     *    **实测每帧角速度** ⟹ 配对偏移 = `Δyaw / 每帧角`，仍是「引擎报真值 + 解析换算」，
+     *    **不引入任何图像配准**（本命令的设计红线）。
+     *
+     * ⚠ pitch 在整个 burst 内恒定（frame_yaw 不碰它），读一次即够；yaw 必须在 burst **前后各
+     *    读一次**（burst 内它在动）。
+     */
+    [[nodiscard]] EngineCameraPose cameraPoseDegrees();
 
     /// 只改 yaw（position/target/fov 不动）。RPC 写相机 = **重设基准**，之后 frame_yaw 从新基准
     /// 继续推进 ⟹ 调用方要按「一次 /shot 会推进多少帧」预先补偿，见 captureFlickerSeries。
@@ -695,6 +722,24 @@ int cmdTemporalFeedback(const std::string& camera, double angleDeg, int burst,
  */
 int cmdTemporalTail(const std::string& camera, double angleDeg, int burst, int warm, int maxLag,
     double tau, int margin);
+
+/**
+ * 批 13.14a **相机运动版尾长**（`temporal-tail --motion camera`）：机位匀速 yaw 下的
+ * 稳态鬼影份额。存在的理由不是「给 spin 版补对称性」——spin 下相机不动 ⟹ 臂 11 的
+ * `gate = saturate(2 − motion)` **恒 1.0** ⟹ 现有仪器原理上进不了 gate 的斜坡区，
+ * 而批 13.14 把 α 恒写 0.01 的全部赌注正压在这个门上（→ `phase13_plan.md` §1.16）。
+ *
+ * 分子 = `|out_j(p) − ref_j(p)|`（同帧同视点，**不需要配准**）；
+ * 分母 = `Δ_j(p) = |ref_j(p) − ref_{j−1}(φ(p))|`，φ = **解析** yaw 映射（带 pitch，
+ * `temporal_yaw_remap`）⟹ 主指标从「尾长」退化为「稳态份额」`frac = Δ加权残差 ÷ Δ`。
+ * 闭式锚点跟着换：一阶稳态运动模糊 = `1 − α`。
+ *
+ * @param angleDeg      每帧 yaw 增量（度/帧，`camera.lua frame_yaw` 同语义）
+ * @param gateAngleDeg  gate 断点的高档角度（度/帧）；**0 = 跳过判决线 4**（只跑前三条）
+ * @param margin        共用内部窗口两端余量（帧）；⚠ 另需 ≥ 每帧位移的边界内缩
+ */
+int cmdTemporalTailCamera(const std::string& camera, double angleDeg, double gateAngleDeg,
+    int burst, int warm, double tau, int margin);
 
 /// 逐杆覆盖率对拍闭式（批 12.6 T4，docs/taa_plan.md §7 第 10 条）：单帧量阶梯杆的
 /// 「黑度积分 vs 投影宽度」，TAA 关应当被二值覆盖量化破坏、TAA 开应当贴合闭式。

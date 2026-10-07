@@ -33,6 +33,10 @@ namespace RGL::imgqa {
 /// 尾事件 / 盒载荷 / 尾单调。
 [[nodiscard]] const std::vector<JudgmentInfo>& temporalTailBoostJudgments();
 
+/// 运动族 · **机位运动**稳态份额（批 13.14a，3 条）：闭式刻度 / 静止塌缩 / gate 断点。
+/// 与上面那族的差别 = 成立条件不同（spin 下臂 11 的 `gate` 恒 1.0，进不了斜坡区）。
+[[nodiscard]] const std::vector<JudgmentInfo>& temporalTailCameraJudgments();
+
 /// 运动族 · feedback 与闭式回扣（5 条）：参数活性 / 零态 / 回扣 / 闪烁闭式 / 单应解释。
 [[nodiscard]] const std::vector<JudgmentInfo>& temporalFeedbackClosureJudgments();
 

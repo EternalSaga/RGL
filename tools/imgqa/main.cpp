@@ -638,6 +638,28 @@ bool isRigCommand(const std::string& cmd)
     return kRig.contains(cmd);
 }
 
+/**
+ * `temporal-tail` 的 spin / camera 分派（批 13.14a）。
+ *
+ * 抽成独立函数的理由有二：① `dispatchTemporal` 的认知复杂度已到上限；② 更要紧的是
+ * **拼错 `--motion` 必须报错**，不能静默回落 spin——否则「以为跑了机位运动、实际拿到
+ * 静止机位的数」这种错误完全没有暴露途径（两个模式的读数都长得很像）。
+ */
+int dispatchTemporalTail(const Args& P)
+{
+    const std::string motion = P.get("--motion");
+    if (motion != "camera" && motion != "spin") {
+        std::fprintf(stderr, "--motion 只认 camera / spin（收到 %s）\n", motion.c_str());
+        return 2;
+    }
+    if (motion == "camera")
+        return cmdTemporalTailCamera(P.get("--camera"), P.number("--angle"),
+            P.number("--gate-angle"), P.integer("--burst"), P.integer("--warm"),
+            P.number("--tau"), P.integer("--margin"));
+    return cmdTemporalTail(P.get("--camera"), P.number("--angle"), P.integer("--burst"),
+        P.integer("--warm"), P.integer("--max-lag"), P.number("--tau"), P.integer("--margin"));
+}
+
 /// temporal-* 家族（7 条）——按前缀转出去，见 dispatch。
 int dispatchTemporal(const std::string& cmd, const Args& P)
 {
@@ -657,9 +679,7 @@ int dispatchTemporal(const std::string& cmd, const Args& P)
             P.number("--edge-pct"), P.number("--boost"), P.number("--clip"),
             P.number("--clip-soft"));
     if (cmd == "temporal-tail")
-        return cmdTemporalTail(P.get("--camera"), P.number("--angle"), P.integer("--burst"),
-            P.integer("--warm"), P.integer("--max-lag"), P.number("--tau"),
-            P.integer("--margin"));
+        return dispatchTemporalTail(P);
     if (cmd == "temporal-feedback") {
         std::vector<double> fbs;
         std::stringstream fs(P.get("--fb"));

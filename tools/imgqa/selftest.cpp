@@ -199,8 +199,12 @@ bool hasBacktickedName(const char* s)
 void testJudgmentFamilies(Checker& c)
 {
     const auto& all = registeredJudgments();
-    // 43 是**当前**条数，写死它才有牙：族拆分/合并时漏接一个子表，这里立刻红。
-    c.chk("判据总数 == 43（族拆分最容易掉条目）", all.size() == 43, std::to_string(all.size()));
+    // 47 是**当前**条数，写死它才有牙：族拆分/合并时漏接一个子表，这里立刻红。
+    // 43 → 46 = 批 13.14a `temporal-tail --motion camera` 新增三条（smear-alpha-monotone /
+    // static-collapse / gate-breakpoint）；46 → 47 = 同批把 **φ 符号标定**从诊断升格成判据
+    // （`temporal-tail-phi-sign`）——理由见其契约：自搭金标准与实现共享朝后的相机基，
+    // 单测对拍 2.3e-13px 全绿仍漏掉 yaw 反号，那一半只有实机数据守得住。
+    c.chk("判据总数 == 47（族拆分最容易掉条目）", all.size() == 47, std::to_string(all.size()));
     size_t n[4] = {0, 0, 0, 0};
     for (const auto& j : all) {
         switch (j.family) {
@@ -1436,26 +1440,38 @@ void testCliArgsBehavior(Checker& c)
 
 // ── 批 13.14a：带 pitch 的解析 yaw 重映射（temporal_yaw_remap）────────────────
 //
-// 金标准 = **显式构造两帧相机基**（yaw 与 yaw+δ 各建一次 R_cam，经世界系回投）。
-// 它与被测实现（合并成 `R_x(−pitch)·R_y(δ)·R_x(pitch)` 一步）唯一的公共假设是
-// 「yaw 会消掉」——那正是本判据要验的命题，所以这个对照**是独立的**，不是自证。
+// 金标准 = **显式构造两帧相机基**（yaw 与 yaw+δ 各建一次，经世界系回投）。基的三列
+// **逐字照抄** `rgl/camera.cppm` 的 `cameraRight/Up/Forward`（见 `engineBasis`），
+// 与被测实现（合并成 `R_x(p)·R_y(−δ)·R_x(−p)` 一步）之间**没有任何可共享的中间约定**。
+// 两者的公共假设只剩「yaw 会消掉」——那正是本判据要验的命题，所以这个对照**是独立的**。
 //
 // 为什么这条必须存在：本文件的**手推闭式连错两次**（求逆漏 `(ABC)⁻¹ = C⁻¹B⁻¹A⁻¹`
 // 的顺序翻转一次、符号展开错一次），第二次错到 pitch≠0 时偏 1.76px 而 pitch=0 时
 // 完全正确 —— 也就是说**只测 pitch=0 的退化情形抓不到它**。故金标准必须扫 pitch。
 //
+// ### ⚠ 但「独立金标准」也漏过一次：**共用的基**比共用的公式更危险
+//
+// 本判据第一版金标准与实现**都用** `R_y(yaw)·R_x(pitch)` 当相机基，而该矩阵第三列是
+// `−fwd`（z 轴朝后）⟹ 两边**同时**把 yaw 符号弄反，对拍拿到 2.3e-13px 全绿，实机 φ
+// 标定扫描却给出 argmin = **−1**（`alignedΔ` 比完全不对齐还大 29%）。
+// ⟹ **自搭金标准能钉「实现 == 我的模型」，钉不了「模型 == 引擎」。** 剩下那一半
+// 只能由实机数据裁决（`temporal-tail --motion camera` 的 φ 标定扫描）。
+//
 // ### 变异红线（2026-10-07 当场注入实测，四条各验一条，全部验红后才入账）
 //
 // | 注入的变异 | 变红的断言（读数） |
 // |---|---|
-// | 求逆顺序翻转 `R_x(+p)·R_y(δ)·R_x(−p)`（**我犯的原错**） | ① 金标准 13.46px |
+// | 求逆顺序翻转 `R_x(−p)·R_y(δ)·R_x(p)`（**我犯的原错**） | ① 金标准 13.46px |
 // | pitch 乘 0（退化成一维） | ① 金标准 7.74px ＋ ⑤ pitch 锚点 `max|Δv| = 0.000` |
-// | yaw 增量反号 `R_y(−δ)` | ① 54.93px ＋ ③b 与既有闭式 9.38px ＋ ④ 符号锚点 636.96 |
+// | **yaw 增量反号**（= 用朝后的基，本轮实机抓到的那个错） | ① 53.63px ＋ ③b 互逆 9.38px ＋ ④ 符号锚点 `map_x(中心)=643.04` ＋ **算子链合成帧对 `aligned = 2.02 × raw`** ＋ H⁻¹ 反向用例互换 |
 // | `Ksi` 主点 y 符号写反（推导时差点写错的那一位） | ② δ=0 恒等 720px ＋ ① 730.9px ＋ ③b ＋ maxShiftPx |
 //
 // ⚠ 变异 2 的第一版写成把 `rotX` 整个删掉，拿到的是 `-Werror=unused-parameter` **编译红**
 //   而不是判据红（skill `rgl-test-discipline` 记的那条坑）。改成 `pitchRad * 0.0`
 //   保留参数使用，才拿到真正的判据红。
+// ⚠ 变异 3 那一行**在修正前也存在**（当时读数 54.93px），却仍然没拦住这个错——因为它
+//   只说「与金标准不符」，而金标准与实现共享同一个反了的约定。⟹ 入账时把「变红」与
+//   「红得有意义」分开记；判据若抄实现的结论，它就不是判据（④ 当时正是绿的）。
 
 /// testYawRemap 的针孔相机（1280×720、垂直 fov 45°、主点居中）+ **金标准**。
 /// 抽成 fixture 的理由：两条测试共用，且金标准独立命名才看得出它**没有**复用被测实现。
@@ -1468,15 +1484,20 @@ struct YawRemapFixture {
     inline static const double kPts[5][2] = { { 0, 0 }, { 640, 360 }, { 1279, 719 },
         { 100, 700 }, { 1200, 20 } };
 
-    static cv::Matx33d rotX(double a)
+    /// 引擎相机基：三列**逐字照抄** `rgl/camera.cppm` 的 `cameraRight/Up/Forward`。
+    /// ⚠ 金标准必须用这个而不是 `rotY(yaw)·rotX(pitch)`——后者的第三列是 `−fwd`
+    ///   （z 轴朝后），拿它配 `u = cx + c[0]/c[2]·f` 会把 yaw 符号静默反掉。金标准若与
+    ///   被测实现**共用同一个朝后的基**，对拍再准也测不出符号（首轮 2.3e-13px 全绿的真相）。
+    ///   逐列照抄 ⟹ 金标准与实现之间**没有任何可共享的中间约定**。
+    static cv::Matx33d engineBasis(double yaw, double pitch)
     {
-        const double k = std::cos(a), s = std::sin(a);
-        return cv::Matx33d(1.0, 0.0, 0.0, 0.0, k, -s, 0.0, s, k);
-    }
-    static cv::Matx33d rotY(double a)
-    {
-        const double k = std::cos(a), s = std::sin(a);
-        return cv::Matx33d(k, 0.0, s, 0.0, 1.0, 0.0, -s, 0.0, k);
+        const double cy = std::cos(yaw), sy = std::sin(yaw);
+        const double cp = std::cos(pitch), sp = std::sin(pitch);
+        return cv::Matx33d(
+            cy, sy * sp, -sy * cp, // 行 0：right.x, up.x, fwd.x
+            0.0, cp, sp,           // 行 1：right.y, up.y, fwd.y
+            -sy, cy * sp, -cy * cp // 行 2：right.z, up.z, fwd.z
+        );
     }
     static std::pair<double, double> apply(const cv::Matx33d& H, double x, double y)
     {
@@ -1484,9 +1505,10 @@ struct YawRemapFixture {
         return { q[0] / q[2], q[1] / q[2] };
     }
     /// 金标准：像素 → t+1 帧相机方向 → 世界 → t 帧相机方向 → 像素（完全不做化简）。
+    /// 两帧各用**显式**的引擎基投影，与被测单应完全无关。
     std::pair<double, double> truth(double x, double y, double yaw, double pitch, double d) const
     {
-        const cv::Matx33d Rt = rotY(yaw) * rotX(pitch), Rt1 = rotY(yaw + d) * rotX(pitch);
+        const cv::Matx33d Rt = engineBasis(yaw, pitch), Rt1 = engineBasis(yaw + d, pitch);
         const cv::Vec3d w = Rt1 * cv::Vec3d((x - cx) / f, (cy - y) / f, 1.0);
         const cv::Vec3d c0 = Rt.t() * w;
         return { cx + c0[0] / c0[2] * f, cy - c0[1] / c0[2] * f };
@@ -1514,9 +1536,14 @@ void testYawRemapAgainstTruth(Checker& c)
     c.chk("yaw 重映射对金标准（显式两帧相机基，含 pitch）", worst < 1e-9,
         "worst=" + std::to_string(worst) + "px");
 
-    // ③b pitch = 0 必须与既有 yawHomography 一致（复用已验证实现；它是本变换的
-    //   **二阶近似**，δ=0.0035 时实测差 0.0022px，δ=0.02 时差 0.073px ⟹ 容差按小 δ 档给）
-    const cv::Matx33d legacy = yawHomography(0.0035, fx.f, fx.cx, fx.cy);
+    // ③b pitch = 0 必须与既有闭式 `yawHomography` **互为逆**（不是相等！）。
+    //   两条独立推导的**方向约定不同**：既有那条返回**前向**映射（t → t+1，所以
+    //   `temporal_homography` 用之前 `buildSrcMap(H.inv(), …)` 取逆），本实现返回
+    //   **src map**（t+1 → t，直接喂 remap）。
+    //   ⚠ 本条第一版写的是「相等」并且**是绿的**——那时两边共享同一个朝后的基。它当时
+    //   给我的信心恰好是错的：跨函数对拍只在对两边**方向语义**都写对时才有意义，
+    //   而 docstring 里的方向没人验。⟹ 现在显式比 `legacy(δ).inv()`，把约定写进判据。
+    const cv::Matx33d legacy = yawHomography(0.0035, fx.f, fx.cx, fx.cy).inv();
     const cv::Matx33d mine = yawRemapHomography(0.0035, 0.0, fx.f, fx.cx, fx.cy);
     double worstLegacy = 0.0;
     for (const auto& q : YawRemapFixture::kPts) {
@@ -1525,8 +1552,8 @@ void testYawRemapAgainstTruth(Checker& c)
         worstLegacy = std::max(
             { worstLegacy, std::abs(a.first - b.first), std::abs(a.second - b.second) });
     }
-    c.chk("pitch=0 与既有 yawHomography 一致", worstLegacy < 5e-3,
-        "worst=" + std::to_string(worstLegacy) + "px（既有闭式是二阶近似）");
+    c.chk("pitch=0 与既有 yawHomography 互逆（方向约定：它是前向、我是 src map）",
+        worstLegacy < 5e-3, "worst=" + std::to_string(worstLegacy) + "px（既有闭式是二阶近似）");
 }
 
 /// ② 恒等 / ③ 几何形状 / ④ 符号 / ⑤ pitch 不可忽略（**退化与方向**侧）。
@@ -1569,11 +1596,15 @@ void testYawRemapAnchors(Checker& c)
     c.chk("透视收缩在场（v 位移随 x 变 ⟹ 非仿射）", std::abs(vAtLeft - vAtRight) > 0.5,
         "Δv(左) = " + std::to_string(vAtLeft) + " vs Δv(右) = " + std::to_string(vAtRight));
 
-    // ④ 符号锚点：δ > 0 ⟹ 世界固定点左移 ⟹ src map 必须往**右**取。
-    //   写反号不会让任何聚合数变难看得离谱（它把位移加倍而不是抵消），必须单独钉。
+    // ④ 符号锚点（**本轮实机 φ 标定扫描 argmin = −1 逼出来的改写**）。
+    //   从引擎公式直接推，不靠记忆：`right = (cos yaw, 0, −sin yaw)`，取正前方世界点
+    //   P = (0,0,−d) ⟹ `right·P = d·sin yaw` 随 yaw **增大**而增大 ⟹ 世界固定点在画面里
+    //   **右移** `f·tan δ`。src map 要取「上一帧这块内容在哪」⟹ 必须往**左**取。
+    //   ⟹ δ > 0 时 `map_x(中心) < cx`。原断言写的是 `> 641`，与被测实现**同一个错约定**，
+    //   所以它当时是绿的——锚点抄实现的结论 = 没有锚点。
     const double shifted = p0.mapX.at<float>(360, 640);
-    c.chk("符号：δ>0 时 src map 往右取", shifted > 641.0,
-        "map_x(中心) = " + std::to_string(shifted) + "（期望 > 641）");
+    c.chk("符号：δ>0 时 src map 往左取（引擎 right·P 随 yaw 增）", shifted < 639.0,
+        "map_x(中心) = " + std::to_string(shifted) + "（期望 < 639；内容右移 f·tanδ）");
 
     // ⑤ **pitch 不可忽略**的阳性锚点：bistro 机位 pitch ≈ −23° 时，v 方向的位移必须
     //   达到亚像素量级。哪天有人把 pitch 参数退化掉，这条会红（②③③b 全都测不出来）。
@@ -1588,6 +1619,63 @@ void testYawRemapAnchors(Checker& c)
         "max|Δv| = " + std::to_string(worstPitch) + "px/帧（实测 0.952）");
     c.chk("maxShiftPx 量级合理（0.2°/帧 ≈ 3px）", pm.maxShiftPx > 2.0 && pm.maxShiftPx < 5.0,
         "maxShiftPx = " + std::to_string(pm.maxShiftPx));
+}
+
+/**
+ * **端到端算子链自检**：合成一对「纯 yaw」帧，φ 对齐必须把差塌掉。
+ *
+ * 为什么必须有（本轮实测教训）：`yawRemapHomography` 对金标准对拍到 2.3e-13px，**但那条
+ * 自检只测矩阵**，从没测过 `buildYawMap` + `remapWith` 的**合成分支**（`dst = src∘H`
+ * 还是 `src∘H⁻¹`）。应用侧反一次 ⟹ 净 **2δ** 位移 ⟹ 对齐后**比完全不对齐还差**，
+ * 而首轮实机读数恰好就是这个形态（`alignedΔ = 1.29 × rawΔ`，量级也对上 2δ 的帧差）。
+ *
+ * 两帧由**各自显式的相机基**投影同一个球面图案生成（**不走被测单应**），⟹ 本条测的是
+ * 「实现 == 我的模型」之外的东西：**算子链的合成本身**。
+ * ⚠ 它仍测不到「引擎 `frame_yaw` 的正方向 ≠ 本变换的 δ 正方向」——那一半只能由
+ * `temporal-tail --motion camera` 的 **φ 标定扫描**（实机数据）裁决。两条各守一半。
+ */
+void testSmearPhiChain(Checker& c)
+{
+    const cv::Size sz(256, 144);
+    const double f = 869.117, cx = sz.width / 2.0, cy = sz.height / 2.0;
+    const double d = 0.0035, pitch = -0.401425, yaw0 = 0.7;
+
+    // 世界方向上的确定图案（与相机无关 ⟹ 两帧看的是同一个"场景"）。
+    // 用高频正弦积而不是棋盘：边缘丰富、无周期性巧合，且不需要随机数。
+    auto scene = [](const cv::Vec3d& w) {
+        const cv::Vec3d v = w * (1.0 / std::max(1e-12, cv::norm(w)));
+        return 0.5 + 0.5 * std::sin(18.0 * v[0]) * std::sin(14.0 * v[1] + 3.0 * v[2]);
+    };
+    auto render = [&](double yaw) {
+        cv::Mat img(sz, CV_64F);
+        const cv::Matx33d R = YawRemapFixture::engineBasis(yaw, pitch);
+        for (int y = 0; y < sz.height; ++y)
+            for (int x = 0; x < sz.width; ++x)
+                img.at<double>(y, x) = scene(R * cv::Vec3d((x - cx) / f, (cy - y) / f, 1.0));
+        return img;
+    };
+    const cv::Mat prev = render(yaw0), cur = render(yaw0 + d);
+
+    const cv::Matx33d H = yawRemapHomography(d, pitch, f, cx, cy);
+    const cv::Mat aligned = remapWith(prev, buildYawMap(H, sz));
+
+    // 只在中部统计：remap 的 BORDER_CONSTANT 带会造出巨大假差（首轮差点把它读成信号）
+    const cv::Rect roi(40, 24, sz.width - 80, sz.height - 48);
+    const double raw = cv::mean(cv::abs(cur(roi) - prev(roi)))[0];
+    const double res = cv::mean(cv::abs(cur(roi) - aligned(roi)))[0];
+    c.chk("φ 算子链把合成纯旋转帧对的差塌掉（合成分支不是 H⁻¹）",
+        res < 0.15 * raw && raw > 1e-3,
+        "raw=" + std::to_string(raw) + " → aligned=" + std::to_string(res) + "（比值 "
+            + std::to_string(raw > 0.0 ? res / raw : 0.0) + "，线 < 0.15）");
+
+    // 反向：喂 H⁻¹ 必须**不塌**，否则上面那条是空洞绿。
+    // 注：本变换族满足 `H(δ)⁻¹ = H(−δ)`（纯旋转单应，取逆 = 反向转同一个角），
+    // 所以这条反向用例同时就是「应用侧符号反了」的**阳性对照**：首轮实机读数的形态
+    // （alignedΔ > rawΔ）正是它该有的样子，而当时没有任何一条自检能复现它。
+    const double wrong
+        = cv::mean(cv::abs(cur(roi) - remapWith(prev, buildYawMap(H.inv(), sz))(roi)))[0];
+    c.chk("同图喂 H⁻¹ 必须不塌（防空洞绿）", wrong > 3.0 * res,
+        "H⁻¹ 残差 " + std::to_string(wrong) + " vs 正确 H 残差 " + std::to_string(res));
 }
 
 int cmdSelftest()
@@ -1611,6 +1699,7 @@ int cmdSelftest()
     testTemporalFlicker(c);
     testYawRemapAgainstTruth(c);
     testYawRemapAnchors(c);
+    testSmearPhiChain(c);
     testKeyValidation(c);
     testCliRegistryShape(c);
     testCliArgsBehavior(c);

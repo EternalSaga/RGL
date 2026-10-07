@@ -262,20 +262,29 @@ std::vector<SubcommandSpec> specsResidualAndMotion()
         /* temporal-tail */
         SubcommandSpec{
             "temporal-tail",
-            "批 13.13 **鬼影尾长直测**（债-63 的出口）：静止机位 + 场景 spin，参考 = 同一次 spin 的「TAA 关 + jitter_scale=0」渲染（基位置真值），配对 ="
-            " **引擎帧计数器之差**（整数常量，**零图像配准**——`temporal-motion` 那两条常红的对齐护栏在这里根本不存在）。主指标 `frac = mean|out−ref| ÷"
-            " mean|N−S|`（无量纲鬼影份额；关盒时闭式 = 1−α）。四条判决线跑前写死（pairing ≤0.02 / events ≥2000 且静止反向 ≤20 / 关盒 > 臂 0 /"
-            " 长窗必须上升），**红一条即不许报臂间结论**。τ 是唯一自由阈值 ⟹ 输出自带三档敏感性表",
+            "**鬼影尾长直测**（债-63 的出口）。`--motion spin`（默认）= 静止机位 + 场景 spin，主指标 = 归一化鬼影份额 `frac = mean|out−ref| ÷"
+            " mean|N−S|`（关盒时闭式 = 1−α）。`--motion camera`（批 13.14a）= **机位匀速 yaw**，主指标退化为**稳态份额** `frac = Δ加权残差 ÷"
+            " mean Δ`，`Δ = |ref_j − ref_{j−1}∘φ|`，φ = **解析** yaw 映射（带 pitch）——spin 下相机不动 ⟹ 臂 11 的 `gate` 恒 1.0 ⟹"
+            " **spin 版原理上进不了 gate 斜坡区**，而批 13.14 的赌注正压在那个门上。两模式共用一条设计红线：参考 = 同一段运动的「TAA 关 +"
+            " jitter_scale=0」渲染，配对 = **引擎帧计数器之差**（整数常量，**零图像配准**——`temporal-motion` 那两条常红的对齐护栏在这里根本不存在）。"
+            "判决线跑前写死，**红一条即不许报臂间结论**。τ 是唯一自由阈值 ⟹ 输出自带三档敏感性表",
             {
                 FlagSpec{"--camera", "brickfence", nullptr, FlagKind::String},
+                FlagSpec{"--motion", "spin", "spin（默认）= 场景旋转相机不动（既有六机位读数的口径）；camera = 相机帧驱动 yaw（批 13.14a，机位运动鬼影）", FlagKind::String},
                 FlagSpec{"--angle", "0.3", nullptr, FlagKind::Number},
+                FlagSpec{"--gate-angle", "0", "仅 --motion camera：gate 断点的高档角度（度/帧），用来把每帧像素位移扫过 `gate = saturate(2 − motion)` 的推导断点 2px；0 = 跳过判决线 4", FlagKind::Number},
                 FlagSpec{"--burst", "96", nullptr, FlagKind::Number},
                 FlagSpec{"--warm", "64", nullptr, FlagKind::Number},
-                FlagSpec{"--max-lag", "16", nullptr, FlagKind::Number},
+                FlagSpec{"--max-lag", "16", "仅 --motion spin：衰减曲线长度 K", FlagKind::Number},
                 FlagSpec{"--tau", "0.05", nullptr, FlagKind::Number},
                 FlagSpec{"--margin", "8", nullptr, FlagKind::Number},
             },
             {
+                "`--motion camera` 的四条判决线（跑前写死）：① **配对零锚** = 主角度的 `Z`（α=1 + 无抖动）frac ≤ 0.02；② **灵敏度 + 单位** = 主指标"
+                "单位是**「相当于几帧过期历史」**（刻度由参考自身算出），线 = 关盒短窗 ≥ 0.8 帧（推导下界 1−α）且关盒长窗 > 短窗；③ **静止零锚** = δ=0 的"
+                " **Z 组**（jitter 0 + α=1）**借主角度的 φ** 量，frac ≤ 0.02（⚠ 两处坑：不能用 δ=0 的 φ，那会让 Δ ≡ 0 ⟹ 0/0 兜底成 0 = 空断言；也不能拿 "
+                "jitter=1 的臂当零点，它的相位平均收敛值比无抖动参考真的更糊，那是**地板** ≈0.13，不是零点）；④ **gate 断点** = `臂11 − 臂0` 低角度侧显著为正"
+                "（洞在场）、高角度侧 ≈ 0（gate 关门后臂 11 退回臂 0）。断点位置是**推出来的**不是扫出来的 ⟹ 阳性锚点不是拟合",
             },
             false,
             "",

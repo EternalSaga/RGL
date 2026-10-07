@@ -2,22 +2,35 @@
 //
 // ## 完整推导（头注释只给结论，这里给可复核的全过程）
 //
-// 引擎相机基（`rgl/camera.cppm`，世界系下的相机三轴为列）：
+// 引擎相机基（`rgl/camera.cppm`，世界系下的相机三轴为**列**，第三列必须是 **fwd**）：
 //
-//     right   = ( cos yaw,              0,          −sin yaw )
-//     up      = ( sin yaw·sin pitch,    cos pitch,   cos yaw·sin pitch )
-//     −fwd    = ( sin yaw·cos pitch,   −sin pitch,   cos yaw·cos pitch )
+//     right = (  cos yaw,             0,         −sin yaw )
+//     up    = (  sin yaw·sin pitch,   cos pitch,  cos yaw·sin pitch )
+//     fwd   = ( −sin yaw·cos pitch,   sin pitch, −cos yaw·cos pitch )
 //
-// 三式恰好是 `R_cam = R_y(yaw)·R_x(pitch)` 的三列（逐列核对：R_x(pitch) 的列
-// = [(1,0,0), (0,cos p,sin p), (0,−sin p,cos p)]，左乘 R_y(yaw) 后与上面逐项相等）。
-// **这个分解是本文件全部结论的前提**——它成立才有「映射与 yaw 无关」。
+// 世界方向 w 在第 t 帧相机系的坐标是 `c_t = E_tᵀ w`，于是
 //
-// 世界方向 w 在第 t 帧相机系的坐标是 `c_t = R_tᵀ w`，于是
+//     c_t = E_tᵀ E_{t+1} c_{t+1}
 //
-//     c_t = R_tᵀ R_{t+1} c_{t+1},    R_tᵀ R_{t+1} = R_x(−p)·R_y(δ)·R_x(p)
+// ## ⚠ 本文件踩过的一次静默符号错（首轮实机 φ 标定 argmin = **−1**）
 //
-// （中间步：`R_x(p)ᵀ · R_y(yaw)ᵀ R_y(yaw+δ) · R_x(p)`，两个 R_y 合并成 R_y(δ)。）
+// 顺手把 `E` 写成 `R_y(yaw)·R_x(pitch)` 是**陷阱**：它的第三列算出来是
+// `(sin y·cos p, −sin p, cos y·cos p)` = **−fwd**，即该基的 z 轴**朝后**。而像素映射
+// `u = cx + c[0]/c[2]·f`（见下方 `Ks`）要求 `c[2]` 是**前向**深度。两者一配，等价于把
+// 正确的映射共轭了 `S = diag(1,1,−1)`；逐因子共轭给 `S·R_x(−p)·R_y(δ)·R_x(p)·S
+// = R_x(p)·R_y(−δ)·R_x(−p)` ⟹ **yaw 符号反掉，其余全对**（恒等性、pitch 修正、
+// yaw 无关性、与既有闭式的一致性统统照过）。首轮就是它：`alignedΔ` 比完全不对齐的
+// `rawΔ` 还大 29%，量级正好对上「净 2δ 位移」的帧差，而对拍金标准 2.3e-13px 全绿
+// ——因为金标准当时用的是**同一个朝后的基**。⟹ 结论：**自搭金标准钉不住约定**。
+//
+// 正确形式（把 `S` 乘进去，即「先转回 fwd 基、转 −δ、再转回去」）：
+//
+//     E_tᵀ E_{t+1} = R_x(p)·R_y(−δ)·R_x(−p)
+//
 // **yaw 消掉了** ⟹ 映射只依赖 pitch 与每帧角，与相机朝哪儿无关。
+// 方向自检（`selftest` 锚点④ + φ 标定扫描）：δ > 0 时引擎内容**右移** `f·tan δ`
+// （`right·P` 随 yaw 增大而增大），而 src map 要往**左**取 ⟹ `apply(H, 中心).x < cx`。
+// 取 cx = cy = 0 验：`u' = f(x/f·cos δ − sin δ)/(x/f·sin δ + cos δ) ≈ x − f·δ` ✓。
 //
 // ## 为什么代码里是三个矩阵相乘而不是闭式
 //
@@ -68,8 +81,10 @@ cv::Matx33d yawRemapHomography(double yawRadPerFrame, double pitchRad, double fo
     if (focalPx <= 0.0)
         throw std::runtime_error("yawRemap: focalPx 必须 > 0（传**水平**焦距像素）");
 
-    // 「t+1 帧相机系 → t 帧相机系」= R_x(−pitch)·R_y(δ)·R_x(pitch)。定义式，不化简。
-    const cv::Matx33d cam = rotX(-pitchRad) * rotY(yawRadPerFrame) * rotX(pitchRad);
+    // 「t+1 帧相机系 → t 帧相机系」= R_x(pitch)·R_y(−δ)·R_x(−pitch)。
+    // ⚠ **负号是本体，不是笔误**：见文件头「静默符号错」一节——写成 R_x(−p)·R_y(δ)·R_x(p)
+    //   等价于用第三列朝后的基，yaw 会静默反号（首轮实机 φ 标定 argmin = −1 的根因）。
+    const cv::Matx33d cam = rotX(pitchRad) * rotY(-yawRadPerFrame) * rotX(-pitchRad);
 
     // 归一化 ↔ 像素：u = (x − cx)/f，v = (cy − y)/f（v **向上**为正 ⟹ 中间项取负）。
     // ⚠ 单一 f 是对的：fovDegrees 走 glm::perspective 的**垂直** fov，水平由 aspect 推
