@@ -314,7 +314,12 @@ const std::vector<JudgmentInfo>& temporalTailCameraJudgments()
             "1.125** 一并打印，读数落在它附近 = 长窗没有额外累积）；③ 短窗归因 > **4 ×** 零锚"
             "归因（灵敏度锚点，**不含任何 α 假设**：鬼影信号必须显著高于同一算子的零点）。\n"
             "② 不成立 ⟹ 「α 恒写 0.01」在鬼影侧是**可见退化**，13.14b 要么改 α、要么先修去遮挡"
-            "处的历史。⚠ 本条不判 TAA 好坏，判的是 13.14b 那个改动的**鬼影侧代价是否可忽略**。",
+            "处的历史。⚠ 本条不判 TAA 好坏，判的是 13.14b 那个改动的**鬼影侧代价是否可忽略**。\n"
+            "🔴 **Δ 图的真实身份 = 边缘探测器**（既不是去遮挡探测器，也不是内容变化探测器）：往返"
+            "地板 `|I − φ⁻¹(φ(I))|` 实测 0.007079 vs `alignedΔ` 0.010838 = **1.53×** ⟹ 其中大部分是"
+            "双线性重采样误差。⟹ 臂间**比值**仍然成立（Δ 只做权重、由 TAA 关的参考帧算、逐臂逐位"
+            "相同），但**绝对**的「相当于几帧过期历史」不许读成「画面真实变化了几帧」\n"
+            "（→ `phase13_plan.md` §1.17 结论 6 / 结论 8）。",
             {"tools/imgqa/temporal_motion.cpp `cmdTemporalTailCamera` 判决线 2 与「运动归因」表；"
               "`SmearAngle::oneFrameFrac` 注释；docs/phase13_plan.md §1.17 结论 2 + 本轮 α 轴重设计"},},
         {"temporal-tail-static-collapse", JudgmentFamily::TemporalMotion,
