@@ -176,15 +176,18 @@
 | 静态库 | `ffx_fsr3upscaler_vk`，Linux/clang 22 + libc++ 干净通过。**全量编译 1.3 s**（-j16），故留在 `just build` 里当"vendor 还编得过"的闸门，成本可忽略 |
 | 冒烟 | `just fsr-smoke` = 最小 device + 2 帧 `ffxFsr3UpscalerContextDispatch`，**AMD Radeon 8060S Graphics (RADV STRIX_HALO) / Mesa 26.2.3**，dispatched + executed，VVL **白名单外 0 条** |
 | vendor 改动 | **P1–P10**，逐条根因 → `third_party/fsr/PATCHES.md`。P1–P6 编译期（MSVC vs clang/libc++）、P7 链接期、**P8–P10 运行期**，其中 P9/P10 **只在 `-O2` 暴露** |
-| 上游 VVL 问题 | 4 类 15 条（coherent memory type / `layerCount=0` / **luma history `rgba8` vs `R16G16B16A16F`** / deinitialize 泄漏 18 对象）。冒烟建白名单 + 计数，**白名单外即 FAIL**（变异验过非空转） |
+| 上游 VVL 问题 | 现存 **3 类 13 条**（coherent memory type / `layerCount=0` / deinitialize 泄漏 18 对象）。冒烟建白名单 + 计数，**白名单外即 FAIL**（变异验过非空转）。第 4 类「luma history 格式不匹配」**已由 P11 修复并从白名单删除** |
 
 三条要带给后续批次的事实：
 
 1. **冒烟必须跑交付优化档**。同一份代码 `-O0` PASS、`-O2` 段错误，两次，都是对齐 UB（P9/P10）。
    「`-O0` 冒烟过了」在这类 bug 上**不提供任何信息** → `调试历史.md` 2026-10-08。
-2. **luma history 的格式不一致是接真实画面前必须还的债**：写侧 `layout(..., rgba8)`、
-   host 侧建 `R16G16B16A16_FLOAT`，VVL 判"整个 image 读写值未定义"。DX12 上 UAV 格式取自
-   资源、限定符被忽略，所以 Windows 路径看不见 ⟹ **这是 GLSL/Vulkan 路径独有的**。
+2. ~~**luma history 的格式不一致是接真实画面前必须还的债**~~ ✅ **当晚已还（P11 / 债-73 ③ 结案）**：
+   写侧 `layout(..., rgba8)`、host 侧建 `R16G16B16A16_FLOAT`，VVL 判"整个 image 读写值未定义"。
+   处置 = 改**限定符**对齐资源（权威口径 = HLSL 侧 `RWTexture2D<FfxFloat32x4>`；反过来降资源精度是
+   错的——存的是 4 槽 luma 历史，HDR 下可远大于 1，UNORM 会截顶还把精度压到 1/255）。
+   **防线做成了对账护栏**：`just fsr-check` 全量比对 22 个 typed image 里两边都查得到的 9 个
+   （1.1.4 实测 8 个本来就对 ⟹ 上游孤立笔误，不是普遍形态）。
 3. **冒烟把 image 一律推到 `VK_IMAGE_LAYOUT_GENERAL`**，是在**回避**而不是预演布局簿记。
    真实接线的布局对账仍归 **14.4b 的护栏**，14.5 的 VVL 判据不能替它背锅。
 4. **排列矩阵的绝大部分运行时到不了**：`ffx_fsr3upscaler.cpp` 从不给 `permutationOptions`
@@ -283,7 +286,7 @@
 | **债-64**（采集层未收敛 / 并行未做） | **14.6/14.7 前置** | 否则"调旋钮"仍是空话 |
 | **债-40**（本帧 HDR firefly） | 14.7 首个旋钮 | `FVELOCITYFACTOR → 0` 是它的现成候选修法 |
 | **债-72**（图外 barrier 靠约定且无断言 / buffer 侧完全在图外） | **14.4b 清偿** | **护栏先于扩面**：FSR 是第三个图外 compute |
-| **债-73**（FSR 上游 4 类 spec 违规，含 luma history 格式 UB） | **14.5 之前处置 ③**，①②④ 记噪声 | ③ 不处置 = 时域历史是未定义值；冒烟侧白名单已把 4 类**登记**住 |
+| **债-73**（FSR 上游 4 类 spec 违规） | ③ **已结案（P11）**；①②④ 记噪声 | ③ 不处置 = 时域历史是未定义值。防线 = `just fsr-check` 的格式对账 + 冒烟白名单外即 FAIL |
 | **债-16**（两套执行世界观） | 14.5 加重、14.4b 缓解 | FSR = 图外 compute 第三例 |
 | **债-24**（compute/transfer 队列死重） | **本 phase 明确不用**（见 §3 红线） | "用上 compute shader" ≠ "用上 compute 队列" |
 | **债-67 / 债-69 / 债-70** | 14.0 收口 | 冻结的账面前提 |

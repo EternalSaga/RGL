@@ -95,28 +95,28 @@ void installCrashTrace()
 }
 
 // ── VVL 记账 ──────────────────────────────────────────────────────────────────
-// 冒烟的判据之一就是「VVL 干净」，但 AMD FSR 3.1.4 的 VK 后端在 RADV 上有 4 类**上游自己**
+// 冒烟的判据之一就是「VVL 干净」，但 AMD FSR 3.1.4 的 VK 后端在 RADV 上有若干类**上游自己**
 // 的 spec 违规（根因逐条见 third_party/fsr/PATCHES.md §已知上游问题）。白名单不等于忽略：
 // 它记的是「已知且已归因」，**任何不在表内的新报错都会让冒烟 FAIL**，这样上游升级或我们
 // 改接线时新引入的问题不会静默溜过。计数会打印出来，白名单命中数变了也看得见。
 struct VvlLedger
 {
+    // 特征子串取 VUID 或唯一短语，不取整句——上游改措辞时宁可失配报错，也不要静默漏过。
+    // ⚠ **修掉一条就把它从表里删掉**：留着等于「修没修都绿」。历史上第 4 条
+    //   "which doesn't match the VkImageView"（luma history 的 rgba8 vs R16G16B16A16F）
+    //   已由 P11 修复并删除；若回归，它会以「白名单外」的形式把冒烟打红。
+    // 表长写死：加条目忘了改 kKnownCount 是编译错误，而不是把 hits[] 写越界。
+    static constexpr int kKnownCount = 3;
+    static const char* const kKnown[kKnownCount];
+
     int total      = 0;
     int unexpected = 0;
-    int hits[4]    = {0, 0, 0, 0};
-
-    // 特征子串取 VUID 或唯一短语，不取整句——上游改措辞时宁可失配报错，也不要静默漏过。
-    static const char* const* known(int* n)
-    {
-        static const char* const kKnown[] = {
-            "VUID-vkAllocateMemory-deviceCoherentMemory-02790",
-            "VUID-VkImageSubresourceRange-layerCount-01721",
-            "which doesn't match the VkImageView",
-            "VUID-vkDestroyDevice-device-05137",
-        };
-        *n = int(sizeof(kKnown) / sizeof(kKnown[0]));
-        return kKnown;
-    }
+    int hits[kKnownCount] = {};
+};
+const char* const VvlLedger::kKnown[VvlLedger::kKnownCount] = {
+    "VUID-vkAllocateMemory-deviceCoherentMemory-02790",
+    "VUID-VkImageSubresourceRange-layerCount-01721",
+    "VUID-vkDestroyDevice-device-05137",
 };
 VvlLedger g_vvl;
 
@@ -126,10 +126,8 @@ debugCb(VkDebugUtilsMessageSeverityFlagBitsEXT sev, VkDebugUtilsMessageTypeFlags
     if (sev < VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT)
         return VK_FALSE;
     ++g_vvl.total;
-    int n = 0;
-    const char* const* known = VvlLedger::known(&n);
-    for (int i = 0; i < n; ++i) {
-        if (std::strstr(d->pMessage, known[i])) {
+    for (int i = 0; i < VvlLedger::kKnownCount; ++i) {
+        if (std::strstr(d->pMessage, VvlLedger::kKnown[i])) {
             ++g_vvl.hits[i];
             return VK_FALSE;
         }
@@ -502,11 +500,9 @@ int main(int argc, char** argv)
     std::free(scratch);
     // VVL 判据：白名单外的报错 = FAIL。白名单命中数逐条打印，避免「0 unexpected」被
     // 误读成「VVL 一条都没报」。
-    int n = 0;
-    const char* const* known = VvlLedger::known(&n);
     log("VVL messages: %d total, %d unexpected", g_vvl.total, g_vvl.unexpected);
-    for (int i = 0; i < n; ++i)
-        log("  known[%d] %-52s x%d", i, known[i], g_vvl.hits[i]);
+    for (int i = 0; i < VvlLedger::kKnownCount; ++i)
+        log("  known[%d] %-52s x%d", i, VvlLedger::kKnown[i], g_vvl.hits[i]);
     if (g_vvl.unexpected > 0) {
         std::fprintf(stderr, "[fsr-smoke] FAIL: %d 条白名单外的 VVL 报错\n", g_vvl.unexpected);
         return 1;

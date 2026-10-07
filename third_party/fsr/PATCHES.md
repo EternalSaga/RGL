@@ -29,22 +29,52 @@ vendor = `third_party/fsr/vendor/`，来源 = FidelityFX-SDK tag **v1.1.4**（co
 | P8 | `src/backends/vk/ffx_vk.cpp`（函数表填充） | **运行期跳 0x0** | `vkGetBufferMemoryRequirements2KHR` 在 Vulkan 1.1 已进核心，`...2KHR` 只是别名兼容名——**没启用 `VK_KHR_get_memory_requirements2` 时 `vkGetDeviceProcAddr` 对它返回 NULL**（Windows loader 宽容地给别名，Linux loader 1.4 不给）。原代码不检查就在 `:1720` 调用。退回核心名，PFN 同签名 |
 | P9 | `include/FidelityFX/host/ffx_fsr3upscaler.h`（`FfxFsr3UpscalerContext`） | **-O2 段错误，-O0 正常** | 原 `typedef struct { uint32_t data[N]; }` **对齐只有 4**，而 `ffx_fsr3upscaler.cpp:511` 把它直接当 `FfxFsr3UpscalerContext_Private*` 用（含指针成员、要求 8 对齐）⟹ UB。`-O0` 侥幸不炸，`-O2` 下 clang 按对齐假设发对齐 SSE 存指令，静态对象落在 4-mod-8 地址就 SIGSEGV。改 union 把对齐抬到 8（`sizeof` 不变，兼容 C） |
 | P10 | `src/backends/vk/ffx_vk.cpp`（`ffxGetScratchMemorySizeVK` + 切分处） | **-O2 段错误，-O0 正常**（UBSan：`member access within misaligned address ... 'EffectContext' requires 32 byte alignment`） | scratch arena 是一整块按字节切分的裸内存，上游每个子数组只 `FFX_ALIGN_UP(..., sizeof(uint32_t))`、总量只对齐到 `sizeof(uint64_t)`；而 `BackendContext_VK::EffectContext` 声明了 `alignas(32)` ⟹ `pEffectContexts` 常落在 8 对齐地址。统一按 64 对齐每个切片（`FFX_VK_SCRATCH_ALIGN`），基址先上取整，总量预留余量。**尺寸计算与实际切分两处必须同步**，故共用该常量 |
+| P11 | `include/FidelityFX/gpu/fsr3upscaler/ffx_fsr3upscaler_callbacks_glsl.h`（`rw_luma_history`） | VVL 每次 dispatch 一条：storage image 的 `OpTypeImage` Format 与 `VkImageView` 不符，判「**整个 image 读写值未定义**」 | 写侧声明 `layout(..., rgba8)`，host 侧却把资源建成 `FFX_SURFACE_FORMAT_R16G16B16A16_FLOAT`（`ffx_fsr3upscaler.cpp:592/595`）。**权威口径 = HLSL 回调的 `RWTexture2D<FfxFloat32x4>`**（DX 的 UAV 格式取自资源、限定符被忽略 ⟹ Windows 永远看不见这条）⟹ 改限定符对齐资源（`rgba16f`），**不是**反过来把资源降成 8-bit：存进去的是 4 槽 luma 历史，HDR 下 luma 可远大于 1，UNORM 会同时截顶并把精度压到 1/255 |
 
 P1–P6 = 编译期（clang/libc++ 与 MSVC 的差异）；P7 = 链接期；P8–P10 = 运行期，且
-**P9/P10 只在 `-O2` 暴露**——这就是「`-O0` 冒烟过了」不能当验收的原因。
+**P9/P10 只在 `-O2` 暴露**——这就是「`-O0` 冒烟过了」不能当验收的原因。P11 = 语义正确性。
+
+### P9/P10 的终局确认（UBSan 双向）
+
+「UBSan 报 0 条」有两种成因，所以两头都要验：
+
+| 构型 | 结果 |
+|---|---|
+| 现状（P9 + P10 在位），`-O2 -fsanitize=undefined -fno-sanitize-recover=undefined` | **0 条 runtime error**，冒烟 PASS，rc=0 |
+| 变异：`FFX_VK_SCRATCH_ALIGN` 64→4（并临时摘掉 P10 的 static_assert，否则护栏先拦下这个变异） | `ffx_vk.cpp:1806: member access within misaligned address ... for type 'EffectContext', which requires 32 byte alignment`，rc=1 |
+
+⟹ 探测器接得上，「0 条」是真零。复现手法：手编一份 UBSan 版（**别走 CMake**——命令行传
+`-DCMAKE_CXX_FLAGS` 会覆盖项目自己设的 modules 扫描标志，configure 直接 Generate 失败）。
+
+⚠ 别把这两条误认成 FSR 常见的那两类 UB：① 「调用方没把结构体归零 / `header.type` 填错」是
+**新版 ffx-api（1.2+）**的形态，1.1.4 的 C API 里 `FfxInterface` 与
+`FfxFsr3UpscalerContextDescription` **根本没有 `header`/`pNext` 字段**（且冒烟全部 `{}` 值初始化）；
+② 「DXC 在 -O2 下 miscompile」用不上——本路径是 glslang，且崩的是 **host 侧 C++ 的 memset**，
+发生在任何 shader 跑之前。
 
 ## 已知上游问题（VVL 实测，非本仓引入）
 
 `just fsr-smoke` 在 **AMD Radeon 8060S Graphics (RADV STRIX_HALO) / Mesa 26.2.3 + VVL** 上
-15 条报错，全部归因上游；冒烟程序对它们建**白名单 + 计数**（`smoke/fsr_smoke.cpp`），
+现存 **13 条 / 3 类**，全部归因上游；冒烟程序对它们建**白名单 + 计数**（`smoke/fsr_smoke.cpp`），
 **白名单外的新报错直接 FAIL**，上游升级时靠这个发现回归。
 
 | 报错 | 次数 | 上游根因 |
 |---|---|---|
 | `VUID-vkAllocateMemory-deviceCoherentMemory-02790` | 10 | 后端选到带 `VK_MEMORY_PROPERTY_DEVICE_COHERENT_BIT_AMD` 的 memory type，却没启用 `deviceCoherentMemory` 特性。RADV 上该位与 `DEVICE_LOCAL` 同型，选类型时没排除 |
 | `VUID-VkImageSubresourceRange-layerCount-01721` | 2 | `ffx_vk.cpp:4223` 的 `vkCmdClearColorImage` 传了 `layerCount = 0` 的 subresource range |
-| storage image 格式不匹配（`which doesn't match the VkImageView`） | 2 | **luma history 的读写格式不一致**：写侧 `ffx_fsr3upscaler_callbacks_glsl.h:398` 声明 `layout(..., rgba8) uniform image2D rw_luma_history`，而 host 侧 `ffx_fsr3upscaler.cpp:592/595` 把资源建成 `FFX_SURFACE_FORMAT_R16G16B16A16_FLOAT`。VVL 判「整个 image 的读写值未定义」。<br>DX12 上 UAV 格式取自资源、`rgba8` 限定符被忽略，所以 Windows 路径看不出问题——**这是 GLSL/Vulkan 路径独有的**。接真实画面前必须处置（要么改 shader 的 layout 限定符，要么改资源格式），否则 luma history 是 UB |
 | `VUID-vkDestroyDevice-device-05137` | 1 | `ffxFsr3UpscalerDeinitialize` 之后仍有 18 个对象未销毁（后端内部 `VkDeviceMemory` / `VkImage` / `VkCommandBuffer` 泄漏） |
+
+### 已修的一条（记在这里防止重踩）
+
+`storage image ... doesn't match the VkImageView`（×2）—— luma history 的 `rgba8` vs
+`R16G16B16A16F`，**已由 P11 修复并从冒烟白名单里删除**。删白名单条目是刻意的：留着就等于
+「修没修都绿」。若上游升级把它带回来，会以「白名单外」的形式把冒烟打红。
+
+**防线不止冒烟**：`gen_ffx_shader_blobs.py::validate_image_formats()` 在 `just fsr-check`
+与每次生成时全量对账「GLSL typed image 的格式限定符 ↔ host 侧资源格式」，不匹配即 rc=1。
+1.1.4 实测：22 个 typed image 里 9 个两边都查得到，8 个本来就对，**唯一那条就是 luma history**
+⟹ 上游的孤立笔误，不是普遍形态。剩下 13 个格式由 app 提供，无从比对（护栏对此明确跳过，
+但**可比对数为 0 会当失败**——防止解析漂了以后靠空集合假绿）。
 
 ## 与 phase14_plan 的对应
 

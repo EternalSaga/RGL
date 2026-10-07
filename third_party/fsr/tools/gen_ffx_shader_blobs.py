@@ -280,6 +280,95 @@ def validate_names(blobs):
     print("反射名对账：OK（%d 条 SRV/UAV 名全部命中 component 绑定表）" % checked)
 
 
+# ── typed image 格式对账（护栏，见 PATCHES.md P11 / 债-73）───────────────────────
+# GLSL 侧 `layout(..., <格式>) uniform image2D` 的格式限定符**必须**与 host 侧给该资源
+# 选的 FfxSurfaceFormat 一致，否则 VVL 判「整个 image 的读写值未定义」（实测 RADV 上
+# rw_luma_history 就是这么炸的：shader 写 rgba8、资源建成 R16G16B16A16_FLOAT）。
+# DX12 侧 UAV 格式取自资源、限定符被忽略 ⟹ **Windows 永远看不见这类 bug**，只能靠对账。
+# HLSL 回调头是这里的「参考实现」：那边写 RWTexture2D<FfxFloat32x4> 的，格式就取资源格式。
+GLSL_CALLBACKS = os.path.join(GPU, "fsr3upscaler", "ffx_fsr3upscaler_callbacks_glsl.h")
+
+# GLSL 限定符 → FFX 自己的格式拼写（注意 FFX 用 _FLOAT，Vulkan 头里才叫 _SFLOAT）
+_GLSL_FMT_TO_FFX = {
+    "r8": "R8_UNORM", "r16f": "R16_FLOAT", "rg16f": "R16G16_FLOAT",
+    "rgba8": "R8G8B8A8_UNORM", "rgba16f": "R16G16B16A16_FLOAT",
+    "rgba32f": "R32G32B32A32_FLOAT", "r32f": "R32_FLOAT",
+    "r11f_g11f_b10f": "B10G11R11_UFLOAT_PACK32",
+}
+
+
+def load_resource_formats():
+    """resourceIdentifier → FfxSurfaceFormat（host 侧建资源用的那张表）。"""
+    src = open(COMPONENT_SRC, "r", encoding="utf-8", errors="replace").read()
+    fmt_of = {}
+    for m in re.finditer(r"(FFX_FSR3UPSCALER_RESOURCE_IDENTIFIER_\w+),\s*L\"[^\"]*\"\s*,[^;]*?FFX_SURFACE_FORMAT_(\w+)", src):
+        fmt_of.setdefault(m.group(1), m.group(2))
+    if not fmt_of:
+        raise RuntimeError("在 %s 里解析不到任何 FFX_SURFACE_FORMAT_*（上游改了资源表结构？）" % COMPONENT_SRC)
+    return fmt_of
+
+
+def validate_image_formats():
+    """typed image2D 的格式限定符 vs host 侧资源格式。
+
+    只比对**两边都查得到**的：app 提供格式的资源（color / output / depth / 各 reactive）
+    没有 host 侧格式项，跳过。ping-pong 双缓冲（LUMA_HISTORY → _1/_2）按前缀解析，
+    但要求前缀下的格式**唯一**，否则不猜。
+
+    防「空集合假绿」：解析不到 typed image、或可比对数为 0，一律当失败——上游重构了
+    写法却没人发现，比报错贵得多。
+    """
+    glsl = open(GLSL_CALLBACKS, "r", encoding="utf-8", errors="replace").read()
+    typed = {}
+    for m in re.finditer(r"layout\s*\(\s*set\s*=\s*0,\s*binding\s*=\s*([A-Z_0-9]+)([^)]*)\)\s*"
+                         r"(?:writeonly\s+)?uniform\s+image2D\s+(rw_\w+)\s*;", glsl):
+        attrs = m.group(2).strip().rstrip(",").strip()
+        fmt = attrs.split(",")[-1].strip() if "," in attrs else None
+        if fmt:
+            typed[m.group(3)] = fmt
+    if not typed:
+        raise RuntimeError("%s 里解析不到任何带格式限定符的 image2D（上游改了声明写法？"
+                           "护栏不能靠『没解析到』通过）" % GLSL_CALLBACKS)
+
+    tables = load_binding_tables()
+    src = open(COMPONENT_SRC, "r", encoding="utf-8", errors="replace").read()
+    mu = re.search(r"uavTextureBindingTable\[\]\s*=\s*\{(.*?)\};", src, re.S)
+    name2id = {m.group(2): m.group(1)
+               for m in re.finditer(r"\{\s*(FFX_FSR3UPSCALER_RESOURCE_IDENTIFIER_\w+)\s*,\s*L\"(\w+)\"\s*\}", mu.group(1))}
+    fmt_of = load_resource_formats()
+
+    bad, checked = [], 0
+    for name, fmt in sorted(typed.items()):
+        if name not in tables["uavTexture"]:
+            continue                                   # 不在绑定表 = app 侧资源，无从比对
+        ident = name2id.get(name)
+        if not ident:
+            continue
+        want = fmt_of.get(ident)
+        if want is None:                                 # ping-pong 别名：前缀下格式须唯一
+            cands = {v for k, v in fmt_of.items() if k.startswith(ident + "_")}
+            if len(cands) != 1:
+                continue
+            want = cands.pop()
+        checked += 1
+        if fmt not in _GLSL_FMT_TO_FFX:
+            bad.append("%s: 未知 GLSL 格式限定符 %r（先补 _GLSL_FMT_TO_FFX）" % (name, fmt))
+        elif _GLSL_FMT_TO_FFX[fmt] != want:
+            bad.append("%s: shader 写 %s（=%s），host 侧资源是 FFX_SURFACE_FORMAT_%s"
+                       % (name, fmt, _GLSL_FMT_TO_FFX[fmt], want))
+    if checked == 0:
+        raise RuntimeError("typed image 格式对账一条都没比对上（绑定表/资源表解析漂了？）")
+    if bad:
+        print("typed image 格式对账 **失败**（%d 条不匹配 / 共比对 %d 条）：" % (len(bad), checked), file=sys.stderr)
+        for b in bad:
+            print("  - " + b, file=sys.stderr)
+        print("  这类不一致在 DX12 上不可见（UAV 格式取自资源），在 Vulkan 上 VVL 判"
+              "「整个 image 读写值未定义」。改 shader 的格式限定符去对齐 host 侧资源格式"
+              "（= HLSL 侧 RWTexture2D<> 的语义），别反过来降资源精度。", file=sys.stderr)
+        raise SystemExit(1)
+    print("typed image 格式对账：OK（%d/%d 条与 host 侧资源格式一致）" % (checked, len(typed)))
+
+
 def c_escape(s):
     """反射出来的名字来自 OpName，正常就是标识符；真撞上引号/反斜杠也不要把头文件写坏。"""
     return s.replace("\\", "\\\\").replace('"', '\\"')
@@ -405,6 +494,9 @@ def read_manifest(path):
 
 def check(out_dir):
     """护栏：输入漂移（改了 shader/生成器却没重跑）或产物被手改 → rc=1 并点名。"""
+    # 先做纯文本对账：格式不一致时 SHA1 可能完全正确（上游就是这么签进来的），
+    # 所以它必须在哈希比对之前、且不受哈希结果影响。
+    validate_image_formats()
     mpath = os.path.join(out_dir, "manifest.txt")
     if not os.path.isfile(mpath):
         print("FSR blobs: manifest.txt 缺失 → 跑 `just fsr-blobs`", file=sys.stderr)
@@ -484,6 +576,7 @@ def main():
         per_variant[key] = (order, k2i)
 
     validate_names(blobs)
+    validate_image_formats()
 
     write_pool(os.path.join(args.out, "ffx_fsr3upscaler_blob_pool.h"), blobs)
     produced = ["ffx_fsr3upscaler_blob_pool.h"]

@@ -395,7 +395,15 @@ FfxFloat32x4 SampleHistory(FfxFloat32x2 fUV)
 #endif
 
 #if defined(FSR3UPSCALER_BIND_UAV_LUMA_HISTORY)
-layout (set = 0, binding = FSR3UPSCALER_BIND_UAV_LUMA_HISTORY, rgba8) uniform image2D  rw_luma_history;
+// RGL-PATCH(P11): 原来是 `rgba8`，而 host 侧把 luma history 建成
+// FFX_SURFACE_FORMAT_R16G16B16A16_FLOAT（ffx_fsr3upscaler.cpp:592/595）——Vulkan 上
+// OpTypeImage 的 Format 与 VkImageView 不符，VVL 判「整个 image 的读写值未定义」（RADV
+// 实测每次 dispatch 一条）。DX12 侧 UAV 格式取自资源、限定符被忽略，所以 Windows 看不见。
+// 权威口径 = HLSL 回调的 `RWTexture2D<FfxFloat32x4>`（格式随资源）⟹ 改限定符对齐资源，
+// 而不是反过来把资源降成 8-bit：存进去的是 4 槽 luma 历史（ffx_fsr3upscaler_luma_instability.h
+// 里逐帧移位、再拿 MinDividedByMax 比相似度），HDR 输入下 luma 可以远大于 1，
+// UNORM 会同时**截顶**和把精度压到 1/255。
+layout (set = 0, binding = FSR3UPSCALER_BIND_UAV_LUMA_HISTORY, rgba16f) uniform image2D  rw_luma_history;
 
 void StoreLumaHistory(FfxInt32x2 iPxPos, FfxFloat32x4 fLumaHistory)
 {
