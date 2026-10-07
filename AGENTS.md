@@ -35,6 +35,8 @@ just test                # 单元测试（tests/，**无 GPU 无窗口**，毫�
 just test-all / test-gpu # 含设备级原语用例（要真设备 + VVL；无设备**FAIL 不 SKIP**）
 just analytic            # 闭式解探针：算像素「该是多少」并与实机截图逐字节对拍（要 GPU）
 just imgqa <子命令>       # 区域归因判据工具箱（子命令与默认值 → `imgqa -h`；判据纪律 → skill rgl-verify）
+just fsr-blobs / fsr-check / fsr-smoke   # Phase 14 vendor FSR 3.1.4：重生成排列产物 / SHA1 护栏 /
+                     # 最小设备冒烟（要真设备；vendor 改动清单与上游已知问题 → `third_party/fsr/PATCHES.md`）
 just clean / clean-all / all           # 增量清理 / 删 build 目录 / clean-all+build-release
 ```
 
@@ -50,7 +52,7 @@ just clean / clean-all / all           # 增量清理 / 删 build 目录 / clean
 
 ## 测试体系
 
-> **下一步做什么** → `docs/phase13_plan.md`；本节 = 现状机制描述。
+> **下一步做什么** → `docs/phase14_plan.md`；本节 = 现状机制描述。
 
 **分层，边界按"要不要 GPU / 要不要窗口"划**（覆盖清单以 `tests/` 与 `tools/imgqa/` 本体为准，别在此抄）：
 
@@ -200,7 +202,7 @@ vk_indirect_commands 显式使用）外**均无显式使用但被其他已启用
 
 ## 其他文档
 
-> 每篇文档头部带状态（`现行`/`历史`/`调研`）。现状权威 = 本文件；**下一步路由 → `docs/phase13_plan.md`**。
+> 每篇文档头部带状态（`现行`/`历史`/`调研`）。现状权威 = 本文件；**下一步路由 → `docs/phase14_plan.md`**。
 > 本节与 `docs/` 由 source_checks **双向对账**（docs 漏索引 / 本节悬空指针即警告，规则
 > `agents_doc_index_checks`）——新建 docs 不在此挂号会被构建点名。**本节只做索引，不写摘要**（摘要会漂）。
 
@@ -208,8 +210,11 @@ vk_indirect_commands 显式使用）外**均无显式使用但被其他已启用
   `docs/技术概念.md`（机制深版：§模块表 / §核心运行时模块表 = **唯一模块职责表** / §main 启动流 /
   §RPC 调试通道 / §构建检查工具机制 / §构建 Windows 前置）· `docs/调试历史.md`（**只增不改**，
   争议结论以此为准）· `docs/gate_lint_plan.md`（**门配置自检的权威载体**；加诊断门前看）
-- **现行计划**：`docs/phase13_plan.md`（**下一步从这里读**）· `docs/taa_history_space_plan.md`
-  （TAA 历史坐标空间改造，未开工；⚠ 批 12.6 T4 的「未抖 prevViewProj 是错的」裁决**要反转**）·
+- **现行计划**：`docs/phase14_plan.md`（**下一步从这里读**：时域线换轨 = 逐像素速度场 + vendor
+  FSR 3.1.4 的 VK 后端；§1 = 本机核实的 FSR 事实基线，**别再重查一遍**）·
+  `docs/phase13_plan.md`（TAA 收口，**2026-10-07 冻结**；§1.22 = 冻结立论）·
+  `docs/taa_history_space_plan.md`（**批 13.5 已落地** = 历史住基空间；批 12.6 T4 的「未抖
+  prevViewProj 是错的」裁决**已反转**）·
   `docs/taa_plan.md`（TAA 机制与踩坑账，§7 第 11/12 条 = 根因）· `docs/evssm_plan.md`（远场软影
   权威路线，HFTS 已降级 backlog）· `docs/hfts_izb_plan.md` · `docs/shader_object_组合成本与优化预留.md`
   （优化**未实施**）· `docs/脚本长期规划.md` + `script_spike/`（脚本长期线，独立于 Phase 编号）

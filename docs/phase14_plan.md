@@ -1,0 +1,290 @@
+# Phase 14 · 时域线换轨：vendor FSR 3.1.4（VK 后端考古）+ 逐像素速度场
+
+> **状态**：现行（2026-10-07 立项）。承接 `docs/phase13_plan.md`（TAA 收口，**本 phase 开工即冻结**）。
+> **一句话**：Phase 13 证明「门唯一的输入是相机派生量」是天花板（§1.22 三次失明），本 phase
+> 不再修那扇门，而是**换输入面**：先做逐像素速度场（债-71），再把 AMD FSR 3.1.4 的 Vulkan
+> 后端从 1.1.4 里捞出来接上。
+> **本 phase 的存在理由不是"FSR 更好"，是三条**：① 自研 TAA 的可行域已被实测证明为空（阈值
+> 上下都被封死，见 §0.2）；② FSR 3.1 的五个旋钮恰好覆盖我们自研的三条线（记忆 / 遗忘 / 细
+> 特征，见 §1.6）；③ 速度场是**任何**时域方案的共同前置，做了不白干（债-35/71）。
+
+---
+
+## 0. 冻结裁决与立论
+
+### 0.1 TAA 冻结（2026-10-07 用户拍板）
+
+- **冻结的是"继续调自研 TAA"**，不是"删掉 TAA"。`rgl/shaders/taa.frag.slang` 与全部 imgqa
+  时域判据**保留**——它们是下一根线的尺子（§4 迁移表）。
+- 台账终态 = **降级**（不是否决）：触发条件 = 逐像素速度场落地（= 本 phase 批 14.4）。
+- **不许做的三件事**：① 删 `clip_mode` 消融臂集（债-68 已裁：该删的是"默认"不是"选择器"，
+  臂 1 是阳性锚点不是候选）；② 删仪器与判据；③ 把"运动中 R>1"记成"TAA 没用"——准确表述是
+  **「运动中 TAA 应当闭嘴」**，而臂 13 恰好就是让它在运动中闭嘴的东西。措辞决定下一个人会不会
+  去把整条线删掉。
+
+### 0.2 为什么可行域为空（本 phase 的立论，比"三次失明"更硬）
+
+`gate = saturate(2 − motion)`（`taa.frag.slang:833,882`）：
+
+- 抖动自身制造的伪 `motion` 上界**恰 1px**，而臂 13 静止侧"逐位不变"完全依赖 `motion ≤ 1px`
+  时 `saturate` **精确返回 1.0**；
+- 真实慢速运动住在 1–2px 的斜坡上（`:820` 自陈"每帧 1.5px 落在斜坡上却累积 150px"）；
+- ⟹ 断点**往上挪** = 慢运动漏过去（债-61 缺陷②）；**往下挪** = 静止抖动期就冲掉历史 = 退化成
+  "关掉 TAA"（判据 ② 专门防的退化解）。
+
+**断点上下都被封死 ⟹ 阈值这一整族修法被一次性排除。** 这不是"还没调到"。
+
+---
+
+## 1. 事实基线（2026-10-07 本机核实；出处 = `~/program/FidelityFX-SDK` @ `60f4ea8` 及其 git 历史）
+
+> 这一节的作用是**防止下次重新查一遍**。每条都核到文件/行号或 git 提交。
+
+### 1.1 "SDK 支持 Vulkan" 是过期话，但代码层面 Vulkan 没死
+
+- 当前 2.3.0 readme **自相矛盾**：第一行 "DirectX® 12 or Vulkan® applications"，末尾 Known
+  Issues 写 **"Vulkan is currently not supported in AMD FSR SDK 2.3"**。
+- Vulkan 后端是**被删的，不是没做过**。文件名含 `vk` 的文件数：1.1.4 = **245** → 2.0.0（`f4c1da8`）
+  = 3 → 2.2.0（`e236f23`）= 1 → 2.3.0 = 0（只剩 3rdparty 的 `vk_mem_alloc.h`）。被删内容包括
+  `sdk/src/backends/vk/ffx_vk.cpp`（**4692 行**后端本体）、`ffx_api_vk.h`、整个 Cauldron
+  `render/vk/`、预编译 `PrebuiltSignedDLL/amd_fidelityfx_vk.dll`。
+- **官方给的路线就是 1.1.4**（blog 原话："our existing FidelityFX SDK features will continue to
+  be available as v1.1.4"）。所以 whats-new 里 `vulkan` 零命中不是遗漏，是"1.x 继续服务"。
+
+### 1.2 为什么砍 Vulkan：分发模型，不是 DX 高级 API
+
+- 2.3 的 DX12 后端只碰 11 个接口（`ID3D12Device/CommandList/CommandQueue/GraphicsCommandList/
+  CommandSignature/DescriptorHeap/Heap/PipelineState/QueryHeap/Resource/RootSignature`）——
+  **无 DXR、无 Work Graphs、无 Mesh Shader、无 State Object**。
+- 真因（blog 原话）：**"Use of pre-built, signed AMD FidelityFX API DLLs is now required."** +
+  "driver releases can update the version of ML-based technologies used in-game by default"
+  ⟹ 要的是「签名 + 驱动可热替换」，那是 Windows PE + Authenticode 的机制，Vulkan 侧无对应物。
+- 推论：**FSR3.1.5 在 SDK 2.x 里的身份是 FSR4 的兼容垫背**，不是产品。我们要的 FSR3 权威载体
+  = **1.1.4（Upscaler 3.1.4 / FSR2 2.3.3）**；3.1.4 → 3.1.5 的全部算法差异 = changelog 一句
+  "Fix for possible negative rcas output"。
+
+### 1.3 VK 后端形态（决定集成难度，四条全是好消息）
+
+| 事实 | 出处 | 对我们的意义 |
+|---|---|---|
+| **compute-only**（全程 `VK_PIPELINE_BIND_POINT_COMPUTE`） | `ffx_vk.cpp:3944` | **不要 `VkRenderPass` 句柄**，录制点由我们控 |
+| wave64 是**管线创建期**挂 `RequiredSubgroupSizeCreateInfoEXT(64)`，且条件式 `waveLaneCountMin≤64≤Max` | `ffx_vk.cpp:3624-3633` | ⚠ **14.1 实测修正：这条在 FSR3-upscaler 上是死路**。挂 wave64 的前提是 `ffxIsWave64(effect, permutationOptions, …)` 为真，而 `ffx_fsr3upscaler.cpp` **从不给 `permutationOptions` 赋值**（`FfxPipelineDescription = {}` 后零赋值，全文件 `permutationOptions` 零命中）⟹ **VK 后端上 wave64 分支永不进**。NVIDIA 的 32..32 因此**不构成风险**，但反过来：wave64 那半套排列**运行时永远用不到**（生成它们只是为了填 accessor 的索引表） |
+| shader 是**真 GLSL 450** 单源双语（`FFX_GLSL` 宏切 `_callbacks_glsl.h` / `_hlsl.h`） | `backends/vk/shaders/fsr3upscaler/*.glsl` | 3.1.5 那行 rcas 修复搬到 GLSL 侧 = 小 diff，不是重写 |
+| 编译链 = **glslang**：`-compiler=glslang -e CS --target-env vulkan1.2 -S comp -Os -DFFX_GLSL=1` | `CMakeShadersFSR3Upscaler.txt` | Linux 现成；且 GLSL 分支下 wave 参数**为空**，矩阵只有 `-DFFX_HALF=0/1` |
+
+### 1.4 构建期唯一的墙：`ffx_sc`（以及为什么绕开它比移植它便宜）
+
+- `sdk/tools/ffx_shader_compiler/` 是构建期排列编译器，CMakeLists **MSVC-only**（`if(MSVC_TOOLSET_VERSION
+  VERSION_LESS 142) → FATAL_ERROR`），还 `add_subdirectory(libs/dxc)` + `libs/glslangValidator`（Windows .lib）。
+- 但它的产物格式**蠢到可复现**：`static const uint32_t g_<name>_size` + `static const unsigned char
+  g_<name>_data[]`，外加 `g_<shader>_PermutationInfo[]` / `g_<shader>_IndirectionTable[]` 两张表。
+  **MD5 只是它内部去重键，不必复现。**
+- ~~**pipeline layout 不是生成的** ⟹ `-reflection` 输出对 VK 路径无用，少一件事。~~
+  ❌ **14.1 实测推翻**：`ffx_vk.cpp:3330+` 逐条读 `FfxShaderBlob::boundSRVTextures` /
+  `boundUAVTextures`（含 Counts / Spaces）来搭 `VkPipelineLayout` ⟹ **反射表是必需的**，
+  少这一件事变成"必须自己反射"。手写的那份 layout 只是 effect 侧的 binding **号**表，
+  不替代反射。且 binding **名字**也是功能正确性的一部分：`ffx_fsr3upscaler.cpp:322-344`
+  用 `wcscmp` 把名字对进 `srvTextureBindingTable` / `uavTextureBindingTable` 填
+  `resourceIdentifier`，对不上直接 `FFX_ERROR_INVALID_ARGUMENT`。
+  ⟹ 生成器自带 SPIR-V 反射（不引 spirv-reflect），并把「反射出的名字 ⊆ 绑定表」做成
+  **阳性锚点**（1.1.4 实测 691 条全命中；空名反向用例确认会被拦下）。
+  ⚠ glslang 的 `-Os` **保留** `OpName`（rcas 里 8 条变量名）——反射不依赖 `-g`。
+- 签入的 `ffx_fsr3upscaler_shaderblobs.cpp` 按名 include `<ffx_<pass>_pass_permutations.h>` 与
+  `<ffx_<pass>_pass_wave64_permutations.h>`，共 **10 个 pass**：`accumulate` / `autogen_reactive` /
+  `debug_view` / `luma_instability` / `luma_pyramid` / `prepare_inputs` / `prepare_reactivity` /
+  `rcas` / `shading_change` / `shading_change_pyramid`。
+  ~~≈ **40 个 SPIR-V 产物**。~~ ❌ **低估了**：排列是 **6 个二值选项的笛卡尔积 = 64/pass**，
+  10 pass × 4 variant（`FFX_HALF` × wave32/64）= **2560 次 glslang 调用**（-j16 约 27 s）。
+  靠内容 MD5 去重后才塌到 **80 个唯一 SPIR-V 模块 / 1.7 MiB**（产物头 9.1 MiB）。
+  去重比预想更狠的两个事实：`rcas` 对 `FFX_FSR3UPSCALER_OPTION_APPLY_SHARPENING` **不敏感**
+  （64 个排列全同，锐化是 host 侧门）；GLSL 分支下 wave32/wave64 编译参数**完全相同**
+  （`CMakeCompileShaders.txt` 的 `HLSL_WAVE*_ARGS` 只在 .hlsl 分支赋值）⟹ 跨 variant 共享字节。
+- 处置 = **生成一次、产物签进仓库、构建开头 SHA1 护栏比对**——与 `generated/*.cppm` +
+  `reflection_check` 完全同构。工具语言纪律：C++ + vcpkg，或 stdlib-only Python。
+
+### 1.5 它不用 VMA、自建 descriptor pool（以及为什么先别改）
+
+- 全文件 `vkAllocateMemory(` **只有 4 处**（`:932` 在漏斗函数 `allocateDeviceMemory()` 内、
+  `:1301` / `:1591` uniform buffer 池、`:4256`），且它自建 `VkDescriptorPool`（含 bindless pool）。
+- 这是**库的立场**，不是偷懒：接 VMA = 依赖我们的 VMA 版本 + 被我们的分块策略绑住 + 崩溃归因模糊。
+  跟它自建描述符池是同一个决定的两面。
+- **真正的代价是账本口径**：我们显存账的招牌性质是「逐内存类型求和与 heap **完全闭合**」
+  （3300.88 / 2926.15 MiB / 461 allocations）。FFX 一加进来，**"闭合"这个断言当场失效**——
+  不是少个数字，是那本账不再证明任何东西（债-34 同形态）。
+- 先记账、别先动刀：用它自带的 `GetEffectGpuMemoryUsageVK` 补一行科目。改那 4 行的触发条件见 §2 批 14.8。
+- ⚠ 我们**自己就干过反方向的事**：VMA + zero-init 冲突那次是"真实需求走原生 `vkAllocateMemory`
+  绕 VMA"（AGENTS 已知问题 / `vulkan_extensions_2025_调研.md` §十二）。同一个权衡，别双标。
+
+### 1.6 输入契约（`ffx_fsr3upscaler.h` @ 1.1.4，权威字段表）
+
+**每帧必需**：`color`（render res）、`depth`（32bit，render res）、`motionVectors`（2D，render res）、
+`output`（upscale res）。**可选**：`exposure`（1×1）、`reactive`、`transparencyAndComposition`。
+**FSR 自己产出、我们分配并可共享**：`dilatedDepth`、`dilatedMotionVectors`、
+`reconstructedPrevNearestDepth` ⟹ **深度膨胀是内部的，不用我们写膨胀 pass**。
+**每帧参数**：`jitterOffset`、`motionVectorScale`、`renderSize`、`upscaleSize`、**`reset`**
+（"camera moved discontinuously" ⟹ 对应我们已有的 `cameraJumps` 概念）。
+**init flags**：`ENABLE_HIGH_DYNAMIC_RANGE` / `_DISPLAY_RESOLUTION_MOTION_VECTORS` /
+`_MOTION_VECTORS_JITTER_CANCELLATION` / `_DEPTH_INVERTED` / `_DEPTH_INFINITE` / `_AUTO_EXPOSURE` /
+`_DYNAMIC_RESOLUTION` / `_DEBUG_CHECKING`。
+**reactive 可以自动生**：`FfxFsr3UpscalerGenerateReactiveDescription`（`colorOpaqueOnly` vs
+`colorPreUpscale` → `outReactive`）⟹ **债-36 那句"reactive 要材质标记，我们一个都没有"被这条
+推翻**，代价是 render-res 多画一遍 opaque-only。
+**quality mode 含 `NATIVEAA`（1.0x）** ⟹ 可以只在原生分辨率做时域 AA，不必真降分辨率。
+
+**五个旋钮（`FfxFsr3UpscalerConfigureKey`）——这就是"不如去 FSR 里调旋钮"的具体内容**：
+
+| key | 语义（doc 原文摘要） | 对应我们哪条债 |
+|---|---|---|
+| `FVELOCITYFACTOR`（默认 1.0，→0.0） | **改善亮像素的时域稳定性** | **债-40**（本帧 HDR firefly / 孤立白点） |
+| `FACCUMULATIONADDEDPERFRAME`（默认 0.333） | 去遮挡处 / reactive>0 处**每帧累积增量** | 债-69 的"遗忘"轴 |
+| `FMINDISOCCLUSIONACCUMULATION`（默认 −0.333） | 去遮挡像素**延迟到 N+2 帧**才开始累积 | 债-69/71（"刚动过、现在静止"那个状态） |
+| `FSHADINGCHANGESCALE`（默认 1.0） | 放大 FSR3.1 **自己算的 shading change** | 我们臂族想造的"时域可信度"，它内置了 |
+| `FREACTIVENESSSCALE`（默认 1.0） | 写进 reactive 的增益 | 债-62 的响应函数族 |
+
+---
+
+### 1.7 渲染图的 barrier 覆盖面现状（2026-10-07 核实；决定 FSR 落位的风险面）
+
+**自动推导只覆盖 image attachment 的布局链，且图外访问靠"进出同值"的约定**：
+
+| 事实 | 出处 |
+|---|---|
+| 图自动推导 = attachment 布局链（`usage → {layout, stage, access}` 查表） | `render_graph.cppm:21-24, 32-37` |
+| **明确不进图**：descriptor/sampler heap host-write barrier、scene data staging copy barrier、acquire/present、fence | `render_graph.cppm:26-30` |
+| `RgAttachmentKind` = swapchain / depth / offscreen / depthOffscreen —— **无 buffer kind** ⟹ **buffer 侧同步完全在图外** | `render_graph.cppm:61-64` |
+| 图外 compute 家族手写 barrier：`gpu_cull` / `IzbShadow` / `EvssmShadow` / `env_prefilter` / `mip_gen` / `texture_upload` / `gpu_canary` | `izb_shadow.cppm:27`「render_graph 无 compute kind」、`evssm_shadow.cppm:20` |
+| IzbShadow 每帧 ~10 条 buffer barrier + **2 条深度图布局 barrier** | `izb_shadow_impl.cppm:256, 280` |
+| 深度布局的处理方式 = **进出同值**，注释自陈「**渲染图布局追踪表不可见**，零漂移」 | `izb_shadow.cppm:52`、`izb_shadow_impl.cppm:279`；`frame_capture_impl.cppm:162` 同构 |
+| 追踪表 = `Renderer::attachmentLayouts`，图外路径**读出并还原**，但**没有任何断言校验还原真的发生了** | `vkrenderer.cppm:320`、`vkrenderer_passrec.cppm:268` |
+
+⟹ **缺口不是"漏了几条 barrier"，是"约定无断言"**：布局若真漂移，VVL 不报（布局本身合法），
+症状推迟到**下一帧首 barrier 的 `oldLayout` 失配**才炸，根因与症状隔一整帧。债-32（mask 永不清零
+却逐位相同）就是同一形态：**约定成立时一切正常，所以没人知道它会不会不成立。**
+
+**FSR 是第三个图外 compute**，且它比 IzbShadow 更麻烦：它的产物里有三张**由我们分配、由它写入**的
+图（`dilatedDepth` / `dilatedMotionVectors` / `reconstructedPrevNearestDepth`），还有一张我们每帧
+写的 velocity buffer ⟹ 手写 barrier 的面积会再扩大。**所以护栏必须先立，再扩面。**
+
+### 1.8 批 14.1 落地事实（2026-10-08 实测；`third_party/fsr/`）
+
+**结论：风险 2 排除** —— 1.1.4 的 VK 后端在 RADV 上跑得起来。
+
+| 项 | 实测 |
+|---|---|
+| vendor 树 | `third_party/fsr/vendor/` = `c6efa6b`（tag v1.1.4）的 **include 闭包裁剪版**，95 文件 / 1.8 MiB（原 `sdk/` 13 MiB）。闭包由传递性解析 `#include` 算出 |
+| 排列产物 | `tools/gen_ffx_shader_blobs.py`（stdlib-only）→ `blobs/` 41 个头，**80 个唯一 SPIR-V 模块 / 1.7 MiB**。`just fsr-blobs` 重生成，`just fsr-check` 比对 38 输入 / 41 产物 SHA1 |
+| 静态库 | `ffx_fsr3upscaler_vk`，Linux/clang 22 + libc++ 干净通过。**全量编译 1.3 s**（-j16），故留在 `just build` 里当"vendor 还编得过"的闸门，成本可忽略 |
+| 冒烟 | `just fsr-smoke` = 最小 device + 2 帧 `ffxFsr3UpscalerContextDispatch`，**AMD Radeon 8060S Graphics (RADV STRIX_HALO) / Mesa 26.2.3**，dispatched + executed，VVL **白名单外 0 条** |
+| vendor 改动 | **P1–P10**，逐条根因 → `third_party/fsr/PATCHES.md`。P1–P6 编译期（MSVC vs clang/libc++）、P7 链接期、**P8–P10 运行期**，其中 P9/P10 **只在 `-O2` 暴露** |
+| 上游 VVL 问题 | 4 类 15 条（coherent memory type / `layerCount=0` / **luma history `rgba8` vs `R16G16B16A16F`** / deinitialize 泄漏 18 对象）。冒烟建白名单 + 计数，**白名单外即 FAIL**（变异验过非空转） |
+
+三条要带给后续批次的事实：
+
+1. **冒烟必须跑交付优化档**。同一份代码 `-O0` PASS、`-O2` 段错误，两次，都是对齐 UB（P9/P10）。
+   「`-O0` 冒烟过了」在这类 bug 上**不提供任何信息** → `调试历史.md` 2026-10-08。
+2. **luma history 的格式不一致是接真实画面前必须还的债**：写侧 `layout(..., rgba8)`、
+   host 侧建 `R16G16B16A16_FLOAT`，VVL 判"整个 image 读写值未定义"。DX12 上 UAV 格式取自
+   资源、限定符被忽略，所以 Windows 路径看不见 ⟹ **这是 GLSL/Vulkan 路径独有的**。
+3. **冒烟把 image 一律推到 `VK_IMAGE_LAYOUT_GENERAL`**，是在**回避**而不是预演布局簿记。
+   真实接线的布局对账仍归 **14.4b 的护栏**，14.5 的 VVL 判据不能替它背锅。
+4. **排列矩阵的绝大部分运行时到不了**：`ffx_fsr3upscaler.cpp` 从不给 `permutationOptions`
+   赋值（§1.3 修正）⟹ 每个 pass 实际只用 base 排列，wave64 那半套**永不索引**。我们仍然必须
+   生成它们（accessor 的 `IndirectionTable` 按 index 查，缺项 = 空 blob），但**这是个可以
+   大幅缩小的生成面**（2560 次 glslang → 理论上 10 次 + 表占位）。要不要缩 = 14.6 之后的
+   构建期账，不在本 phase 的关键路径上。
+
+**14.1 未达成的一条**：验收 ① 要求「Linux clang + Windows MSVC 双平台 configure 通过」——
+本机只有 Linux，**Windows 侧未验**。P1–P6 全是"非-Windows 缺 include"方向的补丁，
+理论上不动 Windows 路径（改动都在 `#ifndef _WIN32` 或新增 TU），但**这是推理不是实测**。
+
+---
+
+## 2. 批次拆分与验收判据
+
+> 顺序按「失败最便宜」排，不是按依赖最紧排。**14.1 与 14.3 可并行**（14.3 不碰 FSR）。
+> 每批收口 = 在本节划掉 + 记 `调试历史.md`。
+
+| 批 | 内容 | 为什么在这个位置 | 验收判据 |
+|---|---|---|---|
+| **14.0** | **TAA 冻结收口**（前置，别跳）：① 臂 13 转交付（`configs/scene.lua` `clip_mode = 13` + 重立红线 B + 六机位阶跃补跑）**或**把判据 ④ `temporal-tail-step-clip-holds` 显式降级为 advisory 并写明理由；② 债-67 默认语义拍板（推荐：imgqa 读 `scene.lua` 的 `clip_mode` 当默认）；③ `phase13_plan.md` §2 表逐条给三态终局；④ 还债总账把 TAA 线标**降级 + 触发条件** | **不转交付就必留一条常红判据**，而债-61 已诊断过这个反模式：一条永远红的闸门 = 没有闸门，且永久污染"全绿"这个信号。臂 13 静止侧逐位不变已被三台仪器独立确认 ⟹ 转交付风险≈0 | ① `imgqa selftest` 全绿**且无常红项**（rc 可当闸门）；② 红线 A 复现 `fdece9d0…`（TAA 关逐位不变）；③ 台账里 TAA 相关债**每条有终态**，无"看过一眼就算完" |
+| ~~**14.1**~~ ✅ **已收口 2026-10-08** | **vendor 骨架 + 编译成功**：从 `c6efa6b` 捞 `sdk/{include,src/backends/vk,src/backends/shared,src/components}` 的 FSR3-upscaler 闭包 → 写 shader 排列生成器（glslang）→ 产物签入 + SHA1 护栏 → `ffx_vk.cpp` 在 Linux/clang 编过（`<codecvt>` 死分支、警告） | 用户方向第一条。**编译不过，后面全是空谈**；且这一步**不碰引擎**，失败可整棵删掉 | ① 独立 target（`third_party/fsr/`）**能编出静态库**，Linux clang + Windows MSVC 双平台 configure 通过 —— ⚠ **Windows 侧未验**（本机无 Windows；改动全在 `#ifndef _WIN32` 或新增 TU，是推理非实测，见 §1.8）；② SPIR-V 排列产物齐（**实际 80 个唯一模块**，非 40）、`just fsr-check` SHA1 护栏覆盖 —— ✅ 变异验过非空转；③ **交付路径逐位不变** —— ✅ `just smoke` PASS errors=0 warnings=0（与开工前基线同）；④ `just test` 全绿 —— ✅ 206/206。**收口记录** → §1.8 + `调试历史.md` 2026-10-08 + `third_party/fsr/PATCHES.md` |
+| **14.2** | **输入面研究（只出文档，不改渲染）**：`jitterOffset` / `motionVectors` / `depth` / `reset` 四个量的**单位、坐标系、符号、采样时刻**逐条与 FSR 源码对拍，写成表；顺带定 `ENABLE_DEPTH_INVERTED` / `_DEPTH_INFINITE` / `_MOTION_VECTORS_JITTER_CANCELLATION` / `_DISPLAY_RESOLUTION_MOTION_VECTORS` 的取值 | 用户方向第二条。**这是本项目第三次栽在"参考/闭式的观测坐标系与被测项不一致"的位置**（`phase13_plan` §1.6 撤回条、§1.17 结论 5 的 φ 反号）——先定口径再写代码 | ① 一张四行表，每行给「FSR 要的口径 / 我们现在的口径 / 差什么 / 差值怎么验」；② **每条差值有一条可跑的对拍**（合成靶或解析式），不接受"读源码认为一致"；③ 符号项必须有**反向用例**（符号取反必须更差） |
+| **14.3** | **内部分辨率与窗口拉伸解耦**：现在 render extent ≡ swapchain extent ≡ 窗口像素（`Resources` 深度图 extent = swapchain extent；全仓**无 `renderScale` 概念**，只有 `vkswapchain.cppm` 的 `windowScale` 诊断）。加一个独立的 render extent，与 swapchain extent、与债-37 的 HPD 分数缩放三者正交 | 用户方向第四条。**它是 FSR 的硬前置，但本身独立可验收、且净收益**（DRS / 性能实验都缺它）；与 14.1 并行 | ① `renderScale ∈ {1.0, 0.75, 0.5}` 下画面正确、resize 不崩、imgui 与**点选**不受影响（债-37 三条连带不许回退）；② `renderScale = 1.0` 时**逐位等于**今天的基线（红线）；③ 截图/判据口径显式记录 render extent（否则 imgqa 所有像素类判据静默换含义）；④ Wayland 175% 缩放下实测一次 |
+| **14.4** | **逐像素速度场**（债-71 / 债-35，**本 phase 最大的一块**）：compute pass 由两帧相机矩阵 + `depthTex` 解析算出每像素速度（本项目唯一运动是全局刚体 ⟹ 便宜），输出 FSR 口径的 `motionVectors`；同时把 TAA 的重投影从"全局矩阵"改成"读这张场" | 用户方向第三条。**它是天花板唯一的出口**，且能独立验收（不必等 FSR 接完）——臂 14 = 门改吃真实逐像素速度 ⟹ 直接问跷跷板是否松绑 | ① 速度场与**独立解析参考**逐像素对拍（含 pitch；用 `temporal_yaw_remap` 那套带 pitch 的金标准，2.3e-13px）；② **阳性锚点** = 静止机位必须恒 0；③ **反向用例** = 符号取反必须让 §1.22 的 R 变差；④ 用它重跑 `temporal-tail --motion step` 与 `temporal-motion`，报 R 是否 < 1（**这是"运动中 TAA 有害"能不能翻案的判决**） |
+| **14.4b** | **图外资源挂号 + 布局对账护栏**（FSR 前置，见 §1.7）。做两档、明确不做第三档：**A 护栏**（便宜）= 图外 pass 进出点比对 `attachmentLayouts[slot]` 与预期值，不符即 error 出声，把"进出同值"从**约定**变**断言**；**B 挂号**（中等）= `RgGraphDesc` 增加 external-use 声明（attachment × usage × 插在哪个 pass 之后/之前），GraphCompiler 据此把 barrier 并入计划，`IzbShadow` / `EvssmShadow` / FSR 三处不再手写 **image** barrier；**C 不做** = buffer 侧依赖自动推导（图只跟 image attachment，加进去 = 半个 memory manager） | **排在 14.5 之前**：FSR 是第三个图外 compute，先立护栏再扩面，否则 14.5 的 VVL 判据要替"约定"背锅，而债-32 已经证明这类缺口 VVL 不报 | ① **阳性锚点** = 故意让某图外 pass 不还原布局 ⟹ 护栏必须 error（**变异验过非空转**）；② **反向** = 现状全绿（护栏零误报，否则等于没有）；③ 红线 = 画面逐位不变（护栏只读不写命令）；④ B 档做完 = `izb_shadow_impl.cppm:256,280` 两处 `depthLayoutBarrier` 删除且画面逐位不变 |
+| **14.5** | **FSR 接线**：落位 = **图外 compute 编舞**（`RgPassKind` 只有 `drawMesh/blit/drawLight`，**无 compute kind**；先例 = IzbShadow / EvssmShadow，见 `evssm_shadow.cppm:20`）。HDR 域位置 = **tonemap 之前**（scene_hdr@render res → FSR → hdr@display res → tonemap → swapchain），`ENABLE_HIGH_DYNAMIC_RANGE` 开 | 唯一架构决策，先写死再动手，免得中途返工 | ① **FSR 关 = 逐位不变**（与 TAA 同款红线，用基线配置）；② VVL 零报错（含跨 submission 依赖与布局链——债-32 那条"图外编舞"的坑）；⚠ **布局漂移 VVL 抓不到**（布局本身合法，症状隔一整帧），这一项靠 **14.4b 的护栏**，不是靠 VVL；③ 显存账新增"外部分配器"科目且**闭合断言重新有意义**；④ 本批**只点亮、不调参**，`NATIVEAA` + `renderScale=1.0` 起步 |
+| **14.6** | **判据迁移**：直接复用（`temporal-tail --motion step` 含闭式锚臂 E、`temporal-motion` 的 M0/M1/M2/M3x 消融族、理想 N 相位平均参考、往返地板、`aa-coverage`、`temporal` 的 ρ 对闭式、alignment/ablation 两条**元判据**）／换口径（ρ 六机位表：**算子留、阈值全重立**，闭式 ρ\*=0.0827 是 EMA 的闭式，FSR 不是 EMA）／随 TAA 作废（`clip_mode` 臂族、gate 断点锚点、`diag_reject` alpha 解码） | 用户方向最后一条"跑一堆 imgqa"的前置。**不先分类就会拿 TAA 的阈值判 FSR** | ① 三张清单落到 `imgqa` 的判据注册表（**不在文档里抄清单**，抄名单反模式）；② 每条"复用"项跑一次并记录新基线；③ 每条"作废"项**先确认不是护栏**（债-68 三条件） |
+| **14.7** | **旋钮调参**：§1.6 那 5 个 configure key × 三轴判据（静止闪烁 / 平移阶跃鬼影 / 运动中 R） | 有判据才有旋钮；顺序必须在 14.6 之后 | 每个 key 给一张扫描表 + **一次消融证明它真的在动**（阳性锚点），并写清代价轴 |
+| **14.8** | **VMA 裁决**：默认**不改**，只补账本科目。改那 4 处 `vkAllocateMemory` 的触发条件（任一）：① 外部分配器条数让 `maxMemoryAllocationCount` 逼近上限；② 预算/OOM 需要统一降级；③ 显存账科目精度不够用 | 见 §1.5。**账本口径问题用账本解决，不用 patch 解决** | 若不动：显存日志里 FSR 的 VRAM 有独立一行且 `logMemoryStats` 的闭合断言重新成立（口径写明"含外部分配器 X MiB"） |
+
+---
+
+## 3. 红线与纪律
+
+- **关 = 逐位不变**：TAA 关（沿用 `fdece9d0…`）与 FSR 关各自一条，**必须用基线配置**
+  （`cp configs/*.lua build/rgl/configs/` 之后）。
+- **FSR 走 graphics 队列，不用那个闲置的 compute 队列**（债-24 的 compute/transfer 队列与命令池
+  全仓零调用，本 phase **明确仍然不用**）。理由：FSR 的输入（scene_hdr / depth / velocity）与输出
+  全在 graphics 侧，同队列执行序天然有序（`izb_shadow_impl.cppm:353` 原话），换队列 = 引入跨队列
+  ownership barrier 这一整类新 bug 却拿不到任何收益。**"用上 compute shader" ≠ "用上 compute 队列"**
+  ——前者是本 phase 的前提，后者是债-24 的死重清理，两件事别混。若将来确要用，先补 §1.7 的 B 档挂号。
+- **BIT-IDENTICAL 不是不做 FSR 的理由**：债-46 的三个位级出口（`lag-16` 同相位逐位相同 ⇒ 相位可锁、
+  `temporal-identity` 恒等式门、`warm=2 vs 128` 预热无关性）对 FSR 同样成立，**先落地成基准**。
+- **口径先于代码**（本 phase 的头号纪律）：任何"闭式/参考/判据"必须先核对**适用域与观测坐标系**
+  与被测项一致。已三次栽在这里（`phase13_plan` §1.6 撤回、§1.17 结论 5/7、债-60 坏构建读数）。
+- **消融实验设计完先自问：被动的量在这个实验里真的会动吗**（box9 教训）。
+- **有效性检查不得套在消融组上**（债-70：M3 是按设计就该坏的组）。
+- **并行红线**：imgqa 采集可并行，但 BIT-IDENTICAL 类跨进程逐位比对**不许并行**（债-64）。
+  14.6/14.7 要扫大量档位，**采集层收敛 + 并行是这两批的前置投资，不是 TAA 遗产维护**。
+- 性能数字绑机器；三机轮换，跨机先复测再比。
+
+---
+
+## 4. 明确不做
+
+- **FSR4 / ML-Upscaler / Ray Regeneration / Radiance Caching**：RDNA4 + 预编译签名二进制，换路线了。
+- **Frame Generation**：`frame-interpolation-swap-chain` 是 **DXGI/DX12** 的 present 替换，Vulkan 上
+  present 节奏要自己接；且它是本 phase 之外的独立目标。
+- **DX12 路径**、**SDK 2.x 的 loader/签名 DLL 架构**：不跟。
+- **reactive 的材质标记通道**：先用 `GenerateReactive`（opaque-only vs pre-upscale 差分）；真需要
+  语义级 reactive 再挂 Phase 10 的 `object_id` pass 骨架。
+- **把 FFX 改成用 VMA / 用我们的 DescriptorHeap**：见 14.8 触发条件，默认不做。
+- **继续调自研 TAA 的 α / 阈值 / 响应函数形状**：§0.2 已证可行域为空。
+
+---
+
+## 5. 风险清单（按"会让本计划作废"排序）
+
+1. **速度场做不出正确结果**（14.4）→ 那 FSR 与自研都无解，时域线整体转"只做静态机位 AA"。
+   缓解：14.4 的判据①②③不依赖 FSR，失败也拿得到结论。
+2. ~~**1.1.4 的 VK 后端在 RADV / anv 上跑不起来**~~ ✅ **14.1 已排除（RADV）**：最小 device + 2 帧
+   `ffxFsr3UpscalerContextDispatch` 在 STRIX_HALO 上全部 dispatched + executed，VVL 白名单外 0 条
+   （`just fsr-smoke`）。descriptor indexing + 自建 pool + pipeline 创建组合成立。**wave64 分支运行时
+   永不进**（见 §1.3 修正），所以它不是风险项。**anv 未验**（风险残留，14.5 前用 `just run-intel`
+   那台补一次）。踩到的三个运行期坑（P8 跳 0x0、P9/P10 对齐 UB）→ `third_party/fsr/PATCHES.md`。
+3. **图外 compute 编舞把债-16"两套执行世界观"从 2 例变 3 例**，且 FSR 的输入是图内产物
+   （scene_hdr / depth）、产物里有三张**我们分配、它写入**的图 ⟹ 跨边界布局转换出错就是债-32 型
+   UB，而 **VVL 抓不到布局漂移**（布局本身合法，症状隔一整帧才出现，见 §1.7）。
+   缓解 = **14.4b 先行**（债-72 的 A 档护栏把约定变断言），VVL 只当第二道。
+4. **imgqa 采集层不收敛**（38s/组、五份副本）→ 14.6/14.7 的档位扫描"存在却没人跑"，与没判据等价。
+5. **显存账闭合断言失效**（§1.5）→ 不是崩溃，是**账不再证明东西**；14.5 判据③专门盯它。
+6. 我们其实更需要的是**内容**（水体 / 粒子 / per-entity 动画）而不是又一个时域滤波器——若 14.4
+   做完发现场景里仍只有全局刚体，速度场的价值会被低估。缓解：14.4 判据④用现有激励也要出数。
+
+---
+
+## 6. 记债继承（本 phase 的账，不自动清偿）
+
+| 债 | 归属 | 说明 |
+|---|---|---|
+| **债-71**（门唯一输入是相机派生量 = 天花板） | **14.4 清偿** | 逐像素速度场 |
+| **债-35**（无 per-pixel 速度 / 无膨胀深度） | 14.4 + 14.5 | 膨胀深度由 FSR 内部产出（§1.6） |
+| **债-46**（位级基准未落地） | 14.5 前置 | 三个出口对 FSR 同样成立 |
+| **债-64**（采集层未收敛 / 并行未做） | **14.6/14.7 前置** | 否则"调旋钮"仍是空话 |
+| **债-40**（本帧 HDR firefly） | 14.7 首个旋钮 | `FVELOCITYFACTOR → 0` 是它的现成候选修法 |
+| **债-72**（图外 barrier 靠约定且无断言 / buffer 侧完全在图外） | **14.4b 清偿** | **护栏先于扩面**：FSR 是第三个图外 compute |
+| **债-73**（FSR 上游 4 类 spec 违规，含 luma history 格式 UB） | **14.5 之前处置 ③**，①②④ 记噪声 | ③ 不处置 = 时域历史是未定义值；冒烟侧白名单已把 4 类**登记**住 |
+| **债-16**（两套执行世界观） | 14.5 加重、14.4b 缓解 | FSR = 图外 compute 第三例 |
+| **债-24**（compute/transfer 队列死重） | **本 phase 明确不用**（见 §3 红线） | "用上 compute shader" ≠ "用上 compute 队列" |
+| **债-67 / 债-69 / 债-70** | 14.0 收口 | 冻结的账面前提 |
+| **债-68**（臂集瘦身） | 冻结，触发条件不变 | 14.6 判"作废"时按它的三条件核 |

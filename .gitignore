@@ -410,3 +410,11 @@ script_spike/script.so
 script_spike/spike_api.o
 script_spike/spike_api.pcm
 docs/参考资料/*.pdf
+
+# AMD FidelityFX SDK 上游克隆（blobless partial clone + sparse-checkout Kits/FidelityFX）。
+# vendor 进仓库的是 third_party/fsr/vendor/（v1.1.4 include 闭包裁剪版，1.8 MiB）；
+# 这 433 MiB 只是取源用的工作副本，不签进仓库。
+/FidelityFX-SDK/
+
+# third_party/fsr 冒烟的独立构建目录（`just fsr-smoke` 自己拉，不进 just build）
+build-fsr*/

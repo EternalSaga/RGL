@@ -283,6 +283,25 @@ run-intel:
     fi; \
     (cd {{ BUILD }}/rgl && VK_DRIVER_FILES="$INTEL_ICD" ./rgl)
 
+# ─── FSR 3.1.4 vendor（third_party/fsr，见 docs/phase14_plan.md）─────────────────
+# 排列产物 = 生成一次、签进仓库、构建开头比对（与 just reflect + reflection_check 同构）。
+# 判据分工：fsr-check 只比哈希（秒级）；真编译 2560 次 glslang 要 ~27 s，人触发。
+#   just fsr-blobs              重生成 blobs/*.h（改 vendor 的 shader 契约后）
+#   just fsr-check              SHA1 护栏 + 反射名对账（CI/提交前）
+#   just fsr-smoke              构建并执行「最小设备 + 单 pass」冒烟（要真设备 + VVL）
+fsr-blobs *ARGS="":
+    @python "{{ WORKSPACE }}/third_party/fsr/tools/gen_ffx_shader_blobs.py" {{ ARGS }}
+
+fsr-check:
+    @python "{{ WORKSPACE }}/third_party/fsr/tools/gen_ffx_shader_blobs.py" --check
+
+# EXCLUDE_FROM_ALL 的 target，故不进 just build 的运行路径；复用 build/ 的现成配置
+# （没配置过就先 just config）。判据 = 两帧 ContextDispatch 全部 dispatched + executed
+# 且 VVL 无白名单外报错（白名单逐条根因 → third_party/fsr/PATCHES.md）。
+fsr-smoke:
+    @cmake --build {{ BUILD }} --target fsr_smoke -j {{ NPROC }}
+    {{ BUILD }}/third_party/fsr/fsr_smoke
+
 # ------------------------------------------------------------------------------
 # 3. 清理
 # ------------------------------------------------------------------------------

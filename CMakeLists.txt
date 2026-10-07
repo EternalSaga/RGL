@@ -34,6 +34,9 @@ add_subdirectory("./logger")
 # slang/schema/模板真变更时，ninja 才按需构建 reflection_tool。默认 ALL
 # 构建不再付工具链 ~14s 串行前缀。
 add_subdirectory(tools EXCLUDE_FROM_ALL)
+# Phase 14 批 14.1：vendor 的 FSR3-upscaler VK 后端（独立静态库，**尚未链进 rgl**，
+# 接线是批 14.5）。留在 ALL 里是为了让「编不过」当场暴露，而不是等接线那天。
+add_subdirectory(third_party/fsr)
 add_subdirectory(rgl)
 # 单元测试层（Phase 12 批 12.1）：纯函数/契约测试，无 GPU 无窗口。EXCLUDE_FROM_ALL
 # ——不进默认构建序列（测试不是引擎产物，AGENTS.md「rgl 不认识测试」），`just test` 显式构建。
