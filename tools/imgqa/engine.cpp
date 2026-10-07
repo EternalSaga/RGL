@@ -6,6 +6,7 @@
 
 #include <chrono>
 #include <cctype>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -226,7 +227,28 @@ void insertAfterKey(std::string& text, const std::string& file, const std::strin
 /// 恒等式会因「pass 根本不在图里」而平凡成立 = 最阴的假绿）。
 /// ⚠ 入参曾是 11 个位置参数（批 13.11 加 clip 门时到 13 个）——**改成直传 ProfileOpts**：
 ///   诊断键越加越多，位置参数是「加一个键改三处 + 中间默认值可能被跳过」的漂移面。
-/// 约定：**默认态 = 不写键**（写出的键越少，漂移面越小；门关态与交付配置逐字相同）。
+/// 约定：**默认态 = 不写键**（写出的键越少，漂移面越小）。
+/// 🔴 但「不写键 = 与交付配置相同」这条**只在引擎默认值等于交付值时成立**。批 13.13 把交付
+/// 默认改成 `clip_mode = 11` 后它就不成立了（不写键 = 引擎默认 0 = 门关），见下方出声守卫。
+/// 交付态的 `clip_mode` 会被这次整块替换丢掉 ⟹ **出声**。抽成独立函数的理由：判据自成一件事，
+/// 而 `rewriteTaaBlock` 的认知复杂度上限很紧（早返回把三个守卫从调用点挪走）。
+/// ⚠ 判据**不硬编码交付值**，而是从即将被替换掉的原文里读——交付档位再改也不会漂。
+void warnIfDropsDeliveryClipMode(const std::string& scene, std::string::size_type begin,
+    std::string::size_type blockEnd, double clipMode)
+{
+    static bool warned = false;
+    if (warned || clipMode != 0.0 || blockEnd == std::string::npos)
+        return;
+    const auto hit = scene.find("clip_mode", begin);
+    if (hit == std::string::npos || hit >= blockEnd)
+        return;
+    warned = true;
+    std::printf("⚠ 本次**未指定 `--clip`** ⟹ 不写 `clip_mode` 键 ⟹ 回落引擎默认 **0**（门关硬盒），"
+                "而交付配置 scene.lua 的 taa 段里写的是非零档位（整块替换会把它丢掉）。"
+                "**读数不是交付态**：要测交付态请显式 `--clip 11`，要测门关就接受它叫门关。"
+                "（本行每次运行只打一次）\n");
+}
+
 void rewriteTaaBlock(std::string& scene, const ProfileOpts& o)
 {
     std::ostringstream blk;
@@ -253,6 +275,8 @@ void rewriteTaaBlock(std::string& scene, const ProfileOpts& o)
     blk << ",\n    },\n";
     const auto begin = scene.find("\n    taa = {");
     if (begin != std::string::npos) {
+        // 🔴 交付态的 clip_mode 会被这次整块替换丢掉 ⟹ 出声（理由见 helper 头注释）。
+        warnIfDropsDeliveryClipMode(scene, begin, scene.find("\n    }", begin), o.taaClipMode);
         // 块收尾是 `\n    }` 再加**可选逗号**（交付配置里 taa 是 return 表最后一项，带逗号）。
         // 逗号必须一起吃掉——留一个孤零零的 `,` 在 `}` 前 = Lua 语法错（实测踩过：
         // `scene.lua:235: unexpected symbol near ','`）。

@@ -919,7 +919,9 @@ BistroRun runBistroGroup(const std::string& dir, const std::string& name, const 
     o.taaFeedback = feedback;
     o.taaJitterScale = jitterScale;
     o.taaBaseSpace = baseSpace;  // 交付态 = 引擎默认 true（口径差异①，勿改默认）
-    o.taaClipMode = arm.mode;    // 批 13.11 消融臂（0 = 门关 = 不写键 = 交付配置原样）
+    o.taaClipMode = arm.mode;    // 批 13.11 消融臂（0 = 门关 = 不写键）
+    // ⚠ 0 **不再等于「交付配置原样」**：批 13.13 起交付默认是 scene.lua 的 clip_mode = 11，
+    // 而本工具整块替换 taa 段 ⟹ 不写键 = 引擎默认 0。要测交付态请显式 `--clip 11`。
     o.taaClipSoft = arm.soft;
     makeProfile(dir, o);
 
@@ -1855,6 +1857,10 @@ int runBistroCamera(const BistroCam& cam, int periods, double warmMult, double l
 
     logCall("temporal-residual-bistro",
         {{"camera", cam.name}, {"periods", std::to_string(periods)},
+            // 🔴 档位必须进机器可读日志：本工具整块替换 taa 段，`--clip` 不给 = 不写键 =
+            // 引擎默认 0，而交付默认自批 13.13 起是 11。臂 0 与臂 11 的 ρ 差 3 倍，而**历史条目
+            // 里根本没有这一列** ⟹ 「这个已发表数是哪个臂」事后无从审计（债-67）。
+            {"clipMode", d4(arm.mode)}, {"clipSoft", d4(arm.soft)},
             {"warmMult", d4(warmMult)}, {"longFeedback", d4(longFeedback)}, {"tau", d6(tau)},
             {"N0_floor_ok", floorOk ? "1" : "0"},
             {"N0_px", std::to_string(n0.changedPx)},
