@@ -18,10 +18,12 @@
 #include <vulkan/vulkan.h>
 
 #include <cstdarg>
+#include <cmath>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 #include <string>
 #include <vector>
 #if defined(__linux__)
@@ -236,6 +238,99 @@ void createImage(VkCtx& c, Image& out, uint32_t w, uint32_t h, FfxSurfaceFormat 
     vkFreeCommandBuffers(c.device, c.pool, 1, &cb);
 }
 
+// ── 契约探针用的两个小工具 ─────────────────────────────────────────────────────
+// 把一张已经是 GENERAL 布局的图清成常量（源图喂已知值用）。
+void clearImageTo(VkCtx& c, VkCommandBuffer cb, const Image& im, VkClearColorValue v)
+{
+    VkImageSubresourceRange r{};
+    r.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+    r.levelCount     = 1;
+    r.layerCount     = 1;              // ⚠ 0 是非法值（vendor 自己就在 :4223 踩了这个，见 PATCHES.md）
+    vkCmdClearColorImage(cb, im.image, VK_IMAGE_LAYOUT_GENERAL, &v, 1, &r);
+}
+
+// IEEE 754 half → float。dilatedMotionVectors 是 R16G16_FLOAT，回读要自己解
+// （只准 stdlib：不引 Half/half.hpp，也不假设 <bit> 里有 from_bits）。
+float halfToFloat(uint16_t h)
+{
+    const uint32_t sign = uint32_t(h & 0x8000u) << 16;
+    const uint32_t exp  = (h >> 10) & 0x1Fu;
+    const uint32_t man  = h & 0x3FFu;
+    uint32_t bits = 0;
+    if (exp == 0) {
+        if (man == 0) bits = sign;                       // ±0
+        else {                                           // 次正规：规格化
+            uint32_t e = 0;
+            uint32_t m = man;
+            while (!(m & 0x400u)) { m <<= 1; ++e; }
+            m &= 0x3FFu;
+            bits = sign | ((127u - 15u - e) << 23) | (m << 13);
+        }
+    } else if (exp == 0x1F) {
+        bits = sign | 0x7F800000u | (man << 13);         // inf / nan
+    } else {
+        bits = sign | ((exp + 112u) << 23) | (man << 13);
+    }
+    float f = 0.0f;
+    std::memcpy(&f, &bits, sizeof(f));
+    return f;
+}
+
+// 回读一张 R16G16_FLOAT 图的中心像素。调用方负责队列已 idle。
+void readBackHalf2Center(VkCtx& c, const Image& im, float& outX, float& outY)
+{
+    const VkDeviceSize bytes = VkDeviceSize(im.w) * im.h * 4;   // 2 × half
+    VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bci.size  = bytes;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    VkBuffer buf = VK_NULL_HANDLE;
+    check(vkCreateBuffer(c.device, &bci, nullptr, &buf), "回读 vkCreateBuffer");
+    VkMemoryRequirements req{};
+    vkGetBufferMemoryRequirements(c.device, buf, &req);
+    VkPhysicalDeviceMemoryProperties mp{};
+    vkGetPhysicalDeviceMemoryProperties(c.phys, &mp);
+    uint32_t mt = 0xFFFFFFFFu;
+    for (uint32_t i = 0; i < mp.memoryTypeCount; ++i)
+        if ((req.memoryTypeBits & (1u << i)) &&
+            (mp.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) &&
+            (mp.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) { mt = i; break; }
+    if (mt == 0xFFFFFFFFu) die("回读需要 host-visible coherent 内存类型");
+    VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    mai.allocationSize = req.size;
+    mai.memoryTypeIndex = mt;
+    VkDeviceMemory mem = VK_NULL_HANDLE;
+    check(vkAllocateMemory(c.device, &mai, nullptr, &mem), "回读 vkAllocateMemory");
+    check(vkBindBufferMemory(c.device, buf, mem, 0), "vkBindBufferMemory");
+
+    VkCommandBuffer cb = VK_NULL_HANDLE;
+    VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    cai.commandPool = c.pool; cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; cai.commandBufferCount = 1;
+    check(vkAllocateCommandBuffers(c.device, &cai, &cb), "回读 vkAllocateCommandBuffers");
+    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    check(vkBeginCommandBuffer(cb, &bi), "回读 vkBeginCommandBuffer");
+    VkBufferImageCopy reg{};                       // bufferRowLength=0 ⟹ 行紧排（4B/像素，满足 4B 对齐）
+    reg.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    reg.imageExtent      = {im.w, im.h, 1};
+    vkCmdCopyImageToBuffer(cb, im.image, VK_IMAGE_LAYOUT_GENERAL, buf, 1, &reg);
+    check(vkEndCommandBuffer(cb), "回读 vkEndCommandBuffer");
+    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    si.commandBufferCount = 1; si.pCommandBuffers = &cb;
+    check(vkQueueSubmit(c.queue, 1, &si, nullptr), "回读 vkQueueSubmit");
+    check(vkQueueWaitIdle(c.queue), "回读 vkQueueWaitIdle");
+
+    void* p = nullptr;
+    check(vkMapMemory(c.device, mem, 0, VK_WHOLE_SIZE, 0, &p), "vkMapMemory");
+    const uint16_t* px = static_cast<const uint16_t*>(p) + (size_t(im.h / 2) * im.w + im.w / 2) * 2;
+    outX = halfToFloat(px[0]);
+    outY = halfToFloat(px[1]);
+    vkUnmapMemory(c.device, mem);
+    vkDestroyBuffer(c.device, buf, nullptr);
+    vkFreeMemory(c.device, mem, nullptr);
+    vkFreeCommandBuffers(c.device, c.pool, 1, &cb);
+}
+
+
 // FfxSurfaceFormat → VkFormat 的映射在文件下方（toVkFormat），createImage 之前声明。
 FfxResource wrap(const Image& im, FfxResourceUsage usage)
 {
@@ -447,7 +542,7 @@ int main(int argc, char** argv)
     VkCommandBuffer        cb = VK_NULL_HANDLE;
     check(vkAllocateCommandBuffers(c.device, &cai, &cb), "vkAllocateCommandBuffers");
 
-    for (int frame = 0; frame < 2; ++frame)
+    auto dispatchFrame = [&](int frame, bool reset, FfxFloatCoords2D mvScale = {1.0f, 1.0f})
     {
         VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -464,14 +559,14 @@ int main(int argc, char** argv)
         dd.reconstructedPrevNearestDepth = rReconDepth;
         dd.output         = rOutput;
         dd.jitterOffset   = {0.0f, 0.0f};
-        dd.motionVectorScale = {(float)renderW, (float)renderH};
+        dd.motionVectorScale = mvScale;   // (1,1) = 输入按「像素」计，见 docs/FSR输入契约.md §1
         dd.renderSize     = {renderW, renderH};
         dd.upscaleSize    = {outW, outH};
         dd.enableSharpening = false;
         dd.sharpness      = 0.0f;
         dd.frameTimeDelta = 16.6f;
         dd.preExposure    = 1.0f;
-        dd.reset          = frame == 0;
+        dd.reset          = reset;
         dd.cameraNear     = 0.1f;
         dd.cameraFar      = 1000.0f;
         dd.cameraFovAngleVertical = 1.0f;
@@ -486,6 +581,62 @@ int main(int argc, char** argv)
         check(vkQueueSubmit(c.queue, 1, &si, nullptr), "vkQueueSubmit(fsr)");
         check(vkQueueWaitIdle(c.queue), "vkQueueWaitIdle(fsr)");
         log("frame %d dispatched + executed", frame);
+    };
+
+    for (int frame = 0; frame < 2; ++frame) dispatchFrame(frame, frame == 0);
+
+    // ── 契约探针：速度场口径（批 14.2 判据 ②③；口径本体 → docs/FSR输入契约.md）──
+    // 契约是 `stored = input × params.motionVectorScale / motionVectorsTargetSize`
+    // （ffx_fsr3upscaler.cpp:996-997 + callbacks_glsl.h:373）。本探针钉死三件事：
+    //   A. **motionVectorScale 是分子不是分母**：像素单位的输入要填 **(1,1)**；填 renderSize
+    //      等于声明「我的 MV 已经是 UV」（scale 变成 1，恒等）——第一版探针就是这么写错的，
+    //      回读直接等于输入，被这条对拍当场抓住。
+    //   B. **分母是 renderSize 还是 upscaleSize**。scale 固定成 1 后，输出完全由分母决定；
+    //      本机 render=640 / out=1280 差 2 倍，可分辨。没开 DISPLAY_RESOLUTION flag
+    //      ⟹ 源码说期望 renderSize。
+    //   C. **有没有隐藏取负**。±dx 各跑一次，回读必须同号；反向用例就是它自己。
+    // 读的是 dilatedMotionVectors：它由 FSR 在 prepare_inputs 里写出、**由我们分配**，
+    // 所以能直接回读（源码里它存的已经是 UV 单位）。
+    {
+        const float  dxPx   = 8.0f;
+        const float  expect = dxPx / float(renderW);      // = 0.0125；若分母是 upscaleSize 则是 0.00625
+        int          bad    = 0;
+        VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+        for (float sign : {1.0f, -1.0f})
+        {
+            // 源图喂「像素」值；深度清成常量 ⟹ 9 点邻域深度全等，膨胀取到的就是本像素，无歧义
+            check(vkBeginCommandBuffer(cb, &bi), "probe vkBeginCommandBuffer");
+            VkClearColorValue mv{};   mv.float32[0]   = sign * dxPx;
+            VkClearColorValue dep{};  dep.float32[0]  = 0.5f;
+            clearImageTo(c, cb, motion, mv);
+            clearImageTo(c, cb, depth, dep);
+            check(vkEndCommandBuffer(cb), "probe vkEndCommandBuffer");
+            VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+            si.commandBufferCount = 1; si.pCommandBuffers = &cb;
+            check(vkQueueSubmit(c.queue, 1, &si, nullptr), "probe vkQueueSubmit");
+            check(vkQueueWaitIdle(c.queue), "probe vkQueueWaitIdle");
+
+            dispatchFrame(100, /*reset=*/true);
+
+            float gx = 0.0f, gy = 0.0f;
+            readBackHalf2Center(c, dilatedMv, gx, gy);
+            const float wantX = sign * expect, wantY = 0.0f;
+            // 容差按 R16G16_FLOAT 的精度给：0.0125 附近 half 的间隔约 6e-6，放 1e-3 已极宽
+            const bool okX = std::fabs(gx - wantX) < 1e-3f;
+            const bool okY = std::fabs(gy - wantY) < 1e-3f;
+            log("probe mv: 输入 %+g px → dilatedMotionVectors (%.6f, %.6f)，期望 (%.6f, %.6f) %s",
+                sign * dxPx, gx, gy, wantX, wantY, (okX && okY) ? "OK" : "**FAIL**");
+            if (!okX || !okY) ++bad;
+        }
+        if (bad) {
+            std::fprintf(stderr,
+                "[fsr-smoke] FAIL: 速度场口径对账 %d 条不符。分母若为 upscaleSize 会得到 %.6f"
+                "（期望 %.6f）；符号不符 = 链路上有隐藏取负。口径出处 → docs/FSR输入契约.md §1\n",
+                bad, dxPx / float(outW), expect);
+            return 1;
+        }
     }
 
     ffxFsr3UpscalerContextDestroy(&ctx);

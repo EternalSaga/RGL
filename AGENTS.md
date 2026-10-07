@@ -218,7 +218,9 @@ vk_indirect_commands 显式使用）外**均无显式使用但被其他已启用
   `docs/taa_plan.md`（TAA 机制与踩坑账，§7 第 11/12 条 = 根因）· `docs/evssm_plan.md`（远场软影
   权威路线，HFTS 已降级 backlog）· `docs/hfts_izb_plan.md` · `docs/shader_object_组合成本与优化预留.md`
   （优化**未实施**）· `docs/脚本长期规划.md` + `script_spike/`（脚本长期线，独立于 Phase 编号）
-- **调研 / 活文档**：`docs/DESCRIPTOR_HEAP_SPEC.md` · `docs/nvidia_compatibility_report.md`
+- **调研 / 活文档**：`docs/DESCRIPTOR_HEAP_SPEC.md` · `docs/FSR输入契约.md`（Phase 14 批 14.2：
+  FSR3-upscaler 四个每帧输入的**口径权威载体**——单位/坐标系/符号/采样时刻 + 逐条出处；
+  接 FSR 前必读，别靠读源码"认为一致"） · `docs/nvidia_compatibility_report.md`
   （三平台；**不写"本机"是哪台**）· `docs/device_generated_commands_research.md` ·
   `docs/vulkan_extensions_2025_调研.md` · `docs/device_fault_调研.md`（**未实施**）·
   `docs/风格检查规则.md`（规则全景；参数真相源 = `config.py`）· `docs/快捷键配置.md`（与代码无关）
