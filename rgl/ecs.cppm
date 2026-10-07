@@ -24,6 +24,29 @@ export struct WindowExtent {
 };
 
 /**
+ * 渲染尺寸（registry context，Phase 14 批 14.3）：内部渲染网格的像素尺寸。
+ *
+ * **口径 = 渲染像素**（= swapchain extent × `runtime.lua render_scale`）。它与
+ * `WindowExtent`（窗口物理像素）是两个坐标空间，此前本项目从未区分——renderScale 恒 1
+ * 时两者逐像素相等，所以混用没暴露过问题。
+ *
+ * 谁读：
+ * - `projectionSystem` —— 宽高比必须与**渲染网格**同源。按窗口比例算投影、却按渲染网格
+ *   铺像素 = 各向异性拉伸（renderScale≠1 时整幅画面被横向/纵向压扁）。
+ * - `taaSystem` —— 抖动幅度按像素计、历史可用性判定的"尺寸变了没"，两者都必须落在渲染网格上。
+ *   按窗口像素算 jitter 再落到渲染网格 = 抖动幅度按比例错（0.75 scale 下错 33%）。
+ *
+ * 谁**不**读：点选 / 鼠标 / imgui —— 那些是窗口像素（见 `WindowExtent` / `WindowScale`）。
+ *
+ * 谁写：main 在 Swapchain 构造后写初值；`resizeSystem` 每帧帧首从 swapchain 同步一次
+ * （含 OUT_OF_DATE 路径重建的情况——那条不改 WindowExtent，但会改渲染 extent）。
+ */
+export struct RenderExtent {
+	uint32_t width = 800;
+	uint32_t height = 600;
+};
+
+/**
  * 窗口像素尺寸查询钩子（registry context，main 建窗时装配；headless 未装配 = 窗口不存在，
  * 也恒无 SDL 窗口事件）：eventSystem 收到 WINDOW_RESIZED / WINDOW_PIXEL_SIZE_CHANGED 后经
  * 本钩子**重新查询**像素尺寸写 WindowExtent——不信任事件携带的 data1/2（RESIZED 带逻辑点、

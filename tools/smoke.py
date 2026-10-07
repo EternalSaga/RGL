@@ -205,7 +205,7 @@ def png_size(path: Path) -> tuple[int, int] | None:
 
 
 def stage_configs(from_build: bool, variant: str | None, shot_file: str, frames: int,
-                  size: tuple[int, int] | None) -> None:
+                  size: tuple[int, int] | None, render_scale: float | None) -> None:
     """把一次性配置铺进 staging 目录并打好运行模式键（每次重建，跑完不残留可复原状态）。"""
     base = (BUILD_RGL / "configs") if from_build else (ROOT / "configs")
     if missing := [f for f in CONFIG_FILES if not (base / f).is_file()]:
@@ -225,6 +225,10 @@ def stage_configs(from_build: bool, variant: str | None, shot_file: str, frames:
         patch_lua(runtime, "size", f"{{ {size[0]}, {size[1]} }}")
     if variant:
         patch_lua(STAGING / "render_graph.lua", "variant", f'"{variant}"')
+    if render_scale is not None:
+        # 越界值不在这里挡：引擎侧 clampRenderScale 是口径的唯一权威，工具重复实现一遍
+        # = 两处规则漂移的机会。工具只负责**事后核对实际生效值**（见 main 里的核对）。
+        patch_lua(runtime, "render_scale", repr(float(render_scale)))
 
 
 def run_engine(exe: Path, timeout: int) -> tuple[int, str, float]:
@@ -269,6 +273,10 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--frames", type=int, default=8, help="第 N 帧截图（默认 8 = llm_shot 默认）")
     ap.add_argument("--size", default="", help="截图尺寸 WxH（默认用配置里的 llm_shot.size）")
     ap.add_argument("--name", default="smoke_shot", help="shot 的 PNG 名（screenshots/<name>.png）")
+    ap.add_argument("--render-scale", type=float, default=None,
+                    help="runtime.lua render_scale（内部渲染分辨率倍率，批 14.3；"
+                         "不给 = 用配置基准里的值）。会**核对引擎实际生效值**，"
+                         "传了没生效即 FAIL，不会静默跑在默认档上")
     ap.add_argument("--from-build", action="store_true",
                     help="以 build/rgl/configs 副本为基准（跑调试现场；默认用仓库 configs/）")
     ap.add_argument("--timeout", type=int, default=90, help="引擎最长存活秒数（默认 90）")
@@ -299,10 +307,12 @@ def main() -> int:
 
     shot_file = (f"{STAGING.name}/probe.png" if args.mode == "smoke"
                  else f"screenshots/{args.name}.png")
-    stage_configs(args.from_build, args.variant, shot_file, args.frames, size)
+    stage_configs(args.from_build, args.variant, shot_file, args.frames, size,
+                  args.render_scale)
     print(f"配置   : 基准={'build 副本' if args.from_build else '仓库 configs/'}"
           f"  variant={args.variant or '(随配置)'}  frames={args.frames}"
-          f"  size={f'{size[0]}x{size[1]}' if size else '(随配置)'}")
+          f"  size={f'{size[0]}x{size[1]}' if size else '(随配置)'}"
+          f"  render_scale={args.render_scale if args.render_scale is not None else '(随配置)'}")
 
     code, log, secs = run_engine(exe, args.timeout)
     LOG_PATH.write_text(log, encoding="utf-8")
@@ -323,12 +333,28 @@ def main() -> int:
     grid = re.search(r"Swapchain extent: (\d+)x(\d+)", log)
     dims = png_size(shot_path)
     if grid and dims and dims != (int(grid.group(1)), int(grid.group(2))):
-        fail(f"截图尺寸 {dims[0]}x{dims[1]} ≠ 渲染网格 {grid.group(1)}x{grid.group(2)}"
+        fail(f"截图尺寸 {dims[0]}x{dims[1]} ≠ 后缓冲 {grid.group(1)}x{grid.group(2)}"
              f"——回读链路与交换链对不上，这张图不能当判据")
+
+    # render_scale 生效核对（批 14.3）。**必须核对而不是只打补丁**：patch_lua 只保证
+    # "配置文件里改了"，不保证"引擎按它算了"（键名漂了 / 引擎读错表 / 被钳制）。一个
+    # 静默跑在默认档上的 --render-scale 会把"0.5 档回归"做成"1.0 档回归"，而两者都绿。
+    eff = re.search(r"render scale = (\S+) → render (\d+)x(\d+) \(swapchain (\d+)x(\d+)\)", log)
+    if not eff:
+        fail("日志里没有 `render scale = ... → render WxH (swapchain WxH)` 行"
+             "——引擎的口径日志被删了或文案改了，批 14.3 的判据失去出处")
+    if args.render_scale is not None:
+        got = float(eff.group(1))
+        if abs(got - args.render_scale) > 1e-6:
+            fail(f"请求 --render-scale {args.render_scale} 引擎实际生效 {got}"
+                 f"（合法区间 [0.25, 1.0]，越界会被钳制；非有限值回落 1.0）")
+    render_grid = (int(eff.group(2)), int(eff.group(3)))
     if size and dims and dims != size:
         fail(f"请求 --size {size[0]}x{size[1]} 实得 {dims[0]}x{dims[1]}"
              f"（headless 下 llm_shot.size 应当直接生效；启动行：{grid.group(0) if grid else '无 Swapchain extent 日志'}）")
-    print(f"网格   : {dims[0]}x{dims[1]}" if dims else "网格   : 未取到（PNG 头异常？）")
+    print(f"网格   : 后缓冲 {dims[0]}x{dims[1]}  渲染 {render_grid[0]}x{render_grid[1]}"
+          f"  render_scale={eff.group(1)}"
+          if dims else "网格   : 未取到（PNG 头异常？）")
     kb = shot_path.stat().st_size // 1024
     if args.mode == "smoke":
         print(f"截图   : {kb} KB（冒烟探针，随 staging 丢弃）")

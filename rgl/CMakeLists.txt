@@ -294,6 +294,7 @@ set(RGL_FRAME_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/vkrenderer.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/vkrenderer_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/vkrenderer_passrec.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/vkrenderer_offgraph.cppm"  # 批 14.3：图外 compute 编舞（IZB/EVSSM；14.5 FSR 的家）
     "${CMAKE_CURRENT_SOURCE_DIR}/imgui_layer.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/imgui_layer_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/debug_rpc_exec.cppm"
@@ -306,6 +307,7 @@ set(RGL_FRAME_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/shader_hot_reload_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/ecs.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/ecs_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/ecs_frame_diag.cppm"      # 批 14.3：帧循环诊断旁路分区（截图时序 / 帧时间统计）
     "${CMAKE_CURRENT_SOURCE_DIR}/param_pages.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/param_pages_impl.cppm"
 )

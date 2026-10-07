@@ -8,6 +8,7 @@ module;
 module ecs:impl;
 
 import ecs;  // clang 不给 partition impl unit 隐式 import 主接口——必须显式
+import :frame_diag;  // 批 14.3：LlmCaptureFlow / FrameStatsTracker（帧循环诊断旁路，兄弟分区）
 import rlstd;
 import vkerror;
 import vk_swapchain;
@@ -77,10 +78,17 @@ void applyWindowResizeExtent(entt::registry& rg, WindowExtent& extent, const SDL
 
 /**
  * 左键点选请求（eventSystem 内联逻辑提出，控 eventSystem 认知复杂度）。
- * **坐标换算在此**：SDL 鼠标事件是逻辑点，而点选回读的 objectID 附件按**帧缓冲像素**
- * 索引 ⟹ 乘 WindowScale（未装配 = 1.0，等价于无缩放/无窗口路径）。脚本化探针
- * pickingProbeTick 直接以像素坐标调钩子，故不经此处（否则会被二次缩放）。
+ * **坐标换算在此**：SDL 鼠标事件是逻辑点，而点选回读的 objectID 附件按**渲染像素**
+ * 索引 ⟹ 两级换算：
+ *   ① 逻辑点 → 窗口像素：乘 `WindowScale`（未装配 = 1.0，等价于无缩放/无窗口路径）；
+ *   ② 窗口像素 → 渲染像素：乘 `RenderExtent / WindowExtent`（批 14.3，renderScale≠1
+ *      时才 ≠1；漏掉它 = 点窗口右下角会采样到 RT 之外，被 clamp 到边缘 → 打偏）。
+ * 脚本化探针 pickingProbeTick 直接以像素坐标调钩子，故不经此处（否则会被二次缩放）。
  * 钩子未挂 = 零调用（与原内联写法等价）。
+ *
+ * 第 ② 级用**两个 extent 的比值**而不是直接读 renderScale：比值取自实际分配出的网格，
+ * 取整后（1001×0.75=751 而非 750.75）比例仍然精确，不会与 RT 尺寸差半个像素。
+ * WindowExtent 为 0（理论上不该发生：建窗即有尺寸）时比值回落 1.0 = 退化成旧行为。
  */
 void requestPickAtCursor(entt::registry& rg, float logicalX, float logicalY) {
 	auto* pk = rg.ctx().find<PickingHook>();
@@ -88,7 +96,11 @@ void requestPickAtCursor(entt::registry& rg, float logicalX, float logicalY) {
 		return;
 	const auto* scale = rg.ctx().find<WindowScale>();
 	const float s = scale ? scale->value : 1.0f;
-	pk->requestPick(logicalX * s, logicalY * s);
+	const auto& we = rg.ctx().get<WindowExtent>();
+	const auto& re = rg.ctx().get<RenderExtent>();
+	const float rx = we.width > 0u ? static_cast<float>(re.width) / static_cast<float>(we.width) : 1.0f;
+	const float ry = we.height > 0u ? static_cast<float>(re.height) / static_cast<float>(we.height) : 1.0f;
+	pk->requestPick(logicalX * s * rx, logicalY * s * ry);
 }
 
 /**
@@ -211,6 +223,16 @@ std::expected<void, Error> resizeSystem(entt::registry& rg, RGL::Swapchain& swap
 	RGL::Resources& resources) {
 	auto& extent = rg.ctx().get<WindowExtent>();
 	auto current = swapchain.getExtent();
+
+	// 渲染尺寸每帧同步（批 14.3）：放在"尺寸没变就早退"**之前**——acquire/present 的
+	// OUT_OF_DATE 路径会重建 swapchain 并改渲染 extent，却不改 WindowExtent，若挂在早退
+	// 之后，那条路径下 RenderExtent 会永久停在旧值（投影比例与 RT 网格跨帧不一致）。
+	// 两次 uint32 比较，正常帧成本可忽略。
+	auto& renderExtent = rg.ctx().get<RenderExtent>();
+	const auto newRender = swapchain.getRenderExtent();
+	renderExtent.width = newRender.width;
+	renderExtent.height = newRender.height;
+
 	if (extent.width == current.width && extent.height == current.height) {
 		return {};
 	}
@@ -229,15 +251,19 @@ std::expected<void, Error> resizeSystem(entt::registry& rg, RGL::Swapchain& swap
 		}
 		return {};
 	}
-	auto result = resources.recreateDepthImage(swapchain.getExtent());
+	// 深度图按**渲染** extent 重建（批 14.3）。上面的比较仍用交换链 extent——WindowExtent 的
+	// 口径定义就是窗口像素，换成渲染 extent 会让"窗口没变但 scale 变了"误判成需要重建。
+	auto result = resources.recreateDepthImage(swapchain.getRenderExtent());
 	if (!result) {
 		return std::unexpected(std::move(result).error());
 	}
 	// 重建成功可观测（2026-10-03）：swapchain extent 是 clamp 后值，与窗口像素并打——
-	// 两者不等 = surface 可达范围钳制生效，拖窗口时一眼看到重建与最终尺寸
+	// 两者不等 = surface 可达范围钳制生效，拖窗口时一眼看到重建与最终尺寸。
+	// 批 14.3 起再并打渲染 extent：三者不等 = renderScale 生效，resize 后网格一眼可核。
 	if (auto* logger = RLLogger::getInstance())
-		logger->info("resizeSystem: swapchain rebuilt to {}x{} (window pixel extent {}x{})",
+		logger->info("resizeSystem: swapchain rebuilt to {}x{}, render {}x{} (window pixel extent {}x{})",
 			swapchain.getExtent().width, swapchain.getExtent().height,
+			swapchain.getRenderExtent().width, swapchain.getRenderExtent().height,
 			extent.width, extent.height);
 	return {};
 }
@@ -312,7 +338,8 @@ void boundsSystem(entt::registry& rg) {
  * @param rg registry（读 Camera/SceneBounds/WindowExtent，写 ViewProjection）
  */
 void projectionSystem(entt::registry& rg) {
-	auto& extent = rg.ctx().get<WindowExtent>();
+	// 批 14.3：宽高比取**渲染**网格。按窗口比例算投影、按渲染网格铺像素 = 各向异性拉伸。
+	auto& extent = rg.ctx().get<RenderExtent>();
 	const auto& camera = rg.ctx().get<Camera>();
 	const auto& sceneBounds = rg.ctx().get<SceneBounds>();
 	auto& viewProj = rg.ctx().get<ViewProjection>();
@@ -357,7 +384,8 @@ void taaSystem(entt::registry& rg) {
 	const auto& env = rg.ctx().get<SceneEnv>();
 	const auto& spin = rg.ctx().get<SceneSpin>();
 	const auto& camera = rg.ctx().get<Camera>();
-	const auto& extent = rg.ctx().get<WindowExtent>();
+	// 批 14.3：jitter 幅度按像素计、历史可用性的"尺寸变了没"，两者都必须落在**渲染**网格上。
+	const auto& extent = rg.ctx().get<RenderExtent>();
 	const auto& bounds = rg.ctx().get<SceneBounds>();
 
 	viewProj.projUnjittered = viewProj.proj;  // projectionSystem 刚写的就是未抖那份
@@ -486,103 +514,7 @@ std::optional<Error> drawFrameChecked(RGL::Renderer& renderer, entt::registry& r
 	return result.error();
 }
 
-/** llm 帧捕获节奏（2026-09-08：截图 = 帧内回读本帧真实输出，离屏重渲退役）：
- * drawFrame 前请求（vkrenderer 帧内钩子，dump_gbuf 通道一并传入）；drawFrame 后
- * 仅当真有捕获产物时消费写 PNG 并请求退出（acquire 超时跳帧 = 请求保持 pending 重试）。 */
-struct LlmCaptureFlow {
-	/** 截图配置（nullptr = llm_debug 未启用）。 */
-	const RGL::LlmDebugConfig* llm;
-	/** 捕获写盘回调（空 = 未启用；引用 renderSystem 形参，同生命周期）。 */
-	std::function<std::expected<std::string, Error>(RGL::Renderer&)>& capture;
-	/** 每帧计数（含跳帧），wantCapture 判定的基准（仅 llm 启用时递增）。 */
-	uint32_t llmFrame = 0;
-
-	/** 是否到捕获时机：llm 启用且已过 delayFrames 帧。 */
-	bool wanted() const {
-		return llm && capture && llmFrame >= llm->delayFrames;
-	}
-
-	/** drawFrame 前挂本帧回读请求（dump_gbuf 通道一并传入）；未到时机不动作。 */
-	void requestBeforeDraw(RGL::Renderer& renderer) const {
-		if (wanted()) {
-			renderer.requestFrameCapture(diagnostics().dumpGbuf);
-		}
-	}
-
-	/** drawFrame 后消费：真产物时调 consumeShot 写 PNG + 置 AppExit；llm 启用时
-	 * 无论是否命中每帧递增 llmFrame（在消费之后，与逐帧时序一致）。
-	 * @return 写盘失败错误（调用方记录 lastError；成功或无产物 = 空） */
-	std::optional<Error> afterDraw(entt::registry& rg, RGL::Renderer& renderer,
-		RLLogger* logger) {
-		if (llm && capture) {
-			std::optional<Error> error;
-			if (wanted() && renderer.hasFrameCapture()) {
-				error = consumeShot(rg, renderer, logger);
-			}
-			++llmFrame;  // 每帧计数（含跳帧），wantCapture 判定的基准
-			return error;
-		}
-		return {};
-	}
-
-	/** 真有产物时调捕获回调写 PNG + 成功/失败日志（文案原样）+ 置 AppExit。
-	 * @return 写盘失败错误（成功 = 空） */
-	std::optional<Error> consumeShot(entt::registry& rg, RGL::Renderer& renderer,
-		RLLogger* logger) {
-		auto shot = capture(renderer);
-		std::optional<Error> error;
-		if (shot) {
-			if (logger) logger->info("llm_debug: 截图已保存 ({})", *shot);
-		} else {
-			if (logger) logger->error("llm_debug: 截图失败 ({})", shot.error().describe());
-			error = shot.error();
-		}
-		rg.ctx().get<AppExit>().requested = true;
-		return error;
-	}
-};
-
-/** 帧时间统计（diagnostics.frame_stats = N：每 N 帧一行 avg/min/max，0 = 关）：
- * 帧循环整周期（input+systems+drawFrame），headless 无 present 限帧时 ≈ GPU/提交吞吐。 */
-struct FrameStatsTracker {
-	/** 打印周期 N（0 = 关闭）。 */
-	uint32_t n;
-	/** 上一帧帧尾时刻（ns；0 = 首帧只记起点、不累积）。 */
-	uint64_t prevNs = 0;
-	/** 本周期帧时长累加（ms）。 */
-	double sumMs = 0.0;
-	/** 本周期最小帧时长（ms）。 */
-	double minMs = 1e30;
-	/** 本周期最大帧时长（ms）。 */
-	double maxMs = 0.0;
-	/** 本周期已累积帧数（达 N 打印并清零）。 */
-	uint32_t count = 0;
-
-	/** 帧尾调用：累积本帧整周期；周期满 N 帧打一行 avg/min/max 并复位。 */
-	void tick() {
-		if (n == 0) {
-			return;
-		}
-		const uint64_t nowNs = SDL_GetTicksNS();  // 帧尾 = 本帧整周期终点
-		if (prevNs != 0) {
-			const double ms = static_cast<double>(nowNs - prevNs) / 1'000'000.0;
-			sumMs += ms;
-			++count;
-			minMs = std::min(minMs, ms);
-			maxMs = std::max(maxMs, ms);
-		}
-		prevNs = nowNs;
-		if (count >= n) {
-			if (auto logger = RLLogger::getInstance())
-				logger->info("frame stats: avg={:.3f}ms min={:.3f} max={:.3f} ({} 帧)",
-					sumMs / count, minMs, maxMs, count);
-			sumMs = 0.0;
-			count = 0;
-			minMs = 1e30;
-			maxMs = 0.0;
-		}
-	}
-};
+// LlmCaptureFlow / FrameStatsTracker（帧循环诊断旁路）已拆至 ecs_frame_diag.cppm（批 14.3 文件长度红线；职责边界 = system 语义 vs 观测旁路）
 
 }  // namespace
 

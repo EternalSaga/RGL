@@ -54,6 +54,12 @@ struct SlotResolver {
 	const std::vector<RgCompiledAttachment>& attachments;
 	VkImage swapchainImage; VkImageView swapchainView;
 	VkImage depthImage; VkImageView depthView;
+	/** 后缓冲尺寸：写 swapchain 附件的 pass（tonemap / composite）按它铺满渲染区。 */
+	vk::Extent2D swapchainExtent;
+	/** 渲染尺寸：其余全部 pass 按它铺满。**也是深度图的尺寸**——深度图在
+	 * `Resources` 构造期就按 `getRenderExtent()` 分配（批 14.3），故 extentForSlot
+	 * 的 depth 分支直接返回本值，不另设成员（多一个字段 = 多一种失步可能）。 */
+	vk::Extent2D renderExtent;
 	const std::vector<RtAttachment*>& offscreenRt;
 	std::vector<vk::ImageLayout>& layouts;
 	vk::raii::CommandBuffer& cmd;
@@ -77,14 +83,29 @@ struct SlotResolver {
 		}
 		return VK_NULL_HANDLE;
 	}
+	/** slot → 该附件自己的 extent（批 14.3：blit 两端尺寸可不同，不能再假设 1:1 同尺寸。
+	 * swapchain → 后缓冲尺寸；depth → 深度图（= 渲染 extent）；offscreen/depthOffscreen →
+	 * RT 缓存里那份的实际尺寸）。 */
+	vk::Extent2D extentForSlot(RgAttachmentSlot slot) const {
+		switch (attachments[slot].kind) {
+			case RgAttachmentKind::swapchain: return swapchainExtent;
+			case RgAttachmentKind::depth: return renderExtent;  // 深度图按渲染 extent 分配（见成员注释）
+			case RgAttachmentKind::depthOffscreen:  // 阴影图类：同走 RT 缓存
+			case RgAttachmentKind::offscreen: return offscreenRt[slot]->extent;
+		}
+		return {};  // 不可达（穷尽）
+	}
 	/**
 	 * 本 pass 的渲染区域矩形（viewport/scissor + beginRendering.renderArea 共用）。
 	 * 解析顺序：① pass 声明的子矩形（图集分块；同时限定 clear 与渲染区）
 	 *   ② 否则 depthOffscreen（阴影图）→ 用该 RT 自己的 extent（分辨率与窗口解耦；若用窗口尺寸
 	 *     会出现 viewport 与 renderArea 不一致 = 贴图比例错 + 边缘漏画）
-	 *   ③ 否则 fallback（交易窗口尺寸，**既有全部 pass 逐位不变**）。
+	 *   ③ 否则**写 swapchain 附件的 pass** → 后缓冲尺寸（批 14.3：tonemap 是全屏大三角，
+	 *     它必须铺满后缓冲；scene_hdr 若是渲染分辨率，归一化 uv 采样天然完成放大）
+	 *   ④ 否则 → 渲染 extent（几何 / G-buffer / ao / taa 全在这一档）。
+	 * renderScale = 1.0 时 ③④ 同值 ⟹ 既有全部 pass 逐位不变。
 	 */
-	vk::Rect2D renderRectFor(const RgPassPlan& pass, vk::Extent2D fallback) const {
+	vk::Rect2D renderRectFor(const RgPassPlan& pass) const {
 		// Rect2D 的 offset 是 int32，而声明里是 uint32；显式转后归一构造
 		// （rlvk 的 Offset2D 类型在 GMF 头里不可见，不能单独引用）。
 		if (pass.viewport[2] != 0u)
@@ -92,7 +113,9 @@ struct SlotResolver {
 				{vk::Extent2D{pass.viewport[2], pass.viewport[3]}}};
 		if (pass.depth && attachments[pass.depth->slot].kind == RgAttachmentKind::depthOffscreen)
 			return {{0, 0}, offscreenRt[pass.depth->slot]->extent};
-		return {{0, 0}, fallback};
+		const bool writesSwapchain = std::ranges::any_of(pass.colors,
+			[this](const auto& c) { return attachments[c.slot].kind == RgAttachmentKind::swapchain; });
+		return {{0, 0}, writesSwapchain ? swapchainExtent : renderExtent};
 	}
 	/** 物化 + 发射一组 attachment barrier（单 DependencyInfo 批量）；oldLayout = 帧首丢弃（eUndefined）或跨帧/帧内追踪值，发射后推进 layouts 追踪。 */
 	void emitBarriers(std::span<const RgBarrierPlan> barriers) {
@@ -232,193 +255,7 @@ void Renderer::recordFixedDataPath(vk::raii::CommandBuffer& cmd, uint32_t frameS
 	profilerAddCommands(fixedCmds + 2);  // 批 9.5：+2 = bindResourceHeapEXT + bindSamplerHeapEXT
 }
 
-// 11.3-1d IZB 帧首段（声明注释见 vkrenderer.cppm）。deferred 图判据 = 存在
-// drawLight "light" pass；重建前 waitIdle（旧 buffer 可能被上一帧命令引用，RT 缓存
-// 同款规则）。门关 = 本函数不被进入（izbShadow 恒空 + 单布尔判断）。
-void Renderer::izbPreFrame() {
-	auto z = zone("drawFrame.izbPre");  // 批 9.5 观测：IZB 帧首段（dump 收割 + 门控重建）
-	if (izbShadow)
-		izbShadow->drainReadback();
-	++izbFrameNo;
-	if (!diagnostics().izbShadow)
-		return;
-	const bool deferred = graphHasDeferredLight(renderGraph.passes);
-	const auto depthIt = std::ranges::find_if(renderGraph.attachments,
-		[](const auto& a) { return a.kind == RgAttachmentKind::depth; });
-	// 非 deferred 在此静默早退是**合法运行期形态**（图判定不该在录制路径打日志）；
-	// 「izb_shadow=true 配了却必然无效」由 gate_lint 启动期 error 喊（R-02，2026-10-02）。
-	if (!deferred || depthIt == renderGraph.attachments.end())
-		return;
-	depthAttSlot = static_cast<int32_t>(depthIt - renderGraph.attachments.begin());
-	const auto extent = swapchain->getExtent();
-	if (!izbShadow || izbShadow->getExtent() != extent) {
-		vkDevice.getDevice().waitIdle();
-		izbShadow = std::make_unique<RGL::IzbShadow>(
-			vkDevice, *resources, extent, diagnostics().izbGrid);
-	}
-}
-
-// 11.3-1d IZB sandwich（声明注释见 vkrenderer.cppm；门关 = izbShadow 恒空早退）。
-void Renderer::izbLightPassPre(vk::raii::CommandBuffer& cmd, const RgPassPlan& pass,
-	const FrameDrawList& list) {
-	if (!izbShadow || pass.kind != RgPassKind::drawLight || pass.state != "light")
-		return;
-	izbShadow->recordFrame(cmd,
-		IzbFrameInput{list.sceneData.skyInvViewProj, list.sceneData.shadowViewProj[0]},
-		attachmentLayouts[static_cast<size_t>(depthAttSlot)],
-		// N 帧起每 30 帧转一次（ppm 覆盖写 + 直方图日志行）——一次性判等会被 RPC
-		// 截图时序甩开（imgqa izb 判据要求 mask 与截图同相机状态，机位是 RPC 后设的）
-		diagnostics().izbDumpFrame != 0 && izbFrameNo >= diagnostics().izbDumpFrame
-			&& (izbFrameNo - diagnostics().izbDumpFrame) % 30 == 0);
-	replayIzbMaskSegment(cmd, list);
-}
-
-// 批 11.6d-2 EVSSM 帧首段（声明注释见 vkrenderer.cppm；门关 = 一次布尔判断早退）。
-// 两条 warn-once 走文件级 helper（assembleBackEnd 复杂度红线先例：分支不入函数体）。
-namespace {
-/** warn-once 日志（批 11.6d-2，EvssmShadow 两条依赖告警共用；flag = 调用方 static）。
- *  @param flag 已告警标志（首次调用后置位）
- *  @param msg 告警文本 */
-void evssmWarnOnce(bool& flag, const char* msg) {
-	if (flag)
-		return;
-	flag = true;
-	if (auto* logger = RLLogger::getInstance())
-		logger->warn("{}", msg);
-}
-}  // namespace
-
-void Renderer::evssmPreFrame() {
-	auto z = zone("drawFrame.evssmPre");  // 批 9.5 观测：EVSSM 帧首段（门 = shadow_evssm）
-	if (evssmShadow || !diagnostics().shadowEvssm || !diagnostics().shadowPass)
-		return;
-	// 非 deferred 组合由 gate_lint 启动期 error（R-03，2026-10-02 从这里的 warn-once
-	// 迁走——不走到这一帧就永远不喊的病灶收口）；运行期早退保留（消费点在 deferred
-	// light pass，判据不变）。
-	if (!graphHasDeferredLight(renderGraph.passes))
-		return;
-	// 阴影图槽 = RT 缓存按名查（启动期 ensureShadowMapSlot 无条件建，deferred 判据
-	// 在其后）；矩图 sampled 槽 = Resources 预发号（binding 15 已 bake 同号）。
-	const auto shadowSlot = rtCache->heapSlot(std::string{kShadowMapName}.c_str());
-	const auto momentsSlot = resources->ensureEvssmSampleSlot();
-	if (!shadowSlot || !momentsSlot) {
-		static bool warnedNoSlots = false;
-		evssmWarnOnce(warnedNoSlots,
-			"EvssmShadow 依赖缺失（shadow map slot / moments slot），EVSSM 关闭");
-		return;
-	}
-	vkDevice.getDevice().waitIdle();  // 矩图链构造不得与在飞帧重叠（preFrame 首构造可能跑在
-	// GPU 执行上一帧期间），同 IzbShadow 重建规则。旧注释称「热开门（RPC 拨开关）」
-	// 已不成立：setDiagnostics 全仓仅启动期一处调用，门进程内不可变（2026-10-02 核对）。
-	evssmShadow = std::make_unique<RGL::EvssmShadow>(
-		vkDevice, *resources, kShadowMapSize,
-		shadowAtlasColumns(kActiveShadowCascades), kEvssmMipLevels, 5.5f,
-		*shadowSlot, *momentsSlot);
-}
-
-// 批 9.5 补：显存账的**懒构造盲区**修补。logStartupBaseline 在帧循环之前打统计，而
-// IzbShadow / EvssmShadow 都是首帧 drawFrame 内懒构造（izbPreFrame / evssmPreFrame）
-// ⟹ startup 那次统计系统性漏掉这两个模块的全部资源（实测：开/关 shadow_evssm 的
-// vma[startup] 逐字节相同）。此处在两个 preFrame 之后补打一次，让显存账真的含它们。
-// 一次性；抽成方法而非内联 if 是为了不把 drawFrame 的认知复杂度推过 15 红线。
-void Renderer::logFirstFrameMemory() {
-	if (memStatsLogged)
-		return;
-	memStatsLogged = true;
-	resources->logMemoryStats("first_frame");
-}
-
-// 批 11.6d-2：EVSSM sandwich（与 izbLightPassPre 同位；门空早退 = 零命令）。
-void Renderer::evssmLightPassPre(vk::raii::CommandBuffer& cmd, const RgPassPlan& pass) {
-	if (!evssmShadow || pass.kind != RgPassKind::drawLight || pass.state != "light")
-		return;
-	evssmShadow->recordFrame(cmd);
-}
-
-// IZB mask pass（批 11.3-1d 后半）：beginRendering(G×G 零附件) + izb_mask 动态态
-// （OVERESTIMATE/双面/无深度）+ shadow0 段逐 draw 重放——管线条目按 vertexSlot
-// 换 izb_mask 形态，push = ShadowDrawArgs 8B 原样 + gridDim 4B（render_list 零改动）。
-void Renderer::replayIzbMaskSegment(vk::raii::CommandBuffer& cmd, const FrameDrawList& list) {
-	const auto seg = segmentSpan(shadowDrawSource(0), list);
-	if (seg.empty()) {
-		if (!izbMaskSegmentWarned) {
-			izbMaskSegmentWarned = true;
-			if (auto* lg = RLLogger::getInstance())
-				lg->warn("izb: shadow0 段为空（shadow_pass 关或无投影体）→ mask 无内容");
-		}
-		return;
-	}
-	const uint32_t gridDim = izbShadow->getGridDim();
-	izbShadow->beginMaskPass(cmd);
-	const vk::Rect2D gridRect{{0, 0}, {gridDim, gridDim}};
-	RGL::applyDynamicState(cmd, gridRect, stateKit.stateFor("izb_mask"),
-		stateKit.depthClipDynamicEnabled(), 0);
-	// 保守光栅（EDS3 动态位）：**只在 mask pass 内 set、出 pass 立即复原 DISABLED**
-	// ——不在 applyDynamicState 里给所有 pass 写（RADV 显式 DISABLED ≠ 从不 set，
-	// 会污染 shadow 光栅红线，2026-10-02 复盘）；能力缺失 = 永不 set = 逐位不变
-	const bool conservative = stateKit.conservativeDynamicEnabled()
-		&& stateKit.stateFor("izb_mask").conservative;
-	if (conservative)
-		cmd.setConservativeRasterizationModeEXT(vk::ConservativeRasterizationModeEXT::eOverestimate);
-	uint32_t maskDraws = 0;  // 批 9.5：本段 draw 数（循环外一次性入账，热循环只多一次自增）
-	for (const auto& call : seg) {
-		if (call.pushData.size() < sizeof(ShadowDrawArgs))
-			continue;  // 契约破裂防御（同 replayClonedPass 的越界跳策略）
-		const auto maskIdx =
-			registry.izbMaskEntryFor(registry.entry(call.pipeline).bindings.slotVertex);
-		if (!maskIdx)
-			continue;  // 门关（条目未建）
-		const auto& entry = registry.entry(*maskIdx);
-		std::array<std::byte, 12> push{};
-		std::ranges::copy_n(call.pushData.begin(), 8, push.begin());
-		*reinterpret_cast<uint32_t*>(push.data() + 8) = gridDim;
-		cmd.pushDataEXT(vk::PushDataInfoEXT(entry.pushDataSet,
-			vk::HostAddressRangeConstEXT(push.data(), push.size())));
-		entry.pipeline.bindShaders(cmd);
-		cmd.drawMeshTasksEXT(call.groupCount, 1, 1);
-		++maskDraws;
-	}
-	profilerAddDraws(maskDraws);  // 批 9.5：IZB mask 重放段（= shadow0 全量重放的 draw 数）
-	// OVERESTIMATE 复原必须在 mask pass 内（动态态命令不可出 renderpass；light/tonemap
-	// 继承 DISABLED = 与默认等值，实测该路径无红线扰动）
-	if (conservative)
-		cmd.setConservativeRasterizationModeEXT(vk::ConservativeRasterizationModeEXT::eDisabled);
-	izbShadow->endMaskPass(cmd);
-}
-
-// offscreen attachment RT 幂等 ensure（批次 4；extent 随 resize 重建含 waitIdle，录制期调用安全；format 经词表解析，"inherit"=swapchain 格式、具名=显式 RT）。出参 offscreenRt 按 slot 填（非 offscreen 槽留 null）。
-std::expected<void, Error> Renderer::ensureOffscreenAttachments(vk::Extent2D extent,
-	std::vector<RtAttachment*>& offscreenRt) {
-	auto z = zone("drawFrame.offscreen");  // 批 9.5 观测：offscreen RT 幂等 ensure（稳态 = 查表）
-	offscreenRt.assign(renderGraph.attachments.size(), nullptr);
-	// RT 重建检测：generation 变化（新图布局 Undefined）→ 同步重置 attachmentLayouts，否则下帧首 barrier oldLayout 失配（resize 必现）。
-	// ⚠ rtGenerations 是**成员**（跨帧快照），不是本函数的局部量——见 vkrenderer.cppm 成员
-	// 注释：局部量每帧归零会让本判断恒真，把每个 offscreen 附件每帧抹成 eUndefined，
-	// 摧毁唯一的跨帧消费者 taa_hist（批 12.6 T4 实测：TAA 历史恒黑）。
-	for (uint32_t s = 0; s < renderGraph.attachments.size(); ++s) {
-		const auto& att = renderGraph.attachments[s];
-		// 图属 RT 两类同走本缓存（批 11.2 基建）：offscreen = 颜色档，
-		// depthOffscreen = 深度档（阴影图，aspect 随格式走深度面）
-		const bool depthRt = att.kind == RgAttachmentKind::depthOffscreen;
-		if (!depthRt && att.kind != RgAttachmentKind::offscreen)
-			continue;
-		const auto fmt = RGL::resolveRgFormat(att.format, swapchain->getFormat().format);
-		// 尺寸：声明了独立 extent 就用它，否则跟随 swapchain。阴影图必须独立——绑在窗口
-		// 尺寸上会让阴影 texel 密度随窗口变，且每次 resize 白白重建整张图
-		const vk::Extent2D rtExtent{att.extent[0] != 0u ? att.extent[0] : extent.width,
-			att.extent[1] != 0u ? att.extent[1] : extent.height};
-		auto rtResult = rtCache->ensure(att.name, rtExtent, fmt,
-			depthRt ? vk::ImageAspectFlagBits::eDepth : vk::ImageAspectFlagBits::eColor);
-		if (!rtResult)
-			return std::unexpected(std::move(rtResult).error());
-		offscreenRt[s] = *rtResult;
-		if ((*rtResult)->generation != rtGenerations[s]) {
-			rtGenerations[s] = (*rtResult)->generation;
-			attachmentLayouts[s] = vk::ImageLayout::eUndefined;
-		}
-	}
-	return {};
-}
+// 图外 compute 编舞（IZB / EVSSM 帧首与光照 pass 前段）已拆至 vkrenderer_offgraph.cppm（批 14.3 文件长度红线；职责边界 = 图内 pass 录制 vs 图外编舞）
 
 // 单个 mesh draw：push DrawArgs（pushDataEXT）+ bindShaders + drawMeshTasksEXT。
 void Renderer::drawOne(vk::raii::CommandBuffer& cmd, const DrawCall& call) {
@@ -470,9 +307,9 @@ void Renderer::replayClonedPass(vk::raii::CommandBuffer& cmd, const FrameDrawLis
 // 布局推进（含追踪表更新）→ hook。src 侧按当前布局精确给（blit 写 = Transfer/TransferWrite、
 // 捕获读 = Transfer/TransferRead）；其余布局兜底全命令同步（仅调试路径付代价）。
 void Renderer::emitFrameEndOverlay(vk::raii::CommandBuffer& cmd, VkImage swapchainImage,
-	vk::ImageView swapchainView, vk::Extent2D extent) {
+	vk::ImageView swapchainView, vk::Extent2D swapchainExtent) {
 	auto z = zone("drawFrame.overlay");  // 批 9.5 观测：imgui 帧末段（headless 无 hook ≈ 0）
-	if (extent.width == 0 || extent.height == 0)
+	if (swapchainExtent.width == 0 || swapchainExtent.height == 0)
 		return;
 	RgAttachmentSlot uiSwapchainSlot = kRgNoAttachment;
 	for (uint32_t s = 0; s < renderGraph.attachments.size(); ++s) {
@@ -504,7 +341,7 @@ void Renderer::emitFrameEndOverlay(vk::raii::CommandBuffer& cmd, VkImage swapcha
 		cmd.pipelineBarrier2(uiDep);
 		uiLayout = vk::ImageLayout::eColorAttachmentOptimal;
 	}
-	frameEndHook(cmd, extent, swapchainView);
+	frameEndHook(cmd, swapchainExtent, swapchainView);
 }
 
 // picking 回读录制（Phase 10 批 10.5）：服务未挂 = 零调用（drawFrame 复杂度预算内
@@ -614,7 +451,11 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 	// 编译图，手写布局转换清零。
 	auto& swapchainImages = swapchain->getImages();
 	auto& swapchainImageViews = swapchain->getImageViews();
-	const auto extent = swapchain->getExtent();
+	// 批 14.3：两个 extent 分叉。renderExtent = 内部渲染网格（几何 / G-buffer / ao / taa /
+	// 深度图 / IzbShadow）；swapchainExtent = 后缓冲（写 swapchain 的 pass、imgui 叠加层、
+	// 捕获到后缓冲的口径）。renderScale = 1.0 时两者逐像素相等 ⟹ 交付路径逐位不变。
+	const auto renderExtent = swapchain->getRenderExtent();
+	const auto swapchainExtent = swapchain->getExtent();
 	VkImage swapchainImage = swapchainImages[imageIndex];
 	VkImageView swapchainView = *swapchainImageViews[imageIndex];
 	VkImage depthImage = *resources->getDepthImage();
@@ -624,12 +465,12 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 	// 块体提为 ensureOffscreenAttachments 私有方法）
 	// 批 9.5：zone "drawFrame.offscreen" 在 ensureOffscreenAttachments 首行
 	std::vector<RtAttachment*> offscreenRt;
-	if (auto r = ensureOffscreenAttachments(extent, offscreenRt); !r)
+	if (auto r = ensureOffscreenAttachments(renderExtent, offscreenRt); !r)
 		return std::unexpected(std::move(r).error());
 
 	// slot → VkImage/View 解析 + barrier 物化（手术 6：三个 lambda 改造为文件内 struct）
 	SlotResolver slots{renderGraph.attachments, swapchainImage, swapchainView, depthImage,
-		depthView, offscreenRt, attachmentLayouts, cmd};
+		depthView, swapchainExtent, renderExtent, offscreenRt, attachmentLayouts, cmd};
 
 	// 批 9.5：CPU 侧逐 pass zone（GPU 侧 9.2 早有同名时间戳，CPU 侧此前整块无计时）。
 	// label 直接复用 pass.name（RgPassPlan.name 是 std::string，活在编译图里 ≥ dump，满足
@@ -653,13 +494,16 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 			vk::ImageBlit blitRegion{};
 			blitRegion.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
 			blitRegion.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-			const int32_t w = static_cast<int32_t>(extent.width);
-			const int32_t h = static_cast<int32_t>(extent.height);
+			// 两端尺寸**各取自自己那个 slot**（批 14.3）：renderScale≠1 时源（scene_rt，
+			// 渲染分辨率）与目标（后缓冲，窗口分辨率）不再等尺寸，旧的"1:1 同尺寸"假设
+			// 会把放大静默截成左上角拷贝。LINEAR + 满幅两端 = 双线性缩放。
+			const auto srcExtent = slots.extentForSlot(*pass.blitSource);
+			const auto dstExtent = slots.extentForSlot(*pass.blitTarget);
 			// hpp ArrayWrapper1D 不接受 brace 整体赋值，逐元素填（同旧 DIAG 通路写法）
 			blitRegion.srcOffsets[0] = vk::Offset3D{0, 0, 0};
-			blitRegion.srcOffsets[1] = vk::Offset3D{w, h, 1};
+			blitRegion.srcOffsets[1] = vk::Offset3D{asI32(srcExtent.width), asI32(srcExtent.height), 1};
 			blitRegion.dstOffsets[0] = vk::Offset3D{0, 0, 0};
-			blitRegion.dstOffsets[1] = vk::Offset3D{w, h, 1};
+			blitRegion.dstOffsets[1] = vk::Offset3D{asI32(dstExtent.width), asI32(dstExtent.height), 1};
 			::vkCmdBlitImage(*cmd, srcImage,
 				VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dstImage,
 				VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
@@ -670,7 +514,7 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 		}
 		// 本 pass 的渲染区域：普通 pass = 窗口尺寸（逐位不变），写 depthOffscreen（阴影图）
 		// 的 pass = 该 RT 自己的 extent，并受 pass.viewport 子矩形约束（图集分块；见 SlotResolver::renderRectFor）
-		const auto renderRect = slots.renderRectFor(pass, extent);
+		const auto renderRect = slots.renderRectFor(pass);
 		beginPassRendering(cmd, slots, pass, renderRect);
 		// 动态状态在 draw 时采样（spec chapters/shaders.adoc "Setting State"），与
 		// bindShadersEXT 先后无约束；段首各 applyDynamicState 一次（Phase 5 语义，
@@ -692,7 +536,7 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 	// acquire 超时跳帧的 return 在本段之前 = 请求保持 pending 至真正录制的帧。
 	// 批 9.5：zone "drawFrame.capture" / "drawFrame.collect" 分别在 FrameCapturer::record /
 	// ::collect 首行（collect 内含本帧 fence 等待 = 真截图帧才有的大段）。
-	capturer.record(cmd, swapchainImage, extent,
+	capturer.record(cmd, swapchainImage, swapchainExtent,
 		swapchain->getFormat().format, attachmentLayouts);
 
 	// picking 回读（Phase 10 批 10.5）：请求帧录 object_id RT 1-texel → staging
@@ -702,7 +546,7 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 	// ⑪.6 帧末扩展段（Phase 10 批 10.1：imgui 调试面板；**空 hook = 零调用零 barrier，
 	// 正常路径逐位不变**）。布局推进与 hook 调用体见 emitFrameEndOverlay。
 	if (frameEndHook)
-		emitFrameEndOverlay(cmd, swapchainImage, swapchainView, extent);  // zone 在其首行
+		emitFrameEndOverlay(cmd, swapchainImage, swapchainView, swapchainExtent);  // zone 在其首行
 
 	// ⑫ swapchain → PresentSrcKHR（图 presentTransition——src 阶段/访问由最后
 	// usage 推导：直渲 = CAO 写、blit 上屏 = Transfer 写，等价旧手工分支；

@@ -21,12 +21,13 @@ namespace RGL {
 /**
  * 调用序契约（装配后期、Renderer 前）与槽语义见接口注释；RT 采样槽走运行时段。实现：名字/格式取自
  * kGBufferAttachments 契约表（单一真相源，与 deferredRenderGraphDesc 共享，无漂移
- * 可能）；extent = 当前 swapchain；逐附件 ensure + heapSlot（任一失败立即返回）；
+ * 可能）；extent = 当前**渲染** extent（批 14.3：
+ * `Swapchain::getRenderExtent()` = 窗口 × renderScale；renderScale=1.0 时与交换链 extent 相等）；逐附件 ensure + heapSlot（任一失败立即返回）；
  * 成功打日志 5 槽号（albedo/normal/position/metalrough/emissive）。
  */
 std::expected<std::array<uint32_t, 5>, Error> ensureDeferredGBufferSlots(
 		RenderTargetCache& rts, Swapchain& swapchain) {
-	const vk::Extent2D extent = swapchain.getExtent();
+	const vk::Extent2D extent = swapchain.getRenderExtent();  // 批 14.3：RT 随渲染网格，不随窗口
 	std::array<uint32_t, 5> slots{};
 	for (uint32_t i = 0; i < kGBufferAttachments.size(); ++i) {
 		const std::string name{kGBufferAttachments[i].name};
@@ -57,7 +58,7 @@ std::expected<std::array<uint32_t, 5>, Error> ensureDeferredGBufferSlots(
 std::expected<uint32_t, Error> ensureSceneHdrSlot(
 		RenderTargetCache& rts, Swapchain& swapchain) {
 	const std::string name{std::string{kSceneHdrName}.c_str()};
-	const vk::Extent2D extent = swapchain.getExtent();
+	const vk::Extent2D extent = swapchain.getRenderExtent();  // 批 14.3：RT 随渲染网格，不随窗口
 	const vk::Format format = vk::Format::eR16G16B16A16Sfloat;  // = kSceneHdrFormat 物化
 	auto rt = rts.ensure(name, extent, format);
 	if (!rt)
@@ -80,7 +81,7 @@ std::expected<uint32_t, Error> ensureSceneHdrSlot(
 std::expected<uint32_t, Error> ensureAoSlot(
 		RenderTargetCache& rts, Swapchain& swapchain) {
 	const std::string name{std::string{kAoName}.c_str()};
-	const vk::Extent2D extent = swapchain.getExtent();
+	const vk::Extent2D extent = swapchain.getRenderExtent();  // 批 14.3：RT 随渲染网格，不随窗口
 	const vk::Format format = resolveRgFormat(std::string{kAoFormat}, vk::Format::eUndefined);
 	auto rt = rts.ensure(name, extent, format);
 	if (!rt)
@@ -103,7 +104,7 @@ std::expected<uint32_t, Error> ensureAoSlot(
  */
 std::expected<std::array<uint32_t, 2>, Error> ensureTaaSlots(
 		RenderTargetCache& rts, Swapchain& swapchain) {
-	const vk::Extent2D extent = swapchain.getExtent();
+	const vk::Extent2D extent = swapchain.getRenderExtent();  // 批 14.3：RT 随渲染网格，不随窗口
 	const vk::Format format = resolveRgFormat(std::string{kTaaFormat}, vk::Format::eUndefined);
 	std::array<uint32_t, 2> slots{};
 	const std::array<std::string, 2> names{

@@ -97,10 +97,11 @@ export class Resources {
 	const vk::raii::ImageView& getDepthImageView() const { return depthImageView; }
 
 	/**
-	 * 重建深度图 + view（交换链 extent 变化后旧深度图不可复用）：先 device waitIdle
+	 * 重建深度图 + view（**渲染** extent 变化后旧深度图不可复用）：先 device waitIdle
 	 *（双帧在飞下旧深度图可能仍被另一帧命令引用），再按新 extent 重建 depthImage 并
 	 * 同步重建 depthImageView。
-	 * @param extent 新的交换链 extent
+	 * @param extent 新的**渲染** extent（= `Swapchain::getRenderExtent()`，批 14.3 起不再
+	 *   等于交换链 extent；传交换链 extent 会让深度图与颜色附件网格不一致）
 	 * @return expected<void, Error>；Error = VMA 图像创建失败（createDepthImage 透传）
 	 * @note 调用方：resizeSystem（ecs_impl，窗口 resize 且 swapchain.recreate 返回
 	 *   true 后）/ Renderer::recreateSwapchainAndDepth（acquire/present OUT_OF_DATE）

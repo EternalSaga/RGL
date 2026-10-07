@@ -29,6 +29,61 @@ export enum class PresentModePref {
 };
 
 /**
+ * `renderScale` 的合法区间（**单一真相源**：配置解析钳制与 Swapchain 派生 render extent
+ * 都读它，避免两处各写一个魔数、改一个漂一个）。
+ *
+ * 上界 1.0 = 内部分辨率不超过窗口。>1 是超采样，本 phase 不做（放大用 FSR，缩小不是
+ * 任何批次的需求），留着的唯一后果是一条永不被测的路径。
+ * 下界 0.25 = 1280×720 时内部 320×180；再低像素类判据会退化成"看色块"，测不出东西。
+ */
+export inline constexpr float kRenderScaleMin = 0.25f;
+export inline constexpr float kRenderScaleMax = 1.0f;
+
+/**
+ * 渲染网格尺寸（Phase 14 批 14.3）。
+ *
+ * **为什么住 rlbase 而不是 `vk::Extent2D`**：这段是纯算术，而 `vk::Extent2D` 会把
+ * `rlvk` 依赖拖进 `runtime_config`（rlbase 层红线：整层无设备依赖）。同时"纯算术"正是
+ * `just test` 能覆盖的形态——放 rlgfx 就得连 SDL 一起链进测试。
+ * Swapchain 侧负责 `RenderSize → vk::Extent2D` 的转换（一次 static_cast）。
+ */
+export struct RenderSize {
+	uint32_t width = 0;
+	uint32_t height = 0;
+};
+
+/**
+ * 把任意输入钳进合法区间（非有限值 → 回落 `fallback`）。配置解析与 Swapchain 构造**共用**，
+ * 所以"配置里钳过一次、构造时又钳一次"不会给出两个答案。
+ */
+export inline float clampRenderScale(float v, float fallback = 1.0f) {
+	if (!std::isfinite(v))
+		return fallback;
+	return std::clamp(v, kRenderScaleMin, kRenderScaleMax);
+}
+
+/**
+ * 渲染尺寸派生（**单一真相源**：Swapchain 构造期与 recreate() 都走它）。
+ *
+ * 各轴独立 `lround`、下限 1（0 会让 viewport / RT 尺寸为 0 = 未定义行为）。
+ * **`scale == 1.0f` 时逐像素等于输入**（float 尾数 24 位足够精确表示任何实际分辨率的
+ * 整数像素，`lround(w * 1.0f) == w` 恒成立）——这条就是"renderScale 默认档交付路径
+ * 逐位不变"红线的算术根据，`tests/` 里有对应用例钉住。
+ *
+ * 宽高比：两轴独立取整可让比例偏差 ≤1 像素（1920×0.75=1440 精确；奇数尺寸会差半像素）。
+ * 投影矩阵的比例来源必须与渲染网格同源，故 `projectionSystem` 读 `RenderExtent` context
+ * 而不是 `WindowExtent`（见 ecs.cppm）。
+ */
+export inline RenderSize computeRenderSize(uint32_t baseWidth, uint32_t baseHeight, float scale) {
+	auto one = [](float v) { return std::max<uint32_t>(1, static_cast<uint32_t>(std::lround(v))); };
+	return {
+	    one(static_cast<float>(baseWidth) * scale),
+	    one(static_cast<float>(baseHeight) * scale),
+	};
+}
+
+
+/**
  * 运行/窗口模式（configs/runtime.lua）：替代 RGL_HEADLESS / RGL_HEADLESS_SIZE /
  * RGL_WIN_SIZE / RGL_SHOW_AFTER 环境变量 + camera.lua 的 llm_debug/llm_shot 段。
  * 全字段可选，缺文件 = 全默认（交互窗 800x600、不截图）。
@@ -41,6 +96,20 @@ export struct RuntimeConfig {
 	uint32_t headlessHeight = 720;
 	uint32_t winWidth = 800;          // 交互窗尺寸（headless / llm 模式下被各自尺寸覆盖）
 	uint32_t winHeight = 600;
+	/**
+	 * 内部渲染分辨率倍率（Phase 14 批 14.3）：render extent = swapchain extent × 本值。
+	 *
+	 * 1.0 = 与窗口逐像素对齐（**默认，交付路径逐位不变**）。<1 = 内部分辨率低于窗口，
+	 * 由 tonemap pass 采样 scene_hdr 时线性放大（该 pass 是全屏大三角 + linear sampler，
+	 * 归一化 uv 采样 ⟹ 放大免费，不需要额外的 pass 或 RT）。
+	 *
+	 * 与债-37 的 HPD 分数缩放**正交**：那条管「窗口逻辑点 → 物理像素」，本值管
+	 * 「物理像素 → 渲染像素」。imgui / 点选 / 鼠标一律走窗口像素，不随本值缩放。
+	 *
+	 * 创建期量（不是逐帧）：RT 与深度图按它分配，改它要走重建路径，热重载不生效。
+	 * 越界 = 钳制 + warn（与 ui_font_size 同处理，不 fail-fast）。
+	 */
+	float renderScale = 1.0f;
 	int showAfter = -1;               // DIAG：隐藏窗启动、第 N 帧后显示（-1 = 立即显示）
 	PresentModePref presentMode = PresentModePref::immediate;  // 窗口 present 模式（headless 忽略）
 	LlmDebugConfig llm;

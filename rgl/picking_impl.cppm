@@ -60,12 +60,14 @@ void PickingService::record(vk::raii::CommandBuffer& cmd,
 	}
 	if (!ensureStaging())
 		return;
-	// 越界 clamp（窗口坐标 vs RT extent；resize 竞争帧取边缘，不判 miss）
-	// ⚠ 口径风险（2026-10-03 复核登记，未修）：pendingX/Y 源自 SDL 鼠标事件坐标 = SDL **逻辑点**
-	// 空间，这里却被直接 clamp 到 object_id RT 的**像素** extent 采样。本机 KDE Wayland 默认配置
-	// pixels==logical（SDL 对分数缩放失明）→ 无漂移；一旦桌面启用分数缩放（客户端拿到缩放后
-	// 缓冲，pixels = logical × scale），此处会偏 scale 倍打偏像素 → 须与鼠标坐标的逻辑→像素
-	// 变换一起修（改点：request 入口或本处换算，连同相机/输入侧同源坐标一起对账）。
+	// 越界 clamp（**渲染像素**坐标 vs RT extent；resize 竞争帧取边缘，不判 miss）
+	// 口径（2026-10-08 批 14.3 收口本条 2026-10-03 登记的风险）：pendingX/Y 由
+	// `requestPickAtCursor` 交进来时**已经是渲染像素**——逻辑点 →（× WindowScale）→
+	// 窗口像素 →（× RenderExtent/WindowExtent）→ 渲染像素。故此处与 rt->extent 同口径，
+	// 直接 clamp 是对的。两条历史成因各自独立、都已被那一级覆盖：
+	//   ① 分数缩放桌面（pixels = logical × scale）→ 由 WindowScale 一级覆盖；
+	//   ② renderScale ≠ 1（RT 比窗口小）→ 由 extent 比值一级覆盖。
+	// ⚠ 新增鼠标→像素的路径**必须**走同一个换算入口，别在这里补第二次缩放（会二次缩）。
 	const uint32_t x = std::min(pendingX, rt->extent.width - 1);
 	const uint32_t y = std::min(pendingY, rt->extent.height - 1);
 	// 布局：picking pass 末 = CAO → TS（copy 源）；**不恢复**（帧内无后续消费者，

@@ -197,8 +197,21 @@ RpcOutcome rpcHandleState(RpcWiring& w) {
 	nlohmann::json pageList = nlohmann::json::array();
 	for (const auto& page : pages)
 		pageList.push_back({{"name", page.name}, {"entries", rpcEntriesJson(page)}});
+	// render 段（批 14.3，判据③「口径显式记录」）：三个 extent 并出 + 生效倍率。
+	// 为什么必须在这里出声：像素类判据（imgqa / 闭式解探针）读的是**后缓冲**截图，而
+	// renderScale≠1 时画面是内部网格放大来的。判据若不知道自己看的是哪档，就会把
+	// "0.5 档变软"误读成"抗锯齿回归"。三个值都给，工具不必再猜换算。
+	const auto& we = w.registry.ctx().get<WindowExtent>();
+	const auto& re = w.registry.ctx().get<RenderExtent>();
 	return rpcOk({{"ok", true}, {"frame", w.frame},
-		{"camera", rpcCameraJson(w.registry.ctx().get<Camera>())}, {"pages", std::move(pageList)}});
+		{"camera", rpcCameraJson(w.registry.ctx().get<Camera>())}, {"pages", std::move(pageList)},
+		{{"render", {
+			{"windowWidth", we.width},
+			{"windowHeight", we.height},
+			{"renderWidth", re.width},
+			{"renderHeight", re.height},
+			{"scale", w.renderer.getSwapchainRef().getRenderScale()},
+		}}}});
 }
 
 /**

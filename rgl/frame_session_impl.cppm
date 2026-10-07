@@ -69,7 +69,8 @@ std::expected<void, Error> FrameSession::recreateSwapchainAndDepth(const char* c
 		}
 		return {};  // extent 未变 → 深度图仍有效，跳过重建
 	}
-	auto result = resources->recreateDepthImage(swapchain->getExtent());
+	// 渲染 extent（批 14.3）：深度图与颜色附件同网格，不是与后缓冲同网格
+	auto result = resources->recreateDepthImage(swapchain->getRenderExtent());
 	if (!result) {
 		auto logger = RLLogger::getInstance();
 		if (logger) logger->error("Renderer: failed to recreate depth image ({}): {}",

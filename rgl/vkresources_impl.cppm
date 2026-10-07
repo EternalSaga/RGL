@@ -38,7 +38,9 @@ Resources::Resources(RGL::AppContext& vkInstance, RGL::DeviceContext& vkDevice, 
  	  allocator(*vkInstance.getInstance(), *vkDevice.getPhysicalDevice(), *vkDevice.getDevice(),
  		  vkInstance.getApiVersion(),
  		  VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT),
-		  depthImage(createDepthImage(allocator, vkSwapchain.getExtent()).value()),
+		  // 深度图按**渲染** extent 分配（批 14.3）：它与 G-buffer / scene_hdr 同网格，
+		  // 必须与颜色附件一致，而不是与后缓冲一致。renderScale=1.0 时两者相等。
+		  depthImage(createDepthImage(allocator, vkSwapchain.getRenderExtent()).value()),
 		  depthImageView(vkDevice.getDevice(), buildDepthView(*depthImage)),
 		  descriptorHeap(createDescriptorHeap().value()),
 		  samplerHeap(createSamplerHeap().value()),

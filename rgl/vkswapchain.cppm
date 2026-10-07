@@ -61,13 +61,18 @@ export class Swapchain {
 	 * @param headlessHeight headless 交换链高（同上，默认 720）
 	 * @param presentModePref 窗口 present 模式偏好（runtime.lua present_mode；headless
 	 *   忽略——恒走 eFifo 回落路径）
+	 * @param renderScaleIn 内部渲染分辨率倍率（runtime.lua render_scale，默认 1.0 = 与窗口
+	 *   逐像素对齐）。**参数名带 In 后缀是刻意的**：mem-initializer 里形参会遮蔽同名成员，
+	 *   若写成 `renderScale` 则后续 `computeRenderExtent(extent, renderScale)` 读到的是
+	 *   **未钳制的形参**而不是已钳制的成员——一个静默的钳制失效。
 	 * @note 失败路径：surface 创建失败 / raii SwapchainKHR 构造失败抛异常（后者为
 	 *   vk::SystemError）；构造体做 checkPresentAbility（graphics family 须可向
 	 *   surface present），不可时抛 std::runtime_error（describe() 带 [Code]）
 	 */
 	Swapchain(RGL::DeviceContext& vkDevice, RGL::SDLWindow* window, bool headless,
 		uint32_t headlessWidth = 0, uint32_t headlessHeight = 0,
-		PresentModePref presentModePref = PresentModePref::immediate)
+		PresentModePref presentModePref = PresentModePref::immediate,
+		float renderScaleIn = 1.0f)
 		: vkDevice(vkDevice),
 		  window(window),
 		  surface(headless ? createHeadlessSurface(vkDevice.getVkInstance().getInstance())
@@ -81,6 +86,9 @@ export class Swapchain {
 		  surfaceCapabilities(vkDevice.getPhysicalDevice().getSurfaceCapabilitiesKHR(*surface)),
 		  extent(headless ? vk::Extent2D{headlessWidth, headlessHeight}
 		                 : window->getSwapchainExtend(surfaceCapabilities)),
+		  renderScale(clampRenderScale(renderScaleIn)),
+		  // 读上面两个成员：声明顺序保证它们已初始化（见成员块注释）
+		  renderExtent(toExtent(computeRenderSize(extent.width, extent.height, renderScale))),
 		  imageCount(headless ? surfaceCapabilities.minImageCount
 		                     : window->getImageCount(surfaceCapabilities.minImageCount, surfaceCapabilities.maxImageCount)),
 		  swapchain(vkDevice.getDevice(), buildSwapchainCreateInfo()),
@@ -113,6 +121,15 @@ export class Swapchain {
 	const std::vector<vk::raii::ImageView>& getImageViews() const { return swapchainImageViews; }
 	/** @return 交换链 extent（按值）；Resources 用它创建深度图，recreate() 可能改变它。 */
 	vk::Extent2D getExtent() const { return extent; }
+	/**
+	 * @return 渲染 extent（= getExtent() × renderScale，批 14.3）；**深度图 / G-buffer /
+	 * scene_hdr / ao / taa 历史 / IzbShadow / TAA jitter 一律用它**，而 imgui、点选、
+	 * 鼠标、捕获到后缓冲的口径继续用 getExtent()。renderScale = 1.0 时两者逐像素相等。
+	 * recreate() 与新 extent 同步刷新。
+	 */
+	vk::Extent2D getRenderExtent() const { return renderExtent; }
+	/** @return 生效的渲染倍率（已钳制）；日志/RPC 回显用，判据靠它区分"哪档 scale"。 */
+	float getRenderScale() const { return renderScale; }
 	/** @return 交换链格式（format + colorSpace）；offscreen RT "inherit" 格式经它解析
 	 * （Renderer），管线颜色格式同源。 */
 	vk::SurfaceFormatKHR getFormat() const { return format; }
@@ -171,6 +188,10 @@ export class Swapchain {
 		presentMode = newPresentMode;
 		presentTiming = newPresentTiming;  // 批 9.3：时间域 id 等运行态随新链作废（collect 侧按句柄变化自适应）
 		extent = newExtent;
+		// 渲染 extent 随新窗口尺寸重派生（renderScale 是创建期常量，不随 resize 变）。
+		// 漏这一行 = resize 后深度图/RT 停在旧渲染尺寸而 swapchain 已是新尺寸，
+		// 症状是"缩窗口后画面比例错/边缘漏画"，且只在 renderScale≠1 时出现。
+		renderExtent = toExtent(computeRenderSize(extent.width, extent.height, renderScale));
 		imageCount = window->getImageCount(surfaceCapabilities.minImageCount,
 			surfaceCapabilities.maxImageCount);
 		swapchain = vk::raii::SwapchainKHR(vkDevice.getDevice(), buildSwapchainCreateInfo());
@@ -181,6 +202,9 @@ export class Swapchain {
 	}
 
    private:
+ 	/** RenderSize（rlbase 纯算术）→ vk::Extent2D。转换只在这一处，见 runtime_config.cppm
+ 	 * 里 RenderSize 的「为什么不住 rlgfx」注释。 */
+ 	static vk::Extent2D toExtent(RenderSize s) { return {s.width, s.height}; }
 	/**
 	 * 窗口路径 surface 创建（委托 SDLWindow::createSurface，SDL_Vulkan_CreateSurface；
 	 * surface 生命周期绑定窗口，raii 包装随本对象析构释放）。
@@ -535,6 +559,19 @@ export class Swapchain {
 	PresentTimingSupport presentTiming;  // 批 9.3 present_timing 探测/激活态（门不过 = active false，行为同旧版；recreate() 重探）
 	vk::SurfaceCapabilitiesKHR surfaceCapabilities;  // surface 能力快照（构造期查询；recreate() 重查刷新）
 	vk::Extent2D extent;  // 交换链 extent（headless = headless_width/height；窗口路径 = getSwapchainExtend 钳制值）
+	/**
+	 * 内部渲染分辨率倍率（创建期常量，已钳到 [kRenderScaleMin, kRenderScaleMax]）。
+	 * 声明在 extent 之后、renderExtent 之前：mem-initializer 按**声明顺序**求值，
+	 * renderExtent 才能安全读到已初始化的这两个。顺序错 = 读未初始化内存（不报错）。
+	 */
+	float renderScale;
+	/**
+	 * 渲染 extent = extent × renderScale（各轴独立取整、下限 1）。**与 extent 同属本对象**
+	 * 是刻意的：resize 只有一条路（recreate()），两个值同处一地就不可能失步——分成两个
+	 * 所有者正是"深度图还是窗口尺寸、RT 已经是缩放尺寸"这类错的成因。
+	 * 1.0 时逐像素等于 extent ⟹ 所有下游消费者行为与引入本概念前逐位相同（红线）。
+	 */
+	vk::Extent2D renderExtent;
 	uint32_t imageCount;  // 图像数（headless = minImageCount；窗口路径 = getImageCount，Wayland 不加 1）
 	vk::raii::SwapchainKHR swapchain;  // raii swapchain（无默认构造/不可拷贝，初始化列表构造；recreate() 经 = nullptr 销毁旧链）
 	std::vector<vk::Image> swapchainImages;  // 交换链图像句柄快照（getImages；recreate() 同步刷新）

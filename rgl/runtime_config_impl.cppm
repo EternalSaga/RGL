@@ -13,11 +13,38 @@ namespace RGL {
 // loadRuntimeConfig 定义（sol2 解析整体移出接口 TU，GMF 只 sol/fmt；本单元是叶子边）。
 
 /**
+ * render_scale 解析（Phase 14 批 14.3）：内部渲染分辨率倍率。
+ *
+ * 非有限值 / 越界 = 回落或钳制 + warn，**不 fail-fast**（与 ui_font_size 同处理：这是偏好量
+ * 不是正确性契约，钳制后画面仍可看，而 fail-fast 会让一次笔误毁掉一次长跑）。
+ * 缺键 = 保持传入值（即 `RuntimeConfig::renderScale` 的默认 1.0，单一真相源在结构体）。
+ *
+ * 抽成函数而非内联：`loadRuntimeConfig` 的认知复杂度已贴着规则上限，这段三分支内联会推过线。
+ * @param root runtime.lua 根表
+ * @param scale 写入目标（传入值 = 当前默认，缺键时原样保留）
+ * @param logger 可为空（无日志器时静默按默认处理）
+ */
+static void applyRenderScale(sol::table root, float& scale, RLLogger* logger) {
+	sol::optional<float> raw = root["render_scale"];
+	if (!raw)
+		return;
+	const float v = *raw;
+	// 钳制本体在 clampRenderScale（rlbase）——配置侧与 Swapchain 构造侧共用同一个函数，
+	// 所以"这里钳过一次、构造时又钳一次"不可能给出两个答案。本函数只负责**怎么出声**。
+	const float clamped = clampRenderScale(v, scale);
+	if (clamped != v && logger)
+		logger->warn("runtime.lua render_scale = {} 不可用（非有限值或越界 [{}, {}]），回落 {}", v,
+			kRenderScaleMin, kRenderScaleMax, clamped);
+	scale = clamped;
+}
+
+/**
  * llm_shot/llm_debug 表公共细字段填充（两段字段布局相同 {delay_frames, file, size}）：
  * 缺字段保留当前值 = 默认或前段已填值。
  * @param shot 源表（调用方保证为表）
  * @param llm 写入目标（delayFrames/file/width/height）
  */
+
 static void applyShotFields(sol::table shot, LlmDebugConfig& llm) {
 	sol::optional<uint32_t> delayFrames = shot["delay_frames"];
 	if (delayFrames)
@@ -122,6 +149,8 @@ static void readUiFont(sol::table& root, RuntimeConfig& cfg) {
 		};
 		readSize("headless_size", cfg.headlessWidth, cfg.headlessHeight);
 		readSize("win_size", cfg.winWidth, cfg.winHeight);
+
+		applyRenderScale(root, cfg.renderScale, logger);  // 批 14.3：内部渲染分辨率倍率
 		sol::optional<int> showAfter = root["show_after"];
 		if (showAfter)
 			cfg.showAfter = *showAfter;

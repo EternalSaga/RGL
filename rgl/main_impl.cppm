@@ -242,6 +242,31 @@ void wireWindowContexts(entt::registry& rg, const PreWindow& pre) {
 	rg.ctx().emplace<WindowScale>(WindowScale{window->displayScale()});
 }
 
+/**
+ * 渲染尺寸 context 装配 + 口径日志（Phase 14 批 14.3）。
+ *
+ * 为什么走 context 而不是把 Swapchain 传进 system：`ecs` 不 import `vk_swapchain`
+ * （分层红线，假边会让慢模块进本不该等它的编译前置），而 projectionSystem / taaSystem
+ * 的像素口径必须是渲染网格 ⟹ 以 context 组件为界。
+ *
+ * 只装**初值**：之后每帧由 `resizeSystem` 帧首从 swapchain 同步（那条覆盖 OUT_OF_DATE
+ * 重建路径——它改渲染 extent 却不改 WindowExtent）。
+ *
+ * 日志是判据的一部分：`tools/smoke.py --render-scale` 靠解析本行核对"请求的倍率真的
+ * 生效了"，改了文案那条判据会当场报"口径日志没了"。
+ * @param rg registry（写 RenderExtent）
+ * @param swapchain 已构造的交换链（渲染 extent 的唯一来源）
+ */
+void wireRenderExtentContext(entt::registry& rg, const Swapchain& swapchain) {
+	const auto r = swapchain.getRenderExtent();
+	rg.ctx().emplace<RenderExtent>(r.width, r.height);
+	if (auto* logger = RLLogger::getInstance()) {
+		const auto s = swapchain.getExtent();
+		logger->info("render scale = {} → render {}x{} (swapchain {}x{})",
+			swapchain.getRenderScale(), r.width, r.height, s.width, s.height);
+	}
+}
+
 /** push data 容量契约检查（超限抛 std::runtime_error）。 */
 void checkPushDataLimits(const DeviceContext& device) {
 	// push data 契约（Phase 5）：shader object + descriptor heap 模式无 pipeline layout →
@@ -507,8 +532,10 @@ int main() {
 		AppContext vkInstance(pre.window.get(), pre.headless);
 		DeviceContext vkDevice(vkInstance);
 		checkPushDataLimits(vkDevice);
-		Swapchain vkSwapchain(vkDevice, pre.window.get(), pre.headless,
-			pre.headlessW, pre.headlessH, configs.runtime.presentMode);
+		// 末位 = 内部渲染分辨率倍率（批 14.3，默认 1.0 = 交付路径逐位不变）
+		Swapchain vkSwapchain(vkDevice, pre.window.get(), pre.headless, pre.headlessW,
+			pre.headlessH, configs.runtime.presentMode, configs.runtime.renderScale);
+		wireRenderExtentContext(registry, vkSwapchain);  // 渲染尺寸进 registry + 口径日志
 		// heap 容量为固定裕量（与场景内容解耦，批次 3 E1.3）：CPU 解析模型不再需要
 		// 先于 Vulkan 初始化
 		Resources vkResources(vkInstance, vkDevice, vkSwapchain);

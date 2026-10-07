@@ -267,10 +267,11 @@ export class Renderer {
 	 * @param cmd 录制中的命令缓冲
 	 * @param swapchainImage 本帧后缓冲（布局 barrier 目标）
 	 * @param swapchainView 本帧后缓冲 view（hook 参数）
-	 * @param extent swapchain extent
+	 * @param swapchainExtent **后缓冲** extent（批 14.3 起不再等于渲染 extent）——imgui
+	 *   的像素空间就是后缓冲像素，传渲染 extent 会让 UI 随 renderScale 一起缩。
 	 */
 	void emitFrameEndOverlay(vk::raii::CommandBuffer& cmd, VkImage swapchainImage,
-		vk::ImageView swapchainView, vk::Extent2D extent);
+		vk::ImageView swapchainView, vk::Extent2D swapchainExtent);
 	/** 批 11.3-1d IZB 帧首段（drawFrame 调用）：收割上帧 dump + 帧计数 + 门开时
 	 *  构造/重建 IzbShadow（deferred 判据 + extent 漂移重建前 waitIdle）。门关 =
 	 *  仅剩一次布尔判断（izbShadow 恒空）。 */
