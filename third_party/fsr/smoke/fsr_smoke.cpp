@@ -660,6 +660,49 @@ int main(int argc, char** argv)
 
     FfxInterface backend{};
     check(ffxGetInterfaceVK(&backend, dev, scratch, scratchSize, FFX_FSR3UPSCALER_CONTEXT_COUNT), "ffxGetInterfaceVK");
+
+    // ── 本机会选到**哪个 shader 排列**（观测，不是判据）────────────────────────
+    // 为什么要打这一行：排列由 `getPipelinePermutationFlags`（ffx_fsr3upscaler.cpp:426-449）
+    // 决定，其输入 `useLut` / `fp16` 来自 `GetDeviceCapabilitiesVK` 遍历
+    // `vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, ...)` 的结果
+    // （ffx_vk.cpp:1593/2070）。默认值是 wave 32/32 + fp16=false（:2056-2058），只有
+    // `VK_EXT_subgroup_size_control` / `VK_KHR_shader_float16_int8` **出现在那张表里**
+    // 才会被改写（:2071-2098）。
+    //
+    // 🔴 本机实测：`wave=32/32 fp16=0` ⟹ **两条都没命中**，走的是"最低配"排列。原因不是
+    //   驱动不支持（RADV 两条都支持，冒烟自己的 VkDevice 还显式启用了 subgroup size
+    //   control），而是**那张表按 instance 的 API 版本过滤掉已进核心的扩展**：
+    //   `VK_KHR_shader_float16_int8` 1.2 进核心、`VK_EXT_subgroup_size_control` 1.3 进核心，
+    //   而 instance 是 1.3+（本冒烟 `VK_API_VERSION_1_3`，渲染器取
+    //   `enumerateInstanceVersion()` 且 required 特性链含 Vulkan14Features ⟹ 必然 ≥1.3）。
+    //   ⟹ **FSR 的 Vulkan 能力探测在现代 instance 下恒为最低配**，排列因此是**确定的**，
+    //     不随机器漂。渲染器与冒烟必然选到同一个排列（这条是 14.5 动手前的关键排除项）。
+    //
+    // ⚠ 顺带钉死两条容易误判的：
+    //   ① **Vulkan 上 `canForceWave64` 恒 false**——后端硬写
+    //      `maximumSupportedShaderModel = FFX_SHADER_MODEL_5_1`（ffx_vk.cpp:2055，注释
+    //      "no shader model in vulkan so assume the minimum"）⟹ `haveShaderModel64`
+    //      永不成立。② 即便成立，`waveLaneCountMin/Max` 也停在 32/32 过不了 `==64` 那关。
+    //      两条独立充分 ⟹ `FORCE_WAVE64` 永不进 ⟹ `ffxIsWave64` 恒假 ⟹ **永不挂
+    //      `VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT`**（:3703-3712）。
+    //      ⟹ 接进渲染器**不需要**给 VkDevice 启用 `VK_EXT_subgroup_size_control`。
+    //   ③ 推论：`_16bit` / `_wave64` 那批排列在本项目的配置下**运行时永不入选**（40 个
+    //      排列头里的一半是死重）。不是缺陷，但别去调 `FFX_FSR3UPSCALER_OPTION_*` 想开它。
+    //
+    // 排列**缺失**会怎样：`fpGetPermutationBlobByIndex` 报错 → `FFX_VALIDATE` 上抛 →
+    // `ContextCreate` 直接失败 ⟹ **硬闸门本来就在**，不会静默用错 shader。本行只是把
+    // "这台机器走哪条"变成日志里看得见的事实（跨机复测不必猜）。
+    {
+        FfxDeviceCapabilities caps{};
+        check(backend.fpGetDeviceCapabilities(&backend, &caps), "fpGetDeviceCapabilities");
+        const bool haveSm66 = caps.maximumSupportedShaderModel >= FFX_SHADER_MODEL_6_6;
+        const bool useLut   = (caps.waveLaneCountMin == 32 && caps.waveLaneCountMax == 64);
+        log("permutation inputs: shaderModel=%d wave=%u/%u fp16=%d ⟹ useLut=%d "
+            "forceWave64=%d(于Vulkan恒0，见注释①②) fp16Perm=%d",
+            (int)caps.maximumSupportedShaderModel, caps.waveLaneCountMin,
+            caps.waveLaneCountMax, (int)caps.fp16Supported, (int)useLut,
+            (int)(haveSm66 && useLut), (int)caps.fp16Supported);
+    }
     log("backend interface OK");
 
     FfxFsr3UpscalerContextDescription cd{};

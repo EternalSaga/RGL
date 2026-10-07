@@ -422,7 +422,7 @@ view 时 format/aspect **全取自我们填的 `FfxResourceDescription`**（`ffx
 **格式串**成立；**aspect 填错 VVL 抓得到** ⟹ 判据 ②「VVL 零报错」在深度输入这里**有效**，
 不必另造判据。口径与造靶细节 → `docs/FSR输入契约.md` §2「真实深度格式怎么申报」。
 
-#### 六条会决定接线写法的 vendor 事实（逐条复核过）
+#### 七条会决定接线写法的 vendor 事实（逐条复核过）
 
 1. **FSR 3.1.4 的 upscaler 没有 per-pass 录制 API**——全树无 `ContextRecord`/`RecordDescription`，
    只有 `ffxFsr3UpscalerContextDispatch` **一次调用录完全部 pass**。⟹ 本 phase 说的「图外 compute
@@ -445,7 +445,21 @@ view 时 format/aspect **全取自我们填的 `FfxResourceDescription`**（`ffx
    ⟹ 14.8 要的「外部分配器 X MiB」一行可以做，源就是它。
    ⚠ **context 构造必须早于 `logFirstFrameMemory()`**（调用点 `vkrenderer_passrec.cppm:446`），
    否则 `first_frame` 统计又漏掉 FSR 全部显存——这是 `调试历史.md:1958-1965` 记过的同一病灶。
-6. **5 个 configure key 代码里零解析**（含 smoke）：`FFX_FSR3UPSCALER_CONFIGURE_UPSCALE_KEY_`
+6. **shader 排列是确定的「最低配」，渲染器与冒烟必然一致**（14.5 动手前的关键排除项）。
+   排列由 `getPipelinePermutationFlags`（`ffx_fsr3upscaler.cpp:426-449`）决定，输入 `useLut` /
+   `fp16` 来自遍历 `vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, ...)`
+   （`ffx_vk.cpp:1593/2070`）。本机实测 `wave=32/32 fp16=0` ⟹ **两条扩展都没命中**，走最低配。
+   原因不是驱动不支持，而是**那张表按 instance API 版本过滤掉已进核心的扩展**
+   （`float16_int8` 1.2 进核心、`subgroup_size_control` 1.3 进核心，而 instance 必然 ≥1.3）。
+   两条独立充分的理由保证 **Vulkan 上 `FORCE_WAVE64` 永不进**：后端硬写
+   `maximumSupportedShaderModel = 5_1`（`:2055`）⟹ `haveShaderModel66` 恒假；且 wave 停在
+   32/32 过不了 `==64`。⟹ **永不挂 `RequiredSubgroupSizeCreateInfoEXT`**（`:3703-3712`）
+   ⟹ **不需要给 VkDevice 启用 `VK_EXT_subgroup_size_control`**。
+   推论：`_16bit` / `_wave64` 那半批排列在本项目配置下**运行时永不入选**（别去调
+   `FFX_FSR3UPSCALER_OPTION_*` 想开它）。排列**缺失**的失败形态 = `ContextCreate` 直接失败
+   （`fpGetPermutationBlobByIndex` 报错 → `FFX_VALIDATE` 上抛），**不是**静默用错 shader
+   ⟹ 硬闸门本来就在。`just fsr-smoke` 现每机会打 `permutation inputs: ...` 一行，跨机复测不必猜。
+7. **5 个 configure key 代码里零解析**（含 smoke）：`FFX_FSR3UPSCALER_CONFIGURE_UPSCALE_KEY_`
    {`FVELOCITYFACTOR`, `FREACTIVENESSSCALE`, `FSHADINGCHANGESCALE`, `FACCUMULATIONADDEDPERFRAME`,
    `FMINDISOCCLUSIONACCUMULATION`}（`ffx_fsr3upscaler.h:176-183`），写入 API
    `ffxFsr3UpscalerSetConstant`（`:587`）。批 14.6 的"调参"目前**没有任何现成接线**可改。
