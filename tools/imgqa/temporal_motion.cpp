@@ -1229,17 +1229,32 @@ int cmdTemporalMotion(const std::string& cameraName, const std::string& motion,
         echoAlign("M3x", aM3x, true);
     echoAlign("M4", aM4, false);
     {
-        double worst = std::min({aM0.minMargin, aM1.minMargin, aM2.minMargin, aM3.minMargin});
-        int gap = std::max({aM0.halfGap, aM1.halfGap, aM2.halfGap, aM3.halfGap});
+        // 🔴 **M3 不进最小值**（2026-10-07 实测定位，别再改回去）。M3 = 关重投影，是按设计
+        // **故意弄坏**的消融组。记忆臂（11/13）在它下面 `motion ≡ 0`：`ecs_impl.cppm` 的消融门把
+        // prevViewProj 换成本帧抖动后矩阵 + 位移清零 ⟹ `prevUvBase ≡ baseUv` ⟹ `gate ≡ 1`
+        // ⟹ 历史无界累积成多视点糊 ⟹ 代价面**恒平坦**（实测余量 0.0001~0.0004、前后半窗差 1）。
+        // 把它算进「配对是否有效」的最小值 = 用「被测链路坏掉时应当坏」的那一组去否决
+        // 「被测链路是否可信」——**判据把有效性检查套在了按设计就该无效的组上**。
+        // 实测判据：同角度同激励下臂 0 的 M3 余量 0.29（无记忆 ⟹ 不糊）而臂 11/13 塌到 0.0002，
+        // 红的一直只有 M3，M0/M1/M2/M3x 全部健康（0.16~3.7）。
+        // M3 怎么塌的是**发现**（门在关重投影时失明），单独打印，不参与否决。
+        double worst = std::min({aM0.minMargin, aM1.minMargin, aM2.minMargin});
+        int gap = std::max({aM0.halfGap, aM1.halfGap, aM2.halfGap});
         if (cameraMode) {
             worst = std::min(worst, aM3x.minMargin);
             gap = std::max(gap, aM3x.halfGap);
         }
+        const bool m3Blind = aM3.minMargin < 0.02 || aM3.halfGap != 0;
         vs.push_back(verdictFor("temporal-motion-alignment", worst >= 0.02 && gap == 0,
-               "最小 argmin 余量 " + d4(worst) + "（下限 0.02）· 最大前后半窗差 "
-                   + std::to_string(gap) + "（要求 0）· 偏移 M0/M1/M2/M3 = "
+               "最小 argmin 余量 " + d4(worst) + "（下限 0.02；**M3 除外**，理由见判据契约）· "
+                   "最大前后半窗差 " + std::to_string(gap) + "（要求 0）· 偏移 M0/M1/M2/M3 = "
                    + std::to_string(aM0.offset) + "/" + std::to_string(aM1.offset) + "/"
-                   + std::to_string(aM2.offset) + "/" + std::to_string(aM3.offset)));
+                   + std::to_string(aM2.offset) + "/" + std::to_string(aM3.offset)
+                   + (m3Blind
+                           ? "\n       ⚠ M3（关重投影消融）余量 " + d4(aM3.minMargin)
+                             + " 已塌 = 记忆臂在此配置下**门失明**、历史糊成多视点。这是发现不是故障，"
+                               "但它意味着下一条 ablation 锚点由错位撑大"
+                           : "")));
         std::cout << "  " << vs.back().line() << "\n";
     }
 
@@ -1301,10 +1316,19 @@ int cmdTemporalMotion(const std::string& cameraName, const std::string& motion,
     // ── 守卫 2：消融组必须显著变差（量具敏感性阳性锚点）───────────────────────
     {
         const double ratio = devM3 / std::max(devM1, 1e-12);
+        // ⚠ **空洞满足风险**（与上一条的 M3 例外成对，别只改一边）：M3 对不齐时 dev(M3) 被
+        //   **错位**撑大 ⟹ `ratio ≥ 1.5` 可以靠错位满足，而不是靠「关掉了搬运历史的那条路」。
+        //   所以 M3 余量低于对齐地板时，本锚点**只算「读数动了」（必要条件仍在），不算阳性锚点**。
+        //   彻底修法 = 用 M1 的偏移**强制**测 M3 的 dev（两边同偏移 ⟹ 错位项相消），→ 债-70。
+        const bool m3Blind = aM3.minMargin < 0.02 || aM3.halfGap != 0;
         vs.push_back(verdictFor("temporal-motion-ablation", ratio >= 1.5,
             "dev(M3 关重投影)/dev(M1) = " + d2(ratio) + "（下限 1.5）· dev M3 = " + d4(devM3)
                 + "，M1 = " + d4(devM1)
-                + "；挂零 = 对齐/掩码/域坏了，整张表作废，不用它下画质结论"));
+                + "；挂零 = 对齐/掩码/域坏了，整张表作废，不用它下画质结论"
+                + (m3Blind
+                        ? "\n       ⚠ M3 余量低于对齐地板 ⟹ 本比值由**错位**撑大，只算「读数动了」"
+                          "**不算阳性锚点**（彻底修法 = 强制同偏移测 dev，→ 债-70）"
+                        : "")));
         std::cout << "  " << vs.back().line() << "\n";
     }
 

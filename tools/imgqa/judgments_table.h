@@ -35,15 +35,18 @@ namespace RGL::imgqa {
 /// 运动族 · 尾长仪器护栏（4 条）：尾零锚 / 尾事件 / 盒载荷 / 尾单调。
 /// 四条全绿只说明「尺子有
 /// 力气」，**不**构成画质结论（每条正文末尾各写着这句）。
+/// 📄 正文在 `judgments_table_tail.cpp`（`temporal-tail-*` 三段同处一文件）。
 [[nodiscard]] const std::vector<JudgmentInfo>& temporalTailGuardJudgments();
 
 /// 运动族 · **机位运动**稳态份额（批 13.14a，4 条）：φ 符号标定 / α 非劣性 / 静止塌缩 /
 /// gate 断点。与上面两族的差别 = 成立条件不同（spin 下臂 11 的 `gate` 恒 1.0，进不了斜坡区）。
+/// 📄 正文在 `judgments_table_tail.cpp`。
 [[nodiscard]] const std::vector<JudgmentInfo>& temporalTailCameraJudgments();
 
-/// 运动族 · **平移阶跃**残影衰减（批 13.15，4 条）：零锚 / 历史存活 / 闭式锚 / 裁剪兑住没有。
-/// 与上面那条的差别 = **激励带视差**（`frame_yaw` 是原地纯旋转 ⟹ 无去遮挡 ⟹ 量不到鬼影），
-/// 本族是本项目第一条真正量「让开的内容回不来」的判据。
+/// 运动族 · **平移阶跃**残影衰减（批 13.15，5 条）：零锚 / 历史存活 / 闭式锚 / 裁剪兑住没有 /
+/// 臂 13 修法验收。与上面那条的差别 = **激励带视差**（`frame_yaw` 是原地纯旋转 ⟹ 无去遮挡 ⟹
+/// 量不到鬼影），本族是本项目第一条真正量「让开的内容回不来」的判据。
+/// 📄 正文在 `judgments_table_tail.cpp`。
 [[nodiscard]] const std::vector<JudgmentInfo>& temporalTailStepJudgments();
 
 /// 运动族 · feedback 与闭式回扣（5 条）：参数活性 / 零态 / 回扣 / 闪烁闭式 / 单应解释。
