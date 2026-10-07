@@ -92,7 +92,8 @@ std::string legalArgsFor(const SubcommandSpec& spec)
     }
     if (spec.allowPositional)
         s += (s.empty() ? "" : " ") + std::string("位置参数");
-    return s;
+    // 空表也要说人话：`check` 现在一个参数都不收，"合法参数：" 后面留白会被读成消息坏了。
+    return s.empty() ? "无（本命令不接受任何参数）" : s;
 }
 
 /// 默认值为空串的 flag 在 synopsis 里显示成 `''`——留白会被读成"没这个参数"。

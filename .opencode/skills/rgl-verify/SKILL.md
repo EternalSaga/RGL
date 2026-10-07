@@ -101,12 +101,14 @@ objectID 附件反解可见 piece，闭式解（GGX+ACES+sRGB 逐式转录，独
 - `faces --piece 名 [--shadow] [--env]` —— 六面闭式解预测（观测域字节）vs 观测亮度簇；解释不了的簇=发现
 - `switch --allow-piece a,b` —— 开关影响域：域外**必须逐位为零** + 域内必须确实变了（两条对偶，堵"0 差异"的两种解释）
 - `probe [--x 640] [--y 360] [--light Lx,Ly,Lz] [--tol 2]` —— 闭式解探针：某像素**该**是多少 vs 实机截图逐字节对拍（`just analytic` = 本命令 + `qa/configs/analytic/` 固定配置；12.3b 起接替已退役的 analytic_ref.py）
-- `check [--promoted]` / `refuse [ssim|...]` / `note "事后真相"`
+- `check`（列每条判据的容差理由 + guard 出处）/ `refuse [ssim|...]` / `note "事后真相"`
 
 **三条硬约束（工具替你守，但写新判据时你也要守）**：① 判据只在 objectID 反解出的**可见集**上求值；
 ② 统计一律线性域，比较域=观测域（预测字节先过完整显示链，ACES 有通道串扰没有比例关系）；
-③ 每次真实调用 `note` 回填真相——晋升凭据在 `qa/log/imgqa_calls.jsonl`，判据晋升四条：真实
-bug/变异上变红过、跨 ≥20 次无关改动不误报、容差有理由、有反向用例。**SSIM/PSNR/全局 epsilon
+③ 每次真实调用 `note` 回填**事后真相**——调用台账 `qa/log/imgqa_calls.jsonl` 是判据可信度的
+一手数据（哪条判据真在排查里被调用、事后看对不对）。**没有"晋升"这回事**，判据一律 advisory；
+可信度的凭据 = 注册表里的容差理由 + guard 出处（`imgqa selftest` 对**每条**强制，不是对某个
+晋升子集）。**SSIM/PSNR/全局 epsilon
 是登记过的反模式**（`imgqa refuse` 会给理由），别重新发明。
 
 **已知边界**：亮度聚类 gap=0.02 会把亮度相近的两面并成一簇，并簇对"每簇可解释"假通过——

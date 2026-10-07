@@ -35,9 +35,8 @@ std::vector<SubcommandSpec> specsMetaAndRig()
         /* check */
         SubcommandSpec{
             "check",
-            "列判据注册表与晋升状态",
+            "列每条判据的容差理由与 guard 出处（一律 advisory，没有晋升这回事）",
             {
-                FlagSpec{"--promoted", nullptr, nullptr, FlagKind::Bool},
             },
             {
             },
@@ -400,7 +399,7 @@ std::vector<SubcommandSpec> specsFlickerAndNoise()
         /* note */
         SubcommandSpec{
             "note",
-            "回填最后一条调用记录（晋升凭据）",
+            "回填最后一条调用记录的事后真相（判据可信度的台账）",
             {
             },
             {

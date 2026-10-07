@@ -164,12 +164,15 @@ void testRegistry(Checker& c)
     c.chk("反模式登记含 ssim/psnr/global-epsilon",
         antiPatterns().count("ssim") && antiPatterns().count("psnr")
             && antiPatterns().count("global-epsilon"));
-    // 晋升闸门不变量：promoted 判据必须有理由（>20 字符，不是"0.5%"式敷衍）与台账。
-    for (const auto& j : registeredJudgments()) {
-        if (j.promoted) {
-            c.chk("promoted 必须有 guard", !j.guards.empty(), j.name);
-            c.chk("promoted 必须有 why_tol", std::strlen(j.whyTol) > 20, j.name);
-        }
+    // **普适不变量**（债-08 降级后这条机制的牙）：**每条**判据都必须有 ① 写得出理由的容差
+    // （>20 字符，不是"0.5%"式敷衍）② 至少一条 guard 出处（真实 bug 或真实变异）。
+    // 原来这条挂在「已晋升判据」的分支下，而那个标志无一处置 true ⟹ 循环体恒不执行 = 摆设。
+    // 前提守卫：注册表若为空，下面两条对空循环**恒真** = 假绿，所以先钉住它非空。
+    const auto& all = registeredJudgments();
+    c.chk("判据注册表非空（否则下面两条恒真是假绿）", !all.empty(), std::to_string(all.size()));
+    for (const auto& j : all) {
+        c.chk("每条判据必须有 guard 出处", !j.guards.empty(), j.name);
+        c.chk("每条判据的容差理由必须 >20 字符", std::strlen(j.whyTol) > 20, j.name);
     }
 }
 

@@ -30,6 +30,7 @@ just config              # CMake 配置（默认 clang, Release）；just config
 just build               # 增量编译（需先 config）；just build-release / build-debug = 一键配置+编译
 just reflect             # 重跑 7 条反射管线（改动 shader 契约/schema/模板后必须，见 skill rgl-shader-contract）
 just checks / doc-check / style-check [--strict]  # 源码检查统一入口（tools/checks/main.py，--only style|doc；每次 just build 已随 source_checks 目标跑、只警告；红线清单见 skill rgl-new-module）
+just build-tools         # 构建 imgqa + 跑 checks（imgqa 不进 ALL，`just build` 不编它 ⟹ 它编译失败没人发现）
 just run                 # 运行
 just smoke / just shot   # agent 一次性 headless 冒烟 / 截图（配置走 RGL_CONFIG_DIR，**不碰 configs 副本**；判据与现场回显 → skill rgl-verify）
 just run-igpu / run-dgpu / run-intel   # 强制核显 / NVIDIA prime 独显 / Intel anv
@@ -60,7 +61,7 @@ CMake 无独立构建目录——必须从根目录构建（`cmake -B build -S .
 | 单元测试层 | `tests/`（doctest，C++20 modules） | **纯函数/契约**：阴影级联几何、相机数学、glTF 解析、四份配置 loader、反射字节布局、内建 cube 几何、**`state_kit` 十段状态表 + `pass_vocabulary` 词表分区**、**`render_graph` 编译（校验/barrier/装饰）**。**无 GPU 无窗口，毫秒级** | `just test` |
 | 设备原语层 | `tests/` 的 `TEST_SUITE("gpu")` | **后端原语 golden**：clear 色逐像素、R32_UINT 魔数整数回环、UNORM 量化取整（0.5→128）、image↔buffer 逐字节保真 + 行序 | `just test-all` / `just test-gpu` |
 | 闭式解探针 | `tools/imgqa/`（probe 子命令）+ `qa/configs/analytic/` | 「某像素**该**是多少」的独立第二实现（GGX + ACES + 硬件 sRGB 逐式复刻，与引擎共享真机锚点），与实机截图逐字节对拍。**不需要基线图像**（12.3b 接替 analytic_ref.py） | `just analytic` |
-| 区域归因判据 | `tools/imgqa/`（C++ + vcpkg，**不进 ALL**） | objectID 反解可见 piece + 闭式解逐面预测 vs 观测亮度簇 + 开关影响域（域外逐位为零）+ 反模式登记（ssim 等有理由的拒绝）。**排查渲染问题的默认起手** | `just imgqa selftest` / `attribution` / `faces` / `switch`（判据晋升与台账纪律 → `tools/imgqa/imgqa.h` 头注释 + skill rgl-verify） |
+| 区域归因判据 | `tools/imgqa/`（C++ + vcpkg，**不进 ALL**） | objectID 反解可见 piece + 闭式解逐面预测 vs 观测亮度簇 + 开关影响域（域外逐位为零）+ 反模式登记（ssim 等有理由的拒绝）。**排查渲染问题的默认起手** | `just imgqa selftest` / `attribution` / `faces` / `switch`（判据口径与调用台账 → `tools/imgqa/imgqa.h` 头注释 + skill rgl-verify） |
 | 进程级集成层 | `qa/`（批 12.2 起**部分落地**：`configs/analytic/` 探针配置） | 图像/场景级：程序化小场景 + RPC 驱动 + OpenCV 量化 | 场景生成 `tools/qa_scenes.py`；量化 harness 未落地 |
 
 ### 分流靠 doctest **测试套件**，不是 tag 也不是链接面（批 12.2d）

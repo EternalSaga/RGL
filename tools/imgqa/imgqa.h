@@ -18,15 +18,14 @@
 // 失败信息直接点名"anchor_cube_near 的某簇像素线性亮度为 0，闭式解预测 0.239"，
 // 而不是"SSIM 0.93"。
 //
-// ## 生命周期（三步，与用户商定）
+// ## 判据的可信度从哪来（一律 advisory，**没有晋升这回事**）
 //
-// 1. **现在**：工具箱 + 判据（promoted=false），我在真实排查里主动调用。
-// 2. **打磨**：每次真实调用留一条记录（qa/log/imgqa_calls.jsonl），事后回填真相。
-//    "打磨"的可检验含义 = 记录里不再出现"判据说不出理由"或"为它加了个新 flag"。
-// 3. **晋升**：判据同时满足四条才 promoted=true，进 `imgqa check --promoted`：
-//    ① 至少一个真实 bug 或真实变异上正确变红过；② 跨 ≥20 次无关改动从未误报；
-//    ③ 容差写得出**理由**（不是"0.5%"，是"float32 多项式 + 8bit 取整，实测 2 LSB"）；
-//    ④ 有反向用例。**判错的测试比没有测试更糟**——它教会未来的你把世界读成正常。
+// 每条判据必须有：① 写得出**理由**的容差（不是"0.5%"，是"float32 多项式 + 8bit 取整，
+// 实测 2 LSB"）；② 至少一条 guard 出处（钉住调试历史里的哪一次真实 bug 或真实变异）。
+// 这两条是**对全部判据**的不变量，由 `imgqa selftest` 强制，`imgqa check` 打印的就是它们。
+// 另有一份调用台账 qa/log/imgqa_calls.jsonl：哪条判据真在排查里被调用、事后看对不对，
+// 每次真实调用后 `imgqa note` 回填事后真相。**为什么这里没有晋升机制** → docs/还债总账.md
+// 债-08（一句话：晋升闸门只对 0 条生效，普适不变量对全部判据生效）。
 //
 // ## 三条硬约束（都来自踩过的坑）
 //
@@ -420,18 +419,16 @@ struct Verdict {
     std::string name;
     bool ok = false;
     std::string observed;
-    std::string whyTol;                  // 必须写**理由**（晋升条件③）
+    std::string whyTol;                  // 必须写**理由**（普适不变量，selftest 强制）
     std::vector<std::string> guards;     // 台账：钉住调试历史里的哪一条
-    bool promoted = false;
     [[nodiscard]] std::string line() const;
 };
 
 /// 判据元信息注册表（check 子命令打印用；求值函数在 commands.cpp 直接调用）。
 struct JudgmentInfo {
     const char* name;
-    const char* whyTol;
-    std::vector<std::string> guards;
-    bool promoted;
+    const char* whyTol;                  // 每条必填（>20 字符的**理由**，selftest 强制）
+    std::vector<std::string> guards;     // 每条至少一条真实 bug/变异出处（selftest 强制）
 };
 [[nodiscard]] const std::vector<JudgmentInfo>& registeredJudgments();
 
@@ -501,7 +498,7 @@ struct TemporalStat {
 /// 否则下一个会话的我（或别人）会重新发明它。拒绝比缺失更能传达判断。
 [[nodiscard]] const std::map<std::string, std::string>& antiPatterns();
 
-// ── 调用记录（"打磨"的计量单位；晋升条件①②的计数来源）──
+// ── 调用记录（判据可信度的一手数据：哪条判据真在排查里被调用、事后看对不对）──
 void logCall(const std::string& cmd, const std::vector<std::pair<std::string, std::string>>& args,
     const std::vector<Verdict>& verdicts);
 /// 回填最后一条调用的事后真相（note 子命令）。
@@ -510,7 +507,7 @@ int noteLastCall(const std::string& text);
 // ═══════════════════════════════════════════ 子命令 / 自检（main.cpp 分发）
 
 int cmdSelftest();
-int cmdCheck(bool onlyPromoted);
+int cmdCheck();
 int cmdRefuse(const std::string& name);
 int cmdAttribution(const std::string& glb, const std::string& camera);
 int cmdFaces(const std::string& glb, const std::string& piece, bool shadowPass,

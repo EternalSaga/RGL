@@ -24,37 +24,37 @@ const std::vector<JudgmentInfo>& registeredJudgments()
         {"visibility",
             "无容差：集合断言，不是数值断言。manifest 声明的 piece 集与可见集之差要么为空"
             "要么点名，没有「差不多」。",
-            {"qa_scenes.py：按预测边界定点 = 会绿 = 无效断言"}, false},
+            {"qa_scenes.py：按预测边界定点 = 会绿 = 无效断言"},},
         {"piece-drawn",
             "面积下限按「该 piece 在该机位下投影应占的像素数」逐个给，不给全局比例。"
             "0 像素 = 没画；个位像素 = 被裁到只剩边。",
-            {"近处盒子 +Z 面纯黑（先分叉「画了没着色」与「根本没画」）"}, false},
+            {"近处盒子 +Z 面纯黑（先分叉「画了没着色」与「根本没画」）"},},
         {"face-clusters-explained",
             "±2 LSB / 255 ≈ 0.0078（沿用探针实测：float64 转录 vs 着色器 float32 + 8bit "
             "取整）。簇匹配间隙 0.02，因为各面 NdotL 差远大于此。",
-            {"近处盒子 +Z 面纯黑", "闭式解探针实测零误差"}, false},
+            {"近处盒子 +Z 面纯黑", "闭式解探针实测零误差"},},
         {"switch-impact-domain",
             "域外**必须恰为 0**，不是「小于阈值」。正确的旁路是位级恒等（已有此性质："
             "lerp(1,x,0) ≡ 1.0、shadowPass=false 画面逐位不变）。既然是恒等，容差就该是"
             "0；给了容差等于放弃这条判据最锋利的部分。",
-            {"5a-7：半径恒 0 的恒等阵伪影同时骗过稳定性对拍与开关对拍"}, false},
+            {"5a-7：半径恒 0 的恒等阵伪影同时骗过稳定性对拍与开关对拍"},},
         {"dead-branch-scan",
             "无容差：恒等即恒等。「两个本该不同的量恒等 = 其中一个分支从未生效」。",
-            {"调试纪律：恒等式日志是指纹"}, false},
+            {"调试纪律：恒等式日志是指纹"},},
         {"determinism",
             "无容差：同配置重跑必须逐位相同。任何差异（未初始化内存、同步时序、顺序抖动）"
             "都会让一切「域外恰为 0」判据失去意义——它是域判据的前置，不是另一条域判据。",
-            {"AGENTS.md 测量纪律：单实例串行（并行双实例曾污染帧率测量）"}, false},
+            {"AGENTS.md 测量纪律：单实例串行（并行双实例曾污染帧率测量）"},},
         {"probe-pixel",
             "±2 LSB：ACES 多项式 float64 转录 vs 着色器 float32 + 8bit 量化取整"
             "（沿用 12.2d-c 实机对拍实测）；再大就该当失败看待，不能靠放宽阈值混过去。",
-            {"闭式解探针实测零误差（批 12.2d-c，analytic_ref.py 时代）"}, false},
+            {"闭式解探针实测零误差（批 12.2d-c，analytic_ref.py 时代）"},},
         {"shadow-swim",
             "0 位移 + 失配 ≤ max(20, 共同格/200)：静态几何 + 静态太阳 ⟹ 影场是世界不变量，"
             "任何机位依赖都是 bug（5a-7 三件套的端到端复验）。2cm 格分辨率对用户报的"
             "「井盖影时有时无」绰绰有余；亚格漂移本就不可见。平移搜索只认覆盖率 ≥80% 的候选"
             "（防止把「两边各遮一半」的垃圾平移当最优解）。",
-            {"5a-7 平移游动 / 5a-8b 旋转游动（当年判据是人工三图对拍，本条机器化）"}, false},
+            {"5a-7 平移游动 / 5a-8b 旋转游动（当年判据是人工三图对拍，本条机器化）"},},
         {"temporal-flicker-anchor",
             "变化像素占比下限 0.5%：激励 = jitter（±0.5px/帧，Halton 周期 16），靶的亚像素"
             "边缘按闭式投影约占靶面 11%（画板边界 2×(869+248) + 12 杆竖边 + 6 环 + 16 放射"
@@ -62,7 +62,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
             "1%。下限 0.5% 只吸收「靶根本没画 / 投出屏 / id 面为空」这类归零失效；均值同时"
             "必须 > 0。⚠ 本条量的是 S1（feedback=1 ⇒ 输出 = 本帧，只抖不滤），不是「TAA "
             "关」——理由见 temporal.cpp 头注释「为什么激励是静止机位 + jitter」。",
-            {"docs/taa_plan.md §6 阳性锚点（缺它 = 「0 差异」的两种解释堵不住）"}, false},
+            {"docs/taa_plan.md §6 阳性锚点（缺它 = 「0 差异」的两种解释堵不住）"},},
         {"temporal-aa-presence",
             "两条互为阴阳，缺一条就是假绿：① **TAA 关时中间调须恰为 0**（不是「接近 0」）——"
             "无 MSAA 的光栅化是二值覆盖，实测全图只有 3 个亮度级（背景 clear / 白板 / 黑件），"
@@ -72,7 +72,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
             "写死绝对带会把整块白板算成中间调、83% 恒饱和——真实踩过的假判据，见 selftest）。"
             "⚠ 本条量的是**空间**抗锯齿在场，不是时域抑制比——后者不能用屏幕空间逐帧差量，"
             "见 `screen-space-l1-frame-diff`。",
-            {"docs/taa_plan.md §6（2026-10-03 执行时由逐帧差判据改立）"}, false},
+            {"docs/taa_plan.md §6（2026-10-03 执行时由逐帧差判据改立）"},},
         {"temporal-suppression-sqrtN",
             "16 相位抖动 = 对同一视点的 16 个独立采样相位求平均 ⟹ 逐样本估计噪声按 **√N = 4.00**"
             " 下降（闭式，不依赖实现）。下限取 **3.0×**（= √N 的 75%）只吸收两件事：邻域裁剪会把"
@@ -84,7 +84,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
             "后两者互抵（实测 3.99× × 1/2.88 = 1.38×），对模糊守恒 ⟹ 量不出抑制。闭式预测从来"
             "是对的，**是它的适用域（逐样本幅度）被错配到了总量上**。修好历史销毁 bug 后两者同时"
             "对上，反模式条目保持有效。",
-            {"docs/taa_plan.md §6 第 5 条 + §7 第 12 条（2026-10-03 换观测空间后重立）"}, false},
+            {"docs/taa_plan.md §6 第 5 条 + §7 第 12 条（2026-10-03 换观测空间后重立）"},},
         {"temporal-swim-anchor",
             "**免费标定，无阈值**：lag = 一个完整抖动周期（16）时，Halton 预测位移恰为 0 ⟹\n"
             "同相位两帧必须**逐字节相同**。这一条不给「按 Halton 预测做判据」留任何讨价空间：\n"
@@ -92,7 +92,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
             "连续帧 / 抖动公式与本工具重抄的不一致），此时本命令所有按预测算的数**全部作废**。\n"
             "首轮实测：T1、T2 的 lag-16 差都恰为 0.000/255。",
             {"phase13 §1.6 末「震的当前解释（未定案）」；前两版量具（自由拟合 / 搬未抖基图）"
-             "的作废理由原地可读 = temporal.cpp 头注释"}, false},
+             "的作废理由原地可读 = temporal.cpp 头注释"},},
         {"temporal-identity",
             "**恒等式，容差 = 舍入级（均值 ≤0.05/255 且逐像素 max ≤4/255 且 dev≥2 像素占比"
             " ≤0.01%；当 dev≥2 像素数 ≥1000 时另须「残差 ≥80% 落在边缘上」）**。"
@@ -125,7 +125,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
             "因为 js=0 稳态与裁剪算子无关（收敛点由「历史怎么被夹」决定，不由「历史怎么被裁」决定）。",
            {"docs/taa_plan.md §7 第 12 条（历史销毁那次的恒等式检查）",
             "docs/phase13_plan.md §1.8（CR 核奇偶性 bug 全案）",
-            "rgl/shaders/taa.frag.slang `clampHdr` 头注释（2026-10-04：saturate 顶平 HDR ⟹ 亮部压暗 18.5 LSB 全案）"}, false},
+            "rgl/shaders/taa.frag.slang `clampHdr` 头注释（2026-10-04：saturate 顶平 HDR ⟹ 亮部压暗 18.5 LSB 全案）"},},
         {"temporal-fitter-anchor",
             "**阳性锚点 + 反向用例（拟合器自己的刻度）**。把零抖动参考 R 按**已知**位移 "
             "(3.25, −2.125) 用 `warpAffine` 做成一张假抖动帧，再让 `freeShift`（相位相关）去量"
@@ -144,7 +144,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
             "±2.25px 却报成 ±9px，打印出『拟合位移 7.9px、拟合后残差反而比不拟合更大』这种自相"
             "矛盾的数，而当时**没有任何一条判据拦它**——差一点就据此得出『抖动不产生平移』的错误"
             "结论。`resid ≤ zero` 是拟合器按构造必须成立的性质，它一破就说明拟合器坏了。",
-           {"本命令 `freeShift` 头注释；skill rgl-test-discipline（辅助函数也要独立判据）"}, false},
+           {"本命令 `freeShift` 头注释；skill rgl-test-discipline（辅助函数也要独立判据）"},},
         {"temporal-jitter-transfer",
             "**绝对口径**（本命令里唯一不靠「帧对帧差分」的判据），跑在 `feedback=1` + "
             "`jitter_scale=8` 组，参考 = T0（TAA 关，逐帧差恰为 0 ⟹ 第一帧就是零抖动参考 R）。"
@@ -169,7 +169,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
             "36.7%（场景档差，见上）④ 额外符号 (+1,+1)、φ 每次启动常数（3/11/15 实测）。\n"
             "⚠ 搜索空间少一维，结论就会反过来：第一版只试「两轴同一符号」，永远匹配不上，于是"
             "把口径错配误读成『画面搬了但不按 Halton 搬』。",
-           {"docs/phase13_plan.md §1.8/§1.9", "docs/调试历史.md 2026-10-03"}, false},
+           {"docs/phase13_plan.md §1.8/§1.9", "docs/调试历史.md 2026-10-03"},},
         {"temporal-swim-pixels",
             "**单位 = 像素**，直接对应肉眼，不需要观测域/阈值换算：量「现行工作点（fb=.12、"
             "js=1）相邻两帧输出之间的整幅位移」（相位相关逐帧量出绝对位移后取相邻差）。闭式期望"
@@ -183,7 +183,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
             "fb=1 游动 0.674px / 1.058px，闭式期望 0.667px。\n"
             "⚠ 为什么不用「逐帧差均值（0..255）」当游动量：那是观测域的量，边缘覆盖翻转会把它"
             "放大/缩小，说不清「几像素」。像素就是像素。",
-           {"docs/phase13_plan.md §1.9", "docs/调试历史.md 2026-10-03"}, false},
+           {"docs/phase13_plan.md §1.9", "docs/调试历史.md 2026-10-03"},},
         {"temporal-base-space",
             "三条同时成立（批 13.2，门 `taa.base_space`）：① 门开态（T5 = T2 + 门）相邻帧整幅"
             "位移 ≤ **0.35×** 闭式抖动差；② 门关态（T2）游动仍 ≥ 0.75× 闭式 —— **阳性锚点**，"
@@ -197,7 +197,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
             "抖动空间」这个机制事实（门改了它就该红，那是回归），前者钉「门开态把它搬回了基"
             "网格」。两条在同一次运行里同时绿，才说明门是**开关**而不是**默认值漂移**。",
             {"docs/phase13_plan.md 批 13.2", "docs/调试历史.md 2026-10-04（游动 = 机制不是 bug）"},
-            false},
+        },
         {"temporal-jitter-phase",
             "**量具自检（差分口径的相位标定）**：采集下标与引擎抖动序号之间差一个未知常数相位"
             "（引擎 `frameIndex` 自己起算 + 序号再 `+1`），而 `lag = 16 同相位差恰为 0` 那条免费"
@@ -207,7 +207,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
             "这个差分算子根本没有足够的信息量同时定出相位——**浅谷本身就是结论**：该口径不足以"
             "检验游动假设，必须换成绝对口径（见 `temporal-jitter-transfer`）。保留本条是为了让"
             "下一个人不再把浅谷 argmin 当成测量结果。",
-           {"本命令头注释「两版废掉的量具」；`rgl/taa_jitter.cppm`（序号 = frameIndex%16 + 1）"}, false},
+           {"本命令头注释「两版废掉的量具」；`rgl/taa_jitter.cppm`（序号 = frameIndex%16 + 1）"},},
         {"temporal-jitter-calibration",
             "**量具自检（λ 一维扫描）**，跑在 `feedback=1` + `jitter_scale=8` 组上。着色器尾部是 "
             "`lerp(clipped, cur, params.x)`，**fb 是本帧权重**（Filament 序）⟹ fb=1 时输出 = 本帧"
@@ -220,7 +220,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
             "极小值很浅，两个自由度无标定 ⟹ 拟合位移逐帧乱跳（实测对预测 RMS 0.33px）。这里方向"
             "已知、只剩一个标量，且 `λ=0` 那一档就是「不搬」的原始逐帧差 ⟹ 天然自带归一化分母。\n"
             "⚠ 本条红 ⟹ 本命令所有「按预测位移搬」的读数（含 `temporal-swim-*`）**全部作废**。",
-           {"本命令头注释「两版废掉的量具」；`rgl/taa_jitter.cppm`（Halton(2,3) 周期 16）"}, false},
+           {"本命令头注释「两版废掉的量具」；`rgl/taa_jitter.cppm`（Halton(2,3) 周期 16）"},},
         {"temporal-swim-discriminative",
             "**只在 ±4px 大抖动档（`jitter_scale=8` + `feedback=1`）判**。两条同时成立：\n"
             "① 搬对相位的残差 ≤50%：fb=1 时输出 = 本帧光栅，该组按构造 = 基图整体平移 8·jitter_t，"
@@ -236,7 +236,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
             "⚠ 本条与 `temporal-swim-anchor` / `temporal-identity` / `temporal-jitter-calibration` "
             "一样是**量具自检**。",
            {"docs/taa_plan.md §7 第 12 条末（box9 消融对竖直杆零区分力）；本命令头注释"
-            "「两版废掉的量具」"}, false},
+            "「两版废掉的量具」"},},
         {"aa-coverage-fidelity",
             "两条同时成立才绿，各堵一种假绿。**判据域 = 投影宽度 ≥2 列的杆**：① **TAA 开：域内"
             "最大逐杆黑度积分误差 ≤ 0.35 列**（闭式期望 = 投影宽度，白件 unlit 线性 1、黑件 0，"
@@ -252,7 +252,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
             "`imgqa probe` 已拿真机 ±2 LSB 对拍验证），不新引入第二条曲线。\n"
             "⚠ 本判据是**单帧**判据，与采集时序无关——这是它取代屏幕空间逐帧差的根本理由"
             "（后者对模糊守恒，见 `screen-space-l1-frame-diff`）。",
-            {"docs/taa_plan.md §7 第 10 条（逐杆覆盖率对拍闭式）"}, false},
+            {"docs/taa_plan.md §7 第 10 条（逐杆覆盖率对拍闭式）"},},
         {"temporal-residual-phase-fold",
             "折叠口径的**前提检查**，不是质量判据，所以容差必须是**两项之和**：① 热身结束时"
             "历史离收敛的残差 `(1−α)^warm × 满幅`；② 量化项 = mask 内**最亮**电平处翻一格的最大"
@@ -269,7 +269,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
             "容差里的①会随热身不足自动放大（那是设计——①本来就是瞬态的上界），热身由 `warm = "
             "⌈6/α⌉` 公式保证并在表头打印，不由本条保证。",
             {"tools/imgqa/temporal_residual.cpp 常量表实测表（2026-10-05 首轮）+ 两条变异记录；"
-             "docs/phase13_plan.md 批 13.1"}, false},
+             "docs/phase13_plan.md 批 13.1"},},
         {"temporal-residual-anchor",
             "阳性锚点 = 「只抖不滤」（fb=1，输出 = 本帧光栅 = 闪烁本体）必须摆得起来。两条子判据"
             "同时成立：meanSwing ≥ **1×τ**、frac(swing>τ) ≥ 1%。实测 meanSwing 门关 0.021982 = "
@@ -284,7 +284,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
             "（丢掉 objectID，背景稀释掉 73% 面积）→ 本条以 0.0059 < 0.0067 红，而 ②④⑦ 三条"
             "**相对**口径全绿。",
             {"tools/imgqa/temporal_residual.cpp 变异记录 M7 / M11（2026-10-05）；"
-             "docs/phase13_plan.md 批 13.1 阳性锚点"}, false},
+             "docs/phase13_plan.md 批 13.1 阳性锚点"},},
         {"temporal-residual-jitter-off",
             "**无容差**（判**恰为 0**，不是接近 0）。`jitter_scale = 0` 掐掉的是唯一激励源：静止机位 "
             "+ 零抖动 ⟹ 每帧是同一张图 ⟹ swing 按构造恒等于 0。任何非零都与「抖动」无关，是量具或"
@@ -296,7 +296,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
             "⚠ 变异验过：反向组 `jitter_scale` 0→1 → 本条以 meanSwing 0.0226 ≠ 0 红（其余判据全绿，"
             "说明本条是这条激励源的唯一守卫）。",
             {"tools/imgqa/temporal_residual.cpp 变异记录 M8（2026-10-05）；"
-             "docs/phase13_plan.md 批 13.1 反向用例；本仓「guard/早退分支配反向用例」纪律"}, false},
+             "docs/phase13_plan.md 批 13.1 反向用例；本仓「guard/早退分支配反向用例」纪律"},},
         {"temporal-residual-magnitude",
             "⚠ **本条不是可见性阈值，也不是「越小越好」的质量线**——它是「现行工作点上信号还在场」"
             "的锚，所以写成**带**（下限红 = 信号消失向，上限红 = 回归向，两种红的处置完全不同，打印里"
@@ -317,7 +317,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
             "②④⑦ 三条相对口径全绿——下限不是装饰；反过来把 fb 从 0.12 推到 0.002（真的变好）本条"
             "**不红**（0.0158 仍在带内），这也是刻意的：本条不判好坏，只判「信号还在不在」。",
             {"tools/imgqa/temporal_residual.cpp 常量表实测表 + 变异记录 M9 / M11（2026-10-05）；"
-             "docs/phase13_plan.md §1.9 / 批 13.5"}, false},
+             "docs/phase13_plan.md §1.9 / 批 13.5"},},
         {"temporal-residual-monotone",
             "分辨力轴：α 从 0.12 推到 0.002（等效累积窗 16 → 500 帧，≫ 抖动周期 16）残差必须显著"
             "下降。上限 **0.90**（= 只许「不许变差」+10% 余量），实测门关 R4/R2 = 0.698、门开 0.049。"
@@ -332,7 +332,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
             "⚠ 变异验过：把 R2 的工作点也搬到 fb=0.002（与 R4 同档）→ 比值 1.001 > 0.90，本条红"
             "（而 ⑤ 仍绿——「工作点变好了」不是本条管的，「量具有没有力气」才是）。",
             {"tools/imgqa/temporal_residual.cpp 变异记录 M9（2026-10-05）；"
-             "docs/phase13_plan.md §1.9（累积压不掉游动）"}, false},
+             "docs/phase13_plan.md §1.9（累积压不掉游动）"},},
         {"temporal-residual-convergence",
             "带 [0.85, 1.02]，实测门关 0.8925 / 门开 0.9683。分子分母**同一个算子**（都是相位平均图"
             "的 Sobel 梯度能量，同 mask），差别只在累积窗——参考必须与被测项同坐标系（本仓烧过多次）。\n"
@@ -354,7 +354,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
             "**全绿**——本条就是红线 1 的守卫，域选错不会静默给出一个看起来正常的数；把 R2 搬到长窗 "
             "fb=0.002 → 0.668 红。",
             {"tools/imgqa/temporal_residual.cpp 变异记录 M3 / M9（2026-10-05）；"
-             "docs/phase13_plan.md §1.5（理想 N 相位平均参考的定义与 bistro 0.671）+ 批 13.5 糊度线"}, false},
+             "docs/phase13_plan.md §1.5（理想 N 相位平均参考的定义与 bistro 0.671）+ 批 13.5 糊度线"},},
         {"temporal-residual-boost-fidelity",
             "**闭式锚定**的主判据：`ρ = meanSwing(门开)/meanSwing(门关) ≤ 1.5 × ρ*`，其中 "
             "`ρ* = |H(α_floor)|/|H(α_fb)|`、`|H(α,k)| = α/|1−(1−α)e^{−j2πk/16}|` 是 EMA 对 16 "
@@ -387,7 +387,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
             "可见性以下（它交付档 `frac>64LSB` 恒 0），不是这条**比值**判据看不见。",
             {"tools/imgqa/temporal_residual.h「历史拒收 × 残余」段（判决线跑前写死）；"
              "qa/log/imgqa_calls.jsonl 2026-10-06 brickfence 首轮；docs/调试历史.md 2026-10-06"},
-            false},
+        },
         {"temporal-motion-excitation",
             "无容差方向 = 只许「非零」：帧驱动运动（camera 模式 = camera.lua `frame_yaw`；"
             "spin 模式 = scene.lua `spin_frame_angle`）是**纯函数**，门开则连拍相邻帧必然"
@@ -398,7 +398,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
             "相邻帧不同，「>0」恒真 = 没有信息。反向不成立：非零不等于「运动速度对」，速度由 "
             "`--angle` 回显 + 对齐余量自证（速度太慢 ⟹ 对齐 argmin 分不出相邻帧 ⟹ "
             "`temporal-motion-alignment` 红）。",
-            {"tools/imgqa/temporal_motion.cpp 头注释「运动激励在场性」；lua 未知键静默"}, false},
+            {"tools/imgqa/temporal_motion.cpp 头注释「运动激励在场性」；lua 未知键静默"},},
         {"temporal-motion-alignment",
             "候选图与超采样参考在**两个引擎进程**里渲染，帧号绝对偏移未知 ⟹ 按全帧线性 L1 "
             "argmin 对齐。两条护栏（都是「对齐本身还有效吗」，不是质量判据）：\n"
@@ -409,7 +409,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
             "而逐帧 argmin 自己发现不了（它只认「哪张参考最像」）。两半中位数不等 = burst 不连续。\n"
             "⚠ 静止组（M4/REFs）不跑本判据：机位不动 ⟹ 所有参考帧逐位相同 ⟹ argmin 恒平坦，"
             "判它 = 判一个没有信息的量。",
-            {"tools/imgqa/temporal_motion.cpp 头注释「跨进程帧对齐」"}, false},
+            {"tools/imgqa/temporal_motion.cpp 头注释「跨进程帧对齐」"},},
         {"temporal-motion-ablation",
             "**量具敏感性阳性锚点**：M3 = M1 只关重投影——camera 模式关的是 `reprojection`"
             "（prevViewProj 相机重投影**本身**，历史按同基位置采样）；spin 模式关的是 "
@@ -425,7 +425,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
             "坏掉时读数必须怎么动」，它挂零 = 整张表作废（rc=2），不用它下画质结论。\n"
             "⚠ 本条**不**判 M1 好坏（那由比值 + 梯度比出数后人工下判决），只判量具有没有坏。",
             {"tools/imgqa/temporal_motion.cpp 头注释「三条守卫」与「M3 按运动源选门」；"
-             "docs/taa_plan.md §7 第 11 条（消融=免费恒等式）"}, false},
+             "docs/taa_plan.md §7 第 11 条（消融=免费恒等式）"},},
         {"temporal-tail-pairing",
             "**零锚点 = 整条尾长仪器的地基**（债-63 的出口判据；`temporal-motion` 那两条对齐护栏"
             "正是常红处，本命令的设计目标就是**不出现图像配准**）。\n"
@@ -438,7 +438,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
             "⚠ 跨进程渲染确定性不是逐位（bistro 上 `G0 确定性地板` 已知常红，1 LSB / 个位数像素，"
             "债-61）；它给 frac 加的是加性噪声，分子分母都是跨十万像素的均值 ⟹ 1e-3 量级，被 0.02 吸收。",
             {"tools/imgqa/temporal_motion.cpp `temporal-tail` 头注释「判决线（跑前写死）」第 1 条；"
-             "docs/还债总账.md 债-63"}, false},
+             "docs/还债总账.md 债-63"},},
         {"temporal-tail-events",
             "**在场性 + 反向**（两条对偶，堵「0 事件」的两种解释）。\n"
             "· 正向：spin 组的「刚让开」事件数 ≥ **2000**。事件太少 ⟹ frac 是少数像素的噪声，"
@@ -448,7 +448,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
             "  为什么反向要单独跑：正向绿只说明「画面在动」，不说明「检测器检测的是让开而不是噪声」。"
             "静止内容上点火 = 检测器量的就是渲染噪声地板，此时所有臂的 frac 都非零且互相接近，"
             "**看起来完全正常**——这是本判据最阴的假绿形态。",
-            {"tools/imgqa/temporal_motion.cpp `temporal-tail` 头注释「判决线」第 2 条"}, false},
+            {"tools/imgqa/temporal_motion.cpp `temporal-tail` 头注释「判决线」第 2 条"},},
         {"temporal-tail-box-load",
             "**阳性锚点，且是想要的那种红**：同 boost 下 **关盒（臂 1）的 frac 必须 > 臂 0**。\n"
             "不成立 ⟹ 邻域盒在鬼影上**没承重** ⟹ 整个臂族「为压鬼影而牺牲静止闪烁」的前提被推翻，"
@@ -457,14 +457,14 @@ const std::vector<JudgmentInfo>& registeredJudgments()
             "⚠ 与 `temporal-motion-ablation` 的区别：那条审的是「重投影链路坏没坏」，本条审的是"
             "「被测机制到底承不承重」。两者都是量具守卫，都不判画质好坏。",
             {"tools/imgqa/temporal_motion.cpp `temporal-tail` 头注释「判决线」第 3 条；"
-             "docs/还债总账.md 债-62/债-63"}, false},
+             "docs/还债总账.md 债-62/债-63"},},
         {"temporal-tail-monotone",
             "**分辨力轴**：关盒态下把本帧权重从 α=0.12 推到 boost α=0.01（**唯一变量 = 窗长**），"
             "frac 必须**上升**。闭式：关盒时 `out = α·N + (1−α)·S` ⟹ frac = 1 − α ⟹ 0.88 → **0.99**。\n"
             "不升 ⟹ frac 量的不是历史长度（可能是掩码把每个臂都稀释成同一个数），此时四条全绿"
             "也**不许**报「臂 X 比臂 Y 鬼影小」——那是在噪声上盖结论。\n"
             "⚠ 本条不判 TAA 好不好（长窗本来就该鬼影更重），只判本量具有没有力气。",
-            {"tools/imgqa/temporal_motion.cpp `temporal-tail` 头注释「判决线」第 4 条"}, false},
+            {"tools/imgqa/temporal_motion.cpp `temporal-tail` 头注释「判决线」第 4 条"},},
         {"temporal-feedback-param-live",
             "**参数扫描的存在性守卫**（不是质量判据）：三条同时成立——\n"
             "① 每组**引擎自己回显**的 feedback（`GET /state` → 滑杆 value）== 请求值"
@@ -477,7 +477,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
             "为什么必须有这条：参数没传进去时曲线是**平的**，而平曲线恰好会被读成「该参数"
             "无效」这个结论——**失效与结论同症状**，是参数扫描最贵的一类假结论。",
             {"tools/imgqa/temporal_motion.cpp 头注释「红线 6」；Engine::paramValue 注释"
-             "（写进 lua ≠ 引擎用了它）"}, false},
+             "（写进 lua ≠ 引擎用了它）"},},
         {"temporal-feedback-zero-state",
             "**跨进程可比性锚点**：F1.0js0 = fb=1（`lerp(clipped, cur, 1) = cur` ⟹ 零累积）"
             "+ jitter_scale=0（投影不抖）⟹ 按构造只剩「taa pass 在图里」这一件事与 M0 不同"
@@ -485,7 +485,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
             "百分点量级（M1/M0 与 1 差 0.138），若连「零抖动 + 零累积」都能偏离地板 5% 以上，"
             "说明**跨进程本身**就有这个量级的系统差，整张表的比值都不再是被测项之差。\n"
             "⚠ 它不是「TAA 免费」的证明（AO 挪位、附件精度都可能进这里），只判「可比性」。",
-            {"tools/imgqa/temporal_motion.cpp 头注释「为什么 fb=1 那一格不许跳过」"}, false},
+            {"tools/imgqa/temporal_motion.cpp 头注释「为什么 fb=1 那一格不许跳过」"},},
         {"temporal-feedback-tieback",
             "**仪器同一性判据**：fb 曲线里的 fb=.12 档（同 warm=16、同视点、同配置 = 已发表 M1 "
             "的重跑）其 dev/dev(TAA 关) 必须 ≈ 已发表的 R = 1.138。容差 ±0.05 的出处 = 两轮跨进程"
@@ -494,7 +494,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
             "为什么值得占一条判据：本命令**没有**重跑那张 A/B 表，两条结论靠同一个比值口径并读；"
             "若它已不是同一台仪器，并读就是拿两把不同刻度的尺子做减法。漂了 ⟹ 要么引擎变了、"
             "要么采集口径变了，先查清再读曲线。",
-            {"tools/imgqa/temporal_motion.cpp 本命令「热身：两条约束不可同时满足」注释"}, false},
+            {"tools/imgqa/temporal_motion.cpp 本命令「热身：两条约束不可同时满足」注释"},},
         {"temporal-flicker-closed-form",
             "**闭式解给两端，不给容差**：理想 AA（覆盖线性斜坡）的每帧变化 ρ_ideal = "
             "max_c|chain(c+v) − chain(c)|，完全无 AA（阶梯）的 ρ_noAA = chain(1) − chain(0)，"
@@ -509,7 +509,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
             "⚠ 高频带能量比（Hann + 半谱，f_hi = 扫速）**已被本条自己的闭式对照否决**：混叠是"
             "零阶保持、把锯齿变成方波，方波高频不比锯齿大，且换 τ = 换占空比，理想 [0.15,0.60] "
             "与无 AA [0.00,0.86] 完全重叠。FFT 只作诊断打印。",
-            {"tools/imgqa/temporal_flicker.h/.cpp（含被否决判据的实测数据）"}, false},
+            {"tools/imgqa/temporal_flicker.h/.cpp（含被否决判据的实测数据）"},},
         {"temporal-homography-explained",
             "**零参考图、零对齐搜索**：相机做**原地**绕 up 轴 yaw ⟹ 像面映射是纯旋转单应，"
             "与深度无关、对整幅画面精确，由 tan(Δψ) + 焦距 + 主点闭式给出。残差 = 上一帧按"
@@ -521,7 +521,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
             "=  warp 反号等于什么都没解释）。符号是 2 选 1 的闭式对照，不是亚像素搜索。\n"
             "分位取 p99.9 不取 p99.5：1px 边缘只占全帧 0.16% 像素，p99.5 会把它整条抹平"
             "（实测 p99.5 的原始帧差读成 0.0000）。",
-            {"tools/imgqa/temporal_homography.h/.cpp（单应推导在头注释）"}, false},
+            {"tools/imgqa/temporal_homography.h/.cpp（单应推导在头注释）"},},
         {"izb-consume-domain",            "变暗阈 = 三通道和差 >30：rig 调色板 albedo（≥0.5）× 方向光 12 → 影差远大于 30"
             "（ladder 首跑实测：变暗 4705/域外 0/未消费 0）；域容差 = dilate(mask,2px)：mask "
             "与截图同帧同源，2px 只吸收保守光栅的过估边（mask 侧只会多遮不会少遮，方向安全）。"
@@ -529,7 +529,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
             "⊆ 变暗域（有遮必消费）。⚠️ 边界：本判据 mask↔画面**同源**，生产者侧几何错（ndc "
             "镜像类）会同步污染 mask 与画面 → 本判据不可见，那半边由 test_izb_engine_contract"
             "（A1 闭式）钉；mask vs manifest 预测影包络（生产者端到端）= 已识别扩展，未做。",
-            {"2026-10-02 消费端字节偏移 ÷4 bug（门开无影）→ 锚点+消费两红——本判据设计原型即那次手工对拍"}, false},
+            {"2026-10-02 消费端字节偏移 ÷4 bug（门开无影）→ 锚点+消费两红——本判据设计原型即那次手工对拍"},},
         {"ao-noise",
             "**主判据的容差来自恒等式，不是相似度**：AGENTS.md 登记的契约「开阔地面 AO 恒 "
             "1.000」在 AO 附件（r8_unorm 可见度）上就是字节 255；`ao.frag.slang:118` 的 "
@@ -563,7 +563,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
             {"AGENTS.md 已知问题：开阔地面 AO 恒 1.000（契约，非 bug）",
                 "docs/phase11_plan.md:351（拿无闭式的量当主判据的反例）",
                 "rgl/shaders/ao.frag.slang:118（strength≤0 位级早退）/ :134（hash12 只吃 "
-                "SV_Position ⟹ 噪声屏幕锚定）"}, false},
+                "SV_Position ⟹ 噪声屏幕锚定）"},},
         {"ao-noise-temporal",
             "**本条记录的是「量具有分辨力」，不是 AO 的时域结论**（初版在这里写错了前提，实测推翻）："
             "原以为「TAA 开 + 静止机位 + AO off 时契约区逐帧差恰为 0」（纯色平面 + 无边缘 ⟹ jitter "
@@ -578,7 +578,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
             "走（组 3，幅度 RMS 与集合 Jaccard 两个独立算子一致）⟹ 噪声表现为「爬行」而非「闪烁」。"
             "两条都有零锚点，因此不需要任何比值。",
             {"skill rgl-verify：凡被测项本身是时域的，必须 /shotburst 连拍测相邻帧差",
-                "反模式 screen-space-l1-frame-diff（分母非零的逐帧差比值）"}, false},
+                "反模式 screen-space-l1-frame-diff（分母非零的逐帧差比值）"},},
     };
     return kAll;
 }
@@ -596,7 +596,7 @@ const JudgmentInfo& info(const char* name)
 Verdict verdictFor(const char* name, bool ok, std::string observed)
 {
     const auto& j = info(name);
-    return Verdict{name, ok, std::move(observed), j.whyTol, j.guards, j.promoted};
+    return Verdict{name, ok, std::move(observed), j.whyTol, j.guards};
 }
 
 namespace {
@@ -812,7 +812,7 @@ const std::map<std::string, std::string>& antiPatterns()
     return kAnti;
 }
 
-// ── 调用记录（晋升条件①②的计数来源；**没有记录，「打磨」就只是随手加 flag**）──
+// ── 调用记录（判据可信度的一手数据；**没有记录，「打磨」就只是随手加 flag**）──
 
 static fs::path callLogPath()
 {

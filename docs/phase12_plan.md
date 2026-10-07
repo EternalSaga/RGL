@@ -30,7 +30,7 @@
 | D2（半）| **`switch` / `dead-branch-scan` 判据零实战**：~~从未真跑过~~ **12.3b 已实战 shadow_pass on/off 两轮**（determinism / impact-domain / dead-branch 三项全绿 + 域外归因，台账已回填）；② `ao.strength` 0↔0.5 轮 + AO 域 K 定标并入 12.3c | 库存（剩 AO 轮） | 12.3c |
 | D3 | **字节级锚点 = 押本机 RADV**：imgqa selftest 锚点（(113,56,249) 等）来自本机 RADV 实测；NVIDIA/Intel 的 float32 着色链（FMA 收缩、取整）与 RADV 无位级契约 → 换机 selftest 必红，且会被误读成"转录坏了"。**用户核心场景就是三机测试，这是唯一结构性问题** | 结构性 | 12.4 |
 | D4 | **机位撑不起逐面判据**：near_anchor 可见 9/9，但 far_cube 420 px / distant_marker 36 px——面级聚类需要单面 ~10⁴ px；`switch --allow-piece` 的影响域同样要求 piece 够大 | 判据精度 | 12.3c 前置 |
-| D5 | **变异测试未做**：晋升四条件（→ imgqa.h 头注释）要求"真实 bug / 变异上变红过"，五条判据一条变异证据都没有 → 全卡 advisory。单测纪律"测试通过≠测试有效"对判据同样成立 | 判据有效性 | 12.3c |
+| D5 | **变异测试未做**：判据要求"真实 bug / 变异上变红过"（现行载体 = 每条判据的 guard 出处 + `imgqa selftest` 普适不变量；原「晋升四条件」机制 **2026-10-07 降级删除** → 债-08），五条判据一条变异证据都没有 → 全卡 advisory。单测纪律"测试通过≠测试有效"对判据同样成立 | 判据有效性 | 12.3c |
 | D6 | **qa_scenes.py 1251 行（含 GlbBuilder）待重写**：用户已拍板"确实需要重写"，方向 = 引擎/工具侧 C++ 直接产生顶点·index·颜色，glb 仅作容器保留（引擎 loader 吃 glb 不变） | 工具形态 | 12.5 |
 | D7 | **qa/ 层定位悬空**：AGENTS.md 表里"进程级集成层……量化 harness 未落地"已过时——imgqa 就是那个 harness（RPC 驱动 + OpenCV 量化 + 台账）。该裁掉这行悬空定位而不是"再建一个" | 账目 | 12.6 |
 | D8 | **Windows 侧 imgqa 未验证**：opencv4 在 Windows vcpkg 从未编译过（此前全项目无人链接）；首编时长可能不可接受 → 需要 cmake 开关或 vcpkg feature 兜底 | 跨机 | 12.4 |

@@ -554,26 +554,18 @@ int cmdProbe(const std::string& configDir, int x, int y, Vec3 albedo, double rou
     return v.ok ? 0 : 1;
 }
 
-int cmdCheck(bool onlyPromoted)
+int cmdCheck()
 {
-    std::printf("判据注册表（共 %zu 条）：\n\n", registeredJudgments().size());
+    // 判据一律 advisory：这里打印的两样（容差理由 + guard 出处）**就是**它的可信度凭据，
+    // 每条都有、由 imgqa selftest 强制（晋升机制已删，理由 → docs/还债总账.md 债-08）。
+    std::printf("判据注册表（共 %zu 条，一律 advisory）：\n\n", registeredJudgments().size());
     for (const auto& j : registeredJudgments()) {
-        std::printf("  [%s] %s\n", j.promoted ? "PROMOTED" : "advisory", j.name);
+        std::printf("  %s\n", j.name);
         std::printf("             容差理由：%s\n", j.whyTol);
         for (const auto& g : j.guards)
             std::printf("             钉住：%s\n", g.c_str());
     }
-    int nPromoted = 0;
-    for (const auto& j : registeredJudgments())
-        nPromoted += j.promoted;
-    std::printf("\n");
-    if (onlyPromoted && nPromoted == 0) {
-        std::printf("晋升集为空。**这是诚实的状态**：还没有判据满足四条晋升条件"
-                    "（真实 bug/变异上变红过、跨 ≥20 次无关改动不误报、容差有理由、有反向用例）。\n"
-                    "晋升不是宣布，是攒出来的——攒的凭据在 qa/log/imgqa_calls.jsonl。\n");
-        return 0;
-    }
-    std::printf("（本命令只列注册表与晋升状态；实际求值需要引擎，见 attribution / faces / switch）\n");
+    std::printf("\n（本命令只列注册表；实际求值需要引擎，见 attribution / faces / switch）\n");
     return 0;
 }
 
@@ -717,7 +709,7 @@ int dispatch(const std::string& cmd, const Args& P)
     if (cmd == "selftest")
         return cmdSelftest();
     if (cmd == "check")
-        return cmdCheck(P.has("--promoted"));
+        return cmdCheck();
     if (cmd == "refuse") {
         const auto pos = P.positional();
         return cmdRefuse(pos.empty() ? "" : pos[0]);

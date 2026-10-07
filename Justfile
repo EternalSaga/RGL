@@ -142,7 +142,7 @@ analytic:
     {{ BUILD }}/tools/imgqa/imgqa probe
 
 # imgqa —— 区域归因的图像判据工具箱（C++ + vcpkg；判据的区域来自几何：objectID 反解
-# 可见 piece / 闭式解逐面预测 vs 观测亮度簇 / 开关影响域；promoted 晋升线见 check）。
+# 可见 piece / 闭式解逐面预测 vs 观测亮度簇 / 开关影响域；每条判据的容差理由与 guard 出处见 check）。
 # 例：just imgqa selftest | just imgqa attribution --camera near_anchor | just imgqa faces --piece anchor_cube_near
 imgqa *ARGS="":
     @cmake --build {{ BUILD }} --target imgqa
