@@ -840,5 +840,56 @@ float4 main(TaaInput input) : SV_Target
         clippedR = lerp(histR, hardR, w);
         alpha = mem;  // 载体同臂 6–10
     }
+    else if (clipMode == 13 && diag < 0.5)
+    {
+        // 13 = **臂 11 + 把 α 也接到 gate 上**（批 13.15b；债-69 的修法）。
+        // 臂 11 只把 gate 用在**接受域**上（`mem` 的豁免），而平移阶跃仪器首次量到它在去遮挡处
+        // 比现行默认盒**更鬼 23%**（`AUC 1.073/0.870 = 1.234`，→ `phase13_plan.md` §1.21）。
+        // 机制：瞬切后机位**又静止** ⟹ `motion` 恰为 0 ⟹ `gate = 1` ⟹ `mem` 是被撑大的记忆
+        // ⟹ 盒比臂 0 的瞬时盒更宽 ⟹ 夹得更松。**臂 11 只加了记忆，遗忘那条线一直没人接。**
+        // 本臂把同一份 gate 也接给遗忘：
+        //     α_eff = α_long + (α_short − α_long)·(1 − gate)
+        // 去遮挡**就发生在 `motion` 大的那一帧** ⟹ 那一帧历史被冲掉 ⟹ 后面没有能拖出来的东西。
+        // **零新常数**：`α_short = clipCtl.z` = 常量 1.0（与臂 10 同一个「接受域说不可信就一票
+        // 否决」的极大端点，接线见 `render_list_impl.cppm`）。
+        // 🔴 **闪烁轴逐位不变（本臂的免费一半，也是它的 bit 级反向用例）**：
+        //   `gate = saturate(2 − motion)` ⟹ 只要 `motion < 1px` 就有 `2 − motion > 1` ⟹ saturate
+        //   **精确返回 1.0** ⟹ `1 − gate` 恰为 `+0` ⟹ `(base − a)·0 = +0` ⟹ `a + 0 = a` **精确**。
+        //   ⚠ 必须写成 `a + (b−a)·t`，不能写 `lerp(a, b, t)`：Slang 把 `lerp` 降成 `a·(1−t) + b·t`，
+        //   即使 t == 0 也不逐位等于 a（臂 10 踩过，注释在 786 行附近）。
+        //   ⟹ 静止机位（= 闪烁的全部论域，ρ 六机位 / 交付基线 `360ce0d2…`）**不需要重拍**。
+        //   ⚠ 这条比臂 10/11 的零点更宽：不要求 `motion` 恰为 0，只要求 ≤ 1px。
+        //   🔴 **但别把它读成「ρ 六机位一定逐位同臂 11」**（本仓栽过的同类错：臂 11 旧注释的
+        //   「motion ≤ 1 可证明静止」就是过强声明、已收回）。抖动**开着**时 `motion` 是相邻两个
+        //   Halton 偏移之差，臂 11 注释给的界是「±0.5px 两帧差上界**恰** 1px」= 正好压在断点上。
+        //   浮点若把它舍到 1.0000001 ⟹ `gate = 0.9999999` ⟹ `α_eff = α + 0.99e-7`。
+        //   物理上是零（1e-7 ≪ 1 LSB ≈ 4e-3），但它使「逐位」二字在**有抖动**时不成立。
+        //   ⟹ 本臂的静止侧结论只由 `staticDiff`（**无抖动**，motion ~1e-4，精确为 0）背书；
+        //     ρ 六机位仍要**实测一遍**确认落在臂 11 的读数上，不靠这条推理放行。
+        // **结构保证**（同臂 10）：`base = max(clipCtl.z, params.x)` ⟹ `α_eff ≥ params.x` 恒成立
+        //   ⟹ 历史只会比臂 11 **丢得更快**；`clipCtl.z` 万一没接上（= 0）则 max 兜回 `params.x`
+        //   ⟹ 退化成臂 11，不会退化成"无限历史"。
+        // 判据（跑前写死，三条 AND）：① 静止机位与臂 11 **逐位相同**（上面那条反向用例）；
+        //   ② 阶跃 `AUC(臂13) ≤ 0.7 × AUC(臂0)`（= `temporal-tail-step-clip-holds` 的线）；
+        //   ③ 闪烁侧 ρ 六机位**逐位同臂 11**（由 ① 蕴含，但必须实测，不靠推理放行）。
+        // ⚠ **代价要如实报**：`motion ≥ 2px` 期间 α = 1 ⟹ TAA 不提供抗锯齿。这是设计意图
+        //   （"运动时别把旧内容平均进来"），不是疏漏，但它意味着运动中的锯齿回到单帧水平。
+        const float memPrev =
+            saturate(historyTex.SampleLevel(pointSampler, prevUvBase, 0.0).a);
+        const float decay = clipCtl.y > 0.0 ? clipCtl.y : (1.0 - 1.0 / 16.0);
+        const float3 ext3 = mx - mn;
+        const float ext = max(ext3.x, max(ext3.y, ext3.z));
+        const float gate = saturate(2.0 - length((prevUvBase - baseUv) / texel));
+        const float mem = max(ext, memPrev * decay * gate);
+        const float histL = dot(histR, float3(0.3333333));
+        const float centL = dot(centroid, float3(0.3333333));
+        const float dist = abs(histL - centL);
+        const float r = 1.0;  // 同臂 8 / 11
+        const float w = saturate((dist - mem) / (r * max(mem, 1e-6)));
+        clippedR = lerp(histR, hardR, w);
+        const float base = max(clipCtl.z, params.x);
+        feedback = params.x + (base - params.x) * (1.0 - gate);
+        alpha = mem;  // 载体同臂 6–11
+    }
     return float4(lerp(fromReinhard(clippedR), cur, feedback), alpha);
 }

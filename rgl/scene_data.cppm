@@ -320,8 +320,8 @@ export inline constexpr uint32_t kSceneDataTaaPrevContentShiftOffset = kSceneDat
  */
 export inline constexpr uint32_t kSceneDataTaaInputKernelOffset = kSceneDataTaaOffset + 160u;
 /**
- * 批 13.11 **历史裁剪消融门**（vec4：x = clip_mode，y = clip_soft λ，**z = 未 boost 的本帧权重
- * `taa.feedback`（仅臂 10 读）**，w 保留）。
+ * 批 13.11 **历史裁剪消融门**（vec4：x = clip_mode，y = clip_soft λ，**z = 短窗端点（臂 10 与
+ * 臂 13 读；批 13.14b 删 boost 后固定填 1.0，出处见 `render_list_impl.cppm`）**，w 保留）。
  *
  * 要回答的问题（实测根因 → `调试历史.md` 2026-10-06）：`clipToAabb` 在 **blend 之前**替换历史，
  * 而混合是 `lerp(clipped, cur, α)` ⟹ **一次裁剪 = 一次历史重置**（历史被换成"本帧邻域盒边界"，
@@ -403,6 +403,20 @@ export inline constexpr uint32_t kSceneDataTaaInputKernelOffset = kSceneDataTaaO
  *     = 采样格周期，零自由参数。**
  *     为什么臂 10 不够：场景转动时 `ext` 把 `mem` 撑大 ⟹ `w` 塌成 0 ⟹ α 耦合恰好失效；
  *     **根子是记忆本身在动的时候还在给豁免**，本臂关掉的正是这个豁免。
+ *
+ *   13 **臂 11 + α 也吃 gate**（批 13.15b；**债-69 的修法**）：臂 11 只把 gate 用在**接受域**上，
+ *     平移阶跃仪器首次量到它在去遮挡处比现行默认盒**更鬼 23%**（`AUC 1.073/0.870 = 1.234`，
+ *     → `phase13_plan.md` §1.21）。机制 = 瞬切后机位**又静止** ⟹ `motion` 恰为 0 ⟹ `gate = 1`
+ *     ⟹ `mem` 是被撑大的记忆 ⟹ 盒比臂 0 的瞬时盒更宽。**臂 11 只加了记忆，遗忘那条线没人接。**
+ *     本臂把同一份 gate 接给遗忘：`α_eff = α_long + (α_short − α_long)·(1 − gate)`，
+ *     `α_short = z` = 常量 1.0（复用臂 10 的端点，**零新常数**）。
+ *     🔴 **闪烁轴逐位不变**（本臂的免费一半 = 它的 bit 级反向用例）：`gate = saturate(2 − motion)`
+ *     ⟹ 只要 `motion < 1px` 就 `2 − motion > 1` ⟹ saturate **精确返回 1.0** ⟹ `1 − gate` 恰为 `+0`
+ *     ⟹ `α_eff ≡ α_long` **精确**。⚠ 这条零点**比臂 10/11 更宽**：不要求 `motion` 恰为 0，只要求
+ *     < 1px。⟹ 静止机位（= 闪烁的全部论域，ρ 六机位 / 交付基线）不需要重拍。
+ *     ⚠ **代价如实报**：`motion ≥ 2px` 期间 α = 1 ⟹ TAA 不提供抗锯齿（设计意图 = 运动中别把旧
+ *     内容平均进来，但锯齿因此回到单帧水平）。
+ *     ⚠ 编号：12′ 预留给 FSR3 加性可信度（债-68）⟹ 本臂取 13。
  *
  * λ（y，仅 mode=4 读）= **无量纲时间常数**，语义 = 裁剪能以多快的速度搬动历史。
  * λ=1 在语义上退化成硬裁剪（浮点上不逐位等于 mode 0，故红线只钉 mode 0）。

@@ -300,12 +300,13 @@ void fillTaaData(FrameDrawList& out, const ViewProjection& viewProj, const Scene
 	out.sceneData.taaInputKernel = {env.taaInputKernel, 0.0f, 0.0f, 0.0f};
 	// x = **历史裁剪消融门**（`taa.clip_mode`，批 13.11；0 = 现行 = 门关），
 	// y = **软裁剪 λ**（`taa.clip_soft`，仅 mode=4 读；无量纲 = 每帧最多搬动 λ 份「到盒边界的距离」）。
-	// z = **臂 10 的短窗端点**（仅臂 10 读，其余臂一个 bit 都不读它）。
+	// z = **短窗端点**（臂 10 与臂 13 读，其余臂一个 bit 都不读它）。
 	// 🔴 批 13.14b 删 boost 后这里**不能再填 `env.taaFeedback`**：那样它就和 `taaParams.x` 是同一个
 	// 数，`feedback = a + (max(z,a) − a)·w ≡ a`（`0·w = 0` 精确）⟹ **臂 10 与臂 8 逐位相同**，
 	// 逐像素 α 自适应死掉（债-66）。改填 **1.0** = 「盒判历史不可信（w=1）就这一帧完全丢历史」：
 	//   w=0（盒说可信）⟹ α = taaParams.x = 长窗；w=1（盒说不可信）⟹ α = 1 = 无历史。
 	// 零新常数，且正是本臂立论的极大端点（「接受域说不可信」应当真的能一票否决）。
+	// 臂 13（批 13.15b）复用同一个端点，只是自变量从 `w` 换成 `1 − gate`。
 	// ⚠ 代价：臂 10 的 boost 时代读数作废——它本来就欠着 doorframe/wetground/doorpanel 三个机位。
 	// 与 input_kernel 同理：配置直传，不是图形态派生。门关（0）⟹ taa.frag 走改前那条硬裁剪，
 	// 一个 bit 不动（红线 = `just shot` sha256）。档位语义 → `scene_data.cppm` 同槽注释。
