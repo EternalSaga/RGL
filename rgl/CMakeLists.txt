@@ -186,6 +186,7 @@ set(RGL_BASE_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/slot_ledger.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/pass_vocabulary.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/taa_jitter.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/velocity_field.cppm"   # 批 14.4：逐像素速度场纯函数层（rlbase，FSR 硬前置）
     "${CMAKE_CURRENT_SOURCE_DIR}/scene_context.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/camera_config.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/camera_config_impl.cppm"

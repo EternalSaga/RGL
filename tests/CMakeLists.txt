@@ -51,6 +51,7 @@ set(RGL_TEST_SOURCES
     test_reflection_layout.cppm # 反射生成物字节布局契约
     test_scene_config.cppm      # 四份配置解析契约
     test_render_scale.cppm      # 批 14.3 渲染倍率纯算术：1.0 档逐像素红线 / 取整 / 钳制 / 非退化
+    test_velocity_field.cppm    # 批 14.4 逐像素速度场：显式相机基参考 / 旋转光流闭式 / 天空与无效判据
     test_camera.cppm            # 相机数学
     test_cube_geometry.cppm     # 内建 cube 顶点/索引契约
     test_state_kit.cppm         # 十段 RenderState 表 + stateFor 分派（纯逻辑）
