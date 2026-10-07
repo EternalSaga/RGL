@@ -7,26 +7,17 @@ description: 运行 RGL 程序做 headless 冒烟、llm_debug 截图多模态读
 
 ## 运行环境
 
-- **CWD 必须是 `build/rgl/`**：程序按相对路径读取 `configs/` 和 `generated_shaders/*.spv`，其他目录启动报 "Log config file not found"
-- Mesa ≥26.2.3：RADV 无条件 advertise `VK_EXT_descriptor_heap`，**无需** `RADV_EXPERIMENTAL=heap`（`just run*` 也不再注入）
-- 运行时资源由构建自动同步：`configs/` 增量拷贝（`copy_if_different`，改 config 后 `just build` 即生效；**新增** config 文件需 `just config`）；SPV 直接编译到 `build/rgl/generated_shaders/`
-- **build 端 configs 副本 = `copy_if_different`（只源更新才覆盖）**——临时改副本调试**不会自动复原**（`just build` 不清理陈旧副本内容），要复原得 `cp configs/*.lua build/rgl/configs/`；这就是"双源"，**一次性跑别碰副本**，用 `just smoke` / `just shot`（走 `RGL_CONFIG_DIR`，见下节）
-- 启动期 DGC 选路可直接看 log：`DGC path: device=... -> ...`
+- **CWD 必须是 `build/rgl/`**：按相对路径读 `configs/` 与 `generated_shaders/*.spv`，
+  其他目录启动报 "Log config file not found"
+- **运行模式全配置化，字段清单去读 `configs/*.lua` 本体**（逐字段带注释，是唯一真相源）：
+  `runtime.lua`（headless/尺寸/llm_shot）、`diagnostics.lua`（各类诊断门，全可选默认关）、
+  `render_graph.lua`（顶层 `variant` 选渲染路线）、`camera.lua`（机位，含帧驱动 `frame_yaw`）、
+  `scene.lua`（场景构成）。仅驱动级 env（`VK_DRIVER_FILES` / prime offload）由 `just run-*` 注入。
+- **build 端 configs 副本 = `copy_if_different`（只源更新才覆盖）**——临时改副本调试**不会自动
+  复原**，要复原得 `cp configs/*.lua build/rgl/configs/`。这就是"双源"，**一次性跑别碰副本**，
+  用 `just smoke` / `just shot`（走 `RGL_CONFIG_DIR`，见下）
 
-## 运行模式全配置化（环境变量→配置文件，2026-09-08）
-
-- `configs/runtime.lua`：headless / headless_size / win_size / show_after / llm_debug + llm_shot
-- `configs/diagnostics.lua`：no_vvl / no_hdr / no_present / vtx_canary / texel_canary / dump_gbuf / style_dist / tex_dist / texture_force_*（全可选默认关）
-- `configs/render_graph.lua` 顶层 `variant = "forward"|"deferred"|"offscreen"`（路线选路，替代旧 RGL_DEFERRED/RGL_OFFSCREEN env）
-- 仅驱动级 env（`VK_DRIVER_FILES` / prime offload）保留——由 `just run-*` 注入，非应用配置
-
-## headless 模式
-
-runtime.lua `headless=true` 脱 SDL/compositor（`vkCreateHeadlessSurfaceEXT`），不建 SDL 窗口；尺寸 `headless_size={W,H}`（默认 1280×720）。
-llm_debug 截图 = drawFrame 帧内回读 swapchain 后缓冲（present 前拷贝，真实上屏内容）；headless+llm 时 main 契约令 headless_size 跟随 llm_shot.size。
-坑：v357 结构体无 width/height/format 字段、须显式 `VK_KHR_surface`、无 `eImmediate`（用 `eFifo`）。
-
-## agent 冒烟 / 截图：`just smoke` / `just shot`（2026-10-03 起的一键入口）
+## agent 冒烟 / 截图：`just smoke` / `just shot`
 
 ```bash
 just smoke                                # headless 出一帧，报 errors/warnings + 设备现场
@@ -35,129 +26,91 @@ just shot --name foo --size 1600x900      # 截图 → build/rgl/screenshots/foo
 just smoke --from-build                   # 配置基准 = build 副本现场（默认 = 仓库 configs/）
 ```
 
-`tools/smoke.py`（stdlib-only）把一次性配置铺到 `build/rgl/.smoke/` 并用 **`RGL_CONFIG_DIR`**
-注入（引擎契约：只覆盖配置目录，资产仍按 CWD 相对）——**不改任何配置副本，因此没有
-"跑完要复原"的状态**。旧做法（手改 `build/rgl/configs/runtime.lua` 再 `cp` 回来）已废弃：
-那份副本是双源，忘复原是静默的。
+`tools/smoke.py`（stdlib-only）把一次性配置铺到临时目录并用 **`RGL_CONFIG_DIR`** 注入（引擎契约：
+只覆盖配置目录，资产仍按 CWD 相对）——**不改任何配置副本，因此没有"跑完要复原"的状态**。
+旧做法（手改 build 副本再 `cp` 回来）已废弃：忘复原是静默的。
 
-工具替你守的判据（写脚本时也要守）：
+需要工具表达不了的配置（相机机位、场景构成）：改**仓库** `configs/` 后 `just build` 再跑。
 
-- **冒烟 = 真出一帧**：两条子命令都走 `llm_debug` 截图（smoke 的探针图随 staging 丢弃），
-  于是"进程活着"与"渲染链跑通"不是两回事，也不靠超时猜渲染完了没。
-- **errors 计数 = `[error]` 级日志行**（引擎 error 与 VVL VUID 同级别，见 `rgl/utils.cppm`
-  vulkanDebugCallback 的 severity 映射）；有 error 行即 FAIL（退出码 1）。
-- **阳性锚点**：日志缺 `headless 模式` 行 = FAIL（否则本次跑的是一次交互窗，判据全废）；
-  PNG 尺寸 ≠ 启动日志 `Swapchain extent` = FAIL；`--size` 请求值未生效 = FAIL。
-- **起跑前**：`pgrep -x rgl` 有残留直接拒跑（并行实例污染画面与计时）；SPV 陈旧
-  （比 `build/rgl/shader_deps.txt` 的源闭包旧）与二进制早于源 → 打"注意"行。
-- **现场回显**：主机 / GPU / DGC 选路 / git 现场 / build 副本是否脏——三机轮换先认设备。
-
-需要工具表达不了的配置（相机机位、scene.lua 场景构成）：改**仓库** `configs/` 后
-`just build` 再跑（默认基准就是它），或改 build 副本后用 `--from-build` 跑现场。
-
-- 相机位置 = `camera.lua` 顶层 position/target/fovDegrees
-- 截图尺寸 = swapchain extent（headless 跟随 llm_shot.size）
-- 诊断直读 G-buffer 通道 = `diagnostics.lua` `dump_gbuf=0..3`
 - **凡"截 UI"验收必须外部截图**：`llm_debug` 截图发生在 `frameEndHook`（imgui 绘制）**之前**
   → 天生不含 UI（既有事实，非回归）；imgui 面板视觉验收走窗口模式 + 外部截图工具
-  （本机 KDE Wayland：`spectacle -b -n -o <file> -d <ms>`）
+- 诊断直读 G-buffer 通道 = `diagnostics.lua` 的 `dump_gbuf`
 
-## 截图回归方法学（2026-09-08）
+## 截图回归方法学
 
-BIT-IDENTICAL 比对须**同会话双构建**（`git stash` 基线构建 vs 改动构建）；跨日/跨全量重建存在 ±1 LSB 叶缘噪声（增量 .o vs 全量 codegen 微差，见 `docs/调试历史.md` 2026-09-08 条目）。
+BIT-IDENTICAL 比对须**同会话双构建**（`git stash` 基线构建 vs 改动构建）；跨日 / 跨全量重建存在
+±1 LSB 叶缘噪声（增量 .o vs 全量 codegen 微差，见 `docs/调试历史.md` 2026-09-08）。
 
-**红线比对算子固定为「逐位相同」，不得换成 PSNR/SSIM**（2026-10-03 用户拍板，此前一次提议
-被实测推翻）。三条理由，别重新发明：① 两者回答的不是同一个问题——逐位是**零容差 A/B 算子**
-（门关 ⇒ 逐位不变），PSNR/SSIM 是**带阈值的相似度**，而红线要防的正是"泄漏一点点"（改坏 3%
-像素的改动 SSIM 0.999 稳过）；② 现机制**从不存 golden**（就是上面那条同会话双构建），所以
-"golden 存不过一天"这个 PSNR 的拒绝理由在现机制里根本不存在，换过去反而是主动引入"要存参考
-图 + 一个会被讨价还价的阈值"；③ 阈值会被谈到通过为止。两者均已登记为反模式，理由原地可读 =
-`tools/imgqa/judge.cpp` 的 `antiPatterns()`（含 ssim 不可归因：说不出哪块错、错在亮度还是几何）。
-**要一个能看的数**可以，但只准**报告不准判据**（同 `temporal` 里 L1 比值 1.38× 的处理）。
+**红线比对算子固定为「逐位相同」，不得换成 PSNR/SSIM**（用户拍板，此前一次提议被实测推翻）。
+三条理由别重新发明：① 逐位是**零容差 A/B 算子**（门关 ⇒ 逐位不变），PSNR/SSIM 是**带阈值的
+相似度**，而红线要防的正是"泄漏一点点"（改坏 3% 像素的改动 SSIM 0.999 稳过）；② 现机制**从不存
+golden**，换过去 = 主动引入"要存参考图 + 一个会被讨价还价的阈值"；③ 阈值会被谈到通过为止。
+两者均已登记反模式，原地可读 = `imgqa refuse`。**要一个能看的数**可以，但只准**报告不准判据**。
 
-**单帧截图看不见时域不稳定**（2026-10-03 TAA 实测教训）：静止场景比"改前 vs 改后"两张图
-**永远测不出逐帧抖动**——TAA 开就是这样过了单帧比对，被用户肉眼叫停（"地震"）。凡被测项
-**本身是时域的**（TAA / 任何跨帧累积 / 噪声类），必须走 `POST /shotburst` 连拍后测**相邻帧差**；
-且先立天然基线：静止场景 + 无随机 pass 时逐帧差**必须恰为 0**，非零即泄漏。
+**单帧截图看不见时域不稳定**：静止场景比"改前 vs 改后"两张图**永远测不出逐帧抖动**——TAA 开就是
+这样过了单帧比对，被用户肉眼叫停。凡被测项**本身是时域的**（TAA / 任何跨帧累积 / 噪声类），必须走
+`POST /shotburst` 连拍后测**相邻帧差**；且先立天然基线：静止场景 + 无随机 pass 时逐帧差**必须恰为 0**。
 
-## 测量纪律（帧率 / present timing，2026-09-27 教训）
+## 测量纪律：什么能并行、什么不能（两版实验都做错后于 2026-10-07 定口径）
 
-帧率/present timing 类测量**必须单实例串行**——起后台跑后，在下一次起跑前须确认前一进程已退出（`pgrep` + 日志终值行双检）。并行两实例会互相遮挡合成，把 stage 可得性与帧率双双扭曲（本项目曾据此得出"85% 白渲"的错误结论并已勘误，见 `docs/调试历史.md` "并行双实例污染测量"）。用户关窗 = 该次长跑作废，不得只取关窗前片段。
+- **帧率 / present timing / stage 可得性 → 必须单实例串行**。争用直接扭曲被测对象本身。起跑前
+  `pgrep -x rgl` 确认无残留（双检：日志终值行）。用户关窗 = 该次长跑作废，不得只取关窗前片段。
+- **像素 / 统计类判据（headless + 帧驱动激励）→ 可以并行**。渲染路径**唯一的墙钟输入**是 legacy
+  `spin.speed * dt`；帧驱动门（`spin_frame_angle` / `camera.frame_yaw`）把 dt 停用，角度是**帧号
+  纯函数** ⟹ 争用只改墙钟不改帧序列。实测争用下 `aa-coverage` 逐字相同、`temporal` 抑制比不变。
+  **红线**：并行只准用于同一次运行内自洽的统计量/比值；跨进程**逐位**比对不许并行（本来就不成立）；
+  legacy dt-spin profile 必须被并行路径拒绝。全量论证与两轮实验设计错误 → `调试历史.md` 2026-10-07。
+- **热身按帧数，不按墙钟**：`advanceFrames(n)`。按墙钟睡会在争用下量到 TAA 未收敛的**瞬态**，
+  并把它误读成"渲染被扰动"（踩过两次）。
 
-## 材质定位（加法闪色，2026-09-29 教训）
+## 材质定位（加法闪色）
 
-"哪个材质占这块屏幕"用**加法闪色**定位：材质页改 **emissive**（加法）再截图差分，**不要改 baseColor**（乘法：纹理本身就暗的表面 ×红后变化 < 阈值 → 暗面被整体漏判，2026-09-29 因此走错三次，见 `docs/调试历史.md`）。比较亮度口径用**同材质内的比值**（如阴影/受光），跨图跨时刻的全局百分位不可比。
+"哪个材质占这块屏幕"用**加法闪色**：材质页改 **emissive**（加法）再截图差分。**不要改 baseColor**
+（乘法：纹理本身就暗的表面 ×红后变化 < 阈值 → 暗面被整体漏判，因此走错过三次）。比较亮度口径用
+**同材质内的比值**（如阴影/受光），跨图跨时刻的全局百分位不可比。
 
-## imgqa —— 区域归因的图像判据工具箱（Phase 12 批 12.3，排查渲染问题的**默认起手**）
+## imgqa —— 区域归因判据（排查渲染问题的**默认起手**）
 
 `tools/imgqa/`（C++ + vcpkg，`just imgqa <子命令>`）。它不是"两图算一个数"——**判据的区域来自几何**：
-objectID 附件反解可见 piece，闭式解（GGX+ACES+sRGB 逐式转录，独立第二实现）给逐面预测，
-失败信息直接点名"哪个 piece 的哪簇像素不对"而不是"SSIM 0.93"。
+objectID 附件反解可见 piece，闭式解（GGX+ACES+sRGB 逐式转录，独立第二实现）给逐面预测，失败信息
+直接点名"哪个 piece 的哪簇像素不对"而不是"SSIM 0.93"。
 
 **何时抄它**（比目视/数值日志优先）：怀疑"画了没着色 vs 根本没画"、验证某 feature 的影响范围、
-问"这块像素该是多少"、改着色链后的定位。**子命令**：
-- `selftest` —— 判据/闭式解转录/解码器自检（无引擎，毫秒级；闭式解锚点=实机截图实测字节）
-- `attribution [--glb X.glb] [--camera 名]` —— 机位下每个 piece：像素数/线性亮度分位数/暗像素占比/色度；可见集=下游判据的求值域
-- `faces --piece 名 [--shadow] [--env]` —— 六面闭式解预测（观测域字节）vs 观测亮度簇；解释不了的簇=发现
-- `switch --allow-piece a,b` —— 开关影响域：域外**必须逐位为零** + 域内必须确实变了（两条对偶，堵"0 差异"的两种解释）
-- `probe [--x 640] [--y 360] [--light Lx,Ly,Lz] [--tol 2]` —— 闭式解探针：某像素**该**是多少 vs 实机截图逐字节对拍（`just analytic` = 本命令 + `qa/configs/analytic/` 固定配置；12.3b 起接替已退役的 analytic_ref.py）
-- `check`（列每条判据的容差理由 + guard 出处）/ `refuse [ssim|...]` / `note "事后真相"`
+问"这块像素该是多少"、改着色链后的定位。**子命令与默认值单一真相源 = `imgqa -h` / `imgqa -h <子命令>`**
+（`imgqa args <cmd>` 回显解析后的实际默认值）；常用：`selftest`（无引擎，毫秒级）/ `attribution` /
+`faces` / `switch` / `probe` / `check` / `refuse` / `note "事后真相"`。
 
-**三条硬约束（工具替你守，但写新判据时你也要守）**：① 判据只在 objectID 反解出的**可见集**上求值；
-② 统计一律线性域，比较域=观测域（预测字节先过完整显示链，ACES 有通道串扰没有比例关系）；
-③ 每次真实调用 `note` 回填**事后真相**——调用台账 `qa/log/imgqa_calls.jsonl` 是判据可信度的
-一手数据（哪条判据真在排查里被调用、事后看对不对）。**没有"晋升"这回事**，判据一律 advisory；
-可信度的凭据 = 注册表里的容差理由 + guard 出处（`imgqa selftest` 对**每条**强制，不是对某个
-晋升子集）。**SSIM/PSNR/全局 epsilon
-是登记过的反模式**（`imgqa refuse` 会给理由），别重新发明。**读反模式必须连 `stillOpen` 一起读**：
-每条都写明自己否掉的是**哪一层**（算子 / 激励 / 论域 / 基线）与**什么没有被否、仍然要做**——
-作用域读宽一格就连带冻掉后来真正需要的激励（真发生过：`moving-camera-l1-ratio` 否的是 L1
-总量这个**算子**，被读成"移动机位不值得测"，那个激励白冻两天）。
+**三条硬约束（工具替你守，写新判据时你也要守）**：① 判据只在 objectID 反解出的**可见集**上求值；
+② 统计一律线性域，比较域 = 观测域（预测字节先过完整显示链，ACES 有通道串扰没有比例关系）；
+③ 每次真实调用 `note` 回填**事后真相**——调用台账 `qa/log/imgqa_calls.jsonl` 是判据可信度的一手数据。
+**没有"晋升"这回事**，判据一律 advisory；凭据 = 注册表里的容差理由 + guard 出处（`selftest` 对
+**每条**强制）。**读反模式必须连 `stillOpen` 一起读** → skill `rgl-test-discipline`。
 
-**已知边界**：亮度聚类 gap=0.02 会把亮度相近的两面并成一簇，并簇对"每簇可解释"假通过——
-并簇时人工看面预测表（如 −X=0.2376 vs +Z=0.2221）；id↔piece 用 primitiveIndex+1 顺序假设 +
-闭式解色度弱校验（纯颜色最近邻不可靠：ACES 饱和移位与 piece 间色度距离同量级，实测踩过）。
+**已知边界**：亮度聚类 gap=0.02 会把亮度相近的两面并成一簇，并簇对"每簇可解释"**假通过**——并簇时
+人工看面预测表；id↔piece 用 primitiveIndex+1 顺序假设 + 闭式解色度**弱**校验（纯颜色最近邻不可靠：
+ACES 饱和移位与 piece 间色度距离同量级，踩过）。
 
-## 噪声 / 时域类判据的四条设计前置（2026-10-04 AO 噪点量化时固化）
-
-量"噪不噪"之前先过这四问，每条都是先做错一遍才知道的（全文 → `调试历史.md` 2026-10-04）：
-
-1. **先问"这个量在当前配置下到底会不会变"**。AO 的随机相位 = `hash12(SV_Position.xy)`，shader
-   **无帧号输入** ⟹ TAA 关（交付默认）时**逐帧完全静止** ⟹ 静态机位连拍必然逐位相同，"连拍几张"
-   量不到任何时域信息。推论：**屏幕锚定的噪声**（hash 只吃像素坐标）的正确量具是**亚像素机位位移**
-   （偏航整 1 px：噪声图案不动而几何动 → 对齐后差**变大** 5.53× = 爬行证据），不是连拍。
-   要真时域就得开 TAA，且**必须走 `/shotburst`**（`/shot` 逐张拍不出结论）。
-2. **屏幕量不是世界量**。"离轮廓 >N 像素内 `(255−AO)` 就是噪声"不成立：AO 半径 0.5 是**世界米**制，
-   近相机表面在轮廓内 40 px 处世界距离可远小于半径（实测 box_short 正面 AO 低到 37 是**合法遮蔽**）。
-   画不出世界空间契约区（要深度缓冲）就别用区域偏离当主判据。
-3. **区域定义不干净时，主判据走中值残差高频项**，它对合法的光滑梯度不敏感。前提要自己钉住：
-   "线性斜坡的中值残差**恰为 0**"（5×5 窗内单调 ⟹ 中值 = 中心）是闭式用例。偏移是合法形状、
-   颗粒才是噪声——分解算子（`absdiff − median(absdiff)`）要有"恒定偏移 → 颗粒项**恰为 0**"钉住。
-4. **程序化靶是判据成立的前提，不是偷懒**。`tools/qa_scenes.py` 的纯色无纹理靶让**底图自身高频
-   ≈ 0**（实测 0.012）⟹ 画面高频只可能来自被测项；真场景（bistro 395 纹理）上分母不是 0，
-   **比值不可解释**，"AO 噪不噪"这个问题在 bistro 上根本问不出来。
+## 时域 / 噪声类判据的设计前置
 
 **可复用到任何开关的硬判据 =「因果泄漏恒等式」**：开关关掉后，**附件/掩码说"这里没影响"的像素上，
-两张交付图必须逐位相同**（AO 版：附件 = 255 的像素上 `strength` 0↔0.5 交付图 max 0 LSB）。
-它**不需要任何区域定义**，且顺带证明"该附件是交付差的唯一来源"（交付 Δ 随附件偏离单调上升即旁证）。
-`shadow_pass` / 任何 feature 门同型可用。相关子命令：`ao-noise [--pairs N] [--bistro]`。
+两张交付图必须逐位相同**。它**不需要任何区域定义**，且顺带证明"该附件是交付差的唯一来源"
+（交付 Δ 随附件偏离单调上升即旁证）。`shadow_pass` / 任何 feature 门同型可用。
 
-## 阴影验收判据（2026-09-29 三轮踩坑固化，Phase 11 批 11.2）
+其余四条前置（"这个量在当前配置下到底会不会变"、"屏幕量 ≠ 世界量"、"区域不干净时主判据走中值残差
+高频项"、"程序化靶是判据成立的前提"）→ `docs/调试历史.md` 2026-10-04 条目。**先问会不会变**这条最
+便宜也最常被跳过：AO 的 hash 只吃像素坐标、shader 无帧号输入 ⟹ TAA 关时逐帧**完全静止**，静态机位
+连拍量不到任何时域信息，正确量具是**亚像素机位位移**。
 
-前 8 轮阴影修复里指标全绿而 bug 全程在场过两次（5a-7 验的是退化数据、5a-8c 的选级 forward
-整个是错的）。**开关对拍（on vs off 只变暗）+ 基线稳定 + D1 小，三者合起来仍会骗人**。以下为硬要求：
+## 阴影验收判据（前 8 轮修复里指标全绿而 bug 全程在场过两次）
 
-1. **阳性锚点**：先指定"某机位下某物体**必须**有影"，逐条断言。没有正向锚点的验收不算验收。
-2. **机位对必须含"同 position 纯转向"**（只改 target）：平移与旋转是独立自由度，5a-8b 的
-   三机位只验了平移，旋转分量整整漏了一轮。
-3. **机位对必须含"远离相机、跨越多级"的取景**（如街道远景/拱门内远街）。只贴着相机看，
-   会落进最小级联的盒内，把"大面积走全亮旁路"的坏路径整个罩住（5a-8c 就是这么骗过 5a-8 的）。
-4. **定位手段优先级：三色哨兵 > 数值日志 > 推导**。把 `shadow.slang` 的"出块/越界"返回改成
-   哨兵值、在 `model_pbr_ibl.frag.slang` 末尾分色直出（红=uv.x 越界 / 绿=uv.y / 蓝=ndc.z，
-   块内受光=白、有影=黑），**一步**就能分清"选错级"与"盒装不下"；再把级号编进哨兵亮度
-   就能直接读出片元选了哪一级。
-5. **恒等式日志是指纹**：两个"本该不同"的量恒等（如 `eyeOffset ≡ r·1.02`）= 其中一个分支
-   从未生效。数值日志不只看"变不变"，要看"哪些量死也不变"。
-6. **每条新逻辑都要有阳性测试**：新分支在当前取景下差异为 0 时，临时把参数推到极端值
-   （如淡出 k 改 1）确认管道真的通——"0 差异"既可能是"没影响"，也可能是"没接上"。
-7. 注释里的"数学断言"（如"w=0 无平移项混入"）要有一条探针判据钉住；写完推导就用探针核对。
+**开关对拍 + 基线稳定 + D1 小，三者合起来仍会骗人**。除 skill `rgl-test-discipline` 的通用条
+（阳性锚点 / 每条新逻辑要有阳性测试 / "0 差异"两种解释）外，阴影特有两条：
+
+1. **机位对必须含"同 position 纯转向"**（只改 target）：平移与旋转是独立自由度，只验平移会让
+   旋转分量整整漏一轮。
+2. **机位对必须含"远离相机、跨越多级"的取景**：只贴着相机看会落进最小级联盒内，把"大面积走全亮
+   旁路"的坏路径整个罩住。
+3. **定位手段优先级：三色哨兵 > 数值日志 > 推导**——把 shader 的"出块/越界"返回改成哨兵值分色
+   直出，**一步**分清"选错级"与"盒装不下"；把级号编进哨兵亮度就能直接读出选了哪一级。
+4. **恒等式日志是指纹**：两个"本该不同"的量恒等 = 其中一个分支从未生效。数值日志不只看"变不变"，
+   要看"哪些量死也不变"。
