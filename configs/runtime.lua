@@ -21,6 +21,13 @@ return {
     -- 与债-37 的 Wayland 分数缩放正交：那条管「逻辑点 → 窗口像素」，本键管「窗口像素 → 渲染像素」。
     -- 生效现场看启动日志 "render scale = ... → render WxH (swapchain WxH)"。
     render_scale = 1.0,
+    -- velocity_field（Phase 14 批 14.4）：逐像素速度场（motion vectors）总开关。
+    -- 关（默认）= 渲染图里**根本没有** velocity pass（装饰器不被调用），不领 RT、不建
+    -- 管线条目 ⟹ 交付路径逐位不变（结构性，不是"有但旁路"）。开 = 每帧多一个全屏 pass
+    -- （读 depth 写 RGBA16F）+ 一张渲染分辨率 RGBA16F RT；口径 = 渲染分辨率像素 · prev−cur · y 向下。
+    -- **创建期量**：改它要走重启。目前尚无消费者（批 14.5 接 FSR upscaler 才用得上）。
+    -- 生效现场看启动日志 "velocity (RGBA16F, 像素单位 prev−cur): WxH slot N"。
+    velocity_field = false,
 
     -- DIAG：隐藏窗启动、第 N 帧后显示（可见窗 fault 排查；-1 = 立即显示）
     show_after = -1,

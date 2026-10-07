@@ -288,6 +288,22 @@ export class ShaderRegistry {
 	[[nodiscard]] uint32_t addAoEntry(uint32_t depthSlot, uint32_t samplerSlot);
 
 	/**
+	 * Phase 14 批 14.4：逐像素速度场 pass 管线条目（单条目，仿 addAoEntry；门默认关
+	 * **不被调用** = 条目表逐位不变）。spec = "velocity"（mesh 复用 light.mesh.spv 全屏
+	 * 大三角 + 速度场 frag）。binding：0/1 占位 + 3 sceneData（@64 invViewProj +
+	 * TAA 尾区 @722080 起两帧矩阵与内容位移）+ extra：4 → 深度图 SAMPLED_IMAGE 堆槽。
+	 *
+	 * **无 sampler 绑定**（与 ao 的唯一差别）：本 shader 用 `depthTex.Load(像素)` 直取，
+	 * 不过滤 ⟹ 不需要也不该占 sampler 堆槽（`vkresources.cppm:350` 记的 2026-10-04
+	 * sampler 槽相撞事故就是"自己算偏移"造成的；不占 = 不参与该风险）。
+	 * 前提 = 深度图 usage 含 eSampled 且已领采样槽（Resources::ensureDepthSampleSlot，
+	 * 与 ao 复用同一槽）。幂等。
+	 * @param depthSlot 深度图 SAMPLED_IMAGE heap 槽（binding 4）
+	 * @return 条目下标；规格缺失抛 runtime_error
+	 */
+	[[nodiscard]] uint32_t addVelocityEntry(uint32_t depthSlot);
+
+	/**
 	 * 批 12.6 TAA pass 管线条目（单条目，仿 addTonemapEntry；门默认关不被调用 =
 	 * 条目表逐位不变）。spec = "taa"（mesh 复用 light.mesh.spv 全屏大三角 + 时域滤波
 	 * frag）。binding：0/1 占位 + 3 sceneData（@722080 prevViewProj / @722144 motion /
@@ -473,7 +489,7 @@ export class ShaderRegistry {
 			return light;
 		// 尾部词表（tonemap/shadow/izb_mask/ao/taa）：批 12.6 起表驱动查表——旧 if 链
 		// 每加一词控制复杂度 +1（taa 加进来正撞 16>15 红线），表长不受此税。
-		static const std::array<RGL::PipelineSpec, 5> kTailSpecs{{
+		static const std::array<RGL::PipelineSpec, 6> kTailSpecs{{
 			{"tonemap", "generated_shaders/light.mesh.spv",
 				"generated_shaders/tonemap.frag.spv"},  // mesh 复用全屏大三角（Phase 8 ①）
 			{"shadow", "generated_shaders/shadow.mesh.spv", "generated_shaders/shadow.frag.spv"},
@@ -483,6 +499,8 @@ export class ShaderRegistry {
 				"generated_shaders/ao.frag.spv"},  // mesh 复用全屏大三角（同 tonemap/light）
 			{"taa", "generated_shaders/light.mesh.spv",
 				"generated_shaders/taa.frag.spv"},  // mesh 复用全屏大三角（同 tonemap/ao）
+			{"velocity", "generated_shaders/light.mesh.spv",
+				"generated_shaders/velocity.frag.spv"},  // 批 14.4：速度场（同 ao/taa 复用大三角）
 		}};
 		for (const auto& s : kTailSpecs)
 			if (std::strcmp(s.name.c_str(), name) == 0)

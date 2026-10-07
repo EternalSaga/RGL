@@ -110,6 +110,22 @@ export struct RuntimeConfig {
 	 * 越界 = 钳制 + warn（与 ui_font_size 同处理，不 fail-fast）。
 	 */
 	float renderScale = 1.0f;
+	/**
+	 * Phase 14 批 14.4：逐像素速度场（motion vectors）总开关。**创建期**量（改它要走
+	 * 重建路径，热重载不生效）——它决定渲染图里**有没有** velocity pass。
+	 *
+	 * 关（默认）= `decorateVelocityPass` 根本不调用 ⟹ 图里没有这个 pass、不领 velocity
+	 * RT、不建管线条目 ⟹ **结构性**逐位不变（不是"有但旁路"，与 ao 的 strength=0 早退
+	 * 是两种不同的红线机制；与 taa 同构）。
+	 *
+	 * 为什么放 runtime.lua 而不是 scene.lua：本键**没有任何逐帧可调语义**（不像
+	 * `ao.strength` / `taa.enabled` 那样有滑杆与逐帧状态），它只改图形态；同类的
+	 * `render_scale` 也在这里。Phase 14 的 FSR 门将来落在本键旁边。
+	 *
+	 * 开 = 每帧多一个全屏 pass（读 depth、写 RGBA16F）+ 一张渲染分辨率 RGBA16F RT。
+	 * 目前（批 14.4）尚无消费者——批 14.5 接 FSR upscaler 才用得上它。
+	 */
+	bool velocityField = false;
 	int showAfter = -1;               // DIAG：隐藏窗启动、第 N 帧后显示（-1 = 立即显示）
 	PresentModePref presentMode = PresentModePref::immediate;  // 窗口 present 模式（headless 忽略）
 	LlmDebugConfig llm;

@@ -77,6 +77,10 @@ export struct CompiledGraphResult {
 	/// 批 12.6：TAA 装饰是否落图（门开且图形态支持）。装配层据此决定 TAA RT/条目
 	/// 是否领建——装饰失败（offscreen 变体）时条目建了也无人执行，不如整套不建。
 	bool taaDecorated = false;
+	/// 批 14.4：逐像素速度场装饰是否落图（门开且图形态支持）。装配层据此决定 velocity
+	/// RT / velocity 条目是否领建。与 taaDecorated 同构，但**互相独立**：速度场是 FSR
+	/// 的前置，不是 TAA 的一部分（判据全文 → docs/phase14_plan.md §1.10）。
+	bool velocityDecorated = false;
 };
 
 /**
@@ -151,7 +155,8 @@ export void validateEnvironmentContract(const SceneConfig& scene);
  * @param taaEnabled 批 12.6：configs/scene.lua taa.enabled（true = decorateTaaPass，
  *        结果随 CompiledGraphResult::taaDecorated 带回；offscreen 变体装饰失败 = false）
  */
-export CompiledGraphResult compileGraphOrThrow(const char* path, bool taaEnabled);
+export CompiledGraphResult compileGraphOrThrow(const char* path, bool taaEnabled,
+	bool velocityEnabled = false);
 
 /** 按 file 去重的已上传模型（instancing：同文件一次解析一次上传，entities 共享资产）。 */
 export struct UploadedModel {
@@ -242,7 +247,7 @@ export RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain
 									 RenderTargetCache& rtCache, AssetTable& assets,
 									 ShaderRegistry& pipelines, CompiledRenderGraph&& graph,
 									 entt::registry& registry, const SceneConfig& scene, bool deferredMode,
-									 bool taaDecorated = false);
+									 bool taaDecorated = false, bool velocityDecorated = false);
 
 /**
  * 配置热重载装配（Phase 10 批 10.3；docs/archive/phase10_plan.md §5）。门 =

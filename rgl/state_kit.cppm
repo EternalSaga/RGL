@@ -68,6 +68,11 @@ export class StateKit {
 		taaState.depthTest = false;
 		taaState.depthWrite = false;
 		taaState.cullMode = vk::CullModeFlagBits::eNone;
+		// 批 14.4：velocity pass —— 与 ao/taa 同形（全屏、**不挂深度附件**（深度只作
+		// sampleRead 输入做重投影）、绕序不剔、不混合；写 velocity RT 供 FSR / 诊断消费）
+		velocityState.depthTest = false;
+		velocityState.depthWrite = false;
+		velocityState.cullMode = vk::CullModeFlagBits::eNone;
 		// Phase 10 批 10.5：picking pass —— depth **只测不写**（复用 scene depth 得可见层，
 		// 不污染后续 transparent 段）；其余 = opaque 同（cull 后端面剔与 opaque 一致即可，
 		// id 归属 = 可见前表面）
@@ -137,6 +142,7 @@ export class StateKit {
 	RenderState lightState{};       // deferred light 全屏终图（见 ctor 注）
 	RenderState tonemapState{};     // Phase 8 ①：HDR→LDR tonemap 全屏终图（与 light 同形，见 ctor 注）
 	RenderState aoState{};          // Phase 11 批 11.4：SSAO 全屏终图（与 tonemap 同形，见 ctor 注）
+	RenderState velocityState{};    // 批 14.4：逐像素速度场 pass（与 ao 同形，见 ctor 注）
 	RenderState taaState{};         // 批 12.6：TAA 全屏 pass（与 ao 同形，见 ctor 注）
 	RenderState pickingState{};     // Phase 10 批 10.5：id pass 复用 scene depth 只测不写（见 ctor 注）
 	RenderState highlightState{};   // Phase 10 批 10.7：高亮 pass 叠加成片（混合 + 剔背面，见 ctor 注）
@@ -165,6 +171,7 @@ export class StateKit {
 		{"shadow", &StateKit::shadowState},
 		{"light", &StateKit::lightState},
 		{"ao", &StateKit::aoState},
+		{"velocity", &StateKit::velocityState},
 		{"taa", &StateKit::taaState},
 		{"tonemap", &StateKit::tonemapState},
 		{"izb_mask", &StateKit::izbMaskState},

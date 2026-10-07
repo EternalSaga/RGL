@@ -188,12 +188,14 @@ TEST_CASE("light / tonemap / ao 三段同形：全屏终图，无深度附件故
     }
 }
 
-TEST_CASE("tonemap / ao 与 light 逐字段完全相同（批 11.4 起 ao pass 走同一形态）") {
+TEST_CASE("tonemap / ao / velocity 与 light 逐字段完全相同（批 11.4 起 ao、批 14.4 起 velocity 走同一形态）") {
     const StateKit kit{true};
     // 这三条是**故意**相同，故断言相同本身有价值：任一段被单独改动都会在这里暴露。
     // 措辞要说清"这是期望"，否则读者会以为这是待修的重复。
     checkSameState(kit.stateFor("tonemap"), kit.stateFor("light"), "tonemap 应与 light 同形");
     checkSameState(kit.stateFor("ao"), kit.stateFor("light"), "ao 应与 light 同形");
+    checkSameState(kit.stateFor("velocity"), kit.stateFor("light"),
+        "velocity 应与 light 同形（批 14.4：全屏、深度只作 sampleRead、不剔不混合）");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -278,7 +280,7 @@ TEST_CASE("词表每个名字都能解析（派生口径 + internal 段也在 st
     }
     // 计数写死 = 加一个状态必须是显式决定（历史上 izb_mask 落地时本文件名单少一名，
     // AGENTS 与两份 Lua 头注释的"九段"口径同时变谎言行）。
-    CHECK(kAllNames.size() == 11);
+    CHECK(kAllNames.size() == 12);
     // internal 档（izb_mask）**不走图但必须能被 stateFor 解析**：执行器有硬编码录制
     // 路径直接按名取它（vkrenderer_passrec 的 IZB mask）。它的独有形态是 conservative
     // =true（FTIZB 保守覆盖命门）——十段里只有它有，正反两面一起钉。
@@ -304,6 +306,7 @@ TEST_CASE("十段实际只有五种形态（分组如实记录，防有人悄悄
     CHECK(fingerprint(kit.stateFor("opaque")) == fingerprint(kit.stateFor("shadow")));
     CHECK(fingerprint(kit.stateFor("light")) == fingerprint(kit.stateFor("tonemap")));
     CHECK(fingerprint(kit.stateFor("light")) == fingerprint(kit.stateFor("ao")));
+    CHECK(fingerprint(kit.stateFor("light")) == fingerprint(kit.stateFor("velocity")));
     CHECK(fingerprint(kit.stateFor("skybox")) == fingerprint(kit.stateFor("picking")));
     // 组间必须真的不同：任取一对跨组的做不等断言
     CHECK(fingerprint(kit.stateFor("opaque")) != fingerprint(kit.stateFor("transparent")));

@@ -45,6 +45,22 @@ namespace RGL {
 
 namespace {
 
+/**
+ * 解包启动期 expected：失败即抛，消息 = 「标签: 底层描述」。
+ *
+ * 本文件此前有 **10 处**逐字同构的四行段 `if (!x) throw std::runtime_error(fmt::format(
+ * "{} …失败: {}", x.error().describe()))`。批 14.4 加第 11 处（velocity RT）时收成一处——
+ * 十份副本意味着"改错误消息口径"要改十处，而漏改的那处**只在失败路径上被读到**，
+ * 正是最不容易被发现的那条路径（本项目在日志文案上漂过不止一次）。
+ * 消息格式与旧代码逐字一致（`"{}: {}"` + 原标签），启动失败输出零变化。
+ */
+template <class Exp>
+auto orThrow(Exp&& result, const char* what) {
+	if (!result)
+		throw std::runtime_error(fmt::format("{}: {}", what, result.error().describe()));
+	return *result;
+}
+
 /** deferred light 条目的阴影描述槽（Phase 11 批 11.2）。为何抽出成函数而不内联：它为
  *  assembleBackEnd 多了一个返回值分支（认知复杂度 +1，已触 15 阈值）。
  * 与 bakePipelineEntries 里的同名 ensure 幂等（按名缓存，同尺寸/格式 → 同槽，不重建图）。
@@ -63,11 +79,7 @@ uint32_t deferredShadowSlotOf(RenderTargetCache& rtCache) {
 /** EVSSM 矩图槽（批 11.6d-2）：发号 + 失败抛出收进 helper（assembleBackEnd 复杂度
  *  红线先例：调用点零分支）。幂等（bakePipelineEntries 已发过号则直接复用同号）。 */
 uint32_t evssmMomentsSlotOf(Resources& resources) {
-	auto slot = resources.ensureEvssmSampleSlot();
-	if (!slot)
-		throw std::runtime_error(
-			fmt::format("EVSSM 矩图槽发号失败: {}", slot.error().describe()));
-	return *slot;
+	return orThrow(resources.ensureEvssmSampleSlot(), "EVSSM 矩图槽发号失败");
 }
 
 }  // namespace
@@ -139,11 +151,8 @@ void uploadEnvironment(Resources& resources, Environment& env, DeviceContext& de
 	if (!envCfg.hdr.empty()) {
 		std::error_code ec;
 		if (std::filesystem::exists(envCfg.hdr, ec) && !ec) {
-			auto hdrResult = loadEnvCubeMapHdr(resources, env, device, envCfg.hdr,
-				envCfg.hdrSize, "scene.environment");
-			if (!hdrResult)
-				throw std::runtime_error(
-					fmt::format("environment: {}", hdrResult.error().describe()));
+			orThrow(loadEnvCubeMapHdr(resources, env, device, envCfg.hdr,
+				envCfg.hdrSize, "scene.environment"), "environment");
 			const auto& envAsset = *env.get();
 			auto& envCtx = registry.ctx().get<SceneEnv>();
 			envCtx.intensity = envCfg.intensity;
@@ -175,10 +184,8 @@ void bakePipelineEntries(UploadedAssets& uploaded, const SceneConfig& scene, boo
 	// 烘焙后再拿到就太晚）。与 env 槽同轴（AGENTS：环境上传 = A2 后、addModelEntry 前）。
 	// 无条件建（不看 diagnostics.shadow_pass）——光照管线无条件烘这个槽。
 	// assembleHdrAoChain 里的同名 ensure 是幂等的（deferred light 条目用）。
-	auto shadowSlot = ensureShadowMapSlot(rtCache, kShadowMapSize);
-	if (!shadowSlot)
-		throw std::runtime_error(
-			fmt::format("阴影图 RT 创建失败: {}", shadowSlot.error().describe()));
+	const auto shadowSlot = orThrow(ensureShadowMapSlot(rtCache, kShadowMapSize),
+		"阴影图 RT 创建失败");
 	// 批 11.6d-2：EVSSM 矩图槽条目烘焙前发号（binding 15 **无条件 bake**，shadowSlot
 	// 同纪律；门关 = -DEVSSM_SOFT 变体不声明该 binding = 空转无害，真描述符由
 	// EvssmShadow 构造时覆写同槽）。幂等，失败处理收 evssmMomentsSlotOf。
@@ -226,7 +233,7 @@ void bakePipelineEntries(UploadedAssets& uploaded, const SceneConfig& scene, boo
 				assetTable.getTexture(texIds.normal[i]).heapSlot,
 				assetTable.getTexture(texIds.orm[i]).heapSlot,
 				assetTable.getTexture(texIds.emissive[i]).heapSlot,
-				samplerSlot, *shadowSlot, samplers.ensurePointSampler(), evssmSlot);
+				samplerSlot, shadowSlot, samplers.ensurePointSampler(), evssmSlot);
 			pipelines.bindToAsset(id, entryIdx);
 			// Phase 11 批 11.2：阴影 depth-only 管线条目。按 vertexSlot 去重（addShadowEntry
 			// 内部有表）——bistro 1591 个 primitive 共用约 8 个拼接块槽 → 仅 8 条目。
@@ -376,31 +383,22 @@ void registerSceneEntities(entt::registry& registry, const UploadedAssets& asset
  * @param pipelines 管线表（建 ao/tonemap 条目）
  * @param taaDecorated 批 12.6：TAA 已装饰落图（启动期 decorateTaaPass 结果）。true =
  *        追加 taa_out/taa_hist RT + taa 条目，且 tonemap 色槽烘 taa_out；false = 逐位不变
+ * @param velocityDecorated 批 14.4：速度场已装饰落图。true = 追加 velocity RT + velocity
+ *        条目（**不改任何既有 binding**，与 taa 换 tonemap 色槽不同——速度场暂无下游）；
+ *        false = 逐位不变
  */
 void assembleHdrAoChain(Swapchain& swapchain, Resources& resources,
 	SamplerLibrary& samplers, RenderTargetCache& rtCache, ShaderRegistry& pipelines,
-	bool taaDecorated) {
-	auto hdrSlot = ensureSceneHdrSlot(rtCache, swapchain);
-	if (!hdrSlot)
-		throw std::runtime_error(
-			fmt::format("scene_hdr RT 创建失败: {}", hdrSlot.error().describe()));
-	auto aoSlot = ensureAoSlot(rtCache, swapchain);
-	if (!aoSlot)
-		throw std::runtime_error(
-			fmt::format("ao RT 创建失败: {}", aoSlot.error().describe()));
-	auto depthSlot = resources.ensureDepthSampleSlot();
-	if (!depthSlot)
-		throw std::runtime_error(
-			fmt::format("深度采样槽分配失败: {}", depthSlot.error().describe()));
+	bool taaDecorated, bool velocityDecorated) {
+	const auto hdrSlot = orThrow(ensureSceneHdrSlot(rtCache, swapchain), "scene_hdr RT 创建失败");
+	const auto aoSlot = orThrow(ensureAoSlot(rtCache, swapchain), "ao RT 创建失败");
+	const auto depthSlot = orThrow(resources.ensureDepthSampleSlot(), "深度采样槽分配失败");
 	// Phase 11 批 11.2：阴影图槽。**无条件建**（不看 diagnostics.shadow_pass）——光照管线条目
 	// 无条件烘焙它（否则开关时描述绑定的图从未被任何 pass 转布局 = 采样就报 VVL）。
 	// 门控在渲染侧：关时阴影段零 draw，图内全 1.0 = 无遮挡 → 成片逐位不变。
-	auto shadowSlot = ensureShadowMapSlot(rtCache, kShadowMapSize);
-	if (!shadowSlot)
-		throw std::runtime_error(
-			fmt::format("阴影图 RT 创建失败: {}", shadowSlot.error().describe()));
+	orThrow(ensureShadowMapSlot(rtCache, kShadowMapSize), "阴影图 RT 创建失败");
 	// ao / tonemap 条目下标由 Renderer 构造期按名 pipelineIndex("ao"/"tonemap") 取
-	[[maybe_unused]] auto aoIdx = pipelines.addAoEntry(*depthSlot, samplers.ensurePointSampler());
+	[[maybe_unused]] auto aoIdx = pipelines.addAoEntry(depthSlot, samplers.ensurePointSampler());
 	// 批 12.6 TAA（门默认关 = taaDecorated false = 本段整体跳过 = 槽/条目零变化）：
 	// ① 两幅 TAA RT 在 addTaaEntry 之前领槽（同 scene_hdr 契约：槽号烘进 binding，
 	//    resize 只重写描述符）；② **tonemap 的色输入槽换成 taa_out**——描述符绑定
@@ -409,18 +407,23 @@ void assembleHdrAoChain(Swapchain& swapchain, Resources& resources,
 	//    漏一条 = 读旧图或布局链错）。
 	std::optional<std::array<uint32_t, 2>> taaSlots;
 	if (taaDecorated) {
-		auto slots = ensureTaaSlots(rtCache, swapchain);
-		if (!slots)
-			throw std::runtime_error(
-				fmt::format("TAA RT 创建失败: {}", slots.error().describe()));
-		taaSlots = *slots;
+		taaSlots = orThrow(ensureTaaSlots(rtCache, swapchain), "TAA RT 创建失败");
 	}
 	[[maybe_unused]] auto tonemapIdx = pipelines.addTonemapEntry(
-		taaSlots ? (*taaSlots)[0] : *hdrSlot, *aoSlot, samplers.ensureShared());
+		taaSlots ? (*taaSlots)[0] : hdrSlot, aoSlot, samplers.ensureShared());
 	if (taaDecorated) {
 		[[maybe_unused]] auto taaIdx = pipelines.addTaaEntry(
-			*hdrSlot, (*taaSlots)[1], *depthSlot, samplers.ensureShared(),
-			samplers.ensurePointSampler(), *aoSlot);
+			hdrSlot, (*taaSlots)[1], depthSlot, samplers.ensureShared(),
+			samplers.ensurePointSampler(), aoSlot);
+	}
+	// 批 14.4 速度场（门默认关 = velocityDecorated false = 本段整体跳过 = 槽/条目零变化）：
+	// 领 velocity RT 槽 + 建条目两件事，**不动任何既有 binding**——速度场目前没有消费者
+	// （14.5 接 FSR 时才多一个下游），所以不像 taa 那样换 tonemap 的色槽。深度采样槽
+	// **复用 ao 那一份**（上面已 ensureDepthSampleSlot），不另领：sampler/描述符堆槽
+	// 自己算偏移是本项目的事故先例（vkresources.cppm:350）。
+	if (velocityDecorated) {
+		orThrow(ensureVelocitySlot(rtCache, swapchain), "velocity RT 创建失败");
+		[[maybe_unused]] auto velIdx = pipelines.addVelocityEntry(depthSlot);
 	}
 }
 
@@ -430,7 +433,7 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 	RenderTargetCache& rtCache, AssetTable& assets,
 							  ShaderRegistry& pipelines, CompiledRenderGraph&& graph,
 							  entt::registry& registry, const SceneConfig& scene, bool deferredMode,
-	bool taaDecorated) {
+	bool taaDecorated, bool velocityDecorated) {
 	// 批 13.6：AO 施加点标志 = **实际图形态**（`decorateTaaPass` 结果），**不是**配置键
 	// `taa.enabled`。true ⟹ AO 已由 taa pass 施加（时域滤波之前），tonemap 跳过；false ⟹ taa
 	// pass 不在图里（含 offscreen 变体：配置开了 TAA 但装饰失败），AO 留在 tonemap 施加。
@@ -481,20 +484,19 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 	// G-buffer RT 堆槽（运行时段）+ 建 light 管线，再构造
 	// Renderer（其构造期校验 drawLight pass 有 light 条目）。forward 全跳过。
 	if (deferredMode) {
-		auto gbSlots = ensureDeferredGBufferSlots(rtCache, swapchain);
-		if (!gbSlots)
-			throw std::runtime_error(
-				fmt::format("deferred: G-buffer RT 创建失败: {}", gbSlots.error().describe()));
+		const auto gbSlots =
+			orThrow(ensureDeferredGBufferSlots(rtCache, swapchain), "deferred: G-buffer RT 创建失败");
 		// light 条目下标由 Renderer 构造期按名 pipelineIndex("light") 取，此处仅需触发建条目
 		// 批 11.6d-2：EVSSM 矩图槽（binding 15 无条件 bake，同 shadowSlot 纪律；
 		// 失败处理收 helper，见 evssmMomentsSlotOf）
 		const uint32_t evssmSlot = evssmMomentsSlotOf(resources);
 		[[maybe_unused]] auto lightIdx = pipelines.addLightEntry(
-			(*gbSlots)[0], (*gbSlots)[1], (*gbSlots)[2], (*gbSlots)[3], (*gbSlots)[4],
+			(gbSlots)[0], (gbSlots)[1], (gbSlots)[2], (gbSlots)[3], (gbSlots)[4],
 			samplers.ensureShared(), deferredShadowSlotOf(rtCache), samplers.ensurePointSampler(),
 			evssmSlot);
 	}
-	assembleHdrAoChain(swapchain, resources, samplers, rtCache, pipelines, taaDecorated);
+	assembleHdrAoChain(swapchain, resources, samplers, rtCache, pipelines, taaDecorated,
+		velocityDecorated);
 
 	// Phase 7b：DGC 命令生成（NVIDIA 路）：仅 graphicsIndirect 能力时构造（RADV =
 	// compute only → null → Renderer 读回重放路）。管线表定后建（execution set

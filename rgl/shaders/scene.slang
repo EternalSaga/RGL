@@ -262,6 +262,60 @@ float3 envBrdfFactor(float NoV, float roughness, float3 F0)
     return F0 * A + B;
 }
 
+// ── 屏幕 ↔ 世界重建（Phase 14 批 14.4 自 ao.frag / taa.frag 抬升为单一来源）──
+//
+// 为什么抬上来：`clipToWorld` / `worldFromDepth` 此前在 ao.frag 与 taa.frag 里**逐字相同
+// 各存一份**（本批实测 diff 过），速度场是第三家。而速度场与 TAA 重投影的正确性判据恰恰是
+// 「两者必须互逆一致」——三份拷贝意味着"改了两处忘第三处"不报错、画面照样动，正是本项目
+// 反复踩的漂移形态（同 `readAoStrength` 从 tonemap 局部函数抬进本模块的理由）。
+// 抬升 = 逐字搬移，一个算术 bit 未动；红线 = `just shot` 与基线逐位相同（已实测）。
+//
+// ⚠ 口径（改任何一行都要同步 `rgl/velocity_field.cppm` 的 CPU 侧镜像与它的单测）：
+//   · ndc.x = uv.x·2−1，**ndc.y = 1 − uv.y·2**（framebuffer uv 原点左上、NDC 原点左下）；
+//   · ndc.z = Vulkan 深度 [0,1] 直接用（0 = near、1 = far，`GLM_FORCE_DEPTH_ZERO_TO_ONE`）；
+//   · 用的矩阵是 sceneData@64 = inverse(proj·view) 的**抖动后**口径（与深度缓冲配套）。
+
+// ObjectMatrix（列 c0..c3）× 列向量：clip/M 变换一律"列组合"写法（同 sky/ao 的
+// clipToWorld 惯例；勿按行主序点乘——ObjectMatrix 存的是列）。
+float4 mulM(ObjectMatrix m, float4 v)
+{
+    return m.c0 * v.x + m.c1 * v.y + m.c2 * v.z + m.c3 * v.w;
+}
+
+// clip → world（sceneData@64 = inverse(proj·view)，**抖动后**口径；字面量 64/80/96/112
+// 与 scene_data.cppm kSceneDataSkyOffset + 16*i 一致）
+float4 clipToWorld(float4 clip)
+{
+    float4 c0 = asfloat(sceneData.Load4(64));
+    float4 c1 = asfloat(sceneData.Load4(80));
+    float4 c2 = asfloat(sceneData.Load4(96));
+    float4 c3 = asfloat(sceneData.Load4(112));
+    return c0 * clip.x + c1 * clip.y + c2 * clip.z + c3 * clip.w;
+}
+
+// 屏幕 uv + 深度 → 世界坐标（y 翻转，Vulkan 深度直接用）
+float3 worldFromDepth(float2 uv, float depth)
+{
+    const float4 clip = clipToWorld(float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0));
+    return clip.xyz / clip.w;
+}
+
+// clip → **framebuffer uv**（`worldFromDepth` 的逆方向；y 翻转互逆：uv.y = (1 − ndc.y)/2）。
+// w ≤ 0（相机背后）时结果无意义，调用方须自行判——本函数不判，因为各消费者的拒收形态不同
+// （taa.frag 直接输出本帧、velocity 写零）。刻意收 clip 而非世界点：调用方本来就要先拿
+// clip 判 w，这样复用**不引入第二次矩阵乘**（taa.frag 换用它时算术逐位不变）。
+float2 uvFromClip(float4 clip)
+{
+    const float2 ndc = clip.xy / clip.w;
+    return float2(ndc.x * 0.5 + 0.5, (1.0 - ndc.y) * 0.5);
+}
+
+// 任意矩阵 × 世界点 → framebuffer uv（一步版；无需判 w 的调用方用这个）
+float2 uvFromWorld(float3 world, ObjectMatrix m)
+{
+    return uvFromClip(mulM(m, float4(world, 1.0)));
+}
+
 // ── 批 12.6 TAA（时域抗锯齿）尾区 ──
 //
 // 基址与 C++ 侧 scene_data.cppm kSceneDataTaa* 手写同源（两侧 static_assert 钉死）：

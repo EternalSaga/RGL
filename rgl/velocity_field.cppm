@@ -144,4 +144,32 @@ export inline PixelVelocity pixelVelocity(glm::vec2 uv, float depth, const Veloc
 	return out;
 }
 
+/**
+ * 抖动空间速度 → **基空间**速度。
+ *
+ * 内容位移口径 = `taa_jitter.cppm::contentShiftPx`（`c = (+jx, −jy)`，**不是** jitterPx）：
+ * 抖动帧 t 的像素 q 显示的是基位置 q − c_t 的内容，即「基位置 p 的内容出现在像素 p + c_t」。
+ * 于是同一个静止表面点：
+ *   抖动网格里的位移 = (p + c_{t−1}) − (p + c_t) = c_{t−1} − c_t   ← **与运动无关，纯抖动伪影**
+ *   基空间位移       = p − p = 0
+ * ⟹ `velocity_base = velocity_jittered + (c_t − c_{t−1})`。
+ *
+ * 为什么单独一个函数而不是并进 `pixelVelocity`：并进去了就有**两个旋钮互相决定输出空间**
+ * （喂的矩阵口径 + 内容位移给没给），而那正是编译器看不出、错了画面照样能看的那类成对约束
+ * ——与 `taa.frag.slang` 的「prevViewProj 抖动后 ⟺ 必须减 c_{t−1}」同款。拆开之后
+ * 调用方**显式**组合一行，空间归属写在名字里。
+ *
+ * 与文件头第 4 条的配对：喂抖动后矩阵（本项目 scene data 里那两份**都是**抖动后）
+ * ⟹ `pixelVelocity` 出抖动空间 ⟹ 过本函数得基空间 ⟹ FSR 的
+ * `ENABLE_MOTION_VECTORS_JITTER_CANCELLATION` **不开**（基空间速度里没有 jitter 项可抵消）。
+ *
+ * @param velocityJittered `pixelVelocity` 的输出（两帧矩阵均为抖动后）
+ * @param contentShiftCur  本帧内容位移 c_t 像素（scene data @722208.zw）
+ * @param contentShiftPrev 上一帧内容位移 c_{t−1} 像素（scene data @722224.xy）
+ */
+export inline glm::vec2 toBaseSpace(glm::vec2 velocityJittered, glm::vec2 contentShiftCur,
+                                    glm::vec2 contentShiftPrev) {
+	return velocityJittered + (contentShiftCur - contentShiftPrev);
+}
+
 }  // namespace RGL

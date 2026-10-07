@@ -319,6 +319,35 @@ namespace RGL {
 		return index;
 	}
 
+	/** addVelocityEntry 实现（契约见接口注释；批 14.4，仿 addAoEntry，少一个 sampler 绑定）。 */
+	uint32_t ShaderRegistry::addVelocityEntry(uint32_t depthSlot) {
+		if (auto idx = pipelineIndex("velocity"))
+			return *idx;
+		const RGL::PipelineSpec* spec = findSpec("velocity");
+		if (!spec)
+			throw std::runtime_error("pipeline spec not found: velocity");
+		const uint32_t descriptorSize = res.getDescriptorHeap().getDescriptorSize();
+		RGL::PipelineBindings b{};
+		b.descriptorSize = descriptorSize;
+		b.slotVertex = 0;   // binding 0/1 占位（velocity mesh = light.mesh 全屏大三角）
+		b.slotIndex = 1;
+		b.slotSceneData = sceneData.ensure();  // binding 3：@64 + TAA 尾区
+		b.hasSceneData = true;
+		b.extra = {
+			// 深度图（eDepth aspect）；本 shader 用 Load 直取 ⟹ 无 sampler 绑定
+			{.binding = 4, .sampler = false, .heapSlot = depthSlot},
+		};
+		auto entry = PipelineEntry{.name = "velocity",
+			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b),
+			.spec = *spec, .bindings = b};
+		const uint32_t index = static_cast<uint32_t>(entries.size());
+		indexByName[entry.name] = index;
+		entries.push_back(std::move(entry));
+		if (auto* logger = RLLogger::getInstance())
+			logger->debug("pipeline entry: velocity (depth slot {}) → 下标 {}", depthSlot, index);
+		return index;
+	}
+
 	/** addTaaEntry 实现（契约见接口注释；批 12.6，仿 addTonemapEntry 三步曲）。 */
 	uint32_t ShaderRegistry::addTaaEntry(uint32_t colorSlot, uint32_t historySlot,
 			uint32_t depthSlot, uint32_t samplerSlot, uint32_t pointSlot, uint32_t aoSlot) {

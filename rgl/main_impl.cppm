@@ -356,6 +356,23 @@ void wireSceneSpinContext(entt::registry& rg, const SceneConfig& scene) {
  *  Phase 10 批 10.5：diagnostics.picking（默认关）= 编译前 decoratePickingPass 装饰
  *  object_id pass（D10 编译图期门控——默认关不调用 = 图逐位同 diff0）。 */
 /**
+ * 批 14.4 速度场图装饰（与 decorateTaaOrWarn 同构；抽函数控复杂度）。
+ * 关（默认）= 不调 decorateVelocityPass = 图里根本没有这个 pass（**结构性**逐位不变，
+ * 不是"有但旁路"）。开但图形态不支持 = warn + false，装配层据 false 整套不建。
+ * @return 是否真正装饰落图
+ */
+bool decorateVelocityOrWarn(RgGraphDesc& desc, bool velocityEnabled) {
+	if (!velocityEnabled)
+		return false;
+	if (decorateVelocityPass(desc))
+		return true;
+	if (auto* logger = RLLogger::getInstance())
+		logger->warn("velocity: 图形态不支持速度场装饰（锚点 = 写 swapchain 且采样场景色的 "
+			"pass，且其前须有可 store 的 depth 写者），本次运行无逐像素速度场");
+	return false;
+}
+
+/**
  * 批 12.6 TAA 图装饰（compileGraphOrThrow 尾段调用；抽函数控复杂度）。
  * 关（默认）= 不调 decorateTaaPass = 图逐位不变；开但图形态不支持（offscreen DIAG
  * 变体用 blit 上屏，无「写 swapchain 且采色」的 pass）= warn + 返回 false，
@@ -373,7 +390,8 @@ bool decorateTaaOrWarn(RgGraphDesc& desc, bool taaEnabled) {
 	return false;
 }
 
-CompiledGraphResult compileGraphOrThrow(const char* path, bool taaEnabled) {
+CompiledGraphResult compileGraphOrThrow(const char* path, bool taaEnabled,
+	bool velocityEnabled) {
 	auto graphConfig = loadRenderGraphConfig(path);
 	if (!graphConfig)
 		throw std::runtime_error(graphConfig.error().describe());
@@ -404,13 +422,17 @@ CompiledGraphResult compileGraphOrThrow(const char* path, bool taaEnabled) {
 	// 批 12.6 TAA 装饰**必须最后**（在 picking / highlight / shadow 之后）：它把
 	// 「写 swapchain 且采色」的 pass（tonemap）的输入换成时域结果，若 highlight 后插
 	// 就会落在 taa 与 tonemap 之间而吃不到滤波。默认关 = 不装饰 = 图逐位不变（D10 纪律）。
+	// 批 14.4 速度场装饰**先于** TAA（TAA 保持「必须最后」的既有纪律）。落点顺序
+	// = [velocity, taa, tonemap]：两者都只 sampleRead depth，彼此无依赖，而 TAA 的锚点
+	// 是**现搜**的（不缓存下标）⟹ velocity 先插不会让 TAA 认错消费者。
+	const bool velocityDecorated = decorateVelocityOrWarn(graphConfig->desc, velocityEnabled);
 	const bool taaDecorated = decorateTaaOrWarn(graphConfig->desc, taaEnabled);
 	auto compiledGraph = compileRenderGraph(graphConfig->desc);
 	if (!compiledGraph)
 		throw std::runtime_error(fmt::format("render graph compile failed: {}",
 			compiledGraph.error().describe()));
 	return CompiledGraphResult{std::move(*compiledGraph), deferredMode, graphConfig->variant,
-		taaDecorated};
+		taaDecorated, velocityDecorated};
 }
 
 /**
@@ -559,7 +581,7 @@ int main() {
 		// Phase 7 路线选路（2026-09-08 env→配置）：顶层 variant = "forward"(默认)/
 		// "deferred"/"offscreen"——后两者为内建 exclusive 图变体（覆盖文件 passes）
 		auto graphResult = compileGraphOrThrow(configPath("render_graph.lua").c_str(),
-			configs.scene.taaEnabled);
+			configs.scene.taaEnabled, configs.runtime.velocityField);
 		const bool deferredMode = graphResult.deferredMode;
 		// 图来源/规模观测（排"配置没生效"类问题：pass 数与 configs/render_graph.lua 对账）
 		if (auto* logger = RLLogger::getInstance())
@@ -609,7 +631,7 @@ int main() {
 		//（装配时序契约见 assembleBackEnd 接口注释；graph 在此 move 进 Renderer）
 		auto backEnd = assembleBackEnd(vkDevice, vkSwapchain, vkResources, sceneData, samplers, env, rtCache, assetTable, shaderRegistry,
 			std::move(graphResult.graph), registry, configs.scene, deferredMode,
-			graphResult.taaDecorated);
+			graphResult.taaDecorated, graphResult.velocityDecorated);
 
 		// Phase 9.2：GPU 时间戳会话（声明序在 backEnd/vkDevice 后 = 析构序其先，
 		// query pool 不越过 device 生命周期——GPU 资源所有权规则；profiler=0 /

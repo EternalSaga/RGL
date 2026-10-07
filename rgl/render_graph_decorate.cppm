@@ -54,6 +54,28 @@ std::optional<size_t> firstColorConsumerIndex(const RgGraphDesc& desc) {
 }
 
 /**
+ * 「**写 swapchain 且** sampleRead 色附件」的 pass 下标（两条路线都是 tonemap）。
+ *
+ * 批 14.4 自 `decorateTaaPass` 抽出为**共享锚点判据**（taa 与 velocity 两个装饰器认同一个
+ * 消费者；各写一份必然漂移）。刻意要求"写 swapchain"：offscreen DIAG 变体用 blit 上屏
+ * （transferRead 不是 sampleRead）⟹ 返回 nullopt，两个装饰器都自动不参与该图形态。
+ */
+std::optional<size_t> swapchainColorConsumerIndex(const RgGraphDesc& desc) {
+	const auto swapIt = std::ranges::find(desc.attachments, RgAttachmentKind::swapchain,
+		&RgAttachmentDesc::kind);
+	if (swapIt == desc.attachments.end())
+		return std::nullopt;
+	for (size_t i = 0; i < desc.passes.size(); ++i) {
+		const auto& p = desc.passes[i];
+		const bool writesSwapchain = std::ranges::any_of(p.outputs,
+			[&](const RgPassAttachment& o) { return o.attachment == swapIt->name; });
+		if (writesSwapchain && sampledColorName(desc, p))
+			return i;
+	}
+	return std::nullopt;
+}
+
+/**
  * 插入点之前**最后一个写 depth 的 pass** 的 depth 附件名（借它做可见性测试），并就地把它
  * 的 storeOp 修正为 store——否则 forward 图的 transparent 段按"depth 后续无人用"的优化
  * 声明 dontCare，高亮读到的是未定义内容。
@@ -188,21 +210,9 @@ bool decorateShadowPass(RgGraphDesc& desc, uint32_t mapSize) {
  * taa pass + 帧末 commit blit；消费者输入改写的角色反查纪律同 picking / highlight）。
  */
 bool decorateTaaPass(RgGraphDesc& desc) {
-	// 锚点 = 「写 swapchain 且 sampleRead 色附件」的 pass（两条路线都是 tonemap）。
-	// 刻意要求"写 swapchain"：offscreen DIAG 变体用 blit 上屏（transferRead 不是
-	// sampleRead）→ 本装饰返回 false，TAA 不参与该图形态。
-	const auto swapIt = std::ranges::find(desc.attachments, RgAttachmentKind::swapchain,
-		&RgAttachmentDesc::kind);
-	if (swapIt == desc.attachments.end())
-		return false;
-	std::optional<size_t> consumerIdx;
-	for (size_t i = 0; i < desc.passes.size() && !consumerIdx; ++i) {
-		const auto& p = desc.passes[i];
-		const bool writesSwapchain = std::ranges::any_of(p.outputs,
-			[&](const RgPassAttachment& o) { return o.attachment == swapIt->name; });
-		if (writesSwapchain && sampledColorName(desc, p))
-			consumerIdx = i;
-	}
+	// 锚点 = 「写 swapchain 且 sampleRead 色附件」的 pass（两条路线都是 tonemap）；
+	// 判据自批 14.4 起与 velocity 装饰器共享（见 swapchainColorConsumerIndex）。
+	const auto consumerIdx = swapchainColorConsumerIndex(desc);
 	if (!consumerIdx)
 		return false;
 	auto colorAtt = sampledColorName(desc, desc.passes[*consumerIdx]);  // 上一步已保证有值
@@ -261,6 +271,43 @@ bool decorateTaaPass(RgGraphDesc& desc) {
 			.usage = RgUsage::transferWrite}},
 		.inputs = {RgPassAttachment{.attachment = std::string{kTaaOutName},
 			.usage = RgUsage::transferRead}}});
+	return true;
+}
+
+/**
+ * decorateVelocityPass 定义（契约见 render_graph.cppm 接口注释）：一个附件 + 一个全屏 pass，
+ * 无历史、无 commit、不改任何消费者的输入——**纯增量**，这是"门关 = 图逐位不变"能结构性
+ * 成立的原因（门关 = 不调本函数 = 图里根本没有这个 pass，而不是"有但旁路"）。
+ *
+ * 与 taa 装饰的三处差别（照抄 taa 会错的地方）：
+ *  - **不改消费者输入**：taa 要把 tonemap 的色输入换成 taa_out；速度场没有下游（14.5 才接
+ *    FSR），换输入 = 凭空改交付路径。
+ *  - **不采色附件**：只 sampleRead depth。⟹ `sampledColorName` 对本 pass 返回 nullopt，
+ *    不会被 highlight / taa 的锚点搜索误认成"消费成片的点"（`decorateTaaPass` 里那条
+ *    「AO 也是色附件，排在 inputs 前面会误认」的教训在此不适用，但**新增色输入时必须重查**）。
+ *  - **无 history 附件**：速度场每帧全量重算，不跨帧携带状态。
+ */
+bool decorateVelocityPass(RgGraphDesc& desc) {
+	const auto consumerIdx = swapchainColorConsumerIndex(desc);
+	if (!consumerIdx)
+		return false;  // offscreen DIAG 变体：无"写 swapchain 且采色"的 pass
+	// depth 附件名从"插入点之前最后一个写 depth 的 pass"反查（不硬编码 "depth"，三个图
+	// 变体自动适用），并顺手把它的 storeOp 修成 store——否则 forward 图的 depth 按"后续
+	// 无人用"声明 dontCare，本 pass 读到未定义内容，且编译期"后续使用的写必须 store"校验
+	// 会直接失败（同 ao 批 11.4 那条教训，见 configs/render_graph.lua:57 的硬警告）。
+	auto depthAtt = borrowDepthFromPriorWriter(desc, *consumerIdx);
+	if (!depthAtt)
+		return false;  // 插入点之前无人写 depth = 速度场无从算起
+
+	desc.attachments.push_back(RgAttachmentDesc{
+		.name = std::string{kVelocityName}, .kind = RgAttachmentKind::offscreen,
+		.format = std::string{kVelocityFormat}});
+	desc.passes.insert(desc.passes.begin() + static_cast<long>(*consumerIdx), RgPassDesc{
+		.name = std::string{kVelocityPassName}, .kind = RgPassKind::drawLight,
+		.state = "velocity",
+		.outputs = {RgPassAttachment{.attachment = std::string{kVelocityName},
+			.usage = RgUsage::colorWrite, .loadOp = RgLoadOp::clear, .storeOp = RgStoreOp::store}},
+		.inputs = {RgPassAttachment{.attachment = *depthAtt, .usage = RgUsage::sampleRead}}});
 	return true;
 }
 

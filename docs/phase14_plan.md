@@ -306,12 +306,44 @@ taa.frag.slang:530-540   depth = depthTex.Load(像素)
 - 7 组变异全部实测验红（含"两道非有限防护互为冗余 ⟹ 单点变异检不出"这条如实记录）。
 - 交付路径逐位不变（新模块**尚无调用方**）。
 
+#### 本批第二批已落地：pass 侧（门 `runtime.lua velocity_field`，默认关）
+
+**零新契约**——速度场要的四个输入**全都已经在 scene data 里**：`skyInvViewProj@64`
+（抖动后逆，与深度配套）+ `prevViewProj@722080` + `motion@722144` + `c_t@722208.zw` /
+`c_{t−1}@722224.xy`。不新增字段 ⟹ 不动布局、不改 buffer 大小。
+
+- **落点 = 装饰器**（`decorateVelocityPass`，与 taa 同锚点、**先于** taa 调），不是 ao 那种
+  「无条件写死在图里 + shader 侧旁路」。差别是红线机制的强度：**门关 = 图里根本没有这个
+  pass**（不领 RT、不建条目），结构性逐位不变，而不是"有但旁路"。
+  ⚠ 顺带纠正一个容易踩的前提：**运行时生效的图是 `configs/render_graph.lua`，不是 C++
+  内建图**（后者只服务 selfCheck / 回落）——但**装饰器路线绕开了改 4 份 lua**（configs +
+  qa/configs/{analytic,env_band,nm_rig}），这是它相对 ao 路线的第二重便宜。
+- **格式复用 `rgba16_sfloat`**（不新开 rg16_sfloat）：新格式要在 `render_graph_formats`
+  词表 + `frame_capture` 的 `captureBpp` + `llm_debug` 通道转换器**三处**同时挂号，
+  而漏掉后两处**不崩不报错**（staging 按错字节数算 ⟹ 捕获尾部是上一次残留）。
+  FP16 是**相对**精度，速度量级 1–300 px 时 ulp ≈ 0.001–0.15 px，够用。
+- **共享重建函数**：`clipToWorld` / `worldFromDepth` 原在 ao.frag 与 taa.frag 各存一份
+  逐字相同的拷贝，速度场是第三家 ⟹ 抬进 `scene.slang`（并新增 `uvFromClip` / `uvFromWorld`）。
+  抬升是逐字搬移，**但用 `just shot` 逐位对拍证明过**（时机判据与验证方式 → 调试历史
+  2026-10-08 批 14.4 第 2 条）。
+- **闭合式**：`vel_base = (prevUv − input.uv)/texel − c_{t−1}`——代入后 `c_t` 自己消掉。
+  `c_t` 与 `c_{t−1}` 这一对由 `render_list_impl.cppm:263/:285` 受**同一个** `taa.base_space`
+  门控写 0 ⟹ 永远成对，门关时自动退化为自洽的抖动空间速度（不是"半修正"的错误形态）。
+- **判据（实测）**：门开 VVL **0 错 0 警**、RT = 渲染网格（`smoke.py --velocity-field`
+  双向核对，含"静默没落图"第三档）；门开/门关截图**逐位相同**（无消费者 ⟹ 本应如此）；
+  活性 = 把输出附件临时改指 `scene_hdr` 的变异，画面平均绝对差 **98.74**。
+  ⚠ **"逐位相同"对新 pass 是盲区不是证据**，推广见调试历史同批第 1 条。
+- 顺手两处：`decorateTaaPass` 的锚点判据抽成共享 `swapchainColorConsumerIndex`（两份必然
+  漂移）；`main_scene.cppm` 里 10 处逐字同构的解包 throw 收成 `orThrow`（超 500 行红线
+  2 行是契机，去重本身是正当改动）。
+
 #### 剩余工作（14.4 未完）
 
-① pass 侧：新 RT（`R16G16B16A16_SFLOAT` 或 RG16F）+ 新 `.slang` 全屏 shader +
-`pass_vocabulary` 加状态 + StateKit 成员 + 图装配 + `VelocityFrame` 每帧装配（生产者 = 
-`taaSystem` 旁边，它已经持有两帧矩阵与 spin）；② TAA 门改吃场（判据 ④，**预期不翻案**）；
-③ imgqa 臂 14 注册。**红线**：`motionVectors` 关 = 逐位不变（与 TAA / FSR 同款）。
+① **GPU 侧逐像素对拍通道**——**已挂号债-74**：按附件名回读产物是 PNG，而 RGBA16F 走
+`convRgba16Half` 的 **clamp [0,1]**，带符号可达数百像素的速度量经这条链**表达不了**
+⟹ 本批判据 ① 只做到 CPU 半边，GPU 半边缺桥；
+② TAA 门改吃场（判据 ④，**预期不翻案**，理由见上面"修正二"）；③ imgqa 臂 14 注册。
+**红线**：`velocity_field` 关 = 逐位不变（已实测，机制 = 图里没有这个 pass）。
 
 ## 2. 批次拆分与验收判据
 
@@ -324,7 +356,7 @@ taa.frag.slang:530-540   depth = depthTex.Load(像素)
 | ~~**14.1**~~ ✅ **已收口 2026-10-08** | **vendor 骨架 + 编译成功**：从 `c6efa6b` 捞 `sdk/{include,src/backends/vk,src/backends/shared,src/components}` 的 FSR3-upscaler 闭包 → 写 shader 排列生成器（glslang）→ 产物签入 + SHA1 护栏 → `ffx_vk.cpp` 在 Linux/clang 编过（`<codecvt>` 死分支、警告） | 用户方向第一条。**编译不过，后面全是空谈**；且这一步**不碰引擎**，失败可整棵删掉 | ① 独立 target（`third_party/fsr/`）**能编出静态库**，Linux clang + Windows MSVC 双平台 configure 通过 —— ⚠ **Windows 侧未验**（本机无 Windows；改动全在 `#ifndef _WIN32` 或新增 TU，是推理非实测，见 §1.8）；② SPIR-V 排列产物齐（**实际 80 个唯一模块**，非 40）、`just fsr-check` SHA1 护栏覆盖 —— ✅ 变异验过非空转；③ **交付路径逐位不变** —— ✅ `just smoke` PASS errors=0 warnings=0（与开工前基线同）；④ `just test` 全绿 —— ✅ 206/206。**收口记录** → §1.8 + `调试历史.md` 2026-10-08 + `third_party/fsr/PATCHES.md` |
 | ~~**14.2**~~ ✅ **已收口 2026-10-08** | **输入面研究（只出文档，不改渲染）**：`jitterOffset` / `motionVectors` / `depth` / `reset` 四个量的**单位、坐标系、符号、采样时刻**逐条与 FSR 源码对拍，写成表；顺带定 `ENABLE_DEPTH_INVERTED` / `_DEPTH_INFINITE` / `_MOTION_VECTORS_JITTER_CANCELLATION` / `_DISPLAY_RESOLUTION_MOTION_VECTORS` 的取值 | 用户方向第二条。**这是本项目第三次栽在"参考/闭式的观测坐标系与被测项不一致"的位置**（`phase13_plan` §1.6 撤回条、§1.17 结论 5 的 φ 反号）——先定口径再写代码 | ① 一张四行表，每行给「FSR 要的口径 / 我们现在的口径 / 差什么 / 差值怎么验」——✅ `docs/FSR输入契约.md`；② **每条差值有一条可跑的对拍**（合成靶或解析式），不接受"读源码认为一致" —— ✅ 四条全部实机对拍（载体 = `just fsr-smoke` 的三条契约探针，常驻非常驻可选）；③ 符号项必须有**反向用例**（符号取反必须更差）—— ✅ MV ±dx、jitter 期望取反变异、depth **真开 `DEPTH_INVERTED`** 后判据行 0.2000→1.0000。**残留**：jitter 在 accumulate 路径的定量判据做不出来（合法量级 ±0.5 px 低于重建滤波器量化），已记为 14.5 第一嫌疑 |
 | ~~**14.3**~~ ✅ **已收口 2026-10-08** | **内部分辨率与窗口拉伸解耦**：现在 render extent ≡ swapchain extent ≡ 窗口像素（`Resources` 深度图 extent = swapchain extent；全仓**无 `renderScale` 概念**，只有 `vkswapchain.cppm` 的 `windowScale` 诊断）。加一个独立的 render extent，与 swapchain extent、与债-37 的 HPD 分数缩放三者正交 | 用户方向第四条。**它是 FSR 的硬前置，但本身独立可验收、且净收益**（DRS / 性能实验都缺它）；与 14.1 并行 | ① `renderScale ∈ {1.0, 0.75, 0.5}` 下画面正确、resize 不崩、imgui 与**点选**不受影响（债-37 三条连带不许回退）—— ✅ 三档实机出图（0.5 档读图：内容/取景/比例正确，仅整体变软 = 双线性放大预期）；imgui 恒在后缓冲像素、点选两级换算收口，债-37 三条连带无回退（renderScale=1 时比值恰为 1）；**live resize 未手工验证**，改为把取整/钳制写成单测断言覆盖；② `renderScale = 1.0` 时**逐位等于**今天的基线（红线）—— ✅ 1280×720 与 1600×900 两档与开工前基线逐位相同（同会话增量构建），且**结构上**成立：图形状与 renderScale 无关（§1.9）；③ 截图/判据口径显式记录 render extent（否则 imgqa 所有像素类判据静默换含义）—— ✅ 启动日志 + 截图成功日志 + RPC `/state` 新增 `render` 段 + `just shot` 网格行；`--render-scale` **核对引擎实际生效值**（变异验红：请求 0.1 → 钳到 0.25 → FAIL）；④ Wayland 175% 缩放下实测一次 —— ⚠ **未做**（本机无 Wayland 会话）；默认档行为逐位同前，风险仅在显式改档。**收口记录** → §1.9 |
-| **14.4** 🕳 **进行中**（纯函数层已落地） | **逐像素速度场**（债-71 / 债-35，**本 phase 最大的一块**）：compute pass 由两帧相机矩阵 + `depthTex` 解析算出每像素速度（本项目唯一运动是全局刚体 ⟹ 便宜），输出 FSR 口径的 `motionVectors`；同时把 TAA 的重投影从"全局矩阵"改成"读这张场" | 用户方向第三条。**它是天花板唯一的出口**，且能独立验收（不必等 FSR 接完）——臂 14 = 门改吃真实逐像素速度 ⟹ 直接问跷跷板是否松绑 | ① 速度场与**独立解析参考**逐像素对拍（含 pitch；用 `temporal_yaw_remap` 那套带 pitch 的金标准，2.3e-13px）；② **阳性锚点** = 静止机位必须恒 0；③ **反向用例** = 符号取反必须让 §1.22 的 R 变差；④ 用它重跑 `temporal-tail --motion step` 与 `temporal-motion`，报 R 是否 < 1（**这是"运动中 TAA 有害"能不能翻案的判决**） |
+| **14.4** 🕳 **进行中**（纯函数层 + pass 侧已落地） | **逐像素速度场**（债-71 / 债-35，**本 phase 最大的一块**）：compute pass 由两帧相机矩阵 + `depthTex` 解析算出每像素速度（本项目唯一运动是全局刚体 ⟹ 便宜），输出 FSR 口径的 `motionVectors`；同时把 TAA 的重投影从"全局矩阵"改成"读这张场" | 用户方向第三条。**它是天花板唯一的出口**，且能独立验收（不必等 FSR 接完）——臂 14 = 门改吃真实逐像素速度 ⟹ 直接问跷跷板是否松绑 | ① 速度场与**独立解析参考**逐像素对拍（含 pitch；用 `temporal_yaw_remap` 那套带 pitch 的金标准，2.3e-13px）；② **阳性锚点** = 静止机位必须恒 0；③ **反向用例** = 符号取反必须让 §1.22 的 R 变差；④ 用它重跑 `temporal-tail --motion step` 与 `temporal-motion`，报 R 是否 < 1（**这是"运动中 TAA 有害"能不能翻案的判决**） |
 | **14.4b** | **图外资源挂号 + 布局对账护栏**（FSR 前置，见 §1.7）。做两档、明确不做第三档：**A 护栏**（便宜）= 图外 pass 进出点比对 `attachmentLayouts[slot]` 与预期值，不符即 error 出声，把"进出同值"从**约定**变**断言**；**B 挂号**（中等）= `RgGraphDesc` 增加 external-use 声明（attachment × usage × 插在哪个 pass 之后/之前），GraphCompiler 据此把 barrier 并入计划，`IzbShadow` / `EvssmShadow` / FSR 三处不再手写 **image** barrier；**C 不做** = buffer 侧依赖自动推导（图只跟 image attachment，加进去 = 半个 memory manager） | **排在 14.5 之前**：FSR 是第三个图外 compute，先立护栏再扩面，否则 14.5 的 VVL 判据要替"约定"背锅，而债-32 已经证明这类缺口 VVL 不报 | ① **阳性锚点** = 故意让某图外 pass 不还原布局 ⟹ 护栏必须 error（**变异验过非空转**）；② **反向** = 现状全绿（护栏零误报，否则等于没有）；③ 红线 = 画面逐位不变（护栏只读不写命令）；④ B 档做完 = `izb_shadow_impl.cppm:256,280` 两处 `depthLayoutBarrier` 删除且画面逐位不变 |
 | **14.5** | **FSR 接线**：落位 = **图外 compute 编舞**（`RgPassKind` 只有 `drawMesh/blit/drawLight`，**无 compute kind**；先例 = IzbShadow / EvssmShadow，见 `evssm_shadow.cppm:20`）。HDR 域位置 = **tonemap 之前**（scene_hdr@render res → FSR → hdr@display res → tonemap → swapchain），`ENABLE_HIGH_DYNAMIC_RANGE` 开 | 唯一架构决策，先写死再动手，免得中途返工 | ① **FSR 关 = 逐位不变**（与 TAA 同款红线，用基线配置）；② VVL 零报错（含跨 submission 依赖与布局链——债-32 那条"图外编舞"的坑）；⚠ **布局漂移 VVL 抓不到**（布局本身合法，症状隔一整帧），这一项靠 **14.4b 的护栏**，不是靠 VVL；③ 显存账新增"外部分配器"科目且**闭合断言重新有意义**；④ 本批**只点亮、不调参**，`NATIVEAA` + `renderScale=1.0` 起步 |
 | **14.6** | **判据迁移**：直接复用（`temporal-tail --motion step` 含闭式锚臂 E、`temporal-motion` 的 M0/M1/M2/M3x 消融族、理想 N 相位平均参考、往返地板、`aa-coverage`、`temporal` 的 ρ 对闭式、alignment/ablation 两条**元判据**）／换口径（ρ 六机位表：**算子留、阈值全重立**，闭式 ρ\*=0.0827 是 EMA 的闭式，FSR 不是 EMA）／随 TAA 作废（`clip_mode` 臂族、gate 断点锚点、`diag_reject` alpha 解码） | 用户方向最后一条"跑一堆 imgqa"的前置。**不先分类就会拿 TAA 的阈值判 FSR** | ① 三张清单落到 `imgqa` 的判据注册表（**不在文档里抄清单**，抄名单反模式）；② 每条"复用"项跑一次并记录新基线；③ 每条"作废"项**先确认不是护栏**（债-68 三条件） |

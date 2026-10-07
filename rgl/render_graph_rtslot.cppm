@@ -126,6 +126,30 @@ std::expected<std::array<uint32_t, 2>, Error> ensureTaaSlots(
 }
 
 /**
+ * Phase 14 批 14.4（接口注释见 render_graph.cppm）：单幅全屏 RT，名字/格式 =
+ * kVelocityName/kVelocityFormat 契约常量。extent 取 **渲染**网格（`getRenderExtent()`，
+ * 批 14.3 起 ≠ 后缓冲）——速度场的分辨率就是渲染网格，shader 侧 `/fwidth(uv)` 折出的
+ * 像素单位与之一致。启动期仅速度场开启时调用一次。
+ */
+std::expected<uint32_t, Error> ensureVelocitySlot(
+		RenderTargetCache& rts, Swapchain& swapchain) {
+	const std::string name{std::string{kVelocityName}.c_str()};
+	const vk::Extent2D extent = swapchain.getRenderExtent();
+	const vk::Format format = resolveRgFormat(std::string{kVelocityFormat}, vk::Format::eUndefined);
+	auto rt = rts.ensure(name, extent, format);
+	if (!rt)
+		return std::unexpected(std::move(rt).error());
+	auto slot = rts.heapSlot(name);
+	if (!slot)
+		return std::unexpected(Error{ErrorCode::Unknown,
+			fmt::format("velocity RT has no sample descriptor slot")});
+	if (auto* logger = RLLogger::getInstance())
+		logger->info("velocity (RGBA16F, 像素单位 prev−cur): {}x{} slot {}",
+			extent.width, extent.height, *slot);
+	return *slot;
+}
+
+/**
  * Phase 11 批 11.2（接口注释见 render_graph.cppm ensureShadowMapSlot）：阴影图 RT + 采样堆槽。
  * 尺寸 = 2·mapSize（候逇 4 级 2×2 图集；当前 kActiveShadowCascades=1 时也只用左上那一块，
  * 但分辨率一开始就固定在 2·mapSize，切到 4 级时不需重建描述绑定）。

@@ -422,4 +422,49 @@ TEST_CASE("深度为 NaN / inf（GPU 侧 UAF 的真实产物形态）⟹ 判无�
 	CHECK(pixelVelocity({0.5f, 0.5f}, 0.5f, fr).valid);
 }
 
+TEST_CASE("🔴 基空间换算：静止机位 + 逐帧变化的 jitter ⟹ 基空间速度恒 0") {
+	// 本条是 `toBaseSpace` 的**阳性锚点**，也是整条速度场链路里最容易做错的一环。
+	// 形态：两帧相机矩阵**完全相同**（机位静止、无自旋），但抖动相位每帧不同
+	// （Halton 序列 ⟹ c_t ≠ c_{t−1}，这是 TAA 的正常工作状态）。
+	// 此时真值 = **恒 0**：表面点根本没动。而抖动空间的原始输出是 c_{t−1} − c_t
+	// （纯抖动伪影、与运动无关），量级 ±1 px —— **与真实亚像素运动同量级**，
+	// 所以漏掉这一步不会让画面崩，只会让 FSR/TAA 的历史在静止机位下也被判成"在动"，
+	// 表现为静止画面糊（与债-65 同族的"错得很小所以看不见"）。
+	const RefCamera cur = RefCamera::fromYawPitch({0.0, 1.0, 5.0}, 0.3, -0.2);
+	const auto proj = glm::perspective(kFovY, kAspect, kNear, kFar);
+	const glm::vec2 jCur{0.41f, -0.28f}, jPrev{-0.33f, 0.37f};  // 任意两相位（模拟相邻帧）
+
+	VelocityFrame fr;
+	fr.curInvViewProj = glm::inverse(applyProjectionJitter(proj, jCur, kExtent) * cur.view());
+	fr.prevViewProj = applyProjectionJitter(proj, jPrev, kExtent) * cur.view();
+	fr.extent = kExtent;
+	const glm::vec2 cCur = contentShiftPx(jCur), cPrev = contentShiftPx(jPrev);
+
+	int checked = 0;
+	float maxRaw = 0.0f, maxBase = 0.0f;
+	for (float u : {0.1f, 0.35f, 0.5f, 0.65f, 0.9f}) {
+		for (float v : {0.1f, 0.35f, 0.5f, 0.65f, 0.9f}) {
+			for (float d : {0.5f, 0.9f}) {
+				const auto raw = pixelVelocity({u, v}, d, fr);
+				REQUIRE(raw.valid);
+				const glm::vec2 base = toBaseSpace(raw.velocityPx, cCur, cPrev);
+				maxRaw = std::max(maxRaw, glm::length(raw.velocityPx));
+				maxBase = std::max(maxBase, glm::length(base));
+				CHECK(glm::length(base) < kNoisePx);
+				++checked;
+			}
+		}
+	}
+	CHECK(checked == 50);
+	// 两条**互相成就**的断言：
+	// ① 换算后必须落到噪声地板内（上面已判），② 换算**前**必须明显非零——
+	// 否则"换算后为 0"可能只是因为整条链路恒 0（那 ① 就是空的）。
+	CHECK(maxRaw > 0.1f);
+	CHECK(maxBase < kNoisePx);
+	// 且换算量恰好是 c_t − c_{t−1}（逐点差恒等，不是拟合出来的系数）
+	const auto one = pixelVelocity({0.5f, 0.5f}, 0.5f, fr);
+	const glm::vec2 expect = one.velocityPx + (cCur - cPrev);
+	CHECK(glm::length(toBaseSpace(one.velocityPx, cCur, cPrev) - expect) == doctest::Approx(0.0f));
+}
+
 }  // namespace RGL

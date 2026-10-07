@@ -45,24 +45,8 @@ static const float kHemisphereCut = 0.1;
 // （取代早先的 pow(x, 2) 曲线——那是在二值累加下才有意义，加权后会二次压制。）
 static const float kGain = 3.0;
 
-// clip → world（列组合变换，sky.slang skyClipToWorld 同款——字面量 64/80/96/112 与
-// scene_data.cppm kSceneDataSkyOffset + 16*i 一致）
-float4 clipToWorld(float4 clip)
-{
-    float4 c0 = asfloat(sceneData.Load4(64));
-    float4 c1 = asfloat(sceneData.Load4(80));
-    float4 c2 = asfloat(sceneData.Load4(96));
-    float4 c3 = asfloat(sceneData.Load4(112));
-    return c0 * clip.x + c1 * clip.y + c2 * clip.z + c3 * clip.w;
-}
-
-// 屏幕 uv + 深度 → 世界坐标。ndc.xy = uv×2−1 且 y 翻转（framebuffer uv 原点左上、NDC
-// 原点左下），ndc.z = Vulkan 深度 [0,1] 直接用（0 = near，1 = far）。
-float3 worldFromDepth(float2 uv, float depth)
-{
-    const float4 clip = clipToWorld(float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0));
-    return clip.xyz / clip.w;
-}
+// `clipToWorld` / `worldFromDepth` 自批 14.4 起是 **scene.slang 的共享函数**（本文件曾是
+// 它的出处之一，与 taa.frag 各存一份逐字相同的拷贝；抬升理由与口径见 scene.slang 段头）。
 
 // 哈希 → [0,1)（Wang hash）。逐像素抖动采样起始相位，否则固定方向会织出可见摩尔纹。
 float hash12(float2 p)

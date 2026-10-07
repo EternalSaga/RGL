@@ -89,30 +89,9 @@ struct TaaInput
 };
 
 // ── scene data 读段 ──
-// ObjectMatrix（列 c0..c3）× 列向量：clip/M 变换一律"列组合"写法（同 sky/ao 的
-// clipToWorld 惯例；勿按行主序点乘——ObjectMatrix 存的是列）。
-float4 mulM(ObjectMatrix m, float4 v)
-{
-    return m.c0 * v.x + m.c1 * v.y + m.c2 * v.z + m.c3 * v.w;
-}
-
-// clip → world（sceneData@64 = inverse(proj·view)，**抖动后**口径；字面量 64/80/96/112
-// 与 scene_data.cppm kSceneDataSkyOffset + 16*i 一致，ao.frag clipToWorld 同款）
-float4 clipToWorld(float4 clip)
-{
-    float4 c0 = asfloat(sceneData.Load4(64));
-    float4 c1 = asfloat(sceneData.Load4(80));
-    float4 c2 = asfloat(sceneData.Load4(96));
-    float4 c3 = asfloat(sceneData.Load4(112));
-    return c0 * clip.x + c1 * clip.y + c2 * clip.z + c3 * clip.w;
-}
-
-// 屏幕 uv + 深度 → 世界坐标（ao.frag worldFromDepth 同款：y 翻转，Vulkan 深度直接用）
-float3 worldFromDepth(float2 uv, float depth)
-{
-    const float4 clip = clipToWorld(float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0));
-    return clip.xyz / clip.w;
-}
+// `mulM` / `clipToWorld` / `worldFromDepth` / `uvFromClip` 自批 14.4 起是 **scene.slang
+// 的共享函数**（此前 ao.frag / taa.frag 各存一份逐字相同的拷贝，速度场是第三家；
+// 抬升理由与口径见 scene.slang「屏幕 ↔ 世界重建」段头）。本文件不再定义，只用。
 
 // ── Reinhard 域（AABB 与裁剪的工作空间；Filament taa.mat "Reinhard" 分支）──
 // x/(1+x) 把 [0,∞) 压进 [0,1)：HDR 高亮不再支配 AABB 体积；逆变换 x/(1−x) 前先钳回
@@ -535,9 +514,9 @@ float4 main(TaaInput input) : SV_Target
     const float4 prevClip = mulM(readTaaPrevViewProj(), worldPrev);
     if (prevClip.w <= 0.0)  // 上一帧相机背后：无历史可言
         return float4(cur, diag > 0.5 ? 0.75 : 1.0);  // 诊断码 0.75 = 重投影拒收
-    const float2 prevNdc = prevClip.xy / prevClip.w;
-    // ndc → uv 与 worldFromDepth 的 y 翻转互逆：uv.y = (1 − ndc.y)/2
-    const float2 prevUv = float2(prevNdc.x * 0.5 + 0.5, (1.0 - prevNdc.y) * 0.5);
+    // ndc → uv 与 worldFromDepth 的 y 翻转互逆（批 14.4 起改用 scene.slang 的共享
+    // `uvFromClip`：它收 clip，**不引入第二次矩阵乘**，算术逐位不变——红线已实测）
+    const float2 prevUv = uvFromClip(prevClip);
     // ── 基空间对齐（批 13.5）──
     // prevViewProj 是**抖动后**矩阵 ⟹ 上面的 prevUv 落在上一帧的**抖动**网格上
     // （= β_{t−1}(w) + c_{t−1}，β = 基网格位置），而历史图自批 13.5 起住**基空间**（按 β

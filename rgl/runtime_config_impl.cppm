@@ -151,6 +151,11 @@ static void readUiFont(sol::table& root, RuntimeConfig& cfg) {
 		readSize("win_size", cfg.winWidth, cfg.winHeight);
 
 		applyRenderScale(root, cfg.renderScale, logger);  // 批 14.3：内部渲染分辨率倍率
+		// velocity_field（批 14.4）：逐像素速度场总开关（缺键 = false = 图里没有 velocity
+		// pass）。类型错误 = sol 直接报错（与 headless 等布尔键同处理，不静默回落）。
+		sol::optional<bool> velocityField = root["velocity_field"];
+		if (velocityField)
+			cfg.velocityField = *velocityField;
 		sol::optional<int> showAfter = root["show_after"];
 		if (showAfter)
 			cfg.showAfter = *showAfter;

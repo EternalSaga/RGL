@@ -205,7 +205,8 @@ def png_size(path: Path) -> tuple[int, int] | None:
 
 
 def stage_configs(from_build: bool, variant: str | None, shot_file: str, frames: int,
-                  size: tuple[int, int] | None, render_scale: float | None) -> None:
+                  size: tuple[int, int] | None, render_scale: float | None,
+                  velocity_field: bool = False) -> None:
     """把一次性配置铺进 staging 目录并打好运行模式键（每次重建，跑完不残留可复原状态）。"""
     base = (BUILD_RGL / "configs") if from_build else (ROOT / "configs")
     if missing := [f for f in CONFIG_FILES if not (base / f).is_file()]:
@@ -229,6 +230,9 @@ def stage_configs(from_build: bool, variant: str | None, shot_file: str, frames:
         # 越界值不在这里挡：引擎侧 clampRenderScale 是口径的唯一权威，工具重复实现一遍
         # = 两处规则漂移的机会。工具只负责**事后核对实际生效值**（见 main 里的核对）。
         patch_lua(runtime, "render_scale", repr(float(render_scale)))
+    if velocity_field:
+        # 批 14.4：逐像素速度场。创建期量（决定图里有没有 velocity pass），无热重载。
+        patch_lua(runtime, "velocity_field", "true")
 
 
 def run_engine(exe: Path, timeout: int) -> tuple[int, str, float]:
@@ -277,6 +281,9 @@ def parse_args() -> argparse.Namespace:
                     help="runtime.lua render_scale（内部渲染分辨率倍率，批 14.3；"
                          "不给 = 用配置基准里的值）。会**核对引擎实际生效值**，"
                          "传了没生效即 FAIL，不会静默跑在默认档上")
+    ap.add_argument("--velocity-field", action="store_true",
+                    help="runtime.lua velocity_field = true（逐像素速度场，批 14.4）。"
+                         "双向核对：开了没建 velocity RT = FAIL；没开却建了 = FAIL（门关不拢）")
     ap.add_argument("--from-build", action="store_true",
                     help="以 build/rgl/configs 副本为基准（跑调试现场；默认用仓库 configs/）")
     ap.add_argument("--timeout", type=int, default=90, help="引擎最长存活秒数（默认 90）")
@@ -308,11 +315,12 @@ def main() -> int:
     shot_file = (f"{STAGING.name}/probe.png" if args.mode == "smoke"
                  else f"screenshots/{args.name}.png")
     stage_configs(args.from_build, args.variant, shot_file, args.frames, size,
-                  args.render_scale)
+                  args.render_scale, args.velocity_field)
     print(f"配置   : 基准={'build 副本' if args.from_build else '仓库 configs/'}"
           f"  variant={args.variant or '(随配置)'}  frames={args.frames}"
           f"  size={f'{size[0]}x{size[1]}' if size else '(随配置)'}"
-          f"  render_scale={args.render_scale if args.render_scale is not None else '(随配置)'}")
+          f"  render_scale={args.render_scale if args.render_scale is not None else '(随配置)'}"
+          f"  velocity_field={'on' if args.velocity_field else '(随配置)'}")
 
     code, log, secs = run_engine(exe, args.timeout)
     LOG_PATH.write_text(log, encoding="utf-8")
@@ -349,6 +357,31 @@ def main() -> int:
             fail(f"请求 --render-scale {args.render_scale} 引擎实际生效 {got}"
                  f"（合法区间 [0.25, 1.0]，越界会被钳制；非有限值回落 1.0）")
     render_grid = (int(eff.group(2)), int(eff.group(3)))
+    # velocity_field 生效核对（批 14.4）。同 render_scale 的纪律：patch 只保证"配置里写了"，
+    # 不保证"引擎按它建了 RT"。**反向同样要核**：默认档不该出现 velocity RT 行——出现了就说明
+    # 门关不拢（图里多了一个 pass，而逐位不变红线单看截图未必抓得住）。
+    vel = re.search(r"velocity \(RGBA16F[^)]*\): (\d+)x(\d+) slot (\d+)", log)
+    velUnsupported = "velocity: 图形态不支持" in log
+    if args.velocity_field and not vel:
+        # 区分两种"没建 RT"：**图形态不支持**（装饰器 warn 后正常跳过，offscreen 变体用
+        # blit 上屏，无"写 swapchain 且采色"的 pass = 与 decorateTaaPass 同判据）与
+        # **静默没落图**（键名漂了 / 日志文案改了 / 装饰器漏调）。前者是正确行为，
+        # 一律 FAIL 会把"正确不支持"报成缺陷，反过来也不许它拿"不支持"当遮羞布：
+        # 必须真的看到那条 warn 才算数。
+        if not velUnsupported:
+            fail("请求 --velocity-field 但日志里既没有 velocity RT 行、也没有"
+                 "「velocity: 图形态不支持」告警 ⟹ 装饰器静默没落图"
+                 "（配置键名漂了 / 启动日志文案改了 / 装饰调用被删）")
+        print("速度场: 本图变体不支持（装饰器已 warn 并跳过）✓ 非错误")
+    if not args.velocity_field and vel:
+        fail(f"默认档（velocity_field 关）却建了 velocity RT：{vel.group(0)}"
+             " ⟹ 门关不拢，「图里没有这个 pass」的逐位不变红线失效")
+    if vel:
+        # 速度场必须与深度**同网格**：它的输出单位是"渲染分辨率像素"，网格不同则单位错。
+        if (int(vel.group(1)), int(vel.group(2))) != render_grid:
+            fail(f"velocity RT {vel.group(1)}x{vel.group(2)} ≠ 渲染网格 "
+                 f"{render_grid[0]}x{render_grid[1]}——速度场必须与深度同网格")
+        print(f"速度场: {vel.group(0)} = 渲染网格 ✓")
     if size and dims and dims != size:
         fail(f"请求 --size {size[0]}x{size[1]} 实得 {dims[0]}x{dims[1]}"
              f"（headless 下 llm_shot.size 应当直接生效；启动行：{grid.group(0) if grid else '无 Swapchain extent 日志'}）")

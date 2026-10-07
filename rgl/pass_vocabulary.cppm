@@ -59,7 +59,7 @@ export struct RgStateName {
  * 加一个状态 = 本表加一行 + StateKit 加成员与实现（漏实现编译不过）；
  * Lua 配置侧与文档不再各自抄名单（写错的启动报错会列出合法值）。
  */
-export inline constexpr std::array<RgStateName, 11> kAllPassStates{{
+export inline constexpr std::array<RgStateName, 12> kAllPassStates{{
 	{"opaque", RgStateScope::meshPass},
 	{"skybox", RgStateScope::meshPass},
 	{"transparent", RgStateScope::meshPass},
@@ -68,6 +68,7 @@ export inline constexpr std::array<RgStateName, 11> kAllPassStates{{
 	{"shadow", RgStateScope::meshPass},        // 批 11.2：depth-only 阴影 pass
 	{"light", RgStateScope::fullscreenPass},
 	{"ao", RgStateScope::fullscreenPass},      // 批 11.4：SSAO 全屏终图
+	{"velocity", RgStateScope::fullscreenPass},  // 批 14.4：逐像素速度场（FSR 输入，与 ao 同形）
 	{"taa", RgStateScope::fullscreenPass},      // 批 12.6：时域滤波全屏 pass（与 ao 同形）
 	{"tonemap", RgStateScope::fullscreenPass},
 	{"izb_mask", RgStateScope::internal},      // 批 11.3-1d：图外硬编码录制（红线 2）

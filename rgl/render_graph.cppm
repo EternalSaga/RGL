@@ -224,6 +224,23 @@ export inline constexpr std::string_view kTaaPassName = "taa";
 export inline constexpr std::string_view kTaaCommitPassName = "taa_commit";
 
 /**
+ * Phase 14 批 14.4：逐像素速度场附件契约（单一真相源）。
+ *
+ * `velocity` RT（state="velocity" 的全屏 pass 写）装的是「本像素表面点在上一帧的像素位移」，
+ * 口径 = **渲染分辨率像素 · prev − cur · y 向下**（`.xy` = 速度、`.z` = 有效标志、`.w` 弃用）。
+ * 消费方 = 批 14.5 的 FSR upscaler（`motionVectors` 硬要求）+ 诊断回读。
+ *
+ * **格式刻意复用 `kTaaFormat`（rgba16_sfloat）而不是新开 rg16_sfloat**：新格式要在
+ * `render_graph_formats` 词表 + `frame_capture` 的 `captureBpp` + `llm_debug` 的通道转换器
+ * **三处**同时挂号，而漏掉后两处**不崩不报错**（staging 按错字节数算 → 捕获尾部是上一次
+ * 残留，见 `frame_capture_impl.cppm` 头注释的 ⚠）。多花的 3.7 MB@720p 买掉这一整类风险。
+ * 精度足够：FP16 是**相对**精度，速度量级 1–300 px 时 ulp ≈ 0.001–0.15 px。
+ */
+export inline constexpr std::string_view kVelocityName = "velocity";
+export inline constexpr std::string_view kVelocityFormat = "rgba16_sfloat";
+export inline constexpr std::string_view kVelocityPassName = "velocity";
+
+/**
  * pass 声明（RgGraphDesc.passes 元素）：name 必填；kind 定执行语义；
  * state = RenderState 名（名字字符串，零 handle，执行器解析；drawMesh 必填，blit 忽略；
  * 合法值 = pass_vocabulary 按 kind 分档的 state 子集）；drawSource = FrameDrawList 段名
@@ -556,6 +573,19 @@ export bool decorateShadowPass(RgGraphDesc& desc, uint32_t mapSize);
  */
 export bool decorateTaaPass(RgGraphDesc& desc);
 
+/**
+ * Phase 14 批 14.4 速度场装饰（契约见本函数实现段头）：加 `velocity` 附件 + 一个
+ * 全屏 `state="velocity"` pass（读 depth，写速度场），插在「写 swapchain 且采色」的
+ * pass（两条路线都是 tonemap）**之前**。
+ *
+ * 与 `decorateTaaPass` 的次序契约：本装饰**先于** TAA 调（TAA 保持「必须最后」的既有
+ * 纪律）。落点顺序 = `[velocity, taa, tonemap]`——两者都只 sampleRead depth，彼此无依赖，
+ * 而 TAA 的锚点搜索是**现搜**的（不缓存下标），故 velocity 先插不会让 TAA 认错消费者。
+ * @param desc 图声明（原地修改）
+ * @return true = 已装饰；false = 图形态不支持（无 swapchain 消费者 / 借不到可 store 的 depth）
+ */
+export bool decorateVelocityPass(RgGraphDesc& desc);
+
 /** G-buffer 附件契约条目 + 契约表（名字 + 格式串）——已移入叶子模块 gbuffer_contract。 */
 
 /**
@@ -618,6 +648,20 @@ export std::expected<uint32_t, Error> ensureAoSlot(
  * @return {taa_out 槽, taa_hist 槽}（addTaaEntry 的 binding 4/5）；Error = 建图失败
  */
 export std::expected<std::array<uint32_t, 2>, Error> ensureTaaSlots(
+	RenderTargetCache& rts, Swapchain& swapchain);
+
+/**
+ * Phase 14 批 14.4：确保逐像素速度场 RT（名字/格式 = kVelocityName/kVelocityFormat
+ * 单一真相源，rgba16_sfloat offscreen）并返回其 SAMPLED_IMAGE 堆槽。
+ *
+ * 调用时序同 ensureTaaSlots，且**必须早于** addVelocityEntry——堆槽号一经烘进管线 binding
+ * 即终身有效（`RenderTargetCache` 跨 resize 复用槽号）。
+ * 仅速度场开启时调用（门默认关 = 不领槽 = 堆槽布局与基线零差异）。
+ * @param rts RT 缓存（ensure/heapSlot）
+ * @param swapchain 交换链层（extent = **渲染**分辨率，批 14.3 起 ≠ 后缓冲）
+ * @return velocity RT 的 SAMPLED_IMAGE heap 槽；Error = RT 创建 / 槽分配失败
+ */
+export std::expected<uint32_t, Error> ensureVelocitySlot(
 	RenderTargetCache& rts, Swapchain& swapchain);
 
 /**
