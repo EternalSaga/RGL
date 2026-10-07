@@ -2,6 +2,7 @@
 // probe / temporal / temporal-residual / temporal-motion / temporal-feedback /
 // temporal-flicker / temporal-homography / aa-coverage / taa-swim / note。
 #include "imgqa.h"
+#include "cli.h"
 #include "temporal_flicker.h"
 #include "temporal_homography.h"
 
@@ -13,6 +14,7 @@
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <set>
 #include <sstream>
 #include <string>
 
@@ -22,23 +24,6 @@
 #include <opencv2/imgproc.hpp>
 
 namespace RGL::imgqa {
-
-namespace {
-struct Args {
-    std::string get(const std::vector<std::string>& argv, const std::string& key,
-        const std::string& def)
-    {
-        for (size_t i = 0; i + 1 < argv.size(); ++i)
-            if (argv[i] == key)
-                return argv[i + 1];
-        return def;
-    }
-    bool has(const std::vector<std::string>& argv, const std::string& key)
-    {
-        return std::find(argv.begin(), argv.end(), key) != argv.end();
-    }
-};
-}  // namespace
 
 std::string fmt6(double v)
 {
@@ -615,242 +600,172 @@ int cmdRefuse(const std::string& name)
     return 2;
 }
 
-void printUsage()
+namespace {
+
+/// 注册表里有这条命令、三条分派链却都没接 = 表与 dispatch 分家（两处必须一起改）。
+/// 正常走不到：main 先查过 findSubcommand。
+int notWired(const std::string& cmd)
 {
-    std::printf(
-        "imgqa —— 区域归因的图像判据工具箱（判据的区域来自几何，不来自图像）\n\n"
-        "用法: imgqa <子命令> [选项]\n"
-        "  selftest                                   判据/转录/解码器自检（无引擎）\n"
-        "  check [--promoted]                         列判据注册表与晋升状态\n"
-        "  refuse [name]                              列/触发反模式拒绝（ssim 等有理由的禁止）\n"
-        "  attribution [--glb X.glb] [--camera 名]    机位下谁被画了/占多少/多亮/谁全黑\n"
-        "  faces [--glb X.glb] --piece 名              闭式解逐面预测 vs 观测亮度簇\n"
-        "  switch [--glb X.glb] [--camera 名] [--allow-piece a,b]  开关影响域 + 死分支（含确定性前置）\n"
-        "  izb [--glb izb_rig.glb] [--camera ladder]  IZB 消费域：mask↔画面寻址一致性（三子判据）\n"
-        "  swim [--glb izb_rig.glb] [--camera ladder] [--dx 0.06] [--izb]  影场世界不变量：机位平移后重投影比影场（0 位移）\n"
-        "  probe [--x 640] [--y 360] [--light Lx,Ly,Lz] [--tol 2]  闭式解探针：该是多少 vs 实际是多少\n"
-        "  aa-coverage [--variant forward] [--base-space] [--kernel 0]  逐杆覆盖率对拍闭式：单帧量"
-        "「黑度积分 vs 投影宽度」（批 12.6 T4；--base-space = 批 13.2 门开态；--kernel = 批 13.8"
-        " 输入侧重建核 0 双线性 / 1 CR 4×4 / 2 Lanczos3，本判据 = 核选型那条**静止态闭式**判据）\n"
-        "  temporal [--pairs 32] [--warm 32] [--variant forward] [--base-space]  TAA 时域阳性锚点："
-        "静止机位 + jitter，连续帧突发逐帧差（批 12.6 T4）\n"
-        "  temporal-residual [--periods 2] [--warm-multiplier 6] [--variant forward]"
-        " [--slow-feedback 0.002] [--skip-slow] [--base-space] [--static-boost 0.02]"
-        " [--bistro] [--camera all] [--boost-floor 0.01]"
-        "  时域**绝对**残差：静止机位连拍折"
-        " (2,16,H,W) 后逐像素 max−median（线性域；补 temporal 相对比的盲区，批 13.1 主判据）。"
-        " --static-boost <地板> = 批 13.7 `taa.static_boost` 变体（**只出数不判**：跑 B1–B4 四组"
-        "出门开/门关 meanSwing/p99.9/frac>τ + 梯度比；⚠ 地板 = **本帧权重**，调小 = 更信历史）。"
-        " --bistro = 批 13.7b 真实场景变体（债-48：交付配置 + 用户报障三机位 doorframe/wetground/"
-        "doorpanel，N1–N5 五组出数 + 债-47 线性域梯度比 + swing 热图；--camera 选单机位）。"
-        "批 13.7c 每机位另出**亮度 × 梯度二维分带**（门关/门开/差三张表，每格 share·rate·"
-        "残余质量三数 + 敏感性），判「残余闪烁住在高亮边还是普通边缘」；判决线跑前写死，"
-        "全文见 temporal_residual.h 同名段。"
-        " `--reject` = 批 13.10 每机位另出**历史拒收 × 残余交叉表**（门 `taa.diag_reject` 开、连拍"
-        " taa_out alpha；按「32 帧里有几帧历史被邻域盒动过」分档 × swing + **逐档抑制比 ρ**），判"
-        "「static boost 压不满的那部分残余是不是 `clipToAabb` 夹历史」——0 档（全程收下）= 纯 EMA "
-        "泄漏对照，其 ρ 必须 ≈ 闭式 ρ*（**内部阳性锚点**：绿例就在同一帧里）。"
-        "并出**主判据 `temporal-residual-boost-fidelity`**：`ρ ≤ 1.5×ρ*`，ρ* = |H(α_floor)|/|H(α_fb)| "
-        "由配置的 α 运行时现算（改档位自动自适应；|H| 跨谐波只散布 5% ⟹ 与内容无关）。**FAIL 即 "
-        "rc=1**（与两条守卫同级：本命令的结论不许被读成通过）。判决线跑前写死，见同名头注释段\n"
-        " `--clip-abl` = 批 13.11 **历史裁剪因果 A/B**（门 `taa.clip_mode`）：逐臂跑「门关/门开」"
-        "两组，出每臂 ρ 并对闭式线判。臂集 = 0 现行 / 1 关盒（短路天花板参照）/ 2 绕 centroid 扩"
-        " 1.5×（债-60 重测臂）/ 3 box9（空间加宽）/ 4 软裁剪 λ（修法臂：历史每帧最多搬动 λ 份"
-        "「到盒边界的距离」= 弹簧不是墙）/ 5 绕 centroid 扩 K×（K = `--clip-soft`，量「盒差几倍」）。"
-        "**每臂带锐度对照**（梯度比 vs 同次 fb=1 参考；出 [0.85,1.02] 带 = 靠糊换安静 = 不算修好）。"
-        "三条线跑前写死：① **坐实** = ρ ≤ 1.5ρ* 且 "
-        "frac>τ 相对臂 0 降 ≥4×；② **否证** = 所有臂 ρ ≥ 0.8×ρ(臂0) ⟹ 盒不是主因；③ **通用性** = "
-        "逐机位 / 逐靶方向一致（只有报障机位降 = 场景特异 = 不算修好）\n"
-        " `--clip <mode> [--clip-soft λ]` = 单臂透传（合成靶侧配 `--static-boost <地板>` 用，"
-        "B2/B3/B4 吃同一臂，ρ 同口径可比）；0 = 门关 = 不写键 = 交付配置原样\n"
-        "  taa-swim [--pairs 32] [--warm 32] [--variant forward]  真实场景逐帧差是否=整幅亚像素"
-        "平移（游动）；含基空间门（批 13.2 T5/T6）与量具阳性锚点（批 13.1b）\n"
-        "  temporal-tail [--camera brickfence] [--angle 0.3] [--burst 64] [--warm 64] [--max-lag 24]"
-" [--tau 0.05]  批 13.13 **鬼影尾长直测**（债-63 的出口）：静止机位 + 场景 spin，参考 = 同一次"
-" spin 的「TAA 关 + jitter_scale=0」渲染（基位置真值），配对 = **引擎帧计数器之差**（整数常量，"
-"**零图像配准**——`temporal-motion` 那两条常红的对齐护栏在这里根本不存在）。主指标"
-" `frac = mean|out−ref| ÷ mean|N−S|`（无量纲鬼影份额；关盒时闭式 = 1−α）。四条判决线跑前写死"
-"（pairing ≤0.02 / events ≥2000 且静止反向 ≤20 / 关盒 > 臂 0 / 长窗必须上升），**红一条即不许"
-"报臂间结论**。τ 是唯一自由阈值 ⟹ 输出自带三档敏感性表\n"
-"  temporal-motion [--camera doorframe] [--motion camera] [--angle 0.2] [--burst 32]"
-        " [--warm 16] [--warm-still 64] [--edge-pct 0.90]  **相机运动下 TAA 抗了什么锯齿**："
-        "--motion camera（默认）= 相机帧驱动 yaw（camera.lua frame_yaw，= 用户报障的运动源；"
-        "angle=角度×帧号，纯函数）；--motion spin = 场景旋转相机不动（债-49 鬼影仪器）。"
-        "M0–M4 对**同机位 2560×1440 超采样参考**量边缘像素线性域偏差（按帧号配对到同一视点，"
-        "故不受 `moving-camera-l1-ratio` 反模式影响）+ M1m/M4m 连拍 taa_out alpha 出**历史被拒"
-        "比例**（门 `taa.diag_reject`，RGB 逐位 = M1/M4）；只出数 + 一句判决，不改渲染\n"
-        " `--boost <地板> --clip <mode> [--clip-soft x]` = 批 13.11 **鬼影 × 裁剪消融**：spin 下"
-        "相机静止 ⟹ `static_boost` 真生效 ⟹ 进入 债-49 风险区（静止机位 + 场景内运动 + 长窗）。"
-        "跨臂比 dev(M1)/dev(M0) 即「放宽盒要付多少鬼影」。**阳性锚点 = 关盒（臂 1）必须显著变差**；"
-        "不变差 = 邻域盒在鬼影上根本没承重，就不必为它付静止闪烁的代价。默认两键都不写 = "
-        "已发表 M0–M4 读数逐位不变\n"
-        "  temporal-feedback [--camera doorframe] [--angle 0.2] [--burst 32] [--edge-pct 0.90]"
-        " [--fb 0.02,0.05,0.12,0.25,0.5,0.8,1.0] [--kernel 0]  **运动态 feedback 扫描**：把「历史在非零分数"
-        "偏移上被 CR 重采样 ⟹ 每帧一次低通、在 ≈1/α 窗内复利」这条假设变成数。fb=1 那格"
-        "（零累积但仍带 jitter）拆开「累积」与「抖动」两个贡献；顺带在静止态扫 fb 出 swing，"
-        "判「窗棂残余与运动失效是否同一个根」。每组回显**引擎自己报的**生效 feedback"
-        "（`GET /state`）+ 同进程 /param A/B 字节差 = 参数生效自证；只出数，不改引擎默认值。"
-        "S0 = 静止 TAA 关地板（批 13.8 第 0 步：静止态 dev(fb=1)/dev(S0) 与运动态 R(fb=1) 同构，"
-        "两边同 ~4% ⟹ 那 4% 与运动无关）；--kernel = 批 13.8 输入侧重建核\n"
-        "  temporal-flicker [--target edge] [--sweep 0.125] [--frames 32] [--halfwidth 8]"
-        " [--rowfrac 0.14] [--verbose] [--kernel 0]  **相机移动下的时间闪烁（闭式解判据）**：相机帧驱动 yaw"
-        " 以亚像素扫速扫过 1px 高对比边缘，量「每帧最大变化」（p99.5，线性域），与**闭式解**两端"
-        "对拍——理想 AA（覆盖线性斜坡）给下界、完全无 AA（阶梯整段跳变）给上界，于是 G=实测/理想"
-        "与 ζ=(实测−理想)/(无AA−理想) 有绝对刻度，不靠「动得慢」刷分。--target edge = aa_target"
-        " 白板左边缘（闭式适用，主判据）；--target <bistro 机位名> = 交付配置口径（闭式只作参考"
-        "刻度）。TAA 开/关各一组，出 flicker(on)/flicker(off)。FFT 只作诊断打印——高频带能量比"
-        "已被闭式对照否决（混叠把锯齿变成方波），理由见 temporal_flicker.h。"
-        "--kernel = 批 13.8 输入侧重建核（0 双线性 / 1 CR 4×4 / 2 Lanczos3），**只作用于 TAA 开组**"
-        "⟹ TAA 关组 = 闭式无 AA 锚点，跨核重测它必须不动（ζ 的主判据）\n"
-        "  temporal-homography [--target edge] [--sweep 0.125] [--frames 16] [--out 前缀]"
-        " [--bands] [--env 1.0] [--ao 0.5]"
-        "  **精确单应 warp 的逐像素闪烁归因图**：相机做原地绕 up 轴 yaw ⟹ 像面映射是纯旋转"
-        "单应（与深度无关、对整幅画面精确），由 tan(Δψ)+焦距+主点**闭式**给出——零参考图、零"
-        "对齐搜索、零 velocity buffer。把上一帧按它搬到本帧网格，剩下的差就是「搬不动的部分」"
-        "（= 采样格移动的锯齿差 / TAA 时域滤波做的事）。同批出**往返地板** |I−H⁻¹(H·I)| 判"
-        "「是量具在响还是真闪烁」，出**解释率** 1−残差/原始帧差，出固定标尺热图 PNG（TAA 开/关"
-        "两张可直接对眼）。yaw 符号用 t 与 −t 两个闭式假设对拍取小者，两个残差都回显\n"
-        "  ao-noise [--glb cornell_box.glb] [--camera front] [--variant deferred] [--strength 0.5]"
-        " [--radius 40] [--pairs 16] [--no-temporal] [--bistro]  SSAO 噪声四组量测：闭式契约区偏离 / 分布 /"
-        "亚像素爬行 / TAA 时域（同进程 /param A/B）\n"
-        "  note \"事后真相\"                             回填最后一条调用记录（晋升凭据）\n");
+    std::printf("子命令 %s 在注册表里但没接线\n", cmd.c_str());
+    return 2;
 }
 
+/// 机位几何类的名字表（dispatch 靠它选链，与 dispatchRig 一一对应）。
+bool isRigCommand(const std::string& cmd)
+{
+    static const std::set<std::string> kRig{"attribution", "faces", "switch", "izb", "swim",
+        "probe", "ao-noise"};
+    return kRig.contains(cmd);
+}
+
+/// temporal-* 家族（7 条）——按前缀转出去，见 dispatch。
+int dispatchTemporal(const std::string& cmd, const Args& P)
+{
+    if (cmd == "temporal")
+        return cmdTemporal(P.integer("--pairs"), P.integer("--warm"), P.get("--variant"),
+            P.has("--base-space"));
+    if (cmd == "temporal-residual")
+        return cmdTemporalResidual(P.integer("--periods"), P.number("--warm-multiplier"),
+            P.get("--variant"), P.number("--slow-feedback"), P.has("--skip-slow"),
+            P.has("--base-space"), P.number("--static-boost"), P.has("--bistro"),
+            P.get("--camera"), P.number("--boost-floor"), P.has("--diag-bs-off"),
+            P.has("--reject"), P.has("--clip-abl"), P.number("--clip"),
+            P.number("--clip-soft"));
+    if (cmd == "temporal-motion")
+        return cmdTemporalMotion(P.get("--camera"), P.get("--motion"), P.number("--angle"),
+            P.integer("--burst"), P.integer("--warm"), P.integer("--warm-still"),
+            P.number("--edge-pct"), P.number("--boost"), P.number("--clip"),
+            P.number("--clip-soft"));
+    if (cmd == "temporal-tail")
+        return cmdTemporalTail(P.get("--camera"), P.number("--angle"), P.integer("--burst"),
+            P.integer("--warm"), P.integer("--max-lag"), P.number("--tau"),
+            P.integer("--margin"));
+    if (cmd == "temporal-feedback") {
+        std::vector<double> fbs;
+        std::stringstream fs(P.get("--fb"));
+        for (std::string t; std::getline(fs, t, ',');)
+            if (!t.empty())
+                fbs.push_back(std::stod(t));
+        return cmdTemporalFeedback(P.get("--camera"), P.number("--angle"),
+            P.integer("--burst"), P.number("--edge-pct"), fbs, P.number("--kernel"));
+    }
+    if (cmd == "temporal-flicker")
+        return cmdTemporalFlicker(P.get("--target"), P.number("--sweep"),
+            P.integer("--frames"), P.integer("--halfwidth"), P.number("--rowfrac"),
+            P.has("--verbose"), P.number("--kernel"));
+    // A/B 侧：负数 = 不覆写 = 交付配置原样（默认）。三个口径对拍才能把「移动闪烁是
+    // IBL 反射 / AO / 几何边 哪个驱动的」这个问题拆开。
+    if (cmd == "temporal-homography")
+        return cmdTemporalHomography(P.get("--target"), P.number("--sweep"),
+            P.integer("--frames"), P.get("--out"), P.has("--bands"), P.number("--env"),
+            P.number("--ao"));
+    return notWired(cmd);
+}
+
+/// 吃 --glb/--camera 的机位几何类（7 条）——参数最长、改判据时最常动。
+int dispatchRig(const std::string& cmd, const Args& P)
+{
+    if (cmd == "attribution")
+        return cmdAttribution(P.get("--glb"), P.get("--camera"));
+    if (cmd == "faces")
+        return cmdFaces(P.get("--glb"), P.get("--piece"), P.has("--shadow"), P.has("--env"));
+    if (cmd == "switch")
+        return cmdSwitch(P.get("--glb"), P.get("--camera"), P.get("--allow-piece"),
+            P.has("--env"));
+    if (cmd == "izb")
+        return cmdIzb(P.get("--glb"), P.get("--camera"));
+    if (cmd == "swim")
+        return cmdSwim(P.get("--glb"), P.get("--camera"), P.number("--dx"), P.has("--izb"),
+            P.has("--evssm"));
+    if (cmd == "probe") {
+        const auto parse3 = [](const std::string& s) {
+            std::array<double, 3> v{0, 0, 0};
+            std::stringstream ss(s);
+            std::string tok;
+            for (size_t i = 0; i < 3 && std::getline(ss, tok, ','); ++i)
+                v[i] = std::stod(tok);
+            return v;
+        };
+        // --light = **指向光源**的方向 L（不是 scene.lua 的 direction）。默认值
+        // 与 qa/configs/analytic 的 direction = (0.642788,0,-0.766044) 配对。
+        const auto a = parse3(P.get("--albedo"));
+        const auto lv = parse3(P.get("--light"));
+        return cmdProbe(projectRoot() + "/" + P.get("--config"), P.integer("--x"),
+            P.integer("--y"), {a[0], a[1], a[2]}, P.number("--rough"), P.number("--metal"),
+            {lv[0], lv[1], lv[2]}, P.number("--intensity"), P.integer("--tol"),
+            P.has("--light") || P.has("--intensity"));
+    }
+    if (cmd == "ao-noise")
+        return cmdAoNoise(P.get("--glb"), P.get("--camera"), P.get("--variant"),
+            P.number("--strength"), P.integer("--radius"), P.integer("--pairs"),
+            !P.has("--no-temporal"), P.has("--bistro"));
+    return notWired(cmd);
+}
+
+/// 子命令分发。**这里不许出现默认值字面量**——值一律来自注册表（cli_table.cpp），
+/// 于是 -h 文本、`imgqa args` 回显与本函数不可能再各说各话。
+///
+/// 分派按家族拆三条链（temporal-* 走前缀、机位几何类走名字表、其余留在本函数）：
+/// 21 条 if 挤一个函数 = 认知复杂度 33（error 级），拆开每条都在护栏内，
+/// 而「一条命令一行」的形态没变。
+int dispatch(const std::string& cmd, const Args& P)
+{
+    if (cmd.rfind("temporal", 0) == 0)
+        return dispatchTemporal(cmd, P);
+    if (isRigCommand(cmd))
+        return dispatchRig(cmd, P);
+    if (cmd == "selftest")
+        return cmdSelftest();
+    if (cmd == "check")
+        return cmdCheck(P.has("--promoted"));
+    if (cmd == "refuse") {
+        const auto pos = P.positional();
+        return cmdRefuse(pos.empty() ? "" : pos[0]);
+    }
+    if (cmd == "aa-coverage")
+        return cmdAaCoverage(P.get("--variant"), P.integer("--warm"), P.number("--feedback"),
+            P.has("--base-space"), P.number("--kernel"));
+    if (cmd == "taa-swim")
+        return cmdTaaSwim(P.integer("--pairs"), P.integer("--warm"), P.get("--variant"));
+    if (cmd == "note") {
+        std::string text;
+        for (const auto& p : P.positional())
+            text += (text.empty() ? "" : " ") + p;
+        return noteLastCall(text);
+    }
+    return notWired(cmd);
+}
 }  // namespace
+
+}  // namespace RGL::imgqa
 
 int main(int argc, char** argv)
 {
     using namespace RGL::imgqa;
-    std::vector<std::string> args(argv + 1, argv + argc);
+    const std::vector<std::string> args(argv + 1, argv + argc);
     if (args.empty() || args[0] == "-h" || args[0] == "--help" || args[0] == "help") {
-        printUsage();
+        // 带子命令名 = 只看那一条（含每个 flag 的一行说明）；不带 = 全表。
+        const SubcommandSpec* one = args.size() > 1 ? findSubcommand(args[1]) : nullptr;
+        std::fputs(one != nullptr ? detailFor(*one).c_str() : usageText().c_str(), stdout);
         return 0;
     }
-    Args P;
     const std::string cmd = args[0];
+    const std::vector<std::string> rest(args.begin() + 1, args.end());
     try {
-        if (cmd == "selftest")
-            return cmdSelftest();
-        if (cmd == "check")
-            return cmdCheck(P.has(args, "--promoted"));
-        if (cmd == "refuse")
-            return cmdRefuse(args.size() > 1 ? args[1] : "");
-        if (cmd == "attribution")
-            return cmdAttribution(P.get(args, "--glb", "shadow_rig.glb"),
-                P.get(args, "--camera", "near_anchor"));
-        if (cmd == "faces")
-            return cmdFaces(P.get(args, "--glb", "shadow_rig.glb"),
-                P.get(args, "--piece", "anchor_cube_near"), P.has(args, "--shadow"),
-                P.has(args, "--env"));
-        if (cmd == "switch")
-            return cmdSwitch(P.get(args, "--glb", "shadow_rig.glb"),
-                P.get(args, "--camera", "near_anchor"),
-                P.get(args, "--allow-piece", "ground"), P.has(args, "--env"));
-        if (cmd == "izb")
-            return cmdIzb(P.get(args, "--glb", "izb_rig.glb"),
-                P.get(args, "--camera", "ladder"));
-        if (cmd == "swim")
-            return cmdSwim(P.get(args, "--glb", "izb_rig.glb"),
-                P.get(args, "--camera", "ladder"), std::stod(P.get(args, "--dx", "0.06")),
-                P.has(args, "--izb"), P.has(args, "--evssm"));
-        if (cmd == "probe") {
-            const auto parse3 = [](const std::string& s) {
-                std::array<double, 3> v{0, 0, 0};
-                std::stringstream ss(s);
-                std::string tok;
-                for (size_t i = 0; i < 3 && std::getline(ss, tok, ','); ++i)
-                    v[i] = std::stod(tok);
-                return v;
-            };
-            // --light = **指向光源**的方向 L（不是 scene.lua 的 direction）。默认值
-            // 与 qa/configs/analytic 的 direction = (0.642788,0,-0.766044) 配对。
-            const auto a = parse3(P.get(args, "--albedo", "0,0,1"));
-            const auto lv = parse3(P.get(args, "--light", "-0.642788,0,0.766044"));
-            return cmdProbe(projectRoot() + "/" + P.get(args, "--config", "qa/configs/analytic"),
-                std::stoi(P.get(args, "--x", "640")), std::stoi(P.get(args, "--y", "360")),
-                {a[0], a[1], a[2]}, std::stod(P.get(args, "--rough", "0.9")),
-                std::stod(P.get(args, "--metal", "0")), {lv[0], lv[1], lv[2]},
-                std::stod(P.get(args, "--intensity", "12")),
-                std::stoi(P.get(args, "--tol", "2")),
-                P.has(args, "--light") || P.has(args, "--intensity"));
+        // args 子命令按**目标子命令**的 spec 解析，必须先于外层 Args 分发——否则拿 args
+        // 自己的 spec 去校验目标命令的 flag，必然报未知参数。
+        if (cmd == "args")
+            return cmdArgs(rest);
+        const SubcommandSpec* spec = findSubcommand(cmd);
+        if (spec == nullptr) {
+            std::printf("未知子命令 %s（-h 看用法）\n", cmd.c_str());
+            return 2;
         }
-        if (cmd == "temporal")
-            return cmdTemporal(std::stoi(P.get(args, "--pairs", "32")),
-                std::stoi(P.get(args, "--warm", "32")), P.get(args, "--variant", ""),
-                P.has(args, "--base-space"));
-        if (cmd == "temporal-residual")
-            return cmdTemporalResidual(std::stoi(P.get(args, "--periods", "2")),
-                std::stod(P.get(args, "--warm-multiplier", "6")), P.get(args, "--variant", ""),
-                std::stod(P.get(args, "--slow-feedback", "0.002")), P.has(args, "--skip-slow"),
-                P.has(args, "--base-space"), std::stod(P.get(args, "--static-boost", "0")),
-                P.has(args, "--bistro"), P.get(args, "--camera", "all"),
-                std::stod(P.get(args, "--boost-floor", "0.01")), P.has(args, "--diag-bs-off"),
-                P.has(args, "--reject"), P.has(args, "--clip-abl"),
-                std::stod(P.get(args, "--clip", "0")), std::stod(P.get(args, "--clip-soft", "1")));
-        if (cmd == "temporal-motion")
-            return cmdTemporalMotion(P.get(args, "--camera", "doorframe"),
-                P.get(args, "--motion", "camera"),
-                std::stod(P.get(args, "--angle", "0.2")),
-                std::stoi(P.get(args, "--burst", "32")),
-                std::stoi(P.get(args, "--warm", "16")),
-                std::stoi(P.get(args, "--warm-still", "64")),
-                std::stod(P.get(args, "--edge-pct", "0.90")),
-                std::stod(P.get(args, "--boost", "0")), std::stod(P.get(args, "--clip", "0")),
-                std::stod(P.get(args, "--clip-soft", "1")));
-        if (cmd == "temporal-tail")
-            return cmdTemporalTail(P.get(args, "--camera", "brickfence"),
-                std::stod(P.get(args, "--angle", "0.3")), std::stoi(P.get(args, "--burst", "96")),
-                std::stoi(P.get(args, "--warm", "64")), std::stoi(P.get(args, "--max-lag", "16")),
-                std::stod(P.get(args, "--tau", "0.05")),
-                std::stoi(P.get(args, "--margin", "8")));
-        if (cmd == "temporal-feedback") {
-            std::vector<double> fbs;
-            std::stringstream fs(P.get(args, "--fb", "0.02,0.05,0.12,0.25,0.5,0.8,1.0"));
-            for (std::string t; std::getline(fs, t, ',');)
-                if (!t.empty())
-                    fbs.push_back(std::stod(t));
-            return cmdTemporalFeedback(P.get(args, "--camera", "doorframe"),
-                std::stod(P.get(args, "--angle", "0.2")),
-                std::stoi(P.get(args, "--burst", "32")),
-                std::stod(P.get(args, "--edge-pct", "0.90")), fbs,
-                std::stod(P.get(args, "--kernel", "0")));
-        }
-        if (cmd == "temporal-flicker")
-            return cmdTemporalFlicker(P.get(args, "--target", "edge"),
-                std::stod(P.get(args, "--sweep", "0.125")),
-                std::stoi(P.get(args, "--frames", "32")),
-                std::stod(P.get(args, "--halfwidth", "8")),
-                std::stod(P.get(args, "--rowfrac", "0.14")),
-                P.has(args, "--verbose"), std::stod(P.get(args, "--kernel", "0")));
-        if (cmd == "temporal-homography")
-            return cmdTemporalHomography(P.get(args, "--target", "edge"),
-                std::stod(P.get(args, "--sweep", "0.125")),
-                std::stoi(P.get(args, "--frames", "16")),
-                P.get(args, "--out", ""), P.has(args, "--bands"),
-                // A/B 侧：负数 = 不覆写 = 交付配置原样（默认）。三个口径对拍才能把
-                // 「移动闪烁是 IBL 反射 / AO / 几何边 哪个驱动的」这个问题拆开。
-                std::stod(P.get(args, "--env", "-1")), std::stod(P.get(args, "--ao", "-1")));
-        if (cmd == "aa-coverage")
-            return cmdAaCoverage(P.get(args, "--variant", ""), std::stoi(P.get(args, "--warm", "32")),
-                std::stod(P.get(args, "--feedback", "0.12")), P.has(args, "--base-space"),
-                std::stod(P.get(args, "--kernel", "0")));
-        if (cmd == "taa-swim")
-            return cmdTaaSwim(std::stoi(P.get(args, "--pairs", "32")),
-                std::stoi(P.get(args, "--warm", "32")), P.get(args, "--variant", ""));
-        if (cmd == "ao-noise")
-            return cmdAoNoise(P.get(args, "--glb", "cornell_box.glb"),
-                P.get(args, "--camera", "front"), P.get(args, "--variant", "deferred"),
-                std::stod(P.get(args, "--strength", "0.5")),
-                std::stoi(P.get(args, "--radius", "40")),
-                std::stoi(P.get(args, "--pairs", "16")), !P.has(args, "--no-temporal"),
-                P.has(args, "--bistro"));
-        if (cmd == "note") {
-            std::string text;
-            for (size_t i = 1; i < args.size(); ++i)
-                text += (i > 1 ? " " : "") + args[i];
-            return noteLastCall(text);
-        }
-        std::printf("未知子命令 %s（-h 看用法）\n", cmd.c_str());
+        const Args P(rest, *spec);
+        P.rejectUnknown();  // 拼错的 flag 不许被静默忽略（那等于在默认值上跑判据）
+        return dispatch(cmd, P);
+    } catch (const UsageError& e) {
+        std::fprintf(stderr, "错误: %s\n", e.what());
         return 2;
     } catch (const std::exception& e) {
         std::fprintf(stderr, "错误: %s\n", e.what());

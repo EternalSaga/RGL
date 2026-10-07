@@ -10,6 +10,10 @@ find_package(Threads REQUIRED)
 
 add_executable(imgqa
     main.cpp
+    # CLI 注册表（批次 B）：cli.cpp = 解析/帮助机制，cli_table.cpp = 子命令/flag/默认值表。
+    # 拆两个文件是护栏逼的（tools/ 侧样式规则：单文件 < 500 代码行），缝在"表 vs 机制"上。
+    cli.cpp
+    cli_table.cpp
     analytic.cpp
     ao_metrics.cpp
     ao_noise.cpp

@@ -2,6 +2,7 @@
 // 「我以为的行为」一轮写出过 10 处，全部是错的）。闭式解锚点来源逐条注明。
 #include "imgqa.h"
 #include "aa_coverage.h"
+#include "cli.h"
 #include "ao_metrics.h"
 #include "temporal_flicker.h"
 #include "temporal_homography.h"
@@ -13,6 +14,8 @@
 #include <cstring>
 #include <fstream>
 #include <random>
+#include <set>
+#include <string>
 
 #include <opencv2/imgproc.hpp>
 
@@ -1205,6 +1208,162 @@ void testBoostFidelity(Checker& c)
     }
 }
 
+/// 断言"这一句必须抛 UsageError"。校验类代码不抛就是摆设——阳性锚点。
+/// 抛**别的**类型也算失败：main 靠 UsageError 这个类型把 rc 分成 2（你敲错了）
+/// 与 3（跑挂了），混型就等于把用法错误伪装成运行故障。
+template <typename Fn>
+bool throwsUsage(Fn&& fn)
+{
+    try {
+        fn();
+    } catch (const UsageError&) {
+        return true;
+    } catch (...) {
+        return false;
+    }
+    return false;
+}
+
+/// 断言"这一句不许抛"（反向用例：合法参数被挡下 = 判据反过来咬人）。
+template <typename Fn>
+bool noThrow(Fn&& fn)
+{
+    try {
+        fn();
+    } catch (const std::exception&) {
+        return false;
+    }
+    return true;
+}
+
+/// Number 类 flag 的默认值串必须能被 stod 解析。不查这条的后果很具体：dispatch 里
+/// `P.number("--burst")` 当场抛，而它抛的是 std::invalid_argument（不是 UsageError）
+/// ⟹ rc=3「跑挂了」，用户看不出真正的问题是注册表里写错了默认值。
+bool numberDefaultParses(const FlagSpec& f)
+{
+    try {
+        std::stod(f.def);
+    } catch (...) {
+        return false;
+    }
+    return true;
+}
+
+/// CLI 注册表自检·**结构面**（批次 B）：这张表是默认值的唯一出处，它自己得先自洽。
+void testCliRegistryShape(Checker& c)
+{
+    const auto& table = subcommands();
+    c.chk("CLI 注册表非空（20+ 子命令）", table.size() >= 20, std::to_string(table.size()));
+
+    std::set<std::string> names;
+    for (const auto& s : table) {
+        c.chk("子命令名唯一", names.insert(s.name).second, s.name);
+        std::set<std::string> flags;
+        for (const auto& f : s.flags) {
+            c.chk("同命令内 flag 名唯一", flags.insert(f.name).second,
+                std::string(s.name) + " " + f.name);
+            c.chk("flag 名以 -- 开头", std::string(f.name).rfind("--", 0) == 0, f.name);
+            if (f.kind == FlagKind::Bool) {
+                c.chk("Bool flag 不许有默认值串", f.def == nullptr,
+                    std::string(s.name) + " " + f.name);
+                continue;
+            }
+            c.chk("非 Bool flag 必须有默认值串", f.def != nullptr, f.name);
+            if (f.kind == FlagKind::Number)
+                c.chk("Number 类默认值能被 stod 解析", numberDefaultParses(f),
+                    std::string(s.name) + " " + f.name + "='" + (f.def ? f.def : "") + "'");
+        }
+    }
+
+    // 反向用例：不存在的命令返回空，而不是某个默认项。
+    c.chk("findSubcommand(不存在的命令) → 空", findSubcommand("不存在的命令") == nullptr);
+    c.chk("findSubcommand(空串) → 空", findSubcommand("") == nullptr);
+}
+
+/// CLI 注册表自检·**行为面**：默认值只有一个出处 + 未知参数校验不是摆设。不碰引擎。
+void testCliArgsBehavior(Checker& c)
+{
+    const auto* tail = findSubcommand("temporal-tail");
+    c.chk("注册表里有 temporal-tail", tail != nullptr);
+    if (tail == nullptr)
+        return;
+    const std::vector<std::string> noargs;
+    const Args empty(noargs, *tail);
+
+    // ── 阳性锚点：读未声明的 flag 必须抛（不抛 = 默认值没有真相源）──
+    c.chk("get 未声明 flag → 抛", throwsUsage([&] { (void)empty.get("--strenght"); }));
+    c.chk("has 未声明 flag → 抛", throwsUsage([&] { (void)empty.has("--strength"); }));
+    c.chk("number 未声明 flag → 抛", throwsUsage([&] { (void)empty.number("--nope"); }));
+
+    // ── 已声明 flag 的默认值 = 注册表里那一串（含被证伪后修正的那几个）──
+    c.chk("默认值来自注册表：--burst = 96", empty.integer("--burst") == 96,
+        empty.get("--burst"));
+    c.chk("默认值来自注册表：--max-lag = 16", empty.integer("--max-lag") == 16,
+        empty.get("--max-lag"));
+    const Args homo(noargs, *findSubcommand("temporal-homography"));
+    c.chk("--env 默认 -1（负数 = 门关；帮助文本曾写 1.0 = 误导判据口径）",
+        homo.number("--env") == -1.0, homo.get("--env"));
+    c.chk("--ao 默认 -1（同上，帮助文本曾写 0.5）", homo.number("--ao") == -1.0,
+        homo.get("--ao"));
+    const Args resid(noargs, *findSubcommand("temporal-residual"));
+    c.chk("--static-boost 默认 0（帮助文本曾写 0.02）", resid.number("--static-boost") == 0.0,
+        resid.get("--static-boost"));
+
+    // ── 显式值覆盖默认值；没给的保持默认 ──
+    const Args given({"--burst", "8"}, *tail);
+    c.chk("显式值覆盖注册表默认", given.integer("--burst") == 8);
+    c.chk("没给的 flag 仍是注册表默认", given.integer("--warm") == 64);
+    c.chk("重复 flag 取首次出现（与改造前 P.get 逐字一致）",
+        Args({"--burst", "7", "--burst", "9"}, *tail).integer("--burst") == 7);
+
+    // ── rejectUnknown：两个方向都要测，否则等于没测 ──
+    const Args bad({"--strenght", "0.5"}, *tail);
+    c.chk("rejectUnknown 挡下拼错的 flag", throwsUsage([&] { bad.rejectUnknown(); }));
+    c.chk("rejectUnknown 放行合法 flag", noThrow([&] { given.rejectUnknown(); }));
+    const Args miss({"--glb"}, *findSubcommand("attribution"));
+    c.chk("flag 后面漏值也要挡（否则静默用默认值）", throwsUsage([&] { miss.rejectUnknown(); }));
+    const Args stray({"多出来的"}, *findSubcommand("attribution"));
+    c.chk("不收位置参数的命令拒位置参数", throwsUsage([&] { stray.rejectUnknown(); }));
+    const Args pos({"ssim"}, *findSubcommand("refuse"));
+    c.chk("refuse 收位置参数", noThrow([&] { pos.rejectUnknown(); }));
+    c.chk("位置参数可取回", pos.positional().size() == 1 && pos.positional()[0] == "ssim");
+
+    // ── args 回显：格式与「默认值快照」同构（验收 3 的机械入口）──
+    const std::string echo = echoFor(*tail, empty);
+    c.chk("回显首行是命令名", echo.rfind("temporal-tail\n", 0) == 0, echo.substr(0, 24));
+    c.chk("回显逐值成行 --burst = '96'", echo.find("   --burst = '96'\n") != std::string::npos,
+        echo);
+    const Args on({"--bistro"}, *findSubcommand("temporal-residual"));
+    c.chk("Bool 未点亮不写值", echo.find("(bool) = ") == std::string::npos, echo);
+    c.chk("Bool 点亮写 = true",
+        echoFor(*findSubcommand("temporal-residual"), on)
+                .find("--bistro(bool) = true")
+            != std::string::npos);
+    const auto* probe = findSubcommand("probe");
+    const std::string pe = echoFor(*probe, Args(noargs, *probe));
+    c.chk("probe 的 --light 既出值行也出 (bool) 行",
+        pe.find("   --light = '") != std::string::npos
+            && pe.find("   --light(bool)") != std::string::npos,
+        pe);
+
+    // ── args 子命令本体：未知参数不许逃到 main 外面（曾 uncaught → abort rc=134）──
+    c.chk("cmdArgs 未知 flag → UsageError",
+        throwsUsage([&] { cmdArgs({"temporal-tail", "--strenght", "0.5"}); }));
+    c.chk("cmdArgs 未知子命令 → UsageError", throwsUsage([&] { cmdArgs({"不存在的命令"}); }));
+    c.chk("cmdArgs 不带参数 → UsageError", throwsUsage([&] { cmdArgs({}); }));
+
+    // ── -h 与表同源：每个子命令都必须出现在 -h 里（漏一条 = 帮助与代码又分家）──
+    const std::string usage = usageText();
+    for (const auto& s : subcommands())
+        c.chk("-h 含子命令行",
+            usage.find(std::string("  ") + s.name + " ") != std::string::npos, s.name);
+    // 反向：-h 里不许再出现被证伪的旧默认值（它们只该留在 git history 里）
+    c.chk("-h 不再写 [--env 1.0]", usage.find("[--env 1.0]") == std::string::npos);
+    c.chk("-h 不再写 [--burst 64]", usage.find("[--burst 64]") == std::string::npos);
+    c.chk("-h 不再写 [--max-lag 24]", usage.find("[--max-lag 24]") == std::string::npos);
+    c.chk("-h 不再写 [--static-boost 0.02]", usage.find("[--static-boost 0.02]") == std::string::npos);
+}
+
 int cmdSelftest()
 {
     Checker c;
@@ -1223,6 +1382,8 @@ int cmdSelftest()
     testBoostFidelity(c);
     testTemporalFlicker(c);
     testKeyValidation(c);
+    testCliRegistryShape(c);
+    testCliArgsBehavior(c);
     std::printf("%s：%d 条失败\n", c.bad ? "自检失败" : "自检通过", c.bad);
     return c.bad ? 1 : 0;
 }
