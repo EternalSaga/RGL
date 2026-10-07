@@ -31,6 +31,7 @@ add_executable(imgqa
     temporal_motion.cpp
     temporal_flicker.cpp
     temporal_homography.cpp
+    temporal_yaw_remap.cpp
     material_attribution.cpp
     aa_coverage.cpp)
 

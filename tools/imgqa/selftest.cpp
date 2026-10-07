@@ -7,6 +7,7 @@
 #include "temporal_flicker.h"
 #include "temporal_homography.h"
 #include "temporal_residual.h"
+#include "temporal_yaw_remap.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1433,6 +1434,162 @@ void testCliArgsBehavior(Checker& c)
     c.chk("-h 不再写 [--static-boost 0.02]", usage.find("[--static-boost 0.02]") == std::string::npos);
 }
 
+// ── 批 13.14a：带 pitch 的解析 yaw 重映射（temporal_yaw_remap）────────────────
+//
+// 金标准 = **显式构造两帧相机基**（yaw 与 yaw+δ 各建一次 R_cam，经世界系回投）。
+// 它与被测实现（合并成 `R_x(−pitch)·R_y(δ)·R_x(pitch)` 一步）唯一的公共假设是
+// 「yaw 会消掉」——那正是本判据要验的命题，所以这个对照**是独立的**，不是自证。
+//
+// 为什么这条必须存在：本文件的**手推闭式连错两次**（求逆漏 `(ABC)⁻¹ = C⁻¹B⁻¹A⁻¹`
+// 的顺序翻转一次、符号展开错一次），第二次错到 pitch≠0 时偏 1.76px 而 pitch=0 时
+// 完全正确 —— 也就是说**只测 pitch=0 的退化情形抓不到它**。故金标准必须扫 pitch。
+//
+// ### 变异红线（2026-10-07 当场注入实测，四条各验一条，全部验红后才入账）
+//
+// | 注入的变异 | 变红的断言（读数） |
+// |---|---|
+// | 求逆顺序翻转 `R_x(+p)·R_y(δ)·R_x(−p)`（**我犯的原错**） | ① 金标准 13.46px |
+// | pitch 乘 0（退化成一维） | ① 金标准 7.74px ＋ ⑤ pitch 锚点 `max|Δv| = 0.000` |
+// | yaw 增量反号 `R_y(−δ)` | ① 54.93px ＋ ③b 与既有闭式 9.38px ＋ ④ 符号锚点 636.96 |
+// | `Ksi` 主点 y 符号写反（推导时差点写错的那一位） | ② δ=0 恒等 720px ＋ ① 730.9px ＋ ③b ＋ maxShiftPx |
+//
+// ⚠ 变异 2 的第一版写成把 `rotX` 整个删掉，拿到的是 `-Werror=unused-parameter` **编译红**
+//   而不是判据红（skill `rgl-test-discipline` 记的那条坑）。改成 `pitchRad * 0.0`
+//   保留参数使用，才拿到真正的判据红。
+
+/// testYawRemap 的针孔相机（1280×720、垂直 fov 45°、主点居中）+ **金标准**。
+/// 抽成 fixture 的理由：两条测试共用，且金标准独立命名才看得出它**没有**复用被测实现。
+struct YawRemapFixture {
+    double f = 360.0 / std::tan(0.5 * 45.0 * 3.14159265358979323846 / 180.0);
+    double cx = 640.0, cy = 360.0;
+    cv::Size sz { 1280, 720 };
+    /// 采样点：四角 + 中心 + 两条边上的点。⚠ 必须是**数组**而不是嵌套花括号的
+    /// `initializer_list`——后者在这里推导成 void（`cannot use type 'void' as a range`）。
+    inline static const double kPts[5][2] = { { 0, 0 }, { 640, 360 }, { 1279, 719 },
+        { 100, 700 }, { 1200, 20 } };
+
+    static cv::Matx33d rotX(double a)
+    {
+        const double k = std::cos(a), s = std::sin(a);
+        return cv::Matx33d(1.0, 0.0, 0.0, 0.0, k, -s, 0.0, s, k);
+    }
+    static cv::Matx33d rotY(double a)
+    {
+        const double k = std::cos(a), s = std::sin(a);
+        return cv::Matx33d(k, 0.0, s, 0.0, 1.0, 0.0, -s, 0.0, k);
+    }
+    static std::pair<double, double> apply(const cv::Matx33d& H, double x, double y)
+    {
+        const cv::Vec3d q = H * cv::Vec3d(x, y, 1.0);
+        return { q[0] / q[2], q[1] / q[2] };
+    }
+    /// 金标准：像素 → t+1 帧相机方向 → 世界 → t 帧相机方向 → 像素（完全不做化简）。
+    std::pair<double, double> truth(double x, double y, double yaw, double pitch, double d) const
+    {
+        const cv::Matx33d Rt = rotY(yaw) * rotX(pitch), Rt1 = rotY(yaw + d) * rotX(pitch);
+        const cv::Vec3d w = Rt1 * cv::Vec3d((x - cx) / f, (cy - y) / f, 1.0);
+        const cv::Vec3d c0 = Rt.t() * w;
+        return { cx + c0[0] / c0[2] * f, cy - c0[1] / c0[2] * f };
+    }
+};
+
+/// ① 金标准对拍 + ③b 与既有闭式一致（**正确性**侧）。
+void testYawRemapAgainstTruth(Checker& c)
+{
+    const YawRemapFixture fx;
+    // 三个 pitch × 三个 yaw × 两个 δ。**同时**钉住正确性与「与 yaw 无关」
+    // （金标准显式换 yaw，被测实现压根不含 yaw 参数 ⟹ 一旦 yaw 其实消不掉就红）。
+    double worst = 0.0;
+    for (const double p : { 0.0, -0.401425, 0.541052 })
+        for (const double yw : { 0.0, 0.7, -1.3 })
+            for (const double d : { 0.0035, 0.02 }) {
+                const cv::Matx33d H = yawRemapHomography(d, p, fx.f, fx.cx, fx.cy);
+                for (const auto& q : YawRemapFixture::kPts) {
+                    const auto a = YawRemapFixture::apply(H, q[0], q[1]);
+                    const auto b = fx.truth(q[0], q[1], yw, p, d);
+                    worst = std::max(
+                        { worst, std::abs(a.first - b.first), std::abs(a.second - b.second) });
+                }
+            }
+    c.chk("yaw 重映射对金标准（显式两帧相机基，含 pitch）", worst < 1e-9,
+        "worst=" + std::to_string(worst) + "px");
+
+    // ③b pitch = 0 必须与既有 yawHomography 一致（复用已验证实现；它是本变换的
+    //   **二阶近似**，δ=0.0035 时实测差 0.0022px，δ=0.02 时差 0.073px ⟹ 容差按小 δ 档给）
+    const cv::Matx33d legacy = yawHomography(0.0035, fx.f, fx.cx, fx.cy);
+    const cv::Matx33d mine = yawRemapHomography(0.0035, 0.0, fx.f, fx.cx, fx.cy);
+    double worstLegacy = 0.0;
+    for (const auto& q : YawRemapFixture::kPts) {
+        const auto a = YawRemapFixture::apply(legacy, q[0], q[1]);
+        const auto b = YawRemapFixture::apply(mine, q[0], q[1]);
+        worstLegacy = std::max(
+            { worstLegacy, std::abs(a.first - b.first), std::abs(a.second - b.second) });
+    }
+    c.chk("pitch=0 与既有 yawHomography 一致", worstLegacy < 5e-3,
+        "worst=" + std::to_string(worstLegacy) + "px（既有闭式是二阶近似）");
+}
+
+/// ② 恒等 / ③ 几何形状 / ④ 符号 / ⑤ pitch 不可忽略（**退化与方向**侧）。
+void testYawRemapAnchors(Checker& c)
+{
+    const YawRemapFixture fx;
+
+    // ② δ = 0 必须逐位恒等（反向用例：任何"顺手加的偏移/半像素修正"都会让它红）
+    const YawMap id = buildYawMap(yawRemapHomography(0.0, -0.4, fx.f, fx.cx, fx.cy), fx.sz);
+    double worstId = 0.0;
+    for (int y = 0; y < fx.sz.height; y += 37)
+        for (int x = 0; x < fx.sz.width; x += 41)
+            worstId = std::max({ worstId,
+                std::abs(static_cast<double>(id.mapX.at<float>(y, x)) - x),
+                std::abs(static_cast<double>(id.mapY.at<float>(y, x)) - y) });
+    c.chk("δ=0 逐位恒等", worstId < 1e-3,
+        "worst=" + std::to_string(worstId) + "px（float map 精度）");
+
+    // ③ pitch = 0 时**垂直线必须映到垂直线**（map_x 与 y 无关）——「绕竖轴转只改水平」的
+    //   正确表述。⚠ 直觉版本「v 不变」是**错的**（本条第一版就栽在这）：透视除法给出
+    //   v′ = v/(1 − u·tanδ)，分母与 u 耦合 ⟹ v 实测确实变 0.92px。那正是
+    //   temporal_homography 头注释写的「垂直线仍映到垂直线，y′ 的分母与 x 耦合 =
+    //   **透视收缩，不是仿射**」。把它机器化，防将来有人把它"优化"成仿射。
+    const YawMap p0 = buildYawMap(yawRemapHomography(0.0035, 0.0, fx.f, fx.cx, fx.cy), fx.sz);
+    double worstCol = 0.0;
+    for (const int x : { 0, 200, 640, 1000, 1279 })
+        for (const int y : { 0, 180, 360, 719 })
+            worstCol = std::max(worstCol,
+                std::abs(static_cast<double>(p0.mapX.at<float>(y, x)) - p0.mapX.at<float>(0, x)));
+    c.chk("pitch=0 时垂直线映到垂直线（map_x 与 y 无关）", worstCol < 1e-3,
+        "worst=" + std::to_string(worstCol) + "px");
+
+    // ③b 透视收缩必须**在场**（阳性锚点）：v 的位移随 x 变化 ⟹ 不是仿射。
+    //   与 ③ 配成一对：③ 说「x 方向不随 y 变」，③b 说「y 方向随 x 变」，两条同时成立
+    //   才是纯旋转单应；少任何一条都退化成别的变换。
+    //   ⚠ 必须取**远离主点**的行：v = (cy − y)/f 在 y = cy 处恰为 0 ⟹ v′ ≡ 0，
+    //   收缩在那一行不显现（第一版取 y=360 主点行，测出 Δv ≡ 0 差点被读成「量具有问题」）。
+    const double vAtLeft = static_cast<double>(p0.mapY.at<float>(100, 0)) - 100.0;
+    const double vAtRight = static_cast<double>(p0.mapY.at<float>(100, 1279)) - 100.0;
+    c.chk("透视收缩在场（v 位移随 x 变 ⟹ 非仿射）", std::abs(vAtLeft - vAtRight) > 0.5,
+        "Δv(左) = " + std::to_string(vAtLeft) + " vs Δv(右) = " + std::to_string(vAtRight));
+
+    // ④ 符号锚点：δ > 0 ⟹ 世界固定点左移 ⟹ src map 必须往**右**取。
+    //   写反号不会让任何聚合数变难看得离谱（它把位移加倍而不是抵消），必须单独钉。
+    const double shifted = p0.mapX.at<float>(360, 640);
+    c.chk("符号：δ>0 时 src map 往右取", shifted > 641.0,
+        "map_x(中心) = " + std::to_string(shifted) + "（期望 > 641）");
+
+    // ⑤ **pitch 不可忽略**的阳性锚点：bistro 机位 pitch ≈ −23° 时，v 方向的位移必须
+    //   达到亚像素量级。哪天有人把 pitch 参数退化掉，这条会红（②③③b 全都测不出来）。
+    const double pitch = -23.0 * 3.14159265358979323846 / 180.0;
+    const YawMap pm = buildYawMap(yawRemapHomography(0.0035, pitch, fx.f, fx.cx, fx.cy), fx.sz);
+    double worstPitch = 0.0;
+    for (int y = 0; y < fx.sz.height; y += 37)
+        for (int x = 0; x < fx.sz.width; x += 41)
+            worstPitch = std::max(worstPitch,
+                std::abs(static_cast<double>(pm.mapY.at<float>(y, x)) - p0.mapY.at<float>(y, x)));
+    c.chk("pitch 不可忽略（−23° 时 v 位移达亚像素）", worstPitch > 0.5,
+        "max|Δv| = " + std::to_string(worstPitch) + "px/帧（实测 0.952）");
+    c.chk("maxShiftPx 量级合理（0.2°/帧 ≈ 3px）", pm.maxShiftPx > 2.0 && pm.maxShiftPx < 5.0,
+        "maxShiftPx = " + std::to_string(pm.maxShiftPx));
+}
+
 int cmdSelftest()
 {
     Checker c;
@@ -1452,6 +1609,8 @@ int cmdSelftest()
     testRejectCrossTab(c);
     testBoostFidelity(c);
     testTemporalFlicker(c);
+    testYawRemapAgainstTruth(c);
+    testYawRemapAnchors(c);
     testKeyValidation(c);
     testCliRegistryShape(c);
     testCliArgsBehavior(c);
