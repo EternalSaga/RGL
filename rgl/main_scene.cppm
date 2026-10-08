@@ -520,11 +520,27 @@ bool computeFsrUsable(DeviceContext& device, const CompiledRenderGraph& graph,
  * @return 实际生效的时域开关（被拦时 = false，并出 warn）
  */
 bool resolveFsrTemporal(bool fsrUsable, bool fsrTemporal, bool taaDecorated) {
-	if (!fsrUsable || !fsrTemporal || !taaDecorated)
+	// **生效锚点**（`tools/smoke.py --fsr-temporal` 的双向核对读这一行）。为什么必须有：本函数
+	// 会在 TAA 在图时把配置键**判关**，而 `runtime.lua` 里写的仍然是 `true` ⟹ 只看配置会以为
+	// 开着。与 `fsr_jitter` 那条同族：申报值与生效值必须现场可读。
+	// 为什么写在**本函数**而不是调用方：`assembleBackEnd` 的认知复杂度已经压线（实测加两行
+	// 即超 15 被 source_checks 点名），而"生效状态"本来就是本函数的职责所在。
+	const auto logState = [&](bool effective) {
+		if (!fsrUsable)
+			return;  // FSR 没接进图 ⟹ 本键无意义，不往启动日志里加噪声
+		if (auto* lg = RLLogger::getInstance())
+			lg->info("fsr temporal: {}（配置键 fsr_temporal = {}，TAA 在图 = {}）",
+				effective ? "开 = vendor 累积历史" : "关 = 纯空间 EASU+RCAS",
+				fsrTemporal ? "true" : "false", taaDecorated ? "true" : "false");
+	};
+	if (!fsrUsable || !fsrTemporal || !taaDecorated) {
+		logState(fsrTemporal);
 		return fsrTemporal;
+	}
 	if (auto* lg = RLLogger::getInstance())
 		lg->warn("fsr_temporal 与 TAA 互斥（两个时域滤波器串联 = 双重模糊）："
 				 "已强制时域关，退化为纯空间升频");
+	logState(false);
 	return false;
 }
 
