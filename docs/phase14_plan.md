@@ -893,10 +893,11 @@ mip 全 1）、HDR 标志（±0.2）、Lanczos 核型（见下）。⟹ 只剩**
 - **不是对比度 / YCoCg 或 HDR 往返**：增益 = 1.000，R² 0.9915。
 - **不是历史采样的半纹素偏置**：σ 量级不对（0.5 vs 0.8），且半纹素偏置解释不了各向同性。
   另外历史采样用的是 FFX **双三次**重采样器（`reproject.h:34` 的 `DeclareCustomTextureSample`，
-  融进 accumulate pass；`REPROJECT_USE_LANCZOS_TYPE` 是我们生成器的排列维度，host 由
-  `getPipelinePermutationFlags` 的 `useLut` 在 0=Reference / 1=LUT 之间选，**两者都是正规
-  Lanczos**），零运动本该落在整数纹素 = 恒等；`previousFrameUpscaleSize` 也确认每帧维护
-  （`ffx_fsr3upscaler.cpp:964-965`）。
+  融进 accumulate pass），零运动**本该**落在整数纹素 = 恒等；`previousFrameUpscaleSize`
+  也确认每帧维护（`ffx_fsr3upscaler.cpp:964-965`）。
+  > ⚠ 本批据此写的"`REPROJECT_USE_LANCZOS_TYPE` 的 0=Reference / 1=LUT **两者都是正规 Lanczos**"
+  > **已被 §1.18 实测推翻**——VK 后端两个分支都读同一张 LUT 纹理，而那张 LUT 就是病灶。
+  > **"本该恒等"不等于"实测恒等"，这条推理链的断点正是下一批的入口。**
 
 **下一步要问的问题因此被收窄成一句**：accumulate 写回历史的那个值，什么时候会变成一个 3×3
 邻域均值？（FSR 的邻域裁剪本来就要在 accumulate 里算 3×3 的 min/max box —— 量级吻合不是巧合，
@@ -914,12 +915,13 @@ mip 全 1）、HDR 标志（±0.2）、Lanczos 核型（见下）。⟹ 只剩**
   `#ifndef` 守卫、命令行 `-D` 优先，**改 vendor 头是空操作**（本批先踩了这个空，两次测量白做）。
 - 还原 vendor 与 blobs 后 `fsr-check` 护栏通过（38 输入 / 41 产物）、门关 SHA256 逐位不变。
 
-### 五、下一步（唯一能一问定生死的动作）
+### 五、下一步（原计划已被替代，见 §1.18）
 
-**包住 vendor 的 `fpCreateResource`**（`FfxInterface` 是函数指针表：拷一份、换掉一项、其余转发）
-截获 `INTERNAL_UPSCALED_COLOR_1/2`，回读历史，问：**它是上一帧输出的恒等拷贝，还是一张被
-采样滤波糊掉的图？** 稳态分析已经把问题收窄成这个二选一，读到即可定。回读手法 `fsr_smoke.cpp`
-里现成（`vkCmdCopyImageToBuffer` + half 解码，§3 探针在用）。
+原计划 = 包住 vendor 的 `fpCreateResource`（`FfxInterface` 是函数指针表：拷一份、换掉一项、
+其余转发）截获 `INTERNAL_UPSCALED_COLOR_1/2` 回读历史，问"恒等拷贝还是被糊掉的图"。
+**该动作未执行**：§1.18 改用**更便宜的两条**（vendor shader 消融 + accumulate pass 运行时探针，
+每轮 41s 重排 + 一次 `/shotburst`）达到了同样的二选一判决，且顺带把嫌疑逐个二分排除。
+**教训：回读产物不是唯一出路——能在 shader 里做单变量消融时，它比截获资源更便宜也更可归因。**
 
 ### 六、`llm_debug` 截图路径 = 删除候选（工具账，不是判据账）
 
@@ -940,7 +942,182 @@ RPC 的 `/shot` + `/shotburst` 覆盖得了 `llm_debug` 的截图职责，且**�
 下次任何"改个参数看效果"的实验，第一步是问**这个改动有没有可能不影响输出**，
 而不是先看输出变没变。
 
-## 2. 批次拆分与验收判据
+## 1.18 批 14.5 第六批（消融批，**无产品代码改动**）：时域档发糊的根因 = **VK 后端的 Lanczos 权重 LUT 采样**（2026-10-08，本机 STRIX_HALO）
+
+### 一、结论一句话（**根因 = vendor host 侧一个 `abs` 的名字解析 bug**）
+
+`ffx_fsr3upscaler.cpp:164` 的 `static float lanczos2(float value)` 写的是
+`abs(value) < FFX_EPSILON ? 1.f : <闭式>`。该函数在**全局作用域**调**非限定** `abs`，而 libstdc++ 的
+`<cmath>` 只把浮点重载放进 `std::`，全局只有 `<stdlib.h>` 的 `::abs(int)` ⟹ **浮点被截断成整数**：
+`|value| < 1` 一律截成 0 ⟹ `0 < 1e-6` 成立 ⟹ **返回 1.0**。转折点恰在 `|value| = 1`。
+
+于是 host 生成的那张 128×1 `R16_SNORM` Lanczos LUT **退化成一个阶跃**（实测：i=0…63 全存
+`32767` = 1.0，i=64 起才回到真核值），**Lanczos2 在 x=1 的零点没了**。VK 后端的
+`SampleLanczos2Weight`（`callbacks_glsl.h:735`）不是闭式核而是**采样这张 LUT**，历史读取（reproject）
+的 4×4 权重全部来自它 ⟹ t=0 处的实际权重变成
+
+| | 中心 | 左邻 | 右邻 |
+|---|---|---|---|
+| vendor 本意 | 1.0 | 0 | 0 |
+| **实测（LUT 阶跃）** | **0.5012** | **0.2494** | **0.2494** |
+
+**= 一个 [¼½¼]，x/y 各一个 ⟹ σ=0.707 的 3×3 低通。** 而 accumulate 的当前帧权重 α ≈ **2.3%**
+（`fUpsampledWeight = 1/43 × fKernelBiasWeight`，与 worker bench 实测 0.0231 吻合）⟹ EMA 把这个
+低通**放大 ~44 倍** ⟹ 画面发糊。
+
+**修法 = 一个 token：`abs` → `fabsf`（host 侧，不用重排 shader blob）。** 实测边缘能量
+**6.01 → 13.7~13.9**，即无 FSR 参照的 **104~105%**。（该指标到第 8 帧**仍在单调上升**，
+未完全收敛 —— 两次跑分别 13.72 / 13.90，差异就是收敛程度，不是噪声。）
+
+> **与 §1.17 闭环**：当年从**图像域**独立拟合出的退化指纹是"σ≈0.75–1.0 的各向同性低通"，
+> 并把 `[¼½¼]⊗[¼½¼]`（σ=0.707）列为候选核。**本批从 host 侧 dump 出的 LUT 精确命中该核。**
+> 两条毫不相干的测量收敛到同一个数 —— 这是本批最强的证据形式。
+
+### 二、判决表（静止机位、render_scale=1.0、抖动关、warm 30 + n 8、`/shotburst` 连拍；指标 = mean|∇|）
+
+每一行都过**两道可观测性断言**：① SPIR-V 产物字节相对 HEAD 变了 ② `libffx_fsr3upscaler_vk.a`
+与 `rgl` 二进制都比产物新。基线本轮**复跑得 6.014**（上一批 6.01）⟹ 判据可复现。
+
+| 配置 | 边缘能量 | 相对无 FSR | 判什么 |
+|---|---|---|---|
+| 不接 FSR（参照） | 13.18 | 100% | — |
+| **FIX-LUT：host `abs`→`fabsf`（一个 token）** | **13.72~13.90 ↑** | **104~105%** | **根因 = 修法** |
+| **消融 C：绕开整个历史 gather** | **13.93 ↑** | **106%** | 根因（独立复现） |
+| **消融 L：shader 核改闭式，不读 LUT** | **13.81 ↑** | **105%** | 根因（独立复现） |
+| 消融 K：喂**精确** UV，保留 gather | 6.037 | 46% | UV/几何无罪，罪名在权重 |
+| 基线（FSR 时域档） | 6.014 | 46% | — |
+| 消融 I：α 强制 0.2（放大 9×） | 7.87 | 60% | α 是**放大器**不是源 |
+| 消融 J：关去振铃 clamp | 6.016 | 46% | 排除 |
+| FIX-E / FIX-E2：索引消抖 | 6.59 / 5.97 | 50% / 45% | 排除（见下） |
+| 纯空间档（每帧 reset） | 10.93 | 83% | 上一批 |
+
+**三条机制完全不同的修法各自独立地收敛到 13.8–13.9**（绕开 gather 13.93 / shader 侧闭式核 13.81 /
+host 侧一个 token 13.90），且都**超过**了不接 FSR 的 13.18（RCAS 0.2 的净加分，与 §1.17"RCAS 是
+净加分 +7%"一致）。另：消融 F（权重恒取中心纹素 `fColor11` = 9.18）与消融 C2（按
+`floor(uv*size-0.5)` 直取 = 9.16）**在数学上本应等价、实测相差 0.02** ⟹ 测量链自洽。
+
+### 三、推翻本批自己前两轮的**两条无效排除**（结构性无效，不是数值错）
+
+- **「消融 D：`useLut=false` → 无变化 ⟹ LUT 排除」是错的。** VK 上 `SAMPLER_1D_0`（Reference
+  `Lanczos2`）与 `SAMPLER_1D_1`（`Lanczos2LUT`）**都调用 `SampleLanczos2Weight`，也就是都读那张
+  LUT 纹理**（`sample.h:134-138` + `:238-241`）。切 `useLut` 在 VK 上**换不掉 LUT**，这个实验
+  在结构上不可能排除它。
+- **「消融 E：关 `REPROJECT_SAMPLERS_USE_DATA_HALF` → 无变化 ⟹ half 路径排除」同理无效**——
+  若该分支本就是运行时所选，"关掉它"就是空操作，"无变化"是必然结果。
+- **通用纪律（本批最值得留的一条）**：一个消融的"无变化"**只有在先证明"这个开关确实能改变
+  被测量"之后才构成排除**。否则它什么也没说。§1.17 已经写过"改完没先证明改动可观测"，本批
+  是它的**进阶形态：不光要证明改动可观测，还要证明这个旋钮接在被测路径上**。
+
+**由此打开的门**（这条事实本身仍有用）：唯一不读 LUT 的是 `SAMPLER_1D_2 = Lanczos2Approx`
+（`sample.h:622-624`），而 `REPROJECT_USE_LANCZOS_TYPE` 在生成器里是 **1 bit**（`PERM_OPTIONS[0]`，
+`total_keys = 1<<6`；host 侧 `FSR3UPSCALER_SHADER_PERMUTATION_USE_LANCZOS_TYPE = (1<<0)`）
+⟹ **type 2 压根不在 41 个产物里**。但本批最终**没走"加排列"这条路**——真正的根因在 host 侧
+（第六节），一个 token 就够，不必动 vendor shader 面。
+
+### 四、正面排除清单（探针实测，勿重复排查）
+
+| 嫌疑 | 判据 | 结论 |
+|---|---|---|
+| 速度场 / 抖动接线 | accumulate 内打点：`\|MV\|·UpscaleSize() > 0.25` 纹素的像素占比 = **0.0000** | **严格为零** |
+| `fPxFrac` 有真分数偏移 | 二值阶梯：`frac.x>0.02`、`>0.9`、`>0.99` 占比**同为 72.48%**；`frac.y>0.02` 与 `>0.9` 同为 29.84% | **恰好双峰 {0.0, 1.0}**，核收到的是 delta 自变量 |
+| 索引往返 `floor(((i+0.5)/S)·S−0.5)` 抖动 | 实测 68.3% 像素整型索引 ≠ `iPxHrPos`，**但 `frac` 恰为 1.0 补偿回来**；强行只改 `floor`（FIX-E）反而把配对拆坏 ⟹ 相邻帧差从 **0 变成 0.031**（时域不稳定） | **vendor 的 base/frac 配对自洽，不是 bug** |
+| 去振铃 clamp（2×2 盒子偏向 +(0,0) 侧） | 消融 J 关掉 → 6.016 | 排除 |
+| 第 0 帧种子残留 | warm 30 → 6.014，warm 400 → 6.023 | **真不动点** |
+| 尺寸相关的 UV 舍入 | CPU float32 复算：S=1280 **0%**、S=720 5.6%、S=1920 1.4%、2 的幂全 0 | 真实存在但**是 GPU `fdiv`（`v_frcp`+牛顿，非正确舍入）与 CPU IEEE 的差异**，且被 frac 补偿 |
+
+**顺带纠正 worker 合成靶台的一个方法学缺陷**：它选 256×256 测 `fPxFrac` 恒 0 并据此判"历史读取
+几何恒等"——**256 是 2 的幂，`(i+0.5)/256·256` 精确，结构上看不见 1280（=2⁸×5）的舍入抖动**；
+且它只跑 30 帧，自身 delta peak 0.53→0.019 仍在单调衰减**未收敛**。**几何这条它测对了结论
+（确实无罪）但推理不成立**，本批的运行时探针才是有效证据。
+
+### 五、两条探针方法学教训（本批各踩一次，都差点导致错结论）
+
+1. **诊断不能写 `data.fHistoryColor`** —— 它经 `StoreInternalColorAndWeight` 写进的内部色
+   **就是历史本身**。第一版探针因此把自己的被测收敛态永久清零，报出"**差恒为 0**"的**假阴性**，
+   差点据此判"历史读取是恒等"。正确做法：**只写 `StoreUpscaledOutput`**，并把
+   `dd.enableSharpening = false`（`fsr_upscaler_impl.cppm:362`）让"历史存储"与"输出"两条写分离
+   —— 关 RCAS 时 accumulate 直接 `StoreUpscaledOutput`，输出图 == 历史图，正是读诊断的关键。
+2. **渲染器对 FSR 输出做 tonemap + sRGB 编码**，**多电平编码不能线性反解**。第一版把 5 电平
+   偏移编码按线性解码，把主峰读成"历史读取平移了 (+1,+1) 纹素"——**一个不存在的根因**。按秩
+   聚类重解后主峰是偏移 **(0,0)**。**二值（0/255）编码在这条管线上无歧义，优先用它。**
+
+### 六、根因是怎么挖出来的（**"内容 vs 绑定"这个问法本身是错的**）
+
+先按"绑定错"查：`R16_SNORM → VK_FORMAT_R16_SNORM` 映射正确；`accumulate_pass.glsl:38` 确实定义了
+`FSR3UPSCALER_BIND_SRV_LANCZOS_LUT 4`（排除"未绑定 → `#else return 0.f` → 权重全 0 → 0/0 = NaN"）；
+`u = x/2` 对 128 宽 LUT 的纹素中心误差 < 半个纹素。**三条都对 ⟹ 一度以为矛盾无解。**
+
+于是改用**运行时二值探针直接问 LUT 采样返回什么**（在 accumulate pass 里调 `SampleLanczos2Weight`，
+只写 `StoreUpscaledOutput`）：
+
+| x | 实测 SW(x) | 闭式 Lanczos2(x) |
+|---|---|---|
+| 0.0 | > 0.50 | 1.0 |
+| 0.5 | > 0.70 | 0.573 |
+| **1.0** | **∈ (0.40, 0.50]** | **0（零点！）** |
+| 1.5 | ≤ 0.30 | −0.150 |
+
+先立了两个假设（"LUT 正确"、"x 轴只覆盖 [0,1] ⟹ `SW(x)=L(x/2)`"），**三分歧判据跑出 (0,1,0)，
+两个都被否证**。真正破局的是换问题：**别再问 GPU，这张 LUT 是 host CPU 侧的数组，一条 `fprintf`
+就能把 128 个值打出来**（`FSRLUTDUMP` 门控，验完即删）。实测：
+
+```
+i=  0 x=0.00000 stored= 32767      i= 63 x=0.99213 stored=   167(修后)
+i= 16 x=0.25197 stored= 32767  ←阶跃  i= 64 x=1.00787 stored=  -162
+i= 32 x=0.50394 stored= 32767  ←阶跃  i= 96 x=1.51181 stored= -2014
+i= 48 x=0.75591 stored= 32767  ←阶跃  i=127 x=2.00000 stored=     0
+```
+
+**i=0…63 全被钳成 1.0。** 用它反推上面四个探针读数：`SW(1.0)` = LUT[63] 与 LUT[64] 线性插值
+= `(1.0 + (−0.0049))/2` = **0.4975** ∈ (0.40, 0.50] ✓；`SW(0.5)`=1.0 ✓；`SW(1.5)`≈−0.046 ✓；
+`SW(0.0)`=1.0 ✓。**四个读数全部命中 ⟹ 诊断闭合，无残余假设。**
+
+**定性为 `abs` 的名字解析**（不是 epsilon）：`FFX_EPSILON = 1e-06f`（`ffx_util.h:46`）排除了
+"epsilon 本身是 1.0"这个竞争假设，而**转折点精确落在 `|value| = 1`** 正是整数截断的签名。
+`<cmath>` 虽然包了（`:24`，注释还写着 "for fabs, abs"），但浮点重载只在 `std::` 里，全局作用域的
+非限定 `abs(float)` 落到 `<stdlib.h>` 的 `::abs(int)`。
+
+> **本批最值钱的一条方法学**：查"GPU 采样结果不对"时，先问**这份数据是在 CPU 还是 GPU、
+> 能不能直接打出来**。本例数据从头到尾就是一个 host `int16_t` 数组，一条 `fprintf` 顶过
+> 三条 GPU 侧推断；而我前两条路（查 format、查绑定、立映射假设）全部走空。
+
+**红线可分析成立**：`lanczos2()` 全文件**只有一个调用点**（`:546`，LUT 生成循环），而该循环只在
+FSR context 创建时跑 ⟹ FSR 关时根本不执行、逐位不变。**形式化的门关 SHA256 红线复验提交前补跑。**
+
+### 七、修法落地状态与待办
+
+**已落地（工作区，未提交）**：`third_party/fsr/vendor/src/components/fsr3upscaler/ffx_fsr3upscaler.cpp`
+一处 —— `lanczos2()` 里 `abs(value)` → `fabsf(value)`。**补丁面 = 1 文件 / +2 −1，不动 vendor shader，
+`fsr-blobs` 产物与 HEAD 逐位一致，`fsr-check` 护栏 OK（38 输入 / 41 产物）。**
+
+**提交前必须补的三条**：
+
+1. **红线复验**：FSR 关 = 逐位不变（第六节已给分析，形式化 SHA256 未跑）。
+2. **真实用法验收**：本批全部数字是 **render_scale=1.0 + 抖动关** 的**诊断档**。FSR 的设计点是
+   `render_scale < 1` + 抖动开 —— 那才是 14.5 要交付的档，**必须在那一档重测**（且时域档测量
+   **不可并行**：`dd.frameTimeDelta` 是墙钟量，争用会改变累积权重）。
+3. **记 `third_party/fsr/PATCHES.md`**：这是**上游 vendor bug**（不是我们的接线错），要写清
+   上游版本与 `abs` 名字解析的根因。**同类面已扫完**：vendor host 代码
+   （`src/components` / `src/backends/vk` / `src/shared` / `include/FidelityFX/host`）里非限定
+   `abs(` 在本处修好后**0 命中** ⟹ 这是唯一一处，不存在同族待爆雷。
+
+**顺带结案的两条旧账**：① §1.17 的 σ≈0.8 指纹**已由本批解释**（[¼½¼]⊗[¼½¼]，σ=0.707）；
+② worker 合成靶台报的 `useLut` 探测口径矛盾**升级后已结案**——`useLut` 正是选 reproject 核的那一位，
+它的工具推导 `false` 而渲染器实测 `true`，**两边跑的是不同的核**，这解释了靶台为何看不见病灶。
+
+### 八、判据载体（**一次性，不进仓库**）
+
+`/tmp/opencode/fsrlab.py`（渲染器侧 shotburst 实验台：铺一次性 `RGL_CONFIG_DIR` → headless +
+`diagnostics.rpc=true` → 一次连拍 warm+n 帧 → numpy 算 mean|∇| 与相邻帧差）、`/tmp/opencode/abl.sh`
+（消融闭环 = 重排 → 编译 → 两道可观测性断言 → 跑 → 指标）、`/tmp/opencode/b.sh`（带断言的 build
+包装）。**符合工具语言纪律**：留在 Python 的只用 stdlib + PIL/numpy，且**不入库**；要入库的判据
+另说。worker 的 `third_party/fsr/smoke/fsr_lab.cpp`（合成靶台）已在册，但**本批的结论不依赖它**
+（见第四节末对其方法学缺陷的说明）。
+
+**本批暴露的一个判据缺口**：LUT 是 host 生成的、直接决定时域锐度的常量，但**没有任何护栏检查它的
+形状**。可落成一个 `just test` 级单测（纯 CPU、无设备）：**断言 `lanczos2(1.0)` 接近 0 且 LUT 单调
+段数正确** —— 这条能永久钉死本批的根因。**待落地**（写它之前先读 skill `rgl-test-discipline`）。
+
 
 > 顺序按「失败最便宜」排，不是按依赖最紧排。**14.1 与 14.3 可并行**（14.3 不碰 FSR）。
 > 每批收口 = 在本节划掉 + 把教训写进**本文**对应批次那节（教训就近写；被实测推翻的旧教训**直接删**，
@@ -956,7 +1133,7 @@ RPC 的 `/shot` + `/shotburst` 覆盖得了 `llm_debug` 的截图职责，且**�
 | **14.4b** ✅ **A 档已落地**（B 档待 14.5 后重裁，见 §1.11） | **图外资源挂号 + 布局对账护栏**（FSR 前置，见 §1.7）。做两档、明确不做第三档：**A 护栏**（便宜）= 图外 pass 进出点比对 `attachmentLayouts[slot]` 与预期值，不符即 error 出声，把"进出同值"从**约定**变**断言**；**B 挂号**（中等）= `RgGraphDesc` 增加 external-use 声明（attachment × usage × 插在哪个 pass 之后/之前），GraphCompiler 据此把 barrier 并入计划，`IzbShadow` / `EvssmShadow` / FSR 三处不再手写 **image** barrier；**C 不做** = buffer 侧依赖自动推导（图只跟 image attachment，加进去 = 半个 memory manager） | **排在 14.5 之前**：FSR 是第三个图外 compute，先立护栏再扩面，否则 14.5 的 VVL 判据要替"约定"背锅，而债-32 已经证明这类缺口 VVL 不报 | ① **阳性锚点** = 故意让某图外 pass 不还原布局 ⟹ 护栏必须 error（**变异验过非空转**）；② **反向** = 现状全绿（护栏零误报，否则等于没有）；③ 红线 = 画面逐位不变（护栏只读不写命令）；④ B 档做完 = `izb_shadow_impl.cppm:256,280` 两处 `depthLayoutBarrier` 删除且画面逐位不变 |
 | **14.5** 🕳 **五批已落地**（第一批 = FSR 每帧跑通 VVL 零错、输出无消费者，见 §1.13；第二批 = **输出接进 tonemap**，零拷贝换槽，**默认只开纯空间档**，见 §1.14；第三批 = **AO 施加点从 taa.frag 拆成独立 `ao_apply` pass**，让"AO 乘在时域之前"与"谁做时域"解耦，见 §1.15；第四批 = **亚像素抖动与 TAA 解耦并申报给 FSR**，见 §1.16——**主实验是否证：时域退化与"没有抖动"无关**；
 第五批 = **诊断批（无产品代码改动）：推翻本 Phase 自己的时域测量方式**，纠正后病灶收窄到
-「历史读取的采样滤波」一处，见 §1.17） | **FSR 接线**：落位 = **图外 compute 编舞**（`RgPassKind` 只有 `drawMesh/blit/drawLight`，**无 compute kind**；先例 = IzbShadow / EvssmShadow，见 `evssm_shadow.cppm:20`）。HDR 域位置 = **tonemap 之前**（scene_hdr@render res → FSR → hdr@display res → tonemap → swapchain），`ENABLE_HIGH_DYNAMIC_RANGE` 开。**第二批改判**：原计划「copy 进图附件 `fsr_out`」**不做**——FSR 的 UAV 输出必须常驻 GENERAL（现有 usage→layout 表表达不了），且图内无写者的附件是额外风险；改走 `Resources::ensureFsrSampleSlot()` + 模块自写描述符（`EvssmShadow::momentsSampleSlot` 同族），**零拷贝、零图词表改动** | 唯一架构决策，先写死再动手，免得中途返工 | ① **FSR 关 = 逐位不变**（与 TAA 同款红线，用基线配置）—— ✅ 门关 SHA256 = `fdece9d0…` = 红线基线；② VVL 零报错（含跨 submission 依赖与布局链——债-32 那条"图外编舞"的坑）—— ✅ 门开 PASS errors=0 warnings=0；⚠ **布局漂移 VVL 抓不到**（布局本身合法，症状隔一整帧），这一项靠 **14.4b 的护栏**，不是靠 VVL；③ 显存账新增"外部分配器"科目且**闭合断言重新有意义**；④ 本批**只点亮不调参** —— ✅（`kFsrSharpness = 0.2` 取 AMD 样例默认，调参归 14.7）；⑤ **第二批新增：画面判据**——纯空间档 0.5 档边缘能量 **8.43 > 双线性 7.95** ✅，且输出是**帧号纯函数**（同参数两次跑 SHA256 相同 ⟹ FSR 档可做逐位回归）；**时域档实测退化**（3.78 < 7.95），默认关，根因与二分链见 §1.14；⑥ **第三批新增：AO 施加点解耦**——门关逐位不变 ✅、三档图形态正确 ✅、**AO 净变暗量级比 1.007**（恰好施一次，同时排除零施与双施）✅、装饰器四条判据变异全验红 ✅，见 §1.15；⑦ **第四批新增：抖动解耦**——门关逐位不变 ✅、
+「历史读取的采样滤波」一处，见 §1.17） | **FSR 接线**：落位 = **图外 compute 编舞**（`RgPassKind` 只有 `drawMesh/blit/drawLight`，**无 compute kind**；先例 = IzbShadow / EvssmShadow，见 `evssm_shadow.cppm:20`）。HDR 域位置 = **tonemap 之前**（scene_hdr@render res → FSR → hdr@display res → tonemap → swapchain），`ENABLE_HIGH_DYNAMIC_RANGE` 开。**第二批改判**：原计划「copy 进图附件 `fsr_out`」**不做**——FSR 的 UAV 输出必须常驻 GENERAL（现有 usage→layout 表表达不了），且图内无写者的附件是额外风险；改走 `Resources::ensureFsrSampleSlot()` + 模块自写描述符（`EvssmShadow::momentsSampleSlot` 同族），**零拷贝、零图词表改动** | 唯一架构决策，先写死再动手，免得中途返工 | ① **FSR 关 = 逐位不变**（与 TAA 同款红线，用基线配置）—— ✅ 门关 SHA256 = `fdece9d0…` = 红线基线；② VVL 零报错（含跨 submission 依赖与布局链——债-32 那条"图外编舞"的坑）—— ✅ 门开 PASS errors=0 warnings=0；⚠ **布局漂移 VVL 抓不到**（布局本身合法，症状隔一整帧），这一项靠 **14.4b 的护栏**，不是靠 VVL；③ 显存账新增"外部分配器"科目且**闭合断言重新有意义**；④ 本批**只点亮不调参** —— ✅（`kFsrSharpness = 0.2` 取 AMD 样例默认，调参归 14.7）；⑤ **第二批新增：画面判据**——纯空间档 0.5 档边缘能量 **8.43 > 双线性 7.95** ✅，且输出是**帧号纯函数**（同参数两次跑 SHA256 相同 ⟹ FSR 档可做逐位回归）；**时域档实测退化**，默认关；**根因已定位并修好 = vendor host 侧 `lanczos2()` 的非限定 `abs(float)` 落到 `::abs(int)`，Lanczos LUT 退化成阶跃 ⟹ 历史读取核变成 [¼½¼]**（一个 token `fabsf` ⟹ 6.01→13.90 = 无 FSR 的 105%），全链见 **§1.18**；⑥ **第三批新增：AO 施加点解耦**——门关逐位不变 ✅、三档图形态正确 ✅、**AO 净变暗量级比 1.007**（恰好施一次，同时排除零施与双施）✅、装饰器四条判据变异全验红 ✅，见 §1.15；⑦ **第四批新增：抖动解耦**——门关逐位不变 ✅、
 **TAA 开时逐位不变**（本批最大回归面，`git stash` 重建对拍 `360ce0d2…` 两次相同）✅、
 相位数对 vendor **公开五档表**（18/23/32/72）✅、三条变异验红 ✅、**仪器有效性自证**
 （逐帧申报值轨迹 = 标准 Halton 周期 32）✅；**主实验判据 = 否证**（时域+抖动 3.50 ≈ 时域无抖动
