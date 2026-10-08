@@ -302,6 +302,13 @@ fsr-smoke:
     @cmake --build {{ BUILD }} --target fsr_smoke -j {{ NPROC }}
     {{ BUILD }}/third_party/fsr/fsr_smoke
 
+# 合成靶实验台（批 14.5 时域档发糊根因量化）。判据与诊断补丁说明 → smoke/fsr_lab.cpp 头注释。
+# 例：just fsr-lab "--size" "1280x720" "--target" "delta"   ← **参数要各自加引号**；
+#     `just fsr-lab -- --size ...` 的常见写法在这里**不生效**（`--` 会当成参数传进去）。
+fsr-lab *ARGS="":
+    @cmake --build {{ BUILD }} --target fsr_lab -j {{ NPROC }}
+    {{ BUILD }}/third_party/fsr/fsr_lab {{ ARGS }}
+
 # ------------------------------------------------------------------------------
 # 3. 清理
 # ------------------------------------------------------------------------------

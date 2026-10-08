@@ -86,3 +86,9 @@ add_custom_target(fsr_blobs_check
 add_executable(fsr_smoke EXCLUDE_FROM_ALL ${CMAKE_CURRENT_SOURCE_DIR}/smoke/fsr_smoke.cpp)
 target_link_libraries(fsr_smoke PRIVATE ffx_fsr3upscaler_vk Vulkan::Vulkan)
 target_compile_options(fsr_smoke PRIVATE $<$<CXX_COMPILER_ID:Clang,GNU,AppleClang>:-Wno-error;-g>)
+
+# ── 合成靶实验台（批 14.5 诊断：时域档发糊根因量化，见 smoke/fsr_lab.cpp 头注释）────
+# 同为 EXCLUDE_FROM_ALL（要真设备）；`just fsr-lab` 显式构建并执行。
+add_executable(fsr_lab EXCLUDE_FROM_ALL ${CMAKE_CURRENT_SOURCE_DIR}/smoke/fsr_lab.cpp)
+target_link_libraries(fsr_lab PRIVATE ffx_fsr3upscaler_vk Vulkan::Vulkan)
+target_compile_options(fsr_lab PRIVATE $<$<CXX_COMPILER_ID:Clang,GNU,AppleClang>:-Wno-error;-g>)
