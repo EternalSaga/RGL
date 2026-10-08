@@ -98,8 +98,13 @@ config COMPILER="default" BUILD_TYPE="Release":
     sys.exit(result.returncode)
 
 build:
+    # ⚠ 退出码必须透传（`config` 一直是 `sys.exit(result.returncode)`，本配方此前漏了）：
+    # 原先 `subprocess.call(...)` 的返回值没人接，**编译失败也返回 0**，于是任何
+    # 「让构建失败」的护栏（如 vendor 的 -Werror=absolute-value，见 third_party/fsr/PATCHES.md P14）
+    # 都退化成"打印一行没人必须读的输出"。判据不拦住 = 判据不存在。
     @python -c "import os,sys,subprocess; b='{{ BUILD }}'; \
-        (subprocess.call(['cmake','--build',b,'--parallel','{{ NPROC }}']) if os.path.exists(os.path.join(b,'build.ninja')) else (print('Error: Run just config first.'), sys.exit(1)))"
+        (os.path.exists(os.path.join(b,'build.ninja')) or (print('Error: Run just config first.'), sys.exit(1))); \
+        sys.exit(subprocess.call(['cmake','--build',b,'--parallel','{{ NPROC }}']))"
 
 # 单元测试（tests/）：**默认只跑无设备子集**（无 GPU、无窗口、毫秒级）。
 #
