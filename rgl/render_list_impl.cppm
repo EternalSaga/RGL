@@ -254,6 +254,10 @@ void fillFsrCameraInput(FrameDrawList& out, const ViewProjection& viewProj) {
 	out.fsrNear = viewProj.nearPlane;
 	out.fsrFar = viewProj.farPlane;
 	out.fsrFovVertical = 2.0f * std::atan(1.0f / viewProj.proj[1][1]);
+	// 批 14.5 第四批：抖动**取的就是注入投影的那一份**（同一个 ViewProjection 字段，不是
+	// 从配置重算）⟹ 「色输入带的抖动」与「申报给 FSR 的抖动」结构上不可能漂移。
+	// 门关（TAA 关 + FSR 抖动关）时 taaSystem 不调 applyProjectionJitter ⇒ 本值恒 0。
+	out.fsrJitterPx = viewProj.jitterPx;
 }
 
 /**

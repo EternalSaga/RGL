@@ -269,11 +269,19 @@ void Renderer::fsrTonemapPassPre(vk::raii::CommandBuffer& cmd, const RgPassPlan&
 	in.farPlane = list.fsrFar;
 	in.fovVertical = list.fsrFovVertical;
 	in.exposure = list.sceneData.exposure;  // tonemap 将施加的曝光（scene data @56）
+	// 批 14.5 第四批：把投影里那份抖动原样报给 FSR（口径 → FSR输入契约 §3）。
+	// 取 FrameDrawList 而不是重算 = 申报值与实际注入值同源，不可能漂移。
+	in.jitterX = list.fsrJitterPx.x;
+	in.jitterY = list.fsrJitterPx.y;
 	in.reset = !fsrDispatchedOnce;  // 首帧 = 时域重置（vendor 靠它清内部历史）
 	if (!fsrDispatchedOnce) {
 		if (auto* lg = RLLogger::getInstance())
-			lg->info("FSRDIAG near={} far={} fov={} exposure={}",
-				in.nearPlane, in.farPlane, in.fovVertical, in.exposure);
+			// jitter 进这条诊断的理由（批 14.5 第四批）：它是**成对约束的一半**，而错了
+			// 不报错——vendor 对 jitterOffset 零校验（只在 |j|>1 时 warn）。开了 fsr_jitter
+			// 却因链路某处断掉而恒报 0，画面只是"抖动白加了"，没有任何信号会喊。
+			lg->info("FSRDIAG near={} far={} fov={} exposure={} jitter=({},{})",
+				in.nearPlane, in.farPlane, in.fovVertical, in.exposure,
+				in.jitterX, in.jitterY);
 		fsrDispatchedOnce = true;
 	}
 	fsr->recordFrame(cmd, in);

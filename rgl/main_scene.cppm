@@ -24,6 +24,7 @@ import model_importer;
 import texture_pool;
 import scene_config;
 import scene_context;
+import taa_jitter;  // fsrJitterPhaseCount（抖动相位数，纯函数层；批 14.5 第四批）
 import shader_registry;
 import gpu_cull;
 import vk_indirect_commands;
@@ -68,6 +69,31 @@ uint32_t deferredShadowSlotOf(RenderTargetCache& rtCache) {
 		throw std::runtime_error(fmt::format("deferred: 阴影图 RT 创建失败: {}",
 			slot.error().describe()));
 	return *slot;
+}
+
+/**
+ * 批 14.5 第四批：把「抖动要不要开、序列周期是多少」写进 SceneEnv（抽函数控复杂度）。
+ *
+ * ⚠ 相位数**必须用与 FsrUpscaler 完全相同的两个尺寸**算：`initFsr` 传的是
+ * `swapchain.getRenderExtent()` / `swapchain.getExtent()`（vkrenderer_offgraph.cppm:180），
+ * vendor 内部拿同一对尺寸自己算 `JitterSequenceLength()`（`ffx_fsr3upscaler.cpp:1010`）。
+ * 两边不一致 ⟹ shader 里的历史寿命衰减按错的周期算，**不报错、不崩，只是糊得没道理**。
+ * 这也是把这两行放在装配层、而不是塞进 taaSystem 的理由：尺寸来源只有一处，且 ecs
+ * 不许 import FSR 模块（分层红线）。
+ */
+void wireFsrJitter(entt::registry& registry, Swapchain& swapchain, bool fsrUsable,
+	bool fsrJitter) {
+	auto& env = registry.ctx().get<SceneEnv>();
+	env.fsrJitter = fsrUsable && fsrJitter;
+	env.fsrJitterPeriod = env.fsrJitter
+		? fsrJitterPhaseCount(swapchain.getRenderExtent().width, swapchain.getExtent().width)
+		: 0u;
+	if (!env.fsrJitter)
+		return;
+	if (auto* lg = RLLogger::getInstance())
+		lg->info("fsr_jitter: 抖动已接入投影并申报给 FSR（相位 {} = 渲染 {} / 上屏 {}）",
+			env.fsrJitterPeriod, swapchain.getRenderExtent().width,
+			swapchain.getExtent().width);
 }
 
 /** EVSSM 矩图槽（批 11.6d-2）：发号 + 失败抛出收进 helper（assembleBackEnd 复杂度
@@ -484,7 +510,7 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 	RenderTargetCache& rtCache, AssetTable& assets,
 							  ShaderRegistry& pipelines, CompiledGraphResult&& graphResult,
 							  entt::registry& registry, const SceneConfig& scene,
-	bool fsrEnabled, bool fsrTemporal) {
+	bool fsrEnabled, bool fsrTemporal, bool fsrJitter) {
 	const bool deferredMode = graphResult.deferredMode;
 	const bool taaDecorated = graphResult.taaDecorated;
 	const bool velocityDecorated = graphResult.velocityDecorated;
@@ -556,6 +582,8 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 	// 批 14.5 第二批：FSR 生效判据在装配层一次算完（判据本体见 computeFsrUsable）。
 	const bool fsrUsable = computeFsrUsable(device, graphResult.graph, fsrEnabled,
 		velocityDecorated, taaDecorated);
+	// 批 14.5 第四批：抖动解耦（判据与"为什么在装配层算相位数"见 wireFsrJitter）
+	wireFsrJitter(registry, swapchain, fsrUsable, fsrJitter);
 	assembleHdrAoChain(swapchain, resources, samplers, rtCache, pipelines, taaDecorated,
 		velocityDecorated, fsrUsable, aoApplyDecorated);
 

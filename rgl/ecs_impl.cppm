@@ -394,9 +394,23 @@ void taaSystem(entt::registry& rg) {
 	const auto forward = cameraForward(camera);
 
 	// ① 抖动注入（关 = 不调用 applyProjectionJitter ⇒ proj 逐位不变）
-	viewProj.jitterPx =
-		env.taaEnabled ? taaJitterPixels(taa.frameIndex, env.taaJitterScale) : glm::vec2{0.0f};
-	if (env.taaEnabled)
+	//
+	// 批 14.5 第四批：抖动与「谁做时域滤波」**解耦**——此前它和 AO 施加点一样被硬编码成
+	// TAA 专属（`env.taaEnabled` 一关投影就不抖），而 FSR3-upscaler 是**抖动相机**升频器，
+	// 无抖动的输入不在它的设计点上。
+	//
+	// **TAA 在 = 一切走原路**（周期 kTaaJitterPeriod=16、幅度 env.taaJitterScale）
+	// ⟹ TAA 档逐位不变（本文件头那条门红线的加强版：不只是关的时候不变，开着也不能被我改坏）。
+	// 只有「TAA 不在而 FSR 要抖动」才用 vendor 的相位数与**满幅**（±0.5px = 设计点，
+	// 不是 taa_jitter_scale——那个是 TAA 的调参旋钮，拿它当 FSR 的实验变量等于两个旋钮互相决定）。
+	const bool fsrJitterOnly = !env.taaEnabled && env.fsrJitter;
+	viewProj.jitterPx = env.taaEnabled
+		? taaJitterPixels(taa.frameIndex, env.taaJitterScale)
+		: (fsrJitterOnly
+			? taaJitterPixels(taa.frameIndex, 1.0f,
+				env.fsrJitterPeriod ? env.fsrJitterPeriod : kTaaJitterPeriod)
+			: glm::vec2{0.0f});
+	if (env.taaEnabled || fsrJitterOnly)
 		viewProj.proj = applyProjectionJitter(viewProj.proj, viewProj.jitterPx,
 			{static_cast<float>(extent.width), static_cast<float>(extent.height)});
 

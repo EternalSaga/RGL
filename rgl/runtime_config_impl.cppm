@@ -168,6 +168,7 @@ void readBoolKey(const sol::table& root, const char* key, bool& dst) {
 		readBoolKey(root, "velocity_field", cfg.velocityField);
 		readBoolKey(root, "fsr_upscaler", cfg.fsrUpscaler);
 		readBoolKey(root, "fsr_temporal", cfg.fsrTemporal);
+		readBoolKey(root, "fsr_jitter", cfg.fsrJitter);
 		sol::optional<int> showAfter = root["show_after"];
 		if (showAfter)
 			cfg.showAfter = *showAfter;

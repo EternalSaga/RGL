@@ -256,7 +256,8 @@ export RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain
 									 RenderTargetCache& rtCache, AssetTable& assets,
 									 ShaderRegistry& pipelines, CompiledGraphResult&& graphResult,
 									 entt::registry& registry, const SceneConfig& scene,
-									 bool fsrEnabled = false, bool fsrTemporal = false);
+									 bool fsrEnabled = false, bool fsrTemporal = false,
+									 bool fsrJitter = false);
 
 /**
  * 配置热重载装配（Phase 10 批 10.3；docs/archive/phase10_plan.md §5）。门 =

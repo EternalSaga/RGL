@@ -215,6 +215,16 @@ export struct FrameDrawList {
 	float fsrNear = 0.05f;
 	float fsrFar = 1000.0f;
 	float fsrFovVertical = 1.0f;
+	/**
+	 * 批 14.5 第四批：本帧**申报给 FSR 的抖动**（渲染像素单位，= 进投影矩阵那份
+	 * `ViewProjection::jitterPx` 原值）。口径 = `docs/FSR输入契约.md` §3：传「原始 Halton
+	 * 值」（±0.5 像素），**不是**投影矩阵里那个、也不是内容位移 c_t（差一个 y 轴翻号）。
+	 *
+	 * ⚠ 这条是**成对约束**的一半：FSR 的 `jitterOffset` 必须恰好等于「本帧色输入实际带的
+	 * 抖动」。报多了报少了都不报错——vendor 零校验，症状是重建窗口偏移（糊或鬼影）。
+	 * 另一半见 `fsr_upscaler_impl.cppm` 的 cancellation 标志。
+	 */
+	glm::vec2 fsrJitterPx{0.0f, 0.0f};
 	SceneFrameData sceneData;
 	// Phase 7b：GPU culling 每帧输入（render_list 与 CPU 剔除同源填充；GpuCull 未激活
 	// 时 Renderer 忽略——始终填充，零条件分支）

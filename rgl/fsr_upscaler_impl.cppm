@@ -222,10 +222,21 @@ FsrUpscaler::FsrUpscaler(RGL::DeviceContext& vkDevice, RGL::Resources& resources
 
 	FfxFsr3UpscalerContextDescription cd{};
 	// HDR：我们的 scene_hdr 是 pre-exposure 线性 HDR（tonemap 才做 ACES）。
-	// JITTER_CANCELLATION：速度场带 TAA 抖动，抵消项必须开（口径 → docs/FSR输入契约.md §3）。
 	// **不开** AUTO_EXPOSURE（我们没有曝光图，exposure 传 NULL 走 vendor 内置默认）。
-	cd.flags = FFX_FSR3UPSCALER_ENABLE_HIGH_DYNAMIC_RANGE
-	         | FFX_FSR3UPSCALER_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION;
+	//
+	// ⚠ **JITTER_CANCELLATION 批 14.5 第四批改成「不开」**（此前一直开着，是个潜伏错）：
+	// 这个标志的语义是「**输入速度场带抖动**，请替我抵消」。vendor 做的事是
+	// `mv_uv −= (previousJitter − curJitter)/motionVectorsTargetSize`
+	// （`ffx_fsr3upscaler.cpp:1000-1003`，`docs/FSR输入契约.md` §3 已实机回读
+	// `dilatedMotionVectors` 钉死公式/符号/分母）。而我们的 `velocity.frag` 输出的
+	// 是**基空间**速度——它自己已经走过 `toBaseSpace` 那一步（文件头第 4 条 + `:85-87`
+	// 写明了配对：基空间 ⟹ 本标志**不开**）。开着 = 对一个不含抖动项的量再减一次抖动
+	// ⟹ 静止表面被判成在动。
+	//
+	// **为什么现在改是零风险**：抖动此前恒 0（TAA 默认关）⟹ 抵消项恒 0 ⟹ 开着与关着一模
+	// 一样，所以这个配对错**从没暴露过**。批 14.5 第四批把抖动打开，它立刻就会变成真错。
+	// 判据 = `just fsr-smoke` 的 §3 探针（它测的正是这一项）。
+	cd.flags = FFX_FSR3UPSCALER_ENABLE_HIGH_DYNAMIC_RANGE;
 	cd.maxRenderSize  = {renderExtent.width, renderExtent.height};
 	cd.maxUpscaleSize = {upscaleExtent.width, upscaleExtent.height};
 	cd.backendInterface = impl->iface;

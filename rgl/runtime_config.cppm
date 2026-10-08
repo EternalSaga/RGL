@@ -141,6 +141,10 @@ export struct RuntimeConfig {
 	 */
 	bool fsrUpscaler = false;
 	bool fsrTemporal = false;
+	/// 批 14.5 第四批：把亚像素 Halton 抖动接进投影矩阵并申报给 FSR（`fsr_jitter`）。
+	/// 只在 FSR 真的接起来时生效；TAA 开时**不参与决策**（走 TAA 原路径 = 逐位不变）。
+	/// 设计意图 = 让输入落到 FSR 的设计点上，从而**证实/证伪** §1.14 那条未结案假设。
+	bool fsrJitter = false;
 	int showAfter = -1;               // DIAG：隐藏窗启动、第 N 帧后显示（-1 = 立即显示）
 	PresentModePref presentMode = PresentModePref::immediate;  // 窗口 present 模式（headless 忽略）
 	LlmDebugConfig llm;

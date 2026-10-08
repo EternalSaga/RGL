@@ -126,6 +126,46 @@ TEST_CASE("taaJitterPixels：周期 16 / 值域 ±0.5 / **非退化**（阳性�
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// 批 14.5 第四批：抖动周期参数化 + FSR 相位数
+// ═══════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("taaJitterPixels 的 period 形参：默认值逐位不变（TAA 档红线）+ 显式周期生效") {
+    // 【为什么这条存在】本批给本函数加了第三个形参。TAA 档的红线是"开着也不能被改坏"，
+    // 而默认参数是最容易被无声改动的东西——所以直接把"默认 == 显式传 kTaaJitterPeriod"
+    // 钉成 bit 级断言，而不是靠"看起来没动"。
+    for (uint32_t i = 0; i < 40u; ++i)
+        CHECK(taaJitterPixels(i) == taaJitterPixels(i, 1.0f, kTaaJitterPeriod));
+
+    // 显式周期 32：周期性与值域照旧，且**不是**周期 16 的序列（否则形参根本没传进去）
+    constexpr uint32_t p32 = 32u;
+    std::set<float> xs;
+    for (uint32_t i = 0; i < p32; ++i) {
+        const glm::vec2 j = taaJitterPixels(i, 1.0f, p32);
+        CHECK(j.x > -0.5f); CHECK(j.x < 0.5f);
+        CHECK(j.y > -0.5f); CHECK(j.y < 0.5f);
+        xs.insert(j.x);
+        CHECK(taaJitterPixels(i, 1.0f, p32) == taaJitterPixels(i + p32, 1.0f, p32));
+    }
+    CHECK(xs.size() == p32);  // 非退化：32 个互不相同的 x
+    // 变异红线：把 period 形参写死成 kTaaJitterPeriod → 本条红（周期 16 的 x 集合只有 16 个）
+    CHECK(taaJitterPixels(16u, 1.0f, p32) != taaJitterPixels(16u));
+}
+
+TEST_CASE("fsrJitterPhaseCount 对上 vendor **公开头文件**的五档对照表（不抄它的实现）") {
+    // 判据来源 = `ffx_fsr3upscaler.h:467-473` 的**公开文档表**（QUALITY 1.5x→18 /
+    // BALANCED 1.7x→23 / PERFORMANCE 2.0x→32 / ULTRA 3.0x→72）。刻意不拿"我读了它的
+    // 实现"当判据——本函数是复刻，复刻错了恰恰是读代码读不出来的那种错。
+    CHECK(fsrJitterPhaseCount(960u, 1440u) == 18u);   // 1.5x
+    CHECK(fsrJitterPhaseCount(1000u, 1700u) == 23u);  // 1.7x
+    CHECK(fsrJitterPhaseCount(640u, 1280u) == 32u);   // 2.0x（= 本项目 renderScale 0.5 档）
+    CHECK(fsrJitterPhaseCount(512u, 1536u) == 72u);   // 3.0x
+    // 1:1 档（§1.14 的 8.08 vs 16.98 那组实验用的就是它）
+    CHECK(fsrJitterPhaseCount(1280u, 1280u) == 8u);
+    // 除零护栏：这个尺寸本来就不该跑 FSR，回落 TAA 周期而不是崩
+    CHECK(fsrJitterPhaseCount(0u, 1280u) == kTaaJitterPeriod);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // jitter → 投影矩阵（闭式解：影像平移 = +jitterPx）
 // ═══════════════════════════════════════════════════════════════════════════
 

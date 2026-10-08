@@ -2,7 +2,7 @@ module;
 #include <glm/glm.hpp>
 export module taa_jitter;
 
-import rlstd;
+import rlstd;  // std::pow（对齐 vendor 的 pow(n,2) 取整行为）
 
 // 批 12.6 TAA：亚像素抖动序列与帧间连续性判据（**纯函数层**，rlbase）。
 //
@@ -40,15 +40,48 @@ export float haltonSequence(uint32_t index, uint32_t base) {
 
 /**
  * 帧号 → 亚像素抖动（**像素单位**，值域 (-0.5, 0.5)·scale）。
- * x = Halton(2)、y = Halton(3)，序号 = (frameIndex mod 16) + 1（+1 跳过全零点，
- * 否则每 16 帧有一帧完全无抖动 → 该帧边缘锯齿原样上屏）。
+ * x = Halton(2)、y = Halton(3)，序号 = (frameIndex mod period) + 1（+1 跳过全零点，
+ * 否则每 period 帧有一帧完全无抖动 → 该帧边缘锯齿原样上屏）。
  * @param frameIndex 帧号（任意非负）
  * @param scale 抖动幅度倍率（1 = 半像素；0 = 关闭抖动）
+ * @param period 序列周期（默认 = TAA 的 16；FSR 档传 `fsrJitterPhaseCount`，见下）
  * @return 像素单位抖动
  */
-export glm::vec2 taaJitterPixels(uint32_t frameIndex, float scale = 1.0f) {
-	const uint32_t i = frameIndex % kTaaJitterPeriod + 1u;
+export glm::vec2 taaJitterPixels(uint32_t frameIndex, float scale = 1.0f,
+	uint32_t period = kTaaJitterPeriod) {
+	const uint32_t i = frameIndex % period + 1u;
 	return (glm::vec2{haltonSequence(i, 2u), haltonSequence(i, 3u)} - 0.5f) * scale;
+}
+
+/**
+ * FSR3-upscaler 的**抖动相位计数**（app 侧必须与 vendor 内部用的那个一致）。
+ *
+ * 【为什么需要 app 侧也算一遍】vendor 不把 `JitterSequenceLength()` 开放成入参——它在
+ * dispatch 里自己算（`ffx_fsr3upscaler.cpp:1010`），而 shader 拿它算历史寿命衰减
+ * `fLifetimeDecrease = (0.1f / JitterSequenceLength()) * …`（`accumulate.h:86`）。
+ * 我们生成抖动的**周期**必须等于它，否则 lock 生命周期与实际序列对不上。
+ *
+ * 【公式来源】`ffxFsr3UpscalerGetJitterPhaseCount`（`ffx_fsr3upscaler.cpp:1319-1324`）
+ * = `int32(8 · (displayW / renderW)²)`。**这里复刻它**是因为抖动必须在 ecs 侧的投影注入
+ * 阶段就决定，而 ecs 不许 import FSR 模块（分层红线：ecs 不认识渲染后端）。
+ * 复刻的正确性不靠"我读了它的代码"——`ffx_fsr3upscaler.h:467-473` 把五档对照表写在**公开
+ * 头文件**里（1.5x→18 / 1.7x→23 / 2.0x→32 / 3.0x→72 / 自定义 ceil(8n²)），单测按那张
+ * 公开表判，比读实现更硬。
+ *
+ * 【两侧一致性】vendor 内部还有一条 ±1/帧的**渐变**（`:1015-1021`），只在运行中改分辨率时
+ * 触发；首帧/reset 直接跳到目标值。我们按固定 scale 跑 ⟹ 恒等于本函数返回值。
+ * @param renderWidth  渲染宽度（FSR 的 renderSize.width）
+ * @param upscaleWidth 上采样输出宽度（FSR 的 upscaleSize.width = 交换链宽度）
+ * @return 相位数；renderWidth 为 0 时回落 TAA 周期（防除零，且这个尺寸下本来就不该跑 FSR）
+ */
+export uint32_t fsrJitterPhaseCount(uint32_t renderWidth, uint32_t upscaleWidth) {
+	if (renderWidth == 0u)
+		return kTaaJitterPeriod;
+	const float n = static_cast<float>(upscaleWidth) / static_cast<float>(renderWidth);
+	// 用 powf 而不是 n*n：要匹配的是 **vendor 的实现**（`pow(n, 2.0f)`）而不是理想公式。
+	// 两者在 8n² 恰为整数的档位上可能差一个 ULP，而外层是**截断**取整 ⟹ 差一个 ULP
+	// 就从 18 掉到 17，抖动周期与 vendor 内部的相位数错开，症状是"糊得没道理"且不报错。
+	return static_cast<uint32_t>(8.0f * std::pow(n, 2.0f));
 }
 
 /**

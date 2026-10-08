@@ -510,6 +510,21 @@ export struct SceneEnv {
 	//   一次都不施加。也**不得**做成 imgui 滑杆（图形态启动期定死，运行期改会让标志与
 	//   图脱钩 = 双施或零施）。
 	bool aoAppliedPreTemporal = false;
+	/**
+	 * 批 14.5 第四批：**亚像素抖动**是否由 FSR 档要求（`runtime.fsr_jitter` 且 FSR 接起来了）。
+	 *
+	 * 与 `aoAppliedPreTemporal` 是**同一个病灶**：抖动此前也被硬编码成 TAA 专属
+	 * （`env.taaEnabled` 一关，投影就不抖），而 FSR3-upscaler 是**抖动相机**时域升频器，
+	 * 没有亚像素抖动的输入根本不在它的设计点上（§1.14 那条未结案假设的验证前提）。
+	 * TAA 在图里时本字段**不参与决策**（走原路径，周期 16 / 幅度 taa_jitter_scale）
+	 * ⟹ TAA 档逐位不变。
+	 */
+	bool fsrJitter = false;
+	/// 抖动序列**周期**（= `taaJitterPixels` 的 period 实参），必须等于 vendor 内部自己算的
+	/// 那个 `JitterSequenceLength()`，由 `fsrJitterPhaseCount(renderW, upscaleW)` 给出。
+	/// 0 = 未设置，消费侧回落 kTaaJitterPeriod。字段名刻意不叫 phaseCount：与同名自由函数
+	/// 并存时 `env.fsrJitterPhaseCount(...)` 这种表达式是纯阅读陷阱。
+	uint32_t fsrJitterPeriod = 0;
 	// 重投影消融门（`taa.reprojection`，默认 true = 逐位今天）：false ⟹ taaSystem 把
 	// 「上一帧矩阵」载荷换成本帧抖动后矩阵 + 位移清零 + motion 单位阵 ⟹ shader 的
 	// prevUvBase ≡ baseUv（历史按同基位置采样）。判据消费方 = imgqa temporal-motion M3。
