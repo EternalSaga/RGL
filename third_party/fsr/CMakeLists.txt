@@ -58,11 +58,36 @@ if(NOT WIN32)
     target_link_libraries(ffx_fsr3upscaler_vk PUBLIC m)
 endif()
 
-# 根 CMakeLists 全局加了 -Wall -Wextra -Werror。vendor 代码不该由我们背警告账，
-# 但**也不能整层关掉**：-Werror 必须先撤（否则第三方警告直接变构建失败），
-# 再逐条静音 vendor 的既有警告类型，保留其余警告可见。
+# 根 CMakeLists 全局加了 -Wall -Wextra -Werror。vendor 代码的**风格类**警告不该由我们背账，
+# 所以先整块 -Wno-error；但**"这是 bug、不是风格"那一类必须重新提升回 error**——
+# 顺序敏感：后出现的 `-Werror=<名>` 覆盖前面的 `-Wno-error`。
+#
+# 为什么必须有这一段（P14 的直接教训）：host 侧非限定 `abs(float)` 落到 `::abs(int)`
+# （Lanczos LUT 退化成阶跃 ⟹ 时域档发糊），clang **默认就发** `-Wabsolute-value`，
+# 被整块 `-Wno-error` 降级成"打印了没人读"。一条能让构建失败的信号，胜过任何事后判据。
+#
+# 入选判据（两条都要满足，加旗前逐条**实测**）：① 诊断的是**错误**而非风格/可移植性偏好；
+# ② **当前 vendor 树零命中**（否则本改动自己就把构建点着）；③ 该旗名在本编译器**存在**——
+# 不存在的旗会每次编译刷一条 `-Wunknown-warning-option`，而"每次刷、没人读"正是 P14 的失败模式，
+# 宁可不要这条旗。（实测：`maybe-uninitialized` / `nonnull-compare` 是 GCC 专有，已单独 gate。
+# 探针坑：clang 对未知 `-Werror=X` 只**警告**不失败，靠退出码探测会漏判，必须读 stderr。）
+set(FFX_BUG_CLASS_WARNINGS
+    -Werror=absolute-value              # 浮点实参传给整数 abs()（= P14 本体）
+    -Werror=uninitialized
+    -Werror=init-self
+    -Werror=array-bounds
+    -Werror=sizeof-array-div
+    -Werror=sizeof-pointer-memaccess
+    -Werror=int-in-bool-context
+    -Werror=varargs
+    -Werror=return-type)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    list(APPEND FFX_BUG_CLASS_WARNINGS -Werror=maybe-uninitialized -Werror=nonnull-compare)
+endif()
+
 target_compile_options(ffx_fsr3upscaler_vk PRIVATE
     $<$<CXX_COMPILER_ID:Clang,GNU,AppleClang>:-Wno-error;-g>
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:${FFX_BUG_CLASS_WARNINGS}>
     $<$<CXX_COMPILER_ID:MSVC>:/WX->)
 
 if(NOT WIN32)
