@@ -285,6 +285,30 @@ export class Resources {
 		return evssmSampleSlot;
 	}
 
+	/**
+	 * FSR 输出图的采样堆槽号（Phase 14 批 14.5 第二批）。
+	 *
+	 * 与 `ensureEvssmSampleSlot` 同族：**只发号不写描述符**——内容 = `FsrUpscaler` 的私有
+	 * 输出图，由它构造时以真 view 覆写同槽（渲染网格变化重建后重写同槽）。
+	 *
+	 * 与 EVSSM 那条的**关键差别 = 不写 fallback 描述符**：EVSSM 的 binding 15 在 SPV 里是
+	 * **静态**声明的（任何配置组合下都必须有效），而本槽是**启动期烘进 tonemap 管线条目**
+	 * 的色输入槽号——装配层只在全部前置都已核实（门开 + velocity 进图 + shader16 + 三个
+	 * 输入附件都在图里）时才烘它，所以「槽已烘进条目却无人写描述符」这个形态被装配层
+	 * 挡死，不需要 fallback 兜底（`FsrUpscaler` 因此改在 Renderer 构造期建，不留窗口）。
+	 *
+	 * 幂等。@return 槽号；Error = 槽段耗尽
+	 */
+	[[nodiscard]] std::expected<uint32_t, Error> ensureFsrSampleSlot() {
+		if (fsrSampleSlot != kNoFsrSampleSlot)
+			return fsrSampleSlot;
+		auto slot = allocSlot(RGL::SlotSegment::Runtime, "fsr.output");
+		if (!slot)
+			return std::unexpected(std::move(slot).error());
+		fsrSampleSlot = *slot;
+		return fsrSampleSlot;
+	}
+
 	/** @return resource heap const 引用（VmaDescriptorHeap：BDA buffer 视为连续描述符槽
 	 * 数组，步长 = max(buffer, image) descriptorSize 运行时查询）；Renderer 每帧绑定，
 	 * 内容层经 allocSlot + getSlotCpuAddress 写描述符。 */
@@ -424,6 +448,7 @@ export class Resources {
 	static constexpr uint32_t kNoDepthSampleSlot = 0xFFFFFFFFu;
 	/** EVSSM 矩图采样槽"未领取"哨兵（批 11.6d-2，同 kNoDepthSampleSlot 惯例）。 */
 	static constexpr uint32_t kNoEvssmSampleSlot = 0xFFFFFFFFu;
+	static constexpr uint32_t kNoFsrSampleSlot = 0xFFFFFFFFu;
 
 	/**
 	 * 把当前 depthImageView 写进 depthSampleSlot 槽（SAMPLED_IMAGE / eDepth aspect）。
@@ -502,6 +527,7 @@ export class Resources {
 	/** EVSSM 矩图采样槽号（批 11.6d-2，ensureEvssmSampleSlot 发号；binding 15 无条件
 	 * bake；真描述符由 EvssmShadow 构造时覆写，门关 = variant 不声明 = 空转）。 */
 	uint32_t evssmSampleSlot = kNoEvssmSampleSlot;
+	uint32_t fsrSampleSlot = kNoFsrSampleSlot;  ///< 批 14.5：FSR 输出采样槽（ensureFsrSampleSlot 发号）
 	/** EVSSM 矩图槽 fallback 1×1 RGBA16F 零图（批 11.6d-2，发号时创建，同
 	 * izbMaskFallback 思路：variant 静态活性 vs EvssmShadow 条件构造的缺口兜底）。 */
 	std::optional<RGL::VmaImage> evssmFallback;

@@ -17,6 +17,8 @@
 3. **官方对四个输入量零格式校验**——没有 `CheckFormat`，只有 `ENABLE_DEBUG_CHECKING`
    门控下的**范围告警**。格式错了没人拦，症状是画面错而不是报错。
 4. **`reset` 只有一个使用点**，且**不碰 reactivity、不碰 previousFrame\* 系列**。
+5. **本文档 §1–§4 不是 dispatch 的全部输入**——还有 6 个标量字段，零初始化不报错但语义是
+   错的，见 **§4.5**（批 14.5 第二批就是照 §1–§4 接线把它们全漏了）。
 
 ## 1. motionVectors
 
@@ -41,6 +43,12 @@
    退化成恒等 ⟹ 等于声明「我的 MV 已经是 UV」。
    ⚠ **第一版探针就是填了 renderSize**，回读直接等于输入（8.0 而不是 0.0125），被这条对拍
    当场抓住——「读源码 + 想当然」在同一个晚上错了两次，这条就是记录。
+   ⚠ **同一处 2026-10-08 又被改错第三次**：批 14.5 第二批只读了
+   `LoadInputMotionVector`（`fUvMotionVector = fSrcMotionVector * MotionVectorScale()`，
+   确实只有乘法）就断定 vendor 不除，改成 `1/尺寸` —— 而 `:996-997` 早把 app 传的本字段
+   除以 `motionVectorsTargetSize` 再交给 shader，改完等于速度场**小 1000 倍**（相机一动
+   就鬼影）。**规则：本节这类结论是「喂常量 + 回读对拍 + 变异验红」换来的，要推翻它
+   只能重跑探针；读代码不构成证据。**
 2. **分母 = `renderSize`（未开 `DISPLAY_RESOLUTION_MOTION_VECTORS` 时）**：喂 8 px、scale (1,1)，
    回读 **0.012497 = 8/640**，不是 8/1280 = 0.00625。两档差 2 倍，且把期望改成 upscaleSize
    会让探针 **FAIL（rc=1）** ⟹ 不是容差松到都算过。
@@ -178,6 +186,29 @@ Y 的负号只属于投影矩阵，它存在的意义就是抵消 NDC-Y-up 与 U
 | **不做什么** | 不碰 reactivity（reactive 是纯每帧输入）；不碰 `previousFrameJitterOffset` / `previousFrameRenderSize` / `previousFrameUpscaleSize` | `:905-910`、`:943-949` ✅ |
 | 其他打断历史的来源 | ① 首帧无条件清 ACCUMULATION_1/2 与 LUMA_1/2；② 累积/亮度缓冲是乒乓，队列深度 16 帧；③ context 销毁即历史消失 | `:844-863`、`:45,867-871,1166`、`ffx_fsr3upscaler.h:249-253` ✅ |
 | `ENABLE_DEBUG_CHECKING` | **不打断历史**，只是 gate 掉一个纯检查函数 | `:836-839` ✅ |
+
+## 4.5 dispatch 的**标量**输入（14.2 整节漏掉 —— 批 14.5 第二批照文档接线就把它们全漏了）
+
+本文档 §1–§4 只覆盖了四个**输入资源**。`FfxFsr3UpscalerDispatchDescription` 上还有 6 个
+标量/枚举字段，**零初始化到 0/false 是合法的、不报错的、但语义是错的**。批 14.5 第二批
+实测后果：静态场景 + 1:1 档边缘能量 16.98 → 7.67（比双线性放大还糊）。逐条：
+
+| 字段 | 零初始化的后果 | 我们填什么 | 出处 |
+|---|---|---|---|
+| `enableSharpening` | **RCAS 那个 pass 根本不录** ⟹ EASU 的软化毫无补偿 | `true` | `ffx_fsr3upscaler.cpp` dispatch 路径 |
+| `sharpness` | 0 = 不额外锐化（与上一条叠加 = 完全没有锐化） | `kFsrSharpness = 0.2f`（**AMD 样例默认，不是本机调出来的**；调参归 14.7） | 头文件 `:207` 注释 |
+| `frameTimeDelta` | `deltaTime = clamp(ms/1000, 0, 1)` = **0** ⟹ 时域累积的时间常数废掉 | 实测墙钟帧间隔，钳到 `[1, 1000]` ms（vendor 对 <1.0f 打 warning，`:251-253`） | `:1025` |
+| `preExposure` | **vendor 明确判非法**：`:256` 打 ERROR 并内部回落 1.0 | `max(sceneData.exposure, 1e-4f)` —— FSR 收到的是**未曝光**线性 HDR，必须把 tonemap 将要施加的曝光告诉它，否则它的 reactivity / flicker / instability 判据跑在错的亮度尺度上 | `:256-258`、`:985` |
+| `flags`（dispatch 级） | 只有 `DRAW_DEBUG_VIEW` 一位，关着无害 | 0（**排查时值得临时打开**：vendor 自带 debug view 直出内部状态） | 头文件 `:173` |
+| `viewSpaceToMetersFactor` | 0 是**合法**的：`:990` 对 `<= 0` 回落 1.0（= 视空间 Z 当米用） | 0 | `:990` |
+
+⚠ **`frameTimeDelta` 是墙钟量 ⟹ 开着时域累积时 FSR 的输出不是帧号纯函数**，逐位回归不成立。
+纯空间档（每帧 `reset`）不受影响 —— 这是把纯空间档设为默认的第二条理由（第一条见
+`phase14_plan.md` §1.14 的实测数据）。
+
+⚠ **本节的存在本身就是一条教训**：14.2 立文档时把"输入"理解成了"四张图"，于是照文档接线
+的人（= 批 14.5 的我）把标量全填了 0，而**这些错误一个 VVL 都不报**。口径文档的覆盖面
+应当按**结构体字段**穷举，不按"我觉得哪几个是输入"。
 
 ## 5. 官方自己写的约束（= 免费的口径断言）
 

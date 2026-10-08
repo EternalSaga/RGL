@@ -391,7 +391,7 @@ void registerSceneEntities(entt::registry& registry, const UploadedAssets& asset
  */
 void assembleHdrAoChain(Swapchain& swapchain, Resources& resources,
 	SamplerLibrary& samplers, RenderTargetCache& rtCache, ShaderRegistry& pipelines,
-	bool taaDecorated, bool velocityDecorated) {
+	bool taaDecorated, bool velocityDecorated, bool fsrUsable = false) {
 	const auto hdrSlot = orThrow(ensureSceneHdrSlot(rtCache, swapchain), "scene_hdr RT 创建失败");
 	const auto aoSlot = orThrow(ensureAoSlot(rtCache, swapchain), "ao RT 创建失败");
 	const auto depthSlot = orThrow(resources.ensureDepthSampleSlot(), "深度采样槽分配失败");
@@ -411,8 +411,15 @@ void assembleHdrAoChain(Swapchain& swapchain, Resources& resources,
 	if (taaDecorated) {
 		taaSlots = orThrow(ensureTaaSlots(rtCache, swapchain), "TAA RT 创建失败");
 	}
-	[[maybe_unused]] auto tonemapIdx = pipelines.addTonemapEntry(
-		taaSlots ? (*taaSlots)[0] : hdrSlot, aoSlot, samplers.ensureShared());
+	// 批 14.5 第二批：色输入优先级 **FSR > TAA > scene_hdr**。FSR 在图里时它读
+	// taa_out/scene_hdr、写自己那张私有图，这里把它的输出采样槽**烘进 tonemap 条目**——
+	// 零拷贝（不新建图附件、不动图词表），先例 = EvssmShadow 的 momentsSampleSlot。
+	// ⚠ 判据由调用方算好传进来（`fsrUsable`），本函数**不再自行判断**：槽号一旦烘进管线条目
+	//   就必须有人写描述符，两处判据漂移 = 读到未初始化描述符（`Renderer::initFsr` 是另一处）。
+	const uint32_t colorSlot = fsrUsable ? orThrow(resources.ensureFsrSampleSlot(),
+		"FSR 输出采样槽领取失败") : (taaSlots ? (*taaSlots)[0] : hdrSlot);
+	[[maybe_unused]] auto tonemapIdx = pipelines.addTonemapEntry(colorSlot, aoSlot,
+		samplers.ensureShared());
 	if (taaDecorated) {
 		[[maybe_unused]] auto taaIdx = pipelines.addTaaEntry(
 			hdrSlot, (*taaSlots)[1], depthSlot, samplers.ensureShared(),
@@ -429,13 +436,46 @@ void assembleHdrAoChain(Swapchain& swapchain, Resources& resources,
 	}
 }
 
+/** 批 14.5 第二批：FSR 生效判据（装配层一次算完，**不懒**）。四条全真才接：门 + velocity
+ *  真的进了图（FSR 的 motionVectors 输入就是那张图）+ 设备有 shaderFloat16/Int16（FSR 的
+ *  SPIR-V 声明了这两个 capability，见 vkdevice.cppm 同批注释）+ 三个输入附件都在图里
+ *  （色 = `kTaaOutName` 或 `kSceneHdrName`、速度场 = `kVelocityName`、深度；名字全部取
+ *  `render_graph.cppm` 的具名常量，不写字面量）。
+ *
+ *  之所以不能留到运行期再判：装配层要把 FSR 的输出采样槽**烘进 tonemap 管线条目**，烘了却
+ *  没人写描述符 = 读到未初始化描述符。`Renderer::initFsr` 是同一判据的另一半（它只查后两条，
+ *  不满足即抛）——**两处判据必须一致**，漂移的代价是垃圾画面且不指名。
+ *
+ *  抽成函数而不是内联在 `assembleBackEnd` 里，是因为内联版把该函数的认知复杂度推到 20、
+ *  函数体推到 101 行，双双超 style 红线。
+ */
+bool computeFsrUsable(DeviceContext& device, const CompiledRenderGraph& graph,
+	bool fsrEnabled, bool velocityDecorated, bool taaDecorated) {
+	const auto has = [&graph](std::string_view name) {
+		return std::ranges::any_of(graph.attachments,
+			[&](const auto& a) { return a.name == name; });
+	};
+	const bool inputsReady = (has(kTaaOutName) || has(kSceneHdrName))
+		&& has(kVelocityName) && has("depth");
+	const bool usable = fsrEnabled && velocityDecorated && device.shader16Supported() && inputsReady;
+	if (fsrEnabled && !usable) {
+		if (auto* lg = RLLogger::getInstance())
+			lg->warn("fsr_upscaler 开门但接不起来（velocityDecorated={} shader16={} 输入齐备={})"
+				" ⟹ 不接 FSR，tonemap 色输入保持 {}",
+				velocityDecorated, device.shader16Supported(), inputsReady,
+				taaDecorated ? "taa_out" : "scene_hdr");
+	}
+	return usable;
+}
+
+
 /** C3 候选表 + GpuCull + skybox + deferred + HDR + DGC + Renderer（装配时序见接口注释）。 */
 RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resources& resources,
 	SceneDataService& sceneData, SamplerLibrary& samplers, Environment& env,
 	RenderTargetCache& rtCache, AssetTable& assets,
 							  ShaderRegistry& pipelines, CompiledRenderGraph&& graph,
 							  entt::registry& registry, const SceneConfig& scene, bool deferredMode,
-	bool taaDecorated, bool velocityDecorated, bool fsrEnabled) {
+	bool taaDecorated, bool velocityDecorated, bool fsrEnabled, bool fsrTemporal) {
 	// 批 13.6：AO 施加点标志 = **实际图形态**（`decorateTaaPass` 结果），**不是**配置键
 	// `taa.enabled`。true ⟹ AO 已由 taa pass 施加（时域滤波之前），tonemap 跳过；false ⟹ taa
 	// pass 不在图里（含 offscreen 变体：配置开了 TAA 但装饰失败），AO 留在 tonemap 施加。
@@ -497,8 +537,10 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 			samplers.ensureShared(), deferredShadowSlotOf(rtCache), samplers.ensurePointSampler(),
 			evssmSlot);
 	}
+	// 批 14.5 第二批：FSR 生效判据在装配层一次算完（判据本体见 computeFsrUsable）。
+	const bool fsrUsable = computeFsrUsable(device, graph, fsrEnabled, velocityDecorated, taaDecorated);
 	assembleHdrAoChain(swapchain, resources, samplers, rtCache, pipelines, taaDecorated,
-		velocityDecorated);
+		velocityDecorated, fsrUsable);
 
 	// Phase 7b：DGC 命令生成（NVIDIA 路）：仅 graphicsIndirect 能力时构造（RADV =
 	// compute only → null → Renderer 读回重放路）。管线表定后建（execution set
@@ -562,7 +604,7 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 			std::move(graph), cullRaw, dgcRaw, dgcStaticRaw,
 			// 批 14.5：FSR 生效判据 = 配置键 **且** velocity 真的进了图（FSR 的 motionVectors
 			// 输入就是那张图；装饰失败时本键自动失效。取实际图形态的先例 = AO 施加点）。
-			fsrEnabled && velocityDecorated)};
+			fsrUsable, fsrTemporal)};
 }
 
 /**

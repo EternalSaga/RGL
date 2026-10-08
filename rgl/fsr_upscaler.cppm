@@ -32,6 +32,11 @@ export struct FsrFrameInput {
 	float nearPlane = 0.05f;       ///< 投影**实际生效**的 near（取 ViewProjection，非 Camera 原值）
 	float farPlane = 1000.0f;      ///< 同上 far
 	float fovVertical = 1.0f;      ///< 垂直 fov，**弧度**（Camera::fov，GLM_FORCE_RADIANS）
+	/** 本帧曝光（= tonemap 将施加的那个值，scene data @56）。FSR 的输入是**未曝光**的线性
+	 *  HDR，所以要把曝光告诉它，它的 luma 相关判据（reactivity / flicker / instability）
+	 *  才是在正确的亮度尺度上算的。vendor 明确 **0.0f 是非法值**（`ffx_fsr3upscaler.cpp:256`
+	 *  直接打 ERROR 并回落 1.0）⟹ 本值被钳到正数。 */
+	float exposure = 1.0f;
 	bool reset = false;            ///< 时域重置（首帧 / 机位突变 / 重建后）
 };
 
@@ -64,11 +69,16 @@ export class FsrUpscaler {
 	 * @param resources     VMA 分配器归属（显存计入 Resources 台账，别绕过）
 	 * @param renderExtent  内部渲染分辨率（= FSR 的 renderSize 与 maxRenderSize）
 	 * @param upscaleExtent 上屏分辨率（= FSR 的 upscaleSize 与 maxUpscaleSize）
+	 * @param outputSlot    `Resources::ensureFsrSampleSlot()` 预发的采样槽；**构造即写入
+	 *        描述符**——tonemap 的色输入槽号是启动期烘进管线条目的，所以「槽已烘好却还
+	 *        没人写描述符」的窗口必须是零（这是本对象在 Renderer 构造期建、而不是像
+	 *        izb/evssm 那样首帧懒构造的唯一理由）
 	 * @note 构造会 `ffxFsr3UpscalerContextCreate`；vendor 的 context 结构约 1 MiB
 	 *       ⟹ **不在栈上**（本类经 pimpl 把它放堆上，见 PATCHES.md P6 同一坑）。
 	 */
 	FsrUpscaler(RGL::DeviceContext& vkDevice, RGL::Resources& resources,
-		vk::Extent2D renderExtent, vk::Extent2D upscaleExtent);
+		vk::Extent2D renderExtent, vk::Extent2D upscaleExtent, uint32_t outputSlot,
+		bool temporal = false);
 	/** 销毁 vendor context（先于私有图的 VmaImage 析构——它持有这些图的 view）。 */
 	~FsrUpscaler();
 

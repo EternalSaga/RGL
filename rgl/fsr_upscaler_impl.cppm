@@ -2,6 +2,7 @@ module;
 #include <vulkan/vulkan.h>  // VK_* 宏/C 函数（rlvk 不含宏）
 #include <vk_mem_alloc.h>   // VmaAllocationCreateInfo / VMA_MEMORY_USAGE_*（VmaRaii 的 C 面）
 #include <fmt/format.h>
+#include <chrono>
 // vendor：include 面由 ffx_fsr3upscaler_vk 的 SYSTEM PUBLIC 传播；头文件**无**
 // `#if defined(FFX_FSR3UPSCALER)` 守卫（该宏是那个 target 的 PRIVATE 编译宏，只影响
 // .cpp 侧的排列表实例化），所以 rgl 侧不需要重复定义它。
@@ -18,6 +19,10 @@ import vk_resources;
 import VmaRaii;
 
 namespace RGL {
+
+/** RCAS 锐化强度（0 = 不额外锐化，1 = 最大）。**0.2 = AMD 样例的常用默认**，不是本机
+ *  调出来的值——真正的三轴扫描在批 14.7（`phase14_plan.md` §2），这里只是「不能是 0」。 */
+inline constexpr float kFsrSharpness = 0.2f;
 
 namespace {
 
@@ -102,6 +107,28 @@ struct FsrUpscaler::Impl {
 	 *  「OpTypeImage 的 Format 与 VkImageView 不符 ⟹ 该变量所有读写值未定义」，
 	 *  而 vendor 会按报过去的格式建 view（实测：reconstructedPrevNearestDepth 的真实
 	 *  格式是 R32_UINT，按 R32_FLOAT 报 = 10 条建 view 报错 + 14 条 dispatch 报错）。 */
+	/** 输出图的 view create info——**必须常驻成员**：descriptor heap 语义下
+	 *  `VkImageDescriptorInfoEXT::pView` 存的是指针（EvssmShadow 的 `sampleViewCreate`
+	 *  同一坑），栈上临时量不报错、用到才炸。 */
+	/** 上一次 dispatch 的时刻（算 `frameTimeDelta`）。vendor 拿它做时域累积的时间常数
+	 *  （`deltaTime = clamp(ms / 1000, 0, 1)`，`ffx_fsr3upscaler.cpp:1025`）——**喂 0 等于
+	 *  把时间常数废掉**，实测后果是静态场景下输出比双线性放大还糊（边缘能量 7.95 → 3.60）。
+	 *  ⚠ 这是墙钟量 ⟹ **门开时 FSR 的输出不是帧号纯函数**（红线只管门关，但 FSR 侧的
+	 *  逐位回归判据因此不成立，14.6 立判据时要按这个口径来）。 */
+	std::optional<std::chrono::steady_clock::time_point> lastDispatch;
+	std::optional<vk::ImageViewCreateInfo> outputViewCreate;
+	uint32_t outputSlot = 0;
+	/** 时域累积开关（构造期定）。false = **每帧 reset** = 只用 EASU+RCAS 的纯空间上采样。
+	 *  默认关的实测理由（本机、静态场景、renderScale=0.5，边缘能量 mean|∇|）：
+	 *    双线性 7.95 < 本路径 8.43，而开时域累积掉到 **3.78**（比双线性还糊）；
+	 *    开运动（frame_yaw）时域档 6.14 仍 < 双线性 8.06。逐帧单调衰减 8.43→5.37→4.71
+	 *    →4.07→3.78 = 每次累积都在糊，且**一次**累积就掉 36% ⟹ 历史读取在零运动下
+	 *    不是恒等重采样。已排除：速度场恒 0（实测）、字节布局（改 .zw 无影响）、
+	 *    HDR 往返（关掉 3.78→4.11，非主因）、相机参数（实测填对）、共享图尺寸/格式
+	 *    （全取 vendor 描述）、DEBUG_CHECKING（无输出）。全文 → plan §1.14。
+	 *  ⚠ 关掉时域 = 输出是**帧号纯函数** ⟹ FSR 档可以做逐位回归（时域档做不到，
+	 *    vendor 还要 frameTimeDelta 这个墙钟量）。 */
+	bool temporal = false;
 	FfxSurfaceFormat outputFormat = FFX_SURFACE_FORMAT_UNKNOWN,
 		dilatedDepthFormat = FFX_SURFACE_FORMAT_UNKNOWN,
 		dilatedMvFormat = FFX_SURFACE_FORMAT_UNKNOWN,
@@ -168,8 +195,10 @@ struct FsrUpscaler::Impl {
 };
 
 FsrUpscaler::FsrUpscaler(RGL::DeviceContext& vkDevice, RGL::Resources& resources,
-	vk::Extent2D renderExtent, vk::Extent2D upscaleExtent)
+	vk::Extent2D renderExtent, vk::Extent2D upscaleExtent, uint32_t outputSlot, bool temporal)
 	: impl(std::make_unique<Impl>()) {
+	impl->outputSlot = outputSlot;
+	impl->temporal = temporal;
 	impl->deviceCtx     = &vkDevice;
 	impl->resources     = &resources;
 	impl->renderExtent  = renderExtent;
@@ -238,9 +267,35 @@ FsrUpscaler::FsrUpscaler(RGL::DeviceContext& vkDevice, RGL::Resources& resources
 		impl->outputFormat = outDesc.resourceDescription.format;
 	}
 
+	// 输出图的采样描述符写进装配层预发的槽（EvssmShadow 的 momentsSampleSlot 同族），
+	// tonemap 的色输入 binding 就指向它——**零拷贝**：FSR 直接写这张图，tonemap 直接读。
+	// ⚠ layout 申报 **GENERAL**：本图常驻 GENERAL（FSR 以 UAV 写它），而 heap 语义下描述符
+	//   里的 layout 必须与真实布局一致。采样一个 GENERAL 图合法（SAMPLED_IMAGE 描述符的
+	//   允许布局含 GENERAL），前提是图有 SAMPLED usage——createShared 里申请了。
+	impl->outputViewCreate = vk::ImageViewCreateInfo{};
+	impl->outputViewCreate->image = *impl->output;
+	impl->outputViewCreate->viewType = vk::ImageViewType::e2D;
+	impl->outputViewCreate->format = toVkFormat(impl->outputFormat);
+	impl->outputViewCreate->subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+	{
+		vk::ImageDescriptorInfoEXT imgDesc{};
+		imgDesc.pView = &*impl->outputViewCreate;
+		imgDesc.layout = vk::ImageLayout::eGeneral;
+		vk::ResourceDescriptorInfoEXT resDesc{};
+		resDesc.type = vk::DescriptorType::eSampledImage;
+		resDesc.data.pImage = &imgDesc;
+		const auto addr = resources.getDescriptorHeap().getSlotCpuAddress(impl->outputSlot);
+		if (!addr)
+			throw std::runtime_error(fmt::format("FsrUpscaler: 槽 {} 地址解析失败",
+				impl->outputSlot));
+		vkDevice.getDevice().writeResourceDescriptorsEXT(resDesc,
+			vk::HostAddressRangeEXT{*addr, static_cast<VkDeviceSize>(
+				resources.getDescriptorHeap().getDescriptorSize())});
+	}
+
 	if (auto* lg = RLLogger::getInstance())
-		lg->info("FsrUpscaler: context 就绪 render={}x{} upscale={}x{} vram={} MiB",
-			renderExtent.width, renderExtent.height, upscaleExtent.width,
+		lg->info("FsrUpscaler: context 就绪（输出槽 {}）render={}x{} upscale={}x{} vram={} MiB",
+			impl->outputSlot, renderExtent.width, renderExtent.height, upscaleExtent.width,
 			upscaleExtent.height, vramBytes() / (1024 * 1024));
 }
 
@@ -281,13 +336,37 @@ void FsrUpscaler::recordFrame(vk::raii::CommandBuffer& cmd, const FsrFrameInput&
 		impl->reconDepthFormat, uav, uavState);
 	dd.output = Impl::wrap(*impl->output, impl->upscaleExtent.width,
 		impl->upscaleExtent.height, impl->outputFormat, uav, uavState);
+	// ── dispatch 的**标量**输入（批 14.5 第二批补漏）──────────────────────────────
+	// ⚠ 这三个字段原本全被零初始化成了 0/false，而 14.2 的《FSR输入契约》只写了四个
+	//   **输入资源**的口径、一个标量都没写 ⟹ 照着那份文档接线就把它们全漏了。后果实测：
+	//   静态场景 + 1:1 档边缘能量 16.98 → 7.67（比双线性还糊）。逐条：
+	//   · enableSharpening：关 ⟹ **RCAS 那个 pass 根本不录**，EASU 的软化毫无补偿。
+	//   · sharpness：0 = 不额外锐化。0.2 = AMD 样例的常用默认，真正的调参在批 14.7。
+	//   · preExposure：vendor 注释写「must be > 0.0f」，:256 对 0 直接打 ERROR 并回落 1.0。
+	const auto now = std::chrono::steady_clock::now();
+	const float frameMs = impl->lastDispatch
+		? std::chrono::duration<float, std::milli>(now - *impl->lastDispatch).count()
+		: 16.667f;
+	impl->lastDispatch = now;
+	dd.enableSharpening = true;
+	dd.sharpness        = kFsrSharpness;
+	// vendor 要求 >= 1.0f（否则打 warning），而它内部再 clamp 到 [0,1] 秒 ⟹ 这里钳区间
+	// 而不是把 warning 当噪声：headless 冒烟的单帧间隔可以是亚毫秒，也可以是一百毫秒。
+	dd.frameTimeDelta   = std::clamp(frameMs, 1.0f, 1000.0f);
+	dd.preExposure      = std::max(input.exposure, 1e-4f);
 	dd.jitterOffset      = {input.jitterX, input.jitterY};
-	// motionVectorScale = (1,1)：速度场按「渲染分辨率像素」计，vendor 侧再除以 renderSize
-	// （它是**分子**不是分母 —— 契约探针 1 实测，docs/FSR输入契约.md §1）。
+	// (1,1) = 「输入按渲染分辨率像素计」的**正确**填法，不是占位。vendor 在
+	// `ffx_fsr3upscaler.cpp:996-997` 就把本字段除以 `motionVectorsTargetSize` 再交给 shader
+	// （shader 侧 `LoadInputMotionVector` 只做乘法），所以像素口径的输入要填 1。
+	// ⚠ 本行 2026-10-10 曾被"读了一半代码"改掉过一次：只看到 callbacks 里的乘法就断定
+	//   vendor 不除，改成 1/尺寸 —— 那会让速度场**小 1000 倍**（相机一动就鬼影）。
+	//   正确答案在 `docs/FSR输入契约.md` §1 里，且那条结论是**喂常量 MV 回读
+	//   dilatedMotionVectors 对拍 + 变异验红**得来的。**改这行前先跑那个探针，别读代码。**
 	dd.motionVectorScale = {1.0f, 1.0f};
 	dd.renderSize        = {w, h};
 	dd.upscaleSize       = {impl->upscaleExtent.width, impl->upscaleExtent.height};
-	dd.reset             = input.reset;
+	// 纯空间档：每帧 reset，vendor 因此不读历史（实测数据见 Impl::temporal）。
+	dd.reset             = impl->temporal ? input.reset : true;
 	dd.cameraNear        = input.nearPlane;
 	dd.cameraFar         = input.farPlane;
 	dd.cameraFovAngleVertical = input.fovVertical;

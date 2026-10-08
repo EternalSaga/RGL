@@ -100,7 +100,7 @@ export class Renderer {
 		RGL::SceneDataService& sceneData, RGL::Environment& env, RGL::RenderTargetCache& rtCache,
 		RGL::ShaderRegistry& shaderRegistry, RGL::CompiledRenderGraph renderGraph,
 		RGL::GpuCull* gpuCull, RGL::DgcCommands* dgc, RGL::DgcStaticCommands* dgcStatic = nullptr,
-		bool fsrEnabled = false);
+		bool fsrEnabled = false, bool fsrTemporal = false);
 	/** @return 交换链层引用（extent / recreate / 后缓冲）。 */
 	RGL::Swapchain& getSwapchainRef() const { return *swapchain; }
 	/** @return 资源层引用（深度图 / descriptor heap / RT 缓存）。 */
@@ -304,12 +304,12 @@ export class Renderer {
 	/** 批 14.5 FSR 帧首段（与 evssmPreFrame 同位、同在其**之后**，让首帧懒构造的显存
 	 *  被 `logFirstFrameMemory` 计入）。门开且图里两个输入附件齐备时构造 FsrUpscaler；
 	 *  渲染网格变化 ⟹ 重建（vendor 内部共享图按 maxRenderSize 定尺寸，**时域历史全丢**）。
-	 *  门关 = 一次布尔判断零分配（fsr 恒空 = 逐位红线）。 */
+	 *  构造**不在这里**（在 Renderer ctor，理由见 `initFsr`）；门关 = 一次指针判空。 */
 	void fsrPreFrame();
-	/** 批 14.5：FSR 能否接起来 = 设备能力（shaderFloat16 + shaderInt16）**且**三个输入
-	 *  附件都在编译图里。失败时 warn-once 并让 `fsrPreFrame` 把门关掉（降级路径与门关
-	 *  共用同一条零命令路径）。抽成函数是 `fsrPreFrame` 的认知复杂度红线。 */
-	bool fsrInputsReady();
+	/** 批 14.5：领 FSR 输出采样槽 + 现查三个输入附件 slot + 构造 FsrUpscaler。
+	 *  Renderer ctor 在 fsrEnabled 时调用（**不懒**，理由见 `FsrUpscaler` 接口注释），
+	 *  渲染网格变化后的重建也走它（重写同槽）。前置不满足即抛——见函数内注释。 */
+	void initFsr();
 	/**
 	 * 批 14.5：pass 循环头部 FSR sandwich（与 izbLightPassPre 同位）——仅 tonemap pass
 	 *  之前录一段图外 compute（vendor 内部一次录完全部 pass）。其余 pass 零命令。
@@ -401,7 +401,7 @@ export class Renderer {
 	// **门关 = 恒 nullptr，零构造零命令逐位不变**，同 izbShadow / evssmShadow）。
 	std::unique_ptr<RGL::FsrUpscaler> fsr;
 	bool fsrEnabled = false;   ///< 装配层传入的门（已含 velocity 齐备判据）
-	bool fsrInputMissingWarned = false;  ///< 输入附件缺位 warn-once
+	bool fsrTemporal = false;  ///< 批 14.5：false = 每帧 reset（纯空间上采样，口径见 configs/runtime.lua）
 	int32_t fsrColorSlot = -1;    ///< FSR 色输入附件 slot（taa_out，缺则 scene_hdr）
 	int32_t fsrVelocitySlot = -1; ///< 速度场附件 slot（布局护栏 + 转 SRO 要写追踪表）
 	bool fsrDispatchedOnce = false;  ///< 首帧之后不再 reset（时域历史已建立）

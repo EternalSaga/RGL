@@ -140,6 +140,7 @@ export struct RuntimeConfig {
 	 *      （输出 + 3 张 vendor 共享图）。
 	 */
 	bool fsrUpscaler = false;
+	bool fsrTemporal = false;
 	int showAfter = -1;               // DIAG：隐藏窗启动、第 N 帧后显示（-1 = 立即显示）
 	PresentModePref presentMode = PresentModePref::immediate;  // 窗口 present 模式（headless 忽略）
 	LlmDebugConfig llm;

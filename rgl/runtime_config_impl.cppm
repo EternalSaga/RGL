@@ -167,6 +167,7 @@ void readBoolKey(const sol::table& root, const char* key, bool& dst) {
 		// 「依赖 velocity」判据都不在这里——运行期取实际图形态，见 RuntimeConfig 注释。
 		readBoolKey(root, "velocity_field", cfg.velocityField);
 		readBoolKey(root, "fsr_upscaler", cfg.fsrUpscaler);
+		readBoolKey(root, "fsr_temporal", cfg.fsrTemporal);
 		sol::optional<int> showAfter = root["show_after"];
 		if (showAfter)
 			cfg.showAfter = *showAfter;

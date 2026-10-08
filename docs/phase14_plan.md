@@ -582,6 +582,75 @@ state 绑并读我们的深度图，而不是"跑通了但没碰图"）；M2 转
 新登记的通用教训：**vendor 的 capability 声明面 ≠ 它的排列选择面**——查"要不要某特性"要
 看**编出来的 SPIR-V 声明了什么**，不能只看排列表怎么选的。
 
+## 1.14 批 14.5 第二批实测：接进 tonemap 之后，**时域档在我们的输入口径下退化**（本机 STRIX_HALO）
+
+**本批落地的接法 = 零拷贝**：`Resources::ensureFsrSampleSlot()` 发号 + `FsrUpscaler` 构造时
+把私有输出图的 view 写进该槽（`EvssmShadow` 的 `momentsSampleSlot` 同族），装配层把
+tonemap 的色输入槽号换成它。原计划的「copy 进图附件」被放弃，两个理由：① FSR 的 UAV 输出
+必须常驻 GENERAL，现有 usage→layout 表表达不了；② 图里没有 `fsr_out` 的写者，编译器对
+「读一个无图内写者的 offscreen 附件」的判定是额外风险。**代价 = 零**（少一次每帧 3.7 MB 拷贝）。
+
+**判据口径**：本批第一次让画面真的变化，红线基线 `fdece9d0…` 只约束**门关**那一档（实测
+门关仍逐位 = 基线 ✅）。门开的量化用**边缘能量 mean|∇|**（PIL `FIND_EDGES` 均值）——
+它是**报告值不是红线**（`rgl-test-discipline` 的口径），用途仅限"FSR 该比双线性锐"这一条
+方向性判断。
+
+| 配置（1280×720 上屏，静态场景） | 边缘能量 |
+|---|---|
+| renderScale=1，FSR 关（= 红线基线） | 16.98 |
+| renderScale=0.5，FSR 关（双线性放大） | 7.95 |
+| renderScale=0.5，**FSR 纯空间**（本批默认） | **8.43** ✅ 优于双线性 |
+| renderScale=0.5，FSR 时域累积 | **3.78** ❌ 比双线性还糊 |
+| renderScale=1，FSR 时域累积 | 8.08 ❌（同图 16.98） |
+
+**时域档是坏的，且坏在 vendor 的历史读取里**。二分链（每步都是实测，不是推演）：
+
+1. **不是空间路径**：每帧 `reset`（= 只用 EASU+RCAS）拿到 8.43 > 双线性 7.95 ⟹ EASU/RCAS 正确。
+2. **不是速度场**：把速度图当颜色喂进 FSR 直读，R=G=**恒 0**（14.4 的静止正锚点没坏）。
+3. **不是字节布局**：怀疑 vendor 按 2×float32 读我们 4×float16 的纹素，把速度输出 `.zw`
+   从 `(1,0)` 改成 `(0,0)` ⟹ 指标**一位不动**（3.78 → 3.78），排除。
+4. **不是相机参数**：日志实测 `near=0.386 far=2.71 fov=0.785 exposure=1`，是投影矩阵真值。
+5. **不是共享图尺寸/格式**：三张私有图全部按 vendor 的 `FfxCreateResourceDescription` 建并
+   原样报回（`:823-827` 三张均 `maxRenderSize`，历史图 `:581/584` 均 `maxUpscaleSize`）✅。
+6. **不是 HDR 往返**：`Accumulate()` 每帧对历史做 `Tonemap → … → InverseTonemap`，怀疑 fp16
+   往返压对比度；关 `ENABLE_HIGH_DYNAMIC_RANGE` ⟹ 3.78 → **4.11**，方向对但**不是主因**。
+7. **不是漏调 sc 每帧 API**：`frameIndex` 由 vendor 在 `:1028-1030` 自管（reset 归零 / 否则 +1）。
+8. `ENABLE_DEBUG_CHECKING` 打开后**无任何输出**（这条是真编进去之后测的——第一次"没输出"
+   是我补丁本身有语法错误、根本没编进去，见下）。
+
+**形态学证据**（决定性地指向"历史读取非恒等"）：逐帧单调衰减 8.43 → 5.37 → 4.71 → 4.07 →
+3.78，**一次**累积就掉 36%；均值不变（82.4 vs 81.7，略升不降 ⟹ 历史不是黑）；x/y 梯度
+**对称**衰减（5.96/6.38 → 3.68/4.02 ⟹ 不是恒定方向的平移涂抹）；对 reset 图做高斯拟合
+最优 σ≈1.4 px。**两张相同图做一次混合不可能变糊** ⟹ 零运动下 vendor 的历史采样不是恒等
+重采样。运动档（`frame_yaw` 开）6.14 仍 < 双线性 8.06，即"有亚像素多样性时好一些但不够"。
+
+**未结案，且已给出下一步的具体假设**：FSR3-upscaler 是**抖动相机**时域升频器，设计点包含
+app 侧的投影抖动（`jitterOffset` 申报 + `JitterSequenceLength()` 参与 lock 生命周期）。我们
+的输入**完全没有亚像素抖动**（TAA 默认关、Phase 13 已冻结），静态场景更是零多样性 ⟹
+「时域档在我们的输入口径外」是**当前最优假设，尚未证实**。要证实它 = 批 14.6 的抖动线
+（把 TAA 的抖动接进投影并申报给 FSR、同时关掉我们自己的 TAA），而不是继续在静态场景上
+调 FSR 参数。
+
+**本批抓到的两条真问题**：
+
+- **dispatch 的 6 个标量字段原本全是零初始化**（`enableSharpening=false` ⟹ **RCAS 那个 pass
+  根本不录**；`sharpness=0`；`frameTimeDelta=0` ⟹ `deltaTime=clamp(ms/1000,0,1)=0` 把时域
+  时间常数废掉；`preExposure=0` 被 vendor `:256` 判 invalid 并回落）。根因 = **14.2 的
+  《FSR输入契约》只写了四个"输入资源"的口径，一个标量都没写**，照那份文档接线就全漏。
+  ⟹ 契约文档已补 dispatch 标量一节。
+- **一次"读半截代码推翻探针"的错误改动**（已回退）：只看到 `LoadInputMotionVector` 里
+  `fUvMotionVector = fSrcMotionVector * MotionVectorScale()` 是**乘法**，就断定 vendor 不除、
+  把 `motionVectorScale` 从 `(1,1)` 改成 `1/尺寸` —— 而 `ffx_fsr3upscaler.cpp:996-997` 早把
+  本字段除以 `motionVectorsTargetSize`，改完等于让速度场**小 1000 倍**（相机一动就鬼影）。
+  正确答案在 `FSR输入契约.md` §1，且那条是**喂常量 MV 回读 `dilatedMotionVectors` 对拍 +
+  变异验红**得来的。**教训：探针验过的结论 > 一次不完整的代码阅读；要推翻它必须重跑探针，
+  不是重读代码。** 这条反过来是 14.2 那次投入的正面证据——文档把结论保住了，是我差点
+  把它改错。
+
+**方法论（本批新增，第 5 次）**：本轮又出现「我以为在做的实验其实没编进去」（语法错误被
+`>/dev/null` 吞掉 ⟹ 拿旧二进制得出结论）。**做实验时不许把 build 输出丢进 /dev/null**；
+判据说"没输出"之前，先确认改动真的进了二进制。
+
 ## 2. 批次拆分与验收判据
 
 > 顺序按「失败最便宜」排，不是按依赖最紧排。**14.1 与 14.3 可并行**（14.3 不碰 FSR）。
@@ -595,7 +664,7 @@ state 绑并读我们的深度图，而不是"跑通了但没碰图"）；M2 转
 | ~~**14.3**~~ ✅ **已收口 2026-10-08** | **内部分辨率与窗口拉伸解耦**：现在 render extent ≡ swapchain extent ≡ 窗口像素（`Resources` 深度图 extent = swapchain extent；全仓**无 `renderScale` 概念**，只有 `vkswapchain.cppm` 的 `windowScale` 诊断）。加一个独立的 render extent，与 swapchain extent、与债-37 的 HPD 分数缩放三者正交 | 用户方向第四条。**它是 FSR 的硬前置，但本身独立可验收、且净收益**（DRS / 性能实验都缺它）；与 14.1 并行 | ① `renderScale ∈ {1.0, 0.75, 0.5}` 下画面正确、resize 不崩、imgui 与**点选**不受影响（债-37 三条连带不许回退）—— ✅ 三档实机出图（0.5 档读图：内容/取景/比例正确，仅整体变软 = 双线性放大预期）；imgui 恒在后缓冲像素、点选两级换算收口，债-37 三条连带无回退（renderScale=1 时比值恰为 1）；**live resize 未手工验证**，改为把取整/钳制写成单测断言覆盖；② `renderScale = 1.0` 时**逐位等于**今天的基线（红线）—— ✅ 1280×720 与 1600×900 两档与开工前基线逐位相同（同会话增量构建），且**结构上**成立：图形状与 renderScale 无关（§1.9）；③ 截图/判据口径显式记录 render extent（否则 imgqa 所有像素类判据静默换含义）—— ✅ 启动日志 + 截图成功日志 + RPC `/state` 新增 `render` 段 + `just shot` 网格行；`--render-scale` **核对引擎实际生效值**（变异验红：请求 0.1 → 钳到 0.25 → FAIL）；④ Wayland 175% 缩放下实测一次 —— ⚠ **未做**（本机无 Wayland 会话）；默认档行为逐位同前，风险仅在显式改档。**收口记录** → §1.9 |
 | **14.4** 🕳 **进行中**（纯函数层 + pass 侧已落地） | **逐像素速度场**（债-71 / 债-35，**本 phase 最大的一块**）：compute pass 由两帧相机矩阵 + `depthTex` 解析算出每像素速度（本项目唯一运动是全局刚体 ⟹ 便宜），输出 FSR 口径的 `motionVectors`；同时把 TAA 的重投影从"全局矩阵"改成"读这张场" | 用户方向第三条。**它是天花板唯一的出口**，且能独立验收（不必等 FSR 接完）——臂 14 = 门改吃真实逐像素速度 ⟹ 直接问跷跷板是否松绑 | ① 速度场与**独立解析参考**逐像素对拍（含 pitch；用 `temporal_yaw_remap` 那套带 pitch 的金标准，2.3e-13px）；② **阳性锚点** = 静止机位必须恒 0；③ **反向用例** = 符号取反必须让 §1.22 的 R 变差；④ 用它重跑 `temporal-tail --motion step` 与 `temporal-motion`，报 R 是否 < 1（**这是"运动中 TAA 有害"能不能翻案的判决**） |
 | **14.4b** ✅ **A 档已落地**（B 档待 14.5 后重裁，见 §1.11） | **图外资源挂号 + 布局对账护栏**（FSR 前置，见 §1.7）。做两档、明确不做第三档：**A 护栏**（便宜）= 图外 pass 进出点比对 `attachmentLayouts[slot]` 与预期值，不符即 error 出声，把"进出同值"从**约定**变**断言**；**B 挂号**（中等）= `RgGraphDesc` 增加 external-use 声明（attachment × usage × 插在哪个 pass 之后/之前），GraphCompiler 据此把 barrier 并入计划，`IzbShadow` / `EvssmShadow` / FSR 三处不再手写 **image** barrier；**C 不做** = buffer 侧依赖自动推导（图只跟 image attachment，加进去 = 半个 memory manager） | **排在 14.5 之前**：FSR 是第三个图外 compute，先立护栏再扩面，否则 14.5 的 VVL 判据要替"约定"背锅，而债-32 已经证明这类缺口 VVL 不报 | ① **阳性锚点** = 故意让某图外 pass 不还原布局 ⟹ 护栏必须 error（**变异验过非空转**）；② **反向** = 现状全绿（护栏零误报，否则等于没有）；③ 红线 = 画面逐位不变（护栏只读不写命令）；④ B 档做完 = `izb_shadow_impl.cppm:256,280` 两处 `depthLayoutBarrier` 删除且画面逐位不变 |
-| **14.5** 🕳 **第一批已落地**（FSR 每帧跑通 VVL 零错；输出尚无消费者，见 §1.13） | **FSR 接线**：落位 = **图外 compute 编舞**（`RgPassKind` 只有 `drawMesh/blit/drawLight`，**无 compute kind**；先例 = IzbShadow / EvssmShadow，见 `evssm_shadow.cppm:20`）。HDR 域位置 = **tonemap 之前**（scene_hdr@render res → FSR → hdr@display res → tonemap → swapchain），`ENABLE_HIGH_DYNAMIC_RANGE` 开 | 唯一架构决策，先写死再动手，免得中途返工 | ① **FSR 关 = 逐位不变**（与 TAA 同款红线，用基线配置）；② VVL 零报错（含跨 submission 依赖与布局链——债-32 那条"图外编舞"的坑）；⚠ **布局漂移 VVL 抓不到**（布局本身合法，症状隔一整帧），这一项靠 **14.4b 的护栏**，不是靠 VVL；③ 显存账新增"外部分配器"科目且**闭合断言重新有意义**；④ 本批**只点亮、不调参**，`NATIVEAA` + `renderScale=1.0` 起步 |
+| **14.5** 🕳 **前两批已落地**（第一批 = FSR 每帧跑通 VVL 零错、输出无消费者，见 §1.13；第二批 = **输出接进 tonemap**，零拷贝换槽，**默认只开纯空间档**，见 §1.14） | **FSR 接线**：落位 = **图外 compute 编舞**（`RgPassKind` 只有 `drawMesh/blit/drawLight`，**无 compute kind**；先例 = IzbShadow / EvssmShadow，见 `evssm_shadow.cppm:20`）。HDR 域位置 = **tonemap 之前**（scene_hdr@render res → FSR → hdr@display res → tonemap → swapchain），`ENABLE_HIGH_DYNAMIC_RANGE` 开。**第二批改判**：原计划「copy 进图附件 `fsr_out`」**不做**——FSR 的 UAV 输出必须常驻 GENERAL（现有 usage→layout 表表达不了），且图内无写者的附件是额外风险；改走 `Resources::ensureFsrSampleSlot()` + 模块自写描述符（`EvssmShadow::momentsSampleSlot` 同族），**零拷贝、零图词表改动** | 唯一架构决策，先写死再动手，免得中途返工 | ① **FSR 关 = 逐位不变**（与 TAA 同款红线，用基线配置）—— ✅ 门关 SHA256 = `fdece9d0…` = 红线基线；② VVL 零报错（含跨 submission 依赖与布局链——债-32 那条"图外编舞"的坑）—— ✅ 门开 PASS errors=0 warnings=0；⚠ **布局漂移 VVL 抓不到**（布局本身合法，症状隔一整帧），这一项靠 **14.4b 的护栏**，不是靠 VVL；③ 显存账新增"外部分配器"科目且**闭合断言重新有意义**；④ 本批**只点亮不调参** —— ✅（`kFsrSharpness = 0.2` 取 AMD 样例默认，调参归 14.7）；⑤ **第二批新增：画面判据**——纯空间档 0.5 档边缘能量 **8.43 > 双线性 7.95** ✅，且输出是**帧号纯函数**（同参数两次跑 SHA256 相同 ⟹ FSR 档可做逐位回归）；**时域档实测退化**（3.78 < 7.95），默认关，根因与二分链见 §1.14 |
 | **14.6** | **判据迁移**：直接复用（`temporal-tail --motion step` 含闭式锚臂 E、`temporal-motion` 的 M0/M1/M2/M3x 消融族、理想 N 相位平均参考、往返地板、`aa-coverage`、`temporal` 的 ρ 对闭式、alignment/ablation 两条**元判据**）／换口径（ρ 六机位表：**算子留、阈值全重立**，闭式 ρ\*=0.0827 是 EMA 的闭式，FSR 不是 EMA）／随 TAA 作废（`clip_mode` 臂族、gate 断点锚点、`diag_reject` alpha 解码） | 用户方向最后一条"跑一堆 imgqa"的前置。**不先分类就会拿 TAA 的阈值判 FSR** | ① 三张清单落到 `imgqa` 的判据注册表（**不在文档里抄清单**，抄名单反模式）；② 每条"复用"项跑一次并记录新基线；③ 每条"作废"项**先确认不是护栏**（债-68 三条件） |
 | **14.7** | **旋钮调参**：§1.6 那 5 个 configure key × 三轴判据（静止闪烁 / 平移阶跃鬼影 / 运动中 R） | 有判据才有旋钮；顺序必须在 14.6 之后 | 每个 key 给一张扫描表 + **一次消融证明它真的在动**（阳性锚点），并写清代价轴 |
 | **14.8** | **VMA 裁决**：默认**不改**，只补账本科目。改那 4 处 `vkAllocateMemory` 的触发条件（任一）：① 外部分配器条数让 `maxMemoryAllocationCount` 逼近上限；② 预算/OOM 需要统一降级；③ 显存账科目精度不够用 | 见 §1.5。**账本口径问题用账本解决，不用 patch 解决** | 若不动：显存日志里 FSR 的 VRAM 有独立一行且 `logMemoryStats` 的闭合断言重新成立（口径写明"含外部分配器 X MiB"） |

@@ -393,7 +393,7 @@ def main() -> int:
     # fsr_upscaler 生效核对（批 14.5）。同 velocity 的纪律：双向都要核。
     # 正向 = 门开必须看到 vendor context 构造行；反向 = 门关**一行都不许有**——FSR 是
     # 图外 compute，门关不拢时截图未必变（本批它的输出尚无消费者），只看画面会漏。
-    fsr = re.search(r"FsrUpscaler: context 就绪 render=(\d+)x(\d+) upscale=(\d+)x(\d+)", log)
+    fsr = re.search(r"FsrUpscaler: context 就绪[^\n]*?render=(\d+)x(\d+) upscale=(\d+)x(\d+)", log)
     fsrOff = re.search(r"fsr: 输入附件不齐", log)
     if args.fsr_upscaler and not fsr:
         if fsrOff:

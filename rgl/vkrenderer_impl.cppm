@@ -135,7 +135,7 @@ Renderer::Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RG
 		RGL::SceneDataService& sceneData, RGL::Environment& env, RGL::RenderTargetCache& rtCache,
 		RGL::ShaderRegistry& shaderRegistry, RGL::CompiledRenderGraph renderGraph,
 		RGL::GpuCull* vkGpuCull, RGL::DgcCommands* vkDgc, RGL::DgcStaticCommands* vkDgcStatic,
-		bool fsrEnabled)
+		bool fsrEnabled, bool fsrTemporal)
 	: vkDevice(vkDevice),
 	  swapchain(&vkSwapchain),
 	  resources(&vkResources),
@@ -166,6 +166,11 @@ Renderer::Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RG
 		// 批 14.5：FSR 门。在体内赋值而非初始化列表——成员声明序在 graphicsCommandPool
 		// 之后，塞进列表要赌顺序（-Werror=reorder），体内赋值零风险且只此一次。
 		this->fsrEnabled = fsrEnabled;
+		this->fsrTemporal = fsrTemporal;
+		// 批 14.5：FSR 在**构造期**建，不像 izb/evssm 那样首帧懒构造——tonemap 的色输入
+		// 槽号是启动期烘进管线条目的，「槽已烘进条目却还没人写描述符」的窗口必须为零。
+		if (fsrEnabled)
+			initFsr();
 		validateRenderGraphForExecutor(this->renderGraph);
 		for (const auto& warning : this->renderGraph.warnings) {
 			auto logger = RLLogger::getInstance();
