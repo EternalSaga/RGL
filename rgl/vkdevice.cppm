@@ -14,6 +14,29 @@ import vkerror;
 namespace RGL {
 
 /**
+ * 设备是否支持 shaderFloat16 **且** shaderInt16（批 14.5，FSR 3.1.4 的 shader 前置）。
+ *
+ * 两个位**分居两处**，所以必须分别读：`shaderInt16` 在 `VkPhysicalDeviceFeatures`（基结构），
+ * `shaderFloat16` 只在 `VkPhysicalDeviceVulkan12Features`（`VkPhysicalDeviceFeatures` 里
+ * 根本没有它）。
+ *
+ * 为什么不走 `features_config.json` 的 optional 机制：该机制「无扩展门」的分支只读
+ * `VkPhysicalDeviceFeatures`（放不进 shaderFloat16），而给它挂
+ * `VK_KHR_shader_float16_int8` 又**永远探不到**——该扩展 1.2 已进核心，被 instance 的 API
+ * 版本从 `enumerateDeviceExtensionProperties` 的表里过滤掉了（同一机制另见
+ * docs/phase14_plan.md §1.12 第 6 条：FSR 自己的排列探测正是因此恒选最低配）。
+ *
+ * 语义是 **optional**：缺位的机器只是跑不了 FSR，不该连应用都起不来（消费侧 =
+ * `Renderer::fsrPreFrame` 探测后降级，同 samplerAnisotropy → 不开 AF 的模式）。
+ */
+bool probeShader16Supported(const vk::raii::PhysicalDevice& device) {
+	const auto probed = device.getFeatures2<vk::PhysicalDeviceFeatures2,
+		vk::PhysicalDeviceVulkan12Features>();
+	return probed.get<vk::PhysicalDeviceVulkan12Features>().shaderFloat16 != 0
+	    && probed.get<vk::PhysicalDeviceFeatures2>().features.shaderInt16 != 0;
+}
+
+/**
  * DGC（VK_EXT_device_generated_commands）能力位（DeviceContext 构造期自
  * VkPhysicalDeviceDeviceGeneratedCommandsPropertiesEXT.supportedIndirectCommandsShaderStagesShaderBinding
  * 派生；culling 子系统据此选路——Phase 7b，见 docs/device_generated_commands_research.md）。
@@ -85,6 +108,7 @@ export class DeviceContext {
 	  queueManager(RGL::QueueFamilyManager::create(*physicalDevice).value()),
 	  /** 可选 feature 探测（先于 featuresChain/eds3Feature——后者按支持位初始化）。 */
 	  optionalFeatures(RGL::queryOptionalFeatures(*physicalDevice)),
+	  shader16Ok(probeShader16Supported(*physicalDevice)),
 	  /** required feature 链（恒 TRUE）。optional 结构**不进本链**（spec：vkCreateDevice pNext
 	   * 链只含"已启用扩展"的 feature 结构；FALSE 结构挂未启用扩展 = UB，RADV 实测启动后
 	   * 首次分配即崩）。 */
@@ -175,6 +199,10 @@ export class DeviceContext {
 	/** @return 可选 feature 支持位（queryOptionalFeatures 探测结果；Renderer 消费——
 	 * edS3 depthClip 动态状态）。 */
 	const RGL::OptionalFeatureSupport& getOptionalFeatures() const { return optionalFeatures; }
+	/** 批 14.5：设备支持 shaderFloat16 **且** shaderInt16（两者都已在本 device 启用）。
+	 *  FSR 3.1.4 的 SPIR-V 声明这两个 capability，缺位则 FSR 不可用（探测式降级，
+	 *  不进 required 清单——理由见 createDevice 内同批注释）。 */
+	bool shader16Supported() const { return shader16Ok; }
 	/** @return DGC 能力位（queryDgcSupport 派生；culling 子系统据此选 DGC 全路径 /
 	 * 读回重放回退，见 vk_indirect_commands 模块与 phase7_devlog 批次 5）。 */
 	const RGL::DgcSupport& getDgcSupport() const { return dgcSupport; }
@@ -353,6 +381,14 @@ export class DeviceContext {
 		// 消费侧按 getOptionalFeatures() 降级（samplerAnisotropy → SamplerLibrary 不开 AF）。
 		if (optionalFeatures.samplerAnisotropy)
 			featuresChain.get<vk::PhysicalDeviceFeatures2>().features.samplerAnisotropy = VK_TRUE;
+		// 批 14.5：FSR 3.1.4 的 SPIR-V 声明了 Float16 / Int16 capability（**与它选哪个 fp16
+		// 数学排列无关**——生成期 `..._REPROJECT_SAMPLERS_USE_DATA_HALF = 1` 让 shader 用
+		// half **采样数据**，那条路径恒开），缺这两个位 = vkCreateShaderModule 直接报
+		// VUID-VkShaderModuleCreateInfo-pCode-08740。置位口径见 probeShader16Supported。
+		if (probeShader16Supported(physicalDevice)) {
+			featuresChain.get<vk::PhysicalDeviceFeatures2>().features.shaderInt16 = VK_TRUE;
+			featuresChain.get<vk::PhysicalDeviceVulkan12Features>().shaderFloat16 = VK_TRUE;
+		}
 
 		vk::DeviceCreateInfo deviceCreateInfo{};
 		deviceCreateInfo.setPNext(&featuresChain.get<vk::PhysicalDeviceFeatures2>());
@@ -390,8 +426,9 @@ export class DeviceContext {
 			}
 			logger->info("Device optional features: depthClipEnable={}",
 				optionalFeatures.depthClipEnable);
-			logger->info("Device optional features: samplerAnisotropy={} (core 位，命中则共享 sampler 开 AF)",
-				optionalFeatures.samplerAnisotropy);
+			logger->info("Device optional features: samplerAnisotropy={} (core 位，命中则共享 sampler 开 AF)"
+				" shader16={} (批 14.5：FSR shader 前置，缺位则 FSR 降级)",
+				optionalFeatures.samplerAnisotropy, probeShader16Supported(physicalDevice));
 			logger->info("Device optional features: robustBufferAccess2={} nullDescriptor={}",
 				optionalFeatures.robustBufferAccess2, optionalFeatures.nullDescriptor);
 			logger->info("Device optional ext: calibratedTimestamps={} (Phase 9.2 GPU 时间戳)",
@@ -432,6 +469,7 @@ export class DeviceContext {
 	RGL::QueueFamilyManager queueManager;  // 队列 family 管理器（持 physicalDevice 引用，须后于其初始化）；
 	                                      //   queueCreateInfos / priorities 是其成员，须比 vkCreateDevice 长寿
 	RGL::OptionalFeatureSupport optionalFeatures;  // 可选 feature 支持位（queryOptionalFeatures 探测，先于 featuresChain）
+	bool shader16Ok = false;  ///< 批 14.5：Float16+Int16 core 位（初始化列表探，与 createDevice 同源）
 	RGL::FeatureChain featuresChain;  // required feature 链（恒 TRUE）——必须类成员：createDevice 的
 	                                  //   DeviceCreateInfo.setPNext 存链头指针（非拷贝），pNext 不能悬空（AGENTS.md）；
 	                                  //   optional 结构不进本链

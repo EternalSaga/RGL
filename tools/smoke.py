@@ -206,7 +206,7 @@ def png_size(path: Path) -> tuple[int, int] | None:
 
 def stage_configs(from_build: bool, variant: str | None, shot_file: str, frames: int,
                   size: tuple[int, int] | None, render_scale: float | None,
-                  velocity_field: bool = False) -> None:
+                  velocity_field: bool = False, fsr_upscaler: bool = False) -> None:
     """把一次性配置铺进 staging 目录并打好运行模式键（每次重建，跑完不残留可复原状态）。"""
     base = (BUILD_RGL / "configs") if from_build else (ROOT / "configs")
     if missing := [f for f in CONFIG_FILES if not (base / f).is_file()]:
@@ -233,6 +233,12 @@ def stage_configs(from_build: bool, variant: str | None, shot_file: str, frames:
     if velocity_field:
         # 批 14.4：逐像素速度场。创建期量（决定图里有没有 velocity pass），无热重载。
         patch_lua(runtime, "velocity_field", "true")
+    if fsr_upscaler:
+        # 批 14.5：FSR upscaler。**它隐含 velocity_field**——FSR 的 motionVectors 输入就是
+        # 那张图，引擎侧生效判据 = 「配置键 && velocity 真的进了图」，这里不把依赖一起打开，
+        # --fsr-upscaler 就会静默退化成"什么都没开"。
+        patch_lua(runtime, "velocity_field", "true")
+        patch_lua(runtime, "fsr_upscaler", "true")
 
 
 def run_engine(exe: Path, timeout: int) -> tuple[int, str, float]:
@@ -284,6 +290,10 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--velocity-field", action="store_true",
                     help="runtime.lua velocity_field = true（逐像素速度场，批 14.4）。"
                          "双向核对：开了没建 velocity RT = FAIL；没开却建了 = FAIL（门关不拢）")
+    ap.add_argument("--fsr-upscaler", action="store_true",
+                    help="runtime.lua fsr_upscaler = true（FSR 3.1.4 upscaler，批 14.5；"
+                         "隐含打开 velocity_field，FSR 的 MV 输入就是那张图）。"
+                         "双向核对：开了没建 FSR context = FAIL；没开却建了 = FAIL（门关不拢）")
     ap.add_argument("--from-build", action="store_true",
                     help="以 build/rgl/configs 副本为基准（跑调试现场；默认用仓库 configs/）")
     ap.add_argument("--timeout", type=int, default=90, help="引擎最长存活秒数（默认 90）")
@@ -315,12 +325,13 @@ def main() -> int:
     shot_file = (f"{STAGING.name}/probe.png" if args.mode == "smoke"
                  else f"screenshots/{args.name}.png")
     stage_configs(args.from_build, args.variant, shot_file, args.frames, size,
-                  args.render_scale, args.velocity_field)
+                  args.render_scale, args.velocity_field, args.fsr_upscaler)
     print(f"配置   : 基准={'build 副本' if args.from_build else '仓库 configs/'}"
           f"  variant={args.variant or '(随配置)'}  frames={args.frames}"
           f"  size={f'{size[0]}x{size[1]}' if size else '(随配置)'}"
           f"  render_scale={args.render_scale if args.render_scale is not None else '(随配置)'}"
-          f"  velocity_field={'on' if args.velocity_field else '(随配置)'}")
+          f"  velocity_field={'on' if args.velocity_field else '(随配置)'}"
+          f"  fsr_upscaler={'on' if args.fsr_upscaler else '(随配置)'}")
 
     code, log, secs = run_engine(exe, args.timeout)
     LOG_PATH.write_text(log, encoding="utf-8")
@@ -362,7 +373,10 @@ def main() -> int:
     # 门关不拢（图里多了一个 pass，而逐位不变红线单看截图未必抓得住）。
     vel = re.search(r"velocity \(RGBA16F[^)]*\): (\d+)x(\d+) slot (\d+)", log)
     velUnsupported = "velocity: 图形态不支持" in log
-    if args.velocity_field and not vel:
+    # --fsr-upscaler 隐含打开 velocity_field（FSR 的 MV 输入就是那张图）⟹ 核对判据必须
+    # 把两条来源并起来，否则 --fsr-upscaler 会被自己的依赖判成「门关不拢」。
+    velRequested = args.velocity_field or args.fsr_upscaler
+    if velRequested and not vel:
         # 区分两种"没建 RT"：**图形态不支持**（装饰器 warn 后正常跳过，offscreen 变体用
         # blit 上屏，无"写 swapchain 且采色"的 pass = 与 decorateTaaPass 同判据）与
         # **静默没落图**（键名漂了 / 日志文案改了 / 装饰器漏调）。前者是正确行为，
@@ -373,9 +387,32 @@ def main() -> int:
                  "「velocity: 图形态不支持」告警 ⟹ 装饰器静默没落图"
                  "（配置键名漂了 / 启动日志文案改了 / 装饰调用被删）")
         print("速度场: 本图变体不支持（装饰器已 warn 并跳过）✓ 非错误")
-    if not args.velocity_field and vel:
+    if not velRequested and vel:
         fail(f"默认档（velocity_field 关）却建了 velocity RT：{vel.group(0)}"
              " ⟹ 门关不拢，「图里没有这个 pass」的逐位不变红线失效")
+    # fsr_upscaler 生效核对（批 14.5）。同 velocity 的纪律：双向都要核。
+    # 正向 = 门开必须看到 vendor context 构造行；反向 = 门关**一行都不许有**——FSR 是
+    # 图外 compute，门关不拢时截图未必变（本批它的输出尚无消费者），只看画面会漏。
+    fsr = re.search(r"FsrUpscaler: context 就绪 render=(\d+)x(\d+) upscale=(\d+)x(\d+)", log)
+    fsrOff = re.search(r"fsr: 输入附件不齐", log)
+    if args.fsr_upscaler and not fsr:
+        if fsrOff:
+            fail(f"请求 --fsr-upscaler 但引擎报输入附件不齐（{fsrOff.group(0)}）"
+                 " ⟹ velocity/depth/色输入三者有一个没进图，FSR 无从接起")
+        else:
+            fail("请求 --fsr-upscaler 但日志里没有「FsrUpscaler: context 就绪」行"
+                 " ⟹ 装饰/门链路静默没落图（配置键名漂了 / 生效判据被改 / 构造日志文案改了）")
+    if not args.fsr_upscaler and fsr:
+        fail(f"默认档（fsr_upscaler 关）却构造了 FSR context：{fsr.group(0)}"
+             " ⟹ 门关不拢，「零构造零命令」的逐位不变红线失效")
+    if fsr:
+        # FSR 的两个尺寸必须是**实际**渲染网格与后缓冲网格：vendor 的内部共享图按
+        # maxRenderSize 定尺寸，填错 = dispatch 硬失败（FFX_ERROR_OUT_OF_RANGE）。
+        if (int(fsr.group(1)), int(fsr.group(2))) != render_grid:
+            fail(f"FSR render={fsr.group(1)}x{fsr.group(2)} ≠ 渲染网格 "
+                 f"{render_grid[0]}x{render_grid[1]}")
+        print(f"FSR: context 就绪 render={fsr.group(1)}x{fsr.group(2)} "
+              f"upscale={fsr.group(3)}x{fsr.group(4)} ✓")
     if vel:
         # 速度场必须与深度**同网格**：它的输出单位是"渲染分辨率像素"，网格不同则单位错。
         if (int(vel.group(1)), int(vel.group(2))) != render_grid:

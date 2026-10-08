@@ -247,7 +247,8 @@ export RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain
 									 RenderTargetCache& rtCache, AssetTable& assets,
 									 ShaderRegistry& pipelines, CompiledRenderGraph&& graph,
 									 entt::registry& registry, const SceneConfig& scene, bool deferredMode,
-									 bool taaDecorated = false, bool velocityDecorated = false);
+									 bool taaDecorated = false, bool velocityDecorated = false,
+						 bool fsrEnabled = false);
 
 /**
  * 配置热重载装配（Phase 10 批 10.3；docs/archive/phase10_plan.md §5）。门 =

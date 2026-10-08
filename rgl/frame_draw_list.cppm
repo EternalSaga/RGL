@@ -206,6 +206,15 @@ export struct FrameDrawList {
 	std::span<const uint32_t> materialBySlot;  // 按 objectSlot 索引的材质 id
 	uint32_t selectedMaterial = 0;             // 选中材质 id（hasSelection=false 时无意义）
 	bool hasSelection = false;                 // 本帧有无选中（Esc 取消 / 首帧 = false）
+	// 批 14.5：FSR upscaler 的相机输入（**不进 scene data 缓冲**，纯 CPU 侧每帧量，
+	// 执行器直接读）。走 FrameDrawList 而不是让执行器问 ECS = 规范 4（执行器零 entt）。
+	// near/far 必须是**投影实际生效值**：projectionSystem 做自适应 near/far 并把结果写回
+	// ViewProjection（ecs_impl.cppm:349-363），取 Camera 原值会按错的平面线性化深度。
+	// fov 由 proj 矩阵反推（= 2·atan(1/proj[1][1])，glm::perspective 恒等式）——比读配置
+	// 字段更硬：读的就是本帧真正用了的那个投影。单位 = 弧度。
+	float fsrNear = 0.05f;
+	float fsrFar = 1000.0f;
+	float fsrFovVertical = 1.0f;
 	SceneFrameData sceneData;
 	// Phase 7b：GPU culling 每帧输入（render_list 与 CPU 剔除同源填充；GpuCull 未激活
 	// 时 Renderer 忽略——始终填充，零条件分支）

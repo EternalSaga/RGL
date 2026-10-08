@@ -126,6 +126,20 @@ export struct RuntimeConfig {
 	 * 目前（批 14.4）尚无消费者——批 14.5 接 FSR upscaler 才用得上它。
 	 */
 	bool velocityField = false;
+	/**
+	 * Phase 14 批 14.5：FSR 3.1.4 upscaler 总开关。**创建期**量（同 `velocity_field`，
+	 * 热重载不生效）——它决定要不要构造 vendor context 与它的四张私有图。
+	 *
+	 * 关（默认）= `Renderer::fsr` 恒空 ⟹ 零构造、零命令、**结构性**逐位不变。
+	 *
+	 * **依赖 `velocity_field`**：FSR 的 motionVectors 输入就是那张图，所以判据取
+	 * **实际图形态**（`velocityDecorated`）而不是配置键——velocity 装饰失败时本键
+	 * 自动失效（AO 施加点的先例，main_scene.cppm:437）。
+	 *
+	 * 开 = 每帧多一段图外 compute（vendor 内部一次录完全部 pass）+ 四张私有图
+	 *      （输出 + 3 张 vendor 共享图）。
+	 */
+	bool fsrUpscaler = false;
 	int showAfter = -1;               // DIAG：隐藏窗启动、第 N 帧后显示（-1 = 立即显示）
 	PresentModePref presentMode = PresentModePref::immediate;  // 窗口 present 模式（headless 忽略）
 	LlmDebugConfig llm;

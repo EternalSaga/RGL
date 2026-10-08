@@ -28,6 +28,10 @@ return {
     -- **创建期量**：改它要走重启。目前尚无消费者（批 14.5 接 FSR upscaler 才用得上）。
     -- 生效现场看启动日志 "velocity (RGBA16F, 像素单位 prev−cur): WxH slot N"。
     velocity_field = false,
+    -- Phase 14 批 14.5：FSR 3.1.4 upscaler 总开关（创建期量，热重载不生效）。
+    -- 关（默认）= 零构造零命令 = 画面逐位不变。**依赖 velocity_field**：velocity 没进图
+    -- 时本键自动失效（判据取实际图形态，不取本键）。
+    fsr_upscaler = false,
 
     -- DIAG：隐藏窗启动、第 N 帧后显示（可见窗 fault 排查；-1 = 立即显示）
     show_after = -1,

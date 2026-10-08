@@ -110,6 +110,13 @@ consteval auto namesInScope() {
 export inline constexpr std::string_view kDeferredLightState = "light";
 
 /**
+ * tonemap pass 的 state 名（批 14.5）。与 `kDeferredLightState` 同因：FSR 的图外
+ * sandwich 要认「这是不是 tonemap pass」，而它此前只以字面量存在于词表与各 Lua。
+ * 比较侧用本常量，构造侧仍写字面量以便阅读。
+ */
+export inline constexpr std::string_view kTonemapState = "tonemap";
+
+/**
  * drawMesh pass 的合法 state 子集（派生自 kAllPassStates，scope = meshPass）——
  * 执行器 validateRenderGraphForExecutor 校验 drawMesh pass 的 state 用本表。
  */
@@ -164,6 +171,8 @@ export constexpr bool isFullscreenPassState(std::string_view name) {
 static_assert(isKnownStateName(kDeferredLightState)
 		&& isFullscreenPassState(kDeferredLightState),
 	"kDeferredLightState 必须是 kAllPassStates 里的 fullscreenPass 档状态名");
+static_assert(isKnownStateName(kTonemapState) && isFullscreenPassState(kTonemapState),
+	"kTonemapState 必须是 kAllPassStates 里的 fullscreenPass 档状态名");
 
 // 同名同数校验（StateKit 用它做 static_assert）。三个函数各管一段，合成一条判据；
 // 用 `export { }` 包一块是因为 doc 检查的"可跳过 template 引入行"只认行首

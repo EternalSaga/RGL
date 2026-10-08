@@ -32,6 +32,8 @@ vendor = `third_party/fsr/vendor/`，来源 = FidelityFX-SDK tag **v1.1.4**（co
 | P11 | `include/FidelityFX/gpu/fsr3upscaler/ffx_fsr3upscaler_callbacks_glsl.h`（`rw_luma_history`） | VVL 每次 dispatch 一条：storage image 的 `OpTypeImage` Format 与 `VkImageView` 不符，判「**整个 image 读写值未定义**」 | 写侧声明 `layout(..., rgba8)`，host 侧却把资源建成 `FFX_SURFACE_FORMAT_R16G16B16A16_FLOAT`（`ffx_fsr3upscaler.cpp:592/595`）。**权威口径 = HLSL 回调的 `RWTexture2D<FfxFloat32x4>`**（DX 的 UAV 格式取自资源、限定符被忽略 ⟹ Windows 永远看不见这条）⟹ 改限定符对齐资源（`rgba16f`），**不是**反过来把资源降成 8-bit：存进去的是 4 槽 luma 历史，HDR 下 luma 可远大于 1，UNORM 会同时截顶并把精度压到 1/255 |
 
 P1–P6 = 编译期（clang/libc++ 与 MSVC 的差异）；P7 = 链接期；P8–P10 = 运行期，且
+| P12 | `src/backends/vk/ffx_vk.cpp`（`findMemoryTypeIndex`） | VVL 每帧数十条 `VUID-vkAllocateMemory-deviceCoherentMemory-02790` | 本后端从不启用 `deviceCoherentMemory` 特性，而 RADV 把某个 memory type 同时标成 `DEVICE_LOCAL\|DEVICE_COHERENT` ⟹ 「只要 device-local」那条匹配选中它 = 未启用特性就分配 coherent 内存。跳过该位（VMA 同做法）。<br>⚠ 这条在 `just fsr-smoke` 里原本是**白名单**条目；渲染器侧接 FSR（批 14.5）后它会按帧刷屏， 故就地修掉而不是继续白名单 | 
+| P13 | `src/backends/vk/ffx_vk.cpp`（clear job 的 `VkImageSubresourceRange`） | `vkCmdClearColorImage` 报 `VUID-VkImageSubresourceRange-layerCount-01721`（9 条/次） | `layerCount` 直接取 `resourceDescription.depth`，而 **TEXTURE2D 的 `depth` 是未填的 0** ⟹ 整条 clear 无效。`depth ? depth : 1`。同 P12：原本是 `just fsr-smoke` 白名单条目，渲染器侧会按帧刷屏，故修而不白名单 | 
 **P9/P10 只在 `-O2` 暴露**——这就是「`-O0` 冒烟过了」不能当验收的原因。P11 = 语义正确性。
 
 ### P9/P10 的终局确认（UBSan 双向）

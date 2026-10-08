@@ -525,6 +525,63 @@ FSR 的两个挂点 = **`:445/446` 之间**（一次性构造，早于显存统�
 ⚠ `"tonemap"` 这个 state 名**目前没有常量**（只在词表里），而 `"light"` 有
 `kDeferredLightState` + `static_assert` 绑定可照抄 ⟹ 接线时先补 `kTonemapState`。
 
+### 1.13 批 14.5 第一批落地事实（2026-10-08 上午，全部本机实测；FSR 已在渲染器内每帧跑通）
+
+**范围**：`FsrUpscaler` 模块 + 门 + 常驻图 + 每帧 dispatch 已接完，**输出尚无消费者**
+（tonemap 仍读 `taa_out`/`scene_hdr`）。所以下面第一条判据是「门开也逐位不变」——这是本批
+**故意**的边界，不是漏了。换 tonemap 色输入 = 第二批。
+
+**六条实测才拿到的事实**（§1.12 的推演没覆盖到，动手前若知道能省一整轮）：
+
+1. **FSR 的 SPIR-V 声明 `Float16` + `Int16` capability，与它选哪个 fp16 数学排列无关。**
+   生成期 `FFX_FSR3UPSCALER_OPTION_REPROJECT_SAMPLERS_USE_DATA_HALF = 1` 让 shader 用 half
+   **采样数据**，那条路径恒开 ⟹ 即使排列是「最低配 fp16=0」也照样声明。缺位时
+   `vkCreateShaderModule` 报 `VUID-VkShaderModuleCreateInfo-pCode-08740`。
+   ⚠ 这**推翻**了 §1.12 里「fp16 不支持 ⟹ 无关」的推断（那条推断只对「数学指令」成立）。
+2. **这两个位分居两处，且都不能走 `features_config.json` 的 optional 机制**：`shaderInt16`
+   在 `VkPhysicalDeviceFeatures`（基结构），`shaderFloat16` **只在**
+   `VkPhysicalDeviceVulkan12Features`（基结构里根本没有它）。给配置挂
+   `VK_KHR_shader_float16_int8` 去探 = **永远探不到**——该扩展 1.2 已进核心，被 instance 的
+   API 版本从 `enumerateDeviceExtensionProperties` 的表里过滤掉了（与 §1.12 第 6 条
+   「FSR 排列探测恒选最低配」是同一个机制）。⟹ 走 `DeviceContext::probeShader16Supported`
+   直接读 `Vulkan12Features`，置位也写回同一个结构；语义仍是 **optional**（缺位的机器
+   只是跑不了 FSR，不该连应用都起不来），消费侧 `fsrInputsReady` 探测后降级。
+3. **FSR 的 VK 后端用 classic descriptor sets，会把我们的 descriptor heap 绑定作废。**
+   VVL 原话："The command buffer is currently in 'Classic Descriptor' mode from previous call
+   to `vkCmdBindDescriptorSets` which invalidated the previous 'Descriptor Heap' mode"。
+   ⟹ **每次 FSR dispatch 之后必须重绑两个 heap**，否则同帧其后每个 mesh draw 报
+   「heap was not bound」（实测 10 条）。这是 `docs/DESCRIPTOR_HEAP_SPEC.md` §坑 9 的**新实例**，
+   已把绑定抽成 `Renderer::bindDescriptorHeaps` 供两处共用。
+4. **vendor 的 clear job 走 `vkCmdClearColorImage`**（`ffx_vk.cpp:4239`，前面还自己发一条到
+   `COPY_DEST` 的 barrier）⟹ 我们替它建的共享图**必须申请 `TRANSFER_DST`**，
+   少这个位 = clear + 两条 barrier 双双违 VUID（实测 19 条）。
+5. **共享图的格式必须照 vendor 给的原样建、并原样报回去。**
+   `reconstructedPrevNearestDepth` 的真实格式是 **`R32_UINT`**（不是直觉上的 R32_FLOAT）；
+   按 float 报 ⟹ vendor 按报的格式建 view ⟹ 「`OpTypeImage` 的 Format 与 `VkImageView` 不符
+   = 该变量所有读写值未定义」+ 「storage image 要 UINT 组件类型」（实测 24 条）。
+   ⟹ 四张私有图各自存一份 `FfxSurfaceFormat`，wrap 时取它，**不写字面量**。
+6. **FSR 侧显存 = 44 MiB**（`ffxFsr3UpscalerContextGetGpuMemoryUsage`，1280×720 档）。
+   14.8 的「外部分配器」科目读数来源确认存在且可用。
+
+**两条新 vendor 补丁**（`third_party/fsr/PATCHES.md`）：P12 = `findMemoryTypeIndex` 不跳
+`DEVICE_COHERENT` 内存类型（RADV 上选中它 = 未启用 `deviceCoherentMemory` 就分配，
+`VUID-vkAllocateMemory-deviceCoherentMemory-02790`）；P13 = clear 的 `layerCount` 直接取
+`resourceDescription.depth`，而 **TEXTURE2D 的 `depth` 是未填的 0**。两条原本都是
+`just fsr-smoke` 的**白名单**条目；渲染器侧接 FSR 后它们按帧刷屏，故**就地修掉而不是继续
+白名单**（白名单在冒烟里是"知道上游有问题"，在渲染器里等于把 VVL 输出彻底淹没）。
+
+**验收结果**：① 门关逐位不变 —— ✅ 截图 SHA256 = `fdece9d0…` = 跨会话红线基线；
+② 门开**也**逐位不变（输出无消费者）—— ✅ 同 SHA；③ VVL 零错 —— ✅ 门开 `just smoke
+--fsr-upscaler` PASS errors=0 warnings=0；④ **活性判据两条变异均验红** ——
+M1 把 depth 申报成 GENERAL（真实 SRO）⟹ VVL 逐帧响在 depth 图上（证明 FSR 真的按我们申报的
+state 绑并读我们的深度图，而不是"跑通了但没碰图"）；M2 转了布局但漏写追踪表 ⟹
+**我们自己的护栏** error 出声（证明 14.4b 那道断言是活的）。还原后复绿。
+
+**方法论**：本批又是「推演被实测推翻」的一次（第 4 次，见 §1.12 末）。§1.12 的三条结论里
+「不需要给 VkDevice 加 `VK_EXT_subgroup_size_control」仍然成立，但「fp16 无关」被推翻。
+新登记的通用教训：**vendor 的 capability 声明面 ≠ 它的排列选择面**——查"要不要某特性"要
+看**编出来的 SPIR-V 声明了什么**，不能只看排列表怎么选的。
+
 ## 2. 批次拆分与验收判据
 
 > 顺序按「失败最便宜」排，不是按依赖最紧排。**14.1 与 14.3 可并行**（14.3 不碰 FSR）。
@@ -538,7 +595,7 @@ FSR 的两个挂点 = **`:445/446` 之间**（一次性构造，早于显存统�
 | ~~**14.3**~~ ✅ **已收口 2026-10-08** | **内部分辨率与窗口拉伸解耦**：现在 render extent ≡ swapchain extent ≡ 窗口像素（`Resources` 深度图 extent = swapchain extent；全仓**无 `renderScale` 概念**，只有 `vkswapchain.cppm` 的 `windowScale` 诊断）。加一个独立的 render extent，与 swapchain extent、与债-37 的 HPD 分数缩放三者正交 | 用户方向第四条。**它是 FSR 的硬前置，但本身独立可验收、且净收益**（DRS / 性能实验都缺它）；与 14.1 并行 | ① `renderScale ∈ {1.0, 0.75, 0.5}` 下画面正确、resize 不崩、imgui 与**点选**不受影响（债-37 三条连带不许回退）—— ✅ 三档实机出图（0.5 档读图：内容/取景/比例正确，仅整体变软 = 双线性放大预期）；imgui 恒在后缓冲像素、点选两级换算收口，债-37 三条连带无回退（renderScale=1 时比值恰为 1）；**live resize 未手工验证**，改为把取整/钳制写成单测断言覆盖；② `renderScale = 1.0` 时**逐位等于**今天的基线（红线）—— ✅ 1280×720 与 1600×900 两档与开工前基线逐位相同（同会话增量构建），且**结构上**成立：图形状与 renderScale 无关（§1.9）；③ 截图/判据口径显式记录 render extent（否则 imgqa 所有像素类判据静默换含义）—— ✅ 启动日志 + 截图成功日志 + RPC `/state` 新增 `render` 段 + `just shot` 网格行；`--render-scale` **核对引擎实际生效值**（变异验红：请求 0.1 → 钳到 0.25 → FAIL）；④ Wayland 175% 缩放下实测一次 —— ⚠ **未做**（本机无 Wayland 会话）；默认档行为逐位同前，风险仅在显式改档。**收口记录** → §1.9 |
 | **14.4** 🕳 **进行中**（纯函数层 + pass 侧已落地） | **逐像素速度场**（债-71 / 债-35，**本 phase 最大的一块**）：compute pass 由两帧相机矩阵 + `depthTex` 解析算出每像素速度（本项目唯一运动是全局刚体 ⟹ 便宜），输出 FSR 口径的 `motionVectors`；同时把 TAA 的重投影从"全局矩阵"改成"读这张场" | 用户方向第三条。**它是天花板唯一的出口**，且能独立验收（不必等 FSR 接完）——臂 14 = 门改吃真实逐像素速度 ⟹ 直接问跷跷板是否松绑 | ① 速度场与**独立解析参考**逐像素对拍（含 pitch；用 `temporal_yaw_remap` 那套带 pitch 的金标准，2.3e-13px）；② **阳性锚点** = 静止机位必须恒 0；③ **反向用例** = 符号取反必须让 §1.22 的 R 变差；④ 用它重跑 `temporal-tail --motion step` 与 `temporal-motion`，报 R 是否 < 1（**这是"运动中 TAA 有害"能不能翻案的判决**） |
 | **14.4b** ✅ **A 档已落地**（B 档待 14.5 后重裁，见 §1.11） | **图外资源挂号 + 布局对账护栏**（FSR 前置，见 §1.7）。做两档、明确不做第三档：**A 护栏**（便宜）= 图外 pass 进出点比对 `attachmentLayouts[slot]` 与预期值，不符即 error 出声，把"进出同值"从**约定**变**断言**；**B 挂号**（中等）= `RgGraphDesc` 增加 external-use 声明（attachment × usage × 插在哪个 pass 之后/之前），GraphCompiler 据此把 barrier 并入计划，`IzbShadow` / `EvssmShadow` / FSR 三处不再手写 **image** barrier；**C 不做** = buffer 侧依赖自动推导（图只跟 image attachment，加进去 = 半个 memory manager） | **排在 14.5 之前**：FSR 是第三个图外 compute，先立护栏再扩面，否则 14.5 的 VVL 判据要替"约定"背锅，而债-32 已经证明这类缺口 VVL 不报 | ① **阳性锚点** = 故意让某图外 pass 不还原布局 ⟹ 护栏必须 error（**变异验过非空转**）；② **反向** = 现状全绿（护栏零误报，否则等于没有）；③ 红线 = 画面逐位不变（护栏只读不写命令）；④ B 档做完 = `izb_shadow_impl.cppm:256,280` 两处 `depthLayoutBarrier` 删除且画面逐位不变 |
-| **14.5** 🕳 **前置已清**（深度格式探针已落地，集成面见 §1.12） | **FSR 接线**：落位 = **图外 compute 编舞**（`RgPassKind` 只有 `drawMesh/blit/drawLight`，**无 compute kind**；先例 = IzbShadow / EvssmShadow，见 `evssm_shadow.cppm:20`）。HDR 域位置 = **tonemap 之前**（scene_hdr@render res → FSR → hdr@display res → tonemap → swapchain），`ENABLE_HIGH_DYNAMIC_RANGE` 开 | 唯一架构决策，先写死再动手，免得中途返工 | ① **FSR 关 = 逐位不变**（与 TAA 同款红线，用基线配置）；② VVL 零报错（含跨 submission 依赖与布局链——债-32 那条"图外编舞"的坑）；⚠ **布局漂移 VVL 抓不到**（布局本身合法，症状隔一整帧），这一项靠 **14.4b 的护栏**，不是靠 VVL；③ 显存账新增"外部分配器"科目且**闭合断言重新有意义**；④ 本批**只点亮、不调参**，`NATIVEAA` + `renderScale=1.0` 起步 |
+| **14.5** 🕳 **第一批已落地**（FSR 每帧跑通 VVL 零错；输出尚无消费者，见 §1.13） | **FSR 接线**：落位 = **图外 compute 编舞**（`RgPassKind` 只有 `drawMesh/blit/drawLight`，**无 compute kind**；先例 = IzbShadow / EvssmShadow，见 `evssm_shadow.cppm:20`）。HDR 域位置 = **tonemap 之前**（scene_hdr@render res → FSR → hdr@display res → tonemap → swapchain），`ENABLE_HIGH_DYNAMIC_RANGE` 开 | 唯一架构决策，先写死再动手，免得中途返工 | ① **FSR 关 = 逐位不变**（与 TAA 同款红线，用基线配置）；② VVL 零报错（含跨 submission 依赖与布局链——债-32 那条"图外编舞"的坑）；⚠ **布局漂移 VVL 抓不到**（布局本身合法，症状隔一整帧），这一项靠 **14.4b 的护栏**，不是靠 VVL；③ 显存账新增"外部分配器"科目且**闭合断言重新有意义**；④ 本批**只点亮、不调参**，`NATIVEAA` + `renderScale=1.0` 起步 |
 | **14.6** | **判据迁移**：直接复用（`temporal-tail --motion step` 含闭式锚臂 E、`temporal-motion` 的 M0/M1/M2/M3x 消融族、理想 N 相位平均参考、往返地板、`aa-coverage`、`temporal` 的 ρ 对闭式、alignment/ablation 两条**元判据**）／换口径（ρ 六机位表：**算子留、阈值全重立**，闭式 ρ\*=0.0827 是 EMA 的闭式，FSR 不是 EMA）／随 TAA 作废（`clip_mode` 臂族、gate 断点锚点、`diag_reject` alpha 解码） | 用户方向最后一条"跑一堆 imgqa"的前置。**不先分类就会拿 TAA 的阈值判 FSR** | ① 三张清单落到 `imgqa` 的判据注册表（**不在文档里抄清单**，抄名单反模式）；② 每条"复用"项跑一次并记录新基线；③ 每条"作废"项**先确认不是护栏**（债-68 三条件） |
 | **14.7** | **旋钮调参**：§1.6 那 5 个 configure key × 三轴判据（静止闪烁 / 平移阶跃鬼影 / 运动中 R） | 有判据才有旋钮；顺序必须在 14.6 之后 | 每个 key 给一张扫描表 + **一次消融证明它真的在动**（阳性锚点），并写清代价轴 |
 | **14.8** | **VMA 裁决**：默认**不改**，只补账本科目。改那 4 处 `vkAllocateMemory` 的触发条件（任一）：① 外部分配器条数让 `maxMemoryAllocationCount` 逼近上限；② 预算/OOM 需要统一降级；③ 显存账科目精度不够用 | 见 §1.5。**账本口径问题用账本解决，不用 patch 解决** | 若不动：显存日志里 FSR 的 VRAM 有独立一行且 `logMemoryStats` 的闭合断言重新成立（口径写明"含外部分配器 X MiB"） |
@@ -609,6 +666,13 @@ FSR 的两个挂点 = **`:445/446` 之间**（一次性构造，早于显存统�
 5. **显存账闭合断言失效**（§1.5）→ 不是崩溃，是**账不再证明东西**；14.5 判据③专门盯它。
 6. 我们其实更需要的是**内容**（水体 / 粒子 / per-entity 动画）而不是又一个时域滤波器——若 14.4
    做完发现场景里仍只有全局刚体，速度场的价值会被低估。缓解：14.4 判据④用现有激励也要出数。
+
+7. **本 device 现在启用了 `shaderFloat16` + `shaderInt16`**（批 14.5 第一批，FSR 的 SPIR-V
+   声明了这两个 capability）。已按 **optional** 处理（探测不到就不置位、FSR 侧降级不构造），
+   所以理论上不支持的机器只是跑不了 FSR；但**这是设备创建路径的改动，只在 STRIX_HALO 上验过**。
+   另两台机器若 device 创建失败或 FSR 静默降级，先看启动日志的
+   `Device optional features: … shader16=` 行（`docs/phase14_plan.md` §1.13 第 2 条 = 为什么
+   它不走 `features_config.json` 的 optional 机制）。
 
 ---
 

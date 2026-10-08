@@ -239,6 +239,8 @@ set(RGL_GFX_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/izb_shadow_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/evssm_shadow.cppm"      # 批 11.6d-1：EVSSM 矩图数据层（图外 compute，门控构造）
     "${CMAKE_CURRENT_SOURCE_DIR}/evssm_shadow_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/fsr_upscaler.cppm"      # 批 14.5：FSR 3.1.4 upscaler 封装（图外 compute，门控构造）
+    "${CMAKE_CURRENT_SOURCE_DIR}/fsr_upscaler_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/render_target_cache.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/sampler_library.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/mip_gen.cppm"
@@ -443,7 +445,12 @@ target_sources(rlgfx PUBLIC
 )
 target_link_libraries(rlgfx
     PUBLIC rlbase Vulkan::Vulkan
-    PRIVATE GPUOpen::VulkanMemoryAllocator SDL3::SDL3)
+    PRIVATE GPUOpen::VulkanMemoryAllocator SDL3::SDL3
+            # 批 14.5：FSR 3.1.4 upscaler VK 后端。PRIVATE 足够——fsr_upscaler 走 pimpl，
+            # vendor 头只出现在它的 impl partition 里，不外泄 BMI；PRIVATE 也就不把
+            # vendor include 面灌进 rlscene/rlframe。（其 PRIVATE 宏 FFX_FSR3UPSCALER
+            # 只影响 .cpp 侧排列表实例化，头文件无条件编译守卫。）
+            ffx_fsr3upscaler_vk)
 add_dependencies(rlgfx reflection_check)   # features_generated 在本库
 
 # ── rlscene：场景数据 / 渲染图 / 资产 ─────────────────────────────────────

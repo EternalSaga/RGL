@@ -100,6 +100,17 @@ static void readUiFont(sol::table& root, RuntimeConfig& cfg) {
 		cfg.uiFontSize = static_cast<float>(*size);
 }
 
+/** 读一个可选布尔键（缺键 = 保持默认值）。类型错误 = sol 直接报错（与 headless 等布尔键
+ *  同处理，不静默回落）。抽成函数而不是就地 `if`：`loadRuntimeConfig` 的认知复杂度已贴红线。
+ *  @param root runtime.lua 顶层表
+ *  @param key  键名
+ *  @param dst  目标字段（仅在键存在时被写） */
+void readBoolKey(const sol::table& root, const char* key, bool& dst) {
+	sol::optional<bool> value = root[key];
+	if (value)
+		dst = *value;
+}
+
 /** loadRuntimeConfig 定义（接口注释见 runtime_config.cppm）：headless/headless_size/win_size/show_after/present_mode/ui_font 逐一可选解析 + parseLlm。 */
 [[nodiscard]] std::expected<RuntimeConfig, Error> loadRuntimeConfig(std::string_view path) {
 	auto* logger = RLLogger::getInstance();
@@ -151,11 +162,11 @@ static void readUiFont(sol::table& root, RuntimeConfig& cfg) {
 		readSize("win_size", cfg.winWidth, cfg.winHeight);
 
 		applyRenderScale(root, cfg.renderScale, logger);  // 批 14.3：内部渲染分辨率倍率
-		// velocity_field（批 14.4）：逐像素速度场总开关（缺键 = false = 图里没有 velocity
-		// pass）。类型错误 = sol 直接报错（与 headless 等布尔键同处理，不静默回落）。
-		sol::optional<bool> velocityField = root["velocity_field"];
-		if (velocityField)
-			cfg.velocityField = *velocityField;
+		// velocity_field（批 14.4）= 逐像素速度场总开关（缺键 = false = 图里没有 velocity
+		// pass）；fsr_upscaler（批 14.5）= FSR 总开关（缺键 = false = 零构造）。两者的
+		// 「依赖 velocity」判据都不在这里——运行期取实际图形态，见 RuntimeConfig 注释。
+		readBoolKey(root, "velocity_field", cfg.velocityField);
+		readBoolKey(root, "fsr_upscaler", cfg.fsrUpscaler);
 		sol::optional<int> showAfter = root["show_after"];
 		if (showAfter)
 			cfg.showAfter = *showAfter;

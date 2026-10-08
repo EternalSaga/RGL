@@ -429,6 +429,16 @@ uint32_t findMemoryTypeIndex(VkPhysicalDevice physicalDevice, VkMemoryRequiremen
             if (requestedProperties == VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT && (memProperties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT))
                 continue;
 
+            // RGL-PATCH(P12): 跳过带 DEVICE_COHERENT 位的内存类型。本后端从不启用
+            // deviceCoherentMemory 特性，而 RADV 把 type 7 同时标成 DEVICE_LOCAL|DEVICE_COHERENT
+            // ⟹ 上面那条"只要 device-local"的匹配会选中它，vkAllocateMemory 直接违
+            // VUID-vkAllocateMemory-deviceCoherentMemory-02790（just fsr-smoke 的白名单条目，
+            // 在渲染器里每次 dispatch 刷几十条，把 VVL 输出彻底淹没）。VMA 的做法相同
+            // （未启用该特性时不选 coherent 类型）——跳过是安全的：同一张图总有若干
+            // 非 coherent 的 device-local 类型可选。
+            if (memProperties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_COHERENT_BIT_AMD)
+                continue;
+
             bestCandidate = i;
             outProperties = memProperties.memoryTypes[i].propertyFlags;
 
@@ -4223,7 +4233,12 @@ static FfxErrorCode executeGpuJobClearFloat(BackendContext_VK* backendContext, F
         if (ffxResource.resourceDescription.type == FFX_RESOURCE_TYPE_TEXTURE3D)
             range.layerCount = 1;
         else
-            range.layerCount = ffxResource.resourceDescription.depth;  // in that case depth is the number of layers
+            // RGL-PATCH(P13): depth==0 时补 1。TEXTURE2D 的描述里 depth 是**未填的 0**
+            // （上游自己就在用它建 clear range），而 layerCount==0 违
+            // VUID-VkImageSubresourceRange-layerCount-01721 ⟹ 整条 clear 被 VVL 判无效
+            // （实测 9 条/次运行）。`just fsr-smoke` 里这条原本是白名单条目；渲染器侧
+            // 接 FSR（批 14.5）后它按帧刷屏，故就地修掉而不是继续白名单。
+            range.layerCount = ffxResource.resourceDescription.depth ? ffxResource.resourceDescription.depth : 1;  // in that case depth is the number of layers
         
         backendContext->vkFunctionTable.vkCmdClearColorImage(vkCommandBuffer, vkResource, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clearColorValue, 1, &range);
     }

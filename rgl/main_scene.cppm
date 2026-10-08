@@ -384,6 +384,8 @@ void registerSceneEntities(entt::registry& registry, const UploadedAssets& asset
  * @param taaDecorated 批 12.6：TAA 已装饰落图（启动期 decorateTaaPass 结果）。true =
  *        追加 taa_out/taa_hist RT + taa 条目，且 tonemap 色槽烘 taa_out；false = 逐位不变
  * @param velocityDecorated 批 14.4：速度场已装饰落图。true = 追加 velocity RT + velocity
+  * @param fsrEnabled      批 14.5：FSR upscaler 门（装配层已把
+  *                        「velocity 真的进了图」并进本参数，见 main_impl）
  *        条目（**不改任何既有 binding**，与 taa 换 tonemap 色槽不同——速度场暂无下游）；
  *        false = 逐位不变
  */
@@ -433,7 +435,7 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 	RenderTargetCache& rtCache, AssetTable& assets,
 							  ShaderRegistry& pipelines, CompiledRenderGraph&& graph,
 							  entt::registry& registry, const SceneConfig& scene, bool deferredMode,
-	bool taaDecorated, bool velocityDecorated) {
+	bool taaDecorated, bool velocityDecorated, bool fsrEnabled) {
 	// 批 13.6：AO 施加点标志 = **实际图形态**（`decorateTaaPass` 结果），**不是**配置键
 	// `taa.enabled`。true ⟹ AO 已由 taa pass 施加（时域滤波之前），tonemap 跳过；false ⟹ taa
 	// pass 不在图里（含 offscreen 变体：配置开了 TAA 但装饰失败），AO 留在 tonemap 施加。
@@ -557,7 +559,10 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 	auto* dgcStaticRaw = dgcStatic.get();
 	return RenderBackEnd{std::move(cull), std::move(dgc), std::move(dgcStatic),
 		Renderer(device, swapchain, resources, sceneData, env, rtCache, pipelines,
-			std::move(graph), cullRaw, dgcRaw, dgcStaticRaw)};
+			std::move(graph), cullRaw, dgcRaw, dgcStaticRaw,
+			// 批 14.5：FSR 生效判据 = 配置键 **且** velocity 真的进了图（FSR 的 motionVectors
+			// 输入就是那张图；装饰失败时本键自动失效。取实际图形态的先例 = AO 施加点）。
+			fsrEnabled && velocityDecorated)};
 }
 
 /**

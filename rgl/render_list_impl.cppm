@@ -241,6 +241,21 @@ constexpr uint32_t kNoMaterial = 0xFFFFFFFFu;
 /** 实现流水（语义/契约见接口声明）：cull 分桶（opaque/transparent，Pending 暂存）
  * → 可见统计 → 段装配（opaque → skybox 单 draw → transparent 稳定排序）
  * → scene data 填充 → 写 ctx。 */
+/** 批 14.5：填 FSR 的相机输入（执行器侧唯一消费者 = `Renderer::fsrTonemapPassPre`）。
+ *
+ * near/far 取 `ViewProjection`，**不是** `Camera` 原值：`projectionSystem` 按场景包围球做
+ * 自适应 near/far 并把实际生效值写回 ViewProjection（ecs_impl.cppm:349-363），取配置原值
+ * 会让 FSR 按错的平面线性化深度。fov 由 proj 矩阵反推（2·atan(1/proj[1][1])，
+ * glm::perspective 恒等式）——读的就是本帧真正用了的那个投影，不存在第二套真相源。
+ *
+ * @param out      本帧绘制列表（写 fsrNear / fsrFar / fsrFovVertical）
+ * @param viewProj 本帧实际投影上下文 */
+void fillFsrCameraInput(FrameDrawList& out, const ViewProjection& viewProj) {
+	out.fsrNear = viewProj.nearPlane;
+	out.fsrFar = viewProj.farPlane;
+	out.fsrFovVertical = 2.0f * std::atan(1.0f / viewProj.proj[1][1]);
+}
+
 /**
  * 批 12.6 TAA 的 scene data 载荷（尾区 @722080 / @722144 / @722208，生产端在此、
  * 消费端 = taa.frag.slang；字节布局与「两侧口径」见 scene_data.cppm kSceneDataTaa* 注释）。
@@ -254,6 +269,7 @@ constexpr uint32_t kNoMaterial = 0xFFFFFFFFu;
  * `skyInvViewProj`（上一行填）与本帧的 prevViewProj 都是**抖动后**口径，只是分别属于
  * 「本帧」与「上一帧」——重建世界坐标的半边是它，投回上一帧的半边是 prevViewProj。
  */
+
 void fillTaaData(FrameDrawList& out, const ViewProjection& viewProj, const SceneEnv& env,
 	const TaaState& taa) {
 	// 内容位移口径的唯一出处 = `taa_jitter.cppm::contentShiftPx`（逐轴符号推导 + 实测背书
@@ -494,6 +510,7 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	// Phase 8 批次 ④a：漫反射辐照度 SH9（env 加载期算好存 Resources，此处每帧拷入）
 	fresh.sceneData.irradianceSH = envService.getIrradianceSH();
 	fresh.sceneData.skyInvViewProj = glm::inverse(viewProj.proj * viewProj.view);
+	fillFsrCameraInput(fresh, viewProj);  // 批 14.5：FSR 相机输入
 	// 批 12.6 TAA 载荷（三矩阵/参数，细节见 fillTaaData）
 	fillTaaData(fresh, viewProj, env, taa);
 	fillShadowData(fresh, shadowNear, shadowFar, shadowVolumes, diagnostics().shadowPass);

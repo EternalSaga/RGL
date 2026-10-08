@@ -230,8 +230,18 @@ void Renderer::recordFixedDataPath(vk::raii::CommandBuffer& cmd, uint32_t frameS
 		}
 	}
 
-	// ⑦ 把 descriptor heap 绑定到命令缓冲（必须在 beginRendering 之前）：
-	// 此后所有描述符引用走 heap，与传统 descriptor set 状态互斥（坑 9）。
+	// ⑦ 把两个 descriptor heap 绑定到命令缓冲（必须在 beginRendering 之前）
+	bindDescriptorHeaps(cmd);
+	profilerAddCommands(fixedCmds + 2);  // 批 9.5：+2 = bindResourceHeapEXT + bindSamplerHeapEXT
+}
+
+// 坑 9（docs/DESCRIPTOR_HEAP_SPEC.md §坑 9）的正主。抽成函数是因为它现在有**第二个**
+// 调用者：FSR 的 VK 后端走 `vkCmdBindDescriptorSets`，会把 CB 切进 classic 模式并**作废**
+// 这里的绑定（VVL 原话："The command buffer is currently in 'Classic Descriptor' mode
+// from previous call to vkCmdBindDescriptorSets which invalidated the previous
+// 'Descriptor Heap' mode"）⟹ 每帧 FSR dispatch 之后必须重绑，否则同帧其后的
+// vkCmdDrawMeshTasksEXT 全部报「heap was not bound」（实测 10 条）。
+void Renderer::bindDescriptorHeaps(vk::raii::CommandBuffer& cmd) const {
 	// heapRange.size 用 getHeapSize()（已扣除内部对齐偏移），而非
 	// descriptorSize * capacity——原因见 VmaBuffer.cppm。
 	// reservedRange = [0, reservedSlots * descriptorSize)：实现保留区域
@@ -252,7 +262,6 @@ void Renderer::recordFixedDataPath(vk::raii::CommandBuffer& cmd, uint32_t frameS
 		samplerHeapRange,
 		0,
 		resources->getSamplerReservedRangeSize()));
-	profilerAddCommands(fixedCmds + 2);  // 批 9.5：+2 = bindResourceHeapEXT + bindSamplerHeapEXT
 }
 
 // 图外 compute 编舞（IZB / EVSSM 帧首与光照 pass 前段）已拆至 vkrenderer_offgraph.cppm（批 14.3 文件长度红线；职责边界 = 图内 pass 录制 vs 图外编舞）
@@ -443,6 +452,7 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 	// 批 9.5：两个图外帧首段各自成 zone（drawFrame.izbPre / drawFrame.evssmPre）
 	izbPreFrame();
 	evssmPreFrame();
+	fsrPreFrame();  // 批 14.5 FSR（同在此之后、统计之前：懒构造的要进 first_frame 账）
 	logFirstFrameMemory();
 
 	// ⑤ pass 循环（执行序 = 图线性序，Phase 6）：attachment barrier（布局链推导物化）
@@ -484,6 +494,8 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 		// 门关 = izbShadow 恒空，本调用零命令，判据全在方法体内）
 		izbLightPassPre(cmd, pass, list);
 		evssmLightPassPre(cmd, pass);
+		fsrTonemapPassPre(cmd, pass, list);  // 批 14.5 FSR（图外 compute，录在 tonemap
+		                                     // 之前；门关 = fsr 恒空，本调用零命令）
 		// blit pass（批次 4，offscreen 图变体的 composite）：transferRead 源 → transferWrite
 		// 目标整幅拷贝（1:1 同尺寸同格式，LINEAR = 精确拷贝）；两端布局转换已由 pass.barriers
 		// 完成（scene_rt CAO→TransferSrc、swapchain 帧首 Undefined→TransferDst），无绘制、

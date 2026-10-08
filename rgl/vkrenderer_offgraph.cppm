@@ -1,5 +1,6 @@
 module;
 #include <vulkan/vulkan.h>  // VK_* 句柄类型；rlvk 不含
+#include <fmt/format.h>     // fsrInputsReady 的降级告警格式化  // VK_* 句柄类型；rlvk 不含
 module vk_renderer:offgraph;
 
 /**
@@ -33,6 +34,8 @@ import scene_context;    // shadowDrawSource（段名单一来源，批 11.3-1d�
 import render_graph;     // RgAttachmentKind（重放后布局回正）
 import izb_shadow;
 import evssm_shadow;
+import fsr_upscaler;
+import pass_vocabulary;  // kTonemapState（批 14.5 FSR 认 tonemap pass）
 
 namespace RGL {
 
@@ -133,6 +136,164 @@ void Renderer::evssmPreFrame() {
 		vkDevice, *resources, kShadowMapSize,
 		shadowAtlasColumns(kActiveShadowCascades), kEvssmMipLevels, 5.5f,
 		*shadowSlot, *momentsSlot);
+}
+
+
+// ── 批 14.5 FSR ────────────────────────────────────────────────────────────────
+// 按名字现查图附件 slot（**不缓存下标**，同 TAA 锚点「现搜」的纪律：装饰器插入顺序变了
+// 不会让这里认错附件）。FSR 的三个输入全部来自编译图本体 = 单一真相源。
+int32_t Renderer::findAttachmentSlot(std::string_view name) const {
+	const auto it = std::ranges::find_if(renderGraph.attachments,
+		[name](const auto& a) { return a.name == name; });
+	return it == renderGraph.attachments.end() ? -1
+	                                           : static_cast<int32_t>(it - renderGraph.attachments.begin());
+}
+
+/** warn-once 日志（EvssmShadow 的 evssmWarnOnce 同族；FSR 两条降级告警共用）。
+ *
+ * 消息由调用方**先格式化好**再传进来：`if (flag)` 与 `if (logger)` 两个分支收在本函数里，
+ * `fsrInputsReady` 才不会因为打日志而超认知复杂度红线。
+ * @param flag 已告警标志（首次调用后置位）
+ * @param msg  告警文本 */
+void fsrWarnOnce(bool& flag, const std::string& msg) {
+	if (flag)
+		return;
+	flag = true;
+	if (auto* logger = RLLogger::getInstance())
+		logger->warn("{}", msg);
+}
+
+// FSR 能不能真的接起来：设备能力 + 三个输入附件是否都在图里。失败时**自己把门关掉**
+// （调用方只看返回值），从而降级路径与「门关」共用同一条零命令路径。
+bool Renderer::fsrInputsReady() {
+	// 能力前置：FSR 的 SPIR-V 声明 Float16 + Int16 capability（见 vkdevice.cppm 同批
+	// 注释）。缺位时降级不构造，而不是让 vendor 在建 pipeline 时炸——同 samplerAnisotropy
+	// → 不开 AF 的降级模式。
+	if (!vkDevice.shader16Supported()) {
+		fsrWarnOnce(fsrInputMissingWarned,
+			"fsr: 设备缺 shaderFloat16 / shaderInt16（FSR 的 SPIR-V 声明了这两个 capability）"
+			"⟹ FSR 关闭。设备扩展清单不必加 VK_EXT_subgroup_size_control——Vulkan 上 "
+			"FORCE_WAVE64 恒不入选，见 docs/phase14_plan.md §1.12");
+		return false;
+	}
+	// 输入齐备性判据 = **实际图形态**（附件在不在图里），不看配置键。色输入优先 taa_out
+	// （TAA 在图里时 tonemap 采的是它，FSR 必须接同一张，否则等于把 TAA 旁路掉）。
+	if (fsrColorSlot < 0) {
+		fsrColorSlot = findAttachmentSlot(kTaaOutName);
+		if (fsrColorSlot < 0)
+			fsrColorSlot = findAttachmentSlot(kSceneHdrName);
+		fsrVelocitySlot = findAttachmentSlot(kVelocityName);
+		fsrDepthSlot = findAttachmentSlot("depth");
+	}
+	if (fsrColorSlot < 0 || fsrVelocitySlot < 0 || fsrDepthSlot < 0) {
+		fsrWarnOnce(fsrInputMissingWarned, fmt::format(
+			"fsr: 输入附件不齐（color={} velocity={} depth={}）⟹ FSR 关闭。"
+			"色输入 = taa_out 或 scene_hdr，速度场 = velocity（需 velocity_field 开门）",
+			fsrColorSlot, fsrVelocitySlot, fsrDepthSlot));
+		return false;
+	}
+	return true;
+}
+
+// 门开才构造（门关 = 一次布尔判断，fsr 恒空 = 逐位红线，同 izb/evssm）。
+// 位臵在 evssmPreFrame **之后**、logFirstFrameMemory 之前：三个图外模块都是首帧懒构造，
+// 而 logStartupBaseline 在帧循环之前 ⟹ 晚于本函数打统计才不会漏账（批 9.5 同一病灶）。
+void Renderer::fsrPreFrame() {
+	auto z = zone("drawFrame.fsrPre");
+	if (!fsrEnabled)
+		return;
+	const auto extent = swapchain->getRenderExtent();
+	if (fsr && fsr->getRenderExtent() == extent)
+		return;  // 已构造且渲染网格未变
+	if (!fsrInputsReady()) {
+		fsrEnabled = false;
+		return;
+	}
+	// 重建前 waitIdle（同 RT 缓存 / izb 规则）。vendor 的内部共享图按 maxRenderSize 定
+	// 尺寸 ⟹ 渲染网格一变**必须**重建，且时域历史全丢（不是可选项，见 §1.12 第 4 条）。
+	vkDevice.getDevice().waitIdle();
+	fsr = std::make_unique<RGL::FsrUpscaler>(vkDevice, *resources, extent,
+		swapchain->getExtent());
+}
+
+// FSR sandwich：只认 tonemap pass（其余 pass 零命令）。录在它**之前**、且此刻 tonemap
+// 自己的 barrier 已在 :482 物化完 ⟹ 三个输入的真实布局就是追踪表里的值。
+void Renderer::fsrTonemapPassPre(vk::raii::CommandBuffer& cmd, const RgPassPlan& pass,
+	const FrameDrawList& list) {
+	if (!fsr || pass.kind != RgPassKind::drawLight || pass.state != kTonemapState)
+		return;
+	// 两个图属输入按**编译图里的附件名**去 RT 缓存取（drawFrame 的 ensureOffscreenAttachments
+	// 已在 pass 循环之前跑完 ⟹ 此处必已存在；取不到就是装配错，直接不录而不是崩）。
+	// 不在调用点传 VkImage 的理由：那要把本文件私有的 SlotResolver 暴露进接口分区。
+	const auto attImage = [this](int32_t slot) -> vk::Image {
+		if (slot < 0)
+			return {};
+		auto* att = rtCache->find(renderGraph.attachments[static_cast<size_t>(slot)].name);
+		return att ? static_cast<vk::Image>(att->image.image) : vk::Image{};
+	};
+	const vk::Image colorImage = attImage(fsrColorSlot);
+	const vk::Image velocityImage = attImage(fsrVelocitySlot);
+	if (!colorImage || !velocityImage)
+		return;
+
+	// ① 速度场在挂点处于 COLOR_ATTACHMENT_OPTIMAL —— 它是全图唯一不达 FSR 要求的输入
+	//   （velocity pass 刻意没有下游消费者，布局停在 CAO 且因 attachmentLayouts 跨帧持久
+	//   而下帧继续被当 oldLayout 用）。这里转成 SRO 并**同步写追踪表**：漏写 = 债-72
+	//   形态（下帧 velocity 写 barrier 拿错 oldLayout，症状隔一整帧、报错点无辜）。
+	//   自己转而不是让 vendor 转，是为了让「FSR 不改动图属资源布局」成为**结构性**事实，
+	//   不依赖 vendor 内部对 SRV 选哪个布局（那会随上游版本漂）。
+	const auto velSlot = static_cast<size_t>(fsrVelocitySlot);
+	if (attachmentLayouts[velSlot] != vk::ImageLayout::eShaderReadOnlyOptimal) {
+		vk::ImageMemoryBarrier2 b{};
+		b.srcStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput;
+		b.srcAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite;
+		b.dstStageMask = vk::PipelineStageFlagBits2::eComputeShader;
+		b.dstAccessMask = vk::AccessFlagBits2::eShaderRead;
+		b.oldLayout = attachmentLayouts[velSlot];
+		b.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		b.image = velocityImage;
+		b.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+		vk::DependencyInfo dep{};
+		dep.setImageMemoryBarriers(b);
+		cmd.pipelineBarrier2(dep);
+		attachmentLayouts[velSlot] = vk::ImageLayout::eShaderReadOnlyOptimal;
+	}
+
+	// ② 护栏（14.4b 同款，从约定变断言）：三个输入的**追踪表布局必须已是 SRO**，因为
+	//   FsrUpscaler 向 vendor 申报的 state 就是 SRO，而 vendor 只在
+	//   `currentState != newState` 时才发 barrier（ffx_vk.cpp:1237）——申报错 = 它跳过
+	//   转换 = shader 在错误布局下读写。VVL 抓得到布局漂移，但报点在下一次使用处，
+	//   归因成本高，所以在这里先喊出「进 FSR 之前就已经错」。
+	if (auto* lg = RLLogger::getInstance()) {
+		const std::pair<const char*, int32_t> want[] = {
+			{"色输入", fsrColorSlot}, {"深度", fsrDepthSlot}, {"速度场", fsrVelocitySlot}};
+		for (const auto& [what, slot] : want)
+			if (attachmentLayouts[static_cast<size_t>(slot)]
+				!= vk::ImageLayout::eShaderReadOnlyOptimal)
+				lg->error("fsr: {} 附件进 FSR 时布局 = {}，而 FsrUpscaler 向 vendor 申报的是 "
+				          "SRO（COMPUTE_READ）⟹ vendor 会跳过布局转换。要么补转换、要么改申报",
+				          what,
+				          static_cast<uint32_t>(
+					          attachmentLayouts[static_cast<size_t>(slot)]));
+	}
+
+	FsrFrameInput in{};
+	in.color = colorImage;
+	in.depth = *resources->getDepthImage();
+	in.velocity = velocityImage;
+	in.nearPlane = list.fsrNear;
+	in.farPlane = list.fsrFar;
+	in.fovVertical = list.fsrFovVertical;
+	in.reset = !fsrDispatchedOnce;  // 首帧 = 时域重置（vendor 靠它清内部历史）
+	fsrDispatchedOnce = true;
+	fsr->recordFrame(cmd, in);
+	// vendor 的 VK 后端逐 job 走 `vkCmdBindDescriptorSets` ⟹ CB 已被切进 classic 模式，
+	// heap 绑定作废（坑 9 的新实例，VVL 会点名下一次 mesh draw「heap was not bound」）。
+	// tonemap 之后还有 pass（imgui 叠加层等），所以这里**立刻**重绑，不能等下一帧的
+	// recordFixedDataPath。
+	bindDescriptorHeaps(cmd);
 }
 
 // 批 9.5 补：显存账的**懒构造盲区**修补。logStartupBaseline 在帧循环之前打统计，而

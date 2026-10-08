@@ -631,7 +631,7 @@ int main() {
 		//（装配时序契约见 assembleBackEnd 接口注释；graph 在此 move 进 Renderer）
 		auto backEnd = assembleBackEnd(vkDevice, vkSwapchain, vkResources, sceneData, samplers, env, rtCache, assetTable, shaderRegistry,
 			std::move(graphResult.graph), registry, configs.scene, deferredMode,
-			graphResult.taaDecorated, graphResult.velocityDecorated);
+			graphResult.taaDecorated, graphResult.velocityDecorated, configs.runtime.fsrUpscaler);
 
 		// Phase 9.2：GPU 时间戳会话（声明序在 backEnd/vkDevice 后 = 析构序其先，
 		// query pool 不越过 device 生命周期——GPU 资源所有权规则；profiler=0 /

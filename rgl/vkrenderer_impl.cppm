@@ -134,7 +134,8 @@ void validateRenderGraphForExecutor(const RGL::CompiledRenderGraph& graph) {
 Renderer::Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RGL::Resources& vkResources,
 		RGL::SceneDataService& sceneData, RGL::Environment& env, RGL::RenderTargetCache& rtCache,
 		RGL::ShaderRegistry& shaderRegistry, RGL::CompiledRenderGraph renderGraph,
-		RGL::GpuCull* vkGpuCull, RGL::DgcCommands* vkDgc, RGL::DgcStaticCommands* vkDgcStatic)
+		RGL::GpuCull* vkGpuCull, RGL::DgcCommands* vkDgc, RGL::DgcStaticCommands* vkDgcStatic,
+		bool fsrEnabled)
 	: vkDevice(vkDevice),
 	  swapchain(&vkSwapchain),
 	  resources(&vkResources),
@@ -162,6 +163,9 @@ Renderer::Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RG
 	  // 构造期即建（原 createSyncObjects/allocateCommandBuffers 移入其 ctor）
 	  session(vkDevice, vkSwapchain, vkResources, diagnostics().noPresent),
 	  graphicsCommandPool(vkDevice.getGraphicsCommandPool()) {
+		// 批 14.5：FSR 门。在体内赋值而非初始化列表——成员声明序在 graphicsCommandPool
+		// 之后，塞进列表要赌顺序（-Werror=reorder），体内赋值零风险且只此一次。
+		this->fsrEnabled = fsrEnabled;
 		validateRenderGraphForExecutor(this->renderGraph);
 		for (const auto& warning : this->renderGraph.warnings) {
 			auto logger = RLLogger::getInstance();

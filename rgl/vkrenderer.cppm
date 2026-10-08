@@ -29,6 +29,7 @@ import izb_shadow;  // 批 11.3-1d：FTIZB 硬阴影 IZB 数据层（门控构�
 import evssm_shadow;  // 批 11.6d-2：EVSSM 矩图数据层（同门控模式；门关 = 指针恒空）
 import vkerror;
 import diagnostics;  // no_present 诊断单例（configs/diagnostics.lua）
+import fsr_upscaler;   // 批 14.5：FSR 3.1.4 upscaler（图外 compute，门控构造）
 
 // 绘制契约（DrawCall/SceneFrameData/FrameDrawList）拆出为独立模块——本模块 export import
 // 保持 Renderer::drawFrame 接口类型对外可见（2026-09-02 拆分）
@@ -98,7 +99,8 @@ export class Renderer {
 	Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RGL::Resources& vkResources,
 		RGL::SceneDataService& sceneData, RGL::Environment& env, RGL::RenderTargetCache& rtCache,
 		RGL::ShaderRegistry& shaderRegistry, RGL::CompiledRenderGraph renderGraph,
-		RGL::GpuCull* gpuCull, RGL::DgcCommands* dgc, RGL::DgcStaticCommands* dgcStatic = nullptr);
+		RGL::GpuCull* gpuCull, RGL::DgcCommands* dgc, RGL::DgcStaticCommands* dgcStatic = nullptr,
+		bool fsrEnabled = false);
 	/** @return 交换链层引用（extent / recreate / 后缓冲）。 */
 	RGL::Swapchain& getSwapchainRef() const { return *swapchain; }
 	/** @return 资源层引用（深度图 / descriptor heap / RT 缓存）。 */
@@ -215,6 +217,15 @@ export class Renderer {
 	 */
 	void recordFixedDataPath(vk::raii::CommandBuffer& cmd, uint32_t frameSlot);
 	/**
+	 * 绑定 resource heap + sampler heap 到命令缓冲（坑 9：与 classic descriptor set 互斥）。
+	 *
+	 * 两个调用者：① `recordFixedDataPath`（每帧一次，pass 循环之前）；② FSR dispatch
+	 * 之后——vendor 的 VK 后端用 `vkCmdBindDescriptorSets`，那会把 CB 切回 classic 模式并
+	 * **作废** heap 绑定（docs/DESCRIPTOR_HEAP_SPEC.md §坑 9 的新实例），不重绑则同帧其后
+	 * 每个 mesh draw 都报「heap was not bound」。
+	 */
+	void bindDescriptorHeaps(vk::raii::CommandBuffer& cmd) const;
+	/**
 	 * offscreen attachment RT 幂等 ensure（批次 4）：逐 offscreen 附件 resolveRgFormat +
 	 * RenderTargetCache::ensure（extent 随 swapchain resize 重建，重建含 waitIdle，录制期调用安全）。
 	 * generation 变化（新图布局 Undefined）→ 重置 attachmentLayouts[slot]，防下帧首 barrier
@@ -290,6 +301,30 @@ export class Renderer {
 	/** 批 11.6d-2：pass 循环头部 EVSSM sandwich（与 izbLightPassPre 同位）——仅
 	 *  deferred light pass 录矩派生 + 7 级 mip 链（图外 compute，其余 pass 零命令）。 */
 	void evssmLightPassPre(vk::raii::CommandBuffer& cmd, const RgPassPlan& pass);
+	/** 批 14.5 FSR 帧首段（与 evssmPreFrame 同位、同在其**之后**，让首帧懒构造的显存
+	 *  被 `logFirstFrameMemory` 计入）。门开且图里两个输入附件齐备时构造 FsrUpscaler；
+	 *  渲染网格变化 ⟹ 重建（vendor 内部共享图按 maxRenderSize 定尺寸，**时域历史全丢**）。
+	 *  门关 = 一次布尔判断零分配（fsr 恒空 = 逐位红线）。 */
+	void fsrPreFrame();
+	/** 批 14.5：FSR 能否接起来 = 设备能力（shaderFloat16 + shaderInt16）**且**三个输入
+	 *  附件都在编译图里。失败时 warn-once 并让 `fsrPreFrame` 把门关掉（降级路径与门关
+	 *  共用同一条零命令路径）。抽成函数是 `fsrPreFrame` 的认知复杂度红线。 */
+	bool fsrInputsReady();
+	/**
+	 * 批 14.5：pass 循环头部 FSR sandwich（与 izbLightPassPre 同位）——仅 tonemap pass
+	 *  之前录一段图外 compute（vendor 内部一次录完全部 pass）。其余 pass 零命令。
+	 *
+	 * 本批 FSR 输出**尚无消费者**（接 tonemap 色输入是下一批），所以门开也画面逐位不变；
+	 * 活性判据 = 故意申报错的 depth state，VVL 必须响（见 docs/phase14_plan.md 14.5 判据）。
+	 *
+	 * @param colorImage    tonemap 当前采的那张色图（taa_out / scene_hdr），SRO
+	 * @param velocityImage 速度场 RT（挂点处通常还在 CAO，本函数负责转 SRO 并同步追踪表）
+	 */
+	void fsrTonemapPassPre(vk::raii::CommandBuffer& cmd, const RgPassPlan& pass,
+		const FrameDrawList& list);
+	/** 批 14.5：按名字找图附件 slot（FSR 的三个输入都从编译图现查，**不缓存下标**，
+	 *  同 TAA 锚点「现搜不缓存」的纪律）。 @return 未找到 = -1 */
+	int32_t findAttachmentSlot(std::string_view name) const;
 	/** 批 9.5 补：首帧补打一次显存统计（`vma[first_frame]`）。动机 = IzbShadow /
 	 *  EvssmShadow 均首帧懒构造，而 `logStartupBaseline` 在帧循环之前 ⟹ `vma[startup]`
 	 *  不含这两个模块的资源（实测开/关 shadow_evssm 的 startup 统计逐字节相同）。
@@ -362,6 +397,16 @@ export class Renderer {
 	// 批 11.6d-2：EVSSM 矩图数据层（门 = diagnostics().shadowEvssm 且 deferred 且
 	// shadow_pass；**门关 = 恒 nullptr，零分配零命令逐位不变**，同 izbShadow）。
 	std::unique_ptr<RGL::EvssmShadow> evssmShadow;
+	// 批 14.5：FSR 3.1.4 upscaler（门 = runtime.fsr_upscaler 且 velocity 真的进了图；
+	// **门关 = 恒 nullptr，零构造零命令逐位不变**，同 izbShadow / evssmShadow）。
+	std::unique_ptr<RGL::FsrUpscaler> fsr;
+	bool fsrEnabled = false;   ///< 装配层传入的门（已含 velocity 齐备判据）
+	bool fsrInputMissingWarned = false;  ///< 输入附件缺位 warn-once
+	int32_t fsrColorSlot = -1;    ///< FSR 色输入附件 slot（taa_out，缺则 scene_hdr）
+	int32_t fsrVelocitySlot = -1; ///< 速度场附件 slot（布局护栏 + 转 SRO 要写追踪表）
+	bool fsrDispatchedOnce = false;  ///< 首帧之后不再 reset（时域历史已建立）
+	int32_t fsrDepthSlot = -1;   ///< 深度附件 slot（布局护栏；**不用 depthAttSlot**——
+	                             ///< 那个只在 IZB 门开时由 izbPreFrame 填，FSR 不依赖 IZB）
 	uint32_t izbFrameNo = 0;   ///< 帧计数（izb_dump_frame 比对，1 起）
 	bool izbMaskSegmentWarned = false;  ///< shadow0 段空 warn-once（mask 依赖投影体）
 	bool memStatsLogged = false;        ///< 显存基线只打一次（首帧懒建资源入账用）

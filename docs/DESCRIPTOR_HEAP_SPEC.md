@@ -197,6 +197,16 @@ cmd.endRendering();
 
 调用了 `vkCmdBindResourceHeapEXT` 后，所有 descriptor set / descriptor buffer 状态立即失效。反之亦然。
 
+**两种受害形态**（第二种是批 14.5 才遇到的，比第一种难查得多）：
+
+1. **我们自己混用** —— 语境一直是这个：本项目全走 heap，不用 descriptor set。
+2. **第三方库在同一条 CB 里混用** —— FSR 3.1.4 的 VK 后端逐 job 调 `vkCmdBindDescriptorSets`，
+   把 CB 切进 classic 模式并**作废**我们帧首的 heap 绑定。症状**报在我们自己的 draw 上**
+   （`vkCmdDrawMeshTasksEXT(): ... a sampler heap was not bound`），第一眼指向"我们漏绑了"；
+   VVL 的第二行才点名真凶（"…from previous call to vkCmdBindDescriptorSets which invalidated
+   the previous 'Descriptor Heap' mode"）。⟹ 任何**图外第三方 compute** 之后必须重绑，
+   本项目的落点 = `Renderer::bindDescriptorHeaps`（帧首 + `fsrTonemapPassPre` 末尾各一次）。
+
 ---
 
 ## 六、StructuredBuffer Stride 问题
