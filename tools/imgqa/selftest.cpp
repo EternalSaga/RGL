@@ -102,7 +102,7 @@ void testClusters(Checker& c)
 void testAnalytic(Checker& c)
 {
     // 锚点 A/B：来源 = 本机 RADV（STRIX_HALO）cornell_box 探针**实机截图逐字节对拍零
-    // 误差**的两组参数（2026-09-30 会话，docs/调试历史.md 收口条目）。不是记忆值。
+    // 误差**的两组参数（2026-09-30 会话，git:调试历史 收口条目）。不是记忆值。
     const Vec3 n{0, 0, 1}, v{0, 0, 1};
     const Vec3 lA{0, 0, 1};
     const Vec3 blue{0, 0, 1}, lc{12, 12, 12};

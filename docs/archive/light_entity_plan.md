@@ -1,7 +1,7 @@
 # 灯 entity 化实施计划（ECS 规范 3）
 
 > **状态**：历史（2026-09-10 已实施完成，BIT-IDENTICAL 全程通过；过程记录见
-> `docs/调试历史.md` 2026-09-10 续 4、`docs/phase7_devlog.md` 灯 entity 化节）。
+> `git:调试历史` 2026-09-10 续 4、`docs/phase7_devlog.md` 灯 entity 化节）。
 > **对应 roadmap**：`next_roadmap.md` Phase 7 剩余计划"**灯 entity 化**（ECS 规范 3）+ forward
 > `LightDataGpu@0` 头并入反射"。
 > **前置**：批次 3 多灯（灯数组 @262272 已入反射管线 4）、批次 5 GPU culling 均已完成——灯 entity 化
@@ -198,7 +198,7 @@ for (uint32_t i = 0; i < nLights; ++i) {
 8. **多灯边界验证**（临时，验证后复原 config）：build 副本 `scene.lua` 加 `lights` 段 2-3 灯
    （含 1 点光）→ 确认 `lightCount` = 灯数、deferred 逐灯点亮、`index` 落槽正确；复原。
 9. **文档同步**：`AGENTS.md` 已知问题（删"灯未 entity 化"项）、`next_roadmap.md`（批次 3 剩余
-   "灯 entity 化"划掉 + 剩余计划更新）、`docs/调试历史.md`（若回归有发现）、`scene_context.cppm`
+   "灯 entity 化"划掉 + 剩余计划更新）、`git:调试历史`（若回归有发现）、`scene_context.cppm`
    头注释。
 10. **提交**（用户确认后）。
 

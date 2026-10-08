@@ -3,7 +3,7 @@
 > **状态**（2026-09-19）：已完成。`Resources` 已瘦身为 allocator / depth / two descriptor heaps /
 > `SlotSegment` 三段分配器；SceneData、RenderTargetCache、Environment、SamplerLibrary、AssetTable
 > 已拆出，allocSlot 区段化完成。`style_check` / `doc_check` 的 libclang crash 另记在
-> `docs/调试历史.md` 2026-09-19 续 10。
+> `git:调试历史` 2026-09-19 续 10。
 
 > 数据来源：教程仓库 `modern_vulkan_tutorial/explore/data/model.json`（`tools/explore/extract.py`
 > 五源抽取，clang 文本 AST import 图 + 符号级 uses 边），辅以 `vkresources.cppm` /

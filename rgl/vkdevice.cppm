@@ -119,7 +119,7 @@ export class DeviceContext {
 	  eds3Feature(initOptionalEds3Feature(optionalFeatures)),
 	  /** VUID-vkCmdSetDepthClipEnableEXT-depthClipEnable-07451：edS3 只是把旧扩展
 	   * VK_EXT_depth_clip_enable 的 depth clip 状态动态化，调用该命令仍要求旧扩展的
-	   * base feature 同时启用（2026-09-02 深挖推翻"VVL 误报"旧结论——见 调试历史）。 */
+	   * base feature 同时启用（2026-09-02 深挖推翻"VVL 误报"旧结论——见 git:调试历史）。 */
 	  depthClipBaseFeature(initOptionalDepthClipBaseFeature(optionalFeatures)),
 	  /** robustness2（越界访问规范化 + null 描述符）：两支持位共用一个 feature 结构，
 	   * 任一位可用即结构进链（字段按各自支持位置位）；不可用 = 不链接，no-op 降级。 */

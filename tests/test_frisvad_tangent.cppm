@@ -8,7 +8,7 @@ module;
 // export inline frisvadTangent（无 TANGENT 属性资产的 loader 兜底，bistro_pack.py
 // 同式）。
 //
-// ## 为什么值得钉（黑面 bug 根因，调试历史 2026-10-01）
+// ## 为什么值得钉（黑面 bug 根因，git:调试历史 2026-10-01）
 //
 // 原式 `a = -1/(n.z+1)` 曾被误写 `1/(1-n.z)`：奇点从 n.z=-1（guard 已处理）搬到
 // n.z=+1（无人处理）→ 法线恰 (0,0,1) 的顶点得 **NaN 切线** → shader TBN 0×NaN

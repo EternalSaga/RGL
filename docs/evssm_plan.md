@@ -162,7 +162,7 @@ AGENTS 已定「机器不著书」纪律）；Raphael/NVIDIA 跨机复测仍列�
   izb_shadow=true、pcss_* 四键默认关）。
 - **EVSSM v1 边界三条**（`d9859c6` 落地时记；① fallback 语义已于 2026-10-02 修复更正）：
   ① forward 路 sandwich 未接（消费点在 geometry pass，门开 = warn-once 不构造、采样读
-  fallback = **far 面最大矩全亮**——初版零矩是恒暗方向、已修，见调试历史 2026-10-02）；
+  fallback = **far 面最大矩全亮**——初版零矩是恒暗方向、已修，见git:调试历史 2026-10-02）；
   ② IZB 同开 = 硬影乘法主导，「IZB 近场细影 + EVSSM 远场软影」的距离混接未做
   （= 11.6e 主题，混接带公式 + 与 shadowFar 淡出的关系一并设计）；
   ③ quincunx 5 抽头边缘毛刺（哈希旋转角噪声），Filament 有 IG noise / −0.86 单抽头 /

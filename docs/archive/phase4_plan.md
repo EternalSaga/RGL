@@ -362,7 +362,7 @@ fresh.calls.push_back(DrawCall{asset.pipelineIndex,
 | `configs/scene.lua` | 3 | +styles 表 +model_pbr 管线条目 |
 | `vulkan_practice/main.cpp` | 2,3 | ShaderRegistry 构造传参（批 2）；风格派生 → styleMap → addModelEntry（批 3） |
 | `AGENTS.md` | 1,2,3,4 | 每批结束更新对应段落（模块表/已知问题/关键文件） |
-| `docs/next_roadmap.md` / `docs/ecs_compliance_review.md` / `docs/phase2_coupling_review.md` | 4 | 状态/债销账 |
+| `docs/next_roadmap.md` / `docs/archive/ecs_compliance_review.md` / `docs/archive/phase2_coupling_review.md` | 4 | 状态/债销账 |
 
 ## 6. 风险与对策
 

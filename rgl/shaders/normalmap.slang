@@ -3,7 +3,7 @@
 //
 // 历史：③a 时代 bistro 无 TANGENT 属性，走屏幕空间导数 TBN（dFdx(P)/dFdx(uv) 解切线基）。
 // 该方法在**掠射角**下 uv 屏幕 Jacobian 行列式 → 0，invDet 放大浮点误差 → world normal
-// 逐像素椒盐噪声 → specular/Fresnel 放大成白噪点（调试历史 2026-09-13 续 5）。
+// 逐像素椒盐噪声 → specular/Fresnel 放大成白噪点（git:调试历史 2026-09-13 续 5）。
 // 根治 = 切线基挪出片元期：bistro_pack.py 导入期烘 Lengyel 平滑切线（glTF core
 // TANGENT），loader 逐三角形推手性 W，顶点属性直通到 FS——本文件只做一次基变换。
 // Filament 同样立场：lit 材质编译期强制 TANGENTS 属性，FS 零 dFdx 造 TBN 路径。
@@ -43,7 +43,7 @@ float3 decodeNormalDx(float4 texel)
  * 中性 normal 贴图不动点：texTangent=(0,0,1) → 返回值 = worldN，与切线基无关
  *（无 normal 贴图 primitive 绑中性纹理，loader 的 Frisvad 兜底值因此无害）。
  * ⚠️ 该"无关"声明对 **NaN** 切线不成立：0×NaN = NaN 会污染整面（2026-10-01 黑面
- * bug，调试历史）。刻意**不在这里吞 NaN**（如 `!(tlen > 1e-6)` 形态）——NaN 进来
+ * bug，git:调试历史）。刻意**不在这里吞 NaN**（如 `!(tlen > 1e-6)` 形态）——NaN 进来
  * 就该渲染成显眼的整面黑让探针当场抓到，静默回落顶点法线 = 把数据 bug 伪装成
  * 合理光照（沉默跳过 = 假绿）。数据正确性由 loader 侧单测钉住（test_frisvad_tangent）。
  * @param worldN 世界空间顶点法线（归一化）

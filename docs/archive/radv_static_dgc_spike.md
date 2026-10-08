@@ -1,7 +1,7 @@
 # RADV 静态 shader DGC spike（计划）
 
 > **状态**：历史（spike 完结 2026-09-10：**功能验证通过、满槽实现性能净亏 → 定案默认不开**，
-> 门控 `dgc_static` 保留可手动启用；定案见 §8.4，排坑记录已入 `docs/调试历史.md`。
+> 门控 `dgc_static` 保留可手动启用；定案见 §8.4，排坑记录已入 `git:调试历史`。
 > 性能翻盘前提 = 紧凑分桶 + 去同步等待，届时以本文档为设计底稿重启）。
 
 ## 1. 背景
@@ -138,7 +138,7 @@ staticGraphicsIndirect 否则 → 静态路（本 spike；S1/S2 期由 diagnosti
   稳定；reconcile 对账持续通过。
 - **S3**：默认开（AMD）；NV 代码路径零改动（本机无 NV，靠路径隔离 + 代码评审保证）；
   文档更新（AGENTS 已知问题 DGC 条目改写、research 文档 §3.3 补"静态模式可用"、
-  `调试历史.md` 新增条目、`next_roadmap.md` Phase 7b 行）。
+  `git:调试历史` 新增条目、`next_roadmap.md` Phase 7b 行）。
 
 ## 6. 风险与回退
 

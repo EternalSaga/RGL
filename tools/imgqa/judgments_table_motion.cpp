@@ -67,7 +67,7 @@ const std::vector<JudgmentInfo>& temporalResidualJudgments()
             "5.1×（0.0226 → 0.0045）。两种状态共用一条带必然一边恒绿一边恒红。\n"
             "⚠ **下限红不是回归**。已登记的机制（`temporal-swim-pixels` / "
             "`docs/taa_history_space_plan.md`）说这个残差主要来自「历史住在抖动空间」；批 13.5 那条"
-            "改造落地后本条**应当变红**——届时把下限改到新读数的 1/3 并在 `docs/调试历史.md` 挂号。"
+            "改造落地后本条**应当变红**——届时把下限改到新读数的 1/3 并在当前任务文档挂号。"
             "本条的价值是把「现行工作点 mask 平均还在摆 0.0226（= 靶白电平的 3.7%）」钉在账上，"
             "而 `temporal` 那四条**相对**比判据在它全绿的时候这件事零信息。\n"
             "⚠ 为什么不能用它判可见性：meanSwing 是 mask 上的 **L1 总量**，对模糊近似守恒——fb "
@@ -157,7 +157,7 @@ const std::vector<JudgmentInfo>& temporalTailBoostJudgments()
             "**不是同机同次实测**，要当结论用得须重跑。⟹ 「合成靶抓不到」的准确说法是**绝对幅度**在"
             "可见性以下（它交付档 `frac>64LSB` 恒 0），不是这条**比值**判据看不见。",
             {"tools/imgqa/temporal_residual.h「历史拒收 × 残余」段（判决线跑前写死）；"
-             "qa/log/imgqa_calls.jsonl 2026-10-06 brickfence 首轮；docs/调试历史.md 2026-10-06"},
+             "qa/log/imgqa_calls.jsonl 2026-10-06 brickfence 首轮；git:调试历史 2026-10-06"},
         },
         {"temporal-motion-excitation", JudgmentFamily::TemporalMotion,
             "无容差方向 = 只许「非零」：帧驱动运动（camera 模式 = camera.lua `frame_yaw`；"

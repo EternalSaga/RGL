@@ -153,7 +153,7 @@ export std::vector<glm::vec3> frustumCornersEye(const EyePlanes& ep) {
  * ## 矩阵顺序：必须是 `proj * view`，不是 `view * proj`
  *
  * 这一条在本项目被踩了**两次**，症状相同，所以在这里写死：
- *   1. 被测代码：docs/调试历史.md 5a-5「NDC 角点当世界点乘**正向** viewProj」；
+ *   1. 被测代码：git:调试历史 5a-5「NDC 角点当世界点乘**正向** viewProj」；
  *   2. 本辅助函数的首版：写成 `inverse(view * proj)`。
  *
  * 原因：约定是**列向量**约定（`v' = M·v`），世界→裁剪是"先 view 后 proj"，故合成

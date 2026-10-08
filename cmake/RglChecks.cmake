@@ -38,11 +38,11 @@ add_custom_target(source_checks ALL
     COMMENT "源码检查：样式 + Doxygen（警告不阻断）")
 
 # ─── shader_dep_check（批 12.3d-D1/D3，只警告不阻断）─────────────────────────
-# rgl_shader() 的 DEP 手工登记漏登 = stale SPV 静默残留根因（调试历史 2026-08-27 /
+# rgl_shader() 的 DEP 手工登记漏登 = stale SPV 静默残留根因（git:调试历史 2026-08-27 /
 # 2026-09-28 批 10.4 / 2026-10-01）。本目标每次构建跑 tools/check_shader_deps.py：
 #   R1 每个 target 的 import 传递闭包 ⊆（主源 + 已登记 DEP），漏登点名报错；
 #   R3 任何 .slang 出现 StructuredBuffer（含 RW/Append/Consume）= 红线（全库零使用，
-#      无豁免清单；调试历史「灰屏」stride 静默错位）。
+#      无豁免清单；git:调试历史「灰屏」stride 静默错位）。
 # 形态 = 无 OUTPUT 的 custom target → 恒执行（与 reflection_check/source_checks 一致）；
 # 脚本 stdlib-only、只读源树不依赖编译产物 → add_dependencies(rgl shader_dep_check)
 # （rgl/CMakeLists.txt）使其先于/并行于编译跑。默认恒 exit 0（醒目 ERROR 行不阻断，

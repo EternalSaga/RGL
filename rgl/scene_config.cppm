@@ -143,7 +143,7 @@ export struct SceneConfig {
 	// ── **历史裁剪消融门**（scene.lua `taa.clip_mode` / `taa.clip_soft`，批 13.11）──
 	// 默认 clip_mode = 0 = **现行行为，逐位不变**；4 = 软裁剪（弹簧不是墙），λ = clip_soft。
 	// 档位语义、为什么这条门存在、以及 λ 的选值安全线（λ < α 时盒不再是鬼影刹车）
-	// → `scene_data.cppm` kSceneDataTaaClipControlOffset 与 `调试历史.md` 2026-10-06。
+	// → `scene_data.cppm` kSceneDataTaaClipControlOffset 与 `git:调试历史` 2026-10-06。
 	float taaClipMode = 0.0f;
 	float taaClipSoft = 1.0f;
 };

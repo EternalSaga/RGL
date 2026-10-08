@@ -129,7 +129,7 @@ FORMAT_NOT_SUPPORTED，且 v357 ImageViewCreateInfo 无 usage 成员 → sRGB �
 
 ### 批次 ④ 收尾
 
-- 文档：`next_roadmap.md` 销账、`调试历史.md` 时间线、AGENTS.md（image_codec/normalmap/mip_gen 新模块、
+- 文档：`next_roadmap.md` 销账、`git:调试历史` 时间线、AGENTS.md（image_codec/normalmap/mip_gen 新模块、
   vcpkg 变更、.hdr 可选资产流、emissive/多灯契约）。
 - 全量验证矩阵跑通 + 最终 baseline 定稿。
 

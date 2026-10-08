@@ -271,7 +271,7 @@ VK_KHR_calibrated_timestamps` 三探测全真才启用，任一缺 = 整组 no-o
 
 | 平台 | 扩展 advertise | 运行时实测 | 结论 |
 |---|---|---|---|
-| **AMD Strix Halo（Radeon 8060S，RADV，Mesa 26.2.3）= 当前开发机** | ✅ 五项齐（present_timing / present_id2 / get_surface_capabilities2 / KHR+EXT calibrated_timestamps，`vulkaninfo` 复核，且 `VK_EXT_descriptor_heap` 同机 advertise） | ✅ **激活并跑通**（单实例，各 25 s）：present 结果持续回收、eImmediate 与 FIFO 分布一致（帧墙钟 avg 7.10 ms、IPD p50 6.96/6.97 ms、**drop=0**、queueFull=0）、queue-full 回退以临时压容量强制触发并自动恢复、VVL 零报警；另有一次 6.5 min 长跑无 crash（该跑的 IPD/drop 数值因双实例污染作废，见 `docs/调试历史.md` 勘误条目） | 支持完整（**只 advertise `VK_TIME_DOMAIN_PRESENT_STAGE_LOCAL_EXT`**，无 swapchain-local；且不同 stage 时间戳历元相差 ~10 s → 跨 stage 跨度不可用，详见 `docs/调试历史.md` 2026-09-27 条目） |
+| **AMD Strix Halo（Radeon 8060S，RADV，Mesa 26.2.3）= 当前开发机** | ✅ 五项齐（present_timing / present_id2 / get_surface_capabilities2 / KHR+EXT calibrated_timestamps，`vulkaninfo` 复核，且 `VK_EXT_descriptor_heap` 同机 advertise） | ✅ **激活并跑通**（单实例，各 25 s）：present 结果持续回收、eImmediate 与 FIFO 分布一致（帧墙钟 avg 7.10 ms、IPD p50 6.96/6.97 ms、**drop=0**、queueFull=0）、queue-full 回退以临时压容量强制触发并自动恢复、VVL 零报警；另有一次 6.5 min 长跑无 crash（该跑的 IPD/drop 数值因双实例污染作废，见 `git:调试历史` 勘误条目） | 支持完整（**只 advertise `VK_TIME_DOMAIN_PRESENT_STAGE_LOCAL_EXT`**，无 swapchain-local；且不同 stage 时间戳历元相差 ~10 s → 跨 stage 跨度不可用，详见 `git:调试历史` 2026-09-27 条目） |
 | **NVIDIA（RTX 5090，prime offload / Windows）** | ❓ 未查（本机无 NVIDIA 可见；`vulkaninfo` 枚举不到该设备） | ⏳ 待有卡机器：`just run-igpu` 之外需 `just run`（NVIDIA 路）跑一次窗口 FIFO + eImmediate，看激活三行 log（`Present timing probe` / `active` / `first result`）与 drop/IPD 分布 | 未验证 |
 | **Intel Arc A310（anv）** | ❓ 未查 | ⏳ 同上（`just run-intel`） | 未验证 |
 

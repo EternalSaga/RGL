@@ -450,7 +450,7 @@ grass / transparent+cube / 无模型+cube 四路），启动零 warn/error；附
 
 > 背景：Phase 4（Shader 反射扩展 + 多 Shader 支持）4 批次落地，清偿两条前置债
 >（push constant 归一 + 管线去重）+ 材质字段 + pbr 占位风格 + Lua 风格映射。
-> 详见 `docs/phase4_plan.md`。
+> 详见 `docs/archive/phase4_plan.md`。
 
 - ~~H1/L5~~ **已解（Phase 4 批次 1）**：push constant 布局归一——统一 `DrawArgs` 超集
   （scalar 布局 96B，`material_types_generated`）+ `renderListSystem` 单一写入路径
@@ -493,7 +493,7 @@ grass / transparent+cube / 无模型+cube 四路），启动零 warn/error；附
    （`types.slang` `TextureSampler` 绑定 + schema 扩展 + 生成端校验）+ model 纹理采样（`model.frag` 采 baseColorTexture）。
 3. ~~E5.2（Relationship 单向化）小，可随批次 3 顺手。~~（**已完成 2026-08-25**，随批次 3）
 
-**Phase 3 预研（2026-08-25 已做 RADV 侧，权威记录 `docs/heap_texture_research.md`）**：
+**Phase 3 预研（2026-08-25 已做 RADV 侧，权威记录 `docs/archive/heap_texture_research.md`）**：
 - spec 条款已核实（v1.4.360 `chapters/descriptorheaps.adoc`）：heap 采样纹理**只能**
   `VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE`（VUID 11210 不含 combined image sampler），sampler 走
   `pEmbeddedSampler`（内嵌，替代 sampler heap）；单 resource heap 可混存 buffer+image 描述符。

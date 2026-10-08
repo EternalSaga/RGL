@@ -56,7 +56,7 @@ void noteKeyEventCapture(bool swallowed, const ImGuiIO& io) {
 	lastTicks = now;
 	if (io.NavActive)
 		logger->warn("imgui: 键盘事件被吞没（NavActive 键盘导航焦点、无主动交互）——相机 "
-			"WASD 期间不响应；若未在操作面板即为捕获回归（docs/调试历史.md 2026-09-28）");
+			"WASD 期间不响应；若未在操作面板即为捕获回归（git:调试历史 2026-09-28）");
 	else
 		logger->debug("imgui: 键盘事件被吞没（主动控件交互，预期）");
 }
@@ -207,7 +207,7 @@ bool ImGuiLayer::init(AppContext& app, DeviceContext& device, Swapchain& swapcha
 	ImGuiIO& io = ImGui::GetIO();
 	io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;     // vcpkg docking-experimental 构建
 	// 键盘捕获红线（勿加回 NavEnableKeyboard，强制清除见 init 尾部守卫，2026-09-28
-	// "面板吞 WASD" 根因链见 docs/调试历史.md）：NavEnableKeyboard ⇒ 面板点击一次后
+	// "面板吞 WASD" 根因链见 git:调试历史）：NavEnableKeyboard ⇒ 面板点击一次后
 	// g.NavWindow 常驻 ⇒ io.NavActive 恒真 ⇒ io.WantCaptureKeyboard 恒真（imgui 1.92
 	// 语义）⇒ eventSystem 的 InputFilter 吞掉全部键事件 ⇒ fps 模式 WASD 移动失效。
 	// 本面板无 InputText/键盘导航需求 → 键盘捕获只允许发生在"主动交互"期间
@@ -279,14 +279,14 @@ bool ImGuiLayer::init(AppContext& app, DeviceContext& device, Swapchain& swapcha
 	}
 
 	// 键盘捕获红线守卫（防御性编程，置于 init 尾部 = 无论 flag 在何处被设置都能拦截；
-	// 2026-09-28 "面板吞 WASD" 根因链见 init 头部注释与 docs/调试历史.md）：
+	// 2026-09-28 "面板吞 WASD" 根因链见 init 头部注释与 git:调试历史）：
 	// NavEnableKeyboard 会让面板点击后 WantCaptureKeyboard 恒真 → InputFilter 吞掉
 	// 全部键事件 → fps 模式 WASD 失效。本面板无键盘导航需求，违反即强制清除。
 	if (io.ConfigFlags & ImGuiConfigFlags_NavEnableKeyboard) {
 		if (logger)
 			logger->error("imgui: ImGuiConfigFlags_NavEnableKeyboard 已强制清除——它会令 "
 				"WantCaptureKeyboard 恒真（NavActive）吞掉相机 WASD 输入（根因见 "
-				"docs/调试历史.md 2026-09-28）");
+				"git:调试历史 2026-09-28）");
 		io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
 	}
 

@@ -68,7 +68,7 @@ void DgcCommands::createLayout() {
 	// 的落点（spec "push constant range that will be updated"），非序列源偏移——
 	// DrawArgs 在 shader 侧 @0，offset 必须 0（序列源 = token.offset 起 sizeof 字节）。
 	// Phase 7b+：DrawArgs 已瘦至 objectIndex（4B）——NV 驱动 DGC push token 在
-	// "push 字节数 × 序列数"较大时命令生成阶段挂死（详见 docs/调试历史 2026-09-10）
+	// "push 字节数 × 序列数"较大时命令生成阶段挂死（详见 git:调试历史 2026-09-10）
 	pushToken.updateRange = {VK_SHADER_STAGE_ALL, 0, static_cast<uint32_t>(sizeof(RGL::DrawArgs))};
 	VkIndirectCommandsLayoutTokenEXT tokens[3]{};
 	tokens[0].sType = VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_TOKEN_EXT;

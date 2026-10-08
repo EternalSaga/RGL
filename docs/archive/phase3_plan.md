@@ -51,7 +51,7 @@ sampler heap、transfer queue 启用、GPU 侧纹理上传。
   `tinygltf_impl.cpp:4` 的 `TINYGLTF_NO_STB_IMAGE` 注释"port 未安装"已过时。
 - `model.slang` 已声明 `uv : TEXCOORD0`（顶点流 offset 24 已上传），`model.frag.slang` flat unlit 未采样。
 - spike 已验证（RADV）：单 heap 混存 buffer+image、`pEmbeddedSampler`（OpTypeSampledImage 路径）、v341 4 参写描述符、
-  `VkImageDescriptorInfoEXT{pView=create info, layout}`。见 `docs/heap_texture_research.md`。
+  `VkImageDescriptorInfoEXT{pView=create info, layout}`。见 `docs/archive/heap_texture_research.md`。
 
 ## 2. 已定决策
 
@@ -183,7 +183,7 @@ class TexturePool {
 | `shaders/model_schema.lua` / `types_schema.lua` | 纹理槽条目（无 cppName）/ 偏移 8→2、4→1 | M1/M3 |
 | `tools/validator.cppm` / `generator.cppm` | offset/cppName 可选化 | M3 |
 | `configs/scene.lua` | model → cottage 路径 | M3 |
-| `AGENTS.md` / `docs/next_roadmap.md` / `docs/heap_texture_research.md` / `docs/技术概念.md` | 回写 | M4 |
+| `AGENTS.md` / `docs/next_roadmap.md` / `docs/archive/heap_texture_research.md` / `docs/技术概念.md` | 回写 | M4 |
 
 ## 6. 风险与对策
 

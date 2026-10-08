@@ -372,7 +372,7 @@ float4 main(TaaInput input) : SV_Target
     //   （`imgqa temporal-residual --bistro --camera brickfence --reject`）五桶实测
     //   「塌回 centroid = **0.00%**、盒裁剪 = **6.60%**」⟹ 病灶在 **0.25** 不在 0.5。
     //   且短路是**部分**的（被夹档抑制比 ρ ≈ 0.30–0.35 而非 1 = 未夹帧仍在累积）。
-    //   全案 → `调试历史.md` 2026-10-06 / 债-59。
+    //   全案 → `git:调试历史` 2026-10-06 / 债-59。
     // 回读 = `POST /shot {"attachment":"taa_out"}`（alpha 经 raw8 直出，不走 gamma）。
     const float diag = readTaaDiagReject();
     // ⚠ texel 必须先于一切采样取到：un-jitter 与出画判据都要它。
@@ -652,7 +652,7 @@ float4 main(TaaInput input) : SV_Target
     }
     else if (clipMode == 8 && diag < 0.5)
     {
-        // 8 = **mem 门控软裁剪**（批 13.11 续；专治臂 7 的极限环，判据与指纹 → `调试历史.md` §10）。
+        // 8 = **mem 门控软裁剪**（批 13.11 续；专治臂 7 的极限环，判据与指纹 → `git:调试历史` §10）。
         // 臂 7 的**判据**是对的（接受域时域不变 ⟹ 静止内容零误报，四机位 ρ 全贴闭式），
         // 坏在**响应是硬开关**：`clipped = |histL−centL| ≤ mem ? histR : hardR`。
         // 阈值 mem 本身是 τ = 1/(1−d) = 16 帧的衰减量 ⟹ 「**带滞后的继电器反馈**」= 教科书级

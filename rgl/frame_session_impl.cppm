@@ -262,7 +262,7 @@ std::expected<void, Error> FrameSession::present() {
 	// 信号量**（同一 binary 信号量再 wait 只能等下一帧的 signal，而那排在更后面 = 自死锁），
 	// 且不挂 timing 链（失败 present 不占结果槽，重试不挂链才不会再次满队列）。重试的队列
 	// 操作排在已入队 wait 之后 ⇒ 图像此时必已渲染完成。若验证期 VVL 对"已释放 acquisition
-	// 的图像再 present"有异议，则改为丢弃本帧不重试（见 docs/调试历史）。
+	// 的图像再 present"有异议，则改为丢弃本帧不重试（见 git:调试历史）。
 	if (timingAttached && presentResult == vk::Result::eErrorPresentTimingQueueFullEXT) {
 		if (auto logger = RLLogger::getInstance())
 			logger->info("present_timing: result queue full (frame {}), retry without timing chain",

@@ -452,7 +452,7 @@ BIT-IDENTICAL 截图回归，基线 `10b00c78c4a2d644479bb56eb35ac796bae90ada643
   `SelectedObject.entity = entt::null` 即整链收口（高亮 pass 见 `hasSelection=false`
   走零 draw；面板回落未选中提示）。与 picking 服务无关，纯 CPU 复位。
   **位置硬约束 = 必须在 `InputFilter` 判定之前**：imgui 的 `WantCaptureKeyboard` 是
-  粘性状态（点过面板后恒为真，见 `docs/调试历史.md` "面板吞键盘"事故），放到 filter
+  粘性状态（点过面板后恒为真，见 `git:调试历史` "面板吞键盘"事故），放到 filter
   之后 Esc 会被 imgui 吞掉。实现用 `if (!isEscape && filter && ...)` 单条件短路
   （不二次调用有副作用的 helper），并把 ESC 判定抽 helper 以压低 `eventSystem`
   认知复杂度（style-check 15 上限）。
@@ -475,13 +475,13 @@ BIT-IDENTICAL 截图回归，基线 `10b00c78c4a2d644479bb56eb35ac796bae90ada643
   `imgui_layer_impl` 的 `BeginTabItem` 未传 `SetSelected` flags、ESC 分支根本没写进
   `eventSystem`。补齐后：窗口模式注入 Esc → 日志打出 `picking: Esc 取消选中`；
   `picking=false` 仍 BIT-IDENTICAL；`checks --strict` 0 警告。详见
-  `docs/调试历史.md` 2026-09-28 补修条目。
+  `git:调试历史` 2026-09-28 补修条目。
 - **未做/遗留**：① 面板"选中"页**视觉走查仍未做**——本机窗口截图只能抓到前台窗口
   （`spectacle -a` 反复抓到终端/浏览器），RGL 窗口无法置前，llm_debug 截图又在 imgui
   绘制**之前**（AGENTS 已知限制）。跳页逻辑已用日志验证，但"看起来切过去了"需用户窗口
   确认。② 阴影仍为 Phase 11。③ 高亮在 offscreen 变体未实测。④ 开 `picking` 时克隆条目
   312 → 624（本机实测两条 `clone[...]` 日志），启动开销未专门计时——延后优化（见
-  `docs/调试历史.md` 2026-09-28 条目）。
+  `git:调试历史` 2026-09-28 条目）。
 
 ## 10. 验收红线（汇总）
 
@@ -512,5 +512,5 @@ BIT-IDENTICAL 截图回归，基线 `10b00c78c4a2d644479bb56eb35ac796bae90ada643
 - ~~`next_roadmap.md` 阴影段 10 → 11 顺移~~ **✅ 已完成（2026-09-27 顺移提交）**：阴影段改号 +
   新 Phase 10 块插入 + :241 imgui 远期候选标注升格 + 头注消歧；AGENTS 基线行/文档表、
   技术概念 :106/:268/:272、脚本长期规划 P1/P2/§6 指称同步改毕；
-- 实施期回写：`phase10_plan.md` 各批实施记录、`调试历史.md` 新条目（只增）、完成后本文件转
+- 实施期回写：`phase10_plan.md` 各批实施记录、`git:调试历史` 新条目（只增）、完成后本文件转
   `archive/`，`AGENTS.md` 已知问题/模块表回写。

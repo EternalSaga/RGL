@@ -32,7 +32,7 @@ export class SamplerLibrary {
 	 * 一份 sampler 描述符（linear + mipmap LINEAR + **REPEAT**，maxLod=20，设备支持时开
 	 * **各向异性过滤**，上限 min(16, 物理 maxSamplerAnisotropy)）写 sampler heap 首个可用槽，
 	 * 全模型管线映射指向同一槽。wrap 定案 REPEAT（2026-09-13，
-	 * 见调试历史）：bistro 49.5% primitive 平铺 UV 越界 [0,1]（最大 V 跨度 ~77000），
+	 * 见git:调试历史）：bistro 49.5% primitive 平铺 UV 越界 [0,1]（最大 V 跨度 ~77000），
 	 * CLAMP 把越界钳成边缘纹素拉平 = 大片纯色块；glb 405 sampler 全空 = glTF 默认
 	 * REPEAT，工程单 sampler 与之对齐。Phase 8 ③b 起 2D 纹理带
 	 * compute mip 链（mip_gen）——采样自动用 mip（maxLod 20 覆盖 ≤2^20 纹理链长，

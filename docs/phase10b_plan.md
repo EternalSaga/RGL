@@ -4,7 +4,7 @@
 > ② 轻量 loopback HTTP POST RPC（= [archive/phase10_plan.md](archive/phase10_plan.md) 决策表
 > **D12 翻案落地**，翻案条件"≥2 次因无编程驱动通道而绕路"已由用户 2026-09-28 主动提出达成）。
 > 本批是 Phase 11（阴影）开工前的插队小批；结论回写 [next_roadmap.md](next_roadmap.md) 与
-> [调试历史.md](调试历史.md)。
+> git:调试历史。
 
 ## 1. 目标
 
@@ -164,7 +164,7 @@ HTTP 线程（httplib::Server 连接线程）
    （md5 `6098eb62…`，两次 run exit=0、`[error]` 0）
 3. [x] 中文字体 → 读图确认中文无问号、MiSans Light 字重可读（D5 判定）。
    **实施偏差**：不用 `llm_debug=true` 出图——`vkrenderer_impl` 里 `capturer.record` 在
-   `frameEndHook` **之前**，llm 截图天生不含 UI（见 `docs/调试历史.md` 2026-09-28 条）。
+   `frameEndHook` **之前**，llm 截图天生不含 UI（见 `git:调试历史` 2026-09-28 条）。
    改为窗口模式（`headless=false` + `diagnostics.imgui=true`）+ `spectacle -b -n -o` 外部截图：
    日志 `面板字体 /usr/share/fonts/misans/MiSans-Light.ttf @ 18px`，
    图内 `profiler = 0（configs/diagnostics.lua 设 profiler=N 出读数）`、页签
@@ -178,13 +178,13 @@ HTTP 线程（httplib::Server 连接线程）
 6. [ ] Windows 构建（有环境时）：`cpp-httplib`/`freetype` 特征正常编译（用户自述"测得少"，
    不作为本批验收门）
 
-**验收期额外抓到并修掉的两个真 bug**（详见 `docs/调试历史.md` 同日条目）：
+**验收期额外抓到并修掉的两个真 bug**（详见 `git:调试历史` 同日条目）：
 `set_error_handler` 无条件覆盖自产 4xx body；`rpcDispatch` 把 responder move 进下层导致
 catch 分支空句柄 → 异常请求 504。两者均已修 + 复测。
 
 ## 7. 文档回写
 
-- [x] [调试历史.md](调试历史.md)：imgui 中文字体根因条目（默认字体无 CJK + stb 不吃 CFF +
+- [x] git:调试历史：imgui 中文字体根因条目（默认字体无 CJK + stb 不吃 CFF +
   imgui 1.92 字形按需烘焙）+ RPC 两个 bug（error handler 覆盖 / responder move）
   + "并行双实例污染测量"无关，勿混
 - [x] [技术概念.md](技术概念.md)：§RPC 调试通道（协议表 + 帧边界时序 + 线程模型 + 配置键）

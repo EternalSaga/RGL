@@ -385,7 +385,7 @@ Step 1+2+3 单 commit ⟹ `git revert <sha>` 一步回滚。
       `tonemap.frag.slang` / `ecs_impl.cppm` / `scene_config*.cppm` / `configs/scene.lua`）
 - [ ] **3c** 糊度（梯度能量）与门红线（TAA 关截图逐位不变）——**待跑**
 - [ ] **5** `temporal-base-space` 阈值按新语义重测回填（门保留，判据结构不退役）
-- [ ] **6** 文档收账：`调试历史.md` 条目（含「`js=0` 锚点区分不了三机制」这条负知识 +
+- [ ] **6** 文档收账：本文对应批次那节记教训（就近写、推翻即删；含「`js=0` 锚点区分不了三机制」这条负知识 +
       「先写单测才发现 shader 写错」这条正知识）、`还债总账.md` 债-38 三态勾账、
       `phase13_plan.md` 批 13.5 登记
 - [ ] **7** Step 4 独立批次（deringing / variance clipping / flicker）——**实测后再决定**

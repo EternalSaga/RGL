@@ -31,7 +31,7 @@ module;
 //     glm mat4 列主序 → Load4(64+16c) = 第 c 列（5a-8c 教训 #2："内存第 c 个 vec4 =
 //     第 c 列"，本测试用真 memcpy + load4 复刻，不经 glm 下标，混不了）。
 //
-// ## 钉住的历史坑（docs/调试历史.md 5a-8c）
+// ## 钉住的历史坑（git:调试历史 5a-8c）
 //
 //   首版把 `-normalize(Load4(96).xyz)`（第 2 列）当 forward，注释称"w=0 无平移项混入"
 //   ——实测 w≠0：invVP 第 2 列 = eyePos/B（透视逆的平移泄漏），方向实为归一化眼位，

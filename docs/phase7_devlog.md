@@ -286,7 +286,7 @@ draw list（规范 4），无全局状态。**下一步**：批次 5 = GPU culli
 ## 重构批次 3（2026-09-08）：环境变量 → 配置文件（用户偏好：不用 env）
 
 全仓 18 处 getenv 调用点（16 个不同 env 名，TEXTURE_FORCE_UNORM 两处）清点处置（驱动级 VK_DRIVER_FILES / prime 保留——
-由 Justfile run-* 注入，非应用配置；`RADV_EXPERIMENTAL` 已于 Mesa 26.2.3 移除，见 `调试历史.md` 2026-09-24 条目）：
+由 Justfile run-* 注入，非应用配置；`RADV_EXPERIMENTAL` 已于 Mesa 26.2.3 移除，见 `git:调试历史` 2026-09-24 条目）：
 
 - **configs/runtime.lua**（新，`runtime_config` 模块）：headless / headless_size / win_size /
   show_after + **llm_debug/llm_shot 自 camera.lua 迁入**（截图属运行模式，camera.lua 回归纯相机；
@@ -425,7 +425,7 @@ DGC 路与重放路消费**同一份序列**（CPU args + GPU 可见性），两
 | count buffer | 64B | total@4（thread0 写 push.sequenceCount）+ @0 保留未用（本批次的 visible@0 InterlockedAdd 已删，2026-09-15）；DGC sequenceCountAddress = BDA+4 |
 
 > 后续演进：本批次 100B push 在 NVIDIA RTX 5090 上按序列数挂死（≈112 条崩），同日经
-> DrawArgs bindless 化（去 mvp → 36B → 终态 4B）修复，详见 `docs/调试历史.md` 2026-09-10 条目
+> DrawArgs bindless 化（去 mvp → 36B → 终态 4B）修复，详见 `git:调试历史` 2026-09-10 条目
 > 与 `rgl/shaders/material.slang` 头注释。
 
 ### 踩坑

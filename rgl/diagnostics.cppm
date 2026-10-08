@@ -44,7 +44,7 @@ export struct DiagnosticsConfig {
 	uint32_t pickingProbeFrame = 0;     // 脚本化点选探针（同 texel_canary headless 驱动方法论）：第 N 帧（1 起）自动 requestProbe(x,y) 一次；0 = 关
 	uint32_t pickingProbeX = 0;         // 探针像素列（窗口/RT 坐标）
 	uint32_t pickingProbeY = 0;         // 探针像素行
-	uint32_t uiClickProbeFrame = 0;     // 脚本化 UI 点击探针（窗口模式）：第 N 帧（0 起，同 picking_probe 实际语义）合成一次鼠标左键点击 (x,y) 灌入完整输入链；0 = 关（2026-09-28 WASD 回归场景复现用，见 docs/调试历史.md）
+	uint32_t uiClickProbeFrame = 0;     // 脚本化 UI 点击探针（窗口模式）：第 N 帧（0 起，同 picking_probe 实际语义）合成一次鼠标左键点击 (x,y) 灌入完整输入链；0 = 关（2026-09-28 WASD 回归场景复现用，见 git:调试历史）
 	uint32_t uiClickProbeX = 0;         // 点击像素列（窗口坐标）
 	uint32_t uiClickProbeY = 0;         // 点击像素行（窗口坐标）
 	uint32_t cameraProbeFrame = 0;      // 脚本化相机键盘探针（窗口模式）：第 N 帧（0 起）按住移动键 holdFrames 帧，验证 eventSystem→InputFilter→cameraSystem 输入链并打 PASS/FAIL；0 = 关（2026-09-28 "面板吞 WASD" 回归护栏）

@@ -18,9 +18,9 @@ RGL 现行策略 = **device lost 即死**：`rgl/frame_session_impl.cppm` 三处
 （恢复代码 = 全代码库最不可测试的代码，见对话讨论），短板在**死得不明不白**：
 fence 超时路径对"GPU 为什么停了"零信息。
 
-归档（`docs/archive/`、`docs/调试历史.md`）三个 device lost 案例：两个闭环但过程曲折
+归档（`docs/archive/`、`git:调试历史`）三个 device lost 案例：两个闭环但过程曲折
 （依赖 root dmesg / 多日状态漂移分析 / 两轮误诊），一个**机理至今未闭环**
-（NV DGC push 挂死，`docs/调试历史.md:274` 明确留待复查）。本文回答：
+（NV DGC push 挂死，`git:调试历史` 明确留待复查）。本文回答：
 **该扩展能不能、在多大程度上补上这个诊断盲区**。
 
 `docs/vulkan_extensions_2025_调研.md` §L54/L126-127 已给出方向
@@ -160,9 +160,9 @@ canary 答"GPU 还活着吗"，masked fault 答"GPU 干了坏事但驱动帮你�
 
 ### 案例 B：NV DGC push 挂死（5090/610.57.04，**机理未闭环——唯一还能真拿答案的**）
 
-- 形态（`docs/调试历史.md:299-307`）：官方 sample `PUSH_CONSTANT` × 44412 序列
+- 形态（`git:调试历史`）：官方 sample `PUSH_CONSTANT` × 44412 序列
   → `VK_ERROR_DEVICE_LOST` + 黑屏，栈卡 fence 等待；RGL 侧已 bindless 化规避（push 降 4B）
-- 未闭环（`docs/调试历史.md:274`）：**"push 字节数 × 序列数阈值规律太邪门"**，
+- 未闭环（`git:调试历史`）：**"push 字节数 × 序列数阈值规律太邪门"**，
   真正的 NV DGC 挂死机理留待复查（候选实验全部未做）
 - 故障报告会强制二分：
   1. **底下是驱动内部 staging OOB 读** → `MEMORY_ADDRESS` + fault VA → 对 push token
@@ -234,7 +234,7 @@ canary 答"GPU 还活着吗"，masked fault 答"GPU 干了坏事但驱动帮你�
 - `docs/vulkan_extensions_2025_调研.md` §L54/L126-127 —— 本文的方向前身
 - `docs/archive/heap_texture_research.md` §11/§12.6 —— 案例 C 全过程与勘误
 - `docs/archive/min_mesh_crash_已删除.md` —— 案例 A 最小复现墓碑（原 `min_mesh_crash/` 子项目 `516cf5a` 删除，代码见 git history）
-- `docs/调试历史.md` 2026-09-10 两条 —— 案例 B（含未闭环存疑段）
+- `git:调试历史` 2026-09-10 两条 —— 案例 B（含未闭环存疑段）
 - `docs/nvidia_compatibility_report.md` —— 案例 A 跨驱动记录（其中机器表述待勘误）
 - `docs/技术概念.md §构建检查工具机制` / `docs/风格检查规则.md` —— 无关，但本文状态头
   遵循 docs 状态行检查（`tools/checks/rules_text.py docs_status_checks`）

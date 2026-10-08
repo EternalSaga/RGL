@@ -8,7 +8,7 @@ module;
 // 相机数学回归（批 12.1 · B1）——被测对象 = rgl/camera.cppm（rlcore 成员，纯数学）。
 //
 // 钉住的历史坑：
-//   · 2026-09-03「天旋地转」（事件原文见 git history，调试历史.md 现文无此条）：cameraUp 的 z 分量符号写反 → 在 (yaw=0, pitch=±45°)
+//   · 2026-09-03「天旋地转」（事件原文见 git history，git:调试历史 现文无此条）：cameraUp 的 z 分量符号写反 → 在 (yaw=0, pitch=±45°)
 //     处 cross(forward, up) = 0，lookAt 基退化 → 画面中途 180° 翻滚。组 1 用
 //     **正交性网格**（刻意含 yaw=0 × pitch=±45）钉死"up 与 forward 恒垂直"这条
 //     构造性不变量——它是本项目对 lookAt 无 NaN 护栏的唯一防线（见组 5）。

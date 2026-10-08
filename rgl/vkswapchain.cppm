@@ -320,7 +320,7 @@ export class Swapchain {
 	 *    getSurfaceCapabilities2KHR 的 timingCaps 查 presentTimingSupported 与
 	 *    presentStageQueries（含 QUEUE_OPERATIONS_END）。**per-present-mode**——
 	 *    用 SurfacePresentModeKHR 过滤当前选定模式查询（FIFO 与 eImmediate 支持位可能不同，
-	 *    本机 RADV 实测见 nvidia_compatibility_report / 调试历史）。
+	 *    本机 RADV 实测见 nvidia_compatibility_report / git:调试历史）。
 	 * headless surface 无 present_timing 支持 → 自然落选（不特判）。
 	 * @param vkDevice 设备层（组门位 + PhysicalDevice 查询）
 	 * @param surface 目标 surface
@@ -416,7 +416,7 @@ export class Swapchain {
 	 * 那条 `nm --defined-only libSDL3.a` 找不到 `wp_viewporter_set_destination` 的论证是
 	 * **方法学错误**：SDL 直接 `wl_proxy_marshal`，协议生成函数根本不参与链接，
 	 * `--defined-only` 查不到是必然，证不了任何事。要证协议行为请用 `WAYLAND_DEBUG=1`。
-	 * 修复与 UI 侧三条连带改动 → `调试历史.md` 2026-10-04「Wayland 175% 缩放」条。
+	 * 修复与 UI 侧三条连带改动 → `git:调试历史` 2026-10-04「Wayland 175% 缩放」条。
 	 * headless（无 SDL 窗口，extent = headless_size 配置）只打一行 extent，零 SDL 调用、零噪声。
 	 * @param headless headless 模式（true 时不碰 SDL 窗口）
 	 * @param window SDL 窗口（非 headless 必非空——类不变式，构造期已解引用）

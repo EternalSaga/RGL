@@ -14,7 +14,7 @@
 > 本文件与 AGENTS/技术概念等活文档中的"阴影 Phase 10"引用已全部改为 Phase 11。
 
 Phase 0–6 已全部完成（各阶段结论一段话归档于下，实施细节与计划-实现偏离的权威记录在
-`docs/archive/phaseX_plan.md`）。（legacy 旧 OpenGL 项目已于 2026-09-08 删除，见 git history。）
+`docs/archive/phase*_plan.md`）。（legacy 旧 OpenGL 项目已于 2026-09-08 删除，见 git history。）
 
 ---
 
@@ -252,7 +252,7 @@ Phase 11：阴影（大特性，一口气；风险分层 = CSM 承诺交付 + HF
    原编号 Phase 10，2026-09-27 因调试交互插队顺延）
    **批次 0 已完成（2026-09-10，Renderer 拆分，BIT-IDENTICAL；旧口径 "Phase 10 批次 0"）**：drawFrame 577→291 行，
     摘出 5 模块（state_kit / frame_capture / cull_driver / frame_session / writeSceneStaging
-    私有方法，详见 docs/调试历史.md 2026-09-10）。阴影特性归属预置：新 pass 种类 →
+    私有方法，详见 `git:调试历史` 2026-09-10）。阴影特性归属预置：新 pass 种类 →
     render_graph + ⑤ pass 循环；per-cascade 光锥剔除 → CullDriver（复用 ④c 编舞）；
     depth-only pass 状态 → StateKit 新增条目；不再往 drawFrame 塞步骤。
   **前置批 11.0 + 11.4 已完成（2026-09-29）**：绿光源（`pack.py` emissive remap 漏补）、

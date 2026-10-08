@@ -12,7 +12,7 @@
 // ## 它不是"图像质量度量工具"
 //
 // "imgqa" 这名字暗示"拿两张图算一个数"。那条路在本项目**被物理堵死**：BIT-IDENTICAL
-// 回归要求同会话双构建，跨日就有 ±1 LSB 叶缘噪声（docs/调试历史.md 2026-09-08）。
+// 回归要求同会话双构建，跨日就有 ±1 LSB 叶缘噪声（git:调试历史 2026-09-08）。
 // 本工具做的是另一件事：**判据的区域来自几何，不来自图像。** 引擎能给出逐像素
 // objectID，于是问题从"图像变了吗"变成"对 piece X，落在它那些像素上的量 Q 是多少"。
 // 失败信息直接点名"anchor_cube_near 的某簇像素线性亮度为 0，闭式解预测 0.239"，
@@ -21,7 +21,7 @@
 // ## 判据的可信度从哪来（一律 advisory，**没有晋升这回事**）
 //
 // 每条判据必须有：① 写得出**理由**的容差（不是"0.5%"，是"float32 多项式 + 8bit 取整，
-// 实测 2 LSB"）；② 至少一条 guard 出处（钉住调试历史里的哪一次真实 bug 或真实变异）。
+// 实测 2 LSB"）；② 至少一条 guard 出处（钉住git:调试历史里的哪一次真实 bug 或真实变异）。
 // 这两条是**对全部判据**的不变量，由 `imgqa selftest` 强制，`imgqa check` 打印的就是它们。
 // 另有一份调用台账 qa/log/imgqa_calls.jsonl：哪条判据真在排查里被调用、事后看对不对，
 // 每次真实调用后 `imgqa note` 回填事后真相。**为什么这里没有晋升机制** → docs/还债总账.md
@@ -442,7 +442,7 @@ struct Verdict {
     bool ok = false;
     std::string observed;
     std::string whyTol;                  // 必须写**理由**（普适不变量，selftest 强制）
-    std::vector<std::string> guards;     // 台账：钉住调试历史里的哪一条
+    std::vector<std::string> guards;     // 台账：钉住git:调试历史里的哪一条
     [[nodiscard]] std::string line() const;
 };
 

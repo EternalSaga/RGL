@@ -7,7 +7,7 @@ stdlib-only（AGENTS.md 工具语言纪律：留在 Python 的工具只准 stdli
 
 `rgl_shader()` 的 DEP 清单是**手工登记**的；漏登一个 import 的共享模块，ninja 就
 判 SPV「未过期」——改 .slang 后构建"成功"而跑的是旧着色器（stale SPV 静默残留，
-调试历史 2026-08-27 model.slang / 2026-09-28 批 10.4 / 2026-10-01 条目）。
+git:调试历史 2026-08-27 model.slang / 2026-09-28 批 10.4 / 2026-10-01 条目）。
 
 ## 规则
 
@@ -17,7 +17,7 @@ R1  每个 rgl_shader target：主源的 `import x;` / `import "x.slang";` /
     解析不到的 import（文件不存在）同样 ERROR。
 R3  红线（D3 裁决 2026-10-01）：任何 .slang 出现 `StructuredBuffer`
     （含 RW/Append/Consume 变体；剥注释后子串匹配）= ERROR。项目全面禁用而非
-    只禁顶点/索引路径——调试历史「灰屏」：stride ≥16B 对齐与 C++ sizeof **静默**
+    只禁顶点/索引路径——git:调试历史「灰屏」：stride ≥16B 对齐与 C++ sizeof **静默**
     偏离；现行约定 ByteAddressBuffer + 手动 .Load()。全库现零使用，故规则不需要
     豁免清单（需要会漂移的豁免清单的规则宁缺毋滥——这里恰好不需要）。
 
@@ -214,7 +214,7 @@ def main() -> int:
             if BANNED_TOKEN in line:
                 err(f"{rel(p)}:{lineno}",
                     f"禁用 {BANNED_TOKEN}（含 RW/Append/Consume 变体）：stride ≥16B 对齐与 "
-                    f"C++ sizeof 静默偏离（调试历史「灰屏」）——数据通路统一 "
+                    f"C++ sizeof 静默偏离（git:调试历史「灰屏」）——数据通路统一 "
                     f"ByteAddressBuffer + .Load()")
 
     for loc, msg in errors:

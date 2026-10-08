@@ -7,7 +7,8 @@ docstring——纯文本规则与 docs 扫描共用。
 from pathlib import Path
 from typing import Iterator
 
-from config import ROOT
+from config import (DOC_POINTER_DIRS, DOC_POINTER_EXCLUDE_DIRS, DOC_POINTER_FILES,
+                    DOC_POINTER_SUFFIXES, ROOT)
 
 
 def read_text(path: str | Path) -> str | None:
@@ -57,6 +58,30 @@ def docs_markdown_files() -> list[str]:
     """docs/（含子目录）全部 .md，仓库相对 POSIX 路径（排序）。"""
     base = Path(ROOT) / "docs"
     return sorted(rel_posix(p) for p in base.rglob("*.md") if p.is_file())
+
+
+def doc_pointer_files() -> list[str]:
+    """文档指针扫描面：白名单目录 × 白名单后缀 + 散文件（排除生成物/依赖/日志/文献）。
+
+    与 docs_markdown_files 的区别：那条服务 docs 状态头（只看 .md），本条要覆盖**代码注释里
+    的文档指针**（rgl/*.cppm、tests/、tools/、configs/*.lua 都写着 `docs/….md`）。
+    """
+    out = []
+    for d in DOC_POINTER_DIRS:
+        base = Path(ROOT) / d
+        if not base.is_dir():
+            continue
+        for p in base.rglob("*"):
+            if not p.is_file() or p.suffix not in DOC_POINTER_SUFFIXES:
+                continue
+            rel = rel_posix(p)
+            if any(rel.startswith(e) for e in DOC_POINTER_EXCLUDE_DIRS):
+                continue
+            out.append(rel)
+    for f in DOC_POINTER_FILES:
+        if (Path(ROOT) / f).is_file():
+            out.append(f)
+    return sorted(set(out))
 
 
 def iter_read(paths: Iterator[str] | list[str]) -> Iterator[tuple[str, str]]:

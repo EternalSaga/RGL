@@ -78,7 +78,7 @@ export inline constexpr uint32_t kSceneDataLightArrayBytes = 16u + kMaxLights * 
  * 逐字节不动 diff0）。CPU 每帧写（值 = 原 DrawArgs.mvp，位级一致），shader
  * scene.slang readObjectMvp 按 objectIndex 读——DrawArgs 去 mvp 字段后 push 36B（当时值，
  * 后 bindless 化终态 4B，见 kSceneDataDrawTableOffset），
- * 绕 NV DGC PUSH token >83B 多序列挂死（见 docs/调试历史）。
+ * 绕 NV DGC PUSH token >83B 多序列挂死（见 git:调试历史）。
  * 基址 = 灯数组尾（262272 + 528 = 262800，scene.slang 字面量同值）。 */
 export inline constexpr uint32_t kSceneDataMvpTableOffset =
 	kSceneDataLightArrayOffset + kSceneDataLightArrayBytes;
@@ -323,7 +323,7 @@ export inline constexpr uint32_t kSceneDataTaaInputKernelOffset = kSceneDataTaaO
  * 批 13.11 **历史裁剪消融门**（vec4：x = clip_mode，y = clip_soft λ，**z = 短窗端点（臂 10 与
  * 臂 13 读；批 13.14b 删 boost 后固定填 1.0，出处见 `render_list_impl.cppm`）**，w 保留）。
  *
- * 要回答的问题（实测根因 → `调试历史.md` 2026-10-06）：`clipToAabb` 在 **blend 之前**替换历史，
+ * 要回答的问题（实测根因 → `git:调试历史` 2026-10-06）：`clipToAabb` 在 **blend 之前**替换历史，
  * 而混合是 `lerp(clipped, cur, α)` ⟹ **一次裁剪 = 一次历史重置**（历史被换成"本帧邻域盒边界"，
  * 权重 1−α）。1px 高对比细线的 box5 在 16 个抖动相位间**双峰**（有杆 / 没杆）⟹ "历史是否被重置"
  * 由相位决定 ⟹ 相位依赖方差以 100% 权重注入输出。实测：门开态盒裁剪 6.60% 帧均面积扛着

@@ -12,7 +12,7 @@ import camera;       // Camera / CameraState / CameraMode（探针断言目标�
 
 namespace RGL {
 
-// ─── 脚本化输入探针（窗口模式输入链回归，2026-09-28；docs/调试历史.md）────────────
+// ─── 脚本化输入探针（窗口模式输入链回归，2026-09-28；git:调试历史）────────────
 // 方法论同 picking_probe / texel_canary：配置门控（默认关 = 零行为变化）+ 帧号触发 +
 // SDL_PushEvent 注入合成事件 + 日志 PASS/FAIL——无物理鼠标/键盘依赖，"点击面板→
 // 键盘捕获"场景可脚本复现。帧计数 0 起（picking_probe 实际语义）；调用方（ecs

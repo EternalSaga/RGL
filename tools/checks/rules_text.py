@@ -4,7 +4,8 @@
 - text_checks：A3 分层零 entt + 点名禁止 import 边 + 模块优先（rgl/ 禁 .h/.hpp/.hh、
   .cpp 白名单、禁内部头 #include "）+ GMF STL 白名单 + 模块结构四条
 - modern_cpp_checks / docs_status_checks / forbidden_vulkan_checks /
-  agents_doc_index_checks：见各自 docstring 与 docs/风格检查规则.md §1–§2
+  agents_doc_index_checks / doc_pointer_checks：见各自 docstring 与
+  docs/风格检查规则.md §1–§2
 """
 
 import re
@@ -12,14 +13,14 @@ from pathlib import Path
 from typing import NamedTuple
 
 from config import (ALLOWED_CPP, AGENTS_FILE, AGENTS_INDEX_EXEMPT_DIRS,
-                    DOCS_STATUS_MAX_LINES, EXCLUDE_FILES,
+                    DOC_POINTER_REF_ROOTS, DOCS_STATUS_MAX_LINES, EXCLUDE_FILES,
                     EXPORT_NAMESPACE_EXEMPT, FORBIDDEN_EDGES,
                     FORBIDDEN_VULKAN_APIS, FORBIDDEN_VULKAN_MSG, MODERN_BANNED,
-                    NEW_DELETE_EXEMPT, ROOT, STL_GMF_EXCEPTIONS, STL_HEADERS,
-                    USING_NAMESPACE_EXEMPT, VULKAN_HPP_INCLUDE_FILES,
+                    NEW_DELETE_EXEMPT, RETIRED_DOC_NAMES, ROOT, STL_GMF_EXCEPTIONS,
+                    STL_HEADERS, USING_NAMESPACE_EXEMPT, VULKAN_HPP_INCLUDE_FILES,
                     ZERO_ENTT_MODULES)
-from fs import (docs_markdown_files, rgl_cppm_files, rgl_tree_files, read_text,
-                rel_posix)
+from fs import (docs_markdown_files, doc_pointer_files, rgl_cppm_files,
+                rgl_tree_files, read_text, rel_posix)
 from models import Warning
 
 MODULE_LINE_RE = re.compile(r"^\s*(?:export\s+)?module\s*([\w:]+)?\s*;")
@@ -301,6 +302,51 @@ def agents_doc_index_checks() -> list[Warning]:
             warnings.append(Warning(AGENTS_FILE, 1,
                 f"索引里的 {path} 磁盘上不存在——悬空指针（先补目的地再修指针，"
                 "见 skill rgl-doc-placement）", "error"))
+    return warnings
+
+
+# ─── 全仓文档指针有效性（§1.7）───────────────────────────────────────────────
+
+# 仓库根起的项目目录 + 中文文件名 + §引用前的路径（同 §1.6 的形态，但扫全仓不止 AGENTS）
+_DOC_PATH_RX = re.compile(
+    r"(?<![\w/.-])((?:" + "|".join(re.escape(r) for r in DOC_POINTER_REF_ROOTS)
+    + r")/[0-9A-Za-z_\u4e00-\u9fff./\-]*\.md)")
+
+
+def doc_pointer_checks() -> list[Warning]:
+    """全仓（含代码注释）写出的文档指针须**指向存在的路径**，且**不得指向退役文档**。
+
+    §1.6 只管 AGENTS.md 一个文件；本条把同一判据铺到全仓，动机是 2026-10-08 删除全局
+    调试时间线文档那类 MOVE：一份文档被 70+ 处引用（docs 与代码注释各占一半），删完文件
+    留下满仓悬空指针 = 后来者按指针找不到东西，比从没有过指针更贵（会怀疑是自己没找到）。
+
+    两条判定（均 error 级）：
+    1. **悬空**：`<项目目录>/**.md` 磁盘上不存在。含通配（`*`）或 `~` 的写法跳过——
+       那是模式不是路径（`docs/archive/*_已删除.md`）。
+    2. **退役**：出现 `config.RETIRED_DOC_NAMES` 里的文件名（裸名或带目录都算）。
+       删文档的复发形态是"从 git 捞回来重建一份"，只查悬空查不到（文件一回来指针就"有效"了），
+       故退役名单单独点名，并在消息里给出**现在的归宿**。
+
+    扫描面/排除面见 `config.DOC_POINTER_*`（tools/checks/ 自身不扫：规则必然写出被禁名）。
+    """
+    warnings: list[Warning] = []
+    for rel in doc_pointer_files():
+        src = read_text(Path(ROOT) / rel)
+        if src is None:
+            continue
+        for name, where in RETIRED_DOC_NAMES.items():
+            idx = src.find(name)
+            if idx >= 0:
+                warnings.append(Warning(rel, src[:idx].count("\n") + 1,
+                    f"引用已退役文档 {name}——{where}", "error"))
+        for m in _DOC_PATH_RX.finditer(src):
+            path = m.group(1)
+            if "*" in path or "~" in path:
+                continue
+            if not (Path(ROOT) / path).exists():
+                warnings.append(Warning(rel, src[:m.start()].count("\n") + 1,
+                    f"悬空文档指针 {path} 磁盘上不存在——先补目的地再修指针"
+                    "（见 skill rgl-doc-placement）", "error"))
     return warnings
 
 

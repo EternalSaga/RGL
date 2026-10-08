@@ -246,7 +246,7 @@ float3 irradianceSH(float3 n)
 // 系数由蒙特卡洛数值积分（52 万样本/格 × 29×29 网格，x=NoV、y=roughness、定义域 [0.05,1]²）
 // 最小二乘得出，最大误差 0.056（掠射角角落，典型区域 <0.02）；复现脚本 tools/brdf_fit.py。
 // 前版手抄 "Karis 拟合" 的 B=-a1² 项致粗糙度全域大负值（非金属像素被减去天空亮度 →
-// 墙面特定角度死黑 + 地面脏噪点），复盘见 docs/调试历史.md 2026-09-13。
+// 墙面特定角度死黑 + 地面脏噪点），复盘见 git:调试历史 2026-09-13。
 float3 envBrdfFactor(float NoV, float roughness, float3 F0)
 {
     float x = clamp(NoV, 0.05, 1.0);
@@ -418,7 +418,7 @@ float readTaaInputKernel()
  * y = 软裁剪 λ（仅 mode=4 读；**无量纲** = 每帧最多走完「到盒边界距离」的 λ 分之一）。
  * 消费端 = taa.frag.slang 历史裁剪段。为什么这条门存在（clip 在 blend 之前 ⟹ 一次裁剪 =
  * 一次历史重置 ⟹ 相位依赖方差 100% 注入输出）→ `scene_data.cppm` 同槽注释与
- * `docs/调试历史.md` 2026-10-06。
+ * `git:调试历史` 2026-10-06。
  */
 float4 readTaaClipControl()
 {

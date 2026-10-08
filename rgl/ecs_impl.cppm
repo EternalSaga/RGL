@@ -37,7 +37,7 @@ namespace RGL {
  * Esc 取消点选（批 10.7；eventSystem 轮询循环内、**InputFilter 判定之前**调用）。
  *
  * 必须在 filter 之前判定：imgui 的 WantCaptureKeyboard 是**粘性**状态（点过面板后
- * 恒为真，见 docs/调试历史.md "面板吞键盘"事故），若让 Esc 先过 imgui 就会被吞掉、
+ * 恒为真，见 git:调试历史 "面板吞键盘"事故），若让 Esc 先过 imgui 就会被吞掉、
  * 永远到不了这里。返回 true = 本事件是 Esc（调用方据此跳过 filter，键事件仍照常
  * 产 InputEvents——Esc 非相机绑定键，相机自然无响应）。
  */

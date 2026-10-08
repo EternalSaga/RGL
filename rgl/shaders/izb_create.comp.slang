@@ -56,7 +56,7 @@ void main(uint3 tid : SV_DispatchThreadID)
         + push.invVPM[2] * d + push.invVPM[3];
     // 透视除法（**必须**：invVPM·ndc 得齐次世界坐标，不除 w = 沿视射线缩放的假点，
     // 节点 uv/深度落进畸变空间——与 mask mesh 的真实 world 不同空间，edge 判据全灭。
-    // 判别路径：dbg2 仅深度 221 偶然命中、加 edge 归零。首挂实录进调试历史）
+    // 判别路径：dbg2 仅深度 221 偶然命中、加 edge 归零。首挂实录进git:调试历史）
     const float4 ls = push.lightVP[0] * (w.x / w.w) + push.lightVP[1] * (w.y / w.w)
         + push.lightVP[2] * (w.z / w.w) + push.lightVP[3];
 

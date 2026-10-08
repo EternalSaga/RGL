@@ -225,7 +225,7 @@ constexpr std::array<AntiPatternInfo, 8> kAntiAll = {{
             "被否的是「拿 SSIM 当比对算子」，**不是「不许比较」**：截图回归的比对算子固定为**逐位相同**（本条 2026-10-03 再裁决原文），替代算子全在用 = `probe` 的闭式解锚点、`attribution` / `faces` 的归属区域统计、`switch` 的开关影响域。"},
         {"psnr", AntiScope::Operator,
             "PSNR 需要一张参考图，而本项目**跨日 ±1 LSB 噪声**使 golden 存不过一天"
-            "（docs/调试历史.md 2026-09-08）。它把「多少像素差了多少」压成一个数，方向信息全丢。",
+            "（git:调试历史 2026-09-08）。它把「多少像素差了多少」压成一个数，方向信息全丢。",
             "被否的是 PSNR 这个算子，**不是「与参考对拍」这件事**：`probe` 拿闭式解当参考逐字节对拍、`aa-coverage` 拿投影宽度 w 当参考，两者都不存 golden（正是本条给的第二个选项）。"},
         {"global-epsilon", AntiScope::Operator,
             "全局容差同时**漏掉大的、冤枉小的**。纪律：容差必须来自**为什么会差**（float32 "

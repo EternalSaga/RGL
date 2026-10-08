@@ -223,7 +223,7 @@ export inline Bounds frustumBoundingSphere(const glm::mat4& view, const glm::mat
 	// near/far 从 proj 深度行反推（RH_ZO：ndc.z = −A − B/z_eye，A=proj[2][2]、B=proj[3][2]
 	// → n = B/A、f = B/(1+A)），fov/aspect = 1/proj[1][1] 与 proj[1][1]/proj[0][0]。
 	//
-	// **前两版的教训**（→ docs/调试历史.md 5a-5/5a-6）：Eberly 增量法与 extractFrustum
+	// **前两版的教训**（→ git:调试历史 5a-5/5a-6）：Eberly 增量法与 extractFrustum
 	// 平面符号约定混用 → 球装不下视锥；改 8 角世界 AABB 法修好正确性但引入姿态依赖
 	// （AABB 随 yaw 变，实测还比精确球大 16%）。闭式解既不碰符号约定也不碰姿态。
 	// **精度（2026-09-30 批 12.1 单测抓出，见 tests/test_shadow_geometry
@@ -542,7 +542,7 @@ export struct SceneEnv {
 	// clip_soft（仅 mode=4）= **无量纲**时间常数：历史每帧最多走完「到盒边界距离」的 λ 分之一。
 	//   ⚠ 选值安全线：鬼影衰减 ≈ 1/λ 帧 vs 累积窗 ≈ 1/α 帧——**λ < α 时盒不再是鬼影刹车**。
 	// 为什么存在（根因：clip 在 blend 之前 ⟹ 一次裁剪 = 一次历史重置 ⟹ 相位依赖方差 100% 注入）
-	// → `调试历史.md` 2026-10-06；档位全量语义 → `scene_data.cppm` kSceneDataTaaClipControlOffset。
+	// → `git:调试历史` 2026-10-06；档位全量语义 → `scene_data.cppm` kSceneDataTaaClipControlOffset。
 	float taaClipMode = 0.0f;
 	float taaClipSoft = 1.0f;
 	// Phase 5.5 批次 4 天空盒：enabled = env 已上传且 scene.lua environment.skybox=true；

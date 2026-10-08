@@ -219,7 +219,7 @@ BIT-IDENTICAL 基线不受扰）。
   nodes 304122**，无坏链；G=64 对照 → 同 nodes、maxChain 2704（grid 参数真生效，
   节点数几何不变）。VVL 零错误；**门开截图与门关 byte-identical**（mask 消费未接
   = 画面不变红线实证，llm_debug 帧 8 对拍）。
-- 首跑 VVL 三连坑（均已注释钉 `izb_shadow_impl.cppm`，调试历史 2026-10-01 收账）：
+- 首跑 VVL 三连坑（均已注释钉 `izb_shadow_impl.cppm`，git:调试历史 2026-10-01 收账）：
   ① BDA 必须 `createBufferWithAddress`（普通 `createBuffer` 的 `getDeviceAddress()`
   恒 0 = 写描述符 "address is zero"）；② `vkCmdFillBuffer` 要 `eTransferDst`；
   ③ `VkBufferCopy.size` 不吃 `VK_WHOLE_SIZE`（要显式字节数）+ nodes 是 dump 拷贝
@@ -261,7 +261,7 @@ render_graph 零改动版**。
 - **实测阳性锚点**（bistro deferred G=512）：`shadowed=33707 / nodes=232820`
   （14.5% 被遮，maxChain=170）；VVL 零错误；**门开（mask 已产出）截图与门关
   byte-identical**（消费未接红线，重构前后双验）。
-- **w 除法坑（首挂真凶，调试历史收账）**：izb_create 反投影 `invVPM·ndc` 未
+- **w 除法坑（首挂真凶，git:调试历史收账）**：izb_create 反投影 `invVPM·ndc` 未
   `w/=w.w` → 节点 uv/深度落进沿视射线缩放的假空间，与 mask mesh 的真实 world
   不同空间 → inside 判据全灭。判别路径三层假象：①「head 置位 221」证明管线通
   但掩盖判据问题；② 三态计数把 occl/inside 写进**相邻像素位**（`2u<<(h&31)`）
@@ -289,7 +289,7 @@ render_graph 零改动版**。
   `writeSceneStaging` 按 `izbShadow` 门写；light.frag 字面量由 static_assert 钉死。
 - **binding 14 仅变体声明+绑定**（原版无此 binding = 不占槽）；Resources 发号时仍写
   16B 零 fallback 到 mask 槽（防门开首帧 IzbShadow 构造前的时序坑，门关零成本）。
-  判别技巧（fallback 全 1 探针等）见调试历史 2026-10-02。
+  判别技巧（fallback 全 1 探针等）见git:调试历史 2026-10-02。
 - **跨 render pass barrier（首挂真凶）**：mask frag atomic 写 → light.frag 读之间
   无隐式依赖，**VVL 不报错但 light 读恒 0**（现象 = 门关门开逐位一致、flag 硬置
   判别却生效）。`endMaskPass` 内补 allGraphics/shaderWrite→shaderRead；
@@ -323,7 +323,7 @@ render_graph 零改动版**。
 - **补账结案（2026-10-02 上午，用户复测推动）**：「门开无影」三重根因全修毕——消费端
   漏 `asfloat()`（ConvertUToF 陷阱）+ 字节偏移口径（`Load(pid>>5)` 缺 ×4）、生产端
   izb_create 屏幕 ndc.y 走错口径（世界重建上下镜像）。**「hair 掠射上半屏全遮异常」
-  = ndc 镜像的产物，随修消解**（stack「阳性」= 稠密假绿，教训入调试历史）。守卫就位：
+  = ndc 镜像的产物，随修消解**（stack「阳性」= 稠密假绿，教训入git:调试历史）。守卫就位：
   `test_izb_engine_contract`（引擎真 SPV 闭式，变异验红×2）+ imgqa `izb`（mask↔画面
   三判据）+ imgqa `swim`（影场世界不变量）+ `slang_load_bitcast_checks`（静态规则）。
   **「影子随相机游动」结案 = 非 5a-7 回归**：swim 实测 CSM·rig·0.06m 漂移 0/63835、
@@ -389,14 +389,14 @@ height field 地形自影轴在本项目建筑场景基本无用，而 EVSSM 的
   | z-prepass（forward） | **0.000** | **0.000** | **实测 = 零成本**：`izbPreFrame` 判 deferred 才构造 ⟹ forward 下 `IzbShadow` 恒空、零 dispatch。gate_lint R-02 如期 error（但 rc=0 不阻止启动） |
   | IZB 创建（图外 dispatch） | **+0.098** | **+0.009** | 含 bounds + priming。分离实验口径：`shadow_pass=off` 时 mask 段空 ⟹ 增量只剩 create+prime |
   | 光空间保守光栅 + mask | **+1.478** | **+0.699** | **主成本确实在这**（占 IZB 总增量 94%）；重放 shadow0 段 = **341 draws**（= shadow0 全量，独立印证"mask 重放 shadow0"） |
-  | 合计 vs 现状 CSM 7.10 ms | **+1.576**（light zone 内）/ Δgpu.frame **+1.64** | 净录制 **+0.993** | 本机 AMD 8060S / Mesa 26.2.3、1280×720 headless、bistro、150 帧窗。⚠ `ΔdrawFrame` 是 +2.70，**多出的 +1.71 是 `cull.fenceWait` 反压不是 IZB 自身成本**（见 `调试历史.md` 债-30 段） |
+  | 合计 vs 现状 CSM 7.10 ms | **+1.576**（light zone 内）/ Δgpu.frame **+1.64** | 净录制 **+0.993** | 本机 AMD 8060S / Mesa 26.2.3、1280×720 headless、bistro、150 帧窗。⚠ `ΔdrawFrame` 是 +2.70，**多出的 +1.71 是 `cull.fenceWait` 反压不是 IZB 自身成本**（见 `git:调试历史` 债-30 段） |
 
   > **填表记录（2026-10-04）**：四行"待填"由本轮实测清偿（worker 跑分离实验 + 主 agent 独立
   > 跑配置轴复核：izb on/off → draw 6942/6601、gpu.frame 10.94/9.30、cpu.record 27.03/24.46，
   > 逐项吻合）。**IZB 显存增量 +46.51 MiB**（`vma[first_frame]` 新测点；`vma[startup]` 量不到，
   > 因 `IzbShadow` 首帧懒构造）。`izb_grid` 扫 256/512/1024/2048 **非单调**（512 与 1024 相近、
   > 256 最差），且 draw/vkcmd 完全不随 grid 变 ⟹ 差异是 GPU 侧执行噪声，**不构成调参结论**。
-  > 全文 → `调试历史.md` 2026-10-04、`docs/还债总账.md` 债-05。
+  > 全文 → `git:调试历史` 2026-10-04、`docs/还债总账.md` 债-05。
 
 - **阶段 2 定案候选口径**：① 若 IZB 定位**替换** CSM：总成本 ≤ 现状 7.10 ms；
   ② 若定位**叠加**：增量 ≤ 实测可接受值。口径在阶段 2 实测后拍板并记录于此，

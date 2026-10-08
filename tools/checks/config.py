@@ -211,6 +211,31 @@ DOCS_STATUS_MAX_LINES = 10
 AGENTS_FILE = "AGENTS.md"
 AGENTS_INDEX_EXEMPT_DIRS = ("docs/archive/", "docs/参考资料/")
 
+# 文档指针有效性（rules_text.doc_pointer_checks，§1.7）：
+# 扫描面 = 下列目录（按后缀白名单）+ 下列散文件；排除目录 = 生成物 / 依赖 / 日志 / 离线文献。
+DOC_POINTER_DIRS = ("docs", "rgl", "tests", "tools", "cmake", "configs", "qa",
+                    "third_party", "script_spike", ".opencode")
+DOC_POINTER_FILES = ("AGENTS.md", "Justfile")
+DOC_POINTER_SUFFIXES = frozenset({
+    ".md", ".py", ".cpp", ".cppm", ".h", ".hpp", ".slang", ".lua", ".cmake",
+    ".txt", ".json", ".jsonl", ".toml", ".yaml", ".yml",
+})
+# tools/checks/ 不参与：规则自身与本文档必然写出被禁名（写了才拦得住别人）。
+# qa/log/ 是历史调用台账（追加式日志，指针当时为真、不回改）。
+DOC_POINTER_EXCLUDE_DIRS = ("tools/checks/", ".opencode/node_modules/", "qa/log/",
+                            "docs/参考资料/")
+# 路径形如 `<root>/….md` 的引用（rules_text 用它拼正则）——只认仓库根起的项目目录
+DOC_POINTER_REF_ROOTS = ("docs", "tools", "tests", "rgl", "qa", "cmake", "configs",
+                         "third_party", "script_spike", ".opencode")
+# 退役文档：文件名（含后缀）→ 退役理由 + 现在的归宿。名字**再次出现**即 error——
+# 删一份文档只有在全仓指针清零后才成立，而"从 git 里捞回来重建一份"是最容易复发的形态。
+RETIRED_DOC_NAMES = {
+    "调试历史.md": "全局调试时间线已于 2026-10-08 删除（原文 "
+                   "`git log --all --first-parent -- <该文件>`）；教训就近写**当前任务文档**"
+                   "（可改写：被实测推翻的旧教训直接删，只留正确做法），能落成测试/护栏的必须落成；"
+                   "引用历史条目写 `git:调试历史 <日期>`",
+}
+
 # 现代 C++ 零违规回归护栏：(正则, 提示)——剥注释后按行匹配（rules_text.modern_cpp_checks）
 MODERN_BANNED = [
     (r"\bgoto\b", "禁 goto——用结构化控制流"),

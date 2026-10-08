@@ -10,7 +10,7 @@ SHA 键；schema = metrics.py 文件头，CACHE_VERSION 随结构演进）：
   （判定与名单见 rules_*.py / config.py；设计见 docs/风格检查规则.md）。
 - Doxygen 注释规则（--only doc|all）→ rules_doxygen.rule_doxygen；声明表来自
   libclang Indexer（穿透 export，坑 7；2026-09-23 起替代文本 -ast-dump 双管线，
-  行为对账记录见 docs/调试历史.md 同日条目）。impl 单元接口已声明函数的
+  行为对账记录见 git:调试历史 同日条目）。impl 单元接口已声明函数的
   定义处不重复要求注释（真相源 = 声明处）。
 
 工具侧（批次 A：tools/imgqa 纳入样式规则）：工具单元走**独立阈值集**、关掉 impl_slim
@@ -66,9 +66,9 @@ from fs import read_text
 from rules_doxygen import interface_declared_names, rule_doxygen
 from rules_metrics import evaluate_metrics
 from rules_layers import lib_layering_checks
-from rules_text import (agents_doc_index_checks, docs_status_checks,
-                        forbidden_vulkan_checks, slang_load_bitcast_checks,
-                        modern_cpp_checks, text_checks)
+from rules_text import (agents_doc_index_checks, doc_pointer_checks,
+                        docs_status_checks, forbidden_vulkan_checks,
+                        slang_load_bitcast_checks, modern_cpp_checks, text_checks)
 from models import Thresholds, Warning
 from tool_baseline import compare as compare_baseline
 from tool_baseline import load_baseline, write_baseline
@@ -280,6 +280,7 @@ def main() -> None:
         warnings.extend(modern_cpp_checks())
         warnings.extend(docs_status_checks())
         warnings.extend(agents_doc_index_checks())
+        warnings.extend(doc_pointer_checks())
         warnings.extend(lib_layering_checks())
 
     # 工具侧基线（只准降不准升）：--update-tool-baseline 先重写再比对（必然持平）。

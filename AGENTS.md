@@ -15,7 +15,7 @@ Vulkan 现代特性学习项目。Mesh shader 渲染管线，使用 ShaderObject
 - **`rgl-verify`** — 运行环境、headless 冒烟、llm_debug 截图、BIT-IDENTICAL 回归、**什么能并行**、材质定位（加法闪色）、imgqa 判据（改渲染后验证必用）
 - **`rgl-shader-contract`** — 反射管线 / `just reflect` / scalar layout / bindless / 关键契约文件位置表（改 `rgl/shaders/`、`*_schema.lua`、`generated/` 前必读）
 - **`rgl-new-module`** — 新建/拆分 `.cppm`、rlstd/GMF 细则、impl partition 分层原则
-- **`rgl-test-discipline`** — 写测试硬纪律（阳性锚点/变异红线/沉淀地址/modules 坑；写单测、加用例、收账调试历史前必读）
+- **`rgl-test-discipline`** — 写测试硬纪律（阳性锚点/变异红线/沉淀地址/modules 坑；写单测、加用例、收账教训前必读）
 - **`rgl-doc-placement`** — 改 AGENTS.md 前的归宿裁决五问 + **抄名单反模式**（**拟向 AGENTS 增删任何段落前必读**）
 
 ## 构建
@@ -85,7 +85,7 @@ just clean / clean-all / all           # 增量清理 / 删 build 目录 / clean
 
 ### 写测试的硬纪律
 
-全量十条 + 新规 → **skill `rgl-test-discipline`**（写单测、加用例、收账调试历史前必读）。
+全量十条 + 新规 → **skill `rgl-test-discipline`**（写单测、加用例、收账教训前必读）。
 
 ## 运行要点
 
@@ -187,7 +187,7 @@ vk_indirect_commands 显式使用）外**均无显式使用但被其他已启用
 - **SSAO 三条固有边界**：① depth-only → **法线贴图细节看不见**（开阔地面 AO 恒 1.000，**不是 bug**）；
   ② 螺旋采样无投影 range check → 前景轮廓外一圈光晕；③ 施加点在 tonemap 合成处，**连直接光一起压**。
   `ao.strength=0` 逐位旁路，无常驻成本。**AO 噪点已量化结案：别再当"噪点闪烁"的嫌疑**（交付颗粒
-  < 1 量化步长 = 不可见；TAA 关时 AO 逐帧静止）；可见形态是**屏幕锚定的相机移动爬行** → `调试历史.md` 2026-10-04
+  < 1 量化步长 = 不可见；TAA 关时 AO 逐帧静止）；可见形态是**屏幕锚定的相机移动爬行** → `git:调试历史` 2026-10-04
 - **湿面只加高光不压暗**：`_Wet` effective roughness 0.12 是**平台期**（无 SSR），真实湿面应同时压暗
   漫反射而这里没做 → 湿区略"亮而奶"；补它需 per-material wetness 进 scene data（= 反射管线改动）
 - **灯契约（现行）**：`Light` 组件 + `index` = 列表位正序（画不画 = 实体有无；forward 读 index 0 = 主光，
@@ -205,11 +205,16 @@ vk_indirect_commands 显式使用）外**均无显式使用但被其他已启用
 > 每篇文档头部带状态（`现行`/`历史`/`调研`）。现状权威 = 本文件；**下一步路由 → `docs/phase14_plan.md`**。
 > 本节与 `docs/` 由 source_checks **双向对账**（docs 漏索引 / 本节悬空指针即警告，规则
 > `agents_doc_index_checks`）——新建 docs 不在此挂号会被构建点名。**本节只做索引，不写摘要**（摘要会漂）。
+>
+> **教训写哪（2026-10-08 换轨：全局调试历史已删除，不再重建）**：能落成测试 / 护栏的**必须**落成
+> （`TEST:` / `GUARD:`）；写不出断言的教训**就近写当前任务文档**，且**可改写**——被实测推翻的旧教训
+> **直接删**，只留正确做法，发现矛盾以新发现为准就地改（错误版本靠 git 沉淀，不留"旧结论 + 更正"双层
+> 误导后来者）。引用已删文档的旧条目写 `git:调试历史 <日期>`。写法与裁决树 → skill `rgl-doc-placement`；
+> 护栏 = `doc_pointer_checks`（悬空文档指针 / 退役文档名复发，规则 §1.7）。
 
 - **台账 / 现状**：`docs/还债总账.md`（**全项目技术债唯一台账**；勾账三态 = 结案/否决/降级）·
   `docs/技术概念.md`（机制深版：§模块表 / §核心运行时模块表 = **唯一模块职责表** / §main 启动流 /
-  §RPC 调试通道 / §构建检查工具机制 / §构建 Windows 前置）· `docs/调试历史.md`（**只增不改**，
-  争议结论以此为准）· `docs/gate_lint_plan.md`（**门配置自检的权威载体**；加诊断门前看）
+  §RPC 调试通道 / §构建检查工具机制 / §构建 Windows 前置）· `docs/gate_lint_plan.md`（**门配置自检的权威载体**；加诊断门前看）
 - **现行计划**：`docs/phase14_plan.md`（**下一步从这里读**：时域线换轨 = 逐像素速度场 + vendor
   FSR 3.1.4 的 VK 后端；§1 = 本机核实的 FSR 事实基线，**别再重查一遍**）·
   `docs/phase13_plan.md`（TAA 收口，**2026-10-07 冻结**；§1.22 = 冻结立论）·

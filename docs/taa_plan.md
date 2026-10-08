@@ -146,7 +146,7 @@ cull 候选、picking、IZB、shadow 级联 near/far。
 | **T1** | jitter 注入（Halton 表 + frameIndex）+ scene data 尾区 TAA 段 + `ViewProjection::projUnjittered` | 单测：Halton 序列闭式（前 16 项手算锚点 / 均值≈0.5 / 值域 ±0.5）；重投影矩阵闭式（spin 关 + 相机不动 → prevUV == uv 逐位；纯平移 → 手算 uv 偏移对拍）；scene data 偏移 static_assert；实机截图看静止边缘逐帧抖动幅度 <1px |
 | **T2** | `taa.frag.slang`（box5/box9 混合 + Lottes 线段 clip + HDR 域 mix + Catmull-Rom history）+ 三图结构（taa/commit/tonemap 换输入）+ 词表/状态/管线表/main 装配全链 | `just reflect`；VVL 零报错；`imgqa switch`（开关影响域：域外逐位为零 + 域内确实变了）；静止 20 帧收敛（帧间差单调降到近零）；门关 BIT-IDENTICAL |
 | **T3** | spin 补偿（prevSpin 上传 + shader 刚体重投影）+ 历史失效（首帧 / resize / 相机跳切阈值 → 一帧 feedback=1） | 开 spin 无拖影（逐帧截图差分峰值 vs 不补偿显著下降）；resize 后一帧内恢复；相机跳切后无残影 |
-| **T4** | 细线条程序化几何 + 优化项 | 见 §6。**执行状态（2026-10-03）：判据全绿，T4 判据部分收口**。靶 + 7 条几何单测（含常量绊线）+ `imgqa temporal` 四条判据 + `imgqa aa-coverage` 逐杆覆盖率探针全部落地且**可复现**（采集走新增 `/shotburst`）。**顺带查出并修掉 TAA 本体四个真 bug**：① 混合权重反了 ② `prevViewProj` 口径错（→ 调试历史 2026-10-03 前两条）③ 覆盖率探针抓到的黑晕 ④ **根因 = 跨帧历史每帧被 `VK_IMAGE_LAYOUT_UNDEFINED` 销毁**（③④ → §7 第 11/12 条；修前 TAA 从未累积过任何东西）。修后闭式对拍：中间调 9.13%（预测 ~11%）、抑制幅度 3.99×（预测 √16=4.00×）、逐杆误差 0.180 列。优化项未动 |
+| **T4** | 细线条程序化几何 + 优化项 | 见 §6。**执行状态（2026-10-03）：判据全绿，T4 判据部分收口**。靶 + 7 条几何单测（含常量绊线）+ `imgqa temporal` 四条判据 + `imgqa aa-coverage` 逐杆覆盖率探针全部落地且**可复现**（采集走新增 `/shotburst`）。**顺带查出并修掉 TAA 本体四个真 bug**：① 混合权重反了 ② `prevViewProj` 口径错（→ git:调试历史 2026-10-03 前两条）③ 覆盖率探针抓到的黑晕 ④ **根因 = 跨帧历史每帧被 `VK_IMAGE_LAYOUT_UNDEFINED` 销毁**（③④ → §7 第 11/12 条；修前 TAA 从未累积过任何东西）。修后闭式对拍：中间调 9.13%（预测 ~11%）、抑制幅度 3.99×（预测 √16=4.00×）、逐杆误差 0.180 列。优化项未动 |
 
 > ⚠ **T2/T3 验收的有效性裁决（2026-10-03，根因 bug 修好后补写；重验归 `phase13_plan.md` 批 13.0）**：
 > 本节表写在「跨帧历史每帧被 `VK_IMAGE_LAYOUT_UNDEFINED` 销毁」（§7 第 12 条）**未知**的期间，
@@ -161,7 +161,7 @@ cull 候选、picking、IZB、shadow 级联 near/far。
 >   真正证明这一点的是 §6 的 `aa-coverage` 逐杆覆盖率与 `temporal` 的 √N 幅度抑制。
 > - **T0/T1 的单测不受影响**（纯函数、无设备、与布局追踪无关），仍然有效。
 >
-> 教训（→ 调试历史 2026-10-03 四续条）：**跨帧算子的验收必须在"它真的生效"被独立证明之后才有意义**；
+> 教训（→ git:调试历史 2026-10-03 四续条）：**跨帧算子的验收必须在"它真的生效"被独立证明之后才有意义**；
 > 而"无拖影/无残影"这类**负向观测**尤其廉价——它同时被"实现正确"与"实现根本没跑"满足。
 
 ## 6. 细线条程序化几何（TAA 的阳性锚点）
@@ -211,7 +211,7 @@ objectID，采集走 `/shotburst` 连续帧）：
 （|h(3)-h(4)|=0.875px 而 |h(8)-h(9)|=0.5px），实测 8 帧对的窗口随预热长度差 3 倍。
 工具已把 pairs/warm 一律向上对齐到 16 并在输出里回显。
 
-## 7. 已知边界与记债（收账时写进 AGENTS/调试历史）
+## 7. 已知边界与记债（收账时写进 AGENTS / 当前任务文档）
 
 1. **AO 时序性**：RGL 的 AO 施加在 tonemap shader 内（不是 Filament 的"AO 烘进 color 再 TAA"）
    → TAA 在 AO 之前，**AO 的螺旋采样噪声不被时域累积**。v1 接受；把 AO 施加挪进 TAA pass

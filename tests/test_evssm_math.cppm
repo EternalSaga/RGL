@@ -8,7 +8,7 @@ module;
 // zBlocker 解码 / evssm_moments 的矩编码）的数学契约回归——本文件是这些式的 **C++ 侧
 // 镜像复刻**（同 test_shadow_forward 的先例）：shader 侧公式任何改动必须同步本文件。
 //
-// ## 钉住的历史 bug（docs/调试历史.md 2026-10-02）
+// ## 钉住的历史 bug（git:调试历史 2026-10-02）
 //
 // 转写 Filament chebyshevUpperBound 时漏掉首行快路（depth ≤ moments.x → 1.0）：
 // d² 对负 d 同样增长，「亮于均值」与「暗于均值」给出同向 ≈0 = 亮区判暗。实机证据 =
@@ -127,7 +127,7 @@ TEST_CASE("EVSSM: far 面最大矩恒全亮——快路死条款（本 bug 正�
 TEST_CASE("EVSSM: 零矩恒暗——fallback 方向的反向用例") {
 	// 零矩 (0,0,0,0)：正边 pw > 0 = moments.x → 公式 p = ε/(ε+1) ≈ 0.002 → LBR 后
 	// **精确 0**；负边 nw ≤ 0 = moments.z → 快路 1；min = 0 = 全暗。
-	// 语义钉死：「fallback 填零矩 = 全场景变暗」——实机 176821 px 变暗事故（调试历史
+	// 语义钉死：「fallback 填零矩 = 全场景变暗」——实机 176821 px 变暗事故（git:调试历史
 	// 2026-10-02）的数学出处；vkresources fallback 的正确性由「值从 kEvssmExponent
 	// 现场推导、无手写字面量」构造性保证，本用例钉的是**方向语义**本身。
 	// 变异红线：若有人「把 fallback 改回零图更省事」→ 本用例 + 上一条一起说明后果。
