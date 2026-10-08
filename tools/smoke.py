@@ -206,7 +206,8 @@ def png_size(path: Path) -> tuple[int, int] | None:
 
 def stage_configs(from_build: bool, variant: str | None, shot_file: str, frames: int,
                   size: tuple[int, int] | None, render_scale: float | None,
-                  velocity_field: bool = False, fsr_upscaler: bool = False) -> None:
+                  velocity_field: bool = False, fsr_upscaler: bool = False,
+                  taa: bool = False, clip: int | None = None) -> None:
     """把一次性配置铺进 staging 目录并打好运行模式键（每次重建，跑完不残留可复原状态）。"""
     base = (BUILD_RGL / "configs") if from_build else (ROOT / "configs")
     if missing := [f for f in CONFIG_FILES if not (base / f).is_file()]:
@@ -239,6 +240,15 @@ def stage_configs(from_build: bool, variant: str | None, shot_file: str, frames:
         # --fsr-upscaler 就会静默退化成"什么都没开"。
         patch_lua(runtime, "velocity_field", "true")
         patch_lua(runtime, "fsr_upscaler", "true")
+    # ── TAA 与历史裁剪档位 ──
+    # 为什么要有这两个旗标：**红线 B 的定义本身就是「TAA 开 + clip_mode = N」**，没有它们
+    # 每次重立基线都得手改**仓库** configs/scene.lua —— 而那正是「改了副本/源不会自动复原」
+    # 这类静默状态的来源。键的唯一性由 `patch_lua` 自己守（命中 ≠ 1 即报错）；`enabled`
+    # 在 scene.lua 里只出现在 taa 段，不会误伤别的块。
+    if taa:
+        patch_lua(STAGING / "scene.lua", "enabled", "true")
+    if clip is not None:
+        patch_lua(STAGING / "scene.lua", "clip_mode", str(clip))
 
 
 def run_engine(exe: Path, timeout: int) -> tuple[int, str, float]:
@@ -296,6 +306,16 @@ def parse_args() -> argparse.Namespace:
                          "双向核对：开了没建 FSR context = FAIL；没开却建了 = FAIL（门关不拢）")
     ap.add_argument("--from-build", action="store_true",
                     help="以 build/rgl/configs 副本为基准（跑调试现场；默认用仓库 configs/）")
+    ap.add_argument("--taa", action="store_true",
+                    help="scene.lua taa.enabled = true。**红线 B 的定义本身就是「TAA 开 + "
+                         "clip_mode = N」**，没有这个旗标每次重立基线都得手改仓库 configs/ "
+                         "= 「改了不会自动复原」那类静默状态。双向核对：开了没建 taa RT = FAIL；"
+                         "没开却建了 = FAIL（门关不拢）")
+    ap.add_argument("--clip", type=int, default=None,
+                    help="scene.lua taa.clip_mode = N（历史裁剪档位：0 门关硬盒 / 11 今天的交付档 / "
+                         "13 债-69 修法臂）。🔴 必须配 --taa：TAA 关时该键根本不被消费，单独给它会"
+                         "静默量到一张「什么都没改」的图。档位是否**真的生效**靠红线表自己的阳性"
+                         "对照（clip 11 / 13 / 0 三张图哈希必须互不相同），不在这里重复实现")
     ap.add_argument("--timeout", type=int, default=90, help="引擎最长存活秒数（默认 90）")
     return ap.parse_args()
 
@@ -311,6 +331,10 @@ def main() -> int:
     if "/" in args.name or ".." in args.name:
         fail(f"--name 只准文件名（不要带路径），收到 {args.name!r}")
 
+    if args.clip is not None and not args.taa:
+        fail("--clip 必须配 --taa：TAA 关时 taa 段整个不进图，clip_mode 不被任何 shader 消费"
+             " ⟹ 这条旗标会静默量到一张与默认逐位相同的图，却报成「档位生效了」")
+
     exe = check_prereq()
     single_instance_or_die()
 
@@ -325,7 +349,8 @@ def main() -> int:
     shot_file = (f"{STAGING.name}/probe.png" if args.mode == "smoke"
                  else f"screenshots/{args.name}.png")
     stage_configs(args.from_build, args.variant, shot_file, args.frames, size,
-                  args.render_scale, args.velocity_field, args.fsr_upscaler)
+                  args.render_scale, args.velocity_field, args.fsr_upscaler,
+                  args.taa, args.clip)
     print(f"配置   : 基准={'build 副本' if args.from_build else '仓库 configs/'}"
           f"  variant={args.variant or '(随配置)'}  frames={args.frames}"
           f"  size={f'{size[0]}x{size[1]}' if size else '(随配置)'}"
@@ -413,6 +438,21 @@ def main() -> int:
                  f"{render_grid[0]}x{render_grid[1]}")
         print(f"FSR: context 就绪 render={fsr.group(1)}x{fsr.group(2)} "
               f"upscale={fsr.group(3)}x{fsr.group(4)} ✓")
+    # taa.enabled 生效核对。同 velocity/FSR 的纪律：双向都要核。
+    # 反向这条尤其值钱：**出厂默认是 TAA 关**（`configs/scene.lua` `taa.enabled = false`），
+    # 而红线 A（`fdece9d0…`）就是那张图。若哪天门关不拢、taa pass 悄悄进了图，红线 A 的
+    # 含义就变了 —— 而单看截图未必发现（TAA 开也可能只改时域不改这一帧）。
+    taaRt = re.search(r"taa \(RGBA16F\)[^\n]*out slot (\d+)", log)
+    if args.taa and not taaRt:
+        fail("请求 --taa 但日志里没有「taa (RGBA16F): … out slot …」行"
+             " ⟹ TAA pass 静默没进图（scene.lua 键名漂了 / decorateTaaPass 的图形态判据"
+             "变了 / 启动日志文案改了）")
+    if not args.taa and taaRt:
+        fail(f"默认档（taa.enabled 关）却建了 taa RT：{taaRt.group(0)}"
+             " ⟹ 门关不拢，红线 A（出厂默认图）的含义已失效")
+    if taaRt:
+        print(f"TAA  : {taaRt.group(0)} ✓"
+              + (f"  clip_mode={args.clip}" if args.clip is not None else ""))
     if vel:
         # 速度场必须与深度**同网格**：它的输出单位是"渲染分辨率像素"，网格不同则单位错。
         if (int(vel.group(1)), int(vel.group(2))) != render_grid:
