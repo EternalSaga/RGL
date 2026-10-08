@@ -34,8 +34,35 @@ nlohmann::json rpcErrorJson(std::string message) {
 	return nlohmann::json{{"ok", false}, {"error", std::move(message)}};
 }
 
-/** 成功应答（端点自行补字段）。 */
-RpcOutcome rpcOk(nlohmann::json body) { return RpcOutcome{200, std::move(body)}; }
+/**
+ * 成功应答（端点自行补字段）。
+ *
+ * ⚠ **这里断言 body 必须是对象**，因为 nlohmann 的 `json(init)` 构造有个静默失败模式：
+ * initializer-list 里**只要有一个元素不是 `{"key", value}` 二元对**，整个值就退化成
+ * **数组**——不报错、不警告。`/state` 的 `render` 段就这么坏过（写成 `{{"render", {...}}}`，
+ * 外层多一对花括号；引入 = 批 14.3，同日发现）。
+ *
+ * 为什么仍值得建这道闸（当时的实际表现并非"假绿"，别据此以为无害）：
+ * - `temporal-flicker` / `temporal-motion` 确实**响亮地**失败（退出码 1），但抛的是
+ *   `type_error.304 cannot use at() with array`——**指向调用侧用错 API**，而真因在服务端；
+ * - `/state` 本身仍回 **HTTP 200**，`render` 段对任何按对象解析的新客户端**不可达且不出声**
+ *   ——而那段存在的目的正是"判据若不知道自己看的是哪档就会误读"（批 14.3 原话）。
+ * 所有成功应答都流经这一个函数，所以闸建在这里而不是每个端点各写一遍：退化时抛
+ * `type_error`（由外层 catch 转成 400 + 消息），**在坏的那一侧坏**。
+ *
+ * 注意别误伤：`{"routes", {"a","b"}}`、`{"position", {x,y,z}}` 这类**值本身是数组**的写法
+ * 是合法的（元素仍是二元对），本断言只拦「整个应答不是对象」。
+ */
+RpcOutcome rpcOk(nlohmann::json body) {
+	if (!body.is_object())
+		throw nlohmann::json::type_error::create(
+			301,
+			"rpcOk 的应答体必须是 JSON 对象，实际是 " + std::string(body.type_name())
+				+ "——通常是 initializer-list 里混进了非 {key, value} 二元对的元素"
+				  "（如把某个键值对多包了一层花括号），nlohmann 于是把整个应答退化成数组",
+			&body);
+	return RpcOutcome{200, std::move(body)};
+}
 
 /** 失败应答。 */
 RpcOutcome rpcFail(int status, std::string message) {
@@ -207,10 +234,11 @@ RpcOutcome rpcHandleState(RpcWiring& w) {
 	//   踩过的坑（批 14.3 引入、本批发现）：写成 `{{"render", {...}}}` 时该元素是
 	//   「单元素数组」而不是 `{"key", value}` 二元对，而 nlohmann 的 initializer-list
 	//   构造要求**每个**元素都是二元对 ⟹ 只要有一个不是，**整个 `/state` 退化成数组**。
-	//   后果不响亮但很宽：`Engine::paramValue` 的 `out.at("pages")` 抛
+	//   后果：`Engine::paramValue` 的 `out.at("pages")` 抛
 	//   `type_error.304 cannot use at() with array` ⟹ `temporal-flicker` 与
-	//   `temporal-motion`（含 `temporal-tail` 族）整台仪器起不来。实测：
-	//   `imgqa temporal-flicker` → `[json.exception.type_error.304]`，退出码 1。
+	//   `temporal-motion`（含 `temporal-tail` 族）整台仪器起不来。那条异常**是**响亮的
+	//   （实测 `imgqa temporal-flicker` 退出码 1），坏在**指错人**——它说"调用侧用了错的
+	//   API"，而真因在服务端少一层花括号。形状守卫见 `rpcOk`。
 	return rpcOk({{"ok", true},
 		{"frame", w.frame},
 		{"camera", rpcCameraJson(w.registry.ctx().get<Camera>())},
