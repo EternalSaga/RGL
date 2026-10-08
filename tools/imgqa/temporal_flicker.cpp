@@ -85,7 +85,7 @@ struct Group: FlickerSeries {
 FlickerSeries captureFlickerSeries(const std::string& dir, const std::string& name, const std::string& tag,
     bool edgeTarget, const BistroCam* cam, bool taaOn, double yawRadPerFrame, int frames,
     double kernel, bool wantBands, bool wantObjectId, double envIntensity, double aoStrength,
-    bool overrideEnv, bool overrideAo)
+    bool overrideEnv, bool overrideAo, const FlickerArm* arm)
 {
     FlickerSeries g;
     g.name = name;
@@ -96,6 +96,18 @@ FlickerSeries captureFlickerSeries(const std::string& dir, const std::string& na
     o.taaJitterScale = 1.0;
     o.taaInputKernel = kernel;  // 批 13.8 输入侧重建核（0 = 不写键 = 引擎默认 = 已发表口径）
     o.cameraFrameYaw = yawRadPerFrame;  // rad/帧（键名 = camera.lua `frame_yaw`）
+    // 批 14.5 升频 / FSR 臂。⚠ `arm` 只改**渲染分辨率与升频器**，运动激励（cameraFrameYaw）、
+    // ROI、帧数一律不动 —— 换了激励就是换口径，两条轴就没法比了。
+    if (arm) {
+        o.renderScale = arm->renderScale;
+        o.velocityField = arm->fsrUpscaler;  // FSR 的前置，一起开（否则引擎静默旁路 FSR）
+        o.fsrUpscaler = arm->fsrUpscaler;
+        o.fsrTemporal = arm->fsrTemporal;
+        o.fsrJitter = arm->fsrJitter;
+        // 工作点对齐鬼影轴（α 与 clip_mode），见 `FlickerArm` 的注释。
+        o.taaFeedback = arm->feedback;
+        o.taaClipMode = o.taa ? arm->clipMode : 0.0;
+    }
     std::array<double, 3> pos = kEdgePosition;
     std::array<double, 3> tgt = kEdgeTarget;
     double fov = kFovDeg;
@@ -489,7 +501,7 @@ float verticalFocalPx(int heightPx, float fovDeg)
 }
 
 int cmdTemporalFlicker(const std::string& target, double sweepPxPerFrame, int frames,
-    double halfWidth, double rowFrac, bool verbose, double kernel)
+    double halfWidth, double rowFrac, bool verbose, double kernel, bool fsr)
 {
     if (sweepPxPerFrame <= 0.0 || sweepPxPerFrame >= 1.0) {
         std::printf("用法: imgqa temporal-flicker [--sweep 0.125] [--frames 32] [--target edge|doorframe|...]\n"
@@ -527,15 +539,33 @@ int cmdTemporalFlicker(const std::string& target, double sweepPxPerFrame, int fr
     std::printf("  输入侧重建核 taa.input_kernel = %s（批 13.8 A/B；只作用于 TAA 开组）\n",
         kKernelNames[kIdx]);
 
+    // 臂表。前两条 = 既有 TAA 关/开，tag 与目录后缀**逐字不变** ⟹ 已发表读数可复现。
+    // 🔴 `双线性@0.75` **不是可选对照**：`render_scale < 1` 本身就糊，而糊天然降闪烁。
+    //    少了它，「FSR 闪烁比 TAA 低」会被一句「你只是把它糊没了」推翻 —— 这正是两轴规则
+    //    的由来（总账已否决「L1 对模糊守恒」）。它在这里的角色 = 闪烁轴的**糊地板**。
+    std::vector<FlickerArm> arms = {
+        { "flicker_off", "TAA 关", false, 1.0, false, false, false },
+        { "flicker_on", "TAA 开", true, 1.0, false, false, false },
+    };
+    if (fsr) {
+        arms.push_back({ "bilin75", "双线性@0.75", false, 0.75, false, false, false });
+        arms.push_back({ "taaa75", "TAA开@0.75", true, 0.75, false, false, false });
+        arms.push_back({ "fsr75", "FSR时域@0.75", false, 0.75, true, true, true });
+        // 🔴 这两条才是鬼影轴的**同工作点**对手：α = 0.01（交付）+ clip 11（今天）/ 13（修法）。
+        //    上面 `TAA 开` 用的是本仪器历史的 α = 0.12，累积窗短 12 倍 ⟹ 拿它当 TAA 的代表
+        //    会系统性**低估** TAA 的闪烁抑制、**高估** FSR 的优势。
+        arms.push_back({ "taaa01c11", "TAAα.01臂11", true, 1.0, false, false, false, 0.01, 11.0 });
+        arms.push_back({ "taaa01c13", "TAAα.01臂13", true, 1.0, false, false, false, 0.01, 13.0 });
+    }
     std::vector<Group> groups;
-    for (bool on: { false, true }) {
-        const std::string tag = on ? "flicker_on" : "flicker_off";
+    for (const FlickerArm& a : arms) {
+        const std::string tag = a.tag;
         const std::string dir = projectRoot() + "/build/imgqa_flicker_" + tag + kTag;
         std::printf("  采集 %s …\n", tag.c_str());
         try {
             Group g;
-            static_cast<FlickerSeries&>(g) = captureFlickerSeries(dir, on ? "TAA 开" : "TAA 关", tag,
-                edgeTarget, cam, on, yawRad, frames, kernel);
+            static_cast<FlickerSeries&>(g) = captureFlickerSeries(dir, a.name, tag, edgeTarget, cam,
+                a.taa, yawRad, frames, kernel, false, false, 1.0, 0.5, false, false, &a);
             groups.push_back(std::move(g));
         }
         catch (const std::exception& e) {
@@ -642,6 +672,19 @@ int cmdTemporalFlicker(const std::string& target, double sweepPxPerFrame, int fr
     std::printf("\n  闪烁比 flicker(on)/flicker(off) = %s  （<1 = TAA 开更不闪）\n", d4(ratio).c_str());
     std::printf("  闭式刻度：理想 AA 的 G=1.0000；完全无 AA 的 G=%s（局部扫速 %s px/帧）\n",
         d4(idealGain).c_str(), d4(off.sweepLocal).c_str());
+
+    if (groups.size() > 2) {
+        std::printf("\n  ── 升频臂（闪烁轴；分母 = 同一个 TAA 关组，同一 ROI、同一激励）──\n");
+        for (size_t i = 2; i < groups.size(); ++i) {
+            const Group& g = groups[i];
+            std::printf("    %-16s ρ %s  flicker/off %s  G=实测/理想 %s\n", g.name.c_str(),
+                d5(g.rho).c_str(), d4(off.rho > 1e-12 ? g.rho / off.rho : 0.0).c_str(),
+                d4(g.anchor.idealRho > 0.0f ? g.rho / g.anchor.idealRho : 0.0).c_str());
+        }
+        std::printf("    🔴 读法：FSR 要算「买了东西」，必须**同时**不劣于「双线性@0.75」（糊地板）\n"
+                    "       且优于「TAA 开」。只赢后者而输前者 = 买到的只是分辨率损失的模糊，\n"
+                    "       不是时域滤波 —— 两轴规则在闪烁轴上的这一侧。\n");
+    }
     std::printf("\n  ⚠ 高频带能量比已实测否决（理想 [0.15,0.60] 与无 AA [0.00,0.86] 重叠，换 τ = 换占空比）；\n"
                 "    FFT 只作诊断，判据是「每帧变化 ÷ 闭式理想」。见 temporal_flicker.h 头注释。\n");
     return 0;

@@ -191,6 +191,29 @@ struct ProfileOpts {
     /// kSceneDataTaaClipControlOffset。消费方 = `imgqa temporal-residual --clip-abl`。
     double taaClipMode = 0.0;
     double taaClipSoft = 1.0;
+    // ── Phase 14 批 14.5：升频 / FSR 臂（量「闪烁↔鬼影」跷跷板用）──────────────────
+    // 五条一律**默认不写键**（同 taa 诊断键纪律：写出的键越少，与交付配置的分歧面越小）。
+    // 键的语义与合法区间以 `configs/runtime.lua` 为唯一真相源，此处不复述。
+    /// runtime.lua `render_scale`。1.0 = **不写键** = 交付态（渲染网格 = 后缓冲逐像素）。
+    /// ⚠ 创建期量（RT/深度按它分配）⟹ 只能靠重启换档，**不能** `/param` 热改。
+    double renderScale = 1.0;
+    /// runtime.lua `velocity_field`（逐像素速度场）。false = 不写键。
+    /// 🔴 它同时是 `fsr_upscaler` 的**前置**：velocity 没进图时 FSR 自动失效（引擎取实际
+    /// 图形态而非本键）。所以「开 FSR 却忘了 velocity」不会报错，只会**静默量到双线性**——
+    /// 故 `makeProfile` 对此直接抛，见其守卫。
+    bool velocityField = false;
+    /// runtime.lua `fsr_upscaler`（FSR 3.1.4 upscaler 总开关）。false = 不写键。
+    bool fsrUpscaler = false;
+    /// runtime.lua `fsr_temporal`（让 vendor 累积历史）。false = 不写键 = 纯空间 EASU+RCAS。
+    /// 🔴 **与 `taa` 互斥**：两个时域滤波器串联 = 双重模糊，引擎会 warn 并强制本键失效
+    /// （`resolveFsrTemporal`）。对判据而言那是**静默换臂**——故 `makeProfile` 直接抛。
+    bool fsrTemporal = false;
+    /// runtime.lua `fsr_jitter`（FSR 自己的 Halton 抖动，vendor 相位序列）。false = 不写键。
+    /// ✅ **与 `taaJitterScale` 是两个独立旋钮**——这是「鬼影仪器 jitter 恒 0」与「FSR 必须
+    /// 带抖动输入」表面冲突的解法：FSR 臂的 `taa` 恒 false（互斥硬门），故 `taa.jitter_scale`
+    /// 根本不被消费，FSR 的抖动走本键自足。仪器的三条 jitter 红利（B∞ 是固定点 / 零锚恰 0 /
+    /// 分母无相位噪声）因此**一条都不必牺牲**。
+    bool fsrJitter = false;
     /// 帧驱动 spin（scene.lua `spin_frame_angle`，rad/帧）。0 = **不写键** = 门关 = 逐位今天。
     /// ≠0 时同时写 `spin_axis`（`spinAxis`）——运动必须是绕 up 轴的定角 yaw（刚体、
     /// prevSpin 重投影能精确对齐；理由全文 = `temporal.cpp` 头注释）。
@@ -781,7 +804,7 @@ int cmdTemporalTailCamera(const std::string& camera, double angleDeg, double gat
  * @param margin    掩膜**向内腐蚀**的像素数（排掉「新内容从画外入画」，那不是鬼影）
  */
 int cmdTemporalTailStep(const std::string& camera, double stepDist, int burst, int warm,
-    double tau, int margin);
+    double tau, int margin, bool fsr = false);
 
 /// 逐杆覆盖率对拍闭式（批 12.6 T4，docs/taa_plan.md §7 第 10 条）：单帧量阶梯杆的
 /// 「黑度积分 vs 投影宽度」，TAA 关应当被二值覆盖量化破坏、TAA 开应当贴合闭式。

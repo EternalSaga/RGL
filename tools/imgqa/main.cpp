@@ -654,7 +654,7 @@ int dispatchTemporalTail(const Args& P)
     }
     if (motion == "step")
         return cmdTemporalTailStep(P.get("--camera"), P.number("--step"), P.integer("--burst"),
-            P.integer("--warm"), P.number("--tau"), P.integer("--margin"));
+            P.integer("--warm"), P.number("--tau"), P.integer("--margin"), P.has("--fsr"));
     if (motion == "camera")
         return cmdTemporalTailCamera(P.get("--camera"), P.number("--angle"),
             P.number("--gate-angle"), P.integer("--burst"), P.integer("--warm"),
@@ -694,7 +694,7 @@ int dispatchTemporal(const std::string& cmd, const Args& P)
     if (cmd == "temporal-flicker")
         return cmdTemporalFlicker(P.get("--target"), P.number("--sweep"),
             P.integer("--frames"), P.integer("--halfwidth"), P.number("--rowfrac"),
-            P.has("--verbose"), P.number("--kernel"));
+            P.has("--verbose"), P.number("--kernel"), P.has("--fsr"));
     // A/B 侧：负数 = 不覆写 = 交付配置原样（默认）。三个口径对拍才能把「移动闪烁是
     // IBL 反射 / AO / 几何边 哪个驱动的」这个问题拆开。
     if (cmd == "temporal-homography")

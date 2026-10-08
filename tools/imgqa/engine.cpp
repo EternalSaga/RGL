@@ -398,8 +398,60 @@ void applyCameraLua(const std::string& outDir, const ProfileOpts& o)
     writeFile(path, cam);
 }
 
+/**
+ * 升频 / FSR 的键表（批 14.5）：只返回**非默认**的键，默认一律不写（写出的键越少，
+ * 与交付配置的分歧面越小，同 taa 诊断键纪律）。
+ *
+ * 🔴 **两条 profile 路径都必须经过它**，这是本函数存在的唯一理由：交付路径的键已存在于
+ * `configs/runtime.lua`（走 `replaceValue`），而合成路径的 `runtime.lua` 是**从零写的**
+ * （那些键根本不存在，`replaceValue` 会抛"键不存在"）。只改交付那条的后果很具体：
+ * `temporal-flicker --target edge`（合成 aa_target ⟹ **闭式唯一适用**的靶）上三条 FSR 臂
+ * 会被静默当原生分辨率跑，却标着 "@0.75" 报进表里 —— 静默换臂。
+ */
+std::vector<std::pair<std::string, std::string>> fsrKeyValues(const ProfileOpts& o)
+{
+    std::vector<std::pair<std::string, std::string>> kv;
+    if (o.renderScale != 1.0) {
+        char sc[32];
+        std::snprintf(sc, sizeof sc, "%g", o.renderScale);
+        kv.emplace_back("render_scale", sc);
+    }
+    if (o.velocityField)
+        kv.emplace_back("velocity_field", "true");
+    if (o.fsrUpscaler)
+        kv.emplace_back("fsr_upscaler", "true");
+    if (o.fsrTemporal)
+        kv.emplace_back("fsr_temporal", "true");
+    if (o.fsrJitter)
+        kv.emplace_back("fsr_jitter", "true");
+    return kv;
+}
+
+/**
+ * 升频 / FSR 的三条守卫。共同理由：这三种错法**都不报错**，只是把臂悄悄换成另一条臂，
+ * 然后读数被当成 FSR 读。判据工具最坏的失效不是崩，是**静默换臂**（同 `requireJsonObject`
+ * 的教训：宁可在这里点名真因，也不要让下游抛一条指向错的一层的消息）。
+ */
+void checkFsrOpts(const ProfileOpts& o)
+{
+    if (o.fsrUpscaler && !o.velocityField)
+        throw std::runtime_error(
+            "fsrUpscaler 开了但 velocityField 没开：velocity 没进图时引擎**自动让 FSR 失效**"
+            "（取实际图形态而非配置键）⟹ 这条臂会静默量成双线性。两者必须一起开。");
+    if (o.fsrTemporal && !o.fsrUpscaler)
+        throw std::runtime_error(
+            "fsrTemporal 只在 fsrUpscaler 为真时有意义（引擎语义），只开前者 = 空开关。");
+    if (o.fsrTemporal && o.taa)
+        throw std::runtime_error(
+            "fsrTemporal 与 taa 互斥（两个时域滤波器串联 = 双重模糊）：引擎会 warn 并"
+            "**强制 fsr_temporal 失效** ⟹ 这条臂会静默量成「TAA + 纯空间 FSR」。"
+            "要 A/B 就分成两条臂。");
+}
+
 std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
 {
+    // 守卫放在**最前面**：两条 profile 路径（交付 / 合成）都必须过它，放后面会被早退路径绕掉。
+    checkFsrOpts(o);
     fs::create_directories(outDir);
     // ── 交付配置模式（批 13.1e）：基底 = 仓库 configs/，只覆写 headless / rpc / taa ──
     // 判据必须在**用户实际跑的那份配置**上求值（ProfileOpts::deliveryConfigDir 的注释里
@@ -430,6 +482,11 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
         if (o.overrideHeadlessSize)
             replaceTableValue(rt, "runtime.lua", "headless_size",
                 std::to_string(o.size[0]) + ", " + std::to_string(o.size[1]));
+
+        // ── 升频 / FSR 臂（批 14.5 量「闪烁↔鬼影」跷跷板）──
+        // 键表与守卫都在 `fsrKeyValues` / `checkFsrOpts`，合成路径共用同一份（理由见彼处）。
+        for (const auto& fk : fsrKeyValues(o))
+            replaceValue(rt, "runtime.lua", fk.first, fk.second);
         writeFile(outDir + "/runtime.lua", rt);
 
         std::string dg = readFile(outDir + "/diagnostics.lua");
@@ -502,12 +559,19 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
         fs::copy_file(profileTemplate() + "/" + j, outDir + "/" + j,
             fs::copy_options::overwrite_existing);
 
+    // 升频 / FSR 键（批 14.5）。合成路径的 runtime.lua 是**从零写的**、这些键根本不存在
+    // ⟹ 必须在这里追加。只改交付那条路径的后果：`--target edge`（闭式唯一适用的靶）上的
+    // FSR 臂静默跑成原生分辨率，却标着 "@0.75" 报进表里。
+    std::string fsrLua;
+    for (const auto& fk : fsrKeyValues(o))
+        fsrLua += "  " + fk.first + " = " + fk.second + ",\n";
     writeFile(outDir + "/runtime.lua",
         "return { headless = true, headless_size = { " + std::to_string(o.size[0]) + ", "
             + std::to_string(o.size[1]) + " },\n"
           "  win_size = { 800, 600 }, show_after = -1, present_mode = \"immediate\",\n"
           "  ui_font = \"\", ui_font_size = 18.0,\n"
-          "  llm_debug = false, llm_shot = { file = \"screenshots/unused.png\", size = { "
+          + fsrLua
+          + "  llm_debug = false, llm_shot = { file = \"screenshots/unused.png\", size = { "
             + std::to_string(o.size[0]) + ", " + std::to_string(o.size[1])
             + " }, delay_frames = 8 } }\n");
 

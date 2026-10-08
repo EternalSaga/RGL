@@ -285,6 +285,15 @@ struct Spec {
     /// 语义 → `rgl/scene_data.cppm` kSceneDataTaaClipControlOffset。
     double clipMode = 0.0;
     double clipSoft = 1.0;
+    // ── Phase 14 批 14.5：升频 / FSR 臂（量「闪烁↔鬼影」跷跷板）──
+    // 默认全关 = 一个键都不多写 = 现有全部臂逐位不变。语义以 `configs/runtime.lua` 为准。
+    // 🔴 三条静默换臂的错法（FSR 忘开 velocity / temporal 忘开 upscaler / temporal 与 taa
+    // 同开）由 `makeProfile` 直接抛，不在这里兜。
+    double renderScale = 1.0;       ///< 1.0 = 不写键 = 交付态
+    bool velocityField = false;     ///< FSR 的前置（velocity 没进图 ⟹ FSR 自动失效）
+    bool fsrUpscaler = false;
+    bool fsrTemporal = false;       ///< 与 `taa` 互斥（引擎硬门）
+    bool fsrJitter = false;         ///< FSR 自己的抖动，与 `jitterScale` 是两个独立旋钮
 };
 
 std::string d4(double v)
@@ -415,6 +424,12 @@ Group collectGroup(const std::string& dir, const std::string& name, const std::s
     //   （长窗档不再有独立键：批 13.14b 删 static boost 后它 = `sp.feedback` 本身。）
     o.taaClipMode = o.taa ? sp.clipMode : 0.0;
     o.taaClipSoft = sp.clipSoft;
+    // 升频 / FSR 臂（默认全关 = 不写键 = 现有 M0…M4 等读数逐位不变）。
+    o.renderScale = sp.renderScale;
+    o.velocityField = sp.velocityField;
+    o.fsrUpscaler = sp.fsrUpscaler;
+    o.fsrTemporal = sp.fsrTemporal;
+    o.fsrJitter = sp.fsrJitter;
     if (sp.cameraMotion)
         o.cameraFrameYaw = sp.motionAngle;  // 默认运动源 = **相机**绕 up 轴定角 yaw
     else {
@@ -3352,6 +3367,15 @@ struct StepArm {
     double clipMode;
     double feedback;
     bool reprojection = true;
+    // ── 批 14.5 升频 / FSR 臂 ──
+    /// false = 本臂**没有 TAA**（FSR 时域臂必须如此，引擎互斥硬门）。此时 clipMode /
+    /// feedback / reprojection 三个 TAA 内部旋钮全部不写键（`stepSpecFor` 负责）。
+    bool taa = true;
+    double renderScale = 1.0;       ///< 1.0 = 不写键 = 交付态（原生分辨率）
+    bool velocityField = false;     ///< FSR 的前置
+    bool fsrUpscaler = false;
+    bool fsrTemporal = false;
+    bool fsrJitter = false;
 };
 
 /// 一跑的产物：连拍的线性 luma（收敛跑 = 收敛段）。
@@ -3437,6 +3461,13 @@ StepRun captureStepRun(const std::string& dir, const std::string& name, const st
     o.taaReprojection = sp.reprojection;  // 闭式锚臂 = false（纯屏幕空间 EMA）
     o.taaClipMode = sp.taa ? sp.clipMode : 0.0;
     o.taaClipSoft = sp.clipSoft;
+    // 升频 / FSR 臂（默认全关 = 不写键）。⚠ 这里**不**因 `sp.taa` 为真而清零：FSR 与 TAA
+    // 的互斥由 `makeProfile` 的守卫**拒绝组合**，而不是悄悄挑一个——后者正是静默换臂。
+    o.renderScale = sp.renderScale;
+    o.velocityField = sp.velocityField;
+    o.fsrUpscaler = sp.fsrUpscaler;
+    o.fsrTemporal = sp.fsrTemporal;
+    o.fsrJitter = sp.fsrJitter;
     makeProfile(dir, o);
 
     Engine eng(dir);
@@ -3488,6 +3519,79 @@ cv::Mat convergedRef(const StepRun& r)
     return acc;
 }
 
+/**
+ * 阶跃掩膜 + 分母。**抽出来的理由**：`stepCurveOf`（分子）与 `convergedFloor`（地板污染）
+ * 必须用**同一个算子**折，否则「地板占 ghost 的百分之几」这句话没有意义。
+ * 掩膜 = `|A − B∞| > τ` 再内腐蚀 `margin`；分母 = 掩膜上的 `mean|A − B∞|`。
+ */
+cv::Mat stepMask(const cv::Mat& aRef, const cv::Mat& bRef, double tau, int margin, double* den,
+    double* share)
+{
+    cv::Mat jump;
+    cv::absdiff(aRef, bRef, jump);
+    cv::Mat m;
+    cv::compare(jump, tau, m, cv::CMP_GT);
+    if (margin > 0) {
+        const cv::Mat k = cv::getStructuringElement(cv::MORPH_RECT,
+            { 2 * margin + 1, 2 * margin + 1 });
+        cv::erode(m, m, k);
+    }
+    const double cnt = static_cast<double>(cv::countNonZero(m));
+    if (share)
+        *share = cnt / static_cast<double>(m.total());
+    if (den) {
+        cv::Mat w;
+        jump.copyTo(w, m);
+        *den = cnt > 0.0 ? cv::sum(w)[0] / cnt : 0.0;
+    }
+    return m;
+}
+
+/**
+ * 收敛态「不是固定点」给鬼影分子带来的**地板**，单位 = ghost 本身（已除以分母）。
+ *
+ * 🔴 **为什么不是全图 max**（首轮实测的教训，全文见判据注册表同名条目）：max-norm 在 F75 上报
+ * 0.83、看着像「FSR 输出根本不稳定」，但全图**均值**偏离只有 0.00075，那 0.83 来自 0.166% 的
+ * 硬边缘像素（线性域梯度 0.95/px，亚像素相位一变就在黑白之间翻）。按鬼影掩膜与同一个分母折
+ * 一遍，真实污染是 0.0010 ghost 单位 —— max-norm 把它夸大了 **700 倍**。
+ * 本函数的算子与分子**逐字相同**（掩膜均值 ÷ 分母），所以它的读数可以直接和 ghost(n) 比。
+ */
+double convergedFloor(const StepRun& r, const cv::Mat& ref, const cv::Mat& mask, double den)
+{
+    const double cnt = static_cast<double>(cv::countNonZero(mask));
+    if (cnt <= 0.0 || den <= 0.0)
+        return 0.0;
+    const int k = std::min<int>(kConvergedAvg, static_cast<int>(r.frames.size()));
+    double acc = 0.0;
+    for (size_t i = r.frames.size() - static_cast<size_t>(k); i < r.frames.size(); ++i) {
+        cv::Mat d, dm;
+        cv::absdiff(r.frames[i], ref, d);
+        d.copyTo(dm, mask);
+        acc += cv::sum(dm)[0] / cnt;
+    }
+    return acc / static_cast<double>(k) / den;
+}
+
+/// 收敛态**内部**的最大逐像素偏离（末 `kConvergedAvg` 帧各自 vs 其均值取最大）。
+///
+/// 为什么 FSR 臂必须有这条：整台仪器把「末 16 帧的均值」当 B∞ 固定点用，而这个假设是从
+/// TAA + `jitter_scale = 0` 那里**借**来的。FSR 臂的抖动是 vendor 自己的相位序列（周期
+/// = `8·(上屏宽/渲染宽)²`，0.75 档实测 **14**），而 16 恰好是 TAA 的抖动周期 —— 也就是说
+/// 「取 16 帧 = 取满一个相位周期」这件事对 FSR 臂不自动成立。
+/// ⚠ 本函数**只作诊断**（它抓的是「输出有没有亚像素不稳定」），闸门用 `convergedFloor`。
+double convergedSpread(const StepRun& r)
+{
+    const cv::Mat m = convergedRef(r);
+    const int k = std::min<int>(kConvergedAvg, static_cast<int>(r.frames.size()));
+    double mx = 0.0;
+    for (size_t i = r.frames.size() - static_cast<size_t>(k); i < r.frames.size(); ++i) {
+        cv::Mat d;
+        cv::absdiff(r.frames[i], m, d);
+        mx = std::max(mx, static_cast<double>(cv::norm(d, cv::NORM_INF)));
+    }
+    return mx;
+}
+
 /// 残影掉到 level 的第一帧（线性插值）。
 /// 🔴 **起点必须高于 level** 才谈得上「掉下来」：起点就低于 level 时曲线压根没有下降沿，
 /// 插值会给出**负帧数**（实测 −1848 帧，把「历史被跳切切没了」伪装成一个荒谬的尾长）。
@@ -3521,24 +3625,12 @@ StepCurve stepCurveOf(const StepArm& arm, const cv::Mat& aRef, const cv::Mat& bR
     StepCurve c;
     c.tag = arm.tag;
 
-    cv::Mat jump;
-    cv::absdiff(aRef, bRef, jump);
-    cv::Mat m;
-    cv::compare(jump, tau, m, cv::CMP_GT);
-    if (margin > 0) {
-        const cv::Mat k = cv::getStructuringElement(cv::MORPH_RECT,
-            { 2 * margin + 1, 2 * margin + 1 });
-        cv::erode(m, m, k);
-    }
+    // 掩膜与分母走 `stepMask`（与 `convergedFloor` 共用同一算子，见彼处理由）。
+    const cv::Mat m = stepMask(aRef, bRef, tau, margin, &c.den, &c.maskShare);
     const double cnt = static_cast<double>(cv::countNonZero(m));
-    c.maskShare = cnt / static_cast<double>(m.total());
     if (cnt <= 0.0)
         throw std::runtime_error(std::string("臂 ") + arm.tag
             + "：掩膜为空（平移没造出足够去遮挡，或 τ 太大）");
-
-    cv::Mat w;
-    jump.copyTo(w, m);
-    c.den = cv::sum(w)[0] / cnt;
 
     cv::Mat lsb(bRef.size(), CV_64FC1);
     for (int y = 0; y < bRef.rows; ++y) {
@@ -3603,7 +3695,7 @@ void printStepCurve(const StepCurve& c)
  */
 int emitStepVerdicts(const std::string& cameraName, double stepDist, int burst, double tau,
     int margin, const StepCurve& zero, const StepCurve& ema, const StepCurve& boxed,
-    const StepCurve& delivery, const StepCurve& fix)
+    const StepCurve& delivery, const StepCurve& fix, bool* guardsOkOut = nullptr)
 {
     constexpr double kAlpha = 0.01;
     std::vector<Verdict> vs;
@@ -3686,6 +3778,11 @@ int emitStepVerdicts(const std::string& cameraName, double stepDist, int burst, 
     //    ①②③ 红 = 仪器坏了 ⟹ 臂间数字一个都不许报。
     //    ④⑤ 红 = 仪器好、结论难看 ⟹ 那正是要报的东西，改判决线才是事故。
     const bool guardsOk = vs[0].ok && vs[1].ok && vs[2].ok;
+    // 量具状态单独交出去：调用方要用它决定「要不要接着在 FSR 臂上读数」。
+    // ⚠ 不能拿本函数的返回值当量具状态 —— 返回值把**臂间结论**（④⑤）也折进去了，
+    //   而「结论是红」与「量具是坏」是两件事，混在一起会把一次真发现误判成仪器故障。
+    if (guardsOkOut)
+        *guardsOkOut = guardsOk;
     std::printf("\n  ⟹ %s\n", guardsOk
             ? "守卫全绿：仪器可信，④⑤ 的比值即臂间结论本身（红 = 结论，不是仪器坏）"
             : "守卫红 ⟹ **不许报臂间结论**（先修仪器，别改判决线）");
@@ -3706,15 +3803,25 @@ int stepWarmFor(double alpha, int warmFloor)
 }
 
 /// 臂 → 采集口径。`jitterScale = 0` 恒成立（理由见段头【为什么 jitter 恒 0】）。
+///
+/// ✅ **FSR 臂不破坏这条纪律**：`taa.jitter_scale` 与 `fsr_jitter` 是两个独立旋钮，而 FSR
+/// 时域臂的 `taa` 恒 false（引擎互斥硬门 `resolveFsrTemporal`）⟹ 前者根本不被消费，FSR 的
+/// 亚像素抖动走 `fsrJitter` 自足。于是仪器的三条 jitter 红利（B∞ 是固定点 / 零锚恰 0 /
+/// 分母无相位噪声）一条都不必牺牲，FSR 也照样跑在它的设计点上。
 Spec stepSpecFor(const StepArm& a, int warm)
 {
     Spec sp;
-    sp.taa = true;
+    sp.taa = a.taa;
     sp.feedback = a.feedback;
     sp.jitterScale = 0.0;
     sp.baseSpace = true;  // 交付态
     sp.clipMode = a.clipMode;
     sp.reprojection = a.reprojection;
+    sp.renderScale = a.renderScale;
+    sp.velocityField = a.velocityField;
+    sp.fsrUpscaler = a.fsrUpscaler;
+    sp.fsrTemporal = a.fsrTemporal;
+    sp.fsrJitter = a.fsrJitter;
     sp.warm = warm;
     return sp;
 }
@@ -3726,12 +3833,20 @@ struct StepArmResult {
     /// 两个**静止**收敛态（A / B∞）。臂 13 的「闪烁轴逐位不变」= 这两个与臂 11 的两个
     /// 应当只差跨进程确定性地板（`convergedRef` 返回独立 Mat，可安全跨臂持有）。
     cv::Mat aRef, bRef;
+    /// 收敛态**内部**最大偏离（A / B∞ 两跑取大）= **诊断**用，见 `convergedSpread`。
+    double spread = -1.0;
+    /// 收敛态不稳定折算到鬼影分子上的**地板**（ghost 单位）= 闸门用，见 `convergedFloor`。
+    double floor = 0.0;
 };
 
 StepArmResult collectStepArm(const std::string& dir, const BistroCam& from, const BistroCam& to,
     const StepArm& a, int burst, int overrideWarm, double tau, int margin)
 {
-    const Spec sp = stepSpecFor(a, stepWarmFor(a.feedback, overrideWarm));
+    // TAA 臂的热身判据 = `⌈6/α⌉`（EMA）。非 TAA 臂（FSR）**没有 α 可依据**：vendor 的历史
+    // 长度是它内部的事，这里给一个保守地板，够不够**不靠猜** —— 没收敛则末 16 帧仍在漂，
+    // 由 `spread` 当场抓（见 `convergedSpread` 的理由）。
+    const int warm = a.taa ? stepWarmFor(a.feedback, overrideWarm) : std::max(overrideWarm, 120);
+    const Spec sp = stepSpecFor(a, warm);
     const std::string tag = a.tag;
     const StepRun ra = captureStepRun(dir + "_a", tag + "/A", tag + "a", from, from, sp, burst);
     const StepRun rb = captureStepRun(dir + "_b", tag + "/B", tag + "b", to, to, sp, burst);
@@ -3742,6 +3857,12 @@ StepArmResult collectStepArm(const std::string& dir, const BistroCam& from, cons
     out.main = stepCurveOf(a, aRef, bRef, rs, tau, margin);
     out.aRef = aRef;
     out.bRef = bRef;
+    out.spread = std::max(convergedSpread(ra), convergedSpread(rb));
+    // 地板 = B∞ 那一跑**自己内部**的不稳定，按分子同一个掩膜/分母折成 ghost 单位。
+    // 取 B 跑而不是 A 跑：ghost(n) 的参考就是 B∞，污染也从它来。
+    double den = 0.0;
+    const cv::Mat mask = stepMask(aRef, bRef, tau, margin, &den, nullptr);
+    out.floor = convergedFloor(rb, bRef, mask, den);
     // τ 敏感性：主判决只读主 τ，其余两档只打印（τ 是唯一自由阈值 ⟹ 结论不能依赖它）。
     for (double t : kStepTauSweep) {
         const StepCurve s = std::abs(t - tau) < 1e-12
@@ -3750,6 +3871,115 @@ StepArmResult collectStepArm(const std::string& dir, const BistroCam& from, cons
         out.sens.push_back(s.vis.size() > 16 ? s.vis[16] : 0.0);
     }
     return out;
+}
+
+/**
+ * `--fsr` 追加的升频臂组（批 14.5）。
+ *
+ * # 为什么 FSR 必须挤进这台仪器
+ * 鬼影的定义是「让开的内容回不来」。唯一能去遮挡的激励 = 本模式的**平移阶跃**（债-63：
+ * `frame_yaw` 是原地纯旋转 ⟹ 无视差 ⟹ 结构上不可能有鬼影）。换激励 = 换口径，所以
+ * 「FSR 的鬼影比 TAA 轻不轻」这个问题**只能**在这把尺上答，不能拿 yaw 运动的 L1 代替。
+ *
+ * # 六臂分工
+ *   B75 = 双线性 @0.75，**无历史** ⟹ 按构造 `ghost ≡ 0` = **下界锚**
+ *   S75 = FSR 纯空间 @0.75（vendor 每帧 reset，同样无历史）= **第二个下界锚**，且它把
+ *         「FSR 管线本身」与「FSR 的历史」分开：S75 干净而 F75 脏 ⟹ 脏在历史，不在管线
+ *   T11 = TAA @原生 1.0 + **现行交付盒 clip_mode = 11** = 今天真的在跑的那条
+ *   T13 = TAA @原生 1.0 + **臂 13**（债-69 修法，鬼影 AUC 1.073→0.011 = 好 79×，只差转交付）
+ *         🔴 **这条才是 FSR 真正的对手**。拿 FSR 去赢 T11 等于赢一个已被判定要换掉的配置——
+ *         债-69 明写「本条剩『转交付』未做」，所以 T11 是**临时的**交付态。少了 T13 的话，
+ *         「FSR 鬼影比 TAA 轻」会是一句对着旧臂说、下个月就作废的结论。
+ *   T75 = TAA 臂 13 @0.75 = 与 FSR **同内部分辨率**的机制对照（分辨率损失变共模 ⟹ 差值归给
+ *         时域滤波器本身，而不是归给「谁渲染得粗」）
+ *   F75 = FSR 时域 + 抖动 @0.75 = 候选（= 交付档）
+ *
+ * # 两条量具守卫（红 ⟹ 本组数字一律不许读）
+ * ① **下界锚**：B75 与 S75 的 `max ghost(n) ≤ 0.02`。它们没有历史，非零只能说明分子里
+ *    混进了与时间无关的东西（参考构造错、跨进程地板、render_scale 下的采样差）。
+ * ② **基空间自证**：F75 的收敛态 `spread ≤ 0.02`。理由见 `convergedSpread` —— 末 16 帧
+ *    这个窗口是 **TAA 的**抖动周期，不是 FSR 的；FSR 输出若不在基空间，B∞ 就是相位平均糊图。
+ *
+ * # 为什么这里**不**下「谁更好」的判决
+ * 跷跷板有两条轴，本仪器只钉得住**鬼影**这一条（闪烁轴在 `temporal-flicker`）。单轴下结论
+ * 正是本批已被否证过的失效模式（L1 会替模糊打分 ⟹ 两轴规则）。所以这里只出数 + 两条守卫，
+ * **rc 只由守卫决定**；判决留给两轴合起来看。
+ */
+int runFsrStepArms(const std::string& dir, const BistroCam& from, const BistroCam& to, int burst,
+    int warm, double tau, int margin, bool taaGuardsOk)
+{
+    if (!taaGuardsOk) {
+        std::printf("\n  ⟹ TAA 锚臂守卫已红 ⟹ **跳过** FSR 臂（不在坏量具上读数）\n");
+        return 1;
+    }
+    const std::vector<StepArm> arms = {
+        { "B75", 0.0, 0.01, true, false, 0.75, false, false, false, false },
+        { "S75", 0.0, 0.01, true, false, 0.75, true, true, false, false },
+        { "T11", 11.0, 0.01, true, true, 1.0, false, false, false, false },
+        { "T13", 13.0, 0.01, true, true, 1.0, false, false, false, false },
+        { "T75", 13.0, 0.01, true, true, 0.75, false, false, false, false },
+        { "F75", 0.0, 0.01, true, false, 0.75, true, true, true, true },
+    };
+    std::printf("\n── 升频 / FSR 臂（同一次阶跃、同一把尺；S75/F75 的 taa 恒关 = 引擎互斥硬门）──\n");
+
+    std::vector<StepCurve> curves;
+    std::vector<double> spreads, floors;
+    for (const StepArm& a : arms) {
+        StepArmResult r = collectStepArm(dir, from, to, a, burst, warm, tau, margin);
+        spreads.push_back(r.spread);
+        floors.push_back(r.floor);
+        curves.push_back(std::move(r.main));
+    }
+    for (size_t i = 0; i < curves.size(); ++i) {
+        printStepCurve(curves[i]);
+        std::printf("       地板 %s ghost 单位（收敛态不稳定折进分子，闸门读它）"
+                    " ｜ max 偏离 %s（仅诊断：全图 max 会把少数硬边缘翻转放大 ~700×）\n",
+            d4(floors[i]).c_str(), d4(spreads[i]).c_str());
+    }
+
+    const auto maxGhost = [](const StepCurve& c) {
+        double m = 0.0;
+        for (double v : c.g)
+            m = std::max(m, v);
+        return m;
+    };
+    std::vector<Verdict> vs;
+    // ① 下界锚：两条无历史臂必须 ≈ 0。
+    const double floorMax = std::max(maxGhost(curves[0]), maxGhost(curves[1]));
+    vs.push_back(verdictFor("temporal-tail-step-fsr-floor", floorMax <= 0.02,
+        "max ghost(n) 无历史臂 (B75/S75) = " + d4(floorMax)
+            + "（线 ≤ 0.02；无历史 ⟹ 阶跃后每帧就是 B∞ ⟹ 应恰为 0。非零 = 分子混进了与时间"
+              "无关的东西，本组全部数字作废）"));
+    std::cout << "  " << vs.back().line() << "\n";
+    // ② 地板污染：F75 的 ghost 读数必须**显著高于它自己的不稳定地板**。
+    //    线写成「本臂自己的量」而不是绝对数 ⟹ 同时封住两种失效：有鬼影但被地板冒充、
+    //    以及报「我 ≈ 0」而地板比自己还大（后者按仪器最小可分辨量级 0.001 卡）。
+    const double g0 = curves[5].g.empty() ? 0.0 : curves[5].g[0];
+    const double floorLine = 0.2 * std::max(g0, 0.001);
+    vs.push_back(verdictFor("temporal-tail-step-fsr-basespace", floors[5] <= floorLine,
+        "F75 地板 = " + d4(floors[5]) + " ghost 单位，线 ≤ " + d4(floorLine)
+            + "（= 20% × max(本臂 ghost(0) = " + d4(g0) + ", 仪器最小可分辨量级 0.001)）。"
+              "超线 = 该臂 ghost 读数里主要是不稳定地板而不是鬼影"));
+    std::cout << "  " << vs.back().line() << "\n";
+
+    const bool ok = std::all_of(vs.begin(), vs.end(), [](const Verdict& v) { return v.ok; });
+    std::printf("\n  ⟹ %s\n", ok
+            ? "守卫全绿：鬼影轴读数可用。**但跷跷板有两条轴** —— 闪烁轴见 `temporal-flicker`，"
+              "单轴不许下「谁更好」"
+            : "守卫红 ⟹ **本组数字一律不许读**（先修量具，别改判决线）");
+    if (!ok)
+        return 1;
+    std::printf("  鬼影轴排序（AUC 小 = 尾短）：");
+    std::vector<size_t> ord(curves.size());
+    for (size_t i = 0; i < ord.size(); ++i)
+        ord[i] = i;
+    std::stable_sort(ord.begin(), ord.end(),
+        [&](size_t a, size_t b) { return curves[a].auc < curves[b].auc; });
+    for (size_t i = 0; i < ord.size(); ++i)
+        std::printf("%s%s AUC %s", i ? " < " : "", curves[ord[i]].tag.c_str(),
+            d2(curves[ord[i]].auc).c_str());
+    std::printf("\n");
+    return 0;
 }
 
 }  // namespace
@@ -3769,7 +3999,7 @@ double staticDiff(const cv::Mat& a, const cv::Mat& b)
 }
 
 int cmdTemporalTailStep(const std::string& cameraName, double stepDist, int burst, int warm,
-    double tau, int margin)
+    double tau, int margin, bool fsr)
 {
     const BistroCam* base = nullptr;
     for (const BistroCam& c : kBistroCams)
@@ -3833,8 +4063,16 @@ int cmdTemporalTailStep(const std::string& cameraName, double stepDist, int burs
     }
     std::printf("\n");
 
-    return emitStepVerdicts(cameraName, dist, burst, tau, margin, main[0], main[1], main[3],
-        main[4], main[5]);
+    bool taaGuardsOk = false;
+    const int taaRc = emitStepVerdicts(cameraName, dist, burst, tau, margin, main[0], main[1],
+        main[3], main[4], main[5], &taaGuardsOk);
+    if (!fsr)
+        return taaRc;
+    // 六条 TAA 臂**照跑**，不是浪费：Z（零锚）与 E（闭式锚 `ghost(n) = (1−α)ⁿ`）是量具的
+    // 刻度，FSR 臂要用同一把尺 ⟹ 刻度必须在**同一次运行**里自证。它们红了就不往下读。
+    return runFsrStepArms(dir, *base, camB, burst, warm, tau, margin, taaGuardsOk) == 0
+        ? taaRc
+        : 1;
 }
 
 }  // namespace RGL::imgqa

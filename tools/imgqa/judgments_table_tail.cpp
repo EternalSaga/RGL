@@ -266,6 +266,35 @@ const std::vector<JudgmentInfo>& temporalTailStepJudgments()
             "⚠ 同样只在 ①②③ 三条守卫全绿时才有意义。",
             {"tools/imgqa/temporal_motion.cpp `emitStepVerdicts` 第 5 条与 `staticDiff`；"
              "rgl/shaders/taa.frag.slang 臂 13 分支；docs/phase13_plan.md §1.21"},},
+        {"temporal-tail-step-fsr-floor", JudgmentFamily::TemporalMotion,
+            "**升频臂的下界锚 = 无历史臂必须鬼影为零**（批 14.5）。\n"
+            "B75（双线性 @0.75）与 S75（FSR 纯空间 @0.75，vendor 每帧 reset）**都没有历史**"
+            " ⟹ 阶跃后每一帧就是 B∞ ⟹ `ghost(n) ≡ 0`。**线：两条臂的 max ghost(n) 都 ≤ 0.02**。\n"
+            "为什么要有两条：B75 只证明「render_scale<1 的参考构造是对的」；S75 在此基础上再证明"
+            "**FSR 管线本身（EASU + RCAS）不产生鬼影** ⟹ 于是 F75 上看到的任何残影都可以**归因给它的"
+            "历史**，而不是归给升频器。少了 S75，「FSR 鬼影大」这句话分不清是管线还是历史。\n"
+            "非零 ⟹ 分子里混进了与时间无关的东西（参考构造、跨进程地板、render_scale 下的采样差），"
+            "**本组全部臂间数字作废**。\n"
+            "实测（brickfence / 阶跃 0.02）：两条都 **0.000**，收敛态偏离 **0.000000**。",
+            {"tools/imgqa/temporal_motion.cpp `runFsrStepArms`；docs/phase14_plan.md 批 14.5"},},
+        {"temporal-tail-step-fsr-basespace", JudgmentFamily::TemporalMotion,
+            "**FSR 臂的地板污染检查**（批 14.5）——本条是被一次实测**逼出来的**，不是先想好的。\n"
+            "整台仪器把「末 16 帧的均值」当 B∞ 固定点用，而这个 16 是从 **TAA 的**抖动周期借的。"
+            "FSR 的抖动相位 = `8·(上屏宽/渲染宽)²`，0.75 档实测 **14**（启动日志 `fsr_jitter: ... "
+            "相位 14`）⟹ 「取 16 帧 = 取满一个相位周期」对 FSR 臂**不成立**。\n"
+            "🔴 **统计量必须是「按分子同一个算子折出来的污染量」，不是全图 max**。首轮实测踩过：用"
+            " max-norm 时 F75 报 **0.83**（线 0.02，红 40 倍），看着像「FSR 输出根本不稳定」；实际"
+            "全图**均值**偏离只有 0.00075，那 0.83 来自 **0.166% 的像素**——全在硬边缘（线性域梯度 "
+            "0.95/px，亚像素相位一变就在黑白之间翻）。把它按**鬼影掩膜 + 同一个分母**折一遍，真正的"
+            "污染只有 **0.0010 ghost 单位 = 该臂 ghost(0) 的 10%**。max-norm 把污染夸大了 **700 倍**。\n"
+            "**线：地板 ≤ 20% × max(本臂 ghost(0), 0.001)**。写成「本臂自己的量」而不是一个绝对数，"
+            "是为了同时封住两种失效：① 臂有鬼影但被地板冒充（地板 > 20% 该臂 ⟹ 红）；② 臂报「我"
+            "鬼影 ≈ 0」而地板比它自己还大（此时按 0.001 这个**仪器打算分辨的最小量级**卡）。"
+            "0.001 是分辨率声明，不是给某条臂调的数。\n"
+            "⚠ 本条只保证「该臂的 ghost 数字可信」，不保证它小。实测 F75 地板 0.0010 / ghost(0) "
+            "0.0100 ⟹ 过；T13 地板 0.0000 / ghost(0) 0.0005 ⟹ 过。",
+            {"tools/imgqa/temporal_motion.cpp `convergedFloor` 与 `runFsrStepArms`；"
+             "docs/phase14_plan.md 批 14.5"},},
     };
     return kPart;
 }

@@ -59,6 +59,29 @@ struct FlickerSeries {
 };
 
 /**
+ * 一条闪烁臂（批 14.5 加 FSR 用）。
+ *
+ * 既有两条（TAA 关 / TAA 开）的 tag 与目录后缀**逐字不变** ⟹ 已发表读数可复现。
+ * `renderScale` / `fsr*` 只改**渲染分辨率与升频器**；运动激励、ROI、帧数一律不动——
+ * 换激励就是换口径，两条轴就没法比。
+ */
+struct FlickerArm {
+    const char* tag;       ///< 采集目录后缀（`imgqa_flicker_<tag>`）
+    const char* name;      ///< 表内显示名
+    bool taa = false;
+    double renderScale = 1.0;  ///< 1.0 = 不写键 = 原生
+    bool fsrUpscaler = false;  ///< 自动连带 `velocity_field`（FSR 的前置）
+    bool fsrTemporal = false;
+    bool fsrJitter = false;
+    /// 🔴 **工作点必须与鬼影轴对齐**，否则两条轴量的是两个配置（首轮就踩在这里）：
+    /// 本仪器历史上恒用 `kTaaFeedback = 0.12`，而鬼影臂与交付配置都是 `α = 0.01`
+    /// ——累积窗差 12 倍，闪烁自然差一截，不写这两个字段就会把 TAA 的闪烁**低估**、
+    /// 把 FSR 的优势**高估**。
+    double feedback = 0.12;
+    double clipMode = 0.0;  ///< 0 = 不写键 = 引擎默认硬盒；11 = 交付；13 = 债-69 修法臂
+};
+
+/**
  * 起引擎采一段连拍（`temporal-flicker` 与 `temporal-homography` **共用同一个采集口**——
  * 两条判据看的是同一种激励，写两份采集代码迟早漂）。
  * @param edgeTarget true = aa_target 合成靶（闭式适用）；false = 交付配置 + bistro 机位
@@ -68,12 +91,13 @@ struct FlickerSeries {
  *                   2 Lanczos3 6×6）。默认 0 = **不写键** = 引擎默认 = 已发表读数的口径
  * @param wantBands  true = 顺带算「亮度 × 梯度」分带的尺子（`byteMean`/`byteMax`/`gradMax`，
  *                   口径见 `FlickerSeries` 注释）。默认 false = 不算 = `temporal-flicker` 逐位今天
+ * @param arm        非空 = 按该臂覆写渲染分辨率与升频器（批 14.5 闪烁轴）。默认 null = 不动
  */
 [[nodiscard]] FlickerSeries captureFlickerSeries(const std::string& dir, const std::string& name,
     const std::string& tag, bool edgeTarget, const BistroCam* cam, bool taaOn,
     double yawRadPerFrame, int frames, double kernel = 0.0, bool wantBands = false,
     bool wantObjectId = false, double envIntensity = 1.0, double aoStrength = 0.5,
-    bool overrideEnv = false, bool overrideAo = false);
+    bool overrideEnv = false, bool overrideAo = false, const FlickerArm* arm = nullptr);
 
 /// `--target` 解析（两条判据共用）：edge = 合成靶；否则 bistro 机位名。找不到 = 抛。
 /// @param edgeTarget [out] true = 合成靶
@@ -141,6 +165,6 @@ struct FlickerAnchor {
  *               键无消费者 ⟹ 它就是本判据的闭式刻度锚点，不随核变）
  */
 int cmdTemporalFlicker(const std::string& target, double sweepPxPerFrame, int frames,
-    double halfWidth, double rowFrac, bool verbose, double kernel = 0.0);
+    double halfWidth, double rowFrac, bool verbose, double kernel = 0.0, bool fsr = false);
 
 }  // namespace RGL::imgqa

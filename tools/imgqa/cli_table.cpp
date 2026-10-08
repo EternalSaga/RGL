@@ -287,6 +287,15 @@ std::vector<SubcommandSpec> specsTailAndMotion()
                 FlagSpec{"--max-lag", "16", "仅 --motion spin：衰减曲线长度 K", FlagKind::Number},
                 FlagSpec{"--tau", "0.05", nullptr, FlagKind::Number},
                 FlagSpec{"--margin", "8", nullptr, FlagKind::Number},
+                FlagSpec{"--fsr", nullptr,
+                    "仅 --motion step：追加**升频 / FSR 六臂**（B75 双线性 / S75 FSR 纯空间 / T11 TAA@原生"
+                    "现行盒 / **T13 TAA@原生臂13** / T75 TAA臂13@0.75 / F75 FSR时域+抖动@0.75），与六条 "
+                    "TAA 锚臂跑在**同一次阶跃、同一把尺**上。🔴 对手是 **T13** 不是 T11——债-69 的修法臂 13 "
+                    "鬼影好 79×、只差转交付，赢 T11 = 赢一个下个月就换掉的配置。两条量具守卫："
+                    "`temporal-tail-step-fsr-floor`（无历史臂 ghost ≡ 0）与 `temporal-tail-step-fsr-basespace`"
+                    "（F75 收敛态是固定点；末 16 帧是 **TAA 的**抖动周期，FSR 的实测是 14）。"
+                    "⚠ 只出**鬼影单轴**，不许据此下「谁更好」——闪烁轴在 temporal-flicker",
+                    FlagKind::Bool},
             },
             {
                 "`--motion camera` 的四条判决线（跑前写死）：① **配对零锚** = 主角度的 `Z`（α=1 + 无抖动）frac ≤ 0.02；② **灵敏度 + 单位** = 主指标"
@@ -379,6 +388,13 @@ std::vector<SubcommandSpec> specsFlickerAndNoise()
                 FlagSpec{"--rowfrac", "0.14", nullptr, FlagKind::Number},
                 FlagSpec{"--verbose", nullptr, nullptr, FlagKind::Bool},
                 FlagSpec{"--kernel", "0", "批 13.8 输入侧重建核（0 双线性 / 1 CR 4×4 / 2 Lanczos3），**只作用于 TAA 开组** ⟹ TAA 关组 = 闭式无 AA 锚点", FlagKind::Number},
+                FlagSpec{"--fsr", nullptr,
+                    "追加三条升频臂跑**闪烁轴**（双线性@0.75 = 糊地板 / TAA开@0.75 = 同分辨率机制对照 / "
+                    "FSR时域+抖动@0.75 = 候选），与既有两条 TAA 臂共用同一 ROI 与同一激励。"
+                    "🔴 FSR 要算「买了东西」必须**同时**不劣于糊地板且优于 TAA 开——只赢后者说明它买到的"
+                    "只是分辨率损失的模糊（两轴规则）。鬼影轴在 `temporal-tail --motion step --fsr`，"
+                    "**两轴合起来才许下结论**",
+                    FlagKind::Bool},
             },
             {
             },
