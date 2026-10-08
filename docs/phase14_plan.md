@@ -1086,20 +1086,21 @@ FSR context 创建时跑 ⟹ FSR 关时根本不执行、逐位不变。**形式
 
 ### 七、修法落地状态与待办
 
-**已落地（工作区，未提交）**：`third_party/fsr/vendor/src/components/fsr3upscaler/ffx_fsr3upscaler.cpp`
-一处 —— `lanczos2()` 里 `abs(value)` → `fabsf(value)`。**补丁面 = 1 文件 / +2 −1，不动 vendor shader，
+**已落地并提交**（`a03d77c`）：`third_party/fsr/vendor/src/components/fsr3upscaler/ffx_fsr3upscaler.cpp`
+一处 —— `lanczos2()` 里 `abs(value)` → `fabsf(value)`。**补丁面 = 1 文件 / +1 −1，不动 vendor shader，
 `fsr-blobs` 产物与 HEAD 逐位一致，`fsr-check` 护栏 OK（38 输入 / 41 产物）。**
+配套护栏 = `632603a`（`just build` 退出码）+ `d76a4e6`（选择性 `-Werror`）。
 
-**提交前必须补的三条**：
+**提交前必须补的三条**（提交时状态）：
 
-1. **红线复验**：FSR 关 = 逐位不变（第六节已给分析，形式化 SHA256 未跑）。
-2. **真实用法验收**：本批全部数字是 **render_scale=1.0 + 抖动关** 的**诊断档**。FSR 的设计点是
-   `render_scale < 1` + 抖动开 —— 那才是 14.5 要交付的档，**必须在那一档重测**（且时域档测量
-   **不可并行**：`dd.frameTimeDelta` 是墙钟量，争用会改变累积权重）。
-3. **记 `third_party/fsr/PATCHES.md`**：这是**上游 vendor bug**（不是我们的接线错），要写清
-   上游版本与 `abs` 名字解析的根因。**同类面已扫完**：vendor host 代码
-   （`src/components` / `src/backends/vk` / `src/shared` / `include/FidelityFX/host`）里非限定
-   `abs(` 在本处修好后**0 命中** ⟹ 这是唯一一处，不存在同族待爆雷。
+1. ~~**红线复验**~~ ✅ **已做**：FSR 关截图 SHA256 = `fdece9d0…` = §1.14 登记基线，**逐位相同**，
+   且是**跨会话**仍与登记值一致（比"同会话双构建"更强）。
+2. **真实用法验收** ⬜ **仍未做**：本批全部数字是 **render_scale=1.0 + 抖动关** 的**诊断档**。
+   FSR 的设计点是 `render_scale < 1` + 抖动开 —— 那才是 14.5 要交付的档，**必须在那一档重测**
+   （且时域档测量**不可并行**：`dd.frameTimeDelta` 是墙钟量，争用会改变累积权重）。
+3. ~~**记 PATCHES.md**~~ ✅ **已做**：P14 条目 + §P14 配套护栏节。**同类面已扫完**：vendor host
+   代码（`src/components` / `src/backends/vk` / `src/shared` / `include/FidelityFX/host`）里
+   非限定 `abs(` 在本处修好后 **0 命中** ⟹ 这是唯一一处，不存在同族待爆雷。
 
 **顺带结案的两条旧账**：① §1.17 的 σ≈0.8 指纹**已由本批解释**（[¼½¼]⊗[¼½¼]，σ=0.707）；
 ② worker 合成靶台报的 `useLut` 探测口径矛盾**升级后已结案**——`useLut` 正是选 reproject 核的那一位，
@@ -1114,9 +1115,29 @@ FSR context 创建时跑 ⟹ FSR 关时根本不执行、逐位不变。**形式
 另说。worker 的 `third_party/fsr/smoke/fsr_lab.cpp`（合成靶台）已在册，但**本批的结论不依赖它**
 （见第四节末对其方法学缺陷的说明）。
 
-**本批暴露的一个判据缺口**：LUT 是 host 生成的、直接决定时域锐度的常量，但**没有任何护栏检查它的
-形状**。可落成一个 `just test` 级单测（纯 CPU、无设备）：**断言 `lanczos2(1.0)` 接近 0 且 LUT 单调
-段数正确** —— 这条能永久钉死本批的根因。**待落地**（写它之前先读 skill `rgl-test-discipline`）。
+### 九、护栏的**归宿裁决**：这一类是 GUARD，不是 TEST
+
+LUT 是 host 生成的、直接决定时域锐度的常量，却没有任何护栏。**但"补个单测"在这里是错的**：
+`lanczos2()` 是 vendor `.cpp` 里的 **`static` 函数，测试根本够不着**。唯一写得出来的单测是
+"在测试里重算一遍闭式去比对期望"——那测的是**我的副本**，vendor 真退化了它**照样绿**，
+**违反阳性锚点**（"这段代码从未生效，这条断言会绿吗"→ 会绿）。**假护栏比没有护栏更糟**，不写。
+
+真正的防线 = **编译器**：clang **默认就发** `-Wabsolute-value`，P14 之所以能活一整个 phase，
+缺的从来不是诊断，而是**两道把诊断咽下去的自伤**，两道都已修：
+
+| 自伤 | 修法 |
+|---|---|
+| vendor target 整块 `-Wno-error`（原注释写"逐条静音、保留其余可见"，**实现其实没做逐条**） | 保留 `-Wno-error`，用 `-Werror=<名>` 把 bug 类逐条提升回来（表 = `FFX_BUG_CLASS_WARNINGS`） |
+| **`just build` 吞编译退出码**——`subprocess.call` 返回值没人接，**编译失败也返回 0**（同文件 `config` 配方一直是对的，只有 `build` 漏） | 透传退出码 |
+
+> **本批最该记住的一条**：第二条比第一条重要。**判据不拦住 = 判据不存在**。
+> 我这几轮排查全程得自己写 `b.sh` 去 grep `error:` —— 那就是在给构建入口打补丁。
+> 任何"让构建失败"的护栏，在这个漏洞之上都退化成"打印一行没人必须读的输出"，
+> 而"打印了没人读"正是 P14 的失败模式本身。
+
+护栏变异验证（双向）：`fabsf`→`abs` ⟹ `just build` rc=**1** 且点名 `[-Werror,-Wabsolute-value]`；
+恢复 ⟹ rc=**0**。`just test` 228 用例 / 62803 断言全过。
+**沉淀地址**：`GUARD: -Werror=absolute-value on ffx_fsr3upscaler_vk` + `just build` 退出码透传。
 
 
 > 顺序按「失败最便宜」排，不是按依赖最紧排。**14.1 与 14.3 可并行**（14.3 不碰 FSR）。
