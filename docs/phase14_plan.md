@@ -651,6 +651,94 @@ app 侧的投影抖动（`jitterOffset` 申报 + `JitterSequenceLength()` 参与
 `>/dev/null` 吞掉 ⟹ 拿旧二进制得出结论）。**做实验时不许把 build 输出丢进 /dev/null**；
 判据说"没输出"之前，先确认改动真的进了二进制。
 
+## 1.15 批 14.5 第三批实测：AO 施加点从 TAA 里拆出来（2026-10-08，本机 STRIX_HALO）
+
+> 触发 = 用户一句话："之前 SSAO 和 TAA 合并了，如何处理下把它拿出来"。直觉完全正确，
+> 但**被合并的不是 SSAO，是「AO 的施加点」**——这个区分决定了改动范围（ao pass 本身一行没动）。
+
+### 耦合的真实形态（先查清再动手，不猜）
+
+| 配置 | AO 从哪来 | AO 在哪施加 | 为什么 |
+|---|---|---|---|
+| TAA 开 | 独立的 `ao` pass（**没被合并**） | **taa.frag 内**，时域滤波**之前** | 批 13.6：AO 乘在时域之后 = 噪声零平均，实测占残余 shimmer **62%** |
+| TAA 关 | 同上 | tonemap 内 | 没有时域滤波器，乘在哪都一样 |
+| **FSR 开 + TAA 关（本批要的路）** | 同上 | ⚠ 只能落回 tonemap = 时域**之后** | **正好退回 13.6 修掉的形态** |
+
+切换机制 = scene data @722224.z 一个**运行时标量**（`tonemap.frag` 的
+`lerp(lerp(1,ao,strength), 1, flag)`），CPU 侧写的是 `decorateTaaPass` **实际结果**而非配置键。
+⟹ 真正的病灶 = **不变量「AO 必须在时域滤波器之前施加」被硬编码成了「时域滤波器 == taa pass」**。
+
+### 三条路的取舍（用户拍板甲）
+
+| 路 | 代价 | 门关档逐位不变？ |
+|---|---|---|
+| **甲：独立 `ao_apply` 全屏 pass** ✅ | +1 全屏 draw + 一个 pass 词表项 | ✅ **天然守住**（门关 = 不插） |
+| 乙：AO 施加搬进 `ao` pass（零新增 draw） | 省一次 draw | ❌ AO 乘法从 tonemap 内 float32 变成写 RGBA16F 时量化一次 ⟹ 红线要重立 |
+| 丙：改 `taa.frag` 支持「只施加 AO 不做时域」 | 零新 shader | ⚠ 精度同今天，但要动 Phase 13 冻结文件，回归面最大 |
+
+甲的红线之所以是**结构性**守住（不是靠小心）：施加点由**图形态**决定，门关时装饰器根本不插，
+tonemap 继续自己施加 = 图与命令流零变化。
+
+### 落地形态（八处）
+
+- **shader** `rgl/shaders/ao_apply.frag.slang`：色采 `input.uv`（留在抖动空间）、AO 采
+  `baseUv = saturate(uv + readTaaParams().zw * texel)` + **线性采**。两条纪律从 taa.frag 批 13.6
+  原样继承。**TAA 关时 c_t 恒 0 ⟹ baseUv == input.uv**，与 tonemap 今天的采法逐位等价——
+  这句不是为今天写的，是为了**接 FSR 抖动线那天**：届时色带抖动而 AO 不会。
+- **词表** `kAllPassStates` 12→13（fullscreen 档 5→6）；StateKit 加成员 + 槽位表（`static_assert`
+  逼着两处同步，漏一处编译不过）。
+- **装饰器** `decorateAoApplyPass`：一附件（`ao_applied`, rgba16_sfloat, **渲染**网格）+ 一 pass
+  + 把 tonemap 的色输入换成 `ao_applied`。**三条跳过条件**：① 图里已有 `taa` pass（防双施）
+  ② 无 `ao` 附件 ③ 无「写 swapchain 且采色」的 pass。**次序契约** = 必须在 picking / highlight /
+  taa 之后装饰（本 pass 采色，不像 velocity 那样靠"不采色"天然免疫锚点误认）。
+- **管线条目** `addAoApplyEntry`（binding 4 色 / 5 共享 sampler / 6 ao 可见度；mesh 复用大三角）。
+- **RT 领槽** `ensureAoAppliedSlot`（仅 `aoApplyDecorated` 时领 = 门关堆槽零差异）。
+- **装配** tonemap 烘进去的堆槽优先级 **ao_applied > taa_out > scene_hdr**；FSR 开时整条被它的
+  零拷贝输出槽顶掉（两者写同一个 binding、互斥）。
+- **FSR 色输入**优先级 **ao_applied > taa_out > scene_hdr**（`initFsr`）。
+- **标志改名** `readTaaAoApplied` → `readAoAppliedPreTemporal` / `SceneEnv::aoAppliedPreTemporal`：
+  施加点从「只有 taa」变成两个来源，旧名会误导。**零布局变更**（复用 @722224.z 保留位）——
+  `just reflect` 后生成物**逐字节未变**，只有 manifest 的输入 SHA1 变了。
+
+### 判据（全部本机实测）
+
+| 判据 | 结果 |
+|---|---|
+| 门关（默认）逐位不变 | ✅ SHA256 `fdece9d0…` = 红线基线 |
+| 三档图形态 | ✅ FSR 单开 → 插（`ao_applied … slot 8256`）；**FSR+TAA → 不插**；TAA 单开 → 不插 |
+| VVL | ✅ 四档全 PASS errors=0 warnings=0 |
+| **AO 恰好施一次**（本批承重判据） | ✅ **量级比 1.007**（见下） |
+| `just test` | ✅ 226/226（新增 2 条装饰器 TEST_CASE） |
+| style / doc-check | ✅ 各 0 警告 |
+| 装饰器判据变异 | ✅ **四条全验红**（防双施护栏 / 输入顺序 / ao 输入声明 / 消费者改写） |
+
+**「AO 恰好施一次」的判据长什么样**（这条同时钉住两个相反的失效方向，值得记下来）：
+跑四张图 —— {FSR, 门关} × {ao.strength 0.5, 0}，比 **AO 净变暗的量级**：
+
+| | AO 开 | AO 关 | 净变暗 |
+|---|---|---|---|
+| 门关（tonemap 施） | 78.264 | 79.547 | 1.284 |
+| FSR（ao_apply 施） | 78.402 | 79.695 | 1.293 |
+
+**比值 1.007**。零施 ⟹ 比值 ≈ 0（FSR 若读无 AO 的 scene_hdr 而 tonemap 又跳过，AO 直接消失）；
+双施 ⟹ 量级翻倍。单看"画面有没有 AO"分不清这两种失效，**只有差分分得开**。
+
+### 顺带还掉的两笔（被 500 行红线逼出来的，不是顺手洁癖）
+
+- **`main_scene.cppm` 拆出 `main_wiring.cppm`**（`module main:wiring;`）：本批给它加 9 行代码时
+  撞上「单文件代码行 ≤500」（该文件此前已顶在 500）。红线不是要绕的、是要**找缝**的——
+  `wireHotReload` / `wireShaderHotReload` / `wirePicking` 是整文件里唯一**零引用本文件 file-static**、
+  不碰 GPU 资源创建的一段（只做「构造服务 + emplace ctx + 闭包桥」）。拆后 509→**400** / 129，
+  并摘掉 6 条随之失效的 import（留假边 = 让慢模块白白成为编译前置）。
+- **`assembleBackEnd` 18 参 → 15 参**：`CompiledRenderGraph&& + deferredMode + taaDecorated +
+  velocityDecorated + aoApplyDecorated` 五个散装参数并成一个 `CompiledGraphResult&&`。散装标志是
+  **真漂移源**（加一个装饰标志要改三处，签名缩进已经歪了）；顺带把 `main()` 从 122 行压回 ≤120
+  （红线），而不是靠拉一条 155 字符的长行绕过去。
+
+**方法论（本批，第 6 次踩同一坑）**：变异脚本里我把 `cmake --build` 的输出丢进了 `>/dev/null`，
+四条变异里**两条其实根本没编译**（语法错误被吞），差点得出"判据抓不住"的相反结论。
+**判据变异必须看编译输出**——"没红"有两种成因：判据无效 / 变异没进二进制。
+
 ## 2. 批次拆分与验收判据
 
 > 顺序按「失败最便宜」排，不是按依赖最紧排。**14.1 与 14.3 可并行**（14.3 不碰 FSR）。
@@ -664,7 +752,7 @@ app 侧的投影抖动（`jitterOffset` 申报 + `JitterSequenceLength()` 参与
 | ~~**14.3**~~ ✅ **已收口 2026-10-08** | **内部分辨率与窗口拉伸解耦**：现在 render extent ≡ swapchain extent ≡ 窗口像素（`Resources` 深度图 extent = swapchain extent；全仓**无 `renderScale` 概念**，只有 `vkswapchain.cppm` 的 `windowScale` 诊断）。加一个独立的 render extent，与 swapchain extent、与债-37 的 HPD 分数缩放三者正交 | 用户方向第四条。**它是 FSR 的硬前置，但本身独立可验收、且净收益**（DRS / 性能实验都缺它）；与 14.1 并行 | ① `renderScale ∈ {1.0, 0.75, 0.5}` 下画面正确、resize 不崩、imgui 与**点选**不受影响（债-37 三条连带不许回退）—— ✅ 三档实机出图（0.5 档读图：内容/取景/比例正确，仅整体变软 = 双线性放大预期）；imgui 恒在后缓冲像素、点选两级换算收口，债-37 三条连带无回退（renderScale=1 时比值恰为 1）；**live resize 未手工验证**，改为把取整/钳制写成单测断言覆盖；② `renderScale = 1.0` 时**逐位等于**今天的基线（红线）—— ✅ 1280×720 与 1600×900 两档与开工前基线逐位相同（同会话增量构建），且**结构上**成立：图形状与 renderScale 无关（§1.9）；③ 截图/判据口径显式记录 render extent（否则 imgqa 所有像素类判据静默换含义）—— ✅ 启动日志 + 截图成功日志 + RPC `/state` 新增 `render` 段 + `just shot` 网格行；`--render-scale` **核对引擎实际生效值**（变异验红：请求 0.1 → 钳到 0.25 → FAIL）；④ Wayland 175% 缩放下实测一次 —— ⚠ **未做**（本机无 Wayland 会话）；默认档行为逐位同前，风险仅在显式改档。**收口记录** → §1.9 |
 | **14.4** 🕳 **进行中**（纯函数层 + pass 侧已落地） | **逐像素速度场**（债-71 / 债-35，**本 phase 最大的一块**）：compute pass 由两帧相机矩阵 + `depthTex` 解析算出每像素速度（本项目唯一运动是全局刚体 ⟹ 便宜），输出 FSR 口径的 `motionVectors`；同时把 TAA 的重投影从"全局矩阵"改成"读这张场" | 用户方向第三条。**它是天花板唯一的出口**，且能独立验收（不必等 FSR 接完）——臂 14 = 门改吃真实逐像素速度 ⟹ 直接问跷跷板是否松绑 | ① 速度场与**独立解析参考**逐像素对拍（含 pitch；用 `temporal_yaw_remap` 那套带 pitch 的金标准，2.3e-13px）；② **阳性锚点** = 静止机位必须恒 0；③ **反向用例** = 符号取反必须让 §1.22 的 R 变差；④ 用它重跑 `temporal-tail --motion step` 与 `temporal-motion`，报 R 是否 < 1（**这是"运动中 TAA 有害"能不能翻案的判决**） |
 | **14.4b** ✅ **A 档已落地**（B 档待 14.5 后重裁，见 §1.11） | **图外资源挂号 + 布局对账护栏**（FSR 前置，见 §1.7）。做两档、明确不做第三档：**A 护栏**（便宜）= 图外 pass 进出点比对 `attachmentLayouts[slot]` 与预期值，不符即 error 出声，把"进出同值"从**约定**变**断言**；**B 挂号**（中等）= `RgGraphDesc` 增加 external-use 声明（attachment × usage × 插在哪个 pass 之后/之前），GraphCompiler 据此把 barrier 并入计划，`IzbShadow` / `EvssmShadow` / FSR 三处不再手写 **image** barrier；**C 不做** = buffer 侧依赖自动推导（图只跟 image attachment，加进去 = 半个 memory manager） | **排在 14.5 之前**：FSR 是第三个图外 compute，先立护栏再扩面，否则 14.5 的 VVL 判据要替"约定"背锅，而债-32 已经证明这类缺口 VVL 不报 | ① **阳性锚点** = 故意让某图外 pass 不还原布局 ⟹ 护栏必须 error（**变异验过非空转**）；② **反向** = 现状全绿（护栏零误报，否则等于没有）；③ 红线 = 画面逐位不变（护栏只读不写命令）；④ B 档做完 = `izb_shadow_impl.cppm:256,280` 两处 `depthLayoutBarrier` 删除且画面逐位不变 |
-| **14.5** 🕳 **前两批已落地**（第一批 = FSR 每帧跑通 VVL 零错、输出无消费者，见 §1.13；第二批 = **输出接进 tonemap**，零拷贝换槽，**默认只开纯空间档**，见 §1.14） | **FSR 接线**：落位 = **图外 compute 编舞**（`RgPassKind` 只有 `drawMesh/blit/drawLight`，**无 compute kind**；先例 = IzbShadow / EvssmShadow，见 `evssm_shadow.cppm:20`）。HDR 域位置 = **tonemap 之前**（scene_hdr@render res → FSR → hdr@display res → tonemap → swapchain），`ENABLE_HIGH_DYNAMIC_RANGE` 开。**第二批改判**：原计划「copy 进图附件 `fsr_out`」**不做**——FSR 的 UAV 输出必须常驻 GENERAL（现有 usage→layout 表表达不了），且图内无写者的附件是额外风险；改走 `Resources::ensureFsrSampleSlot()` + 模块自写描述符（`EvssmShadow::momentsSampleSlot` 同族），**零拷贝、零图词表改动** | 唯一架构决策，先写死再动手，免得中途返工 | ① **FSR 关 = 逐位不变**（与 TAA 同款红线，用基线配置）—— ✅ 门关 SHA256 = `fdece9d0…` = 红线基线；② VVL 零报错（含跨 submission 依赖与布局链——债-32 那条"图外编舞"的坑）—— ✅ 门开 PASS errors=0 warnings=0；⚠ **布局漂移 VVL 抓不到**（布局本身合法，症状隔一整帧），这一项靠 **14.4b 的护栏**，不是靠 VVL；③ 显存账新增"外部分配器"科目且**闭合断言重新有意义**；④ 本批**只点亮不调参** —— ✅（`kFsrSharpness = 0.2` 取 AMD 样例默认，调参归 14.7）；⑤ **第二批新增：画面判据**——纯空间档 0.5 档边缘能量 **8.43 > 双线性 7.95** ✅，且输出是**帧号纯函数**（同参数两次跑 SHA256 相同 ⟹ FSR 档可做逐位回归）；**时域档实测退化**（3.78 < 7.95），默认关，根因与二分链见 §1.14 |
+| **14.5** 🕳 **前三批已落地**（第一批 = FSR 每帧跑通 VVL 零错、输出无消费者，见 §1.13；第二批 = **输出接进 tonemap**，零拷贝换槽，**默认只开纯空间档**，见 §1.14；第三批 = **AO 施加点从 taa.frag 拆成独立 `ao_apply` pass**，让"AO 乘在时域之前"与"谁做时域"解耦，见 §1.15） | **FSR 接线**：落位 = **图外 compute 编舞**（`RgPassKind` 只有 `drawMesh/blit/drawLight`，**无 compute kind**；先例 = IzbShadow / EvssmShadow，见 `evssm_shadow.cppm:20`）。HDR 域位置 = **tonemap 之前**（scene_hdr@render res → FSR → hdr@display res → tonemap → swapchain），`ENABLE_HIGH_DYNAMIC_RANGE` 开。**第二批改判**：原计划「copy 进图附件 `fsr_out`」**不做**——FSR 的 UAV 输出必须常驻 GENERAL（现有 usage→layout 表表达不了），且图内无写者的附件是额外风险；改走 `Resources::ensureFsrSampleSlot()` + 模块自写描述符（`EvssmShadow::momentsSampleSlot` 同族），**零拷贝、零图词表改动** | 唯一架构决策，先写死再动手，免得中途返工 | ① **FSR 关 = 逐位不变**（与 TAA 同款红线，用基线配置）—— ✅ 门关 SHA256 = `fdece9d0…` = 红线基线；② VVL 零报错（含跨 submission 依赖与布局链——债-32 那条"图外编舞"的坑）—— ✅ 门开 PASS errors=0 warnings=0；⚠ **布局漂移 VVL 抓不到**（布局本身合法，症状隔一整帧），这一项靠 **14.4b 的护栏**，不是靠 VVL；③ 显存账新增"外部分配器"科目且**闭合断言重新有意义**；④ 本批**只点亮不调参** —— ✅（`kFsrSharpness = 0.2` 取 AMD 样例默认，调参归 14.7）；⑤ **第二批新增：画面判据**——纯空间档 0.5 档边缘能量 **8.43 > 双线性 7.95** ✅，且输出是**帧号纯函数**（同参数两次跑 SHA256 相同 ⟹ FSR 档可做逐位回归）；**时域档实测退化**（3.78 < 7.95），默认关，根因与二分链见 §1.14；⑥ **第三批新增：AO 施加点解耦**——门关逐位不变 ✅、三档图形态正确 ✅、**AO 净变暗量级比 1.007**（恰好施一次，同时排除零施与双施）✅、装饰器四条判据变异全验红 ✅，见 §1.15 |
 | **14.6** | **判据迁移**：直接复用（`temporal-tail --motion step` 含闭式锚臂 E、`temporal-motion` 的 M0/M1/M2/M3x 消融族、理想 N 相位平均参考、往返地板、`aa-coverage`、`temporal` 的 ρ 对闭式、alignment/ablation 两条**元判据**）／换口径（ρ 六机位表：**算子留、阈值全重立**，闭式 ρ\*=0.0827 是 EMA 的闭式，FSR 不是 EMA）／随 TAA 作废（`clip_mode` 臂族、gate 断点锚点、`diag_reject` alpha 解码） | 用户方向最后一条"跑一堆 imgqa"的前置。**不先分类就会拿 TAA 的阈值判 FSR** | ① 三张清单落到 `imgqa` 的判据注册表（**不在文档里抄清单**，抄名单反模式）；② 每条"复用"项跑一次并记录新基线；③ 每条"作废"项**先确认不是护栏**（债-68 三条件） |
 | **14.7** | **旋钮调参**：§1.6 那 5 个 configure key × 三轴判据（静止闪烁 / 平移阶跃鬼影 / 运动中 R） | 有判据才有旋钮；顺序必须在 14.6 之后 | 每个 key 给一张扫描表 + **一次消融证明它真的在动**（阳性锚点），并写清代价轴 |
 | **14.8** | **VMA 裁决**：默认**不改**，只补账本科目。改那 4 处 `vkAllocateMemory` 的触发条件（任一）：① 外部分配器条数让 `maxMemoryAllocationCount` 逼近上限；② 预算/OOM 需要统一降级；③ 显存账科目精度不够用 | 见 §1.5。**账本口径问题用账本解决，不用 patch 解决** | 若不动：显存日志里 FSR 的 VRAM 有独立一行且 `logMemoryStats` 的闭合断言重新成立（口径写明"含外部分配器 X MiB"） |

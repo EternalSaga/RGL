@@ -509,7 +509,7 @@ export struct SceneEnv {
 	//   `taaEnabled` 配置键：offscreen 变体配置开了 TAA 也会装饰失败，拿配置派生 = AO
 	//   一次都不施加。也**不得**做成 imgui 滑杆（图形态启动期定死，运行期改会让标志与
 	//   图脱钩 = 双施或零施）。
-	bool taaAoApplied = false;
+	bool aoAppliedPreTemporal = false;
 	// 重投影消融门（`taa.reprojection`，默认 true = 逐位今天）：false ⟹ taaSystem 把
 	// 「上一帧矩阵」载荷换成本帧抖动后矩阵 + 位移清零 + motion 单位阵 ⟹ shader 的
 	// prevUvBase ≡ baseUv（历史按同基位置采样）。判据消费方 = imgqa temporal-motion M3。

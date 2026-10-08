@@ -125,6 +125,7 @@ std::expected<std::array<uint32_t, 2>, Error> ensureTaaSlots(
 	return slots;
 }
 
+
 /**
  * Phase 14 批 14.4（接口注释见 render_graph.cppm）：单幅全屏 RT，名字/格式 =
  * kVelocityName/kVelocityFormat 契约常量。extent 取 **渲染**网格（`getRenderExtent()`，
@@ -145,6 +146,29 @@ std::expected<uint32_t, Error> ensureVelocitySlot(
 			fmt::format("velocity RT has no sample descriptor slot")});
 	if (auto* logger = RLLogger::getInstance())
 		logger->info("velocity (RGBA16F, 像素单位 prev−cur): {}x{} slot {}",
+			extent.width, extent.height, *slot);
+	return *slot;
+}
+
+/**
+ * Phase 14 批 14.5 第三批（接口注释见 render_graph.cppm）：单幅全屏 RT，名字/格式 =
+ * `kAoAppliedName` / `kAoAppliedFormat` 契约常量。extent 同速度场取**渲染**网格——它是
+ * 时域滤波器的输入，必须与 scene_hdr / taa_out 同尺寸。启动期仅 ao_apply 落图时调用一次。
+ */
+std::expected<uint32_t, Error> ensureAoAppliedSlot(
+		RenderTargetCache& rts, Swapchain& swapchain) {
+	const std::string name{std::string{kAoAppliedName}.c_str()};
+	const vk::Extent2D extent = swapchain.getRenderExtent();
+	const vk::Format format = resolveRgFormat(std::string{kAoAppliedFormat}, vk::Format::eUndefined);
+	auto rt = rts.ensure(name, extent, format);
+	if (!rt)
+		return std::unexpected(std::move(rt).error());
+	auto slot = rts.heapSlot(name);
+	if (!slot)
+		return std::unexpected(Error{ErrorCode::Unknown,
+			fmt::format("ao_applied RT has no sample descriptor slot")});
+	if (auto* logger = RLLogger::getInstance())
+		logger->info("ao_applied (RGBA16F, 成片×AO 可见度): {}x{} slot {}",
 			extent.width, extent.height, *slot);
 	return *slot;
 }

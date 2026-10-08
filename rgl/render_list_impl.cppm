@@ -300,14 +300,14 @@ void fillTaaData(FrameDrawList& out, const ViewProjection& viewProj, const Scene
 	// TAA 关 / jitter_scale=0 ⇒ jitterPx = 0 ⇒ 门开门关逐位相同（门红线自动成立）。
 	const glm::vec2 histShift = env.taaBaseSpace ? taa.payloadPrevContentShift : glm::vec2{0.0f};
 	// z = **AO 已由 taa pass 施加**（批 13.6）：tonemap 见 1 就跳过自己的 AO 乘法，见 0 照旧施加。
-	// 取 `env.taaAoApplied`（= decorateTaaPass **实际**结果），**不是** `env.taaEnabled`（配置键）
+	// 取 `env.aoAppliedPreTemporal`（= decorateTaaPass **实际**结果），**不是** `env.taaEnabled`（配置键）
 	// ——offscreen 变体配置开了 TAA 也装饰失败，用配置派生就会「taa pass 不存在 + tonemap 又
 	// 跳过」= AO 一次都不施加。两个分支位精确（lerp(x,1,1)≡1.0 / lerp(x,1,0)≡x）
 	// ⟹ TAA 关时 tonemap 逐位不变（门红线）。本函数**无条件调用**，故门关态也保证写对 0。
 	// w = **历史拒收诊断门标志**（`taa.diag_reject`，默认 0 = 今天）：1 ⟹ taa.frag 把逐像素
 	// 拒收码写进 taa_out.a（RGB 一个 bit 不动；tonemap 与历史采样都只读 rgb ⟹ 交付图不变）。
 	// 本槽位原为保留 0，复用 = **零布局变更**（static_assert 不动）。
-	out.sceneData.taaPrevContentShift = {histShift, env.taaAoApplied ? 1.0f : 0.0f,
+	out.sceneData.taaPrevContentShift = {histShift, env.aoAppliedPreTemporal ? 1.0f : 0.0f,
 		env.taaDiagReject ? 1.0f : 0.0f};
 	// x = **输入侧 un-jitter 的重建核选择**（`taa.input_kernel`，批 13.8；0 = 双线性 = 默认）。
 	// 本函数**无条件写**（门关 = 0），shader 侧 `k < 0.5` 走的就是改前那条 `SampleLevel`

@@ -68,6 +68,11 @@ export class StateKit {
 		taaState.depthTest = false;
 		taaState.depthWrite = false;
 		taaState.cullMode = vk::CullModeFlagBits::eNone;
+		// 批 14.5：ao_apply pass —— 与 ao/taa 同形（全屏、不挂深度附件、绕序不剔、不混合；
+		// 写 ao_applied 供时域滤波器（FSR）消费。见 shaders/ao_apply.frag.slang 头注释）
+		aoApplyState.depthTest = false;
+		aoApplyState.depthWrite = false;
+		aoApplyState.cullMode = vk::CullModeFlagBits::eNone;
 		// 批 14.4：velocity pass —— 与 ao/taa 同形（全屏、**不挂深度附件**（深度只作
 		// sampleRead 输入做重投影）、绕序不剔、不混合；写 velocity RT 供 FSR / 诊断消费）
 		velocityState.depthTest = false;
@@ -144,6 +149,7 @@ export class StateKit {
 	RenderState aoState{};          // Phase 11 批 11.4：SSAO 全屏终图（与 tonemap 同形，见 ctor 注）
 	RenderState velocityState{};    // 批 14.4：逐像素速度场 pass（与 ao 同形，见 ctor 注）
 	RenderState taaState{};         // 批 12.6：TAA 全屏 pass（与 ao 同形，见 ctor 注）
+	RenderState aoApplyState{};     // 批 14.5：AO 施加专用全屏 pass（与 ao 同形，见 ctor 注）
 	RenderState pickingState{};     // Phase 10 批 10.5：id pass 复用 scene depth 只测不写（见 ctor 注）
 	RenderState highlightState{};   // Phase 10 批 10.7：高亮 pass 叠加成片（混合 + 剔背面，见 ctor 注）
 	RenderState shadowState{};      // Phase 11 批 11.2：阴影 depth-only pass（写 depthOffscreen，见 ctor 注）
@@ -173,6 +179,7 @@ export class StateKit {
 		{"ao", &StateKit::aoState},
 		{"velocity", &StateKit::velocityState},
 		{"taa", &StateKit::taaState},
+		{"ao_apply", &StateKit::aoApplyState},
 		{"tonemap", &StateKit::tonemapState},
 		{"izb_mask", &StateKit::izbMaskState},
 	}};

@@ -241,6 +241,22 @@ export inline constexpr std::string_view kVelocityFormat = "rgba16_sfloat";
 export inline constexpr std::string_view kVelocityPassName = "velocity";
 
 /**
+ * Phase 14 批 14.5 第三批：**AO 施加专用 pass** 的附件契约（单一真相源）。
+ *
+ * `ao_applied` RT 装的是「本帧成片 × AO 可见度」= **时域滤波器的输入**。它的存在把
+ * 「AO 必须乘在时域之前」这条批 13.6 的不变量与「谁做时域滤波」**解耦**——此前 AO 乘法
+ * 长在 taa.frag 里，换成 FSR 当时域滤波器就会退回 13.6 修掉的形态（AO 落回 tonemap =
+ * 时域之后 = 噪声零平均，实测占残余 shimmer 62%）。推导全文 →
+ * `shaders/ao_apply.frag.slang` 头注释与 `phase14_plan.md` §1.15。
+ *
+ * 格式沿用 rgba16_sfloat（同 scene_hdr / taa_out：tonemap 之前的线性 HDR），
+ * 理由与精度口径同 `kVelocityFormat` 那条（新开格式要三处同时挂号）。
+ */
+export inline constexpr std::string_view kAoAppliedName = "ao_applied";
+export inline constexpr std::string_view kAoAppliedFormat = "rgba16_sfloat";
+export inline constexpr std::string_view kAoApplyPassName = "ao_apply";
+
+/**
  * pass 声明（RgGraphDesc.passes 元素）：name 必填；kind 定执行语义；
  * state = RenderState 名（名字字符串，零 handle，执行器解析；drawMesh 必填，blit 忽略；
  * 合法值 = pass_vocabulary 按 kind 分档的 state 子集）；drawSource = FrameDrawList 段名
@@ -574,6 +590,28 @@ export bool decorateShadowPass(RgGraphDesc& desc, uint32_t mapSize);
 export bool decorateTaaPass(RgGraphDesc& desc);
 
 /**
+ * 批 14.5 第三批：插「AO 施加」专用全屏 pass（附件契约见 `kAoAppliedName`）。
+ *
+ * 做的事 = 三件套的简化版：一个附件（`ao_applied`）+ 一个全屏 pass（state="ao_apply"，
+ * 读成片与 ao 写 ao_applied）+ 把「写 swapchain 且采色」那个 pass（tonemap）的色输入
+ * 换成 `ao_applied`。**没有**帧末 copy（不跨帧）。
+ *
+ * **跳过条件（两条，缺一即不插，返回 false）**：
+ *  1. 图里已有 `taa` pass —— AO 施加点就在它里面（批 13.6），再插本 pass = **双施**。
+ *     Phase 13 已冻结，taa.frag 一字不动，所以解耦靠"谁在图里谁负责"而不是改 taa。
+ *  2. 图里没有 `ao` 附件（无 SSAO 的图形态）—— 没有可见度可乘。
+ * ⟹ 门关（TAA 关 + FSR 关）时本装饰**不插**，AO 仍由 tonemap 施加 = **图逐位不变**（红线）。
+ *
+ * **次序契约**：必须在 picking / highlight / taa 三个装饰**之后**调。本 pass 是真正的
+ * 成片消费者（sampleRead 色附件），先插会让后续装饰的锚点搜索认错消费点（同 velocity
+ * 装饰器那条纪律，只是 velocity 靠"不采色"天然免疫，本 pass 采色、免疫不了）。
+ *
+ * @param desc 图声明（原地修改）
+ * @return true = 已装饰；false = 按上面两条跳过（图不变）
+ */
+export bool decorateAoApplyPass(RgGraphDesc& desc);
+
+/**
  * Phase 14 批 14.4 速度场装饰（契约见本函数实现段头）：加 `velocity` 附件 + 一个
  * 全屏 `state="velocity"` pass（读 depth，写速度场），插在「写 swapchain 且采色」的
  * pass（两条路线都是 tonemap）**之前**。
@@ -648,6 +686,18 @@ export std::expected<uint32_t, Error> ensureAoSlot(
  * @return {taa_out 槽, taa_hist 槽}（addTaaEntry 的 binding 4/5）；Error = 建图失败
  */
 export std::expected<std::array<uint32_t, 2>, Error> ensureTaaSlots(
+	RenderTargetCache& rts, Swapchain& swapchain);
+
+/**
+ * 批 14.5 第三批：确保 AO 施加专用 pass 的 RT（名字/格式 = `kAoAppliedName` /
+ * `kAoAppliedFormat` 单一真相源，rgba16_sfloat offscreen，**渲染分辨率**——它是时域滤波器的
+ * 输入，必须与 scene_hdr / taa_out 同尺寸）并返回其 SAMPLED_IMAGE 堆槽。
+ *
+ * 调用时序同 `ensureTaaSlots`，且**必须早于** `addAoApplyEntry`。仅
+ * `CompiledGraphResult::aoApplyDecorated` 为真时调用（门关 = 不领槽 = 堆槽布局与基线零差异）。
+ * @return ao_applied RT 的 SAMPLED_IMAGE heap 槽；Error = RT 创建 / 槽分配失败
+ */
+export std::expected<uint32_t, Error> ensureAoAppliedSlot(
 	RenderTargetCache& rts, Swapchain& swapchain);
 
 /**

@@ -113,7 +113,7 @@ float4 main(TonemapInput input) : SV_Target
     // ——offscreen 变体装饰失败时它仍为 true，拿配置派生会双跳成零施）。
     // 两个分支都位精确：lerp(x, 1, 1) ≡ 1.0、lerp(x, 1, 0) ≡ x ⟹ TAA 关时本行逐位 = 改前
     // （门红线：TAA 关截图 sha256 必须不变）。
-    hdr *= lerp(lerp(1.0, ao, readAoStrength()), 1.0, readTaaAoApplied());
+    hdr *= lerp(lerp(1.0, ao, readAoStrength()), 1.0, readAoAppliedPreTemporal());
     float3 mapped = acesTonemap(hdr * readExposure());
     return float4(mapped, 1.0);
 }

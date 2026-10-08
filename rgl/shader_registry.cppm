@@ -325,6 +325,21 @@ export class ShaderRegistry {
 	 */
 	[[nodiscard]] uint32_t addTaaEntry(uint32_t colorSlot, uint32_t historySlot,
 		uint32_t depthSlot, uint32_t samplerSlot, uint32_t pointSlot, uint32_t aoSlot);
+	/**
+	 * 批 14.5 第三批：AO 施加专用 pass 管线条目（单条目，仿 addTonemapEntry——本 pass 的
+	 * 绑定面就是 tonemap 的前半段，去掉 ACES/曝光）。spec = "ao_apply"，mesh 复用
+	 * light.mesh.spv 全屏大三角。binding 0/1 顶点/索引占位、3 → scene data（@60 AO 强度
+	 * + @722208 TAA 参数取 c_t 做 baseUv）+ extra：4 → 本帧场景色 RT 的 SAMPLED_IMAGE 堆槽、
+	 * 5 → 共享 sampler（**必须 linear**：AO 走 baseUv 分数坐标，点采会随相位跳纹素，
+	 * 见 shaders/ao_apply.frag.slang 纪律②）、6 → ao RT 的 SAMPLED_IMAGE 堆槽。
+	 * 前提 = ao_applied RT 已 ensure + 领槽、ao RT 已领槽。幂等。
+	 * @param colorSlot 本帧场景色（scene_hdr 或 taa_out）SAMPLED_IMAGE heap 槽（binding 4）
+	 * @param aoSlot ao RT 的 SAMPLED_IMAGE heap 槽（binding 6，同 tonemap/taa 条目复用同槽）
+	 * @param samplerSlot 共享 sampler 的 sampler heap 槽（binding 5）
+	 * @return 条目下标；规格缺失抛 runtime_error
+	 */
+	[[nodiscard]] uint32_t addAoApplyEntry(uint32_t colorSlot, uint32_t aoSlot,
+		uint32_t samplerSlot);
 
 	/**
 	 * Phase 11 批 11.2：阴影 depth-only 管线条目。spec = "shadow"（shadow.mesh.spv + 空壳
@@ -489,7 +504,7 @@ export class ShaderRegistry {
 			return light;
 		// 尾部词表（tonemap/shadow/izb_mask/ao/taa）：批 12.6 起表驱动查表——旧 if 链
 		// 每加一词控制复杂度 +1（taa 加进来正撞 16>15 红线），表长不受此税。
-		static const std::array<RGL::PipelineSpec, 6> kTailSpecs{{
+		static const std::array<RGL::PipelineSpec, 7> kTailSpecs{{
 			{"tonemap", "generated_shaders/light.mesh.spv",
 				"generated_shaders/tonemap.frag.spv"},  // mesh 复用全屏大三角（Phase 8 ①）
 			{"shadow", "generated_shaders/shadow.mesh.spv", "generated_shaders/shadow.frag.spv"},
@@ -501,6 +516,8 @@ export class ShaderRegistry {
 				"generated_shaders/taa.frag.spv"},  // mesh 复用全屏大三角（同 tonemap/ao）
 			{"velocity", "generated_shaders/light.mesh.spv",
 				"generated_shaders/velocity.frag.spv"},  // 批 14.4：速度场（同 ao/taa 复用大三角）
+			{"ao_apply", "generated_shaders/light.mesh.spv",
+				"generated_shaders/ao_apply.frag.spv"},  // 批 14.5：AO 施加（同复用大三角）
 		}};
 		for (const auto& s : kTailSpecs)
 			if (std::strcmp(s.name.c_str(), name) == 0)

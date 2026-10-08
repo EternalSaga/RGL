@@ -159,9 +159,15 @@ void Renderer::initFsr() {
 	if (!slot)
 		throw std::runtime_error("Renderer: FSR 采样槽领取失败");
 	// 三个输入按**编译图里的附件名**现查 slot（同 TAA 锚点「现搜不缓存下标」的纪律）。
-	// 色输入优先 taa_out：TAA 在图里时 tonemap 采的是它，FSR 必须接同一张，否则等于
-	// 把 TAA 旁路掉。
-	fsrColorSlot = findAttachmentSlot(kTaaOutName);
+	// 色输入优先级 **ao_applied > taa_out > scene_hdr**：
+	//  · ao_applied（批 14.5 第三批）= 「成片 × AO 可见度」。AO 必须乘在时域滤波**之前**
+	//    （批 13.6 实测：乘在之后 = 噪声零平均，占残余 shimmer 62%），而 FSR 就是时域
+	//    滤波器 ⟹ 必须接这张，否则 AO 只能落回 tonemap = 时域之后，13.6 的收益整条丢掉。
+	//  · taa_out：TAA 在图里时 AO 已乘在它里面（批 13.6），接它 = 不旁路 TAA。
+	//  · scene_hdr：两者都不在（此时 ao_apply 也不会插，见 decorateAoApplyPass 跳过条件）。
+	fsrColorSlot = findAttachmentSlot(kAoAppliedName);
+	if (fsrColorSlot < 0)
+		fsrColorSlot = findAttachmentSlot(kTaaOutName);
 	if (fsrColorSlot < 0)
 		fsrColorSlot = findAttachmentSlot(kSceneHdrName);
 	fsrVelocitySlot = findAttachmentSlot(kVelocityName);

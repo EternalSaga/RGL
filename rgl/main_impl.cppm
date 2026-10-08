@@ -373,6 +373,28 @@ bool decorateVelocityOrWarn(RgGraphDesc& desc, bool velocityEnabled) {
 }
 
 /**
+ * 批 14.5 第三批：AO 施加专用 pass 的图装饰（抽函数控复杂度）。
+ *
+ * 门 = **FSR 门开**（`runtime.fsr_upscaler`）。为什么不是「FSR 真的接起来了」：FSR 的可用性
+ * （shader16 / 三个输入附件）要到装配层才裁决完，而本装饰在图编译期。这个先后顺序**不影响
+ * 正确性**——施加点标志取的是**实际图形态**（`aoApplyDecorated`），所以「本 pass 在图里但
+ * FSR 最终没接」= AO 由本 pass 施加、tonemap 跳过，画面只是比 tonemap 路径多一次 RGBA16F
+ * 量化，不会双施也不会零施。
+ *
+ * 装饰器自己还会查「taa 不在图里」与「有 ao 附件」，任一不满足返回 false = 图逐位不变。
+ */
+bool decorateAoApplyOrWarn(RgGraphDesc& desc, bool fsrEnabled) {
+	if (!fsrEnabled)
+		return false;
+	if (decorateAoApplyPass(desc))
+		return true;
+	if (auto* logger = RLLogger::getInstance())
+		logger->debug("ao_apply: 未插 AO 施加 pass（taa 已在图里 = 施加点在它里面，"
+			"或本图无 ao 附件），AO 施加点保持现状");
+	return false;
+}
+
+/**
  * 批 12.6 TAA 图装饰（compileGraphOrThrow 尾段调用；抽函数控复杂度）。
  * 关（默认）= 不调 decorateTaaPass = 图逐位不变；开但图形态不支持（offscreen DIAG
  * 变体用 blit 上屏，无「写 swapchain 且采色」的 pass）= warn + 返回 false，
@@ -391,7 +413,7 @@ bool decorateTaaOrWarn(RgGraphDesc& desc, bool taaEnabled) {
 }
 
 CompiledGraphResult compileGraphOrThrow(const char* path, bool taaEnabled,
-	bool velocityEnabled) {
+	bool velocityEnabled, bool fsrEnabled) {
 	auto graphConfig = loadRenderGraphConfig(path);
 	if (!graphConfig)
 		throw std::runtime_error(graphConfig.error().describe());
@@ -427,12 +449,15 @@ CompiledGraphResult compileGraphOrThrow(const char* path, bool taaEnabled,
 	// 是**现搜**的（不缓存下标）⟹ velocity 先插不会让 TAA 认错消费者。
 	const bool velocityDecorated = decorateVelocityOrWarn(graphConfig->desc, velocityEnabled);
 	const bool taaDecorated = decorateTaaOrWarn(graphConfig->desc, taaEnabled);
+	// 批 14.5 第三批：AO 施加 pass **必须在 taa 之后**装饰——它自己要先看「taa 在不在图里」
+	// 决定跳过，而它本身是真正的成片消费者，先插会让前面的装饰认错锚点。
+	const bool aoApplyDecorated = decorateAoApplyOrWarn(graphConfig->desc, fsrEnabled);
 	auto compiledGraph = compileRenderGraph(graphConfig->desc);
 	if (!compiledGraph)
 		throw std::runtime_error(fmt::format("render graph compile failed: {}",
 			compiledGraph.error().describe()));
 	return CompiledGraphResult{std::move(*compiledGraph), deferredMode, graphConfig->variant,
-		taaDecorated, velocityDecorated};
+		taaDecorated, velocityDecorated, aoApplyDecorated};
 }
 
 /**
@@ -581,7 +606,7 @@ int main() {
 		// Phase 7 路线选路（2026-09-08 env→配置）：顶层 variant = "forward"(默认)/
 		// "deferred"/"offscreen"——后两者为内建 exclusive 图变体（覆盖文件 passes）
 		auto graphResult = compileGraphOrThrow(configPath("render_graph.lua").c_str(),
-			configs.scene.taaEnabled, configs.runtime.velocityField);
+			configs.scene.taaEnabled, configs.runtime.velocityField, configs.runtime.fsrUpscaler);
 		const bool deferredMode = graphResult.deferredMode;
 		// 图来源/规模观测（排"配置没生效"类问题：pass 数与 configs/render_graph.lua 对账）
 		if (auto* logger = RLLogger::getInstance())
@@ -630,8 +655,8 @@ int main() {
 		// C3 GPU culling 候选表 + GpuCull + skybox + deferred G-buffer/HDR + DGC + Renderer
 		//（装配时序契约见 assembleBackEnd 接口注释；graph 在此 move 进 Renderer）
 		auto backEnd = assembleBackEnd(vkDevice, vkSwapchain, vkResources, sceneData, samplers, env, rtCache, assetTable, shaderRegistry,
-			std::move(graphResult.graph), registry, configs.scene, deferredMode,
-			graphResult.taaDecorated, graphResult.velocityDecorated, configs.runtime.fsrUpscaler, configs.runtime.fsrTemporal);
+			std::move(graphResult), registry, configs.scene,
+			configs.runtime.fsrUpscaler, configs.runtime.fsrTemporal);
 
 		// Phase 9.2：GPU 时间戳会话（声明序在 backEnd/vkDevice 后 = 析构序其先，
 		// query pool 不越过 device 生命周期——GPU 资源所有权规则；profiler=0 /

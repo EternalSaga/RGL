@@ -379,12 +379,15 @@ float4 readTaaPrevContentShift()
     return asfloat(sceneData.Load4(722224u));  // kSceneDataTaaPrevContentShiftOffset
 }
 
-// 批 13.6：AO 是否**已由 taa pass 施加**（1/0）。= 1 ⟹ tonemap 必须跳过自己的 AO 乘法，
-// 否则双施；= 0 ⟹ tonemap 照旧施加（TAA 不在图里时的唯一施加点）。
+// 批 13.6：AO 是否**已在 tonemap 之前施加过**（1/0）。= 1 ⟹ tonemap 必须跳过自己的 AO
+// 乘法，否则双施；= 0 ⟹ tonemap 照旧施加（没有更早的施加点时的唯一施加点）。
+// 施加者有两个（批 14.5 第三批起）：**taa pass**（批 13.6，乘在时域滤波之前）或专用的
+// **ao_apply pass**（与"谁做时域"解耦，FSR 当时域滤波器时用它）。两者互斥。
+// 名字从 `readTaaAoApplied` 改成本名正因此——旧名在只有 taa 一个来源时对，现在会误导。
 // ⚠ 该标志由 CPU 侧写**实际图形态**（decorateTaaPass 的返回值），**不是**配置键 taa.enabled
 //   ——offscreen 变体配置开了 TAA 也装饰失败，若拿配置派生就会「taa pass 不存在 + tonemap
 //   又跳过」= AO 一次都不施加。零布局变更（复用 .z 保留位，static_assert 不变）。
-float readTaaAoApplied()
+float readAoAppliedPreTemporal()
 {
     return asfloat(sceneData.Load(722224u + 8u));  // kSceneDataTaaPrevContentShiftOffset + z
 }

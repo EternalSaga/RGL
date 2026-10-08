@@ -70,6 +70,9 @@ rgl_shader(ao.frag AO_FRAG_SPV scene)
 rgl_shader(velocity.frag VELOCITY_FRAG_SPV scene)   # 批 14.4：逐像素速度场（全屏 pass，消费 scene data 既有槽位）
 # 批 12.6 TAA：时域滤波 frag（mesh 复用 light.mesh.spv；import scene 读 @64 invViewProj
 # + TAA 尾区 @722080；binding 4 本帧色 / 5 历史 / 6 深度 / 7 线性 sampler / 8 point sampler）
+# 批 14.5 第三批：AO 施加专用全屏 pass（把「AO 乘在时域滤波之前」从 taa.frag 里抽出来，
+# 与「谁做时域」解耦；mesh 复用 light.mesh.spv，binding 4 色 / 5 共享 sampler / 6 ao 可见度）
+rgl_shader(ao_apply.frag AO_APPLY_FRAG_SPV scene)
 rgl_shader(taa.frag TAA_FRAG_SPV scene)
 # Phase 7b（批次 5）：GPU culling compute（独立契约 cull.comp.slang 头注释，无 import 契约文件）
 rgl_shader(cull.comp CULL_SPV)
@@ -102,7 +105,8 @@ rgl_shader(stream_fanout.comp STREAM_FANOUT_SPV)
 # 分配至 32GB 后回归目标级 -O2（启动路径代码质量优先，编译峰值内存已非瓶颈）。
 #
 # main.cppm（主接口：启动流 helper 声明 + 轻量 struct）+ main_scene.cppm（module
-# main:scene; 重函数定义）+ main_impl.cppm（module main:impl; 轻函数 + main()）
+# main:scene; 重函数定义）+ main_wiring.cppm（module main:wiring; 诊断/热重载挂点装配）
+# + main_impl.cppm（module main:impl; 轻函数 + main()）
 # ——2026-09-14 由 main.cpp 转来：CMake FILE_SET 不收**无 module 声明的裸实现文件**
 #（旧 main.cpp），故"接口声明 + 分区实现"形状（同 ecs/ecs_impl 惯例；分区实现单元
 # main_impl/main_scene 本身与接口同登记 FILE_SET）；经 FILE_SET 编译为模块 TU 并纳入
@@ -321,6 +325,7 @@ set(RGL_APP_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/main.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/main_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/main_scene.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/main_wiring.cppm"
 )
 
 # ── 归属完整性闸门（configure 期，违反即 FATAL_ERROR）────────────────────

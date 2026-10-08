@@ -24,12 +24,6 @@ import model_importer;
 import texture_pool;
 import scene_config;
 import scene_context;
-import camera_config;  // loadCameraConfig（hot_reload camera.lua 套用，Phase 10 批 10.3）
-import camera;  // Camera ctx 类型（hot_reload 调参字段套用，10.3）
-import hot_reload;  // HotReloader（配置热重载机制模块，10.3）
-import shader_hot_reload;  // ShaderHotReloader（shader 热重载 L1，10.4）
-import picking;  // PickingService（wirePicking 桥接，10.5）
-import ecs;  // ConfigReloadHook ctx（帧边界挂点类型，10.3）
 import shader_registry;
 import gpu_cull;
 import vk_indirect_commands;
@@ -391,7 +385,8 @@ void registerSceneEntities(entt::registry& registry, const UploadedAssets& asset
  */
 void assembleHdrAoChain(Swapchain& swapchain, Resources& resources,
 	SamplerLibrary& samplers, RenderTargetCache& rtCache, ShaderRegistry& pipelines,
-	bool taaDecorated, bool velocityDecorated, bool fsrUsable = false) {
+	bool taaDecorated, bool velocityDecorated, bool fsrUsable = false,
+	bool aoApplyDecorated = false) {
 	const auto hdrSlot = orThrow(ensureSceneHdrSlot(rtCache, swapchain), "scene_hdr RT 创建失败");
 	const auto aoSlot = orThrow(ensureAoSlot(rtCache, swapchain), "ao RT 创建失败");
 	const auto depthSlot = orThrow(resources.ensureDepthSampleSlot(), "深度采样槽分配失败");
@@ -416,10 +411,24 @@ void assembleHdrAoChain(Swapchain& swapchain, Resources& resources,
 	// 零拷贝（不新建图附件、不动图词表），先例 = EvssmShadow 的 momentsSampleSlot。
 	// ⚠ 判据由调用方算好传进来（`fsrUsable`），本函数**不再自行判断**：槽号一旦烘进管线条目
 	//   就必须有人写描述符，两处判据漂移 = 读到未初始化描述符（`Renderer::initFsr` 是另一处）。
-	const uint32_t colorSlot = fsrUsable ? orThrow(resources.ensureFsrSampleSlot(),
-		"FSR 输出采样槽领取失败") : (taaSlots ? (*taaSlots)[0] : hdrSlot);
+	// 批 14.5 第三批：ao_apply 在图里时**图**已把 tonemap 的色输入换成 ao_applied
+	//（decorateAoApplyPass 干的），所以烘进条目的堆槽必须跟着换——否则「图说采 A、描述符
+	// 指向 B」= 采到没转布局的图（VVL 报布局不符）。
+	// 优先级：ao_applied > taa_out > scene_hdr；FSR 开时整条被 FSR 的**零拷贝输出槽**顶掉
+	//（批 14.5 第二批那条路），两者写同一个 binding、互斥。
+	const uint32_t graphColorSlot = aoApplyDecorated
+		? orThrow(ensureAoAppliedSlot(rtCache, swapchain), "ao_applied RT 创建失败")
+		: (taaSlots ? (*taaSlots)[0] : hdrSlot);
+	const uint32_t colorSlot = fsrUsable
+		? orThrow(resources.ensureFsrSampleSlot(), "FSR 输出采样槽领取失败") : graphColorSlot;
 	[[maybe_unused]] auto tonemapIdx = pipelines.addTonemapEntry(colorSlot, aoSlot,
 		samplers.ensureShared());
+	// 批 14.5 第三批：AO 施加专用 pass 的条目。色输入恒为 scene_hdr——本 pass 的跳过条件
+	// 保证「taa 在图里就不插」，所以它不可能需要读 taa_out。
+	if (aoApplyDecorated) {
+		[[maybe_unused]] auto aoApplyIdx = pipelines.addAoApplyEntry(hdrSlot, aoSlot,
+			samplers.ensureShared());
+	}
 	if (taaDecorated) {
 		[[maybe_unused]] auto taaIdx = pipelines.addTaaEntry(
 			hdrSlot, (*taaSlots)[1], depthSlot, samplers.ensureShared(),
@@ -473,14 +482,21 @@ bool computeFsrUsable(DeviceContext& device, const CompiledRenderGraph& graph,
 RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resources& resources,
 	SceneDataService& sceneData, SamplerLibrary& samplers, Environment& env,
 	RenderTargetCache& rtCache, AssetTable& assets,
-							  ShaderRegistry& pipelines, CompiledRenderGraph&& graph,
-							  entt::registry& registry, const SceneConfig& scene, bool deferredMode,
-	bool taaDecorated, bool velocityDecorated, bool fsrEnabled, bool fsrTemporal) {
+							  ShaderRegistry& pipelines, CompiledGraphResult&& graphResult,
+							  entt::registry& registry, const SceneConfig& scene,
+	bool fsrEnabled, bool fsrTemporal) {
+	const bool deferredMode = graphResult.deferredMode;
+	const bool taaDecorated = graphResult.taaDecorated;
+	const bool velocityDecorated = graphResult.velocityDecorated;
+	const bool aoApplyDecorated = graphResult.aoApplyDecorated;
 	// 批 13.6：AO 施加点标志 = **实际图形态**（`decorateTaaPass` 结果），**不是**配置键
-	// `taa.enabled`。true ⟹ AO 已由 taa pass 施加（时域滤波之前），tonemap 跳过；false ⟹ taa
-	// pass 不在图里（含 offscreen 变体：配置开了 TAA 但装饰失败），AO 留在 tonemap 施加。
+	// `taa.enabled`。true ⟹ AO 已在 tonemap **之前**施加过，tonemap 跳过；false ⟹ 没有更早的
+	// 施加点（含 offscreen 变体：配置开了 TAA 但装饰失败），AO 留在 tonemap 施加。
 	// 取错源 = AO 双施或零施。消费者 = scene data @722224.z → fillTaaData / tonemap.frag。
-	registry.ctx().get<SceneEnv>().taaAoApplied = taaDecorated;
+	// 批 14.5 第三批：来源从「只有 taa」变成**两个**——`taaDecorated`（AO 乘在 taa.frag 里，
+	// 批 13.6）或 `aoApplyDecorated`（AO 乘在专用 ao_apply pass 里，与"谁做时域"解耦）。
+	// 两者**互斥**：decorateAoApplyPass 的第一条跳过条件就是「taa 在图里」。
+	registry.ctx().get<SceneEnv>().aoAppliedPreTemporal = taaDecorated || aoApplyDecorated;
 	// C3：GPU culling 候选表（Phase 7b 批次 5）：candidate = 不透明 primitive。
 	// 守卫与迭代序和 render_list CPU 路径**完全一致**（同 view、同守卫）——GPU 输出
 	// 固定槽非紧凑，重放序与 CPU opaque 段序逐位一致（截图 BIT-IDENTICAL 前提）。
@@ -538,9 +554,10 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 			evssmSlot);
 	}
 	// 批 14.5 第二批：FSR 生效判据在装配层一次算完（判据本体见 computeFsrUsable）。
-	const bool fsrUsable = computeFsrUsable(device, graph, fsrEnabled, velocityDecorated, taaDecorated);
+	const bool fsrUsable = computeFsrUsable(device, graphResult.graph, fsrEnabled,
+		velocityDecorated, taaDecorated);
 	assembleHdrAoChain(swapchain, resources, samplers, rtCache, pipelines, taaDecorated,
-		velocityDecorated, fsrUsable);
+		velocityDecorated, fsrUsable, aoApplyDecorated);
 
 	// Phase 7b：DGC 命令生成（NVIDIA 路）：仅 graphicsIndirect 能力时构造（RADV =
 	// compute only → null → Renderer 读回重放路）。管线表定后建（execution set
@@ -601,142 +618,10 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 	auto* dgcStaticRaw = dgcStatic.get();
 	return RenderBackEnd{std::move(cull), std::move(dgc), std::move(dgcStatic),
 		Renderer(device, swapchain, resources, sceneData, env, rtCache, pipelines,
-			std::move(graph), cullRaw, dgcRaw, dgcStaticRaw,
+			std::move(graphResult.graph), cullRaw, dgcRaw, dgcStaticRaw,
 			// 批 14.5：FSR 生效判据 = 配置键 **且** velocity 真的进了图（FSR 的 motionVectors
 			// 输入就是那张图；装饰失败时本键自动失效。取实际图形态的先例 = AO 施加点）。
 			fsrUsable, fsrTemporal)};
-}
-
-/**
- * wireHotReload 定义（契约见 main.cppm 接口注释）。三条监视链 = 帧边界
- * HotReloader::poll 触发；回调只碰 ctx 值字段（不触碰 GPU 资源/资产表/registry 结构），
- * 解析失败 warn + 保留旧值。reloader 所有权在 hook 闭包内（ctx 活多久它活多久）。
- */
-void wireHotReload(entt::registry& registry) {
-	if (!diagnostics().configReload)
-		return;  // 总开关默认关 = 零行为变化（红线）
-	// 监视源：RGL_CONFIG_DIR 覆盖时优先（测试用一次性配置目录），否则回退编译期源树
-	// configs/（D7——build 副本会被 just build 覆盖复原，监听它无意义）。
-	// env 已设 = 该目录由调用方负责存在性与生命周期。
-	std::filesystem::path sourceDir;
-	if (const char* dir = std::getenv("RGL_CONFIG_DIR"); dir && *dir) {
-		sourceDir = dir;
-	} else {
-#ifdef RGL_SOURCE_CONFIG_DIR
-		sourceDir = RGL_SOURCE_CONFIG_DIR;
-#else
-		if (auto* logger = RLLogger::getInstance())
-			logger->warn("hot_reload: 编译期未注入 RGL_SOURCE_CONFIG_DIR，热重载关闭");
-		return;
-#endif
-	}
-	std::error_code ec;
-	if (!std::filesystem::is_directory(sourceDir, ec)) {
-		if (auto* logger = RLLogger::getInstance())
-			logger->warn("hot_reload: 源 configs 目录不存在（热重载关闭）: {}", sourceDir.string());
-		return;
-	}
-
-	auto reloader = std::make_shared<HotReloader>();
-	reloader->watch(sourceDir / "scene.lua", [&registry](const std::string& path) {
-		auto cfg = loadSceneConfig(path);
-		auto* logger = RLLogger::getInstance();
-		if (!cfg) {
-			if (logger)
-				logger->warn("hot_reload: scene.lua 解析失败（保留旧值）: {}", cfg.error().message);
-			return;
-		}
-		registry.ctx().get<SceneSpin>().speed = cfg->spin ? 1.0f : 0.0f;
-		// 帧驱动 spin 同路热载（门默认 0 = 关；见 SceneSpin / main_impl 同段注释）
-		registry.ctx().get<SceneSpin>().frameAngle = cfg->spinFrameAngle;
-		registry.ctx().get<SceneSpin>().axis = cfg->spinAxis;
-		auto& env = registry.ctx().get<SceneEnv>();
-		env.exposure = cfg->exposure;
-		env.aoStrength = cfg->aoStrength;  // Phase 11 批 11.4：SSAO 强度（热重载同路）
-		env.intensity = cfg->environment.intensity;  // env 未上传时 mipRange=0 = shader 端无贡献，安全
-		if (logger)
-			logger->info("hot_reload: scene.lua 已套用 spin={} exposure={} env_intensity={}（entities/灯不热载）",
-				cfg->spin, cfg->exposure, cfg->environment.intensity);
-	});
-	reloader->watch(sourceDir / "camera.lua", [&registry](const std::string& path) {
-		auto cfg = loadCameraConfig(path);
-		auto* logger = RLLogger::getInstance();
-		if (!cfg) {
-			if (logger)
-				logger->warn("hot_reload: camera.lua 解析失败（保留旧值）: {}", cfg.error().message);
-			return;
-		}
-		const Camera& src = cfg->camera;
-		auto& cam = registry.ctx().get<Camera>();
-		cam.fov = src.fov;
-		cam.nearPlane = src.nearPlane;
-		cam.farPlane = src.farPlane;
-		cam.fpsSpeed = src.fpsSpeed;
-		cam.fpsSensitivity = src.fpsSensitivity;
-		cam.trackballSensitivity = src.trackballSensitivity;
-		cam.zoomSpeed = src.zoomSpeed;
-		cam.keys = src.keys;  // 键位表（CameraState 无键相关缓存，换表安全）
-		if (logger)
-			logger->info("hot_reload: camera.lua 已套用 fov={}（姿态/mode 不热套，重启生效）",
-				glm::degrees(cam.fov));
-	});
-	reloader->watch(sourceDir / "log_level.json", [](const std::string& path) {
-		RLLogger::reloadLevels(path);
-	});
-
-	registry.ctx().emplace<ConfigReloadHook>(ConfigReloadHook{
-		.poll = [r = std::move(reloader)] { r->poll(); }});
-	if (auto* logger = RLLogger::getInstance())
-		logger->info("hot_reload: 已启动，监视源树 {}（scene.lua / camera.lua / log_level.json）",
-			sourceDir.string());
-}
-
-/**
- * wireShaderHotReload 定义（契约见 main.cppm 接口注释）。复用 ConfigReloadHook
- * 帧边界挂点：config_reload 已挂 = 组合追加（配置链先跑），否则独占 emplace；
- * reloader 所有权在闭包内（ctx 活多久它活多久，同 10.3 模式）。init 失败
- * （编译期三件套缺失 / 基线 SPV 读不到）= 降级关，ShaderHotReloader 内部已日志。
- */
-void wireShaderHotReload(entt::registry& registry, ShaderRegistry& pipelines,
-	RenderBackEnd& backEnd) {
-	if (!diagnostics().shaderReload)
-		return;  // 总开关默认关 = 零行为变化（红线）
-	auto reloader = std::make_shared<ShaderHotReloader>(pipelines, backEnd.renderer,
-		backEnd.dgc.get(), backEnd.dgcStatic.get());
-	if (!reloader->init())
-		return;
-	if (auto* hook = registry.ctx().find<ConfigReloadHook>(); hook && hook->poll) {
-		auto prev = std::move(hook->poll);
-		hook->poll = [prev = std::move(prev), r = std::move(reloader)] {
-			prev();
-			r->poll();
-		};
-	} else {
-		registry.ctx().emplace<ConfigReloadHook>(ConfigReloadHook{
-			.poll = [r = std::move(reloader)] { r->poll(); }});
-	}
-}
-
-/**
- * wirePicking 定义（契约见 main.cppm 接口注释）：门关早退；门开 = 构造服务 +
- * 挂 Renderer + 双向函数桥（ecs 零依赖 picking 模块，同 ConfigReloadHook 闭包
- * 模式）。requestPick 只在左键按下产请求（右键 = 相机拖拽）；takeResult = 服务侧
- * 一次性消费。
- */
-std::unique_ptr<PickingService> wirePicking(entt::registry& registry, Resources& resources,
-	RenderTargetCache& rts, Renderer& renderer) {
-	if (!diagnostics().picking)
-		return nullptr;
-	auto service = std::make_unique<PickingService>(resources, rts,
-		renderer.getRenderGraphRef());
-	renderer.setPickingService(service.get());
-	PickingHook hook;
-	hook.requestPick = [svc = service.get()](float x, float y) {
-		svc->request(static_cast<uint32_t>(x), static_cast<uint32_t>(y));
-	};
-	hook.takeResult = [svc = service.get()] { return svc->take(); };
-	registry.ctx().emplace<PickingHook>(std::move(hook));
-	return service;
 }
 
 }  // namespace RGL

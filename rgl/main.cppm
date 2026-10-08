@@ -81,6 +81,11 @@ export struct CompiledGraphResult {
 	/// RT / velocity 条目是否领建。与 taaDecorated 同构，但**互相独立**：速度场是 FSR
 	/// 的前置，不是 TAA 的一部分（判据全文 → docs/phase14_plan.md §1.10）。
 	bool velocityDecorated = false;
+	/// 批 14.5 第三批：AO 施加专用 pass 是否落图（FSR 门开**且** taa 不在图里**且**有 ao
+	/// 附件）。装配层据此决定 ao_applied RT / ao_apply 条目是否领建，并把「AO 已在 tonemap
+	/// 之前施加」这个标志置真（tonemap 据此跳过自己的乘法）。与 taaDecorated **互斥**：
+	/// 两条路各有一个施加点，绝不双施。判据全文 → `shaders/ao_apply.frag.slang` 头注释。
+	bool aoApplyDecorated = false;
 };
 
 /**
@@ -154,9 +159,13 @@ export void validateEnvironmentContract(const SceneConfig& scene);
  * forward(默认)/deferred/offscreen——后两者为内建 exclusive 图变体）。
  * @param taaEnabled 批 12.6：configs/scene.lua taa.enabled（true = decorateTaaPass，
  *        结果随 CompiledGraphResult::taaDecorated 带回；offscreen 变体装饰失败 = false）
+ * @param velocityEnabled 批 14.4：configs/runtime.velocity_field（逐像素速度场装饰）
+ * @param fsrEnabled      批 14.5 第三批：configs/runtime.fsr_upscaler。它在这里**只**决定
+ *        「要不要插 AO 施加专用 pass」（FSR 当时域滤波器 ⟹ AO 必须在它之前施加）；
+ *        FSR 本身能不能接是装配层的事，两者不耦合（理由见 decorateAoApplyOrWarn）。
  */
 export CompiledGraphResult compileGraphOrThrow(const char* path, bool taaEnabled,
-	bool velocityEnabled = false);
+	bool velocityEnabled = false, bool fsrEnabled = false);
 
 /** 按 file 去重的已上传模型（instancing：同文件一次解析一次上传，entities 共享资产）。 */
 export struct UploadedModel {
@@ -245,10 +254,9 @@ export struct RenderBackEnd {
 export RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resources& resources,
 									 SceneDataService& sceneData, SamplerLibrary& samplers, Environment& env,
 									 RenderTargetCache& rtCache, AssetTable& assets,
-									 ShaderRegistry& pipelines, CompiledRenderGraph&& graph,
-									 entt::registry& registry, const SceneConfig& scene, bool deferredMode,
-									 bool taaDecorated = false, bool velocityDecorated = false,
-						 bool fsrEnabled = false, bool fsrTemporal = false);
+									 ShaderRegistry& pipelines, CompiledGraphResult&& graphResult,
+									 entt::registry& registry, const SceneConfig& scene,
+									 bool fsrEnabled = false, bool fsrTemporal = false);
 
 /**
  * 配置热重载装配（Phase 10 批 10.3；docs/archive/phase10_plan.md §5）。门 =

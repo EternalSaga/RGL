@@ -280,7 +280,7 @@ TEST_CASE("词表每个名字都能解析（派生口径 + internal 段也在 st
     }
     // 计数写死 = 加一个状态必须是显式决定（历史上 izb_mask 落地时本文件名单少一名，
     // AGENTS 与两份 Lua 头注释的"九段"口径同时变谎言行）。
-    CHECK(kAllNames.size() == 12);
+    CHECK(kAllNames.size() == 13);
     // internal 档（izb_mask）**不走图但必须能被 stateFor 解析**：执行器有硬编码录制
     // 路径直接按名取它（vkrenderer_passrec 的 IZB mask）。它的独有形态是 conservative
     // =true（FTIZB 保守覆盖命门）——十段里只有它有，正反两面一起钉。

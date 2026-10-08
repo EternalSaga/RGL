@@ -349,7 +349,37 @@ namespace RGL {
 	}
 
 	/** addTaaEntry 实现（契约见接口注释；批 12.6，仿 addTonemapEntry 三步曲）。 */
-	uint32_t ShaderRegistry::addTaaEntry(uint32_t colorSlot, uint32_t historySlot,
+	uint32_t ShaderRegistry::addAoApplyEntry(uint32_t colorSlot, uint32_t aoSlot,
+		uint32_t samplerSlot) {
+		if (auto idx = pipelineIndex("ao_apply"))
+			return *idx;
+		const RGL::PipelineSpec* spec = findSpec("ao_apply");
+		if (!spec)
+			throw std::runtime_error("pipeline spec not found: ao_apply");
+		const uint32_t descriptorSize = res.getDescriptorHeap().getDescriptorSize();
+		RGL::PipelineBindings b{};
+		b.descriptorSize = descriptorSize;
+		b.slotVertex = 0;   // binding 0/1 占位（mesh = light.mesh 全屏大三角，不声明顶点）
+		b.slotIndex = 1;
+		b.slotSceneData = sceneData.ensure();  // binding 3：@60 AO 强度 + @722208 c_t
+		b.hasSceneData = true;
+		const uint32_t samplerHeapOffset =
+			samplerSlot * res.getSamplerHeap().getDescriptorSize();
+		b.extra = {
+			{.binding = 4, .sampler = false, .heapSlot = colorSlot},
+			{.binding = 5, .sampler = true, .samplerHeapOffset = samplerHeapOffset},
+			{.binding = 6, .sampler = false, .heapSlot = aoSlot},
+		};
+		auto entry = PipelineEntry{.name = "ao_apply",
+			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b),
+			.spec = *spec, .bindings = b};
+		const uint32_t index = static_cast<uint32_t>(entries.size());
+		indexByName[entry.name] = index;
+		entries.push_back(std::move(entry));
+		return index;
+	}
+
+uint32_t ShaderRegistry::addTaaEntry(uint32_t colorSlot, uint32_t historySlot,
 			uint32_t depthSlot, uint32_t samplerSlot, uint32_t pointSlot, uint32_t aoSlot) {
 		if (auto idx = pipelineIndex("taa"))
 			return *idx;

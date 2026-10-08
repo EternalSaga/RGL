@@ -677,8 +677,8 @@ TEST_CASE("blit 变体：swapchainWaitStage = Transfer，blit 两端被解析成
 // 那是刻意的——名单变动必须是有意识的决定。
 constexpr std::array<std::string_view, 6> kExpectMesh{"opaque", "skybox", "transparent",
     "picking", "highlight", "shadow"};
-constexpr std::array<std::string_view, 5> kExpectFullscreen{"light", "ao", "taa", "tonemap",
-    "velocity"};  // 批 14.4 加 velocity（逐像素速度场，与 ao 同形）
+constexpr std::array<std::string_view, 6> kExpectFullscreen{"light", "ao", "taa", "tonemap",
+    "velocity", "ao_apply"};  // 批 14.4 加 velocity（逐像素速度场）；批 14.5 加 ao_apply（AO 施加专用）
 constexpr std::array<std::string_view, 1> kExpectInternal{"izb_mask"};
 
 /** name 数组 → 集合（比较用；kAllPassStates 走 scope 过滤后也汇成它）。 */
@@ -695,10 +695,10 @@ std::set<std::string_view> namesInInternal() {
     return out;
 }
 
-TEST_CASE("kAllPassStates = 十二名、无重复、每名恰属一档") {
+TEST_CASE("kAllPassStates = 十三名、无重复、每名恰属一档") {
     // 计数写死 = 「加一个状态」必须是显式决定（本项目的口径漂移正是从多一个名字
     // 而四处口径没人改开始的：izb_mask 落地时单测/Lua 头注释/AGENTS 三处都没跟）。
-    REQUIRE(kAllPassStates.size() == 12);
+    REQUIRE(kAllPassStates.size() == 13);
     // 无重复 + 每名都能被自己那一档承认（档判据与表自洽）。
     for (const auto& e : kAllPassStates) {
         INFO("state = " << e.name);
@@ -713,11 +713,11 @@ TEST_CASE("kAllPassStates = 十二名、无重复、每名恰属一档") {
     }
 }
 
-TEST_CASE("kFullscreenPassStates 恰含 light / ao / taa / tonemap / velocity 五个（派生自 fullscreenPass 档）") {
+TEST_CASE("kFullscreenPassStates 恰含 light / ao / taa / tonemap / velocity / ao_apply 六个（派生自 fullscreenPass 档）") {
     // 这张表决定「哪些 state 是全屏终图」：少一个 = 该 pass 在图校验里不被承认为
     // 全屏，多一个 = kind 与 state 串味的图被放行。现由 kAllPassStates 派生，
     // 故这条同时在验派生机制本身（namesInScope 填错/漏填都会红）。
-    REQUIRE(kFullscreenPassStates.size() == 5);
+    REQUIRE(kFullscreenPassStates.size() == 6);
     CHECK(toSet(kFullscreenPassStates) == toSet(kExpectFullscreen));
 }
 
@@ -741,7 +741,7 @@ TEST_CASE("两档 state 词表互斥、并起来 = 全表减 internal（**防扁
     unionMeshFull.insert(full.begin(), full.end());
     std::set<std::string_view> expectUnion(kExpectMesh.begin(), kExpectMesh.end());
     expectUnion.insert(kExpectFullscreen.begin(), kExpectFullscreen.end());
-    CHECK(unionMeshFull == expectUnion);  // 两档并集必须正好是"能上图的十一名"
+    CHECK(unionMeshFull == expectUnion);  // 两档并集必须正好是"能上图的十二名"
     CHECK(unionMeshFull.size() + kExpectInternal.size() == kAllPassStates.size());
 }
 
@@ -1341,6 +1341,173 @@ TEST_CASE("decorateTaaPass 的图形态门槛：没有「写 swapchain 且采色
     d.passes.push_back(RgPassDesc{.name = "tonemap", .kind = RgPassKind::drawLight,
         .state = "tonemap", .outputs = {colorOut("swapchain")}, .inputs = {sampleIn("scene_rt")}});
     CHECK(decorateTaaPass(d));
+}
+
+/**
+ * 批 14.5 第三批：AO 施加专用 pass 的装饰产物。
+ *
+ * 【为什么这条值得单测】本 pass 一落地就同时踩两条既有纪律的刀刃：
+ *  ① 它**采样** ao 附件 ⟹ 图里少声明这条边 = 编译器不生成 ColorAttachment→ShaderReadOnly
+ *     转换，症状只在真机 VVL 上出现（无设备单测子集抓不到）。同 decorateTaaPass 挂 ao
+ *     输入那条教训（本文件上方）。
+ *  ② ao 也是**色**附件，而所有装饰都按「首个 sampleRead 色附件」反查场景色 ⟹ ao 一旦排到
+ *     成片前面，后续装饰会把 AO 图当场景色去写 = 画面直接花掉。
+ * 外加本 pass 独有的第三条：它存在的意义就是「AO 只施一次」，所以**跳过条件比产物更需要
+ * 钉**——跳过条件失效的后果（AO 乘两次）是画面整体变暗，肉眼容易被当成"材质变暗了"放过。
+ */
+TEST_CASE("decorateAoApplyPass 产物形状：ao_applied 附件 + pass 插在 tonemap 前 + 消费者改写 + 无帧末 copy") {
+    auto build = []() {
+        RgGraphDesc d;
+        d.attachments = {swapchainAtt(), depthAtt(),
+            offscreenAtt("scene_hdr", "rgba16_sfloat"), offscreenAtt("ao")};
+        d.passes = {
+            RgPassDesc{.name = "opaque", .kind = RgPassKind::drawMesh, .state = "opaque",
+                .drawSource = "opaque", .outputs = {colorOut("scene_hdr"), depthOut("depth")}},
+            RgPassDesc{.name = "ao", .kind = RgPassKind::drawLight, .state = "ao",
+                .outputs = {colorOut("ao")}, .inputs = {sampleIn("depth")}},
+            RgPassDesc{.name = "tonemap", .kind = RgPassKind::drawLight, .state = "tonemap",
+                .outputs = {colorOut("swapchain")},
+                .inputs = {sampleIn("scene_hdr"), sampleIn("ao")}},
+        };
+        return d;
+    };
+
+    RgGraphDesc d = build();
+    const size_t passesBefore = d.passes.size();
+    REQUIRE(decorateAoApplyPass(d));
+
+    // ① 附件：offscreen + rgba16_sfloat，且**不是** history（本 pass 不跨帧；误标 history
+    //    会在帧首多一条 AllCommands barrier，且语义上假装自己是历史图）
+    const auto att = std::ranges::find(d.attachments, std::string{kAoAppliedName},
+        &RgAttachmentDesc::name);
+    REQUIRE(att != d.attachments.end());
+    CHECK(att->kind == RgAttachmentKind::offscreen);
+    CHECK(att->format == std::string{kAoAppliedFormat});
+    CHECK_FALSE(att->history);
+
+    // ② pass 位置在 tonemap **之前**（AO 必须在消费者之前施加；插在之后 = 白插一 pass）
+    const auto passIt = std::ranges::find(d.passes, std::string{kAoApplyPassName}, &RgPassDesc::name);
+    REQUIRE(passIt != d.passes.end());
+    const auto toneIt = std::ranges::find(d.passes, std::string{"tonemap"}, &RgPassDesc::name);
+    REQUIRE(toneIt != d.passes.end());
+    CHECK(passIt < toneIt);
+    CHECK(passIt->state == std::string{kAoApplyPassName});
+
+    // ③ 输入序（= barrier 发射序）：成片在前、ao 在后。
+    // 变异红线：把两条 inputs 调换 → 本段红（真机表现 = 后续装饰把 AO 图认成场景色）
+    REQUIRE(passIt->inputs.size() == 2);
+    CHECK(passIt->inputs[0].attachment == "scene_hdr");
+    CHECK(passIt->inputs[0].usage == RgUsage::sampleRead);
+    CHECK(passIt->inputs[1].attachment == std::string{kAoName});
+    CHECK(passIt->inputs[1].usage == RgUsage::sampleRead);
+    // 变异红线：删掉 ao 输入声明 → 上面 inputs.size() 与 [1] 两行红（真机 = 采样未转布局）
+
+    // ④ 消费者的色输入换成 ao_applied，且**不再**直接读 scene_hdr
+    //   （不改写 = tonemap 仍吃未乘 AO 的成片，而施加点标志已置真 ⟹ AO 一次都不施加）
+    CHECK(std::ranges::any_of(toneIt->inputs,
+        [&](const RgPassAttachment& a) { return a.attachment == std::string{kAoAppliedName}; }));
+    CHECK_FALSE(std::ranges::any_of(toneIt->inputs,
+        [&](const RgPassAttachment& a) { return a.attachment == "scene_hdr"; }));
+
+    // ⑤ **只多一个 pass**：本装饰没有帧末 copy（不跨帧，与 decorateTaaPass 的关键差别）
+    CHECK(d.passes.size() == passesBefore + 1);
+
+    // ⑥ 整图能编译（阳性锚点：装饰产物必须自洽，任何一处形状错这里就红）
+    const auto g = compileRenderGraph(d);
+    INFO(errOf(g));
+    REQUIRE(g.has_value());
+    // ⑦ 图真的承认了这两条写→读边（不只是"图里有这附件"）：ao_apply 读 ao、tonemap 读
+    //    ao_applied，两者的 newLayout 都必须是 ShaderReadOnly。
+    // 变异红线：把 usage 从 sampleRead 写成别的 → 本段红（真机 = 采样 COLOR_ATTACHMENT 布局）
+    const RgPassPlan* compiled = nullptr;
+    for (const auto& p : g->passes)
+        if (p.name == kAoApplyPassName) compiled = &p;
+    REQUIRE(compiled != nullptr);
+    const auto* bAo = barrierFor(*compiled, slotOf(*g, std::string{kAoName}));
+    REQUIRE(bAo != nullptr);
+    CHECK(bAo->newLayout == vk::ImageLayout::eShaderReadOnlyOptimal);
+    // srcAccess 取的是**上一条使用者**的 access（帧内写→读），ao 的上一条 = ao pass 的
+    // colorWrite ⟹ eColorAttachmentWrite。别抄成 eMemoryWrite——那是 history 附件跨
+    // submission 才有的分支（见 planBarrier 的帧间分析注释）。
+    CHECK(bAo->srcAccess == vk::AccessFlagBits2::eColorAttachmentWrite);
+    const RgPassPlan* compiledTone = nullptr;
+    for (const auto& p : g->passes)
+        if (p.name == "tonemap") compiledTone = &p;
+    REQUIRE(compiledTone != nullptr);
+    const auto* bApplied = barrierFor(*compiledTone, slotOf(*g, std::string{kAoAppliedName}));
+    REQUIRE(bApplied != nullptr);
+    CHECK(bApplied->newLayout == vk::ImageLayout::eShaderReadOnlyOptimal);
+}
+
+TEST_CASE("decorateAoApplyPass 三条跳过条件：taa 在图里 / 无 ao 附件 / 无采色上屏 pass → false 且不动图") {
+    auto build = [](bool withAo) {
+        RgGraphDesc d;
+        d.attachments = {swapchainAtt(), depthAtt(),
+            offscreenAtt("scene_hdr", "rgba16_sfloat")};
+        if (withAo)
+            d.attachments.push_back(offscreenAtt("ao"));
+        d.passes = {
+            RgPassDesc{.name = "opaque", .kind = RgPassKind::drawMesh, .state = "opaque",
+                .drawSource = "opaque", .outputs = {colorOut("scene_hdr"), depthOut("depth")}},
+        };
+        if (withAo)
+            d.passes.push_back(RgPassDesc{.name = "ao", .kind = RgPassKind::drawLight,
+                .state = "ao", .outputs = {colorOut("ao")}, .inputs = {sampleIn("depth")}});
+        d.passes.push_back(RgPassDesc{.name = "tonemap", .kind = RgPassKind::drawLight,
+            .state = "tonemap", .outputs = {colorOut("swapchain")},
+            .inputs = {sampleIn("scene_hdr")}});
+        return d;
+    };
+    auto unchanged = [](const RgGraphDesc& d, size_t a, size_t p) {
+        CHECK(d.attachments.size() == a);   // 失败路径不得留下半成品附件
+        CHECK(d.passes.size() == p);
+    };
+
+    // ①【最重要的一条】taa 在图里 ⟹ 不插。**这就是「AO 只施一次」的护栏**：AO 施加点在
+    //   taa.frag 里（批 13.6），再插本 pass = 乘两次 = 遮蔽处全黑。
+    //   用真实的调用次序复现（main_impl 就是先 decorateTaaPass 再本装饰），比手搓图更硬。
+    //   变异红线：删掉 decorateAoApplyPass 开头那个 taa 检查 → 本行红
+    //   （真机表现 = 开 TAA 后 AO 边缘明显发黑，容易被误读成"材质变暗"）。
+    {
+        RgGraphDesc d = build(/*withAo=*/true);
+        REQUIRE(decorateTaaPass(d));   // 前置条件：taa 真在图里
+        const size_t a = d.attachments.size(), p = d.passes.size();
+        CHECK_FALSE(decorateAoApplyPass(d));
+        unchanged(d, a, p);
+    }
+
+    // ② 无 ao 附件（无 SSAO 的图形态）⟹ 没有可见度可乘，不插。
+    //   变异红线：把 hasAo 判据删掉 → 本行红（真机 = 装饰出一个采不存在附件的 pass，
+    //   编译期即报"未知附件"，图起不来）
+    {
+        RgGraphDesc d = build(/*withAo=*/false);
+        const size_t a = d.attachments.size(), p = d.passes.size();
+        CHECK_FALSE(decorateAoApplyPass(d));
+        unchanged(d, a, p);
+    }
+
+    // ③ 没有「写 swapchain 且采色」的 pass（offscreen DIAG 变体走 blit）⟹ 无锚点，不插。
+    {
+        RgGraphDesc d;
+        d.attachments = {swapchainAtt(), depthAtt(), offscreenAtt("scene_rt", "rgba16_sfloat"),
+            offscreenAtt("ao")};
+        d.passes = {
+            RgPassDesc{.name = "opaque", .kind = RgPassKind::drawMesh, .state = "opaque",
+                .drawSource = "opaque", .outputs = {colorOut("scene_rt"), depthOut("depth")}},
+            RgPassDesc{.name = "composite", .kind = RgPassKind::blit,
+                .outputs = {RgPassAttachment{.attachment = "swapchain", .usage = RgUsage::transferWrite}},
+                .inputs = {RgPassAttachment{.attachment = "scene_rt", .usage = RgUsage::transferRead}}},
+        };
+        const size_t a = d.attachments.size(), p = d.passes.size();
+        CHECK_FALSE(decorateAoApplyPass(d));
+        unchanged(d, a, p);
+    }
+
+    // ④ 阳性配对：三条都不命中时必须插得成（防上面三条门槛被写成"恒 false"）
+    {
+        RgGraphDesc d = build(/*withAo=*/true);
+        CHECK(decorateAoApplyPass(d));
+    }
 }
 
 }  // namespace RGL

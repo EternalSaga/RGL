@@ -275,6 +275,52 @@ bool decorateTaaPass(RgGraphDesc& desc) {
 }
 
 /**
+ * decorateAoApplyPass 定义（契约见 render_graph.cppm 接口注释：跳过两条 + 次序契约）。
+ */
+bool decorateAoApplyPass(RgGraphDesc& desc) {
+	// 跳过条件 1：taa pass 在图里 ⟹ AO 施加点已经在那儿了（批 13.6），插本 pass = 双施。
+	for (const auto& p : desc.passes)
+		if (p.name == std::string{kTaaPassName})
+			return false;
+	// 锚点 = 「写 swapchain 且 sampleRead 色附件」的 pass（与 taa / velocity 同一个）。
+	const auto consumerIdx = swapchainColorConsumerIndex(desc);
+	if (!consumerIdx)
+		return false;
+	auto colorAtt = sampledColorName(desc, desc.passes[*consumerIdx]);  // 上一步已保证有值
+	// 跳过条件 2：没有 ao 附件（无 SSAO 的图形态）= 没有可见度可乘。按**存在性**判，
+	// 不假设变体（同 decorateTaaPass 里挂 ao 输入那条判据）。
+	const bool hasAo = std::ranges::any_of(desc.attachments,
+		[](const auto& a) { return a.name == std::string{kAoName}; });
+	if (!hasAo)
+		return false;
+
+	desc.attachments.push_back(RgAttachmentDesc{
+		.name = std::string{kAoAppliedName}, .kind = RgAttachmentKind::offscreen,
+		.format = std::string{kAoAppliedFormat}});
+
+	RgPassDesc pass{
+		.name = std::string{kAoApplyPassName}, .kind = RgPassKind::drawLight,
+		.state = std::string{kAoApplyPassName},
+		.outputs = {RgPassAttachment{.attachment = std::string{kAoAppliedName},
+			.usage = RgUsage::colorWrite, .loadOp = RgLoadOp::clear, .storeOp = RgStoreOp::store}},
+		// 输入序 = barrier 发射序：先成片（本帧刚写）、再 AO（ao pass 刚写）。
+		// ⚠ 色必须排在 ao **之前**：`sampledColorName` 取「首个 sampleRead 色附件」，而 ao
+		//   也是色附件——排在前面会让后续装饰把 AO 误认成场景色（decorateTaaPass 同条纪律）。
+		.inputs = {
+			RgPassAttachment{.attachment = *colorAtt, .usage = RgUsage::sampleRead},
+			RgPassAttachment{.attachment = std::string{kAoName}, .usage = RgUsage::sampleRead}}};
+	desc.passes.insert(desc.passes.begin() + static_cast<long>(*consumerIdx), std::move(pass));
+
+	// 消费者的色输入换成 AO-后的成片（tonemap 因此不再自己乘 AO，见 scene data 施加点标志）。
+	for (auto& in : desc.passes[*consumerIdx + 1].inputs)
+		if (in.attachment == *colorAtt && in.usage == RgUsage::sampleRead) {
+			in.attachment = std::string{kAoAppliedName};
+			break;
+		}
+	return true;
+}
+
+/**
  * decorateVelocityPass 定义（契约见 render_graph.cppm 接口注释）：一个附件 + 一个全屏 pass，
  * 无历史、无 commit、不改任何消费者的输入——**纯增量**，这是"门关 = 图逐位不变"能结构性
  * 成立的原因（门关 = 不调本函数 = 图里根本没有这个 pass，而不是"有但旁路"）。
