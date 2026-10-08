@@ -365,7 +365,7 @@ void FsrUpscaler::recordFrame(vk::raii::CommandBuffer& cmd, const FsrFrameInput&
 	// 而不是把 warning 当噪声：headless 冒烟的单帧间隔可以是亚毫秒，也可以是一百毫秒。
 	dd.frameTimeDelta   = std::clamp(frameMs, 1.0f, 1000.0f);
 	dd.preExposure      = std::max(input.exposure, 1e-4f);
-	dd.jitterOffset      = {input.jitterX, input.jitterY};
+	dd.jitterOffset      = {input.contentShiftX, input.contentShiftY};
 	// (1,1) = 「输入按渲染分辨率像素计」的**正确**填法，不是占位。vendor 在
 	// `ffx_fsr3upscaler.cpp:996-997` 就把本字段除以 `motionVectorsTargetSize` 再交给 shader
 	// （shader 侧 `LoadInputMotionVector` 只做乘法），所以像素口径的输入要填 1。

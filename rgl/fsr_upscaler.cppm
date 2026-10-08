@@ -27,8 +27,17 @@ export struct FsrFrameInput {
 	vk::Image color = nullptr;     ///< HDR 颜色（渲染分辨率，SRO）
 	vk::Image depth = nullptr;     ///< D32_SFLOAT 深度（SRO）
 	vk::Image velocity = nullptr;  ///< 逐像素速度场 rgba16_sfloat（SRO）
-	float jitterX = 0.0f;          ///< 当前帧 TAA 抖动的 x（像素单位的 UV 口径，见 §3 契约）
-	float jitterY = 0.0f;          ///< 同上 y
+	// ⚠ **不是「抖动」，是「内容位移」**——这两个名字混用过一次，代价是一整个 Phase 的
+	// 时域档（`phase14_plan.md` §1.19）。FSR 全部消费者把本字段当**渲染内容在纹理空间的实际
+	// 平移**用（`accumulate.h:110` `fLrUvJittered = fHrUv + Jitter()/RenderSize()`、
+	// `upsample.h:307`、`common.h:298`），而**投影注入量与它 Y 轴反号**：本引擎给
+	// `proj[2][1]` 减 `2jy/H`（`taa_jitter.cppm::applyProjectionJitter`），官方伪码是加
+	// （`ffx_fsr3upscaler.h:513-517`），再叠加负高视口 ⟹ `c = (jx, −jy)`。
+	// 唯一合法来源 = `taa_jitter.cppm::contentShiftPx`；地面真值实测（回读 `scene_hdr` +
+	// Lucas-Kanade，阳性锚点残差 0.019）：c = (−0.0995, +0.2648) vs contentShiftPx 声称
+	// (−0.125, +0.278) 残差 0.029，vs 原始 jitterPx 残差 0.543。
+	float contentShiftX = 0.0f;    ///< 本帧内容位移 x（渲染像素单位，= `contentShiftPx(jitterPx).x`）
+	float contentShiftY = 0.0f;    ///< 同上 y
 	float nearPlane = 0.05f;       ///< 投影**实际生效**的 near（取 ViewProjection，非 Camera 原值）
 	float farPlane = 1000.0f;      ///< 同上 far
 	float fovVertical = 1.0f;      ///< 垂直 fov，**弧度**（Camera::fov，GLM_FORCE_RADIANS）

@@ -12,8 +12,10 @@
 
 1. **速度场进 shader 前是「像素」，出来是「UV」，且是 `prev − cur` 方向**——消费点全是
    `fUv + fMotionVector`，**全树没有一处减法**。
-2. **`jitterOffset` 传「原始 Halton 值」（±0.5 像素），不是投影矩阵里那个取过负的值**。
-   Y 的负号只属于投影矩阵，作用是抵消 NDC-Y-up 与 UV-Y-down 的轴反向。
+2. **`jitterOffset` 传「内容位移 `contentShiftPx(jitterPx)`」（±0.5 渲染像素），不是原始 Halton 值**。
+   **本条曾被本文写反**（原文写「传原始值」）——错因是拿官方伪码的注入符号去推我们自己的申报值，
+   而**本引擎的 Y 注入符号与官方相反**，再叠加负高视口 ⟹ `c = (jx, −jy)`。
+   裁决依据 = 回读 `scene_hdr` 的地面真值实测（残差 0.029 vs 0.543），全文见 §3「Y 轴符号」。
 3. **官方对四个输入量零格式校验**——没有 `CheckFormat`，只有 `ENABLE_DEBUG_CHECKING`
    门控下的**范围告警**。格式错了没人拦，症状是画面错而不是报错。
 4. **`reset` 只有一个使用点**，且**不碰 reactivity、不碰 previousFrame\* 系列**。
@@ -170,27 +172,60 @@ RADV 实机结论：
 ⟹ 结论：**jitter 符号要在 cancellation 这条可精确回读的路径上测**，不要在输出图上测。
 输出图侧只留下一个**定性**佐证：jitter 增大时边缘单调**负向**移动，与 `uv + j/H` 一致。
 
-### Y 轴符号：源码里裁决不了，几何上能推死
+### Y 轴符号：本节结论曾被实测推翻（2026-10-08），正确口径 = 传**内容位移**
+
+> 🔴 **原文结论「传原始 Halton 值」是错的**，且错法值得记：下面那段推导的第一步
+> 「投影矩阵让画面在 NDC 里偏移 `(2jx/W, −2jy/H)`」用的是**官方伪码的注入符号**，
+> 而**本引擎的注入符号与官方相反**。拿官方的注入去推我们的申报值，结论必然错。
 
 官方伪码（`ffx_fsr3upscaler.h:513-516`）把 jitter 合进投影矩阵时是：
 
 ```
 jitterX =  2.0f * jitterX / renderWidth;
-jitterY = -2.0f * jitterY / renderHeight;      // ← 只有这里取负
+jitterY = -2.0f * jitterY / renderHeight;      // ← 官方在这里取负
 ```
 
-而 shader 消费时**不做任何 Y 翻转**（`fUv + Jitter()/RenderSize()`）。两者是否自洽，
-取决于 NDC 与 UV 的 Y 轴关系，推一下就有唯一答案：
+**本引擎不是这个符号**：`taa_jitter.cppm::applyProjectionJitter` 给 `proj[2][0/1]` 各**减**
+`2j/extent`，而 `clip.w = −v.z` 翻一次号 ⟹ `Δndc = (+2jx/W, **+**2jy/H)`——**Y 与官方反号**。
+再往下推（每步都是我们自己的事实，不是官方的）：
 
-- 投影矩阵让画面在 **NDC** 里偏移 `(2·jx/W, −2·jy/H)`。
-- 帧缓冲 / 纹理 UV 与 NDC 的关系是 `uv.y = (1 − ndc.y)/2`（Y 反向），故
-  `Δuv = (Δndc.x/2, −Δndc.y/2) = (jx/W, jy/H)`。
-- FSR 算的正是 `fUv + (jitterOffset)/(W,H)`。
+- 本引擎用**负高视口**（`shader.cppm` 「NDC y=+1 对应 area.y」）⟹ 行 = `(1 − ndc.y)/2 · H`。
+- ⟹ `Δ行 = −Δndc.y/2 · H = −jy`，`Δ列 = +jx`。
+- ⟹ **内容位移 `c = (jx, −jy)`**，正是 `taa_jitter.cppm::contentShiftPx`（它另有 imgqa 背书）。
+- 而 shader 消费侧 `fUv + Jitter()/RenderSize()`（`accumulate.h:110`、`upsample.h:307`、
+  `common.h:298`）要的就是这个**内容位移**。
 
-⟹ **两边相等的唯一解：`dispatch.jitterOffset` 传原始 Halton 值（未取负的那个）**，
-Y 的负号只属于投影矩阵，它存在的意义就是抵消 NDC-Y-up 与 UV-Y-down。
-**实机佐证**：jitter 增大 → 输出内容单调负向移动（定性），且 cancellation 路径的符号
-已精确对拍（见下）。⬜ accumulate 路径的**定量**判据仍缺（原因见「无效仪器」一节）。
+⟹ **`dispatch.jitterOffset` 必须传 `contentShiftPx(jitterPx)`，不是原始 `jitterPx`。**
+
+#### 地面真值实测（本节的裁决依据，不再靠推）
+
+在**输出图**上量位移是无效仪器（见上一节）。正确做法 = 回读 **`scene_hdr`**（mesh pass 写完、
+`ao_apply`/FSR/tonemap **之前**，几何未经任何重建环节），两档对拍：FSR 开 + 抖动关 vs FSR 开 +
+抖动开 + **相位冻结**（`env.fsrJitter = fsrUsable && fsrJitter`，所以 FSR 不能关——实测关 FSR
+后两图 md5 逐位相同）。估计器 = 预滤波去走样 + Lucas-Kanade 闭式解。
+
+仪器自检（缺了读数就不可信）：**阳性锚点** = 傅里叶平移造人造位移 `(−0.125, +0.278)` 测回
+`(−0.133, +0.295)`，残差 **0.019**；**反向用例** = 同图自比 `(0.0000, 0.0000)`。
+⚠ **预滤波是判据成立的前提**：不滤波时同一锚点高估到 1.55×（走样破坏 LK 的亮度恒定假设）。
+
+冻结相位引擎实报 `jitterPx = (−0.125, −0.2778)`：
+
+| 候选 | 期望 | 对实测的残差 |
+|---|---|---|
+| **实测内容位移 c** | — | `(−0.0995, +0.2648)` |
+| `contentShiftPx` 声称 `(jx, −jy)` | (−0.125, **+0.278**) | **0.029** ✅ |
+| 曾申报的原始 `(jx, jy)` | (−0.125, **−0.278**) | **0.543** ❌ |
+
+残差差 **19 倍**，不是仪器精度能含混的量级。
+
+**原文那条「实机佐证」为什么没救回来**：它是**定性**观察（jitter 增大 → 输出负向移动），
+且测于 P14（`lanczos2()` 的 `abs(float)` 落到 `::abs(int)`，见 `third_party/fsr/PATCHES.md`）
+修好**之前**——当时整条重建滤波是坏的，输出图上的任何位移观察都不构成裁决。
+
+**护栏（为什么这次不容易再犯）**：`FsrFrameInput::jitterX/jitterY` 已**改名**为
+`contentShiftX/contentShiftY` 并在字段注释里写死口径与实测数字。这个 bug 的成因就是
+「raw jitter」与「content shift」两个量在接口上同名 ⟹ 名字本身就是护栏。
+`GUARD: FsrFrameInput::contentShiftX/Y 命名 + 本节地面真值表`。
 
 ## 4. reset
 

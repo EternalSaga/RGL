@@ -216,12 +216,17 @@ export struct FrameDrawList {
 	float fsrFar = 1000.0f;
 	float fsrFovVertical = 1.0f;
 	/**
-	 * 批 14.5 第四批：本帧**申报给 FSR 的抖动**（渲染像素单位，= 进投影矩阵那份
-	 * `ViewProjection::jitterPx` 原值）。口径 = `docs/FSR输入契约.md` §3：传「原始 Halton
-	 * 值」（±0.5 像素），**不是**投影矩阵里那个、也不是内容位移 c_t（差一个 y 轴翻号）。
+	 * 批 14.5 第四批：本帧**进投影矩阵那份抖动**（渲染像素单位，= `ViewProjection::jitterPx`
+	 * 原值）。口径 = `docs/FSR输入契约.md` §3。
+	 *
+	 * ⚠ **本字段不是申报给 FSR 的值**——申报要用它经 `contentShiftPx` 换算后的**内容位移**
+	 * （两者 **Y 轴反号**）。本注释此前写的是「传原始 Halton 值，不是内容位移 c_t」，
+	 * **正好反了**，照它实现就把 Y 符号报错了一整个 Phase（地面真值实测：内容位移残差
+	 * 0.029 vs 原始值残差 0.543）。换算点收在唯一消费者 `vkrenderer_offgraph.cppm`，
+	 * 落地字段名已是 `FsrFrameInput::contentShiftX/Y`。
 	 *
 	 * ⚠ 这条是**成对约束**的一半：FSR 的 `jitterOffset` 必须恰好等于「本帧色输入实际带的
-	 * 抖动」。报多了报少了都不报错——vendor 零校验，症状是重建窗口偏移（糊或鬼影）。
+	 * 内容位移」。报多了报少了都不报错——vendor 零校验，症状是重建窗口偏移（糊或鬼影）。
 	 * 另一半见 `fsr_upscaler_impl.cppm` 的 cancellation 标志。
 	 */
 	glm::vec2 fsrJitterPx{0.0f, 0.0f};

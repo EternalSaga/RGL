@@ -504,6 +504,30 @@ bool computeFsrUsable(DeviceContext& device, const CompiledRenderGraph& graph,
 }
 
 
+/**
+ * 批 14.5 第七批：**TAA 与 FSR 时域互斥**——这不是画质偏好，是结构关系。
+ *
+ * FSR3-upscaler 自己就是带累积的时域升频器 ⟹ 接在 TAA 后面 = 两个时域滤波器串联
+ * = 双重模糊，**就算抖动簿记全修对也一样**。让它可配 = 等着被人配出"画面糊了"再当
+ * 调参问题去调（本 phase 已在这上面烧掉一整批）。
+ *
+ * 判据取 `taaDecorated`（**实际图形态**）而非配置键 `scene.taaEnabled`：后者为真但装饰
+ * 失败时色输入并不是 taa_out，拦它属于误拦（先例 = AO 施加点、`fsrUsable` 本身）。
+ *
+ * @param fsrUsable    FSR 真的接进了图（含 velocity 装饰成功）
+ * @param fsrTemporal  配置键 `runtime.fsr_temporal`
+ * @param taaDecorated TAA pass 真的在编译图里
+ * @return 实际生效的时域开关（被拦时 = false，并出 warn）
+ */
+bool resolveFsrTemporal(bool fsrUsable, bool fsrTemporal, bool taaDecorated) {
+	if (!fsrUsable || !fsrTemporal || !taaDecorated)
+		return fsrTemporal;
+	if (auto* lg = RLLogger::getInstance())
+		lg->warn("fsr_temporal 与 TAA 互斥（两个时域滤波器串联 = 双重模糊）："
+				 "已强制时域关，退化为纯空间升频");
+	return false;
+}
+
 /** C3 候选表 + GpuCull + skybox + deferred + HDR + DGC + Renderer（装配时序见接口注释）。 */
 RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resources& resources,
 	SceneDataService& sceneData, SamplerLibrary& samplers, Environment& env,
@@ -644,12 +668,14 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 	auto* cullRaw = cull.get();
 	auto* dgcRaw = dgc.get();
 	auto* dgcStaticRaw = dgcStatic.get();
+	// 批 14.5 第七批：TAA 与 FSR 时域互斥（判据与理由见 `resolveFsrTemporal`）。
+	const bool temporal = resolveFsrTemporal(fsrUsable, fsrTemporal, taaDecorated);
 	return RenderBackEnd{std::move(cull), std::move(dgc), std::move(dgcStatic),
 		Renderer(device, swapchain, resources, sceneData, env, rtCache, pipelines,
 			std::move(graphResult.graph), cullRaw, dgcRaw, dgcStaticRaw,
 			// 批 14.5：FSR 生效判据 = 配置键 **且** velocity 真的进了图（FSR 的 motionVectors
 			// 输入就是那张图；装饰失败时本键自动失效。取实际图形态的先例 = AO 施加点）。
-			fsrUsable, fsrTemporal)};
+			fsrUsable, temporal)};
 }
 
 }  // namespace RGL

@@ -37,6 +37,7 @@ import izb_shadow;
 import evssm_shadow;
 import fsr_upscaler;
 import pass_vocabulary;  // kTonemapState（批 14.5 FSR 认 tonemap pass）
+import taa_jitter;        // contentShiftPx（批 14.5 第七批：申报给 FSR 的是内容位移，非投影注入量）
 
 namespace RGL {
 
@@ -165,11 +166,19 @@ void Renderer::initFsr() {
 	//    滤波器 ⟹ 必须接这张，否则 AO 只能落回 tonemap = 时域之后，13.6 的收益整条丢掉。
 	//  · taa_out：TAA 在图里时 AO 已乘在它里面（批 13.6），接它 = 不旁路 TAA。
 	//  · scene_hdr：两者都不在（此时 ao_apply 也不会插，见 decorateAoApplyPass 跳过条件）。
+	// 批 14.5 第七批：**申报与「色输入在哪个空间」绑死**——这条不变量的唯一来源。
+	// `taa_out` 自批 13.5 起已在**基空间**（TAA 自己 un-jitter 过），`ao_applied` /
+	// `scene_hdr` 则带抖动。FSR 的 `jitterOffset` 必须恰好等于「色输入实际带的内容位移」，
+	// 色输入是 taa_out 时那份位移就是 **0**——照投影抖动申报会让 FSR 再 un-jitter 一次。
+	// 此前申报走**另一条独立链路**，与这里选中哪个分支毫无耦合 ⟹ 三个分支两个恰好对、
+	// 一个必错，且错了不报错、VVL 不抓、症状只是糊。先例 = AO 施加点取「实际图形态」。
+	const int32_t taaOutSlot = findAttachmentSlot(kTaaOutName);
 	fsrColorSlot = findAttachmentSlot(kAoAppliedName);
 	if (fsrColorSlot < 0)
-		fsrColorSlot = findAttachmentSlot(kTaaOutName);
+		fsrColorSlot = taaOutSlot;
 	if (fsrColorSlot < 0)
 		fsrColorSlot = findAttachmentSlot(kSceneHdrName);
+	fsrColorBaseSpace = (taaOutSlot >= 0 && fsrColorSlot == taaOutSlot);
 	fsrVelocitySlot = findAttachmentSlot(kVelocityName);
 	fsrDepthSlot = findAttachmentSlot("depth");
 	if (fsrColorSlot < 0 || fsrVelocitySlot < 0 || fsrDepthSlot < 0)
@@ -271,20 +280,55 @@ void Renderer::fsrTonemapPassPre(vk::raii::CommandBuffer& cmd, const RgPassPlan&
 	in.exposure = list.sceneData.exposure;  // tonemap 将施加的曝光（scene data @56）
 	// 批 14.5 第四批：把投影里那份抖动原样报给 FSR（口径 → FSR输入契约 §3）。
 	// 取 FrameDrawList 而不是重算 = 申报值与实际注入值同源，不可能漂移。
-	in.jitterX = list.fsrJitterPx.x;
-	in.jitterY = list.fsrJitterPx.y;
+	// 申报给 FSR 的**不是**投影注入量，而是它造成的**内容位移**（Y 轴反号）。
+	// 申报 = **色输入实际带的内容位移**（唯一来源 = `initFsr` 的分支选择，见 fsrColorBaseSpace）。
+	// 色输入是 `taa_out` 时它已在基空间、位移为 0（照投影抖动申报会让 FSR 再 un-jitter 一次）；
+	// 其余分支带抖动。此前申报走**另一条独立链路**，与这里选中哪个分支毫无耦合。
+	const auto colorShift = contentShiftPx(list.fsrJitterPx);
+	const float shiftScale = fsrColorBaseSpace ? 0.0f : 1.0f;
+	in.contentShiftX = colorShift.x * shiftScale;
+	in.contentShiftY = colorShift.y * shiftScale;
 	in.reset = !fsrDispatchedOnce;  // 首帧 = 时域重置（vendor 靠它清内部历史）
 	if (!fsrDispatchedOnce) {
 		if (auto* lg = RLLogger::getInstance())
-			// jitter 进这条诊断的理由（批 14.5 第四批）：它是**成对约束的一半**，而错了
+			// 申报量进这条诊断的理由（批 14.5 第四批）：它是**成对约束的一半**，而错了
 			// 不报错——vendor 对 jitterOffset 零校验（只在 |j|>1 时 warn）。开了 fsr_jitter
 			// 却因链路某处断掉而恒报 0，画面只是"抖动白加了"，没有任何信号会喊。
-			lg->info("FSRDIAG near={} far={} fov={} exposure={} jitter=({},{})",
+			// ⚠ 打印的是**内容位移**（不是投影注入量，两者 Y 反号）——第七批曾因读成注入量而误判。
+			lg->info("FSRDIAG near={} far={} fov={} exposure={} contentShift=({},{})",
 				in.nearPlane, in.farPlane, in.fovVertical, in.exposure,
-				in.jitterX, in.jitterY);
+				in.contentShiftX, in.contentShiftY);
 		fsrDispatchedOnce = true;
 	}
 	fsr->recordFrame(cmd, in);
+	// ③ FSR 输出 → tonemap 采样读：**必须补执行依赖**（缺了是 UB，不是"可能慢一点"）。
+	//   为什么图属 barrier 覆盖不到：FSR 的输出图不是图附件（零拷贝烘采样槽），而本 pass
+	//   的全部图 barrier 都物化在 `fsrTonemapPassPre` **之前**（`vkrenderer_passrec.cppm`
+	//   的 `emitBarriers(pass.barriers)` → 本函数 → `beginPassRendering`，后者体内零 barrier）。
+	//   vendor 侧也不补：它只在每个 job **前** flush（`ffx_vk.cpp:4026`），最后一个写 UAV 的
+	//   job 之后什么都不发，`ffx_fsr3upscaler.cpp` 里 grep 不到任何 barrier/sync。
+	//   ⚠ **VVL 抓不到**：布局本身是对的（输出常驻 GENERAL，GENERAL 可采样），缺的只是
+	//   compute-write → fragment-read 的**顺序**。
+	//   曾怀疑它是"时域档发糊"的根因（失效形态确实吻合：静止 + 无抖动时「读到上一帧」与
+	//   「读到本帧」内容相同 ⟹ 看不出问题；开抖动则上一帧 = 另一个亚像素相位）。
+	//   **实测否证**：补完后交付档 6.778→6.849，没动。真根因是申报 Y 反号，见 §1.19 §二。
+	//   **但它必须留着**——缺执行依赖是 UB，与"是不是某个症状的病灶"无关；驱动换个调度
+	//   就可能真读到上一帧，而那种错一次只会让人以为是着色器问题。
+	{
+		vk::ImageMemoryBarrier2 b{};
+		b.srcStageMask = vk::PipelineStageFlagBits2::eComputeShader;
+		b.srcAccessMask = vk::AccessFlagBits2::eShaderWrite;
+		b.dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader;
+		b.dstAccessMask = vk::AccessFlagBits2::eShaderRead;
+		b.oldLayout = b.newLayout = vk::ImageLayout::eGeneral;  // 不做布局转换，只要顺序
+		b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		b.image = fsr->outputImage();
+		b.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+		vk::DependencyInfo dep{};
+		dep.setImageMemoryBarriers(b);
+		cmd.pipelineBarrier2(dep);
+	}
 	// vendor 的 VK 后端逐 job 走 `vkCmdBindDescriptorSets` ⟹ CB 已被切进 classic 模式，
 	// heap 绑定作废（坑 9 的新实例，VVL 会点名下一次 mesh draw「heap was not bound」）。
 	// tonemap 之后还有 pass（imgui 叠加层等），所以这里**立刻**重绑，不能等下一帧的

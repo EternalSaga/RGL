@@ -402,7 +402,9 @@ export class Renderer {
 	std::unique_ptr<RGL::FsrUpscaler> fsr;
 	bool fsrEnabled = false;   ///< 装配层传入的门（已含 velocity 齐备判据）
 	bool fsrTemporal = false;  ///< 批 14.5：false = 每帧 reset（纯空间上采样，口径见 configs/runtime.lua）
-	int32_t fsrColorSlot = -1;    ///< FSR 色输入附件 slot（taa_out，缺则 scene_hdr）
+	int32_t fsrColorSlot = -1;    ///< FSR 色输入附件 slot（ao_applied → taa_out → scene_hdr）
+	bool fsrColorBaseSpace = false;  ///< 色输入是否已在**基空间**（= 选中的是 `taa_out`）；
+	                                 ///< 申报给 FSR 的内容位移必须由它推导，见 `initFsr`
 	int32_t fsrVelocitySlot = -1; ///< 速度场附件 slot（布局护栏 + 转 SRO 要写追踪表）
 	bool fsrDispatchedOnce = false;  ///< 首帧之后不再 reset（时域历史已建立）
 	int32_t fsrDepthSlot = -1;   ///< 深度附件 slot（布局护栏；**不用 depthAttSlot**——
