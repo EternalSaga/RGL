@@ -203,15 +203,25 @@ RpcOutcome rpcHandleState(RpcWiring& w) {
 	// "0.5 档变软"误读成"抗锯齿回归"。三个值都给，工具不必再猜换算。
 	const auto& we = w.registry.ctx().get<WindowExtent>();
 	const auto& re = w.registry.ctx().get<RenderExtent>();
-	return rpcOk({{"ok", true}, {"frame", w.frame},
-		{"camera", rpcCameraJson(w.registry.ctx().get<Camera>())}, {"pages", std::move(pageList)},
-		{{"render", {
+	// ⚠ **`render` 的值必须显式写成 `nlohmann::json{...}`**，不能只写 `{...}`。
+	//   踩过的坑（批 14.3 引入、本批发现）：写成 `{{"render", {...}}}` 时该元素是
+	//   「单元素数组」而不是 `{"key", value}` 二元对，而 nlohmann 的 initializer-list
+	//   构造要求**每个**元素都是二元对 ⟹ 只要有一个不是，**整个 `/state` 退化成数组**。
+	//   后果不响亮但很宽：`Engine::paramValue` 的 `out.at("pages")` 抛
+	//   `type_error.304 cannot use at() with array` ⟹ `temporal-flicker` 与
+	//   `temporal-motion`（含 `temporal-tail` 族）整台仪器起不来。实测：
+	//   `imgqa temporal-flicker` → `[json.exception.type_error.304]`，退出码 1。
+	return rpcOk({{"ok", true},
+		{"frame", w.frame},
+		{"camera", rpcCameraJson(w.registry.ctx().get<Camera>())},
+		{"pages", std::move(pageList)},
+		{"render", nlohmann::json{
 			{"windowWidth", we.width},
 			{"windowHeight", we.height},
 			{"renderWidth", re.width},
 			{"renderHeight", re.height},
 			{"scale", w.renderer.getSwapchainRef().getRenderScale()},
-		}}}});
+		}}});
 }
 
 /**

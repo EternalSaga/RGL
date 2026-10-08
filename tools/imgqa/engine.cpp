@@ -733,6 +733,23 @@ void Engine::setParam(const std::string& page, const std::string& label, double 
             + label + " page=" + page + ": " + res->body);
 }
 
+/**
+ * `/state` 之类的响应**必须是 JSON 对象**；不是就把真因说出来。
+ *
+ * 为什么要有这条：引擎侧曾写成 `{{"render", {...}}}`（多一对花括号 ⟹ 该元素是单元素数组
+ * 而不是 `{"key", value}` 二元对），nlohmann 于是把**整个** `/state` 序列化成数组。
+ * 届时下游 `out.at("pages")` 只抛 `type_error.304 cannot use at() with array` —— 那条信息
+ * 指向「调用侧用错了 API」，而真相是「服务端响应形状坏了」。差一层，指错人。
+ */
+static void requireJsonObject(const json& v, const char* what)
+{
+    if (v.is_object())
+        return;
+    throw std::runtime_error(std::string(what) + " 返回的不是 JSON 对象（是 "
+        + std::string(v.type_name()) + "）⟹ 引擎侧响应构造坏了：查 rpcHandleState 的 "
+          "initializer-list 里是否混入了非 {key, value} 二元对的元素");
+}
+
 double Engine::paramValue(const std::string& page, const std::string& label)
 {
     auto res = impl_->http->Get("/state");
@@ -740,6 +757,7 @@ double Engine::paramValue(const std::string& page, const std::string& label)
         throw std::runtime_error(
             "GET /state 失败: " + (res ? std::to_string(res->status) : std::string("无响应")));
     const json out = json::parse(res->body);
+    requireJsonObject(out, "GET /state");
     for (const auto& p : out.at("pages")) {
         if (!page.empty() && p.value("name", "") != page)
             continue;
