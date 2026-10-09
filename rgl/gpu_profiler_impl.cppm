@@ -4,7 +4,6 @@
 //（vk::raii 未包装 getQueryPoolResults；每段只读实际写入部分，非 SUCCESS 计 drops 跳段）。
 module;
 #include <vulkan/vulkan.h>  // vkGetQueryPoolResults C 函数（loader trampoline；vk::raii 未包装）
-#include <chrono>            // steady_clock 换算基准（GMF 例外清单成员）
 module gpu_profiler:impl;
 
 import gpu_profiler;  // clang 不给 partition impl unit 隐式 import 主接口——必须显式
@@ -13,20 +12,11 @@ import rlvk;
 import rllogger;
 import diagnostics;  // diagnostics().profiler（帧窗口开关，main 启动早期 setDiagnostics）
 import profiler;     // profilerCurrentFrame（归属帧）+ profilerPushRecord（归并回填）
+import timing_util;  // steadyNowNs（与校准 mono 域同域的取时刻；自本文件收敛）
 import vk_device;
 import queue_family_manager;  // QueueFamilyRole::Graphics（timestampValidBits 族判定）
 
 namespace RGL {
-
-namespace {
-
-/** steady_clock 当前时刻 ns（glibc = CLOCK_MONOTONIC，与校准 mono 域同域）。 */
-uint64_t steadyNs() {
-	return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-		std::chrono::steady_clock::now().time_since_epoch()).count());
-}
-
-}  // namespace
 
 GpuProfiler::GpuProfiler(DeviceContext& dev) : device(dev) {
 	if (diagnostics().profiler == 0)
@@ -192,9 +182,9 @@ void GpuProfiler::mergeRegions(uint32_t slot, uint32_t segBase, uint32_t segCoun
 	const std::array<vk::CalibratedTimestampInfoKHR, 2> domains{
 		vk::CalibratedTimestampInfoKHR{vk::TimeDomainEXT::eDevice},
 		vk::CalibratedTimestampInfoKHR{vk::TimeDomainEXT::eClockMonotonic}};
-	const uint64_t steadyBefore = steadyNs();
+	const uint64_t steadyBefore = steadyNowNs();
 	const auto cal = device.getDevice().getCalibratedTimestampsEXT(domains);
-	const uint64_t steadyAfter = steadyNs();
+	const uint64_t steadyAfter = steadyNowNs();
 	lastMaxDeviationNs = cal.second;
 	const int64_t devCal = static_cast<int64_t>(cal.first[0] & validMask);
 	const int64_t monoCal = static_cast<int64_t>(cal.first[1]);

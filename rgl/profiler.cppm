@@ -7,6 +7,7 @@
 export module profiler;
 
 import rlstd;
+import timing_util;  // steadyNowNs（计数记录回填时间轴；本模块曾另出一份同名实现）
 
 namespace RGL {
 
@@ -141,9 +142,6 @@ export void profilerAddCommands(uint32_t n);
  */
 export void profilerFlushFrameCounters();
 
-/** steady_clock 当前时刻（ns）——外部记录/计数回填时间轴用（批 9.5 帧命令计数）。 */
-export uint64_t profilerNowNs();
-
 namespace {
 /** 本帧 draw 累加（profilerAddDraws 写、profilerFlushFrameCounters 清零）。 */
 uint64_t g_frameDraws = 0;
@@ -177,7 +175,7 @@ void profilerAddCommands(uint32_t n) { g_frameCommands += n; }
 /** profilerFlushFrameCounters 定义（口径见其声明注释）：取数 → 清零 → 推两条计数。 */
 void profilerFlushFrameCounters() {
 	const uint64_t frame = profilerCurrentFrame();
-	const uint64_t ts = profilerNowNs();
+	const uint64_t ts = steadyNowNs();
 	const uint64_t draws = g_frameDraws;
 	const uint64_t commands = g_frameCommands;
 	g_frameDraws = 0;

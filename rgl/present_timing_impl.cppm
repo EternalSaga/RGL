@@ -4,7 +4,6 @@
 // queue-full 回退语义（wsi.adoc「队列操作仍入队、信号量 wait 仍执行」）：重试 present 由
 // frame_session 负责摘掉 wait 信号量（同队列 wait-then-signal = 自死锁），本单元只记账 + 冷却。
 module;
-#include <chrono>            // steady_clock（校准夹取 + counter 时间戳；GMF 例外清单成员）
 #include <fmt/format.h>      // 摘要行格式化（rllogger 内部 fmt，此处直接组串）
 module present_timing:impl;
 
@@ -13,18 +12,13 @@ import rlstd;
 import rlvk;
 import rllogger;
 import profiler;   // profilerCurrentFrame / profilerPushRecord / profilerPushCounter
+import timing_util;  // steadyNowNs / toMs / percentile（自本文件与 profiler_impl 收敛）
 import vk_device;
 import vk_swapchain;
 
 namespace RGL {
 
 namespace {
-
-/** steady_clock 当前时刻 ns（glibc = CLOCK_MONOTONIC，与校准 mono 域同域，9.2 同款）。 */
-uint64_t steadyNs() {
-	return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-		std::chrono::steady_clock::now().time_since_epoch()).count());
-}
 
 /** stage 掩码位数（VUID-vkGetPastPresentationTimingEXT-flags-12231：结果项 presentStageCount
 	 * 输入容量须 ≥ 挂链查询的 stage 数——本项目掩码恒定，直接按位计数）。 */
@@ -49,18 +43,7 @@ uint64_t basisTime(const vk::PastPresentationTimingEXT& res, vk::PresentStageFla
 	return 0;
 }
 
-/** ns → ms（摘要行用）。 */
-double toMs(uint64_t ns) { return static_cast<double>(ns) / 1e6; }
-
-/** 百分位（最近秩；sorted 须升序，空 = 0）。 */
-uint64_t percentile(const std::vector<uint64_t>& sorted, double p) {
-	if (sorted.empty())
-		return 0;
-	size_t idx = static_cast<size_t>(p * static_cast<double>(sorted.size()));
-	if (idx >= sorted.size())
-		idx = sorted.size() - 1;
-	return sorted[idx];
-}
+/** ns → ms 与 percentile 见 `timing_util.cppm`（与 profiler_impl 共用一份口径）。 */
 
 }  // namespace
 
@@ -303,10 +286,10 @@ void PresentTiming::calibrate() {
 	const std::array<vk::CalibratedTimestampInfoKHR, 2> infos{
 		vk::CalibratedTimestampInfoKHR{vk::TimeDomainKHR::eClockMonotonic},
 		vk::CalibratedTimestampInfoKHR{reportDomain, &swInfo}};
-	const uint64_t steadyBefore = steadyNs();
+	const uint64_t steadyBefore = steadyNowNs();
 	try {
 		const auto cal = device.getDevice().getCalibratedTimestampsKHR(infos);
-		const uint64_t steadyAfter = steadyNs();
+		const uint64_t steadyAfter = steadyNowNs();
 		calibMaxDeviationNs = cal.second;
 		if (cal.first[1] == 0) {
 			// spec：timeDomainId 不再支持时驱动可报 0
@@ -430,7 +413,7 @@ void PresentTiming::recordIpd(uint64_t ipdNs) {
 void PresentTiming::pushCounter(std::string_view name, uint64_t value) {
 	CounterRecord rec;
 	rec.frame = profilerCurrentFrame();
-	rec.tsNs = steadyNs();
+	rec.tsNs = steadyNowNs();
 	rec.value = value;
 	rec.name = name;
 	profilerPushCounter(rec);
@@ -439,7 +422,7 @@ void PresentTiming::pushCounter(std::string_view name, uint64_t value) {
 void PresentTiming::periodicLog() {
 	if (stats.attachedPresents == 0)
 		return;
-	const uint64_t now = steadyNs();
+	const uint64_t now = steadyNowNs();
 	if (now - lastLogNs < kPeriodicLogNs)
 		return;
 	lastLogNs = now;

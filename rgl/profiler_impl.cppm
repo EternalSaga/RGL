@@ -12,6 +12,7 @@ import profiler;  // clang 不给 partition impl unit 隐式 import 主接口—
 import rlstd;
 import rllogger;
 import diagnostics;  // diagnostics().profiler（帧窗口配置，main 启动早期 setDiagnostics）
+import timing_util;  // steadyNowNs / toMs / percentile（自本文件与 present_timing 收敛）
 
 namespace RGL {
 
@@ -60,12 +61,6 @@ ProfilerState& state() {
 	return s;
 }
 
-/** steady_clock 当前时刻（ns；glibc = CLOCK_MONOTONIC，与 9.2 GPU 校准目标域同源）。 */
-uint64_t nowNs() {
-	return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-		std::chrono::steady_clock::now().time_since_epoch()).count());
-}
-
 /** zone 类别 → trace 分轨 tid（cpu 为默认兜底）。 */
 int tidFor(ZoneKind kind) {
 	if (kind == ZoneKind::gpu)
@@ -96,18 +91,7 @@ std::string jsonEscape(std::string_view in) {
 	return out;
 }
 
-/** 时长 ns → ms（double；日志与 JSON 共用）。 */
-double toMs(uint64_t ns) { return static_cast<double>(ns) / 1e6; }
-
-/** 百分位（最近秩；durs 须已升序，空集返回 0）。 */
-uint64_t percentile(const std::vector<uint64_t>& sorted, double p) {
-	if (sorted.empty())
-		return 0;
-	size_t idx = static_cast<size_t>(p * static_cast<double>(sorted.size()));
-	if (idx >= sorted.size())
-		idx = sorted.size() - 1;
-	return sorted[idx];
-}
+/** ns→ms 与 percentile 见 `timing_util.cppm`（与 present_timing_impl 共用一份口径）。 */
 
 /** 向量求和 + 均值（ms）。rlstd 未导出 std::accumulate，局部实现避免动 rlstd。 */
 double meanMs(const std::vector<uint64_t>& ns) {
@@ -433,7 +417,7 @@ Zone::Zone(std::string_view label_, std::source_location loc_)
 	if (st.window == 0 || !st.inFrame)
 		return;  // 关（或首帧未开）：仅两次可预测分支，近零开销
 	active = true;
-	startNs = nowNs();
+	startNs = steadyNowNs();
 	depth = st.depth++;
 }
 
@@ -452,7 +436,7 @@ Zone::~Zone() {
 	}
 	ZoneRecord r;
 	r.startNs = startNs;
-	r.durNs = nowNs() - startNs;
+	r.durNs = steadyNowNs() - startNs;
 	r.frame = st.frame;
 	r.depth = depth;
 	r.line = static_cast<uint32_t>(loc.line());
@@ -477,7 +461,7 @@ void profilerFrameBegin() {
 		if (auto* lg = RLLogger::getInstance())
 			lg->info("profile: on (window {} frames, dump on exit)", st.window);
 	}
-	const uint64_t t = nowNs();
+	const uint64_t t = steadyNowNs();
 	const uint64_t k = st.inFrame ? st.frame + 1 : 0;
 	FrameSlot& slot = st.slots[k % st.window];
 	// 上一帧墙钟 = 两次 frameBegin 间隔（真实帧节奏，含等 GPU）；归属帧 k-1，
@@ -526,8 +510,6 @@ void profilerPushCounter(const CounterRecord& rec) {
 	}
 	slot.counters.push_back(rec);
 }
-
-uint64_t profilerNowNs() { return nowNs(); }
 
 void profilerDump() {
 	auto& st = state();
