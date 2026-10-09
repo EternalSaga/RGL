@@ -615,10 +615,13 @@ def baseline_checkout(ref: str):
     dirty = bool(before_status.strip())
     msg = f"regress-baseline-{time.strftime('%Y%m%dT%H%M%S')}"
     stashed = detached = False
+    stash_sha = ""
     try:
         if dirty:
             git("stash", "push", "-u", "-m", msg)
             stashed = True
+            # 立刻记下**这次 stash 的 commit SHA**（不是索引）：并发 stash 不会骗它。
+            stash_sha = git("rev-parse", "stash@{0}").strip()
             if git("status", "--porcelain").strip():
                 raise RegressError("stash 之后工作树仍不干净（多半是 skip-worktree/assume-unchanged）"
                                    "——已中止，构建没动")
@@ -633,10 +636,10 @@ def baseline_checkout(ref: str):
                               cwd=ROOT, capture_output=True, text=True).returncode != 0:
                 problems.append(f"git checkout --detach {orig[:8]} 失败")
         if stashed:
-            idx = _find_stash(msg)
+            idx = _find_stash(stash_sha, msg)
             if idx is None:
-                problems.append(f"找不到本次建的 stash（message={msg}）——"
-                                f"手工核对 `git stash list`")
+                problems.append(f"找不到本次建的 stash（sha={stash_sha[:12]} msg={msg}）"
+                                "——手工核对 `git stash list` 后 pop 它")
             elif subprocess.run(["git", "stash", "pop", f"stash@{{{idx}}}"],
                                 cwd=ROOT, capture_output=True, text=True).returncode != 0:
                 problems.append(f"git stash pop stash@{{{idx}}} 冲突 → 手工执行它")
@@ -647,16 +650,28 @@ def baseline_checkout(ref: str):
         if problems:
             raise RegressError("现场恢复失败，**先别继续改代码**：\n  - "
                                + "\n  - ".join(problems)
-                               + f"\n进场 HEAD={orig[:12]} stash={stashed}")
+                               + f"\n进场 HEAD={orig[:12]} stash={stashed} sha={stash_sha[:12]}")
 
 
-def _find_stash(msg: str) -> int | None:
-    for line in git("stash", "list", "--format=%gd\t%s").splitlines():
-        ref, _, subject = line.partition("\t")
-        if subject.strip() == msg:
-            m = re.match(r"stash@\{(\d+)\}", ref)
-            if m:
-                return int(m.group(1))
+def _find_stash(sha: str, msg: str) -> int | None:
+    """按 **commit SHA** 找本次 stash 的索引（message 只作兜底）。
+
+    踩过的坑（2026-10-09 第一次跑 `ab` 就撞上）：`%s` 对 stash 是**reflog 主题**
+    `On master: <msg>`，不是 `<msg>` ⟹ 按 message 全等匹配永远找不到 ⟹ pop 不执行
+    ⟹ 用户改动静静留在 stash 里，而工具只留下一句"找不到 stash"。所以主判据用 SHA：
+    它同时免疫 message 变形与"期间用户又 stash 了一次"导致的索引漂移。
+    `%x09` 是 git 自己的制表符转义——写 `\\t` 会被 pretty-format 吞成字母 t。
+    """
+    for line in git("stash", "list", "--format=%gd%x09%H%x09%s").splitlines():
+        cols = line.split("\t")
+        if len(cols) != 3:
+            continue
+        ref, entry_sha, subject = cols
+        if entry_sha != sha and not subject.strip().endswith(msg):
+            continue
+        m = re.match(r"stash@\{(\d+)\}", ref)
+        if m:
+            return int(m.group(1))
     return None
 
 
