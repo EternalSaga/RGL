@@ -149,29 +149,35 @@ static const float kEvssmLbr = 0.1;         // light-bleed reduction（Filament 
 static const float kEvssmEpsilon = 0.002;   // 动态方差地板系数（evaluateEVSM EPSILON_MULTIPLIER）
 
 /** Chebyshev 上界 + 动态方差地板 + LBR（evaluateEVSM 内联件逐式转写）。
- *  ⚠️ 快路（depth ≤ moments.x → 1.0）是**语义必需**不是性能优化（forward fallback
+ *  ⚠️ 快路（depth ≤ anchor → 1.0）是**语义必需**不是性能优化（forward fallback
  *  实测坐实，2026-10-02）：无它则「receiver 严格在所有 caster 之前」与「receiver
  *  在 caster 之后」给出同向的 ≈0（d² 对负 d 同样增长）= 全亮区反而判全暗。
+ *  ⚠️ 批 N6d：快路参照从 `moments.x`（**均值**）换成调用点传入的 `anchor`（**单纹素**）。
+ *  均值是 `mean(exp(c·depth))` = 软最大深度，双线性一跨剪影就被远侧拉到 100× 量级，
+ *  于是「receiver 在均值之前」几乎恒成立 = 沿整条剪影漏光（实测丢 40% 影）。单纹素锚点
+ *  没有混合，「receiver 在本纹素最近表面之前」才是**又sound又tight**的判据。
  *  返回值语义 = **受光量**（1 = 全亮）。 */
-float chebyshevUpperBound(float2 moments, float depth, float minVariance, float lbr)
+float chebyshevUpperBound(float2 moments, float anchor, float depth, float minVariance, float lbr)
 {
-    if (depth <= moments.x)
-        return 1.0;  // 快路：receiver 在均值深度之前 = 全亮（Filament 同款，LBR 前返回）
+    if (depth <= anchor)
+        return 1.0;  // 快路：receiver 在锚点深度之前 = 全亮（LBR 前返回）
     const float variance = max(moments.y - moments.x * moments.x, minVariance);
     const float d = depth - moments.x;
     const float pMax = variance / (variance + d * d);
     return saturate((pMax - lbr) / (1.0 - lbr));
 }
 
-/** ELVSM 双侧矩评估（矩 = (z, z², −1/z, 1/z²)，z = exp(c·(2d−1))；zReceiver = 光深度 [0,1]）。 */
-float evaluateEvssm(float4 moments, float zReceiver)
+/** ELVSM 双侧矩评估（矩 = (z, z², −1/z, 1/z²)，z = exp(c·(2d−1))；zReceiver = 光深度 [0,1]）。
+ *  @param anchor 同一点的**单纹素**（未混合）矩，只服务两侧快路；两侧锚点条件在单纹素上
+ *         退化成同一个式子（`nw ≤ anchor.z ⟺ pw ≤ anchor.x`），故传 anchor.x / anchor.z 即可。 */
+float evaluateEvssm(float4 moments, float4 anchor, float zReceiver)
 {
     const float depth = zReceiver * 2.0 - 1.0;
     const float c = readShadowEvssmExponent();
     const float pw = exp(c * depth);
-    const float p = chebyshevUpperBound(moments.xy, pw, kEvssmEpsilon * (pw * pw), kEvssmLbr);
+    const float p = chebyshevUpperBound(moments.xy, anchor.x, pw, kEvssmEpsilon * (pw * pw), kEvssmLbr);
     const float nw = -1.0 / pw;
-    const float n = chebyshevUpperBound(moments.zw, nw, kEvssmEpsilon * (nw * nw), kEvssmLbr);
+    const float n = chebyshevUpperBound(moments.zw, anchor.z, nw, kEvssmEpsilon * (nw * nw), kEvssmLbr);
     return min(p, n);
 }
 
@@ -206,9 +212,25 @@ float evssmCoverage(float2 uv, float refZ, float texelWorld,
         ? penumbraTexels
         : evp.z + 1.0 - exp(-(penumbraTexels - evp.z));
 
+    // —— STEP 2.5：核宽下限（批 N6d G2）————————————————————————————————————————————
+    // 物理半影在出厂太阳角 0.53° 下 **< 1 个图集纹素** ⟹ 抽点半径 r = 0.5 纹素 ⟹ 5 个抽点
+    // 全落进同一个 2×2 双线性邻域（实测：单抽头变异与基线**逐位相同**、太阳角敏感度**恰好
+    // 0.000%**）⟹ 核根本没张开，EVSSM 退化成「单纹素深度比较」= CSM 去掉 PCF。下限让核
+    // 至少张到能比较多个纹素。
+    // ⚠ 核宽是**覆盖 ↔ 不透明度**的单调权衡，实测（交付配置 / 逐位确定性，比 CSM 同臂）：
+    //   foot    0     4      8     16     32
+    //   覆盖率比 .600  .631   .641  .736   .845
+    //   黑度比  .863   .810   .758  .708   .608
+    //   带核比  .209   .376   .532  .999   2.176
+    //   每影像素深度(EVSSM/CSM=52LSB) 75 66 61 50 37
+    // **16 = 唯一同时贴上 CSM 形态的点**（带核比 1.000、每影像素深度 50 vs 52），故取 16 为
+    // 默认。再往上（32）覆盖率是靠**把影冲淡**换来的 —— 黑度比掉到 .608，不是变好。
+    // 完整权衡与「为何转正不成立」→ docs/shadow_routes_plan.md §5 修法重排。
+    const float penumbraFloored = max(penumbraSquashed, readShadowEvssmFootprint());
+
     // —— STEP 3：半影滤波（5 抽头 quincunx，中心 0.5 + 四角 0.125；lod 偏置 −1 =
     //    Filament TAPS==5 式：靠空间抽头重建形状，绕过 mip 极端压缩）——
-    const float idealLod = log2(max(penumbraSquashed, 1.0)) - 1.0;
+    const float idealLod = log2(max(penumbraFloored, 1.0)) - 1.0;
     const float targetLod = clamp(idealLod, 0.0, maxMip);
     const float lodDeficit = exp2(max(idealLod - targetLod, 0.0));
 
@@ -216,7 +238,7 @@ float evssmCoverage(float2 uv, float refZ, float texelWorld,
     const float2 fc = gl_FragCoord.xy;  // import glsl（门见文件头注）
     const float ang = 6.28318531 * fract(sin(dot(fc, float2(12.9898, 78.233))) * 43758.54531);
     const float2 cs = float2(cos(ang), sin(ang));
-    const float2 r = penumbraSquashed * invAtlas * 0.5 * lodDeficit;
+    const float2 r = penumbraFloored * invAtlas * 0.5 * lodDeficit;
     const float2 rotX = float2(cs.x * r.x, cs.y * r.x);
     const float2 rotY = float2(-cs.y * r.y, cs.x * r.y);
     const float inset = 0.5 * exp2(targetLod) * invAtlas;
@@ -229,9 +251,23 @@ float evssmCoverage(float2 uv, float refZ, float texelWorld,
     const float4 k2 = momentsAtlas.SampleLevel(momentsSampler, clamp(anchor + rotX - rotY, lo, hi), targetLod);
     const float4 k3 = momentsAtlas.SampleLevel(momentsSampler, clamp(anchor - rotX + rotY, lo, hi), targetLod);
     const float4 k4 = momentsAtlas.SampleLevel(momentsSampler, clamp(anchor - rotX - rotY, lo, hi), targetLod);
-    const float4 finalMoments = c4 * 0.5 + (k1 + k2 + k3 + k4) * 0.125;
 
-    return evaluateEvssm(finalMoments, refZ);
+    // —— STEP 5：**逐抽头评估再平均**（批 N6d 主修）————————————————————————————————
+    // 「先把 5 个抽点的矩平均、再评估一次 Chebyshev」在跨剪影的 footprint 上必然退化：那种
+    // footprint 的深度分布是**双峰**（遮挡体 + 远背景），双峰让 Var 爆量级、μ 被远侧抬走，
+    // 上界 Var/(Var+d²) 直接趋 0 或趋 1（两个方向都错：漏光 / 痤疮，实测 5.89% 与 16.92%
+    // 就是这两侧，归因 → docs/shadow_routes_plan.md §4.2）。
+    // 逐抽头评估把双峰**拆成五个局部单峰**，每个抽点各自判「本抽点局部是否被遮」，再按权重
+    // 平均受光量 —— 这正是 PCF 的结构，也是 EVSSM 本该有的形态（mip 链给的是核宽，不是把
+    // 分布搅在一起的理由）。
+    // ⚠ 快路参照**必须逐抽点各用自己的矩**，不能共用中心锚点：共用时中心纹素判「接收面在
+    //   其之前」会让 5 个抽点全部返回全亮，核再宽也加不回影（实测 foot 扫到 8 只从 0.598
+    //   涨到 0.620）。而 CSM 影域里 **37.9%** 的像素正是「中心锚点判在前、CSM 判影」——
+    //   共用锚点等于把 PCF 靠邻域抽点找回来的那部分永久抹掉（集合对拍实测）。
+    const float litSum = evaluateEvssm(c4, c4, refZ) + evaluateEvssm(k1, k1, refZ)
+        + evaluateEvssm(k2, k2, refZ) + evaluateEvssm(k3, k3, refZ)
+        + evaluateEvssm(k4, k4, refZ);
+    return litSum / 5.0;
 }
 #endif
 

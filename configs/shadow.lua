@@ -35,9 +35,22 @@ return {
     csm = { },
 
     -- PCSS 档调参（clamp 口径 = 旧 pcss_* 三键原样：sun [0,5]、两半径 [1,64] 成本护栏）
+    -- ⚠ 本档**没有** min_footprint_texels：那是 EVSSM 矩滤波专用件（PCSS 的半径由 Δz 现算，
+    --    没有"核窄到 0.5 纹素"这个失效），写在这里任何 mode 下都不生效——gate_lint 直接
+    --    warn，不靠注释自觉。
     pcss  = { sun_degrees = 0.53, search_radius = 16.0, max_penumbra = 32.0 },
 
     -- EVSSM 档调参（**按档分立**——消掉旧门「shadow_pcss 与 shadow_evssm 共用一套 pcss_*」
     -- 的债-16⑤；两档同值只是出厂巧合，改一档不许串到另一档）
-    evssm = { sun_degrees = 0.53, search_radius = 16.0, max_penumbra = 32.0 },
+    --   min_footprint_texels = 滤波核**宽度下限**（图集纹素；0 = 不设下限）。出厂 0.53° 下
+    --    物理半影 < 1 纹素 ⟹ 抽点半径 0.5 纹素 = 5 抽点全落同一个双线性邻域 ⟹ EVSSM 退化成
+    --    「单纹素深度比较」= CSM 去掉 PCF（实测太阳角敏感度恰好 0.000%）。
+    -- ⚠ 16 = 实测**唯一贴上 CSM 形态**的点（带核比 1.000、每影像素深度 50 vs CSM 52 LSB）。
+    --    核宽是「覆盖 ↔ 不透明度」的单调权衡，不是越宽越好：foot=32 覆盖率比涨到 .845 但黑度比
+    --    掉到 .608 = 把影冲淡。**改这个数前先看 rgl/shaders/shadow.slang STEP 2.5 的权衡表**。
+    -- ⚠ 曾有第二键 coherence_texels（跨断崖抽点一致性闸门），实测**净负作用**（foot=32 时
+    --    覆盖率比 0.845→0.526：被剔的抽点恰是能提供遮挡的那些）已删。归因 →
+    --    docs/shadow_routes_plan.md §4.2。
+    evssm = { sun_degrees = 0.53, search_radius = 16.0, max_penumbra = 32.0,
+              min_footprint_texels = 16.0 },
 }

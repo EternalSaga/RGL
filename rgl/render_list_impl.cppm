@@ -200,6 +200,11 @@ void fillShadowData(FrameDrawList& out, float shadowNear, float shadowFar,
     out.sceneData.shadowEvssm = {std::tan(evssmHalfAngle),
         static_cast<float>(evssm.searchRadius), static_cast<float>(evssm.maxPenumbra),
         static_cast<float>(RGL::kEvssmMipLevels - 1u)};
+    // 核宽下限（批 N6d）走常量区 .z（原留白）：它是**滤波形态参数**而不是逐帧几何，与指数 c
+    // 同区同源。0 = 不设下限（= 单纹素比较形态）。⚠ .y（722068）曾为一致性闸门容差，实测
+    // 净负作用已删，槽位恒 0 不动布局 —— 理由见 shadow.slang STEP 2.5 权衡表。
+    out.sceneData.shadowEvssmConst
+        = {kEvssmExponent, 0.0f, static_cast<float>(evssm.minFootprintTexels), 0.0f};
 }
 
 /**

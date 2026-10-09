@@ -215,6 +215,16 @@ float readShadowEvssmExponent()
     return asfloat(sceneData.Load(722064u));
 }
 
+// 滤波核宽下限（批 N6d，kSceneDataEvssmConstOffset.z；单位 = 图集纹素，0 = 不设下限）。
+// ⚠ .y（722068）曾为「一致性闸门容差」，实测净负作用（foot=32 时覆盖率比 0.845→0.526）已删，
+//   槽位保留为 0 不动布局 —— 理由与核宽权衡表见 shadow.slang STEP 2.5 注释。
+// 出厂 0.53° 下半影 < 1 纹素 ⟹ 抽点半径 0.5 纹素 ⟹ 5 抽点全落同一双线性邻域（实测单抽头
+// 变异与基线逐位相同）⟹ 核没张开、软度无从谈起。归因 → docs/shadow_routes_plan.md §4.2。
+float readShadowEvssmFootprint()
+{
+    return asfloat(sceneData.Load(722072u));
+}
+
 float3 irradianceSH(float3 n)
 {
     uint base = 721552u;  // kSceneDataIrradianceOffset（vkresources.cppm 字面量同步）

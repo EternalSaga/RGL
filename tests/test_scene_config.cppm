@@ -1271,8 +1271,8 @@ TEST_CASE("shadow_config 回显覆盖率护栏：解析器读过的键集合 == 
 	auto r = loadShadowConfig(f.pathStr(), &trace);
 	REQUIRE(r.has_value());
 	const auto echo = shadowConfigEchoKeys();
-	CHECK(echo.size() == 11u);         // 钉死键数：加键不更新回显表 → 这里先红
-	CHECK(trace.read.size() == 11u);   // 解析器恰好读一遍（重复读 = 记录点放错层）
+	CHECK(echo.size() == 13u);         // 钉死键数：加键不更新回显表 → 这里先红
+	CHECK(trace.read.size() == 13u);   // 解析器恰好读一遍（重复读 = 记录点放错层）
 	for (const auto& k : echo)
 		CHECK(containsKey(trace.read, k));  // 回显有而解析器不读 = 陈旧键
 	for (const auto& k : trace.read)
@@ -1293,7 +1293,7 @@ TEST_CASE("shadow_config 回显覆盖率护栏：解析器读过的键集合 == 
 	}
 }
 
-TEST_CASE("shadow_config 回显 describe：全默认 = 空串；改动只列改动键（info 差集语义）；debug 全量 11 段") {
+TEST_CASE("shadow_config 回显 describe：全默认 = 空串；改动只列改动键（info 差集语义）；debug 全量 13 段") {
 	const ShadowConfig d;
 	CHECK(describeShadowGates(d, d).empty());  // 反向用例：全默认一个都不喊
 	ShadowConfig c;
@@ -1306,7 +1306,7 @@ TEST_CASE("shadow_config 回显 describe：全默认 = 空串；改动只列改�
 	CHECK(s.find("evssm.search_radius=48") != std::string::npos);
 	CHECK(s.find("pcss.sun_degrees") == std::string::npos);  // 未动的键不出现
 	const std::string all = describeAllShadowGates(d);
-	CHECK(std::ranges::count(all, '=') == 11);  // 全量 = 11 段 k=v（空格分隔）
+	CHECK(std::ranges::count(all, '=') == 13);  // 全量 = 15 段 k=v（空格分隔）
 	CHECK(all.find("mode=csm") != std::string::npos);
 	CHECK(all.find("izb=true") != std::string::npos);
 	CHECK(all.find("csm=reserved") != std::string::npos);  // 预留块出可读文本（差集永不喊）

@@ -35,7 +35,7 @@ struct GateRule {
 	bool (*violated)(const Ctx&);
 };
 
-/** 偏离默认值判定缩写（43 行表里少写 60 处三元噪声）。 */
+/** 偏离默认值判定缩写（45 行表里少写 60 处三元噪声）。 */
 template <typename T>
 constexpr bool deviated(const Ctx& c, const T DiagnosticsConfig::* field) {
 	return c.cfg.*field != c.defaults.*field;
@@ -59,7 +59,7 @@ constexpr bool deviated(const Ctx& c, const ShadowTuning ShadowConfig::* block,
 
 /**
  * 43 行申报表 = diagnostics 侧 30 行 + shadow 侧 13 行（N6b）。与两份配置结构体 /
- * 两份回显表一一对应，覆盖率由 tests/test_gate_lint.cppm 钉死（去重后 41 门）。
+ * 两份回显表一一对应，覆盖率由 tests/test_gate_lint.cppm 钉死（去重后 43 门）。
  * 级别判据 = 计划 §4：error 只留给「必然完全无效且无其他信号」，拿不准一律 warn / inertNote。
  * **行数 ≠ 门数**：一门可以有多条规则（`izb` 两条 = 非 deferred 图 / mode="none"，
  * 两个根因各自一条消息，合并会丢归因）；覆盖率护栏钉的是**去重后的门数** == 两份回显表键数之和。
@@ -68,7 +68,9 @@ constexpr bool deviated(const Ctx& c, const ShadowTuning ShadowConfig::* block,
  * 「PCSS 让位 EVSSM」这类**只在旧门形下才存在**的规则。枚举下两门同开表达不出来 ⟹
  * 让位规则整条删除，剩下的判据一律写成 `mode == X` / `mode != X`。
  */
-const std::array<GateRule, 43> kGateRules{{
+// ⚠ 原生数组（尺寸自动推导）——同 kShadowEcho：显式 N 写错会零填充出**空谓词**，
+// 而本表**允许** nullptr 谓词（预留空块），所以连"空"都看不出来，只会静默少门。
+const GateRule kGateRules[]{
 	// ———— 无前置门（对着驱动/上传路径/日志本身工作，任何组合都生效）————
 	{"no_vvl", GateSeverity::inertNote, "", nullptr},  // vkinstance 建 instance 时读
 	{"no_hdr", GateSeverity::inertNote, "", nullptr},  // vulkan_window 选格式时读
@@ -156,6 +158,15 @@ const std::array<GateRule, 43> kGateRules{{
 		"mode != \"evssm\"：evssm.* 调参块没人读（按档分立，pcss 档读的是 pcss.*）",
 		[](const Ctx& c) { return deviated(c, &ShadowConfig::evssm, &ShadowTuning::maxPenumbra)
 			&& c.shadow.mode != ShadowMode::evssm; }},
+	{"evssm.min_footprint_texels", GateSeverity::inertNote,
+		"mode != \"evssm\"：evssm.* 调参块没人读（按档分立，pcss 档读的是 pcss.*）",
+		[](const Ctx& c) { return deviated(c, &ShadowConfig::evssm, &ShadowTuning::minFootprintTexels)
+			&& c.shadow.mode != ShadowMode::evssm; }},
+	{"pcss.min_footprint_texels", GateSeverity::warn,
+		"滤波核宽下限（min_footprint_texels）是 **EVSSM 矩滤波专用件**：PCSS 的半径由 Δz 现算，"
+		"没有「核窄到 0.5 纹素 ⟹ 抽点全落同一双线性邻域」这个失效 ⟹ 写在 pcss 块里"
+		"**任何 mode 下都不生效**。要调核宽请写进 evssm 块",
+		[](const Ctx& c) { return deviated(c, &ShadowConfig::pcss, &ShadowTuning::minFootprintTexels); }},
 	{"csm", GateSeverity::inertNote, "", nullptr},  // 预留空块（CSM 档暂无调参键）
 	{"mode", GateSeverity::inertNote, "", nullptr},  // 本身是软影滤波轴总开关
 	{"picking_probe.x", GateSeverity::inertNote,
@@ -182,14 +193,14 @@ const std::array<GateRule, 43> kGateRules{{
 		"camera_probe.frame=0（探针关）：保持帧数是死值",
 		[](const Ctx& c) { return deviated(c, &DiagnosticsConfig::cameraProbeHold)
 			&& c.cfg.cameraProbeFrame == 0; }},
-}};
+};
 
 }  // namespace
 
 /** gateLintRuleGates 定义（接口注释见 gate_lint.cppm）。 */
 std::vector<std::string> gateLintRuleGates() {
 	std::vector<std::string> gates;
-	gates.reserve(kGateRules.size());
+	gates.reserve(std::size(kGateRules));
 	for (const auto& r : kGateRules)
 		gates.emplace_back(r.gate);
 	return gates;

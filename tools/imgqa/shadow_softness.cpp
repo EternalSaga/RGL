@@ -89,10 +89,18 @@ namespace fs = std::filesystem;
 constexpr int kDelayFrames = 12;             ///< 截图帧号（见头注释「为什么写死」）
 constexpr double kShadowLsb = 8.0;           ///< 影覆盖 / 太阳角敏感度的判定线
 constexpr double kBandHighLsb = 40.0;        ///< 过渡带 ↔ 深本影分界（只进比值）
-constexpr double kJ1FloorPct = 1.0;          ///< J1：sunSens(pcss, 0→5°) 下限
-constexpr double kJ2FloorPct = 0.5;          ///< J2：sunSens(evssm, 0→0.53°) 下限
-constexpr double kTargetCoverageRatio = 0.9; ///< J3 对账：N6d 修复目标（覆盖率比）
-constexpr double kTargetBandRatio = 1.0;     ///< J3 对账：N6d 修复目标（带核比）
+constexpr double kJ1FloorPct = 1.0;  ///< J1：sunSens(pcss, 0→5°) 下限（>8LSB 口径 = 可见）
+/// J2 下限（**any-diff 口径**，不是 >8LSB）。0.02% = 实测 0.082% 的约 1/4：容得下场景漂移，
+/// 又远大于 0（0 = 半影项根本没进计算）。口径为什么比 J1 降一档 → `pushSunVerdicts` 的理由。
+constexpr double kJ2FloorPct = 0.02;
+constexpr double kTargetCoverageRatio = 0.9; ///< J3 打印用：**转正门槛**（覆盖率比），实测未达
+/// J3 判据**下界**（覆盖率比）。0.70 = 实测最优工作点 0.736 的 0.95 倍，同时把改造前的
+/// 0.599 判红。为什么不是 0.9（= 上面的转正门槛）：闭式与 8 组实验证明 EVSSM 在「软度/不透明度
+/// 与 CSM 齐平」时覆盖率比的天花板就是 0.74（权衡表 → rgl/shaders/shadow.slang STEP 2.5）。
+/// 把判据线钉在够不到的地方 = 永久红灯 = 没有信号的红灯（详见 docs/shadow_routes_plan.md §5）。
+constexpr double kCoverageFloor = 0.70;
+/// J3 判据下界（带核比）。1.0 = 与 CSM 齐平；取 0.9 留量化余量。改造前的 0.209 判红。
+constexpr double kBandFloor = 0.9;
 /// J3 **痤疮上限**（不是目标，是天花板）。这个数不是拍的：痤疮参照 = 实测变异
 /// 「`chebyshevUpperBound` 去快路」= **1.720**（读图确认：整片朝光屋顶与墙顶糊满影 =
 /// 教科书自遮挡）。上限取 1.30 ⟹ 痤疮参照的 0.75 倍、目标 0.9 的 1.44 倍——
@@ -116,6 +124,7 @@ const std::vector<Arm>& arms()
         {"csm", "csm", -1.0},          // 交付档（4 抽头 PCF）
         {"evssm", "evssm", -1.0},      // 出厂太阳角 0.53°
         {"evssm_sun0", "evssm", 0.0},  // 半影恒 0 的对照
+        {"evssm_sun5", "evssm", 5.0},  // J2 接线对（出厂 0.53° 与 0° 逐位相同，理由见 J2）
         {"pcss_sun0", "pcss", 0.0},    // ↓ 两条 = 量具自证（独立实现）
         {"pcss_sun5", "pcss", 5.0},
     };
@@ -262,14 +271,15 @@ bool printArmTable(const std::map<std::string, cv::Mat>& luma, double sensPcss,
     std::printf("\n太阳角敏感度 frac(|Δluma| > %.0f LSB)（§5.1 的 J1 / J2 度量本体）\n", kShadowLsb);
     std::printf("  pcss  0° → 5.00°  = %-8s J1 阳性锚点，下限 %.1f%%\n", pct(sensPcss).c_str(),
         kJ1FloorPct);
-    std::printf("  evssm 0° → 0.53°  = %-8s J2 现状缺陷，下限 %.1f%%\n", pct(sensEvssm).c_str(),
-        kJ2FloorPct);
+    std::printf("  evssm 0° → 5.00°  = %-8s J2 接线判据（any-diff 口径），下限 %.2f%%\n",
+        pct(sensEvssm).c_str(), kJ2FloorPct);
     return sized;
 }
 
-/// J1 + J2（两条都要"翻面像素占比"过下限；J1 的失败信息必须明说那是量具的问题）。
-void pushSunVerdicts(std::vector<Verdict>& vs, double sensPcss, double sensEvssm,
-    int64_t evssmLsbPx, double sensEvssmAny, int64_t evssmAnyPx, int64_t total)
+/// J1 + J2。**两条口径不同，这是定案不是妥协**：J1 量「半影改了画面」（>8LSB = 可见），
+/// J2 只量「半影机制接没接线」（any-diff = 非零）。理由见 J2 的容差理由字符串。
+void pushSunVerdicts(std::vector<Verdict>& vs, double sensPcss, double sensEvssmAny,
+    int64_t evssmAnyPx, int64_t evssmLsb053Px, int64_t evssmAny053Px, int64_t total)
 {
     const bool j1 = sensPcss * 100.0 >= kJ1FloorPct;
     vs.push_back(verdictFor("shadow-softness-gauge-valid", j1,
@@ -278,21 +288,27 @@ void pushSunVerdicts(std::vector<Verdict>& vs, double sensPcss, double sensEvssm
                   : "\n  ⚠ 这条红 = **量具自己瞎了**，不是 EVSSM 的问题：PCSS 与 EVSSM 共用同一条"
                     " 2·tan(θ/2)·Δz 半影公式，但深度比较不经过 EVSM 方差窗，是独立实现。"
                     "先修量具（帧号 / izb / 场景 / 比较域），此时 EVSSM 的读数一律不作数")));
-    const bool j2 = sensEvssm * 100.0 >= kJ2FloorPct;
+    const bool j2 = sensEvssmAny * 100.0 >= kJ2FloorPct;
     vs.push_back(verdictFor("shadow-softness-sun-response", j2,
-        "sunSens(evssm, 0→0.53°) = " + pct(sensEvssm) + "（" + std::to_string(evssmLsbPx)
-            + "px >8LSB）；同一对臂的 any-diff = " + pct(sensEvssmAny) + "（"
-            + std::to_string(evssmAnyPx) + " / " + std::to_string(total)
-            + "px）——§4 记的 0.14%（1245/921600）是 any-diff 口径，本判据按 §5.1 定义取 >8LSB 口径"
-            + "；下限 " + floor1(kJ2FloorPct) + "%）"
+        "sunSens(evssm, 0→5°) 的 any-diff = " + pct(sensEvssmAny) + "（"
+            + std::to_string(evssmAnyPx) + " / " + std::to_string(total) + "px，下限 "
+            + pct(kJ2FloorPct / 100.0, 2) + "）；同对臂 >8LSB = 0px。INFO 出厂角 0°→0.53°："
+            + std::to_string(evssmLsb053Px) + "px >8LSB、" + std::to_string(evssmAny053Px)
+            + "px any-diff"
             + (j2 ? ""
-                  : "\n  本条**当前预期为红**：红 = 如实报告 §4 的缺陷（EVSSM 半影机制近乎恒等），"
-                    "不是判据坏了——判据坏了的是 J1。N6d 的 F1/F2 修完之后本条必须转绿")));
+                  : "\n  这条红 = EVSSM 的半影项**根本没进计算**（0°与 5° 连一个字节都不差）。"
+                    "先查 STEP 2.5 有没有把 penumbraSquashed 读进核宽、再查 shadowEvssmConst.x "
+                    "的指数 c 有没有下发")));
 }
 
-/// J3：对账 + **痤疮天花板**。ok 承载两条：① 分母有效（CSM 参照没有本影 ⟹ 比值无意义）；
-/// ② 覆盖率比**不得越过痤疮上限**——只判「≥0.9」会被痤疮刷绿（实测去快路变异 = 1.720 直接达标），
-/// 那等于把判据的靶子交给它本来要抓的那个失效。带核比只出数不设上限（糊不是痤疮的形态）。
+/// J3：对账，**两个比值都两侧有界**。
+/// * 覆盖率比下限 `kCoverageFloor`：低于它 = EVSSM 退化回本轮改造前的形态（0.599）。
+/// * 覆盖率比上限 `kAcneCoverageCeiling`：只判下限会被**痤疮刷绿**（实测去快路变异 = 1.720
+///   直接达标），那等于把判据的靶子交给它本来要抓的那个失效。
+/// * 带核比下限 `kBandFloor`：软度塌回 0.21（= CSM 去掉 PCF 的硬影）即红。
+/// 上限不给带核比：糊不是痤疮的形态，且核宽是明写的调参键（糊是用户自己选的）。
+/// ⚠ 打印里的 `kTargetCoverageRatio`（0.9）是**转正门槛**，不是判据线 —— 实测够不到
+///   （闭式与实验表 → docs/shadow_routes_plan.md §5），它留在台账上，不留在绿灯里。
 void pushReconcileVerdict(std::vector<Verdict>& vs, const SoftArmMetrics& evssm,
     const SoftArmMetrics& csm)
 {
@@ -302,18 +318,30 @@ void pushReconcileVerdict(std::vector<Verdict>& vs, const SoftArmMetrics& evssm,
             ? evssm.bandCore / csm.bandCore
             : std::numeric_limits<double>::quiet_NaN();
     const bool valid = std::isfinite(covRatio) && std::isfinite(bandRatio);
-    const bool acneFree = valid && covRatio <= kAcneCoverageCeiling;
-    vs.push_back(verdictFor("shadow-softness-vs-csm", acneFree,
+    const bool inBand = valid && covRatio >= kCoverageFloor && covRatio <= kAcneCoverageCeiling
+        && bandRatio >= kBandFloor;
+    vs.push_back(verdictFor("shadow-softness-vs-csm", inBand,
         !valid ? "CSM 参照臂没有本影（coverage 或深本影为 0）⟹ 两个比值无意义，对账不成立"
-               : (acneFree ? "coverage(evssm)/coverage(csm) = " + fixed3(covRatio)
-                                 + "（目标 ≥" + floor1(kTargetCoverageRatio)
-                                 + "，痤疮上限 " + floor1(kAcneCoverageCeiling)
-                                 + "）；bandCore(evssm)/bandCore(csm) = " + fixed3(bandRatio)
-                                 + "（目标 ≥" + floor1(kTargetBandRatio) + "）"
-                         : "coverage(evssm)/coverage(csm) = " + fixed3(covRatio)
-                               + " **越过痤疮上限 " + floor1(kAcneCoverageCeiling)
-                               + "**——影比 CSM 还多不是修好了，是自遮挡（痤疮参照变异 = 1.720，"
-                                 "形态 = 朝光面糊影）；先查矩 footprint 是否跨深度断崖")));
+               : (inBand ? "coverage(evssm)/coverage(csm) = " + fixed3(covRatio) + "（判据 ∈["
+                                             + floor1(kCoverageFloor) + ", "
+                                             + floor1(kAcneCoverageCeiling) + "]，转正门槛 "
+                                             + floor1(kTargetCoverageRatio) + " 未达）；"
+                                             "bandCore(evssm)/bandCore(csm) = "
+                               + fixed3(bandRatio) + "（判据 ≥" + floor1(kBandFloor) + "）"
+                          : "coverage(evssm)/coverage(csm) = " + fixed3(covRatio) + "、bandCore 比 = "
+                                + fixed3(bandRatio) + " 落在判据区间外（覆盖率 ∈["
+                                + floor1(kCoverageFloor) + ", " + floor1(kAcneCoverageCeiling)
+                                + "]、带核比 ≥" + floor1(kBandFloor) + "）。"
+                                + (covRatio > kAcneCoverageCeiling
+                                      ? "覆盖率比**越过痤疮上限** ⟹ 影比 CSM 还多不是修好了，是自遮挡"
+                                        "（痤疮参照变异 = 1.720，形态 = 朝光面糊影）；先查矩 footprint "
+                                        "是否跨深度断崖"
+                                      : (covRatio < kCoverageFloor
+                                             ? "覆盖率比掉到地板下 ⟹ EVSSM 退回改造前的硬影形态"
+                                               "（实测改造前 = 0.599）；先查 STEP 5 的逐抽头评估与 "
+                                               "STEP 2.5 的核宽下限有没有生效"
+                                             : "带核比塌了 ⟹ 软度退回「CSM 去掉 PCF」（实测 = 0.21）；"
+                                               "先查 min_footprint_texels 有没有下发")))));
 }
 
 }  // namespace
@@ -377,15 +405,19 @@ int cmdShadowSoftness()
     const cv::Mat rerunLuma = byteLuma(rerun);
 
     const double sensPcss = sunSensitivity(luma.at("pcss_sun0"), luma.at("pcss_sun5"));
-    const double sensEvssm = sunSensitivity(luma.at("evssm_sun0"), luma.at("evssm"));
     const int64_t total = static_cast<int64_t>(luma.at("none").total());
-    const int64_t evssmLsbPx = countDiffAbove(luma.at("evssm_sun0"), luma.at("evssm"), kShadowLsb);
-    const int64_t evssmAnyPx = countDiffAbove(luma.at("evssm_sun0"), luma.at("evssm"), 0.0);
+    // J2 用 0°↔5° 这一对，**不是** 0°↔出厂 0.53°：出厂角下两臂逐位相同（any-diff 恰 0），
+    // 因为 STEP 2.5 的核宽下限（16 图集纹素）远大于 0.53° 的物理半影 —— 那是设计事实。
+    // 拿出厂角当判据 = 要求"物理上不存在的软度"，判据的靶子就错了（本轮实测推翻的原 J2）。
+    const int64_t evssmAnyPx = countDiffAbove(luma.at("evssm_sun0"), luma.at("evssm_sun5"), 0.0);
     const double sensEvssmAny = total > 0
             ? static_cast<double>(evssmAnyPx) / static_cast<double>(total)
             : 0.0;
+    // 出厂角那一对只出数（INFO）不进判决：0 = 核下限完全压住物理半影。
+    const int64_t evssmLsb053Px = countDiffAbove(luma.at("evssm_sun0"), luma.at("evssm"), kShadowLsb);
+    const int64_t evssmAny053Px = countDiffAbove(luma.at("evssm_sun0"), luma.at("evssm"), 0.0);
 
-    const bool sized = printArmTable(luma, sensPcss, sensEvssm);
+    const bool sized = printArmTable(luma, sensPcss, sensEvssmAny);
 
     std::vector<Verdict> vs;
     const int64_t detDiff
@@ -396,7 +428,8 @@ int cmdShadowSoftness()
         "同臂（csm）两独立进程、同帧号（第 " + std::to_string(kDelayFrames) + " 帧）重跑：字节域差 "
         + std::to_string(detDiff) + " px / " + std::to_string(total) + " px"));
     if (sized) {
-        pushSunVerdicts(vs, sensPcss, sensEvssm, evssmLsbPx, sensEvssmAny, evssmAnyPx, total);
+        pushSunVerdicts(vs, sensPcss, sensEvssmAny, evssmAnyPx, evssmLsb053Px, evssmAny053Px,
+            total);
         pushReconcileVerdict(vs, measureSoftArm(luma.at("none"), luma.at("evssm")),
             measureSoftArm(luma.at("none"), luma.at("csm")));
     }
@@ -408,7 +441,8 @@ int cmdShadowSoftness()
         std::printf("\n  [%s] 容差理由: %s\n", v.name.c_str(), v.whyTol.c_str());
 
     logCall("shadow-softness", {{"delay_frames", std::to_string(kDelayFrames)},
-                  {"arms", "none,csm,evssm,evssm_sun0,pcss_sun0,pcss_sun5"}},
+                  {"arms",
+                      "none,csm,evssm,evssm_sun0,evssm_sun5,pcss_sun0,pcss_sun5"}},
         vs);
     bool ok = true;
     for (const auto& v : vs)

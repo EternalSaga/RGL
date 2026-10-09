@@ -77,7 +77,7 @@ export bool graphHasDeferredLight(std::span<const RgPassPlan> passes);
    - `info`：只列**偏离默认值**的门（= "你实际配了什么"），一行；
    - `debug`：全量键表。
    "偏离默认"的比较基准 = `DiagnosticsConfig{}`（零新机制）。**批 N6b 起两份配置各一份回显表**
-   = diagnostics 30 键（`kGateEcho`）+ shadow 11 键（`kShadowEcho`），键名各以回显表为单一
+   = diagnostics 30 键（`kGateEcho`）+ shadow 15 键（`kShadowEcho`），键名各以回显表为单一
    真相源；shadow 侧另有一行恒打的路线行（`shadow: mode=… izb=…`，见
    `docs/shadow_routes_plan.md` §3.1 第 6 条）。
 
@@ -103,9 +103,9 @@ export std::vector<GateFinding> lintDiagnosticsGates(const DiagnosticsConfig& cf
 ```
 
 - **申报式规则表**（一条规则 = 门名 + 谓词 + 原因），全表集中一文件、顺序固定。现行表 =
-  **43 行 / 41 门**（diagnostics 侧 30 行 30 门 + shadow 侧 13 行 11 门；行数 ≠ 门数，
+  **45 行 / 43 门**（diagnostics 侧 30 行 30 门 + shadow 侧 15 行 13 门；行数 ≠ 门数，
   一门可多条规则 → §8.6）。
-- **覆盖率护栏**：测试断言 41 个门**每个都有一条规则或显式 `noPrecondition` 标注**——
+- **覆盖率护栏**：测试断言 45 个门**每个都有一条规则或显式 `noPrecondition` 标注**——
   加门时必须回答"这门的生效前置是什么"，答不出就得显式写"无前置"。批 N6b 起两份配置各一份
   回显表，判据 = **规则表门名集合 == 两份回显表键集合之并**（`gateLintRuleGates()` 对
   `diagnosticsEchoKeys() ∪ shadowConfigEchoKeys()`）。
@@ -173,7 +173,7 @@ TAA 视角（立项时按它演算过）：TAA 必然插一个**采样场景色�
 | 启动日志变长 | `info` 只列偏离默认值的门；全量走 `debug` |
 | 回显表成员指针形态与 Doxygen/style 检查打架 | 先小步试编译；退路 = 回显表用 `{键名, std::function<std::string(const Cfg&)>}`（多一次分配，但只在启动期） |
 | `KeyTrace` 记录影响解析路径 | 记录发生在启动期一次、38 个键量级；解析器返回值不变（`KeyTrace` 出参/侧信道，不进 `DiagnosticsConfig`，不污染数据体） |
-| lint 表覆盖率护栏做不到"编译期" | 退到测试期断言（41 门逐个查），已足够：加门时 `just test` 红 = 同一个提醒效果，只是晚到测试阶段 |
+| lint 表覆盖率护栏做不到"编译期" | 退到测试期断言（43 门逐个查），已足够：加门时 `just test` 红 = 同一个提醒效果，只是晚到测试阶段 |
 
 ## 8. 执行偏差（落地当日记，与上文设计不一致处以此为准）
 

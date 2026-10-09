@@ -93,10 +93,10 @@ TEST_CASE("gate_lint 覆盖率护栏：规则表门名集合 == 两份回显表�
 	const auto rules = gateLintRuleGates();
 	const auto echo = diagnosticsEchoKeys();
 	const auto shadowEcho = shadowConfigEchoKeys();
-	CHECK(rules.size() == 43u);
-	CHECK(distinctGateCount(rules) == 41u);
+	CHECK(rules.size() == 45u);
+	CHECK(distinctGateCount(rules) == 43u);
 	CHECK(echo.size() == 30u);
-	CHECK(shadowEcho.size() == 11u);
+	CHECK(shadowEcho.size() == 13u);
 	for (const auto& k : echo)
 		CHECK(hasGate(rules, k));  // 回显有而规则表没有 = 没回答「生效前置是什么」
 	for (const auto& k : shadowEcho)

@@ -136,6 +136,8 @@ void applyTuningBlock(sol::table& root, std::string_view table, ShadowTuning& in
 	into.sunDegrees = std::clamp(readF64("sun_degrees", into.sunDegrees), 0.0, 5.0);
 	into.searchRadius = std::clamp(readF64("search_radius", into.searchRadius), 1.0, 64.0);
 	into.maxPenumbra = std::clamp(readF64("max_penumbra", into.maxPenumbra), 1.0, 64.0);
+	// 核宽下限（批 N6d）：**0 = 不设下限**（回退到"半影多窄就多窄" = 单纹素比较的形态）
+	into.minFootprintTexels = std::clamp(readF64("min_footprint_texels", into.minFootprintTexels), 0.0, 64.0);
 }
 
 /**
@@ -206,7 +208,10 @@ struct ShadowGateEcho {
  * tests/test_scene_config.cppm 的覆盖率护栏拦下。`csm` 是定案形状里的**预留空块**
  * （CSM 档暂无调参键），回显恒 "reserved"（差集语义下永不进 info 行）。
  */
-const std::array<ShadowGateEcho, 11> kShadowEcho{{
+// ⚠ **原生数组**（尺寸自动推导），不是 `std::array<T, N>`：N 写错时 std::array 不报错，
+// 而是把剩余元素**零填充** ⟹ 空键名 + **空调用 std::function = SIGSEGV**（实测踩过：删两个
+// 调参键忘改 N，症状是测试段错误而不是编译错，排查成本远高于本行注释）。
+const ShadowGateEcho kShadowEcho[]{
 	{"mode", [](const ShadowConfig& c) { return std::string(shadowModeName(c.mode)); }},
 	{"izb", [](const ShadowConfig& c) { return fmt::format("{}", c.izb); }},
 	{"izb.grid", [](const ShadowConfig& c) { return fmt::format("{}", c.izbGrid); }},
@@ -215,10 +220,14 @@ const std::array<ShadowGateEcho, 11> kShadowEcho{{
 	{"pcss.sun_degrees", [](const ShadowConfig& c) { return fmt::format("{}", c.pcss.sunDegrees); }},
 	{"pcss.search_radius", [](const ShadowConfig& c) { return fmt::format("{}", c.pcss.searchRadius); }},
 	{"pcss.max_penumbra", [](const ShadowConfig& c) { return fmt::format("{}", c.pcss.maxPenumbra); }},
+	{"pcss.min_footprint_texels",
+		[](const ShadowConfig& c) { return fmt::format("{}", c.pcss.minFootprintTexels); }},
 	{"evssm.sun_degrees", [](const ShadowConfig& c) { return fmt::format("{}", c.evssm.sunDegrees); }},
 	{"evssm.search_radius", [](const ShadowConfig& c) { return fmt::format("{}", c.evssm.searchRadius); }},
 	{"evssm.max_penumbra", [](const ShadowConfig& c) { return fmt::format("{}", c.evssm.maxPenumbra); }},
-}};
+	{"evssm.min_footprint_texels",
+		[](const ShadowConfig& c) { return fmt::format("{}", c.evssm.minFootprintTexels); }},
+};
 
 /**
  * 未知键 lint（lintUnknownDiagnosticsKeys 同判据）：文件里出现的顶层键，凡回显表键名的
@@ -291,7 +300,7 @@ void logShadowGateEcho(const ShadowConfig& cfg) {
 /** shadowConfigEchoKeys 定义（接口注释见 shadow_config.cppm）。 */
 std::vector<std::string> shadowConfigEchoKeys() {
 	std::vector<std::string> keys;
-	keys.reserve(kShadowEcho.size());
+	keys.reserve(std::size(kShadowEcho));
 	for (const auto& e : kShadowEcho)
 		keys.emplace_back(e.key);
 	return keys;

@@ -53,6 +53,18 @@ export struct ShadowTuning {
 	double sunDegrees = 0.53;   ///< 太阳视直径（度；物理真值 0.53；写大 = 艺术化夸张半影）
 	double searchRadius = 16.0; ///< blocker 搜索半径上限（图集纹素；clamp [1, 64]）
 	double maxPenumbra = 32.0;  ///< 半影半径上限（图集纹素；clamp [1, 64]）
+	/**
+	 * 滤波核**宽度下限**（图集纹素；clamp [0, 64]；**0 = 不设下限**）。
+	 *
+	 * 批 N6d。出厂太阳角 0.53° 下 `penumbraTexels < 1` ⟹ 抽点半径 `r ≈ 0.5` 纹素，5 个抽点
+	 * 全落进同一个 2×2 双线性邻域（实测：单抽头变异与基线**逐位相同**、太阳角敏感度**恰好
+	 * 0.000%**）⟹ 核根本没张开，EVSSM 退化成「单纹素深度比较」= CSM 去掉 PCF。
+	 * **默认 16 = 实测唯一贴上 CSM 形态的点**（带核比 1.000、每影像素深度 50 vs CSM 52 LSB）；
+	 * 权衡表（覆盖 ↔ 不透明度单调互换）逐档读数在 `rgl/shaders/shadow.slang` STEP 2.5 注释。
+	 * ⚠ 曾有第二个键 `coherence_texels`（跨断崖抽点一致性闸门），**实测净负作用**
+	 *   （foot=32 时覆盖率比 0.845 → 0.526）已删；归因 → `docs/shadow_routes_plan.md` §4.2。
+	 */
+	double minFootprintTexels = 16.0;
 };
 
 /**

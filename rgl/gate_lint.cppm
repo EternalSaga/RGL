@@ -47,7 +47,7 @@ export struct GateFinding {
 };
 
 /**
- * 跑全量规则表（41 门 = diagnostics 侧 30 + shadow 侧 11，一门可多条规则——两个根因各
+ * 跑全量规则表（43 门 = diagnostics 侧 30 + shadow 侧 13，一门可多条规则——两个根因各
  * 一行消息；覆盖率钉去重门数 + variant 交叉校验）。
  * 判据基准：bool 门 = true 才参与判定；数值/字符串门 = **偏离 defaults** 才参与
  * （configs/diagnostics.lua 显式写着 ~30 个默认值键，按「写了」喊就是噪音）。
