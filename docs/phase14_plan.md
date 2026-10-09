@@ -155,7 +155,7 @@
 | 自发 `CmdPipelineBarrier2` 的模块（执行器 `vkrenderer_passrec` / `vkrenderer_offgraph` 除外）实测 **12 个**：`gpu_cull` / `IzbShadow` / `EvssmShadow` / `env_prefilter` / `mip_gen` / `texture_upload`(+cubemap) / `gpu_canary` / `fsr_upscaler` / `frame_capture` / `picking` / `vkresources`。其中做**逐帧 image 布局 sandwich** 的只有 `IzbShadow` 与 `fsr_upscaler` 两处，其余的 barrier 全是 buffer / 全局 barrier（§1.11 修正一） | `izb_shadow.cppm`（`IzbShadow` 类头注释「render_graph 无 compute kind」）、`evssm_shadow.cppm`（`EvssmShadow` 类头注释同构） |
 | IzbShadow 逐帧 barrier（`izb_shadow` 开且 shadow0 段非空）= **8 条 buffer + 2 条深度图布局**：`recordFrame` 3+2、`beginMaskPass` 4、`endMaskPass` 1；dump 帧额外走 `recordDumpCopy` **+4 条 buffer**（旧数「~10」= 把全文件 12 个 `bufferBarrier` 调用点当成了每帧数） | `IzbShadow::recordFrame` / `beginMaskPass` / `endMaskPass` / `recordDumpCopy`（`izb_shadow_impl.cppm`） |
 | 深度布局的处理方式 = **进出同值**，注释自陈「**渲染图布局追踪表不可见**，零漂移」 | `izb_shadow.cppm`（`IzbShadow::recordFrame` 文档注释）、`IzbShadow::recordFrame` ⑥ 还原 barrier 注释；`frame_capture_impl.cppm`「追踪表原值进出」注释同构 |
-| 追踪表 = `Renderer::attachmentLayouts`，图外路径**读出并还原**，且自批 14.4b A 档护栏起**有断言校验还原真的发生了**（IZB + FSR 两处，不符即 error，机制与变异验证 → §1.11） | `Renderer::attachmentLayouts` / `Renderer::transitionAndTrack`（`vkrenderer.cppm`）；`Renderer::izbLightPassPre` / `Renderer::fsrTonemapPassPre`（`vkrenderer_offgraph.cppm`） |
+| 追踪表 = `Renderer::attachmentLayouts`，图外路径**读出并还原**，且自批 14.4b A 档护栏起**有断言校验还原真的发生了**（不符即 error，机制与变异验证 → §1.11）。⚠ 两处护栏**防的不是同一件事**（批 14.4b 收账修正）：IZB 那条对账「实际发出的 barrier 推进出的布局 ↔ 表」；FSR 那两条查「色输入 / 深度进 vendor 前是否已在申报布局」。FSR 原先那条 velocity 护栏是**恒假断言**（读的是上一行刚写进表的值），已删，velocity 改由 `Renderer::transitionAndTrack` 的**结构**保证 → §1.21 | `Renderer::attachmentLayouts` / `Renderer::transitionAndTrack`（`vkrenderer.cppm`）；`Renderer::izbLightPassPre` / `Renderer::fsrTonemapPassPre`（`vkrenderer_offgraph.cppm`）；判定与消息 = `layoutDrift`（`utils.cppm`） |
 
 ⟹ **缺口不是"漏了几条 barrier"，是"约定无断言"**（断言已由 14.4b 补上）：布局若真漂移，VVL **能**报
 （§1.11 实测：删 IZB 还原 barrier 的变异里 VVL 确实响了），但报在**执行器下一次 barrier 那个无辜
@@ -366,6 +366,11 @@ plan 与债-72 把 EVSSM 与 FSR 并列为图外布局用户。实测：
 收益面因此比 plan 估的小一个量级：**建议 14.5 之后重新裁决 B 档是否还值得做**（只有两个
 用户时，"照抄 IZB 的先例"可能比"给图加一套声明机制"更便宜）。
 
+> **后续（批 14.4b 收账，2026-10-09）**：上面两句都已走到终局——FSR 确实接上了第二个，
+> **但接的那一条是恒假断言**（断言读的是上一行刚写进表的值），本批删掉它、velocity 改由
+> `Renderer::transitionAndTrack` 的结构保证；B 档已**否决并降级挂触发条件**（理由 →
+> `docs/还债总账.md` §3）。→ 成因、永久/临时 sandwich 的分界、syncval 查证全在 **§1.21**。
+
 #### 修正二：「布局漂移 VVL 抓不到」这条**理由不成立**——护栏的价值要换成另外三条
 
 plan 判据 ② 与债-72 都写着"布局漂移 VVL 不报，所以靠护栏"。做阳性锚点时实测：把 IZB 的
@@ -408,7 +413,8 @@ barrier 的 `to` 参数就是两个独立事实——删掉还原 barrier 而忘
   ⚠ 这条只有在确认 IZB 真在跑时才有意义（先查启动行 `izb: 开门 grid=512`，否则"0 误报"
   是空转出来的）。
 - **判据 ③（红线）**：护栏只读不写命令 → 截图与基线**逐位相同**。
-- **B 档未做**（本批只做 A 档，与 plan 一致）。
+- **B 档**：本批未做；批 14.4b 收账时**否决并降级挂触发条件**（不是"还没做"）→
+  `docs/还债总账.md` §3 + §1.21 六。
 
 ### 1.12 批 14.5 前置：FSR 集成面勘察 + 最大未知数已归零（2026-10-08 晨，全部本机实测/复核）
 
@@ -1384,6 +1390,142 @@ EASU 的 un-jitter 开始起作用；修复前那个更高的边缘值是**错�
 - imgqa 的 CLI 仍叫 `--fsr`（选臂开关），只有 `smoke.py` 换成了 `--aa`。两侧不同名是**已知**的，
   统一到 `--aa` 要连 `cli_table.cpp` 的默认值回显一起做。
 
+## 1.21 批 14.4b（步 0–4 收账）：恒假护栏的成因、永久/临时 sandwich 的分界、syncval 查证（2026-10-09，本机 STRIX_HALO）
+
+> 本节 = 批 14.4b 的收口记录（改动本体见 `629568c` / `396b959`，数字修正见 `6ee43e2`）。
+> 这里只留**可复用的结论**；被实测推翻的表述就地删，不留双层。债的终态 → `docs/还债总账.md` 债-72 / 债-75。
+
+### 一、恒假护栏是怎么长出来的：断言读的是「别人写的记录」，不是被断言的那个事实
+
+FSR 的 velocity 护栏（改前）：转换块把 barrier 的 `newLayout` 与写进 `attachmentLayouts[slot]` 的值写成
+**两个独立字面量**，而护栏读**表**与常量比对 ⟹ 它做的是「表 vs 常量」的**同义反复**；转换块无论走不走
+早退都已把该槽写成申报布局 ⟹ **断言恒假**。
+
+镜像探针实测（步 0）：改 barrier 的 `newLayout` → 护栏**不响**（只有 VVL 在 vendor 使用处报，归因成本高）；
+改表 → 护栏响。⟹ 它检的从来不是"barrier 转对了吗"，而是"我上一行写进表的数是不是我上一行写的那个数"。
+
+**教训的通用形态**：断言的输入必须来自**被断言的那个事实本身**；读一份「别人写的记录」——尤其是同一段
+代码上一行刚写下的记录——不算。
+
+⚠ **同一条纪律在同一批里第二次踩**：这机关正是 §1.11 为 IZB 那条护栏写下的（原话"返回值由发命令那一处
+产出……若让 `recordFrame` 自己写个局部量记布局，那个量与 barrier 的 `to` 参数就是两个独立事实"），
+却在另一个模块被违反。**为什么写了说明还会踩** = §1.11 把它写成了"IZB 那条护栏**为什么有效**的说明"，
+而不是"**任何**护栏怎么才算有效的判据"——说明是回顾性的，不会主动去拦新写的代码。
+⟹ 能落成防线的只有两样：`Renderer::transitionAndTrack`（把「发 barrier + 写表 + 返回实际写入布局」收成
+一次调用，"转成 A 却记成 B"在写法上不可能）+ `tests/test_layout_drift.cppm`（判定与消息的常驻阳性锚点）。
+**覆盖面边界已写进测试头注释**：它测判定与消息，**不测调用点还在不在**——调用点被删它照样全绿。
+
+### 二、永久 vs 临时 sandwich 的分界（本批最有复用价值的一条）
+
+| | 谁写 `Renderer::attachmentLayouts` | 护栏靠什么 | 现有用户 |
+|---|---|---|---|
+| **永久转换**（转完停在那儿，下帧继续当 `oldLayout`） | **必须写表**，且必须由发 barrier 那一处写 ⟹ `Renderer::transitionAndTrack` | **结构**：barrier 的 `newLayout` 与写表的值是同一个局部量 ⟹「转成 A 却记成 B」写不出来 | `Renderer::fsrTonemapPassPre` 的 velocity |
+| **临时 sandwich**（进出同值，图追踪表不可见） | **必须不写表** | **断言**：`IzbShadow::recordFrame` 返回由**实际发出的** barrier 推进出的布局，调用方拿它跟表对账 | `IzbShadow::recordFrame` 的深度图 |
+
+**临时的一律不得用 `transitionAndTrack`**：一旦它写表，表就自洽 ⟹ 那条漂移护栏永远为真 = 又一个假护栏。
+⟹ 这里"复用同一个原语"是**错的方向**——两类 sandwich 对表的要求恰好相反。分界写进了原语的声明处注释。
+
+### 三、步 0 变异实测的两条反直觉结果
+
+1. **删掉还原 barrier（变异 2a）也响**（进入=3 / 离开=5）。反直觉在于"删掉还原 = 返回值与表都停在 SRO，
+   应当自洽"——漏了**返回值链自己就漂**：删掉后 `depth` 停在进入 barrier 的返回值 SRO，与追踪表的 DSO
+   不等 ⟹ 护栏响。⟹ 这条护栏的强度来自"返回值 = 实际发出的 barrier 推进的链"，**不是**来自"进出同值"。
+   还原目标写错（变异 2b）也响（离开=2）。
+2. **两个变异下画面逐位不变**（红线 A `fdece9d0…` 精确复现）⟹ **本机无像素症状，只有日志能抓**。
+   这正是债-32 的形态（约定成立时一切正常）。⟹ 在这类问题上，"改完截图没变所以没事"**不提供信息**。
+3. 顺带修掉一个诊断缺陷：IZB 那条消息的三个占位符里「进入」与「追踪表」是**同一个变量恒等**——读者以为
+   拿到两个独立事实，其实只有一个。`tests/test_layout_drift.cppm` 把"消息里恰好两个数字串"钉成判据防复发。
+
+### 四、syncval 查证：「buffer 侧缺 barrier，VVL 抓不到」在本项目成立到什么程度
+
+四种预期结果（开→报/不开→不报 ｜ 两边都报 ｜ 两边都不报 ｜ 未做成）里，实测**同时命中两种**：
+**开关本身确实生效**（下面第 2 条），但**对本批那两个变异是「两边都不报」**（第 3 条）。逐条：
+
+1. **本项目 VVL 默认不开 syncval**（不是推断，是本机层清单自述）：
+   `/usr/share/vulkan/explicit_layer.d/VkLayer_khronos_validation.json` 里 `validate_sync` 的
+   `default = false`（同表 `validate_core` / `check_image_layout` / `thread_safety` = true）。
+   `vkinstance.cppm` 只 `setPEnabledLayerNames({"VK_LAYER_KHRONOS_validation"})`、无 `vk_layer_settings`
+   ⟹ 吃默认值。
+2. **开关能生效**（阳性锚点不靠变异）：`VK_LAYER_VALIDATE_SYNC=1` 下，**未变异的现行代码**报出
+   **3 类 10 条 hazard**（+1 条 duplicate_message_limit 提示 = smoke 计数 11），而同一份代码不开 syncval 时
+   `errors=0` ⟹ 开关打开的是一个平时**完全不存在**的子系统。
+3. **但对本批指定的变异（删 `IzbShadow::recordFrame` 里 FillBuffer→compute 那条 buffer barrier），
+   开与不开都不报**：
+
+   | 环境 | 结果 |
+   |---|---|
+   | 不开 syncval（现状配置） | `just smoke` **PASS errors=0 warnings=0** |
+   | 开 syncval | 11 条，与**未变异**代码**逐条同集**（5 深度图 WAW + 4 CopyBuffer↔CopyBuffer WAW + 1 CopyImageToBuffer WAR + 1 提示），**没有一条**提到 `vkCmdFillBuffer` / dispatch / izb 的 buffer |
+
+   ⟹ **「buffer 侧缺 barrier，VVL 抓不到」这句话在本项目成立，且开了 syncval 也不改变。**
+4. **但它不是普遍真理**——同一个 syncval 在现行代码上抓到了一条 **API 级 buffer 竞争**
+   （`vkQueueSubmit(): WRITE_AFTER_WRITE … vkCmdCopyBuffer … previously written by another vkCmdCopyBuffer`，
+   4 次）。⟹ 不对称的轴是**访问由谁发出**：**CPU 侧 API 命令之间**的竞争（实测样本 = CopyBuffer↔CopyBuffer）
+   syncval 看得见；**只要有一端是 shader 经 descriptor heap 发出的访问，它就看不见**（两个变异都是这一类，
+   均 0 条）。
+   - **机制假设（未证）**：本项目走 shader object + 应用自写 descriptor heap，VVL 无从把 dispatch 的访问
+     归到具体 `VkBuffer`。旁证 = 本机层清单里 `descriptor_hashing` 的自述（"When enabled and using
+     VK_EXT_descriptor_heap/… this will attempt to track all descriptors seen such that **GPU-AV and GPU
+     Dump** can detect more errors"，默认 false，且只提 GPU-AV/GPU-Dump，不提 syncval）。
+   - **什么实验推翻它**：开 `descriptor_hashing`（或改走常规 descriptor set）后重跑变异 2，若报出
+     `SYNC-HAZARD-READ-AFTER-WRITE` ⟹ 假设成立但可绕；仍不报 ⟹ 换解释（例如 syncval 不建模 compute↔compute
+     的 storage buffer 竞争）。
+   - **仍然要做的部分**（别把作用域读宽）：本条否的是"VVL 能兜住 buffer 侧同步"，**不否**"该写的 barrier
+     照样得写"，也**不否**"将来值得开一次 syncval 专抓 API 级竞争"——它已经抓到一条现行存在的。
+5. **第二个变异**（删 create 写 → prime 读那条 compute↔compute 的 head buffer barrier）**同样开与不开都
+   0 条**。加它只为排除"FillBuffer 是特例"这个竞争解释，不是为了多拿一个数。
+
+**方法（两条坑先记，下次别再撞）**
+
+- **任务里给的开关写法在本机无效**：`VK_LAYER_ENABLES=VK_ENABLE_SYNCHRONIZATION_VALIDATION` →
+  `PASS errors=0`（**no-op**，那个值名在本机清单里不存在）。有效的两种：`VK_LAYER_VALIDATE_SYNC=1`（现代）
+  与 `VK_LAYER_ENABLES=VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT`（清单里仍在、标
+  DEPRECATED）。⟹ **开关名查本机清单，别抄 SDK 文档。**
+- 🔴 **一开 syncval 引擎必崩**（本批新发现，**未修**）：VVL 回调 `vulkanDebugCallback`（`rgl/utils.cppm`）
+  把 `pMessage` 直接当 **fmt 格式串**（`RLLogger::log` → `fmt::runtime`），而 syncval 的消息体带
+  `pImageMemoryBarriers[6]: {` ⟹ `std::runtime_error("invalid format string")` 直接 terminate（实测崩在
+  **第一条** syncval 消息：`what(): invalid format string [Vulkan-Validation(0)]`）。**任何含花括号的 VVL
+  消息都会崩进程**，只是 core validation 的消息恰好没带过花括号。本批用**临时**转义补丁跑完实验后已 `cp`
+  还原，**产品代码未改**。建议另立债：它把"开 syncval"这条路整个堵死，而 `just smoke` 只会报"引擎非零退出"，
+  那条真正的 hazard 永远看不到。修法两选一（成对转义花括号 / 改 `log(lvl, "{}", msg)`）。
+- 读消息原文的**零重建**办法（不改产品代码时用得上）：binary 带 debug_info，
+  `lldb -b -o "breakpoint set --name RGL::vulkanDebugCallback" -o "breakpoint command add -F …"`；参数在
+  `-O2` 下无 DWARF 位置（`frame variable` 为空），按 SysV ABI 从 `$rdx` 读
+  `VkDebugUtilsMessengerCallbackDataEXT`（`pMessageIdName` 偏移 24、`pMessage` 40）。
+
+**现行代码 syncval 报的 3 类 hazard（本批不裁决是否真 UB，只登记不重查）**
+
+| 类 | 条数 | 原文要点 |
+|---|---|---|
+| 深度图 WAW | 5 | 图布局转换的 `srcStageMask = EARLY_FRAGMENT_TESTS`，未覆盖 render pass 结束时 attachment storeOp 的深度写（VVL 建议含 `LATE_FRAGMENT_TESTS`） |
+| CopyBuffer↔CopyBuffer WAW | 4 | 同 queue 上两个 `vkCmdCopyBuffer` 写同一 `VkBuffer`，中间无依赖（**buffer 侧、API 级**——正是 syncval 唯一看得见的那一类） |
+| CopyImageToBuffer WAR | 1 | 图布局转换未等此前 `vkCmdCopyImageToBuffer` 的读 |
+
+### 五、§1.11 那句「FSR 是第二个」的后续
+
+§1.11 写「A 档护栏的**现状作用域 = IZB 一处**；14.5 的 FSR 是**第二个**」。后续：FSR 确实接了，
+**但接上的那一条是恒假的**（本节一），本批删掉它、velocity 改由结构保证。**真正活着的两处** =
+`Renderer::izbLightPassPre` 的深度 sandwich 返回值对账 + `Renderer::fsrTonemapPassPre` 的**色输入 / 深度**
+两支（后者防的是另一件事：图把附件留在非申报布局就进 FSR，职责一字未动）。
+⟹ 以后引用"A 档覆盖两处 sandwich"时，两处的**含义**与本批前不同，以这两个函数现码为准。
+
+### 六、B 档否决（裁决结论，理由与触发条件在账上）
+
+三条理由 + 触发条件已进 `docs/还债总账.md` §3 明确不做表（此处不重述以免成第三副本）。
+一句话版：**B 档不是 A 档的升级，是拿编译期声明换掉运行期断言**——它的判据「删掉 `depthLayoutBarrier`」
+恰好拆掉 A 档护栏的断言输入（barrier 不由模块发，模块就无从返回真实布局）。
+
+### 七、判据与沉淀地址
+
+`just build` style-check .cppm **0 警告** / doc-check **0 警告**（工具侧 69 = 基线持平）·
+`just test` **241 例 / 67353 断言**全绿 · 红线 A `just shot --name s4-redline` = `fdece9d0…07ff7`
+逐位复现 · `just smoke` 与 `just smoke --aa fsr` 均 **PASS errors=0 warnings=0**（FSR 门真开：日志含 FSRDIAG）。
+
+- `TEST: tests/test_layout_drift.cppm`（判定 + 值可读化；M1/M2 变异验过非空转）
+- `GUARD: Renderer::transitionAndTrack`（永久转换的原子原语，"转成 A 却记成 B"写不出来）
+- `GUARD: fsrInputLayout()`（向 vendor 申报的 state ↔ 布局的单一真相源，实现体紧挨 `srvState`）
+- `DOC: 本节`（工具/硬件观察、决策记录、带失效条件的负知识——断言写不出来的那部分）
+
 ---
 
 > 顺序按「失败最便宜」排，不是按依赖最紧排。**14.1 与 14.3 可并行**（14.3 不碰 FSR）。
@@ -1397,7 +1539,7 @@ EASU 的 un-jitter 开始起作用；修复前那个更高的边缘值是**错�
 | ~~**14.2**~~ ✅ **已收口 2026-10-08** | **输入面研究（只出文档，不改渲染）**：`jitterOffset` / `motionVectors` / `depth` / `reset` 四个量的**单位、坐标系、符号、采样时刻**逐条与 FSR 源码对拍，写成表；顺带定 `ENABLE_DEPTH_INVERTED` / `_DEPTH_INFINITE` / `_MOTION_VECTORS_JITTER_CANCELLATION` / `_DISPLAY_RESOLUTION_MOTION_VECTORS` 的取值 | 用户方向第二条。**这是本项目第三次栽在"参考/闭式的观测坐标系与被测项不一致"的位置**（`phase13_plan` §1.6 撤回条、§1.17 结论 5 的 φ 反号）——先定口径再写代码 | ① 一张四行表，每行给「FSR 要的口径 / 我们现在的口径 / 差什么 / 差值怎么验」——✅ `docs/FSR输入契约.md`；② **每条差值有一条可跑的对拍**（合成靶或解析式），不接受"读源码认为一致" —— ✅ 四条全部实机对拍（载体 = `just fsr-smoke` 的三条契约探针，常驻非常驻可选）；③ 符号项必须有**反向用例**（符号取反必须更差）—— ✅ MV ±dx、jitter 期望取反变异、depth **真开 `DEPTH_INVERTED`** 后判据行 0.2000→1.0000。**残留**：jitter 在 accumulate 路径的定量判据做不出来（合法量级 ±0.5 px 低于重建滤波器量化），已记为 14.5 第一嫌疑 |
 | ~~**14.3**~~ ✅ **已收口 2026-10-08** | **内部分辨率与窗口拉伸解耦**：现在 render extent ≡ swapchain extent ≡ 窗口像素（`Resources` 深度图 extent = swapchain extent；全仓**无 `renderScale` 概念**，只有 `vkswapchain.cppm` 的 `windowScale` 诊断）。加一个独立的 render extent，与 swapchain extent、与债-37 的 HPD 分数缩放三者正交 | 用户方向第四条。**它是 FSR 的硬前置，但本身独立可验收、且净收益**（DRS / 性能实验都缺它）；与 14.1 并行 | ① `renderScale ∈ {1.0, 0.75, 0.5}` 下画面正确、resize 不崩、imgui 与**点选**不受影响（债-37 三条连带不许回退）—— ✅ 三档实机出图（0.5 档读图：内容/取景/比例正确，仅整体变软 = 双线性放大预期）；imgui 恒在后缓冲像素、点选两级换算收口，债-37 三条连带无回退（renderScale=1 时比值恰为 1）；**live resize 未手工验证**，改为把取整/钳制写成单测断言覆盖；② `renderScale = 1.0` 时**逐位等于**今天的基线（红线）—— ✅ 1280×720 与 1600×900 两档与开工前基线逐位相同（同会话增量构建），且**结构上**成立：图形状与 renderScale 无关（§1.9）；③ 截图/判据口径显式记录 render extent（否则 imgqa 所有像素类判据静默换含义）—— ✅ 启动日志 + 截图成功日志 + RPC `/state` 新增 `render` 段 + `just shot` 网格行；`--render-scale` **核对引擎实际生效值**（变异验红：请求 0.1 → 钳到 0.25 → FAIL）；④ Wayland 175% 缩放下实测一次 —— ⚠ **未做**（本机无 Wayland 会话）；默认档行为逐位同前，风险仅在显式改档。**收口记录** → §1.9 |
 | **14.4** 🕳 **进行中**（纯函数层 + pass 侧已落地） | **逐像素速度场**（债-71 / 债-35，**本 phase 最大的一块**）：compute pass 由两帧相机矩阵 + `depthTex` 解析算出每像素速度（本项目唯一运动是全局刚体 ⟹ 便宜），输出 FSR 口径的 `motionVectors`；同时把 TAA 的重投影从"全局矩阵"改成"读这张场" | 用户方向第三条。**它是天花板唯一的出口**，且能独立验收（不必等 FSR 接完）——臂 14 = 门改吃真实逐像素速度 ⟹ 直接问跷跷板是否松绑 | ① 速度场与**独立解析参考**逐像素对拍（含 pitch；用 `temporal_yaw_remap` 那套带 pitch 的金标准，2.3e-13px）；② **阳性锚点** = 静止机位必须恒 0；③ **反向用例** = 符号取反必须让 §1.22 的 R 变差；④ 用它重跑 `temporal-tail --motion step` 与 `temporal-motion`，报 R 是否 < 1（**这是"运动中 TAA 有害"能不能翻案的判决**） |
-| **14.4b** ✅ **A 档已落地**（B 档待 14.5 后重裁，见 §1.11） | **图外资源挂号 + 布局对账护栏**（FSR 前置，见 §1.7）。做两档、明确不做第三档：**A 护栏**（便宜）= 图外 pass 进出点比对 `attachmentLayouts[slot]` 与预期值，不符即 error 出声，把"进出同值"从**约定**变**断言**；**B 挂号**（中等）= `RgGraphDesc` 增加 external-use 声明（attachment × usage × 插在哪个 pass 之后/之前），GraphCompiler 据此把 barrier 并入计划，`IzbShadow` / `EvssmShadow` / FSR 三处不再手写 **image** barrier；**C 不做** = buffer 侧依赖自动推导（图只跟 image attachment，加进去 = 半个 memory manager） | **排在 14.5 之前**：FSR 是第三个图外 compute，先立护栏再扩面，否则 14.5 的 VVL 判据要替"约定"背锅——布局漂移 VVL **能**报，但报得晚且报在无辜调用点（§1.11 实测修正旧结论"VVL 不报"）；债-32 那类 **buffer 侧**缺口才是 VVL 真不报的 | ① **阳性锚点** = 故意让某图外 pass 不还原布局 ⟹ 护栏必须 error（**变异验过非空转**）；② **反向** = 现状全绿（护栏零误报，否则等于没有）；③ 红线 = 画面逐位不变（护栏只读不写命令）；④ B 档做完 = `IzbShadow::recordFrame` 的两条 `depthLayoutBarrier` 删除且画面逐位不变 |
+| **14.4b** ✅ **已收口**（A 档落地并修正恒假臂 / B 档**否决**挂触发条件 / C 维持不做 / buffer 侧另立 **债-75**）→ 收账记录 **§1.21** | **图外资源挂号 + 布局对账护栏**（FSR 前置，见 §1.7）。做两档、明确不做第三档：**A 护栏**（便宜）= 图外 pass 进出点比对 `attachmentLayouts[slot]` 与预期值，不符即 error 出声，把"进出同值"从**约定**变**断言**；**B 挂号**（中等）= `RgGraphDesc` 增加 external-use 声明（attachment × usage × 插在哪个 pass 之后/之前），GraphCompiler 据此把 barrier 并入计划，`IzbShadow` / `EvssmShadow` / FSR 三处不再手写 **image** barrier；**C 不做** = buffer 侧依赖自动推导（图只跟 image attachment，加进去 = 半个 memory manager） | **排在 14.5 之前**：FSR 是第三个图外 compute，先立护栏再扩面，否则 14.5 的 VVL 判据要替"约定"背锅——布局漂移 VVL **能**报，但报得晚且报在无辜调用点（§1.11 实测修正旧结论"VVL 不报"）；债-32 那类 **buffer 侧**缺口才是 VVL 真不报的（⚠ 批 14.4b 查证**收窄**：VVL 默认不开 syncval；开了之后 **shader 经 descriptor heap 的 buffer 访问它仍看不见**（两个变异 0 条），但 **API 命令之间**的 buffer 竞争它抓得到（现行代码就报 4 条）→ §1.21 四） | ① **阳性锚点** = 故意让某图外 pass 不还原布局 ⟹ 护栏必须 error（**变异验过非空转**）；② **反向** = 现状全绿（护栏零误报，否则等于没有）；③ 红线 = 画面逐位不变（护栏只读不写命令）；④ ~~B 档做完 = `IzbShadow::recordFrame` 的两条 `depthLayoutBarrier` 删除且画面逐位不变~~ **随 B 档否决作废**（该判据本身正是问题：barrier 不由模块发，模块就无从返回真实布局 ⟹ 拆掉 A 档护栏的断言输入）。**收口实测**：红线 A `fdece9d0…` 逐位复现、`just test` 241 例全绿、两个 smoke 均 errors=0；恒假臂的镜像探针与 syncval 查证 → §1.21 |
 | **14.5** 🕳 **七批已落地**（第一批 = FSR 每帧跑通 VVL 零错、输出无消费者，见 §1.13；第二批 = **输出接进 tonemap**，零拷贝换槽，**默认只开纯空间档**，见 §1.14；第三批 = **AO 施加点从 taa.frag 拆成独立 `ao_apply` pass**，让"AO 乘在时域之前"与"谁做时域"解耦，见 §1.15；第四批 = **亚像素抖动与 TAA 解耦并申报给 FSR**，见 §1.16——**主实验是否证：时域退化与"没有抖动"无关**；
 第五批 = **诊断批（无产品代码改动）：推翻本 Phase 自己的时域测量方式**，纠正后病灶收窄到
 「历史读取的采样滤波」一处，见 §1.17；第六批 = **根因定位并修好（vendor host 侧 `abs(float)` 落到 `::abs(int)`）**，见 §1.18；第七批 = **真实档验收 = 通过**：根因 = **申报给 FSR 的是投影注入量、而 FSR 要的是内容位移（Y 反号）**，地面真值实测裁决；同时**换掉失效判据**（`mean|∇|` 在升频区间与质量反相关），见 §1.19；
@@ -1496,7 +1638,8 @@ EASU 的 un-jitter 开始起作用；修复前那个更高的边缘值是**错�
 | **债-46**（位级基准未落地） | 14.5 前置 | 三个出口对 FSR 同样成立 |
 | **债-64**（采集层未收敛 / 并行未做） | **14.6/14.7 前置** | 否则"调旋钮"仍是空话 |
 | **债-40**（本帧 HDR firefly） | 14.7 首个旋钮 | `FVELOCITYFACTOR → 0` 是它的现成候选修法 |
-| **债-72**（图外 barrier 靠约定，断言自 14.4b 起才覆盖两处 sandwich / buffer 侧完全在图外） | A 档已落地，B 档待重裁（§1.11） | **护栏先于扩面**：FSR 是第三个图外 compute |
+| **债-72**（图外 barrier 靠约定，边界外无断言） | ✅ **14.4b 收口**：A 结案 / B **否决** / C 维持不做（→ §1.21） | **护栏先于扩面**已执行；buffer 侧另立 **债-75** |
+| **债-75**（buffer 侧同步完全在图外、零对账；VVL 连开 syncval 也看不见 shader 侧访问） | **14.4b 步 4 新开**，未排期 | 严重度依据 = §1.21 四的实测；**开 syncval 之前要先修 VVL 回调把消息当格式串那个崩溃** |
 | **债-73**（FSR 上游 4 类 spec 违规） | ③ **已结案（P11）**；①②④ 记噪声 | ③ 不处置 = 时域历史是未定义值。防线 = `just fsr-check` 的格式对账 + 冒烟白名单外即 FAIL |
 | **债-16**（两套执行世界观） | 14.5 加重、14.4b 缓解 | FSR = 图外 compute 第三例 |
 | **债-24**（compute/transfer 队列死重） | **本 phase 明确不用**（见 §3 红线） | "用上 compute shader" ≠ "用上 compute 队列" |
