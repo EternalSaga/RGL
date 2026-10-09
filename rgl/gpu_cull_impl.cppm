@@ -256,6 +256,24 @@ void GpuCull::recordCullPass(vk::raii::CommandBuffer& cmd, const CullFrameInput&
 	// scene data 拷贝（staging → device buffer；compute 读对象矩阵表 @128）
 	const auto& sceneBuffer = sceneData.getBuffer();
 	if (sceneBuffer.buffer != VK_NULL_HANDLE) {
+		// 🔴 写前依赖 barrier（与主 CB recordFixedDataPath 的同一条，理由逐字在那边写全，
+		// 要点：scene data 单份跨帧共享 + 每帧两个写者（本 CB 与主 CB）+ kFramesInFlight=2
+		// ⟹ 本帧 copy 与"上一帧的读 / 另一 CB 的写"之间必须自己建依赖，post-copy 那条
+		// dst=AllGraphics/ShaderRead 覆盖不到下一次 copy 的 TransferWrite）。
+		vk::BufferMemoryBarrier2 preBarrier{};
+		preBarrier.srcStageMask = vk::PipelineStageFlagBits2::eAllGraphics
+			| vk::PipelineStageFlagBits2::eComputeShader
+			| vk::PipelineStageFlagBits2::eTransfer;
+		preBarrier.srcAccessMask = vk::AccessFlagBits2::eShaderRead
+			| vk::AccessFlagBits2::eTransferWrite;
+		preBarrier.dstStageMask = vk::PipelineStageFlagBits2::eTransfer;
+		preBarrier.dstAccessMask = vk::AccessFlagBits2::eTransferWrite;
+		preBarrier.buffer = sceneBuffer.buffer;
+		preBarrier.size = kSceneDataBytes;
+		vk::DependencyInfo preDep{};
+		preDep.setBufferMemoryBarriers(preBarrier);
+		cmd.pipelineBarrier2(preDep);
+
 		VkBufferCopy region{0, 0, static_cast<VkDeviceSize>(kSceneDataBytes)};
 		::vkCmdCopyBuffer(*cmd, *sceneStaging, sceneBuffer.buffer, 1, &region);
 		vk::BufferMemoryBarrier2 sceneBarrier{};

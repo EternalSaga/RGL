@@ -31,7 +31,7 @@ export import gbuffer_contract;
 //
 // usage → {layout, stage, access} 推导规则（单一真相源 = impl 的 usageInfo 查表）：
 //   colorWrite    → ColorAttachmentOptimal / 写 / ColorAttachmentOutput
-//   depthWrite    → DepthStencilAttachmentOptimal / 读+写 / EarlyFragmentTests
+//   depthWrite    → DepthStencilAttachmentOptimal / 读+写 / Early+LateFragmentTests
 //   sampleRead    → ShaderReadOnlyOptimal / ShaderRead / AllGraphics
 //   transferRead  → TransferSrcOptimal / TransferRead / Transfer
 //   transferWrite → TransferDstOptimal / TransferWrite / Transfer

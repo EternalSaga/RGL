@@ -135,6 +135,26 @@ struct SlotResolver {
 		for (const auto& plan : barriers)
 			layouts[plan.attachment] = plan.newLayout;
 	}
+	/**
+	 * ⑫ 帧末 present 转换（图派生 plan + **按追踪布局补上真实末次访问**）。
+	 *
+	 * 🔴 为什么要补：帧内捕获（⑪.5）会把后缓冲推进到 TransferSrcOptimal 并留下一次
+	 * **Transfer 读**（回读拷贝），而图派生的 src 只覆盖 pass 里的最后一次写（CAO 写）
+	 * ⟹ present 的布局转换与那次回读读之间没有依赖。syncval 实测（2026-10-09）：
+	 * `WRITE_AFTER_READ hazard ... layout transition on the VkImage <后缓冲>, which was
+	 * previously read by vkCmdCopyImageToBuffer`，Hint 直接点名 srcStageMask 须含 COPY。
+	 * 处理方式与 ⑪.6 帧末叠加层同一条惯例（emitFrameEndOverlay 的"src 侧按当前布局精确
+	 * 给"）：**并进** src 而不是替换——CAO 写仍是真值，丢了它就换成另一个 hazard。
+	 * @param plan 图编译产物 presentTransition（原样不改，本地副本上补）
+	 */
+	void emitPresentBarrier(const RgBarrierPlan& plan) {
+		auto widened = plan;
+		if (layouts[widened.attachment] == vk::ImageLayout::eTransferSrcOptimal) {
+			widened.srcStage |= vk::PipelineStageFlagBits2::eTransfer;
+			widened.srcAccess |= vk::AccessFlagBits2::eTransferRead;
+		}
+		emitBarriers(std::span<const RgBarrierPlan>{&widened, 1});
+	}
 };
 
 /** 构造并发起一个 pass 的 dynamic rendering（手术 6：自 drawFrame 摘出——color/depth RenderingAttachmentInfo 逐字段构造 + beginRendering，命令参数逐字不变；动态状态/draw 分发留 drawFrame 因需 stateKit/registry 成员）。 */
@@ -202,17 +222,42 @@ void Renderer::recordFixedDataPath(vk::raii::CommandBuffer& cmd, uint32_t frameS
 	vk::DependencyInfo heapDepInfo{};
 	heapDepInfo.setMemoryBarriers(heapBarrier);
 	cmd.pipelineBarrier2(heapDepInfo);
-	// 批 9.5 vkcmd.count 口径：本函数固定段 = heap barrier 1 + [staging 拷贝 + barrier] 2
-	// + heap/sampler heap 绑定 2（改本函数命令流须同步改这里的计数）。
+	// 批 9.5 vkcmd.count 口径：本函数固定段 = heap barrier 1 + [scene 写前依赖 barrier +
+	// staging 拷贝 + barrier] 3 + heap/sampler heap 绑定 2（改本函数命令流须同步改这里的计数）。
 	uint32_t fixedCmds = 1;
 
 	// ⑥.5 scene data staging → device buffer 拷贝（Phase 5 批次 2）+ Transfer 写 →
 	// 图形阶段 shader 读 barrier（storage buffer 的写/读即使同 cmd 也须显式依赖，
 	// VVL BUFFER_SYNC 检查项）。目标未创建（无模型场景 = SceneDataService::ensure
 	// 未被调用）则跳过——cube 管线不绑 scene data。
+	//
+	// 🔴 拷贝**前**先发一条"写前依赖"barrier（syncval 实测 2026-10-09：缺它每帧 2 条
+	// WRITE_AFTER_WRITE hazard）。理由：scene data 是**单份跨帧共享**的 device buffer，
+	// 而每帧有两个写者（本函数 = 主 CB、GpuCull::recordCullPass = cull CB，同队列），
+	// kFramesInFlight=2 下"上一帧的 shader/compute 读"与"上一帧或另一 CB 的 copy 写"
+	// 同本帧的 copy 写之间**没有任何依赖**——post-copy 那条 barrier 的 dst 只覆盖 shader
+	// 读，覆盖不到下一次 copy 的 TransferWrite（VVL 原话：to prevent this hazard, it must
+	// allow TRANSFER_WRITE_BIT accesses at COPY_BIT）。pipeline barrier 的 first scope 含
+	// "同队列更早提交"的命令（跨 submission，见 planBarrier 里同一条 spec 论证），故本条
+	// 一次补齐 RAW（上一帧读→本帧写）与 WAW（上一份写→本帧写）。
+	// src 侧必须含 **Compute**：cull compute 读对象矩阵表 @128（只给 AllGraphics 漏掉它）。
 	{
 		const auto& sceneBuffer = sceneData->getBuffer();
 		if (sceneBuffer.buffer != VK_NULL_HANDLE) {
+			vk::BufferMemoryBarrier2 preBarrier{};
+			preBarrier.srcStageMask = vk::PipelineStageFlagBits2::eAllGraphics
+				| vk::PipelineStageFlagBits2::eComputeShader
+				| vk::PipelineStageFlagBits2::eTransfer;
+			preBarrier.srcAccessMask = vk::AccessFlagBits2::eShaderRead
+				| vk::AccessFlagBits2::eTransferWrite;
+			preBarrier.dstStageMask = vk::PipelineStageFlagBits2::eTransfer;
+			preBarrier.dstAccessMask = vk::AccessFlagBits2::eTransferWrite;
+			preBarrier.buffer = sceneBuffer.buffer;
+			preBarrier.size = kSceneDataBytes;
+			vk::DependencyInfo preDep{};
+			preDep.setBufferMemoryBarriers(preBarrier);
+			cmd.pipelineBarrier2(preDep);
+			++fixedCmds;  // 写前依赖 barrier（与下面的 copy + post barrier 各计 1）
 			VkBufferCopy region{0, 0, static_cast<VkDeviceSize>(kSceneDataBytes)};
 			::vkCmdCopyBuffer(*cmd, *sceneStaging[frameSlot],
 				sceneBuffer.buffer, 1, &region);
@@ -562,11 +607,12 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 
 	// ⑫ swapchain → PresentSrcKHR（图 presentTransition——src 阶段/访问由最后
 	// usage 推导：直渲 = CAO 写、blit 上屏 = Transfer 写，等价旧手工分支；
-	// 无 swapchain 写入的离屏图 = nullopt 跳过）
+	// 无 swapchain 写入的离屏图 = nullopt 跳过）。帧内捕获读过后缓冲时由
+	// SlotResolver::emitPresentBarrier 补上那次 Transfer 读（理由写在那儿）。
 	{
 		auto z = zone("drawFrame.cmdEnd");  // 批 9.5：present barrier + gpu.frame 收口 + CB end
 		if (renderGraph.presentTransition)
-			slots.emitBarriers(std::span<const RgBarrierPlan>{&*renderGraph.presentTransition, 1});
+			slots.emitPresentBarrier(*renderGraph.presentTransition);
 
 		gpuProfilerEnd(cmd);  // Phase 9.2：gpu.frame 收口（终点 eAllCommands = 全命令完成）
 

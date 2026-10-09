@@ -106,8 +106,10 @@ export class FrameCapturer {
 
 	/**
 	 * ⑪.5：presentTransition 前录制回读拷贝（请求存在时）。后缓冲：追踪布局 →
-	 * TransferSrc 拷贝 → 追踪表推进为 TransferSrc（⑫ 天然转 PresentSrc，无恢复
-	 * barrier）；GB 通道（dump_gbuf）：帧末追踪布局（SRO）→ TS 拷贝 → 转回（追踪值不变）。
+	 * TransferSrc 拷贝 → 追踪表推进为 TransferSrc（无恢复 barrier，⑫ 直接转 PresentSrc；
+	 * 但 ⑫ 的 src **必须**含这次回读的 Transfer 读——由
+	 * `SlotResolver::emitPresentBarrier` 按追踪布局补，缺它 syncval 报 WRITE_AFTER_READ）；
+	 * GB 通道（dump_gbuf）：帧末追踪布局（SRO）→ TS 拷贝 → 转回（追踪值不变）。
 	 * @param cmd 主命令缓冲（录制期）
 	 * @param swapchainImage 本帧后缓冲
 	 * @param swapchainExtent 后缓冲尺寸

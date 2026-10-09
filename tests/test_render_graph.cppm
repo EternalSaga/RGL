@@ -25,7 +25,8 @@ module;
  *   2. swapchain / depth 附件的 format **必须** 是 `"inherit"`（给具体格式是编译错误），
  *      词表格式只对 offscreen / depthOffscreen 开放。
  *   3. depthWrite 的目标布局是 **DepthStencilAttachmentOptimal**、stage 是
- *      EarlyFragmentTests —— 不是「跟 colorWrite 一样的 ColorAttachmentOptimal」。
+ *      **Early|Late 两段并集**（load 写在 Early、store 写与深度测试在 Late）——
+ *      不是「跟 colorWrite 一样的 ColorAttachmentOptimal」，也不是只给 Early。
  *   4. `decorateShadowPass` **无条件返回 true**（不校验 mapSize），且 extent 用**入参**
  *      mapSize、分块尺寸却用**常量** kShadowMapSize 推 —— 两者只在 mapSize ==
  *      kShadowMapSize 时自洽（见组 8，那条断言钉的就是这个耦合）。
@@ -196,7 +197,13 @@ TEST_CASE("usage → {layout, stage} 查表：colorWrite 与 depthWrite 的布�
     CHECK(cb->newLayout == vk::ImageLayout::eColorAttachmentOptimal);
     CHECK(cb->dstStage == vk::PipelineStageFlagBits2::eColorAttachmentOutput);
     CHECK(db->newLayout == vk::ImageLayout::eDepthStencilAttachmentOptimal);
-    CHECK(db->dstStage == vk::PipelineStageFlagBits2::eEarlyFragmentTests);
+    // 深度附件的 stage 必须**同时**含 Early 与 Late 两段（spec synchronization-pipeline-stages：
+    // 深度/模板格式附件的 **load** 操作归 EARLY_FRAGMENT_TESTS、**store** 操作与晚期深度
+    // 测试归 LATE_FRAGMENT_TESTS）。本表同时喂 barrier 的 src 与 dst，只写 Early 的实测后果
+    // = VVL syncval 报 5 条 "WRITE_AFTER_WRITE hazard ... previously written at the end of
+    // the render pass instance by the attachment storeOp"（阴影图 DSAO→SRO 那条）。
+    CHECK(db->dstStage == (vk::PipelineStageFlagBits2::eEarlyFragmentTests
+                              | vk::PipelineStageFlagBits2::eLateFragmentTests));
 }
 
 TEST_CASE("第二次使用同一附件的 barrier：oldLayoutDiscard 转 false 且 src = 上一次 usage") {
@@ -227,6 +234,39 @@ TEST_CASE("第二次使用同一附件的 barrier：oldLayoutDiscard 转 false �
     CHECK(b2->oldLayoutDiscard == false);
     CHECK(b2->srcStage == vk::PipelineStageFlagBits2::eColorAttachmentOutput);
     CHECK(b2->newLayout == vk::ImageLayout::eShaderReadOnlyOptimal);
+}
+
+TEST_CASE("depthWrite → sampleRead 的 barrier：src 必须覆盖 Late fragment tests（syncval 实测）") {
+    // 实机 VVL 同步验证（VK_LAYER_VALIDATE_SYNC=1，2026-10-09）抓出的洞：deferred 图里阴影图
+    // 由 shadow pass 以 storeOp=store 收尾，随后光照 pass 以 sampleRead 读它 ⟹ 图发一条
+    // DSAO→SRO 布局转换。**布局转换本身是一次写**，其 src 侧必须覆盖"上一次写发生的阶段"，
+    // 而深度格式附件的 storeOp 写在 LATE_FRAGMENT_TESTS（spec synchronization-pipeline-stages：
+    // EARLY = 早期深度测试 + 该格式附件的 load 操作，LATE = 晚期深度测试 + 该格式附件的 store
+    // 操作）。只给 EARLY 时 VVL 每帧报一条 WRITE_AFTER_WRITE（阴影图 5 条/轮冒烟）。
+    // 变异红线：usageInfo(depthWrite).stage 退回只含 eEarlyFragmentTests → 本用例红。
+    RgGraphDesc d;
+    d.attachments = {swapchainAtt(), depthAtt(), offscreenAtt("rt", "rgba16_sfloat")};
+    d.passes = {
+        RgPassDesc{.name = "shadow", .kind = RgPassKind::drawMesh, .state = "shadow",
+            .drawSource = "shadow", .outputs = {depthOut("depth")}},
+        RgPassDesc{.name = "light", .kind = RgPassKind::drawLight, .state = "tonemap",
+            .outputs = {colorOut("rt")}, .inputs = {sampleIn("depth")}},
+        RgPassDesc{.name = "present", .kind = RgPassKind::drawLight, .state = "tonemap",
+            .outputs = {colorOut("swapchain", RgLoadOp::load)}},
+    };
+    const auto g = compileRenderGraph(d);
+    INFO(errOf(g));
+    REQUIRE(g.has_value());
+    const auto* b = barrierFor(g->passes[1], slotOf(*g, "depth"));
+    REQUIRE(b != nullptr);
+    CHECK(b->newLayout == vk::ImageLayout::eShaderReadOnlyOptimal);
+    // 期望值出处 = spec 的阶段归属，不是 usageInfo 查表本身（抄表 = 表怎么改都绿）。
+    CHECK((b->srcStage & vk::PipelineStageFlagBits2::eLateFragmentTests)
+        == vk::PipelineStageFlagBits2::eLateFragmentTests);
+    CHECK((b->srcStage & vk::PipelineStageFlagBits2::eEarlyFragmentTests)
+        == vk::PipelineStageFlagBits2::eEarlyFragmentTests);  // load/clear 写在 Early
+    CHECK((b->srcAccess & vk::AccessFlagBits2::eDepthStencilAttachmentWrite)
+        == vk::AccessFlagBits2::eDepthStencilAttachmentWrite);
 }
 
 TEST_CASE("跨布局读→读必须发 barrier（TAA taa_out 首例）；同布局读→读保持不发") {

@@ -30,9 +30,19 @@ struct UsageInfo {
 
 /**
  * usage → {layout, stage, access} 推导表（接口注释速览的权威实现，单一真相源）：
- * colorWrite→CAO/写/ColorAttachmentOutput；depthWrite→DSAO/读+写/EarlyFragmentTests；
+ * colorWrite→CAO/写/ColorAttachmentOutput；depthWrite→DSAO/读+写/Early+LateFragmentTests；
  * sampleRead→SRO/ShaderRead/AllGraphics；transferRead→TsrcO/TransferRead/Transfer；
  * transferWrite→TdstO/TransferWrite/Transfer。
+ *
+ * 🔴 depthWrite 的 stage 必须是 **Early | Late 两段并集**（syncval 实测：只给 Early 时
+ * VVL 报 `WRITE_AFTER_WRITE hazard ... layout transition ... previously written at the end
+ * of the render pass instance by the attachment storeOp`）。依据 spec
+ * `synchronization-pipeline-stages`：EARLY_FRAGMENT_TESTS 覆盖早期深度测试与该格式附件的
+ * **load**（clear）操作，LATE_FRAGMENT_TESTS 覆盖晚期深度测试与该格式附件的 **store** 操作
+ * ——本表同时当 barrier 的 src（上次 usage）与 dst（本次 usage）用，作 src 时漏掉 Late
+ * 就等于"深度写入不需要等"，作 dst 时漏掉 Late 就等于"本 pass 不在晚期写深度"。
+ * 两段并集是 spec 允许的最小覆盖（不是兜底 AllGraphics；IZB 图外 barrier 用 AllGraphics
+ * 是另一条路径，见 izb_shadow_impl）。
  * @param u 附件角色
  * @return 推导三元组（枚举穷尽，末条 return 不可达）
  */
@@ -44,7 +54,8 @@ UsageInfo usageInfo(RgUsage u) {
 			return {vk::ImageLayout::eColorAttachmentOptimal, Stage::eColorAttachmentOutput,
 				Acc::eColorAttachmentWrite};
 		case RgUsage::depthWrite:
-			return {vk::ImageLayout::eDepthStencilAttachmentOptimal, Stage::eEarlyFragmentTests,
+			return {vk::ImageLayout::eDepthStencilAttachmentOptimal,
+				Stage::eEarlyFragmentTests | Stage::eLateFragmentTests,
 				Acc::eDepthStencilAttachmentRead | Acc::eDepthStencilAttachmentWrite};
 		case RgUsage::sampleRead:
 			return {vk::ImageLayout::eShaderReadOnlyOptimal, Stage::eAllGraphics, Acc::eShaderRead};
