@@ -93,6 +93,12 @@ constexpr double kJ1FloorPct = 1.0;          ///< J1：sunSens(pcss, 0→5°) �
 constexpr double kJ2FloorPct = 0.5;          ///< J2：sunSens(evssm, 0→0.53°) 下限
 constexpr double kTargetCoverageRatio = 0.9; ///< J3 对账：N6d 修复目标（覆盖率比）
 constexpr double kTargetBandRatio = 1.0;     ///< J3 对账：N6d 修复目标（带核比）
+/// J3 **痤疮上限**（不是目标，是天花板）。这个数不是拍的：痤疮参照 = 实测变异
+/// 「`chebyshevUpperBound` 去快路」= **1.720**（读图确认：整片朝光屋顶与墙顶糊满影 =
+/// 教科书自遮挡）。上限取 1.30 ⟹ 痤疮参照的 0.75 倍、目标 0.9 的 1.44 倍——
+/// 既不放行痤疮，也不逼修复贴着天花板走。
+/// ⚠ 没有这条上限，J3 的「≥0.9」会被**痤疮刷绿**（去快路直接 1.72 达标）。
+constexpr double kAcneCoverageCeiling = 1.30;
 
 /// 一臂 = shadow.lua 的一次覆写。`sun < 0` = **不写键** = 出厂值 0.53°（`evssm` 默认臂要的
 /// 就是这个：J2 比的是出厂值，把 0.53 抄进配置反而多一个"我抄对了出厂值吗"的漂移面）。
@@ -284,8 +290,9 @@ void pushSunVerdicts(std::vector<Verdict>& vs, double sensPcss, double sensEvssm
                     "不是判据坏了——判据坏了的是 J1。N6d 的 F1/F2 修完之后本条必须转绿")));
 }
 
-/// J3：对账出数（advisory）。ok 只承载"分母有效"这一条真不变量——CSM 参照若没有本影，
-/// 两个比值都是无意义的数，那才是本条能失败的唯一方式。
+/// J3：对账 + **痤疮天花板**。ok 承载两条：① 分母有效（CSM 参照没有本影 ⟹ 比值无意义）；
+/// ② 覆盖率比**不得越过痤疮上限**——只判「≥0.9」会被痤疮刷绿（实测去快路变异 = 1.720 直接达标），
+/// 那等于把判据的靶子交给它本来要抓的那个失效。带核比只出数不设上限（糊不是痤疮的形态）。
 void pushReconcileVerdict(std::vector<Verdict>& vs, const SoftArmMetrics& evssm,
     const SoftArmMetrics& csm)
 {
@@ -295,11 +302,18 @@ void pushReconcileVerdict(std::vector<Verdict>& vs, const SoftArmMetrics& evssm,
             ? evssm.bandCore / csm.bandCore
             : std::numeric_limits<double>::quiet_NaN();
     const bool valid = std::isfinite(covRatio) && std::isfinite(bandRatio);
-    vs.push_back(verdictFor("shadow-softness-vs-csm", valid,
-        valid ? "coverage(evssm)/coverage(csm) = " + fixed3(covRatio) + "（N6d 目标 ≥"
-                    + floor1(kTargetCoverageRatio) + "）；bandCore(evssm)/bandCore(csm) = "
-                + fixed3(bandRatio) + "（目标 ≥" + floor1(kTargetBandRatio) + "）"
-              : "CSM 参照臂没有本影（coverage 或深本影为 0）⟹ 两个比值无意义，对账不成立"));
+    const bool acneFree = valid && covRatio <= kAcneCoverageCeiling;
+    vs.push_back(verdictFor("shadow-softness-vs-csm", acneFree,
+        !valid ? "CSM 参照臂没有本影（coverage 或深本影为 0）⟹ 两个比值无意义，对账不成立"
+               : (acneFree ? "coverage(evssm)/coverage(csm) = " + fixed3(covRatio)
+                                 + "（目标 ≥" + floor1(kTargetCoverageRatio)
+                                 + "，痤疮上限 " + floor1(kAcneCoverageCeiling)
+                                 + "）；bandCore(evssm)/bandCore(csm) = " + fixed3(bandRatio)
+                                 + "（目标 ≥" + floor1(kTargetBandRatio) + "）"
+                         : "coverage(evssm)/coverage(csm) = " + fixed3(covRatio)
+                               + " **越过痤疮上限 " + floor1(kAcneCoverageCeiling)
+                               + "**——影比 CSM 还多不是修好了，是自遮挡（痤疮参照变异 = 1.720，"
+                                 "形态 = 朝光面糊影）；先查矩 footprint 是否跨深度断崖")));
 }
 
 }  // namespace

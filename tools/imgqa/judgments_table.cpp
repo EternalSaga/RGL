@@ -70,13 +70,16 @@ const std::vector<JudgmentInfo>& foundationJudgments()
              "docs/shadow_routes_plan.md §5.1 J2（现状 0.14% = 1245/921600）",
              "shadow-softness 首跑：evssm 0°→0.53° = 120 px >8LSB / 1686 px any-diff（第 12 帧）"},},
         {"shadow-softness-vs-csm", JudgmentFamily::Foundation,
-            "advisory：只出数不判红——「软影档相对 CSM 丢了多少覆盖 / 带核比低多少」是 N6d 的"
-            "**修复目标**（定 ≥0.9 / ≥1.0），不是当下的对错；拿它判红会把同一个已知缺陷重复计成"
-            "第二条失败。ok 只承载一条真不变量：**CSM 参照臂必须有本影**（coverage>0 且深本影>0），"
-            "否则两个比值是 NaN、对账本身不成立。分母取 CSM 而不是 none：§4.1 确证 B 记着「软影档"
-            "覆盖率低于 CSM 不是 EVSSM 独有」（PCSS 也丢 30%，机制是 blockerCnt==0 全亮早退），"
-            "但 CSM 是当前交付档 ⟹ 比值才是用户视角的得失。",
-            {"docs/shadow_routes_plan.md §4.1 确证 B（PCSS 也丢覆盖：9.84% → 6.89%，机制与 EVSSM 可分）",
+            "**两侧都有界**：coverage(evssm)/coverage(csm) 目标 ≥0.9、**痤疮上限 1.30**。上限不是"
+            "拍的——痤疮参照 = 实测变异「`chebyshevUpperBound` 去快路」= **1.720**，读图确认形态是"
+            "整片朝光屋顶糊影（教科书自遮挡）。**没有上限，「≥0.9」会被痤疮直接刷绿**，判据的靶子"
+            "就交给了它要抓的那个失效。取 1.30 = 痤疮参照的 0.75 倍、目标的 1.44 倍：不放行痤疮，"
+            "也不逼修复贴边。带核比只出数不设上限（糊 ≠ 痤疮形态）。分母取 CSM 而不是 none：§4.1 "
+            "确证 B 记着「软影档覆盖率低于 CSM 不是 EVSSM 独有」（PCSS 也丢 30%，机制是 blockerCnt==0 "
+            "全亮早退），但 CSM 是当前交付档 ⟹ 比值才是用户视角的得失。",
+            {"docs/shadow_routes_plan.md §4.2 三实验归因（快路 ON = 漏光 5.89%、OFF = 痤疮 16.92%，"
+             "同一根因 = 矩 footprint 跨深度断崖污染）",
+             "docs/shadow_routes_plan.md §4.1 确证 B（PCSS 也丢覆盖：9.84% → 6.89%，机制与 EVSSM 可分）",
              "docs/shadow_routes_plan.md §4 画质表（EVSSM 带核比 0.185 vs CSM 1.021 = 边缘反而更硬）"},},
     };
     return kPart;
