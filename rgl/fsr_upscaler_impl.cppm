@@ -317,11 +317,22 @@ FsrUpscaler::~FsrUpscaler() {
 	// 私有图随 VmaImage 析构回 VMA；context 必须先销毁（它还持有这些图的 view）。
 }
 
+/** `fsrInputLayout()` 的实现体（声明与语义见接口分区）。**故意住在 impl 而不是接口**：本函数
+ *  与下面 `recordFrame` 里的 `srvState` 是同一个事实的两半（「向 vendor 申报什么 state」与
+ *  「那个 state 对应哪个 VkImageLayout」），拆到两个文件 = 调用方读的布局与真实申报各说各话。
+ *  对端映射的厂商出处 = ffx_vk.cpp 的 `getVKImageLayoutFromResourceState`：
+ *  `FFX_RESOURCE_STATE_COMPUTE_READ → VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL`。 */
+vk::ImageLayout fsrInputLayout() {
+	return vk::ImageLayout::eShaderReadOnlyOptimal;
+}
+
 void FsrUpscaler::recordFrame(vk::raii::CommandBuffer& cmd, const FsrFrameInput& input) {
 	const uint32_t w = impl->renderExtent.width;
 	const uint32_t h = impl->renderExtent.height;
 	// 三个图属输入申报 COMPUTE_READ（= SRO）：布局护栏在调用方，见 FsrFrameInput 头注释。
 	constexpr auto srv = static_cast<FfxResourceUsage>(FFX_RESOURCE_USAGE_READ_ONLY);
+	// ⚠ `srvState` 与上面那个 `fsrInputLayout()` **成对修改**：调用方（velocity 的转换目标 +
+	//   进 FSR 前的布局护栏）读的是那个函数，这里改了不改它 = 让护栏在错误的布局上放行。
 	const auto srvState = FFX_RESOURCE_STATE_COMPUTE_READ;
 	const auto uav = static_cast<FfxResourceUsage>(
 		FFX_RESOURCE_USAGE_UAV | FFX_RESOURCE_USAGE_READ_ONLY);

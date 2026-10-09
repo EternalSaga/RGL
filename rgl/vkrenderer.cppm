@@ -354,6 +354,40 @@ export class Renderer {
 	// 不查询）；录制期随每条物化 barrier 更新为 plan.newLayout。
 	//（Phase 4 前 DIAG RGL_OFFSCREEN 的 offscreenLayout 单变量泛化为逐 slot 表）
 	std::vector<vk::ImageLayout> attachmentLayouts;
+	/**
+	 * 图外编舞用的**永久布局转换**原子原语：发一条 `pipelineBarrier2` + 写
+	 * `attachmentLayouts[slot]` + 返回实际写入的布局，三者由同一个局部量产出、不可分割。
+	 *
+	 * 为什么必须是**一个**函数而不是「调用方自己发 barrier 再自己写表」：barrier 的
+	 * `newLayout` 与写进表的值一旦是两个独立字面量，表就可能与真实布局脱钩，而**读表的护栏
+	 * 随之退化成同义反复**（恒真）。velocity 那条护栏在批 14.4b 之前就是这个形态，镜像探针
+	 * 实测恒假 → 见 `fsrTonemapPassPre` 的注释。
+	 *
+	 * 语义细则（改动前逐条读）：
+	 * - **同布局早退**：`attachmentLayouts[slot] == newLayout` 时一条命令都不发、直接返回该
+	 *   布局。⚠ 这条判据**不许改宽也不许改窄**——它决定「是否发 barrier」，而 barrier 除了
+	 *   布局转换还建执行依赖；放宽 = 少一条同步（UB），改窄 = 每帧多发转换。
+	 * - `oldLayout` 取转换前的 `attachmentLayouts[slot]`。
+	 *
+	 * 适用边界（本原语**只**服务永久转换）：
+	 * - 永久转换 = 转换后一直保持、下帧的 barrier 该拿它当 `oldLayout` ⟹ **必须写表**。
+	 * - **临时 sandwich 一律不得用它**：IZB 的深度 sandwich（`DSO → SRO → compute → 还原
+	 *   DSO`）靠的正是「**不写表** + 返回值与表对账」——一旦它改成写表，表就自洽 ⟹ 那条
+	 *   漂移护栏永远为真 = 假护栏。它的写法见 `rgl/izb_shadow_impl.cppm` 的 `recordFrame`。
+	 * - 目前**只有一个用户**（FSR 的 velocity 转换）。第二个用户出现时再议要不要推广，
+	 *   **不要**顺手把 IZB 接上（见上一条）。
+	 *
+	 * @param cmd       录制中的命令缓冲
+	 * @param slot      图附件 slot（`attachmentLayouts` 的下标）
+	 * @param image     该附件的 VkImage（表只记布局、不持句柄，故须由调用方给）
+	 * @param newLayout 目标布局（永久转换的落点）
+	 * @param aspect    subresourceRange 的 aspect（图属附件均为单 mip 单层）
+	 * @return 实际写入表与 barrier 的那个布局（同布局早退时 = 原值）
+	 */
+	vk::ImageLayout transitionAndTrack(vk::raii::CommandBuffer& cmd, size_t slot,
+		vk::Image image, vk::ImageLayout newLayout, vk::ImageAspectFlags aspect,
+		vk::PipelineStageFlags2 srcStage, vk::AccessFlags2 srcAccess,
+		vk::PipelineStageFlags2 dstStage, vk::AccessFlags2 dstAccess);
 	// 批 12.6 T4：RT generation 的**跨帧**快照（按图 slot 索引，与 attachmentLayouts 同
 	// 生命周期）。⚠ **必须是成员，不能是 ensureOffscreenAttachments 的局部量**：局部量每帧
 	// 归零，而 RT 首建即 generation=1（`ensure` 的早退只挡「尺寸/格式没变」，首建必走
@@ -405,7 +439,8 @@ export class Renderer {
 	int32_t fsrColorSlot = -1;    ///< FSR 色输入附件 slot（ao_applied → taa_out → scene_hdr）
 	bool fsrColorBaseSpace = false;  ///< 色输入是否已在**基空间**（= 选中的是 `taa_out`）；
 	                                 ///< 申报给 FSR 的内容位移必须由它推导，见 `initFsr`
-	int32_t fsrVelocitySlot = -1; ///< 速度场附件 slot（布局护栏 + 转 SRO 要写追踪表）
+	int32_t fsrVelocitySlot = -1; ///< 速度场附件 slot（`transitionAndTrack` 的转换对象；布局
+	                              ///< 护栏**不读**它——理由见 `fsrTonemapPassPre` 的 ② 注释）
 	bool fsrDispatchedOnce = false;  ///< 首帧之后不再 reset（时域历史已建立）
 	int32_t fsrDepthSlot = -1;   ///< 深度附件 slot（布局护栏；**不用 depthAttSlot**——
 	                             ///< 那个只在 IZB 门开时由 izbPreFrame 填，FSR 不依赖 IZB）

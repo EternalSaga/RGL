@@ -207,6 +207,37 @@ void Renderer::fsrPreFrame() {
 	initFsr();
 }
 
+// 图外编舞的**永久布局转换**原子原语（声明注释见 vkrenderer.cppm：为什么 barrier 与追踪表
+// 必须由同一个量产出、以及为什么临时 sandwich 不得用它）。目前唯一用户 = 下面的 FSR velocity。
+vk::ImageLayout Renderer::transitionAndTrack(vk::raii::CommandBuffer& cmd, size_t slot,
+	vk::Image image, vk::ImageLayout newLayout, vk::ImageAspectFlags aspect,
+	vk::PipelineStageFlags2 srcStage, vk::AccessFlags2 srcAccess,
+	vk::PipelineStageFlags2 dstStage, vk::AccessFlags2 dstAccess) {
+	const auto before = attachmentLayouts[slot];
+	// 同布局早退：一条命令都不发。判据的宽窄 = 「是否发 barrier」的判据，别改（声明处有理由）。
+	if (before == newLayout)
+		return before;
+	// ⚠ barrier 的 newLayout 与写进追踪表的值**必须是同一个变量**——本原语存在的全部理由：
+	//   一旦拆成两个字面量，表就与真实布局脱钩，而读表的护栏跟着退化成恒真的同义反复。
+	const auto written = newLayout;
+	vk::ImageMemoryBarrier2 b{};
+	b.srcStageMask = srcStage;
+	b.srcAccessMask = srcAccess;
+	b.dstStageMask = dstStage;
+	b.dstAccessMask = dstAccess;
+	b.oldLayout = before;
+	b.newLayout = written;
+	b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	b.image = image;
+	b.subresourceRange = {aspect, 0, 1, 0, 1};
+	vk::DependencyInfo dep{};
+	dep.setImageMemoryBarriers(b);
+	cmd.pipelineBarrier2(dep);
+	attachmentLayouts[slot] = written;
+	return written;
+}
+
 // FSR sandwich：只认 tonemap pass（其余 pass 零命令）。录在它**之前**、且此刻 tonemap
 // 自己的 barrier 已在 :482 物化完 ⟹ 三个输入的真实布局就是追踪表里的值。
 void Renderer::fsrTonemapPassPre(vk::raii::CommandBuffer& cmd, const RgPassPlan& pass,
@@ -229,45 +260,41 @@ void Renderer::fsrTonemapPassPre(vk::raii::CommandBuffer& cmd, const RgPassPlan&
 
 	// ① 速度场在挂点处于 COLOR_ATTACHMENT_OPTIMAL —— 它是全图唯一不达 FSR 要求的输入
 	//   （velocity pass 刻意没有下游消费者，布局停在 CAO 且因 attachmentLayouts 跨帧持久
-	//   而下帧继续被当 oldLayout 用）。这里转成 SRO 并**同步写追踪表**：漏写 = 债-72
-	//   形态（下帧 velocity 写 barrier 拿错 oldLayout，症状隔一整帧、报错点无辜）。
+	//   而下帧继续被当 oldLayout 用）。转换走 `transitionAndTrack` ⟹ barrier 的 newLayout 与
+	//   写进追踪表的值是同一个变量，「漏写表」（债-72 形态：下帧 velocity 写 barrier 拿错
+	//   oldLayout，症状隔一整帧、报错点无辜）在写法上不可能。
 	//   自己转而不是让 vendor 转，是为了让「FSR 不改动图属资源布局」成为**结构性**事实，
 	//   不依赖 vendor 内部对 SRV 选哪个布局（那会随上游版本漂）。
-	const auto velSlot = static_cast<size_t>(fsrVelocitySlot);
-	if (attachmentLayouts[velSlot] != vk::ImageLayout::eShaderReadOnlyOptimal) {
-		vk::ImageMemoryBarrier2 b{};
-		b.srcStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput;
-		b.srcAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite;
-		b.dstStageMask = vk::PipelineStageFlagBits2::eComputeShader;
-		b.dstAccessMask = vk::AccessFlagBits2::eShaderRead;
-		b.oldLayout = attachmentLayouts[velSlot];
-		b.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-		b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		b.image = velocityImage;
-		b.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
-		vk::DependencyInfo dep{};
-		dep.setImageMemoryBarriers(b);
-		cmd.pipelineBarrier2(dep);
-		attachmentLayouts[velSlot] = vk::ImageLayout::eShaderReadOnlyOptimal;
-	}
+	//   转换目标取 `fsrInputLayout()`（= 向 vendor 申报的输入 state 所对应的布局，两者在
+	//   fsr_upscaler_impl 里成对定义）⟹「转成 A 却申报 B」同样写不出来。
+	transitionAndTrack(cmd, static_cast<size_t>(fsrVelocitySlot), velocityImage,
+		fsrInputLayout(), vk::ImageAspectFlagBits::eColor,
+		vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+		vk::AccessFlagBits2::eColorAttachmentWrite,
+		vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderRead);
 
-	// ② 护栏（14.4b 同款，从约定变断言）：三个输入的**追踪表布局必须已是 SRO**，因为
-	//   FsrUpscaler 向 vendor 申报的 state 就是 SRO，而 vendor 只在
-	//   `currentState != newState` 时才发 barrier（ffx_vk.cpp:1237）——申报错 = 它跳过
-	//   转换 = shader 在错误布局下读写。VVL 抓得到布局漂移，但报点在下一次使用处，
+	// ② 护栏（14.4b 同款，从约定变断言）：色输入与深度进 FSR 前**必须已处于申报布局**，因为
+	//   vendor 只在 `currentState != newState` 时才发 barrier（ffx_vk.cpp:1237）——申报错 =
+	//   它跳过转换 = shader 在错误布局下读写。VVL 抓得到布局漂移，但报点在下一次使用处，
 	//   归因成本高，所以在这里先喊出「进 FSR 之前就已经错」。
+	// ⚠ 这里**没有**「速度场」那一支，不是漏写：velocity 的布局正确性现在由**结构**保证
+	//   ——转换目标就是 `fsrInputLayout()`，而它与向 vendor 申报的 state 成对定义。原来那一支
+	//   读的是 velocity 自己的追踪表槽，而上面那个转换块**无论走不走早退**都已把该槽写成申报
+	//   布局 ⟹ 断言恒假。恒假由批 14.4b 步 0 的镜像探针实测确认（改 barrier 的 newLayout 护栏
+	//   不响、改表才响）。删掉它没有减少任何保护：velocity 的洞改由**结构**堵（见上），而不是
+	//   由一条恒假断言假装在堵。保留的这两支防的是**另一件事**：图把色/深度留在非申报布局就进
+	//   FSR（图侧没转，FSR 管不着），那条职责本批一字未动。
 	if (auto* lg = RLLogger::getInstance()) {
 		const std::pair<const char*, int32_t> want[] = {
-			{"色输入", fsrColorSlot}, {"深度", fsrDepthSlot}, {"速度场", fsrVelocitySlot}};
+			{"色输入", fsrColorSlot}, {"深度", fsrDepthSlot}};
 		for (const auto& [what, slot] : want)
-			if (attachmentLayouts[static_cast<size_t>(slot)]
-				!= vk::ImageLayout::eShaderReadOnlyOptimal)
-				lg->error("fsr: {} 附件进 FSR 时布局 = {}，而 FsrUpscaler 向 vendor 申报的是 "
-				          "SRO（COMPUTE_READ）⟹ vendor 会跳过布局转换。要么补转换、要么改申报",
+			if (attachmentLayouts[static_cast<size_t>(slot)] != fsrInputLayout())
+				lg->error("fsr: {} 附件进 FSR 时布局 = {}，而 FsrUpscaler 向 vendor 申报的 "
+				          "state 对应布局 = {} ⟹ vendor 会跳过布局转换。要么补转换、要么改申报",
 				          what,
 				          static_cast<uint32_t>(
-					          attachmentLayouts[static_cast<size_t>(slot)]));
+					          attachmentLayouts[static_cast<size_t>(slot)]),
+				          static_cast<uint32_t>(fsrInputLayout()));
 	}
 
 	FsrFrameInput in{};

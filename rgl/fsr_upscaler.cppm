@@ -11,17 +11,34 @@ import VmaRaii;
 namespace RGL {
 
 /**
+ * 向 vendor 申报的输入资源 state（impl 里的 `srvState`）所**对应**的 VkImageLayout。
+ *
+ * vendor 只在 `currentState != newState` 时发 barrier（ffx_vk.cpp:1237）⟹ 图属资源进 FSR
+ * 前必须已处于本函数所指布局，否则 vendor 跳过转换 = shader 在错误布局下读写。
+ *
+ * 为什么是**函数**而不是接口分区里的一个 constexpr：constexpr 的字面量就落在本文件，而它的
+ * 对端（`srvState`）在 impl 分区——**同一个事实跨文件各写一份**正是批 14.4b 要消灭的形态
+ * （velocity 那条恒假护栏就是这么长出来的）。实现体住在 impl 里紧挨 `srvState`，改申报的人
+ * 必然看见它。
+ *
+ * ⚠ 必须与 `fsr_upscaler_impl.cppm` 里的 `srvState` **成对修改**。
+ *
+ * @return 三个图属输入（color / depth / velocity）申报的 state 对应的镜像布局
+ */
+export vk::ImageLayout fsrInputLayout();
+
+/**
  * 一帧喂给 FSR-upscaler 的输入（批 14.5）。
  *
  * @note 三个 image 的**布局是契约的一部分**，不是"随便传个句柄"：FSR 的 VK 后端在
  *       每个 compute job 绑定时按 SRV/UAV 自动排 layout barrier，但它靠的是
  *       `ffxGetResourceVK(..., state)` 里我们**申报**的那个 state（记账种子）——
  *       `addBarrier` 只在 `currentState != newState` 时才发（`ffx_vk.cpp:1237`）。
- *       本模块对三个输入一律申报 `FFX_RESOURCE_STATE_COMPUTE_READ`
- *       （= `VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL`），所以**调用方必须保证它们在
- *       dispatch 时刻真的处于 SRO**。渲染图在挂点处已把 scene_hdr/taa_out 与深度转成
- *       SRO；velocity 是唯一不达标者（它无下游消费者，停在 CAO），由调用方在挂点转
- *       ——见 `Renderer::fsrTonemapPassPre` 的布局护栏。
+ *       本模块对三个输入一律申报 `FFX_RESOURCE_STATE_COMPUTE_READ`（对应布局 =
+ *       `fsrInputLayout()`，单一真相源），所以**调用方必须保证它们在 dispatch 时刻真的处于
+ *       那个布局**。渲染图在挂点处已把 scene_hdr/taa_out 与深度转成 SRO；velocity 是唯一
+ *       不达标者（它无下游消费者，停在 CAO），由调用方在挂点转——见
+ *       `Renderer::fsrTonemapPassPre` 的布局护栏。
  */
 export struct FsrFrameInput {
 	vk::Image color = nullptr;     ///< HDR 颜色（渲染分辨率，SRO）
