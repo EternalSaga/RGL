@@ -313,4 +313,27 @@ createImageBarrier(VkImage image, vk::ImageLayout oldLayout,
 	return barrier;
 }
 
+/**
+ * 图外布局对账的**判定 + 值可读化**（纯函数：不发日志、不碰命令缓冲）。
+ *
+ * 为什么抽出来：判定与「怎么把 vk::ImageLayout 打成人才看的数」在两处护栏各写一份，
+ * 而它是唯一有对错的部分——日志发射与后果说明留在调用方（两处诊断语义不同，不该并）。
+ * 可测性只是副产品：判定进了纯函数才有毫秒级单测（见 `tests/test_layout_drift.cppm`），
+ * 而"护栏到底会不会响"这件事在真机上只能靠故意改坏 barrier 才能验。
+ *
+ * @param what     漂移对象名（进消息，用于点名是哪张图/哪个输入）
+ * @param expected 期望布局（渲染图追踪表里的值 / 向 vendor 申报的布局）
+ * @param actual   实际布局（图外模块发出的 barrier 真实写入的值）
+ * @return 一致 = `std::nullopt`；不一致 = 完整可读消息（含对象名与两个布局的数值）
+ */
+export std::optional<std::string> layoutDrift(std::string_view what,
+	vk::ImageLayout expected, vk::ImageLayout actual) {
+	if (expected == actual)
+		return std::nullopt;
+	// 数值而非 vk::to_string：与两处护栏改动前的口径一致（原本就打 uint32），且排查时
+	// 拿这个数直接对 vulkan.h 的枚举表；单测也据此在消息里找数字而不是找整串文本。
+	return fmt::format("{}布局漂移 —— 期望 = {}，实际 = {}", what,
+		static_cast<uint32_t>(expected), static_cast<uint32_t>(actual));
+}
+
 }  // namespace RGL

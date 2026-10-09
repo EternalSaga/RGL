@@ -33,6 +33,7 @@ import profiler;         // zone（IZB / EVSSM 帧首段观测）
 import frame_draw_list;  // segmentSpan（mask 重放段名 → draw 序列）
 import scene_context;    // shadowDrawSource（段名单一来源，批 11.3-1d）
 import render_graph;     // RgAttachmentKind（重放后布局回正）
+import vulkan_utils;     // layoutDrift（图外布局对账的判定 + 值可读化，批 14.4b 步 2）
 import izb_shadow;
 import evssm_shadow;
 import fsr_upscaler;
@@ -86,13 +87,18 @@ void Renderer::izbLightPassPre(vk::raii::CommandBuffer& cmd, const RgPassPlan& p
 		// 截图时序甩开（imgqa izb 判据要求 mask 与截图同相机状态，机位是 RPC 后设的）
 		diagnostics().izbDumpFrame != 0 && izbFrameNo >= diagnostics().izbDumpFrame
 			&& (izbFrameNo - diagnostics().izbDumpFrame) % 30 == 0);
-	if (leftLayout != trackedLayout) {
-		if (auto* logger = RLLogger::getInstance())
-			logger->error("izb: 深度附件布局漂移 —— 进入 = {}，离开 = {}，追踪表 = {}。"
-				"渲染图不知道这次转换，下一跳会拿错的 oldLayout 转布局（VVL 不报，"
-				"症状隔一整帧）；recordFrame 的返回值必须由实际发出的 barrier 推进",
-				static_cast<uint32_t>(trackedLayout), static_cast<uint32_t>(leftLayout),
-				static_cast<uint32_t>(trackedLayout));
+	// 判定与值可读化走 `vulkan_utils::layoutDrift`（批 14.4b 步 2 收成单点纯函数），
+	// **后果说明留在本处**——它与下面 FSR 那段的诊断语义不同（一个是"执行器下一跳拿错
+	// oldLayout"，一个是"vendor 跳过转换"），不该并成一份。
+	// 诊断缺陷修正（步 2 顺手修）：原来这条打的是「进入 = X，离开 = Y，追踪表 = X」，
+	// 而**进入与追踪表是同一个变量**（`trackedLayout` 既当进入值又当追踪表值，恒等）
+	// ⟹ 三个占位符里有一个是冗余的，读者会以为拿到了两个独立事实（恒等式日志 = 有一个
+	// 分支从未生效）。现在只报两个真正独立的量：期望（追踪表）/ 实际（recordFrame 返回）。
+	if (auto* logger = RLLogger::getInstance()) {
+		if (const auto drift = layoutDrift("izb: 深度附件", trackedLayout, leftLayout))
+			logger->error("{}。渲染图不知道这次转换，下一跳会拿错的 oldLayout 转布局"
+				"（VVL 不报，症状隔一整帧）；recordFrame 的返回值必须由实际发出的 barrier 推进",
+				*drift);
 	}
 	replayIzbMaskSegment(cmd, list);
 }
@@ -284,17 +290,15 @@ void Renderer::fsrTonemapPassPre(vk::raii::CommandBuffer& cmd, const RgPassPlan&
 	//   不响、改表才响）。删掉它没有减少任何保护：velocity 的洞改由**结构**堵（见上），而不是
 	//   由一条恒假断言假装在堵。保留的这两支防的是**另一件事**：图把色/深度留在非申报布局就进
 	//   FSR（图侧没转，FSR 管不着），那条职责本批一字未动。
+	// 判定与值可读化走 `vulkan_utils::layoutDrift`（与上面 IZB 那处共用，批 14.4b 步 2）；
+	// 后果说明（vendor 跳过转换）留在本处，不与 IZB 那份并。
 	if (auto* lg = RLLogger::getInstance()) {
-		const std::pair<const char*, int32_t> want[] = {
-			{"色输入", fsrColorSlot}, {"深度", fsrDepthSlot}};
+		const std::pair<std::string_view, int32_t> want[] = {
+			{"fsr: 色输入附件", fsrColorSlot}, {"fsr: 深度附件", fsrDepthSlot}};
 		for (const auto& [what, slot] : want)
-			if (attachmentLayouts[static_cast<size_t>(slot)] != fsrInputLayout())
-				lg->error("fsr: {} 附件进 FSR 时布局 = {}，而 FsrUpscaler 向 vendor 申报的 "
-				          "state 对应布局 = {} ⟹ vendor 会跳过布局转换。要么补转换、要么改申报",
-				          what,
-				          static_cast<uint32_t>(
-					          attachmentLayouts[static_cast<size_t>(slot)]),
-				          static_cast<uint32_t>(fsrInputLayout()));
+			if (const auto drift = layoutDrift(what, fsrInputLayout(),
+					attachmentLayouts[static_cast<size_t>(slot)]))
+				lg->error("{} ⟹ vendor 会跳过布局转换。要么补转换、要么改申报", *drift);
 	}
 
 	FsrFrameInput in{};

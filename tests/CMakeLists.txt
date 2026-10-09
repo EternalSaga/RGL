@@ -71,6 +71,7 @@ set(RGL_TEST_SOURCES
     test_gltf_texcoord.cppm      # glTF TEXCOORD_0 vec2 步长 + 去索引展开（手构 GLB，2026-08-30 越界读回归，12.3d-C）
     test_shadow_forward.cppm     # shadow.slang 选级 forward 提取式数学恒等（invVP 列叉积，5a-8c 回归，12.3d-C）
     test_evssm_math.cppm         # EVSSM 消费端公式数学契约（快路/零矩/far 矩恒等/单调/LBR，11.6d bug 回归）
+    test_layout_drift.cppm       # 图外布局对账护栏的判定 + 值可读化（批 14.4b 步 2：IZB/FSR 两处护栏收成单点）
     test_device_primitives.cppm      # gpu 套件回读原语：clear 逐像素 / 整数回环 / UNORM 量化 / 拷贝保真
     test_device_primitives_impl.cppm # 设备夹具实现（partition impl unit）
     test_conservative_mesh.cppm      # gpu 套件 11.3-1b 成败门：保守光栅 × mesh shader × RADV（含 EDS3 动态态）
