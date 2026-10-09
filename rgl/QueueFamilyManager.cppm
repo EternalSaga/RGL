@@ -109,7 +109,7 @@ export class QueueFamilyManager {
 				"Graphics queue family (Index: {}) cannot present to surface",
 				graphicsFamilyIdx);
 			if (logger)
-				logger->critical(errMsg);
+				logger->critical("{}", errMsg);
 			return std::unexpected(Error{ErrorCode::SurfaceNotPresentable, errMsg});
 		}
 		return {};

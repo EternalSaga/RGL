@@ -1481,13 +1481,20 @@ FSR 的 velocity 护栏（改前）：转换块把 barrier 的 `newLayout` 与�
   `PASS errors=0`（**no-op**，那个值名在本机清单里不存在）。有效的两种：`VK_LAYER_VALIDATE_SYNC=1`（现代）
   与 `VK_LAYER_ENABLES=VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT`（清单里仍在、标
   DEPRECATED）。⟹ **开关名查本机清单，别抄 SDK 文档。**
-- 🔴 **一开 syncval 引擎必崩**（本批新发现，**未修**）：VVL 回调 `vulkanDebugCallback`（`rgl/utils.cppm`）
-  把 `pMessage` 直接当 **fmt 格式串**（`RLLogger::log` → `fmt::runtime`），而 syncval 的消息体带
-  `pImageMemoryBarriers[6]: {` ⟹ `std::runtime_error("invalid format string")` 直接 terminate（实测崩在
-  **第一条** syncval 消息：`what(): invalid format string [Vulkan-Validation(0)]`）。**任何含花括号的 VVL
-  消息都会崩进程**，只是 core validation 的消息恰好没带过花括号。本批用**临时**转义补丁跑完实验后已 `cp`
-  还原，**产品代码未改**。建议另立债：它把"开 syncval"这条路整个堵死，而 `just smoke` 只会报"引擎非零退出"，
-  那条真正的 hazard 永远看不到。修法两选一（成对转义花括号 / 改 `log(lvl, "{}", msg)`）。
+ - ✅ **一开 syncval 引擎必崩**（本批发现**并已修**，2026-10-09）：VVL 回调 `vulkanDebugCallback`
+   （`rgl/utils.cppm`）曾把 `pMessage` 直接当 **fmt 格式串**——`RLLogger::log` 里的 `fmt::runtime`
+   只绕开编译期检查、运行时照旧解析花括号——而 syncval 的消息体带 `pImageMemoryBarriers[6]: {`
+   ⟹ `std::runtime_error("invalid format string")` 直接 terminate（实测崩在**第一条** syncval
+   消息：`what(): invalid format string [Vulkan-Validation(0)]`）。**任何含花括号的 VVL 消息都会
+   崩进程**，只是 core validation 的消息恰好没带过花括号。修法 = 消息改当**参数**：
+   `log(lvl, "{}", pMessage)`。同批清掉**同病根**的 4 处 `critical(errMsg)`
+   （`sdl3window.cppm` ×3 / `QueueFamilyManager.cppm` ×1；那里的 `errMsg` 是**已格式化**的字符串，
+   再被二次当格式串解析，SDL 错误消息带花括号即炸）。
+   **复验判据（阳性锚点）**：`VK_LAYER_VALIDATE_SYNC=1 just smoke` 修前 terminate、修后跑完并完整
+   打出 11 条 hazard（`pImageMemoryBarriers[6]: {` 那条多行消息逐字段落盘 = 崩溃触发点本身）；
+   不开 syncval 的常规路径 `PASS errors=0`、截图逐位不变、`just test` 全绿。
+   ⚠ 本条**未硬凑单测**：回调体没有可断言的逻辑，能断言的只有「含花括号的消息不炸」，而那要真跑
+   VVL 才量得到 ⟹ 验收走上面的端到端判据（还债总账 §3「给写不出断言的东西硬凑测试」）。
 - 读消息原文的**零重建**办法（不改产品代码时用得上）：binary 带 debug_info，
   `lldb -b -o "breakpoint set --name RGL::vulkanDebugCallback" -o "breakpoint command add -F …"`；参数在
   `-O2` 下无 DWARF 位置（`frame variable` 为空），按 SysV ABI 从 `$rdx` 读

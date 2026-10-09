@@ -71,15 +71,19 @@ vulkanDebugCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
 		lvl = RGL::LogLevelError;
 	}
 
-	format_with_location fmtObj{pCallbackData->pMessage,
-		std::source_location::current()};
+	// ⚠ 消息当**参数**、不当格式串：VVL 的消息体自带花括号（syncval 实测含
+	//   `pImageMemoryBarriers[6]: {`），而 `RLLogger::log` 里的 `fmt::runtime` 只绕开编译期
+	//   检查、运行时照旧把它当格式串解析 ⟹ 抛 fmt::format_error，而异常逃出 Vulkan C 回调
+	//   = std::terminate（实测：一开 syncval 引擎必崩在第一条消息，`just smoke` 只报
+	//   「引擎非零退出」，真正的 hazard 永远看不到）。诊断设施不得反杀主程序。
+	format_with_location fmtObj{"{}", std::source_location::current()};
 
 	fmtObj.loc.filename = "Vulkan-Validation";
 	fmtObj.loc.funcname =
 		pCallbackData->pMessageIdName ? pCallbackData->pMessageIdName : "UNKNOWN";
 	fmtObj.loc.line = 0;
 
-	logger->log(lvl, fmtObj);
+	logger->log(lvl, fmtObj, pCallbackData->pMessage);
 
 	return VK_FALSE;
 }

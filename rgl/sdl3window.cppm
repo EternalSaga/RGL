@@ -112,7 +112,7 @@ export class SDLWindow {
 		if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
 			std::string errMsg = std::string("SDL init failed: ") + SDL_GetError();
 			if (logger)
-				logger->critical(errMsg);
+				logger->critical("{}", errMsg);
 			return std::unexpected(Error{ErrorCode::SDLError, errMsg});
 		}
 
@@ -127,7 +127,7 @@ export class SDLWindow {
 		if (!wnd) {
 			std::string errMsg = std::string("Failed to create SDL Window: ") + SDL_GetError();
 			if (logger)
-				logger->critical(errMsg);
+				logger->critical("{}", errMsg);
 			SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
 			return std::unexpected(Error{ErrorCode::SDLError, errMsg});
 		}
@@ -151,7 +151,7 @@ export class SDLWindow {
 		if (!SDL_Vulkan_CreateSurface(window, *instance, nullptr, &surface)) {
 			const std::string errMsg = fmt::format("Failed to create Vulkan Surface: {}", SDL_GetError());
 			if (logger)
-				logger->critical(errMsg);
+				logger->critical("{}", errMsg);
 			return std::unexpected(Error{ErrorCode::VulkanError, errMsg});
 		}
 
