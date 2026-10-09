@@ -164,19 +164,6 @@ std::string d2(double v)
     return b;
 }
 
-/// 任一通道不同的 8UC1 掩码（同 judge.cpp 的教训：别用 cv::reduce 合通道）。
-cv::Mat anyDiff(const cv::Mat& a, const cv::Mat& b)
-{
-    cv::Mat d;
-    cv::compare(a, b, d, cv::CMP_NE);
-    std::vector<cv::Mat> ch;
-    cv::split(d, ch);
-    cv::Mat any = ch[0];
-    for (size_t i = 1; i < ch.size(); ++i)
-        cv::bitwise_or(any, ch[i], any);
-    return any;
-}
-
 }  // namespace
 
 TemporalStat temporalDiffStat(const std::vector<Frame>& shots, const cv::Mat& mask,
@@ -223,7 +210,7 @@ TemporalStat temporalDiffStat(const std::vector<Frame>& shots, const cv::Mat& ma
         meanSum += cv::mean(d, m)[0];
         maxPair = std::max(maxPair, cv::norm(d, cv::NORM_INF, m));
         cv::Mat changed;
-        cv::bitwise_and(anyDiff(shots[i - 1].bgr, shots[i].bgr), m, changed);
+        cv::bitwise_and(anyChannelDiff(shots[i - 1].bgr, shots[i].bgr), m, changed);
         maxFrac = std::max(maxFrac, static_cast<double>(cv::countNonZero(changed))
                 / static_cast<double>(s.maskPixels));
         ++pairs;

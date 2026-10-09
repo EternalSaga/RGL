@@ -464,6 +464,16 @@ struct Attribution {
 /// 连通域计数（cv::connectedComponents）。一个 piece 渲成 N 个互不相交的岛通常就是 bug。
 [[nodiscard]] int connectedCount(const cv::Mat& mask);
 
+/// 任一通道不同的 8UC1 掩码 = 帧间差分的最小原语（`countNonZero` 数变化像素、
+/// `bitwise_and` 与区域掩码求交都吃它）。
+/// ⚠ **不要**"简化"成 `cv::reduce(axis=0)` 合通道——reduce 对多通道输入按通道独立归约、
+///   输出仍是多通道，`countNonZero` 直接断言 `cn == 1` 炸（switch 判据首战抓到）。
+/// 本函数曾在 4 个 TU 里各存一份逐字节相同的实现（`temporal.cpp::anyDiff`、
+/// `judge.cpp` / `temporal_residual.cpp::anyChannelDiff`、
+/// `temporal_motion.cpp::anyChannelDiffLocal`），上面那条教训也跟着抄了 4 遍——
+/// 收敛到此处单点，改一次四处同时生效。
+[[nodiscard]] cv::Mat anyChannelDiff(const cv::Mat& a, const cv::Mat& b);
+
 /// 一维间隙聚类（同材质各面色度同向、只差 NdotL ⟹ 一维足够；不用 k-means：k 未知，
 /// 而"簇 = 亮度直方图里的分离"在此是物理事实——每个可见面一个亮度）。
 [[nodiscard]] std::vector<std::pair<double, int64_t>> lumaClusters(cv::InputArray luma,

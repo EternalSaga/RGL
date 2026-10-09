@@ -280,6 +280,21 @@ int connectedCount(const cv::Mat& mask)
     return cv::connectedComponents(mask, labels) - 1;  // 0 是背景
 }
 
+cv::Mat anyChannelDiff(const cv::Mat& a, const cv::Mat& b)
+{
+    // compare 出逐元素逐通道的 NE 掩码后，必须**逐通道 bitwise_or 收成单通道**：
+    // cv::reduce(axis=0) 看着更短，但它对多通道输入按通道独立归约、输出仍是多通道，
+    // 下游 countNonZero 断言 cn == 1 当场炸（switch 判据首战抓到）。
+    cv::Mat d;
+    cv::compare(a, b, d, cv::CMP_NE);
+    std::vector<cv::Mat> ch;
+    cv::split(d, ch);
+    cv::Mat any = ch[0];
+    for (size_t i = 1; i < ch.size(); ++i)
+        cv::bitwise_or(any, ch[i], any);
+    return any;
+}
+
 std::vector<std::pair<double, int64_t>> lumaClusters(cv::InputArray lumaIn, double gap,
     double minFraction)
 {

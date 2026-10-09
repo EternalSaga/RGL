@@ -240,21 +240,6 @@ cv::Point2d contentShiftPx(uint32_t frameIndex, double scale)
     return out;
 }
 
-/// 任一通道不同的 8UC1 掩码（同 `judge.cpp::anyChannelDiff`；那边在匿名 namespace 里，
-/// 跨文件够不着。**不要**用 cv::reduce(axis=0) 合并通道——它对多通道输入按通道独立归约、
-/// 输出仍是多通道，countNonZero 会断言 cn==1 炸）。
-[[nodiscard]] cv::Mat anyChannelDiffLocal(const cv::Mat& a, const cv::Mat& b)
-{
-    cv::Mat d;
-    cv::compare(a, b, d, cv::CMP_NE);
-    std::vector<cv::Mat> chs;
-    cv::split(d, chs);
-    cv::Mat any = chs[0];
-    for (size_t i = 1; i < chs.size(); ++i)
-        cv::bitwise_or(any, chs[i], any);
-    return any;
-}
-
 /// 一组的采集规格（每组 = 一个引擎进程；默认值 = 交付态）。
 struct Spec {
     /// 抗锯齿选路（批 14.6：原 `bool taa`，与下面的 FSR 两键一起收进这一个槽位）。
@@ -599,7 +584,7 @@ Group collectGroup(const std::string& dir, const std::string& name, const std::s
         cv::Mat d;
         cv::absdiff(ia, ib, d);
         g.probeBytes = cv::norm(d, cv::NORM_INF);
-        g.probeChangedPx = static_cast<double>(cv::countNonZero(anyChannelDiffLocal(ia, ib)))
+        g.probeChangedPx = static_cast<double>(cv::countNonZero(anyChannelDiff(ia, ib)))
             / static_cast<double>(ia.total());
         std::printf("      └ /param A/B 探针（同进程 · 静止机位 · 隔整 1 个抖动周期 = 同相位）："
                     "fb %s → %s，引擎回显 %s，字节差 %d（变化 %.2f%%）\n",

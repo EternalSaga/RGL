@@ -81,6 +81,31 @@ void testRegion(Checker& c)
     c.chk("环带与原集不交", cv::countNonZero(overlap) == 0);
 }
 
+void testAnyChannelDiff(Checker& c)
+{
+    // 阳性锚点 = **逐通道分别**制造差异。只比 channel 0 的实现能过"BGR 全不同"这条，
+    // 但过不了下面逐通道的三条；"简化"回 cv::reduce(axis=0) 的实现过不了最后一条
+    // （reduce 对多通道输入按通道独立归约、输出仍是多通道，countNonZero 断言 cn==1 炸）。
+    // 这条教训原本抄在 4 个 TU 里各一份，收敛单点后由本用例守住。
+    const cv::Mat a = cv::Mat::zeros(4, 5, CV_8UC3);
+    const cv::Mat same = a.clone();
+    c.chk("相同图 → 全 0", cv::countNonZero(anyChannelDiff(a, same)) == 0);
+
+    for (int ch = 0; ch < 3; ++ch) {
+        cv::Mat b = a.clone();
+        b.at<cv::Vec3b>(2, 3)[ch] = 7;
+        const cv::Mat d = anyChannelDiff(a, b);
+        c.chk("任一通道单独不同都必须抓到", cv::countNonZero(d) == 1,
+            "ch=" + std::to_string(ch) + " got=" + std::to_string(cv::countNonZero(d)));
+        c.chk("差异落在正确像素上", d.at<uint8_t>(2, 3) != 0);
+    }
+
+    const cv::Mat d = anyChannelDiff(a, same);
+    c.chk("输出是单通道 8UC1（下游 countNonZero 的前提）",
+        d.channels() == 1 && d.depth() == CV_8U,
+        "channels=" + std::to_string(d.channels()) + " depth=" + std::to_string(d.depth()));
+}
+
 void testClusters(Checker& c)
 {
     std::mt19937 rng(0);  // 写死种子（测试纪律：真随机的失败无法重跑）
@@ -1688,6 +1713,7 @@ int cmdSelftest()
     testSrgb(c);
     testObjectId(c);
     testRegion(c);
+    testAnyChannelDiff(c);
     testClusters(c);
     testAnalytic(c);
     testRegistry(c);

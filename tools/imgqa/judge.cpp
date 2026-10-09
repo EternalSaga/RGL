@@ -38,20 +38,6 @@ Verdict verdictFor(const char* name, bool ok, std::string observed)
 }
 
 namespace {
-/// 任一通道不同的 8UC1 掩码。**不要**用 cv::reduce(axis=0) 合并通道——reduce 对多
-/// 通道输入按通道独立归约、输出仍是多通道，countNonZero 直接断言 cn==1 炸（switch
-/// 判据首战抓到，此前零实战）。
-cv::Mat anyChannelDiff(const cv::Mat& a, const cv::Mat& b)
-{
-    cv::Mat d;
-    cv::compare(a, b, d, cv::CMP_NE);
-    std::vector<cv::Mat> chs;
-    cv::split(d, chs);
-    cv::Mat any = chs[0];
-    for (size_t i = 1; i < chs.size(); ++i)
-        cv::bitwise_or(any, chs[i], any);
-    return any;
-}
 Verdict mk(const char* name, bool ok, std::string observed)
 {
     return verdictFor(name, ok, std::move(observed));
@@ -146,11 +132,11 @@ Verdict judgeSwitchDomain(const Frame& base, const Frame& alt, const cv::Mat& al
 {
     // 「开关对拍」强化版。弱版只问 on/off 是不是只变暗，5a-7 的恒 0 伪影同时骗过它和
     // 稳定性对拍——弱版没约束变化的**位置**。本判据约束位置：域外任何一位不同 = 旁路泄漏。
-    cv::Mat anyDiff = anyChannelDiff(base.bgr, alt.bgr);
+    cv::Mat diffMask = anyChannelDiff(base.bgr, alt.bgr);
     cv::Mat outside, inside;
-    cv::bitwise_and(anyDiff, ~allowed, outside);
-    cv::bitwise_and(anyDiff, allowed, inside);
-    const int total = cv::countNonZero(anyDiff);
+    cv::bitwise_and(diffMask, ~allowed, outside);
+    cv::bitwise_and(diffMask, allowed, inside);
+    const int total = cv::countNonZero(diffMask);
     const int out = cv::countNonZero(outside);
     const int in = cv::countNonZero(inside);
     return mk("switch-impact-domain", out == 0,

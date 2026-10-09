@@ -541,19 +541,6 @@ std::string dExp(double v)
     return b;
 }
 
-/// 任一通道不同的 8UC1 掩码（同 judge.cpp 的教训：别用 cv::reduce 合通道）。
-cv::Mat anyChannelDiff(const cv::Mat& a, const cv::Mat& b)
-{
-    cv::Mat d;
-    cv::compare(a, b, d, cv::CMP_NE);
-    std::vector<cv::Mat> ch;
-    cv::split(d, ch);
-    cv::Mat any = ch[0];
-    for (size_t i = 1; i < ch.size(); ++i)
-        cv::bitwise_or(any, ch[i], any);
-    return any;
-}
-
 struct Run {
     std::string name;
     bool taa = false;
