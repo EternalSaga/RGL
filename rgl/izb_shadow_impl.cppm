@@ -235,6 +235,21 @@ vk::ImageLayout IzbShadow::recordFrame(vk::raii::CommandBuffer& cmd,
 
 	// ② 清 head（NONE 哨兵 = 「地址即像素 ID」布局的帧初始化；节点数组无需清：
 	// 旧节点从新 head 不可达）。FillBuffer 要 eTransferDst（VVL 实录）
+	// ⚠ 清零**前面**这条 barrier 是跨帧依赖（债-30 方案 C 暴露，2026-10-09）：head 是
+	//   **单份**跨 frames-in-flight 共享的 buffer，本帧的 FillBuffer 写与上一帧对它的
+	//   compute 写 / mask pass frag 读 / dump 拷读之间必须有声明过的执行依赖。此前"没写也
+	//   没事"是因为 cull 每帧同步等待把帧序列整个串行化了（等 = 等上一帧整帧排空，正是
+	//   债-30 那笔账）；串行一去掉，syncval 立刻报 WRITE_AFTER_WRITE（实测 cpu / gpu_lagged
+	//   两档各 8 条，gpu_sync 档 0 条 = 旧串行还在时看不见）。src 三档全给：head 上一帧的
+	//   最后访问点取决于 dump 门开没开（Transfer 读只在 dumpHead 时发生），拿不准的一律
+	//   纳入源作用域，代价 = 每帧一条 barrier，换 VVL 沉默 + 不靠"上一帧恰好排空了"。
+	//   同一条依赖在 mask 清零处本来就有（下面 ⑧），head 是漏的那个。
+	bufferBarrier(cmd, *headBuffer,
+		vk::PipelineStageFlagBits2::eAllGraphics | vk::PipelineStageFlagBits2::eComputeShader
+			| vk::PipelineStageFlagBits2::eTransfer,
+		vk::AccessFlagBits2::eShaderWrite | vk::AccessFlagBits2::eShaderRead
+			| vk::AccessFlagBits2::eTransferRead,
+		vk::PipelineStageFlagBits2::eAllCommands, vk::AccessFlagBits2::eMemoryWrite);
 	::vkCmdFillBuffer(*cmd, *headBuffer, 0, VK_WHOLE_SIZE, static_cast<uint32_t>(kNone));
 	bufferBarrier(cmd, *headBuffer, vk::PipelineStageFlagBits2::eAllCommands,
 		vk::AccessFlagBits2::eMemoryWrite,
