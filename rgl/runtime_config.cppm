@@ -29,6 +29,24 @@ export enum class PresentModePref {
 };
 
 /**
+ * 抗锯齿选路（configs/runtime.lua 的 `aa` 键，批 14.6）：**三态互斥**，不是两个布尔。
+ *
+ * 为什么必须是 enum（用户拍板的理由，写下来防"顺手加个布尔"）：两个布尔
+ * （`taa.enabled` × `fsr_temporal`）的失效形态 = 「两个都开然后引擎静默关掉一个」
+ * （`resolveFsrTemporal` 强制 FSR 时域关，而配置里仍写着 true）——申报值与生效值
+ * 分家，看配置会以为开着。三态让它**结构上不可能**：一个槽位只有一个值，
+ * 「谁做抗锯齿」根本不存在同时命中两条的写法。
+ *
+ * 消费侧一律走 `RuntimeConfig::aaWantsTaa()/aaWantsFsr()` 谓词，不在各处比字符串
+ * （字符串比较 = 拼错静默失配；enum 拼错编译失败）。
+ */
+export enum class AaMode {
+	off,  // 默认 = 出厂态：无 TAA 无 FSR（红线 A 那张图 `fdece9d0…`）
+	fsr,  // FSR3-upscaler 做抗锯齿（隐含 velocity_field，见 RuntimeConfig::velocityField）
+	taa,  // 自研 TAA 做抗锯齿（图形态开关 = 本键推导，scene.lua `taa` 块只剩调参）
+};
+
+/**
  * `renderScale` 的合法区间（**单一真相源**：配置解析钳制与 Swapchain 派生 render extent
  * 都读它，避免两处各写一个魔数、改一个漂一个）。
  *
@@ -118,33 +136,45 @@ export struct RuntimeConfig {
 	 * RT、不建管线条目 ⟹ **结构性**逐位不变（不是"有但旁路"，与 ao 的 strength=0 早退
 	 * 是两种不同的红线机制；与 taa 同构）。
 	 *
-	 * 为什么放 runtime.lua 而不是 scene.lua：本键**没有任何逐帧可调语义**（不像
-	 * `ao.strength` / `taa.enabled` 那样有滑杆与逐帧状态），它只改图形态；同类的
-	 * `render_scale` 也在这里。Phase 14 的 FSR 门将来落在本键旁边。
+	 * 为什么保持**独立键**而不是并进 `aa`（批 14.6 裁决）：它有非 FSR 消费者——批 14.4
+	 * 起的 TAA 逐像素重投影线要它，与「谁做抗锯齿」无关。但 `aa` 为 fsr 时它被**隐含
+	 * 打开**（FSR 的 motionVectors 输入就是那张图）——隐含只发生在解析期一处
+	 * （runtime_config_impl.cppm 的 `applyAaKey` 段），本字段因此仍是**单一真相源**，
+	 * 消费侧不需要知道隐含关系的存在。
 	 *
 	 * 开 = 每帧多一个全屏 pass（读 depth、写 RGBA16F）+ 一张渲染分辨率 RGBA16F RT。
-	 * 目前（批 14.4）尚无消费者——批 14.5 接 FSR upscaler 才用得上它。
 	 */
 	bool velocityField = false;
 	/**
-	 * Phase 14 批 14.5：FSR 3.1.4 upscaler 总开关。**创建期**量（同 `velocity_field`，
-	 * 热重载不生效）——它决定要不要构造 vendor context 与它的四张私有图。
+	 * 批 14.6：抗锯齿选路（三态语义与"为什么不是两个布尔" → `AaMode` 注释）。
+	 * 缺键 = off = 出厂默认 = 红线 A 那张图。未知值 = 解析期 fail-fast（present_mode
+	 * 的既有纪律：配置笔误不静默回落）。
 	 *
-	 * 关（默认）= `Renderer::fsr` 恒空 ⟹ 零构造、零命令、**结构性**逐位不变。
-	 *
-	 * **依赖 `velocity_field`**：FSR 的 motionVectors 输入就是那张图，所以判据取
-	 * **实际图形态**（`velocityDecorated`）而不是配置键——velocity 装饰失败时本键
-	 * 自动失效（AO 施加点的先例，main_scene.cppm:437）。
-	 *
-	 * 开 = 每帧多一段图外 compute（vendor 内部一次录完全部 pass）+ 四张私有图
-	 *      （输出 + 3 张 vendor 共享图）。
+	 * fsr 态 = 原 `fsr_upscaler` 的语义（构造 vendor context + 图外 compute + 四张
+	 * 私有图；关态零构造逐位不变的红线原样继承，只是门从布尔换成了槽位）。
+	 * taa 态 = 原 `scene.lua taa.enabled` 的语义（decorateTaaPass 的图形态开关）。
 	 */
-	bool fsrUpscaler = false;
-	bool fsrTemporal = false;
-	/// 批 14.5 第四批：把亚像素 Halton 抖动接进投影矩阵并申报给 FSR（`fsr_jitter`）。
-	/// 只在 FSR 真的接起来时生效；TAA 开时**不参与决策**（走 TAA 原路径 = 逐位不变）。
-	/// 设计意图 = 让输入落到 FSR 的设计点上，从而**证实/证伪** §1.14 那条未结案假设。
-	bool fsrJitter = false;
+	AaMode aa = AaMode::off;
+	/// fsr 态的两枚**调参**（configs/runtime.lua 嵌套块 `fsr = { temporal, jitter }`），
+	/// 只在 aa == fsr 时被消费；其余态下它们是无人读的默认值。
+	/// 默认 true/true = FSR 的**设计点**（vendor 累积历史 + 亚像素抖动）——纯空间是
+	/// 消融臂要显式写 false。曾长期默认关，理由「实测退化」**已作废**（根因 = 申报
+	/// Y 反号 + Lanczos LUT 缺陷，均修，phase14_plan §1.18/§1.19）。
+	/// temporal 与 TAA 的互斥**不再靠运行期裁决**（三态结构上不可能同开），
+	/// `resolveFsrTemporal` 只留作防御性断言。
+	bool fsrTemporal = true;
+	/// 把亚像素 Halton 抖动接进投影矩阵并申报给 FSR（原 `fsr_jitter` 键）。
+	/// 只在 FSR 真的接起来时生效；设计意图 = 让输入落到 FSR 的设计点上（§1.16）。
+	bool fsrJitter = true;
+
+	/** 「TAA 在不在图里」的唯一推导点（原 `scene.lua taa.enabled` 的消费者全部改走这里）。 */
+	[[nodiscard]] constexpr bool aaWantsTaa() const {
+		return aa == AaMode::taa;
+	}
+	/** 「FSR 要不要接」的唯一推导点（原 `fsr_upscaler` 的消费者全部改走这里）。 */
+	[[nodiscard]] constexpr bool aaWantsFsr() const {
+		return aa == AaMode::fsr;
+	}
 	int showAfter = -1;               // DIAG：隐藏窗启动、第 N 帧后显示（-1 = 立即显示）
 	PresentModePref presentMode = PresentModePref::immediate;  // 窗口 present 模式（headless 忽略）
 	LlmDebugConfig llm;

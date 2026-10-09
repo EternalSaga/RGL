@@ -183,8 +183,13 @@ style-check *ARGS="":
 # 注意方向：**checks 本身不去编译 imgqa**——source_checks 是 just build 的内建步骤，
 # 检查步骤里再触发编译会形成递归并拖慢每次构建。checks 只要 compile_commands.json
 # 里的编译命令（configure 期即导出），imgqa 未构建也能解析它。
+#
+# selftest 也在这里跑（不要设备、毫秒级）：**只在某个工具里自检的护栏，必须有人自动跑它**。
+# 2026-10-09 实测踩过：给判据注册表加两条却没抬 selftest 里写死的总数 ⟹ 护栏本身是红的，
+# 而本 recipe 原先不跑它 ⟹ 提交者听不见，红留给下一个人才被发现。
 build-tools:
     @cmake --build {{ BUILD }} --target imgqa
+    @{{ BUILD }}/tools/imgqa/imgqa selftest
     just checks
 
 # 全量编译基准: clean-all + config + 计时编译

@@ -257,7 +257,9 @@ cv::Point2d contentShiftPx(uint32_t frameIndex, double scale)
 
 /// 一组的采集规格（每组 = 一个引擎进程；默认值 = 交付态）。
 struct Spec {
-    bool taa = false;
+    /// 抗锯齿选路（批 14.6：原 `bool taa`，与下面的 FSR 两键一起收进这一个槽位）。
+    /// Off = 不写键 = 出厂态。臂表因此**写不出**「TAA 与 FSR 时域同开」这类静默换臂的错法。
+    Aa aa = Aa::Off;
     double feedback = 0.12;
     double jitterScale = 1.0;
     bool baseSpace = true;
@@ -285,15 +287,13 @@ struct Spec {
     /// 语义 → `rgl/scene_data.cppm` kSceneDataTaaClipControlOffset。
     double clipMode = 0.0;
     double clipSoft = 1.0;
-    // ── Phase 14 批 14.5：升频 / FSR 臂（量「闪烁↔鬼影」跷跷板）──
+    // ── Phase 14 批 14.5：升频 / FSR 臂（量「闪烁↔鬼影」跷跷板）；批 14.6 三态化 ──
     // 默认全关 = 一个键都不多写 = 现有全部臂逐位不变。语义以 `configs/runtime.lua` 为准。
-    // 🔴 三条静默换臂的错法（FSR 忘开 velocity / temporal 忘开 upscaler / temporal 与 taa
-    // 同开）由 `makeProfile` 直接抛，不在这里兜。
-    double renderScale = 1.0;       ///< 1.0 = 不写键 = 交付态
-    bool velocityField = false;     ///< FSR 的前置（velocity 没进图 ⟹ FSR 自动失效）
-    bool fsrUpscaler = false;
-    bool fsrTemporal = false;       ///< 与 `taa` 互斥（引擎硬门）
-    bool fsrJitter = false;         ///< FSR 自己的抖动，与 `jitterScale` 是两个独立旋钮
+    // 旧的「FSR 忘开 velocity / temporal 忘开 upscaler / temporal 与 taa 同开」三条错法已
+    // **结构上消失**：velocity 由引擎在 aa=fsr 时隐含打开，其余两条被 aa 单槽位排除。
+    double renderScale = 1.0;  ///< 1.0 = 不写键 = 交付态
+    bool fsrTemporal = false;  ///< 仅 aa == Fsr 时被消费
+    bool fsrJitter = false;    ///< FSR 自己的抖动，与 `jitterScale` 是两个独立旋钮
 };
 
 std::string d4(double v)
@@ -410,7 +410,7 @@ Group collectGroup(const std::string& dir, const std::string& name, const std::s
     o.cameraPosition = cam.position;
     o.cameraTarget = cam.target;
     o.cameraFov = cam.fov;
-    o.taa = sp.taa;
+    o.aa = sp.aa;
     o.taaFeedback = sp.feedback;
     o.taaJitterScale = sp.jitterScale;
     o.taaBaseSpace = sp.baseSpace;
@@ -419,15 +419,14 @@ Group collectGroup(const std::string& dir, const std::string& name, const std::s
     o.taaDiagReject = sp.diagReject;
     o.taaInputKernel = sp.kernel;  // 批 13.8 输入侧重建核（0 = 不写键 = 已发表口径）
     // 批 13.11 鬼影 × 裁剪消融（默认全关 = 不写键 = 已发表 M0…M4 读数逐位不变）。
-    // ⚠ clip 两键以 `o.taa` 为条件：TAA 关的组（M0/REFm/REFs）没有历史，写这些键是空操作，
+    // ⚠ clip 两键以 `o.aa == Taa` 为条件：TAA 关的组（M0/REFm/REFs）没有历史，写这些键是空操作，
     //   但会让「参考组 = 交付配置原样」这条自证失效 ⟹ 一个字节都不多写。
     //   （长窗档不再有独立键：批 13.14b 删 static boost 后它 = `sp.feedback` 本身。）
-    o.taaClipMode = o.taa ? sp.clipMode : 0.0;
+    o.taaClipMode = o.aa == Aa::Taa ? sp.clipMode : 0.0;
     o.taaClipSoft = sp.clipSoft;
     // 升频 / FSR 臂（默认全关 = 不写键 = 现有 M0…M4 等读数逐位不变）。
+    // 批 14.6：velocity 不在这里写——`aa == Fsr` 时由引擎解析期隐含打开（单一来源）。
     o.renderScale = sp.renderScale;
-    o.velocityField = sp.velocityField;
-    o.fsrUpscaler = sp.fsrUpscaler;
     o.fsrTemporal = sp.fsrTemporal;
     o.fsrJitter = sp.fsrJitter;
     if (sp.cameraMotion)
@@ -1071,12 +1070,12 @@ int cmdTemporalMotion(const std::string& cameraName, const std::string& motion,
         return *slots.back();
     };
     Spec m0;
-    m0.taa = false;
+    m0.aa = Aa::Off;
     m0.motionAngle = angle;
     m0.cameraMotion = cameraMode;
     m0.warm = warm;
     Spec m1 = m0;
-    m1.taa = true;
+    m1.aa = Aa::Taa;
     // 批 13.11 鬼影 × 裁剪消融：只给 **TAA 开**的组设（m2/m3/m3x/m4/m1m/m4m 全由 m1 复制派生
     // ⟹ 一处生效全覆盖）。TAA 关的组（M0/REFm/REFs）没有历史，臂对它们是空操作。
     // 默认（0 / 0）= 不覆写不写键 = 交付态 = 已发表 M0…M4 读数逐位不变。
@@ -1101,7 +1100,7 @@ int cmdTemporalMotion(const std::string& cameraName, const std::string& motion,
     refm.refScale = 1;
     refm.wantBytes = true;  // 批 13.9：分带尺子的**亮度轴**只能来自参考图（理由见文件头）
     Spec refs = m4;
-    refs.taa = false;
+    refs.aa = Aa::Off;
     refs.refScale = 1;
     Spec m1m = m1;
     m1m.diagReject = true;
@@ -1595,7 +1594,7 @@ int cmdTemporalFeedback(const std::string& cameraName, double angleDeg, int burs
     };
 
     Spec m0;
-    m0.taa = false;
+    m0.aa = Aa::Off;
     m0.motionAngle = angle;
     m0.warm = warmMotion;
     Spec refm = m0;
@@ -1605,7 +1604,7 @@ int cmdTemporalFeedback(const std::string& cameraName, double angleDeg, int burs
     std::vector<std::pair<double, Group*>> motion;
     for (const double fb : fbs) {
         Spec s;
-        s.taa = true;
+        s.aa = Aa::Taa;
         s.feedback = fb;
         s.kernel = kernel;
         s.motionAngle = angle;
@@ -1613,7 +1612,7 @@ int cmdTemporalFeedback(const std::string& cameraName, double angleDeg, int burs
         motion.push_back({fb, &run("F" + d2(fb) + " 运动 fb=" + d2(fb), "f" + fbTag(fb), s)});
     }
     Spec zs;
-    zs.taa = true;
+    zs.aa = Aa::Taa;
     zs.feedback = 1.0;
     zs.jitterScale = 0.0;  // 零抖动 + 零累积 ⟹ 按构造 ≈ M0
     zs.kernel = kernel;
@@ -1622,7 +1621,7 @@ int cmdTemporalFeedback(const std::string& cameraName, double angleDeg, int burs
     Group& gZero = run("F1.0js0 零态锚点（应 ≈ M0）", "zero", zs);
 
     Spec refs = m0;
-    refs.taa = false;
+    refs.aa = Aa::Off;
     refs.motionAngle = 0.0;
     refs.refScale = 1;
     refs.warm = 64;
@@ -1634,7 +1633,7 @@ int cmdTemporalFeedback(const std::string& cameraName, double angleDeg, int burs
     // 而 fb 是同一个字段，不 gate 住就会一起被抬。
     for (const double fb : {0.02, 0.12, 0.5, 1.0}) {
         Spec s;
-        s.taa = true;
+        s.aa = Aa::Taa;
         s.feedback = fb;
         s.kernel = kernel;
         s.motionAngle = 0.0;
@@ -1653,7 +1652,7 @@ int cmdTemporalFeedback(const std::string& cameraName, double angleDeg, int burs
     // **静止态**同一格：静止 + fb=1 vs 静止 + TAA 关。两边同参考（REFs）、同边缘带（bS）、
     // 同 τ、同 warm 口径（64 = 静止组口径）⟹ 比值里没有跨视点项。
     Spec s0;
-    s0.taa = false;
+    s0.aa = Aa::Off;
     s0.motionAngle = 0.0;
     s0.warm = 64;
     Group& gS0 = run("S0 静止 TAA 关（静止地板）", "s0", s0);
@@ -2266,7 +2265,7 @@ int cmdTemporalTail(const std::string& cameraName, double angleDeg, int burst, i
     auto collect = [&](const std::string& sub, bool taa, double fb, double jitter, double clip,
                            double spinAngle, int w) {
         Spec sp;
-        sp.taa = taa;
+        sp.aa = taa ? Aa::Taa : Aa::Off;
         sp.feedback = fb;
         sp.jitterScale = jitter;
         sp.baseSpace = true;
@@ -2680,7 +2679,7 @@ SmearAngle collectSmearAngle(const std::string& base, const BistroCam& cam, int 
 {
     auto collect = [&](const SmearArm& a, double yaw) {
         Spec sp;
-        sp.taa = a.taa;
+        sp.aa = a.taa ? Aa::Taa : Aa::Off;
         sp.feedback = a.feedback;
         sp.jitterScale = a.jitter;
         sp.baseSpace = true;
@@ -3367,15 +3366,14 @@ struct StepArm {
     double clipMode;
     double feedback;
     bool reprojection = true;
-    // ── 批 14.5 升频 / FSR 臂 ──
-    /// false = 本臂**没有 TAA**（FSR 时域臂必须如此，引擎互斥硬门）。此时 clipMode /
-    /// feedback / reprojection 三个 TAA 内部旋钮全部不写键（`stepSpecFor` 负责）。
-    bool taa = true;
-    double renderScale = 1.0;       ///< 1.0 = 不写键 = 交付态（原生分辨率）
-    bool velocityField = false;     ///< FSR 的前置
-    bool fsrUpscaler = false;
-    bool fsrTemporal = false;
-    bool fsrJitter = false;
+    // ── 批 14.5 升频 / FSR 臂（批 14.6 三态化）──
+    /// 抗锯齿选路。`aa != Taa`（Off / Fsr）时 clipMode / feedback / reprojection 三个 TAA
+    /// 内部旋钮全部不写键（`stepSpecFor` 负责）。旧「FSR 时域臂必须关 TAA（引擎互斥硬门）」
+    /// 现在是**类型事实**：一个 aa 槽位装不下两个时域滤波器。
+    Aa aa = Aa::Taa;
+    double renderScale = 1.0;  ///< 1.0 = 不写键 = 交付态（原生分辨率）
+    bool fsrTemporal = false;  ///< 仅 aa == Fsr 时被消费
+    bool fsrJitter = false;    ///< FSR 自己的抖动，与 TAA 的 jitter_scale 是两个独立旋钮
 };
 
 /// 一跑的产物：连拍的线性 luma（收敛跑 = 收敛段）。
@@ -3454,18 +3452,16 @@ StepRun captureStepRun(const std::string& dir, const std::string& name, const st
     o.cameraPosition = from.position;
     o.cameraTarget = from.target;
     o.cameraFov = from.fov;
-    o.taa = sp.taa;
+    o.aa = sp.aa;
     o.taaFeedback = sp.feedback;
     o.taaJitterScale = sp.jitterScale;  // 本仪器恒 0（理由见段头【为什么 jitter 恒 0】）
     o.taaBaseSpace = sp.baseSpace;
     o.taaReprojection = sp.reprojection;  // 闭式锚臂 = false（纯屏幕空间 EMA）
-    o.taaClipMode = sp.taa ? sp.clipMode : 0.0;
+    o.taaClipMode = sp.aa == Aa::Taa ? sp.clipMode : 0.0;
     o.taaClipSoft = sp.clipSoft;
-    // 升频 / FSR 臂（默认全关 = 不写键）。⚠ 这里**不**因 `sp.taa` 为真而清零：FSR 与 TAA
-    // 的互斥由 `makeProfile` 的守卫**拒绝组合**，而不是悄悄挑一个——后者正是静默换臂。
+    // 升频 / FSR 臂（默认全关 = 不写键）。批 14.6：TAA 与 FSR 时域**写不出同时开**（aa 单槽位），
+    // 旧的「守卫拒绝组合」随之删除；velocity 由引擎在 aa=fsr 时隐含打开，这里不再代开。
     o.renderScale = sp.renderScale;
-    o.velocityField = sp.velocityField;
-    o.fsrUpscaler = sp.fsrUpscaler;
     o.fsrTemporal = sp.fsrTemporal;
     o.fsrJitter = sp.fsrJitter;
     makeProfile(dir, o);
@@ -3804,22 +3800,20 @@ int stepWarmFor(double alpha, int warmFloor)
 
 /// 臂 → 采集口径。`jitterScale = 0` 恒成立（理由见段头【为什么 jitter 恒 0】）。
 ///
-/// ✅ **FSR 臂不破坏这条纪律**：`taa.jitter_scale` 与 `fsr_jitter` 是两个独立旋钮，而 FSR
-/// 时域臂的 `taa` 恒 false（引擎互斥硬门 `resolveFsrTemporal`）⟹ 前者根本不被消费，FSR 的
+/// ✅ **FSR 臂不破坏这条纪律**：`taa.jitter_scale` 与 `fsr` 块 `jitter` 是两个独立旋钮，而
+/// FSR 时域臂的 `aa` 恒非 Taa（一个槽位装不下两个时域滤波器）⟹ 前者根本不被消费，FSR 的
 /// 亚像素抖动走 `fsrJitter` 自足。于是仪器的三条 jitter 红利（B∞ 是固定点 / 零锚恰 0 /
 /// 分母无相位噪声）一条都不必牺牲，FSR 也照样跑在它的设计点上。
 Spec stepSpecFor(const StepArm& a, int warm)
 {
     Spec sp;
-    sp.taa = a.taa;
+    sp.aa = a.aa;
     sp.feedback = a.feedback;
     sp.jitterScale = 0.0;
     sp.baseSpace = true;  // 交付态
     sp.clipMode = a.clipMode;
     sp.reprojection = a.reprojection;
     sp.renderScale = a.renderScale;
-    sp.velocityField = a.velocityField;
-    sp.fsrUpscaler = a.fsrUpscaler;
     sp.fsrTemporal = a.fsrTemporal;
     sp.fsrJitter = a.fsrJitter;
     sp.warm = warm;
@@ -3845,7 +3839,8 @@ StepArmResult collectStepArm(const std::string& dir, const BistroCam& from, cons
     // TAA 臂的热身判据 = `⌈6/α⌉`（EMA）。非 TAA 臂（FSR）**没有 α 可依据**：vendor 的历史
     // 长度是它内部的事，这里给一个保守地板，够不够**不靠猜** —— 没收敛则末 16 帧仍在漂，
     // 由 `spread` 当场抓（见 `convergedSpread` 的理由）。
-    const int warm = a.taa ? stepWarmFor(a.feedback, overrideWarm) : std::max(overrideWarm, 120);
+    const int warm = a.aa == Aa::Taa ? stepWarmFor(a.feedback, overrideWarm)
+                                     : std::max(overrideWarm, 120);
     const Spec sp = stepSpecFor(a, warm);
     const std::string tag = a.tag;
     const StepRun ra = captureStepRun(dir + "_a", tag + "/A", tag + "a", from, from, sp, burst);
@@ -3912,15 +3907,19 @@ int runFsrStepArms(const std::string& dir, const BistroCam& from, const BistroCa
         std::printf("\n  ⟹ TAA 锚臂守卫已红 ⟹ **跳过** FSR 臂（不在坏量具上读数）\n");
         return 1;
     }
+    // 臂表用**指定初始化器**：批 14.6 之后 `aa` 夹在中间，位置初值容易把「哪个槽是抗锯齿」
+    // 读错（读错 = 静默换臂），写出来就点不出来。
     const std::vector<StepArm> arms = {
-        { "B75", 0.0, 0.01, true, false, 0.75, false, false, false, false },
-        { "S75", 0.0, 0.01, true, false, 0.75, true, true, false, false },
-        { "T11", 11.0, 0.01, true, true, 1.0, false, false, false, false },
-        { "T13", 13.0, 0.01, true, true, 1.0, false, false, false, false },
-        { "T75", 13.0, 0.01, true, true, 0.75, false, false, false, false },
-        { "F75", 0.0, 0.01, true, false, 0.75, true, true, true, true },
+        StepArm{ .tag = "B75", .clipMode = 0.0, .feedback = 0.01, .aa = Aa::Off, .renderScale = 0.75 },
+        StepArm{ .tag = "S75", .clipMode = 0.0, .feedback = 0.01, .aa = Aa::Fsr, .renderScale = 0.75 },
+        StepArm{ .tag = "T11", .clipMode = 11.0, .feedback = 0.01, .aa = Aa::Taa },
+        StepArm{ .tag = "T13", .clipMode = 13.0, .feedback = 0.01, .aa = Aa::Taa },
+        StepArm{ .tag = "T75", .clipMode = 13.0, .feedback = 0.01, .aa = Aa::Taa, .renderScale = 0.75 },
+        StepArm{ .tag = "F75", .clipMode = 0.0, .feedback = 0.01, .aa = Aa::Fsr, .renderScale = 0.75,
+            .fsrTemporal = true, .fsrJitter = true },
     };
-    std::printf("\n── 升频 / FSR 臂（同一次阶跃、同一把尺；S75/F75 的 taa 恒关 = 引擎互斥硬门）──\n");
+    std::printf("\n── 升频 / FSR 臂（同一次阶跃、同一把尺；S75/F75 的 aa = fsr，"
+                "结构上不是 TAA ⟹ 无「两个时域滤波器同开」可犯）──\n");
 
     std::vector<StepCurve> curves;
     std::vector<double> spreads, floors;

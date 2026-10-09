@@ -340,10 +340,10 @@ void parseDeferredStyles(sol::table root, SceneConfig& cfg) {
 		// Phase 11 批 11.4：SSAO 强度（可选段 ao.strength，0 = 逐位旁路）
 		if (sol::table ao = root["ao"]; ao.valid() && ao.is<sol::table>())
 			readFloat(ao, "strength", cfg.aoStrength);
-		// 批 12.6 TAA（可选段 taa；缺段 = 全默认即「关」）：enabled 决定图形态，
-		// 其余是每帧运行参数（feedback / jitterScale / motionCompensation / baseSpace）
+		// 批 12.6 TAA（可选段 taa）：批 14.6 起本段**只有调参**（feedback / jitterScale /
+		// motionCompensation / baseSpace / 各消融门）；原 `enabled` 图形态开关已删，
+		// 「TAA 在不在图里」由 runtime.lua 的 aa 三态推导（RuntimeConfig::aaWantsTaa）。
 		if (sol::table taa = root["taa"]; taa.valid() && taa.is<sol::table>()) {
-			readBool(taa, "enabled", cfg.taaEnabled);
 			readFloat(taa, "feedback", cfg.taaFeedback);
 			readFloat(taa, "jitter_scale", cfg.taaJitterScale);
 			readBool(taa, "motion_compensation", cfg.taaMotionCompensation);

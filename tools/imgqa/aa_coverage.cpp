@@ -144,7 +144,7 @@ int cmdAaCoverage(const std::string& variant, int warm, double feedback, bool ba
         o.aoStrength = 0.0;
         o.shadowPass = false;
         o.picking = false;
-        o.taa = taa;
+        o.aa = taa ? Aa::Taa : Aa::Off;
         o.taaFeedback = feedback;
         o.taaJitterScale = jitterScale;
         o.taaBaseSpace = baseSpace;  // 批 13.2（taa=false 的那组无消费者，值无意义）

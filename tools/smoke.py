@@ -206,8 +206,8 @@ def png_size(path: Path) -> tuple[int, int] | None:
 
 def stage_configs(from_build: bool, variant: str | None, shot_file: str, frames: int,
                   size: tuple[int, int] | None, render_scale: float | None,
-                  velocity_field: bool = False, fsr_upscaler: bool = False,
-                  taa: bool = False, clip: int | None = None,
+                  velocity_field: bool = False, aa: str | None = None,
+                  clip: int | None = None,
                   fsr_temporal: bool = False, fsr_jitter: bool = False) -> None:
     """把一次性配置铺进 staging 目录并打好运行模式键（每次重建，跑完不残留可复原状态）。"""
     base = (BUILD_RGL / "configs") if from_build else (ROOT / "configs")
@@ -235,28 +235,22 @@ def stage_configs(from_build: bool, variant: str | None, shot_file: str, frames:
     if velocity_field:
         # 批 14.4：逐像素速度场。创建期量（决定图里有没有 velocity pass），无热重载。
         patch_lua(runtime, "velocity_field", "true")
-    if fsr_upscaler:
-        # 批 14.5：FSR upscaler。**它隐含 velocity_field**——FSR 的 motionVectors 输入就是
-        # 那张图，引擎侧生效判据 = 「配置键 && velocity 真的进了图」，这里不把依赖一起打开，
-        # --fsr-upscaler 就会静默退化成"什么都没开"。
-        patch_lua(runtime, "velocity_field", "true")
-        patch_lua(runtime, "fsr_upscaler", "true")
-    # FSR 时域累积与它自己的抖动。**没有这两个旗标，跷跷板的两条臂就表达不出来**：
-    # 纯空间档（EASU+RCAS，vendor 每帧 reset、无历史）与时域档（vendor 累积历史）是两条
-    # 完全不同的臂，鬼影只可能来自后者（实测：两条无历史臂的 ghost AUC 恰为 0.000）。
-    # `fsr_jitter` 与 `taa.jitter_scale` 是**两个独立旋钮** —— 时域臂的 taa 恒关（引擎互斥
-    # 硬门），所以 FSR 的亚像素抖动只能从这里给。
-    if fsr_temporal:
-        patch_lua(runtime, "fsr_temporal", "true")
-    if fsr_jitter:
-        patch_lua(runtime, "fsr_jitter", "true")
-    # ── TAA 与历史裁剪档位 ──
-    # 为什么要有这两个旗标：**红线 B 的定义本身就是「TAA 开 + clip_mode = N」**，没有它们
+    # ── 抗锯齿三态（批 14.6）：一个槽位取代旧的 taa.enabled × fsr_upscaler 两个布尔 ──
+    if aa:
+        patch_lua(runtime, "aa", f'"{aa}"')
+    if aa == "fsr":
+        # FSR 的两枚调参**总是显式写**：配置文件出厂值是 true/true（= 设计点），而工具的
+        # 每个臂必须是**自己写出来的那个配置**——不写键 = 拿出厂默认 = 想量纯空间却静默跑成
+        # 时域+抖动（静默换臂）。旗标缺省 = false = 纯空间臂（EASU+RCAS，vendor 每帧 reset、
+        # 无历史 ⟹ 按构造无鬼影）；时域臂 = --fsr-temporal（+ --fsr-jitter 才是设计点，
+        # 守卫在下面）。velocity_field 不用这里打开：aa=fsr 时**引擎解析期隐含打开**
+        # （单一来源在 applyAaKey），旧版工具替引擎补依赖的写法随扁平键一起退役。
+        patch_lua(runtime, "temporal", "true" if fsr_temporal else "false")
+        patch_lua(runtime, "jitter", "true" if fsr_jitter else "false")
+    # ── 历史裁剪档位 ──
+    # 为什么要有这个旗标：**红线 B 的定义本身就是「aa=taa + clip_mode = N」**，没有它
     # 每次重立基线都得手改**仓库** configs/scene.lua —— 而那正是「改了副本/源不会自动复原」
-    # 这类静默状态的来源。键的唯一性由 `patch_lua` 自己守（命中 ≠ 1 即报错）；`enabled`
-    # 在 scene.lua 里只出现在 taa 段，不会误伤别的块。
-    if taa:
-        patch_lua(STAGING / "scene.lua", "enabled", "true")
+    # 这类静默状态的来源。键的唯一性由 `patch_lua` 自己守（命中 ≠ 1 即报错）。
     if clip is not None:
         patch_lua(STAGING / "scene.lua", "clip_mode", str(clip))
 
@@ -309,34 +303,35 @@ def parse_args() -> argparse.Namespace:
                          "传了没生效即 FAIL，不会静默跑在默认档上")
     ap.add_argument("--velocity-field", action="store_true",
                     help="runtime.lua velocity_field = true（逐像素速度场，批 14.4）。"
-                         "双向核对：开了没建 velocity RT = FAIL；没开却建了 = FAIL（门关不拢）")
-    ap.add_argument("--fsr-upscaler", action="store_true",
-                    help="runtime.lua fsr_upscaler = true（FSR 3.1.4 upscaler，批 14.5；"
-                         "隐含打开 velocity_field，FSR 的 MV 输入就是那张图）。"
-                         "双向核对：开了没建 FSR context = FAIL；没开却建了 = FAIL（门关不拢）")
+                         "双向核对：开了没建 velocity RT = FAIL；没开却建了 = FAIL（门关不拢）。"
+                         "aa=fsr 时无需给：引擎解析期已隐含打开")
+    ap.add_argument("--aa", choices=("off", "fsr", "taa"), default=None,
+                    help="runtime.lua aa（批 14.6 抗锯齿三态开关）：off = 出厂默认（无 TAA "
+                         "无 FSR，红线 A 那张图）；fsr = FSR3-upscaler 做抗锯齿（隐含打开 "
+                         "velocity_field，调参走 --fsr-temporal/--fsr-jitter）；taa = 自研 TAA "
+                         "做抗锯齿（原 --taa，调参 --clip）。互斥是**结构性的**——旧「--taa 撞 "
+                         "--fsr-temporal」那类组合根本表达不出来。不给 = 用配置基准里的值。"
+                         "双向核对：请求了没建对应 pass = FAIL；没请求却建了 = FAIL（门关不拢）")
     ap.add_argument("--fsr-temporal", action="store_true",
-                    help="runtime.lua fsr_temporal = true（让 vendor 累积历史；不给 = 纯空间 "
-                         "EASU+RCAS，每帧 reset、**按构造无鬼影**）。必须配 --fsr-upscaler。"
-                         "🔴 与 --taa 互斥：引擎 `resolveFsrTemporal` 会**强制把时域判关**"
-                         "（配置里还写着 true），所以这里直接 FAIL，不许静默量成「TAA + 纯空间 FSR」"
-                         "却报成时域档。生效核对读日志「fsr temporal: 开/关」")
+                    help="runtime.lua fsr 块 temporal = true（让 vendor 累积历史）。不给 = "
+                         "显式写 false = 纯空间 EASU+RCAS，每帧 reset、**按构造无鬼影**。必须配 "
+                         "--aa fsr（其余态下该调参没有消费者 = 空开关）。生效核对读日志"
+                         "「fsr temporal: 开/关」——读**生效**而不是**请求**")
     ap.add_argument("--fsr-jitter", action="store_true",
-                    help="runtime.lua fsr_jitter = true（FSR 自己的 Halton 抖动，相位 = "
+                    help="runtime.lua fsr 块 jitter = true（FSR 自己的 Halton 抖动，相位 = "
                          "8·(上屏宽/渲染宽)²，0.75 档实测 14）。必须配 --fsr-temporal：单独开它"
                          "只会让输入图整体亚像素平移而没有任何东西去抵消。⚠ 它与 taa.jitter_scale "
                          "是**两个独立旋钮**，不是同一个的别名")
     ap.add_argument("--from-build", action="store_true",
                     help="以 build/rgl/configs 副本为基准（跑调试现场；默认用仓库 configs/）")
-    ap.add_argument("--taa", action="store_true",
-                    help="scene.lua taa.enabled = true。**红线 B 的定义本身就是「TAA 开 + "
-                         "clip_mode = N」**，没有这个旗标每次重立基线都得手改仓库 configs/ "
-                         "= 「改了不会自动复原」那类静默状态。双向核对：开了没建 taa RT = FAIL；"
-                         "没开却建了 = FAIL（门关不拢）")
     ap.add_argument("--clip", type=int, default=None,
-                    help="scene.lua taa.clip_mode = N（历史裁剪档位：0 门关硬盒 / 11 今天的交付档 / "
-                         "13 债-69 修法臂）。🔴 必须配 --taa：TAA 关时该键根本不被消费，单独给它会"
-                         "静默量到一张「什么都没改」的图。档位是否**真的生效**靠红线表自己的阳性"
-                         "对照（clip 11 / 13 / 0 三张图哈希必须互不相同），不在这里重复实现")
+                    help="scene.lua taa.clip_mode = N（历史裁剪档位：0 门关硬盒 / 11 上一版"
+                         "交付档 / 13 现行交付档）。🔴 必须配 --aa taa：TAA 不在图时该键根本不被"
+                         "消费，单独给它会静默量到一张「什么都没改」的图。档位是否**真的生效**靠"
+                         "阳性对照：`clip_mode = 0` 的哈希必须与 11/13 不同（实测 `37b6a5f2…` ≠ "
+                         "`360ce0d2…`）。⚠ **别拿「11 与 13 必须不同」当对照**——静止机位下两者"
+                         "逐位相同（`360ce0d2…` = 红线 B），臂 13 只在 `motion > 0` 时才分家，"
+                         "这正是它转正零像素代价的原因；拿它当对照会把一个正确行为报成回归")
     ap.add_argument("--timeout", type=int, default=90, help="引擎最长存活秒数（默认 90）")
     return ap.parse_args()
 
@@ -352,20 +347,20 @@ def main() -> int:
     if "/" in args.name or ".." in args.name:
         fail(f"--name 只准文件名（不要带路径），收到 {args.name!r}")
 
-    if args.clip is not None and not args.taa:
-        fail("--clip 必须配 --taa：TAA 关时 taa 段整个不进图，clip_mode 不被任何 shader 消费"
-             " ⟹ 这条旗标会静默量到一张与默认逐位相同的图，却报成「档位生效了」")
-    if args.fsr_temporal and not args.fsr_upscaler:
-        fail("--fsr-temporal 必须配 --fsr-upscaler：引擎语义里前者只在后者为真时有意义，"
-             "只开前者 = 空开关（配置里写了、什么都没发生）")
+    # ── 旗标守卫（批 14.6 三态化后从三条收成两条）──
+    # 原「--fsr-temporal 与 --taa 互斥」那条**已删**：aa 是一个槽位，"temporal 撞 taa"
+    # 这种组合现在根本表达不出来（引擎侧 resolveFsrTemporal 同理由退化为防御性断言）。
+    if args.clip is not None and args.aa != "taa":
+        fail("--clip 必须配 --aa taa：TAA 不在图时 taa 段整个不进图，clip_mode 不被任何 "
+             "shader 消费 ⟹ 这条旗标会静默量到一张与默认逐位相同的图，却报成「档位生效了」")
+    if (args.fsr_temporal or args.fsr_jitter) and args.aa != "fsr":
+        fail("--fsr-temporal/--fsr-jitter 是 --aa fsr 的子选项：其余态下 fsr 块调参没有"
+             "消费者（引擎只在 aa=fsr 时才接 FSR），只开子选项 = 空开关（配置里写了、"
+             "什么都没发生）")
     if args.fsr_jitter and not args.fsr_temporal:
         fail("--fsr-jitter 必须配 --fsr-temporal：时域档关着 ⟹ 没有历史重投影去抵消抖动"
-             " ⟹ 量到的只是一张整体亚像素平移过的纯空间图（configs/runtime.lua 本键注释"
+             " ⟹ 量到的只是一张整体亚像素平移过的纯空间图（configs/runtime.lua fsr 块注释"
              "早写过这个坑）")
-    if args.fsr_temporal and args.taa:
-        fail("--fsr-temporal 与 --taa 互斥：引擎 `resolveFsrTemporal` 会 warn 并**强制把时域"
-             "判关**（配置里 fsr_temporal 仍写着 true）⟹ 这条组合会静默量成「TAA + 纯空间 "
-             "FSR」却报成时域档。要 A/B 请分两次跑")
 
     exe = check_prereq()
     single_instance_or_die()
@@ -381,14 +376,16 @@ def main() -> int:
     shot_file = (f"{STAGING.name}/probe.png" if args.mode == "smoke"
                  else f"screenshots/{args.name}.png")
     stage_configs(args.from_build, args.variant, shot_file, args.frames, size,
-                  args.render_scale, args.velocity_field, args.fsr_upscaler,
-                  args.taa, args.clip, args.fsr_temporal, args.fsr_jitter)
+                  args.render_scale, args.velocity_field, args.aa,
+                  args.clip, args.fsr_temporal, args.fsr_jitter)
     print(f"配置   : 基准={'build 副本' if args.from_build else '仓库 configs/'}"
           f"  variant={args.variant or '(随配置)'}  frames={args.frames}"
           f"  size={f'{size[0]}x{size[1]}' if size else '(随配置)'}"
           f"  render_scale={args.render_scale if args.render_scale is not None else '(随配置)'}"
           f"  velocity_field={'on' if args.velocity_field else '(随配置)'}"
-          f"  fsr_upscaler={'on' if args.fsr_upscaler else '(随配置)'}")
+          f"  aa={args.aa or '(随配置)'}"
+          + (f"  fsr(temporal={'on' if args.fsr_temporal else 'off'}"
+             f",jitter={'on' if args.fsr_jitter else 'off'})" if args.aa == "fsr" else ""))
 
     code, log, secs = run_engine(exe, args.timeout)
     LOG_PATH.write_text(log, encoding="utf-8")
@@ -430,9 +427,9 @@ def main() -> int:
     # 门关不拢（图里多了一个 pass，而逐位不变红线单看截图未必抓得住）。
     vel = re.search(r"velocity \(RGBA16F[^)]*\): (\d+)x(\d+) slot (\d+)", log)
     velUnsupported = "velocity: 图形态不支持" in log
-    # --fsr-upscaler 隐含打开 velocity_field（FSR 的 MV 输入就是那张图）⟹ 核对判据必须
-    # 把两条来源并起来，否则 --fsr-upscaler 会被自己的依赖判成「门关不拢」。
-    velRequested = args.velocity_field or args.fsr_upscaler
+    # aa=fsr 隐含 velocity_field（FSR 的 MV 输入就是那张图，隐含发生在引擎解析期）⟹ 核对
+    # 判据必须把两条来源并起来，否则 --aa fsr 会被自己的依赖判成「门关不拢」。
+    velRequested = args.velocity_field or args.aa == "fsr"
     if velRequested and not vel:
         # 区分两种"没建 RT"：**图形态不支持**（装饰器 warn 后正常跳过，offscreen 变体用
         # blit 上屏，无"写 swapchain 且采色"的 pass = 与 decorateTaaPass 同判据）与
@@ -447,20 +444,21 @@ def main() -> int:
     if not velRequested and vel:
         fail(f"默认档（velocity_field 关）却建了 velocity RT：{vel.group(0)}"
              " ⟹ 门关不拢，「图里没有这个 pass」的逐位不变红线失效")
-    # fsr_upscaler 生效核对（批 14.5）。同 velocity 的纪律：双向都要核。
+    # aa=fsr 生效核对（批 14.5 的门 + 批 14.6 的槽位）。同 velocity 的纪律：双向都要核。
     # 正向 = 门开必须看到 vendor context 构造行；反向 = 门关**一行都不许有**——FSR 是
     # 图外 compute，门关不拢时截图未必变（本批它的输出尚无消费者），只看画面会漏。
+    fsrRequested = args.aa == "fsr"
     fsr = re.search(r"FsrUpscaler: context 就绪[^\n]*?render=(\d+)x(\d+) upscale=(\d+)x(\d+)", log)
     fsrOff = re.search(r"fsr: 输入附件不齐", log)
-    if args.fsr_upscaler and not fsr:
+    if fsrRequested and not fsr:
         if fsrOff:
-            fail(f"请求 --fsr-upscaler 但引擎报输入附件不齐（{fsrOff.group(0)}）"
+            fail(f"请求 --aa fsr 但引擎报输入附件不齐（{fsrOff.group(0)}）"
                  " ⟹ velocity/depth/色输入三者有一个没进图，FSR 无从接起")
         else:
-            fail("请求 --fsr-upscaler 但日志里没有「FsrUpscaler: context 就绪」行"
+            fail("请求 --aa fsr 但日志里没有「FsrUpscaler: context 就绪」行"
                  " ⟹ 装饰/门链路静默没落图（配置键名漂了 / 生效判据被改 / 构造日志文案改了）")
-    if not args.fsr_upscaler and fsr:
-        fail(f"默认档（fsr_upscaler 关）却构造了 FSR context：{fsr.group(0)}"
+    if not fsrRequested and fsr:
+        fail(f"默认档（aa 不是 fsr）却构造了 FSR context：{fsr.group(0)}"
              " ⟹ 门关不拢，「零构造零命令」的逐位不变红线失效")
     if fsr:
         # FSR 的两个尺寸必须是**实际**渲染网格与后缓冲网格：vendor 的内部共享图按
@@ -470,25 +468,26 @@ def main() -> int:
                  f"{render_grid[0]}x{render_grid[1]}")
         print(f"FSR: context 就绪 render={fsr.group(1)}x{fsr.group(2)} "
               f"upscale={fsr.group(3)}x{fsr.group(4)} ✓")
-    # taa.enabled 生效核对。同 velocity/FSR 的纪律：双向都要核。
-    # 反向这条尤其值钱：**出厂默认是 TAA 关**（`configs/scene.lua` `taa.enabled = false`），
+    # aa=taa 生效核对。同 velocity/FSR 的纪律：双向都要核。
+    # 反向这条尤其值钱：**出厂默认是 aa="off"**（`configs/runtime.lua`），
     # 而红线 A（`fdece9d0…`）就是那张图。若哪天门关不拢、taa pass 悄悄进了图，红线 A 的
     # 含义就变了 —— 而单看截图未必发现（TAA 开也可能只改时域不改这一帧）。
+    taaRequested = args.aa == "taa"
     taaRt = re.search(r"taa \(RGBA16F\)[^\n]*out slot (\d+)", log)
-    if args.taa and not taaRt:
-        fail("请求 --taa 但日志里没有「taa (RGBA16F): … out slot …」行"
-             " ⟹ TAA pass 静默没进图（scene.lua 键名漂了 / decorateTaaPass 的图形态判据"
+    if taaRequested and not taaRt:
+        fail("请求 --aa taa 但日志里没有「taa (RGBA16F): … out slot …」行"
+             " ⟹ TAA pass 静默没进图（runtime.lua 键名漂了 / decorateTaaPass 的图形态判据"
              "变了 / 启动日志文案改了）")
-    if not args.taa and taaRt:
-        fail(f"默认档（taa.enabled 关）却建了 taa RT：{taaRt.group(0)}"
+    if not taaRequested and taaRt:
+        fail(f"默认档（aa 不是 taa）却建了 taa RT：{taaRt.group(0)}"
              " ⟹ 门关不拢，红线 A（出厂默认图）的含义已失效")
     if taaRt:
         print(f"TAA  : {taaRt.group(0)} ✓"
               + (f"  clip_mode={args.clip}" if args.clip is not None else ""))
-    # fsr_temporal 生效核对。**必须读「生效」而不是「请求」**：`resolveFsrTemporal` 会在
-    # TAA 在图时把本键判关，而配置里仍写着 true —— 那正是"静默换臂"的引擎侧版本。
-    # 上面 main 里已经拒绝过 --taa + --fsr-temporal 的组合，所以这里判关只可能是别的原因
-    # （velocity 没进图 ⟹ fsrUsable 假 / 图形态不支持）。
+    # fsr 时域调参生效核对。**必须读「生效」而不是「请求」**：日志行报的是引擎实际接上的
+    # 档位，而配置里写的可能是另一回事（"静默换臂"的引擎侧版本就藏在这个差里）。
+    # 批 14.6 三态之后「TAA 在图 = true 且 temporal 请求开」已不可能同时成立（aa 一个槽位），
+    # 所以这里判关只可能是：velocity 没进图 ⟹ fsrUsable 假 / 图形态不支持 / 本来就没请求。
     fsrTemp = re.search(r"fsr temporal: (开|关).*?fsr_temporal = (\w+)，TAA 在图 = (\w+)", log)
     if args.fsr_temporal and not (fsrTemp and fsrTemp.group(1) == "开"):
         detail = (f"引擎判关（配置键 = {fsrTemp.group(2)}，TAA 在图 = {fsrTemp.group(3)}）"

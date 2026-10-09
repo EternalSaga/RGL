@@ -91,7 +91,7 @@ FlickerSeries captureFlickerSeries(const std::string& dir, const std::string& na
     g.name = name;
     ProfileOpts o;
     o.size = { kSize[0], kSize[1] };
-    o.taa = taaOn;
+    o.aa = taaOn ? Aa::Taa : Aa::Off;
     o.taaFeedback = kTaaFeedback;
     o.taaJitterScale = 1.0;
     o.taaInputKernel = kernel;  // 批 13.8 输入侧重建核（0 = 不写键 = 引擎默认 = 已发表口径）
@@ -100,13 +100,12 @@ FlickerSeries captureFlickerSeries(const std::string& dir, const std::string& na
     // ROI、帧数一律不动 —— 换了激励就是换口径，两条轴就没法比了。
     if (arm) {
         o.renderScale = arm->renderScale;
-        o.velocityField = arm->fsrUpscaler;  // FSR 的前置，一起开（否则引擎静默旁路 FSR）
-        o.fsrUpscaler = arm->fsrUpscaler;
+        o.aa = arm->aa;  // 批 14.6：aa 一个槽位同时表达「谁做抗锯齿」与「不做」
         o.fsrTemporal = arm->fsrTemporal;
         o.fsrJitter = arm->fsrJitter;
         // 工作点对齐鬼影轴（α 与 clip_mode），见 `FlickerArm` 的注释。
         o.taaFeedback = arm->feedback;
-        o.taaClipMode = o.taa ? arm->clipMode : 0.0;
+        o.taaClipMode = o.aa == Aa::Taa ? arm->clipMode : 0.0;
     }
     std::array<double, 3> pos = kEdgePosition;
     std::array<double, 3> tgt = kEdgeTarget;
@@ -544,18 +543,18 @@ int cmdTemporalFlicker(const std::string& target, double sweepPxPerFrame, int fr
     //    少了它，「FSR 闪烁比 TAA 低」会被一句「你只是把它糊没了」推翻 —— 这正是两轴规则
     //    的由来（总账已否决「L1 对模糊守恒」）。它在这里的角色 = 闪烁轴的**糊地板**。
     std::vector<FlickerArm> arms = {
-        { "flicker_off", "TAA 关", false, 1.0, false, false, false },
-        { "flicker_on", "TAA 开", true, 1.0, false, false, false },
+        { "flicker_off", "TAA 关", Aa::Off, 1.0, false, false },
+        { "flicker_on", "TAA 开", Aa::Taa, 1.0, false, false },
     };
     if (fsr) {
-        arms.push_back({ "bilin75", "双线性@0.75", false, 0.75, false, false, false });
-        arms.push_back({ "taaa75", "TAA开@0.75", true, 0.75, false, false, false });
-        arms.push_back({ "fsr75", "FSR时域@0.75", false, 0.75, true, true, true });
+        arms.push_back({ "bilin75", "双线性@0.75", Aa::Off, 0.75, false, false });
+        arms.push_back({ "taaa75", "TAA开@0.75", Aa::Taa, 0.75, false, false });
+        arms.push_back({ "fsr75", "FSR时域@0.75", Aa::Fsr, 0.75, true, true });
         // 🔴 这两条才是鬼影轴的**同工作点**对手：α = 0.01（交付）+ clip 11（今天）/ 13（修法）。
         //    上面 `TAA 开` 用的是本仪器历史的 α = 0.12，累积窗短 12 倍 ⟹ 拿它当 TAA 的代表
         //    会系统性**低估** TAA 的闪烁抑制、**高估** FSR 的优势。
-        arms.push_back({ "taaa01c11", "TAAα.01臂11", true, 1.0, false, false, false, 0.01, 11.0 });
-        arms.push_back({ "taaa01c13", "TAAα.01臂13", true, 1.0, false, false, false, 0.01, 13.0 });
+        arms.push_back({ "taaa01c11", "TAAα.01臂11", Aa::Taa, 1.0, false, false, 0.01, 11.0 });
+        arms.push_back({ "taaa01c13", "TAAα.01臂13", Aa::Taa, 1.0, false, false, 0.01, 13.0 });
     }
     std::vector<Group> groups;
     for (const FlickerArm& a : arms) {
@@ -565,7 +564,7 @@ int cmdTemporalFlicker(const std::string& target, double sweepPxPerFrame, int fr
         try {
             Group g;
             static_cast<FlickerSeries&>(g) = captureFlickerSeries(dir, a.name, tag, edgeTarget, cam,
-                a.taa, yawRad, frames, kernel, false, false, 1.0, 0.5, false, false, &a);
+                a.aa == Aa::Taa, yawRad, frames, kernel, false, false, 1.0, 0.5, false, false, &a);
             groups.push_back(std::move(g));
         }
         catch (const std::exception& e) {

@@ -55,7 +55,7 @@ export struct FsrFrameInput {
  * 图外 compute（与 izb_shadow / evssm_shadow 同族编舞，render_graph 无 compute kind）：
  * 它在命令流里占一段**自己录制**的 compute pass 序列，编译图看不见它。
  *
- * 生命周期 = Renderer 在 runtime.fsr_upscaler 开门时构造；
+ * 生命周期 = Renderer 在 runtime.aa 选 fsr（批 14.6 三态）时构造；
  * **门关 = 本对象根本不被构造**（逐位旁路红线，同 izb_shadow / evssm_shadow）。
  *
  * 布局策略（与另两个图外模块相反，值得注意）：本模块**自己不发任何 layout barrier**，

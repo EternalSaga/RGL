@@ -310,16 +310,18 @@ void validateEnvironmentContract(const SceneConfig& scene) {
  *   shader 逐位旁路）。运行参数（feedback / jitterScale / motionCompensation）搭
  *   SceneEnv 同路，imgui 参数页可调（同 aoStrength 先例）。
  *   `taaEnabled` 在这里只是**每帧抖动**开关，**图形态**由 compileGraphOrThrow 的
- *   decorateTaaPass 决定——两处读同一配置键，缺一就会出现「抖了但没滤波」或
- *   「有 pass 但没抖动」的半开状态。
+ *   decorateTaaPass 决定——两处读同一配置源，缺一就会出现「抖了但没滤波」或
+ *   「有 pass 但没抖动」的半开状态。批 14.6 起两处读的都是 `RuntimeConfig::aaWantsTaa()`
+ *   （原 scene.lua `taa.enabled` 键已删），本形参只是把它穿下来。
  * @param rg 场景 registry（ViewProjection 等基础 ctx 已 emplace）
  * @param scene configs/scene.lua 产物
+ * @param taaEnabled 调用点传 `configs.runtime.aaWantsTaa()`（批 14.6 三态推导）
  */
-void wireSceneEnvContexts(entt::registry& rg, const SceneConfig& scene) {
+void wireSceneEnvContexts(entt::registry& rg, const SceneConfig& scene, bool taaEnabled) {
 	auto& env = rg.ctx().emplace<SceneEnv>();
 	env.exposure = scene.exposure;
 	env.aoStrength = scene.aoStrength;
-	env.taaEnabled = scene.taaEnabled;
+	env.taaEnabled = taaEnabled;
 	env.taaFeedback = scene.taaFeedback;
 	env.taaJitterScale = scene.taaJitterScale;
 	env.taaMotionCompensation = scene.taaMotionCompensation;
@@ -574,7 +576,8 @@ int main() {
 		registry.ctx().emplace<ViewProjection>();
 		registry.ctx().emplace<FrameDrawList>();
 		registry.ctx().emplace<NextObjectSlot>();  // Phase 6 instancing：实例矩阵槽分配器
-		wireSceneEnvContexts(registry, configs.scene);  // SceneEnv（曝光/AO/TAA）+ TaaState
+		// SceneEnv（曝光/AO/TAA）+ TaaState；TAA 开关 = aa 三态推导（批 14.6）
+		wireSceneEnvContexts(registry, configs.scene, configs.runtime.aaWantsTaa());
 
 		AppContext vkInstance(pre.window.get(), pre.headless);
 		DeviceContext vkDevice(vkInstance);
@@ -605,8 +608,10 @@ int main() {
 		// 报错退出（Renderer 构造校验器兜底执行器可解析性）。
 		// Phase 7 路线选路（2026-09-08 env→配置）：顶层 variant = "forward"(默认)/
 		// "deferred"/"offscreen"——后两者为内建 exclusive 图变体（覆盖文件 passes）
+		// 批 14.6：TAA 图形态与 FSR 开关都是 aa 三态推导（原 scene.taaEnabled / fsr_upscaler
+		// 键已删）；velocityField 在 aa=fsr 时已被解析期隐含打开（单一来源在解析处）。
 		auto graphResult = compileGraphOrThrow(configPath("render_graph.lua").c_str(),
-			configs.scene.taaEnabled, configs.runtime.velocityField, configs.runtime.fsrUpscaler);
+			configs.runtime.aaWantsTaa(), configs.runtime.velocityField, configs.runtime.aaWantsFsr());
 		const bool deferredMode = graphResult.deferredMode;
 		// 图来源/规模观测（排"配置没生效"类问题：pass 数与 configs/render_graph.lua 对账）
 		if (auto* logger = RLLogger::getInstance())
@@ -656,7 +661,8 @@ int main() {
 		//（装配时序契约见 assembleBackEnd 接口注释；graph 在此 move 进 Renderer）
 		auto backEnd = assembleBackEnd(vkDevice, vkSwapchain, vkResources, sceneData, samplers, env, rtCache, assetTable, shaderRegistry,
 			std::move(graphResult), registry, configs.scene,
-			configs.runtime.fsrUpscaler, configs.runtime.fsrTemporal, configs.runtime.fsrJitter);
+			// 批 14.6：FSR 开关 = aa 三态推导（原 fsr_upscaler 键已删）；两枚调参留在 fsr 块
+			configs.runtime.aaWantsFsr(), configs.runtime.fsrTemporal, configs.runtime.fsrJitter);
 
 		// Phase 9.2：GPU 时间戳会话（声明序在 backEnd/vkDevice 后 = 析构序其先，
 		// query pool 不越过 device 生命周期——GPU 资源所有权规则；profiler=0 /

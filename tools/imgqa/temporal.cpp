@@ -108,7 +108,7 @@ RunResult runSequence(const std::string& dir, bool taa, double feedback, double 
     o.aoStrength = 0.0;   // strength=0 逐位旁路，不给差分添第二来源
     o.shadowPass = false;
     o.picking = true;     // object_id = 区域的唯一出处
-    o.taa = taa;
+    o.aa = taa ? Aa::Taa : Aa::Off;
     o.taaFeedback = feedback;
     o.taaJitterScale = jitterScale;
     o.taaBaseSpace = baseSpace;  // 批 13.2 基空间输出（false = 现行为 = 输出在抖动空间）
@@ -602,7 +602,7 @@ SwimRun runSwimSequence(const std::string& dir, bool taa, double feedback, doubl
 {
     ProfileOpts o;
     o.deliveryConfigDir = projectRoot() + "/configs";  // 交付配置原样（见 SwimRun 头注释）
-    o.taa = taa;
+    o.aa = taa ? Aa::Taa : Aa::Off;
     o.taaFeedback = feedback;
     o.taaJitterScale = jitterScale;
     o.taaBaseSpace = baseSpace;  // 批 13.2 基空间输出（false = 现行为）

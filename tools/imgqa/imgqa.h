@@ -116,10 +116,17 @@ struct FacePrediction {
 ///   ① lua 布尔必须小写——`{}` 直接格式化 C++ bool 若配错成 True 就是 nil 回落默认；
 ///   ② 键名对着**引擎解析器源码**校验（`shadowPass` 是 C++ 字段名，lua 键是
 ///      `shadow_pass`——拼错键 = 静默用默认值 = 在默认值上下判据，拒绝）。
+/// 抗锯齿三态（引擎 `runtime.lua` 的 `aa` 键，批 14.6）。imgqa 不链 rgl 库，同值重抄
+/// （先例 = kTaaFeedbackLabel）；语义与"为什么是三态不是两个布尔" → `rgl/runtime_config.cppm`
+/// 的 `AaMode`。三态**结构上排除了**「TAA 与 FSR 时域同开」——旧 `checkFsrOpts` 那条
+/// 运行期守卫随之删除（写不出非法组合比拒绝非法组合更强）。
+enum class Aa : std::uint8_t { Off = 0, Fsr, Taa };
+
 struct ProfileOpts {
     /// **交付配置模式**（批 13.1e）：非空 = 以该目录（仓库 `configs/`）里的 *.lua / *.json
-    /// 为基底**整份拷贝**，之后只覆写三处：`runtime.lua` 的 headless、`diagnostics.lua` 的
-    /// rpc、`scene.lua` 的 taa 块（enabled / feedback / jitter_scale）。其余一律不动。
+    /// 为基底**整份拷贝**，之后只覆写三处：`runtime.lua` 的 headless（+ aa/fsr/render_scale
+    /// 等升频臂键）、`diagnostics.lua` 的 rpc、`scene.lua` 的 taa 块（feedback / jitter_scale
+    /// / 各消融门；批 14.6 起**不含开关**——开关是 runtime 的 aa 三态）。其余一律不动。
     ///
     /// 为什么必须有这条：判据跑在**合成 profile** 上得出的绿不算绿。`temporal-identity`
     /// 就是这么假绿了一整轮——合成 profile + 默认机位上残差 0.016/255（绿），同一判据换到
@@ -160,7 +167,12 @@ struct ProfileOpts {
     bool evssmShadow = false;              // diagnostics.shadow_evssm（批 11.6d swim 判据）
     int izbDumpFrame = 0;                  // diagnostics.izb_dump_frame（>0：N 帧起每 30 帧覆盖写 izb_mask.ppm）
     std::string variant;                   // "" = 模板默认（forward）；"deferred" 等 = 拷贝后重写 variant 行
-    bool taa = false;                      // scene.lua `taa.enabled`（**图形态**开关，批 12.6）
+    /// 抗锯齿选路（批 14.6：引擎 `runtime.lua` 的 `aa` 三态键）。Off = **不写键** = 出厂态。
+    /// 原 `taa` 布尔（scene.lua `taa.enabled`）与 `fsrUpscaler` 布尔（`fsr_upscaler`）都收进
+    /// 这一个槽位——「谁做抗锯齿」不存在同时命中两条的写法，臂表因此**写不出**非法组合
+    /// （旧 checkFsrOpts 的「temporal 与 taa 互斥」守卫随双布尔一起删除）。
+    /// TAA 的调参仍走 scene.lua `taa` 块（本结构的 taa* 系列字段），FSR 的走 `fsr` 块。
+    Aa aa = Aa::Off;
     double taaFeedback = 0.12;             // scene.lua `taa.feedback`（= 本帧权重；**1** = 只抖不滤 = 消融组；0 = 「只要历史」的退化环，勿用）
     double taaJitterScale = 1.0;           // scene.lua `taa.jitter_scale`（0 = 只留时域累积，去抖动）
     /// 批 13.2：scene.lua `taa.base_space`（true = 最终消费处按内容偏移重采样，把输出从
@@ -191,26 +203,25 @@ struct ProfileOpts {
     /// kSceneDataTaaClipControlOffset。消费方 = `imgqa temporal-residual --clip-abl`。
     double taaClipMode = 0.0;
     double taaClipSoft = 1.0;
-    // ── Phase 14 批 14.5：升频 / FSR 臂（量「闪烁↔鬼影」跷跷板用）──────────────────
-    // 五条一律**默认不写键**（同 taa 诊断键纪律：写出的键越少，与交付配置的分歧面越小）。
+    // ── Phase 14 批 14.5/14.6：升频 / aa 臂（量「闪烁↔鬼影」跷跷板用）──────────────────
     // 键的语义与合法区间以 `configs/runtime.lua` 为唯一真相源，此处不复述。
+    // 批 14.6 换轨：`fsr_upscaler` 布尔 → `aa` 三态（见上）；`fsr_temporal` / `fsr_jitter`
+    // 两个扁平键 → `fsr` 嵌套块的两枚调参（**aa=Fsr 时总是显式写两枚**——出厂默认是
+    // true/true = 设计点，不写键 = 拿出厂值 = 想量纯空间却静默跑成时域+抖动，静默换臂）。
     /// runtime.lua `render_scale`。1.0 = **不写键** = 交付态（渲染网格 = 后缓冲逐像素）。
     /// ⚠ 创建期量（RT/深度按它分配）⟹ 只能靠重启换档，**不能** `/param` 热改。
     double renderScale = 1.0;
     /// runtime.lua `velocity_field`（逐像素速度场）。false = 不写键。
-    /// 🔴 它同时是 `fsr_upscaler` 的**前置**：velocity 没进图时 FSR 自动失效（引擎取实际
-    /// 图形态而非本键）。所以「开 FSR 却忘了 velocity」不会报错，只会**静默量到双线性**——
-    /// 故 `makeProfile` 对此直接抛，见其守卫。
+    /// 批 14.6：`aa == Fsr` 时**引擎解析期隐含打开**（旧「开 FSR 却忘开 velocity ⟹ 静默
+    /// 量到双线性」的失效形态由引擎侧消除，本工具不再替引擎补依赖，守卫随之删除）。
     bool velocityField = false;
-    /// runtime.lua `fsr_upscaler`（FSR 3.1.4 upscaler 总开关）。false = 不写键。
-    bool fsrUpscaler = false;
-    /// runtime.lua `fsr_temporal`（让 vendor 累积历史）。false = 不写键 = 纯空间 EASU+RCAS。
-    /// 🔴 **与 `taa` 互斥**：两个时域滤波器串联 = 双重模糊，引擎会 warn 并强制本键失效
-    /// （`resolveFsrTemporal`）。对判据而言那是**静默换臂**——故 `makeProfile` 直接抛。
+    /// runtime.lua `fsr` 块 `temporal`（让 vendor 累积历史）。false = 纯空间 EASU+RCAS。
+    /// 仅 `aa == Fsr` 时被消费（其余态 = 空开关，`checkFsrOpts` 抛）。与 TAA 的互斥
+    /// **不再需要守卫**：aa 一个槽位装不下两个时域滤波器。
     bool fsrTemporal = false;
-    /// runtime.lua `fsr_jitter`（FSR 自己的 Halton 抖动，vendor 相位序列）。false = 不写键。
+    /// runtime.lua `fsr` 块 `jitter`（FSR 自己的 Halton 抖动，vendor 相位序列）。
     /// ✅ **与 `taaJitterScale` 是两个独立旋钮**——这是「鬼影仪器 jitter 恒 0」与「FSR 必须
-    /// 带抖动输入」表面冲突的解法：FSR 臂的 `taa` 恒 false（互斥硬门），故 `taa.jitter_scale`
+    /// 带抖动输入」表面冲突的解法：FSR 臂的 aa 是 Fsr（结构上非 Taa）⟹ `taa.jitter_scale`
     /// 根本不被消费，FSR 的抖动走本键自足。仪器的三条 jitter 红利（B∞ 是固定点 / 零锚恰 0 /
     /// 分母无相位噪声）因此**一条都不必牺牲**。
     bool fsrJitter = false;

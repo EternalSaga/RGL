@@ -495,7 +495,7 @@ bool computeFsrUsable(DeviceContext& device, const CompiledRenderGraph& graph,
 	const bool usable = fsrEnabled && velocityDecorated && device.shader16Supported() && inputsReady;
 	if (fsrEnabled && !usable) {
 		if (auto* lg = RLLogger::getInstance())
-			lg->warn("fsr_upscaler 开门但接不起来（velocityDecorated={} shader16={} 输入齐备={})"
+			lg->warn("aa=\"fsr\" 开门但接不起来（velocityDecorated={} shader16={} 输入齐备={})"
 				" ⟹ 不接 FSR，tonemap 色输入保持 {}",
 				velocityDecorated, device.shader16Supported(), inputsReady,
 				taaDecorated ? "taa_out" : "scene_hdr");
@@ -511,18 +511,25 @@ bool computeFsrUsable(DeviceContext& device, const CompiledRenderGraph& graph,
  * = 双重模糊，**就算抖动簿记全修对也一样**。让它可配 = 等着被人配出"画面糊了"再当
  * 调参问题去调（本 phase 已在这上面烧掉一整批）。
  *
- * 判据取 `taaDecorated`（**实际图形态**）而非配置键 `scene.taaEnabled`：后者为真但装饰
+ * 🔴 **批 14.6 之后本函数的拦截路径已结构上不可达**：`fsrUsable` 蕴含 `aa == fsr`、
+ * `taaDecorated` 蕴含 `aa == taa`，而 `aa` 是一个槽位只有一个值的 enum——「两个都开」
+ * 这种配置**根本写不出来**（这正是三态取代两个布尔的目的：旧失效形态 = 引擎静默把
+ * 配置里的 true 判关，申报值与生效值分家）。留着它是**防御性断言**而不是机制：若哪天
+ * 有人把接线改回两个独立来源，本函数会当场 warn 出声，而不是让串联悄悄上线。
+ *
+ * 判据取 `taaDecorated`（**实际图形态**）而非配置推导值：配置为真但装饰
  * 失败时色输入并不是 taa_out，拦它属于误拦（先例 = AO 施加点、`fsrUsable` 本身）。
  *
  * @param fsrUsable    FSR 真的接进了图（含 velocity 装饰成功）
- * @param fsrTemporal  配置键 `runtime.fsr_temporal`
+ * @param fsrTemporal  runtime.lua `fsr` 块的 temporal 调参
  * @param taaDecorated TAA pass 真的在编译图里
  * @return 实际生效的时域开关（被拦时 = false，并出 warn）
  */
 bool resolveFsrTemporal(bool fsrUsable, bool fsrTemporal, bool taaDecorated) {
 	// **生效锚点**（`tools/smoke.py --fsr-temporal` 的双向核对读这一行）。为什么必须有：本函数
-	// 会在 TAA 在图时把配置键**判关**，而 `runtime.lua` 里写的仍然是 `true` ⟹ 只看配置会以为
+	// 曾在 TAA 在图时把调参**判关**，而配置里写的仍然是 `true` ⟹ 只看配置会以为
 	// 开着。与 `fsr_jitter` 那条同族：申报值与生效值必须现场可读。
+	// ⚠ 文本格式被 smoke.py 的正则钉住（批 14.6 只改注释不改文案）。
 	// 为什么写在**本函数**而不是调用方：`assembleBackEnd` 的认知复杂度已经压线（实测加两行
 	// 即超 15 被 source_checks 点名），而"生效状态"本来就是本函数的职责所在。
 	const auto logState = [&](bool effective) {
@@ -555,9 +562,9 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 	const bool taaDecorated = graphResult.taaDecorated;
 	const bool velocityDecorated = graphResult.velocityDecorated;
 	const bool aoApplyDecorated = graphResult.aoApplyDecorated;
-	// 批 13.6：AO 施加点标志 = **实际图形态**（`decorateTaaPass` 结果），**不是**配置键
-	// `taa.enabled`。true ⟹ AO 已在 tonemap **之前**施加过，tonemap 跳过；false ⟹ 没有更早的
-	// 施加点（含 offscreen 变体：配置开了 TAA 但装饰失败），AO 留在 tonemap 施加。
+	// 批 13.6：AO 施加点标志 = **实际图形态**（`decorateTaaPass` 结果），**不是**配置推导值
+	// （`aaWantsTaa()`）。true ⟹ AO 已在 tonemap **之前**施加过，tonemap 跳过；false ⟹ 没有更早的
+	// 施加点（含 offscreen 变体：aa 要了 TAA 但装饰失败），AO 留在 tonemap 施加。
 	// 取错源 = AO 双施或零施。消费者 = scene data @722224.z → fillTaaData / tonemap.frag。
 	// 批 14.5 第三批：来源从「只有 taa」变成**两个**——`taaDecorated`（AO 乘在 taa.frag 里，
 	// 批 13.6）或 `aoApplyDecorated`（AO 乘在专用 ao_apply pass 里，与"谁做时域"解耦）。

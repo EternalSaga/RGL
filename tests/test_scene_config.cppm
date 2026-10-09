@@ -136,20 +136,20 @@ TEST_CASE("scene_config：显式 exposure = 2.5 被解析（回落断言的正�
 	CHECK(r->entities.size() == 1);
 }
 
-TEST_CASE("scene_config：taa 段解析（批 12.6；缺段默认关 + 显式键逐项命中）") {
-	// 缺段 = 全默认（门关画像）。变异红线：taaEnabled 默认被翻成 true → 首条断言红；
-	// enabled 是启动期图形态开关，默认漂移 = 基线不再是基线。
+TEST_CASE("scene_config：taa 段解析（批 12.6；缺段回落调参默认 + 显式键逐项命中）") {
+	// 缺段 = 全默认（调参画像）。批 14.6：`enabled` 已删（抗锯齿选路搬进 runtime.lua 的
+	// `aa` 三态键，见本文件 runtime_config 段）——本用例从此只管**调参**。
+	// 变异红线：taaFeedback 默认被翻成 0.12 → 首条断言红；默认值 = 交付画像的一部分，
+	// 漂移不会被任何判据抓到（判据都在显式写键的 profile 上跑），只有这条覆盖「不写键」。
 	{
 		TempLua f("sc_taa_absent", "return {}\n");
 		auto r = loadSceneConfig(f.pathStr());
 		REQUIRE(r.has_value());
-		CHECK(r->taaEnabled == false);
 		expectNear(r->taaFeedback, 0.01, 0.0, 1e-6);  // 本帧权重（≈100 帧等效累积窗）
 		expectNear(r->taaJitterScale, 1.0, 0.0, 1e-6);
 		CHECK(r->taaMotionCompensation == true);
 		// 批 13.1f：base_space 默认**开**（游动 0.643 → 0.060px 实测后拍板）。变异红线：
-		// 默认被翻成 false → 本条红（默认值 = 交付画像的一部分，漂移不会被任何判据抓到，
-		// 因为所有判据都在显式写键的 profile 上跑，只有这条断言覆盖「不写键」这条路）。
+		// 默认被翻成 false → 本条红。
 		CHECK(r->taaBaseSpace == true);
 	}
 	// 显式命中（snake_case 键名 = 契约）。变异红线：任一 key 打错（如 jitterScale）→
@@ -158,11 +158,10 @@ TEST_CASE("scene_config：taa 段解析（批 12.6；缺段默认关 + 显式键
 	//   「键名拼错时静默回落默认」——键名打错与不写键在只测 true 的写法下**不可区分**。
 	{
 		TempLua f("sc_taa_on",
-			"return { taa = { enabled = true, feedback = 0.3, jitter_scale = 0.5, "
+			"return { taa = { feedback = 0.3, jitter_scale = 0.5, "
 			"motion_compensation = false, base_space = false } }\n");
 		auto r = loadSceneConfig(f.pathStr());
 		REQUIRE(r.has_value());
-		CHECK(r->taaEnabled == true);
 		expectNear(r->taaFeedback, 0.3, 1e-4, 0.0);
 		expectNear(r->taaJitterScale, 0.5, 0.0, 1e-6);
 		CHECK(r->taaMotionCompensation == false);
@@ -686,6 +685,110 @@ return { headless = true, headless_size = { 1920, 1080 }, win_size = { 640, 480 
 		auto r = loadRuntimeConfig(f.pathStr());
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().message.find("present_mode") != std::string::npos);
+	}
+}
+
+TEST_CASE("runtime_config：aa 三态（批 14.6；缺键 = off、三值命中、未知值 fail-fast）") {
+	// 出厂画像：aa = off 且两个谓词都关。变异红线：默认被翻成 taa → 本条红（默认漂移 =
+	// 出厂就开一条时域滤波，而所有红线基线都是在 off 上拍的，没有任何判据会因此变红）。
+	{
+		TempLua f("rt_aa_default", "return {}\n");
+		auto r = loadRuntimeConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->aa == AaMode::off);
+		CHECK(r->aaWantsTaa() == false);
+		CHECK(r->aaWantsFsr() == false);
+		CHECK(r->velocityField == false);  // 关态绝不凭空冒出 velocity pass
+	}
+	// 三值逐个命中。变异红线：off/taa 分支写反（taa 落进 off 支）→ 对应 CHECK 红；
+	// 谓词与枚举比错成员（aaWantsFsr 比成 AaMode::taa）→ 同一条里的两个 CHECK 互相矛盾 ⟹ 红。
+	{
+		TempLua f("rt_aa_off", R"lua(return { aa = "off" })lua");
+		auto r = loadRuntimeConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->aa == AaMode::off);
+		CHECK(r->aaWantsTaa() == false);
+		CHECK(r->aaWantsFsr() == false);
+	}
+	{  // taa 态：只推导 TAA，**不**碰 velocity（原 scene.lua taa.enabled 的消费者改走 aa）
+		TempLua f("rt_aa_taa", R"lua(return { aa = "taa" })lua");
+		auto r = loadRuntimeConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->aa == AaMode::taa);
+		CHECK(r->aaWantsTaa() == true);
+		CHECK(r->aaWantsFsr() == false);
+		CHECK(r->velocityField == false);
+	}
+	// fsr 态**隐含** velocity_field（FSR 的 motionVectors 输入就是那张图）。
+	// 变异红线：删掉 applyAaKey 里 `cfg.velocityField = true` 这一行 → 本条红，而失效形态是
+	// 「FSR 静默退化成双线性放大」（vendor 拿不到速度场就每帧 reset），判据不会替引擎喊。
+	{
+		TempLua f("rt_aa_fsr", R"lua(return { aa = "fsr" })lua");
+		auto r = loadRuntimeConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->aa == AaMode::fsr);
+		CHECK(r->aaWantsFsr() == true);
+		CHECK(r->aaWantsTaa() == false);
+		CHECK(r->velocityField == true);  // 隐含打开
+	}
+	// 隐含关系是**单向且强制**的：显式 velocity_field = false 也压不过 aa = fsr（解析顺序 =
+	// 先读 velocity_field 再 applyAaKey，见 runtime_config_impl）。变异红线：把两行解析调个
+	// 顺序（applyAaKey 先跑）→ 本条红，且红的是「谁赢」这条契约而不是某个默认值。
+	{
+		TempLua f("rt_aa_fsr_vel_off", R"lua(return { aa = "fsr", velocity_field = false })lua");
+		auto r = loadRuntimeConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->velocityField == true);
+	}
+	// 反向独立性：velocity_field 有自己的非 FSR 消费者（批 14.4 逐像素重投影线），所以
+	// off/taa 态下它必须**照配置走**、不被 aa 清掉。变异红线：在 applyAaKey 的 off/taa 支
+	// 里补一句 `cfg.velocityField = false`「归一化」→ 本条红（那会把重投影线的开关吃掉）。
+	{
+		TempLua f("rt_aa_off_vel_on", R"lua(return { aa = "off", velocity_field = true })lua");
+		auto r = loadRuntimeConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->aaWantsFsr() == false);
+		CHECK(r->velocityField == true);
+	}
+	{  // 未知值 = fail-fast（present_mode 同纪律：静默回落 = 你以为开着抗锯齿在量图）
+		TempLua f("rt_aa_bad", R"lua(return { aa = "msaa" })lua");
+		auto r = loadRuntimeConfig(f.pathStr());
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().message.find("aa") != std::string::npos);
+	}
+}
+
+TEST_CASE("runtime_config：fsr 嵌套块（缺块 = true/true 设计点；显式命中；无扁平键双读）") {
+	// 缺块默认 = true/true = FSR 设计点。变异红线：默认翻成 false/false → 本条红（出厂态
+	// 静默从「vendor 累积历史 + 抖动」换成「纯空间放大」= 换了一档，而配置里一个字都没改）。
+	{
+		TempLua f("rt_fsr_default", "return {}\n");
+		auto r = loadRuntimeConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->fsrTemporal == true);
+		CHECK(r->fsrJitter == true);
+	}
+	{  // 块内键名命中（temporal / jitter）。变异红线：键名打错 → 回落默认 → 本条红。
+		TempLua f("rt_fsr_off", R"lua(return { fsr = { temporal = false, jitter = false } })lua");
+		auto r = loadRuntimeConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->fsrTemporal == false);
+		CHECK(r->fsrJitter == false);
+	}
+	{  // 只写一枚 = 另一枚保持默认（块内逐键可选，不是整块覆盖）
+		TempLua f("rt_fsr_half", R"lua(return { fsr = { temporal = false } })lua");
+		auto r = loadRuntimeConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->fsrTemporal == false);
+		CHECK(r->fsrJitter == true);
+	}
+	{  // **没有**扁平键的兼容双读（两个真相源 = 本项目反复登记的反模式）：顶层写
+	  // fsr_temporal 必须**什么都不发生**，否则旧键与新块并存 = 静默用哪个说不清。
+		TempLua f("rt_fsr_flat", R"lua(return { fsr_temporal = false, fsr_jitter = false })lua");
+		auto r = loadRuntimeConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->fsrTemporal == true);
+		CHECK(r->fsrJitter == true);
 	}
 }
 

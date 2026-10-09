@@ -199,14 +199,16 @@ bool hasBacktickedName(const char* s)
 void testJudgmentFamilies(Checker& c)
 {
     const auto& all = registeredJudgments();
-    // 51 是**当前**条数，写死它才有牙：族拆分/合并时漏接一个子表，这里立刻红。
+    // 54 是**当前**条数，写死它才有牙：族拆分/合并时漏接一个子表，这里立刻红。
     // 43 → 46 = 批 13.14a `temporal-tail --motion camera` 新增三条（smear-alpha-monotone /
     // static-collapse / gate-breakpoint）；46 → 47 = 同批把 **φ 符号标定**从诊断升格成判据
     // （`temporal-tail-phi-sign`）——理由见其契约：自搭金标准与实现共享朝后的相机基，
     // 单测对拍 2.3e-13px 全绿仍漏掉 yaw 反号，那一半只有实机数据守得住。
     // 47 → 51 = 批 13.15 `temporal-tail --motion step`（债-63 真鬼影量具）四条：零锚 /
     // 历史存活（防 `cameraJumps` 跳切假绿）/ 闭式锚 / 主判据。
-    c.chk("判据总数 == 52（族拆分最容易掉条目）", all.size() == 52, std::to_string(all.size()));
+    // 51 → 52 = 批 13.15b 的 C13 臂判决「修法验收」。
+    // 52 → 54 = 批 14.5 FSR 臂两条守卫（`temporal-tail-step-fsr-floor` / `-basespace`）。
+    c.chk("判据总数 == 54（族拆分最容易掉条目）", all.size() == 54, std::to_string(all.size()));
     size_t n[4] = {0, 0, 0, 0};
     for (const auto& j : all) {
         switch (j.family) {

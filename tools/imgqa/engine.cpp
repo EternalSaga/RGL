@@ -251,8 +251,11 @@ void warnIfDropsDeliveryClipMode(const std::string& scene, std::string::size_typ
 
 void rewriteTaaBlock(std::string& scene, const ProfileOpts& o)
 {
+    // 批 14.6：本块**不再写 `enabled`**（键已删）——「TAA 在不在图里」是 runtime.lua 的
+    // aa 三态（由 `fsrKeyValues` 写），本块只剩调参。块本身仍整段重写：feedback /
+    // jitter_scale / base_space 三枚是判据的工作点，缺省值与交付配置不同就必须覆写。
     std::ostringstream blk;
-    blk << "    taa = {\n        enabled = " << lb(o.taa) << ",\n        feedback = "
+    blk << "    taa = {\n        feedback = "
         << std::setprecision(6) << o.taaFeedback << ",\n        jitter_scale = "
         << o.taaJitterScale << ",\n        base_space = " << lb(o.taaBaseSpace);
     // 消融/诊断开关：默认态 = 不写键（键越少漂移面越小）。
@@ -399,14 +402,20 @@ void applyCameraLua(const std::string& outDir, const ProfileOpts& o)
 }
 
 /**
- * 升频 / FSR 的键表（批 14.5）：只返回**非默认**的键，默认一律不写（写出的键越少，
- * 与交付配置的分歧面越小，同 taa 诊断键纪律）。
+ * 升频 / aa 的键表（批 14.5 引入，批 14.6 换轨三态）：只返回**非默认**的键，默认一律不写
+ * （写出的键越少，与交付配置的分歧面越小，同 taa 诊断键纪律）。
  *
  * 🔴 **两条 profile 路径都必须经过它**，这是本函数存在的唯一理由：交付路径的键已存在于
  * `configs/runtime.lua`（走 `replaceValue`），而合成路径的 `runtime.lua` 是**从零写的**
  * （那些键根本不存在，`replaceValue` 会抛"键不存在"）。只改交付那条的后果很具体：
  * `temporal-flicker --target edge`（合成 aa_target ⟹ **闭式唯一适用**的靶）上三条 FSR 臂
  * 会被静默当原生分辨率跑，却标着 "@0.75" 报进表里 —— 静默换臂。
+ *
+ * ⚠ `aa == Fsr` 时两枚子调参**总是显式写**（哪怕值 = 出厂默认）：出厂 `fsr` 块是
+ * true/true = 设计点，"不写键 = 拿出厂值"会让想量纯空间的臂静默跑成时域+抖动。
+ * "默认不写键"的纪律只适用于**引擎默认 = 本工具默认**的键，这里两者相反，写才是诚实。
+ * 合成路径的嵌套形状（`temporal`/`jitter` 归进 `fsr = { … }`）由 makeProfile 负责，
+ * 本函数只给扁平的 (键, 值) 对——交付路径的块内键恰好也是逐行 replaceValue 的形态。
  */
 std::vector<std::pair<std::string, std::string>> fsrKeyValues(const ProfileOpts& o)
 {
@@ -418,34 +427,33 @@ std::vector<std::pair<std::string, std::string>> fsrKeyValues(const ProfileOpts&
     }
     if (o.velocityField)
         kv.emplace_back("velocity_field", "true");
-    if (o.fsrUpscaler)
-        kv.emplace_back("fsr_upscaler", "true");
-    if (o.fsrTemporal)
-        kv.emplace_back("fsr_temporal", "true");
-    if (o.fsrJitter)
-        kv.emplace_back("fsr_jitter", "true");
+    if (o.aa == Aa::Fsr) {
+        kv.emplace_back("aa", "\"fsr\"");
+        kv.emplace_back("temporal", lb(o.fsrTemporal));
+        kv.emplace_back("jitter", lb(o.fsrJitter));
+    } else if (o.aa == Aa::Taa) {
+        kv.emplace_back("aa", "\"taa\"");
+    }
     return kv;
 }
 
 /**
- * 升频 / FSR 的三条守卫。共同理由：这三种错法**都不报错**，只是把臂悄悄换成另一条臂，
- * 然后读数被当成 FSR 读。判据工具最坏的失效不是崩，是**静默换臂**（同 `requireJsonObject`
- * 的教训：宁可在这里点名真因，也不要让下游抛一条指向错的一层的消息）。
+ * 升频 / aa 的守卫（批 14.6 三态化后从三条收成一条）。共同理由：这些错法**都不报错**，
+ * 只是把臂悄悄换成另一条臂，然后读数被当成 FSR 读。判据工具最坏的失效不是崩，是
+ * **静默换臂**（同 `requireJsonObject` 的教训：宁可在这里点名真因，也不要让下游抛一条
+ * 指向错的一层的消息）。
+ *
+ * 删掉的两条旧守卫及理由：
+ *  · 「fsrUpscaler 开了但 velocityField 没开」——aa=fsr 时 velocity 由**引擎解析期隐含
+ *    打开**（单一来源在 applyAaKey），失效形态从根上消除；
+ *  · 「fsrTemporal 与 taa 互斥」——aa 是一个槽位，非法组合**写不出来**（比运行期拒绝更强）。
  */
 void checkFsrOpts(const ProfileOpts& o)
 {
-    if (o.fsrUpscaler && !o.velocityField)
+    if ((o.fsrTemporal || o.fsrJitter) && o.aa != Aa::Fsr)
         throw std::runtime_error(
-            "fsrUpscaler 开了但 velocityField 没开：velocity 没进图时引擎**自动让 FSR 失效**"
-            "（取实际图形态而非配置键）⟹ 这条臂会静默量成双线性。两者必须一起开。");
-    if (o.fsrTemporal && !o.fsrUpscaler)
-        throw std::runtime_error(
-            "fsrTemporal 只在 fsrUpscaler 为真时有意义（引擎语义），只开前者 = 空开关。");
-    if (o.fsrTemporal && o.taa)
-        throw std::runtime_error(
-            "fsrTemporal 与 taa 互斥（两个时域滤波器串联 = 双重模糊）：引擎会 warn 并"
-            "**强制 fsr_temporal 失效** ⟹ 这条臂会静默量成「TAA + 纯空间 FSR」。"
-            "要 A/B 就分成两条臂。");
+            "fsrTemporal/fsrJitter 只在 aa == Fsr 时有意义（引擎只在 aa=fsr 时才接 FSR），"
+            "其余态下开子选项 = 空开关（配置里写了、什么都没发生）。");
 }
 
 std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
@@ -559,12 +567,22 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
         fs::copy_file(profileTemplate() + "/" + j, outDir + "/" + j,
             fs::copy_options::overwrite_existing);
 
-    // 升频 / FSR 键（批 14.5）。合成路径的 runtime.lua 是**从零写的**、这些键根本不存在
-    // ⟹ 必须在这里追加。只改交付那条路径的后果：`--target edge`（闭式唯一适用的靶）上的
-    // FSR 臂静默跑成原生分辨率，却标着 "@0.75" 报进表里。
+    // 升频 / aa 键（批 14.5 引入，批 14.6 三态化）。合成路径的 runtime.lua 是**从零写的**、
+    // 这些键根本不存在 ⟹ 必须在这里追加。只改交付那条路径的后果：`--target edge`（闭式唯一
+    // 适用的靶）上的 FSR 臂静默跑成原生分辨率，却标着 "@0.75" 报进表里。
+    // 键源与交付路径**同一个 fsrKeyValues**；这里只多做一步形状适配：`temporal`/`jitter`
+    // 归进嵌套的 `fsr = { … }` 表（引擎只从块内读它们，扁平写出 = 静默读默认）。
     std::string fsrLua;
-    for (const auto& fk : fsrKeyValues(o))
+    std::string fsrBlock;
+    for (const auto& fk : fsrKeyValues(o)) {
+        if (fk.first == "temporal" || fk.first == "jitter") {
+            fsrBlock += (fsrBlock.empty() ? "  fsr = { " : ", ") + fk.first + " = " + fk.second;
+            continue;
+        }
         fsrLua += "  " + fk.first + " = " + fk.second + ",\n";
+    }
+    if (!fsrBlock.empty())
+        fsrLua += fsrBlock + " },\n";
     writeFile(outDir + "/runtime.lua",
         "return { headless = true, headless_size = { " + std::to_string(o.size[0]) + ", "
             + std::to_string(o.size[1]) + " },\n"
@@ -596,8 +614,8 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
     std::set<std::string> sceneKeys
         = {"entities", "styles", "material_styles", "deferred_styles", "environment", "light",
            "spin", "cube", "exposure", "ao"};
-    if (o.taa)
-        sceneKeys.insert("taa");  // 只在真要开的时候写这段（缺段 = 全默认即「关」）
+    if (o.aa == Aa::Taa)
+        sceneKeys.insert("taa");  // 只在 TAA 真在图时写这段（批 14.6：开关在 runtime 的 aa，本块只剩调参）
     assertKeys("scene.lua", sceneKeys, knownRootKeys("rgl/scene_config_impl.cppm"));
     const auto j3 = [](std::array<double, 3> a) {
         return std::to_string(a[0]) + ", " + std::to_string(a[1]) + ", " + std::to_string(a[2]);
@@ -607,13 +625,13 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
     const std::string entities = o.entitiesLua.empty()
         ? "    entities = { { type = \"model\", file = \"models/" + o.glb + "\" } },\n"
         : "    entities = { " + o.entitiesLua + " },\n";
-    // TAA 段（批 12.6）：enabled + feedback + jitter_scale + base_space（批 13.2），
+    // TAA 调参段（批 12.6 引入；批 14.6：**不再写 enabled**——开关在 runtime 的 aa 三态）：
     // 其余走引擎默认（运动补偿开）——写出来的键越少，漂移面越小。两个消融开关各有用途：
     // jitter_scale=0 = 只留时域累积；feedback=1 = 只抖不滤（输出 = 本帧，temporal 的阳性
     // 锚点组。别写 0——0 是「只要裁剪后的历史、完全丢本帧」的退化反馈环，测出来的不是
     // 闪烁本体）。
-    const std::string taa = o.taa
-        ? "    taa = { enabled = true, feedback = " + std::to_string(o.taaFeedback)
+    const std::string taa = o.aa == Aa::Taa
+        ? "    taa = { feedback = " + std::to_string(o.taaFeedback)
               + ", jitter_scale = " + std::to_string(o.taaJitterScale)
               + ", base_space = " + lb(o.taaBaseSpace)
               // 输入侧重建核（批 13.8）：0 = 双线性 = 引擎默认 = 不写键

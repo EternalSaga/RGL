@@ -59,7 +59,7 @@ struct FlickerSeries {
 };
 
 /**
- * 一条闪烁臂（批 14.5 加 FSR 用）。
+ * 一条闪烁臂（批 14.5 加 FSR 用，批 14.6 换轨 aa 三态）。
  *
  * 既有两条（TAA 关 / TAA 开）的 tag 与目录后缀**逐字不变** ⟹ 已发表读数可复现。
  * `renderScale` / `fsr*` 只改**渲染分辨率与升频器**；运动激励、ROI、帧数一律不动——
@@ -68,11 +68,12 @@ struct FlickerSeries {
 struct FlickerArm {
     const char* tag;       ///< 采集目录后缀（`imgqa_flicker_<tag>`）
     const char* name;      ///< 表内显示名
-    bool taa = false;
+    /// 抗锯齿选路（批 14.6：原 `bool taa` + `bool fsrUpscaler` 两槽合成这一个）。臂表因此
+    /// **写不出**「TAA 与 FSR 时域同开」；FSR 的 velocity 前置由引擎隐含，臂无需再声明。
+    Aa aa = Aa::Off;
     double renderScale = 1.0;  ///< 1.0 = 不写键 = 原生
-    bool fsrUpscaler = false;  ///< 自动连带 `velocity_field`（FSR 的前置）
-    bool fsrTemporal = false;
-    bool fsrJitter = false;
+    bool fsrTemporal = false;  ///< 仅 aa == Fsr 时被消费
+    bool fsrJitter = false;    ///< 仅 aa == Fsr 时被消费
     /// 🔴 **工作点必须与鬼影轴对齐**，否则两条轴量的是两个配置（首轮就踩在这里）：
     /// 本仪器历史上恒用 `kTaaFeedback = 0.12`，而鬼影臂与交付配置都是 `α = 0.01`
     /// ——累积窗差 12 倍，闪烁自然差一截，不写这两个字段就会把 TAA 的闪烁**低估**、

@@ -90,10 +90,11 @@ export struct SceneConfig {
 	// 0 = 逐位旁路。半径/采样数等形状参数在 ao.frag.slang 内为常量，不走配置）
 	float aoStrength = 0.0f;
 	// ── 批 12.6 TAA（时域抗锯齿，scene.lua `taa` 段）──
-	// enabled 是**图形态**开关（decorateTaaPass 是否调用，启动期读一次）：默认关 =
-	// 图里没有 taa/taa_commit pass ⇒ 与基线逐位不变（比「pass 常驻 + shader 旁路」更强，
-	// 因为连 jitter 注入与一次全屏 blit 都不发生）。其余各项是每帧运行参数。
-	bool taaEnabled = false;
+	// 批 14.6：**本结构不再持有 TAA 开关**——「TAA 在不在图里」= **图形态**问题，归
+	// runtime.lua 的 `aa` 三态（`RuntimeConfig::aaWantsTaa()`，原 `taa.enabled` 键已删）。
+	// 留在 scene 侧的只有**调参**（下面各项是每帧运行参数）。开关搬走的理由不是洁癖：
+	// 它与 `fsr_temporal` 分家两个布尔时，失效形态 = 两个都开、引擎静默关掉一个而配置
+	// 里还写着 true；收进一个槽位后该写法不存在。
 	// 本帧权重（taa.frag: lerp(clipped, cur, x)）⟹ **调小 = 更信历史**，等效累积窗 ≈1/α。
 	// 0.01 是 2026-10-05 扫档拍板的交付档（原 static boost 的静止地板，boost 已删 ⟹ 它
 	// 就是唯一档位）：aa_target 交付态 base_space=true 下 meanSwing / 梯度比 =

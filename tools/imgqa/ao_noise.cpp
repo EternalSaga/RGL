@@ -364,7 +364,7 @@ int cmdAoNoise(const std::string& glb, const std::string& camera, const std::str
         o.skybox = false;
         o.exposure = 1.0;
         o.picking = true;
-        o.taa = taa;
+        o.aa = taa ? Aa::Taa : Aa::Off;
         o.taaFeedback = feedback;
         o.taaJitterScale = 1.0;
         o.size = {kAoSize[0], kAoSize[1]};

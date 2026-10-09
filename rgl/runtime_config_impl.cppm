@@ -111,6 +111,53 @@ void readBoolKey(const sol::table& root, const char* key, bool& dst) {
 		dst = *value;
 }
 
+/**
+ * `aa` 键解析（批 14.6 抗锯齿三态开关）：字符串 → `AaMode`。
+ *
+ * 缺键 = 保持默认 off（出厂态 = 红线 A）；未知值 = 返回错误消息由调用方 fail-fast
+ * （present_mode 的既有纪律：配置笔误不静默回落——静默回落的失效形态 = 你以为开着
+ * 抗锯齿在量图，其实跑在关档上，而图看起来"只是糊了一点"）。
+ * 抽成函数 = 认知复杂度红线（先例 applyRenderScale），也为了让 tests 能单独打它。
+ * @param root runtime.lua 顶层表
+ * @param cfg  写入目标（仅在键存在且合法时被写）
+ * @param path 仅用于错误消息（与 present_mode 同口径带配置文件路径）
+ * @return nullopt = 合法（含缺键）；有值 = 错误消息
+ */
+[[nodiscard]] static std::optional<std::string> applyAaKey(const sol::table& root,
+	RuntimeConfig& cfg, std::string_view path) {
+	sol::optional<std::string> raw = root["aa"];
+	if (!raw)
+		return std::nullopt;
+	if (*raw == "off")
+		cfg.aa = AaMode::off;
+	else if (*raw == "fsr") {
+		// fsr 态**隐含打开** velocity_field（FSR 的 motionVectors 输入就是那张图）。
+		// 隐含只发生在本处这一行（解析期归一化 ⟹ velocityField 仍是单一真相源，
+		// 消费侧对隐含关系无感知）；off/taa 态不碰它 ⟹ 不会凭空冒出 velocity pass。
+		cfg.aa = AaMode::fsr;
+		cfg.velocityField = true;
+	} else if (*raw == "taa")
+		cfg.aa = AaMode::taa;
+	else
+		return fmt::format(
+			"runtime config ({}): aa must be \"off\", \"fsr\" or \"taa\", got \"{}\"",
+			path, *raw);
+	return std::nullopt;
+}
+
+/**
+ * `fsr` 嵌套块解析（批 14.6）：`fsr = { temporal = …, jitter = … }` 两枚调参。
+ * 缺块 / 缺键 = 保持结构体默认（true/true = FSR 设计点，理由 → RuntimeConfig 字段注释）。
+ * 键的归属就是本函数——**没有**扁平键的兼容双读：两个真相源是本项目反复登记的反模式。
+ */
+static void readFsrBlock(const sol::table& root, RuntimeConfig& cfg) {
+	sol::table fsr = root["fsr"];
+	if (!fsr.valid() || !fsr.is<sol::table>())
+		return;
+	readBoolKey(fsr, "temporal", cfg.fsrTemporal);
+	readBoolKey(fsr, "jitter", cfg.fsrJitter);
+}
+
 /** loadRuntimeConfig 定义（接口注释见 runtime_config.cppm）：headless/headless_size/win_size/show_after/present_mode/ui_font 逐一可选解析 + parseLlm。 */
 [[nodiscard]] std::expected<RuntimeConfig, Error> loadRuntimeConfig(std::string_view path) {
 	auto* logger = RLLogger::getInstance();
@@ -163,12 +210,12 @@ void readBoolKey(const sol::table& root, const char* key, bool& dst) {
 
 		applyRenderScale(root, cfg.renderScale, logger);  // 批 14.3：内部渲染分辨率倍率
 		// velocity_field（批 14.4）= 逐像素速度场总开关（缺键 = false = 图里没有 velocity
-		// pass）；fsr_upscaler（批 14.5）= FSR 总开关（缺键 = false = 零构造）。两者的
-		// 「依赖 velocity」判据都不在这里——运行期取实际图形态，见 RuntimeConfig 注释。
+		// pass）。「FSR 依赖 velocity」的判据不在这里——运行期取实际图形态，见 RuntimeConfig
+		// 注释；批 14.6 起 aa 为 fsr 时本键被隐含打开（唯一发生点 = applyAaKey 内一行）。
 		readBoolKey(root, "velocity_field", cfg.velocityField);
-		readBoolKey(root, "fsr_upscaler", cfg.fsrUpscaler);
-		readBoolKey(root, "fsr_temporal", cfg.fsrTemporal);
-		readBoolKey(root, "fsr_jitter", cfg.fsrJitter);
+		if (auto err = applyAaKey(root, cfg, path))
+			return std::unexpected(Error{ErrorCode::ConfigLoadFailed, *err});
+		readFsrBlock(root, cfg);  // 批 14.6：FSR 调参收进嵌套块（无扁平键双读兼容）
 		sol::optional<int> showAfter = root["show_after"];
 		if (showAfter)
 			cfg.showAfter = *showAfter;

@@ -600,7 +600,7 @@ Run runGroup(const std::string& dir, const std::string& name, const std::string&
     o.aoStrength = 0.0;   // strength=0 逐位旁路，不给残差添第二来源
     o.shadowPass = false;
     o.picking = true;     // object_id = 区域的唯一出处
-    o.taa = taa;
+    o.aa = taa ? Aa::Taa : Aa::Off;
     o.taaFeedback = feedback;
     o.taaJitterScale = jitterScale;
     // 批 13.2 的门 `taa.base_space`：开 = 输出搬回**基空间**（引擎按内容偏移重采样，整幅
@@ -915,7 +915,7 @@ BistroRun runBistroGroup(const std::string& dir, const std::string& name, const 
     o.cameraPosition = cam.position;
     o.cameraTarget = cam.target;
     o.cameraFov = cam.fov;
-    o.taa = taa;
+    o.aa = taa ? Aa::Taa : Aa::Off;
     o.taaFeedback = feedback;
     o.taaJitterScale = jitterScale;
     o.taaBaseSpace = baseSpace;  // 交付态 = 引擎默认 true（口径差异①，勿改默认）
@@ -1051,7 +1051,7 @@ BistroReject runBistroRejectGroup(const std::string& dir, const std::string& nam
     o.cameraPosition = cam.position;
     o.cameraTarget = cam.target;
     o.cameraFov = cam.fov;
-    o.taa = true;
+    o.aa = Aa::Taa;
     o.taaFeedback = feedback;
     o.taaJitterScale = 1.0;
     o.taaBaseSpace = true;
