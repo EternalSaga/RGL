@@ -29,6 +29,22 @@ DiagnosticsConfig& diagnostics() {
 void setDiagnostics(const DiagnosticsConfig& cfg) { diagnostics() = cfg; }
 
 /**
+ * cullReplayName 定义：三态 ↔ `cull_replay` 配置名的唯一映射（回显与告警共用）。
+ * 与 applyCullReplayKey 的解析表**必须同集合**——tests/test_scene_config.cppm 的
+ * "回显 = 配置名" 断言钉住这一层（改一边就红）。
+ * @param mode 剔除驱动方式
+ * @return 配置名
+ */
+const char* cullReplayName(CullReplayMode mode) {
+	switch (mode) {
+		case CullReplayMode::cpu: return "cpu";
+		case CullReplayMode::gpuLagged: return "gpu_lagged";
+		case CullReplayMode::gpuSync: return "gpu_sync";
+	}
+	return "?";  // 不可达（枚举穷尽）；写出来只为不调用 UB 兜底路径的 printf 风格断言
+}
+
+/**
  * rpc_port 解析（Phase 10b 批 11b.2）：缺省 / 越界（1..65535 之外）= 8788 回落，
  * 调试面配置笔误不 fail-fast。抽成小函数以守住主解析函数的认知复杂度阈值。
  * @param root 配置根表
@@ -158,6 +174,36 @@ static void applyScalarGates(sol::table& root, DiagnosticsConfig& cfg,
 }
 
 /**
+ * `cull_replay` 字符串枚举读取段（债-30 方案 C，docs/cpu_perf_plan.md §4）：三态
+ * cpu / gpu_lagged / gpu_sync，**未知值 = 解析期 fail-fast**（present_mode / aa 的既有
+ * 纪律：静默回落的失效形态 = 你以为在测 GPU 剔除路，其实跑的是 CPU 路，而两边读数
+ * 看起来都"合理"）。抽成函数 = 认知复杂度红线（先例 applyAaKey），也为了让单测单独打它。
+ * @param root diagnostics.lua 顶层表
+ * @param cfg  写入目标（仅在键存在且合法时被写）
+ * @param path 仅用于错误消息（与 present_mode 同口径带配置文件路径）
+ * @param trace 键轨迹（缺键也记 = 解析器读过它，覆盖率护栏的输入）
+ * @return nullopt = 合法（含缺键）；有值 = 错误消息
+ */
+[[nodiscard]] static std::optional<std::string> applyCullReplayKey(const sol::table& root,
+	DiagnosticsConfig& cfg, std::string_view path, DiagnosticsKeyTrace& trace) {
+	trace.read.emplace_back("cull_replay");
+	sol::optional<std::string> raw = root["cull_replay"];
+	if (!raw)
+		return std::nullopt;
+	if (*raw == "cpu")
+		cfg.cullReplay = CullReplayMode::cpu;
+	else if (*raw == "gpu_lagged")
+		cfg.cullReplay = CullReplayMode::gpuLagged;
+	else if (*raw == "gpu_sync")
+		cfg.cullReplay = CullReplayMode::gpuSync;
+	else
+		return fmt::format(
+			"diagnostics config ({}): cull_replay must be \"cpu\", \"gpu_lagged\" or \"gpu_sync\", got \"{}\"",
+			path, *raw);
+	return std::nullopt;
+}
+
+/**
  * 探针 + 数值门读取段（picking_probe / 输入探针 / texel_canary / dump_gbuf /
  * frame_stats / profiler / IZB 数值；2026-10-02 从主函数拆出守认知复杂度阈值）。
  * 数值门负数 = 显式"关"哨兵（配置文件写 -1 直观）；dump_gbuf 越界 = warn + 关闭。
@@ -225,7 +271,7 @@ struct GateEcho {
  * tests/test_scene_config.cppm 的覆盖率护栏拦下（解析器读了而表里没有 → 红）。
  * 哨兵值出可读文本：texel_canary MAX = "off"、camera_probe.key 0 = "none"。
  */
-const std::array<GateEcho, 38> kGateEcho{{
+const std::array<GateEcho, 39> kGateEcho{{
 	{"no_vvl", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.noVvl); }},
 	{"no_hdr", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.noHdr); }},
 	{"no_present", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.noPresent); }},
@@ -240,6 +286,7 @@ const std::array<GateEcho, 38> kGateEcho{{
 	{"texture_force_white", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.textureForceWhite); }},
 	{"texture_force_unorm", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.textureForceUnorm); }},
 	{"dgc_static", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.dgcStatic); }},
+	{"cull_replay", [](const DiagnosticsConfig& c) { return std::string(cullReplayName(c.cullReplay)); }},
 	{"frame_stats", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.frameStats); }},
 	{"profiler", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.profiler); }},
 	{"imgui", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.imgui); }},
@@ -373,6 +420,9 @@ std::string describeAllDiagnosticsGates(const DiagnosticsConfig& cfg) {
 		}
 		applyScalarGates(root, cfg, *trace);
 		applyProbeAndNumericGates(root, cfg, *trace);
+		// 字符串枚举门（fail-fast：笔误不静默回落，见 applyCullReplayKey 注释）
+		if (auto err = applyCullReplayKey(root, cfg, path, *trace); err)
+			return std::unexpected(Error{ErrorCode::ConfigLoadFailed, std::move(*err)});
 
 		// 未知键 lint（普查附带收获：diagnostics.lua 里拼错的键**今天完全静默**）
 		lintUnknownDiagnosticsKeys(*trace);

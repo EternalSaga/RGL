@@ -2,7 +2,7 @@ module;
 /**
  * test_gate_lint —— 门组合自检（gate_lint 立项批，docs/gate_lint_plan.md）
  *
- * 被测 = rgl/gate_lint.cppm（rlscene 成员）：38 门申报规则表 + variant 交叉校验。
+ * 被测 = rgl/gate_lint.cppm（rlscene 成员）：39 门申报规则表 + variant 交叉校验。
  * 纯函数（一切事实入参），无 GPU 无窗口，`just test` 毫秒级。
  *
  * ## 判据纪律（本文件比别处更严的原因）
@@ -13,7 +13,7 @@ module;
  *
  * ## 覆盖率护栏（同 pass_vocabulary 范式）
  *
- * 规则表门名集合 == diagnostics 回显表键集合（双向 + 钉 38）。加门不答
+ * 规则表门名集合 == diagnostics 回显表键集合（双向 + 钉 39）。加门不答
  * 「生效前置是什么」→ 红。nullptr 谓词行 = 显式「无前置」，同样占一行被钉住。
  */
 #include <doctest/doctest.h>
@@ -65,16 +65,16 @@ constexpr GateEnv kHappyEnv{.headless = false, .llmCapture = true, .staticGraphi
 
 }  // namespace
 
-TEST_CASE("gate_lint 覆盖率护栏：规则表门名集合 == 回显表键集合（双向 + 钉 38）") {
+TEST_CASE("gate_lint 覆盖率护栏：规则表门名集合 == 回显表键集合（双向 + 钉 39）") {
 	// 变异红线：kGateRules 删任一行 / 改任一门名拼写 → 本用例红；
-	// DiagnosticsConfig 加字段不更新两侧 → diagnosticsEchoKeys 的 38 钉先红。
+	// DiagnosticsConfig 加字段不更新两侧 → diagnosticsEchoKeys 的 39 钉先红。
 	// ⚠ 钉的是**去重后的门数**：一门可有多条规则（izb_shadow 两条 = 非 deferred 图 /
 	//   shadow_pass 关，两个根因各一条消息），行数只作"表没被整段删空"的下界哨兵。
 	const auto rules = gateLintRuleGates();
 	const auto echo = diagnosticsEchoKeys();
-	CHECK(rules.size() == 39u);
-	CHECK(distinctGateCount(rules) == 38u);
-	CHECK(echo.size() == 38u);
+	CHECK(rules.size() == 40u);
+	CHECK(distinctGateCount(rules) == 39u);
+	CHECK(echo.size() == 39u);
 	for (const auto& k : echo)
 		CHECK(hasGate(rules, k));  // 回显有而规则表没有 = 没回答「生效前置是什么」
 	for (const auto& k : rules)
@@ -193,6 +193,34 @@ TEST_CASE("gate_lint error 组：dump_gbuf / picking_probe / 输入探针×headl
 		CHECK(find(fs, "ui_click_probe.frame")->severity == GateSeverity::error);
 		CHECK(find(lintDiagnosticsGates(c, d, passesOf(defaultRenderGraphDesc()),
 			RgGraphVariant::forward, kHappyEnv), "ui_click_probe.frame") == nullptr);
+	}
+}
+
+TEST_CASE("gate_lint warn 组：cull_replay 非 gpu_sync × dgc_static（DGC execute 走不到）") {
+	// 债-30 方案 C 新增门。lint 的失败模式是常喊，故两条反向用例分别钉住两个假阳性方向：
+	// ① gpu_sync（DGC 路真会被走到）不该喊；② 出厂默认（dgc_static 关）绝不该喊。
+	const DiagnosticsConfig d;
+	const auto fwd = passesOf(defaultRenderGraphDesc());
+	for (const auto mode : {CullReplayMode::cpu, CullReplayMode::gpuLagged}) {
+		DiagnosticsConfig c;
+		c.dgcStatic = true;
+		c.cullReplay = mode;
+		const auto fs = lintDiagnosticsGates(c, d, fwd, RgGraphVariant::forward, kHappyEnv);
+		REQUIRE(find(fs, "cull_replay") != nullptr);
+		CHECK(find(fs, "cull_replay")->severity == GateSeverity::warn);
+	}
+	{  // 反向①：gpu_sync = opaque 段确实由 GPU 序列驱动 → 不喊
+		DiagnosticsConfig c;
+		c.dgcStatic = true;
+		c.cullReplay = CullReplayMode::gpuSync;
+		CHECK(find(lintDiagnosticsGates(c, d, fwd, RgGraphVariant::forward, kHappyEnv),
+			"cull_replay") == nullptr);
+	}
+	{  // 反向②：dgc_static 关（出厂默认）+ cull_replay=cpu（也是出厂默认）→ 不喊
+		DiagnosticsConfig c;
+		c.cullReplay = CullReplayMode::cpu;
+		CHECK(find(lintDiagnosticsGates(c, d, fwd, RgGraphVariant::forward, kHappyEnv),
+			"cull_replay") == nullptr);
 	}
 }
 

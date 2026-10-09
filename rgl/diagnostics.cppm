@@ -6,6 +6,31 @@ import vkerror;
 namespace RGL {
 
 /**
+ * 遮挡剔除结果的**驱动方式**（configs/diagnostics.lua 的 `cull_replay`，债-30 方案 C）。
+ *
+ * 为什么是三态而不是布尔：中间档 `gpuLagged` 不是过渡装饰，它**同时解两个死结**——
+ * GPU 集要驱动本帧 draw 就必须本帧读回（那是硬同步，正是债-30 的账），而剔除结果
+ * 一旦滞后一帧，CPU 对照表若也跟着滞后就**永远比不过**（对账失去意义）。滞后档让
+ * CPU 仍驱动 draw、GPU 集照常跑并逐帧与「提交那一帧」的 CPU 表对账 ⟹ 想保留 GPU 读回
+ * 路的真机持续验证时用它，不必退回每帧硬同步（默认 `cpu` 档下 GPU 集根本不跑）。
+ *
+ * 失效形态决定这里必须 fail-fast：拼错的值若静默回落默认档，读数就变成"你以为在测
+ * GPU 路，其实跑的是 CPU 路"（`present_mode` / `aa` 的同一条纪律）。
+ */
+export enum class CullReplayMode {
+	cpu,       // 默认：CPU 剔除驱动 draw，GPU 集整条不上 CB（省 dispatch + 读回拷贝 + 一次提交）
+	gpuLagged, // GPU 集照跑、结果滞后一帧收割并与上一帧的 CPU 表对账；draw 仍由 CPU 驱动
+	gpuSync,   // 本帧等读回并由 GPU 集驱动 draw（现行主路形态，预期含硬同步）
+};
+
+/**
+ * 反查 `CullReplayMode` 的配置名（与 `cull_replay` 取值表一致，回显/日志用）。
+ * @param mode 剔除驱动方式
+ * @return 配置名字符串
+ */
+export const char* cullReplayName(CullReplayMode mode);
+
+/**
  * 诊断开关（configs/diagnostics.lua，全可选回落默认 = 全关）：散落在低层模块深处的
  * 调试旋钮，经**单例**承载（仿 RLLogger::getInstance，见 logger/）——避免给
  * uploadTexture/loadEmbedded/AppContext/Renderer 等一串签名加参数。main 启动最早期
@@ -26,6 +51,7 @@ export struct DiagnosticsConfig {
 	bool textureForceWhite = false;     // 纹理全白填充（"均匀内容不 fault"假设）
 	bool textureForceUnorm = false;     // upload 强制 UNORM（sRGB 嫌疑隔离）
 	bool dgcStatic = false;             // RADV 静态 shader DGC 路（staticGraphicsIndirect 设备的 spike 门，默认关，见 docs/archive/radv_static_dgc_spike.md）
+	CullReplayMode cullReplay = CullReplayMode::cpu;  // 剔除结果驱动方式（cull_replay；三态语义 → `CullReplayMode` 注释，方案与定价 → docs/cpu_perf_plan.md §4）。默认 cpu = 交付路径不让 CPU 等 GPU 读回
 	uint32_t frameStats = 0;            // 帧时间统计：每 N 帧打一行 avg/min/max（0 = 关；headless 吞吐 ≈ GPU-bound）
 	uint32_t profiler = 0;              // Phase 9 zone profiler 帧窗口 N（0 = 关；最近 N 帧 → 退出 dump trace+stats，docs/phase9_plan.md）
 	bool imgui = false;                 // Phase 10 IMGUI 调试面板总开关（帧末 UI 段 + 输入拦截；headless 无窗天然 no-op，docs/archive/phase10_plan.md）
@@ -97,7 +123,7 @@ export std::string describeDiagnosticsGates(const DiagnosticsConfig& cfg,
 	const DiagnosticsConfig& defaults);
 
 /**
- * 门回显：全量 38 键（`debug` 级用；排障时"这台机器的门到底是什么状态"的一行真相）。
+ * 门回显：全量 39 键（`debug` 级用；排障时"这台机器的门到底是什么状态"的一行真相）。
  * @param cfg 解析后的配置
  * @return 一行文本（`key=value` 空格分隔，顺序 = 回显表顺序）
  */

@@ -667,19 +667,21 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 	std::unique_ptr<DgcCommands> dgc = makeDgc();
 	std::unique_ptr<DgcStaticCommands> dgcStatic = (dgc ? nullptr : makeDgcStatic());
 
-	// 清晰选路日志（启动期一次）：哪个设备走 DGC execute / 静态 execute / 读回重放
+	// 清晰选路日志（启动期一次）：哪个设备走 DGC execute / 静态 execute / 读回重放。
+	// 末尾附 `cull_replay`（债-30 方案 C）：本行说的是**能力**选了哪条，而"opaque 段到底
+	// 由谁驱动"由该门决定（cpu/gpu_lagged = CPU 剔除驱动，下面三条都不会被走到）。
 	if (auto* logger = RLLogger::getInstance()) {
 		std::string devName(device.getPhysicalDevice().getProperties().deviceName.data());
 		if (dgc && dgc->active())
-			logger->info("DGC path: device='{}' graphicsIndirect={} computeIndirect={} static={} -> DGC execute (vkCmdExecuteGeneratedCommandsEXT)",
-				devName, dgcSup.graphicsIndirect, dgcSup.computeIndirect, dgcSup.staticGraphicsIndirect);
+			logger->info("DGC path: device='{}' graphicsIndirect={} computeIndirect={} static={} -> DGC execute (vkCmdExecuteGeneratedCommandsEXT) [cull_replay={}]",
+				devName, dgcSup.graphicsIndirect, dgcSup.computeIndirect, dgcSup.staticGraphicsIndirect, cullReplayName(diagnostics().cullReplay));
 		else if (dgcStatic && dgcStatic->active())
-			logger->info("DGC path: device='{}' graphicsIndirect={} computeIndirect={} static={} -> DGC static execute ({} entries × vkCmdExecuteGeneratedCommandsEXT)",
+			logger->info("DGC path: device='{}' graphicsIndirect={} computeIndirect={} static={} -> DGC static execute ({} entries × vkCmdExecuteGeneratedCommandsEXT) [cull_replay={}]",
 				devName, dgcSup.graphicsIndirect, dgcSup.computeIndirect, dgcSup.staticGraphicsIndirect,
-				dgcStatic->entryCount());
+				dgcStatic->entryCount(), cullReplayName(diagnostics().cullReplay));
 		else
-			logger->info("DGC path: device='{}' graphicsIndirect={} computeIndirect={} static={} -> 读回重放 (CPU 回退)",
-				devName, dgcSup.graphicsIndirect, dgcSup.computeIndirect, dgcSup.staticGraphicsIndirect);
+			logger->info("DGC path: device='{}' graphicsIndirect={} computeIndirect={} static={} -> 读回重放 (CPU 回退) [cull_replay={}]",
+				devName, dgcSup.graphicsIndirect, dgcSup.computeIndirect, dgcSup.staticGraphicsIndirect, cullReplayName(diagnostics().cullReplay));
 	}
 	// Renderer 以 prvalue **直接初始化**进聚合并 move-init 的 RenderBackEnd 槽位——
 	// 绝不 move Renderer：其成员 FrameCapturer::graph 是指向本对象 renderGraph 成员的

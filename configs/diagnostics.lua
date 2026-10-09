@@ -24,6 +24,19 @@ return {
     pcss_search_radius = 16.0, -- blocker 搜索半径上限（图集纹素，clamp [1,64]；越大半影找回越远、全亮早退越慢）
     pcss_max_penumbra = 32.0,  -- 半影半径上限（图集纹素，clamp [1,64]；成本与糊度护栏）
     shadow_evssm = false,  -- 批 11.6：EVSSM 远场软阴影（true = 构造 EvssmShadow 矩图链（图外 compute 从 D32 派生矩 + 7 级 per-tile box mip）+ 阴影采样 frag 换 -DEVSSM_SOFT 变体（O(1) mip 搜索 + soft clamp + quincunx，Filament 同款）；数值键复用 pcss_*；false = 零构造零变体 **逐位不变** = 红线，见 docs/evssm_plan.md）
+
+    -- 债-30：遮挡剔除结果的**驱动方式**（三态互斥，语义 → rgl/diagnostics.cppm `CullReplayMode`；
+    -- 定价与方案推导 → docs/cpu_perf_plan.md §4）。为什么默认不是"最忠实"的 gpu_sync：
+    -- 读回重放要在帧首同步等上一帧的 cull 结果，而 cull GPU 本身只 ~14µs —— 等的其实是
+    -- "上一帧整帧 GPU 排空"（实测 = gpu.frame 的几乎全部，跨 3.6× GPU 跨度成立）。
+    --   "cpu"        = 默认。CPU 视锥剔除的结果驱动 draw，GPU 集整条不上 CB（实测交付
+    --                   13.29→10.66ms、开发环境 28.17→15.25ms；截图逐位不变）
+    --   "gpu_lagged" = GPU 集照跑、结果滞后一帧收割，与「提交那一帧」的 CPU 表逐帧对账；draw 仍
+    --                   由 CPU 驱动 ⟹ 画面逐位不变，但 GPU 读回路被真机持续验证（对账不失明）
+    --   "gpu_sync"   = 本帧等读回并由 GPU 集驱动 draw（= 本键存在以来的原行为，DGC 对照组）
+    -- 未知值 = 启动失败（不静默回落：否则"以为在测 GPU 路其实跑的是 CPU 路"）。
+    cull_replay = "cpu",
+
     rpc = false,      -- Phase 10b HTTP POST RPC 调试通道（true=帧边界命令队列，仅绑 127.0.0.1；GET /state 发现参数，POST /camera /param /shot；独立于 imgui 门，headless 可用，见 docs/phase10b_plan.md）
     rpc_port = 8788,  -- RPC 监听端口（bind 失败只降级关，不崩）
 

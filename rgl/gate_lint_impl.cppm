@@ -32,20 +32,20 @@ struct GateRule {
 	bool (*violated)(const Ctx&);
 };
 
-/** 偏离默认值判定缩写（38 行表里少写 60 处三元噪声）。 */
+/** 偏离默认值判定缩写（40 行表里少写 60 处三元噪声）。 */
 template <typename T>
 constexpr bool deviated(const Ctx& c, const T DiagnosticsConfig::* field) {
 	return c.cfg.*field != c.defaults.*field;
 }
 
 /**
- * 38 门 / 39 行申报表（与 DiagnosticsConfig 字段/回显表一一对应，覆盖率由
+ * 39 门 / 40 行申报表（与 DiagnosticsConfig 字段/回显表一一对应，覆盖率由
  * tests/test_gate_lint.cppm 钉死）。级别判据 = 计划 §4：error 只留给
  * 「必然完全无效且无其他信号」，拿不准一律 warn / inertNote。
  * **行数 ≠ 门数**：一门可以有多条规则（`izb_shadow` 两条 = 非 deferred 图 / shadow_pass 关，
  * 两个根因各自一条消息，合并会丢归因）；覆盖率护栏钉的是**去重后的门数** == 回显表键数。
  */
-const std::array<GateRule, 39> kGateRules{{
+const std::array<GateRule, 40> kGateRules{{
 	// ———— 无前置门（对着驱动/上传路径/日志本身工作，任何组合都生效）————
 	{"no_vvl", GateSeverity::inertNote, "", nullptr},  // vkinstance 建 instance 时读
 	{"no_hdr", GateSeverity::inertNote, "", nullptr},  // vulkan_window 选格式时读
@@ -93,6 +93,9 @@ const std::array<GateRule, 39> kGateRules{{
 	{"dgc_static", GateSeverity::warn,
 		"设备未 advertise staticGraphicsIndirect：dgc_static 无效（走 compute culling 读回重放）",
 		[](const Ctx& c) { return c.cfg.dgcStatic && !c.env.staticGraphicsIndirect; }},
+	{"cull_replay", GateSeverity::warn,
+		"cull_replay 非 gpu_sync：opaque 段由 CPU 剔除驱动，dgc_static 的 execute 路根本不会被走到（要测 DGC 请同时设 cull_replay=\"gpu_sync\"，见 docs/cpu_perf_plan.md §4）",
+		[](const Ctx& c) { return c.cfg.dgcStatic && c.cfg.cullReplay != CullReplayMode::gpuSync; }},
 	{"imgui", GateSeverity::warn,
 		"imgui 在 headless 下天然 no-op（无窗无输入，UI 段零调用）",
 		[](const Ctx& c) { return c.cfg.imgui && c.env.headless; }},

@@ -431,10 +431,13 @@ void Renderer::executePassDraws(vk::raii::CommandBuffer& cmd, const RgPassPlan& 
 		registry.entry(fullscreenPipelineIdx.at(pass.state)).pipeline.bindShaders(cmd);
 		cmd.drawMeshTasksEXT(1, 1, 1);
 		profilerAddDraws(1);  // 批 9.5：drawLight 档（light/tonemap/ao/taa）恒 1 draw
-	} else if (pass.drawSource == "opaque" && cullDriver.active()) {
+	} else if (pass.drawSource == "opaque" && cullDriver.drivesDraws()) {
 		// GPU culling 路（手术 3：双路提交迁 CullDriver::executeOpaqueSegment——
 		// DGC execute（NVIDIA）/ 读回重放（RADV，args = CPU 位级真相源 → BIT-IDENTICAL）
-		// 能力位自动切换，重放顺序契约见其类注释）
+		// 能力位自动切换，重放顺序契约见其类注释）。
+		// 债-30 方案 C：判据是 drivesDraws() 而非 active()——`cull_replay` 为 cpu/gpu_lagged
+		// 时 draw 由 CPU 剔除结果驱动，落下面那条通用 segmentSpan + drawOne 路（两者参数同源
+		// CPU args ⟹ 逐位同，实测截图 SHA256 相同，docs/cpu_perf_plan.md §4）。
 		cullDriver.executeOpaqueSegment(cmd, list, registry, frameSlot);
 	} else {
 		const auto seg = segmentSpan(pass.drawSource, list);
@@ -477,13 +480,15 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 		return std::unexpected(std::move(r).error());
 
 	// ④c GPU culling 数据通路（Phase 7b 批次 5；手术 3：块体迁 CullDriver::runFrame——
-	// cull CB 录制/提交/同帧同步等待/读回/对账 + fence 与主 CB 共用的时序契约见其类注释）
+	// cull CB 录制/提交/同步等待/读回/对账 + 三档驱动方式与 fence 时序契约见其类注释）
 	// 批 9.5：本段内含一次**无限超时** waitForFences（Phase 9 当年落在未归因段里从未被量过），
-	// 其单独 zone = cull.fenceWait，见 cull_driver_impl.cppm::runFrame。
-	if (cullDriver.active()) {
+	// 其单独 zone = cull.fenceWait，见 cull_driver_impl.cppm::harvest。
+	// 债-30 方案 C：判据是 gpuPassRuns() 而非 active()——`cull_replay=cpu`（默认）时本段整体
+	// 不执行（连 zone 都不出现，别在 trace 里留一条 0 时间的假段）。
+	if (cullDriver.gpuPassRuns()) {
 		auto z = zone("drawFrame.cull");
 		if (auto r = cullDriver.runFrame(frameSlot, frame, list,
-				sceneStaging[frameSlot], session.currentInFlightFence()); !r)
+				sceneStaging[frameSlot]); !r)
 			return std::unexpected(std::move(r).error());
 	}
 

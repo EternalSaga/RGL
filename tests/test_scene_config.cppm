@@ -964,8 +964,8 @@ return {
 	auto r = loadDiagnosticsConfig(f.pathStr(), &trace);
 	REQUIRE(r.has_value());
 	const auto echo = diagnosticsEchoKeys();
-	CHECK(echo.size() == 38u);            // 钉死门数：加门不更新回显表 → 这里先红
-	CHECK(trace.read.size() == 38u);      // 解析器恰好读一遍（重复读 = 记录点放错层）
+	CHECK(echo.size() == 39u);            // 钉死门数：加门不更新回显表 → 这里先红
+	CHECK(trace.read.size() == 39u);      // 解析器恰好读一遍（重复读 = 记录点放错层）
 	for (const auto& k : echo)
 		CHECK(containsKey(trace.read, k));    // 回显有而解析器不读 = 陈旧键
 	for (const auto& k : trace.read)
@@ -1009,6 +1009,31 @@ TEST_CASE("diagnostics 未知键（探针子表）：探针表名不算未知键
 	CHECK(r->rpcPort == 9999u);  // 合法值照常生效（lint 不改解析结果）
 }
 
+TEST_CASE("diagnostics cull_replay：三态各自生效 + 缺键回落 cpu + 未知值 fail-fast") {
+	// 债-30 方案 C（docs/cpu_perf_plan.md §4）。为什么未知值必须启动失败而不是回落默认：
+	// 回落的失效形态 = "你以为在测 GPU 剔除路，其实跑的是 CPU 路"，而两种读数看起来都
+	// 合理（present_mode / aa 的同一条纪律）。反向用例（合法值不误拒）逐态各钉一条。
+	auto load = [](std::string_view body) {
+		TempLua f("dg_cullreplay", body);
+		return loadDiagnosticsConfig(f.pathStr(), nullptr);
+	};
+	CHECK(load("return {}\n")->cullReplay == CullReplayMode::cpu);  // 缺键 = 出厂默认
+	CHECK(load("return { cull_replay = \"cpu\" }\n")->cullReplay == CullReplayMode::cpu);
+	CHECK(load("return { cull_replay = \"gpu_lagged\" }\n")->cullReplay == CullReplayMode::gpuLagged);
+	CHECK(load("return { cull_replay = \"gpu_sync\" }\n")->cullReplay == CullReplayMode::gpuSync);
+	const auto bad = load("return { cull_replay = \"gpu\" }\n");  // 前缀命中也不算合法
+	CHECK_FALSE(bad.has_value());
+	if (!bad)
+		CHECK(bad.error().message.find("cull_replay") != std::string::npos);
+	// 回显 = 配置名本身，且差集语义下默认值不喊（默认配置写进 lua 也不狂喊）
+	const DiagnosticsConfig d;
+	CHECK(describeDiagnosticsGates(d, d).find("cull_replay") == std::string::npos);
+	DiagnosticsConfig c;
+	c.cullReplay = CullReplayMode::gpuSync;
+	CHECK(describeDiagnosticsGates(c, d) == "cull_replay=gpu_sync");
+	CHECK(std::string_view{cullReplayName(CullReplayMode::gpuLagged)} == "gpu_lagged");
+}
+
 TEST_CASE("diagnostics 回显 describe：全默认 = 空串；改动只列改动门（info 差集语义）；debug 全量") {
 	const DiagnosticsConfig d;
 	// 反向用例：全默认一个都不喊（configs 写满默认值不狂喊的实现基础）
@@ -1024,8 +1049,8 @@ TEST_CASE("diagnostics 回显 describe：全默认 = 空串；改动只列改动
 	CHECK(s.find("no_vvl") == std::string::npos);       // 未动的门不出现
 	CHECK(s.find("texel_canary") == std::string::npos); // 未动的哨兵门不出现
 	const std::string all = describeAllDiagnosticsGates(d);
-	// 全量表 = 38 段 `k=v`（空格分隔），抽查首、中、尾与两个特殊格式条目
-	CHECK(std::ranges::count(all, '=') == 38);
+	// 全量表 = 39 段 `k=v`（空格分隔），抽查首、中、尾与两个特殊格式条目
+	CHECK(std::ranges::count(all, '=') == 39);
 	CHECK(all.find("no_vvl=false") != std::string::npos);
 	CHECK(all.find("shadow_pass=true") != std::string::npos);
 	CHECK(all.find("texel_canary=off") != std::string::npos);  // MAX 哨兵出可读文本
