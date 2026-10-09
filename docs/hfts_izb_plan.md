@@ -3,6 +3,15 @@
 > 状态：**现行** —— Phase 11 批 11.3（spike，带退出条件，非承诺项）的调研结论 + 分阶段执行计划。
 > 引用方：`phase11_plan.md` §批 11.3 · `next_roadmap.md` §Phase 11 ③。
 > 2026-10-01 调研定稿（四篇论文全文通读 + 开源面查清 + 项目 gap 经主 agent 复核）。
+>
+> ⚠ **2026-10-10：IZB 交付已关（`shadow.lua` 的 `izb` 默认 true → false，用户放行换红线）**。
+> 两个结构性缺陷 = ① 只管 cascade-0 光空间盒、盒外回落 CSM ⟹ 盒边界是一条**随相机在世界表面
+> 爬行的接缝**（默认机位实测 1.76% 屏幕判反、亮度差中位 16 LSB / 最高 160 LSB）；② 管辖范围内
+> 系统性欠遮挡（`imgqa izb` 的「CSM 遮而 IZB 放」= 405048 px = 占屏 44%）。**阶段 2/3 若开工，
+> 缺陷① 是必须先解决的问题**（"扩到全部级联"正是阶段 2 的形态，但按现状扩会把 44% 欠遮挡从
+> 近场铺满全屏）。读数、复现配方（三色哨兵一步定死接缝）与裁决全文 →
+> `shadow_routes_plan.md` §7。代码路径全留，`izb = true` 会触发 gate_lint warn。
+> 本文下方带日期的实测记录（含红线 `fdece9d0…`）是**当时的**读数，不改写；现行红线 = `52231a84…`。
 
 ---
 
@@ -110,10 +119,11 @@ dispatch（IZB 创建）——与本项目"compute 全在图外、render_graph �
 | ⑤ 光空间保守光栅 + 链表遍历写 mask | drawMesh 新 state `"izb"`：DynamicState3 开 `OVERESTIMATE`（不加管线条目）+ 遍历链表 fragment 原子 OR 写 r32ui mask SSBO | shadow pass 模板 + phase11 §9 动态状态结论 |
 | ⑥ 消费 | `shadow.slang` 加 izb 分支：读 mask，与 PCF 结果混合/替代 | binding 12/13 旁路先例 |
 
-**门控**：门 = `configs/shadow.lua` 的 `izb`（**出厂开**，代码默认 true；当初立计划时默认关，
-2026-10-09 批 N6a 承认为出厂开，定案 → `docs/shadow_routes_plan.md` §1）。门关 = IZB 相关 pass
+**门控**：门 = `configs/shadow.lua` 的 `izb`（**出厂关**，代码默认 false）。默认值走过三步：
+立计划时关 → 2026-10-09 批 N6a「承认出厂开」改 true → **2026-10-10 实测两个结构性缺陷后关回
+false**（用户放行换红线，读数与复现配方 → `docs/shadow_routes_plan.md` §7）。门关 = IZB 相关 pass
 零 draw + 采样端旁路 = **画面逐位不变**（`mode = "none"` / `ao.strength=0` 同款纪律，
-BIT-IDENTICAL 基线不受扰）。
+BIT-IDENTICAL 基线不受扰）。开回来 = `izb = true`，gate_lint 会 warn 把两个读数带在消息里。
 
 **红线**：
 
@@ -206,7 +216,7 @@ BIT-IDENTICAL 基线不受扰）。
 **1d 前半（2026-10-01 深夜落地）：IZB 创建/priming 进引擎（rlgfx `izb_shadow` 模块）**。
 - 形态：图外 compute sandwich，录在 **deferred 图 `drawLight "light"` pass 头部**
   （深度已由 geometry pass 写完）；深度 layout 进出同值 = 渲染图布局追踪表零漂移。
-  门 = `configs/shadow.lua` 的 `izb`（**出厂开**，代码默认 true）：**门关 = IzbShadow 恒不构造**
+  门 = `configs/shadow.lua` 的 `izb`（**出厂关**，代码默认 false，理由见上方门控段）：**门关 = IzbShadow 恒不构造**
   （零分配零命令）；forward 图无 drawLight pass 天然不触发（z-prepass 两路接 = 1e）。
 - 数据 = `vk_resources` 全量 heap Runtime 段 3 槽（izb.head/nodes/primed）+
   **深度采样描述符与 SSAO 共用 `ensureDepthSampleSlot`**（同 view 同 RO 布局）；

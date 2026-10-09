@@ -88,6 +88,37 @@ int cmdAttribution(const std::string& glb, const std::string& camera)
     return 0;
 }
 
+/**
+ * `face-clusters-explained` 的**可求值性闸门** + 求值（拆出来是为了让 cmdFaces 不长分支）。
+ *
+ * 闭式解只含**直接光**一项（`predictFaces` 无阴影项、无 env 项）⟹ 一旦开了 `--shadow` 或
+ * `--env`，画面就多出一个模型里根本没有的项。此时**拒绝求值**，而不是调阈值让它过——
+ * 判据的靶子里没有这一项，任何阈值都是在噪声上签字。
+ *
+ * 实测指纹（2026-10-10，同机位同 piece 两跑，其余配置逐字相同）：
+ *   `--shadow` 关：观测簇 0.2214 / 0.2904 ≈ 预测 +Z 0.2221 / +Y 0.2885 ⟹ PASS
+ *   `--shadow` 开：同两簇 0.1273 / 0.1936（各 ×0.575 / ×0.667）
+ * 两簇系数**不同** = 逐像素阴影因子，正是模型缺的那一项。与 IZB 无关：faces 走合成 profile，
+ * `ProfileOpts::izbShadow` 恒 false，所以这条红从 `--shadow` 落地那天起就在，与交付 izb 无关。
+ *
+ * 与旧 `--env` 注释的唯一区别：那里写"FAIL 是**预期**"= 留一盏永久红灯，而常亮的红等于没有红
+ * （gate_lint 的防腐条款用的是同一条理由）⟹ 两个开关统一改成拒绝求值。
+ */
+static void addFaceClusterVerdict(std::vector<Verdict>& verdicts, const Frame& f,
+    const Attribution& at, const std::string& piece, const std::vector<FacePrediction>& predict,
+    bool shadowPass, bool envOn)
+{
+    if (!shadowPass && !envOn) {
+        verdicts.push_back(judgeFaceClusters(f, at, piece, predict));
+        return;
+    }
+    std::printf(
+        "\n  SKIP [face-clusters-explained] 闭式解只含直接光项，本次开了 %s ⟹ 模型缺项、不可求值。\n"
+        "       实测：--shadow 开时两簇各 ×0.575 / ×0.667（系数不同 = 逐像素阴影因子）。\n"
+        "       要下闭式结论请两个开关都关；本命令的 --shadow/--env 只用于**复现观察**。\n",
+        shadowPass ? (envOn ? "--shadow 与 --env" : "--shadow") : "--env");
+}
+
 // ── faces：闭式解接进区域归因。观测亮度簇必须每簇都被某个面的预测解释 ──
 int cmdFaces(const std::string& glb, const std::string& pieceName, bool shadowPass,
     bool envOn)
@@ -122,9 +153,7 @@ int cmdFaces(const std::string& glb, const std::string& pieceName, bool shadowPa
     o.glb = glb;
     o.shadowPass = shadowPass;
     if (envOn)
-        o.envIntensity = 1.0;  // ⚠ 开 env 后闭式解不再覆盖画面（预测只有直接光项）——
-                               // 此时 face-clusters FAIL 是**预期**，此开关只用来复现
-                               // 「某配置下有没有黑面」这类观察，不用来下闭式结论。
+        o.envIntensity = 1.0;  // 见下方 modelCovers：开 env 后闭式解不再覆盖画面
     const std::string prof = projectRoot() + "/build/imgqa_profile_faces";
     makeProfile(prof, o);
     Engine eng(prof);
@@ -148,7 +177,7 @@ int cmdFaces(const std::string& glb, const std::string& pieceName, bool shadowPa
 
     std::vector<Verdict> verdicts;
     verdicts.push_back(judgePieceDrawn(f, at, pieceName));
-    verdicts.push_back(judgeFaceClusters(f, at, pieceName, predict));
+    addFaceClusterVerdict(verdicts, f, at, pieceName, predict, shadowPass, envOn);
     std::printf("\n");
     for (const auto& v : verdicts)
         std::cout << "  " << v.line() << "\n";
@@ -240,7 +269,8 @@ int cmdSwitch(const std::string& glb, const std::string& camera,
 //   锚点   |变暗| ≥ 下限（消费链路活着——2026-10-02 字节偏移 bug 下恒 0）
 //   域内   变暗 ⊆ dilate(mask遮,2)（IZB 不许在 mask 判受光处画影——ndc 镜像 bug 红）
 //   消费   mask遮 ∩ CSM受光 ⊆ dilate(变暗,2)（mask 有货必须落到画面——消费断链红）
-// 变亮集（CSM 遮而 IZB 放）只报不判：v1 近场语义下远场 CSM 影被拆属预期。
+// 变亮集（CSM 遮而 IZB 放）只报不判——但**报出来要带定性**：它是 IZB 缺陷②（管辖范围内系统性
+// 欠遮挡，rig 占屏 44%）的读数，不是"v1 语义属预期"。2026-10-10 据此把交付 izb 关成 false。
 int cmdIzb(const std::string& glb, const std::string& camera)
 {
     const std::string stem = glb.substr(0, glb.find_last_of('.'));
@@ -324,8 +354,13 @@ int cmdIzb(const std::string& glb, const std::string& camera)
             + std::to_string(nReq) + " px（要求恰 0）");
     std::cout << "  " << vAnchor.line() << "\n  " << vDomain.line() << "\n  "
         << vConsume.line() << "\n";
-    std::printf("\n  INFO 变亮（CSM 遮而 IZB 放，v1 近场语义）: %lld px\n",
-        static_cast<long long>(nBright));
+    std::printf("\n  INFO 变亮（CSM 遮而 IZB 放）: %lld px = 占屏 %.1f%%\n",
+        static_cast<long long>(nBright), 100.0 * static_cast<double>(nBright) / d.total());
+    std::printf(
+        "       ⚠ 这个数**不是**「v1 近场语义属预期」，它是 IZB 的缺陷②读数（管辖范围内系统性\n"
+        "         欠遮挡）。2026-10-10 已据此把交付 IZB 关掉（izb 默认 false），本判据的两条\n"
+        "         硬判据只测**寻址一致性**、不测遮挡量——别拿本命令绿了当「IZB 画质可用」。\n"
+        "         两个缺陷的完整读数 → docs/shadow_routes_plan.md §7\n");
     logCall("izb", {{"glb", glb}, {"camera", camera}}, {vAnchor, vDomain, vConsume});
     return (vAnchor.ok && vDomain.ok && vConsume.ok) ? 0 : 1;
 }

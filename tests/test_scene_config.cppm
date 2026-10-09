@@ -964,7 +964,7 @@ TEST_CASE("shadow_config：setShadowConfig → shadowConfig() 单例往返（N6b
 	// 还原出厂形态（单例 = 进程级状态，谁改谁负责收尾）
 	setShadowConfig(ShadowConfig{});
 	CHECK(shadowConfig().mode == ShadowMode::csm);
-	CHECK(shadowConfig().izb == true);
+	CHECK(shadowConfig().izb == false);  // 交付默认关（2026-10-10 换红线，理由见 ShadowConfig 头注）
 }
 
 TEST_CASE("shadowFormPlan：形态决策表逐档四件事（N6b 选路判断的唯一收口）") {
@@ -1247,11 +1247,12 @@ TEST_CASE("shadow_config：izb 两形态（布尔简写 / 子表 on+grid+dump_fr
 		CHECK(r->izbGrid == 1024u);
 		CHECK(r->izbDumpFrame == 7u);
 	}
-	{  // 子表缺 on = 保默认 true；grid 越界夹 [64,2048]；dump_frame 负数 = 0（旧 izb_* 口径）
+	{  // 子表缺 on = 保默认 **false**（交付默认，2026-10-10）；grid 越界夹 [64,2048]；
+	   // dump_frame 负数 = 0（旧 izb_* 口径）
 		TempLua f("sh_izb_clamp", "return { izb = { grid = 10, dump_frame = -3 } }\n");
 		auto r = loadShadowConfig(f.pathStr());
 		REQUIRE(r.has_value());
-		CHECK(r->izb == true);
+		CHECK(r->izb == false);  // 只写 grid/dump_frame 不动开关 = 保交付默认
 		CHECK(r->izbGrid == 64u);
 		CHECK(r->izbDumpFrame == 0u);
 		TempLua g("sh_izb_big", "return { izb = { grid = 99999 } }\n");
@@ -1298,17 +1299,17 @@ TEST_CASE("shadow_config 回显 describe：全默认 = 空串；改动只列改�
 	CHECK(describeShadowGates(d, d).empty());  // 反向用例：全默认一个都不喊
 	ShadowConfig c;
 	c.mode = ShadowMode::evssm;
-	c.izb = false;
+	c.izb = true;  // 默认已关 ⟹ 开回来才是"改动"，才会进 info 差集
 	c.evssm.searchRadius = 48.0;
 	const std::string s = describeShadowGates(c, d);
 	CHECK(s.find("mode=evssm") != std::string::npos);
-	CHECK(s.find("izb=false") != std::string::npos);
+	CHECK(s.find("izb=true") != std::string::npos);
 	CHECK(s.find("evssm.search_radius=48") != std::string::npos);
 	CHECK(s.find("pcss.sun_degrees") == std::string::npos);  // 未动的键不出现
 	const std::string all = describeAllShadowGates(d);
 	CHECK(std::ranges::count(all, '=') == 13);  // 全量 = 15 段 k=v（空格分隔）
 	CHECK(all.find("mode=csm") != std::string::npos);
-	CHECK(all.find("izb=true") != std::string::npos);
+	CHECK(all.find("izb=false") != std::string::npos);
 	CHECK(all.find("csm=reserved") != std::string::npos);  // 预留块出可读文本（差集永不喊）
 }
 

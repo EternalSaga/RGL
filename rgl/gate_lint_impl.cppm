@@ -35,7 +35,7 @@ struct GateRule {
 	bool (*violated)(const Ctx&);
 };
 
-/** 偏离默认值判定缩写（45 行表里少写 60 处三元噪声）。 */
+/** 偏离默认值判定缩写（46 行表里少写 60 处三元噪声）。 */
 template <typename T>
 constexpr bool deviated(const Ctx& c, const T DiagnosticsConfig::* field) {
 	return c.cfg.*field != c.defaults.*field;
@@ -100,6 +100,14 @@ const GateRule kGateRules[]{
 		"IZB 的 mask 由 shadow0 段重放填充：shadow.lua 的 mode = \"none\" 时段必空 ⟹ mask 无内容、"
 		"IZB 一帧阴影也不产（mask 每帧清零 = 全不遮挡，债-32 收口；与 mode = \"evssm\" 的 deferred 判据同形）",
 		[](const Ctx& c) { return c.shadow.izb && c.shadow.mode == ShadowMode::none; }},
+	{"izb", GateSeverity::warn,
+		"IZB 是**近场 v1 spike**，交付默认已关（2026-10-10 换红线）。两个结构性缺陷："
+		"① 只覆盖 cascade-0 光空间盒、盒外回落 CSM ⟹ 盒边界是一条**随相机在世界表面爬行的接缝**"
+		"（默认机位实测 1.76% 屏幕判反、亮度差中位 16 LSB / 最高 160 LSB）；"
+		"② 管辖范围内系统性欠遮挡（`just imgqa izb` 的「CSM 遮而 IZB 放」= 405048 px，rig 占屏 44%）。"
+		"关掉是测出来的：CSM 单独一档 `just imgqa swim` 影场世界不变（0/63835）。"
+		"读数与复现配方 → docs/shadow_routes_plan.md §7",
+		[](const Ctx& c) { return c.shadow.izb; }},
 	{"mode", GateSeverity::error,
 		"mode = \"evssm\" 需图为 deferred（EvssmShadow 不构造 = 该档整体无效，消费点在 deferred light pass）",
 		[](const Ctx& c) { return c.shadow.mode == ShadowMode::evssm && !c.deferredLight; }},

@@ -93,7 +93,7 @@ TEST_CASE("gate_lint 覆盖率护栏：规则表门名集合 == 两份回显表�
 	const auto rules = gateLintRuleGates();
 	const auto echo = diagnosticsEchoKeys();
 	const auto shadowEcho = shadowConfigEchoKeys();
-	CHECK(rules.size() == 45u);
+	CHECK(rules.size() == 46u);
 	CHECK(distinctGateCount(rules) == 43u);
 	CHECK(echo.size() == 30u);
 	CHECK(shadowEcho.size() == 13u);
@@ -111,16 +111,17 @@ TEST_CASE("gate_lint 基线：全默认配置（任何图/任何世界）零 fin
 	// 反向用例总锚：configs/diagnostics.lua 与 configs/shadow.lua 写满默认值的现实 =
 	// lint 必须沉默。变异红线：任何 nullptr 谓词行被改成恒真 → 本用例红。
 	const DiagnosticsConfig d;
-	// 结构体默认 = 交付形态（csm + izb），该组合**只在 deferred 图合法**（izb × forward
-	// = error 恰是规则该说的话——运行时行为不变：旧 configs/diagnostics.lua 本就写
-	// izb_shadow=true，forward + 出厂配置在改造前同样是 error）。
+	// 结构体默认 = 交付形态（csm + **izb 关**，2026-10-10 换红线）。izb 关之后交付默认在
+	// **两种图上都沉默**（此前 izb 开 ⟹ forward 必有一条 izb error，"全默认零 findings"这条
+	// 总锚其实一直是靠例外撑着的，现在才是真锚）。
 	const auto fwd = passesOf(defaultRenderGraphDesc());
 	CHECK(lint(d, fwd, RgGraphVariant::forward, {}, kShadowFwd).empty());
 	CHECK(lint(d, passesOf(deferredRenderGraphDesc()), RgGraphVariant::deferred, kHappyEnv).empty());
-	// 交付默认（csm+izb）× forward = 恰有一条 izb error（新默认的正向锚点；mode=csm
-	// 不触发第二条 izb 规则 ⟹ 恰 1 而不是 2）
-	CHECK(std::ranges::count(lint(d, fwd, RgGraphVariant::forward, {}), "izb",
-		&GateFinding::gate) == 1);
+	// 反向锚点：把 izb 显式开回来 ⟹ forward 上 izb 恰有 **2** 条（一条 error = 非 deferred
+	// 图、一条 warn = 交付已关的近场 v1）。这条在，"izb 关"才不是把规则删掉才绿的。
+	const ShadowConfig onIzb{.izb = true};
+	CHECK(std::ranges::count(lint(d, fwd, RgGraphVariant::forward, {}, onIzb), "izb",
+		&GateFinding::gate) == 2);
 	// 全默认 + headless/llm关/static关 也零（门全关时环境事实不参与判定）
 	const GateEnv dark{.headless = true, .llmCapture = false, .staticGraphicsIndirect = false};
 	CHECK(lint(d, fwd, RgGraphVariant::forward, dark, kShadowFwd).empty());
@@ -130,7 +131,8 @@ TEST_CASE("gate_lint error 组：izb × {非 deferred 图, mode=none} / mode=evs
 	const auto fwd = passesOf(defaultRenderGraphDesc());
 	const auto def = passesOf(deferredRenderGraphDesc());
 	{  // 正例：IZB × forward = error（此前静默早退）
-		const auto fs = lint(DiagnosticsConfig{}, fwd, RgGraphVariant::forward, kHappyEnv);
+		const auto fs = lint(DiagnosticsConfig{}, fwd, RgGraphVariant::forward, kHappyEnv,
+			ShadowConfig{.izb = true});
 		REQUIRE(find(fs, "izb") != nullptr);
 		CHECK(find(fs, "izb")->severity == GateSeverity::error);
 	}
@@ -152,22 +154,26 @@ TEST_CASE("gate_lint error 组：izb × {非 deferred 图, mode=none} / mode=evs
 	}
 	{  // 正例（债-32）：IZB × mode="none" = error。mask 由 shadow0 段重放填充，
 	   // 图集不画 ⟹ 段必空 ⟹ mask 无内容 ⟹ IZB 一帧阴影也不产
-		const ShadowConfig noneIzb{.mode = ShadowMode::none};
+		const ShadowConfig noneIzb{.mode = ShadowMode::none, .izb = true};
 		const auto fs = lint(DiagnosticsConfig{}, def, RgGraphVariant::deferred, kHappyEnv, noneIzb);
 		REQUIRE(find(fs, "izb") != nullptr);
 		CHECK(find(fs, "izb")->severity == GateSeverity::error);
 	}
-	{  // 反向（configs/shadow.lua 现值即此组合）：izb 开 + mode=csm + deferred
+	{  // 反向（configs/shadow.lua 现值即此组合）：**交付默认 izb 关** + mode=csm + deferred
 	   // ⟹ izb 零 findings（常错的 lint = 被静音的 lint，防腐条款 2）
 		CHECK(find(lint(DiagnosticsConfig{}, def, RgGraphVariant::deferred, kHappyEnv), "izb")
 			== nullptr);
 	}
-	{  // 两条 izb 规则**各自独立**（非 deferred 图 + mode=none = 两个根因同时成立
-	   // ⟹ 两条 findings，各有自己的消息；合并成一条 = 丢归因）
-	   // 变异红线：删掉任一条 izb 规则 → 本断言只剩 1 条 ⟹ 红
-		const ShadowConfig noneIzb{.mode = ShadowMode::none};
+	{  // 两条 izb **error** 规则各自独立（非 deferred 图 + mode=none = 两个根因同时成立
+	   // ⟹ 两条 error findings，各有自己的消息；合并成一条 = 丢归因）
+	   // 变异红线：删掉任一条 izb error 规则 → 本断言只剩 1 条 ⟹ 红
+		const ShadowConfig noneIzb{.mode = ShadowMode::none, .izb = true};
 		const auto fs = lint(DiagnosticsConfig{}, fwd, RgGraphVariant::forward, kHappyEnv, noneIzb);
-		CHECK(std::ranges::count(fs, "izb", &GateFinding::gate) == 2);
+		// 两条 **error** 各自独立（第三条 izb finding 是"交付已关"的 warn，与本断言的归因无关，
+		// 故按 severity 计数而不是按 gate 计数——按 gate 计会把 warn 混进来变成"3 条 error"的假象）
+		CHECK(std::ranges::count_if(fs, [](const GateFinding& f) {
+			return f.gate == "izb" && f.severity == GateSeverity::error;
+		}) == 2);
 	}
 }
 
@@ -273,6 +279,21 @@ TEST_CASE("gate_lint warn 组：dgc_static 能力不符 / imgui×headless / rpc_
 	}
 }
 
+TEST_CASE("gate_lint warn 组（shadow）：izb 开 = warn（交付默认已关，开回来必须被提醒）") {
+	const auto def = passesOf(deferredRenderGraphDesc());
+	// 正例：deferred + mode=csm + izb 开 ⟹ 恰一条 izb **warn**（两条 error 规则都不成立，
+	// 所以只有这条）。消息里必须带两个实测读数——warn 不带上游为什么关掉的数，就会被当噪声读。
+	const ShadowConfig s{.izb = true};
+	const auto fs = lint(DiagnosticsConfig{}, def, RgGraphVariant::deferred, kHappyEnv, s);
+	REQUIRE(find(fs, "izb") != nullptr);
+	CHECK(find(fs, "izb")->severity == GateSeverity::warn);
+	CHECK(find(fs, "izb")->message.find("405048") != std::string::npos);
+	CHECK(find(fs, "izb")->message.find("cascade-0") != std::string::npos);
+	// 反向：交付默认（izb 关）零 findings —— 变异红线：谓词写成恒真即红
+	CHECK(find(lint(DiagnosticsConfig{}, def, RgGraphVariant::deferred, kHappyEnv), "izb")
+		== nullptr);
+}
+
 TEST_CASE("gate_lint warn 组（shadow）：izb.dump_frame × izb 关") {
 	const auto def = passesOf(deferredRenderGraphDesc());
 	{  // 正例：izb 关但写了 dump_frame = warn（有人真打算 dump）
@@ -282,7 +303,7 @@ TEST_CASE("gate_lint warn 组（shadow）：izb.dump_frame × izb 关") {
 		CHECK(find(fs, "izb.dump_frame")->severity == GateSeverity::warn);
 	}
 	{  // 反向：izb 开 + dump_frame 非零 = 不喊（回读的是真存在的 IZB head）
-		const ShadowConfig s{.izbDumpFrame = 120};
+		const ShadowConfig s{.izb = true, .izbDumpFrame = 120};
 		CHECK(find(lint(DiagnosticsConfig{}, def, RgGraphVariant::deferred, kHappyEnv, s),
 			"izb.dump_frame") == nullptr);
 	}
@@ -305,7 +326,7 @@ TEST_CASE("gate_lint inertNote 组（shadow）：izb.grid 与两档调参块按 
 		CHECK(find(fs, "izb.grid")->severity == GateSeverity::inertNote);
 	}
 	{  // 反向：izb 开 + grid 偏离 = 不喊（网格真按它构造）
-		const ShadowConfig s{.izbGrid = 1024};
+		const ShadowConfig s{.izb = true, .izbGrid = 1024};
 		CHECK(find(lintS(s), "izb.grid") == nullptr);
 	}
 	{  // pcss.* 三键：mode=csm（出厂档）时是死值；mode=pcss 时有效

@@ -103,7 +103,7 @@ export std::vector<GateFinding> lintDiagnosticsGates(const DiagnosticsConfig& cf
 ```
 
 - **申报式规则表**（一条规则 = 门名 + 谓词 + 原因），全表集中一文件、顺序固定。现行表 =
-  **45 行 / 43 门**（diagnostics 侧 30 行 30 门 + shadow 侧 15 行 13 门；行数 ≠ 门数，
+  **46 行 / 43 门**（diagnostics 侧 30 行 30 门 + shadow 侧 16 行 13 门；行数 ≠ 门数，
   一门可多条规则 → §8.6）。
 - **覆盖率护栏**：测试断言 45 个门**每个都有一条规则或显式 `noPrecondition` 标注**——
   加门时必须回答"这门的生效前置是什么"，答不出就得显式写"无前置"。批 N6b 起两份配置各一份

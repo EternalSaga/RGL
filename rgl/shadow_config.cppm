@@ -69,13 +69,31 @@ export struct ShadowTuning {
 
 /**
  * 阴影配置（configs/shadow.lua → ShadowConfig）。**代码默认 = 交付形态**
- * （mode=csm、izb=true——「承认 IZB 出厂开」的落点，docs/shadow_routes_plan.md §1 拍板）。
- * izbGrid / izbDumpFrame 是 izb 子块的诊断两键（语义沿用旧 izb_grid / izb_dump_frame）。
+ * （mode=csm、**izb=false**）。izbGrid / izbDumpFrame 是 izb 子块的诊断两键（语义沿用旧
+ * izb_grid / izb_dump_frame）。
+ *
+ * ### izb 默认 true → false（2026-10-10，用户放行换红线）
+ *
+ * 这里曾经是 `true`，理由只是「承认出厂开」（§1 拍板 3）——**那是记录现状，不是质量裁决**。
+ * 实测两个结构性缺陷（读数与复现配方 → `docs/shadow_routes_plan.md` §7）：
+ *
+ * 1. **随相机爬行的接缝**：IZB 只覆盖 **cascade-0 光空间盒**（`izb_create.comp.slang` 头注自陈
+ *    「v1 只覆盖 split0 范围…HFTS 分区留阶段 2」），盒外回落 `sampleShadow1Tap`（CSM 4 抽头 PCF）。
+ *    两套算法在边界两侧给出**不同答案** ⟹ 边界成了一条在世界表面上爬的线。三色哨兵（盒内全黑 /
+ *    盒外全白）一步定死：实测那条蓝色裂缝**正好压在盒边界上**。默认机位实测 **1.76% 屏幕判反**，
+ *    亮度差中位 **16 LSB**、p95 41、最高 **160 LSB**（8 LSB 是本仓"刚好可觉"口径）。
+ * 2. **管辖范围内系统性欠遮挡**：`imgqa izb` 自己打印的 `INFO 变亮（CSM 遮而 IZB 放）`=
+ *    **405048 px**（rig，占屏 44%）。这条此前被登记成 INFO 放过去 = 判据记录了缺陷又放它过。
+ *
+ * 关掉是**测出来的选择**，不是妥协：CSM 单独一档已被 `imgqa swim` 证明影场世界不变（零位移失配
+ * 0/63835），且 `light.frag.slang` 头注记着「同一太阳下 IZB 遮挡集 ⊆ CSM 遮挡集」⟹ 拿 CSM 单独
+ * 作源不丢遮挡（它遮的是超集），只丢那条缝。**IZB 代码路径一律保留**（`mode` 与 `izb` 正交，
+ * 开回来仍可用），gate_lint 对 `izb = true` 出 **warn** 把上面两个读数带在消息里，防止被随手打开。
  */
 export struct ShadowConfig {
 	ShadowMode mode = ShadowMode::csm;  ///< 软影滤波轴（四值互斥）
-	bool izb = true;                     ///< 正交修饰：光空间硬影 mask（要求 mode != none，
-	                                      ///< 该组合门由 gate_lint 在 N6b 接管，本批不接）
+	bool izb = false;                   ///< 正交修饰：光空间硬影 mask（要求 mode != none）。
+	                                      ///< **默认 false 的理由见上方整段**，别当笔误改回 true
 	uint32_t izbGrid = 512;              ///< 光空间 IZB 网格边长 G（izb.grid；clamp [64, 2048]）
 	uint32_t izbDumpFrame = 0;           ///< 第 N 帧起回读 head 直方图打日志（izb.dump_frame；0=关）
 	ShadowTuning pcss{};                 ///< PCSS 档调参（mode=pcss 时消费）

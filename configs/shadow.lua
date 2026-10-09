@@ -3,10 +3,10 @@
 -- 解析器 = rgl/shadow_config.cppm，回显见启动日志 "shadow: mode=... izb=..."）。
 --
 -- 为什么 izb 是**正交布尔**而不是 mode 枚举的第五值（shadow_routes_plan.md §2 红线 1）：
--- 交付路径就是 csm + izb 同时开（红线 A 那张图），且「IZB 近场细影 + 远场软影」混接
--- （evssm_plan.md 11.6e）要求两者共存 ⟹ 枚举管**软影滤波轴**（none/csm/pcss/evssm 互斥），
--- izb 管**硬影 mask**，两条轴正交。izb=true × mode="none" 的组合无意义，由 gate_lint 在
--- 启动期报 error（N6b 已接管），不在这里造第五个枚举值。
+-- 「IZB 近场细影 + 远场软影」混接（evssm_plan.md 11.6e）要求两者共存 ⟹ 枚举管**软影滤波轴**
+-- （none/csm/pcss/evssm 互斥），izb 管**硬影 mask**，两条轴正交。izb=true × mode="none" 的组合
+-- 无意义，由 gate_lint 在启动期报 error（N6b 已接管），不在这里造第五个枚举值。
+-- ⚠ 正交是**形状**上的判断，不代表交付该同时开：izb 现在默认 **false**，理由见下方 izb 块。
 --
 -- ⚠ 旧键（shadow_pass / shadow_pcss / shadow_evssm / pcss_* / izb_*）已从 diagnostics.lua
 -- 删除且**出现即启动失败**（红线 2：不静默映射；fail-fast 永久保留）。N6b 起本文件是阴影
@@ -24,11 +24,21 @@ return {
 
     -- 正交修饰：光空间硬影 mask（旧 izb_shadow；要求 mode ~= "none"，仅 deferred light pass 消费）。
     -- 布尔简写 = 只开关；子表形态收编旧 izb_grid / izb_dump_frame 两键（语义原样）：
-    --   on         = 开关（缺省 true）
+    --   on         = 开关（缺省 **false**）
     --   grid       = 光空间网格边长 G（旧 izb_grid；clamp [64, 2048]，防手滑建巨型缓冲）
     --   dump_frame = 第 N 帧（1 起）起每 30 帧回读 head 直方图打日志 + 覆盖写 izb_mask.ppm
     --                （旧 izb_dump_frame；0 = 关）——IZB 冒烟阳性锚点，N+1 帧起输出
-    izb = { on = true, grid = 512, dump_frame = 0 },
+    --
+    -- ⚠ **on 从 true 改成 false（2026-10-10，用户放行换红线）**。IZB 有两个结构性缺陷，
+    --    读数与复现配方 → docs/shadow_routes_plan.md §7：
+    --      ① 它只覆盖 **cascade-0 光空间盒**，盒外回落 CSM ⟹ 两套算法在盒边界两侧给出不同
+    --         答案，边界成了一条**随相机在世界表面爬行的线**（默认机位实测 1.76% 屏幕判反、
+    --         亮度差中位 16 LSB、最高 160 LSB）。
+    --      ② 在自己管辖范围内就系统性欠遮挡：`just imgqa izb` 打印的「CSM 遮而 IZB 放」
+    --         = 405048 px（rig，占屏 44%）。
+    --    关掉是测出来的：CSM 单独一档 `imgqa swim` 影场世界不变（零位移失配 0/63835）。
+    --    开回来 = 把上面两条一起开回来，gate_lint 会 warn。
+    izb = { on = false, grid = 512, dump_frame = 0 },
 
     -- CSM 档暂无调参键（定案形状里的预留块，留着是为了加键时不改形状；写了不认识的
     -- 子键不报错也不生效——未知键 lint 只到顶层，同 diagnostics 口径）

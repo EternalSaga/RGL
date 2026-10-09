@@ -314,7 +314,10 @@ const std::vector<JudgmentInfo>& attachmentJudgments()
             "三条子判据：锚点（变暗集非空 = 消费活着）、变暗域 ⊆ mask（寻址对得上）、mask∩受光 "
             "⊆ 变暗域（有遮必消费）。⚠️ 边界：本判据 mask↔画面**同源**，生产者侧几何错（ndc "
             "镜像类）会同步污染 mask 与画面 → 本判据不可见，那半边由 test_izb_engine_contract"
-            "（A1 闭式）钉；mask vs manifest 预测影包络（生产者端到端）= 已识别扩展，未做。",
+            "（A1 闭式）钉；mask vs manifest 预测影包络（生产者端到端）= 已识别扩展，未做。"
+            "⚠️ **绿不等于画质可用**（2026-10-10 补）：本判据只测寻址一致性，变亮集（rig 405048 px "
+            "= 占屏 44%）是 IZB 系统性欠遮挡的读数、被三条子判据整个漏掉——正是这个漏判让 IZB 出厂开了"
+            "很久。交付已据此关 izb（docs/shadow_routes_plan.md §7）。",
             {"2026-10-02 消费端字节偏移 ÷4 bug（门开无影）→ 锚点+消费两红——本判据设计原型即那次手工对拍"},},
         {"ao-noise", JudgmentFamily::Attachment,
             "**主判据的容差来自恒等式，不是相似度**：AGENTS.md 登记的契约「开阔地面 AO 恒 "
