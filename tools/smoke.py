@@ -296,14 +296,58 @@ def run_engine(exe: Path, timeout: int, syncval: bool = False) -> tuple[int, str
              f"）——日志 {LOG_PATH.relative_to(ROOT)}")
 
 
+def count_severities(log: str) -> tuple[list[str], list[str]]:
+    """数 error / warning 级日志行（**不打印**，给只要计数不要现场的工具用）。
+
+    severity 映射见 `rgl/utils.cppm` vulkanDebugCallback：引擎自身 error 与 VVL 的 VUID
+    都落 `[error]`。拆出来是为了让 `tools/regress.py` 复用同一口径——两处各写一遍
+    `"[error]" in ln` 迟早漂成两个判据。
+    """
+    return ([ln for ln in log.splitlines() if "[error]" in ln],
+            [ln for ln in log.splitlines() if "[warning]" in ln])
+
+
+def gpu_of(log: str) -> str:
+    """启动日志里的实际渲染 GPU（三机轮换，任何读数都要绑机器）。"""
+    m = re.search(r"Selected rendering GPU: (.+?) \(score=(\d+)\)", log)
+    return f"{m.group(1)} (score={m.group(2)})" if m else "未取到（引擎没走到选设备？）"
+
+
+def parse_size(text: str | None) -> tuple[int, int] | None:
+    """`--size` 解析（WxH）。给 regress 复用，免得两处对同一旗标有两种宽容度。"""
+    if not text:
+        return None
+    m = re.fullmatch(r"(\d+)\s*[xX]\s*(\d+)", text.strip())
+    if not m:
+        fail(f"--size 要 WxH 形态，收到 {text!r}")
+    return int(m.group(1)), int(m.group(2))
+
+
+def guard_flags(clip: int | None, aa: str | None, fsr_temporal: bool,
+                fsr_jitter: bool) -> None:
+    """旗标守卫（批 14.6 三态化后从三条收成两条）。
+
+    单独成函数是为了 `tools/regress.py` 复用同一组守卫：守卫只在一处生效的话，
+    绕过它的那条路就会静默量到一张与默认逐位相同的图，却报成「档位生效了」。
+    """
+    if clip is not None and aa != "taa":
+        fail("--clip 必须配 --aa taa：TAA 不在图时 taa 段整个不进图，clip_mode 不被任何 "
+             "shader 消费 ⟹ 这条旗标会静默量到一张与默认逐位相同的图，却报成「档位生效了」")
+    if (fsr_temporal or fsr_jitter) and aa != "fsr":
+        fail("--fsr-temporal/--fsr-jitter 是 --aa fsr 的子选项：其余态下 fsr 块调参没有"
+             "消费者（引擎只在 aa=fsr 时才接 FSR），只开子选项 = 空开关（配置里写了、"
+             "什么都没发生）")
+    if fsr_jitter and not fsr_temporal:
+        fail("--fsr-jitter 必须配 --fsr-temporal：时域档关着 ⟹ 没有历史重投影去抵消抖动"
+             " ⟹ 量到的只是一张整体亚像素平移过的纯空间图（configs/runtime.lua fsr 块注释"
+             "早写过这个坑）")
+
+
 def report(log: str) -> tuple[list[str], list[str]]:
     """打印设备/选路现场，返回 (error 行, warning 行)。"""
-    errors = [ln for ln in log.splitlines() if "[error]" in ln]
-    warnings = [ln for ln in log.splitlines() if "[warning]" in ln]
-    gpu = re.search(r"Selected rendering GPU: (.+?) \(score=(\d+)\)", log)
+    errors, warnings = count_severities(log)
     dgc = re.search(r"DGC path: device='[^']*'.*?-> (.+)", log)
-    print(f"GPU    : {gpu.group(1) if gpu else '未取到（引擎没走到选设备？）'}"
-          + (f" (score={gpu.group(2)})" if gpu else ""))
+    print(f"GPU    : {gpu_of(log)}")
     print(f"DGC 路 : {dgc.group(1).strip() if dgc else '未取到'}")
     # 阳性锚点：headless 真生效了吗——否则本次跑的是一次交互窗，判据全废
     if "headless 模式" not in log:
@@ -368,29 +412,11 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    size = None
-    if args.size:
-        m = re.fullmatch(r"(\d+)\s*[xX]\s*(\d+)", args.size.strip())
-        if not m:
-            fail(f"--size 要 WxH 形态，收到 {args.size!r}")
-        size = (int(m.group(1)), int(m.group(2)))
+    size = parse_size(args.size)
     if "/" in args.name or ".." in args.name:
         fail(f"--name 只准文件名（不要带路径），收到 {args.name!r}")
 
-    # ── 旗标守卫（批 14.6 三态化后从三条收成两条）──
-    # 原「--fsr-temporal 与 --taa 互斥」那条**已删**：aa 是一个槽位，"temporal 撞 taa"
-    # 这种组合现在根本表达不出来（引擎侧 resolveFsrTemporal 同理由退化为防御性断言）。
-    if args.clip is not None and args.aa != "taa":
-        fail("--clip 必须配 --aa taa：TAA 不在图时 taa 段整个不进图，clip_mode 不被任何 "
-             "shader 消费 ⟹ 这条旗标会静默量到一张与默认逐位相同的图，却报成「档位生效了」")
-    if (args.fsr_temporal or args.fsr_jitter) and args.aa != "fsr":
-        fail("--fsr-temporal/--fsr-jitter 是 --aa fsr 的子选项：其余态下 fsr 块调参没有"
-             "消费者（引擎只在 aa=fsr 时才接 FSR），只开子选项 = 空开关（配置里写了、"
-             "什么都没发生）")
-    if args.fsr_jitter and not args.fsr_temporal:
-        fail("--fsr-jitter 必须配 --fsr-temporal：时域档关着 ⟹ 没有历史重投影去抵消抖动"
-             " ⟹ 量到的只是一张整体亚像素平移过的纯空间图（configs/runtime.lua fsr 块注释"
-             "早写过这个坑）")
+    guard_flags(args.clip, args.aa, args.fsr_temporal, args.fsr_jitter)
 
     exe = check_prereq()
     single_instance_or_die()

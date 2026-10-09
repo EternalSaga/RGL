@@ -264,6 +264,16 @@ smoke *ARGS="":
 shot *ARGS="":
     @python tools/smoke.py shot {{ ARGS }}
 
+# BIT-IDENTICAL 逐位回归（债-09 + 债-46）。判据口径与归因三态 → `tools/regress.py` docstring：
+#   just regress selftest                量具自检（任何判定前也会自动先跑）
+#   just regress floor                   同一构建连跑 N 次 = 本机 run-to-run 噪声地板
+#   just regress ab                      同会话双构建（工作树 vs --ref，默认 HEAD）+ 归因
+#   just regress burst --lag 16          连拍量最小同相位周期（时域位级出口）
+# 三条不可谈：零容差（差异大小只归因不放行）· 不存 golden · 不存基线哈希（--expect 只
+# 接受你从文档抄来的前缀）。配置旗标与 just smoke 同源（--variant/--aa/--size/--clip/…）。
+regress *ARGS="":
+    @python tools/regress.py {{ ARGS }}
+
 # 核显运行（Linux AMD 集显，原生渲染，无 offload）
 # 必须用 VK_DRIVER_FILES 隐藏 NVIDIA ICD —— 设备评分器默认选 dGPU（分数更高）
 run-igpu:
