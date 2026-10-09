@@ -1449,6 +1449,11 @@ FSR 的 velocity 护栏（改前）：转换块把 barrier 的 `newLayout` 与�
 2. **开关能生效**（阳性锚点不靠变异）：`VK_LAYER_VALIDATE_SYNC=1` 下，**未变异的现行代码**报出
    **3 类 10 条 hazard**（+1 条 duplicate_message_limit 提示 = smoke 计数 11），而同一份代码不开 syncval 时
    `errors=0` ⟹ 开关打开的是一个平时**完全不存在**的子系统。
+   ⚠ **上面这 11 条是当日读数，同日已全部修至 0**（`053e38a`：`usageInfo(depthWrite)` 的 stage 漏
+   `LATE_FRAGMENT_TESTS` ×5 / scene data 单份跨帧共享 buffer 两个写者零依赖 ×4 / present 转换看不见
+   图外捕获段的 Transfer 读 ×1 / 提示 ×1），并把 syncval 做成了常驻闸门 `just smoke --sync`
+   （带阳性锚点与 `no_vvl` 生效核对，`db2fe38`）。**本节下面那条「VVL 抓不到」的结论不受影响** ——
+   修掉的是 API 轴那批，shader 轴那条支路一条没动。
 3. **但对本批指定的变异（删 `IzbShadow::recordFrame` 里 FillBuffer→compute 那条 buffer barrier），
    开与不开都不报**：
 
@@ -1491,7 +1496,8 @@ FSR 的 velocity 护栏（改前）：转换块把 barrier 的 `newLayout` 与�
    （`sdl3window.cppm` ×3 / `QueueFamilyManager.cppm` ×1；那里的 `errMsg` 是**已格式化**的字符串，
    再被二次当格式串解析，SDL 错误消息带花括号即炸）。
    **复验判据（阳性锚点）**：`VK_LAYER_VALIDATE_SYNC=1 just smoke` 修前 terminate、修后跑完并完整
-   打出 11 条 hazard（`pImageMemoryBarriers[6]: {` 那条多行消息逐字段落盘 = 崩溃触发点本身）；
+   打出当时的 11 条 hazard（`pImageMemoryBarriers[6]: {` 那条多行消息逐字段落盘 = 崩溃触发点本身；
+   那 11 条同日已修至 0，见上面第 2 条）；
    不开 syncval 的常规路径 `PASS errors=0`、截图逐位不变、`just test` 全绿。
    ⚠ 本条**未硬凑单测**：回调体没有可断言的逻辑，能断言的只有「含花括号的消息不炸」，而那要真跑
    VVL 才量得到 ⟹ 验收走上面的端到端判据（还债总账 §3「给写不出断言的东西硬凑测试」）。
