@@ -396,10 +396,15 @@ void Renderer::evssmLightPassPre(vk::raii::CommandBuffer& cmd, const RgPassPlan&
 void Renderer::replayIzbMaskSegment(vk::raii::CommandBuffer& cmd, const FrameDrawList& list) {
 	const auto seg = segmentSpan(shadowDrawSource(0), list);
 	if (seg.empty()) {
+		// 债-32：段空**不再需要**走 mask pass——mask 的每帧清零已搬到 `IzbShadow::recordFrame`
+		// 第 ⑧ 步（`izbLightPassPre` 每帧无条件先调它，再调本函数），所以这里早退不会让
+		// light.frag 读到未初始化显存：mask 此刻恒为全 0 = 「无遮挡」，与 shadow_pass 关
+		// 本应给出的画面一致（清零留在 beginMaskPass 之内时，这条早退 = 整帧不写 mask = 真 UB，
+		// 本机此前逐位相同纯属新页读零的侥幸）。组合本身无意义由 gate_lint 启动期 error 喊。
 		if (!izbMaskSegmentWarned) {
 			izbMaskSegmentWarned = true;
 			if (auto* lg = RLLogger::getInstance())
-				lg->warn("izb: shadow0 段为空（shadow_pass 关或无投影体）→ mask 无内容");
+				lg->warn("izb: shadow0 段为空（shadow_pass 关或无投影体）→ 本帧 mask 无内容 = 无遮挡");
 		}
 		return;
 	}

@@ -331,6 +331,37 @@ render_graph 零改动版**。
   即 v1「cascade-0 近场」语义的 patch 边界扫过（街景 c0 仅 r=0.25 光盒贴相机）。
   修法待拍板：覆盖外回落 CSM（推荐）/ 换挂 c3 / 阶段 2 多网格。
 
+**债-32 收口（2026-10-09：mask 永不清零 = 着色器读未初始化显存）**
+
+- **根因（一句话）**：mask 的 `FillBuffer` 清零写在 `IzbShadow::beginMaskPass` 之内，而 mask
+  pass **会被调用点整段跳过**（`Renderer::replayIzbMaskSegment` 在 shadow0 段为空时早退 =
+  `shadow_pass=off` 或无投影体）；消费侧 `light.frag` 的 `izbShadowFactor` 只看 izb flag
+  （= `izbShadow` 已构造，**不判 shadow_pass**）照常被读 ⟹ 该组合下整帧无人写过 mask，shader
+  读未初始化显存。本机此前与 shadow-off 逐位相同 = 「新页读零」×「bit=0 语义恰为无遮挡」两条
+  侥幸叠乘，换驱动 / 分配器复用脏页即翻车。
+- **修法 = 搬走清零，不是给调用点加纪律**：清零移到 `IzbShadow::recordFrame` 第 ⑧ 步（每帧
+  无条件；`izbLightPassPre` 逐 pass 无条件调它）。此后「izb flag=1 ⟹ mask 本帧被写过」**由结构
+  成立**，调用点再怎么早退都跳不掉。两条位置/同步红线：① 必须在 dump 拷贝**之后**——dump 读的是
+  **上一帧**的 mask（`imgqa izb` 吃它），清在前面 `shadowed` 恒 0；② fill 的 dst barrier 补
+  `ShaderRead`——段空时没有 `endMaskPass` 那条写→读 barrier，light.frag 的读得由 fill 排序。
+- **护栏**：gate_lint 新增 `izb_shadow × shadow_pass=off` error（与 `shadow_evssm` 同判据同形）。
+  规则表**首次一门两行**（两个根因各一条消息，合并 = 丢归因）⟹ 覆盖率护栏改钉**去重后的门数**。
+- **判据（本机 8060S / RADV，1280×720 deferred）**：① 红线 = 默认配置截图 SHA256 `fdece9d0…`
+  复现（正常路径命令数不变：三条 mask 命令只是换了宿主函数。7 次里 6 次逐位、1 次 1 像素
+  ±1 LSB，而**改动前**二进制同档连拍也漂 1 次 1 像素 ≤4 LSB ⟹ 本机既有 nondeterminism，
+  非本批引入 → 总账债-09）；② `just smoke --sync` hazard 0；③ `just test` 242 全绿；
+  ④ **位置红线的直接复验**：`izb_dump_frame=3` 跑通 → `shadowed=109294` > 0（清零若搬到 dump
+  之前该值恒 0），该档再开 syncval 仍 errors=0；⑤ **阳性锚点（变异）**：把 ⑧ 的 fill 值改成
+  `0xFFFFFFFF` 跑 `shadow off × izb on` → 画面整片失去直射光（消费通路是活的、fill 真落地）
+  ⟹ 修前该组合「无人写 mask」不是纸面推理；⑥ 修后 `shadow off × izb on` 与
+  `shadow off × izb off` 逐位相同（`121e7502…`）= 全 0 mask 的「无遮挡」与 shadow-off 本应
+  给出的画面重合，且这次**由构造**；⑦ lint 三条变异各自验红（谓词恒假 → 正例红 / 谓词去掉
+  `shadowPass` → 反向红 / 整行删掉 → 覆盖率与「两条独立规则」计数红）。
+- **教训（`TEST:` `tests/test_gate_lint.cppm` + `GUARD:` gate_lint 规则表）**：**每帧必达**的写
+  （清零 / 初始化 / 上传）宿主必须选在**每帧必到**的编舞里。挂在「可选 pass 的 begin」上 = 把
+  正确性押在「调用点不会跳过这个 pass」这条没人守的约定上，而这一维 VVL / syncval **根本不建模**
+  （债-75 同族：shader 侧发起的访问它无从归因）——所以这类洞只有结构能堵，日志和层都指望不上。
+
 **1d 光空间保守光栅 pass + mask 写入**：✅ 已完成（上文）；「izb_rig 出硬影」= 1e 消费后。
 
 **1e 消费接入 + forward z-prepass**，D1 对拍（forward vs deferred 的 izb 阴影），

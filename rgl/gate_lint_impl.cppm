@@ -39,11 +39,13 @@ constexpr bool deviated(const Ctx& c, const T DiagnosticsConfig::* field) {
 }
 
 /**
- * 38 门申报表（与 DiagnosticsConfig 字段/回显表一一对应，覆盖率由
+ * 38 门 / 39 行申报表（与 DiagnosticsConfig 字段/回显表一一对应，覆盖率由
  * tests/test_gate_lint.cppm 钉死）。级别判据 = 计划 §4：error 只留给
  * 「必然完全无效且无其他信号」，拿不准一律 warn / inertNote。
+ * **行数 ≠ 门数**：一门可以有多条规则（`izb_shadow` 两条 = 非 deferred 图 / shadow_pass 关，
+ * 两个根因各自一条消息，合并会丢归因）；覆盖率护栏钉的是**去重后的门数** == 回显表键数。
  */
-const std::array<GateRule, 38> kGateRules{{
+const std::array<GateRule, 39> kGateRules{{
 	// ———— 无前置门（对着驱动/上传路径/日志本身工作，任何组合都生效）————
 	{"no_vvl", GateSeverity::inertNote, "", nullptr},  // vkinstance 建 instance 时读
 	{"no_hdr", GateSeverity::inertNote, "", nullptr},  // vulkan_window 选格式时读
@@ -70,6 +72,10 @@ const std::array<GateRule, 38> kGateRules{{
 	{"izb_shadow", GateSeverity::error,
 		"IZB 只接 deferred 光照 pass：非 deferred 图下 izbPreFrame 零命令（此前静默，EVSSM 同条件却喊——不对称收口）",
 		[](const Ctx& c) { return c.cfg.izbShadow && !c.deferredLight; }},
+	{"izb_shadow", GateSeverity::error,
+		"IZB 的 mask 由 shadow0 段重放填充：shadow_pass=off 时段必空 ⟹ mask 无内容、IZB 一帧阴影也不产"
+		"（mask 每帧清零 = 全不遮挡，债-32 收口；与 shadow_evssm 的 shadow_pass 判据同形）",
+		[](const Ctx& c) { return c.cfg.izbShadow && !c.cfg.shadowPass; }},
 	{"shadow_evssm", GateSeverity::error,
 		"EVSSM 需 shadow_pass=on 且图为 deferred（EvssmShadow 不构造 = 门整体无效，消费点在 deferred light pass）",
 		[](const Ctx& c) { return c.cfg.shadowEvssm && (!c.cfg.shadowPass || !c.deferredLight); }},

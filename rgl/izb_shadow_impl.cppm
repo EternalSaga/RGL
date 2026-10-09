@@ -257,9 +257,32 @@ vk::ImageLayout IzbShadow::recordFrame(vk::raii::CommandBuffer& cmd,
 		vk::PipelineStageFlagBits2::eAllGraphics,
 		vk::AccessFlagBits2::eDepthStencilAttachmentWrite | vk::AccessFlagBits2::eShaderRead);
 
-	// ⑦ dump（可选）+ 帧奇偶推进
+	// ⑦ dump（可选）+ ⑧ mask 清零 + 帧奇偶推进
 	if (dumpHead)
 		recordDumpCopy(cmd);
+	// ⑧ mask **每帧无条件**清零（债-32）。清零属于每帧编舞，**不属于 mask pass**：mask pass
+	//   是可以被整段跳过的（shadow0 段为空 = shadow_pass 关或无投影体，见
+	//   `Renderer::replayIzbMaskSegment` 的早退），而 light.frag 的 `izbShadowFactor` 只看
+	//   izb flag（= 本对象已构造，**不判 shadow_pass**）照常被消费。清零原先写在
+	//   `beginMaskPass` 之内 ⟹ 段空的帧 mask 一帧都不被写 = 着色器读未初始化显存（真 UB；
+	//   本机画面与 shadow-off 逐位相同纯属"新页读零 + bit=0 语义恰为无遮挡"的侥幸，换驱动
+	//   或分配器复用脏页即翻车）。搬到本处后「flag=1 ⟹ mask 本帧被写过」由**结构**成立：
+	//   本函数是 izbShadow 非空时每帧的唯一入口（`izbLightPassPre` 逐 pass 无条件调用），
+	//   调用点再怎么早退都跳不掉它——不靠"记得走 mask pass"这种约定。
+	//   ⚠ 位置红线：必须在 ⑦ 之后。dump 拷的是**上一帧**的 mask（`imgqa izb` 判据读它），
+	//   清在前面会让 shadowed 恒 0。
+	//   barrier：src 含 Transfer 读 = dump 帧的 WAR（上一行刚把 mask 拷进 staging）；
+	//   dst 同时给 ShaderWrite|ShaderRead = 段空时**没有** endMaskPass 那条写→读 barrier，
+	//   light.frag 的 Load 读得由这里排序（段不空时 endMaskPass 仍在 mask pass 后补一条）。
+	bufferBarrier(cmd, *maskBuffer,
+		vk::PipelineStageFlagBits2::eAllGraphics | vk::PipelineStageFlagBits2::eTransfer,
+		vk::AccessFlagBits2::eShaderWrite | vk::AccessFlagBits2::eShaderRead
+			| vk::AccessFlagBits2::eTransferRead,
+		vk::PipelineStageFlagBits2::eAllCommands, vk::AccessFlagBits2::eMemoryWrite);
+	::vkCmdFillBuffer(*cmd, *maskBuffer, 0, VK_WHOLE_SIZE, 0u);
+	bufferBarrier(cmd, *maskBuffer, vk::PipelineStageFlagBits2::eAllCommands,
+		vk::AccessFlagBits2::eMemoryWrite, vk::PipelineStageFlagBits2::eAllGraphics,
+		vk::AccessFlagBits2::eShaderWrite | vk::AccessFlagBits2::eShaderRead);
 	parity ^= 1u;
 	return depth;
 }
@@ -324,16 +347,9 @@ void IzbShadow::beginMaskPass(vk::raii::CommandBuffer& cmd) {
 	bufferBarrier(cmd, *nodesBuffer, vk::PipelineStageFlagBits2::eComputeShader,
 		vk::AccessFlagBits2::eShaderWrite,
 		vk::PipelineStageFlagBits2::eAllGraphics, vk::AccessFlagBits2::eShaderRead);
-	// mask hazard 簿记：上次写 = 上一帧本 pass 的 frag atomic、上次读 = 上一帧
-	// light.frag（同队列执行序天然有序，barrier 按 bookkeeping 补齐；src 含读 =
-	// fill 覆写前的 WAR 同步）→ FillBuffer 清 0 → 本帧 frag atomic 写
-	bufferBarrier(cmd, *maskBuffer, vk::PipelineStageFlagBits2::eAllGraphics,
-		vk::AccessFlagBits2::eShaderWrite | vk::AccessFlagBits2::eShaderRead,
-		vk::PipelineStageFlagBits2::eAllCommands, vk::AccessFlagBits2::eMemoryWrite);
-	::vkCmdFillBuffer(*cmd, *maskBuffer, 0, VK_WHOLE_SIZE, 0u);
-	bufferBarrier(cmd, *maskBuffer, vk::PipelineStageFlagBits2::eAllCommands,
-		vk::AccessFlagBits2::eMemoryWrite,
-		vk::PipelineStageFlagBits2::eAllGraphics, vk::AccessFlagBits2::eShaderWrite);
+	// ⚠ mask 的 FillBuffer 清零**不在这里**（债-32，2026-10-09 搬走）：清零若留在本函数，
+	// 则"跳过 mask pass"与"跳过清零"是同一件事，而调用点确实会跳过本 pass（shadow0 段为空）。
+	// 现在 mask 由 `recordFrame` 第 ⑧ 步每帧无条件清零，本函数只负责开 pass。
 	// 零附件动态渲染（frag 只写 mask SSBO；viewport/scissor = G×G 由调用方
 	// applyDynamicState 设——引擎负 viewport 口径自动生效，frag 侧 cell.y 翻转匹配）
 	vk::RenderingInfo rendering{};

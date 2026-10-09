@@ -186,3 +186,8 @@ TAA 视角（立项时按它演算过）：TAA 必然插一个**采样场景色�
    `applyProbeAndNumericGates`（阈值倒逼，纯搬运）；`kDeferredLightState` 具名常量 +
    `static_assert` 与词表绑定；`vkrenderer_impl` 的 drawLight 缺条目消息修掉
    ao 误报 Tonemap 的三元式。
+6. **一门可以有多条规则（2026-10-09，债-32 收口时新增）**：`izb_shadow` 现有两行
+   （非 deferred 图 / `shadow_pass=off`）——同一扇门的两条**不同根因**各配一条消息，
+   合并成一条谓词 = 丢归因（本模块的存在理由正是"报在肇事配置上并说清为什么"）。
+   ⟹ §3-C 的覆盖率护栏钉的是**去重后的门数** == 回显表键数，规则表行数另作"表没被整段
+   删空"的下界哨兵（两者都在 `tests/test_gate_lint.cppm`）。

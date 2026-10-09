@@ -17,6 +17,8 @@ module;
  * 「生效前置是什么」→ 红。nullptr 谓词行 = 显式「无前置」，同样占一行被钉住。
  */
 #include <doctest/doctest.h>
+#include <algorithm>  // std::ranges::sort / unique / count（自由函数不经 BMI 保证传递，GMF 自带）
+#include <string>     // std::string 的 operator<（同上：ranges::sort 比较 std::string 时要它）
 
 export module test_gate_lint;
 
@@ -35,6 +37,13 @@ bool hasGate(const std::vector<std::string>& v, std::string_view k) {
 		if (s == k)
 			return true;
 	return false;
+}
+
+/** 去重后的门数（规则表允许一门多行，覆盖率钉的是门数不是行数）。 */
+size_t distinctGateCount(std::vector<std::string> v) {
+	std::ranges::sort(v);
+	v.erase(std::ranges::unique(v).begin(), v.end());
+	return v.size();
 }
 
 /** 找某门的 finding（nullptr = 没有）。 */
@@ -59,9 +68,12 @@ constexpr GateEnv kHappyEnv{.headless = false, .llmCapture = true, .staticGraphi
 TEST_CASE("gate_lint 覆盖率护栏：规则表门名集合 == 回显表键集合（双向 + 钉 38）") {
 	// 变异红线：kGateRules 删任一行 / 改任一门名拼写 → 本用例红；
 	// DiagnosticsConfig 加字段不更新两侧 → diagnosticsEchoKeys 的 38 钉先红。
+	// ⚠ 钉的是**去重后的门数**：一门可有多条规则（izb_shadow 两条 = 非 deferred 图 /
+	//   shadow_pass 关，两个根因各一条消息），行数只作"表没被整段删空"的下界哨兵。
 	const auto rules = gateLintRuleGates();
 	const auto echo = diagnosticsEchoKeys();
-	CHECK(rules.size() == 38u);
+	CHECK(rules.size() == 39u);
+	CHECK(distinctGateCount(rules) == 38u);
 	CHECK(echo.size() == 38u);
 	for (const auto& k : echo)
 		CHECK(hasGate(rules, k));  // 回显有而规则表没有 = 没回答「生效前置是什么」
@@ -112,6 +124,32 @@ TEST_CASE("gate_lint error 组：izb_shadow / shadow_evssm（非 deferred 图，
 		c2.shadowPass = false;
 		const auto fs2 = lintDiagnosticsGates(c2, d, def, RgGraphVariant::deferred, kHappyEnv);
 		CHECK(find(fs2, "shadow_evssm") != nullptr);  // deferred 图但阴影总开关关了
+	}
+	{  // 正例（债-32）：IZB × shadow_pass=false = error。mask 由 shadow0 段重放填充，
+	   // 总开关关 ⟹ 段必空 ⟹ mask 无内容 ⟹ IZB 一帧阴影也不产（与 shadow_evssm 同判据）
+		DiagnosticsConfig c;
+		c.izbShadow = true;
+		c.shadowPass = false;
+		const auto fs = lintDiagnosticsGates(c, d, def, RgGraphVariant::deferred, kHappyEnv);
+		REQUIRE(find(fs, "izb_shadow") != nullptr);
+		CHECK(find(fs, "izb_shadow")->severity == GateSeverity::error);
+	}
+	{  // 反向（configs/diagnostics.lua 现值即此组合）：izb 开 + shadow_pass 开 + deferred
+	   // ⟹ izb_shadow 零 findings（常错的 lint = 被静音的 lint，防腐条款 2）
+		DiagnosticsConfig c;
+		c.izbShadow = true;
+		c.shadowPass = true;
+		CHECK(find(lintDiagnosticsGates(c, d, def, RgGraphVariant::deferred, kHappyEnv),
+			"izb_shadow") == nullptr);
+	}
+	{  // 两条 izb_shadow 规则**各自独立**（非 deferred 图 + shadow_pass 关 = 两个根因同时成立
+	   // ⟹ 两条 findings，各有自己的消息；合并成一条 = 丢归因）
+	   // 变异红线：删掉任一条 izb_shadow 规则 → 本断言只剩 1 条 ⟹ 红
+		DiagnosticsConfig c;
+		c.izbShadow = true;
+		c.shadowPass = false;
+		const auto fs = lintDiagnosticsGates(c, d, fwd, RgGraphVariant::forward, kHappyEnv);
+		CHECK(std::ranges::count(fs, "izb_shadow", &GateFinding::gate) == 2);
 	}
 }
 

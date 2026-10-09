@@ -49,7 +49,11 @@ public:
 	/**
 	 * 图外 sandwich（录在 light pass 的 pass 循环迭代顶部）：
 	 * 深度 layout→RO → FillBuffer 清 head → create dispatch → 链 barrier → prime
-	 * dispatch → 深度 layout 还原（进出同值 = 渲染图布局追踪表不可见，零漂移）。
+	 * dispatch → 深度 layout 还原（进出同值 = 渲染图布局追踪表不可见，零漂移）
+	 * →（可选 dump 拷贝）→ **FillBuffer 清 mask（每帧无条件，债-32）**。
+	 * mask 清零住这里是**刻意的**：本函数是 izbShadow 非空时每帧的唯一入口，而 mask pass
+	 * （`beginMaskPass`）会被调用点整段跳过（shadow0 段为空）——清零跟着 pass 走 = 消费侧
+	 * （light.frag 的 `izbShadowFactor`，它只看 izb flag）读到未初始化显存。
 	 * @param cmd pass 循环所在命令缓冲（heap 已由 ⑦ 绑定）
 	 * @param input 本帧矩阵（见 IzbFrameInput）
 	 * @param depthCurrentLayout 深度图当前布局（追踪表读出，还原目标）
@@ -84,8 +88,10 @@ public:
 	/**
 	 * mask pass 录制体（1d 后半；sandwich 内 create/prime 之后 begin，Renderer
 	 * applyDynamicState + 重放 shadow0 段 draws，然后 end）。
-	 * begin = FillBuffer 清 mask（1 bit/像素）+ hazard barrier + beginRendering
-	 * （**零附件**、renderArea = G×G）；end = endRendering。
+	 * begin = head/nodes 的 compute→frag 读 barrier + beginRendering（**零附件**、
+	 * renderArea = G×G）；end = endRendering + mask 写→读 barrier（light.frag 消费）。
+	 * ⚠ mask 的每帧清零**不在本函数**（债-32）——本 pass 会被调用点整段跳过，
+	 * 清零跟着 pass 走就等于「跳过 pass = 跳过清零 = shader 读未初始化显存」。
 	 * @param cmd 命令缓冲（heap 已绑定）
 	 */
 	void beginMaskPass(vk::raii::CommandBuffer& cmd);
@@ -111,7 +117,7 @@ private:
 	RGL::VmaBuffer headBuffer;    ///< G² uint（NONE 哨兵；每帧 FillBuffer 清）
 	RGL::VmaBuffer nodesBuffer;   ///< W·H × 16B (u, v, lightDepth, next)
 	RGL::VmaBuffer primedBuffer;  ///< G² float
-	RGL::VmaBuffer maskBuffer;    ///< ⌈W·H/32⌉ word 位图（1 bit/像素 = 被遮；mask pass 写）
+	RGL::VmaBuffer maskBuffer;    ///< ⌈W·H/32⌉ word 位图（1 bit/像素 = 被遮；每帧由 recordFrame 清 0、mask pass 写）
 	RGL::VmaBuffer staging[2];    ///< head 回读 ring（host-visible mapped）
 	void* stagingMapped[2] = {nullptr, nullptr};
 	bool dumpPending[2] = {false, false};
