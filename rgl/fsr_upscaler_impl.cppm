@@ -70,7 +70,8 @@ void toGeneral(RGL::DeviceContext& vkDevice, VkImage image) {
 	cb.pipelineBarrier2(dep);
 	cb.end();
 
-	// raii 局部 cmd/fence 函数尾自动销毁（texture_upload::submitUploadAndWait 同款）
+	// raii 局部 cmd/fence 函数尾自动销毁（vulkan_utils::submitCmdBufferAndWait 同款机制，
+	// 但本站失败 = throw，启动期 fail-fast 契约，不走 expected）
 	vk::raii::Fence fence(dev, vk::FenceCreateInfo{});
 	const VkCommandBuffer raw = *cb;
 	VkSubmitInfo si{};

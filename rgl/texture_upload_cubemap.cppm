@@ -271,30 +271,6 @@ void recordMipBlitChainCube(vk::raii::CommandBuffer& cmd, CubeImages& images, ui
 		mipLevels - 1, 1, 0, 6));
 }
 
-/** submit 上传 CB + fence 等待；任一失败 = Error（错误码与消息逐字保留）。
- * @param device 设备（graphics 队列提交 + 等待）
- * @param cmd 已 end() 的上传命令缓冲
- * @param name 日志名（错误消息）
- * @return submit 失败 / fence 超时 = Error */
-std::expected<void, Error> submitCubeUpload(RGL::DeviceContext& device,
-	vk::raii::CommandBuffer& cmd, const char* name) {
-	auto& dev = device.getDevice();
-	auto fence = vk::raii::Fence(dev, vk::FenceCreateInfo{});
-	VkSubmitInfo submitInfo{};
-	submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-	VkCommandBuffer cmdBuffer = *cmd;
-	submitInfo.commandBufferCount = 1;
-	submitInfo.pCommandBuffers = &cmdBuffer;
-	if (auto result = vk::Result(::vkQueueSubmit(device.getGraphicsQueue(), 1, &submitInfo, *fence));
-		result != vk::Result::eSuccess)
-		return std::unexpected(Error{ErrorCode::VulkanError,
-			fmt::format("cubemap: upload submit failed: {}", name)});
-	if (dev.waitForFences(std::array<vk::Fence, 1>{*fence}, true, UINT64_MAX) != vk::Result::eSuccess)
-		return std::unexpected(Error{ErrorCode::VulkanError,
-			fmt::format("cubemap: upload fence timeout: {}", name)});
-	return {};
-}
-
 /**
  * 录制并执行上传：staging 行距填充 → 一次性 CB（staging→SRC / cube→DST 批量 barrier +
  * per-face copy + 逐 level 6 面 blit mip 链 + 全级 →SHADER_READ_ONLY）→ submit + fence。
@@ -332,7 +308,8 @@ std::expected<void, Error> recordCubeUpload(RGL::Environment& env, RGL::DeviceCo
 	}
 	cmd.end();
 
-	return submitCubeUpload(device, cmd, name);
+	return submitCmdBufferAndWait(device.getDevice(), cmd, device.getGraphicsQueue(), "cubemap",
+		name);
 }
 
 /** 构造 12 个回读 copy region：6 面 × {texel(0,0), 中心(mid,mid)}，bufferOffset 逐点累加 bytes。

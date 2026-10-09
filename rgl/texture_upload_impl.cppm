@@ -139,31 +139,6 @@ vk::Format selectUploadFormat(RGL::DeviceContext& device, bool linear, const cha
 	return format;
 }
 
-/**
- * 一次性上传命令提交 + 等待（uploadTexture 抽出；裸 C 提交同 llm_debug ⑫ 风格）。
- * @param dev 设备层（fence 创建 / waitForFences）
- * @param cmd 已 end 的上传命令缓冲
- * @param queue graphics 队列
- * @param name 日志名（失败 Error 用）
- * @return void（成功）；submit 失败 / fence 超时 → Error
- */
-std::expected<void, Error> submitUploadAndWait(vk::raii::Device& dev,
-	vk::raii::CommandBuffer& cmd, VkQueue queue, const char* name) {
-	auto fence = vk::raii::Fence(dev, vk::FenceCreateInfo{});
-	VkSubmitInfo submitInfo{};
-	submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-	VkCommandBuffer cmdBuffer = *cmd;
-	submitInfo.commandBufferCount = 1;
-	submitInfo.pCommandBuffers = &cmdBuffer;
-	if (auto result = vk::Result(::vkQueueSubmit(queue, 1, &submitInfo, *fence));
-		result != vk::Result::eSuccess)
-		return std::unexpected(Error{ErrorCode::VulkanError,
-			fmt::format("texture: upload submit failed: {}", name)});
-	if (dev.waitForFences(std::array<vk::Fence, 1>{*fence}, true, UINT64_MAX) != vk::Result::eSuccess)
-		return std::unexpected(Error{ErrorCode::VulkanError, fmt::format("texture: upload fence timeout: {}", name)});
-	return {};
-}
-
 }  // namespace
 
 /** uploadTexture 定义（契约与行为注释见 texture_upload.cppm 接口声明）。 */
@@ -250,9 +225,9 @@ std::expected<void, Error> submitUploadAndWait(vk::raii::Device& dev,
 	if (!recordResult) return std::unexpected(std::move(recordResult).error());
 	cmd.end();
 
-	// 提交 + 等待（独立 fence，见 submitUploadAndWait）
-	if (auto submitResult = submitUploadAndWait(dev, cmd, device.getGraphicsQueue(), name);
-		!submitResult)
+	// 提交 + 等待（独立 fence，机制见 vulkan_utils::submitCmdBufferAndWait）
+	if (auto submitResult = submitCmdBufferAndWait(dev, cmd, device.getGraphicsQueue(),
+		"texture", name); !submitResult)
 		return std::unexpected(std::move(submitResult).error());
 
 	// slot 分配 + 描述符写入（SAMPLED_IMAGE，v341 4 参形态，spike 已验证）

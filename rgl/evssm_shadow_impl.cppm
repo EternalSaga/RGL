@@ -49,8 +49,9 @@ void stageBarrier(vk::raii::CommandBuffer& cmd, vk::PipelineStageFlags2 srcStage
 	cmd.pipelineBarrier2(dep);
 }
 
-/** 一次性 layout 转移 CB（texture_upload::submitUploadAndWait 同款：raii 局部
- *  cmd/fence 函数尾销毁；提交 graphics 队列 + fence 等待，失败抛 = 启动期 fail-fast）。 */
+/** 一次性 layout 转移 CB（vulkan_utils::submitCmdBufferAndWait 同款机制——raii 局部
+ *  cmd/fence 函数尾销毁；提交 graphics 队列 + fence 等待——但本站失败直接抛，
+ *  = 启动期 fail-fast 契约，故不复用那个返回 expected 的版本）。 */
 void runOnce(vk::raii::Device& dev, const vk::raii::CommandPool& pool, VkQueue queue,
 	const std::function<void(vk::raii::CommandBuffer&)>& body) {
 	vk::CommandBufferAllocateInfo ai{*pool, vk::CommandBufferLevel::ePrimary, 1};

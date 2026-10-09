@@ -1,5 +1,6 @@
 module;
 #include <vulkan/vulkan.h>  // VK_* 宏/C 函数（rlvk 不含宏；C 头解析 ~0.4s）
+#include <fmt/format.h>     // submitCmdBufferAndWait 的错误消息拼装
 export module vulkan_utils;
 
 import rlstd;
@@ -111,6 +112,42 @@ setupDebugMessenger(vk::raii::Instance& instance) {
 		logger->info("Debug messenger created");
 
 	return vk::raii::DebugUtilsMessengerEXT(instance, createInfo);
+}
+
+/**
+ * 提交单条命令缓冲并等待其 fence 完成——一次性上传 / 传输的通用原语。
+ *
+ * 错误消息模板固定为 `"{sub}: upload submit failed: {name}"` 与
+ * `"{sub}: upload fence timeout: {name}"`——`sub` 就是各调用点自己的排查前缀
+ * （`"cubemap"` / `"texture"`），两个既有调用点的文案因此**逐字节不变**。
+ *
+ * ⚠ 只共享机制，**不统一错误策略**：本函数返回 expected；仓库里另有 throw 型
+ *   （fsr_upscaler / evssm_shadow，启动期 fail-fast 契约）与忽略结果型（gpu_canary
+ *   / 回读路径）的同形代码，那些**不在本次范围**，各自边界自行决定怎么处置返回值。
+ *
+ * @param dev   逻辑设备（建 fence + 等 fence）
+ * @param cmd   已 end() 的命令缓冲
+ * @param queue 提交目标队列
+ * @param sub   错误消息前缀（排查抓手，如 "cubemap"）
+ * @param name  资源名（拼进消息）
+ */
+export [[nodiscard]] std::expected<void, Error>
+submitCmdBufferAndWait(vk::raii::Device& dev, vk::raii::CommandBuffer& cmd, VkQueue queue,
+	std::string_view sub, const char* name) {
+	auto fence = vk::raii::Fence(dev, vk::FenceCreateInfo{});
+	VkSubmitInfo submitInfo{};
+	submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+	VkCommandBuffer cmdBuffer = *cmd;
+	submitInfo.commandBufferCount = 1;
+	submitInfo.pCommandBuffers = &cmdBuffer;
+	if (auto result = vk::Result(::vkQueueSubmit(queue, 1, &submitInfo, *fence));
+		result != vk::Result::eSuccess)
+		return std::unexpected(Error{ErrorCode::VulkanError,
+			fmt::format("{}: upload submit failed: {}", sub, name)});
+	if (dev.waitForFences(std::array<vk::Fence, 1>{*fence}, true, UINT64_MAX) != vk::Result::eSuccess)
+		return std::unexpected(Error{ErrorCode::VulkanError,
+			fmt::format("{}: upload fence timeout: {}", sub, name)});
+	return {};
 }
 
 /** 单设备打分（core 数 ×1000 + 设备本地 GiB ×10 + 类型分）；score = 0 = 不参与。 */
