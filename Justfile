@@ -274,6 +274,16 @@ shot *ARGS="":
 regress *ARGS="":
     @python tools/regress.py {{ ARGS }}
 
+# CPU 分布账重测（债-02 / 债-20 / 债-30 的读数来源）。口径写死在 tools/cpu_baseline.py：
+#   just cpu                                       全部臂（default/no-vvl/shadow-off/izb-off/scale-half）
+#   just cpu --arms default,no-vvl                 只跑两臂（改渲染后的最小验收）
+#   just cpu --json f.json                         落读数     --compare f.json  逐项对差
+#   just cpu --list-arms                           臂表现读口（**别在文档里抄臂表**）
+# 三条不可谈：单实例串行（争用 = 读数作废）· 退出走 RPC /quit 不走截图（截图帧的回读落在
+# drawFrame 区间内）· 主口径 p50。读数必须绑机器 + 绑 VVL 档（no-vvl 臂就是为这条设的）。
+cpu *ARGS="":
+    @python tools/cpu_baseline.py {{ ARGS }}
+
 # 核显运行（Linux AMD 集显，原生渲染，无 offload）
 # 必须用 VK_DRIVER_FILES 隐藏 NVIDIA ICD —— 设备评分器默认选 dGPU（分数更高）
 run-igpu:
