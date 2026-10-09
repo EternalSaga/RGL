@@ -18,7 +18,8 @@ return {
     shader_reload = false,
     picking = false,        -- 不加 picking/highlight pass（图逐位同基线形态）
     rpc = false,            -- llm_debug 截图足够，不需要 RPC
-    shadow_pass = false,    -- ← 关键 1：sampleShadow1Tap 恒 1.0（无遮挡）。键名曾是
-                            -- shadowPass（camelCase，解析器不认 → 回落默认 **true**），
-                            -- 靠探针 frag 不采样阴影而恰好无害（两个错误互盖，12.3b 查实改对）
+    -- 阴影键已迁出（批 N6b）→ 同目录 shadow.lua 的 mode = "none"（= 关键 1：
+    -- sampleShadow1Tap 恒 1.0，无遮挡）。旧键 shadow_pass 在本文件出现即启动失败。
+    -- 键名坑的教训原样保留：这里曾写 camelCase 的 shadowPass，解析器不认 → 静默回落
+    -- 默认 true，靠探针 frag 不采样阴影而恰好无害（两个错误互盖，12.3b 查实改对）。
 }

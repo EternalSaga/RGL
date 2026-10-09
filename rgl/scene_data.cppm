@@ -194,7 +194,7 @@ export inline constexpr uint32_t kSceneDataShadowAtlasOffset = kSceneDataShadowS
 export inline constexpr uint32_t kSceneDataShadowAuxBytes = 64u;  // 分界远距/texel/参数/图集各 16
 
 /** IZB 消费区（批 11.3-1e，shadow aux 之后 16B）：(x = 消费开关 1/0、y = 像素 W、
- *  z = 像素 H、w 保留)。Renderer 在 writeSceneStaging 尾部按 izb_shadow 门写；
+ *  z = 像素 H、w 保留)。Renderer 在 writeSceneStaging 尾部按 shadow.lua 的 izb 门写；
  *  light.frag 字面量消费（static_assert 钉死同步）。flag=0 时因子恒 1 = 逐位旁路。 */
 export inline constexpr uint32_t kSceneDataIzbOffset = kSceneDataShadowAtlasOffset + 16u;
 export inline constexpr uint32_t kSceneDataIzbBytes = 16u;

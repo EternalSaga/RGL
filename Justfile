@@ -137,7 +137,7 @@ test-gpu *ARGS="":
 # 也不比 SSIM——它抓的是整条链的数值系统性偏移。
 #
 # 引擎侧**零改动**：链上每一项都已有配置门（env.intensity / skybox / light.ambient /
-# ao.strength / exposure / diagnostics.shadow_pass），全套见 qa/configs/analytic/scene.lua
+# ao.strength / exposure / shadow.lua 的 mode），全套见 qa/configs/analytic/scene.lua
 # 的逐项注释。原计划加的 `analytic = true` 开关经实测判定为多余。
 # 12.3b 起由 imgqa probe 接管（原 tools/analytic_ref.py 退役删除；参考实现移入 imgqa
 # judge.cpp，闭式解与字节判据同一份代码、同一次编译）。

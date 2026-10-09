@@ -34,6 +34,7 @@ import render_graph;
 import builtin_geometry;
 import asset_table;
 import diagnostics;
+import shadow_config;  // shadowConfig() + shadowFormPlan()（IZB mask 条目门，批 N6b）
 import rllogger;
 
 namespace RGL {
@@ -261,8 +262,8 @@ void bakePipelineEntries(UploadedAssets& uploaded, const SceneConfig& scene, boo
 			// 条目（零成本；AGENTS「条目全按需建」纪律）。
 			pipelines.bindShadowToAsset(id, pipelines.addShadowEntry(assetTable.get(id).heapSlot));
 			// 批 11.3-1d 后半：IZB mask 条目（门关零创建；重放点经 vertexSlot 反查，
-			// 不挂资产——同 vertexSlot 去重）
-			if (diagnostics().izbShadow)
+			// 不挂资产——同 vertexSlot 去重）。门 = shadow.lua 的 izb.on（N6b）
+			if (shadowFormPlan(shadowConfig()).consumeIzbMask)
 				static_cast<void>(pipelines.addIzbMaskEntry(assetTable.get(id).heapSlot));
 		};
 		// DIAG（configs/diagnostics.lua style_dist；Phase 4 批次 3 风格分布核查）：

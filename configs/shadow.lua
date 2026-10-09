@@ -5,13 +5,14 @@
 -- 为什么 izb 是**正交布尔**而不是 mode 枚举的第五值（shadow_routes_plan.md §2 红线 1）：
 -- 交付路径就是 csm + izb 同时开（红线 A 那张图），且「IZB 近场细影 + 远场软影」混接
 -- （evssm_plan.md 11.6e）要求两者共存 ⟹ 枚举管**软影滤波轴**（none/csm/pcss/evssm 互斥），
--- izb 管**硬影 mask**，两条轴正交。izb=true × mode="none" 的组合门由 gate_lint 管
--- （N6b 接管），不在这里造第五个枚举值。
+-- izb 管**硬影 mask**，两条轴正交。izb=true × mode="none" 的组合无意义，由 gate_lint 在
+-- 启动期报 error（N6b 已接管），不在这里造第五个枚举值。
 --
--- ⚠ N6a 过渡期（本批）：本文件**只回显不回灌**——消费点仍读 diagnostics() 的旧字段；
--- 旧键（shadow_pass / shadow_pcss / shadow_evssm / pcss_* / izb_*）已从 diagnostics.lua
--- 删除且**出现即启动失败**（红线 2：不静默映射）。旧字段现由「代码默认 = 交付形态」
--- 提供：mode=csm ↔ shadow_pass=true、izb=true ↔ izb_shadow=true。消费点切过来 = N6b。
+-- ⚠ 旧键（shadow_pass / shadow_pcss / shadow_evssm / pcss_* / izb_*）已从 diagnostics.lua
+-- 删除且**出现即启动失败**（红线 2：不静默映射；fail-fast 永久保留）。N6b 起本文件是阴影
+-- 门的**唯一**真相源：DiagnosticsConfig 的九个旧字段已删除，六处消费点一律经
+-- shadowConfig() + shadowFormPlan()（形态决策表的唯一实现体在 rgl/shadow_config_impl.cppm，
+-- 本文件不抄映射——红线 4）。
 return {
     -- 软影滤波轴（四值互斥；未知值 = 启动失败并列出合法值，不静默回落——"你以为在测
     -- EVSSM 其实跑的是 CSM"是本项目最怕的失效形态）。

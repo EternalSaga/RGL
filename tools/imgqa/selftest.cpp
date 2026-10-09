@@ -408,7 +408,8 @@ void testAaCoverage(Checker& c)
 
 void testKeyValidation(Checker& c)
 {
-    // 键名校验器自己也要有用例：真实解析器源码里必须能抽到 picking / shadow_pass / rpc
+    // 键名校验器自己也要有用例：真实解析器源码里必须能抽到 picking / rpc / mode
+    // （mode 在 shadow_config_impl.cppm，N6b 起校验器覆盖两份解析器）
     // （工具在仓库内跑，源文件必然存在；抽不到 = 校验器或解析器读取形态变了，
     //  校验静默失效比没有校验更糟——它会把「零警告」读成「键都对」）。
     // 直接经 makeProfile 的通道测：生成一份合法 profile 不许抛。
@@ -429,7 +430,45 @@ void testKeyValidation(Checker& c)
     std::string content{std::istreambuf_iterator<char>{d}, {}};
     c.chk("lua 布尔是小写（True/False 是 nil 回落默认——真实事故）",
         content.find("picking = true") != std::string::npos
-            && content.find("shadow_pass = false") != std::string::npos);
+            && content.find("rpc = true") != std::string::npos);
+    // N6b：阴影门不在 diagnostics.lua 了（旧键出现 = 引擎启动失败），改由同目录
+    // shadow.lua 承载。默认 opts（shadowPass=false）→ mode="none" + izb=false；
+    // izb 若写成 True 就是 nil 回落**代码默认 true** = 静默开 IZB（真实事故的形状）。
+    std::ifstream s(tmp + "/shadow.lua");
+    const std::string shadow{std::istreambuf_iterator<char>{s}, {}};
+    c.chk("shadow.lua：门关 = mode=\"none\" + 小写 izb=false",
+        shadow.find("mode = \"none\"") != std::string::npos
+            && shadow.find("izb = false") != std::string::npos);
+    // 阳性锚点：三档 mode 各自写对（枚举塌缩方向写错 = 判据跑在另一条阴影路上）。
+    // 变异红线：engine.cpp 的 shadowMode 三元塌错一档 → 本断言红。
+    {
+        const auto modeOf = [&](bool pass, bool evssm) {
+            ProfileOpts p;
+            p.glb = "shadow_rig.glb";
+            p.shadowPass = pass;
+            p.evssmShadow = evssm;
+            makeProfile(tmp, p);
+            std::ifstream f(tmp + "/shadow.lua");
+            const std::string t{std::istreambuf_iterator<char>{f}, {}};
+            return t;
+        };
+        c.chk("shadow.lua：shadowPass → mode=\"csm\"",
+            modeOf(true, false).find("mode = \"csm\"") != std::string::npos);
+        c.chk("shadow.lua：evssmShadow → mode=\"evssm\"",
+            modeOf(true, true).find("mode = \"evssm\"") != std::string::npos);
+        // 矛盾组合（EVSSM 开着但图集不画）必须**抛**而不是替调用方猜一档
+        ProfileOpts bad;
+        bad.glb = "shadow_rig.glb";
+        bad.shadowPass = false;
+        bad.evssmShadow = true;
+        bool threw = false;
+        try {
+            makeProfile(tmp, bad);
+        } catch (const std::exception&) {
+            threw = true;
+        }
+        c.chk("shadow.lua：evssm × 无图集 = 拒绝生成（不静默猜档）", threw);
+    }
 }
 
 // ── AO 噪声判据的度量层（ao_metrics.cpp）─────────────────────────────────────────

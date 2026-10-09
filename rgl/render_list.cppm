@@ -105,15 +105,17 @@ export void renderListSystem(entt::registry& rg, RGL::Resources& resources,
 /**
  * 每帧填阴影 scene data（尾区阴影 VP 区 + 4 个 vec4 采样参数子区）。定义在
  * render_list_impl（partition impl unit，实现侧不写 export）。导出为**可测接缝**
- * （批 12.3d）：阴影总开关经 shadowPassEnabled 显式入参，测试无需 diagnostics
- * 单例即可打 enabled 两态；调用点（renderListSystem）传 diagnostics().shadowPass。
+ * （批 12.3d）：阴影总开关经 shadowPassEnabled 显式入参，测试无需单例即可打 enabled
+ * 两态；调用点（renderListSystem）传形态决策表 `ShadowFormPlan::drawAtlas`。
  * 契约红线（未生效槽 splits 不得为 0 / texel 分母 = 单块边长 / params.w = shadowFar）
  * 随实现体注释，回归断言 = tests/test_render_list_shadow。
+ * ⚠ 软影两区（shadowPcss / shadowEvssm）的调参**在实现内读 shadowConfig() 的两块**
+ * （按档分立，批 N6b / 债-16⑤），不走本接缝的入参——入参只承载 draw 开关这一件事。
  * @param out 出参：本帧 draw list（写 sceneData.shadowViewProj / Splits / TexelSizes / Params / Atlas）
  * @param shadowNear/shadowFar **量化后**的切分深度界（与 renderListSystem 建切片同源——
  *   splits 阈值与级联内容错位 = 边界处阴影闪跳）
  * @param volumes 各级光空间体（VP + XY 半宽；与剔除用同一批，先建体再同时用于剔除与矩阵）
- * @param shadowPassEnabled 阴影总开关（调用点 = diagnostics().shadowPass；false 只影响
+ * @param shadowPassEnabled 阴影总开关（调用点 = 形态决策表 drawAtlas；false 只影响
  *   shadowParams.z，其余字段照常填写）
  */
 export void fillShadowData(FrameDrawList& out, float shadowNear, float shadowFar,

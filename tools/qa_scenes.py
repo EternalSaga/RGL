@@ -70,7 +70,7 @@
 #   跨级联分布 / 远景取景），逐物体的失效模式在场景函数注释里。
 # - d1_parity：forward / deferred 两路对拍（D1 指标）用的中等面数 + 材质混合 + 自发光面板。
 # - izb_rig：FTIZB/IZB 硬阴影 spike 装置（docs/hfts_izb_plan.md 批 1a）——厚度梯
-#   0.4→0.02 m + 接触柱 + 穿插杆 + 叠影三分带；判据 = izb_shadow 开关 A/B 对拍。
+#   0.4→0.02 m + 接触柱 + 穿插杆 + 叠影三分带；判据 = shadow.lua 的 izb 开关 A/B 对拍。
 # - env_band：变体 1「带边」——metallic=1 平坦地面 + 四条并排 roughness 档，配程序化
 #   env（纯黑 + 极亮窄带，tools/env_band_hdr.py），掠射机位让窄带镜面反射横贯画面；
 #   判据 = speck / phase-lock / grain 三口径的受控实验表（TAA × env × roughness）。
@@ -899,7 +899,7 @@ def scene_d1_parity() -> Scene:
 # ---------------------------------------------------------------------------
 # 设计哲学与 shadow_rig 同构：判据「边界免疫」。CSM 级联 texel 尺寸是运行时自适应量
 # （near/far 随相机与包围球漂移），manifest 里预测"这根杆必亚 texel"= 会绿 = 无效断言。
-# 所以本 rig 给的是**四组探针 + A/B 对拍**（izb_shadow 关=CSM / 开=IZB，同机位同帧），
+# 所以本 rig 给的是**四组探针 + A/B 对拍**（shadow.lua 的 izb 关=CSM / 开=IZB，同机位同帧），
 # 让图像回答「细影去哪了」，构建期只断言几何事实（包络/相交/三分区存在性）。
 #
 # 四组探针（逐一对应 FTIZB 能力点）：
@@ -945,8 +945,8 @@ def scene_izb_rig() -> Scene:
         name="izb_rig",
         purpose="FTIZB/IZB 硬阴影 spike 装置：厚度梯（0.4→0.02 m）+ 接触阴影 + 穿插影线 + 叠影链表（docs/hfts_izb_plan.md 批 1a）",
         honesty=("浮动杆无物理支撑（QA 装置，非美术）。影带坐标是按默认光向的**几何设计值**，"
-                 "不是渲染逐像素契约——CSM 级联 texel 尺寸运行时自适应，正确用法 = izb_shadow "
-                 "开关 A/B 对拍 + imgqa 影响域（域外恰为 0），不是拿预测坐标逐像素比。"
+                 "不是渲染逐像素契约——CSM 级联 texel 尺寸运行时自适应，正确用法 = shadow.lua "
+                 "的 izb 开关 A/B 对拍 + imgqa 影响域（域外恰为 0），不是拿预测坐标逐像素比。"
                  "锚点前提 = 默认光向（scene.lua SUN）；RPC 改光后一切坐标须按新光向重算。"),
         cameras={
             "hero": {"position": [0.0, 8.0, 34.0], "target": [0.0, 1.0, 0.0],

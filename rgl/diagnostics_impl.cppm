@@ -130,8 +130,9 @@ static void readInputProbes(sol::table& root, DiagnosticsConfig& cfg,
 }
 
 /**
- * 标量门读取段（bool + pcss 数值 + rpc_port；2026-10-02 从主函数拆出守认知复杂度
+ * 标量门读取段（bool + rpc_port；2026-10-02 从主函数拆出守认知复杂度
  * 阈值）。每个键都问一遍（缺省回落 cfg 当前值 = 结构体默认），并记键轨迹。
+ * N6b 前这里还读 pcss 三个数值门，随字段一起迁走了。
  * @param root 配置根表
  * @param cfg 写入目标
  * @param trace 键轨迹
@@ -156,19 +157,9 @@ static void applyScalarGates(sol::table& root, DiagnosticsConfig& cfg,
 	cfg.configReload = readBool("config_reload", cfg.configReload);
 	cfg.shaderReload = readBool("shader_reload", cfg.shaderReload);
 	cfg.picking = readBool("picking", cfg.picking);
-	cfg.shadowPass = readBool("shadow_pass", cfg.shadowPass);
-	cfg.izbShadow = readBool("izb_shadow", cfg.izbShadow);
-	// 批 11.5：PCSS（门 = 变体选择，非运行时 flag——slang fp 重排教训同 1e，门关必须原版 SPV）
-	cfg.shadowPcss = readBool("shadow_pcss", cfg.shadowPcss);
-	cfg.shadowEvssm = readBool("shadow_evssm", cfg.shadowEvssm);
-	auto readF64 = [&](const char* key, double def) {
-		trace.read.emplace_back(key);
-		sol::optional<double> v = root[key];
-		return v ? *v : def;
-	};
-	cfg.pcssSunDegrees = std::clamp(readF64("pcss_sun_degrees", cfg.pcssSunDegrees), 0.0, 5.0);
-	cfg.pcssSearchRadius = std::clamp(readF64("pcss_search_radius", cfg.pcssSearchRadius), 1.0, 64.0);
-	cfg.pcssMaxPenumbra = std::clamp(readF64("pcss_max_penumbra", cfg.pcssMaxPenumbra), 1.0, 64.0);
+	// N6b：阴影九键（shadow_pass / shadow_pcss / shadow_evssm / pcss_* ×3 / izb_* ×3）
+	// 的读取段已随字段一起删除——配置面 = configs/shadow.lua，旧键出现即由
+	// checkMigratedShadowKeys 启动失败。
 	cfg.rpc = readBool("rpc", cfg.rpc);
 	cfg.rpcPort = readRpcPort(root, trace);
 }
@@ -286,11 +277,8 @@ static void applyProbeAndNumericGates(sol::table& root, DiagnosticsConfig& cfg,
 		std::max<int64_t>(0, readI64("frame_stats", 0).value_or(0)));
 	cfg.profiler = static_cast<uint32_t>(
 		std::max<int64_t>(0, readI64("profiler", 0).value_or(0)));
-	// 批 11.3 IZB 数值门（izb_shadow=true 才有意义；clamp 防手滑建巨型缓冲）
-	cfg.izbGrid = static_cast<uint32_t>(std::clamp<int64_t>(
-		readI64("izb_grid", cfg.izbGrid).value_or(cfg.izbGrid), 64, 2048));
-	cfg.izbDumpFrame = static_cast<uint32_t>(std::max<int64_t>(
-		0, readI64("izb_dump_frame", 0).value_or(0)));
+	// N6b：izb_grid / izb_dump_frame 的读取段已删（配置面 = shadow.lua 的 izb.grid /
+	// izb.dump_frame，clamp 也搬去 shadow_config_impl；旧键出现即启动失败）。
 }
 
 // ———— 门回显（2026-10-02 派生化，docs/gate_lint_plan.md §3-B）————
@@ -310,7 +298,7 @@ struct GateEcho {
  * tests/test_scene_config.cppm 的覆盖率护栏拦下（解析器读了而表里没有 → 红）。
  * 哨兵值出可读文本：texel_canary MAX = "off"、camera_probe.key 0 = "none"。
  */
-const std::array<GateEcho, 39> kGateEcho{{
+const std::array<GateEcho, 30> kGateEcho{{
 	{"no_vvl", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.noVvl); }},
 	{"no_hdr", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.noHdr); }},
 	{"no_present", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.noPresent); }},
@@ -332,15 +320,8 @@ const std::array<GateEcho, 39> kGateEcho{{
 	{"config_reload", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.configReload); }},
 	{"shader_reload", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.shaderReload); }},
 	{"picking", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.picking); }},
-	{"izb_shadow", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.izbShadow); }},
-	{"izb_grid", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.izbGrid); }},
-	{"izb_dump_frame", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.izbDumpFrame); }},
-	{"shadow_pass", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.shadowPass); }},
-	{"shadow_pcss", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.shadowPcss); }},
-	{"shadow_evssm", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.shadowEvssm); }},
-	{"pcss_sun_degrees", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.pcssSunDegrees); }},
-	{"pcss_search_radius", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.pcssSearchRadius); }},
-	{"pcss_max_penumbra", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.pcssMaxPenumbra); }},
+	// N6b：阴影九行已删（izb_* / shadow_* / pcss_*）——回显面 = configs/shadow.lua 的
+	// loader 自己那行（shadow_config_impl 打印 mode / izb.on / 各档数值）。
 	{"rpc", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.rpc); }},
 	{"rpc_port", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.rpcPort); }},
 	{"picking_probe.frame", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.pickingProbeFrame); }},

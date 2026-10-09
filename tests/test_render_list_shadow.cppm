@@ -43,6 +43,7 @@ import frame_draw_list;  // FrameDrawList / SceneFrameData
 import scene_context;  // ShadowVolume / cascadeSplitDistance
 import scene_data;     // kActiveShadowCascades / kSceneShadowCascadeCount / kShadowDepthBias / kShadowNormalOffsetScale
 import render_graph;   // kShadowMapSize / shadowAtlasColumns / shadowTileSize
+import shadow_config;  // ShadowConfig / setShadowConfig（按档分立用例，N6b）
 
 namespace RGL {
 namespace {
@@ -154,6 +155,39 @@ TEST_CASE("fillShadowData：atlas = (图集边长, 单块边长, 列数, 0)（�
 	const uint32_t cols = shadowAtlasColumns(kActiveShadowCascades);
 	CHECK(list.sceneData.shadowAtlas == glm::vec4(static_cast<float>(kShadowMapSize),
 		static_cast<float>(shadowTileSize(cols)), static_cast<float>(cols), 0.0f));
+}
+
+TEST_CASE("fillShadowData：软影两区各读各的调参块（按档分立 = 消债-16⑤ 的唯一机器护栏）") {
+	// 为什么值得测：改造前两个区共用一套 `pcss_*` 键，"EVSSM 的半影上限"只能借 PCSS 的
+	// 键名写。N6b 起 configs/shadow.lua 有 pcss / evssm 两块，**取值来源**就是这条契约的
+	// 本体——串档（两块都从同一块取）不会崩、不会报错，只会让"改 evssm 的半影上限"
+	// 静默改到 PCSS 身上（正是债-16⑤ 的形态）。两区各自只有一个 shader 变体会读，
+	// 所以"按当前档挑一块"在运行期没有消费者（ShadowFormPlan 头注记此事），能测的、
+	// 也是唯一需要钉的，就是**两块互不串**。
+	// 变异红线：把 `shadowConfig().evssm` 改成 `.pcss`（或反向）→ 本用例红。
+	const auto vols = makeVolumes();
+	ShadowConfig c;
+	c.pcss = {1.0, 10.0, 11.0};   // 三值互不相同且与 evssm 块两两不同 ⟹ 错位藏不住
+	c.evssm = {2.0, 20.0, 21.0};
+	setShadowConfig(c);
+	// 单例 = 进程级状态，谁改谁收尾（同 test_scene_config 的单例往返用例）。本用例只用
+	// CHECK（失败不中断）⟹ 末尾还原足够，不需要 scope guard。
+
+	FrameDrawList list;
+	fillShadowData(list, kNear, kFar, {vols.data(), vols.size()}, true);
+
+	constexpr float kDegToHalfRad = 0.01745329252f * 0.5f;
+	CHECK(list.sceneData.shadowPcss.x == doctest::Approx(2.0f * std::tan(1.0 * kDegToHalfRad)));
+	CHECK(list.sceneData.shadowPcss.y == 10.0f);   // ← pcss.search_radius
+	CHECK(list.sceneData.shadowPcss.z == 11.0f);   // ← pcss.max_penumbra
+	CHECK(list.sceneData.shadowPcss.w == 0.0f);
+
+	CHECK(list.sceneData.shadowEvssm.x == doctest::Approx(std::tan(2.0f * kDegToHalfRad)));
+	CHECK(list.sceneData.shadowEvssm.y == 20.0f);  // ← evssm.search_radius（不是 pcss 的 10）
+	CHECK(list.sceneData.shadowEvssm.z == 21.0f);  // ← evssm.max_penumbra（不是 pcss 的 11）
+	// w = 矩链最大 mip（期望常量，非同源引用；EvssmShadow 8 级链固定 7）
+	CHECK(list.sceneData.shadowEvssm.w == 7.0f);
+	setShadowConfig(ShadowConfig{});  // 还原单例（见上）
 }
 
 }  // namespace RGL

@@ -293,7 +293,7 @@ export class Renderer {
 	void izbLightPassPre(vk::raii::CommandBuffer& cmd, const RgPassPlan& pass,
 		const FrameDrawList& list);
 	/** 批 11.6d-2 EVSSM 帧首段（drawFrame 调用，与 izbPreFrame 同位）：门开时构造
-	 *  EvssmShadow（需 deferred light pass + 阴影图 RT 已在 + shadow_pass 开）。
+	 *  EvssmShadow（需 deferred light pass + 阴影图 RT 已在 + shadow.lua 的 mode=="evssm"）。
 	 *  门关 = 一次布尔判断零分配（evssmShadow 恒空 = 逐位红线）。
 	 *  ⚠️ v1 边界 = 仅 deferred：forward 的矩消费在 geometry pass（sandwich 未接），
 	 *  forward + 门开 = warn-once 不构造（变体采样读 fallback 零矩 = 全亮，无害）。 */
@@ -327,7 +327,7 @@ export class Renderer {
 	int32_t findAttachmentSlot(std::string_view name) const;
 	/** 批 9.5 补：首帧补打一次显存统计（`vma[first_frame]`）。动机 = IzbShadow /
 	 *  EvssmShadow 均首帧懒构造，而 `logStartupBaseline` 在帧循环之前 ⟹ `vma[startup]`
-	 *  不含这两个模块的资源（实测开/关 shadow_evssm 的 startup 统计逐字节相同）。
+	 *  不含这两个模块的资源（实测开/关 EVSSM 档的 startup 统计逐字节相同）。
 	 *  进程内只打一次（`vmaCalculateStatistics` 遍历全分配，有开销）。 */
 	void logFirstFrameMemory();
 	/** 批 11.3-1d 后半：光空间 mask pass（零附件 G×G + izb_mask 态 + shadow0 段
@@ -424,12 +424,12 @@ export class Renderer {
 	// descriptor heap 的 GPU 地址（VmaDescriptorHeap 管理的"描述符槽位数组"，
 	// 对齐细节见 VmaBuffer.cppm）
 	vk::DeviceAddress heapAddress = 0;
-	// 批 11.3-1d：FTIZB 硬阴影 IZB 数据层（门 = diagnostics().izbShadow 且图含
+	// 批 11.3-1d：FTIZB 硬阴影 IZB 数据层（门 = shadowFormPlan().consumeIzbMask 且图含
 	// drawLight "light" pass；**门关 = 恒 nullptr，零分配零命令逐位不变**，
 	// docs/hfts_izb_plan.md）。extent 变化重建（重建前 waitIdle，同 RT 缓存规则）。
 	std::unique_ptr<RGL::IzbShadow> izbShadow;
-	// 批 11.6d-2：EVSSM 矩图数据层（门 = diagnostics().shadowEvssm 且 deferred 且
-	// shadow_pass；**门关 = 恒 nullptr，零分配零命令逐位不变**，同 izbShadow）。
+	// 批 11.6d-2：EVSSM 矩图数据层（门 = shadowFormPlan().buildEvssmMoments 且 deferred；
+	// **门关 = 恒 nullptr，零分配零命令逐位不变**，同 izbShadow）。
 	std::unique_ptr<RGL::EvssmShadow> evssmShadow;
 	// 批 14.5：FSR 3.1.4 upscaler（门 = runtime.fsr_upscaler 且 velocity 真的进了图；
 	// **门关 = 恒 nullptr，零构造零命令逐位不变**，同 izbShadow / evssmShadow）。
@@ -444,7 +444,7 @@ export class Renderer {
 	bool fsrDispatchedOnce = false;  ///< 首帧之后不再 reset（时域历史已建立）
 	int32_t fsrDepthSlot = -1;   ///< 深度附件 slot（布局护栏；**不用 depthAttSlot**——
 	                             ///< 那个只在 IZB 门开时由 izbPreFrame 填，FSR 不依赖 IZB）
-	uint32_t izbFrameNo = 0;   ///< 帧计数（izb_dump_frame 比对，1 起）
+	uint32_t izbFrameNo = 0;   ///< 帧计数（shadow.lua 的 izb.dump_frame 比对，1 起）
 	bool izbMaskSegmentWarned = false;  ///< shadow0 段空 warn-once（mask 依赖投影体）
 	bool memStatsLogged = false;        ///< 显存基线只打一次（首帧懒建资源入账用）
 	int32_t depthAttSlot = -1; ///< 图内 depth 附件 slot（IZB sandwich 读布局追踪表用）

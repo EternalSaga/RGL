@@ -18,13 +18,13 @@ return {
     config_reload = false,  -- Phase 10 批 10.3 配置热重载（true=帧边界轮询源 configs/：scene.lua spin/exposure/env 强度、camera.lua 调参、log_level.json；imgui 开关本身需重启，见 docs/archive/phase10_plan.md）
     shader_reload = false,  -- Phase 10 批 10.4 shader 热重载 L1（true=帧边界 fork slangc 全量重编源 rgl/shaders/ 并同签名守卫换入；接口契约变化保留旧管线提示重启；slangc/源目录缺失降级关，见 docs/archive/phase10_plan.md）
     picking = false,  -- Phase 10 批 10.5 GPU id 点选 + 批 10.7 选中高亮（true=编译图期追加 object_id pass（r32ui 写 objectIndex+1，点选回读 1 texel 反查 entity 进面板）+ highlight pass（琥珀高亮叠加成片，按材质过滤=同材质实体一起发光）+ 面板自动切"选中"页 + Esc 取消；默认关=图逐位同，见 docs/archive/phase10_plan.md）
-    -- ── 阴影键已迁出（批 N6a，docs/shadow_routes_plan.md §2 红线 2）──
+    -- ── 阴影键已迁出（批 N6a 迁出、N6b 断根，docs/shadow_routes_plan.md §2 红线 2）──
     -- shadow_pass / shadow_pcss / shadow_evssm / pcss_sun_degrees / pcss_search_radius /
     -- pcss_max_penumbra / izb_shadow / izb_grid / izb_dump_frame 在本文件**出现即启动失败**
-    -- （不静默映射：本项目最怕"配置写了、什么都没发生"）。新落点 = configs/shadow.lua
-    -- （mode / izb / pcss.* / evssm.*）。N6a 过渡期本文件不再承载阴影键，旧字段由
-    -- DiagnosticsConfig 的默认值（= 交付形态：shadow_pass=true、izb_shadow=true、
-    -- pcss/evssm 关、pcss_* = 0.53/16/32）提供；消费点切到新门 = N6b。
+    -- （不静默映射：本项目最怕"配置写了、什么都没发生"；fail-fast 是永久护栏，不随迁移
+    -- 批次退役）。新落点 = configs/shadow.lua（mode / izb / pcss.* / evssm.*），N6b 起
+    -- 它是阴影门的**唯一**真相源：DiagnosticsConfig 里那九个字段已删除，消费点一律经
+    -- shadowConfig() + shadowFormPlan() 读形态。
 
     -- 债-30：遮挡剔除结果的**驱动方式**（三态互斥，语义 → rgl/diagnostics.cppm `CullReplayMode`；
     -- 定价与方案推导 → docs/cpu_perf_plan.md §4）。为什么默认不是"最忠实"的 gpu_sync：

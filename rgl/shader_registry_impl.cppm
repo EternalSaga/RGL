@@ -12,7 +12,7 @@ import shader;
 import scene_config;
 import material_types_generated;
 import vkerror;
-import diagnostics;  // 批 11.3-1e：light 管线条目按 izb_shadow 门选 spec 变体
+import shadow_config;  // 批 11.3-1e / N6b：light 管线条目与软影 frag 变体按形态决策表选 spec
 import asset_table;
 
 namespace RGL {
@@ -64,7 +64,7 @@ namespace RGL {
 		b.extra.push_back({.binding = 7, .sampler = false, .heapSlot = ormSlot});
 		b.extra.push_back({.binding = 8, .sampler = false, .heapSlot = emissiveSlot});
 		// Phase 11 批 11.2：阴影图（binding 12）+ 专用 NEAREST sampler（binding 13）。**无条件烘焙**
-		// ——不能看 diagnostics.shadow_pass：光照管线条目一旦少了这个描述槽，开关时
+		// ——不能看 shadow.lua 的 mode：光照管线条目一旦少了这个描述槽，开关时
 		// 图不存在就会在采样侧报 VVL。unlit / phong 等不 import shadow.slang 的风格不声明
 		// 它们 → 空转（既证无害，同 binding 4/5 对不 import env 的风格）。
 		b.extra.push_back({.binding = 12, .sampler = false, .heapSlot = shadowMapSlot});
@@ -180,7 +180,8 @@ namespace RGL {
 			return *idx;
 		// 批 11.3-1e 红线终态：门 = 选 spec 变体（IZB 消费版 frag SPV），不是运行时 flag 分支
 		// ——slang 对源码差异的 fp 重排会让「门关 flag=0」也逐位漂移（2026-10-02 实测教训）。
-		const bool izbGate = diagnostics().izbShadow;
+		// 批 N6b：判据来自形态决策表的 `consumeIzbMask`（= configs/shadow.lua 的 `izb`）。
+		const bool izbGate = shadowFormPlan(shadowConfig()).consumeIzbMask;
 		const RGL::PipelineSpec* spec = findSpec(izbGate ? "light_izb" : "light");
 		if (!spec)
 			throw std::runtime_error("pipeline spec not found: light");
@@ -536,19 +537,20 @@ void ShaderRegistry::bindPipelineToAsset(const char* name, uint32_t assetId) {
 	}
 
 /**
- * 批 11.5/11.6：软阴影变体 spec 查表/建表（门 = diagnostics().shadowEvssm 优先、
- * 其次 shadowPcss；两门全关原样返回 = 原版 SPV 红线构造性保证，同 addLightEntry 的
- * 1e 模式——运行时 flag 分支会被 slang fp 重排坑穿，2026-10-02 实测教训）。
+ * 批 11.5/11.6：软阴影变体 spec 查表/建表（批 N6b：后缀直接来自形态决策表的 `spvSuffix`，
+ * 改造前那条「shadowEvssm 优先、其次 shadowPcss」的让位链**从此结构性消失**——枚举下
+ * "两门同开"这个组合根本表达不出来，也就没有谁给谁让位）。两档都不开时原样返回
+ * = 原版 SPV 红线构造性保证，同 addLightEntry 的 1e 模式——运行时 flag 分支会被 slang
+ * fp 重排坑穿，2026-10-02 实测教训）。
  * 阴影消费 frag 恰 4 文件（rgl_shader_defined 声明面同源）；"light.frag" 前缀同时覆盖
  * light.frag 与 light.frag_IZB_CONSUME.spv，后者插后缀 = ..._IZB_CONSUME_EVSSM_SOFT.spv
- * = rgl_shader_defined2 命名。两门同开 = EVSSM（11.5 冻结件让位，不叠后缀——
- * _PCSS_SOFT_EVSSM_SOFT 变体不存在，shadow.slang 内 EVSSM 分支优先）。
+ * = rgl_shader_defined2 命名。
  */
 const RGL::PipelineSpec* ShaderRegistry::softShadowVariantSpec(const RGL::PipelineSpec* base) const {
 	if (!base)
 		return base;
-	const bool evssm = diagnostics().shadowEvssm;
-	if (!evssm && !diagnostics().shadowPcss)
+	const auto plan = shadowFormPlan(shadowConfig());
+	if (plan.spvSuffix.empty())
 		return base;
 	const std::string_view path{base->fragSpv};
 	const auto slash = path.find_last_of("/\\");
@@ -565,9 +567,10 @@ const RGL::PipelineSpec* ShaderRegistry::softShadowVariantSpec(const RGL::Pipeli
 		return &it->second;
 	RGL::PipelineSpec variant = *base;
 	const auto dot = variant.fragSpv.rfind(".spv");
-	variant.fragSpv.insert(dot == std::string::npos ? variant.fragSpv.size() : dot,
-		evssm ? "_EVSSM_SOFT" : "_PCSS_SOFT");
-	variant.name = base->name + (evssm ? "_evssm" : "_pcss");
+	variant.fragSpv.insert(dot == std::string::npos ? variant.fragSpv.size() : dot, plan.spvSuffix);
+	// 条目名后缀 = spv 后缀的小写短名（表里没有的后缀不会走到这里，故无需兜底分支）
+	variant.name = base->name
+		+ (plan.spvSuffix == "_EVSSM_SOFT" ? "_evssm" : "_pcss");
 	return &variantSpecs.emplace(base->fragSpv, std::move(variant)).first->second;
 }
 

@@ -135,15 +135,17 @@ std::optional<StartupConfigs> loadAllConfigs() {
 		return std::nullopt;
 	}
 	setDiagnostics(*diagResult);
-	// 批 N6a（docs/shadow_routes_plan.md §3）：configs/shadow.lua 阴影路线枚举。
-	// **只解析 + 回显（loader 内打日志），不回灌**——6 处消费点仍读 diagnostics() 旧字段
-	// （旧字段默认值 = 交付形态）；消费点切到新门 = N6b。失败口径与其余配置一致 = 启动失败。
+	// 批 N6a（docs/shadow_routes_plan.md §3）建文件、**N6b 回灌**：configs/shadow.lua 的
+	// 阴影路线枚举（枚举 mode + 正交 izb）。setShadowConfig 之后 6 处消费点经
+	// shadowConfig() / shadowFormPlan() 读它；diagnostics 侧九个旧字段已删。
+	// 失败口径与其余配置一致 = 启动失败。
 	auto shadowResult = loadShadowConfig(configPath("shadow.lua").c_str());
 	if (!shadowResult) {
 		auto* logger = RLLogger::getInstance();
 		if (logger) logger->error("错误: {}", shadowResult.error().describe());
 		return std::nullopt;
 	}
+	setShadowConfig(*shadowResult);
 	return StartupConfigs{std::move(*cameraResult), std::move(*sceneResult),
 		std::move(*runtimeResult)};
 }
@@ -450,8 +452,8 @@ CompiledGraphResult compileGraphOrThrow(const char* path, bool taaEnabled,
 	// 1.0 = 无遮挡 → 采样结果恒为全亮 → 成片逐位不变。
 	decorateShadowPass(graphConfig->desc, kShadowMapSize);
 	if (auto* logger = RLLogger::getInstance())
-		logger->info("shadow_pass: 已装饰 depth-only 阴影 pass（{}² {}，{} 级；投影体清单由 "
-			"diagnostics.shadow_pass 门控，关时段内零 draw = 画面逐位不变）",
+		logger->info("shadow: 已装饰 depth-only 阴影 pass（{}² {}，{} 级；投影体清单由 "
+			"shadow.lua 的 mode 门控（形态表 drawAtlas），mode = \"none\" 时段内零 draw = 画面逐位不变）",
 			kShadowMapSize, kShadowMapFormat, kActiveShadowCascades);
 	// 批 12.6 TAA 装饰**必须最后**（在 picking / highlight / shadow 之后）：它把
 	// 「写 swapchain 且采色」的 pass（tonemap）的输入换成时域结果，若 highlight 后插
@@ -487,7 +489,10 @@ void runGateLint(const RuntimeConfig& runtime, const DeviceContext& device,
 	gateEnv.headless = runtime.headless;
 	gateEnv.llmCapture = runtime.llm.enabled;
 	gateEnv.staticGraphicsIndirect = device.getDgcSupport().staticGraphicsIndirect;
+	// 两份配置各带一份出厂默认（第二份 = 「只报偏离出厂值的门」的比对基准）；
+	// shadow 侧与 diagnostics 侧同为「启动期单例」口径（loadAllConfigs 已回灌）。
 	const auto findings = lintDiagnosticsGates(diagnostics(), DiagnosticsConfig{},
+		shadowConfig(), ShadowConfig{},
 		graphResult.graph.passes, graphResult.variant, gateEnv);
 	const uint32_t errors = logGateFindings(findings);
 	if (auto* logger = RLLogger::getInstance())

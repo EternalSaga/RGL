@@ -28,7 +28,7 @@ import rlvk;
 import rllogger;
 import vk_swapchain;     // izbPreFrame 按渲染 extent 重建 mask（批 14.3）
 import vk_resources;
-import diagnostics;
+import shadow_config;    // shadowConfig() / shadowFormPlan()（IZB 与 EVSSM 两扇图外门，批 N6b）
 import profiler;         // zone（IZB / EVSSM 帧首段观测）
 import frame_draw_list;  // segmentSpan（mask 重放段名 → draw 序列）
 import scene_context;    // shadowDrawSource（段名单一来源，批 11.3-1d）
@@ -50,13 +50,15 @@ void Renderer::izbPreFrame() {
 	if (izbShadow)
 		izbShadow->drainReadback();
 	++izbFrameNo;
-	if (!diagnostics().izbShadow)
+	// ⚠ 构造判据**只有** `consumeIzbMask`（= configs/shadow.lua 的 `izb`），刻意不掺
+	// drawAtlas：mask 每帧无条件清零是债-32 的收口，掺第二个判据就把它拆了。
+	if (!shadowFormPlan(shadowConfig()).consumeIzbMask)
 		return;
 	const bool deferred = graphHasDeferredLight(renderGraph.passes);
 	const auto depthIt = std::ranges::find_if(renderGraph.attachments,
 		[](const auto& a) { return a.kind == RgAttachmentKind::depth; });
 	// 非 deferred 在此静默早退是**合法运行期形态**（图判定不该在录制路径打日志）；
-	// 「izb_shadow=true 配了却必然无效」由 gate_lint 启动期 error 喊（R-02，2026-10-02）。
+	// 「izb 配了却必然无效」由 gate_lint 启动期 error 喊（R-02，2026-10-02）。
 	if (!deferred || depthIt == renderGraph.attachments.end())
 		return;
 	depthAttSlot = static_cast<int32_t>(depthIt - renderGraph.attachments.begin());
@@ -64,7 +66,7 @@ void Renderer::izbPreFrame() {
 	if (!izbShadow || izbShadow->getExtent() != extent) {
 		vkDevice.getDevice().waitIdle();
 		izbShadow = std::make_unique<RGL::IzbShadow>(
-			vkDevice, *resources, extent, diagnostics().izbGrid);
+			vkDevice, *resources, extent, shadowConfig().izbGrid);
 	}
 }
 
@@ -88,8 +90,9 @@ void Renderer::izbLightPassPre(vk::raii::CommandBuffer& cmd, const RgPassPlan& p
 		trackedLayout,
 		// N 帧起每 30 帧转一次（ppm 覆盖写 + 直方图日志行）——一次性判等会被 RPC
 		// 截图时序甩开（imgqa izb 判据要求 mask 与截图同相机状态，机位是 RPC 后设的）
-		diagnostics().izbDumpFrame != 0 && izbFrameNo >= diagnostics().izbDumpFrame
-			&& (izbFrameNo - diagnostics().izbDumpFrame) % 30 == 0);
+		// 门在 shadow.lua 的 izb.dump_frame（N6b：原 diagnostics.izb_dump_frame）
+		shadowConfig().izbDumpFrame != 0 && izbFrameNo >= shadowConfig().izbDumpFrame
+			&& (izbFrameNo - shadowConfig().izbDumpFrame) % 30 == 0);
 	// 判定与值可读化走 `vulkan_utils::layoutDrift`（批 14.4b 步 2 收成单点纯函数），
 	// **后果说明留在本处**——它与下面 FSR 那段的诊断语义不同（一个是"执行器下一跳拿错
 	// oldLayout"，一个是"vendor 跳过转换"），不该并成一份。
@@ -123,8 +126,11 @@ void evssmWarnOnce(bool& flag, const char* msg) {
 }  // namespace
 
 void Renderer::evssmPreFrame() {
-	auto z = zone("drawFrame.evssmPre");  // 批 9.5 观测：EVSSM 帧首段（门 = shadow_evssm）
-	if (evssmShadow || !diagnostics().shadowEvssm || !diagnostics().shadowPass)
+	auto z = zone("drawFrame.evssmPre");  // 批 9.5 观测：EVSSM 帧首段（门 = shadow.lua mode=="evssm"）
+	// N6b：判据收成形态决策表一项（= 旧 `shadow_evssm && shadow_pass`，等价性见
+	// shadowFormPlan 的注释）。**注意不要把 buildEvssmMoments 换成 drawAtlas**：
+	// mode==pcss 时图集照画但不建矩图。
+	if (evssmShadow || !shadowFormPlan(shadowConfig()).buildEvssmMoments)
 		return;
 	// 非 deferred 组合由 gate_lint 启动期 error（R-03，2026-10-02 从这里的 warn-once
 	// 迁走——不走到这一帧就永远不喊的病灶收口）；运行期早退保留（消费点在 deferred
@@ -398,13 +404,14 @@ void Renderer::replayIzbMaskSegment(vk::raii::CommandBuffer& cmd, const FrameDra
 	if (seg.empty()) {
 		// 债-32：段空**不再需要**走 mask pass——mask 的每帧清零已搬到 `IzbShadow::recordFrame`
 		// 第 ⑧ 步（`izbLightPassPre` 每帧无条件先调它，再调本函数），所以这里早退不会让
-		// light.frag 读到未初始化显存：mask 此刻恒为全 0 = 「无遮挡」，与 shadow_pass 关
-		// 本应给出的画面一致（清零留在 beginMaskPass 之内时，这条早退 = 整帧不写 mask = 真 UB，
-		// 本机此前逐位相同纯属新页读零的侥幸）。组合本身无意义由 gate_lint 启动期 error 喊。
+		// light.frag 读到未初始化显存：mask 此刻恒为全 0 = 「无遮挡」，与 shadow.lua 的
+		// `mode = "none"` 本应给出的画面一致（清零留在 beginMaskPass 之内时，这条早退 = 整帧不写
+		// mask = 真 UB，本机此前逐位相同纯属新页读零的侥幸）。组合本身无意义由 gate_lint 启动期
+		// error 喊（判据 = `izb.on × mode == "none"`，N6b 起两键同在 shadow.lua）。
 		if (!izbMaskSegmentWarned) {
 			izbMaskSegmentWarned = true;
 			if (auto* lg = RLLogger::getInstance())
-				lg->warn("izb: shadow0 段为空（shadow_pass 关或无投影体）→ 本帧 mask 无内容 = 无遮挡");
+				lg->warn("izb: shadow0 段为空（shadow.mode = \"none\" 或无投影体）→ 本帧 mask 无内容 = 无遮挡");
 		}
 		return;
 	}

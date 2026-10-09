@@ -88,7 +88,7 @@ error 并列出四合法值，`cullReplayName` 同口径）/ `ShadowTuning` / `S
 6. 回显三行制（比 diagnostics 多一行）：`shadow: mode=csm izb=true` 路线行**恒打**
    （info，"这台机器跑哪条阴影路"是排障第一问）+ 差集 info（全默认不喊）+ 全量 debug。
 
-**四臂 sha 对账表**（2026-10-09 改造前实测，deferred / 1280×720 / 第 8 帧 / 本机 8060S）——
+**五臂 sha 对账表**（2026-10-09 改造前实测，deferred / 1280×720 / 第 8 帧 / 本机 8060S）——
 N6b 改完必须逐臂复现，这是「重构没动语义」的硬锚点，比「看着没坏」强得多：
 
 | 形态 | 旧配置 | 新配置 | 截图 sha256 前缀 |
@@ -97,7 +97,50 @@ N6b 改完必须逐臂复现，这是「重构没动语义」的硬锚点，比�
 | 无影 | `shadow_pass=false` | `mode="none"` | `121e7502` |
 | CSM 单独 | `shadow_pass=true, izb_shadow=false` | `mode="csm", izb=false` | `52231a84` |
 | PCSS | `shadow_pcss=true, izb_shadow=false` | `mode="pcss"` | `da06ca00` |
-| EVSSM | `shadow_evssm=true, izb_shadow=false` | `mode="evssm"` | `1a6757f3` |
+| EVSSM | `shadow_evssm=true, izb_shadow=false` | `mode="evssm", izb=false` | `1a6757f3` |
+
+**五臂复现（2026-10-09 N6b 改完实测，同机 8060S）**：`fdece9d0` / `121e7502` / `52231a84` /
+`da06ca00` / `1a6757f3` —— **逐臂逐位相同**。量法 = 备份 `configs/shadow.lua` → 逐臂改写 →
+`just shot --name <臂>` → `sha256sum build/rgl/screenshots/<臂>.png` → trap 还原。
+
+### 3.2 N6b 落地实况（2026-10-09，只记与 §2 定案的差异 + 符号名）
+
+**消费点面**（六处一律 `shadowFormPlan(shadowConfig())`，判据不再散写）：
+`render_list_impl.cppm`（`collectShadowCasters` / `fillShadowData` 的 `drawAtlas`）、
+`shader_registry_impl.cppm`（`softShadowVariantSpec` 的 `spvSuffix` + `addLightEntry` 的
+`consumeIzbMask`）、`vkrenderer_offgraph.cppm`（`izbPreFrame`/`izbLightPassPre`/`evssmPreFrame`）、
+`main_scene.cppm`（IZB mask 条目）。单例对 = `shadowConfig()` / `setShadowConfig()`
+（`main_impl.cppm` 的 `loadAllConfigs` 回灌，同 `diagnostics()` 范式，不穿构造函数参数）。
+`DiagnosticsConfig` 的九个旧字段与 `kGateEcho` 九行**已删**（39→30 键），
+`checkMigratedShadowKeys` **保留为永久护栏**。
+
+与定案的差异（实现选择，非设计改动）：
+
+1. **scene data 两个软影区按档分立**：`shadowPcss` 区读 `shadowConfig().pcss`、`shadowEvssm`
+   区读 `shadowConfig().evssm`，两块都**照旧无条件写**（与改造前同形）。出厂两块同值
+   （0.53/16/32）⟹ 交付形态下写出的字节逐位相同（五臂已证）。这是债-16⑤ 的落点。
+2. **`ShadowFormPlan` 没有 `tuning` 字段**（主 agent 复核时删掉了子 agent 加的那版）：两个
+   scene data 区各读各的块、且**同时被写**，"本档的那一块"在运行期没有消费者——给它写
+   断言就是自指绿例（只有测试读它）。且它是 `const ShadowTuning&` 成员，`shadowFormPlan(ShadowConfig{})`
+   即悬垂引用（AGENTS 生命周期红线那一类）。调参分立的真护栏改钉在**有消费者的地方**：
+   `tests/test_render_list_shadow.cppm` 的「软影两区各读各的调参块」（串档即红）。
+3. **`consumeIzbMask` 刻意不掺 `drawAtlas`**：IZB 的构造判据今天就只有 izb 一个
+   （`IzbShadow::recordFrame` 无条件清零 = 债-32 的收口，掺上 drawAtlas 就把它拆了）。
+   「izb × mode=none 必然一帧阴影也不产」是 gate_lint 的 **error**，不是运行期早退。
+4. **gate_lint 阴影规则按枚举重写**（13 行 / 11 门）：`izb × mode="none"`(error)、
+   `izb × 非 deferred`(error)、`mode="evssm" × 非 deferred`(error)、`izb.dump_frame × izb 关`
+   (warn)、`izb.grid × izb 关`(inertNote)、`pcss.* × mode≠pcss` ×3、`evssm.* × mode≠evssm` ×3
+   (inertNote)、`csm`(nullptr)。**「PCSS 让位 EVSSM」那条 warn 整条删除**——枚举下两门同开
+   表达不出来，让位链不是被修好，是被消掉（§2 红线 1 的推论）。
+5. **`qa/configs/analytic/shadow.lua` 除 `mode="none"` 外还须显式 `izb = false`**（定案表里
+   无影臂只写了 `mode="none"`）：N6a 把 izb 的代码默认翻成 true，而该目录是 **forward** 图
+   ⟹ izb 开着既撞 gate_lint 的 `izb × 非 deferred` error，又会把 frag 换成 IZB 变体（换 SPV
+   = 换被测对象）。nm_rig / env_band 同理。
+6. **`tools/cpu_baseline.py` 的 izb-off 臂只能整键替换** `izb = false`（`smoke.patch_lua`
+   不支持 `izb.on` 这类嵌套键）——解析器的 izb 两形态（布尔 / 子表）在此派上用场。
+7. **`shadow_config_impl.cppm` 的 `loadShadowConfig` 局部量必须叫 `root`**：imgqa 的键名
+   校验器（`knownRootKeys`）按 `root["键"]` 正则从源文件抽「解析器认识的键」，叫 `table`
+   就抽不到 `mode`，校验器反过来拒绝合法的 shadow.lua。
 
 ## 4. EVSSM 生效性实测结论（2026-10-09，本机 8060S / Mesa 26.2.3）
 

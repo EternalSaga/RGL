@@ -114,8 +114,8 @@ struct FacePrediction {
 ///
 /// 两个真实陷阱在此收口：
 ///   ① lua 布尔必须小写——`{}` 直接格式化 C++ bool 若配错成 True 就是 nil 回落默认；
-///   ② 键名对着**引擎解析器源码**校验（`shadowPass` 是 C++ 字段名，lua 键是
-///      `shadow_pass`——拼错键 = 静默用默认值 = 在默认值上下判据，拒绝）。
+///   ② 键名对着**引擎解析器源码**校验（`shadowPass` 是 C++ 字段名，shadow.lua 的键是
+///      `mode`——拼错键 = 静默用默认值 = 在默认值上下判据，拒绝）。
 /// 抗锯齿三态（引擎 `runtime.lua` 的 `aa` 键，批 14.6）。imgqa 不链 rgl 库，同值重抄
 /// （先例 = kTaaFeedbackLabel）；语义与"为什么是三态不是两个布尔" → `rgl/runtime_config.cppm`
 /// 的 `AaMode`。三态**结构上排除了**「TAA 与 FSR 时域同开」——旧 `checkFsrOpts` 那条
@@ -162,10 +162,10 @@ struct ProfileOpts {
     std::array<double, 3> ambient{0.0, 0.0, 0.0};
     double exposure = 1.0;
     double aoStrength = 0.0;
-    bool shadowPass = false;
-    bool izbShadow = false;                // diagnostics.izb_shadow（izb 消费域判据）
-    bool evssmShadow = false;              // diagnostics.shadow_evssm（批 11.6d swim 判据）
-    int izbDumpFrame = 0;                  // diagnostics.izb_dump_frame（>0：N 帧起每 30 帧覆盖写 izb_mask.ppm）
+    bool shadowPass = false;               // → shadow.lua 的 mode（true="csm"，false="none"）
+    bool izbShadow = false;                // → shadow.lua 的 izb（izb 消费域判据；与 mode 正交）
+    bool evssmShadow = false;              // → shadow.lua 的 mode="evssm"（批 11.6d swim 判据）
+    int izbDumpFrame = 0;                  // → shadow.lua 的 izb.dump_frame（>0：N 帧起每 30 帧覆盖写 izb_mask.ppm）
     std::string variant;                   // "" = 模板默认（forward）；"deferred" 等 = 拷贝后重写 variant 行
     /// 抗锯齿选路（批 14.6：引擎 `runtime.lua` 的 `aa` 三态键）。Off = **不写键** = 出厂态。
     /// 原 `taa` 布尔（scene.lua `taa.enabled`）与 `fsrUpscaler` 布尔（`fsr_upscaler`）都收进

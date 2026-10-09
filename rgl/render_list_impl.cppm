@@ -20,7 +20,7 @@ import scene_context;
 import camera;
 import render_graph;  // shadowAtlasColumns（图集列数，与装饰 extent 同源）
 import evssm_shadow;  // kEvssmMipLevels（矩链级数；scene data w 从常量导出，禁双源写死）
-import diagnostics;  // diagnostics().shadowPass（阴影总开关）
+import shadow_config;  // shadowConfig() / shadowFormPlan()（阴影形态：画不画图集 + 逐档调参）
 import taa_jitter;    // contentShiftPx（内容位移口径唯一出处；批 13.5 起 fillTaaData 要用）
 
 namespace RGL {
@@ -54,7 +54,7 @@ struct ShadowCandidate {
  * 只收**不透明**材质：blend 体投出的影子会看不到遮挡体的背面（收下来只多花一遍光流，
  * 还会在透明体上留不可见的脊影）；MASK 背面本就被 alpha 消掉，不影响。
  * 不过 GPU culling：候选表按**主视棱**建立，用它会漏掉视野外屋顶的投影体。
- * 门控（diagnostics.shadowPass）在**最前**：关时不产出任何 draw——图里的阴影 pass 仍然运行
+ * 门控（形态决策表 `drawAtlas`）在**最前**：关时不产出任何 draw——图里的阴影 pass 仍然运行
  * （清深度），但无光栅化开销，且采样端因 enabled=0 直接返回全亮。
  * @param asset 该实体的网格资产（取 shadowPipelineIndex / groupCount）
  * @param mat 该实体绑定的材质（判 blend）
@@ -66,8 +66,8 @@ struct ShadowCandidate {
 void collectShadowCasters(const RGL::MeshAsset& asset, const RGL::MaterialAsset& mat,
     const glm::vec3& worldCenter, float worldRadius, uint32_t objectSlot,
     std::vector<ShadowCandidate>& out) {
-    if (!diagnostics().shadowPass || asset.shadowPipelineIndex == kInvalidPipelineIndex
-        || mat.alphaModeBlend)
+    if (!shadowFormPlan(shadowConfig()).drawAtlas
+        || asset.shadowPipelineIndex == kInvalidPipelineIndex || mat.alphaModeBlend)
         return;
     out.push_back(ShadowCandidate{worldCenter, worldRadius, objectSlot,
         asset.shadowPipelineIndex, asset.groupCount});
@@ -138,7 +138,7 @@ std::array<ShadowVolume, kActiveShadowCascades> buildShadowVolumes(const Light& 
 
 /**
  * 定义（接口声明与 @param 契约见 render_list.cppm；12.3d 接缝 = shadowPassEnabled
- * 显式入参取代内部 diagnostics() 单例读取，调用点传 diagnostics().shadowPass）。
+ * 显式入参取代内部单例读取，调用点传形态决策表的 `drawAtlas`）。
  */
 void fillShadowData(FrameDrawList& out, float shadowNear, float shadowFar,
     std::span<const ShadowVolume> volumes, bool shadowPassEnabled) {
@@ -150,7 +150,7 @@ void fillShadowData(FrameDrawList& out, float shadowNear, float shadowFar,
     // **必须用与 CPU 切片同源的量化 n/f**（renderListSystem 传入）——阈值与内容错位 =
     // 片元选到不覆盖自己的级 → 边界处阴影随相机闪跳。
     // texelSizes = 2·r/块边长，每级各自从自己的球推。
-    // params = (depthBias, normalOffsetScale, enabled, shadowFar)；enabled 由门控 diagnostics
+    // params = (depthBias, normalOffsetScale, enabled, shadowFar)；enabled 由形态决策表
     // 驱动（12.3d 起经 shadowPassEnabled 显式传入），shadowFar 供采样端做末级淡出
     // （5a-9，见下方填写处）。
     // atlas = (图集边长, 单块边长, 分块列数, 保留)，采样端把分块 uv 叠图集用。
@@ -180,18 +180,25 @@ void fillShadowData(FrameDrawList& out, float shadowNear, float shadowFar,
     // 列数与图装饰的 extent 同源（shadowAtlasColumns）——两处不同步 = 采样端把块叠到错位置
     out.sceneData.shadowAtlas = {static_cast<float>(kShadowMapSize),
         static_cast<float>(shadowTileSize(cols)), static_cast<float>(cols), 0.0f};
-    // 批 11.5 PCSS 参数（只有 -DPCSS_SOFT 变体读，原版 SPV 不引用 = 门关红线）：
+    // ── 软影两区的调参（批 N6b 起**按档分立**，消债-16⑤）────────────────────────
+    // 两个区都**照旧无条件写**（与改造前同形）：PCSS 变体只读 pcss 区、EVSSM 变体只读
+    // evssm 区，各自看不到对方的值 ⟹ 改一档不串到另一档。改造前两个区共用一套
+    // `pcss_*`，"EVSSM 的半影上限"只能借 PCSS 的键名写（docs/shadow_routes_plan.md §2 红线 3）。
+    // 出厂 configs/shadow.lua 两块同值（0.53/16/32）⟹ 交付形态下写出的字节与改造前逐位相同。
     // 半影全宽系数取 2·tan(θ/2)（θ = 太阳视直径；小角下 ≈ tanθ，物理定义用半角式）。
-    const float halfAngle = static_cast<float>(diagnostics().pcssSunDegrees) * 0.01745329252f * 0.5f;
-    out.sceneData.shadowPcss = {2.0f * std::tan(halfAngle),
-        static_cast<float>(diagnostics().pcssSearchRadius),
-        static_cast<float>(diagnostics().pcssMaxPenumbra), 0.0f};
-    // 批 11.6 EVSSM 参数（只有 -DEVSSM_SOFT 变体读）：x = 半坡 tan(θ/2)（与 pcss 同数值键，
-    // EVSSM 消费半坡而非全宽系数）；y/z = 搜索半径/半影上限（图集纹素 mip0 域）；
+    const auto degToHalfRad = [](double degrees) {
+        return static_cast<float>(degrees) * 0.01745329252f * 0.5f;
+    };
+    const ShadowTuning& pcss = shadowConfig().pcss;
+    out.sceneData.shadowPcss = {2.0f * std::tan(degToHalfRad(pcss.sunDegrees)),
+        static_cast<float>(pcss.searchRadius), static_cast<float>(pcss.maxPenumbra), 0.0f};
+    // 批 11.6 EVSSM 参数（只有 -DEVSSM_SOFT 变体读）：x = 半坡 tan(θ/2)（与 pcss 同形状但
+    // 各读各的块，EVSSM 消费半坡而非全宽系数）；y/z = 搜索半径/半影上限（图集纹素 mip0 域）；
     // w = 矩链最大 mip（EvssmShadow 8 级链固定 7，docs/evssm_plan.md §3.1）。
-    out.sceneData.shadowEvssm = {std::tan(halfAngle),
-        static_cast<float>(diagnostics().pcssSearchRadius),
-        static_cast<float>(diagnostics().pcssMaxPenumbra),
+    const ShadowTuning& evssm = shadowConfig().evssm;
+    const float evssmHalfAngle = degToHalfRad(evssm.sunDegrees);
+    out.sceneData.shadowEvssm = {std::tan(evssmHalfAngle),
+        static_cast<float>(evssm.searchRadius), static_cast<float>(evssm.maxPenumbra),
         static_cast<float>(RGL::kEvssmMipLevels - 1u)};
 }
 
@@ -517,7 +524,7 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	fillFsrCameraInput(fresh, viewProj);  // 批 14.5：FSR 相机输入
 	// 批 12.6 TAA 载荷（三矩阵/参数，细节见 fillTaaData）
 	fillTaaData(fresh, viewProj, env, taa);
-	fillShadowData(fresh, shadowNear, shadowFar, shadowVolumes, diagnostics().shadowPass);
+	fillShadowData(fresh, shadowNear, shadowFar, shadowVolumes, shadowFormPlan(shadowConfig()).drawAtlas);
 	fresh.sceneData.objectMatrices = std::span<const glm::mat4>{state.matrices};
 	fresh.sceneData.objectMvps = std::span<const glm::mat4>{state.mvps};
 	fresh.sceneData.objectDraws = std::span<const ObjectDraw>{state.draws};

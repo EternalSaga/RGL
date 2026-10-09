@@ -1,0 +1,20 @@
+-- 分析探针的阴影门：**整条阴影路关掉**（原 diagnostics.lua 的 shadow_pass = false）。
+--
+-- 为什么必须显式写在这里（而不是"缺文件回落默认"）：缺 shadow.lua = 回落**交付形态**
+-- mode=csm + izb 开 = 有影，而探针要的是 sampleShadow1Tap 恒 1.0（无遮挡）。整目录
+-- --config 用法下这个回落是**静默换臂**——画面看着"合理"，闭式解对不上才发现。
+--
+-- ⚠ 两件事都要写，只关一件不够：
+--   mode = "none" → 图首 shadow0..3 段零 draw + 采样端 enabled=0 恒全亮（旧 shadow_pass）
+--   izb  = false  → 不构造 IZB、light 条目不选 IZB_CONSUME 变体（旧 izb_shadow）。
+--     本目录 render_graph.lua 是 **forward** 图，而 IZB 只接 deferred light pass
+--     ⟹ izb 开着既触发 gate_lint 启动期 error，又会把 frag 换成 izb 变体（换 SPV = 换
+--     被测对象）。N6a 把 izb 的代码默认翻成 true 之后，这一条不再能靠默认值兜住。
+--
+-- 键名口径提醒（analytic 探针踩过的坑还在）：键名写错 = 解析器不读 = 静默用默认值 =
+-- 在默认值上下判据。旧键（shadow_pass / izb_shadow / pcss_*）现在出现在**任何**配置文件
+-- 里都会立刻报错或告警，不再静默。
+return {
+    mode = "none",
+    izb = false,
+}

@@ -2,6 +2,7 @@ export module gate_lint;
 
 import rlstd;
 import diagnostics;
+import shadow_config;          // ShadowConfig（N6b：阴影门与 diagnostics 门同表申报）
 import render_graph;         // RgPassPlan / graphHasDeferredLight
 import render_graph_config;  // RgGraphVariant
 
@@ -38,7 +39,7 @@ export struct GateEnv {
 	bool staticGraphicsIndirect = false;    ///< 设备能力（dgc_static 的门槛）
 };
 
-/** 一条 lint 结论（gate = diagnostics 回显表键名拼写）。 */
+/** 一条 lint 结论（gate = 两份回显表的键名拼写，含 shadow.lua 的 `表.字段` 形态）。 */
 export struct GateFinding {
 	std::string_view gate;                    ///< 涉事门（"variant" = 意图/图事实交叉校验）
 	GateSeverity severity = GateSeverity::warn;
@@ -46,26 +47,30 @@ export struct GateFinding {
 };
 
 /**
- * 跑全量规则表（38 门，一门可多条规则——两个根因各一行消息；覆盖率钉去重门数
- * + variant 交叉校验）。
+ * 跑全量规则表（41 门 = diagnostics 侧 30 + shadow 侧 11，一门可多条规则——两个根因各
+ * 一行消息；覆盖率钉去重门数 + variant 交叉校验）。
  * 判据基准：bool 门 = true 才参与判定；数值/字符串门 = **偏离 defaults** 才参与
  * （configs/diagnostics.lua 显式写着 ~30 个默认值键，按「写了」喊就是噪音）。
- * 依赖方向：lint 不读单例（`diagnostics()`）——cfg 与 defaults 都是入参，
- * 测试可任意构造「假的世界」。
- * @param cfg 生效配置
- * @param defaults 比较基准（正常调用方传 DiagnosticsConfig{}）
+ * 依赖方向：lint 不读单例（`diagnostics()` / `shadowConfig()`）——两份配置与各自的
+ * 默认值都是入参，测试可任意构造「假的世界」。
+ * @param cfg 生效的 diagnostics 配置
+ * @param defaults diagnostics 比较基准（正常调用方传 `DiagnosticsConfig{}`）
+ * @param shadow 生效的阴影配置（configs/shadow.lua）
+ * @param shadowDefaults 阴影比较基准（正常调用方传 `ShadowConfig{}`）
  * @param passes 编译图 pass 序列（deferred 判据 = graphHasDeferredLight，图事实层）
  * @param variant 配置层路线意图（与图事实的**分歧**在此交叉校验，不互相抹平）
  * @param env 设备/模式事实
  * @return findings（error 排前不保证——由 logGateFindings 按级别分发）
  */
 export std::vector<GateFinding> lintDiagnosticsGates(const DiagnosticsConfig& cfg,
-	const DiagnosticsConfig& defaults, std::span<const RgPassPlan> passes,
+	const DiagnosticsConfig& defaults, const ShadowConfig& shadow,
+	const ShadowConfig& shadowDefaults, std::span<const RgPassPlan> passes,
 	RgGraphVariant variant, const GateEnv& env);
 
 /**
- * 规则表覆盖的门名（= 覆盖率护栏输入；单测断言其与 diagnosticsEchoKeys() 集合相等——
- * 加门不答「生效前置是什么」，`just test` 红，同 pass_vocabulary 的收口范式）。
+ * 规则表覆盖的门名（= 覆盖率护栏输入；单测断言其与 `diagnosticsEchoKeys()` +
+ * `shadowConfigEchoKeys()` 的并集相等——加门不答「生效前置是什么」，`just test` 红，
+ * 同 pass_vocabulary 的收口范式）。
  * @return 门名列表（顺序 = 表序）
  */
 export std::vector<std::string> gateLintRuleGates();

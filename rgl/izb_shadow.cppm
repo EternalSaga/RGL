@@ -28,7 +28,7 @@ export struct IzbFrameInput {
  * 深度图（与 SSAO 共用 depthSampleSlot）→ 光空间 grid-of-lists（head/nodes，
  * 「地址即像素 ID」布局 = tests/test_izb_create.cppm 护栏同款）+ early-Z priming。
  *
- * 生命周期 = Renderer 的 deferred 路线 + diagnostics.izbShadow 开门时存在；
+ * 生命周期 = Renderer 的 deferred 路线 + shadow.lua 的 izb 开门时存在；
  * **门关 = 本对象根本不被构造**（逐位旁路红线：零分配零命令）。
  * 消费侧（光空间保守光栅 mask pass）= 1d 下半程；1d 本模块只建数据，画面不变。
  *
@@ -41,7 +41,7 @@ public:
 	 * @param vkDevice 设备（shader object / barrier / fill 用 getDevice()）
 	 * @param resources descriptor heap + depthSampleSlot（SSAO 同款深度采样描述符共享）
 	 * @param extent 像素分辨率（深度图尺寸；resize 由调用方重建本对象）
-	 * @param gridDim 光空间网格边长 G（diagnostics.izb_grid）
+	 * @param gridDim 光空间网格边长 G（shadow.lua 的 izb.grid）
 	 */
 	IzbShadow(RGL::DeviceContext& vkDevice, RGL::Resources& resources,
 		vk::Extent2D extent, uint32_t gridDim);

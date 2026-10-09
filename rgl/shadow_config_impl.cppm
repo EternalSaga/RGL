@@ -11,6 +11,54 @@ import vkerror;
 namespace RGL {
 
 /**
+ * shadowFormPlan 定义（接口注释见 shadow_config.cppm）：**形态决策表的唯一实现体**
+ * （docs/shadow_routes_plan.md §2 红线 4——表只住这里，文档与注释都不抄映射）。
+ *
+ * 逐条与改造前的消费点判据等价：
+ * - `drawAtlas` = 旧 `diagnostics().shadowPass`：none 之外三档都要图首画投影体（pcss/evssm
+ *   的软影全部建立在同一张 CSM 图集上，旧世界它们也必然与 shadow_pass=true 同开）。
+ * - `spvSuffix` = 旧 `softShadowVariantSpec` 的「shadowEvssm 优先、shadowPcss 次之」让位链。
+ *   枚举下两门同开表达不出来 ⟹ 让位链不是被修好，是被**消掉**（本函数没有优先级分支）。
+ * - `buildEvssmMoments` = 旧 `shadowEvssm && shadowPass`：枚举下 mode==evssm 天然蕴含
+ *   drawAtlas，故不必再掺第二个判据（与旧判据逐档等价）。
+ * - `consumeIzbMask` = 旧 `izbShadow` **单独一个判据**：⚠ 刻意不掺 drawAtlas——IZB 的构造
+ *   判据今天就只有 izbShadow（`IzbShadow::recordFrame` 无条件跑清零是债-32 的收口，掺了
+ *   就把它拆了）。「izb × mode=none 必然一帧阴影也不产」是 gate_lint 的 error，不是这里的
+ *   运行期早退——两者判据同形但职责不同（lint 喊人，运行期不改形态）。
+ *
+ * @param cfg 阴影配置（返回值引用其调参块，见接口生命周期条）
+ * @return 本形态的四件事 + 本档调参
+ */
+ShadowFormPlan shadowFormPlan(const ShadowConfig& cfg) {
+	std::string_view suffix;
+	switch (cfg.mode) {
+		case ShadowMode::none: break;  // 原版 SPV（门关红线：零后缀 = 零变体）
+		case ShadowMode::csm: break;   // 同上：CSM 就是原版 4 抽头 PCF
+		case ShadowMode::pcss: suffix = "_PCSS_SOFT"; break;
+		case ShadowMode::evssm: suffix = "_EVSSM_SOFT"; break;
+	}
+	return ShadowFormPlan{
+		.drawAtlas = cfg.mode != ShadowMode::none,
+		.spvSuffix = suffix,
+		.buildEvssmMoments = cfg.mode == ShadowMode::evssm,
+		.consumeIzbMask = cfg.izb,
+	};
+}
+
+/**
+ * shadowConfig 定义：单例存储（进程级，main setShadowConfig 一次，此后只读）。
+ * 默认构造 = 交付形态（mode=csm、izb=true）⟹ 未接线的调用方（如 `just test` 里不加载
+ * 配置的用例）拿到的就是出厂形态，与改造前 `diagnostics()` 的旧字段默认值同形。
+ */
+ShadowConfig& shadowConfig() {
+	static ShadowConfig instance;
+	return instance;
+}
+
+/** setShadowConfig 定义：整体赋值到单例。 */
+void setShadowConfig(const ShadowConfig& cfg) { shadowConfig() = cfg; }
+
+/**
  * shadowModeName 定义：四态 ↔ `mode` 配置名的唯一映射（回显与告警共用）。
  * 与 parseShadowMode 的解析表**必须同集合**——tests/test_scene_config.cppm 的
  * 「回显 = 配置名」往返断言钉住这一层（改一边就红）。
@@ -299,19 +347,22 @@ std::string describeAllShadowGates(const ShadowConfig& cfg) {
 	lua["loadfile"] = sol::nil;
 	lua["package"] = sol::nil;
 	lua["require"] = sol::nil;
-	auto root = doFileRoot(lua, path);
-	if (!root)
-		return std::unexpected(std::move(root).error());
+	auto rootObj = doFileRoot(lua, path);
+	if (!rootObj)
+		return std::unexpected(std::move(rootObj).error());
 	// 子表类型闸门覆盖的三张表（csm = 定案形状里的预留空块，无调参键）
 	constexpr std::array<const char*, 3> kSubTables{{"csm", "pcss", "evssm"}};
 
 	try {
-		sol::table& table = *root;
-		collectPresentKeys(table, *trace);
+		// 局部量**必须**叫 `root`：imgqa 的键名校验器（tools/imgqa/engine.cpp 的
+		// knownRootKeys）按 `root["键"]` 形态从本文件抽「解析器认识的键」，改名 = 抽不到
+		// `mode` = 校验器反过来拒绝合法生成的 shadow.lua（自检失效比没校验更糟）。
+		sol::table& root = *rootObj;
+		collectPresentKeys(root, *trace);
 
 		// mode：字符串枚举门（fail-fast：笔误不静默回落，见 ShadowMode 注释）
 		trace->read.emplace_back("mode");
-		if (sol::optional<std::string> rawMode = table["mode"]; rawMode) {
+		if (sol::optional<std::string> rawMode = root["mode"]; rawMode) {
 			auto mode = parseShadowMode(*rawMode);
 			if (!mode)
 				return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
@@ -319,7 +370,7 @@ std::string describeAllShadowGates(const ShadowConfig& cfg) {
 			cfg.mode = *mode;
 		}
 
-		if (auto err = applyIzbKey(table, cfg, *trace); err)
+		if (auto err = applyIzbKey(root, cfg, *trace); err)
 			return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
 				fmt::format("shadow config ({}): {}", path, *err)});
 		// csm/pcss/evssm：存在必须是表（类型错 = 报错不静默）。csm = 预留空块：只记读集
@@ -327,12 +378,12 @@ std::string describeAllShadowGates(const ShadowConfig& cfg) {
 		// 断言 read 集合 == 回显表键集合）。
 		trace->read.emplace_back("csm");
 		for (const char* sub : kSubTables) {
-			if (auto err = checkTableOrAbsent(table, sub); err)
+			if (auto err = checkTableOrAbsent(root, sub); err)
 				return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
 					fmt::format("shadow config ({}): {}", path, *err)});
 		}
-		applyTuningBlock(table, "pcss", cfg.pcss, *trace);
-		applyTuningBlock(table, "evssm", cfg.evssm, *trace);
+		applyTuningBlock(root, "pcss", cfg.pcss, *trace);
+		applyTuningBlock(root, "evssm", cfg.evssm, *trace);
 
 		lintUnknownShadowKeys(*trace);
 

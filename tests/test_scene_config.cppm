@@ -798,7 +798,7 @@ TEST_CASE("runtime_config：fsr 嵌套块（缺块 = true/true 设计点；显�
 // diagnostics
 // ═══════════════════════════════════════════════════════════════════════════
 
-TEST_CASE("diagnostics：空表 = 全默认（影子开、其余关；texelCanary=MAX、dumpGbuf=−1）") {
+TEST_CASE("diagnostics：空表 = 全默认（N6b 起无阴影字段；texelCanary=MAX、dumpGbuf=−1）") {
 	TempLua f("dg_empty", "return {}\n");
 	auto r = loadDiagnosticsConfig(f.pathStr());
 	REQUIRE(r.has_value());
@@ -810,19 +810,15 @@ TEST_CASE("diagnostics：空表 = 全默认（影子开、其余关；texelCanar
 	CHECK(r->rpcPort == 8788u);
 	CHECK(r->rpc == false);
 	CHECK(r->imgui == false);
-	CHECK(r->shadowPass == true);  // 5a-9 起默认开（diagnostics.cppm:35）
-	// N6a「承认 IZB 出厂开」锚点（docs/shadow_routes_plan.md §1）：izb_shadow 代码默认 =
-	// true = 交付形态（旧键已从 configs/diagnostics.lua 删除，值只能来自字段默认）。
-	// 变异红线：字段默认翻回 false → 本断言红（configs 不再兜住这个值）。
-	CHECK(r->izbShadow == true);
-	CHECK(r->shadowPcss == false);
-	CHECK(r->shadowEvssm == false);
+	// N6b：阴影九字段（shadowPass / shadowPcss / shadowEvssm / pcss* / izb*）已从
+	// DiagnosticsConfig 删除——交付形态的真相搬到 ShadowConfig（其默认值由下方
+	// shadow_config 那组用例钉），这里只余「diagnostics 侧不再有阴影字段」的事实。
 	// 缺文件同样全默认 + warn（不报错）
 	std::string missing = (std::filesystem::temp_directory_path() / "rgl_cfg_no_such_diag.lua").string();
 	auto m = loadDiagnosticsConfig(missing);
 	REQUIRE(m.has_value());
 	CHECK(m->texelCanary == ~uint64_t{0});
-	CHECK(m->shadowPass == true);
+	CHECK(m->frameStats == 0u);
 }
 
 TEST_CASE("diagnostics：dump_gbuf 越界闸门按 kGBufferChannelCount 判界（越界=warn+关闭，界内保留）") {
@@ -942,14 +938,61 @@ TEST_CASE("diagnostics：setDiagnostics → diagnostics() 单例往返（main �
 	DiagnosticsConfig c;
 	c.frameStats = 77;
 	c.dumpGbuf = 2;
-	c.shadowPass = false;
+	c.picking = true;  // N6b：原来这里用 shadowPass，字段已删；换任意标量门等价
 	setDiagnostics(c);
 	CHECK(diagnostics().frameStats == 77u);
 	CHECK(diagnostics().dumpGbuf == 2);
-	CHECK(diagnostics().shadowPass == false);
+	CHECK(diagnostics().picking == true);
 	// 还原全默认，避免污染同进程其它用例（单例 = 进程级状态，谁改谁负责收尾）
 	setDiagnostics(DiagnosticsConfig{});
 	CHECK(diagnostics().frameStats == 0u);
+}
+
+TEST_CASE("shadow_config：setShadowConfig → shadowConfig() 单例往返（N6b 回灌路径）") {
+	// 消费点全部经 shadowConfig() 读形态（六处签名不穿参数）⟹ 这条往返 = 那条回灌
+	// 路径唯一的单测覆盖点。变异红线：main 的 setShadowConfig 删掉 → 交付时单例恒为
+	// 出厂默认，本用例仍绿（它测的是 setter/getter 契约），但 just smoke 的
+	// 「shadow: mode=…」回显行会与 configs/shadow.lua 不符。
+	ShadowConfig c;
+	c.mode = ShadowMode::evssm;
+	c.izb = false;
+	c.evssm.searchRadius = 41.0;
+	setShadowConfig(c);
+	CHECK(shadowConfig().mode == ShadowMode::evssm);
+	CHECK(shadowConfig().izb == false);
+	CHECK(shadowConfig().evssm.searchRadius == 41.0);
+	// 还原出厂形态（单例 = 进程级状态，谁改谁负责收尾）
+	setShadowConfig(ShadowConfig{});
+	CHECK(shadowConfig().mode == ShadowMode::csm);
+	CHECK(shadowConfig().izb == true);
+}
+
+TEST_CASE("shadowFormPlan：形态决策表逐档四件事（N6b 选路判断的唯一收口）") {
+	// 表本体是纯函数（不读单例）⟹ 这里逐档钉，加一档漏改一行立刻红。
+	// 口径权威 = docs/shadow_routes_plan.md §2；本文件不抄表（红线 4），只钉**行为**。
+	const auto planOf = [](ShadowMode m, bool izb) {
+		const ShadowConfig c{.mode = m, .izb = izb};
+		return shadowFormPlan(c);
+	};
+	// drawAtlas：none 之外三档都画（pcss/evssm 的软影建立在同一张 CSM 图集上）
+	CHECK(shadowFormPlan(ShadowConfig{.mode = ShadowMode::none}).drawAtlas == false);
+	for (const auto m : {ShadowMode::csm, ShadowMode::pcss, ShadowMode::evssm})
+		CHECK(planOf(m, false).drawAtlas == true);
+	// spvSuffix：只有两档软影有变体后缀（门关 = 零后缀 = 零变体的逐位红线）
+	CHECK(planOf(ShadowMode::none, false).spvSuffix == "");
+	CHECK(planOf(ShadowMode::csm, false).spvSuffix == "");
+	CHECK(planOf(ShadowMode::pcss, false).spvSuffix == "_PCSS_SOFT");
+	CHECK(planOf(ShadowMode::evssm, false).spvSuffix == "_EVSSM_SOFT");
+	// buildEvssmMoments：只有 evssm 档建矩图（pcss 档图集照画但不建矩图）
+	CHECK(planOf(ShadowMode::pcss, true).buildEvssmMoments == false);
+	CHECK(planOf(ShadowMode::evssm, false).buildEvssmMoments == true);
+	// consumeIzbMask：**只看 izb**，刻意不掺 drawAtlas（债-32 的收口 = IzbShadow 在
+	// mode=none 下也构造、也每帧无条件清零）。变异红线：掺上 drawAtlas → 本断言红。
+	CHECK(planOf(ShadowMode::none, true).consumeIzbMask == true);
+	CHECK(planOf(ShadowMode::csm, false).consumeIzbMask == false);
+	// **本用例刻意不测"本档的调参块"**：那个量在运行期没有消费者（两个 scene data 区
+	// 同时被写、各自只有一个 shader 变体会读），给它写断言 = 自指绿例。调参按档分立的
+	// 真护栏在 tests/test_render_list_shadow.cppm 的同名用例（串档即红）。
 }
 
 namespace {
@@ -962,11 +1005,11 @@ bool containsKey(const std::vector<std::string>& v, std::string_view k) {
 }  // namespace
 
 TEST_CASE("diagnostics 回显覆盖率护栏：解析器读过的键集合 == 回显表键集合（双向）") {
-	// 回显此前是手写子集（38 门只列 ~11 个，连默认开的 shadow_pass 都不出现）。
+	// 回显此前是手写子集（38 门只列 ~11 个，连默认开的阴影总开关都不出现）。
 	// 本用例是防漂移护栏（docs/gate_lint_plan.md §3-B）：两个方向都断——
 	//   回显表删一行 / 解析器漏记一键 / 两处任一侧改拼写 → set 相等立刻红。
 	// 探针子表字段只在表存在时才被读 → 测试文件写全三张探针表。
-	// 变异红线：kGateEcho 删任一条目或 readBool/readF64/readI64 删记录行 → 本用例红。
+	// 变异红线：kGateEcho 删任一条目或 readBool/readI64 删记录行 → 本用例红。
 	TempLua f("dg_keys", R"lua(
 return {
   picking_probe = { frame = 0, x = 0, y = 0 },
@@ -978,8 +1021,8 @@ return {
 	auto r = loadDiagnosticsConfig(f.pathStr(), &trace);
 	REQUIRE(r.has_value());
 	const auto echo = diagnosticsEchoKeys();
-	CHECK(echo.size() == 39u);            // 钉死门数：加门不更新回显表 → 这里先红
-	CHECK(trace.read.size() == 39u);      // 解析器恰好读一遍（重复读 = 记录点放错层）
+	CHECK(echo.size() == 30u);            // 钉死门数：加门不更新回显表 → 这里先红
+	CHECK(trace.read.size() == 30u);      // 解析器恰好读一遍（重复读 = 记录点放错层）
 	for (const auto& k : echo)
 		CHECK(containsKey(trace.read, k));    // 回显有而解析器不读 = 陈旧键
 	for (const auto& k : trace.read)
@@ -1053,23 +1096,26 @@ TEST_CASE("diagnostics 回显 describe：全默认 = 空串；改动只列改动
 	// 反向用例：全默认一个都不喊（configs 写满默认值不狂喊的实现基础）
 	CHECK(describeDiagnosticsGates(d, d).empty());
 	DiagnosticsConfig c;
-	c.izbShadow = false; // N6a 起 izb_shadow 默认开 = 交付形态，**关掉**才是偏离（同 shadow_pass）
 	c.dumpGbuf = 2;
-	c.shadowPass = false;  // 默认开的门**关掉**才是偏离（开着的默认值不是偏离）
+	c.picking = true;  // N6b：原来这里改的是 izbShadow / shadowPass（字段已删，改判任意标量门）
 	const std::string s = describeDiagnosticsGates(c, d);
-	CHECK(s.find("izb_shadow=false") != std::string::npos);
 	CHECK(s.find("dump_gbuf=2") != std::string::npos);
-	CHECK(s.find("shadow_pass=false") != std::string::npos);
+	CHECK(s.find("picking=true") != std::string::npos);
 	CHECK(s.find("no_vvl") == std::string::npos);       // 未动的门不出现
 	CHECK(s.find("texel_canary") == std::string::npos); // 未动的哨兵门不出现
 	const std::string all = describeAllDiagnosticsGates(d);
-	// 全量表 = 39 段 `k=v`（空格分隔），抽查首、中、尾与两个特殊格式条目
-	CHECK(std::ranges::count(all, '=') == 39);
+	// 全量表 = 30 段 `k=v`（空格分隔），抽查首、中、尾与两个特殊格式条目
+	CHECK(std::ranges::count(all, '=') == 30);
 	CHECK(all.find("no_vvl=false") != std::string::npos);
-	CHECK(all.find("shadow_pass=true") != std::string::npos);
+	CHECK(all.find("cull_replay=cpu") != std::string::npos);
 	CHECK(all.find("texel_canary=off") != std::string::npos);  // MAX 哨兵出可读文本
 	CHECK(all.find("camera_probe.key=none") != std::string::npos);
 	CHECK(all.find("camera_probe.holdFrames=0") != std::string::npos);
+	// N6b：阴影九键不在 diagnostics 回显里（配置面 = configs/shadow.lua，回显由
+	// describeAllShadowGates 承担，见下方 shadow 侧用例）
+	CHECK(all.find("shadow") == std::string::npos);
+	CHECK(all.find("izb") == std::string::npos);
+	CHECK(all.find("pcss") == std::string::npos);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

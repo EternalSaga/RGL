@@ -227,7 +227,7 @@ int cmdSwitch(const std::string& glb, const std::string& camera,
     const Verdict v0 = judgeDeterminism(fOff, fOff2);
     const Verdict v1 = judgeSwitchDomain(fOn, fOff, allowed);
     const Verdict v2 = judgeDeadBranch(fOn, fOff, allowed,
-        "shadow_pass on/off 在 [" + allowPiecesCsv + "] 上");
+        "shadow mode csm/none 在 [" + allowPiecesCsv + "] 上");
     std::cout << "  " << v0.line() << "\n  " << v1.line() << "\n  " << v2.line() << "\n";
     std::printf("\n  容差理由: %s\n", v1.whyTol.c_str());
     logCall("switch", {{"glb", glb}, {"camera", camera}, {"allow", allowPiecesCsv}},
@@ -276,7 +276,7 @@ int cmdIzb(const std::string& glb, const std::string& camera)
     const std::string ppm = projectRoot() + "/build/rgl/izb_mask.ppm";
     cv::Mat gray = cv::imread(ppm, cv::IMREAD_GRAYSCALE);
     if (gray.empty())
-        throw std::runtime_error("izb_mask.ppm 不存在/读失败（izb_dump_frame 未生效？）");
+        throw std::runtime_error("izb_mask.ppm 不存在/读失败（shadow.lua 的 izb.dump_frame 未生效？）");
     if (gray.size() != fIzb.bgr.size())
         throw std::runtime_error("mask 与截图 extent 不符: " + std::to_string(gray.cols)
             + "x" + std::to_string(gray.rows));

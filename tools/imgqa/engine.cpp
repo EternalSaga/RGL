@@ -107,7 +107,7 @@ std::set<std::string> knownRootKeys(const std::string& implRel)
 
 /// 写出的键必须在解析器里认得。**拼错键 = 静默用默认值**，是最坏的一类失效：
 /// 配置看起来写了、引擎看起来读了、判据看起来在跑，而它跑在默认值上。
-/// （真实事故：`shadowPass` 是 C++ 字段名，lua 键实为 `shadow_pass`。）
+/// （真实事故：`shadowPass` 是 C++ 字段名，shadow.lua 的键实为 `mode`。）
 void assertKeys(const std::string& fileName, const std::set<std::string>& emitted,
     const std::set<std::string>& known)
 {
@@ -596,8 +596,7 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
     const std::set<std::string> diagKeys = {"no_vvl", "no_hdr", "no_present", "vtx_canary",
         "texel_canary", "dump_gbuf", "style_dist", "tex_dist", "texture_force_size",
         "texture_force_white", "texture_force_unorm", "profiler", "imgui", "config_reload",
-        "shader_reload", "picking", "rpc", "rpc_port", "shadow_pass", "izb_shadow",
-        "shadow_evssm", "izb_grid", "izb_dump_frame"};
+        "shader_reload", "picking", "rpc", "rpc_port"};
     assertKeys("diagnostics.lua", diagKeys, knownRootKeys("rgl/diagnostics_impl.cppm"));
     writeFile(outDir + "/diagnostics.lua",
         std::string(
@@ -606,10 +605,32 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
             "  texture_force_size = 0, texture_force_white = false, texture_force_unorm = false,\n"
             "  profiler = 0, imgui = false, config_reload = false, shader_reload = false,\n"
             "  picking = ")
-        + lb(o.picking) + ", rpc = true, rpc_port = 8788,\n  shadow_pass = " + lb(o.shadowPass)
-        + ", izb_shadow = " + lb(o.izbShadow)
-        + ", shadow_evssm = " + lb(o.evssmShadow)
-        + ", izb_dump_frame = " + std::to_string(o.izbDumpFrame) + " }\n");
+        + lb(o.picking) + ", rpc = true, rpc_port = 8788 }\n");
+
+    // 阴影门（批 N6b：configs/shadow.lua）。三个 C++ 布尔塌成**一个 mode 轴 + 一个正交
+    // izb**——旧世界 `shadow_pass`/`shadow_pcss`/`shadow_evssm` 三个独立布尔能写出
+    // 「EVSSM 开着但图集不画」这类自相矛盾的组合，枚举下它表达不出来，塌缩方向因此
+    // 唯一：evssm 档 → "evssm"（swim 臂的语义就是"开 EVSSM"），否则 shadowPass → "csm"，
+    // 全关 → "none"。唯一剩下的矛盾组合显式拒绝而不是替调用方猜：EVSSM 要图集。
+    if (o.evssmShadow && !o.shadowPass)
+        throw std::runtime_error("ProfileOpts: evssmShadow=true 而 shadowPass=false 是矛盾组合"
+            "（EVSSM 的矩图建立在 CSM 图集上）；批 N6b 起 mode 是单轴枚举，拒绝替你猜一档");
+    const std::string shadowMode
+        = o.evssmShadow ? "evssm" : (o.shadowPass ? "csm" : "none");
+    // izb 与 mode 正交（旧 izb_shadow）。izb 开而 mode=none 是 gate_lint 的启动期 error
+    // （mask 无内容 = 一帧阴影也不产，债-32），这里同样不写出去。
+    const bool izb = o.izbShadow && o.shadowPass;
+    // izb 子表只在需要 dump_frame 时展开（布尔简写 = 只开关，grid/dump 保默认）。
+    // ⚠ 只校验两个顶层键：izb 子表的 on/grid/dump_frame 在解析器里是 `t["…"]` 形态，
+    //   knownRootKeys 的 `root["…"]` 正则抽不到，写进校验集会把校验器自己变成假阳性源。
+    assertKeys("shadow.lua", {"mode", "izb"}, knownRootKeys("rgl/shadow_config_impl.cppm"));
+    writeFile(outDir + "/shadow.lua",
+        "return { mode = \"" + shadowMode + "\", izb = "
+        + (o.izbDumpFrame > 0
+               ? std::string("{ on = ") + lb(izb) + ", dump_frame = "
+                     + std::to_string(o.izbDumpFrame) + " }"
+               : std::string(lb(izb)))
+        + " }\n");
 
     std::set<std::string> sceneKeys
         = {"entities", "styles", "material_styles", "deferred_styles", "environment", "light",
@@ -647,7 +668,7 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
               + " },\n"
         : "";
     // styles 必须显式写（switch 首战抓到的静默坑）：缺表回落默认 pbr→model_pbr，
-    // 而 model_pbr.frag **不 import shadow/env**——shadow_pass 与 env 开关全部
+    // 而 model_pbr.frag **不 import shadow/env**——阴影与 env 开关全部
     // 退化为逐位相同的假象（投影侧照画、采样侧不存在）。model_pbr_ibl 在
     // env=0/shadow=off 下直接光与 model_pbr 逐式相同（IBL 项 ×intensity=0 归零），
     // 闭式解前提不破。

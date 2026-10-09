@@ -7,9 +7,10 @@ namespace RGL {
 
 // 批 N6a（docs/shadow_routes_plan.md §2 定案）：阴影路线配置（configs/shadow.lua）。
 // 一个枚举（软影滤波轴）+ 每档自己的调参块 + 一个正交的 IZB 修饰（硬影 mask）。
-// **N6a 过渡期**：本模块只解析 + 回显，**不回灌**——6 处消费点仍读 diagnostics() 的
-// 旧字段（旧字段默认值 = 交付形态，旧键已从 configs/diagnostics.lua 删除并 fail-fast）。
-// 消费点切到新门 = N6b（本文件不抄形态决策表，红线 4）。
+// **N6b 起本模块是阴影门的唯一真相源**：`shadowConfig()` 单例承载解析结果，6 处消费点
+// 一律经 `shadowFormPlan()`（下面的形态决策表）读形态，`DiagnosticsConfig` 的旧阴影字段
+// 已删除（旧键出现在 diagnostics.lua 仍 fail-fast = 永久护栏 `checkMigratedShadowKeys`）。
+// 本文件不抄映射表（红线 4：表只住 `shadowFormPlan` 的实现体，抄一次漂一次）。
 
 /**
  * 阴影**软影滤波轴**（configs/shadow.lua 的 `mode`，四值互斥）。
@@ -68,6 +69,53 @@ export struct ShadowConfig {
 	ShadowTuning pcss{};                 ///< PCSS 档调参（mode=pcss 时消费）
 	ShadowTuning evssm{};                ///< EVSSM 档调参（mode=evssm 时消费）
 };
+
+/**
+ * 形态决策表（**唯一真相源**，docs/shadow_routes_plan.md §2 红线 4）：`mode` + `izb` →
+ * 各消费点要的那四件事 + 本档调参。
+ *
+ * 为什么要有这张表：改造前"这条阴影路到底跑不跑"散在 6 处消费点各写一遍布尔组合
+ * （`shadowEvssm && shadowPass`、`shadowEvssm 优先 / shadowPcss 次之` 的让位链…），
+ * 加一档就要改六处、漏一处就是"配置写了、什么都没发生"。枚举 + 单点查表把选路判断
+ * 收成一处：两门同开这类**根本不该存在**的组合从此表达不出来（让位链不是被"修好"，是被
+ * 消掉）。`gate_lint` / `shader_registry` / `Renderer` 三处从它读，文档不抄（红线 4）。
+ *
+ * ⚠ **生命周期**：`tuning` 是入参 `cfg` 的引用 ⟹ 调用方必须让 `cfg` 活得比返回值久。
+ * 消费点一律传 `shadowConfig()`（进程级单例），天然满足；**别拿临时量调它**。
+ */
+export struct ShadowFormPlan {
+	bool drawAtlas = false;          ///< 图首 shadow0..3 段画不画投影体（= 旧 shadow_pass）
+	std::string_view spvSuffix;      ///< "" | "_PCSS_SOFT" | "_EVSSM_SOFT"（采样 frag 变体后缀）
+	bool buildEvssmMoments = false;  ///< 构不构造 EvssmShadow 矩图链
+	bool consumeIzbMask = false;     ///< light 条目选不选 IZB_CONSUME 变体 / 构不构造 IzbShadow
+	// **刻意没有 `tuning` 字段**（N6b 主 agent 裁决）：调参按档分立靠**消费点各读各的块**
+	// （render_list 的 pcss 区读 `shadowConfig().pcss`、evssm 区读 `.evssm`），而不是靠
+	// "按当前档挑一块"——两个 scene data 区同时被写、各自只有一个变体会读，"本档的那一块"
+	// 这个量在运行期**没有消费者**；而返回 `const ShadowTuning&` 还是把决策表变成了
+	// 悬垂引用发生器（`shadowFormPlan(ShadowConfig{})` 即悬空）。死值调参由 gate_lint 的
+	// inertNote 喊（`pcss.*` 偏离默认但 mode≠pcss），不靠这里。
+};
+
+/**
+ * 查形态决策表（纯函数，不读单例 ⟹ `just test` 毫秒级可测）。
+ * @param cfg 阴影配置（消费点传 `shadowConfig()`；返回值引用它，见 `ShadowFormPlan` 生命周期条）
+ * @return 本形态的四件事 + 本档调参
+ */
+export ShadowFormPlan shadowFormPlan(const ShadowConfig& cfg);
+
+/**
+ * 单例访问器（main setShadowConfig 后，深栈点 shadowConfig() 只读）。
+ * 与 `diagnostics()` 同一条理由：消费点散在 render_list / shader_registry / Renderer /
+ * main_scene 深处，给这一串签名加参数不值当（AGENTS「单例承载诊断/形态门」范式）。
+ * @return 进程级 ShadowConfig 引用
+ */
+export ShadowConfig& shadowConfig();
+
+/**
+ * 填充阴影配置单例（main 启动期调用一次，此后只读——同 setDiagnostics）。
+ * @param cfg 解析好的阴影配置
+ */
+export void setShadowConfig(const ShadowConfig& cfg);
 
 /**
  * 解析器键轨迹（同 `DiagnosticsKeyTrace` 的用途：回显覆盖率护栏 + 未知键 lint 输入）。

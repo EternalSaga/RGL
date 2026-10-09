@@ -172,7 +172,7 @@ CPU 路"，而两种读数看起来都合理，与 `present_mode` / `aa` 同一�
 | fence | **自持 `cullFences[slot]`**，不再借 `session.currentInFlightFence()`（消除"submit 后必须立刻 reset 才能给主 CB 复用"那条隐式契约；滞后档必须自持才表达得出） |
 | 消费点 | `vkrenderer_passrec.cppm`：opaque 分支判 `drivesDraws()`，`drawFrame.cull` 段判 `gpuPassRuns()`（`cpu` 档连 zone 都不出现，不在 trace 里留 0 时间假段） |
 | 滞后对账 | 比的是「GPU 的 F−1 结果 vs **提交那一帧**记下的 CPU 表」。拿本帧表比 = 相机一动必然失配 = 告警永久化 = 护栏失效 |
-| lint | `kGateRules` 40 行 / 39 门：`cull_replay ≠ gpu_sync × dgc_static` → warn（DGC execute 路根本走不到） |
+| lint | `kGateRules` 43 行 / 41 门（批 N6b 起含 shadow.lua 侧 11 门）：`cull_replay ≠ gpu_sync × dgc_static` → warn（DGC execute 路根本走不到） |
 
 三档共用同一条异步管道（cull CB 录制+提交后不等 fence；下一帧收割 + 对账），差别只在
 "opaque 段重放消费哪个集合"：

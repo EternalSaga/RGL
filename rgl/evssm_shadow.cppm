@@ -22,7 +22,7 @@ export inline constexpr uint32_t kEvssmMipLevels = 8;
  * z=exp(c·(2d−1))）→ 7 级 per-tile box 降采样链（免 sampler2DArray 的对齐论证
  * = 11.6b）。shadow pass / RT 缓存 / graph **零改动**。
  *
- * 生命周期 = Renderer 在 diagnostics.shadowEvssm 开门时构造；
+ * 生命周期 = Renderer 在 shadow.lua 的 mode="evssm" 时构造；
  * **门关 = 本对象根本不被构造**（逐位旁路红线，同 izb_shadow）。
  *
  * 布局策略：矩图全程 GENERAL（探针 /tmp/opencode/evssm_probe 已证 RADV 可行），
