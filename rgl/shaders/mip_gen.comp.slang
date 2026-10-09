@@ -5,7 +5,7 @@
 // **仅 UNORM 纹理走本 compute 链**（normal/ORM 等 linear 数据）：R8G8B8A8_SRGB 在 RADV
 // 无 STORAGE_IMAGE 能力（vkGetPhysicalDeviceImageFormatProperties2 = FORMAT_NOT_SUPPORTED，
 // sRGB 图不能带 eStorage usage）→ sRGB 纹理（baseColor 等）的 mip 链走 LINEAR blit 链
-//（recordMipBlitChain，同上传 CB，字节保真 + 双线性降采样）。计划文档"先 LINEAR blit
+//（recordMipBlitChain2d，同上传 CB，字节保真 + 双线性降采样）。计划文档"先 LINEAR blit
 // 过渡"即此路径。
 //
 // **降采样公式（单 tap LINEAR = 4-tap box）**：dst 像素 (x,y) 对应 src 的 2×2 texel 块

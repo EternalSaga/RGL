@@ -23,7 +23,7 @@ namespace RGL {
 //     push index 恒 0（pushOffset=5×4 处 push data）。per-level 视图：每目标级一对
 //     （sampled 只覆盖 level−1、storage 只覆盖 level）——视图范围 = 精确访问子资源，VVL
 //     逐 subresource 布局检查天然干净（全链视图会在链生成中期看到 UNDEFINED/GENERAL 级误报）。
-//   - **sRGB 纹理 = LINEAR blit 链（recordMipBlitChain）**：R8G8B8A8_SRGB 在 RADV 无
+//   - **sRGB 纹理 = LINEAR blit 链（recordMipBlitChain2d）**：R8G8B8A8_SRGB 在 RADV 无
 //     STORAGE_IMAGE 能力（格式+usage 查询 FORMAT_NOT_SUPPORTED → sRGB 图不能带 eStorage
 //     usage；且本 spec 视图格式须支持图的全部 usage → SRGB 视图 + eStorage 图必被 VVL
 //     拒）→ compute 存储不可行，走 blit（字节保真 + 硬件双线性降采样）。本路径无描述符，
@@ -101,7 +101,7 @@ export class MipGen {
 
 	/**
 	 * 把 compute mip 链（level 1..mipLevels−1，每级一个 dispatch）录进 cmd——调用点 =
-	 * uploadTexture（**仅 UNORM 纹理**；sRGB 走 recordMipBlitChain，见模块头注释），
+	 * uploadTexture（**仅 UNORM 纹理**；sRGB 走 recordMipBlitChain2d，见模块头注释），
 	 * cmd = 该纹理的一次性上传 CB（mip0 拷贝 + mip0→SHADER_READ_ONLY 已先行录制，
 	 * 本方法续录后由调用方统一 end + submit + fence）。
 	 * **前置**：SamplerLibrary::ensureMipGenReady(mipLevels) 已把 level shader/槽 建齐（本方法
@@ -170,8 +170,15 @@ export class MipGen {
  * @param w mip0 宽
  * @param h mip0 高
  * @param mipLevels 总 mip 级数（1 = 无需生成，直接返回）
+ *
+ * @parallel_group mip_blit_chain —— 与 `recordMipBlitChainCube` **刻意不合并**。两者都是
+ * 「逐 level blit 降采样」，但**布局状态机相反**：本函数源级每级在 SRO⇄TRANSFER 之间来回、
+ * 目标级从 UNDEFINED 起；cube 版整条链留在 TRANSFER、末尾一次性转 SRO、源级从 TRANSFER_DST 起。
+ * 合并要参数化 4 个互斥开关 + 滤镜 + 层数，得到「每个调用方只设一半旋钮」的函数——比留两份更糟。
+ * 二者原名互为同词转置（`recordMipBlitChain` / `recordBlitMipChain`），读代码极易调错，
+ * 2026-10-09 按形状加后缀消歧。
  */
-export void recordMipBlitChain(vk::raii::CommandBuffer& cmd, VkImage image, uint32_t w, uint32_t h,
+export void recordMipBlitChain2d(vk::raii::CommandBuffer& cmd, VkImage image, uint32_t w, uint32_t h,
 	uint32_t mipLevels);
 
 }  // namespace RGL

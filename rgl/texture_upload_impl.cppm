@@ -61,7 +61,7 @@ void fillLinearStaging(vk::raii::Device& dev, RGL::VmaImage& staging,
  * @param h 高
  * @param mipLevels 总 mip 级数（1 = 仅拷贝，不录链）
  * @param format 图格式
- * @param isSrgb sRGB 纹理（mip 链走 recordMipBlitChain；false = UNORM compute 链）
+ * @param isSrgb sRGB 纹理（mip 链走 recordMipBlitChain2d；false = UNORM compute 链）
  * @param mipGen mip 链生成器（per-level 视图/描述符集存其成员容器）
  * @param name 日志名
  * @return Error = mip 链录制失败（描述符集分配失败）
@@ -109,7 +109,7 @@ std::expected<void, Error> recordMipZeroAndChain(vk::raii::CommandBuffer& cmd,
 	// SRGB 无 STORAGE_IMAGE 能力，见 uploadTexture usage 注释）；UNORM = compute 链
 	if (mipLevels > 1) {
 		if (isSrgb) {
-			recordMipBlitChain(cmd, image.image, w, h, mipLevels);
+			recordMipBlitChain2d(cmd, image.image, w, h, mipLevels);
 			return {};
 		}
 		return mipGen.recordChain(cmd, image.image, format, w, h, mipLevels, name);

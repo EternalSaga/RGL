@@ -222,12 +222,17 @@ std::expected<void, Error> recordGgxMipChain(RGL::Environment& env,
 
 /** 非预滤波 mip 链（8-bit）：逐 level 先 DST→SRC 再 6 面 blit 到 level i（同图不同 subresource
  * 不重叠，spec 允许；滤镜 = fmt.mipFilter）→ 全级 →SHADER_READ_ONLY（level 0..L−2 停 SRC、末级停 DST）。
+ *
+ * @parallel_group mip_blit_chain —— 与 `recordMipBlitChain2d` **刻意不合并**：布局状态机相反
+ * （本函数整条链留在 TRANSFER、末尾一次性转 SRO、源级从 TRANSFER_DST 起；2D 版每级在
+ * SRO⇄TRANSFER 之间来回、目标级从 UNDEFINED 起）。理由全文见 `mip_gen.cppm` 同名标记。
+ *
  * @param cmd 录制中的命令缓冲
  * @param images cube 目标图
  * @param size 面边长
  * @param mipLevels 全级数
  * @param mipFilter blit 滤镜（sRGB 8-bit 只能 NEAREST，VUID-vkCmdBlitImage-filter-00239） */
-void recordBlitMipChain(vk::raii::CommandBuffer& cmd, CubeImages& images, uint32_t size,
+void recordMipBlitChainCube(vk::raii::CommandBuffer& cmd, CubeImages& images, uint32_t size,
 	uint32_t mipLevels, VkFilter mipFilter) {
 	// mip 链（8-bit / 非预滤波）：level i−1 先 DST→SRC，再 6 面 blit 到 level i（同图不同
 	// subresource 不重叠，spec 允许；滤镜见 CubeFormat::mipFilter 注）
@@ -323,7 +328,7 @@ std::expected<void, Error> recordCubeUpload(RGL::Environment& env, RGL::DeviceCo
 		if (auto r = recordGgxMipChain(env, cmd, images, fmt, size, mipLevels, name); !r)
 			return std::unexpected(std::move(r).error());
 	} else {
-		recordBlitMipChain(cmd, images, size, mipLevels, fmt.mipFilter);
+		recordMipBlitChainCube(cmd, images, size, mipLevels, fmt.mipFilter);
 	}
 	cmd.end();
 

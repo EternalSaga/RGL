@@ -270,7 +270,7 @@ std::expected<void, Error> MipGen::recordChain(vk::raii::CommandBuffer& cmd, VkI
  * {dst(level) TRANSFER_DST→SRO + src(level−1) TRANSFER_SRC→SRO}——源级用完必须回 SRO
  * （渲染端全链采样），否则 mip0..n−2 停在 TRANSFER_SRC。blit 源/目标是同一 image 的
  * 不同 subresource，无视图/描述符。 */
-void recordMipBlitChain(vk::raii::CommandBuffer& cmd, VkImage image, uint32_t w, uint32_t h,
+void recordMipBlitChain2d(vk::raii::CommandBuffer& cmd, VkImage image, uint32_t w, uint32_t h,
 	uint32_t mipLevels) {
 	if (mipLevels <= 1)
 		return;
