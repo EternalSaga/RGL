@@ -246,6 +246,18 @@ run:
 #   just smoke --variant deferred               换渲染路线冒烟
 #   just shot --name foo --size 1600x900        截图 → build/rgl/screenshots/foo.png
 #   just smoke --from-build                     以 build 副本现场为配置基准（默认基准 = 仓库 configs/）
+#   just smoke --sync                           **VVL 同步验证档**（syncval，改 barrier 后跑）
+#     开关名 = `VK_LAYER_VALIDATE_SYNC=1`（工具内置，`--syncval` 是同义写法）。hazard 以
+#     [error] 落日志 ⟹ 直接计入 errors，判据仍是 errors=0。默认不开：syncval 有实打实 CPU
+#     成本，且逐位红线档不需要它（它查"依赖漏没漏"，不查"画面对不对"）。
+#     🔴 两个坑（照抄 SDK 文档会踩，2026-10-09 实测）：
+#       · 本机 VVL 层清单自述 `validate_sync` **default = false**，而引擎只
+#         setPEnabledLayerNames、项目无 vk_layer_settings ⟹ 不开这个 env，同步验证
+#         **从来没开过**（"VVL 常开"里同步那一维一直是空的）。
+#       · SDK 文档的 `VK_LAYER_ENABLES=VK_ENABLE_SYNCHRONIZATION_VALIDATION` 与
+#         `VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT` 在本机层清单里
+#         **不存在 = no-op**，照抄只会得到"开了也抓不到"的假结论。
+#     闸门自身的阳性锚点（怀疑它静默失效时照此重验）→ `tools/smoke.py` docstring 第 3 条。
 smoke *ARGS="":
     @python tools/smoke.py smoke {{ ARGS }}
 

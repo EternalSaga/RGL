@@ -16,11 +16,28 @@ PNG 留不留——于是"进程还活着"与"渲染链跑通了"不是两回事
 errors 计数抓 `[error]` 级日志行：引擎自身 error 与 VVL 的 VUID 都落这一级（severity
 映射见 `rgl/utils.cppm` vulkanDebugCallback）。
 
+同步验证档（`--sync`，2026-10-09）：在 `VK_LAYER_VALIDATE_SYNC=1` 下跑，VVL 的
+`*_HAZARD detected` 落 `[error]` 级 ⟹ **hazard 天然计入 errors**，无需另设计数。
+三条必须知道的坑：
+  1. 本机 VVL 层清单自述 `validate_sync` **default = false**，而引擎只
+     `setPEnabledLayerNames`（`rgl/vkinstance.cppm`）、项目无 `vk_layer_settings`
+     ⟹ **不开这个 env 就等于同步验证从来没开过**（"VVL 常开"给人的一切安全感里，
+     同步这一维是空的）。
+  2. SDK 文档里那几个写法（`VK_LAYER_ENABLES=VK_ENABLE_SYNCHRONIZATION_VALIDATION`、
+     `VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT`）在本机层清单里
+     **不存在 = no-op**，照抄会得到"开了也抓不到"的假结论。
+  3. 阳性锚点（**改完 barrier 相关代码后照此重验一次闸门本身**，别只信 errors=0）：
+     把 `rgl/render_graph_impl.cppm` 的 `usageInfo(depthWrite).stage` 里的
+     `Stage::eLateFragmentTests` 删掉（`cp` 备份，验完还原）→ `just build` →
+     `just smoke --sync` **必须 FAIL**（阴影图 DSAO→SRO 报 WRITE_AFTER_WRITE）；
+     还原 → 重新 `just build` → 必须回 PASS。闸门不红 = 开关漂了或本档没生效。
+
 用法:
     python tools/smoke.py smoke [--variant forward|deferred|offscreen]
-                               [--from-build] [--frames N] [--timeout S]
+                               [--from-build] [--frames N] [--timeout S] [--sync]
     python tools/smoke.py shot  [--name NAME] [--size WxH]
-                               [--variant ...] [--from-build] [--frames N] [--timeout S]
+                               [--variant ...] [--from-build] [--frames N]
+                               [--timeout S] [--sync]
 
 退出码: 0 = PASS · 1 = FAIL（前置不满足 / 引擎非零退出 / 有 error 级日志 / 没出图）。
 """
@@ -255,9 +272,15 @@ def stage_configs(from_build: bool, variant: str | None, shot_file: str, frames:
         patch_lua(STAGING / "scene.lua", "clip_mode", str(clip))
 
 
-def run_engine(exe: Path, timeout: int) -> tuple[int, str, float]:
-    """跑引擎到自行退出（llm_debug 拍完收工）；返回 (退出码, 合并输出, 墙钟秒)。"""
+def run_engine(exe: Path, timeout: int, syncval: bool = False) -> tuple[int, str, float]:
+    """跑引擎到自行退出（llm_debug 拍完收工）；返回 (退出码, 合并输出, 墙钟秒)。
+
+    syncval = True 时置 `VK_LAYER_VALIDATE_SYNC=1`（VVL 同步验证在本机的唯一有效开关，
+    理由与"哪几个写法是 no-op"见模块 docstring 第 1/2 条）。
+    """
     env = dict(os.environ, RGL_CONFIG_DIR=str(STAGING))
+    if syncval:
+        env["VK_LAYER_VALIDATE_SYNC"] = "1"
     started = time.monotonic()
     try:
         proc = subprocess.run([f"./{EXE_NAME}"], cwd=BUILD_RGL, env=env, timeout=timeout,
@@ -333,6 +356,13 @@ def parse_args() -> argparse.Namespace:
                          "逐位相同（`360ce0d2…` = 红线 B），臂 13 只在 `motion > 0` 时才分家，"
                          "这正是它转正零像素代价的原因；拿它当对照会把一个正确行为报成回归")
     ap.add_argument("--timeout", type=int, default=90, help="引擎最长存活秒数（默认 90）")
+    ap.add_argument("--sync", "--syncval", dest="sync", action="store_true",
+                    help="在 VK_LAYER_VALIDATE_SYNC=1 下跑 = 打开 VVL 的同步验证（syncval），"
+                         "hazard 以 [error] 落日志 ⟹ 计入 errors。默认不开（syncval 有实打实的"
+                         "CPU 成本，且它查的是「依赖漏没漏」而不是「画面对不对」，逐位红线档不需要它）。"
+                         "⚠ 本机 VVL 自述 validate_sync 默认 false，而 SDK 文档里 "
+                         "VK_LAYER_ENABLES=VK_ENABLE_SYNCHRONIZATION_VALIDATION 那几个写法是 "
+                         "no-op——唯一有效开关就是这个 env（详见本文件 docstring）")
     return ap.parse_args()
 
 
@@ -366,6 +396,9 @@ def main() -> int:
     single_instance_or_die()
 
     print(f"主机   : {socket.gethostname()} · {platform.system()} {platform.release()} · {git_state()}")
+    # 同步验证档的现场记录：syncval 是本工具唯一"改 env 才成立"的臂，而 env 不在上面那行
+    # 配置摘要里——不写出来，事后拿着 errors=0 的读数无法回答"这次到底开没开"。
+    print(f"同步验证: {'开（VK_LAYER_VALIDATE_SYNC=1，hazard 计入 errors）' if args.sync else '关（默认）'}")
     for note in stale_shaders():
         print(f"[smoke] 注意（陈旧 SPV）: {note}")
     if newer := stale_binary():
@@ -387,9 +420,21 @@ def main() -> int:
           + (f"  fsr(temporal={'on' if args.fsr_temporal else 'off'}"
              f",jitter={'on' if args.fsr_jitter else 'off'})" if args.aa == "fsr" else ""))
 
-    code, log, secs = run_engine(exe, args.timeout)
+    code, log, secs = run_engine(exe, args.timeout, args.sync)
     LOG_PATH.write_text(log, encoding="utf-8")
     errors, warnings = report(log)
+    # 同步验证档的**生效**核对（同 render_scale/velocity 的纪律：请求 ≠ 生效）。这里能廉价
+    # 抓到的静默失效只有一种，但恰好是最贵的一种：diagnostics.no_vvl = true 时引擎根本不
+    # 启用验证层 ⟹ syncval env 再对也一条不报，errors=0 会被读成"同步干净"。启动日志的
+    # "diagnostics:" 行只列非默认值（见 diagnostics_impl.cppm），故出现 no_vvl 即为 true。
+    if args.sync:
+        if re.search(r"diagnostics:.*no_vvl", log):
+            fail("--sync 档下 no_vvl = true ⟹ 验证层没启用，syncval 等于没跑"
+                 "（本档的 errors=0 不作数，改回 no_vvl = false 再测）")
+        hazards = [ln for ln in log.splitlines() if "hazard detected" in ln]
+        print(f"同步验证: hazard {len(hazards)} 条"
+              + (f"（{hazards[0].split('hazard detected')[0].split('] ')[-1].strip()} …）"
+                 if hazards else ""))
 
     shot_path = BUILD_RGL / shot_file
     if code != 0:
