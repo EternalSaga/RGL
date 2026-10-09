@@ -204,6 +204,45 @@ static void applyScalarGates(sol::table& root, DiagnosticsConfig& cfg,
 }
 
 /**
+ * 旧阴影键 fail-fast（批 N6a，docs/shadow_routes_plan.md §2 红线 2）：这 9 个键的配置面
+ * 已迁到 configs/shadow.lua（rgl/shadow_config.cppm），**出现在 diagnostics.lua = 启动
+ * 失败并指路新键**，不做静默映射——理由：本项目最怕的失效形态是「配置写了、什么都没
+ * 发生」，静默映射正是它的制造机。旧字段本身仍是消费点真相（N6b 才切），值由
+ * DiagnosticsConfig 默认值（= 交付形态）提供。
+ * @param root diagnostics.lua 顶层表
+ * @param path 仅用于错误消息（与 cull_replay 同口径带配置文件路径）
+ * @return nullopt = 文件里一个旧键都没有；有值 = 错误（点名旧键 + 新落点）
+ */
+[[nodiscard]] static std::optional<Error> checkMigratedShadowKeys(const sol::table& root,
+	std::string_view path) {
+	// 旧键 → 新落点（configs/shadow.lua 内的键路径；指路要指到能直接抄的程度）
+	struct MovedKey {
+		const char* key;
+		const char* target;
+	};
+	static constexpr std::array<MovedKey, 9> kMoved{{
+		{"shadow_pass", "mode = \"csm\"（无影 = \"none\"）"},
+		{"shadow_pcss", "mode = \"pcss\""},
+		{"shadow_evssm", "mode = \"evssm\""},
+		{"pcss_sun_degrees", "pcss.sun_degrees / evssm.sun_degrees（按档分立）"},
+		{"pcss_search_radius", "pcss.search_radius / evssm.search_radius（按档分立）"},
+		{"pcss_max_penumbra", "pcss.max_penumbra / evssm.max_penumbra（按档分立）"},
+		{"izb_shadow", "izb（布尔）或 izb.on"},
+		{"izb_grid", "izb.grid"},
+		{"izb_dump_frame", "izb.dump_frame"},
+	}};
+	for (const auto& moved : kMoved) {
+		sol::object o = root[moved.key];
+		if (o.valid() && o.get_type() != sol::type::lua_nil)
+			return Error{ErrorCode::ConfigLoadFailed, fmt::format(
+				"diagnostics config ({}): key '{}' has moved to configs/shadow.lua "
+				"({}), remove it from diagnostics.lua — see docs/shadow_routes_plan.md",
+				path, moved.key, moved.target)};
+	}
+	return std::nullopt;
+}
+
+/**
  * 探针 + 数值门读取段（picking_probe / 输入探针 / texel_canary / dump_gbuf /
  * frame_stats / profiler / IZB 数值；2026-10-02 从主函数拆出守认知复杂度阈值）。
  * 数值门负数 = 显式"关"哨兵（配置文件写 -1 直观）；dump_gbuf 越界 = warn + 关闭。
@@ -375,7 +414,40 @@ std::string describeAllDiagnosticsGates(const DiagnosticsConfig& cfg) {
 }
 
 
-/** loadDiagnosticsConfig 定义（接口注释见 diagnostics.cppm）。要点：数值门（texel_canary/dump_gbuf/texture_force_size）负数 = "关"哨兵；dump_gbuf 越界（> kGBufferAttachments 最大通道号）warn 一句并置 -1（关，不再静默改判为 0）；解析完成后打门回显（差集 info + 全量 debug）。 */
+/**
+ * sol2 沙箱执行 + 顶层表提取（从 loadDiagnosticsConfig 拆出，守认知复杂度阈值；
+ * 先例 applyAaKey/applyCullReplayKey）。沙箱口径同 camera_config：禁 dofile/loadfile/
+ * package/require；脚本错误 = ConfigLoadFailed。
+ * @param lua 沙箱状态（**调用方持有**——返回的 root 表引用这台 lua 机）
+ * @param path 配置文件路径（错误信息用）
+ * @return 顶层表；脚本错误返回 Error
+ */
+[[nodiscard]] static std::expected<sol::table, Error> doFileRoot(sol::state& lua,
+	std::string_view path) {
+	auto result = lua.do_file(std::string(path).c_str());
+	if (!result.valid()) {
+		sol::optional<sol::error> err = result.get<sol::optional<sol::error>>();
+		std::string msg = err ? err->what() : std::string("unknown lua error");
+		return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
+			fmt::format("diagnostics config ({}): {}", path, msg)});
+	}
+	return result[0].as<sol::table>();
+}
+
+/**
+ * 「文件里实际出现的顶层键」采集（未知键 lint 的输入；子表只记表名——present 来自文件
+ * 本体不来自读取动作。从 loadDiagnosticsConfig 拆出，守认知复杂度阈值）。
+ * @param root 配置根表
+ * @param trace 键轨迹（present 追加目标）
+ */
+static void collectPresentKeys(const sol::table& root, DiagnosticsKeyTrace& trace) {
+	for (auto&& kv : root) {
+		if (sol::optional<std::string> k = kv.first.as<sol::optional<std::string>>())
+			trace.present.push_back(*k);
+	}
+}
+
+/** loadDiagnosticsConfig 定义（接口注释见 diagnostics.cppm）。要点：缺文件 = 全默认 + warn；旧阴影键出现 = 启动失败（checkMigratedShadowKeys）；`mode` 类字符串枚举 fail-fast；数值门负数 = 显式"关"哨兵；dump_gbuf 越界 = warn + 关闭；解析完成后打门回显（差集 info + 全量 debug）。 */
 [[nodiscard]] std::expected<DiagnosticsConfig, Error> loadDiagnosticsConfig(
 	std::string_view path, DiagnosticsKeyTrace* trace) {
 	auto* logger = RLLogger::getInstance();
@@ -401,27 +473,20 @@ std::string describeAllDiagnosticsGates(const DiagnosticsConfig& cfg) {
 	lua["loadfile"] = sol::nil;
 	lua["package"] = sol::nil;
 	lua["require"] = sol::nil;
-
-	auto result = lua.do_file(std::string(path).c_str());
-	if (!result.valid()) {
-		sol::optional<sol::error> err = result.get<sol::optional<sol::error>>();
-		std::string msg = err ? err->what() : std::string("unknown lua error");
-		return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
-			fmt::format("diagnostics config ({}): {}", path, msg)});
-	}
+	auto root = doFileRoot(lua, path);
+	if (!root)
+		return std::unexpected(std::move(root).error());
 
 	try {
-		sol::table root = result[0].as<sol::table>();
-		// 「文件里实际出现的顶层键」：子表只记表名（未知键 lint 的输入；
-		// 解析器漏读某键不影响这里——present 来自文件本体不来自读取动作）
-		for (auto&& kv : root) {
-			if (sol::optional<std::string> k = kv.first.as<sol::optional<std::string>>())
-				trace->present.push_back(*k);
-		}
-		applyScalarGates(root, cfg, *trace);
-		applyProbeAndNumericGates(root, cfg, *trace);
+		sol::table& table = *root;
+		collectPresentKeys(table, *trace);
+		// 旧阴影键 fail-fast（N6a 红线 2）：出现即启动失败并指路 configs/shadow.lua
+		if (auto err = checkMigratedShadowKeys(table, path); err)
+			return std::unexpected(std::move(*err));
+		applyScalarGates(table, cfg, *trace);
+		applyProbeAndNumericGates(table, cfg, *trace);
 		// 字符串枚举门（fail-fast：笔误不静默回落，见 applyCullReplayKey 注释）
-		if (auto err = applyCullReplayKey(root, cfg, path, *trace); err)
+		if (auto err = applyCullReplayKey(table, cfg, path, *trace); err)
 			return std::unexpected(Error{ErrorCode::ConfigLoadFailed, std::move(*err)});
 
 		// 未知键 lint（普查附带收获：diagnostics.lua 里拼错的键**今天完全静默**）

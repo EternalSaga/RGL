@@ -4,8 +4,9 @@ module;
 #include <glm/glm.hpp>
 #include <filesystem>  // 临时 lua 落盘（AGENTS.md GMF 例外清单成员）
 
-// 四份配置 loader 的解析契约（批 12.1 · B1）——被测对象 = scene_config /
-// camera_config / runtime_config / diagnostics（rlcore 成员，sol2 沙箱 + 缺省回落）。
+// 五份配置 loader 的解析契约（批 12.1 · B1；批 N6a 加 shadow_config）——被测对象 =
+// scene_config / camera_config / runtime_config / diagnostics / shadow_config
+// （rlcore/rlbase 成员，sol2 沙箱 + 缺省回落）。
 //
 // ## 判据来源纪律
 //
@@ -33,6 +34,7 @@ import camera_config;
 import camera;  // 本文件直接调 cameraForward/cameraView（camera_config 是 import 非 export import）
 import runtime_config;
 import diagnostics;
+import shadow_config;
 import gbuffer_contract;
 import vkerror;
 
@@ -809,6 +811,12 @@ TEST_CASE("diagnostics：空表 = 全默认（影子开、其余关；texelCanar
 	CHECK(r->rpc == false);
 	CHECK(r->imgui == false);
 	CHECK(r->shadowPass == true);  // 5a-9 起默认开（diagnostics.cppm:35）
+	// N6a「承认 IZB 出厂开」锚点（docs/shadow_routes_plan.md §1）：izb_shadow 代码默认 =
+	// true = 交付形态（旧键已从 configs/diagnostics.lua 删除，值只能来自字段默认）。
+	// 变异红线：字段默认翻回 false → 本断言红（configs 不再兜住这个值）。
+	CHECK(r->izbShadow == true);
+	CHECK(r->shadowPcss == false);
+	CHECK(r->shadowEvssm == false);
 	// 缺文件同样全默认 + warn（不报错）
 	std::string missing = (std::filesystem::temp_directory_path() / "rgl_cfg_no_such_diag.lua").string();
 	auto m = loadDiagnosticsConfig(missing);
@@ -881,14 +889,20 @@ TEST_CASE("diagnostics：rpc_port 越界回落 8788（0/70000），合法值原�
 		TempLua h("dg_port_ok", "return { rpc_port = 9999 }\n");
 		CHECK(loadDiagnosticsConfig(h.pathStr())->rpcPort == 9999u);
 	}
-	{  // bool 门两侧：shadow_pass（默认 true）可写 false、imgui（默认 false）可写 true。
-	   // 若 bool 解析坏掉恒读默认，这两个断言必红——纯默认值测试永远绿不了坏读取器。
-		TempLua f("dg_bools", "return { shadow_pass = false, imgui = true, rpc = true }\n");
+	{  // bool 门两侧：imgui / rpc（默认 false）可写 true、imgui 显式写 false 也生效。
+	   // 若 bool 解析坏掉恒读默认，这些断言必红——纯默认值测试永远绿不了坏读取器。
+	   // （N6a 起 shadow_pass 不再可用：旧阴影键出现 = 启动失败，见下方 fail-fast 用例；
+	   //   「默认 true 的门可写 false」方向由 shadow_config 的 izb 用例接管。）
+		TempLua f("dg_bools", "return { imgui = true, rpc = true, no_vvl = true }\n");
 		auto r = loadDiagnosticsConfig(f.pathStr());
 		REQUIRE(r.has_value());
-		CHECK(r->shadowPass == false);
 		CHECK(r->imgui == true);
 		CHECK(r->rpc == true);
+		CHECK(r->noVvl == true);
+		TempLua g("dg_bools_off", "return { imgui = false }\n");
+		auto r2 = loadDiagnosticsConfig(g.pathStr());
+		REQUIRE(r2.has_value());
+		CHECK(r2->imgui == false);
 	}
 	{  // camera_probe 子表：数值字段 + 单字母键（SDL3 SDLK_A='a' 基，见 camera_config 组
 	   // 注释："d"→SDLK_A+3=100）；非单字母 warn+忽略
@@ -1039,11 +1053,11 @@ TEST_CASE("diagnostics 回显 describe：全默认 = 空串；改动只列改动
 	// 反向用例：全默认一个都不喊（configs 写满默认值不狂喊的实现基础）
 	CHECK(describeDiagnosticsGates(d, d).empty());
 	DiagnosticsConfig c;
-	c.izbShadow = true;
+	c.izbShadow = false; // N6a 起 izb_shadow 默认开 = 交付形态，**关掉**才是偏离（同 shadow_pass）
 	c.dumpGbuf = 2;
 	c.shadowPass = false;  // 默认开的门**关掉**才是偏离（开着的默认值不是偏离）
 	const std::string s = describeDiagnosticsGates(c, d);
-	CHECK(s.find("izb_shadow=true") != std::string::npos);
+	CHECK(s.find("izb_shadow=false") != std::string::npos);
 	CHECK(s.find("dump_gbuf=2") != std::string::npos);
 	CHECK(s.find("shadow_pass=false") != std::string::npos);
 	CHECK(s.find("no_vvl") == std::string::npos);       // 未动的门不出现
@@ -1056,6 +1070,237 @@ TEST_CASE("diagnostics 回显 describe：全默认 = 空串；改动只列改动
 	CHECK(all.find("texel_canary=off") != std::string::npos);  // MAX 哨兵出可读文本
 	CHECK(all.find("camera_probe.key=none") != std::string::npos);
 	CHECK(all.find("camera_probe.holdFrames=0") != std::string::npos);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// shadow_config（批 N6a，docs/shadow_routes_plan.md §2 定案的配置面）
+// ═══════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("shadow_config：mode 四值各自解析正确 + 缺键回落交付默认 + 配置名往返（回显=配置名）") {
+	auto load = [](std::string_view body) {
+		TempLua f("sh_mode", body);
+		return loadShadowConfig(f.pathStr());
+	};
+	// 回落断言的基准 = ShadowConfig{} 符号本身（不把默认值抄第二遍当断言）；
+	// 「默认 = 交付形态（mode=csm、izb=true）」由结构体定义承载（shadow_config.cppm）。
+	const ShadowConfig def;
+	{
+		auto r = load("return {}\n");
+		REQUIRE(r.has_value());
+		CHECK(r->mode == def.mode);
+		CHECK(r->izb == def.izb);
+		CHECK(r->izbGrid == def.izbGrid);
+		CHECK(r->izbDumpFrame == def.izbDumpFrame);
+		CHECK(r->pcss.sunDegrees == def.pcss.sunDegrees);
+		CHECK(r->evssm.maxPenumbra == def.evssm.maxPenumbra);
+	}
+	// 四值逐个命中（反向用例：合法值不误拒）
+	CHECK(load("return { mode = \"none\" }\n")->mode == ShadowMode::none);
+	CHECK(load("return { mode = \"csm\" }\n")->mode == ShadowMode::csm);
+	CHECK(load("return { mode = \"pcss\" }\n")->mode == ShadowMode::pcss);
+	CHECK(load("return { mode = \"evssm\" }\n")->mode == ShadowMode::evssm);
+	// 名字往返：shadowModeName → parseShadowMode 同集合（cullReplayName 同一条护栏形状）
+	for (const auto m : {ShadowMode::none, ShadowMode::csm, ShadowMode::pcss, ShadowMode::evssm}) {
+		auto p = parseShadowMode(shadowModeName(m));
+		REQUIRE(p.has_value());
+		CHECK(*p == m);
+	}
+	CHECK(std::string_view{shadowModeName(ShadowMode::evssm)} == "evssm");
+}
+
+TEST_CASE("shadow_config：未知 mode fail-fast 且错误列出全部合法值（不静默回落）") {
+	// 回落的失效形态 = "你以为在测 EVSSM 其实跑的是 CSM"（cull_replay / present_mode / aa
+	// 的同一条纪律）。变异红线：解析表加 else 回落 → 本用例红。
+	TempLua f("sh_badmode", "return { mode = \"evssm2\" }\n");
+	auto r = loadShadowConfig(f.pathStr());
+	CHECK_FALSE(r.has_value());
+	if (r)
+		return;  // 上面已红；下面解引用 error() 只在失败路径成立
+	const std::string& msg = r.error().message;
+	CHECK(msg.find("mode") != std::string::npos);
+	CHECK(msg.find("\"none\"") != std::string::npos);   // 错误文本列出合法值
+	CHECK(msg.find("\"csm\"") != std::string::npos);
+	CHECK(msg.find("\"pcss\"") != std::string::npos);
+	CHECK(msg.find("\"evssm\"") != std::string::npos);
+	CHECK(msg.find("evssm2") != std::string::npos);     // 且回显写错的值本体
+	// parseShadowMode 独立面：大小写敏感（"CSM" 不合法）、空串不合法、四合法值不误拒
+	CHECK_FALSE(parseShadowMode("CSM").has_value());
+	CHECK_FALSE(parseShadowMode("").has_value());
+	CHECK(parseShadowMode("none").has_value());
+	CHECK(parseShadowMode("csm").has_value());
+	CHECK(parseShadowMode("pcss").has_value());
+	CHECK(parseShadowMode("evssm").has_value());
+}
+
+TEST_CASE("shadow_config：缺文件回落交付默认（warn 不报错，与 diagnostics 同口径）") {
+	std::string missing =
+		(std::filesystem::temp_directory_path() / "rgl_cfg_no_such_shadow.lua").string();
+	auto m = loadShadowConfig(missing);
+	REQUIRE(m.has_value());
+	CHECK(m->mode == ShadowConfig{}.mode);
+	CHECK(m->izb == ShadowConfig{}.izb);
+	CHECK(m->pcss.searchRadius == ShadowConfig{}.pcss.searchRadius);
+}
+
+TEST_CASE("shadow_config：数值键 clamp 边界（sun_degrees [0,5]、两半径 [1,64]）；pcss/evssm 按档分立不串味") {
+	// clamp 口径 = 旧 pcss_* 三键原样（diagnostics_impl applyScalarGates 的 std::clamp 界）。
+	{  // 下界外 → 界值（不是 0、不是原值）
+		TempLua f("sh_clamp_lo",
+			"return { pcss = { sun_degrees = -1.0, search_radius = 0.5, max_penumbra = 0.0 } }\n");
+		auto r = loadShadowConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->pcss.sunDegrees == 0.0);
+		CHECK(r->pcss.searchRadius == 1.0);
+		CHECK(r->pcss.maxPenumbra == 1.0);
+	}
+	{  // 上界外 → 界值
+		TempLua f("sh_clamp_hi",
+			"return { pcss = { sun_degrees = 99.0, search_radius = 100.0, max_penumbra = 65.0 } }\n");
+		auto r = loadShadowConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->pcss.sunDegrees == 5.0);
+		CHECK(r->pcss.searchRadius == 64.0);
+		CHECK(r->pcss.maxPenumbra == 64.0);
+	}
+	{  // 界内原样（clamp 不是恒取界）
+		TempLua f("sh_inrange",
+			"return { pcss = { sun_degrees = 2.5, search_radius = 16.0, max_penumbra = 32.0 } }\n");
+		auto r = loadShadowConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->pcss.sunDegrees == 2.5);
+		CHECK(r->pcss.searchRadius == 16.0);
+		CHECK(r->pcss.maxPenumbra == 32.0);
+	}
+	{  // 按档分立（债-16⑤ 的消账锚点）：pcss 写值不串 evssm，evssm 未写键保默认
+		TempLua f("sh_split",
+			"return { pcss = { sun_degrees = 1.0 }, evssm = { sun_degrees = 2.0, search_radius = 8.0 } }\n");
+		auto r = loadShadowConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->pcss.sunDegrees == 1.0);
+		CHECK(r->evssm.sunDegrees == 2.0);
+		CHECK(r->evssm.searchRadius == 8.0);
+		CHECK(r->pcss.searchRadius == ShadowConfig{}.pcss.searchRadius);  // 未写键 = 默认
+		CHECK(r->evssm.maxPenumbra == ShadowConfig{}.evssm.maxPenumbra);
+	}
+}
+
+TEST_CASE("shadow_config：izb 两形态（布尔简写 / 子表 on+grid+dump_frame；grid clamp [64,2048]、类型错 fail-fast）") {
+	{  // 布尔简写 = 只开关，grid/dump_frame 保默认
+		TempLua f("sh_izb_off", "return { izb = false }\n");
+		auto r = loadShadowConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->izb == false);
+		CHECK(r->izbGrid == ShadowConfig{}.izbGrid);
+		CHECK(r->izbDumpFrame == ShadowConfig{}.izbDumpFrame);
+	}
+	{  // 子表三键各命中
+		TempLua f("sh_izb_tab", "return { izb = { on = false, grid = 1024, dump_frame = 7 } }\n");
+		auto r = loadShadowConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->izb == false);
+		CHECK(r->izbGrid == 1024u);
+		CHECK(r->izbDumpFrame == 7u);
+	}
+	{  // 子表缺 on = 保默认 true；grid 越界夹 [64,2048]；dump_frame 负数 = 0（旧 izb_* 口径）
+		TempLua f("sh_izb_clamp", "return { izb = { grid = 10, dump_frame = -3 } }\n");
+		auto r = loadShadowConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->izb == true);
+		CHECK(r->izbGrid == 64u);
+		CHECK(r->izbDumpFrame == 0u);
+		TempLua g("sh_izb_big", "return { izb = { grid = 99999 } }\n");
+		CHECK(loadShadowConfig(g.pathStr())->izbGrid == 2048u);
+	}
+	{  // 类型错 = 报错不静默（"配置写了、什么都没发生"是本项目最怕的失效形态）
+		TempLua f("sh_izb_str", "return { izb = \"yes\" }\n");
+		CHECK_FALSE(loadShadowConfig(f.pathStr()).has_value());
+	}
+}
+
+TEST_CASE("shadow_config 回显覆盖率护栏：解析器读过的键集合 == 回显表键集合（双向）+ 未知键判据") {
+	// diagnostics 同形护栏（docs/gate_lint_plan.md §3-B）：回显表删一行 / 解析器漏记一键 /
+	// 两处任一侧改拼写 → set 相等立刻红。变异红线：kShadowEcho 删任一条目 → 本用例红。
+	TempLua f("sh_keys", "return { mode = \"csm\", izb = true, csm = { }, pcss = { }, evssm = { } }\n");
+	ShadowKeyTrace trace;
+	auto r = loadShadowConfig(f.pathStr(), &trace);
+	REQUIRE(r.has_value());
+	const auto echo = shadowConfigEchoKeys();
+	CHECK(echo.size() == 11u);         // 钉死键数：加键不更新回显表 → 这里先红
+	CHECK(trace.read.size() == 11u);   // 解析器恰好读一遍（重复读 = 记录点放错层）
+	for (const auto& k : echo)
+		CHECK(containsKey(trace.read, k));  // 回显有而解析器不读 = 陈旧键
+	for (const auto& k : trace.read)
+		CHECK(containsKey(echo, k));        // 解析器读而回显不列 = 撒谎行
+	// csm = {} 是定案形状里的预留块：present 有它、读集也有它（未知键 lint 不喊）
+	CHECK(containsKey(trace.present, "csm"));
+	{  // 未知键判据：拼错的顶层键进 present 而不进 read（lint 的输入成立）；正确键不误报
+		TempLua g("sh_typo", "return { mode2 = \"csm\", mod = \"csm\", mode = \"csm\" }\n");
+		ShadowKeyTrace t2;
+		auto r2 = loadShadowConfig(g.pathStr(), &t2);
+		REQUIRE(r2.has_value());
+		CHECK(t2.present.size() == 3u);
+		CHECK(containsKey(t2.present, "mode2"));
+		CHECK(containsKey(t2.read, "mode"));            // 正确键照常生效
+		CHECK_FALSE(containsKey(t2.read, "mode2"));
+		CHECK_FALSE(containsKey(t2.read, "mod"));
+		CHECK(r2->mode == ShadowMode::csm);
+	}
+}
+
+TEST_CASE("shadow_config 回显 describe：全默认 = 空串；改动只列改动键（info 差集语义）；debug 全量 11 段") {
+	const ShadowConfig d;
+	CHECK(describeShadowGates(d, d).empty());  // 反向用例：全默认一个都不喊
+	ShadowConfig c;
+	c.mode = ShadowMode::evssm;
+	c.izb = false;
+	c.evssm.searchRadius = 48.0;
+	const std::string s = describeShadowGates(c, d);
+	CHECK(s.find("mode=evssm") != std::string::npos);
+	CHECK(s.find("izb=false") != std::string::npos);
+	CHECK(s.find("evssm.search_radius=48") != std::string::npos);
+	CHECK(s.find("pcss.sun_degrees") == std::string::npos);  // 未动的键不出现
+	const std::string all = describeAllShadowGates(d);
+	CHECK(std::ranges::count(all, '=') == 11);  // 全量 = 11 段 k=v（空格分隔）
+	CHECK(all.find("mode=csm") != std::string::npos);
+	CHECK(all.find("izb=true") != std::string::npos);
+	CHECK(all.find("csm=reserved") != std::string::npos);  // 预留块出可读文本（差集永不喊）
+}
+
+TEST_CASE("diagnostics 旧阴影键 fail-fast：9 键逐个出现 = 启动失败并指路 configs/shadow.lua；无旧键文件正常") {
+	// N6a 红线 2（docs/shadow_routes_plan.md §2）：不静默映射。每个旧键单独出现都要炸，
+	// 且报错**点名旧键 + 指路新落点**（指到能直接抄的程度）。反向用例（无旧键不误拒）
+	// 钉底——常炸的 fail-fast = 被静音的 fail-fast。
+	struct OldKey {
+		const char* key;
+		const char* value;
+	};
+	static constexpr std::array<OldKey, 9> oldKeys{{
+		{"shadow_pass", "true"},
+		{"shadow_pcss", "false"},
+		{"shadow_evssm", "false"},
+		{"pcss_sun_degrees", "0.53"},
+		{"pcss_search_radius", "16.0"},
+		{"pcss_max_penumbra", "32.0"},
+		{"izb_shadow", "true"},
+		{"izb_grid", "512"},
+		{"izb_dump_frame", "0"},
+	}};
+	for (const auto& [key, value] : oldKeys) {
+		const std::string body = "return { " + std::string(key) + " = " + value + " }\n";
+		TempLua f("dg_movedkey", body);
+		auto r = loadDiagnosticsConfig(f.pathStr());
+		CHECK_FALSE(r.has_value());
+		if (!r) {
+			CHECK(r.error().message.find(key) != std::string::npos);           // 点名旧键
+			CHECK(r.error().message.find("shadow.lua") != std::string::npos);  // 指路新落点
+		}
+	}
+	// 反向：不含旧键的文件正常加载（fail-fast 不是恒拒）
+	TempLua ok("dg_movedok", "return { no_vvl = true, rpc_port = 9000 }\n");
+	auto r = loadDiagnosticsConfig(ok.pathStr());
+	REQUIRE(r.has_value());
+	CHECK(r->noVvl == true);
+	CHECK(r->rpcPort == 9000u);
 }
 
 }  // namespace RGL

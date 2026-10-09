@@ -61,7 +61,7 @@ STAGING = BUILD_RGL / ".smoke"
 LOG_PATH = BUILD_RGL / "smoke_run.log"
 EXE_NAME = "rgl.exe" if os.name == "nt" else "rgl"
 # configDir() 里必须齐的配置（少一个引擎就启动失败，见 main_impl.cppm loadAllConfigs）
-CONFIG_FILES = ("camera.lua", "scene.lua", "runtime.lua", "diagnostics.lua", "render_graph.lua")
+CONFIG_FILES = ("camera.lua", "scene.lua", "runtime.lua", "diagnostics.lua", "render_graph.lua", "shadow.lua")
 VALID_VARIANTS = ("forward", "deferred", "offscreen")
 
 

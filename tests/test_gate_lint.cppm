@@ -85,13 +85,23 @@ TEST_CASE("gate_lint 基线：全默认配置（任何图/任何世界）零 fin
 	// 反向用例总锚：configs/diagnostics.lua 写满默认值的现实 = lint 必须沉默。
 	// 变异红线：任何 nullptr 谓词行被改成恒真 → 本用例红。
 	const DiagnosticsConfig d;
+	// N6a：结构体默认 = 交付形态（csm + izb），该组合**只在 deferred 图合法**
+	// （izb × forward = error 恰是规则该说的话，旧世界"默认 = 任何图都沉默"随
+	// izb_shadow 默认翻真一起结束——运行时行为不变：旧 configs/diagnostics.lua 本就写
+	// izb_shadow=true，forward + 出厂配置在改造前同样是 error）。forward 臂显式关 izb，
+	// 测的是「合法世界沉默」，不是「全默认在任何图合法」。
+	DiagnosticsConfig fwdCfg;
+	fwdCfg.izbShadow = false;
 	const auto fwd = passesOf(defaultRenderGraphDesc());
-	CHECK(lintDiagnosticsGates(d, d, fwd, RgGraphVariant::forward, {}).empty());
+	CHECK(lintDiagnosticsGates(fwdCfg, d, fwd, RgGraphVariant::forward, {}).empty());
 	CHECK(lintDiagnosticsGates(d, d, passesOf(deferredRenderGraphDesc()),
 		RgGraphVariant::deferred, kHappyEnv).empty());
+	// 交付默认（csm+izb）× forward = 恰有一条 izb_shadow error（新默认的正向锚点）
+	CHECK(std::ranges::count(lintDiagnosticsGates(d, d, fwd, RgGraphVariant::forward, {}),
+		"izb_shadow", &GateFinding::gate) == 1);
 	// 全默认 + headless/llm关/static关 也零（门全关时环境事实不参与判定）
 	const GateEnv dark{.headless = true, .llmCapture = false, .staticGraphicsIndirect = false};
-	CHECK(lintDiagnosticsGates(d, d, fwd, RgGraphVariant::forward, dark).empty());
+	CHECK(lintDiagnosticsGates(fwdCfg, d, fwd, RgGraphVariant::forward, dark).empty());
 }
 
 TEST_CASE("gate_lint error 组：izb_shadow / shadow_evssm（非 deferred 图，对称收口）") {
@@ -166,8 +176,11 @@ TEST_CASE("gate_lint error 组：dump_gbuf / picking_probe / 输入探针×headl
 			"dump_gbuf") == nullptr);
 	}
 	{  // dump_gbuf 保持默认 -1（关）→ 即使世界全黑也不喊（未偏离默认不参与）
+	   // （N6a：forward 臂显式关 izb——交付默认 csm+izb 在 forward 上是 error，见基线用例）
 		const GateEnv dark{.headless = true, .llmCapture = false, .staticGraphicsIndirect = false};
-		CHECK(lintDiagnosticsGates(d, d, passesOf(defaultRenderGraphDesc()),
+		DiagnosticsConfig noIzb;
+		noIzb.izbShadow = false;
+		CHECK(lintDiagnosticsGates(noIzb, d, passesOf(defaultRenderGraphDesc()),
 			RgGraphVariant::forward, dark).empty());
 	}
 	{  // picking_probe × picking=false = error；反向：picking 开 + frame 非零不喊
@@ -268,7 +281,8 @@ TEST_CASE("gate_lint warn 组：dgc_static 能力不符 / imgui×headless / pcss
 		CHECK(find(lintDiagnosticsGates(c2, d, fwd, RgGraphVariant::forward, kHappyEnv), "rpc_port")
 			== nullptr);
 		DiagnosticsConfig c3;
-		c3.rpc = true;  // 默认端口 + rpc 开 = 完全合法
+		c3.rpc = true;      // 默认端口 + rpc 开 = 完全合法
+		c3.izbShadow = false;  // N6a：forward 臂显式关 izb（交付默认 csm+izb × forward = error）
 		CHECK(lintDiagnosticsGates(c3, d, fwd, RgGraphVariant::forward, kHappyEnv).empty());
 	}
 }
@@ -289,7 +303,9 @@ TEST_CASE("gate_lint inertNote 组：主门关时的死值（izb_grid / pcss_* /
 			"pcss_sun_degrees") == nullptr);
 	}
 	{  // izb_dump_frame × izb off = warn（有人真打算 dump）；izb_grid × izb off = note（调参残留）
+	   // （N6a：izb_shadow 默认开 = 交付形态，"izb 关"必须显式写出来）
 		DiagnosticsConfig c;
+		c.izbShadow = false;
 		c.izbDumpFrame = 120;
 		c.izbGrid = 1024;
 		const auto fs = lintDiagnosticsGates(c, d, fwd, RgGraphVariant::forward, kHappyEnv);

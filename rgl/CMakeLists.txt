@@ -201,6 +201,8 @@ set(RGL_BASE_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/runtime_config_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/diagnostics.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/diagnostics_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shadow_config.cppm"      # 批 N6a：configs/shadow.lua loader（阴影路线枚举）
+    "${CMAKE_CURRENT_SOURCE_DIR}/shadow_config_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/gltf_loader.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/gltf_loader_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/image_codec.cppm"

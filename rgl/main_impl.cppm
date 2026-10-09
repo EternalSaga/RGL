@@ -49,6 +49,7 @@ import camera;
 import camera_config;
 import runtime_config;  // 2026-09-08 env→配置：runtime.lua（headless/窗口/llm 截图）
 import diagnostics;      // diagnostics.lua 诊断单例（须先于一切 GPU 对象构造 setDiagnostics）
+import shadow_config;    // 批 N6a：configs/shadow.lua（阴影路线枚举）——本批**只回显不回灌**
 import profiler;         // Phase 9：帧循环 zone 收口 dump（docs/phase9_plan.md 批 9.1）
 import gpu_profiler;     // Phase 9.2：GPU 时间戳会话（main 栈持有 = device 生命周期内）
 import llm_debug;
@@ -106,7 +107,7 @@ std::string configPath(const char* fileName) {
 	return dir;
 }
 
-/** 四配置加载（错误日志在内）+ setDiagnostics（先于一切 GPU 对象构造）。 */
+/** 启动配置加载（错误日志在内）+ setDiagnostics（先于一切 GPU 对象构造）。 */
 std::optional<StartupConfigs> loadAllConfigs() {
 	auto cameraResult = loadCameraConfig(configPath("camera.lua").c_str());
 	if (!cameraResult) {
@@ -134,6 +135,15 @@ std::optional<StartupConfigs> loadAllConfigs() {
 		return std::nullopt;
 	}
 	setDiagnostics(*diagResult);
+	// 批 N6a（docs/shadow_routes_plan.md §3）：configs/shadow.lua 阴影路线枚举。
+	// **只解析 + 回显（loader 内打日志），不回灌**——6 处消费点仍读 diagnostics() 旧字段
+	// （旧字段默认值 = 交付形态）；消费点切到新门 = N6b。失败口径与其余配置一致 = 启动失败。
+	auto shadowResult = loadShadowConfig(configPath("shadow.lua").c_str());
+	if (!shadowResult) {
+		auto* logger = RLLogger::getInstance();
+		if (logger) logger->error("错误: {}", shadowResult.error().describe());
+		return std::nullopt;
+	}
 	return StartupConfigs{std::move(*cameraResult), std::move(*sceneResult),
 		std::move(*runtimeResult)};
 }
