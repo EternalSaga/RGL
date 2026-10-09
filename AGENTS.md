@@ -30,6 +30,7 @@ just checks / doc-check / style-check [--strict]  # 源码检查统一入口（�
 just build-tools         # 构建 imgqa + 跑 checks（imgqa 不进 ALL，`just build` 不编它 ⟹ 它编译失败没人发现）
 just run                 # 运行
 just smoke / just shot   # agent 一次性 headless 冒烟 / 截图（配置走 RGL_CONFIG_DIR，**不碰 configs 副本**）
+just regress ab|floor|burst|selftest  # 逐位回归 + 同构建地板归因（改渲染后验收的默认起手；口径红线 → skill rgl-verify）
 just run-igpu / run-dgpu / run-intel   # 强制核显 / NVIDIA prime 独显 / Intel anv
 just test                # 单元测试（tests/，**无 GPU 无窗口**，毫秒级；排除 gpu 套件）
 just test-all / test-gpu # 含设备级原语用例（要真设备 + VVL；无设备**FAIL 不 SKIP**）
