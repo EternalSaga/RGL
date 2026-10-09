@@ -5,6 +5,7 @@ module;
 #include <glm/gtc/matrix_inverse.hpp>    // glm::inverse（批 13.5 用例复刻 shader 的 worldFromDepth）
 #include <algorithm>  // std::max（initializer_list 版）/ std::abs
 #include <cmath>
+#include <limits>  // std::numeric_limits<float>::epsilon（两份 Halton 精度关系的界）
 #include <set>
 
 /**
@@ -80,6 +81,88 @@ TEST_CASE("haltonSequence 逐项对上「进制位反写」定义式（手算值
         CHECK(haltonSequence(i, 3u) < 1.0f);
     }
     // 变异红线：把 i%base 写成 i/base（经典笔误）→ 上面逐项全红
+}
+
+/**
+ * haltonDouble 与 haltonSequence 的关系（**这条是"不许合并两份精度"的护栏**）。
+ *
+ * 为什么有两份精度：`tools/imgqa/` 的时域判据拿 Halton **预测**引擎抖动再去抖
+ * （`temporal.cpp::jitterPredPx` / `temporal_motion.cpp::contentShiftPx`），预测全程
+ * double（要喂 `cv::warpAffine`），中途收窄成 float 会改判据打印读数的末位。判据数字
+ * 不许静默变 ⟹ 两份并存是设计，漂移才是事故。
+ *
+ * 独立判据 = **整数位反写有理式**（`num/den` 全程整数运算 + 最后一次除法），不是把
+ * 实现的浮点累加循环抄一遍。实测最大偏差恰为 1 ulp（2.22e-16 @ i=95 base=3），
+ * 容差取 1e-15 留 4.5× 余量。
+ */
+TEST_CASE("haltonDouble：对整数有理式（独立推导）+ 与 float 版的精度关系各自钉死") {
+    // ① 逐项对定义式（手算，不抄实现）
+    testing::expectNear(haltonDouble(1u, 2u), 0.5);
+    testing::expectNear(haltonDouble(3u, 2u), 0.75);
+    testing::expectNear(haltonDouble(5u, 2u), 0.625);      // 5 = 101₂ → .101₂
+    testing::expectNear(haltonDouble(1u, 3u), 1.0 / 3.0);
+    testing::expectNear(haltonDouble(4u, 3u), 4.0 / 9.0);  // 4 = 11₃ → .11₃
+    CHECK(haltonDouble(0u, 3u) == 0.0);                    // index=0 的约定（同上）
+
+    // ② 与整数位反写有理式对拍：φ(i) = reverse_base(i) / base^(位数+1)
+    for (uint32_t i = 1; i <= 1024u; ++i) {
+        for (const uint32_t base : {2u, 3u}) {
+            uint64_t num = 0, den = 1;
+            for (uint32_t v = i; v > 0u; v /= base) {
+                num = num * base + (v % base);
+                den *= base;
+            }
+            const double exact = static_cast<double>(num) / static_cast<double>(den);
+            CHECK(std::abs(haltonDouble(i, base) - exact) < 1e-15);
+        }
+    }
+
+    // ③ 两份精度的**关系**——base 2 全是二进制有理数 ⟹ float 精确 ⟹ 必须逐位相等
+    for (uint32_t i = 1; i <= 1024u; ++i) {
+        CHECK(static_cast<double>(haltonSequence(i, 2u)) == haltonDouble(i, 2u));
+        // base 3 含 1/3 系数量 ⟹ 两份必然不等，钉的是"差在哪个量级"。
+        // 界取 float 的 epsilon（1.19e-7）而不是拍的绝对数，因为它有含义：**两份实现只差
+        // float 末位量级**。实测最大 5.52e-8（i=962 base=3）= 1.16 个 float ulp = 0.46ε。
+        // 谁只改其中一份的算法（而非精度），差会立刻跳出末位量级 → 这条红。
+        CHECK(std::abs(static_cast<double>(haltonSequence(i, 3u)) - haltonDouble(i, 3u))
+              < std::numeric_limits<float>::epsilon());
+    }
+
+    // ④ haltonSequence 的**精确 float 位型**（TAA 周期 1..16 全钉）。
+    //
+    // 为什么必须钉到位型、"差多少算对"不够格：本函数的输出是**注入投影矩阵的输入**，
+    // 逐位就是渲染契约。实测「全程 float」与「double 算完再收窄」两种实现在整个周期内
+    // 只有 **1 项**不同（i=10 base=3），而 ①②③ 对它**全部免疫**——收窄本身就制造
+    // float≠double，所以任何比大小/比容差的断言都看不出实现被换过。实测证据：把
+    // haltonSequence 换成「double 算完再收窄」后，改动前全量 237 用例 / 67273 断言**全绿**。
+    //
+    // 期望值出处 = 定义式在 float 精度下逐项手算（numpy float32 独立复算，非抄实现）。
+    static constexpr std::array<uint32_t, 16> kBase3FloatBits = {
+        0x3eaaaaab, 0x3f2aaaab, 0x3de38e39, 0x3ee38e39, 0x3f471c72, 0x3e638e39, 0x3f0e38e4,
+        0x3f638e39, 0x3d17b426, 0x3ebda130, 0x3f3425ed, 0x3e17b426, 0x3ef684be, 0x3f5097b4,
+        0x3e84bda1, 0x3f17b426,
+    };
+    for (uint32_t i = 1; i <= kTaaJitterPeriod; ++i)
+        CHECK(std::bit_cast<uint32_t>(haltonSequence(i, 3u)) == kBase3FloatBits[i - 1]);
+    // 分水岭单独点名：变异成「double 算完再收窄」时全周期**只有这一项**变 ⟹ 最小红点
+    CHECK(std::bit_cast<uint32_t>(haltonSequence(10u, 3u)) == 0x3ebda130u);
+}
+
+/**
+ * 绊线：imgqa 侧仍手抄的抖动周期必须等于引擎真值。
+ *
+ * `tools/imgqa/temporal_residual.h::kResidualPeriod` 是**默认实参**，搬不动——header 里
+ * `import` 会把模块依赖渗进每个 includer。所以它只能留一份手抄，按项目惯例钉绊线
+ * （先例 = `test_aa_target.cppm` 的杆表绊线，同写法同弱点：钉的是引擎值 + 注释指路，
+ * 不是真的两边比对，因为 tests/ 不链 imgqa）。
+ *
+ * 已消掉的手抄（本用例存在的前提）：`temporal.cpp` 与 `temporal_motion.cpp` 现在
+ * `import taa_jitter` 直接取 `kTaaJitterPeriod`，不再各抄一个字面量 16。
+ */
+TEST_CASE("绊线：imgqa 手抄的 kResidualPeriod 必须等于引擎 kTaaJitterPeriod") {
+    // ⚠ 下面这个字面量必须与 tools/imgqa/temporal_residual.h::kResidualPeriod 逐字相同
+    //   （那边是抄的一方）。改引擎周期不改探针 ⟹ 本条红并点名同步目的地。
+    CHECK(kTaaJitterPeriod == 16u);
 }
 
 TEST_CASE("taaJitterPixels：周期 16 / 值域 ±0.5 / **非退化**（阳性锚点）/ scale=0 归零") {

@@ -192,6 +192,10 @@
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
+// 引擎真值：Halton 序列与抖动周期。判据拿它们**预测**引擎抖动再去抖，预测必须与引擎同式
+// ——手抄的话引擎一改公式，仪器不会报错，只会拿错的偏移去抖、静默量到另一个东西。
+import taa_jitter;
+
 namespace RGL::imgqa {
 namespace {
 
@@ -199,33 +203,25 @@ namespace {
 constexpr int kSize[2] = {1280, 720};
 constexpr int kRefSize[2] = {2560, 1440};
 
-/// 抖动周期（帧）——与 `rgl/taa_jitter.cppm::kTaaJitterPeriod` 同值（imgqa 不链 rgl 库，
-/// 同式重抄；先例 = `temporal_residual.h::kResidualPeriod`，漂移由判据自己抓：M2 的
-/// 离散相位搜索若周期不再是 16，最优 p 的改善会**消失**而不是变好，读数当场失真）。
-constexpr uint32_t kJitterPeriod = 16u;
-
-/// Halton 低差异序列第 index 项（同式重抄 `taa_jitter.cppm::haltonSequence`，index 从 1 起）。
-double halton(uint32_t index, uint32_t base)
-{
-    double result = 0.0;
-    double factor = 1.0 / static_cast<double>(base);
-    for (uint32_t i = index; i > 0u; i /= base) {
-        result += factor * static_cast<double>(i % base);
-        factor /= static_cast<double>(base);
-    }
-    return result;
-}
+/// 抖动周期 = 引擎真值 `kTaaJitterPeriod` 的**别名**（此前是手抄字面量 16）。
+/// 保留本文件的名字是因为判据里它就是「本仪器的离散相位搜索周期」，语义不同；
+/// 但值必须同源——周期若不再是 16，M2 离散相位搜索的最优 p 改善会**消失**而不是变好。
+constexpr uint32_t kJitterPeriod = kTaaJitterPeriod;
 
 /**
  * 帧号 → **内容位移** c_t（像素单位）。口径 = `taa_jitter.cppm::contentShiftPx` =
  * `(+jx, −jy)`，**勿凭直觉写符号**（该函数注释里写着：x 不翻、y 被负高视口翻一次；
  * 符号若反，M2 的去抖会把 0.7px 的错位**翻倍**成 1.4px，实测可分辨）。
+ *
+ * Halton 取 `haltonDouble`（double 版）而**不是**引擎 shader 用的 `haltonSequence`
+ * （float 版）：本函数要喂 `cv::warpAffine`，中途收窄成 float 会改判据读数末位。
+ * 两份精度的关系由 `tests/test_taa_jitter.cppm` 钉死。
  */
 cv::Point2d contentShiftPx(uint32_t frameIndex, double scale)
 {
     const uint32_t i = frameIndex % kJitterPeriod + 1u;
-    const double jx = (halton(i, 2u) - 0.5) * scale;
-    const double jy = (halton(i, 3u) - 0.5) * scale;
+    const double jx = (haltonDouble(i, 2u) - 0.5) * scale;
+    const double jy = (haltonDouble(i, 3u) - 0.5) * scale;
     return {jx, -jy};
 }
 

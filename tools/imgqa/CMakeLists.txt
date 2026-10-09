@@ -46,6 +46,15 @@ target_include_directories(imgqa PRIVATE ${OpenCV_INCLUDE_DIRS})
 target_compile_definitions(imgqa PRIVATE RGL_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 target_link_libraries(imgqa PRIVATE
+    # rlbase：只为一件事——时域判据要**预测**引擎的抖动再去抖，预测必须与引擎同式。
+    # 此前 imgqa 手抄 Halton（`temporal.cpp` 一个 lambda、`temporal_motion.cpp` 一个函数），
+    # 漂移不会报错，只会让仪器静默量到另一个东西。
+    # 「imgqa 不链 rgl」从来不是决策（建项提交 ca18627 拍的是 C++/vcpkg 而非 Python），
+    # 是从 `analytic.cpp`「闭式解必须是独立第二实现」那一条**泛化**出来的惯性。实测代价：
+    # 二进制体积 0（21M→21M，静态库只拉被引用目标文件）、ldd 0（6 条不变）、
+    # 改不相干 rlbase 模块时 imgqa 重编 0 个 TU。唯一成本是一条构建图边。
+    # ⚠ 闭式解 `analytic.cpp` 仍**不得** import 引擎——那条边界有真理由，别照本行推广。
+    rlbase
     ${OpenCV_LIBS}
     httplib::httplib
     nlohmann_json::nlohmann_json

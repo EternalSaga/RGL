@@ -64,6 +64,9 @@
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
 
+// 引擎真值：Halton 序列与抖动周期（理由同 `temporal_motion.cpp` 的对应处——预测必须同式）。
+import taa_jitter;
+
 namespace RGL::imgqa {
 
 namespace {
@@ -421,25 +424,18 @@ int cmdTemporal(int pairs, int warm, const std::string& variant, bool baseSpace)
 
 namespace {
 
-/// 抖动周期（帧）——与 `rgl/taa_jitter.cppm::kTaaJitterPeriod` 同值（重抄理由见 jitterPredPx）。
-constexpr uint32_t kTaaJitterPeriod = 16u;
-
-/// Halton(2,3) 抖动（像素单位，值域 ±0.5）——与 `rgl/taa_jitter.cppm::taaJitterPixels`
-/// **同式重抄**：imgqa 不链 rgl 库（模块 GMF 常量不导出），先例 = `aa_coverage.h` 的杆表。
-/// ⚠ 漂移风险两处把守：`tests/test_taa_jitter.cppm` 钉引擎侧闭式锚点，本命令 T1 组钉
-///   「按构造必须命中预测」（引擎改了公式而探针没改 ⟹ T1 立刻红）。
+/// Halton(2,3) 抖动（像素单位，值域 ±0.5）——直接取引擎真值：`kTaaJitterPeriod` 与
+/// `haltonDouble` 都来自 `import taa_jitter`（此前这里是手抄字面量 + 一个内联 lambda）。
+///
+/// 为什么用 **double** 版而不用 shader 那条 float 路：本函数的输出要喂 `cv::warpAffine`
+/// 去抖，中途收窄成 float 会改判据读数末位（判据数字不许静默变）。
+///
+/// ⚠ 本命令 T1 组钉「按构造必须命中预测」——它验的是**口径**（符号、尺度、周期），
+///   不再是公式本身；公式现在同源，漂不了。
 std::array<double, 2> jitterPredPx(uint32_t frameIndex)
 {
-    const auto halton = [](uint32_t idx, uint32_t base) {
-        double r = 0.0, f = 1.0 / static_cast<double>(base);
-        for (uint32_t i = idx; i > 0u; i /= base) {
-            r += f * static_cast<double>(i % base);
-            f /= static_cast<double>(base);
-        }
-        return r;
-    };
     const uint32_t i = frameIndex % kTaaJitterPeriod + 1u;
-    return {halton(i, 2u) - 0.5, halton(i, 3u) - 0.5};
+    return {haltonDouble(i, 2u) - 0.5, haltonDouble(i, 3u) - 0.5};
 }
 
 /// 抖动引起的位移预测（像素，含尺度）——**口径 = `freeShift` 返回的 d = 图像内容位移的相反数**。

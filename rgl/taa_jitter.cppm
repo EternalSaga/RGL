@@ -27,6 +27,12 @@ export inline constexpr uint32_t kTaaJitterPeriod = 16u;
  * @param index 序号（≥1）
  * @param base 进制（2 / 3 构成本项目的二维抖动）
  * @return 值域 (0,1)
+ *
+ * ⚠ **不要**"简化"成 `static_cast<float>(haltonDouble(index, base))`——看着等价，实测改
+ *   渲染。全程 float 与「double 算完再收窄」在 i∈[1,1024]×base{2,3} 的 2048 个点里有
+ *   **190 个不相等**，其中 `i=10, base=3` 就落在 TAA 周期 1..16 内（0.370370388 vs
+ *   0.370370358）。抖动幅度差 3e-8 px 无所谓，但它是**注入投影矩阵的输入** ⟹ 交付像素
+ *   会变 ⟹ 这是一次渲染变更，不是重构。护栏 = `tests/test_taa_jitter.cppm` 的精度对拍。
  */
 export float haltonSequence(uint32_t index, uint32_t base) {
 	float result = 0.0f;
@@ -34,6 +40,32 @@ export float haltonSequence(uint32_t index, uint32_t base) {
 	for (uint32_t i = index; i > 0u; i /= base) {
 		result += factor * static_cast<float>(i % base);
 		factor /= static_cast<float>(base);
+	}
+	return result;
+}
+
+/**
+ * Halton 的 **double** 版——同一算法、另一种精度纪律，**不是**上面那个的加宽版。
+ *
+ * 【为什么要有第二份精度】`tools/imgqa/` 的时域判据拿 Halton **预测**引擎抖动再去抖
+ * （`temporal.cpp::jitterPredPx` / `temporal_motion.cpp::contentShiftPx`）。预测必须与
+ * 引擎**同式**，否则仪器拿错的偏移去抖 ⟹ 静默量到错的东西（`temporal.cpp` 记着 2026-10-04
+ * 符号反号那次的教训）。但仪器全程 double：预测值要喂 `cv::warpAffine`，中途被收窄成
+ * float 会改它打印读数的末位——判据数字不许静默变。
+ *
+ * 【为什么两份不算双源】两份都在本文件相邻位置，**共享的是没有约定可说的东西**（序列本身），
+ * 各自保留的是精度与符号约定（约定属于消费者）。二者的关系由单测钉死：同 index 下
+ * `|haltonDouble − haltonSequence| < 3e-8` 且 base=2 逐位相等。
+ * @param index 序号（≥1）
+ * @param base 进制
+ * @return 值域 (0,1)，double 精度
+ */
+export double haltonDouble(uint32_t index, uint32_t base) {
+	double result = 0.0;
+	double factor = 1.0 / static_cast<double>(base);
+	for (uint32_t i = index; i > 0u; i /= base) {
+		result += factor * static_cast<double>(i % base);
+		factor /= static_cast<double>(base);
 	}
 	return result;
 }
