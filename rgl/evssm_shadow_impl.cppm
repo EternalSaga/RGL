@@ -49,49 +49,6 @@ void stageBarrier(vk::raii::CommandBuffer& cmd, vk::PipelineStageFlags2 srcStage
 	cmd.pipelineBarrier2(dep);
 }
 
-/**
- * heap 映射的 compute shader object（izb_shadow_impl / gpu_cull_impl 同款模式）：
- * binding→heap 槽一对一；push constant 无需映射条目（heap 下 push data 区自动供给）。
- */
-vk::raii::ShaderEXT makeMappedCompute(vk::raii::Device& dev, const char* spvPath,
-	const std::vector<std::pair<uint32_t, uint32_t>>& bindingToSlot, uint32_t descriptorSize) {
-	auto spvResult = loadShaderSpv(spvPath);
-	if (!spvResult)
-		throw std::runtime_error(spvResult.error().describe());
-	const auto spv = std::move(*spvResult);
-
-	std::vector<VkDescriptorSetAndBindingMappingEXT> mappings;
-	mappings.reserve(bindingToSlot.size());
-	for (const auto& [binding, slot] : bindingToSlot) {
-		VkDescriptorSetAndBindingMappingEXT m{};
-		m.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
-		m.descriptorSet = 0;
-		m.firstBinding = binding;
-		m.bindingCount = 1;
-		m.resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
-		m.source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
-		m.sourceData.constantOffset.heapOffset = slot * descriptorSize;
-		m.sourceData.constantOffset.heapArrayStride = descriptorSize;
-		mappings.push_back(m);
-	}
-	VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{};
-	mappingInfo.sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT;
-	mappingInfo.mappingCount = static_cast<uint32_t>(mappings.size());
-	mappingInfo.pMappings = mappings.data();
-
-	VkShaderCreateInfoEXT raw{};
-	raw.sType = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT;
-	raw.pNext = &mappingInfo;
-	raw.flags = VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT;
-	raw.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-	raw.codeType = VK_SHADER_CODE_TYPE_SPIRV_EXT;
-	raw.codeSize = spv.size() * sizeof(uint32_t);
-	raw.pCode = spv.data();
-	raw.pName = "main";
-	auto shaders = dev.createShadersEXT(std::vector<vk::ShaderCreateInfoEXT>{vk::ShaderCreateInfoEXT(raw)});
-	return std::move(shaders[0]);
-}
-
 /** 一次性 layout 转移 CB（texture_upload::submitUploadAndWait 同款：raii 局部
  *  cmd/fence 函数尾销毁；提交 graphics 队列 + fence 等待，失败抛 = 启动期 fail-fast）。 */
 void runOnce(vk::raii::Device& dev, const vk::raii::CommandPool& pool, VkQueue queue,
@@ -210,11 +167,12 @@ EvssmShadow::EvssmShadow(RGL::DeviceContext& vkDevice, RGL::Resources& vkResourc
 
 	// ── compute shader objects（binding→槽一对一，常量偏移映射）──
 	momentsShader = makeMappedCompute(dev, "generated_shaders/evssm_moments.comp.spv",
-		{{0u, shadowMapSlot}, {1u, mipSlots[0]}}, descSize);
+		std::vector<std::pair<uint32_t, uint32_t>>{{0, shadowMapSlot}, {1, mipSlots[0]}}, descSize);
 	downShaders.reserve(mipLevels - 1);
 	for (uint32_t level = 1; level < mipLevels; ++level)
 		downShaders.push_back(makeMappedCompute(dev, "generated_shaders/evssm_downsample.comp.spv",
-			{{0u, mipSlots[level - 1]}, {1u, mipSlots[level]}}, descSize));
+			std::vector<std::pair<uint32_t, uint32_t>>{
+				{0, mipSlots[level - 1]}, {1, mipSlots[level]}}, descSize));
 
 	if (auto* logger = RLLogger::getInstance())
 		logger->info("EvssmShadow: {}x{} RGBA16F x{} mip（GENERAL）| {} heap 槽 | 矩从 D32 派生（C 方案）",

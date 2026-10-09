@@ -106,50 +106,6 @@ vk::ImageLayout depthLayoutBarrier(vk::raii::CommandBuffer& cmd, vk::Image image
 	return to;
 }
 
-/**
- * heap 映射的 compute shader object（gpu_cull_impl::createCullShaders 同款模式）：
- * binding→heap 槽一对一；push constant 无需映射条目（heap 下 push data 区自动供给）。
- */
-vk::raii::ShaderEXT makeMappedCompute(vk::raii::Device& dev, const char* spvPath,
-	const std::vector<std::pair<uint32_t, uint32_t>>& bindingToSlot, uint32_t descriptorSize) {
-	auto spvResult = loadShaderSpv(spvPath);
-	if (!spvResult)
-		throw std::runtime_error(spvResult.error().describe());
-	const auto spv = std::move(*spvResult);
-
-	std::vector<VkDescriptorSetAndBindingMappingEXT> mappings;
-	mappings.reserve(bindingToSlot.size());
-	for (const auto& [binding, slot] : bindingToSlot) {
-		VkDescriptorSetAndBindingMappingEXT m{};
-		m.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
-		m.descriptorSet = 0;
-		m.firstBinding = binding;
-		m.bindingCount = 1;
-		m.resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
-		m.source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
-		m.sourceData.constantOffset.heapOffset = slot * descriptorSize;
-		m.sourceData.constantOffset.heapArrayStride = descriptorSize;
-		mappings.push_back(m);
-	}
-	VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{};
-	mappingInfo.sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT;
-	mappingInfo.mappingCount = static_cast<uint32_t>(mappings.size());
-	mappingInfo.pMappings = mappings.data();
-
-	VkShaderCreateInfoEXT raw{};
-	raw.sType = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT;
-	raw.pNext = &mappingInfo;
-	raw.flags = VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT;
-	raw.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-	raw.codeType = VK_SHADER_CODE_TYPE_SPIRV_EXT;
-	raw.codeSize = spv.size() * sizeof(uint32_t);
-	raw.pCode = spv.data();
-	raw.pName = "main";
-	vk::ShaderCreateInfoEXT createInfo(raw);
-	auto shaders = dev.createShadersEXT(std::vector<vk::ShaderCreateInfoEXT>{createInfo});
-	return std::move(shaders[0]);
-}
-
 }  // namespace
 
 IzbShadow::IzbShadow(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
@@ -247,9 +203,11 @@ IzbShadow::IzbShadow(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
 
 	const uint32_t descriptorSize = resources->getDescriptorHeap().getDescriptorSize();
 	createShader.emplace(makeMappedCompute(dev, "generated_shaders/izb_create.comp.spv",
-		{{0, headSlot}, {1, nodesSlot}, {2, depthSlot}}, descriptorSize));
+		std::vector<std::pair<uint32_t, uint32_t>>{
+			{0, headSlot}, {1, nodesSlot}, {2, depthSlot}}, descriptorSize));
 	primeShader.emplace(makeMappedCompute(dev, "generated_shaders/izb_prime.comp.spv",
-		{{0, headSlot}, {1, nodesSlot}, {3, primedSlot}}, descriptorSize));
+		std::vector<std::pair<uint32_t, uint32_t>>{
+			{0, headSlot}, {1, nodesSlot}, {3, primedSlot}}, descriptorSize));
 
 	if (auto* lg = RLLogger::getInstance())
 		lg->info("izb: 开门 grid={} extent={}x{} head={}B nodes={}B（cascade-0 近场 v1，"

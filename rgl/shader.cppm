@@ -31,6 +31,60 @@ loadShaderSpv(const std::string& filename) {
 	return buffer;
 }
 
+/**
+ * heap 映射的 compute shader object：binding→heap 槽一对一。
+ *
+ * push constant 无需映射条目——descriptor heap 下 push data 区自动供给（vkCmdPushDataEXT）。
+ * 原三处同款模式（evssm_shadow / izb_shadow / gpu_cull）收成本点。
+ *
+ * @param dev            逻辑设备
+ * @param spvPath        .spv 路径（相对 CWD，即 build/rgl/）
+ * @param bindingToSlot  (binding, heap 槽) 对列表；binding 不必连续
+ * @param descriptorSize descriptor heap 的槽大小
+ * @throw std::runtime_error SPV 加载失败
+ */
+export [[nodiscard]] vk::raii::ShaderEXT
+makeMappedCompute(vk::raii::Device& dev, const std::string& spvPath,
+	std::span<const std::pair<uint32_t, uint32_t>> bindingToSlot,
+	uint32_t descriptorSize) {
+	auto spvResult = loadShaderSpv(spvPath);
+	if (!spvResult)
+		throw std::runtime_error(spvResult.error().describe());
+	const auto spv = std::move(*spvResult);
+
+	std::vector<VkDescriptorSetAndBindingMappingEXT> mappings;
+	mappings.reserve(bindingToSlot.size());
+	for (const auto& [binding, slot] : bindingToSlot) {
+		VkDescriptorSetAndBindingMappingEXT m{};
+		m.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
+		m.descriptorSet = 0;
+		m.firstBinding = binding;
+		m.bindingCount = 1;
+		m.resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
+		m.source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
+		m.sourceData.constantOffset.heapOffset = slot * descriptorSize;
+		m.sourceData.constantOffset.heapArrayStride = descriptorSize;
+		mappings.push_back(m);
+	}
+	VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{};
+	mappingInfo.sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT;
+	mappingInfo.mappingCount = static_cast<uint32_t>(mappings.size());
+	mappingInfo.pMappings = mappings.data();
+
+	VkShaderCreateInfoEXT raw{};
+	raw.sType = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT;
+	raw.pNext = &mappingInfo;
+	raw.flags = VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT;
+	raw.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+	raw.codeType = VK_SHADER_CODE_TYPE_SPIRV_EXT;
+	raw.codeSize = spv.size() * sizeof(uint32_t);
+	raw.pCode = spv.data();
+	raw.pName = "main";
+	vk::ShaderCreateInfoEXT createInfo(raw);
+	auto shaders = dev.createShadersEXT(std::vector<vk::ShaderCreateInfoEXT>{createInfo});
+	return std::move(shaders[0]);
+}
+
 /** shader 对象对的 SPV 码流（mesh + fragment 两阶段，RenderPipeline 构造输入）。 */
 export struct ShaderEffect {
 	std::vector<uint32_t> meshStageSpv;

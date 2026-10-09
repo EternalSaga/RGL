@@ -195,81 +195,21 @@ void GpuCull::writeHeapDescriptors(vk::raii::Device& device) {
 
 void GpuCull::createCullShaders(vk::raii::Device& device) {
 	// compute shader object（stage=COMPUTE + heap bit + 4 binding 映射；
-	// RenderPipeline 同款模式，单阶段版——push constant 无需映射条目，
+	// shader 模块 makeMappedCompute 单阶段版——push constant 无需映射条目，
 	// descriptor heap 下经 vkCmdPushDataEXT 的 push data 区自动供给）
-	auto spvResult = loadShaderSpv("generated_shaders/cull.comp.spv");
-	if (!spvResult)
-		throw std::runtime_error(spvResult.error().describe());
-	const auto& spv = *spvResult;
 	const uint32_t descriptorSize = resources.getDescriptorHeap().getDescriptorSize();
 
-	VkDescriptorSetAndBindingMappingEXT mappings[4]{};
-	const uint32_t slots[4] = {tableSlot, sceneDataSlot, sequenceSlot, countSlot};
-	for (uint32_t n = 0; n < 4; ++n) {
-		auto& m = mappings[n];
-		m.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
-		m.descriptorSet = 0;
-		m.firstBinding = n;
-		m.bindingCount = 1;
-		m.resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
-		m.source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
-		m.sourceData.constantOffset.heapOffset = slots[n] * descriptorSize;
-		m.sourceData.constantOffset.heapArrayStride = descriptorSize;
-	}
-	VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{};
-	mappingInfo.sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT;
-	mappingInfo.mappingCount = 4;
-	mappingInfo.pMappings = mappings;
-
-	VkShaderCreateInfoEXT raw{};
-	raw.sType = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT;
-	raw.pNext = &mappingInfo;
-	raw.flags = VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT;
-	raw.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-	raw.codeType = VK_SHADER_CODE_TYPE_SPIRV_EXT;
-	raw.codeSize = spv.size() * sizeof(uint32_t);
-	raw.pCode = spv.data();
-	raw.pName = "main";
-	vk::ShaderCreateInfoEXT createInfo(raw);
-	auto shaders = device.createShadersEXT(std::vector<vk::ShaderCreateInfoEXT>{createInfo});
-	cullShader = std::move(shaders[0]);
+	cullShader = makeMappedCompute(device, "generated_shaders/cull.comp.spv",
+		std::vector<std::pair<uint32_t, uint32_t>>{
+			{0, tableSlot}, {1, sceneDataSlot}, {2, sequenceSlot}, {3, countSlot}},
+		descriptorSize);
 
 	// stream fanout shader object（静态 DGC 路；3 binding：0=table 1=sequences(ro) 2=streams(rw)，
 	// heap 映射同款模式——仅启用时建，docs/archive/radv_static_dgc_spike.md §3.3）
 	if (nEntryStreams > 0) {
-		auto fanResult = loadShaderSpv("generated_shaders/stream_fanout.comp.spv");
-		if (!fanResult)
-			throw std::runtime_error(fanResult.error().describe());
-		const auto& fanSpv = *fanResult;
-		VkDescriptorSetAndBindingMappingEXT fanMappings[3]{};
-		const uint32_t fanSlots[3] = {tableSlot, sequenceSlot, streamsSlot};
-		for (uint32_t n = 0; n < 3; ++n) {
-			auto& m = fanMappings[n];
-			m.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
-			m.descriptorSet = 0;
-			m.firstBinding = n;
-			m.bindingCount = 1;
-			m.resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
-			m.source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
-			m.sourceData.constantOffset.heapOffset = fanSlots[n] * descriptorSize;
-			m.sourceData.constantOffset.heapArrayStride = descriptorSize;
-		}
-		VkShaderDescriptorSetAndBindingMappingInfoEXT fanMappingInfo{};
-		fanMappingInfo.sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT;
-		fanMappingInfo.mappingCount = 3;
-		fanMappingInfo.pMappings = fanMappings;
-		VkShaderCreateInfoEXT fanRaw{};
-		fanRaw.sType = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT;
-		fanRaw.pNext = &fanMappingInfo;
-		fanRaw.flags = VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT;
-		fanRaw.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-		fanRaw.codeType = VK_SHADER_CODE_TYPE_SPIRV_EXT;
-		fanRaw.codeSize = fanSpv.size() * sizeof(uint32_t);
-		fanRaw.pCode = fanSpv.data();
-		fanRaw.pName = "main";
-		vk::ShaderCreateInfoEXT fanCreateInfo(fanRaw);
-		auto fanShaders = device.createShadersEXT(std::vector<vk::ShaderCreateInfoEXT>{fanCreateInfo});
-		fanoutShader = std::move(fanShaders[0]);
+		fanoutShader = makeMappedCompute(device, "generated_shaders/stream_fanout.comp.spv",
+			std::vector<std::pair<uint32_t, uint32_t>>{
+				{0, tableSlot}, {1, sequenceSlot}, {2, streamsSlot}}, descriptorSize);
 	}
 }
 
