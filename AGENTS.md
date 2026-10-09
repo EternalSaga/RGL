@@ -31,6 +31,9 @@ just build-tools         # 构建 imgqa + 跑 checks（imgqa 不进 ALL，`just 
 just run                 # 运行
 just smoke / just shot   # agent 一次性 headless 冒烟 / 截图（配置走 RGL_CONFIG_DIR，**不碰 configs 副本**）
 just regress ab|floor|burst|selftest  # 逐位回归 + 同构建地板归因（改渲染后验收的默认起手；口径红线 → skill rgl-verify）
+just cpu [--arms default,no-vvl --json f.json --compare f.json --list-arms]  # CPU 分布账重测（债-02/20/30 读数；
+                       # **单实例串行**，主口径 p50；**CPU 读数必须带 VVL 档**；cull 三档对照 =
+                       # `cull-gpu-sync` / `cull-gpu-lagged` 两臂 → tools/cpu_baseline.py 口径五条）
 just run-igpu / run-dgpu / run-intel   # 强制核显 / NVIDIA prime 独显 / Intel anv
 just test                # 单元测试（tests/，**无 GPU 无窗口**，毫秒级；排除 gpu 套件）
 just test-all / test-gpu # 含设备级原语用例（要真设备 + VVL；无设备**FAIL 不 SKIP**）
@@ -175,9 +178,12 @@ vk_indirect_commands 显式使用）外**均无显式使用但被其他已启用
 > 已解决问题的根因/误诊复盘见 `docs/archive/issue_history.md`。性能数字一律标机器、结论全文放
 > phase 计划，本节只留"每次开工都得知道"的边界。
 
-- **本机 forward 1280×720 = CPU-bound**（Phase 9 收口，绑机复测）：GPU 侧有余量、**CPU 侧无余量**。
-  未收口：`drawFrame` 内 ~93% CPU 时间无子 zone（提帧率下一步 = 补子 zone）、present_timing 跨机复测未做。
-  数字与判定全文 → `docs/phase9_plan.md` §10/§11
+- **本机 1280×720 帧时间构成（2026-10-09 重测 + 债-30 还账后，绑机；旧结论"CPU 侧无余量"已作废）**：
+  交付路径（VVL 关）= **frame 10.66ms vs GPU 10.30ms ⟹ GPU-bound 且已贴地板（差 0.36ms）**；
+  开 VVL 后 CPU 录制翻到 15ms（VVL ≈ 0.73µs/条 vkCmd）⟹ **"CPU-bound" 只在开发环境成立**。
+  **CPU 侧读数必须带 VVL 档**，且"CPU 真干"要减掉**两处**主机等待（cull 读回 + 帧首 fence）——
+  债-30 还掉后背压不消失只**搬家**（实测从 cull 等待 10.78ms 搬到帧首 6.73ms）。
+  读数/口径/方案 → `docs/cpu_perf_plan.md`；重测 = `just cpu`。present_timing 跨机复测仍未做（债-07）
 - **渲染近似（现行边界）**：世界法线 mat3 直乘（假定均匀缩放）；透明排序 per-primitive 距离²（非 OIT）
   且开背面剔除；BRDF LUT 仍无；mip blit NEAREST（sRGB LINEAR 违 VUID-00239）；单环境贴图；大三角 z=1
   依赖 depth clear + LEQUAL；**light/env 两个 intensity 语义不对称**（light CPU 预乘、env shader 端乘，
@@ -193,9 +199,13 @@ vk_indirect_commands 显式使用）外**均无显式使用但被其他已启用
   漫反射而这里没做 → 湿区略"亮而奶"；补它需 per-material wetness 进 scene data（= 反射管线改动）
 - **灯契约（现行）**：`Light` 组件 + `index` = 列表位正序（画不画 = 实体有无；forward 读 index 0 = 主光，
   延迟按 index 落槽）；`SceneLight`/`GpuLight` 布局均走 C API 反射生成，无手写双源
-- **GPU culling（现行）**：默认 = compute culling + **读回重放**（三驱动均跑 culling compute）；DGC execute
-  仅 NVIDIA graphicsIndirect=true 可走，RADV 与 Intel anv 实测均 false → 重放；RADV 静态 shader 模式功能通
-  但性能亏 1.85× → `diagnostics.dgc_static` 门默认关。CPU 剔除保留为兜底 + 每帧对账基准（不一致告警不中断）；
+- **GPU culling（现行）**：三态门 **`diagnostics.cull_replay`，默认 `cpu`** = opaque 段由 **CPU 剔除**驱动、
+  GPU compute culling 退为**异步对账验证器**（债-30 还账，实测逐位不变）；`gpu_sync` = 旧的"compute culling +
+  **读回重放**"同帧形态，`gpu_lagged` = GPU 集照跑但滞后一帧对账。**非默认档必须单独冒烟 + syncval**——
+  默认档不提交 cull CB，fence 生命周期与跨帧依赖错误只在两 GPU 臂现形（`just cpu` 的 `cull-gpu-*` 两臂）。
+  DGC execute 仅 NVIDIA graphicsIndirect=true 可走，RADV 与 Intel anv 实测均 false → 重放；RADV 静态 shader
+  模式功能通但性能亏 1.85× → `diagnostics.dgc_static` 门默认关（`cull_replay≠gpu_sync` 时该路根本走不到，
+  gate-lint 会喊）。CPU 剔除保留为兜底 + 每帧对账基准（不一致告警不中断）；
   mvp 由 CPU 算进 scene data（GPU float4x4 FMA 收缩序与 glm 无位级契约，保 forward diff0）。
   驱动级细节 → `docs/nvidia_compatibility_report.md` / `docs/archive/radv_static_dgc_spike.md`
 - **VMA + zero-init 冲突**：VMA 对 BDA buffer 自动加内部 DEVICE_ADDRESS flags，与用户 ZERO_INITIALIZE
@@ -214,6 +224,8 @@ vk_indirect_commands 显式使用）外**均无显式使用但被其他已启用
 > 护栏 = `doc_pointer_checks`（悬空文档指针 / 退役文档名复发，规则 §1.7）。
 
 - **台账 / 现状**：`docs/还债总账.md`（**全项目技术债唯一台账**；勾账三态 = 结案/否决/降级）·
+  `docs/cpu_perf_plan.md`（**CPU/GPU 性能读数与还账方案**：量具 `just cpu` 的口径 + 基线表 +
+  债-30 三档方案与**落地实测/验收**；本文件"帧时间构成"那条结论的全文在这里）·
   `docs/技术概念.md`（机制深版：§模块表 / §核心运行时模块表 = **唯一模块职责表** / §main 启动流 /
   §RPC 调试通道 / §构建检查工具机制 / §构建 Windows 前置）· `docs/gate_lint_plan.md`（**门配置自检的权威载体**；加诊断门前看）
 - **现行计划**：`docs/phase14_plan.md`（**下一步从这里读**：时域线换轨 = 逐像素速度场 + vendor
