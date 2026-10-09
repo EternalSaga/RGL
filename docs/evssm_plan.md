@@ -139,7 +139,9 @@ sampler2DArray + RT 缓存改造）推迟为后续优化：
 - scene data 新 EVSSM 块 32B @722048：参数 vec4（半坡 tan(θ/2) / 搜索半径 / 半影上限 /
   最大 mip）+ 常量 vec4 @722064（x = EVSM 指数 c，host kEvssmExponent 唯一权威源下发，
   生产/消费/fallback 三方同源）；配置
-  门 `shadow_evssm`（与冻结的 shadow_pcss 分立），数值键复用 pcss_*；
+  门 = `configs/shadow.lua` 的 `mode = "evssm"`（与 `pcss` 档互斥），数值键**按档分立**
+  = `evssm.sun_degrees` / `evssm.search_radius` / `evssm.max_penumbra`（不再与 pcss 共用一套，
+  形状定案 → `docs/shadow_routes_plan.md` §2）；
 - 代价 = 比 Filament 融合式多一遍 D32 读 + 矩写（探针估 ~+0.1 ms），换掉的
   是 RT 缓存/graph/executor 三大件零改动 + 门关红线构造性保证不新增暴露面。
 
@@ -159,7 +161,8 @@ AGENTS 已定「机器不著书」纪律）；Raphael/NVIDIA 跨机复测仍列�
 
 - 11.5 冻结件未写测试（fallback 定位，转正时补：半影宽度闭式 + swim 扩展）。
 - ~~源树 configs 测试态改动待处置~~ → 已转正（`c05b2bd`：variant=deferred、
-  izb_shadow=true、pcss_* 四键默认关）。
+  izb_shadow=true、pcss_* 四键默认关）。本条是当时现场：这些键批 N6b 起迁
+  `configs/shadow.lua`（`izb` / `pcss.*`，形状 → `docs/shadow_routes_plan.md` §2）。
 - **EVSSM v1 边界三条**（`d9859c6` 落地时记；① fallback 语义已于 2026-10-02 修复更正）：
   ① forward 路 sandwich 未接（消费点在 geometry pass，门开 = warn-once 不构造、采样读
   fallback = **far 面最大矩全亮**——初版零矩是恒暗方向、已修，见git:调试历史 2026-10-02）；
@@ -227,3 +230,29 @@ AGENTS 已定「机器不著书」纪律）；Raphael/NVIDIA 跨机复测仍列�
 （候选：矩指数 5.5 / mip 搜索 lod 选择 / 消费端 `shadow.slang:313` 的 `EVSSM_SOFT` 分支实际退化）
 之前，**数字不支持转正，也不支持"门后当备选"**。→ `docs/还债总账.md` 债-17。
 
+## 6.3 生效性机制结论（2026-10-09 主 agent 实测；本机 8060S STRIX_HALO / Mesa 26.2.3）
+
+> **EVSSM 生效（构造 + 改画面 + 零 error），但它改的不是「软」——半影机制实测近乎恒等。**
+>
+> | 臂 | 影覆盖 | 平均变暗 | 过渡带/深本影 |
+> |---|---|---|---|
+> | CSM（现行） | 9.72% | 51.5 LSB | 1.021 |
+> | EVSSM 默认参数 | 5.87% | 74.5 LSB | 0.185 |
+> | EVSSM 太阳 5°（物理值 ×9.4） | 6.00% | 71.6 | 0.229 |
+> | EVSSM 太阳 **0°**（半影恒 0） | 5.87% | 74.6 | 0.184 |
+> | EVSSM 搜索/半影上限 16/32→64/64 | 与默认臂**逐位相同** | | |
+>
+> 太阳角 0° 与 0.53° 全图只差 **1245 / 921600 像素**（>8LSB 仅 105 像素）⟹ 半影项不承重。
+>
+> **成因两条互锁**：① `evssm_moments.comp.slang` 只写 `(z, z², −1/z, 1/z²)` ⟹ mip0 处
+> `m2 − m1² ≡ 0`，方差只剩地板 `ε·pw²`（ε=0.002，与 Filament 同值）；`pMax > lbr(0.1)` 要求
+> `exp(2c·Δ) > 0.866` ⟹ **遮挡体必须落在本级联归一化深度 1.31% 以内**，否则判全亮
+> （级联 0 深度跨度 ~10m ⟹ 13cm 以外全亮 = 只交付接触影）。② 抬 mip 的唯一入口是半影
+> `penumbraTexels = Δz·tan(θ/2)/texelWorld`，θ=0.53° 时要 Δz > 215×texelWorld（本场景 ≈4.3m）
+> 才够 1 纹素——而 4.3m 早已越过①的亮区 ⟹ **中间那段既不被半影软化、也不被 EVSM 判成影 =
+> 直接丢影**。
+>
+> **推翻本文件 §4.1 的一条前提**：`shadow.slang` 的 `EVSSM_SOFT` 头注称「解析方差不加——矩在
+> compute 侧生成无导数可用」。**该前提不成立**：compute 读邻 texel 做中心差分就是解析方差，
+> Filament 用屏幕导数只是便利形式 ⟹ 修复有路（候选 F1/F2/F3 → `shadow_routes_plan.md` §5）。
+> 修法与判据先行的排期都在 `shadow_routes_plan.md`，本文件不重述。

@@ -22,6 +22,8 @@
 PCSS 让位 EVSSM、`picking_probe`×`picking=false`、输入探针×headless、`rpc_port` 越界回落、
 `dgc_static` 能力不符、`pcss_*` 死值、`texel_canary` 帧号不可达）。
 
+> 2026-10-09 批 N6b：阴影门迁 configs/shadow.lua 枚举，本节旧键名是当时现场；现行规则表口径见下文级别判据表。
+
 ## 2. 目标 / 非目标
 
 **目标**：四件事，按收益/成本排序。
@@ -71,10 +73,13 @@ export bool graphHasDeferredLight(std::span<const RgPassPlan> passes);
      陈旧键也 → 红）。这是"不出声失效"的正面解法。
    - **未知键**：遍历 Lua 顶层键，凡解析器没读过、又不是已知子表名 → `warn`
      （`diagnostics.lua` 里**拼错的键今天完全静默**，这是普查的附带收获）。
-4. **打印形态**（避免 38 键一行的噪音）：
+4. **打印形态**（避免几十键一行的噪音）：
    - `info`：只列**偏离默认值**的门（= "你实际配了什么"），一行；
-   - `debug`：全量 38 键表。
-   "偏离默认"的比较基准 = `DiagnosticsConfig{}`（零新机制）。
+   - `debug`：全量键表。
+   "偏离默认"的比较基准 = `DiagnosticsConfig{}`（零新机制）。**批 N6b 起两份配置各一份回显表**
+   = diagnostics 30 键（`kGateEcho`）+ shadow 11 键（`kShadowEcho`），键名各以回显表为单一
+   真相源；shadow 侧另有一行恒打的路线行（`shadow: mode=… izb=…`，见
+   `docs/shadow_routes_plan.md` §3.1 第 6 条）。
 
 ### C. `gate_lint` 模块（新，rlscene）
 
@@ -97,9 +102,13 @@ export std::vector<GateFinding> lintDiagnosticsGates(const DiagnosticsConfig& cf
     RgGraphVariant variant, const GateEnv& env);
 ```
 
-- **申报式规则表**（一条规则 = 门名 + 谓词 + 原因），全表集中一文件、顺序固定。
-- **覆盖率护栏**：测试断言 38 个门**每个都有一条规则或显式 `noPrecondition` 标注**——
-  加门时必须回答"这门的生效前置是什么"，答不出就得显式写"无前置"。
+- **申报式规则表**（一条规则 = 门名 + 谓词 + 原因），全表集中一文件、顺序固定。现行表 =
+  **43 行 / 41 门**（diagnostics 侧 30 行 30 门 + shadow 侧 13 行 11 门；行数 ≠ 门数，
+  一门可多条规则 → §8.6）。
+- **覆盖率护栏**：测试断言 41 个门**每个都有一条规则或显式 `noPrecondition` 标注**——
+  加门时必须回答"这门的生效前置是什么"，答不出就得显式写"无前置"。批 N6b 起两份配置各一份
+  回显表，判据 = **规则表门名集合 == 两份回显表键集合之并**（`gateLintRuleGates()` 对
+  `diagnosticsEchoKeys() ∪ shadowConfigEchoKeys()`）。
   （与 `pass_vocabulary` 同构：把"记得同步"变成"同步不了"。）
 - **判据基准**：只对「bool 门 == true」或「数值 ≠ 默认」的配置喊——`configs/diagnostics.lua`
   显式写了 30 个键且多数等于默认值，否则启动日志会因为文件里写满默认值而狂喊。
@@ -122,9 +131,9 @@ export std::vector<GateFinding> lintDiagnosticsGates(const DiagnosticsConfig& cf
 
 | 级别 | 判据 | 例 |
 |---|---|---|
-| `error` | 用户明确开了 X，X 在当前配置下**必然完全无效**，且**没有其他任何信号** | `izb_shadow`×非 deferred、`picking_probe`×`picking=false`、输入探针×headless、`dump_gbuf`×llm 关、variant 意图与图事实矛盾（R-01） |
-| `warn` | 部分生效 / 被更高优先级让位 / 设备能力不符 / 帧号不可达 | PCSS 让位 EVSSM、`dgc_static`×非 RADV、`shadow_pcss`×`shadow_pass=false`、`texel_canary` 跑不到帧号、热重载前提缺失 |
-| `inertNote`（debug 级） | **设计上合法的惰性**——喊它就是制造噪音、教人不信任日志 | 阴影装饰无条件（`main_impl.cppm:261-266`：条目无条件烘槽，故图必须有无条件阴影 pass）、未引用的 pipeline 条目、`pcss_*` 数值在软阴影门全关时是死值但 configs 本就写着默认值 |
+| `error` | 用户明确开了 X，X 在当前配置下**必然完全无效**，且**没有其他任何信号** | `izb`×非 deferred、`izb`×`mode="none"`、`mode="evssm"`×非 deferred、`picking_probe`×`picking=false`、输入探针×headless、`dump_gbuf`×llm 关、variant 意图与图事实矛盾（R-01） |
+| `warn` | 部分生效 / 被更高优先级让位 / 设备能力不符 | `izb.dump_frame`×`izb` 关、`dgc_static`×非 RADV、`cull_replay`×`dgc_static` 开、`rpc_port`×`rpc=false` |
+| `inertNote`（debug 级） | **设计上合法的惰性**——喊它就是制造噪音、教人不信任日志 | 阴影装饰无条件（`main_impl.cppm:261-266`：条目无条件烘槽，故图必须有无条件阴影 pass）、未引用的 pipeline 条目、`pcss.*` / `evssm.*` 调参块在 `mode` 不是本档时没人读（按档分立）、`izb.grid`×`izb` 关 |
 
 > 「依赖设备资源是否缺失」**不是**配置 lint 的判据（`warnedNoSlots` 留运行期）——
 > 否则 lint 就不能在 `just test` 里跑，且会把跨机差异带进启动判定（违反"工作机器不著书"）。
@@ -164,7 +173,7 @@ TAA 视角（立项时按它演算过）：TAA 必然插一个**采样场景色�
 | 启动日志变长 | `info` 只列偏离默认值的门；全量走 `debug` |
 | 回显表成员指针形态与 Doxygen/style 检查打架 | 先小步试编译；退路 = 回显表用 `{键名, std::function<std::string(const Cfg&)>}`（多一次分配，但只在启动期） |
 | `KeyTrace` 记录影响解析路径 | 记录发生在启动期一次、38 个键量级；解析器返回值不变（`KeyTrace` 出参/侧信道，不进 `DiagnosticsConfig`，不污染数据体） |
-| lint 表覆盖率护栏做不到"编译期" | 退到测试期断言（38 门逐个查），已足够：加门时 `just test` 红 = 同一个提醒效果，只是晚到测试阶段 |
+| lint 表覆盖率护栏做不到"编译期" | 退到测试期断言（41 门逐个查），已足够：加门时 `just test` 红 = 同一个提醒效果，只是晚到测试阶段 |
 
 ## 8. 执行偏差（落地当日记，与上文设计不一致处以此为准）
 
@@ -186,8 +195,11 @@ TAA 视角（立项时按它演算过）：TAA 必然插一个**采样场景色�
    `applyProbeAndNumericGates`（阈值倒逼，纯搬运）；`kDeferredLightState` 具名常量 +
    `static_assert` 与词表绑定；`vkrenderer_impl` 的 drawLight 缺条目消息修掉
    ao 误报 Tonemap 的三元式。
-6. **一门可以有多条规则（2026-10-09，债-32 收口时新增）**：`izb_shadow` 现有两行
-   （非 deferred 图 / `shadow_pass=off`）——同一扇门的两条**不同根因**各配一条消息，
+6. **一门可以有多条规则（2026-10-09，债-32 收口时新增）**：`izb` 现有两行
+   （非 deferred 图 / `mode = "none"`）——同一扇门的两条**不同根因**各配一条消息，
    合并成一条谓词 = 丢归因（本模块的存在理由正是"报在肇事配置上并说清为什么"）。
-   ⟹ §3-C 的覆盖率护栏钉的是**去重后的门数** == 回显表键数，规则表行数另作"表没被整段
-   删空"的下界哨兵（两者都在 `tests/test_gate_lint.cppm`）。
+   ⟹ §3-C 的覆盖率护栏钉的是**去重后的门数** == 两份回显表键数之和，规则表行数另作"表没被整段
+   删空"的下界哨兵（两者都在 `tests/test_gate_lint.cppm`）。同批 N6b 把阴影侧整段换成
+   **枚举口径**后，「PCSS 让位 EVSSM」那条 warn **整条删除**（枚举下两门同开表达不出来，
+   让位链不是被修好，是被消掉）；现行阴影侧 13 行 / 11 门的清单 →
+   `docs/shadow_routes_plan.md` §3.2 第 4 条。

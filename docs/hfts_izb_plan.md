@@ -110,8 +110,9 @@ dispatch（IZB 创建）——与本项目"compute 全在图外、render_graph �
 | ⑤ 光空间保守光栅 + 链表遍历写 mask | drawMesh 新 state `"izb"`：DynamicState3 开 `OVERESTIMATE`（不加管线条目）+ 遍历链表 fragment 原子 OR 写 r32ui mask SSBO | shadow pass 模板 + phase11 §9 动态状态结论 |
 | ⑥ 消费 | `shadow.slang` 加 izb 分支：读 mask，与 PCF 结果混合/替代 | binding 12/13 旁路先例 |
 
-**门控**：`diagnostics.lua` 新增 `izb_shadow`（默认 **false**）。关 = IZB 相关 pass
-零 draw + 采样端旁路 = **画面逐位不变**（`shadow_pass` / `ao.strength=0` 同款纪律，
+**门控**：门 = `configs/shadow.lua` 的 `izb`（**出厂开**，代码默认 true；当初立计划时默认关，
+2026-10-09 批 N6a 承认为出厂开，定案 → `docs/shadow_routes_plan.md` §1）。门关 = IZB 相关 pass
+零 draw + 采样端旁路 = **画面逐位不变**（`mode = "none"` / `ao.strength=0` 同款纪律，
 BIT-IDENTICAL 基线不受扰）。
 
 **红线**：
@@ -205,7 +206,7 @@ BIT-IDENTICAL 基线不受扰）。
 **1d 前半（2026-10-01 深夜落地）：IZB 创建/priming 进引擎（rlgfx `izb_shadow` 模块）**。
 - 形态：图外 compute sandwich，录在 **deferred 图 `drawLight "light"` pass 头部**
   （深度已由 geometry pass 写完）；深度 layout 进出同值 = 渲染图布局追踪表零漂移。
-  门 = `diagnostics.izb_shadow`（默认 false）：**门关 = IzbShadow 恒不构造**
+  门 = `configs/shadow.lua` 的 `izb`（**出厂开**，代码默认 true）：**门关 = IzbShadow 恒不构造**
   （零分配零命令）；forward 图无 drawLight pass 天然不触发（z-prepass 两路接 = 1e）。
 - 数据 = `vk_resources` 全量 heap Runtime 段 3 槽（izb.head/nodes/primed）+
   **深度采样描述符与 SSAO 共用 `ensureDepthSampleSlot`**（同 view 同 RO 布局）；
@@ -344,7 +345,8 @@ render_graph 零改动版**。
   成立**，调用点再怎么早退都跳不掉。两条位置/同步红线：① 必须在 dump 拷贝**之后**——dump 读的是
   **上一帧**的 mask（`imgqa izb` 吃它），清在前面 `shadowed` 恒 0；② fill 的 dst barrier 补
   `ShaderRead`——段空时没有 `endMaskPass` 那条写→读 barrier，light.frag 的读得由 fill 排序。
-- **护栏**：gate_lint 新增 `izb_shadow × shadow_pass=off` error（与 `shadow_evssm` 同判据同形）。
+- **护栏**：gate_lint 新增 `izb × mode = "none"` error（与 `mode = "evssm"` × 非 deferred 同判据
+  同形；N6b 起阴影侧规则表整体按枚举重写，现行口径 → `docs/shadow_routes_plan.md` §3.2）。
   规则表**首次一门两行**（两个根因各一条消息，合并 = 丢归因）⟹ 覆盖率护栏改钉**去重后的门数**。
 - **判据（本机 8060S / RADV，1280×720 deferred）**：① 红线 = 默认配置截图 SHA256 `fdece9d0…`
   复现（正常路径命令数不变：三条 mask 命令只是换了宿主函数。7 次里 6 次逐位、1 次 1 像素
