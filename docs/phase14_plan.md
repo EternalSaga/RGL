@@ -143,27 +143,32 @@
 
 ---
 
-### 1.7 渲染图的 barrier 覆盖面现状（2026-10-07 核实；决定 FSR 落位的风险面）
+### 1.7 渲染图的 barrier 覆盖面现状（决定 FSR 落位的风险面）
 
-**自动推导只覆盖 image attachment 的布局链，且图外访问靠"进出同值"的约定**：
+**自动推导只覆盖 image attachment 的布局链，图外访问靠"进出同值"的约定——该约定已由批 14.4b 的 A 档护栏变成断言**：
 
 | 事实 | 出处 |
 |---|---|
-| 图自动推导 = attachment 布局链（`usage → {layout, stage, access}` 查表） | `render_graph.cppm:21-24, 32-37` |
-| **明确不进图**：descriptor/sampler heap host-write barrier、scene data staging copy barrier、acquire/present、fence | `render_graph.cppm:26-30` |
-| `RgAttachmentKind` = swapchain / depth / offscreen / depthOffscreen —— **无 buffer kind** ⟹ **buffer 侧同步完全在图外** | `render_graph.cppm:61-64` |
-| 图外 compute 家族手写 barrier：`gpu_cull` / `IzbShadow` / `EvssmShadow` / `env_prefilter` / `mip_gen` / `texture_upload` / `gpu_canary` | `izb_shadow.cppm:27`「render_graph 无 compute kind」、`evssm_shadow.cppm:20` |
-| IzbShadow 每帧 ~10 条 buffer barrier + **2 条深度图布局 barrier** | `izb_shadow_impl.cppm:256, 280` |
-| 深度布局的处理方式 = **进出同值**，注释自陈「**渲染图布局追踪表不可见**，零漂移」 | `izb_shadow.cppm:52`、`izb_shadow_impl.cppm:279`；`frame_capture_impl.cppm:162` 同构 |
-| 追踪表 = `Renderer::attachmentLayouts`，图外路径**读出并还原**，但**没有任何断言校验还原真的发生了** | `vkrenderer.cppm:320`、`vkrenderer_passrec.cppm:268` |
+| 图自动推导 = attachment 布局链（`usage → {layout, stage, access}` 查表） | `render_graph.cppm` 头注释「usage → {layout, stage, access} 推导规则」段 |
+| **明确不进图**：descriptor/sampler heap host-write barrier、scene data staging copy barrier、acquire/present、fence | `render_graph.cppm` 头注释「图的边界」段 |
+| `RgAttachmentKind` = swapchain / depth / offscreen / depthOffscreen —— **无 buffer kind** ⟹ **buffer 侧同步完全在图外** | `RgAttachmentKind`（`render_graph.cppm`） |
+| 自发 `CmdPipelineBarrier2` 的模块（执行器 `vkrenderer_passrec` / `vkrenderer_offgraph` 除外）实测 **12 个**：`gpu_cull` / `IzbShadow` / `EvssmShadow` / `env_prefilter` / `mip_gen` / `texture_upload`(+cubemap) / `gpu_canary` / `fsr_upscaler` / `frame_capture` / `picking` / `vkresources`。其中做**逐帧 image 布局 sandwich** 的只有 `IzbShadow` 与 `fsr_upscaler` 两处，其余的 barrier 全是 buffer / 全局 barrier（§1.11 修正一） | `izb_shadow.cppm`（`IzbShadow` 类头注释「render_graph 无 compute kind」）、`evssm_shadow.cppm`（`EvssmShadow` 类头注释同构） |
+| IzbShadow 逐帧 barrier（`izb_shadow` 开且 shadow0 段非空）= **8 条 buffer + 2 条深度图布局**：`recordFrame` 3+2、`beginMaskPass` 4、`endMaskPass` 1；dump 帧额外走 `recordDumpCopy` **+4 条 buffer**（旧数「~10」= 把全文件 12 个 `bufferBarrier` 调用点当成了每帧数） | `IzbShadow::recordFrame` / `beginMaskPass` / `endMaskPass` / `recordDumpCopy`（`izb_shadow_impl.cppm`） |
+| 深度布局的处理方式 = **进出同值**，注释自陈「**渲染图布局追踪表不可见**，零漂移」 | `izb_shadow.cppm`（`IzbShadow::recordFrame` 文档注释）、`IzbShadow::recordFrame` ⑥ 还原 barrier 注释；`frame_capture_impl.cppm`「追踪表原值进出」注释同构 |
+| 追踪表 = `Renderer::attachmentLayouts`，图外路径**读出并还原**，且自批 14.4b A 档护栏起**有断言校验还原真的发生了**（IZB + FSR 两处，不符即 error，机制与变异验证 → §1.11） | `Renderer::attachmentLayouts` / `Renderer::transitionAndTrack`（`vkrenderer.cppm`）；`Renderer::izbLightPassPre` / `Renderer::fsrTonemapPassPre`（`vkrenderer_offgraph.cppm`） |
 
-⟹ **缺口不是"漏了几条 barrier"，是"约定无断言"**：布局若真漂移，VVL 不报（布局本身合法），
-症状推迟到**下一帧首 barrier 的 `oldLayout` 失配**才炸，根因与症状隔一整帧。债-32（mask 永不清零
+⟹ **缺口不是"漏了几条 barrier"，是"约定无断言"**（断言已由 14.4b 补上）：布局若真漂移，VVL **能**报
+（§1.11 实测：删 IZB 还原 barrier 的变异里 VVL 确实响了），但报在**执行器下一次 barrier 那个无辜
+调用点**、根因与症状隔一整帧，且只在调试层在场时存在。债-32（mask 永不清零
 却逐位相同）就是同一形态：**约定成立时一切正常，所以没人知道它会不会不成立。**
 
-**FSR 是第三个图外 compute**，且它比 IzbShadow 更麻烦：它的产物里有三张**由我们分配、由它写入**的
-图（`dilatedDepth` / `dilatedMotionVectors` / `reconstructedPrevNearestDepth`），还有一张我们每帧
-写的 velocity buffer ⟹ 手写 barrier 的面积会再扩大。**所以护栏必须先立，再扩面。**
+**FSR（批 14.5 已接入）是第三个图外 compute**，它比 IzbShadow 更麻烦：它的产物里有三张**由我们
+分配、由它写入**的图（`dilatedDepth` / `dilatedMotionVectors` / `reconstructedPrevNearestDepth`），
+还有一张我们每帧写的 velocity buffer ⟹ 手写 barrier 的面积确实再扩大——护栏**先立后扩面**已照此执行（A 档，见 §1.11）。
+
+> **修正记录**：本节初稿写于 2026-10-07；「布局漂移 VVL 不报」「图外 compute 家族 7 个」「IzbShadow
+> 每帧 ~10 条 buffer barrier」已被 §1.11 与批 14.4b / 步 0 实测修正，上表即修正后的现状（被推翻的
+> 旧结论直接删，不留双层）。
 
 ### 1.8 批 14.1 落地事实（2026-10-08 实测；`third_party/fsr/`）
 
@@ -1392,11 +1397,11 @@ EASU 的 un-jitter 开始起作用；修复前那个更高的边缘值是**错�
 | ~~**14.2**~~ ✅ **已收口 2026-10-08** | **输入面研究（只出文档，不改渲染）**：`jitterOffset` / `motionVectors` / `depth` / `reset` 四个量的**单位、坐标系、符号、采样时刻**逐条与 FSR 源码对拍，写成表；顺带定 `ENABLE_DEPTH_INVERTED` / `_DEPTH_INFINITE` / `_MOTION_VECTORS_JITTER_CANCELLATION` / `_DISPLAY_RESOLUTION_MOTION_VECTORS` 的取值 | 用户方向第二条。**这是本项目第三次栽在"参考/闭式的观测坐标系与被测项不一致"的位置**（`phase13_plan` §1.6 撤回条、§1.17 结论 5 的 φ 反号）——先定口径再写代码 | ① 一张四行表，每行给「FSR 要的口径 / 我们现在的口径 / 差什么 / 差值怎么验」——✅ `docs/FSR输入契约.md`；② **每条差值有一条可跑的对拍**（合成靶或解析式），不接受"读源码认为一致" —— ✅ 四条全部实机对拍（载体 = `just fsr-smoke` 的三条契约探针，常驻非常驻可选）；③ 符号项必须有**反向用例**（符号取反必须更差）—— ✅ MV ±dx、jitter 期望取反变异、depth **真开 `DEPTH_INVERTED`** 后判据行 0.2000→1.0000。**残留**：jitter 在 accumulate 路径的定量判据做不出来（合法量级 ±0.5 px 低于重建滤波器量化），已记为 14.5 第一嫌疑 |
 | ~~**14.3**~~ ✅ **已收口 2026-10-08** | **内部分辨率与窗口拉伸解耦**：现在 render extent ≡ swapchain extent ≡ 窗口像素（`Resources` 深度图 extent = swapchain extent；全仓**无 `renderScale` 概念**，只有 `vkswapchain.cppm` 的 `windowScale` 诊断）。加一个独立的 render extent，与 swapchain extent、与债-37 的 HPD 分数缩放三者正交 | 用户方向第四条。**它是 FSR 的硬前置，但本身独立可验收、且净收益**（DRS / 性能实验都缺它）；与 14.1 并行 | ① `renderScale ∈ {1.0, 0.75, 0.5}` 下画面正确、resize 不崩、imgui 与**点选**不受影响（债-37 三条连带不许回退）—— ✅ 三档实机出图（0.5 档读图：内容/取景/比例正确，仅整体变软 = 双线性放大预期）；imgui 恒在后缓冲像素、点选两级换算收口，债-37 三条连带无回退（renderScale=1 时比值恰为 1）；**live resize 未手工验证**，改为把取整/钳制写成单测断言覆盖；② `renderScale = 1.0` 时**逐位等于**今天的基线（红线）—— ✅ 1280×720 与 1600×900 两档与开工前基线逐位相同（同会话增量构建），且**结构上**成立：图形状与 renderScale 无关（§1.9）；③ 截图/判据口径显式记录 render extent（否则 imgqa 所有像素类判据静默换含义）—— ✅ 启动日志 + 截图成功日志 + RPC `/state` 新增 `render` 段 + `just shot` 网格行；`--render-scale` **核对引擎实际生效值**（变异验红：请求 0.1 → 钳到 0.25 → FAIL）；④ Wayland 175% 缩放下实测一次 —— ⚠ **未做**（本机无 Wayland 会话）；默认档行为逐位同前，风险仅在显式改档。**收口记录** → §1.9 |
 | **14.4** 🕳 **进行中**（纯函数层 + pass 侧已落地） | **逐像素速度场**（债-71 / 债-35，**本 phase 最大的一块**）：compute pass 由两帧相机矩阵 + `depthTex` 解析算出每像素速度（本项目唯一运动是全局刚体 ⟹ 便宜），输出 FSR 口径的 `motionVectors`；同时把 TAA 的重投影从"全局矩阵"改成"读这张场" | 用户方向第三条。**它是天花板唯一的出口**，且能独立验收（不必等 FSR 接完）——臂 14 = 门改吃真实逐像素速度 ⟹ 直接问跷跷板是否松绑 | ① 速度场与**独立解析参考**逐像素对拍（含 pitch；用 `temporal_yaw_remap` 那套带 pitch 的金标准，2.3e-13px）；② **阳性锚点** = 静止机位必须恒 0；③ **反向用例** = 符号取反必须让 §1.22 的 R 变差；④ 用它重跑 `temporal-tail --motion step` 与 `temporal-motion`，报 R 是否 < 1（**这是"运动中 TAA 有害"能不能翻案的判决**） |
-| **14.4b** ✅ **A 档已落地**（B 档待 14.5 后重裁，见 §1.11） | **图外资源挂号 + 布局对账护栏**（FSR 前置，见 §1.7）。做两档、明确不做第三档：**A 护栏**（便宜）= 图外 pass 进出点比对 `attachmentLayouts[slot]` 与预期值，不符即 error 出声，把"进出同值"从**约定**变**断言**；**B 挂号**（中等）= `RgGraphDesc` 增加 external-use 声明（attachment × usage × 插在哪个 pass 之后/之前），GraphCompiler 据此把 barrier 并入计划，`IzbShadow` / `EvssmShadow` / FSR 三处不再手写 **image** barrier；**C 不做** = buffer 侧依赖自动推导（图只跟 image attachment，加进去 = 半个 memory manager） | **排在 14.5 之前**：FSR 是第三个图外 compute，先立护栏再扩面，否则 14.5 的 VVL 判据要替"约定"背锅，而债-32 已经证明这类缺口 VVL 不报 | ① **阳性锚点** = 故意让某图外 pass 不还原布局 ⟹ 护栏必须 error（**变异验过非空转**）；② **反向** = 现状全绿（护栏零误报，否则等于没有）；③ 红线 = 画面逐位不变（护栏只读不写命令）；④ B 档做完 = `izb_shadow_impl.cppm:256,280` 两处 `depthLayoutBarrier` 删除且画面逐位不变 |
+| **14.4b** ✅ **A 档已落地**（B 档待 14.5 后重裁，见 §1.11） | **图外资源挂号 + 布局对账护栏**（FSR 前置，见 §1.7）。做两档、明确不做第三档：**A 护栏**（便宜）= 图外 pass 进出点比对 `attachmentLayouts[slot]` 与预期值，不符即 error 出声，把"进出同值"从**约定**变**断言**；**B 挂号**（中等）= `RgGraphDesc` 增加 external-use 声明（attachment × usage × 插在哪个 pass 之后/之前），GraphCompiler 据此把 barrier 并入计划，`IzbShadow` / `EvssmShadow` / FSR 三处不再手写 **image** barrier；**C 不做** = buffer 侧依赖自动推导（图只跟 image attachment，加进去 = 半个 memory manager） | **排在 14.5 之前**：FSR 是第三个图外 compute，先立护栏再扩面，否则 14.5 的 VVL 判据要替"约定"背锅——布局漂移 VVL **能**报，但报得晚且报在无辜调用点（§1.11 实测修正旧结论"VVL 不报"）；债-32 那类 **buffer 侧**缺口才是 VVL 真不报的 | ① **阳性锚点** = 故意让某图外 pass 不还原布局 ⟹ 护栏必须 error（**变异验过非空转**）；② **反向** = 现状全绿（护栏零误报，否则等于没有）；③ 红线 = 画面逐位不变（护栏只读不写命令）；④ B 档做完 = `IzbShadow::recordFrame` 的两条 `depthLayoutBarrier` 删除且画面逐位不变 |
 | **14.5** 🕳 **七批已落地**（第一批 = FSR 每帧跑通 VVL 零错、输出无消费者，见 §1.13；第二批 = **输出接进 tonemap**，零拷贝换槽，**默认只开纯空间档**，见 §1.14；第三批 = **AO 施加点从 taa.frag 拆成独立 `ao_apply` pass**，让"AO 乘在时域之前"与"谁做时域"解耦，见 §1.15；第四批 = **亚像素抖动与 TAA 解耦并申报给 FSR**，见 §1.16——**主实验是否证：时域退化与"没有抖动"无关**；
 第五批 = **诊断批（无产品代码改动）：推翻本 Phase 自己的时域测量方式**，纠正后病灶收窄到
 「历史读取的采样滤波」一处，见 §1.17；第六批 = **根因定位并修好（vendor host 侧 `abs(float)` 落到 `::abs(int)`）**，见 §1.18；第七批 = **真实档验收 = 通过**：根因 = **申报给 FSR 的是投影注入量、而 FSR 要的是内容位移（Y 反号）**，地面真值实测裁决；同时**换掉失效判据**（`mean|∇|` 在升频区间与质量反相关），见 §1.19；
- 第八批 = **配置面收口（无渲染改动）**：抗锯齿三布尔 → 一个三态键 `aa`，四条截图逐位复现，见 §1.20；代码里编号 = **批 14.6**） | **FSR 接线**：落位 = **图外 compute 编舞**（`RgPassKind` 只有 `drawMesh/blit/drawLight`，**无 compute kind**；先例 = IzbShadow / EvssmShadow，见 `evssm_shadow.cppm:20`）。HDR 域位置 = **tonemap 之前**（scene_hdr@render res → FSR → hdr@display res → tonemap → swapchain），`ENABLE_HIGH_DYNAMIC_RANGE` 开。**第二批改判**：原计划「copy 进图附件 `fsr_out`」**不做**——FSR 的 UAV 输出必须常驻 GENERAL（现有 usage→layout 表表达不了），且图内无写者的附件是额外风险；改走 `Resources::ensureFsrSampleSlot()` + 模块自写描述符（`EvssmShadow::momentsSampleSlot` 同族），**零拷贝、零图词表改动** | 唯一架构决策，先写死再动手，免得中途返工 | ① **FSR 关 = 逐位不变**（与 TAA 同款红线，用基线配置）—— ✅ 门关 SHA256 = `fdece9d0…` = 红线基线；② VVL 零报错（含跨 submission 依赖与布局链——债-32 那条"图外编舞"的坑）—— ✅ 门开 PASS errors=0 warnings=0；⚠ **布局漂移 VVL 抓不到**（布局本身合法，症状隔一整帧），这一项靠 **14.4b 的护栏**，不是靠 VVL；③ 显存账新增"外部分配器"科目且**闭合断言重新有意义**；④ 本批**只点亮不调参** —— ✅（`kFsrSharpness = 0.2` 取 AMD 样例默认，调参归 14.7）；⑤ **第二批新增：画面判据**——纯空间档 0.5 档边缘能量 **8.43 > 双线性 7.95** ✅，且输出是**帧号纯函数**（同参数两次跑 SHA256 相同 ⟹ FSR 档可做逐位回归）；**时域档实测退化**，默认关；**根因已定位并修好 = vendor host 侧 `lanczos2()` 的非限定 `abs(float)` 落到 `::abs(int)`，Lanczos LUT 退化成阶跃 ⟹ 历史读取核变成 [¼½¼]**（一个 token `fabsf` ⟹ 6.01→13.90 = 无 FSR 的 105%），全链见 **§1.18**；⑥ **第三批新增：AO 施加点解耦**——门关逐位不变 ✅、三档图形态正确 ✅、**AO 净变暗量级比 1.007**（恰好施一次，同时排除零施与双施）✅、装饰器四条判据变异全验红 ✅，见 §1.15；⑦ **第四批新增：抖动解耦**——门关逐位不变 ✅、
+ 第八批 = **配置面收口（无渲染改动）**：抗锯齿三布尔 → 一个三态键 `aa`，四条截图逐位复现，见 §1.20；代码里编号 = **批 14.6**） | **FSR 接线**：落位 = **图外 compute 编舞**（`RgPassKind` 只有 `drawMesh/blit/drawLight`，**无 compute kind**；先例 = IzbShadow / EvssmShadow，见 `evssm_shadow.cppm:20`）。HDR 域位置 = **tonemap 之前**（scene_hdr@render res → FSR → hdr@display res → tonemap → swapchain），`ENABLE_HIGH_DYNAMIC_RANGE` 开。**第二批改判**：原计划「copy 进图附件 `fsr_out`」**不做**——FSR 的 UAV 输出必须常驻 GENERAL（现有 usage→layout 表表达不了），且图内无写者的附件是额外风险；改走 `Resources::ensureFsrSampleSlot()` + 模块自写描述符（`EvssmShadow::momentsSampleSlot` 同族），**零拷贝、零图词表改动** | 唯一架构决策，先写死再动手，免得中途返工 | ① **FSR 关 = 逐位不变**（与 TAA 同款红线，用基线配置）—— ✅ 门关 SHA256 = `fdece9d0…` = 红线基线；② VVL 零报错（含跨 submission 依赖与布局链——债-32 那条"图外编舞"的坑）—— ✅ 门开 PASS errors=0 warnings=0；⚠ **布局漂移 VVL 报得晚且报错点**（报在执行器下一次 barrier 那个无辜调用点、只在调试层在场时存在，§1.11），这一项靠 **14.4b 的护栏**，不是靠 VVL；③ 显存账新增"外部分配器"科目且**闭合断言重新有意义**；④ 本批**只点亮不调参** —— ✅（`kFsrSharpness = 0.2` 取 AMD 样例默认，调参归 14.7）；⑤ **第二批新增：画面判据**——纯空间档 0.5 档边缘能量 **8.43 > 双线性 7.95** ✅，且输出是**帧号纯函数**（同参数两次跑 SHA256 相同 ⟹ FSR 档可做逐位回归）；**时域档实测退化**，默认关；**根因已定位并修好 = vendor host 侧 `lanczos2()` 的非限定 `abs(float)` 落到 `::abs(int)`，Lanczos LUT 退化成阶跃 ⟹ 历史读取核变成 [¼½¼]**（一个 token `fabsf` ⟹ 6.01→13.90 = 无 FSR 的 105%），全链见 **§1.18**；⑥ **第三批新增：AO 施加点解耦**——门关逐位不变 ✅、三档图形态正确 ✅、**AO 净变暗量级比 1.007**（恰好施一次，同时排除零施与双施）✅、装饰器四条判据变异全验红 ✅，见 §1.15；⑦ **第四批新增：抖动解耦**——门关逐位不变 ✅、
 **TAA 开时逐位不变**（本批最大回归面，`git stash` 重建对拍 `360ce0d2…` 两次相同）✅、
 相位数对 vendor **公开五档表**（18/23/32/72）✅、三条变异验红 ✅、**仪器有效性自证**
 （逐帧申报值轨迹 = 标准 Halton 周期 32）✅；**主实验判据 = 否证**（时域+抖动 3.50 ≈ 时域无抖动
@@ -1465,7 +1470,8 @@ EASU 的 un-jitter 开始起作用；修复前那个更高的边缘值是**错�
    那台补一次）。踩到的三个运行期坑（P8 跳 0x0、P9/P10 对齐 UB）→ `third_party/fsr/PATCHES.md`。
 3. **图外 compute 编舞把债-16"两套执行世界观"从 2 例变 3 例**，且 FSR 的输入是图内产物
    （scene_hdr / depth）、产物里有三张**我们分配、它写入**的图 ⟹ 跨边界布局转换出错就是债-32 型
-   UB，而 **VVL 抓不到布局漂移**（布局本身合法，症状隔一整帧才出现，见 §1.7）。
+   UB，而 **布局漂移 VVL 报得晚且报错点**（报在执行器下一次 barrier 那个无辜调用点、根因与症状隔
+   一整帧，且只在调试层在场时存在，§1.11 实测修正，见 §1.7）。
    缓解 = **14.4b 先行**（债-72 的 A 档护栏把约定变断言），VVL 只当第二道。
 4. **imgqa 采集层不收敛**（38s/组、五份副本）→ 14.6/14.7 的档位扫描"存在却没人跑"，与没判据等价。
 5. **显存账闭合断言失效**（§1.5）→ 不是崩溃，是**账不再证明东西**；14.5 判据③专门盯它。
@@ -1490,7 +1496,7 @@ EASU 的 un-jitter 开始起作用；修复前那个更高的边缘值是**错�
 | **债-46**（位级基准未落地） | 14.5 前置 | 三个出口对 FSR 同样成立 |
 | **债-64**（采集层未收敛 / 并行未做） | **14.6/14.7 前置** | 否则"调旋钮"仍是空话 |
 | **债-40**（本帧 HDR firefly） | 14.7 首个旋钮 | `FVELOCITYFACTOR → 0` 是它的现成候选修法 |
-| **债-72**（图外 barrier 靠约定且无断言 / buffer 侧完全在图外） | **14.4b 清偿** | **护栏先于扩面**：FSR 是第三个图外 compute |
+| **债-72**（图外 barrier 靠约定，断言自 14.4b 起才覆盖两处 sandwich / buffer 侧完全在图外） | A 档已落地，B 档待重裁（§1.11） | **护栏先于扩面**：FSR 是第三个图外 compute |
 | **债-73**（FSR 上游 4 类 spec 违规） | ③ **已结案（P11）**；①②④ 记噪声 | ③ 不处置 = 时域历史是未定义值。防线 = `just fsr-check` 的格式对账 + 冒烟白名单外即 FAIL |
 | **债-16**（两套执行世界观） | 14.5 加重、14.4b 缓解 | FSR = 图外 compute 第三例 |
 | **债-24**（compute/transfer 队列死重） | **本 phase 明确不用**（见 §3 红线） | "用上 compute shader" ≠ "用上 compute 队列" |

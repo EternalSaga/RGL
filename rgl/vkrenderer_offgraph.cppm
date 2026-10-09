@@ -75,8 +75,11 @@ void Renderer::izbLightPassPre(vk::raii::CommandBuffer& cmd, const RgPassPlan& p
 		return;
 	// 批 14.4b A 档护栏：图外 sandwich 的「进出同值」从**约定**变**断言**。
 	// 为什么必须有：追踪表 `attachmentLayouts` 的唯一写者就是执行器自己，图外模块发的
-	// barrier 它一概不知 ⟹ 漂移后执行器下一跳会拿**错的 oldLayout** 去转布局，而 VVL
-	// **不报**（漂移后的布局本身合法，只是与表不符），症状隔一整帧才现（债-72）。
+	// barrier 它一概不知 ⟹ 漂移后执行器下一跳会拿**错的 oldLayout** 去转布局（债-72）。
+	// VVL **能**报这类漂移（批 14.4b 阳性锚点实测推翻旧结论「VVL 不报」，详见
+	// docs/phase14_plan.md §1.11），护栏仍有三条独立价值：**归因**（VVL 报在下一次
+	// barrier 那个无辜调用点，本护栏直接点名肇事模块）、**不依赖调试层**（交付配置里
+	// VVL 不在场）、**早一帧**。
 	// 14.5 的 FSR 是第二个这样的 sandwich，先在这里把模式立起来。
 	const auto depthSlotIdx = static_cast<size_t>(depthAttSlot);
 	const auto trackedLayout = attachmentLayouts[depthSlotIdx];
@@ -97,7 +100,8 @@ void Renderer::izbLightPassPre(vk::raii::CommandBuffer& cmd, const RgPassPlan& p
 	if (auto* logger = RLLogger::getInstance()) {
 		if (const auto drift = layoutDrift("izb: 深度附件", trackedLayout, leftLayout))
 			logger->error("{}。渲染图不知道这次转换，下一跳会拿错的 oldLayout 转布局"
-				"（VVL 不报，症状隔一整帧）；recordFrame 的返回值必须由实际发出的 barrier 推进",
+				"（VVL 要等下一次 barrier 才响，且报在那个无辜调用点、只在调试层在场时存在）；"
+				"recordFrame 的返回值必须由实际发出的 barrier 推进",
 				*drift);
 	}
 	replayIzbMaskSegment(cmd, list);
