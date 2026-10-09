@@ -138,9 +138,6 @@ export class EnvPrefilter {
 	[[nodiscard]] std::expected<void, Error> writeImageDesc(DescChain& chain, uint32_t slot,
 		VkImage image, vk::Format format, vk::ImageViewType viewType, uint32_t baseMip,
 		uint32_t baseLayer, uint32_t layerCount, vk::DescriptorType type, vk::ImageLayout layout);
-	/** 为一个 level 建 compute shader object（3 mapping：0/1 = heap push-index，2 = sampler）。 */
-	[[nodiscard]] std::expected<vk::raii::ShaderEXT, Error> createLevelShader(uint32_t srcSlot,
-		uint32_t dstSlot);
 
 	vk::raii::Device& device;  // 设备引用（非拥有；初始化列表首位）
 	std::vector<uint32_t> code;  // env_prefilter.comp.spv 码流（构造期加载，逐 level 建 shader object 复用）

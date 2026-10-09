@@ -15,9 +15,10 @@ import shader;        // loadShaderSpv（env_prefilter.comp.slang）
 
 namespace RGL {
 
-// 构造器 / init / addLevel / createLevelShader / writeImageDesc / recordPrefilter 定义（契约
-// 见接口声明）。本单元是叶子边（不 import vk_resources——Resources 持本模块类型，无环），
-// 编译不上关键路径。descriptor heap + shader object 版（mip_gen 的 cube 变体）。
+// 构造器 / init / addLevel / writeImageDesc / recordPrefilter 定义（契约见接口声明）。本单元是
+// 叶子边（不 import vk_resources——Resources 持本模块类型，无环），编译不上关键路径。
+// descriptor heap + shader object 版（mip_gen 的 cube 变体）；逐 level 的 shader object 创建
+// 已收成共享点 shader.cppm::makePerLevelComputeShader（与 mip_gen 同一份实现）。
 
 namespace {
 
@@ -29,15 +30,10 @@ std::vector<uint32_t> loadEnvPrefilterSpv() {
 	return *spv;
 }
 
-/** heap push index 在 push data 的字节偏移：EnvPrefilterPush 占 3×u32（0..11），留 2 槽位后
- * 落在第 5 个 u32（offset 20）——与 createLevelShader 的 mapping.pushOffset 一致，
- * 与 recordPrefilter push data 里 heapIndex 成员偏移一致（三者手工同频，改动须同步）。 */
-constexpr uint32_t kPushIndexByte = 5 * 4;
-
 /** 本模块 push data 布局（24B）：@0 EnvPrefilterPush（12B shader push constant）+ 2 u32 留白 +
  * @20 heap push index（u32，恒 0）。descriptor heap 下 push constant 经 vkCmdPushDataEXT
  * 供给（vkCmdPushConstants 与 descriptor heap 互斥——见 descriptorheaps.adoc :962-965）。
- * static_assert 锁死 heapIndex 落在 kPushIndexByte（漂移即编译失败）。 */
+ * static_assert 锁死 heapIndex 落在 kPushIndexByte（共享常量，现居 shader.cppm；漂移即编译失败）。 */
 struct EnvPrefilterPushData {
 	EnvPrefilterPush push;
 	uint32_t pad[2];
@@ -75,72 +71,13 @@ void EnvPrefilter::init(const VmaDescriptorHeap& resourceHeapIn,
 	samplerSlot = samplerSlotIn;
 }
 
-/** 契约见接口注释。实现：3 条 mapping（binding 0/1 = resource heap push-index 各烘焙到
- * 独立槽；binding 2 = sampler heap constant-offset 源）+ heap bit compute shader object。
- * push-index 配方（非 constant-offset）= RADV heap storage image 唯一验证可用路径（mip_gen
- * 同配方，docs/DESCRIPTOR_HEAP_SPEC.md）：push index 恒 0 → offset = heapOffset + 0×stride =
- * heapOffset（slot 固定，靠不同 level 的 shader object 绑不同槽换视图，非重写同槽）。 */
-std::expected<vk::raii::ShaderEXT, Error> EnvPrefilter::createLevelShader(uint32_t srcSlot,
-	uint32_t dstSlot) {
-	const uint32_t descriptorSize = resourceHeap->getDescriptorSize();
-	const uint32_t samplerDescriptorSize = samplerHeap->getDescriptorSize();
-
-	VkDescriptorSetAndBindingMappingEXT mappings[3]{};
-	// binding 0 = src sampled image（cube mip0；resource heap，push-index 源，heapOffset = src 槽字节偏移）
-	mappings[0].sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
-	mappings[0].firstBinding = 0;
-	mappings[0].bindingCount = 1;
-	mappings[0].resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
-	mappings[0].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_PUSH_INDEX_EXT;
-	mappings[0].sourceData.pushIndex.heapOffset = srcSlot * descriptorSize;
-	mappings[0].sourceData.pushIndex.pushOffset = kPushIndexByte;
-	mappings[0].sourceData.pushIndex.heapIndexStride = descriptorSize;
-	mappings[0].sourceData.pushIndex.heapArrayStride = descriptorSize;
-	mappings[0].sourceData.pushIndex.pEmbeddedSampler = nullptr;
-	mappings[0].sourceData.pushIndex.useCombinedImageSamplerIndex = VK_FALSE;
-	// binding 1 = dst storage image（cube 第 level 级 2DArray；resource heap，push-index 源）
-	mappings[1] = mappings[0];
-	mappings[1].firstBinding = 1;
-	mappings[1].sourceData.pushIndex.heapOffset = dstSlot * descriptorSize;
-	// binding 2 = sampler（sampler heap，constant-offset 源；一份全 level 共用、从不重写）
-	mappings[2].sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
-	mappings[2].firstBinding = 2;
-	mappings[2].bindingCount = 1;
-	mappings[2].resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
-	mappings[2].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
-	mappings[2].sourceData.constantOffset.heapOffset = samplerSlot * samplerDescriptorSize;
-	mappings[2].sourceData.constantOffset.heapArrayStride = 0;
-	mappings[2].sourceData.constantOffset.pEmbeddedSampler = nullptr;
-
-	VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{};
-	mappingInfo.sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT;
-	mappingInfo.mappingCount = 3;
-	mappingInfo.pMappings = mappings;
-
-	VkShaderCreateInfoEXT raw{};
-	raw.sType = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT;
-	raw.pNext = &mappingInfo;
-	raw.flags = VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT;
-	raw.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-	raw.codeType = VK_SHADER_CODE_TYPE_SPIRV_EXT;
-	raw.codeSize = code.size() * sizeof(uint32_t);
-	raw.pCode = code.data();
-	raw.pName = "main";
-	vk::ShaderCreateInfoEXT createInfo(raw);
-	try {
-		auto built = device.createShadersEXT(std::vector<vk::ShaderCreateInfoEXT>{createInfo});
-		return std::move(built[0]);
-	} catch (const vk::SystemError& e) {
-		return std::unexpected(Error{ErrorCode::VulkanError,
-			fmt::format("env_prefilter: compute shader object 创建失败（level {}）: {}", levels, e.what())});
-	}
-}
-
-/** 契约见接口注释。实现：建 shader object + 登记 src/dst 槽 + 追加 per-level 描述符链
+/** 契约见接口注释。实现：经共享点 shader.cppm::makePerLevelComputeShader 建 shader object
+ * （heap 尺寸由本类持有的两个 heap 现取）+ 登记 src/dst 槽 + 追加 per-level 描述符链
  * （deque 尾追加——元素地址不迁移，pView 指针稳定活过提交）。level index = mip level
  * （0 占位不用于预滤波生成，但同批建好以便按下标直接取）。 */
 std::expected<void, Error> EnvPrefilter::addLevel(uint32_t srcSlot, uint32_t dstSlot) {
-	auto shader = createLevelShader(srcSlot, dstSlot);
+	auto shader = makePerLevelComputeShader(device, code, srcSlot, dstSlot, samplerSlot,
+		resourceHeap->getDescriptorSize(), samplerHeap->getDescriptorSize(), levels, "env_prefilter");
 	if (!shader)
 		return std::unexpected(std::move(shader).error());
 	shaders.push_back(std::move(*shader));

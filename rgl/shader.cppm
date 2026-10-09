@@ -85,6 +85,99 @@ makeMappedCompute(vk::raii::Device& dev, const std::string& spvPath,
 	return std::move(shaders[0]);
 }
 
+/**
+ * push constant 里 heap push index 的字节偏移（= 第 5 个 uint32）。
+ *
+ * 两个使用方（env_prefilter / mip_gen）各自的
+ * `static_assert(offsetof(<各自>PushData, heapIndex) == kPushIndexByte)` 现在锁**同一个数**——
+ * 比原先两份各自 `constexpr` 更强：以前两个常量可以互相漂移而各自 assert 仍然通过，
+ * 于是两个模块对「push index 在哪」静默不一致。
+ */
+export inline constexpr uint32_t kPushIndexByte = 5 * 4;
+
+/**
+ * 逐 mip level 的 heap 映射 compute shader object。
+ *
+ * 3 条 mapping：binding 0 = src sampled image、1 = dst storage image（均 resource heap，
+ * **push-index 源**，heapOffset = 各自槽 × resourceDescriptorSize）；
+ * binding 2 = sampler（sampler heap，**constant-offset 源**，全 level 共用一份、从不重写）。
+ *
+ * push-index 配方（非 constant-offset）= RADV heap storage image 唯一验证可用路径
+ * （docs/DESCRIPTOR_HEAP_SPEC.md 坑 17）：push index 恒 0 → offset = heapOffset + 0×stride =
+ * heapOffset（slot 固定，靠不同 level 的 shader object 绑不同槽换视图，非重写同槽）。
+ *
+ * 只取 descriptor **尺寸**而非 heap 对象 —— 故本模块不依赖 VmaBuffer（**不加依赖边**）。
+ *
+ * @param dev                    逻辑设备
+ * @param code                   compute SPV 码流（调用方持有，逐 level 复用同一份）
+ * @param srcSlot                src sampled image 描述符在 resource heap 的槽号
+ * @param dstSlot                dst storage image 描述符在 resource heap 的槽号
+ * @param samplerSlot            共享 sampler 在 sampler heap 的槽号
+ * @param resourceDescriptorSize resource heap 槽大小
+ * @param samplerDescriptorSize  sampler heap 槽大小
+ * @param levelIndex             仅用于错误消息定位（= 正在建的 level 下标）
+ * @param sub                    错误消息前缀（"env_prefilter" / "mip_gen"，各站排查抓手）
+ * @return shader object；createShadersEXT 抛 vk::SystemError = 转 unexpected
+ */
+export [[nodiscard]] std::expected<vk::raii::ShaderEXT, Error>
+makePerLevelComputeShader(vk::raii::Device& dev, const std::vector<uint32_t>& code,
+	uint32_t srcSlot, uint32_t dstSlot, uint32_t samplerSlot,
+	uint32_t resourceDescriptorSize, uint32_t samplerDescriptorSize,
+	uint32_t levelIndex, std::string_view sub) {
+	VkDescriptorSetAndBindingMappingEXT mappings[3]{};
+	// binding 0 = src sampled image（resource heap，push-index 源，heapOffset = src 槽字节偏移）
+	mappings[0].sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
+	mappings[0].firstBinding = 0;
+	mappings[0].bindingCount = 1;
+	mappings[0].resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
+	mappings[0].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_PUSH_INDEX_EXT;
+	mappings[0].sourceData.pushIndex.heapOffset = srcSlot * resourceDescriptorSize;
+	mappings[0].sourceData.pushIndex.pushOffset = kPushIndexByte;
+	mappings[0].sourceData.pushIndex.heapIndexStride = resourceDescriptorSize;
+	mappings[0].sourceData.pushIndex.heapArrayStride = resourceDescriptorSize;
+	mappings[0].sourceData.pushIndex.pEmbeddedSampler = nullptr;
+	mappings[0].sourceData.pushIndex.useCombinedImageSamplerIndex = VK_FALSE;
+	// binding 1 = dst storage image（resource heap，push-index 源）。**整条 struct 赋值继承
+	// binding 0 已填的全部字段**（含 heapIndexStride / heapArrayStride / pushOffset），随后只改
+	// firstBinding 与 heapOffset——这是原 env_prefilter / mip_gen 两份实现的既有形态，
+	// 逐字段照搬，**勿"补齐"也勿"删掉 stride"**（改了就是改渲染参数）。
+	mappings[1] = mappings[0];
+	mappings[1].firstBinding = 1;
+	mappings[1].sourceData.pushIndex.heapOffset = dstSlot * resourceDescriptorSize;
+	// binding 2 = sampler（sampler heap，constant-offset 源；一份全 level 共用、从不重写）
+	mappings[2].sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
+	mappings[2].firstBinding = 2;
+	mappings[2].bindingCount = 1;
+	mappings[2].resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
+	mappings[2].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
+	mappings[2].sourceData.constantOffset.heapOffset = samplerSlot * samplerDescriptorSize;
+	mappings[2].sourceData.constantOffset.heapArrayStride = 0;
+	mappings[2].sourceData.constantOffset.pEmbeddedSampler = nullptr;
+
+	VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{};
+	mappingInfo.sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT;
+	mappingInfo.mappingCount = 3;
+	mappingInfo.pMappings = mappings;
+
+	VkShaderCreateInfoEXT raw{};
+	raw.sType = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT;
+	raw.pNext = &mappingInfo;
+	raw.flags = VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT;
+	raw.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+	raw.codeType = VK_SHADER_CODE_TYPE_SPIRV_EXT;
+	raw.codeSize = code.size() * sizeof(uint32_t);
+	raw.pCode = code.data();
+	raw.pName = "main";
+	vk::ShaderCreateInfoEXT createInfo(raw);
+	try {
+		auto built = dev.createShadersEXT(std::vector<vk::ShaderCreateInfoEXT>{createInfo});
+		return std::move(built[0]);
+	} catch (const vk::SystemError& e) {
+		return std::unexpected(Error{ErrorCode::VulkanError,
+			fmt::format("{}: compute shader object 创建失败（level {}）: {}", sub, levelIndex, e.what())});
+	}
+}
+
 /** shader 对象对的 SPV 码流（mesh + fragment 两阶段，RenderPipeline 构造输入）。 */
 export struct ShaderEffect {
 	std::vector<uint32_t> meshStageSpv;
