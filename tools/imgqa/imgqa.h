@@ -137,13 +137,43 @@ struct ProfileOpts {
     ///   `exposure` **全部被忽略**（真相在交付配置里，工具再抄一份就是第二份真相）；
     ///   `variant` 留空 = 尊重交付配置自己写的路线。
     ///
-    /// **三个例外**（`overridePicking` / `overrideEnvIntensity` / `overrideAoStrength`）：
-    /// 这三件事不是"工具再抄一份真相"，而是**A/B 实验本身**（关 IBL / 关 AO）与**测量所需的
-    /// 观测通道**（object_id 附件要 picking）。默认三个门全关 = 一个键都不多写 = 现有判据
-    /// 逐位不变；开了门才覆写，且覆写失败（键不存在）一律抛，**拒绝在旧值上下判据**。
+    /// **例外**（`overridePicking` / `overrideEnvIntensity` / `overrideAoStrength` /
+    /// `overrideShadowRoute` / `overrideLlmShot`）：这几件事不是"工具再抄一份真相"，而是
+    /// **A/B 实验本身**（关 IBL / 关 AO / 换软影档）与**测量所需的观测通道或采集形态**
+    /// （object_id 附件要 picking / 钉死帧号要 llm 截图）。默认所有门全关 = 一个键都不多写
+    /// = 现有判据逐位不变；开了门才覆写，且覆写失败（键不存在）一律抛，**拒绝在旧值上下判据**。
     bool overridePicking = false;       ///< true = 把 `diagnostics.picking` 写成 `picking`
     bool overrideEnvIntensity = false;  ///< true = 把 `scene.lua` 的 `env.intensity` 写成 `envIntensity`
     bool overrideAoStrength = false;    ///< true = 把 `scene.lua` 的 `ao.strength` 写成 `aoStrength`
+    /// **第 4 个例外**（批 N6d `shadow-softness`）：true = 覆写交付配置 `shadow.lua` 的
+    /// **软影滤波轴**——`mode` ← `shadowRouteMode`、`izb` ← **false**、并按
+    /// `shadowRouteSunDegrees` 写本档的 `sun_degrees`。
+    ///
+    /// 为什么 `izb` 必须被强制成 false（不是"顺手"）：IZB 是乘在软影之上的**光空间硬影 mask**，
+    /// 开着它测半影等于让硬影吞掉软影——实测带核比 0.097（开）vs 0.185（关）（§4.1）。
+    /// 交付形态（izb 开）的读数是 `izb` 命令的事，本判据测的是滤波轴本身。
+    /// `izb` 在交付配置里是**子表形态**（`{ on = true, grid = 512, dump_frame = 0 }`），
+    /// 引擎两种形态都收（布尔简写 = 只开关）⟹ 覆写器两种都要能吃，见 `overrideTopLevelValue`。
+    bool overrideShadowRoute = false;
+    std::string shadowRouteMode;  ///< "none"|"csm"|"pcss"|"evssm"（门开时必填，其余值抛）
+    /// `shadowRouteSunDegrees` ≥ 0 = 把它写进**本档**的 `sun_degrees`（pcss 档写 pcss 块、
+    /// evssm 档写 evssm 块——两档分立是消债-16⑤，写错块 = 静默拿出厂 0.53 当另一档的读数）。
+    /// < 0 = **不写键** = 出厂值 0.53（`evssm` 默认臂要的就是这个：用户看到的就是出厂值）。
+    /// 门开而 mode 是 none/csm 时给 ≥0 的值 = 抛（太阳角在两档下根本不进 shader，
+    /// 写进去是"配置里写了、什么都没发生"）。
+    double shadowRouteSunDegrees = -1.0;
+    /// **第 5 个例外**（批 N6d `shadow-softness`）：true = 一次性截图形态——`runtime.lua` 的
+    /// `llm_debug` ← true、`llm_shot.{file,size,delay_frames}` ← 给定值，并把 `diagnostics.rpc`
+    /// ← false（引擎既有约定：llm 截图在跑时 `/shot` 返 409，两种采集形态互斥）。
+    ///
+    /// 为什么必须有这根线而不是走 RPC `Engine`：**帧号**。交付场景 `spin` 在转，同配置第 8 帧
+    /// 与第 12 帧的影覆盖差 0.12pp（§4.1）⟹ 帧号是量具的一部分。RPC 的 `/shot` 落在哪一帧
+    /// 取决于 HTTP 往返与帧首钩子的先后（= 墙钟），`advanceFrames` 之后也是"大约第 N 帧"；
+    /// 而 `llm_shot.delay_frames` 是引擎在**第 N 帧渲染完成后**截图 = 精确钉死，同配置两跑
+    /// 逐位相同（evssm_plan §6.1 的确定性实测就是这条形态）。
+    bool overrideLlmShot = false;
+    std::string llmShotFile;       ///< `llm_shot.file`（相对引擎 CWD build/rgl；门开时必填）
+    int llmShotDelayFrames = 8;    ///< `llm_shot.delay_frames`（消费方写死，别用默认值——理由见上）
     std::string deliveryConfigDir;
     /// 可选机位（**写进 profile 的 camera.lua**，从第 1 帧生效）。false = 不动 camera.lua。
     ///
@@ -884,6 +914,44 @@ int cmdAoNoise(const std::string& glb, const std::string& camera, const std::str
 /// @param warm  预热帧数（历史收敛）
 /// @param variant 渲染路线（默认 forward）
 int cmdTaaSwim(int pairs, int warm, const std::string& variant);
+
+// ═══════════════════════════════════════════ 软影滤波轴量具（批 N6d 步 0）
+//
+// 判据设计定案 = `docs/shadow_routes_plan.md` §5.1，量具边界（为什么不是 shadow_rig）=
+// 同文件 §4.1。此处只放**度量层**的声明；口径为什么长这样逐条写在 shadow_softness.cpp 头注释。
+
+/// 一臂相对 `none` 参照的差分统计（§5.1 度量口径）。
+/// ⚠ **比较域 = 存储字节域的 Rec.709 加权和**（不是 `Frame::luma` 的线性域）——理由见
+///   `byteLuma` 注释：阈值 8/40 是 LSB 量，换域会让同一个数在暗部变成完全不同的判据。
+struct SoftArmMetrics {
+    double coverage = 0.0;   ///< 影覆盖率 = frac(Δ > 8 LSB)
+    double meanDark = 0.0;   ///< 平均变暗 = mean(max(Δ, 0))，LSB
+    double band = 0.0;       ///< 过渡带占比 = frac(8 < Δ ≤ 40)
+    double core = 0.0;       ///< 深本影占比 = frac(Δ > 40)
+    double bandCore = 0.0;   ///< 带核比 = band/core（core=0 时为 NaN，由调用侧显式处理）
+};
+
+/// 字节域 luma（0.2126/0.7152/0.0722 直接吃 8bit 字节，不做 sRGB 解码）。
+/// 为什么不用现成的 `Frame::luma`：那条是 sRGB 解码后的**线性**亮度（比较域单点在
+/// image.cpp），而本判据的阈值是**字节 LSB**（8/40）——线性域里 8 LSB 在暗部对应
+/// 0.0004 的相对量、在亮部对应 0.03，同一个阈值会变成"只量亮部"的判据。
+/// §4/§5 的全部现状数（9.84% / 0.14% / 1.955%）都在字节域，换域 = 换判据。
+[[nodiscard]] cv::Mat byteLuma(const cv::Mat& bgr);
+
+/// 一臂 vs `none` 参照的四数（两图尺寸必须相同，不同即抛）。
+[[nodiscard]] SoftArmMetrics measureSoftArm(const cv::Mat& refLuma, const cv::Mat& armLuma);
+
+/// 太阳角敏感度 = frac(|L_a − L_b| > 8 LSB)（§5.1 的 J1/J2 度量本体）。
+/// 与"覆盖率之差"的差别：它不看参照臂、只看两臂**逐像素**是否翻转，因此不会被
+/// "两边一起丢影"抵消（覆盖率之差在两条都丢影的档上是 0，看着像"无响应"）。
+[[nodiscard]] double sunSensitivity(const cv::Mat& lumaA, const cv::Mat& lumaB);
+
+/// 软影滤波轴量具（交付配置，五臂六跑）。**无 flag**：场景/臂/帧号/阈值都是量具的
+/// 组成部分，能调 = 能调绿（§5.1「阈值一旦写死就不许为了让它绿回头改」）。
+/// 三条判决线：J1 `shadow-softness-gauge-valid`（量具有效，必须绿）·
+/// J2 `shadow-softness-sun-response`（现状缺陷，**现在必须红**）·
+/// J3 `shadow-softness-vs-csm`（对账出数，advisory）。
+int cmdShadowSoftness();
 
 }  // namespace RGL::imgqa
 

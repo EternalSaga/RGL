@@ -144,6 +144,30 @@ std::vector<SubcommandSpec> specsSwimAndProbe()
             false,
             "",
         },
+        /* shadow-softness */
+        SubcommandSpec{
+            "shadow-softness",
+            "软影滤波轴量具：交付配置五臂的影形态 + 太阳角敏感度（J2 当前预期红）",
+            {
+            },
+            {
+                "场景 = **交付配置 configs/**（只覆写 shadow.lua，`izb` 强制 false）；**不是 shadow_rig**"
+                "——后者量不出半影（全部遮挡体 Δz≤12m 而级联 texelWorld 0.29…2.63m ⟹ penumbraTexels 恒<1），"
+                "理由全文 = `docs/shadow_routes_plan.md` §4.1 量具边界。",
+                "五臂六跑：`none`（参照）· `csm` · `evssm`（出厂 0.53°）· `evssm_sun0` · `pcss_sun0` · "
+                "`pcss_sun5`。后两条只服务 J1：量具自证必须走 PCSS 这条**不经过 EVSM 方差窗**的独立"
+                "「太阳角→半影」实现，拿 EVSSM 自己当锚点是循环论证（§5.1 的设计自纠）。",
+                "帧号写死第 12 帧（`llm_shot.delay_frames`，不走 RPC `/shot`）：交付场景 `spin` 在转，"
+                "同配置第 8 帧与第 12 帧影覆盖差 0.12pp ⟹ 帧号是量具的一部分，不是采集细节。",
+                "**无 flag 是设计**：场景 / 臂 / 帧号 / 阈值都是量具的组成部分，能调 = 能调绿"
+                "（§5.1「阈值一旦写死就不许为了让它绿回头改」）。",
+                "当前预期读数：J1 PASS · J2 **FAIL**（红 = 如实报告 §4 的缺陷「EVSSM 半影机制近乎恒等」，"
+                "不是判据坏了——判据坏了的是 J1）· J3 advisory 出数 · 确定性 PASS ⟹ **rc=1 是现状的"
+                "正确结果**，N6d 的 F1/F2 修完后才该归 0。",
+            },
+            false,
+            "",
+        },
         /* probe */
         SubcommandSpec{
             "probe",

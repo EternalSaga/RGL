@@ -46,6 +46,38 @@ const std::vector<JudgmentInfo>& foundationJudgments()
             "「井盖影时有时无」绰绰有余；亚格漂移本就不可见。平移搜索只认覆盖率 ≥80% 的候选"
             "（防止把「两边各遮一半」的垃圾平移当最优解）。",
             {"5a-7 平移游动 / 5a-8b 旋转游动（当年判据是人工三图对拍，本条机器化）"},},
+        {"shadow-softness-gauge-valid", JudgmentFamily::Foundation,
+            "下限 1.0%：本条是**量具自证**，不是画质判据——只要求「太阳角 0→5° 时，PCSS 这条"
+            "不经过 EVSM 方差窗的独立实现有 ≥1% 像素翻面」。§5.1 定案时探针实测 1.955%"
+            "（18019/921600，>8LSB），本命令首跑 1.928%（差 0.03pp = profile 构造路径不同，"
+            "同量级）；1.0% 取在现状的一半以下：它要吸收的是驱动/帧号/量化边界带来的抖动，"
+            "而不是把「量具根本没响应」也吸收掉——PCSS 的半影半径 = Δz·2tan(θ/2)/2/texelWorld，"
+            "5° 时按闭式远大于 1 纹素，读数真为 0 只可能是覆写没生效（izb 没关掉 / 帧号漂了 / "
+            "场景换成了量不出半影的 rig）。不给上限：本条没有「响应太大」的失效形态。",
+            {"docs/shadow_routes_plan.md §5.1（J1 为什么用 PCSS 不用 EVSSM：拿被测对象当锚点 = 循环论证）",
+             "docs/shadow_routes_plan.md §4.1 量具边界（shadow_rig 上 sun0↔sun5 实测 6 px / 逐位相同"
+             "——场景选错时这条必红，红的是量具不是缺陷）",
+             "shadow-softness 首跑（2026-10-09，8060S）：pcss 0°→5° = 1.928% >8LSB"
+             "（定案时探针 1.955%）"},},
+        {"shadow-softness-sun-response", JudgmentFamily::Foundation,
+            "下限 0.5%，且比的是**出厂太阳角 0.53°** 而不是 5°：0.53° 是用户看到的那一档，修复必须让"
+            "**默认配置**有响应（把 sun_degrees 拉到极端值才有反应 = 交付形态仍然是恒等）。量级依据 = "
+            "同一次运行里 PCSS 的独立实现响应（1.9%）：EVSSM 修好后至少该有它的几分之一，而不是它的"
+            "百分之一。本命令首跑实测 0.013%（>8LSB 120 px；同一对臂 any-diff 0.183% = §4 记的 0.14% "
+            "同口径）⟹ **本条当前必须红**：红 = 如实报告 §4 的机制缺陷（mip0 零方差 + 遮挡体落在归一化"
+            "深度窗外判全亮），不是判据坏了——判据坏了的是 J1。N6d 的 F1/F2 修完后本条必须转绿。",
+            {"docs/shadow_routes_plan.md §4 成因①②（零方差矩 ⟹ 只交付接触影；半影抬 mip 的入口在窗外）",
+             "docs/shadow_routes_plan.md §5.1 J2（现状 0.14% = 1245/921600）",
+             "shadow-softness 首跑：evssm 0°→0.53° = 120 px >8LSB / 1686 px any-diff（第 12 帧）"},},
+        {"shadow-softness-vs-csm", JudgmentFamily::Foundation,
+            "advisory：只出数不判红——「软影档相对 CSM 丢了多少覆盖 / 带核比低多少」是 N6d 的"
+            "**修复目标**（定 ≥0.9 / ≥1.0），不是当下的对错；拿它判红会把同一个已知缺陷重复计成"
+            "第二条失败。ok 只承载一条真不变量：**CSM 参照臂必须有本影**（coverage>0 且深本影>0），"
+            "否则两个比值是 NaN、对账本身不成立。分母取 CSM 而不是 none：§4.1 确证 B 记着「软影档"
+            "覆盖率低于 CSM 不是 EVSSM 独有」（PCSS 也丢 30%，机制是 blockerCnt==0 全亮早退），"
+            "但 CSM 是当前交付档 ⟹ 比值才是用户视角的得失。",
+            {"docs/shadow_routes_plan.md §4.1 确证 B（PCSS 也丢覆盖：9.84% → 6.89%，机制与 EVSSM 可分）",
+             "docs/shadow_routes_plan.md §4 画质表（EVSSM 带核比 0.185 vs CSM 1.021 = 边缘反而更硬）"},},
     };
     return kPart;
 }

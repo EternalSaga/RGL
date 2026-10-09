@@ -37,7 +37,10 @@ add_executable(imgqa
     temporal_homography.cpp
     temporal_yaw_remap.cpp
     material_attribution.cpp
-    aa_coverage.cpp)
+    aa_coverage.cpp
+    # 批 N6d 步 0：软影滤波轴量具（交付配置五臂 + 太阳角敏感度）。另立 TU 的理由同 aa_coverage：
+    # 判据本体（度量口径 + 三条判决线的阈值理由）与 CLI/引擎生命周期不是同一条改动缝。
+    shadow_softness.cpp)
 
 target_compile_features(imgqa PRIVATE cxx_std_23)
 target_include_directories(imgqa PRIVATE ${OpenCV_INCLUDE_DIRS})

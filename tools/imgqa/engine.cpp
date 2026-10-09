@@ -361,6 +361,234 @@ void checkShadersFresh()
             + "\n  修复：just build（重编 SPV；改 shader 契约/schema 再 just reflect）后重跑");
     }
 }
+
+// ── 交付配置覆写器的两个底层件（批 N6d 第 4/5 例外门）────────────────────────────
+//
+// 为什么不能复用 replaceValue / replaceValueInBlock（那两个服务的是"标量键 + 文档顺序
+// 里唯一的表"）：
+//  ① `izb = { on = true, grid = 512, dump_frame = 0 }` 的**值里有逗号**，
+//     `replaceValue` 按第一个 `,` 收尾 ⟹ 截在 `{ on = true` 后面 = 留下 `grid = 512 }`
+//     = Lua 语法错。引擎两种 izb 形态都收（布尔简写 = 只开关），覆写器两种都得能吃。
+//  ② `pcss  = {` 在 configs/shadow.lua 里是**两个空格**（对齐排版），
+//     `replaceValueInBlock` 找字面 `"pcss = {"` 直接抛「没有表 pcss」——排版改一个空格
+//     就让覆写器打偏，而打偏的方向是"抛"，看起来还像是配置的问题。
+//  ③ 表内找键必须**限定在该表的括号跨度内**：`sun_degrees` 在 pcss 与 evssm 两块里各有
+//     一份（两档分立是消债-16⑤），"从 pcss 块开头往后找第一个"在 pcss 缺键时会静默
+//     命中 evssm 那份 = 改错档、读数却标着 pcss。
+
+/// 定位 `key =` 之后**值**的跨度：标量吃到 `,`/换行，表值吃到配对 `}`（嵌套计数）。
+/// ⚠ 不支持"引号内含逗号/花括号"的值（`mode = "csm"` / 路径都不含，本工具的键已逐一核对）。
+std::pair<size_t, size_t> valueSpanAt(const std::string& text, size_t from,
+    const std::string& file, const std::string& what)
+{
+    size_t b = from;
+    while (b < text.size() && (text[b] == ' ' || text[b] == '\t'))
+        ++b;
+    if (b < text.size() && text[b] == '{') {
+        for (size_t i = b, depth = 0; i < text.size(); ++i) {
+            if (text[i] == '{')
+                ++depth;
+            else if (text[i] == '}' && --depth == 0)
+                return {b, i + 1 - b};
+        }
+        throw std::runtime_error("交付配置 " + file + " 的 `" + what + "` 表值没有收尾");
+    }
+    const size_t e = text.find_first_of(",\n", b);
+    return {b, (e == std::string::npos ? text.size() : e) - b};
+}
+
+/// 顶层口径的位置判据：键必须在行首（允许缩进）。
+bool hitAtTopLevel(const std::string& text, size_t p, size_t ls)
+{
+    return text.find_first_not_of(" \t", ls) == p;
+}
+
+/// 表内口径的位置判据：左邻必须是空白 / `{` / `,`（键名不得是更长标识符的后缀），
+/// 且不得落在本行 `--` 之后（行内注释里的键名不是覆写目标）。
+bool hitInsideTable(const std::string& text, size_t p, size_t ls, size_t end)
+{
+    const char left = p == ls ? ' ' : text[p - 1];
+    if (p != ls && !(left == ' ' || left == '\t' || left == '{' || left == ','))
+        return false;
+    const size_t dash = text.find("--", ls);
+    return dash == std::string::npos || dash >= end || dash >= p;
+}
+
+/// 命中的 `key` 算不算覆写目标（两种口径的判据本体，见 findKeyHits 注释）。
+/// 拆成独立函数的理由不是审美：本文件的样式护栏在认知复杂度 15，把"扫描"与"判据"混在
+/// 一个 while 里直接冲到 33（error 级）。
+bool isKeyHit(const std::string& text, size_t p, const std::string& key, size_t end,
+    bool lineStartOnly)
+{
+    const size_t ls = p == 0 ? 0 : text.rfind('\n', p - 1) + 1;
+    if (text.compare(ls, std::min<size_t>(2, end - ls), "--") == 0)
+        return false;  // 整行注释
+    if (!(lineStartOnly ? hitAtTopLevel(text, p, ls) : hitInsideTable(text, p, ls, end)))
+        return false;
+    size_t i = p + key.size();
+    while (i < end && (text[i] == ' ' || text[i] == '\t'))
+        ++i;
+    return i < end && text[i] == '=';  // 键名是更长标识符的前缀时这里挡住
+}
+
+/// 找 `key =` 的出现位置。两种口径：
+///  - **顶层**（lineStartOnly=true，同 insertAfterKey）：键必须在行首（允许缩进）——`izb` 因此
+///    不会命中 `izb_shadow = …`，也不会命中注释里 `"evssm" = 远场软影矩图` 那种散文。
+///  - **表内**（lineStartOnly=false）：`evssm = { sun_degrees = 0.53, … }` 的键**和表头同一行**，
+///    行首口径永远找不到它。改要求左邻是空白 / `{` / `,`，并排除"本行 `--` 之后"的命中。
+std::vector<size_t> findKeyHits(const std::string& text, const std::string& key,
+    size_t from = 0, size_t to = std::string::npos, bool lineStartOnly = true)
+{
+    std::vector<size_t> hits;
+    const size_t end = std::min(to, text.size());
+    for (size_t pos = from; (pos = text.find(key, pos)) != std::string::npos;) {
+        if (pos >= end)
+            break;
+        if (isKeyHit(text, pos, key, end, lineStartOnly))
+            hits.push_back(pos);
+        pos += key.size();
+    }
+    return hits;
+}
+
+/// 交付配置覆写器：**顶层**键整值替换（标量与表值都吃）。找不到 / 命中多处 / 形状不认识
+/// 一律抛——覆写失败必须在生成期炸，不能到判据里发现（同"三个例外"的纪律）。
+void overrideTopLevelValue(std::string& text, const std::string& file, const std::string& key,
+    const std::string& newValue)
+{
+    const auto hits = findKeyHits(text, key);
+    if (hits.size() != 1)
+        throw std::runtime_error("交付配置 " + file + " 里顶层键 `" + key + "` 命中 "
+            + std::to_string(hits.size()) + " 处（要恰好 1 处）——覆写目标不唯一或不存在，"
+              "拒绝在旧值上下判据");
+    const size_t eq = text.find('=', hits[0] + key.size());
+    if (eq == std::string::npos)
+        throw std::runtime_error("交付配置 " + file + " 的键 `" + key + "` 后面没有 `=`");
+    const auto span = valueSpanAt(text, eq + 1, file, key);
+    text.replace(span.first, span.second, newValue);
+}
+
+/// 读回**顶层键当前的值文本**（去空白），供覆写器写后自检用。
+/// 与 `overrideTopLevelValue` 走同一套定位判据 ⟹ 自检问的是"引擎会读到的那个值是什么"，
+/// 而不是"文件里有没有出现过这串字符"（后者会被注释里的同名示例骗到）。
+std::string topLevelValueOf(const std::string& text, const std::string& key,
+    const std::string& file)
+{
+    const auto hits = findKeyHits(text, key);
+    if (hits.size() != 1)
+        throw std::runtime_error("交付配置 " + file + " 里顶层键 `" + key + "` 命中 "
+            + std::to_string(hits.size()) + " 处（要恰好 1 处）——自检无法定位");
+    const size_t eq = text.find('=', hits[0] + key.size());
+    const auto span = valueSpanAt(text, eq + 1, file, key);
+    const std::string v = text.substr(span.first, span.second);
+    const auto a = v.find_first_not_of(" \t\r\n");
+    if (a == std::string::npos)
+        return "";
+    return v.substr(a, v.find_last_not_of(" \t\r\n") - a + 1);
+}
+
+/// 交付配置覆写器：**限定在某个表的括号跨度内**整值替换（表头允许任意空白，
+/// `pcss  = {` 这种对齐排版也认）。见文件头 ②③ 两条为什么必须有它。
+void overrideValueInTable(std::string& text, const std::string& file, const std::string& table,
+    const std::string& key, const std::string& newValue)
+{
+    // 表头：先按"顶层键"口径找 `table`，再要求其后（跳过 `=` 与空白）是 `{`
+    size_t head = std::string::npos;
+    for (const auto hit : findKeyHits(text, table)) {
+        size_t i = hit + table.size();
+        while (i < text.size() && (text[i] == ' ' || text[i] == '\t' || text[i] == '='))
+            ++i;
+        if (i < text.size() && text[i] == '{') {
+            head = i;
+            break;
+        }
+    }
+    if (head == std::string::npos)
+        throw std::runtime_error("交付配置 " + file + " 里没有表 `" + table + "`（或它不是表）"
+            "，无法覆写 " + key + "——拒绝在旧值上下判据");
+    const auto span = valueSpanAt(text, head, file, table);
+    const auto inner = findKeyHits(text, key, span.first, span.first + span.second, false);
+    if (inner.empty())
+        throw std::runtime_error("交付配置 " + file + " 的 `" + table + "` 表里没有键 `" + key
+            + "`（表跨度内未命中 = 不越界去别的表找，那会改错块）");
+    if (inner.size() > 1)
+        throw std::runtime_error("交付配置 " + file + " 的 `" + table + "` 表里 `" + key
+            + "` 命中 " + std::to_string(inner.size()) + " 处，覆写目标不唯一");
+    const size_t eq = text.find('=', inner[0] + key.size());
+    const auto val = valueSpanAt(text, eq + 1, file, table + "." + key);
+    text.replace(val.first, val.second, newValue);
+}
+
+/**
+ * 第 4 个例外门（批 N6d）：覆写交付配置 `shadow.lua` 的软影滤波轴。
+ * 门闭 = 直接返回（一个键都不写 = 现有判据逐位不变）。
+ * @throws 档名非法 / 键缺失 / 太阳角给了不消费它的档
+ */
+void applyShadowRouteGate(const std::string& dir, const ProfileOpts& o)
+{
+    if (!o.overrideShadowRoute)
+        return;
+    const std::string mode = o.shadowRouteMode;
+    if (mode != "none" && mode != "csm" && mode != "pcss" && mode != "evssm")
+        throw std::runtime_error("overrideShadowRoute=true 而 shadowRouteMode='" + mode
+            + "' 不是 none|csm|pcss|evssm 之一（拼错的档名引擎只在启动期喊，本工具在生成期就拒）");
+    std::string sh = readFile(dir + "/shadow.lua");
+    overrideTopLevelValue(sh, "shadow.lua", "mode", "\"" + mode + "\"");
+    // izb 强制关：交付配置写的是**子表形态**，这里整值换成布尔简写 `false`
+    // （引擎两形态都收）。留着它 = 硬影 mask 乘在软影之上 = 测的不是滤波轴（§4.1）。
+    overrideTopLevelValue(sh, "shadow.lua", "izb", "false");
+    if (o.shadowRouteSunDegrees >= 0.0) {
+        if (mode != "pcss" && mode != "evssm")
+            throw std::runtime_error("shadowRouteSunDegrees="
+                + std::to_string(o.shadowRouteSunDegrees) + " 而 mode='" + mode
+                + "'：太阳角只有 pcss/evssm 两档消费，写进 none/csm = 配置里写了、什么都没发生");
+        std::ostringstream v;
+        v << std::setprecision(9) << o.shadowRouteSunDegrees;
+        overrideValueInTable(sh, "shadow.lua", mode, "sun_degrees", v.str());
+    }
+    // 写出后自检：读回**解析后的值**比对，而不是在文件里搜字面量。
+    // "覆写了但没生效"是这类工具最贵的失效（键名打偏 = 静默拿出厂值下判据）。
+    // ⚠ 刻意不用 `sh.find("on = true") == npos` 那种"旧值离场"搜法：它把判据耦合到
+    //   **全文**（含注释）——configs/shadow.lua 的注释块正在讲子表形态怎么写，哪天补一行
+    //   `-- izB = { on = true, ... }` 示例，旧搜法就抛一句看不懂的"自检失败"。
+    const bool modeOk = topLevelValueOf(sh, "mode", "shadow.lua") == "\"" + mode + "\"";
+    const bool izbOk = topLevelValueOf(sh, "izb", "shadow.lua") == "false";
+    if (!modeOk || !izbOk)
+        throw std::runtime_error("shadow.lua 覆写后自检失败（mode=" + mode
+            + " / izb=false 之一没真正落上，读回值 = \"" + topLevelValueOf(sh, "mode", "shadow.lua")
+            + "\" / \"" + topLevelValueOf(sh, "izb", "shadow.lua")
+            + "\"）——拒绝在旧值上下判据");
+    writeFile(dir + "/shadow.lua", sh);
+}
+
+/**
+ * 第 5 个例外门（批 N6d）：把 profile 切成**一次性截图**形态（钉死帧号）。
+ * 门闭 = 直接返回。rpc 同时关掉是引擎既有约定（llm 截图在跑时 `/shot` 返 409）。
+ */
+void applyLlmShotGate(const std::string& dir, const ProfileOpts& o)
+{
+    if (!o.overrideLlmShot)
+        return;
+    if (o.llmShotFile.empty())
+        throw std::runtime_error("overrideLlmShot=true 而 llmShotFile 为空——截图落在哪里都不知道");
+    if (o.llmShotDelayFrames < 0)
+        throw std::runtime_error("llmShotDelayFrames 不能为负: "
+            + std::to_string(o.llmShotDelayFrames));
+    std::string rt = readFile(dir + "/runtime.lua");
+    replaceValue(rt, "runtime.lua", "llm_debug", "true");
+    overrideValueInTable(rt, "runtime.lua", "llm_shot", "file", "\"" + o.llmShotFile + "\"");
+    overrideValueInTable(rt, "runtime.lua", "llm_shot", "size",
+        "{ " + std::to_string(o.size[0]) + ", " + std::to_string(o.size[1]) + " }");
+    overrideValueInTable(rt, "runtime.lua", "llm_shot", "delay_frames",
+        std::to_string(o.llmShotDelayFrames));
+    if (rt.find("llm_debug = true") == std::string::npos)
+        throw std::runtime_error("runtime.lua 覆写后自检失败（llm_debug 不是 true）");
+    writeFile(dir + "/runtime.lua", rt);
+
+    std::string dg = readFile(dir + "/diagnostics.lua");
+    replaceValue(dg, "diagnostics.lua", "rpc", "false");
+    writeFile(dir + "/diagnostics.lua", dg);
+}
 }  // namespace
 
 /**
@@ -460,6 +688,14 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
 {
     // 守卫放在**最前面**：两条 profile 路径（交付 / 合成）都必须过它，放后面会被早退路径绕掉。
     checkFsrOpts(o);
+    // 第 4/5 例外门只在交付配置路径里有实现（合成路径的 shadow.lua/runtime.lua 是从零写的，
+    // 本来就能表达同一件事）。放在最前面同 checkFsrOpts 的理由：门开了却走合成路径 =
+    // **静默不生效** = 在出厂值上下判据，必须在生成期就拒。
+    if (o.deliveryConfigDir.empty() && (o.overrideShadowRoute || o.overrideLlmShot))
+        throw std::runtime_error(
+            "overrideShadowRoute / overrideLlmShot 是交付配置模式的例外门，而本 opts 没给 "
+            "deliveryConfigDir ⟹ 两个门根本没有实现路径（合成 profile 请直接写 shadowPass 等字段）。"
+            "开着门却静默不生效 = 在出厂值上下判据，拒绝生成");
     fs::create_directories(outDir);
     // ── 交付配置模式（批 13.1e）：基底 = 仓库 configs/，只覆写 headless / rpc / taa ──
     // 判据必须在**用户实际跑的那份配置**上求值（ProfileOpts::deliveryConfigDir 的注释里
@@ -547,6 +783,12 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
         }
         // 机位写进 camera.lua（**从第 1 帧生效**，理由见 ProfileOpts::hasCamera 的注释）
         applyCameraLua(outDir, o);
+        // 第 4/5 例外门（批 N6d `shadow-softness`）：门闭 = 函数第一行返回 = 交付配置
+        // 一个键都不多写 = 现有判据逐位不变。放在既有写盘**之后**、直接读写 profile 目录，
+        // 是为了让 makeProfile 本体不掺这两个门的 if（护栏：认知复杂度；语义：
+        // 「门闭 = 逐位不变」由门函数自己保证，不靠调用侧记得加 if）。
+        applyShadowRouteGate(outDir, o);
+        applyLlmShotGate(outDir, o);
         return outDir;
     }
     // render_graph.lua 定义图本身，**必须整份拷**（只给 {variant=...} 得 0 个

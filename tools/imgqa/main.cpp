@@ -756,10 +756,14 @@ int dispatch(const std::string& cmd, const Args& P)
         return dispatchTemporal(cmd, P);
     if (isRigCommand(cmd))
         return dispatchRig(cmd, P);
-    if (cmd == "selftest")
-        return cmdSelftest();
-    if (cmd == "check")
-        return cmdCheck();
+    // 元命令 selftest / check 同形（零 flag、零参数）⟹ 合成一条查表。不是审美：本函数的
+    // 认知复杂度已到护栏上限（15），加第 8 条子命令（shadow-softness）就出界；查表把两条
+    // if 收成一条，形态与上面「temporal 前缀」「isRigCommand 名字表」两条同构。
+    static const std::map<std::string, int (*)()> kMeta = {
+        { "selftest", cmdSelftest }, { "check", cmdCheck },
+    };
+    if (const auto meta = kMeta.find(cmd); meta != kMeta.end())
+        return meta->second();
     if (cmd == "refuse") {
         const auto pos = P.positional();
         return cmdRefuse(pos.empty() ? "" : pos[0]);
@@ -767,6 +771,8 @@ int dispatch(const std::string& cmd, const Args& P)
     if (cmd == "aa-coverage")
         return cmdAaCoverage(P.get("--variant"), P.integer("--warm"), P.number("--feedback"),
             P.has("--base-space"), P.number("--kernel"));
+    if (cmd == "shadow-softness")
+        return cmdShadowSoftness();  // 无 flag：默认值全在实现里的 constexpr（量具的组成部分）
     if (cmd == "taa-swim")
         return cmdTaaSwim(P.integer("--pairs"), P.integer("--warm"), P.get("--variant"));
     if (cmd == "note") {

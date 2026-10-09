@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <random>
 #include <set>
@@ -233,7 +234,9 @@ void testJudgmentFamilies(Checker& c)
     // 历史存活（防 `cameraJumps` 跳切假绿）/ 闭式锚 / 主判据。
     // 51 → 52 = 批 13.15b 的 C13 臂判决「修法验收」。
     // 52 → 54 = 批 14.5 FSR 臂两条守卫（`temporal-tail-step-fsr-floor` / `-basespace`）。
-    c.chk("判据总数 == 54（族拆分最容易掉条目）", all.size() == 54, std::to_string(all.size()));
+    // 54 → 57：批 N6d 步 0 的 `shadow-softness` 三条（J1 量具有效 / J2 现状缺陷 / J3 对账出数）。
+    // 这条硬计数的意义 = 族拆分/改名最容易掉条目，而掉掉的正是没人再读的那几条。
+    c.chk("判据总数 == 57（族拆分最容易掉条目）", all.size() == 57, std::to_string(all.size()));
     size_t n[4] = {0, 0, 0, 0};
     for (const auto& j : all) {
         switch (j.family) {
@@ -468,6 +471,291 @@ void testKeyValidation(Checker& c)
             threw = true;
         }
         c.chk("shadow.lua：evssm × 无图集 = 拒绝生成（不静默猜档）", threw);
+    }
+}
+
+// ── 软影滤波轴量具（批 N6d 步 0，shadow_softness.cpp）───────────────────────────
+//
+// 两条独立面，各自堵不同的失效：**臂塌缩**（生成的 shadow.lua 真的是那一臂）与
+// **度量算子**（期望全部来自定义本身，不吃截图）。实机数字只能证明「与上次一样」，
+// 闭式才能证明「算子算的是我说的那个量」（同 testAoMetrics 的纪律）。
+/// 跑一遍「期望抛异常」的构造，抛了算通过（本批用例专用；本文件别处的 throwsUsage 吃的是
+/// CLI 退出码，不是异常）。
+template <class F>
+bool softnessThrew(F fn)
+{
+    try {
+        fn();
+        return false;
+    } catch (const std::exception&) {
+        return true;
+    }
+}
+
+int64_t softnessCount(const std::string& text, const std::string& needle)
+{
+    int64_t n = 0;
+    for (size_t p = text.find(needle); p != std::string::npos; p = text.find(needle, p + 1))
+        ++n;
+    return n;
+}
+
+/// 生成一臂的 shadow.lua 文本（门的形态 = 整份拷交付配置 + 覆写，**不启引擎**）
+std::string softnessShadowOf(const char* mode, double sun)
+{
+    const std::string tmp = "/tmp/imgqa_selftest_softness";
+    ProfileOpts o;
+    o.deliveryConfigDir = projectRoot() + "/configs";
+    o.overrideShadowRoute = true;
+    o.shadowRouteMode = mode;
+    o.shadowRouteSunDegrees = sun;
+    makeProfile(tmp, o);
+    std::ifstream f(tmp + "/shadow.lua");
+    return std::string { std::istreambuf_iterator<char>{f}, {} };
+}
+
+/// makeProfile 的「不许抛」包装：门抛 = 覆写没成功（正确行为是响），但不该让整份自检
+/// 中途退出——后面的用例就再也不跑了。落成一条 FAIL 才既响又不吞。
+void softnessGen(Checker& c, const std::string& dir, const ProfileOpts& o)
+{
+    try {
+        makeProfile(dir, o);
+    } catch (const std::exception& e) {
+        c.chk("softness profile 生成成功（门不该抛：抛 = 覆写没成功）", false, e.what());
+    }
+}
+
+/// 面 A：臂塌缩与矛盾组合拒绝（生成的 shadow.lua 是不是真的那一臂）
+void testShadowSoftnessArms(Checker& c)
+{
+    const std::string tmp = "/tmp/imgqa_selftest_softness";
+    // 门抛 = 「拒绝在旧值上下判据」的正确行为，但**不该让整份自检中途退出**（后面的用例
+    // 就再也不跑了）——落成一条 FAIL 才既响又不吞（同 testKeyValidation 的 try/catch 先例）。
+    const auto shadowOf = [&c](const char* mode, double sun) {
+        try {
+            return softnessShadowOf(mode, sun);
+        } catch (const std::exception& e) {
+            c.chk("softness 臂生成成功（门不该抛：抛 = 覆写没成功）", false, e.what());
+            return std::string();
+        }
+    };
+    const auto countOf = softnessCount;
+
+    // ① 出厂档（sun 不写键）：mode 换对、izb 子表整值塌成布尔简写、两档 sun_degrees 原封不动
+    const std::string def = shadowOf("evssm", -1.0);
+    c.chk("softness 臂塌缩：mode=\"evssm\" 写对", def.find("mode = \"evssm\"") != std::string::npos);
+    c.chk("softness 臂塌缩：izb 子表整值换成布尔简写 false（旧子表键必须离场）",
+        def.find("izb = false") != std::string::npos && def.find("on = true") == std::string::npos,
+        "留 `grid = 512` = Lua 语法错；留 on = true = 硬影 mask 吞掉半影");
+    c.chk("softness 臂塌缩：sun 不写键 = 两档都还是出厂 0.53",
+        countOf(def, "sun_degrees = 0.53") == 2, std::to_string(countOf(def, "sun_degrees")));
+
+    // ② sun0 臂**真的写了 0**，而不是"没写"（没写 = 出厂 0.53 = 另一臂，判据就在出厂值上跑）
+    const std::string s0 = shadowOf("evssm", 0.0);
+    c.chk("softness 臂塌缩：evssm_sun0 真的写了 sun_degrees = 0（不是漏写）",
+        countOf(s0, "sun_degrees = 0,") == 1 && countOf(s0, "sun_degrees = 0.53") == 1);
+    // 写进**本档**的块：evssm 块头是文件里最后一个 "evssm"（前面两处都在注释里），
+    // sun_degrees = 0 必须落在它之后 —— 否则就是改到了 pcss 那份（两档分立是消债-16⑤）。
+    c.chk("softness 臂塌缩：sun_degrees=0 落在 evssm 块内（不越界改到 pcss）",
+        s0.rfind("evssm") < s0.find("sun_degrees = 0,"));
+
+    // ③ pcss 档同理反向对账：pcss 块被改、evssm 块保持出厂
+    const std::string p5 = shadowOf("pcss", 5.0);
+    c.chk("softness 臂塌缩：pcss_sun5 只改 pcss 块（evssm 仍是 0.53）",
+        countOf(p5, "sun_degrees = 5,") == 1 && countOf(p5, "sun_degrees = 0.53") == 1
+            && p5.find("sun_degrees = 5,") < p5.rfind("evssm"));
+
+    // ④ 矛盾组合一律拒（"配置里写了、什么都没发生" 是这类工具最贵的失效）
+    // 拒绝类用例走**未包装**的 softnessShadowOf：这里要的就是"它抛"（包装版会把抛吞成
+    // 一条 FAIL，两个方向都想要只能分开调用点）。
+    c.chk("softness 门：非法档名被拒",
+        softnessThrew([&] { softnessShadowOf("evssm_soft", -1.0); }));
+    c.chk("softness 门：太阳角给 csm 档被拒（csm 不消费它）",
+        softnessThrew([&] { softnessShadowOf("csm", 5.0); }));
+    c.chk("softness 门：没有 deliveryConfigDir 时开门被拒（合成路径无实现 = 静默不生效）",
+        softnessThrew([&] {
+            ProfileOpts o;
+            o.glb = "shadow_rig.glb";
+            o.overrideShadowRoute = true;
+            o.shadowRouteMode = "evssm";
+            makeProfile(tmp, o);
+        }));
+
+    // ⑤ 一次性截图门：帧号与开关都写对，且 rpc 同时关（引擎约定：llm 截图在跑时 /shot 409）
+    {
+        ProfileOpts o;
+        o.deliveryConfigDir = projectRoot() + "/configs";
+        o.overrideLlmShot = true;
+        o.llmShotFile = "screenshots/selftest_softness.png";
+        o.llmShotDelayFrames = 12;
+        softnessGen(c, tmp, o);
+        std::ifstream rt(tmp + "/runtime.lua");
+        const std::string rtText { std::istreambuf_iterator<char>{rt}, {} };
+        std::ifstream dg(tmp + "/diagnostics.lua");
+        const std::string dgText { std::istreambuf_iterator<char>{dg}, {} };
+        c.chk("softness 截图门：llm_debug=true + delay_frames=12 写对",
+            rtText.find("llm_debug = true") != std::string::npos
+                && rtText.find("delay_frames = 12") != std::string::npos);
+        c.chk("softness 截图门：file 落在 llm_shot 块内被改写",
+            rtText.find("selftest_softness.png") != std::string::npos
+                && countOf(rtText, "file = ") == 1);
+        c.chk("softness 截图门：rpc 同时关（两种采集形态互斥）",
+            dgText.find("rpc = false") != std::string::npos);
+        c.chk("softness 截图门：file 为空被拒", softnessThrew([&] {
+            ProfileOpts bad;
+            bad.deliveryConfigDir = projectRoot() + "/configs";
+            bad.overrideLlmShot = true;
+            makeProfile(tmp, bad);
+        }));
+    }
+
+}
+
+/// 面 C：`izb` 的**两种形态**都要能覆写（主 agent 的硬要求：两种都要能写，或明确拒绝一种）。
+/// 交付配置今天是子表形态（`{ on = true, grid = 512, dump_frame = 0 }`），面 A 已覆盖；
+/// 这里造一份布尔形态的临时交付目录——`izb = true` 改成 `false` 走的是**标量值跨度**那条分支
+/// （子表走的是配对 `}` 分支）。只测一条 = 交付配置哪天改成布尔简写时覆写器静默打偏。
+void testShadowSoftnessIzbForm(Checker& c)
+{
+    namespace fs = std::filesystem;
+    const std::string src = projectRoot() + "/configs";
+    const std::string dst = "/tmp/imgqa_selftest_softness_bool";
+    std::error_code ec;
+    fs::remove_all(dst, ec);
+    fs::create_directories(dst);
+    for (const auto& e : fs::directory_iterator(src)) {
+        if (e.path().extension() != ".lua")
+            continue;
+        fs::copy_file(e.path(), dst + "/" + e.path().filename().string(),
+            fs::copy_options::overwrite_existing);
+    }
+    // 把交付的 izb 子表整行换成布尔形态 true（引擎两形态都收：布尔简写 = 只开关）
+    std::ifstream in(dst + "/shadow.lua");
+    std::string sh { std::istreambuf_iterator<char>{in}, {} };
+    const size_t at = sh.find("izb = {");
+    const size_t tail = sh.find("},", at);
+    c.chk("softness 布尔形态靶：交付 shadow.lua 里找到 izb 子表（找不到 = 交付配置改了形）",
+        at != std::string::npos && tail != std::string::npos);
+    sh = sh.substr(0, at) + "izb = true," + sh.substr(tail + 2);
+
+    std::ofstream out(dst + "/shadow.lua");
+    out << sh;
+    out.close();
+    ProfileOpts o;
+    o.deliveryConfigDir = dst;
+    o.overrideShadowRoute = true;
+    o.shadowRouteMode = "evssm";
+    o.shadowRouteSunDegrees = 0.0;
+    softnessGen(c, dst + "/profile", o);
+    std::ifstream f(dst + "/profile/shadow.lua");
+    const std::string got { std::istreambuf_iterator<char>{f}, {} };
+    c.chk("softness 布尔形态：izb = true 被覆写成 false（标量分支）",
+        got.find("izb = false") != std::string::npos && got.find("mode = \"evssm\"") != std::string::npos,
+        "覆写器只吃子表分支的话，这里会留下 izb = true = 硬影 mask 吞掉半影");
+}
+
+/// 面 D：注释里的同名示例**不得**骗过覆写器的写后自检（主 agent 复核时加的回归靶）。
+/// 自检原本是 `sh.find("on = true") == npos` 那种"旧值离场"全文搜法——今天能过只因为
+/// configs/shadow.lua 的注释恰好没写这个字面量。哪天有人在注释里补一行子表写法示例，
+/// 旧搜法就抛一句"覆写后自检失败"，而配置其实是对的（排查方向会被带去怀疑覆写器）。
+/// 现在自检读回**解析后的值**，与注释彻底解耦。
+/// 变异红线：把 `topLevelValueOf` 换回全文搜字面量 → 本用例红。
+void testShadowSoftnessCommentTrap(Checker& c)
+{
+    namespace fs = std::filesystem;
+    const std::string src = projectRoot() + "/configs";
+    const std::string dst = "/tmp/imgqa_selftest_softness_trap";
+    std::error_code ec;
+    fs::remove_all(dst, ec);
+    fs::create_directories(dst);
+    for (const auto& e : fs::directory_iterator(src)) {
+        if (e.path().extension() != ".lua")
+            continue;
+        fs::copy_file(e.path(), dst + "/" + e.path().filename().string(),
+            fs::copy_options::overwrite_existing);
+    }
+    std::ifstream in(dst + "/shadow.lua");
+    std::string sh { std::istreambuf_iterator<char>{in}, {} };
+    const size_t at = sh.find("izb = {");
+    c.chk("softness 注释陷阱靶：交付 shadow.lua 里找到 izb 键", at != std::string::npos);
+    // 在 izb 键**之前**插一行讲子表写法的注释（含 `on = true` 字面量）
+    sh = sh.substr(0, at) + "    -- 子表形态示例：izb = { on = true, grid = 512, dump_frame = 0 }\n"
+        + sh.substr(at);
+    std::ofstream out(dst + "/shadow.lua");
+    out << sh;
+    out.close();
+
+    ProfileOpts o;
+    o.deliveryConfigDir = dst;
+    o.overrideShadowRoute = true;
+    o.shadowRouteMode = "csm";
+    softnessGen(c, dst + "/profile", o);  // 门内自检若被注释骗到 → 这里抛，chk 记红
+    std::ifstream f(dst + "/profile/shadow.lua");
+    const std::string got { std::istreambuf_iterator<char>{f}, {} };
+    c.chk("softness 注释陷阱：注释含 `on = true` 时覆写仍成功且 izb = false",
+        got.find("izb = false") != std::string::npos && got.find("mode = \"csm\"") != std::string::npos,
+        "自检若在全文搜 `on = true`，会因这行注释抛「覆写后自检失败」= 配置没错、工具自己错");
+}
+
+/// 面 B：度量算子的闭式期望（不吃截图——实机数字只能证明「与上次一样」）
+void testShadowSoftnessMetrics(Checker& c)
+{
+    // ⑥ 度量算子的闭式期望（字节域 luma + 四个差分统计 + 太阳角敏感度）
+    const auto flat = [](double v) {
+        cv::Mat m(2, 2, CV_64FC1, cv::Scalar(v));
+        return m;
+    };
+    cv::Mat bgr = cv::Mat(1, 3, CV_8UC3, cv::Scalar(0, 0, 0));
+    bgr.at<cv::Vec3b>(0, 1) = cv::Vec3b(0, 0, 255);  // 纯红
+    bgr.at<cv::Vec3b>(0, 2) = cv::Vec3b(255, 255, 255);
+    const cv::Mat lum = byteLuma(bgr);
+    c.chk("softness byteLuma：黑=0 / 纯红=0.2126×255 / 白=255（权重与通道序）",
+        std::abs(lum.at<double>(0, 0)) < 1e-9
+            && std::abs(lum.at<double>(0, 1) - 0.2126 * 255.0) < 1e-6
+            && std::abs(lum.at<double>(0, 2) - 255.0) < 1e-9);
+    {
+        const SoftArmMetrics same = measureSoftArm(flat(100.0), flat(100.0));
+        c.chk("softness 度量：同图 = 覆盖 0 且带核比 NaN（分母 0 不假装是 0）",
+            same.coverage == 0.0 && !std::isfinite(same.bandCore));
+        const SoftArmMetrics deep = measureSoftArm(flat(100.0), flat(50.0));  // Δ=50 > 40
+        c.chk("softness 度量：Δ=50 全落深本影（core=1、band=0、带核比 0）",
+            deep.coverage == 1.0 && deep.core == 1.0 && deep.band == 0.0
+                && deep.bandCore == 0.0 && std::abs(deep.meanDark - 50.0) < 1e-9);
+        const SoftArmMetrics soft = measureSoftArm(flat(100.0), flat(70.0));  // 8<Δ=30≤40
+        c.chk("softness 度量：Δ=30 全落过渡带（core=0 ⟹ 带核比 NaN）",
+            soft.coverage == 1.0 && soft.band == 1.0 && soft.core == 0.0
+                && !std::isfinite(soft.bandCore));
+        cv::Mat mix = flat(70.0);
+        mix.at<double>(1, 0) = 50.0;
+        mix.at<double>(1, 1) = 50.0;
+        const SoftArmMetrics both = measureSoftArm(flat(100.0), mix);
+        c.chk("softness 度量：半带半核 ⟹ 带核比恰 1.0（比值口径的阳性锚点）",
+            std::abs(both.band - 0.5) < 1e-12 && std::abs(both.core - 0.5) < 1e-12
+                && std::abs(both.bandCore - 1.0) < 1e-12);
+        // 区间开闭：8 不算、40 归带（定义是 8<Δ≤40）；写反 = 边界像素被算两次或一次不算
+        c.chk("softness 度量：Δ=8 不计（严格 >）、Δ=40 归过渡带（≤40）",
+            measureSoftArm(flat(100.0), flat(92.0)).coverage == 0.0
+                && measureSoftArm(flat(100.0), flat(60.0)).core == 0.0
+                && measureSoftArm(flat(100.0), flat(60.0)).band == 1.0);
+        // 反向用例：变亮不得计入"影"（否则 skybox 变化之类的整体提亮会伪装成覆盖率暴涨）
+        const SoftArmMetrics bright = measureSoftArm(flat(100.0), flat(120.0));
+        c.chk("softness 度量：变亮不计入覆盖、平均变暗恒非负",
+            bright.coverage == 0.0 && bright.meanDark == 0.0);
+        c.chk("softness 太阳角敏感度：同图 0 / Δ=8 不计 / Δ=9 全计（与覆盖同一判定线）",
+            sunSensitivity(flat(10.0), flat(10.0)) == 0.0
+                && sunSensitivity(flat(10.0), flat(2.0)) == 0.0
+                && sunSensitivity(flat(10.0), flat(1.0)) == 1.0);
+        c.chk("softness 度量：尺寸不同立刻抛（两臂不同帧/不同尺寸不能被算成 0 差）",
+            softnessThrew([&] { (void)measureSoftArm(flat(1.0), cv::Mat(3, 3, CV_64FC1, cv::Scalar(1.0))); }));
+    }
+
+    // ⑦ 三条判决线必须在注册表里（改名而漏挂号 = verdictFor 运行期才炸，太晚）
+    for (const char* name :
+        { "shadow-softness-gauge-valid", "shadow-softness-sun-response", "shadow-softness-vs-csm" }) {
+        bool found = false;
+        for (const auto& j : registeredJudgments())
+            found = found || std::string(j.name) == name;
+        c.chk("softness 判据已挂号进注册表", found, name);
     }
 }
 
@@ -1770,6 +2058,10 @@ int cmdSelftest()
     testYawRemapAnchors(c);
     testSmearPhiChain(c);
     testKeyValidation(c);
+    testShadowSoftnessArms(c);
+    testShadowSoftnessIzbForm(c);
+    testShadowSoftnessCommentTrap(c);
+    testShadowSoftnessMetrics(c);
     testCliRegistryShape(c);
     testCliArgsBehavior(c);
     std::printf("%s：%d 条失败\n", c.bad ? "自检失败" : "自检通过", c.bad);
