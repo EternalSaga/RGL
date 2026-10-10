@@ -195,11 +195,11 @@ vk_indirect_commands 显式使用）外**均无显式使用但被其他已启用
   ② 螺旋采样无投影 range check → 前景轮廓外一圈光晕；③ 施加点在 tonemap 合成处，**连直接光一起压**。
   `ao.strength=0` 逐位旁路，无常驻成本。**AO 噪点已量化结案：别再当"噪点闪烁"的嫌疑**（交付颗粒
   < 1 量化步长 = 不可见；TAA 关时 AO 逐帧静止）；可见形态是**屏幕锚定的相机移动爬行** → `git:调试历史` 2026-10-04
-- **湿面只加高光不压暗**：`_Wet` effective roughness 0.12 是**平台期**（无 SSR，实测三档 roughness
-  画面 p90 不动），真实湿面应同时压暗漫反射而这里没做 → 湿区略"亮而奶"。**Phase 15 结案它**；
-  旧前提「需 per-material wetness 进 scene data」**已被推翻**，而"wetness 走程序化"**也已修正**——
-  wetness 身份**已在 roughness 通道里**（资产就 3 个光滑材质、名字即 `Pavement_*_Wet*`），
-  程序化只管湿区内部空间变化 → `docs/phase15_plan.md` §2.4
+- **湿面（15.2 已落地，旧边界「只加高光不压暗」已结案）**：wetness 身份 = roughness 通道
+  （与 SSR 粗糙度门控同源）⟹ **跨场景光滑介质会被误判成湿**，需材质白名单；三项调制
+  （压暗/水洼粗糙度/水膜法线扰动）在 deferred_geometry 的 G-buffer，法线扰动**同时进
+  NdotL/AO/SSR**（不只反射项）；参数 = runtime.lua `wet` 块，`strength=0` = 逐位旁路
+  （湿面关锚 `5ff793bf…`）→ `docs/phase15_plan.md` §3.3
 - **灯契约（现行）**：`Light` 组件 + `index` = 列表位正序（画不画 = 实体有无；forward 读 index 0 = 主光，
   延迟按 index 落槽）；`SceneLight`/`GpuLight` 布局均走 C API 反射生成，无手写双源
 - **GPU culling（现行）**：三态门 **`diagnostics.cull_replay`，默认 `cpu`** = opaque 段由 **CPU 剔除**驱动、
