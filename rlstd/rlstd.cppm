@@ -203,6 +203,7 @@ using __gnu_cxx::operator<=>;
 export namespace std {
 
 namespace ranges {
+using std::ranges::all_of;
 using std::ranges::any_of;
 using std::ranges::copy_n;
 using std::ranges::find;

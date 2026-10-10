@@ -358,28 +358,58 @@ bool decorateVelocityPass(RgGraphDesc& desc) {
 }
 
 /**
- * decorateSsrPass 定义（契约见 render_graph.cppm 接口注释：跳过两条 + 次序契约）。
+ * decorateSsrPass 定义（契约见 render_graph.cppm 接口注释：跳过四条 + 次序契约）。
  *
  * 形状 = decorateAoApplyPass 的同构三件套（一个附件 + 一个全屏 pass + 换消费者色输入），
  * 三条纪律逐字继承：outputs = colorWrite + clear + store；色输入排 inputs 首位
  *（`sampledColorName` 取「首个 sampleRead 色附件」，别的色附件排前面会让后续装饰器认错
- * 场景色）；插入用 `begin() + consumerIdx`、换消费者输入用 `consumerIdx + 1`。
- * 与 ao_apply 的唯一结构差别：**没有**「taa 在图里就跳过」那条——本 pass 不是"施加点"，
- * 与 TAA 是串联关系（SSR 先合成、TAA 后滤波），而非互斥。
+ * 场景色——本 pass 的输入里有四个色附件（gbuffer_*），这条纪律比 ao_apply 更易被破，
+ * 由单测逐位钉输入序）；插入用 `begin() + consumerIdx`、换消费者输入用 `consumerIdx + 1`。
  */
 bool decorateSsrPass(RgGraphDesc& desc) {
-	// 锚点 = 「写 swapchain 且 sampleRead 色附件」的 pass（与 taa / velocity / ao_apply
-	// 同一个共享判据）；offscreen DIAG 变体用 blit 上屏（transferRead ≠ sampleRead）= 跳过。
+	// 跳过条件 1 = **装饰太晚**（taa / ao_apply 已在图里 ⟹ main_impl 的「SSR 先于它们装饰」
+	// 调用序被人挪错）。这条把那条调用顺序不变量变成**结构性**的，三件事必须写清：
+	//  ① 挪错的症状从「SSR 静默建在时域滤波之后」变成「SSR 静默消失」——前者图仍自洽
+	//    （能编译、无 hazard、无 warning，只是抖动网格不匹配且 SSR 不被滤波），图/布局/
+	//    像素三个层面都无异常，单测与冒烟全绿抓不到（缺口 2，phase15_plan §3.2）；后者
+	//    可被观测（tools/smoke.py --ssr 的双向核对看见 ssr RT 行消失即 FAIL）。
+	//  ② 端到端兜底 = 真 shader 落地后 `aa=taa` 档 SSR 开/关差分必须不同（那条判据由主
+	//    agent 在 15.1 后半验收执行，护栏设计 → phase15_plan §3.2 缺口 1/2）。
+	//  ③ 与 decorateAoApplyPass 的「taa 在图里就跳过」**语义不同**：那条是**互斥**（AO
+	//    施加点只能有一个），本条是**时序**（SSR 与 TAA 串联而非互斥——正确调用序下
+	//    taa/ao_apply 必然还没进图，本条不改变任何正确顺序的行为，只把「顺序错」变成
+	//    可观测失败）。别把两条读成同一种东西。
+	for (const auto& p : desc.passes)
+		if (p.name == std::string{kTaaPassName} || p.name == std::string{kAoApplyPassName})
+			return false;
+	// 跳过条件 2 = 找不到「写 swapchain 且 sampleRead 色附件」的锚点（与 taa / velocity /
+	// ao_apply 同一个共享判据）；offscreen DIAG 变体用 blit 上屏（transferRead ≠ sampleRead）。
 	const auto consumerIdx = swapchainColorConsumerIndex(desc);
 	if (!consumerIdx)
 		return false;
 	auto colorAtt = sampledColorName(desc, desc.passes[*consumerIdx]);  // 上一步已保证有值
-	// 跳过条件 2 = **SSR 的 deferred-only 边界**（D1 对等豁免已拍板，forward 不跟，
-	// 出处 `docs/phase15_plan.md` §0.1）：图里没有 G-buffer 的 position 附件 = forward 图，
-	// SSR 的权重全从 G-buffer 现成量算，没有落点。按**存在性**判（同 ao 附件那条判据）。
-	const bool hasGBufferPosition = std::ranges::any_of(desc.attachments,
-		[](const auto& a) { return a.name == std::string{kGBufferPositionName}; });
-	if (!hasGBufferPosition)
+	// 跳过条件 3 = **SSR 的 deferred-only 边界 + 附件存在性判据**（D1 对等豁免已拍板，
+	// forward 不跟，出处 `docs/phase15_plan.md` §0.1）。判据 = 「图里**逐一**有
+	// kGBufferAttachments 契约表的全部通道」，不再是前半的「有 position 即可」：本 pass
+	// 的 inputs 引用四个 G-buffer 通道，半张契约表（如只有 position）会装饰出引用不存在
+	// 附件的 pass（编译期「未知附件」错误，图起不来）。查**全表**而非只查消费的四个：
+	// 表就是契约，缺任何一通道 = 这不是 deferredRenderGraphDesc 产出的图，跳过比装饰出
+	// 悬空引用保守；emissive 虽不被采样，也是契约表成员，存在性上不豁免。
+	const bool gBufferContractHeld = std::ranges::all_of(kGBufferAttachments,
+		[&](const RgGBufferDesc& gb) {
+			return std::ranges::any_of(desc.attachments,
+				[&](const RgAttachmentDesc& a) { return a.name == gb.name; });
+		});
+	if (!gBufferContractHeld)
+		return false;
+	// 跳过条件 4 = 借不到可 store 的 depth。深度附件名从「插入点之前最后一个写 depth 的
+	// pass」反查（本文件头部「认角色不认名字」纪律，同 decorateVelocityPass），而**不是**
+	// 照 aoPass 硬编码 "depth"——那是内建图描述，"depth" 在同函数里定义；装饰器硬编码
+	// 违本文件纪律，且反查顺手把它的 storeOp 修成 store：depth 按「后续无人用」声明
+	// dontCare 的图会让本 pass 读到未定义内容、且编译期「后续使用的写必须 store」校验直接
+	// 失败（velocity 记过的教训）。usage 三件套（sampleRead/load/store）仍照 aoPass。
+	auto depthAtt = borrowDepthFromPriorWriter(desc, *consumerIdx);
+	if (!depthAtt)
 		return false;
 
 	desc.attachments.push_back(RgAttachmentDesc{
@@ -391,10 +421,20 @@ bool decorateSsrPass(RgGraphDesc& desc) {
 		.state = std::string{kSsrPassName},
 		.outputs = {RgPassAttachment{.attachment = std::string{kSsrAppliedName},
 			.usage = RgUsage::colorWrite, .loadOp = RgLoadOp::clear, .storeOp = RgStoreOp::store}},
-		// 输入序 = barrier 发射序：本批只有成片一个输入（G-buffer/深度在 shader 侧声明但
-		// 占位实现不采样；15.1 接线时在此**追加**，色必须恒排首位——同 ao_apply 那条纪律）。
+		// 输入序 = barrier 发射序，且**色恒排首位**：`sampledColorName` 取「首个
+		// sampleRead 色附件」，gbuffer_* 四通道全是色附件——任何一个排在成片前，下游
+		// taa / ao_apply 装饰就会认错场景色（ao_apply 同款纪律，那里是 ao）。其余顺序：
+		// G-buffer 由 geometry 写、light pass 采样时已转 ShaderReadOnly（本 pass 再声明
+		// = 幂等，但没有这条声明，真 shader 采样它们的布局保证就来自「没人中途写它」的
+		// 巧合而不是图——15.1 后半要拆的延迟引信）；depth 由 ao 之前的 geometry 写。
 		.inputs = {
 			RgPassAttachment{.attachment = *colorAtt, .usage = RgUsage::sampleRead}}};
+	for (const auto& gb : kGBufferAttachments)
+		if (gb.name != kGBufferEmissiveName)  // emissive 不被 SSR 消费，不声明读边
+			pass.inputs.push_back(RgPassAttachment{.attachment = std::string{gb.name},
+				.usage = RgUsage::sampleRead});
+	pass.inputs.push_back(RgPassAttachment{.attachment = *depthAtt, .usage = RgUsage::sampleRead,
+		.loadOp = RgLoadOp::load, .storeOp = RgStoreOp::store});
 	desc.passes.insert(desc.passes.begin() + static_cast<long>(*consumerIdx), std::move(pass));
 
 	// 消费者的色输入换成 SSR 后的成片。下游装饰器（本装饰之后才跑的 taa / ao_apply）此刻

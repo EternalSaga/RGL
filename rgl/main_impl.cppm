@@ -429,8 +429,9 @@ bool decorateTaaOrWarn(RgGraphDesc& desc, bool taaEnabled) {
 /**
  * 批 15.1 前半：SSR 图装饰（与 decorateVelocityOrWarn 同构；抽函数控复杂度）。
  * 关（默认）= 不调 decorateSsrPass = 图里根本没有这个 pass（**结构性**逐位不变，
- * 不是"有但旁路"）。开但图形态不支持（forward 图无 G-buffer position 附件 / offscreen
- * 变体无采色上屏消费者）= warn + false，装配层据 false 整套不建。
+ * 不是"有但旁路"）。开但图形态不支持（offscreen 变体无采色上屏消费者 / 图缺 G-buffer
+ * 契约表通道（forward 图 = D1 豁免）/ 借不到可 store 的 depth）= warn + false，
+ * 装配层据 false 整套不建。
  * @return 是否真正装饰落图
  */
 bool decorateSsrOrWarn(RgGraphDesc& desc, bool ssrEnabled) {
@@ -440,8 +441,9 @@ bool decorateSsrOrWarn(RgGraphDesc& desc, bool ssrEnabled) {
 		return true;
 	if (auto* logger = RLLogger::getInstance())
 		logger->warn("ssr: 图形态不支持 SSR 装饰（锚点 = 写 swapchain 且采样场景色的 pass，"
-			"且图里须有 G-buffer position 附件 = deferred 图；forward 不跟 = D1 对等豁免，"
-			"docs/phase15_plan.md §0.1），本次运行无屏幕空间反射");
+			"且图里须有 G-buffer 契约表全部通道 = deferred 图，且锚点前须有可 store 的 depth "
+			"写者；forward 不跟 = D1 对等豁免，docs/phase15_plan.md §0.1；或 taa/ao_apply "
+			"已在图里 = 装饰太晚，见 decorateSsrPass 跳过条件 1），本次运行无屏幕空间反射");
 	return false;
 }
 
@@ -486,10 +488,11 @@ CompiledGraphResult compileGraphOrThrow(const char* path, const RuntimeConfig& r
 	//     （sampledColorName）⟹ SSR 先插，它们自动读到 ssr_applied，链自己接成
 	//     scene_hdr → ssr_applied → [taa_out | ao_applied] → tonemap。这是这些装饰器可
 	//     复合的既有性质，不要破坏它。TAA 读到含 SSR 的成片 = 正确（时域滤波该滤最终画面）。
-	// ⚠ **这条顺序不变量当前只由本注释承载**：把下面这行挪到 taa / ao_apply **之后**，图**仍然
-	//   自洽**（能编译、无 hazard、无 warning，只是 SSR 落到时域滤波之后 = 抖动网格不匹配），
-	//   而单测与冒烟全绿抓不到（缺口论证 → phase15_plan §3.2；后半要收进可测函数并断言
-	//   装配后图里 ssr 的 pass 下标 < taa 的 pass 下标）。
+	// 批 15.1 后半：这条顺序不变量不再只由本注释承载——decorateSsrPass 跳过条件 1 在
+	//   taa / ao_apply 已在图里时返回 false（= SSR 静默消失，smoke --ssr 双向核对可见），
+	//   把「挪错顺序」从不可观测（SSR 静默建在时域滤波之后 = 图/布局/像素三层全无异常）
+	//   变成可观测失败。挪错顺序的端到端兜底（aa=taa 档 SSR 开/关差分必须不同）→
+	//   phase15_plan §3.2 缺口 1/2。
 	// 默认关 = 不调用 = 图逐位不变（D10 纪律；门 = runtime.lua ssr.enabled，与 aa 正交）。
 	const bool ssrDecorated = decorateSsrOrWarn(graphConfig->desc, ssrEnabled);
 	// 批 12.6 TAA 装饰**必须最后**（在 picking / highlight / shadow 之后）：它把

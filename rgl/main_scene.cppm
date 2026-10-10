@@ -107,8 +107,8 @@ uint32_t evssmMomentsSlotOf(Resources& resources) {
  * G-buffer 领槽 + light 条目（Phase 7 D1；批 15.1 前半把领槽条件放宽到
  * `deferredMode || ssrDecorated` 后抽成 helper 控 assembleBackEnd 行数）。
  * 领槽 = ensureDeferredGBufferSlots（幂等，light / ssr 条目复用同一组槽号）；light
- * 条目仅 deferred 建（forward 图没有 G-buffer 附件，ssr 装饰器的跳过条件 2 也保证
- * ssrDecorated ⟹ 图里有 gbuffer_position ⟹ 槽可领）。
+ * 条目仅 deferred 建（forward 图没有 G-buffer 附件，ssr 装饰器的跳过条件 3 也保证
+ * ssrDecorated ⟹ 图里 kGBufferAttachments 契约表全部通道都在 ⟹ 槽可领）。
  */
 std::optional<std::array<uint32_t, 5>> gBufferSlotsAndLightEntry(
 	Resources& resources, SamplerLibrary& samplers, RenderTargetCache& rtCache,

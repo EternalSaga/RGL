@@ -636,12 +636,17 @@ export bool decorateAoApplyPass(RgGraphDesc& desc);
  *（state="ssr"，读本帧成片写 ssr_applied）+ 把「写 swapchain 且采色」那个 pass（tonemap）
  * 的色输入换成 `ssr_applied`。没有帧末 copy（不跨帧）。
  *
- * **跳过条件（两条，缺一即不插，返回 false）**：
- *  1. 找不到「写 swapchain 且 sampleRead 色附件」的消费者（offscreen DIAG 变体用 blit
+ * **跳过条件（四条，任一命中即不插、返回 false，图不变）**：
+ *  1. 图里已有 `taa` 或 `ao_apply` pass —— **装饰太晚**（调用序不变量的结构性护栏：症状
+ *     从不可观测的「SSR 建在时域滤波之后」变成可观测的「SSR 消失」）。与 ao_apply 的
+ *     「taa 在图里就跳过」**语义不同**：那条是互斥（施加点唯一），本条是时序（串联）。
+ *  2. 找不到「写 swapchain 且 sampleRead 色附件」的消费者（offscreen DIAG 变体用 blit
  *     上屏，transferRead ≠ sampleRead）——与 taa / velocity / ao_apply 同一锚点判据。
- *  2. 图里没有 G-buffer 的 position 附件（= forward 图）。**这就是 SSR 的 deferred-only
- *     边界**：D1 对等豁免已拍板（forward 不跟，`docs/phase15_plan.md` §0.1），SSR 的权重
- *     全从 G-buffer 现成量算，forward 图没有落点。
+ *  3. 图里没有 **kGBufferAttachments 契约表的全部通道**（缺一即跳过）。**这就是 SSR 的
+ *     deferred-only 边界**：D1 对等豁免已拍板（forward 不跟，`docs/phase15_plan.md` §0.1）；
+ *     查全表而非只查 position = 本 pass 的 inputs 引用四个 G-buffer 通道，半张契约表会
+ *     装饰出引用不存在附件的 pass（编译期即错）。
+ *  4. 插入点之前没有可 store 的 depth 写者（本 pass 以 sampleRead 读深度图）。
  * ⟹ 门关（`runtime.ssr.enabled = false`，默认）= 根本不调本函数 = 图里没有这个 pass，
  *    **结构性**逐位不变（不是"有但旁路"——运行时分支挡不住 slang 的浮点重排，教训原文在
  *    `shaders/light.frag.slang` 的 IZB_CONSUME 注释）。
@@ -649,11 +654,12 @@ export bool decorateAoApplyPass(RgGraphDesc& desc);
  * **次序契约**：必须在 velocity / taa / ao_apply 三个装饰**之前**调（本 pass 读 light 的
  * 产物 scene_hdr，且这三个装饰器都动态读「消费者当前的色附件」⟹ SSR 先插它们自动读到
  * ssr_applied，链自己接成 scene_hdr → ssr_applied → [taa_out | ao_applied] → tonemap）。
- * 与 ao_apply 的关键差别：本装饰**不看** taa 在不在图里——它不是"施加点"，与 TAA 可串联
- *（TAA 读到含 SSR 的成片 = 正确，时域滤波该滤最终画面）。
+ * 与 ao_apply 的关键差别：ao_apply 的「taa 在图里就跳过」是**互斥**（AO 施加点只能有一个），
+ * 本装饰的跳过条件 1 是**时序**——SSR 与 TAA 是串联（TAA 读到含 SSR 的成片 = 正确，时域
+ * 滤波该滤最终画面），那条只是把"调用序挪错"变成可观测失败，不改变正确顺序下的行为。
  *
  * @param desc 图声明（原地修改）
- * @return true = 已装饰；false = 按上面两条跳过（图不变）
+ * @return true = 已装饰；false = 按上面四条跳过（图不变）
  */
 export bool decorateSsrPass(RgGraphDesc& desc);
 

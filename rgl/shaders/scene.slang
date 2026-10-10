@@ -326,6 +326,22 @@ float2 uvFromWorld(float3 world, ObjectMatrix m)
     return uvFromClip(mulM(m, float4(world, 1.0)));
 }
 
+// octahedral 解码（与 deferred_geometry.frag octEncode 同式自反；McTaggart **标准形
+// +signNotZero**——折叠乘子两端必须一致。旧 −signNotZero 在赤道带 z≈0⁻ 产生 180°
+// 翻转，2026-09-15 勘误）
+//
+// 批 15.1 后半自 light.frag 抬入本段（与 clipToWorld/worldFromDepth 同因、同法）：
+// 它同属「从 G-buffer/深度恢复几何量」一族，而消费者从 light.frag 一个变成 light.frag +
+// ssr.frag 多个——逐字各存一份正是上面段头写明的漂移形态（改了两处忘第三处不报错、
+// 画面照样动）。抬升 = 逐字搬移，一个算术 bit 未动；红线 = `just regress ab` 逐位相同。
+float3 octDecode(float2 e)
+{
+    float3 n = float3(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
+    if (n.z < 0.0)
+        n.xy = (1.0 - abs(n.yx)) * select(n.xy >= 0.0, 1.0, -1.0);
+    return normalize(n);
+}
+
 // ── 批 12.6 TAA（时域抗锯齿）尾区 ──
 //
 // 基址与 C++ 侧 scene_data.cppm kSceneDataTaa* 手写同源（两侧 static_assert 钉死）：

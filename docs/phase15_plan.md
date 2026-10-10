@@ -333,21 +333,36 @@ ssr_applied > scene_hdr`**（FSR 仍整条顶掉）。装饰器**可复合性**�
 | `main_scene` 里 **taa 条目的色输入退回 `hdrSlot`** | **绿**（275 例全过） | ⚠ 缺口 1 |
 | **`decorateSsrOrWarn` 调用挪到装饰序列最后** | **绿**（275 例 + 冒烟 + syncval 全过） | ⚠ 缺口 2 |
 
-**⚠ 两个已确认、当前无任何检查覆盖的缺口（15.1 后半必堵，别当"已护栏"）**：
+**⚠ 两个已确认的缺口（主 agent 实测；一个已闭合、一个仍开放）**：
 
-1. **「烘进管线条目的堆槽」这条通道全裸**。把 `addTaaEntry` 的色输入退回 `hdrSlot`（= 图上写
-   `ssr_applied`、描述符指 `scene_hdr`）后：单测全绿、`--ssr --aa taa --syncval` `errors=0`、
-   出图正常。原因是两张图都在 `eShaderReadOnlyOptimal`，VVL 无从分辨；而占位拷贝下像素又
-   恰好相同，逐位判据也抓不住。**真 shader 下的症状 = SSR 在 `aa=taa` / `aa=fsr` 档完全无效**，
-   而 §3 给 15.1 定的判据（闭式靶）只在 `aa=off` 跑 ⟹ 抓不到。
-   **后半必加的护栏 = SSR 开/关差分在 `aa` 三档各测一次**：`aa=taa` / `aa=fsr` 两档
-   SSR-on 与 SSR-off **必须不同**（不同 = 那条通道的描述符真的指向了 SSR 产物）。
-2. **装饰器调用顺序这条不变量只由注释承载**。把 `decorateSsrOrWarn` 挪到 taa/ao_apply 之后，
-   图**仍然自洽**（能编译、无 hazard、无 warning）——只是 SSR 落到时域滤波之后（抖动网格不匹配
-   + SSR 不被滤波）。差分覆盖率那条护栏**抓不到它**（SSR 仍然生效、只是位置不对）。
-   **后半必加的护栏**：把装饰序列收进一个可测函数，对 `aa × ssr` 全组合断言**装配后图里
-   `ssr` 的 pass 下标 < `taa` 的 pass 下标**（顺序错了即红）。现在做不到是因为序列内联在
-   `compileGraphOrThrow` 里，测试不可达。
+1. **仍开放——「烘进管线条目的堆槽」这条通道全裸**。把 `addTaaEntry` / `addAoApplyEntry` 的色
+   输入退回 `hdrSlot`（= 图上写 `ssr_applied`、描述符指 `scene_hdr`）后：单测 275 例全绿、
+   `--ssr --aa taa --syncval` `errors=0`、出图正常。原因是两张图都停在 `eShaderReadOnlyOptimal`，
+   VVL 无从分辨；而占位拷贝下像素又恰好相同，逐位判据也抓不住。**真 shader 下的症状 = SSR 在
+   `aa=taa` / `aa=fsr` 档完全无效**，而 §3 给 15.1 定的判据（闭式靶）只在 `aa=off` 跑 ⟹ 抓不到。
+   **后半必加的护栏 = SSR 开/关差分在 `aa` 三档各测一次**：`aa=taa` / `aa=fsr` 两档 SSR-on 与
+   SSR-off **必须不同**（不同 = 那条通道的描述符真的指向了 SSR 产物）。
+2. **已闭合——装饰器调用顺序不变量**（原先只由注释承载）。实测：把 `decorateSsrOrWarn` 挪到
+   taa / ao_apply 之后，图**仍然自洽**（能编译、无 hazard、无 warning），只是 SSR 落到时域滤波
+   之后（抖动网格不匹配 + SSR 不被滤波），单测与冒烟全绿。
+   **闭合方式** = `decorateSsrPass` 新增「`taa` / `ao_apply` 已在图里 ⟹ 跳过」这条**时序**判据
+   （形状照 `decorateAoApplyPass`，但语义是**时序**不是**互斥**——正确调用序下根本走不到它）。
+   它把挪错顺序的症状从「SSR 静默建在滤波之后（图/布局/像素三层面无异常）」变成「SSR 静默消失」
+   （`smoke --ssr` 双向核对看见 RT 行消失即 FAIL）——**可观测性**是这条护栏的全部价值。
+
+**已完成子步：ssr pass 的真实读边 + `octDecode` 单一来源 + 顺序不变量结构性化**
+
+三件事：① `decorateSsrPass` 的 `inputs` 补齐 4 个 G-buffer 通道 + depth（此前 shader 已声明
+却未在图上声明读边 = **延迟引信**：占位体不采样所以无害，真 shader 一采样，布局保证就来自
+"没人中途写它"这个巧合而不是来自图）；深度名走本文件既有的 `borrowDepthFromPriorWriter`
+反查而非硬编码 `"depth"`（顺带修 storeOp，`dontCare` 图会让本 pass 读到未定义内容）。
+② `octDecode` 自 `light.frag` 逐字抬进 `scene.slang`——SSR 是第二个消费者，与当年
+`clipToWorld` 三份拷贝的漂移形态同因，同法处理（红线 = `regress ab` 逐位相同，已实测）。
+③ 缺口 2 的结构性护栏（见上）。
+
+主 agent 质检变异三条**全红**（形态与实现者所验不同，各攻击它自己声称的东西）：时序判据漏查
+`ao_apply` → 红 1 例；把 gbuffer 色附件排到成片**之前** → 红 2 例（"色恒排首位"确实被逐位钉住）；
+时序判据挪到附件 `push_back` **之后** → 红 1 例（失败路径不留半成品附件，taa/ao_apply 两侧都钉）。
 
 ## 4. 红线与纪律
 

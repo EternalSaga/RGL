@@ -176,8 +176,8 @@ export struct RuntimeConfig {
 	 *
 	 * 与 `aa` 三态键**正交**（拍板记录 → `docs/phase15_plan.md` §3 批 15.1）：`aa` 管
 	 * 「谁做抗锯齿」（TAA/FSR），SSR 是独立特性，两键可任意组合（SSR 开 × aa 三档都要冒烟）。
-	 * deferred-only：forward 图无 G-buffer，装饰器按「图里没有 gbuffer_position 附件」跳过
-	 *（D1 对等豁免 → `docs/phase15_plan.md` §0.1）。
+	 * deferred-only：forward 图无 G-buffer，装饰器按「图里缺 kGBufferAttachments 契约表
+	 * 任一通道」跳过（D1 对等豁免 → `docs/phase15_plan.md` §0.1）。
 	 */
 	bool ssrEnabled = false;
 

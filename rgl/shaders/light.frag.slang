@@ -90,16 +90,9 @@ struct LightInput
     float2 uv       : TEXCOORD0;
 };
 
-// octahedral 解码（与 deferred_geometry.frag octEncode 同式自反；McTaggart **标准形
-// +signNotZero**——折叠乘子两端必须一致。旧 −signNotZero 在赤道带 z≈0⁻ 产生 180°
-// 翻转，2026-09-15 勘误）
-float3 octDecode(float2 e)
-{
-    float3 n = float3(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
-    if (n.z < 0.0)
-        n.xy = (1.0 - abs(n.yx)) * select(n.xy >= 0.0, 1.0, -1.0);
-    return normalize(n);
-}
+// octDecode（G-buffer oct 法线解码）批 15.1 后半起走 `import scene;` 单一来源——
+// 本文件曾是唯一消费者，ssr.frag 是第二个；抬升理由与逐字搬移纪律见 scene.slang
+// 「屏幕 ↔ 世界重建」段头（clipToWorld 先例）。
 
 // 单灯 GGX 贡献（与 model_pbr.frag 逐式相同，epsilon 相对化 1e-7·a2）；atten = 距离衰减
 float3 shadeLight(float3 N, float3 V, float3 albedo, float metallic, float roughness,
