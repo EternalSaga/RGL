@@ -18,6 +18,7 @@
         {"vk_type": "vk::PhysicalDeviceFeatures2", "path": "features.robustBufferAccess", "name": "robustBufferAccess"},
         {"vk_type": "vk::PhysicalDeviceFeatures2", "path": "features.shaderInt64", "name": "shaderInt64"},
         {"vk_type": "vk::PhysicalDeviceFeatures2", "path": "features.fragmentStoresAndAtomics", "name": "fragmentStoresAndAtomics"},
+        {"vk_type": "vk::PhysicalDeviceFeatures2", "path": "features.multiDrawIndirect", "name": "multiDrawIndirect"},
         {"vk_type": "vk::PhysicalDeviceVulkan11Features", "path": "shaderDrawParameters", "name": "Vulkan11::shaderDrawParameters"},
         {"vk_type": "vk::PhysicalDeviceVulkan11Features", "path": "multiview", "name": "Vulkan11::multiview"},
         {"vk_type": "vk::PhysicalDeviceVulkan11Features", "path": "storageBuffer16BitAccess", "name": "Vulkan11::storageBuffer16BitAccess"},
