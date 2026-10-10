@@ -6,9 +6,9 @@
 // tonemap 当乘数把开阔处（occlusion=0）直接乘成黑（实测 strength=1 整幅全黑）。存可见度
 // 的另一好处：RT 本身就是一张可直接复合的乘数图，将来接模糊/升采样不必再翻转。
 //
-// 为什么 depth-only：默认变体是 forward，没有 G-buffer 可读法线；加 depth prepass 等于把
-// 283 万三角形的光栅化再跑一遍，而本机已判定 **CPU-bound**（Phase 9 批 9.4，GPU 侧只剩
-// ≈3 ms 余量）。法线改由"重建世界坐标的屏幕空间导数叉积"给出——不增几何、不增附件。
+// 为什么 depth-only：本 pass 同时挂在 forward 与 deferred 两张图上，forward 没有 G-buffer
+// 可读法线；加 depth prepass 等于把 283 万三角形的光栅化再跑一遍。法线改由"重建世界坐标的
+// 屏幕空间导数叉积"给出——不增几何、不增附件。
 //
 // 消费的 scene data 槽位**全部既有**，本 shader 不新增任何契约字段：
 //   @12 eyePos vec3（scene.slang 头内）—— 视线方向判"采样点是否更靠相机"；

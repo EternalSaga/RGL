@@ -1718,6 +1718,324 @@ def scene_penumbra_ladder() -> Scene:
     return s
 
 
+# ---------------------------------------------------------------------------
+# 场景 8：ssr_rig —— 屏幕空间反射的**闭式**靶（Phase 15 批 15.0）
+# ---------------------------------------------------------------------------
+# ## 为什么必须新造靶，而不是在 env_band 上加一根柱
+#
+# env_band 的 A5 断言是**单变量纪律**（四 piece 同色板位、同几何、metallic 全 1，只有
+# roughness 不同）。加柱会直接违反它自己的断言；nm_rig 当年也是同一个理由另造的靶
+# （见本文件「为什么必须新造一个靶，而不是在 env_band 上加纹理」）。
+#
+# ## 判据为什么是闭式的（本 rig 的全部价值在这一段）
+#
+# 平面 y=0、N=+Y 的镜面：眼 E=(0,h,0) 看向地面点 P=(x,0,z) 的入射方向 D=(x,−h,z)，
+# 反射方向 R = D − 2(D·N)N = (x, +h, z)。沿 R 前进：Q(t) = (x(1+t), ht, z(1+t))。
+# 令 s = 1+t ≥ 1，则**水平位置 = s·(x,z)、高度 = h(s−1)**。于是命中竖直柱
+# （水平截面 C、y ∈ [0,Hc]）的条件是
+#       ∃ s ∈ [1, 1 + Hc/h] : s·(x,z) ∈ C
+# 换 λ = 1/s 写成"倒影区 = 柱底面关于相机原点的缩放并集"：
+#       R_refl = ⋃_{λ ∈ [λmin, 1]} λ·C,     λmin = h / (h + Hc)
+# **与方位角无关、与柱的形状无关**——C 是矩形时该并集就是 8 个角点（λmin·四角 ∪ 1·四角）
+# 的凸包。所以"哪块屏幕该出现倒影"是纯几何闭式解，不需要任何渲染器参与，
+# 这正是本项目判据体系里最高的一档（闭式解 > 统计）。
+#
+# ## 判据算子 = SSR 开/关**差分**，不是绝对亮度（务必读）
+#
+# 地面是 metallic=1，方向光在它上面本来就有 specular 高光；env 也非全黑。所以
+# 「倒影区变亮」这种绝对判据会把太阳高光算进来。正确算子 = **因果泄漏恒等式**
+# （skill rgl-verify）：SSR 关时，闭式掩码**之外**的像素交付图必须逐位不变；
+# 掩码**之内**必须出现显著变化（阳性锚点）。共同项在差分里天然抵消。
+#
+# ## 两条诚实声明（harness 必须处理，否则会得出假结论）
+#
+# ① **柱身与倒影在屏幕上部分重叠**（几何必然：倒影区远边界 = λ=1 的柱底面，它的屏幕行
+#    比柱底近端更高）。所以判据必须用 objectID 可见集把「柱自己的像素」摘出去，
+#    不能拿屏幕 bbox 当掩码。
+# ② 地面**完全平坦且无纹理**（同 env_band 的取舍）——本 rig 只测「反射**位置**对不对」
+#    这一条轴，测不了粗糙度模糊与水膜法线扰动（那是 15.3 的事，届时另加参数）。
+#
+# ## 变异红线（改坏哪里会让本靶立刻构建失败）
+#
+# 下表**逐条实测验红**（2026-10-10，7/7 变红、无一存活；复跑 = 本文件头部纪律）。
+# "红在" = **实际**首先触发的断言。断言顺序刻意排成「闭式几何 A1/A2 → 屏幕投影 A3/A4 →
+# 场景装配 A5–A7」，让最具体的一条先报——第一版把屏幕区间放在前面，结果 λmin 写倒数
+# 只报出"出画"这种粗判据，归因要重做一遍。
+#
+# ⚠ 写这张表时按记忆填"该红哪条"，**四条里错了三条**（纪律「断言要照实测写，不照记忆写」
+# 就是这么来的）。另外第一版的 A0 **测不到**「投影函数自己会归一化」：`nm_ray_dir` 返回的
+# 本就是单位向量，只拿它做往返，去掉归一化时 A0 原样绿——补了"喂非单位方向"的第二段才红。
+#
+# | 变异 | 红在 |
+# |---|---|
+# | 投影函数去掉归一化 | **A0** 第二段（未归一化方向往返误差 1.4e19 px） |
+# | `λmin` 写成倒数 `(h+Hc)/h` | **A1**（倒影点半径 12.79 越过柱底最远角 6.63） |
+# | `λmin` 写死成常数 | **A2**（面积 3.870/3.870/3.870 不随柱高单调） |
+# | `λ` 区间退化成单点（忘柱高贡献） | **A2**（面积 1.440/1.440/1.440） |
+# | 相机俯角写错（8°→0°） | **A3**（倒影行区间 [569, 855] 出画） |
+# | 负对照忘了传 `hc=0` | **A5**（无柱变体的凸包非空） |
+# | 地面半宽缩到盖不住凸包 | **A6**（倒影落出接收面） |
+
+SSR_CAM_H = 1.6        # 相机离地高度（m），人眼工作点
+SSR_PITCH_DEG = 8.0    # 相机俯角（度）
+SSR_FOV_V = 45.0       # 垂直 fov（与 nm_rig 同约定：垂直 fov + 宽高比推水平）
+SSR_RHO = 6.0          # 柱底心到相机原点的水平距离（沿 −Z），m
+SSR_HALF = 0.6         # 柱截面半宽 = 半深（正方形），m
+SSR_HC = 1.5           # 柱高（m）
+SSR_GROUND_HALF_X = 25.0
+SSR_GROUND_Z_NEAR = 5.0     # 地面向相机身后延伸（避免画面下缘看到"地面尽头"）
+SSR_GROUND_Z_FAR = 25.0
+SSR_GROUND_ROUGHNESS = 0.12  # 与 nm_rig 交付档一致；越接近镜面判据越锐
+SSR_PROBE_W, SSR_PROBE_H = 1280, 720   # = llm_shot 默认取景，断言与 probe 共用同一份
+
+
+def ssr_dir_to_pixel(d, w: int = SSR_PROBE_W, h: int = SSR_PROBE_H,
+                     fov_v: float = SSR_FOV_V, pitch_deg: float = SSR_PITCH_DEG):
+    """世界方向 → 亚像素坐标（`nm_ray_dir` 的闭式逆，同一套 glm::perspective 约定）。
+
+    ⚠ 必须先归一化：下面 asin(dot(d,û)) 的定义域是**单位**向量，喂未归一化方向会让
+    asin 撞上 clamp 边界 → tan(90°) 发散出 1e16 量级的假行号（本 rig 开发时实测踩过，
+    症状是"倒影跑到画面外"，而闭式代码看起来完全正确）。
+    """
+    n = math.sqrt(sum(c * c for c in d))
+    dx, dy, dz = d[0] / n, d[1] / n, d[2] / n
+    p = math.radians(pitch_deg)
+    sp, cp = math.sin(p), math.cos(p)
+    # f̂=(0,−sin p,−cos p)、r̂=(1,0,0)、û=(0,cos p,−sin p)（与 nm_ray_dir 逐字同式）
+    tv = math.asin(max(-1.0, min(1.0, dy * cp - dz * sp)))
+    th = math.atan2(dx, -(dy * sp + dz * cp))
+    t = math.tan(math.radians(fov_v / 2.0))
+    ndc_x = math.tan(th) / (t * (w / h))
+    ndc_y = math.tan(tv) / t
+    return ((ndc_x + 1.0) / 2.0 * w - 0.5, (1.0 - ndc_y) / 2.0 * h - 0.5)
+
+
+def ssr_ground_point(px: float, py: float, w: int = SSR_PROBE_W, h: int = SSR_PROBE_H,
+                     fov_v: float = SSR_FOV_V, pitch_deg: float = SSR_PITCH_DEG,
+                     cam_h: float = SSR_CAM_H):
+    """像素 → 地面点 (x, 0, z)；None = 该像素打不到 y=0（朝上）。复用 nm_ray_dir。"""
+    d = nm_ray_dir(int(round(px)), int(round(py)), w, h, fov_v, pitch_deg)
+    if d[1] >= -1e-12:
+        return None
+    t = cam_h / -d[1]
+    return (d[0] * t, 0.0, d[2] * t)
+
+
+def _convex_hull_2d(pts):
+    """Andrew monotone chain → 逆时针凸包（去共线）。排序先于扫描 ⟹ 输出与输入序无关
+    （确定性纪律：同一输入两次生成必须逐字节相同）。"""
+    ps = sorted(set(pts))
+    if len(ps) <= 2:
+        return ps
+
+    def cr(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    lower: list = []
+    for p in ps:
+        while len(lower) >= 2 and cr(lower[-2], lower[-1], p) <= 0:
+            lower.pop()
+        lower.append(p)
+    upper: list = []
+    for p in reversed(ps):
+        while len(upper) >= 2 and cr(upper[-2], upper[-1], p) <= 0:
+            upper.pop()
+        upper.append(p)
+    return lower[:-1] + upper[:-1]
+
+
+def ssr_reflection_hull(half: float = SSR_HALF, rho: float = SSR_RHO, hc: float = SSR_HC,
+                        cam_h: float = SSR_CAM_H):
+    """倒影区（世界 XZ 平面）= ⋃_{λ∈[λmin,1]} λ·柱底面 的凸包；柱高 ≤ 0 → 空集。
+
+    返回 [(x, z), ...] 逆时针。λmin = h/(h+Hc) 来自"反射射线在柱高范围内"这一约束
+    （推导见本段头注释），**不是**调出来的旋钮。
+    """
+    if hc <= 0.0:
+        return []
+    lam_min = cam_h / (cam_h + hc)
+    corners = [(sx, sz) for sx in (-half, half) for sz in (-half, half)]
+    pts = [(lam * sx, lam * (-rho + sz)) for lam in (lam_min, 1.0) for sx, sz in corners]
+    return _convex_hull_2d(pts)
+
+
+def ssr_probe(w: int = SSR_PROBE_W, h: int = SSR_PROBE_H, hc: float = SSR_HC) -> dict:
+    """闭式取景事实（进 manifest，供 harness 定位与构建期断言）。
+
+    `hc = 0` = **无反射源**（负对照变体用）⟹ 凸包空集、行/列区间为 None。倒影区间的
+    存在性是几何属性而非渲染结果，所以负对照的"区间必须为空"能在构建期就断言掉。
+    """
+    hull = ssr_reflection_hull(hc=hc)
+    lam_min = SSR_CAM_H / (SSR_CAM_H + hc) if hc > 0.0 else None
+    proj = [ssr_dir_to_pixel((x, -SSR_CAM_H, z), w, h) for x, z in hull]
+    pillar_rows = [] if hc <= 0.0 else [
+        ssr_dir_to_pixel((sx, y - SSR_CAM_H, -SSR_RHO + sz), w, h)[1]
+        for y in (0.0, hc) for sx in (-SSR_HALF, SSR_HALF) for sz in (-SSR_HALF, SSR_HALF)]
+    # 柱身的屏幕凸包：harness 用它把「柱自己的像素」从倒影判据里摘出去（诚实声明 ②：
+    # 倒影远边界与柱底在屏幕上重叠，拿 bbox 或行区间当掩码会把柱身算成倒影）。
+    pillar_hull = [] if hc <= 0.0 else _convex_hull_2d([
+        ssr_dir_to_pixel((sx, y - SSR_CAM_H, -SSR_RHO + sz), w, h)
+        for y in (0.0, hc) for sx in (-SSR_HALF, SSR_HALF) for sz in (-SSR_HALF, SSR_HALF)])
+    return {
+        "frameWidth": w, "frameHeight": h,
+        "lambdaMin": round(lam_min, 6) if lam_min is not None else None,
+        "mirrorRow": h / 2.0 - 0.5,          # env 反射的镜像线 = 主点行
+        "reflectionHullWorldXZ": [[round(x, 6), round(z, 6)] for x, z in hull],
+        "reflectionHullPx": [[round(px, 4), round(py, 4)] for px, py in proj],
+        "reflectionRowRangePx": ([round(min(p[1] for p in proj), 3),
+                                  round(max(p[1] for p in proj), 3)] if proj else None),
+        "reflectionColRangePx": ([round(min(p[0] for p in proj), 3),
+                                  round(max(p[0] for p in proj), 3)] if proj else None),
+        "pillarRowRangePx": ([round(min(pillar_rows), 3), round(max(pillar_rows), 3)]
+                             if pillar_rows else None),
+        "pillarHullPx": [[round(px, 4), round(py, 4)] for px, py in pillar_hull],
+        "reflectionAreaM2": None,            # 由调用方按凸包鞋带公式填
+    }
+
+
+def scene_ssr_rig(pillar: bool = True) -> Scene:
+    """`pillar=False` = 负对照（无柱）：闭式倒影凸包必须为空集，判据的"反向用例"。"""
+    hc = SSR_HC if pillar else 0.0
+    probe = ssr_probe(hc=hc)
+    hull = ssr_reflection_hull(hc=hc)
+    name = "ssr_rig" if pillar else "ssr_rig_empty"
+    probe["reflectionAreaM2"] = round(_hull_area(hull), 6)
+
+    lam_txt = (f"λ∈[{probe['lambdaMin']:.4f},1]" if pillar
+               else "（无柱 ⟹ 倒影区 = ∅）")
+    s = Scene(
+        name=name,
+        purpose=("SSR 闭式靶：metallic=1 平坦镜面地面 + 一根几何完全已知的竖直柱，"
+                 f"倒影区 = 柱底面关于相机原点的缩放并集 {lam_txt}，"
+                 "其屏幕位置是纯几何闭式解（不依赖渲染器）"
+                 + ("" if pillar else "；本变体**无柱** = 负对照")),
+        honesty=("① 判据算子必须是 SSR 开/关**差分**（因果泄漏恒等式），不是绝对亮度——"
+                 "金属地面本来就有方向光 specular 与 env 项，绝对判据会把它们算进倒影。"
+                 "② 柱身与倒影在屏幕上**部分重叠**（倒影远边界 = λ=1 的柱底面，其屏幕行"
+                 "比柱底近端更高），所以必须用 objectID 可见集摘出柱自身像素，"
+                 "拿屏幕 bbox 当掩码会把柱身算成倒影。③ 地面完全平坦无纹理，本 rig 只测"
+                 "「反射位置对不对」，测不了粗糙度模糊与水膜法线扰动（15.3 另加参数）。"
+                 "④ 无柱变体的地面与有柱变体逐字节同材质同几何，唯一差别是少一个 piece。"),
+        cameras={
+            "grazing": {"position": [0.0, SSR_CAM_H, 0.0],
+                        "target": [0.0,
+                                   SSR_CAM_H - 10.0 * math.sin(math.radians(SSR_PITCH_DEG)),
+                                   -10.0 * math.cos(math.radians(SSR_PITCH_DEG))],
+                        "fovDegrees": SSR_FOV_V},
+        },
+    )
+    P = s.pieces.append
+    P(Piece("ground_metal",
+            quad((-SSR_GROUND_HALF_X, 0.0, SSR_GROUND_Z_NEAR),
+                 (0.0, 0.0, -(SSR_GROUND_Z_NEAR + SSR_GROUND_Z_FAR)),
+                 (2.0 * SSR_GROUND_HALF_X, 0.0, 0.0)),
+            PAL["yellow"], metallic=1.0, roughness=SSR_GROUND_ROUGHNESS,
+            radial=False, closed=False,
+            intent=("metallic=1 镜面接收面；baseColor 是金属的 F0 调制色，"
+                    "所以它**不能**与柱色正交（cyan×red=0 会让倒影恒黑）——"
+                    "yellow×red = red，倒影可辨而地面自身在纯黑 env 下近黑")))
+    if pillar:
+        P(Piece("pillar_red",
+                box(0.0, SSR_HC / 2.0, -SSR_RHO, 2.0 * SSR_HALF, SSR_HC, 2.0 * SSR_HALF),
+                PAL["red"], metallic=0.0, roughness=0.4,
+                intent=(f"反射源：底心 (0,0,−{SSR_RHO})、高 {SSR_HC} m、截面 "
+                        f"{2 * SSR_HALF} m 方柱；倒影凸包 = 其底面缩放并集")))
+
+    s.extra["probe"] = probe
+    s.extra["closedForm"] = {
+        "relation": "R_refl = ⋃_{λ∈[h/(h+Hc),1]} λ·C，C = 柱底面，h=相机离地高，Hc=柱高",
+        "derivation": ("平面 N=+Y：E=(0,h,0) 看 P=(x,0,z) 的反射方向 = (x,h,z)，"
+                       "沿它走 s=1+t 步 ⟹ 水平 = s·(x,z)、高度 = h(s−1)；"
+                       "命中竖直柱 ⟺ ∃s∈[1,1+Hc/h] 使 s·(x,z) ∈ C"),
+        "cameraHeightM": SSR_CAM_H, "pillarHeightM": SSR_HC,
+        "pillarCenterZ": -SSR_RHO, "pillarHalfM": SSR_HALF,
+        "operator": "SSR 开/关差分（因果泄漏恒等式）；绝对亮度判据无效，见 honesty ①",
+    }
+
+    # ── 构建期断言 ──────────────────────────────────────────────────────
+    # A0 **闭式实现自身的阳性锚点**：ssr_dir_to_pixel 必须是 nm_ray_dir 的逆。
+    #    这条不成立时后面所有断言都在自欺（投影写错 → 凸包"在画面内"也毫无意义）。
+    #    ⚠ 第二段**不是冗余**：nm_ray_dir 返回的本就是单位向量，只测它等于**没测**
+    #    「函数自己会归一化」这条契约（变异验红实测：去掉归一化时 A0 原样绿，
+    #    只有喂非单位方向才红）。归一化一旦丢，凸包会发散到 1e19 量级的假行号。
+    err = 0.0
+    for px in range(0, SSR_PROBE_W, 97):
+        for py in range(0, SSR_PROBE_H, 71):
+            d = nm_ray_dir(px, py, SSR_PROBE_W, SSR_PROBE_H, SSR_FOV_V, SSR_PITCH_DEG)
+            qx, qy = ssr_dir_to_pixel(d, SSR_PROBE_W, SSR_PROBE_H)
+            err = max(err, abs(qx - px), abs(qy - py))
+    assert err < 1e-6, f"A0 投影逆映射往返误差 {err:.2e} px（应 ≪ 1e-6）"
+    err_scaled = 0.0
+    for px in range(0, SSR_PROBE_W, 131):
+        for py in range(0, SSR_PROBE_H, 97):
+            d = nm_ray_dir(px, py, SSR_PROBE_W, SSR_PROBE_H, SSR_FOV_V, SSR_PITCH_DEG)
+            for scale in (0.001, 7.0, 1e5):    # 世界点→方向那一步喂进来的就是未归一化向量
+                qx, qy = ssr_dir_to_pixel(tuple(c * scale for c in d), SSR_PROBE_W, SSR_PROBE_H)
+                err_scaled = max(err_scaled, abs(qx - px), abs(qy - py))
+    assert err_scaled < 1e-6, \
+        f"A0 未归一化方向往返误差 {err_scaled:.2e} px（函数必须自己归一化）"
+    # ── 断言顺序 = 先闭式几何（A1/A2）、再屏幕投影（A3/A4）、最后场景装配（A5–A7）。
+    #    理由：闭式几何那条最具体、最先报出"是推导错了还是取景错了"；反过来把屏幕区间
+    #    放前面，任何几何错都只会报"出画"这条粗判据，归因要重做一遍（实测踩过：
+    #    λmin 写倒数被 A「出画」遮蔽，看不出是几何问题）。
+    # A1 **倒影区不许越过柱底**（出处 = 闭式契约本身，不是本文件代码）：
+    #    R_refl = ⋃_{λ∈(0,1]} λ·C ⟹ 每个凸包点都是 C 内某点的**不超过 1 倍**的缩放，
+    #    于是 |p| ≤ max_{c∈C}|c|（倒影只会比柱更靠近相机，绝不会跑到柱后面去）。
+    #    专门抓 λmin 写反（误写成 (h+Hc)/h > 1）：那种错不会让面积单调性变号，
+    #    但会让倒影区整体翻到柱的**远侧**——画面上一切照常、判据量的是空气。
+    # A2 倒影区随柱高**单调增**（越高 ⟹ 反射射线能在柱高范围内走越远 ⟹ 近端越靠近相机）。
+    #    抓 λmin 与 Hc 的耦合被写死成常数（λ 区间退化成单点也一并红）。
+    if hull:
+        r_farthest = max(math.hypot(sx, -SSR_RHO + sz)
+                         for sx in (-SSR_HALF, SSR_HALF) for sz in (-SSR_HALF, SSR_HALF))
+        for x, z in hull:
+            assert math.hypot(x, z) <= r_farthest + 1e-9, \
+                f"A1 倒影点 ({x:.3f},{z:.3f}) 半径超过柱底最远角 {r_farthest:.3f} ⟹ 倒影跑到柱后面"
+        a_lo = _hull_area(ssr_reflection_hull(hc=SSR_HC * 0.5))
+        a_hi = _hull_area(ssr_reflection_hull(hc=SSR_HC * 2.0))
+        assert a_lo < probe["reflectionAreaM2"] < a_hi, \
+            f"A2 倒影面积不随柱高单调：{a_lo:.3f} / {probe['reflectionAreaM2']:.3f} / {a_hi:.3f}"
+        # A3 倒影凸包完全在画面内（出画 = 判据区域不完整，差分只能量到一半）
+        rr, rc = probe["reflectionRowRangePx"], probe["reflectionColRangePx"]
+        assert 0.0 < rr[0] and rr[1] < SSR_PROBE_H - 1.0, f"A3 倒影行区间 {rr} 出画"
+        assert 0.0 < rc[0] and rc[1] < SSR_PROBE_W - 1.0, f"A3 倒影列区间 {rc} 出画"
+        # A4 倒影区与 env 镜像线（主点行）分得开——否则「env 反射」与「SSR 反射」两件事
+        #    在同一批像素上混在一起，差分归不了因（env_band 的窄带就落在这一行）。
+        assert rr[0] - probe["mirrorRow"] >= 60.0, \
+            f"A4 倒影上边界 {rr[0]:.0f} 离镜像线 {probe['mirrorRow']:.0f} 不足 60px"
+    # A5 柱身必须在画面内（柱不在屏幕上 ⟹ 没有任何像素能 ray march 到它，靶是空的）；
+    #    负对照走 else：闭式凸包必须是空集（判据的**反向用例**，区分"没倒影"与"算错了"）
+    if pillar:
+        pr = probe["pillarRowRangePx"]
+        assert -1.0 < pr[0] and pr[1] < SSR_PROBE_H, f"A5 柱身行区间 {pr} 出画"
+        assert probe["reflectionAreaM2"] > 0.5, \
+            f"A5 倒影面积 {probe['reflectionAreaM2']} m² 过小"
+    else:
+        assert hull == [], "A5 负对照（无柱）的倒影凸包必须为空集"
+    # A6 地面必须覆盖整个倒影凸包（凸包落在地面外 = 看到的是"地面尽头"不是倒影）
+    for x, z in hull:
+        assert abs(x) <= SSR_GROUND_HALF_X, f"A6 倒影凸包 x={x} 落出地面"
+        assert -SSR_GROUND_Z_FAR <= z <= SSR_GROUND_Z_NEAR, f"A6 倒影凸包 z={z} 落出地面"
+    # A7 柱几何非退化（柱底贴地但不穿进地面，穿模会让 objectID 可见集出现 z-fighting）
+    if pillar:
+        assert SSR_HC > 0.0 and SSR_RHO - SSR_HALF > 0.0, "A7 柱几何退化"
+    return s
+
+
+def _hull_area(hull) -> float:
+    """鞋带公式面积（probe 的 reflectionAreaM2 与 A7 单调性判据共用一处实现）。"""
+    n = len(hull)
+    if n < 3:
+        return 0.0
+    return abs(sum(hull[i][0] * hull[(i + 1) % n][1] - hull[(i + 1) % n][0] * hull[i][1]
+                   for i in range(n))) / 2.0
+
+
+def scene_ssr_rig_empty() -> Scene:
+    """负对照：同地面、无柱 ⟹ 闭式倒影凸包为空，判据区域必须拿不到任何变化。"""
+    return scene_ssr_rig(pillar=False)
+
+
 SCENES = {
     "cornell_box": scene_cornell_box,
     "shadow_rig": scene_shadow_rig,
@@ -1726,6 +2044,8 @@ SCENES = {
     "env_band": scene_env_band,
     "nm_rig": scene_nm_rig,
     "penumbra_ladder": scene_penumbra_ladder,
+    "ssr_rig": scene_ssr_rig,
+    "ssr_rig_empty": scene_ssr_rig_empty,
 }
 
 
@@ -2442,9 +2762,9 @@ def build_scene(scene: Scene) -> tuple[bytes, str, dict]:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
-        description="程序化 QA 场景生成器（cornell_box / shadow_rig / d1_parity / izb_rig / "
-                    "env_band / nm_rig）。输出默认落 build/qa_scenes/（gitignore 内；引擎 CWD=build/rgl/，"
-                    "harness 用绝对路径或拷入 build/rgl/models/ 加载）。")
+        description="程序化 QA 场景生成器（场景清单 = --only 的取值，即 SCENES 注册表键，"
+                    "此处不抄名单）。输出默认落 build/qa_scenes/（gitignore 内；引擎 "
+                    "CWD=build/rgl/，harness 用绝对路径或拷入 build/rgl/models/ 加载）。")
     ap.add_argument("--out", default="build/qa_scenes", help="输出目录（默认 build/qa_scenes）")
     ap.add_argument("--only", choices=sorted(SCENES), help="只生成指定场景")
     # ── nm_rig 的自变量（仅 --only nm_rig 时生效；文件名自带参数，可一族并存）──────

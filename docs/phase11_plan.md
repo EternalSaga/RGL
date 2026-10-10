@@ -129,7 +129,7 @@ sceneBuilder.envMap.intensity = 10          # ← 官方标定值
 |---|---|---|
 | **AO / 接触遮蔽** | **必须** | 湿/干对比度唯一来源（§2.4⑥）。资产无 AO 数据，只能自算。投入产出比最高 |
 | **湿面 roughness 定值** | **必须** | 资产 wet=dry（§2.3）。无此项则与干地视觉无异 |
-| **局部反射 / SSR** | **可选** | Exterior_1 视角不需要（反射天空即可）；Interior_2 类机位才需要。若做，planar reflection（单平面镜像相机）对 forward/deferred 都成立，不破 D1 对等；SSR 属后处理 → deferred-only |
+| **局部反射 / SSR** | **可选** | Exterior_1 视角不需要（反射天空即可）；Interior_2 类机位才需要。当年因「SSR 属后处理 → deferred-only 破 D1 对等」被搁置，**该约束 2026-10-10 已豁免**（Phase 15 立项 → `docs/phase15_plan.md` §0.1）；planar reflection 的唯一优势随豁免一起消失 → 同文件 §5 |
 | **env 强度** | **必须（参数）** | §2.2，0.2→0.7 直接把背光墙从 19 拉到 52 |
 
 ### 2.6 附带发现（本次调查的副产品）
@@ -172,7 +172,7 @@ sceneBuilder.envMap.intensity = 10          # ← 官方标定值
 | D4 | P2/P3 修复方式 | **先改配置**（`sun 15→6` / `env 0.2→0.7` / `exposure 1.2→1.0`），**AO 与湿面 roughness 留到阴影批** | 配置改动零风险、立刻见效；AO 需要新管线（不进阴影批就是凭空插一条 pass） |
 | D5 | 湿面 roughness 载体 | **材质名规则表**（`configs/scene.lua` 的 `material_styles` 已是此形态） | 资产不给湿/干区分，只能由配置按材质名路由；复用现成机制，不新增机制 |
 | D6 | AO 实现形态 | **批 11.2（随 CSM）** | CSM 的 depth 已含遮挡信息，AO 可复用；且 AO 是阴影的自然延伸，Phase 9 已把 ⑥ 列在阴影条目下 |
-| D7 | SSR 是否进 Phase 11 | **不进**，列 Phase 12 候选 | §2.5：Exterior_1 不需要。若进，优先 planar reflection（forward/deferred 都成立，不破 D1 对等） |
+| D7 | SSR 是否进 Phase 11 | **不进**，列 Phase 12 候选 | §2.5：Exterior_1 不需要该视角的反射。实际落地在 Phase 15（`docs/phase15_plan.md`），形态 = SSR；planar reflection 已否决 |
 | D8 | FBX `roughnessFactor` | **暂不改**，先在 §2.6-1 定夺 | 改错方向会让全场景更粗糙；且与 D5 的湿面 roughness 定值耦合，宜合并决策 |
 | D9 | RPC 缺陷修复排期 | **随批 11.0 顺手修** | fps 拒收 `target` 或加明确回显提示 + bind 日志加 pid；都是小改动 |
 
@@ -220,7 +220,9 @@ CSM/HFTS 共同硬前提。
    否则阴影一开，画面比现在更糟、且会被误判为阴影 bug。
 2. **本机 CPU-bound，无 CPU 余量**（Phase 9 批 9.4 判定：CPU 7.03 ms / GPU 2.98 ms）。
    新增 pass（阴影 depth、AO）只加 GPU 成本，≤3 ms 内则整机帧时不变；超了直接掉帧。
-3. **AO 若走后处理会破 D1 对等**（deferred-only）—— 与 SSR 同病。优先考虑能同时服务两路的前向形态。
+3. **AO 走后处理会 deferred-only**——当年按「破 D1 对等」选了 depth-only 前向形态（已落地，
+   开阔地面靠导数叉积重建法线）。D1 对等 2026-10-10 **已豁免**（`docs/phase15_plan.md` §0.1），
+   但 AO 的 depth-only 形态**不因此回退**：它同时服务两张图且已验收，没有改的理由。
 4. **`pack.py` 重跑会改变 132 材质的 `emissive` 强度**（绿 → 本色 × 2.0），
    夜间场景可能过曝；`Bistro_Night` 类对比要单独看。
 5. **测量纪律**：`AGENTS.md` 已要求单实例串行（并行实例互相遮挡合成会扭曲帧率与 present timing），

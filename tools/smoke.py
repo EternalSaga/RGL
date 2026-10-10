@@ -38,6 +38,8 @@ errors 计数抓 `[error]` 级日志行：引擎自身 error 与 VVL 的 VUID �
     python tools/smoke.py shot  [--name NAME] [--size WxH]
                                [--variant ...] [--from-build] [--frames N]
                                [--timeout S] [--sync]
+    python tools/smoke.py shot  --config-base qa/configs/ssr_rig --name ssr_rig
+                               # 用仓库里的靶配置出图（qa/configs/* 的既有目录同此用法）
 
 退出码: 0 = PASS · 1 = FAIL（前置不满足 / 引擎非零退出 / 有 error 级日志 / 没出图）。
 """
@@ -225,11 +227,19 @@ def stage_configs(from_build: bool, variant: str | None, shot_file: str, frames:
                   size: tuple[int, int] | None, render_scale: float | None,
                   velocity_field: bool = False, aa: str | None = None,
                   clip: int | None = None,
-                  fsr_temporal: bool = False, fsr_jitter: bool = False) -> None:
+                  fsr_temporal: bool = False, fsr_jitter: bool = False,
+                  config_base: Path | None = None) -> None:
     """把一次性配置铺进 staging 目录并打好运行模式键（每次重建，跑完不残留可复原状态）。"""
-    base = (BUILD_RGL / "configs") if from_build else (ROOT / "configs")
+    if config_base is not None and from_build:
+        fail("--config-base 与 --from-build 互斥（前者已经指定了基准目录）")
+    if config_base is not None and not config_base.is_dir():
+        fail(f"--config-base {config_base} 不是目录")
+    base = config_base if config_base is not None else \
+        ((BUILD_RGL / "configs") if from_build else (ROOT / "configs"))
     if missing := [f for f in CONFIG_FILES if not (base / f).is_file()]:
-        fail(f"配置基准 {base.relative_to(ROOT)} 缺 {missing}")
+        # 不用 relative_to(base)：--config-base 允许指到仓库外，那时它会抛 ValueError
+        # 而不是报出"缺哪几个文件"这条真正有用的信息。
+        fail(f"配置基准 {base} 缺 {missing}")
     shutil.rmtree(STAGING, ignore_errors=True)
     STAGING.mkdir(parents=True)
     for f in base.iterdir():
@@ -391,6 +401,10 @@ def parse_args() -> argparse.Namespace:
                          "是**两个独立旋钮**，不是同一个的别名")
     ap.add_argument("--from-build", action="store_true",
                     help="以 build/rgl/configs 副本为基准（跑调试现场；默认用仓库 configs/）")
+    ap.add_argument("--config-base", type=Path, default=None,
+                    help="以任意配置目录为基准（如 qa/configs/ssr_rig、qa/configs/analytic）。"
+                         "与 --from-build 互斥。走的是同一套 staging + 生效核对，"
+                         "**不碰该目录也不碰 configs/ 副本**——靶配置因此可以直接放仓库里跑")
     ap.add_argument("--clip", type=int, default=None,
                     help="scene.lua taa.clip_mode = N（历史裁剪档位：0 门关硬盒 / 11 上一版"
                          "交付档 / 13 现行交付档）。🔴 必须配 --aa taa：TAA 不在图时该键根本不被"
@@ -436,8 +450,11 @@ def main() -> int:
                  else f"screenshots/{args.name}.png")
     stage_configs(args.from_build, args.variant, shot_file, args.frames, size,
                   args.render_scale, args.velocity_field, args.aa,
-                  args.clip, args.fsr_temporal, args.fsr_jitter)
-    print(f"配置   : 基准={'build 副本' if args.from_build else '仓库 configs/'}"
+                  args.clip, args.fsr_temporal, args.fsr_jitter,
+                  config_base=args.config_base)
+    base_desc = (str(args.config_base) if args.config_base is not None
+                 else ('build 副本' if args.from_build else '仓库 configs/'))
+    print(f"配置   : 基准={base_desc}"
           f"  variant={args.variant or '(随配置)'}  frames={args.frames}"
           f"  size={f'{size[0]}x{size[1]}' if size else '(随配置)'}"
           f"  render_scale={args.render_scale if args.render_scale is not None else '(随配置)'}"

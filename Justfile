@@ -146,6 +146,16 @@ analytic:
     @python tools/qa_scenes.py --out {{ BUILD }}/rgl/models --only cornell_box
     {{ BUILD }}/tools/imgqa/imgqa probe
 
+# ssr_rig 闭式反射靶（Phase 15 批 15.0）：生成靶 + 用 qa/configs/ssr_rig 出一张图。
+# 判据本体 = 该场景 manifest 的 probe.reflectionHullPx / pillarHullPx（闭式倒影凸包，
+# 推导见 tools/qa_scenes.py 的「场景 8：ssr_rig」段头）。SSR 关时凸包内（剥掉柱身）
+# 必须全黑，SSR 开起来后同一批像素必须变亮 = 阳性锚点。
+# 两个变体都要生成：ssr_rig_empty 是**负对照**（无柱 ⟹ 闭式凸包为空集）。
+ssr-target:
+    @python tools/qa_scenes.py --out {{ BUILD }}/rgl/models --only ssr_rig
+    @python tools/qa_scenes.py --out {{ BUILD }}/rgl/models --only ssr_rig_empty
+    @python tools/smoke.py shot --config-base qa/configs/ssr_rig --name ssr_rig
+
 # imgqa —— 区域归因的图像判据工具箱（C++ + vcpkg；判据的区域来自几何：objectID 反解
 # 可见 piece / 闭式解逐面预测 vs 观测亮度簇 / 开关影响域；每条判据的容差理由与 guard 出处见 check）。
 # 例：just imgqa selftest | just imgqa attribution --camera near_anchor | just imgqa faces --piece anchor_cube_near

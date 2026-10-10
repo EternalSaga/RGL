@@ -182,12 +182,12 @@ per-light 颜色、距离衰减）headless 零 VVL error；forward 只读 `light
    结构债 8 条随批次拆完（"进场顺手拆"）；残留 style_check 1 条 = expandPrimitive 认知复杂度
    20>15（loader 批次字段累积，下次动加载路径时拆）
    **延后项（2026-09-14 用户拍板延后）——地面"水质感"**：现状地面"亮"但反射里只有环境（天空）、
-   没有场景（建筑/树/灯）= 油亮 ≠ 湿。补齐清单：① 反射源：planar reflection（地面单平面，
-   镜像相机重渲 + 剔平面下方，电影湿街标准做法）或 SSR（deferred G-buffer 已有 pos+normal，
-   但属后处理 → deferred-only，破 D1 对等）② 水洼状粗糙度贴图（洼 ≈0.05/湿石 0.3–0.5）
+   没有场景（建筑/树/灯）= 油亮 ≠ 湿。**Phase 15 接手（`docs/phase15_plan.md`）**，补齐清单：
+   ① 反射源 = SSR（deferred G-buffer 已有 pos+normal；当年卡「deferred-only 破 D1 对等」，
+   该约束 2026-10-10 已豁免，planar reflection 已否决）② 水洼状粗糙度贴图（洼 ≈0.05/湿石 0.3–0.5）
    ③ 湿区 albedo×0.5–0.7 压暗 ④ 水膜法线扰动（镜面扭曲 = "水"与"玻璃"的区分要素）
-   ⑤ 太阳 glint（GGX 机制已在，被粗糙度分布解锁）⑥ AO/接触阴影（石缝积水暗部）；
-   架构上长在 deferred light pass（逐像素 specular 现成），D1 两路对等需豁免或 forward 补 G-buffer
+   ⑤ 太阳 glint（GGX 机制已在，被粗糙度分布解锁）⑥ AO/接触阴影（石缝积水暗部，批 11.4 已落地）；
+   架构上长在 deferred light pass（逐像素 specular 现成）
      ↓
 Phase 9：性能观测（profiler）——先回答"CPU-bound 还是 GPU-bound"，再谈优化
   **进度（2026-09-27）**：批 9.1（① CPU zone profiler，零宏 `RGL::zone()`）/ 9.2（③ GPU

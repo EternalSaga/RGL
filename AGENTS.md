@@ -56,7 +56,7 @@ just clean / clean-all / all           # 增量清理 / 删 build 目录 / clean
 
 ## 测试体系
 
-> **下一步做什么** → `docs/phase14_plan.md`；本节 = 现状机制描述。
+> **下一步做什么** → `docs/phase15_plan.md`；本节 = 现状机制描述。
 
 **分层，边界按"要不要 GPU / 要不要窗口"划**（覆盖清单以 `tests/` 与 `tools/imgqa/` 本体为准，别在此抄）：
 
@@ -195,8 +195,10 @@ vk_indirect_commands 显式使用）外**均无显式使用但被其他已启用
   ② 螺旋采样无投影 range check → 前景轮廓外一圈光晕；③ 施加点在 tonemap 合成处，**连直接光一起压**。
   `ao.strength=0` 逐位旁路，无常驻成本。**AO 噪点已量化结案：别再当"噪点闪烁"的嫌疑**（交付颗粒
   < 1 量化步长 = 不可见；TAA 关时 AO 逐帧静止）；可见形态是**屏幕锚定的相机移动爬行** → `git:调试历史` 2026-10-04
-- **湿面只加高光不压暗**：`_Wet` effective roughness 0.12 是**平台期**（无 SSR），真实湿面应同时压暗
-  漫反射而这里没做 → 湿区略"亮而奶"；补它需 per-material wetness 进 scene data（= 反射管线改动）
+- **湿面只加高光不压暗**：`_Wet` effective roughness 0.12 是**平台期**（无 SSR，实测三档 roughness
+  画面 p90 不动），真实湿面应同时压暗漫反射而这里没做 → 湿区略"亮而奶"。**Phase 15 结案它**；
+  旧前提「需 per-material wetness 进 scene data」**已被推翻**——wetness 走程序化，零契约改动
+  → `docs/phase15_plan.md` §2.4
 - **灯契约（现行）**：`Light` 组件 + `index` = 列表位正序（画不画 = 实体有无；forward 读 index 0 = 主光，
   延迟按 index 落槽）；`SceneLight`/`GpuLight` 布局均走 C API 反射生成，无手写双源
 - **GPU culling（现行）**：三态门 **`diagnostics.cull_replay`，默认 `cpu`** = opaque 段由 **CPU 剔除**驱动、
@@ -228,8 +230,11 @@ vk_indirect_commands 显式使用）外**均无显式使用但被其他已启用
   债-30 三档方案与**落地实测/验收**；本文件"帧时间构成"那条结论的全文在这里）·
   `docs/技术概念.md`（机制深版：§模块表 / §核心运行时模块表 = **唯一模块职责表** / §main 启动流 /
   §RPC 调试通道 / §构建检查工具机制 / §构建 Windows 前置）· `docs/gate_lint_plan.md`（**门配置自检的权威载体**；加诊断门前看）
-- **现行计划**：`docs/phase14_plan.md`（**下一步从这里读**：时域线换轨 = 逐像素速度场 + vendor
-  FSR 3.1.4 的 VK 后端；§1 = 本机核实的 FSR 事实基线，**别再重查一遍**）·
+- **现行计划**：`docs/phase15_plan.md`（**下一步从这里读**：屏幕空间反射 + 湿面输入面；§0 = D1
+  豁免与「成本不设上限」两条拍板；§1.3 = Filament SSR 的可抄/不可抄面，**别再重读一遍 filament**）·
+  `docs/phase14_plan.md`（时域线换轨 = 逐像素速度场 + vendor
+  FSR 3.1.4 的 VK 后端；§1 = 本机核实的 FSR 事实基线，**别再重查一遍**；剩余 14.7/14.8/14.9
+  不阻塞 Phase 15）·
   `docs/phase13_plan.md`（TAA 收口，**2026-10-07 冻结**；§1.22 = 冻结立论）·
   `docs/taa_history_space_plan.md`（**批 13.5 已落地** = 历史住基空间；批 12.6 T4 的「未抖
   prevViewProj 是错的」裁决**已反转**）·
