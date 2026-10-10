@@ -98,7 +98,7 @@ return {
         -- 下面五项 = 批 15.1 那五枚 shader 常量的原值（行尾常量名 = 它当初住在哪）。口径与
         -- 两条不变式（bias_px < thickness_px、rough_full < rough_cutoff）→ ssr.frag.slang 头
         -- 注释；越界**不钳制**——退化档是反向消融的诊断手段，clamp 掉 = 消融静默失效。
-        max_distance_radii = 0.26,  -- kMaxDistanceRadii：光线推进上限 = sceneRadius × 本值
+        max_distance_radii = 0.52,  -- kMaxDistanceRadii：射线长度上限 = sceneRadius × 本值（0.52 = bistro 饱和判据定，非靶反推）
         thickness_px = 6.0,         -- kThicknessPx：命中判据的屏幕空间厚度容差，单位 = 像素
         bias_px = 0.6,              -- kBiasPx：命中点外推防自粘，单位 = 像素（须 < thickness_px）
         rough_full = 0.15,          -- kRoughFull：粗糙度低于此 = 满强度反射

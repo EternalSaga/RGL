@@ -209,7 +209,7 @@ TEST_CASE("SsrTuning 出厂默认值 = 批 15.1 五个 shader 常量原值（红
 	// SsrTuning{} 的字段引用就成了"默认值等于默认值"的空断言。
 	// 任一默认值被改 ⟹ 本条红 ⟹ 出厂配置的 ssr 输出不再逐位等于批 15.1（红线 A 破）。
 	const SsrTuning d;
-	CHECK(d.maxDistanceRadii == 0.26f);  // kMaxDistanceRadii
+	CHECK(d.maxDistanceRadii == 0.52f);  // kMaxDistanceRadii（bistro 饱和判据定，非靶反推）
 	CHECK(d.thicknessPx == 6.0f);        // kThicknessPx
 	CHECK(d.biasPx == 0.6f);             // kBiasPx
 	CHECK(d.roughFull == 0.15f);         // kRoughFull

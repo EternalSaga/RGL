@@ -813,7 +813,7 @@ TEST_CASE("runtime_config：ssr 块（批 15.1 参数面）——缺块回落出
 		CHECK(r->ssrEnabled == false);
 		// ⚠ 字面量手抄自批 15.1 的 shader 常量（与 test_ssr_params 的默认值用例同源）。
 		// 写成 SsrTuning{} 的字段就成了"默认值等于默认值"的空断言。
-		CHECK(r->ssr.maxDistanceRadii == 0.26f);
+		CHECK(r->ssr.maxDistanceRadii == 0.52f);
 		CHECK(r->ssr.thicknessPx == 6.0f);
 		CHECK(r->ssr.biasPx == 0.6f);
 		CHECK(r->ssr.roughFull == 0.15f);
@@ -839,7 +839,7 @@ TEST_CASE("runtime_config：ssr 块（批 15.1 参数面）——缺块回落出
 		auto r = loadRuntimeConfig(f.pathStr());
 		REQUIRE(r.has_value());
 		CHECK(r->ssr.thicknessPx == 3.0f);
-		CHECK(r->ssr.maxDistanceRadii == 0.26f);
+		CHECK(r->ssr.maxDistanceRadii == 0.52f);
 		CHECK(r->ssr.biasPx == 0.6f);
 	}
 	{  // 🔴 **反向消融档必须写得出来**（变异③）：bias ≥ thickness 与 thickness = 0 都是

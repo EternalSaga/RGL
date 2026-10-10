@@ -33,10 +33,20 @@ export struct LlmDebugConfig {
  *
  * shader 侧**不留 fallback 常量**（`ssr.frag.slang` 里五枚 `static const` 已删）。两处
  * 定义 = 迟早漂移，而漂移的形态是"配置改了没反应"，比写死更难查。
- * ⚠ 默认值不是拍脑袋：0.26 / 6.0 / 0.6 由闭式靶（`qa/configs/ssr_rig`）的调定值反推
- * （推导 → `docs/phase15_plan.md` §3.2），**携带靶的标定污染**（靶的 SceneBounds.radius 被
- * 那块 50m 地面 quad 撑到 31.065，不代表"可反射物的大小"）⟹ 最终标定必须在交付场景上
- * 靠画质判据定。**改这里 = 改出厂画面**，红线 A 需重立。
+ * ⚠ 默认值不是拍脑袋，且**两枚来源不同**（这个区别是本参数的全部教训）：
+ *  - `thicknessPx` / `biasPx`（6.0 / 0.6）= 闭式靶调定值反推，**像素单位**、与场景尺度无关，
+ *    靶上标定即交付态（推导 → `docs/phase15_plan.md` §3.2）。
+ *  - `maxDistanceRadii` = **0.52**，2026-10-10 在交付场景 bistro 上按**饱和判据**定，
+ *    **不再用靶的 0.26**：靶的 SceneBounds.radius 被那块 50m 地面 quad 撑到 31.065，
+ *    不代表"可反射物的大小"，且靶上该参数 0.13 以上就饱和 ⟹ **靶给不出这个参数的信息**。
+ *    bistro 实测差分 px 随本值：0.13→2492 / 0.26→4871 / 0.45→6545 / **0.52→6649** /
+ *    0.70→6662 / 1.0→6663（曲线在 0.52 后进入饱和）。取 0.52 = 拿到渐近线反射量的 99.8%
+ *    而只花 84% 的成本（GPU 实测 ssr pass：0.26=159µs / 0.52=259µs / 1.0=308µs）。
+ *    ⚠ 0.26 的形态是**反射带被截断在湿步道中间**（0.26→0.52 新增的 1779 px 是一条连续带
+ *    的延伸、不是散落噪声），不是"少一点反射"那么无害。
+ *
+ * 🔴 **改本结构的值不影响红线 A**（实测）：`enabled` 默认关 ⟹ 五枚系数虽仍**无条件**写进
+ * scene data，但**没有消费者** ⟹ 出厂画面逐位不变。红线 A 只被 `enabled` 与图形态动到。
  *
  * ## 与 `ssrEnabled` 的区别（别混）
  *
@@ -48,7 +58,7 @@ export struct LlmDebugConfig {
  */
 export struct SsrTuning {
 	/// maxDistance = SceneBounds.radius × 本值（射线长度上限的尺度系数）。
-	float maxDistanceRadii = 0.26f;
+	float maxDistanceRadii = 0.52f;
 	/// 命中窗口深度 = 本值 × worldPerPixel(**采样点**视深)。与 `biasPx` 构成不变式
 	/// `biasPx < thicknessPx`（见下方两条注释）。
 	/// `0` 是**合法消融档**（命中窗口退化为空 ⟹ 闭式覆盖率该恰为 0），配置层不 clamp。
