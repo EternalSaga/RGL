@@ -28,6 +28,7 @@ add_executable(imgqa
     # 缝按**仪器**选（同一台 `temporal-tail` 的三段同处），**判据现序一字未动**。
     judgments_table.cpp
     judgments_table_motion.cpp
+    judgments_table_shadow.cpp
     judgments_table_tail.cpp
     selftest.cpp
     temporal.cpp
@@ -40,7 +41,13 @@ add_executable(imgqa
     aa_coverage.cpp
     # 批 N6d 步 0：软影滤波轴量具（交付配置五臂 + 太阳角敏感度）。另立 TU 的理由同 aa_coverage：
     # 判据本体（度量口径 + 三条判决线的阈值理由）与 CLI/引擎生命周期不是同一条改动缝。
-    shadow_softness.cpp)
+    shadow_softness.cpp
+    # `shadow-kernel-scale`：CSM 核尺度漂移量具（程序化 penumbra_ladder 靶 + 三臂 + 世界米制
+    # 半影宽度）。拆两 TU 的缝 = **口径 vs 仪器**：`shadow_kernel_metric.cpp` 是三个纯算子
+    # （selftest 用闭式直接测，不启引擎），`shadow_kernel_scale.cpp` 是三臂采集 + 读数表 +
+    # 三条判决线。常数唯一出处 = `shadow_kernel_metric.h`（两处各抄一份 = 第二份真相）。
+    shadow_kernel_metric.cpp
+    shadow_kernel_scale.cpp)
 
 target_compile_features(imgqa PRIVATE cxx_std_23)
 target_include_directories(imgqa PRIVATE ${OpenCV_INCLUDE_DIRS})

@@ -55,6 +55,11 @@ namespace RGL::imgqa {
 /// 附件族（3 条）：IZB 消费域 / AO 噪点两条。
 [[nodiscard]] const std::vector<JudgmentInfo>& attachmentJudgments();
 
+/// 地基族 · **CSM PCF 核宽单位护栏**（`shadow-kernel-scale`，3 条）：CSM 必须有影 / CSM 的
+/// 半影宽度对间隙必须平 / 靶必须分得出 PCSS 的接触硬化（阳性锚点）。族仍是 Foundation
+/// （不涉时域比值口径），缝按**仪器**切。📄 正文在 `judgments_table_shadow.cpp`。
+[[nodiscard]] const std::vector<JudgmentInfo>& shadowKernelScaleJudgments();
+
 }  // namespace RGL::imgqa
 
 #endif  // RGL_IMGQA_JUDGMENTS_TABLE_H

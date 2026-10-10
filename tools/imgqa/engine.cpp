@@ -589,6 +589,46 @@ void applyLlmShotGate(const std::string& dir, const ProfileOpts& o)
     replaceValue(dg, "diagnostics.lua", "rpc", "false");
     writeFile(dir + "/diagnostics.lua", dg);
 }
+
+/**
+ * 合成 profile 的 shadow.lua（从 makeProfile **抽出**：`shadow-kernel-scale` 的 pcss 臂要写
+ * 逐档调参块，往 makeProfile 里再加一个分支会把它的认知复杂度再往上推，而它已经是
+ * 基线里的 61-ERROR）。抽出后语义一字未改，只多一条「整份覆写」的早返回。
+ *
+ * 三个 C++ 布尔塌成**一个 mode 轴 + 一个正交 izb**——旧世界 `shadow_pass`/`shadow_pcss`/
+ * `shadow_evssm` 三个独立布尔能写出「EVSSM 开着但图集不画」这类自相矛盾的组合，枚举下它
+ * 表达不出来，塌缩方向因此唯一：evssm 档 → "evssm"（swim 臂的语义就是"开 EVSSM"），否则
+ * shadowPass → "csm"，全关 → "none"。唯一剩下的矛盾组合显式拒绝而不是替调用方猜：EVSSM 要图集。
+ */
+void writeSyntheticShadowLua(const std::string& outDir, const ProfileOpts& o)
+{
+    // 整份覆写 = 调用方给臂定义（见 ProfileOpts::shadowLuaOverride）。mode 打偏在 lua 侧
+    // 是**静默**的，所以消费方另有守卫：`shadow_kernel_scale.cpp::requireShadowEcho` 拿引擎
+    // 自己的门回显对账。
+    if (!o.shadowLuaOverride.empty()) {
+        writeFile(outDir + "/shadow.lua", o.shadowLuaOverride);
+        return;
+    }
+    if (o.evssmShadow && !o.shadowPass)
+        throw std::runtime_error("ProfileOpts: evssmShadow=true 而 shadowPass=false 是矛盾组合"
+            "（EVSSM 的矩图建立在 CSM 图集上）；批 N6b 起 mode 是单轴枚举，拒绝替你猜一档");
+    const std::string shadowMode
+        = o.evssmShadow ? "evssm" : (o.shadowPass ? "csm" : "none");
+    // izb 与 mode 正交（旧 izb_shadow）。izb 开而 mode=none 是 gate_lint 的启动期 error
+    // （mask 无内容 = 一帧阴影也不产，债-32），这里同样不写出去。
+    const bool izb = o.izbShadow && o.shadowPass;
+    // izb 子表只在需要 dump_frame 时展开（布尔简写 = 只开关，grid/dump 保默认）。
+    // ⚠ 只校验两个顶层键：izb 子表的 on/grid/dump_frame 在解析器里是 `t["…"]` 形态，
+    //   knownRootKeys 的 `root["…"]` 正则抽不到，写进校验集会把校验器自己变成假阳性源。
+    assertKeys("shadow.lua", {"mode", "izb"}, knownRootKeys("rgl/shadow_config_impl.cppm"));
+    writeFile(outDir + "/shadow.lua",
+        "return { mode = \"" + shadowMode + "\", izb = "
+        + (o.izbDumpFrame > 0
+               ? std::string("{ on = ") + lb(izb) + ", dump_frame = "
+                     + std::to_string(o.izbDumpFrame) + " }"
+               : std::string(lb(izb)))
+        + " }\n");
+}
 }  // namespace
 
 /**
@@ -688,13 +728,16 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
 {
     // 守卫放在**最前面**：两条 profile 路径（交付 / 合成）都必须过它，放后面会被早退路径绕掉。
     checkFsrOpts(o);
-    // 第 4/5 例外门只在交付配置路径里有实现（合成路径的 shadow.lua/runtime.lua 是从零写的，
-    // 本来就能表达同一件事）。放在最前面同 checkFsrOpts 的理由：门开了却走合成路径 =
-    // **静默不生效** = 在出厂值上下判据，必须在生成期就拒。
-    if (o.deliveryConfigDir.empty() && (o.overrideShadowRoute || o.overrideLlmShot))
+    // 第 4 例外门（覆写**交付** shadow.lua 的软影轴）只在交付配置路径里有实现。放在最前面
+    // 的理由：门开了却走合成路径 = **静默不生效** = 在出厂值上下判据，必须在生成期就拒。
+    // 第 5 例外门（llm 截图形态）**两条路径都有实现**——它只改 runtime.lua 的 llm_debug /
+    // llm_shot 与 diagnostics.lua 的 rpc，而合成路径写出的 runtime.lua 里这些键本来就在
+    // （`applyLlmShotGate` 逐键覆写 + 写后自检，键不在就抛），故不再要求 deliveryConfigDir。
+    if (o.deliveryConfigDir.empty() && o.overrideShadowRoute)
         throw std::runtime_error(
-            "overrideShadowRoute / overrideLlmShot 是交付配置模式的例外门，而本 opts 没给 "
-            "deliveryConfigDir ⟹ 两个门根本没有实现路径（合成 profile 请直接写 shadowPass 等字段）。"
+            "overrideShadowRoute 是交付配置模式的例外门（它覆写的是**交付** shadow.lua 的 "
+            "mode/izb/sun_degrees），而本 opts 没给 deliveryConfigDir ⟹ 这个门根本没有实现路径"
+            "（合成 profile 请直接写 shadowPass / shadowLuaOverride 等字段）。"
             "开着门却静默不生效 = 在出厂值上下判据，拒绝生成");
     fs::create_directories(outDir);
     // ── 交付配置模式（批 13.1e）：基底 = 仓库 configs/，只覆写 headless / rpc / taa ──
@@ -831,9 +874,18 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
           "  win_size = { 800, 600 }, show_after = -1, present_mode = \"immediate\",\n"
           "  ui_font = \"\", ui_font_size = 18.0,\n"
           + fsrLua
-          + "  llm_debug = false, llm_shot = { file = \"screenshots/unused.png\", size = { "
-            + std::to_string(o.size[0]) + ", " + std::to_string(o.size[1])
-            + " }, delay_frames = 8 } }\n");
+          // ⚠ `llm_shot` 必须**自成一块**、每个键以 `,` 收尾：`overrideValueInTable` 的表头按
+          // **顶层键**口径找（行首），值跨度按「到 `,` 或换行为止」算。旧写法把三个键与
+          // `llm_debug` 挤在同一行、`delay_frames = 8 } }` 收尾 ⟹ 门开时表头找不到（抛）、
+          // 值跨度吞掉尾部 ` } }`（实测把 runtime.lua 写坏成 lua 语法错）。lua 语义一字未变。
+          + "  llm_debug = false,\n"
+            "  llm_shot = {\n"
+            "    file = \"screenshots/unused.png\",\n"
+            "    size = { " + std::to_string(o.size[0]) + ", " + std::to_string(o.size[1])
+            + " },\n"
+              "    delay_frames = 8,\n"
+              "  },\n"
+              "}\n");
 
     const std::set<std::string> diagKeys = {"no_vvl", "no_hdr", "no_present", "vtx_canary",
         "texel_canary", "dump_gbuf", "style_dist", "tex_dist", "texture_force_size",
@@ -849,30 +901,7 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
             "  picking = ")
         + lb(o.picking) + ", rpc = true, rpc_port = 8788 }\n");
 
-    // 阴影门（批 N6b：configs/shadow.lua）。三个 C++ 布尔塌成**一个 mode 轴 + 一个正交
-    // izb**——旧世界 `shadow_pass`/`shadow_pcss`/`shadow_evssm` 三个独立布尔能写出
-    // 「EVSSM 开着但图集不画」这类自相矛盾的组合，枚举下它表达不出来，塌缩方向因此
-    // 唯一：evssm 档 → "evssm"（swim 臂的语义就是"开 EVSSM"），否则 shadowPass → "csm"，
-    // 全关 → "none"。唯一剩下的矛盾组合显式拒绝而不是替调用方猜：EVSSM 要图集。
-    if (o.evssmShadow && !o.shadowPass)
-        throw std::runtime_error("ProfileOpts: evssmShadow=true 而 shadowPass=false 是矛盾组合"
-            "（EVSSM 的矩图建立在 CSM 图集上）；批 N6b 起 mode 是单轴枚举，拒绝替你猜一档");
-    const std::string shadowMode
-        = o.evssmShadow ? "evssm" : (o.shadowPass ? "csm" : "none");
-    // izb 与 mode 正交（旧 izb_shadow）。izb 开而 mode=none 是 gate_lint 的启动期 error
-    // （mask 无内容 = 一帧阴影也不产，债-32），这里同样不写出去。
-    const bool izb = o.izbShadow && o.shadowPass;
-    // izb 子表只在需要 dump_frame 时展开（布尔简写 = 只开关，grid/dump 保默认）。
-    // ⚠ 只校验两个顶层键：izb 子表的 on/grid/dump_frame 在解析器里是 `t["…"]` 形态，
-    //   knownRootKeys 的 `root["…"]` 正则抽不到，写进校验集会把校验器自己变成假阳性源。
-    assertKeys("shadow.lua", {"mode", "izb"}, knownRootKeys("rgl/shadow_config_impl.cppm"));
-    writeFile(outDir + "/shadow.lua",
-        "return { mode = \"" + shadowMode + "\", izb = "
-        + (o.izbDumpFrame > 0
-               ? std::string("{ on = ") + lb(izb) + ", dump_frame = "
-                     + std::to_string(o.izbDumpFrame) + " }"
-               : std::string(lb(izb)))
-        + " }\n");
+    writeSyntheticShadowLua(outDir, o);  // 阴影门（整段实现见该函数注释）
 
     std::set<std::string> sceneKeys
         = {"entities", "styles", "material_styles", "deferred_styles", "environment", "light",
@@ -940,6 +969,8 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
             + ",\n    ao = { strength = " + std::to_string(o.aoStrength) + " },\n"
             + taa + "}\n");
     applyCameraLua(outDir, o);  // 合成路径同样支持机位/帧驱动 yaw（见 applyCameraLua 注释）
+    // 第 5 例外门（钉死帧号的一次性截图形态）。门闭 = 函数第一行返回 = 现有合成判据逐位不变。
+    applyLlmShotGate(outDir, o);
     return outDir;
 }
 

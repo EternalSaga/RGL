@@ -173,6 +173,29 @@ std::vector<SubcommandSpec> specsSwimAndProbe()
             false,
             "",
         },
+        /* shadow-kernel-scale */
+        SubcommandSpec{
+            "shadow-kernel-scale",
+            "CSM 核尺度漂移量具：penumbra_ladder 上量半影宽度的世界米制（三臂 + 三条判决线）",
+            {
+            },
+            {
+                "靶 = 程序化 `models/penumbra_ladder.glb`（`tools/qa_scenes.py` 生成）。四块板离地"
+                "高度 8/16/32/64m，级联半径随高度增长 ⟹ **滤波核 / 影宽** 之比是否随高度漂移被直接"
+                "读成一条曲线。测量常量一律从 `penumbra_ladder.manifest.json` 的 `measure` 块读，"
+                "工具不重抄（重抄 = 第二份真相，改靶必漂）。",
+                "三臂：`none`（参照，无影）· `csm`（被测：4-tap PCF）· `pcss5`（阳性锚：PCSS "
+                "sun_degrees=5）。S = (L_none − L_arm)/L_none，半影宽度 W = 剖面 10%↔90% 交叉的"
+                "**世界米**距离（针孔投影反解，不做像素换算）。",
+                "三条判决线：J1 CSM 本影存在（S>0.5 占全幅 ≥0.50%）· J2 CSM 的 W(64)/W(16) ∈ "
+                "[0.55, 1.80]（不随 cascade 半径漂）· J3 pcss5 的 W(64)/W(16) ≥ 1.60（靶子真的"
+                "在展开，J2 的绿不是「什么都量不到」）。阈值理由与 guard 出处见 `imgqa check`。",
+                "**无 flag 是设计**（同 `shadow-softness`）：靶 / 臂 / 帧号 / 阈值都是量具的组成"
+                "部分，能调 = 能调绿。缺 `.glb` 或缺 manifest 直接 FAIL，**不 SKIP**。",
+            },
+            false,
+            "",
+        },
         /* probe */
         SubcommandSpec{
             "probe",

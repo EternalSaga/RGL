@@ -4,6 +4,7 @@
 #include "aa_coverage.h"
 #include "cli.h"
 #include "ao_metrics.h"
+#include "shadow_kernel_metric.h"  // kernelscale 口径层（Projector / ScanLine / shadowScanPoint）
 #include "temporal_flicker.h"
 #include "temporal_homography.h"
 #include "temporal_residual.h"
@@ -235,8 +236,10 @@ void testJudgmentFamilies(Checker& c)
     // 51 → 52 = 批 13.15b 的 C13 臂判决「修法验收」。
     // 52 → 54 = 批 14.5 FSR 臂两条守卫（`temporal-tail-step-fsr-floor` / `-basespace`）。
     // 54 → 57：批 N6d 步 0 的 `shadow-softness` 三条（J1 量具有效 / J2 现状缺陷 / J3 对账出数）。
+    // 57 → 60：`shadow-kernel-scale` 三条（CSM 本影存在性 / 核尺度不随 cascade 半径漂移 /
+    // PCSS 半影随高度展开）。写法照抄 `shadow-softness` 那三条，见 judgments_table_shadow.cpp。
     // 这条硬计数的意义 = 族拆分/改名最容易掉条目，而掉掉的正是没人再读的那几条。
-    c.chk("判据总数 == 57（族拆分最容易掉条目）", all.size() == 57, std::to_string(all.size()));
+    c.chk("判据总数 == 60（族拆分最容易掉条目）", all.size() == 60, std::to_string(all.size()));
     size_t n[4] = {0, 0, 0, 0};
     for (const auto& j : all) {
         switch (j.family) {
@@ -756,6 +759,273 @@ void testShadowSoftnessMetrics(Checker& c)
         for (const auto& j : registeredJudgments())
             found = found || std::string(j.name) == name;
         c.chk("softness 判据已挂号进注册表", found, name);
+    }
+}
+
+// ── shadow-kernel-scale 的度量层与 profile 生成（shadow_kernel_scale.cpp）───────────
+//
+// 期望值一律来自**闭式**（线性斜坡的阈值交叉位置是解析的、覆盖率是整数比），不来自实机
+// 截图——截图只能证明「与上次一样」，闭式才能证明「算子算的是我说的那个量」。每条都配
+// **反向用例**（算子在应该无响应的地方必须无响应），并写明**变异红线**（把实现改坏成哪种
+// 具体形态时本用例会红）。
+namespace {
+
+/// 斜坡剖面：[lo, s0) 恒 v0、[s0, s1] 线性到 v1、(s1, hi] 恒 v1。
+std::vector<ShadowScanSample> rampProfile(double s0, double v0, double s1, double v1,
+    double step, double lo, double hi)
+{
+    std::vector<ShadowScanSample> out;
+    const int n = static_cast<int>(std::llround((hi - lo) / step));
+    for (int i = 0; i <= n; ++i) {
+        ShadowScanSample p;
+        p.s = lo + step * i;
+        p.valid = true;
+        const double t = p.s <= s0 ? 0.0 : (p.s >= s1 ? 1.0 : (p.s - s0) / (s1 - s0));
+        p.value = v0 + (v1 - v0) * t;
+        out.push_back(p);
+    }
+    return out;
+}
+
+/// 平坦剖面（可整片置为无效点，用来演「参照全黑」与「投出屏」）。
+std::vector<ShadowScanSample> flatProfile(double v, double step, double lo, double hi,
+    bool valid = true)
+{
+    std::vector<ShadowScanSample> out = rampProfile(lo, v, lo, v, step, lo, hi);
+    for (auto& p : out)
+        p.valid = valid;
+    return out;
+}
+
+cv::Mat grayLuma(const cv::Size& sz, double v)
+{
+    return cv::Mat(sz.height, sz.width, CV_64FC1, cv::Scalar(v));
+}
+}  // namespace
+
+void testShadowKernelScale(Checker& c)
+{
+    // ① 闭式：下降斜坡 S: 1→0 跨 [0,10] ⟹ 90% 交叉在 s=1、10% 在 s=9 ⟹ W = 0.8×10 = **8.0**。
+    //    这条钉的是「宽度 = |s90 − s10| 且线性插值」，变异红线：把 10/90 写成 5/95 或把
+    //    插值改成取整（返回 s0）都立刻红。
+    const std::vector<ShadowScanSample> ramp = rampProfile(0.0, 1.0, 10.0, 0.0, 0.5, 0.0, 10.0);
+    c.chk("kernelscale 交叉：下降斜坡的 90%/10% 交叉恰在 1.0 / 9.0（线性插值闭式）",
+        std::abs(shadowCrossing(ramp, 0.9, 0.0, 10.0) - 1.0) < 1e-9
+            && std::abs(shadowCrossing(ramp, 0.1, 0.0, 10.0) - 9.0) < 1e-9);
+    c.chk("kernelscale 宽度：斜坡 W = 0.8×跨度 = 8.0（米，不做任何像素换算）",
+        std::abs(shadowPenumbraWidth(ramp, 0.0, 10.0) - 8.0) < 1e-9,
+        std::to_string(shadowPenumbraWidth(ramp, 0.0, 10.0)));
+
+    // ② 反向（**缺陷态的算子级保证**）：全 0 剖面（影根本没画出来）必须给 **NaN**，
+    //    既不是 0 也不是任何数。写成 0 = 「影缘无限硬」= 把缺陷读成满分；写成 1 = 「完美地平」。
+    c.chk("kernelscale 宽度：无影剖面 → NaN（不是 0！）",
+        !std::isfinite(shadowPenumbraWidth(flatProfile(0.0, 0.5, 0.0, 16.0), 0.0, 16.0)));
+    c.chk("kernelscale 宽度：常数剖面（S 恒 0.5，无 10/90 交叉）→ NaN",
+        !std::isfinite(shadowPenumbraWidth(flatProfile(0.5, 0.5, 0.0, 16.0), 0.0, 16.0)));
+    c.chk("kernelscale 交叉：整片无效点（投出屏 / 参照全黑）→ NaN",
+        !std::isfinite(shadowCrossing(flatProfile(1.0, 0.5, 0.0, 16.0, false), 0.5, 0.0, 16.0)));
+
+    // ③ 窗口是判据的一部分：交叉落在 [lo,hi] 外**不许**被拿去用（否则「扫描窗随便放宽」
+    //    就能把上游缘当成下游缘，宽度读数换的靶子都没人知道）。
+    c.chk("kernelscale 交叉：窗口外的交叉不计（同一条剖面换窗即换读数）",
+        !std::isfinite(shadowCrossing(ramp, 0.5, 6.0, 10.0))
+            && std::abs(shadowCrossing(ramp, 0.5, 0.0, 10.0) - 5.0) < 1e-9);
+
+    // ④ 取**第一个**交叉：窗口内先撞上板体轮廓（下穿）再撞上影缘（上穿）时，判据量的是
+    //    先出现的那条。变异红线：改成从后往前扫 → 本条红。
+    std::vector<ShadowScanSample> two = rampProfile(0.0, 1.0, 2.0, 0.0, 0.5, 0.0, 16.0);
+    for (auto& p : two)
+        if (p.s > 8.0)
+            p.value = 1.0 - (p.s - 8.0) / 2.0;  // 8→10 再下一次（第二条缘）
+    c.chk("kernelscale 交叉：两条缘都在窗口内时取**第一个**（板体轮廓不得冒充影缘）",
+        std::abs(shadowCrossing(two, 0.5, 0.0, 16.0) - 1.0) < 1e-9,
+        std::to_string(shadowCrossing(two, 0.5, 0.0, 16.0)));
+
+    // ⑤ 影覆盖率（判据 1 的算子本体）。闭式：半幅 S=1、半幅 S=0 ⟹ 恰 0.5。
+    const cv::Size sz(4, 4);
+    cv::Mat ref = grayLuma(sz, 100.0);
+    cv::Mat arm = grayLuma(sz, 100.0);
+    for (int y = 0; y < 2; ++y)
+        for (int x = 0; x < sz.width; ++x)
+            arm.at<double>(y, x) = 0.0;  // 上半幅全影（S=1），下半幅同参照（S=0）
+    c.chk("kernelscale 覆盖率：半幅全影 → 恰 0.5（分母 = 全幅）",
+        std::abs(shadowUmbraFraction(ref, arm) - 0.5) < 1e-12);
+    c.chk("kernelscale 覆盖率：同图 → 恰 0（反向用例）",
+        shadowUmbraFraction(ref, ref) == 0.0);
+    cv::Mat bright = grayLuma(sz, 200.0);
+    c.chk("kernelscale 覆盖率：变亮不计入影（反向用例，否则整体提亮伪装成覆盖率暴涨）",
+        shadowUmbraFraction(ref, bright) == 0.0);
+    // 🔴 分母下限是本判据最要紧的一条反向：env/skybox 全关时**背景就是黑的**，
+    // S = (0−0)/0 会爆成 1 ⟹ 整屏算成「有影」= 缺陷态刷绿。变异红线：删掉 `>= 1 LSB`
+    // 这个下限 → 下面两条同时红。
+    c.chk("kernelscale 覆盖率：参照全黑（背景）不得算成影",
+        shadowUmbraFraction(grayLuma(sz, 0.0), grayLuma(sz, 0.0)) == 0.0);
+    c.chk("kernelscale 覆盖率：参照 0.5 LSB（低于 1 LSB 下限）→ 0 而不是 1",
+        shadowUmbraFraction(grayLuma(sz, 0.5), grayLuma(sz, 0.0)) == 0.0);
+    c.chk("kernelscale 覆盖率：S 恰为 0.5 不计（严格 >），0.5+ε 才计",
+        shadowUmbraFraction(grayLuma(sz, 100.0), grayLuma(sz, 50.0)) == 0.0
+            && shadowUmbraFraction(grayLuma(sz, 100.0), grayLuma(sz, 49.0)) == 1.0);
+    c.chk("kernelscale 覆盖率：尺寸不同立刻抛（两臂不是同一帧/同一尺寸）",
+        softnessThrew([&] {
+            (void)shadowUmbraFraction(ref, cv::Mat(3, 3, CV_64FC1, cv::Scalar(1.0)));
+        }));
+}
+
+/// ⑥ 取样层（`shadowScanPoint`）的闭式：合成图 + 合成机位，**不启引擎**。
+/// 单独成函数的理由 = 认知复杂度护栏（合成进上一条 19 > 15）；缝也正当：上面测的是
+/// 「剖面 → 读数」的算子，这里测的是「两张图 → 一条剖面」的取样。
+void testShadowKernelScaleSampling(Checker& c)
+{
+    // 机位：(0, 9.5, 16.5) → 原点，fov 40°，画幅 320×180 ⟹ 地面 1 m ≈ 13 px，
+    // 五条取样线（dv = 0/±1/±2 m）彼此相距 ≈13 px，互不污染。
+    Engine::Camera cam;
+    cam.position = {0.0, 9.5, 16.5};
+    cam.target = {0.0, 0.0, 0.0};
+    cam.fovDegrees = 40.0;
+    const Projector proj = makeProjector(cam, 320, 180);
+    ScanLine line;
+    line.origin = {0.0, 0.0};
+    line.u = {1.0, 0.0};
+    line.v = {0.0, 1.0};
+    line.lo = -1.0;
+    line.hi = 1.0;
+    line.step = 0.5;
+    const cv::Mat refFlat = grayLuma(cv::Size(320, 180), 100.0);
+    const cv::Mat armFlat = grayLuma(cv::Size(320, 180), 100.0);
+    const ShadowScanSample same = shadowScanPoint(refFlat, armFlat, proj, line, 0.0);
+    c.chk("kernelscale 取样：两图相同 → S 恰为 0（零点）", same.valid && same.value == 0.0);
+    // 五条线里**只有一条**被涂黑（3×3 块盖住它的 2×2 双线性足迹）⟹ 平均后 S **恰为 1/5**。
+    // 🔴 这条就是 kVLineOffsets 的存在性证明：把五线平均删掉（退回单线）这里读到的是 1.0。
+    cv::Mat armOne = armFlat.clone();
+    {
+        double fx = 0.0, fy = 0.0;
+        const bool ok = projectTo(proj, 0.0, 0.0, fx, fy);
+        c.chk("kernelscale 取样：机位视线扫得到影心（合成机位不是随手取的）", ok,
+            ok ? "" : "投影落在屏外");
+        const int cx0 = static_cast<int>(std::lround(fx));
+        const int cy0 = static_cast<int>(std::lround(fy));
+        for (int y = cy0 - 1; y <= cy0 + 1; ++y)
+            for (int x = cx0 - 1; x <= cx0 + 1; ++x)
+                armOne.at<double>(y, x) = 0.0;
+    }
+    const ShadowScanSample one = shadowScanPoint(refFlat, armOne, proj, line, 0.0);
+    c.chk("kernelscale 取样：五条线只有一条全黑 → S 恰为 1/5（沿 v 平均在起作用）",
+        one.valid && std::abs(one.value - 0.2) < 1e-12, std::to_string(one.value));
+    // 阳性锚点（反向）：**整条竖带**涂黑 = 真影缘 ⟹ 五条线一起读到 0 ⟹ S 恰为 1。
+    // 平均不许把真的缘也摊掉；把 v 偏移放大到越出板宽（±8 m）就是靠这条变红。
+    cv::Mat armBand = armFlat.clone();
+    {
+        double fx = 0.0, fy = 0.0;
+        projectTo(proj, 0.0, 0.0, fx, fy);
+        const int cx0 = static_cast<int>(std::lround(fx));
+        for (int y = 0; y < armBand.rows; ++y)
+            for (int x = cx0 - 1; x <= cx0 + 1; ++x)
+                armBand.at<double>(y, x) = 0.0;
+    }
+    const ShadowScanSample band = shadowScanPoint(refFlat, armBand, proj, line, 0.0);
+    c.chk("kernelscale 取样：整条竖带全黑（真影缘）→ S 恰为 1（平均不摊平缘）",
+        band.valid && band.value == 1.0, std::to_string(band.value));
+    // 投出屏的样本必须**作废**而不是夹到边缘像素（夹 = 把屏外读成边缘，剖面会凭空多出端点）。
+    ScanLine far2 = line;
+    far2.origin = {5000.0, 5000.0};
+    const ShadowScanSample off = shadowScanPoint(refFlat, armFlat, proj, far2, 0.0);
+    c.chk("kernelscale 取样：投出屏 → valid=false（不夹到边缘像素）", !off.valid);
+}
+
+/// `shadow-kernel-scale` 的**仪器面**（⑦ 合成 profile 的两个门 + ⑧ 判据挂号）。
+/// 与算子面 `testShadowKernelScale` 分成两个函数的直接理由 = 认知复杂度护栏（合成 17 > 15）；
+/// 缝本身也正当：算子面不碰磁盘、不启引擎，本面不碰算子。
+void testShadowKernelScaleInstrument(Checker& c)
+{
+    // ⑦ 合成 profile：shadow.lua 整份覆写 + llm 截图门在**合成路径**上有实现。
+    //    后者是本轮新开的线（旧守卫认为合成路径无实现 ⟹ 直接拒）；没有这组用例，
+    //    「门开了却静默不生效」就只能在实机跑的时候才发现。
+    const std::string tmp = "/tmp/imgqa_selftest_kernelscale";
+    {
+        ProfileOpts o;
+        o.glb = "penumbra_ladder.glb";
+        o.variant = "deferred";
+        o.shadowLuaOverride = "return { mode = \"pcss\", izb = false, pcss = { sun_degrees = 5.0 } }\n";
+        o.overrideLlmShot = true;
+        o.llmShotFile = "screenshots/selftest_kernelscale.png";
+        o.llmShotDelayFrames = 13;  // ≠ 模板默认 8，否则「覆写真的落上」这条测不到
+        // 机位走 camera.lua（从第 1 帧生效）——本命令的投影必须知道相机在哪，
+        // 而 RPC 补写的机位不进 camera.lua（假绿教训见 ProfileOpts::hasCamera 注释）。
+        o.hasCamera = true;
+        o.cameraPosition = { 1.0, 2.0, 3.0 };
+        o.cameraTarget = { 0.0, 0.0, 0.0 };
+        o.cameraFov = 40.0;
+        softnessGen(c, tmp, o);
+        std::ifstream sh(tmp + "/shadow.lua");
+        const std::string shText{std::istreambuf_iterator<char>{sh}, {}};
+        c.chk("kernelscale profile：shadow.lua 整份 = 臂定义（pcss 调参块在场）",
+            shText.find("mode = \"pcss\"") != std::string::npos
+                && shText.find("sun_degrees = 5.0") != std::string::npos,
+            shText);
+        std::ifstream rt(tmp + "/runtime.lua");
+        const std::string rtText{std::istreambuf_iterator<char>{rt}, {}};
+        std::ifstream dg(tmp + "/diagnostics.lua");
+        const std::string dgText{std::istreambuf_iterator<char>{dg}, {}};
+        c.chk("kernelscale profile：合成路径的 llm 截图门写对（帧号 = 量具的一部分）",
+            rtText.find("llm_debug = true") != std::string::npos
+                && rtText.find("delay_frames = 13") != std::string::npos
+                && rtText.find("selftest_kernelscale.png") != std::string::npos);
+        c.chk("kernelscale profile：合成路径同时关 rpc（llm 截图与 /shot 互斥）",
+            dgText.find("rpc = false") != std::string::npos);
+        // 🔴 覆写**不许把配置写坏**。这条是本轮实测付出来的：旧合成模板把 `llm_shot` 三个键
+        // 挤在一行、`delay_frames = 8 } }` 收尾，值跨度按「到 , 或换行为止」算 ⟹ 覆写把尾部
+        // ` } }` 一起吃掉，runtime.lua 变成 lua 语法错，引擎 status=1 退出（实测）。
+        // 只查括号平衡与收尾，不查语义——语义错由引擎启动期喊，形状错本条喊。
+        const auto braces = [](const std::string& t) {
+            int open = 0;
+            for (const char ch : t)
+                open += ch == '{' ? 1 : (ch == '}' ? -1 : 0);
+            return open;
+        };
+        c.chk("kernelscale profile：覆写后的 runtime.lua 括号平衡且以 } 收尾（覆写没吃掉收尾）",
+            braces(rtText) == 0 && !rtText.empty()
+                && rtText.find_last_not_of(" \t\n\r") == rtText.find_last_of('}'),
+            "brace_delta=" + std::to_string(braces(rtText)));
+        c.chk("kernelscale profile：机位写进 camera.lua（从第 1 帧生效，不是 RPC 补写）",
+            [&] {
+                std::ifstream cam(tmp + "/camera.lua");
+                const std::string t{std::istreambuf_iterator<char>{cam}, {}};
+                return t.find("position = { 1, 2, 3 }") != std::string::npos;
+            }());
+    }
+    {
+        // 门关态必须**逐位不变**：现有合成判据（temporal / aa-coverage / ao-noise…）都走
+        // 这条路径，任何"顺手多写一个键"都会让它们的历史读数失效。
+        ProfileOpts o;
+        o.glb = "cornell_box.glb";
+        softnessGen(c, tmp, o);
+        std::ifstream rt(tmp + "/runtime.lua");
+        const std::string rtText{std::istreambuf_iterator<char>{rt}, {}};
+        std::ifstream sh(tmp + "/shadow.lua");
+        const std::string shText{std::istreambuf_iterator<char>{sh}, {}};
+        c.chk("kernelscale profile：门关 = 不写 llm 截图键（现有合成判据逐位不变）",
+            rtText.find("llm_debug = false") != std::string::npos
+                && rtText.find("unused.png") != std::string::npos);
+        c.chk("kernelscale profile：shadowLuaOverride 为空时仍走 mode/izb 生成（不写空串）",
+            shText.find("mode = \"none\"") != std::string::npos && shText.size() > 10,
+            shText);
+    }
+    c.chk("kernelscale profile：overrideShadowRoute 在合成路径仍被拒（那条门确实无实现）",
+        softnessThrew([&] {
+            ProfileOpts bad;
+            bad.glb = "penumbra_ladder.glb";
+            bad.overrideShadowRoute = true;
+            bad.shadowRouteMode = "pcss";
+            makeProfile(tmp, bad);
+        }));
+
+    // ⑦ 三条判决线必须在注册表里（改名而漏挂号 = verdictFor 运行期才炸，太晚）
+    for (const char* name :
+        { "shadow-csm-umbra-present", "shadow-csm-flat-in-gap", "shadow-target-resolves-gap" }) {
+        bool found = false;
+        for (const auto& j : registeredJudgments())
+            found = found || std::string(j.name) == name;
+        c.chk("kernelscale 判据已挂号进注册表", found, name);
     }
 }
 
@@ -2062,6 +2332,9 @@ int cmdSelftest()
     testShadowSoftnessIzbForm(c);
     testShadowSoftnessCommentTrap(c);
     testShadowSoftnessMetrics(c);
+    testShadowKernelScale(c);
+    testShadowKernelScaleSampling(c);
+    testShadowKernelScaleInstrument(c);
     testCliRegistryShape(c);
     testCliArgsBehavior(c);
     std::printf("%s：%d 条失败\n", c.bad ? "自检失败" : "自检通过", c.bad);

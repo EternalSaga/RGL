@@ -196,6 +196,15 @@ struct ProfileOpts {
     bool izbShadow = false;                // → shadow.lua 的 izb（izb 消费域判据；与 mode 正交）
     bool evssmShadow = false;              // → shadow.lua 的 mode="evssm"（批 11.6d swim 判据）
     int izbDumpFrame = 0;                  // → shadow.lua 的 izb.dump_frame（>0：N 帧起每 30 帧覆盖写 izb_mask.ppm）
+    /// **合成 profile 专用**（`shadow-kernel-scale`）：非空 = 合成路径写出的 shadow.lua
+    /// **整份**由它给（调用方负责是合法 lua）。存在的理由：批 N6b 把三个布尔塌成 mode 单轴
+    /// 枚举之后，**逐档调参块**在 ProfileOpts 里表达不出来——pcss 臂要
+    /// `pcss = { sun_degrees = 5.0, search_radius = 16.0, max_penumbra = 32.0 }`，而「哪个档
+    /// 的哪枚调参」是那台仪器的**臂定义**，不是工具的通用字段（为它加三枚字段 = 每个新档
+    /// 都要来改 ProfileOpts）。
+    /// ⚠ 交付配置路径**不吃**它：那条路径整份替换 shadow.lua = 把交付调参抄第二份（会漂），
+    /// 走 `overrideShadowRoute` 的逐键覆写。
+    std::string shadowLuaOverride;
     std::string variant;                   // "" = 模板默认（forward）；"deferred" 等 = 拷贝后重写 variant 行
     /// 抗锯齿选路（批 14.6：引擎 `runtime.lua` 的 `aa` 三态键）。Off = **不写键** = 出厂态。
     /// 原 `taa` 布尔（scene.lua `taa.enabled`）与 `fsrUpscaler` 布尔（`fsr_upscaler`）都收进
@@ -952,6 +961,45 @@ struct SoftArmMetrics {
 /// J2 `shadow-softness-sun-response`（现状缺陷，**现在必须红**）·
 /// J3 `shadow-softness-vs-csm`（对账出数，advisory）。
 int cmdShadowSoftness();
+
+// ═══════════════════════════════════════════ CSM PCF 核宽**单位**护栏（shadow-kernel-scale）
+//
+// 缺陷本体 = `rgl/shaders/shadow.slang` ⑥ 把世界米/纹素的 `texel` 当归一化图集 uv 偏移用
+// （误差 = 4r，随级联半径线性放大 ⟹ 大场景下阴影整体消失）。判据本体与全部口径理由
+// = `tools/imgqa/shadow_kernel_scale.cpp` 头注释；此处只放**度量层**声明。
+
+/// 扫描线上一个采样点。s = 沿扫描方向的**世界米**（不是像素！宽度因此直接以米计）；
+/// value = 阴影因子 `S = (L_ref − L_arm) / L_ref`（env/ambient/ao 全 0 时与 albedo 无关）。
+/// `valid = false` = 投出屏外，或参照黑到取不出比值（分母 < 1 LSB）。
+struct ShadowScanSample {
+    double s = 0.0;
+    double value = 0.0;
+    bool valid = false;
+};
+
+/// S 在窗口 [lo, hi] 内**第一次**穿过 thr 的 s（样本间线性插值）；取不到 = NaN。
+/// 为什么是「第一个」而不是「最后一个」：下游缘是扫描方向上唯一该有半影的地方，而窗口内
+/// 可能先撞上板体轮廓（板把自己的上游影段挡住了）——取最后一个会把轮廓当成影缘。
+[[nodiscard]] double shadowCrossing(const std::vector<ShadowScanSample>& pr, double thr,
+    double lo, double hi);
+
+/// 半影宽度 = |s(90%) − s(10%)|（米）。任一交叉取不到 = **NaN 而不是 0**：
+/// 「没有影」与「影缘无限硬」是两种相反的失效，混成 0 会让缺陷态看起来像满分。
+[[nodiscard]] double shadowPenumbraWidth(const std::vector<ShadowScanSample>& pr, double lo,
+    double hi);
+
+/// 影覆盖率 = frac(L_ref ≥ 1 LSB 且 (L_ref − L_arm)/L_ref > 0.5)，分母 = **全幅**像素。
+/// 参照下限不是可有可无：分母接近 0 时 S 会爆到 1，背景（env/skybox 全关 = 黑）会被
+/// 整片算成「有影」——那正是本判据要抓的反面。
+[[nodiscard]] double shadowUmbraFraction(const cv::Mat& refLuma, const cv::Mat& armLuma);
+
+/// CSM PCF 核宽单位护栏（靶 = 程序化 `penumbra_ladder`，三臂 none/csm/pcss5）。
+/// **无 flag**：场景 / 臂 / 帧号 / 阈值都是量具的组成部分，能调 = 能调绿。
+/// 三条判决线：`shadow-csm-umbra-present`（CSM 必须有影）·
+/// `shadow-csm-flat-in-gap`（CSM 的 W 对间隙 h 必须平）·
+/// `shadow-target-resolves-gap`（**阳性锚点**：pcss5 的 W 必须随 h 涨，它红时第二条的绿不作数）。
+/// 缺靶（.glb / .manifest.json）= 抛，**不 SKIP**。
+int cmdShadowKernelScale();
 
 }  // namespace RGL::imgqa
 

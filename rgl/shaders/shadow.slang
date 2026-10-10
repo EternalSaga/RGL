@@ -217,15 +217,20 @@ float evssmCoverage(float2 uv, float refZ, float texelWorld,
     // 全落进同一个 2×2 双线性邻域（实测：单抽头变异与基线**逐位相同**、太阳角敏感度**恰好
     // 0.000%**）⟹ 核根本没张开，EVSSM 退化成「单纹素深度比较」= CSM 去掉 PCF。下限让核
     // 至少张到能比较多个纹素。
-    // ⚠ 核宽是**覆盖 ↔ 不透明度**的单调权衡，实测（交付配置 / 逐位确定性，比 CSM 同臂）：
+    // ⚠ 核宽是**覆盖 ↔ 不透明度**的单调权衡，实测（交付配置 / 逐位确定性，比 CSM 同臂；
+    //   分母 = 修好 ⑥ 抽头单位之后的 CSM：覆盖率 6.88% / 本影深 4.990LSB / 带核比 0.281）：
     //   foot    0     4      8     16     32
-    //   覆盖率比 .600  .631   .641  .736   .845
-    //   黑度比  .863   .810   .758  .708   .608
-    //   带核比  .209   .376   .532  .999   2.176
-    //   每影像素深度(EVSSM/CSM=52LSB) 75 66 61 50 37
-    // **16 = 唯一同时贴上 CSM 形态的点**（带核比 1.000、每影像素深度 50 vs 52），故取 16 为
-    // 默认。再往上（32）覆盖率是靠**把影冲淡**换来的 —— 黑度比掉到 .608，不是变好。
-    // 完整权衡与「为何转正不成立」→ docs/shadow_routes_plan.md §5 修法重排。
+    //   覆盖率比 .857  .903   .917  1.051  1.208
+    //   黑度比  .882   .827   .774  .723   .621
+    //   带核比  .725   1.309  1.851 3.478  7.574
+    //   每影像素深度(EVSSM) 75 66 61 50 37
+    // **全域唯一不随分母漂的读数 = 黑度比**：≤0.882 且随核宽单调下降 ⟹ **EVSSM 的本影永远比
+    //   CSM 浅**，想要软度就得付这个价。覆盖率与带核比两列都是**比值**，它们的绝对位置由分母
+    //   决定：覆盖率在 foot≥4 就已 ≥0.90、foot=16 达 1.051（**超过 CSM 本身**），"带核比 ≈ 1"
+    //   的点落在 **foot ≈ 2.4**（0.725@0 ↔ 1.309@4 线性插值），不在 16。
+    // 出厂仍取 16 = 让 `mode="evssm"` 这一档**演示它自己的卖点**（比 CSM 软 3.5 倍、覆盖不输），
+    //   不是"贴上 CSM"——那个理由随 ⑥ 的单位错一起作废了。要"尽量像 CSM"就调低到 2~4。
+    // 完整权衡与转正裁决 → docs/shadow_routes_plan.md §5.2。
     const float penumbraFloored = max(penumbraSquashed, readShadowEvssmFootprint());
 
     // —— STEP 3：半影滤波（5 抽头 quincunx，中心 0.5 + 四角 0.125；lod 偏置 −1 =
@@ -371,9 +376,20 @@ float sampleShadow1Tap(float3 worldPos, float3 N)
 #else
     // ⑥ 4 抽头 PCF（2×2，偏移半个纹素）：单抽头的阶梯状阴影边在 1024² 块上肉眼可见，
     // 4 抽头是"看不出锯齿"与"不多花 4 倍采样"的平衡点。偏移量用 texel 常量而非屏幕导数：
-    // texelSizes 是 scene data 里的 uniform（每帧一样）而不是按像素变化的；用 ddx/ddy 会在分支内
-    // 未定义（同 ao.frag 批 11.4 的教训）。
-    const float2 o = float2(texel * 0.5, texel * 0.5);
+    // texelSizes 是 scene data 里的 uniform（每帧一样）而不是按像素变化的；用 ddx/ddy 会在
+    // 分支内未定义（同 ao.frag 批 11.4 的教训）。
+    // ⚠ **单位**：这里的偏移是 **uv**，而上面那个 `texel` 是**世界米/纹素**（= 2·r/块边长，
+    //   ② 拿它乘法线做世界系偏移是对的）。半个纹素换算到 uv 只跟图集边长有关、与 r 无关：
+    //   块是图集里像素对齐的一块 ⟹ 1 块纹素 = 1 图集纹素 = 1/atlas.x uv。
+    //   曾写成 `texel * 0.5`（把世界米当 uv）⟹ 实际偏移 = 应有值的 **4r 倍**（r = 本块光空间
+    //   半径，取米数）。bistro 交付档 r=0.57 m → 2.3 倍（PCF 核略宽，肉眼看不出，故长期潜伏）；
+    //   r 上到几十米 → 抽头直接跑到遮挡体图像之外 → 采样到空图集（远深度）→ **整场景判成受光
+    //   = 阴影消失**。PCSS/EVSSM 分支因 ① 有 `clamp(uv+off, lo, hi)` 夹回本块而免疫。
+    //   护栏 = `just imgqa shadow-kernel-scale`（靶 = qa_scenes.py 的 penumbra_ladder，四块板
+    //   只让间隙 h 变；r 是几十米量级，正是 bistro 尺度照不出这个错的那个盲点）。三条判据：
+    //   CSM 必须有 umbra、CSM 半影宽度必须对 h 平、PCSS@5° 必须**不**平（阳性锚点）。
+    const float halfTexelUv = 0.5 / atlas.x;
+    const float2 o = float2(halfTexelUv, halfTexelUv);
     const float ref = ndc.z - params.x;
     const float d0 = shadowMap.Sample(shadowSampler, uv + float2(-o.x, -o.y));
     const float d1 = shadowMap.Sample(shadowSampler, uv + float2(o.x, -o.y));

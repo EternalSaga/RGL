@@ -1,6 +1,7 @@
 // imgqa CLI。子命令：selftest / check / refuse / attribution / faces / switch / izb / swim /
 // probe / temporal / temporal-residual / temporal-motion / temporal-feedback /
-// temporal-flicker / temporal-homography / aa-coverage / taa-swim / note。
+// temporal-flicker / temporal-homography / aa-coverage / taa-swim / shadow-softness /
+// shadow-kernel-scale / note。（权威清单 = `cli_table.cpp` 的注册表，本行只是路标。）
 #include "imgqa.h"
 #include "cli.h"
 #include "temporal_flicker.h"
@@ -791,11 +792,17 @@ int dispatch(const std::string& cmd, const Args& P)
         return dispatchTemporal(cmd, P);
     if (isRigCommand(cmd))
         return dispatchRig(cmd, P);
-    // 元命令 selftest / check 同形（零 flag、零参数）⟹ 合成一条查表。不是审美：本函数的
-    // 认知复杂度已到护栏上限（15），加第 8 条子命令（shadow-softness）就出界；查表把两条
-    // if 收成一条，形态与上面「temporal 前缀」「isRigCommand 名字表」两条同构。
+    // 元命令 selftest / check / shadow-softness / shadow-kernel-scale 同形（零 flag、零
+    // 参数）⟹ 合成一条查表。不是审美：本函数的认知复杂度已到护栏上限（15），加第 8 条子命令
+    // （shadow-softness）就出界；查表把多条 if 收成一条，形态与上面「temporal 前缀」
+    // 「isRigCommand 名字表」两条同构。
+    // ⚠ 进这张表的前提 = **真的零 flag**。判据的阈值是量具的组成部分（写死在实现里的
+    // constexpr），可调 flag 会让同一条判据在不同调用下给出不同的绿，那就不许走这张表。
     static const std::map<std::string, int (*)()> kMeta = {
-        { "selftest", cmdSelftest }, { "check", cmdCheck },
+        { "selftest", cmdSelftest },
+        { "check", cmdCheck },
+        { "shadow-softness", cmdShadowSoftness },
+        { "shadow-kernel-scale", cmdShadowKernelScale },
     };
     if (const auto meta = kMeta.find(cmd); meta != kMeta.end())
         return meta->second();
@@ -806,8 +813,6 @@ int dispatch(const std::string& cmd, const Args& P)
     if (cmd == "aa-coverage")
         return cmdAaCoverage(P.get("--variant"), P.integer("--warm"), P.number("--feedback"),
             P.has("--base-space"), P.number("--kernel"));
-    if (cmd == "shadow-softness")
-        return cmdShadowSoftness();  // 无 flag：默认值全在实现里的 constexpr（量具的组成部分）
     if (cmd == "taa-swim")
         return cmdTaaSwim(P.integer("--pairs"), P.integer("--warm"), P.get("--variant"));
     if (cmd == "note") {

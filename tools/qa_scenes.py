@@ -1512,6 +1512,212 @@ def scene_nm_rig(amp_deg: float = 2.0, block: int = 1, pattern: str = "blocks",
     return s
 
 
+# ---------------------------------------------------------------------------
+# 场景 6：penumbra_ladder —— 半影宽度随「遮挡体↔接收面间隙 h」的变化曲线
+# ---------------------------------------------------------------------------
+# 为什么需要它（债-17 PCSS 冻结件处置缺的那个数）：PCSS 相对 CSM 唯一**结构性**的能力差异
+# = 半影随间隙变宽（接触硬化：贴地的接触影硬、高处的投影软）。CSM 的 4 抽头 PCF 核宽绑的是
+# **阴影贴图纹素**，与 h 无关 ⟹ 它在原理上给不出这条曲线。
+#
+# 为什么现有靶都量不出来：shadow_rig 的遮挡体**全坐在地上**（h≈0）⟹ 半影恒等于核宽，梯子
+# 退化成一点；bistro 上高处投影确实有，但**间隙与级联同时变**（越高的遮挡体离相机越远 ⟹ 落进
+# 越粗的级联），两个自变量搅在一起，测出来分不清是 PCSS 的功劳还是 texel 变粗。本场景的设计
+# 约束就一条：**只让 h 变，其余全固定**——所有板同尺寸、同 u 位（沿光的水平行进方向）、只在
+# 横向 v 上排开，接收面是同一块无限远的平地同材质。
+#
+# 闭式解（写进 manifest，测量脚本据此对拍）：太阳是角直径 α 的圆盘；接收面水平、遮挡边缘
+# **垂直于光的水平行进方向**时，半影宽度
+#     W(h) = h · [cot(e − α/2) − cot(e + α/2)]        e = 太阳仰角
+# 一阶 = α·h/sin²e。本场景 e = asin(0.75/|SUN|) = 48.1108°（sin²e = 0.554187），
+# 于是 W/h = 0.016692（α=0.53° 出厂）/ 0.157809（α=5°）。**线性于 h** 是判据本体。
+#
+# 判据用**比值** W(h_max)/W(h_min)：PCSS 应 ≈ h_max/h_min，CSM 应 ≈ 1。选比值不选绝对值 =
+# 透视缩放、像素尺度、相机标定全部约掉 ⟹ 量具自身不引入误差（绝对值那列仍报，用来查
+# max_penumbra 软夹取的介入点，那是出厂配置的真实行为，不是测量误差）。
+#
+# 三条让"边缘垂直于光"成立的机关（写错任何一条，测到的就是方位角展宽而非仰角展宽）：
+#   ① 板的 yaw = atan(0.9) = 41.9872°，把板的局部 +x 精确转到光的水平行进方向
+#      u = normalize(2/3, −3/5)（= SHADOW_OFF 归一化，见下）；
+#   ② 扫描沿 u 走，穿过的是板的**局部 ±x 边**（不是世界 x 边）；
+#   ③ 接收面是**单一平地**（不是阶梯/坡面），间隙 = 板底高度，逐点相同。
+#
+# ⚠ **只量下游缘**（离开影的那条），上游缘不可测且这是几何事实不是疏忽：上游缘位于
+# u = 0.897h − 8，板 footprint 是 u ∈ [−8, 8] ⟹ h < 17.8 m 时上游缘就在板**正下方**，
+# 被不透明的板本身挡住（任何俯角都躲不开，俯角越平被遮得越多）。下游缘 u = 0.897h + 8 > 8
+# 恒在板外，但板仍会在它下游投下"相机视线遮挡带"，其边界 = 视线擦过板下游缘：
+#     u_hidden(h) = (8·Y − h·u_cam)/(Y − h)      （Y = 相机高、u_cam = 相机沿 u 的坐标）
+# 俯角 65° / 距离 170 m 时四档余量 = 4.3 / 8.3 / 14.8 / 19.8 m（h=8/16/32/64），全部 > 半影
+# 半宽 ⟹ 下游半影完整可见。**换机位前必须重算这条**，否则测到的是"板挡住了"而不是"没半影"。
+#
+# 自校验锚点（阳性）：下游缘 50% 交叉的**位置**有闭式解 = 0.897h + 8（以板心沿 u 计）。
+# 位置对得上 ⟹ 相机投影复刻正确、扫描线落在正确的地上；宽度读数才有意义。
+
+LADDER_HEIGHTS = (8.0, 16.0, 32.0, 64.0)   # 间隙梯（米）；等比 ×2 ⟹ 判据比值 = 8
+LADDER_SIDE = 16.0                         # 板边长（米）；同时是图内自定标的已知长度
+LADDER_THICK = 0.5
+LADDER_SPACING = 44.0                      # 沿 v 的间距；影包络两两不相交（下方 assert）
+LADDER_YAW = math.degrees(math.atan(0.9))  # 41.9872°：板局部 +x → 光的水平行进方向 u
+LADDER_U = (SHADOW_OFF[0] / math.hypot(*SHADOW_OFF), SHADOW_OFF[1] / math.hypot(*SHADOW_OFF))
+LADDER_V = (-LADDER_U[1], LADDER_U[0])     # 横向（垂直于光的水平行进方向）
+LADDER_SUN_ELEV = math.asin(-SUN[1] / math.sqrt(sum(v * v for v in SUN)))
+
+# 机位由（俯角, 距离）**反解**，不手填坐标 —— 手填过一次就把净空算错了（h=64 档净空只剩
+# 0.7 m，被下面的构建期 assert 当场抓住）。场景心 = 四片影的均值位置（沿 u 26.9 m）。
+LADDER_TARGET_U = 0.896908 * sum(LADDER_HEIGHTS) / len(LADDER_HEIGHTS)   # = 26.9
+LADDER_CAM_ELEV_DEG = 75.0
+LADDER_CAM_DIST = 200.0
+
+
+def ladder_target():
+    return (LADDER_TARGET_U * LADDER_U[0], 0.0, LADDER_TARGET_U * LADDER_U[1])
+
+
+def ladder_camera():
+    e = math.radians(LADDER_CAM_ELEV_DEG)
+    tx, _, tz = ladder_target()
+    back = LADDER_CAM_DIST * math.cos(e)
+    return (tx - back * LADDER_U[0], LADDER_CAM_DIST * math.sin(e),
+            tz - back * LADDER_U[1])
+
+
+LADDER_CAM = {"position": list(ladder_camera()), "target": list(ladder_target()),
+              "fovDegrees": 40.0}
+
+
+def ladder_camera_clearance():
+    """每档下游缘的**视线净空**（米）：> 0 才说明板没挡住自己要测的那条影缘。
+
+    板是不透明的。视线擦过板下游缘（u = 边长/2, y = h）时落地的 u 就是遮挡带边界：
+        u_hidden(h) = (边长/2 · Y − h · u_cam) / (Y − h)
+    下游缘在 u_edge(h) = |SHADOW_OFF|·h + 边长/2。返回 [(h, u_hidden, u_edge, margin)]。
+    """
+    cx, y, cz = ladder_camera()
+    u_cam = cx * LADDER_U[0] + cz * LADDER_U[1]
+    half = LADDER_SIDE / 2.0
+    offlen = math.hypot(*SHADOW_OFF)
+    out = []
+    for h in LADDER_HEIGHTS:
+        u_hidden = (half * y - h * u_cam) / (y - h)
+        u_edge = offlen * h + half
+        out.append((h, u_hidden, u_edge, u_edge - u_hidden))
+    return out
+
+
+def ladder_penumbra_per_meter(alpha_deg: float) -> float:
+    """闭式半影宽度对间隙的斜率 dW/dh（米/米）；边缘垂直于光的水平行进方向、接收面水平。"""
+    half = math.radians(alpha_deg) / 2.0
+    e = LADDER_SUN_ELEV
+    return 1.0 / math.tan(e - half) - 1.0 / math.tan(e + half)
+
+
+def scene_penumbra_ladder() -> Scene:
+    s = Scene(
+        name="penumbra_ladder",
+        purpose="半影宽度↔间隙曲线：PCSS 接触硬化的能力判据（CSM 原理上给不出斜率）",
+        honesty=("半影宽度的闭式解只在**边缘垂直于光的水平行进方向 + 接收面水平**时成立，"
+                 "本场景靠 yaw/平地两个机关把这两个前提钉死（见源码头注）；换机位扫描方向就"
+                 "不再适用该闭式解。max_penumbra 是**图集纹素域**的 soft clamp，高 h 档会被"
+                 "夹住——那是出厂配置的真实行为，读数里必须区分'物理该多宽'与'配置允许多宽'。"
+                 "级联边界随相机漂移（运行期自适应），本场景刻意压小横向跨度让四档尽量落在"
+                 "同一条 texel 尺度上，但**不承诺**它们真在同一级联——CSM 那一列若出现台阶，"
+                 "先查级联再查 PCSS。"),
+        cameras={
+            "ladder": {"position": list(LADDER_CAM["position"]),
+                       "target": list(LADDER_CAM["target"]),
+                       "fovDegrees": LADDER_CAM["fovDegrees"],
+                       "note": "沿 u 上游、俯角 65°、距场景心 170 m。俯角是**算出来的**："
+                               "再平一点，板就会挡住自己的下游影缘（净空见 selfProof，"
+                               "构建期 assert 非负）"},
+        },
+        extra={
+            "defaultLight": {"direction": list(SUN), "intensity": 12.0,
+                             "source": "configs/scene.lua light 段（闭式解的前提）"},
+            "sunElevationDeg": math.degrees(LADDER_SUN_ELEV),
+            "penumbraPerMeterOfGap": {
+                "formula": "W/h = cot(e-a/2) - cot(e+a/2)，a = pcss.sun_degrees",
+                "at_0.53": ladder_penumbra_per_meter(0.53),
+                "at_5": ladder_penumbra_per_meter(5.0),
+            },
+            "csmExpectation": "W 与 h 无关（PCF 核宽 = 阴影贴图纹素数 × texelWorld），"
+                              "判据比值 W(64)/W(16) 应 ≈ 1；PCSS 应 ≈ 4",
+            "measureOnly": "下游缘（离开影的那条）。上游缘在 h<17.8 m 时位于板正下方、被板本身"
+                           "挡住，任何俯角都测不到 —— 这是几何事实，不是配置没调好",
+            "edgePositionAnchor": "下游缘 50% 交叉沿 u 的位置 = |SHADOW_OFF|·h + 边长/2"
+                                  "（闭式、独立于宽度）⟹ 位置对得上才证明投影复刻没错",
+            # ── 测量接口（imgqa 判据读本块，**不在 C++ 里重抄几何常量** = 不造第二真相）──
+            # 扫描 = 从 shadowCenter 起沿 u 走 s 米；下游缘在 s = edgeS；半影宽度取该缘上
+            # 阴影因子 S=(none−arm)/none 的 10↔90 交叉间距。
+            "measure": {
+                "u": [LADDER_U[0], LADDER_U[1]],
+                "v": [LADDER_V[0], LADDER_V[1]],
+                "shadowOffsetPerMeter": list(SHADOW_OFF),
+                "side": LADDER_SIDE,
+                "spacing": LADDER_SPACING,
+                "edgeS": LADDER_SIDE / 2.0,
+                "scanHalfSpan": LADDER_SIDE / 2.0,
+                "step": 0.05,
+                "plates": [
+                    {"name": f"plate_h{int(h):02d}", "h": h,
+                     "center": [off * LADDER_V[0], off * LADDER_V[1]],
+                     "shadowCenter": [off * LADDER_V[0] + h * SHADOW_OFF[0],
+                                      off * LADDER_V[1] + h * SHADOW_OFF[1]],
+                     "edgeS": LADDER_SIDE / 2.0}
+                    for h, off in zip(LADDER_HEIGHTS,
+                                      [(i - (len(LADDER_HEIGHTS) - 1) / 2.0) * LADDER_SPACING
+                                       for i in range(len(LADDER_HEIGHTS))])
+                ],
+            },
+        },
+    )
+    P = s.pieces.append
+
+    half = 200.0
+    P(Piece("ground", quad((-half, 0.0, -half), (0.0, 0.0, 2 * half), (2 * half, 0.0, 0.0)),
+            PAL["yellow"], roughness=0.9, radial=False, closed=False,
+            intent="唯一接收面（同材质同粗糙度 ⟹ 四档半影的明暗基准完全一致，"
+                   "明暗跳变全部归因于半影本身而不是材质差异）；法线 +Y"))
+
+    plates = [
+        (f"plate_h{int(h):02d}", h, c,
+         f"间隙 h={h:g} m 档：底面离地 {h:g} m，板面水平 ⟹ 影内每一点的遮挡体↔接收面间隙"
+         f"恒等于 h（这是本场景唯一的自变量）")
+        for h, c in zip(LADDER_HEIGHTS,
+                        [PAL["red"], PAL["magenta"], PAL["cyan"], PAL["orange"]])
+    ]
+    n = len(plates)
+    footprints = []
+    for i, (name, h, color, intent) in enumerate(plates):
+        off = (i - (n - 1) / 2.0) * LADDER_SPACING
+        cx, cz = off * LADDER_V[0], off * LADDER_V[1]
+        P(Piece(name, box(cx, h + LADDER_THICK / 2.0, cz, LADDER_SIDE, LADDER_THICK,
+                          LADDER_SIDE, yaw_deg=LADDER_YAW),
+                color, roughness=0.7, intent=intent))
+        r = LADDER_SIDE / 2.0  # 旋转不改变沿自身局部轴的跨度；世界 AABB 见下
+        ext = LADDER_SIDE * (abs(math.cos(math.radians(LADDER_YAW)))
+                             + abs(math.sin(math.radians(LADDER_YAW)))) / 2.0
+        footprints.append((name, (cx - ext, cx + ext, cz - ext, cz + ext), h))
+
+    # ---- 构建期几何断言（口头承诺不算数，坏了直接构建失败）----
+    # 视线净空：板是不透明的，俯角不够就会挡住**自己要测的那条下游影缘**，症状是"半影量不出来"
+    # 而不是"没影"——最难归因的一种失效，所以钉在构建期。
+    for h, u_hidden, u_edge, margin in ladder_camera_clearance():
+        half_pen = ladder_penumbra_per_meter(5.0) * h / 2.0   # 最宽档（α=5°）的半影半宽
+        assert margin > half_pen, \
+            f"penumbra_ladder: h={h} 档板体遮挡带边界 u={u_hidden:.1f} 吃掉下游影缘 " \
+            f"u={u_edge:.1f}（净空 {margin:.1f} m < 半影半宽 {half_pen:.1f} m）——抬高相机"
+    ground = (-half, half, -half, half)
+    for name, rect, h in footprints:
+        assert _rect_contains(ground, _rect_hull(rect, h)), \
+            f"penumbra_ladder: {name} 的影包络落出接收面"
+    for i, (na, ra, ha) in enumerate(footprints):
+        for nb, rb, hb in footprints[i + 1:]:
+            assert not _rect_overlap(_rect_hull(ra, ha), rb), \
+                f"penumbra_ladder: {na} 的影压上 {nb}（半影会被邻居污染）"
+            assert not _rect_overlap(_rect_hull(rb, hb), ra), \
+                f"penumbra_ladder: {nb} 的影压上 {na}（半影会被邻居污染）"
+    return s
+
+
 SCENES = {
     "cornell_box": scene_cornell_box,
     "shadow_rig": scene_shadow_rig,
@@ -1519,6 +1725,7 @@ SCENES = {
     "izb_rig": scene_izb_rig,
     "env_band": scene_env_band,
     "nm_rig": scene_nm_rig,
+    "penumbra_ladder": scene_penumbra_ladder,
 }
 
 
