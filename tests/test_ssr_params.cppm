@@ -85,15 +85,16 @@ static_assert(kSceneDataSsrParamsOffset == kSlangSsrParamsLiteral,
 static_assert(kSceneDataSsrGateOffset == kSlangSsrGateLiteral,
 	"scene.slang readSsrGate literal drifted from kSceneDataSsrGateOffset");
 // 子区排布：params 紧贴 ssrViewProj mat4 之后、gate 紧贴 params 之后，gate 恰盖到
-// kSceneDataBytes 尾（SSR 区仍是最后一个尾区，无重叠无空洞）。
+// 湿面区起点（批 15.2 子步 A 在 SSR 之后追加湿面区 ⟹「最后尾区」的旧断言改钉相邻关系，
+// 无重叠无空洞；湿面区自身的相邻与末尾断言 = tests/test_wet_params）。
 static_assert(kSceneDataSsrParamsOffset == kSceneDataSsrOffset + 64u,
 	"params sub-region must sit right after the ssrViewProj mat4");
 static_assert(kSceneDataSsrGateOffset == kSceneDataSsrParamsOffset + 16u,
 	"gate sub-region must sit right after ssrParams (no overlap, no hole)");
-static_assert(kSceneDataSsrGateOffset + sizeof(glm::vec4) == kSceneDataBytes,
-	"gate sub-region must end exactly at the scene data buffer tail");
-static_assert(kSceneDataSsrOffset + kSceneDataSsrBytes == kSceneDataBytes,
-	"SSR region must be the last tail region of the scene data buffer");
+static_assert(kSceneDataSsrGateOffset + sizeof(glm::vec4) == kSceneDataWetOffset,
+	"gate sub-region must end exactly where the wet region begins");
+static_assert(kSceneDataSsrOffset + kSceneDataSsrBytes == kSceneDataWetOffset,
+	"SSR region must sit right before the wet tail region (batch 15.2A appended after it)");
 // 区宽 = 16B 矩阵 + 16B 正向矩阵 + 16B params + 16B gate（参数面由 80 扩到 96）。
 static_assert(kSceneDataSsrBytes == 96u, "SSR region width drifted (mat4+mat4+vec4+vec4)");
 

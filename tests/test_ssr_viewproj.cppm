@@ -67,12 +67,13 @@ namespace {
 /// scene.slang readSsrViewProj 的字面量基址（两源结构的 shader 侧镜像，勿改成常量引用）。
 constexpr uint32_t kSlangSsrLiteral = 722272u;
 
-// 编译期双保险：C++ 常量与 shader 字面量同钉（变异①在此炸）；SSR 区是**最后一个**尾区
-// （kSceneDataBytes 恰盖到区尾，无重叠无空洞）；不与头 128B 区重叠。
+// 编译期双保险：C++ 常量与 shader 字面量同钉（变异①在此炸）；SSR 区紧贴湿面区之前
+// （批 15.2 子步 A 在 SSR 之后追加湿面区 ⟹「最后尾区」的旧断言改钉相邻关系，无重叠无
+// 空洞；湿面区自身的末尾断言 = tests/test_wet_params）；不与头 128B 区重叠。
 static_assert(kSceneDataSsrOffset == kSlangSsrLiteral,
 	"scene.slang readSsrViewProj literal drifted from kSceneDataSsrOffset");
-static_assert(kSceneDataSsrOffset + kSceneDataSsrBytes == kSceneDataBytes,
-	"SSR region must be the last tail region of the scene data buffer");
+static_assert(kSceneDataSsrOffset + kSceneDataSsrBytes == kSceneDataWetOffset,
+	"SSR region must sit right before the wet tail region (batch 15.2A appended after it)");
 static_assert(kSceneDataSsrOffset >= kSceneDataSkyOffset + sizeof(glm::mat4),
 	"SSR region overlaps the @64 skyInvViewProj header slot");
 

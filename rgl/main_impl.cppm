@@ -366,6 +366,26 @@ void wireSceneSpinContext(entt::registry& rg, const SceneConfig& scene) {
 	spin.axis = scene.spinAxis;              // 默认 (0.5,1,0) = SceneSpin 现值
 }
 
+/**
+ * 每帧调参 context（Phase 15 批 15.1 SSR 系数 + 批 15.2 子步 A 湿面参数）——
+ * configs/runtime.lua 的 `ssr`/`wet` 块 → registry context 的映射。
+ *
+ * 抽 helper 的直接原因 = `main()` 的 120 行红线（wireSceneSpinContext 同款），顺手把
+ * 「配置 → 每帧调参」收成一处。注意分工：这里搬的是**系数**（每帧量：引擎每帧现取现写
+ * scene data）；`ssr.enabled` 是**创建期量**，走 configs.runtime.ssrEnabled 决定
+ * decorateSsrPass 建不建 pass，不进本 ctx、也不进 scene data（湿面**没有**创建期开关：
+ * 调制住在 deferred_geometry（G-buffer 调制），不改图形态，`strength = 0` 就是门关档）。缺块时 ctx 里
+ * 就是结构体默认值 = 出厂系数（默认值唯一出处在 C++）。runtime.lua 无热重载
+ * （RuntimeConfig 只在启动期 load() 一次）⟹ 两类改动都要重启进程才读到，区别只在
+ * "生效"要不要重建 RT / 重建管线。
+ * @param rg      场景 registry（尚未 emplace SsrTuning/WetTuning）
+ * @param runtime configs/runtime.lua 产物
+ */
+void wireTuningContexts(entt::registry& rg, const RuntimeConfig& runtime) {
+	rg.ctx().emplace<SsrTuning>(runtime.ssr);
+	rg.ctx().emplace<WetTuning>(runtime.wet);
+}
+
 /** 渲染图配置加载 + compileRenderGraph（校验 + barrier 布局链推导，错误抛 std::runtime_error）+ deferredMode 求值。
  *  Phase 10 批 10.5：diagnostics.picking（默认关）= 编译前 decoratePickingPass 装饰
  *  object_id pass（D10 编译图期门控——默认关不调用 = 图逐位同 diff0）。 */
@@ -633,13 +653,10 @@ int main() {
 		registry.ctx().emplace<NextObjectSlot>();  // Phase 6 instancing：实例矩阵槽分配器
 		// SceneEnv（曝光/AO/TAA）+ TaaState；TAA 开关 = aa 三态推导（批 14.6）
 		wireSceneEnvContexts(registry, configs.scene, configs.runtime.aaWantsTaa());
-		// SSR 系数（Phase 15 批 15.1 参数面）：configs/runtime.lua 的 ssr 块 → ctx → 每帧 fillSsrParams 写
-		// scene data。缺块时 configs.runtime.ssr 就是 SsrTuning 的默认值（默认值唯一出处在 C++）。
-		// 注意分工：这里搬的是**系数**（每帧量：引擎每帧现取现写 scene data）；ssr.enabled 是
-		// **创建期量**，走 configs.runtime.ssrEnabled 决定 pass 建不建，不进本 ctx、也不进
-		// scene data。runtime.lua 无热重载（RuntimeConfig 只在启动期 load() 一次）⟹ 两类改动
-		// 都要重启进程才读到，区别只在"生效要不要重建 RT / 重建管线"。
-		registry.ctx().emplace<SsrTuning>(configs.runtime.ssr);
+		// SSR 系数 + 湿面参数（批 15.1 参数面 + 批 15.2 子步 A）：configs/runtime.lua 的 ssr/wet 块 → ctx →
+		// 每帧 fill*Params 写 scene data 尾区（湿面本步**零消费者**，写它不改像素，红线 A = regress ab）。
+		// 创建期/每帧量的分工与"缺块 = 结构体默认值" → wireTuningContexts 注释。
+		wireTuningContexts(registry, configs.runtime);
 
 		AppContext vkInstance(pre.window.get(), pre.headless);
 		DeviceContext vkDevice(vkInstance);

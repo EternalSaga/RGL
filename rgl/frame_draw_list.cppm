@@ -164,6 +164,18 @@ export struct SceneFrameData {
 	///   与场景尺度无关，故与 ssrParams 分槽（分组理由 → scene_data.cppm 该区注释）。
 	///   生产者同 fillSsrParams（一次填两槽，两槽永远同源同帧）。
 	glm::vec4 ssrGate{0.0f};
+	// ── Phase 15 批 15.2 子步 A 湿面参数，scene data 尾区 @722368 ──
+	/// · wetParams —— 湿面身份调制系数子区 @722368（vec4）= (strength, dark, roughLo,
+	///   roughHi)：x = 总开关兼强度（0 = 关 = 消融档，**默认 1.0 = 开**）。湿面**身份**
+	///   （哪些面湿）不占参数 = 1 − smoothstep(ssrGate.x, ssrGate.y, roughness)，与 SSR
+	///   门控同区间同源（理由 → scene_data.cppm 湿面区注释）。生产者 = fillWetParams
+	///   （render_list_impl，可测接缝）。本步零消费者 = 写它不改像素。
+	glm::vec4 wetParams{0.0f};
+	/// · wetSpatial —— 湿面空间变化参数子区 @722384（vec4）= (rippleAmp, puddleFreqRadii,
+	///   0, 0)。与 wetParams 语义分组不同（身份调制系数 vs 空间变化形状参数），故分槽
+	///   （分组理由照 ssrParams/ssrGate 那条，→ scene_data.cppm 该区注释）。
+	///   生产者同 fillWetParams（一次填两槽，两槽永远同源同帧）。
+	glm::vec4 wetSpatial{0.0f};
 };
 
 /**

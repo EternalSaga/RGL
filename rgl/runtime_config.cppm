@@ -80,6 +80,52 @@ export struct SsrTuning {
 };
 
 /**
+ * 湿面调制的 6 枚**每帧**参数（configs/runtime.lua `wet` 块，Phase 15 批 15.2 子步 A 参数面）。
+ *
+ * ## 为什么是一个结构（同 `SsrTuning`，理由不重复）
+ *
+ * 6 枚量**永远作为一个整体**从配置流到 scene data（RuntimeConfig → registry ctx →
+ * fillWetParams → 两个 vec4），中间没有任何一处只读其中一枚。收成一体 = 「配置键 ↔
+ * scene data 分量」的映射只有一处（`fillWetParams`）。护栏分两半：字节布局与填值 =
+ * tests/test_wet_params；配置往返（lua 文本 → loadRuntimeConfig → 默认值/逐键覆盖）=
+ * tests/test_scene_config 的 wet 块用例。
+ *
+ * ## 🔴 本结构体成员初始化值 = 这 6 个默认值的**全项目唯一真相源**
+ *
+ * shader 侧**不留 fallback 常量**（scene.slang 的 readWetParams/readWetSpatial 只读内存）。
+ *
+ * ## 湿面**身份**不占本结构的参数（设计定案 → `docs/phase15_plan.md` §2.4 修正块）
+ *
+ * 「哪些面湿」= `1 − smoothstep(ssr.roughFull, ssr.roughCutoff, roughness)`，与 SSR 粗糙度
+ * 门控**同区间同源**（资产已标定：湿材质 roughness 0.122 在区间下方 → wetness = 1，干面
+ * ~0.74/1.0 在区间上方 → wetness = 0，两簇间隔着整个门控区间）⟹ 结构上排除「反射了但没
+ * 压暗」的错配。本结构只放**调制系数**与**空间变化参数**。
+ *
+ * 🔴 **改本结构的值不影响红线 A**（本步实测）：`strength` 虽默认开、六枚系数虽仍**无条件**
+ * 写进 scene data 尾区 @722368/@722384，但本步（15.2 子步 A）**零消费者** ⟹ 出厂画面逐位
+ * 不变。红线 A 由下一步（15.2 子步 B 接 shader 消费者）重立。
+ */
+export struct WetTuning {
+	/// 总开关兼强度（0 = 关 = 消融档）。**默认开**（用户拍板：湿面默认开、15.2B 重立红线 A）。
+	/// `0` 是**合法消融档**，配置层不校验不 clamp（理由同 readSsrBlock：消融档必须写得出来）。
+	float strength = 1.0f;
+	/// 湿区 albedo 压暗系数（×0.5–0.7 区间取中；真实湿面水填进微观凹凸 → 压暗漫反射，
+	/// 现状「只加高光不压暗」正是 AGENTS.md 登记的边界，本值就是还这笔的旋钮）。
+	float dark = 0.6f;
+	/// 水洼粗糙度（水膜表面）。🔴 **shader 侧不变式 `roughLo < roughHi`**（水洼必须比
+	/// 湿石更光滑，反了 = 空间调制方向倒置）。配置层**不校验**，理由同 readSsrBlock。
+	float roughLo = 0.05f;
+	/// 湿石粗糙度（资产湿面 roughness 均匀 0.122 给不了「水洼比湿石更滑」的空间结构，
+	/// 由 shader 端程序化调制，本值是调制上端点）。
+	float roughHi = 0.35f;
+	/// 水膜法线扰动幅度（0 = 无扰动 = 逐位旁路扰动项）。
+	float rippleAmp = 0.3f;
+	/// 水洼噪声频率 = 本值 / sceneRadius（**尺度无关**口径，同 ssrParams 的尺度锚点纪律；
+	/// bistro radius≈1.16 → 特征尺寸 ≈0.1 世界单位）。
+	float puddleFreqRadii = 12.0f;
+};
+
+/**
  * 窗口 present 模式偏好（configs/runtime.lua 的 present_mode 键，2026-09-27 批 9.3
  * 用户追加需求：FIFO/eImmediate 双模式对比测量）。仅**窗口路径**生效；headless
  * surface 无 eImmediate、present 为 no-op，恒走 eFifo 回落（忽略此偏好）。
@@ -248,6 +294,15 @@ export struct RuntimeConfig {
 	 * renderListSystem 每帧取 → fillSsrParams 写 scene data @722336/.yzw 与 @722352/.xy。
 	 */
 	SsrTuning ssr;
+	/**
+	 * 湿面调制的 6 枚**每帧**参数（configs/runtime.lua `wet` 块）。**每帧量**——与
+	 * `ssr` 同构（湿面没有创建期开关：它不是独立 pass，是 deferred_geometry 的 G-buffer 调制，
+	 * 不改图形态；语义与「身份不占参数」→ `WetTuning` 注释）。
+	 * 消费链：main 启动期 `registry.ctx().emplace<WetTuning>(configs.runtime.wet)` →
+	 * renderListSystem 每帧取 → fillWetParams 写 scene data @722368/.xyzw 与 @722384/.xy。
+	 * ⚠ 批 15.2 子步 A **零消费者**（shader 只备读取函数）⟹ 出厂画面逐位不变。
+	 */
+	WetTuning wet;
 
 	/** 「TAA 在不在图里」的唯一推导点（原 `scene.lua taa.enabled` 的消费者全部改走这里）。 */
 	[[nodiscard]] constexpr bool aaWantsTaa() const {

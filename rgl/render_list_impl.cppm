@@ -21,7 +21,7 @@ import camera;
 import render_graph;  // shadowAtlasColumns（图集列数，与装饰 extent 同源）
 import evssm_shadow;  // kEvssmMipLevels（矩链级数；scene data w 从常量导出，禁双源写死）
 import shadow_config;  // shadowConfig() / shadowFormPlan()（阴影形态：画不画图集 + 逐档调参）
-import runtime_config;  // SsrTuning（Phase 15 批 15.1 参数面：SSR 系数，fillSsrParams 入参）
+import runtime_config;  // SsrTuning / WetTuning（批 15.1 参数面 + 批 15.2A 湿面参数，fill*Params 入参）
 import taa_jitter;    // contentShiftPx（内容位移口径唯一出处；批 13.5 起 fillTaaData 要用）
 
 namespace RGL {
@@ -370,6 +370,34 @@ void fillSsrParams(FrameDrawList& out, const SceneBounds& bounds, const SsrTunin
 	out.sceneData.ssrGate = {tuning.roughFull, tuning.roughCutoff, 0.0f, 0.0f};
 }
 
+/** Phase 15 批 15.2 子步 A：填湿面尾区的两个参数子区（scene data @722368 身份调制系数
+ *  vec4 + @722384 空间变化 vec4）。
+ *  · wetParams  = (strength, dark, roughLo, roughHi)——身份调制系数；湿面**身份**不占参数
+ *    （= 1 − smoothstep(ssrGate.x, ssrGate.y, roughness)，与 SSR 门控同区间同源，理由 →
+ *    scene_data.cppm 湿面区注释）。
+ *  · wetSpatial = (rippleAmp, puddleFreqRadii, 0, 0)——空间变化参数，与身份调制系数
+ *    语义分组不同，故分槽。
+ *  两槽**一次填、同源同帧**是刻意的（拆两个接缝 = 允许"系数新、空间参数旧"的半帧状态）。
+ *  无条件写（同尾区纪律：不按门分支、无消费者不改像素）；CPU 侧**不 clamp 不校验**
+ *  （`strength = 0` 是合法消融档、`roughLo < roughHi` 是 shader 侧不变式），理由 →
+ *  readWetBlock。可测接缝声明 → render_list.cppm。 */
+void fillWetParams(FrameDrawList& out, const WetTuning& tuning) {
+	out.sceneData.wetParams = {tuning.strength, tuning.dark, tuning.roughLo, tuning.roughHi};
+	out.sceneData.wetSpatial = {tuning.rippleAmp, tuning.puddleFreqRadii, 0.0f, 0.0f};
+}
+
+/** 每帧填 SSR + 湿面调参的 scene data 尾区（批 15.1 参数面 + 批 15.2 子步 A 湿面参数）：
+ *  两个 fill*Params 各自是**可测接缝**（tests/test_ssr_params / tests/test_wet_params），
+ *  本函数只是它们在 renderListSystem 里的**唯一调用点**——该函数已在 120 行代码红线
+ *  （每新增一枚调参加一行必破线，main_impl wireSceneSpinContext 同款抽法）。两份调参
+ *  都是每帧量、都由 main 启动期灌 ctx（同一 ctx 约定），口径与不变式 → scene_data.cppm
+ *  各区注释。 */
+void fillTuningTail(FrameDrawList& out, const SceneBounds& bounds, const SsrTuning& ssr,
+	const WetTuning& wet) {
+	fillSsrParams(out, bounds, ssr);
+	fillWetParams(out, wet);
+}
+
 void renderListSystem(entt::registry& rg, RGL::Resources&,
 	RGL::Environment& envService, const RGL::AssetTable& assets, RenderListState& state) {
 	auto& list = rg.ctx().get<FrameDrawList>();
@@ -552,11 +580,12 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	// Phase 15 批 15.1：SSR 正向矩阵 = 上一行**同一表达式不取逆**（接缝可测；口径同源，
 	// 抖动后、与 @64 严格互逆；填值表达式只此一处，避免两份口径漂移）
 	fillSsrViewProj(fresh, viewProj);
-	// Phase 15 批 15.1 收尾：SSR 尺度锚点 = SceneBounds.radius（boundsSystem 本帧已聚合，
-	// 与 projectionSystem 的自适应 near/far 同一颗球）
-	// SsrTuning 由 main 启动期从 configs/runtime.lua 的 ssr 块灌进 registry（每帧量走 scene data，
-	// 与 SceneBounds 同一处 ctx 约定）；缺块时 ctx 里就是结构体默认值 = 出厂系数。
-	fillSsrParams(fresh, rg.ctx().get<SceneBounds>(), rg.ctx().get<SsrTuning>());
+	// Phase 15 批 15.1 收尾 + 批 15.2 子步 A：SSR 尺度锚点（SceneBounds.radius，boundsSystem 本帧已聚合，
+	// 与 projectionSystem 的自适应 near/far 同一颗球）与两份调参（SsrTuning/WetTuning 由 main 启动期从
+	// configs/runtime.lua 的 ssr/wet 块灌进 registry，每帧量；缺块时 ctx 里就是结构体默认值 = 出厂系数）
+	// → fillTuningTail 内两个 fill*Params 各写 scene data 尾区。湿面本步**零消费者**（shader 只备读取
+	// 函数）——无条件写、不改像素（红线 A = regress ab）。
+	fillTuningTail(fresh, rg.ctx().get<SceneBounds>(), rg.ctx().get<SsrTuning>(), rg.ctx().get<WetTuning>());
 	fillFsrCameraInput(fresh, viewProj);  // 批 14.5：FSR 相机输入
 	// 批 12.6 TAA 载荷（三矩阵/参数，细节见 fillTaaData）
 	fillTaaData(fresh, viewProj, env, taa);

@@ -11,7 +11,7 @@ import vk_resources;
 import environment;  // Environment（irradianceSH，架构债务续账步骤 3）
 import asset_table;
 import scene_context;
-import runtime_config;  // SsrTuning（Phase 15 批 15.1 参数面：SSR 系数唯一默认值载体，fillSsrParams 入参）
+import runtime_config;  // SsrTuning / WetTuning（批 15.1 参数面 + 批 15.2A 湿面参数：系数唯一默认值载体，fill*Params 入参）
 import camera;
 
 namespace RGL {
@@ -164,5 +164,21 @@ export void fillSsrViewProj(FrameDrawList& out, const ViewProjection& viewProj);
  */
 export void fillSsrParams(FrameDrawList& out, const SceneBounds& bounds,
 	const SsrTuning& tuning);
+
+/**
+ * 每帧填湿面尾区的**两个参数子区**（scene data @722368 身份调制系数 vec4 + @722384
+ * 空间变化 vec4；口径 → scene_data.cppm 各区注释）。定义在 render_list_impl（partition
+ * impl unit，实现侧不写 export）。导出为**可测接缝**（fillSsrParams 同款先例）：回归断言 =
+ * tests/test_wet_params（两源结构：写入侧 C++ 常量、读回侧字面量 722368/722384）；
+ * 上游配置往返（lua 文本 → loadRuntimeConfig）另测于 tests/test_scene_config。
+ *
+ * **一次填两槽**是刻意的：两槽永远同源同帧（同一个 WetTuning 派生），拆成两个接缝 =
+ * 允许出现"系数是新的、空间参数是旧的"这种半帧状态。
+ *
+ * @param out    出参：本帧 draw list（写 sceneData.wetParams / sceneData.wetSpatial）
+ * @param tuning 本帧湿面参数（registry ctx，启动期由 RuntimeConfig 拷入；CPU 侧**不**
+ *               clamp、不校验不变式——`strength = 0` 是合法消融档，理由 → readWetBlock 注释）
+ */
+export void fillWetParams(FrameDrawList& out, const WetTuning& tuning);
 
 }  // namespace RGL

@@ -866,6 +866,70 @@ TEST_CASE("runtime_config：ssr 块（批 15.1 参数面）——缺块回落出
 	}
 }
 
+TEST_CASE("runtime_config：wet 块（批 15.2A 湿面参数）——缺块回落默认、逐键命中、消融档可写出、无扁平键双读") {
+	// 判据来源 = 实读 runtime_config_impl::readWetBlock / readFloatKey（缺键 = 不写目标字段）。
+	// 本用例是湿面参数链的**上游一半**；下游一半（tuning → scene data 字节）= test_wet_params。
+	// 两半合起来才是「lua 文本 → 字节」整链——分开测是因为中间隔着 registry。
+	//
+	// 变异红线声明：
+	//   ① readWetBlock 漏读某枚键 → 该键的"显式命中"红（默认值 ≠ 本用例写的探针值）。
+	//   ② 键名打错（lua 侧或 C++ 侧）→ 同上红（回落默认，探针值读不到）。
+	//   ③ 配置层加了 clamp / 不变式校验 → 「消融档 strength=0 可写出」红。**这条是刻意的
+	//      反向用例**：批 15.2A 拍板配置层不校验（理由 → readWetBlock 注释，与 readSsrBlock
+	//      同判），将来谁想补校验必须先推翻那段理由并同步改本用例，不能悄悄加。
+	//   ④ 出厂默认值被改 → 「缺块回落」红（断言的是字面量，不是 WetTuning{} 的字段）。
+	{  // 缺块 = 出厂系数（红线 A 的配置层前提；strength 默认 1.0 = 「湿面默认开」拍板的钉，
+	   // 与 test_wet_params 的默认值用例同源——字面量手抄，写成 WetTuning{} 就是空断言）。
+		TempLua f("rt_wet_default", "return {}\n");
+		auto r = loadRuntimeConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->wet.strength == 1.0f);
+		CHECK(r->wet.dark == 0.6f);
+		CHECK(r->wet.roughLo == 0.05f);
+		CHECK(r->wet.roughHi == 0.35f);
+		CHECK(r->wet.rippleAmp == 0.3f);
+		CHECK(r->wet.puddleFreqRadii == 12.0f);
+	}
+	{  // 块内六枚键名逐个命中（探针值互不相同、且都不等于任何默认值）
+		TempLua f("rt_wet_full", R"lua(return { wet = {
+			strength = 0.5, dark = 0.75, rough_lo = 0.01, rough_hi = 0.5,
+			ripple_amp = 0.25, puddle_freq_radii = 8.0,
+		} })lua");
+		auto r = loadRuntimeConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->wet.strength == 0.5f);
+		CHECK(r->wet.dark == 0.75f);
+		CHECK(r->wet.roughLo == 0.01f);
+		CHECK(r->wet.roughHi == 0.5f);
+		CHECK(r->wet.rippleAmp == 0.25f);
+		CHECK(r->wet.puddleFreqRadii == 8.0f);
+	}
+	{  // 只写一枚 = 其余保默认（块内逐键可选，不是整块覆盖；先例 = fsr/ssr 块同款）
+		TempLua f("rt_wet_half", R"lua(return { wet = { dark = 0.5 } })lua");
+		auto r = loadRuntimeConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->wet.dark == 0.5f);
+		CHECK(r->wet.strength == 1.0f);
+		CHECK(r->wet.roughHi == 0.35f);
+	}
+	{  // 🔴 **消融档必须写得出来**（变异③）：strength = 0 是合法档（湿面关 = 因果泄漏恒等式
+	   // 的门关档）。配置层若钳制/拒绝，消融就静默变成另一档。
+		TempLua f("rt_wet_ablate", R"lua(return { wet = { strength = 0.0 } })lua");
+		auto r = loadRuntimeConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->wet.strength == 0.0f);  // 0 不是"缺键"哨兵，写 0 就得是 0
+		CHECK(r->wet.dark == 0.6f);      // 消融只关总开关，其余系数保默认（无联动）
+	}
+	{  // **没有**扁平键的兼容双读（两个真相源 = 本项目反复登记的反模式）：顶层写
+	   // wet_strength 必须**什么都不发生**，否则旧键与新块并存 = 静默用哪个说不清。
+		TempLua f("rt_wet_flat", R"lua(return { wet_strength = 9.0, wet_dark = 9.0 })lua");
+		auto r = loadRuntimeConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->wet.strength == 1.0f);
+		CHECK(r->wet.dark == 0.6f);
+	}
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // diagnostics
 // ═══════════════════════════════════════════════════════════════════════════

@@ -422,6 +422,32 @@ float4 readSsrGate()
     return asfloat(sceneData.Load4(722352u));  // kSceneDataSsrGateOffset
 }
 
+// ── Phase 15 批 15.2 子步 A 湿面尾区 ──
+//
+// 基址与 C++ 侧 scene_data.cppm kSceneDataWetParamsOffset / kSceneDataWetSpatialOffset
+// 手写同源（**只有 C++ 那一侧有 static_assert 钉**——slang 没有能引用 C++ 常量的机制，
+// 本侧漂移只能靠端到端判据抓，SSR 区同款纪律）：
+//   @722368  vec4 wetParams —— (strength, dark, roughLo, roughHi) = 身份调制系数。
+//   @722384  vec4 wetSpatial —— (rippleAmp, puddleFreqRadii, 保留, 保留) = 空间变化参数。
+// 湿面**身份**（哪些面湿）不占参数 = `1 - smoothstep(readSsrGate().x, readSsrGate().y,
+// roughness)`，与 SSR 粗糙度门控同区间同源（结构上排除「反射了但没压暗」的错配；
+// 理由 → scene_data.cppm 湿面区注释）。
+// 🔴 **本步（15.2 子步 A）零调用点**（备好待 15.2B 接线，先例 = 批 15.1 readSsrViewProj）。
+// **系数无 shader 侧默认值**（唯一真相源 = WetTuning 成员初始化器，rgl/runtime_config.cppm）。
+float4 readWetParams()
+{
+    return asfloat(sceneData.Load4(722368u));  // kSceneDataWetParamsOffset
+}
+
+// 湿面空间变化参数（x = rippleAmp 水膜法线扰动幅度、y = puddleFreqRadii 水洼噪声频率
+// = 本值 / sceneRadius，尺度无关口径同 ssrParams.x 的锚点；zw 保留）。消费者 = deferred
+// _geometry 湿面 G-buffer 调制（15.2B 接线）；⚠ wetParams 的 z < w（roughLo < roughHi，反了 = 空间
+// 调制方向倒置），不变式落点与「配置层为何不校验」→ scene_data.cppm kSceneDataWetParamsOffset。
+float4 readWetSpatial()
+{
+    return asfloat(sceneData.Load4(722384u));  // kSceneDataWetSpatialOffset
+}
+
 // AO 施加强度：scene data @60，configs/scene.lua ao.strength，0 = 逐位旁路。
 // ⚠ 自批 13.6 起有**两个**消费者（taa.frag 施加 / tonemap 按标志施加），故从 tonemap 的
 //   局部函数**抬进本模块**——同一个 @60 字面量写两处必然漂移（本项目反复踩过）。

@@ -482,9 +482,50 @@ static_assert(kSceneDataSsrOffset == 722272 && kSceneDataSsrParamsOffset == 7223
 		&& kSceneDataSsrGateOffset == 722352,
 	"scene.slang readSsrViewProj/readSsrParams/readSsrGate literals 722272/722336/722352 out of sync with scene_data.cppm offsets");
 
+/** Phase 15 批 15.2 子步 A 湿面参数区（2×vec4, 32B）= 身份调制系数 + 空间变化参数
+ *  （尾区追加，既有偏移逐字节不动 diff0，先例 = 批 11.2 阴影 VP 区 / 批 12.6 TAA 区 /
+ *  批 15.1 SSR 区）。
+ *
+ *  口径（接消费者前必读）：
+ *  - 湿面**身份**（哪些面湿）**不占参数** = `1 − smoothstep(ssrGate.x, ssrGate.y, roughness)`，
+ *    与 SSR 粗糙度门控**同区间同源**（资产已标定：湿材质 roughness 0.122 在区间下方 →
+ *    wetness = 1、干面 ~0.74/1.0 在上方 → 0，出处 → docs/phase15_plan.md §2.4 修正块）
+ *    ⟹ 结构上排除「反射了但没压暗」的错配。本区只放**空间变化与调制系数**。
+ *  - 交付时**无消费者**（scene.slang readWetParams/readWetSpatial 备好待 15.2B 接线），
+ *    无条件写、不改任何像素（同 shadow/TAA/SSR 尾区「无消费者时照写」纪律）。
+ *  消费端 = scene.slang readWetParams/readWetSpatial 字面量（两侧 static_assert 钉死同步）。 */
+export inline constexpr uint32_t kSceneDataWetOffset = kSceneDataSsrOffset + kSceneDataSsrBytes;
+/** 湿面身份调制系数子区（vec4, 16B）= (strength, dark, roughLo, roughHi)。
+ *  - `x` = 总开关兼强度（0 = 关 = 消融档；**默认 1.0 = 开**，用户拍板「湿面默认开」）。
+ *  - `y` = 湿区 albedo 压暗系数（×0.5–0.7 区间取中）。
+ *  - `z/w` = 水洼/湿石粗糙度端点（🔴 shader 侧不变式 `z < w`，反了 = 空间调制方向倒置；
+ *    配置层**不校验**，理由 → readWetBlock 注释）。
+ *  **默认值唯一真相源 = `WetTuning` 成员初始化值**（shader 侧无 fallback 常量——两处定义
+ *  迟早漂移，见 SsrTuning 同款纪律）。生产者 = fillWetParams（可测接缝），护栏 =
+ *  tests/test_wet_params（两源结构）+ tests/test_scene_config（配置往返）。 */
+export inline constexpr uint32_t kSceneDataWetParamsOffset = kSceneDataWetOffset;
+/** 湿面空间变化参数子区（vec4, 16B）= (rippleAmp, puddleFreqRadii, 保留, 保留)。
+ *
+ *  **为什么不塞进上面那个 wetParams**（设计决策，别"顺手合并"，分组理由照 ssrParams/
+ *  ssrGate 那条）：上四个是**身份调制系数**（压暗/粗糙度端点，逐湿面常数），本两个是
+ *  **空间变化的形状参数**（水膜扰动幅度/水洼噪声频率，逐像素自变量不同）。混进一槽 =
+ *  语义上两组旋钮共用一个名字，改任一组都要读另一组的口径。
+ *
+ *  `y` = puddleFreqRadii：噪声频率 = 本值 / sceneRadius（**尺度无关**口径，锚点与 SSR
+ *  的 ssrParams.x 同一颗 SceneBounds.radius 球）。 */
+export inline constexpr uint32_t kSceneDataWetSpatialOffset = kSceneDataWetOffset + 16u;
+export inline constexpr uint32_t kSceneDataWetBytes = 32u;
+// 钉的是「C++ 常量 == 已知的两个基址」：改 C++ 侧必编译失败。⚠ **改 scene.slang 那一侧不会**
+// ——slang 里没有能引用 C++ 常量的机制，shader 字面量单侧漂只能靠端到端判据抓（15.2B 接消费者后
+// 立湿面判据；本步零消费者的端到端护栏 = just regress ab 红线 + 红线 A），机器对账规则尚未落地
+// （缺口账与 SSR 同款 → docs/phase15_plan.md §3.2）。
+static_assert(kSceneDataWetOffset == 722368 && kSceneDataWetParamsOffset == 722368
+		&& kSceneDataWetSpatialOffset == 722384,
+	"scene.slang readWetParams/readWetSpatial literals 722368/722384 out of sync with scene_data.cppm offsets");
+
 /** scene data buffer 总字节数 = 头 128 + 对象矩阵表 + 灯数组区 + MVP 表 + 材质表 +
- * 辐照度 SH9 区 + 阴影/IZB/PCSS/EVSSM 区 + TAA 区 + SSR 区（= 722368B，编译期派生；
- * SSR 区 96B 是批 15.1 尾区，本常量随 kSceneDataSsrBytes 自动走）；
+ * 辐照度 SH9 区 + 阴影/IZB/PCSS/EVSSM 区 + TAA 区 + SSR 区 + 湿面区（= 722400B，编译期派生；
+ * 湿面区 32B 是批 15.2 子步 A 尾区，本常量随 kSceneDataWetBytes 自动走）；
  * SceneDataService::ensure 的分配尺寸与 drawFrame 每帧 staging 拷贝区尺寸均为本值
  *（vkrenderer.cppm ⑥.5）。 */
 export inline constexpr vk::DeviceSize kSceneDataBytes =
@@ -499,7 +540,8 @@ export inline constexpr vk::DeviceSize kSceneDataBytes =
 	+ kSceneDataPcssBytes
 	+ kSceneDataEvssmBytes
 	+ kSceneDataTaaBytes
-	+ kSceneDataSsrBytes;
+	+ kSceneDataSsrBytes
+	+ kSceneDataWetBytes;
 
 /**
  * SceneData buffer 服务（2026-09-19 架构债务续账步骤 1：原 Resources::ensureSceneData/

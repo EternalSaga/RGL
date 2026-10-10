@@ -219,6 +219,38 @@ static void readSsrBlock(const sol::table& root, RuntimeConfig& cfg) {
 	readFloatKey(ssr, "rough_cutoff", cfg.ssr.roughCutoff);
 }
 
+/**
+ * `wet` 嵌套块解析（批 15.2 子步 A 参数面）：6 枚调制系数/空间变化参数，**没有**创建期
+ * 开关（湿面调制不是独立 pass，是 deferred_geometry 的 G-buffer 调制，不改图形态；`strength = 0`
+ * 就是它的门关档）。缺块 / 缺键 = 保持结构体默认（`WetTuning` 成员初始化值 =
+ * **全项目唯一真相源**，shader 侧零 fallback）。形态先例 = readSsrBlock（嵌套块 +
+ * readFloatKey，无扁平键双读兼容——两个真相源是本项目反复登记的反模式）。
+ *
+ * ## 🔴 shader 侧不变式 `rough_lo < rough_hi`，配置层**刻意不校验**（判断同 readSsrBlock）
+ *
+ * 1. **校验会堵死消融**：`strength = 0` 是合法消融档（因果泄漏恒等式的门关档），配置层
+ *    把它当非法值拒了/钳了 = 为了让判据过而改判据，只是改在配置层，更难查。
+ * 2. **配置层校验管不住真正的写入方**：不变式语义住在 shader（15.2B 接线后违反的失效
+ *    形态由 shader 定义），将来 RPC / imgui 接进来就是绕过配置层的路径 ⟹ 只在配置层
+ *    校验 = 给人"已经防住"的错觉（第二真相源）。
+ *
+ * ⟹ 本函数**原样透传**，一条 warn 都不发（warn 会在每次跑消融档时刷屏，教人不信任日志）。
+ * 不变式的权威措辞在 `WetTuning` 字段注释。gate_lint 不挂号的理由与 ssr 块完全同款
+ * （runtime.lua 键不在 gate_lint 管辖的两张回显表里，→ readSsrBlock 末段）。
+ */
+static void readWetBlock(const sol::table& root, RuntimeConfig& cfg) {
+	sol::table wet = root["wet"];
+	if (!wet.valid() || !wet.is<sol::table>())
+		return;
+	// 6 枚调参 = 每帧量（键名 ↔ scene data 分量的映射唯一落点 = fillWetParams）
+	readFloatKey(wet, "strength", cfg.wet.strength);
+	readFloatKey(wet, "dark", cfg.wet.dark);
+	readFloatKey(wet, "rough_lo", cfg.wet.roughLo);
+	readFloatKey(wet, "rough_hi", cfg.wet.roughHi);
+	readFloatKey(wet, "ripple_amp", cfg.wet.rippleAmp);
+	readFloatKey(wet, "puddle_freq_radii", cfg.wet.puddleFreqRadii);
+}
+
 /** loadRuntimeConfig 定义（接口注释见 runtime_config.cppm）：headless/headless_size/win_size/show_after/present_mode/ui_font 逐一可选解析 + parseLlm。 */
 [[nodiscard]] std::expected<RuntimeConfig, Error> loadRuntimeConfig(std::string_view path) {
 	auto* logger = RLLogger::getInstance();
@@ -278,6 +310,7 @@ static void readSsrBlock(const sol::table& root, RuntimeConfig& cfg) {
 			return std::unexpected(Error{ErrorCode::ConfigLoadFailed, *err});
 		readFsrBlock(root, cfg);  // 批 14.6：FSR 调参收进嵌套块（无扁平键双读兼容）
 		readSsrBlock(root, cfg);  // 批 15.1：SSR 总开关（嵌套块，缺块/缺键 = false = 图里没有 ssr pass）
+		readWetBlock(root, cfg);  // 批 15.2A：湿面参数（嵌套块，缺块/缺键 = WetTuning 默认；本步零消费者）
 		sol::optional<int> showAfter = root["show_after"];
 		if (showAfter)
 			cfg.showAfter = *showAfter;
