@@ -342,23 +342,29 @@ export class ShaderRegistry {
 		uint32_t samplerSlot);
 
 	/**
-	 * 批 15.1 前半：SSR（屏幕空间反射）pass 管线条目（单条目，仿 addVelocityEntry——
-	 * 全 `Load` 直取 **无 sampler 绑定**；门默认关不被调用 = 条目表逐位不变）。
+	 * 批 15.1：SSR（屏幕空间反射）pass 管线条目（单条目；门默认关不被调用 = 条目表逐位不变）。
 	 * spec = "ssr"（mesh 复用 light.mesh.spv 全屏大三角 + ssr.frag）。binding：0/1 占位
-	 * + 3 sceneData（@722272 ssrViewProj，消费者 = 15.1 的 ray march，占位体不读）+
-	 * extra：4 → 本帧场景色（**恒 scene_hdr**，理由见 addSsrEntry 定义处注释）、
+	 * + 3 sceneData（@722272 ssrViewProj = 本帧**抖动后** proj·view，ray march 把命中点投回
+	 * 屏幕 uv 用）+ extra：4 → 本帧场景色（**恒 scene_hdr**，理由见 addSsrEntry 定义处注释）、
 	 * 5/6/7 → G-buffer normal/position/metalrough 采样槽（通道号镜像 light.frag）、
-	 * 8 → 深度图采样槽（与 ao/velocity/taa 复用同一份 ensureDepthSampleSlot 的槽）。
+	 * 8 → 深度图采样槽（与 ao/velocity/taa 复用同一份 ensureDepthSampleSlot 的槽）、
+	 * 9 → G-buffer albedo 采样槽（Schlick fresnel 的 F0 = lerp(0.04, albedo, metal)——金属
+	 *   表面的 F0 就是 albedo，不绑它等于把所有表面当介质，靶的金属地面反射会整个不出来）、
+	 * 10 → 共享 LINEAR/ClampToEdge sampler（**只有**命中点取反射色用它；直通路径与逐像素自身
+	 *   量全走 `Load`，判据根据见 ssr.frag.slang 绑定面那条 ⚠）。
 	 * 前提 = ssr_applied RT 已 ensure + 领槽、G-buffer 5 槽已领、深度采样槽已领。幂等。
 	 * @param colorSlot scene_hdr 的 SAMPLED_IMAGE heap 槽（binding 4）
 	 * @param normalSlot G-buffer normal RT 槽（binding 5）
 	 * @param positionSlot G-buffer position RT 槽（binding 6）
 	 * @param metalRoughSlot G-buffer metalrough RT 槽（binding 7）
 	 * @param depthSlot 深度图 SAMPLED_IMAGE heap 槽（binding 8，同 ao 条目复用同槽）
+	 * @param albedoSlot G-buffer albedo RT 槽（binding 9）
+	 * @param samplerSlot 共享 sampler 的 sampler heap 槽（binding 10）
 	 * @return 条目下标；规格缺失抛 runtime_error
 	 */
 	[[nodiscard]] uint32_t addSsrEntry(uint32_t colorSlot, uint32_t normalSlot,
-		uint32_t positionSlot, uint32_t metalRoughSlot, uint32_t depthSlot);
+		uint32_t positionSlot, uint32_t metalRoughSlot, uint32_t depthSlot,
+		uint32_t albedoSlot, uint32_t samplerSlot);
 
 	/**
 	 * Phase 11 批 11.2：阴影 depth-only 管线条目。spec = "shadow"（shadow.mesh.spv + 空壳

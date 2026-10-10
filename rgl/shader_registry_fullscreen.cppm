@@ -188,9 +188,10 @@ uint32_t ShaderRegistry::addTaaEntry(uint32_t colorSlot, uint32_t historySlot,
 		return index;
 	}
 
-	/** addSsrEntry 实现（契约见接口注释；批 15.1 前半，仿 addVelocityEntry：全 Load 无 sampler）。 */
+	/** addSsrEntry 实现（契约见接口注释；批 15.1 后半补齐 binding 9/10：albedo + 命中取色 sampler）。 */
 	uint32_t ShaderRegistry::addSsrEntry(uint32_t colorSlot, uint32_t normalSlot,
-			uint32_t positionSlot, uint32_t metalRoughSlot, uint32_t depthSlot) {
+			uint32_t positionSlot, uint32_t metalRoughSlot, uint32_t depthSlot,
+			uint32_t albedoSlot, uint32_t samplerSlot) {
 		if (auto idx = pipelineIndex("ssr"))
 			return *idx;
 		const RGL::PipelineSpec* spec = findSpec("ssr");
@@ -201,17 +202,19 @@ uint32_t ShaderRegistry::addTaaEntry(uint32_t colorSlot, uint32_t historySlot,
 		b.descriptorSize = descriptorSize;
 		b.slotVertex = 0;   // binding 0/1 占位（mesh = light.mesh 全屏大三角，不声明顶点）
 		b.slotIndex = 1;
-		b.slotSceneData = sceneData.ensure();  // binding 3：@722272 ssrViewProj（消费者 = 15.1 ray march）
+		b.slotSceneData = sceneData.ensure();  // binding 3：@722272 ssrViewProj（ray march 投回屏幕）
 		b.hasSceneData = true;
-		// 全 `Load` 直取 ⟹ 无 sampler 绑定（同 addVelocityEntry：不占 sampler 堆槽 =
-		// 不参与"自己算偏移"的事故面）。G-buffer 通道号镜像 light.frag（5=normal/6=position/
-		// 7=metalrough），15.1 接线时 shader 侧 binding 面零改动。
+		// 自身像素量全走 `Load`（不需要 sampler），binding 10 只服务命中点那**一次** `Sample`
+		// ——命中 uv 是亚像素的，必须过滤。G-buffer 通道号镜像 light.frag（5=normal/6=position/
+		// 7=metalrough/9=albedo）。
 		b.extra = {
 			{.binding = 4, .sampler = false, .heapSlot = colorSlot},
 			{.binding = 5, .sampler = false, .heapSlot = normalSlot},
 			{.binding = 6, .sampler = false, .heapSlot = positionSlot},
 			{.binding = 7, .sampler = false, .heapSlot = metalRoughSlot},
 			{.binding = 8, .sampler = false, .heapSlot = depthSlot},
+			{.binding = 9, .sampler = false, .heapSlot = albedoSlot},
+			{.binding = 10, .sampler = true, .heapSlot = samplerSlot},
 		};
 		auto entry = PipelineEntry{.name = "ssr",
 			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b),

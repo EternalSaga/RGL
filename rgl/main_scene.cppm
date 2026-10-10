@@ -505,8 +505,11 @@ void assembleHdrAoChain(Swapchain& swapchain, Resources& resources,
 	// 读到下游）。G-buffer normal/position/metalrough = 烘 5/6/7（镜像 light.frag 通道号，
 	// 15.1 后半 ray march 的权重输入）；深度复用 ao 那一份采样槽（不另领，先例同 velocity）。
 	if (ssrDecorated) {
+		// G-buffer 通道号镜像 light.frag：[0]=albedo（binding 9，fresnel F0）/[1]=normal/
+		// [2]=position/[3]=metalrough；emissive（[4]）SSR 不消费。sampler = 共享 LINEAR，
+		// 只服务命中点那一次 Sample（直通路径全 Load）。
 		[[maybe_unused]] auto ssrIdx = pipelines.addSsrEntry(hdrSlot, (*gbSlots)[1],
-			(*gbSlots)[2], (*gbSlots)[3], depthSlot);
+			(*gbSlots)[2], (*gbSlots)[3], depthSlot, (*gbSlots)[0], samplers.ensureShared());
 	}
 	// 批 14.5 第三批：AO 施加专用 pass 的条目。色输入 = SSR 在图时 ssr_applied、否则
 	// scene_hdr——本 pass 的跳过条件保证「taa 在图里就不插」，所以它读的是装饰器插入序
