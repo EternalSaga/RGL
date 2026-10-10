@@ -106,6 +106,11 @@ STRIX_HALO · 1280×720 · deferred · `profiler=120` 帧窗口 · 单实例串�
 | **0.52（现行默认）** | **259µs** | 9.573ms | **6649** |
 | 1.0 | 308µs | 9.659ms | 6663 |
 
+> **15.2 子步 C 复测（2026-10-10，湿面默认开档）**：`ssr` pass GPU mean **257µs**（p50 同）/
+> `gpu.frame` mean 9.546ms（SSR 关 = 9.283ms）——减法项（命中像素一次 env `SampleLevel` +
+> 数条 FMA）成本不可见。⚠ 口径差：上表测于湿面落地前，本行测于湿面默认开（`profiler=120`、
+> 120 帧窗口、kind=gpu 过滤、单实例串行，同本表口径）。
+
 四条：① **成本随射线预算近似线性走、不出屏就不饱和**（我先前"射线出屏 ⟹ 成本饱和"的假设
 被实测推翻）；② `ssr` 259µs = 帧时 **2.7%**，在 §1.1 "全屏 pass 几乎免费、成本全在每像素
 采样次数"的预判之内，且阴影仍占 71%；③ `gpu.frame` 的增量（+0.332ms @0.52）**大于** `ssr`
@@ -290,7 +295,7 @@ shader 构建登记在 `rgl/CMakeLists.txt` 的 `rgl_shader(...)`。
 |---|---|---|
 | **15.0** | **判据与靶先行（零渲染改动）** ✅ **已落地**（落地形态与计划的偏差见 §3.1） | 红线 = `just regress ab` 逐位不变（**已实测：逐位相同**）；判据 = 闭式预测表本身要有**反向用例**（柱不存在时预测区间必须为空，已做成 `ssr_rig_empty` 变体 + 构建期断言 A3） |
 | **15.1** | **镜面 SSR 最小可用**（**前半 ✅** = `ssr` pass 管道 + 门 + 占位拷贝；**后半主体 ✅** = 真 DDA ray march，落地记录 + 四条 DDA 缺陷 + 方法学教训 → §3.2；**余下** = ~~参数进配置面~~ ✅（批 15.1 参数面，扫描表 → §3.2）+ ~~§1.1 命中率读数~~ ✅（36%，见下））：`ssr.frag.slang` 全分辨率 DDA ray march（§1.3 算法面），反射源 = `scene_hdr`，权重全从 G-buffer 现成量算（Schlick fresnel 与 `light.frag` 同式、roughness 门控、背面/边界 fade）。§2.2 的 viewProj 尾区 + 互逆护栏。门走 `configs/runtime.lua` 新块，与 `aa` 三态键**正交**。**末尾必做（§6 风险 1 的量具）**：在 bistro 交付机位上出 SSR 开/关差分覆盖率 = 命中率读数，写进 §1.1 表；过低即触发 §6 的降级路径。⚠ 该读数**必须在参数面之后出**——常量还是米制而 bistro 是 `scale=0.01`，现在量出来的数不可解读 | 红线 = 门关逐位 = **红线 A `5ff793bf…`**（权威载体 = `docs/还债总账.md` 的红线声明块；**必须用基线配置**。⚠ 本计划立项时写的是 `fdece9d0`，那个锚 2026-10-10 已因债-76 退役，批 15.0 的 `just regress ab` 实测跑出的就是 `5ff793bf`）；VVL + syncval 零 hazard（新 pass 的布局链，先例债-32）；判据 = **`just ssr-check`**（闭式靶两条：凸包内覆盖率 + 凸包外逐位）+ `imgqa switch`（门关影响域**必须恰为 0**）+ `imgqa attribution` + **`aa` 三档各测一次 SSR 开/关差分**（✅ 已实测，缺口 1 闭合）与**装配后 `ssr` pass 下标 < `taa` pass 下标**（后者由 `decorateSsrPass` 的时序判据结构性接管，见 §3.2） |
-| **15.2** | **子步 B ✅ 已落地（2026-10-10）**：湿面三项进 deferred_geometry = **G-buffer 调制**（粗糙度空间变化 / 水膜法线扰动 / albedo 压暗），**默认开**，红线 A 重立 `54e40665`（落地记录 + 判据读数 → §3.3；imgqa 正式判据与参数扫描表留后续子步）。原计划：**湿面消费 SSR**（= 原课题「bistro 水膜」三项）：湿区 albedo 压暗 ×0.5–0.7、水洼粗糙度（洼 ≈0.05 / 湿石 0.3–0.5）、水膜法线扰动。wetness **身份**走 roughness 通道（§2.4 已修正：资产已标定，别猜）、**空间变化**走程序化；顺带还"命中处不减 IBL specular"那笔债。🔴 **动手前先读 §1.2 末「SSR 落地后效果差的归因」**——四条备选假设（贡献弱/无结构/反射源错/射线预算不够）**全部实测排除**，主因确认 = 反射加在满强度干漫反射之上 ⟹ **本批的压暗就是让已有 SSR 变可见的那一步** | ⚠**待用户拍板：判据建议从「Δ 大小」换成「反射结构的对比度」**——现状 Δ 已经不小（反射占最终亮度 p50=25%），沿用「Δ 变大即通过」会让「还是不像水」蒙混过关；建议判据 = 纯 Δ 图（开/关差、黑底放大）的 p90/p10 与暗特征是否更暗。原定判据保留：结案 AGENTS.md「湿面只加高光不压暗」那条已知边界（就地删该条）；`imgqa faces` 闭式逐面预测；`imgqa switch --allow-piece ground` 限定湿区影响域 |
+| **15.2** | **子步 B ✅ 已落地（2026-10-10）**：湿面三项进 deferred_geometry = **G-buffer 调制**（粗糙度空间变化 / 水膜法线扰动 / albedo 压暗），**默认开**，红线 A 重立 `54e40665`（落地记录 + 判据读数 → §3.3；imgqa 正式判据与参数扫描表留后续子步）。**子步 C ✅ 已落地（2026-10-10）** = 命中处减 IBL specular（置信度混合 `hdr + weight·(F·reflected − iblSpec)`，「顺带还」那笔债就地还清 → §3.3 子步 C）。原计划：**湿面消费 SSR**（= 原课题「bistro 水膜」三项）：湿区 albedo 压暗 ×0.5–0.7、水洼粗糙度（洼 ≈0.05 / 湿石 0.3–0.5）、水膜法线扰动。wetness **身份**走 roughness 通道（§2.4 已修正：资产已标定，别猜）、**空间变化**走程序化；~~顺带还"命中处不减 IBL specular"那笔债~~ ✅（子步 C）。🔴 **动手前先读 §1.2 末「SSR 落地后效果差的归因」**——四条备选假设（贡献弱/无结构/反射源错/射线预算不够）**全部实测排除**，主因确认 = 反射加在满强度干漫反射之上 ⟹ **本批的压暗就是让已有 SSR 变可见的那一步** | ✅**判据已拍板（2026-10-10 用户）= 「反射结构的对比度」**：纯 Δ 图（SSR 开/关差，线性亮度域）的 **p90/p10 比值 + 湿区内 Δ<0（变暗）像素占比 > 0**（后者 = 「命中处减 IBL specular」生效的机器可验阳性锚点）；「Δ 大小」降级为报告值不作判据（§1.2 实测现状 Δ 已不小，沿用会让「还是不像水」蒙混过关）。湿面效果**默认开**亦同批拍板（红线 A 已重立 `54e40665`）。原定判据保留：结案 AGENTS.md「湿面只加高光不压暗」那条已知边界（就地删该条）；`imgqa faces` 闭式逐面预测；`imgqa switch --allow-piece ground` 限定湿区影响域 |
 | **15.3** | **粗糙度感知模糊 + 伪影治理**：拆半分辨率 march + 全分辨率 apply；反射图走 mip chain（§1.3 抄 Filament 这条）；治深度间隙断裂、屏幕边界淡出、firefly（`docs/还债总账.md` 债-40 那条 HDR firefly 对 SSR 同样成立） | 每条伪影要有**反向用例**，不许"看着好了"收账；per-pass 读数进 §1.1 表 |
 
 **批次顺序的理由**：15.0 先做是因为 SSR 是本项目少数能闭式验证的特性，尺子必须比实现先到位
@@ -500,8 +505,10 @@ ssr_applied > scene_hdr`**（FSR 仍整条顶掉）。装饰器**可复合性**�
 `qa/configs/ssr_rig` 上跑不起来（该配置基准缺 `fsr` 块，smoke.py 的键替换命中 0 次即 FAIL），
 所以这条差分是在默认配置上测的——**靶配置要支持 fsr 档，得先给它补 `fsr` 块**（未做）。
 
-**未还的账（15.2 及后续）**：① 命中处**不减 IBL specular** ⟹ 光滑面双计偏亮（15.2 还，
-与"湿面压暗"同一处）；② ~~shader 内 `kMaxDistance / kBias / kThickness` 仍是米制常量~~
+**未还的账（15.2 及后续）**：① ~~命中处**不减 IBL specular** ⟹ 光滑面双计偏亮~~ **已还**
+（15.2 子步 C = 置信度混合 `hdr + weight·(F·reflected − iblSpec)`，iblSpec 逐式镜像 light.frag；
+bistro 交付机位实测差分中 **4221 px 变暗**（15.1 时代恒 0），过门控 roughness≥0.40 上变暗 = 0，
+靶判据不受影响（无 environment ⟹ mipRange=0 ⟹ 减法恒关）→ §3.3 子步 C）；② ~~shader 内 `kMaxDistance / kBias / kThickness` 仍是米制常量~~
 **已还**（见下条"世界单位参数改尺度无关导出量"；`kCellPx` 本来就是像素单位不受尺度影响；
 参数进**配置面** ✅ 已还 = 批 15.1 参数面，五枚系数进 `configs/runtime.lua` 的 `ssr` 块，扫描表与
 消融实测见下文"SSR 画质参数进配置面"）；
@@ -763,10 +770,56 @@ patch_lua，键唯一性护栏原样继承；作用在具名旗标之后）= §3
 镜面 roughness 恒 0.122 = wet=1 满调制，不钉则闭式覆盖率判据被改写）。scene.slang 仅注释更新
 → `just reflect` 后 generated 只有 manifest 哈希行变化（生成物内容零变化）。
 
+**子步 C：命中处减 IBL specular（置信度混合），还 §3.2 未还账① ✅（2026-10-10）**
+
+落地形态 = `ssr.frag.slang` 最终 return 从「只加」`hdr + F·weight·reflected` 改成
+`hdr + weight·(F·reflected − iblSpec)`；`iblSpec` = light.frag 加进 scene_hdr 那一项
+（light.frag:218-226 env.mipRange>0 分支）的**逐式镜像重算**（post-lighting pass 拿不到
+light 的中间量；重算比加 RT 便宜且无新附件）。相消条件逐条对齐（行号 = light.frag，
+shader 内注释逐条带出处）：R 同式（:220）、envSpec LOD = roughness·mipRange（:222）、
+`envBrdfFactor` 的 NdotV = `max(dot(N,V),1e-4)`（:216，**不是**本文件给 Schlick F 用的
+`saturate(abs(...))`——abs 只留给加法那项，减法用 abs 口径背面像素不相消）、F0（:215）、
+× env.intensity（:226）。**按磁盘事实补的一条 spec 未列对齐**：roughness 取
+`clamp(mr.g, 0.04, 1.0)`（light.frag:164 同款钳制；门控仍用未钳制那份，两口径不混——
+出厂资产双峰 0.122/≥0.74 均 >0.04，本场景两口径逐位等价，跨场景才分家）。
+
+- **绑定面**：`[[vk::binding(11,0)]] envMapL` + `[[vk::binding(12,0)]] envSamplerL`；CPU 侧
+  `addSsrEntry` 照 `addLightEntry`（shader_registry_impl.cppm:210-218）env 形态追加 extra：
+  env 已上传 = `{11, heapSlot}` + `{12, samplerHeapOffset = ensureSkySampler(mipLevels)·…}`，
+  未上传 = 占位 0/0（shader 端 mipRange=0 恒不采样 = 减法恒关，逐位回旧「只加」形态）。
+  env 不是图附件，走 extra，**渲染图零改动**。env 参数本地 `EnvParamsS` 直读 @48/@52，
+  不 import env.slang（其 envMap 在 binding 4 与本 pass sceneHdr 冲突，light.frag:25 同款理由）。
+- **影响域不变**：减法只在命中且 weight>0 路径；未命中/早退仍返回逐位 `hdr`。
+- 🐛 **顺带修掉 15.1 引入的 binding 10 错绑（主 agent 复核发现）**：`addSsrEntry` 的
+  `{.binding=10, .sampler=true, .heapSlot=samplerSlot}` 把**槽号**当**字节偏移**传——消费端
+  sampler 条目读 `samplerHeapOffset`（shader.cppm:488），实际偏移恒 0。本机 RADV
+  reservedSlots=0 且 `sampler.shared→0`（启动台账）⟹ 恒 0 恰正确、逐位判据全绿抓不到；
+  NVIDIA reservedSlots=3024 ⟹ 命中取色 sampler 绑进驱动保留区。改 `.samplerHeapOffset =
+  samplerSlot·descSize`（照 addTaaEntry 形态），本机实测 no-op（SSR-on 图差分 649 px ⊆
+  同二进制 run-to-run 漂移 612 px 同量级）。**教训形态：`sampler=true` 的 extra 条目只有
+  `samplerHeapOffset` 一个正确写法，槽号直传是类型通过、语义错误的静默形态——跨机保留槽
+  非零的设备上才现形**。
+- **已知边界（跨场景）**：light.frag 对植被 envSpec 置 0、对光源强制 metallic=0，本 pass
+  不认识 materialClass ⟹ 这两类若过粗糙度门控会**过减**。本场景安全（植被 roughness 1.0
+  ≫ gate.y=0.40）。写进文件头，不加绑定不早退。
+
+| 验收项 | 实测（本机 RADV STRIX_HALO · 1280×720 · 单实例串行） |
+|---|---|
+| `just build` + checks | 0 新警告（.cppm 0 · imgqa 工具侧 69 = 基线持平 · doc-check 0）；未改 scene.slang/schema ⟹ 未跑 `just reflect`，manifest 零变化 |
+| `just test` | **274/274** 全绿（68182 断言） |
+| 红线 `regress ab --expect 54e40665` | A（工作树）= `54e406655f16`×3 · B（7865f44）= `54e406655f16`×3 ⟹ **逐位相同**（ssr 默认关 = 无 pass = 结构性旁路） |
+| `just ssr-check`（靶无 environment ⟹ mipRange=0 ⟹ 减法恒关） | 判据 A **PASS** 覆盖率 **97.2%** · 判据 B **PASS** 泄漏 **0**。⚠ 97.3%→97.2%（−29 px）= 最终式乘法次序改变（`F·weight·reflected` → `weight·(F·reflected−0)`）翻 DDA 命中判据边界像素，与 §3.2「常量换读内存 ±29 px」同类；门开路径判据是阈值制（≥90%），红线（门关）不受触及 |
+| **阳性锚点**（bistro 交付机位、湿面默认开、`aa=off`，线性 Rec.709 亮度域） | 差分 **5583 px = 0.61%**；**Δ<0（变暗）4221 px = 差分的 75.6% = 画面的 0.458%**（15.1 时代恒 0，§1.1 表「差分中变暗的像素 0」）⟹ **减法生效的机器可验证据**；变亮 1362；变暗像素 Δ 最深 −0.312（线性域） |
+| 影响域交叉（`dump_gbuf=3` roughness 通道） | **roughness ≥ gate.y=0.40 上变暗 = 0**；变暗像素 roughness 分布 min 0.051 / p50 0.337 / **max 0.349**（全部落在过门控光滑面内 = 水洼 0.05 / 湿石 0.35 两簇） |
+| 成本（`profiler=120` · 120 帧 · kind=gpu） | `ssr` mean **257µs**（p50 257µs）· `gpu.frame` 9.546ms（SSR 关 9.283ms）；与 §1.1 的 259µs 持平（口径差 = 湿面开/未落地），减法成本不可见 |
+| 冒烟矩阵 | `--ssr` / `--ssr --aa taa` / `--ssr --aa fsr` / `--ssr --sync`（hazard 0）/ `--ssr --variant forward`（优雅跳过 warn）五档全 PASS errors=0 |
+| aa 三档 SSR 开/关差分（缺口 1 护栏，ssr.frag 改了重跑） | off **5583**（0.61%）/ taa **6744**（0.73%）/ fsr **7032**（0.76%）均非零；SSR-off 哈希：off 档 = `54e40665` ✓ · taa/fsr 档 `regress ab --aa taa/fsr`（工作树 vs HEAD）**A=B 逐位**（`75fcf6c3` / `6c40e81e`）。⚠ 磁盘偏差：phase14 的 taa/fsr 锚 `360ce0d2`/`866c0e6b` 是**湿面 B 之前**的（B 只重立了 off 档红线），故本步以「与 HEAD 逐位相同」为锚 |
+| 变异自验（减法改回 `+ weight·F·reflected`） | 变暗计数 4221 → **0**（差分 5835 px 全变亮）= 阳性锚点反向自证；还原后重构建 checks 0 警告 |
+| 🆕 **既有边界（非本步引入，实测划出）** | **SSR-on 图存在 ~400–500 px（0.05%）进程级 run-to-run 漂移**：还原后同二进制连拍 423 px 差；回退到 HEAD（15.1+wetB，无本步改动）连拍同样漂 **490 px** ⟹ 15.1 起既有、从未被刻画（此前没人连拍过 SSR-on；§3.2「逐次相同」是闭式靶上的读数）。SSR-off 红线不受影响（regress 地板 = 0）。**含义：SSR-on 图不能当逐位锚，本步全部 SSR-on 判据都是统计制的（4221 ≫ 漂移 423）**。根因未查（漂移簇在反射带内、Δ 多为亚 LSB 级 = DDA 命中边界翻转型），登记不追 |
+
 **余下（15.2 后续子步）**：imgqa 正式判据（`faces` 闭式逐面预测 / `switch --allow-piece ground`
-限定湿区影响域）；「反射结构对比度」判据（§2 批次表待拍板项）；「命中处不减 IBL specular」
-那笔债（§3.2 未还账①）；AGENTS「湿面只加高光不压暗」条目的就地删除（随判据收账，本步未动
-AGENTS）。
+限定湿区影响域）；「反射结构对比度」判据（§2 批次表待拍板项）；AGENTS「湿面只加高光不压暗」
+条目的就地删除（随判据收账，本步未动 AGENTS）。
 
 ## 4. 红线与纪律
 

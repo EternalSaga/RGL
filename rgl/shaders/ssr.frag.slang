@@ -34,12 +34,20 @@
 // （深度缓冲与 `readSsrViewProj()` 同为抖动后口径，见 scene_data.cppm kSceneDataSsrOffset）。
 // 不做 un-jitter——那是下游时域滤波器的活（同 ao_apply 纪律）。
 //
-// ── 未命中的回退 = 什么都不加（**已知边界，不是遗漏**）──
-// 未命中时反射贡献为 0，画面退回 `light.frag` 已经加过的 IBL specular。本批**不做**"命中处
-// 把 IBL specular 减掉"的能量守恒（那要把 env 图 + BRDF LUT 也绑进来重算一遍）。后果 =
-// 光滑面上 IBL specular 与 SSR **双计**，镜面偏亮。§1.3 说"回退质量比命中质量更决定观感"，
-// 这条就是回退面的欠账 ⟹ 记在 `docs/phase15_plan.md` §3.2，15.2（湿面 = 最光滑的那批表面）
-// 之前必须还。
+// ── 命中处 = 置信度混合（15.2 子步 C 起；旧形态「只加不减」已还账）──
+// 未命中 / 每条早退路径仍返回逐位 `hdr`（= `light.frag` 已加过的 IBL specular 原样保留，
+// 回退面 = 「什么都不加」，影响域判据的前提不变）；命中且 weight>0 的路径做
+//     hdr.rgb + weight * (F * reflected - iblSpec)
+// `scene_hdr` 里已含 light.frag 加的 IBL specular，SSR 命中 ⟹ 那一项该被反射内容**顶替**
+// 而不是叠加（旧形态双计偏亮，且「反射到暗物」永远无法让像素变暗 = SSR 开/关差分恒 ≥0）。
+// `iblSpec` = light.frag 那一项的**逐式镜像重算**（本 pass 是 post-lighting，拿不到 light
+// pass 的中间量；重算比加一张 RT 便宜且无新附件），相消条件逐条对齐 → 最终 return 处注释。
+//
+// ⚠ **已知边界（跨场景，植被/光源过减）**：light.frag 对植被类（emissive.a∈(0.5,1.5)）把
+// envSpec 置 0（light.frag:226 isVeg 分支）、对光源类强制 metallic=0（light.frag:172-173），
+// 本 pass 不认识 materialClass ⟹ 若这两类过粗糙度门控会**过减**（减掉 light 根本没加的
+// 能量）。本场景安全：植被 roughness 1.0 ≫ gate.y=0.40 ⟹ weight=0，到不了减法行。跨场景
+// 若引入光滑植被，减法要随 materialClass 走（届时再还，别提前加绑定、别在此早退）。
 //
 // ── 绑定面（与 CPU 侧 addSsrEntry 成对；G-buffer 通道号镜像 light.frag）──
 //   3 = sceneData（import scene；@722272 ssrViewProj = 本帧**抖动后** proj·view；
@@ -53,9 +61,14 @@
 //   9 = gbuffer_albedo（RGBA8_SRGB，Schlick fresnel 的 F0 要它——金属地面的 F0 就是 albedo，
 //       省掉它等于把所有表面当介质，靶的金属地面反射会整个不出来）
 //  10 = sampler（共享 LINEAR/ClampToEdge；**只有**命中取色用它，见下条纪律）
+//  11 = envMapL(TextureCube) / 12 = envSamplerL(sky sampler)（15.2 子步 C：命中处减 IBL
+//       specular 的镜像重算源；light.frag 的 9/10 在本 pass 号接 4-10 之后。env 未上传 =
+//       占位 0/0，shader 端 mipRange=0 不采样的契约，light.frag 同款）
 //
 // ⚠ **取色器分工是判据的一部分**：直通路径与逐像素自身量一律 `Load`（整数纹素原值），只有
-//   命中点取反射色用 `Sample`（命中 uv 是亚像素的，必须过滤）。直通用 `Load` 保证
+//   命中取反射色用 `Sample`（命中 uv 是亚像素的，必须过滤）；env 的 `SampleLevel` 走 12 号
+//   sky sampler 且**必须与 light.frag:222 同 LOD 表达式**（那是镜像重算的相消条件，不是
+//   本纪律的例外）。直通用 `Load` 保证
 //   **SSR 未作用的像素与门关时逐位相同** ⟹ `imgqa switch` 的影响域判据（"门关影响域恰为 0"）
 //   才有意义；否则影响域里混进"采样路径的浮点差异"，判据就分不清"SSR 没作用"与"SSR 作用了
 //   但被浮点噪声淹没"。
@@ -69,6 +82,24 @@ import scene;  // sceneData + readSsrViewProj + readSsrParams + octDecode + worl
 [[vk::binding(8, 0)]] Texture2D<float> depthTex;        // eD32Sfloat 深度图（eDepth aspect）
 [[vk::binding(9, 0)]] Texture2D<float4> albedoTex;      // G-buffer albedo（rgba8_srgb，F0 用）
 [[vk::binding(10, 0)]] SamplerState hitSampler;         // 共享 LINEAR/ClampToEdge
+[[vk::binding(11, 0)]] TextureCube<float4> envMapL;     // 环境立方图（GGX 预滤波 mip 链，减法项）
+[[vk::binding(12, 0)]] SamplerState envSamplerL;        // sky sampler（maxLod = mipLevels-1）
+
+// env 参数（scene data @48 intensity / @52 mipRange，light.frag EnvParamsL 同款布局直读）。
+// **为什么不 import env.slang**：其 envMap/envSampler 声明在 binding 4/5，与本 pass 的
+// sceneHdr(4) 冲突（light.frag:25 同款理由）——env 绑定本地声明在 11/12，参数从 sceneData 直读。
+struct EnvParamsS
+{
+    float intensity;
+    float mipRange;
+};
+EnvParamsS readEnvParamsS()
+{
+    EnvParamsS e;
+    e.intensity = asfloat(sceneData.Load(48));
+    e.mipRange  = asfloat(sceneData.Load(52));
+    return e;
+}
 
 struct SsrInput
 {
@@ -401,13 +432,38 @@ float4 main(SsrInput input) : SV_Target
     if (weight <= 0.0)
         return hdr;
 
-    // Schlick fresnel，与 light.frag 的 IBL specular **同式**（F0 = lerp(0.04, albedo, metal)），
-    // 这样 15.2 要做"命中处减掉 IBL specular"时两边可以直接相消。
+    // Schlick fresnel（**加法**那项的镜面权重）。F0 = lerp(0.04, albedo, metal) 与 light.frag:215
+    // 同式；NoV 口径 `saturate(abs(dot(N,V)))` 只服务这一项（背面像素的 fresnel 不该塌成 1）。
     const float3 albedo = albedoTex.Load(int3(pix, 0)).xyz;
     const float3 F0 = lerp(float3(0.04), albedo, mr.r);
     const float NoV = saturate(abs(dot(N, V)));
     const float3 F = F0 + (1.0 - F0) * pow(1.0 - NoV, 5.0);
 
+    // ── 命中处减 IBL specular（15.2 子步 C，还 §3.2 未还账①）──
+    // iblSpec = light.frag 加进 scene_hdr 的那一项（light.frag:218-226 的 env.mipRange>0 分支）
+    // 的**逐式镜像重算**，相消条件逐条对齐（行号 = light.frag）：
+    //   · R = reflect(-V, N)           —— light.frag:220 同式，且与本文件射线用的 R 同一个（:247）
+    //   · LOD = roughness·mipRange     —— light.frag:222；mipRange=0 时 light 走常 ambient 回落、
+    //     根本没加 envSpec ⟹ 外层 if 让整项置 0（env 未上传的占位绑定因此恒不采样）
+    //   · roughness = clamp(mr.g, 0.04, 1.0) —— light.frag:164 同款钳制（本文件**门控**用的是
+    //     未钳制那份，两口径别混；出厂资产双峰 0.122/≥0.74 均 > 0.04，本场景两口径逐位等价，
+    //     跨场景 mr.g < 0.04 时才分家——届时不钳 = 减法与 light 不相消）
+    //   · envBrdfFactor(NdotV, roughness, F0)，NdotV = max(dot(N,V), 1e-4) —— light.frag:216。
+    //     ⚠ **不是**上面给 Schlick F 用的 saturate(abs(...))：abs 只留给加法那项的 fresnel，
+    //     减法必须镜像 light 的口径，否则背面像素不相消
+    //   · × env.intensity              —— light.frag:226
+    // 已知边界（植被/光源过减）→ 文件头；减法只发生在**命中且 weight>0** 的路径上，未命中/
+    // 早退路径仍返回逐位 `hdr`（影响域判据的前提）。
+    const EnvParamsS env = readEnvParamsS();
+    const float roughClamped = clamp(roughness, 0.04, 1.0);
+    float3 iblSpec = float3(0.0);
+    if (env.mipRange > 0.0)
+    {
+        const float3 envSpec =
+            envMapL.SampleLevel(envSamplerL, R, roughClamped * env.mipRange).rgb;
+        iblSpec = envSpec * envBrdfFactor(max(dot(N, V), 1e-4), roughClamped, F0) * env.intensity;
+    }
+
     const float3 reflected = sceneHdrTex.Sample(hitSampler, hitUv).rgb;
-    return float4(hdr.rgb + F * weight * reflected, hdr.a);
+    return float4(hdr.rgb + weight * (F * reflected - iblSpec), hdr.a);
 }

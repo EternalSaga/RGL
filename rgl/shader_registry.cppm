@@ -351,7 +351,10 @@ export class ShaderRegistry {
 	 * 9 → G-buffer albedo 采样槽（Schlick fresnel 的 F0 = lerp(0.04, albedo, metal)——金属
 	 *   表面的 F0 就是 albedo，不绑它等于把所有表面当介质，靶的金属地面反射会整个不出来）、
 	 * 10 → 共享 LINEAR/ClampToEdge sampler（**只有**命中点取反射色用它；直通路径与逐像素自身
-	 *   量全走 `Load`，判据根据见 ssr.frag.slang 绑定面那条 ⚠）。
+	 *   量全走 `Load`，判据根据见 ssr.frag.slang 绑定面那条 ⚠）、
+	 * 11/12 → env cubemap 采样槽 + sky sampler（批 15.2 子步 C：命中处减 IBL specular 的镜像
+	 *   重算源；env 不是图附件，走 extra = light pass 9/10 同法，图零改动；env 未上传 = 占位
+	 *   0/0，shader 端 mipRange=0 恒不采样）。
 	 * 前提 = ssr_applied RT 已 ensure + 领槽、G-buffer 5 槽已领、深度采样槽已领。幂等。
 	 * @param colorSlot scene_hdr 的 SAMPLED_IMAGE heap 槽（binding 4）
 	 * @param normalSlot G-buffer normal RT 槽（binding 5）

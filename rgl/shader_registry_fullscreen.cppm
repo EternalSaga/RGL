@@ -188,7 +188,8 @@ uint32_t ShaderRegistry::addTaaEntry(uint32_t colorSlot, uint32_t historySlot,
 		return index;
 	}
 
-	/** addSsrEntry 实现（契约见接口注释；批 15.1 后半补齐 binding 9/10：albedo + 命中取色 sampler）。 */
+	/** addSsrEntry 实现（契约见接口注释；批 15.1 后半补齐 binding 9/10：albedo + 命中取色 sampler；
+	 *  批 15.2 子步 C 补齐 11/12：env cubemap + sky sampler，命中处减 IBL specular 的镜像重算源）。 */
 	uint32_t ShaderRegistry::addSsrEntry(uint32_t colorSlot, uint32_t normalSlot,
 			uint32_t positionSlot, uint32_t metalRoughSlot, uint32_t depthSlot,
 			uint32_t albedoSlot, uint32_t samplerSlot) {
@@ -207,6 +208,13 @@ uint32_t ShaderRegistry::addTaaEntry(uint32_t colorSlot, uint32_t historySlot,
 		// 自身像素量全走 `Load`（不需要 sampler），binding 10 只服务命中点那**一次** `Sample`
 		// ——命中 uv 是亚像素的，必须过滤。G-buffer 通道号镜像 light.frag（5=normal/6=position/
 		// 7=metalrough/9=albedo）。
+		// ⚠ sampler=true 的条目必须烘 **samplerHeapOffset（字节偏移）**而不是 heapSlot——
+		// 消费端 shader.cppm 对 sampler 条目读 `e.samplerHeapOffset`（shader.cppm:488）。
+		// 15.1 原样误写 `.heapSlot = samplerSlot`（偏移退化为 0）：本机 RADV reservedSlots=0
+		// 且共享 sampler 恰在槽 0 ⟹ 碰巧正确、逐位判据全绿；NVIDIA reservedSlots=3024 ⟹
+		// 命中取色 sampler 会绑进驱动保留区。形态照 addTaaEntry 同名偏移（:166）。
+		const uint32_t samplerHeapOffset =
+			samplerSlot * res.getSamplerHeap().getDescriptorSize();
 		b.extra = {
 			{.binding = 4, .sampler = false, .heapSlot = colorSlot},
 			{.binding = 5, .sampler = false, .heapSlot = normalSlot},
@@ -214,8 +222,22 @@ uint32_t ShaderRegistry::addTaaEntry(uint32_t colorSlot, uint32_t historySlot,
 			{.binding = 7, .sampler = false, .heapSlot = metalRoughSlot},
 			{.binding = 8, .sampler = false, .heapSlot = depthSlot},
 			{.binding = 9, .sampler = false, .heapSlot = albedoSlot},
-			{.binding = 10, .sampler = true, .heapSlot = samplerSlot},
+			{.binding = 10, .sampler = true, .samplerHeapOffset = samplerHeapOffset},
 		};
+		// 批 15.2 子步 C：env cubemap（11）+ sky sampler（12）——env **不是图附件**，走
+		// PipelineBindings.extra（light pass 9/10 同法），渲染图零改动。绑定形态照
+		// addLightEntry（shader_registry_impl.cppm:210-218）：env 已上传 = 正常绑定（heapSlot
+		// 烘资源堆槽、sampler 烘 sky sampler 字节偏移，maxLod = mipLevels-1 是 GGX mip 链
+		// 唯一入口）；未上传 = 占位 0/0（shader 端 mipRange=0 恒不采样，见 ssr.frag 减法块）。
+		if (const auto* envAsset = env.get()) {
+			b.extra.push_back({.binding = 11, .sampler = false, .heapSlot = envAsset->heapSlot});
+			b.extra.push_back({.binding = 12, .sampler = true,
+				.samplerHeapOffset = env.ensureSkySampler(envAsset->mipLevels) *
+					res.getSamplerHeap().getDescriptorSize()});
+		} else {
+			b.extra.push_back({.binding = 11, .sampler = false, .heapSlot = 0});
+			b.extra.push_back({.binding = 12, .sampler = true, .samplerHeapOffset = 0});
+		}
 		auto entry = PipelineEntry{.name = "ssr",
 			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b),
 			.spec = *spec, .bindings = b};
