@@ -84,6 +84,25 @@ return {
     -- **创建期量**：改它要走重启。生效现场看启动日志 "ssr (RGBA16F, …): WxH slot N"。
     ssr = {
         enabled = false,
+
+        -- ⚠ 本块并存**两类量**（Phase 15 批 15.1 参数面起）：上面 `enabled` 是**创建期量**（决定渲染
+        -- 图里有没有 ssr pass、要不要领 ssr_applied RT，改它要重启）。下面五项是**每帧量**——
+        -- 每帧经 FrameDrawList 写进 scene data 尾区的 ssrParams(@722336) / ssrGate(@722352)，
+        -- shader 读内存：不重编译着色器、不重建管线、不改图形态。
+        -- 但 runtime.lua **没有热重载**（RuntimeConfig 只在启动期 load() 一次，热重载只套
+        -- scene.lua / camera.lua / log_level.json）⟹ 改这五项同样要重启进程才读得到，
+        -- 只是"生效"这一步不需要重建任何东西。
+        -- 默认值唯一真相源 = C++ 的 SsrTuning 成员初始化器（rgl/runtime_config.cppm）；本文件
+        -- 不写 fallback 常量，缺块/缺键 = 直接用那份默认值（两处定义迟早漂移）。
+        --
+        -- 下面五项 = 批 15.1 那五枚 shader 常量的原值（行尾常量名 = 它当初住在哪）。口径与
+        -- 两条不变式（bias_px < thickness_px、rough_full < rough_cutoff）→ ssr.frag.slang 头
+        -- 注释；越界**不钳制**——退化档是反向消融的诊断手段，clamp 掉 = 消融静默失效。
+        max_distance_radii = 0.26,  -- kMaxDistanceRadii：光线推进上限 = sceneRadius × 本值
+        thickness_px = 6.0,         -- kThicknessPx：命中判据的屏幕空间厚度容差，单位 = 像素
+        bias_px = 0.6,              -- kBiasPx：命中点外推防自粘，单位 = 像素（须 < thickness_px）
+        rough_full = 0.15,          -- kRoughFull：粗糙度低于此 = 满强度反射
+        rough_cutoff = 0.40,        -- kRoughCutoff：粗糙度高于此 = 不反射（中间 smoothstep 过渡）
     },
 
     -- DIAG：隐藏窗启动、第 N 帧后显示（可见窗 fault 排查；-1 = 立即显示）

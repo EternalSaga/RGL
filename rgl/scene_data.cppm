@@ -433,8 +433,8 @@ static_assert(kSceneDataTaaOffset == 722080 && kSceneDataTaaMotionOffset == 7221
 	&& kSceneDataTaaInputKernelOffset == 722240 && kSceneDataTaaClipControlOffset == 722256,
 	"scene.slang taa literals drifted from scene_data.cppm offsets");
 
-/** Phase 15 批 15.1 SSR 区（mat4 + vec4, 80B）= 本帧**抖动后** proj·view + 尺度锚点参数
- *  （尾区追加，既有偏移
+/** Phase 15 批 15.1 SSR 区（mat4 + 2×vec4, 96B）= 本帧**抖动后** proj·view + 尺度锚点与
+ *  系数 + 粗糙度门控区间（尾区追加，既有偏移
  *  逐字节不动 diff0，先例 = 批 11.2 阴影 VP 区 / 批 12.6 TAA 区）。
  *
  *  口径（接消费者前必读）：
@@ -450,24 +450,43 @@ static_assert(kSceneDataTaaOffset == 722080 && kSceneDataTaaMotionOffset == 7221
  *    不改任何像素（同 shadow/TAA 尾区「无消费者时照写」纪律）。
  *  消费端 = scene.slang readSsrViewProj 字面量（两侧 static_assert 钉死同步）。 */
 export inline constexpr uint32_t kSceneDataSsrOffset = kSceneDataTaaOffset + kSceneDataTaaBytes;
-/** SSR 参数子区（vec4, 16B）= (SceneBounds.radius, 0, 0, 0)。x = 世界空间场景并集包围球
- *  半径（boundsSystem 每帧聚合，空场景 = 0）——ssr.frag 的**尺度无关参数锚点**：旧版
- *  kMaxDistance/kThickness/kBias 是按闭式靶（米制）调的世界单位常量，交付场景 bistro 是
- *  scale=0.01（r≈1.16）⟹ 同一常量无法同时服务两者（2026-10-10 实测：靶 radius=31.06 /
- *  bistro radius=1.16）。半径与相机推拉无关、随场景尺度线性走 ⟹ maxDistance 由它导出后
- *  在任意尺度合理。生产者 = fillSsrParams（可测接缝），护栏 = tests/test_ssr_params。
- *  yzw = 保留 0（后续 SSR 调参落地时复用本槽位，零布局变更，先例 = taaPrevContentShift）。 */
+/** SSR 系数子区（vec4, 16B）= (sceneRadius, maxDistanceRadii, thicknessPx, biasPx)。
+ *  **语义分组 = 「尺度锚点 + 三个由它导出的系数」**——四个分量同属"射线几何量"，故同槽：
+ *  - `x` = 世界空间场景并集包围球半径（boundsSystem 每帧聚合，空场景 = 0）= **尺度锚点**。
+ *    旧版 kMaxDistance/kThickness/kBias 是按闭式靶（米制）调的世界单位常量，交付场景
+ *    bistro 是 scale=0.01（r≈1.16）⟹ 同一常量无法同时服务两者（2026-10-10 实测：靶
+ *    radius=31.06 / bistro radius=1.16）。半径与相机推拉无关、随场景尺度线性走 ⟹
+ *    maxDistance 由它导出后在任意尺度合理。
+ *  - `y/z/w` = 三个**无量纲系数**（configs/runtime.lua `ssr` 块，每帧量、非创建期量）：
+ *    maxDistance = x·y；thickness/bias = z/w × worldPerPixel(**采样点**视深，不是起点)。
+ *
+ *  生产者 = fillSsrParams（可测接缝），护栏 = tests/test_ssr_params（两源结构）+
+ *  tests/test_scene_config（配置往返）。**默认值唯一真相源 = `RuntimeConfig` 成员初始化值**
+ *  （shader 侧无 fallback 常量——两处定义迟早漂移，见 ssr.frag.slang 参数段）。 */
 export inline constexpr uint32_t kSceneDataSsrParamsOffset = kSceneDataSsrOffset + 64u;
-export inline constexpr uint32_t kSceneDataSsrBytes = 80u;
-// 钉的是「C++ 常量 == 已知的两个基址」：改 C++ 侧必编译失败。⚠ **改 scene.slang 那一侧不会**
+/** SSR 粗糙度门控子区（vec4, 16B）= (roughFull, roughCutoff, 保留, 保留)。
+ *
+ *  **为什么不塞进上面那个 ssrParams**（设计决策，别"顺手合并"）：那四个是"由 sceneRadius
+ *  导出的射线几何量"，本两个是**与场景尺度无关的材质属性区间**（roughness 本身无量纲）。
+ *  混进一槽 = 语义上两组旋钮共用一个名字，改任一组都要读另一组的口径。
+ *
+ *  ⚠ `x < y` 是 **shader 侧不变式**（`smoothstep(x, y, roughness)` 要求等号左 ≤ 右，
+ *  反了 = 门控反向 = 粗糙面满反射、光滑面全关）。配置层**不校验**，理由与不变式落点 →
+ *  `SsrTuning::roughCutoff` 注释。 */
+export inline constexpr uint32_t kSceneDataSsrGateOffset = kSceneDataSsrOffset + 80u;
+export inline constexpr uint32_t kSceneDataSsrBytes = 96u;
+// 钉的是「C++ 常量 == 已知的三个基址」：改 C++ 侧必编译失败。⚠ **改 scene.slang 那一侧不会**
 // ——slang 里没有能引用 C++ 常量的机制，shader 字面量单侧漂只能靠端到端判据（just ssr-check）
 // 抓，机器对账规则尚未落地（缺口账 → docs/phase15_plan.md §3.2）。
-static_assert(kSceneDataSsrOffset == 722272 && kSceneDataSsrParamsOffset == 722336,
-	"scene.slang readSsrViewProj literal 722272 / readSsrParams literal 722336 out of sync with scene_data.cppm offsets");
+static_assert(kSceneDataSsrOffset == 722272 && kSceneDataSsrParamsOffset == 722336
+		&& kSceneDataSsrGateOffset == 722352,
+	"scene.slang readSsrViewProj/readSsrParams/readSsrGate literals 722272/722336/722352 out of sync with scene_data.cppm offsets");
 
 /** scene data buffer 总字节数 = 头 128 + 对象矩阵表 + 灯数组区 + MVP 表 + 材质表 +
- * 辐照度 SH9 区 + 阴影 VP 区（= 721952B，编译期派生）；SceneDataService::ensure 的分配尺寸与
- * drawFrame 每帧 staging 拷贝区尺寸均为本值（vkrenderer.cppm ⑥.5）。 */
+ * 辐照度 SH9 区 + 阴影/IZB/PCSS/EVSSM 区 + TAA 区 + SSR 区（= 722368B，编译期派生；
+ * SSR 区 96B 是批 15.1 尾区，本常量随 kSceneDataSsrBytes 自动走）；
+ * SceneDataService::ensure 的分配尺寸与 drawFrame 每帧 staging 拷贝区尺寸均为本值
+ *（vkrenderer.cppm ⑥.5）。 */
 export inline constexpr vk::DeviceSize kSceneDataBytes =
 	kSceneDataHeaderBytes + vk::DeviceSize{kSceneMatrixCapacity} * kSceneMatrixStride
 	+ kSceneDataLightArrayBytes

@@ -11,6 +11,7 @@ import vk_resources;
 import environment;  // Environment（irradianceSH，架构债务续账步骤 3）
 import asset_table;
 import scene_context;
+import runtime_config;  // SsrTuning（Phase 15 批 15.1 参数面：SSR 系数唯一默认值载体，fillSsrParams 入参）
 import camera;
 
 namespace RGL {
@@ -146,15 +147,22 @@ export Light fillLightData(entt::registry& rg, const glm::vec3& eyePos, FrameDra
 export void fillSsrViewProj(FrameDrawList& out, const ViewProjection& viewProj);
 
 /**
- * 每帧填 SSR 参数子区（scene data 尾区 kSceneDataSsrParamsOffset = @722336，vec4：
- * x = SceneBounds.radius，yzw = 保留 0；口径 → scene_data.cppm 该区注释）。定义在
- * render_list_impl（partition impl unit，实现侧不写 export）。导出为**可测接缝**
- * （fillSsrViewProj 同款先例）：回归断言 = tests/test_ssr_params（两源结构：写入侧
- * C++ 常量、读回侧字面量 722336）。
- * @param out    出参：本帧 draw list（写 sceneData.ssrParams）
+ * 每帧填 SSR 尾区的**两个参数子区**（scene data @722336 系数 vec4 + @722352 门控 vec4；
+ * 口径 → scene_data.cppm 各区注释）。定义在 render_list_impl（partition impl unit，实现侧
+ * 不写 export）。导出为**可测接缝**（fillSsrViewProj 同款先例）：回归断言 =
+ * tests/test_ssr_params（两源结构：写入侧 C++ 常量、读回侧字面量 722336/722352）；
+ * 上游配置往返（lua 文本 → loadRuntimeConfig）另测于 tests/test_scene_config。
+ *
+ * **一次填两槽**是刻意的：两槽永远同源同帧（同一个 SsrTuning 派生），拆成两个接缝 =
+ * 允许出现"系数是新的、门控是旧的"这种半帧状态。
+ *
+ * @param out    出参：本帧 draw list（写 sceneData.ssrParams / sceneData.ssrGate）
  * @param bounds 本帧场景聚合包围球（boundsSystem 产物，空场景 radius = 0 原样透传——
  *               兜底住在消费端 shader，CPU 不做第二真相源）
+ * @param tuning 本帧 SSR 系数（registry ctx，启动期由 RuntimeConfig 拷入；CPU 侧**不**
+ *               clamp、不校验不变式，理由 → readSsrBlock 注释）
  */
-export void fillSsrParams(FrameDrawList& out, const SceneBounds& bounds);
+export void fillSsrParams(FrameDrawList& out, const SceneBounds& bounds,
+	const SsrTuning& tuning);
 
 }  // namespace RGL

@@ -43,7 +43,8 @@
 //
 // ── 绑定面（与 CPU 侧 addSsrEntry 成对；G-buffer 通道号镜像 light.frag）──
 //   3 = sceneData（import scene；@722272 ssrViewProj = 本帧**抖动后** proj·view；
-//       @722336 ssrParams.x = SceneBounds.radius = 尺度无关参数锚点）
+//       @722336 ssrParams = 尺度锚点 + 三个导出系数；@722352 ssrGate = 粗糙度门控区间。
+//       后两槽的口径与默认值真相源 → scene_data.cppm / configs/runtime.lua `ssr` 块）
 //   4 = scene_hdr（RGBA16F 线性 HDR，反射源）
 //   5 = gbuffer_normal（RG16_SNORM oct，解法走 scene.slang `octDecode` 单一来源）
 //   6 = gbuffer_position（RGBA32_SFLOAT 世界坐标）
@@ -75,31 +76,38 @@ struct SsrInput
     float2 uv       : TEXCOORD0;    // light.mesh 产出 = framebuffer 对齐 uv（1:1）
 };
 
-// ── 参数（**尺度无关导出**；旧版是照闭式靶（米制）调的世界单位常量，而交付场景
-//    bistro 是 scale=0.01（世界包围球 r≈1.16）⟹ 同一常量不可能同时服务两者（2026-10-10
-//    实测：靶 SceneBounds.radius=31.06 / bistro radius=1.16）⟹ 三个量全部改从引擎已有
-//    的量导出，这里只留**无量纲系数**。系数按靶上调定值反推（判据基线 = 靶覆盖率 97.2%
-//    不回归），反推过程见各条注释；导出量：maxDistance = sceneRadius·kMaxDistanceRadii，
-//    thickness/bias = 像素数 × worldPerPixel（采样点口径，见 sampleAlong）──
-// 射线长度上限锚点。sceneRadius = SceneBounds.radius（世界空间场景并集包围球半径，
-// CPU @722336）。不锚 farPlane：那是自适应 near/far 的产物（随相机推拉变），包围球是
-// "场景本身多大"，相机推拉不改它。0.26 由靶上调定值 8.0 反推（8.0/31.06 = 0.2575）：
-// 再长就大量反射到"屏幕里根本没有的内容"（§1.3 心理阴影 ③：宁可少反射也不要错反射）。
-static const float kMaxDistanceRadii = 0.26;
-// 命中窗口 / 自交偏置的像素数。这两个参数的真实语义是"多薄算薄""多近算自交"，判断的
-// 分辨率极限本来就是像素 ⟹ 从 worldPerPixel 导出后自动近处收紧、远处放宽——常量做不到。
-// 命中窗口**双重职责**：① 真命中那格的 along 最深约 −Δt（Δt ≈ tMax/kMaxSteps，靶命中
-// 深度 w≈6 处 ≈ 2.3 px），窗口必须 > Δt 才不会把真命中误杀；② 又必须远小于"射线从物体
-// 后方经过"时的穿透深度，否则治不了 sticking（职责②的实测数据见主循环那条 ⚠）。
-// 6 px 由靶上调定值 0.04 反推（靶命中深度 w≈6 处 0.04/worldPerPixel = 5.79 px ≈ 2.6·Δt，
-// 取整到 6）。
-static const float kThicknessPx = 6.0;
-// 自交偏置：射线起点就在 G-buffer 表面上（along(0)=0），数值噪声会立刻给出 along<0 的
-// 假命中。必须 < kThicknessPx（否则命中窗口 [−thickness, −bias] 为空 = 永不命中）。
-// **worldPerPixel 逐像素变化后这条不变式为什么仍成立**：同一采样点上 bias 与 thickness
-// 乘的是**同一个** worldPerPixel，而 kBiasPx < kThicknessPx 是常量关系 ⟹ 逐像素
-// bias < thickness 恒成立。0.6 px 由靶上调定值 0.004 反推（w≈6 处 = 0.58 px）。
-static const float kBiasPx = 0.6;
+// ── 参数（**全部来自 scene data 尾区**，配置面 = configs/runtime.lua `ssr` 块）──
+// 本 shader 里**没有一枚画质旋钮的默认值**：默认值的唯一真相源 = C++ 侧 `RuntimeConfig`
+// 成员初始化值（两处定义迟早漂移，这是本项目反复登记的反模式）。缺块/缺键 = 结构体默认，
+// 走的是同一条填充代码 ⟹ 「门关」与「门开但参数默认」共用同一条路径。
+// 旧版这里是三枚按闭式靶（米制）调的世界单位常量，而交付场景 bistro 是 scale=0.01
+// （世界包围球 r≈1.16）⟹ 同一常量不可能同时服务两者（2026-10-10 实测：靶
+// SceneBounds.radius=31.06 / bistro radius=1.16）⟹ 三个量全部改从引擎已有的量导出，
+// 系数本身进配置面。导出量：maxDistance = sceneRadius·maxDistanceRadii，
+// thickness/bias = 像素数 × worldPerPixel（采样点口径，见 sampleAlong）。
+//
+// ⚠ **退化系数一律不 clamp**（自己定并写理由，2026-10-10）：
+//   · `thickness_px = 0` 与 `bias_px >= thickness_px` 是**合法消融档**（判据 = 闭式覆盖率
+//     恰为 0），clamp 掉它们 = 把反向消融静默改成另一档 = 消融失效；
+//   · 逐条查过每条除法，**没有一条会 NaN/除零**：maxDistance ≤ 0 ⟹ tMax ≤ 0 ⟹ 循环里
+//     `tStop > tCur` 恒假 ⟹ 永不命中（`tHit/maxDistance` 那条除法根本到不了），而
+//     `tSing/maxDistance` 的 ±inf 被 `saturate` 收成 [0,1]；
+//   · 系数为负 = 命中窗口 [−thickness, −bias] 变空或变宽，两种都"照字面执行"，
+//     比"看起来正常其实被悄悄改过"好。
+//
+// ⚠ **两条 shader 侧不变式**（配置层不校验，理由 → `SsrTuning` 字段注释与
+//   `readSsrBlock`）：
+//   `biasPx < thicknessPx`（否则命中窗口为空 = 永不命中）、`roughFull < roughCutoff`
+//   （否则门控**反向**：e0 > e1 时除数为负 ⟹ 光滑面 gate=0、粗糙面 gate=1；e0 == e1 时
+//   仅 roughness 恰等于 e0 的像素出 0/0 = NaN，其余按 ±inf 被 clamp 收成 0/1）。违反都是
+//   **可见**失效（实测反向档：凸包内覆盖率**恰 0**、凸包外泄漏 0 = "SSR 整个不起作用"）
+//   且 `just ssr-check` 判据 A 直接红，不是静默漂移。
+//
+// 下面四个**刻意留在 shader 里当常量**：`kCellPx`（DDA 格边长）、`kMaxSteps`（步数上界）、
+// `kRefineIters`（二分次数）、`kEdgeFadePx`（屏幕边界淡出宽度）。前三个是 **shader 形态与
+// 成本决策**（循环上界与网格边长进配置 = 编译器拿不到常量 ⟹ 循环展开/提前退出全废，
+// 且"步数上限"根本不是画质旋钮而是兜底保险丝）；第四个是屏幕像素域的经验常数，
+// 与场景尺度无关，本批没有要扫它的人。
 // DDA 格边长（像素）。2 = 步数减半；靶的倒影边界是硬边，格粗于 2 会把边界量化出来。
 static const float kCellPx = 2.0;
 // 步数上限。**刻意不抄 Filament 的 max(res)**（§1.3 红线：那是移动端小分辨率的宽松上界）。
@@ -110,10 +118,6 @@ static const float kCellPx = 2.0;
 static const int kMaxSteps = 512;
 // 命中点二分细化次数（在 [上一格穿越 t, 本格穿越 t] 上解 along=0）。
 static const int kRefineIters = 4;
-// 粗糙度门控：SSR 只对镜面成立，粗糙面反射的是"一片"而不是"一个方向"，屏幕空间采样给不出。
-// 全反射上限 0.15 / 完全关闭 0.4（中间 smoothstep 过渡，硬切会在材质边界出现可见的开关线）。
-static const float kRoughFull = 0.15;
-static const float kRoughCutoff = 0.40;
 // 命中点离屏幕边界多近开始淡出（像素）。边界外的内容根本没画，越靠边反射越不可信。
 static const float kEdgeFadePx = 24.0;
 // 天空判据：深度 = 远平面清值（skybox 大三角 z=1 靠 depth clear + LEQUAL，不写深度）。
@@ -227,7 +231,12 @@ float4 main(SsrInput input) : SV_Target
     const float roughness = mr.g;
     // 粗糙度门控早退（**性能与正确性双重**：粗糙面本就不该有镜面反射，且这条早退让绝大多数
     // 像素根本不进 ray march —— 门控关掉的是整段 march 的成本，不是一个乘数）。
-    const float roughGate = 1.0 - smoothstep(kRoughFull, kRoughCutoff, roughness);
+    // 门控区间 = scene data @722352（configs/runtime.lua `ssr.rough_full / rough_cutoff`）：
+    // 低于 x = 满强度、高于 y = 完全不反射、中间 smoothstep 过渡（硬切会在材质边界出现可见的
+    // 开关线）。⚠ 要求 x < y：反了 = 门控反向（光滑面全关、粗糙面满反射，实测靶上覆盖率恰 0），
+    // x == y 时只有 roughness 恰等于该值的像素会 0/0 = NaN（其余被 clamp 收成 0/1）。
+    const float4 gate = readSsrGate();
+    const float roughGate = 1.0 - smoothstep(gate.x, gate.y, roughness);
     if (roughGate <= 0.0)
         return hdr;
 
@@ -244,17 +253,20 @@ float4 main(SsrInput input) : SV_Target
     const float4 C0 = mulM(vp, float4(P, 1.0));
     const float4 Cd = mulM(vp, float4(R, 0.0));
 
-    // ── 尺度无关参数（定值口径 → 参数区注释）──
+    // ── 尺度无关参数（scene data @722336；口径 → scene_data.cppm 该区注释）──
+    // 一次读满 vec4：x = sceneRadius（尺度锚点）、y = maxDistanceRadii、z = thicknessPx、
+    // w = biasPx（configs/runtime.lua `ssr` 块，**shader 侧无默认值**）。
+    const float4 ssrParams = readSsrParams();
     // 空场景兜底：SceneBounds.radius = 0 是它的"空"哨兵 ⟹ maxDistance 会是 0，而下面
-    // `tSing / maxDistance` 是除法。1e-6 下限**不是调参**、是防零除守卫——空场景没有像素
+    // `tSing / maxDistance` 是除法。1e-6 下限**不是调定值**、是防零除守卫——空场景没有像素
     // 能过深度门（全是天空，早已早退），这条路径实际到不了。
-    const float maxDistance = max(readSsrParams().x, 1e-6) * kMaxDistanceRadii;
+    const float maxDistance = max(ssrParams.x, 1e-6) * ssrParams.y;
     // cot(fovY/2) = |viewProj 的 row1.xyz|（view 刚体 ⟹ 单位 up 行 × proj[1][1]），
     // 精确且抖动无关；口径与"为什么不用 vp.c1.y" → sampleAlong 内注释。
     const float tanHalfFovY = 1.0 / length(float3(vp.c0.y, vp.c1.y, vp.c2.y));
     // 起点处 worldPerPixel：起点用的两处 bias（奇异平面截断、零长度步判据）都是射线**起点**
     // 的判据；命中窗口（bias/thickness）用**采样点**那份（sampleAlong 带出），两者可差数倍。
-    const float bias0 = kBiasPx * (2.0 * C0.w * tanHalfFovY / px.y);
+    const float bias0 = ssrParams.w * (2.0 * C0.w * tanHalfFovY / px.y);
 
     // 射线朝相机时会在 t = −C0.w/Cd.w 处撞上 w=0 奇异平面。那里投影翻转、屏幕坐标乱跳，
     // 必须硬截断；同时把"还剩多少可用行程"当淡出——这是**尺度无关**的朝相机淡出，刻意不用
@@ -292,7 +304,7 @@ float4 main(SsrInput input) : SV_Target
     // 穿越判据的状态 = 「曾经采到 along > 0」+「那次正值的参数」（二分的下界）。
     // ⚠ **不要用「上一个采样 along > 0」当状态**（本批最贵的一条，实测形态 = 靶上 25.8% 的倒影
     //   像素整条射线走到预算耗尽、且**漏与不漏按行交替**）。`along < −bias` 留了条死区
-    //   (−bias, 0]（bias = kBiasPx·采样点 worldPerPixel）：采样一旦落进死区，"上一个为正"就
+    //   (−bias, 0]（bias = biasPx·采样点 worldPerPixel）：采样一旦落进死区，"上一个为正"就
     //   **永久失效**，之后无论穿多深都再也判不出命中。本靶恰好把这条放大到必然发生——平坦镜面
     //   的 `along` 零点与**被反射物轮廓的入口**重合（射线到达柱面的那一刻才进柱子轮廓），所以
     //   "零点附近那一次采样"必然出现。
@@ -330,7 +342,7 @@ float4 main(SsrInput input) : SV_Target
                 sawFront = true;
                 tFront = 0.5 * (tCur + tStop);
             }
-            else if (sawFront && s.along < -kBiasPx * s.worldPerPixel)
+            else if (sawFront && s.along < -ssrParams.w * s.worldPerPixel)
             {
                 // ⚠ **防 "sticking" 假命中**（本批实测：删掉这条 ⟹ 靶上柱子**两侧**的地面多出
                 //   34170 px 的反射，幅度 p50=0.022 与真倒影同量级）。那些射线是在柱子**后方几米**
@@ -339,7 +351,7 @@ float4 main(SsrInput input) : SV_Target
                 //   跨 Δt ≈ tMax/kMaxSteps。所以"这一步穿进几何的深度"就是两者的判别量。
                 //   ⟹ 判据必须作用在**细化之前**的采样上：二分只会把任何跳变都收敛到 along≈0，
                 //   细化之后再判就永远看不出区别了。
-                if (-s.along > kThicknessPx * s.worldPerPixel)
+                if (-s.along > ssrParams.z * s.worldPerPixel)
                     break;
                 // 二分细化到 along = 0，把命中点从"格中点"提到亚像素。下界取**最后一次
                 // along > 0 的参数**（不是 tCur：tCur 处的采样可能正落在上面那条死区里，

@@ -276,6 +276,8 @@ void Renderer::createSceneStaging(RGL::Resources& vkResources) {
 	// Phase 15 批 15.1 收尾：SSR 参数子区（vec4，x = SceneBounds.radius = ssr.frag 的尺度
 	// 锚点）。无条件写（16B，同矩阵区纪律：门关路径也保证值正确，省第二条分支）
 	std::memcpy(stage + kSceneDataSsrParamsOffset, &list.sceneData.ssrParams, sizeof(glm::vec4));
+	// Phase 15 批 15.1 参数面：SSR 阈值门控系数（@722352，紧随 ssrParams；同样无条件写，理由同上）
+	std::memcpy(stage + kSceneDataSsrGateOffset, &list.sceneData.ssrGate, sizeof(glm::vec4));
 	// 批 11.3-1e：IZB 消费区 (flag, W, H, 保留)——light.frag izbNearShadow 消费。
 	// flag = izbShadow 已构造（门关恒空 = 全 0 → ×1.0 逐位旁路）；W/H = mask 位图行距
 	{

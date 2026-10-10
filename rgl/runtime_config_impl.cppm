@@ -111,6 +111,17 @@ void readBoolKey(const sol::table& root, const char* key, bool& dst) {
 		dst = *value;
 }
 
+/** 读一个可选浮点键（缺键 = 保持默认值，与 readBoolKey 同形）。
+ *  类型错误 = sol 直接报错（不静默回落，同 render_scale 之外的既有纪律）。
+ *  @param root 配置表（本函数不关心是哪一层，嵌套块传块表即可）
+ *  @param key  键名
+ *  @param dst  目标字段（仅在键存在时被写） */
+void readFloatKey(const sol::table& root, const char* key, float& dst) {
+	sol::optional<float> value = root[key];
+	if (value)
+		dst = *value;
+}
+
 /**
  * `aa` 键解析（批 14.6 抗锯齿三态开关）：字符串 → `AaMode`。
  *
@@ -159,16 +170,53 @@ static void readFsrBlock(const sol::table& root, RuntimeConfig& cfg) {
 }
 
 /**
- * `ssr` 嵌套块解析（批 15.1）：`ssr = { enabled = … }` 一枚总开关。
- * 缺块 / 缺键 = 保持结构体默认 false（= 图里没有 ssr pass，出厂红线形态）。与 `aa` 正交
+ * `ssr` 嵌套块解析（批 15.1 总开关 + 同批参数面）：`enabled` 一枚总开关 + 5 枚调参。
+ * 缺块 / 缺键 = 保持结构体默认（`ssrEnabled = false` = 图里没有 ssr pass；5 枚系数 =
+ * `SsrTuning` 成员初始化值 = **全项目唯一真相源**，shader 侧零 fallback）。与 `aa` 正交
  *（`aa` 管抗锯齿选路，本块管 SSR 特性；组合语义 → RuntimeConfig::ssrEnabled 注释）。
  * 形态先例 = readFsrBlock（嵌套块 + readBoolKey，无扁平键双读兼容）。
+ *
+ * ## 🔴 两条 shader 侧不变式，配置层**刻意不校验**（判断理由，2026-10-10 拍板）
+ *
+ * 不变式：`bias_px < thickness_px`（违反 = 命中窗口 `[-thickness, -bias]` 为空 = 永不命中）、
+ * `rough_full < rough_cutoff`（违反 = 门控反向：光滑面全关、粗糙面满反射；实测靶上覆盖率
+ * 恰 0、泄漏 0，形态是"没反射"而不是 NaN 垃圾画面——NaN 只在 e0 == e1 且 roughness 恰等
+ * 于 e0 的像素上出现）。
+ *
+ * 1. **校验会直接堵死反向消融。** `bias_px >= thickness_px` 正是判据 6 要跑的档（闭式期望
+ *    = 凸包内覆盖率**恰为 0**），`thickness_px = 0` 同理。配置层把它当非法值拒了/钳了，
+ *    就等于"为了让判据过而改判据"——只是改在配置层，更难查。
+ * 2. **配置层校验管不住真正的写入方。** 这两条不变式的语义住在 shader，将来 RPC / imgui
+ *    若接进来就是绕过配置层的路径 ⟹ 只在配置层校验 = 给人"已经防住"的错觉（第二个真相源）。
+ * 3. **两种违反都是可见失效**（整屏没反射 / 垃圾画面），且 `just ssr-check` 判据 A 直接红
+ *    ⟹ 不是本项目最怕的"静默漂移"形态。与之对照：`render_scale` 走"钳制 + warn"是因为越界
+ *    值仍想要一张能看的图；这里的"越界"本身就是**档**，钳制 = 静默换档，比笔误更坏。
+ *
+ * ⟹ 本函数**原样透传**，一条 warn 都不发（warn 会在每次跑消融档时刷屏，教人不信任日志）。
+ * 不变式的权威措辞在 `SsrTuning` 字段注释与 `ssr.frag.slang` 参数段。
+ *
+ * ## 为什么**不**往 gate_lint 挂号（判断结论，防后来者"顺手补上"）
+ *
+ * gate_lint 的覆盖率护栏 = 单测断言 `gateLintRuleGates()` 与 `diagnosticsEchoKeys() ∪
+ * shadowConfigEchoKeys()` 相等 ⟹ 它的管辖范围**只有** `configs/diagnostics.lua` 与
+ * `configs/shadow.lua` 两份配置。`configs/runtime.lua` 的键（含本块的 `enabled`，也含
+ * `aa` / `render_scale` / `fsr.*` 这些既有键）从来不在那张表里，本批因此**没有欠账**：
+ * 硬塞进去要么给 runtime.lua 造第三张回显表（= 与 `RuntimeConfig` 字段并存的第二真相源），
+ * 要么把 runtime.lua 键混进 diagnostics 的回显语义（那张表按"诊断门"组织，画质系数不是）。
+ * 本块键的"生效前置"本来也不依赖设备/图形态（`enabled` 的前置 = 渲染图支持 ssr，那条已由
+ * `decorateSsrPass` 自己出 warn），lint 无话可说。
  */
 static void readSsrBlock(const sol::table& root, RuntimeConfig& cfg) {
 	sol::table ssr = root["ssr"];
 	if (!ssr.valid() || !ssr.is<sol::table>())
 		return;
 	readBoolKey(ssr, "enabled", cfg.ssrEnabled);
+	// 5 枚调参 = 每帧量（键名 ↔ scene data 分量的映射唯一落点 = fillSsrParams）
+	readFloatKey(ssr, "max_distance_radii", cfg.ssr.maxDistanceRadii);
+	readFloatKey(ssr, "thickness_px", cfg.ssr.thicknessPx);
+	readFloatKey(ssr, "bias_px", cfg.ssr.biasPx);
+	readFloatKey(ssr, "rough_full", cfg.ssr.roughFull);
+	readFloatKey(ssr, "rough_cutoff", cfg.ssr.roughCutoff);
 }
 
 /** loadRuntimeConfig 定义（接口注释见 runtime_config.cppm）：headless/headless_size/win_size/show_after/present_mode/ui_font 逐一可选解析 + parseLlm。 */

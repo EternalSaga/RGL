@@ -383,12 +383,16 @@ ObjectMatrix readTaaMotion()
 
 // ── Phase 15 批 15.1 SSR 尾区 ──
 //
-// 基址与 C++ 侧 scene_data.cppm kSceneDataSsrOffset / kSceneDataSsrParamsOffset 手写同源
-// （两侧 static_assert 钉死）：
+// 基址与 C++ 侧 scene_data.cppm kSceneDataSsrOffset / kSceneDataSsrParamsOffset /
+// kSceneDataSsrGateOffset 手写同源（**只有 C++ 那一侧有 static_assert 钉**——slang 没有能
+// 引用 C++ 常量的机制，本侧漂移只能靠端到端判据 just ssr-check 抓）：
 //   @722272  mat4 ssrViewProj —— 本帧**抖动后** proj·view（与 @64 skyInvViewProj 严格互逆、
 //   与深度缓冲配套；SSR 命中点投回屏幕 uv 用正向矩阵，消费方配 mulM/uvFromWorld 列组合惯例）。
-//   @722336  vec4 ssrParams —— x = SceneBounds.radius（世界空间场景并集包围球半径 =
-//   尺度无关参数锚点），yzw = 保留 0。
+//   @722336  vec4 ssrParams —— (sceneRadius, maxDistanceRadii, thicknessPx, biasPx)：
+//   x = SceneBounds.radius（世界空间场景并集包围球半径 = 尺度无关参数锚点），yzw = 由它
+//   导出的三个无量纲系数（configs/runtime.lua `ssr` 块）。
+//   @722352  vec4 ssrGate —— (roughFull, roughCutoff, 保留, 保留) = 粗糙度门控区间（与场景
+//   尺度无关，故单独一槽；分组理由 → scene_data.cppm 同槽注释）。
 // 为什么是 CPU 直传正向矩阵而不是 shader 里 inverse(@64)：inverse(inverse(M)) 与 M 无位级
 // 契约，而 SSR 的 uv 精度直接进 ray march 采样位置（全量推导 → scene_data.cppm 同槽注释）。
 ObjectMatrix readSsrViewProj()
@@ -402,11 +406,20 @@ ObjectMatrix readSsrViewProj()
     return m;
 }
 
-// SSR 尺度锚点（x = SceneBounds.radius，空场景 = 0，yzw = 保留）。消费者 = ssr.frag
-// （maxDistance 由它导出）；口径与兜底责任 → scene_data.cppm kSceneDataSsrParamsOffset。
+// SSR 尺度锚点与三个导出系数（x = SceneBounds.radius，空场景 = 0；yzw = maxDistanceRadii /
+// thicknessPx / biasPx）。消费者 = ssr.frag；口径与兜底责任 → scene_data.cppm
+// kSceneDataSsrParamsOffset。**系数无 shader 侧默认值**（唯一真相源 = RuntimeConfig）。
 float4 readSsrParams()
 {
     return asfloat(sceneData.Load4(722336u));  // kSceneDataSsrParamsOffset
+}
+
+// SSR 粗糙度门控区间（x = roughFull、y = roughCutoff，zw 保留）。消费者 = ssr.frag 的
+// `1 - smoothstep(x, y, roughness)`；⚠ 要求 x < y（反了 = 门控反向），不变式落点与
+// 「配置层为何不校验」→ scene_data.cppm kSceneDataSsrGateOffset。
+float4 readSsrGate()
+{
+    return asfloat(sceneData.Load4(722352u));  // kSceneDataSsrGateOffset
 }
 
 // AO 施加强度：scene data @60，configs/scene.lua ao.strength，0 = 逐位旁路。

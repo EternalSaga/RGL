@@ -19,6 +19,57 @@ export struct LlmDebugConfig {
 };
 
 /**
+ * SSR 的 5 枚**每帧**画质参数（configs/runtime.lua `ssr` 块，Phase 15 批 15.1 参数面）。
+ *
+ * ## 为什么是一个结构而不是一排扁平字段
+ *
+ * 这 5 个量**永远作为一个整体**从配置流到 scene data（RuntimeConfig → registry ctx →
+ * fillSsrParams → 两个 vec4），中间没有任何一处只读其中一枚。收成一体 = 「配置键 ↔
+ * scene data 分量」的映射只有一处（`fillSsrParams`）。护栏分两半：字节布局与填值 =
+ * tests/test_ssr_params；配置往返（lua 文本 → loadRuntimeConfig → 默认值/逐键覆盖）=
+ * tests/test_scene_config 的 ssr 块用例（那里是五份 loader 解析契约的住处）。
+ *
+ * ## 🔴 本结构体成员初始化值 = 这 5 个默认值的**全项目唯一真相源**
+ *
+ * shader 侧**不留 fallback 常量**（`ssr.frag.slang` 里五枚 `static const` 已删）。两处
+ * 定义 = 迟早漂移，而漂移的形态是"配置改了没反应"，比写死更难查。
+ * ⚠ 默认值不是拍脑袋：0.26 / 6.0 / 0.6 由闭式靶（`qa/configs/ssr_rig`）的调定值反推
+ * （推导 → `docs/phase15_plan.md` §3.2），**携带靶的标定污染**（靶的 SceneBounds.radius 被
+ * 那块 50m 地面 quad 撑到 31.065，不代表"可反射物的大小"）⟹ 最终标定必须在交付场景上
+ * 靠画质判据定。**改这里 = 改出厂画面**，红线 A 需重立。
+ *
+ * ## 与 `ssrEnabled` 的区别（别混）
+ *
+ * `enabled` 是**创建期量**（决定渲染图里有没有 ssr pass、要不要领 ssr_applied RT，改它
+ * 要走重启）；本结构的 5 枚是**每帧量**（每帧写进 scene data 尾区 @722336/@722352，
+ * 改它不改图形态、不重建任何 RT）。⚠ 但 runtime.lua **不在热重载清单里**（热重载只套
+ * scene.lua / camera.lua / log_level.json，见 `wireHotReload`）⟹ 改文件仍需重启进程才
+ * 生效；"每帧量"说的是**机制**（引擎每帧现取），不是"热重载已接"。
+ */
+export struct SsrTuning {
+	/// maxDistance = SceneBounds.radius × 本值（射线长度上限的尺度系数）。
+	float maxDistanceRadii = 0.26f;
+	/// 命中窗口深度 = 本值 × worldPerPixel(**采样点**视深)。与 `biasPx` 构成不变式
+	/// `biasPx < thicknessPx`（见下方两条注释）。
+	/// `0` 是**合法消融档**（命中窗口退化为空 ⟹ 闭式覆盖率该恰为 0），配置层不 clamp。
+	float thicknessPx = 6.0f;
+	/// 自交偏置 = 本值 × worldPerPixel(采样点)。射线起点就在 G-buffer 表面上（along(0)=0），
+	/// 数值噪声会立刻给出 along<0 的假命中，故命中窗口是 `[-thickness, -bias]` 而非 `[-t, 0]`。
+	/// 🔴 **shader 侧不变式 `biasPx < thicknessPx`**：违反 = 窗口为空 = **永不命中**（不是
+	/// 崩溃、不是 NaN，是"SSR 看起来完全没作用"）。`biasPx >= thicknessPx` 因此是判据 6
+	/// 的**反向消融档**，配置层**必须允许写出来**（见 readSsrBlock 注释）。
+	float biasPx = 0.6f;
+	/// roughness 低于此 = 满强度反射。🔴 **shader 侧不变式 `roughFull < roughCutoff`**：
+	/// 违反 = `smoothstep(e0, e1, ·)` 的 e0 > e1 ⟹ **门控反向**（光滑面 gate=0 = SSR 整个
+	/// 不起作用、粗糙面 gate=1 = 满反射）。⚠ 实测（2026-10-10 靶反向档 0.40/0.15）：凸包内
+	/// 覆盖率**恰 0**、凸包外泄漏 0 ⟹ 失效形态是"没反射"，**不是** NaN 垃圾画面；e0 == e1
+	/// 也只在 roughness 恰等于 e0 的像素上出 0/0（其余 ±inf 被 clamp 收成 0/1）。
+	float roughFull = 0.15f;
+	/// roughness 高于此 = 完全不反射（中间 smoothstep 过渡；硬切会在材质边界出现可见开关线）。
+	float roughCutoff = 0.40f;
+};
+
+/**
  * 窗口 present 模式偏好（configs/runtime.lua 的 present_mode 键，2026-09-27 批 9.3
  * 用户追加需求：FIFO/eImmediate 双模式对比测量）。仅**窗口路径**生效；headless
  * surface 无 eImmediate、present 为 no-op，恒走 eFifo 回落（忽略此偏好）。
@@ -180,6 +231,13 @@ export struct RuntimeConfig {
 	 * 任一通道」跳过（D1 对等豁免 → `docs/phase15_plan.md` §0.1）。
 	 */
 	bool ssrEnabled = false;
+	/**
+	 * SSR 的 5 枚**每帧**画质参数（configs/runtime.lua `ssr` 块）。**每帧量**——与上面
+	 * `ssrEnabled`（创建期量）的区别与"为什么是一个结构" → `SsrTuning` 注释。
+	 * 消费链：main 启动期 `registry.ctx().emplace<SsrTuning>(configs.runtime.ssr)` →
+	 * renderListSystem 每帧取 → fillSsrParams 写 scene data @722336/.yzw 与 @722352/.xy。
+	 */
+	SsrTuning ssr;
 
 	/** 「TAA 在不在图里」的唯一推导点（原 `scene.lua taa.enabled` 的消费者全部改走这里）。 */
 	[[nodiscard]] constexpr bool aaWantsTaa() const {

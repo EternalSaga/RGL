@@ -155,10 +155,15 @@ export struct SceneFrameData {
 	/// 「为什么不让 shader 自己求逆」→ scene_data.cppm kSceneDataSsrOffset）。生产者 =
 	/// fillSsrViewProj（render_list_impl，可测接缝）。交付时无消费者 = 写它不改像素。
 	glm::mat4 ssrViewProj{1.0f};
-	/// · ssrParams —— SSR 参数子区 @722336（vec4）：x = SceneBounds.radius（尺度无关参数
-	///   锚点，口径 → scene_data.cppm kSceneDataSsrParamsOffset），yzw = 保留 0。生产者 =
-	///   fillSsrParams（render_list_impl，可测接缝）。
+	/// · ssrParams —— SSR 系数子区 @722336（vec4）= (SceneBounds.radius, maxDistanceRadii,
+	///   thicknessPx, biasPx)：x = 尺度无关参数锚点（口径 → scene_data.cppm
+	///   kSceneDataSsrParamsOffset），yzw = 由它导出的三个无量纲系数（configs/runtime.lua
+	///   `ssr` 块，**每帧量**）。生产者 = fillSsrParams（render_list_impl，可测接缝）。
 	glm::vec4 ssrParams{0.0f};
+	/// · ssrGate —— SSR 粗糙度门控子区 @722352（vec4）= (roughFull, roughCutoff, 0, 0)。
+	///   与场景尺度无关，故与 ssrParams 分槽（分组理由 → scene_data.cppm 该区注释）。
+	///   生产者同 fillSsrParams（一次填两槽，两槽永远同源同帧）。
+	glm::vec4 ssrGate{0.0f};
 };
 
 /**

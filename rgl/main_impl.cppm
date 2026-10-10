@@ -633,6 +633,13 @@ int main() {
 		registry.ctx().emplace<NextObjectSlot>();  // Phase 6 instancing：实例矩阵槽分配器
 		// SceneEnv（曝光/AO/TAA）+ TaaState；TAA 开关 = aa 三态推导（批 14.6）
 		wireSceneEnvContexts(registry, configs.scene, configs.runtime.aaWantsTaa());
+		// SSR 系数（Phase 15 批 15.1 参数面）：configs/runtime.lua 的 ssr 块 → ctx → 每帧 fillSsrParams 写
+		// scene data。缺块时 configs.runtime.ssr 就是 SsrTuning 的默认值（默认值唯一出处在 C++）。
+		// 注意分工：这里搬的是**系数**（每帧量：引擎每帧现取现写 scene data）；ssr.enabled 是
+		// **创建期量**，走 configs.runtime.ssrEnabled 决定 pass 建不建，不进本 ctx、也不进
+		// scene data。runtime.lua 无热重载（RuntimeConfig 只在启动期 load() 一次）⟹ 两类改动
+		// 都要重启进程才读到，区别只在"生效要不要重建 RT / 重建管线"。
+		registry.ctx().emplace<SsrTuning>(configs.runtime.ssr);
 
 		AppContext vkInstance(pre.window.get(), pre.headless);
 		DeviceContext vkDevice(vkInstance);

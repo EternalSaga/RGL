@@ -794,6 +794,78 @@ TEST_CASE("runtime_config：fsr 嵌套块（缺块 = true/true 设计点；显�
 	}
 }
 
+TEST_CASE("runtime_config：ssr 块（批 15.1 参数面）——缺块回落出厂系数、逐键命中、消融档不钳制") {
+	// 判据来源 = 实读 runtime_config_impl::readSsrBlock / readFloatKey（缺键 = 不写目标字段）。
+	// 本用例是 SSR 参数链的**上游一半**；下游一半（tuning → scene data 字节）= test_ssr_params。
+	// 两半合起来才是「lua 文本 → 字节」整链——分开测是因为中间隔着 registry。
+	//
+	// 变异红线声明：
+	//   ① readSsrBlock 漏读某枚键 → 该键的"显式命中"红（默认值 ≠ 本用例写的探针值）。
+	//   ② 键名打错（lua 侧或 C++ 侧）→ 同上红（回落默认，探针值读不到）。
+	//   ③ 配置层加了 clamp / 不变式校验 → 「消融档可写出来」红。**这条是刻意的反向用例**：
+	//      批 15.1 参数面拍板配置层不校验（理由 → readSsrBlock 注释），将来谁想补校验必须先推翻
+	//      那段理由并同步改本用例，不能悄悄加。
+	//   ④ 出厂默认值被改 → 「缺块回落」红（断言的是字面量，不是 SsrTuning{} 的字段）。
+	{  // 缺块 = 出厂系数（红线 A 的配置层前提：出厂 runtime.lua 的 ssr 块只写 enabled）
+		TempLua f("rt_ssr_default", "return {}\n");
+		auto r = loadRuntimeConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->ssrEnabled == false);
+		// ⚠ 字面量手抄自批 15.1 的 shader 常量（与 test_ssr_params 的默认值用例同源）。
+		// 写成 SsrTuning{} 的字段就成了"默认值等于默认值"的空断言。
+		CHECK(r->ssr.maxDistanceRadii == 0.26f);
+		CHECK(r->ssr.thicknessPx == 6.0f);
+		CHECK(r->ssr.biasPx == 0.6f);
+		CHECK(r->ssr.roughFull == 0.15f);
+		CHECK(r->ssr.roughCutoff == 0.40f);
+	}
+	{  // 块内五枚键名逐个命中（探针值互不相同、且都不等于任何默认值）
+		TempLua f("rt_ssr_full", R"lua(return { ssr = {
+			enabled = true,
+			max_distance_radii = 1.25, thickness_px = 2.5, bias_px = 0.75,
+			rough_full = 0.05, rough_cutoff = 0.9,
+		} })lua");
+		auto r = loadRuntimeConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->ssrEnabled == true);  // 创建期量与系数同块不同键，互不干扰
+		CHECK(r->ssr.maxDistanceRadii == 1.25f);
+		CHECK(r->ssr.thicknessPx == 2.5f);
+		CHECK(r->ssr.biasPx == 0.75f);
+		CHECK(r->ssr.roughFull == 0.05f);
+		CHECK(r->ssr.roughCutoff == 0.9f);
+	}
+	{  // 只写一枚 = 其余保默认（块内逐键可选，不是整块覆盖；先例 = fsr 块同款）
+		TempLua f("rt_ssr_half", R"lua(return { ssr = { thickness_px = 3.0 } })lua");
+		auto r = loadRuntimeConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->ssr.thicknessPx == 3.0f);
+		CHECK(r->ssr.maxDistanceRadii == 0.26f);
+		CHECK(r->ssr.biasPx == 0.6f);
+	}
+	{  // 🔴 **反向消融档必须写得出来**（变异③）：bias ≥ thickness 与 thickness = 0 都是
+	   // 合法档（闭式期望 = 凸包内覆盖率恰为 0）。配置层若钳制/拒绝，消融就静默变成另一档。
+		TempLua f("rt_ssr_ablate", R"lua(return { ssr = {
+			bias_px = 8.0, thickness_px = 6.0,
+		} })lua");
+		auto r = loadRuntimeConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->ssr.biasPx == 8.0f);        // 违反不变式：原样透传，不 warn 不 clamp
+		CHECK(r->ssr.thicknessPx == 6.0f);
+		TempLua g("rt_ssr_zero", R"lua(return { ssr = { thickness_px = 0.0 } })lua");
+		auto r2 = loadRuntimeConfig(g.pathStr());
+		REQUIRE(r2.has_value());
+		CHECK(r2->ssr.thicknessPx == 0.0f);  // 0 不是"缺键"哨兵，写 0 就得是 0
+	}
+	{  // **没有**扁平键的兼容双读（两个真相源 = 本项目反复登记的反模式）：顶层写
+	   // ssr_thickness_px 必须**什么都不发生**，否则旧键与新块并存 = 静默用哪个说不清。
+		TempLua f("rt_ssr_flat", R"lua(return { ssr_thickness_px = 9.0, ssr_bias_px = 9.0 })lua");
+		auto r = loadRuntimeConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->ssr.thicknessPx == 6.0f);
+		CHECK(r->ssr.biasPx == 0.6f);
+	}
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // diagnostics
 // ═══════════════════════════════════════════════════════════════════════════

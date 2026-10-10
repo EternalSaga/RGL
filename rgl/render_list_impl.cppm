@@ -21,6 +21,7 @@ import camera;
 import render_graph;  // shadowAtlasColumns（图集列数，与装饰 extent 同源）
 import evssm_shadow;  // kEvssmMipLevels（矩链级数；scene data w 从常量导出，禁双源写死）
 import shadow_config;  // shadowConfig() / shadowFormPlan()（阴影形态：画不画图集 + 逐档调参）
+import runtime_config;  // SsrTuning（Phase 15 批 15.1 参数面：SSR 系数，fillSsrParams 入参）
 import taa_jitter;    // contentShiftPx（内容位移口径唯一出处；批 13.5 起 fillTaaData 要用）
 
 namespace RGL {
@@ -353,13 +354,20 @@ void fillSsrViewProj(FrameDrawList& out, const ViewProjection& viewProj) {
 	out.sceneData.ssrViewProj = viewProj.proj * viewProj.view;
 }
 
-/** Phase 15 批 15.1 收尾：填 SSR 参数区（scene data 尾区 @722336，vec4）。
- *  x = SceneBounds.radius（世界空间场景并集包围球半径，boundsSystem 每帧聚合）——
- *  ssr.frag 的尺度无关参数（maxDistance 等）由它导出，锚点选择与系数反推 → 该区注释。
- *  yzw = 保留 0（无条件写，同尾区纪律：不按门分支、无消费者不改像素）。
+/** Phase 15 批 15.1 参数面：填 SSR 的两个参数子区（scene data @722336 系数
+ *  vec4 + @722352 门控 vec4）。
+ *  · ssrParams = (SceneBounds.radius, maxDistanceRadii, thicknessPx, biasPx)——x 是尺度锚点
+ *    （boundsSystem 每帧聚合），yzw 是 configs/runtime.lua `ssr` 块的三枚系数。ssr.frag 的
+ *    尺度无关参数由它们导出，锚点选择与系数反推 → scene_data.cppm 该区注释。
+ *  · ssrGate   = (roughFull, roughCutoff, 0, 0)——与场景尺度无关的门控区间，故分槽。
+ *  两槽**一次填、同源同帧**（拆两个接缝 = 允许"系数新、门控旧"的半帧状态）。
+ *  无条件写（同尾区纪律：不按门分支、无消费者不改像素）；CPU 侧**不 clamp 不校验**两条
+ *  shader 侧不变式（`bias < thickness` / `roughFull < roughCutoff`），理由 → readSsrBlock。
  *  可测接缝声明 → render_list.cppm。 */
-void fillSsrParams(FrameDrawList& out, const SceneBounds& bounds) {
-	out.sceneData.ssrParams = {bounds.radius, 0.0f, 0.0f, 0.0f};
+void fillSsrParams(FrameDrawList& out, const SceneBounds& bounds, const SsrTuning& tuning) {
+	out.sceneData.ssrParams = {bounds.radius, tuning.maxDistanceRadii, tuning.thicknessPx,
+		tuning.biasPx};
+	out.sceneData.ssrGate = {tuning.roughFull, tuning.roughCutoff, 0.0f, 0.0f};
 }
 
 void renderListSystem(entt::registry& rg, RGL::Resources&,
@@ -546,7 +554,9 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	fillSsrViewProj(fresh, viewProj);
 	// Phase 15 批 15.1 收尾：SSR 尺度锚点 = SceneBounds.radius（boundsSystem 本帧已聚合，
 	// 与 projectionSystem 的自适应 near/far 同一颗球）
-	fillSsrParams(fresh, rg.ctx().get<SceneBounds>());
+	// SsrTuning 由 main 启动期从 configs/runtime.lua 的 ssr 块灌进 registry（每帧量走 scene data，
+	// 与 SceneBounds 同一处 ctx 约定）；缺块时 ctx 里就是结构体默认值 = 出厂系数。
+	fillSsrParams(fresh, rg.ctx().get<SceneBounds>(), rg.ctx().get<SsrTuning>());
 	fillFsrCameraInput(fresh, viewProj);  // 批 14.5：FSR 相机输入
 	// 批 12.6 TAA 载荷（三矩阵/参数，细节见 fillTaaData）
 	fillTaaData(fresh, viewProj, env, taa);
