@@ -77,6 +77,15 @@ golden**，换过去 = 主动引入"要存参考图 + 一个会被讨价还价�
   legacy dt-spin profile 必须被并行路径拒绝。全量论证与两轮实验设计错误 → `git:调试历史` 2026-10-07。
 - **热身按帧数，不按墙钟**：`advanceFrames(n)`。按墙钟睡会在争用下量到 TAA 未收敛的**瞬态**，
   并把它误读成"渲染被扰动"（踩过两次）。
+- **"并行"还有一层不是 CPU 争用、而是 `git` 状态**：`just regress ab` 为构建 B 侧跑
+  `git stash -u`，**连未跟踪文件一起卷走**，直到 `finally` 才弹回。⟹ 同一检出里**任何**并发工作
+  （包括"我只新建文件、绝不碰你的东西"这种自认安全的做法）都会在 regress 窗口里凭空消失；
+  中途 `stash pop` / `checkout` 还会和它的现场恢复自检对撞。实测 2026-10-10 两次。
+  **判据**：`git stash list` 出现 `regress-baseline-<时间戳>` = 有 regress 在飞。
+  ⚠ **别用 `pgrep -f regress.py` 当这条判据**——它会匹配到发起检查的那条命令自身（实测假阳性），
+  要看得看 stash 里有没有 `regress-baseline-*`。
+  **正确做法**：并发期间要么等它退出（`pgrep -f regress.py`），要么把产物先抄到**仓库外**
+  （`/tmp/opencode/…`）落地保存。切分支**不解决**——`git checkout -b` 把工作树改动一起带走，零隔离。
 
 ## 材质定位（加法闪色）
 

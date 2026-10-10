@@ -242,7 +242,9 @@ vk_indirect_commands 显式使用）外**均无显式使用但被其他已启用
   `docs/taa_plan.md`（TAA 机制与踩坑账，§7 第 11/12 条 = 根因）· `docs/evssm_plan.md`（远场软影
   权威路线，HFTS 已降级 backlog）· `docs/shadow_routes_plan.md`（**阴影路线形态唯一定案载体**：`configs/shadow.lua` 的 `mode` 枚举形状与四条红线；改阴影配置键/门形前看）· `docs/hfts_izb_plan.md` · `docs/shader_object_组合成本与优化预留.md`
   （优化**未实施**）· `docs/脚本长期规划.md` + `script_spike/`（脚本长期线，独立于 Phase 编号）
-- **调研 / 活文档**：`docs/DESCRIPTOR_HEAP_SPEC.md` · `docs/FSR输入契约.md`（Phase 14 批 14.2：
+- **调研 / 活文档**：`docs/mdi_plan.md`（Multi Draw Indirect 路线**可行性定案载体**，未立项：
+  DGC 的 `@8 PUSH_DATA` 为何不可删 / `push.base + DrawIndex` 统一公式 / 阶段划分与风险；
+  动 indirect 前先读，别重推一遍） · `docs/DESCRIPTOR_HEAP_SPEC.md` · `docs/FSR输入契约.md`（Phase 14 批 14.2：
   FSR3-upscaler 四个每帧输入的**口径权威载体**——单位/坐标系/符号/采样时刻 + 逐条出处；
   接 FSR 前必读，别靠读源码"认为一致"） · `docs/nvidia_compatibility_report.md`
   （三平台；**不写"本机"是哪台**）· `docs/device_generated_commands_research.md` ·
