@@ -134,4 +134,15 @@ export void fillShadowData(FrameDrawList& out, float shadowNear, float shadowFar
  */
 export Light fillLightData(entt::registry& rg, const glm::vec3& eyePos, FrameDrawList& out);
 
+/**
+ * 每帧填 SSR 正向矩阵（scene data 尾区 kSceneDataSsrOffset = 本帧**抖动后** proj·view，
+ * 与 @64 skyInvViewProj 严格互逆；口径 → scene_data.cppm 该区注释）。定义在
+ * render_list_impl（partition impl unit，实现侧不写 export）。导出为**可测接缝**
+ * （12.3d fillShadowData 同款先例）：口径契约「取 viewProj.proj（注入抖动那一份）而非
+ * projUnjittered」必须两态可直打才有判据，回归断言 = tests/test_ssr_viewproj。
+ * @param out      出参：本帧 draw list（写 sceneData.ssrViewProj）
+ * @param viewProj 本帧实际投影上下文（proj = 注入抖动那一份，taaSystem 之后）
+ */
+export void fillSsrViewProj(FrameDrawList& out, const ViewProjection& viewProj);
+
 }  // namespace RGL

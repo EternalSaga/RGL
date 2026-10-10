@@ -272,7 +272,41 @@ shader 构建登记在 `rgl/CMakeLists.txt` 的 `rgl_shader(...)`。
 
 ---
 
+### 3.2 批 15.1 落地记录（进行中）
+
+**已完成子步：SSR 正向矩阵进 scene data 尾区（零渲染改动）**
+
+`kSceneDataSsrOffset = 722272`（= TAA 区尾 722080+192），`kSceneDataSsrBytes = 64`，
+`kSceneDataBytes` → **722336**。填值 = `viewProj.proj * viewProj.view`，与 @64
+`skyInvViewProj` **同一表达式不取逆**（`fillSsrViewProj` 接缝，12.3d `fillShadowData` 先例）。
+消费端 `scene.slang readSsrViewProj()` 已备好，**本步无调用点** ⟹ 红线 = 画面逐位不变（已实测）。
+
+`tests/test_ssr_viewproj.cppm` 两条用例，设计上有三处值得记（都是"否则就是假绿"的形态）：
+- **两源结构**：写入侧偏移用 C++ 常量、**读回侧用字面量 722272**（镜像 slang 的 `Load4`）。
+  两侧同用一个常量的话，常量整体漂移测试永远绿。
+- **刻意不用 identity view**：`view = 单位阵`时 `inverse` 的两种乘法顺序恰好同值（5a-8c 教训），
+  转置/顺序错会被完全掩盖。另钉了"矩阵非对称"阳性锚点——对称矩阵下 transpose 判据失去区分力。
+- **闭式差量当独立预言机**：抖动注入的期望差量从 `applyProjectionJitter` 的注入式推
+  （只动 proj 第 3 列 ⟹ 行 0 差 = `(−2jx/W)·view[c][2]`、行 2/3 逐位等），**不是再算一遍
+  `proj·view`**。
+
+**主 agent 质检变异（形态与实现者所验三条不同）**：
+
+| 变异 | 结果 | 证明了什么 |
+|---|---|---|
+| 乘法顺序颠倒 `view * proj` | 两条用例**全红**（282 断言） | 5a-8c 那条防线真的有区分力 |
+| 抖动注入**符号**翻转（`-=`→`+=`） | **只红闭式差量那条**用例（56 断言），(a) 保持绿 | 闭式差量是**独立预言机**，不是同义反复；两条用例分工清晰 |
+
+**⚠ 已知覆盖缺口（别把这块读成"全链已护栏"）**：单测是**复刻** `writeSceneStaging` 的两条
+memcpy，不是调用它 ⟹ 若有人把 `vkrenderer_impl.cppm` 里的**目标常量写错**（比如误用
+`kSceneDataTaaOffset`），单测**不会红**（常量本身有 static_assert 钉值，但"用哪个常量"没有）。
+这与 `test_shadow_forward` 是同一形态的取舍。**真正的端到端护栏 = 本批的闭式反射靶**：
+SSR 一旦消费这颗矩阵，`just ssr-target` 的闭式倒影凸包就会把「偏移错 / 口径错 / 提取链错」
+一起现形（矩阵错 ⟹ 倒影不出现在预测位置 ⟹ 判据红）。所以 15.1 的接线顺序刻意是
+「先有靶、再接线」，不是「先接线再补判据」。
+
 ## 4. 红线与纪律
+
 
 - **门关 = 逐位不变**，且必须是**结构性**旁路（装饰器不被调用 = 图里没这个 pass），不是运行时
   分支——运行时分支挡不住 slang 对源码差异的 fp 重排（`light.frag.slang` 的 IZB_CONSUME 注释里

@@ -433,6 +433,27 @@ static_assert(kSceneDataTaaOffset == 722080 && kSceneDataTaaMotionOffset == 7221
 	&& kSceneDataTaaInputKernelOffset == 722240 && kSceneDataTaaClipControlOffset == 722256,
 	"scene.slang taa literals drifted from scene_data.cppm offsets");
 
+/** Phase 15 批 15.1 SSR 区（mat4, 64B）= 本帧**抖动后** proj·view（尾区追加，既有偏移
+ *  逐字节不动 diff0，先例 = 批 11.2 阴影 VP 区 / 批 12.6 TAA 区）。
+ *
+ *  口径（接消费者前必读）：
+ *  - 与 @64 `skyInvViewProj = inverse(proj·view)` **严格互逆**：生产点填同一个表达式
+ *    `viewProj.proj * viewProj.view`，@64 那份取逆、本区不取（`fillSsrViewProj`）。
+ *  - **抖动后** = taaSystem 注入抖动的那一份 proj ⟹ 与 SSR ray march 读的 `scene_hdr`
+ *    同一张采样网格、与深度缓冲配套（深度由抖动后矩阵产出）。口径漂成非抖动时采样位置
+ *    整体偏亚像素而画面「看着还行」= 本项目反复踩的静默漂移，护栏 = tests/test_ssr_viewproj。
+ *  - 为什么不让 shader 自己 `inverse(@64)`：`inverse(inverse(M))` 与 M **无位级契约**
+ *    （余子式展开的舍入误差被两次求逆放大），而 SSR 的 uv 精度直接进 ray march 采样位置
+ *    ——误差形态不是「糊一点」而是系统性偏移。CPU 已持有正向矩阵，直传 = 零重推导。
+ *  - 交付时**无消费者**（scene.slang `readSsrViewProj` 备好待 15.1 接线），无条件写、
+ *    不改任何像素（同 shadow/TAA 尾区「无消费者时照写」纪律）。
+ *  消费端 = scene.slang readSsrViewProj 字面量（两侧 static_assert 钉死同步）。 */
+export inline constexpr uint32_t kSceneDataSsrOffset = kSceneDataTaaOffset + kSceneDataTaaBytes;
+export inline constexpr uint32_t kSceneDataSsrBytes = 64u;
+// 与 scene.slang readSsrViewProj 的字面量基址钉死（两侧手写同步点，改一侧必编译失败）
+static_assert(kSceneDataSsrOffset == 722272,
+	"scene.slang readSsrViewProj literal 722272 out of sync with kSceneDataSsrOffset");
+
 /** scene data buffer 总字节数 = 头 128 + 对象矩阵表 + 灯数组区 + MVP 表 + 材质表 +
  * 辐照度 SH9 区 + 阴影 VP 区（= 721952B，编译期派生）；SceneDataService::ensure 的分配尺寸与
  * drawFrame 每帧 staging 拷贝区尺寸均为本值（vkrenderer.cppm ⑥.5）。 */
@@ -447,7 +468,8 @@ export inline constexpr vk::DeviceSize kSceneDataBytes =
 	+ kSceneDataIzbBytes
 	+ kSceneDataPcssBytes
 	+ kSceneDataEvssmBytes
-	+ kSceneDataTaaBytes;
+	+ kSceneDataTaaBytes
+	+ kSceneDataSsrBytes;
 
 /**
  * SceneData buffer 服务（2026-09-19 架构债务续账步骤 1：原 Resources::ensureSceneData/

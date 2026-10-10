@@ -365,6 +365,25 @@ ObjectMatrix readTaaMotion()
     return m;
 }
 
+// ── Phase 15 批 15.1 SSR 尾区 ──
+//
+// 基址与 C++ 侧 scene_data.cppm kSceneDataSsrOffset 手写同源（两侧 static_assert 钉死）：
+//   @722272  mat4 ssrViewProj —— 本帧**抖动后** proj·view（与 @64 skyInvViewProj 严格互逆、
+//   与深度缓冲配套；SSR 命中点投回屏幕 uv 用正向矩阵，消费方配 mulM/uvFromWorld 列组合惯例）。
+// 为什么是 CPU 直传正向矩阵而不是 shader 里 inverse(@64)：inverse(inverse(M)) 与 M 无位级
+// 契约，而 SSR 的 uv 精度直接进 ray march 采样位置（全量推导 → scene_data.cppm 同槽注释）。
+// 交付时无消费者 = 本函数尚无调用点（15.1 接线），scene data 已无条件写该区。
+ObjectMatrix readSsrViewProj()
+{
+    uint base = 722272u;  // kSceneDataSsrOffset
+    ObjectMatrix m;
+    m.c0 = asfloat(sceneData.Load4(base));
+    m.c1 = asfloat(sceneData.Load4(base + 16u));
+    m.c2 = asfloat(sceneData.Load4(base + 32u));
+    m.c3 = asfloat(sceneData.Load4(base + 48u));
+    return m;
+}
+
 // AO 施加强度：scene data @60，configs/scene.lua ao.strength，0 = 逐位旁路。
 // ⚠ 自批 13.6 起有**两个**消费者（taa.frag 施加 / tonemap 按标志施加），故从 tonemap 的
 //   局部函数**抬进本模块**——同一个 @60 字面量写两处必然漂移（本项目反复踩过）。

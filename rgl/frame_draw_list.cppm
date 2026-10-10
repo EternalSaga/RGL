@@ -150,6 +150,11 @@ export struct SceneFrameData {
 	///   为什么要有：`clipToAabb` 在 blend 之前替换历史 ⟹ 一次裁剪 = 一次历史重置，而 1px 高对比
 	///   细线的 box5 随抖动相位双峰 ⟹ 静止机位残余 97.8% 住在这条路上（`git:调试历史` 2026-10-06）。
 	glm::vec4 taaClipControl{0.0f};
+	// ── Phase 15 批 15.1 SSR（屏幕空间反射）帧载荷，scene data 尾区 @722272 ──
+	/// 本帧**抖动后** proj·view（与 @64 skyInvViewProj 严格互逆、与深度缓冲配套；口径与
+	/// 「为什么不让 shader 自己求逆」→ scene_data.cppm kSceneDataSsrOffset）。生产者 =
+	/// fillSsrViewProj（render_list_impl，可测接缝）。交付时无消费者 = 写它不改像素。
+	glm::mat4 ssrViewProj{1.0f};
 };
 
 /**

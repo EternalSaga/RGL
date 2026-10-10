@@ -345,6 +345,14 @@ void fillTaaData(FrameDrawList& out, const ViewProjection& viewProj, const Scene
 	out.sceneData.taaClipControl = {env.taaClipMode, env.taaClipSoft, 1.0f, 0.0f};
 }
 
+/** Phase 15 批 15.1：填 SSR 正向矩阵（scene data 尾区 @722272）。与调用点上一帧
+ *  skyInvViewProj **同一表达式**，唯一区别是不取逆——为什么不让 shader 自己求逆、
+ *  抖动口径推导全在 scene_data.cppm kSceneDataSsrOffset 注释（重复的推导必然漂移成
+ *  两个版本，此处不再重复）。可测接缝声明 → render_list.cppm。 */
+void fillSsrViewProj(FrameDrawList& out, const ViewProjection& viewProj) {
+	out.sceneData.ssrViewProj = viewProj.proj * viewProj.view;
+}
+
 void renderListSystem(entt::registry& rg, RGL::Resources&,
 	RGL::Environment& envService, const RGL::AssetTable& assets, RenderListState& state) {
 	auto& list = rg.ctx().get<FrameDrawList>();
@@ -354,8 +362,7 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	const auto& env = rg.ctx().get<SceneEnv>();  // Phase 5.5（天空盒 draw 生成 + env 参数）
 	const auto& taa = rg.ctx().get<TaaState>();  // 批 12.6（帧间载荷；taaSystem 本帧已算好）
 
-	std::vector<Pending> opaque;
-	std::vector<Pending> transparent;
+	std::vector<Pending> opaque, transparent;
 	// Phase 11 批 11.2：阴影 draw 清单。**不经过主视罞剔除**（见下方注释）。
 	std::array<std::vector<Pending>, kActiveShadowCascades> shadowCasters;
 
@@ -526,6 +533,9 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	// Phase 8 批次 ④a：漫反射辐照度 SH9（env 加载期算好存 Resources，此处每帧拷入）
 	fresh.sceneData.irradianceSH = envService.getIrradianceSH();
 	fresh.sceneData.skyInvViewProj = glm::inverse(viewProj.proj * viewProj.view);
+	// Phase 15 批 15.1：SSR 正向矩阵 = 上一行**同一表达式不取逆**（接缝可测；口径同源，
+	// 抖动后、与 @64 严格互逆；填值表达式只此一处，避免两份口径漂移）
+	fillSsrViewProj(fresh, viewProj);
 	fillFsrCameraInput(fresh, viewProj);  // 批 14.5：FSR 相机输入
 	// 批 12.6 TAA 载荷（三矩阵/参数，细节见 fillTaaData）
 	fillTaaData(fresh, viewProj, env, taa);
