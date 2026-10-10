@@ -69,6 +69,23 @@ return {
         jitter = true,
     },
 
+    -- ── 批 15.1：SSR（屏幕空间反射）总开关——与上面 aa 三态键**正交** ──
+    -- aa 管「谁做抗锯齿」（TAA/FSR），本块管 SSR 这个独立特性；两键可任意组合
+    --（SSR 开 × aa 三档都要分别冒烟，默认档不覆盖非默认组合）。
+    --   enabled = false（默认）= 渲染图里**根本没有** ssr pass（装饰器不被调用），不领
+    --     ssr_applied RT、不建管线条目 ⟹ 交付路径逐位不变（**结构性**旁路，不是"有但
+    --     旁路"——运行时分支挡不住 slang 对源码差异的浮点重排，教训 = light.frag 的
+    --     IZB_CONSUME 注释）。
+    --   enabled = true = 每帧多一个全屏 pass（读 scene_hdr 写渲染分辨率 RGBA16F 的
+    --     ssr_applied，下游 tonemap/taa/ao_apply 自动改读它）。**deferred-only**：
+    --     forward 图无 G-buffer，装饰器跳过并 warn（D1 对等豁免 → docs/phase15_plan.md §0.1）。
+    -- 本批（15.1 前半）pass 内是**占位拷贝**（输出 = scene_hdr 原值）：判据 = 门开与门关
+    -- 逐位相同（管道正确性判据，算法零参与）；真正的 ray march 在 15.1 后半替换函数体。
+    -- **创建期量**：改它要走重启。生效现场看启动日志 "ssr (RGBA16F, …): WxH slot N"。
+    ssr = {
+        enabled = false,
+    },
+
     -- DIAG：隐藏窗启动、第 N 帧后显示（可见窗 fault 排查；-1 = 立即显示）
     show_after = -1,
 

@@ -257,6 +257,24 @@ export inline constexpr std::string_view kAoAppliedFormat = "rgba16_sfloat";
 export inline constexpr std::string_view kAoApplyPassName = "ao_apply";
 
 /**
+ * Phase 15 批 15.1 前半：**SSR（屏幕空间反射）pass** 的附件契约（单一真相源）。
+ *
+ * `ssr_applied` RT 装的是「本帧成片 + 屏幕空间反射」——本批占位实现下 = 成片的**逐位拷贝**
+ * （占位的存在理由见 `shaders/ssr.frag.slang` 头注释：门开 = 门关逐位相同 ⟹ 画面若变只
+ * 可能是管道接错，把「管道」与「算法」两种失效彻底分开）。
+ *
+ * 格式**必须**与 `kSceneHdrFormat` 同为 rgba16_sfloat：占位拷贝要逐位等于输入，格式不同
+ * 就过不了「门开 = 门关逐位相同」这条本批红线（新开格式还要在 render_graph_formats 词表
+ * + frame_capture 的 captureBpp + llm_debug 通道转换器三处挂号，理由同 `kVelocityFormat`）。
+ *
+ * 消费方 = decorateSsrPass（图声明）+ ensureSsrAppliedSlot（启动期建 RT + 采样堆槽）+
+ * addSsrEntry / assembleHdrAoChain 色输入优先级链（烘 binding）。
+ */
+export inline constexpr std::string_view kSsrAppliedName = "ssr_applied";
+export inline constexpr std::string_view kSsrAppliedFormat = "rgba16_sfloat";
+export inline constexpr std::string_view kSsrPassName = "ssr";
+
+/**
  * pass 声明（RgGraphDesc.passes 元素）：name 必填；kind 定执行语义；
  * state = RenderState 名（名字字符串，零 handle，执行器解析；drawMesh 必填，blit 忽略；
  * 合法值 = pass_vocabulary 按 kind 分档的 state 子集）；drawSource = FrameDrawList 段名
@@ -612,6 +630,34 @@ export bool decorateTaaPass(RgGraphDesc& desc);
 export bool decorateAoApplyPass(RgGraphDesc& desc);
 
 /**
+ * Phase 15 批 15.1 前半：插「SSR（屏幕空间反射）」专用全屏 pass（附件契约见 `kSsrAppliedName`）。
+ *
+ * 做的事 = ao_apply 的同形三件套：一个附件（`ssr_applied`）+ 一个全屏 pass
+ *（state="ssr"，读本帧成片写 ssr_applied）+ 把「写 swapchain 且采色」那个 pass（tonemap）
+ * 的色输入换成 `ssr_applied`。没有帧末 copy（不跨帧）。
+ *
+ * **跳过条件（两条，缺一即不插，返回 false）**：
+ *  1. 找不到「写 swapchain 且 sampleRead 色附件」的消费者（offscreen DIAG 变体用 blit
+ *     上屏，transferRead ≠ sampleRead）——与 taa / velocity / ao_apply 同一锚点判据。
+ *  2. 图里没有 G-buffer 的 position 附件（= forward 图）。**这就是 SSR 的 deferred-only
+ *     边界**：D1 对等豁免已拍板（forward 不跟，`docs/phase15_plan.md` §0.1），SSR 的权重
+ *     全从 G-buffer 现成量算，forward 图没有落点。
+ * ⟹ 门关（`runtime.ssr.enabled = false`，默认）= 根本不调本函数 = 图里没有这个 pass，
+ *    **结构性**逐位不变（不是"有但旁路"——运行时分支挡不住 slang 的浮点重排，教训原文在
+ *    `shaders/light.frag.slang` 的 IZB_CONSUME 注释）。
+ *
+ * **次序契约**：必须在 velocity / taa / ao_apply 三个装饰**之前**调（本 pass 读 light 的
+ * 产物 scene_hdr，且这三个装饰器都动态读「消费者当前的色附件」⟹ SSR 先插它们自动读到
+ * ssr_applied，链自己接成 scene_hdr → ssr_applied → [taa_out | ao_applied] → tonemap）。
+ * 与 ao_apply 的关键差别：本装饰**不看** taa 在不在图里——它不是"施加点"，与 TAA 可串联
+ *（TAA 读到含 SSR 的成片 = 正确，时域滤波该滤最终画面）。
+ *
+ * @param desc 图声明（原地修改）
+ * @return true = 已装饰；false = 按上面两条跳过（图不变）
+ */
+export bool decorateSsrPass(RgGraphDesc& desc);
+
+/**
  * Phase 14 批 14.4 速度场装饰（契约见本函数实现段头）：加 `velocity` 附件 + 一个
  * 全屏 `state="velocity"` pass（读 depth，写速度场），插在「写 swapchain 且采色」的
  * pass（两条路线都是 tonemap）**之前**。
@@ -698,6 +744,18 @@ export std::expected<std::array<uint32_t, 2>, Error> ensureTaaSlots(
  * @return ao_applied RT 的 SAMPLED_IMAGE heap 槽；Error = RT 创建 / 槽分配失败
  */
 export std::expected<uint32_t, Error> ensureAoAppliedSlot(
+	RenderTargetCache& rts, Swapchain& swapchain);
+
+/**
+ * Phase 15 批 15.1 前半：确保 SSR pass 的 RT（名字/格式 = `kSsrAppliedName` /
+ * `kSsrAppliedFormat` 单一真相源，rgba16_sfloat offscreen，**渲染分辨率**——它的消费者
+ * （tonemap / taa / ao_apply / FSR）都在渲染网格上工作）并返回其 SAMPLED_IMAGE 堆槽。
+ *
+ * 调用时序同 `ensureAoAppliedSlot`，且**必须早于** `addSsrEntry`。仅
+ * `CompiledGraphResult::ssrDecorated` 为真时调用（门关 = 不领槽 = 堆槽布局与基线零差异）。
+ * @return ssr_applied RT 的 SAMPLED_IMAGE heap 槽；Error = RT 创建 / 槽分配失败
+ */
+export std::expected<uint32_t, Error> ensureSsrAppliedSlot(
 	RenderTargetCache& rts, Swapchain& swapchain);
 
 /**

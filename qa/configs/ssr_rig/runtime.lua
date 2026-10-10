@@ -12,6 +12,12 @@ return {
     ui_font = "",
     ui_font_size = 18.0,
     aa = "off",
+    -- 批 15.1 前半：ssr 门显式写出（出厂默认 false = 行为零变化）。写在这里是为了
+    -- `just smoke --ssr --config-base qa/configs/ssr_rig` 能 patch 到它（patch_lua 要求
+    -- 键恰好命中 1 次）——靶配置的每个旗标都必须"在场且可核对"，不吃隐式默认。
+    ssr = {
+        enabled = false,
+    },
     llm_debug = true,
     llm_shot = {
         file = "screenshots/ssr_rig.png",

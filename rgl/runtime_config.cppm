@@ -166,6 +166,20 @@ export struct RuntimeConfig {
 	/// 把亚像素 Halton 抖动接进投影矩阵并申报给 FSR（原 `fsr_jitter` 键）。
 	/// 只在 FSR 真的接起来时生效；设计意图 = 让输入落到 FSR 的设计点上（§1.16）。
 	bool fsrJitter = true;
+	/**
+	 * Phase 15 批 15.1：SSR（屏幕空间反射）总开关（configs/runtime.lua 嵌套块
+	 * `ssr = { enabled = … }`）。**创建期**量——它决定渲染图里**有没有** ssr pass。
+	 *
+	 * 关（默认）= `decorateSsrPass` 根本不调用 ⟹ 图里没有这个 pass、不领 ssr_applied RT、
+	 * 不建管线条目 ⟹ **结构性**逐位不变（不是"有但旁路"——运行时分支挡不住 slang 对源码
+	 * 差异的浮点重排，教训原文 = `shaders/light.frag.slang` 的 IZB_CONSUME 注释）。
+	 *
+	 * 与 `aa` 三态键**正交**（拍板记录 → `docs/phase15_plan.md` §3 批 15.1）：`aa` 管
+	 * 「谁做抗锯齿」（TAA/FSR），SSR 是独立特性，两键可任意组合（SSR 开 × aa 三档都要冒烟）。
+	 * deferred-only：forward 图无 G-buffer，装饰器按「图里没有 gbuffer_position 附件」跳过
+	 *（D1 对等豁免 → `docs/phase15_plan.md` §0.1）。
+	 */
+	bool ssrEnabled = false;
 
 	/** 「TAA 在不在图里」的唯一推导点（原 `scene.lua taa.enabled` 的消费者全部改走这里）。 */
 	[[nodiscard]] constexpr bool aaWantsTaa() const {

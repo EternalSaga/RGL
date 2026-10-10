@@ -86,6 +86,11 @@ export struct CompiledGraphResult {
 	/// 之前施加」这个标志置真（tonemap 据此跳过自己的乘法）。与 taaDecorated **互斥**：
 	/// 两条路各有一个施加点，绝不双施。判据全文 → `shaders/ao_apply.frag.slang` 头注释。
 	bool aoApplyDecorated = false;
+	/// 批 15.1 前半：SSR pass 是否落图（门开**且**图里有 G-buffer position 附件 = deferred
+	/// 形态）。装配层据此决定 ssr_applied RT / ssr 条目是否领建，并把色输入优先级链的
+	/// 「ssr_applied 档」接上（taa / ao_apply / tonemap 的色输入槽跟着换）。与 taaDecorated
+	/// 是**串联**关系（SSR 先合成、TAA 后滤波），不互斥。判据全文 → `shaders/ssr.frag.slang`。
+	bool ssrDecorated = false;
 };
 
 /**
@@ -166,9 +171,11 @@ export void validateEnvironmentContract(const SceneConfig& scene);
  *        `aaWantsFsr()`，原 fsr_upscaler 键已删）。它在这里**只**决定
  *        「要不要插 AO 施加专用 pass」（FSR 当时域滤波器 ⟹ AO 必须在它之前施加）；
  *        FSR 本身能不能接是装配层的事，两者不耦合（理由见 decorateAoApplyOrWarn）。
+ * @param ssrEnabled      批 15.1 前半：configs/runtime.lua `ssr.enabled`（屏幕空间反射
+ *        装饰；与 aa 三态键正交，结果随 CompiledGraphResult::ssrDecorated 带回）。
  */
 export CompiledGraphResult compileGraphOrThrow(const char* path, bool taaEnabled,
-	bool velocityEnabled = false, bool fsrEnabled = false);
+	bool velocityEnabled = false, bool fsrEnabled = false, bool ssrEnabled = false);
 
 /** 按 file 去重的已上传模型（instancing：同文件一次解析一次上传，entities 共享资产）。 */
 export struct UploadedModel {

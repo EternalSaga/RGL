@@ -158,6 +158,19 @@ static void readFsrBlock(const sol::table& root, RuntimeConfig& cfg) {
 	readBoolKey(fsr, "jitter", cfg.fsrJitter);
 }
 
+/**
+ * `ssr` 嵌套块解析（批 15.1）：`ssr = { enabled = … }` 一枚总开关。
+ * 缺块 / 缺键 = 保持结构体默认 false（= 图里没有 ssr pass，出厂红线形态）。与 `aa` 正交
+ *（`aa` 管抗锯齿选路，本块管 SSR 特性；组合语义 → RuntimeConfig::ssrEnabled 注释）。
+ * 形态先例 = readFsrBlock（嵌套块 + readBoolKey，无扁平键双读兼容）。
+ */
+static void readSsrBlock(const sol::table& root, RuntimeConfig& cfg) {
+	sol::table ssr = root["ssr"];
+	if (!ssr.valid() || !ssr.is<sol::table>())
+		return;
+	readBoolKey(ssr, "enabled", cfg.ssrEnabled);
+}
+
 /** loadRuntimeConfig 定义（接口注释见 runtime_config.cppm）：headless/headless_size/win_size/show_after/present_mode/ui_font 逐一可选解析 + parseLlm。 */
 [[nodiscard]] std::expected<RuntimeConfig, Error> loadRuntimeConfig(std::string_view path) {
 	auto* logger = RLLogger::getInstance();
@@ -216,6 +229,7 @@ static void readFsrBlock(const sol::table& root, RuntimeConfig& cfg) {
 		if (auto err = applyAaKey(root, cfg, path))
 			return std::unexpected(Error{ErrorCode::ConfigLoadFailed, *err});
 		readFsrBlock(root, cfg);  // 批 14.6：FSR 调参收进嵌套块（无扁平键双读兼容）
+		readSsrBlock(root, cfg);  // 批 15.1：SSR 总开关（嵌套块，缺块/缺键 = false = 图里没有 ssr pass）
 		sol::optional<int> showAfter = root["show_after"];
 		if (showAfter)
 			cfg.showAfter = *showAfter;

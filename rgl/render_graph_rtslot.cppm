@@ -174,6 +174,29 @@ std::expected<uint32_t, Error> ensureAoAppliedSlot(
 }
 
 /**
+ * Phase 15 批 15.1 前半（接口注释见 render_graph.cppm）：单幅全屏 RT，名字/格式 =
+ * `kSsrAppliedName` / `kSsrAppliedFormat` 契约常量。extent 同 ao_applied 取**渲染**网格。
+ * 启动期仅 ssr 落图时调用一次；每帧 drawFrame 的 ensureOffscreenAttachments 命中同名缓存复用。
+ */
+std::expected<uint32_t, Error> ensureSsrAppliedSlot(
+		RenderTargetCache& rts, Swapchain& swapchain) {
+	const std::string name{std::string{kSsrAppliedName}.c_str()};
+	const vk::Extent2D extent = swapchain.getRenderExtent();
+	const vk::Format format = resolveRgFormat(std::string{kSsrAppliedFormat}, vk::Format::eUndefined);
+	auto rt = rts.ensure(name, extent, format);
+	if (!rt)
+		return std::unexpected(std::move(rt).error());
+	auto slot = rts.heapSlot(name);
+	if (!slot)
+		return std::unexpected(Error{ErrorCode::Unknown,
+			fmt::format("ssr_applied RT has no sample descriptor slot")});
+	if (auto* logger = RLLogger::getInstance())
+		logger->info("ssr (RGBA16F, 成片+屏幕空间反射; 批 15.1 前半 = 占位拷贝): {}x{} slot {}",
+			extent.width, extent.height, *slot);
+	return *slot;
+}
+
+/**
  * Phase 11 批 11.2（接口注释见 render_graph.cppm ensureShadowMapSlot）：阴影图 RT + 采样堆槽。
  * 尺寸 = 2·mapSize（候逇 4 级 2×2 图集；当前 kActiveShadowCascades=1 时也只用左上那一块，
  * 但分辨率一开始就固定在 2·mapSize，切到 4 级时不需重建描述绑定）。

@@ -103,6 +103,32 @@ uint32_t evssmMomentsSlotOf(Resources& resources) {
 	return orThrow(resources.ensureEvssmSampleSlot(), "EVSSM 矩图槽发号失败");
 }
 
+/**
+ * G-buffer 领槽 + light 条目（Phase 7 D1；批 15.1 前半把领槽条件放宽到
+ * `deferredMode || ssrDecorated` 后抽成 helper 控 assembleBackEnd 行数）。
+ * 领槽 = ensureDeferredGBufferSlots（幂等，light / ssr 条目复用同一组槽号）；light
+ * 条目仅 deferred 建（forward 图没有 G-buffer 附件，ssr 装饰器的跳过条件 2 也保证
+ * ssrDecorated ⟹ 图里有 gbuffer_position ⟹ 槽可领）。
+ */
+std::optional<std::array<uint32_t, 5>> gBufferSlotsAndLightEntry(
+	Resources& resources, SamplerLibrary& samplers, RenderTargetCache& rtCache,
+	Swapchain& swapchain, ShaderRegistry& pipelines, bool deferredMode, bool ssrDecorated) {
+	std::optional<std::array<uint32_t, 5>> gbSlots;
+	if (deferredMode || ssrDecorated)
+		gbSlots = orThrow(ensureDeferredGBufferSlots(rtCache, swapchain),
+			"deferred: G-buffer RT 创建失败");
+	if (deferredMode) {
+		// light 条目下标由 Renderer 构造期按名 pipelineIndex("light") 取，此处仅需触发建条目
+		// 批 11.6d-2：EVSSM 矩图槽（binding 15 无条件 bake，同 shadowSlot 纪律）。
+		const uint32_t evssmSlot = evssmMomentsSlotOf(resources);
+		[[maybe_unused]] auto lightIdx = pipelines.addLightEntry(
+			(*gbSlots)[0], (*gbSlots)[1], (*gbSlots)[2], (*gbSlots)[3], (*gbSlots)[4],
+			samplers.ensureShared(), deferredShadowSlotOf(rtCache), samplers.ensurePointSampler(),
+			evssmSlot);
+	}
+	return gbSlots;
+}
+
 }  // namespace
 
 /** A0 内建 cube + A1 解析/顶点上传（全几何槽先于任何纹理槽）+ A2 纹理上传。 */
@@ -409,11 +435,21 @@ void registerSceneEntities(entt::registry& registry, const UploadedAssets& asset
   *                        「velocity 真的进了图」并进本参数，见 main_impl）
  *        条目（**不改任何既有 binding**，与 taa 换 tonemap 色槽不同——速度场暂无下游）；
  *        false = 逐位不变
+ * @param ssrDecorated    批 15.1 前半：SSR pass 已装饰落图。true = 追加 ssr_applied RT +
+ *                        ssr 条目，且 taa / ao_apply / tonemap 的色输入槽按优先级链
+ *                        ao_applied > taa_out > ssr_applied > scene_hdr 跟着换（图上输入名
+ *                        的改写由 decorateSsrPass 做，这里换的是**烘进管线条目的堆槽**——
+ *                        两条通道漏一条 = 「图说采 A、描述符指向 B」= 采到从未转换布局的
+ *                        图，VVL 报布局不符，教训原文见函数体内「色输入优先级」注释）
+ * @param gbSlots         ssr 条目要烘的 G-buffer 5 槽（ensureDeferredGBufferSlots 产物；
+ *                        ssrDecorated 为真时调用方必须给值——装饰器跳过条件保证彼时图里
+ *                        必有 G-buffer 附件）
  */
 void assembleHdrAoChain(Swapchain& swapchain, Resources& resources,
 	SamplerLibrary& samplers, RenderTargetCache& rtCache, ShaderRegistry& pipelines,
 	bool taaDecorated, bool velocityDecorated, bool fsrUsable = false,
-	bool aoApplyDecorated = false) {
+	bool aoApplyDecorated = false, bool ssrDecorated = false,
+	const std::optional<std::array<uint32_t, 5>>& gbSlots = {}) {
 	const auto hdrSlot = orThrow(ensureSceneHdrSlot(rtCache, swapchain), "scene_hdr RT 创建失败");
 	const auto aoSlot = orThrow(ensureAoSlot(rtCache, swapchain), "ao RT 创建失败");
 	const auto depthSlot = orThrow(resources.ensureDepthSampleSlot(), "深度采样槽分配失败");
@@ -433,6 +469,12 @@ void assembleHdrAoChain(Swapchain& swapchain, Resources& resources,
 	if (taaDecorated) {
 		taaSlots = orThrow(ensureTaaSlots(rtCache, swapchain), "TAA RT 创建失败");
 	}
+	// 批 15.1 前半：ssr 在图里时领 ssr_applied 槽（同 scene_hdr 契约：槽号一经烘进管线
+	// binding 即终身有效，resize 只重写描述符内容）。门关 = 不领槽 = 堆槽布局零差异。
+	std::optional<uint32_t> ssrSlot;
+	if (ssrDecorated) {
+		ssrSlot = orThrow(ensureSsrAppliedSlot(rtCache, swapchain), "ssr_applied RT 创建失败");
+	}
 	// 批 14.5 第二批：色输入优先级 **FSR > TAA > scene_hdr**。FSR 在图里时它读
 	// taa_out/scene_hdr、写自己那张私有图，这里把它的输出采样槽**烘进 tonemap 条目**——
 	// 零拷贝（不新建图附件、不动图词表），先例 = EvssmShadow 的 momentsSampleSlot。
@@ -441,24 +483,48 @@ void assembleHdrAoChain(Swapchain& swapchain, Resources& resources,
 	// 批 14.5 第三批：ao_apply 在图里时**图**已把 tonemap 的色输入换成 ao_applied
 	//（decorateAoApplyPass 干的），所以烘进条目的堆槽必须跟着换——否则「图说采 A、描述符
 	// 指向 B」= 采到没转布局的图（VVL 报布局不符）。
-	// 优先级：ao_applied > taa_out > scene_hdr；FSR 开时整条被 FSR 的**零拷贝输出槽**顶掉
-	//（批 14.5 第二批那条路），两者写同一个 binding、互斥。
-	const uint32_t graphColorSlot = aoApplyDecorated
-		? orThrow(ensureAoAppliedSlot(rtCache, swapchain), "ao_applied RT 创建失败")
-		: (taaSlots ? (*taaSlots)[0] : hdrSlot);
+	// 批 15.1 前半：优先级 **ao_applied > taa_out > ssr_applied > scene_hdr**——ssr_applied
+	//   档插在 scene_hdr 之上：SSR 与 taa / ao_apply 是**串联**（SSR 先合成、它们后处理），
+	//   装饰器插入序保证 tonemap 在链尾看到的永远是链头产物。FSR 开时整条被 FSR 的
+	//   **零拷贝输出槽**顶掉（批 14.5 第二批那条路），两者写同一个 binding、互斥。
+	// 写法 = 顺序覆盖（低优先级先赋、高优先级后覆盖），与嵌套三目逐位等价；用三目会把
+	// 本函数认知复杂度推过 15 的检查红线（每层嵌套 +2）。
+	uint32_t graphColorSlot = hdrSlot;
+	if (ssrSlot)
+		graphColorSlot = *ssrSlot;
+	if (taaSlots)
+		graphColorSlot = (*taaSlots)[0];
+	if (aoApplyDecorated) // ao_applied 槽只在真要建条目时领（门关 = 堆槽零变化）
+		graphColorSlot = orThrow(ensureAoAppliedSlot(rtCache, swapchain), "ao_applied RT 创建失败");
 	const uint32_t colorSlot = fsrUsable
 		? orThrow(resources.ensureFsrSampleSlot(), "FSR 输出采样槽领取失败") : graphColorSlot;
 	[[maybe_unused]] auto tonemapIdx = pipelines.addTonemapEntry(colorSlot, aoSlot,
 		samplers.ensureShared());
-	// 批 14.5 第三批：AO 施加专用 pass 的条目。色输入恒为 scene_hdr——本 pass 的跳过条件
-	// 保证「taa 在图里就不插」，所以它不可能需要读 taa_out。
+	// 批 15.1 前半：SSR 专用 pass 的条目。色输入**恒为 scene_hdr**——decorateSsrPass 插在
+	// velocity/taa/ao_apply 之前，它读的本帧成片永远是 light 的产物（跳过条件保证它不可能
+	// 读到下游）。G-buffer normal/position/metalrough = 烘 5/6/7（镜像 light.frag 通道号，
+	// 15.1 后半 ray march 的权重输入）；深度复用 ao 那一份采样槽（不另领，先例同 velocity）。
+	if (ssrDecorated) {
+		[[maybe_unused]] auto ssrIdx = pipelines.addSsrEntry(hdrSlot, (*gbSlots)[1],
+			(*gbSlots)[2], (*gbSlots)[3], depthSlot);
+	}
+	// 批 14.5 第三批：AO 施加专用 pass 的条目。色输入 = SSR 在图时 ssr_applied、否则
+	// scene_hdr——本 pass 的跳过条件保证「taa 在图里就不插」，所以它读的是装饰器插入序
+	// 上自己上游的那张成片（SSR 先插 ⟹ 上游 = ssr_applied），不可能需要读 taa_out。
 	if (aoApplyDecorated) {
-		[[maybe_unused]] auto aoApplyIdx = pipelines.addAoApplyEntry(hdrSlot, aoSlot,
-			samplers.ensureShared());
+		// ⚠ 同下面 taa 那条：本行的 `ssrSlot ? *ssrSlot : hdrSlot` 也零测试覆盖（缺口 → phase15_plan §3.2）。
+		[[maybe_unused]] auto aoApplyIdx = pipelines.addAoApplyEntry(
+			ssrSlot ? *ssrSlot : hdrSlot, aoSlot, samplers.ensureShared());
 	}
 	if (taaDecorated) {
+		// 色输入同 ao_apply 那条理由：SSR 在图时 taa 的上游 = ssr_applied（图上输入名已由
+		// decorateSsrPass 改写，烘进条目的堆槽必须同步）。
+		// ⚠ **本行当前零测试覆盖**：把它退回 `hdrSlot`（= 图说读 ssr_applied、描述符指
+		//   scene_hdr）时单测 275 例全绿、`--ssr --aa taa --syncval` errors=0、出图正常
+		//   ——两张图同在 eShaderReadOnlyOptimal，VVL 无从分辨（缺口论证 → phase15_plan §3.2）。
+		//   改它之后要手测：`aa=taa` 档 SSR 开/关差分**必须不同**。
 		[[maybe_unused]] auto taaIdx = pipelines.addTaaEntry(
-			hdrSlot, (*taaSlots)[1], depthSlot, samplers.ensureShared(),
+			ssrSlot ? *ssrSlot : hdrSlot, (*taaSlots)[1], depthSlot, samplers.ensureShared(),
 			samplers.ensurePointSampler(), aoSlot);
 	}
 	// 批 14.4 速度场（门默认关 = velocityDecorated false = 本段整体跳过 = 槽/条目零变化）：
@@ -563,6 +629,7 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 	const bool taaDecorated = graphResult.taaDecorated;
 	const bool velocityDecorated = graphResult.velocityDecorated;
 	const bool aoApplyDecorated = graphResult.aoApplyDecorated;
+	const bool ssrDecorated = graphResult.ssrDecorated;
 	// 批 13.6：AO 施加点标志 = **实际图形态**（`decorateTaaPass` 结果），**不是**配置推导值
 	// （`aaWantsTaa()`）。true ⟹ AO 已在 tonemap **之前**施加过，tonemap 跳过；false ⟹ 没有更早的
 	// 施加点（含 offscreen 变体：aa 要了 TAA 但装饰失败），AO 留在 tonemap 施加。
@@ -614,26 +681,17 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 
 	// Phase 7 D1：deferred 资源。装配序——env/models 已分配，此处才分配
 	// G-buffer RT 堆槽（运行时段）+ 建 light 管线，再构造
-	// Renderer（其构造期校验 drawLight pass 有 light 条目）。forward 全跳过。
-	if (deferredMode) {
-		const auto gbSlots =
-			orThrow(ensureDeferredGBufferSlots(rtCache, swapchain), "deferred: G-buffer RT 创建失败");
-		// light 条目下标由 Renderer 构造期按名 pipelineIndex("light") 取，此处仅需触发建条目
-		// 批 11.6d-2：EVSSM 矩图槽（binding 15 无条件 bake，同 shadowSlot 纪律；
-		// 失败处理收 helper，见 evssmMomentsSlotOf）
-		const uint32_t evssmSlot = evssmMomentsSlotOf(resources);
-		[[maybe_unused]] auto lightIdx = pipelines.addLightEntry(
-			(gbSlots)[0], (gbSlots)[1], (gbSlots)[2], (gbSlots)[3], (gbSlots)[4],
-			samplers.ensureShared(), deferredShadowSlotOf(rtCache), samplers.ensurePointSampler(),
-			evssmSlot);
-	}
+	// Renderer（其构造期校验 drawLight pass 有 light 条目）。forward 全跳过
+	// （批 15.1 前半：领槽条件放宽到 ssr 也要槽，本体见 gBufferSlotsAndLightEntry）。
+	const auto gbSlots = gBufferSlotsAndLightEntry(resources, samplers, rtCache, swapchain,
+		pipelines, deferredMode, ssrDecorated);
 	// 批 14.5 第二批：FSR 生效判据在装配层一次算完（判据本体见 computeFsrUsable）。
 	const bool fsrUsable = computeFsrUsable(device, graphResult.graph, fsrEnabled,
 		velocityDecorated, taaDecorated);
 	// 批 14.5 第四批：抖动解耦（判据与"为什么在装配层算相位数"见 wireFsrJitter）
 	wireFsrJitter(registry, swapchain, fsrUsable, fsrJitter);
 	assembleHdrAoChain(swapchain, resources, samplers, rtCache, pipelines, taaDecorated,
-		velocityDecorated, fsrUsable, aoApplyDecorated);
+		velocityDecorated, fsrUsable, aoApplyDecorated, ssrDecorated, gbSlots);
 
 	// Phase 7b：DGC 命令生成（NVIDIA 路）：仅 graphicsIndirect 能力时构造（RADV =
 	// compute only → null → Renderer 读回重放路）。管线表定后建（execution set

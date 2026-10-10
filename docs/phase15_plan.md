@@ -205,7 +205,7 @@ shader 构建登记在 `rgl/CMakeLists.txt` 的 `rgl_shader(...)`。
 | 批 | 内容 | 判据 / 红线 |
 |---|---|---|
 | **15.0** | **判据与靶先行（零渲染改动）** ✅ **已落地**（落地形态与计划的偏差见 §3.1） | 红线 = `just regress ab` 逐位不变（**已实测：逐位相同**）；判据 = 闭式预测表本身要有**反向用例**（柱不存在时预测区间必须为空，已做成 `ssr_rig_empty` 变体 + 构建期断言 A3） |
-| **15.1** | **镜面 SSR 最小可用**：`ssr.frag.slang` 全分辨率 DDA ray march（§1.3 算法面），反射源 = `scene_hdr`，权重全从 G-buffer 现成量算（Schlick fresnel 与 `light.frag` 同式、roughness 门控、背面/边界 fade）。§2.2 的 viewProj 尾区 + 互逆护栏。门走 `configs/runtime.lua` 新块，与 `aa` 三态键**正交**。**末尾必做（§6 风险 1 的量具）**：在 bistro 交付机位上出 SSR 开/关差分覆盖率 = 命中率读数，写进 §1.1 表；过低即触发 §6 的降级路径 | 红线 = 门关逐位 = **红线 A `5ff793bf…`**（权威载体 = `docs/还债总账.md` 的红线声明块；**必须用基线配置**。⚠ 本计划立项时写的是 `fdece9d0`，那个锚 2026-10-10 已因债-76 退役，批 15.0 的 `just regress ab` 实测跑出的就是 `5ff793bf`）；VVL + syncval 零 hazard（新 pass 的布局链，先例债-32）；判据 = 15.0 闭式靶（`just ssr-target`，凸包内必须变亮 = 阳性锚点）+ `imgqa switch`（门关影响域**必须恰为 0**）+ `imgqa attribution` |
+| **15.1** | **镜面 SSR 最小可用**（**前半 ✅ 已落地** = `ssr` pass 管道 + 门 + 占位拷贝，落地记录与两个已知缺口 → §3.2；**后半** = 下面的 ray march 本体）：`ssr.frag.slang` 全分辨率 DDA ray march（§1.3 算法面），反射源 = `scene_hdr`，权重全从 G-buffer 现成量算（Schlick fresnel 与 `light.frag` 同式、roughness 门控、背面/边界 fade）。§2.2 的 viewProj 尾区 + 互逆护栏。门走 `configs/runtime.lua` 新块，与 `aa` 三态键**正交**。**末尾必做（§6 风险 1 的量具）**：在 bistro 交付机位上出 SSR 开/关差分覆盖率 = 命中率读数，写进 §1.1 表；过低即触发 §6 的降级路径 | 红线 = 门关逐位 = **红线 A `5ff793bf…`**（权威载体 = `docs/还债总账.md` 的红线声明块；**必须用基线配置**。⚠ 本计划立项时写的是 `fdece9d0`，那个锚 2026-10-10 已因债-76 退役，批 15.0 的 `just regress ab` 实测跑出的就是 `5ff793bf`）；VVL + syncval 零 hazard（新 pass 的布局链，先例债-32）；判据 = 15.0 闭式靶（`just ssr-target`，凸包内必须变亮 = 阳性锚点）+ `imgqa switch`（门关影响域**必须恰为 0**）+ `imgqa attribution` + **`aa` 三档各测一次 SSR 开/关差分**与**装配后 `ssr` pass 下标 < `taa` pass 下标**（这两条堵的是 §3.2 那两个当前全裸的缺口，缺一条 = 后半可以静默交付一个"SSR 只在 aa=off 生效"或"SSR 建在时域滤波之后"的东西） |
 | **15.2** | **湿面消费 SSR**（= 原课题「bistro 水膜」三项）：湿区 albedo 压暗 ×0.5–0.7、水洼粗糙度（洼 ≈0.05 / 湿石 0.3–0.5）、水膜法线扰动。wetness 走 §2.4 程序化路线 | 结案 AGENTS.md「湿面只加高光不压暗」那条已知边界（就地删该条）；`imgqa faces` 闭式逐面预测；`imgqa switch --allow-piece ground` 限定湿区影响域 |
 | **15.3** | **粗糙度感知模糊 + 伪影治理**：拆半分辨率 march + 全分辨率 apply；反射图走 mip chain（§1.3 抄 Filament 这条）；治深度间隙断裂、屏幕边界淡出、firefly（`docs/还债总账.md` 债-40 那条 HDR firefly 对 SSR 同样成立） | 每条伪影要有**反向用例**，不许"看着好了"收账；per-pass 读数进 §1.1 表 |
 
@@ -304,6 +304,50 @@ memcpy，不是调用它 ⟹ 若有人把 `vkrenderer_impl.cppm` 里的**目标�
 SSR 一旦消费这颗矩阵，`just ssr-target` 的闭式倒影凸包就会把「偏移错 / 口径错 / 提取链错」
 一起现形（矩阵错 ⟹ 倒影不出现在预测位置 ⟹ 判据红）。所以 15.1 的接线顺序刻意是
 「先有靶、再接线」，不是「先接线再补判据」。
+
+**已完成子步：`ssr` pass 管道 + 占位拷贝 shader（门默认关）**
+
+拆出这一步的唯一理由 = 拿到一条比"门关逐位不变"更强的判据：**占位 shader 零算术
+（`Load` 整数纹素原值拷贝），所以「门开 = 门关逐位相同」只可能因**管道**接错而破，不可能因
+算法而破**。实测：门关 `5ff793bf…` = 门开 `5ff793bf…`（`cmp` 完全相同），而启动日志
+`ssr (RGBA16F, …): 1280x720 slot 8252` 证明 RT 真领了、pass 真跑了 —— 于是"接错"与"算错"
+这两种在本批极易混在一起的失效被彻底分开，后半只剩算法一种嫌疑。
+
+落点：`decorateSsrPass`（`decorateAoApplyPass` 同构三件套）插在 shadow 之后、velocity/taa/
+ao_apply **之前**；跳过两条 = 无采色上屏消费者 / 图无 `gbuffer_position`（= deferred-only
+边界，即 §0.1 的 D1 豁免在代码里的落点）。色输入优先级链成 **`ao_applied > taa_out >
+ssr_applied > scene_hdr`**（FSR 仍整条顶掉）。装饰器**可复合性**是这套设计成立的前提：每个
+装饰器都现搜「消费者当前的色附件」，SSR 先插 ⟹ 下游自动读到 `ssr_applied` ⟹ 链自己接成
+`scene_hdr → ssr_applied → [taa_out | ao_applied] → tonemap`；这条性质有单测钉（含 barrier 成立）。
+
+验收：`just regress ab --expect 5ff793bf` 逐位相同 · 门开/门关两图 SHA 相同 · VVL + syncval
+`errors=0` · `--ssr` × `aa` 三档各冒烟 PASS · `--ssr --variant forward` 走"图形态不支持"warn
+优雅跳过（D1 边界的运行时证据）· `just test` 260 → **263 例** · style/doc-check 0 警告。
+
+**主 agent 质检变异（形态与实现者所验不同）—— 两条红、两条绿，绿的那两条是缺口**：
+
+| 变异 | 结果 | 含义 |
+|---|---|---|
+| `ssr` pass 的 `kind` 改成 `drawMesh`（kind 与 state 串味） | **红**（2 例） | 图校验承认可复合性 |
+| 跳过条件 2 的谓词取反（forward 边界） | **红**（1 例） | deferred-only 边界有护栏 |
+| `main_scene` 里 **taa 条目的色输入退回 `hdrSlot`** | **绿**（275 例全过） | ⚠ 缺口 1 |
+| **`decorateSsrOrWarn` 调用挪到装饰序列最后** | **绿**（275 例 + 冒烟 + syncval 全过） | ⚠ 缺口 2 |
+
+**⚠ 两个已确认、当前无任何检查覆盖的缺口（15.1 后半必堵，别当"已护栏"）**：
+
+1. **「烘进管线条目的堆槽」这条通道全裸**。把 `addTaaEntry` 的色输入退回 `hdrSlot`（= 图上写
+   `ssr_applied`、描述符指 `scene_hdr`）后：单测全绿、`--ssr --aa taa --syncval` `errors=0`、
+   出图正常。原因是两张图都在 `eShaderReadOnlyOptimal`，VVL 无从分辨；而占位拷贝下像素又
+   恰好相同，逐位判据也抓不住。**真 shader 下的症状 = SSR 在 `aa=taa` / `aa=fsr` 档完全无效**，
+   而 §3 给 15.1 定的判据（闭式靶）只在 `aa=off` 跑 ⟹ 抓不到。
+   **后半必加的护栏 = SSR 开/关差分在 `aa` 三档各测一次**：`aa=taa` / `aa=fsr` 两档
+   SSR-on 与 SSR-off **必须不同**（不同 = 那条通道的描述符真的指向了 SSR 产物）。
+2. **装饰器调用顺序这条不变量只由注释承载**。把 `decorateSsrOrWarn` 挪到 taa/ao_apply 之后，
+   图**仍然自洽**（能编译、无 hazard、无 warning）——只是 SSR 落到时域滤波之后（抖动网格不匹配
+   + SSR 不被滤波）。差分覆盖率那条护栏**抓不到它**（SSR 仍然生效、只是位置不对）。
+   **后半必加的护栏**：把装饰序列收进一个可测函数，对 `aa × ssr` 全组合断言**装配后图里
+   `ssr` 的 pass 下标 < `taa` 的 pass 下标**（顺序错了即红）。现在做不到是因为序列内联在
+   `compileGraphOrThrow` 里，测试不可达。
 
 ## 4. 红线与纪律
 

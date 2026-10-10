@@ -73,6 +73,8 @@ rgl_shader(velocity.frag VELOCITY_FRAG_SPV scene)   # 批 14.4：逐像素速度
 # 批 14.5 第三批：AO 施加专用全屏 pass（把「AO 乘在时域滤波之前」从 taa.frag 里抽出来，
 # 与「谁做时域」解耦；mesh 复用 light.mesh.spv，binding 4 色 / 5 共享 sampler / 6 ao 可见度）
 rgl_shader(ao_apply.frag AO_APPLY_FRAG_SPV scene)
+# 批 15.1 前半：SSR 全屏 pass（本批 = 占位拷贝，接口即契约；15.1 后半只换函数体）
+rgl_shader(ssr.frag SSR_FRAG_SPV scene)
 rgl_shader(taa.frag TAA_FRAG_SPV scene)
 # Phase 7b（批次 5）：GPU culling compute（独立契约 cull.comp.slang 头注释，无 import 契约文件）
 rgl_shader(cull.comp CULL_SPV)
@@ -314,6 +316,7 @@ set(RGL_FRAME_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/llm_debug_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/shader_registry.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/shader_registry_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shader_registry_fullscreen.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/shader_hot_reload.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/shader_hot_reload_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/ecs.cppm"

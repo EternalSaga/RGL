@@ -357,4 +357,55 @@ bool decorateVelocityPass(RgGraphDesc& desc) {
 	return true;
 }
 
+/**
+ * decorateSsrPass 定义（契约见 render_graph.cppm 接口注释：跳过两条 + 次序契约）。
+ *
+ * 形状 = decorateAoApplyPass 的同构三件套（一个附件 + 一个全屏 pass + 换消费者色输入），
+ * 三条纪律逐字继承：outputs = colorWrite + clear + store；色输入排 inputs 首位
+ *（`sampledColorName` 取「首个 sampleRead 色附件」，别的色附件排前面会让后续装饰器认错
+ * 场景色）；插入用 `begin() + consumerIdx`、换消费者输入用 `consumerIdx + 1`。
+ * 与 ao_apply 的唯一结构差别：**没有**「taa 在图里就跳过」那条——本 pass 不是"施加点"，
+ * 与 TAA 是串联关系（SSR 先合成、TAA 后滤波），而非互斥。
+ */
+bool decorateSsrPass(RgGraphDesc& desc) {
+	// 锚点 = 「写 swapchain 且 sampleRead 色附件」的 pass（与 taa / velocity / ao_apply
+	// 同一个共享判据）；offscreen DIAG 变体用 blit 上屏（transferRead ≠ sampleRead）= 跳过。
+	const auto consumerIdx = swapchainColorConsumerIndex(desc);
+	if (!consumerIdx)
+		return false;
+	auto colorAtt = sampledColorName(desc, desc.passes[*consumerIdx]);  // 上一步已保证有值
+	// 跳过条件 2 = **SSR 的 deferred-only 边界**（D1 对等豁免已拍板，forward 不跟，
+	// 出处 `docs/phase15_plan.md` §0.1）：图里没有 G-buffer 的 position 附件 = forward 图，
+	// SSR 的权重全从 G-buffer 现成量算，没有落点。按**存在性**判（同 ao 附件那条判据）。
+	const bool hasGBufferPosition = std::ranges::any_of(desc.attachments,
+		[](const auto& a) { return a.name == std::string{kGBufferPositionName}; });
+	if (!hasGBufferPosition)
+		return false;
+
+	desc.attachments.push_back(RgAttachmentDesc{
+		.name = std::string{kSsrAppliedName}, .kind = RgAttachmentKind::offscreen,
+		.format = std::string{kSsrAppliedFormat}});
+
+	RgPassDesc pass{
+		.name = std::string{kSsrPassName}, .kind = RgPassKind::drawLight,
+		.state = std::string{kSsrPassName},
+		.outputs = {RgPassAttachment{.attachment = std::string{kSsrAppliedName},
+			.usage = RgUsage::colorWrite, .loadOp = RgLoadOp::clear, .storeOp = RgStoreOp::store}},
+		// 输入序 = barrier 发射序：本批只有成片一个输入（G-buffer/深度在 shader 侧声明但
+		// 占位实现不采样；15.1 接线时在此**追加**，色必须恒排首位——同 ao_apply 那条纪律）。
+		.inputs = {
+			RgPassAttachment{.attachment = *colorAtt, .usage = RgUsage::sampleRead}}};
+	desc.passes.insert(desc.passes.begin() + static_cast<long>(*consumerIdx), std::move(pass));
+
+	// 消费者的色输入换成 SSR 后的成片。下游装饰器（本装饰之后才跑的 taa / ao_apply）此刻
+	// 再搜 `sampledColorName` 会读到 ssr_applied ⟹ 链自动接成
+	// scene_hdr → ssr_applied → [taa_out | ao_applied] → tonemap（可复合性 = 既有性质）。
+	for (auto& in : desc.passes[*consumerIdx + 1].inputs)
+		if (in.attachment == *colorAtt && in.usage == RgUsage::sampleRead) {
+			in.attachment = std::string{kSsrAppliedName};
+			break;
+		}
+	return true;
+}
+
 }  // namespace RGL

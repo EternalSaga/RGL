@@ -426,8 +426,32 @@ bool decorateTaaOrWarn(RgGraphDesc& desc, bool taaEnabled) {
 	return false;
 }
 
-CompiledGraphResult compileGraphOrThrow(const char* path, bool taaEnabled,
-	bool velocityEnabled, bool fsrEnabled) {
+/**
+ * 批 15.1 前半：SSR 图装饰（与 decorateVelocityOrWarn 同构；抽函数控复杂度）。
+ * 关（默认）= 不调 decorateSsrPass = 图里根本没有这个 pass（**结构性**逐位不变，
+ * 不是"有但旁路"）。开但图形态不支持（forward 图无 G-buffer position 附件 / offscreen
+ * 变体无采色上屏消费者）= warn + false，装配层据 false 整套不建。
+ * @return 是否真正装饰落图
+ */
+bool decorateSsrOrWarn(RgGraphDesc& desc, bool ssrEnabled) {
+	if (!ssrEnabled)
+		return false;
+	if (decorateSsrPass(desc))
+		return true;
+	if (auto* logger = RLLogger::getInstance())
+		logger->warn("ssr: 图形态不支持 SSR 装饰（锚点 = 写 swapchain 且采样场景色的 pass，"
+			"且图里须有 G-buffer position 附件 = deferred 图；forward 不跟 = D1 对等豁免，"
+			"docs/phase15_plan.md §0.1），本次运行无屏幕空间反射");
+	return false;
+}
+
+CompiledGraphResult compileGraphOrThrow(const char* path, const RuntimeConfig& runtime) {
+	// 批 15.1 前半：四个图形态开关改由 RuntimeConfig 派生（= 原四形参的逐位同值来源，
+	// 单一真相源在 runtime_config；main() 调用点不再逐项推导，省行也防漏传）。
+	const bool taaEnabled = runtime.aaWantsTaa();
+	const bool velocityEnabled = runtime.velocityField;
+	const bool fsrEnabled = runtime.aaWantsFsr();
+	const bool ssrEnabled = runtime.ssrEnabled;
 	auto graphConfig = loadRenderGraphConfig(path);
 	if (!graphConfig)
 		throw std::runtime_error(graphConfig.error().describe());
@@ -455,6 +479,19 @@ CompiledGraphResult compileGraphOrThrow(const char* path, bool taaEnabled,
 		logger->info("shadow: 已装饰 depth-only 阴影 pass（{}² {}，{} 级；投影体清单由 "
 			"shadow.lua 的 mode 门控（形态表 drawAtlas），mode = \"none\" 时段内零 draw = 画面逐位不变）",
 			kShadowMapSize, kShadowMapFormat, kActiveShadowCascades);
+	// 批 15.1 前半：SSR 装饰插在 shadow **之后**、velocity / taa / ao_apply **之前**。理由：
+	//  ① SSR 读 scene_hdr（light pass 的产物），必须在其后——light 在图本体里，任何装饰都
+	//     在它之后跑，shadow 之后自然满足；
+	//  ② velocity / taa / ao_apply 三个装饰器都**动态**读「消费者当前的色附件」
+	//     （sampledColorName）⟹ SSR 先插，它们自动读到 ssr_applied，链自己接成
+	//     scene_hdr → ssr_applied → [taa_out | ao_applied] → tonemap。这是这些装饰器可
+	//     复合的既有性质，不要破坏它。TAA 读到含 SSR 的成片 = 正确（时域滤波该滤最终画面）。
+	// ⚠ **这条顺序不变量当前只由本注释承载**：把下面这行挪到 taa / ao_apply **之后**，图**仍然
+	//   自洽**（能编译、无 hazard、无 warning，只是 SSR 落到时域滤波之后 = 抖动网格不匹配），
+	//   而单测与冒烟全绿抓不到（缺口论证 → phase15_plan §3.2；后半要收进可测函数并断言
+	//   装配后图里 ssr 的 pass 下标 < taa 的 pass 下标）。
+	// 默认关 = 不调用 = 图逐位不变（D10 纪律；门 = runtime.lua ssr.enabled，与 aa 正交）。
+	const bool ssrDecorated = decorateSsrOrWarn(graphConfig->desc, ssrEnabled);
 	// 批 12.6 TAA 装饰**必须最后**（在 picking / highlight / shadow 之后）：它把
 	// 「写 swapchain 且采色」的 pass（tonemap）的输入换成时域结果，若 highlight 后插
 	// 就会落在 taa 与 tonemap 之间而吃不到滤波。默认关 = 不装饰 = 图逐位不变（D10 纪律）。
@@ -471,7 +508,7 @@ CompiledGraphResult compileGraphOrThrow(const char* path, bool taaEnabled,
 		throw std::runtime_error(fmt::format("render graph compile failed: {}",
 			compiledGraph.error().describe()));
 	return CompiledGraphResult{std::move(*compiledGraph), deferredMode, graphConfig->variant,
-		taaDecorated, velocityDecorated, aoApplyDecorated};
+		taaDecorated, velocityDecorated, aoApplyDecorated, ssrDecorated};
 }
 
 /**
@@ -625,8 +662,9 @@ int main() {
 		// "deferred"/"offscreen"——后两者为内建 exclusive 图变体（覆盖文件 passes）
 		// 批 14.6：TAA 图形态与 FSR 开关都是 aa 三态推导（原 scene.taaEnabled / fsr_upscaler
 		// 键已删）；velocityField 在 aa=fsr 时已被解析期隐含打开（单一来源在解析处）。
-		auto graphResult = compileGraphOrThrow(configPath("render_graph.lua").c_str(),
-			configs.runtime.aaWantsTaa(), configs.runtime.velocityField, configs.runtime.aaWantsFsr());
+		// 批 15.1 前半：四个图形态开关（taa/velocity/fsr/ssr）改由 configs.runtime 一次传入
+		// （派生点搬进 compileGraphOrThrow，见其函数头注释）。
+		auto graphResult = compileGraphOrThrow(configPath("render_graph.lua").c_str(), configs.runtime);
 		const bool deferredMode = graphResult.deferredMode;
 		// 图来源/规模观测（排"配置没生效"类问题：pass 数与 configs/render_graph.lua 对账）
 		if (auto* logger = RLLogger::getInstance())

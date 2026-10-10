@@ -57,4 +57,25 @@ export inline constexpr std::array<RgGBufferDesc, 5> kGBufferAttachments{{
 export inline constexpr int kGBufferChannelCount =
 	static_cast<int>(kGBufferAttachments.size());
 
+/**
+ * G-buffer **position** 通道名（批 15.1）。判据「图里有没有这张附件」= SSR 的
+ * deferred-only 边界（forward 图无 G-buffer ⟹ 装饰器跳过；D1 对等豁免的落地形态，
+ * `docs/phase15_plan.md` §0.1）。与 `kDeferredLightState` 同因：比较侧用本常量，
+ * 名字与契约表由下面的 static_assert 绑定——改名 = 编译不过，而不是留下恒 false 的死判据。
+ */
+export inline constexpr std::string_view kGBufferPositionName = "gbuffer_position";
+
+namespace detail {
+/** 名字是否在 kGBufferAttachments 表内（constexpr 版 any_of，本模块零算法头依赖）。 */
+consteval bool inGBufferTable(std::string_view name) {
+	for (const auto& gb : kGBufferAttachments)
+		if (gb.name == name)
+			return true;
+	return false;
+}
+}  // namespace detail
+
+static_assert(detail::inGBufferTable(kGBufferPositionName),
+	"kGBufferPositionName 必须是 kGBufferAttachments 里的通道名（改表名/改常量都要两处同步）");
+
 }  // namespace RGL

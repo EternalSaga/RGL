@@ -228,6 +228,7 @@ def stage_configs(from_build: bool, variant: str | None, shot_file: str, frames:
                   velocity_field: bool = False, aa: str | None = None,
                   clip: int | None = None,
                   fsr_temporal: bool = False, fsr_jitter: bool = False,
+                  ssr: bool = False,
                   config_base: Path | None = None) -> None:
     """把一次性配置铺进 staging 目录并打好运行模式键（每次重建，跑完不残留可复原状态）。"""
     if config_base is not None and from_build:
@@ -262,6 +263,10 @@ def stage_configs(from_build: bool, variant: str | None, shot_file: str, frames:
     if velocity_field:
         # 批 14.4：逐像素速度场。创建期量（决定图里有没有 velocity pass），无热重载。
         patch_lua(runtime, "velocity_field", "true")
+    if ssr:
+        # 批 15.1 前半：屏幕空间反射（占位拷贝）。同为创建期量（决定图里有没有 ssr
+        # pass）。键 = ssr 块里的 enabled（行首键名全文件唯一，唯一性由 patch_lua 自守）。
+        patch_lua(runtime, "enabled", "true")
     # ── 抗锯齿三态（批 14.6）：一个槽位取代旧的 taa.enabled × fsr_upscaler 两个布尔 ──
     if aa:
         patch_lua(runtime, "aa", f'"{aa}"')
@@ -382,6 +387,10 @@ def parse_args() -> argparse.Namespace:
                     help="runtime.lua velocity_field = true（逐像素速度场，批 14.4）。"
                          "双向核对：开了没建 velocity RT = FAIL；没开却建了 = FAIL（门关不拢）。"
                          "aa=fsr 时无需给：引擎解析期已隐含打开")
+    ap.add_argument("--ssr", action="store_true",
+                    help="runtime.lua ssr 块 enabled = true（屏幕空间反射，批 15.1 前半 = "
+                         "占位拷贝）。双向核对：开了没建 ssr RT 且无「图形态不支持」warn = FAIL；"
+                         "没开却建了 = FAIL（门关不拢 = 「门开=门关逐位相同」红线失效）")
     ap.add_argument("--aa", choices=("off", "fsr", "taa"), default=None,
                     help="runtime.lua aa（批 14.6 抗锯齿三态开关）：off = 出厂默认（无 TAA "
                          "无 FSR，红线 A 那张图）；fsr = FSR3-upscaler 做抗锯齿（隐含打开 "
@@ -451,7 +460,7 @@ def main() -> int:
     stage_configs(args.from_build, args.variant, shot_file, args.frames, size,
                   args.render_scale, args.velocity_field, args.aa,
                   args.clip, args.fsr_temporal, args.fsr_jitter,
-                  config_base=args.config_base)
+                  ssr=args.ssr, config_base=args.config_base)
     base_desc = (str(args.config_base) if args.config_base is not None
                  else ('build 副本' if args.from_build else '仓库 configs/'))
     print(f"配置   : 基准={base_desc}"
@@ -459,6 +468,7 @@ def main() -> int:
           f"  size={f'{size[0]}x{size[1]}' if size else '(随配置)'}"
           f"  render_scale={args.render_scale if args.render_scale is not None else '(随配置)'}"
           f"  velocity_field={'on' if args.velocity_field else '(随配置)'}"
+          f"  ssr={'on' if args.ssr else '(随配置)'}"
           f"  aa={args.aa or '(随配置)'}"
           + (f"  fsr(temporal={'on' if args.fsr_temporal else 'off'}"
              f",jitter={'on' if args.fsr_jitter else 'off'})" if args.aa == "fsr" else ""))
@@ -532,6 +542,25 @@ def main() -> int:
     if not velRequested and vel:
         fail(f"默认档（velocity_field 关）却建了 velocity RT：{vel.group(0)}"
              " ⟹ 门关不拢，「图里没有这个 pass」的逐位不变红线失效")
+    # ssr 生效核对（批 15.1 前半）。同 velocity 的双向纪律：正向 = 门开必须见 ssr RT 行
+    # （或装饰器显式「图形态不支持」warn）；反向 = 门关一行都不许有——本批的判据本体就是
+    # 「门开 = 门关逐位相同」，它依赖「门关 = 图里根本没有这个 pass」，门关不拢时截图
+    # 恰好也可能相同（占位拷贝），画面判据抓不住，只有日志能抓。
+    ssrRt = re.search(r"ssr \(RGBA16F[^)]*\): (\d+)x(\d+) slot (\d+)", log)
+    ssrUnsupported = "ssr: 图形态不支持" in log
+    if args.ssr and not ssrRt:
+        if not ssrUnsupported:
+            fail("请求 --ssr 但日志里既没有 ssr RT 行、也没有「ssr: 图形态不支持」告警"
+                 " ⟹ 装饰器静默没落图（配置键名漂了 / 启动日志文案改了 / 装饰调用被删）")
+        print("SSR    : 本图变体不支持（装饰器已 warn 并跳过）✓ 非错误")
+    if not args.ssr and ssrRt:
+        fail(f"默认档（ssr.enabled 关）却建了 ssr RT：{ssrRt.group(0)}"
+             " ⟹ 门关不拢，「门开 = 门关逐位相同」红线的前提失效")
+    if ssrRt and (int(ssrRt.group(1)), int(ssrRt.group(2))) != render_grid:
+        fail(f"ssr RT {ssrRt.group(1)}x{ssrRt.group(2)} ≠ 渲染网格 "
+             f"{render_grid[0]}x{render_grid[1]}——占位拷贝要求同格式同网格")
+    if ssrRt:
+        print(f"SSR    : {ssrRt.group(0)} = 渲染网格 ✓")
     # aa=fsr 生效核对（批 14.5 的门 + 批 14.6 的槽位）。同 velocity 的纪律：双向都要核。
     # 正向 = 门开必须看到 vendor context 构造行；反向 = 门关**一行都不许有**——FSR 是
     # 图外 compute，门关不拢时截图未必变（本批它的输出尚无消费者），只看画面会漏。

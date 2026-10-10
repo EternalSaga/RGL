@@ -342,6 +342,25 @@ export class ShaderRegistry {
 		uint32_t samplerSlot);
 
 	/**
+	 * 批 15.1 前半：SSR（屏幕空间反射）pass 管线条目（单条目，仿 addVelocityEntry——
+	 * 全 `Load` 直取 **无 sampler 绑定**；门默认关不被调用 = 条目表逐位不变）。
+	 * spec = "ssr"（mesh 复用 light.mesh.spv 全屏大三角 + ssr.frag）。binding：0/1 占位
+	 * + 3 sceneData（@722272 ssrViewProj，消费者 = 15.1 的 ray march，占位体不读）+
+	 * extra：4 → 本帧场景色（**恒 scene_hdr**，理由见 addSsrEntry 定义处注释）、
+	 * 5/6/7 → G-buffer normal/position/metalrough 采样槽（通道号镜像 light.frag）、
+	 * 8 → 深度图采样槽（与 ao/velocity/taa 复用同一份 ensureDepthSampleSlot 的槽）。
+	 * 前提 = ssr_applied RT 已 ensure + 领槽、G-buffer 5 槽已领、深度采样槽已领。幂等。
+	 * @param colorSlot scene_hdr 的 SAMPLED_IMAGE heap 槽（binding 4）
+	 * @param normalSlot G-buffer normal RT 槽（binding 5）
+	 * @param positionSlot G-buffer position RT 槽（binding 6）
+	 * @param metalRoughSlot G-buffer metalrough RT 槽（binding 7）
+	 * @param depthSlot 深度图 SAMPLED_IMAGE heap 槽（binding 8，同 ao 条目复用同槽）
+	 * @return 条目下标；规格缺失抛 runtime_error
+	 */
+	[[nodiscard]] uint32_t addSsrEntry(uint32_t colorSlot, uint32_t normalSlot,
+		uint32_t positionSlot, uint32_t metalRoughSlot, uint32_t depthSlot);
+
+	/**
 	 * Phase 11 批 11.2：阴影 depth-only 管线条目。spec = "shadow"（shadow.mesh.spv + 空壳
 	 * shadow.frag.spv）。
 	 *
@@ -443,7 +462,8 @@ export class ShaderRegistry {
 
 	/** 回落查表体（批 11.5 起为 findSpec 的内部底座：scene.lua styles 命中或默认回落词表
 	 *  cube / model / model_pbr / model_phong / model_pbr_ibl / skybox / deferred_geometry×3 /
-	 *  light×2 / tonemap / ao / taa / shadow / izb_mask；不含 PCSS 变体替换）。 */
+	 *  light×2 / 尾部 kTailSpecs（tonemap/shadow/izb_mask/ao/taa/velocity/ao_apply/ssr）；
+	 *  不含 PCSS 变体替换）。 */
 	const RGL::PipelineSpec* findSpecBase(const char* name) const {
 		auto it = styles.find(name);
 		if (it != styles.end())
@@ -504,7 +524,7 @@ export class ShaderRegistry {
 			return light;
 		// 尾部词表（tonemap/shadow/izb_mask/ao/taa）：批 12.6 起表驱动查表——旧 if 链
 		// 每加一词控制复杂度 +1（taa 加进来正撞 16>15 红线），表长不受此税。
-		static const std::array<RGL::PipelineSpec, 7> kTailSpecs{{
+		static const std::array<RGL::PipelineSpec, 8> kTailSpecs{{
 			{"tonemap", "generated_shaders/light.mesh.spv",
 				"generated_shaders/tonemap.frag.spv"},  // mesh 复用全屏大三角（Phase 8 ①）
 			{"shadow", "generated_shaders/shadow.mesh.spv", "generated_shaders/shadow.frag.spv"},
@@ -518,6 +538,8 @@ export class ShaderRegistry {
 				"generated_shaders/velocity.frag.spv"},  // 批 14.4：速度场（同 ao/taa 复用大三角）
 			{"ao_apply", "generated_shaders/light.mesh.spv",
 				"generated_shaders/ao_apply.frag.spv"},  // 批 14.5：AO 施加（同复用大三角）
+			{"ssr", "generated_shaders/light.mesh.spv",
+				"generated_shaders/ssr.frag.spv"},  // 批 15.1：SSR（同复用大三角）
 		}};
 		for (const auto& s : kTailSpecs)
 			if (std::strcmp(s.name.c_str(), name) == 0)
