@@ -18,6 +18,12 @@ return {
     ssr = {
         enabled = false,
     },
+    -- 批 15.2B：湿面 G-buffer 调制**钉死关**。本靶测的是 SSR 闭式凸包，而镜面 roughness
+    -- 恒 0.122 = wet=1 满调制 ⟹ 不钉则出厂湿面调制改写 metalrough/albedo，判据 A 的
+    -- 闭式覆盖率与判据 B 的泄漏恒等式全被重定义。strength=0 = 恒等旁路（逐位 no-op）。
+    wet = {
+        strength = 0.0,
+    },
     llm_debug = true,
     llm_shot = {
         file = "screenshots/ssr_rig.png",

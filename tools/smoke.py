@@ -40,6 +40,9 @@ errors 计数抓 `[error]` 级日志行：引擎自身 error 与 VVL 的 VUID �
                                [--timeout S] [--sync]
     python tools/smoke.py shot  --config-base qa/configs/ssr_rig --name ssr_rig
                                # 用仓库里的靶配置出图（qa/configs/* 的既有目录同此用法）
+    python tools/smoke.py shot  --name wetoff --set strength=0
+                               # 通用配置注入（可重复，作用于 staging 的 runtime.lua；
+                               # 键命中 ≠ 1 即 FAIL——湿面关消融档 / 参数扫描表复现）
 
 退出码: 0 = PASS · 1 = FAIL（前置不满足 / 引擎非零退出 / 有 error 级日志 / 没出图）。
 """
@@ -229,7 +232,8 @@ def stage_configs(from_build: bool, variant: str | None, shot_file: str, frames:
                   clip: int | None = None,
                   fsr_temporal: bool = False, fsr_jitter: bool = False,
                   ssr: bool = False,
-                  config_base: Path | None = None) -> None:
+                  config_base: Path | None = None,
+                  overrides: list[str] | None = None) -> None:
     """把一次性配置铺进 staging 目录并打好运行模式键（每次重建，跑完不残留可复原状态）。"""
     if config_base is not None and from_build:
         fail("--config-base 与 --from-build 互斥（前者已经指定了基准目录）")
@@ -285,6 +289,16 @@ def stage_configs(from_build: bool, variant: str | None, shot_file: str, frames:
     # 这类静默状态的来源。键的唯一性由 `patch_lua` 自己守（命中 ≠ 1 即报错）。
     if clip is not None:
         patch_lua(STAGING / "scene.lua", "clip_mode", str(clip))
+    # ── 通用配置注入（--set KEY=VALUE，可重复；批 15.2B，§3.2 未还账④「配置注入通路」）──
+    # 具名旗标只覆盖高频臂；低频/一次性扫描（湿面六旋钮、将来的 ssr 18 臂扫描表复现）
+    # 不该每加一枚键就长一条旗标。键唯一性护栏 = patch_lua 本体（命中 ≠ 1 即 FAIL，
+    # 拼错键不会被读成"改了"）。作用在**全部具名旗标之后** = 显式 --set 覆盖具名档
+    # （后写者赢，可预测）；只准打 runtime.lua——要改别的文件说明该长具名旗标了。
+    for item in overrides or []:
+        key, sep, value = item.partition("=")
+        if not sep or not key.strip():
+            fail(f"--set 要 KEY=VALUE 形态，收到 {item!r}（VALUE 允许带空格/引号，KEY 不允许）")
+        patch_lua(runtime, key.strip(), value)
 
 
 def run_engine(exe: Path, timeout: int, syncval: bool = False) -> tuple[int, str, float]:
@@ -410,6 +424,13 @@ def parse_args() -> argparse.Namespace:
                          "是**两个独立旋钮**，不是同一个的别名")
     ap.add_argument("--from-build", action="store_true",
                     help="以 build/rgl/configs 副本为基准（跑调试现场；默认用仓库 configs/）")
+    ap.add_argument("--set", dest="overrides", action="append", default=None,
+                    metavar="KEY=VALUE",
+                    help="通用配置注入（可重复）：对 staging 的 runtime.lua 走 patch_lua "
+                         "（键命中 ≠ 1 即 FAIL，护栏与具名旗标同源）。例：`just shot --name "
+                         "wetoff --set strength=0` = 湿面关消融档。作用在具名旗标**之后** = "
+                         "显式注入覆盖具名档；只准打 runtime.lua（键名以 configs/runtime.lua "
+                         "本体为准）")
     ap.add_argument("--config-base", type=Path, default=None,
                     help="以任意配置目录为基准（如 qa/configs/ssr_rig、qa/configs/analytic）。"
                          "与 --from-build 互斥。走的是同一套 staging + 生效核对，"
@@ -460,7 +481,8 @@ def main() -> int:
     stage_configs(args.from_build, args.variant, shot_file, args.frames, size,
                   args.render_scale, args.velocity_field, args.aa,
                   args.clip, args.fsr_temporal, args.fsr_jitter,
-                  ssr=args.ssr, config_base=args.config_base)
+                  ssr=args.ssr, config_base=args.config_base,
+                  overrides=args.overrides)
     base_desc = (str(args.config_base) if args.config_base is not None
                  else ('build 副本' if args.from_build else '仓库 configs/'))
     print(f"配置   : 基准={base_desc}"
@@ -471,7 +493,8 @@ def main() -> int:
           f"  ssr={'on' if args.ssr else '(随配置)'}"
           f"  aa={args.aa or '(随配置)'}"
           + (f"  fsr(temporal={'on' if args.fsr_temporal else 'off'}"
-             f",jitter={'on' if args.fsr_jitter else 'off'})" if args.aa == "fsr" else ""))
+             f",jitter={'on' if args.fsr_jitter else 'off'})" if args.aa == "fsr" else "")
+          + (f"  set[{', '.join(args.overrides)}]" if args.overrides else ""))
 
     code, log, secs = run_engine(exe, args.timeout, args.sync)
     LOG_PATH.write_text(log, encoding="utf-8")

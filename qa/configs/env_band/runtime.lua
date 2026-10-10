@@ -15,6 +15,12 @@ return {
     present_mode = "immediate",
     ui_font = "",
     ui_font_size = 18.0,
+    -- 批 15.2B：湿面 G-buffer 调制**钉死关**。本靶测的是时域带边/相位锁定（闭式预测表
+    -- 是整套判据的分母），湿面调制会改材质观测值、与抖动相位无关地污染连拍差分。
+    -- strength=0 = 恒等旁路（逐位 no-op）。
+    wet = {
+        strength = 0.0,
+    },
     llm_debug = false,
     llm_shot = {
         file = "screenshots/env_band.png",

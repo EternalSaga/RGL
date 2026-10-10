@@ -432,7 +432,8 @@ float4 readSsrGate()
 // 湿面**身份**（哪些面湿）不占参数 = `1 - smoothstep(readSsrGate().x, readSsrGate().y,
 // roughness)`，与 SSR 粗糙度门控同区间同源（结构上排除「反射了但没压暗」的错配；
 // 理由 → scene_data.cppm 湿面区注释）。
-// 🔴 **本步（15.2 子步 A）零调用点**（备好待 15.2B 接线，先例 = 批 15.1 readSsrViewProj）。
+// 消费者 = deferred_geometry.frag.slang 湿面 G-buffer 调制（15.2B 已接线，默认开；
+// 消融档 `--set strength=0` 实测逐位 = 换锚前旧图）。
 // **系数无 shader 侧默认值**（唯一真相源 = WetTuning 成员初始化器，rgl/runtime_config.cppm）。
 float4 readWetParams()
 {
@@ -441,7 +442,7 @@ float4 readWetParams()
 
 // 湿面空间变化参数（x = rippleAmp 水膜法线扰动幅度、y = puddleFreqRadii 水洼噪声频率
 // = 本值 / sceneRadius，尺度无关口径同 ssrParams.x 的锚点；zw 保留）。消费者 = deferred
-// _geometry 湿面 G-buffer 调制（15.2B 接线）；⚠ wetParams 的 z < w（roughLo < roughHi，反了 = 空间
+// _geometry 湿面 G-buffer 调制（15.2B 已接线）；⚠ wetParams 的 z < w（roughLo < roughHi，反了 = 空间
 // 调制方向倒置），不变式落点与「配置层为何不校验」→ scene_data.cppm kSceneDataWetParamsOffset。
 float4 readWetSpatial()
 {

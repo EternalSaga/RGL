@@ -101,9 +101,10 @@ export struct SsrTuning {
  * ~0.74/1.0 在区间上方 → wetness = 0，两簇间隔着整个门控区间）⟹ 结构上排除「反射了但没
  * 压暗」的错配。本结构只放**调制系数**与**空间变化参数**。
  *
- * 🔴 **改本结构的值不影响红线 A**（本步实测）：`strength` 虽默认开、六枚系数虽仍**无条件**
- * 写进 scene data 尾区 @722368/@722384，但本步（15.2 子步 A）**零消费者** ⟹ 出厂画面逐位
- * 不变。红线 A 由下一步（15.2 子步 B 接 shader 消费者）重立。
+ * 🔴 **改本结构的值 = 改出厂画面**（15.2 子步 B 起消费者已接线）：shader 消费者 =
+ * `deferred_geometry.frag.slang` 湿面 G-buffer 调制（身份 = readSsrGate 同区间同源）。
+ * 红线 A 已随之重立 = `54e40665…`（`docs/还债总账.md` 红线声明块）；`strength = 0` 消融档
+ * 实测逐位 = 旧锚 `5ff793bf…`（恒等旁路的机器可验形态，`just shot --set strength=0`）。
  */
 export struct WetTuning {
 	/// 总开关兼强度（0 = 关 = 消融档）。**默认开**（用户拍板：湿面默认开、15.2B 重立红线 A）。
@@ -299,8 +300,8 @@ export struct RuntimeConfig {
 	 * `ssr` 同构（湿面没有创建期开关：它不是独立 pass，是 deferred_geometry 的 G-buffer 调制，
 	 * 不改图形态；语义与「身份不占参数」→ `WetTuning` 注释）。
 	 * 消费链：main 启动期 `registry.ctx().emplace<WetTuning>(configs.runtime.wet)` →
-	 * renderListSystem 每帧取 → fillWetParams 写 scene data @722368/.xyzw 与 @722384/.xy。
-	 * ⚠ 批 15.2 子步 A **零消费者**（shader 只备读取函数）⟹ 出厂画面逐位不变。
+	 * renderListSystem 每帧取 → fillWetParams 写 scene data @722368/.xyzw 与 @722384/.xy →
+	 * shader 消费者 = deferred_geometry.frag.slang 湿面调制（15.2B 接线，默认开）。
 	 */
 	WetTuning wet;
 

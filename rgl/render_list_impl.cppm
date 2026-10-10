@@ -583,8 +583,8 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	// Phase 15 批 15.1 收尾 + 批 15.2 子步 A：SSR 尺度锚点（SceneBounds.radius，boundsSystem 本帧已聚合，
 	// 与 projectionSystem 的自适应 near/far 同一颗球）与两份调参（SsrTuning/WetTuning 由 main 启动期从
 	// configs/runtime.lua 的 ssr/wet 块灌进 registry，每帧量；缺块时 ctx 里就是结构体默认值 = 出厂系数）
-	// → fillTuningTail 内两个 fill*Params 各写 scene data 尾区。湿面本步**零消费者**（shader 只备读取
-	// 函数）——无条件写、不改像素（红线 A = regress ab）。
+	// → fillTuningTail 内两个 fill*Params 各写 scene data 尾区。湿面消费者 = deferred_geometry
+	// 湿面 G-buffer 调制（15.2B 接线，默认开）——无条件写；strength=0 消融档实测逐位 = 换锚前旧图。
 	fillTuningTail(fresh, rg.ctx().get<SceneBounds>(), rg.ctx().get<SsrTuning>(), rg.ctx().get<WetTuning>());
 	fillFsrCameraInput(fresh, viewProj);  // 批 14.5：FSR 相机输入
 	// 批 12.6 TAA 载荷（三矩阵/参数，细节见 fillTaaData）

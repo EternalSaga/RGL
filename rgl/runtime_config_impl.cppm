@@ -310,7 +310,7 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg) {
 			return std::unexpected(Error{ErrorCode::ConfigLoadFailed, *err});
 		readFsrBlock(root, cfg);  // 批 14.6：FSR 调参收进嵌套块（无扁平键双读兼容）
 		readSsrBlock(root, cfg);  // 批 15.1：SSR 总开关（嵌套块，缺块/缺键 = false = 图里没有 ssr pass）
-		readWetBlock(root, cfg);  // 批 15.2A：湿面参数（嵌套块，缺块/缺键 = WetTuning 默认；本步零消费者）
+		readWetBlock(root, cfg);  // 批 15.2：湿面参数（嵌套块，缺块/缺键 = WetTuning 默认；消费者 = deferred_geometry 湿面调制）
 		sol::optional<int> showAfter = root["show_after"];
 		if (showAfter)
 			cfg.showAfter = *showAfter;

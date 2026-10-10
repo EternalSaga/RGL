@@ -169,7 +169,7 @@ export struct SceneFrameData {
 	///   roughHi)：x = 总开关兼强度（0 = 关 = 消融档，**默认 1.0 = 开**）。湿面**身份**
 	///   （哪些面湿）不占参数 = 1 − smoothstep(ssrGate.x, ssrGate.y, roughness)，与 SSR
 	///   门控同区间同源（理由 → scene_data.cppm 湿面区注释）。生产者 = fillWetParams
-	///   （render_list_impl，可测接缝）。本步零消费者 = 写它不改像素。
+	///   （render_list_impl，可测接缝）。消费者 = deferred_geometry.frag.slang 湿面调制（15.2B）。
 	glm::vec4 wetParams{0.0f};
 	/// · wetSpatial —— 湿面空间变化参数子区 @722384（vec4）= (rippleAmp, puddleFreqRadii,
 	///   0, 0)。与 wetParams 语义分组不同（身份调制系数 vs 空间变化形状参数），故分槽

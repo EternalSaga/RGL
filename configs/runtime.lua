@@ -105,13 +105,13 @@ return {
         rough_cutoff = 0.40,        -- kRoughCutoff：粗糙度高于此 = 不反射（中间 smoothstep 过渡）
     },
 
-    -- ── 批 15.2 子步 A：湿面参数（6 枚全部是**每帧量**）──
+    -- ── 批 15.2 湿面参数（6 枚全部是**每帧量**；子步 B 起消费者已接线）──
     -- 本块**没有创建期开关**：湿面调制不是独立 pass，是 deferred_geometry 内的 G-buffer 调制
     -- （压暗 albedo / 粗糙度端点 / 法线扰动写进 G-buffer，light 与 ssr 读 G-buffer 自动同源），不改图形态；
     -- `strength = 0` 就是它的门关档（合法消融档，配置层不校验不 clamp，理由 → readWetBlock）。
-    -- ⚠ 本步（15.2 子步 A）**零消费者**：六枚系数写进 scene data 湿面区 @722368/@722384，
-    -- shader 只备 readWetParams/readWetSpatial 读取函数、无调用点 ⟹ 出厂画面逐位不变（红线 A），
-    -- 消费者在 15.2 子步 B 接。
+    -- 消费者 = deferred_geometry.frag.slang「湿面调制」段（15.2B 接线，**默认开**）：出厂画面
+    -- 含湿面调制（红线 A = `54e40665…`）；`strength = 0` 实测逐位 = 换锚前的旧图（`5ff793bf…`）。
+    -- 消融/扫描注入 = `just shot --set strength=0`（tools/smoke.py，不碰配置副本）。
     -- 湿面**身份**（哪些面湿）不占本块键 = 1 − smoothstep(ssr.rough_full, ssr.rough_cutoff,
     -- roughness)，与 SSR 粗糙度门控同区间同源（资产已标定 → docs/phase15_plan.md §2.4 修正块）。
     -- 默认值唯一真相源 = C++ 的 WetTuning 成员初始化器（rgl/runtime_config.cppm）；本文件

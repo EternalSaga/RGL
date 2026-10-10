@@ -491,8 +491,8 @@ static_assert(kSceneDataSsrOffset == 722272 && kSceneDataSsrParamsOffset == 7223
  *    与 SSR 粗糙度门控**同区间同源**（资产已标定：湿材质 roughness 0.122 在区间下方 →
  *    wetness = 1、干面 ~0.74/1.0 在上方 → 0，出处 → docs/phase15_plan.md §2.4 修正块）
  *    ⟹ 结构上排除「反射了但没压暗」的错配。本区只放**空间变化与调制系数**。
- *  - 交付时**无消费者**（scene.slang readWetParams/readWetSpatial 备好待 15.2B 接线），
- *    无条件写、不改任何像素（同 shadow/TAA/SSR 尾区「无消费者时照写」纪律）。
+ *  - 消费者 = deferred_geometry.frag.slang 湿面 G-buffer 调制（15.2B 接线，**默认开**）；
+ *    无条件写（同 shadow/TAA/SSR 尾区纪律），`strength = 0` 消融档实测逐位 = 换锚前旧图。
  *  消费端 = scene.slang readWetParams/readWetSpatial 字面量（两侧 static_assert 钉死同步）。 */
 export inline constexpr uint32_t kSceneDataWetOffset = kSceneDataSsrOffset + kSceneDataSsrBytes;
 /** 湿面身份调制系数子区（vec4, 16B）= (strength, dark, roughLo, roughHi)。
@@ -516,8 +516,9 @@ export inline constexpr uint32_t kSceneDataWetParamsOffset = kSceneDataWetOffset
 export inline constexpr uint32_t kSceneDataWetSpatialOffset = kSceneDataWetOffset + 16u;
 export inline constexpr uint32_t kSceneDataWetBytes = 32u;
 // 钉的是「C++ 常量 == 已知的两个基址」：改 C++ 侧必编译失败。⚠ **改 scene.slang 那一侧不会**
-// ——slang 里没有能引用 C++ 常量的机制，shader 字面量单侧漂只能靠端到端判据抓（15.2B 接消费者后
-// 立湿面判据；本步零消费者的端到端护栏 = just regress ab 红线 + 红线 A），机器对账规则尚未落地
+// ——slang 里没有能引用 C++ 常量的机制，shader 字面量单侧漂只能靠端到端判据抓（15.2B 已接消费者：
+// 漂移的可见形态 = 湿面调制读错系数，红线 A `54e40665` + 影响域判据（≥gate.y 像素差分恒 0）都抓），
+// 机器对账规则尚未落地
 // （缺口账与 SSR 同款 → docs/phase15_plan.md §3.2）。
 static_assert(kSceneDataWetOffset == 722368 && kSceneDataWetParamsOffset == 722368
 		&& kSceneDataWetSpatialOffset == 722384,
