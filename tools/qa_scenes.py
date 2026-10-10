@@ -1926,9 +1926,14 @@ def scene_ssr_rig(pillar: bool = True) -> Scene:
     )
     P = s.pieces.append
     P(Piece("ground_metal",
+            # ⚠ u/v 顺序**不可随意对调**：quad 的法线 = cross(u,v)，本 rig 要 +Y。全项目地面
+            #   quad 的约定是 (0,0,+L),(L,0,0)（见 shadow_rig / nm_rig 的 ground）。写成
+            #   (0,0,−L),(L,0,0) 会得到 −Y 法线，画面靠 deferred_geometry 的 `!frontFace → N=−N`
+            #   背面翻向救回来，于是 N 要先过一遍 TBN 再翻号——实测带 ~5° 偏差，SSR 的反射方向
+            #   被 2× 放大成 ~10°，靶上表现为「倒影只剩中央窄带 + 两侧地面假命中」（2026-10-10）。
             quad((-SSR_GROUND_HALF_X, 0.0, SSR_GROUND_Z_NEAR),
-                 (0.0, 0.0, -(SSR_GROUND_Z_NEAR + SSR_GROUND_Z_FAR)),
-                 (2.0 * SSR_GROUND_HALF_X, 0.0, 0.0)),
+                 (2.0 * SSR_GROUND_HALF_X, 0.0, 0.0),
+                 (0.0, 0.0, -(SSR_GROUND_Z_NEAR + SSR_GROUND_Z_FAR))),
             PAL["yellow"], metallic=1.0, roughness=SSR_GROUND_ROUGHNESS,
             radial=False, closed=False,
             intent=("metallic=1 镜面接收面；baseColor 是金属的 F0 调制色，"
