@@ -353,6 +353,15 @@ void fillSsrViewProj(FrameDrawList& out, const ViewProjection& viewProj) {
 	out.sceneData.ssrViewProj = viewProj.proj * viewProj.view;
 }
 
+/** Phase 15 批 15.1 收尾：填 SSR 参数区（scene data 尾区 @722336，vec4）。
+ *  x = SceneBounds.radius（世界空间场景并集包围球半径，boundsSystem 每帧聚合）——
+ *  ssr.frag 的尺度无关参数（maxDistance 等）由它导出，锚点选择与系数反推 → 该区注释。
+ *  yzw = 保留 0（无条件写，同尾区纪律：不按门分支、无消费者不改像素）。
+ *  可测接缝声明 → render_list.cppm。 */
+void fillSsrParams(FrameDrawList& out, const SceneBounds& bounds) {
+	out.sceneData.ssrParams = {bounds.radius, 0.0f, 0.0f, 0.0f};
+}
+
 void renderListSystem(entt::registry& rg, RGL::Resources&,
 	RGL::Environment& envService, const RGL::AssetTable& assets, RenderListState& state) {
 	auto& list = rg.ctx().get<FrameDrawList>();
@@ -465,8 +474,7 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 			const float scale = std::max({glm::length(glm::vec3(modelMatrix[0])),
 				glm::length(glm::vec3(modelMatrix[1])), glm::length(glm::vec3(modelMatrix[2]))});
 			const float worldRadius = cull.radius * scale;
-			collectShadowCasters(asset, mat, wc, worldRadius, meshRef.objectSlot,
-				shadowCandidates);
+			collectShadowCasters(asset, mat, wc, worldRadius, meshRef.objectSlot, shadowCandidates);
 			if (!sphereInFrustum(frustum, wc, worldRadius))
 				return;
 			const RGL::DrawCall call{
@@ -536,6 +544,9 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	// Phase 15 批 15.1：SSR 正向矩阵 = 上一行**同一表达式不取逆**（接缝可测；口径同源，
 	// 抖动后、与 @64 严格互逆；填值表达式只此一处，避免两份口径漂移）
 	fillSsrViewProj(fresh, viewProj);
+	// Phase 15 批 15.1 收尾：SSR 尺度锚点 = SceneBounds.radius（boundsSystem 本帧已聚合，
+	// 与 projectionSystem 的自适应 near/far 同一颗球）
+	fillSsrParams(fresh, rg.ctx().get<SceneBounds>());
 	fillFsrCameraInput(fresh, viewProj);  // 批 14.5：FSR 相机输入
 	// 批 12.6 TAA 载荷（三矩阵/参数，细节见 fillTaaData）
 	fillTaaData(fresh, viewProj, env, taa);

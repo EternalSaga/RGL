@@ -26,6 +26,8 @@
 //     along < 0 ⟺ 射线已穿到几何**后方**。⟹ `thickness` / `bias` / `maxDistance` 三个参数
 //     **直接是世界单位**，这正是 §1.3 那条红线（"世界单位参数一个都不许抄 Filament"）要求
 //     的口径——若比 ndc 深度，这三个参数就得随投影参数标定，抄过来的数值含义不明。
+//     （批 15.1 收尾：三个量仍走世界单位口径，但定值改从 SceneBounds.radius 与
+//     worldPerPixel **导出**——米制常量在 scale=0.01 的交付场景下不可解读，参数区有账。）
 //
 // ── 纹理空间口径 ──
 // 本 pass **不改变纹理空间**：输入输出同空间同网格，ray march 在**本帧抖动空间**求交
@@ -40,7 +42,8 @@
 // 之前必须还。
 //
 // ── 绑定面（与 CPU 侧 addSsrEntry 成对；G-buffer 通道号镜像 light.frag）──
-//   3 = sceneData（import scene；@722272 ssrViewProj = 本帧**抖动后** proj·view）
+//   3 = sceneData（import scene；@722272 ssrViewProj = 本帧**抖动后** proj·view；
+//       @722336 ssrParams.x = SceneBounds.radius = 尺度无关参数锚点）
 //   4 = scene_hdr（RGBA16F 线性 HDR，反射源）
 //   5 = gbuffer_normal（RG16_SNORM oct，解法走 scene.slang `octDecode` 单一来源）
 //   6 = gbuffer_position（RGBA32_SFLOAT 世界坐标）
@@ -56,7 +59,7 @@
 //   才有意义；否则影响域里混进"采样路径的浮点差异"，判据就分不清"SSR 没作用"与"SSR 作用了
 //   但被浮点噪声淹没"。
 
-import scene;  // sceneData + readSsrViewProj + octDecode + worldFromDepth + uvFromClip + readSceneLight
+import scene;  // sceneData + readSsrViewProj + readSsrParams + octDecode + worldFromDepth + uvFromClip + readSceneLight
 
 [[vk::binding(4, 0)]] Texture2D<float4> sceneHdrTex;    // 本帧成片（RGBA16F 线性 HDR）
 [[vk::binding(5, 0)]] Texture2D<float2> normalTex;      // G-buffer oct 法线（rg16_snorm）
@@ -72,23 +75,38 @@ struct SsrInput
     float2 uv       : TEXCOORD0;    // light.mesh 产出 = framebuffer 对齐 uv（1:1）
 };
 
-// ── 参数（**世界单位**；一个都不许抄 Filament，§1.3 红线：它是米制单模型标定，本场景
-//    scale=0.01、包围球 r≈1.17 ⟹ 下面每个数都按本场景尺度定，扫描表见 §3.2）──
-// 射线长度上限。场景跨度 ≈2.3，取 0.55 ≈ 跨度的四分之一：再长就大量反射到"屏幕里根本没有的
-// 内容"（§1.3 心理阴影 ③：大场景未命中率高，宁可少反射也不要错反射）。
-static const float kMaxDistance = 8.0;
-// 命中窗口（世界单位）。**双重职责**：① 真命中那格的 along 最深约 −Δt（Δt ≈ tMax/kMaxSteps），
-// 窗口必须 > Δt 才不会把真命中误杀；② 又必须远小于"射线从物体后方经过"时的穿透深度，否则治不了
-// sticking（职责②的实测数据见主循环那条 ⚠）。当前 0.04 ≈ 5×Δt。
-static const float kThickness = 0.04;
-// 自交偏置：射线起点就在 G-buffer 表面上（along(0)=0），数值噪声会立刻给出 along<0 的假命中。
-// 必须 < kThickness（否则窗口 [−thickness, −bias] 为空 = 永不命中）。
-static const float kBias = 0.004;
+// ── 参数（**尺度无关导出**；旧版是照闭式靶（米制）调的世界单位常量，而交付场景
+//    bistro 是 scale=0.01（世界包围球 r≈1.16）⟹ 同一常量不可能同时服务两者（2026-10-10
+//    实测：靶 SceneBounds.radius=31.06 / bistro radius=1.16）⟹ 三个量全部改从引擎已有
+//    的量导出，这里只留**无量纲系数**。系数按靶上调定值反推（判据基线 = 靶覆盖率 97.2%
+//    不回归），反推过程见各条注释；导出量：maxDistance = sceneRadius·kMaxDistanceRadii，
+//    thickness/bias = 像素数 × worldPerPixel（采样点口径，见 sampleAlong）──
+// 射线长度上限锚点。sceneRadius = SceneBounds.radius（世界空间场景并集包围球半径，
+// CPU @722336）。不锚 farPlane：那是自适应 near/far 的产物（随相机推拉变），包围球是
+// "场景本身多大"，相机推拉不改它。0.26 由靶上调定值 8.0 反推（8.0/31.06 = 0.2575）：
+// 再长就大量反射到"屏幕里根本没有的内容"（§1.3 心理阴影 ③：宁可少反射也不要错反射）。
+static const float kMaxDistanceRadii = 0.26;
+// 命中窗口 / 自交偏置的像素数。这两个参数的真实语义是"多薄算薄""多近算自交"，判断的
+// 分辨率极限本来就是像素 ⟹ 从 worldPerPixel 导出后自动近处收紧、远处放宽——常量做不到。
+// 命中窗口**双重职责**：① 真命中那格的 along 最深约 −Δt（Δt ≈ tMax/kMaxSteps，靶命中
+// 深度 w≈6 处 ≈ 2.3 px），窗口必须 > Δt 才不会把真命中误杀；② 又必须远小于"射线从物体
+// 后方经过"时的穿透深度，否则治不了 sticking（职责②的实测数据见主循环那条 ⚠）。
+// 6 px 由靶上调定值 0.04 反推（靶命中深度 w≈6 处 0.04/worldPerPixel = 5.79 px ≈ 2.6·Δt，
+// 取整到 6）。
+static const float kThicknessPx = 6.0;
+// 自交偏置：射线起点就在 G-buffer 表面上（along(0)=0），数值噪声会立刻给出 along<0 的
+// 假命中。必须 < kThicknessPx（否则命中窗口 [−thickness, −bias] 为空 = 永不命中）。
+// **worldPerPixel 逐像素变化后这条不变式为什么仍成立**：同一采样点上 bias 与 thickness
+// 乘的是**同一个** worldPerPixel，而 kBiasPx < kThicknessPx 是常量关系 ⟹ 逐像素
+// bias < thickness 恒成立。0.6 px 由靶上调定值 0.004 反推（w≈6 处 = 0.58 px）。
+static const float kBiasPx = 0.6;
 // DDA 格边长（像素）。2 = 步数减半；靶的倒影边界是硬边，格粗于 2 会把边界量化出来。
 static const float kCellPx = 2.0;
 // 步数上限。**刻意不抄 Filament 的 max(res)**（§1.3 红线：那是移动端小分辨率的宽松上界）。
-// 覆盖屏幕行程 ≈ kMaxSteps·kCellPx = 144 px；靶的倒影需要 ~240 px 行程里的大部分（射线只需
-// 走到"被反射内容的像"，不必走完整个倒影区）。扫描表见 §3.2。
+// 行程上限 = kMaxSteps·kCellPx = 1024 px（1280 宽 = 整屏宽）——它是**兜底**不是预算：
+// 真实行程先被 maxDistance / 出屏 / 命中截断，只有横穿全屏的射线才可能把步数走完
+// （靶的倒影需要 ~240 px 行程里的大部分：射线只需走到"被反射内容的像"，不必走完整个
+// 倒影区）。扫描表见 §3.2。
 static const int kMaxSteps = 512;
 // 命中点二分细化次数（在 [上一格穿越 t, 本格穿越 t] 上解 along=0）。
 static const int kRefineIters = 4;
@@ -105,12 +123,14 @@ static const float kFarDepth = 0.9999;
 // 沿射线求交的一个采样结果。
 struct MarchSample
 {
-    float along;  // 世界空间有符号距离：>0 几何还在射线前方，<0 射线已到几何后方
-    bool  usable; // false = 该处无法求交（出屏 / 落到相机平面之后）⟹ 调用方必须停走
+    float along;          // 世界空间有符号距离：>0 几何还在射线前方，<0 射线已到几何后方
+    bool  usable;         // false = 该处无法求交（出屏 / 落到相机平面之后）⟹ 调用方必须停走
+    float worldPerPixel;  // **采样点**视深处一像素的世界长度（thickness/bias 是作用在采样点
+                          // 上的判据，必须用它、不是起点 C0.w 那份——两者可差数倍）
 };
 
 // 屏幕某处的世界点相对射线的位置（判据本体，见文件头 ②）。
-MarchSample sampleAlong(float4 c0, float4 cd, float t, float3 P, float3 R, float2 px)
+MarchSample sampleAlong(float4 c0, float4 cd, float t, float3 P, float3 R, float2 px, float tanHalfFovY)
 {
     MarchSample s;
     const float4 c = c0 + cd * t;
@@ -118,8 +138,17 @@ MarchSample sampleAlong(float4 c0, float4 cd, float t, float3 P, float3 R, float
     {
         s.along = 0.0;
         s.usable = false;
+        s.worldPerPixel = 0.0;
         return s;
     }
+    // 视深 c.w（沿相机**前向**，不是到相机的距离）处一像素的世界长度：
+    //     worldPerPixel = 2·c.w·tan(fovY/2)/px.y
+    // tanHalfFovY 的来源（**别退回 vp.c1.y**）：viewProj 的 row1 = proj[1][1]·(view 的 row1)，
+    // 而 view 是刚体 ⟹ 旋转部分每行是**单位向量** ⟹ `length(row1.xyz) = proj[1][1] =
+    // cot(fovY/2)` 精确（2026-10-10 数值验证相对误差 1.8e-16）。直接用 vp.c1.y 会多带一个
+    // view[1][1] = up.y = cos(pitch) 因子（靶 pitch 8° → 偏 1%，交付机位 bistro pitch≈24° →
+    // 偏 **9.5%**），等于让 thickness/bias 随相机俯仰漂。抖动只改 proj 的 row2，不污染 row1。
+    s.worldPerPixel = 2.0 * c.w * tanHalfFovY / px.y;
     const float2 uv = uvFromClip(c);
     if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0)
     {
@@ -215,19 +244,31 @@ float4 main(SsrInput input) : SV_Target
     const float4 C0 = mulM(vp, float4(P, 1.0));
     const float4 Cd = mulM(vp, float4(R, 0.0));
 
+    // ── 尺度无关参数（定值口径 → 参数区注释）──
+    // 空场景兜底：SceneBounds.radius = 0 是它的"空"哨兵 ⟹ maxDistance 会是 0，而下面
+    // `tSing / maxDistance` 是除法。1e-6 下限**不是调参**、是防零除守卫——空场景没有像素
+    // 能过深度门（全是天空，早已早退），这条路径实际到不了。
+    const float maxDistance = max(readSsrParams().x, 1e-6) * kMaxDistanceRadii;
+    // cot(fovY/2) = |viewProj 的 row1.xyz|（view 刚体 ⟹ 单位 up 行 × proj[1][1]），
+    // 精确且抖动无关；口径与"为什么不用 vp.c1.y" → sampleAlong 内注释。
+    const float tanHalfFovY = 1.0 / length(float3(vp.c0.y, vp.c1.y, vp.c2.y));
+    // 起点处 worldPerPixel：起点用的两处 bias（奇异平面截断、零长度步判据）都是射线**起点**
+    // 的判据；命中窗口（bias/thickness）用**采样点**那份（sampleAlong 带出），两者可差数倍。
+    const float bias0 = kBiasPx * (2.0 * C0.w * tanHalfFovY / px.y);
+
     // 射线朝相机时会在 t = −C0.w/Cd.w 处撞上 w=0 奇异平面。那里投影翻转、屏幕坐标乱跳，
     // 必须硬截断；同时把"还剩多少可用行程"当淡出——这是**尺度无关**的朝相机淡出，刻意不用
     // Filament 的 `1 − max(0, vsDir.z)`（那要假设 proj 的 w 行是单位向量，本引擎的投影惯例
     // 不该被 shader 这样依赖）。
-    float tMax = kMaxDistance;
+    float tMax = maxDistance;
     float singularityFade = 1.0;
     if (Cd.w < 0.0)
     {
         const float tSing = -C0.w / Cd.w;
-        if (tSing <= kBias)
+        if (tSing <= bias0)
             return hdr;
         tMax = min(tMax, tSing);
-        singularityFade = saturate(tSing / kMaxDistance);
+        singularityFade = saturate(tSing / maxDistance);
     }
 
     // ── DDA：沿屏幕网格走，逐格判 along 的符号翻转 ──
@@ -250,10 +291,11 @@ float4 main(SsrInput input) : SV_Target
     bool hit = false;
     // 穿越判据的状态 = 「曾经采到 along > 0」+「那次正值的参数」（二分的下界）。
     // ⚠ **不要用「上一个采样 along > 0」当状态**（本批最贵的一条，实测形态 = 靶上 25.8% 的倒影
-    //   像素整条射线走到预算耗尽、且**漏与不漏按行交替**）。`along < -kBias` 留了条死区
-    //   (−kBias, 0]：采样一旦落进死区，"上一个为正"就**永久失效**，之后无论穿多深都再也判不出
-    //   命中。本靶恰好把这条放大到必然发生——平坦镜面的 `along` 零点与**被反射物轮廓的入口**
-    //   重合（射线到达柱面的那一刻才进柱子轮廓），所以"零点附近那一次采样"必然出现。
+    //   像素整条射线走到预算耗尽、且**漏与不漏按行交替**）。`along < −bias` 留了条死区
+    //   (−bias, 0]（bias = kBiasPx·采样点 worldPerPixel）：采样一旦落进死区，"上一个为正"就
+    //   **永久失效**，之后无论穿多深都再也判不出命中。本靶恰好把这条放大到必然发生——平坦镜面
+    //   的 `along` 零点与**被反射物轮廓的入口**重合（射线到达柱面的那一刻才进柱子轮廓），所以
+    //   "零点附近那一次采样"必然出现。
     //   而像素中心在格内的位置只有 0.25 / 0.75 两种（uv 像素中心 = (i+0.5)/res、格宽 = 2px），
     //   第一步长度随之不同 ⟹ 采样相位随行/列奇偶交替 ⟹ 死区命中与否也交替 = 横条纹。
     bool sawFront = false;
@@ -278,9 +320,9 @@ float4 main(SsrInput input) : SV_Target
         const float tStop = budgetDone ? tMax : tEnd;
 
         // 零长度步（tStop == tCur）不采样：它不贡献任何覆盖，采样只会把同一点当新格重复判。
-        if (tStop > tCur && tStop > kBias)
+        if (tStop > tCur && tStop > bias0)
         {
-            const MarchSample s = sampleAlong(C0, Cd, 0.5 * (tCur + tStop), P, R, px);
+            const MarchSample s = sampleAlong(C0, Cd, 0.5 * (tCur + tStop), P, R, px, tanHalfFovY);
             if (!s.usable)
                 break;                       // 出屏 / 奇异平面之后：再走也没有意义
             if (s.along > 0.0)
@@ -288,7 +330,7 @@ float4 main(SsrInput input) : SV_Target
                 sawFront = true;
                 tFront = 0.5 * (tCur + tStop);
             }
-            else if (sawFront && s.along < -kBias)
+            else if (sawFront && s.along < -kBiasPx * s.worldPerPixel)
             {
                 // ⚠ **防 "sticking" 假命中**（本批实测：删掉这条 ⟹ 靶上柱子**两侧**的地面多出
                 //   34170 px 的反射，幅度 p50=0.022 与真倒影同量级）。那些射线是在柱子**后方几米**
@@ -297,7 +339,7 @@ float4 main(SsrInput input) : SV_Target
                 //   跨 Δt ≈ tMax/kMaxSteps。所以"这一步穿进几何的深度"就是两者的判别量。
                 //   ⟹ 判据必须作用在**细化之前**的采样上：二分只会把任何跳变都收敛到 along≈0，
                 //   细化之后再判就永远看不出区别了。
-                if (-s.along > kThickness)
+                if (-s.along > kThicknessPx * s.worldPerPixel)
                     break;
                 // 二分细化到 along = 0，把命中点从"格中点"提到亚像素。下界取**最后一次
                 // along > 0 的参数**（不是 tCur：tCur 处的采样可能正落在上面那条死区里，
@@ -306,7 +348,7 @@ float4 main(SsrInput input) : SV_Target
                 for (int i = 0; i < kRefineIters; ++i)
                 {
                     const float m = 0.5 * (a + b);
-                    const MarchSample r = sampleAlong(C0, Cd, m, P, R, px);
+                    const MarchSample r = sampleAlong(C0, Cd, m, P, R, px, tanHalfFovY);
                     if (!r.usable)
                         break;
                     if (r.along > 0.0)
@@ -340,7 +382,7 @@ float4 main(SsrInput input) : SV_Target
     const float2 edgePx = min(hitUv * px, px - hitUv * px);
     const float edgeFade = saturate(min(edgePx.x, edgePx.y) / kEdgeFadePx);
     // ② 距离淡出：硬截在 maxDistance 会看到一条"反射突然消失"的等高线。
-    const float u = saturate(tHit / kMaxDistance);
+    const float u = saturate(tHit / maxDistance);
     const float distanceFade = 1.0 - smoothstep(0.6, 1.0, u);
     // ③ 朝相机淡出（上面算的，尺度无关）。
     const float weight = roughGate * edgeFade * distanceFade * singularityFade;

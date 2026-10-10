@@ -145,4 +145,16 @@ export Light fillLightData(entt::registry& rg, const glm::vec3& eyePos, FrameDra
  */
 export void fillSsrViewProj(FrameDrawList& out, const ViewProjection& viewProj);
 
+/**
+ * 每帧填 SSR 参数子区（scene data 尾区 kSceneDataSsrParamsOffset = @722336，vec4：
+ * x = SceneBounds.radius，yzw = 保留 0；口径 → scene_data.cppm 该区注释）。定义在
+ * render_list_impl（partition impl unit，实现侧不写 export）。导出为**可测接缝**
+ * （fillSsrViewProj 同款先例）：回归断言 = tests/test_ssr_params（两源结构：写入侧
+ * C++ 常量、读回侧字面量 722336）。
+ * @param out    出参：本帧 draw list（写 sceneData.ssrParams）
+ * @param bounds 本帧场景聚合包围球（boundsSystem 产物，空场景 radius = 0 原样透传——
+ *               兜底住在消费端 shader，CPU 不做第二真相源）
+ */
+export void fillSsrParams(FrameDrawList& out, const SceneBounds& bounds);
+
 }  // namespace RGL

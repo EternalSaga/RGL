@@ -155,6 +155,10 @@ export struct SceneFrameData {
 	/// 「为什么不让 shader 自己求逆」→ scene_data.cppm kSceneDataSsrOffset）。生产者 =
 	/// fillSsrViewProj（render_list_impl，可测接缝）。交付时无消费者 = 写它不改像素。
 	glm::mat4 ssrViewProj{1.0f};
+	/// · ssrParams —— SSR 参数子区 @722336（vec4）：x = SceneBounds.radius（尺度无关参数
+	///   锚点，口径 → scene_data.cppm kSceneDataSsrParamsOffset），yzw = 保留 0。生产者 =
+	///   fillSsrParams（render_list_impl，可测接缝）。
+	glm::vec4 ssrParams{0.0f};
 };
 
 /**

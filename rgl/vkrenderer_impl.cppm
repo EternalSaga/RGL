@@ -273,6 +273,9 @@ void Renderer::createSceneStaging(RGL::Resources& vkResources) {
 	// 无条件写（64B）——交付时无消费者（scene.slang readSsrViewProj 备好待 15.1 接线），
 	// 写它不改任何像素，且省下「按门分支写」的第二条路径（同 shadow/TAA 尾区纪律）。
 	std::memcpy(stage + kSceneDataSsrOffset, &list.sceneData.ssrViewProj, sizeof(glm::mat4));
+	// Phase 15 批 15.1 收尾：SSR 参数子区（vec4，x = SceneBounds.radius = ssr.frag 的尺度
+	// 锚点）。无条件写（16B，同矩阵区纪律：门关路径也保证值正确，省第二条分支）
+	std::memcpy(stage + kSceneDataSsrParamsOffset, &list.sceneData.ssrParams, sizeof(glm::vec4));
 	// 批 11.3-1e：IZB 消费区 (flag, W, H, 保留)——light.frag izbNearShadow 消费。
 	// flag = izbShadow 已构造（门关恒空 = 全 0 → ×1.0 逐位旁路）；W/H = mask 位图行距
 	{

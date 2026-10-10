@@ -417,11 +417,88 @@ ssr_applied > scene_hdr`**（FSR 仍整条顶掉）。装饰器**可复合性**�
 所以这条差分是在默认配置上测的——**靶配置要支持 fsr 档，得先给它补 `fsr` 块**（未做）。
 
 **未还的账（15.2 及后续）**：① 命中处**不减 IBL specular** ⟹ 光滑面双计偏亮（15.2 还，
-与"湿面压暗"同一处）；② shader 内 `kMaxDistance / kBias / kThickness / kCellPx` 仍是
-**米制常量**，而 bistro 是 `scale=0.01`（跨度 2.3）⟹ 上面 bistro 那三个覆盖率数字在参数
-进配置面之前**不可解读**（靶是米制、bistro 是 0.01 尺度，单一常量无法同时服务两者）；
+与"湿面压暗"同一处）；② ~~shader 内 `kMaxDistance / kBias / kThickness` 仍是米制常量~~
+**已还**（见下条"世界单位参数改尺度无关导出量"；`kCellPx` 本来就是像素单位不受尺度影响；
+参数进**配置面**仍未做——本步只把常量换成尺度无关导出 + shader 内无量纲系数）；
 ③ 凸包内残余 2.8% 漏集中在闭式区间的**两端行带**（480–519 与 680–719）= 掠射端与近端，
-待参数面出来后重测再判是不是真边界。
+**参数导出后重测仍 2.8%（97.2% 持平）⟹ 不是米制常量错位造成的**，是真边界/掠射问题，
+结案挪到 15.2 之后。
+
+**已完成子步：世界单位参数改尺度无关导出量（15.1 收尾前置）**
+
+`kMaxDistance / kThickness / kBias` 三个米制常量（8.0 / 0.04 / 0.004）改为从引擎已有的量
+导出，shader 里只留无量纲系数：
+
+| 量 | 导出式 | 系数 | 锚点实测（2026-10-10，本机） |
+|---|---|---|---|
+| maxDistance | `SceneBounds.radius × kMaxDistanceRadii` | **0.26** | 靶 radius=31.065（8.0/31.06=0.2575）；bistro radius=1.163 → 0.302 |
+| thickness | `kThicknessPx × worldPerPixel(采样点)` | **6.0 px** | 靶命中深度 w≈6 处 0.04 = 5.79 px（取整 6） |
+| bias | `kBiasPx × worldPerPixel(采样点)` | **0.6 px** | 同处 0.004 = 0.58 px |
+
+- **半径锚点走 scene data 尾区 @722336**（`kSceneDataSsrParamsOffset`，vec4，x=radius，
+  SSR 区 64→80B、`kSceneDataBytes`→722352）。接缝 = `fillSsrParams`（与 fillSsrViewProj
+  分开的第二个可测接缝，职责单一）；消费端 `scene.slang readSsrParams()` 字面量 + 两侧
+  static_assert + `tests/test_ssr_params`（两源结构，先例 = test_ssr_viewproj）。
+- **`worldPerPixel` 的口径：`2·c.w·tan(fovY/2)/px.y`，`tan(fovY/2)` 从 viewProj 精确提取**。
+  实现者第一版用 `1/vp.c1.y`，实测 **`c1.y = cot(fovY/2)·view[1][1]`**，即多带一个
+  `view[1][1] = up.y = cos(pitch)` 因子（靶 pitch 8° → 偏 1%，bistro 交付机位 pitch≈24°
+  → 偏 **9.5%**）——那等于让 thickness/bias 随相机俯仰漂。**主 agent 复核时改掉了**：
+  `viewProj` 的 row1 = `proj[1][1]·(view 的 row1)`，而 view 是刚体 ⟹ 旋转部分每行是
+  **单位向量** ⟹ `length(float3(vp.c0.y, vp.c1.y, vp.c2.y)) = proj[1][1] = cot(fovY/2)`
+  **精确**（数值验证相对误差 1.8e-16；jitter 只改 proj 的 row2，不污染 row1）。零新增数据。
+  ⚠ 教训形态值得记：**这个偏差不会让画面错**，只会让一个"看起来是像素数"的参数悄悄带上
+  相机姿态依赖——只有把公式与它的名字对一遍才会发现。
+- **thickness/bias 用采样点的 c.w 不用起点 C0.w**（判据作用在采样点上，两者可差数倍）；
+  `MarchSample` 因此带出 `worldPerPixel`。`kBias < kThickness` 不变式在系数层面成立
+  （同一 worldPerPixel × `kBiasPx < kThicknessPx`）⟹ 逐像素恒成立。
+- **验收实测**：靶覆盖率 97.2% → **97.2%**（p50 +0.21492 持平）· 泄漏 0 · 红线 A
+  `5ff793bf` 逐位 · `just test` 264→**266** · syncval hazard 0 · **×10 尺度抽查**：
+  靶几何+机位整体 ×10（radius 实测 310.648590 = 恰 ×10，闭包凸包像素**逐位不变**）
+  覆盖率 **97.1%**、泄漏 0；×1 vs ×10 的 ON 图残差 1777 px（0.193%）= 判据边界上的
+  命中翻转（float 舍入 + 远平面 ×10 改深度量化），**逐位不变在跨尺度下不成立、
+  成立的是覆盖率 ≥90% 与形态不变**。
+- **bistro 交付机位 SSR 开/关差分**（本步的核心价值读数，主 agent 复核后终值）：
+  `off` 0.93→**0.53%** / `taa` 1.28→**0.80%** / `fsr` 1.35→**0.86%**（实现者首报
+  0.54/0.81/0.87，差 0.01pp = 上面 `cot(fovY/2)` 口径修正所致，**在噪声内**）。
+  下降的性质 = **参数变合理不是命中变差**：改前 thickness=0.04 世界单位在 bistro 尺度
+  = 21 px 宽的窗口（sticking 治不住），改后 6 px；差分全为变亮（变暗 0.0%）。
+- 🔴 **主 agent 读差分图得到的、尚未结案的新问题（15.2 的前置）**：bistro 上 SSR 的作用
+  **形态**可疑，不是覆盖率高低的问题。差分（黄）落在①中间建筑簇地面的一条连续斜带
+  ②右下**植被区**的零散斑块；而画面里**最该反射的运河水面一个像素都没有**。两条推断：
+  ① 水面在 deferred 路线是**透明/BLEND**材质 ⟹ **不进 G-buffer** ⟹ SSR 从原理上看不见它
+  （SSR 只能作用于不透明表面，这是架构边界不是 bug）；② 干燥石板路与植被能反射，说明
+  它们的 roughness < `kRoughCutoff=0.40` 被门控放行，**待 `dump_gbuf` 核实**。
+  对 15.2 的影响：湿面课题的对象是**石板路**（§2.4 程序化 wetness），所以"SSR 作用在地面"
+  方向是对的；但**"干地面现在就在反射"必须先查清**，否则 wetness 的效果无法与既有假反射
+  归因分离。⚠ 覆盖率 0.53% 这个数字**不是命中率**——它只说"SSR 改了多少像素"，其中多少
+  是该反射的，当前量具答不了（闭式靶测不出：靶地面是刻意 metallic=1 的镜面）。
+- **注释漂移一并修掉**（调试期实验值没跟上注释）：`kMaxDistance` 注释写 0.55 值 8.0、
+  `kMaxSteps` 注释写 144 px 实为 512·2=1024 px、thickness 注释写 5×Δt 实为 2.6×。
+  交付态判定：kMaxSteps=512 保留（行程上限 1024 px = 兜底不是预算，真实行程先被
+  maxDistance/出屏/命中截断）。
+
+**主 agent 复核补记（三条，实现者汇报里没有的）**
+
+1. **变异实测：这条链路端到端有牙，且很敏感**。注入变异 = `fillSsrParams` 把
+   `bounds.center.y` 当 radius 填（靶上 0.643 vs 真值 31.065）：`just test` 红 1 例
+   （`CHECK(ssrParams.x == bounds.radius)`），`just ssr-check` 靶覆盖率
+   **97.2% → 2.6%**、判据 A FAIL、判据 B 仍 PASS（泄漏是逐位恒等式，与锚点无关）。
+   ⟹ **锚点错一个数量级，覆盖率掉 37 倍** = 端到端护栏的灵敏度量级。
+2. ⚠ **`kMaxDistanceRadii = 0.26` 携带靶的标定污染，别当物理正确值**。它由靶上米制调定值
+   反推（8.0 / 31.065），而靶的 `SceneBounds.radius` 被那块 **50 m 宽的地面 quad 撑大**
+   （实测 31.065；且 `enclosingSphere` 是"质心 + 最远点"保守界，质心被柱的顶点数拉离
+   quad 中心，最小外接球本应 29.15）。**radius 不代表"可反射物的大小"**——这正是当初
+   预判的"类 2 归一化到 radius 的失效模式"在靶上的体现。结论：**系数的最终标定必须在
+   bistro 上靠画质判据定**（靶只能证明"算法对"，证明不了"参数好看"），而这要等**参数
+   配置面**——本步刻意没建。
+3. 🔴 **护栏缺口（新记，未落地）**：`rgl/shaders/scene.slang` 有 **16 处**手写偏移字面量
+   （`Load4(722336u)` 这类），全是"两侧手写同步点"。C++ 侧 `static_assert` 钉的是
+   「C++ 常量 == 已知基址」，**改 shader 那一侧不会编译失败**——slang 里没有能引用 C++
+   常量的机制。既有注释里"两侧 static_assert 钉死同步"是**过度承诺**，已就地改准
+   （`scene_data.cppm` / `test_ssr_params` 头部含措辞纪律）。该建的护栏 = 一条
+   `tools/checks/` 规则：扫 `*.slang` 里的 `Load*(\d+u)` 字面量，与 `scene_data.cppm`
+   全部 `kSceneData*Offset` 常量集合对账（shader 读到 C++ 侧不存在的偏移 = error；反向
+   不报，很多尾区无消费者）。**一条规则覆盖全部 16 处**，成本低于逐个写单测。
 
 ## 4. 红线与纪律
 

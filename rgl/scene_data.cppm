@@ -433,7 +433,8 @@ static_assert(kSceneDataTaaOffset == 722080 && kSceneDataTaaMotionOffset == 7221
 	&& kSceneDataTaaInputKernelOffset == 722240 && kSceneDataTaaClipControlOffset == 722256,
 	"scene.slang taa literals drifted from scene_data.cppm offsets");
 
-/** Phase 15 批 15.1 SSR 区（mat4, 64B）= 本帧**抖动后** proj·view（尾区追加，既有偏移
+/** Phase 15 批 15.1 SSR 区（mat4 + vec4, 80B）= 本帧**抖动后** proj·view + 尺度锚点参数
+ *  （尾区追加，既有偏移
  *  逐字节不动 diff0，先例 = 批 11.2 阴影 VP 区 / 批 12.6 TAA 区）。
  *
  *  口径（接消费者前必读）：
@@ -449,10 +450,20 @@ static_assert(kSceneDataTaaOffset == 722080 && kSceneDataTaaMotionOffset == 7221
  *    不改任何像素（同 shadow/TAA 尾区「无消费者时照写」纪律）。
  *  消费端 = scene.slang readSsrViewProj 字面量（两侧 static_assert 钉死同步）。 */
 export inline constexpr uint32_t kSceneDataSsrOffset = kSceneDataTaaOffset + kSceneDataTaaBytes;
-export inline constexpr uint32_t kSceneDataSsrBytes = 64u;
-// 与 scene.slang readSsrViewProj 的字面量基址钉死（两侧手写同步点，改一侧必编译失败）
-static_assert(kSceneDataSsrOffset == 722272,
-	"scene.slang readSsrViewProj literal 722272 out of sync with kSceneDataSsrOffset");
+/** SSR 参数子区（vec4, 16B）= (SceneBounds.radius, 0, 0, 0)。x = 世界空间场景并集包围球
+ *  半径（boundsSystem 每帧聚合，空场景 = 0）——ssr.frag 的**尺度无关参数锚点**：旧版
+ *  kMaxDistance/kThickness/kBias 是按闭式靶（米制）调的世界单位常量，交付场景 bistro 是
+ *  scale=0.01（r≈1.16）⟹ 同一常量无法同时服务两者（2026-10-10 实测：靶 radius=31.06 /
+ *  bistro radius=1.16）。半径与相机推拉无关、随场景尺度线性走 ⟹ maxDistance 由它导出后
+ *  在任意尺度合理。生产者 = fillSsrParams（可测接缝），护栏 = tests/test_ssr_params。
+ *  yzw = 保留 0（后续 SSR 调参落地时复用本槽位，零布局变更，先例 = taaPrevContentShift）。 */
+export inline constexpr uint32_t kSceneDataSsrParamsOffset = kSceneDataSsrOffset + 64u;
+export inline constexpr uint32_t kSceneDataSsrBytes = 80u;
+// 钉的是「C++ 常量 == 已知的两个基址」：改 C++ 侧必编译失败。⚠ **改 scene.slang 那一侧不会**
+// ——slang 里没有能引用 C++ 常量的机制，shader 字面量单侧漂只能靠端到端判据（just ssr-check）
+// 抓，机器对账规则尚未落地（缺口账 → docs/phase15_plan.md §3.2）。
+static_assert(kSceneDataSsrOffset == 722272 && kSceneDataSsrParamsOffset == 722336,
+	"scene.slang readSsrViewProj literal 722272 / readSsrParams literal 722336 out of sync with scene_data.cppm offsets");
 
 /** scene data buffer 总字节数 = 头 128 + 对象矩阵表 + 灯数组区 + MVP 表 + 材质表 +
  * 辐照度 SH9 区 + 阴影 VP 区（= 721952B，编译期派生）；SceneDataService::ensure 的分配尺寸与
