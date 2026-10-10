@@ -197,8 +197,9 @@ vk_indirect_commands 显式使用）外**均无显式使用但被其他已启用
   < 1 量化步长 = 不可见；TAA 关时 AO 逐帧静止）；可见形态是**屏幕锚定的相机移动爬行** → `git:调试历史` 2026-10-04
 - **湿面只加高光不压暗**：`_Wet` effective roughness 0.12 是**平台期**（无 SSR，实测三档 roughness
   画面 p90 不动），真实湿面应同时压暗漫反射而这里没做 → 湿区略"亮而奶"。**Phase 15 结案它**；
-  旧前提「需 per-material wetness 进 scene data」**已被推翻**——wetness 走程序化，零契约改动
-  → `docs/phase15_plan.md` §2.4
+  旧前提「需 per-material wetness 进 scene data」**已被推翻**，而"wetness 走程序化"**也已修正**——
+  wetness 身份**已在 roughness 通道里**（资产就 3 个光滑材质、名字即 `Pavement_*_Wet*`），
+  程序化只管湿区内部空间变化 → `docs/phase15_plan.md` §2.4
 - **灯契约（现行）**：`Light` 组件 + `index` = 列表位正序（画不画 = 实体有无；forward 读 index 0 = 主光，
   延迟按 index 落槽）；`SceneLight`/`GpuLight` 布局均走 C API 反射生成，无手写双源
 - **GPU culling（现行）**：三态门 **`diagnostics.cull_replay`，默认 `cpu`** = opaque 段由 **CPU 剔除**驱动、
