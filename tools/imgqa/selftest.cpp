@@ -4,6 +4,7 @@
 #include "aa_coverage.h"
 #include "cli.h"
 #include "ao_metrics.h"
+#include "diff_struct_metric.h"  // 批 15.2 子步 D1：结构差分的口径层（合成数组闭式测）
 #include "shadow_kernel_metric.h"  // kernelscale 口径层（Projector / ScanLine / shadowScanPoint）
 #include "temporal_flicker.h"
 #include "temporal_homography.h"
@@ -238,8 +239,10 @@ void testJudgmentFamilies(Checker& c)
     // 54 → 57：批 N6d 步 0 的 `shadow-softness` 三条（J1 量具有效 / J2 现状缺陷 / J3 对账出数）。
     // 57 → 60：`shadow-kernel-scale` 三条（CSM 本影存在性 / 核尺度不随 cascade 半径漂移 /
     // PCSS 半影随高度展开）。写法照抄 `shadow-softness` 那三条，见 judgments_table_shadow.cpp。
+    // 60 → 62：批 15.2 子步 D1 的 `diffstruct` 两条（变暗阳性锚点 / 域外变暗恰 0），见
+    // judgments_table_ssr.cpp。
     // 这条硬计数的意义 = 族拆分/改名最容易掉条目，而掉掉的正是没人再读的那几条。
-    c.chk("判据总数 == 60（族拆分最容易掉条目）", all.size() == 60, std::to_string(all.size()));
+    c.chk("判据总数 == 62（族拆分最容易掉条目）", all.size() == 62, std::to_string(all.size()));
     size_t n[4] = {0, 0, 0, 0};
     for (const auto& j : all) {
         switch (j.family) {
@@ -1908,6 +1911,136 @@ void testBoostFidelity(Checker& c)
     }
 }
 
+/// `diffstruct` 的**口径层**（`diffStructStat` / `diffStructRatio`）闭式自检（批 15.2 子步 D1）。
+/// 缝 = 判据本体：纯度量，不读图、不启引擎（同 `shadow_kernel_metric` 的拆法）。实机对拍只能
+/// 证明「与上次一样」，这里钉的是「算的就是它声称的那个式子」。本条钉四类：已知分布的分位数
+/// 精确值 / 全非负 ⟹ 变暗恰 0 / 注入 N 个变暗 ⟹ 计数恰 N / ε 门槛的台阶闭式。
+/// 域交叉（gbuf）与前提守卫在同名 `…DomainGuard`（合起来认知复杂度 16 > 15）。
+void testDiffStructMetric(Checker& c)
+{
+    const cv::Size sz(10, 10);
+    const auto flat = [&](double v) { return cv::Mat(sz, CV_64FC1, cv::Scalar(v)); };
+
+    // ① 已知分布的闭式分位数：Δ_i = +0.01·(i+1)，i = 0..99 ⟹ 差分集合 |Δ| = {0.01 … 1.00}，
+    //    nearest-rank `sorted[floor(q·99)]` 给 p10/p50/p90 = **0.10 / 0.50 / 0.90**、
+    //    p90/p10 = **9.0**。变异红线：floor→round（p10 变 0.11）、q·(n−1)→q·n（三条全漂）、
+    //    比值取反（9.0 → 0.111）都立刻红。
+    {
+        cv::Mat a(sz, CV_64FC1);
+        for (int i = 0; i < 100; ++i)
+            a.at<double>(i / sz.width, i % sz.width) = 0.01 * (i + 1);
+        const DiffStructStat st = diffStructStat(a, flat(0.0), {}, 0.40, 1e-6);
+        c.chk("diffstruct：全变亮 100 px、变暗恰 0（正负号分配）",
+            st.diff == 100 && st.brighter == 100 && st.darker == 0, std::to_string(st.diff));
+        c.chk("diffstruct：p10/p50/p90 = 0.10/0.50/0.90（nearest-rank 闭式精确值）",
+            std::abs(st.p10 - 0.10) < 1e-12 && std::abs(st.p50 - 0.50) < 1e-12
+                && std::abs(st.p90 - 0.90) < 1e-12,
+            std::to_string(st.p10) + "/" + std::to_string(st.p50) + "/" + std::to_string(st.p90));
+        c.chk("diffstruct：p90/p10 = 9.0（结构对比度 = 本判据的主读数）",
+            st.ratioFinite && std::abs(st.ratio - 9.0) < 1e-9, std::to_string(st.ratio));
+        c.chk("diffstruct：无变暗像素时 minDarkDelta = 0（不是 -inf、不是未初始化）",
+            st.minDarkDelta == 0.0);
+    }
+    // ② 阴性对照：同图自比 ⟹ 差分集合**为空**。空集合的比值必须是 NaN 而不是 0——写 0 会被
+    //    下游读成「p90/p10 = 0 = 结构完全平」= 把「量具取不出数」读成满分。
+    {
+        const DiffStructStat st = diffStructStat(flat(0.3), flat(0.3), {}, 0.40, 1e-6);
+        c.chk("diffstruct：同图自比 → 差分集合为空（三个计数恰 0）",
+            st.diff == 0 && st.darker == 0 && st.brighter == 0);
+        c.chk("diffstruct：空集合的比值 = NaN 且 ratioFinite=false（不是 0）",
+            !std::isfinite(st.ratio) && !st.ratioFinite);
+        c.chk("diffstruct：rough 缺席时 hasRough=false（域交叉不做，不假装 0）",
+            !st.hasRough && st.darkOutsideGate == 0 && st.gatePixels == 0);
+    }
+    // ③ 注入 N 个变暗像素 ⟹ 计数恰 N。这是 `diffstruct-dark-anchor` 的算子级保证：判据线是
+    //    「> 0」，而它数的是**方向**，所以正负号分配错（把变亮数成变暗）在本条就红。
+    {
+        cv::Mat a = flat(0.5), b = flat(0.5);
+        for (int i = 0; i < 7; ++i)
+            b.at<double>(0, i) = 0.5 + 0.01 * (i + 1);  // Δ = −0.01 … −0.07（变暗）
+        for (int i = 7; i < 17; ++i)
+            a.at<double>(i / sz.width, i % sz.width) = 0.52;  // Δ = +0.02（变亮）
+        const DiffStructStat st = diffStructStat(a, b, {}, 0.40, 1e-6);
+        c.chk("diffstruct：注入 7 个变暗 → darker 恰 7、brighter 恰 10、diff 恰 17",
+            st.darker == 7 && st.brighter == 10 && st.diff == 17,
+            std::to_string(st.darker) + "/" + std::to_string(st.brighter));
+        c.chk("diffstruct：变暗 Δ 最小值 = 最负者 −0.07（不是首个、不是绝对值）",
+            std::abs(st.minDarkDelta + 0.07) < 1e-12, std::to_string(st.minDarkDelta));
+    }
+    // ⑦ 门槛 ε = 1e-6 与「PNG 字节有任何不同」**逐位等量**的闭式依据：最小可量化亮度台阶
+    //    = 0.0722·srgbDecode(1/255) ≈ 2.2e-5（权重最小的通道动 1 LSB），它远大于 ε；ε 之下的
+    //    差（本口径 = 字节相同）不计入差分。两个方向都钉，否则门槛是摆设。
+    {
+        const double step = 0.0722 * srgbDecode(1.0 / 255.0);
+        c.chk("diffstruct：1 LSB 的最小亮度台阶 ≈ 2.2e-5 ≫ ε=1e-6（两口径等量的依据）",
+            step > 2.1e-5 && step < 2.3e-5, std::to_string(step));
+        cv::Mat a = flat(0.5), b = flat(0.5);
+        a.at<double>(0, 0) = 0.5 + step;
+        c.chk("diffstruct：台阶大小的差计入差分集合（ε 没把真差吃掉）",
+            diffStructStat(a, b, {}, 0.40, 1e-6).diff == 1);
+        a.at<double>(0, 0) = 0.5 + 1e-7;
+        c.chk("diffstruct：ε 之下的差不计，而 ε=0 时它必须计（反向：门槛不是摆设）",
+            diffStructStat(a, b, {}, 0.40, 1e-6).diff == 0
+                && diffStructStat(a, b, {}, 0.40, 0.0).diff == 1);
+    }
+}
+
+/// `diffstruct` 口径层·**域交叉与前提守卫**（上一条的认知复杂度已到护栏上限 15，而缝也正当：
+/// 上面测的是「两幅亮度图 → 读数」，这里测的是「第三幅 roughness 图进来之后」与「喂错了怎样」）。
+void testDiffStructDomainGuard(Checker& c)
+{
+    const cv::Size sz(10, 10);
+    const auto flat = [&](double v) { return cv::Mat(sz, CV_64FC1, cv::Scalar(v)); };
+
+    // ④ gbuf 域交叉（`diffstruct-dark-domain` 的 FAIL 形态）：变暗 ∧ rough ≥ gate 必须数得出来。
+    {
+        cv::Mat a = flat(0.5), b = flat(0.5);
+        const double darkRough[7] = { 0.05, 0.06, 0.07, 0.08, 0.09, 0.10, 0.50 };
+        cv::Mat rough = flat(0.2);
+        for (int i = 0; i < 7; ++i) {
+            b.at<double>(0, i) = 0.5 + 0.01 * (i + 1);
+            rough.at<double>(0, i) = darkRough[i];  // 六档在门内，第七档 0.50 在门外
+        }
+        rough.at<double>(sz.height - 1, sz.width - 1) = 0.0;  // 天空：g=0 排除在分母之外
+        const DiffStructStat st = diffStructStat(a, b, rough, 0.40, 1e-6);
+        c.chk("diffstruct：变暗 ∧ rough≥gate → darkOutsideGate 恰 1（域外变暗 = FAIL 形态）",
+            st.hasRough && st.darkOutsideGate == 1 && st.darker == 7,
+            std::to_string(st.darkOutsideGate));
+        // 过门控 = **全图** `0<rough<gate`：100 − 1（门外 0.50）− 1（天空 0.0）= 98，而差分集合
+        // 只有 7。首版把这句写进了差分循环（只数变暗像素 ⟹ 分母被读成 7），本条钉住那个 bug。
+        c.chk("diffstruct：过门控像素按全图口径数（98 ≫ 差分集 7，g=0 天空除外）",
+            st.gatePixels == 98, std::to_string(st.gatePixels));
+        c.chk("diffstruct：变暗像素 roughness 分布 min/p50/max = 0.05/0.08/0.50（闭式）",
+            st.roughDistValid && std::abs(st.roughMin - 0.05) < 1e-12
+                && std::abs(st.roughP50 - 0.08) < 1e-12 && std::abs(st.roughMax - 0.50) < 1e-12,
+            std::to_string(st.roughP50));
+    }
+    // ⑤ p10 = 0 → +inf。⚠ 这是**防御分支**：差分集合按 |Δ|>ε 构造，p10 数学上取不到 0，
+    //    所以只能从公开 helper 钉（走 diffStructStat 永远走不到）。它防的是 ε 被显式给 0
+    //    之类的调用形态——比值无定义 ≠ 比值是 0。
+    c.chk("diffstruct：p10 = 0 → 比值 +inf（不崩、不写成 0；防御分支）",
+        std::isinf(diffStructRatio(0.9, 0.0)) && diffStructRatio(0.9, 0.0) > 0.0);
+    c.chk("diffstruct：p10 > 0 → 比值 = p90/p10（0.9/0.3 = 3.0）",
+        std::abs(diffStructRatio(0.9, 0.3) - 3.0) < 1e-12);
+    // ⑥ 前提守卫：错位/错型的两幅图不是同一次采集，出数就是假绿（同 bandTableOf 的纪律）。
+    c.chk("diffstruct：A/B 尺寸不同立刻抛（像素对不上不出数）",
+        softnessThrew([&] {
+            (void)diffStructStat(flat(0.3), cv::Mat(4, 4, CV_64FC1, cv::Scalar(0.3)), {}, 0.4,
+                1e-6);
+        }));
+    c.chk("diffstruct：空图（读图失败传空 Mat）立刻抛",
+        softnessThrew([&] { (void)diffStructStat(cv::Mat(), flat(0.3), {}, 0.4, 1e-6); }));
+    c.chk("diffstruct：非 CV_64FC1（字节域混进线性域）立刻抛",
+        softnessThrew([&] {
+            (void)diffStructStat(cv::Mat(sz, CV_8UC1, cv::Scalar(3)), flat(0.3), {}, 0.4, 1e-6);
+        }));
+    c.chk("diffstruct：gbuf 与亮度图尺寸不同立刻抛（采错帧/采错档）",
+        softnessThrew([&] {
+            (void)diffStructStat(flat(0.3), flat(0.2), cv::Mat(4, 4, CV_64FC1, cv::Scalar(0.2)),
+                0.4, 1e-6);
+        }));
+}
+
 /// 断言"这一句必须抛 UsageError"。校验类代码不抛就是摆设——阳性锚点。
 /// 抛**别的**类型也算失败：main 靠 UsageError 这个类型把 rc 分成 2（你敲错了）
 /// 与 3（跑挂了），混型就等于把用法错误伪装成运行故障。
@@ -2008,6 +2141,17 @@ void testCliArgsBehavior(Checker& c)
     const Args resid(noargs, *findSubcommand("temporal-residual"));
     c.chk("--long-feedback 默认 0.01（长窗档 = 仓库拍板值；批 13.14b 前这一档藏在 static boost 地板里）",
         resid.number("--long-feedback") == 0.01, resid.get("--long-feedback"));
+
+    // diffstruct（批 15.2 子步 D1）的两枚阈值都是**判据的组成部分**，默认值写错 = 判据换口径。
+    const Args dstruct(noargs, *findSubcommand("diffstruct"));
+    c.chk("diffstruct --gate 默认 0.40（交付资产双峰 0.05/0.35 与 ≥0.74 之间的空档）",
+        dstruct.number("--gate") == 0.40, dstruct.get("--gate"));
+    c.chk("diffstruct --min-delta 默认 1e-6（与「PNG 字节有任何不同」逐位等量）",
+        dstruct.number("--min-delta") == 1e-6, dstruct.get("--min-delta"));
+    c.chk("diffstruct --expect-dark 是 Bool 且出厂关（不给 = 变暗只作报告值，参数臂对不许被硬判）",
+        !dstruct.has("--expect-dark"));
+    c.chk("diffstruct --a/--b 无出厂值（空串由算子拒掉，不拿空路径去读图）",
+        dstruct.get("--a").empty() && dstruct.get("--b").empty());
 
     // ── 显式值覆盖默认值；没给的保持默认 ──
     const Args given({"--burst", "8"}, *tail);
@@ -2335,6 +2479,8 @@ int cmdSelftest()
     testShadowKernelScale(c);
     testShadowKernelScaleSampling(c);
     testShadowKernelScaleInstrument(c);
+    testDiffStructMetric(c);
+    testDiffStructDomainGuard(c);
     testCliRegistryShape(c);
     testCliArgsBehavior(c);
     std::printf("%s：%d 条失败\n", c.bad ? "自检失败" : "自检通过", c.bad);

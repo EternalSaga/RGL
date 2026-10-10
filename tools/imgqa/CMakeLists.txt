@@ -14,6 +14,8 @@ add_executable(imgqa
     # 拆两个文件是护栏逼的（tools/ 侧样式规则：单文件 < 500 代码行），缝在"表 vs 机制"上。
     cli.cpp
     cli_table.cpp
+    # `diffstruct` 的 spec 段（护栏逼的另立 TU：主表 481 代码行、上限 500），缝按仪器切。
+    cli_table_diffstruct.cpp
     analytic.cpp
     ao_metrics.cpp
     ao_noise.cpp
@@ -29,6 +31,7 @@ add_executable(imgqa
     judgments_table.cpp
     judgments_table_motion.cpp
     judgments_table_shadow.cpp
+    judgments_table_ssr.cpp
     judgments_table_tail.cpp
     selftest.cpp
     temporal.cpp
@@ -47,7 +50,12 @@ add_executable(imgqa
     # （selftest 用闭式直接测，不启引擎），`shadow_kernel_scale.cpp` 是三臂采集 + 读数表 +
     # 三条判决线。常数唯一出处 = `shadow_kernel_metric.h`（两处各抄一份 = 第二份真相）。
     shadow_kernel_metric.cpp
-    shadow_kernel_scale.cpp)
+    shadow_kernel_scale.cpp
+    # `diffstruct`（批 15.2 子步 D1：把一次性脚本 ssr_subtract_check.py 升成常驻算子）。
+    # 拆两 TU 的缝 = **口径 vs 仪器**（同 shadow_kernel_*）：`diff_struct_metric.cpp` 是纯度量
+    # （selftest 用合成数组闭式直接测，不读图、不启引擎），`diff_struct.cpp` 是读图 + 报数 + 判决。
+    diff_struct_metric.cpp
+    diff_struct.cpp)
 
 target_compile_features(imgqa PRIVATE cxx_std_23)
 target_include_directories(imgqa PRIVATE ${OpenCV_INCLUDE_DIRS})

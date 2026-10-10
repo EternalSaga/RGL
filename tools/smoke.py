@@ -43,6 +43,18 @@ errors 计数抓 `[error]` 级日志行：引擎自身 error 与 VVL 的 VUID �
     python tools/smoke.py shot  --name wetoff --set strength=0
                                # 通用配置注入（可重复，作用于 staging 的 runtime.lua；
                                # 键命中 ≠ 1 即 FAIL——湿面关消融档 / 参数扫描表复现）
+    python tools/smoke.py shot  --name refcam --set camera:mode='"trackball"' \
+                               --set "camera:position={ -0.07, 0.06, -0.02 }"
+                               # 注入别的配置文件：`--set [FILE:]KEY=VALUE`，FILE ∈
+                               # runtime|camera|scene|render_graph|diagnostics（缺省 runtime，
+                               # 旧形态逐字不变）。护栏同 patch_lua：键命中 ≠ 1 即 FAIL
+    python tools/smoke.py shot  --name gbuf3 --set diagnostics:dump_gbuf=3
+                               # dump_gbuf 档下引擎**忽略 llm_shot.file**，出图名写死
+                               # screenshots/gbuffer_3.png ⟹ 本工具按那个名字核对（见下）
+                               # ⚠ 走 `just shot` 时值里的引号要**再逃一层**（just 把参数原样
+                               # 拼进 shell 行、sh 再剥一次）：`just shot --name refcam --set
+                               # 'camera:mode=\"trackball\"'`；带空格的值同理（`--set
+                               # 'camera:position="{ 1, 2, 3 }"'`）。上面的 python 直调无此问题。
 
 退出码: 0 = PASS · 1 = FAIL（前置不满足 / 引擎非零退出 / 有 error 级日志 / 没出图）。
 """
@@ -68,6 +80,11 @@ EXE_NAME = "rgl.exe" if os.name == "nt" else "rgl"
 # configDir() 里必须齐的配置（少一个引擎就启动失败，见 main_impl.cppm loadAllConfigs）
 CONFIG_FILES = ("camera.lua", "scene.lua", "runtime.lua", "diagnostics.lua", "render_graph.lua", "shadow.lua")
 VALID_VARIANTS = ("forward", "deferred", "offscreen")
+# `--set [FILE:]KEY=VALUE` 的目标文件白名单（批 15.2 子步 D1）。为什么要有这张表而不是
+# "前缀是什么就打开同名文件"：拼错的目标（`--set camrea:mode=...`）会去 staging 里新建一个
+# 没人加载的 camrea.lua ⟹ **静默不生效**，而 patch_lua 的"键命中 ≠ 1 即 FAIL"护栏在错误
+# 的文件上照样能命中 0 次以外的形态（比如恰好同名）。白名单 + 配置文件清单同源才拦得住。
+SET_TARGETS = ("runtime", "camera", "scene", "render_graph", "diagnostics")
 
 
 def fail(msg: str) -> None:
@@ -217,6 +234,51 @@ def patch_lua(path: Path, key: str, value: str) -> None:
     path.write_text(text[:m.start()] + new_line + text[m.end():], encoding="utf-8")
 
 
+def split_set(item: str) -> tuple[str, str, str]:
+    """把 `--set` 的一项拆成 (目标文件 stem, 键, 值)。
+
+    形态 `[FILE:]KEY=VALUE`，FILE 缺省 = runtime（批 15.2B 的旧形态 `--set KEY=VALUE` 逐字
+    不变）。FILE 只准是 `SET_TARGETS` 里的五个之一——不在白名单里的前缀（`camrea:` 拼错）
+    会去新建一个引擎根本不加载的文件，护栏再严也是在错误的文件上严。
+
+    值里带冒号是合法的（`--set runtime:url="http://x"`），所以判"这是不是前缀"的条件是
+    **冒号左侧不含 `=`**：含 `=` 说明冒号在值里，整项按无前缀处理。
+    """
+    head, sep, rest = item.partition(":")
+    target = "runtime"
+    if sep:
+        if head in SET_TARGETS:
+            target, item = head, rest
+        elif "=" not in head:
+            fail(f"--set 的目标文件 {head!r} 不在白名单 {SET_TARGETS}"
+                 f"（不带前缀 = 打 runtime.lua；键名以 configs/<文件>.lua 本体为准）")
+    key, eq, value = item.partition("=")
+    if not eq or not key.strip():
+        fail(f"--set 要 [FILE:]KEY=VALUE 形态，收到 {item!r}（VALUE 允许带空格/引号，KEY 不允许）")
+    return target, key.strip(), value
+
+
+def gbuf_channel(overrides: list[str] | None) -> int | None:
+    """从 `--set` 里取 dump_gbuf 通道号（N>0 才算开），没注入/值为负 → None。
+
+    为什么工具必须认识这个键：引擎在该档下**忽略 `llm_shot.file`**，出图名写死
+    `screenshots/gbuffer_{N}.png`（`rgl/llm_debug_impl.cppm` 的 writeCapturePng）。于是
+    "请求的名字"与"磁盘上的名字"是两个，而本工具判 PASS 的根据恰恰是"请求的那个文件在不在"
+    ——不核对名字，注入 dump_gbuf 的每一次跑都会误报"没拿到截图"（或更坏：命中上一次留下的
+    同名旧图）。
+    """
+    for item in overrides or []:
+        target, key, value = split_set(item)
+        if target != "diagnostics" or key != "dump_gbuf":
+            continue
+        try:
+            n = int(value.strip())
+        except ValueError:
+            fail(f"--set diagnostics:dump_gbuf 要整数（-1 = 关，0..4 = 通道号），收到 {value!r}")
+        return n if n > 0 else None
+    return None
+
+
 def png_size(path: Path) -> tuple[int, int] | None:
     """读 PNG 头拿真实宽高（stdlib，不引图像库）。判据用途见调用处注释。"""
     with open(path, "rb") as f:
@@ -289,16 +351,16 @@ def stage_configs(from_build: bool, variant: str | None, shot_file: str, frames:
     # 这类静默状态的来源。键的唯一性由 `patch_lua` 自己守（命中 ≠ 1 即报错）。
     if clip is not None:
         patch_lua(STAGING / "scene.lua", "clip_mode", str(clip))
-    # ── 通用配置注入（--set KEY=VALUE，可重复；批 15.2B，§3.2 未还账④「配置注入通路」）──
+    # ── 通用配置注入（`--set [FILE:]KEY=VALUE`，可重复；批 15.2B 起键，批 15.2 D1 加文件前缀）──
     # 具名旗标只覆盖高频臂；低频/一次性扫描（湿面六旋钮、将来的 ssr 18 臂扫描表复现）
     # 不该每加一枚键就长一条旗标。键唯一性护栏 = patch_lua 本体（命中 ≠ 1 即 FAIL，
     # 拼错键不会被读成"改了"）。作用在**全部具名旗标之后** = 显式 --set 覆盖具名档
-    # （后写者赢，可预测）；只准打 runtime.lua——要改别的文件说明该长具名旗标了。
+    # （后写者赢，可预测）。前缀缺省 runtime；带前缀是为了参考机位（camera.lua 三键联动）
+    # 与 dump_gbuf（diagnostics.lua）这类**必须跨文件**的一次性臂——以前只能手改 configs 副本，
+    # 而"改了副本不会自动复原"正是本工具立项目标里点名要消灭的双源。
     for item in overrides or []:
-        key, sep, value = item.partition("=")
-        if not sep or not key.strip():
-            fail(f"--set 要 KEY=VALUE 形态，收到 {item!r}（VALUE 允许带空格/引号，KEY 不允许）")
-        patch_lua(runtime, key.strip(), value)
+        target, key, value = split_set(item)
+        patch_lua(STAGING / f"{target}.lua", key, value)
 
 
 def run_engine(exe: Path, timeout: int, syncval: bool = False) -> tuple[int, str, float]:
@@ -425,12 +487,16 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--from-build", action="store_true",
                     help="以 build/rgl/configs 副本为基准（跑调试现场；默认用仓库 configs/）")
     ap.add_argument("--set", dest="overrides", action="append", default=None,
-                    metavar="KEY=VALUE",
-                    help="通用配置注入（可重复）：对 staging 的 runtime.lua 走 patch_lua "
+                    metavar="[FILE:]KEY=VALUE",
+                    help="通用配置注入（可重复）：对 staging 的配置文件走 patch_lua "
                          "（键命中 ≠ 1 即 FAIL，护栏与具名旗标同源）。例：`just shot --name "
                          "wetoff --set strength=0` = 湿面关消融档。作用在具名旗标**之后** = "
-                         "显式注入覆盖具名档；只准打 runtime.lua（键名以 configs/runtime.lua "
-                         "本体为准）")
+                         "显式注入覆盖具名档。带 `FILE:` 前缀换目标文件，FILE ∈ "
+                         "runtime|camera|scene|render_graph|diagnostics（缺省 runtime；键名以 "
+                         "configs/<文件>.lua 本体为准）。例：`--set camera:mode='\"trackball\"'` "
+                         "换机位模式、`--set diagnostics:dump_gbuf=3` 出 G-buffer 直读图"
+                         "（后者引擎会忽略 --name，出图名固定 screenshots/gbuffer_3.png，"
+                         "本工具按该名字核对）")
     ap.add_argument("--config-base", type=Path, default=None,
                     help="以任意配置目录为基准（如 qa/configs/ssr_rig、qa/configs/analytic）。"
                          "与 --from-build 互斥。走的是同一套 staging + 生效核对，"
@@ -478,6 +544,10 @@ def main() -> int:
 
     shot_file = (f"{STAGING.name}/probe.png" if args.mode == "smoke"
                  else f"screenshots/{args.name}.png")
+    # dump_gbuf 注入档：引擎忽略 llm_shot.file、出图名写死 screenshots/gbuffer_N.png
+    # ⟹ "请求的名字"与"该出现在磁盘上的名字"从这里分叉（判 PASS 与末尾的丢弃都按后者）。
+    gbuf = gbuf_channel(args.overrides)
+    expect_file = f"screenshots/gbuffer_{gbuf}.png" if gbuf is not None else shot_file
     stage_configs(args.from_build, args.variant, shot_file, args.frames, size,
                   args.render_scale, args.velocity_field, args.aa,
                   args.clip, args.fsr_temporal, args.fsr_jitter,
@@ -495,6 +565,8 @@ def main() -> int:
           + (f"  fsr(temporal={'on' if args.fsr_temporal else 'off'}"
              f",jitter={'on' if args.fsr_jitter else 'off'})" if args.aa == "fsr" else "")
           + (f"  set[{', '.join(args.overrides)}]" if args.overrides else ""))
+    if gbuf is not None:
+        print(f"出图   : dump_gbuf={gbuf} 注入 ⟹ 引擎忽略 llm_shot.file，按 {expect_file} 核对")
 
     code, log, secs = run_engine(exe, args.timeout, args.sync)
     LOG_PATH.write_text(log, encoding="utf-8")
@@ -512,13 +584,24 @@ def main() -> int:
               + (f"（{hazards[0].split('hazard detected')[0].split('] ')[-1].strip()} …）"
                  if hazards else ""))
 
-    shot_path = BUILD_RGL / shot_file
+    shot_path = BUILD_RGL / expect_file
     if code != 0:
         print(f"[smoke] 引擎退出码 {code}，日志尾部：\n{tail(log)}")
         fail("引擎非零退出")
     if "截图已保存" not in log or not shot_path.is_file():
         print(f"[smoke] 日志尾部：\n{tail(log)}")
-        fail(f"没拿到截图 {shot_file}——llm_debug 链路没通，见 {LOG_PATH.relative_to(ROOT)}")
+        fail(f"没拿到截图 {expect_file}——llm_debug 链路没通，见 {LOG_PATH.relative_to(ROOT)}")
+    # dump_gbuf 档的**出图名核对**：光"磁盘上有张 gbuffer_N.png"不够——它可能是上一次别的
+    # 通道/别的尺寸留下的。核对引擎自己报的路径（ecs_frame_diag 的「截图已保存 (<路径>)」行）
+    # 与按通道号推出的名字一致，才算这次注入真的落到了这张图上。
+    if gbuf is not None:
+        saved = re.search(r"截图已保存 \(([^)]*)\)", log)
+        want = f"gbuffer_{gbuf}.png"
+        if not saved or not saved.group(1).endswith(want):
+            fail(f"dump_gbuf={gbuf} 档下引擎报的出图路径不是 {want}"
+                 f"（日志：{saved.group(1) if saved else '没有「截图已保存」行'}）"
+                 " ⟹ 出图名口径变了，本工具的核对与 diffstruct 的 --gbuf 都会认错图")
+        print(f"出图名 : {saved.group(1)} ✓（与 dump_gbuf={gbuf} 一致）")
 
     for ln in errors[:5]:
         print(f"[smoke] ERROR 行: {ln.strip()}")
@@ -526,7 +609,11 @@ def main() -> int:
         print(f"[smoke] ...（其余 {len(errors) - 5} 条见日志）")
     grid = re.search(r"Swapchain extent: (\d+)x(\d+)", log)
     dims = png_size(shot_path)
-    if grid and dims and dims != (int(grid.group(1)), int(grid.group(2))):
+    # 后缓冲核对（普通档）：回读链路与交换链对不上 ⟹ 这张图不能当判据。
+    # dump_gbuf 档**跳过这一条**：它直读的是渲染网格上的 G-buffer RT，与后缓冲网格本来就
+    # 可以不同（render_scale < 1 时必然不同），拿后缓冲判它 = 在合法档上误杀。改与渲染网格比，
+    # 见下面 render_grid 处的核对。
+    if gbuf is None and grid and dims and dims != (int(grid.group(1)), int(grid.group(2))):
         fail(f"截图尺寸 {dims[0]}x{dims[1]} ≠ 后缓冲 {grid.group(1)}x{grid.group(2)}"
              f"——回读链路与交换链对不上，这张图不能当判据")
 
@@ -543,6 +630,17 @@ def main() -> int:
             fail(f"请求 --render-scale {args.render_scale} 引擎实际生效 {got}"
                  f"（合法区间 [0.25, 1.0]，越界会被钳制；非有限值回落 1.0）")
     render_grid = (int(eff.group(2)), int(eff.group(3)))
+    # dump_gbuf 档的尺寸判据换基准（上面跳过后缓冲核对的对应另一半）：G-buffer RT 与深度
+    # **同网格**（渲染网格），diffstruct 的 --gbuf 又要求它与 A/B 两图同尺寸，所以这里必须
+    # 真的等于渲染网格——不等就是采集错档（比如 render_scale 不是 1 的那一档）。
+    if gbuf is not None and dims and dims != render_grid:
+        fail(f"gbuf 出图 {dims[0]}x{dims[1]} ≠ 渲染网格 {render_grid[0]}x{render_grid[1]}"
+             "——dump_gbuf 直读的是渲染分辨率上的 G-buffer RT；要与差分对同尺寸请配 render_scale=1")
+    # --size 在 dump_gbuf 档**不是不核**，而是换个对象核：那张图量不到"后缓冲是不是这个尺寸"
+    # （它不经过后缓冲），但渲染网格必须等于请求尺寸，否则 --size 被静默忽略也会一路绿。
+    if gbuf is not None and size and render_grid != size:
+        fail(f"请求 --size {size[0]}x{size[1]}，dump_gbuf 档的渲染网格却是 "
+             f"{render_grid[0]}x{render_grid[1]}——--size 没生效（llm_shot.size 被别处盖掉？）")
     # velocity_field 生效核对（批 14.4）。同 render_scale 的纪律：patch 只保证"配置里写了"，
     # 不保证"引擎按它建了 RT"。**反向同样要核**：默认档不该出现 velocity RT 行——出现了就说明
     # 门关不拢（图里多了一个 pass，而逐位不变红线单看截图未必抓得住）。
@@ -657,16 +755,20 @@ def main() -> int:
             fail(f"velocity RT {vel.group(1)}x{vel.group(2)} ≠ 渲染网格 "
                  f"{render_grid[0]}x{render_grid[1]}——速度场必须与深度同网格")
         print(f"速度场: {vel.group(0)} = 渲染网格 ✓")
-    if size and dims and dims != size:
+    if size and dims and gbuf is None and dims != size:
         fail(f"请求 --size {size[0]}x{size[1]} 实得 {dims[0]}x{dims[1]}"
              f"（headless 下 llm_shot.size 应当直接生效；启动行：{grid.group(0) if grid else '无 Swapchain extent 日志'}）")
     print(f"网格   : 后缓冲 {dims[0]}x{dims[1]}  渲染 {render_grid[0]}x{render_grid[1]}"
           f"  render_scale={eff.group(1)}"
           if dims else "网格   : 未取到（PNG 头异常？）")
     kb = shot_path.stat().st_size // 1024
-    if args.mode == "smoke":
+    if args.mode == "smoke" and gbuf is None:
         print(f"截图   : {kb} KB（冒烟探针，随 staging 丢弃）")
         shot_path.unlink(missing_ok=True)
+    elif args.mode == "smoke":
+        # dump_gbuf 档的产物**不在 staging 里**（引擎写死 screenshots/gbuffer_N.png），
+        # 照探针那句"随 staging 丢弃"去删，删掉的正是用户这次跑要的那张图。
+        print(f"截图   : {shot_path} ({kb} KB) — dump_gbuf 产物，不随 staging 丢弃")
     else:
         print(f"截图   : {shot_path} ({kb} KB)")
     print(f"日志   : {LOG_PATH.relative_to(ROOT)}")

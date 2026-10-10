@@ -60,6 +60,11 @@ namespace RGL::imgqa {
 /// （不涉时域比值口径），缝按**仪器**切。📄 正文在 `judgments_table_shadow.cpp`。
 [[nodiscard]] const std::vector<JudgmentInfo>& shadowKernelScaleJudgments();
 
+/// 地基族 · **湿面/SSR 结构差分**（`diffstruct`，2 条）：变暗阳性锚点（减法在不在）/ 域外变暗
+/// 恰 0（减法有没有漏出湿区）。族仍是 Foundation（两张静态图，不涉时域比值口径），缝按**仪器**切。
+/// 📄 正文在 `judgments_table_ssr.cpp`。
+[[nodiscard]] const std::vector<JudgmentInfo>& ssrDiffStructJudgments();
+
 }  // namespace RGL::imgqa
 
 #endif  // RGL_IMGQA_JUDGMENTS_TABLE_H

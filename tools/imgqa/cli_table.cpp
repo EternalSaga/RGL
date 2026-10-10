@@ -507,7 +507,7 @@ std::vector<SubcommandSpec> specsFlickerAndNoise()
     };
 }
 
-/// 按顺序串起四段（顺序即 -h 顺序）。
+/// 按顺序串起各段（顺序即 -h 顺序）。段数不在本文抄——`append` 行本身就是清单。
 std::vector<SubcommandSpec> allSpecs()
 {
     std::vector<SubcommandSpec> table;
@@ -520,6 +520,7 @@ std::vector<SubcommandSpec> allSpecs()
     append(specsResidualAndMotion());
     append(specsTailAndMotion());
     append(specsFlickerAndNoise());
+    append(diffStructSpecs());
     return table;
 }
 

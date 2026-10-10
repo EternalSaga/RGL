@@ -1001,6 +1001,28 @@ struct ShadowScanSample {
 /// 缺靶（.glb / .manifest.json）= 抛，**不 SKIP**。
 int cmdShadowKernelScale();
 
+// ═══════════════════════════════════════════ 结构差分（diffstruct，Phase 15 批 15.2 子步 D1）
+//
+// 判据本体（拍板 → docs/phase15_plan.md §2 批次表 15.2 行）= 湿面/SSR「反射结构的对比度」：
+// 纯 Δ 图（A−B，**线性亮度域**）上的 p90/p10 比值 + 湿区内 Δ<0（变暗）像素数 > 0。
+// 本算子**场景无关**：输入 = 磁盘两张 PNG，不启引擎、不读 manifest（bistro 没有 manifest）。
+// 口径与一次性参考实现的对账全部写在 `diff_struct_metric.h` 头注释，此处不重述。
+
+/**
+ * 结构差分统计。A = 实验档、B = 基线档（方向反了 ⟹ 变暗计数读成变亮，不报错但结论相反）。
+ *
+ * 两条硬判据（其余全部是报告值）：
+ *  · `diffstruct-dark-domain` —— 仅 gbufPath 非空时求值：变暗 ∧ roughness ≥ gate **非零即 FAIL**
+ *  · `diffstruct-dark-anchor` —— 仅 expectDark 时求值：Δ<0 计数 > 0（SSR 开/关档对用；
+ *    参数臂对不给该旗标 = 纯报告，因为参数扰动本来可以只变亮）
+ *
+ * @param gbufPath dump_gbuf=3 的 metalrough 出图（.g = UNORM8 roughness）；空 = 不做域交叉
+ * @param gate     干/湿 roughness 门控（g/255 口径），过门控 = `0 < rough < gate`（g=0 天空除外）
+ * @param minDelta 差分集合门槛 |Δ| > 此值（默认 1e-6 与「字节有任何不同」逐位等量，理由 → 头注释）
+ */
+int cmdDiffStruct(const std::string& aPath, const std::string& bPath,
+    const std::string& gbufPath, double gate, bool expectDark, double minDelta);
+
 }  // namespace RGL::imgqa
 
 #endif

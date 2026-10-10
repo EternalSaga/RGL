@@ -46,6 +46,11 @@ struct UsageError : std::runtime_error {
 const std::vector<SubcommandSpec>& subcommands();
 const SubcommandSpec* findSubcommand(const std::string& name);
 
+/// `diffstruct` 段的正文在 `cli_table_diffstruct.cpp`（主表撞「单文件 < 500 代码行」护栏，
+/// 缝按**仪器**切，同 `judgments_table_shadow.cpp`）。**拼接顺序只在** `cli_table.cpp` 的
+/// `allSpecs()`，本头不抄条数。
+[[nodiscard]] std::vector<SubcommandSpec> diffStructSpecs();
+
 /// 绑定到某个 spec 的解析结果。**默认值只能来自 spec**——旧的三参数
 /// `get(args, key, def)` 已删除：留着它，字面量默认值就还有地方活。
 /// 读未声明的 flag 直接抛（不抛 = 校验是摆设）。

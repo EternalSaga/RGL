@@ -817,9 +817,57 @@ shader 内注释逐条带出处）：R 同式（:220）、envSpec LOD = roughnes
 | 变异自验（减法改回 `+ weight·F·reflected`） | 变暗计数 4221 → **0**（差分 5835 px 全变亮）= 阳性锚点反向自证；还原后重构建 checks 0 警告 |
 | 🆕 **既有边界（非本步引入，实测划出）** | **SSR-on 图存在 ~400–500 px（0.05%）进程级 run-to-run 漂移**：还原后同二进制连拍 423 px 差；回退到 HEAD（15.1+wetB，无本步改动）连拍同样漂 **490 px** ⟹ 15.1 起既有、从未被刻画（此前没人连拍过 SSR-on；§3.2「逐次相同」是闭式靶上的读数）。SSR-off 红线不受影响（regress 地板 = 0）。**含义：SSR-on 图不能当逐位锚，本步全部 SSR-on 判据都是统计制的（4221 ≫ 漂移 423）**。根因未查（漂移簇在反射带内、Δ 多为亚 LSB 级 = DDA 命中边界翻转型），登记不追 |
 
-**余下（15.2 后续子步）**：imgqa 正式判据（`faces` 闭式逐面预测 / `switch --allow-piece ground`
-限定湿区影响域）；「反射结构对比度」判据（§2 批次表待拍板项）；AGENTS「湿面只加高光不压暗」
-条目的就地删除（随判据收账，本步未动 AGENTS）。
+**子步 D1：验收工具化（`imgqa diffstruct` + `smoke.py` 注入通路）✅（2026-10-10）**
+
+**零渲染改动**（本步 diff 只落在 `tools/`）。把子步 C 的一次性脚本 `/tmp/opencode/ssr_subtract_check.py`
+升成 imgqa 常驻算子，**该脚本自此作废**（口径以 `tools/imgqa/diff_struct_metric.h` 头注释为准，
+两条判据的容差理由与 guard 出处 → `imgqa check`）。
+
+- **算子三层**（缝 = 口径 / 仪器 / 注册表，同 `shadow_kernel_*` 的拆法）：`diff_struct_metric.{h,cpp}`
+  纯度量（吃内存数组 ⟹ selftest 闭式直接测）· `diff_struct.cpp` 读图 + 报数 + 判决 ·
+  `cli_table_diffstruct.cpp` + `judgments_table_ssr.cpp` 注册表。**场景无关是设计约束**：输入 =
+  磁盘两张 PNG，不启引擎、不读 manifest（bistro 没有 manifest，靶算子那套机位驱动用不上）。
+- **CLI**：`imgqa diffstruct --a A.png --b B.png [--gbuf g.png] [--gate 0.40] [--expect-dark]
+  [--min-delta 1e-6]`；A = 实验档、B = 基线档，Δ = lum(A) − lum(B) 在**线性亮度域**（sRGB 解码后
+  Rec.709，`prepareLinear` 单点）。
+- **判据语义（两条硬判据，其余全是报告值）**：`diffstruct-dark-anchor`（仅 `--expect-dark` 在场）
+  = Δ<0 计数 > 0；`diffstruct-dark-domain`（仅 `--gbuf` 在场）= 变暗 ∧ roughness ≥ gate **恰 0**。
+  报告值 = 差分像素数与占比 / Δ<0 与 Δ>0 / 变暗 Δ 最小值 / |Δ| 的 p10·p50·p90 与 **p90/p10**
+  （= 拍板的「反射结构对比度」）/ 变暗像素 roughness 分布 / 过门控像素总数。
+- **`smoke.py` 两处**：① `--set [FILE:]KEY=VALUE`，FILE ∈ runtime|camera|scene|render_graph|
+  diagnostics（缺省 runtime = 旧形态逐字不变；白名单外的前缀直接 FAIL，护栏仍是 `patch_lua` 的
+  「键命中 ≠ 1 即 FAIL」）⟹ 参考机位三键联动与 dump_gbuf 不再需要手改 configs 副本；② 注入
+  `--set diagnostics:dump_gbuf=N`（N>0）时按引擎写死的 `screenshots/gbuffer_N.png` 核对出图
+  （`llm_debug_impl.cppm` 在该档**忽略 `llm_shot.file`**），并核对日志「截图已保存 (<路径>)」与
+  通道号一致、尺寸判据从后缓冲换成**渲染网格**、smoke 模式不删这张产物。
+- **selftest 覆盖点**（合成数组，不读图不启引擎）：已知分布 p10/p50/p90 = 0.10/0.50/0.90 与比值
+  **9.0** 的精确值 / 全非负 ⟹ 变暗恰 0 / 注入 N=7 个变暗 ⟹ 计数恰 7 / gbuf 域外变暗 ⟹
+  `darkOutsideGate` 恰 1 且过门控按**全图** `0<rough<gate` 数（98 ≫ 差分集 7）/ p10=0 ⟹ 比值
+  +inf 不崩（**防御分支**：差分集合按 |Δ|>ε 构造，走算子永远走不到，只能从公开 helper 钉）/
+  错位与错型输入立刻抛 / ε=1e-6 的台阶闭式（两个方向都钉）。判据注册表硬计数 60 → **62**。
+
+| 验收项 | 实测（本机 RADV STRIX_HALO · 1280×720 · 单实例串行） |
+|---|---|
+| `just build-tools` / `just build` / `just doc-check` | imgqa 编译过 + selftest 0 失败；.cppm **0** 警告 · 工具侧 **69 = 基线持平**（新增 5 个 TU 各 0 条）· doc-check **0** |
+| `just imgqa selftest` | **自检通过：0 条失败**；用例面 30 → **31** 个 test 函数、`c.chk` 调用点 290 → **315**（+21 口径层、+4 CLI 默认值） |
+| **算子对拍**（同三图 `c_ssr_on`/`c_ssr_off`/`gbuffer_3`，与脚本喂同一份输入） | 逐项**逐位一致**：差分 **5581 = 0.61%**（脚本的字节差口径同为 5581）· 变暗 **4244**（占差分 76.04%、占画面 0.461%）· 变亮 **1337** · 变暗 Δ 最小 **−0.308347** · 域外 **0** · roughness min/p50/max **0.051/0.337/0.349** · 过门控 **13620 = 1.48%**。算子多报的一行才是拍板的主读数：p10/p50/p90 = 0.000109/0.001250/0.005853 ⟹ **p90/p10 = 53.80** |
+| 重出三图（`d1_off` / `d1_on --ssr` / `--set diagnostics:dump_gbuf=3`）再对拍 | 两实现仍逐项一致：差分 **5589 = 0.61%** · 变暗 **4274**（76.47% / 0.464%）· 变亮 **1315** · 最小 **−0.316298** · 域外 **0** · rough **0.051/0.337/0.349** · 过门控 **13620 = 1.48%** · **p90/p10 = 50.80**。与子步 C 读数的差（5581→5589、4244→4274）落在上面登记的 SSR-on run-to-run 漂移量级内 ⟹ 「SSR-on 判据是统计制的」结论不变 |
+| 反向（锚点必须能红） | `--a X --b X --expect-dark`（同图自比）⟹ 变暗 0 ⟹ **FAIL rc=1**；`--min-delta 1e9`（差分集合空）⟹ **FAIL rc=1**。⚠ **`--expect-dark` 不是方向判据**：A/B 互换仍 PASS（变暗 1315 = 正向的变亮集），因为 SSR 开/关对里两个方向都真有像素——方向性由算子的 A/B 约定 + selftest 的符号分配钉，不由这条判据钉 |
+| `--set camera:` 参考机位 | `camera:mode="trackball"` + position/target 三键联动出 `d1_refcam.png`（staging `camera.lua` 三键各命中 1 次）；与交付机位（同 SSR 开）差分 **921586 px = 100.00%** ≫ 1% ⟹ 注入通路真的落到引擎 |
+| dump_gbuf 出图名核对 | `--set diagnostics:dump_gbuf=3` → 出图名核对 PASS（日志路径 `…/screenshots/gbuffer_3.png` 与通道号一致）· 1280×720 = 渲染网格 ✓ |
+| `just test` | **274/274** 全绿（68182 断言） |
+| 红线 A | `just regress floor --runs 3 --expect 54e40665` → `54e406655f16`×3、最大差异 **0 像素**、expect **命中**。**`ab` 未跑**：并行 MDI 线正在同一工作树写文件（`tests/shaders/mdi_groups.mesh.slang` 21:39、`.opencode/skills/rgl-verify/SKILL.md` 21:42），而 `ab` 要 `git stash push -u` ⟹ 按纪律不硬 stash。本步 diff 只落 `tools/`（引擎零改动），A==B 由「同一天同 HEAD 同工作树的子步 C `ab` 记录 + 本步未碰任何被编译/被读取的引擎文件」传递成立 |
+
+**口径偏差（磁盘与 spec 文本不一致处以磁盘为准，逐条）**：① 过门控像素 = 全图 `0 < rough < gate`
+（参考脚本 `0 < g < 102`），**不是** `rough < gate`——那会把整片 g=0 的天空算进分母，1.48% 的湿区
+被稀释到看不见；② 差分集合按严格 `|Δ| > min-delta`，默认 1e-6 与脚本的 `d != 0` **逐位等量**
+（最小可量化亮度台阶 = 0.0722·srgbDecode(1/255) ≈ 2.2e-5 ≫ 1e-6，selftest 钉这条）；③ 空差分集合
+的 p90/p10 是 **NaN（无定义）**、p10=0 才是 **inf**，两者都不许当 0 用；④ p50 用 nearest-rank
+`sorted[floor(q·(n−1))]`（脚本用 `vs[n/2]`，双峰资产上同值，实测 0.337 逐位一致）。
+
+**余下（15.2 后续子步 D2）**：参数扫描表（湿面六旋钮 / ssr 臂）与 AGENTS「湿面只加高光不压暗」
+条目的就地删除（随判据收账）；imgqa 正式判据 `faces` 闭式逐面预测 / `switch --allow-piece ground`
+限定湿区影响域。
 
 ## 4. 红线与纪律
 

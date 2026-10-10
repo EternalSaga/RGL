@@ -1,7 +1,7 @@
 // imgqa CLI。子命令：selftest / check / refuse / attribution / faces / switch / izb / swim /
 // probe / temporal / temporal-residual / temporal-motion / temporal-feedback /
 // temporal-flicker / temporal-homography / aa-coverage / taa-swim / shadow-softness /
-// shadow-kernel-scale / note。（权威清单 = `cli_table.cpp` 的注册表，本行只是路标。）
+// shadow-kernel-scale / diffstruct / note。（权威清单 = `cli_table.cpp` 的注册表，本行只是路标。）
 #include "imgqa.h"
 #include "cli.h"
 #include "temporal_flicker.h"
@@ -810,11 +810,25 @@ int dispatch(const std::string& cmd, const Args& P)
         const auto pos = P.positional();
         return cmdRefuse(pos.empty() ? "" : pos[0]);
     }
-    if (cmd == "aa-coverage")
-        return cmdAaCoverage(P.get("--variant"), P.integer("--warm"), P.number("--feedback"),
-            P.has("--base-space"), P.number("--kernel"));
-    if (cmd == "taa-swim")
-        return cmdTaaSwim(P.integer("--pairs"), P.integer("--warm"), P.get("--variant"));
+    // 「读参数 → 一句转发」的算子同形 ⟹ 合成查表，理由与上面 kMeta 同一条：本函数的认知复杂度
+    // 已到护栏上限（15），逐条加 if 会出界（第 8 条子命令就付过一次账）。
+    // ⚠ 进这张表的前提 = 函数体**只有一句转发**；要判分支的（refuse / note 收位置参数）留在 if 里。
+    // lambda 无捕获 ⟹ 转函数指针，与 kMeta 同型；`Args` 的取值接口全是 const，故按 const& 传。
+    static const std::map<std::string, int (*)(const Args&)> kFlagCmd = {
+        { "aa-coverage", +[](const Args& a) {
+             return cmdAaCoverage(a.get("--variant"), a.integer("--warm"), a.number("--feedback"),
+                 a.has("--base-space"), a.number("--kernel"));
+         } },
+        { "taa-swim", +[](const Args& a) {
+             return cmdTaaSwim(a.integer("--pairs"), a.integer("--warm"), a.get("--variant"));
+         } },
+        { "diffstruct", +[](const Args& a) {
+             return cmdDiffStruct(a.get("--a"), a.get("--b"), a.get("--gbuf"), a.number("--gate"),
+                 a.has("--expect-dark"), a.number("--min-delta"));
+         } },
+    };
+    if (const auto fn = kFlagCmd.find(cmd); fn != kFlagCmd.end())
+        return fn->second(P);
     if (cmd == "note") {
         std::string text;
         for (const auto& p : P.positional())
