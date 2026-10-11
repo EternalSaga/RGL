@@ -24,7 +24,7 @@ return {
         -- 批 15.3 子步 B 追加第六枚 blur_scale（螺旋模糊半径系数，= SsrTuning 出厂 8.0）：
         -- 模糊臂（0/4/16）经 --set 注入，同一条「键在场」纪律。
         max_distance_radii = 0.52,
-        thickness_px = 6.0,
+        thickness_px = 12.0,  -- 15.3C 出厂重定（= SsrTuning 新默认；窗口跟住半分辨率 march 网格）
         bias_px = 0.6,
         rough_full = 0.15,
         rough_cutoff = 0.40,

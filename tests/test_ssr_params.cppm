@@ -207,14 +207,16 @@ TEST_CASE("fillSsrParams：空场景 radius=0 原样透传、系数不受 bounds
 	CHECK(list.sceneData.ssrGate == glm::vec4(0.33f, 0.55f, 0.77f, 0.0f));
 }
 
-TEST_CASE("SsrTuning 出厂默认值 = 批 15.1 五个 shader 常量原值（红线 A 前提，变异⑤）") {
-	// 字面量手抄自 git 里的 rgl/shaders/ssr.frag.slang 批 15.1 版本（kMaxDistanceRadii /
-	// kThicknessPx / kBiasPx / kRoughFull / kRoughCutoff）。**这里必须是字面量**：写成
-	// SsrTuning{} 的字段引用就成了"默认值等于默认值"的空断言。
-	// 任一默认值被改 ⟹ 本条红 ⟹ 出厂配置的 ssr 输出不再逐位等于批 15.1（红线 A 破）。
+TEST_CASE("SsrTuning 出厂默认值钉死（红线 A 前提，变异⑤）") {
+	// 字面量手抄：maxDistanceRadii/biasPx/roughFull/roughCutoff = git 里 rgl/shaders/ssr.frag.slang
+	// 批 15.1 版本常量原值（kMaxDistanceRadii / kBiasPx / kRoughFull / kRoughCutoff）；
+	// thicknessPx = **15.3C 重定值 12.0**（窗口跟住 15.3B 半分辨率 march 网格，理由 →
+	// runtime_config.cppm 字段注释）。**这里必须是字面量**：写成 SsrTuning{} 的字段引用就成了
+	// "默认值等于默认值"的空断言。
+	// 任一默认值被改 ⟹ 本条红 ⟹ 出厂配置的 ssr 输出不再逐位等于钉住的那一版（红线 A 破）。
 	const SsrTuning d;
 	CHECK(d.maxDistanceRadii == 0.52f);  // kMaxDistanceRadii（bistro 饱和判据定，非靶反推）
-	CHECK(d.thicknessPx == 6.0f);        // kThicknessPx
+	CHECK(d.thicknessPx == 12.0f);       // kThicknessPx（15.1 原值 6.0 → 15.3C 跟网格翻倍）
 	CHECK(d.biasPx == 0.6f);             // kBiasPx
 	CHECK(d.roughFull == 0.15f);         // kRoughFull
 	CHECK(d.roughCutoff == 0.40f);       // kRoughCutoff

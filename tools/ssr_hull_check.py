@@ -149,6 +149,10 @@ def main():
     ap.add_argument("--edge-px", type=float, default=4.0,
                     help="判据 B：距凸包边界多少像素以内豁免（默认 4 = 15.3B 半分辨率 footprint"
                          " + 出厂模糊半径的实测上界 3.37px，理由见模块 docstring）")
+    ap.add_argument("--row-bands", action="store_true",
+                    help="追加判据 A 区域的**逐行带漏分布**（40px 带，批 15.3 子步 C 结案 §3.2③ 用："
+                         "15.1 时代 2.8%% 漏集中在两端行带 480–519/680–719，要看的是**分布形状**"
+                         "不是总数）")
     a = ap.parse_args()
 
     if not os.path.exists(MANIFEST):
@@ -168,6 +172,8 @@ def main():
     band_a = band_b = brighter = darker = leak = 0
     leak_far = 0.0
     deltas = []
+    miss_by_row = [0] * h  # --row-bands：判据 A 区域内每行「未变亮」像素数（③ 结案用）
+    region_by_row = [0] * h
     for y in range(h):
         ob, nb = off_rows[y], on_rows[y]
         for x in range(w):
@@ -177,12 +183,15 @@ def main():
                 continue
             if inside(hull, cx, cy):
                 band_a += 1
+                region_by_row[y] += 1
                 d = luma(npx) - luma(opx)
                 deltas.append(d)
                 if d > 1e-6:
                     brighter += 1
                 elif d < -1e-6:
                     darker += 1
+                else:
+                    miss_by_row[y] += 1
             else:
                 band_b += 1
                 if opx != npx:
@@ -201,6 +210,29 @@ def main():
           f"Δ线性亮度 p50={q(.5):+.5f} p90={q(.9):+.5f} max={deltas[-1]:+.5f}" if n else "    （区域为空）")
     print(f"B 凸包外（去柱身）{band_b} px，边界 ±{a.edge_px:g}px 豁免后泄漏 {leak} px"
           + (f"，最远 {leak_far:.1f}px" if leak else ""))
+
+    if a.row_bands:
+        # 逐行带漏分布（40px 带 = 15.1 时代 ③ 记录的行带宽，直接可比）。两端带 = 掠射端与
+        # 近端（15.1 实测 2.8% 漏集中处）；结案判据 = 两端带漏率与中部**同量级**，不是总数。
+        print("\nA 区域逐行带漏分布（40px 带；漏 = 区域内未变亮且未变暗）：")
+        bands = [(y0, min(y0 + 40, h)) for y0 in range(0, h, 40)]
+        rows_out = []
+        for y0, y1 in bands:
+            reg = sum(region_by_row[y0:y1])
+            mis = sum(miss_by_row[y0:y1])
+            if reg:
+                rows_out.append((y0, y1, reg, mis))
+        for y0, y1, reg, mis in rows_out:
+            mark = " ← 15.1 ③ 两端带" if (y0, y1) in [(480, 520), (680, 720)] else ""
+            print(f"    rows {y0:3d}–{y1 - 1:3d}: 区域 {reg:6d}  漏 {mis:5d}  "
+                  f"漏率 {100.0 * mis / reg:5.2f}%{mark}")
+        edge = [(r, m) for y0, y1, r, m in rows_out if (y0, y1) in [(480, 520), (680, 720)]]
+        mid = [(r, m) for y0, y1, r, m in rows_out if (y0, y1) not in [(480, 520), (680, 720)]]
+        if edge and mid and all(r for r, _ in edge):
+            er = sum(m for r, m in edge) / sum(r for r, _ in edge)
+            mr = sum(m for r, m in mid) / sum(r for r, _ in mid)
+            print(f"    两端带漏率 {100.0 * er:.2f}% vs 其余带 {100.0 * mr:.2f}%"
+                  f"（比值 {er / mr if mr else float('inf'):.2f}×；≈1 = 已收敛到同量级）")
 
     ok_a = n > 0 and cov >= a.min_coverage and darker == 0
     ok_b = leak == 0

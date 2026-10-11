@@ -111,6 +111,19 @@ ARMS: dict[str, tuple[str, list[tuple[str, str, str]]]] = {
         "与 cull-gpu-sync 之差 = 帧首那次同步等待",
         [("diagnostics.lua", "cull_replay", '"gpu_lagged"')],
     ),
+    "ssr-on": (
+        "ssr.enabled=true（trace+apply 双 pass）× no-vvl：与 no-vvl 臂的 frame p50 之差 = "
+        "SSR 的**代理读数**（本机 GPU 时间戳 profiler 0 zone 期间按此口径，15.3B/C 登记；"
+        "该档 CPU-bound 时读数是下界。键 `enabled` 行首唯一 = smoke --ssr 同款 patch）",
+        [("diagnostics.lua", "no_vvl", "true"), ("runtime.lua", "enabled", "true")],
+    ),
+    "ssr-on-t6": (
+        "ssr.enabled=true × thickness_px=6（15.3C 改默认 12 之前的出厂值）× no-vvl：与 "
+        "ssr-on 臂之差 = **thickness 6→12 这一改动本身**的成本（同会话对照，跨会话 frame "
+        "漂移不可比）。预期 ≈0：M3 拒绝与命中都在同一步 break，多出来的只有细化 + 取色",
+        [("diagnostics.lua", "no_vvl", "true"), ("runtime.lua", "enabled", "true"),
+         ("runtime.lua", "thickness_px", "6.0")],
+    ),
 }
 DEFAULT_ARMS = "default,no-vvl,shadow-off,izb-off,scale-half"
 

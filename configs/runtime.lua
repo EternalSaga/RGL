@@ -100,7 +100,9 @@ return {
         -- 两条不变式（bias_px < thickness_px、rough_full < rough_cutoff）→ ssr_trace.frag.slang
         -- 头注释；越界**不钳制**——退化档是反向消融的诊断手段，clamp 掉 = 消融静默失效。
         max_distance_radii = 0.52,  -- kMaxDistanceRadii：射线长度上限 = sceneRadius × 本值（0.52 = bistro 饱和判据定，非靶反推）
-        thickness_px = 6.0,         -- kThicknessPx：命中判据的屏幕空间厚度容差，单位 = 像素
+        thickness_px = 12.0,        -- kThicknessPx：命中判据的屏幕空间厚度容差，单位 = 像素
+                                    -- （15.3C 重定 6.0→12.0：窗口须跟住 march 网格，15.3B 半分辨率
+                                    -- 后一步穿深翻倍；读数与反向消融 → runtime_config.cppm 字段注释）
         bias_px = 0.6,              -- kBiasPx：命中点外推防自粘，单位 = 像素（须 < thickness_px）
         rough_full = 0.15,          -- kRoughFull：粗糙度低于此 = 满强度反射
         rough_cutoff = 0.40,        -- kRoughCutoff：粗糙度高于此 = 不反射（中间 smoothstep 过渡）

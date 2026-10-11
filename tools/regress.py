@@ -604,6 +604,24 @@ def run_build(tag: str) -> float:
     return secs
 
 
+def _disk_snapshot() -> str:
+    """脏路径 → 磁盘内容 sha256 的排序快照（对 staged/unstaged 形态不敏感）。
+
+    口径：`git status --porcelain -uall`（未跟踪目录展开到文件）逐行取路径——rename/copy
+    行（`R `/`C `）取 `-> ` 右侧（磁盘上存在的是新路径）；磁盘不存在（删除）记哨兵。
+    两遍 stash-pop 之间「形态可漂、内容不许丢」的核对只需要这一个视图。
+    """
+    entries = []
+    for line in git("status", "--porcelain", "-uall").splitlines():
+        xy, path = line[:2], line[3:]
+        if "R" in xy or "C" in xy:
+            path = path.split(" -> ", 1)[-1]
+        p = ROOT / path
+        digest = "<deleted>" if not p.exists() else hashlib.sha256(p.read_bytes()).hexdigest()
+        entries.append(f"{path}\t{digest}")
+    return "\n".join(sorted(entries))
+
+
 @contextlib.contextmanager
 def baseline_checkout(ref: str):
     """把工作树切到 ref（构建基线二进制用），**无论成败都恢复现场**。
@@ -611,13 +629,19 @@ def baseline_checkout(ref: str):
     两条路径：
       · ref == HEAD 且工作树脏 → `git stash push -u`（不 checkout，避免动 HEAD）
       · ref != HEAD            → `git checkout --detach <ref>`（脏的话先 stash）
-    恢复后**核对** `git diff HEAD --binary` 与进场逐字节相同——不一致就点名，绝不留下
+    恢复后**核对磁盘内容**与进场逐字节相同——不一致就点名，绝不留下
     "以为恢复了"的状态（丢用户改动是这个工具唯一不可接受的失败）。
+
+    ⚠ 核对的是**内容**，不是 `git status` 形态（2026-10-11 修）：`stash pop` 不保留
+    staged/unstaged 区分（`M ` 回场变 ` M`、暂存新文件 `A ` 回场变 `??`），按 status
+    或 `git diff HEAD` 全文比对会把「内容完好、形态漂移」误报成「恢复失败」并吞掉
+    后面的判定段（15.3B/C 连撞两次；后者对「暂存新文件回场变未跟踪」同样误报——
+    `diff HEAD` 看不见未跟踪文件）。快照 = 每个脏路径的磁盘内容 sha256（删除记哨兵），
+    形态怎么漂、内容不丢就同值。
     """
     orig = git("rev-parse", "HEAD").strip()
-    before_diff = git("diff", "HEAD", "--binary")
-    before_status = git("status", "--porcelain")
-    dirty = bool(before_status.strip())
+    before_snap = _disk_snapshot()
+    dirty = bool(git("status", "--porcelain").strip())
     msg = f"regress-baseline-{time.strftime('%Y%m%dT%H%M%S')}"
     stashed = detached = False
     stash_sha = ""
@@ -648,10 +672,8 @@ def baseline_checkout(ref: str):
             elif subprocess.run(["git", "stash", "pop", f"stash@{{{idx}}}"],
                                 cwd=ROOT, capture_output=True, text=True).returncode != 0:
                 problems.append(f"git stash pop stash@{{{idx}}} 冲突 → 手工执行它")
-        if git("diff", "HEAD", "--binary") != before_diff:
-            problems.append("恢复后 `git diff HEAD` 与进场不一致")
-        if git("status", "--porcelain") != before_status:
-            problems.append("恢复后 `git status` 与进场不一致")
+        if _disk_snapshot() != before_snap:
+            problems.append("恢复后磁盘内容与进场不一致（脏路径逐个 sha256 核对）")
         if problems:
             raise RegressError("现场恢复失败，**先别继续改代码**：\n  - "
                                + "\n  - ".join(problems)
