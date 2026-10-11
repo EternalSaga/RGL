@@ -46,6 +46,10 @@ config COMPILER="default" BUILD_TYPE="Release":
         print("Error: vcpkg toolchain not found: %s (set VCPKG_ROOT or put vcpkg on PATH)" % toolchain)
         sys.exit(1)
     triplets = fwd(os.path.join(workspace, "custom-triplets"))
+    # 单一 port 的版本钉死走 overlay（不 pull 整个 vcpkg 仓库 = 不触发其它 port 升版与全量重编）：
+    # third_party/vcpkg-ports/ 里只放我们需要超前 baseline 的那几个 port（当前 = meshoptimizer 1.3，
+    # 簇化打包工具依赖；baseline 里只有 1.2，缺 clusterlod.h 需要的 simplify flag）。
+    ports = fwd(os.path.join(workspace, "third_party", "vcpkg-ports"))
 
     cmake_cmd = [
         "cmake", "-S", workspace, "-B", build,
@@ -53,6 +57,7 @@ config COMPILER="default" BUILD_TYPE="Release":
         "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
         "-DVCPKG_MANIFEST_MODE=ON",
         "-DVCPKG_OVERLAY_TRIPLETS=" + triplets,
+        "-DVCPKG_OVERLAY_PORTS=" + ports,
         "-DVCPKG_APPLOCAL_DEPS=ON",
         "-DX_VCPKG_APPLOCAL_DEPS_INSTALL=ON",
         "-DVCPKG_VERBOSE=ON",
