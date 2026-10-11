@@ -46,6 +46,8 @@ export module rlstd;
 // 重声明合法。）
 export using std::uint8_t;
 
+export using std::int8_t;  // 2026-10-12 补（★0.5-c）：meshlet_hand 逐三角手性输出 ±1 的载体
+
 export using std::uint16_t;
 export using std::uint32_t;
 export using std::uint64_t;

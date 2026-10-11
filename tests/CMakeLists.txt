@@ -72,6 +72,7 @@ set(RGL_TEST_SOURCES
     test_meshlet_asset.cppm      # ★0-b1 meshlet 产物读取侧：合成缓冲正向 + 21 条反向（错误串两两不同 = 可归因）
     test_meshlet_cull.cppm       # ★0.5-a CPU 参考簇剔除器：六面逐条归因 + 保守判据 + 半径缩放上界 + 三角合计
     test_meshlet_ranges.cppm     # ★1-a1i 逐 prim 簇区间扫描：四条产物不变量各配反向用例（错误串两两不同）+ 尾区写入逐字节
+    test_meshlet_hand.cppm       # ★0.5-c UV 手性 CPU 参考 + 簇→三角寻址：闭式五形态锚点 + 跨簇偏移混淆四变异 + 8bit 断言 + Lcg 公式对拍
     test_shadow_forward.cppm     # shadow.slang 选级 forward 提取式数学恒等（invVP 列叉积，5a-8c 回归，12.3d-C）
     test_ssr_viewproj.cppm       # 批 15.1 SSR 尾区 @722272：字节布局互逆 + 抖动口径闭式差量（fillSsrViewProj 接缝）
     test_ssr_params.cppm         # 批 15.1/15.3 SSR 尾区两 vec4 @722336/@722352：两源布局 + fillSsrParams 填值（radius 直传/四系数落槽/空场景透传）+ 出厂默认值 = 批 15.1 常量

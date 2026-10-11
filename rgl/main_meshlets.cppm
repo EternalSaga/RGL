@@ -14,6 +14,7 @@ import rllogger;
 import scene_context;  // MeshRef（asset / objectSlot）+ NextObjectSlot（实例矩阵槽计数）
 import meshlet_asset;  // MeshletAsset（只读视图：prims 身份字段）
 import meshlet_ranges;  // scanClusterRanges / MeshletRangeScan / ClusterRangeTable
+import meshlet_hand;  // traverseClusterHandedness（★0.5-c 真产物统计锚：UV 手性 CPU 参考）
 import scene_forward_types_generated;  // ObjectClusterRange（scene data 表条目，反射生成）
 
 namespace RGL {
@@ -91,6 +92,41 @@ std::optional<MeshletRangeScan> scanOneModel(const UploadedModel& um,
 }
 
 /**
+ * 真产物统计锚（★0.5-c 判据 4）：UV 手性 CPU 参考对全表跑 L0，INFO 一条。
+ *
+ * 两个数**互为探测器**：
+ * · `total == header.l0TriangleCount` —— 遍历恰好覆盖 L0、不重不漏（寻址口径 + L0 判据对）；
+ * · `negative` 对账 packer 在**源 glb** 上独立量的逐三角读数（bistro = 2,322,319 / 82.00%）——
+ *   两个同时对上 = 「寻址 + UV 忠实（池内 uv 是源字节拷贝）+ 公式与 loader 同式」三者同时成立。
+ * 任一不符打 WARNING 不出声 = 静默放过；本路径是诊断（门开才走），失败不影响现行渲染。
+ */
+void reportHandAnchor(const MeshletAsset& product) {
+	auto* logger = RLLogger::getInstance();
+	auto hand = traverseClusterHandedness(product, 0, product.header.clusterCount,
+		MeshletHandFilter::kL0Only, false);
+	if (!hand) {
+		if (logger)
+			logger->warn("meshlet: UV 手性 CPU 参考遍历失败：{} —— 不影响现行路径", hand.error());
+		return;
+	}
+	if (hand->total != product.header.l0TriangleCount) {
+		if (logger)
+			logger->warn("meshlet: UV 手性遍历未恰好覆盖 L0：total={} vs header.l0TriangleCount={} "
+			             "—— 不重不漏判据失效",
+				hand->total, product.header.l0TriangleCount);
+		return;
+	}
+	const double pct = hand->total != 0
+	                       ? 100.0 * static_cast<double>(hand->negative) /
+	                             static_cast<double>(hand->total)
+	                       : 0.0;
+	if (logger)
+		logger->info("meshlet: UV 手性 CPU 参考（L0）total={} negative={} ({:.2f}% negative) "
+		             "l0TriangleCount={}",
+			hand->total, hand->negative, pct, product.header.l0TriangleCount);
+}
+
+/**
  * 逐模型扫簇区间，收「mesh 资产 id → 区间」查表 + 三个统计锚（口径与回落策略 → scanOneModel）。
  *
  * @param scans 稳定存储（std::map 节点不搬家 ⟹ 区间指针在装配后仍然有效）
@@ -120,6 +156,7 @@ void scanModelRanges(const UploadedAssets& assets, const MeshletAssetStore& mesh
 			logger->info("meshlet: 簇区间扫描 {} ← prims={} clusters={} l0Clusters={}",
 				um.file, stored->second.perPrim.size(), stored->second.totalClusters,
 				stored->second.totalL0Clusters);
+		reportHandAnchor(product->second);  // ★0.5-c 统计锚（total/negative 判据 → 函数注释）
 	}
 }
 

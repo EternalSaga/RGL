@@ -668,6 +668,33 @@ MC 类"门失效"变异只能靠它，图像看不见）；门开 INFO 报 `prim
 （prim 数 / material 身份）住在 app 模块**不在单测面**，护栏只有"启动日志无 WARNING"；
 ③ `writeClusterRangeRegion` 不校验 `staging.size() >= kSceneDataBytes`（本区是尾区，越界写 buffer 外）。
 
+**★0.5-c 交付记录（2026-10-12，子 agent 实现 + 主 agent 亲验）**：`rgl/meshlet_hand.cppm`(+`_impl`，
+rlbase) = **★1-a1ii 那两件"错了不报错、只是图像静默错"的事的 CPU 对账伙伴**：① 沿簇寻址三角形
+（`簇 → Tris[triOffset+3k]` 8bit 局部索引 `→ Remap[remapOffset+局部] →` 全局顶点池）；
+② 逐三角重算 UV 手性（`gltf_loader_impl.cppm:365` 同式，`det < 0 → −1`，含 `det == 0`/NaN 走 +1）。
+
+1. 🔴 **本批最硬的证据 = 真产物双锚同时命中**：门开 INFO
+   `total=2832120 negative=2322319 (82.00%) l0TriangleCount=2832120`。
+   `total` **恰等于 header.l0TriangleCount** ⟹ 遍历对 L0 不重不漏；`negative` **逐位等于 packer 在
+   源 glb 上独立量的 2,322,319** ⟹ 一条链同时验通三件事：**寻址正确 + 顶点池里的 UV 忠实于源 +
+   公式照抄无误**。这三件任何一件错，第三个数都不会对上（§10.3 那条"82% 面法线翻错"的前置据此
+   从"packer 自报"升级为"引擎侧独立复现"）。
+2. **对账契约 = 序，不是计数**：GPU 版将来按 `(base, count, kL0Only)` 跑，与本模块 `perTriangle`
+   **逐元素**比 ±1（遍历序 = 簇升序 × 簇内三角升序，被滤簇不产条目）。统计锚是第二形态，**不替代**它。
+3. 🔴 **主 agent 两条对账契约面变异，第一条就抓到缺口**（子 agent 的 M1-M13 全绿时它们也全绿）：
+   - **M14 逐三角载体改前插（全局逆序）** → 红 3 条 ✅。序错时 `total`/`negative` **完全不变**，
+     若没有逐序列断言，★1-a1ii 的对账会**逐元素静默错位**还一路"对上了"。
+   - **M15 删掉 `if (wantPerTriangle)`（false 也填）** → **首跑存活**。根因：原有那条
+     `perTriangle.empty()` 长在 **count = 0** 的空区间上 = **恒真**，钉不住契约。补
+     `total > 0` 前提 + `stats->perTriangle.empty()` 后红。**教训与 ★1-a1i 的 ⑫ 同源：断言要长在
+     "这条契约能被违反"的输入形态上**——同一类错（判据存在但输入形态不给它违反的机会）今晚第二次犯。
+4. **验收证据**：`just config`/`build`/`test`（348 条）/`checks` 全绿；门关与门开截图同为 `54e40665…`；
+   门关日志 `grep -ci meshlet` = 0。
+
+**挂号**：① 门开时启动期多一次全表 L0 遍历（2.83M 三角，实测 ~30ms 量级，11.3s 启动内不可辨）——
+**★1-a2 若把它挪进逐帧路径必须先重算**；② M8/M11 类"越界读"变异会让进程先死（红名单不完整），
+本批按红线不重复校验读取侧职责，GPU 对账批若要吃这条需给遍历加显式"读窗口有界"前置。
+
 **贯穿纪律**：
 
 - **验收档固定**（P6）：`shadow.lua mode="csm"` + `aa=off` + TAA off + SSR off，走 `RGL_CONFIG_DIR`
