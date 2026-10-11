@@ -262,6 +262,8 @@ set(RGL_GFX_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/mip_gen.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/mip_gen_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/asset_table.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/meshlet_geometry.cppm"   # ★1-a0：簇产物 4 段的 GPU 侧持有者（要 VkDevice → rlgfx）
+    "${CMAKE_CURRENT_SOURCE_DIR}/meshlet_geometry_impl.cppm"
 )
 
 set(RGL_SCENE_MODULE_SOURCES

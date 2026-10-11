@@ -605,6 +605,36 @@ GPU 版必须继承：视锥 = 复用 `extractFrustum`/`sphereInFrustum`（保�
    而 `w=1` 向量在两种乘法次序下都取第 3 列 ⟹ 恒等（glm 一般矩阵下确实不同，已探针验证）。
    补两条含旋转用例后 MC 红。**先问"输入有没有这个维度"，再问"判据是不是松"。**
 
+**★1-a0 交付记录（2026-10-12，子 agent 实现 + 主 agent 亲验）**：`rgl/meshlet_geometry.cppm`(+`_impl`，
+**rlgfx**——要 VkDevice，且与 `Resources`/描述符堆一概无关，放 rlscene 会把"要设备"读成"要场景层"）。
+四段（顶点池/簇表/Tris/Remap）各一个 storage buffer，**Groups/Nodes/PrimTable 本批不上传**（选级与
+层级遍历才要，§10.5 定死的交付面不多做）。门 `meshlet.enable` 关 = 一行不执行。
+
+四条要记的：
+
+1. **上传路径照抄 `uploadChunk`（映射直写、无 staging，峰值 1× 而非 2×）**，但**补了先例的两个洞**：
+   ① usage 加 `eTransferSrc`——先例的 canary 缺它，所以它的回读**从没在 VVL 下跑过**；
+   ② 写完 `vmaFlushAllocation`——先例没刷，三台机器恰好都 coherent 所以没症状，非 coherent 驱动上
+   会**静默读到脏数据**。coherent 内存上这次调用是 VMA 内部提前返回，代价 0。
+2. 🔴 **判据形态上的一个坑（本批最有普适价值的一条）**：**映射指针回读在统一内存的机器上是恒真判据**
+   （CPU 和 GPU 看同一块内存，"回读一致"什么都没证明）。主判据必须是**设备侧往返**
+   （`vkCmdCopyBuffer` 让 GPU 读源 buffer 写目标 buffer），映射回读只作辅助锚点（它红 = 上传写错；
+   它绿而设备回读红 = harness 坏）。**任何"上传后回读"类测试都适用**。
+3. **主 agent 变异（与子 agent 的 6 条不同形态）抓到一条真缺陷**：MA「整段漏传」注入后，用例
+   `CHECK` 完**继续拿 `VK_NULL_HANDLE` 去 `vkCmdCopyBuffer`** → SIGSEGV **打断整个测试二进制**，
+   实测其余 **214 条用例静默不跑**——"全绿"面被扩大成假绿。修法 = 两条用例各加
+   `REQUIRE(section->deviceAddress != 0)`（真实分配的 BDA 恒非 0，比 `allocBytes>0` 更直接）。
+   修后 MA 红得干净（346 条全跑、2 红、无崩溃），MB「传完即被覆盖」同样红。**教训**：设备级用例里
+   任何"句柄可能为空还进 vkCmd*"的路径，前置条件一律 `REQUIRE` 不是 `CHECK`——VVL 只报错不拦。
+4. **验收证据**（本机 AMD 8060S / RADV STRIX_HALO）：`just build`/`test`/`test-all`/`checks` 全绿
+   （346 条含 gpu 套件、0 skipped）；**门关与门开截图同为基线锚 `54e40665…`**，门开有日志实证
+   （`clusters=61518 vertices=2883709 | vertexPool=138418032B clusters=2706800B tris=16673264B
+   remap=26178352B`，与 `meshlet_pack --stats` 口径对得上）。
+
+**★1-a1 挂号两条**（本批不做，别忘）：① 装配层接线**别再往 `main_scene.cppm` 里塞**（已 840 行，
+本批的 `loadMeshletForModel` 是最后一块）——走独立 helper 模块；② 4 个簇 buffer 进 shader 走
+**固定 binding 下标**（§10.2），不进 per-entry 描述符。
+
 **贯穿纪律**：
 
 - **验收档固定**（P6）：`shadow.lua mode="csm"` + `aa=off` + TAA off + SSR off，走 `RGL_CONFIG_DIR`
@@ -666,7 +696,7 @@ GPU 版必须继承：视锥 = 复用 `extractFrustum`/`sphereInFrustum`（保�
 
 | 步 | 内容 | 判据 |
 |---|---|---|
-| ★1-a0 | 4 个簇 buffer 上传 GPU（`MeshletAssetStore` 之上加 GPU 侧持有者） | 门关逐位不变；门开日志报 buffer 大小；`just test` 的 gpu 套件加一条**回读校验和**（设备级，无设备必须 FAIL 不 SKIP） |
+| ★1-a0 ✅ **已交付**（2026-10-12） | 4 个簇 buffer 上传 GPU（`meshlet_geometry`，rlgfx） | 门关逐位不变；门开日志报 buffer 大小；`just test-all` 的 gpu 套件加一条**设备侧回读校验和**（合成小产物，不依赖 184MB 文件；无设备必须 FAIL 不 SKIP） |
 | ★1-a1 | 新 mesh shader + 条目 + 逐 prim 提交，**不剔不选级（恒 L0）** | **建立"簇路径 vs 现行路径"的图像统计地板**（★0.5-b）；差异必须可归因（预期集中在轮廓/UV 缝边缘，不是整块错） |
 | ★1-a2 | 层级遍历 + 逐簇剔除 + 分段压紧 | 与 `cullClustersLinear` 逐帧对账；提交三角落到 §7.3 的 1.08-1.30% 量级 |
 | ★1-b | 阴影段走簇路径（**只 CSM 档**，P6） | 阴影段 GPU 时间对照 6.28ms 基线；**非默认 cull 档单独冒烟 + syncval**（AGENTS 红线） |

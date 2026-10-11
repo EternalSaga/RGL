@@ -678,9 +678,14 @@ int main() {
 		// 声明序在 Renderer（backEnd）之前 = 析构序其后，表内 GPU 资源不在渲染器存活期释放）
 		AssetTable assetTable;
 		// 簇产物容器（★0-b2）：与 assetTable 同层由装配层持有——**不进 UploadedAssets**
-		//（那是"已上传 GPU 的东西"，本批什么都没传；理由全文 → MeshletAssetStore 注释）。
-		// 声明序紧随 assetTable：纯 CPU 数据无 GPU 生命周期契约，★1-a 直接消费本容器。
+		//（那是"顶点/纹理已上传 GPU 的东西"，本容器只有 CPU 只读视图；理由全文 →
+		// MeshletAssetStore 注释）。声明序紧随 assetTable：纯 CPU 数据无 GPU 生命周期契约。
 		MeshletAssetStore meshletAssets;
+		// 簇产物 GPU 侧持有者（★1-a0）：键与 meshletAssets 同源（模型路径），门开才有条目。
+		// 🔴 声明序必须与 meshletAssets 同作用域且在其后（AGENTS 生命周期红线：元素是 VmaBuffer，
+		// 放进 main() 局部块 = 块尾析构 = GPU 侧引用已释放的 VA）。本批无人消费，★1-a1 起
+		// 若被 Renderer 引用，须按 assetTable 的同一条规则挪到 backEnd 之前声明。
+		MeshletGeometryStore meshletGeometry;
 		// 管线表（Phase 4 批次 2：ShaderRegistry，零 entt）：规格来自 configs/scene.lua；
 		// 条目全按需建（画不画 = entity 有无，数据驱动）——模型条目 C1 期 addModelEntry、
 		// 内建 cube 条目 cube 资产上传后 addCubeEntry、天空盒/光源条目各自前提满足时建。
@@ -721,7 +726,7 @@ int main() {
 		// （buffer/slot/纹理/材质）全部在 Resources 资产表（初始化层 owner——TexturePool
 		// 局部对象 UAF 教训，docs/archive/heap_texture_research.md §12.6/§12.7）
 		auto assets = uploadModelAssets(vkDevice, vkResources, samplers, assetTable, configs.scene,
-			configs.runtime.meshletEnable, meshletAssets);
+			configs.runtime.meshletEnable, meshletAssets, meshletGeometry);
 		if (configs.scene.environment.enabled)
 			uploadEnvironment(vkResources, env, vkDevice, configs.scene, registry);  // 时序契约见定义处注释
 

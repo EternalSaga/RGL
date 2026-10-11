@@ -67,6 +67,18 @@ export class Fixture {
     [[nodiscard]] const vk::raii::PhysicalDevice& physical() const {
         return dev_->getPhysicalDevice();
     }
+    /**
+     * 实例句柄 + 驱动报告的实例 API 版本。
+     *
+     * 为什么暴露这两个：测试要**自建 VMA 分配器**走引擎同一条分配路径
+     * （`test_meshlet_geometry` 测 `meshlet_geometry` 的上传），而 `VmaAllocatorRAII`
+     * 的构造四参 = (instance, physicalDevice, device, apiVersion)，与引擎
+     * `Resources` 构造器喂的完全同源。缺这两个访问器就得在测试里重抄一遍引导链
+     * （文件头明确反对的做法）。
+     */
+    [[nodiscard]] vk::raii::Instance& instance() const { return app_->getInstance(); }
+    /** 实例 API 版本（`vkEnumerateInstanceVersion`；VMA 的 vulkanApiVersion 用）。 */
+    [[nodiscard]] uint32_t apiVersion() const { return app_->getApiVersion(); }
     [[nodiscard]] vk::Queue queue() const { return dev_->getGraphicsQueue(); }
     [[nodiscard]] const std::string& deviceName() const { return deviceName_; }
 

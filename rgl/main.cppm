@@ -24,6 +24,7 @@ import environment;        // Environment（架构债务续账步骤 3）
 import render_target_cache;  // RenderTargetCache（架构债务续账步骤 2）
 import asset_table;        // AssetTable（装配 helper 参数，F 拆出）
 import meshlet_asset;       // MeshletAsset（★0-b2 簇产物容器元素，纯 CPU 只读视图）
+import meshlet_geometry;     // MeshletGeometryStore（★1-a0 簇产物 4 段的 GPU 侧持有者）
 import gltf_loader;         // GltfModel
 import texture_pool;        // ModelTextureIds
 import shader_registry;     // ShaderRegistry
@@ -217,15 +218,20 @@ export struct MeshletAssetStore {
  * A0 内建 cube 上传 + A1 模型解析+顶点上传 + A2 纹理上传。段契约：几何分配走几何段，
  * 纹理分配走纹理段；几何段期望槽号仍由 AssetTable::expectedGeometrySlot 校验，纹理首槽
  * = 白由纹理段首槽校验。
- * ★0-b2 簇产物加载挂在 A1 的按 file 去重循环里：门 = `meshletEnable` **AND** 该模型路径旁
- * 有 `.meshlets.bin`；门关 = 一行都不执行。加载只进 `meshlets` 容器 + 日志，不碰 GPU、
- * 不碰上传路径 ⟹ 门开图像仍逐位不变（比"门关不变"更强：证明加载路径是惰性的）。
+ * ★0-b2：A1 去重循环里挂簇产物**加载**（门 = `meshletEnable` **AND** 该模型路径旁有
+ * `.meshlets.bin`）；★1-a0：加载成功后同处挂 **4 段 GPU 上传**（`meshletGeometry`，
+ * 键与 `meshlets` 同源 = 模型路径；🔴 容器元素是 `VmaBuffer`，调用方必须让它在
+ * `MeshletAssetStore` 同一作用域存活——AGENTS 生命周期红线）。
+ * 门关 = 两者一行都不执行（逐位不变构造性成立）；门开 = 只多分配 buffer + 日志，
+ * 不碰上传路径、不建条目、不领 heap slot、不写描述符 ⟹ 图像仍逐位不变。
  * @note 任一加载/上传失败 → 抛 std::runtime_error（启动期 catch 退出）；
- *       簇产物是**可选加速资产**，其加载失败**不抛**（WARNING + 回落，见 meshlet_asset）
+ *       簇产物是**可选加速资产**，其加载失败与 GPU 上传失败**都不抛**（WARNING + 回落，
+ *       见 meshlet_asset / meshlet_geometry）
  */
 export UploadedAssets uploadModelAssets(DeviceContext& device, Resources& resources,
 								 SamplerLibrary& samplers, AssetTable& assets, const SceneConfig& scene,
-								 bool meshletEnable, MeshletAssetStore& meshlets);
+								 bool meshletEnable, MeshletAssetStore& meshlets,
+								 MeshletGeometryStore& meshletGeometry);
 
 /**
  * Phase 5.5 环境 cubemap 上传（scene.lua environment 段，faces 按 Vulkan 层序 0-5）+
