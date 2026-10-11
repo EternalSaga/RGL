@@ -56,9 +56,19 @@ GpuProfiler::GpuProfiler(DeviceContext& dev) : device(dev) {
 }
 
 GpuProfiler::~GpuProfiler() {
-	if (auto* lg = RLLogger::getInstance(); lg && pool.has_value())
-		lg->info("gpu profiler: closed ({} drops, calibration maxDeviation {} ns)",
-			drops, lastMaxDeviationNs);
+	if (!pool.has_value())
+		return;
+	if (auto* lg = RLLogger::getInstance()) {
+		lg->info("gpu profiler: closed ({} drops, {} zones, calibration maxDeviation {} ns)",
+			drops, pushedZones, lastMaxDeviationNs);
+		// 空轨必须出声（债-87）：窗口够长却一条 gpu zone 都没归并 = query 通路或换算
+		// 失效，而 stats JSON 里 kind=gpu 缺席看起来只像"没开 profiler"——静默的判据
+		// 比没有判据更坏（本条债因此拖到 per-pass 读数被反复引用后才被发现）。
+		if (pushedZones == 0 && diagnostics().profiler >= 3)
+			lg->warn("gpu profiler: 0 gpu zones in {} drops — gpu track is EMPTY "
+				"(query 未写入 / 读回非就绪 / 换算全被丢弃)，per-pass GPU 读数不可用",
+				drops);
+	}
 }
 
 void GpuProfiler::frameBegin(vk::raii::CommandBuffer& cmd, uint32_t slot) {
@@ -76,6 +86,7 @@ void GpuProfiler::frameBegin(vk::raii::CommandBuffer& cmd, uint32_t slot) {
 	s.regionCount = 0;
 	s.openDepth = 0;
 	s.frame = profilerCurrentFrame();  // 本轮区域的归属逻辑帧（读回时带回填）
+	s.hostAnchorNs = steadyNowNs();    // 纪元自检的 host 锚点（本轮 GPU 起点必落在其后 ≤1 帧）
 	activeSlot = slot;
 }
 
@@ -176,27 +187,11 @@ void GpuProfiler::readback(uint32_t slot, uint64_t recordedFrame) {
 
 void GpuProfiler::mergeRegions(uint32_t slot, uint32_t segBase, uint32_t segCount,
 	uint64_t recordedFrame) {
-	// 校准：设备 tick ↔ CLOCK_MONOTONIC 同次采样（单次调用内近似同刻，偏差受
-	// maxDeviation 约束）；steady_clock = glibc CLOCK_MONOTONIC 同域 → 双读 steady
-	// 夹取调用时刻求偏移，仿射换算 steady(T) = monoCal + (T − devCal)×period + offset。
-	const std::array<vk::CalibratedTimestampInfoKHR, 2> domains{
-		vk::CalibratedTimestampInfoKHR{vk::TimeDomainEXT::eDevice},
-		vk::CalibratedTimestampInfoKHR{vk::TimeDomainEXT::eClockMonotonic}};
-	const uint64_t steadyBefore = steadyNowNs();
-	const auto cal = device.getDevice().getCalibratedTimestampsEXT(domains);
-	const uint64_t steadyAfter = steadyNowNs();
-	lastMaxDeviationNs = cal.second;
-	const int64_t devCal = static_cast<int64_t>(cal.first[0] & validMask);
-	const int64_t monoCal = static_cast<int64_t>(cal.first[1]);
-	const int64_t steadyOffset =
-		static_cast<int64_t>((steadyBefore + steadyAfter) / 2) - monoCal;
-	const auto toSteady = [&](uint64_t tick) -> uint64_t {
-		const int64_t delta = static_cast<int64_t>(tick & validMask) - devCal;
-		const int64_t ns =
-			monoCal + static_cast<int64_t>(static_cast<double>(delta) * timestampPeriodNs) +
-			steadyOffset;
-		return ns > 0 ? static_cast<uint64_t>(ns) : 0;
-	};
+	// 校准只管**绝对定位**（债-87）：本机 RADV 的 VK_TIME_DOMAIN_DEVICE 是 boottime 域自由跑
+	// 时钟、query 池时间戳另起纪元（实测恒差 15.7h 而 maxDeviation 仍谎报 ~10µs）。旧实现
+	// 用同一条仿射同时定起点与时长，两端被同一常量压掉后再被 "ns > 0" 夹成 0 ⟹ 逐区域
+	// 非单调、整帧 GPU 区域全丢（债-87 现象）。
+	const SteadyCal cal = sampleCalibration();
 	SlotState& s = slotStates[slot];
 	for (uint32_t i = 0; i < s.regionCount; ++i) {
 		const Region& r = s.regions[i];
@@ -206,21 +201,76 @@ void GpuProfiler::mergeRegions(uint32_t slot, uint32_t segBase, uint32_t segCoun
 			++drops;  // end 容量丢弃 → 未闭合
 			continue;
 		}
-		const uint64_t startNs = toSteady(ticks[r.beginQuery - segBase]);
-		const uint64_t endNs = toSteady(ticks[r.endQuery - segBase]);
-		if (endNs <= startNs) {
+		// 时长 = 同段同池两 tick 之差（begin 恒先于 end 写入；CB 根本没执行时两端都是
+		// 复位值 0 → 差非正被丢），与跨域校准无关 ⟹ 纪元错乱的驱动上读数依旧可信
+		const uint64_t beginTick = ticks[r.beginQuery - segBase] & validMask;
+		const uint64_t endTick = ticks[r.endQuery - segBase] & validMask;
+		if (endTick <= beginTick) {
 			++drops;
 			continue;
 		}
+		const int64_t start = cal.toSteady(beginTick, timestampPeriodNs);
+		checkEpoch(start, s.hostAnchorNs);  // 整进程一次：纪元不一致则常量平移整条 GPU 轨
+		const int64_t anchored = start + epochShiftNs;
+		if (anchored <= 0) {
+			++drops;  // 平移后仍落不到 host 时间轴（锚点缺失才可达）
+			continue;
+		}
 		ZoneRecord rec;
-		rec.startNs = startNs;
-		rec.durNs = endNs - startNs;
+		rec.startNs = static_cast<uint64_t>(anchored);
+		rec.durNs = gpuTicksToNs(endTick - beginTick, timestampPeriodNs);
 		rec.frame = recordedFrame;
 		rec.depth = r.depth;
 		rec.kind = ZoneKind::gpu;
 		rec.name = r.name;
 		profilerPushRecord(rec);
+		++pushedZones;
 	}
+}
+
+GpuProfiler::SteadyCal GpuProfiler::sampleCalibration() {
+	// 设备 tick ↔ CLOCK_MONOTONIC 同次采样（单次调用内近似同刻，偏差受 maxDeviation 约束）；
+	// steady_clock = glibc CLOCK_MONOTONIC 同域 → 双读 steady 夹取调用时刻求偏移
+	const std::array<vk::CalibratedTimestampInfoKHR, 2> domains{
+		vk::CalibratedTimestampInfoKHR{vk::TimeDomainEXT::eDevice},
+		vk::CalibratedTimestampInfoKHR{vk::TimeDomainEXT::eClockMonotonic}};
+	const uint64_t steadyBefore = steadyNowNs();
+	const auto cal = device.getDevice().getCalibratedTimestampsEXT(domains);
+	const uint64_t steadyAfter = steadyNowNs();
+	lastMaxDeviationNs = cal.second;
+	return SteadyCal{
+		.devCal = static_cast<int64_t>(cal.first[0] & validMask),
+		.monoCal = static_cast<int64_t>(cal.first[1]),
+		.steadyOffset = static_cast<int64_t>((steadyBefore + steadyAfter) / 2) -
+			static_cast<int64_t>(cal.first[1]),
+	};
+}
+
+void GpuProfiler::checkEpoch(int64_t calibratedStartNs, uint64_t hostAnchorNs) {
+	if (epochChecked)
+		return;  // 纪元差是设备级常量 → 整进程判一次，之后所有区域共用同一平移
+	epochShiftNs = gpuEpochShiftNs(calibratedStartNs, hostAnchorNs);
+	epochChecked = true;
+	if (epochShiftNs == 0)
+		return;
+	if (auto* lg = RLLogger::getInstance())
+		lg->warn(
+			"gpu profiler: VK_TIME_DOMAIN_DEVICE epoch off host by {:.1f}s (maxDeviation lies "
+			"{:.1f}us), gpu track rebased — durations unaffected",
+			-static_cast<double>(epochShiftNs) / 1e9,
+			static_cast<double>(lastMaxDeviationNs) / 1e3);
+}
+
+uint64_t gpuTicksToNs(uint64_t deltaTicks, double periodNs) {
+	return static_cast<uint64_t>(static_cast<double>(deltaTicks) * periodNs);
+}
+
+int64_t gpuEpochShiftNs(int64_t calibratedStartNs, uint64_t hostAnchorNs) {
+	if (hostAnchorNs == 0)
+		return 0;  // 无锚点 = 无从判定，宁可不干预也不误平移
+	const int64_t delta = calibratedStartNs - static_cast<int64_t>(hostAnchorNs);
+	const int64_t magnitude = delta < 0 ? -delta : delta;
+	return magnitude > kGpuEpochSanityNs ? -delta : 0;
 }
 
 namespace {

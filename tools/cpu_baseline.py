@@ -112,9 +112,11 @@ ARMS: dict[str, tuple[str, list[tuple[str, str, str]]]] = {
         [("diagnostics.lua", "cull_replay", '"gpu_lagged"')],
     ),
     "ssr-on": (
-        "ssr.enabled=true（trace+apply 双 pass）× no-vvl：与 no-vvl 臂的 frame p50 之差 = "
-        "SSR 的**代理读数**（本机 GPU 时间戳 profiler 0 zone 期间按此口径，15.3B/C 登记；"
-        "该档 CPU-bound 时读数是下界。键 `enabled` 行首唯一 = smoke --ssr 同款 patch）",
+        "ssr.enabled=true（trace+apply 双 pass）× no-vvl：SSR 的**直接读数**看本臂 pass 行的 "
+        "gpu= 列（ssr_trace / ssr 两 pass 各自的 GPU 时间戳；债-87 已还，2026-10-11 起可用）。"
+        "与 no-vvl 臂的 frame p50 之差只作**代理读数**保留：GPU-bound 时它被帧预算吃掉、"
+        "CPU-bound 时是下界，都不等于 pass 自身成本（15.3B/C 当年因量具失效只能用这条）。"
+        "键 `enabled` 行首唯一 = smoke --ssr 同款 patch",
         [("diagnostics.lua", "no_vvl", "true"), ("runtime.lua", "enabled", "true")],
     ),
     "ssr-on-t6": (

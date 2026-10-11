@@ -8,7 +8,11 @@
 //（同帧 fence 同步等待）也互不抹除；各自复位先于自身时间戳记录，规避 VVL 跨 CB 记录序。
 // VK_EXT_calibrated_timestamps 同次采样设备 tick 与 CLOCK_MONOTONIC + 双读
 // steady_clock 求偏移 → 仿射换算到 steady ns → profilerPushRecord 归并（同报告
-// gpu 轨 tid=1）。开关 = diagnostics.profiler（0 = 全 no-op）∧ 校准扩展位
+// gpu 轨 tid=1）。**债-87 换轨：时长只走同段 tick 差（gpuTicksToNs），仿射只管绝对
+// 定位，且定位结果过纪元自检（gpuEpochShiftNs）**——本机 RADV 实测 VK_TIME_DOMAIN_DEVICE
+// 与 query 池时间戳是两个独立纪元的同频时钟（恒差 15.7h，跨 suspend/resume 变），
+// 旧实现拿仿射结果同时求起点与时长 → 逐区域被压成同一时刻、整帧 GPU 区域全判非单调丢弃。
+// 开关 = diagnostics.profiler（0 = 全 no-op）∧ 校准扩展位
 //（features_config optional_extensions）∧ 队列 timestampComputeAndGraphics；
 // 对象 main 栈持有（声明序在 backEnd 后 = 先于 device 析构，GPU 资源生命周期规则），
 // 经 bindGpuProfiler 挂进帧循环钩子。归并滞后槽复用节奏（2 帧）→ 诊断窗口需
@@ -20,6 +24,33 @@ import rlvk;
 import vk_device;
 
 namespace RGL {
+
+/**
+ * 纪元自检阈值（债-87）：仿射换算出的 GPU 区域起点与「该帧 frameBegin 的 host 时刻」
+ * 之间允许的偏差。取秒量级的理由：正常管线里 GPU 起点必落在同帧 frameBegin 之后
+ * ≤ 1 帧内（帧槽只有 2 个、帧首 fence 已等完上一轮），即毫秒级；而跨域纪元错乱的
+ * 形态是小时级（本机 RADV 实测 15.7h）——两个数量级之间没有灰区。
+ */
+export constexpr int64_t kGpuEpochSanityNs = 1'000'000'000;
+
+/**
+ * 同段 timestamp tick 差 → ns（**债-87 后的时长口径**：begin/end 同池同时钟，求差不经
+ * 任何跨域换算 ⟹ 驱动的纪元错乱污染不到读数）。
+ * @param deltaTicks 终点 tick − 起点 tick（调用方保证 > 0）
+ * @param periodNs   VkPhysicalDeviceLimits::timestampPeriod（ns/tick）
+ * @return 时长 ns
+ */
+export uint64_t gpuTicksToNs(uint64_t deltaTicks, double periodNs);
+
+/**
+ * 纪元自检（债-87）：把仿射起点与 host 帧锚点比对，判定 VK_TIME_DOMAIN_DEVICE 与
+ * query 池时间戳是否同一纪元；不同纪元则给出把整条 GPU 轨平移回 host 轴所需的常量。
+ * 平移是**常量** ⟹ 区域内/区域间相对结构（纪元错乱后唯一还有意义的信息）不被破坏。
+ * @param calibratedStartNs 仿射换算出的首区域起点（steady ns）
+ * @param hostAnchorNs 该帧 frameBegin 的 steady ns（锚点缺失传 0 = 不干预）
+ * @return 需叠加到全部仿射结果上的常量平移（纪元一致 = 0 = 不干预）
+ */
+export int64_t gpuEpochShiftNs(int64_t calibratedStartNs, uint64_t hostAnchorNs);
 
 /**
  * GPU 时间戳会话：timestamp query pool 所有者 + 每帧槽区域状态。main 栈构造
@@ -105,6 +136,7 @@ export class GpuProfiler {
 	/** 每帧槽状态（frameBegin 复位并登记归属帧；readback 消费上一轮两段游标）。 */
 	struct SlotState {
 		uint64_t frame = 0;       // 区域归属逻辑帧（frameBegin 时 profilerCurrentFrame()）
+		uint64_t hostAnchorNs = 0; // 本轮 frameBegin 的 steady ns（纪元自检的 host 锚点）
 		uint32_t queryCursor = 0; // 主段查询分配游标
 		uint32_t cullCursor = 0;  // cull 段查询分配游标
 		uint32_t regionCount = 0; // 有效区域数（读回上一轮后清零）
@@ -130,9 +162,47 @@ export class GpuProfiler {
 	void readback(uint32_t slot, uint64_t recordedFrame);
 
 	/**
-	 * 单段区域换算与归并：段内校准（设备 tick ↔ CLOCK_MONOTONIC 同次采样 + 双读
-	 * steady_clock 求偏移，仿射换算 steady ns——校准为单次 ext 调用，每段各采一次
-	 * 成本可忽略且更贴近读回时刻）→ 有效区域逐条 profilerPushRecord。
+	 * 一次跨域校准的采样结果（仿射 steady(T) = monoCal + (T − devCal)×period + offset）。
+	 * 只用于**绝对定位**（债-87：时长走同段 tick 差，见 gpuTicksToNs）。
+	 */
+	struct SteadyCal {
+		int64_t devCal = 0;        ///< 采样时刻的设备 tick
+		int64_t monoCal = 0;       ///< 同次采样的 CLOCK_MONOTONIC ns
+		int64_t steadyOffset = 0;  ///< 双读 steady 夹取时刻 − monoCal（steady 与 mono 同域）
+
+		/**
+		 * 设备 tick → steady ns。**刻意不夹 0**：纪元错乱时结果为负，由纪元自检整体
+		 * 平移回来（夹 0 会把所有区域压成同一时刻 = 债-87 的失效形态）。
+		 * @param tick 读回的设备 tick（已套 validMask）
+		 * @param periodNs limits.timestampPeriod（ns/tick）
+		 */
+		int64_t toSteady(uint64_t tick, double periodNs) const {
+			const int64_t delta = static_cast<int64_t>(tick) - devCal;
+			return monoCal +
+				static_cast<int64_t>(static_cast<double>(delta) * periodNs) + steadyOffset;
+		}
+	};
+
+	/**
+	 * 段内取一次跨域校准：设备 tick ↔ CLOCK_MONOTONIC 同次采样（偏差受 maxDeviation
+	 * 约束）+ 双读 steady_clock 夹取调用时刻求偏移（顺带记 lastMaxDeviationNs 观测）。
+	 * @return 仿射参数
+	 */
+	SteadyCal sampleCalibration();
+
+	/**
+	 * 纪元自检（债-87，整进程首次调用定型）：仿射起点 vs host 帧锚点超阈值 → 记下
+	 * 把 GPU 轨平移回 host 轴的常量并 warn 一次（时长不受影响，故只 warn 不丢数据）。
+	 * @param calibratedStartNs 首区域的仿射起点（steady ns）
+	 * @param hostAnchorNs 该帧 frameBegin 的 steady ns
+	 */
+	void checkEpoch(int64_t calibratedStartNs, uint64_t hostAnchorNs);
+
+	/**
+	 * 单段区域换算与归并：**时长 = 同段原始 tick 差 × timestampPeriod**（gpuTicksToNs，
+	 * 跨域校准不参与）；绝对定位才走校准（设备 tick ↔ CLOCK_MONOTONIC 同次采样 + 双读
+	 * steady_clock 求偏移的仿射换算，每段各采一次成本可忽略且更贴近读回时刻）→ 首区域
+	 * 过纪元自检（gpuEpochShiftNs，整进程一次）后逐条 profilerPushRecord。
 	 * @param slot 槽号 @param segBase 段起始绝对查询下标 @param segCount 段内已写入数
 	 * @param recordedFrame 区域归属逻辑帧（frameBegin 登记值）
 	 */
@@ -146,7 +216,10 @@ export class GpuProfiler {
 	uint64_t validMask = ~uint64_t{0};        // timestampValidBits 掩码（<64 位机型高位保留）
 	uint32_t activeSlot = 0;                  // frameBegin 登记（begin/end 槽归属）
 	uint64_t drops = 0;                       // 容量/未闭合/未就绪丢弃累计（析构日志）
+	uint64_t pushedZones = 0;                 // 归并成功的 gpu zone 数（0 = 空轨，析构告警）
 	uint64_t lastMaxDeviationNs = 0;          // 最近一次校准 maxDeviation（观测）
+	int64_t epochShiftNs = 0;                 // 纪元平移量（首区域自检定型，0 = 纪元一致）
+	bool epochChecked = false;                // 纪元自检是否已做（整进程一次，平移取常量）
 	std::array<SlotState, kGpuSlots> slotStates{};
 };
 

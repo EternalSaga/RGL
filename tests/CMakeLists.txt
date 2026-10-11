@@ -75,6 +75,7 @@ set(RGL_TEST_SOURCES
     test_wet_params.cppm         # 批 15.2A 湿面尾区两 vec4 @722368/@722384：两源布局 + fillWetParams 填值（六系数落槽/两槽不互换/消融档透传）+ 出厂默认值六枚（strength=1.0 = 「默认开」拍板的钉）
     test_evssm_math.cppm         # EVSSM 消费端公式数学契约（快路/零矩/far 矩恒等/单调/LBR，11.6d bug 回归）
     test_layout_drift.cppm       # 图外布局对账护栏的判定 + 值可读化（批 14.4b 步 2：IZB/FSR 两处护栏收成单点）
+    test_gpu_profiler_time.cppm  # 债-87 GPU 时间戳换算口径：tick 差求时长 / 纪元自检平移量与阈值边界（实机 golden）
     test_device_primitives.cppm      # gpu 套件回读原语：clear 逐像素 / 整数回环 / UNORM 量化 / 拷贝保真
     test_device_primitives_impl.cppm # 设备夹具实现（partition impl unit）
     test_conservative_mesh.cppm      # gpu 套件 11.3-1b 成败门：保守光栅 × mesh shader × RADV（含 EDS3 动态态）
