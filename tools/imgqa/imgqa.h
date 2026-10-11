@@ -655,6 +655,12 @@ int cmdFaces(const std::string& glb, const std::string& piece, bool shadowPass,
     bool envOn);
 int cmdSwitch(const std::string& glb, const std::string& camera, const std::string& allowPiece,
     bool envOn);
+/// IZB 消费域（批 11.3 补账 B）：mask ↔ 画面**寻址一致性**三条子判据。定义在
+/// `rig_shadow_field.cpp`（izb_rig 影场仪器族，与 `cmdSwim` 同一套 deferred + shadowPass 采集）。
+int cmdIzb(const std::string& glb, const std::string& camera);
+/// 影场世界不变量（同场景两机位、静态太阳 ⟹ 影场必须跟着世界走）：机位平移 `dx` 后重投影比影场，
+/// 零位移失配 = 地板，搜索到的最优平移 = 世界位移的证据。定义在 `rig_shadow_field.cpp`。
+int cmdSwim(const std::string& glb, const std::string& camera, double dx, bool izb, bool evssm);
 /// 闭式解探针（12.3b 接替 analytic_ref.py --probe）：跑 qa/configs/analytic 固定配置
 /// （llm_debug 截图模式，**非** RPC——那份配置本身是契约，六门逐项关掉写在注释里），
 /// 对指定像素出「该是多少 vs 实际是多少」。l = 指向光源方向（不是 direction）。

@@ -59,6 +59,82 @@ double invAces(double luma)
     return 0.5 * (lo + hi);
 }
 
+namespace {
+
+// 采样窗口半宽。窗口 ±6px：最宽杆 6.5px、杆间距 21.7px ⟹ 既容得下 AA 摊开，又碰不到邻杆。
+// ⚠ 这条边界 = 判据本身（`--kernel` 三档对照全靠它），拆函数时一个字节都不许动。
+constexpr int kHalf = 6;
+
+/// 一根杆的采样窗口（列心 ±kHalf × 行区间 [rowMin,rowMax)）扫描结果。
+struct RodScan {
+    cv::Mat cov;         ///< 逐像素覆盖率图（先算覆盖率再对行取均值，顺序不能反）
+    double centerLuma;   ///< 杆心亮度（**亮度域**，与 whiteLuma 同域可直接比）
+};
+
+/// 扫一根杆：窗口内逐像素覆盖率 = 1 − aces⁻¹(亮度)，杆心亮度 = 列心各行亮度的均值。
+/// ⚠ 按行/按列的分段边界（±kHalf 与 [rowMin,rowMax)）逐字照搬原实现，勿"顺手"合并成一行。
+RodScan rodScan(const cv::Mat& luma, const RodExpectation& e)
+{
+    cv::Mat c(e.rowMax - e.rowMin, 2 * kHalf + 1, CV_64FC1);
+    double centerSum = 0.0;
+    for (int y = e.rowMin; y < e.rowMax; ++y) {
+        for (int x = -kHalf; x <= kHalf; ++x)
+            c.at<double>(y - e.rowMin, x + kHalf)
+                = 1.0 - invAces(luma.at<double>(y, e.colCenter + x));
+        centerSum += luma.at<double>(y, e.colCenter);
+    }
+    // 杆心亮度（**亮度域**，与 whiteLuma 同域可直接比）。⚠ 别拿 c 求均值再反解一次：
+    // c 已经是覆盖率，再套一次 1−aces⁻¹ 会得到 0.97 这种荒值（本文件真实踩过）。
+    // 先算除法再 move：move 之后 c.rows 归零。
+    const double centerLuma = centerSum / static_cast<double>(c.rows);
+    return RodScan{std::move(c), centerLuma};
+}
+
+/// 逐杆算出覆盖率图 + 最暗杆心亮度。任一杆投出屏 = 机位不对 ⟹ 返回 false，
+/// 调用方按「采集配置错」出空报告（出了数就会被当成"测到了"）。
+bool collectRods(const cv::Mat& luma, const std::vector<RodExpectation>& rods,
+    std::vector<cv::Mat>& cov, double& darkestLuma)
+{
+    for (const auto& e : rods) {
+        if (e.colCenter - kHalf < 0 || e.colCenter + kHalf >= luma.cols || e.rowMin < 0
+            || e.rowMax > luma.rows || e.rowMax <= e.rowMin) {
+            return false;  // 投出屏 = 机位不对
+        }
+        RodScan s = rodScan(luma, e);
+        darkestLuma = std::min(darkestLuma, s.centerLuma);
+        cov.push_back(std::move(s.cov));
+    }
+    return true;
+}
+
+/// 单根杆的一列覆盖率 = 该列各行覆盖率的均值（黑度积分的逐项，单位：列）。
+/// 先算覆盖率再对行取均值，顺序不能反。
+double columnCoverage(const cv::Mat& c, int x)
+{
+    double s = 0.0;
+    for (int y = 0; y < c.rows; ++y)
+        s += c.at<double>(y, x);
+    return s / static_cast<double>(c.rows);
+}
+
+/// 逐杆对照表（三态并排：TAA 关 / TAA 开 / 不抖消融）。表头与列宽 = 判据文案。
+void printRodTable(const CoverageReport& off, const CoverageReport& on,
+    const CoverageReport& onJ0)
+{
+    std::printf("  杆  世界宽    期望列   TAA关    误差     TAA开    误差      不抖(消融)\n");
+    std::printf("  --  -------   ------   ------   -----    ------   -----    ---------\n");
+    for (size_t i = 0; i < on.rods.size(); ++i) {
+        const auto& a = off.rods[i];
+        const auto& b = on.rods[i];
+        const auto& d = onJ0.rods[i];
+        std::printf("  %2u  %.5f  %6.3f   %6.3f  %+6.3f    %6.3f  %+6.3f   %6.3f\n",
+            b.expect.index, b.expect.widthWorld, b.expect.widthPx, a.integral, a.error,
+            b.integral, b.error, d.integral);
+    }
+}
+
+}  // namespace
+
 CoverageReport measureCoverage(const cv::Mat& luma)
 {
     CoverageReport r;
@@ -77,28 +153,10 @@ CoverageReport measureCoverage(const cv::Mat& luma)
     r.whiteLuma = cv::mean(plateBand)[0];
 
     const auto rods = ladderExpectations();
-    // 窗口 ±6px：最宽杆 6.5px、杆间距 21.7px ⟹ 既容得下 AA 摊开，又碰不到邻杆。
-    constexpr int kHalf = 6;
-    double darkestLuma = 1e9;
     std::vector<cv::Mat> cov;  // 每杆的逐像素覆盖率图（先算覆盖率再对行取均值，顺序不能反）
-    for (const auto& e : rods) {
-        if (e.colCenter - kHalf < 0 || e.colCenter + kHalf >= luma.cols || e.rowMin < 0
-            || e.rowMax > luma.rows || e.rowMax <= e.rowMin) {
-            return r;  // 投出屏 = 机位不对
-        }
-        cv::Mat c(e.rowMax - e.rowMin, 2 * kHalf + 1, CV_64FC1);
-        double centerSum = 0.0;
-        for (int y = e.rowMin; y < e.rowMax; ++y) {
-            for (int x = -kHalf; x <= kHalf; ++x)
-                c.at<double>(y - e.rowMin, x + kHalf)
-                    = 1.0 - invAces(luma.at<double>(y, e.colCenter + x));
-            centerSum += luma.at<double>(y, e.colCenter);
-        }
-        // 杆心亮度（**亮度域**，与 whiteLuma 同域可直接比）。⚠ 别拿 c 求均值再反解一次：
-        // c 已经是覆盖率，再套一次 1−aces⁻¹ 会得到 0.97 这种荒值（本文件真实踩过）。
-        darkestLuma = std::min(darkestLuma, centerSum / static_cast<double>(c.rows));
-        cov.push_back(std::move(c));
-    }
+    double darkestLuma = 1e9;
+    if (!collectRods(luma, rods, cov, darkestLuma))
+        return r;
     r.blackLuma = darkestLuma;
     // 阴阳自检，任一不满足 = 靶没画对 / 机位不对 / 曝光被改，此时「覆盖率误差」无意义：
     // ① 白板亮度须对拍**闭式** ACES(1)（不是"落在某区间"——区间是拍的，闭式是推的）；
@@ -109,13 +167,9 @@ CoverageReport measureCoverage(const cv::Mat& luma)
     for (size_t i = 0; i < rods.size(); ++i) {
         RodMeasurement m;
         m.expect = rods[i];
-        // 列覆盖率 = 该列各行覆盖率的均值；沿列求和 = 黑度积分（单位：列）。
-        for (int x = 0; x < cov[i].cols; ++x) {
-            double s = 0.0;
-            for (int y = 0; y < cov[i].rows; ++y)
-                s += cov[i].at<double>(y, x);
-            m.integral += s / static_cast<double>(cov[i].rows);
-        }
+        // 沿列求和 = 黑度积分（单位：列）。
+        for (int x = 0; x < cov[i].cols; ++x)
+            m.integral += columnCoverage(cov[i], x);
         m.error = m.integral - m.expect.widthPx;
         m.relError = m.expect.widthPx > 0.0 ? m.error / m.expect.widthPx : 0.0;
         r.rods.push_back(m);
@@ -187,16 +241,7 @@ int cmdAaCoverage(const std::string& variant, int warm, double feedback, bool ba
     }
     std::printf("  电平自检：白板 %.4f（闭式 ACES(1)）  杆心 < %.4f  ✓\n\n", on.whiteLuma,
         on.blackLuma);
-    std::printf("  杆  世界宽    期望列   TAA关    误差     TAA开    误差      不抖(消融)\n");
-    std::printf("  --  -------   ------   ------   -----    ------   -----    ---------\n");
-    for (size_t i = 0; i < on.rods.size(); ++i) {
-        const auto& a = off.rods[i];
-        const auto& b = on.rods[i];
-        const auto& d = onJ0.rods[i];
-        std::printf("  %2u  %.5f  %6.3f   %6.3f  %+6.3f    %6.3f  %+6.3f   %6.3f\n",
-            b.expect.index, b.expect.widthWorld, b.expect.widthPx, a.integral, a.error,
-            b.integral, b.error, d.integral);
-    }
+    printRodTable(off, on, onJ0);
     // 判据域 = 投影宽度 ≥2 列的杆。⚠ 这不是「把阈值调到能过」，是**收窄适用域**：
     // 邻域裁剪 TAA 对 ≲2 列的细杆必然欠累积（错相帧里本帧没采到杆 ⟹ box5 = 全白 ⟹
     // 已累积的黑被判在盒外拒掉），单帧值由抖动相位决定，不是稳定质量量。窄杆仍打印，

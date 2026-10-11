@@ -211,6 +211,11 @@ DOCS_STATUS_MAX_LINES = 10
 AGENTS_FILE = "AGENTS.md"
 AGENTS_INDEX_EXEMPT_DIRS = ("docs/archive/", "docs/参考资料/")
 
+# 判据契约表出处指针（rules_text.judgments_pointer_checks，§1.8）：判据表把「这条判据钉在
+# 哪个文件的哪段注释」抄成字符串打印在 imgqa check 里 ⟹ 拆文件后锚点会搬空（文件还在、符号没了，
+# §1.7 查不到）。glob 只圈判据表本体，不圈全部 imgqa 源码（那里的注释由 §1.7 与人工评审管）。
+JUDGMENTS_TABLE_GLOB = "judgments_table*.cpp"
+
 # 文档指针有效性（rules_text.doc_pointer_checks，§1.7）：
 # 扫描面 = 下列目录（按后缀白名单）+ 下列散文件；排除目录 = 生成物 / 依赖 / 日志 / 离线文献。
 DOC_POINTER_DIRS = ("docs", "rgl", "tests", "tools", "cmake", "configs", "qa",

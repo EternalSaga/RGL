@@ -34,8 +34,8 @@ const std::vector<JudgmentInfo>& temporalTailGuardJudgments()
             "🔴 **本条被 `--motion spin` 与 `--motion camera` 共用**（批 13.14a）。相机运动下它"
             "**更硬**：配对错开一帧 ⟹ yaw 已转过一整帧 ⟹ 参考与候选根本不在同一视点，"
             "而分子是**同帧同视点**比较 ⟹ frac 立刻跳。",
-            {"tools/imgqa/temporal_motion.cpp `temporal-tail` 头注释「判决线（跑前写死）」第 1 条；"
-             "tools/imgqa/temporal_motion.cpp `cmdTemporalTailCamera` 头注释「判决线」第 1 条；"
+            {"tools/imgqa/temporal_tail.cpp `temporal-tail` 头注释「判决线（跑前写死）」第 1 条；"
+             "tools/imgqa/temporal_tail_camera.cpp `cmdTemporalTailCamera` 头注释「判决线」第 1 条；"
              "docs/还债总账.md 债-63"},},
         {"temporal-tail-events", JudgmentFamily::TemporalMotion,
             "**在场性 + 反向**（两条对偶，堵「0 事件」的两种解释）。\n"
@@ -46,7 +46,7 @@ const std::vector<JudgmentInfo>& temporalTailGuardJudgments()
             "  为什么反向要单独跑：正向绿只说明「画面在动」，不说明「检测器检测的是让开而不是噪声」。"
             "静止内容上点火 = 检测器量的就是渲染噪声地板，此时所有臂的 frac 都非零且互相接近，"
             "**看起来完全正常**——这是本判据最阴的假绿形态。",
-            {"tools/imgqa/temporal_motion.cpp `temporal-tail` 头注释「判决线」第 2 条"},},
+            {"tools/imgqa/temporal_tail.cpp `temporal-tail` 头注释「判决线」第 2 条"},},
         {"temporal-tail-box-load", JudgmentFamily::TemporalMotion,
             "**阳性锚点，且是想要的那种红**：同窗档下 **关盒（臂 1）的 frac 必须 > 臂 0**。\n"
             "不成立 ⟹ 邻域盒在鬼影上**没承重** ⟹ 整个臂族「为压鬼影而牺牲静止闪烁」的前提被推翻，"
@@ -54,7 +54,7 @@ const std::vector<JudgmentInfo>& temporalTailGuardJudgments()
             "这条直接审它）。\n"
             "⚠ 与 `temporal-motion-ablation` 的区别：那条审的是「重投影链路坏没坏」，本条审的是"
             "「被测机制到底承不承重」。两者都是量具守卫，都不判画质好坏。",
-            {"tools/imgqa/temporal_motion.cpp `temporal-tail` 头注释「判决线」第 3 条；"
+            {"tools/imgqa/temporal_tail.cpp `temporal-tail` 头注释「判决线」第 3 条；"
              "docs/还债总账.md 债-62/债-63"},},
         {"temporal-tail-monotone", JudgmentFamily::TemporalMotion,
             "**分辨力轴**：关盒态下把本帧权重从短窗 α=0.12 推到长窗 α=0.01（**唯一变量 = 窗长**），"
@@ -62,7 +62,7 @@ const std::vector<JudgmentInfo>& temporalTailGuardJudgments()
             "不升 ⟹ frac 量的不是历史长度（可能是掩码把每个臂都稀释成同一个数），此时四条全绿"
             "也**不许**报「臂 X 比臂 Y 鬼影小」——那是在噪声上盖结论。\n"
             "⚠ 本条不判 TAA 好不好（长窗本来就该鬼影更重），只判本量具有没有力气。",
-            {"tools/imgqa/temporal_motion.cpp `temporal-tail` 头注释「判决线」第 4 条"},},
+            {"tools/imgqa/temporal_tail.cpp `temporal-tail` 头注释「判决线」第 4 条"},},
     };
     return kPart;
 }
@@ -96,7 +96,7 @@ const std::vector<JudgmentInfo>& temporalTailCameraJudgments()
             "⚠ 本条红 ⟹ 其余三条的 Δ 分母不可信（φ 反号把系统错位混进 Δ，臂间真差被稀释），"
             "**先修 φ，不许改判决线**。⚠ 只读 argmin 不读曲率：图像差值对位移**饱和**，"
             "argmin 附近曲线本就不对称。",
-            {"tools/imgqa/temporal_motion.cpp `printSmearPhiCalibration` 头注释（含首轮 argmin ="
+            {"tools/imgqa/temporal_smear.cpp `printSmearPhiCalibration` 头注释（含首轮 argmin ="
               " −1 与 1.29× 的定量指纹）；tools/imgqa/temporal_yaw_remap.cpp 头注释「静默符号错」"
               "一节；tools/imgqa/selftest.cpp 变异红线表「yaw 增量反号」行"},},
         {"temporal-tail-alpha-noninferior", JudgmentFamily::TemporalMotion,
@@ -130,7 +130,7 @@ const std::vector<JudgmentInfo>& temporalTailCameraJudgments()
             "双线性重采样误差。⟹ 臂间**比值**仍然成立（Δ 只做权重、由 TAA 关的参考帧算、逐臂逐位"
             "相同），但**绝对**的「相当于几帧过期历史」不许读成「画面真实变化了几帧」\n"
             "（→ `phase13_plan.md` §1.17 结论 6 / 结论 8）。",
-            {"tools/imgqa/temporal_motion.cpp `cmdTemporalTailCamera` 判决线 2 与「运动归因」表；"
+            {"tools/imgqa/temporal_tail_camera.cpp `cmdTemporalTailCamera` 判决线 2 与「运动归因」表；"
               "`SmearAngle::oneFrameFrac` 注释；docs/phase13_plan.md §1.17 结论 2 + 本轮 α 轴重设计"},},
         {"temporal-tail-static-collapse", JudgmentFamily::TemporalMotion,
             "**零点锚**（`--motion camera`）：相机静止（δ=0）的 **Z 组**（`jitter_scale=0` +\n"
@@ -149,7 +149,7 @@ const std::vector<JudgmentInfo>& temporalTailCameraJudgments()
             "零点会把正确的仪器判成坏（第一版定的线是 `frac ≤ 0.05` 喂 A0，就是这么错的）。\n"
             "⟹ 本条同时输出地板读数 `A0(δ=0)`：它是主角度各臂的**同口径加性底**——报臂间差"
             "时用它，报绝对份额时减掉它。",
-            {"tools/imgqa/temporal_motion.cpp `cmdTemporalTailCamera` 判决线 3 的实现处注释"
+            {"tools/imgqa/temporal_tail_camera.cpp `cmdTemporalTailCamera` 判决线 3 的实现处注释"
              "（含首轮 0.1286 地板误读）；docs/phase13_plan.md §1.16 第 6 条"},},
         {"temporal-tail-gate-breakpoint", JudgmentFamily::TemporalMotion,
             "**阳性锚点，且是这台仪器存在的唯一理由**（`--motion camera`）。\n"
@@ -180,7 +180,7 @@ const std::vector<JudgmentInfo>& temporalTailCameraJudgments()
             "13.14 改完无法验收。**\n"
             "⚠ 门关侧不判「残差必须小」——机位运动快的时候长窗本来就糊，判的是"
             "**臂 11 与臂 0 的比**退回 1，即门确实在起作用。",
-            {"tools/imgqa/temporal_motion.cpp `cmdTemporalTailCamera` 头注释「判决线」第 4 条；"
+            {"tools/imgqa/temporal_tail_camera.cpp `cmdTemporalTailCamera` 头注释「判决线」第 4 条；"
              "docs/phase13_plan.md §1.14 缺陷 2、§1.15 第 3 条、§1.16「13.14 拆 a/b」"},},
     };
     return kPart;
@@ -196,7 +196,7 @@ const std::vector<JudgmentInfo>& temporalTailStepJudgments()
             "的系统差算进残差、掩膜算错等）。0.02 与「一整个遮挡物的颜色」（≈1）之间没有中间地带。\n"
             "⚠ 本条与 `temporal-tail-pairing` 是**两台不同仪器**的零锚：那条守的是帧号配对（连续运动），"
             "本条守的是「收敛参考的构造」+「掩膜分母」（阶跃）。它俩不互相覆盖。",
-            {"tools/imgqa/temporal_motion.cpp `temporal-tail --motion step` 段头【协议】；"
+            {"tools/imgqa/temporal_step.cpp `temporal-tail --motion step` 段头【协议】；"
              "docs/还债总账.md 债-63"},},
         {"temporal-tail-step-stimulus", JudgmentFamily::TemporalMotion,
             "**历史真的活过了这一刀**——本仪器唯一一条会造假绿的坑的守卫。\n"
@@ -217,7 +217,7 @@ const std::vector<JudgmentInfo>& temporalTailStepJudgments()
             "组合钉死，不能靠叙述。",
             {"rgl/taa_jitter.cppm `cameraJumps` / `taaHistoryUsable`；"
              "rgl/shaders/taa.frag.slang `params.y < 0.5` 早退 + 默认 5 抽头盒分支；"
-             "tools/imgqa/temporal_motion.cpp `StepArm::reprojection` 注释"},},
+             "tools/imgqa/temporal_motion.h `StepArm::reprojection` 注释"},},
         {"temporal-tail-step-ema-anchor", JudgmentFamily::TemporalMotion,
             "**仪器自证（闭式锚）**：E 臂（关盒 + 重投影关）⟹ `hist(p) ≡ out_{n−1}(p)` 精确 ⟹ "
             "`out_n = (1−α)ⁿ·A + (1−(1−α)ⁿ)·B∞` ⟹ `ghost(n) = (1−α)ⁿ` **精确** ⟹ 主指标 "
@@ -231,7 +231,7 @@ const std::vector<JudgmentInfo>& temporalTailStepJudgments()
             "⚠ 本条与 `temporal-tail-monotone`（spin 版）是同一类「量具有没有力气」的守卫，但口径不同："
             "那条判 frac 随窗长上升（相对），本条判**绝对帧数**命中闭式。绝对数能钉住相对数钉不住的东西："
             "「ghost 的自变量到底是不是帧」。",
-            {"tools/imgqa/temporal_motion.cpp `temporal-tail --motion step` 段头【闭式锚点】"
+            {"tools/imgqa/temporal_step.cpp `temporal-tail --motion step` 段头【闭式锚点】"
              "与 `StepCurve::auc` 注释"},},
         {"temporal-tail-step-clip-holds", JudgmentFamily::TemporalMotion,
             "**主判据（结论，不是守卫）**：交付臂（`clip_mode = 11`）的残影总量必须显著少于**现行默认"
@@ -247,7 +247,7 @@ const std::vector<JudgmentInfo>& temporalTailStepJudgments()
             "工作点本条都不覆盖，别把本条读成「臂 11 在运动下没用」。\n"
             "⚠ 同时打印**完全无裁剪**（关盒）的 AUC 作参照，它给出「盒族本身兑掉了多少」——没有这个"
             "参照，④ 的比值会被误读成「裁剪只省了一点」。",
-            {"tools/imgqa/temporal_motion.cpp `emitStepVerdicts` 第 4 条；"
+            {"tools/imgqa/temporal_step.cpp `emitStepVerdicts` 第 4 条；"
              "rgl/shaders/taa.frag.slang 臂 11 分支；docs/还债总账.md 债-63"},},
         {"temporal-tail-step-arm13-fixes", JudgmentFamily::TemporalMotion,
             "**修法验收（批 13.15b，臂 13 = 臂 11 + α 也吃 gate）**。两条 **AND**，缺一条即红：\n"
@@ -264,7 +264,7 @@ const std::vector<JudgmentInfo>& temporalTailStepJudgments()
             "⚠ (b) 不是 bit 级判据（跨进程本就不逐位，债-61）；真正的 bit 级红线走 `just shot` "
             "同会话双构建。本条是**量级**检查：要抓的是「某个像素上 α 被换了个数」那种 1e-1 错。\n"
             "⚠ 同样只在 ①②③ 三条守卫全绿时才有意义。",
-            {"tools/imgqa/temporal_motion.cpp `emitStepVerdicts` 第 5 条与 `staticDiff`；"
+            {"tools/imgqa/temporal_step.cpp `emitStepVerdicts` 第 5 条与 tools/imgqa/temporal_motion_metric.cpp `staticDiff`；"
              "rgl/shaders/taa.frag.slang 臂 13 分支；docs/phase13_plan.md §1.21"},},
         {"temporal-tail-step-fsr-floor", JudgmentFamily::TemporalMotion,
             "**升频臂的下界锚 = 无历史臂必须鬼影为零**（批 14.5）。\n"
@@ -276,7 +276,7 @@ const std::vector<JudgmentInfo>& temporalTailStepJudgments()
             "非零 ⟹ 分子里混进了与时间无关的东西（参考构造、跨进程地板、render_scale 下的采样差），"
             "**本组全部臂间数字作废**。\n"
             "实测（brickfence / 阶跃 0.02）：两条都 **0.000**，收敛态偏离 **0.000000**。",
-            {"tools/imgqa/temporal_motion.cpp `runFsrStepArms`；docs/phase14_plan.md 批 14.5"},},
+            {"tools/imgqa/temporal_step_fsr.cpp `runFsrStepArms`；docs/phase14_plan.md 批 14.5"},},
         {"temporal-tail-step-fsr-basespace", JudgmentFamily::TemporalMotion,
             "**FSR 臂的地板污染检查**（批 14.5）——本条是被一次实测**逼出来的**，不是先想好的。\n"
             "整台仪器把「末 16 帧的均值」当 B∞ 固定点用，而这个 16 是从 **TAA 的**抖动周期借的。"
@@ -293,7 +293,7 @@ const std::vector<JudgmentInfo>& temporalTailStepJudgments()
             "0.001 是分辨率声明，不是给某条臂调的数。\n"
             "⚠ 本条只保证「该臂的 ghost 数字可信」，不保证它小。实测 F75 地板 0.0010 / ghost(0) "
             "0.0100 ⟹ 过；T13 地板 0.0000 / ghost(0) 0.0005 ⟹ 过。",
-            {"tools/imgqa/temporal_motion.cpp `convergedFloor` 与 `runFsrStepArms`；"
+            {"tools/imgqa/temporal_step.cpp `convergedFloor` 与 tools/imgqa/temporal_step_fsr.cpp `runFsrStepArms`；"
              "docs/phase14_plan.md 批 14.5"},},
     };
     return kPart;

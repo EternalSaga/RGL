@@ -98,6 +98,65 @@ cv::Mat flatRegion(const cv::Mat& ids, const cv::Mat& dist, int32_t oid, double 
 }
 
 // ───────────────────────────── 统计 ─────────────────────────────
+
+namespace {
+/// `statRegion` 第一趟（逐像素）的累加器。切在「逐像素求和」与「由和算统计量」之间：
+/// 前者是三层嵌套的像素循环、后者是纯向量代数，合在一起就是认知复杂度的雷区，
+/// 而它们的改动理由根本不同（像素遍历的坑 vs 分位数口径）。
+struct PixelAccum {
+    std::vector<double> vals;  ///< mask 内的字节值（分位数就在这上面求）
+    int64_t below = 0;         ///< 低于契约的像素数（`contract` < 0 时恒 0）
+    int64_t nLap = 0, nJit = 0;
+    double lapAcc = 0.0, jitAcc = 0.0;
+};
+
+/// 逐像素填累加器：只走 [y0, ye) 行、只取 mask 非零处（`inner` = mask 腐蚀一圈的结果）。
+void accumulateRegion(const cv::Mat& x8u, const cv::Mat& mask, const cv::Mat& lap,
+    const cv::Mat& jit, const cv::Mat& inner, double contract, int y0, int ye,
+    PixelAccum& acc)
+{
+    for (int y = y0; y < ye; ++y)
+        for (int x = 0; x < mask.cols; ++x) {
+            if (!mask.at<uint8_t>(y, x))
+                continue;
+            const double v = x8u.at<uint8_t>(y, x);
+            acc.vals.push_back(v);
+            if (contract >= 0.0 && v < contract)
+                ++acc.below;
+            acc.jitAcc += static_cast<double>(jit.at<float>(y, x)) * jit.at<float>(y, x);
+            ++acc.nJit;
+            if (inner.at<uint8_t>(y, x)) {  // 窗口须整个落在 mask 内，否则 mask 边界本身
+                const double l = lap.at<float>(y, x);  // 会被算成高频——那是区域形状
+                acc.lapAcc += l * l;
+                ++acc.nLap;
+            }
+        }
+}
+
+/// 一阶/二阶矩与分位数。⚠ 分位数走 `nth_element`，**会打乱 vals 的顺序**（原实现即如此，
+/// 调用方此后不得再依赖 vals 有序）；p05 先于 p95 求，顺序照抄原实现以保证逐位同结果。
+void fillDistribution(std::vector<double>& vals, RegionStat& s)
+{
+    double sum = 0.0;
+    for (const double v : vals)
+        sum += v;
+    s.mean = sum / static_cast<double>(vals.size());
+    double var = 0.0;
+    for (const double v : vals)
+        var += (v - s.mean) * (v - s.mean);
+    s.sd = std::sqrt(var / static_cast<double>(vals.size()));
+    s.lo = *std::min_element(vals.begin(), vals.end());
+    s.hi = *std::max_element(vals.begin(), vals.end());
+    const auto pick = [&](double q) {
+        const size_t i = std::min(vals.size() - 1, static_cast<size_t>(q * vals.size()));
+        std::nth_element(vals.begin(), vals.begin() + i, vals.end());
+        return vals[i];
+    };
+    s.p05 = pick(0.05);
+    s.p95 = pick(0.95);
+}
+}  // namespace
+
 /**
  * mask 上的单通道统计。`contract` < 0 = 不算契约偏离；`y0/y1` = 只统计该行的区间
  * （按行分带用；传 ROI mask 会被下游静默吞掉，实测踩过，故把「带」做成参数而不是 mask）。
@@ -121,48 +180,15 @@ RegionStat statRegion(const cv::Mat& x8u, const cv::Mat& mask, double contract,
     cv::medianBlur(f, sm, 5);
     cv::subtract(f, sm, jit);
     cv::erode(mask, inner, cv::getStructuringElement(cv::MORPH_RECT, {3, 3}));
-    std::vector<double> vals;
-    int64_t below = 0, nLap = 0, nJit = 0;
-    double lapAcc = 0.0, jitAcc = 0.0;
-    for (int y = y0; y < ye; ++y)
-        for (int x = 0; x < mask.cols; ++x) {
-            if (!mask.at<uint8_t>(y, x))
-                continue;
-            const double v = x8u.at<uint8_t>(y, x);
-            vals.push_back(v);
-            if (contract >= 0.0 && v < contract)
-                ++below;
-            jitAcc += static_cast<double>(jit.at<float>(y, x)) * jit.at<float>(y, x);
-            ++nJit;
-            if (inner.at<uint8_t>(y, x)) {  // 窗口须整个落在 mask 内，否则 mask 边界本身
-                const double l = lap.at<float>(y, x);  // 会被算成高频——那是区域形状
-                lapAcc += l * l;
-                ++nLap;
-            }
-        }
-    s.pixels = static_cast<int64_t>(vals.size());
-    if (vals.empty())
+    PixelAccum acc;
+    accumulateRegion(x8u, mask, lap, jit, inner, contract, y0, ye, acc);
+    s.pixels = static_cast<int64_t>(acc.vals.size());
+    if (acc.vals.empty())
         return s;
-    double sum = 0.0;
-    for (const double v : vals)
-        sum += v;
-    s.mean = sum / static_cast<double>(vals.size());
-    double var = 0.0;
-    for (const double v : vals)
-        var += (v - s.mean) * (v - s.mean);
-    s.sd = std::sqrt(var / static_cast<double>(vals.size()));
-    s.lo = *std::min_element(vals.begin(), vals.end());
-    s.hi = *std::max_element(vals.begin(), vals.end());
-    const auto pick = [&](double q) {
-        const size_t i = std::min(vals.size() - 1, static_cast<size_t>(q * vals.size()));
-        std::nth_element(vals.begin(), vals.begin() + i, vals.end());
-        return vals[i];
-    };
-    s.p05 = pick(0.05);
-    s.p95 = pick(0.95);
-    s.fracBelowContract = static_cast<double>(below) / static_cast<double>(vals.size());
-    s.lapRms = nLap > 0 ? std::sqrt(lapAcc / static_cast<double>(nLap)) : 0.0;
-    s.jitterRms = nJit > 0 ? std::sqrt(jitAcc / static_cast<double>(nJit)) : 0.0;
+    fillDistribution(acc.vals, s);
+    s.fracBelowContract = static_cast<double>(acc.below) / static_cast<double>(acc.vals.size());
+    s.lapRms = acc.nLap > 0 ? std::sqrt(acc.lapAcc / static_cast<double>(acc.nLap)) : 0.0;
+    s.jitterRms = acc.nJit > 0 ? std::sqrt(acc.jitAcc / static_cast<double>(acc.nJit)) : 0.0;
     return s;
 }
 

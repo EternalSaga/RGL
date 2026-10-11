@@ -128,6 +128,109 @@ std::vector<std::string> Attribution::visiblePieces() const
     return v;
 }
 
+namespace {
+/// 亮像素平均色度（验证器输入的一对分量，全暗 = 两个 NaN）。
+struct Chroma {
+    double r, g;
+};
+
+/// 收集 mask 内像素的线性亮度并升序排序（分位数与暗像素占比都在排序结果上取）。
+std::vector<double> sortedLumaInMask(const Frame& f, const cv::Mat& mask)
+{
+    std::vector<double> vals;
+    vals.reserve(static_cast<size_t>(cv::countNonZero(mask)));
+    for (int y = 0; y < f.luma.rows; ++y) {
+        const auto* mrow = mask.ptr<uchar>(y);
+        const double* lrow = f.luma.ptr<double>(y);
+        for (int x = 0; x < f.luma.cols; ++x)
+            if (mrow[x])
+                vals.push_back(lrow[x]);
+    }
+    std::sort(vals.begin(), vals.end());
+    return vals;
+}
+
+/// 排序序列上取百分位：下标 = q/100·(n−1) 截断，**不做线性插值**——观测与闭式解都按这条取，
+/// 换插值口径 = 换一台仪器。⚠ 本函数的 `q` 是 **0..100**，与 `temporal_residual.h` 导出的
+/// `percentileOf`（p = **0..1**）**不是同一个刻度**，所以刻意不叫那个名字——两个同名不同刻度的
+/// 量在同一工具里 = 迟早有人传错（传错不报错，只是分位数静默变成 0 或最后一个）。
+double percentile100(const std::vector<double>& sorted, double q)
+{
+    return sorted[static_cast<size_t>(q / 100.0 * (sorted.size() - 1))];
+}
+
+/// 把排序后的亮度序列读数填进 `PieceStat` 的四个观测字段（中位数 / p05 / p95 与暗像素
+/// 占比；暗阈 `darkEps` 由调用方给，判据侧可调）。
+void fillReadout(PieceStat& st, const std::vector<double>& sorted, double darkEps)
+{
+    st.medianLinear = percentile100(sorted, 50.0);
+    st.p05Linear = percentile100(sorted, 5.0);
+    st.p95Linear = percentile100(sorted, 95.0);
+    st.darkFraction = static_cast<double>(
+        std::count_if(sorted.begin(), sorted.end(),
+            [&](double v) { return v < darkEps; }))
+        / static_cast<double>(sorted.size());
+}
+
+/// 亮像素平均色度（**验证器输入**，命名者已换成顺序假设）。黑像素 0/0 无定义 ⟹ 只从
+/// 亮像素取；全暗 id 得 NaN = 不校验（文件头硬约束）。
+Chroma brightChroma(const Frame& f, const cv::Mat& mask, double chromaMinLuma)
+{
+    double cx = std::nan(""), cy = std::nan("");
+    cv::Mat bright;
+    cv::compare(f.luma, chromaMinLuma, bright, cv::CMP_GE);
+    cv::Mat chromaMask;
+    cv::bitwise_and(mask, bright, chromaMask);
+    if (cv::countNonZero(chromaMask) > 0) {
+        const cv::Scalar meanLin = cv::mean(f.lin, chromaMask);  // lin 是 R,G,B 语义
+        const double s = meanLin[0] + meanLin[1] + meanLin[2];
+        if (s > 1e-9) {
+            cx = meanLin[0] / s;
+            cy = meanLin[1] / s;
+        }
+    }
+    return {cx, cy};
+}
+
+/// 色度弱校验（验证器角色，不当命名者）。**期望色度 = 闭式解最强受光面预测字节解完 sRGB
+/// 的色度**——与观测同域，ACES 串扰已在预测里。最强面用 V=N 退化：漫反射色度与 V 无关，
+/// specular 只加白不改色度方向。阈值 0.35：只有**方向性**偏离（分配顺序变了 / 材质颜色
+/// 坏了）才触发。全暗 id 色度 NaN = 不校验（它正是待判对象，不冤）。
+/// 偏离 ⟹ 登记进 `at.conflicts`（不 throw：现场必须先看到它看到的原始数据）。
+void checkChromaOrdering(Attribution& at, int32_t oid, const std::string& piece, Chroma obs,
+    const ManifestPiece& mp, std::array<double, 3> lightDir, double lightIntensity)
+{
+    const double cx = obs.r, cy = obs.g;
+    const Vec3 L = normalize(Vec3{-lightDir[0], -lightDir[1], -lightDir[2]});
+    static constexpr double kAxes[6][3] = {
+        {1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+    Vec3 bestFace{1, 0, 0};
+    double bestNdl = -1.0;
+    for (const auto& ax : kAxes) {
+        const Vec3 n{ax[0], ax[1], ax[2]};
+        if (const double ndl = dot(n, L); ndl > bestNdl) {
+            bestNdl = ndl;
+            bestFace = n;
+        }
+    }
+    const auto predByte = toBytes(shadeDirect(bestFace, bestFace, L,
+        Vec3{mp.color[0], mp.color[1], mp.color[2]}, mp.roughness, mp.metallic,
+        Vec3{lightIntensity, lightIntensity, lightIntensity}));
+    const double pr = srgbDecode(predByte[0] / 255.0)
+        + srgbDecode(predByte[1] / 255.0) + srgbDecode(predByte[2] / 255.0);
+    // 取反早返回（与原来的 `pr > 1e-9 && !std::isnan(cx)` 逐值等价，含 pr 为 NaN 的边角）。
+    if (!(pr > 1e-9) || std::isnan(cx))
+        return;
+    const double ex = srgbDecode(predByte[0] / 255.0) / pr;
+    const double ey = srgbDecode(predByte[1] / 255.0) / pr;
+    if (const double d = std::hypot(cx - ex, cy - ey); d > 0.35)
+        at.conflicts.push_back("id " + std::to_string(oid) + " 按序应为 "
+            + piece + "，但观测色度 (" + fmt3(cx) + "," + fmt3(cy)
+            + ") 距期望 (" + fmt3(ex) + "," + fmt3(ey) + ") 达 " + fmt3(d)
+            + "——分配顺序假设或材质颜色之一变了");
+}
+}  // namespace
+
 Attribution attribute(const Frame& f, const Manifest& man, std::array<double, 3> lightDir,
     double lightIntensity, double darkEps, double chromaMinLuma)
 {
@@ -159,85 +262,21 @@ Attribution attribute(const Frame& f, const Manifest& man, std::array<double, 3>
         PieceStat st;
         st.oid = oid;
         st.pixels = cv::countNonZero(mask);
-        std::vector<double> vals;
-        vals.reserve(static_cast<size_t>(st.pixels));
-        for (int y = 0; y < f.luma.rows; ++y) {
-            const auto* mrow = mask.ptr<uchar>(y);
-            const double* lrow = f.luma.ptr<double>(y);
-            for (int x = 0; x < f.luma.cols; ++x)
-                if (mrow[x])
-                    vals.push_back(lrow[x]);
-        }
-        std::sort(vals.begin(), vals.end());
-        const auto pct = [&](double q) {
-            return vals[static_cast<size_t>(q / 100.0 * (vals.size() - 1))];
-        };
-        st.medianLinear = pct(50.0);
-        st.p05Linear = pct(5.0);
-        st.p95Linear = pct(95.0);
-        st.darkFraction = static_cast<double>(
-            std::count_if(vals.begin(), vals.end(),
-                [&](double v) { return v < darkEps; }))
-            / static_cast<double>(vals.size());
-
-        // 亮像素平均色度（**验证器输入**，命名者已换成顺序假设）。黑像素 0/0 无
-        // 定义 ⟹ 只从亮像素取；全暗 id 得 NaN = 不校验（文件头硬约束）。
-        double cx = std::nan(""), cy = std::nan("");
-        cv::Mat bright;
-        cv::compare(f.luma, chromaMinLuma, bright, cv::CMP_GE);
-        cv::Mat chromaMask;
-        cv::bitwise_and(mask, bright, chromaMask);
-        if (cv::countNonZero(chromaMask) > 0) {
-            const cv::Scalar meanLin = cv::mean(f.lin, chromaMask);  // lin 是 R,G,B 语义
-            const double s = meanLin[0] + meanLin[1] + meanLin[2];
-            if (s > 1e-9) {
-                cx = meanLin[0] / s;
-                cy = meanLin[1] / s;
-            }
-        }
+        fillReadout(st, sortedLumaInMask(f, mask), darkEps);
+        const Chroma chroma = brightChroma(f, mask, chromaMinLuma);
         // 顺序命名（主映射注释在 unique 循环上方）。
         const auto pit = byIndex.find(oid - 1);
         if (pit != byIndex.end()) {
             st.piece = pit->second->name;
-            // 色度弱校验（验证器角色，不当命名者）。**期望色度 = 闭式解最强受光面
-            // 预测字节解完 sRGB 的色度**——与观测同域，ACES 串扰已在预测里。最强面
-            // 用 V=N 退化：漫反射色度与 V 无关，specular 只加白不改色度方向。
-            // 阈值 0.35：只有**方向性**偏离（分配顺序变了 / 材质颜色坏了）才触发。
-            // 全暗 id 色度 NaN = 不校验（它正是待判对象，不冤）。
-            const Vec3 L = normalize(Vec3{-lightDir[0], -lightDir[1], -lightDir[2]});
-            static constexpr double kAxes[6][3] = {
-                {1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
-            Vec3 bestFace{1, 0, 0};
-            double bestNdl = -1.0;
-            for (const auto& ax : kAxes) {
-                const Vec3 n{ax[0], ax[1], ax[2]};
-                if (const double ndl = dot(n, L); ndl > bestNdl) {
-                    bestNdl = ndl;
-                    bestFace = n;
-                }
-            }
-            const auto predByte = toBytes(shadeDirect(bestFace, bestFace, L,
-                Vec3{pit->second->color[0], pit->second->color[1], pit->second->color[2]},
-                pit->second->roughness, pit->second->metallic,
-                Vec3{lightIntensity, lightIntensity, lightIntensity}));
-            const double pr = srgbDecode(predByte[0] / 255.0)
-                + srgbDecode(predByte[1] / 255.0) + srgbDecode(predByte[2] / 255.0);
-            if (pr > 1e-9 && !std::isnan(cx)) {
-                const double ex = srgbDecode(predByte[0] / 255.0) / pr;
-                const double ey = srgbDecode(predByte[1] / 255.0) / pr;
-                if (const double d = std::hypot(cx - ex, cy - ey); d > 0.35)
-                    at.conflicts.push_back("id " + std::to_string(oid) + " 按序应为 "
-                        + st.piece + "，但观测色度 (" + fmt3(cx) + "," + fmt3(cy)
-                        + ") 距期望 (" + fmt3(ex) + "," + fmt3(ey) + ") 达 " + fmt3(d)
-                        + "——分配顺序假设或材质颜色之一变了");
-            }
+            checkChromaOrdering(
+                at, oid, st.piece, chroma, *pit->second, lightDir, lightIntensity);
             at.nameByOid.emplace(oid, st.piece);
         } else {
             st.piece = "unnamed#" + std::to_string(oid);  // manifest 之外的 id
             at.unnamed.push_back(oid);
         }
-        st.chromaR = cx;  // 全暗 = NaN（输出可见，不装成 0）
-        st.chromaG = cy;
+        st.chromaR = chroma.r;  // 全暗 = NaN（输出可见，不装成 0）
+        st.chromaG = chroma.g;
         at.stats.push_back(std::move(st));
     }
     return at;

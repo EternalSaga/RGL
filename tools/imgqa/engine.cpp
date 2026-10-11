@@ -1,19 +1,23 @@
-// 配置目录生成 + 引擎进程生命周期（httplib RPC）。
+// 引擎会话层：SPV 新鲜度守卫 + rgl 子进程生命周期 + httplib RPC 客户端。
+//
+// 三层缝（B5 拆文件）：本文件 = **会话**（profile 目录之外的一切）；`engine_profile.cpp` =
+// **配置语义**（把 ProfileOpts 翻译成 lua）；`engine_lua_edit.cpp` = **lua 文本编辑原语**。
+// 本层不认识任何一份 lua 文件的名字，配置层也不 fork 进程——改超时/重试口径动这里，
+// 加一个诊断键动那里。
+
 #include "imgqa.h"
 
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <chrono>
-#include <cctype>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <iomanip>
-#include <regex>
 #include <iterator>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <thread>
@@ -37,265 +41,69 @@ const std::string& projectRoot()
 }
 
 namespace {
+
 std::string buildRglDir() { return projectRoot() + "/build/rgl"; }
-std::string profileTemplate() { return projectRoot() + "/qa/configs/analytic"; }
 
-std::string readFile(const fs::path& p)
+// ── SPV 新鲜度守卫的三枚小件（口径全文见 `checkShadersFresh`）────────────────────────
+
+/// spv 目录里有没有任何一个 `.spv`：一个都没有 = 从未构建 ⟹ 跳过守卫（后续引擎启动失败兜底）。
+bool hasAnySpv(const fs::path& spvDir)
 {
-    std::ifstream in(p, std::ios::binary);
-    if (!in)
-        throw std::runtime_error("读不到文件: " + p.string());
-    return std::string{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}};
+    std::error_code ec;
+    for (const auto& e : fs::directory_iterator(spvDir, ec))
+        if (!ec && e.is_regular_file(ec) && e.path().extension() == ".spv")
+            return true;
+    return false;
 }
 
-void writeFile(const fs::path& p, const std::string& text)
+/// 清单的一行（`<spv 名> <它自己的源闭包…>`）里比该 spv 新的源，逐条给「源 新于 spv」。
+/// 该 spv 未构建（如 target 新加未编译）= 空：引擎启动失败兜底，不在这里喊。
+std::vector<std::string> staleDepsOfLine(const fs::path& spvDir, const std::string& line)
 {
-    std::ofstream out(p, std::ios::binary | std::ios::trunc);
-    out << text;
-}
-
-/**
- * 替换 lua 里**第一条以 `key` 开头的未注释行**的整行值（行尾注释一并丢掉——这是生成出来的
- * profile 副本，不是仓库配置，留着解释新值的旧注释更坏）。
- *
- * 为什么手写行扫描而不是 `std::regex`：`std::regex` 的 ECMAScript **没有 multiline**，`^` 只
- * 匹配整个输入的开头，`(?m)` 前缀会直接语法错。行首是空白但不允许是 `--`：camera.lua 里
- * 排着一整列注释掉的备选机位，那些必须原样留着。
- */
-void subLuaLine(std::string& text, const std::string& key, const std::string& value,
-    const std::string& where)
-{
-    std::istringstream in(text);
-    std::ostringstream out;
-    std::string line;
-    bool hit = false;
-    while (std::getline(in, line)) {
-        const auto first = line.find_first_not_of(" \t");
-        if (!hit && first != std::string::npos && line.compare(first, key.size(), key) == 0
-            && line.substr(first, 2) != "--") {
-            const bool comma = line.find(',') != std::string::npos;
-            out << std::string(first, ' ') << key << " = " << value << (comma ? "," : "") << "\n";
-            hit = true;
-            continue;
-        }
-        out << line << "\n";
+    std::vector<std::string> out;
+    if (line.empty() || line[0] == '#')
+        return out;
+    std::error_code ec;
+    std::istringstream cols(line);
+    std::string spvName;
+    cols >> spvName;
+    const auto spvT = fs::last_write_time(spvDir / spvName, ec);
+    if (ec)
+        return out;
+    for (std::string depRel; cols >> depRel;) {
+        const auto depT = fs::last_write_time(fs::path(projectRoot()) / depRel, ec);
+        if (!ec && depT > spvT)
+            out.push_back(depRel + " 新于 " + spvName);
     }
-    if (!hit)
-        throw std::runtime_error(where + " 里没有未注释的 " + key + " 行");
-    text = out.str();
+    return out;
 }
 
-/// 从**引擎解析器源码**抽「配置解析器认识的根级键」。
-/// 不手抄白名单：手抄的会和解析器一起漂移，最后变成"看起来在检查其实什么都没检查"
-/// ——那比不检查更糟。两种读取形态都要覆盖（实测各配置模块用的不一样，只覆盖一种会
-/// **误报**合法键，而误报的检查很快被当噪音绕过）：
-///   diagnostics_impl：readBool("no_vvl", def) ／ scene_config_impl：readBool(root, "spin", def)
-std::set<std::string> knownRootKeys(const std::string& implRel)
-{
-    const std::string src = readFile(fs::path(projectRoot()) / implRel);
-    // raw string 用 rx 定界符：模式内容里有 `)"`（捕获组收尾紧跟引号），
-    // 裸 R"(...)" 会被提前终止（实测踩过）。
-    static const std::regex reRoot(R"rx(root\[\s*"([a-z_]{2,26})"\s*\])rx");
-    static const std::regex reRead(R"rx(\bread\w*\([^"]*"([a-z_]{2,26})")rx");
-    static const std::regex reGet(R"rx(\b(?:get|opt|has|contains|named)\(\s*"([a-z_]{2,26})")rx");
-    std::set<std::string> keys;
-    for (auto* re : {&reRoot, &reRead, &reGet})
-        for (std::sregex_iterator it(src.begin(), src.end(), *re), e; it != e; ++it)
-            keys.insert((*it)[1].str());
-    return keys;
-}
+/// 「源新于 spv」的总对数 + 要打进异常里的读数行。两者必须分开数：读数刷屏没有信息量，
+/// 但总数被截成 5 就是把 N 对过期读成 5 对。
+struct StaleScan {
+    int pairs = 0;
+    std::string lines;
+};
 
-/// 写出的键必须在解析器里认得。**拼错键 = 静默用默认值**，是最坏的一类失效：
-/// 配置看起来写了、引擎看起来读了、判据看起来在跑，而它跑在默认值上。
-/// （真实事故：`shadowPass` 是 C++ 字段名，shadow.lua 的键实为 `mode`。）
-void assertKeys(const std::string& fileName, const std::set<std::string>& emitted,
-    const std::set<std::string>& known)
+/// 一对过期记进总账：`pairs` 照计，读数行只收头 5 条。
+void noteStale(StaleScan& scan, const std::string& dep)
 {
-    std::string unknown;
-    for (const auto& k : emitted)
-        if (!known.count(k))
-            unknown += (unknown.empty() ? "" : ", ") + k;
-    if (!unknown.empty())
-        throw std::runtime_error(fileName
-            + " 写出了配置解析器不认识的键: " + unknown
-            + "\n继续跑就等于在**默认值**上下判据——拒绝。");
-}
-
-const char* lb(bool v) { return v ? "true" : "false"; }
-
-/// 交付配置模式：把 `key = <旧值>,` 一行的**值**换成新值（只认第一处，且必须找到）。
-/// 找不到就抛——静默不替换 = 判据跑在**交付配置的原值**上而工具以为改了，
-/// 与「拼错键 = 静默用默认值」同罪（makeProfile 头注释）。
-void replaceValue(std::string& text, const std::string& file, const std::string& key,
-    const std::string& newValue)
-{
-    const std::string head = key + " = ";
-    const auto at = text.find(head);
-    if (at == std::string::npos)
-        throw std::runtime_error("交付配置 " + file + " 里没有键 `" + key
-            + "`——覆写失败，拒绝在旧值上下判据");
-    const auto eol = text.find_first_of(",\n", at + head.size());
-    if (eol == std::string::npos)
-        throw std::runtime_error("交付配置 " + file + " 的键 `" + key + "` 形状不认识");
-    text.replace(at + head.size(), eol - (at + head.size()), newValue);
-}
-
-/// 交付配置模式：**限定在某个表内**改写 `key = 值`（`env.intensity` 这种）。
-/// 为什么不能直接用 `replaceValue`：`intensity` 在 scene.lua 里出现两次（`env.intensity`
-/// 与 `light.intensity`），`replaceValue` 取**第一个命中**——今天恰好是 env 那个，但那是
-/// **文档顺序**在替我们做决定。键不存在于该表内 = 抛（拒绝在旧值上下判据）。
-void replaceValueInBlock(std::string& text, const std::string& file, const std::string& block,
-    const std::string& key, const std::string& newValue)
-{
-    const std::string bhead = block + " = {";
-    const auto bpos = text.find(bhead);
-    if (bpos == std::string::npos)
-        throw std::runtime_error("交付配置 " + file + " 里没有表 `" + block + "`，无法覆写 " + key);
-    const std::string head = key + " = ";
-    const auto at = text.find(head, bpos);
-    if (at == std::string::npos)
-        throw std::runtime_error("交付配置 " + file + " 的 `" + block + "` 表里没有键 `" + key + "`");
-    const auto eol = text.find_first_of(",\n", at + head.size());
-    if (eol == std::string::npos)
-        throw std::runtime_error("交付配置 " + file + " 的键 `" + block + "." + key + "` 形状不认识");
-    text.replace(at + head.size(), eol - (at + head.size()), newValue);
-}
-
-/// 交付配置模式：把表值键 `key = { a, b }` 整体改写为 `key = { newContent }`。
-/// 为什么不能复用 `replaceValue`：它按第一个 `,` 或换行收尾，而表值**内部就有逗号**
-/// （`headless_size = { 1280, 720 }` ⟹ 截在 1280 后 = 留下 `720 },` = Lua 语法错）。
-/// ⚠ `newContent` 是**花括号内部**的内容（不含花括号）——上一版把开括号混进参数、函数
-/// 又补一次，写出 `headless_size = { { 2560, 1440 } }`：语法合法（嵌套表）但 loader 把
-/// [1] 当数字读 = ConfigLoadFailed，REF 超采样组整组引擎启动即退（本轮缺陷 B 的根因）。
-/// 形状自检（写出后必须匹配 `key = { <num>, <num> }`）就钉住这一类「语法合法、语义是
-/// 嵌套表」的失效——只测「正则命中数」抓不到它，命中了恰恰说明写坏了。
-void replaceTableValue(std::string& text, const std::string& file, const std::string& key,
-    const std::string& newContent)
-{
-    const std::string head = key + " = {";
-    const auto at = text.find(head);
-    if (at == std::string::npos)
-        throw std::runtime_error("交付配置 " + file + " 里没有表值键 `" + key
-            + "`——覆写失败，拒绝在旧值上下判据");
-    const auto close = text.find('}', at + head.size());
-    if (close == std::string::npos)
-        throw std::runtime_error("交付配置 " + file + " 的表值键 `" + key + "` 没有收尾");
-    text.replace(at + head.size(), close - (at + head.size()) + 1,
-        " " + newContent + " }");
-    // 写出后的形状自检：扁平数值表 `{ 数字, 数字 }`，**不许**出现嵌套花括号。
-    const std::regex flatRx(key + R"aaa(\s*=\s*\{\s*-?[0-9]+(\.[0-9]+)?\s*,\s*-?[0-9]+(\.[0-9]+)?\s*\})aaa");
-    if (!std::regex_search(text, flatRx))
-        throw std::runtime_error("交付配置 " + file + " 的 `" + key
-            + "` 改写后不是扁平数值表（疑似嵌套花括号 = 引擎 loader 会把表当数字读 = "
-              "ConfigLoadFailed）。改写前的原文片段: "
-            + text.substr(at, std::min<size_t>(64, text.size() - at)));
-}
-
-/// 交付配置模式：在**第一条未注释的 `key = ...` 行**之后插入若干行（不碰原行）。
-/// 与 `subLuaLine` 的区别 = 原行要留着（`spin = false` 是交付配置的既有键，本工具只
-/// 追加同级的诊断键）；与 `rewriteTaaBlock` 的「插到 `return {` 之后」的区别 =
-/// 插到兄弟键旁边，读生成出来的 profile 时键的归属一眼可见。
-void insertAfterKey(std::string& text, const std::string& file, const std::string& key,
-    const std::string& block)
-{
-    std::istringstream in(text);
-    std::ostringstream out;
-    std::string line;
-    bool hit = false;
-    while (std::getline(in, line)) {
-        out << line << "\n";
-        const auto first = line.find_first_not_of(" \t");
-        if (!hit && first != std::string::npos && line.compare(first, key.size(), key) == 0
-            && line.substr(first, 2) != "--"
-            // 键名边界：`spin` 不得命中同前缀的兄弟键（scene.lua 里就有 `spin_frame_angle`，
-            // 插到它后面 = 插到自己刚写的那两行之后，第二次调用直接跑偏）。
-            && (first + key.size() >= line.size()
-                || !(std::isalnum(static_cast<unsigned char>(line[first + key.size()]))
-                    || line[first + key.size()] == '_'))) {
-            out << block;
-            hit = true;
-        }
-    }
-    if (!hit)
-        throw std::runtime_error("交付配置 " + file + " 里没有未注释的 " + key
-            + " 行——诊断键无处可插，拒绝在缺键的配置上下判据");
-    text = out.str();
-}
-
-/// 交付配置模式：整段替换 `scene.lua` 的 `taa = { ... },` 块为显式键。
-/// 缺块就在 `return {` 之后插一段——**不静默跳过**（跳过 = 判据跑在「TAA 关」的配置上，
-/// 恒等式会因「pass 根本不在图里」而平凡成立 = 最阴的假绿）。
-/// ⚠ 入参曾是 11 个位置参数（批 13.11 加 clip 门时到 13 个）——**改成直传 ProfileOpts**：
-///   诊断键越加越多，位置参数是「加一个键改三处 + 中间默认值可能被跳过」的漂移面。
-/// 约定：**默认态 = 不写键**（写出的键越少，漂移面越小）。
-/// 🔴 但「不写键 = 与交付配置相同」这条**只在引擎默认值等于交付值时成立**。批 13.13 把交付
-/// 默认改成 `clip_mode = 11` 后它就不成立了（不写键 = 引擎默认 0 = 门关），见下方出声守卫。
-/// 交付态的 `clip_mode` 会被这次整块替换丢掉 ⟹ **出声**。抽成独立函数的理由：判据自成一件事，
-/// 而 `rewriteTaaBlock` 的认知复杂度上限很紧（早返回把三个守卫从调用点挪走）。
-/// ⚠ 判据**不硬编码交付值**，而是从即将被替换掉的原文里读——交付档位再改也不会漂。
-void warnIfDropsDeliveryClipMode(const std::string& scene, std::string::size_type begin,
-    std::string::size_type blockEnd, double clipMode)
-{
-    static bool warned = false;
-    if (warned || clipMode != 0.0 || blockEnd == std::string::npos)
+    ++scan.pairs;
+    if (scan.pairs > 5)
         return;
-    const auto hit = scene.find("clip_mode", begin);
-    if (hit == std::string::npos || hit >= blockEnd)
-        return;
-    warned = true;
-    std::printf("⚠ 本次**未指定 `--clip`** ⟹ 不写 `clip_mode` 键 ⟹ 回落引擎默认 **0**（门关硬盒），"
-                "而交付配置 scene.lua 的 taa 段里写的是非零档位（整块替换会把它丢掉）。"
-                "**读数不是交付态**：要测交付态请显式 `--clip 11`，要测门关就接受它叫门关。"
-                "（本行每次运行只打一次）\n");
+    if (scan.pairs > 1)
+        scan.lines += "\n";
+    scan.lines += "  " + dep;
 }
 
-void rewriteTaaBlock(std::string& scene, const ProfileOpts& o)
+/// 逐行走完整份清单（口径 = 逐 spv 只比它自己的源闭包，见 `checkShadersFresh` 头注释）。
+StaleScan scanStaleSpvs(const fs::path& spvDir, std::istream& manifest)
 {
-    // 批 14.6：本块**不再写 `enabled`**（键已删）——「TAA 在不在图里」是 runtime.lua 的
-    // aa 三态（由 `fsrKeyValues` 写），本块只剩调参。块本身仍整段重写：feedback /
-    // jitter_scale / base_space 三枚是判据的工作点，缺省值与交付配置不同就必须覆写。
-    std::ostringstream blk;
-    blk << "    taa = {\n        feedback = "
-        << std::setprecision(6) << o.taaFeedback << ",\n        jitter_scale = "
-        << o.taaJitterScale << ",\n        base_space = " << lb(o.taaBaseSpace);
-    // 消融/诊断开关：默认态 = 不写键（键越少漂移面越小）。
-    // motion_compensation 只关 prevSpin 场景旋转补偿（spin 模式 M3 用）；reprojection 关的是
-    // prevViewProj 相机重投影本身（相机模式 M3 用）——两者在相机运动下**不等价**，
-    // 语义 → rgl/scene_config.cppm 字段注释。
-    if (!o.taaMotionCompensation)
-        blk << ",\n        motion_compensation = false";
-    if (!o.taaReprojection)
-        blk << ",\n        reprojection = false";
-    if (o.taaDiagReject)
-        blk << ",\n        diag_reject = true";
-    // 输入侧重建核（批 13.8）：0 = 双线性 = 引擎默认 = **不写键**（门关态与今天逐字相同）
-    if (o.taaInputKernel != 0.0)
-        blk << ",\n        input_kernel = " << std::setprecision(6) << o.taaInputKernel;
-    // 历史裁剪消融门（批 13.11）：0 = 现行 = **不写键**。λ 只在 mode=4 有意义（一起写）。
-    if (o.taaClipMode != 0.0)
-        blk << ",\n        clip_mode = " << std::setprecision(6) << o.taaClipMode
-            << ",\n        clip_soft = " << std::setprecision(6) << o.taaClipSoft;
-    blk << ",\n    },\n";
-    const auto begin = scene.find("\n    taa = {");
-    if (begin != std::string::npos) {
-        // 🔴 交付态的 clip_mode 会被这次整块替换丢掉 ⟹ 出声（理由见 helper 头注释）。
-        warnIfDropsDeliveryClipMode(scene, begin, scene.find("\n    }", begin), o.taaClipMode);
-        // 块收尾是 `\n    }` 再加**可选逗号**（交付配置里 taa 是 return 表最后一项，带逗号）。
-        // 逗号必须一起吃掉——留一个孤零零的 `,` 在 `}` 前 = Lua 语法错（实测踩过：
-        // `scene.lua:235: unexpected symbol near ','`）。
-        const auto end = scene.find("\n    }", begin);
-        if (end == std::string::npos)
-            throw std::runtime_error("交付配置 scene.lua 的 taa 块没有收尾，无法覆写");
-        std::string::size_type len = 6;  // == std::string_view("\n    }").size()
-        if (end + len < scene.size() && scene[end + len] == ',')
-            ++len;
-        scene.replace(begin, end - begin + len, "\n" + blk.str());
-        return;
-    }
-    const auto head = scene.find("return {");
-    if (head == std::string::npos)
-        throw std::runtime_error("交付配置 scene.lua 不是 `return {` 形状，无法注入 taa 块");
-    scene.insert(head + 8, "\n" + blk.str());
+    StaleScan scan;
+    for (std::string line; std::getline(manifest, line);)
+        for (const auto& dep : staleDepsOfLine(spvDir, line))
+            noteStale(scan, dep);
+    return scan;
 }
 
 /// D2（批 12.3d）：SPV 新鲜度守卫（mtime 轻版，不核内容）。**所有引擎驱动路径的
@@ -311,14 +119,7 @@ void rewriteTaaBlock(std::string& scene, const ProfileOpts& o)
 void checkShadersFresh()
 {
     const fs::path spvDir = fs::path(buildRglDir()) / "generated_shaders";
-    std::error_code ec;
-    bool anySpv = false;
-    for (const auto& e : fs::directory_iterator(spvDir, ec))
-        if (!ec && e.is_regular_file(ec) && e.path().extension() == ".spv") {
-            anySpv = true;
-            break;
-        }
-    if (!anySpv)
+    if (!hasAnySpv(spvDir))
         return;
 
     const fs::path manifest = fs::path(buildRglDir()) / "shader_deps.txt";
@@ -330,649 +131,18 @@ void checkShadersFresh()
     std::ifstream in(manifest);
     if (!in)
         throw std::runtime_error("读不到 " + manifest.string());
-    std::string stale;
-    int shown = 0;
-    for (std::string line; std::getline(in, line);) {
-        if (line.empty() || line[0] == '#')
-            continue;
-        std::istringstream cols(line);
-        std::string spvName;
-        cols >> spvName;
-        const fs::path spv = spvDir / spvName;
-        const auto spvT = fs::last_write_time(spv, ec);
-        if (ec)
-            continue;  // 该 spv 未构建（如 target 新加未编译）：引擎启动失败兜底
-        for (std::string depRel; cols >> depRel;) {
-            const auto depT = fs::last_write_time(fs::path(projectRoot()) / depRel, ec);
-            if (ec || depT <= spvT)
-                continue;
-            if (++shown <= 5) {
-                if (shown > 1)
-                    stale += "\n";
-                stale += "  " + depRel + " 新于 " + spvName;
-            }
-        }
-    }
-    if (shown) {
-        if (shown > 5)
-            stale += "\n  …（共 " + std::to_string(shown) + " 对）";
+    const StaleScan stale = scanStaleSpvs(spvDir, in);
+    if (stale.pairs) {
+        std::string tail;
+        if (stale.pairs > 5)
+            tail = "\n  …（共 " + std::to_string(stale.pairs) + " 对）";
         throw std::runtime_error(
-            "SPV 疑似过期（测量会跑在旧着色器上）：\n" + stale
+            "SPV 疑似过期（测量会跑在旧着色器上）：\n" + stale.lines + tail
             + "\n  修复：just build（重编 SPV；改 shader 契约/schema 再 just reflect）后重跑");
     }
 }
 
-// ── 交付配置覆写器的两个底层件（批 N6d 第 4/5 例外门）────────────────────────────
-//
-// 为什么不能复用 replaceValue / replaceValueInBlock（那两个服务的是"标量键 + 文档顺序
-// 里唯一的表"）：
-//  ① `izb = { on = true, grid = 512, dump_frame = 0 }` 的**值里有逗号**，
-//     `replaceValue` 按第一个 `,` 收尾 ⟹ 截在 `{ on = true` 后面 = 留下 `grid = 512 }`
-//     = Lua 语法错。引擎两种 izb 形态都收（布尔简写 = 只开关），覆写器两种都得能吃。
-//  ② `pcss  = {` 在 configs/shadow.lua 里是**两个空格**（对齐排版），
-//     `replaceValueInBlock` 找字面 `"pcss = {"` 直接抛「没有表 pcss」——排版改一个空格
-//     就让覆写器打偏，而打偏的方向是"抛"，看起来还像是配置的问题。
-//  ③ 表内找键必须**限定在该表的括号跨度内**：`sun_degrees` 在 pcss 与 evssm 两块里各有
-//     一份（两档分立是消债-16⑤），"从 pcss 块开头往后找第一个"在 pcss 缺键时会静默
-//     命中 evssm 那份 = 改错档、读数却标着 pcss。
-
-/// 定位 `key =` 之后**值**的跨度：标量吃到 `,`/换行，表值吃到配对 `}`（嵌套计数）。
-/// ⚠ 不支持"引号内含逗号/花括号"的值（`mode = "csm"` / 路径都不含，本工具的键已逐一核对）。
-std::pair<size_t, size_t> valueSpanAt(const std::string& text, size_t from,
-    const std::string& file, const std::string& what)
-{
-    size_t b = from;
-    while (b < text.size() && (text[b] == ' ' || text[b] == '\t'))
-        ++b;
-    if (b < text.size() && text[b] == '{') {
-        for (size_t i = b, depth = 0; i < text.size(); ++i) {
-            if (text[i] == '{')
-                ++depth;
-            else if (text[i] == '}' && --depth == 0)
-                return {b, i + 1 - b};
-        }
-        throw std::runtime_error("交付配置 " + file + " 的 `" + what + "` 表值没有收尾");
-    }
-    const size_t e = text.find_first_of(",\n", b);
-    return {b, (e == std::string::npos ? text.size() : e) - b};
-}
-
-/// 顶层口径的位置判据：键必须在行首（允许缩进）。
-bool hitAtTopLevel(const std::string& text, size_t p, size_t ls)
-{
-    return text.find_first_not_of(" \t", ls) == p;
-}
-
-/// 表内口径的位置判据：左邻必须是空白 / `{` / `,`（键名不得是更长标识符的后缀），
-/// 且不得落在本行 `--` 之后（行内注释里的键名不是覆写目标）。
-bool hitInsideTable(const std::string& text, size_t p, size_t ls, size_t end)
-{
-    const char left = p == ls ? ' ' : text[p - 1];
-    if (p != ls && !(left == ' ' || left == '\t' || left == '{' || left == ','))
-        return false;
-    const size_t dash = text.find("--", ls);
-    return dash == std::string::npos || dash >= end || dash >= p;
-}
-
-/// 命中的 `key` 算不算覆写目标（两种口径的判据本体，见 findKeyHits 注释）。
-/// 拆成独立函数的理由不是审美：本文件的样式护栏在认知复杂度 15，把"扫描"与"判据"混在
-/// 一个 while 里直接冲到 33（error 级）。
-bool isKeyHit(const std::string& text, size_t p, const std::string& key, size_t end,
-    bool lineStartOnly)
-{
-    const size_t ls = p == 0 ? 0 : text.rfind('\n', p - 1) + 1;
-    if (text.compare(ls, std::min<size_t>(2, end - ls), "--") == 0)
-        return false;  // 整行注释
-    if (!(lineStartOnly ? hitAtTopLevel(text, p, ls) : hitInsideTable(text, p, ls, end)))
-        return false;
-    size_t i = p + key.size();
-    while (i < end && (text[i] == ' ' || text[i] == '\t'))
-        ++i;
-    return i < end && text[i] == '=';  // 键名是更长标识符的前缀时这里挡住
-}
-
-/// 找 `key =` 的出现位置。两种口径：
-///  - **顶层**（lineStartOnly=true，同 insertAfterKey）：键必须在行首（允许缩进）——`izb` 因此
-///    不会命中 `izb_shadow = …`，也不会命中注释里 `"evssm" = 远场软影矩图` 那种散文。
-///  - **表内**（lineStartOnly=false）：`evssm = { sun_degrees = 0.53, … }` 的键**和表头同一行**，
-///    行首口径永远找不到它。改要求左邻是空白 / `{` / `,`，并排除"本行 `--` 之后"的命中。
-std::vector<size_t> findKeyHits(const std::string& text, const std::string& key,
-    size_t from = 0, size_t to = std::string::npos, bool lineStartOnly = true)
-{
-    std::vector<size_t> hits;
-    const size_t end = std::min(to, text.size());
-    for (size_t pos = from; (pos = text.find(key, pos)) != std::string::npos;) {
-        if (pos >= end)
-            break;
-        if (isKeyHit(text, pos, key, end, lineStartOnly))
-            hits.push_back(pos);
-        pos += key.size();
-    }
-    return hits;
-}
-
-/// 交付配置覆写器：**顶层**键整值替换（标量与表值都吃）。找不到 / 命中多处 / 形状不认识
-/// 一律抛——覆写失败必须在生成期炸，不能到判据里发现（同"三个例外"的纪律）。
-void overrideTopLevelValue(std::string& text, const std::string& file, const std::string& key,
-    const std::string& newValue)
-{
-    const auto hits = findKeyHits(text, key);
-    if (hits.size() != 1)
-        throw std::runtime_error("交付配置 " + file + " 里顶层键 `" + key + "` 命中 "
-            + std::to_string(hits.size()) + " 处（要恰好 1 处）——覆写目标不唯一或不存在，"
-              "拒绝在旧值上下判据");
-    const size_t eq = text.find('=', hits[0] + key.size());
-    if (eq == std::string::npos)
-        throw std::runtime_error("交付配置 " + file + " 的键 `" + key + "` 后面没有 `=`");
-    const auto span = valueSpanAt(text, eq + 1, file, key);
-    text.replace(span.first, span.second, newValue);
-}
-
-/// 读回**顶层键当前的值文本**（去空白），供覆写器写后自检用。
-/// 与 `overrideTopLevelValue` 走同一套定位判据 ⟹ 自检问的是"引擎会读到的那个值是什么"，
-/// 而不是"文件里有没有出现过这串字符"（后者会被注释里的同名示例骗到）。
-std::string topLevelValueOf(const std::string& text, const std::string& key,
-    const std::string& file)
-{
-    const auto hits = findKeyHits(text, key);
-    if (hits.size() != 1)
-        throw std::runtime_error("交付配置 " + file + " 里顶层键 `" + key + "` 命中 "
-            + std::to_string(hits.size()) + " 处（要恰好 1 处）——自检无法定位");
-    const size_t eq = text.find('=', hits[0] + key.size());
-    const auto span = valueSpanAt(text, eq + 1, file, key);
-    const std::string v = text.substr(span.first, span.second);
-    const auto a = v.find_first_not_of(" \t\r\n");
-    if (a == std::string::npos)
-        return "";
-    return v.substr(a, v.find_last_not_of(" \t\r\n") - a + 1);
-}
-
-/// 交付配置覆写器：**限定在某个表的括号跨度内**整值替换（表头允许任意空白，
-/// `pcss  = {` 这种对齐排版也认）。见文件头 ②③ 两条为什么必须有它。
-void overrideValueInTable(std::string& text, const std::string& file, const std::string& table,
-    const std::string& key, const std::string& newValue)
-{
-    // 表头：先按"顶层键"口径找 `table`，再要求其后（跳过 `=` 与空白）是 `{`
-    size_t head = std::string::npos;
-    for (const auto hit : findKeyHits(text, table)) {
-        size_t i = hit + table.size();
-        while (i < text.size() && (text[i] == ' ' || text[i] == '\t' || text[i] == '='))
-            ++i;
-        if (i < text.size() && text[i] == '{') {
-            head = i;
-            break;
-        }
-    }
-    if (head == std::string::npos)
-        throw std::runtime_error("交付配置 " + file + " 里没有表 `" + table + "`（或它不是表）"
-            "，无法覆写 " + key + "——拒绝在旧值上下判据");
-    const auto span = valueSpanAt(text, head, file, table);
-    const auto inner = findKeyHits(text, key, span.first, span.first + span.second, false);
-    if (inner.empty())
-        throw std::runtime_error("交付配置 " + file + " 的 `" + table + "` 表里没有键 `" + key
-            + "`（表跨度内未命中 = 不越界去别的表找，那会改错块）");
-    if (inner.size() > 1)
-        throw std::runtime_error("交付配置 " + file + " 的 `" + table + "` 表里 `" + key
-            + "` 命中 " + std::to_string(inner.size()) + " 处，覆写目标不唯一");
-    const size_t eq = text.find('=', inner[0] + key.size());
-    const auto val = valueSpanAt(text, eq + 1, file, table + "." + key);
-    text.replace(val.first, val.second, newValue);
-}
-
-/**
- * 第 4 个例外门（批 N6d）：覆写交付配置 `shadow.lua` 的软影滤波轴。
- * 门闭 = 直接返回（一个键都不写 = 现有判据逐位不变）。
- * @throws 档名非法 / 键缺失 / 太阳角给了不消费它的档
- */
-void applyShadowRouteGate(const std::string& dir, const ProfileOpts& o)
-{
-    if (!o.overrideShadowRoute)
-        return;
-    const std::string mode = o.shadowRouteMode;
-    if (mode != "none" && mode != "csm" && mode != "pcss" && mode != "evssm")
-        throw std::runtime_error("overrideShadowRoute=true 而 shadowRouteMode='" + mode
-            + "' 不是 none|csm|pcss|evssm 之一（拼错的档名引擎只在启动期喊，本工具在生成期就拒）");
-    std::string sh = readFile(dir + "/shadow.lua");
-    overrideTopLevelValue(sh, "shadow.lua", "mode", "\"" + mode + "\"");
-    // izb 强制关：交付配置写的是**子表形态**，这里整值换成布尔简写 `false`
-    // （引擎两形态都收）。留着它 = 硬影 mask 乘在软影之上 = 测的不是滤波轴（§4.1）。
-    overrideTopLevelValue(sh, "shadow.lua", "izb", "false");
-    if (o.shadowRouteSunDegrees >= 0.0) {
-        if (mode != "pcss" && mode != "evssm")
-            throw std::runtime_error("shadowRouteSunDegrees="
-                + std::to_string(o.shadowRouteSunDegrees) + " 而 mode='" + mode
-                + "'：太阳角只有 pcss/evssm 两档消费，写进 none/csm = 配置里写了、什么都没发生");
-        std::ostringstream v;
-        v << std::setprecision(9) << o.shadowRouteSunDegrees;
-        overrideValueInTable(sh, "shadow.lua", mode, "sun_degrees", v.str());
-    }
-    // 写出后自检：读回**解析后的值**比对，而不是在文件里搜字面量。
-    // "覆写了但没生效"是这类工具最贵的失效（键名打偏 = 静默拿出厂值下判据）。
-    // ⚠ 刻意不用 `sh.find("on = true") == npos` 那种"旧值离场"搜法：它把判据耦合到
-    //   **全文**（含注释）——configs/shadow.lua 的注释块正在讲子表形态怎么写，哪天补一行
-    //   `-- izB = { on = true, ... }` 示例，旧搜法就抛一句看不懂的"自检失败"。
-    const bool modeOk = topLevelValueOf(sh, "mode", "shadow.lua") == "\"" + mode + "\"";
-    const bool izbOk = topLevelValueOf(sh, "izb", "shadow.lua") == "false";
-    if (!modeOk || !izbOk)
-        throw std::runtime_error("shadow.lua 覆写后自检失败（mode=" + mode
-            + " / izb=false 之一没真正落上，读回值 = \"" + topLevelValueOf(sh, "mode", "shadow.lua")
-            + "\" / \"" + topLevelValueOf(sh, "izb", "shadow.lua")
-            + "\"）——拒绝在旧值上下判据");
-    writeFile(dir + "/shadow.lua", sh);
-}
-
-/**
- * 第 5 个例外门（批 N6d）：把 profile 切成**一次性截图**形态（钉死帧号）。
- * 门闭 = 直接返回。rpc 同时关掉是引擎既有约定（llm 截图在跑时 `/shot` 返 409）。
- */
-void applyLlmShotGate(const std::string& dir, const ProfileOpts& o)
-{
-    if (!o.overrideLlmShot)
-        return;
-    if (o.llmShotFile.empty())
-        throw std::runtime_error("overrideLlmShot=true 而 llmShotFile 为空——截图落在哪里都不知道");
-    if (o.llmShotDelayFrames < 0)
-        throw std::runtime_error("llmShotDelayFrames 不能为负: "
-            + std::to_string(o.llmShotDelayFrames));
-    std::string rt = readFile(dir + "/runtime.lua");
-    replaceValue(rt, "runtime.lua", "llm_debug", "true");
-    overrideValueInTable(rt, "runtime.lua", "llm_shot", "file", "\"" + o.llmShotFile + "\"");
-    overrideValueInTable(rt, "runtime.lua", "llm_shot", "size",
-        "{ " + std::to_string(o.size[0]) + ", " + std::to_string(o.size[1]) + " }");
-    overrideValueInTable(rt, "runtime.lua", "llm_shot", "delay_frames",
-        std::to_string(o.llmShotDelayFrames));
-    if (rt.find("llm_debug = true") == std::string::npos)
-        throw std::runtime_error("runtime.lua 覆写后自检失败（llm_debug 不是 true）");
-    writeFile(dir + "/runtime.lua", rt);
-
-    std::string dg = readFile(dir + "/diagnostics.lua");
-    replaceValue(dg, "diagnostics.lua", "rpc", "false");
-    writeFile(dir + "/diagnostics.lua", dg);
-}
-
-/**
- * 合成 profile 的 shadow.lua（从 makeProfile **抽出**：`shadow-kernel-scale` 的 pcss 臂要写
- * 逐档调参块，往 makeProfile 里再加一个分支会把它的认知复杂度再往上推，而它已经是
- * 基线里的 61-ERROR）。抽出后语义一字未改，只多一条「整份覆写」的早返回。
- *
- * 三个 C++ 布尔塌成**一个 mode 轴 + 一个正交 izb**——旧世界 `shadow_pass`/`shadow_pcss`/
- * `shadow_evssm` 三个独立布尔能写出「EVSSM 开着但图集不画」这类自相矛盾的组合，枚举下它
- * 表达不出来，塌缩方向因此唯一：evssm 档 → "evssm"（swim 臂的语义就是"开 EVSSM"），否则
- * shadowPass → "csm"，全关 → "none"。唯一剩下的矛盾组合显式拒绝而不是替调用方猜：EVSSM 要图集。
- */
-void writeSyntheticShadowLua(const std::string& outDir, const ProfileOpts& o)
-{
-    // 整份覆写 = 调用方给臂定义（见 ProfileOpts::shadowLuaOverride）。mode 打偏在 lua 侧
-    // 是**静默**的，所以消费方另有守卫：`shadow_kernel_scale.cpp::requireShadowEcho` 拿引擎
-    // 自己的门回显对账。
-    if (!o.shadowLuaOverride.empty()) {
-        writeFile(outDir + "/shadow.lua", o.shadowLuaOverride);
-        return;
-    }
-    if (o.evssmShadow && !o.shadowPass)
-        throw std::runtime_error("ProfileOpts: evssmShadow=true 而 shadowPass=false 是矛盾组合"
-            "（EVSSM 的矩图建立在 CSM 图集上）；批 N6b 起 mode 是单轴枚举，拒绝替你猜一档");
-    const std::string shadowMode
-        = o.evssmShadow ? "evssm" : (o.shadowPass ? "csm" : "none");
-    // izb 与 mode 正交（旧 izb_shadow）。izb 开而 mode=none 是 gate_lint 的启动期 error
-    // （mask 无内容 = 一帧阴影也不产，债-32），这里同样不写出去。
-    const bool izb = o.izbShadow && o.shadowPass;
-    // izb 子表只在需要 dump_frame 时展开（布尔简写 = 只开关，grid/dump 保默认）。
-    // ⚠ 只校验两个顶层键：izb 子表的 on/grid/dump_frame 在解析器里是 `t["…"]` 形态，
-    //   knownRootKeys 的 `root["…"]` 正则抽不到，写进校验集会把校验器自己变成假阳性源。
-    assertKeys("shadow.lua", {"mode", "izb"}, knownRootKeys("rgl/shadow_config_impl.cppm"));
-    writeFile(outDir + "/shadow.lua",
-        "return { mode = \"" + shadowMode + "\", izb = "
-        + (o.izbDumpFrame > 0
-               ? std::string("{ on = ") + lb(izb) + ", dump_frame = "
-                     + std::to_string(o.izbDumpFrame) + " }"
-               : std::string(lb(izb)))
-        + " }\n");
-}
 }  // namespace
-
-/**
- * 机位 + 帧驱动 yaw 写进 camera.lua（**两条路径共用一份实现**）。
- *
- * 为什么必须共用：此前只有交付分支写，合成 profile 根本不产出 camera.lua
- * ⟹ `ProfileOpts::hasCamera` 在合成路径上**静默失效**——`temporal.cpp` 的注释一直声称
- * 「机位同时给两处」，实际只给了 RPC 一处，而 hasCamera 那条注释记的正是「RPC 之前的帧
- * 已经进了 TAA 历史」这条假绿教训。写出来的键仍然只在门开时出现（不写 = 引擎默认 = 逐位今天）。
- */
-void applyCameraLua(const std::string& outDir, const ProfileOpts& o)
-{
-    if (!o.hasCamera && o.cameraFrameYaw == 0.0)
-        return;  // 两边都没要求 ⟹ 不产出 camera.lua（保持既有合成判据的逐位行为）
-    const std::string path = outDir + "/camera.lua";
-    std::string cam = readFile(fs::exists(path) ? path : profileTemplate() + "/camera.lua");
-    if (o.hasCamera) {
-        const auto vec = [](const std::array<double, 3>& a) {
-            std::ostringstream s;
-            s.precision(9);
-            s << "{ " << a[0] << ", " << a[1] << ", " << a[2] << " }";
-            return s.str();
-        };
-        std::ostringstream fov;
-        fov.precision(9);
-        fov << o.cameraFov;
-        subLuaLine(cam, "position", vec(o.cameraPosition), "camera.lua");
-        subLuaLine(cam, "target", vec(o.cameraTarget), "camera.lua");
-        subLuaLine(cam, "fovDegrees", fov.str(), "camera.lua");
-    }
-    if (o.cameraFrameYaw != 0.0) {
-        // 插到 `mode` 行旁（两份 camera.lua 里 frame_yaw 都只有注释行，subLuaLine 找不到实体行）。
-        // 键名拼错在 lua 侧是**静默**的，消费方的「运动激励在场性」守卫兜底。
-        std::ostringstream yaw;
-        yaw << std::setprecision(9) << "    frame_yaw = " << o.cameraFrameYaw << ",\n";
-        insertAfterKey(cam, "camera.lua", "mode", yaw.str());
-    }
-    writeFile(path, cam);
-}
-
-/**
- * 升频 / aa 的键表（批 14.5 引入，批 14.6 换轨三态）：只返回**非默认**的键，默认一律不写
- * （写出的键越少，与交付配置的分歧面越小，同 taa 诊断键纪律）。
- *
- * 🔴 **两条 profile 路径都必须经过它**，这是本函数存在的唯一理由：交付路径的键已存在于
- * `configs/runtime.lua`（走 `replaceValue`），而合成路径的 `runtime.lua` 是**从零写的**
- * （那些键根本不存在，`replaceValue` 会抛"键不存在"）。只改交付那条的后果很具体：
- * `temporal-flicker --target edge`（合成 aa_target ⟹ **闭式唯一适用**的靶）上三条 FSR 臂
- * 会被静默当原生分辨率跑，却标着 "@0.75" 报进表里 —— 静默换臂。
- *
- * ⚠ `aa == Fsr` 时两枚子调参**总是显式写**（哪怕值 = 出厂默认）：出厂 `fsr` 块是
- * true/true = 设计点，"不写键 = 拿出厂值"会让想量纯空间的臂静默跑成时域+抖动。
- * "默认不写键"的纪律只适用于**引擎默认 = 本工具默认**的键，这里两者相反，写才是诚实。
- * 合成路径的嵌套形状（`temporal`/`jitter` 归进 `fsr = { … }`）由 makeProfile 负责，
- * 本函数只给扁平的 (键, 值) 对——交付路径的块内键恰好也是逐行 replaceValue 的形态。
- */
-std::vector<std::pair<std::string, std::string>> fsrKeyValues(const ProfileOpts& o)
-{
-    std::vector<std::pair<std::string, std::string>> kv;
-    if (o.renderScale != 1.0) {
-        char sc[32];
-        std::snprintf(sc, sizeof sc, "%g", o.renderScale);
-        kv.emplace_back("render_scale", sc);
-    }
-    if (o.velocityField)
-        kv.emplace_back("velocity_field", "true");
-    if (o.aa == Aa::Fsr) {
-        kv.emplace_back("aa", "\"fsr\"");
-        kv.emplace_back("temporal", lb(o.fsrTemporal));
-        kv.emplace_back("jitter", lb(o.fsrJitter));
-    } else if (o.aa == Aa::Taa) {
-        kv.emplace_back("aa", "\"taa\"");
-    }
-    return kv;
-}
-
-/**
- * 升频 / aa 的守卫（批 14.6 三态化后从三条收成一条）。共同理由：这些错法**都不报错**，
- * 只是把臂悄悄换成另一条臂，然后读数被当成 FSR 读。判据工具最坏的失效不是崩，是
- * **静默换臂**（同 `requireJsonObject` 的教训：宁可在这里点名真因，也不要让下游抛一条
- * 指向错的一层的消息）。
- *
- * 删掉的两条旧守卫及理由：
- *  · 「fsrUpscaler 开了但 velocityField 没开」——aa=fsr 时 velocity 由**引擎解析期隐含
- *    打开**（单一来源在 applyAaKey），失效形态从根上消除；
- *  · 「fsrTemporal 与 taa 互斥」——aa 是一个槽位，非法组合**写不出来**（比运行期拒绝更强）。
- */
-void checkFsrOpts(const ProfileOpts& o)
-{
-    if ((o.fsrTemporal || o.fsrJitter) && o.aa != Aa::Fsr)
-        throw std::runtime_error(
-            "fsrTemporal/fsrJitter 只在 aa == Fsr 时有意义（引擎只在 aa=fsr 时才接 FSR），"
-            "其余态下开子选项 = 空开关（配置里写了、什么都没发生）。");
-}
-
-std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
-{
-    // 守卫放在**最前面**：两条 profile 路径（交付 / 合成）都必须过它，放后面会被早退路径绕掉。
-    checkFsrOpts(o);
-    // 第 4 例外门（覆写**交付** shadow.lua 的软影轴）只在交付配置路径里有实现。放在最前面
-    // 的理由：门开了却走合成路径 = **静默不生效** = 在出厂值上下判据，必须在生成期就拒。
-    // 第 5 例外门（llm 截图形态）**两条路径都有实现**——它只改 runtime.lua 的 llm_debug /
-    // llm_shot 与 diagnostics.lua 的 rpc，而合成路径写出的 runtime.lua 里这些键本来就在
-    // （`applyLlmShotGate` 逐键覆写 + 写后自检，键不在就抛），故不再要求 deliveryConfigDir。
-    if (o.deliveryConfigDir.empty() && o.overrideShadowRoute)
-        throw std::runtime_error(
-            "overrideShadowRoute 是交付配置模式的例外门（它覆写的是**交付** shadow.lua 的 "
-            "mode/izb/sun_degrees），而本 opts 没给 deliveryConfigDir ⟹ 这个门根本没有实现路径"
-            "（合成 profile 请直接写 shadowPass / shadowLuaOverride 等字段）。"
-            "开着门却静默不生效 = 在出厂值上下判据，拒绝生成");
-    fs::create_directories(outDir);
-    // ── 交付配置模式（批 13.1e）：基底 = 仓库 configs/，只覆写 headless / rpc / taa ──
-    // 判据必须在**用户实际跑的那份配置**上求值（ProfileOpts::deliveryConfigDir 的注释里
-    // 记着这条是怎么用一轮假绿换来的）。刻意**不**在这里重抄 env/ao/shadow/light：
-    // 那些键的真相在交付配置里，工具再抄一份就是第二份真相，会漂移。
-    if (!o.deliveryConfigDir.empty()) {
-        std::error_code ec;
-        int copied = 0;
-        for (fs::directory_iterator it(o.deliveryConfigDir, ec), e; it != e; it.increment(ec)) {
-            if (!it->is_regular_file(ec))
-                continue;
-            const std::string ext = it->path().extension().string();
-            if (ext != ".lua" && ext != ".json")
-                continue;
-            fs::copy_file(it->path(), fs::path(outDir) / it->path().filename(),
-                fs::copy_options::overwrite_existing);
-            ++copied;
-        }
-        if (copied == 0)
-            throw std::runtime_error("交付配置目录里没有 .lua/.json: " + o.deliveryConfigDir);
-
-        std::string rt = readFile(outDir + "/runtime.lua");
-        replaceValue(rt, "runtime.lua", "headless", "true");
-        replaceValue(rt, "runtime.lua", "llm_debug", "false");  // RPC 形态与 llm 截图互斥
-        // 尺寸覆写是**可选**的（默认关：现有判据全部钉 1280×720，隐式改尺寸 = 换口径）。
-        // 表值必须走 replaceTableValue，理由见其注释（replaceValue 会截在花括号里的逗号；
-        // 而参数**不含花括号**——含了就写出嵌套表，缺陷 B 的根因，函数内有形状自检）。
-        if (o.overrideHeadlessSize)
-            replaceTableValue(rt, "runtime.lua", "headless_size",
-                std::to_string(o.size[0]) + ", " + std::to_string(o.size[1]));
-
-        // ── 升频 / FSR 臂（批 14.5 量「闪烁↔鬼影」跷跷板）──
-        // 键表与守卫都在 `fsrKeyValues` / `checkFsrOpts`，合成路径共用同一份（理由见彼处）。
-        for (const auto& fk : fsrKeyValues(o))
-            replaceValue(rt, "runtime.lua", fk.first, fk.second);
-        writeFile(outDir + "/runtime.lua", rt);
-
-        std::string dg = readFile(outDir + "/diagnostics.lua");
-        replaceValue(dg, "diagnostics.lua", "rpc", "true");
-        replaceValue(dg, "diagnostics.lua", "rpc_port", std::to_string(8788));
-        // ⚠ picking 覆写门在下面（同一个 dg 上继续改），所以这里**不**提前 writeFile
-
-        // 三个**显式门**（默认关 = 一个键都不多写）。开着的语义 = 这次跑的就是 A/B 的另一侧，
-        // 或需要 object_id 观测通道。见 ProfileOpts 的注释。
-        if (o.overridePicking)
-            replaceValue(dg, "diagnostics.lua", "picking", o.picking ? "true" : "false");
-        writeFile(outDir + "/diagnostics.lua", dg);
-
-        std::string sc = readFile(outDir + "/scene.lua");
-        if (o.overrideEnvIntensity) {
-            std::ostringstream v;
-            v << std::setprecision(9) << o.envIntensity;
-            // ⚠ 表名是 `environment`，**不是** `env`（实测第一版按 "env = {" 找，直接抛
-            //   「交付配置 scene.lua 里没有表 env」）。而键名在 shader/文档里一律叫 env，
-            //   正是这种"配置里叫 environment、口头叫 env"的错位最容易让覆写静默打偏。
-            replaceValueInBlock(sc, "scene.lua", "environment", "intensity", v.str());
-        }
-        if (o.overrideAoStrength) {
-            std::ostringstream v;
-            v << std::setprecision(9) << o.aoStrength;
-            replaceValueInBlock(sc, "scene.lua", "ao", "strength", v.str());
-        }
-        rewriteTaaBlock(sc, o);
-        // 帧驱动 spin（诊断激励门）。**只在门开时写**：不写 = 交付配置原样 = 逐位今天。
-        // 键名拼错在这里是**静默**的（scene.lua 的未知键引擎不打警告），所以消费方
-        // temporal-motion 另有在场性守卫：运动组的连拍若逐位相同 = 键没生效 = 立刻停下。
-        if (o.spinFrameAngle != 0.0) {
-            std::ostringstream spin;
-            spin << std::setprecision(9)
-                 << "    spin_frame_angle = " << o.spinFrameAngle << ",\n"
-                 << "    spin_axis = { " << o.spinAxis[0] << ", " << o.spinAxis[1] << ", "
-                 << o.spinAxis[2] << " },\n";
-            insertAfterKey(sc, "scene.lua", "spin", spin.str());
-        }
-        writeFile(outDir + "/scene.lua", sc);
-
-        // variant 覆写是**可选**的：留空 = 尊重交付配置自己写的路线（交付默认 deferred）。
-        if (!o.variant.empty()) {
-            std::string rg = readFile(outDir + "/render_graph.lua");
-            static const std::regex variantRx(R"(variant\s*=\s*"[^"]*")");
-            if (!std::regex_search(rg, variantRx))
-                throw std::runtime_error("交付配置 render_graph.lua 无 variant 行，无法覆写");
-            writeFile(outDir + "/render_graph.lua",
-                std::regex_replace(rg, variantRx, "variant = \"" + o.variant + "\""));
-        }
-        // 机位写进 camera.lua（**从第 1 帧生效**，理由见 ProfileOpts::hasCamera 的注释）
-        applyCameraLua(outDir, o);
-        // 第 4/5 例外门（批 N6d `shadow-softness`）：门闭 = 函数第一行返回 = 交付配置
-        // 一个键都不多写 = 现有判据逐位不变。放在既有写盘**之后**、直接读写 profile 目录，
-        // 是为了让 makeProfile 本体不掺这两个门的 if（护栏：认知复杂度；语义：
-        // 「门闭 = 逐位不变」由门函数自己保证，不靠调用侧记得加 if）。
-        applyShadowRouteGate(outDir, o);
-        applyLlmShotGate(outDir, o);
-        return outDir;
-    }
-    // render_graph.lua 定义图本身，**必须整份拷**（只给 {variant=...} 得 0 个
-    // swapchain 附件 → 启动失败，实测踩过）。
-    fs::copy_file(profileTemplate() + "/render_graph.lua", outDir + "/render_graph.lua",
-        fs::copy_options::overwrite_existing);
-    // variant 重写（izb 判据要 deferred；模板默认 forward）：只动 variant 行的字符串值
-    if (!o.variant.empty()) {
-        std::ifstream in(outDir + "/render_graph.lua");
-        std::string rg((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-        static const std::regex variantRx(R"(variant\s*=\s*"[^"]*")");
-        if (!std::regex_search(rg, variantRx))
-            throw std::runtime_error("render_graph.lua 模板无 variant 行，无法重写");
-        const std::string out = std::regex_replace(rg, variantRx, "variant = \"" + o.variant + "\"");
-        writeFile(outDir + "/render_graph.lua", out);
-    }
-    for (const char* j : {"log_level.json", "shaderRefLogLevel.json"})
-        fs::copy_file(profileTemplate() + "/" + j, outDir + "/" + j,
-            fs::copy_options::overwrite_existing);
-
-    // 升频 / aa 键（批 14.5 引入，批 14.6 三态化）。合成路径的 runtime.lua 是**从零写的**、
-    // 这些键根本不存在 ⟹ 必须在这里追加。只改交付那条路径的后果：`--target edge`（闭式唯一
-    // 适用的靶）上的 FSR 臂静默跑成原生分辨率，却标着 "@0.75" 报进表里。
-    // 键源与交付路径**同一个 fsrKeyValues**；这里只多做一步形状适配：`temporal`/`jitter`
-    // 归进嵌套的 `fsr = { … }` 表（引擎只从块内读它们，扁平写出 = 静默读默认）。
-    std::string fsrLua;
-    std::string fsrBlock;
-    for (const auto& fk : fsrKeyValues(o)) {
-        if (fk.first == "temporal" || fk.first == "jitter") {
-            fsrBlock += (fsrBlock.empty() ? "  fsr = { " : ", ") + fk.first + " = " + fk.second;
-            continue;
-        }
-        fsrLua += "  " + fk.first + " = " + fk.second + ",\n";
-    }
-    if (!fsrBlock.empty())
-        fsrLua += fsrBlock + " },\n";
-    writeFile(outDir + "/runtime.lua",
-        "return { headless = true, headless_size = { " + std::to_string(o.size[0]) + ", "
-            + std::to_string(o.size[1]) + " },\n"
-          "  win_size = { 800, 600 }, show_after = -1, present_mode = \"immediate\",\n"
-          "  ui_font = \"\", ui_font_size = 18.0,\n"
-          + fsrLua
-          // ⚠ `llm_shot` 必须**自成一块**、每个键以 `,` 收尾：`overrideValueInTable` 的表头按
-          // **顶层键**口径找（行首），值跨度按「到 `,` 或换行为止」算。旧写法把三个键与
-          // `llm_debug` 挤在同一行、`delay_frames = 8 } }` 收尾 ⟹ 门开时表头找不到（抛）、
-          // 值跨度吞掉尾部 ` } }`（实测把 runtime.lua 写坏成 lua 语法错）。lua 语义一字未变。
-          + "  llm_debug = false,\n"
-            "  llm_shot = {\n"
-            "    file = \"screenshots/unused.png\",\n"
-            "    size = { " + std::to_string(o.size[0]) + ", " + std::to_string(o.size[1])
-            + " },\n"
-              "    delay_frames = 8,\n"
-              "  },\n"
-              "}\n");
-
-    const std::set<std::string> diagKeys = {"no_vvl", "no_hdr", "no_present", "vtx_canary",
-        "texel_canary", "dump_gbuf", "style_dist", "tex_dist", "texture_force_size",
-        "texture_force_white", "texture_force_unorm", "profiler", "imgui", "config_reload",
-        "shader_reload", "picking", "rpc", "rpc_port"};
-    assertKeys("diagnostics.lua", diagKeys, knownRootKeys("rgl/diagnostics_impl.cppm"));
-    writeFile(outDir + "/diagnostics.lua",
-        std::string(
-            "return { no_vvl = false, no_hdr = false, no_present = false, vtx_canary = false,\n"
-            "  texel_canary = -1, dump_gbuf = -1, style_dist = false, tex_dist = false,\n"
-            "  texture_force_size = 0, texture_force_white = false, texture_force_unorm = false,\n"
-            "  profiler = 0, imgui = false, config_reload = false, shader_reload = false,\n"
-            "  picking = ")
-        + lb(o.picking) + ", rpc = true, rpc_port = 8788 }\n");
-
-    writeSyntheticShadowLua(outDir, o);  // 阴影门（整段实现见该函数注释）
-
-    std::set<std::string> sceneKeys
-        = {"entities", "styles", "material_styles", "deferred_styles", "environment", "light",
-           "spin", "cube", "exposure", "ao"};
-    if (o.aa == Aa::Taa)
-        sceneKeys.insert("taa");  // 只在 TAA 真在图时写这段（批 14.6：开关在 runtime 的 aa，本块只剩调参）
-    assertKeys("scene.lua", sceneKeys, knownRootKeys("rgl/scene_config_impl.cppm"));
-    const auto j3 = [](std::array<double, 3> a) {
-        return std::to_string(a[0]) + ", " + std::to_string(a[1]) + ", " + std::to_string(a[2]);
-    };
-    // entities：默认一份 glb；entitiesLua 非空 = 整条由调用侧给（内建合成靶 aa_target
-    // 没有 glb 文件）。拼错 type 不会静默——parseEntityItem 直接启动报错列合法值。
-    const std::string entities = o.entitiesLua.empty()
-        ? "    entities = { { type = \"model\", file = \"models/" + o.glb + "\" } },\n"
-        : "    entities = { " + o.entitiesLua + " },\n";
-    // TAA 调参段（批 12.6 引入；批 14.6：**不再写 enabled**——开关在 runtime 的 aa 三态）：
-    // 其余走引擎默认（运动补偿开）——写出来的键越少，漂移面越小。两个消融开关各有用途：
-    // jitter_scale=0 = 只留时域累积；feedback=1 = 只抖不滤（输出 = 本帧，temporal 的阳性
-    // 锚点组。别写 0——0 是「只要裁剪后的历史、完全丢本帧」的退化反馈环，测出来的不是
-    // 闪烁本体）。
-    const std::string taa = o.aa == Aa::Taa
-        ? "    taa = { feedback = " + std::to_string(o.taaFeedback)
-              + ", jitter_scale = " + std::to_string(o.taaJitterScale)
-              + ", base_space = " + lb(o.taaBaseSpace)
-              // 输入侧重建核（批 13.8）：0 = 双线性 = 引擎默认 = 不写键
-              + (o.taaInputKernel != 0.0
-                     ? ", input_kernel = " + std::to_string(o.taaInputKernel)
-                     : "")
-              // 历史裁剪消融门（批 13.11）：0 = 现行 = 不写键。合成靶也要能跑——
-              // 「修法不得是 bistro 专用」这条护栏要求同一臂在合成靶上同向。
-              + (o.taaClipMode != 0.0
-                     ? ", clip_mode = " + std::to_string(o.taaClipMode) + ", clip_soft = "
-                           + std::to_string(o.taaClipSoft)
-                     : "")
-              + " },\n"
-        : "";
-    // styles 必须显式写（switch 首战抓到的静默坑）：缺表回落默认 pbr→model_pbr，
-    // 而 model_pbr.frag **不 import shadow/env**——阴影与 env 开关全部
-    // 退化为逐位相同的假象（投影侧照画、采样侧不存在）。model_pbr_ibl 在
-    // env=0/shadow=off 下直接光与 model_pbr 逐式相同（IBL 项 ×intensity=0 归零），
-    // 闭式解前提不破。
-    // 表 = **交付配置 configs/scene.lua 的全量四风格 + 材质名连连看**（13.1b 补：此前只写
-    // unlit/pbr 两条，bistro 的 `light`/`vegetation` 材质直接启动失败
-    // "style not in scene.lua styles: light"；缺 material_styles 则 Emissive/Foliage
-    // 全落 pbr = 测的不是交付路径）。对无这些材质的探针场景（cornell_box / aa_target）
-    // 逐位 inert——连连看按材质名命中，探针场景无命中项。
-    const std::string styles =
-        "    styles = { unlit = \"model\", pbr = \"model_pbr_ibl\", vegetation = "
-        "\"model_vegetation\", light = \"model_light\" },\n"
-        "    material_styles = { { pattern = \"Emissive\", style = \"light\" },\n"
-        "      { pattern = \"Foliage\", style = \"vegetation\" } },\n"
-        "    deferred_styles = { vegetation = \"deferred_geometry_vegetation\",\n"
-        "      light = \"deferred_geometry_light\" },\n";
-    writeFile(outDir + "/scene.lua",
-        "return {\n" + entities
-          + styles
-        // 环境（intensity / skybox 由 ProfileOpts 给；env 文件与交付配置同一张 .hdr）
-          + "    environment = { hdr = \"env/san_giuseppe_bridge_4k.hdr\", hdr_size = 2048,\n"
-        "      intensity = "
-            + std::to_string(o.envIntensity) + ", skybox = " + lb(o.skybox) + " },\n"
-          "    light = { direction = { "
-            + j3(o.lightDir) + " }, color = { 1.0, 1.0, 1.0 },\n      intensity = "
-            + std::to_string(o.lightIntensity) + ", ambient = { " + j3(o.ambient) + " } },\n"
-            + "    spin = false, cube = false, exposure = " + std::to_string(o.exposure)
-            + ",\n    ao = { strength = " + std::to_string(o.aoStrength) + " },\n"
-            + taa + "}\n");
-    applyCameraLua(outDir, o);  // 合成路径同样支持机位/帧驱动 yaw（见 applyCameraLua 注释）
-    // 第 5 例外门（钉死帧号的一次性截图形态）。门闭 = 函数第一行返回 = 现有合成判据逐位不变。
-    applyLlmShotGate(outDir, o);
-    return outDir;
-}
 
 // ── Engine ─────────────────────────────────────────────────────────────────
 
@@ -995,6 +165,7 @@ struct Engine::Impl {
 };
 
 namespace {
+
 /**
  * 引擎日志尾部（「配置写出来必须能被引擎接受」这条自检的**取证**部分）。
  *
@@ -1024,6 +195,33 @@ std::string logTail(const std::string& path, int lines = 12)
         out << "\n    | " << ring[static_cast<size_t>(i % lines)];
     return out.str();
 }
+
+// ── 子进程与 RPC 就绪（从 `Engine` 构造切出：构造本体只留「守卫 → fork → 挂 http」）────
+
+/// 下面两枚只是把 `Engine` 构造里那两个 `std::to_string(W…(st) ? … : …)` 挪出 throw 表达式：
+/// 三元塞在 throw 里会把构造的认知复杂度顶到线上，而文案逐字不变。
+/// wait status → 文案里的退出码（`WIFEXITED` 不成立时给 -1，与原表达式逐字同）。
+std::string exitCodeText(int st) { return std::to_string(WIFEXITED(st) ? WEXITSTATUS(st) : -1); }
+
+/// wait status → 文案里的信号号（不是被信号杀的 = 0，与原表达式逐字同）。
+std::string signalText(int st) { return std::to_string(WIFSIGNALED(st) ? WTERMSIG(st) : 0); }
+
+/// 子进程侧的全部动作（fork 之后才跑）：切 CWD → stdout/stderr 接日志 → 指定 profile 目录 exec。
+/// **不得抛**：异常穿不过 `execl`，失败只能以非零码报出去（120/121/127 各指一处）。
+void execEngineChild(const std::string& bin, const std::string& logPath,
+    const std::string& profileDir)
+{
+    // 子进程：CWD 必须是 build/rgl（相对路径读 configs/ 与 generated_shaders/）。
+    if (::chdir(buildRglDir().c_str()) != 0)
+        _exit(120);
+    if (freopen(logPath.c_str(), "wb", stdout) == nullptr)
+        _exit(121);
+    dup2(fileno(stdout), fileno(stderr));
+    setenv("RGL_CONFIG_DIR", profileDir.c_str(), 1);
+    execl(bin.c_str(), "rgl", static_cast<char*>(nullptr));
+    _exit(127);
+}
+
 }  // namespace
 
 Engine::Engine(std::string profileDir, int port) : impl_(new Impl{.profileDir = profileDir, .port = port})
@@ -1043,17 +241,8 @@ Engine::Engine(std::string profileDir, int port) : impl_(new Impl{.profileDir = 
     const pid_t pid = ::fork();
     if (pid < 0)
         throw std::runtime_error("fork 失败");
-    if (pid == 0) {
-        // 子进程：CWD 必须是 build/rgl（相对路径读 configs/ 与 generated_shaders/）。
-        if (::chdir(buildRglDir().c_str()) != 0)
-            _exit(120);
-        if (freopen(impl_->logPath.c_str(), "wb", stdout) == nullptr)
-            _exit(121);
-        dup2(fileno(stdout), fileno(stderr));
-        setenv("RGL_CONFIG_DIR", impl_->profileDir.c_str(), 1);
-        execl(bin.c_str(), "rgl", static_cast<char*>(nullptr));
-        _exit(127);
-    }
+    if (pid == 0)
+        execEngineChild(bin, impl_->logPath, impl_->profileDir);
     impl_->pid = pid;
     impl_->http = std::make_unique<httplib::Client>("127.0.0.1", port);
     impl_->http->set_connection_timeout(2, 0);
@@ -1072,8 +261,7 @@ Engine::Engine(std::string profileDir, int port) : impl_(new Impl{.profileDir = 
         if (waitpid(pid, &st, WNOHANG) == pid) {
             impl_->pid = -1;
             throw std::runtime_error("引擎提前退出（exit="
-                + std::to_string(WIFEXITED(st) ? WEXITSTATUS(st) : -1) + ", signal="
-                + std::to_string(WIFSIGNALED(st) ? WTERMSIG(st) : 0)
+                + exitCodeText(st) + ", signal=" + signalText(st)
                 + "）= 写出的配置没被引擎接受，见 " + impl_->logPath + logTail(impl_->logPath));
         }
         if (impl_->http->Get("/"))

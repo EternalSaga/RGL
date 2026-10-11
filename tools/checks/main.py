@@ -67,6 +67,7 @@ from rules_doxygen import interface_declared_names, rule_doxygen
 from rules_metrics import evaluate_metrics
 from rules_layers import lib_layering_checks
 from rules_text import (agents_doc_index_checks, doc_pointer_checks,
+                        judgments_pointer_checks,
                         docs_status_checks, forbidden_vulkan_checks,
                         slang_load_bitcast_checks, modern_cpp_checks, text_checks)
 from models import Thresholds, Warning
@@ -281,6 +282,7 @@ def main() -> None:
         warnings.extend(docs_status_checks())
         warnings.extend(agents_doc_index_checks())
         warnings.extend(doc_pointer_checks())
+        warnings.extend(judgments_pointer_checks())
         warnings.extend(lib_layering_checks())
 
     # 工具侧基线（只准降不准升）：--update-tool-baseline 先重写再比对（必然持平）。

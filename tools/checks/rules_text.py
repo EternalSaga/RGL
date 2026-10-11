@@ -15,7 +15,8 @@ from typing import NamedTuple
 from config import (ALLOWED_CPP, AGENTS_FILE, AGENTS_INDEX_EXEMPT_DIRS,
                     DOC_POINTER_REF_ROOTS, DOCS_STATUS_MAX_LINES, EXCLUDE_FILES,
                     EXPORT_NAMESPACE_EXEMPT, FORBIDDEN_EDGES,
-                    FORBIDDEN_VULKAN_APIS, FORBIDDEN_VULKAN_MSG, MODERN_BANNED,
+                    FORBIDDEN_VULKAN_APIS, FORBIDDEN_VULKAN_MSG, JUDGMENTS_TABLE_GLOB,
+                     MODERN_BANNED,
                     NEW_DELETE_EXEMPT, RETIRED_DOC_NAMES, ROOT, STL_GMF_EXCEPTIONS,
                     STL_HEADERS, USING_NAMESPACE_EXEMPT, VULKAN_HPP_INCLUDE_FILES,
                     ZERO_ENTT_MODULES)
@@ -347,6 +348,55 @@ def doc_pointer_checks() -> list[Warning]:
                 warnings.append(Warning(rel, src[:m.start()].count("\n") + 1,
                     f"悬空文档指针 {path} 磁盘上不存在——先补目的地再修指针"
                     "（见 skill rgl-doc-placement）", "error"))
+    return warnings
+
+
+# ─── 判据契约表的「出处指针」有效性（§1.8）────────────────────────────────────
+
+# 出处指针的形态：`tools/imgqa/<文件>` 紧跟一个反引号标识符或「段名」——判据表把它当字符串
+# 抄在「钉住：…」里，两种锚点写法都要查（`cmdTemporalTailCamera` 与「判决线」是同一类指针）。
+_JUDGMENTS_POINTER_RX = re.compile(
+    r"tools/imgqa/([a-z_0-9]+\.(?:cpp|h))\s*(?:`([^`]{1,60})`|「([^」]{2,40})」)")
+
+
+def judgments_pointer_checks() -> list[Warning]:
+    """判据契约表里的 **文件 + 锚点** 出处指针，必须指向该文件里**真实存在**的符号或段名。
+
+    动机（2026-10-11，imgqa 拆 TU 那批）：判据表把"这条判据的口径写在哪个文件的哪段注释"
+    抄成字符串，`imgqa check` 原样打印。拆文件把实现搬走后，**文件还在、锚点没了**——
+    现有 §1.7 只查 `.md` 路径存在性，管不到这种"指针不悬空但翻空"的失效；实测一次拆文件
+    就留下 18 处失效（全在 judgments_table_tail.cpp），闸门全程绿。
+
+    两条判定（均 error 级）：
+    1. 指向的 `tools/imgqa/*.{cpp,h}` 磁盘上不存在；
+    2. 锚点（剥掉 `()` 与 `::` 右半后）不在该文件文本里 —— 消息里直接给出**当前真正含该
+       锚点的文件**，改起来是一次复制不是一次搜索。
+
+    范围只到 `tools/imgqa/`：判据表的职责就是钉住 imgqa 自己的仪器口径。
+    """
+    warnings: list[Warning] = []
+    root = Path(ROOT)
+    imgqa = root / "tools/imgqa"
+    corpus = {p.name: (read_text(p) or "")
+              for p in sorted(imgqa.glob("*.cpp")) + sorted(imgqa.glob("*.h"))}
+    for tbl in sorted(imgqa.glob(JUDGMENTS_TABLE_GLOB)):
+        src = read_text(tbl) or ""
+        rel = rel_posix(tbl)
+        for m in _JUDGMENTS_POINTER_RX.finditer(src):
+            target, ref = m.group(1), (m.group(2) or m.group(3))
+            line = src[:m.start()].count("\n") + 1
+            if target not in corpus:
+                warnings.append(Warning(rel, line,
+                    f"判据出处指针 {target} 磁盘上不存在——文件已改名或删除，改判据表", "error"))
+                continue
+            key = ref.replace("()", "").split("::")[0]
+            if key in corpus[target]:
+                continue
+            here = sorted(n for n, t in corpus.items() if key in t)
+            warnings.append(Warning(rel, line,
+                f"判据出处指针 {target} 里没有 `{ref}`——锚点已搬走，现在在 "
+                + ("、".join(here[:3]) if here else "全仓找不到")
+                + "（拆文件要连着改判据表，否则 imgqa check 打印的出处翻空）", "error"))
     return warnings
 
 

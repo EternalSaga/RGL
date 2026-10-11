@@ -77,6 +77,79 @@ Verdict judgePieceDrawn(const Frame& f, const Attribution& at, const std::string
         piece + ": " + std::to_string(n) + " 像素（阈值 " + std::to_string(minPixels) + "）");
 }
 
+namespace {
+/// `std::fixed << setprecision(4)` 的一行读数（observed 文案里的数字口径，多处共用）。
+std::string fixed4(double v)
+{
+    std::ostringstream os;
+    os << std::fixed << std::setprecision(4) << v;
+    return os.str();
+}
+
+/// 收集 mask 内像素的线性亮度。**不用 copyTo(dst, mask)**：它对 dst 是"掩码外保留原值"，
+/// 新分配的 dst 掩码外是未初始化内存，直接聚类会把垃圾当暗簇（假发现）。
+std::vector<double> lumaInsideMask(const Frame& f, const cv::Mat& m)
+{
+    std::vector<double> insideVals;
+    insideVals.reserve(static_cast<size_t>(cv::countNonZero(m)));
+    for (int y = 0; y < f.luma.rows; ++y) {
+        const auto* mrow = m.ptr<uchar>(y);
+        const double* lrow = f.luma.ptr<double>(y);
+        for (int x = 0; x < f.luma.cols; ++x)
+            if (mrow[x])
+                insideVals.push_back(lrow[x]);
+    }
+    return insideVals;
+}
+
+/// 观测簇列表 → `0.1234(5678px), …`（首项不带分隔逗号）。
+std::string describeClusters(const std::vector<std::pair<double, int64_t>>& clusters)
+{
+    std::string out;
+    for (size_t i = 0; i < clusters.size(); ++i) {
+        std::ostringstream os;
+        os << std::fixed << std::setprecision(4) << clusters[i].first << "("
+           << clusters[i].second << "px)";
+        out += (i ? ", " : "") + os.str();
+    }
+    return out;
+}
+
+/// 预测面值列表 → `+X=0.1234, -Z=0.0000`（面值名 + 与像素同域的预测亮度）。
+std::string describePredictions(const std::vector<FacePrediction>& predict)
+{
+    std::string out;
+    for (size_t i = 0; i < predict.size(); ++i)
+        out += (i ? ", " : "") + predict[i].face + "=" + fixed4(predict[i].luma);
+    return out;
+}
+
+/// 单个观测簇中位数能否被**某个**预测面值解释。容差 = max(相对 tol·预测值, 2/255 绝对
+/// 下限)：绝对下限兜住预测为 0 的面（全背面 ⟹ 闭式就是 0，相对容差乘什么都还是 0）。
+bool explainedByAny(double med, const std::vector<FacePrediction>& predict, double tol)
+{
+    for (const auto& p : predict)
+        if (std::abs(med - p.luma) <= std::max(tol * std::max(p.luma, 1e-6), 2.0 / 255.0))
+            return true;
+    return false;
+}
+
+/// 解释不了的簇（判据的失败项）→ `0.0000(1234px), …`；全被解释 = 空串。
+std::string unexplainedClusters(const std::vector<std::pair<double, int64_t>>& clusters,
+    const std::vector<FacePrediction>& predict, double tol)
+{
+    std::string unexplained;
+    for (const auto& [med, n] : clusters) {
+        if (explainedByAny(med, predict, tol))
+            continue;
+        std::ostringstream os;
+        os << std::fixed << std::setprecision(4) << med << "(" << n << "px)";
+        unexplained += (unexplained.empty() ? "" : ", ") + os.str();
+    }
+    return unexplained;
+}
+}  // namespace
+
 Verdict judgeFaceClusters(const Frame& f, const Attribution& at, const std::string& piece,
     const std::vector<FacePrediction>& predict, double tol)
 {
@@ -87,42 +160,14 @@ Verdict judgeFaceClusters(const Frame& f, const Attribution& at, const std::stri
     const cv::Mat m = maskOfPiece(f, at, piece);
     if (cv::countNonZero(m) == 0)
         return mk("face-clusters-explained", false, piece + ": 无像素，无法判");
-    // 只收集 mask 内像素——copyTo(dst, mask) 对 dst 是"掩码外保留原值"，新分配的 dst
-    // 掩码外是未初始化内存，直接聚类会把垃圾当暗簇（假发现）。
-    std::vector<double> insideVals;
-    insideVals.reserve(static_cast<size_t>(cv::countNonZero(m)));
-    for (int y = 0; y < f.luma.rows; ++y) {
-        const auto* mrow = m.ptr<uchar>(y);
-        const double* lrow = f.luma.ptr<double>(y);
-        for (int x = 0; x < f.luma.cols; ++x)
-            if (mrow[x])
-                insideVals.push_back(lrow[x]);
-    }
+    // ⚠ 不能是 const：下一行 cv::Mat 的构造吃 `void*`（**包住**这块内存、不拷贝），
+    // 聚类期间 insideVals 必须仍然活着且可寻址。
+    std::vector<double> insideVals = lumaInsideMask(f, m);
     const cv::Mat masked(static_cast<int>(insideVals.size()), 1, CV_64FC1, insideVals.data());
     const auto clusters = lumaClusters(masked);
-    std::string obs = piece + ": 观测簇 ";
-    for (size_t i = 0; i < clusters.size(); ++i) {
-        std::ostringstream os;
-        os << std::fixed << std::setprecision(4) << clusters[i].first << "("
-           << clusters[i].second << "px)";
-        obs += (i ? ", " : "") + os.str();
-    }
-    obs += " | 预测 ";
-    for (size_t i = 0; i < predict.size(); ++i)
-        obs += (i ? ", " : "") + predict[i].face + "="
-            + [&] { std::ostringstream os; os << std::fixed << std::setprecision(4) << predict[i].luma; return os.str(); }();
-    std::string unexplained;
-    for (const auto& [med, n] : clusters) {
-        bool explained = false;
-        for (const auto& p : predict)
-            if (std::abs(med - p.luma) <= std::max(tol * std::max(p.luma, 1e-6), 2.0 / 255.0))
-                explained = true;
-        if (!explained) {
-            std::ostringstream os;
-            os << std::fixed << std::setprecision(4) << med << "(" << n << "px)";
-            unexplained += (unexplained.empty() ? "" : ", ") + os.str();
-        }
-    }
+    std::string obs = piece + ": 观测簇 " + describeClusters(clusters) + " | 预测 "
+        + describePredictions(predict);
+    const std::string unexplained = unexplainedClusters(clusters, predict, tol);
     if (!unexplained.empty())
         obs += " | **解释不了的簇**: " + unexplained;
     return mk("face-clusters-explained", unexplained.empty(), std::move(obs));
