@@ -32,5 +32,21 @@ return {
                 { name = "emissive",          type = "vec4", offset = 32 },
             },
         },
+        -- 簇化轴 ★1-a1i：per-object 簇区间表条目（scene.slang ObjectClusterRange，
+        -- 表基址 @722400 stride 16，见 scene_data.cppm kSceneDataClusterRangeOffset）。
+        -- 方案 B（docs/mdi_plan.md §10.1）：**新增独立表**而非给 ObjectDraw 加字段——
+        -- 现有结构逐字节不动 ⟹「门关逐位不变」是构造性成立，不是靠"没人读新字段"。
+        -- 本批 shader 侧零读取点（消费者 = ★1-a1 的 mesh shader），本条目只为把布局
+        -- 纳入反射单一真相源（C++ 侧不再手写第二份布局）。
+        {
+            name = "ObjectClusterRange",
+            stride = 16,
+            attributes = {
+                { name = "base",      type = "uint", offset = 0 },
+                { name = "count",     type = "uint", offset = 4 },
+                { name = "l0Count",   type = "uint", offset = 8 },
+                { name = "reserved",  type = "uint", offset = 12 },
+            },
+        },
     },
 }

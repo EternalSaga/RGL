@@ -82,16 +82,18 @@ static_assert(kSceneDataWetParamsOffset == kSlangWetParamsLiteral,
 	"scene.slang readWetParams literal drifted from kSceneDataWetParamsOffset");
 static_assert(kSceneDataWetSpatialOffset == kSlangWetSpatialLiteral,
 	"scene.slang readWetSpatial literal drifted from kSceneDataWetSpatialOffset");
-// 子区排布：wetParams 居湿面区首、wetSpatial 紧随其后，wetSpatial 恰盖到
-// kSceneDataBytes 尾（湿面区是最后一个尾区，无重叠无空洞）；区宽 = 2×vec4。
+// 子区排布：wetParams 居湿面区首、wetSpatial 紧随其后，wetSpatial 恰盖到**簇区间表起点**
+//（簇化轴 ★1-a1i 在湿面之后追加 `ObjectClusterRange` 尾区 ⟹「湿面区是最后一个尾区」的旧断言
+//  改钉相邻关系，照 test_ssr_params 批 15.2 的同款处置；无重叠无空洞。尾区末尾断言 =
+//  tests/test_meshlet_ranges）；区宽 = 2×vec4。
 static_assert(kSceneDataWetParamsOffset == kSceneDataWetOffset,
 	"params sub-region must sit at the head of the wet region");
 static_assert(kSceneDataWetSpatialOffset == kSceneDataWetParamsOffset + 16u,
 	"spatial sub-region must sit right after wetParams (no overlap, no hole)");
-static_assert(kSceneDataWetSpatialOffset + sizeof(glm::vec4) == kSceneDataBytes,
-	"spatial sub-region must end exactly at the scene data buffer tail");
-static_assert(kSceneDataWetOffset + kSceneDataWetBytes == kSceneDataBytes,
-	"wet region must be the last tail region of the scene data buffer");
+static_assert(kSceneDataWetSpatialOffset + sizeof(glm::vec4) == kSceneDataClusterRangeOffset,
+	"spatial sub-region must end exactly where the cluster-range region begins");
+static_assert(kSceneDataWetOffset + kSceneDataWetBytes == kSceneDataClusterRangeOffset,
+	"wet region must end exactly where the cluster-range region begins (no overlap, no hole)");
 static_assert(kSceneDataWetBytes == 32u, "wet region width drifted (vec4+vec4)");
 
 /// shader `sceneData.Load4(byteOffset)` 等价形态（test_ssr_params 同款：真 memcpy）。

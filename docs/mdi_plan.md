@@ -635,6 +635,39 @@ GPU 版必须继承：视锥 = 复用 `extractFrustum`/`sphereInFrustum`（保�
 本批的 `loadMeshletForModel` 是最后一块）——走独立 helper 模块；② 4 个簇 buffer 进 shader 走
 **固定 binding 下标**（§10.2），不进 per-entry 描述符。
 
+**★1-a1i 交付记录（2026-10-12，子 agent 实现 + 主 agent 亲验）**：`ObjectClusterRange` 尾区 +
+`meshlet_ranges` 扫描（rlbase）。**本批零消费者**（读取点归 ★1-a1ii 的 mesh shader）。
+
+三条要记的：
+
+1. **"加一张表"的真实爆炸半径**（下次加 scene data 尾区照此清单走，别现场发现）：schema 登记 +
+   `scene.slang` 结构声明（仅声明）+ `just reflect` 生成物（**纯追加**，`ObjectDraw` 逐字节不动）+
+   `scene_data` 尾区常量与 `kSceneDataBytes` + `SceneFrameData` 镜像字段 + `mirrorObjectTables`
+   （`renderListSystem` 撞 120 行红线被迫抽函数）+ `writeSceneStaging` 调用点 +
+   🔴 **`tests/test_wet_params.cppm` 两条"湿面区是最后一个尾区"的 static_assert 必然编不过**
+   （追加尾区的必然后果，改钉"相邻关系"，末尾性移交本批测试的 `static_assert`）。
+2. **可测性优先的一次主动重构**：尾区写入本体从 `Renderer` 私有成员提为
+   `scene_data::writeClusterRangeRegion`（纯函数、无 VkDevice）。原形态单测**根本调不到**，
+   于是"门关 = 整区全 0"与"有效段之外清零"两条只有代码阅读在担保——**截图哈希看不见 scene data
+   缓冲区**，这类"数据面而非图像面"的安全性质尤其容易变成假担保。
+3. 🔴 **主 agent 变异 MB 抓到一条真覆盖缺口，形态与以往不同**：把铺满判据 `base != expect`
+   弱化成本地正确的 `base > expect`（只挡空洞、放过重叠），**子 agent 的 11 条变异全绿时它也全绿**。
+   补 `badOverlap` 后红。两条教训：**(a) 判据"短路"≠ 判据"弱化"**——只测"摘掉整条判据"会漏掉
+   "判据写反一半"，而后者才是 `!=` 比较最真实的漂移形态；**(b) 反向用例要按判据负责的每一半边
+   构造**——一条"空洞"用例会被后来人读成"铺满已验"。另注意它**不是**"完全没响"：重叠仍会被末尾
+   总量判据抓到，但**不点名是哪个 prim** ⟹ 这条用例真正钉的是**归因**（合成数据要满足读取侧
+   `clusterCount == Σ group.clusterCount`，主 agent 第一版因簇数取 4 而非 5 被 parse 先拒）。
+
+**验收证据**：`just config`/`build`/`reflect`（幂等）/`test`/`checks` 全绿；门关与门开截图同为
+`54e40665…`；门关日志 `grep -ci meshlet` = **0**（"门关 = 一行都不执行"的唯一可观测护栏，
+MC 类"门失效"变异只能靠它，图像看不见）；门开 INFO 报 `prims=1591 clusters=61518 l0Clusters=27487
+/ objectSlot 填充 1591/1591`，与 §10.1 实测三数一致。
+
+**★1-a1ii 挂号**（本批不做）：① 每帧 scene data 多拷 64KB（722400→787936，+9%）——接消费者时
+重算这笔账（scene data 是单 buffer 整区 `vkCmdCopyBuffer`，成本按容量线性）；② 装配层两道对账
+（prim 数 / material 身份）住在 app 模块**不在单测面**，护栏只有"启动日志无 WARNING"；
+③ `writeClusterRangeRegion` 不校验 `staging.size() >= kSceneDataBytes`（本区是尾区，越界写 buffer 外）。
+
 **贯穿纪律**：
 
 - **验收档固定**（P6）：`shadow.lua mode="csm"` + `aa=off` + TAA off + SSR off，走 `RGL_CONFIG_DIR`
@@ -658,9 +691,18 @@ GPU 版必须继承：视锥 = 复用 `extractFrustum`/`sphereInFrustum`（保�
 | **B. 新增独立表 `ObjectClusterRange{uint base; uint count;}`（stride 8，追加在 scene data 末尾）** | 多一张表 + 一个 offset | **构造性成立**：现有结构逐字节不动 | ✅ **采用** |
 | C. push constant 加 `clusterBase` | 零表改动 | 成立 | ❌ 把 per-draw CPU 成本带回来，与"交付 GPU-bound、CPU 有余量"反着走（§8 对 push-index 已表过态） |
 
-- **per-prim 簇区间由引擎加载时扫一遍算出**（61,518 簇 / 7,596 group，一次线性扫，微秒级）。
-  **不抬 `kFormatVersion`、不改工具**——`DiskGroup.prim` + `DiskCluster.group` 足够推出区间，
-  且逐 prim 的 group 是**连续**的（`clodBuild` 逐 primitive 调用、group 顺序追加）。
+- 🔴 **产物结构不变量（2026-10-12 主 agent 在真产物上实测，★1-a1 直接依赖，别再重推）**：
+  | 量 | 实测 | 含义 |
+  |---|---|---|
+  | group 表按 prim 的分段数 | **1591 = primCount** | 每个 prim 的 group 是**一段连续区间**（`clodBuild` 逐 prim 跑的直接后果） |
+  | 每 prim 的**簇**区间被拆成多段的 prim 数 | **0 / 1591** | ⟹ 一个 prim 的全部簇 = **单一 `[base, count)`** |
+  | 按 prim 序拼出的区间是否铺满 `[0, 61518)` | **是，0 重叠、0 空洞** | ⟹ 表就是"按 prim 序的连续分块"，★1-a2 的分段压紧天然成立 |
+  | 每 prim 的 **L0 簇**是否其区间**前缀** | **1591 / 1591 = 100%** | 🔴 **恒 L0 档只要 `(base, l0Count)`**，**不必上传 Groups、shader 侧不必选级过滤**（全局 L0 不是 `[0,27487)` 前缀，是逐 prim 前缀的并 —— 别拿全局前缀偷懒） |
+- **per-prim 区间由引擎加载时扫一遍算出**（61,518 簇 / 7,596 group，一次线性扫，微秒级）。
+  **不抬 `kFormatVersion`、不改工具**——`DiskGroup{prim, clusterOffset, clusterCount, depth}` 足够。
+  上表四条**同时是这条扫描的断言**：任何一条不成立 = 工具漂了，加载期直接报错回落（不砖引擎）。
+- **表布局据此定为 `ObjectClusterRange{ uint base; uint count; uint l0Count; uint _reserved; }`
+  stride 16**（三个数都要：`count` 给全级档、`l0Count` 给恒 L0 档；补齐位留给 ★2 的选级预算）。
 - 表写入走 `scene_data` 现有生成路径（`just reflect` 重跑，生成物随改动提交）。
 
 ### 10.2 管线条目与绑定
@@ -697,7 +739,8 @@ GPU 版必须继承：视锥 = 复用 `extractFrustum`/`sphereInFrustum`（保�
 | 步 | 内容 | 判据 |
 |---|---|---|
 | ★1-a0 ✅ **已交付**（2026-10-12） | 4 个簇 buffer 上传 GPU（`meshlet_geometry`，rlgfx） | 门关逐位不变；门开日志报 buffer 大小；`just test-all` 的 gpu 套件加一条**设备侧回读校验和**（合成小产物，不依赖 184MB 文件；无设备必须 FAIL 不 SKIP） |
-| ★1-a1 | 新 mesh shader + 条目 + 逐 prim 提交，**不剔不选级（恒 L0）** | **建立"簇路径 vs 现行路径"的图像统计地板**（★0.5-b）；差异必须可归因（预期集中在轮廓/UV 缝边缘，不是整块错） |
+| ★1-a1i ✅ **已交付**（2026-10-12） | scene data 新增 `ObjectClusterRange` 尾区 + 逐 prim 簇区间扫描（四条不变量当探测器） | 门关逐位不变 + 门关日志零 meshlet 行；门开日志三数 = §10.1 实测（1591/61518/27487）；扫描的四条不变量各配反向用例 |
+| ★1-a1ii | 新 mesh shader + 条目 + 逐 prim 提交，**不剔不选级（恒 L0，用 `l0Count`）** | **建立"簇路径 vs 现行路径"的图像统计地板**（★0.5-b）；差异必须可归因（预期集中在轮廓/UV 缝边缘，不是整块错） |
 | ★1-a2 | 层级遍历 + 逐簇剔除 + 分段压紧 | 与 `cullClustersLinear` 逐帧对账；提交三角落到 §7.3 的 1.08-1.30% 量级 |
 | ★1-b | 阴影段走簇路径（**只 CSM 档**，P6） | 阴影段 GPU 时间对照 6.28ms 基线；**非默认 cull 档单独冒烟 + syncval**（AGENTS 红线） |
 

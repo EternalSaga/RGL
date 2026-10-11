@@ -177,6 +177,15 @@ export struct SceneFrameData {
 	///   （分组理由照 ssrParams/ssrGate 那条，→ scene_data.cppm 该区注释）。
 	///   生产者同 fillWetParams（一次填两槽，两槽永远同源同帧）。
 	glm::vec4 wetSpatial{0.0f};
+	// ── 簇化轴 ★1-a1i：per-object 簇区间表，scene data 尾区 @722400（stride 16 × 4096）──
+	/// · clusterRanges —— 按 objectSlot 索引的 `ObjectClusterRange` 表（scene data 尾区
+	///   kSceneDataClusterRangeOffset）。**生产者不是本 system**：装配层启动期用
+	///   `meshlet_ranges::scanClusterRanges` 扫簇产物 groups → registry ctx `ClusterRangeTable`，
+	///   renderListSystem 每帧只搬 span（生命周期规则同 objectDraws：录制期读取即完成使命）。
+	///   门 `meshlet.enable` 关 = ctx 里根本没有那张表 = 空 span ⟹ 该区保持全 0。
+	///   🔴 **本批零消费者**：读取点归 ★1-a1 的 mesh shader（`groupID.x + base` = 全局簇下标），
+	///   写它不改任何像素（门关逐位不变的构造性保证 = 方案 B 追加尾区，见 scene_data 该区注释）。
+	std::span<const ObjectClusterRange> clusterRanges;
 };
 
 /**

@@ -124,6 +124,22 @@ ObjectDraw readObjectDraw(uint objectIndex)
     return sceneData.Load<ObjectDraw>(524944u + objectIndex * 48u);
 }
 
+// 簇化轴 ★1-a1i：per-object 的**簇区间表**条目（scene data 尾区 @722400，stride 16，
+// 容量 = kSceneMatrixCapacity，按 objectIndex 索引；基址/容量 = scene_data.cppm
+// kSceneDataClusterRange* 推导 + static_assert 钉死，本文件字面量手工同源）。
+// 布局走与 ObjectDraw 同一条反射路（scene_forward_schema 登记 → C API 反射生成 C++
+// 同名 struct + 逐字段 offsetof static_assert），故本声明是布局唯一真相源。
+// 🔴 **本批（★1-a1i）零消费者**：mesh shader 的读取点归 ★1-a1（`groupID.x + base` =
+// 全局簇下标；`count` 给全级档、`l0Count` 给恒 L0 档，见 docs/mdi_plan.md §10.1）。
+// 表内容由装配层写入（门关 = 全 0），写它不改任何像素。
+struct ObjectClusterRange
+{
+    uint base;      // 该 primitive 的簇区间起点（全局簇下标）
+    uint count;     // 区间长度（全部 DAG 级；恒 L0 档只用前 l0Count 条）
+    uint l0Count;   // 区间**前缀**里的 L0 簇条数（产物不变量：L0 恒为前缀）
+    uint reserved;  // 补齐位（★2 选级预算）
+};
+
 float3 worldPos(ObjectMatrix m, float3 p)
 {
     return (m.c0 * p.x + m.c1 * p.y + m.c2 * p.z + m.c3).xyz;

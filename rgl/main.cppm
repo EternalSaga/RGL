@@ -277,6 +277,26 @@ export void registerSceneEntities(entt::registry& registry, const UploadedAssets
 								  ShaderRegistry& pipelines);
 
 /**
+ * 簇化轴 ★1-a1i：把簇产物的**逐 prim 簇区间**落到 per-objectSlot 表（registry ctx
+ * `ClusterRangeTable`），供 renderListSystem 每帧搬进 `SceneFrameData::clusterRanges`
+ * → scene data 尾区 `ObjectClusterRange` 表（@722400，stride 16）。
+ *
+ * **调用序契约 = `registerSceneEntities` 之后**：落表要读 `MeshRef{asset, objectSlot}` 与
+ * `NextObjectSlot`，两者都在实体注册时才成形。区间本身来自
+ * `meshlet_ranges::scanClusterRanges`（扫产物 groups，校验 §10.1 四条结构不变量）。
+ *
+ * 门 `meshlet.enable` 关 = 首行返回、ctx 不建条目 ⟹ 执行器把该区写成**全 0**（逐位不变）。
+ * 门开但扫描/对账失败 = WARNING + 该模型回落现行路径（簇产物是可选加速资产，不砖引擎）。
+ * 🔴 本批零消费者：读取点归 ★1-a1 的 mesh shader，写它不改任何像素。
+ * @param registry 已注册实体的 registry（读 MeshRef / NextObjectSlot，写 ctx）
+ * @param assets 上传产物（`models[].file` 与 `meshlets` 同源；`assetIds` 与 prim 下标对齐）
+ * @param meshlets 簇产物容器（★0-b2；门关 = 空）
+ * @param meshletEnable 门 `runtime.lua meshlet.enable`（关 = 一行都不走）
+ */
+export void wireClusterRangeTable(entt::registry& registry, const UploadedAssets& assets,
+								  const MeshletAssetStore& meshlets, bool meshletEnable);
+
+/**
  * C3+deferred+DGC+Renderer 装配产物（成员析构逆序 renderer→dgcStatic→dgc→cull，与
  * 拆分前 main 局部变量声明序一致）。cull 堆分配：Renderer 持 GpuCull*，聚合返回时
  * 局部对象析构会悬空指针——堆地址跨 move 稳定（启动期一次分配，无每帧开销）。

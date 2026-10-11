@@ -283,6 +283,16 @@ void Renderer::createSceneStaging(RGL::Resources& vkResources) {
 	// 本步零消费者，写它不改任何像素）
 	std::memcpy(stage + kSceneDataWetParamsOffset, &list.sceneData.wetParams, sizeof(glm::vec4));
 	std::memcpy(stage + kSceneDataWetSpatialOffset, &list.sceneData.wetSpatial, sizeof(glm::vec4));
+	// 簇化轴 ★1-a1i：per-object 簇区间表（尾区 @722400，stride 16 × 4096）。表由装配层启动期
+	// 扫产物 groups 得到、经 registry ctx 走到这里（生产者与索引口径 → SceneFrameData::clusterRanges）。
+	// 写入本体在 scene_data::writeClusterRangeRegion（**无设备 ⟹ 可单测**：门关整区全 0 /
+	// 有效段之外清零两条都在 tests/test_meshlet_ranges 里逐字节验）。
+	// 🔴 本批零消费者（读取点归 ★1-a1 的 mesh shader），写它不改任何像素。
+	if (!writeClusterRangeRegion(std::span<std::byte> {stage, kSceneDataBytes},
+	                             list.sceneData.clusterRanges))
+		return std::unexpected(Error {
+			ErrorCode::Unknown,
+			"scene clusterRanges exceeds capacity (same contract as objectDraws)" });
 	// 批 11.3-1e：IZB 消费区 (flag, W, H, 保留)——light.frag izbNearShadow 消费。
 	// flag = izbShadow 已构造（门关恒空 = 全 0 → ×1.0 逐位旁路）；W/H = mask 位图行距
 	{

@@ -530,9 +530,46 @@ static_assert(kSceneDataWetOffset == 722368 && kSceneDataWetParamsOffset == 7223
 		&& kSceneDataWetSpatialOffset == 722384,
 	"scene.slang readWetParams/readWetSpatial literals 722368/722384 out of sync with scene_data.cppm offsets");
 
+/** 簇化轴 ★1-a1i：per-object **簇区间表**区（湿面区之后，尾区追加，既有偏移逐字节不动
+ *  diff0，先例 = 批 11.2 阴影 VP 区 / 批 15.1 SSR 区 / 批 15.2 湿面区）。
+ *
+ *  条目 = `ObjectClusterRange{base, count, l0Count, reserved}`（stride 16，布局真相源 =
+ *  scene.slang struct 经 C API 反射生成，见 scene_forward_types_generated）。索引 =
+ *  objectIndex（= MeshRef.objectSlot，与对象矩阵/MVP/ObjectDraw 三张 per-object 表同源）。
+ *
+ *  🔴 **方案 B（docs/mdi_plan.md §10.1，主 agent 拍板，别再重新讨论）**：新增独立表而不是
+ *  给 `ObjectDraw` 加字段——后者把 stride 48→56 改在**所有** shader 热路径整读的结构上，
+ *  "门关逐位不变"只能靠"没人读新字段"保证（弱）；本方案现有结构逐字节不动 ⟹ 不变性是
+ *  **构造性**的。代价 = 多一张表 + 一个 offset + 每帧多拷 64KB（见下方风险注记）。
+ *
+ *  内容来源 = `meshlet_ranges::scanClusterRanges`（装配层启动期扫一遍产物 groups），
+ *  门 `meshlet.enable` 关 = 不写 = 全 0（本区常驻零）。🔴 **本批零消费者**：读取点归
+ *  ★1-a1 的 mesh shader（`groupID.x + base` = 全局簇下标），写它不改任何像素。
+ *
+ *  容量与对象矩阵表同 = `kSceneMatrixCapacity`（表按 objectIndex 索引，容量必须一致，
+ *  否则越界写的是**下一个字节**——本区是尾区，越界即写出 buffer 外）。
+ *  ⚠ 每帧 staging 写入面因此从 722400B 涨到 787936B（+65536B ≈ +9%）：scene data 是单
+ *  buffer 整区 vkCmdCopyBuffer，追加尾区的成本按容量线性走，这条账记在 ★1-a 的性能面。 */
+export inline constexpr uint32_t kSceneDataClusterRangeOffset = kSceneDataWetOffset + kSceneDataWetBytes;
+/** 条目字节数 = 生成 struct 的 sizeof（C++ 侧漂移即编译失败；shader 侧由反射实查）。 */
+export inline constexpr uint32_t kSceneDataClusterRangeStride = sizeof(ObjectClusterRange);
+/** 容量与其余三张 per-object 表同（按 objectIndex 索引 ⟹ 容量必须同）。 */
+export inline constexpr uint32_t kSceneDataClusterRangeCapacity = kSceneMatrixCapacity;
+export inline constexpr uint32_t kSceneDataClusterRangeBytes =
+	kSceneDataClusterRangeCapacity * kSceneDataClusterRangeStride;
+// 钉的是「C++ 常量 == 已知的基址/布局」：改 scene_data.cppm 一侧必编译失败（本区暂无
+// shader 字面量消费者，★1-a1 接线时再补 scene.slang 侧字面量的同步注释）。
+static_assert(kSceneDataClusterRangeOffset == 722400,
+	"cluster-range region drifted from the documented tail offset 722400");
+static_assert(kSceneDataClusterRangeOffset % 16 == 0, "cluster range region must stay 16B aligned");
+static_assert(kSceneDataClusterRangeStride == 16, "ObjectClusterRange stride drifted from 16B");
+static_assert(kSceneDataClusterRangeCapacity == kSceneMatrixCapacity,
+	"cluster range capacity must equal the object matrix capacity (both index by objectIndex)");
+
 /** scene data buffer 总字节数 = 头 128 + 对象矩阵表 + 灯数组区 + MVP 表 + 材质表 +
- * 辐照度 SH9 区 + 阴影/IZB/PCSS/EVSSM 区 + TAA 区 + SSR 区 + 湿面区（= 722400B，编译期派生；
- * 湿面区 32B 是批 15.2 子步 A 尾区，本常量随 kSceneDataWetBytes 自动走）；
+ * 辐照度 SH9 区 + 阴影/IZB/PCSS/EVSSM 区 + TAA 区 + SSR 区 + 湿面区 + 簇区间表
+ *（= 787936B，编译期派生；湿面区 32B 是批 15.2 子步 A 尾区、簇区间表 64KB 是簇化轴
+ * ★1-a1i 尾区，本常量随 kSceneDataClusterRangeBytes 自动走）；
  * SceneDataService::ensure 的分配尺寸与 drawFrame 每帧 staging 拷贝区尺寸均为本值
  *（vkrenderer.cppm ⑥.5）。 */
 export inline constexpr vk::DeviceSize kSceneDataBytes =
@@ -548,7 +585,35 @@ export inline constexpr vk::DeviceSize kSceneDataBytes =
 	+ kSceneDataEvssmBytes
 	+ kSceneDataTaaBytes
 	+ kSceneDataSsrBytes
-	+ kSceneDataWetBytes;
+	+ kSceneDataWetBytes
+	+ kSceneDataClusterRangeBytes;
+static_assert(kSceneDataBytes == kSceneDataClusterRangeOffset + kSceneDataClusterRangeBytes,
+	"cluster range region must be the last tail region (no overlap, no hole)");
+
+/**
+ * 把 per-object 簇区间表写进 staging 的 ★1-a1i 尾区（**可测接缝**：本函数不需要 VkDevice，
+ * 故「门关 = 整区全 0」与「有效段之外清零」两条能在 `just test` 里逐字节验）。
+ *
+ * 先清尾再写有效段 = 「门 `meshlet.enable` 关（表空）⟹ 整区全 0」是**构造性**成立，不依赖
+ * staging 映射内存的初值（VMA 不保证新分配内存为 0，未初始化字节会静默变成一条假区间）。
+ *
+ * @param staging 整块 scene data staging（大小须 ≥ `kSceneDataBytes`，调用方 =
+ *                `Renderer::writeSceneStaging`，尺寸由 `SceneDataService::ensure` 保证）
+ * @param ranges  按 objectSlot 索引的表（空 = 门关）
+ * @return false = 表超出容量（调用方报错；**不静默截断**——截断的失效形态是「排在容量之外
+ *         的实例没有区间」= 静默少画一块，与 `objectDraws` 的容量契约同纪律）
+ */
+export [[nodiscard]] inline bool writeClusterRangeRegion(
+	std::span<std::byte> staging, std::span<const ObjectClusterRange> ranges) {
+	if (ranges.size() > kSceneDataClusterRangeCapacity)
+		return false;
+	const size_t usedBytes = ranges.size() * sizeof(ObjectClusterRange);
+	auto* tail = staging.data() + kSceneDataClusterRangeOffset;
+	if (usedBytes > 0)
+		std::memcpy(tail, ranges.data(), usedBytes);
+	std::memset(tail + usedBytes, 0, kSceneDataClusterRangeBytes - usedBytes);
+	return true;
+}
 
 /**
  * SceneData buffer 服务（2026-09-19 架构债务续账步骤 1：原 Resources::ensureSceneData/

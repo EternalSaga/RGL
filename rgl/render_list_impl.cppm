@@ -23,6 +23,7 @@ import evssm_shadow;  // kEvssmMipLevels（矩链级数；scene data w 从常量
 import shadow_config;  // shadowConfig() / shadowFormPlan()（阴影形态：画不画图集 + 逐档调参）
 import runtime_config;  // SsrTuning / WetTuning（批 15.1 参数面 + 批 15.2A 湿面参数，fill*Params 入参）
 import taa_jitter;    // contentShiftPx（内容位移口径唯一出处；批 13.5 起 fillTaaData 要用）
+import meshlet_ranges;  // ClusterRangeTable（★1-a1i 簇区间表的 registry ctx，装配层写、本层只搬 span）
 
 namespace RGL {
 
@@ -399,6 +400,21 @@ void fillTuningTail(FrameDrawList& out, const SceneBounds& bounds, const SsrTuni
 	fillWetParams(out, wet);
 }
 
+/** 簇化轴 ★1-a1i：把四张 **per-objectSlot 表**镜像进本帧 draw list（对象矩阵 / MVP / ObjectDraw
+ *  / 簇区间）。抽出来的理由 = 上面 fillTuningTail 同一条：renderListSystem 已在 120 行代码红线，
+ *  四张表同构（state 或 ctx → span，录制期读取即完成使命），一处镜像比四处散写更难漏掉一张。
+ *  前三张的存储住在 `RenderListState`（本 system 每帧填）；第四张是**启动期静态数据**，住在
+ *  registry ctx（装配层 `wireClusterRangeTable` 写，生产者与"为什么走 ctx" → ClusterRangeTable
+ *  注释），本层只搬 span。门 `meshlet.enable` 关 = ctx 无该条目 = 空 span ⟹ 执行器把 scene data
+ *  该区写成**全 0**（逐位不变）。 */
+void mirrorObjectTables(FrameDrawList& out, entt::registry& rg, const RenderListState& state) {
+	out.sceneData.objectMatrices = std::span<const glm::mat4>{state.matrices};
+	out.sceneData.objectMvps = std::span<const glm::mat4>{state.mvps};
+	out.sceneData.objectDraws = std::span<const ObjectDraw>{state.draws};
+	if (const auto* ranges = rg.ctx().find<ClusterRangeTable>(); ranges != nullptr)
+		out.sceneData.clusterRanges = std::span<const ObjectClusterRange>{ranges->bySlot};
+}
+
 void renderListSystem(entt::registry& rg, RGL::Resources&,
 	RGL::Environment& envService, const RGL::AssetTable& assets, RenderListState& state) {
 	auto& list = rg.ctx().get<FrameDrawList>();
@@ -591,9 +607,9 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	// 批 12.6 TAA 载荷（三矩阵/参数，细节见 fillTaaData）
 	fillTaaData(fresh, viewProj, env, taa);
 	fillShadowData(fresh, shadowNear, shadowFar, shadowVolumes, shadowFormPlan(shadowConfig()).drawAtlas);
-	fresh.sceneData.objectMatrices = std::span<const glm::mat4>{state.matrices};
-	fresh.sceneData.objectMvps = std::span<const glm::mat4>{state.mvps};
-	fresh.sceneData.objectDraws = std::span<const ObjectDraw>{state.draws};
+	// 四张 per-objectSlot 表（矩阵/MVP/ObjectDraw/簇区间）一次镜像，见 mirrorObjectTables。
+	// 前三张住在 state（本 system 每帧填），第四张住在 ctx（装配层启动期填）。
+	mirrorObjectTables(fresh, rg, state);
 	fresh.cullArgs = std::move(cullArgs);
 
 	// Phase 7b：GPU culling 每帧输入（与上方 CPU 剔除同源同值——planes = 同一 frustum
