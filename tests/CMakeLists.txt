@@ -70,6 +70,7 @@ set(RGL_TEST_SOURCES
     test_slot_ledger.cppm        # sampler heap 申报制领槽：幂等 / 不同 owner 不同槽 / 超容量不越界（2026-10-04 槽相撞事故护栏）
     test_gltf_texcoord.cppm      # glTF TEXCOORD_0 vec2 步长 + 去索引展开（手构 GLB，2026-08-30 越界读回归，12.3d-C）
     test_meshlet_asset.cppm      # ★0-b1 meshlet 产物读取侧：合成缓冲正向 + 21 条反向（错误串两两不同 = 可归因）
+    test_meshlet_cull.cppm       # ★0.5-a CPU 参考簇剔除器：六面逐条归因 + 保守判据 + 半径缩放上界 + 三角合计
     test_shadow_forward.cppm     # shadow.slang 选级 forward 提取式数学恒等（invVP 列叉积，5a-8c 回归，12.3d-C）
     test_ssr_viewproj.cppm       # 批 15.1 SSR 尾区 @722272：字节布局互逆 + 抖动口径闭式差量（fillSsrViewProj 接缝）
     test_ssr_params.cppm         # 批 15.1/15.3 SSR 尾区两 vec4 @722336/@722352：两源布局 + fillSsrParams 填值（radius 直传/四系数落槽/空场景透传）+ 出厂默认值 = 批 15.1 常量
