@@ -5,10 +5,12 @@
 #   cmake/RglReflection.cmake    反射管线 + reflect/reflection_check
 #   cmake/RglChecks.cmake        source_checks（样式 + Doxygen）+ shader_dep_check（DEP 表）
 #   cmake/RglRuntimeAssets.cmake configs/models/skybox/env 拷贝
+#   cmake/RglMeshlets.cmake    簇产物构建期生成（★0-b2，meshlet_pack 清单内模型）
 include(${CMAKE_SOURCE_DIR}/cmake/RglSlang.cmake)
 include(${CMAKE_SOURCE_DIR}/cmake/RglReflection.cmake)
 include(${CMAKE_SOURCE_DIR}/cmake/RglChecks.cmake)
 include(${CMAKE_SOURCE_DIR}/cmake/RglRuntimeAssets.cmake)
+include(${CMAKE_SOURCE_DIR}/cmake/RglMeshlets.cmake)
 
 # ─── Shader Compilation ───────────────────────────────────────────────────────
 # rgl_shader(<name> <OUT_VAR> [<DEP>...])：短名相对 shaders/，DEP = import 契约文件。

@@ -677,6 +677,10 @@ int main() {
 		// 资产表（ECS 规范 5 单一数据源；架构债务续账 F：所有权自 Resources 移入装配层，
 		// 声明序在 Renderer（backEnd）之前 = 析构序其后，表内 GPU 资源不在渲染器存活期释放）
 		AssetTable assetTable;
+		// 簇产物容器（★0-b2）：与 assetTable 同层由装配层持有——**不进 UploadedAssets**
+		//（那是"已上传 GPU 的东西"，本批什么都没传；理由全文 → MeshletAssetStore 注释）。
+		// 声明序紧随 assetTable：纯 CPU 数据无 GPU 生命周期契约，★1-a 直接消费本容器。
+		MeshletAssetStore meshletAssets;
 		// 管线表（Phase 4 批次 2：ShaderRegistry，零 entt）：规格来自 configs/scene.lua；
 		// 条目全按需建（画不画 = entity 有无，数据驱动）——模型条目 C1 期 addModelEntry、
 		// 内建 cube 条目 cube 资产上传后 addCubeEntry、天空盒/光源条目各自前提满足时建。
@@ -716,7 +720,8 @@ int main() {
 		// + ECS 注册。CPU 解析产物（GltfModel）活到 C（unique_ptr 稳定地址）；资产数据
 		// （buffer/slot/纹理/材质）全部在 Resources 资产表（初始化层 owner——TexturePool
 		// 局部对象 UAF 教训，docs/archive/heap_texture_research.md §12.6/§12.7）
-		auto assets = uploadModelAssets(vkDevice, vkResources, samplers, assetTable, configs.scene);
+		auto assets = uploadModelAssets(vkDevice, vkResources, samplers, assetTable, configs.scene,
+			configs.runtime.meshletEnable, meshletAssets);
 		if (configs.scene.environment.enabled)
 			uploadEnvironment(vkResources, env, vkDevice, configs.scene, registry);  // 时序契约见定义处注释
 
@@ -724,16 +729,9 @@ int main() {
 		// 按 (规格,顶点 slot,纹理 slot) 组合去重兜底）
 		bakePipelineEntries(assets, configs.scene, deferredMode, shaderRegistry, vkResources, samplers,
 			assetTable, rtCache);
-		// 克隆管线条目（Phase 10 批 10.5 picking / 10.7 highlight，门 = diagnostics.picking
-		// 默认关 = 零条目追加）：契约 = 模型条目烘焙完成后立即（克隆只认 modelEntry 位，
-		// 天空盒/光等后续条目在不在表内无关）。两个用途同门——高亮依赖点选出结果，
-		// 单独开高亮无意义。
-		if (diagnostics().picking) {
-			shaderRegistry.addCloneEntries(ClonePurpose::picking,
-				"generated_shaders/picking.frag.spv");
-			shaderRegistry.addCloneEntries(ClonePurpose::highlight,
-				"generated_shaders/highlight.frag.spv");
-		}
+		// 克隆管线条目（Phase 10 批 10.5 picking / 10.7 highlight）：契约与门控见 helper
+		// 注释；自 main() 抽出（★0-b2 装配层行数预算，纯代码搬移零行为变化）。
+		addDiagnosticCloneEntries(shaderRegistry);
 		// C2/C2b：场景实体注册（模型/cube/灯）+ 实例矩阵槽容量契约
 		registerSceneEntities(registry, assets, configs.scene, vkResources, assetTable, shaderRegistry);
 

@@ -506,7 +506,7 @@ Morton 排序后的同级还紧 **3-10×**——摄影测量资产的重建面�
 |---|---|---|---|
 | **★0-a 打包器** ✅ **已交付**（2026-10-12） | vcpkg 加 `meshoptimizer`；`third_party/meshoptimizer/`（vendored `clusterlod.h` + LICENSE + PATCHES.md）；`tools/meshlet_pack/`（glb → 簇产物 + 统计表 + `--verify`）；CMake 与 `just build-tools` 接入 | ① `just build-tools` 与 `just build` 双绿，且**引擎链接面无 meshoptimizer**（`nm -C build/rgl/rgl \| grep -c meshopt` = **0**，工具二进制 = 101）；② bistro 统计表与 §7.2 **逐项对拍**（配置钉死 = `clodDefaultConfig(128)` 全默认：max_vertices/max_triangles=128、min_triangles=42、partition_size=16、simplify_ratio=0.5、threshold=0.85、permissive=true）；③ `--verify` 四条自检绿 | **零**（不碰运行时） |
 | **★0-b1 读取侧** ✅ **已交付**（2026-10-12） | `rgl/meshlet_asset.cppm` + `_impl`（rlbase，**纯 CPU 无设备**）：产物字节流 → 经校验的只读视图；门 `runtime.lua meshlet.enable` **默认 false**；`tests/test_meshlet_asset.cppm` 24 用例 | `just test` 304 全绿（无设备）；21 条反向用例**错误串两两不同**（可归因）；主 agent 独立变异两条（8bit 契约判据、段对齐判据）各红 2 条且归因干净；**端到端实测：真读取器读真 184MB 产物通过**（61,518 簇 / 7,596 group / 8,699 节点 / 12 级，临时用例验完即删） | 零（不接渲染路径） |
-| **★0-b2 构建期接入** | 构建期生成产物（源更新才重跑）+ GPU 上传 + 门接线（`meshlet.enable` AND "该资产有产物"） | **门默认关时截图逐位不变**（`just regress ab`）；产物缺失/存在两种情况启动均不红；**端到端冒烟**（引擎日志打印产物统计，与 `--stats` 对账） | 零（门关 = 旧路径） |
+| **★0-b2 构建期接入** ✅ **已交付**（2026-10-12） | `cmake/RglMeshlets.cmake`（构建期生成，清单驱动，configure 期 git-lfs 防御）+ 装配层加载（`MeshletAssetStore` 与 `AssetTable` 同层） | 门关截图 = 基线锚 `54e40665…`；**门开（真加载 184MB 产物，日志实证门是开的）= 同一哈希** ⟹ 加载路径惰性；第二次 `just build` 不重跑；坏产物 WARNING 回落不砖引擎 | 零（门关 = 一行都不走） |
 | **★0.5 验收仪器**（P5 落地，🔴 ★1 前置） | 闭式解探针与 imgqa 判据扩展到簇档：**可见性归因**（被剔的每块都该剔）+ **逐像素误差上界**断言 | 仪器在**现行路径**上跑必须全绿（阳性锚点）；人为剔掉一块可见几何必须红（变异红线） | 零 |
 | **★1-a 簇路径 + 簇剔除** | 新 mesh shader（读簇描述 → ≤128 顶点 → 变换）+ GPU 层级遍历 + 逐簇可见性 + 压紧；**选级恒 L0** | 用 ★0.5 仪器判；G-buffer 提交几何应落到 §7.3 的 **1.65%** 量级（离线模拟数，作对照不作硬判据） | 中，可逐块归因 |
 | **★1-b 阴影段接入** | 阴影 mesh 走簇路径（**只 CSM 档**，P6） | 阴影段 GPU 时间对照 6.28ms 基线；**非默认 cull 档（`gpu_sync`/`gpu_lagged`）单独冒烟 + syncval**（AGENTS 红线：默认档不提交 cull CB） | 中高 |
@@ -544,6 +544,27 @@ L0 三角多重集 / 8bit 索引可解 / 逐簇包围体 / **DAG 结构不变量
 3. **两条已知无护栏项**（★0-b2 或后续要收）：① 写侧抬 `kToolVersion` 会被引擎拒读，
    联动只写在注释里没有机器护栏；② `MeshletAsset::image` 是公开成员（护栏禁 friend 挡了封装写法），
    parse 后改它会让各 span 悬空，目前只有注释红线。
+
+**★0-b2 交付记录（2026-10-12，主 agent 亲验）**：产物 = `cmake/RglMeshlets.cmake` + 装配层
+`loadMeshletForModel` + `MeshletAssetStore`（与 `AssetTable` 同层持有，**不进 `UploadedAssets`**
+——那是"已上传 GPU 的东西"，本批零上传）。亲验到的四件事：
+
+1. **门开仍逐位不变是"实证"不是"推断"**：`--set meshlet.enable=true` 后引擎日志确有
+   `meshlet: … 已加载 … clusters=61518 groups=7596 nodes=8699 levels=12`，而截图哈希与门关
+   **同为基线锚 `54e40665…`**。先证门开了，位比才有意义（否则测的是两次门关）。
+2. **坏产物不砖引擎**（实测把产物截断到 2MB）：`WARNING … section table inconsistent: Clusters
+   offset … beyond file size …—— 回落现行路径`，退出码 0。产物是可选加速资产，这条是 §7.8 拍板 3
+   「缺失 → 回落」的**坏产物版**。
+3. **git-lfs 防御必须在 configure 期**：新克隆没拉 LFS 时 glb 是 ~135B 指针，喂给工具 = **构建红**，
+   比运行期失败更糟（可选资产不该挡干净 checkout 的构建）。configure 期按文件大小跳过并 WARNING。
+4. **主 agent 顺手补的护栏**：`tools/smoke.py --set` 只支持扁平键，worker 是靠裸键 `enable`
+   **恰好唯一命中**才跑通门开的——那是运气不是护栏（新门一律是嵌套块 `meshlet`/`wet`/`fsr`/`taa`）。
+   已让 `--set` 支持点号嵌套键（`meshlet.enable`），先定位块再匹配子键，块或子键命中 ≠1 一律红。
+
+**已知无护栏项**（★1-a 收）：① 缓存键实现 = ninja 文件级依赖（glb mtime + 工具二进制），
+拍板 3 说的"源 SHA1 + 工具版本"里**工具改了没重编**这类形态不设防；② 产物路径约定
+（CMake 输出位置 ↔ 引擎"模型路径 + `.meshlets.bin`"）是**注释级同步**，模型若改用绝对路径会
+静默找不到产物（好在 INFO 会出声）。
 
 **贯穿纪律**：
 

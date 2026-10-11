@@ -23,6 +23,7 @@ import sampler_library;    // SamplerLibrary（架构债务续账步骤 4a/4b）
 import environment;        // Environment（架构债务续账步骤 3）
 import render_target_cache;  // RenderTargetCache（架构债务续账步骤 2）
 import asset_table;        // AssetTable（装配 helper 参数，F 拆出）
+import meshlet_asset;       // MeshletAsset（★0-b2 簇产物容器元素，纯 CPU 只读视图）
 import gltf_loader;         // GltfModel
 import texture_pool;        // ModelTextureIds
 import shader_registry;     // ShaderRegistry
@@ -197,13 +198,34 @@ export struct UploadedAssets {
 };
 
 /**
+ * 簇产物容器（★0-b2，装配层持有；docs/mdi_plan.md §9 ★0-b2）。
+ *
+ * 🔴 **为什么不进 UploadedAssets**（ECS 规范 5，"第二份真相"红线）：UploadedAssets 的
+ * 语义是"**已上传 GPU** 的东西"，而 ★0-b2 只加载、只校验、只打日志，**什么都没上传**
+ * ——放进去会让"uploaded"一词同时指两件事。落点 = 装配层独立持有（main_impl 与
+ * AssetTable 同层声明）；解析出的 MeshletAsset 在这里**活着**，★1-a 直接消费本容器，
+ * 不再走一遍装配管线。
+ * 键 = 模型路径（SceneEntityDesc.file，CWD 相对，与产物路径约定同源）；
+ * 值 = 经校验的只读视图（meshlet_asset 读取侧）。门开且加载成功才有条目——
+ * 门关 = 空容器零装配（逐位不变构造性成立）。
+ */
+export struct MeshletAssetStore {
+	std::map<std::string, MeshletAsset> byFile;
+};
+
+/**
  * A0 内建 cube 上传 + A1 模型解析+顶点上传 + A2 纹理上传。段契约：几何分配走几何段，
  * 纹理分配走纹理段；几何段期望槽号仍由 AssetTable::expectedGeometrySlot 校验，纹理首槽
  * = 白由纹理段首槽校验。
- * @note 任一加载/上传失败 → 抛 std::runtime_error（启动期 catch 退出）
+ * ★0-b2 簇产物加载挂在 A1 的按 file 去重循环里：门 = `meshletEnable` **AND** 该模型路径旁
+ * 有 `.meshlets.bin`；门关 = 一行都不执行。加载只进 `meshlets` 容器 + 日志，不碰 GPU、
+ * 不碰上传路径 ⟹ 门开图像仍逐位不变（比"门关不变"更强：证明加载路径是惰性的）。
+ * @note 任一加载/上传失败 → 抛 std::runtime_error（启动期 catch 退出）；
+ *       簇产物是**可选加速资产**，其加载失败**不抛**（WARNING + 回落，见 meshlet_asset）
  */
 export UploadedAssets uploadModelAssets(DeviceContext& device, Resources& resources,
-								 SamplerLibrary& samplers, AssetTable& assets, const SceneConfig& scene);
+								 SamplerLibrary& samplers, AssetTable& assets, const SceneConfig& scene,
+								 bool meshletEnable, MeshletAssetStore& meshlets);
 
 /**
  * Phase 5.5 环境 cubemap 上传（scene.lua environment 段，faces 按 Vulkan 层序 0-5）+
@@ -227,6 +249,15 @@ export void bakePipelineEntries(UploadedAssets& uploaded, const SceneConfig& sce
 								ShaderRegistry& pipelines, Resources& resources,
 								SamplerLibrary& samplers, AssetTable& assets,
 								RenderTargetCache& rtCache);
+
+/**
+ * 克隆管线条目（Phase 10 批 10.5 picking / 10.7 highlight，门 = `diagnostics.picking`
+ * 默认关 = 零条目追加）。契约 = **模型条目烘焙完成后立即调用**（克隆只认 modelEntry 位，
+ * 天空盒/光等后续条目在不在表内无关）。两个用途同门——高亮依赖点选出结果，单独开高亮
+ * 无意义。★0-b2 起自 main() 抽出（main 行数红线 120，装配层预算被簇容器占满；
+ * 纯代码搬移零行为变化）。
+ */
+export void addDiagnosticCloneEntries(ShaderRegistry& pipelines);
 
 /**
  * C2/C2b：场景实体注册——per **entity**：模型 entity（rootTransform = T·Rx·Ry·Rz·S，

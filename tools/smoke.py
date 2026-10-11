@@ -214,6 +214,30 @@ def _split_value_comment(rest: str) -> tuple[str, bool, str]:
     return (value[:-1].rstrip() if has_comma else value), has_comma, comment
 
 
+def _lua_block_span(text: str, block: str) -> tuple[int, int]:
+    """返回 `block = { … }` 块的 (内容起点, 块尾 `}` 位置)。命中 0 或多处 = 报错。
+
+    只数花括号配对，不解析 lua（配置里 `{` 只出现在表构造里；真出现字符串内花括号会算错，
+    那种形态由"子键命中次数"护栏兜住——算错区域后子键多半命中 0 次，直接红，不会静默）。
+    """
+    rx = re.compile(rf"^[ \t]*{re.escape(block)}[ \t]*=[ \t]*\{{", re.M)
+    hits = list(rx.finditer(text))
+    if len(hits) != 1:
+        fail(f"配置里块 `{block} = {{` 命中 {len(hits)} 次（须恰好 1 次）"
+             f"——配置格式变了？同步改 tools/smoke.py，别让它静默不生效")
+    start = hits[0].end()
+    depth = 1
+    for i in range(start, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return start, i
+    fail(f"配置里块 `{block} = {{` 没找到配对的 `}}`")
+    raise SystemExit  # 不可达，fail 已 exit
+
+
 def patch_lua(path: Path, key: str, value: str) -> None:
     """换掉 lua 表里 `key = <值>` 的值（保留尾逗号与同行注释）。
 
@@ -221,17 +245,32 @@ def patch_lua(path: Path, key: str, value: str) -> None:
     键命中 0 次或多于 1 次 = **报错**而不是静默不改——拼错键的失效形态最坏（看着改了、
     引擎看着读了、判据看着在跑，其实跑在默认值上）。行首必须是键名（`headless_size`
     不会被 `size` 命中）。
+
+    **嵌套键用点号**（`meshlet.enable`）：先定位 `meshlet = {` 块，再在块内匹配 `enable`。
+    为什么必须有它：新门一律是嵌套块（`meshlet`/`wet`/`fsr`/`taa`/`ssr`），而裸子键
+    `enable` 能不能命中，取决于别的块有没有恰好同名的键——**那是运气不是护栏**
+    （2026-10-12 实测：`--set enable=true` 当时唯一命中 meshlet 块，加第二个 `enable`
+    就变成"命中 2 次"红，或更坏：静默改到别人的键）。裸键仍可用（旧调用逐字不变）。
     """
-    text = path.read_text(encoding="utf-8")
-    rx = re.compile(rf"^([ \t]*){re.escape(key)}[ \t]*=[ \t]*+(.*)$", re.M)
-    hits = list(rx.finditer(text))
+    parent, _, child = key.rpartition(".")
+    if parent:
+        lo, hi = _lua_block_span(text := path.read_text(encoding="utf-8"), parent)
+        scope = text[lo:hi]
+        offset = lo
+    else:
+        scope = text = path.read_text(encoding="utf-8")
+        offset = 0
+    rx = re.compile(rf"^([ \t]*){re.escape(child)}[ \t]*=[ \t]*+(.*)$", re.M)
+    hits = list(rx.finditer(scope))
     if len(hits) != 1:
-        fail(f"{rel(path)} 里键 `{key}` 命中 {len(hits)} 次（须恰好 1 次）"
+        where = f"块 `{parent}` 内的键 `{child}`" if parent else f"键 `{key}`"
+        fail(f"{rel(path)} 里{where}命中 {len(hits)} 次（须恰好 1 次）"
              f"——配置格式变了？同步改 tools/smoke.py，别让它静默不生效")
     m = hits[0]
     _, comma, comment = _split_value_comment(m.group(2))
-    new_line = f"{m.group(1)}{key} = {value}{',' if comma else ''}{comment}"
-    path.write_text(text[:m.start()] + new_line + text[m.end():], encoding="utf-8")
+    new_line = f"{m.group(1)}{child} = {value}{',' if comma else ''}{comment}"
+    a, b = offset + m.start(), offset + m.end()
+    path.write_text(text[:a] + new_line + text[b:], encoding="utf-8")
 
 
 def split_set(item: str) -> tuple[str, str, str]:

@@ -33,6 +33,7 @@ import vk_swapchain;
 import render_graph;
 import builtin_geometry;
 import asset_table;
+import meshlet_asset;  // ★0-b2：loadMeshletAsset（产物读取侧，纯 CPU 无设备）
 import diagnostics;
 import shadow_config;  // shadowConfig() + shadowFormPlan()（IZB mask 条目门，批 N6b）
 import rllogger;
@@ -55,6 +56,45 @@ auto orThrow(Exp&& result, const char* what) {
 	if (!result)
 		throw std::runtime_error(fmt::format("{}: {}", what, result.error().describe()));
 	return *result;
+}
+
+/**
+ * ★0-b2 簇产物加载（**只加载、只校验、只打日志**——不上传 GPU、不画任何东西）。
+ *
+ * 边界（docs/mdi_plan.md §9 ★0-b2 + 主 agent 拍板）：GPU 上传归 ★1-a（那里才需要
+ * buffer usage flags 与 shader 契约）。门关 = 调用方根本不进本函数（逐位不变是
+ * **构造性成立**，不是测出来的）；门开 = 数据进 CPU 并打印统计，**图像仍逐位不变**
+ * （这条比"门关不变"更强：它证明加载路径是惰性的）。
+ *
+ * 🔴 **不抛异常**：产物是可选加速资产（§7.8 拍板 3「缺失 → 回落现行路径」），坏产物
+ * 不能砖掉引擎。失败打 WARNING 带可归因错误串（读取侧每条校验各返回不同错误串，
+ * 见 meshlet_asset 文件头校验清单）；产物缺失打 INFO——**别静默**，静默会让"门开了
+ * 但没产物"被读成"门开了但没生效"。
+ * @param modelFile 模型路径（CWD 相对）；产物路径约定 = 本路径 + `.meshlets.bin`
+ * @param store 装配层容器（所有权落点理由 → MeshletAssetStore 注释）
+ */
+void loadMeshletForModel(const std::string& modelFile, MeshletAssetStore& store) {
+	const std::string binPath = modelFile + ".meshlets.bin";
+	auto* lg = RLLogger::getInstance();
+	std::error_code ec;
+	if (!std::filesystem::exists(binPath, ec)) {
+		if (lg)
+			lg->info("meshlet: 门开但 {} 无簇产物（{} 不存在）：走现行路径", modelFile, binPath);
+		return;
+	}
+	auto loaded = loadMeshletAsset(binPath);
+	if (!loaded) {
+		if (lg)
+			lg->warn("meshlet: 产物加载失败 {}：{} —— 回落现行路径", binPath, loaded.error());
+		return;
+	}
+	const auto& h = loaded->header;
+	if (lg)
+		lg->info("meshlet: {} ← {} 已加载（只加载未上传，图像不变）: prims={} clusters={} groups={} "
+				 "nodes={} levels={} vertices={} l0Tris={} sourceSha1={}",
+			modelFile, binPath, h.primCount, h.clusterCount, h.groupCount, h.nodeCount,
+			h.levelCount, h.vertexCount, h.l0TriangleCount, loaded->sourceSha1Hex.substr(0, 8));
+	store.byFile.emplace(modelFile, std::move(*loaded));
 }
 
 /** deferred light 条目的阴影描述槽（Phase 11 批 11.2）。为何抽出成函数而不内联：它为
@@ -131,9 +171,11 @@ std::optional<std::array<uint32_t, 5>> gBufferSlotsAndLightEntry(
 
 }  // namespace
 
-/** A0 内建 cube + A1 解析/顶点上传（全几何槽先于任何纹理槽）+ A2 纹理上传。 */
+/** A0 内建 cube + A1 解析/顶点上传（全几何槽先于任何纹理槽）+ A2 纹理上传。
+ *  ★0-b2：A1 去重循环里挂簇产物加载（门与惰性边界 → 接口注释 + loadMeshletForModel）。 */
 UploadedAssets uploadModelAssets(DeviceContext& device, Resources& resources,
-	SamplerLibrary& samplers, AssetTable& assets, const SceneConfig& scene) {
+	SamplerLibrary& samplers, AssetTable& assets, const SceneConfig& scene,
+	bool meshletEnable, MeshletAssetStore& meshlets) {
 	UploadedAssets out;
 	// A0：内建几何（架构债务 1 方案 B）——entities 里有 cube 就上传内建 cube 资产，
 	// 与普通模型的顶点槽同属"几何段"（先于任何纹理槽）；先于模型循环上传 = 与旧
@@ -177,6 +219,11 @@ UploadedAssets uploadModelAssets(DeviceContext& device, Resources& resources,
 			throw std::runtime_error(assetIdsResult.error().describe());
 		out.models.push_back(UploadedModel{.file = key, .model = std::move(mesh),
 			.assetIds = std::move(*assetIdsResult), .instances = 1});
+		// ★0-b2：簇产物加载（按 file 去重后每文件至多一次）。aa_target 是内存合成模型
+		// （key 不是文件路径，无"路径旁的产物"可言）不适用。门关 = 本行不执行（逐位
+		// 不变构造性成立）；门开也只进 meshlets 容器 + 日志，不碰上面的上传路径。
+		if (meshletEnable && !target)
+			loadMeshletForModel(key, meshlets);
 	};
 	for (const auto& ent : scene.entities)
 		uploadModelFile(ent);
@@ -329,6 +376,14 @@ void bakePipelineEntries(UploadedAssets& uploaded, const SceneConfig& scene, boo
 		logStyleDiag();
 		logTexDiag();
 	}
+}
+
+/** 克隆管线条目（门 = diagnostics.picking；契约见接口注释）。 */
+void addDiagnosticCloneEntries(ShaderRegistry& pipelines) {
+	if (!diagnostics().picking)
+		return;
+	pipelines.addCloneEntries(ClonePurpose::picking, "generated_shaders/picking.frag.spv");
+	pipelines.addCloneEntries(ClonePurpose::highlight, "generated_shaders/highlight.frag.spv");
 }
 
 /** C2/C2b：模型/cube/灯 entity 注册 + 实例矩阵槽容量契约。 */
