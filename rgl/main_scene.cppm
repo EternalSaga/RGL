@@ -435,8 +435,9 @@ void registerSceneEntities(entt::registry& registry, const UploadedAssets& asset
   *                        「velocity 真的进了图」并进本参数，见 main_impl）
  *        条目（**不改任何既有 binding**，与 taa 换 tonemap 色槽不同——速度场暂无下游）；
  *        false = 逐位不变
- * @param ssrDecorated    批 15.1 前半：SSR pass 已装饰落图。true = 追加 ssr_applied RT +
- *                        ssr 条目，且 taa / ao_apply / tonemap 的色输入槽按优先级链
+ * @param ssrDecorated    批 15.1 前半：SSR pass 已装饰落图（批 15.3B 起 = trace + apply
+ *                        两个 pass）。true = 追加 ssr_trace / ssr_applied RT + 两条目，且
+ *                        taa / ao_apply / tonemap 的色输入槽按优先级链
  *                        ao_applied > taa_out > ssr_applied > scene_hdr 跟着换（图上输入名
  *                        的改写由 decorateSsrPass 做，这里换的是**烘进管线条目的堆槽**——
  *                        两条通道漏一条 = 「图说采 A、描述符指向 B」= 采到从未转换布局的
@@ -471,8 +472,10 @@ void assembleHdrAoChain(Swapchain& swapchain, Resources& resources,
 	}
 	// 批 15.1 前半：ssr 在图里时领 ssr_applied 槽（同 scene_hdr 契约：槽号一经烘进管线
 	// binding 即终身有效，resize 只重写描述符内容）。门关 = 不领槽 = 堆槽布局零差异。
-	std::optional<uint32_t> ssrSlot;
+	// 批 15.3B：trace RT（半分辨率）同段领槽——两槽都在两个 addSsr*Entry 之前。
+	std::optional<uint32_t> ssrSlot, ssrTraceSlot;
 	if (ssrDecorated) {
+		ssrTraceSlot = orThrow(ensureSsrTraceSlot(rtCache, swapchain), "ssr_trace RT 创建失败");
 		ssrSlot = orThrow(ensureSsrAppliedSlot(rtCache, swapchain), "ssr_applied RT 创建失败");
 	}
 	// 批 14.5 第二批：色输入优先级 **FSR > TAA > scene_hdr**。FSR 在图里时它读
@@ -500,16 +503,21 @@ void assembleHdrAoChain(Swapchain& swapchain, Resources& resources,
 		? orThrow(resources.ensureFsrSampleSlot(), "FSR 输出采样槽领取失败") : graphColorSlot;
 	[[maybe_unused]] auto tonemapIdx = pipelines.addTonemapEntry(colorSlot, aoSlot,
 		samplers.ensureShared());
-	// 批 15.1 前半：SSR 专用 pass 的条目。色输入**恒为 scene_hdr**——decorateSsrPass 插在
-	// velocity/taa/ao_apply 之前，它读的本帧成片永远是 light 的产物（跳过条件保证它不可能
-	// 读到下游）。G-buffer normal/position/metalrough = 烘 5/6/7（镜像 light.frag 通道号，
-	// 15.1 后半 ray march 的权重输入）；深度复用 ao 那一份采样槽（不另领，先例同 velocity）。
+	// 批 15.1 前半：SSR 专用 pass 的条目。批 15.3B 拆成 **trace + apply 两条目**（图上
+	// 也是两个 pass）。色输入**恒为 scene_hdr**——decorateSsrPass 插在 velocity/taa/
+	// ao_apply 之前，两 pass 读的本帧成片永远是 light 的产物（跳过条件保证它们不可能读到
+	// 下游）。G-buffer normal/position/metalrough = 烘 5/6/7（镜像 light.frag 通道号）；
+	// 深度复用 ao 那一份采样槽（不另领，先例同 velocity）。
 	if (ssrDecorated) {
-		// G-buffer 通道号镜像 light.frag：[0]=albedo（binding 9，fresnel F0）/[1]=normal/
+		// trace：G-buffer 通道号镜像 light.frag：[0]=albedo（binding 9，fresnel F0）/[1]=normal/
 		// [2]=position/[3]=metalrough；emissive（[4]）SSR 不消费。sampler = 共享 LINEAR，
-		// 只服务命中点那一次 Sample（直通路径全 Load）。
-		[[maybe_unused]] auto ssrIdx = pipelines.addSsrEntry(hdrSlot, (*gbSlots)[1],
+		// 只服务命中点那一次 Sample（逐像素自身量全 Load）。env 减法源（11/12）在条目内烘。
+		[[maybe_unused]] auto ssrTraceIdx = pipelines.addSsrTraceEntry(hdrSlot, (*gbSlots)[1],
 			(*gbSlots)[2], (*gbSlots)[3], depthSlot, (*gbSlots)[0], samplers.ensureShared());
+		// apply：读 scene_hdr（直通基准 Load）+ ssr_trace（模糊 taps Sample）+ metalrough
+		// （半径自变量）。env **不再需要**——减法留在 trace（裁决 → ssr_trace.frag 文件头）。
+		[[maybe_unused]] auto ssrIdx = pipelines.addSsrApplyEntry(
+			hdrSlot, *ssrTraceSlot, (*gbSlots)[3], samplers.ensureShared());
 	}
 	// 批 14.5 第三批：AO 施加专用 pass 的条目。色输入 = SSR 在图时 ssr_applied、否则
 	// scene_hdr——本 pass 的跳过条件保证「taa 在图里就不插」，所以它读的是装饰器插入序

@@ -170,8 +170,8 @@ static void readFsrBlock(const sol::table& root, RuntimeConfig& cfg) {
 }
 
 /**
- * `ssr` 嵌套块解析（批 15.1 总开关 + 同批参数面）：`enabled` 一枚总开关 + 5 枚调参。
- * 缺块 / 缺键 = 保持结构体默认（`ssrEnabled = false` = 图里没有 ssr pass；5 枚系数 =
+ * `ssr` 嵌套块解析（批 15.1 总开关 + 同批参数面）：`enabled` 一枚总开关 + 6 枚调参。
+ * 缺块 / 缺键 = 保持结构体默认（`ssrEnabled = false` = 图里没有 ssr pass；6 枚系数 =
  * `SsrTuning` 成员初始化值 = **全项目唯一真相源**，shader 侧零 fallback）。与 `aa` 正交
  *（`aa` 管抗锯齿选路，本块管 SSR 特性；组合语义 → RuntimeConfig::ssrEnabled 注释）。
  * 形态先例 = readFsrBlock（嵌套块 + readBoolKey，无扁平键双读兼容）。
@@ -211,12 +211,15 @@ static void readSsrBlock(const sol::table& root, RuntimeConfig& cfg) {
 	if (!ssr.valid() || !ssr.is<sol::table>())
 		return;
 	readBoolKey(ssr, "enabled", cfg.ssrEnabled);
-	// 5 枚调参 = 每帧量（键名 ↔ scene data 分量的映射唯一落点 = fillSsrParams）
+	// 6 枚调参 = 每帧量（键名 ↔ scene data 分量的映射唯一落点 = fillSsrParams）
 	readFloatKey(ssr, "max_distance_radii", cfg.ssr.maxDistanceRadii);
 	readFloatKey(ssr, "thickness_px", cfg.ssr.thicknessPx);
 	readFloatKey(ssr, "bias_px", cfg.ssr.biasPx);
 	readFloatKey(ssr, "rough_full", cfg.ssr.roughFull);
 	readFloatKey(ssr, "rough_cutoff", cfg.ssr.roughCutoff);
+	// 批 15.3B：模糊半径系数（@722352.z，ssr_apply 消费）。0 = 合法消融档（纯双线性上采样），
+	// 同上面两枚 px 系数一条纪律：不 clamp 不 warn（readSsrBlock 头注释的理由逐字适用）。
+	readFloatKey(ssr, "blur_scale", cfg.ssr.blurScale);
 }
 
 /**

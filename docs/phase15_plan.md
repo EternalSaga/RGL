@@ -125,6 +125,30 @@ zones}` 只留后者 ⟹ 第一版脚本把 `light` 读成 30µs（真值 151µs
 = 其中一个分支读错了源）。读 profiler 产物**必须先按 `kind` 过滤**，且**任何新读数都要与
 既有基线交叉对一次**——单看一张表里的数，5 倍错误完全"看起来合理"。
 
+**15.3 子步 B 的 per-pass 读数（2026-10-11）——GPU 时间戳量具本机失效，只能给代理读数**
+
+本批把 `ssr` 拆成 `ssr_trace`（半分辨率）+ `ssr`（apply）两 pass，**没能按本表口径拿到 per-pass
+GPU 成本**：profiler 的 `stats_*.json` 里 **`kind=gpu` 侧 0 个 zone**（全 drops），且**基线
+`3aa4121` 复现同样 0 zone** ⟹ 本机既存量具回归、非本批引入（headless / 窗口、VVL 开 / 关四档
+全测均 drops；`just cpu` 的 `gpu.frame` 亦为 `—`）。同一次 `just cpu` 里**帧首 fenceWait
+0.032ms** 对 AGENTS.md 登记的 6.73ms ⟹ fence 契约形态已漂（**另案，建议登记成债**：GPU profiler
+在本机不可用 = 本表所有口径的读数都拿不到）。
+
+代理读数（`no-vvl` 档 · 120 帧窗口 · 单实例串行 · 1280×720 · SSR 开/关各一次）：
+
+| 档 | frame p50 | frame avg |
+|---|---|---|
+| SSR 开（trace + apply） | 9.189ms | 9.273ms |
+| SSR 关 | 9.144ms | 9.176ms |
+| **Δ** | **+45µs** | +97µs |
+
+CPU 录制侧 zone（同窗口，**不是** GPU 时间）：`ssr_trace` 5µs、`ssr`（apply）3µs。
+
+三条如实报：① **Δp50 = +45µs 是下界**——今日本机该档 CPU-bound（AGENTS.md 同机：frame 10.66 vs
+GPU 10.30），GPU 侧真实增量被主机等待吃掉一部分；② 与本节 257µs 那个数**不可直接比**（那是
+GPU zone 均值，这是 CPU 帧时差分，两个口径）；③ 半分辨率 march 理论上把 257µs 压到 ≈1/4，代理
+读数与此不矛盾（45µs < 257µs），**但不能当结论**——profiler 修好后按本表口径重测。
+
 ### 1.2 湿面平台期（已有实测，本 phase 的立项依据）
 
 `docs/phase11_plan.md` §8.5：`_Wet` 材质 effective roughness 0.221 / 0.120 / 0.059 三档，
@@ -296,7 +320,10 @@ shader 构建登记在 `rgl/CMakeLists.txt` 的 `rgl_shader(...)`。
 | **15.0** | **判据与靶先行（零渲染改动）** ✅ **已落地**（落地形态与计划的偏差见 §3.1） | 红线 = `just regress ab` 逐位不变（**已实测：逐位相同**）；判据 = 闭式预测表本身要有**反向用例**（柱不存在时预测区间必须为空，已做成 `ssr_rig_empty` 变体 + 构建期断言 A3） |
 | **15.1** | **镜面 SSR 最小可用**（**前半 ✅** = `ssr` pass 管道 + 门 + 占位拷贝；**后半主体 ✅** = 真 DDA ray march，落地记录 + 四条 DDA 缺陷 + 方法学教训 → §3.2；**余下** = ~~参数进配置面~~ ✅（批 15.1 参数面，扫描表 → §3.2）+ ~~§1.1 命中率读数~~ ✅（36%，见下））：`ssr.frag.slang` 全分辨率 DDA ray march（§1.3 算法面），反射源 = `scene_hdr`，权重全从 G-buffer 现成量算（Schlick fresnel 与 `light.frag` 同式、roughness 门控、背面/边界 fade）。§2.2 的 viewProj 尾区 + 互逆护栏。门走 `configs/runtime.lua` 新块，与 `aa` 三态键**正交**。**末尾必做（§6 风险 1 的量具）**：在 bistro 交付机位上出 SSR 开/关差分覆盖率 = 命中率读数，写进 §1.1 表；过低即触发 §6 的降级路径。⚠ 该读数**必须在参数面之后出**——常量还是米制而 bistro 是 `scale=0.01`，现在量出来的数不可解读 | 红线 = 门关逐位 = **红线 A `5ff793bf…`**（权威载体 = `docs/还债总账.md` 的红线声明块；**必须用基线配置**。⚠ 本计划立项时写的是 `fdece9d0`，那个锚 2026-10-10 已因债-76 退役，批 15.0 的 `just regress ab` 实测跑出的就是 `5ff793bf`）；VVL + syncval 零 hazard（新 pass 的布局链，先例债-32）；判据 = **`just ssr-check`**（闭式靶两条：凸包内覆盖率 + 凸包外逐位）+ `imgqa switch`（门关影响域**必须恰为 0**）+ `imgqa attribution` + **`aa` 三档各测一次 SSR 开/关差分**（✅ 已实测，缺口 1 闭合）与**装配后 `ssr` pass 下标 < `taa` pass 下标**（后者由 `decorateSsrPass` 的时序判据结构性接管，见 §3.2） |
 | **15.2** | **✅ 结案（2026-10-10，子步 A/B/C/D1/D2 全落地）**。**子步 B ✅ 已落地（2026-10-10）**：湿面三项进 deferred_geometry = **G-buffer 调制**（粗糙度空间变化 / 水膜法线扰动 / albedo 压暗），**默认开**，红线 A 重立 `54e40665`（落地记录 + 判据读数 → §3.3）。**子步 C ✅ 已落地（2026-10-10）** = 命中处减 IBL specular（置信度混合 `hdr + weight·(F·reflected − iblSpec)`，「顺带还」那笔债就地还清 → §3.3 子步 C）。**子步 D1 ✅ 已落地（2026-10-10）** = 验收工具化（`imgqa diffstruct` 常驻算子 + `smoke.py --set [FILE:]KEY=VALUE` 注入通路 → §3.3 子步 D1）。**子步 D2 ✅ 已落地（2026-10-10）** = 湿面六旋钮扫描表 `tools/wet_scan.py`（13 臂全出数、阳性锚点 12/12 PASS）+ 结构对照收账（p90/p10 湿开 20.75 > 湿关 19.21 → §3.3 子步 D2）。原计划：**湿面消费 SSR**（= 原课题「bistro 水膜」三项）：湿区 albedo 压暗 ×0.5–0.7、水洼粗糙度（洼 ≈0.05 / 湿石 0.3–0.5）、水膜法线扰动。wetness **身份**走 roughness 通道（§2.4 已修正：资产已标定，别猜）、**空间变化**走程序化；~~顺带还"命中处不减 IBL specular"那笔债~~ ✅（子步 C）。🔴 **动手前先读 §1.2 末「SSR 落地后效果差的归因」**——四条备选假设（贡献弱/无结构/反射源错/射线预算不够）**全部实测排除**，主因确认 = 反射加在满强度干漫反射之上 ⟹ **本批的压暗就是让已有 SSR 变可见的那一步** | ✅**判据已拍板（2026-10-10 用户）= 「反射结构的对比度」**：纯 Δ 图（SSR 开/关差，线性亮度域）的 **p90/p10 比值 + 湿区内 Δ<0（变暗）像素占比 > 0**（后者 = 「命中处减 IBL specular」生效的机器可验阳性锚点）；「Δ 大小」降级为报告值不作判据（§1.2 实测现状 Δ 已不小，沿用会让「还是不像水」蒙混过关）。湿面效果**默认开**亦同批拍板（红线 A 已重立 `54e40665`）。原定判据保留：结案 AGENTS.md「湿面只加高光不压暗」那条已知边界（就地删该条，**AGENTS 结案句由主 agent 处理，D2 未碰 AGENTS.md**）；`imgqa faces` 闭式逐面预测；`imgqa switch --allow-piece ground` 限定湿区影响域。**结案时补（磁盘事实）**：faces/switch 是 manifest 驱动（`loadManifest` 只认 `build/rgl/models/*.manifest.json`，bistro 无 manifest）⟹ 对 15.2 的 bistro 场景**不适用**，本批实际执行的可执行判据 = `diffstruct`（已执行，读数 → §3.3 子步 D2） |
-| **15.3** | **粗糙度感知模糊 + 伪影治理**：拆半分辨率 march + 全分辨率 apply；反射图走 mip chain（§1.3 抄 Filament 这条）；治深度间隙断裂、屏幕边界淡出、firefly（`docs/还债总账.md` 债-40 那条 HDR firefly 对 SSR 同样成立） | 每条伪影要有**反向用例**，不许"看着好了"收账；per-pass 读数进 §1.1 表 |
+| **15.3** | **粗糙度感知模糊 + 伪影治理**：**子步 B ✅ 已落地（2026-10-11）** = 拆半分辨率 march + 全分辨率
+apply（落地记录 / 全部验收读数 / 两条方法学教训 → §3.5）；~~反射图走 mip chain~~ **偏差** = 实际
+用粗糙度感知黄金角螺旋 taps（门控封顶了所需半径，mip 在小半径下不划算；🔴 失效条件与推翻实验 →
+§3.5，§1.3 抄 Filament 这条**只在门控放宽时才回来**）；治深度间隙断裂、屏幕边界淡出、firefly（`docs/还债总账.md` 债-40 那条 HDR firefly 对 SSR 同样成立） | 每条伪影要有**反向用例**，不许"看着好了"收账；per-pass 读数进 §1.1 表 |
 
 **批次顺序的理由**：15.0 先做是因为 SSR 是本项目少数能闭式验证的特性，尺子必须比实现先到位
 （skill `rgl-test-discipline` 的"程序化靶是判据成立的前提"）。
@@ -1065,6 +1092,88 @@ M1+M2+M3+M4 = **54.6%**（与 §1.2 开关差分的 55% 自洽），其中 **M1 
 - 出图三张 = 三次构建（`kDiagMode` 1/2/3），计数脚本常驻 `tools/`（④ 教训：读数器别留
   /tmp）；重跑诊断 = 再开 shader 两个常量 + 三次 `just build` + 同机位出图 +
   `python3 tools/ssr_diag_count.py <mode1> <mode2> <mode3>`。
+
+### 3.5 批 15.3 子步 B 落地记录：单 pass 拆「半分辨率 march + 全分辨率 apply」（2026-10-11）
+
+**形态**（`ssr.frag.slang` 删除 → 两个 shader）：
+
+| pass | 分辨率 | 职责 | 输出 RT |
+|---|---|---|---|
+| `ssr_trace`（`ssr_trace.frag.slang`） | 半网格（1280×720 → 640×360） | DDA ray march + 权重 + **减 iblSpec** | `ssr_trace` |
+| `ssr`（`ssr_apply.frag.slang`） | 全网格 | 粗糙度感知黄金角螺旋模糊 + 加法合成 | `ssr_applied` |
+
+- **apply 沿用原 pass 名 `"ssr"` 与原 state**（消费链零改动：`taa`/`tonemap`/`fsr` 的输入边、
+  `decorateSsrPass` 的时序判据、`vkrenderer` 的 pass 记录全不动）；trace 是新名/新 state
+  `"ssr_trace"`（`pass_vocabulary` 15 条目 + StateKit 同形状 slot，`test_state_kit` 钉住）。
+- **premultiplied 契约**：trace 写 `rgb = weight·(F·reflected − iblSpec)`、`a = weight`。
+  减法**留在 trace**（apply 因此不需要 env/light 绑定，只多一条 `metalRoughTex` 读边）；
+  加法与减法同源，`a==0 ⟹ rgb 恒 ±0` 的不变式由 apply 的乘法保持。
+- **半分辨率 = 新增 `RgAttachmentDesc::extentScale`**（仅离屏、(0,1]、floor 到最小 1）+ 共享
+  `scaleRtExtent` helper——起跑建槽与每帧 ensure **必须同一口径**（两处各写一份 ⟹ 每帧重建 RT）。
+- `blurScale` 骑 `ssrGate.z`（scene data @722352），配置键 `ssr.blur_scale` 默认 **8.0f**
+  （真相源 = `SsrTuning` 成员初值），**0 = 合法消融档**（半径 0 = 纯双线性上采样）。
+
+**偏差记录：螺旋 taps 代替批次表原文的「反射图走 mip chain」**（§3 表 15.3 行就地标注）：
+实际形态 = 8 taps 黄金角螺旋、`sqrt` 铺等面积圆盘、**半径 = roughness × blurScale**（全分辨率
+px；默认档 roughness 0.122 → 半径 ≈ 1.0px），基座模糊 = 半分辨率→全分辨率的双线性上采样
+（≈2×2 盒），螺旋叠在其上。不走 mip 的理由 = 本引擎 roughness 门控（`gate.y = 0.40`）**封顶了
+所需半径**（>0.40 无 SSR ⟹ 上界 0.40×8 = 3.2px），小半径下 mip 的盒式模糊与螺旋 taps 视觉等价，
+而 mip chain 要为 `ssr_trace` 多背一条 mip 生成（全屏带宽 + barrier）。
+🔴 **失效条件（负知识三件套）**：作用域 = 当前 `rough_cutoff = 0.40` + `blur_scale = 8.0`；
+**若将来门控放宽**（cutoff → 1.0）**或 blur_scale 上调一个量级**（半径 > ~8px），螺旋要加 tap
+数才不留采样空洞，那时**换 mip chain 更划算**（mip 覆盖大半径而成本不随半径涨）。推翻它的实验
+= `--set rough_cutoff=1.0 blur_scale=32` 出图与 mip 版对拍，若螺旋版出现明显空洞/aliasing 而
+mip 版没有 ⟹ 本裁决作废。
+
+**接收侧门控（必须项，不是优化）**：apply 里 `reflect = 1 - smoothstep(gate.x, gate.y, rough)`
+且 `sum *= reflect`。模糊会把邻域**光滑面**的 trace 采进「本被门控关死」的粗面像素——bistro
+参考机位实测不加此门控时 `roughness ≥ 0.40` 的像素上**变暗 6585 px**（`diffstruct-dark-domain`
+红，半径 = rough×8 恰在门该关死处最大）。半径仍用**未钳制** roughness（门归零后无所谓）。
+
+**🔴 形态红线：门控只能乘，不许在 `Sample` 循环之前 `return`**（RADV 实测）。逐 lane 早退让
+quad 内邻居被 mask 掉时 `Sample` 读出**幻影值**：x=544 处出现一条 34px 宽红色幻影列，而把
+`ssr_trace` RT 经 RPC `/shot attachment=` dump 出来该列**全 0** ⟹ 幻影来自 apply 的采样而非
+trace；去掉早退即消失（二分定位）。门关的逐位旁路不靠早退，靠「`sum` 全 0（含 ±0）→ `return
+hdr`」，旁路仍是逐位精确的。
+
+**`tools/ssr_hull_check.py --edge-px` 默认 2.0 → 4.0（按实测重设，不是放宽判据）**：判据 B 的
+屏幕边界豁免宽度。半分辨率上采样的双线性足迹 ≈2px，再叠 roughness×blur_scale 的模糊半径 ⟹
+默认档实测泄漏最大 **3.37px**（639 px，分布 [0,1)=334 / [1,2)=223 / [2,3)=72 / [3,4)=10，全部
+贴边）。阳性对照：`--edge-px 0` 必须红（已实测红）。`blur_scale=16` 档泄漏上界升到 4.4px
+（半径翻倍，预期内）——门 = **默认配置**的 `just ssr-check`，扫描档只报数。
+
+**验收读数**（本机 RADV STRIX_HALO · 1280×720 · 单实例串行 · 全部在最终构建上重测）：
+
+| 判据 | 原始读数 | 结论 |
+|---|---|---|
+| 红线 A `just regress ab --expect 54e40665` | A=B=`54e406655f16`（各 3 次；跨构建 0 对不同哈希、最大 0 像素） | **逐位相同** ✅ |
+| 湿面关锚点 `--set strength=0` | `5ff793bff594f163` | 命中 ✅ |
+| `just smoke --ssr` 双 RT 齐全 | apply 1280×720 = 渲染网格 / trace 640×360 = 半网格 | PASS |
+| `just ssr-check` 判据 A（闭式凸包内） | 39901 px = 画面 4.33%，变亮 39314 = **98.5%**、变暗 **0**、Δp50 +0.21442 | PASS（≥90%） |
+| `just ssr-check` 判据 B（凸包外泄漏） | **0 px** @±4px | PASS |
+| bistro 参考机位 `imgqa diffstruct --gate 0.40` | 域外变暗 **0** · 变暗锚点 **70816** · 命中率 **72.65%**（152659/210135）· 差分 152664 px = 16.57% · p90/p10 **30.95** | 两条 PASS |
+| **影响域逐位**（`rough ≥ 0.40` 全像素，ON vs OFF，RGBA 全通道双向） | **709269 px 不逐位相同 = 0** | PASS（比 diffstruct 的「域外变暗恰 0」更强） |
+| `blur_scale` 8 vs 0 / 8 vs 16（bistro 参考机位） | **74134 px = 8.04%** / **112009 px = 12.15%** | 非零 ✅ |
+| **变异体**（`radiusPx = 0.0 * gate.z`，断开 roughness） | blur 8 vs 16 = **0 px**；还原后同对 = **112009 px**（与变异前逐位一致） | 阳性 ✅（半径确由 roughness 驱动） |
+| aa 三档 SSR 开/关差分（`--aa off/taa/fsr`） | 有差异行 **221 / 222 / 223**（/720 行） | 非零 ✅ |
+| 冒烟矩阵 | `--ssr --aa taa` / `--ssr --aa fsr` / `--ssr --sync` / `--sync` / 默认 = PASS（errors=0 warnings=0）；`--ssr --variant forward` = PASS warnings=1（「本图变体不支持」= §0.1 D1 豁免的设计路径） | PASS |
+| `just test` | 274/274（含新增：双 pass 形态 / `gate.z=blurScale` / `blur_scale` 往返 / StateKit 15 名） | PASS |
+| `tools/ssr_scan.py` blur 三臂（靶 `ssr_rig`） | 覆盖率 97.6 / 97.6 / 98.6%、变暗 0 / 0 / 0、泄漏 0 / 0 / **9**、ON 图差分 11556 / 11904 / 14204（blur 0/4/16） | 锚点全 PASS；blur16 判据 B 的 9 px = 半径翻倍（4.4px > 4px 豁免），预期内 |
+
+**per-pass GPU 成本未取到（量具既存回归，非本批引入）** → §1.1 末「15.3 子步 B 的 per-pass
+读数」小节：GPU 时间戳 profiler 本机 `kind=gpu` 侧 0 zone（基线 `3aa4121` 同样复现），只有
+代理读数（SSR 开/关帧时 Δp50 = **+45µs**，且本机该档 CPU-bound ⟹ 是下界）。**建议登记成债**。
+
+**方法学教训（本批踩的，两条）**：
+
+1. **自写 PNG 读图器必须做行过滤器展开**（Sub/Up/Average/Paeth）。本批一版 stdlib 一次性脚本只
+   `zlib.decompress` 后按 `1+stride` 切行 ⟹ 报出「影响域 5183 px 不逐位相同、Δ 高达 255」的
+   **假 FAIL**（正确实现后真值 = **0**）。发现方式 = 与 imgqa 同图差分像素数对表（假读数远大于
+   imgqa 的 152664）。与 §1.1 的量具教训同一条：**任何新读数先与既有算子交叉对一次**，
+   「任意通道不同」应 ≈ diffstruct 的线性亮度差分计数（实测 152673 vs 152664，差 9 px 落在
+   近黑处 1 LSB 不改变线性亮度的量级）。
+2. **读数绑构建**：bistro 对拍图曾早于最后一次 shader 改动 + 重建（08:53 vs 09:05）⟹ 出图前
+   先看 mtime、重拍后确认读数不变（重拍后 70816 / 152664 / p90-p10 30.952178 逐项不变）。
 
 ## 4. 红线与纪律
 

@@ -464,11 +464,17 @@ export inline constexpr uint32_t kSceneDataSsrOffset = kSceneDataTaaOffset + kSc
  *  tests/test_scene_config（配置往返）。**默认值唯一真相源 = `RuntimeConfig` 成员初始化值**
  *  （shader 侧无 fallback 常量——两处定义迟早漂移，见 ssr.frag.slang 参数段）。 */
 export inline constexpr uint32_t kSceneDataSsrParamsOffset = kSceneDataSsrOffset + 64u;
-/** SSR 粗糙度门控子区（vec4, 16B）= (roughFull, roughCutoff, 保留, 保留)。
+/** SSR 粗糙度门控 + 模糊子区（vec4, 16B）= (roughFull, roughCutoff, blurScale, 保留)。
  *
  *  **为什么不塞进上面那个 ssrParams**（设计决策，别"顺手合并"）：那四个是"由 sceneRadius
- *  导出的射线几何量"，本两个是**与场景尺度无关的材质属性区间**（roughness 本身无量纲）。
- *  混进一槽 = 语义上两组旋钮共用一个名字，改任一组都要读另一组的口径。
+ *  导出的射线几何量"，本组是**与场景尺度无关的材质属性区间/像素域系数**（roughness 本身
+ *  无量纲；blurScale 的单位 = 全分辨率 px，与场景尺度无关）。混进一槽 = 语义上两组旋钮
+ *  共用一个名字，改任一组都要读另一组的口径。
+ *
+ *  `z` = blurScale（批 15.3 子步 B 占用，此前措辞「保留」）：apply pass 的螺旋模糊半径 =
+ *  roughness × z（**全分辨率 px** 口径——trace 图半分辨率但 uv 空间一致，偏移按全分辨率
+ *  换算）。消费者 = ssr_apply.frag；0 = 合法消融档（taps 全落中心 = 纯双线性上采样），
+ *  CPU 侧不 clamp（readSsrBlock 同款纪律：消融档必须写得出来）。
  *
  *  ⚠ `x < y` 是 **shader 侧不变式**（`smoothstep(x, y, roughness)` 要求等号左 ≤ 右，
  *  反了 = 门控反向 = 粗糙面满反射、光滑面全关）。配置层**不校验**，理由与不变式落点 →

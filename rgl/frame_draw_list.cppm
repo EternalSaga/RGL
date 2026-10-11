@@ -160,8 +160,9 @@ export struct SceneFrameData {
 	///   kSceneDataSsrParamsOffset），yzw = 由它导出的三个无量纲系数（configs/runtime.lua
 	///   `ssr` 块，**每帧量**）。生产者 = fillSsrParams（render_list_impl，可测接缝）。
 	glm::vec4 ssrParams{0.0f};
-	/// · ssrGate —— SSR 粗糙度门控子区 @722352（vec4）= (roughFull, roughCutoff, 0, 0)。
+	/// · ssrGate —— SSR 粗糙度门控子区 @722352（vec4）= (roughFull, roughCutoff, blurScale, 0)。
 	///   与场景尺度无关，故与 ssrParams 分槽（分组理由 → scene_data.cppm 该区注释）。
+	///   z = blurScale（批 15.3B，ssr_apply 螺旋模糊半径系数，全分辨率 px 口径）。
 	///   生产者同 fillSsrParams（一次填两槽，两槽永远同源同帧）。
 	glm::vec4 ssrGate{0.0f};
 	// ── Phase 15 批 15.2 子步 A 湿面参数，scene data 尾区 @722368 ──

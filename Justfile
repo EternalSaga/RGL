@@ -158,7 +158,7 @@ ssr-target:
 
 # SSR 闭式靶判据算子（批 15.1）——区域来自 manifest 几何、比较 SSR 开/关**差分**。
 # A 阳性锚点 = 闭式倒影凸包内必须变亮（覆盖率下限抓"部分像素整条射线没命中"）；
-# B 因果泄漏恒等式 = 凸包外逐位不变（±2px 边界豁免，理由见脚本 docstring）。
+# B 因果泄漏恒等式 = 凸包外逐位不变（±4px 边界豁免 = 15.3B 半分辨率 footprint + 模糊半径，理由见脚本 docstring）。
 # 与 ssr-target 的分工：那个只生成场景 + 门关图，这个才是判据本体。
 ssr-check:
     @python tools/ssr_hull_check.py

@@ -1,10 +1,36 @@
-// ssr.frag —— 屏幕空间反射（Phase 15 批 15.1 后半）：镜面 DDA ray march。
+// ssr_trace.frag —— 屏幕空间反射的 **march 本体**（Phase 15 批 15.3 子步 B：自 ssr.frag
+// 拆出；march/减法/三条 fade 原样搬，取色加法与粗糙度模糊搬进 ssr_apply.frag）。
 //
-// ── 形态（为什么是 post-lighting 全屏 pass）──
-// 输入 = `light` pass 写好的 `scene_hdr`（本帧成片）+ G-buffer 现成量，输出 = `ssr_applied`
-// （成片 + 反射贡献）。图内不可能读同帧 SSR 结果（`light` 正在写 `scene_hdr`），所以形态
-// 唯一（论证 → `docs/phase15_plan.md` §2.1）。**deferred-only**：权重全从 G-buffer 算，
-// forward 图没有 G-buffer（D1 对等豁免 → §0.1，装饰器跳过条件保证本 shader 只在 deferred 跑）。
+// ── 形态（为什么拆成 trace + apply 两 pass）──
+// 本 pass 只做「反射是什么」：DDA ray march + 命中处置信度（含减 IBL specular），将结果以
+// **premultiplied** 形态写进半分辨率的 `ssr_trace`；「反射怎么合成」= 粗糙度感知模糊 +
+// 加法，全在 apply pass（`ssr_apply.frag`，全分辨率）。两件事此前长在同一枚全分辨率 pass 里
+// （批 15.1 后半的单 pass 形态），拆开买两样东西：
+//  ① **成本**：march 的成本 = 每像素采样次数（§1.1 推论①），半分辨率 = 1/4 像素，而反射是
+//     低频信号（本来就靠粗糙度模糊看），半分辨率不亏画质；
+//  ② **可模糊性**：模糊必须作用在「反射贡献」这张独立图上，且**加法减法必须同源**——
+//     premultiplied（rgb 已乘 weight、a = weight）让模糊 = 逐通道均值，加/减两项被同一个
+//     权重一起平均，不需要事后重建置信度。
+// 输入 = `light` pass 写好的 `scene_hdr`（反射源，全分辨率）+ G-buffer 现成量，输出 =
+// `ssr_trace`（半分辨率 RGBA16F）。图内不可能读同帧 SSR 结果（`light` 正在写 `scene_hdr`），
+// 所以形态唯一（论证 → `docs/phase15_plan.md` §2.1）。**deferred-only**：权重全从 G-buffer
+// 算，forward 图没有 G-buffer（D1 对等豁免 → §0.1，装饰器跳过条件保证本 shader 只在 deferred 跑）。
+//
+// ── premultiplied 约定（两 pass 之间的契约，改任何一侧都要同步）──
+//     rgb = weight * (F * reflected - iblSpec)      a = weight
+// 所有未命中 / 早退路径写 `float4(0, 0, 0, 0)`（= 「本 texel 无贡献」，apply 侧的
+// 「trace 采样全零 ⟹ 直接 return hdr」早退据此成立 = 影响域判据的前提）。weight 恒 > 0
+// （weight ≤ 0 走早退），所以 a == 0 ⟺ rgb 恒 ±0，premultiplied 不变式自洽。
+// 旧形态（单 pass 直接 `hdr.rgb + weight·(…)` 写 ssr_applied）里「未作用像素逐位 = hdr」
+// 靠每条早退 `return hdr`；新形态里同样的纪律搬到 apply（早退 return Load 的 hdr），本 pass
+// 的早退只是写零——**加法不再发生在本 pass**，`scene_hdr` 的 Load 直通也随之一并移除。
+//
+// ── 半分辨率对齐口径（确定性约定，别改成过滤）──
+// 本 pass 的 viewport = 渲染网格 × 0.5（`RgAttachmentDesc::extentScale`，装配侧
+// render_graph.cppm kSsrTraceScale）。读全分辨率的 G-buffer / depth / scene_hdr 时取
+// **左上纹素**：`int2(pos.xy) * 2`。半分辨率像素 (i+0.5) 覆盖全分辨率 [2i, 2i+1)，取 2i
+// 是约定不是采样理论——它确定（同输入同输出逐位）、无过滤（不引入第二张采样网格），且
+// 奇数窗口下 2·floor(W/2) ≤ W 恒不越界。
 //
 // ── 算法 ──
 // McGuire & Mara, Efficient GPU Screen-Space Ray Tracing (JCGT 2014) 的 2.5D DDA：把反射
@@ -30,18 +56,20 @@
 //     worldPerPixel **导出**——米制常量在 scale=0.01 的交付场景下不可解读，参数区有账。）
 //
 // ── 纹理空间口径 ──
-// 本 pass **不改变纹理空间**：输入输出同空间同网格，ray march 在**本帧抖动空间**求交
-// （深度缓冲与 `readSsrViewProj()` 同为抖动后口径，见 scene_data.cppm kSceneDataSsrOffset）。
-// 不做 un-jitter——那是下游时域滤波器的活（同 ao_apply 纪律）。
+// ray march 在**本帧抖动空间**求交（深度缓冲与 `readSsrViewProj()` 同为抖动后口径，见
+// scene_data.cppm kSceneDataSsrOffset）。本 pass 的 viewport 是半分辨率，但 **uv 空间不变**
+// （pos/extent 各自归一化到 [0,1]，march 起点走 uvFromClip、深度采样走全分辨率纹素），
+// 抖动网格与全分辨率 pass 同一张。不做 un-jitter——那是下游时域滤波器的活（同 ao_apply 纪律）。
 //
-// ── 命中处 = 置信度混合（15.2 子步 C 起；旧形态「只加不减」已还账）──
-// 未命中 / 每条早退路径仍返回逐位 `hdr`（= `light.frag` 已加过的 IBL specular 原样保留，
-// 回退面 = 「什么都不加」，影响域判据的前提不变）；命中且 weight>0 的路径做
-//     hdr.rgb + weight * (F * reflected - iblSpec)
+// ── 命中处 = 置信度混合（15.2 子步 C 起；本步只把「加法」搬去 apply，减法留本 pass）──
+// 命中且 weight>0 的路径写 premultiplied 的 `weight * (F * reflected - iblSpec)`。
 // `scene_hdr` 里已含 light.frag 加的 IBL specular，SSR 命中 ⟹ 那一项该被反射内容**顶替**
 // 而不是叠加（旧形态双计偏亮，且「反射到暗物」永远无法让像素变暗 = SSR 开/关差分恒 ≥0）。
 // `iblSpec` = light.frag 那一项的**逐式镜像重算**（本 pass 是 post-lighting，拿不到 light
 // pass 的中间量；重算比加一张 RT 便宜且无新附件），相消条件逐条对齐 → 最终 return 处注释。
+// 减法**留在 trace** 的裁决：premultiplied 均值对「加性两项」一视同仁（同一 weight 一起
+// 平均），减法放 apply 反而要 apply 重读 env cubemap + 重算 envBrdf（绑定面翻倍、且相消
+// 条件跨 pass 对齐比同 pass 脆弱得多）。
 //
 // ⚠ **已知边界（跨场景，植被/光源过减）**：light.frag 对植被类（emissive.a∈(0.5,1.5)）把
 // envSpec 置 0（light.frag:226 isVeg 分支）、对光源类强制 metallic=0（light.frag:172-173），
@@ -49,33 +77,28 @@
 // 能量）。本场景安全：植被 roughness 1.0 ≫ gate.y=0.40 ⟹ weight=0，到不了减法行。跨场景
 // 若引入光滑植被，减法要随 materialClass 走（届时再还，别提前加绑定、别在此早退）。
 //
-// ── 绑定面（与 CPU 侧 addSsrEntry 成对；G-buffer 通道号镜像 light.frag）──
+// ── 绑定面（与 CPU 侧 addSsrTraceEntry 成对；G-buffer 通道号镜像 light.frag）──
 //   3 = sceneData（import scene；@722272 ssrViewProj = 本帧**抖动后** proj·view；
-//       @722336 ssrParams = 尺度锚点 + 三个导出系数；@722352 ssrGate = 粗糙度门控区间。
-//       后两槽的口径与默认值真相源 → scene_data.cppm / configs/runtime.lua `ssr` 块）
-//   4 = scene_hdr（RGBA16F 线性 HDR，反射源）
+//       @722336 ssrParams = 尺度锚点 + 三个导出系数；@722352 ssrGate = 粗糙度门控区间
+//       （本 pass 只读 x/y，z = blurScale 是 apply 的旋钮）。
+//       各槽口径与默认值真相源 → scene_data.cppm / configs/runtime.lua `ssr` 块）
+//   4 = scene_hdr（RGBA16F 线性 HDR，反射源；**全分辨率**，命中取色 Sample）
 //   5 = gbuffer_normal（RG16_SNORM oct，解法走 scene.slang `octDecode` 单一来源）
 //   6 = gbuffer_position（RGBA32_SFLOAT 世界坐标）
 //   7 = gbuffer_metalrough（RGBA8_UNORM .r=metal .g=rough）
 //   8 = depth（eD32Sfloat 深度图，eDepth aspect；`Load` 直取，不占 sampler）
 //   9 = gbuffer_albedo（RGBA8_SRGB，Schlick fresnel 的 F0 要它——金属地面的 F0 就是 albedo，
 //       省掉它等于把所有表面当介质，靶的金属地面反射会整个不出来）
-//  10 = sampler（共享 LINEAR/ClampToEdge；**只有**命中取色用它，见下条纪律）
+//  10 = sampler（共享 LINEAR/ClampToEdge；**只有**命中取反射色用它——其余逐像素自身量全走
+//       `Load` 整数纹素。旧单 pass 里「直通 Load 保证未作用像素逐位 = hdr」的判据纪律随
+//       直通路径一起搬去 ssr_apply；本 pass 没有直通——输出是新图，早退 = 写零）
 //  11 = envMapL(TextureCube) / 12 = envSamplerL(sky sampler)（15.2 子步 C：命中处减 IBL
 //       specular 的镜像重算源；light.frag 的 9/10 在本 pass 号接 4-10 之后。env 未上传 =
 //       占位 0/0，shader 端 mipRange=0 不采样的契约，light.frag 同款）
-//
-// ⚠ **取色器分工是判据的一部分**：直通路径与逐像素自身量一律 `Load`（整数纹素原值），只有
-//   命中取反射色用 `Sample`（命中 uv 是亚像素的，必须过滤）；env 的 `SampleLevel` 走 12 号
-//   sky sampler 且**必须与 light.frag:222 同 LOD 表达式**（那是镜像重算的相消条件，不是
-//   本纪律的例外）。直通用 `Load` 保证
-//   **SSR 未作用的像素与门关时逐位相同** ⟹ `imgqa switch` 的影响域判据（"门关影响域恰为 0"）
-//   才有意义；否则影响域里混进"采样路径的浮点差异"，判据就分不清"SSR 没作用"与"SSR 作用了
-//   但被浮点噪声淹没"。
 
-import scene;  // sceneData + readSsrViewProj + readSsrParams + octDecode + worldFromDepth + uvFromClip + readSceneLight
+import scene;  // sceneData + readSsrViewProj + readSsrParams + readSsrGate + octDecode + worldFromDepth + uvFromClip + readSceneLight
 
-[[vk::binding(4, 0)]] Texture2D<float4> sceneHdrTex;    // 本帧成片（RGBA16F 线性 HDR）
+[[vk::binding(4, 0)]] Texture2D<float4> sceneHdrTex;    // 本帧成片（RGBA16F 线性 HDR，全分辨率）
 [[vk::binding(5, 0)]] Texture2D<float2> normalTex;      // G-buffer oct 法线（rg16_snorm）
 [[vk::binding(6, 0)]] Texture2D<float4> positionTex;    // G-buffer 世界坐标（rgba32_sfloat）
 [[vk::binding(7, 0)]] Texture2D<float4> metalRoughTex;  // G-buffer .r=metal .g=rough
@@ -103,8 +126,8 @@ EnvParamsS readEnvParamsS()
 
 struct SsrInput
 {
-    float4 position : SV_Position;  // framebuffer 坐标（Load 用）
-    float2 uv       : TEXCOORD0;    // light.mesh 产出 = framebuffer 对齐 uv（1:1）
+    float4 position : SV_Position;  // **半分辨率** framebuffer 坐标（×2 = 全分辨率左上纹素）
+    float2 uv       : TEXCOORD0;    // light.mesh 产出 = framebuffer 对齐 uv（归一后与全分辨率同网格）
 };
 
 // ── 参数（**全部来自 scene data 尾区**，配置面 = configs/runtime.lua `ssr` 块）──
@@ -139,17 +162,21 @@ struct SsrInput
 // 成本决策**（循环上界与网格边长进配置 = 编译器拿不到常量 ⟹ 循环展开/提前退出全废，
 // 且"步数上限"根本不是画质旋钮而是兜底保险丝）；第四个是屏幕像素域的经验常数，
 // 与场景尺度无关，本批没有要扫它的人。
-// DDA 格边长（像素）。2 = 步数减半；靶的倒影边界是硬边，格粗于 2 会把边界量化出来。
+// DDA 格边长（**半分辨率**像素，15.3B 起）。2 = 半分辨率格 = 全分辨率 4px：格按本 pass 的
+// 像素网格走（cellSize 换算见 main），步数与全分辨率时代比再减半——**这就是半分辨率的
+// 成本来源**。靶的倒影边界是硬边，格粗于 2 会把边界量化出来（半分辨率下边界量化误差本身
+// 已有 2 全分辨率 px，格不再加第三层）。
 static const float kCellPx = 2.0;
 // 步数上限。**刻意不抄 Filament 的 max(res)**（§1.3 红线：那是移动端小分辨率的宽松上界）。
-// 行程上限 = kMaxSteps·kCellPx = 1024 px（1280 宽 = 整屏宽）——它是**兜底**不是预算：
-// 真实行程先被 maxDistance / 出屏 / 命中截断，只有横穿全屏的射线才可能把步数走完
-// （靶的倒影需要 ~240 px 行程里的大部分：射线只需走到"被反射内容的像"，不必走完整个
-// 倒影区）。扫描表见 §3.2。
+// 行程上限 = kMaxSteps·kCellPx = 1024 **半分辨率** px = 全分辨率 2048 px（≥ 整屏宽）——
+// 它是**兜底**不是预算：真实行程先被 maxDistance / 出屏 / 命中截断，只有横穿全屏的射线才
+// 可能把步数走完（靶的倒影需要 ~240 px 行程里的大部分：射线只需走到"被反射内容的像"，
+// 不必走完整个倒影区）。扫描表见 §3.2。
 static const int kMaxSteps = 512;
 // 命中点二分细化次数（在 [上一格穿越 t, 本格穿越 t] 上解 along=0）。
 static const int kRefineIters = 4;
-// 命中点离屏幕边界多近开始淡出（像素）。边界外的内容根本没画，越靠边反射越不可信。
+// 命中点离屏幕边界多近开始淡出（**全分辨率**像素——edgeFade 用全分辨率 px 算，视觉宽度与
+// 拆 pass 前一致）。边界外的内容根本没画，越靠边反射越不可信。
 static const float kEdgeFadePx = 24.0;
 // 天空判据：深度 = 远平面清值（skybox 大三角 z=1 靠 depth clear + LEQUAL，不写深度）。
 // 阈值与 ao.frag:106 同值同因——两处必须一起改，否则 AO 当天空而 SSR 当几何（或反之）。
@@ -165,6 +192,8 @@ struct MarchSample
 };
 
 // 屏幕某处的世界点相对射线的位置（判据本体，见文件头 ②）。
+// ⚠ 深度采样**恒走全分辨率纹素**（uv × 全分辨率 px）——半分辨率只改「谁执行这段 march」，
+// 不改「march 里的求交精度」；深度图本来就是全分辨率的，没有理由降它。
 MarchSample sampleAlong(float4 c0, float4 cd, float t, float3 P, float3 R, float2 px, float tanHalfFovY)
 {
     MarchSample s;
@@ -232,8 +261,9 @@ float nextCrossT(float4 c0, float4 cd, float A, int axis, float tAfter)
     // ⚠ **非正解必须当"不可达"**（本函数最容易被漏掉的一半）。屏幕坐标是 t 的**有理**函数
     //   (c + t·d)/(w0 + t·dw)：当 |d/w0| 不足以穿过边界、而 w 又在单调增长时，该坐标是**渐近
     //   收敛**到某个值（几何上 = 射线朝消隐点收敛），那条边界根本到不了，可上面这个代数式照样
-    //   算出一个**负 t**（方程的另一支）。调用方拿 `min(tX, tY)` 就会拿到一个身后的 t——2026-10-10 实测：靶上 48% 的倒影像素死在这一条（反射射线几乎垂直上行、x 分量
-    //   ≈0，正是收敛形态）。真正的穿越永远在 t > 0。
+    //   算出一个**负 t**（方程的另一支）。调用方拿 `min(tX, tY)` 就会拿到一个身后的 t——2026-10-10
+    //   实测：靶上 48% 的倒影像素死在这一条（反射射线几乎垂直上行、x 分量≈0，正是收敛形态）。
+    //   真正的穿越永远在 t > 0。
     const float tcand = (A * c0.w - c) / den;
     // ⚠ 判据是「在 tAfter **之后**」而不是「> 0」。用 > 0 会把**已经越过**的边界当成有效穿越
     //   返回（值落在 (0, tCur]），调用方于是把 tCur **往回**设——实测形态：射线走了 200 多步
@@ -245,20 +275,22 @@ float nextCrossT(float4 c0, float4 cd, float A, int axis, float tAfter)
 [shader("fragment")]
 float4 main(SsrInput input) : SV_Target
 {
-    // 直通基准：后面每条早退路径都返回它（`Load` 整数纹素原值），保证"SSR 未作用"的像素
-    // 与门关**逐位**相同（判据根据见绑定面那条 ⚠）。
-    const int2 pix = int2(input.position.xy);
-    const float4 hdr = sceneHdrTex.Load(int3(pix, 0));
+    // 半分辨率像素 → 全分辨率**左上纹素**（对齐口径 → 文件头「半分辨率对齐」）。本 pass 里
+    // 所有对全分辨率资源（G-buffer / depth）的逐像素 `Load` 一律走 gpix。
+    const int2 gpix = int2(input.position.xy) * 2;
 
     uint pxW, pxH, mLvl;
     depthTex.GetDimensions(0u, pxW, pxH, mLvl);
+    // px = **全分辨率**尺寸（depth/G-buffer/scene_hdr 都是全分辨率）：worldPerPixel、
+    // edgeFade、sampleAlong 的深度纹素、DDA 格换算全部用它——拆半分辨率后这些口径**不变**，
+    // 变的只有 DDA 格（cellPx 乘 2，见下）。
     const float2 px = float2(float(pxW), float(pxH));
 
     // 天空不反射（它已经是"整个环境"，再叠一层 SSR 是双重计数且会糊掉天顶渐变）。
-    if (depthTex.Load(int3(pix, 0)) >= kFarDepth)
-        return hdr;
+    if (depthTex.Load(int3(gpix, 0)) >= kFarDepth)
+        return float4(0.0, 0.0, 0.0, 0.0);
 
-    const float4 mr = metalRoughTex.Load(int3(pix, 0));
+    const float4 mr = metalRoughTex.Load(int3(gpix, 0));
     const float roughness = mr.g;
     // 粗糙度门控早退（**性能与正确性双重**：粗糙面本就不该有镜面反射，且这条早退让绝大多数
     // 像素根本不进 ray march —— 门控关掉的是整段 march 的成本，不是一个乘数）。
@@ -269,15 +301,15 @@ float4 main(SsrInput input) : SV_Target
     const float4 gate = readSsrGate();
     const float roughGate = 1.0 - smoothstep(gate.x, gate.y, roughness);
     if (roughGate <= 0.0)
-        return hdr;
+        return float4(0.0, 0.0, 0.0, 0.0);
 
-    const float3 P = positionTex.Load(int3(pix, 0)).xyz;
-    const float3 N = octDecode(normalTex.Load(int3(pix, 0)).xy);
+    const float3 P = positionTex.Load(int3(gpix, 0)).xyz;
+    const float3 N = octDecode(normalTex.Load(int3(gpix, 0)).xy);
     const float3 eyePos = readSceneLight().eyePos;
     const float3 V = normalize(eyePos - P);      // 表面 → 相机（与 light.frag 同向口径）
     const float3 R = reflect(-V, N);             // 反射射线方向（|R| = 1 ⟹ t 就是世界距离）
     if (dot(R, N) <= 0.0)
-        return hdr;                              // 退化（数值上不该发生）：宁可不反射
+        return float4(0.0, 0.0, 0.0, 0.0);       // 退化（数值上不该发生）：宁可不反射
 
     // 投进屏幕：clip(t) = C0 + t·Cd，对 t 线性（文件头 ①）。
     const ObjectMatrix vp = readSsrViewProj();
@@ -309,14 +341,19 @@ float4 main(SsrInput input) : SV_Target
     {
         const float tSing = -C0.w / Cd.w;
         if (tSing <= bias0)
-            return hdr;
+            return float4(0.0, 0.0, 0.0, 0.0);
         tMax = min(tMax, tSing);
         singularityFade = saturate(tSing / maxDistance);
     }
 
     // ── DDA：沿屏幕网格走，逐格判 along 的符号翻转 ──
-    const float2 cellPx = float2(kCellPx, kCellPx);
-    const float2 cellSize = cellPx / px;                       // 一格的 uv 跨度
+    // 格边长换算（15.3B 半分辨率口径）：kCellPx 是**半分辨率** px，而本 shader 拿不到自己
+    // RT 的尺寸（fragment 无 viewport 查询），按「1 半分辨率 px = 2 全分辨率 px」换算成
+    // 全分辨率 px 再除 px——偶数窗口下与 2/traceW **精确相等**；奇数窗口（traceW =
+    // floor(W/2)）差 ≤ 1/traceW 相对量。格尺寸只是**遍历粒度**不是正确性契约（沿射线的
+    // 穿越解恒精确），所以这个近似无害；**别**为它加 uniform（多一条每帧参数 = 多一个口径）。
+    const float2 cellPx = float2(kCellPx * 2.0, kCellPx * 2.0);
+    const float2 cellSize = cellPx / px;                         // 一格的 uv 跨度
     int2 cell = int2(floor(uvFromClip(C0) / cellSize));
     // 行走方向：格按 **uv** 走，所以符号必须取 uv 的变化率，不是 ndc 的。
     // ⚠ **y 必须翻向**：本引擎 `ndc.y = 1 − uv.y·2`（framebuffer uv 原点左上、NDC 原点左下，
@@ -414,14 +451,14 @@ float4 main(SsrInput input) : SV_Target
         tCur = tStop;
     }
     if (!hit)
-        return hdr;
+        return float4(0.0, 0.0, 0.0, 0.0);
 
     const float2 hitUv = uvFromClip(C0 + Cd * tHit);
     if (hitUv.x < 0.0 || hitUv.x > 1.0 || hitUv.y < 0.0 || hitUv.y > 1.0)
-        return hdr;
+        return float4(0.0, 0.0, 0.0, 0.0);
 
     // ── 权重（三条 fade 的语义照 §1.3 的裁决；数值按本场景重标定）──
-    // ① 屏幕边界淡出：边界外的内容没画，越靠边越不可信。
+    // ① 屏幕边界淡出：边界外的内容没画，越靠边越不可信（edgePx 用全分辨率 px，见常量注释）。
     const float2 edgePx = min(hitUv * px, px - hitUv * px);
     const float edgeFade = saturate(min(edgePx.x, edgePx.y) / kEdgeFadePx);
     // ② 距离淡出：硬截在 maxDistance 会看到一条"反射突然消失"的等高线。
@@ -430,19 +467,19 @@ float4 main(SsrInput input) : SV_Target
     // ③ 朝相机淡出（上面算的，尺度无关）。
     const float weight = roughGate * edgeFade * distanceFade * singularityFade;
     if (weight <= 0.0)
-        return hdr;
+        return float4(0.0, 0.0, 0.0, 0.0);
 
     // Schlick fresnel（**加法**那项的镜面权重）。F0 = lerp(0.04, albedo, metal) 与 light.frag:215
     // 同式；NoV 口径 `saturate(abs(dot(N,V)))` 只服务这一项（背面像素的 fresnel 不该塌成 1）。
-    const float3 albedo = albedoTex.Load(int3(pix, 0)).xyz;
+    const float3 albedo = albedoTex.Load(int3(gpix, 0)).xyz;
     const float3 F0 = lerp(float3(0.04), albedo, mr.r);
     const float NoV = saturate(abs(dot(N, V)));
     const float3 F = F0 + (1.0 - F0) * pow(1.0 - NoV, 5.0);
 
-    // ── 命中处减 IBL specular（15.2 子步 C，还 §3.2 未还账①）──
+    // ── 命中处减 IBL specular（15.2 子步 C；15.3B 裁决：减法留在 trace，见文件头）──
     // iblSpec = light.frag 加进 scene_hdr 的那一项（light.frag:218-226 的 env.mipRange>0 分支）
     // 的**逐式镜像重算**，相消条件逐条对齐（行号 = light.frag）：
-    //   · R = reflect(-V, N)           —— light.frag:220 同式，且与本文件射线用的 R 同一个（:247）
+    //   · R = reflect(-V, N)           —— light.frag:220 同式，且与本文件射线用的 R 同一个
     //   · LOD = roughness·mipRange     —— light.frag:222；mipRange=0 时 light 走常 ambient 回落、
     //     根本没加 envSpec ⟹ 外层 if 让整项置 0（env 未上传的占位绑定因此恒不采样）
     //   · roughness = clamp(mr.g, 0.04, 1.0) —— light.frag:164 同款钳制（本文件**门控**用的是
@@ -452,8 +489,7 @@ float4 main(SsrInput input) : SV_Target
     //     ⚠ **不是**上面给 Schlick F 用的 saturate(abs(...))：abs 只留给加法那项的 fresnel，
     //     减法必须镜像 light 的口径，否则背面像素不相消
     //   · × env.intensity              —— light.frag:226
-    // 已知边界（植被/光源过减）→ 文件头；减法只发生在**命中且 weight>0** 的路径上，未命中/
-    // 早退路径仍返回逐位 `hdr`（影响域判据的前提）。
+    // 已知边界（植被/光源过减）→ 文件头。
     const EnvParamsS env = readEnvParamsS();
     const float roughClamped = clamp(roughness, 0.04, 1.0);
     float3 iblSpec = float3(0.0);
@@ -464,6 +500,7 @@ float4 main(SsrInput input) : SV_Target
         iblSpec = envSpec * envBrdfFactor(max(dot(N, V), 1e-4), roughClamped, F0) * env.intensity;
     }
 
+    // premultiplied 输出（契约 → 文件头）：rgb 已乘 weight、a = weight。加法在 ssr_apply。
     const float3 reflected = sceneHdrTex.Sample(hitSampler, hitUv).rgb;
-    return float4(hdr.rgb + weight * (F * reflected - iblSpec), hdr.a);
+    return float4(weight * (F * reflected - iblSpec), weight);
 }

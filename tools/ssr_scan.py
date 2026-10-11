@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SSR 18 臂画质参数扫描表复跑驱动（Phase 15 批 15.3 子步 A，还 §3.2 未还账④，stdlib-only）。
+"""SSR 21 臂画质参数扫描表复跑驱动（Phase 15 批 15.3 子步 A 建、子步 B 追加模糊臂，还 §3.2 未还账④，stdlib-only）。
 
 **为什么存在**：§3.2 的 18 臂扫描表（「每枚旋钮一张扫描表 + 一次消融阳性锚点」的实测）
 由一次性脚本驱动、住在 `/tmp` ⟹ 表会腐烂。本脚本把驱动落进仓库。靶 = `ssr_rig` 闭式
@@ -7,21 +7,23 @@
 （判据算子的单一真相源，这里只搬运读数不重抄）；共享骨架（smoke 出图 / diffstruct 解析 /
 markdown 表）住 `tools/scan_common.py`，与 `wet_scan.py` 同源（④ 原文「别复制脚本」）。
 
-臂表 = 五枚画质系数（configs/runtime.lua `ssr` 块：max_distance_radii / thickness_px /
-bias_px / rough_full / rough_cutoff）× 档位，共 18 臂（含出厂默认），与 §3.2 原表逐臂
-对应（含反向档与退化档两条不变式违反臂）。
+臂表 = 六枚画质系数（configs/runtime.lua `ssr` 块：max_distance_radii / thickness_px /
+bias_px / rough_full / rough_cutoff / blur_scale）× 档位，共 21 臂（含出厂默认）；前 18 臂
+与 §3.2 原表逐臂对应（含反向档与退化档两条不变式违反臂），blur_scale 三臂（0/4/16）是
+批 15.3 子步 B 追加的模糊旋钮扫描（0 = 纯双线性上采样消融档；靶 roughness 恒 0.122 ⟹
+默认 8.0 下半径 ≈ 1.0px，4/16 是它的两侧）。
 
 **阳性锚点 = 非默认臂的覆盖率或差分与默认臂不同**：hull check 读数（凸包内变亮数 / 覆盖率 /
 变暗数 / Δp50）任一不同，或该臂 ON 图对默认臂 ON 图的 diffstruct 差分 > 0 px。
 不能只拿「覆盖率不同」判——原表里 max_distance 0.52、rough_cutoff 0.80 这类臂覆盖率
 本就饱和相同，差分在 Δ 亮度或凸包外的量化位上。
 
-前置：`qa/configs/ssr_rig/runtime.lua` 的 `ssr` 块**显式写出五枚键**（默认值 = SsrTuning
+前置：`qa/configs/ssr_rig/runtime.lua` 的 `ssr` 块**显式写出六枚键**（默认值 = SsrTuning
 出厂值，行为零变化）——patch_lua 的「键命中 ≠ 1 即 FAIL」护栏要求键在场，与 `enabled`
 写在靶配置里的理由同一条：靶配置不吃隐式默认。
 
 用法（复跑命令示例）:
-    python3 tools/ssr_scan.py                        # 全表（18 臂 × off/on 两图）→ markdown 到 stdout
+    python3 tools/ssr_scan.py                        # 全表（21 臂 × off/on 两图）→ markdown 到 stdout
     python3 tools/ssr_scan.py --only thickness_px=0  # 只跑一臂（消融档抽查）
 
 进度与失败详情走 stderr，stdout 只有 markdown。
@@ -44,7 +46,7 @@ HULL = sc.ROOT / "tools" / "ssr_hull_check.py"
 CONFIG_BASE = "qa/configs/ssr_rig"  # 相对 ROOT（sc.shot 按 ROOT 解）
 TAG = "ssr_scan"
 
-# 臂表 = §3.2 原 18 臂表逐臂照搬（出厂默认 + 17 档）。sets = 注入 runtime.lua 的裸键。
+# 臂表 = §3.2 原 18 臂表逐臂照搬（出厂默认 + 17 档）+ 15.3B 模糊三臂。sets = 注入 runtime.lua 的裸键。
 # (label, sets, note)；label 同时是 --only 的选择子与出图 slug 的来源。
 ARMS: list[tuple[str, list[str], str]] = [
     ("max_distance_radii=0.03", ["max_distance_radii=0.03"], ""),
@@ -66,6 +68,10 @@ ARMS: list[tuple[str, list[str], str]] = [
         "（反向：rough_full > rough_cutoff）"),
     ("rough_full=0.2,rough_cutoff=0.2", ["rough_full=0.2", "rough_cutoff=0.2"],
         "（退化：rough_full = rough_cutoff）"),
+    # 批 15.3 子步 B 追加：模糊旋钮三臂（靶 roughness 恒 0.122 ⟹ 默认 8.0 下半径 ≈ 1.0px）
+    ("blur_scale=0", ["blur_scale=0"], "（消融档：纯双线性上采样，无螺旋模糊）"),
+    ("blur_scale=4", ["blur_scale=4"], "（半模糊：半径 ≈ 0.5px）"),
+    ("blur_scale=16", ["blur_scale=16"], "（重模糊：半径 ≈ 2.0px）"),
 ]
 
 
@@ -123,7 +129,7 @@ def run_arm(name: str, sets: list[str], default_on: Path) -> dict[str, object]:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="SSR 18 臂画质参数扫描表复跑（15.3 子步 A，还 §3.2④）")
+    ap = argparse.ArgumentParser(description="SSR 21 臂画质参数扫描表复跑（15.3 子步 A 建 + B 模糊臂，还 §3.2④）")
     ap.add_argument("--only", metavar="LABEL", default=None,
                     help="只跑一臂（label 见 ARMS，如 thickness_px=0；默认档写 default）")
     args = ap.parse_args()
@@ -168,7 +174,7 @@ def main() -> int:
             sc.fail(TAG, f"--only {args.only!r} 不在臂表里（臂表见 ARMS）")
         label, sets, note = hit[0]
         row, changed = arm_row(label, sets, note, default_on, base_hull)
-        print(f"# SSR 18 臂扫描 · 单臂复跑（{label}，{today}）\n")
+        print(f"# SSR 21 臂扫描 · 单臂复跑（{label}，{today}）\n")
         print(sc.md_table(["臂", "出图", "凸包内变亮（覆盖率）", "变暗", "Δp50", "泄漏",
             "判据A/B", "ON图差分", "锚点"], [row]))
         return 0 if changed else 1
@@ -194,7 +200,7 @@ def main() -> int:
         knob = lab0.split("=")[0].split(",")[0]
         knobs[knob] = knobs.get(knob, False) or ok
     knob_fail = [k for k, v in knobs.items() if not v]
-    print("# SSR 画质参数 18 臂扫描表 · 复跑（Phase 15 批 15.3 子步 A，还 §3.2 未还账④）\n")
+    print("# SSR 画质参数 21 臂扫描表 · 复跑（Phase 15 批 15.3 子步 A 建 + B 模糊臂，还 §3.2 未还账④）\n")
     print(f"- 靶 = `ssr_rig`（配置基准 `{CONFIG_BASE}`，湿面钉 strength=0、aa 锁 off）· "
           f"尺寸 {sc.SIZE} · 日期 {today}")
     print(f"- 设备：{gpu}")

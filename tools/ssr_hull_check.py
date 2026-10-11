@@ -14,10 +14,16 @@
   74%（漏的按行交替 = 横条纹），修完 97.2%。
 
   **B 因果泄漏恒等式** = 凸包**外**（去柱身）必须**逐位不变**。SSR 只可能在闭式预测
-  的倒影区产生作用，区外任何改动都是假命中。⚠ 判据带 `--edge-px`（默认 2）的**边界
+  的倒影区产生作用，区外任何改动都是假命中。⚠ 判据带 `--edge-px`（默认 4）的**边界
   豁免带**：闭式多边形是解析投影，实际反射边由逐像素射线求交决定，两者差 ~1px 是
-  **量化**不是错误（实测泄漏 115 px 全部距边界 ≤1.18px）。豁免带只作用于 B；
-  真正的"逐位"红线是 `just regress ab`（SSR 门默认关 ⟹ 默认配置必须逐位不变）。
+  **量化**不是错误（15.1 全分辨率单 pass 实测泄漏 115 px 全部距边界 ≤1.18px）。
+  **批 15.3 子步 B 起豁免带 = 4px**（按实测重设）：apply 的粗糙度感知螺旋模糊把影响
+  域外推，理论 = 半分辨率双线性 footprint（~2px）+ 模糊半径（roughness × blur_scale）；
+  靶 roughness 恒 0.122、出厂 blur_scale=8 ⟹ 实测泄漏 639 px 全部 ≤3.37px
+  （分布 [0,1)=334 / [1,2)=223 / [2,3)=72 / [3,4)=10），消融臂逐条对上公式：
+  blur_scale=0 → 最远 2.4px（纯 footprint）、=16 → 最远 4.4px（半径翻倍）。
+  豁免带只作用于 B；真正的"逐位"红线是 `just regress ab`（SSR 门默认关 ⟹
+  默认配置必须逐位不变）。
 
 柱身从两侧都摘掉：它自己也能反射地面（合法作用），而它与倒影在屏幕上**部分重叠**
 （honesty ②），拿屏幕 bbox 当掩码会把柱身算成倒影。
@@ -140,8 +146,9 @@ def main():
     ap.add_argument("--on", help="SSR 开的 PNG（不给 = 自己跑）")
     ap.add_argument("--min-coverage", type=float, default=0.90,
                     help="判据 A：凸包内必须变亮的像素占比下限（默认 0.90）")
-    ap.add_argument("--edge-px", type=float, default=2.0,
-                    help="判据 B：距凸包边界多少像素以内豁免（默认 2，理由见模块 docstring）")
+    ap.add_argument("--edge-px", type=float, default=4.0,
+                    help="判据 B：距凸包边界多少像素以内豁免（默认 4 = 15.3B 半分辨率 footprint"
+                         " + 出厂模糊半径的实测上界 3.37px，理由见模块 docstring）")
     a = ap.parse_args()
 
     if not os.path.exists(MANIFEST):

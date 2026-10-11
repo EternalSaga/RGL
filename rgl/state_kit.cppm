@@ -73,9 +73,14 @@ export class StateKit {
 		aoApplyState.depthTest = false;
 		aoApplyState.depthWrite = false;
 		aoApplyState.cullMode = vk::CullModeFlagBits::eNone;
-		// 批 15.1：ssr pass —— 与 ao/taa 同形（全屏、**不挂深度附件**（深度/G-buffer 只作
-		// sampleRead 输入做 ray march）、绕序不剔、不混合；写 ssr_applied 供下游消费者采样。
-		// 见 shaders/ssr.frag.slang 头注释）
+		// 批 15.3-B：ssr_trace pass —— 与 ao/taa 同形（半分辨率全屏 march、不挂深度附件、
+		// 绕序不剔、**不混合**：写 ssr_trace RT 的是预乘结果，不是叠加项）。
+		// 批 15.1：ssr pass —— 与 ao/taa 同形（全分辨率、**不挂深度附件**（深度/G-buffer 只作
+		// sampleRead 输入）、绕序不剔、不混合；模糊后 additive 合成写 ssr_applied。
+		// 见 shaders/ssr_trace.frag.slang / ssr_apply.frag.slang 头注释）
+		ssrTraceState.depthTest = false;
+		ssrTraceState.depthWrite = false;
+		ssrTraceState.cullMode = vk::CullModeFlagBits::eNone;
 		ssrState.depthTest = false;
 		ssrState.depthWrite = false;
 		ssrState.cullMode = vk::CullModeFlagBits::eNone;
@@ -156,6 +161,7 @@ export class StateKit {
 	RenderState velocityState{};    // 批 14.4：逐像素速度场 pass（与 ao 同形，见 ctor 注）
 	RenderState taaState{};         // 批 12.6：TAA 全屏 pass（与 ao 同形，见 ctor 注）
 	RenderState aoApplyState{};     // 批 14.5：AO 施加专用全屏 pass（与 ao 同形，见 ctor 注）
+	RenderState ssrTraceState{};    // 批 15.3-B：半分辨率 SSR march pass（与 ao 同形，见 ctor 注）
 	RenderState ssrState{};         // 批 15.1：屏幕空间反射全屏 pass（与 ao 同形，见 ctor 注）
 	RenderState pickingState{};     // Phase 10 批 10.5：id pass 复用 scene depth 只测不写（见 ctor 注）
 	RenderState highlightState{};   // Phase 10 批 10.7：高亮 pass 叠加成片（混合 + 剔背面，见 ctor 注）
@@ -187,6 +193,7 @@ export class StateKit {
 		{"velocity", &StateKit::velocityState},
 		{"taa", &StateKit::taaState},
 		{"ao_apply", &StateKit::aoApplyState},
+		{"ssr_trace", &StateKit::ssrTraceState},
 		{"ssr", &StateKit::ssrState},
 		{"tonemap", &StateKit::tonemapState},
 		{"izb_mask", &StateKit::izbMaskState},

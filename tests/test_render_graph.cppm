@@ -717,9 +717,9 @@ TEST_CASE("blit 变体：swapchainWaitStage = Transfer，blit 两端被解析成
 // 那是刻意的——名单变动必须是有意识的决定。
 constexpr std::array<std::string_view, 6> kExpectMesh{"opaque", "skybox", "transparent",
     "picking", "highlight", "shadow"};
-constexpr std::array<std::string_view, 7> kExpectFullscreen{"light", "ao", "taa", "tonemap",
-    "velocity", "ao_apply", "ssr"};  // 批 14.4 加 velocity（逐像素速度场）；批 14.5 加 ao_apply（AO 施加专用）；
-    // 批 15.1 加 ssr（屏幕空间反射，deferred-only）
+constexpr std::array<std::string_view, 8> kExpectFullscreen{"light", "ao", "taa", "tonemap",
+    "velocity", "ao_apply", "ssr_trace", "ssr"};  // 批 14.4 加 velocity（逐像素速度场）；批 14.5 加 ao_apply（AO 施加专用）；
+    // 批 15.1 加 ssr（屏幕空间反射，deferred-only）；批 15.3B 加 ssr_trace（SSR march 半分辨率）
 constexpr std::array<std::string_view, 1> kExpectInternal{"izb_mask"};
 
 /** name 数组 → 集合（比较用；kAllPassStates 走 scope 过滤后也汇成它）。 */
@@ -736,10 +736,10 @@ std::set<std::string_view> namesInInternal() {
     return out;
 }
 
-TEST_CASE("kAllPassStates = 十四名、无重复、每名恰属一档") {
+TEST_CASE("kAllPassStates = 十五名、无重复、每名恰属一档") {
     // 计数写死 = 「加一个状态」必须是显式决定（本项目的口径漂移正是从多一个名字
     // 而四处口径没人改开始的：izb_mask 落地时单测/Lua 头注释/AGENTS 三处都没跟）。
-    REQUIRE(kAllPassStates.size() == 14);
+    REQUIRE(kAllPassStates.size() == 15);
     // 无重复 + 每名都能被自己那一档承认（档判据与表自洽）。
     for (const auto& e : kAllPassStates) {
         INFO("state = " << e.name);
@@ -754,11 +754,11 @@ TEST_CASE("kAllPassStates = 十四名、无重复、每名恰属一档") {
     }
 }
 
-TEST_CASE("kFullscreenPassStates 恰含 light / ao / taa / tonemap / velocity / ao_apply / ssr 七个（派生自 fullscreenPass 档）") {
+TEST_CASE("kFullscreenPassStates 恰含 light / ao / taa / tonemap / velocity / ao_apply / ssr_trace / ssr 八个（派生自 fullscreenPass 档）") {
     // 这张表决定「哪些 state 是全屏终图」：少一个 = 该 pass 在图校验里不被承认为
     // 全屏，多一个 = kind 与 state 串味的图被放行。现由 kAllPassStates 派生，
     // 故这条同时在验派生机制本身（namesInScope 填错/漏填都会红）。
-    REQUIRE(kFullscreenPassStates.size() == 7);
+    REQUIRE(kFullscreenPassStates.size() == 8);
     CHECK(toSet(kFullscreenPassStates) == toSet(kExpectFullscreen));
 }
 
@@ -1552,14 +1552,16 @@ TEST_CASE("decorateAoApplyPass 三条跳过条件：taa 在图里 / 无 ao 附�
 }
 
 // ============================================================================
-// decorateSsrPass（批 15.1）：产物形状 + 跳过条件 + 与 taa/ao_apply 可复合
+// decorateSsrPass（批 15.1 建、批 15.3 子步 B 起 = 双 pass）：产物形状 + 跳过条件 +
+// 与 taa/ao_apply 可复合
 // ============================================================================
 //
-// 本批 shader 仍是**占位精确拷贝**（零 SSR 算法），所以图侧契约就是全部判据：ssr 插在
-// 上屏消费者之前、色输入链 scene_hdr → ssr_applied → 消费者、G-buffer/深度读边**声明进图**
-// （15.1 后半 (a)：不声明则真 shader 采样它们的布局保证来自"没人中途写它"的巧合）。
-// 断言里的附件名写**字面量**（不 import gbuffer_contract 常量）——断言独立于实现，
-// 常量漂了测试要红。
+// 15.3B 形状 = **两附件两 pass**：trace（半分辨率 march，写 premultiplied ssr_trace）+
+// apply（全分辨率模糊加法，写 ssr_applied）。图侧契约就是全部判据：两 pass 插在
+// 上屏消费者之前（trace 紧邻 apply 前）、色输入链 scene_hdr → ssr_applied → 消费者、
+// G-buffer/深度读边**声明进图**（15.1 后半 (a)：不声明则真 shader 采样它们的布局保证
+// 来自"没人中途写它"的巧合）。断言里的附件名写**字面量**（不 import gbuffer_contract
+// 常量）——断言独立于实现，常量漂了测试要红。
 
 namespace {
 
@@ -1609,53 +1611,88 @@ size_t passIndexOf(const RgGraphDesc& d, std::string_view name) {
 
 }  // namespace
 
-TEST_CASE("decorateSsrPass 产物形状：ssr_applied 附件 + ssr 紧邻 tonemap 前 + 唯一色输入改写 + 整图可编译") {
+TEST_CASE("decorateSsrPass 产物形状（15.3B 双 pass）：trace+apply 附件与 pass + 次序 + 唯一色输入改写 + 整图可编译") {
     auto d = ssrSkeletonGraph(SsrGBufferMode::full);
     REQUIRE(decorateSsrPass(d));
 
-    // 附件：ssr_applied = offscreen rgba16_sfloat（与 scene_hdr **同格式**是门关=门开
-    // 逐位相同的必要非充分条件：格式不同则连"拷贝都逐位"都不成立）。
+    // 附件两张：ssr_trace = offscreen rgba16_sfloat + **extentScale 0.5**（半分辨率档，
+    // 口径 = scaleRtExtent，执行器装配与 renderRectFor 都消费它）；ssr_applied = offscreen
+    // rgba16_sfloat + extentScale 0（跟随渲染网格——它的消费者 tonemap/taa/ao_apply 都在
+    // 渲染网格上工作）。与 scene_hdr **同格式**是「SSR 未作用像素逐位 = 门关」的必要非
+    // 充分条件：格式不同则 apply 的直通早退路径连"原值写回"都不成立。
+    const auto itTrace = std::ranges::find(d.attachments, std::string{kSsrTraceName},
+        &RgAttachmentDesc::name);
+    REQUIRE(itTrace != d.attachments.end());
+    CHECK(itTrace->kind == RgAttachmentKind::offscreen);
+    CHECK(itTrace->format == "rgba16_sfloat");
+    CHECK(itTrace->extentScale == 0.5f);
     const auto it = std::ranges::find(d.attachments, std::string{kSsrAppliedName},
         &RgAttachmentDesc::name);
     REQUIRE(it != d.attachments.end());
     CHECK(it->kind == RgAttachmentKind::offscreen);
     CHECK(it->format == std::string{kSsrAppliedFormat});
     CHECK(it->format == "rgba16_sfloat");
+    CHECK(it->extentScale == 0.0f);
 
-    // pass 序：ssr 紧邻 tonemap 之前（变异红线：插到 tonemap 之后 = 拷贝结果永远上不了屏）。
+    // pass 序：trace → apply → tonemap（两 pass 一起插在消费者前，trace 紧邻 apply 前；
+    // 变异红线：apply 先插 trace 后插 = apply 在自己的上游采自己还没人写的 ssr_trace，
+    // 编译期「读先于写」即错；插到 tonemap 之后 = 反射永远上不了屏）。
+    const size_t traceIdx = passIndexOf(d, kSsrTracePassName);
     const size_t ssrIdx = passIndexOf(d, kSsrPassName);
     const size_t toneIdx = passIndexOf(d, "tonemap");
+    REQUIRE(traceIdx != d.passes.size());
     REQUIRE(ssrIdx != d.passes.size());
+    CHECK(traceIdx + 1 == ssrIdx);
     CHECK(ssrIdx + 1 == toneIdx);
+    CHECK(d.passes[traceIdx].kind == RgPassKind::drawLight);
+    CHECK(d.passes[traceIdx].state == std::string{kSsrTracePassName});
     CHECK(d.passes[ssrIdx].kind == RgPassKind::drawLight);
     CHECK(d.passes[ssrIdx].state == std::string{kSsrPassName});
 
-    // ssr pass 的边：输出 = ssr_applied；输入 = **六项定序**（15.1 后半 (a) 契约：成片 +
-    // 四个 G-buffer 通道 + 深度，全部 sampleRead）。顺序本身就是契约，两处各有名堂：
+    // trace pass 的边：输出 = ssr_trace 且 **clear 全零**（premultiplied 契约的零元：
+    // 「未写到的 texel」与「早退写入的 texel」必须同值）。输入 = **六项定序**（15.1 后半
+    // (a) 契约：成片 + 四个 G-buffer 通道 + 深度，全部 sampleRead）。顺序本身就是契约，
+    // 两处各有名堂：
     //  ① 色恒排首位——`sampledColorName` 取「首个 sampleRead 色附件」，而 gbuffer_* 四个
     //     也全是色附件，任何一个排到 scene_hdr 之前，下游 taa / ao_apply 装饰就会把
     //     G-buffer 误认成场景色（本断言钉这条纪律，变异红线：把任一 gbuffer 输入插到
     //     首位 → 本行红）。
     //  ② G-buffer 按契约表序、depth 垫尾——输入序 = barrier 发射序（装饰器侧注释）。
+    const auto& trace = d.passes[traceIdx];
+    REQUIRE(trace.outputs.size() == 1);
+    CHECK(trace.outputs[0].attachment == std::string{kSsrTraceName});
+    CHECK(trace.outputs[0].usage == RgUsage::colorWrite);
+    CHECK(trace.outputs[0].clear.color == std::array<float, 4>{0.0f, 0.0f, 0.0f, 0.0f});
+    REQUIRE(trace.inputs.size() == 6);
+    CHECK(trace.inputs[0].attachment == std::string{"scene_hdr"});
+    CHECK(trace.inputs[1].attachment == std::string{"gbuffer_albedo"});
+    CHECK(trace.inputs[2].attachment == std::string{"gbuffer_normal"});
+    CHECK(trace.inputs[3].attachment == std::string{"gbuffer_position"});
+    CHECK(trace.inputs[4].attachment == std::string{"gbuffer_metalrough"});
+    CHECK(trace.inputs[5].attachment == std::string{"depth"});
+    for (const auto& in : trace.inputs)
+        CHECK(in.usage == RgUsage::sampleRead);
+    // emissive 不被 SSR 消费 ⟹ 不得声明读边（变异红线：inputs 循环不排 emissive → 红）。
+    CHECK_FALSE(std::ranges::any_of(trace.inputs, [](const RgPassAttachment& a) {
+        return a.attachment == std::string{"gbuffer_emissive"}; }));
+
+    // apply pass 的边：输出 = ssr_applied；输入 = **三项定序** [scene_hdr, ssr_trace,
+    // gbuffer_metalrough]——成片排首位（直通早退要 Load 它 + 下游装饰器认色），ssr_trace
+    // 第二（本帧 trace 刚写 → CAO→ShaderReadOnly barrier 由这条声明生成），metalrough
+    // 第三（模糊半径自变量）。变异红线：ssr_trace 排到 scene_hdr 前 → 下游认错场景色。
     const auto& ssr = d.passes[ssrIdx];
     REQUIRE(ssr.outputs.size() == 1);
     CHECK(ssr.outputs[0].attachment == std::string{kSsrAppliedName});
     CHECK(ssr.outputs[0].usage == RgUsage::colorWrite);
-    REQUIRE(ssr.inputs.size() == 6);
+    REQUIRE(ssr.inputs.size() == 3);
     CHECK(ssr.inputs[0].attachment == std::string{"scene_hdr"});
-    CHECK(ssr.inputs[1].attachment == std::string{"gbuffer_albedo"});
-    CHECK(ssr.inputs[2].attachment == std::string{"gbuffer_normal"});
-    CHECK(ssr.inputs[3].attachment == std::string{"gbuffer_position"});
-    CHECK(ssr.inputs[4].attachment == std::string{"gbuffer_metalrough"});
-    CHECK(ssr.inputs[5].attachment == std::string{"depth"});
+    CHECK(ssr.inputs[1].attachment == std::string{kSsrTraceName});
+    CHECK(ssr.inputs[2].attachment == std::string{"gbuffer_metalrough"});
     for (const auto& in : ssr.inputs)
         CHECK(in.usage == RgUsage::sampleRead);
-    // emissive 不被 SSR 消费 ⟹ 不得声明读边（变异红线：inputs 循环不排 emissive → 红）。
-    CHECK_FALSE(std::ranges::any_of(ssr.inputs, [](const RgPassAttachment& a) {
-        return a.attachment == std::string{"gbuffer_emissive"}; }));
 
     // 消费者的色输入换成 ssr_applied，且**不再**直接读 scene_hdr（变异红线：漏改写 =
-    // ssr 白跑、tonemap 读旧成片；真机表现 = 门开画面仍正确但 pass 是死代码）。
+    // apply 白跑、tonemap 读旧成片；真机表现 = 门开画面仍正确但 pass 是死代码）。
     const auto& tone = d.passes[toneIdx];
     CHECK(std::ranges::any_of(tone.inputs, [&](const RgPassAttachment& a) {
         return a.attachment == std::string{kSsrAppliedName} && a.usage == RgUsage::sampleRead; }));
@@ -1663,22 +1700,33 @@ TEST_CASE("decorateSsrPass 产物形状：ssr_applied 附件 + ssr 紧邻 tonema
         [&](const RgPassAttachment& a) { return a.attachment == "scene_hdr"; }));
 
     // 整图能编译（阳性锚点：装饰产物必须自洽）+ 各读边真的生成 barrier：
-    // ssr pass 对 scene_hdr / gbuffer_normal / depth 都是读（→ShaderReadOnly），tonemap
-    // 对 ssr_applied 是读，而 ssr pass 对 ssr_applied 是写（→ColorAttachmentOptimal）。
-    // normal 与 depth 这两条是 (a) 的正身：读边不声明进图，真 shader 采样它们的布局
+    // trace pass 对 scene_hdr / gbuffer_normal / depth 都是读（→ShaderReadOnly）、对
+    // ssr_trace 是写（→ColorAttachmentOptimal）；apply 对 ssr_trace 是读（**跨 pass
+    // 依赖的正身**：这条 barrier 不存在 = apply 读到的内容无保证）；tonemap 对 ssr_applied
+    // 是读。normal 与 depth 这两条是 (a) 的正身：读边不声明进图，真 shader 采样它们的布局
     // 保证就来自"没人中途写它"的巧合而非图（变异红线：删掉装饰里的对应输入 → 本段红）。
     const auto g = compileRenderGraph(d);
     INFO(errOf(g));
     REQUIRE(g.has_value());
-    const auto* ssrRead = barrierFor(g->passes[ssrIdx], slotOf(*g, "scene_hdr"));
+    const auto* ssrRead = barrierFor(g->passes[traceIdx], slotOf(*g, "scene_hdr"));
     REQUIRE(ssrRead != nullptr);
     CHECK(ssrRead->newLayout == vk::ImageLayout::eShaderReadOnlyOptimal);
-    const auto* ssrGb = barrierFor(g->passes[ssrIdx], slotOf(*g, "gbuffer_normal"));
+    const auto* ssrGb = barrierFor(g->passes[traceIdx], slotOf(*g, "gbuffer_normal"));
     REQUIRE(ssrGb != nullptr);
     CHECK(ssrGb->newLayout == vk::ImageLayout::eShaderReadOnlyOptimal);
-    const auto* ssrDepth = barrierFor(g->passes[ssrIdx], slotOf(*g, "depth"));
+    const auto* ssrDepth = barrierFor(g->passes[traceIdx], slotOf(*g, "depth"));
     REQUIRE(ssrDepth != nullptr);
     CHECK(ssrDepth->newLayout == vk::ImageLayout::eShaderReadOnlyOptimal);
+    const auto* traceWrite = barrierFor(g->passes[traceIdx], slotOf(*g, std::string{kSsrTraceName}));
+    REQUIRE(traceWrite != nullptr);
+    CHECK(traceWrite->newLayout == vk::ImageLayout::eColorAttachmentOptimal);
+    const auto* applyTraceRead = barrierFor(g->passes[ssrIdx], slotOf(*g, std::string{kSsrTraceName}));
+    REQUIRE(applyTraceRead != nullptr);
+    CHECK(applyTraceRead->newLayout == vk::ImageLayout::eShaderReadOnlyOptimal);
+    // apply 对 scene_hdr 的读**不产生 barrier**是正确行为：trace 已把它带进
+    // ShaderReadOnlyOptimal，barrier 按布局迁移去重（apply 的读边声明仍必须存在——
+    // 上面 inputs[0] 的断言钉的是它，barrier 判据在这里钉反而是过度规定）。
+    CHECK(barrierFor(g->passes[ssrIdx], slotOf(*g, "scene_hdr")) == nullptr);
     const auto* ssrWrite = barrierFor(g->passes[ssrIdx], slotOf(*g, std::string{kSsrAppliedName}));
     REQUIRE(ssrWrite != nullptr);
     CHECK(ssrWrite->newLayout == vk::ImageLayout::eColorAttachmentOptimal);

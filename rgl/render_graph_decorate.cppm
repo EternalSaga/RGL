@@ -360,11 +360,14 @@ bool decorateVelocityPass(RgGraphDesc& desc) {
 /**
  * decorateSsrPass 定义（契约见 render_graph.cppm 接口注释：跳过四条 + 次序契约）。
  *
- * 形状 = decorateAoApplyPass 的同构三件套（一个附件 + 一个全屏 pass + 换消费者色输入），
- * 三条纪律逐字继承：outputs = colorWrite + clear + store；色输入排 inputs 首位
- *（`sampledColorName` 取「首个 sampleRead 色附件」，别的色附件排前面会让后续装饰器认错
- * 场景色——本 pass 的输入里有四个色附件（gbuffer_*），这条纪律比 ao_apply 更易被破，
- * 由单测逐位钉输入序）；插入用 `begin() + consumerIdx`、换消费者输入用 `consumerIdx + 1`。
+ * 批 15.3 子步 B = **双 pass**（trace 半分辨率 march + apply 全分辨率模糊加法；拆分论证 →
+ * shaders/ssr_trace.frag.slang 文件头）。形状 = decorateAoApplyPass 的同构三件套的加倍版：
+ * 两附件 + 两全屏 pass + 换消费者色输入，三条纪律逐字继承：outputs = colorWrite + clear +
+ * store；色输入排 inputs 首位（`sampledColorName` 取「首个 sampleRead 色附件」，别的色附件
+ * 排前面会让后续装饰器认错场景色——本装饰的输入里共有五个色附件（gbuffer_* 四通道 +
+ * ssr_trace），这条纪律比 ao_apply 更易被破，由单测逐位钉输入序）；插入用 `begin() +
+ * consumerIdx`、换消费者输入用 `consumerIdx + 2`（插入了两个 pass）。
+ * trace 先插、apply 后插（apply 采 trace 的输出，图序 = 执行序）。
  */
 bool decorateSsrPass(RgGraphDesc& desc) {
 	// 跳过条件 1 = **装饰太晚**（taa / ao_apply 已在图里 ⟹ main_impl 的「SSR 先于它们装饰」
@@ -413,14 +416,25 @@ bool decorateSsrPass(RgGraphDesc& desc) {
 		return false;
 
 	desc.attachments.push_back(RgAttachmentDesc{
+		.name = std::string{kSsrTraceName}, .kind = RgAttachmentKind::offscreen,
+		.format = std::string{kSsrTraceFormat},
+		// 半分辨率跟随渲染网格（口径/校验 → RgAttachmentDesc::extentScale 与 scaleRtExtent）；
+		// 写它的 pass 其 viewport/renderArea 随缩放后 extent（SlotResolver::renderRectFor ②）。
+		.extentScale = kSsrTraceScale});
+	desc.attachments.push_back(RgAttachmentDesc{
 		.name = std::string{kSsrAppliedName}, .kind = RgAttachmentKind::offscreen,
 		.format = std::string{kSsrAppliedFormat}});
 
-	RgPassDesc pass{
-		.name = std::string{kSsrPassName}, .kind = RgPassKind::drawLight,
-		.state = std::string{kSsrPassName},
-		.outputs = {RgPassAttachment{.attachment = std::string{kSsrAppliedName},
-			.usage = RgUsage::colorWrite, .loadOp = RgLoadOp::clear, .storeOp = RgStoreOp::store}},
+	// ── trace pass（半分辨率 march 本体，写 premultiplied 反射贡献）──
+	RgPassDesc trace{
+		.name = std::string{kSsrTracePassName}, .kind = RgPassKind::drawLight,
+		.state = std::string{kSsrTracePassName},
+		// clear 全零 = 「无贡献」哨兵值本身（premultiplied 契约的零元）。全屏 pass 每像素
+		// 必写，清值本无关紧要，但让「未写到的 texel」与「早退写入的 texel」同值 = 零，
+		// 不给未来的形态漏洞留「清成 0.1 灰被 apply 当真反射」的机会。
+		.outputs = {RgPassAttachment{.attachment = std::string{kSsrTraceName},
+			.usage = RgUsage::colorWrite, .loadOp = RgLoadOp::clear, .storeOp = RgStoreOp::store,
+			.clear = RgClearValue{{0.0f, 0.0f, 0.0f, 0.0f}, 1.0f}}},
 		// 输入序 = barrier 发射序，且**色恒排首位**：`sampledColorName` 取「首个
 		// sampleRead 色附件」，gbuffer_* 四通道全是色附件——任何一个排在成片前，下游
 		// taa / ao_apply 装饰就会认错场景色（ao_apply 同款纪律，那里是 ao）。其余顺序：
@@ -431,16 +445,36 @@ bool decorateSsrPass(RgGraphDesc& desc) {
 			RgPassAttachment{.attachment = *colorAtt, .usage = RgUsage::sampleRead}}};
 	for (const auto& gb : kGBufferAttachments)
 		if (gb.name != kGBufferEmissiveName)  // emissive 不被 SSR 消费，不声明读边
-			pass.inputs.push_back(RgPassAttachment{.attachment = std::string{gb.name},
+			trace.inputs.push_back(RgPassAttachment{.attachment = std::string{gb.name},
 				.usage = RgUsage::sampleRead});
-	pass.inputs.push_back(RgPassAttachment{.attachment = *depthAtt, .usage = RgUsage::sampleRead,
+	trace.inputs.push_back(RgPassAttachment{.attachment = *depthAtt, .usage = RgUsage::sampleRead,
 		.loadOp = RgLoadOp::load, .storeOp = RgStoreOp::store});
-	desc.passes.insert(desc.passes.begin() + static_cast<long>(*consumerIdx), std::move(pass));
 
-	// 消费者的色输入换成 SSR 后的成片。下游装饰器（本装饰之后才跑的 taa / ao_apply）此刻
-	// 再搜 `sampledColorName` 会读到 ssr_applied ⟹ 链自动接成
+	// ── apply pass（全分辨率，粗糙度感知螺旋模糊 + 加法，写 ssr_applied）──
+	// pass/state 名**沿用 "ssr"**（15.1 起消费者链 / 启动日志 / smoke 判据的锚点不动）。
+	RgPassDesc apply{
+		.name = std::string{kSsrPassName}, .kind = RgPassKind::drawLight,
+		.state = std::string{kSsrPassName},
+		.outputs = {RgPassAttachment{.attachment = std::string{kSsrAppliedName},
+			.usage = RgUsage::colorWrite, .loadOp = RgLoadOp::clear, .storeOp = RgStoreOp::store}},
+		// 输入序同纪律：成片排首位（apply 的直通早退路径要 Load 它），ssr_trace 第二
+		// （本帧 trace pass 刚写 → 它的 CAO→ShaderReadOnly barrier 由这条声明生成），
+		// gbuffer_metalrough 第三（geometry 写，幂等声明）。
+		.inputs = {
+			RgPassAttachment{.attachment = *colorAtt, .usage = RgUsage::sampleRead},
+			RgPassAttachment{.attachment = std::string{kSsrTraceName},
+				.usage = RgUsage::sampleRead},
+			RgPassAttachment{.attachment = std::string{kGBufferMetalRoughName},
+				.usage = RgUsage::sampleRead}}};
+
+	// 先插 apply 再插 trace（同一位置两次 insert ⟹ 净序 = trace, apply, 消费者）。
+	desc.passes.insert(desc.passes.begin() + static_cast<long>(*consumerIdx), std::move(apply));
+	desc.passes.insert(desc.passes.begin() + static_cast<long>(*consumerIdx), std::move(trace));
+
+	// 消费者的色输入换成 SSR 后的成片（消费者此刻在 consumerIdx + 2）。下游装饰器（本装饰
+	// 之后才跑的 taa / ao_apply）此刻再搜 `sampledColorName` 会读到 ssr_applied ⟹ 链自动接成
 	// scene_hdr → ssr_applied → [taa_out | ao_applied] → tonemap（可复合性 = 既有性质）。
-	for (auto& in : desc.passes[*consumerIdx + 1].inputs)
+	for (auto& in : desc.passes[*consumerIdx + 2].inputs)
 		if (in.attachment == *colorAtt && in.usage == RgUsage::sampleRead) {
 			in.attachment = std::string{kSsrAppliedName};
 			break;

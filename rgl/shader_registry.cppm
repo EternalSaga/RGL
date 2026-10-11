@@ -342,20 +342,20 @@ export class ShaderRegistry {
 		uint32_t samplerSlot);
 
 	/**
-	 * 批 15.1：SSR（屏幕空间反射）pass 管线条目（单条目；门默认关不被调用 = 条目表逐位不变）。
-	 * spec = "ssr"（mesh 复用 light.mesh.spv 全屏大三角 + ssr.frag）。binding：0/1 占位
-	 * + 3 sceneData（@722272 ssrViewProj = 本帧**抖动后** proj·view，ray march 把命中点投回
-	 * 屏幕 uv 用）+ extra：4 → 本帧场景色（**恒 scene_hdr**，理由见 addSsrEntry 定义处注释）、
-	 * 5/6/7 → G-buffer normal/position/metalrough 采样槽（通道号镜像 light.frag）、
+	 * 批 15.3-B：SSR **march** pass 管线条目（半分辨率，写 ssr_trace RT；门默认关不被调用 =
+	 * 条目表逐位不变）。spec = "ssr_trace"（mesh 复用 light.mesh.spv 全屏大三角 + ssr_trace.frag）。
+	 * binding：0/1 占位 + 3 sceneData（@722272 ssrViewProj = 本帧**抖动后** proj·view，ray march
+	 * 把命中点投回屏幕 uv 用）+ extra：4 → 本帧场景色（**恒 scene_hdr**，理由见 addSsrTraceEntry
+	 * 定义处注释）、5/6/7 → G-buffer normal/position/metalrough 采样槽（通道号镜像 light.frag）、
 	 * 8 → 深度图采样槽（与 ao/velocity/taa 复用同一份 ensureDepthSampleSlot 的槽）、
 	 * 9 → G-buffer albedo 采样槽（Schlick fresnel 的 F0 = lerp(0.04, albedo, metal)——金属
 	 *   表面的 F0 就是 albedo，不绑它等于把所有表面当介质，靶的金属地面反射会整个不出来）、
 	 * 10 → 共享 LINEAR/ClampToEdge sampler（**只有**命中点取反射色用它；直通路径与逐像素自身
-	 *   量全走 `Load`，判据根据见 ssr.frag.slang 绑定面那条 ⚠）、
+	 *   量全走 `Load`，判据根据见 ssr_trace.frag.slang 绑定面那条 ⚠）、
 	 * 11/12 → env cubemap 采样槽 + sky sampler（批 15.2 子步 C：命中处减 IBL specular 的镜像
 	 *   重算源；env 不是图附件，走 extra = light pass 9/10 同法，图零改动；env 未上传 = 占位
 	 *   0/0，shader 端 mipRange=0 恒不采样）。
-	 * 前提 = ssr_applied RT 已 ensure + 领槽、G-buffer 5 槽已领、深度采样槽已领。幂等。
+	 * 前提 = ssr_trace RT 已 ensure + 领槽、G-buffer 5 槽已领、深度采样槽已领。幂等。
 	 * @param colorSlot scene_hdr 的 SAMPLED_IMAGE heap 槽（binding 4）
 	 * @param normalSlot G-buffer normal RT 槽（binding 5）
 	 * @param positionSlot G-buffer position RT 槽（binding 6）
@@ -365,9 +365,27 @@ export class ShaderRegistry {
 	 * @param samplerSlot 共享 sampler 的 sampler heap 槽（binding 10）
 	 * @return 条目下标；规格缺失抛 runtime_error
 	 */
-	[[nodiscard]] uint32_t addSsrEntry(uint32_t colorSlot, uint32_t normalSlot,
+	[[nodiscard]] uint32_t addSsrTraceEntry(uint32_t colorSlot, uint32_t normalSlot,
 		uint32_t positionSlot, uint32_t metalRoughSlot, uint32_t depthSlot,
 		uint32_t albedoSlot, uint32_t samplerSlot);
+
+	/**
+	 * 批 15.3-B：SSR **模糊+合成** pass 管线条目（全分辨率，写 ssr_applied）。
+	 * spec = "ssr"（mesh 复用 light.mesh.spv 全屏大三角 + ssr_apply.frag）。binding：0/1 占位
+	 * + 3 sceneData（本 pass 不读 ssrViewProj——模糊/加法全在屏幕空间，抖动只影响采样位置）
+	 * + extra：4 → 本帧场景色（恒 scene_hdr，与 trace 同槽）、5 → ssr_trace RT 采样槽
+	 * （预乘契约：rgb = weight·(F·reflected − iblSpec)，a = weight）、6 → G-buffer metalrough
+	 * 采样槽（模糊核宽度 = roughness 的函数）、7 → 共享 LINEAR/ClampToEdge sampler（金角
+	 * 螺旋 5 taps 采样半分辨率 trace RT 用；sampler 条目烘字节偏移，红线同 trace）。
+	 * 前提 = ssr_applied/ssr_trace RT 均已 ensure + 领槽。幂等。
+	 * @param colorSlot scene_hdr 的 SAMPLED_IMAGE heap 槽（binding 4）
+	 * @param traceSlot ssr_trace RT 的 SAMPLED_IMAGE heap 槽（binding 5）
+	 * @param metalRoughSlot G-buffer metalrough RT 槽（binding 6）
+	 * @param samplerSlot 共享 sampler 的 sampler heap 槽（binding 7）
+	 * @return 条目下标；规格缺失抛 runtime_error
+	 */
+	[[nodiscard]] uint32_t addSsrApplyEntry(uint32_t colorSlot, uint32_t traceSlot,
+		uint32_t metalRoughSlot, uint32_t samplerSlot);
 
 	/**
 	 * Phase 11 批 11.2：阴影 depth-only 管线条目。spec = "shadow"（shadow.mesh.spv + 空壳
@@ -471,7 +489,7 @@ export class ShaderRegistry {
 
 	/** 回落查表体（批 11.5 起为 findSpec 的内部底座：scene.lua styles 命中或默认回落词表
 	 *  cube / model / model_pbr / model_phong / model_pbr_ibl / skybox / deferred_geometry×3 /
-	 *  light×2 / 尾部 kTailSpecs（tonemap/shadow/izb_mask/ao/taa/velocity/ao_apply/ssr）；
+	 *  light×2 / 尾部 kTailSpecs（tonemap/shadow/izb_mask/ao/taa/velocity/ao_apply/ssr_trace/ssr）；
 	 *  不含 PCSS 变体替换）。 */
 	const RGL::PipelineSpec* findSpecBase(const char* name) const {
 		auto it = styles.find(name);
@@ -533,7 +551,7 @@ export class ShaderRegistry {
 			return light;
 		// 尾部词表（tonemap/shadow/izb_mask/ao/taa）：批 12.6 起表驱动查表——旧 if 链
 		// 每加一词控制复杂度 +1（taa 加进来正撞 16>15 红线），表长不受此税。
-		static const std::array<RGL::PipelineSpec, 8> kTailSpecs{{
+		static const std::array<RGL::PipelineSpec, 9> kTailSpecs{{
 			{"tonemap", "generated_shaders/light.mesh.spv",
 				"generated_shaders/tonemap.frag.spv"},  // mesh 复用全屏大三角（Phase 8 ①）
 			{"shadow", "generated_shaders/shadow.mesh.spv", "generated_shaders/shadow.frag.spv"},
@@ -547,8 +565,10 @@ export class ShaderRegistry {
 				"generated_shaders/velocity.frag.spv"},  // 批 14.4：速度场（同 ao/taa 复用大三角）
 			{"ao_apply", "generated_shaders/light.mesh.spv",
 				"generated_shaders/ao_apply.frag.spv"},  // 批 14.5：AO 施加（同复用大三角）
+			{"ssr_trace", "generated_shaders/light.mesh.spv",
+				"generated_shaders/ssr_trace.frag.spv"},  // 批 15.3-B：SSR march（同复用大三角）
 			{"ssr", "generated_shaders/light.mesh.spv",
-				"generated_shaders/ssr.frag.spv"},  // 批 15.1：SSR（同复用大三角）
+				"generated_shaders/ssr_apply.frag.spv"},  // 批 15.3-B：SSR 模糊+合成（同复用大三角）
 		}};
 		for (const auto& s : kTailSpecs)
 			if (std::strcmp(s.name.c_str(), name) == 0)

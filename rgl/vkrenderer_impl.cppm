@@ -273,7 +273,7 @@ void Renderer::createSceneStaging(RGL::Resources& vkResources) {
 	// 无条件写（64B）——交付时无消费者（scene.slang readSsrViewProj 备好待 15.1 接线），
 	// 写它不改任何像素，且省下「按门分支写」的第二条路径（同 shadow/TAA 尾区纪律）。
 	std::memcpy(stage + kSceneDataSsrOffset, &list.sceneData.ssrViewProj, sizeof(glm::mat4));
-	// Phase 15 批 15.1 收尾：SSR 参数子区（vec4，x = SceneBounds.radius = ssr.frag 的尺度
+	// Phase 15 批 15.1 收尾：SSR 参数子区（vec4，x = SceneBounds.radius = ssr_trace.frag 的尺度
 	// 锚点）。无条件写（16B，同矩阵区纪律：门关路径也保证值正确，省第二条分支）
 	std::memcpy(stage + kSceneDataSsrParamsOffset, &list.sceneData.ssrParams, sizeof(glm::vec4));
 	// Phase 15 批 15.1 参数面：SSR 阈值门控系数（@722352，紧随 ssrParams；同样无条件写，理由同上）

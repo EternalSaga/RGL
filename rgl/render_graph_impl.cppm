@@ -178,6 +178,30 @@ std::expected<void, Error> validateAttachmentExtent(const RgAttachmentDesc& att)
 		att.kind == RgAttachmentKind::swapchain ? "swapchain" : "depth", att.name)));
 }
 
+/**
+ * ① 跟随缩放档（extentScale，批 15.3 子步 B）按 kind 与区间校验：只对图属**颜色** RT
+ * （offscreen）开放——depthOffscreen 走静态 extent（阴影图与窗口解耦是本字段的反面），
+ * swapchain/depth 同 extent 那条纪律。区间 = (0,1]：>1 = RT 大于渲染网格（无消费者、白占
+ * 显存），≤0 的负值会被 scaleRtExtent 静默读成「跟随」= 笔误吞掉。
+ * @return 失败带定位 Error
+ */
+std::expected<void, Error> validateAttachmentExtentScale(const RgAttachmentDesc& att) {
+	if (att.extentScale == 0.0f)
+		return {};
+	if (att.kind != RgAttachmentKind::offscreen)
+		return std::unexpected(rgError(fmt::format(
+			"render graph: extentScale is only allowed on offscreen attachments, but '{}' is {}",
+			att.name,
+			att.kind == RgAttachmentKind::swapchain      ? "swapchain"
+			: att.kind == RgAttachmentKind::depth        ? "depth"
+			                                             : "depthOffscreen")));
+	if (!(att.extentScale > 0.0f && att.extentScale <= 1.0f))
+		return std::unexpected(rgError(fmt::format(
+			"render graph: attachment '{}' extentScale must be in (0,1], got {}",
+			att.name, att.extentScale)));
+	return {};
+}
+
 /** ① 历史附件按 kind 校验：跨帧历史只对图属颜色 RT（offscreen）开放——swapchain/depth
  *  内容由执行器按帧重建（present 后缓冲未定义、深度图每帧 clear），"上一帧内容"这个
  *  概念对它们不成立；depthOffscreen（阴影图）同理每帧整幅 clear。@return 失败带定位 Error */
@@ -193,7 +217,7 @@ std::expected<void, Error> validateAttachmentHistory(const RgAttachmentDesc& att
 	return {};
 }
 
-/** ① 单 attachment 校验与落图：空名 / 重名 / swapchain 计数 / 格式（validateAttachmentFormat）/ 尺寸（validateAttachmentExtent）→ 名字→slot + 图记录 + 游标。@return 失败带定位 Error */
+/** ① 单 attachment 校验与落图：空名 / 重名 / swapchain 计数 / 格式（validateAttachmentFormat）/ 尺寸（validateAttachmentExtent）/ 缩放（validateAttachmentExtentScale）/ 历史（validateAttachmentHistory）→ 名字→slot + 图记录 + 游标。@return 失败带定位 Error */
 std::expected<void, Error> registerAttachment(const RgAttachmentDesc& att, CompileCtx& ctx) {
 	if (att.name.empty())
 		return std::unexpected(rgError("render_graph: attachment with empty name"));
@@ -208,6 +232,8 @@ std::expected<void, Error> registerAttachment(const RgAttachmentDesc& att, Compi
 		return std::unexpected(std::move(r).error());
 	if (auto r = validateAttachmentExtent(att); !r)
 		return std::unexpected(std::move(r).error());
+	if (auto r = validateAttachmentExtentScale(att); !r)
+		return std::unexpected(std::move(r).error());
 	if (auto r = validateAttachmentHistory(att); !r)
 		return std::unexpected(std::move(r).error());
 	ctx.graph.attachments.push_back(RgCompiledAttachment{
@@ -215,6 +241,7 @@ std::expected<void, Error> registerAttachment(const RgAttachmentDesc& att, Compi
 		.kind = att.kind,
 		.format = att.format,
 		.extent = att.extent,  // 独立 RT 尺寸透传（执行器装配消费；非图属 RT 恒 {0,0}）
+		.extentScale = att.extentScale,  // 跟随缩放档透传（批 15.3B；非图属 RT 恒 0）
 		.aspect = aspectOf(att.kind),
 		// 帧首丢弃规则：swapchain/depth/depthOffscreen 每帧内容按 loadOp 重建（现 ④ 的
 		// oldLayout=eUndefined 约定；阴影图每帧整幅 clear 亦归此档）；

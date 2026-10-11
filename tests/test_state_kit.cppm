@@ -199,6 +199,8 @@ TEST_CASE("tonemap / ao / velocity / ssr 与 light 逐字段完全相同（批 1
         "velocity 应与 light 同形（批 14.4：全屏、深度只作 sampleRead、不剔不混合）");
     checkSameState(kit.stateFor("ssr"), kit.stateFor("light"),
         "ssr 应与 light 同形（批 15.1：全屏、G-buffer/深度只作 sampleRead、不剔不混合）");
+    checkSameState(kit.stateFor("ssr_trace"), kit.stateFor("light"),
+        "ssr_trace 应与 light 同形（批 15.3B：半分辨率 march 也只是换 extent，状态同 ao/taa）");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -283,7 +285,7 @@ TEST_CASE("词表每个名字都能解析（派生口径 + internal 段也在 st
     }
     // 计数写死 = 加一个状态必须是显式决定（历史上 izb_mask 落地时本文件名单少一名，
     // AGENTS 与两份 Lua 头注释的"九段"口径同时变谎言行）。
-    CHECK(kAllNames.size() == 14);
+    CHECK(kAllNames.size() == 15);
     // internal 档（izb_mask）**不走图但必须能被 stateFor 解析**：执行器有硬编码录制
     // 路径直接按名取它（vkrenderer_passrec 的 IZB mask）。它的独有形态是 conservative
     // =true（FTIZB 保守覆盖命门）——十段里只有它有，正反两面一起钉。
@@ -311,6 +313,7 @@ TEST_CASE("十段实际只有五种形态（分组如实记录，防有人悄悄
     CHECK(fingerprint(kit.stateFor("light")) == fingerprint(kit.stateFor("ao")));
     CHECK(fingerprint(kit.stateFor("light")) == fingerprint(kit.stateFor("velocity")));
     CHECK(fingerprint(kit.stateFor("light")) == fingerprint(kit.stateFor("ssr")));
+    CHECK(fingerprint(kit.stateFor("light")) == fingerprint(kit.stateFor("ssr_trace")));
     CHECK(fingerprint(kit.stateFor("skybox")) == fingerprint(kit.stateFor("picking")));
     // 组间必须真的不同：任取一对跨组的做不等断言
     CHECK(fingerprint(kit.stateFor("opaque")) != fingerprint(kit.stateFor("transparent")));

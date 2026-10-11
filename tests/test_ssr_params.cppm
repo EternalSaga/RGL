@@ -14,7 +14,8 @@ module;
  *     @722336 / @722352，再按 **shader 侧提取链**（scene.slang readSsrParams / readSsrGate
  *     的 Load4 字面量）读回，断言逐位还原。抓的是**偏移错 / 步长错 / 两子区重叠**。
  * (b) **填值**：ssrParams = (sceneRadius, maxDistanceRadii, thicknessPx, biasPx)、
- *     ssrGate = (roughFull, roughCutoff, 0, 0)，全部逐位。三条子判据：
+ *     ssrGate = (roughFull, roughCutoff, blurScale, 0)（z = blurScale 批 15.3B 占用），
+ *     全部逐位。三条子判据：
  *     - **系数与 bounds 无关**：空场景（radius=0）时系数仍是配置值——系数若被 bounds
  *       污染（或反过来 center 混进上传区）在此红。
  *     - **center 不上传**：测试把 center 与 tuning 各分量取成互不相同的非零值，任何
@@ -119,6 +120,7 @@ SsrTuning distinctTuning() {
 	t.biasPx = 0.22f;
 	t.roughFull = 0.33f;
 	t.roughCutoff = 0.55f;
+	t.blurScale = 0.77f;  // 批 15.3B 第六枚（同样两两不等、非零、不等于 center 分量）
 	return t;
 }
 
@@ -185,10 +187,11 @@ TEST_CASE("fillSsrParams：四个系数逐位落槽（批 15.1 参数面契约�
 		}
 	}
 
-	// ssrGate = (roughFull, roughCutoff, 0, 0)；zw 预留必须恒 0（批 15.4 才占）。
+	// ssrGate = (roughFull, roughCutoff, blurScale, 0)；w 预留必须恒 0（批 15.4 才占）。
+	// z = blurScale 是批 15.3B 的占用（此前恒 0；消费者 = ssr_apply 的螺旋模糊半径）。
 	CHECK(list.sceneData.ssrGate.x == tuning.roughFull);
 	CHECK(list.sceneData.ssrGate.y == tuning.roughCutoff);
-	CHECK(list.sceneData.ssrGate.z == 0.0f);
+	CHECK(list.sceneData.ssrGate.z == tuning.blurScale);
 	CHECK(list.sceneData.ssrGate.w == 0.0f);
 }
 
@@ -201,7 +204,7 @@ TEST_CASE("fillSsrParams：空场景 radius=0 原样透传、系数不受 bounds
 	CHECK(list.sceneData.ssrParams.y == 4.44f);  // maxDistanceRadii
 	CHECK(list.sceneData.ssrParams.z == 0.11f);  // thicknessPx
 	CHECK(list.sceneData.ssrParams.w == 0.22f);  // biasPx
-	CHECK(list.sceneData.ssrGate == glm::vec4(0.33f, 0.55f, 0.0f, 0.0f));
+	CHECK(list.sceneData.ssrGate == glm::vec4(0.33f, 0.55f, 0.77f, 0.0f));
 }
 
 TEST_CASE("SsrTuning 出厂默认值 = 批 15.1 五个 shader 常量原值（红线 A 前提，变异⑤）") {
@@ -215,6 +218,9 @@ TEST_CASE("SsrTuning 出厂默认值 = 批 15.1 五个 shader 常量原值（红
 	CHECK(d.biasPx == 0.6f);             // kBiasPx
 	CHECK(d.roughFull == 0.15f);         // kRoughFull
 	CHECK(d.roughCutoff == 0.40f);       // kRoughCutoff
+	// blurScale = 8.0 是批 15.3B 的出厂值（ssr_apply 螺旋半径系数，configs/runtime.lua
+	// `ssr.blur_scale` 注释里的换算 0.05→0.4px / 0.35→2.8px 以它为基准）。
+	CHECK(d.blurScale == 8.0f);
 
 	// 两条 shader 侧不变式在默认值下必须成立（越界不钳制，但出厂值没理由越界）：
 	// bias 顶不进厚度、衰减在截断之前归零。默认值被改成越界 ⟹ 这两条红。
@@ -227,6 +233,7 @@ TEST_CASE("SsrTuning 出厂默认值 = 批 15.1 五个 shader 常量原值（红
 	CHECK(d.roughCutoff != 0.0f);
 	CHECK(d.thicknessPx != 0.0f);
 	CHECK(d.biasPx != 0.0f);
+	CHECK(d.blurScale != 0.0f);  // 出厂非零（0 是消融档，但默认必须是有效半径）
 }
 
 }  // namespace RGL

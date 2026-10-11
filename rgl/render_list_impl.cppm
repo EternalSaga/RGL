@@ -357,9 +357,10 @@ void fillSsrViewProj(FrameDrawList& out, const ViewProjection& viewProj) {
 /** Phase 15 批 15.1 参数面：填 SSR 的两个参数子区（scene data @722336 系数
  *  vec4 + @722352 门控 vec4）。
  *  · ssrParams = (SceneBounds.radius, maxDistanceRadii, thicknessPx, biasPx)——x 是尺度锚点
- *    （boundsSystem 每帧聚合），yzw 是 configs/runtime.lua `ssr` 块的三枚系数。ssr.frag 的
- *    尺度无关参数由它们导出，锚点选择与系数反推 → scene_data.cppm 该区注释。
- *  · ssrGate   = (roughFull, roughCutoff, 0, 0)——与场景尺度无关的门控区间，故分槽。
+ *    （boundsSystem 每帧聚合），yzw 是 configs/runtime.lua `ssr` 块的三枚系数。ssr_trace.frag
+ *    的尺度无关参数由它们导出，锚点选择与系数反推 → scene_data.cppm 该区注释。
+ *  · ssrGate   = (roughFull, roughCutoff, blurScale, 0)——与场景尺度无关的门控区间 + 模糊
+ *    半径系数（blurScale 批 15.3B 占用 z，消费者 = ssr_apply），故分槽。
  *  两槽**一次填、同源同帧**（拆两个接缝 = 允许"系数新、门控旧"的半帧状态）。
  *  无条件写（同尾区纪律：不按门分支、无消费者不改像素）；CPU 侧**不 clamp 不校验**两条
  *  shader 侧不变式（`bias < thickness` / `roughFull < roughCutoff`），理由 → readSsrBlock。
@@ -367,7 +368,7 @@ void fillSsrViewProj(FrameDrawList& out, const ViewProjection& viewProj) {
 void fillSsrParams(FrameDrawList& out, const SceneBounds& bounds, const SsrTuning& tuning) {
 	out.sceneData.ssrParams = {bounds.radius, tuning.maxDistanceRadii, tuning.thicknessPx,
 		tuning.biasPx};
-	out.sceneData.ssrGate = {tuning.roughFull, tuning.roughCutoff, 0.0f, 0.0f};
+	out.sceneData.ssrGate = {tuning.roughFull, tuning.roughCutoff, tuning.blurScale, 0.0f};
 }
 
 /** Phase 15 批 15.2 子步 A：填湿面尾区的两个参数子区（scene data @722368 身份调制系数

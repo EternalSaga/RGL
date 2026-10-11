@@ -104,6 +104,13 @@ export struct RgAttachmentDesc {
 	// 阴影图必须走独立档——把阴影图绑在窗口尺寸上是错的（窗口缩一半阴影 texel 跟着变，
 	// 且每次 resize 白白重建整张阴影图）。swapchain/depth 附件必须留 {0,0}（compile 校验）。
 	std::array<uint32_t, 2> extent{0u, 0u};
+	// **跟随窗口的缩放档**（批 15.3 子步 B；仅 kind=offscreen 合法，compile 校验）：
+	// 0 = 跟随（现状逐位不变）；(0,1] = 渲染 extent × 本值（向下取整、下限 1，口径唯一
+	// 落点 = scaleRtExtent）。与上面静态 extent 的差别 = 它**随窗口/resize 走**——
+	// ssr_trace 半分辨率 march 要的是「渲染网格的一半」这种派生尺寸，不是独立分辨率。
+	// 两者同时给时 extent 优先（scale 只作用于「跟随」档）。写进本字段的 pass 其渲染区域
+	// 随缩放后的 RT extent（SlotResolver::renderRectFor 第 ② 档，viewport/renderArea 同源）。
+	float extentScale = 0.0f;
 	// **跨帧历史附件**（TAA 类；仅 kind=offscreen 合法，compile 校验）：语义 =
 	// "本帧第一手读它时，读的是**上一帧留下的内容**"。三处后果（都在 compile 落实）：
 	//   ① 豁免"读前置"校验（普通附件本帧未写先读 = 报错，历史附件必须允许）；
@@ -113,6 +120,21 @@ export struct RgAttachmentDesc {
 	//      TopOfPipe 不建立任何依赖；论证见 docs/taa_plan.md §2 gap ①）。
 	bool history = false;
 };
+
+/**
+ * 缩放 RT extent 的**口径唯一落点**（批 15.3 子步 B）：scale ≤ 0 = 原样跟随；否则
+ * base × scale **向下取整、下限 1**。两处消费必须共用本函数——执行器逐帧装配
+ * （Renderer::ensureOffscreenAttachments）与启动期领槽（ensureSsrTraceSlot）各写一份
+ * floor = 两个真相源，漂移的形态 = 每帧 RT 重建（尺寸永远对不上缓存）。
+ */
+export inline constexpr vk::Extent2D scaleRtExtent(vk::Extent2D base, float scale) {
+	if (scale <= 0.0f)
+		return base;
+	const auto one = [](uint32_t v, float f) {
+		return std::max(1u, static_cast<uint32_t>(static_cast<float>(v) * f));
+	};
+	return {one(base.width, scale), one(base.height, scale)};
+}
 
 /**
  * offscreen attachment 格式词表成员判定 = compile 校验入口（"inherit" 与全部具名为 true）。
@@ -259,20 +281,31 @@ export inline constexpr std::string_view kAoApplyPassName = "ao_apply";
 /**
  * Phase 15 批 15.1 前半：**SSR（屏幕空间反射）pass** 的附件契约（单一真相源）。
  *
- * `ssr_applied` RT 装的是「本帧成片 + 屏幕空间反射」——本批占位实现下 = 成片的**逐位拷贝**
- * （占位的存在理由见 `shaders/ssr.frag.slang` 头注释：门开 = 门关逐位相同 ⟹ 画面若变只
- * 可能是管道接错，把「管道」与「算法」两种失效彻底分开）。
+ * 批 15.3 子步 B 起 SSR = **两 pass 两附件**：
+ *  - `ssr_trace`（**半分辨率**，premultiplied 反射贡献 `rgb = weight·(F·reflected − iblSpec)`、
+ *    `a = weight`）由 trace pass（state="ssr_trace"）写；
+ *  - `ssr_applied`（渲染分辨率，= 成片 + 粗糙度感知模糊后的反射）由 apply pass（state="ssr"）
+ *    写，消费者链（tonemap / taa / ao_apply / FSR）零改动。
+ * 拆分的论证与 premultiplied 契约 → `shaders/ssr_trace.frag.slang` 文件头。
  *
- * 格式**必须**与 `kSceneHdrFormat` 同为 rgba16_sfloat：占位拷贝要逐位等于输入，格式不同
- * 就过不了「门开 = 门关逐位相同」这条本批红线（新开格式还要在 render_graph_formats 词表
- * + frame_capture 的 captureBpp + llm_debug 通道转换器三处挂号，理由同 `kVelocityFormat`）。
+ * 格式**必须**与 `kSceneHdrFormat` 同为 rgba16_sfloat：apply 的直通早退路径要把 scene_hdr 的
+ * Load 原值逐位写进 ssr_applied（「SSR 未作用 = 逐位相同」影响域判据的前提），格式不同连
+ * 「拷贝都逐位」都不成立（新开格式还要在 render_graph_formats 词表 + frame_capture 的
+ * captureBpp + llm_debug 通道转换器三处挂号，理由同 `kVelocityFormat`）。
  *
- * 消费方 = decorateSsrPass（图声明）+ ensureSsrAppliedSlot（启动期建 RT + 采样堆槽）+
- * addSsrEntry / assembleHdrAoChain 色输入优先级链（烘 binding）。
+ * 消费方 = decorateSsrPass（图声明）+ ensureSsrTraceSlot / ensureSsrAppliedSlot（启动期建
+ * RT + 采样堆槽）+ addSsrTraceEntry / addSsrApplyEntry / assembleHdrAoChain 色输入优先级链
+ *（烘 binding）。
  */
 export inline constexpr std::string_view kSsrAppliedName = "ssr_applied";
 export inline constexpr std::string_view kSsrAppliedFormat = "rgba16_sfloat";
+/** apply pass 名（**沿用 15.1 的 "ssr"**——消费者链 / 日志 / smoke 判据零改动）与 state 名同源。 */
 export inline constexpr std::string_view kSsrPassName = "ssr";
+/** trace pass 的附件 / pass 名 / 格式 / 缩放（批 15.3 子步 B；缩放口径 → scaleRtExtent）。 */
+export inline constexpr std::string_view kSsrTraceName = "ssr_trace";
+export inline constexpr std::string_view kSsrTracePassName = "ssr_trace";
+export inline constexpr std::string_view kSsrTraceFormat = "rgba16_sfloat";
+export inline constexpr float kSsrTraceScale = 0.5f;
 
 /**
  * pass 声明（RgGraphDesc.passes 元素）：name 必填；kind 定执行语义；
@@ -322,6 +355,9 @@ export struct RgCompiledAttachment {
 	// 独立 RT 尺寸透传（0 = 跟随 swapchain）：执行器装配 RT 时消费（批 11.2 阴影图）。
 	// 非图属 RT 恒 {0,0}（registerAttachment 已校验）。
 	std::array<uint32_t, 2> extent{0u, 0u};
+	// 跟随缩放档透传（批 15.3 子步 B；0 = 跟随）：执行器装配 RT（scaleRtExtent）与
+	// renderRectFor（渲染区域随缩放后 extent）消费。非图属 RT 恒 0（registerAttachment 已校验）。
+	float extentScale = 0.0f;
 	vk::ImageAspectFlags aspect = {};
 	// 帧首写是否走"内容丢弃"规则（swapchain/depth/depthOffscreen = true；offscreen = false
 	// 需追踪布局。depthOffscreen 归"丢弃"档：阴影图每帧整幅 clear，无跨帧内容依赖）
@@ -630,11 +666,17 @@ export bool decorateTaaPass(RgGraphDesc& desc);
 export bool decorateAoApplyPass(RgGraphDesc& desc);
 
 /**
- * Phase 15 批 15.1 前半：插「SSR（屏幕空间反射）」专用全屏 pass（附件契约见 `kSsrAppliedName`）。
+ * Phase 15 批 15.1 前半：插「SSR（屏幕空间反射）」专用全屏 pass。**批 15.3 子步 B 起 =
+ * 双 pass**（附件契约见 `kSsrTraceName` / `kSsrAppliedName`，拆分论证 → ssr_trace.frag 文件头）。
  *
- * 做的事 = ao_apply 的同形三件套：一个附件（`ssr_applied`）+ 一个全屏 pass
- *（state="ssr"，读本帧成片写 ssr_applied）+ 把「写 swapchain 且采色」那个 pass（tonemap）
- * 的色输入换成 `ssr_applied`。没有帧末 copy（不跨帧）。
+ * 做的事 = 两附件 + 两全屏 pass + 一次消费者改写：
+ *  - `ssr_trace` pass（state="ssr_trace"，半分辨率 extentScale）：读 light 的成片与
+ *    G-buffer/深度，march 后写 premultiplied 反射贡献；
+ *  - `ssr` pass（apply，state="ssr" **沿用原名**——消费者链/日志/smoke 判据零改动）：读
+ *    scene_hdr + ssr_trace + gbuffer_metalrough，粗糙度感知模糊后加法写 ssr_applied；
+ *  - 把「写 swapchain 且采色」那个 pass（tonemap）的色输入换成 `ssr_applied`。
+ * 插入次序 = light → **trace → apply** → [taa | ao_applied] → tonemap（两 pass 一起插在
+ * 消费者之前，trace 紧邻 apply 之前）。没有帧末 copy（不跨帧）。
  *
  * **跳过条件（四条，任一命中即不插、返回 false，图不变）**：
  *  1. 图里已有 `taa` 或 `ao_apply` pass —— **装饰太晚**（调用序不变量的结构性护栏：症状
@@ -644,14 +686,14 @@ export bool decorateAoApplyPass(RgGraphDesc& desc);
  *     上屏，transferRead ≠ sampleRead）——与 taa / velocity / ao_apply 同一锚点判据。
  *  3. 图里没有 **kGBufferAttachments 契约表的全部通道**（缺一即跳过）。**这就是 SSR 的
  *     deferred-only 边界**：D1 对等豁免已拍板（forward 不跟，`docs/phase15_plan.md` §0.1）；
- *     查全表而非只查 position = 本 pass 的 inputs 引用四个 G-buffer 通道，半张契约表会
+ *     查全表而非只查 position = trace pass 的 inputs 引用四个 G-buffer 通道，半张契约表会
  *     装饰出引用不存在附件的 pass（编译期即错）。
- *  4. 插入点之前没有可 store 的 depth 写者（本 pass 以 sampleRead 读深度图）。
- * ⟹ 门关（`runtime.ssr.enabled = false`，默认）= 根本不调本函数 = 图里没有这个 pass，
+ *  4. 插入点之前没有可 store 的 depth 写者（trace pass 以 sampleRead 读深度图）。
+ * ⟹ 门关（`runtime.ssr.enabled = false`，默认）= 根本不调本函数 = 图里没有这两个 pass，
  *    **结构性**逐位不变（不是"有但旁路"——运行时分支挡不住 slang 的浮点重排，教训原文在
  *    `shaders/light.frag.slang` 的 IZB_CONSUME 注释）。
  *
- * **次序契约**：必须在 velocity / taa / ao_apply 三个装饰**之前**调（本 pass 读 light 的
+ * **次序契约**：必须在 velocity / taa / ao_apply 三个装饰**之前**调（apply 读 light 的
  * 产物 scene_hdr，且这三个装饰器都动态读「消费者当前的色附件」⟹ SSR 先插它们自动读到
  * ssr_applied，链自己接成 scene_hdr → ssr_applied → [taa_out | ao_applied] → tonemap）。
  * 与 ao_apply 的关键差别：ao_apply 的「taa 在图里就跳过」是**互斥**（AO 施加点只能有一个），
@@ -753,15 +795,28 @@ export std::expected<uint32_t, Error> ensureAoAppliedSlot(
 	RenderTargetCache& rts, Swapchain& swapchain);
 
 /**
- * Phase 15 批 15.1 前半：确保 SSR pass 的 RT（名字/格式 = `kSsrAppliedName` /
+ * Phase 15 批 15.1 前半：确保 SSR apply pass 的 RT（名字/格式 = `kSsrAppliedName` /
  * `kSsrAppliedFormat` 单一真相源，rgba16_sfloat offscreen，**渲染分辨率**——它的消费者
  * （tonemap / taa / ao_apply / FSR）都在渲染网格上工作）并返回其 SAMPLED_IMAGE 堆槽。
  *
- * 调用时序同 `ensureAoAppliedSlot`，且**必须早于** `addSsrEntry`。仅
+ * 调用时序同 `ensureAoAppliedSlot`，且**必须早于** `addSsrApplyEntry`。仅
  * `CompiledGraphResult::ssrDecorated` 为真时调用（门关 = 不领槽 = 堆槽布局与基线零差异）。
  * @return ssr_applied RT 的 SAMPLED_IMAGE heap 槽；Error = RT 创建 / 槽分配失败
  */
 export std::expected<uint32_t, Error> ensureSsrAppliedSlot(
+	RenderTargetCache& rts, Swapchain& swapchain);
+
+/**
+ * Phase 15 批 15.3 子步 B：确保 SSR trace pass 的 RT（名字/格式/缩放 = `kSsrTraceName` /
+ * `kSsrTraceFormat` / `kSsrTraceScale` 单一真相源，rgba16_sfloat offscreen，**半渲染分辨率**
+ * ——march 本体跑在半分辨率网格上，成本随像素数走）并返回其 SAMPLED_IMAGE 堆槽。
+ *
+ * extent 计算与执行器逐帧装配共用 `scaleRtExtent`（两处各写一份 floor = 每帧重建 RT）。
+ * 调用时序同 `ensureSsrAppliedSlot`，且**必须早于** `addSsrTraceEntry`（槽号烘进 binding）。
+ * 仅 `CompiledGraphResult::ssrDecorated` 为真时调用（门关 = 不领槽 = 零差异）。
+ * @return ssr_trace RT 的 SAMPLED_IMAGE heap 槽；Error = RT 创建 / 槽分配失败
+ */
+export std::expected<uint32_t, Error> ensureSsrTraceSlot(
 	RenderTargetCache& rts, Swapchain& swapchain);
 
 /**

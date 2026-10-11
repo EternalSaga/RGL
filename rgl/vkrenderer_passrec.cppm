@@ -98,8 +98,9 @@ struct SlotResolver {
 	/**
 	 * 本 pass 的渲染区域矩形（viewport/scissor + beginRendering.renderArea 共用）。
 	 * 解析顺序：① pass 声明的子矩形（图集分块；同时限定 clear 与渲染区）
-	 *   ② 否则 depthOffscreen（阴影图）→ 用该 RT 自己的 extent（分辨率与窗口解耦；若用窗口尺寸
-	 *     会出现 viewport 与 renderArea 不一致 = 贴图比例错 + 边缘漏画）
+	 *   ② 否则 depthOffscreen（阴影图）**或写 extentScale > 0 的缩放 RT（批 15.3B
+	 *     ssr_trace 半分辨率）**→ 用该 RT 自己的 extent（分辨率与窗口解耦/被缩放；若用
+	 *     窗口尺寸会出现 viewport 与 renderArea 不一致 = 贴图比例错 + 边缘漏画）
 	 *   ③ 否则**写 swapchain 附件的 pass** → 后缓冲尺寸（批 14.3：tonemap 是全屏大三角，
 	 *     它必须铺满后缓冲；scene_hdr 若是渲染分辨率，归一化 uv 采样天然完成放大）
 	 *   ④ 否则 → 渲染 extent（几何 / G-buffer / ao / taa 全在这一档）。
@@ -111,6 +112,12 @@ struct SlotResolver {
 		if (pass.viewport[2] != 0u)
 			return vk::Rect2D{{asI32(pass.viewport[0]), asI32(pass.viewport[1])},
 				{vk::Extent2D{pass.viewport[2], pass.viewport[3]}}};
+		// 批 15.3B：写**跟随缩放** offscreen RT（extentScale > 0，= ssr_trace 半分辨率）的
+		// pass → 渲染区域随该 RT 自己的 extent（viewport/renderArea 同源，depthOffscreen
+		// 同档纪律）。既有 offscreen 颜色 RT 全恒 extentScale = 0 ⟹ 本分支不走 = 逐位不变。
+		for (const auto& c : pass.colors)
+			if (attachments[c.slot].extentScale > 0.0f)
+				return {{0, 0}, offscreenRt[c.slot]->extent};
 		if (pass.depth && attachments[pass.depth->slot].kind == RgAttachmentKind::depthOffscreen)
 			return {{0, 0}, offscreenRt[pass.depth->slot]->extent};
 		const bool writesSwapchain = std::ranges::any_of(pass.colors,

@@ -53,13 +53,13 @@ export struct RgStateName {
 };
 
 /**
- * pass.state 全量状态名词表（**单一真相源**，14 条）——键集合 = StateKit::stateFor
+ * pass.state 全量状态名词表（**单一真相源**，15 条）——键集合 = StateKit::stateFor
  * 能解析的名字集合（static_assert 绑定）；按 scope 派生出图校验用的两个子集。
  *
  * 加一个状态 = 本表加一行 + StateKit 加成员与实现（漏实现编译不过）；
  * Lua 配置侧与文档不再各自抄名单（写错的启动报错会列出合法值）。
  */
-export inline constexpr std::array<RgStateName, 14> kAllPassStates{{
+export inline constexpr std::array<RgStateName, 15> kAllPassStates{{
 	{"opaque", RgStateScope::meshPass},
 	{"skybox", RgStateScope::meshPass},
 	{"transparent", RgStateScope::meshPass},
@@ -71,7 +71,8 @@ export inline constexpr std::array<RgStateName, 14> kAllPassStates{{
 	{"velocity", RgStateScope::fullscreenPass},  // 批 14.4：逐像素速度场（FSR 输入，与 ao 同形）
 	{"taa", RgStateScope::fullscreenPass},      // 批 12.6：时域滤波全屏 pass（与 ao 同形）
 	{"ao_apply", RgStateScope::fullscreenPass},  // 批 14.5：AO 施加点独立 pass（与 ao/taa 同形）
-	{"ssr", RgStateScope::fullscreenPass},  // 批 15.1：屏幕空间反射 pass（与 ao/taa 同形；deferred-only）
+	{"ssr_trace", RgStateScope::fullscreenPass},  // 批 15.3B：SSR march 本体（半分辨率，与 ao/taa 同形）
+	{"ssr", RgStateScope::fullscreenPass},  // 批 15.1：屏幕空间反射 pass（与 ao/taa 同形；deferred-only。15.3B 起 = apply）
 	{"tonemap", RgStateScope::fullscreenPass},
 	{"izb_mask", RgStateScope::internal},      // 批 11.3-1d：图外硬编码录制（红线 2）
 }};

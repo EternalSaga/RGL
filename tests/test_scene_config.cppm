@@ -818,12 +818,13 @@ TEST_CASE("runtime_config：ssr 块（批 15.1 参数面）——缺块回落出
 		CHECK(r->ssr.biasPx == 0.6f);
 		CHECK(r->ssr.roughFull == 0.15f);
 		CHECK(r->ssr.roughCutoff == 0.40f);
+		CHECK(r->ssr.blurScale == 8.0f);  // 批 15.3B 第六枚（出厂 = 螺旋半径系数标定值）
 	}
-	{  // 块内五枚键名逐个命中（探针值互不相同、且都不等于任何默认值）
+	{  // 块内六枚键名逐个命中（探针值互不相同、且都不等于任何默认值）
 		TempLua f("rt_ssr_full", R"lua(return { ssr = {
 			enabled = true,
 			max_distance_radii = 1.25, thickness_px = 2.5, bias_px = 0.75,
-			rough_full = 0.05, rough_cutoff = 0.9,
+			rough_full = 0.05, rough_cutoff = 0.9, blur_scale = 12.5,
 		} })lua");
 		auto r = loadRuntimeConfig(f.pathStr());
 		REQUIRE(r.has_value());
@@ -833,6 +834,7 @@ TEST_CASE("runtime_config：ssr 块（批 15.1 参数面）——缺块回落出
 		CHECK(r->ssr.biasPx == 0.75f);
 		CHECK(r->ssr.roughFull == 0.05f);
 		CHECK(r->ssr.roughCutoff == 0.9f);
+		CHECK(r->ssr.blurScale == 12.5f);
 	}
 	{  // 只写一枚 = 其余保默认（块内逐键可选，不是整块覆盖；先例 = fsr 块同款）
 		TempLua f("rt_ssr_half", R"lua(return { ssr = { thickness_px = 3.0 } })lua");
@@ -855,6 +857,11 @@ TEST_CASE("runtime_config：ssr 块（批 15.1 参数面）——缺块回落出
 		auto r2 = loadRuntimeConfig(g.pathStr());
 		REQUIRE(r2.has_value());
 		CHECK(r2->ssr.thicknessPx == 0.0f);  // 0 不是"缺键"哨兵，写 0 就得是 0
+		// 批 15.3B：blur_scale = 0 同为合法消融档（纯双线性上采样），同一条不钳制纪律。
+		TempLua h("rt_ssr_blur0", R"lua(return { ssr = { blur_scale = 0.0 } })lua");
+		auto r3 = loadRuntimeConfig(h.pathStr());
+		REQUIRE(r3.has_value());
+		CHECK(r3->ssr.blurScale == 0.0f);
 	}
 	{  // **没有**扁平键的兼容双读（两个真相源 = 本项目反复登记的反模式）：顶层写
 	   // ssr_thickness_px 必须**什么都不发生**，否则旧键与新块并存 = 静默用哪个说不清。

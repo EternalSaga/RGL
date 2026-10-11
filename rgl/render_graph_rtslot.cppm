@@ -177,6 +177,7 @@ std::expected<uint32_t, Error> ensureAoAppliedSlot(
  * Phase 15 批 15.1 前半（接口注释见 render_graph.cppm）：单幅全屏 RT，名字/格式 =
  * `kSsrAppliedName` / `kSsrAppliedFormat` 契约常量。extent 同 ao_applied 取**渲染**网格。
  * 启动期仅 ssr 落图时调用一次；每帧 drawFrame 的 ensureOffscreenAttachments 命中同名缓存复用。
+ * 批 15.3 子步 B 起它是 **apply pass** 的输出（trace 的 RT 见 ensureSsrTraceSlot）。
  */
 std::expected<uint32_t, Error> ensureSsrAppliedSlot(
 		RenderTargetCache& rts, Swapchain& swapchain) {
@@ -191,8 +192,34 @@ std::expected<uint32_t, Error> ensureSsrAppliedSlot(
 		return std::unexpected(Error{ErrorCode::Unknown,
 			fmt::format("ssr_applied RT has no sample descriptor slot")});
 	if (auto* logger = RLLogger::getInstance())
-		logger->info("ssr (RGBA16F, 成片+屏幕空间反射; 批 15.1 前半 = 占位拷贝): {}x{} slot {}",
+		logger->info("ssr (RGBA16F, 成片+屏幕空间反射): {}x{} slot {}",
 			extent.width, extent.height, *slot);
+	return *slot;
+}
+
+/**
+ * Phase 15 批 15.3 子步 B（接口注释见 render_graph.cppm）：SSR trace pass 的 RT，名字/格式/
+ * 缩放 = `kSsrTraceName` / `kSsrTraceFormat` / `kSsrTraceScale` 契约常量。extent =
+ * **渲染网格 × kSsrTraceScale**（口径与执行器逐帧装配共用 scaleRtExtent——两处各写一份
+ * floor = 每帧重建）。启动期仅 ssr 落图时调用一次；每帧 ensureOffscreenAttachments 命中
+ * 同名同尺寸缓存复用。
+ */
+std::expected<uint32_t, Error> ensureSsrTraceSlot(
+		RenderTargetCache& rts, Swapchain& swapchain) {
+	const std::string name{std::string{kSsrTraceName}.c_str()};
+	const vk::Extent2D extent
+		= scaleRtExtent(swapchain.getRenderExtent(), kSsrTraceScale);
+	const vk::Format format = resolveRgFormat(std::string{kSsrTraceFormat}, vk::Format::eUndefined);
+	auto rt = rts.ensure(name, extent, format);
+	if (!rt)
+		return std::unexpected(std::move(rt).error());
+	auto slot = rts.heapSlot(name);
+	if (!slot)
+		return std::unexpected(Error{ErrorCode::Unknown,
+			fmt::format("ssr_trace RT has no sample descriptor slot")});
+	if (auto* logger = RLLogger::getInstance())
+		logger->info("ssr_trace (RGBA16F, premultiplied 反射贡献, ×{} 渲染网格): {}x{} slot {}",
+			kSsrTraceScale, extent.width, extent.height, *slot);
 	return *slot;
 }
 

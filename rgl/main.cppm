@@ -87,9 +87,10 @@ export struct CompiledGraphResult {
 	/// 两条路各有一个施加点，绝不双施。判据全文 → `shaders/ao_apply.frag.slang` 头注释。
 	bool aoApplyDecorated = false;
 	/// 批 15.1 前半：SSR pass 是否落图（门开**且**图里有 G-buffer position 附件 = deferred
-	/// 形态）。装配层据此决定 ssr_applied RT / ssr 条目是否领建，并把色输入优先级链的
+	/// 形态）。批 15.3B 起 = trace + apply **两个 pass 一起**落图。装配层据此决定
+	/// ssr_trace / ssr_applied RT 与两条目是否领建，并把色输入优先级链的
 	/// 「ssr_applied 档」接上（taa / ao_apply / tonemap 的色输入槽跟着换）。与 taaDecorated
-	/// 是**串联**关系（SSR 先合成、TAA 后滤波），不互斥。判据全文 → `shaders/ssr.frag.slang`。
+	/// 是**串联**关系（SSR 先合成、TAA 后滤波），不互斥。判据全文 → `shaders/ssr_trace.frag.slang`。
 	bool ssrDecorated = false;
 };
 

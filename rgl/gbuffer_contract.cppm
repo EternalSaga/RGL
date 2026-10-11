@@ -66,6 +66,13 @@ export inline constexpr int kGBufferChannelCount =
  */
 export inline constexpr std::string_view kGBufferEmissiveName = "gbuffer_emissive";
 
+/**
+ * G-buffer **metalrough** 通道名（批 15.3 子步 B）。判据 = decorateSsrPass 的 apply pass
+ * 输入引用它（roughness = 螺旋模糊半径的自变量）。emissive 同款先例：比较侧用本常量、
+ * 名字与契约表由 static_assert 绑定——改名 = 编译不过，而不是留下恒 false 的死判据。
+ */
+export inline constexpr std::string_view kGBufferMetalRoughName = "gbuffer_metalrough";
+
 namespace detail {
 /** 名字是否在 kGBufferAttachments 表内（constexpr 版 any_of，本模块零算法头依赖）。 */
 consteval bool inGBufferTable(std::string_view name) {
@@ -78,5 +85,7 @@ consteval bool inGBufferTable(std::string_view name) {
 
 static_assert(detail::inGBufferTable(kGBufferEmissiveName),
 	"kGBufferEmissiveName 必须是 kGBufferAttachments 里的通道名（改表名/改常量都要两处同步）");
+static_assert(detail::inGBufferTable(kGBufferMetalRoughName),
+	"kGBufferMetalRoughName 必须是 kGBufferAttachments 里的通道名（同上）");
 
 }  // namespace RGL

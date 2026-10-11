@@ -470,10 +470,13 @@ std::expected<void, Error> Renderer::ensureOffscreenAttachments(vk::Extent2D ext
 		if (!depthRt && att.kind != RgAttachmentKind::offscreen)
 			continue;
 		const auto fmt = RGL::resolveRgFormat(att.format, swapchain->getFormat().format);
-		// 尺寸：声明了独立 extent 就用它，否则跟随 swapchain。阴影图必须独立——绑在窗口
-		// 尺寸上会让阴影 texel 密度随窗口变，且每次 resize 白白重建整张图
-		const vk::Extent2D rtExtent{att.extent[0] != 0u ? att.extent[0] : extent.width,
-			att.extent[1] != 0u ? att.extent[1] : extent.height};
+		// 尺寸：声明了独立 extent 就用它，否则跟随 swapchain（× extentScale，批 15.3B：
+		// ssr_trace 半分辨率——缩放口径与 ensureSsrTraceSlot 共用 scaleRtExtent，两处各写
+		// 一份 floor = 每帧重建）。阴影图必须独立——绑在窗口尺寸上会让阴影 texel 密度随
+		// 窗口变，且每次 resize 白白重建整张图
+		const vk::Extent2D follow = scaleRtExtent(extent, att.extentScale);
+		const vk::Extent2D rtExtent{att.extent[0] != 0u ? att.extent[0] : follow.width,
+			att.extent[1] != 0u ? att.extent[1] : follow.height};
 		auto rtResult = rtCache->ensure(att.name, rtExtent, fmt,
 			depthRt ? vk::ImageAspectFlagBits::eDepth : vk::ImageAspectFlagBits::eColor);
 		if (!rtResult)

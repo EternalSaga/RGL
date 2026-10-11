@@ -330,8 +330,9 @@ def stage_configs(from_build: bool, variant: str | None, shot_file: str, frames:
         # 批 14.4：逐像素速度场。创建期量（决定图里有没有 velocity pass），无热重载。
         patch_lua(runtime, "velocity_field", "true")
     if ssr:
-        # 批 15.1 前半：屏幕空间反射（占位拷贝）。同为创建期量（决定图里有没有 ssr
-        # pass）。键 = ssr 块里的 enabled（行首键名全文件唯一，唯一性由 patch_lua 自守）。
+        # 批 15.1 前半：屏幕空间反射。同为创建期量（决定图里有没有 ssr pass；15.3B 起 =
+        # trace + apply 两个）。键 = ssr 块里的 enabled（行首键名全文件唯一，唯一性由
+        # patch_lua 自守）。
         patch_lua(runtime, "enabled", "true")
     # ── 抗锯齿三态（批 14.6）：一个槽位取代旧的 taa.enabled × fsr_upscaler 两个布尔 ──
     if aa:
@@ -464,9 +465,10 @@ def parse_args() -> argparse.Namespace:
                          "双向核对：开了没建 velocity RT = FAIL；没开却建了 = FAIL（门关不拢）。"
                          "aa=fsr 时无需给：引擎解析期已隐含打开")
     ap.add_argument("--ssr", action="store_true",
-                    help="runtime.lua ssr 块 enabled = true（屏幕空间反射，批 15.1 前半 = "
-                         "占位拷贝）。双向核对：开了没建 ssr RT 且无「图形态不支持」warn = FAIL；"
-                         "没开却建了 = FAIL（门关不拢 = 「门开=门关逐位相同」红线失效）")
+                    help="runtime.lua ssr 块 enabled = true（屏幕空间反射，批 15.3B 起 = "
+                         "trace + apply 两 pass）。双向核对：开了没建齐 ssr_trace/ssr 两行 RT "
+                         "且无「图形态不支持」warn = FAIL；没开却建了 = FAIL（门关不拢 = "
+                         "「门开=门关逐位相同」红线失效）")
     ap.add_argument("--aa", choices=("off", "fsr", "taa"), default=None,
                     help="runtime.lua aa（批 14.6 抗锯齿三态开关）：off = 出厂默认（无 TAA "
                          "无 FSR，红线 A 那张图）；fsr = FSR3-upscaler 做抗锯齿（隐含打开 "
@@ -663,25 +665,37 @@ def main() -> int:
     if not velRequested and vel:
         fail(f"默认档（velocity_field 关）却建了 velocity RT：{vel.group(0)}"
              " ⟹ 门关不拢，「图里没有这个 pass」的逐位不变红线失效")
-    # ssr 生效核对（批 15.1 前半）。同 velocity 的双向纪律：正向 = 门开必须见 ssr RT 行
-    # （或装饰器显式「图形态不支持」warn）；反向 = 门关一行都不许有——本批的判据本体就是
-    # 「门开 = 门关逐位相同」，它依赖「门关 = 图里根本没有这个 pass」，门关不拢时截图
-    # 恰好也可能相同（占位拷贝），画面判据抓不住，只有日志能抓。
+    # ssr 生效核对（批 15.1 前半；批 15.3 子步 B 起 = **两 RT 两 pass**）。同 velocity 的
+    # 双向纪律：正向 = 门开必须 **trace 与 apply 两行都在**（只缺一行 = 半条链，图能跑但
+    # 结果错，单行判据抓不住）；反向 = 门关一行都不许有——本判据的本体仍是「门开 = 门关
+    # 逐位相同」，它依赖「门关 = 图里根本没有这两个 pass」，门关不拢时截图恰好也可能相同，
+    # 画面判据抓不住，只有日志能抓。尺寸判据分档：apply RT = 渲染网格（消费者全在渲染
+    # 网格上工作）、trace RT = 渲染网格 × 0.5 向下取整（口径 = C++ scaleRtExtent）。
     ssrRt = re.search(r"ssr \(RGBA16F[^)]*\): (\d+)x(\d+) slot (\d+)", log)
+    ssrTraceRt = re.search(r"ssr_trace \(RGBA16F[^)]*\): (\d+)x(\d+) slot (\d+)", log)
     ssrUnsupported = "ssr: 图形态不支持" in log
-    if args.ssr and not ssrRt:
+    if args.ssr and not (ssrRt and ssrTraceRt):
         if not ssrUnsupported:
-            fail("请求 --ssr 但日志里既没有 ssr RT 行、也没有「ssr: 图形态不支持」告警"
-                 " ⟹ 装饰器静默没落图（配置键名漂了 / 启动日志文案改了 / 装饰调用被删）")
+            fail("请求 --ssr 但日志里 trace/apply 两行 RT 不齐"
+                 f"（trace={'有' if ssrTraceRt else '无'}, apply={'有' if ssrRt else '无'}），"
+                 "也没有「ssr: 图形态不支持」告警 ⟹ 装饰器静默没落图或只落了一半"
+                 "（配置键名漂了 / 启动日志文案改了 / 装饰调用被删）")
         print("SSR    : 本图变体不支持（装饰器已 warn 并跳过）✓ 非错误")
-    if not args.ssr and ssrRt:
-        fail(f"默认档（ssr.enabled 关）却建了 ssr RT：{ssrRt.group(0)}"
+    if not args.ssr and (ssrRt or ssrTraceRt):
+        fail(f"默认档（ssr.enabled 关）却建了 ssr RT：{(ssrRt or ssrTraceRt).group(0)}"
              " ⟹ 门关不拢，「门开 = 门关逐位相同」红线的前提失效")
     if ssrRt and (int(ssrRt.group(1)), int(ssrRt.group(2))) != render_grid:
-        fail(f"ssr RT {ssrRt.group(1)}x{ssrRt.group(2)} ≠ 渲染网格 "
-             f"{render_grid[0]}x{render_grid[1]}——占位拷贝要求同格式同网格")
-    if ssrRt:
-        print(f"SSR    : {ssrRt.group(0)} = 渲染网格 ✓")
+        fail(f"ssr(apply) RT {ssrRt.group(1)}x{ssrRt.group(2)} ≠ 渲染网格 "
+             f"{render_grid[0]}x{render_grid[1]}——apply 的消费者（tonemap/taa/ao_apply）"
+             "都在渲染网格上工作")
+    traceGrid = (max(1, render_grid[0] // 2), max(1, render_grid[1] // 2))
+    if ssrTraceRt and (int(ssrTraceRt.group(1)), int(ssrTraceRt.group(2))) != traceGrid:
+        fail(f"ssr_trace RT {ssrTraceRt.group(1)}x{ssrTraceRt.group(2)} ≠ 半渲染网格 "
+             f"{traceGrid[0]}x{traceGrid[1]}（floor，口径 = scaleRtExtent）"
+             "——march 成本随像素数走，缩放口径错 = 成本账整个不对")
+    if ssrRt and ssrTraceRt:
+        print(f"SSR    : apply {ssrRt.group(1)}x{ssrRt.group(2)} = 渲染网格 ✓ / "
+              f"trace {ssrTraceRt.group(1)}x{ssrTraceRt.group(2)} = 半网格 ✓")
     # aa=fsr 生效核对（批 14.5 的门 + 批 14.6 的槽位）。同 velocity 的纪律：双向都要核。
     # 正向 = 门开必须看到 vendor context 构造行；反向 = 门关**一行都不许有**——FSR 是
     # 图外 compute，门关不拢时截图未必变（本批它的输出尚无消费者），只看画面会漏。

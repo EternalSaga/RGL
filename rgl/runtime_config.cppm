@@ -19,19 +19,21 @@ export struct LlmDebugConfig {
 };
 
 /**
- * SSR 的 5 枚**每帧**画质参数（configs/runtime.lua `ssr` 块，Phase 15 批 15.1 参数面）。
+ * SSR 的 6 枚**每帧**画质参数（configs/runtime.lua `ssr` 块，Phase 15 批 15.1 参数面；
+ * 第 6 枚 blurScale 是批 15.3 子步 B 的模糊旋钮）。
  *
  * ## 为什么是一个结构而不是一排扁平字段
  *
- * 这 5 个量**永远作为一个整体**从配置流到 scene data（RuntimeConfig → registry ctx →
+ * 这 6 个量**永远作为一个整体**从配置流到 scene data（RuntimeConfig → registry ctx →
  * fillSsrParams → 两个 vec4），中间没有任何一处只读其中一枚。收成一体 = 「配置键 ↔
  * scene data 分量」的映射只有一处（`fillSsrParams`）。护栏分两半：字节布局与填值 =
  * tests/test_ssr_params；配置往返（lua 文本 → loadRuntimeConfig → 默认值/逐键覆盖）=
  * tests/test_scene_config 的 ssr 块用例（那里是五份 loader 解析契约的住处）。
  *
- * ## 🔴 本结构体成员初始化值 = 这 5 个默认值的**全项目唯一真相源**
+ * ## 🔴 本结构体成员初始化值 = 这 6 个默认值的**全项目唯一真相源**
  *
- * shader 侧**不留 fallback 常量**（`ssr.frag.slang` 里五枚 `static const` 已删）。两处
+ * shader 侧**不留 fallback 常量**（原 `ssr.frag.slang`（15.3B 拆为 ssr_trace/ssr_apply）里
+ * 五枚 `static const` 已删）。两处
  * 定义 = 迟早漂移，而漂移的形态是"配置改了没反应"，比写死更难查。
  * ⚠ 默认值不是拍脑袋，且**两枚来源不同**（这个区别是本参数的全部教训）：
  *  - `thicknessPx` / `biasPx`（6.0 / 0.6）= 闭式靶调定值反推，**像素单位**、与场景尺度无关，
@@ -45,13 +47,13 @@ export struct LlmDebugConfig {
  *    ⚠ 0.26 的形态是**反射带被截断在湿步道中间**（0.26→0.52 新增的 1779 px 是一条连续带
  *    的延伸、不是散落噪声），不是"少一点反射"那么无害。
  *
- * 🔴 **改本结构的值不影响红线 A**（实测）：`enabled` 默认关 ⟹ 五枚系数虽仍**无条件**写进
+ * 🔴 **改本结构的值不影响红线 A**（实测）：`enabled` 默认关 ⟹ 六枚系数虽仍**无条件**写进
  * scene data，但**没有消费者** ⟹ 出厂画面逐位不变。红线 A 只被 `enabled` 与图形态动到。
  *
  * ## 与 `ssrEnabled` 的区别（别混）
  *
  * `enabled` 是**创建期量**（决定渲染图里有没有 ssr pass、要不要领 ssr_applied RT，改它
- * 要走重启）；本结构的 5 枚是**每帧量**（每帧写进 scene data 尾区 @722336/@722352，
+ * 要走重启）；本结构的 6 枚是**每帧量**（每帧写进 scene data 尾区 @722336/@722352，
  * 改它不改图形态、不重建任何 RT）。⚠ 但 runtime.lua **不在热重载清单里**（热重载只套
  * scene.lua / camera.lua / log_level.json，见 `wireHotReload`）⟹ 改文件仍需重启进程才
  * 生效；"每帧量"说的是**机制**（引擎每帧现取），不是"热重载已接"。
@@ -77,6 +79,12 @@ export struct SsrTuning {
 	float roughFull = 0.15f;
 	/// roughness 高于此 = 完全不反射（中间 smoothstep 过渡；硬切会在材质边界出现可见开关线）。
 	float roughCutoff = 0.40f;
+	/// 粗糙度感知模糊半径上限系数（**全分辨率 px**）：apply 的螺旋 taps 半径 =
+	/// roughness × 本值（scene data @722352.z，批 15.3 子步 B）。默认 8.0 ⟹ roughness
+	/// 0.05 → 0.4px ≈ 无模糊、0.35 → 2.8px（湿区 0.05–0.35 区间标定；gate.y 以上本来
+	/// 就没有 trace 可糊）。`0` 是**合法消融档**（半径 0 = taps 全落中心 = 纯双线性上采样），
+	/// 配置层不 clamp（同 readSsrBlock 纪律：消融档必须写得出来）。
+	float blurScale = 8.0f;
 };
 
 /**
@@ -289,10 +297,11 @@ export struct RuntimeConfig {
 	 */
 	bool ssrEnabled = false;
 	/**
-	 * SSR 的 5 枚**每帧**画质参数（configs/runtime.lua `ssr` 块）。**每帧量**——与上面
+	 * SSR 的 6 枚**每帧**画质参数（configs/runtime.lua `ssr` 块）。**每帧量**——与上面
 	 * `ssrEnabled`（创建期量）的区别与"为什么是一个结构" → `SsrTuning` 注释。
 	 * 消费链：main 启动期 `registry.ctx().emplace<SsrTuning>(configs.runtime.ssr)` →
-	 * renderListSystem 每帧取 → fillSsrParams 写 scene data @722336/.yzw 与 @722352/.xy。
+	 * renderListSystem 每帧取 → fillSsrParams 写 scene data @722336/.yzw 与 @722352/.xyz
+	 *（z = blurScale，批 15.3B 起占用，消费者 = ssr_apply）。
 	 */
 	SsrTuning ssr;
 	/**

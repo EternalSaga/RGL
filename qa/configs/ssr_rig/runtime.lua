@@ -21,11 +21,14 @@ return {
         -- 默认，行为零变化）。18 臂扫描表复跑驱动 tools/ssr_scan.py 经 smoke.py --set 注入
         -- 这五枚键，patch_lua 的「键命中 ≠ 1 即 FAIL」要求键在场——与 `enabled` 写在这里
         -- 同一条理由：靶配置的每个旗标都"在场且可核对"，不吃隐式默认。
+        -- 批 15.3 子步 B 追加第六枚 blur_scale（螺旋模糊半径系数，= SsrTuning 出厂 8.0）：
+        -- 模糊臂（0/4/16）经 --set 注入，同一条「键在场」纪律。
         max_distance_radii = 0.52,
         thickness_px = 6.0,
         bias_px = 0.6,
         rough_full = 0.15,
         rough_cutoff = 0.40,
+        blur_scale = 8.0,
     },
     -- 批 15.2B：湿面 G-buffer 调制**钉死关**。本靶测的是 SSR 闭式凸包，而镜面 roughness
     -- 恒 0.122 = wet=1 满调制 ⟹ 不钉则出厂湿面调制改写 metalrough/albedo，判据 A 的

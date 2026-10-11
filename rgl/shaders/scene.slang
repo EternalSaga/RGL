@@ -391,8 +391,9 @@ ObjectMatrix readTaaMotion()
 //   @722336  vec4 ssrParams —— (sceneRadius, maxDistanceRadii, thicknessPx, biasPx)：
 //   x = SceneBounds.radius（世界空间场景并集包围球半径 = 尺度无关参数锚点），yzw = 由它
 //   导出的三个无量纲系数（configs/runtime.lua `ssr` 块）。
-//   @722352  vec4 ssrGate —— (roughFull, roughCutoff, 保留, 保留) = 粗糙度门控区间（与场景
-//   尺度无关，故单独一槽；分组理由 → scene_data.cppm 同槽注释）。
+//   @722352  vec4 ssrGate —— (roughFull, roughCutoff, blurScale, 保留)：x/y = 粗糙度门控区间
+//   （与场景尺度无关，故单独一槽；分组理由 → scene_data.cppm 同槽注释）；z = 螺旋模糊半径
+//   系数（批 15.3 子步 B，ssr_apply 消费，全分辨率 px 口径）。
 // 为什么是 CPU 直传正向矩阵而不是 shader 里 inverse(@64)：inverse(inverse(M)) 与 M 无位级
 // 契约，而 SSR 的 uv 精度直接进 ray march 采样位置（全量推导 → scene_data.cppm 同槽注释）。
 ObjectMatrix readSsrViewProj()
@@ -414,9 +415,11 @@ float4 readSsrParams()
     return asfloat(sceneData.Load4(722336u));  // kSceneDataSsrParamsOffset
 }
 
-// SSR 粗糙度门控区间（x = roughFull、y = roughCutoff，zw 保留）。消费者 = ssr.frag 的
-// `1 - smoothstep(x, y, roughness)`；⚠ 要求 x < y（反了 = 门控反向），不变式落点与
-// 「配置层为何不校验」→ scene_data.cppm kSceneDataSsrGateOffset。
+// SSR 粗糙度门控 + 模糊旋钮（x = roughFull、y = roughCutoff、z = blurScale、w 保留）。
+// x/y 消费者 = ssr_trace.frag 的 `1 - smoothstep(x, y, roughness)`；⚠ 要求 x < y（反了 =
+// 门控反向），不变式落点与「配置层为何不校验」→ scene_data.cppm kSceneDataSsrGateOffset。
+// z 消费者 = ssr_apply.frag 的螺旋模糊半径（roughness × z，**全分辨率 px**；0 = 消融档 =
+// 纯双线性上采样）。批 15.3 子步 B 起占用（此前措辞「zw 保留」，w 仍保留）。
 float4 readSsrGate()
 {
     return asfloat(sceneData.Load4(722352u));  // kSceneDataSsrGateOffset
