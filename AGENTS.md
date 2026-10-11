@@ -244,7 +244,8 @@ vk_indirect_commands 显式使用）外**均无显式使用但被其他已启用
   `docs/taa_plan.md`（TAA 机制与踩坑账，§7 第 11/12 条 = 根因）· `docs/evssm_plan.md`（远场软影
   权威路线，HFTS 已降级 backlog）· `docs/shadow_routes_plan.md`（**阴影路线形态唯一定案载体**：`configs/shadow.lua` 的 `mode` 枚举形状与四条红线；改阴影配置键/门形前看）· `docs/hfts_izb_plan.md` · `docs/shader_object_组合成本与优化预留.md`
   （优化**未实施**）· `docs/脚本长期规划.md` + `script_spike/`（脚本长期线，独立于 Phase 编号）
-- **调研 / 活文档**：`docs/mdi_plan.md`（Multi Draw Indirect 路线**可行性定案载体**，未立项：
+- **调研 / 活文档**：`docs/mdi_plan.md`（Multi Draw Indirect 路线**可行性定案载体**，**2026-10-12 簇化轴
+  立项开工（§0 拍板 P4-P7、§9 编排）**、命令数轴挂起：
   DGC 的 `@8 PUSH_DATA` 为何不可删 / `push.base + DrawIndex` 统一公式 / 阶段划分与风险；
   动 indirect 前先读，别重推一遍） · `docs/DESCRIPTOR_HEAP_SPEC.md` · `docs/FSR输入契约.md`（Phase 14 批 14.2：
   FSR3-upscaler 四个每帧输入的**口径权威载体**——单位/坐标系/符号/采样时刻 + 逐条出处；
