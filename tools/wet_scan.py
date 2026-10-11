@@ -15,6 +15,9 @@ diffstruct 读数。**阳性锚点：非默认臂差分必须 > 0 px**（旋钮�
 另出**结构对比度前后对照**（判据拍板本体 → docs/phase15_plan.md §2 批次表 15.2 行）：
 wet 开/关 × SSR 开/关 四图，两对 diffstruct（各 SSR开−SSR关），对照 p90/p10 与 Δ<0。
 
+共享骨架（smoke 出图 / diffstruct 解析 / markdown 表 / log·fail·前置检查）住在
+`tools/scan_common.py`——与 `ssr_scan.py`（18 臂表驱动）同源，两处不各抄一份（④ 纪律）。
+
 用法（复跑命令示例）:
     python3 tools/wet_scan.py                          # 全表（13 臂 + 2 张对照补图）→ markdown 到 stdout
     python3 tools/wet_scan.py --only dark=0.4 --twice  # 复现性自证：同一臂连跑两次对同一基线读数
@@ -29,15 +32,15 @@ from __future__ import annotations
 import argparse
 import datetime
 import re
-import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-SMOKE = ROOT / "tools" / "smoke.py"
-IMGQA = ROOT / "build" / "tools" / "imgqa" / "imgqa"
-SHOTS = ROOT / "build" / "rgl" / "screenshots"
-SIZE = "1280x720"  # 与红线/子步 C/D1 读数同尺寸，跨批可比
+import scan_common as sc
+
+ROOT = sc.ROOT
+SHOTS = sc.SHOTS
+SIZE = sc.SIZE
+TAG = "wet_scan"
 
 # 参考机位三键联动（configs/camera.lua 注释段，2026-10-10 用户提供，街道平视）。
 # 必须 mode/position/target 三键一起给：target 仅 trackball 消费（fps 模式写 target
@@ -66,24 +69,11 @@ KNOBS: list[tuple[str, list[str]]] = [
 
 def log(msg: str) -> None:
     """进度走 stderr——stdout 只准是 markdown 产物。"""
-    print(msg, file=sys.stderr, flush=True)
+    sc.log(msg)
 
 
 def fail(msg: str) -> None:
-    log(f"[wet_scan] FAIL: {msg}")
-    sys.exit(1)
-
-
-def check_prereq() -> None:
-    if not SMOKE.is_file():
-        fail(f"找不到 {SMOKE.relative_to(ROOT)}")
-    if not IMGQA.is_file():
-        fail(f"找不到 {IMGQA.relative_to(ROOT)}——先 just build-tools")
-
-
-def slug(key: str, value: str) -> str:
-    """臂名 → 文件名安全 slug（smoke.py 的 --name 只准文件名）。点→p、负号→m。"""
-    return "d2_" + key.replace("_", "") + "_" + value.replace(".", "p").replace("-", "m")
+    sc.fail(TAG, msg)
 
 
 def shot(name: str, ssr: bool, sets: list[str]) -> str:
@@ -91,47 +81,14 @@ def shot(name: str, ssr: bool, sets: list[str]) -> str:
 
     机位三键在**每个臂**都带：默认档也拍参考机位，臂对默认档的差分才同机位可比。
     """
-    cmd = [sys.executable, str(SMOKE), "shot", "--name", name, "--size", SIZE]
-    if ssr:
-        cmd.append("--ssr")
-    cmd += REF_CAM
-    for s in sets:
-        cmd += ["--set", s]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    if proc.returncode != 0:
-        log(f"[wet_scan] smoke.py 退出码 {proc.returncode}，臂 {name} 输出：\n{proc.stdout}\n{proc.stderr}")
-        fail(f"出图失败：{name}（sets={sets} ssr={ssr}）")
-    return proc.stdout
+    return sc.shot(TAG, name, ssr, sets, cam=REF_CAM)
 
 
-def diffstruct(a: str, b: str) -> dict[str, str]:
-    """调 imgqa diffstruct 算子并解析报告值（口径在算子本体，这里只搬运不重抄）。"""
-    proc = subprocess.run([str(IMGQA), "diffstruct", "--a", str(a), "--b", str(b)],
-                          capture_output=True, text=True)
-    if proc.returncode != 0:
-        log(f"[wet_scan] diffstruct 退出码 {proc.returncode}：\n{proc.stdout}\n{proc.stderr}")
-        fail(f"diffstruct 失败：{a} vs {b}")
-    out = proc.stdout
-    m = re.search(r"差分像素（线性亮度 \|Δ\|>[\d.]+）: (\d+) = ([\d.]+)%", out)
-    if not m:
-        fail(f"diffstruct 输出解析失败（口径文案改了？同步改本脚本）：\n{out}")
-    got = {
-        "diff": int(m.group(1)),
-        "diff_pct": m.group(2),
-        "darker": "0", "brighter": "0", "min_dark": "—", "ratio": "—", "extent": "",
-    }
-    if (m := re.search(r"变暗（Δ<0，线性亮度域）\s*: (\d+)（占差分 ([\d.]+)%，占画面 ([\d.]+)%）", out)):
-        got["darker"] = m.group(1)
-    if (m := re.search(r"变亮（Δ>0）\s*: (\d+)；变暗像素 Δ 最小值 = (\S+)", out)):
-        got["brighter"], got["min_dark"] = m.group(1), m.group(2)
-    if (m := re.search(r"p10/p50/p90 = (\S+) / (\S+) / (\S+)；p90/p10 = (\S+)", out)):
-        got["ratio"] = m.group(4)
-    if (m := re.search(r"^画面 (\d+) x (\d+)", out, re.M)):
-        got["extent"] = f"{m.group(1)}x{m.group(2)}"
-    return got
+def diffstruct(a: Path, b: Path) -> dict[str, object]:
+    return sc.diffstruct(TAG, a, b)
 
 
-def run_arm(name: str, ssr: bool, sets: list[str], base_png: Path) -> dict[str, str]:
+def run_arm(name: str, ssr: bool, sets: list[str], base_png: Path) -> dict[str, object]:
     shot(name, ssr, sets)
     png = SHOTS / f"{name}.png"
     if not png.is_file():
@@ -146,10 +103,10 @@ def main() -> int:
     ap.add_argument("--twice", action="store_true",
                     help="配合 --only：同一臂连跑两次、各对默认档读数并打印差值（复现性自证）")
     args = ap.parse_args()
-    check_prereq()
+    sc.check_prereq(TAG)
 
     today = datetime.date.today().isoformat()
-    rows: list[str] = []
+    rows: list[list[str]] = []
     anchors: list[tuple[str, bool]] = []
     gpu = "未取到"
 
@@ -164,7 +121,7 @@ def main() -> int:
         if not value or (key, value) not in [(k, v) for k, vs in KNOBS for v in vs]:
             fail(f"--only {args.only!r} 不在臂表里（臂表见 KNOBS，默认档写 default）")
         name = slug(key, value)
-        log(f"[wet_scan] 基线臂 default（SSR 开，参考机位）…")
+        log(f"[{TAG}] 基线臂 default（SSR 开，参考机位）…")
         shot("d2_default", True, [])
         base = SHOTS / "d2_default.png"
         runs = [name, name + "_r2"] if args.twice else [name]
@@ -174,48 +131,46 @@ def main() -> int:
             print(f"| {n} | 差分 {r['diff']} px = {r['diff_pct']}% | Δ<0 {r['darker']} | "
                   f"Δ>0 {r['brighter']} | p90/p10 {r['ratio']} |")
         if args.twice and len(readings) == 2:
-            d0, d1 = readings[0]["diff"], readings[1]["diff"]
+            d0, d1 = int(readings[0]["diff"]), int(readings[1]["diff"])
             print(f"\n复现性：两次差分 {d0} vs {d1}，差 |Δ| = {abs(d0 - d1)} px"
                   f"（对照 SSR-on run-to-run 漂移量级 ~600 px → docs/phase15_plan.md §3.3 子步 C）")
         return 0
 
     # ── 全表 ──
-    log("[wet_scan] 基线臂 default（出厂 wet 块，SSR 开，参考机位）…")
+    log(f"[{TAG}] 基线臂 default（出厂 wet 块，SSR 开，参考机位）…")
     out = shot("d2_default", True, [])
     if m := re.search(r"GPU    : (.+)", out):
         gpu = m.group(1).strip()
     base = SHOTS / "d2_default.png"
-    rows.append("| （默认档） | d2_default | 基线 | — | — | — | — | — | — |")
+    rows.append(["（默认档）", "d2_default", "基线", "—", "—", "—", "—", "—"])
     for key, values in KNOBS:
         for value in values:
             name = slug(key, value)
-            log(f"[wet_scan] 臂 {key}={value} …")
+            log(f"[{TAG}] 臂 {key}={value} …")
             r = run_arm(name, True, arm_sets(key, value), base)
-            ok = r["diff"] > 0
+            ok = int(r["diff"]) > 0
             anchors.append((f"{key}={value}", ok))
             note = "（消融档）" if (key, value) == ("strength", "0") else ""
-            rows.append(f"| {key}={value}{note} | {name} | {r['diff']} = {r['diff_pct']}% | "
-                        f"{r['darker']} | {r['brighter']} | {r['min_dark']} | {r['ratio']} | "
-                        f"{'PASS' if ok else '**FAIL**'} |")
+            rows.append([f"{key}={value}{note}", name, f"{r['diff']} = {r['diff_pct']}%",
+                str(r["darker"]), str(r["brighter"]), str(r["min_dark"]), str(r["ratio"]),
+                "PASS" if ok else "**FAIL**"])
 
     # ── 结构对比度前后对照（判据拍板本体）──
     # 四图两对：wet开+SSR开 = d2_default、wet关+SSR开 = d2_strength_0（复用扫描臂），
     # 另补 SSR 关两张。每对 = 同 wet 档的 SSR开−SSR关，对照两对的 p90/p10 与 Δ<0。
-    log("[wet_scan] 结构对照补图：wet开+SSR关 …")
+    log(f"[{TAG}] 结构对照补图：wet开+SSR关 …")
     shot("d2_struct_wet_ssr_off", False, [])
-    log("[wet_scan] 结构对照补图：wet关+SSR关 …")
+    log(f"[{TAG}] 结构对照补图：wet关+SSR关 …")
     shot("d2_struct_wetoff_ssr_off", False, ["strength=0"])
     pairs = {
         "湿面关（strength=0）": (SHOTS / "d2_strength_0.png", SHOTS / "d2_struct_wetoff_ssr_off.png"),
         "湿面开（出厂默认）": (SHOTS / "d2_default.png", SHOTS / "d2_struct_wet_ssr_off.png"),
     }
-    struct_rows: list[str] = []
-    struct: dict[str, dict[str, str]] = {}
+    struct_rows: list[list[str]] = []
     for label, (a, b) in pairs.items():
         r = diffstruct(a, b)
-        struct[label] = r
-        struct_rows.append(f"| {label} | {a.name} − {b.name} | {r['diff']} = {r['diff_pct']}% | "
-                           f"{r['darker']} | {r['brighter']} | {r['min_dark']} | {r['ratio']} |")
+        struct_rows.append([label, f"{a.name} − {b.name}", f"{r['diff']} = {r['diff_pct']}%",
+            str(r["darker"]), str(r["brighter"]), str(r["min_dark"]), str(r["ratio"])])
 
     n_fail = sum(1 for _, ok in anchors if not ok)
     print("# 湿面六旋钮扫描表（Phase 15 批 15.2 子步 D2）\n")
@@ -226,20 +181,21 @@ def main() -> int:
     print("- 指标 = `imgqa diffstruct`（A=臂、B=默认档，线性亮度域）；"
           "阳性锚点 = 非默认臂差分 > 0 px（旋钮不动像素 = 参数没接上）\n")
     print("## 扫描表（13 臂）\n")
-    print("| 臂 | 出图 | 差分 px | Δ<0 | Δ>0 | 变暗Δ最小 | p90/p10 | 锚点 |")
-    print("|---|---|---|---|---|---|---|---|")
-    print("\n".join(rows))
+    print(sc.md_table(["臂", "出图", "差分 px", "Δ<0", "Δ>0", "变暗Δ最小", "p90/p10", "锚点"], rows))
     print(f"\n阳性锚点：{len(anchors) - n_fail}/{len(anchors)} PASS"
           + ("；FAIL 臂：" + ", ".join(k for k, ok in anchors if not ok) if n_fail else ""))
     print("\n## 结构对比度前后对照（每对 = 同 wet 档的 SSR开 − SSR关）\n")
-    print("| wet 档 | 对 | 差分 px | Δ<0 | Δ>0 | 变暗Δ最小 | p90/p10 |")
-    print("|---|---|---|---|---|---|---|")
-    print("\n".join(struct_rows))
+    print(sc.md_table(["wet 档", "对", "差分 px", "Δ<0", "Δ>0", "变暗Δ最小", "p90/p10"], struct_rows))
     print("\n判据拍板 = 「反射结构的对比度」：对照两对的 p90/p10 与 Δ<0"
           "（→ docs/phase15_plan.md §2 批次表 15.2 行）。")
     print("\n复跑：`python3 tools/wet_scan.py`（全表）· "
           "`python3 tools/wet_scan.py --only dark=0.4 --twice`（复现性自证）")
     return 1 if n_fail else 0
+
+
+def slug(key: str, value: str) -> str:
+    """臂名 → 文件名安全 slug（smoke.py 的 --name 只准文件名）。点→p、负号→m。"""
+    return "d2_" + key.replace("_", "") + "_" + value.replace(".", "p").replace("-", "m")
 
 
 if __name__ == "__main__":

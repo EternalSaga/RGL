@@ -44,6 +44,29 @@ void collectDiff(const cv::Mat& lumaA, const cv::Mat& lumaB, double minDelta,
     }
 }
 
+/// 域交叉的逐像素计数（口径全部集中在这里，与 collectDiff 的差分集合判据同一条 ε）。
+/// 从双重循环里拆出来是为了认知复杂度：合写 18 > 15 直接打红 style-check，而这几行
+/// 判据（门控 / 命中率分子 / 变暗子集）拆散到两处迟早漂成两套口径。
+void domainPixel(double rough, double d, double gate, double minDelta,
+    DiffStructStat& st, std::vector<double>& darkRough)
+{
+    // 过门控像素 = 0<rough<gate 的**全图**计数（参考实现在差分判定之外数它，
+    // 挪进差分集会把「没变但光滑」的像素漏出分母；g=0 天空排除，口径见头注释）。
+    const bool inGate = rough > 0.0 && rough < gate;
+    if (inGate)
+        ++st.gatePixels;
+    // 命中率分子（§3.2 未还账⑤）：|Δ|>ε ∧ 过门控。**两个口径的交集不是子集关系**
+    // ——差分集里有干面（域外变暗 = 判据要抓的），门控集里有「光滑但没命中」的，
+    // 所以命中率必须单独数，不能拿 darker/gatePixels 或 diff/gatePixels 凑。
+    if (inGate && std::abs(d) > minDelta)
+        ++st.gateDiff;
+    if (d >= 0.0 || std::abs(d) <= minDelta)
+        return;
+    darkRough.push_back(rough);
+    if (rough >= gate)
+        ++st.darkOutsideGate;  // 域外变暗 = 减法漏到干面
+}
+
 /// 第二遍（仅 rough 在场时跑）：**影响域交叉**与两个分布。
 /// 为什么融成一遍不行 / 拆两遍为什么不要钱：本算子量的是 1280×720 的一次性判据，多一遍
 /// 线性扫描是微秒级；换来的是「差分集合」与「域交叉」两条口径各自能独立读、也各自在认知
@@ -55,18 +78,8 @@ void collectDomain(const cv::Mat& lumaA, const cv::Mat& lumaB, const cv::Mat& ro
         const double* ra = lumaA.ptr<double>(y);
         const double* rb = lumaB.ptr<double>(y);
         const double* rr = rough.ptr<double>(y);
-        for (int x = 0; x < lumaA.cols; ++x) {
-            // 过门控像素 = 0<rough<gate 的**全图**计数（参考实现在差分判定之外数它，
-            // 挪进差分集会把「没变但光滑」的像素漏出分母；g=0 天空排除，口径见头注释）。
-            if (rr[x] > 0.0 && rr[x] < gate)
-                ++st.gatePixels;
-            const double d = ra[x] - rb[x];
-            if (d >= 0.0 || std::abs(d) <= minDelta)
-                continue;
-            darkRough.push_back(rr[x]);
-            if (rr[x] >= gate)
-                ++st.darkOutsideGate;  // 域外变暗 = 减法漏到干面
-        }
+        for (int x = 0; x < lumaA.cols; ++x)
+            domainPixel(rr[x], ra[x] - rb[x], gate, minDelta, st, darkRough);
     }
 }
 
@@ -114,8 +127,12 @@ DiffStructStat diffStructStat(const cv::Mat& lumaA, const cv::Mat& lumaB,
     }
 
     std::vector<double> darkRough;  // 变暗像素的 roughness（分布输入）
-    if (st.hasRough)
+    if (st.hasRough) {
         collectDomain(lumaA, lumaB, rough, gate, minDelta, st, darkRough);
+        // 分母 0 → NaN 不是 0（无定义 ≠ 零命中，同 diffStructRatio 的纪律）。
+        if (st.gatePixels > 0)
+            st.hitRate = static_cast<double>(st.gateDiff) / static_cast<double>(st.gatePixels);
+    }
     if (!darkRough.empty()) {
         std::sort(darkRough.begin(), darkRough.end());
         st.roughMin = darkRough.front();

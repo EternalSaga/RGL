@@ -17,6 +17,15 @@ return {
     -- 键恰好命中 1 次）——靶配置的每个旗标都必须"在场且可核对"，不吃隐式默认。
     ssr = {
         enabled = false,
+        -- 批 15.3 子步 A（还 §3.2 未还账④）：五枚画质系数**显式写出**（值 = SsrTuning 出厂
+        -- 默认，行为零变化）。18 臂扫描表复跑驱动 tools/ssr_scan.py 经 smoke.py --set 注入
+        -- 这五枚键，patch_lua 的「键命中 ≠ 1 即 FAIL」要求键在场——与 `enabled` 写在这里
+        -- 同一条理由：靶配置的每个旗标都"在场且可核对"，不吃隐式默认。
+        max_distance_radii = 0.52,
+        thickness_px = 6.0,
+        bias_px = 0.6,
+        rough_full = 0.15,
+        rough_cutoff = 0.40,
     },
     -- 批 15.2B：湿面 G-buffer 调制**钉死关**。本靶测的是 SSR 闭式凸包，而镜面 roughness
     -- 恒 0.122 = wet=1 满调制 ⟹ 不钉则出厂湿面调制改写 metalrough/albedo，判据 A 的

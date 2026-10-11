@@ -7,6 +7,8 @@
 //   ① |Δ| 的 p10/p50/p90 与 **p90/p10 比值**（结构对比度：只在 |Δ|>ε 的差分集合上算）
 //   ② **Δ<0（变暗）像素数**——「命中处减 IBL specular」生效的阳性锚点（15.1 时代恒 0）
 //   ③ 影响域交叉：变暗 ∧ roughness ≥ gate（dump_gbuf=3 的 metalrough .g = UNORM8）必须 = 0
+//   ④ **命中率 = |Δ|>ε ∧ 过门控 / 过门控**（15.3 子步 A 还 §3.2 未还账⑤：此前手算）——
+//     报告值不是判据；需 --gbuf 在场，缺席报「需 --gbuf」、分母 0 报「无定义」，两者都不是 0
 //
 // 与一次性参考实现 /tmp/opencode/ssr_subtract_check.py 的口径对账（该脚本本算子落地后作废）：
 //   · 差分集合：脚本数 `d != 0`，本算子数 `|Δ| > minDelta`（默认 1e-6）。两者对 PNG 字节图
@@ -22,6 +24,7 @@
 //   它防的是 ε 被显式给 0 之类的调用形态（比值无定义 ≠ 比值是 0，写 0 = 把失效读成满分，
 //   同 `shadowPenumbraWidth` 的 NaN 纪律）。selftest 用 `diffStructRatio` 钉住这条分支。
 #include <cstdint>
+#include <limits>
 
 #include <opencv2/core.hpp>
 
@@ -42,6 +45,11 @@ struct DiffStructStat {
     bool hasRough = false;
     int64_t darkOutsideGate = 0;  ///< 变暗 ∧ rough ≥ gate —— **判据：必须 = 0**
     int64_t gatePixels = 0;       ///< 过门控像素 0 < rough < gate（全图，非差分集）
+    int64_t gateDiff = 0;         ///< |Δ| > minDelta ∧ 过门控 —— 命中率分子（§3.2 未还账⑤）
+    /// 命中率 = gateDiff / gatePixels（「过门控分母命中率」的硬口径，15.3 子步 A ⑤）。
+    /// 分母为 0 时 = **NaN 不是 0**（同 ratio 的纪律：无定义 ≠ 零命中，写 0 = 把
+    /// 「量具取不出数」读成「一个都没命中」）。rough 缺席时同为 NaN。
+    double hitRate = std::numeric_limits<double>::quiet_NaN();
     double roughMin = 0.0, roughP50 = 0.0, roughMax = 0.0;  ///< 变暗像素的 roughness 分布
     bool roughDistValid = false;  ///< 变暗集非空才有分布
 };

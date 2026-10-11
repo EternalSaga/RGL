@@ -50,6 +50,10 @@ std::vector<SubcommandSpec> diffStructSpecs()
                 "出处 → `imgqa check`（`diffstruct-dark-anchor` / `diffstruct-dark-domain`）。",
                 "p10 = 0 时比值报 **inf 并标注**，不写 0（比值无定义 ≠ 比值是 0，同 "
                 "`shadowPenumbraWidth` 的 NaN 纪律：写 0 = 把量具取不出数读成满分）。",
+                "④ **命中率 = |Δ|>ε ∧ 过门控 / 过门控**（还 §3.2 未还账⑤，报告值非判据）：只在 "
+                "--gbuf 在场时报；缺席报「需 --gbuf」、过门控分母为 0 报「无定义」——**两者都不是 "
+                "0**（缺输入/无定义被读成「零命中」= 把量具状态当读数）。分子分母口径与 ③ 同 "
+                "（分母 = 全图 0<rough<gate，分子 = 其中 |Δ|>ε 者）。",
             },
             false,
             "",

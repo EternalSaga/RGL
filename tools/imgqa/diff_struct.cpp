@@ -90,8 +90,12 @@ void printDiffStructReport(const DiffStructStat& st, const std::string& aPath,
     } else {
         std::printf("|Δ| 分位：差分集合为空，p10/p50/p90 与比值无定义（不是 0）\n");
     }
-    if (!st.hasRough)
+    if (!st.hasRough) {
+        // 命中率没有 roughness 通道就没有分母——**报「需 --gbuf」而不是 0**（0 会被读成
+        // 「一个都没命中」，缺输入与读数是两回事，同 ratio 的 NaN 纪律）。
+        std::printf("④ 命中率（|Δ|>ε ∧ 过门控 / 过门控）: 需 --gbuf（过门控分母要 roughness 通道）\n");
         return;
+    }
     std::printf("③ 变暗 ∧ roughness≥%.2f      : %lld（判据：必须 = 0）\n", gate,
         static_cast<long long>(st.darkOutsideGate));
     if (st.roughDistValid) {
@@ -102,6 +106,15 @@ void printDiffStructReport(const DiffStructStat& st, const std::string& aPath,
     std::printf("参考：过门控（0<roughness<%.2f，g=0 天空除外）像素 = %lld = %.2f%%\n", gate,
         static_cast<long long>(st.gatePixels),
         100.0 * st.gatePixels / std::max<int64_t>(1, st.total));
+    // ④ 命中率（§3.2 未还账⑤：此前手算 = dump_gbuf=3 + 开关差分两个已有产物相除）。
+    // 分母 0 = 无定义，报「无定义」不报 0%（同 p90/p10 的 NaN 纪律）。
+    if (st.gatePixels > 0) {
+        std::printf("④ 命中率（|Δ|>ε ∧ 过门控 / 过门控）: %lld / %lld = %.2f%%\n",
+            static_cast<long long>(st.gateDiff), static_cast<long long>(st.gatePixels),
+            100.0 * st.hitRate);
+    } else {
+        std::printf("④ 命中率（|Δ|>ε ∧ 过门控 / 过门控）: 无定义（过门控分母 = 0，不是 0%%）\n");
+    }
 }
 
 /// 两条硬判据（其余全是报告值），容差理由一律从注册表取（`imgqa check` 打印的就是它们）。

@@ -2015,6 +2015,37 @@ void testDiffStructDomainGuard(Checker& c)
                 && std::abs(st.roughP50 - 0.08) < 1e-12 && std::abs(st.roughMax - 0.50) < 1e-12,
             std::to_string(st.roughP50));
     }
+    // ④b 命中率（§3.2 未还账⑤的算子级保证）：**门内 8 px、其中 2 px 命中 → 恰 0.25**。
+    //     分子 = |Δ|>ε ∧ 过门控 的**交集**——门外的差分与门内的未命中都不许进分子/分母，
+    //     所以构造三个干扰项：门外差分 ×2（进 diff 不进 gateDiff）、门内无差分 ×6（进分母
+    //     不进分子）、天空差分 ×1（两边都不进）。变异红线：分子漏与门控求交 → 4/8；
+    //     分母漏「g=0 除外」→ 8/9。
+    {
+        cv::Mat a = flat(0.5), b = flat(0.5);
+        cv::Mat rough = flat(0.5);  // 出厂全干（≥gate）：分母从 0 起步
+        for (int i = 0; i < 8; ++i)
+            rough.at<double>(0, i) = 0.2;  // 门内 8 px
+        b.at<double>(0, 0) = 0.51;         // 门内命中（变暗）
+        a.at<double>(0, 1) = 0.52;         // 门内命中（变亮）
+        a.at<double>(0, 9) = 0.53;         // 门外差分（干扰项：进 diff 不进分子）
+        b.at<double>(9, 9) = 0.54;         // 门外差分（同上）
+        rough.at<double>(5, 5) = 0.0;      // 天空
+        a.at<double>(5, 5) = 0.55;         // 天空差分（干扰项：两边都不进）
+        const DiffStructStat st = diffStructStat(a, b, rough, 0.40, 1e-6);
+        c.chk("diffstruct：门内 8 px 命中 2 → gateDiff=2、gatePixels=8、命中率恰 0.25",
+            st.gatePixels == 8 && st.gateDiff == 2 && st.hitRate == 0.25,
+            std::to_string(st.gateDiff) + "/" + std::to_string(st.gatePixels));
+        c.chk("diffstruct：门外/天空差分不进命中率分子（diff=5 但 gateDiff=2）",
+            st.diff == 5 && st.gateDiff == 2, std::to_string(st.diff));
+    }
+    // ④c 命中率的分母 0 形态：全图无过门控像素 → **NaN 不是 0**（同 ratio 的纪律：
+    //     「量具取不出数」≠「一个都没命中」）。rough 缺席时同为 NaN（上面 ② 已覆盖缺席）。
+    {
+        const cv::Mat rough = flat(0.5);  // 全干，无天空也无湿面
+        const DiffStructStat st = diffStructStat(flat(0.5), flat(0.4), rough, 0.40, 1e-6);
+        c.chk("diffstruct：过门控分母 = 0 → 命中率 NaN（不是 0）",
+            st.gatePixels == 0 && st.gateDiff == 0 && !std::isfinite(st.hitRate));
+    }
     // ⑤ p10 = 0 → +inf。⚠ 这是**防御分支**：差分集合按 |Δ|>ε 构造，p10 数学上取不到 0，
     //    所以只能从公开 helper 钉（走 diffStructStat 永远走不到）。它防的是 ε 被显式给 0
     //    之类的调用形态——比值无定义 ≠ 比值是 0。
