@@ -1,0 +1,130 @@
+#pragma once
+//
+// format.h —— meshlet_pack 二进制产物布局的**唯一真相源**（★0-a）。
+//
+// ## 文件布局（小端；每段起始 16B 对齐，段间以 0x00 填充）
+//
+//   [FileHeader]                        固定 192B（static_assert 钉死）
+//   [PrimTable]      primCount × DiskPrim      16B/条
+//   [VertexPool]     vertexCount × 48B         ModelVertex 契约布局（pos f32×3 @0 /
+//                                              normal f32×3 @12 / uv f32×2 @24 /
+//                                              tangent f32×4 @32，rgl/shaders/model_schema.lua
+//                                              vertexLayouts 单一真相源，48B/顶点不变）
+//   [Clusters]       clusterCount × DiskCluster 44B/条
+//   [Tris]           扁平 u8 流                 逐簇 triCount×3 个 8bit 局部索引
+//   [Remap]          扁平 u32 流                逐簇 vertCount 个全局顶点下标
+//   [Groups]         groupCount × DiskGroup     36B/条（簇 LOD DAG 的 group 节点）
+//   [Nodes]          nodeCount × DiskNode       32B/条（clodBuildHierarchy 空间层级森林）
+//
+//   段内寻址：DiskCluster.triOffset = Tris 段内**字节**偏移；
+//            DiskCluster.remapOffset = Remap 段内**元素**偏移。
+//   全局顶点下标 = Remap[remapOffset + 局部索引]，恒指向 VertexPool。
+//
+// ## 与 docs/mdi_plan.md §7.2 数据面口径的对应
+//
+//   顶点池 138.4MB = VertexPool；L0 索引 8.5MB(8bit) + 其余级索引 8.2MB = Tris 全量
+//   （L0 = 前缀，按 group.depth==0 切分）；重映射 11.9MB(32bit) = Remap 全量。
+//   LOD 不增顶点（简化只在原顶点集上产索引表）⟹ 全部 12 级共用同一份 VertexPool。
+//
+// ## 语义（渲染侧读法，= clusterlod.h 头注释的渲染规则）
+//
+//   簇 c 属于 group c.group（DiskGroup.depth = DAG 级）；c.refined = 产出 c 的**更细**
+//   group 下标（-1 = 原始几何 L0）。簇该画 ⟺ groups[c.group].error > 阈值 且
+//   (c.refined == -1 或 groups[c.refined].error ≤ 阈值)。层级 Nodes 是每 DAG 级一棵
+//   树的森林：前 levelCount 个节点是各级根，叶节点 .group ≥ 0 指回 Groups。
+//
+// ## 坐标系
+//
+//   顶点与包围体全部是**源 glb 单位**（未乘 scene.lua 的 scale=0.01、未应用 node
+//   transform）——与 §7 实测口径一致（spike 喂的也是原始 accessor 数据）。世界换算
+//   归引擎侧（★0-b/★1 经对象矩阵）。
+//
+//   🔴 **tangent.w 恒 +1（规范值）**——bistro 实测 UV 手性 **82.00% 三角为负**
+//   （2,322,319 / 2,832,120，与引擎 loader 同法逐三角 UV Jacobian，--stats 每次
+//   打印可复核）。手性是**逐三角形**量（引擎 normalmap.slang 的 applyNormalMapTBN
+//   消费 B = cross(N,T)·w；gltf_loader fillTangents 按 UV Jacobian 符号逐三角推），
+//   共享顶点池存不下 ⟹ **★1 的 mesh shader 必须逐三角重算手性**（loader 同法），
+//   否则该比例的面法线翻错。
+//
+// ## 缓存键（§7.8 拍板 3：构建期生成、不进 git）
+//
+//   sourceSha1 = 输入 glb 全文件 SHA1；configFingerprint = 钉死配置
+//   （clodDefaultConfig(128) 全默认）的 FNV-1a（字段序逐字段哈希，见 packer.cpp）。
+//   ★0-b 的缓存键 = 两者拼接 + toolVersion。
+//
+#include <cstdint>
+
+namespace RGL::meshpack {
+
+inline constexpr char kMagic[8] = {'R', 'G', 'L', 'C', 'L', 'O', 'D', 0};
+inline constexpr uint32_t kFormatVersion = 1;  ///< 产物布局版本（本文件描述的布局）
+inline constexpr uint32_t kToolVersion = 1;    ///< 打包器版本（算法改动时抬）
+inline constexpr uint32_t kSectionAlign = 16;
+inline constexpr uint32_t kVertexStride = 48;  ///< ModelVertex 契约（model_schema.lua）
+inline constexpr uint32_t kHierarchyNodeWidth = 8;  ///< §7.2 层级 8,705 节点的口径
+
+// 文件头：固定大小、字段即偏移表。新增字段 = 抬 kFormatVersion。
+struct FileHeader {
+    char magic[8];
+    uint32_t formatVersion;
+    uint32_t toolVersion;
+    uint8_t sourceSha1[20];   ///< 输入 glb 全文件 SHA1
+    uint32_t configFingerprint;  ///< 钉死配置的 FNV-1a（口径见 packer.cpp）
+    uint32_t primCount;
+    uint32_t vertexCount;   ///< 顶点池元素数（48B/元素）
+    uint32_t clusterCount;
+    uint32_t groupCount;
+    uint32_t nodeCount;
+    uint32_t levelCount;    ///< DAG 级数（bistro = 12）
+    uint32_t nodeWidth;     ///< 层级分支因子（= kHierarchyNodeWidth）
+    uint64_t l0TriangleCount;
+    uint64_t totalTriangleCount;  ///< 全部 LOD 级三角合计
+    uint64_t offPrimTable, offVertexPool, offClusters, offTris, offRemap, offGroups, offNodes;
+    uint32_t reserved[12];  ///< 头部扩位（凑满 192B = 16 的倍数；用掉一个减一个）
+};
+static_assert(sizeof(FileHeader) == 192, "FileHeader 布局是产物契约，改字段必须抬 kFormatVersion");
+
+// 源 primitive 表：★0-b 的 importer 用它把簇资产对回 glb 的 mesh/material。
+// 顺序 = tinygltf meshes[].primitives[] 展平序（= §7 spike dump.py 的喂入序）。
+struct DiskPrim {
+    uint32_t vertexBase;   ///< 该 primitive 在 VertexPool 中的首顶点下标
+    uint32_t vertexCount;
+    uint32_t indexCount;   ///< 源索引数（三角数 ×3）
+    uint32_t material;     ///< glb material 下标（无 = 0xFFFFFFFF）
+};
+static_assert(sizeof(DiskPrim) == 16);
+
+// 簇描述：≤128 顶点 + 8bit 三角索引 + 逐簇包围体（bounds 仅用于剔除，
+// error 跨 DAG 非单调——渲染判据走 group，见 clusterlod.h 头注释）。
+struct DiskCluster {
+    uint32_t group;
+    int32_t refined;       ///< 产出本簇的更细 group 下标，-1 = 原始几何
+    uint32_t triCount;     ///< ≤ 128
+    uint32_t vertCount;    ///< ≤ 128（8bit 局部索引因此可解）
+    uint32_t triOffset;    ///< Tris 段字节偏移（triCount×3 个 u8）
+    uint32_t remapOffset;  ///< Remap 段元素偏移（vertCount 个 u32 全局下标）
+    float center[3];
+    float radius;
+    float error;
+};
+static_assert(sizeof(DiskCluster) == 44);
+
+// 簇 LOD DAG 的 group（= clodGroup）：simplified = 该 group 简化产物的保守包围体，
+// error = 其簇的累积误差（terminal group = FLT_MAX）。
+struct DiskGroup {
+    int32_t depth;         ///< DAG 级（0 = L0）
+    uint32_t prim;         ///< 归属 primitive（clodBuild 逐 primitive 跑）
+    float center[3], radius, error;  ///< clodGroup::simplified
+    uint32_t clusterOffset, clusterCount;  ///< 连续簇区间 [offset, offset+count)
+};
+static_assert(sizeof(DiskGroup) == 36);
+
+// 空间层级节点（= clodNode）：森林，前 levelCount 个是各级根；bounds.error = 子树最坏误差。
+struct DiskNode {
+    float center[3], radius, error;
+    int32_t group;         ///< 叶：group 下标；内部节点 = -1
+    uint32_t childOffset, childCount;
+};
+static_assert(sizeof(DiskNode) == 32);
+
+}  // namespace RGL::meshpack

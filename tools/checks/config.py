@@ -36,13 +36,15 @@ DEFAULT_COGNITIVE_THRESHOLD = 15
 DEFAULT_COGNITIVE_ERROR_THRESHOLD = 30
 DEFAULT_IMPL_THRESHOLD = 100
 
-# ─── 工具侧（tools/）样式检查（批次 A：imgqa 纳入样式规则）──────────────────────
+# ─── 工具侧（tools/）样式检查（批次 A：imgqa 纳入样式规则；2026-10-12 ★0-a：meshlet_pack 纳入）──
 # 工具单元 = compile_commands 里落在 TOOL_UNIT_PREFIXES 下、后缀在 TOOL_UNIT_SUFFIXES
-# 里的编译命令（imgqa 是 EXCLUDE_FROM_ALL 的 C++ 工具，configure 期仍导出编译命令，
-# 故 checks 无需 imgqa 被构建就能解析它——它的命令里没有 -fmodule-file，不依赖 BMI）。
+# 里的编译命令（imgqa / meshlet_pack 是 EXCLUDE_FROM_ALL 的 C++ 工具，configure 期仍导出
+# 编译命令，故 checks 无需它们被构建就能解析——命令里没有 -fmodule-file，不依赖 BMI）。
+# **新工具进 TOOL_UNIT_PREFIXES 时零基线起步**（不登 tool_baseline.json）：imgqa 那份基线是
+# 历史包袱，不是范例；工具不进样式面 = 会烂（与"不进 build-tools 就没人发现编译红"同一条教训）。
 # **Doxygen 规则不纳入工具侧**：imgqa 的注释是散文式不是 Doxygen 式，套 doc 规则 =
 # 265 条 d2/d4/d6 噪声（打印 helper 各缺 5 份注释），main.py 的 doc 段跳过工具单元。
-TOOL_UNIT_PREFIXES = ("tools/imgqa/",)
+TOOL_UNIT_PREFIXES = ("tools/imgqa/", "tools/meshlet_pack/")
 TOOL_UNIT_SUFFIXES = (".cpp", ".h")
 
 # 工具侧阈值：起步与 rgl 现值对齐，但**各写一份**（后续单独收紧工具侧时不牵动 rgl，

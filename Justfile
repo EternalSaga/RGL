@@ -212,6 +212,7 @@ style-check *ARGS="":
 build-tools:
     @cmake --build {{ BUILD }} --target imgqa
     @{{ BUILD }}/tools/imgqa/imgqa selftest
+    @cmake --build {{ BUILD }} --target meshlet_pack
     just checks
 
 # 全量编译基准: clean-all + config + 计时编译

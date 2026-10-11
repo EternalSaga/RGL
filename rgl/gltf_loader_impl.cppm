@@ -353,8 +353,10 @@ static std::string resolvePrimitiveIndices(const tinygltf::Model& gltf, int mesh
 
 /**
  * 三角形 UV Jacobian 手性 w（expandPrimitive 切线填充抽出）：s1×s2 的 det 符号
- *（glTF core TANGENT 不含 w，spec 约定从几何推断；bistro UV 手性 92% 为负——
- * DirectX Y-down 传统）。
+ *（glTF core TANGENT 不含 w，spec 约定从几何推断；bistro **逐三角 82.00% 为负**
+ * ——2,322,319 / 2,832,120，2026-10-12 实测；若按"prim 内多数三角为负"口径则是
+ * 93.5%（1487/1591），旧注释写的"92%"是后一口径的约数但没写口径——**口径必须写，
+ * 否则换个人量出 82% 会以为这里错了**。DirectX Y-down 传统）。
  * @param indices primitive 索引（三角形 t = [3t..3t+2]）
  * @param uv 顶点 UV（交错 2 分量）
  * @param t 三角形下标

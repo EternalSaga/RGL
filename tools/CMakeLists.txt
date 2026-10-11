@@ -62,3 +62,6 @@ add_custom_command(
 
 # imgqa：区域归因图像判据工具箱（EXCLUDE_FROM_ALL 继承本目录；just imgqa 显式构建）
 add_subdirectory(imgqa)
+# meshlet_pack：离线簇化打包器（簇化轴 ★0-a；EXCLUDE_FROM_ALL 继承本目录，
+# just build-tools 显式构建；依赖红线 = 不链引擎，见其 CMakeLists 头注释）
+add_subdirectory(meshlet_pack)
