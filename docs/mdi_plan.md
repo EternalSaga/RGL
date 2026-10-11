@@ -612,3 +612,62 @@ GPU 版必须继承：视锥 = 复用 `extractFrustum`/`sphereInFrustum`（保�
 - **门关逐位不变**（P5）是每批都要重跑的护栏，不是只测一次。
 - 每批交付的测试由主 agent **当场变异验红后才入账**（skill `rgl-test-discipline`）。
 - 顶点格式压缩（48B → 量化）**是另一条轴**，不混进簇化批次；簇化之后可再拿 2-3×。
+
+## 10. ★1-a 设计定案（2026-10-12 主 agent 拍板，实现前照做）
+
+★1-a 是本轮唯一还没做设计的大块（要动 shader 契约 + 表布局）。四个决定，实现时**别再重新讨论**：
+
+### 10.1 per-draw 的"我这个 primitive 的簇区间从哪来"
+
+产物里簇是**全局一张表**，而 ★1-a1 沿用现行的**逐 primitive 提交**（材质绑定原样不动）。mesh shader
+需要 `clusterBase`（`groupID.x + clusterBase` = 全局簇下标）。三个选项：
+
+| 方案 | 代价 | 门关逐位不变 | 裁决 |
+|---|---|---|---|
+| A. `ObjectDraw` 加两字段（stride 48 → 56） | 最省一张表 | **靠"没人读新字段"保证**（弱）——它改的是**所有** shader 热路径整读的结构 | ❌ |
+| **B. 新增独立表 `ObjectClusterRange{uint base; uint count;}`（stride 8，追加在 scene data 末尾）** | 多一张表 + 一个 offset | **构造性成立**：现有结构逐字节不动 | ✅ **采用** |
+| C. push constant 加 `clusterBase` | 零表改动 | 成立 | ❌ 把 per-draw CPU 成本带回来，与"交付 GPU-bound、CPU 有余量"反着走（§8 对 push-index 已表过态） |
+
+- **per-prim 簇区间由引擎加载时扫一遍算出**（61,518 簇 / 7,596 group，一次线性扫，微秒级）。
+  **不抬 `kFormatVersion`、不改工具**——`DiskGroup.prim` + `DiskCluster.group` 足够推出区间，
+  且逐 prim 的 group 是**连续**的（`clodBuild` 逐 primitive 调用、group 顺序追加）。
+- 表写入走 `scene_data` 现有生成路径（`just reflect` 重跑，生成物随改动提交）。
+
+### 10.2 管线条目与绑定
+
+- 现行条目按 **(顶点块, 纹理集)** 键控（376 条）。簇路径**只有一份顶点池** ⟹ 条目退化成按纹理集键控，
+  **不要**给每个簇再开条目。
+- 4 个簇 buffer（顶点池 / 簇表 / Tris / Remap）是**全局单例** ⟹ 放**固定 binding 下标**（像 scene data
+  那样），**不进** per-entry 描述符，避免条目数再涨。
+- 新 mesh shader 只多读这三样 + 现有 `ObjectDraw`/材质绑定；MVP 仍从 scene data 读（`readObjectMvp`）。
+
+### 10.3 🔴 两条硬前置（漏一条 = 图像静默错，不是编译错）
+
+1. **`tangent.w` 必须逐三角重算**：产物顶点池存的是 `w = +1` 占位，而 bistro **逐三角 82.00% 为负**，
+   `normalmap.slang` 消费 `worldT.w`（`B = cross(N,T) * w`）⟹ 不重算 = 82% 的面法线翻错。
+   公式与 loader **同式**（`uvTriangleHandedness`：`s1x·s2y − s2x·s1y < 0 → -1`），mesh shader 里
+   每三角 ~10 FLOP，可忽略。**别存逐顶点 w**：共享池里一个顶点被多三角引用，逐顶点存是**近似**，
+   逐三角重算是**忠实**于现行语义的。
+2. **`triCount ≤ 128` 的 8bit 契约**在 shader 侧要有断言形态（`numthreads` / `out indices` 上限
+   与产物契约对账），否则越界产物会静默画错（读取侧已拦，shader 侧是第二道）。
+
+### 10.4 剔除接法（★1-a2，先定形态再写码）
+
+- **★1-a2 采用"逐 primitive 分段压紧"**：可见簇按 primitive 分段压紧（稳定划分），每 prim 一个
+  indirect args（`groupCount` = 该段簇数）⟹ **材质绑定与提交结构与今天完全一致**，改动面最小。
+- **单 draw + bindless 材质**（一条 mesh draw 画完全场景可见簇）是真正的奖品（6942 draw → 1），
+  但它要 bindless 材质表 + 逐簇材质解析 ⟹ **归 ★1-b/★3 之后**，且那正是命令数轴（§4 A-E）与本轴
+  合流的地方——**别在 ★1-a2 顺手做**。
+- 对账伙伴 = ★0.5-a 的 `cullClustersLinear`（**线性扫描**，与 GPU 层级遍历算法不同）。
+  GPU 侧另加一条诊断：逐帧比对两个可见集，不一致**告警不中断**（照抄 primitive 路径的既有口径）。
+- 🔴 **★2 的选级必须与剔除耦合**（§7.3 重测：不耦合时 @1px 反而多提交 64% 三角）。
+
+### 10.5 批次切法（把 ★1-a 再切细，每步都能单独验收）
+
+| 步 | 内容 | 判据 |
+|---|---|---|
+| ★1-a0 | 4 个簇 buffer 上传 GPU（`MeshletAssetStore` 之上加 GPU 侧持有者） | 门关逐位不变；门开日志报 buffer 大小；`just test` 的 gpu 套件加一条**回读校验和**（设备级，无设备必须 FAIL 不 SKIP） |
+| ★1-a1 | 新 mesh shader + 条目 + 逐 prim 提交，**不剔不选级（恒 L0）** | **建立"簇路径 vs 现行路径"的图像统计地板**（★0.5-b）；差异必须可归因（预期集中在轮廓/UV 缝边缘，不是整块错） |
+| ★1-a2 | 层级遍历 + 逐簇剔除 + 分段压紧 | 与 `cullClustersLinear` 逐帧对账；提交三角落到 §7.3 的 1.08-1.30% 量级 |
+| ★1-b | 阴影段走簇路径（**只 CSM 档**，P6） | 阴影段 GPU 时间对照 6.28ms 基线；**非默认 cull 档单独冒烟 + syncval**（AGENTS 红线） |
+
