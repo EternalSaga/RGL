@@ -937,6 +937,37 @@ TEST_CASE("runtime_config：wet 块（批 15.2A 湿面参数）——缺块回�
 	}
 }
 
+TEST_CASE("runtime_config：meshlet 块（★0-b1 簇路径总门）——缺块 = false、显式命中、无扁平键双读") {
+	// 判据来源 = 实读 runtime_config_impl::readMeshletBlock / readBoolKey（缺键 = 不写目标字段）。
+	// 默认 false = P5 拍板「门关 = 逐位不变是硬护栏」的配置层前提；本批无消费者（★0-b1 只落
+	// 配置项与读取侧模块，接线 = ★0-b2/★1）。
+	// 变异红线声明：
+	//   ① 默认值翻成 true → 「缺块回落」与「RuntimeConfig{} 成员初始化」两条断言红。
+	//   ② readMeshletBlock 漏读 enable / 键名打错 → 「显式命中」红（探针值 true 读不到）。
+	//   ③ 加了扁平键双读兼容 → 「顶层 meshlet_enable 什么都不发生」红（两个真相源反模式）。
+	{  // 成员初始化默认路径（不看 lua 文件的默认值 = 主 agent 验收口径）
+		CHECK(RuntimeConfig{}.meshletEnable == false);
+	}
+	{  // 缺块 = 门关（出厂态 = 逐位护栏）
+		TempLua f("rt_meshlet_default", "return {}\n");
+		auto r = loadRuntimeConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->meshletEnable == false);
+	}
+	{  // 块内键名命中（探针值 true ≠ 默认 false，漏读即红）
+		TempLua f("rt_meshlet_on", R"lua(return { meshlet = { enable = true } })lua");
+		auto r = loadRuntimeConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->meshletEnable == true);
+	}
+	{  // **没有**扁平键的兼容双读（两个真相源 = 本项目反复登记的反模式）
+		TempLua f("rt_meshlet_flat", R"lua(return { meshlet_enable = true })lua");
+		auto r = loadRuntimeConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->meshletEnable == false);
+	}
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // diagnostics
 // ═══════════════════════════════════════════════════════════════════════════

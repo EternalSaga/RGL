@@ -254,6 +254,20 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg) {
 	readFloatKey(wet, "puddle_freq_radii", cfg.wet.puddleFreqRadii);
 }
 
+/**
+ * `meshlet` 嵌套块解析（★0-b1 簇路径总门）：`meshlet = { enable = … }` 一枚布尔。
+ * 缺块 / 缺键 = 保持结构体默认（`meshletEnable = false` = 门关 = 逐位不变护栏，P5 拍板）。
+ * 形态先例 = readFsrBlock（嵌套块 + readBoolKey，无扁平键双读兼容）。本批**只加配置项与
+ * 读取，不接线到任何渲染路径**（消费者 = ★0-b2/★1）；gate_lint 不挂号的理由与 ssr 块完全
+ * 同款（runtime.lua 键不在 gate_lint 管辖的两张回显表里，→ readSsrBlock 末段）。
+ */
+static void readMeshletBlock(const sol::table& root, RuntimeConfig& cfg) {
+	sol::table meshlet = root["meshlet"];
+	if (!meshlet.valid() || !meshlet.is<sol::table>())
+		return;
+	readBoolKey(meshlet, "enable", cfg.meshletEnable);
+}
+
 /** loadRuntimeConfig 定义（接口注释见 runtime_config.cppm）：headless/headless_size/win_size/show_after/present_mode/ui_font 逐一可选解析 + parseLlm。 */
 [[nodiscard]] std::expected<RuntimeConfig, Error> loadRuntimeConfig(std::string_view path) {
 	auto* logger = RLLogger::getInstance();
@@ -314,6 +328,7 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg) {
 		readFsrBlock(root, cfg);  // 批 14.6：FSR 调参收进嵌套块（无扁平键双读兼容）
 		readSsrBlock(root, cfg);  // 批 15.1：SSR 总开关（嵌套块，缺块/缺键 = false = 图里没有 ssr pass）
 		readWetBlock(root, cfg);  // 批 15.2：湿面参数（嵌套块，缺块/缺键 = WetTuning 默认；消费者 = deferred_geometry 湿面调制）
+		readMeshletBlock(root, cfg);  // ★0-b1：簇路径总门（嵌套块，缺块/缺键 = false = 门关逐位护栏；本批无消费者）
 		sol::optional<int> showAfter = root["show_after"];
 		if (showAfter)
 			cfg.showAfter = *showAfter;

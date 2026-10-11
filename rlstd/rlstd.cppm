@@ -178,6 +178,7 @@ using std::ifstream;
 using std::ios;
 using std::ios_base;
 using std::istream;
+using std::streamoff;  // 2026-10-12 补（★0-b1）：meshlet_asset 读产物文件 tellg 尺寸用
 using std::ostream;
 using std::ofstream;
 }  // namespace std

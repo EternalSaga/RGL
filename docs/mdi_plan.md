@@ -505,7 +505,8 @@ Morton 排序后的同级还紧 **3-10×**——摄影测量资产的重建面�
 | 批次 | 内容 | 判据（入账条件） | 渲染风险 |
 |---|---|---|---|
 | **★0-a 打包器** ✅ **已交付**（2026-10-12） | vcpkg 加 `meshoptimizer`；`third_party/meshoptimizer/`（vendored `clusterlod.h` + LICENSE + PATCHES.md）；`tools/meshlet_pack/`（glb → 簇产物 + 统计表 + `--verify`）；CMake 与 `just build-tools` 接入 | ① `just build-tools` 与 `just build` 双绿，且**引擎链接面无 meshoptimizer**（`nm -C build/rgl/rgl \| grep -c meshopt` = **0**，工具二进制 = 101）；② bistro 统计表与 §7.2 **逐项对拍**（配置钉死 = `clodDefaultConfig(128)` 全默认：max_vertices/max_triangles=128、min_triangles=42、partition_size=16、simplify_ratio=0.5、threshold=0.85、permissive=true）；③ `--verify` 四条自检绿 | **零**（不碰运行时） |
-| **★0-b 格式 + 构建期接入** | 二进制格式（magic/version/源 SHA1 缓存键）、构建期生成规则、importer 读入、门 = "该资产有簇产物吗" | **门默认关时截图逐位不变**（`just regress ab`）；产物缺失/存在两种情况启动均不红 | 零（门关 = 旧路径） |
+| **★0-b1 读取侧** ✅ **已交付**（2026-10-12） | `rgl/meshlet_asset.cppm` + `_impl`（rlbase，**纯 CPU 无设备**）：产物字节流 → 经校验的只读视图；门 `runtime.lua meshlet.enable` **默认 false**；`tests/test_meshlet_asset.cppm` 24 用例 | `just test` 304 全绿（无设备）；21 条反向用例**错误串两两不同**（可归因）；主 agent 独立变异两条（8bit 契约判据、段对齐判据）各红 2 条且归因干净；**端到端实测：真读取器读真 184MB 产物通过**（61,518 簇 / 7,596 group / 8,699 节点 / 12 级，临时用例验完即删） | 零（不接渲染路径） |
+| **★0-b2 构建期接入** | 构建期生成产物（源更新才重跑）+ GPU 上传 + 门接线（`meshlet.enable` AND "该资产有产物"） | **门默认关时截图逐位不变**（`just regress ab`）；产物缺失/存在两种情况启动均不红；**端到端冒烟**（引擎日志打印产物统计，与 `--stats` 对账） | 零（门关 = 旧路径） |
 | **★0.5 验收仪器**（P5 落地，🔴 ★1 前置） | 闭式解探针与 imgqa 判据扩展到簇档：**可见性归因**（被剔的每块都该剔）+ **逐像素误差上界**断言 | 仪器在**现行路径**上跑必须全绿（阳性锚点）；人为剔掉一块可见几何必须红（变异红线） | 零 |
 | **★1-a 簇路径 + 簇剔除** | 新 mesh shader（读簇描述 → ≤128 顶点 → 变换）+ GPU 层级遍历 + 逐簇可见性 + 压紧；**选级恒 L0** | 用 ★0.5 仪器判；G-buffer 提交几何应落到 §7.3 的 **1.65%** 量级（离线模拟数，作对照不作硬判据） | 中，可逐块归因 |
 | **★1-b 阴影段接入** | 阴影 mesh 走簇路径（**只 CSM 档**，P6） | 阴影段 GPU 时间对照 6.28ms 基线；**非默认 cull 档（`gpu_sync`/`gpu_lagged`）单独冒烟 + syncval**（AGENTS 红线：默认档不提交 cull CB） | 中高 |
@@ -530,6 +531,19 @@ L0 三角多重集 / 8bit 索引可解 / 逐簇包围体 / **DAG 结构不变量
 3. **`tangent.w` 逐三角 82.00% 为负**（§7.2 表）= **★1 硬前置**：mesh shader 不逐三角重算手性
    = 82% 的面法线翻错。同一条实测顺手把 `gltf_loader_impl.cppm` 里"92%"那条**没写口径**的旧注释
    钉死了（逐三角 82.00% / 逐 prim 多数 93.5% / 逐材质多数 94.7%）。
+
+**★0-b1 交付记录（2026-10-12，主 agent 亲验）**：读取侧 = `meshlet_asset`（rlbase）+ 24 条用例 +
+门 `meshlet.enable`（默认 false，真相源 = `runtime_config.cppm` 成员初始化）。三条要记的：
+
+1. **worker 实测抓出一条真设计 bug，主 agent 独立复核为真**：写侧段间 16B 对齐填充 ⟹ "段字节数
+   == Σ 计数"对**真产物**不成立（实测 Tris 段多 11B、Remap 段多 8B），判据必须是
+   `Σ ≤ 段字节 < Σ + 16`。**若当初写死严格相等，★0-b2 第一次加载就炸**。
+2. **两侧格式一致性**是裁决 2（引擎不 include `tools/`）留下的已知缺口，本批用**一次性端到端用例**
+   补了证据（真读取器读真 184MB 产物：簇/group/节点/顶点/级数全对，验完即删——**不留依赖 `/tmp`
+   产物、会静默 skip 的用例**）。常驻证据改由 ★0-b2 的构建期端到端冒烟承担（产物那时在 build 目录里）。
+3. **两条已知无护栏项**（★0-b2 或后续要收）：① 写侧抬 `kToolVersion` 会被引擎拒读，
+   联动只写在注释里没有机器护栏；② `MeshletAsset::image` 是公开成员（护栏禁 friend 挡了封装写法），
+   parse 后改它会让各 span 悬空，目前只有注释红线。
 
 **贯穿纪律**：
 

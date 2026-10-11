@@ -320,6 +320,19 @@ export struct RuntimeConfig {
 	 * shader 消费者 = deferred_geometry.frag.slang 湿面调制（15.2B 接线，默认开）。
 	 */
 	WetTuning wet;
+	/**
+	 * 簇化渲染路径（meshlet 产物）总门（configs/runtime.lua `meshlet` 块 `enable` 键，★0-b1）。
+	 *
+	 * **默认关**（`docs/mdi_plan.md` P5 拍板：门关 = 逐位不变是硬护栏）。逐资产门不在本键——
+	 * = 「该资产有没有簇产物」（§7.8 拍板 3：产物缺失 → 回落现行路径，未打包资产零风险）。
+	 * ★0-b1 只落**配置项与读取侧模块**（`rgl/meshlet_asset.cppm`），尚未接线到任何渲染路径
+	 * ⟹ 本键当前无消费者，接线发生在 ★0-b2/★1。
+	 *
+	 * 形态先例 = readSsrBlock（嵌套块 + readBoolKey，无扁平键双读兼容——两个真相源是本项目
+	 * 反复登记的反模式）。gate_lint 不挂号的理由与 ssr 块同款（runtime.lua 键不在 gate_lint
+	 * 管辖的两张回显表里，→ readSsrBlock 末段）。
+	 */
+	bool meshletEnable = false;
 
 	/** 「TAA 在不在图里」的唯一推导点（原 `scene.lua taa.enabled` 的消费者全部改走这里）。 */
 	[[nodiscard]] constexpr bool aaWantsTaa() const {

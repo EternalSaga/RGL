@@ -211,6 +211,8 @@ set(RGL_BASE_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/gltf_loader_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/image_codec.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/image_codec_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/meshlet_asset.cppm"      # ★0-b1：meshlet_pack 产物读取侧（只读视图+校验，纯 CPU 无设备）
+    "${CMAKE_CURRENT_SOURCE_DIR}/meshlet_asset_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/timing_util.cppm"      # 时间戳/时间统计纯函数层（自 profiler / present_timing / gpu_profiler 三处收敛）
     "${CMAKE_CURRENT_SOURCE_DIR}/profiler.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/profiler_impl.cppm"
