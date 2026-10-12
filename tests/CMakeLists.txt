@@ -88,7 +88,7 @@ set(RGL_TEST_SOURCES
     test_izb_engine_contract.cppm    # gpu 套件 11.3 补账：引擎真 SPV 的 ndc 口径/字节偏移/guard 契约
     test_mdi_drawindex.cppm          # gpu 套件 MDI 门：DrawIndex 语义 × stride16 × 零计数不跳号（docs/mdi_plan.md §6）
     test_meshlet_geometry.cppm       # gpu 套件 ★1-a0：簇产物 4 段 GPU 上传的设备级逐字节回读校验
-    test_descriptor_heap_ubo.cppm    # gpu 套件能力 spike：resource heap 能否放 eUniformBuffer 并被 ConstantBuffer<T> 读（+ binding→槽机制证伪）
+    test_descriptor_heap_ubo.cppm    # gpu 套件能力 spike：resource heap 能否放 eUniformBuffer 并被 ConstantBuffer<T> 读（+ binding→槽机制证伪）；dheap 4/5 = StructuredBuffer 元素 stride 8/44 设备端往返（R3 撤销条件第 2 条）
 )
 
 # ─── 11.3-1b 探针 SPIR-V（izb_spike mesh/frag，测试专用不入引擎 SPV 面）──────
@@ -115,6 +115,10 @@ compile_slang("${CMAKE_CURRENT_SOURCE_DIR}/shaders/mdi_groups.mesh.slang" MDI_GR
 # 主判据体 + 阳性对照体（同 binding/同 heap，只差读哪个成员/索引）
 compile_slang("${CMAKE_CURRENT_SOURCE_DIR}/shaders/dheap_ubo.comp.slang" DHEAP_UBO_COMP_SPV)
 compile_slang("${CMAKE_CURRENT_SOURCE_DIR}/shaders/dheap_ubo_wrong.comp.slang" DHEAP_UBO_WRONG_COMP_SPV)
+# StructuredBuffer 元素 stride 设备端往返（R3 撤销条件第 2 条，docs/constantbuffer_迁移计划.md
+# §8.4）：stride 8 与 **44**（非 16 倍数的奇数 stride）；主判据读元素 1/2，阳性对照读元素 0
+compile_slang("${CMAKE_CURRENT_SOURCE_DIR}/shaders/dheap_stride.comp.slang" DHEAP_STRIDE_COMP_SPV)
+compile_slang("${CMAKE_CURRENT_SOURCE_DIR}/shaders/dheap_stride_wrong.comp.slang" DHEAP_STRIDE_WRONG_COMP_SPV)
 
 # ─── 测试支撑模块 ─────────────────────────────────────────────────────────
 # doctest 头（GMF）+ 共享断言宏 + **确定性采样器**。确定性是硬要求：历史教训
@@ -144,7 +148,8 @@ target_compile_features(rgl_tests PRIVATE cxx_std_23)
 target_sources(rgl_tests PRIVATE ${IZB_SPIKE_MESH_SPV} ${IZB_SPIKE_FRAG_SPV}
     ${IZB_CREATE_SPV} ${IZB_PRIME_SPV} ${IZB_MASK_MESH_SPV} ${IZB_MASK_FRAG_SPV}
     ${MDI_SPIKE_MESH_SPV} ${MDI_SPIKE_FRAG_SPV} ${MDI_GROUPS_MESH_SPV}
-    ${DHEAP_UBO_COMP_SPV} ${DHEAP_UBO_WRONG_COMP_SPV})
+    ${DHEAP_UBO_COMP_SPV} ${DHEAP_UBO_WRONG_COMP_SPV}
+    ${DHEAP_STRIDE_COMP_SPV} ${DHEAP_STRIDE_WRONG_COMP_SPV})
 # 链接面：rlbase 之外**也**链 rlgfx/rlscene/rlframe（批 12.2d）。
 #
 # 为什么不只链 rlbase（那样测试二进制里 Vulkan 符号恒 0，看起来更干净）：

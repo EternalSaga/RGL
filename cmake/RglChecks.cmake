@@ -39,17 +39,28 @@ add_custom_target(source_checks ALL
 
 # ─── shader_dep_check（批 12.3d-D1/D3，只警告不阻断）─────────────────────────
 # rgl_shader() 的 DEP 手工登记漏登 = stale SPV 静默残留根因（git:调试历史 2026-08-27 /
-# 2026-09-28 批 10.4 / 2026-10-01）。本目标每次构建跑 tools/check_shader_deps.py：
-#   R1 每个 target 的 import 传递闭包 ⊆（主源 + 已登记 DEP），漏登点名报错；
-#   R3 任何 .slang 出现 StructuredBuffer（含 RW/Append/Consume）= 红线（全库零使用，
-#      无豁免清单；git:调试历史「灰屏」stride 静默错位）。
-# 形态 = 无 OUTPUT 的 custom target → 恒执行（与 reflection_check/source_checks 一致）；
-# 脚本 stdlib-only、只读源树不依赖编译产物 → add_dependencies(rgl shader_dep_check)
-# （rgl/CMakeLists.txt）使其先于/并行于编译跑。默认恒 exit 0（醒目 ERROR 行不阻断，
-# 先例 source_checks；--strict 供手动/CI 拿非零码）。
+# 2026-09-28 批 10.4 / 2026-10-01）。本目标每次构建跑两个 stdlib-only 脚本：
+#   R1 每个 target 的 import 传递闭包 ⊆（主源 + 已登记 DEP），漏登点名报错
+#      （tools/check_shader_deps.py）；
+#   R3 任何 .slang 里 `StructuredBuffer<T>` 的元素类型 T **不在反射契约类型集合内** = 红线
+#      （集合机械取自 rgl/generated/*_types_generated.cppm，**别在此抄名单**）。
+#      2026-10-12 从"出现即 ERROR"**窄化**而来：全禁的理由（stride ≥16B 对齐与 C++ sizeof
+#      静默偏离）经实测只在 std430 口径下成立，项目全量 `-fvk-use-scalar-layout` 下
+#      ArrayStride 就是 sizeof —— 完整实测与理由 → docs/constantbuffer_迁移计划.md §8。
+#   R4 StructuredBuffer 元素 stride 对账（tools/check_spirv_stride.py）：现场编探针断言
+#      SPIR-V `ArrayStride` == 反射生成物 `sizeof`。**R3 能窄化的前提就是这条**：R3 管
+#      "只准用有契约的类型"，R4 管"有契约的类型 stride 真的对"，合起来才闭合灰屏风险。
+# 形态 = 无 OUTPUT 的 custom target → 恒执行（与 reflection_check/source_checks 一致）。
+# 依赖口径（2026-10-12 更新，别再读成"只读源树"）：R1/R3 只读源树；**R4 额外需要 slangc**
+# （现场编探针，不读已构建 SPV ⟹ 没有"产物陈旧/缺失"这一类假绿，代价是每次构建多 ~1s）。
+# slangc 找不到时 R4 **响亮报错并声明"本次未检查 N 个类型"**，绝不静默返回 0。
+# 默认恒 exit 0（醒目 ERROR 行不阻断，先例 source_checks；--strict 供手动/CI 拿非零码）。
 # 副作用：--emit-manifest 写 build/rgl/shader_deps.txt（spv→源闭包清单），供 imgqa
 # D2 守卫 checkShadersFresh() 逐 spv 比 mtime（图真相源单点在本脚本）。
 add_custom_target(shader_dep_check ALL
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_shader_deps.py
             --emit-manifest ${CMAKE_BINARY_DIR}/rgl/shader_deps.txt
-    COMMENT "Shader DEP 表检查：import 闭包 ⊆ DEP + StructuredBuffer 红线（警告不阻断）")
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_spirv_stride.py
+            --build-dir ${CMAKE_BINARY_DIR} --slangc ${SLANGC_EXECUTABLE}
+            --probe-dir ${CMAKE_BINARY_DIR}/checks/stride_probe
+    COMMENT "Shader DEP 表检查：import 闭包 ⊆ DEP + StructuredBuffer 契约/stride 对账（警告不阻断）")

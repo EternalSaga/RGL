@@ -209,53 +209,34 @@ cmd.endRendering();
 
 ---
 
-## 六、StructuredBuffer Stride 问题
+## 六、StructuredBuffer Stride 问题（🔴 本节旧结论已被实测推翻，2026-10-12 改写）
 
-### 坑 10：`StructuredBuffer<T>` 元素自动对齐到 16 字节
+**本节原来写的是**：「HLSL/Slang 的 `StructuredBuffer` 要求元素 stride 是 16 字节的倍数
+（最小 16B）」+「修复：C++ 和 shader 端同时补齐到 32 字节」+「4 字节数据不要用
+StructuredBuffer，`StructuredBuffer<uint>` stride = 16B」。**三条都不成立**，且第二条
+（补 `float _padding[2]` 凑 32）正是 git:调试历史「灰屏」条目里点名的那个**陷阱**。
 
-```hlsl
-StructuredBuffer<Vertex> vertexBuffer;
-```
+**实测**（本机 slangc + 项目原 flags，`struct Vertex { float3 pos; float3 color; }`，
+C++ `sizeof` = 24；完整表 → `docs/constantbuffer_迁移计划.md` §8.5）：
 
-HLSL/Slang 的 `StructuredBuffer` 要求元素 stride 是 16 字节的倍数（最小 16B）。
+| flags | SPIR-V 结构体名 | `color@Offset` | **ArrayStride** |
+|---|---|---|---|
+| 带 `-fvk-use-scalar-layout`（**项目现行**） | `Vertex_natural` | 12 | **24** ✓ = `sizeof` |
+| 不带 | `Vertex_std430` | 16 | **32** ✗ |
 
-```cpp
-// C++: sizeof(Vertex) = 24 bytes (float3×2)
-struct Vertex { float position[3]; float color[3]; };
-```
+`StructuredBuffer<uint>` 在 scalar layout 下 `ArrayStride` = **4**（不是 16）。
 
-GPU 读取 `vertexBuffer[1]` 时从偏移 32 读取，但实际数据在偏移 24 → **数据完全错乱**。
+**所以坑 10 / 坑 11 的现行形态是**：
 
-**修复：C++ 和 shader 端同时补齐到 32 字节**
-
-```cpp
-// C++
-struct Vertex {
-    float position[3];
-    float color[3];
-    float _padding[2];  // 补齐到 32 字节
-};
-```
-
-```hlsl
-// HLSL/Slang — 自动对齐，无需额外操作
-struct Vertex {
-    float3 position;
-    float3 color;
-    float  _padding[2];  // 可选，但建议显式写出
-};
-```
-
-### 坑 11：4 字节数据不要用 StructuredBuffer
-
-```hlsl
-// ❌ 错误：StructuredBuffer<uint> stride = 16B，实际数据 4B/元素
-StructuredBuffer<uint> indexBuffer;
-
-// ✅ 正确：ByteAddressBuffer 按字节偏移读取
-ByteAddressBuffer indexBuffer;
-// 使用：indexBuffer.Load(index * 4)
-```
+- **坑 10（改写后）**：stride 静默错位的**发生条件是布局口径**，不是载体本身。项目全量带
+  `-fvk-use-scalar-layout`（`cmake/RglSlang.cmake` 的 `SLANG_FLAGS` 唯一声明点）⟹
+  `ArrayStride` 就是 `sizeof`。**真正的红线**是：`StructuredBuffer<T>` 的 `T` 必须是反射
+  契约类型（`R3`），且 `ArrayStride == sizeof` 由 `R4`（`tools/check_spirv_stride.py`，
+  每次 `just build`）+ 设备端往返（`just test-gpu -tc="*stride*"`，stride 8 / 44）对账。
+  **掉 `-fvk-use-scalar-layout` 会立刻被 `R4` 抓**（实测：MeshletClusterHeader 44→64、
+  ModelVertex 48→64、MeshletCullPush 100→112，4 条 ERROR）——这条坑现在由护栏守，不靠注释。
+- **坑 11（作废）**：`StructuredBuffer<uint>` 的 stride 是 4B，不存在"4 字节数据浪费到 16B"。
+  按字节切仍然该用 `ByteAddressBuffer`，但理由是**异构区段需要基址**，不是 stride 对齐。
 
 ---
 

@@ -15,11 +15,19 @@ R1  每个 rgl_shader target：主源的 `import x;` / `import "x.slang";` /
     `#include "x"` 的**传递闭包** ⊆（主源 + 已登记 DEP）。漏登 = ERROR，
     点名 target、漏登文件与引入链（`a.slang:3 import scene`，传递引入带全链）。
     解析不到的 import（文件不存在）同样 ERROR。
-R3  红线（D3 裁决 2026-10-01）：任何 .slang 出现 `StructuredBuffer`
-    （含 RW/Append/Consume 变体；剥注释后子串匹配）= ERROR。项目全面禁用而非
-    只禁顶点/索引路径——git:调试历史「灰屏」：stride ≥16B 对齐与 C++ sizeof **静默**
-    偏离；现行约定 ByteAddressBuffer + 手动 .Load()。全库现零使用，故规则不需要
-    豁免清单（需要会漂移的豁免清单的规则宁缺毋滥——这里恰好不需要）。
+R3  红线（2026-10-01 立"全禁"；2026-10-12 按 §8.4 第 1 条**窄化**）：任何 .slang 里
+    `StructuredBuffer<T>`（含 RW/Append/Consume 变体）的元素类型 T **不在反射生成契约类型
+    集合内** = ERROR。契约集合机械取自 `rgl/generated/*_types_generated.cppm`（**别手抄
+    名单**——抄名单反模式，副本必然漂）。禁的是**无契约的裸 struct**：git:调试历史「灰屏」
+    的成因是元素 stride 与 C++ sizeof 静默偏离，而契约类型的 sizeof 由反射生成物
+    `static_assert(sizeof == N)` 钉住、SPIR-V `ArrayStride` 由 **R4** 逐次构建对账，
+    两侧同源于一份声明 ⟹ 那条静默偏离在这里**有机器可验的等式**，不再是裸奔。
+    标量/向量元素（uint/int/float/…）没有 C++ 侧对偶可漂，不在射程内（§2 目标形态本身
+    就用 `StructuredBuffer<uint>`）。完整理由与实测 → `docs/constantbuffer_迁移计划.md` §8。
+R4  StructuredBuffer 元素 stride 对账（**R3 能窄化的前提**，同一次构建里由
+    `tools/check_spirv_stride.py` 跑，见 cmake/RglChecks.cmake）：对每个契约类型断言
+    SPIR-V `ArrayStride` == 反射生成物 `sizeof`。R3 管"只准用有契约的类型"，
+    R4 管"有契约的类型 stride 真的对"——两条合起来才闭合。
 
 ## 输出形态与退出码（先例 = tools/checks/main.py）
 
@@ -63,9 +71,33 @@ RE_IMPORT = re.compile(
     r"|([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*))\s*;")
 RE_INCLUDE = re.compile(r'^\s*#\s*include\s+"([^"]+)"')
 
-# D3 红线 token：子串匹配，一并覆盖 StructuredBuffer / RWStructuredBuffer /
-# AppendStructuredBuffer / ConsumeStructuredBuffer（剥注释后）。
-BANNED_TOKEN = "StructuredBuffer"
+# R3 的元素类型判定（剥注释后按 `StructuredBuffer<` 前缀取尖括号里的标识符）。
+# 一并覆盖 StructuredBuffer / RWStructuredBuffer / AppendStructuredBuffer /
+# ConsumeStructuredBuffer。
+RE_STRUCTURED_BUFFER = re.compile(
+    r"\b(?:RW|Append|Consume)?StructuredBuffer\s*<\s*([A-Za-z_]\w*)")
+# 反射生成物 = 契约类型集合的**唯一机械来源**（R3 放行名单，不是手抄豁免清单：
+# 名单随 schema 自动长，加类型的人不需要知道 R3 存在）。
+GENERATED_DIR = ROOT / "rgl" / "generated"
+RE_GENERATED_STRUCT = re.compile(r"^\s*export\s+struct\s+([A-Za-z_]\w*)\b", re.M)
+# 标量/向量元素类型：没有 C++ struct 对偶，stride 由类型本身定死（uint→4），
+# 灰屏那条静默偏离在这里**不存在发生地**。这是语言的类型词表，不是会漂的项目名单。
+SCALAR_ELEMENT_TYPES = frozenset({
+    "bool", "int", "uint", "dword", "float", "half",
+    "bool2", "bool3", "bool4", "int2", "int3", "int4",
+    "uint2", "uint3", "uint4", "float2", "float3", "float4",
+    "half2", "half3", "half4",
+})
+
+
+def contract_types(generated_dir: Path) -> set[str]:
+    """反射生成物里的契约 struct 名（R3 的放行面）。空 = 规则失效，调用处必须出声。"""
+    out: set[str] = set()
+    if generated_dir.is_dir():
+        for f in sorted(generated_dir.glob("*_types_generated.cppm")):
+            out |= set(RE_GENERATED_STRUCT.findall(
+                f.read_text(encoding="utf-8", errors="replace")))
+    return out
 
 
 def rel(p: Path) -> str:
@@ -154,7 +186,8 @@ def chain_str(target_file: Path, f: Path, parent: dict) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="Shader DEP 表检查（import 闭包 ⊆ rgl_shader DEP + StructuredBuffer 红线）")
+        description="Shader DEP 表检查（import 闭包 ⊆ rgl_shader DEP + StructuredBuffer "
+                    "元素类型须走反射契约）")
     ap.add_argument("--strict", action="store_true",
                     help="有问题时 exit 1（默认只警告不阻断，先例 tools/checks/main.py）")
     ap.add_argument("--emit-manifest", default=None, metavar="PATH",
@@ -207,20 +240,35 @@ def main() -> int:
                 f"（由 {chain_str(main_src, f, parent)}——改该文件不会触发本 SPV 重编译）")
         manifest_rows.append((src + ".spv", files))
 
-    # ── R3：StructuredBuffer 红线（D3 裁决：全库零使用 → 全禁、无豁免清单）──
+    # ── R3：StructuredBuffer 元素类型必须是反射契约类型（2026-10-12 窄化，见 §8）──
     slang_files = sorted(SHADERS_DIR.rglob("*.slang"))
+    contracts = contract_types(GENERATED_DIR)
+    if not contracts:
+        err(rel(GENERATED_DIR),
+            "反射生成物里一个契约 struct 都没解析到（生成物被清空？正则漂了？）——"
+            "R3 的放行面为空，本次**任何 StructuredBuffer 都会被误判成违规**，"
+            "规则已不可信，请勿把「零警告」读成「干净」")
+    sb_uses: list[tuple[Path, int, str]] = []
     for p in slang_files:
         for lineno, line in enumerate(read_lines(p), 1):
-            if BANNED_TOKEN in line:
+            for m in RE_STRUCTURED_BUFFER.finditer(line):
+                elem = m.group(1)
+                sb_uses.append((p, lineno, elem))
+                if elem in SCALAR_ELEMENT_TYPES or elem in contracts:
+                    continue
                 err(f"{rel(p)}:{lineno}",
-                    f"禁用 {BANNED_TOKEN}（含 RW/Append/Consume 变体）：stride ≥16B 对齐与 "
-                    f"C++ sizeof 静默偏离（git:调试历史「灰屏」）——数据通路统一 "
-                    f"ByteAddressBuffer + .Load()")
+                    f"`StructuredBuffer<{elem}>` 的元素类型 {elem} 不在反射契约类型集合内"
+                    f"（集合 = {rel(GENERATED_DIR)}/*_types_generated.cppm 机械提取，"
+                    f"现 {len(contracts)} 个）——无契约的裸 struct 正是 stride 静默错位的"
+                    f"发生地（git:调试历史「灰屏」）。要么把 {elem} 进 schema 走反射，"
+                    f"要么走 ByteAddressBuffer + .Load()；理由与实测 → "
+                    f"docs/constantbuffer_迁移计划.md §8")
 
     for loc, msg in errors:
         print(f"\033[1;31m[shader-dep-check-ERROR] {loc}: {msg}\033[0m")
     print(f"[shader-dep-check] 汇总: {len(errors)} 问题（ERROR {len(errors)}） / "
-          f"{len(calls)} 个 rgl_shader target、{len(slang_files)} 个 .slang")
+          f"{len(calls)} 个 rgl_shader target、{len(slang_files)} 个 .slang、"
+          f"StructuredBuffer 使用 {len(sb_uses)} 处（契约类型 {len(contracts)} 个放行面）")
 
     if args.emit_manifest and manifest_rows:
         out = Path(args.emit_manifest)

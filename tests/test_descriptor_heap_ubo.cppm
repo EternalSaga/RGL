@@ -102,12 +102,29 @@ module;
  *
  * ## 跑法
  *
- *   just test-gpu                          # 四条全跑（含反向对照）
+ *   just test-gpu                          # 六条全跑（含反向对照）
  *   just test-gpu -tc="dheap 3*"           # 只跑可能挂死的那条（隔离归因）
- *   just test-gpu -tc="dheap 1*"           # 只跑主判据
+ *   just test-gpu -tc="dheap 1*"           # 只跑 UBO 主判据
+ *   just test-gpu -tc="*stride*"           # 只跑 stride 往返两条（dheap 4/5）
  *
- * 无设备时四条一律**响亮 FAIL**（Fixture 构造即抛，实测 `VK_DRIVER_FILES` 指向空 ICD
+ * 无设备时六条一律**响亮 FAIL**（Fixture 构造即抛，实测 `VK_DRIVER_FILES` 指向空 ICD
  * 清单 → `ErrorIncompatibleDriver` 记为 FAILURE，不 SKIP）。
+ *
+ * ## dheap 4/5 是另一件事：StructuredBuffer 元素 stride 的设备端往返
+ *
+ * 搭本文件的夹具便车，但回答的是 **R3 红线撤销条件第 2 条**（docs/constantbuffer_迁移计划.md
+ * §8.4）：8B 与 **44B**（非 16 倍数的奇数 stride）元素经 `StructuredBuffer<T>` 读元素 1/2，
+ * 期望值走闭式解 `kStrideWordBase + (e*sizeof + b)/4`（C++ 侧只认反射生成物的 `sizeof` /
+ * `offsetof`，与 shader 侧的 `ArrayStride` 是两条独立路径）。判据、变异红线声明与
+ * "为什么读元素 1 不读元素 0"见 `tests/shaders/dheap_stride.comp.slang` 头注释。
+ *
+ * 与构建期 R4（`tools/check_spirv_stride.py`，每次 `just build` 跑）的分工：R4 证**编译器
+ * 口径**（探针 SPV 的 `ArrayStride` == 反射 `sizeof`），本用例证**驱动真按那个 stride 取数**。
+ * 两条缺一条，就还剩一段只有截图能抓的静默空间。
+ *
+ * 实测有牙（2026-10-12 本机变异）：shader 镜像 `float3 center` 改成 `float4`（stride 44→48）
+ * ⟹ dheap 4 的 8 个 stride-44 槽位全红、3 个 stride-8 槽位不动；把阳性对照体改回与主判据
+ * 同下标 ⟹ dheap 5 恰好在被改的两个槽位红。
  */
 #include <doctest/doctest.h>
 #include <vulkan/vulkan.h>      // vkGetPhysicalDeviceDescriptorSizeEXT（rlvk 只出类型不出 C 函数）
@@ -126,6 +143,7 @@ import rlvk;
 import vkerror;                 // Error（createDescriptorHeap 的 expected 错误分支）
 import VmaRaii;                 // VmaAllocatorRAII / VmaDescriptorHeap（引擎 heap 封装）
 import shader;                  // makeMappedCompute（引擎 binding→heap mapping 烘焙）
+import meshlet_cull_types_generated;  // 反射生成物本体 = stride 往返用例的 C++ 侧真相
 import test_device_primitives;  // Fixture（引擎同款 headless 引导）
 
 namespace RGL::testing::dheap {
@@ -553,6 +571,201 @@ void Harness::reportHeapProperties() const {
     CHECK(szUbo <= descriptorSize());
 }
 
+// ─── StructuredBuffer 元素 stride 设备端往返（R3 撤销条件第 2 条，§8.4）──────
+
+/**
+ * 填充图案基址：第 k 个字（字节 4k）= `kStrideWordBase + k`。
+ *
+ * 为什么是这个形态：期望值有**闭式解**（见 `strideWord`），且字与字两两不同、全非零
+ * ——「整体错位一格」会同时打红所有槽位，"读到零初始化"被基址排掉。
+ */
+constexpr uint32_t kStrideWordBase = 0x5A000000u;
+
+/**
+ * 闭式期望：元素 `elem` 的字节偏移 `byteOffset` 处**该**读到什么。
+ *
+ * 这就是"独立第二实现"：C++ 侧只认 `sizeof` / `offsetof`（反射生成物），shader 侧只认
+ * `ArrayStride`（编译器），两条路径只在"stride 相同"这一点上相交。stride 一漂，
+ * 所有槽位同时打红（不是"某一位不同"）。
+ */
+constexpr uint32_t strideWord(uint32_t elem, uint32_t stride, uint32_t byteOffset) {
+    return kStrideWordBase + (elem * stride + byteOffset) / 4u;
+}
+
+/** 输出槽位（编号 = 两份 dheap_stride*.comp.slang 头注释里的表）。 */
+enum StrideOutSlot : uint32_t {
+    kStrideOutItem1A = 0,      ///< it[1].clusterIdx（字节 8）
+    kStrideOutItem1B = 1,      ///< it[1].objectSlot（字节 12）
+    kStrideOutItem2A = 2,      ///< it[2].clusterIdx（字节 16 = 2×stride）
+    kStrideOutHdr1Group = 3,   ///< h[1].group（字节 44 —— **第一次用到 stride**）
+    kStrideOutHdr1Remap = 4,   ///< h[1].remapOffset（字节 64）
+    kStrideOutHdr1Cx = 5,      ///< h[1].center.x（字节 68）
+    kStrideOutHdr1Cy = 6,      ///< h[1].center.y（字节 72）
+    kStrideOutHdr1Cz = 7,      ///< h[1].center.z（字节 76）
+    kStrideOutHdr1Radius = 8,  ///< h[1].radius（字节 80 —— float3 只占 12B 才落在这）
+    kStrideOutHdr1Error = 9,   ///< h[1].error（字节 84）
+    kStrideOutHdr2Group = 10,  ///< h[2].group（字节 88 = 2×44）
+    kStrideOutLast = kStrideOutHdr2Group,
+    kStrideOutAnchor = 11,      ///< 派发锚点槽（不来自任何描述符读）
+    kStrideOutAnchorValue = 0xBEEFCAFEu,
+    kStrideOutCount = 16,       ///< out buffer 的 uint 个数（12..15 未写，必须恒 0）
+};
+
+/**
+ * 主判据期望表（下标 = StrideOutSlot 的 0..10）。
+ *
+ * 🔴 表里**没有任何手抄的字节偏移**：stride 取 `sizeof(生成物类型)`、成员偏移取
+ * `offsetof(生成物类型, …)`。契约改了这张表自动跟着走，而 shader 侧不跟 ⟹ 用例红。
+ */
+inline std::array<uint32_t, kStrideOutLast + 1> strideExpectedMain() {
+    constexpr uint32_t kItem = sizeof(RGL::MeshletCullItem);
+    constexpr uint32_t kHeader = sizeof(RGL::MeshletClusterHeader);
+    constexpr uint32_t kCenter = offsetof(RGL::MeshletClusterHeader, center);
+    return {{
+        strideWord(1, kItem, offsetof(RGL::MeshletCullItem, clusterIdx)),
+        strideWord(1, kItem, offsetof(RGL::MeshletCullItem, objectSlot)),
+        strideWord(2, kItem, offsetof(RGL::MeshletCullItem, clusterIdx)),
+        strideWord(1, kHeader, offsetof(RGL::MeshletClusterHeader, group)),
+        strideWord(1, kHeader, offsetof(RGL::MeshletClusterHeader, remapOffset)),
+        strideWord(1, kHeader, kCenter + 0),
+        strideWord(1, kHeader, kCenter + 4),
+        strideWord(1, kHeader, kCenter + 8),
+        strideWord(1, kHeader, offsetof(RGL::MeshletClusterHeader, radius)),
+        strideWord(1, kHeader, offsetof(RGL::MeshletClusterHeader, error)),
+        strideWord(2, kHeader, offsetof(RGL::MeshletClusterHeader, group)),
+    }};
+}
+
+/** 第 k 个字 = `kStrideWordBase + k` 的填充（"字两两不同"是闭式期望成立的前提）。 */
+inline std::vector<uint32_t> strideFillWords(size_t words) {
+    std::vector<uint32_t> w(words);
+    for (size_t k = 0; k < words; ++k)
+        w[k] = kStrideWordBase + static_cast<uint32_t>(k);
+    return w;
+}
+
+/**
+ * stride 往返夹具：两块 `StructuredBuffer` + out，全部走引擎 descriptor heap 通路。
+ *
+ * 元素类型的 C++ 侧**直接用反射生成物本体**（`RGL::MeshletCullItem` /
+ * `RGL::MeshletClusterHeader`），不自造镜像 struct ⟹ 本用例量的就是"实际在用的 stride"，
+ * 而不是某个恰好长得像的 struct。shader 侧是镜像（tests/shaders 的 compile_slang 只 -I
+ * 自己目录，import 不到引擎契约文件），两侧漂移正是本用例要抓的东西。
+ *
+ * 与 `Harness` 分开成两个夹具（而不是扩它）：`Harness` 的槽位布局是「binding→槽机制
+ * 证伪」判据的一部分（真槽 ≠ binding 号 + 诱饵槽 = binding 号），加槽会动那四条用例的
+ * 构造前提。本用例不重复验机制，只验 stride。
+ */
+class StrideHarness {
+  public:
+    /** 3 个元素：元素 1 首次用到 stride，元素 2 用到两次（把"步长"与"首元素偏移"分开）。 */
+    static constexpr uint32_t kElements = 3;
+
+    explicit StrideHarness(const Fixture& fx);
+    void writeDescriptors();
+    void runDispatch(const std::string& spvPath);
+    [[nodiscard]] std::array<uint32_t, kStrideOutCount> readOut() const;
+
+  private:
+    const Fixture& fx_;
+    RGL::VmaAllocatorRAII alloc_;
+    RGL::VmaDescriptorHeap heap_;
+    GpuBuf items_;
+    GpuBuf headers_;
+    GpuBuf out_;
+    uint32_t slotItems_ = 0;
+    uint32_t slotHeaders_ = 0;
+    uint32_t slotOut_ = 0;
+    vk::DeviceSize reservedRangeSize_ = 0;
+};
+
+StrideHarness::StrideHarness(const Fixture& fx)
+    : fx_(fx), alloc_(*fx.instance(), *fx.physical(), *fx.device(), fx.apiVersion()) {
+    auto props = fx.physical().getProperties2<vk::PhysicalDeviceProperties2,
+        vk::PhysicalDeviceDescriptorHeapPropertiesEXT>();
+    auto& hp = props.get<vk::PhysicalDeviceDescriptorHeapPropertiesEXT>();
+    const uint32_t descriptorSize = static_cast<uint32_t>(
+        std::max(vk::DeviceSize(hp.bufferDescriptorSize), vk::DeviceSize(hp.imageDescriptorSize)));
+    const uint32_t reservedSlots = static_cast<uint32_t>(
+        (hp.minResourceHeapReservedRange + descriptorSize - 1) / descriptorSize);
+    auto made = alloc_.createDescriptorHeap(fx.device(), reservedSlots + 16, descriptorSize,
+        vk::BufferUsageFlagBits::eDescriptorHeapEXT, reservedSlots, hp.resourceHeapAlignment);
+    REQUIRE(made.has_value());
+    heap_ = std::move(*made);
+    reservedRangeSize_ = static_cast<vk::DeviceSize>(reservedSlots) * descriptorSize;
+    std::memset(heap_.pMappedData, 0, static_cast<size_t>(heap_.getHeapSize()));
+
+    // 两块 buffer 的大小 = 元素数 × sizeof(生成物类型)，**不向上取整到 16**：
+    // 44×3 = 132B 就是 132B。取整等于替驱动把越界读藏起来，本用例要的是"按 stride 数数"。
+    const auto itemWords = strideFillWords(kElements * sizeof(RGL::MeshletCullItem) / 4);
+    const auto headerWords = strideFillWords(kElements * sizeof(RGL::MeshletClusterHeader) / 4);
+    items_ = makeBuf(alloc_, fx.device(), itemWords.size() * 4, itemWords.data());
+    headers_ = makeBuf(alloc_, fx.device(), headerWords.size() * 4, headerWords.data());
+    out_ = makeBuf(alloc_, fx.device(), sizeof(uint32_t) * kStrideOutCount, nullptr);
+
+    // 槽号 ≠ binding 号（0/1/2）：与 Harness 同纪律，机制虽已由 dheap 1 钉死，
+    // 但沿用同一形态可排除"这条用例恰好踩到 binding==槽的巧合"这一层混淆。
+    slotItems_ = reservedSlots + 5;
+    slotHeaders_ = reservedSlots + 11;
+    slotOut_ = reservedSlots + 7;
+}
+
+void StrideHarness::writeDescriptors() {
+    auto& dev = fx_.device();
+    writeDesc(heap_, dev, slotItems_, vk::DescriptorType::eStorageBuffer, items_.address,
+        items_.size);
+    writeDesc(heap_, dev, slotHeaders_, vk::DescriptorType::eStorageBuffer, headers_.address,
+        headers_.size);
+    writeDesc(heap_, dev, slotOut_, vk::DescriptorType::eStorageBuffer, out_.address, out_.size);
+}
+
+void StrideHarness::runDispatch(const std::string& spvPath) {
+    const std::array<std::pair<uint32_t, uint32_t>, 3> bindingToSlot{{
+        {0, slotItems_},
+        {1, slotHeaders_},
+        {2, slotOut_},
+    }};
+    auto shaderObj = RGL::makeMappedCompute(fx_.device(), spvPath,
+        std::span<const std::pair<uint32_t, uint32_t>>(bindingToSlot), heap_.getDescriptorSize());
+
+    fx_.submitAndWait([&](vk::raii::CommandBuffer& cmd) {
+        // host 写（描述符 + buffer 内容）→ GPU 读。dst 必须含 eResourceHeapReadEXT：
+        // 漏它 = 描述符堆的读侧没排序（先例见 Harness::runDispatch 注释）。
+        vk::MemoryBarrier2 pre{};
+        pre.srcStageMask = vk::PipelineStageFlagBits2::eHost;
+        pre.srcAccessMask = vk::AccessFlagBits2::eHostWrite;
+        pre.dstStageMask = vk::PipelineStageFlagBits2::eComputeShader;
+        pre.dstAccessMask = vk::AccessFlagBits2::eResourceHeapReadEXT
+            | vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite;
+        vk::DependencyInfo dep0{};
+        dep0.setMemoryBarriers(pre);
+        cmd.pipelineBarrier2(dep0);
+
+        vk::DeviceAddressRangeEXT heapRange{heap_.getGpuAddress(), heap_.getHeapSize()};
+        cmd.bindResourceHeapEXT(vk::BindHeapInfoEXT(heapRange, 0, reservedRangeSize_));
+
+        std::array<vk::ShaderStageFlagBits, 1> stages{vk::ShaderStageFlagBits::eCompute};
+        std::array<vk::ShaderEXT, 1> handles{*shaderObj};
+        cmd.bindShadersEXT(stages, handles);
+        cmd.dispatch(1, 1, 1);
+
+        vk::MemoryBarrier2 post{};
+        post.srcStageMask = vk::PipelineStageFlagBits2::eComputeShader;
+        post.srcAccessMask = vk::AccessFlagBits2::eShaderWrite;
+        post.dstStageMask = vk::PipelineStageFlagBits2::eHost;
+        post.dstAccessMask = vk::AccessFlagBits2::eHostRead;
+        vk::DependencyInfo dep1{};
+        dep1.setMemoryBarriers(post);
+        cmd.pipelineBarrier2(dep1);
+    });
+}
+
+std::array<uint32_t, kStrideOutCount> StrideHarness::readOut() const {
+    std::array<uint32_t, kStrideOutCount> got{};
+    std::memcpy(got.data(), out_.mapped, sizeof(got));
+    return got;
+}
+
 }  // namespace
 
 }  // namespace RGL::testing::dheap
@@ -567,7 +780,12 @@ using RGL::testing::dheap::expectedMain;
 using RGL::testing::dheap::kOutAnchor;
 using RGL::testing::dheap::kOutAnchorValue;
 using RGL::testing::dheap::kOutRaw0;
+using RGL::testing::dheap::kStrideOutAnchor;
+using RGL::testing::dheap::kStrideOutAnchorValue;
+using RGL::testing::dheap::kStrideOutLast;
+using RGL::testing::dheap::strideExpectedMain;
 using RGL::testing::dheap::Harness;
+using RGL::testing::dheap::StrideHarness;
 using RGL::testing::gpu::Fixture;
 
 TEST_CASE("dheap 0：heap 属性与逐类型描述符尺寸读数（UBO 有无专属对齐要求）") {
@@ -658,6 +876,81 @@ TEST_CASE("dheap 3：反向对照 —— UBO 槽不写描述符，不得恰好�
             ++uboMatched;
     MESSAGE("反向对照：UBO 专属槽位（0..6）命中数 = " << uboMatched << " / 7");
     CHECK(uboMatched < 7);
+}
+
+// ─── dheap 4/5：StructuredBuffer 元素 stride 设备端往返 ────────────────────────
+//
+// R3 红线（全禁 StructuredBuffer）撤销条件第 2 条（docs/constantbuffer_迁移计划.md §8.4）：
+// 「给 tests/ 的 gpu 套件加**实际在用的 stride**（8 / 44）的设备端往返用例——写已知模式到
+// 元素 1、经 shader 读回比对。理由：R3 的理由是一条**驱动/布局事实**，事实只能测，
+// 不能靠注释或推理定案。」
+//
+// 与构建期 R4（tools/check_spirv_stride.py）的分工：R4 证**编译器口径**（探针 SPV 的
+// ArrayStride == 反射 sizeof），本用例证**驱动真按那个 stride 取数**。缺 R4 → 编译器
+// 口径漂了没人知道；缺本用例 → 编译器说 44 而驱动按 48 数数，仍然静默。
+//
+// 变异红线声明（哪个变异让我红）：
+//   去掉 -fvk-use-scalar-layout（std430 口径）→ 44 变 64 ⟹ 主判据 8 个 stride-44 槽位全红
+//   契约 struct 加/删一个字段而 shader 镜像不改 → 期望表随 sizeof/offsetof 走 ⟹ 红
+//   阳性对照体读元素 0（stride 不参与）→ 「≠ 主判据值」若被改成「==」立刻红（判据不
+//     discriminative 时它自己会喊）
+//   out buffer 忘 barrier → VVL 当场打断（不靠运气）
+
+TEST_CASE("dheap 4：stride 往返主判据 —— 8B 与 44B 元素经 StructuredBuffer 逐槽位读回") {
+    // 🔴 判据工具自检，放在起设备之前：44 这个数**就是**本用例存在的理由。哪天契约把
+    // MeshletClusterHeader 改成 16 的倍数，本用例会**悄悄退化成**"又一个 16 对齐 stride
+    // 的往返"，而它要抓的那类错位（float3 被补到 16B）根本不再发生 —— 那时"绿"会被读成
+    // "还在守"，实际守的是一句空话。缺这几条，用例失效是完全无声的。
+    CHECK(sizeof(RGL::MeshletCullItem) == 8);
+    CHECK(sizeof(RGL::MeshletClusterHeader) == 44);
+    CHECK(sizeof(RGL::MeshletClusterHeader) % 16 != 0);  // 关键：非 16 倍数的奇数 stride
+    CHECK(offsetof(RGL::MeshletClusterHeader, center) == 24);
+    CHECK(offsetof(RGL::MeshletClusterHeader, radius) == 36);  // float3 占 12B，不占 16B
+
+    const Fixture fx;
+    StrideHarness h(fx);
+    h.writeDescriptors();
+    h.runDispatch(RGL_TEST_SHADER_DIR "/dheap_stride.comp.spv");
+
+    const auto got = h.readOut();
+    const auto want = strideExpectedMain();
+    // 派发锚点先判（**FATAL**）：锚点缺失 = dispatch / out 描述符没生效，继续判会把
+    // "我的夹具没搭对"答成"驱动不支持非 16 倍数 stride"（同款教训见文件头坑 ②）。
+    REQUIRE_MESSAGE(got[kStrideOutAnchor] == kStrideOutAnchorValue,
+        "派发锚点缺失（got=" << got[kStrideOutAnchor] << "）⟹ dispatch/out 描述符未生效，"
+        "本次不构成对 stride 的任何结论");
+    MESSAGE("stride 往返（本机 " << fx.deviceName() << "，元素数 " << StrideHarness::kElements
+        << "）：sizeof(MeshletCullItem)=" << sizeof(RGL::MeshletCullItem)
+        << " sizeof(MeshletClusterHeader)=" << sizeof(RGL::MeshletClusterHeader));
+    for (uint32_t i = 0; i <= kStrideOutLast; ++i) {
+        INFO("stride 往返槽位 " << i << "（got=" << got[i] << " want=" << want[i] << "）");
+        CHECK(got[i] == want[i]);
+    }
+    // 未使用槽位必须恒 0：写越界/写到别处会在这里现形（与 dheap 1 同形态）。
+    for (uint32_t i = kStrideOutAnchor + 1; i < got.size(); ++i)
+        CHECK(got[i] == 0u);
+}
+
+TEST_CASE("dheap 5：stride 往返阳性对照 —— 读错元素下标必须 ≠ 主判据期望值") {
+    const Fixture fx;
+    StrideHarness h(fx);
+    h.writeDescriptors();
+    h.runDispatch(RGL_TEST_SHADER_DIR "/dheap_stride_wrong.comp.spv");
+
+    const auto got = h.readOut();
+    const auto want = strideExpectedMain();
+    // 同 dheap 2：先钉"这个 shader 确实跑了并写进了 out"，否则"≠ 期望值"可能只是
+    // "什么都没写"造成的假阳性对照。
+    REQUIRE_MESSAGE(got[kStrideOutAnchor] == kStrideOutAnchorValue,
+        "阳性对照体的派发锚点缺失（got=" << got[kStrideOutAnchor] << "）⟹ 对照不成立");
+    // 断言方向 = **不等于**。缺这条时主判据的绿排不掉两种假绿：
+    //   ① 读回的是零初始化/未初始化值而期望恰好等于它（填充全非零已排一半）；
+    //   ② 描述符根本没被消费 / 读到了别处（§3.4 第一条：漏写描述符**完全静默**，
+    //      VVL 不报、不 device lost）——只有"错位版 shader 必须拿到不同结果"排得掉。
+    for (uint32_t i = 0; i <= kStrideOutLast; ++i) {
+        INFO("wrong-index out slot " << i << " 必须 ≠ 主判据值（否则判据不 discriminative）");
+        CHECK(got[i] != want[i]);
+    }
 }
 
 }  // TEST_SUITE("gpu")

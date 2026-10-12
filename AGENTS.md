@@ -244,7 +244,7 @@ vk_indirect_commands 显式使用）外**均无显式使用但被其他已启用
   `docs/taa_plan.md`（TAA 机制与踩坑账，§7 第 11/12 条 = 根因）· `docs/evssm_plan.md`（远场软影
   权威路线，HFTS 已降级 backlog）· `docs/shadow_routes_plan.md`（**阴影路线形态唯一定案载体**：`configs/shadow.lua` 的 `mode` 枚举形状与四条红线；改阴影配置键/门形前看）·
   `docs/constantbuffer_迁移计划.md`（scene data 类型化迁移的**唯一计划载体 + spike 已定案事实基线**；
-  **动 scene data 访问形态前看**，§1 别再重查、§6.2 是分支拓扑拍板、🔴 §8 = R3 红线冲突未决）· `docs/hfts_izb_plan.md` · `docs/shader_object_组合成本与优化预留.md`
+  **动 scene data 访问形态前看**，§1 别再重查、§6.2 是分支拓扑拍板、✅ §8 = R3 红线已窄化放行）· `docs/hfts_izb_plan.md` · `docs/shader_object_组合成本与优化预留.md`
   （优化**未实施**）· `docs/脚本长期规划.md` + `script_spike/`（脚本长期线，独立于 Phase 编号）
 - **调研 / 活文档**：`docs/mdi_plan.md`（Multi Draw Indirect 路线**可行性定案载体**，**2026-10-12 簇化轴
   立项开工（§0 拍板 P4-P7、§9 编排）**、命令数轴挂起：

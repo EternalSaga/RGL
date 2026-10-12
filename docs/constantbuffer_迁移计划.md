@@ -1,6 +1,7 @@
 # scene data 类型化迁移（ByteAddressBuffer → ConstantBuffer / StructuredBuffer）
 
-> **状态**：现行（2026-10-12 立）。本文件 = 这条线的**唯一计划载体 + 事实基线**。
+> **状态**：现行（2026-10-12 立；同日 **C4 结案** = R3 红线窄化放行 + R4 stride 护栏落地，见 §8）。
+> 本文件 = 这条线的**唯一计划载体 + 事实基线**。
 > 触发源 = 簇化轴 ★1-a2-i 期间对"双源为什么必然"的架构诊断（结论见 §1）+ 用户拍板做 spike。
 > spike 定案 = `tests/test_descriptor_heap_ubo.cppm`（`TEST_SUITE("gpu")`，git `308a703`）。
 > 机制深版仍以各 `.cppm` / `.slang` 文件头注释为权威；本文件不重述 scene data 分区表本身
@@ -13,7 +14,7 @@
 | C1 | 分支拓扑：迁移从 master 切，还是从 MDI tip 切 | 🔴 **从 MDI tip 切**（理由 §6.2，这条决定另一会话怎么开） |
 | C2 | 迁移粒度：每区一 buffer，还是"标量合并一 UBO + 大表各自 SSBO" | 先做批 0 测量再定，**别先定形态再找理由** |
 | C3 | `cull.comp.slang` 遗留偏移是否并入本计划 | 并入，但排最后（它是纯遗留，不阻塞任何新功能） |
-| 🔴 **C4** | **R3 红线（禁 StructuredBuffer）是否按 §8.4 三条件改精确** | 未决。🔴 **未获放行前 §2 目标形态在 `rgl/` 树内不得实施**——★1-a2 已按此回退 |
+| **C4** | **R3 红线（禁 StructuredBuffer）是否按 §8.4 三条件改精确** | ✅ **已结案（用户 2026-10-12 拍板放行）**：R3 已窄化成"元素类型未走反射契约才 ERROR"，配套护栏 R4 + 设备端 stride 往返已落地 → §8 |
 
 ## 1. 为什么现在能做（事实基线，**别再重查一遍**）
 
@@ -73,10 +74,15 @@ StructuredBuffer<uint>            clusterVisible;
 
 对照现状（要消失的形态）：`sceneData.Load<ObjectDraw>(524944u + objectIndex * 48u)`。
 
-> 🔴🔴 **本计划的整个 §2 目标形态被一条现存红线挡着，未获撤销前不得在 `rgl/` 树内实施**：
-> `shader_dep_check` **R3**（`tools/check_shader_deps.py`）——「任何 .slang 出现
-> StructuredBuffer = ERROR，全库零使用，**无豁免清单**」，出处 git:调试历史「灰屏」stride
-> 静默错位。冲突经过、撤销条件与配套护栏见 **§8**。**这条是用户决策，不是工程默认。**
+> ✅ **本计划的 §2 目标形态已放行（2026-10-12，C4 结案）**。曾经挡着它的 `shader_dep_check`
+> **R3**（`tools/check_shader_deps.py`）从「任何 .slang 出现 StructuredBuffer = ERROR，全库零
+> 使用，**无豁免清单**」**窄化**为「`StructuredBuffer<T>` 的元素类型 T **不在反射生成契约类型
+> 集合内**才 ERROR」——保留牙（无契约的裸 struct 仍然红），去掉误伤（契约类型放行）。
+> 配套两道护栏，**缺任一道都不许再写 `StructuredBuffer<T>`**：
+> **R4** = `tools/check_spirv_stride.py`（每次 `just build` 现场编探针，断言 SPIR-V
+> `ArrayStride` == 反射生成物 `sizeof`，失效必出声）；**设备端往返** = `just test-gpu
+> -tc="*stride*"`（stride 8 与 44 的逐槽位读回 + 阳性对照）。
+> 窄化的全部依据（含推翻旧理由的实测）与放行前的经过 → **§8**。
 
 > 🔴 **本计划的成功判据不是"偏移被生成对了"，是"偏移写不出来了"**。凡是最后落成"生成一份
 > 偏移常量给 shader 用"的批次，都说明那块没真正迁完，只是把双源搬了个家。
@@ -186,9 +192,15 @@ ERROR（红线明令"无豁免清单"）⟹ **已回退成 `ByteAddressBuffer` +
 - **不在本计划里改 scene data 的任何语义或数值**——那是功能改动，会污染逐位判据。
 - **不追求"一个区都不剩"**：§2 第三类允许保留 `ByteAddressBuffer`，但必须申报理由。
 
-## 8. 🔴 未决冲突：R3 红线 vs 本计划的目标形态（**等用户拍板**）
+## 8. ✅ 已结案：R3 红线按 §8.4 窄化放行（**用户 2026-10-12 拍板**）
 
-### 8.1 红线本体
+> **终态一句话**：R3 从「出现 `StructuredBuffer` 即 ERROR」窄化为「**元素类型未走反射契约**
+> 才 ERROR」，配套 **R4 stride 对账护栏**（构建期）+ **设备端 stride 往返用例**（`just
+> test-gpu`）同日落地，§2 目标形态自此可在 `rgl/` 树内实施。
+> 🔴 **但"放行"不等于"立刻迁移"**：现存 `meshlet_cull.comp.slang` / `meshlet.mesh.slang`
+> 挂着逐位锚点，改回类型化载体是**单独一批**（要跑逐位对拍），与本结案无关。
+
+### 8.1 红线本体（历史形态，2026-10-01 立 → 2026-10-12 窄化）
 
 `tools/check_shader_deps.py`（构建期 `shader_dep_check`，`cmake/RglChecks.cmake` 登记）：
 
@@ -196,9 +208,9 @@ ERROR（红线明令"无豁免清单"）⟹ **已回退成 `ByteAddressBuffer` +
 > 无豁免清单；git:调试历史「灰屏」stride 静默错位）**
 
 只警告不阻断（醒目 ERROR 行、`--strict` 拿非零码）。规则自陈的理由是"stride ≥16B 对齐与
-C++ sizeof 静默偏离"。
+C++ sizeof 静默偏离"——**这条理由的普适性已被 §8.5 实测推翻**。
 
-### 8.2 今天发生的事，按时间顺序（**含一个我该早点发现的疏漏**）
+### 8.2 当时发生的事，按时间顺序（**含一个我该早点发现的疏漏**）
 
 1. spike（`tests/test_descriptor_heap_ubo.cppm`）用 `StructuredBuffer<Mvp>` 验通了 heap 内的
    SSBO/UBO。**但 R3 只扫 `rgl/` 树、不扫 `tests/shaders/`** ⟹ **spike 是绕着红线跑的，
@@ -218,18 +230,71 @@ C++ sizeof 静默偏离"。
 - 反过来，R3 **不**保证现存 `ByteAddressBuffer` 路径是对的——那条路上偏移是手抄的，
   真出错时同样静默。今天 `MeshletClusterHeader` 那批字面量就是靠人肉发现才删掉的。
 
-### 8.4 撤销条件（要三条同时成立，缺一条就是拿灰屏风险换整洁）
+### 8.4 撤销条件 → **三条全部落地（2026-10-12）**
 
-1. **R3 改精确**：从"出现 StructuredBuffer 即 ERROR"改成"**元素类型未走反射契约**才 ERROR"。
-   保留牙（无契约的裸 struct 仍然红），去掉误伤（契约类型放行）。
-2. **stride 实测护栏**：给 `tests/` 的 gpu 套件加**实际在用的 stride**（8 / 44 / 4，含 44 这个
-   非 16 倍数的奇数 stride）的**设备端往返**用例——写已知模式到元素 1、经 shader 读回比对。
-   理由：R3 的理由是一条**驱动/布局事实**，事实只能测，不能靠注释或推理定案。
-3. **逐位护栏**：迁移批次逐条 `just regress`（§3.2），且**阳性对照必须真变**（§3.4 第一条：
-   漏写/接错描述符是完全静默的）。
+| # | 条件 | 落地形态 | 有牙证明 |
+|---|---|---|---|
+| 1 | **R3 改精确**：从"出现 StructuredBuffer 即 ERROR"改成"**元素类型未走反射契约**才 ERROR" | `tools/check_shader_deps.py` R3；契约集合机械取自 `rgl/generated/*_types_generated.cppm`（**不是手抄豁免清单**——名单随 schema 自动长） | 临时塞一个 `StructuredBuffer<BareDude>`（无契约裸 struct）→ 2 条 ERROR、`--strict` 退 1；同文件里 `StructuredBuffer<MeshletClusterHeader>` 与 `StructuredBuffer<uint>` 放行 |
+| 2 | **stride 实测护栏**（构建期） | **R4** = `tools/check_spirv_stride.py`（挂在同一个 `shader_dep_check` 目标，每次 `just build` 跑）：按定义模块合成探针、用**构建期同一套 `SLANG_FLAGS`** 现场编 SPV、解析二进制断言 `ArrayStride == sizeof` | 见 §8.6 变异读数 |
+| 2′ | **stride 设备端往返** | `tests/test_descriptor_heap_ubo.cppm` 的 `dheap 4/5`（`just test-gpu -tc="*stride*"`）：stride **8** 与 **44**，写已知模式到**元素 1**（元素 0 在 stride 错位时恰好也对，只读它等于没测 stride），期望值走闭式解 | shader 镜像 `float3 center`→`float4`（stride 44→48）⟹ 8 个 stride-44 槽位全红、3 个 stride-8 槽位不动；阳性对照改回同下标 ⟹ 恰好被改的 2 个槽位红 |
+| 3 | **逐位护栏** | §3.2 不变：迁移批次逐条 `just regress`，阳性对照必须真变 | 既有纪律，本批未动渲染路径 |
 
-### 8.5 为什么这条**必须**用户拍板
+🔴 **R4 是 R3 能窄化的前提，不是附属品**：R3 管"只准用有契约的类型"，R4 管"有契约的类型
+stride 真的对"，两条合起来才把灰屏那段静默空间关掉。**拆掉 R4 而不恢复 R3 全禁 = 放行裸奔。**
+
+### 8.5 🔴 红线理由的**实测推翻**（2026-10-12，本机 slangc + 项目原 flags）
+
+旧理由写的是「`StructuredBuffer<T>` 强制元素 stride ≥16 字节对齐」，且旧调试历史另有一句
+「`scalarBlockLayout` 不影响其 stride」。**两句都被实测推翻**：同一个 `struct Vertex { float3
+pos; float3 color; }`（C++ `sizeof` = 24），只改一个 flag：
+
+| flags | SPIR-V 结构体名 | `color@Offset` | **ArrayStride** |
+|---|---|---|---|
+| 项目现行（带 `-fvk-use-scalar-layout`） | `Vertex_natural` | 12 | **24** ✓ = C++ `sizeof` |
+| 不带 scalar layout | `Vertex_std430` | 16 | **32** ✗ |
+
+旁证（同一构建产物，非推测）：`build/rgl/generated_shaders/meshlet_cull.comp.spv` 里
+`MeshletClusterHeader`（含 `float3 center`，44B）的 `ArrayStride` = **44**，不是 48。
+
+**三条结论**：
+
+1. **灰屏是真的、机制也记对了**（24 vs 32），**但根因是 std430 把 `float3` 补到 16 字节**，
+   不是"StructuredBuffer 强制 16 字节 stride 对齐"这条固有属性。旧记录把**一种布局口径的
+   行为**写成了**载体的固有属性**——这是本类红线最容易犯的过度泛化。
+2. **「`scalarBlockLayout` 不影响其 stride」经验上是错的**：scalar layout 把 `ArrayStride`
+   从 32 改成 24、`color` 从 16 改成 12。也就是说**项目全量带 `-fvk-use-scalar-layout`
+   （`cmake/RglSlang.cmake` 的 `SLANG_FLAGS` 唯一声明点）这件事本身，就是那条红线的前提失效**。
+3. **当年选的"正确修法"（`ByteAddressBuffer` + 手写 `.Load3(ti * 24)`）正是本项目今天双源
+   问题的制造者**——拿一个**编译器能抓**的坑（stride 不匹配 → 现在由 R4 直接 ERROR），
+   换成了一个**只有截图能抓**的坑（手写字节偏移写错，静默画错）。这条讽刺是本次结案最值钱
+   的产出：**一条被过度泛化的红线，其"解法"的代价不会出现在红线的账上**，只会出现在半年后
+   那份"为什么这块偏移有两份"的排查记录里。
+
+**所以**：2026-10-01 全禁**当时是对的**（那会儿不在全项目 scalar layout 下、也没有 R4）；
+2026-10-12 全禁**现在是错的**（全项目带 scalar layout、元素类型出自反射契约带
+`static_assert(sizeof == N)`、且 R4 每次构建对账）。
+
+### 8.6 变异读数（护栏有牙的原始证据，2026-10-12 本机）
+
+```
+# 变异 A：把 MeshletClusterHeader 的 schema 声明值 44 改成 48
+[stride-check-ERROR] rgl/shaders/meshlet_cull.slang: `StructuredBuffer<MeshletClusterHeader>`
+  的 SPIR-V ArrayStride = 44 ≠ 反射生成物 sizeof(MeshletClusterHeader) = 48   → exit 1
+
+# 变异 B：去掉 -fvk-use-scalar-layout（= 复现当年灰屏的机制本身）
+[stride-check-ERROR] … MeshletClusterHeader  ArrayStride = 64 ≠ sizeof = 44（类型名 …_std430）
+[stride-check-ERROR] … MeshletCullPush       ArrayStride = 112 ≠ sizeof = 100
+[stride-check-ERROR] … ModelVertex           ArrayStride = 64 ≠ sizeof = 48
+[stride-check-ERROR] … SceneLight            ArrayStride = 64 ≠ sizeof = 48   → exit 1
+
+# 失效出声：slangc 定位不到时不静默返回 0
+[stride-check-ERROR] --slangc 指定的路径不存在: /nope/slangc——无法现场编探针，
+  本护栏本次**未检查 9 个契约类型**
+[stride-check] 汇总: 1 问题（ERROR 1） / **无读数 = 本次未做任何对账**
+```
+
+### 8.7 为什么这条**必须**用户拍板（结案陈词）
 
 "全库零使用、无豁免清单"是一条**意图声明**，不是一条技术结论。工程侧能证明"带反射契约的
 StructuredBuffer 在本机 stride 正确"，但**推翻一条用户定下的红线不是工程权限**。
-所以在 §8.4 三条落地并获放行之前，本计划的 §2 目标形态**在 `rgl/` 树内一律不得实施**。
+2026-10-12 用户拍板放行，§8.4 三条同日落地，本计划 §2 目标形态自此解禁。
