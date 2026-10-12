@@ -26,7 +26,7 @@ set(RGL_GENERATED_CPPM "")
 
 # 调用：rgl_reflect_slang(<slang 相对 rgl/> <schema 相对 rgl/> <module_name>)
 # 产物 = generated/<module_name>.cppm；模板固定 types_cppm.inja。
-# 5 条 slang 管线统一走 reflection_tool slang 子命令（链接 libslang.so 直接查 C API，
+# 6 条 slang 管线统一走 reflection_tool slang 子命令（链接 libslang.so 直接查 C API，
 # 不消费 JSON 中间层——见 docs/archive/slang_api_reflection_research.md）。struct 布局 = 编译器
 # 实查真值（逐字段 offsetof static_assert），schema 降为提取清单 + 交叉校验期望值。
 # 每条 = 单一 COMMAND（原 slangc + validate + generate 三步合一）。
@@ -51,7 +51,7 @@ endfunction()
 
 # reflect：显式重建全部反射产物（工具由 add_dependencies 先建；管线无条件重跑）。
 add_custom_target(reflect
-    COMMENT "重跑 5 条反射管线（slangc reflection + validate + generate/render）")
+    COMMENT "重跑 6 条反射管线（slangc reflection + validate + generate/render）")
 add_dependencies(reflect reflection_tool)
 
 # types 管线
@@ -65,6 +65,8 @@ rgl_reflect_slang(shaders/lights.slang shaders/lights_schema.lua lights_types_ge
 # 前向头管线（Phase 7 债消）：scene.slang 的 SceneLight（forward 单灯头 @0-48）经 C API
 # 反射生成 C++ struct，替换 vkresources.cppm 原手写 LightDataGpu（双源消除）。
 rgl_reflect_slang(shaders/scene.slang shaders/scene_forward_schema.lua scene_forward_types_generated)
+# 逐簇剔除契约（★1-a2-i）：MeshletCullItem / cullPush 经 C API 反射生成 C++ struct
+rgl_reflect_slang(shaders/meshlet_cull.slang shaders/meshlet_cull_schema.lua meshlet_cull_types_generated)
 
 # features 管线（config JSON → 模板渲染，无 slangc 步骤）
 set(FEATURES_CPPM "${GEN_SRC_DIR}/features_generated.cppm")

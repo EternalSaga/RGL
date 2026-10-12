@@ -36,12 +36,12 @@ namespace RGL {
         uint32_t base;
         uint32_t count;
         uint32_t l0Count;
-        uint32_t reserved;
+        uint32_t cullBase;
     };
     static_assert(sizeof(ObjectClusterRange) == 16, "Size of C++ struct ObjectClusterRange does not match shader reflection!");
     static_assert(offsetof(ObjectClusterRange, count) == 4, "Field ObjectClusterRange.count offset does not match shader reflection (scalar layout drift!)");
     static_assert(offsetof(ObjectClusterRange, l0Count) == 8, "Field ObjectClusterRange.l0Count offset does not match shader reflection (scalar layout drift!)");
-    static_assert(offsetof(ObjectClusterRange, reserved) == 12, "Field ObjectClusterRange.reserved offset does not match shader reflection (scalar layout drift!)");
+    static_assert(offsetof(ObjectClusterRange, cullBase) == 12, "Field ObjectClusterRange.cullBase offset does not match shader reflection (scalar layout drift!)");
 
 
 

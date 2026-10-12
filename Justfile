@@ -176,7 +176,7 @@ imgqa *ARGS="":
     {{ BUILD }}/tools/imgqa/imgqa {{ ARGS }}
 
 
-# 重跑 7 条反射管线（改动 shaders/*.slang / *_schema.lua / tools/templates /
+# 重跑 8 条反射管线（改动 shaders/*.slang / *_schema.lua / tools/templates /
 # features_config.json / param_semantics.json 后必须执行；产物 rgl/generated/ 已入版本控制需随
 # 改动一并提交，否则 reflection_check 守卫会拦构建）
 reflect:

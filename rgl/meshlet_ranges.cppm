@@ -3,6 +3,7 @@ export module meshlet_ranges;
 import rlstd;
 import meshlet_asset;
 import scene_forward_types_generated;  // ObjectClusterRange（scene data 表条目，反射生成）
+import meshlet_cull_types_generated;   // MeshletCullItem（★1-a2-i 剔除项，反射生成，🔴 勿在此手写）
 
 /**
  * meshlet_ranges —— 从簇产物扫出**逐 primitive 的簇区间**（簇化轴 ★1-a1i，rlbase，纯 CPU 无设备）
@@ -102,6 +103,51 @@ export struct ClusterRangeTable {
 	/** 按 objectSlot 索引的表条目（与 `ObjectDraw` 等三张 per-object 表同一条索引）。 */
 	std::vector<ObjectClusterRange> bySlot;
 };
+
+/**
+ * 逐簇剔除项表（★1-a2-i，registry ctx，装配层启动期建一次）。
+ *
+ * 元素 `MeshletCullItem` 是**反射生成物**（`meshlet_cull.slang` → `generated/meshlet_cull_types_generated.cppm`，
+ * clusterIdx@0 / objectSlot@4，sizeof 8 由生成物里的 static_assert 钉住），本模块只持有它——
+ * 🔴 布局不在这里手写第二份（compute 契约走反射是红线，见 meshlet_cull.slang 头注释）。
+ *
+ * 为什么一个剔除项是「(簇, 实例) 对」而不是只存簇下标：同一个资产的簇会被多个 objectSlot 共享，而
+ * 剔除判据里的世界变换来自**实例**（对象矩阵表按 objectSlot 索引）。只存簇下标 ⟹ 剔除器不知道该用
+ * 哪个实例的矩阵。8B 一项 × 27,487 项 ≈ 220 KB，启动期一次性上传（同 `GpuCull` 的 cullTable 形态）。
+ *
+ * 与 `ClusterRangeTable` 的关系 = **同一批数据的两种视图**：区间表给 mesh shader 按 objectIndex
+ * 查「我的簇从哪开始」，本表给剔除器**线性铺开**逐簇跑（GPU 上按 object 分段的二维派发不划算）。
+ * 两者由 `buildClusterCullItems` **一次同时产出**（cullBase 与 items 的下标关系必须同生共死，
+ * 分两处算 = 迟早漂）。
+ */
+export struct MeshletCullItemTable {
+	/**
+	 * 剔除项，**objectSlot 升序**、同 object 内簇内序升序（= `cullBase` 前缀和的展开序）。
+	 * 字段口径：`clusterIdx` = 全局簇下标（= 该 object 的 `ObjectClusterRange.base` + 簇内序，
+	 * 读簇包围球用）；`objectSlot` = 实例矩阵槽（= shader 的 `objectIndex`，读对象矩阵用）。
+	 */
+	std::vector<MeshletCullItem> items;
+};
+
+/**
+ * 建逐簇剔除项表，并**就地**把 `cullBase` 写进 `table.bySlot`（★1-a2-i）。
+ *
+ * ## 下标空间这件事是本函数的全部风险，所以口径写死
+ * 剔除标志数组按**剔除项下标**索引；mesh shader 侧要能算出同一个下标，公式是
+ * `flag[range.cullBase + 簇内序]`。于是 `cullBase` 必须满足：
+ * **按 objectSlot 升序的 `l0Count` 前缀和**。选 slot 升序而不是别的序，理由只有一个：
+ * 它是 mesh shader 侧**唯一能复现**的序（shader 只有 objectIndex，没有别的可比量）。
+ *
+ * 🔴 为什么不用 `base + 簇内序` 当下标：`base` 是全局簇下标，同资产被两个 object 复用时两者
+ * 相同 ⟹ 撞同一标志槽 = 一个对象的可见性替另一个决定 = **几何凭空消失**（误剔无错误信号）。
+ *
+ * 无簇产物的槽（`l0Count == 0`）不占剔除项，但**照样占号**（前缀和天然跳过 0 长度段），
+ * 所以 mesh shader 的 `cullBase + 簇内序` 对任何槽都不会读到别人的标志。
+ *
+ * @param table 已装配完的区间表（本函数写其 `cullBase` 字段，其余字段只读）
+ * @return 剔除项表，`items.size() == Σ l0Count`
+ */
+export MeshletCullItemTable buildClusterCullItems(ClusterRangeTable& table);
 
 /**
  * 簇路径「opaque 段原位取代」的**生效**标记（★1-a1ii-β-1，`meshlet.switch`）。

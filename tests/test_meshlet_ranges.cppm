@@ -70,6 +70,7 @@ import meshlet_asset;    // MeshletAsset / parseMeshletAsset / 段规格常量
 import meshlet_ranges;   // scanClusterRanges / MeshletPrimRange
 import scene_data;       // writeClusterRangeRegion / kSceneDataClusterRange* / kSceneDataBytes
 import scene_forward_types_generated;  // ObjectClusterRange（表条目，反射生成）
+import meshlet_cull_types_generated;   // MeshletCullItem（剔除项条目，反射生成；★1-a2-i）
 
 namespace RGL {
 namespace {
@@ -435,7 +436,7 @@ TEST_CASE("尾区写入：逐字段落位 + 有效段之外清零 + 不踩前一
 		CHECK(readU32(staging, slot + 0) == ranges[i].base);
 		CHECK(readU32(staging, slot + 4) == ranges[i].count);
 		CHECK(readU32(staging, slot + 8) == ranges[i].l0Count);
-		CHECK(readU32(staging, slot + 12) == ranges[i].reserved);
+		CHECK(readU32(staging, slot + 12) == ranges[i].cullBase);
 	}
 	// ② 有效段之后清零（★1-a2 的「无簇产物实例 = 空区间」依赖这条）
 	const uint64_t usedEnd = kSlangClusterRangeLiteral + ranges.size() * kSlangClusterRangeStride;
@@ -472,6 +473,135 @@ TEST_CASE("尾区写入：容量边界 = 恰好满表必须成功（`>` 写成 `
 	overflow.push_back(ObjectClusterRange { 0u, 0u, 0u, 0u });
 	auto staging2 = makeStaging();
 	CHECK_FALSE(writeClusterRangeRegion(staging2, overflow));
+}
+
+// ───────────────────────────────────────────────────────────────
+// ★1-a2-i `buildClusterCullItems`：逐簇剔除项表 + cullBase 前缀和
+// ───────────────────────────────────────────────────────────────
+
+/**
+ * 手搭区间表（**不**走扫描器）：本函数的输入就是 `ClusterRangeTable`，扫描器有自己的用例，
+ * 混进来只会让失败不可归因。
+ *
+ * 形态刻意埋三个坑：
+ *  - slot2 `l0Count = 0`（无簇产物实例）→ 不占剔除项，但要验它没被塞进表里；
+ *  - slot1 与 slot3 **共享同一个 `base`**（同资产两实例）→ 这是「为什么不能用
+ *    `base + 簇内序` 当标志下标」的全部理由，也是本组用例的核心；
+ *  - slot4 空槽收尾（表尾边界）。
+ */
+inline ClusterRangeTable makeTableForCullItems() {
+	ClusterRangeTable table;
+	table.bySlot = {
+		ObjectClusterRange { 0u, 9u, 3u, 0u },  // slot0 → 剔除项 0..2
+		ObjectClusterRange { 3u, 4u, 2u, 0u },  // slot1 → 剔除项 3..4
+		ObjectClusterRange { 0u, 9u, 0u, 0u },  // slot2 → 无簇，不占项
+		ObjectClusterRange { 3u, 4u, 1u, 0u },  // slot3 → 剔除项 5（与 slot1 同 base）
+		ObjectClusterRange { 0u, 0u, 0u, 0u },  // slot4 → 空
+	};
+	return table;
+}
+
+TEST_CASE("剔除项表正向锚点：cullBase 前缀和与逐项内容等于手算常量") {
+	auto table = makeTableForCullItems();
+	const auto items = buildClusterCullItems(table);
+
+	// cullBase = l0Count 按 slot 升序的前缀和：0, 0+3, 3+2, 5+0, 5+1
+	//            slot0  slot1  slot2  slot3  slot4
+	const std::array<uint32_t, 5> expectedCullBase { 0u, 3u, 5u, 5u, 6u };
+	for (size_t slot = 0; slot < expectedCullBase.size(); ++slot)
+		CHECK(table.bySlot[slot].cullBase == expectedCullBase[slot]);
+
+	// 逐项内容手算（顺序 = slot 升序、同 slot 内簇内序升序；clusterIdx = base + 簇内序）
+	const std::array<MeshletCullItem, 6> expectedItems {
+		MeshletCullItem { 0u, 0u }, MeshletCullItem { 1u, 0u }, MeshletCullItem { 2u, 0u },
+		MeshletCullItem { 3u, 1u }, MeshletCullItem { 4u, 1u }, MeshletCullItem { 3u, 3u },
+	};
+	REQUIRE(items.items.size() == expectedItems.size());
+	for (size_t i = 0; i < expectedItems.size(); ++i) {
+		CHECK(items.items[i].clusterIdx == expectedItems[i].clusterIdx);
+		CHECK(items.items[i].objectSlot == expectedItems[i].objectSlot);
+	}
+}
+
+/**
+ * 🔴 **本组最值钱的一条**：复现 mesh shader 那行寻址公式
+ * `flag[range.cullBase + 簇内序]` ⟹ 必须落在「本 object 自己的第 local 个簇」上。
+ *
+ * 为什么断言写成"对每个槽每个簇都成立"而不是只查几个点：这条是**契约**而不是实现细节，
+ * 它一旦破了，症状是「某个 object 的一块簇凭空消失」（误剔没有任何错误信号）。
+ * 全量遍历 ⟹ 任何前缀和错位（少加一个槽、把 count 当 l0Count 加、跳过空槽时忘了推进）
+ * 都会立刻红。
+ */
+TEST_CASE("剔除项表契约：shader 侧 cullBase + 簇内序 必须命中本 object 自己的簇") {
+	auto table = makeTableForCullItems();
+	const auto items = buildClusterCullItems(table);
+
+	for (uint32_t slot = 0; slot < table.bySlot.size(); ++slot) {
+		const ObjectClusterRange& range = table.bySlot[slot];
+		for (uint32_t local = 0; local < range.l0Count; ++local) {
+			const uint32_t flagIndex = range.cullBase + local;  // ← mesh shader 的算式
+			REQUIRE(flagIndex < items.items.size());
+			CHECK(items.items[flagIndex].clusterIdx == range.base + local);
+			CHECK(items.items[flagIndex].objectSlot == slot);
+		}
+	}
+}
+
+/**
+ * 反向护栏：**同 base 的两个 object 必须各占互不相交的标志区间**。
+ *
+ * 这条专门杀那个最自然的错法——拿 `base + 簇内序` 当标志下标。slot1 与 slot3 共享 `base = 3`，
+ * 若按那个口径，slot3 的第一个簇会去读 slot1 第一个簇的标志位 ⟹ 一个实例的可见性替另一个
+ * 决定 = 几何凭空消失。断言写成"区间不相交"而不是"值不相等"，是为了让错法**必然**触发
+ * （而不是碰巧两个实例可见性相同而蒙过去）。
+ */
+TEST_CASE("剔除项表反向：同 base 的两实例标志区间必须不相交（杀 base+簇内序 当下标）") {
+	auto table = makeTableForCullItems();
+	const auto items = buildClusterCullItems(table);
+
+	const ObjectClusterRange& a = table.bySlot[1];
+	const ObjectClusterRange& b = table.bySlot[3];
+	REQUIRE(a.base == b.base);  // 前提本身：两实例确实共享簇区间
+	REQUIRE(a.l0Count > 0u);
+	REQUIRE(b.l0Count > 0u);
+
+	// 区间 [cullBase, cullBase + l0Count) 必须不重叠
+	const bool disjoint = a.cullBase + a.l0Count <= b.cullBase || b.cullBase + b.l0Count <= a.cullBase;
+	CHECK(disjoint);
+
+	// 且两侧同簇内序读到的确实是**不同实例**（objectSlot 不同 = 会用各自的对象矩阵）
+	// 🔴 先 REQUIRE 边界再取下标：本用例的存在意义就是抓「cullBase 指到区间外」的错法，
+	// 若直接 `items[a.cullBase]` 越界 = UB，测试可能不红而是崩或读到巧合同值的垃圾。
+	REQUIRE(a.cullBase < items.items.size());
+	REQUIRE(b.cullBase < items.items.size());
+	CHECK(items.items[a.cullBase].objectSlot != items.items[b.cullBase].objectSlot);
+}
+
+TEST_CASE("剔除项表边界：空表 → 空 items 且 cullBase 保持 0（门关形态）") {
+	ClusterRangeTable empty;
+	CHECK(buildClusterCullItems(empty).items.empty());
+
+	ClusterRangeTable allZero;
+	allZero.bySlot.resize(4);  // value-init = 全 0（无簇产物实例）
+	const auto items = buildClusterCullItems(allZero);
+	CHECK(items.items.empty());
+	for (const auto& range : allZero.bySlot)
+		CHECK(range.cullBase == 0u);
+}
+
+TEST_CASE("剔除项表合计锚：items.size() == Σ l0Count（不是 Σ count）") {
+	auto table = makeTableForCullItems();
+	const auto items = buildClusterCullItems(table);
+
+	uint64_t sumL0 = 0;
+	uint64_t sumAll = 0;
+	for (const auto& range : table.bySlot) {
+		sumL0 += range.l0Count;
+		sumAll += range.count;
+	}
+	CHECK(items.items.size() == sumL0);
+	// 反向：恒 L0 档只喂 L0 前缀，若哪天有人拿 count 建表，这条会把它和上一条同时点亮
+	CHECK(sumL0 < sumAll);
 }
 
 }  // namespace RGL

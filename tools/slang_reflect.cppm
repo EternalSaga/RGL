@@ -213,6 +213,21 @@ private:
 				return fmt::format("glm::mat{}", rc);
 			return fmt::format("glm::mat{}x{}", rc, cc);
 		}
+		// 定长数组字段（★1-a2-i：cullPush.planes = float4[6]）→ std::array<元素, N>。
+		// 元素类型**递归**走本函数；元素不可映射、或元素数拿不到（SLANG_UNBOUNDED_SIZE /
+		// SLANG_UNKNOWN_SIZE）一律返回空串，让调用方既有的 unmappable 失败路径继续生效——
+		// 🔴 不静默兜底成别的类型：兜底 = 生成物按错布局发字段而 [FAIL] 永远不响（本函数
+		// default: return "" 存在的全部理由）。字符串形态与 schema 侧
+		// schema_loader.cppm::vertexAttrCppType 的 "T[N]" 分支逐字符一致，交叉校验才成立。
+		case slang::TypeReflection::Kind::Array: {
+			const size_t n = t->getElementCount();
+			if (n == SLANG_UNBOUNDED_SIZE || n == SLANG_UNKNOWN_SIZE)
+				return "";
+			const std::string elem = typeToCppType(t->getElementType());
+			if (elem.empty())
+				return "";
+			return fmt::format("std::array<{}, {}>", elem, n);
+		}
 		default:
 			return "";
 		}

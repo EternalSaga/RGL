@@ -341,6 +341,9 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg) {
 	// ★1-a1ii-β-1 原位取代档
 	if (auto err = readStrictBoolKey(meshlet, "switch", cfg.meshletSwitch, path))
 		return err;
+	// ★1-a2-i 逐簇视锥剔除
+	if (auto err = readStrictBoolKey(meshlet, "cull", cfg.meshletCull, path))
+		return err;
 	return applyMeshletCoplanarKey(meshlet, cfg, path);
 }
 

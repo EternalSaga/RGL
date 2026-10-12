@@ -91,6 +91,10 @@ rgl_shader(ssr_apply.frag SSR_APPLY_FRAG_SPV scene)
 rgl_shader(taa.frag TAA_FRAG_SPV scene)
 # Phase 7b（批次 5）：GPU culling compute（独立契约 cull.comp.slang 头注释，无 import 契约文件）
 rgl_shader(cull.comp CULL_SPV)
+# 簇化轴 ★1-a2-i：逐簇视锥剔除 compute（一线程一剔除项）。契约 = meshlet_cull.slang
+#（C API 反射单一真相源，非 cull.comp 那套手写字节偏移）。🔴 契约**必须列 DEP**：漏登 =
+# 改契约不触发本 SPV 重编译（stale SPV 静默残留，check_shader_deps R1 点名）。
+rgl_shader(meshlet_cull.comp MESHLET_CULL_SPV meshlet_cull)
 # 批 11.3-1d：FTIZB IZB 创建 + priming（独立契约，头注释即布局真相；heap + shader object，
 # 消费侧 = vk_renderer 门控 sandwich，docs/hfts_izb_plan.md）
 rgl_shader(izb_create.comp IZB_CREATE_SPV)
@@ -242,6 +246,7 @@ set(RGL_BASE_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/lights_types_generated.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/model_types_generated.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/scene_forward_types_generated.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/generated/meshlet_cull_types_generated.cppm"   # ★1-a2-i：MeshletCullItem / cullPush（反射单一真相源）
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/param_semantics_generated.cppm"
 )
 

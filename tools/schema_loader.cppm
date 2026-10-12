@@ -61,9 +61,34 @@ export struct Schema {
 	std::vector<SchemaConstant> constants;
 };
 
+// 定长数组形态 "T[N]" 的拆解（★1-a2-i：cullPush.planes 在 schema 里写 "vec4[6]"）。
+// 成功 = 填出元素类型名与元素数；N 必须是**无溢出**的十进制正整数。非数组形态、缺 `]`、
+// 空/非数字/为 0 的 N 一律 false，调用方按「不可映射」报错——🔴 不静默退化成标量类型
+// （退化的后果是生成的 C++ 字段比 shader 少 N−1 个元素，而布局 static_assert 照样过）。
+// 刻意**不递归**解析多维数组：本项目 slang 侧零使用，递归只会把「写错形态」变成「看着能过」。
+inline bool splitArrayAttrType(std::string_view type, std::string_view& outElem, uint32_t& outCount) {
+	const size_t open = type.find('[');
+	if (open == std::string_view::npos || type.size() < 4 || type.back() != ']')
+		return false;
+	const std::string_view digits = type.substr(open + 1, type.size() - open - 2);
+	if (digits.empty() || digits.size() > 9)  // >9 位不可能是合法数组长度（按溢出防护砍掉）
+		return false;
+	uint32_t count = 0;
+	for (const char ch : digits) {
+		if (ch < '0' || ch > '9')
+			return false;
+		count = count * 10u + static_cast<uint32_t>(ch - '0');
+	}
+	if (count == 0)
+		return false;
+	outElem = type.substr(0, open);
+	outCount = count;
+	return true;
+}
+
 // 顶点属性类型的 packed 字节尺寸（C++/glm 约定：vec3=12B 等）。
 // 未知类型返回 0，由校验方报错。
-export inline uint32_t vertexAttrSize(const std::string& type) {
+export inline uint32_t vertexAttrSize(std::string_view type) {
 	if (type == "float") return 4;
 	if (type == "vec2") return 8;
 	if (type == "vec3") return 12;
@@ -74,11 +99,19 @@ export inline uint32_t vertexAttrSize(const std::string& type) {
 	// Phase 10 批 10.2a：整型标量属性（ObjectDraw.totalTriangles/vertexOffset）
 	if (type == "int") return 4;
 	if (type == "uint") return 4;
+	// 定长数组形态 "T[N]"（★1-a2-i）：元素尺寸 × N，元素名仍走上面那张表
+	std::string_view elem;
+	uint32_t count = 0;
+	if (splitArrayAttrType(type, elem, count)) {
+		const uint32_t elemSize = vertexAttrSize(elem);
+		return elemSize == 0 ? 0 : elemSize * count;
+	}
 	return 0;
 }
 
-// 顶点属性类型 → 生成代码中的 C++ 类型（未知类型返回 nullptr）。
-export inline const char* vertexAttrCppType(const std::string& type) {
+// 标量/向量形态的映射表（"T[N]" 的**元素名**也走这张表，见 vertexAttrCppType）。
+// 未知类型返回 nullptr。
+inline const char* vertexAttrScalarCppType(std::string_view type) {
 	if (type == "float") return "float";
 	if (type == "vec2") return "glm::vec2";
 	if (type == "vec3") return "glm::vec3";
@@ -90,6 +123,23 @@ export inline const char* vertexAttrCppType(const std::string& type) {
 	if (type == "int") return "int32_t";
 	if (type == "uint") return "uint32_t";
 	return nullptr;
+}
+
+// 顶点属性类型 → 生成代码中的 C++ 类型（未知/不可映射类型返回**空串**，由校验方报错）。
+// 两种形态：标量/向量名（"float"/"vec4"/"uint"…）与定长数组 "T[N]"（★1-a2-i 的
+// cullPush.planes 写 "vec4[6]"）。数组分支产出的字符串与 slang_reflect.cppm::typeToCppType
+// 的 Kind::Array 分支**逐字符相同**——validateSlangVertexLayout 比的就是这两个字符串，
+// 两边各写一份格式 = 迟早漂，改任一侧必须同步另一侧。
+export inline std::string vertexAttrCppType(std::string_view type) {
+	if (const char* scalar = vertexAttrScalarCppType(type))
+		return scalar;
+	std::string_view elem;
+	uint32_t count = 0;
+	if (!splitArrayAttrType(type, elem, count))
+		return {};
+	if (const char* elemType = vertexAttrScalarCppType(elem))
+		return fmt::format("std::array<{}, {}>", elemType, count);
+	return {};
 }
 
 export inline bool has(const nlohmann::json& obj, std::string_view key) {

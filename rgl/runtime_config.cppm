@@ -424,6 +424,18 @@ export struct RuntimeConfig {
 	 */
 	bool meshletSwitch = false;
 
+	/**
+	 * ★1-a2-i 逐簇视锥剔除（`runtime.lua meshlet.cull`，默认关）。
+	 *
+	 * 开 = 每帧一次 compute 逐 L0 簇做保守视锥测试，mesh shader 对不可见簇
+	 * `SetMeshOutputCounts(0,0)` 早退。判据与定价 → `docs/mdi_plan.md` §17。
+	 *
+	 * 🔴 依赖 `enable && switch`：本键只作用于**已被簇路径接管**的那批 draw（旧 mesh 管线
+	 * 读不到标志数组）。单独开 = 无消费者，装配层 warn 出声（静默空开关是本项目反复踩的形态）。
+	 * 与 `meshletSwitch` 同款限制：只在 `diagnostics.cull_replay == "cpu"` 生效。
+	 */
+	bool meshletCull = false;
+
 	/** 「TAA 在不在图里」的唯一推导点（原 `scene.lua taa.enabled` 的消费者全部改走这里）。 */
 	[[nodiscard]] constexpr bool aaWantsTaa() const {
 		return aa == AaMode::taa;

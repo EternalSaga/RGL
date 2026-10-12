@@ -192,4 +192,20 @@ std::expected<MeshletRangeScan, std::string> scanClusterRanges(const MeshletAsse
 	return out;
 }
 
+MeshletCullItemTable buildClusterCullItems(ClusterRangeTable& table) {
+	// 一趟 slot 升序扫描同时产出两件事（cullBase 与 items 的下标关系必须同生共死，见接口注释）。
+	// 用 running 而不是先算前缀和再第二趟填表：两趟之间任何对 bySlot 的改动都会让两者错位，
+	// 而那种错位是**静默的**（标志读错 = 少画一块，没有错误信号）。
+	MeshletCullItemTable out;
+	uint32_t running = 0;
+	for (size_t slot = 0; slot < table.bySlot.size(); ++slot) {
+		ObjectClusterRange& range = table.bySlot[slot];
+		range.cullBase = running;
+		for (uint32_t local = 0; local < range.l0Count; ++local)
+			out.items.push_back(MeshletCullItem{range.base + local, static_cast<uint32_t>(slot)});
+		running += range.l0Count;
+	}
+	return out;
+}
+
 }  // namespace RGL

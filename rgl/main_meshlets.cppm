@@ -322,7 +322,7 @@ void wireMeshletSwitch(entt::registry& registry, const AssetTable& assets,
  * 共享同一份区间，资产 id 反查天然实例无关，也不依赖 registerScene 的分配序。
  */
 void wireClusterRangeTable(entt::registry& registry, const UploadedAssets& assets,
-                           const MeshletAssetStore& meshlets, bool meshletEnable) {
+                           const MeshletAssetStore& meshlets, bool meshletEnable, bool meshletCull) {
 	if (!meshletEnable)
 		return;  // 门关 = 一行都不走（逐位不变构造性成立；表不建 ⟹ scene data 该区全 0）
 	std::map<std::string, MeshletRangeScan> scans;
@@ -344,10 +344,21 @@ void wireClusterRangeTable(entt::registry& registry, const UploadedAssets& asset
 			.base = hit->second->base,
 			.count = hit->second->count,
 			.l0Count = hit->second->l0Count,
-			.reserved = 0,
+			.cullBase = 0,  // ★1-a2-i：门开时由 buildClusterCullItems 就地改写，门关恒 0
 		};
 		++filled;
 	});
+	// ★1-a2-i 逐簇剔除：建剔除项表 + 就地写 cullBase。门 `meshlet.cull` 关 = **根本不调**，
+	// 于是 scene data 该区与 β-1 逐位同（cullBase 保持 0，mesh shader 也不读标志）——
+	// 门关逐位不变的构造性保证，不靠"读了但结果一样"。
+	if (meshletCull) {
+		auto& items = registry.ctx().emplace<MeshletCullItemTable>();
+		items = buildClusterCullItems(table);
+		if (auto* logger = RLLogger::getInstance())
+			logger->info("meshlet: 逐簇剔除项表已装配（★1-a2-i，消费者 = meshlet_cull.comp.slang）"
+						 "—— cullItems={}（应 == l0Clusters={}）",
+					items.items.size(), totals.l0Clusters);
+	}
 	if (auto* logger = RLLogger::getInstance())
 		logger->info("meshlet: ObjectClusterRange 表已装配（scene data 尾区 @722400，消费者 = "
 					 "meshlet.mesh.slang）—— prims={} clusters={} l0Clusters={} / objectSlot 填充 {}/{}",
@@ -524,7 +535,7 @@ void wireMeshletOverlayDepthCompare(Renderer& renderer, const RuntimeConfig& cfg
  */
 void wireMeshletPostRegistration(entt::registry& registry, const UploadedAssets& uploaded,
 	const MeshletAssetStore& meshlets, const AssetTable& assetTable, const RuntimeConfig& cfg) {
-	wireClusterRangeTable(registry, uploaded, meshlets, cfg.meshletEnable);
+	wireClusterRangeTable(registry, uploaded, meshlets, cfg.meshletEnable, cfg.meshletCull);
 	wireMeshletSwitch(registry, assetTable, cfg);
 }
 

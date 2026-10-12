@@ -138,7 +138,12 @@ struct ObjectClusterRange
     uint base;      // 该 primitive 的簇区间起点（全局簇下标）
     uint count;     // 区间长度（全部 DAG 级；恒 L0 档只用前 l0Count 条）
     uint l0Count;   // 区间**前缀**里的 L0 簇条数（产物不变量：L0 恒为前缀）
-    uint reserved;  // 补齐位（★2 选级预算）
+    // ★1-a2-i 逐簇剔除项表的**本 object 首项下标**（= l0Count 按 objectSlot 升序的前缀和）。
+    // 🔴 为什么不能拿 `base + 簇内序` 当剔除标志数组的下标：`base` 是**全局簇下标**，同资产被
+    // 两个 object 复用时两者 `base` 相同 ⟹ 撞同一标志槽 = 一个对象的可见性替另一个决定
+    // = **几何凭空消失**（误剔没有任何错误信号）。cullBase 按 objectSlot 前缀和 ⟹ 逐 object 唯一。
+    // 本字段原为 `reserved` 补齐位（★2 选级预算）——★2 若要选级请另开字段/另表，勿与此争用。
+    uint cullBase;
 };
 
 // 簇化轴 ★1-a1ii-α：按 objectIndex 读簇区间条目。与 readObjectDraw 同纪律：

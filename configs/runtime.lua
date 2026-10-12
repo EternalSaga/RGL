@@ -172,6 +172,11 @@ return {
         --   一次（gpu_sync 档 opaque 段由候选表重放，段内换管线不在那条路上）。
         -- 边界（β-1 不做）：阴影/CSM、picking、IZB mask 重放、透明排序仍走旧路径。
         switch = false,
+        -- ★1-a2-i 逐簇视锥剔除：= true（且 enable = switch = true）时每帧一次 compute 逐 L0 簇
+        -- 做保守视锥测试（与 CPU 参考剔除器 cullClustersLinear 同式），mesh shader 对不可见簇
+        -- 早退。判据（🔴 主判据是零阈值的「cull=on 逐位 = cull=off」——保守剔除按构造不可能
+        -- 改变交付图像）与定价 → docs/mdi_plan.md §17。单独开 = 无消费者，装配层 warn 出声。
+        cull = false,
     },
 
     -- DIAG：隐藏窗启动、第 N 帧后显示（可见窗 fault 排查；-1 = 立即显示）

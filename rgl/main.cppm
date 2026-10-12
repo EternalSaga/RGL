@@ -386,9 +386,11 @@ export std::string resolvePrimitiveSpecName(const SceneConfig& scene, bool defer
  * @param assets 上传产物（`models[].file` 与 `meshlets` 同源；`assetIds` 与 prim 下标对齐）
  * @param meshlets 簇产物容器（★0-b2；门关 = 空）
  * @param meshletEnable 门 `runtime.lua meshlet.enable`（关 = 一行都不走）
+ * @param meshletCull 门 `runtime.lua meshlet.cull`（★1-a2-i；关 = 不建剔除项表、cullBase 保持 0
+ *        ⟹ scene data 该区与 β-1 逐位同，构造性保证不靠"读了但结果一样"）
  */
 export void wireClusterRangeTable(entt::registry& registry, const UploadedAssets& assets,
-								  const MeshletAssetStore& meshlets, bool meshletEnable);
+								  const MeshletAssetStore& meshlets, bool meshletEnable, bool meshletCull);
 
 /**
  * C3+deferred+DGC+Renderer 装配产物（成员析构逆序 renderer→dgcStatic→dgc→cull，与

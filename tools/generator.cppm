@@ -249,8 +249,8 @@ export std::optional<std::string> generateCppm(const nlohmann::json& reflection,
 		structObj["fields"] = nlohmann::json::array();
 		structObj["size"] = vl.stride;
 			for (const auto& attr : vl.attributes) {
-				const char* cppType = vertexAttrCppType(attr.type);
-				if (!cppType) continue;
+				const std::string cppType = vertexAttrCppType(attr.type);
+				if (cppType.empty()) continue;
 				nlohmann::json fieldObj;
 				fieldObj["name"] = attr.name;
 				fieldObj["cpp_type"] = cppType;
@@ -311,8 +311,8 @@ export bool validateSlangVertexLayout(const SlangStruct& api, const SchemaVertex
 	}
 	for (size_t i = 0; i < vl.attributes.size(); i++) {
 		const auto& attr = vl.attributes[i];
-		const auto* expected = vertexAttrCppType(attr.type);
-		if (!expected) {
+		const std::string expected = vertexAttrCppType(attr.type);
+		if (expected.empty()) {
 			logger->error("[FAIL] vertexLayout '{}' attr '{}': unmappable schema type '{}'",
 				vl.name, attr.name, attr.type);
 			return false;
