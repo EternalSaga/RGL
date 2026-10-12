@@ -145,9 +145,8 @@ StructuredBuffer<uint>            clusterVisible;
 2. 🔴 **裸字节偏移棘轮**：新增 `Load*(... + <数字>)` 形态 = **error**；存量进 baseline
    **只准减不准增**（机制先例 = `tools/checks/tool_baseline.py`）。这条是唯一能阻止
    ByteAddressBuffer 再扩散的护栏——**没有它，本计划做完后新代码照样写偏移**。
-3. **GPU-AV 冒烟臂**：给 `just smoke` 加一臂（先例 = syncval 的 `VK_LAYER_VALIDATE_SYNC=1`
-   环境变量形态）。**先按变异纪律证明它有牙**（故意越界读，必须报），再当判据用。
-   它覆盖 §3.4 第二条，也是唯一能覆盖**运行期下标越界**的工具。
+3. ~~**GPU-AV 冒烟臂**~~ → 🔴 **已否决**（2026-10-12 实测，依据见 §9.9）。替代护栏 =
+   **表尾毒化哨兵元素**（§9.9 末），它覆盖 §3.4 第二条的"读到界外"那一半。
 4. **设备能力闸门**：任何编码了设备上限的着色器常量，必须有对应的运行期查询。
    先例 = `checkMeshletDeviceFit`。
 
@@ -478,3 +477,47 @@ barrier→逐位"全链路第一次打通；之后各批按上面三条。
 🔴 **护栏（批 G）先于任何迁移批**（§5 顺序红线："先建护栏再迁移，顺序反了护栏永远补不上"）。
 🔴 每批收账必须写回本节状态列 + `docs/还债实测数据.md`，**数字绑机**（AMD 8060S / RADV
 STRIX_HALO / Mesa 26.2.3）。
+
+### 9.9 §5.3 GPU-AV 冒烟臂：**否决**（实测两条独立障碍）+ 替代护栏
+
+结论先说：**GPU-AV 在本项目架构下不可用**，不是"没配好"。别再试第三次，两条障碍都是实测：
+
+**障碍一：环境变量根本开不起来**（先例 syncval 的 `VK_LAYER_VALIDATE_SYNC=1` 走不通）。
+本机 VVL 实测无效的写法（每种都以 `createTotal` 不变为准据判为 no-op）：
+`VK_LAYER_ENABLES=GPU-Assisted`（**连乱码值都不报错** = 该变量不被解析）、
+`VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT=1`、`VK_KHRONOS_VALIDATION_ENABLE={GPU-AV|gpu_av|GPU-Assisted}`、
+`VK_LAYER_SETTINGS_PATH`（`khronos_validation.enable = GPU-AV` 与 ini 头两种写法）。
+✅ **唯一有效形态 = 代码里挂 `vk::ValidationFeaturesEXT` pNext 到 instance create**
+（`eGpuAssisted` + `eGpuAssistedReserveBindingSlot`；rlvk 需补
+`ValidationFeatureEnableEXT` / `ValidationFeaturesEXT` 两行 `using`）。
+
+**障碍二：开起来后被 `VK_SHADER_CREATE_INDIRECT_BINDABLE_BIT_EXT` 顶死**。VVL 原文：
+> `vkCreateShadersEXT(): pCreateInfos[1] Internal Error, GPU-AV is being disabled.`
+> `Unable to instrument shader using VkIndirectExecutionSetEXT validly … because of GPU-AV's
+> usage of VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC (If you don't need
+> VK_SHADER_CREATE_INDIRECT_BINDABLE_BIT_EXT, turn it off).`
+
+⟹ GPU-AV 与 DGC 的 indirect-bindable shader **互斥**（`rgl/shader.cppm` 两处 flags 是无条件的）。
+
+**障碍三（决定性，也是最贵的一条）**：把两处 `INDIRECT_BINDABLE` 摘掉后 GPU-AV **确实跑起来了**
+（`createTotal` 2.95s → **5.63s** = 插桩代价，同时是"它真的在"的判据），
+但**故意越界读它一条不报**：把 `scene.slang::readAoStrength` 改成
+`sceneData.Load(4000000u)`（buffer 只有 789760B）——截图 1376KB → 1360KB **证明该读真的执行了**，
+`errors=0`、日志零条越界报告。
+
+机制解释（**假设**，两条观察收敛）：VVL 自己那句
+"GPU-AV instruments all shaders at vkCreateShadersEXT time, this means there are embedded
+descriptors bound that we can't detect if needed or not later" ⟹ descriptor heap 下它拿不到
+描述符的 buffer 边界。**这与 `docs/还债总账.md` 债-75 的「shader 侧 buffer 访问 VVL 无从归因」
+是同一条机制的两处独立观察**（那边是 syncval 删 barrier 变异 0 条，这边是 GPU-AV 越界读 0 条）。
+
+**为什么不摘 flag 硬凑一臂**：摘掉 `INDIRECT_BINDABLE` 后测的**不是交付形态**（DGC 路整条不成立），
+"另一条臂" 的判据强度低于它带来的维护面；且它仍抓不到越界（障碍三），等于只付代价不拿收益。
+
+**替代护栏 = 表尾毒化哨兵元素**（本计划采用，随第一个 `StructuredBuffer` 表批落地）：
+各区之间现在**紧邻**，越界读读到的是**邻居区的合法数据** = 静默错值。给每张表尾追加
+**一个元素**，内容由 `ensure()` 一次性写成**毒化模式**（NaN 填充，非零、不参与每帧写），
+越界读 ⟹ NaN 进着色器 ⟹ **锚点必炸**。
+- 判据（有牙）：把某 read 的下标临时 +1 → 两档锚点必须变；还原回锚。
+- 代价：每表 +1 元素（矩阵表 64B）、`kSceneDataBytes` 略增、零每帧代价。
+- 它抓不到"界内读错元素"（那本来就不是越界问题，靠逐位锚点 + 阳性对照）。
