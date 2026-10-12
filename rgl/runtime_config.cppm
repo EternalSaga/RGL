@@ -348,8 +348,9 @@ export struct RuntimeConfig {
 	 * ★0-b1 只落**配置项与读取侧模块**（`rgl/meshlet_asset.cppm`），尚未接线到任何渲染路径
 	 * ⟹ 本键当前无消费者，接线发生在 ★0-b2/★1。
 	 *
-	 * 形态先例 = readSsrBlock（嵌套块 + readBoolKey，无扁平键双读兼容——两个真相源是本项目
-	 * 反复登记的反模式）。gate_lint 不挂号的理由与 ssr 块同款（runtime.lua 键不在 gate_lint
+	 * 形态先例 = readSsrBlock（嵌套块，无扁平键双读兼容——两个真相源是本项目反复登记的反
+	 * 模式）；★1-a1ii-β-1 起本块四枚布尔改走 readStrictBoolKey（类型错 = 启动失败，理由 →
+	 * 该函数注释）。gate_lint 不挂号的理由与 ssr 块同款（runtime.lua 键不在 gate_lint
 	 * 管辖的两张回显表里，→ readSsrBlock 末段）。
 	 */
 	bool meshletEnable = false;
@@ -396,6 +397,32 @@ export struct RuntimeConfig {
 	 * （2026-10-02 slang fp 重排教训，同 `meshletDebug`）。默认关；enable 关时无意义。
 	 */
 	bool meshletTint = false;
+	/**
+	 * 簇路径在 opaque 段**原位取代**旧 mesh draw 档（configs/runtime.lua `meshlet.switch`
+	 * 键，★1-a1ii-β-1）。
+	 *
+	 * = true（且 `enable` = true）时，门开资产（有簇管线条目 + L0 簇数 > 0 + 非 blend）在
+	 * 主 opaque 段里由簇路径 draw **1:1 原位**顶掉旧 mesh draw：同 objectIndex、同 pushData、
+	 * 同段内位置，只换「管线条目 + task 数」（`meshletPipelineIndex` / `2 × l0Count`）。
+	 * 取代发生在**原位**而不是另开一段，理由 = opaque 段序被 GPU culling 候选序对账
+	 * （`collectCpuObjectSlots`）与 cull_driver 重放路强依赖，任何插段/换序都在非默认 cull
+	 * 档打破对账；原位换 draw 内容而不动序列 = 对账零感知（★1-a1ii-α 的独立叠加向量正是
+	 * 为了绕开这条才那样设计，本键是把它请回段内）。
+	 *
+	 * 三态语义（缺键 = false = 现行 α 形态 = 逐位不变护栏）：
+	 *  · `enable = false`        → 本键无意义（簇条目根本没烘，无 draw 可取代）
+	 *  · `enable && !switch`     → α 形态：旧路径照画 + 共面影子叠加
+	 *  · `enable && switch`      → β 形态：簇路径顶掉旧 draw，**影子叠加同时清空**
+	 *    （同一批几何不能既原位取代又再叠加画第二遍；互斥在装配层 warn 出声）
+	 *
+	 * 🔴 只在 `diagnostics.cull_replay == "cpu"`（默认档）生效：`gpu_sync` 档的 opaque 段由
+	 * `cullDriver.executeOpaqueSegment` 按**候选表**重放（DGC 的 push 与 task 数按旧 mesh
+	 * 管线烘焙），段内换管线不在那条路上。非默认档 + 本键 = **不切**、保持旧路径、启动
+	 * warn 一次（判据点 = `wireMeshletSwitch`；静默切一半 = 最难查的假绿形态）。
+	 * 边界（β-1 故意不做，归 β-2/β-3）：阴影/CSM、picking/objectID、IZB mask 重放、透明
+	 * 排序仍走旧路径。
+	 */
+	bool meshletSwitch = false;
 
 	/** 「TAA 在不在图里」的唯一推导点（原 `scene.lua taa.enabled` 的消费者全部改走这里）。 */
 	[[nodiscard]] constexpr bool aaWantsTaa() const {

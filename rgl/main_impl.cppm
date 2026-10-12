@@ -753,9 +753,10 @@ int main() {
 			configs.runtime.meshletDebug, configs.runtime.meshletTint);
 		// C2/C2b：场景实体注册（模型/cube/灯）+ 实例矩阵槽容量契约
 		registerSceneEntities(registry, assets, configs.scene, vkResources, assetTable, shaderRegistry);
-		// 簇化轴 ★1-a1i：簇区间表装配（**必须在实体注册之后**——落表读 MeshRef{asset,objectSlot}）；
-		// 门关 = 首行返回，ctx 不建条目 ⟹ scene data 尾区 @722400 全 0（逐位不变）。
-		wireClusterRangeTable(registry, assets, meshletAssets, configs.runtime.meshletEnable);
+		// 簇化轴 ★1-a1i + ★1-a1ii-β-1：簇区间表装配 + 原位取代开关落地（**必须在实体注册之后**——
+		// 两步都读 MeshRef，且开关的逐资产对账要读区间表；顺序契约内聚在 helper）。门关 = 两步
+		// 各自首行返回，ctx 不建条目 ⟹ scene data 尾区 @722400 全 0（逐位不变）。
+		wireMeshletPostRegistration(registry, assets, meshletAssets, assetTable, configs.runtime);
 
 		// C3 GPU culling 候选表 + GpuCull + skybox + deferred G-buffer/HDR + DGC + Renderer
 		//（装配时序契约见 assembleBackEnd 接口注释；graph 在此 move 进 Renderer）

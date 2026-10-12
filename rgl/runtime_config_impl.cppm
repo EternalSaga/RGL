@@ -285,27 +285,62 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg) {
 }
 
 /**
- * `meshlet` 嵌套块解析（★0-b1 簇路径总门 + ★1-a1ii-α debug 档 + ★0.5-b2 coplanar/tint）：
- * `meshlet = { enable = …, debug = …, coplanar = …, tint = … }`。
+ * 严格布尔键读取（★1-a1ii-β-1 起 **meshlet 块专用**；与 `readBoolKey` 的唯一差别 =
+ * **值不是布尔时立即报错**，而不是静默当键缺失）。
+ *
+ * 为什么必须换（实测，不是推测）：`sol::optional<bool> v = root[key]` 在值是字符串或数字时
+ * **静默给 nullopt** —— `meshlet.switch = "yes"` 与 `meshlet.switch = 1` 两条都按「键不存在」
+ * 跑完整程，errors=0 warnings=0、日志零行。对 meshlet 块这是最坏的失效形态：β 的主判据是
+ * 「截图哈希对基线」，键被静默吃掉 ⟹ 实际跑的是旧路径而判据全绿。`present_mode` / `aa` /
+ * `meshlet.coplanar` 的「笔误不静默回落」纪律同向。
+ * 缺键仍 = 保持结构体默认（门关 / off 护栏不动）。旧块（fsr/ssr/wet）不改——零回归面，
+ * 严格化整张配置表是另一批的事。
+ * @return nullopt = 缺键或类型正确；有值 = 错误消息（调用方 fail-fast）
+ */
+[[nodiscard]] static std::optional<std::string> readStrictBoolKey(const sol::table& root,
+	const char* key, bool& dst, std::string_view path) {
+	sol::object value = root[key];
+	const auto type = value.get_type();
+	if (type == sol::type::lua_nil)
+		return std::nullopt;  // 缺键 = 出厂默认（门关护栏）
+	if (type != sol::type::boolean)
+		return fmt::format("runtime config ({}): meshlet.{} must be a boolean, got {}",
+			path, key, sol::type_name(root.lua_state(), type));
+	dst = value.as<bool>();
+	return std::nullopt;
+}
+
+/**
+ * `meshlet` 嵌套块解析（★0-b1 簇路径总门 + ★1-a1ii-α debug 档 + ★0.5-b2 coplanar/tint +
+ * ★1-a1ii-β-1 switch 原位取代档）：`meshlet = { enable, debug, coplanar, tint, switch }`。
  * 缺块 / 缺键 = 保持结构体默认（`meshletEnable = false` = 门关 = 逐位不变护栏，P5 拍板；
  * `meshletDebug = false` = 正常叠加档；`meshletCoplanar = off` = 不碰动态状态；
- * `meshletTint = false` = 不选 tint 变体）。
- * 形态先例 = readFsrBlock（嵌套块 + readBoolKey，无扁平键双读兼容）；coplanar 三态键先例 =
- * applyAaKey（未知值 fail-fast，错误经返回值上抛给调用方）。gate_lint 不挂号的理由与 ssr
- * 块完全同款（runtime.lua 键不在 gate_lint 管辖的两张回显表里，→ readSsrBlock 末段）。
+ * `meshletTint = false` = 不选 tint 变体；`meshletSwitch = false` = 不取代）。
+ * 形态先例 = readFsrBlock（嵌套块，无扁平键双读兼容）；coplanar 三态键先例 = applyAaKey
+ * （未知值 fail-fast，错误经返回值上抛给调用方）。四枚布尔自 β-1 起走 readStrictBoolKey
+ * （类型错 = 启动失败，理由 → 该函数注释）。gate_lint 不挂号的理由与 ssr 块完全同款
+ * （runtime.lua 键不在 gate_lint 管辖的两张回显表里，→ readSsrBlock 末段）。
  * @param root runtime.lua 顶层表
  * @param cfg  写入目标
- * @param path 仅用于 coplanar 错误消息
- * @return nullopt = 合法；有值 = coplanar 未知值的错误消息（调用方 fail-fast）
+ * @param path 仅用于错误消息
+ * @return nullopt = 合法；有值 = 首个错误消息（调用方 fail-fast）
  */
 [[nodiscard]] static std::optional<std::string> readMeshletBlock(const sol::table& root,
 	RuntimeConfig& cfg, std::string_view path) {
 	sol::table meshlet = root["meshlet"];
 	if (!meshlet.valid() || !meshlet.is<sol::table>())
 		return std::nullopt;
-	readBoolKey(meshlet, "enable", cfg.meshletEnable);
-	readBoolKey(meshlet, "debug", cfg.meshletDebug);
-	readBoolKey(meshlet, "tint", cfg.meshletTint);  // ★0.5-b2 阳性对照变体（与 debug 同真时 tint 优先）
+	// 顺序 = 键在 configs/runtime.lua 里的出现序；任一失败即返回（fail-fast，不收集后合并）
+	if (auto err = readStrictBoolKey(meshlet, "enable", cfg.meshletEnable, path))
+		return err;
+	if (auto err = readStrictBoolKey(meshlet, "debug", cfg.meshletDebug, path))
+		return err;
+	// ★0.5-b2 阳性对照变体（与 debug 同真时 tint 优先）
+	if (auto err = readStrictBoolKey(meshlet, "tint", cfg.meshletTint, path))
+		return err;
+	// ★1-a1ii-β-1 原位取代档
+	if (auto err = readStrictBoolKey(meshlet, "switch", cfg.meshletSwitch, path))
+		return err;
 	return applyMeshletCoplanarKey(meshlet, cfg, path);
 }
 

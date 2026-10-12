@@ -76,6 +76,19 @@ void collectShadowCasters(const RGL::MeshAsset& asset, const RGL::MaterialAsset&
 }
 
 /**
+ * 簇路径单条 draw 的 task 数（★1-a1ii-β-1 抬出 = **单一真相源**）。恒 L0 档下每簇固定
+ * **2 个任务槽**：乘 2 的口径 → collectMeshletOverlay 注释（去索引发射把每任务三角数压到 85，
+ * 而 L0 簇中位 121 三角、71.2% 的簇 > 85 ⟹ 每簇 2 槽，空半区在 shader 内早退）。
+ * 🔴 α 的影子叠加段与 β-1 的原位取代段**必须同式**——两处各写一遍 `2 * l0Count` 迟早漂成
+ * 一个只画一半几何（且画面未必看得出来，簇是空间局部的）。
+ * @param l0Count 本 objectSlot 的 L0 簇数（> 0，调用方守）
+ */
+uint32_t meshletTaskCount(uint32_t l0Count) {
+	// l0Count 上限实测 682 ⟹ 2× 远小于 maxMeshWorkGroupCount.x = 65535，无回绕风险。
+	return 2u * l0Count;
+}
+
+/**
  * 簇化轴 ★1-a1ii-α：簇路径**影子叠加** draw 采集（实体遍历内调用，视锥剔除之后——
  * 叠加与本体同进同退）。四个发射条件（任一不满足 = 零 draw）：
  *  1. 资产有叠加管线条目（门关 / 无产物 / 多产物回落 = kInvalidPipelineIndex）；
@@ -103,10 +116,54 @@ void collectMeshletOverlay(const RGL::MeshAsset& asset, const RGL::MaterialAsset
     const uint32_t l0Count = table->bySlot[objectSlot].l0Count;
     if (l0Count == 0)
         return;
-    // 每簇 2 个任务槽（见函数头注释）；l0Count 上限实测 682 ⟹ 2× 远小于
-    // maxMeshWorkGroupCount.x = 65535，无回绕风险。
-    const uint32_t taskCount = 2u * l0Count;
-    out.push_back(RGL::DrawCall{asset.meshletPipelineIndex, pushData, taskCount});
+    out.push_back(RGL::DrawCall{asset.meshletPipelineIndex, pushData, meshletTaskCount(l0Count)});
+}
+
+/**
+ * opaque 段单条 draw 的构造（★1-a1ii-β-1 原位取代；α 批这里是一段裸的三段字面量）。
+ *
+ * `meshletInPlace` 生效且本图元是「门开资产」（有簇管线条目 + 本 objectSlot 的 L0 簇数 > 0 +
+ * 材质非 blend + **材质非 doubleSided**）时返回**簇路径**的 draw，否则返回旧 mesh draw。
+ * 两条分支只差两个字段：管线条目（`meshletPipelineIndex` vs `pipelineIndex`）与
+ * task 数（`2 × l0Count` vs `groupCount`）。
+ * 🔴 **pushData 与 objectIndex 一 bit 不动**（同一个 DrawArgs 实例 ⟹ shader 读同一套材质 /
+ * MVP / ObjectClusterRange 表项），**在段里的位置也不动**（调用点 push_back 的位置不变）。
+ *
+ * 为什么必须是「原位换 draw 内容」而不是「旧 draw 不画、簇 draw 另开一段」：opaque 段序是
+ * GPU culling 候选序对账的 CPU 侧基准——`collectCpuObjectSlots` 逐 draw 从 pushData 里取
+ * objectIndex 与 GPU 可见集比多重集，`checkCullAlignment` 比 cullArgs[i] ↔ entries[i]。本函数
+ * 只换 draw 的**内容**，段长 / 段内序 / objectIndex 三者不变 ⟹ 两条对账逐条仍成立。
+ * ⚠ 这条**不是**靠"非默认 cull 档跑一遍"验的——那些档下 switch 根本不生效（→ wireMeshletSwitch
+ * 的 cull 档闸门）。实测口径 = 临时摘掉那道闸门后在 `gpu_lagged` 下开 switch：CPU/GPU 多重集
+ * 对账 MISMATCH = 0、alignment VIOLATION = 0；同臂同配置的阳性对照（把门开图元的 draw 整条
+ * 不发）必须喊 `reconcile MISMATCH`，实测 gpu-visible=1571/cpu-visible=0 如期喊。
+ * blend 判据与 α 的 collectMeshletOverlay 同源（透明段按距离²排序，不参与取代）。
+ *
+ * @param asset 本图元网格资产（两个管线条目下标 + 旧 task 数都取自它）
+ * @param mat   本图元材质（blend = 不参与取代，同 α 判据 2）
+ * @param table 簇区间表（nullptr = 门关 = 恒走旧路径）
+ * @param objectSlot = MeshRef.objectSlot（表下标 = shader objectIndex）
+ * @param pushData 与旧 draw 同一个 DrawArgs 的字节（帧局部存储，规则同 DrawCall::pushData）
+ * @param meshletInPlace 原位取代**生效**标记（ctx 里有没有 `MeshletSwitchOn`）
+ */
+RGL::DrawCall makeOpaqueCall(const RGL::MeshAsset& asset, const RGL::MaterialAsset& mat,
+        const ClusterRangeTable* table, uint32_t objectSlot,
+        std::span<const std::byte> pushData, bool meshletInPlace) {
+    // 🔴 `!mat.doubleSided` 是**正确性闸门**，不是优化：loader 对 doubleSided 材质会
+    // `duplicateForDoubleSided` 追加一份绕序翻转 + 法线取反的**背面副本**（gltf_loader_impl.cppm:616），
+    // 而 packer 打的是**原始 glb**（不含副本）。实测 bistro：6 个 doubleSided 材质覆盖
+    // 279,210 三角，`2,832,120 + 279,210 = 3,111,330` 恰等于 loader 报的去索引三角数（逐位吻合）。
+    // ⟹ 簇产物里**根本没有那些背面**，取代它们 = 背面直接消失。当前机位看不见这个洞
+    // （position G-buffer 逐位同、β-1 只差 0.045%），但换机位就是洞 ⟹ 不接管，留旧路径。
+    // 正解另立批次（产物侧复制副本 / 或 shader 端按 gl_FrontFacing 翻法线 + 不剔背面），
+    // 口径 → docs/mdi_plan.md §16。
+    if (meshletInPlace && !mat.alphaModeBlend && !mat.doubleSided
+        && asset.meshletPipelineIndex != kInvalidPipelineIndex
+        && table != nullptr && objectSlot < table->bySlot.size()
+        && table->bySlot[objectSlot].l0Count > 0)
+        return RGL::DrawCall{asset.meshletPipelineIndex, pushData,
+            meshletTaskCount(table->bySlot[objectSlot].l0Count)};
+    return RGL::DrawCall{asset.pipelineIndex, pushData, asset.groupCount};
 }
 
 /**
@@ -489,6 +546,9 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	// 门关 = 无该条目 = nullptr = 零 draw。
 	std::vector<RGL::DrawCall> meshletPending;
 	const auto* clusterTable = rg.ctx().find<ClusterRangeTable>();
+	// 簇化轴 ★1-a1ii-β-1：原位取代的**生效**标记（装配层 wireMeshletSwitch 判定后 emplace，
+	// 本层只读；不 emplace = 不切 = 逐位不变）。判定只有一处，理由 → MeshletSwitchOn 注释。
+	const bool meshletInPlace = rg.ctx().contains<MeshletSwitchOn>();
 
 	// 循环前一次性 resize（objectSlot 稠密 [0, NextObjectSlot.next)，Phase 6 instancing）：
 	// 循环内 resize 触发 realloc 会使先前存入 DrawCall 的 span 悬空（帧 0 确定性 UAF——
@@ -577,15 +637,19 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 			collectShadowCasters(asset, mat, wc, worldRadius, meshRef.objectSlot, shadowCandidates);
 			if (!sphereInFrustum(frustum, wc, worldRadius))
 				return;
-			const RGL::DrawCall call{
-				asset.pipelineIndex,
-				std::as_bytes(std::span<const RGL::DrawArgs>{&args, 1}), asset.groupCount};
 			auto& bucket = mat.alphaModeBlend ? transparent : opaque;  // MASK 走 opaque（shader 内 discard，Phase 8 C1）
 			const glm::vec3 d = glm::vec3(tf.world[3]) - camera.position;  // world 平移列（无 per-entity 包围盒时的排序代理）
-			bucket.push_back(Pending{call, glm::dot(d, d)});  // 距离²（免 sqrt，排序单调等价）
+			// 簇化轴 ★1-a1ii-β-1：opaque 段单条 draw 的构造（switch 生效时簇路径**原位**顶掉旧
+			// mesh draw，同 objectIndex / 同 pushData / 同段内位置；条件与"为什么原位" → helper）。
+			bucket.push_back(Pending{makeOpaqueCall(asset, mat, clusterTable, meshRef.objectSlot,
+				std::as_bytes(std::span<const RGL::DrawArgs>{&args, 1}), meshletInPlace),
+				glm::dot(d, d)});  // 距离²（免 sqrt，排序单调等价）
 			// 簇化轴 ★1-a1ii-α：影子叠加 draw（视锥剔除后 = 与本体同进同退；条件 → helper）。
-			collectMeshletOverlay(asset, mat, clusterTable, meshRef.objectSlot,
-				std::as_bytes(std::span<const RGL::DrawArgs>{&args, 1}), meshletPending);
+			// ★1-a1ii-β-1 互斥：switch 生效时那批几何已经**原位**画过一遍，再叠加 = 同一几何画
+			// 两遍（且叠加段在段尾，与透明/天空盒的相对序也跟着变）⟹ 整段不采（装配层 warn 出声）。
+			if (!meshletInPlace)
+				collectMeshletOverlay(asset, mat, clusterTable, meshRef.objectSlot,
+					std::as_bytes(std::span<const RGL::DrawArgs>{&args, 1}), meshletPending);
 		});
 
 	// 主灯（阴影矩阵要它的方向）—— 提到此处：光空间体必须在剔除之前成形

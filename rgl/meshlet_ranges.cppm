@@ -103,4 +103,18 @@ export struct ClusterRangeTable {
 	std::vector<ObjectClusterRange> bySlot;
 };
 
+/**
+ * 簇路径「opaque 段原位取代」的**生效**标记（★1-a1ii-β-1，`meshlet.switch`）。
+ *
+ * 住在 registry ctx 的理由与 `ClusterRangeTable` 完全同款——**同一个生产者/消费者一对**：
+ * 装配层 `wireMeshletSwitch` 在启动期判定并 emplace，`renderListSystem` 每帧 find 只读。
+ * 「生效」这件事**只判定一次**（`enable && switch && cull_replay == cpu && 逐资产对账通过`），
+ * 消费者重述条件 = 两处真相源迟早漂（本项目的反复教训）。
+ *
+ * **存在即生效**（不 emplace = 不切）：与 `ClusterRangeTable` 的「门关 = ctx 无条目 = 执行器
+ * 看到空 span」同构，门关路径连一个字节都不写进 ctx（逐位不变的构造性保证）。
+ * 无字段 = 纯标记；本结构体不携带数据，簇区间仍从 `ClusterRangeTable` 取。
+ */
+export struct MeshletSwitchOn {};
+
 }  // namespace RGL

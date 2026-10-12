@@ -968,6 +968,50 @@ TEST_CASE("runtime_config：meshlet 块（★0-b1 簇路径总门）——缺块
 	}
 }
 
+TEST_CASE("runtime_config：meshlet.switch（★1-a1ii-β-1 原位取代）——默认 false、显式命中、非布尔即失败") {
+	// 判据来源 = 实读 readMeshletBlock / readStrictBoolKey。默认 false = 「α 形态（旧路径 +
+	// 影子叠加）是出厂态」的配置层前提；非布尔 = 启动失败是 β-1 新增的严格面。
+	// 变异红线声明：
+	//   ① 默认值翻成 true → 「成员初始化」与「缺块」两条断言红（出厂即取代 = 逐位护栏失效）。
+	//   ② readMeshletBlock 漏读 switch / 键名打错 → 「显式命中」红（探针值 true 读不到）。
+	//   ③ 退回宽容的 readBoolKey（类型错静默当缺键）→ 「非布尔即失败」两条红。
+	//      🔴 这条正是本批实测到的真实失效：`switch = "yes"` 与 `switch = 1` 在宽容读法下
+	//      跑完整程 errors=0 warnings=0，而实际跑的是旧路径 = 截图哈希判据整批假绿。
+	{  // 成员初始化默认路径（不看 lua 文件的默认值）
+		CHECK(RuntimeConfig{}.meshletSwitch == false);
+	}
+	{  // 缺块 / 缺键 = 不取代（= α 形态 = 出厂态）
+		TempLua f("rt_mswitch_default", "return {}\n");
+		auto r = loadRuntimeConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->meshletSwitch == false);
+		TempLua g("rt_mswitch_nokey", R"lua(return { meshlet = { enable = true } })lua");
+		auto r2 = loadRuntimeConfig(g.pathStr());
+		REQUIRE(r2.has_value());
+		CHECK(r2->meshletSwitch == false);
+	}
+	{  // 块内键名命中（探针值 true ≠ 默认 false，漏读即红）
+		TempLua f("rt_mswitch_on", R"lua(return { meshlet = { enable = true, switch = true } })lua");
+		auto r = loadRuntimeConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->meshletSwitch == true);
+	}
+	{  // 非布尔值 = **启动失败**，不静默回落（实测旧行为：字符串/数字都当键缺失跑完）
+		for (const char* bad : {R"lua(return { meshlet = { switch = "yes" } })lua",
+		                        R"lua(return { meshlet = { switch = 1 } })lua"}) {
+			TempLua f("rt_mswitch_bad", bad);
+			auto r = loadRuntimeConfig(f.pathStr());
+			CHECK_FALSE(r.has_value());
+		}
+	}
+	{  // 同块其余三枚布尔同享严格面（本批把整块换掉，不是只换 switch）
+		TempLua f("rt_mswitch_strict_siblings", R"lua(return { meshlet = { enable = "on" } })lua");
+		CHECK_FALSE(loadRuntimeConfig(f.pathStr()).has_value());
+		TempLua g("rt_mswitch_strict_debug", R"lua(return { meshlet = { debug = 0 } })lua");
+		CHECK_FALSE(loadRuntimeConfig(g.pathStr()).has_value());
+	}
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // diagnostics
 // ═══════════════════════════════════════════════════════════════════════════

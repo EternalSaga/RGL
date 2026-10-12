@@ -136,6 +136,9 @@ return {
     -- = 「该资产有没有簇产物」（§7.8 拍板 3：产物构建期生成、缺失 → 回落现行路径）。
     -- ★1-a1ii-α 起 enable 开 = 恒 L0 簇**影子叠加**（同 objectIndex 重画一遍，正常档与底
     -- 共面 + eLess ⟹ 零像素写入）；默认值唯一真相源 = RuntimeConfig 成员初始化。
+    -- 🔴 ★1-a1ii-β-1 起本块四枚布尔走**严格类型**读：写成字符串/数字 = 启动失败并点名键，
+    --   不再静默当键缺失（实测旧行为：`switch = "yes"` 跑完整程 errors=0 warnings=0，而实际
+    --   跑的是关档 = 截图哈希判据整批假绿）。coplanar 的未知值 fail-fast 同纪律。
     meshlet = {
         enable = false,
         -- ★1-a1ii-α 阳性对照档（判据 3）：叠加改用 DEBUG_OFFSET SPV 变体（clip.z 拉向
@@ -160,6 +163,15 @@ return {
         -- 非空洞证明；coplanar=off + tint 必须 = 基线（eLess 共面全拒）。
         -- 与 debug 同真时 tint 优先（warn 出声，不建组合变体）。enable 关时无意义。
         tint = false,
+        -- ★1-a1ii-β-1 原位取代档：= true（且 enable = true）时，门开资产在主 opaque 段里
+        -- 由簇路径 draw **1:1 原位**顶掉旧 mesh draw（同 objectIndex / 同 pushData / 同段内
+        -- 位置，只换管线条目与 task 数 = 2×L0 簇数），而不是 α 那种「旧路径照画 + 共面影子
+        -- 叠加」。原位而非另开一段的理由 = opaque 段序被 GPU culling 候选序对账强依赖。
+        -- 与叠加互斥：本键开 = 叠加段清空（同一批几何不画两遍），装配层 warn 出声。
+        -- 🔴 只在 diagnostics.cull_replay = "cpu"（默认档）生效；非默认档不切 + 启动 warn
+        --   一次（gpu_sync 档 opaque 段由候选表重放，段内换管线不在那条路上）。
+        -- 边界（β-1 不做）：阴影/CSM、picking、IZB mask 重放、透明排序仍走旧路径。
+        switch = false,
     },
 
     -- DIAG：隐藏窗启动、第 N 帧后显示（可见窗 fault 排查；-1 = 立即显示）

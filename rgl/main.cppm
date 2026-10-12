@@ -329,6 +329,37 @@ export void wireMeshletOverlay(Resources& resources, DeviceContext& device,
 export void wireMeshletOverlayDepthCompare(Renderer& renderer, const RuntimeConfig& cfg);
 
 /**
+ * 簇化轴 ★1-a1ii-β-1：实体注册之后的两步簇轴装配合成一次调用（`main()` 已在 120 行代码
+ * 红线，`wireSceneSpinContext` 同法抽 helper）= ① `wireClusterRangeTable`（簇区间表）→
+ * ② `wireMeshletSwitch`（`meshlet.switch` 落地）。顺序契约内聚在定义处：区间表**先**建，
+ * ② 的逐资产对账要读它的逐槽 l0Count。
+ *
+ * ② 的语义：`enable && switch` 时，门开资产（有簇管线条目 + L0 簇数 > 0 + 非 blend）在主
+ * opaque 段里由簇路径 draw **1:1 原位**顶掉旧 mesh draw（同 objectIndex / 同 pushData /
+ * 同段内位置，只换管线条目与 task 数），同时清空 α 的影子叠加段（互斥）。三态语义与
+ * 「为什么是原位而不是另开一段」→ `RuntimeConfig::meshletSwitch` 注释；生效标记 = registry
+ * ctx 里的 `MeshletSwitchOn`（存在即生效，消费者 = renderListSystem）。
+ *
+ * 两道**不生效**闸门（各自 warn 出声、保持旧路径，绝不静默半切）：
+ *  · `diagnostics.cull_replay != "cpu"` → warn「switch 在非默认 cull 档不生效」（gpu_sync 档
+ *    的 opaque 段按候选表重放，段内换管线不在那条路上）；
+ *  · 逐资产对账失败（有簇条目却无 L0 簇）→ warn 并停用（半切形态的画面可能逐位不变而结论假）。
+ *
+ * 🔴 门开且切档时 INFO 打印**生效**档（同 coplanar 的第二道机器护栏：主判据是截图哈希，
+ * 开关静默不落地时哈希也可能全绿）。门关 = 零 ctx 零日志。
+ *
+ * 调用序契约 = `registerSceneEntities` 之后（两步都读 MeshRef）；与
+ * `wireMeshletOverlayDepthCompare` 互不依赖。
+ * @param registry   场景 registry（区间表与生效标记的 emplace 目标）
+ * @param uploaded   已上传资产（区间表扫描输入）
+ * @param meshlets   簇产物容器（区间表扫描输入）
+ * @param assetTable 资产表（对账读 pipelineIndex / groupCount / meshletPipelineIndex）
+ * @param cfg        运行配置（读 meshletEnable / meshletSwitch / meshletCoplanar）
+ */
+export void wireMeshletPostRegistration(entt::registry& registry, const UploadedAssets& uploaded,
+	const MeshletAssetStore& meshlets, const AssetTable& assetTable, const RuntimeConfig& cfg);
+
+/**
  * 材质风格 → 管线规格名派生（★1-a1ii-α 起 bakePipelineEntries 与 bakeMeshletEntries
  * **共用**——叠加与本体必须走同一 material_rules / deferred_styles 映射，否则 frag
  * 静默接错；原为 bakePipelineEntries 内 lambda，抬出 = 单一真相源）。

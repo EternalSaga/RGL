@@ -314,7 +314,10 @@ def gbuf_channel(overrides: list[str] | None) -> int | None:
             n = int(value.strip())
         except ValueError:
             fail(f"--set diagnostics:dump_gbuf 要整数（-1 = 关，0..4 = 通道号），收到 {value!r}")
-        return n if n > 0 else None
+        # 🔴 `>= 0` 不是笔误：引擎侧 0..4 都是合法通道（0 = albedo），-1 才是"关"。
+        # 旧写法 `n > 0` 让 dump_gbuf=0 返回 None ⟹ 工具去找 llm_shot.file 里那个引擎
+        # 根本不写的名字 ⟹ ch0 采集每次误报"没拿到截图"（★1-a1ii-β-1 子 agent 发现）。
+        return n if n >= 0 else None
     return None
 
 

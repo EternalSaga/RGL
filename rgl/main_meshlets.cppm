@@ -24,6 +24,7 @@ import meshlet_geometry;  // MeshletGeometryStore（4 段 GPU buffer 的 BDA，�
 import scene_forward_types_generated;  // ObjectClusterRange（scene data 表条目，反射生成）
 import scene_config;   // SceneConfig（resolvePrimitiveSpecName 入参）
 import runtime_config;  // RuntimeConfig / MeshletCoplanarMode（★0.5-b2 wireMeshletOverlayDepthCompare 入参）
+import diagnostics;  // diagnostics().cullReplay / cullReplayName（★1-a1ii-β-1 wireMeshletSwitch 的 cull 档闸门）
 import vk_renderer;  // Renderer（★0.5-b2 setMeshletOverlayDepthCompareOp 目标；main 已 export import 链上，此处显式）
 import scene_data;     // kShadowMapSize（阴影图边长，与模型条目同值）
 import render_graph;   // ensureShadowMapSlot（幂等，按名缓存命中同槽）
@@ -205,6 +206,109 @@ bool writeMeshletSectionDescriptors(DeviceContext& device, Resources& resources,
 			vk::HostAddressRangeEXT{*addr, descSize});
 	}
 	return true;
+}
+
+/** 原位取代对账的两个计数（口径 → auditMeshletSwitch）。 */
+struct SwitchCoverage {
+	uint32_t gated = 0;       ///< 旧路径出 draw 且带簇条目的图元数（= 被取代的 draw 数）
+	uint32_t mismatch = 0;    ///< 其中 L0 簇数 = 0 / 表缺位 / 槽越界的图元数（不可取代）
+	/// 🔴 doubleSided 材质覆盖的图元数：**不计入 gated**（产物里没有 loader 复制出来的背面副本，
+	/// 取代 = 背面消失）。口径与实测数字 → makeOpaqueCall 的闸门注释与 docs/mdi_plan.md §16。
+	uint32_t doubleSided = 0;
+};
+
+/**
+ * 原位取代的**逐资产对账**（★1-a1ii-β-1：把任务书的停止条件「门开资产 l0Count == 0 但旧路径
+ * 有 draw」变成装配期机器检查，而不是靠人读日志）。
+ *
+ * 为什么必须在装配期查、而不是渲染期兜着：不匹配时 `makeOpaqueCall` 会**静默退回旧管线**——
+ * 画面完全可能逐位不变（于是所有像素判据全绿），但「簇路径已取代旧路径」这句话从此是假的。
+ * 装配期一次遍历（万级图元，微秒级）把这种「半切」状态挡在生效之前。
+ *
+ * 对账范围只含「旧路径真的会出 draw」的图元：`pipelineIndex` 无效或 `groupCount == 0` 的图元在
+ * render_list 构造 draw **之前**就 return，取代与否都与它无关（把它们算进 mismatch = 误杀）。
+ * @param registry 场景 registry（读 MeshRef 实例）
+ * @param assets   资产表（读 pipelineIndex / groupCount / meshletPipelineIndex）
+ * @param table    簇区间表（nullptr = 门关 / 全部模型扫描失败）
+ * @return gated = 会被取代的图元数；mismatch = 有簇条目却无簇可画的图元数
+ */
+SwitchCoverage auditMeshletSwitch(entt::registry& registry, const AssetTable& assets,
+	const ClusterRangeTable* table) {
+	SwitchCoverage cov;
+	registry.view<MeshRef, MaterialRef>().each([&](const MeshRef& meshRef,
+		const MaterialRef& matRef) {
+		const auto& asset = assets.get(meshRef.asset);
+		if (asset.pipelineIndex == kInvalidPipelineIndex || asset.groupCount == 0)
+			return;  // 旧路径本就不出 draw（见函数注释）
+		if (asset.meshletPipelineIndex == kInvalidPipelineIndex)
+			return;  // 无簇产物 / 多产物回落 = 不取代（α 起的回落契约，β-1 不改）
+		if (assets.getMaterial(matRef.material).doubleSided) {
+			++cov.doubleSided;
+			return;  // 🔴 正确性闸门，与 makeOpaqueCall 同一条判据（两处必须同步改）
+		}
+		++cov.gated;
+		const bool hasClusters = table != nullptr && meshRef.objectSlot < table->bySlot.size()
+		                         && table->bySlot[meshRef.objectSlot].l0Count > 0;
+		if (!hasClusters)
+			++cov.mismatch;
+	});
+	return cov;
+}
+
+/**
+ * 簇路径「opaque 段原位取代」接线（★1-a1ii-β-1；对外经 wireMeshletPostRegistration 第二步
+ * 进入，完整口径 → main.cppm 声明）。四步：
+ * ① 门关 / 关档早退（零 ctx 零日志 = 门关 grep meshlet = 0 护栏）→ ② cull 档闸门 →
+ * ③ 逐资产对账（停止条件的机器版）→ ④ emplace 生效标记 + INFO 打印**生效**档。
+ *
+ * 生效标记走 registry ctx（`MeshletSwitchOn`，存在即生效）而不是把三枚配置传进 render_list：
+ * 「生效」这件事必须**只判定一次**（消费者重述条件 = 两处真相源迟早漂），且 ctx 是本项目
+ * 装配层 → system 的既有唯一通道（`ClusterRangeTable` / `SsrTuning` / `WetTuning` 同法）。
+ */
+void wireMeshletSwitch(entt::registry& registry, const AssetTable& assets,
+	const RuntimeConfig& cfg) {
+	auto* logger = RLLogger::getInstance();
+	if (!cfg.meshletEnable || !cfg.meshletSwitch)
+		return;  // 门关 / 不切 = 零 ctx 零日志（门关 grep meshlet = 0 护栏）
+	// ② cull 档闸门。只有 cpu 档的 opaque 段是「逐 draw 盲执行」（executePassDraws 通用分支），
+	// 段内换管线条目才落到命令流上。gpu_sync 档那段改由 cullDriver.executeOpaqueSegment 按
+	// **候选表**重放（DGC 的 push 与 task 数按旧 mesh 管线烘），换管线不在那条路上 ⟹ 不切、
+	// 出声（静默切一半 = 判据全绿而结论是假的）。
+	if (diagnostics().cullReplay != CullReplayMode::cpu) {
+		if (logger)
+			logger->warn("meshlet: switch 在非默认 cull 档不生效（cull_replay = {}，只有 \"cpu\" 档的 "
+						 "opaque 段是逐 draw 盲执行、才认段内换管线条目）—— 本跑保持旧路径 + 影子叠加",
+				cullReplayName(diagnostics().cullReplay));
+		return;
+	}
+	// ③ 逐资产对账（口径 → auditMeshletSwitch）
+	const auto cov = auditMeshletSwitch(registry, assets, registry.ctx().find<ClusterRangeTable>());
+	if (cov.mismatch != 0) {
+		if (logger)
+			logger->warn("meshlet: switch 停用 —— {}/{} 个门开图元有簇管线条目却没有 L0 簇（区间表缺位 "
+						 "/ 槽越界 / l0Count = 0）：取代会退化成「半切」（那几条 draw 静默走旧管线），画面"
+						 "可能逐位不变而结论是假的 —— 本跑保持旧路径",
+				cov.mismatch, cov.gated);
+		return;
+	}
+	// ④ 生效
+	registry.ctx().emplace<MeshletSwitchOn>();
+	if (logger)
+		logger->info("meshlet: switch 生效档 = in_place —— opaque 段内簇路径 1:1 取代旧 mesh draw，"
+					 "取代图元 {} 个（同 objectIndex / 同 pushData / 同段内位置，只换管线条目与 task 数 "
+					 "= 2×L0 簇数）；doubleSided 材质 {} 个**不接管**（产物无背面副本，见 §16）",
+			cov.gated, cov.doubleSided);
+	if (logger && cov.gated == 0)
+		logger->warn("meshlet: switch 生效但**零图元可取代**（没有任何簇产物通过扫描/对账）—— 本档"
+					 "与门关逐位相同，阳性对照必须另外跑");
+	// 与 α 影子叠加互斥（render_list 侧的抑制 = `if (!meshletInPlace)` 包住 collectMeshletOverlay
+	// 调用点）。coplanar 双臂只作用**叠加**那批 draw ⟹ 叠加清空后它在本档下没有消费者，
+	// 而 wireMeshletOverlayDepthCompare 的 INFO 照打不误 —— 不点出来会被读成"双臂还在跑"。
+	if (logger)
+		logger->warn("meshlet: switch 生效 ⟹ α 影子叠加段（meshletCalls / executeMeshletOverlay）整段"
+					 "清空（同一批几何不画两遍）{}",
+			cfg.meshletCoplanar == MeshletCoplanarMode::off ? ""
+								: "；且 coplanar 双臂只作用叠加 draw，本档下它无消费者");
 }
 
 }  // namespace
@@ -410,6 +514,18 @@ void wireMeshletOverlayDepthCompare(Renderer& renderer, const RuntimeConfig& cfg
 		logger->info("meshlet: coplanar 双臂生效档 = {}（叠加 draw depthCompare = {}；"
 					 "只作用叠加 draw，pass 与旧路径状态不动）",
 			modeName, opName);
+}
+
+/**
+ * 接口声明与完整口径 → main.cppm `wireMeshletPostRegistration`。本定义只做一件事：
+ * 把「实体注册之后」的两步簇轴装配合成一次调用（`main()` 已在 120 行代码红线，
+ * `wireSceneSpinContext` / `bakeMeshletEntries` 同法抽 helper，零行为变化）。
+ * 顺序契约内聚在此：区间表**先**建（`wireMeshletSwitch` 的对账要读逐槽 l0Count）。
+ */
+void wireMeshletPostRegistration(entt::registry& registry, const UploadedAssets& uploaded,
+	const MeshletAssetStore& meshlets, const AssetTable& assetTable, const RuntimeConfig& cfg) {
+	wireClusterRangeTable(registry, uploaded, meshlets, cfg.meshletEnable);
+	wireMeshletSwitch(registry, assetTable, cfg);
 }
 
 }  // namespace RGL

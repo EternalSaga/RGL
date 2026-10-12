@@ -1085,3 +1085,68 @@ primitive 赢）。**叠加形态下它不可能绿。** 配置注释已就地�
 albedo/metalrough 逐位同、normal 只剩亚 4px 边缘点。β 剩下的确实是接线。
 产物 sha 基准 `fa189554…` → **`317ae76e…`**（切线修复抬的；UV 类锚点
 `total=2832120 / negative=2322319 (82.00%)` 逐位不变）。
+## 16. ★1-a1ii-β-1 原位取代落地：簇路径第一次接管真实渲染（2026-10-12）
+
+### 16.1 形态与实测
+
+`meshlet.switch`（默认 false）三态：门关 / `enable` 叠加（α 形态，判据全保留）/ `enable+switch`
+= **opaque 段内 1:1 原位取代**（同 `objectIndex`、同 `pushData`、同段内位置，只换管线条目与
+task 数）。取代点 = `render_list_impl.cppm::makeOpaqueCall` 一条 return。
+
+主 agent 亲验（本机 AMD 8060S / RADV STRIX_HALO，`aa=off`）：
+
+| 判据 | 读数 |
+|---|---|
+| 门关 | = 基线锚 `54e40665…`，日志 `grep -ci meshlet` = 0 |
+| 🔴 **取代档 vs 门关** | **M = 65 px = 0.007%**，50 个连通域，**U(1) = 0**（全是孤立单像素） |
+| 阳性对照 tint / debug | 各改 **32.19% / 32.27%** 屏（≈ 接管覆盖，非"切了个寂寞"） |
+| 反证 `enable=false + switch=true` | = 基线锚 |
+| 确定性 | 连跑三次同哈希 |
+| VVL | 默认档 + `gpu_sync` + `gpu_lagged` 三档 errors=0 |
+| draws / cmds | **6601 / 19994 两臂逐条相等** ⟹ 命令流形状未变 = 1:1 原位的直接读数 |
+
+🔴 **性能（交付路径 no-vvl，两次独立测量）**：GPU 帧 **8.816 / 8.881 → 8.447 / 8.433 = −4.6%**。
+帧墙钟单跑噪声达 3%（9.283 / 9.013），**不足以支撑任何单跑结论**——本批只报 GPU。
+这 −4.6% **不含任何剔除收益**（逐簇剔除是 ★1-a2），来源是簇路径顺序读 138MB 顶点池
+取代旧路径流式读 408MB 去索引顶点缓冲的内存局部性。**接管本身就是净增益**，剔除是叠加收益。
+
+### 16.2 🔴 主 agent 查出的正确性缺口：doubleSided 的背面副本不在产物里
+
+β-1 报"loader 三角数比产物 L0 多 9%"时我以为是缺几何。逐层查：
+
+1. glb 源三角（Σ `indices.count/3`，1591 prim）= **2,832,120 = 产物 L0，差 0** ⟹ 产物完整。
+2. 那 loader 的 3,111,330 多出来的是谁？`duplicateForDoubleSided`（loader:616）给 doubleSided
+   材质**追加一份绕序翻转 + 法线取反的背面副本**。
+3. 逐位对上：glb 里 **6 个材质** 带 doubleSided，覆盖 **279,210** 三角，
+   `2,832,120 + 279,210 = 3,111,330` **恰等于** loader 报的数。
+   （引擎从**材质**读 doubleSided，而 glTF 规范把它放在 **primitive** 级——本 glb 由
+   `bistro_pack.py` 生成、写在材质上，两边自洽，但换标准 glb 这条口径要重看。）
+
+⟹ **簇产物里没有那 279,210 个背面**，取代它们 = 背面直接消失。当前机位看不见这个洞
+（position G-buffer 逐位同），换机位就是洞。
+
+**处置**：取代条件加 `!mat.doubleSided`（`makeOpaqueCall` 与 `auditMeshletSwitch` **同一条判据、
+两处必须同步改**），装配期审计把不接管的数量打进 INFO。实测引擎报 **61 个** doubleSided
+primitive 不接管，与我从 glb 独立算出的 **61** 逐位吻合；gated = 1530 = 1591 − 61 精确。
+加闸后差异从 419 px 掉到 **65 px**——**顺带说明那 419 px 里大部分本来就是这批图元的背面**。
+
+正解（另立批次，别混进 β）：产物侧复制副本，或 shader 端按 `gl_FrontFacing` 翻法线 + 不剔背面
+（后者更省，且与 loader 的副本语义等价）。
+
+### 16.3 本批故意不做的边界（都是真缺口，不是遗漏）
+
+- 🔴 **picking / highlight 静默失血**：`replayClonedPass` 逐 draw 调 `cloneEntryFor`，meshlet 条目
+  在 `cloneRemap` 里是 `kNoClone` → `continue` ⟹ switch 开时 **1530 条 draw 在 picking/highlight
+  pass 里一条都不重放**（表现 = 这些面点不中）。picking 默认关，**VVL 冒烟抓不到它**。归 β-3。
+- 阴影 / CSM、IZB mask 重放、透明排序仍走旧路径 ⟹ 同一份几何由两条管线分别画，
+  "两条管线深度是否逐位同"尚未测。归 β-2。
+- 只在 `cull_replay=cpu` 生效（DGC 重放路走不了簇 draw）；非默认档不切并 warn（已实测三档）。
+
+### 16.4 两个坑（都咬过我，写下来）
+
+1. **`--set diagnostics:cull_replay=gpu_sync` 是无效的**：写进 Lua 是 `cull_replay = gpu_sync`
+   （右端是**全局 nil**）⟹ 静默回落默认档。字符串值必须 `--set 'diagnostics:cull_replay="gpu_sync"'`。
+   我自己先踩了，导致三条"非默认档"跑其实全是默认档。**`meshlet.coplanar` 有 fail-fast，
+   `diagnostics.cull_replay` 没有**——判据关键的键都该 fail-fast（挂号）。
+2. **`smoke.py:gbuf_channel()` 对 `dump_gbuf=0` 返回 None**（`n if n > 0 else None`），
+   而引擎 0..4 都是合法通道 ⟹ ch0 采集每次报"没拿到截图"。子 agent 发现并绕过，已修。
