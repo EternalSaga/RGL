@@ -32,22 +32,32 @@ module;
  * 执行方式 = `/tmp/opencode/mutate_b2.py`（`cp` 语义用 `shutil.copyfile` **不带 mtime**、禁 git
  * checkout；每条显式 `cmake --build build --target rgl_tests` 并核对**构建自身**返回码；
  * 每条还原后重跑全量基线并断言全绿）。执行记录 = `/tmp/opencode/mutation_b2_results.txt`。
+ * ⚠ 上面两个 `/tmp` 路径随重启已失——**留的是那段可复现配方**（缺了它，"13/13 红"就退化成
+ * 一句无法重跑的自述），不是留指针。
  * 「helper 内 REQUIRE」= 失败点在 `peek` 的尺寸契约上（8B/12B 读错那份立刻红）。
+ * 逐条写法 = 变异**改在源码上的那一行**（不是意译），照抄即可重放。
  *   ① drawAtlas 门短路（`(!plan.drawAtlas && false)`）→ 红 1 条（门关两态）
  *   ② doubleSided 判据短路（整项删掉）→ 红 1 条（四条判据）
  *   ③ 🔴 **弱化**：`!mat.doubleSided` 改 `!mat.alphaModeMask`（本地正确的另一半）→ 红 1 条
  *      （四条判据里「MASK 仍可切」那条反向断言）
- *   ④ `count > 0` 弱化成恒真 → 红 1 条（四条判据：count==0 是不切）
- *   ⑤ 槽越界判据弱化成恒真 → 红 1 条（四条判据：resize(3) 留的**已知内容**越界探针读到 {41,9}）
- *   ⑥ ×2 提前换算（collect 侧存 task 数）→ 红 1 条（四条判据的正例 `meshletGroups == 5`）——
+ *   ④ `lodTable->bySlot[slot].count > 0` 弱化成恒真（`(count > 0) || true`）→ 红 1 条
+ *      （四条判据：count==0 是合法「不切」不是错误）
+ *   ⑤ `objectSlot < lodTable->bySlot.size()` 弱化成恒真 → 红 1 条（四条判据：表用 resize(3)
+ *      留的**已知内容**越界探针读到 {41,9} ⟹ 不靠 UB 撞运气）
+ *   ⑥ ×2 提前换算（collect 侧 `cand.meshletGroups = lod.count` 改成 `kSlotsPerCluster * lod.count`）
+ *      → 红 1 条（四条判据的正例 `meshletGroups == 5`）——
  *      🔴 emit 侧用例**不红**（那里的候选是手搭的、不经 collect），故两侧各自钉一条是必须的
- *   ⑦ task 数少一半（`meshletTaskCount(...)` 改裸簇数）→ 红 2 条（emit 主用例 + Lcg 属性）
- *   ⑧ c0 也切簇（丢掉 `c >= 1u`）→ 红 3 条 + helper REQUIRE（c0 行哨兵、push 尺寸）
- *   ⑨ 簇路径分支不 `continue`（两条都发）→ 红 3 条 + helper REQUIRE（逐级条数 1/2/2/3 被打破）
- *   ⑩ 索引丢分块（`c * objectSlotCount` 归零）→ 红 3 条（push 指向预期槽地址的指针身份断言）
- *   ⑪ clusterStart 丢传（恒 0）→ 红 2 条（12B push 内容 + Lcg 属性）
- *   ⑫ 不可切候选在 c>=1 被 `continue` 丢掉（忘回退旧路径）→ 红 3 条（切与不切条数相等）
- *   ⑬ `margs.cascadeIndex = c` 写死 0 → 红 3 条（push 内容 + 切与不切 + Lcg）
+ *   ⑦ task 数少一半（emit 里 `meshletTaskCount(cd.meshletGroups)` 改裸 `cd.meshletGroups`）
+ *      → 红 2 条（emit 主用例 + Lcg 属性）
+ *   ⑧ c0 也切簇（`c >= 1u` 改 `c >= 0u`）→ 红 3 条 + helper REQUIRE（c0 行哨兵、push 尺寸）
+ *   ⑨ 簇路径分支不 `continue`（先写 12B 再**也**写 8B 旧 draw）→ 红 3 条 + helper REQUIRE
+ *      （逐级条数 1/2/2/3 被打破）
+ *   ⑩ 索引丢分块（`c * objectSlotCount + cd.objectSlot` 改成 `cd.objectSlot`）→ 红 3 条
+ *      （push 指向预期槽地址的指针身份断言）
+ *   ⑪ clusterStart 丢传（`margs.clusterStart = cd.clusterStart` 写成 `0`）→ 红 2 条
+ *      （12B push 内容 + Lcg 属性）
+ *   ⑫ 不可切候选在 c>=1 被 `continue` 丢掉（忘回退旧路径）→ 红 3 条（切与不切条数逐条相等）
+ *   ⑬ `margs.cascadeIndex = c` 写死 0 → 红 3 条（push 内容里的逐级递增 + 切与不切 + Lcg）
  *
  * ## 已知覆盖缺口（写出来，别让「全绿」被读成「全验过」）
  *   · `collectShadowCasters` 的 `drawAtlas` 门读 `shadowConfig()` 单例（形态决策表在实现内），
