@@ -144,8 +144,8 @@ export struct SceneFrameData {
 	//   不读该字段 = 门关红线。值 = vk_resources kEvssmExponent（唯一权威源，
 	//   生产/消费/fallback 三方同源——禁在此写死字面量）。
 	glm::vec4 shadowEvssmConst{kEvssmExponent, 0.0f, 0.0f, 0.0f};
-	// ── 批 12.6 TAA（时域抗锯齿）帧间载荷，scene data 尾区 @723456 / @723520 / @723584
-	//   （+ @723600，批 13.5 起 = 上一帧内容位移）──
+	// ── 批 12.6 TAA（时域抗锯齿）帧间载荷，scene data TAA 区（迁移批 S-4 起 = 契约
+	//    TaaParamsBlock 的六字段，binding 30 载体；字段序即下面声明序）──
 	// 口径（**改动前必读**，全量推导 → scene_data.cppm kSceneDataTaa* 区注释）：
 	//   重建世界坐标 = 本帧**抖动后**逆矩阵（与深度缓冲配套）；投回上一帧 = 上一帧
 	//   **抖动后**矩阵（产出**抖动网格**坐标），随后在 taa.frag 减 c_{t−1} 落回**基空间**
@@ -158,12 +158,13 @@ export struct SceneFrameData {
 	///   但 shader 从未读它（死载荷）。口径 = `taa_jitter.cppm::contentShiftPx`，非 jitterPx。
 	glm::vec4 taaParams{0.0f};
 	/// · taaPrevContentShift —— 批 13.5 历史基空间修正：**上一帧内容位移** c_{t−1}
-	///   (x, y = 像素, z/w 保留)，scene data 尾区 @723600（复用批 13.2 基空间偏移删除后
+	///   (x, y = 像素, z/w 保留)，契约字段 TaaParamsBlock::prevContentShift（复用批 13.2
+	///   基空间偏移删除后
 	///   空出的槽 ⟹ **零布局变更**）。taa.frag 把抖动网格的 prevUv 减它才落到基空间历史网格。
 	///   默认值 = 全 0 ⇒ 减法逐位恒等（TAA 关 / jitter_scale=0 走这条，BIT-IDENTICAL 基线）。
 	glm::vec4 taaPrevContentShift{0.0f};
 	/// · taaInputKernel —— 批 13.8 输入侧 un-jitter 的**重建核选择**（x = 0 双线性 / 1 CR 4×4 /
-	///   2 Lanczos3 6×6，yzw 保留），scene data @723616。默认 0 = 走改前那条 `SampleLevel`
+	///   2 Lanczos3 6×6，yzw 保留），契约字段 TaaParamsBlock::inputKernel。默认 0 = 走改前那条 `SampleLevel`
 	///   ⟹ **逐位今天**（门红线 = `just shot` sha256）。消费者 = taa.frag `sampleInputColor`。
 	glm::vec4 taaInputKernel{0.0f};
 	/// · taaClipControl —— 批 13.11 **历史裁剪消融门**（x = clip_mode：0 现行 / 1 关盒 /
@@ -171,7 +172,7 @@ export struct SceneFrameData {
 	///   **13 臂 11 + α 也吃 gate**（批 13.15b，债-69 修法；⚠ 12′ 预留给 FSR3 加性可信度）
 	///   （判据与两条已知缺陷 → `phase13_plan.md` §1.14、§1.21）；y = 软裁剪 λ（mode=4）/
 	///   decay（mode=7~11/13），**z = 短窗端点（臂 10 与臂 13 读）**），
-	///   scene data @723632。默认 0 = 现行那条硬裁剪 ⟹ **逐位今天**（门红线 = `just shot` sha256）。
+	///   契约字段 TaaParamsBlock::clipControl。默认 0 = 现行那条硬裁剪 ⟹ **逐位今天**（门红线 = `just shot` sha256）。
 	///   为什么要有：`clipToAabb` 在 blend 之前替换历史 ⟹ 一次裁剪 = 一次历史重置，而 1px 高对比
 	///   细线的 box5 随抖动相位双峰 ⟹ 静止机位残余 97.8% 住在这条路上（`git:调试历史` 2026-10-06）。
 	glm::vec4 taaClipControl{0.0f};

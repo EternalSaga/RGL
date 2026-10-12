@@ -290,16 +290,21 @@ export inline constexpr uint32_t kSceneDataShadowParamsBytes =
 static_assert(kSceneDataShadowParamsBytes == 128,
 	"scene.slang ShadowParamsBlock (reflection-generated) 尺寸变了——区容量取它，其后各区基址跟着搬");
 
-/** 批 12.6 TAA 区（阴影参数区之后 **176B**（原 160B，批 13.8 追加一段 16B），
- *  五段子区；第四段 16B 自批 13.5 改义）：
+/** 批 12.6 TAA 区（阴影参数区之后 **192B**，六段连排；第四段 16B 自批 13.5 改义）：
+ *
+ *  🔵 **迁移批 S-4 起本区已类型化**：shader 端读路 = `ConstantBuffer<TaaParamsBlock>`
+ *  （scene.slang binding 30，经本区**子范围 UBO 描述符**，SceneDataService::taaSlot），
+ *  本文件不再有字段级基址常量与 shader 字面量的手写同步点；字段偏移只存在于反射生成物
+ *  一处，写端（writeSceneStaging）按同一个生成 struct 整块 memcpy。区容量与契约 struct
+ *  同源（下方 sizeof assert）。
  *
  *  🔵 **批 13.5 的架构变更（读整段前先看这条）**：历史附件 `taa_hist` 自批 13.5 起住在
  *  **基空间**（无抖动网格），不再住抖动空间。做法 = taa.frag 把**本帧**输入按 c_t 做
  *  un-jitter 重建后再进时域混合 ⟹ 混合结果天然基空间 ⟹ 历史不再每帧被亚像素重采样
  *  （静止机位下重采样偏移恒 0）。这修掉「固定频率 + 固定位置」的 16 帧周期边缘 shimmer。
- *  全案 → `docs/taa_history_space_plan.md`。**本区四段载荷的字节布局与偏移全部未变。**
+ *  全案 → `docs/taa_history_space_plan.md`。**本区六段的字节布局与偏移全部未变。**
  *
- *  - `kSceneDataTaaOffset`（mat4, 64B）= 上一帧**抖动后**的 proj·view。重投影公式：
+ *  - `prevViewProj`（mat4, 64B）= 上一帧**抖动后**的 proj·view。重投影公式：
  *      world = (sceneData@64 skyInvViewProj) · clip(uv, depth)   ← 本帧抖动后的逆矩阵
  *      prevClip = prevViewProj · (motionPrevFromCur · world)     ← 上一帧抖动后的矩阵
  *    两侧各用**自己那一帧的抖动后**矩阵（不是「口径不统一」，而是「两边都是渲染出各自
@@ -309,39 +314,49 @@ static_assert(kSceneDataShadowParamsBytes == 128,
  *    随机变），静止机位实测 S1/S2 = 0.48×（开滤波逐帧差反而**翻倍**）。批 12.6 T4。
  *    🔵 **批 13.5：本裁决仍然成立、未被反转**，但**理由变了，且多了一条成对约束**：
  *      · 本字段产出的是**抖动网格**上的坐标 = `β_{t−1}(w) + c_{t−1}`（β = 基网格位置）。
- *      · 历史现在住基空间 ⟹ taa.frag 拿到后要**减 `kSceneDataTaaPrevContentShiftOffset`**
+ *      · 历史现在住基空间 ⟹ taa.frag 拿到后要**减 `prevContentShift`**
  *        才落到 `β_{t−1}(w)`。
  *      · ⟹ **两处成对、二选一**：要么「本字段抖动后 + shader 减 c_{t−1}」（现行），要么
  *        「本字段未抖 + shader 不减」（Filament 形态）。**都做 = 多减一次 c_{t−1}，
  *        都不做 = 少减一次 c_{t−1}**，两种都让静止机位 0.667px 游动原样回来。
  *        改一侧必须同时改另一侧。
- *  - `kSceneDataTaaMotionOffset`（mat4, 64B）= `prevSpin · inverse(curSpin)`。本项目的
- *    运动源是 SceneSpin「全场景同一旋转矩阵」，所以一个 mat4 就**精确**补偿物体运动
+ *  - `motion`（mat4, 64B）= `prevSpin · inverse(curSpin)`。本项目的运动源是 SceneSpin
+ *    「全场景同一旋转矩阵」，所以一个 mat4 就**精确**补偿物体运动
  *    （Filament 纯深度重投影假设世界静止，动场景必拖影；RGL 这里没有这个 gap）。
  *    spin 关 = 单位阵。
- *  - `kSceneDataTaaParamsOffset`（vec4, 16B）= (x = feedback 本帧权重, y = historyValid 1/0,
+ *  - `params`（vec4, 16B）= (x = feedback 本帧权重, y = historyValid 1/0,
  *    z/w = **本帧内容位移 c_t** 像素)。y=0 时 shader 直接输出本帧 = **逐位旁路**
  *    （首帧 / resize / 相机跳切走这条，同 ao.strength=0 的旁路纪律）。
  *    🔵 批 13.5：zw 此前装 `jitterPx` 但 **shader 从未读**（死载荷）；现改装 c_t 并**真读**
  *    （输入侧 un-jitter）。⚠ 两者差一个 y 轴翻号（`c = (+jx, −jy)`，见
  *    `taa_jitter.cppm::contentShiftPx`），照旧口径读会错一整轴。
- *  - `kSceneDataTaaPrevContentShiftOffset`（vec4, 16B）= **上一帧内容位移 c_{t−1}**（批 13.5）
- *    + **AO 已施加标志**（z，批 13.6）。
- *  - `kSceneDataTaaInputKernelOffset`（vec4, 16B，批 13.8 新增）= x = **输入侧 un-jitter 的
- *    重建核选择**（0 双线性 = 默认 / 1 CR 4×4 / 2 Lanczos3 6×6），yzw 保留。
- *  - `kSceneDataTaaClipControlOffset`（vec4, 16B，批 13.11 新增）= (x = **历史裁剪消融门**,
+ *  - `prevContentShift`（vec4, 16B）= **上一帧内容位移 c_{t−1}**（批 13.5）
+ *    + **AO 已施加标志**（z，批 13.6）+ **历史拒收诊断门标志**（w）。
+ *  - `inputKernel`（vec4, 16B，批 13.8 新增）= x = **输入侧 un-jitter 的重建核选择**
+ *    （0 双线性 = 默认 / 1 CR 4×4 / 2 Lanczos3 6×6），yzw 保留。
+ *  - `clipControl`（vec4, 16B，批 13.11 新增）= (x = **历史裁剪消融门**,
  *    y = 软裁剪 λ, z = **臂 10 的短窗端点**（常量 1.0；批 13.14b 起不再 = `taa.feedback`，
  *    否则与 `taaParams.x` 同值 ⟹ 臂 10 退化成臂 8，见债-66）, w 保留)；0 = 逐位今天。
- * 消费端 = taa.frag.slang / tonemap.frag.slang 字面量（两侧 static_assert 钉死同步）。 */
+ * 消费端 = taa.frag.slang / tonemap.frag.slang（经 scene.slang 的类型化 read 函数）。 */
 export inline constexpr uint32_t kSceneDataTaaOffset =
 	alignUp(kSceneDataShadowParamsOffset + kSceneDataShadowParamsBytes, kSceneRegionAlign);
-export inline constexpr uint32_t kSceneDataTaaMotionOffset = kSceneDataTaaOffset + 64u;
-export inline constexpr uint32_t kSceneDataTaaParamsOffset = kSceneDataTaaOffset + 128u;
-/**
- * 批 13.5 历史基空间修正：**上一帧内容位移** c_{t−1}（vec4 = x/y = 像素，**z = 批 13.6 AO
- * 施加点标志**，w 保留）。
- * 偏移 @723600 = 复用批 13.2「基空间输出」删除后空出的槽（批 S-2 的合并把它连同整区
- * 往下搬了 768B，但「复用空槽、不额外占位」的形状不变）。
+export inline constexpr uint32_t kSceneDataTaaBytes =
+	static_cast<uint32_t>(sizeof(TaaParamsBlock));
+// 区容量与契约 struct 同源（192 = 2×ObjectMatrix + 4×vec4）。原「scene.slang 六条 TAA
+// 字面量 == 本文件六个字段级偏移」的两侧手写同步点随字面量一起消失（本文件下方那条
+// 六值 assert 已删），换成两条**同源** assert：区容量取 sizeof(生成物)、区基址这条是
+// 「上游区改尺寸 ⟹ 本区搬家」的绊线（TAA 侧已无字节字面量，搬家时本 assert 红 = 强制
+// 确认 SSR / 湿面 / 簇区间等下游绊线同步）。
+static_assert(kSceneDataTaaBytes == 192u,
+	"TaaParamsBlock (reflection-generated) size out of sync with TAA region bytes");
+static_assert(kSceneDataTaaOffset == 723456,
+	"TAA region base drifted from the documented offset 723456");
+
+/*
+ * 契约字段 `TaaParamsBlock::prevContentShift`（@区基址 + 144）：批 13.5 历史基空间修正
+ * ——**上一帧内容位移** c_{t−1}（vec4 = x/y = 像素，**z = 批 13.6 AO 施加点标志**，w 保留）。
+ * 槽位 = 复用批 13.2「基空间输出」删除后空出的那一格（批 S-2 的合并把它连同整区往下搬了
+ * 768B，但「复用空槽、不额外占位」的形状不变）。
  *
  * 为什么需要它（一句话）：批 13.2 只把**显示**搬回基空间（在 tonemap 加 `+c_t` 采样偏移），
  * 而**累积**那一半没动——历史图仍住抖动空间 ⟹ 静止机位下每帧按 `δ_t = c_t − c_{t−1}`
@@ -366,9 +381,9 @@ export inline constexpr uint32_t kSceneDataTaaParamsOffset = kSceneDataTaaOffset
  * 又跳过」= AO 一次都不施加。两个分支位精确（`lerp(x,1,1) ≡ 1.0`、`lerp(x,1,0) ≡ x`）
  * ⟹ TAA 关时 tonemap 逐位不变（门红线）。
  */
-export inline constexpr uint32_t kSceneDataTaaPrevContentShiftOffset = kSceneDataTaaOffset + 144u;
-/**
- * 批 13.8 输入侧重建核选择（vec4，x = 核编号，yzw 保留）：0 = 双线性（**默认 = 逐位今天**）/
+/*
+ * 契约字段 `TaaParamsBlock::inputKernel`（@区基址 + 160）：批 13.8 输入侧重建核选择
+ * （vec4，x = 核编号，yzw 保留）：0 = 双线性（**默认 = 逐位今天**）/
  * 1 = Catmull-Rom 4×4 / 2 = Lanczos3 6×6。消费端 = taa.frag.slang `sampleInputColor`。
  *
  * 为什么要新增 16B 而不是复用槽位：前四个 vec4 的**每个分量都有主**（feedback / historyValid /
@@ -379,9 +394,9 @@ export inline constexpr uint32_t kSceneDataTaaPrevContentShiftOffset = kSceneDat
  * 门红线是**构造性**的：门关（0）⟹ shader 走 `k < 0.5` 那一条 `SampleLevel`，
  * 与改前同一条表达式，一个 bit 不动（`just shot` sha256 实测钉死）。
  */
-export inline constexpr uint32_t kSceneDataTaaInputKernelOffset = kSceneDataTaaOffset + 160u;
-/**
- * 批 13.11 **历史裁剪消融门**（vec4：x = clip_mode，y = clip_soft λ，**z = 短窗端点（臂 10 与
+/*
+ * 契约字段 `TaaParamsBlock::clipControl`（@区基址 + 176）：批 13.11 **历史裁剪消融门**
+ * （vec4：x = clip_mode，y = clip_soft λ，**z = 短窗端点（臂 10 与
  * 臂 13 读；批 13.14b 删 boost 后固定填 1.0，出处见 `render_list_impl.cppm`）**，w 保留）。
  *
  * 要回答的问题（实测根因 → `git:调试历史` 2026-10-06）：`clipToAabb` 在 **blend 之前**替换历史，
@@ -487,12 +502,6 @@ export inline constexpr uint32_t kSceneDataTaaInputKernelOffset = kSceneDataTaaO
  * 门红线**构造性**：mode=0 ⟹ shader 走改前那一条表达式（盒构造循环与裁剪调用一个 bit 不动），
  * 红线由 `just shot` sha256 钉。本区因此从 176B 扩到 192B。
  */
-export inline constexpr uint32_t kSceneDataTaaClipControlOffset = kSceneDataTaaOffset + 176u;
-export inline constexpr uint32_t kSceneDataTaaBytes = 192u;
-static_assert(kSceneDataTaaOffset == 723456 && kSceneDataTaaMotionOffset == 723520
-	&& kSceneDataTaaParamsOffset == 723584 && kSceneDataTaaPrevContentShiftOffset == 723600
-	&& kSceneDataTaaInputKernelOffset == 723616 && kSceneDataTaaClipControlOffset == 723632,
-	"scene.slang taa literals drifted from scene_data.cppm offsets");
 
 /** Phase 15 批 15.1 SSR 区（mat4 + 2×vec4, 96B）= 本帧**抖动后** proj·view + 尺度锚点与
  *  系数 + 粗糙度门控区间（尾区追加，既有偏移
@@ -860,6 +869,16 @@ export class SceneDataService {
 	}
 
 	/**
+	 * TAA 区 UBO 子范围槽号（迁移批 S-4，shader 端 binding 30；用法与 wetSlot 同型，
+	 * PipelineBindings::slotSceneTaa）。描述符内容 = {buffer 基址 +
+	 * kSceneDataTaaOffset, sizeof(TaaParamsBlock)} 的 eUniformBuffer。
+	 */
+	[[nodiscard]] uint32_t taaSlot() {
+		sceneDataSlot = ensure();
+		return sceneTaaSlot;
+	}
+
+	/**
 	 * 逐对象世界矩阵表 SSBO 子范围槽号（类型化迁移 批 T1，shader 端 binding 23；
 	 * PipelineBindings::slotObjectMatrices）。描述符内容 = {buffer 基址 +
 	 * kSceneDataObjectMatrixOffset, kSceneDataObjectMatrixBytes} 的 eStorageBuffer——
@@ -892,7 +911,7 @@ export class SceneDataService {
 	/** 区槽总数（含全区 scene.data 本身）= ensure 领槽数 = writeRegionDescriptors 行数。
 	 *  🔴 每迁一区 +1 时**只改这一处**：四张 std::array 都以它取尺寸，漏写描述符行会
 	 *  编译失败（初始化列表元素多于 N），而不是留到运行期读脏槽。 */
-	static constexpr size_t kRegionSlotCount = 11;
+	static constexpr size_t kRegionSlotCount = 12;
 
 	/**
 	 * 全部区槽描述符一次写（ensure 领槽后调用；实现见文件下方）。
@@ -912,6 +931,7 @@ export class SceneDataService {
 	uint32_t sceneShadowViewProjSlot = 0;  // 阴影 VP 区 UBO 子范围槽号（迁移批 S-1，binding 28）
 	uint32_t sceneShadowParamsSlot = 0;  // 阴影采样参数区 UBO 子范围槽号（迁移批 S-2，binding 29）
 	uint32_t sceneSsrSlot = 0;  // SSR 区 UBO 子范围槽号（迁移批 S-3，binding 31）
+	uint32_t sceneTaaSlot = 0;  // TAA 区 UBO 子范围槽号（迁移批 S-4，binding 30）
 	uint32_t sceneObjectMatrixSlot = 0;  // 对象矩阵表 SSBO 子范围槽号（批 T1，binding 23）
 	uint32_t sceneObjectMvpSlot = 0;  // MVP 表 SSBO 子范围槽号（批 T1，binding 25）
 	uint32_t sceneObjectDrawSlot = 0;  // 绘制属性表 SSBO 子范围槽号（批 T1，binding 26）
@@ -1022,6 +1042,8 @@ inline uint32_t SceneDataService::ensure() {
 	sceneShadowParamsSlot = allocRuntimeSlot("scene.shadow_params");  // binding 29
 	// 迁移批 S-3：SSR 区（UBO 子范围，binding 31）
 	sceneSsrSlot = allocRuntimeSlot("scene.ssr");  // binding 31
+	// 迁移批 S-4：TAA 区（UBO 子范围，binding 30）
+	sceneTaaSlot = allocRuntimeSlot("scene.taa");  // binding 30
 	// 批 T1：逐对象四张表（世界矩阵 / MVP / 绘制属性 / 簇区间）各一 SSBO 子范围槽
 	sceneObjectMatrixSlot = allocRuntimeSlot("scene.object_matrices");  // binding 23
 	sceneObjectMvpSlot = allocRuntimeSlot("scene.object_mvps");  // binding 25
@@ -1036,8 +1058,8 @@ inline uint32_t SceneDataService::ensure() {
 /**
  * 全部区槽描述符一次 writeResourceDescriptorsEXT（领槽方 = ensure，见其 allocRuntimeSlot）。
  * 载体口径：全区与批 T1 的四张表 = `eStorageBuffer`（shader 端 ByteAddressBuffer /
- * StructuredBuffer）；湿面 / 辐照度 / 灯数组 / 阴影 VP / 阴影参数 / SSR = `eUniformBuffer`
- *（shader 端 ConstantBuffer，迁移批 1/2/3/S-1/S-2/S-3）。子范围 address 对齐 = 基址 256（minAlignment）+
+ * StructuredBuffer）；湿面 / 辐照度 / 灯数组 / 阴影 VP / 阴影参数 / SSR / TAA = `eUniformBuffer`
+ *（shader 端 ConstantBuffer，迁移批 1/2/3/S-1/S-2/S-3/S-4）。子范围 address 对齐 = 基址 256（minAlignment）+
  * 区基址 256 台阶（本文件顶部布局红线）⟹ 恒过 VUID-12350（UBO）/ VUID-12351（SSBO）；
  * 闸门读数见 checkAlignmentGate。
  * 🔴 四张表的下发长度**含尾部哨兵**（`kSceneData*Bytes` = (容量+1)×步长，批 T0）：
@@ -1057,6 +1079,7 @@ inline void SceneDataService::writeRegionDescriptors() {
 		{base + kSceneDataShadowMatrixOffset, sizeof(ShadowViewProjBlock)},  // — binding 28
 		{base + kSceneDataShadowParamsOffset, sizeof(ShadowParamsBlock)},  // — binding 29
 		{base + kSceneDataSsrOffset, sizeof(SsrParamsBlock)},  // — binding 31
+		{base + kSceneDataTaaOffset, sizeof(TaaParamsBlock)},  // — binding 30
 		{base + kSceneDataObjectMatrixOffset, kSceneDataObjectMatrixBytes},  // — binding 23
 		{base + kSceneDataMvpTableOffset, kSceneDataMvpTableBytes},  // — binding 25
 		{base + kSceneDataDrawTableOffset, kSceneDataDrawTableBytes},  // — binding 26
@@ -1069,13 +1092,14 @@ inline void SceneDataService::writeRegionDescriptors() {
 		vk::DescriptorType::eUniformBuffer,  // 阴影光空间 VP
 		vk::DescriptorType::eUniformBuffer,  // 阴影采样参数
 		vk::DescriptorType::eUniformBuffer,  // SSR
+		vk::DescriptorType::eUniformBuffer,  // TAA
 		vk::DescriptorType::eStorageBuffer,  // 对象世界矩阵表
 		vk::DescriptorType::eStorageBuffer,  // 对象 MVP 表
 		vk::DescriptorType::eStorageBuffer,  // 对象绘制属性表
 		vk::DescriptorType::eStorageBuffer}};  // 对象簇区间表
 	std::array<uint32_t, kRegionSlotCount> slots{{sceneDataSlot, sceneWetSlot,
 		sceneIrradianceSlot, sceneLightArraySlot, sceneShadowViewProjSlot, sceneShadowParamsSlot,
-		sceneSsrSlot, sceneObjectMatrixSlot,
+		sceneSsrSlot, sceneTaaSlot, sceneObjectMatrixSlot,
 		sceneObjectMvpSlot, sceneObjectDrawSlot, sceneObjectClusterRangeSlot}};
 	std::array<vk::ResourceDescriptorInfoEXT, kRegionSlotCount> descs{};
 	std::array<vk::HostAddressRangeEXT, kRegionSlotCount> dsts{};

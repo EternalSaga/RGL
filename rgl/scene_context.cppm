@@ -542,7 +542,7 @@ export struct SceneEnv {
 	// clip_soft（仅 mode=4）= **无量纲**时间常数：历史每帧最多走完「到盒边界距离」的 λ 分之一。
 	//   ⚠ 选值安全线：鬼影衰减 ≈ 1/λ 帧 vs 累积窗 ≈ 1/α 帧——**λ < α 时盒不再是鬼影刹车**。
 	// 为什么存在（根因：clip 在 blend 之前 ⟹ 一次裁剪 = 一次历史重置 ⟹ 相位依赖方差 100% 注入）
-	// → `git:调试历史` 2026-10-06；档位全量语义 → `scene_data.cppm` kSceneDataTaaClipControlOffset。
+	// → `git:调试历史` 2026-10-06；档位全量语义 → `scene_data.cppm` TaaParamsBlock::clipControl。
 	float taaClipMode = 0.0f;
 	float taaClipSoft = 1.0f;
 	// Phase 5.5 批次 4 天空盒：enabled = env 已上传且 scene.lua environment.skybox=true；

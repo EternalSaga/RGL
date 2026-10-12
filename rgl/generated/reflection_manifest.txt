@@ -11,8 +11,8 @@ ce1042a6aa982d83e447b84b0f7314d5d0c39a4b  rgl/shaders/model.slang
 46123e26816075fb7c388dd9cc226e2ef3de3bd8  rgl/shaders/lights.slang
 a92e9a35d6a89ea4395c2082517d33046736957d  rgl/shaders/lights_schema.lua
 69ebae222b5acfa4efbef3230e7f24fbff769ecd  tools/templates/types_cppm.inja
-9a9d65a9f49244f6556ace92f42f1aadfddf2c23  rgl/shaders/scene.slang
-5c50515c45bc4837f296de588b8df78b4d1c3c3b  rgl/shaders/scene_forward_schema.lua
+ce3f4e3f22052d3f4e34d57d3afce31987350dc5  rgl/shaders/scene.slang
+ee394482a30b2f1e8359e6a61ca96c7b909e278b  rgl/shaders/scene_forward_schema.lua
 69ebae222b5acfa4efbef3230e7f24fbff769ecd  tools/templates/types_cppm.inja
 db854a9ecd279d5f942795ad49d9379e91f67226  rgl/shaders/meshlet_cull.slang
 565b96ab5cb80b86ac779a54e475a0f4f6d6998c  rgl/shaders/meshlet_cull_schema.lua

@@ -277,19 +277,31 @@ void Renderer::createSceneStaging(RGL::Resources& vkResources) {
 		"ShadowParamsBlock 尺寸与区容量失同步（scene_data.cppm）");
 	std::memcpy(stage + kSceneDataShadowParamsOffset, &shadowBlock, sizeof(shadowBlock));
 	// 批 12.6 TAA 区：上一帧**抖动后** viewProj / 全场景刚体运动补偿 / 参数四元组。
-	// 无条件写（16B+128B+16B）——TAA 关时前三段值本身无消费者（图里没有 taa pass），
+	// 迁移批 S-4 起六段合并成契约 `TaaParamsBlock`（binding 30 载体），**按生成 struct 整块
+	// 写**（同批 S-3 SSR 的做法）：旧的六个基址常量（kSceneDataTaa{,Motion,Params,
+	// PrevContentShift,InputKernel,ClipControl}Offset）删除，字段偏移只在反射生成物一处。
+	// 无条件写（192B）——TAA 关时前三段值本身无消费者（图里没有 taa pass），
 	// 写它不改任何像素，且省下「按门分支写」的第二条路径（同 shadow 尾区纪律）。
 	// 第四段（批 13.2 基空间输出偏移）**有**常驻消费者（tonemap 三条路线都在），但门关时
 	// 值 = 全 0 ⟹ `uv + 0` 逐位 = `uv`，红线仍成立。
-	std::memcpy(stage + kSceneDataTaaOffset, &list.sceneData.taaPrevViewProj, sizeof(glm::mat4));
-	std::memcpy(stage + kSceneDataTaaMotionOffset, &list.sceneData.taaMotion, sizeof(glm::mat4));
-	std::memcpy(stage + kSceneDataTaaParamsOffset, &list.sceneData.taaParams, sizeof(glm::vec4));
-	std::memcpy(stage + kSceneDataTaaPrevContentShiftOffset, &list.sceneData.taaPrevContentShift,
-		sizeof(glm::vec4));  // 批 13.2 基空间输出偏移（门关 = 全 0 → tonemap 逐位不变）
-	std::memcpy(stage + kSceneDataTaaInputKernelOffset, &list.sceneData.taaInputKernel,
-		sizeof(glm::vec4));  // 批 13.8 输入侧重建核（0 = 双线性 = 门关 → taa.frag 逐位不变）
-	std::memcpy(stage + kSceneDataTaaClipControlOffset, &list.sceneData.taaClipControl,
-		sizeof(glm::vec4));  // 批 13.11 历史裁剪消融门（0 = 现行 = 门关 → taa.frag 逐位不变）
+	// mat4 → ObjectMatrix 的**列直拷**与旧的「memcpy 64B」逐字节同（glm 是 col_major）。
+	static_assert(sizeof(TaaParamsBlock) == sizeof(glm::mat4) * 2 + 4 * sizeof(glm::vec4),
+		"TaaParamsBlock 字节形态与「2×mat4 + 4×vec4」不同源（契约 struct 出现 padding？）");
+	const TaaParamsBlock taaBlock {
+		.prevViewProj = ObjectMatrix {list.sceneData.taaPrevViewProj[0],
+		                              list.sceneData.taaPrevViewProj[1],
+		                              list.sceneData.taaPrevViewProj[2],
+		                              list.sceneData.taaPrevViewProj[3]},
+		.motion = ObjectMatrix {list.sceneData.taaMotion[0], list.sceneData.taaMotion[1],
+		                        list.sceneData.taaMotion[2], list.sceneData.taaMotion[3]},
+		.params = list.sceneData.taaParams,
+		.prevContentShift = list.sceneData.taaPrevContentShift,
+		.inputKernel = list.sceneData.taaInputKernel,
+		.clipControl = list.sceneData.taaClipControl,
+	};
+	static_assert(sizeof(taaBlock) == kSceneDataTaaBytes,
+		"TaaParamsBlock 尺寸与 TAA 区容量失同步（scene_data.cppm）");
+	std::memcpy(stage + kSceneDataTaaOffset, &taaBlock, sizeof(taaBlock));
 	// Phase 15 批 15.1 SSR 区：本帧**抖动后** proj·view（与 @64 skyInvViewProj 严格互逆）
 	// + 参数 vec4 + 门控 vec4。迁移批 S-3 起三段合并成契约 `SsrParamsBlock`（binding 31
 	// 载体），**按生成 struct 整块写**：旧的三个基址常量（kSceneDataSsr{,Params,Gate}Offset）

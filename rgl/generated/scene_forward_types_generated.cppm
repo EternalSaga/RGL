@@ -99,6 +99,21 @@ namespace RGL {
     static_assert(offsetof(SsrParamsBlock, params) == 64, "Field SsrParamsBlock.params offset does not match shader reflection (scalar layout drift!)");
     static_assert(offsetof(SsrParamsBlock, gate) == 80, "Field SsrParamsBlock.gate offset does not match shader reflection (scalar layout drift!)");
 
+    export struct TaaParamsBlock {
+        ObjectMatrix prevViewProj;
+        ObjectMatrix motion;
+        glm::vec4 params;
+        glm::vec4 prevContentShift;
+        glm::vec4 inputKernel;
+        glm::vec4 clipControl;
+    };
+    static_assert(sizeof(TaaParamsBlock) == 192, "Size of C++ struct TaaParamsBlock does not match shader reflection!");
+    static_assert(offsetof(TaaParamsBlock, motion) == 64, "Field TaaParamsBlock.motion offset does not match shader reflection (scalar layout drift!)");
+    static_assert(offsetof(TaaParamsBlock, params) == 128, "Field TaaParamsBlock.params offset does not match shader reflection (scalar layout drift!)");
+    static_assert(offsetof(TaaParamsBlock, prevContentShift) == 144, "Field TaaParamsBlock.prevContentShift offset does not match shader reflection (scalar layout drift!)");
+    static_assert(offsetof(TaaParamsBlock, inputKernel) == 160, "Field TaaParamsBlock.inputKernel offset does not match shader reflection (scalar layout drift!)");
+    static_assert(offsetof(TaaParamsBlock, clipControl) == 176, "Field TaaParamsBlock.clipControl offset does not match shader reflection (scalar layout drift!)");
+
 
 
 

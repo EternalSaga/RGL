@@ -239,7 +239,7 @@ struct ProfileOpts {
     double taaInputKernel = 0.0;
     /// 批 13.11 **历史裁剪消融门**（scene.lua `taa.clip_mode` / `taa.clip_soft`）。
     /// 0 = 现行 = **不写键**（门关态与交付配置逐字相同）。档位语义 → `rgl/scene_data.cppm`
-    /// kSceneDataTaaClipControlOffset。消费方 = `imgqa temporal-residual --clip-abl`。
+    /// TaaParamsBlock::clipControl。消费方 = `imgqa temporal-residual --clip-abl`。
     double taaClipMode = 0.0;
     double taaClipSoft = 1.0;
     // ── Phase 14 批 14.5/14.6：升频 / aa 臂（量「闪烁↔鬼影」跷跷板用）──────────────────

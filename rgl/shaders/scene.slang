@@ -5,7 +5,8 @@
 // 🔴 类型化迁移（docs/constantbuffer_迁移计划.md §9）：各区逐批从「binding 3 + 手写字节
 // 偏移」迁到**类型化载体**（本文件零字节数）；已迁区 = 湿面（binding 32，批 1）、
 // 辐照度（binding 27，批 2）、灯数组（binding 24，批 3，消费端在 lights.slang）、
-// 阴影光空间 VP（binding 28，批 S-1）、阴影采样参数（binding 29，批 S-2，含 IZB/PCSS/EVSSM）；
+// 阴影光空间 VP（binding 28，批 S-1）、阴影采样参数（binding 29，批 S-2，含 IZB/PCSS/EVSSM）、
+// SSR（binding 31，批 S-3）、TAA（binding 30，批 S-4）；
 // 未迁区仍走 binding 3 字节读，**全部迁完后 binding 3 与 sceneData 声明一起删**。
 // 字节布局真相源分两段（2026-09-15 勘误：旧注释称真相源 = vkresources.cppm 的
 // LightDataGpu——该类型已删）：
@@ -406,43 +407,49 @@ float3 octDecode(float2 e)
     return normalize(n);
 }
 
-// ── 批 12.6 TAA（时域抗锯齿）尾区 ──
+// ── 批 12.6 TAA（时域抗锯齿）尾区（迁移批 S-4 起 = 类型化载体，本文件零字节偏移）──
 //
-// 基址与 C++ 侧 scene_data.cppm kSceneDataTaa* 手写同源（两侧 static_assert 钉死）：
-//   @723456  mat4 prevViewProj —— 上一帧**抖动后** proj·view（产出**抖动网格**坐标）
-//   @723520  mat4 motionPrevFromCur —— prevSpin · inverse(curSpin)（spin 关 = 单位阵）
-//   @723584  vec4 (feedback, historyValid, 本帧内容位移 c_t 的 x/y px)
-//   @723600  vec4 (上一帧内容位移 c_{t−1} 的 x/y px, **AO 已施加标志** z, 保留)  —— 批 13.5/13.6
-//   @723616  vec4 (输入侧重建核选择 x, yzw 保留)  —— 批 13.8，默认 0 = 双线性 = 逐位今天
-//   @723632  vec4 (历史裁剪消融门 x, 软裁剪 λ y, zw 保留)  —— 批 13.11，默认 0 = 逐位今天
+// 载体 = binding 30 的 `ConstantBuffer<TaaParamsBlock>`（§9.5 定案表给 TAA 区的号），物理
+// 存储仍是 scene data 单 buffer 的 TAA 区（C++ 侧 kSceneDataTaaOffset 子范围描述符）。六段
+// 本就同区连排（192B）⟹ 本批**零布局变更**；字段偏移只存在于反射生成物一处（写端
+// writeSceneStaging 按同一个生成 struct 整块 memcpy ⟹ 两侧不可能各写一份偏移）。
 //
-// 矩阵口径提醒（改动前必读，全量推导 → scene_data.cppm kSceneDataTaa* 区注释）：
+// 字段语义（口径未变，全量推导 → scene_data.cppm kSceneDataTaa* 区注释）：
+//   prevViewProj     上一帧**抖动后** proj·view（产出**抖动网格**坐标）
+//   motion           prevSpin · inverse(curSpin)（spin 关 = 单位阵）
+//   params           (feedback, historyValid, 本帧内容位移 c_t 的 x/y px)
+//   prevContentShift (上一帧内容位移 c_{t−1} 的 x/y px, **AO 已施加标志** z, 保留) —— 13.5/13.6
+//   inputKernel      (输入侧重建核选择 x, yzw 保留) —— 批 13.8，默认 0 = 双线性 = 逐位今天
+//   clipControl      (历史裁剪消融门 x, 软裁剪 λ y, zw 保留) —— 批 13.11，默认 0 = 逐位今天
+//
+// 矩阵口径提醒（改动前必读）：
 //   · 重建世界坐标用 sceneData@64 的 skyInvViewProj，它是**抖动后** proj·view 的逆（与深度配套）；
 //   · 投回上一帧用这里的 prevViewProj（**也是抖动后**），产出**抖动网格**坐标；
 //   · 批 13.5 起历史住**基空间** ⟹ 上一步的抖动网格坐标要**减 c_{t−1}** 才对齐历史。
 //     ⚠ 这三条**成对**：prevViewProj 的口径与「减不减 c_{t−1}」必须二选一配套，
 //       都做或都不做都会让静止机位 0.667px 游动原样回来。
 // historyValid = 0 时 taa.frag 直接输出本帧（逐位旁路，首帧/resize/跳切走这条）。
+struct TaaParamsBlock
+{
+    ObjectMatrix prevViewProj;  // @0  列主序 4 列（§9.4：契约里的矩阵一律 ObjectMatrix）
+    ObjectMatrix motion;        // @64 列主序 4 列
+    float4 params;              // @128
+    float4 prevContentShift;    // @144
+    float4 inputKernel;         // @160
+    float4 clipControl;         // @176
+};
+
+[[vk::binding(30, 0)]]
+ConstantBuffer<TaaParamsBlock> sceneTaa;
+
 ObjectMatrix readTaaPrevViewProj()
 {
-    uint base = 723456u;  // kSceneDataTaaOffset
-    ObjectMatrix m;
-    m.c0 = asfloat(sceneData.Load4(base));
-    m.c1 = asfloat(sceneData.Load4(base + 16u));
-    m.c2 = asfloat(sceneData.Load4(base + 32u));
-    m.c3 = asfloat(sceneData.Load4(base + 48u));
-    return m;
+    return sceneTaa.prevViewProj;
 }
 
 ObjectMatrix readTaaMotion()
 {
-    uint base = 723520u;  // kSceneDataTaaMotionOffset
-    ObjectMatrix m;
-    m.c0 = asfloat(sceneData.Load4(base));
-    m.c1 = asfloat(sceneData.Load4(base + 16u));
-    m.c2 = asfloat(sceneData.Load4(base + 32u));
-    m.c3 = asfloat(sceneData.Load4(base + 48u));
-    return m;
+    return sceneTaa.motion;
 }
 
 // ── Phase 15 批 15.1 SSR 尾区（迁移批 S-3 起 = 类型化载体，本文件零字节偏移）──
@@ -544,15 +551,15 @@ float readAoStrength()
 // 口径 = `taa_jitter.cppm::contentShiftPx` = `(+jx, −jy)`，**不是** jitterPx（差一个 y 轴翻号）。
 float4 readTaaParams()
 {
-    return asfloat(sceneData.Load4(723584u));  // kSceneDataTaaParamsOffset
+    return sceneTaa.params;
 }
 
 // 批 13.5 历史基空间修正：**上一帧内容位移 c_{t−1}** 像素（x/y）+ 批 13.6 AO 施加点标志（z）。
 // 用途：prevViewProj 产出的是抖动网格坐标，减本值才落到基空间历史网格。
-// 语义与「为什么偏移由 CPU 算好」全在 scene_data.cppm kSceneDataTaaPrevContentShiftOffset 注释里。
+// 语义与「为什么偏移由 CPU 算好」全在 scene_data.cppm TAA 区 `prevContentShift` 字段注释里。
 float4 readTaaPrevContentShift()
 {
-    return asfloat(sceneData.Load4(723600u));  // kSceneDataTaaPrevContentShiftOffset
+    return sceneTaa.prevContentShift;
 }
 
 // 批 13.6：AO 是否**已在 tonemap 之前施加过**（1/0）。= 1 ⟹ tonemap 必须跳过自己的 AO
@@ -565,7 +572,7 @@ float4 readTaaPrevContentShift()
 //   又跳过」= AO 一次都不施加。零布局变更（复用 .z 保留位，static_assert 不变）。
 float readAoAppliedPreTemporal()
 {
-    return asfloat(sceneData.Load(723600u + 8u));  // kSceneDataTaaPrevContentShiftOffset + z
+    return sceneTaa.prevContentShift.z;
 }
 
 // 历史拒收诊断门标志（`taa.diag_reject`，1/0，默认 0 = 今天）。= 1 ⟹ taa.frag 把逐像素
@@ -574,7 +581,7 @@ float readAoAppliedPreTemporal()
 // 零布局变更（复用 .w 保留位，static_assert 不变）。
 float readTaaDiagReject()
 {
-    return asfloat(sceneData.Load(723600u + 12u));  // kSceneDataTaaPrevContentShiftOffset + w
+    return sceneTaa.prevContentShift.w;
 }
 
 // 输入侧 un-jitter 的**重建核选择**（`taa.input_kernel`，默认 0 = 双线性 = 逐位今天）。
@@ -585,7 +592,7 @@ float readTaaDiagReject()
 //   门关（0）⟹ taa.frag 走双线性分支，一个 bit 不动（红线由 `just shot` sha256 钉）。
 float readTaaInputKernel()
 {
-    return asfloat(sceneData.Load(723616u));  // kSceneDataTaaInputKernelOffset
+    return sceneTaa.inputKernel.x;
 }
 
 /**
@@ -598,5 +605,5 @@ float readTaaInputKernel()
  */
 float4 readTaaClipControl()
 {
-    return asfloat(sceneData.Load4(723632u));  // kSceneDataTaaClipControlOffset
+    return sceneTaa.clipControl;
 }

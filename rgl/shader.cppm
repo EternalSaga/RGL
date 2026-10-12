@@ -398,6 +398,8 @@ export struct PipelineBindings {
 	                             // 裁未声明者同批 M）
 	uint32_t slotSceneSsr = 0;  // binding 31（迁移批 S-3，hasSceneData 恒带上）：SSR 区
 	                             // UBO 子范围槽（SceneDataService::ssrSlot；裁未声明者同批 M）
+	uint32_t slotSceneTaa = 0;  // binding 30（迁移批 S-4，hasSceneData 恒带上）：TAA 区
+	                             // UBO 子范围槽（SceneDataService::taaSlot；裁未声明者同批 M）
 	// 类型化迁移 批 T1：逐对象四张表的 SSBO 子范围槽（SceneDataService::objectMatrixSlot 等）。
 	// 与上面三条同纪律 = hasSceneData 一律带上、C++ 侧不登记谁用，未声明的 binding 由批 M 的
 	// SPV 声明过滤自动裁掉。元素步长由 shader 侧 StructuredBuffer<T> 的类型给（R4 逐次构建
@@ -551,28 +553,21 @@ export class RenderPipeline {
 			add(2, bindings.samplerHeapOffset, 0);
 		}
 		if (bindings.hasSceneData) {
-			add(3, bindings.slotSceneData * descriptorSize, descriptorSize);
-			// 迁移批 1：湿面区 UBO 载体（binding 32）。**hasSceneData 一律带上、不在 C++ 侧
-			// 登记谁用**——SPV 没声明 binding 32 的条目被上面的批 M 过滤自动裁掉（§9.3/§9.7；
-			// 「声明了未 mapping」才是 VUID-11292 启动炸，方向别记反）。
-			add(32, bindings.slotSceneWet * descriptorSize, descriptorSize);
-			// 迁移批 2：辐照度区 UBO 载体（binding 27），同批 1 纪律（恒带上、过滤裁未声明者）
-			add(27, bindings.slotSceneIrradiance * descriptorSize, descriptorSize);
-			// 迁移批 3：灯数组区 UBO 载体（binding 24），同批 1 纪律
-			add(24, bindings.slotSceneLights * descriptorSize, descriptorSize);
-			// 迁移批 S-1：阴影光空间 VP 区 UBO 载体（binding 28），同批 1 纪律
-			add(28, bindings.slotSceneShadowViewProj * descriptorSize, descriptorSize);
-			// 迁移批 S-2：阴影采样参数区 UBO 载体（binding 29），同批 1 纪律
-			add(29, bindings.slotSceneShadowParams * descriptorSize, descriptorSize);
-			// 迁移批 S-3：SSR 区 UBO 载体（binding 31），同批 1 纪律
-			add(31, bindings.slotSceneSsr * descriptorSize, descriptorSize);
-			// 类型化迁移 批 T1：逐对象四张表 SSBO 载体（binding 23/25/26/33），同批 1 纪律。
-			// 只有 import scene_tables.slang 且真用到某张表的条目才在 SPV 里声明它（未用到的
-			// 表被 Slang 死代码消除掉），批 M 过滤把剩下的裁干净 ⟹ 烘的恰好是用的。
-			add(23, bindings.slotObjectMatrices * descriptorSize, descriptorSize);
-			add(25, bindings.slotObjectMVPs * descriptorSize, descriptorSize);
-			add(26, bindings.slotObjectDraws * descriptorSize, descriptorSize);
-			add(33, bindings.slotObjectClusterRanges * descriptorSize, descriptorSize);
+			// scene data 各载体（binding 号 = §9.5 定案表）。**hasSceneData 一律全带上、不在
+			// C++ 侧登记谁用**——SPV 没声明的那条被上面的批 M 过滤自动裁掉（§9.3/§9.7；
+			// 「声明了却未 mapping」才是 VUID-11292 启动炸，方向别记反）。
+			// 表驱动而非逐条 add()：迁移加区只加一个条目，本构造函数不随区数一条条长胖
+			// （>100 代码行的拆分红线）。批 T1 的四张表只有 import scene_tables.slang 且真用到
+			// 某张表的条目才在 SPV 里声明它（未用到的被 Slang 死代码消除）⟹ 烘的恰好是用的。
+			const std::pair<uint32_t, uint32_t> sceneRegions[] = {
+				{3, bindings.slotSceneData}, {32, bindings.slotSceneWet},
+				{27, bindings.slotSceneIrradiance}, {24, bindings.slotSceneLights},
+				{28, bindings.slotSceneShadowViewProj}, {29, bindings.slotSceneShadowParams},
+				{31, bindings.slotSceneSsr}, {30, bindings.slotSceneTaa},
+				{23, bindings.slotObjectMatrices}, {25, bindings.slotObjectMVPs},
+				{26, bindings.slotObjectDraws}, {33, bindings.slotObjectClusterRanges}};
+			for (const auto& [regionBinding, regionSlot] : sceneRegions)
+				add(regionBinding, regionSlot * descriptorSize, descriptorSize);
 		}
 		if (bindings.hasEnv) {
 			// Phase 5.5：binding 4 → env cubemap（resource heap SAMPLED_IMAGE 槽）；

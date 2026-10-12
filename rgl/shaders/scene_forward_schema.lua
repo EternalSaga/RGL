@@ -137,5 +137,23 @@ return {
                 { name = "gate",     type = "vec4", offset = 80 },
             },
         },
+        -- 迁移批 S-4（§9.5 binding 30）：TAA 区类型化载体（scene.slang TaaParamsBlock，
+        -- ConstantBuffer<TaaParamsBlock> 经子范围描述符指向 scene data TAA 区
+        -- kSceneDataTaaOffset，192B = 2×ObjectMatrix + 4×vec4）。六段自批 13.11 起本就同区
+        -- 连排 ⟹ **零布局变更**（区容量与合并前逐字节同，其后 SSR/湿面/簇区间不动）。
+        -- 「契约 struct 嵌契约 struct」非数组形态的第二个消费者（两份矩阵 = §9.4 定案：
+        -- 契约里的矩阵一律 ObjectMatrix，禁 float4x4 字段）。依赖方向：排在 ObjectMatrix 之后。
+        {
+            name = "TaaParamsBlock",
+            stride = 192,
+            attributes = {
+                { name = "prevViewProj",     type = "ObjectMatrix", offset = 0 },
+                { name = "motion",           type = "ObjectMatrix", offset = 64 },
+                { name = "params",           type = "vec4", offset = 128 },
+                { name = "prevContentShift", type = "vec4", offset = 144 },
+                { name = "inputKernel",      type = "vec4", offset = 160 },
+                { name = "clipControl",      type = "vec4", offset = 176 },
+            },
+        },
     },
 }

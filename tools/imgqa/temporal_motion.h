@@ -72,7 +72,7 @@ struct Spec {
     // 批 13.11 曾有 `staticBoostFloor`（`static_boost` 地板）；批 13.14b 删 boost 后长窗档
     // 直接写 `feedback`（= 下面的 feedback 字段本身），字段随之删除。
     /// 批 13.11 **历史裁剪消融臂**（`taa.clip_mode` / `taa.clip_soft`）。默认 0 = 不写键 = 交付态。
-    /// 语义 → `rgl/scene_data.cppm` kSceneDataTaaClipControlOffset。
+    /// 语义 → `rgl/scene_data.cppm` TaaParamsBlock::clipControl。
     double clipMode = 0.0;
     double clipSoft = 1.0;
     // ── Phase 14 批 14.5：升频 / FSR 臂（量「闪烁↔鬼影」跷跷板）；批 14.6 三态化 ──

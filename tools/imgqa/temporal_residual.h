@@ -599,7 +599,7 @@ inline constexpr double kBoostFidelityLine = 1.5;
 /**
  * 批 13.11 **历史裁剪消融臂**（门 `taa.clip_mode` / `taa.clip_soft`）。默认 = 门关 = 逐位今天。
  *
- * 档位（权威语义 → `rgl/scene_data.cppm` kSceneDataTaaClipControlOffset）：
+ * 档位（权威语义 → `rgl/scene_data.cppm` TaaParamsBlock::clipControl）：
  * 0 现行 / 1 关盒（短路天花板参照）/ 2 绕 centroid 扩 1.5× / 3 box9 / 4 软裁剪（λ = soft）
  * / 5 绕 centroid 扩 K×（K = soft，参数化扩盒扫描臂）。
  */
