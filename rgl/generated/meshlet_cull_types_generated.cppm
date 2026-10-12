@@ -15,6 +15,27 @@ namespace RGL {
     static_assert(sizeof(MeshletCullItem) == 8, "Size of C++ struct MeshletCullItem does not match shader reflection!");
     static_assert(offsetof(MeshletCullItem, objectSlot) == 4, "Field MeshletCullItem.objectSlot offset does not match shader reflection (scalar layout drift!)");
 
+    export struct MeshletClusterHeader {
+        uint32_t group;
+        int32_t refined;
+        uint32_t triCount;
+        uint32_t vertCount;
+        uint32_t triOffset;
+        uint32_t remapOffset;
+        glm::vec3 center;
+        float radius;
+        float error;
+    };
+    static_assert(sizeof(MeshletClusterHeader) == 44, "Size of C++ struct MeshletClusterHeader does not match shader reflection!");
+    static_assert(offsetof(MeshletClusterHeader, refined) == 4, "Field MeshletClusterHeader.refined offset does not match shader reflection (scalar layout drift!)");
+    static_assert(offsetof(MeshletClusterHeader, triCount) == 8, "Field MeshletClusterHeader.triCount offset does not match shader reflection (scalar layout drift!)");
+    static_assert(offsetof(MeshletClusterHeader, vertCount) == 12, "Field MeshletClusterHeader.vertCount offset does not match shader reflection (scalar layout drift!)");
+    static_assert(offsetof(MeshletClusterHeader, triOffset) == 16, "Field MeshletClusterHeader.triOffset offset does not match shader reflection (scalar layout drift!)");
+    static_assert(offsetof(MeshletClusterHeader, remapOffset) == 20, "Field MeshletClusterHeader.remapOffset offset does not match shader reflection (scalar layout drift!)");
+    static_assert(offsetof(MeshletClusterHeader, center) == 24, "Field MeshletClusterHeader.center offset does not match shader reflection (scalar layout drift!)");
+    static_assert(offsetof(MeshletClusterHeader, radius) == 36, "Field MeshletClusterHeader.radius offset does not match shader reflection (scalar layout drift!)");
+    static_assert(offsetof(MeshletClusterHeader, error) == 40, "Field MeshletClusterHeader.error offset does not match shader reflection (scalar layout drift!)");
+
     export struct MeshletCullPush {
         std::array<glm::vec4, 6> planes;
         uint32_t itemCount;

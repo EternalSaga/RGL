@@ -19,6 +19,24 @@ return {
                 { name = "objectSlot",  type = "uint", offset = 4 },
             },
         },
+        -- 簇头运行时视图（★1-a2-i）。offset 逐条来自 meshlet_cull.slang 的声明序；
+        -- 写错只会让 reflection_tool 报 [FAIL] 拒生成（API 是实查真值），不会生成错位结构体。
+        -- 44B 与 packer 的 `format.h::DiskCluster` 一致，但两侧刻意不共享代码（理由见 slang 侧注释）。
+        {
+            name = "MeshletClusterHeader",
+            stride = 44,
+            attributes = {
+                { name = "group",       type = "uint",  offset = 0 },
+                { name = "refined",     type = "int",   offset = 4 },
+                { name = "triCount",    type = "uint",  offset = 8 },
+                { name = "vertCount",   type = "uint",  offset = 12 },
+                { name = "triOffset",   type = "uint",  offset = 16 },
+                { name = "remapOffset", type = "uint",  offset = 20 },
+                { name = "center",      type = "vec3",  offset = 24 },
+                { name = "radius",      type = "float", offset = 36 },
+                { name = "error",       type = "float", offset = 40 },
+            },
+        },
     },
     -- name = slang 的 **push 变量名**（cullPush），不是 struct 名（material_schema.lua 同规矩）
     pushConstants = {

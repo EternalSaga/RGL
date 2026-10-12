@@ -31,4 +31,29 @@ struct MeshletCullPush
     uint itemCount;    // 剔除项数（= 标志数组长度）
 };
 
+// 簇头（= 打包工具产物 `tools/meshlet_pack/format.h::DiskCluster` 的**运行时视图**）。
+//
+// 🔴 为什么它进本契约而不是让 shader 写死字节偏移：这个布局此前有 4 份手写副本（packer 的
+// format.h / 引擎 `meshlet_asset` 的镜像 struct / meshlet.mesh.slang 的 44+8/12/16/20 字面量 /
+// 本 compute 的 24/36 字面量）。副本越多，**差一个字段就静默错剔一块几何**的面积越大——
+// 产品级 tangent.w off-by-one（把 tangent.z 写成 tangent.w）就是同型错。本结构把 shader 侧
+// 与引擎侧收敛成一份：shader 用 `Load<MeshletClusterHeader>` 让编译器定偏移，C++ 用生成物。
+//
+// ⚠ 与 packer 的 `DiskCluster` 之间**刻意**不共享代码：项目红线「引擎不 include tools/」
+// （`tests/test_meshlet_asset.cppm` 头注释），且该测试刻意手抄 format.h 常量当**独立**第二出处
+// ——两侧同时漂才被抓到，合并成一份反而失去这个交叉验证。本结构的作用是把**引擎内部**的
+// 多份副本收成一份。
+struct MeshletClusterHeader
+{
+    uint   group;       // 所属 group 下标（选级判据住在 group，不住簇）
+    int    refined;     // 产出本簇的**更细** group 下标；-1 = 原始几何（L0 判据）
+    uint   triCount;    // 三角数（≤ 128，8bit 局部索引因此可解）
+    uint   vertCount;   // 簇内顶点数（≤ 128）
+    uint   triOffset;   // Tris 段内**字节**偏移（triCount×3 个 u8）
+    uint   remapOffset; // Remap 段内**元素**偏移（vertCount 个 u32 全局顶点下标）
+    float3 center;      // 包围球球心（**源 glb 单位**，未应用对象矩阵）
+    float  radius;      // 包围球半径（同上，源单位）
+    float  error;       // 跨 DAG 累积误差（剔除不消费，声明在此只为把 44B 布局钉死）
+};
+
 [[vk::push_constant]] MeshletCullPush cullPush;

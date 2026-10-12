@@ -26,17 +26,6 @@ readonly ByteAddressBuffer sceneData;    // 对象矩阵表 @128 + objectSlot ×
 [[vk::binding(3, 0)]]
 RWByteAddressBuffer clusterVisible;      // u32 × itemCount（1 = 可见；mesh shader 按 cullBase+簇内序读）
 
-// DiskCluster 的包围球字节偏移。🔴 **唯一真相源 = tools/meshlet_pack/format.h 的 DiskCluster**
-// （group@0 / refined@4 / triCount@8 / vertCount@12 / triOffset@16 / remapOffset@20 /
-//   center[3]@24 / radius@36 / error@40，`static_assert(sizeof(DiskCluster) == 44)` 在 :137）。
-// 为什么这里只能写死：DiskCluster 是**打包工具的产物格式**，不是 CPU↔shader 的 push/uniform 契约，
-// 没有对应的 slang struct 可供反射（meshlet.mesh.slang:130-133 读同段的 triCount/vertCount/
-// triOffset/remapOffset 也是同一套字面量）。改 format.h 必须同步这里——
-// 先例偏移对得上（triCount@8 等）即本表与 format.h 未漂。
-static const uint kClusterStride = 44u;   // format.h:137 static_assert(sizeof(DiskCluster) == 44)
-static const uint kClusterCenter = 24u;   // format.h:133 `float center[3]`（前 6 个 u32/i32 = 24B）
-static const uint kClusterRadius = 36u;   // format.h:134 `float radius`（center 之后第 3 个 float）
-
 // 对象矩阵表基址（scene data 契约，scene.slang readObjectMatrix / cull.comp.slang 同值）
 static const uint kSceneMatrixBase = 128u;
 
@@ -54,10 +43,14 @@ void main(uint3 tid : SV_DispatchThreadID)
     const MeshletCullItem item =
         cullItems.Load<MeshletCullItem>(tid.x * uint(sizeof(MeshletCullItem)));
 
-    // 簇包围球（源 glb 单位，未乘对象矩阵——世界换算在下面）
-    const uint cb = item.clusterIdx * kClusterStride;
-    const float3 c = asfloat(clusters.Load3(cb + kClusterCenter));
-    const float r = asfloat(clusters.Load(cb + kClusterRadius));
+    // 簇包围球（源 glb 单位，未乘对象矩阵——世界换算在下面）。步长与字段位置**都**取自契约
+    // 结构体本身（与上面 cullItems 同读法）：编译器按 meshlet_cull.slang 的
+    // MeshletClusterHeader 定偏移，本文件一个字节偏移都不写（改 format.h 而忘了同步契约
+    // = 反射 [FAIL] / 生成物 static_assert 编译红，不再是"读着隔壁字段还像个数"的静默错）
+    const MeshletClusterHeader cluster =
+        clusters.Load<MeshletClusterHeader>(item.clusterIdx * uint(sizeof(MeshletClusterHeader)));
+    const float3 c = cluster.center;
+    const float r = cluster.radius;
 
     // 对象世界矩阵 M（scene data @128 + slot×64，4 列显式读——cull.comp.slang:75-79 同款）
     const uint mb = kSceneMatrixBase + item.objectSlot * 64u;
