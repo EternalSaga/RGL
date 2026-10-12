@@ -84,7 +84,16 @@ VALID_VARIANTS = ("forward", "deferred", "offscreen")
 # "前缀是什么就打开同名文件"：拼错的目标（`--set camrea:mode=...`）会去 staging 里新建一个
 # 没人加载的 camrea.lua ⟹ **静默不生效**，而 patch_lua 的"键命中 ≠ 1 即 FAIL"护栏在错误
 # 的文件上照样能命中 0 次以外的形态（比如恰好同名）。白名单 + 配置文件清单同源才拦得住。
-SET_TARGETS = ("runtime", "camera", "scene", "render_graph", "diagnostics")
+# 🔴 「同源」是**从磁盘派生**，不是手抄一份名单：本常量曾经手抄五个，configs/shadow.lua
+# 落地时没人回来加它 ⟹ `--set shadow:mode=pcss` 一直撞在白名单上（批 N+1 实测：报
+# 「目标文件 'shadow' 不在白名单」）。护栏一点没松——拼错的前缀磁盘上没有那个文件，照样 fail。
+def set_targets() -> tuple[str, ...]:
+    """`--set [FILE:]KEY=VALUE` 允许的目标文件 = 仓库 configs/ 里实际存在的 `*.lua`。"""
+    names = tuple(sorted(p.stem for p in (ROOT / "configs").glob("*.lua")))
+    if not names:
+        fail(f"{rel(ROOT / 'configs')} 里一个 .lua 都没有——配置目录不对？"
+             "（白名单从它派生，扫空 = 这条护栏已经空转）")
+    return names
 
 
 def fail(msg: str) -> None:
@@ -267,6 +276,16 @@ def patch_lua(path: Path, key: str, value: str) -> None:
         fail(f"{rel(path)} 里{where}命中 {len(hits)} 次（须恰好 1 次）"
              f"——配置格式变了？同步改 tools/smoke.py，别让它静默不生效")
     m = hits[0]
+    # 🔴 少写引号的值 = **静默空操作**，比键名拼错更坏。`--set shadow:mode=pcss` 写进 lua 是
+    # `mode = pcss`，pcss 是个未定义全局 = nil，解析器按「缺键回落默认」处理 ⟹ 引擎照跑默认档、
+    # patch_lua 的「键命中 ≠ 1」护栏全绿、smoke 报 PASS errors=0，而**量的是默认档**。判据 =
+    # 原值是带引号字符串而新值是裸标识符 ⟹ 几乎必然是漏引号（真要写裸值，自己把引号写全）。
+    oldRaw = _split_value_comment(m.group(2))[0].strip()
+    newRaw = value.strip()
+    if oldRaw[:1] in {'"', "'"} and newRaw[:1] not in {'"', "'"}:
+        fail(f"{rel(path)} 的键 `{child}` 原值是**字符串**（{oldRaw}），而 --set 给的是裸值 "
+             f"{newRaw!r} ⟹ 写进 lua 是 `{child} = {newRaw}`，那是个未定义全局 = nil = 回落默认，"
+             f"配置改了但引擎读不到（静默空操作）。要字符串值请带引号：--set '{child}=\"{newRaw}\"'")
     _, comma, comment = _split_value_comment(m.group(2))
     new_line = f"{m.group(1)}{child} = {value}{',' if comma else ''}{comment}"
     a, b = offset + m.start(), offset + m.end()
@@ -277,8 +296,8 @@ def split_set(item: str) -> tuple[str, str, str]:
     """把 `--set` 的一项拆成 (目标文件 stem, 键, 值)。
 
     形态 `[FILE:]KEY=VALUE`，FILE 缺省 = runtime（批 15.2B 的旧形态 `--set KEY=VALUE` 逐字
-    不变）。FILE 只准是 `SET_TARGETS` 里的五个之一——不在白名单里的前缀（`camrea:` 拼错）
-    会去新建一个引擎根本不加载的文件，护栏再严也是在错误的文件上严。
+    不变）。FILE 只准是 `set_targets()`（= 仓库 configs/ 里实际存在的 .lua）之一——不在白名单
+    里的前缀（`camrea:` 拼错）会去新建一个引擎根本不加载的文件，护栏再严也是在错误的文件上严。
 
     值里带冒号是合法的（`--set runtime:url="http://x"`），所以判"这是不是前缀"的条件是
     **冒号左侧不含 `=`**：含 `=` 说明冒号在值里，整项按无前缀处理。
@@ -286,15 +305,44 @@ def split_set(item: str) -> tuple[str, str, str]:
     head, sep, rest = item.partition(":")
     target = "runtime"
     if sep:
-        if head in SET_TARGETS:
+        if head in set_targets():
             target, item = head, rest
         elif "=" not in head:
-            fail(f"--set 的目标文件 {head!r} 不在白名单 {SET_TARGETS}"
+            fail(f"--set 的目标文件 {head!r} 不在白名单 {set_targets()}"
                  f"（不带前缀 = 打 runtime.lua；键名以 configs/<文件>.lua 本体为准）")
     key, eq, value = item.partition("=")
     if not eq or not key.strip():
         fail(f"--set 要 [FILE:]KEY=VALUE 形态，收到 {item!r}（VALUE 允许带空格/引号，KEY 不允许）")
     return target, key.strip(), value
+
+
+def set_value(overrides: list[str] | None, target: str, key: str) -> str | None:
+    """`--set` 注入里 `[target:]key` 的**最后一个** VALUE（没注入 = None）。
+
+    「最后一个」= 与 patch_lua 的作用顺序同口径：`--set` 逐条后写者赢（见 stage_configs
+    末尾那个循环），护栏读到的必须是真正落到配置里的那一次。lua 字符串值的引号剥掉
+    （`'"taa"'` → `taa`），比较方不必再记两种写法。
+    """
+    found = None
+    for item in overrides or []:
+        t, k, v = split_set(item)
+        if t == target and k == key:
+            found = v.strip().strip('"').strip("'")
+    return found
+
+
+def set_switch_on(overrides: list[str] | None, target: str, key: str) -> bool:
+    """`--set` 有没有把某个布尔开关打开（VALUE ∈ {true, 1}，大小写不敏感）。
+
+    🔴 **为什么"门关不拢"类反向判据必须问这一句**：`--ssr` / `--velocity-field` 这类**具名
+    旗标**只是配置的一条来路，`--set ssr.enabled=true` 是另一条**等价**来路（低频/一次性臂
+    走它，见 `--set` 的 help）。反向判据若只看具名旗标，就会在「用 --set 开的门」上把
+    **门开**读成**门关不拢**——批 N+1 实测四条全部中招：`--set ssr.enabled=true` /
+    `--set velocity_field=true` / `--set aa="taa"` / `--set aa="fsr"`（最后这条还是被
+    隐含依赖 velocity_field 撞的）。护栏反过来咬自己人时，唯一的绕行办法就是手改配置副本，
+    而那正是本工具的立项目标里点名要消灭的双源。
+    """
+    return (set_value(overrides, target, key) or "").lower() in {"true", "1"}
 
 
 def gbuf_channel(overrides: list[str] | None) -> int | None:
@@ -458,17 +506,23 @@ def parse_size(text: str | None) -> tuple[int, int] | None:
 
 
 def guard_flags(clip: int | None, aa: str | None, fsr_temporal: bool,
-                fsr_jitter: bool) -> None:
+                fsr_jitter: bool, aa_eff: str | None = None) -> None:
     """旗标守卫（批 14.6 三态化后从三条收成两条）。
 
     单独成函数是为了 `tools/regress.py` 复用同一组守卫：守卫只在一处生效的话，
     绕过它的那条路就会静默量到一张与默认逐位相同的图，却报成「档位生效了」。
+
+    `aa_eff` = 含 `--set aa=…` 之后的**实际** aa（后写者赢）。缺省回落到具名旗标
+    （regress.py 的旧调用逐字不变）。不并这一条的话，`--set aa=fsr --fsr-temporal`
+    这条**合法**组合会被守卫判成"空开关"拒掉——护栏反过来挡住了合法入口（同批修掉的
+    四条反向判据是同一个病：只看具名旗标，认不出 `--set` 这条等价来路）。
     """
+    aa = aa_eff if aa_eff is not None else aa
     if clip is not None and aa != "taa":
         fail("--clip 必须配 --aa taa：TAA 不在图时 taa 段整个不进图，clip_mode 不被任何 "
              "shader 消费 ⟹ 这条旗标会静默量到一张与默认逐位相同的图，却报成「档位生效了」")
     if (fsr_temporal or fsr_jitter) and aa != "fsr":
-        fail("--fsr-temporal/--fsr-jitter 是 --aa fsr 的子选项：其余态下 fsr 块调参没有"
+        fail("--fsr-temporal/--fsr-jitter 是 aa=fsr 的子选项：其余态下 fsr 块调参没有"
              "消费者（引擎只在 aa=fsr 时才接 FSR），只开子选项 = 空开关（配置里写了、"
              "什么都没发生）")
     if fsr_jitter and not fsr_temporal:
@@ -535,9 +589,11 @@ def parse_args() -> argparse.Namespace:
                     help="通用配置注入（可重复）：对 staging 的配置文件走 patch_lua "
                          "（键命中 ≠ 1 即 FAIL，护栏与具名旗标同源）。例：`just shot --name "
                          "wetoff --set strength=0` = 湿面关消融档。作用在具名旗标**之后** = "
-                         "显式注入覆盖具名档。带 `FILE:` 前缀换目标文件，FILE ∈ "
-                         "runtime|camera|scene|render_graph|diagnostics（缺省 runtime；键名以 "
-                         "configs/<文件>.lua 本体为准）。例：`--set camera:mode='\"trackball\"'` "
+                         "显式注入覆盖具名档。带 `FILE:` 前缀换目标文件，FILE = 仓库 configs/ "
+                         "里实际存在的 .lua（从磁盘派生，本 help 不抄名单；缺省 runtime；键名以 "
+                         "configs/<文件>.lua 本体为准）。⚠ **字符串值必须自己带引号**："
+                         "`--set shadow:mode=pcss` 写进 lua 是 `mode = pcss` = nil = 回落默认，"
+                         "patch_lua 现在直接拒收这种裸值。例：`--set camera:mode='\"trackball\"'` "
                          "换机位模式、`--set diagnostics:dump_gbuf=3` 出 G-buffer 直读图"
                          "（后者引擎会忽略 --name，出图名固定 screenshots/gbuffer_3.png，"
                          "本工具按该名字核对）")
@@ -570,7 +626,11 @@ def main() -> int:
     if "/" in args.name or ".." in args.name:
         fail(f"--name 只准文件名（不要带路径），收到 {args.name!r}")
 
-    guard_flags(args.clip, args.aa, args.fsr_temporal, args.fsr_jitter)
+    # aa 的**实际**值：`--set aa=…` 作用在具名旗标之后 = 后写者赢（与 patch_lua 顺序同口径）。
+    # 守卫与下面所有 aa 相关判据都用它，否则 `--set aa=fsr --fsr-temporal` 会被拒、
+    # `--set aa=taa` 会被自己的反向判据判成"门关不拢"（详见 set_switch_on 的注释）。
+    aaEff = set_value(args.overrides, "runtime", "aa") or args.aa
+    guard_flags(args.clip, args.aa, args.fsr_temporal, args.fsr_jitter, aa_eff=aaEff)
 
     exe = check_prereq()
     single_instance_or_die()
@@ -688,11 +748,20 @@ def main() -> int:
     # velocity_field 生效核对（批 14.4）。同 render_scale 的纪律：patch 只保证"配置里写了"，
     # 不保证"引擎按它建了 RT"。**反向同样要核**：默认档不该出现 velocity RT 行——出现了就说明
     # 门关不拢（图里多了一个 pass，而逐位不变红线单看截图未必抓得住）。
+    # ── 「这扇门到底开没开」的统一口径 ──────────────────────────────────────────
+    # 🔴 三条来路必须并成一条，否则下面的**反向**判据（门关不拢）会拿「门关」的假设去判
+    # 一门其实开着的图，把正确行为报成缺陷：
+    #   ① 具名旗标：--ssr / --velocity-field / --aa taa|fsr
+    #   ② `--set [runtime:]KEY=VALUE` 这条**等价**来路（低频/一次性臂的唯一入口）
+    #   ③ 引擎解析期的**隐含依赖**：aa=fsr 隐含 velocity_field（单一来源在 applyAaKey）
+    # aaEff 在 main 开头算（guard_flags 也要它），这里只派生其余三态。
+    taaRequested = aaEff == "taa"
+    fsrRequested = aaEff == "fsr"
+    ssrRequested = args.ssr or set_switch_on(args.overrides, "runtime", "ssr.enabled")
+    velRequested = (args.velocity_field or fsrRequested
+                    or set_switch_on(args.overrides, "runtime", "velocity_field"))
     vel = re.search(r"velocity \(RGBA16F[^)]*\): (\d+)x(\d+) slot (\d+)", log)
     velUnsupported = "velocity: 图形态不支持" in log
-    # aa=fsr 隐含 velocity_field（FSR 的 MV 输入就是那张图，隐含发生在引擎解析期）⟹ 核对
-    # 判据必须把两条来源并起来，否则 --aa fsr 会被自己的依赖判成「门关不拢」。
-    velRequested = args.velocity_field or args.aa == "fsr"
     if velRequested and not vel:
         # 区分两种"没建 RT"：**图形态不支持**（装饰器 warn 后正常跳过，offscreen 变体用
         # blit 上屏，无"写 swapchain 且采色"的 pass = 与 decorateTaaPass 同判据）与
@@ -700,7 +769,8 @@ def main() -> int:
         # 一律 FAIL 会把"正确不支持"报成缺陷，反过来也不许它拿"不支持"当遮羞布：
         # 必须真的看到那条 warn 才算数。
         if not velUnsupported:
-            fail("请求 --velocity-field 但日志里既没有 velocity RT 行、也没有"
+            fail("请求 velocity_field（--velocity-field 或 --set velocity_field=true 或 aa=fsr "
+                 "隐含）但日志里既没有 velocity RT 行、也没有"
                  "「velocity: 图形态不支持」告警 ⟹ 装饰器静默没落图"
                  "（配置键名漂了 / 启动日志文案改了 / 装饰调用被删）")
         print("速度场: 本图变体不支持（装饰器已 warn 并跳过）✓ 非错误")
@@ -716,14 +786,14 @@ def main() -> int:
     ssrRt = re.search(r"ssr \(RGBA16F[^)]*\): (\d+)x(\d+) slot (\d+)", log)
     ssrTraceRt = re.search(r"ssr_trace \(RGBA16F[^)]*\): (\d+)x(\d+) slot (\d+)", log)
     ssrUnsupported = "ssr: 图形态不支持" in log
-    if args.ssr and not (ssrRt and ssrTraceRt):
+    if ssrRequested and not (ssrRt and ssrTraceRt):
         if not ssrUnsupported:
-            fail("请求 --ssr 但日志里 trace/apply 两行 RT 不齐"
+            fail("请求 ssr（--ssr 或 --set ssr.enabled=true）但日志里 trace/apply 两行 RT 不齐"
                  f"（trace={'有' if ssrTraceRt else '无'}, apply={'有' if ssrRt else '无'}），"
                  "也没有「ssr: 图形态不支持」告警 ⟹ 装饰器静默没落图或只落了一半"
                  "（配置键名漂了 / 启动日志文案改了 / 装饰调用被删）")
         print("SSR    : 本图变体不支持（装饰器已 warn 并跳过）✓ 非错误")
-    if not args.ssr and (ssrRt or ssrTraceRt):
+    if not ssrRequested and (ssrRt or ssrTraceRt):
         fail(f"默认档（ssr.enabled 关）却建了 ssr RT：{(ssrRt or ssrTraceRt).group(0)}"
              " ⟹ 门关不拢，「门开 = 门关逐位相同」红线的前提失效")
     if ssrRt and (int(ssrRt.group(1)), int(ssrRt.group(2))) != render_grid:
@@ -741,7 +811,6 @@ def main() -> int:
     # aa=fsr 生效核对（批 14.5 的门 + 批 14.6 的槽位）。同 velocity 的纪律：双向都要核。
     # 正向 = 门开必须看到 vendor context 构造行；反向 = 门关**一行都不许有**——FSR 是
     # 图外 compute，门关不拢时截图未必变（本批它的输出尚无消费者），只看画面会漏。
-    fsrRequested = args.aa == "fsr"
     fsr = re.search(r"FsrUpscaler: context 就绪[^\n]*?render=(\d+)x(\d+) upscale=(\d+)x(\d+)", log)
     fsrOff = re.search(r"fsr: 输入附件不齐", log)
     if fsrRequested and not fsr:
@@ -766,7 +835,7 @@ def main() -> int:
     # 反向这条尤其值钱：**出厂默认是 aa="off"**（`configs/runtime.lua`），
     # 而红线 A（`fdece9d0…`）就是那张图。若哪天门关不拢、taa pass 悄悄进了图，红线 A 的
     # 含义就变了 —— 而单看截图未必发现（TAA 开也可能只改时域不改这一帧）。
-    taaRequested = args.aa == "taa"
+    # taaRequested 的口径见上面「这扇门到底开没开」的统一口径（`--set aa="taa"` 也算开）。
     taaRt = re.search(r"taa \(RGBA16F\)[^\n]*out slot (\d+)", log)
     if taaRequested and not taaRt:
         fail("请求 --aa taa 但日志里没有「taa (RGBA16F): … out slot …」行"
@@ -783,21 +852,32 @@ def main() -> int:
     # 批 14.6 三态之后「TAA 在图 = true 且 temporal 请求开」已不可能同时成立（aa 一个槽位），
     # 所以这里判关只可能是：velocity 没进图 ⟹ fsrUsable 假 / 图形态不支持 / 本来就没请求。
     fsrTemp = re.search(r"fsr temporal: (开|关).*?fsr_temporal = (\w+)，TAA 在图 = (\w+)", log)
+    # 🔴 两条判据的口径**故意不对称**，别"顺手统一"：
+    #   正向只认具名旗标 `--fsr-temporal`（guard_flags 已保证它必须配 aa=fsr，请求了就必须看到）；
+    #   反向认两条来路（`--set fsr.temporal=true` 也是合法开法）。反向若只看具名旗标，
+    #   `--set aa=fsr --set fsr.temporal=true` 会被判成"门关不拢"——而门是开着的。
+    fsrTempRequested = (args.fsr_temporal
+                        or set_switch_on(args.overrides, "runtime", "fsr.temporal"))
     if args.fsr_temporal and not (fsrTemp and fsrTemp.group(1) == "开"):
         detail = (f"引擎判关（配置键 = {fsrTemp.group(2)}，TAA 在图 = {fsrTemp.group(3)}）"
                   if fsrTemp else "日志里没有「fsr temporal:」行（fsrUsable 为假 = FSR 根本没接进图）")
         fail(f"请求 --fsr-temporal 但 vendor 时域没开：{detail}"
              " ⟹ 这条读数会是「纯空间升频」却被记成时域档")
-    if not args.fsr_temporal and fsrTemp and fsrTemp.group(1) == "开":
+    if not fsrTempRequested and fsrTemp and fsrTemp.group(1) == "开":
         fail("默认档（fsr_temporal 关）却开着 vendor 时域 ⟹ 门关不拢，"
-             "「FSR 关 = 逐位不变」的红线含义已失效")
+             "「FSR 关 = 逐位不变」的红线含义已失效。⚠ 若这一档是用 `--set aa=fsr` 进来的：\n"
+             "     fsr 块出厂值是 temporal=true / jitter=true（= vendor 设计点），而工具的每个臂\n"
+             "     必须是**自己写出来的那个配置**（不写键 = 静默换臂）——显式补\n"
+             "     `--set fsr.temporal=false --set fsr.jitter=false` 才是 --aa fsr 的纯空间臂")
     # fsr_jitter 生效核对（正向 = 必须看到接入行并读出相位数；反向 = 门关一行不许有）。
+    # 反向的口径与 fsr_temporal 同：`--set fsr.jitter=true` 也是一条合法开法。
     jit = re.search(r"fsr_jitter: 抖动已接入投影[^\n]*?相位 (\d+)", log)
     if args.fsr_jitter and not jit:
         fail("请求 --fsr-jitter 但日志里没有「fsr_jitter: 抖动已接入投影」行"
              " ⟹ 抖动静默没接（键名漂了 / 生效判据被改 / 日志文案改了）")
-    if not args.fsr_jitter and jit:
-        fail(f"默认档（fsr_jitter 关）却把抖动接进了投影：{jit.group(0)} ⟹ 门关不拢")
+    if not (args.fsr_jitter or set_switch_on(args.overrides, "runtime", "fsr.jitter")) and jit:
+        fail(f"默认档（fsr_jitter 关）却把抖动接进了投影：{jit.group(0)} ⟹ 门关不拢"
+             "（`--set aa=fsr` 进来的话要显式 `--set fsr.jitter=false`，理由见上面 temporal 那条）")
     if fsrTemp or jit:
         bits = []
         if fsrTemp:
