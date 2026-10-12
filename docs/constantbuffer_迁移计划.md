@@ -1,6 +1,8 @@
 # scene data 类型化迁移（ByteAddressBuffer → ConstantBuffer / StructuredBuffer）
 
-> **状态**：现行（2026-10-12 立；同日 **C4 结案** = R3 红线窄化放行 + R4 stride 护栏落地，见 §8）。
+> **状态**：现行（2026-10-12 立；同日 **C4 结案** = R3 红线窄化放行 + R4 stride 护栏落地，见 §8；
+> 同日**开工定案** = C1/C2/C3 全部落定 + 三条新事实（子范围描述符合法 / mapping 必须按 SPV 过滤 /
+> 契约矩阵禁用 `float4x4`），见 **§9 —— 开工照 §9 做**）。
 > 本文件 = 这条线的**唯一计划载体 + 事实基线**。
 > 触发源 = 簇化轴 ★1-a2-i 期间对"双源为什么必然"的架构诊断（结论见 §1）+ 用户拍板做 spike。
 > spike 定案 = `tests/test_descriptor_heap_ubo.cppm`（`TEST_SUITE("gpu")`，git `308a703`）。
@@ -9,11 +11,11 @@
 
 ## 0. 待拍板
 
-| 编号 | 问题 | 我的建议 |
+| 编号 | 问题 | 结论 |
 |---|---|---|
-| C1 | 分支拓扑：迁移从 master 切，还是从 MDI tip 切 | 🔴 **从 MDI tip 切**（理由 §6.2，这条决定另一会话怎么开） |
-| C2 | 迁移粒度：每区一 buffer，还是"标量合并一 UBO + 大表各自 SSBO" | 先做批 0 测量再定，**别先定形态再找理由** |
-| C3 | `cull.comp.slang` 遗留偏移是否并入本计划 | 并入，但排最后（它是纯遗留，不阻塞任何新功能） |
+| C1 | 分支拓扑：迁移从 master 切，还是从 MDI tip 切 | ✅ **已结案**：从 MDI tip 切（§6.2 成立）→ 分支 `feat/scene-data-typed-migration` @ `f4ee56c`，锚点 §9.1 |
+| C2 | 迁移粒度：每区一 buffer，还是"标量合并一 UBO + 大表各自 SSBO" | ✅ **已结案（§9.2/§9.5）**：**都不选**——物理 buffer 一块不拆，**只拆描述符**（子范围描述符，VUID 依据）；粒度按**语义**划，成本项已被两条机制消掉 |
+| C3 | `cull.comp.slang` 遗留偏移是否并入本计划 | ✅ **已结案**：并入，排最后（§9.7「末」批） |
 | **C4** | **R3 红线（禁 StructuredBuffer）是否按 §8.4 三条件改精确** | ✅ **已结案（用户 2026-10-12 拍板放行）**：R3 已窄化成"元素类型未走反射契约才 ERROR"，配套护栏 R4 + 设备端 stride 往返已落地 → §8 |
 
 ## 1. 为什么现在能做（事实基线，**别再重查一遍**）
@@ -124,6 +126,9 @@ StructuredBuffer<uint>            clusterVisible;
   ⟹ §5.1。
 
 ## 4. 分批（每批一个可回退单元）
+
+> 🔴 **本表已被 §9.7 取代**（批 0 的"拆 buffer 代价"经 §9.2 证明为 0，不再需要先量再定；
+> 实际执行序与每批状态以 §9.7 为准）。保留本表只为留下"当初为什么这么排"的推理。
 
 | 批 | 内容 | 判据 | 为什么这个顺序 |
 |---|---|---|---|
@@ -300,3 +305,130 @@ pos; float3 color; }`（C++ `sizeof` = 24），只改一个 flag：
 "全库零使用、无豁免清单"是一条**意图声明**，不是一条技术结论。工程侧能证明"带反射契约的
 StructuredBuffer 在本机 stride 正确"，但**推翻一条用户定下的红线不是工程权限**。
 2026-10-12 用户拍板放行，§8.4 三条同日落地，本计划 §2 目标形态自此解禁。
+
+## 9. ✅ 开工定案（2026-10-12 晚，分支 `feat/scene-data-typed-migration` @ 分支点 `f4ee56c`）
+
+> 本节 = C1/C2/C3 的**结论** + 开工前必须钉死的事实。**迁移照本节做，别再重新讨论。**
+> MDI 阶段性结束、无并行会话（用户拍板），本分支从 MDI tip（= 当时的 master 前沿）切，
+> C1 按 §6.2 建议成立。
+
+### 9.1 分支点锚点（开批前记下，§3.2 红线）
+
+| 档 | 命令 | sha256 |
+|---|---|---|
+| **门关**（护栏态） | `just shot --set meshlet.enable=false --set meshlet.shadow_lod=-1` | `54e406655f16faf0674b382818bd589f875c8ee0705cdec1c109d5ff1a72df4f` |
+| **出厂默认**（meshlet 开） | `just shot`（不带 `--set`） | `95edc8ccd7a4f2a5d72094007a68aa5b0fa41aed7d490397b30730fa7dc7908c` |
+
+门关档实测**仍 = 文档旧锚** `54e40665…`（★18-A/B1/B2/C 只动 meshlet 路径）。
+**每一批两档都要量**：门关证明"没碰旧语义"，默认档证明"没碰 meshlet 叠加路径"。
+
+### 9.2 C2 定案：**一个物理 buffer + N 个子范围描述符**（拆描述符，不拆 buffer）
+
+这是本计划最省的一笔。三条依据：
+
+1. **VUID-VkResourceDescriptorInfoEXT-type-12350 / -12351**（本机 spec 克隆
+   `chapters/descriptorheaps.adoc:412,417`）：UBO / SSBO 描述符的 `pAddressRange->address`
+   只需分别是 `minUniformBufferOffsetAlignment` / `minStorageBufferOffsetAlignment` 的整数倍
+   ⟹ **允许指向 buffer 内部的非零偏移**（spike 只测了整块 buffer，这条是本次补的）。
+2. **VUID-…-11461 / -11462**：只要求那块 buffer 建时带 `UNIFORM_BUFFER_BIT` /
+   `STORAGE_BUFFER_BIT`（同一块两个 usage 合法）；**VUID-…-11433**：size 不得为 0。
+3. 描述符是**启动期写一次**的静态地址范围（现状 `SceneDataService::ensure` 就只写一次）。
+
+⟹ **每帧 CPU 代价增量 = 0**：staging ring、逐字段 memcpy、`vkCmdCopyBuffer` 一条不多不少。
+§1.2 第 3 条"拆 buffer 的 CPU 代价未量"与 §4 批 0 的"不达标就停"因此**不构成风险**——
+要拆的只是**描述符**（+N 个 heap 槽，每槽 32B，运行时段容量 1024 用不完）。
+
+**布局红线**：所有子区基址静态 **256B 对齐**（覆盖桌面端 `minUniformBufferOffsetAlignment`
+的常见上限），buffer 基址用 `VmaAllocationCreateInfo::allocationAlignment = 256` 钉住；
+并加**运行期闸门**（§3.1 形态，先例 `checkMeshletDeviceFit`）：查
+`minUniformBufferOffsetAlignment` / `minStorageBufferOffsetAlignment` / `maxUniformBufferRange`，
+不满足则**响亮失败**（不是静默画错）。
+
+### 9.3 定案：mapping 按 **SPV 实际声明的 binding** 过滤（否则启动翻倍）
+
+基线读数（本机 `f4ee56c`，日志 `main_impl.cppm:588`）：
+`registryEntries=479 pipelinesCreated=479 handles=958 mappings=6560 createTotal=2.98s`
+⟹ ≈13.7 mapping/条目。现状 `hasSceneData` 是**一个布尔烘一条 binding 3**；若改成"新
+binding 全烘"，每条目 +12 条 ⟹ mapping 总数 ~1.14 万（+73%），启动时间按 mapping 面外推
+接近翻倍。**所以**：`RenderPipeline` 构造期解析两份 SPV 的 `OpVariable` 装饰集，**只为
+SPV 真声明了的 binding 发 mapping**；解析失败则**退回全烘 + warn**（全烘恒正确，是
+fail-safe 方向——"有 mapping 未声明"空转无害已由 addSkyEntry/addLightEntry 既证）。
+副产品：今天白烘的空转 mapping 也一并降掉，启动**优于**基线。
+🔴 这条是**机器可验**替代手工清单（抄名单反模式）：新增 binding 不需要在 C++ 侧登记"谁用"。
+
+### 9.4 定案：契约里的矩阵**继续**用 `ObjectMatrix`（4 个具名 float4），禁止 `float4x4` 字段
+
+反汇编实测（2026-10-12 本机 slangc + 项目原 flags，`-fvk-use-scalar-layout`）：
+
+```
+OpMemberDecorate %H_natural 0 Offset 0
+OpMemberDecorate %H_natural 0 RowMajor        ← Slang 对 float4x4 成员发 RowMajor
+OpMemberDecorate %H_natural 0 MatrixStride 16
+…  m[0]  →  OpLoad %mat4v4float + OpCompositeExtract %v4float … 0
+```
+
+SPIR-V 矩阵**逻辑上是列数组**，`RowMajor` 只改内存布局 ⟹ `m[0]`（逻辑列 0）在 RowMajor
+内存下是**跨行 gather**，**不等于**内存第 0 个连续 16B。而 `ObjectMatrix.c0` = 内存第 0 个
+连续 16B = glm 的列 0。两者差一个转置——正是 `scene.slang:73-79` 那条"带旋转的建筑直接
+炸形"的坑的同一机制的另一面。
+⟹ 契约 struct 里凡矩阵一律 `ObjectMatrix`（4×float4，反射可查、C++ 侧 `sizeof` 64），
+列组合走既有 `mulM` / `clipPos` / `worldPos` 惯用法。**不引入 `transpose()` 兜圈子**。
+
+推论：`ObjectMatrix` 要能**作为字段嵌进** UBO 契约 struct，而反射生成器当前不支持嵌套
+struct（`slang_reflect.cppm::typeToCppType` 对 `Kind::Struct` 落到 `default: return ""`
+= unmappable 致命）。⟹ **批 R 先给反射工具补嵌套 struct 支持**（递归类型名 + 依赖先出 +
+schema 交叉校验），这是"反射工具为主导"这条目标本体的活，不是绕路。
+
+### 9.5 区 → 载体定案（C2 的粒度结论：**按语义划，不按成本划**）
+
+成本已被 §9.2（子范围描述符）+ §9.3（mapping 过滤）两条消掉 ⟹ 粒度选择**不再有成本项**，
+按语义边界划即可。binding 3（`sceneData` ByteAddressBuffer）在迁移期保留，各区迁完即从
+`scene.slang` 删对应 read，**全部迁完后 binding 3 与 `sceneData` 声明一起删**。
+
+| 载体 | binding | 类型 | 内容 | 备注 |
+|---|---|---|---|---|
+| `SceneHeader` | 22 | UBO | light(48) + envParams + exposure + aoStrength + skyInvVP | 消费者最多，**最后迁** |
+| 对象矩阵表 | 23 | `StructuredBuffer<ObjectMatrix>` | ×4096 | |
+| `LightArray` | 24 | UBO | count + 8×`GpuLight` | 528B，UBO 装得下 |
+| 对象 MVP 表 | 25 | `StructuredBuffer<ObjectMatrix>` | ×4096 | |
+| 材质/几何表 | 26 | `StructuredBuffer<ObjectDraw>` | ×4096 | 已是契约类型 |
+| `IrradianceSH` | 27 | UBO | 9×vec4 | |
+| 阴影 VP 区 | 28 | UBO | `ObjectMatrix[4]`（嵌套 + 数组） | 走 UBO 不走 SSBO：它是"4 个固定槽的参数" |
+| `ShadowParams` | 29 | UBO | splits/texel/params/atlas/izb/pcss/evssm/evssmConst | 合并原 7 个小 vec4 子区 |
+| `TaaParams` | 30 | UBO | prevViewProj / motion / params / prevShift / inputKernel / clipControl | |
+| `SsrParams` | 31 | UBO | viewProj / params / gate | |
+| `WetParams` | 32 | UBO | params / spatial | **批 1 试点**（1 个消费者、无矩阵） |
+| 簇区间表 | 33 | `StructuredBuffer<ObjectClusterRange>` | ×4096 | 已是契约类型 |
+
+目标 idiom 达成形态（对照 §2 的"要消失的形态"）：`objectDraws[i].baseColor`、
+`frame.taa.params.x`——**shader 里一个字节数都不写，也没有基址**。
+
+### 9.6 验收口径的**一处修订**（不是放松，是换更强的算子）
+
+§4 批 1 原写"双路对拍：老路 vs 新路，门切换"。实施结论：**逐位对分支点锚**（§9.1）比
+"同一 binary 内门切换"**更强**——它比的是同一帧同一构建的像素，而门切换要引入 SPV 变体
+× 区数的组合税，且门本身是新代码。所以每批的判据固定为三条 AND：
+
+1. 门关 + 出厂默认**两档**截图 sha 逐位 = §9.1 锚点；
+2. **阳性对照**（把新载体读错成员/错下标，画面必须变）——§3.4 第一条"漏写描述符完全静默"
+   只有这条能排，**缺它整批不算过**；
+3. `just test` / `just test-gpu` / `just checks` 全绿。
+
+批 1 额外做一次真正的**双路**（新旧载体并存、逐位相同），用来把"schema→反射→heap 写→
+barrier→逐位"全链路第一次打通；之后各批按上面三条。
+
+### 9.7 分批执行序（每批一个可回退单元，子 agent 推进 + 主 agent 校验）
+
+| 批 | 内容 | 状态 |
+|---|---|---|
+| **R** | 反射工具补**嵌套 struct** 支持（§9.4 推论）+ 有牙判据 | ⬜ |
+| **G** | 护栏先行（§5 顺序红线）：R2 裸字节偏移棘轮 + 死 offset 常量检测 | ⬜ |
+| **M** | mapping 按 SPV 声明过滤（§9.3）+ 启动面复测（必须 ≤ 基线 2.98s） | ⬜ |
+| **1** | 湿面区（32B，1 消费者，无矩阵）双路打通全链路 | ⬜ |
+| 2..N | 按区推进（消费者少的先）：SSR → 簇区间表 → 材质表 → MVP 表 → 阴影参数 → 辐照度 → 灯数组 → 对象矩阵 → TAA → 阴影 VP → SceneHeader | ⬜ |
+| **N+1** | 删 `scene.slang` 失效 read 函数 + `scene_data.cppm` 失效 offset 常量 + `meshlet.mesh.slang` 的 `44+8/12/16/20` 字面量 + **binding 3 与 `sceneData` 声明** | ⬜ |
+| 末 | `cull.comp.slang` 遗留偏移（C3，纯遗留不阻塞） | ⬜ |
+
+🔴 **护栏（批 G）先于任何迁移批**（§5 顺序红线："先建护栏再迁移，顺序反了护栏永远补不上"）。
+🔴 每批收账必须写回本节状态列 + `docs/还债实测数据.md`，**数字绑机**（AMD 8060S / RADV
+STRIX_HALO / Mesa 26.2.3）。
