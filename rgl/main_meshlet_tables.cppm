@@ -558,7 +558,7 @@ void wireClusterRangeTable(entt::registry& registry, const UploadedAssets& asset
 					items.items.size(), totals.l0Clusters);
 	}
 	if (auto* logger = RLLogger::getInstance())
-		logger->info("meshlet: ObjectClusterRange 表已装配（scene data 尾区 @722400，消费者 = "
+		logger->info("meshlet: ObjectClusterRange 表已装配（scene data 尾区 @724224，消费者 = "
 					 "meshlet.mesh.slang）—— prims={} clusters={} l0Clusters={} / objectSlot 填充 {}/{}",
 			totals.primRanges, totals.clusters, totals.l0Clusters, filled, slotCount);
 	// ★18-B2 步骤④⑤：逐资产对账 → Σtask 机器对账 → 单 draw task 上限 → emplace + INFO

@@ -18,7 +18,7 @@
 //   cullTable (binding 0)：CullEntry × N，60B 步长（启动期一次性上传，host 写）
 //     @0  center vec3 | @12 radius | @16 objectSlot | @20 pipelineIndex | @24 groupCount
 //     @28 totalTriangles | @32 vertexOffset | @36 baseColor vec4 | @52 roughnessMetallic vec2
-//   sceneData (binding 1)：对象矩阵表 @128（mat4 列主序 × kSceneMatrixCapacity，
+//   sceneData (binding 1)：对象矩阵表 @256（批 L 256B 对齐；mat4 列主序 × kSceneMatrixCapacity，
 //     [objectSlot] = spin·world，render_list 每帧写全量——被剔对象不留陈值）
 //   sequences (binding 2)：per-candidate **固定槽**（非紧凑——不可见序列 meshCmd.x=0
 //     = no-op draw，顺序 = candidate 序 = CPU entity 迭代序 → 重放序与 CPU 完全一致，
@@ -52,7 +52,7 @@ struct CullPush
 [[vk::push_constant]] CullPush push;
 
 static const uint kEntryStride = 60u;
-static const uint kSceneMatrixBase = 128u;
+static const uint kSceneMatrixBase = 256u;  // 批 L：区基址 256B 对齐（scene_data.cppm kSceneDataObjectMatrixOffset 同值）
 static const uint kSequenceStride = 120u;
 
 [numthreads(64, 1, 1)]
@@ -70,7 +70,7 @@ void main(uint3 tid : SV_DispatchThreadID)
     uint objectSlot = cullTable.Load(base + 16u);
     uint groupCount = cullTable.Load(base + 24u);
 
-    // 对象世界矩阵 M（scene data @128 + slot×64，4 列显式读——scene.slang
+    // 对象世界矩阵 M（scene data @256 + slot×64，4 列显式读——scene.slang
     // readObjectMatrix 同款，chunk j = 列 j）
     uint mb = kSceneMatrixBase + objectSlot * 64u;
     float4 m0 = asfloat(sceneData.Load4(mb));

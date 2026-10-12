@@ -18,7 +18,7 @@ return {
             },
         },
         -- Phase 10 批 10.2a 单源化：per-object 材质/几何表条目（scene.slang ObjectDraw，
-        -- 表基址 @524944 stride 48，见 scene_data.cppm kSceneDataDrawTableOffset）。
+        -- 表基址 @525312 stride 48，见 scene_data.cppm kSceneDataDrawTableOffset）。
         -- 生成 C++ struct 替换手写 ObjectDrawGpu（双源消除）；字段声明序 = 内存序
         --（scalar layout 0/4/8/16/32 无 padding，shader 端 Load<ObjectDraw> 整读）。
         {
@@ -33,7 +33,7 @@ return {
             },
         },
         -- 簇化轴 ★1-a1i：per-object 簇区间表条目（scene.slang ObjectClusterRange，
-        -- 表基址 @722400 stride 16，见 scene_data.cppm kSceneDataClusterRangeOffset）。
+        -- 表基址 @724224 stride 16，见 scene_data.cppm kSceneDataClusterRangeOffset）。
         -- 方案 B（docs/mdi_plan.md §10.1）：**新增独立表**而非给 ObjectDraw 加字段——
         -- 现有结构逐字节不动 ⟹「门关逐位不变」是构造性成立，不是靠"没人读新字段"。
         -- ★1-a2-i：第 4 字段由补齐位 `reserved` 转正为 `cullBase`（逐簇剔除标志数组的

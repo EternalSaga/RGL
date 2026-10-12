@@ -11,7 +11,7 @@ import meshlet_cull;   // MeshletCullItem / cullPush 契约（反射单一真相
 // （generated/meshlet_cull_types_generated.cppm），shader 侧则用 `Load<T>` 让**编译器自己**决定
 // 元素与字段位置——两侧都没有手抄的字段偏移。
 //
-// sceneData（对象矩阵表 @128 + slot×64）仍写死偏移：那是 scene data 巨型异构 buffer，它的类型化
+// sceneData（对象矩阵表 @256 + slot×64，批 L 256B 对齐）仍写死偏移：那是 scene data 巨型异构 buffer，它的类型化
 // 是独立一条线（`docs/constantbuffer_迁移计划.md` §4 分批 + §8 R3 冲突，要逐位护栏），不在本文件顺手做。
 //
 // 保守性口径（与 CPU 参考实现同式）：球心到某平面距离 < −r 才判不可见，**跨界与内含一律判可见**。
@@ -34,12 +34,12 @@ readonly ByteAddressBuffer cullItems;    // MeshletCullItem × cullPush.itemCoun
 [[vk::binding(1, 0)]]
 readonly ByteAddressBuffer clusters;     // 簇头段（DiskCluster，44B/条）
 [[vk::binding(2, 0)]]
-readonly ByteAddressBuffer sceneData;    // 对象矩阵表 @128 + objectSlot × 64
+readonly ByteAddressBuffer sceneData;    // 对象矩阵表 @256 + objectSlot × 64
 [[vk::binding(3, 0)]]
 RWByteAddressBuffer clusterVisible;      // u32 × itemCount（1 = 可见；mesh shader 按 cullBase+簇内序读）
 
 // 对象矩阵表基址（scene data 契约，scene.slang readObjectMatrix / cull.comp.slang 同值）
-static const uint kSceneMatrixBase = 128u;
+static const uint kSceneMatrixBase = 256u;  // 批 L：区基址 256B 对齐（scene_data.cppm kSceneDataObjectMatrixOffset 同值）
 
 [numthreads(64, 1, 1)]
 void main(uint3 tid : SV_DispatchThreadID)
@@ -63,7 +63,7 @@ void main(uint3 tid : SV_DispatchThreadID)
     const float3 c = cluster.center;
     const float r = cluster.radius;
 
-    // 对象世界矩阵 M（scene data @128 + slot×64，4 列显式读——cull.comp.slang:75-79 同款）
+    // 对象世界矩阵 M（scene data @256 + slot×64，4 列显式读——cull.comp.slang:75-79 同款）
     const uint mb = kSceneMatrixBase + item.objectSlot * 64u;
     const float4 m0 = asfloat(sceneData.Load4(mb));
     const float4 m1 = asfloat(sceneData.Load4(mb + 16u));

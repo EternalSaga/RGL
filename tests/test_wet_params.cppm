@@ -3,7 +3,7 @@ module;
  * test_wet_params —— Phase 15 批 15.2 子步 A：湿面区两个 vec4 子区的字节布局契约
  * + fillWetParams 填值契约（纯 CPU、无设备）。
  *
- * 湿面区（@722368 身份调制系数 vec4 + @722384 空间变化 vec4）是**纯新增尾区**：既有偏移
+ * 湿面区（@723968 身份调制系数 vec4 + @723984 空间变化 vec4）是**纯新增尾区**：既有偏移
  * 逐字节不动（diff0），本步**零渲染消费者**（scene.slang 只备 readWetParams/readWetSpatial
  * 读取函数、无调用点，先例 = 批 15.1 readSsrViewProj「本步无调用点」）。红线 A（出厂画面
  * 逐位不变）由 just regress ab 钉，本文件钉的是**管线本身**：六枚系数从 WetTuning 到
@@ -12,7 +12,7 @@ module;
  * ## 钉什么
  *
  * (a) **布局**：按 vkrenderer_impl::writeSceneStaging 的 memcpy 口径把两个 vec4 写进
- *     @722368 / @722384，再按 **shader 侧提取链**（scene.slang readWetParams / readWetSpatial
+ *     @723968 / @723984，再按 **shader 侧提取链**（scene.slang readWetParams / readWetSpatial
  *     的 Load4 字面量）读回，断言逐位还原。抓的是**偏移错 / 步长错 / 两子区重叠**。
  * (b) **填值**：wetParams = (strength, dark, roughLo, roughHi)、
  *     wetSpatial = (rippleAmp, puddleFreqRadii, 0, 0)，全部逐位；**两槽不互换**由
@@ -26,19 +26,19 @@ module;
  * ## 两源结构（先例 = test_ssr_params / test_ssr_viewproj，理由在那不重复）
  *
  * 写入侧偏移 = C++ 常量 kSceneDataWetParamsOffset / kSceneDataWetSpatialOffset，
- * **读回侧偏移 = 字面量 722368u / 722384u**（手抄 scene.slang 的两个 Load4）。
+ * **读回侧偏移 = 字面量 723968u / 723984u**（手抄 scene.slang 的两个 Load4）。
  * 编译期另有 static_assert 双保险（C++ 常量 == 本文件手抄值）。
  *
  * ⚠ **本测试钉不住 shader 那一侧**（措辞纪律，别让注释把它吹成"两侧钉死"）：
  * `kSlangWetParamsLiteral` / `kSlangWetSpatialLiteral` 是**本文件手抄的 C++ 常量**，不是从
- * scene.slang 提取的。若有人只改 scene.slang 里的 `Load4(722368u)`，本测试与全部
+ * scene.slang 提取的。若有人只改 scene.slang 里的 `Load4(723968u)`，本测试与全部
  * static_assert **都不红**。本步零消费者的端到端护栏 = just regress ab（红线 A，画面必须
  * 不动）；15.2B 接消费者后须立湿面专属判据（缺口账与 SSR 同款 → phase15_plan §3.2）。
  *
  * ## 变异红线声明（哪个变异让我红）
  *
  *   ① kSceneDataWetParamsOffset / kSceneDataWetSpatialOffset 改 +16 → **编译期红**（本文件与
- *      scene_data.cppm 的 static_assert 双钉炸编译）；把本文件读回字面量改 722384u →
+ *      scene_data.cppm 的 static_assert 双钉炸编译）；把本文件读回字面量改 723984u →
  *      (a) 红（params 读回的是 spatial 的字节，p != wetParams）。⚠ 单改 scene.slang 的字
  *      面量**不在此覆盖内**（见上）。
  *   ② fillWetParams 两槽互换（wetParams ↔ wetSpatial 整体）或槽内任意两枚互换 → (b) 红
@@ -73,9 +73,9 @@ namespace RGL {
 namespace {
 
 /// scene.slang readWetParams 的字面量基址（两源结构的 shader 侧镜像，勿改成常量引用）。
-constexpr uint32_t kSlangWetParamsLiteral = 722368u;
+constexpr uint32_t kSlangWetParamsLiteral = 723968u;
 /// scene.slang readWetSpatial 的字面量基址（同上）。
-constexpr uint32_t kSlangWetSpatialLiteral = 722384u;
+constexpr uint32_t kSlangWetSpatialLiteral = 723984u;
 
 // 编译期双保险：C++ 常量与两个 shader 字面量同钉（变异①在此炸）。
 static_assert(kSceneDataWetParamsOffset == kSlangWetParamsLiteral,
@@ -90,10 +90,14 @@ static_assert(kSceneDataWetParamsOffset == kSceneDataWetOffset,
 	"params sub-region must sit at the head of the wet region");
 static_assert(kSceneDataWetSpatialOffset == kSceneDataWetParamsOffset + 16u,
 	"spatial sub-region must sit right after wetParams (no overlap, no hole)");
-static_assert(kSceneDataWetSpatialOffset + sizeof(glm::vec4) == kSceneDataClusterRangeOffset,
-	"spatial sub-region must end exactly where the cluster-range region begins");
-static_assert(kSceneDataWetOffset + kSceneDataWetBytes == kSceneDataClusterRangeOffset,
-	"wet region must end exactly where the cluster-range region begins (no overlap, no hole)");
+// 批 L（§9.7）后相邻不变式 = 「下一区基址 = alignUp(前区尾, 256)」：无重叠 + 间隙 < 256
+//（对齐间隙无常驻内容，writeClusterRangeRegion/本文件写侧都不越出本区字节面）。
+static_assert(alignUp(kSceneDataWetSpatialOffset + sizeof(glm::vec4), kSceneRegionAlign) ==
+		kSceneDataClusterRangeOffset,
+	"cluster-range region must start at the 256-aligned end of the wet spatial sub-region");
+static_assert(alignUp(kSceneDataWetOffset + kSceneDataWetBytes, kSceneRegionAlign) ==
+		kSceneDataClusterRangeOffset,
+	"wet region must be followed by the cluster-range region at the next 256 step");
 static_assert(kSceneDataWetBytes == 32u, "wet region width drifted (vec4+vec4)");
 
 /// shader `sceneData.Load4(byteOffset)` 等价形态（test_ssr_params 同款：真 memcpy）。
@@ -123,7 +127,7 @@ WetTuning distinctTuning() {
 
 }  // namespace
 
-TEST_CASE("湿面两个 vec4 子区布局：C++ 常量写、字面量 722368/722384 读回逐位相同（两源结构）") {
+TEST_CASE("湿面两个 vec4 子区布局：C++ 常量写、字面量 723968/723984 读回逐位相同（两源结构）") {
 	const WetTuning tuning = distinctTuning();
 
 	FrameDrawList list;

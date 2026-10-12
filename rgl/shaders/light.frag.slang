@@ -40,7 +40,7 @@ import shadow;   // Phase 11 批 11.2：级联阴影采样（binding 12/13，与
 #ifdef IZB_CONSUME
 [[vk::binding(14, 0)]] ByteAddressBuffer izbMask;
 
-// IZB 消费（批 11.3-1e，v1.5 起含覆盖外回落）：方向光硬阴影因子。消费区 @722016
+// IZB 消费（批 11.3-1e，v1.5 起含覆盖外回落）：方向光硬阴影因子。消费区 @722688
 // （scene_data.cppm kSceneDataIzbOffset static_assert 钉死）= (flag, W, H, r)。
 // flag=0 → 原样 sampleShadow1Tap（CSM 路径**逐位透传** = 门关红线）；flag=1 →
 // cascade-0 IZB mask 接管方向光阴影（bit = 帧缓冲像素，与 izb_create 的 py·W+px
@@ -58,7 +58,7 @@ float izbShadowFactor(float3 P, float3 N, float2 uv)
     //    W/H 变 1e9 量级 = pid 恒溢出 OOB 读零；flag 位模式碰巧 ≥0.5 掩盖症状。
     // ② ByteAddressBuffer.Load 参数 = 字节偏移（与 izb_mask.frag InterlockedOr
     //    同口径）——传字索引 pid>>5 会被再 ÷4，读位置偏 4 倍。
-    const float4 izb = asfloat(sceneData.Load4(722016u));
+    const float4 izb = asfloat(sceneData.Load4(722688u));
     if (izb.x < 0.5)
         return sampleShadow1Tap(P, N);
     // 覆盖测试与 izb_create 同源：cascade-0 光空间（正交 w=1）；P = G-buffer 世界位

@@ -223,7 +223,7 @@ export class Renderer {
 	/**
 	 * ③.5 scene data 上传（Phase 5 批次 2，全项目首个每帧动态 GPU 数据）：CPU 写
 	 * staging[frameSlot] 头 128B（光参数@0 / env@48 / skyInvViewProj@64）+ 对象矩阵表
-	 * @128 + 多灯数组尾区@262272（Phase 7 D3）。本 slot fence 已在 ① wait（f-2 帧命令
+	 * @128 + 多灯数组尾区@262400（Phase 7 D3）。本 slot fence 已在 ① wait（f-2 帧命令
 	 * 跑完，staging 不再被读），写安全；录制期 vkCmdCopyBuffer 拷进 device buffer。
 	 * 容量契约（objectMatrices ≤ kSceneMatrixCapacity、lightCount ≤ kMaxLights）由 main
 	 * 启动期检查，此处防御性再校验。

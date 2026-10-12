@@ -281,7 +281,7 @@ const std::vector<BadCase>& badCases() {
 }
 
 // ─── 尾区写入（两源结构：读回侧偏移 = 手抄 scene.slang 将用的字面量）─────────────────
-constexpr uint32_t kSlangClusterRangeLiteral = 722400;  ///< 手抄 = scene_data 的尾区基址
+constexpr uint32_t kSlangClusterRangeLiteral = 724224;  ///< 手抄 = scene_data 的尾区基址
 constexpr uint32_t kSlangClusterRangeStride = 16;       ///< 手抄 = ObjectClusterRange 的 stride
 static_assert(kSceneDataClusterRangeOffset == kSlangClusterRangeLiteral,
 	"尾区基址与本文件手抄值分家（scene.slang 侧字面量跟着漂）");
@@ -442,7 +442,7 @@ TEST_CASE("尾区写入：逐字段落位 + 有效段之外清零 + 不踩前一
 	const uint64_t usedEnd = kSlangClusterRangeLiteral + ranges.size() * kSlangClusterRangeStride;
 	const uint64_t regionEnd = kSlangClusterRangeLiteral + kSceneDataClusterRangeBytes;
 	CHECK(regionAllZero(staging, usedEnd, regionEnd));
-	// ③ 尾区之前（含前一个尾区湿面 @722368）一个字节都没被踩（抓「基址用错区」）
+	// ③ 尾区之前（含前一个尾区湿面 @723968）一个字节都没被踩（抓「基址用错区」）
 	CHECK(firstByteNot(staging, 0, kSlangClusterRangeLiteral, std::byte { 0x5a }) == -1);
 	// ④ 没写出 buffer 尾（哨兵区）
 	CHECK(firstByteNot(staging, kSceneDataBytes, staging.size(), std::byte { 0x5a }) == -1);

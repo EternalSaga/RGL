@@ -711,7 +711,7 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 	// 批 13.6：AO 施加点标志 = **实际图形态**（`decorateTaaPass` 结果），**不是**配置推导值
 	// （`aaWantsTaa()`）。true ⟹ AO 已在 tonemap **之前**施加过，tonemap 跳过；false ⟹ 没有更早的
 	// 施加点（含 offscreen 变体：aa 要了 TAA 但装饰失败），AO 留在 tonemap 施加。
-	// 取错源 = AO 双施或零施。消费者 = scene data @722224.z → fillTaaData / tonemap.frag。
+	// 取错源 = AO 双施或零施。消费者 = scene data @723600.z → fillTaaData / tonemap.frag。
 	// 批 14.5 第三批：来源从「只有 taa」变成**两个**——`taaDecorated`（AO 乘在 taa.frag 里，
 	// 批 13.6）或 `aoApplyDecorated`（AO 乘在专用 ao_apply pass 里，与"谁做时域"解耦）。
 	// 两者**互斥**：decorateAoApplyPass 的第一条跳过条件就是「taa 在图里」。

@@ -756,7 +756,7 @@ int main() {
 		registerSceneEntities(registry, assets, configs.scene, vkResources, assetTable, shaderRegistry);
 		// 簇化轴 ★1-a1i + ★1-a1ii-β-1：簇区间表装配 + 原位取代开关落地（**必须在实体注册之后**——
 		// 两步都读 MeshRef，且开关的逐资产对账要读区间表；顺序契约内聚在 helper）。门关 = 两步
-		// 各自首行返回，ctx 不建条目 ⟹ scene data 尾区 @722400 全 0（逐位不变）。
+		// 各自首行返回，ctx 不建条目 ⟹ scene data 尾区 @724224 全 0（逐位不变）。
 		// ★1-a2-i：扫出来的剔除项表就地交给 meshletCullService（cullBase 与 items 同生共死）。
 		wireMeshletPostRegistration(registry, assets, meshletAssets, assetTable, configs.runtime, vkDevice, meshletCullService.get());
 

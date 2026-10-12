@@ -98,7 +98,7 @@ export struct SceneFrameData {
 	// Phase 5.5 批次 4：天空盒 clip→world 矩阵（scene data @64，sky.slang skyClipToWorld；
 	// = inverse(proj·view)，renderListSystem 每帧从 ViewProjection 推导）
 	glm::mat4 skyInvViewProj{1.0f};
-	std::span<const glm::mat4> objectMatrices;  // scene data @128 对象矩阵表（spin·world，按 objectSlot 索引）
+	std::span<const glm::mat4> objectMatrices;  // scene data @256 对象矩阵表（spin·world，按 objectSlot 索引）
 	// Phase 7b+（NV DGC 规避）：per-object MVP 表（scene data @kSceneDataMvpTableOffset，
 	// 按 objectSlot 索引，值 = 原 DrawArgs.mvp 位级一致；shader readObjectMvp）
 	std::span<const glm::mat4> objectMvps;
@@ -132,19 +132,19 @@ export struct SceneFrameData {
 	glm::vec4 shadowAtlas{2048.0f, 1024.0f, 2.0f, 0.0f};
 	// · shadowPcss —— 批 11.5 PCSS 参数（半影全宽系数 2·tan(θ/2), blocker 搜索半径[图集纹素],
 	//   半影半径上限[图集纹素], 保留）。只有 -DPCSS_SOFT 变体消费（scene.slang readShadowPcss
-	//   @722032）；原版 SPV 不读本区 = 门关红线。默认值 = diagnostics 默认（tan(0.53° 全宽)、16、32）
+	//   @722944）；原版 SPV 不读本区 = 门关红线。默认值 = diagnostics 默认（tan(0.53° 全宽)、16、32）
 	glm::vec4 shadowPcss{0.00925f, 16.0f, 32.0f, 0.0f};
 	// · shadowEvssm —— 批 11.6 EVSSM 参数（半坡 tan(θ/2), 搜索半径[图集纹素 mip0 域],
 	//   半影半径上限[图集纹素], 矩链最大 mip）。只有 -DEVSSM_SOFT 变体消费（scene.slang
-	//   readShadowEvssm @722048）；原版 SPV 不读本区 = 门关红线。
+	//   readShadowEvssm @723200）；原版 SPV 不读本区 = 门关红线。
 	glm::vec4 shadowEvssm{0.00465f, 24.0f, 48.0f, 7.0f};
 	// · shadowEvssmConst —— 批 11.6 EVSSM 常量 vec4（x = EVSM 指数 c，yzw 留白）。只有
-	//   -DEVSSM_SOFT 变体消费（scene.slang readShadowEvssmExponent @722064）；原版 SPV
+	//   -DEVSSM_SOFT 变体消费（scene.slang readShadowEvssmExponent @723216）；原版 SPV
 	//   不读本区 = 门关红线。值 = vk_resources kEvssmExponent（唯一权威源，
 	//   生产/消费/fallback 三方同源——禁在此写死字面量）。
 	glm::vec4 shadowEvssmConst{kEvssmExponent, 0.0f, 0.0f, 0.0f};
-	// ── 批 12.6 TAA（时域抗锯齿）帧间载荷，scene data 尾区 @722080 / @722144 / @722208
-	//   （+ @722224，批 13.5 起 = 上一帧内容位移）──
+	// ── 批 12.6 TAA（时域抗锯齿）帧间载荷，scene data 尾区 @723456 / @723520 / @723584
+	//   （+ @723600，批 13.5 起 = 上一帧内容位移）──
 	// 口径（**改动前必读**，全量推导 → scene_data.cppm kSceneDataTaa* 区注释）：
 	//   重建世界坐标 = 本帧**抖动后**逆矩阵（与深度缓冲配套）；投回上一帧 = 上一帧
 	//   **抖动后**矩阵（产出**抖动网格**坐标），随后在 taa.frag 减 c_{t−1} 落回**基空间**
@@ -157,12 +157,12 @@ export struct SceneFrameData {
 	///   但 shader 从未读它（死载荷）。口径 = `taa_jitter.cppm::contentShiftPx`，非 jitterPx。
 	glm::vec4 taaParams{0.0f};
 	/// · taaPrevContentShift —— 批 13.5 历史基空间修正：**上一帧内容位移** c_{t−1}
-	///   (x, y = 像素, z/w 保留)，scene data 尾区 @722224（复用批 13.2 基空间偏移删除后
+	///   (x, y = 像素, z/w 保留)，scene data 尾区 @723600（复用批 13.2 基空间偏移删除后
 	///   空出的槽 ⟹ **零布局变更**）。taa.frag 把抖动网格的 prevUv 减它才落到基空间历史网格。
 	///   默认值 = 全 0 ⇒ 减法逐位恒等（TAA 关 / jitter_scale=0 走这条，BIT-IDENTICAL 基线）。
 	glm::vec4 taaPrevContentShift{0.0f};
 	/// · taaInputKernel —— 批 13.8 输入侧 un-jitter 的**重建核选择**（x = 0 双线性 / 1 CR 4×4 /
-	///   2 Lanczos3 6×6，yzw 保留），scene data @722240。默认 0 = 走改前那条 `SampleLevel`
+	///   2 Lanczos3 6×6，yzw 保留），scene data @723616。默认 0 = 走改前那条 `SampleLevel`
 	///   ⟹ **逐位今天**（门红线 = `just shot` sha256）。消费者 = taa.frag `sampleInputColor`。
 	glm::vec4 taaInputKernel{0.0f};
 	/// · taaClipControl —— 批 13.11 **历史裁剪消融门**（x = clip_mode：0 现行 / 1 关盒 /
@@ -170,38 +170,38 @@ export struct SceneFrameData {
 	///   **13 臂 11 + α 也吃 gate**（批 13.15b，债-69 修法；⚠ 12′ 预留给 FSR3 加性可信度）
 	///   （判据与两条已知缺陷 → `phase13_plan.md` §1.14、§1.21）；y = 软裁剪 λ（mode=4）/
 	///   decay（mode=7~11/13），**z = 短窗端点（臂 10 与臂 13 读）**），
-	///   scene data @722256。默认 0 = 现行那条硬裁剪 ⟹ **逐位今天**（门红线 = `just shot` sha256）。
+	///   scene data @723632。默认 0 = 现行那条硬裁剪 ⟹ **逐位今天**（门红线 = `just shot` sha256）。
 	///   为什么要有：`clipToAabb` 在 blend 之前替换历史 ⟹ 一次裁剪 = 一次历史重置，而 1px 高对比
 	///   细线的 box5 随抖动相位双峰 ⟹ 静止机位残余 97.8% 住在这条路上（`git:调试历史` 2026-10-06）。
 	glm::vec4 taaClipControl{0.0f};
-	// ── Phase 15 批 15.1 SSR（屏幕空间反射）帧载荷，scene data 尾区 @722272 ──
+	// ── Phase 15 批 15.1 SSR（屏幕空间反射）帧载荷，scene data 尾区 @723712 ──
 	/// 本帧**抖动后** proj·view（与 @64 skyInvViewProj 严格互逆、与深度缓冲配套；口径与
 	/// 「为什么不让 shader 自己求逆」→ scene_data.cppm kSceneDataSsrOffset）。生产者 =
 	/// fillSsrViewProj（render_list_impl，可测接缝）。交付时无消费者 = 写它不改像素。
 	glm::mat4 ssrViewProj{1.0f};
-	/// · ssrParams —— SSR 系数子区 @722336（vec4）= (SceneBounds.radius, maxDistanceRadii,
+	/// · ssrParams —— SSR 系数子区 @723776（vec4）= (SceneBounds.radius, maxDistanceRadii,
 	///   thicknessPx, biasPx)：x = 尺度无关参数锚点（口径 → scene_data.cppm
 	///   kSceneDataSsrParamsOffset），yzw = 由它导出的三个无量纲系数（configs/runtime.lua
 	///   `ssr` 块，**每帧量**）。生产者 = fillSsrParams（render_list_impl，可测接缝）。
 	glm::vec4 ssrParams{0.0f};
-	/// · ssrGate —— SSR 粗糙度门控子区 @722352（vec4）= (roughFull, roughCutoff, blurScale, 0)。
+	/// · ssrGate —— SSR 粗糙度门控子区 @723792（vec4）= (roughFull, roughCutoff, blurScale, 0)。
 	///   与场景尺度无关，故与 ssrParams 分槽（分组理由 → scene_data.cppm 该区注释）。
 	///   z = blurScale（批 15.3B，ssr_apply 螺旋模糊半径系数，全分辨率 px 口径）。
 	///   生产者同 fillSsrParams（一次填两槽，两槽永远同源同帧）。
 	glm::vec4 ssrGate{0.0f};
-	// ── Phase 15 批 15.2 子步 A 湿面参数，scene data 尾区 @722368 ──
-	/// · wetParams —— 湿面身份调制系数子区 @722368（vec4）= (strength, dark, roughLo,
+	// ── Phase 15 批 15.2 子步 A 湿面参数，scene data 尾区 @723968 ──
+	/// · wetParams —— 湿面身份调制系数子区 @723968（vec4）= (strength, dark, roughLo,
 	///   roughHi)：x = 总开关兼强度（0 = 关 = 消融档，**默认 1.0 = 开**）。湿面**身份**
 	///   （哪些面湿）不占参数 = 1 − smoothstep(ssrGate.x, ssrGate.y, roughness)，与 SSR
 	///   门控同区间同源（理由 → scene_data.cppm 湿面区注释）。生产者 = fillWetParams
 	///   （render_list_impl，可测接缝）。消费者 = deferred_geometry.frag.slang 湿面调制（15.2B）。
 	glm::vec4 wetParams{0.0f};
-	/// · wetSpatial —— 湿面空间变化参数子区 @722384（vec4）= (rippleAmp, puddleFreqRadii,
+	/// · wetSpatial —— 湿面空间变化参数子区 @723984（vec4）= (rippleAmp, puddleFreqRadii,
 	///   0, 0)。与 wetParams 语义分组不同（身份调制系数 vs 空间变化形状参数），故分槽
 	///   （分组理由照 ssrParams/ssrGate 那条，→ scene_data.cppm 该区注释）。
 	///   生产者同 fillWetParams（一次填两槽，两槽永远同源同帧）。
 	glm::vec4 wetSpatial{0.0f};
-	// ── 簇化轴 ★1-a1i：per-object 簇区间表，scene data 尾区 @722400（stride 16 × 4096）──
+	// ── 簇化轴 ★1-a1i：per-object 簇区间表，scene data 尾区 @724224（stride 16 × 4096）──
 	/// · clusterRanges —— 按 objectSlot 索引的 `ObjectClusterRange` 表（scene data 尾区
 	///   kSceneDataClusterRangeOffset）。**生产者不是本 system**：装配层启动期用
 	///   `meshlet_ranges::scanClusterRanges` 扫簇产物 groups → registry ctx `ClusterRangeTable`，

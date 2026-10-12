@@ -10,7 +10,7 @@
 // 布局（字节偏移真相源 = vkresources.cppm kSceneDataLightArray*，字面量手工一致，scene.slang 先例）：
 //   @base + 0   uint lightCount（有效灯数，≤ kMaxLights）
 //   @base + 16  GpuLight[count]（stride = kGpuLightStride = 64，全 Load4 读）
-//   base = 头(128) + 对象矩阵表(kSceneMatrixCapacity·64) —— 追加于矩阵表之后，
+//   base = 对象矩阵表基址(256，批 L 256B 对齐) + 容量×64 —— 追加于矩阵表之后，
 //   既有 @0-128 头（含 env@48 / sky@64）逐字节不动 → forward/env/sky shader 零改动。
 
 import scene;  // sceneData（binding 3）
@@ -18,7 +18,7 @@ import scene;  // sceneData（binding 3）
 // ---- 契约常量（schema 单一真相源生成 C++ constexpr；shader 端字面量必须一致）----
 static const uint kMaxLights = 8u;
 static const uint kGpuLightStride = 64u;
-static const uint kSceneDataLightArrayBase = 262272u;  // 128 + 4096*64
+static const uint kSceneDataLightArrayBase = 262400u;  // 256 + 4096*64（批 L 256 对齐）
 
 // ---- 单灯（float4 对齐，stride=64）----
 struct GpuLight

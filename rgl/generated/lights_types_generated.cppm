@@ -26,6 +26,6 @@ namespace RGL {
     // 契约常量（schema 单一真相源；shader 端字面量必须一致，见对应 shader 头注释）
     export inline constexpr uint32_t kGpuLightStride = 64;
     // 契约常量（schema 单一真相源；shader 端字面量必须一致，见对应 shader 头注释）
-    export inline constexpr uint32_t kSceneDataLightArrayBase = 262272;
+    export inline constexpr uint32_t kSceneDataLightArrayBase = 262400;
 
 }  // namespace RGL

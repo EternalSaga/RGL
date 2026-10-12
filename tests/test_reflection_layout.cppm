@@ -61,12 +61,14 @@ TEST_CASE("GpuLight：64B / 4 个 vec4 连续无 padding，kGpuLightStride 常�
 
 TEST_CASE("灯数组尾区地址：kSceneDataLightArrayBase = 头128 + 矩阵表4096×64（独立重推导）") {
 	// 该常量是 schema 字面量（生成进 C++），而 scene_data.cppm 的 C++ 侧是
-	// **独立计算式** kSceneDataHeaderBytes + kSceneMatrixCapacity·kSceneMatrixStride
+	// **独立计算式** alignUp(alignUp(头 128, 256) + 矩阵表容量·stride, 256)
 	// ——两者一个是数一个是公式，单边改动（矩阵容量 4096→8192、头 128→256）不会
-	// 触发 generated 的 static_assert。测试侧按 shader 头注释公式（scene.slang:21
-	// "128 + 4096*64"）**第三次独立重算**，钉住三方共享的算术关系。
-	constexpr uint64_t kReDerived = 128ull + 4096ull * 64ull;
-	CHECK(static_cast<uint64_t>(kSceneDataLightArrayBase) == kReDerived);  // 262272
+	// 触发 generated 的 static_assert。测试侧按 shader 头注释公式（lights.slang:13
+	// "矩阵表基址 256 + 容量×64，批 L 256B 对齐"）**第三次独立重算**（256 取整算术
+	// 就地手写，不复用 scene_data::alignUp——重推导的意义就在于不共享被测算子）。
+	constexpr uint64_t kMatrixBase = (128ull + 255ull) / 256ull * 256ull;  // 256（批 L）
+	constexpr uint64_t kReDerived = (kMatrixBase + 4096ull * 64ull + 255ull) / 256ull * 256ull;
+	CHECK(static_cast<uint64_t>(kSceneDataLightArrayBase) == kReDerived);  // 262400
 	// 槽对齐：基址必须落在 GpuLight 槽位边界（% stride == 0），错位 = 逐灯全读到
 	// 邻灯数据（heapOffset 字节/槽混淆的同族）。
 	CHECK(kSceneDataLightArrayBase % kGpuLightStride == 0u);

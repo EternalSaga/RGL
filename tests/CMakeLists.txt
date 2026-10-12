@@ -76,9 +76,9 @@ set(RGL_TEST_SOURCES
     test_meshlet_lod.cppm        # §18 批 A 逐 prim 选级扫描：五条不变量各配反向用例 + 手算 costTable + base-shift 序锚 + Lcg 契约全量钉
     test_meshlet_hand.cppm       # ★0.5-c UV 手性 CPU 参考 + 簇→三角寻址：闭式五形态锚点 + 跨簇偏移混淆四变异 + 8bit 断言 + Lcg 公式对拍
     test_shadow_forward.cppm     # shadow.slang 选级 forward 提取式数学恒等（invVP 列叉积，5a-8c 回归，12.3d-C）
-    test_ssr_viewproj.cppm       # 批 15.1 SSR 尾区 @722272：字节布局互逆 + 抖动口径闭式差量（fillSsrViewProj 接缝）
-    test_ssr_params.cppm         # 批 15.1/15.3 SSR 尾区两 vec4 @722336/@722352：两源布局 + fillSsrParams 填值（radius 直传/四系数落槽/空场景透传）+ 出厂默认值 = 批 15.1 常量
-    test_wet_params.cppm         # 批 15.2A 湿面尾区两 vec4 @722368/@722384：两源布局 + fillWetParams 填值（六系数落槽/两槽不互换/消融档透传）+ 出厂默认值六枚（strength=1.0 = 「默认开」拍板的钉）
+    test_ssr_viewproj.cppm       # 批 15.1 SSR 尾区 @723712：字节布局互逆 + 抖动口径闭式差量（fillSsrViewProj 接缝）
+    test_ssr_params.cppm         # 批 15.1/15.3 SSR 尾区两 vec4 @723776/@723792：两源布局 + fillSsrParams 填值（radius 直传/四系数落槽/空场景透传）+ 出厂默认值 = 批 15.1 常量
+    test_wet_params.cppm         # 批 15.2A 湿面尾区两 vec4 @723968/@723984：两源布局 + fillWetParams 填值（六系数落槽/两槽不互换/消融档透传）+ 出厂默认值六枚（strength=1.0 = 「默认开」拍板的钉）
     test_evssm_math.cppm         # EVSSM 消费端公式数学契约（快路/零矩/far 矩恒等/单调/LBR，11.6d bug 回归）
     test_layout_drift.cppm       # 图外布局对账护栏的判定 + 值可读化（批 14.4b 步 2：IZB/FSR 两处护栏收成单点）
     test_gpu_profiler_time.cppm  # 债-87 GPU 时间戳换算口径：tick 差求时长 / 纪元自检平移量与阈值边界（实机 golden）

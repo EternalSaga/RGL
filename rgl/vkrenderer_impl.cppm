@@ -221,7 +221,7 @@ void Renderer::createSceneStaging(RGL::Resources& vkResources) {
  	/** drawFrame 定义（整体流程见接口声明 + 类头；逐步骤注记见体内 ①~⑮）：
 	 * 双 fence wait/reset → acquire（100ms 超时跳帧）→ ③.5 scene staging 写
 	 *（头 128B + 矩阵表 + 灯数组尾区）→ ⑥ heap barrier（3 dst flag）+ ⑥.5 scene 拷贝
-	 *（kSceneDataBytes=262800B）→ ⑦ heap/sampler heap 绑定 → ⑤ 逐 pass（barrier 物化 /
+	 *（kSceneDataBytes=263168B）→ ⑦ heap/sampler heap 绑定 → ⑤ 逐 pass（barrier 物化 /
 	 * beginRendering / applyDynamicState / 段内逐 draw / blit / drawLight）→ ⑪.5 帧内
 	 * 捕获回读 → ⑫ presentTransition → ⑬ submit（waitStage = 图派生）→ 捕获搬移 →
 	 * ⑭ present（present fence）→ ⑮ 帧 slot 推进。 */
@@ -276,14 +276,14 @@ void Renderer::createSceneStaging(RGL::Resources& vkResources) {
 	// Phase 15 批 15.1 收尾：SSR 参数子区（vec4，x = SceneBounds.radius = ssr_trace.frag 的尺度
 	// 锚点）。无条件写（16B，同矩阵区纪律：门关路径也保证值正确，省第二条分支）
 	std::memcpy(stage + kSceneDataSsrParamsOffset, &list.sceneData.ssrParams, sizeof(glm::vec4));
-	// Phase 15 批 15.1 参数面：SSR 阈值门控系数（@722352，紧随 ssrParams；同样无条件写，理由同上）
+	// Phase 15 批 15.1 参数面：SSR 阈值门控系数（@723792，紧随 ssrParams；同样无条件写，理由同上）
 	std::memcpy(stage + kSceneDataSsrGateOffset, &list.sceneData.ssrGate, sizeof(glm::vec4));
-	// Phase 15 批 15.2 子步 A：湿面参数区（身份调制系数 @722368 + 空间变化 @722384，2×vec4）。
+	// Phase 15 批 15.2 子步 A：湿面参数区（身份调制系数 @723968 + 空间变化 @723984，2×vec4）。
 	// 无条件写（同 ssrParams/ssrGate 尾区纪律：门关路径也保证值正确，省第二条分支；
 	// 本步零消费者，写它不改任何像素）
 	std::memcpy(stage + kSceneDataWetParamsOffset, &list.sceneData.wetParams, sizeof(glm::vec4));
 	std::memcpy(stage + kSceneDataWetSpatialOffset, &list.sceneData.wetSpatial, sizeof(glm::vec4));
-	// 簇化轴 ★1-a1i：per-object 簇区间表（尾区 @722400，stride 16 × 4096）。表由装配层启动期
+	// 簇化轴 ★1-a1i：per-object 簇区间表（尾区 @724224，stride 16 × 4096）。表由装配层启动期
 	// 扫产物 groups 得到、经 registry ctx 走到这里（生产者与索引口径 → SceneFrameData::clusterRanges）。
 	// 写入本体在 scene_data::writeClusterRangeRegion（**无设备 ⟹ 可单测**：门关整区全 0 /
 	// 有效段之外清零两条都在 tests/test_meshlet_ranges 里逐字节验）。
@@ -306,7 +306,7 @@ void Renderer::createSceneStaging(RGL::Resources& vkResources) {
 	if (matricesBytes > kSceneMatrixCapacity * kSceneMatrixStride)
 		return std::unexpected(Error{ErrorCode::Unknown,
 			"scene objectMatrices exceeds capacity (Phase 5 contract, main startup check bypassed)"});
-	std::memcpy(stage + kSceneDataHeaderBytes, list.sceneData.objectMatrices.data(),
+	std::memcpy(stage + kSceneDataObjectMatrixOffset, list.sceneData.objectMatrices.data(),
 		matricesBytes);
 	// Phase 7 D3：多灯数组写尾区（count@base + GpuLight[count]@base+16；lightCount=0 只写 count）
 	if (list.sceneData.lightCount > kMaxLights)

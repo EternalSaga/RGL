@@ -135,7 +135,7 @@ namespace RGL {
 		b.descriptorSize = descriptorSize;
 		b.slotVertex = 0;   // binding 0/1 占位（mesh = light.mesh 全屏大三角，不声明顶点）
 		b.slotIndex = 1;
-		b.slotSceneData = sceneData.ensure();  // binding 3：@60 AO 强度 + @722208 c_t
+		b.slotSceneData = sceneData.ensure();  // binding 3：@60 AO 强度 + @723584 c_t
 		b.hasSceneData = true;
 		const uint32_t samplerHeapOffset =
 			samplerSlot * res.getSamplerHeap().getDescriptorSize();
@@ -166,7 +166,7 @@ uint32_t ShaderRegistry::addTaaEntry(uint32_t colorSlot, uint32_t historySlot,
 		b.descriptorSize = descriptorSize;
 		b.slotVertex = 0;   // binding 0/1 占位（taa mesh = light.mesh.spv 全屏大三角）
 		b.slotIndex = 1;
-		b.slotSceneData = sceneData.ensure();  // binding 3：@722080 起 TAA 尾区 + @64 重建
+		b.slotSceneData = sceneData.ensure();  // binding 3：@723456 起 TAA 尾区 + @64 重建
 		b.hasSceneData = true;
 		const uint32_t samplerHeapOffset =
 			samplerSlot * res.getSamplerHeap().getDescriptorSize();
@@ -210,7 +210,7 @@ uint32_t ShaderRegistry::addTaaEntry(uint32_t colorSlot, uint32_t historySlot,
 		b.descriptorSize = descriptorSize;
 		b.slotVertex = 0;   // binding 0/1 占位（mesh = light.mesh 全屏大三角，不声明顶点）
 		b.slotIndex = 1;
-		b.slotSceneData = sceneData.ensure();  // binding 3：@722272 ssrViewProj（ray march 投回屏幕）
+		b.slotSceneData = sceneData.ensure();  // binding 3：@723712 ssrViewProj（ray march 投回屏幕）
 		b.hasSceneData = true;
 		// 自身像素量全走 `Load`（不需要 sampler），binding 10 只服务命中点那**一次** `Sample`
 		// ——命中 uv 是亚像素的，必须过滤。G-buffer 通道号镜像 light.frag（5=normal/6=position/

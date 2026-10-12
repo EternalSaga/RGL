@@ -490,20 +490,20 @@ export struct SceneEnv {
 	float aoStrength = 0.0f;
 	// ── 批 12.6 TAA 运行参数（configs/scene.lua `taa` 段，同 aoStrength 的搭车路）──
 	// enabled 决定**图形态**（decorateTaaPass 是否调用，启动期读一次）+ 每帧是否抖动；
-	// feedback/jitterScale/motionCompensation 每帧进 scene data @722208，imgui 可调。
+	// feedback/jitterScale/motionCompensation 每帧进 scene data @723584，imgui 可调。
 	bool taaEnabled = false;
 	float taaFeedback = 0.01f;   ///< 本帧权重（0.01 ⇒ 等效累积窗 ≈100 帧，扫档依据 → scene_config.cppm 同名字段）
 	float taaJitterScale = 1.0f;  ///< 抖动幅度倍率（1 = ±0.5px）
 	bool taaMotionCompensation = true;  ///< 是否用 prevSpin 补偿全场景旋转
 	// 批 13.5 基空间累积（`taa.base_space`，语义于批 13.5 改义 → scene_config.cppm 同名字段
-	// 注释）：true ⟹ 每帧把「本帧内容位移 c_t」写进 scene data @722208.zw、把「上一帧内容
-	// 位移 c_{t−1}」写进 @722224，由 **taa.frag** 消费（输入侧 un-jitter + 历史对齐）。
+	// 注释）：true ⟹ 每帧把「本帧内容位移 c_t」写进 scene data @723584.zw、把「上一帧内容
+	// 位移 c_{t−1}」写进 @723600，由 **taa.frag** 消费（输入侧 un-jitter + 历史对齐）。
 	// 唯一消费者 = taa.frag（批 13.2 时代是 tonemap）；tonemap 与 taa_commit 不认识它。
 	// false = 两区恒 0 = 逐位回到改前 `base_space = false` 形态（A/B 对照点）。
 	// ⚠ 默认值与 SceneConfig 的**生效默认**对齐（true）。曾写 false 而 main 总从 config 覆盖
 	//   ⟹ 直接构造 SceneEnv 的测试拿到 false、生产拿到 true = 谎言行（2026-10-04 清点发现）。
 	bool taaBaseSpace = true;
-	// 批 13.6 AO 施加点标志（scene data @722224.z）：true ⟹ AO 已由 **taa pass** 施加，
+	// 批 13.6 AO 施加点标志（scene data @723600.z）：true ⟹ AO 已由 **taa pass** 施加，
 	// tonemap 跳过（否则双施）；false ⟹ taa pass 不在图里，tonemap 是唯一施加点。
 	// ⚠ 取值 = **实际图形态**（`decorateTaaPass` 返回值，main 启动期回填），**不是**上面的
 	//   `taaEnabled` 配置键：offscreen 变体配置开了 TAA 也会装饰失败，拿配置派生 = AO
@@ -529,11 +529,11 @@ export struct SceneEnv {
 	// 「上一帧矩阵」载荷换成本帧抖动后矩阵 + 位移清零 + motion 单位阵 ⟹ shader 的
 	// prevUvBase ≡ baseUv（历史按同基位置采样）。判据消费方 = imgqa temporal-motion M3。
 	bool taaReprojection = true;
-	// 历史拒收诊断门（`taa.diag_reject`，默认关）：true ⟹ scene data @722224.w = 1，
+	// 历史拒收诊断门（`taa.diag_reject`，默认关）：true ⟹ scene data @723600.w = 1，
 	// taa.frag 把拒收码写进 taa_out.a（RGB 不动）。回读 = /shot attachment=taa_out。
 	bool taaDiagReject = false;
 	// 输入侧 un-jitter 的**重建核选择**（`taa.input_kernel`，批 13.8，默认 0 = 逐位今天）：
-	// 0 = 双线性 / 1 = Catmull-Rom 4×4 / 2 = Lanczos3 6×6。scene data @722240.x，
+	// 0 = 双线性 / 1 = Catmull-Rom 4×4 / 2 = Lanczos3 6×6。scene data @723616.x，
 	// 唯一消费者 = taa.frag `sampleInputColor`。判据消费方 = imgqa `--kernel`（temporal-flicker
 	// / aa-coverage / temporal-feedback）。⚠ 非整数值按 `k<0.5` / `k<1.5` 落桶（不报错）。
 	float taaInputKernel = 0.0f;
@@ -610,7 +610,7 @@ export struct ViewProjection {
 	// `projUnjittered` = 未抖那份，供重投影把世界点投回**上一帧的像素中心**。
 	// TAA 关：两者相同、jitterPx = 0（projectionSystem 根本不碰 proj ⇒ 逐位不变）。
 	glm::mat4 projUnjittered{1.0f};
-	glm::vec2 jitterPx{0.0f};  ///< 本帧抖动（像素单位，±0.5 档），进 scene data @722208.zw
+	glm::vec2 jitterPx{0.0f};  ///< 本帧抖动（像素单位，±0.5 档），进 scene data @723584.zw
 };
 
 /**

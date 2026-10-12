@@ -10,11 +10,12 @@ return {
         { name = "sceneData", index = 3, shape = "byteAddressBuffer" },
     },
 
-    -- 契约常量（shader 端字面量必须一致；kSceneDataLightArrayBase = 头 128 + 矩阵表 4096*64）
+    -- 契约常量（shader 端字面量必须一致；kSceneDataLightArrayBase = 矩阵表基址 256 + 矩阵表
+    -- 4096*64 = 262400，批 L 区基址 256B 对齐）
     constants = {
         { name = "kMaxLights", value = 8 },
         { name = "kGpuLightStride", value = 64 },
-        { name = "kSceneDataLightArrayBase", value = 262272 },
+        { name = "kSceneDataLightArrayBase", value = 262400 },
     },
 
     -- GpuLight struct（stride 64，4×vec4 packed；生成 C++ struct + static_assert(sizeof==64)）

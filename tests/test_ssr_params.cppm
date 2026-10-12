@@ -4,14 +4,14 @@ module;
  * + fillSsrParams 填值契约（纯 CPU、无设备）。
  *
  * 批 15.1 参数面把 ssrParams 的 yzw 从「恒 0 预留」换成三个可调系数，并新增 ssrGate 子区
- * （@722352，两个阈值门控系数）。**这是有意的契约变更**：原「yzw = 0」断言不是被删掉，
+ * （@723792，两个阈值门控系数）。**这是有意的契约变更**：原「yzw = 0」断言不是被删掉，
  * 而是改成「yzw = 配置系数」——预留位被正式占用后，"这里不该有别的值"这句话由
  * 「等于配置里的那个数」接替（更强的判据：0 只排除一个值，系数逐位钉住四个）。
  *
  * ## 钉什么
  *
  * (a) **布局**：按 vkrenderer_impl::writeSceneStaging 的 memcpy 口径把两个 vec4 写进
- *     @722336 / @722352，再按 **shader 侧提取链**（scene.slang readSsrParams / readSsrGate
+ *     @723776 / @723792，再按 **shader 侧提取链**（scene.slang readSsrParams / readSsrGate
  *     的 Load4 字面量）读回，断言逐位还原。抓的是**偏移错 / 步长错 / 两子区重叠**。
  * (b) **填值**：ssrParams = (sceneRadius, maxDistanceRadii, thicknessPx, biasPx)、
  *     ssrGate = (roughFull, roughCutoff, blurScale, 0)（z = blurScale 批 15.3B 占用），
@@ -27,12 +27,12 @@ module;
  * ## 两源结构（先例 = test_ssr_viewproj，理由在那不重复）
  *
  * 写入侧偏移 = C++ 常量 kSceneDataSsrParamsOffset / kSceneDataSsrGateOffset，
- * **读回侧偏移 = 字面量 722336u / 722352u**（手抄 scene.slang 的两个 Load4）。
+ * **读回侧偏移 = 字面量 723776u / 723792u**（手抄 scene.slang 的两个 Load4）。
  * 编译期另有 static_assert 双保险（C++ 常量 == 本文件手抄值）。
  *
  * ⚠ **本测试钉不住 shader 那一侧**（措辞纪律，别让注释把它吹成"两侧钉死"）：
  * `kSlangSsrParamsLiteral` / `kSlangSsrGateLiteral` 是**本文件手抄的 C++ 常量**，不是从
- * scene.slang 提取的。若有人只改 scene.slang 里的 `Load4(722336u)`，本测试与全部
+ * scene.slang 提取的。若有人只改 scene.slang 里的 `Load4(723776u)`，本测试与全部
  * static_assert **都不红**——它们只证明"C++ 常量 == 本文件手抄值"，与 shader 实际写了
  * 什么无关。所以变异①的运行时形态是"读回偏移与写入偏移不一致"，**不是**"shader 字面量
  * 单侧漂"。真正端到端抓住它的只有 `just ssr-check`（2026-10-10 实测：把 fillSsrParams 的
@@ -42,7 +42,7 @@ module;
  * ## 变异红线声明（哪个变异让我红）
  *
  *   ① kSceneDataSsrParamsOffset / kSceneDataSsrGateOffset 改 +16 → **编译期红**（本文件与
- *      scene_data.cppm 的 static_assert 双钉炸编译）；把本文件读回字面量改 722352u →
+ *      scene_data.cppm 的 static_assert 双钉炸编译）；把本文件读回字面量改 723792u →
  *      (a) 红（读回全 0）；只改 gate 字面量 → gate 读回全 0 红。⚠ 单改 scene.slang 的字
  *      面量**不在此覆盖内**（见上）。
  *   ② fillSsrParams 把 center.x 填进 y / 把系数填错槽（如 thickness↔bias 互换）→ (b) 红
@@ -76,9 +76,9 @@ namespace RGL {
 namespace {
 
 /// scene.slang readSsrParams 的字面量基址（两源结构的 shader 侧镜像，勿改成常量引用）。
-constexpr uint32_t kSlangSsrParamsLiteral = 722336u;
+constexpr uint32_t kSlangSsrParamsLiteral = 723776u;
 /// scene.slang readSsrGate 的字面量基址（同上）。
-constexpr uint32_t kSlangSsrGateLiteral = 722352u;
+constexpr uint32_t kSlangSsrGateLiteral = 723792u;
 
 // 编译期双保险：C++ 常量与两个 shader 字面量同钉（变异①在此炸）。
 static_assert(kSceneDataSsrParamsOffset == kSlangSsrParamsLiteral,
@@ -92,9 +92,12 @@ static_assert(kSceneDataSsrParamsOffset == kSceneDataSsrOffset + 64u,
 	"params sub-region must sit right after the ssrViewProj mat4");
 static_assert(kSceneDataSsrGateOffset == kSceneDataSsrParamsOffset + 16u,
 	"gate sub-region must sit right after ssrParams (no overlap, no hole)");
-static_assert(kSceneDataSsrGateOffset + sizeof(glm::vec4) == kSceneDataWetOffset,
-	"gate sub-region must end exactly where the wet region begins");
-static_assert(kSceneDataSsrOffset + kSceneDataSsrBytes == kSceneDataWetOffset,
+// 批 L（§9.7）后相邻不变式 = 「下一区基址 = alignUp(前区尾, 256)」（无重叠 + 间隙 < 256）。
+static_assert(alignUp(kSceneDataSsrGateOffset + sizeof(glm::vec4), kSceneRegionAlign) ==
+		kSceneDataWetOffset,
+	"wet region must start at the 256-aligned end of the ssrGate sub-region");
+static_assert(alignUp(kSceneDataSsrOffset + kSceneDataSsrBytes, kSceneRegionAlign) ==
+		kSceneDataWetOffset,
 	"SSR region must sit right before the wet tail region (batch 15.2A appended after it)");
 // 区宽 = 16B 矩阵 + 16B 正向矩阵 + 16B params + 16B gate（参数面由 80 扩到 96）。
 static_assert(kSceneDataSsrBytes == 96u, "SSR region width drifted (mat4+mat4+vec4+vec4)");
@@ -126,7 +129,7 @@ SsrTuning distinctTuning() {
 
 }  // namespace
 
-TEST_CASE("SSR 两个 vec4 子区布局：C++ 常量写、字面量 722336/722352 读回逐位相同（两源结构）") {
+TEST_CASE("SSR 两个 vec4 子区布局：C++ 常量写、字面量 723776/723792 读回逐位相同（两源结构）") {
 	// 非退化输入：radius 取靶实测值量级；center **非零且各分量不同**——它不该出现在
 	// 任何字节里（center 混进上传区 = 第二真相源，变异②的判据前提）。
 	SceneBounds bounds;

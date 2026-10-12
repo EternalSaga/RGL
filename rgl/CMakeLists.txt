@@ -85,7 +85,7 @@ rgl_shader(tonemap.frag TONEMAP_FRAG_SPV scene)
 rgl_shader(ao.frag AO_FRAG_SPV scene)
 rgl_shader(velocity.frag VELOCITY_FRAG_SPV scene)   # 批 14.4：逐像素速度场（全屏 pass，消费 scene data 既有槽位）
 # 批 12.6 TAA：时域滤波 frag（mesh 复用 light.mesh.spv；import scene 读 @64 invViewProj
-# + TAA 尾区 @722080；binding 4 本帧色 / 5 历史 / 6 深度 / 7 线性 sampler / 8 point sampler）
+# + TAA 尾区 @723456；binding 4 本帧色 / 5 历史 / 6 深度 / 7 线性 sampler / 8 point sampler）
 # 批 14.5 第三批：AO 施加专用全屏 pass（把「AO 乘在时域滤波之前」从 taa.frag 里抽出来，
 # 与「谁做时域」解耦；mesh 复用 light.mesh.spv，binding 4 色 / 5 共享 sampler / 6 ao 可见度）
 rgl_shader(ao_apply.frag AO_APPLY_FRAG_SPV scene)
