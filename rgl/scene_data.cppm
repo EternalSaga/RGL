@@ -544,7 +544,9 @@ static_assert(kSceneDataWetOffset == 722368 && kSceneDataWetParamsOffset == 7223
  *
  *  内容来源 = `meshlet_ranges::scanClusterRanges`（装配层启动期扫一遍产物 groups），
  *  门 `meshlet.enable` 关 = 不写 = 全 0（本区常驻零）。🔴 **本批零消费者**：读取点归
- *  ★1-a1 的 mesh shader（`groupID.x + base` = 全局簇下标），写它不改任何像素。
+ *  ★1-a1 的 mesh shader（`base + (groupID.x >> 1)` = 全局簇下标（★1-a1ii-α″ 去索引发射后每簇固定 2 槽：
+ *  半区号 = `groupID.x & 1`，每槽 ≤ 85 三角，3×85 = 255 ≤ maxMeshOutputVertices）），门开时它只叠加在旧路径
+ *  之后（同 objectIndex、同深度），门关逐位不变。
  *
  *  容量与对象矩阵表同 = `kSceneMatrixCapacity`（表按 objectIndex 索引，容量必须一致，
  *  否则越界写的是**下一个字节**——本区是尾区，越界即写出 buffer 外）。

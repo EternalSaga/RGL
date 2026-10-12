@@ -129,7 +129,8 @@ ObjectDraw readObjectDraw(uint objectIndex)
 // kSceneDataClusterRange* 推导 + static_assert 钉死，本文件字面量手工同源）。
 // 布局走与 ObjectDraw 同一条反射路（scene_forward_schema 登记 → C API 反射生成 C++
 // 同名 struct + 逐字段 offsetof static_assert），故本声明是布局唯一真相源。
-// 消费者 = ★1-a1ii-α 的 meshlet.mesh.slang（`groupID.x + base` = 全局簇下标；
+// 消费者 = ★1-a1ii-α 的 meshlet.mesh.slang（`base + (groupID.x >> 1)` = 全局簇下标（★1-a1ii-α″ 去索引发射后每簇固定 2 槽：
+// 半区号 = `groupID.x & 1`，每槽 ≤ 85 三角，3×85 = 255 ≤ maxMeshOutputVertices）；
 // 恒 L0 档用 `l0Count`，`count` 留给 ★1-a2 全级档，见 docs/mdi_plan.md §10.1）。
 // 表内容由装配层写入（门关 = 全 0），门关本区全 0 ⟹ 读取点天然零 group。
 struct ObjectClusterRange

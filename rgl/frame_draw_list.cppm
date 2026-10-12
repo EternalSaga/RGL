@@ -183,7 +183,8 @@ export struct SceneFrameData {
 	///   `meshlet_ranges::scanClusterRanges` 扫簇产物 groups → registry ctx `ClusterRangeTable`，
 	///   renderListSystem 每帧只搬 span（生命周期规则同 objectDraws：录制期读取即完成使命）。
 	///   门 `meshlet.enable` 关 = ctx 里根本没有那张表 = 空 span ⟹ 该区保持全 0。
-	///   🔴 **本批零消费者**：读取点归 ★1-a1 的 mesh shader（`groupID.x + base` = 全局簇下标），
+	///   读取点 = meshlet.mesh.slang（`base + (groupID.x >> 1)` = 全局簇下标（★1-a1ii-α″ 去索引发射后每簇固定 2 槽：
+/// 半区号 = `groupID.x & 1`，每槽 ≤ 85 三角，3×85 = 255 ≤ maxMeshOutputVertices）），
 	///   写它不改任何像素（门关逐位不变的构造性保证 = 方案 B 追加尾区，见 scene_data 该区注释）。
 	std::span<const ObjectClusterRange> clusterRanges;
 };

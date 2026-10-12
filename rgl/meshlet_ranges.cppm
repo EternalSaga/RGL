@@ -9,7 +9,8 @@ import scene_forward_types_generated;  // ObjectClusterRange（scene data 表条
  *
  * ## 它解决的那一件事（docs/mdi_plan.md §10.1）
  * 产物里的簇是**全局一张表**，而提交是**逐 primitive** 的（材质绑定原样不动）。mesh shader 要
- * `clusterBase`（`groupID.x + base` = 全局簇下标）。本模块把 `MeshletAsset` 的 groups 视图扫成
+ * `clusterBase`（去索引发射后是 `base + (groupID.x >> 1)`，每簇 2 槽；α″ 前曾是
+ * `groupID.x + base`）。本模块把 `MeshletAsset` 的 groups 视图扫成
  * 「按 prim 序的连续分块」——每 prim 一个 `[base, count)` 加上该 prim 的 **L0 前缀长度**，
  * 装配层把它写进 scene data 尾区的 `ObjectClusterRange` 表（stride 16，按 objectIndex 索引）。
  *

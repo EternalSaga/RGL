@@ -82,8 +82,12 @@ void collectShadowCasters(const RGL::MeshAsset& asset, const RGL::MaterialAsset&
  *  2. 材质非 blend（透明段按距离排序，叠加不参与——画进独立向量会破坏其排序语义）；
  *  3. registry ctx 有簇区间表（门关 = 装配层根本不建，meshlet_ranges::ClusterRangeTable）；
  *  4. 本 objectSlot 的 L0 簇数 > 0（无簇 = 零 group，连空 draw 都不发）。
- * groupCount = l0Count（恒 L0 档，docs/mdi_plan.md §10.1：L0 恒为区间前缀）；pushData
- * 与本体 draw 同一个 DrawArgs（同 objectIndex ⟹ shader 读同一套材质/MVP 表项）。
+ * groupCount = **2 × l0Count**（恒 L0 档，docs/mdi_plan.md §10.1：L0 恒为区间前缀）。乘 2 的理由
+ * = 簇路径去索引发射（§13.2 路 C）把每任务的三角形数压到 85（3×85 = 255 ≤ maxMeshOutputVertices
+ * 256），而 L0 簇中位 121 三角、71.2% 的簇 > 85 ⟹ **每簇固定 2 个任务槽**（shader 侧
+ * `cluster = base + (groupID.x >> 1)`、`half = groupID.x & 1`；空半区 SetMeshOutputCounts(0,0)
+ * 早退）。固定 2 槽而非前缀和：零额外 buffer、零每帧扫描，代价 = 空任务（实测 28.8% 的簇的第二槽）。
+ * pushData 与本体 draw 同一个 DrawArgs（同 objectIndex ⟹ shader 读同一套材质/MVP 表项）。
  * @param asset/mat 本实体资产与材质（判据 1/2）
  * @param table 簇区间表（nullptr = 门关）
  * @param objectSlot = MeshRef.objectSlot（表下标 = shader objectIndex）
@@ -99,7 +103,10 @@ void collectMeshletOverlay(const RGL::MeshAsset& asset, const RGL::MaterialAsset
     const uint32_t l0Count = table->bySlot[objectSlot].l0Count;
     if (l0Count == 0)
         return;
-    out.push_back(RGL::DrawCall{asset.meshletPipelineIndex, pushData, l0Count});
+    // 每簇 2 个任务槽（见函数头注释）；l0Count 上限实测 682 ⟹ 2× 远小于
+    // maxMeshWorkGroupCount.x = 65535，无回绕风险。
+    const uint32_t taskCount = 2u * l0Count;
+    out.push_back(RGL::DrawCall{asset.meshletPipelineIndex, pushData, taskCount});
 }
 
 /**
