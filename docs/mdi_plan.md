@@ -785,7 +785,7 @@ rlbase) = **★1-a1ii 那两件"错了不报错、只是图像静默错"的事�
 |---|---|---|---|---|
 | `gbuffer_albedo` (0) | `rgba8_srgb` | **原样 memcpy** | 🔴 **逐字节精确** | **零阈值逐字节对拍** |
 | `gbuffer_metalrough` (3) | `rgba8_unorm` | 线性 clamp（值域本就 0..1） | 🔴 **逐字节精确** | **零阈值逐字节对拍** |
-| `object_id` 附件 | `r32_uint` | raw id 无损编进 RGB24 | 🔴 **整数无损** | **零阈值逐字节对拍**（覆盖归属） |
+| `object_id` 附件 | `r32_uint` | raw id 无损编进 RGB24 | 🔴 **整数无损** | ⚠ **本批不用**：它要 `diagnostics.picking=true`，而那条门**会在编译期追加 object_id pass**（改渲染图）⟹ 拍出来的不是交付那一档。且它给的是**归属**不是**检出**（少画一块已被 albedo 抓到）。要拍走 RPC（`attachment` 字段，无配置键），归 ★1-b |
 | `gbuffer_normal` (1) | `rg16_snorm` | oct (x,y)∈[-1,1] → 8bit | ⚠ 8bit 有损 | 只能做**形态**判据（§11.2） |
 | `gbuffer_position` (2) | `rgba32_sfloat` | **世界坐标 clamp 显示** | ❌ 不可比对 | 弃用（要精确位置走别的路） |
 | 最终截图 | swapchain sRGB | — | 8bit | 用户视角，形态判据 |
@@ -842,11 +842,24 @@ U = area( erode( M, 圆盘半径 r ) )              默认 r = 2
 | # | 判据 | 阈值 | 抓什么 |
 |---|---|---|---|
 | A1 | 门关截图 = 基线锚 `54e40665…` | 逐字节 | 旧路径一行没动 |
-| A2 | 门开 `gbuffer_albedo` / `gbuffer_metalrough` / `object_id` 三张与门关**逐字节相同** | **零** | 少画簇、材质接错、覆盖归属错、UV 缝顶点位置错 |
+| A2 | 门开 `gbuffer_albedo`(0) / `gbuffer_metalrough`(3) 两张与门关**逐字节相同**（object_id 见 §11.1 该行注记，本批不做） | **零** | 少画簇、材质接错、UV 缝顶点位置错 |
 | A3 | 门开 `gbuffer_normal` 过 `diffblock`（r=2） | U=0 | 法线/切线（含 `tangent.w` 手性）整块错 |
 | A4 | 门开最终截图（csm 档 + 阴影关档）过 `diffblock`（r=2） | U=0 | 用户视角的整块错 |
 | A5 | 提交三角数落到 §7.3 的 **1.08-1.30%** 量级（恒 L0 档 = 全 L0 不减，改看**簇数/顶点数**口径） | 量级 | 路径真的在走簇，不是偷偷回落到旧路径 |
 | A6 | `just test` / `test-all` / `checks` 全绿 | — | 常规 |
+
+**A2 的采集流程（2026-10-12 已在 ★1-a1i 构建上演练通过，直接照抄）**：
+逐通道各跑一次（`dump_gbuf` 档下引擎忽略 `llm_shot.file`，出图名写死 `screenshots/gbuffer_N.png`）：
+
+```bash
+for ch in 0 3; do
+  python3 tools/smoke.py shot --name g${ch}_off --aa off --set diagnostics:dump_gbuf=$ch
+  python3 tools/smoke.py shot --name g${ch}_on  --aa off --set meshlet.enable=true --set diagnostics:dump_gbuf=$ch
+  # 各自把 build/rgl/screenshots/gbuffer_$ch.png 存到不同目录再比（同名的两次跑会互相覆盖）
+done
+```
+演练读数：ch0 `ea84ed5e…` / ch3 `7df898fd…` 两臂**逐字节相同**（当时门开不画 ⟹ 本应相同，
+这条演练验的是**流程**不是渲染）。
 
 🔴 **A2 是本批的主判据**：它零阈值、无解释空间，且直接覆盖"整块错"的全部形态。
 A3/A4 只处理"有损通道上的薄差异"，也就是用户已经认可的那一类。
