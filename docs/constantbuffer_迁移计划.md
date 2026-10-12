@@ -15,7 +15,7 @@
 |---|---|---|
 | C1 | 分支拓扑：迁移从 master 切，还是从 MDI tip 切 | ✅ **已结案**：从 MDI tip 切（§6.2 成立）→ 分支 `feat/scene-data-typed-migration` @ `f4ee56c`，锚点 §9.1 |
 | C2 | 迁移粒度：每区一 buffer，还是"标量合并一 UBO + 大表各自 SSBO" | ✅ **已结案（§9.2/§9.5）**：**都不选**——物理 buffer 一块不拆，**只拆描述符**（子范围描述符，VUID 依据）；粒度按**语义**划，成本项已被两条机制消掉 |
-| C3 | `cull.comp.slang` 遗留偏移是否并入本计划 | ✅ **已结案**：并入，排最后（§9.7「末」批） |
+| C3 | `cull.comp.slang` 遗留偏移是否并入本计划 | ✅ **已结案**：并入，排最后（§9.8「末」批） |
 | **C4** | **R3 红线（禁 StructuredBuffer）是否按 §8.4 三条件改精确** | ✅ **已结案（用户 2026-10-12 拍板放行）**：R3 已窄化成"元素类型未走反射契约才 ERROR"，配套护栏 R4 + 设备端 stride 往返已落地 → §8 |
 
 ## 1. 为什么现在能做（事实基线，**别再重查一遍**）
@@ -127,8 +127,8 @@ StructuredBuffer<uint>            clusterVisible;
 
 ## 4. 分批（每批一个可回退单元）
 
-> 🔴 **本表已被 §9.7 取代**（批 0 的"拆 buffer 代价"经 §9.2 证明为 0，不再需要先量再定；
-> 实际执行序与每批状态以 §9.7 为准）。保留本表只为留下"当初为什么这么排"的推理。
+> 🔴 **本表已被 §9.8 取代**（批 0 的"拆 buffer 代价"经 §9.2 证明为 0，不再需要先量再定；
+> 实际执行序与每批状态以 §9.8 为准）。保留本表只为留下"当初为什么这么排"的推理。
 
 | 批 | 内容 | 判据 | 为什么这个顺序 |
 |---|---|---|---|
@@ -344,17 +344,35 @@ StructuredBuffer 在本机 stride 正确"，但**推翻一条用户定下的红�
 `minUniformBufferOffsetAlignment` / `minStorageBufferOffsetAlignment` / `maxUniformBufferRange`，
 不满足则**响亮失败**（不是静默画错）。
 
-### 9.3 定案：mapping 按 **SPV 实际声明的 binding** 过滤（否则启动翻倍）
+### 9.3 定案：mapping 按 **SPV 实际声明的 binding** 过滤 ✅ **已落地**（批 M，`1b48f27`）
 
-基线读数（本机 `f4ee56c`，日志 `main_impl.cppm:588`）：
-`registryEntries=479 pipelinesCreated=479 handles=958 mappings=6560 createTotal=2.98s`
-⟹ ≈13.7 mapping/条目。现状 `hasSceneData` 是**一个布尔烘一条 binding 3**；若改成"新
-binding 全烘"，每条目 +12 条 ⟹ mapping 总数 ~1.14 万（+73%），启动时间按 mapping 面外推
-接近翻倍。**所以**：`RenderPipeline` 构造期解析两份 SPV 的 `OpVariable` 装饰集，**只为
-SPV 真声明了的 binding 发 mapping**；解析失败则**退回全烘 + warn**（全烘恒正确，是
-fail-safe 方向——"有 mapping 未声明"空转无害已由 addSkyEntry/addLightEntry 既证）。
-副产品：今天白烘的空转 mapping 也一并降掉，启动**优于**基线。
-🔴 这条是**机器可验**替代手工清单（抄名单反模式）：新增 binding 不需要在 C++ 侧登记"谁用"。
+**动机原样保留**：`RenderPipeline` 原先无条件烘 mapping（`hasSceneData` 一个布尔烘一条
+binding 3）。迁移要加 12 条 binding，若沿用旧形态就得在 C++ 侧逐条目登记"谁用哪几条"
+——**那正是本项目最反感的抄名单反模式**（名单随 schema 漂）。
+解法：构造期解析 mesh + frag 两份 SPV 的 `OpVariable` 装饰集，**只为真声明的 binding 发
+mapping**；解析失败退回全烘 + warn 点名条目（全烘恒正确 = fail-safe 方向）。
+⟹ 新增 binding **不需要**在 C++ 侧登记消费者，`PipelineBindings` 无脑带上全部载体槽即可。
+
+**🔴 但本批实测推翻了我原先写在这里的预估，照实测改口径（2026-10-12 本机）**：
+
+| 读数 | 改前 | 改后 |
+|---|---|---|
+| mappings（出厂默认档） | 6560 | **3722**（−43%） |
+| mappings（门关档） | — | 2265 |
+| createTotal | 2.93s | **2.95s**（噪声内，**没降**） |
+| 退回全烘的条目 | — | **0 / 479**（958 份 SPV 全部解析成功） |
+
+原写"mapping +73% ⟹ 启动接近翻倍"**不成立**：本机 `vkCreateShadersEXT` 由**着色器编译**
+主导，mapping 条数的边际成本近零。**所以批 M 的收益不是启动提速，而是"消灭手工消费者
+清单"这条结构性质**——别拿提速当它的验收判据。（教训形态：**成本预估也是假设**，
+"按 X 面外推"在没测过边际成本前不是结论。）
+
+**🔴 顺带钉死一条对本计划风险面影响很大的事实**（变异 A 实测，非推理）：
+"SPV 声明了 binding 却没烘 mapping" **不是静默读零**，而是 `vkCreateShadersEXT` 期被 VVL
+**硬拦**并报 `VUID-VkShaderCreateInfoEXT-flags-11292`（"has no mapping for [Set 0, Binding N,
+variable …]"），引擎启动即死。
+⟹ 迁移期"加了 binding 忘了接线"的失效形态是**响的**，与 §3.4 第一条（**反向**：漏写
+**描述符**完全静默）正好互补。两侧别记混：**描述符漏写 = 静默读零；mapping 漏写 = 启动炸**。
 
 ### 9.4 定案：契约里的矩阵**继续**用 `ObjectMatrix`（4 个具名 float4），禁止 `float4x4` 字段
 
@@ -417,13 +435,40 @@ schema 交叉校验），这是"反射工具为主导"这条目标本体的活�
 批 1 额外做一次真正的**双路**（新旧载体并存、逐位相同），用来把"schema→反射→heap 写→
 barrier→逐位"全链路第一次打通；之后各批按上面三条。
 
-### 9.7 分批执行序（每批一个可回退单元，子 agent 推进 + 主 agent 校验）
+### 9.7 定案：布局**原地重排到 256B 对齐**，迁移期**不复制数据**（批 L）
+
+§9.2 说"拆描述符不拆 buffer"，但子范围描述符的**地址对齐**是硬约束
+（`minUniformBufferOffsetAlignment` / `minStorageBufferOffsetAlignment`，VUID-…-12350/12351），
+而现状各区基址只保证 **16B** 对齐（`128` / `262800` / `524944` / `722400` 全都过不了 32/256）。
+⟹ 必须先重排布局，否则载体根本挂不上去。
+
+**两条被否掉的路**（别再想第三次）：
+
+- ❌ **迁移期把数据写两份**（旧字节区 + 新载体区）：per-object 表合计 ~768KB，
+  等于把 buffer 与每帧 staging memcpy 翻倍，而"翻倍"这件事会一直挂着直到 N+1 批才拆。
+- ❌ **只给新载体追加一段 256 对齐的尾区**：小参数区可以，大表不行（表要么搬、要么留旧地址，
+  搬了旧字面量就得改——绕回原地重排）。
+
+✅ **定案 = 原地重排**：`scene_data.cppm` 的区基址常量全部改成**按 256B 向上取整**派生
+（`kSceneRegionAlign = 256`，buffer 分配 `allocationAlignment = 256` 钉住基址），
+`scene.slang` 侧尚未迁移区的字节字面量随之同步（**两侧 static_assert 本来就钉着，
+改错编译不过**）。数值语义一 bit 不动 ⟹ **两档锚点逐位不变就是本批的全部判据**。
+
+之后每批迁移 = ①契约 struct 进 schema + `just reflect` ②`SceneDataService` 给该区写一条
+子范围描述符（`{base + 区基址, 区大小}`，UBO 区用 `eUniformBuffer`、SSBO 区用 `eStorageBuffer`）
+③`scene.slang` 的 read 函数从"字节 Load"改成"类型化访问"。**零数据复制、零每帧代价变化。**
+
+🔴 `PipelineBindings` 带上**全部**载体槽、由批 M 的过滤自动裁掉未声明的——**不在 C++ 侧
+登记消费者**。代价：`RenderPipeline` 的 `mappings[]` 容量要从 24 抬到 ≥48（过滤前计数）。
+
+### 9.8 分批执行序（每批一个可回退单元，子 agent 推进 + 主 agent 校验）
 
 | 批 | 内容 | 状态 |
 |---|---|---|
 | **R** | 反射工具补**嵌套 struct** 支持（§9.4 推论）+ 有牙判据 | ⬜ |
 | **G** | 护栏先行（§5 顺序红线）：**R5** 裸字节偏移棘轮（本表原写「R2」，落地时按 `check_shader_deps.py` 已有的 R1/R3/R4 现号续为 **R5**——R2 是退役空号，不复用以免被读成"复活退役规则"）+ 死 offset 常量检测 | ✅ **R5 棘轮已落地**（2026-10-12，零引擎改动）：存量 **130 条 / 19 个 .slang**（`scene.slang` 56 条为最，`meshlet.mesh.slang` 12、`cull.comp.slang` 8）钉进 `tools/checks/byte_offset_baseline.json`，按文件记只准减。变异三条实测**有牙**：① 加一条 `sceneData.Load4(12345u)` → ERROR「基线上升 5 > 4」+ `--strict` **退 1** ② 删一条真实偏移 → WARNING「可下调 0 < 1」+ 打印 `--update-byte-offset-baseline` 收账命令 ③ 基线改名 / JSON 写坏 / 缺 `files` 键 → ERROR「本次**未做任何对账**」+ `--strict` **退 1**（三条跑完均已还原，`git diff` 干净）。附带修掉一处**假绿**：`strip_comments` 两条正则版会把行注释里 `configs/*.lua` 的 `/*` 当块注释起点，`taa.frag.slang` 一次吞掉 224 行 → 该区新增偏移旧实现报 0 条。⚠ §5.1 **死 offset 常量检测不在本批**——零引擎改动 ⟹ 还没有"区已迁走"的常量可当阳性锚点，无锚点的判据立了就是空转，留到第一个迁移批（批 1）随迁随建 |
 | **M** | mapping 按 SPV 声明过滤（§9.3）+ 启动面复测（必须 ≤ 基线 2.98s） | ✅ **已落地**（2026-10-12 本机）：mappings **6560→3722**（−43%，479 条目 958 份 SPV **全部解析成功、0 条目退回全烘**）、createTotal **2.93s→2.95s**（≤ 基线 2.98s；**持平**——本机 vkCreateShadersEXT 耗时由 shader 编译主导、mapping 条数边际成本小，本批收益是防住后续 +12 binding 的扩张面而非当下提速）；两档锚点逐位命中（门关 `54e40665…` / 默认 `95edc8cc…`），VVL 实开（loader 层插入日志）errors=0。变异两条实测**有牙**：A（恒空集）→ 首个条目 `vkCreateShadersEXT` 即报 VUID-VkShaderCreateInfoEXT-flags-11292「has no mapping for [Set 0, Binding 0, "modelVertexBuffer"]」⟹ **引擎非零退出**（比「画面变」更强：启动都起不来）；B（恒 nullopt）→ 像素逐位 = 锚 + mappings 精确回 6560 + 479 条「退回全烘」warn（fail-safe 方向 = 全烘且出声）。跑完均已还原 |
+| **L** | 布局原地重排到 **256B 对齐**（§9.7）+ buffer `allocationAlignment` + 运行期对齐闸门 | ⬜ |
 | **1** | 湿面区（32B，1 消费者，无矩阵）双路打通全链路 | ⬜ |
 | 2..N | 按区推进（消费者少的先）：SSR → 簇区间表 → 材质表 → MVP 表 → 阴影参数 → 辐照度 → 灯数组 → 对象矩阵 → TAA → 阴影 VP → SceneHeader | ⬜ |
 | **N+1** | 删 `scene.slang` 失效 read 函数 + `scene_data.cppm` 失效 offset 常量 + `meshlet.mesh.slang` 的 `44+8/12/16/20` 字面量 + **binding 3 与 `sceneData` 声明** | ⬜ |
