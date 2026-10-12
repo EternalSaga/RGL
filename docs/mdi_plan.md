@@ -931,12 +931,23 @@ LOD 选级）才暴露。
 α′ 按 §12.2 做 per-primitive 手性输出，实现全绿，但**主判据（门关逐位 = 基线锚）红**。根因不是设计错：
 
 - mesh 侧 slang **能**发 `PerPrimitiveEXT`（`out primitives` 三件套限定词）；
-- **FS 侧 slang 发不出**。子 agent 试遍 `[[vk::perprimitive]]` / `[perprimitive]` / `[primitives]`
-  全部 unknown attribute；主 agent 在 `~/program/slang` 源码级复核：
-  装饰只在 `kIROp_GLSLPrimitivesRateDecoration` 时发出（`slang-emit-spirv.cpp` 两处），
-  该装饰唯一添加点是 `declarator->flavor == meshOutputPrimitives`（`slang-ir-glsl-legalize.cpp:1066`），
-  而 `GlobalVaryingDeclarator::Flavor` 枚举**只有输出侧三种**（`array` / `meshOutputVertices` /
-  `meshOutputIndices` / `meshOutputPrimitives`）⟹ **输入侧不存在这条路径**。
+- **FS 侧 slang 发不出**（指**用户自定义**逐图元属性）。三重独立证据：
+  1. **源码级**（`~/program/slang` @ 2026-09-12）：装饰只在 `kIROp_GLSLPrimitivesRateDecoration` 时发出
+     （`slang-emit-spirv.cpp:18299` / `:20090`），该装饰**唯一**添加点是
+     `declarator->flavor == meshOutputPrimitives`（`slang-ir-glsl-legalize.cpp:1066`），而
+     `GlobalVaryingDeclarator::Flavor` 枚举**只有输出侧三种**（`array` / `meshOutputVertices` /
+     `meshOutputIndices` / `meshOutputPrimitives`，`slang-ir-glsl-legalize.cpp:994`）
+     ⟹ **输入侧不存在这条路径**。
+  2. **行为级双版本对拍**（主 agent 亲做，脚本 `/tmp/opencode/pp_probe.py`，mesh 侧作阳性对照）：
+     构建 pin 的 **2026.16** 与系统的 **2026.18.3** 字符串集完全相同、行为完全相同；FS 侧
+     `nointerpolation` / `[[vk::perprimitive]]` / `[perprimitive]` / `[perprimitiveEXT]` / 裸语义
+     **五种写法装饰数全为 0**（mesh 侧同脚本能查到装饰 ⟹ 判据本身有效）。
+     🔴 **且 `[[vk::perprimitive]]` 只报 `warning[E31000]: unknown attribute`、rc 仍为 0**
+     ⟹ 只看退出码的构建会**静默产出错着色器**。
+  3. **上游**：issue **#7019**（2025-05 开，至今 open，里程碑从 2025Q3 漂到 2026Q4）正文写的复现形态
+     与我们逐字相同；修复 PR **#8821** 仍 open 且 reviewer 明确 "the change to the spirv-embedder is
+     missing, so this won't work yet"。DXC 那条 `[[vk::ext_decorate(...)]]` 绕法在 slang **根本不存在**
+     （全树 `ext_decorate` 零命中）。
 - 缺该装饰的后果不是"精度略差"而是**读未写过的 location**（mesh 把 location 4 当逐图元写，
   FS 当普通插值输入读）⟹ 图像 `6dee4f11…` ≠ 基线。子 agent 用 SPIR-V 后置补装饰验证过：
   **补上后门关逐位 = 基线锚**、VVL 干净 ⟹ 设计与旧路径语义等价这条**已被证明**，只是编译器给不出产物。
@@ -965,11 +976,56 @@ LOD 选级）才暴露。
 **A 的重开触发条件（写死，别靠记性）**：当簇路径的**顶点发射**成为可测瓶颈（`just cpu` /
 `just analytic` 归因到 mesh 阶段顶点输出），或 slang 上游实现 FS 侧 `perprimitive` 时，
 回到 A；届时 §13.1 的三条源码证据与"补装饰后逐位 = 基线"这条实测就是现成的立项材料。
+🔴 **但顺序变了**：真到那一天，**先试 §13.4 的路线 D**（`SV_PrimitiveID` 全局下标 + 全局属性表），
+它不碰编译器产物；A 降为 D 也不可行时的备胎。
 
 ### 13.3 α′ 的产物处置
 
 α′ 的 9 文件契约改动**全部 revert**（旧路径一行不动 = 位锚零风险）。它不是白做：
 它证明了 per-primitive 路线可行且旧路语义等价，并把上游缺口钉死到源码级——这些是 §13.1 的来源。
+
+### 13.4 纠正：`SV_PrimitiveID` 是一条**今天就能用**的逐图元通道
+
+§13.1 的结论对**用户自定义**逐图元属性成立，但"此路只能等上游"这句**是错的**。
+
+**① 先记我自己踩的探针陷阱（后来者必踩）**：slang 只在 system-value 语义写成**独立入口参数**时
+才映射成 SPIR-V 内置量；写成 **struct 字段**时退化成普通 `Location`。第一版探针把
+`SV_Position` / `SV_PrimitiveID` 塞进 `struct FIn`，得到 `SV_Position → Location 0`
+（而非 `BuiltIn Position`），**差点据此得出"slang 连 SV_Position 都不映射"**。改独立参数后全对：
+
+| 独立入口参数写法 | 编译出的装饰 |
+|---|---|
+| `float4 pos : SV_Position` | `BuiltIn FragCoord` |
+| `int primitiveId : SV_PrimitiveID` | `BuiltIn PrimitiveId` + `Flat` |
+| `bool ff : SV_IsFrontFace` | `BuiltIn FrontFacing` |
+
+旁证：项目**本来就在用** `SV_IsFrontFace`（`deferred_geometry` / `model_light` / `model_pbr_ibl` /
+`model_vegetation` 四处，全是独立参数形态）且生产正常。
+
+**② 于是 `SV_PrimitiveID` 两端都通**（用项目原样参数 `-profile sm_6_6+spirv_1_6` 亲验 SPIR-V）：
+
+- mesh 侧 `struct POut { int primitiveId : SV_PrimitiveID; … }` 写进 `out primitives`
+  ⟶ `OpDecorate %gl_PrimitiveID BuiltIn PrimitiveId` **+** `PerPrimitiveEXT`；
+- FS 侧独立参数 `int primitiveId : SV_PrimitiveID` ⟶ `BuiltIn PrimitiveId`
+  ——**它是系统值，不需要那个我们拿不到的装饰**。
+
+⟹ **路线 D**：mesh 把**全局逐图元下标**写进 `SV_PrimitiveID`，FS 读出来索引一张**全局逐图元属性表**。
+它只携带一个整数、任意数据靠查表得到 ⟹ **不受上游缺口影响**。
+🔴 **需要的产物侧改动**：现有 `ClusterHeader.primBase` 是**该簇首 primitive 在本 primitive 顶点段内
+的相对偏移**（shader 里 `vertPool[firstVertex + primBase + localPrim]` 就是它），**不是全局图元序号**；
+D 要的是打包期新分配一个全局 per-primitive 序号（`DiskPrim` 加一个字段 + 全局计数即可，
+2,832,120 个图元 → 4B/个 ≈ 11MB 索引面，属性表另算）。
+🟡 **未验**：驱动（RADV）是否真采用**写入值**而非自动顺序编号——要一次实机实验才能定案，
+别把上面这张表读成"运行时也已验证对"。
+
+**③ 对既有裁决的影响**：
+
+- **不改本轮结论**：C（去索引）已落地、相对现状零代价、实测 −4.6% GPU；D 要为 0.1689% 的
+  UV 冲突面加一张全局表 + 每片一次查表。**C 仍是对的**。
+- **但 §13.2 的"A 的重开触发条件"要改**：将来真需要精确逐图元数据时**先试 D，别先去补 SPIR-V**
+  ——D 不碰编译器产物，A 的"仓库新物种 + 三驱动重验"代价直接消失。
+- **doubleSided 正解（§15.3 缺口 2）的着色器半边今天就有**：`SV_IsFrontFace` 可用
+  ⟹ 背面在 FS 里翻法线即可，不必在产物侧复制副本。
 ## 14. ★1-a1ii-α″ 去索引发射落地（2026-10-12）
 
 只改 2 个文件（`meshlet.mesh.slang` + `render_list_impl.cppm` 的 taskCount），旧路径一行未动。
