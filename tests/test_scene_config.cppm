@@ -937,34 +937,38 @@ TEST_CASE("runtime_config：wet 块（批 15.2A 湿面参数）——缺块回�
 	}
 }
 
-TEST_CASE("runtime_config：meshlet 块（★0-b1 簇路径总门）——缺块 = false、显式命中、无扁平键双读") {
+TEST_CASE("runtime_config：meshlet 块（★0-b1 簇路径总门）——缺块 = true、显式关门、无扁平键双读") {
 	// 判据来源 = 实读 runtime_config_impl::readMeshletBlock / readBoolKey（缺键 = 不写目标字段）。
-	// 默认 false = P5 拍板「门关 = 逐位不变是硬护栏」的配置层前提；本批无消费者（★0-b1 只落
-	// 配置项与读取侧模块，接线 = ★0-b2/★1）。
+	// 🔴 ★18-C 起默认 **true**（用户拍板「默认开 D=5」）。P5「门关 = 逐位不变」仍是硬护栏，
+	// 只是**门关不再是出厂态** ⟹ 本用例钉的是「缺块落到出厂默认 true」，而「显式关掉必须生效」
+	// 由「块内键名命中」那条钉。
+	// 🔴 翻默认同时必须**翻探针方向**：默认变 true 后探针若还写 true，则「键被读到」与
+	// 「键被静默忽略」都得到 true ⟹ 用例失去判别力（翻默认最容易留下的假绿形态）。
 	// 变异红线声明：
-	//   ① 默认值翻成 true → 「缺块回落」与「RuntimeConfig{} 成员初始化」两条断言红。
-	//   ② readMeshletBlock 漏读 enable / 键名打错 → 「显式命中」红（探针值 true 读不到）。
-	//   ③ 加了扁平键双读兼容 → 「顶层 meshlet_enable 什么都不发生」红（两个真相源反模式）。
+	//   ① 默认值翻回 false → 「缺块回落」与「RuntimeConfig{} 成员初始化」两条断言红。
+	//   ② readMeshletBlock 漏读 enable / 键名打错 → 「显式关门」红（探针值 false 读不到 = 恒 true）。
+	//   ③ 加了扁平键双读兼容 → 「顶层 meshlet_enable = false 什么都不发生」红（两个真相源反模式）。
 	{  // 成员初始化默认路径（不看 lua 文件的默认值 = 主 agent 验收口径）
-		CHECK(RuntimeConfig{}.meshletEnable == false);
+		CHECK(RuntimeConfig{}.meshletEnable == true);
 	}
-	{  // 缺块 = 门关（出厂态 = 逐位护栏）
+	{  // 缺块 = 出厂默认（★18-C 起 = 开）
 		TempLua f("rt_meshlet_default", "return {}\n");
-		auto r = loadRuntimeConfig(f.pathStr());
-		REQUIRE(r.has_value());
-		CHECK(r->meshletEnable == false);
-	}
-	{  // 块内键名命中（探针值 true ≠ 默认 false，漏读即红）
-		TempLua f("rt_meshlet_on", R"lua(return { meshlet = { enable = true } })lua");
 		auto r = loadRuntimeConfig(f.pathStr());
 		REQUIRE(r.has_value());
 		CHECK(r->meshletEnable == true);
 	}
-	{  // **没有**扁平键的兼容双读（两个真相源 = 本项目反复登记的反模式）
-		TempLua f("rt_meshlet_flat", R"lua(return { meshlet_enable = true })lua");
+	{  // 块内键名命中（🔴 探针值 **false** ≠ 默认 true：漏读即恒 true，显式关门会静默失效）
+		TempLua f("rt_meshlet_off", R"lua(return { meshlet = { enable = false } })lua");
 		auto r = loadRuntimeConfig(f.pathStr());
 		REQUIRE(r.has_value());
 		CHECK(r->meshletEnable == false);
+	}
+	{  // **没有**扁平键的兼容双读（两个真相源 = 本项目反复登记的反模式）
+		// 探针取 false：默认已是 true，取 true 就分不出「忽略」与「读到」。
+		TempLua f("rt_meshlet_flat", R"lua(return { meshlet_enable = false })lua");
+		auto r = loadRuntimeConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->meshletEnable == true);
 	}
 }
 
@@ -1012,35 +1016,37 @@ TEST_CASE("runtime_config：meshlet.switch（★1-a1ii-β-1 原位取代）—�
 	}
 }
 
-TEST_CASE("runtime_config：meshlet.shadow_lod（★18-B1 阴影段选级）——默认 −1、三态取值、严格整数面") {
-	// 判据来源 = 实读 readMeshletBlock / readStrictIntKey。默认 **−1 = 本档关** 是「门关逐位
-	// 不变」的配置层前提；0 与 N≥1 是两条**语义不同**的合法档（0 = §18.6 判据 2 的阳性对照
-	// L0 臂，N≥1 = uniform 选级），解析层必须原样透传、不得合并。
+TEST_CASE("runtime_config：meshlet.shadow_lod（★18-B1 阴影段选级）——默认 5、三态取值、严格整数面") {
+	// 判据来源 = 实读 readMeshletBlock / readStrictIntKey。🔴 ★18-C 起默认 **5**（用户拍板
+	// 「默认开 D=5」，与 enable = true 同时给默认，避免本键落在「开了但不生效」的形态）。
+	// −1 / 0 / N≥1 是三条**语义不同**的档（−1 = 关、0 = §18.6 判据 2 的阳性对照 L0 臂、
+	// N≥1 = uniform 选级），解析层必须原样透传、不得合并。
+	// 🔴 探针一律避开默认值 5（取 7）：默认 = 探针 ⟹ 「读到」与「静默忽略」不可区分。
 	// 变异红线声明：
-	//   ① 默认值翻成 0 → 「成员初始化」「缺块」「缺键」三条红（出厂即开阳性对照臂 = 逐位护栏失效）。
+	//   ① 默认值翻成 0 → 「成员初始化」「缺块」「缺键」三条红（出厂即开阳性对照臂）。
 	//   ② 解析层把 0 当「关」（写成 `if (v <= 0)` 而非 `< 0`）→ 「0 = L0 臂」红。
 	//      🔴 这条最要紧：0 被吞掉 ⟹ §18.6 判据 2 根本跑不出来，而截图与门关逐位同 = 假绿。
 	//   ③ 退回宽容的 readFloatKey/readBoolKey 式读法（类型错静默当缺键）→ 「非整数即失败」
 	//      四条红（字符串/布尔/小数/越界各一条，小数与越界钉的是"截断"这条独立漂移）。
-	//   ④ 加扁平键双读兼容 → 「顶层 meshlet_shadow_lod 什么都不发生」红（两个真相源反模式）。
+	//   ④ 加扁平键双读兼容 → 「顶层 meshlet_shadow_lod = 7 什么都不发生」红（两个真相源反模式）。
 	{  // 成员初始化默认路径（不看 lua 文件的默认值 = 主 agent 验收口径）
-		CHECK(RuntimeConfig{}.meshletShadowLod == -1);
+		CHECK(RuntimeConfig{}.meshletShadowLod == 5);
 	}
-	{  // 缺块 / 缺键 = 关（出厂态 = 逐位护栏）
+	{  // 缺块 / 缺键 = 出厂默认（★18-C 起 = 5）
 		TempLua f("rt_mlod_default", "return {}\n");
 		auto r = loadRuntimeConfig(f.pathStr());
 		REQUIRE(r.has_value());
-		CHECK(r->meshletShadowLod == -1);
+		CHECK(r->meshletShadowLod == 5);
 		TempLua g("rt_mlod_nokey", R"lua(return { meshlet = { enable = true } })lua");
 		auto r2 = loadRuntimeConfig(g.pathStr());
 		REQUIRE(r2.has_value());
-		CHECK(r2->meshletShadowLod == -1);
+		CHECK(r2->meshletShadowLod == 5);
 	}
-	{  // 三态取值原样透传（探针值 5 / 0 / −3 互不相同且 ≠ 默认，漏读或错并即红）
-		TempLua a("rt_mlod_five", R"lua(return { meshlet = { shadow_lod = 5 } })lua");
+	{  // 三态取值原样透传（探针值 7 / 0 / −3 互不相同且 ≠ 默认 5，漏读或错并即红）
+		TempLua a("rt_mlod_seven", R"lua(return { meshlet = { shadow_lod = 7 } })lua");
 		auto r = loadRuntimeConfig(a.pathStr());
 		REQUIRE(r.has_value());
-		CHECK(r->meshletShadowLod == 5);
+		CHECK(r->meshletShadowLod == 7);
 		TempLua b("rt_mlod_zero", R"lua(return { meshlet = { shadow_lod = 0 } })lua");
 		auto r0 = loadRuntimeConfig(b.pathStr());
 		REQUIRE(r0.has_value());
@@ -1060,11 +1066,11 @@ TEST_CASE("runtime_config：meshlet.shadow_lod（★18-B1 阴影段选级）—�
 			CHECK_FALSE(r.has_value());
 		}
 	}
-	{  // **没有**扁平键的兼容双读
-		TempLua f("rt_mlod_flat", "return { meshlet_shadow_lod = 5 }\n");
+	{  // **没有**扁平键的兼容双读（探针 7 ≠ 默认 5，否则「忽略」与「读到」不可区分）
+		TempLua f("rt_mlod_flat", "return { meshlet_shadow_lod = 7 }\n");
 		auto r = loadRuntimeConfig(f.pathStr());
 		REQUIRE(r.has_value());
-		CHECK(r->meshletShadowLod == -1);
+		CHECK(r->meshletShadowLod == 5);
 	}
 }
 

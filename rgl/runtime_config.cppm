@@ -365,17 +365,27 @@ export struct RuntimeConfig {
 	/**
 	 * 簇化渲染路径（meshlet 产物）总门（configs/runtime.lua `meshlet` 块 `enable` 键，★0-b1）。
 	 *
-	 * **默认关**（`docs/mdi_plan.md` P5 拍板：门关 = 逐位不变是硬护栏）。逐资产门不在本键——
-	 * = 「该资产有没有簇产物」（§7.8 拍板 3：产物缺失 → 回落现行路径，未打包资产零风险）。
-	 * ★0-b1 只落**配置项与读取侧模块**（`rgl/meshlet_asset.cppm`），尚未接线到任何渲染路径
-	 * ⟹ 本键当前无消费者，接线发生在 ★0-b2/★1。
+	 * 🔴 **★18-C 起默认开**（2026-10-12 用户拍板：连同 `meshlet.shadow_lod = 5` 出厂）。
+	 * 这**没有废掉 P5**（「门关 = 逐位不变是硬护栏」仍是每批改渲染的必跑判据），改的只是
+	 * **门关不再是出厂态** ⟹ 验收口径跟着变：想要门关必须**显式**给
+	 * `--set meshlet.enable=false --set meshlet.shadow_lod=-1`（旧口径「出厂默认就是门关」已失效）。
+	 * 出厂默认截图锚随之从 `54e40665…`（门关）换成 `95edc8cc…`（enable + shadow_lod=5）；
+	 * 两个锚都记在 `docs/mdi_plan.md` §18.11，引用锚的判据必须同时写明是哪一态。
 	 *
-	 * 形态先例 = readSsrBlock（嵌套块，无扁平键双读兼容——两个真相源是本项目反复登记的反
-	 * 模式）；★1-a1ii-β-1 起本块四枚布尔改走 readStrictBoolKey（类型错 = 启动失败，理由 →
-	 * 该函数注释）。gate_lint 不挂号的理由与 ssr 块同款（runtime.lua 键不在 gate_lint
-	 * 管辖的两张回显表里，→ readSsrBlock 末段）。
+	 * 拍板时明写的三条代价（读数绑本机 AMD 8060S，→ §18.9）：
+	 *  · 显存 **+175.5 MiB**（4 段簇 buffer，顶点池 138MB 占大头）
+	 *  · 启动 **+1.2s**（解析 184MB 产物 + 上传）
+	 *  · 🔴 **连带打开 α 影子叠加段 = 白付 1.59ms/帧**：`collectMeshletOverlay` 的激活条件
+	 *    只有「有簇管线条目 + 区间表存在」，**没有自己的门**。α 是 ★1-a1ii-α 的验证脚手架
+	 *    （同批几何在 opaque 之后重画一遍、靠共面 + eLess 一个像素不写），β-1 的 `switch` 档
+	 *    会把整段清空 ⟹ 它已完工却仍绑死产品路径的开关。解耦 = §18.11 欠账 ④。
+	 *
+	 * 逐资产门不在本键 = 「该资产有没有簇产物」（§7.8 拍板 3：产物缺失 → 回落现行路径，
+	 * 未打包资产零风险）。形态先例 = readSsrBlock（嵌套块，无扁平键双读兼容——两个真相源是
+	 * 本项目反复登记的反模式）；★1-a1ii-β-1 起本块布尔走 readStrictBoolKey（类型错 = 启动失败，
+	 * 理由 → 该函数注释）。gate_lint 不挂号的理由 → §18.10 欠账 ③。
 	 */
-	bool meshletEnable = false;
+	bool meshletEnable = true;
 	/**
 	 * 簇路径**阳性对照**档（configs/runtime.lua `meshlet.debug` 键，★1-a1ii-α）。
 	 *
@@ -459,25 +469,29 @@ export struct RuntimeConfig {
 	bool meshletCull = false;
 
 	/**
-	 * ★18-B1 阴影段簇路径的 **uniform 选级 D**（`runtime.lua meshlet.shadow_lod`，默认 **-1 = 关**）。
+	 * ★18-B1 阴影段簇路径的 **uniform 选级 D**（`runtime.lua meshlet.shadow_lod`）。
+	 * 🔴 **★18-C 起默认 `5`**（2026-10-12 用户拍板「默认开 D=5」；数据推荐档 = 5.10% L0 三角，§18.2）。
 	 *
 	 * 三态语义（§18.7 已定案，别再改形态）：
-	 *  · `-1`（默认）= 本档关：装配层一条阴影条目都不建、一行日志都不打（门关 grep meshlet = 0
-	 *    护栏），阴影全部走既有 `shadowPipelineIndex` 旧管线 ⟹ 逐位不变。
+	 *  · `-1` = 本档关：装配层一条阴影条目都不建、一行日志都不打，阴影全部走既有
+	 *    `shadowPipelineIndex` 旧管线 ⟹ 逐位不变。🔴 **门关现在要显式给**（出厂不再是 -1）。
 	 *  · `0` = 🔴 **阳性对照 L0 臂**（§18.6 判据 2）：同一新管线画每 prim 的 L0 前缀，先证明
-	 *    「管线画的是对的几何」，再谈 level D。
+	 *    「管线画的是对的几何」，再谈 level D。实测与门关**逐位相同**（depth-only 每纹素深度
+	 *    = 覆盖它的图元之 min，与图元序无关）⟹ 这条同时是寻址正确性的证明。
 	 *  · `N ≥ 1` = uniform 选级 D=N：每 prim 画 `min(D, 本 prim 最深级)` 那一段连续子区间
 	 *    （§18.3：每 object 的第 D 级是单一连续区间；§18.4：uniform 整级不受 §7.4 那条
 	 *    「group 粒度自适应选级」负知识影响，不读 error、不比阈值）。
 	 *
 	 * 与 `meshletEnable` 的关系：本键是**独立档**（阴影段的杠杆与主 pass 的取代档正交），但
 	 * 簇四段 buffer 的描述符槽由 `meshlet.enable` 的 wireMeshletBindings 提供 ⟹ 生效需要
-	 * `enable = true` 且本键 ≥ 0。数据推荐档 D=5 + deepest（5.10% L0 三角，§18.2）。
+	 * `enable = true` 且本键 ≥ 0。🔴 两键**同时**给默认（`enable = true` + `shadow_lod = 5`）
+	 * 正是为了不把本键放进「开了但不生效」的形态；只给本键不给 enable 时装配层出声
+	 * （→ `warnIfShadowLodOrphaned`）。画质/成本对照表（D → diff 像素）→ §18.9 末。
 	 * 🔴 类型必须是整数（走 readStrictIntKey，写成字符串/浮点 = 启动失败点名键，理由 →
 	 * readStrictBoolKey 注释那条实测纪律）。负数除 -1 以外的值不当非法（本键只把 `< 0` 当
 	 * 「关」这一件事读），但装配层不会为它们建条目以外的任何行为。
 	 */
-	int32_t meshletShadowLod = -1;
+	int32_t meshletShadowLod = 5;
 	/**
 	 * ★18-B1 阴影段簇路径的**回落策略**（`runtime.lua meshlet.shadow_lod_fallback`，默认
 	 * `"deepest"`）。仅在 `meshletShadowLod >= 0` 时有消费者。未知值 = 启动 fail-fast。
