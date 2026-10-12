@@ -78,7 +78,7 @@
 // 若引入光滑植被，减法要随 materialClass 走（届时再还，别提前加绑定、别在此早退）。
 //
 // ── 绑定面（与 CPU 侧 addSsrTraceEntry 成对；G-buffer 通道号镜像 light.frag）──
-//   3 = sceneData（import scene；@723712 ssrViewProj = 本帧**抖动后** proj·view；
+//   3 = 空位（批 N+1 起 sceneData 退役；ssrViewProj/ssrParams/ssrGate 走 binding 31；
 //       @723776 ssrParams = 尺度锚点 + 三个导出系数；@723792 ssrGate = 粗糙度门控区间
 //       （本 pass 只读 x/y，z = blurScale 是 apply 的旋钮）。
 //       各槽口径与默认值真相源 → scene_data.cppm / configs/runtime.lua `ssr` 块）
@@ -96,7 +96,7 @@
 //       specular 的镜像重算源；light.frag 的 9/10 在本 pass 号接 4-10 之后。env 未上传 =
 //       占位 0/0，shader 端 mipRange=0 不采样的契约，light.frag 同款）
 
-import scene;  // sceneData + readSsrViewProj + readSsrParams + readSsrGate + octDecode + worldFromDepth + uvFromClip + readSceneLight
+import scene;  // readSsrViewProj + readSsrParams + readSsrGate + octDecode + worldFromDepth + uvFromClip + readSceneLight
 
 [[vk::binding(4, 0)]] Texture2D<float4> sceneHdrTex;    // 本帧成片（RGBA16F 线性 HDR，全分辨率）
 [[vk::binding(5, 0)]] Texture2D<float2> normalTex;      // G-buffer oct 法线（rg16_snorm）

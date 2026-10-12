@@ -2,10 +2,10 @@
 //
 // 绑定编号的选择（本项目 binding 号是管线内唯一命名空间，两条路各自的低号段已被占满，
 // 故阴影统一排 12/13 —— 见下表与 shader_registry 的 extra 映射）：
-//   forward 模型条目：0 顶点 / 1 baseColor / 2 sampler / 3 sceneData / 4 env / 5 envSampler
+//   forward 模型条目：0 顶点 / 1 baseColor / 2 sampler / 3（空位，批 N+1 起）/ 4 env / 5 envSampler
 //                      / 6 normal / 7 orm / 8 emissive  → 9,10 空着但**保留给未来扩展**，
 //                      阴影固定用 12/13（两路一致，改一处只需改一处 mapping 逻辑）
-//   deferred light 条目：0,1 占位 / 3 sceneData / 4-7 G-buffer / 8 sampler / 9 env /
+//   deferred light 条目：0,1 占位 / 3（空位）/ 4-7 G-buffer / 8 sampler / 9 env /
 //                      10 envSampler / 11 emissive → 12/13 同样空闲
 // 结论：12/13 在**两条路上都空闲**，故取 12/13，让 shadow.slang 成为一个真正共用的契约
 // （若两条路取不同号，同一份采样代码就得复制两份 = D1 破口的老路）。

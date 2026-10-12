@@ -52,16 +52,16 @@ namespace RGL {
 		const uint32_t descriptorSize = res.getDescriptorHeap().getDescriptorSize();
 		const uint32_t samplerHeapOffset =
 			samplerSlot * res.getSamplerHeap().getDescriptorSize();
-		// Phase 5 批次 2：模型管线恒传 scene data（binding 3，幂等创建；批 M 按 SPV 声明过滤：
-		// 不声明 binding 3 的 frag/mesh 该条不烘，声明了照烘——mesh 读对象矩阵即声明方）
-		const uint32_t sceneSlot = sceneData.ensure();
+		// Phase 5 批次 2：模型管线恒要 scene data（幂等创建 buffer + 各子范围槽）。批 N+1 起
+		// 这里**不再领 binding 3 的槽号**——全区字节读已退役，各区走 fillSceneRegionSlots 的
+		// 子范围载体；批 M 按 SPV 声明过滤：不声明某 binding 的 frag/mesh 该条不烘。
+		sceneData.ensure();
 		RGL::PipelineBindings b{};
 		b.descriptorSize = descriptorSize;
 		b.slotVertex = vertexSlot;
 		b.slotIndex = vertexSlot;
 		b.slotTexture = textureSlot;
 		b.samplerHeapOffset = samplerHeapOffset;
-		b.slotSceneData = sceneSlot;
 		fillSceneRegionSlots(b);  // scene data 子范围载体（binding 表以该函数为准，别在此抄）
 		//（恒带上，SPV 未声明的那条由批 M 过滤自动裁掉——C++ 侧不登记谁用）
 		b.textured = true;
@@ -208,7 +208,7 @@ namespace RGL {
 		const uint32_t descriptorSize = res.getDescriptorHeap().getDescriptorSize();
 		const uint32_t samplerHeapOffset =
 			samplerSlot * res.getSamplerHeap().getDescriptorSize();
-		const uint32_t sceneSlot = sceneData.ensure();
+		sceneData.ensure();
 		RGL::PipelineBindings b{};
 		b.descriptorSize = descriptorSize;
 		// binding 0/1 顶点段：meshlet mesh 不声明 modelVertexBuffer（读簇顶点池 @17）⟹
@@ -218,7 +218,6 @@ namespace RGL {
 		b.slotIndex = textureSlot;
 		b.slotTexture = textureSlot;
 		b.samplerHeapOffset = samplerHeapOffset;
-		b.slotSceneData = sceneSlot;
 		fillSceneRegionSlots(b);  // scene data 子范围载体（binding 表以该函数为准，别在此抄）
 		//（恒带上，SPV 未声明的那条由批 M 过滤自动裁掉——C++ 侧不登记谁用）
 		b.textured = true;
@@ -288,7 +287,7 @@ namespace RGL {
 		b.descriptorSize = res.getDescriptorHeap().getDescriptorSize();
 		b.slotVertex = 0;
 		b.slotIndex = 1;
-		b.slotSceneData = sceneData.ensure();
+		sceneData.ensure();
 		fillSceneRegionSlots(b);  // scene data 子范围载体（binding 表以该函数为准，别在此抄）
 		//（恒带上，SPV 未声明的那条由批 M 过滤自动裁掉——C++ 侧不登记谁用）
 		b.hasSceneData = true;
@@ -326,7 +325,7 @@ namespace RGL {
 		b.descriptorSize = descriptorSize;
 		b.slotVertex = 0;   // binding 0/1 占位槽号（light mesh 不声明 = 批 M 过滤不烘，skybox 同）
 		b.slotIndex = 1;
-		b.slotSceneData = sceneData.ensure();  // binding 3：readSceneLight 单灯
+		sceneData.ensure();  // 幂等创建 scene data buffer + 各子范围槽（批 N+1 起无返回槽号）
 		fillSceneRegionSlots(b);  // scene data 子范围载体（binding 表以该函数为准，别在此抄）
 		//（恒带上，SPV 未声明的那条由批 M 过滤自动裁掉——C++ 侧不登记谁用）
 		b.hasSceneData = true;
@@ -401,7 +400,7 @@ namespace RGL {
 		b.descriptorSize = res.getDescriptorHeap().getDescriptorSize();
 		b.slotVertex = vertexSlot;  // binding 0 = 顶点 buffer 槽（modelVertexBuffer 真正消费）
 		b.slotIndex = vertexSlot;   // binding 1 = 占位槽号（shadow mesh 不声明 = 批 M 过滤不烘，同 light/ao 条目做法）
-		b.slotSceneData = sceneData.ensure();  // binding 3 = scene data（VP 区/对象矩阵/ObjectDraw）
+		sceneData.ensure();  // 幂等创建 scene data buffer + 各子范围槽（批 N+1 起无返回槽号）
 		fillSceneRegionSlots(b);  // scene data 子范围载体（binding 表以该函数为准，别在此抄）
 		//（恒带上，SPV 未声明的那条由批 M 过滤自动裁掉——C++ 侧不登记谁用）
 		b.hasSceneData = true;
@@ -443,7 +442,7 @@ namespace RGL {
 		// 过滤只敢滤没声明的）。取 0/1 两个真实存在的低段槽号。
 		b.slotVertex = 0;
 		b.slotIndex = 1;
-		b.slotSceneData = sceneData.ensure();  // binding 3：簇区间/对象矩阵/ShadowViewProj 三张表
+		sceneData.ensure();  // 幂等创建 scene data buffer + 各子范围槽（批 N+1 起无返回槽号）
 		fillSceneRegionSlots(b);  // scene data 子范围载体（binding 表以该函数为准，别在此抄）
 		//（恒带上，SPV 未声明的那条由批 M 过滤自动裁掉——C++ 侧不登记谁用）
 		b.hasSceneData = true;
@@ -493,7 +492,7 @@ namespace RGL {
 		b.descriptorSize = res.getDescriptorHeap().getDescriptorSize();
 		b.slotVertex = vertexSlot;   // binding 0（mesh 消费 modelVertexBuffer）
 		b.slotIndex = vertexSlot;    // binding 1 = 占位（两 stage 不声明，同 shadow 做法）
-		b.slotSceneData = sceneData.ensure();  // binding 3（readObjectDraw/Matrix/ShadowViewProj）
+		sceneData.ensure();  // binding 3（readObjectDraw/Matrix/ShadowViewProj）
 		fillSceneRegionSlots(b);  // scene data 子范围载体（binding 表以该函数为准，别在此抄）
 		//（恒带上，SPV 未声明的那条由批 M 过滤自动裁掉——C++ 侧不登记谁用）
 		b.hasSceneData = true;
@@ -535,7 +534,7 @@ namespace RGL {
 		// Phase 7b+（NV DGC 规避）：cube mesh 也走 readObjectMvp（binding 3 scene data，
 		// 同 model 条目恒传入——cube mesh 声明了它 ⟹ 批 M 过滤照烘；cube 的 mvp 由
 		// render_list 循环填进 mvp 表，objectIndex 有效）
-		b.slotSceneData = sceneData.ensure();
+		sceneData.ensure();
 		fillSceneRegionSlots(b);  // scene data 子范围载体（binding 表以该函数为准，别在此抄）
 		//（恒带上，SPV 未声明的那条由批 M 过滤自动裁掉——C++ 侧不登记谁用）
 		b.hasSceneData = true;

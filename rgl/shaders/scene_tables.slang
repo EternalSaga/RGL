@@ -3,7 +3,7 @@
 // 【为什么单独一个模块，而不是并进 scene.slang】
 // scene.slang 是反射管线（`rgl_reflect_slang(shaders/scene.slang shaders/scene_forward_schema.lua …)`）
 // 的输入单元，且被 `cull.comp.slang` / `meshlet_cull.comp.slang` 两个 compute **整份 import 过**
-// ——它们自带 binding 3 的独立小 buffer，与 scene.slang 的 `sceneData` 显式撞号（见两文件头注释）。
+// ——它们自带 binding 3 的独立小 buffer，历史上与 scene.slang 的 `sceneData` 显式撞号（批 N+1 起 sceneData 已退役，撞号约束消失，**但 binding 布局不挪回去**——见两文件头注释）。
 // 把 `StructuredBuffer` 声明放进 scene.slang 等于把这条撞号重新埋回去；把三个结构体搬出 scene.slang
 // 又动反射输入。故本模块只做**消费者侧**：结构体仍留在 scene.slang（反射契约零改动），本模块
 // `import scene;` 取用它们，四张表以 `StructuredBuffer<T>` 落在各自独立 binding。

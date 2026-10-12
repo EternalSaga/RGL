@@ -1,13 +1,15 @@
 // 场景级 bindless 数据契约（Phase 5 批次 2/3：光照 + 对象矩阵表）
 //
-// 单一 storage buffer（descriptor heap binding 3，Resources::ensureSceneData 创建，
-// 每帧 staging → vkCmdCopyBuffer 更新，见 vkrenderer.cppm）。
+// 物理载体 = 单一 storage buffer（Resources::ensureSceneData 创建，每帧 staging →
+// vkCmdCopyBuffer 更新，见 vkrenderer.cppm）。🔴 批 N+1 起它**没有全区 binding 号了**：
+// shader 侧一律经 12 条**子范围描述符**按类型化载体访问（binding 22/23/24/25/26/27/28/
+// 29/30/31/32/33，逐行 = SceneDataService::writeRegionDescriptors）。
 // 🔴 类型化迁移（docs/constantbuffer_迁移计划.md §9）：各区逐批从「binding 3 + 手写字节
 // 偏移」迁到**类型化载体**（本文件零字节数）；已迁区 = 湿面（binding 32，批 1）、
 // 辐照度（binding 27，批 2）、灯数组（binding 24，批 3，消费端在 lights.slang）、
 // 阴影光空间 VP（binding 28，批 S-1）、阴影采样参数（binding 29，批 S-2，含 IZB/PCSS/EVSSM）、
 // SSR（binding 31，批 S-3）、TAA（binding 30，批 S-4）、**头区**（binding 22，批 S-5）
-// —— 读取面已全量类型化，binding 3 与 sceneData 声明随批 N+1 删除。
+// —— 批 N+1 起 binding 3 与 `sceneData` 声明**已删除**，本文件零字节数、零 ByteAddressBuffer。
 // 字节布局真相源分两段（2026-09-15 勘误：旧注释称真相源 = vkresources.cppm 的
 // LightDataGpu——该类型已删）：
 //   · SceneLight（头区 @0）真相源 = **本文件**——scene_forward 反射管线从本文件
@@ -42,15 +44,12 @@
 // unlit 风格不 import 本文件）。法线变换取 mat3 直接乘（假定均匀缩放——glTF 节点
 // 基本满足；非均匀缩放失真为本期已知近似，Phase 7 真实 normalMatrix 再议）。
 
-// 🔴 批 S-5 起本声明**已无任何 .slang 消费者**（头区是最后一个迁出的区，剥注释后
-// grep sceneData 在 rgl/shaders/**.slang 命中 0 条）；Slang 把未用声明 DCE 掉 ⟹ 不进 SPV、
-// mapping 由批 M 过滤。声明与其 heap 槽留到**批 N+1** 一并删除（删除 + 永久护栏同批，
-// 见 docs/constantbuffer_迁移计划.md §9.8 N+1 行）。
-[[vk::binding(3, 0)]]
-ByteAddressBuffer sceneData;
-
-// 🔴 头区（@0 主光 / @48 env 参数 / @64 skyboxInvViewProj）批 S-5 起走**类型化 UBO**
-// （binding 22，SceneHeaderBlock）——本文件读取面零字节数。
+// 🔴 批 N+1：本文件**不再有** `ByteAddressBuffer sceneData`（binding 3）。迁移期它是
+// 「binding 3 + 手写字节偏移」那条旧路的载体，S-5 迁完头区后读取面归零 ⟹ Slang 把它
+// DCE 掉、不进任何 SPV。永久护栏 = tools/check_shader_deps.py 的 R6（任何 .slang 再出现
+// `ByteAddressBuffer sceneData` 或 `sceneData.Load` = ERROR），判据见 docs/风格检查规则.md。
+// scene data **物理 buffer 仍在**（Resources/SceneDataService 持有），只是全部经 12 条
+// 子范围描述符按类型化载体访问。
 struct SceneLight
 {
     float3 direction;  // 照射方向（世界空间，归一化）

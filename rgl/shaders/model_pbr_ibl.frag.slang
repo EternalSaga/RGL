@@ -1,10 +1,10 @@
 import model;
 import material;  // 统一 push constant（Phase 4：DrawArgs 超集）
-import scene;     // 场景级 bindless 数据（Phase 5：光照 + 对象矩阵表，binding 3；④a irradianceSH/envBrdfFactor）
+import scene;     // 场景级 bindless 数据（Phase 5：光照 binding 22 + 对象矩阵表 binding 23；④a irradianceSH/envBrdfFactor）
 import scene_tables;  // 批 T1：逐对象四张表 StructuredBuffer 读取面（binding 23/25/26/33）
 import env;       // 环境 cubemap（Phase 5.5：binding 4/5 + readEnvParams）
 import normalmap; // Phase 8 方案 A：normal 贴图标准 TBN + DX flip-G 解码（binding 6/7 消费）
-import lights;    // Phase 8 ③：前向多灯循环（sceneData 尾区 GpuLight[]，无新绑定）
+import lights;    // Phase 8 ③：前向多灯循环（灯数组区 UBO binding 24，无新绑定）
 import shadow;   // Phase 11 批 11.2：级联阴影采样（binding 12/13，与 deferred light.frag 共用）
 
 // Phase 5.5：简化 PBR + IBL。direct light = 简化 Cook-Torrance；IBL 环境项 Phase 8 ④a 升级

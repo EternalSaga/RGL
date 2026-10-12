@@ -34,7 +34,7 @@
 // 【逐位旁路】`ao.strength = 0` 时 `lerp(1.0, ao, 0) ≡ 1.0`（IEEE 精确）⟹ 本 pass 退化成
 // 一次纯拷贝，与 ao pass / tonemap 侧同一技巧。
 
-import scene;  // sceneData buffer（binding 3：@60 AO 强度 / @723584 TAA 参数）
+import scene;  // 头区 readAoStrength（binding 22）+ TAA 区 readTaaParams（binding 30）
 
 [[vk::binding(4, 0)]] Texture2D<float4> sceneHdrTex;   // 本帧成片（RGBA16F 线性 HDR）
 [[vk::binding(5, 0)]] SamplerState hdrSampler;         // 共享 sampler（linear / mipLod 0）

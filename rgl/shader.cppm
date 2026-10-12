@@ -382,7 +382,6 @@ export struct PipelineBindings {
 	uint32_t slotIndex = 0;        // binding 1（非 textured 形态）：索引槽
 	uint32_t slotTexture = 0;      // binding 1（textured 形态）：SAMPLED_IMAGE 槽
 	uint32_t samplerHeapOffset = 0;  // binding 2（textured）：sampler heap 字节偏移
-	uint32_t slotSceneData = 0;    // binding 3（hasSceneData）：scene data storage 槽
 	uint32_t slotSceneHeader = 0;  // binding 22（迁移批 S-5，hasSceneData 恒带上）：头区
 	                             // UBO 子范围槽（SceneDataService::headerSlot；裁未声明者同批 M）
 	uint32_t slotSceneWet = 0;     // binding 32（迁移批 1，hasSceneData 恒带上）：湿面区
@@ -481,9 +480,9 @@ export class RenderPipeline {
 	 * 注意：sampler 走独立 sampler heap 而非 pEmbeddedSampler——2026-08-27 spike
 	 * 交叉测试两者三驱动均 PASS（docs/archive/heap_texture_research.md §九），此处维持独立
 	 * sampler heap（docs/archive/phase3_plan.md R1 回退链的既选路径，已验证可用）。
-	 * hasSceneData=true（Phase 5 批次 2，模型形态）追加 binding 3 → scene data storage
-	 * buffer 槽（光照 + 对象矩阵表，SceneDataService::ensure；不声明 binding 3 的
-	 * mesh/unlit frag 该条被批 M 过滤掉，不再白烘）。
+	 * hasSceneData=true（Phase 5 批次 2，模型形态）追加 scene data 各**子范围**载体槽
+	 *（binding 表 = ShaderRegistry::fillSceneRegionSlots，本文件不抄；批 N+1 起**没有**
+	 * 全区 binding 3 那一条了）；SPV 未声明的那条被批 M 过滤掉，不再白烘。
 	 * hasEnv=true（Phase 5.5）追加 binding 4/5 → env cubemap 槽 + sky sampler 偏移
 	 *（仅 import env.slang 的风格消费——pbr/phong/unlit 不声明 = 批 M 后不烘）。
 	 * extra（Phase 7 D1）续 base 追加（light pass 采 G-buffer 4 RT + sampler）。
@@ -561,9 +560,10 @@ export class RenderPipeline {
 			// 表驱动而非逐条 add()：迁移加区只加一个条目，本构造函数不随区数一条条长胖
 			// （>100 代码行的拆分红线）。批 T1 的四张表只有 import scene_tables.slang 且真用到
 			// 某张表的条目才在 SPV 里声明它（未用到的被 Slang 死代码消除）⟹ 烘的恰好是用的。
+			// 🔴 批 N+1：binding 3（全区 sceneData）这一条已删——scene.slang 不再声明它，
+			// 留着 = 给一个不存在的 binding 烘 mapping。
 			const std::pair<uint32_t, uint32_t> sceneRegions[] = {
-				{3, bindings.slotSceneData}, {22, bindings.slotSceneHeader},
-				{32, bindings.slotSceneWet},
+				{22, bindings.slotSceneHeader}, {32, bindings.slotSceneWet},
 				{27, bindings.slotSceneIrradiance}, {24, bindings.slotSceneLights},
 				{28, bindings.slotSceneShadowViewProj}, {29, bindings.slotSceneShadowParams},
 				{31, bindings.slotSceneSsr}, {30, bindings.slotSceneTaa},

@@ -24,7 +24,7 @@
 // push 块。它仍然只承载"纯索引"，符合 AGENTS 的 bindless 原则。
 
 import model;   // modelVertexBuffer（binding 0）+ ModelVertex 布局契约
-import scene;   // sceneData（binding 3）+ readObjectDraw / readObjectMatrix / readShadowViewProj
+import scene;   // 结构体与共享助手 + readObjectDraw / readObjectMatrix / readShadowViewProj
 import scene_tables;  // 批 T1：逐对象四张表 StructuredBuffer 读取面（binding 23/25/26/33）
 
 struct ShadowDrawArgs

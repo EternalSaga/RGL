@@ -36,7 +36,7 @@
 // 天空像素（深度 ≥ 0.9999）：**不施加自旋补偿**但仍做相机重投影（与 taa.frag:533 同判据）
 // —— 天空在无穷远，相机旋转时它在屏幕上确实会动，FSR 需要这个速度。
 
-import scene;  // sceneData buffer + 共享的 worldFromDepth / mulM / uvFromClip（批 14.4 抬升）
+import scene;  // 头区 UBO（binding 22）+ 共享的 worldFromDepth / mulM / uvFromClip（批 14.4 抬升）
 
 [[vk::binding(4, 0)]] Texture2D<float> depthTex;  // eD32Sfloat 深度图（eDepth aspect）
 

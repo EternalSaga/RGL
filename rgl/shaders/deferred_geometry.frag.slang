@@ -1,11 +1,11 @@
 import model;
 import material;  // 统一 push constant（DrawArgs 超集）
-import scene;     // 场景级 bindless（binding 3：对象矩阵表，worldPos/worldNormal）
+import scene;     // 场景级 bindless（binding 23 对象矩阵表，worldPos/worldNormal）
 import scene_tables;  // 批 T1：逐对象四张表 StructuredBuffer 读取面（binding 23/25/26/33）
 import normalmap;  // Phase 8 方案 A：normal 贴图标准 TBN + DX flip-G 解码（binding 6/7 消费）
 
 // Phase 7 D1：G-buffer 几何 pass fragment。复用 model.mesh.slang（同 ModelVertexOutput、
-// 同绑定 binding0 顶点/1 baseColorTex/2 sampler/3 sceneData/6 normalTex/7 ormTex），
+// 同绑定 binding0 顶点/1 baseColorTex/2 sampler/3 空位/6 normalTex/7 ormTex），
 // **不做光照**——只把材质几何/外观属性写进 4 个 MRT，供 light pass 光照。材质数据与
 // forward 严格同源（albedo = baseColor.rgb × baseColorTexture；法线 = 导数 TBN 后世界
 // 法线 oct 编码（Phase 8 ③a normal 贴图，DX flip-G + Z 重建）；metal/rough = 材质 factor

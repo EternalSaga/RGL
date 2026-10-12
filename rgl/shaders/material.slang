@@ -7,7 +7,8 @@
 //
 // Phase 7b+（NV DGC 规避，最终形态）：DrawArgs 只剩 objectIndex（4B）。原 mvp /
 // totalTriangles / vertexOffset / baseColor / roughnessMetallic 全部迁入 scene data
-// per-object 表（scene.slang readObjectMvp / readObjectDraw，binding 3 按 objectIndex 读）。
+// per-object 表（scene.slang readObjectMvp = binding 25 / readObjectDraw = binding 26，
+// 按 objectIndex 读）。
 // 原因：NV 驱动 DGC PUSH token 在"push 字节数 × 序列数"较大时于命令生成阶段挂死
 //（Xid 109 CTX SWITCH TIMEOUT，实测 100B→~112 序列崩、36B→~1200 崩、4B→1591 全量不崩）；
 // 压到 4B 彻底绕开。所有值仍是 CPU 同一份（render_list 算好写表），shader 不做矩阵乘法，

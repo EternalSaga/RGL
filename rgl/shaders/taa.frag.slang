@@ -73,7 +73,7 @@
 //   （mode 9 诊断图，js=1 同相位 17 帧）。剩下的 0.38% 落在真平坦区——糊一个平坦区还是那个平坦值，
 //   所以给它加盒下限是**只付风险不拿收益**（盒变宽 = 鬼影保护变松）。诊断开关已随定案删除。
 
-import scene;  // sceneData buffer（binding 3：@64 invViewProj + TAA 尾区 @723456 起）
+import scene;  // 头区 readSkyInvViewProj（binding 22）+ TAA 区读取面（binding 30）
 
 [[vk::binding(4, 0)]] Texture2D<float4> colorTex;    // 本帧成片（RGBA16F 线性 HDR）
 [[vk::binding(5, 0)]] Texture2D<float4> historyTex;  // taa_hist = 上一帧 taa_out 帧末 blit

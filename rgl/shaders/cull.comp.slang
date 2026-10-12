@@ -34,7 +34,7 @@
 //     | @4 total u32（thread0 每帧写 push.sequenceCount——DGC sequenceCountAddress
 //     指向此处，非紧凑 = candidate 数；可见数 = CPU 读回序列 meshCmd 位统计）
 //     🔴 批 T1 起本 binding 从 3 挪到 4：本文件 `import scene;`（取 ObjectMatrix 类型）后，
-//     scene.slang 的 `sceneData` 声明占着 binding 3，同占一个显式 binding = slangc
+//     【历史】scene.slang 的 `sceneData` 声明曾占着 binding 3，同占一个显式 binding = slangc
 //     `warning[E39001] explicit binding overlap`（sceneData 未用到 → 不进 SPV，但警告
 //     恒出声）。挪号只动本 compute 自己的私有布局（C++ 侧 gpu_cull_impl.cppm 同步）。
 import scene;         // ObjectMatrix 类型（批 T1：逐对象表的结构体仍在 scene.slang = 反射契约）

@@ -1,4 +1,4 @@
-import scene;   // sceneData（binding 3）+ readObjectClusterRange / readObjectMatrix / readShadowViewProj
+import scene;   // 结构体与共享助手 + readObjectClusterRange / readObjectMatrix / readShadowViewProj
 import scene_tables;  // 批 T1：逐对象四张表 StructuredBuffer 读取面（binding 23/25/26/33）
 
 // 簇化轴 ★18-B1：阴影段 depth-only 的**簇路径** mesh shader（docs/mdi_plan.md §18.5 前置清单 /

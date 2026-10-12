@@ -39,7 +39,7 @@ readonly ByteAddressBuffer clusters;     // 簇头段（DiskCluster，44B/条）
 RWByteAddressBuffer clusterVisible;      // u32 × itemCount（1 = 可见；mesh shader 按 cullBase+簇内序读）
 
 // 🔴 clusterVisible 的 binding 号在批 T1 从 3 挪到 4：本文件 `import scene;` 后，scene.slang
-// 的 `sceneData` 声明占着 binding 3，同占显式 binding = slangc `warning[E39001] explicit
+// 【历史】的 `sceneData` 声明占着 binding 3，同占显式 binding = slangc `warning[E39001] explicit
 // binding overlap`（sceneData 未用到 → 不进 SPV，但警告恒出声）。本 compute 的 binding 布局是
 // 私有的（mesh shader 侧读标志表走的是**另一条**管线布局），挪号只需同步
 // meshlet_cull_service_impl.cppm 的 binding→槽表。

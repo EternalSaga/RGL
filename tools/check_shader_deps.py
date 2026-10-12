@@ -51,6 +51,18 @@ R4  StructuredBuffer 元素 stride 对账（**R3 能窄化的前提**，同一�
     已知射程外（读数在汇总行出声，别读成"0 条违规"）：① `Interlocked*` 同样吃字节偏移，
     未纳入棘轮；② 偏移字面量若**先存进变量再传参**（`const uint o = 48u; buf.Load(o)`）
     本规则看不见——棘轮数的是"调用点内联字面量"，不是"字节偏移总量"。
+ R6  **scene data 全区字节读永久退役**（批 N+1，2026-10-13；判据 =
+    docs/constantbuffer_迁移计划.md §2 的成功判据「偏移写不出来了」的机器形态）：
+    任何 `rgl/shaders/**.slang`（剥注释后）出现 `ByteAddressBuffer sceneData` 声明或
+    `sceneData.Load*/Store*` 读写 = **ERROR**（不是警告——这条没有"存量"要棘轮，命中即回归）。
+    与 R5 的分工要说清，否则后来人会以为 R5 已经够了：R5 是**棘轮**（别的 ByteAddressBuffer
+    允许有裸偏移，只准减），R6 是**绝对禁令**（只认 `sceneData` 这一个名字，没有基线、
+    没有豁免、没有下调命令）。scene data 的**物理 buffer 仍然存在**，R6 禁的是"绕过类型化
+    载体直接按字节读它"这条旧路，不是禁 buffer。
+    🔴 **自检先于判据**（形态先例 = R5 的「基线不可用 ⟹ 声明本次未做任何对账」）：一条
+    "什么都没找到"的规则与一条"扫错了目录"的规则**输出一模一样**。故 R6 先要求扫描面里
+    确实有 `scene.slang`（sceneData 曾经的唯一声明地、也是这条规则唯一可能咬人的文件），
+    看不见它 ⟹ ERROR「本次未做任何对账」，绝不把"零命中"当成"已退役"。
 
 ## 输出形态与退出码（先例 = tools/checks/main.py）
 
@@ -145,6 +157,34 @@ RE_BAB_CALL = re.compile(
 # 裸十进制字面量：数字且左侧不是标识符字符/点（`kVertexStride2` 的 2、`float4x4` 的 4
 # 都不算；`48u` / `24` / `0x10` 都算）。
 RE_BARE_DECIMAL = re.compile(r"(?<![A-Za-z0-9_.])\d")
+
+
+# ─── R6：scene data 全区字节读**永久退役**（批 N+1，2026-10-13）───────────────
+# 判据 = docs/constantbuffer_迁移计划.md §2 的成功判据「偏移写不出来了」的机器形态。
+# 迁移期各区逐批从 `ByteAddressBuffer sceneData` + 手写字节偏移迁到类型化载体；批 N+1 删掉
+# 声明本身之后，"再写回去"必须是**构建期出声**的事，而不是靠 code review 记着。
+# 与 R5 的分工：R5 是**棘轮**（允许别的 ByteAddressBuffer 有裸偏移，只准减），R6 是**绝对
+# 禁令**（只针对 sceneData 这一个名字，没有基线、没有豁免、没有下调）。
+SCENE_DATA_BUFFER_NAME = "sceneData"
+RE_SCENE_DATA_DECL = re.compile(r"\bByteAddressBuffer\s*\*?\s*sceneData\b")
+RE_SCENE_DATA_READ = re.compile(r"\bsceneData\s*\.\s*(?:Load|Store)[0-9]?\b")
+# R6 的自检锚：扫描面里**必须**看到 scene.slang —— 它曾是 sceneData 的唯一声明地，
+# 也是这条规则唯一真正可能咬人的文件。看不见它 = 规则扫错了目录 = 静默失效。
+SCENE_DATA_SELF_CHECK_FILE = "scene.slang"
+
+
+def scan_scene_data_retired(texts: dict[Path, str]) -> list[tuple[Path, int, str]]:
+    """R6 扫描（输入 = 已剥注释的 {文件: 文本}）→ [(文件, 行号, 命中行文本)]。
+
+    剥注释是判据的一部分：`// sceneData.Load4(64)` 是历史散文不是调用（同 R5 的教训，
+    本仓库的注释里全是这种句子，不剥 = 满屏误报 = 第二天就被加豁免名单）。
+    """
+    hits: list[tuple[Path, int, str]] = []
+    for path, text in texts.items():
+        for lineno, line in enumerate(text.splitlines(), 1):
+            if RE_SCENE_DATA_DECL.search(line) or RE_SCENE_DATA_READ.search(line):
+                hits.append((path, lineno, line.strip()))
+    return hits
 
 
 def contract_types(generated_dir: Path) -> set[str]:
@@ -577,6 +617,30 @@ def main() -> int:
              f"R5 判不出 `{name}` 的类型（既不是 ByteAddressBuffer，也查不到任何声明）——"
              f"若它其实是 ByteAddressBuffer，**它的裸偏移本次漏检了**（R5 自曝盲区）")
 
+    # ── R6：scene data 全区字节读永久退役（批 N+1，判据 §2「偏移写不出来了」）────
+    # 🔴 自检先于判据（形态先例 = R5 的「基线不可用 ⟹ 声明本次未做任何对账」）：
+    # 一条「什么都没找到」的规则，与一条「扫错了目录」的规则，输出**一模一样**。所以先证明
+    # 扫描面里确实有 scene.slang（sceneData 曾经的唯一声明地），再谈"零命中 = 干净"。
+    sd_scanned = {p.name for p in shader_texts}
+    if SCENE_DATA_SELF_CHECK_FILE not in sd_scanned:
+        sd_ok = False
+        err(f"{rel(SHADERS_DIR)}",
+            f"R6 本次**未做任何对账**：扫描面（现 {len(shader_texts)} 个 .slang）里没有 "
+            f"{SCENE_DATA_SELF_CHECK_FILE}——sceneData 曾经的唯一声明地不在射程内，"
+            f"「零命中」是扫错目录的产物，不是干净；请勿把「零警告」读成「已退役」")
+    else:
+        sd_ok = True
+        for path, lineno, line in scan_scene_data_retired(shader_texts):
+            err(f"{rel(path)}:{lineno}",
+                f"R6 禁止 scene data 全区字节读：`{SCENE_DATA_BUFFER_NAME}` 声明/读写已随批 N+1 "
+                f"永久退役（各区走类型化子范围载体，binding 表见 scene.slang 头注释）。"
+                f"要加新区 → 加契约 struct + schema 登记 + SceneDataService 子范围槽，"
+                f"**不是**把字节读写回来。命中 = `{line}`")
+    if sd_ok:
+        sd_hits = len(scan_scene_data_retired(shader_texts))
+    else:
+        sd_hits = -1
+
     for loc, msg in errors:
         print(f"\033[1;31m[shader-dep-check-ERROR] {loc}: {msg}\033[0m")
     for loc, msg in warnings:
@@ -586,7 +650,9 @@ def main() -> int:
           f"{len(calls)} 个 rgl_shader target、{len(slang_files)} 个 .slang、"
           f"StructuredBuffer 使用 {len(sb_uses)} 处（契约类型 {len(contracts)} 个放行面）、"
           f"R5 裸字节偏移 "
-          f"{'**无读数 = 本次未做任何对账**' if bo_allowed < 0 else f'当前 {bo_cur} 条 / 基线 {bo_allowed} 条（{len(bo_counts)} 个 .slang 参与）'}）")
+          f"{'**无读数 = 本次未做任何对账**' if bo_allowed < 0 else f'当前 {bo_cur} 条 / 基线 {bo_allowed} 条（{len(bo_counts)} 个 .slang 参与）'}、"
+          f"R6 sceneData 全区读 "
+          f"{'**本次未做任何对账**' if sd_hits < 0 else f'{sd_hits} 处命中（必须 0）'}）")
 
     if args.emit_manifest and manifest_rows:
         out = Path(args.emit_manifest)

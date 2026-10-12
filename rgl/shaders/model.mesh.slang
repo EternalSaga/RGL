@@ -1,7 +1,7 @@
 import model;
 import material;  // 统一 push constant（Phase 4：DrawArgs 超集；Phase 7b+ push 仅 objectIndex，
                   // totalTriangles/baseColor 等经 scene data ObjectDraw 表读取）
-import scene;     // Phase 7b+：readObjectMvp（binding 3 scene data，mvp 从 heap 读不走 push）
+import scene;     // Phase 7b+：readObjectMvp（binding 25 对象 MVP 表，mvp 从 heap 读不走 push）
 import scene_tables;  // 批 T1：逐对象四张表 StructuredBuffer 读取面（binding 23/25/26/33）
 
 // 无 task stage：一次 mesh 调用 = 一个 group，group 序号 = SV_GroupID.x

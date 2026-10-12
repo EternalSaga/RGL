@@ -36,7 +36,7 @@ namespace RGL {
 		b.descriptorSize = descriptorSize;
 		b.slotVertex = 0;   // binding 0/1 占位（tonemap mesh = light.mesh 全屏大三角，不声明顶点）
 		b.slotIndex = 1;
-		b.slotSceneData = sceneData.ensure();  // binding 3：@56 曝光 + @60 AO 强度
+		sceneData.ensure();  // 幂等创建 scene data buffer + 各子范围槽（批 N+1 起无返回槽号）
 		fillSceneRegionSlots(b);  // scene data 子范围载体（binding 表以该函数为准，别在此抄）
 		//（恒带上，SPV 未声明的那条由批 M 过滤自动裁掉——C++ 侧不登记谁用）
 		b.hasSceneData = true;
@@ -73,7 +73,7 @@ namespace RGL {
 		b.descriptorSize = descriptorSize;
 		b.slotVertex = 0;   // binding 0/1 占位（ao mesh = light.mesh 全屏大三角，不声明顶点）
 		b.slotIndex = 1;
-		b.slotSceneData = sceneData.ensure();  // binding 3：@12 eyePos + @64 invViewProj
+		sceneData.ensure();  // 幂等创建 scene data buffer + 各子范围槽（批 N+1 起无返回槽号）
 		fillSceneRegionSlots(b);  // scene data 子范围载体（binding 表以该函数为准，别在此抄）
 		//（恒带上，SPV 未声明的那条由批 M 过滤自动裁掉——C++ 侧不登记谁用）
 		b.hasSceneData = true;
@@ -108,7 +108,7 @@ namespace RGL {
 		b.descriptorSize = descriptorSize;
 		b.slotVertex = 0;   // binding 0/1 占位（velocity mesh = light.mesh 全屏大三角）
 		b.slotIndex = 1;
-		b.slotSceneData = sceneData.ensure();  // binding 3：@64 + TAA 尾区
+		sceneData.ensure();  // 幂等创建 scene data buffer + 各子范围槽（批 N+1 起无返回槽号）
 		fillSceneRegionSlots(b);  // scene data 子范围载体（binding 表以该函数为准，别在此抄）
 		//（恒带上，SPV 未声明的那条由批 M 过滤自动裁掉——C++ 侧不登记谁用）
 		b.hasSceneData = true;
@@ -141,7 +141,7 @@ namespace RGL {
 		b.descriptorSize = descriptorSize;
 		b.slotVertex = 0;   // binding 0/1 占位（mesh = light.mesh 全屏大三角，不声明顶点）
 		b.slotIndex = 1;
-		b.slotSceneData = sceneData.ensure();  // binding 3：@60 AO 强度 + @723584 c_t
+		sceneData.ensure();  // 幂等创建 scene data buffer + 各子范围槽（批 N+1 起无返回槽号）
 		fillSceneRegionSlots(b);  // scene data 子范围载体（binding 表以该函数为准，别在此抄）
 		//（恒带上，SPV 未声明的那条由批 M 过滤自动裁掉——C++ 侧不登记谁用）
 		b.hasSceneData = true;
@@ -174,7 +174,7 @@ uint32_t ShaderRegistry::addTaaEntry(uint32_t colorSlot, uint32_t historySlot,
 		b.descriptorSize = descriptorSize;
 		b.slotVertex = 0;   // binding 0/1 占位（taa mesh = light.mesh.spv 全屏大三角）
 		b.slotIndex = 1;
-		b.slotSceneData = sceneData.ensure();  // binding 3：@723456 起 TAA 尾区 + @64 重建
+		sceneData.ensure();  // 幂等创建 scene data buffer + 各子范围槽（批 N+1 起无返回槽号）
 		fillSceneRegionSlots(b);  // scene data 子范围载体（binding 表以该函数为准，别在此抄）
 		//（恒带上，SPV 未声明的那条由批 M 过滤自动裁掉——C++ 侧不登记谁用）
 		b.hasSceneData = true;
@@ -220,7 +220,7 @@ uint32_t ShaderRegistry::addTaaEntry(uint32_t colorSlot, uint32_t historySlot,
 		b.descriptorSize = descriptorSize;
 		b.slotVertex = 0;   // binding 0/1 占位（mesh = light.mesh 全屏大三角，不声明顶点）
 		b.slotIndex = 1;
-		b.slotSceneData = sceneData.ensure();  // binding 3：@723712 ssrViewProj（ray march 投回屏幕）
+		sceneData.ensure();  // 幂等创建 scene data buffer + 各子范围槽（批 N+1 起无返回槽号）
 		fillSceneRegionSlots(b);  // scene data 子范围载体（binding 表以该函数为准，别在此抄）
 		//（恒带上，SPV 未声明的那条由批 M 过滤自动裁掉——C++ 侧不登记谁用）
 		b.hasSceneData = true;
@@ -284,7 +284,7 @@ uint32_t ShaderRegistry::addTaaEntry(uint32_t colorSlot, uint32_t historySlot,
 		b.descriptorSize = descriptorSize;
 		b.slotVertex = 0;   // binding 0/1 占位（mesh = light.mesh 全屏大三角，不声明顶点）
 		b.slotIndex = 1;
-		b.slotSceneData = sceneData.ensure();  // binding 3：本 pass 不读，但管线布局要求占位
+		sceneData.ensure();  // 幂等创建 scene data buffer + 各子范围槽（批 N+1 起无返回槽号）
 		fillSceneRegionSlots(b);  // scene data 子范围载体（binding 表以该函数为准，别在此抄）
 		//（恒带上，SPV 未声明的那条由批 M 过滤自动裁掉——C++ 侧不登记谁用）
 		b.hasSceneData = true;

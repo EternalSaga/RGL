@@ -41,14 +41,14 @@
 //     `--edge-px` 豁免带按实测重定（→ docs/phase15_plan.md §3.3 子步 B）。
 //
 // ── 绑定面（与 CPU 侧 addSsrApplyEntry 成对）──
-//   3 = sceneData（import scene；只读 @723792 ssrGate.z = blurScale，口径 → scene_data.cppm）
+//   3 = 空位（批 N+1 起 sceneData 退役；ssrGate.z = blurScale 走 readSsrGate，binding 31）
 //   4 = scene_hdr（RGBA16F 线性 HDR 成片，**Load** 直通基准）
 //   5 = ssr_trace（RGBA16F premultiplied 反射贡献，**半分辨率**，模糊 taps 用 Sample）
 //   6 = gbuffer_metalrough（RGBA8_UNORM .g=rough，模糊半径的自变量）
 //   7 = sampler（共享 LINEAR/ClampToEdge；ClampToEdge 让边缘 tap 不绕回对侧 = 不产生
 //       对侧内容的假泄漏）
 
-import scene;  // sceneData + readSsrGate
+import scene;  // readSsrGate（SSR 区 UBO binding 31）
 
 [[vk::binding(4, 0)]] Texture2D<float4> sceneHdrTex;    // 本帧成片（RGBA16F，全分辨率）
 [[vk::binding(5, 0)]] Texture2D<float4> ssrTraceTex;    // premultiplied 反射贡献（半分辨率）

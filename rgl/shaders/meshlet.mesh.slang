@@ -1,6 +1,6 @@
 import model;    // ModelVertexOutput 契约（与 model 路同一输出接口 ⟹ frag 原样复用）
 import material; // 统一 push constant（DrawArgs 仅 objectIndex）
-import scene;    // readObjectMvp / readObjectClusterRange（binding 3 scene data）
+import scene;    // readObjectMvp（binding 25）/ readObjectClusterRange（binding 33）
 import scene_tables;  // 批 T1：逐对象四张表 StructuredBuffer 读取面（binding 23/25/26/33）
 
 // 簇化轴 ★1-a1ii-α″：读**簇产物**（meshlet_pack 的 4 段 GPU buffer）的 mesh shader。
@@ -56,7 +56,7 @@ ByteAddressBuffer meshletRemap;       // 扁平 u32 顶点重映射流
 // objectSlot 共享，用全局下标会让一个实例的可见性替另一个决定 = 几何凭空消失）。
 // 🔴 本 binding **无条件声明**——mesh SPV 只有一份，β-1 取代档与 cull 档共用，而 descriptor heap
 // 下「shader 声明了 binding 却无 mapping」是 VVL 错误（反向的「有 mapping 未声明」才空转无害，
-// 见 shader.cppm 的 binding 3 注释）。⟹ 门关时装配层照样建 buffer 并**填全 1**，本行恒不成立。
+// 见 shader.cppm 的 binding 布局注释）。⟹ 门关时装配层照样建 buffer 并**填全 1**，本行恒不成立。
 [[vk::binding(21, 0)]]
 // 🔴 用 `ByteAddressBuffer` 而非 `StructuredBuffer<uint>`：后者触 `shader_dep_check` **R3 红线**
 // （任何 .slang 出现 StructuredBuffer = ERROR，全库零使用、**无豁免清单**，出处 git:调试历史

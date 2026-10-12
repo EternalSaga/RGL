@@ -111,7 +111,7 @@ export class ShaderRegistry {
 	 * 延迟光 = addLightEntry）——画不画 = entity 有无，无内容专属的构造期恒建条目。
 	 * @param device 设备层（RenderPipeline 创建）
 	 * @param res 资源层（heap / sampler 槽 / env——binding mapping 烘焙）
-	 * @param sceneData scene data 服务（binding 3 槽 = ensure 幂等返回，架构债务续账步骤 1）
+	 * @param sceneData scene data 服务（幂等创建 buffer + 各子范围槽，架构债务续账步骤 1）
 	 * @param env 环境服务（env 槽/sky sampler binding 4/5 烘焙，架构债务续账步骤 3）
 	 * @param specs 管线规格（scene.lua styles 表，name → SPV 路径；缺条目时
 	 *   findSpec 回落默认路径）
@@ -213,7 +213,8 @@ export class ShaderRegistry {
 	 * 顶点 slot + 纹理槽（binding 0 = 顶点 buffer 槽、binding 1 = resource heap 的
 	 * baseColor SAMPLED_IMAGE 描述符槽、binding 2 = sampler heap 槽——OpTypeSampler 映射，
 	 * 共享一份 sampler 描述符，偏移 = samplerSlot * samplerHeap.getDescriptorSize()；
-	 * binding 3 = scene data、4/5 = env 恒传入（批 M 按 SPV 声明过滤烘焙）；binding 6/7 =
+	 * scene data 各子范围载体（fillSceneRegionSlots）、4/5 = env 恒传入（批 M 按 SPV 声明
+	 * 过滤烘焙）；binding 6/7 =
 	 * normal/orm 贴图槽
 	 *（Phase 8 ③a）、binding 8 = emissive 贴图槽（Phase ③，extra 追加，见 impl））。
 	 * 首参 specName = 管线规格名（Phase 4 批次 3：风格→规格名映射在 main.cpp 经 scene.lua
@@ -288,8 +289,8 @@ export class ShaderRegistry {
 	/**
 	 * 天空盒管线条目（Phase 5.5 批次 4）：单条目（env 槽全局单例，无组合去重需求）。
 	 * mapping = binding 0/1 占位槽号（skybox shader 不声明顶点/索引 = 批 M 过滤不烘，
-	 * 槽号只是 PipelineBindings 形态的合法占位）+ binding 3 scene data（skyClipToWorld 读
-	 * invViewProj）+ binding 4/5 env（skybox.frag import env 声明——"声明未映射"才是错误，
+	 * 槽号只是 PipelineBindings 形态的合法占位）+ scene data 子范围载体（skyClipToWorld 读
+	 * invViewProj 走头区 UBO）+ binding 4/5 env（skybox.frag import env 声明——"声明未映射"才是错误，
 	 * 声明了 ⟹ 过滤后照烘）。
 	 * 前提 = env 已上传（main 调用点保证）；幂等（既有 "skybox" 条目直接返回下标）。
 	 * @return 条目下标；规格缺失 / env 未上传抛 runtime_error
@@ -456,7 +457,8 @@ export class ShaderRegistry {
 	 * shadow.frag.spv）。
 	 *
 	 * **为何按 vertexSlot 去重而不按六元组**：模型条目要区分 baseColor/normal/orm/
-	 * emissive 四个纹理槽，而阴影 mesh 只读 modelVertexBuffer（binding 0）与 sceneData（binding 3）
+	 * emissive 四个纹理槽，而阴影 mesh 只读 modelVertexBuffer（binding 0）与 scene data
+	 * 子范围载体（对象 MVP / 阴影 VP / ObjectDraw）
 	 * ——纹理槽外的一切都不消费，因此唯一变量就是 vertexSlot。
 	 * 每个 16MB 拼接块一个槽 → bistro 约 8 个条目（而不是 1591 个）。
 	 *
@@ -567,14 +569,15 @@ export class ShaderRegistry {
 
    private:
 	/**
-	 * 把 scene data 各**子范围**载体槽号一次填进 PipelineBindings（迁移批 1/2/3 的三条 UBO 子范围
-	 * + 类型化迁移批 T1 的四张逐对象表 SSBO 子范围，共 binding 32/27/24/23/25/26/33）。
-	 *
+	 * 把 scene data 各**子范围**载体槽号一次填进 PipelineBindings（UBO 子范围 = 迁移批
+	 * 1/2/3/S-1/S-2/S-3/S-4/S-5，逐对象表 SSBO 子范围 = 批 T1）。🔴 binding 号与字段的一一对应
+	 * 以**本函数体为唯一真相源**，本文不抄表（抄一次漂一次，S-1 起每批都在加行）。	 *
 	 * 15 处条目装配点（:impl 8 + :fullscreen 7）同一段赋值，抽成一处：这些 binding **恒带上、
 	 * 不在 C++ 侧登记谁用**，SPV 没声明的那条由批 M 的声明过滤自动裁掉（§9.3/§9.7）——
 	 * 「谁用哪张表」的唯一判据是 SPV 声明，C++ 侧再抄一份就是双源。
-	 * 注：binding 3（全区字节读旧路）不在本函数内，各装配点自己写（它带各自的用途注释）。
-	 * @param b 待填的 mapping 烘焙参数（只写上述七个字段，其余不动）
+	 * 🔴 批 N+1 起 scene data **没有全区 binding 3 了**（`ByteAddressBuffer sceneData` 声明已删，
+	 * 护栏 = check_shader_deps.py R6）⟹ 本函数就是 scene data 下发面的**全部**。
+	 * @param b 待填的 mapping 烘焙参数（只写本函数体内出现的那些字段，其余不动）
 	 */
 	void fillSceneRegionSlots(RGL::PipelineBindings& b);
 
@@ -703,7 +706,7 @@ export class ShaderRegistry {
 
 	RGL::DeviceContext& device;  // 设备层引用（RenderPipeline 创建）
 	RGL::Resources& res;         // 资源层引用（heap / sampler 槽 / env 烘焙）
-	RGL::SceneDataService& sceneData;  // scene data 服务引用（binding 3 槽烘焙；架构债务续账步骤 1）
+	RGL::SceneDataService& sceneData;  // scene data 服务引用（各子范围槽烘焙；架构债务续账步骤 1）
 	RGL::Environment& env;  // 环境服务引用（env 槽 + sky sampler binding 4/5 烘焙；架构债务续账步骤 3）
 	RGL::AssetTable& assets;  // 资产表引用（bindPipelineToAsset 回写；F 拆出）
 	std::map<std::string, RGL::PipelineSpec> styles;          // 风格名 → SPV 规格（scene.lua）

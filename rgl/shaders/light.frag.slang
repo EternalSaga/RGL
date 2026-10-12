@@ -1,4 +1,4 @@
-import scene;    // binding 3：sceneData + SceneLight/readSceneLight（共享 eyePos/ambient）
+import scene;    // SceneLight/readSceneLight（共享 eyePos/ambient，头区 UBO binding 22）
 import lights;   // 多灯：readLightCount/readGpuLight（lights 自带 binding 24 载体，不再 import scene）
 import sky;      // skybox 射线重建：skyClipToWorld（读 @64 invViewProj）——skybox 背景合成
 import shadow;   // Phase 11 批 11.2：级联阴影采样（binding 12/13，与 forward 三个光照风格共用）
@@ -16,14 +16,15 @@ import shadow;   // Phase 11 批 11.2：级联阴影采样（binding 12/13，与
 //   ② skybox 背景合成——天空像素（G-buffer position 清 0 = 无几何）重建世界射线采 env
 //      cubemap（与 forward skybox.frag 同式，免 resolution）；mipRange=0 = 黑天。
 //
-// 绑定：3=sceneData（scene.slang import）；4=albedo(RGBA8_SRGB)；5=normal(RG16_SNORM oct)；
+// 绑定：（批 N+1 起 3 号位**空出**——sceneData 全区读已退役）；4=albedo(RGBA8_SRGB)；
+//      5=normal(RG16_SNORM oct)；
 //   6=worldPos(RGBA32_SFLOAT)；7=metalRough(RGBA8_UNORM .r=metal .g=rough)；8=sampler（共享）；
 //   9=envMap(TextureCube) / 10=envSampler(sky sampler)（批次 2 refine 新增）；
 //   **11=emissive(RGBA16_SFLOAT)**（Phase 8 剩余批次 B：G-buffer 第 5 通道——排在尾部是因
 //   4-10 已被旧布局占用，勿按 kGBufferAttachments 序推断 binding）。4-11 经
 //   PipelineBindings.extra 映射到 G-buffer RT / env 堆槽。
 // 注：不 import env.slang（其 envMap/envSampler 声明在 4/5，与本 pass G-buffer 冲突）——
-//   env 绑定本地声明在 9/10，env 参数（@48/@52）从 sceneData 直读（env.slang 同款布局）。
+//   env 绑定本地声明在 9/10，env 参数走 scene.slang 的 readEnvIntensity / readEnvMipRange。
 
 [[vk::binding(4, 0)]] Texture2D<float4> albedoTex;
 [[vk::binding(5, 0)]] Texture2D<float2> normalTex;
