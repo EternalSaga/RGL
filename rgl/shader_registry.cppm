@@ -567,6 +567,18 @@ export class ShaderRegistry {
 
    private:
 	/**
+	 * 把 scene data 各**子范围**载体槽号一次填进 PipelineBindings（迁移批 1/2/3 的三条 UBO 子范围
+	 * + 类型化迁移批 T1 的四张逐对象表 SSBO 子范围，共 binding 32/27/24/23/25/26/33）。
+	 *
+	 * 15 处条目装配点（:impl 8 + :fullscreen 7）同一段赋值，抽成一处：这些 binding **恒带上、
+	 * 不在 C++ 侧登记谁用**，SPV 没声明的那条由批 M 的声明过滤自动裁掉（§9.3/§9.7）——
+	 * 「谁用哪张表」的唯一判据是 SPV 声明，C++ 侧再抄一份就是双源。
+	 * 注：binding 3（全区字节读旧路）不在本函数内，各装配点自己写（它带各自的用途注释）。
+	 * @param b 待填的 mapping 烘焙参数（只写上述七个字段，其余不动）
+	 */
+	void fillSceneRegionSlots(RGL::PipelineBindings& b);
+
+	/**
 	 * 把一条 pipeline 规格对应的 mesh/fragment SPV 载入 ShaderEffect（SPV 路径来自 SceneConfig）。
 	 * @param spec 管线规格（meshSpv / fragSpv 相对路径）
 	 * @return 填好两阶段 SPV 的 ShaderEffect；任一路径加载失败抛 runtime_error（Error::describe）

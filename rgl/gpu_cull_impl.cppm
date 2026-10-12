@@ -152,8 +152,8 @@ void GpuCull::createHostRings() {
 }
 
 void GpuCull::allocRuntimeSlots() {
-	// heap 描述符槽（table/sequence/count 各一走运行时段；scene data 槽 = SceneDataService::ensure
-	// 幂等返回——main 的 C1 已建，此处只取槽号）
+	// heap 描述符槽（table/sequence/count 各一走运行时段；对象矩阵表子范围槽 =
+	// SceneDataService::objectMatrixSlot 幂等返回——main 的 C1 已建，此处只取槽号）
 	auto ensureSlot = [&](const char* name) -> uint32_t {
 		auto slotResult = resources.allocSlot(RGL::SlotSegment::Runtime, name);
 		if (!slotResult)
@@ -164,8 +164,11 @@ void GpuCull::allocRuntimeSlots() {
 	sequenceSlot = ensureSlot("cull.sequences");
 	countSlot = ensureSlot("cull.count");
 	if (nEntryStreams > 0)
-		streamsSlot = ensureSlot("cull.streams");  // scene data 槽早已被 main C1 固定，不漂移
-	sceneDataSlot = sceneData.ensure();
+		streamsSlot = ensureSlot("cull.streams");
+	// 批 T1：cull.comp.slang 的对象矩阵表改走 binding 23 的 StructuredBuffer<ObjectMatrix>
+	//（子范围描述符 = {scene data 基址 + 区基址, 区长度含哨兵}）。SceneDataService::objectMatrixSlot
+	// 内部幂等 ensure——scene data 全区槽早已被 main C1 固定，此处只取子范围槽号，不漂移。
+	objectMatrixSlot = sceneData.objectMatrixSlot();
 }
 
 void GpuCull::writeHeapDescriptors(vk::raii::Device& device) {
@@ -194,14 +197,17 @@ void GpuCull::writeHeapDescriptors(vk::raii::Device& device) {
 }
 
 void GpuCull::createCullShaders(vk::raii::Device& device) {
-	// compute shader object（stage=COMPUTE + heap bit + 4 binding 映射；
+	// compute shader object（stage=COMPUTE + heap bit + binding 映射；
 	// shader 模块 makeMappedCompute 单阶段版——push constant 无需映射条目，
 	// descriptor heap 下经 vkCmdPushDataEXT 的 push data 区自动供给）
+	// 🔴 binding 号 = cull.comp.slang 的显式声明（批 T1 后：0 表 / 2 序列 / 4 计数 / 23 对象矩阵；
+	// 旧的 1=scene data 全 buffer 字节读已删，3 号位让给 scene.slang 的 sceneData 声明避免
+	// slangc E39001 显式撞号警告）。
 	const uint32_t descriptorSize = resources.getDescriptorHeap().getDescriptorSize();
 
 	cullShader = makeMappedCompute(device, "generated_shaders/cull.comp.spv",
 		std::vector<std::pair<uint32_t, uint32_t>>{
-			{0, tableSlot}, {1, sceneDataSlot}, {2, sequenceSlot}, {3, countSlot}},
+			{0, tableSlot}, {2, sequenceSlot}, {4, countSlot}, {23, objectMatrixSlot}},
 		descriptorSize);
 
 	// stream fanout shader object（静态 DGC 路；3 binding：0=table 1=sequences(ro) 2=streams(rw)，

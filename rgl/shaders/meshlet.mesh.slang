@@ -1,6 +1,7 @@
 import model;    // ModelVertexOutput 契约（与 model 路同一输出接口 ⟹ frag 原样复用）
 import material; // 统一 push constant（DrawArgs 仅 objectIndex）
 import scene;    // readObjectMvp / readObjectClusterRange（binding 3 scene data）
+import scene_tables;  // 批 T1：逐对象四张表 StructuredBuffer 读取面（binding 23/25/26/33）
 
 // 簇化轴 ★1-a1ii-α″：读**簇产物**（meshlet_pack 的 4 段 GPU buffer）的 mesh shader。
 //

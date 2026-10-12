@@ -12,10 +12,11 @@
 //     生成 scene_forward_types_generated.cppm（逐字段 offsetof static_assert 钉死），
 //     scene_data.cppm 的 kSceneDataEnvOffset 等派生自 sizeof(SceneLight) 并 static_assert
 //     钉死各区偏移，shader 结构漂移 = C++ 编译失败；
-//   · 其余表区（@256 矩阵表 / @263424 MVP 表 / @525824 draw 表）
-//     字节字面量与 scene_data.cppm kSceneData* 手工一致（draw 表自 Phase 10 批 10.2a 起 =
-//     生成 ObjectDraw 布局 static_assert + 基址 525824 钉死断言，MVP 表仍仅对齐 assert；
-//     改字面量须两端同步。灯数组区已迁 lights.slang binding 24，不再在此列）。
+//   · 其余表区（@256 矩阵表 / @263424 MVP 表 / @525824 draw 表 / @724992 簇区间表）
+//     **批 T1 起已类型化迁出本文件** → `scene_tables.slang` 的四个 `StructuredBuffer`
+//     （binding 23 / 26 / 25 / 33），本文件只留结构体声明（= 反射契约 + 布局唯一真相源），
+//     不再有任何字节字面量。C++ 侧基址/stride 仍由 scene_data.cppm 容量常量推导 +
+//     static_assert 钉死。
 //   @0   direction vec3 | @12 eyePos vec3 | @24 color vec3（CPU 预乘 intensity）| @36 ambient vec3
 //        （两个 intensity 语义：光色在此 CPU 预乘成最终值；env intensity 是 @48 的裸标量、
 //          GPU 端乘——env 颜色在 GPU 侧无法预乘，调光两条路线各改各 config 的一个 intensity）
@@ -24,6 +25,7 @@
 //   @256 对象矩阵表（批 L 起 256B 对齐，头 128B 后为对齐间隙）：mat4 列主序 ×
 //        kSceneMatrixCapacity(4096)，[objectIndex] = spin·world
 //        （DrawArgs.objectIndex = MeshRef.objectSlot，实例级槽，Phase 6 instancing）
+//        消费端 = scene_tables.slang binding 23
 //   @262656 灯数组（lights.slang 经 binding 24 类型化消费，本文件无字节读）
 //   @263424 per-object MVP 表：mat4 列主序 × 4096，[objectIndex] = proj·view·world
 //        （Phase 7b+ NV DGC 规避：DrawArgs 去 mvp（当时 push 36B，后 bindless 化终态 4B）
@@ -64,16 +66,8 @@ struct ObjectMatrix
     float4 c0, c1, c2, c3;
 };
 
-ObjectMatrix readObjectMatrix(uint objectIndex)
-{
-    uint base = 256u + objectIndex * 64u;  // kSceneDataObjectMatrixOffset（批 L 256 对齐）
-    ObjectMatrix m;
-    m.c0 = asfloat(sceneData.Load4(base));
-    m.c1 = asfloat(sceneData.Load4(base + 16u));
-    m.c2 = asfloat(sceneData.Load4(base + 32u));
-    m.c3 = asfloat(sceneData.Load4(base + 48u));
-    return m;
-}
+// 表读取函数 readObjectMatrix / readObjectMvp 已迁 **scene_tables.slang**（批 T1，
+// StructuredBuffer<ObjectMatrix> @binding 23 / 26）——本文件零字节数，消费端 import 它。
 
 // per-object MVP（列主序 4 列显式读，返回 ObjectMatrix 结构，消费方用 clipPos 列组合——
 // 不用 float4x4(c0,c1,c2,c3)：Slang/HLSL 该构造把入参当【行】，会把列主序内存读成转置，
@@ -83,26 +77,17 @@ float4 clipPos(ObjectMatrix m, float3 p)
     return m.c0 * p.x + m.c1 * p.y + m.c2 * p.z + m.c3;
 }
 
-ObjectMatrix readObjectMvp(uint objectIndex)
-{
-    uint base = 263424u + objectIndex * 64u;
-    ObjectMatrix m;
-    m.c0 = asfloat(sceneData.Load4(base));
-    m.c1 = asfloat(sceneData.Load4(base + 16u));
-    m.c2 = asfloat(sceneData.Load4(base + 32u));
-    m.c3 = asfloat(sceneData.Load4(base + 48u));
-    return m;
-}
 
 // Phase 7b+（NV DGC 规避）：per-object 材质/几何表（DrawArgs 去 mvp 后剩余字段也进 heap，
 // push 仅留 objectIndex）。基址 @525824 = alignUp(263424+4097×64, 256)，stride 48。
 // **Phase 10 批 10.2a 单源化**：本 struct 声明 = 表布局唯一真相源——字段声明序按
-// 内存序排（scalar layout 下 0/4/8/16/32 无 padding），readObjectDraw 直接
-// Load<ObjectDraw>（编译器管偏移，无手写 Load4 链）；C API 反射（scene_forward_schema
+// 内存序排（scalar layout 下 0/4/8/16/32 无 padding），消费端 readObjectDraw 整读
+// （编译器管偏移，无手写 Load4 链）；C API 反射（scene_forward_schema
 // 登记）生成 C++ 同名 struct + 逐字段 offsetof static_assert（generated/
 // scene_forward_types_generated.cppm），手写 ObjectDrawGpu 已删。
 // 基址/stride 的 C++ 侧 = scene_data.cppm 由容量常量推导（static_assert 钉 525824）；
-// 本文件字面量与其手工一致（同 kTrianglesPerGroup 纪律）。
+// 批 T1 起读取面在 scene_tables.slang（StructuredBuffer<ObjectDraw> @binding 25），
+// 本文件不再出现该基址的字面量。
 //   @0  uint totalTriangles | uint vertexOffset | float roughness | float metallic
 //   @16 float4 baseColor
 //   @32 float4 emissive（Phase 8 ③：xyz=emissiveFactor；Phase 8 C1：w=MASK alphaCutoff，0 = 不测）
@@ -122,16 +107,12 @@ struct ObjectDraw
     }
 };
 
-ObjectDraw readObjectDraw(uint objectIndex)
-{
-    // 10.2a：Load<ObjectDraw> 整读（编译器按 scalar layout 定字段偏移 = 反射真值 =
-    // 生成的 C++ 布局）；此前手写 Load4 + asuint 链与 struct 声明是双份知识。
-    return sceneData.Load<ObjectDraw>(525824u + objectIndex * 48u);
-}
+// readObjectDraw 已迁 **scene_tables.slang**（批 T1，StructuredBuffer<ObjectDraw> @binding 25）。
 
 // 簇化轴 ★1-a1i：per-object 的**簇区间表**条目（scene data 尾区 @724992，stride 16，
 // 容量 = kSceneMatrixCapacity，按 objectIndex 索引；基址/容量 = scene_data.cppm
-// kSceneDataClusterRange* 推导 + static_assert 钉死，本文件字面量手工同源）。
+// kSceneDataClusterRange* 推导 + static_assert 钉死；批 T1 起读取面在 scene_tables.slang
+// 的 StructuredBuffer<ObjectClusterRange> @binding 33，本文件无字节字面量）。
 // 布局走与 ObjectDraw 同一条反射路（scene_forward_schema 登记 → C API 反射生成 C++
 // 同名 struct + 逐字段 offsetof static_assert），故本声明是布局唯一真相源。
 // 消费者 = ★1-a1ii-α 的 meshlet.mesh.slang（`base + (groupID.x >> 1)` = 全局簇下标（★1-a1ii-α″ 去索引发射后每簇固定 2 槽：
@@ -151,14 +132,9 @@ struct ObjectClusterRange
     uint cullBase;
 };
 
-// 簇化轴 ★1-a1ii-α：按 objectIndex 读簇区间条目。与 readObjectDraw 同纪律：
-// Load<ObjectClusterRange> 整读（scalar layout 偏移 = 反射真值 = 生成的 C++ 布局）；
-// 基址 @724992 = scene_data.cppm kSceneDataClusterRangeOffset（static_assert 钉死），
-// 本字面量与其手工一致（同 kTrianglesPerGroup 纪律，改一侧必两端同步）。
-ObjectClusterRange readObjectClusterRange(uint objectIndex)
-{
-    return sceneData.Load<ObjectClusterRange>(724992u + objectIndex * 16u);
-}
+// readObjectClusterRange 已迁 **scene_tables.slang**（批 T1，StructuredBuffer<ObjectClusterRange>
+// @binding 33）。原纪律（Load<T> 整读 = 反射真值 = 生成的 C++ 布局）不变，只是基址改由 binding
+// 承载、步长由元素类型承载，本文件不再出现 724992 / 16 的字节字面量。
 
 float3 worldPos(ObjectMatrix m, float3 p)
 {

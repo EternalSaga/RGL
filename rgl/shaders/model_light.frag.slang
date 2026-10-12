@@ -1,6 +1,7 @@
 import model;
 import material;
 import scene;
+import scene_tables;  // 批 T1：逐对象四张表 StructuredBuffer 读取面（binding 23/25/26/33）
 import env;
 import normalmap;
 import lights;

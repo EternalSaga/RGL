@@ -194,7 +194,7 @@ export class GpuCull {
 	uint32_t tableSlot = 0;  // 静态表 heap 槽（allocSlot）
 	uint32_t sequenceSlot = 0;  // 序列 buffer heap 槽
 	uint32_t countSlot = 0;  // count buffer heap 槽
-	uint32_t sceneDataSlot = 0;  // scene data heap 槽（SceneDataService::ensure 幂等返回）
+	uint32_t objectMatrixSlot = 0;  // 对象矩阵表 SSBO 子范围槽（SceneDataService::objectMatrixSlot，compute binding 23）
 
 	// 静态 shader DGC 路（spike，docs/archive/radv_static_dgc_spike.md §3.2/§3.3；
 	// nEntryStreams = 0 时以下全不创建，NV/重放路零开销）

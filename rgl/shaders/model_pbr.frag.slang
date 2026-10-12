@@ -1,6 +1,7 @@
 import model;
 import material;  // 统一 push constant（Phase 4：DrawArgs 超集）
 import scene;     // 场景级 bindless 数据（Phase 5：光照 + 对象矩阵表，binding 3）
+import scene_tables;  // 批 T1：逐对象四张表 StructuredBuffer 读取面（binding 23/25/26/33）
 
 // Phase 5 批次 3：简化 PBR（ambient + Lambert diffuse + 简化 GGX specular，Cook-Torrance
 // 单平行光形态）。世界空间光照：normal/position 经对象矩阵表（DrawArgs.objectIndex）

@@ -19,6 +19,7 @@
 import model;     // ModelVertexOutput（mesh 输出接口匹配）
 import material;  // push constant DrawArgs（objectIndex）
 import scene;     // readSceneLight / readObjectMatrix / worldPos / worldNormal
+import scene_tables;  // 批 T1：逐对象四张表 StructuredBuffer 读取面（binding 23/25/26/33）
 
 // look-dev 常量（截图迭代）。
 // **混合语义（关键，踩过一次坑）**：本 frag 输出走标准 alpha 混合

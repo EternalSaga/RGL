@@ -133,7 +133,7 @@ export class MeshletCullService {
 	VmaBuffer visibleBuffer; ///< 逐簇可见标志（device-local，启动期填 1）
 	uint32_t itemsSlot = 0;  ///< 剔除项表 heap 槽（compute binding 0）
 	uint32_t visibleBufferSlot = 0;  ///< 可见标志 heap 槽（compute binding 3 = mesh binding 21）
-	uint32_t sceneDataSlot = 0;  ///< scene data heap 槽（ensure 幂等返回，compute binding 2）
+	uint32_t objectMatrixSlot = 0;  ///< 对象矩阵表 SSBO 子范围槽（SceneDataService::objectMatrixSlot，compute binding 23）
 	uint32_t nItems = 0;  ///< 已上传的剔除项数
 	vk::raii::ShaderEXT cullShader = nullptr;  ///< meshlet_cull.comp（4 binding mapping 烘死）
 };

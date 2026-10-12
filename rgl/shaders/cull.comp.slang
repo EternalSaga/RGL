@@ -18,8 +18,9 @@
 //   cullTable (binding 0)：CullEntry × N，60B 步长（启动期一次性上传，host 写）
 //     @0  center vec3 | @12 radius | @16 objectSlot | @20 pipelineIndex | @24 groupCount
 //     @28 totalTriangles | @32 vertexOffset | @36 baseColor vec4 | @52 roughnessMetallic vec2
-//   sceneData (binding 1)：对象矩阵表 @256（批 L 256B 对齐；mat4 列主序 × kSceneMatrixCapacity，
-//     [objectSlot] = spin·world，render_list 每帧写全量——被剔对象不留陈值）
+//   sceneData → **binding 23 `StructuredBuffer<ObjectMatrix>`**（批 T1 类型化迁出字节读）：
+//     区基址（旧 @256）由描述符子范围承载、步长由元素类型承载，本文件零字节字面量。
+//     [objectSlot] = spin·world，render_list 每帧写全量——被剔对象不留陈值
 //   sequences (binding 2)：per-candidate **固定槽**（非紧凑——不可见序列 meshCmd.x=0
 //     = no-op draw，顺序 = candidate 序 = CPU entity 迭代序 → 重放序与 CPU 完全一致，
 //     截图 BIT-IDENTICAL 前提；紧凑化是后续优化，会破坏顺序确定性）。120B 步长：
@@ -29,16 +30,21 @@
 //     @8   DrawArgs 4B（仅 objectIndex；CPU 写，material.slang 契约——@8..108 槽区
 //          保留 100B 宽度以维持 120B 步长，余 96B 空置不读）
 //     @108 meshCmd 12B（CPU 写基值 x=groupCount y=z=1；**GPU 覆盖 x**）
-//   count (binding 3)：@0 保留未用（旧 visible atomicAdd 无人清零已删，2026-09-15）
+//   count (binding **4**)：@0 保留未用（旧 visible atomicAdd 无人清零已删，2026-09-15）
 //     | @4 total u32（thread0 每帧写 push.sequenceCount——DGC sequenceCountAddress
 //     指向此处，非紧凑 = candidate 数；可见数 = CPU 读回序列 meshCmd 位统计）
+//     🔴 批 T1 起本 binding 从 3 挪到 4：本文件 `import scene;`（取 ObjectMatrix 类型）后，
+//     scene.slang 的 `sceneData` 声明占着 binding 3，同占一个显式 binding = slangc
+//     `warning[E39001] explicit binding overlap`（sceneData 未用到 → 不进 SPV，但警告
+//     恒出声）。挪号只动本 compute 自己的私有布局（C++ 侧 gpu_cull_impl.cppm 同步）。
+import scene;         // ObjectMatrix 类型（批 T1：逐对象表的结构体仍在 scene.slang = 反射契约）
+import scene_tables; // readObjectMatrix（binding 23 StructuredBuffer<ObjectMatrix>）
+
 [[vk::binding(0, 0)]]
 readonly ByteAddressBuffer cullTable;
-[[vk::binding(1, 0)]]
-readonly ByteAddressBuffer sceneData;
 [[vk::binding(2, 0)]]
 RWByteAddressBuffer sequences;
-[[vk::binding(3, 0)]]
+[[vk::binding(4, 0)]]
 RWByteAddressBuffer countBuf;
 
 struct CullPush
@@ -52,7 +58,6 @@ struct CullPush
 [[vk::push_constant]] CullPush push;
 
 static const uint kEntryStride = 60u;
-static const uint kSceneMatrixBase = 256u;  // 批 L：区基址 256B 对齐（scene_data.cppm kSceneDataObjectMatrixOffset 同值）
 static const uint kSequenceStride = 120u;
 
 [numthreads(64, 1, 1)]
@@ -70,13 +75,13 @@ void main(uint3 tid : SV_DispatchThreadID)
     uint objectSlot = cullTable.Load(base + 16u);
     uint groupCount = cullTable.Load(base + 24u);
 
-    // 对象世界矩阵 M（scene data @256 + slot×64，4 列显式读——scene.slang
-    // readObjectMatrix 同款，chunk j = 列 j）
-    uint mb = kSceneMatrixBase + objectSlot * 64u;
-    float4 m0 = asfloat(sceneData.Load4(mb));
-    float4 m1 = asfloat(sceneData.Load4(mb + 16u));
-    float4 m2 = asfloat(sceneData.Load4(mb + 32u));
-    float4 m3 = asfloat(sceneData.Load4(mb + 48u));
+    // 对象世界矩阵 M（binding 23 类型化读，批 T1——旧「scene data @256 + slot×64，4 列显式
+    // Load4」的字节形态已删：区基址在描述符子范围里、步长在元素类型里）
+    ObjectMatrix m = readObjectMatrix(objectSlot);
+    float4 m0 = m.c0;
+    float4 m1 = m.c1;
+    float4 m2 = m.c2;
+    float4 m3 = m.c3;
 
     // 世界球（CPU 同式：中心 = M·(c,1) 列组合，半径 = r × max(三列长度)）
     float3 wc = (m0 * c.x + m1 * c.y + m2 * c.z + m3).xyz;

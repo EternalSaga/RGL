@@ -46,9 +46,9 @@ MeshletCullService::MeshletCullService(DeviceContext& device, Resources& resourc
 	createCullShader();
 	if (auto* logger = RLLogger::getInstance())
 		logger->info("meshlet: 逐簇剔除服务已装配（★1-a2-i）—— 标志容量={} 条（槽 {}，compute "
-					 "binding 3 = mesh binding 21 同槽）；簇头复用槽 {}（mesh binding 18）；"
-					 "scene data 槽 {}；items 槽 {}（uploadItems 时建 buffer）",
-			clusterCapacity, visibleBufferSlot, clusterHeaderSlot, sceneDataSlot, itemsSlot);
+					 "binding 4 = mesh binding 21 同槽）；簇头复用槽 {}（mesh binding 18）；"
+					 "对象矩阵表子范围槽 {}（compute binding 23）；items 槽 {}（uploadItems 时建 buffer）",
+			clusterCapacity, visibleBufferSlot, clusterHeaderSlot, objectMatrixSlot, itemsSlot);
 }
 
 void MeshletCullService::allocRuntimeSlots() {
@@ -60,8 +60,9 @@ void MeshletCullService::allocRuntimeSlots() {
 	};
 	itemsSlot = ensureSlot("meshlet.cull.items");
 	visibleBufferSlot = ensureSlot("meshlet.cull.visible");
-	// scene data 槽 = 幂等取号（ShaderRegistry / SceneDataService 早已建过），只读号不重建
-	sceneDataSlot = sceneData.ensure();
+	// 批 T1：对象矩阵表子范围槽（幂等取号，内部先 ensure 全区；ShaderRegistry / SceneDataService
+	// 早已建过，这里只读号不重建）。旧的「全区字节读」槽随 compute binding 2 一起退役。
+	objectMatrixSlot = sceneData.objectMatrixSlot();
 }
 
 void MeshletCullService::createVisibleFlags() {
@@ -117,7 +118,8 @@ void MeshletCullService::createCullShader() {
 	// 「单份 buffer 跨帧复用」不是省事的选择，是这里的形状决定的（→ 类注释）。
 	cullShader = makeMappedCompute(device.getDevice(), "generated_shaders/meshlet_cull.comp.spv",
 	    std::vector<std::pair<uint32_t, uint32_t>>{
-	        {0, itemsSlot}, {1, clusterHeaderSlot}, {2, sceneDataSlot}, {3, visibleBufferSlot}},
+	        {0, itemsSlot}, {1, clusterHeaderSlot}, {4, visibleBufferSlot},
+	        {23, objectMatrixSlot}},
 	    resources.getDescriptorHeap().getDescriptorSize());
 }
 

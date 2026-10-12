@@ -20,6 +20,17 @@ namespace RGL {
 // addModelEntry/addSkyEntry/addCubeEntry/loadShaderEffect 定义（2026-09-02 编译提速
 // A 方案）：SPV 加载 + 管线创建函数体移出接口 TU；本单元是叶子边。
 
+	void ShaderRegistry::fillSceneRegionSlots(RGL::PipelineBindings& b) {
+		b.slotSceneWet = sceneData.wetSlot();  // binding 32（迁移批 1 湿面 UBO 载体）
+		b.slotSceneIrradiance = sceneData.irradianceSlot();  // binding 27（迁移批 2 辐照度 UBO 载体）
+		b.slotSceneLights = sceneData.lightSlot();  // binding 24（迁移批 3 灯数组 UBO 载体）
+		// 类型化迁移 批 T1：逐对象四张表 SSBO 子范围载体（binding 23/25/26/33）
+		b.slotObjectMatrices = sceneData.objectMatrixSlot();
+		b.slotObjectDraws = sceneData.objectDrawSlot();
+		b.slotObjectMVPs = sceneData.objectMvpSlot();
+		b.slotObjectClusterRanges = sceneData.objectClusterRangeSlot();
+	}
+
 	uint32_t ShaderRegistry::addModelEntry(const std::string& specName, uint32_t vertexSlot,
 			uint32_t textureSlot, uint32_t normalSlot, uint32_t ormSlot, uint32_t emissiveSlot,
 			uint32_t samplerSlot, uint32_t shadowMapSlot, uint32_t shadowSamplerSlot,
@@ -46,9 +57,8 @@ namespace RGL {
 		b.slotTexture = textureSlot;
 		b.samplerHeapOffset = samplerHeapOffset;
 		b.slotSceneData = sceneSlot;
-		b.slotSceneWet = sceneData.wetSlot();  // binding 32（迁移批 1 湿面 UBO 载体；批 M 过滤裁未声明者）
-		b.slotSceneIrradiance = sceneData.irradianceSlot();  // binding 27（迁移批 2 辐照度 UBO 载体；批 M 过滤裁未声明者）
-		b.slotSceneLights = sceneData.lightSlot();  // binding 24（迁移批 3 灯数组 UBO 载体；批 M 过滤裁未声明者）
+		fillSceneRegionSlots(b);  // scene data 子范围载体：binding 32/27/24 + 批 T1 的 23/25/26/33
+		//（恒带上，SPV 未声明的那条由批 M 过滤自动裁掉——C++ 侧不登记谁用）
 		b.textured = true;
 		b.hasSceneData = true;
 		// Phase 5.5：env cubemap 已上传 → 全模型条目传 binding 4/5（env 槽全局单例
@@ -204,9 +214,8 @@ namespace RGL {
 		b.slotTexture = textureSlot;
 		b.samplerHeapOffset = samplerHeapOffset;
 		b.slotSceneData = sceneSlot;
-		b.slotSceneWet = sceneData.wetSlot();  // binding 32（迁移批 1 湿面 UBO 载体；批 M 过滤裁未声明者）
-		b.slotSceneIrradiance = sceneData.irradianceSlot();  // binding 27（迁移批 2 辐照度 UBO 载体；批 M 过滤裁未声明者）
-		b.slotSceneLights = sceneData.lightSlot();  // binding 24（迁移批 3 灯数组 UBO 载体；批 M 过滤裁未声明者）
+		fillSceneRegionSlots(b);  // scene data 子范围载体：binding 32/27/24 + 批 T1 的 23/25/26/33
+		//（恒带上，SPV 未声明的那条由批 M 过滤自动裁掉——C++ 侧不登记谁用）
 		b.textured = true;
 		b.hasSceneData = true;
 		if (const auto* envAsset = env.get()) {
@@ -275,9 +284,8 @@ namespace RGL {
 		b.slotVertex = 0;
 		b.slotIndex = 1;
 		b.slotSceneData = sceneData.ensure();
-		b.slotSceneWet = sceneData.wetSlot();  // binding 32（迁移批 1 湿面 UBO 载体；批 M 过滤裁未声明者）
-		b.slotSceneIrradiance = sceneData.irradianceSlot();  // binding 27（迁移批 2 辐照度 UBO 载体；批 M 过滤裁未声明者）
-		b.slotSceneLights = sceneData.lightSlot();  // binding 24（迁移批 3 灯数组 UBO 载体；批 M 过滤裁未声明者）
+		fillSceneRegionSlots(b);  // scene data 子范围载体：binding 32/27/24 + 批 T1 的 23/25/26/33
+		//（恒带上，SPV 未声明的那条由批 M 过滤自动裁掉——C++ 侧不登记谁用）
 		b.hasSceneData = true;
 		b.hasEnv = true;
 		b.slotEnv = envAsset->heapSlot;
@@ -314,9 +322,8 @@ namespace RGL {
 		b.slotVertex = 0;   // binding 0/1 占位槽号（light mesh 不声明 = 批 M 过滤不烘，skybox 同）
 		b.slotIndex = 1;
 		b.slotSceneData = sceneData.ensure();  // binding 3：readSceneLight 单灯
-		b.slotSceneWet = sceneData.wetSlot();  // binding 32（迁移批 1 湿面 UBO 载体；批 M 过滤裁未声明者）
-		b.slotSceneIrradiance = sceneData.irradianceSlot();  // binding 27（迁移批 2 辐照度 UBO 载体；批 M 过滤裁未声明者）
-		b.slotSceneLights = sceneData.lightSlot();  // binding 24（迁移批 3 灯数组 UBO 载体；批 M 过滤裁未声明者）
+		fillSceneRegionSlots(b);  // scene data 子范围载体：binding 32/27/24 + 批 T1 的 23/25/26/33
+		//（恒带上，SPV 未声明的那条由批 M 过滤自动裁掉——C++ 侧不登记谁用）
 		b.hasSceneData = true;
 		const uint32_t samplerHeapOffset =
 			samplerSlot * res.getSamplerHeap().getDescriptorSize();
@@ -390,9 +397,8 @@ namespace RGL {
 		b.slotVertex = vertexSlot;  // binding 0 = 顶点 buffer 槽（modelVertexBuffer 真正消费）
 		b.slotIndex = vertexSlot;   // binding 1 = 占位槽号（shadow mesh 不声明 = 批 M 过滤不烘，同 light/ao 条目做法）
 		b.slotSceneData = sceneData.ensure();  // binding 3 = scene data（VP 区/对象矩阵/ObjectDraw）
-		b.slotSceneWet = sceneData.wetSlot();  // binding 32（迁移批 1 湿面 UBO 载体；批 M 过滤裁未声明者）
-		b.slotSceneIrradiance = sceneData.irradianceSlot();  // binding 27（迁移批 2 辐照度 UBO 载体；批 M 过滤裁未声明者）
-		b.slotSceneLights = sceneData.lightSlot();  // binding 24（迁移批 3 灯数组 UBO 载体；批 M 过滤裁未声明者）
+		fillSceneRegionSlots(b);  // scene data 子范围载体：binding 32/27/24 + 批 T1 的 23/25/26/33
+		//（恒带上，SPV 未声明的那条由批 M 过滤自动裁掉——C++ 侧不登记谁用）
 		b.hasSceneData = true;
 		// textured=false → 不烘焙 binding 1 的 baseColor 形态（上面 slotIndex 占位即此）；
 		// 不烘焙 env（612）、不纹理纹理槽（6-8）——两个 shader 文件均未声明它们。
@@ -433,9 +439,8 @@ namespace RGL {
 		b.slotVertex = 0;
 		b.slotIndex = 1;
 		b.slotSceneData = sceneData.ensure();  // binding 3：簇区间/对象矩阵/ShadowViewProj 三张表
-		b.slotSceneWet = sceneData.wetSlot();  // binding 32（迁移批 1 湿面 UBO 载体；批 M 过滤裁未声明者）
-		b.slotSceneIrradiance = sceneData.irradianceSlot();  // binding 27（迁移批 2 辐照度 UBO 载体；批 M 过滤裁未声明者）
-		b.slotSceneLights = sceneData.lightSlot();  // binding 24（迁移批 3 灯数组 UBO 载体；批 M 过滤裁未声明者）
+		fillSceneRegionSlots(b);  // scene data 子范围载体：binding 32/27/24 + 批 T1 的 23/25/26/33
+		//（恒带上，SPV 未声明的那条由批 M 过滤自动裁掉——C++ 侧不登记谁用）
 		b.hasSceneData = true;
 		// textured = false → 不传 binding 1 的 baseColor 形态；不传 env、不传 6/7/8/12/13/15/16
 		// ——两个 shader 文件均未声明它们（批 M 后即使传了也不会烘，但「不传」让槽号来源
@@ -484,9 +489,8 @@ namespace RGL {
 		b.slotVertex = vertexSlot;   // binding 0（mesh 消费 modelVertexBuffer）
 		b.slotIndex = vertexSlot;    // binding 1 = 占位（两 stage 不声明，同 shadow 做法）
 		b.slotSceneData = sceneData.ensure();  // binding 3（readObjectDraw/Matrix/ShadowViewProj）
-		b.slotSceneWet = sceneData.wetSlot();  // binding 32（迁移批 1 湿面 UBO 载体；批 M 过滤裁未声明者）
-		b.slotSceneIrradiance = sceneData.irradianceSlot();  // binding 27（迁移批 2 辐照度 UBO 载体；批 M 过滤裁未声明者）
-		b.slotSceneLights = sceneData.lightSlot();  // binding 24（迁移批 3 灯数组 UBO 载体；批 M 过滤裁未声明者）
+		fillSceneRegionSlots(b);  // scene data 子范围载体：binding 32/27/24 + 批 T1 的 23/25/26/33
+		//（恒带上，SPV 未声明的那条由批 M 过滤自动裁掉——C++ 侧不登记谁用）
 		b.hasSceneData = true;
 		// 5/6/7 = IZB head/nodes/mask（frag 声明 = 必须传；mesh 不声明也无妨，过滤取并集）
 		b.extra.push_back({.binding = 5, .heapSlot = slots->head});
@@ -527,9 +531,8 @@ namespace RGL {
 		// 同 model 条目恒传入——cube mesh 声明了它 ⟹ 批 M 过滤照烘；cube 的 mvp 由
 		// render_list 循环填进 mvp 表，objectIndex 有效）
 		b.slotSceneData = sceneData.ensure();
-		b.slotSceneWet = sceneData.wetSlot();  // binding 32（迁移批 1 湿面 UBO 载体；批 M 过滤裁未声明者）
-		b.slotSceneIrradiance = sceneData.irradianceSlot();  // binding 27（迁移批 2 辐照度 UBO 载体；批 M 过滤裁未声明者）
-		b.slotSceneLights = sceneData.lightSlot();  // binding 24（迁移批 3 灯数组 UBO 载体；批 M 过滤裁未声明者）
+		fillSceneRegionSlots(b);  // scene data 子范围载体：binding 32/27/24 + 批 T1 的 23/25/26/33
+		//（恒带上，SPV 未声明的那条由批 M 过滤自动裁掉——C++ 侧不登记谁用）
 		b.hasSceneData = true;
 		auto entry = PipelineEntry{
 			.name = "cube",

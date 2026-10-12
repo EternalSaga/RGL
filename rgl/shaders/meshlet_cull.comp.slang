@@ -11,8 +11,10 @@ import meshlet_cull;   // MeshletCullItem / cullPush 契约（反射单一真相
 // （generated/meshlet_cull_types_generated.cppm），shader 侧则用 `Load<T>` 让**编译器自己**决定
 // 元素与字段位置——两侧都没有手抄的字段偏移。
 //
-// sceneData（对象矩阵表 @256 + slot×64，批 L 256B 对齐）仍写死偏移：那是 scene data 巨型异构 buffer，它的类型化
-// 是独立一条线（`docs/constantbuffer_迁移计划.md` §4 分批 + §8 R3 冲突，要逐位护栏），不在本文件顺手做。
+// sceneData（对象矩阵表）批 T1 起**已类型化**：改走 scene_tables.slang 的
+// `StructuredBuffer<ObjectMatrix>` @binding 23（区基址旧 @256 由描述符子范围承载、步长由元素
+// 类型承载，本文件零字节字面量）。scene data 其余区仍是巨型异构 buffer 的字节读，那条线在
+// `docs/constantbuffer_迁移计划.md` §9 逐批推进。
 //
 // 保守性口径（与 CPU 参考实现同式）：球心到某平面距离 < −r 才判不可见，**跨界与内含一律判可见**。
 // 误剔没有任何错误信号（图像上就是"少画一块"），所以宁可少剔。
@@ -20,26 +22,27 @@ import meshlet_cull;   // MeshletCullItem / cullPush 契约（反射单一真相
 // 矩阵约定与 cull.comp.slang 完全一致（无行/列主序歧义）：对象矩阵按"内存 chunk j = 数学列 j"
 // 处理（C++ 侧 glm 列主序），世界球心用列组合展开，不依赖 Slang 矩阵构造函数 / operator[] 语义。
 
-// 🔴 三张自建表全部用 `ByteAddressBuffer` + `Load<T>` 而非 `StructuredBuffer<T>`：后者触
-// `shader_dep_check` **R3 红线**（任何 .slang 出现 StructuredBuffer = ERROR，全库零使用、
-// **无豁免清单**，出处 git:调试历史「灰屏」(2026-06-24) stride 静默错位）。本文件一度改成类型化载体并实测
-// 全绿（ArrayStride 8/44/4、逐位不变、阳性对照成立），但**红线未撤销前不在 rgl/ 树内引入违规**
-// ——撤销条件与配套护栏见 `docs/constantbuffer_迁移计划.md` §8。
-//
-// 注意：`Load<T>` 形态下**步长与字段位置都由编译器从契约 struct 算**（`sizeof(T)` + 编译器决定的
-// 字段偏移），所以本文件仍然**没有任何手抄的字段偏移**——这与 cull.comp.slang 的手写字节偏移
-// 是两回事。R3 挡的是 stride 布局的静默偏离，不是挡"不写字面量"。
+// 🔴 三张自建表里 cullItems / clusters 用 `ByteAddressBuffer` + `Load<T>` 而非
+// `StructuredBuffer<T>`：它们的元素类型（MeshletCullItem / MeshletClusterHeader）是**本服务
+// 自己的**契约类型，载体选哪种都不影响布局真相源（`Load<T>` 已让编译器算步长与字段位置）。
+// 对象矩阵表则不同——它的类型化本身就是本批要买的东西（越界可被设备端检查覆盖 + 基址不再
+// 手抄），故走 scene_tables.slang 的 StructuredBuffer。R3 红线自 2026-10-12 窄化后只禁
+// 「无契约的裸 struct」（本文件用的全是反射生成契约类型），见 §8。
+import scene;         // ObjectMatrix 类型（批 T1：逐对象表的结构体仍在 scene.slang = 反射契约）
+import scene_tables; // readObjectMatrix（binding 23 StructuredBuffer<ObjectMatrix>）
+
 [[vk::binding(0, 0)]]
 readonly ByteAddressBuffer cullItems;    // MeshletCullItem × cullPush.itemCount
 [[vk::binding(1, 0)]]
 readonly ByteAddressBuffer clusters;     // 簇头段（DiskCluster，44B/条）
-[[vk::binding(2, 0)]]
-readonly ByteAddressBuffer sceneData;    // 对象矩阵表 @256 + objectSlot × 64
-[[vk::binding(3, 0)]]
+[[vk::binding(4, 0)]]
 RWByteAddressBuffer clusterVisible;      // u32 × itemCount（1 = 可见；mesh shader 按 cullBase+簇内序读）
 
-// 对象矩阵表基址（scene data 契约，scene.slang readObjectMatrix / cull.comp.slang 同值）
-static const uint kSceneMatrixBase = 256u;  // 批 L：区基址 256B 对齐（scene_data.cppm kSceneDataObjectMatrixOffset 同值）
+// 🔴 clusterVisible 的 binding 号在批 T1 从 3 挪到 4：本文件 `import scene;` 后，scene.slang
+// 的 `sceneData` 声明占着 binding 3，同占显式 binding = slangc `warning[E39001] explicit
+// binding overlap`（sceneData 未用到 → 不进 SPV，但警告恒出声）。本 compute 的 binding 布局是
+// 私有的（mesh shader 侧读标志表走的是**另一条**管线布局），挪号只需同步
+// meshlet_cull_service_impl.cppm 的 binding→槽表。
 
 [numthreads(64, 1, 1)]
 void main(uint3 tid : SV_DispatchThreadID)
@@ -63,12 +66,12 @@ void main(uint3 tid : SV_DispatchThreadID)
     const float3 c = cluster.center;
     const float r = cluster.radius;
 
-    // 对象世界矩阵 M（scene data @256 + slot×64，4 列显式读——cull.comp.slang:75-79 同款）
-    const uint mb = kSceneMatrixBase + item.objectSlot * 64u;
-    const float4 m0 = asfloat(sceneData.Load4(mb));
-    const float4 m1 = asfloat(sceneData.Load4(mb + 16u));
-    const float4 m2 = asfloat(sceneData.Load4(mb + 32u));
-    const float4 m3 = asfloat(sceneData.Load4(mb + 48u));
+    // 对象世界矩阵 M（binding 23 类型化读，批 T1；cull.comp.slang 同款）
+    const ObjectMatrix m = readObjectMatrix(item.objectSlot);
+    const float4 m0 = m.c0;
+    const float4 m1 = m.c1;
+    const float4 m2 = m.c2;
+    const float4 m3 = m.c3;
 
     // 世界球（与 CPU 同式：中心 = M·(c,1) 列组合，半径 = r × max(三列长度)）。
     // 🔴 缩放必须取 **max**：取小轴或非均匀缩放下会低估半径 ⟹ 把实际可见的簇判成不可见 = 误剔。

@@ -15,39 +15,39 @@ include(${CMAKE_SOURCE_DIR}/cmake/RglMeshlets.cmake)
 # ─── Shader Compilation ───────────────────────────────────────────────────────
 # rgl_shader(<name> <OUT_VAR> [<DEP>...])：短名相对 shaders/，DEP = import 契约文件。
 # （OUT_VAR 供调试；add_executable 经全局属性 RGL_SPV_OUTPUTS 汇总，勿依赖散落变量。）
-rgl_shader(cube.mesh MESH_SPV types material scene)
+rgl_shader(cube.mesh MESH_SPV types material scene scene_tables)
 rgl_shader(cube.frag FRAG_SPV types)
-rgl_shader(model.mesh MODEL_MESH_SPV model material scene)
+rgl_shader(model.mesh MODEL_MESH_SPV model material scene scene_tables)
 # 簇化轴 ★1-a1ii-α：读簇产物的 mesh shader（影子叠加）。MESHLET_DEBUG_OFFSET 变体 =
 # 阳性对照（判据 3）：门 = 选 SPV 变体不是运行时 flag（2026-10-02 slang fp 重排教训，
 # 见 RglSlang.cmake 门控变体注释）。
-rgl_shader(meshlet.mesh MESHLET_MESH_SPV model material scene)
-rgl_shader_defined(meshlet.mesh MESHLET_MESH_DEBUG_SPV MESHLET_DEBUG_OFFSET model material scene)
+rgl_shader(meshlet.mesh MESHLET_MESH_SPV model material scene scene_tables)
+rgl_shader_defined(meshlet.mesh MESHLET_MESH_DEBUG_SPV MESHLET_DEBUG_OFFSET model material scene scene_tables)
 # ★0.5-b2 共面双臂阳性对照变体（门 `meshlet.tint`）：只把着色输入写常数、clip 不动（与
 # DEBUG_OFFSET 正交，见 meshlet.mesh.slang 内注释）。tint/debug 同真时 tint 优先（不建
 # 组合变体，判据 3 只用 tint、判据 4 只用 offset）。
-rgl_shader_defined(meshlet.mesh MESHLET_MESH_TINT_SPV MESHLET_TINT model material scene)
-rgl_shader(model.frag MODEL_FRAG_SPV model material scene)
+rgl_shader_defined(meshlet.mesh MESHLET_MESH_TINT_SPV MESHLET_TINT model material scene scene_tables)
+rgl_shader(model.frag MODEL_FRAG_SPV model material scene scene_tables)
 # Phase 5 批次 3：真简化 PBR frag（mesh 复用 model.mesh.spv，import scene.slang 光照数据）
-rgl_shader(model_pbr.frag MODEL_PBR_FRAG_SPV model material scene)
+rgl_shader(model_pbr.frag MODEL_PBR_FRAG_SPV model material scene scene_tables)
 # Phase 5 批次 3：基础 Phong frag（第二条光照路线，同契约同 mesh SPV，scene.lua styles 一行切换）
-rgl_shader(model_phong.frag MODEL_PHONG_FRAG_SPV model material scene)
+rgl_shader(model_phong.frag MODEL_PHONG_FRAG_SPV model material scene scene_tables)
 # Phase 5.5：IBL 路线（model_pbr + 环境 cubemap 采样替换常 ambient；env.slang 契约）
 # Phase 8 ③a：normal 贴图导数 TBN（normalmap.slang 契约，binding 6/7 消费）
-rgl_shader(model_pbr_ibl.frag MODEL_PBR_IBL_FRAG_SPV model material scene env normalmap lights shadow)
+rgl_shader(model_pbr_ibl.frag MODEL_PBR_IBL_FRAG_SPV model material scene env normalmap lights shadow scene_tables)
 # Phase 8 植被/光源专属 frag（forward-only；mesh 复用 model.mesh.spv，import 契约同 model_pbr_ibl）
-rgl_shader(model_vegetation.frag MODEL_VEGETATION_FRAG_SPV model material scene env normalmap lights shadow)
-rgl_shader(model_light.frag MODEL_LIGHT_FRAG_SPV model material scene env normalmap lights shadow)
+rgl_shader(model_vegetation.frag MODEL_VEGETATION_FRAG_SPV model material scene env normalmap lights shadow scene_tables)
+rgl_shader(model_light.frag MODEL_LIGHT_FRAG_SPV model material scene env normalmap lights shadow scene_tables)
 # Phase 5.5 批次 4：天空盒（全屏大三角 mesh + clip→world 射线采 env cubemap frag）
 rgl_shader(skybox.mesh SKYBOX_MESH_SPV sky scene)
 rgl_shader(skybox.frag SKYBOX_FRAG_SPV sky scene env)
 # Phase 7 D1：deferred G-buffer 几何 frag（mesh 复用 model.mesh.spv，写 4 MRT，import scene 对象矩阵）
 # Phase 8 ③a：normal 贴图导数 TBN + ORM（normalmap.slang 契约，与 forward 严格同源）
-rgl_shader(deferred_geometry.frag DEFERRED_GEOM_FRAG_SPV model material scene normalmap)
+rgl_shader(deferred_geometry.frag DEFERRED_GEOM_FRAG_SPV model material scene normalmap scene_tables)
 # Phase 8 批次 F：deferred 材质类别变体（#include 本体 + MATERIAL_CLASS 宏，class 进 emissive.a；
 # DEPS 含本体——改本体必触发两变体重编译）
-rgl_shader(deferred_geometry_vegetation.frag DEFERRED_GEOM_VEG_FRAG_SPV deferred_geometry.frag model material scene normalmap)
-rgl_shader(deferred_geometry_light.frag DEFERRED_GEOM_LIGHT_FRAG_SPV deferred_geometry.frag model material scene normalmap)
+rgl_shader(deferred_geometry_vegetation.frag DEFERRED_GEOM_VEG_FRAG_SPV deferred_geometry.frag model material scene normalmap scene_tables)
+rgl_shader(deferred_geometry_light.frag DEFERRED_GEOM_LIGHT_FRAG_SPV deferred_geometry.frag model material scene normalmap scene_tables)
 # Phase 7 D1：light pass（全屏大三角 mesh + 采样 G-buffer 的 deferred 光照 frag）
 rgl_shader(light.mesh LIGHT_MESH_SPV)
 rgl_shader(light.frag LIGHT_FRAG_SPV scene lights sky shadow)
@@ -55,29 +55,29 @@ rgl_shader(light.frag LIGHT_FRAG_SPV scene lights sky shadow)
 rgl_shader_defined(light.frag LIGHT_IZB_FRAG_SPV IZB_CONSUME scene lights sky shadow)
 # 批 11.5：PCSS 接触硬化软阴影变体（-DPCSS_SOFT；阴影采样 frag 恰 4 个文件——grep "import shadow"。
 # 门关选原版 = 逐位红线构造性保证；IZB×PCSS 组合 = 双 define（registry 拼接顺序 = 此处顺序））
-rgl_shader_defined(model_pbr_ibl.frag MODEL_PBR_IBL_PCSS_FRAG_SPV PCSS_SOFT model material scene env normalmap lights shadow)
-rgl_shader_defined(model_vegetation.frag MODEL_VEGETATION_PCSS_FRAG_SPV PCSS_SOFT model material scene env normalmap lights shadow)
-rgl_shader_defined(model_light.frag MODEL_LIGHT_PCSS_FRAG_SPV PCSS_SOFT model material scene env normalmap lights shadow)
+rgl_shader_defined(model_pbr_ibl.frag MODEL_PBR_IBL_PCSS_FRAG_SPV PCSS_SOFT model material scene env normalmap lights shadow scene_tables)
+rgl_shader_defined(model_vegetation.frag MODEL_VEGETATION_PCSS_FRAG_SPV PCSS_SOFT model material scene env normalmap lights shadow scene_tables)
+rgl_shader_defined(model_light.frag MODEL_LIGHT_PCSS_FRAG_SPV PCSS_SOFT model material scene env normalmap lights shadow scene_tables)
 rgl_shader_defined(light.frag LIGHT_PCSS_FRAG_SPV PCSS_SOFT scene lights sky shadow)
 rgl_shader_defined2(light.frag LIGHT_IZB_PCSS_FRAG_SPV IZB_CONSUME PCSS_SOFT scene lights sky shadow)
 # 批 11.6d-2：EVSSM 远场软阴影变体（-DEVSSM_SOFT；同 4 个阴影采样 frag + IZB 组合，
 # 门控模式同 11.5。两门同开 = shadow.slang 内 EVSSM 优先分支）
-rgl_shader_defined(model_pbr_ibl.frag MODEL_PBR_IBL_EVSSM_FRAG_SPV EVSSM_SOFT model material scene env normalmap lights shadow)
-rgl_shader_defined(model_vegetation.frag MODEL_VEGETATION_EVSSM_FRAG_SPV EVSSM_SOFT model material scene env normalmap lights shadow)
-rgl_shader_defined(model_light.frag MODEL_LIGHT_EVSSM_FRAG_SPV EVSSM_SOFT model material scene env normalmap lights shadow)
+rgl_shader_defined(model_pbr_ibl.frag MODEL_PBR_IBL_EVSSM_FRAG_SPV EVSSM_SOFT model material scene env normalmap lights shadow scene_tables)
+rgl_shader_defined(model_vegetation.frag MODEL_VEGETATION_EVSSM_FRAG_SPV EVSSM_SOFT model material scene env normalmap lights shadow scene_tables)
+rgl_shader_defined(model_light.frag MODEL_LIGHT_EVSSM_FRAG_SPV EVSSM_SOFT model material scene env normalmap lights shadow scene_tables)
 rgl_shader_defined(light.frag LIGHT_EVSSM_FRAG_SPV EVSSM_SOFT scene lights sky shadow)
 rgl_shader_defined2(light.frag LIGHT_IZB_EVSSM_FRAG_SPV IZB_CONSUME EVSSM_SOFT scene lights sky shadow)
 # Phase 11 批 11.2：级联阴影 depth-only 管线。mesh 自带 8B push（objectIndex +
 # cascadeIndex）——**不 import material.slang**：共享的 4B DrawArgs 契约不能为阴影多加一个
 # 字段（改了 = 1591 条模型条目全重建），故阴影管线自带 push 块。frag 空壳（无输出）。
 # shadow.slang（采样契约，被 forward/deferred 两条光照路 import）无新结构体 → 不需单独反射管线。
-rgl_shader(shadow.mesh SHADOW_MESH_SPV model scene)
+rgl_shader(shadow.mesh SHADOW_MESH_SPV model scene scene_tables)
 rgl_shader(shadow.frag SHADOW_FRAG_SPV)
 # 簇化轴 ★18-B1：阴影段**簇路径** depth-only mesh（§18.5 前置清单 / §18.6 第一刀）。
 # 🔴 DEP 只有 scene：本文件不 import model（簇路径不读 modelVertexBuffer，读簇顶点池 @17）、
 # 不 import material（自带 12B push 块，理由照 shadow.mesh.slang 头注释）。frag **复用**
 # shadow.frag.spv（输出接口同为 ShadowVertexOutput）→ 本行不新增 frag target。
-rgl_shader(shadow_meshlet.mesh SHADOW_MESHLET_MESH_SPV scene)
+rgl_shader(shadow_meshlet.mesh SHADOW_MESHLET_MESH_SPV scene scene_tables)
 # Phase 8 批次 ①：HDR tonemap frag（mesh 复用 light.mesh.spv；import scene 读 @56 曝光）
 rgl_shader(tonemap.frag TONEMAP_FRAG_SPV scene)
 # Phase 11 批 11.4：SSAO frag（mesh 复用 light.mesh.spv 全屏大三角；import scene 读
@@ -95,17 +95,17 @@ rgl_shader(ssr_trace.frag SSR_TRACE_FRAG_SPV scene)
 rgl_shader(ssr_apply.frag SSR_APPLY_FRAG_SPV scene)
 rgl_shader(taa.frag TAA_FRAG_SPV scene)
 # Phase 7b（批次 5）：GPU culling compute（独立契约 cull.comp.slang 头注释，无 import 契约文件）
-rgl_shader(cull.comp CULL_SPV)
+rgl_shader(cull.comp CULL_SPV scene scene_tables)
 # 簇化轴 ★1-a2-i：逐簇视锥剔除 compute（一线程一剔除项）。契约 = meshlet_cull.slang
 #（C API 反射单一真相源，非 cull.comp 那套手写字节偏移）。🔴 契约**必须列 DEP**：漏登 =
 # 改契约不触发本 SPV 重编译（stale SPV 静默残留，check_shader_deps R1 点名）。
-rgl_shader(meshlet_cull.comp MESHLET_CULL_SPV meshlet_cull)
+rgl_shader(meshlet_cull.comp MESHLET_CULL_SPV meshlet_cull scene scene_tables)
 # 批 11.3-1d：FTIZB IZB 创建 + priming（独立契约，头注释即布局真相；heap + shader object，
 # 消费侧 = vk_renderer 门控 sandwich，docs/hfts_izb_plan.md）
 rgl_shader(izb_create.comp IZB_CREATE_SPV)
 rgl_shader(izb_prime.comp IZB_PRIME_SPV)
 # 批 11.3-1d 后半：光空间保守光栅 mask pass（mesh 形态 = shadow.mesh 镜像 + 平摊三 uv）
-rgl_shader(izb_mask.mesh IZB_MASK_MESH_SPV model scene)
+rgl_shader(izb_mask.mesh IZB_MASK_MESH_SPV model scene scene_tables)
 rgl_shader(izb_mask.frag IZB_MASK_FRAG_SPV)
 # 批 11.6d-1：EVSSM 矩派生链（图外 compute，C 方案；docs/evssm_plan.md §4.1）
 rgl_shader(evssm_moments.comp EVSSM_MOMENTS_SPV)
@@ -114,7 +114,7 @@ rgl_shader(evssm_downsample.comp EVSSM_DOWN_SPV)
 rgl_shader(picking.frag PICKING_FRAG_SPV model material)
 # Phase 10 批次 10.7：点选高亮 frag（mesh 复用 model.mesh.spv；菲涅尔边缘发光 alpha 混合
 # 叠加 scene_hdr；选中范围按 materialId 在 CPU 侧过滤 draw list，本 frag 不读选中标志）
-rgl_shader(highlight.frag HIGHLIGHT_FRAG_SPV model material scene)
+rgl_shader(highlight.frag HIGHLIGHT_FRAG_SPV model material scene scene_tables)
 # Phase 8 批次 ③b：2D 纹理 compute mip 链（独立契约 mip_gen.comp.slang 头注释，无 import 契约文件；
 # 传统 descriptor set + 经典 compute 管线，与 bindless 渲染路径隔离，见 mip_gen.cppm）
 rgl_shader(mip_gen.comp MIP_GEN_SPV)

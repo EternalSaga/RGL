@@ -1,4 +1,5 @@
 import scene;   // sceneData（binding 3）+ readObjectClusterRange / readObjectMatrix / readShadowViewProj
+import scene_tables;  // 批 T1：逐对象四张表 StructuredBuffer 读取面（binding 23/25/26/33）
 
 // 簇化轴 ★18-B1：阴影段 depth-only 的**簇路径** mesh shader（docs/mdi_plan.md §18.5 前置清单 /
 // §18.6 第一刀形态）。形态 = `meshlet.mesh.slang` 的**段寻址** × `shadow.mesh.slang` 的

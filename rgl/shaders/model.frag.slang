@@ -1,6 +1,7 @@
 import model;
 import material;  // 统一 push constant（Phase 7b+：DrawArgs 仅 objectIndex）
 import scene;     // Phase 7b+：readObjectDraw（baseColor 从 heap per-object 材质表读）
+import scene_tables;  // 批 T1：逐对象四张表 StructuredBuffer 读取面（binding 23/25/26/33）
 
 [shader("fragment")]
 float4 main(ModelVertexOutput input) : SV_Target

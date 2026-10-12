@@ -390,6 +390,14 @@ export struct PipelineBindings {
 	                             // UBO 子范围槽（SceneDataService::irradianceSlot；裁未声明者同批 M）
 	uint32_t slotSceneLights = 0;  // binding 24（迁移批 3，hasSceneData 恒带上）：灯数组区
 	                             // UBO 子范围槽（SceneDataService::lightSlot；裁未声明者同批 M）
+	// 类型化迁移 批 T1：逐对象四张表的 SSBO 子范围槽（SceneDataService::objectMatrixSlot 等）。
+	// 与上面三条同纪律 = hasSceneData 一律带上、C++ 侧不登记谁用，未声明的 binding 由批 M 的
+	// SPV 声明过滤自动裁掉。元素步长由 shader 侧 StructuredBuffer<T> 的类型给（R4 逐次构建
+	// 对账 ArrayStride == 反射 sizeof），C++ 侧不再往下传 stride。
+	uint32_t slotObjectMatrices = 0;   // binding 23：对象世界矩阵表（StructuredBuffer<ObjectMatrix>）
+	uint32_t slotObjectDraws = 0;      // binding 26：对象绘制属性表（StructuredBuffer<ObjectDraw>）
+	uint32_t slotObjectMVPs = 0;       // binding 25：对象 MVP 表（StructuredBuffer<ObjectMatrix>）
+	uint32_t slotObjectClusterRanges = 0;  // binding 33：对象簇区间表（StructuredBuffer<ObjectClusterRange>）
 	uint32_t slotEnv = 0;          // binding 4（hasEnv）：env cubemap SAMPLED_IMAGE 槽
 	uint32_t envSamplerHeapOffset = 0;  // binding 5（hasEnv）：sky sampler heap 字节偏移
 	bool textured = false;
@@ -477,7 +485,8 @@ export class RenderPipeline {
 		const uint32_t descriptorSize = bindings.descriptorSize;
 		// 容量 48（迁移批 1 从 24 抬，§9.7 红线：过滤发生在计数之后，容量必须盖过「全烘」
 		// 的最坏条目数 + 后续批 +12 binding 的扩张面）：model 条目已用 14（base 0-5 +
-		// binding 32 + extra 6/7/8/12/13/15/16），meshlet 条目再 +5 个簇 buffer（17-21）。
+		// binding 32 + extra 6/7/8/12/13/15/16），meshlet 条目再 +5 个簇 buffer（17-21），
+		// 批 T1 再 +4 张逐对象表（23/25/26/33）。
 		// 上限判据 = 最多 extra 的条目，别贴边。批 M 过滤只让**实际烘焙数**减不让它增，
 		// 越界保护（add 内 throw 点名条目）防的是未来 extra 列表继续加长时静默越界写栈。
 		VkDescriptorSetAndBindingMappingEXT mappings[48]{};
@@ -543,6 +552,13 @@ export class RenderPipeline {
 			add(27, bindings.slotSceneIrradiance * descriptorSize, descriptorSize);
 			// 迁移批 3：灯数组区 UBO 载体（binding 24），同批 1 纪律
 			add(24, bindings.slotSceneLights * descriptorSize, descriptorSize);
+			// 类型化迁移 批 T1：逐对象四张表 SSBO 载体（binding 23/25/26/33），同批 1 纪律。
+			// 只有 import scene_tables.slang 且真用到某张表的条目才在 SPV 里声明它（未用到的
+			// 表被 Slang 死代码消除掉），批 M 过滤把剩下的裁干净 ⟹ 烘的恰好是用的。
+			add(23, bindings.slotObjectMatrices * descriptorSize, descriptorSize);
+			add(25, bindings.slotObjectMVPs * descriptorSize, descriptorSize);
+			add(26, bindings.slotObjectDraws * descriptorSize, descriptorSize);
+			add(33, bindings.slotObjectClusterRanges * descriptorSize, descriptorSize);
 		}
 		if (bindings.hasEnv) {
 			// Phase 5.5：binding 4 → env cubemap（resource heap SAMPLED_IMAGE 槽）；

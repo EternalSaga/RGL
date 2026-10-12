@@ -1,6 +1,7 @@
 import model;
 import material;  // 统一 push constant（DrawArgs 超集）
 import scene;     // 场景级 bindless（binding 3：对象矩阵表，worldPos/worldNormal）
+import scene_tables;  // 批 T1：逐对象四张表 StructuredBuffer 读取面（binding 23/25/26/33）
 import normalmap;  // Phase 8 方案 A：normal 贴图标准 TBN + DX flip-G 解码（binding 6/7 消费）
 
 // Phase 7 D1：G-buffer 几何 pass fragment。复用 model.mesh.slang（同 ModelVertexOutput、

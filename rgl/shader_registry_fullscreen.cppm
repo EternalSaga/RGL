@@ -37,9 +37,8 @@ namespace RGL {
 		b.slotVertex = 0;   // binding 0/1 占位（tonemap mesh = light.mesh 全屏大三角，不声明顶点）
 		b.slotIndex = 1;
 		b.slotSceneData = sceneData.ensure();  // binding 3：@56 曝光 + @60 AO 强度
-		b.slotSceneWet = sceneData.wetSlot();  // binding 32（迁移批 1 湿面 UBO 载体；批 M 过滤裁未声明者）
-		b.slotSceneIrradiance = sceneData.irradianceSlot();  // binding 27（迁移批 2 辐照度 UBO 载体；批 M 过滤裁未声明者）
-		b.slotSceneLights = sceneData.lightSlot();  // binding 24（迁移批 3 灯数组 UBO 载体；批 M 过滤裁未声明者）
+		fillSceneRegionSlots(b);  // scene data 子范围载体：binding 32/27/24 + 批 T1 的 23/25/26/33
+		//（恒带上，SPV 未声明的那条由批 M 过滤自动裁掉——C++ 侧不登记谁用）
 		b.hasSceneData = true;
 		const uint32_t samplerHeapOffset =
 			samplerSlot * res.getSamplerHeap().getDescriptorSize();
@@ -75,9 +74,8 @@ namespace RGL {
 		b.slotVertex = 0;   // binding 0/1 占位（ao mesh = light.mesh 全屏大三角，不声明顶点）
 		b.slotIndex = 1;
 		b.slotSceneData = sceneData.ensure();  // binding 3：@12 eyePos + @64 invViewProj
-		b.slotSceneWet = sceneData.wetSlot();  // binding 32（迁移批 1 湿面 UBO 载体；批 M 过滤裁未声明者）
-		b.slotSceneIrradiance = sceneData.irradianceSlot();  // binding 27（迁移批 2 辐照度 UBO 载体；批 M 过滤裁未声明者）
-		b.slotSceneLights = sceneData.lightSlot();  // binding 24（迁移批 3 灯数组 UBO 载体；批 M 过滤裁未声明者）
+		fillSceneRegionSlots(b);  // scene data 子范围载体：binding 32/27/24 + 批 T1 的 23/25/26/33
+		//（恒带上，SPV 未声明的那条由批 M 过滤自动裁掉——C++ 侧不登记谁用）
 		b.hasSceneData = true;
 		const uint32_t samplerHeapOffset =
 			samplerSlot * res.getSamplerHeap().getDescriptorSize();
@@ -111,9 +109,8 @@ namespace RGL {
 		b.slotVertex = 0;   // binding 0/1 占位（velocity mesh = light.mesh 全屏大三角）
 		b.slotIndex = 1;
 		b.slotSceneData = sceneData.ensure();  // binding 3：@64 + TAA 尾区
-		b.slotSceneWet = sceneData.wetSlot();  // binding 32（迁移批 1 湿面 UBO 载体；批 M 过滤裁未声明者）
-		b.slotSceneIrradiance = sceneData.irradianceSlot();  // binding 27（迁移批 2 辐照度 UBO 载体；批 M 过滤裁未声明者）
-		b.slotSceneLights = sceneData.lightSlot();  // binding 24（迁移批 3 灯数组 UBO 载体；批 M 过滤裁未声明者）
+		fillSceneRegionSlots(b);  // scene data 子范围载体：binding 32/27/24 + 批 T1 的 23/25/26/33
+		//（恒带上，SPV 未声明的那条由批 M 过滤自动裁掉——C++ 侧不登记谁用）
 		b.hasSceneData = true;
 		b.extra = {
 			// 深度图（eDepth aspect）；本 shader 用 Load 直取 ⟹ 无 sampler 绑定
@@ -145,9 +142,8 @@ namespace RGL {
 		b.slotVertex = 0;   // binding 0/1 占位（mesh = light.mesh 全屏大三角，不声明顶点）
 		b.slotIndex = 1;
 		b.slotSceneData = sceneData.ensure();  // binding 3：@60 AO 强度 + @724352 c_t
-		b.slotSceneWet = sceneData.wetSlot();  // binding 32（迁移批 1 湿面 UBO 载体；批 M 过滤裁未声明者）
-		b.slotSceneIrradiance = sceneData.irradianceSlot();  // binding 27（迁移批 2 辐照度 UBO 载体；批 M 过滤裁未声明者）
-		b.slotSceneLights = sceneData.lightSlot();  // binding 24（迁移批 3 灯数组 UBO 载体；批 M 过滤裁未声明者）
+		fillSceneRegionSlots(b);  // scene data 子范围载体：binding 32/27/24 + 批 T1 的 23/25/26/33
+		//（恒带上，SPV 未声明的那条由批 M 过滤自动裁掉——C++ 侧不登记谁用）
 		b.hasSceneData = true;
 		const uint32_t samplerHeapOffset =
 			samplerSlot * res.getSamplerHeap().getDescriptorSize();
@@ -179,9 +175,8 @@ uint32_t ShaderRegistry::addTaaEntry(uint32_t colorSlot, uint32_t historySlot,
 		b.slotVertex = 0;   // binding 0/1 占位（taa mesh = light.mesh.spv 全屏大三角）
 		b.slotIndex = 1;
 		b.slotSceneData = sceneData.ensure();  // binding 3：@724224 起 TAA 尾区 + @64 重建
-		b.slotSceneWet = sceneData.wetSlot();  // binding 32（迁移批 1 湿面 UBO 载体；批 M 过滤裁未声明者）
-		b.slotSceneIrradiance = sceneData.irradianceSlot();  // binding 27（迁移批 2 辐照度 UBO 载体；批 M 过滤裁未声明者）
-		b.slotSceneLights = sceneData.lightSlot();  // binding 24（迁移批 3 灯数组 UBO 载体；批 M 过滤裁未声明者）
+		fillSceneRegionSlots(b);  // scene data 子范围载体：binding 32/27/24 + 批 T1 的 23/25/26/33
+		//（恒带上，SPV 未声明的那条由批 M 过滤自动裁掉——C++ 侧不登记谁用）
 		b.hasSceneData = true;
 		const uint32_t samplerHeapOffset =
 			samplerSlot * res.getSamplerHeap().getDescriptorSize();
@@ -226,9 +221,8 @@ uint32_t ShaderRegistry::addTaaEntry(uint32_t colorSlot, uint32_t historySlot,
 		b.slotVertex = 0;   // binding 0/1 占位（mesh = light.mesh 全屏大三角，不声明顶点）
 		b.slotIndex = 1;
 		b.slotSceneData = sceneData.ensure();  // binding 3：@724480 ssrViewProj（ray march 投回屏幕）
-		b.slotSceneWet = sceneData.wetSlot();  // binding 32（迁移批 1 湿面 UBO 载体；批 M 过滤裁未声明者）
-		b.slotSceneIrradiance = sceneData.irradianceSlot();  // binding 27（迁移批 2 辐照度 UBO 载体；批 M 过滤裁未声明者）
-		b.slotSceneLights = sceneData.lightSlot();  // binding 24（迁移批 3 灯数组 UBO 载体；批 M 过滤裁未声明者）
+		fillSceneRegionSlots(b);  // scene data 子范围载体：binding 32/27/24 + 批 T1 的 23/25/26/33
+		//（恒带上，SPV 未声明的那条由批 M 过滤自动裁掉——C++ 侧不登记谁用）
 		b.hasSceneData = true;
 		// 自身像素量全走 `Load`（不需要 sampler），binding 10 只服务命中点那**一次** `Sample`
 		// ——命中 uv 是亚像素的，必须过滤。G-buffer 通道号镜像 light.frag（5=normal/6=position/
@@ -291,9 +285,8 @@ uint32_t ShaderRegistry::addTaaEntry(uint32_t colorSlot, uint32_t historySlot,
 		b.slotVertex = 0;   // binding 0/1 占位（mesh = light.mesh 全屏大三角，不声明顶点）
 		b.slotIndex = 1;
 		b.slotSceneData = sceneData.ensure();  // binding 3：本 pass 不读，但管线布局要求占位
-		b.slotSceneWet = sceneData.wetSlot();  // binding 32（迁移批 1 湿面 UBO 载体；批 M 过滤裁未声明者）
-		b.slotSceneIrradiance = sceneData.irradianceSlot();  // binding 27（迁移批 2 辐照度 UBO 载体；批 M 过滤裁未声明者）
-		b.slotSceneLights = sceneData.lightSlot();  // binding 24（迁移批 3 灯数组 UBO 载体；批 M 过滤裁未声明者）
+		fillSceneRegionSlots(b);  // scene data 子范围载体：binding 32/27/24 + 批 T1 的 23/25/26/33
+		//（恒带上，SPV 未声明的那条由批 M 过滤自动裁掉——C++ 侧不登记谁用）
 		b.hasSceneData = true;
 		// ⚠ sampler=true 条目烘 **字节偏移**（红线同 addSsrTraceEntry 上方注释）。
 		const uint32_t samplerHeapOffset =
