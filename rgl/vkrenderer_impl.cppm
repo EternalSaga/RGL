@@ -308,13 +308,18 @@ void Renderer::createSceneStaging(RGL::Resources& vkResources) {
 			"scene objectMatrices exceeds capacity (Phase 5 contract, main startup check bypassed)"});
 	std::memcpy(stage + kSceneDataObjectMatrixOffset, list.sceneData.objectMatrices.data(),
 		matricesBytes);
-	// Phase 7 D3：多灯数组写尾区（count@base + GpuLight[count]@base+16；lightCount=0 只写 count）
+	// Phase 7 D3：多灯数组写尾区（迁移批 3：**按生成 struct 整块写** LightArrayBlock，
+	// count@0 + pad + lights[8]@16 与旧 count@base + 数组@base+16 布局逐字节同；旧的两段
+	// 字节 memcpy（含 +16 字面量）清零）。count 之外：lights 尾部 = lightArray 数组的零初始化
+	// 条目、pad = 零（旧路径这些字节留 staging 残值——shader 只读 lights[i<count]，逐位不变，
+	// 阳性对照与两档锚点实测）。
 	if (list.sceneData.lightCount > kMaxLights)
 		return std::unexpected(Error{ErrorCode::Unknown,
 			"scene lightCount exceeds kMaxLights (lights_schema.lua contract)"});
-	std::memcpy(stage + kSceneDataLightArrayOffset, &list.sceneData.lightCount, sizeof(uint32_t));
-	std::memcpy(stage + kSceneDataLightArrayOffset + 16, list.sceneData.lightArray.data(),
-		list.sceneData.lightCount * kGpuLightStride);
+	LightArrayBlock lightBlock{};
+	lightBlock.count = list.sceneData.lightCount;
+	lightBlock.lights = list.sceneData.lightArray;  // std::array<GpuLight, kMaxLights> 同型直拷
+	std::memcpy(stage + kSceneDataLightArrayOffset, &lightBlock, sizeof(lightBlock));
 	// Phase 7b+（NV DGC 规避）：per-object MVP 表上传（尾区 @kSceneDataMvpTableOffset，
 	// scene.slang readObjectMvp 消费；值 = 原 DrawArgs.mvp，位级一致）
 	const auto mvpsBytes = list.sceneData.objectMvps.size() * sizeof(glm::mat4);

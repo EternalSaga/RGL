@@ -87,17 +87,24 @@ static_assert(kSceneDataObjectMatrixOffset == 256,
 	"scene.slang readObjectMatrix / cull kSceneMatrixBase literal 256 out of sync");
 
 /** Phase 7 D3：多灯数组区（追加于对象矩阵表之后——@0-128 头逐字节不动，forward/env/sky
- * shader 零改动 diff0）。基址 = 矩阵表尾按 256 取整（= 256 + 4096×64 = 262400，
- * lights.slang kSceneDataLightArrayBase 同值）；static_assert 钉死与生成常量
- * kSceneDataLightArrayBase（lights_schema.lua）三方同步，任一侧漂移编译失败。 */
+ * shader 零改动 diff0）。基址 = 矩阵表尾按 256 取整（= 256 + 4096×64 = 262400）。
+ * 消费端（迁移批 3 起）= lights.slang `ConstantBuffer<LightArrayBlock> lightArray`
+ * （binding 24，本区**子范围 UBO 描述符**，SceneDataService::ensure 写一次）——shader 侧
+ * 零字节字面量。static_assert 的三方同步降为两方 + 测试第三算（lights.slang 字面量已清零
+ * = 被钉的第三方不存在了）：本派生式 ↔ 生成常量 kSceneDataLightArrayBase（lights_schema.lua
+ * 字面量）↔ tests/test_reflection_layout 独立重推导，矩阵容量/头尺寸单边改动仍被抓住。 */
 export inline constexpr uint32_t kSceneDataLightArrayOffset =
 	alignUp(kSceneDataObjectMatrixOffset + kSceneMatrixCapacity * kSceneMatrixStride,
 		kSceneRegionAlign);
 static_assert(kSceneDataLightArrayOffset == kSceneDataLightArrayBase,
 	"scene data light-array offset drifted from lights_schema.lua kSceneDataLightArrayBase");
 /** 灯数组区字节数 = 16B lightCount 头 + kMaxLights × kGpuLightStride（= 16 + 8×64 = 528；
- * 区布局见 lights.slang readLightCount/readGpuLight）。 */
+ * 区布局 = lights.slang LightArrayBlock 经反射，与旧字节布局逐字节同）。
+ * 🔴 本值是下游 MVP 表基址的派生输入（scene.slang readObjectMvp 字面量 263168 手工同源，
+ * 该区暂无独立 assert 链——尺寸漂移由下方 sizeof assert + schema 交叉校验先抓）。 */
 export inline constexpr uint32_t kSceneDataLightArrayBytes = 16u + kMaxLights * kGpuLightStride;
+static_assert(sizeof(LightArrayBlock) == kSceneDataLightArrayBytes,
+	"lights.slang LightArrayBlock (reflection-generated) size out of sync with region bytes");
 
 /** Phase 7b+（NV DGC 规避）：per-object MVP 表区（追加于灯数组之后——既有各区基址
  * 逐字节不动 diff0）。CPU 每帧写（值 = 原 DrawArgs.mvp，位级一致），shader
@@ -681,6 +688,9 @@ export class SceneDataService {
 	 */
 	[[nodiscard]] uint32_t ensure();
 
+	/** 对齐闸门判据（ensure 首步调用；实现见文件下方，注释在那）。 */
+	void checkAlignmentGate() const;
+
 	/** @return SceneData 设备端 buffer const 引用（drawFrame 每帧 staging copy 的
 	 * 目标；未创建 = 空句柄，drawFrame 跳过拷贝——无模型场景 ensure 未被调用） */
 	[[nodiscard]] const RGL::VmaBuffer& getBuffer() const { return sceneDataBuffer; }
@@ -705,6 +715,16 @@ export class SceneDataService {
 		return sceneIrradianceSlot;
 	}
 
+	/**
+	 * 灯数组区 UBO 子范围槽号（迁移批 3，shader 端 binding 24；用法与 wetSlot 同型，
+	 * PipelineBindings::slotSceneLights）。描述符内容 = {buffer 基址 +
+	 * kSceneDataLightArrayOffset, sizeof(LightArrayBlock)} 的 eUniformBuffer。
+	 */
+	[[nodiscard]] uint32_t lightSlot() {
+		sceneDataSlot = ensure();
+		return sceneLightArraySlot;
+	}
+
    private:
 	RGL::Resources& kernel;  // 资源内核引用（领 allocator/heap/槽）
 	RGL::DeviceContext& device;  // 设备层引用（writeResourceDescriptorsEXT）
@@ -712,8 +732,52 @@ export class SceneDataService {
 	uint32_t sceneDataSlot = 0;  // scene data 在 resource heap 的槽号（allocSlot 领取）
 	uint32_t sceneWetSlot = 0;   // 湿面区 UBO 子范围槽号（迁移批 1，binding 32）
 	uint32_t sceneIrradianceSlot = 0;  // 辐照度区 UBO 子范围槽号（迁移批 2，binding 27）
+	uint32_t sceneLightArraySlot = 0;  // 灯数组区 UBO 子范围槽号（迁移批 3，binding 24）
 	bool sceneDataReady = false;  // 就绪标记（ensure 幂等守卫）
 };
+
+/**
+ * scene data 对齐闸门（迁移批 1 引入，批 2/3 沿用；从 ensure() 拆出控复杂度）。
+ * 注：必须是类的静态成员而非文件级 static 函数——本模块是接口单元，inline 成员函数
+ * 引用 TU-local 实体会触发 clang -WTU-local-entity-exposure（-Werror）。
+ */
+void SceneDataService::checkAlignmentGate() const {
+// §9.2/§3.1 运行期对齐闸门（形态先例 = checkMeshletDeviceFit：查询 → 核对 → 点名，
+// 读数常驻日志要能抄）。判据三条：
+//   ① 子范围描述符 address 必须是 minUniformBufferOffsetAlignment（UBO）/
+//      minStorageBufferOffsetAlignment（SSBO）的整数倍（VUID-VkResourceDescriptorInfoEXT-
+//      type-12350/12351）；各区基址恒为 kSceneRegionAlign 的倍数 ⟹ 判据 = kSceneRegionAlign
+//      同时是两者的整数倍（两者皆 2 的幂，非倍数 = 该设备 256 台阶挂不上去）。
+//   ② buffer 基址本身 256 对齐（VmaAllocationCreateInfo::minAlignment 已钉，这里实测
+//      复核——VMA 给不了对齐是失败还是静默降级取决于版本，不赌）。
+//   ③ 将来走 UBO 载体的各区（§9.5：SceneHeader/LightArray/Irradiance/ShadowVP/ShadowParams/
+//      Taa/Ssr/Wet）尺寸 ≤ maxUniformBufferRange；大表走 SSBO 不受此限。
+	
+const auto limits = device.getPhysicalDevice().getProperties().limits;
+const uint64_t minUboAlign = limits.minUniformBufferOffsetAlignment;
+const uint64_t minSboAlign = limits.minStorageBufferOffsetAlignment;
+const uint32_t maxUboRange = limits.maxUniformBufferRange;
+if (auto* logger = RLLogger::getInstance())
+	logger->info("scene data 对齐闸门读数：minUniformBufferOffsetAlignment={} "
+				 "minStorageBufferOffsetAlignment={} maxUniformBufferRange={}（kSceneRegionAlign={}）",
+		minUboAlign, minSboAlign, maxUboRange, kSceneRegionAlign);
+constexpr uint32_t kLargestUboRegionBytes = std::max({kSceneDataHeaderBytes,
+	kSceneDataLightArrayBytes, kSceneDataIrradianceBytes, kSceneDataShadowMatrixBytes,
+	kSceneDataShadowAuxBytes, kSceneDataIzbBytes, kSceneDataPcssBytes, kSceneDataEvssmBytes,
+	kSceneDataTaaBytes, kSceneDataSsrBytes, kSceneDataWetBytes});
+if (minUboAlign == 0 || kSceneRegionAlign % minUboAlign != 0)
+	throw std::runtime_error(fmt::format(
+		"scene data 对齐闸门：minUniformBufferOffsetAlignment={} 不整除 kSceneRegionAlign={} —— "
+		"子范围 UBO 描述符（VUID-12350）挂不上去", minUboAlign, kSceneRegionAlign));
+if (minSboAlign == 0 || kSceneRegionAlign % minSboAlign != 0)
+	throw std::runtime_error(fmt::format(
+		"scene data 对齐闸门：minStorageBufferOffsetAlignment={} 不整除 kSceneRegionAlign={} —— "
+		"子范围 SSBO 描述符（VUID-12351）挂不上去", minSboAlign, kSceneRegionAlign));
+if (kLargestUboRegionBytes > maxUboRange)
+	throw std::runtime_error(fmt::format(
+		"scene data 对齐闸门：最大 UBO 候选区 {}B 超 maxUniformBufferRange={} —— "
+		"该区载体需改走 SSBO（§9.5）", kLargestUboRegionBytes, maxUboRange));
+}
 
 /**
  * 幂等契约见 SceneDataService::ensure 注释。实现：buffer usage =
@@ -724,46 +788,15 @@ export class SceneDataService {
  * allocSlot(Runtime, "scene.data")；描述符 = eStorageBuffer，data = buffer BDA 地址范围
  *（全 kSceneDataBytes）+ 第二槽 "scene.wet" = 湿面区子范围 eUniformBuffer（迁移批 1，
  * binding 32）+ 第三槽 "scene.irradiance" = 辐照度区子范围 eUniformBuffer（迁移批 2，
- * binding 27，三槽一次 writeResourceDescriptorsEXT）。
+ * binding 27）+ 第四槽 "scene.lights" = 灯数组区子范围 eUniformBuffer（迁移批 3，
+ * binding 24，四槽一次 writeResourceDescriptorsEXT）。
  */
 inline uint32_t SceneDataService::ensure() {
 	if (sceneDataReady)
 		return sceneDataSlot;
-	// §9.2/§3.1 运行期对齐闸门（形态先例 = checkMeshletDeviceFit：查询 → 核对 → 点名，
-	// 读数常驻日志要能抄）。判据三条：
-	//   ① 子范围描述符 address 必须是 minUniformBufferOffsetAlignment（UBO）/
-	//      minStorageBufferOffsetAlignment（SSBO）的整数倍（VUID-VkResourceDescriptorInfoEXT-
-	//      type-12350/12351）；各区基址恒为 kSceneRegionAlign 的倍数 ⟹ 判据 = kSceneRegionAlign
-	//      同时是两者的整数倍（两者皆 2 的幂，非倍数 = 该设备 256 台阶挂不上去）。
-	//   ② buffer 基址本身 256 对齐（VmaAllocationCreateInfo::minAlignment 已钉，这里实测
-	//      复核——VMA 给不了对齐是失败还是静默降级取决于版本，不赌）。
-	//   ③ 将来走 UBO 载体的各区（§9.5：SceneHeader/LightArray/Irradiance/ShadowVP/ShadowParams/
-	//      Taa/Ssr/Wet）尺寸 ≤ maxUniformBufferRange；大表走 SSBO 不受此限。
-	// 不满足 = throw 点名（静默画错是本类迁移最不能接受的失效形态，§3.4）。
-	const auto limits = device.getPhysicalDevice().getProperties().limits;
-	const uint64_t minUboAlign = limits.minUniformBufferOffsetAlignment;
-	const uint64_t minSboAlign = limits.minStorageBufferOffsetAlignment;
-	const uint32_t maxUboRange = limits.maxUniformBufferRange;
-	if (auto* logger = RLLogger::getInstance())
-		logger->info("scene data 对齐闸门读数：minUniformBufferOffsetAlignment={} "
-					 "minStorageBufferOffsetAlignment={} maxUniformBufferRange={}（kSceneRegionAlign={}）",
-			minUboAlign, minSboAlign, maxUboRange, kSceneRegionAlign);
-	constexpr uint32_t kLargestUboRegionBytes = std::max({kSceneDataHeaderBytes,
-		kSceneDataLightArrayBytes, kSceneDataIrradianceBytes, kSceneDataShadowMatrixBytes,
-		kSceneDataShadowAuxBytes, kSceneDataIzbBytes, kSceneDataPcssBytes, kSceneDataEvssmBytes,
-		kSceneDataTaaBytes, kSceneDataSsrBytes, kSceneDataWetBytes});
-	if (minUboAlign == 0 || kSceneRegionAlign % minUboAlign != 0)
-		throw std::runtime_error(fmt::format(
-			"scene data 对齐闸门：minUniformBufferOffsetAlignment={} 不整除 kSceneRegionAlign={} —— "
-			"子范围 UBO 描述符（VUID-12350）挂不上去", minUboAlign, kSceneRegionAlign));
-	if (minSboAlign == 0 || kSceneRegionAlign % minSboAlign != 0)
-		throw std::runtime_error(fmt::format(
-			"scene data 对齐闸门：minStorageBufferOffsetAlignment={} 不整除 kSceneRegionAlign={} —— "
-			"子范围 SSBO 描述符（VUID-12351）挂不上去", minSboAlign, kSceneRegionAlign));
-	if (kLargestUboRegionBytes > maxUboRange)
-		throw std::runtime_error(fmt::format(
-			"scene data 对齐闸门：最大 UBO 候选区 {}B 超 maxUniformBufferRange={} —— "
-			"该区载体需改走 SSBO（§9.5）", kLargestUboRegionBytes, maxUboRange));
+	// 对齐闸门（判据与读数注释见文件级 checkSceneDataAlignmentGate）。
+	checkAlignmentGate();
+
 
 	vk::BufferCreateInfo info{};
 	info.size = kSceneDataBytes;
@@ -804,24 +837,33 @@ inline uint32_t SceneDataService::ensure() {
 	if (!irradianceSlotResult)
 		throw std::runtime_error(irradianceSlotResult.error().describe());
 	sceneIrradianceSlot = *irradianceSlotResult;
+	// 迁移批 3：灯数组区子范围 UBO 槽（同 scene.wet 形态，§9.2 每迁一区 +1 槽）
+	auto lightSlotResult = kernel.allocSlot(RGL::SlotSegment::Runtime, "scene.lights");
+	if (!lightSlotResult)
+		throw std::runtime_error(lightSlotResult.error().describe());
+	sceneLightArraySlot = *lightSlotResult;
 
-	// 三槽一次写：scene.data = 全区 eStorageBuffer（binding 3 旧路，迁移期保留）；
+	// 四槽一次写：scene.data = 全区 eStorageBuffer（binding 3 旧路，迁移期保留）；
 	// scene.wet = {基址 + kSceneDataWetOffset, sizeof(WetParamsBlock)} 的 eUniformBuffer
 	//（binding 32）；scene.irradiance = {基址 + kSceneDataIrradianceOffset,
-	// sizeof(IrradianceBlock)} 的 eUniformBuffer（binding 27，迁移批 2）。子范围 address
-	// 对齐 = 基址 256（minAlignment）+ 区基址 256 台阶（本文件顶部布局红线）⟹ 恒过
-	// VUID-12350；闸门读数见上。
-	std::array<vk::DeviceAddressRangeEXT, 3> ranges{{
+	// sizeof(IrradianceBlock)} 的 eUniformBuffer（binding 27，迁移批 2）；scene.lights =
+	// {基址 + kSceneDataLightArrayOffset, sizeof(LightArrayBlock)} 的 eUniformBuffer
+	//（binding 24，迁移批 3）。子范围 address 对齐 = 基址 256（minAlignment）+ 区基址
+	// 256 台阶（本文件顶部布局红线）⟹ 恒过 VUID-12350；闸门读数见上。
+	std::array<vk::DeviceAddressRangeEXT, 4> ranges{{
 		{sceneDataBuffer.getDeviceAddress(), kSceneDataBytes},
 		{sceneDataBuffer.getDeviceAddress() + kSceneDataWetOffset, sizeof(WetParamsBlock)},
-		{sceneDataBuffer.getDeviceAddress() + kSceneDataIrradianceOffset, sizeof(IrradianceBlock)}}};
-	std::array<vk::ResourceDescriptorInfoEXT, 3> descs{};
+		{sceneDataBuffer.getDeviceAddress() + kSceneDataIrradianceOffset, sizeof(IrradianceBlock)},
+		{sceneDataBuffer.getDeviceAddress() + kSceneDataLightArrayOffset, sizeof(LightArrayBlock)}}};
+	std::array<vk::ResourceDescriptorInfoEXT, 4> descs{};
 	descs[0].type = vk::DescriptorType::eStorageBuffer;
 	descs[0].data.pAddressRange = &ranges[0];
 	descs[1].type = vk::DescriptorType::eUniformBuffer;
 	descs[1].data.pAddressRange = &ranges[1];
 	descs[2].type = vk::DescriptorType::eUniformBuffer;
 	descs[2].data.pAddressRange = &ranges[2];
+	descs[3].type = vk::DescriptorType::eUniformBuffer;
+	descs[3].data.pAddressRange = &ranges[3];
 	auto slotAddr = kernel.getDescriptorHeap().getSlotCpuAddress(sceneDataSlot);
 	if (!slotAddr)
 		throw std::runtime_error(slotAddr.error().describe());
@@ -831,10 +873,14 @@ inline uint32_t SceneDataService::ensure() {
 	auto irradianceAddr = kernel.getDescriptorHeap().getSlotCpuAddress(sceneIrradianceSlot);
 	if (!irradianceAddr)
 		throw std::runtime_error(irradianceAddr.error().describe());
+	auto lightAddr = kernel.getDescriptorHeap().getSlotCpuAddress(sceneLightArraySlot);
+	if (!lightAddr)
+		throw std::runtime_error(lightAddr.error().describe());
 	const vk::DeviceSize heapStride = kernel.getDescriptorHeap().getDescriptorSize();
-	std::array<vk::HostAddressRangeEXT, 3> dsts{
+	std::array<vk::HostAddressRangeEXT, 4> dsts{
 		vk::HostAddressRangeEXT{*slotAddr, heapStride}, vk::HostAddressRangeEXT{*wetAddr, heapStride},
-		vk::HostAddressRangeEXT{*irradianceAddr, heapStride}};
+		vk::HostAddressRangeEXT{*irradianceAddr, heapStride},
+		vk::HostAddressRangeEXT{*lightAddr, heapStride}};
 	device.getDevice().writeResourceDescriptorsEXT(descs, dsts);
 	sceneDataReady = true;
 	return sceneDataSlot;

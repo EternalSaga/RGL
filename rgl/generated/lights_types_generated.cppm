@@ -19,6 +19,15 @@ namespace RGL {
     static_assert(offsetof(GpuLight, color) == 32, "Field GpuLight.color offset does not match shader reflection (scalar layout drift!)");
     static_assert(offsetof(GpuLight, params) == 48, "Field GpuLight.params offset does not match shader reflection (scalar layout drift!)");
 
+    export struct LightArrayBlock {
+        uint32_t count;
+        std::array<uint32_t, 3> pad;
+        std::array<GpuLight, 8> lights;
+    };
+    static_assert(sizeof(LightArrayBlock) == 528, "Size of C++ struct LightArrayBlock does not match shader reflection!");
+    static_assert(offsetof(LightArrayBlock, pad) == 4, "Field LightArrayBlock.pad offset does not match shader reflection (scalar layout drift!)");
+    static_assert(offsetof(LightArrayBlock, lights) == 16, "Field LightArrayBlock.lights offset does not match shader reflection (scalar layout drift!)");
+
 
 
     // 契约常量（schema 单一真相源；shader 端字面量必须一致，见对应 shader 头注释）

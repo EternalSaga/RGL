@@ -4,7 +4,7 @@
 // 每帧 staging → vkCmdCopyBuffer 更新，见 vkrenderer.cppm）。
 // 🔴 类型化迁移（docs/constantbuffer_迁移计划.md §9）：各区逐批从「binding 3 + 手写字节
 // 偏移」迁到**类型化载体**（本文件零字节数）；已迁区 = 湿面（binding 32，批 1）、
-// 辐照度（binding 27，批 2）；
+// 辐照度（binding 27，批 2）、灯数组（binding 24，批 3，消费端在 lights.slang）；
 // 未迁区仍走 binding 3 字节读，**全部迁完后 binding 3 与 sceneData 声明一起删**。
 // 字节布局真相源分两段（2026-09-15 勘误：旧注释称真相源 = vkresources.cppm 的
 // LightDataGpu——该类型已删）：
@@ -12,10 +12,10 @@
 //     生成 scene_forward_types_generated.cppm（逐字段 offsetof static_assert 钉死），
 //     scene_data.cppm 的 kSceneDataEnvOffset 等派生自 sizeof(SceneLight) 并 static_assert
 //     钉死各区偏移，shader 结构漂移 = C++ 编译失败；
-//   · 其余表区（@256 矩阵表 / @262400 灯数组 / @263168 MVP 表 / @525312 draw 表）
-//     字节字面量与 scene_data.cppm kSceneData* 手工一致（灯数组基址经 lights_schema 常量
-//     三方 static_assert 钉死；draw 表自 Phase 10 批 10.2a 起 = 生成 ObjectDraw 布局
-//     static_assert + 基址 525312 钉死断言，MVP 表仍仅对齐 assert；改字面量须两端同步）。
+//   · 其余表区（@256 矩阵表 / @263168 MVP 表 / @525312 draw 表）
+//     字节字面量与 scene_data.cppm kSceneData* 手工一致（draw 表自 Phase 10 批 10.2a 起 =
+//     生成 ObjectDraw 布局 static_assert + 基址 525312 钉死断言，MVP 表仍仅对齐 assert；
+//     改字面量须两端同步。灯数组区已迁 lights.slang binding 24，不再在此列）。
 //   @0   direction vec3 | @12 eyePos vec3 | @24 color vec3（CPU 预乘 intensity）| @36 ambient vec3
 //        （两个 intensity 语义：光色在此 CPU 预乘成最终值；env intensity 是 @48 的裸标量、
 //          GPU 端乘——env 颜色在 GPU 侧无法预乘，调光两条路线各改各 config 的一个 intensity）
@@ -24,7 +24,7 @@
 //   @256 对象矩阵表（批 L 起 256B 对齐，头 128B 后为对齐间隙）：mat4 列主序 ×
 //        kSceneMatrixCapacity(4096)，[objectIndex] = spin·world
 //        （DrawArgs.objectIndex = MeshRef.objectSlot，实例级槽，Phase 6 instancing）
-//   @262400 灯数组（lights.slang）
+//   @262400 灯数组（lights.slang 经 binding 24 类型化消费，本文件无字节读）
 //   @263168 per-object MVP 表：mat4 列主序 × 4096，[objectIndex] = proj·view·world
 //        （Phase 7b+ NV DGC 规避：DrawArgs 去 mvp（当时 push 36B，后 bindless 化终态 4B）
 //          < NV 驱动 84B 挂死阈值；

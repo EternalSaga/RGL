@@ -48,6 +48,7 @@ namespace RGL {
 		b.slotSceneData = sceneSlot;
 		b.slotSceneWet = sceneData.wetSlot();  // binding 32（迁移批 1 湿面 UBO 载体；批 M 过滤裁未声明者）
 		b.slotSceneIrradiance = sceneData.irradianceSlot();  // binding 27（迁移批 2 辐照度 UBO 载体；批 M 过滤裁未声明者）
+		b.slotSceneLights = sceneData.lightSlot();  // binding 24（迁移批 3 灯数组 UBO 载体；批 M 过滤裁未声明者）
 		b.textured = true;
 		b.hasSceneData = true;
 		// Phase 5.5：env cubemap 已上传 → 全模型条目传 binding 4/5（env 槽全局单例
@@ -205,6 +206,7 @@ namespace RGL {
 		b.slotSceneData = sceneSlot;
 		b.slotSceneWet = sceneData.wetSlot();  // binding 32（迁移批 1 湿面 UBO 载体；批 M 过滤裁未声明者）
 		b.slotSceneIrradiance = sceneData.irradianceSlot();  // binding 27（迁移批 2 辐照度 UBO 载体；批 M 过滤裁未声明者）
+		b.slotSceneLights = sceneData.lightSlot();  // binding 24（迁移批 3 灯数组 UBO 载体；批 M 过滤裁未声明者）
 		b.textured = true;
 		b.hasSceneData = true;
 		if (const auto* envAsset = env.get()) {
@@ -275,6 +277,7 @@ namespace RGL {
 		b.slotSceneData = sceneData.ensure();
 		b.slotSceneWet = sceneData.wetSlot();  // binding 32（迁移批 1 湿面 UBO 载体；批 M 过滤裁未声明者）
 		b.slotSceneIrradiance = sceneData.irradianceSlot();  // binding 27（迁移批 2 辐照度 UBO 载体；批 M 过滤裁未声明者）
+		b.slotSceneLights = sceneData.lightSlot();  // binding 24（迁移批 3 灯数组 UBO 载体；批 M 过滤裁未声明者）
 		b.hasSceneData = true;
 		b.hasEnv = true;
 		b.slotEnv = envAsset->heapSlot;
@@ -313,6 +316,7 @@ namespace RGL {
 		b.slotSceneData = sceneData.ensure();  // binding 3：readSceneLight 单灯
 		b.slotSceneWet = sceneData.wetSlot();  // binding 32（迁移批 1 湿面 UBO 载体；批 M 过滤裁未声明者）
 		b.slotSceneIrradiance = sceneData.irradianceSlot();  // binding 27（迁移批 2 辐照度 UBO 载体；批 M 过滤裁未声明者）
+		b.slotSceneLights = sceneData.lightSlot();  // binding 24（迁移批 3 灯数组 UBO 载体；批 M 过滤裁未声明者）
 		b.hasSceneData = true;
 		const uint32_t samplerHeapOffset =
 			samplerSlot * res.getSamplerHeap().getDescriptorSize();
@@ -388,6 +392,7 @@ namespace RGL {
 		b.slotSceneData = sceneData.ensure();  // binding 3 = scene data（VP 区/对象矩阵/ObjectDraw）
 		b.slotSceneWet = sceneData.wetSlot();  // binding 32（迁移批 1 湿面 UBO 载体；批 M 过滤裁未声明者）
 		b.slotSceneIrradiance = sceneData.irradianceSlot();  // binding 27（迁移批 2 辐照度 UBO 载体；批 M 过滤裁未声明者）
+		b.slotSceneLights = sceneData.lightSlot();  // binding 24（迁移批 3 灯数组 UBO 载体；批 M 过滤裁未声明者）
 		b.hasSceneData = true;
 		// textured=false → 不烘焙 binding 1 的 baseColor 形态（上面 slotIndex 占位即此）；
 		// 不烘焙 env（612）、不纹理纹理槽（6-8）——两个 shader 文件均未声明它们。
@@ -430,6 +435,7 @@ namespace RGL {
 		b.slotSceneData = sceneData.ensure();  // binding 3：簇区间/对象矩阵/ShadowViewProj 三张表
 		b.slotSceneWet = sceneData.wetSlot();  // binding 32（迁移批 1 湿面 UBO 载体；批 M 过滤裁未声明者）
 		b.slotSceneIrradiance = sceneData.irradianceSlot();  // binding 27（迁移批 2 辐照度 UBO 载体；批 M 过滤裁未声明者）
+		b.slotSceneLights = sceneData.lightSlot();  // binding 24（迁移批 3 灯数组 UBO 载体；批 M 过滤裁未声明者）
 		b.hasSceneData = true;
 		// textured = false → 不传 binding 1 的 baseColor 形态；不传 env、不传 6/7/8/12/13/15/16
 		// ——两个 shader 文件均未声明它们（批 M 后即使传了也不会烘，但「不传」让槽号来源
@@ -480,6 +486,7 @@ namespace RGL {
 		b.slotSceneData = sceneData.ensure();  // binding 3（readObjectDraw/Matrix/ShadowViewProj）
 		b.slotSceneWet = sceneData.wetSlot();  // binding 32（迁移批 1 湿面 UBO 载体；批 M 过滤裁未声明者）
 		b.slotSceneIrradiance = sceneData.irradianceSlot();  // binding 27（迁移批 2 辐照度 UBO 载体；批 M 过滤裁未声明者）
+		b.slotSceneLights = sceneData.lightSlot();  // binding 24（迁移批 3 灯数组 UBO 载体；批 M 过滤裁未声明者）
 		b.hasSceneData = true;
 		// 5/6/7 = IZB head/nodes/mask（frag 声明 = 必须传；mesh 不声明也无妨，过滤取并集）
 		b.extra.push_back({.binding = 5, .heapSlot = slots->head});
@@ -522,6 +529,7 @@ namespace RGL {
 		b.slotSceneData = sceneData.ensure();
 		b.slotSceneWet = sceneData.wetSlot();  // binding 32（迁移批 1 湿面 UBO 载体；批 M 过滤裁未声明者）
 		b.slotSceneIrradiance = sceneData.irradianceSlot();  // binding 27（迁移批 2 辐照度 UBO 载体；批 M 过滤裁未声明者）
+		b.slotSceneLights = sceneData.lightSlot();  // binding 24（迁移批 3 灯数组 UBO 载体；批 M 过滤裁未声明者）
 		b.hasSceneData = true;
 		auto entry = PipelineEntry{
 			.name = "cube",

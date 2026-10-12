@@ -1,5 +1,5 @@
 import scene;    // binding 3：sceneData + SceneLight/readSceneLight（共享 eyePos/ambient）
-import lights;   // 多灯：readLightCount/readGpuLight（lights 内部亦 import scene）
+import lights;   // 多灯：readLightCount/readGpuLight（lights 自带 binding 24 载体，不再 import scene）
 import sky;      // skybox 射线重建：skyClipToWorld（读 @64 invViewProj）——skybox 背景合成
 import shadow;   // Phase 11 批 11.2：级联阴影采样（binding 12/13，与 forward 三个光照风格共用）
 
