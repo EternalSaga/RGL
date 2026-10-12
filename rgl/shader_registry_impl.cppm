@@ -387,6 +387,54 @@ namespace RGL {
 		assets.bindShadowPipeline(assetId, entryIdx);
 	}
 
+	// 簇化轴 ★18-B1：阴影段簇路径条目（契约见接口注释）。全场景 1 条目 = 簇 buffer 是全局
+	// 单例（§10.2）⟹ addShadowEntry 的 vertexSlot 去重键在这里没有对应物；幂等靠条目名
+	// （同 addSkyEntry / addLightEntry 的 `pipelineIndex("...")` 写法），装配层逐 prim 调它。
+	uint32_t ShaderRegistry::addShadowMeshletEntry(std::array<uint32_t, 4> clusterSlots) {
+		if (auto idx = pipelineIndex("shadow_meshlet"))
+			return *idx;
+		const RGL::PipelineSpec* spec = findSpec("shadow_meshlet");
+		if (!spec)
+			throw std::runtime_error("pipeline spec not found: shadow_meshlet");
+		RGL::PipelineBindings b{};
+		b.descriptorSize = res.getDescriptorHeap().getDescriptorSize();
+		// binding 0/1 = 合法占位（本管线 mesh/frag 两 stage 都不声明它们：mesh 不 import model、
+		// frag 是 depth-only 空壳）⟹ mapping 空转无害，方向与 addSkyEntry/addLightEntry 的
+		// 0/1 占位同（"声明未映射"才是 VVL 错误，反向无害）。取 0/1 两个真实存在的低段槽号。
+		b.slotVertex = 0;
+		b.slotIndex = 1;
+		b.slotSceneData = sceneData.ensure();  // binding 3：簇区间/对象矩阵/ShadowViewProj 三张表
+		b.hasSceneData = true;
+		// textured = false → 不烘 binding 1 的 baseColor 形态；不烘 env、不烘 6/7/8/12/13/15/16
+		// ——两个 shader 文件均未声明它们（烘了是空转，但空转的 mapping 也要占 descriptor，
+		// 不占 = 不参与"槽号从哪来"的账，同 addShadowEntry 的取舍）。
+		// 簇 buffer 固定 binding（§10.2，与 addMeshletEntry 的 kClusterBindings 前 4 项同源）：
+		// 17=顶点池 18=簇表 19=Tris 20=Remap。🔴 **不含 21**（逐簇可见标志）——本管线不声明
+		// 该 binding，条目侧也不烘（两侧同向，理由 → 接口注释）。
+		static constexpr std::array<uint32_t, 4> kClusterBindings{17u, 18u, 19u, 20u};
+		for (size_t i = 0; i < kClusterBindings.size(); ++i)
+			b.extra.push_back({.binding = kClusterBindings[i], .sampler = false,
+				.heapSlot = clusterSlots[i]});
+		auto entry = PipelineEntry{.name = "shadow_meshlet",
+			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b),
+			// ShadowMeshletDrawArgs = objectIndex + cascadeIndex + clusterStart（12B，scalar
+			// layout；frame_draw_list.cppm 的 static_assert 与本 shader 的 struct 同源）
+			.argsSize = 12,
+			.spec = *spec, .bindings = b};
+		const uint32_t index = static_cast<uint32_t>(entries.size());
+		indexByName[entry.name] = index;
+		entries.push_back(std::move(entry));
+		if (auto* logger = RLLogger::getInstance())
+			logger->debug("pipeline entry: shadow_meshlet (cluster slots {}/{}/{}/{}，binding "
+				"17-20；无 binding 21) → 下标 {}",
+				clusterSlots[0], clusterSlots[1], clusterSlots[2], clusterSlots[3], index);
+		return index;
+	}
+
+	void ShaderRegistry::bindShadowMeshletToAsset(uint32_t assetId, uint32_t entryIdx) {
+		assets.bindShadowMeshletPipeline(assetId, entryIdx);
+	}
+
 	// 批 11.3-1d 后半：IZB mask 条目（契约见接口注释；vertexSlot 去重同 shadow）。
 	uint32_t ShaderRegistry::addIzbMaskEntry(uint32_t vertexSlot) {
 		if (const auto it = izbMaskEntryBySlot.find(vertexSlot); it != izbMaskEntryBySlot.end())

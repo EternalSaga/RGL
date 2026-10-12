@@ -489,6 +489,46 @@ export class ShaderRegistry {
 	void bindShadowToAsset(uint32_t assetId, uint32_t entryIdx);
 
 	/**
+	 * 簇化轴 ★18-B1：阴影段**簇路径** depth-only 管线条目（spec = "shadow_meshlet"：
+	 * shadow_meshlet.mesh.spv + **复用** shadow.frag.spv）。docs/mdi_plan.md §18.5 前置清单。
+	 *
+	 * ## 为什么全场景 **1 条目**而 addShadowEntry 是 ~8 条目
+	 *
+	 * `addShadowEntry` 的唯一去重变量是 `vertexSlot`（阴影 mesh 只读 modelVertexBuffer +
+	 * sceneData，纹理槽外一切不消费 ⟹ 每个 16MB 拼接块一个条目，bistro ≈8）。**这个去重键在
+	 * 簇路径不存在了**：簇路径不读 per-资产拼接顶点 buffer，读的是全局单例的簇四段 buffer
+	 * （§10.2「全局单例进固定 binding，不进 per-entry 描述符」）⟹ 条目退化成常量一份
+	 * （同 addSkyEntry / addLightEntry 的"全局单例 ⟹ 单条目"形态）。
+	 *
+	 * ## binding 映射
+	 *
+	 *  · 0/1 = 合法占位槽号：本管线的 mesh/frag **两个 stage 都不声明 binding 0/1**（mesh 不
+	 *    import model，frag 是空壳）⟹ mapping 空转无害。🔴 方向别记反：「有 mapping 未声明」
+	 *    无害，「声明了未 mapping」才是 VVL 错误（addSkyEntry/addLightEntry 的 0/1 占位既证方向）。
+	 *  · 3 = scene data（`hasSceneData = true`）：readObjectClusterRange / readObjectMatrix /
+	 *    readShadowViewProj 三张表都在这一份 buffer 里。
+	 *  · 17/18/19/20 = 簇四段 buffer（顶点池/簇表/Tris/Remap），内容 = 装配层
+	 *    wireMeshletBindings 写入的 Runtime 段槽（与主 pass 的 meshlet 条目**同一批槽号**）。
+	 *  · 🔴 **不烘 binding 21**（`clusterVisible`）：本管线不声明它（阴影段本批不做逐簇剔除），
+	 *    而「声明了未 mapping」才是 VVL 错误 ⟹ 条目侧烘了 21 只会多一条无人消费的 mapping，
+	 *    而将来 shader 若声明它又漏烘就是 VVL 错误——两侧同向（都不带 21）是当前形态的约束。
+	 *  · 不烘 env、不烘 6/7/8/12/13/15/16：两个 shader 文件都不声明它们（`textured = false`）。
+	 *
+	 * 幂等：同名条目（"shadow_meshlet"）命中直接返回既有下标（同 addSkyEntry 的写法）——
+	 * 装配层逐 primitive 调用它，去重住在本函数。
+	 * @param clusterSlots 4 个簇 buffer 描述符**堆槽号**（vertexPool/clusters/tris/remap 序 =
+	 *        binding 17-20 升序；🔴 传的是槽号不是 binding 号，同 addMeshletEntry）
+	 * @return 条目下标（重复调用返回同一个下标）；规格缺失抛 runtime_error
+	 */
+	[[nodiscard]] uint32_t addShadowMeshletEntry(std::array<uint32_t, 4> clusterSlots);
+
+	/** 簇路径阴影条目写回资产记录（★18-B1，与 bindShadowToAsset 同节奏）。
+	 * @param assetId mesh 资产记录 id
+	 * @param entryIdx addShadowMeshletEntry 返回的条目下标
+	 */
+	void bindShadowMeshletToAsset(uint32_t assetId, uint32_t entryIdx);
+
+	/**
 	 * 内建几何管线条目（架构债务 1 方案 B）：spec = "cube"，binding mapping = 传入资产记录的
 	 * 顶点/索引 heap 槽（无纹理/无 scene data = cube 形态，binding 0 = 顶点槽、
 	 * binding 1 落索引槽——非 textured 形态）。
@@ -545,8 +585,8 @@ export class ShaderRegistry {
 
 	/** 回落查表体（批 11.5 起为 findSpec 的内部底座：scene.lua styles 命中或默认回落词表
 	 *  cube / model / model_pbr / model_phong / model_pbr_ibl / skybox / deferred_geometry×3 /
-	 *  light×2 / 尾部 kTailSpecs（tonemap/shadow/izb_mask/ao/taa/velocity/ao_apply/ssr_trace/ssr）；
-	 *  不含 PCSS 变体替换）。 */
+	 *  light×2 / 尾部 kTailSpecs（tonemap/shadow/shadow_meshlet/izb_mask/ao/taa/velocity/
+	 *  ao_apply/ssr_trace/ssr）；不含 PCSS 变体替换）。 */
 	const RGL::PipelineSpec* findSpecBase(const char* name) const {
 		auto it = styles.find(name);
 		if (it != styles.end())
@@ -607,10 +647,15 @@ export class ShaderRegistry {
 			return light;
 		// 尾部词表（tonemap/shadow/izb_mask/ao/taa）：批 12.6 起表驱动查表——旧 if 链
 		// 每加一词控制复杂度 +1（taa 加进来正撞 16>15 红线），表长不受此税。
-		static const std::array<RGL::PipelineSpec, 9> kTailSpecs{{
+		static const std::array<RGL::PipelineSpec, 10> kTailSpecs{{
 			{"tonemap", "generated_shaders/light.mesh.spv",
 				"generated_shaders/tonemap.frag.spv"},  // mesh 复用全屏大三角（Phase 8 ①）
 			{"shadow", "generated_shaders/shadow.mesh.spv", "generated_shaders/shadow.frag.spv"},
+			// 簇化轴 ★18-B1：阴影段簇路径（§18.5）。mesh 换 shadow_meshlet.mesh（读簇 buffer
+			// @17-20 + 12B push），frag **复用** shadow.frag.spv（输出接口同为 ShadowVertexOutput
+			// = 只一个 SV_Position，两 mesh 的 frag 侧完全等价）。
+			{"shadow_meshlet", "generated_shaders/shadow_meshlet.mesh.spv",
+				"generated_shaders/shadow.frag.spv"},
 			{"izb_mask", "generated_shaders/izb_mask.mesh.spv",
 				"generated_shaders/izb_mask.frag.spv"},
 			{"ao", "generated_shaders/light.mesh.spv",

@@ -177,6 +177,19 @@ return {
         -- 早退。判据（🔴 主判据是零阈值的「cull=on 逐位 = cull=off」——保守剔除按构造不可能
         -- 改变交付图像）与定价 → docs/mdi_plan.md §17。单独开 = 无消费者，装配层 warn 出声。
         cull = false,
+        -- ★18-B1 阴影段**簇路径**的 uniform 选级 D（docs/mdi_plan.md §18.5/§18.6/§18.7）：
+        --   -1（默认）= 本档关 ⟹ 一条阴影条目都不建、一行日志都不打，阴影全走既有旧 mesh 管线
+        --    （逐位不变护栏，P5 拍板）
+        --    0        = 🔴 阳性对照 L0 臂（§18.6 判据 2）：同一新管线画每 prim 的 L0 前缀，
+        --               先证明「管线画的是对的几何」，再谈 level D
+        --    N >= 1    = uniform 选级 D=N：每 prim 画 min(D, 本 prim 最深级) 那一段连续子区间
+        -- 生效需要 enable = true（簇四段 buffer 的描述符槽由 enable 的接线提供）。数据推荐档
+        -- D=5（5.10% L0 三角，§18.2 实测）。🔴 必须是整数（写成字符串/浮点 = 启动失败点名键）。
+        shadow_lod = -1,
+        -- ★18-B1 回落策略（D 超过某 prim 自身最深级时怎么办）："deepest" | "l0"。
+        -- 🔴 它比 D 更主导成本（§18.2：D=7 下 deepest = 3.32% 而 l0 = 34.97% 的 L0 三角），
+        -- 故未知值 = 启动 fail-fast（coplanar/aa/present_mode 纪律：静默回落 = 成本判据整批读错臂）。
+        shadow_lod_fallback = "deepest",
     },
 
     -- DIAG：隐藏窗启动、第 N 帧后显示（可见窗 fault 排查；-1 = 立即显示）

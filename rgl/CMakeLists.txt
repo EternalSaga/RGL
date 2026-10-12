@@ -73,6 +73,11 @@ rgl_shader_defined2(light.frag LIGHT_IZB_EVSSM_FRAG_SPV IZB_CONSUME EVSSM_SOFT s
 # shadow.slang（采样契约，被 forward/deferred 两条光照路 import）无新结构体 → 不需单独反射管线。
 rgl_shader(shadow.mesh SHADOW_MESH_SPV model scene)
 rgl_shader(shadow.frag SHADOW_FRAG_SPV)
+# 簇化轴 ★18-B1：阴影段**簇路径** depth-only mesh（§18.5 前置清单 / §18.6 第一刀）。
+# 🔴 DEP 只有 scene：本文件不 import model（簇路径不读 modelVertexBuffer，读簇顶点池 @17）、
+# 不 import material（自带 12B push 块，理由照 shadow.mesh.slang 头注释）。frag **复用**
+# shadow.frag.spv（输出接口同为 ShadowVertexOutput）→ 本行不新增 frag target。
+rgl_shader(shadow_meshlet.mesh SHADOW_MESHLET_MESH_SPV scene)
 # Phase 8 批次 ①：HDR tonemap frag（mesh 复用 light.mesh.spv；import scene 读 @56 曝光）
 rgl_shader(tonemap.frag TONEMAP_FRAG_SPV scene)
 # Phase 11 批 11.4：SSAO frag（mesh 复用 light.mesh.spv 全屏大三角；import scene 读

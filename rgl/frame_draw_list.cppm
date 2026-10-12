@@ -49,6 +49,30 @@ static_assert(sizeof(ShadowDrawArgs) == 8,
 	"ShadowDrawArgs layout drifted from shadow.mesh.slang ShadowDrawArgs (scalar layout)");
 
 /**
+ * 阴影段**簇路径** pass 的 push constant（簇化轴 ★18-B1，12B；spec = "shadow_meshlet"）。
+ *
+ * = `ShadowDrawArgs` 的两字段原样 + 一枚 `clusterStart`。为什么不复用 8B 那份：本管线要多带
+ * 一个选级偏移，而 8B 那份是 shadow.mesh.slang 与 izb_mask 共用的既有契约（改了 = 既有条目的
+ * argsSize 全表重烘焙）。§18.3 三条扩法里选「偏移走 push constant」正是为了这条：零 scene
+ * data 变更、零反射重跑、旧 shadow 管线一字节不动。
+ *
+ * 三个字段全是**纯索引/偏移**（AGENTS bindless 原则）。
+ */
+export struct ShadowMeshletDrawArgs {
+	uint32_t objectIndex = 0;    // 与 DrawArgs.objectIndex 同值（MeshRef.objectSlot）
+	uint32_t cascadeIndex = 0;   // 阴影图分块号（同 ShadowDrawArgs.cascadeIndex）
+	/**
+	 * 🔴 **相对 `ObjectClusterRange::base` 的偏移**，不是全局簇下标——口径 = 批 A 的
+	 * `MeshletLodPrimRange::start`（meshlet_lod.cppm）。shader 侧 `cluster = base +
+	 * clusterStart + (groupID.x >> 1)` 里 base 由 `readObjectClusterRange(objectIndex)` 提供，
+	 * 两者拼起来才是簇下标；传全局下标会在「同资产多 prim / 多实例」上错（base 被加两遍）。
+	 */
+	uint32_t clusterStart = 0;
+};
+static_assert(sizeof(ShadowMeshletDrawArgs) == 12,
+	"ShadowMeshletDrawArgs layout drifted from shadow_meshlet.mesh.slang ShadowMeshletDrawArgs (scalar layout)");
+
+/**
  * 场景级每帧动态数据（Phase 5 批次 2，bindless）：渲染 system 产出、drawFrame 消费——
  * CPU 写 staging[currentFrame] + 录制期 vkCmdCopyBuffer 拷进 scene data buffer
  *（布局契约见 scene.slang SceneLight / scene_forward_types_generated）。objectMatrices 按

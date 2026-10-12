@@ -311,14 +311,80 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg) {
 }
 
 /**
+ * 严格整数键读取（★18-B1 起 **meshlet 块专用**；与 `readStrictBoolKey` 同一条纪律，只是
+ * 目标类型是 `int32_t`）：**类型不对立即报错点名键**，🔴 **不许**静默当键缺失。
+ *
+ * 理由不重抄——见 `readStrictBoolKey` 注释里那条实测（`sol::optional<T>` 在值类型不匹配时
+ * **静默给 nullopt**，键被吃掉而 errors=0 warnings=0、日志零行 ⟹ 截图哈希判据整批假绿）。
+ * 本键的失效形态同样致命：`shadow_lod = "5"` 被静默吃掉 = 跑的是关档，而"门开了、条目建了、
+ * 图没变"会被读成「LOD 不影响图像」。
+ * Lua 的 number 全是 double，故整数判据 = 「是 number 且无小数部分」；`5.0` 放行（Lua 里
+ * `5` 与 `5.0` 是同一个值），`5.5` 报错而不是悄悄截断成 5。
+ * @return nullopt = 缺键或类型正确；有值 = 错误消息（调用方 fail-fast）
+ */
+[[nodiscard]] static std::optional<std::string> readStrictIntKey(const sol::table& root,
+	const char* key, int32_t& dst, std::string_view path) {
+	sol::object value = root[key];
+	const auto type = value.get_type();
+	if (type == sol::type::lua_nil)
+		return std::nullopt;  // 缺键 = 保持结构体默认（-1 = 本档关）
+	if (type != sol::type::number)
+		return fmt::format("runtime config ({}): meshlet.{} must be an integer, got {}",
+			path, key, sol::type_name(root.lua_state(), type));
+	const double raw = value.as<double>();
+	// 整数判据 = 无小数部分；范围判据 = int32_t 可表示（越界不截断，报错——截断出来的
+	// 是个语义完全不同的数，比"启动失败"难查得多）。
+	constexpr double lo = static_cast<double>(std::numeric_limits<int32_t>::min());
+	constexpr double hi = static_cast<double>(std::numeric_limits<int32_t>::max());
+	if (raw != std::floor(raw) || raw < lo || raw > hi)
+		return fmt::format(
+			"runtime config ({}): meshlet.{} must be an integer (got {})", path, key, raw);
+	dst = static_cast<int32_t>(raw);
+	return std::nullopt;
+}
+
+/**
+ * `meshlet.shadow_lod_fallback` 字符串键解析（★18-B1；形态先例 = `applyMeshletCoplanarKey`）。
+ *
+ * 缺键 = 保持默认 `deepest`。**未知值 = 返回错误消息由调用方 fail-fast**，不静默回落
+ * （`meshlet.coplanar` 的理由在此更硬：§18.2 实测 D=7 下 deepest = 3.32% 而 l0 = 34.97%
+ * 三角，笔误值静默回落成默认会让「成本判据」整批读到错的臂）。
+ * ⚠ 覆盖面与先例同边界：只有**字符串**值进得了本判据，数字值被 sol 的 `optional<string>`
+ * 读成 nullopt = 走缺键保默认（实机对照 `meshlet.coplanar = 0` 同形）。整数键的严格类型面
+ * 在 `readStrictIntKey`（走 `get_type()`，另一条代码形状），两者不是一回事，别混着指望。
+ * @param root meshlet 块表（与 readMeshletBlock 同层）
+ * @param cfg  写入目标（仅在键存在且合法时被写）
+ * @param path 仅用于错误消息（与 aa/present_mode 同口径带配置文件路径）
+ * @return nullopt = 合法（含缺键）；有值 = 错误消息
+ */
+[[nodiscard]] static std::optional<std::string> applyMeshletShadowLodFallbackKey(
+	const sol::table& root, RuntimeConfig& cfg, std::string_view path) {
+	sol::optional<std::string> raw = root["shadow_lod_fallback"];
+	if (!raw)
+		return std::nullopt;
+	if (*raw == "deepest")
+		cfg.meshletShadowLodFallback = MeshletLodFallbackMode::deepest;
+	else if (*raw == "l0")
+		cfg.meshletShadowLodFallback = MeshletLodFallbackMode::l0;
+	else
+		return fmt::format("runtime config ({}): meshlet.shadow_lod_fallback must be "
+			"\"deepest\" or \"l0\", got \"{}\"",
+			path, *raw);
+	return std::nullopt;
+}
+
+/**
  * `meshlet` 嵌套块解析（★0-b1 簇路径总门 + ★1-a1ii-α debug 档 + ★0.5-b2 coplanar/tint +
- * ★1-a1ii-β-1 switch 原位取代档）：`meshlet = { enable, debug, coplanar, tint, switch }`。
+ * ★1-a1ii-β-1 switch 原位取代档 + ★1-a2-i cull + ★18-B1 shadow_lod 阴影段选级）：
+ * `meshlet = { enable, debug, coplanar, tint, switch, cull, shadow_lod, shadow_lod_fallback }`。
  * 缺块 / 缺键 = 保持结构体默认（`meshletEnable = false` = 门关 = 逐位不变护栏，P5 拍板；
  * `meshletDebug = false` = 正常叠加档；`meshletCoplanar = off` = 不碰动态状态；
- * `meshletTint = false` = 不选 tint 变体；`meshletSwitch = false` = 不取代）。
- * 形态先例 = readFsrBlock（嵌套块，无扁平键双读兼容）；coplanar 三态键先例 = applyAaKey
- * （未知值 fail-fast，错误经返回值上抛给调用方）。四枚布尔自 β-1 起走 readStrictBoolKey
- * （类型错 = 启动失败，理由 → 该函数注释）。gate_lint 不挂号的理由与 ssr 块完全同款
+ * `meshletTint = false` = 不选 tint 变体；`meshletSwitch = false` = 不取代；
+ * `meshletShadowLod = -1` = 阴影段簇路径关；`shadow_lod_fallback = deepest`）。
+ * 形态先例 = readFsrBlock（嵌套块，无扁平键双读兼容）；coplanar / shadow_lod_fallback 两枚
+ * 三态键先例 = applyAaKey（未知值 fail-fast，错误经返回值上抛给调用方）。四枚布尔走
+ * readStrictBoolKey、shadow_lod 走 readStrictIntKey（类型错 = 启动失败，理由 → 各自注释）。
+ * gate_lint 不挂号的理由与 ssr 块完全同款
  * （runtime.lua 键不在 gate_lint 管辖的两张回显表里，→ readSsrBlock 末段）。
  * @param root runtime.lua 顶层表
  * @param cfg  写入目标
@@ -343,6 +409,12 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg) {
 		return err;
 	// ★1-a2-i 逐簇视锥剔除
 	if (auto err = readStrictBoolKey(meshlet, "cull", cfg.meshletCull, path))
+		return err;
+	// ★18-B1 阴影段簇路径选级（-1 = 关 / 0 = 阳性对照 L0 臂 / N≥1 = uniform 选级 D=N）
+	if (auto err = readStrictIntKey(meshlet, "shadow_lod", cfg.meshletShadowLod, path))
+		return err;
+	// ★18-B1 回落策略（三态字符串键，未知值 fail-fast）
+	if (auto err = applyMeshletShadowLodFallbackKey(meshlet, cfg, path))
 		return err;
 	return applyMeshletCoplanarKey(meshlet, cfg, path);
 }

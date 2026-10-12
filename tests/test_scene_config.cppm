@@ -1012,6 +1012,120 @@ TEST_CASE("runtime_config：meshlet.switch（★1-a1ii-β-1 原位取代）—�
 	}
 }
 
+TEST_CASE("runtime_config：meshlet.shadow_lod（★18-B1 阴影段选级）——默认 −1、三态取值、严格整数面") {
+	// 判据来源 = 实读 readMeshletBlock / readStrictIntKey。默认 **−1 = 本档关** 是「门关逐位
+	// 不变」的配置层前提；0 与 N≥1 是两条**语义不同**的合法档（0 = §18.6 判据 2 的阳性对照
+	// L0 臂，N≥1 = uniform 选级），解析层必须原样透传、不得合并。
+	// 变异红线声明：
+	//   ① 默认值翻成 0 → 「成员初始化」「缺块」「缺键」三条红（出厂即开阳性对照臂 = 逐位护栏失效）。
+	//   ② 解析层把 0 当「关」（写成 `if (v <= 0)` 而非 `< 0`）→ 「0 = L0 臂」红。
+	//      🔴 这条最要紧：0 被吞掉 ⟹ §18.6 判据 2 根本跑不出来，而截图与门关逐位同 = 假绿。
+	//   ③ 退回宽容的 readFloatKey/readBoolKey 式读法（类型错静默当缺键）→ 「非整数即失败」
+	//      四条红（字符串/布尔/小数/越界各一条，小数与越界钉的是"截断"这条独立漂移）。
+	//   ④ 加扁平键双读兼容 → 「顶层 meshlet_shadow_lod 什么都不发生」红（两个真相源反模式）。
+	{  // 成员初始化默认路径（不看 lua 文件的默认值 = 主 agent 验收口径）
+		CHECK(RuntimeConfig{}.meshletShadowLod == -1);
+	}
+	{  // 缺块 / 缺键 = 关（出厂态 = 逐位护栏）
+		TempLua f("rt_mlod_default", "return {}\n");
+		auto r = loadRuntimeConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->meshletShadowLod == -1);
+		TempLua g("rt_mlod_nokey", R"lua(return { meshlet = { enable = true } })lua");
+		auto r2 = loadRuntimeConfig(g.pathStr());
+		REQUIRE(r2.has_value());
+		CHECK(r2->meshletShadowLod == -1);
+	}
+	{  // 三态取值原样透传（探针值 5 / 0 / −3 互不相同且 ≠ 默认，漏读或错并即红）
+		TempLua a("rt_mlod_five", R"lua(return { meshlet = { shadow_lod = 5 } })lua");
+		auto r = loadRuntimeConfig(a.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->meshletShadowLod == 5);
+		TempLua b("rt_mlod_zero", R"lua(return { meshlet = { shadow_lod = 0 } })lua");
+		auto r0 = loadRuntimeConfig(b.pathStr());
+		REQUIRE(r0.has_value());
+		CHECK(r0->meshletShadowLod == 0);  // 🔴 0 是合法档（阳性对照 L0 臂），不是"关"
+		TempLua c("rt_mlod_neg3", R"lua(return { meshlet = { shadow_lod = -3 } })lua");
+		auto r3 = loadRuntimeConfig(c.pathStr());
+		REQUIRE(r3.has_value());
+		CHECK(r3->meshletShadowLod == -3);  // 解析层不解释语义：只有 < 0 这一件事由消费方读
+	}
+	{  // 非整数 = **启动失败**并点名键（严格面，同 readStrictBoolKey 的实测纪律）
+		for (const char* bad : {R"lua(return { meshlet = { shadow_lod = "5" } })lua",
+		                        "return { meshlet = { shadow_lod = true } }\n",
+		                        "return { meshlet = { shadow_lod = 5.5 } }\n",
+		                        "return { meshlet = { shadow_lod = 3000000000 } }\n"}) {
+			TempLua f("rt_mlod_bad", bad);
+			auto r = loadRuntimeConfig(f.pathStr());
+			CHECK_FALSE(r.has_value());
+		}
+	}
+	{  // **没有**扁平键的兼容双读
+		TempLua f("rt_mlod_flat", "return { meshlet_shadow_lod = 5 }\n");
+		auto r = loadRuntimeConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->meshletShadowLod == -1);
+	}
+}
+
+TEST_CASE("runtime_config：meshlet.shadow_lod_fallback（★18-B1 回落策略）——两半各钉 + 未知值 fail-fast") {
+	// 判据来源 = 实读 applyMeshletShadowLodFallbackKey（形态先例 = applyMeshletCoplanarKey）。
+	// 🔴 两半各一条用例（不是"测一个代表值"）：deepest 与 l0 在 D=7 上差 10 倍成本
+	// （§18.2：3.32% vs 34.97% 的 L0 三角），只钉默认那侧的话，另一侧的映射写错无人发现。
+	// 变异红线声明：
+	//   ① 默认值翻成 l0 → 「成员初始化」「缺块」「缺键」三条红。
+	//   ② "l0" 分支映射错（写成 deepest）→ 「显式命中 l0」红（默认也是 deepest，故必须显式给）。
+	//   ③ 未知字符串静默回落 → 「未知字符串即失败」三条红（拼错值 / 大小写错 / 空串）。
+	//      这条是本键最坏的失效：静默回落成默认 = 成本判据整批读错的臂，而日志一切正常。
+	//      ⚠ 覆盖面 = 字符串值；**数字值**走「缺键保默认」不报错（sol 的 optional<string> 对
+	//      number 给 nullopt，与先例 coplanar 共有）——该限制由下方最后一条用例显式钉住。
+	CHECK(MeshletLodFallbackMode::deepest != MeshletLodFallbackMode::l0);  // 两档必须可区分
+	{  // 成员初始化默认路径
+		CHECK(RuntimeConfig{}.meshletShadowLodFallback == MeshletLodFallbackMode::deepest);
+	}
+	{  // 缺块 / 缺键 = deepest
+		TempLua f("rt_mfb_default", "return {}\n");
+		auto r = loadRuntimeConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->meshletShadowLodFallback == MeshletLodFallbackMode::deepest);
+		TempLua g("rt_mfb_nokey", R"lua(return { meshlet = { shadow_lod = 5 } })lua");
+		auto r2 = loadRuntimeConfig(g.pathStr());
+		REQUIRE(r2.has_value());
+		CHECK(r2->meshletShadowLodFallback == MeshletLodFallbackMode::deepest);
+	}
+	{  // 两半各钉：显式 deepest / 显式 l0（探针值 ≠ 默认，漏读或错映射即红）
+		TempLua a("rt_mfb_deepest",
+			R"lua(return { meshlet = { shadow_lod_fallback = "deepest" } })lua");
+		auto r = loadRuntimeConfig(a.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->meshletShadowLodFallback == MeshletLodFallbackMode::deepest);
+		TempLua b("rt_mfb_l0", R"lua(return { meshlet = { shadow_lod_fallback = "l0" } })lua");
+		auto r2 = loadRuntimeConfig(b.pathStr());
+		REQUIRE(r2.has_value());
+		CHECK(r2->meshletShadowLodFallback == MeshletLodFallbackMode::l0);
+	}
+	{  // 未知**字符串** = **启动失败**并点名键，不静默回落（两半之外的值都要落这条）
+		for (const char* bad : {R"lua(return { meshlet = { shadow_lod_fallback = "shallowest" } })lua",
+		                        R"lua(return { meshlet = { shadow_lod_fallback = "L0" } })lua",
+		                        R"lua(return { meshlet = { shadow_lod_fallback = "" } })lua"}) {
+			TempLua f("rt_mfb_bad", bad);
+			auto r = loadRuntimeConfig(f.pathStr());
+			CHECK_FALSE(r.has_value());
+		}
+	}
+	{  // 🔴 已知限制（**与先例 coplanar 共有，实机对照过**）：值写成**数字**时 sol 的
+		// `sol::optional<std::string>` 给 nullopt ⟹ 走「缺键保默认」那条，**不**报错。
+		// 本用例把它钉成显式行为而不是留白：① 别误以为本键有 readStrictIntKey 那种全类型严格面
+		// （那枚走的是 `sol::object::get_type()`，另一条代码形状）；② 将来若把字符串键也换成
+		// 类型严格读，本断言会红 ⟹ 逼改的人显式裁决，而不是悄悄多覆盖一种输入。
+		TempLua f("rt_mfb_number_is_missing_key",
+			"return { meshlet = { shadow_lod_fallback = 0 } }\n");
+		auto r = loadRuntimeConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->meshletShadowLodFallback == MeshletLodFallbackMode::deepest);
+	}
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // diagnostics
 // ═══════════════════════════════════════════════════════════════════════════

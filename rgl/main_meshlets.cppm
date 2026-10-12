@@ -564,6 +564,68 @@ void bakeMeshletEntries(const UploadedAssets& uploaded, const SceneConfig& scene
 }
 
 /**
+ * 阴影段簇路径条目烘焙（★18-B1；对外经下方 wireMeshletOverlay 总入口调用）。
+ *
+ * 🔴 **本批只建条目，不接任何 draw**（接线 = 批 B2）。于是门开的形态 = 「条目建了、资产字段
+ * 写了、没有任何一条 draw 引用它」⟹ 截图必须仍 = 基线锚（本批主判据：基础设施本身不改像素）。
+ *
+ * 早退两条（任一成立 = 一条条目都不建、**一行日志都不打**，门关 `grep -ci meshlet` = 0 的护栏）：
+ *  · `!slots` —— 门关 / 无产物 / 多产物回落（wireMeshletBindings 没建服务，簇 buffer 描述符
+ *    根本不存在，条目烘出来就是「声明了 binding 却无 mapping」= VVL 错误）；
+ *  · `cfg.meshletShadowLod < 0` —— 本档关（-1 = 出厂默认）。
+ *
+ * 第三条路径是**出声**不是早退：`slots` 有值（= 门开且产物在）却零资产命中 ⟹ warn。
+ * 「配置说开了而实际一条没建」静默通过 = 判据全绿而结论是假的（同 wireMeshletCull 的
+ * 「服务缺位而出声」第二道护栏）。
+ *
+ * 🔴 为什么**逐 prim 调** addShadowMeshletEntry 而不是只调一次：条目去重住在被调方（全场景
+ * 1 条目，同一次调用返回同一个下标），但**写回是逐资产的**。逐 prim 走一遍让「没有簇产物的
+ * 资产」天然保持 `kInvalidPipelineIndex`（它们的循环根本走不到）——批 B2 靠这个字段判
+ * 「这个资产能不能走簇路径」，调一次再统一回填就得在这里重造一遍"哪些资产有产物"的判据。
+ * @param slots wireMeshletBindings 的产物（4 个簇 buffer 堆槽 + 可见标志槽；nullopt = 早退）
+ * @param cfg   运行配置（读 meshletShadowLod 本档开关）
+ */
+void bakeShadowMeshletEntries(const UploadedAssets& uploaded, ShaderRegistry& pipelines,
+	const MeshletGeometryStore& meshletGeometry,
+	const std::optional<MeshletBindingSlots>& slots, const RuntimeConfig& cfg) {
+	if (!slots || cfg.meshletShadowLod < 0)
+		return;  // 门关 / 无产物 / 多产物回落 / 本档关 = 零条目零日志（逐位不变 + grep 护栏）
+	const std::array<uint32_t, 4> clusterSlots{slots->vertexPool, slots->clusters, slots->tris,
+		slots->remap};
+	uint32_t baked = 0;
+	// 🔴 条目下标用 optional 而不是 0 初值：0 是**合法条目下标**（内建几何就在低位），零覆盖时
+	// 打进日志的"条目下标 0"会被读成"建在了 0"——那是谎报。
+	std::optional<uint32_t> entryIdx;
+	for (const auto& um : uploaded.models) {
+		if (!meshletGeometry.byFile.contains(um.file))
+			continue;  // 该模型旁没有簇产物（或扫描/对账失败）= 无阴影簇条目
+		for (const uint32_t id : um.assetIds) {
+			entryIdx = pipelines.addShadowMeshletEntry(clusterSlots);
+			pipelines.bindShadowMeshletToAsset(id, *entryIdx);
+			++baked;
+		}
+	}
+	auto* logger = RLLogger::getInstance();
+	if (baked == 0) {
+		// 门开了、产物也在（slots 有值就要求 byFile 恰一份），却没有任何资产的文件名命中
+		// ⟹ 本批的"生效"证据不能是 INFO（什么都没生效）。出声，别静默（同 wireMeshletCull
+		// 「服务缺位而出声」的第二道护栏纪律）。
+		if (logger)
+			logger->warn("meshlet: 阴影簇管线条目**未装配** —— meshlet.enable 开且簇产物存在，"
+						 "但没有一个已上传模型的产物文件命中（shadow_lod={} 无消费者）",
+				cfg.meshletShadowLod);
+		return;
+	}
+	if (logger)
+		logger->info("meshlet: 阴影簇管线条目已装配（★18-B1，**只建条目不接 draw**，接线归 B2）"
+					 " —— 条目下标 {} 覆盖 prims={}（全场景 1 条目，簇 buffer 全局单例）"
+					 " 簇 buffer 槽 {}/{}/{}/{}（binding 17-20，无 21）；shadow_lod={} fallback={}",
+			*entryIdx, baked, clusterSlots[0], clusterSlots[1], clusterSlots[2], clusterSlots[3],
+			cfg.meshletShadowLod,
+			cfg.meshletShadowLodFallback == MeshletLodFallbackMode::l0 ? "l0" : "deepest");
+}
+
+/**
  * 簇化轴 ★1-a1ii-α 装配总入口（main.cppm 声明）：描述符接线 + 条目烘焙两步的顺序
  * 契约内聚在此（bake 依赖 wire 的槽号），main() 只留一次调用（装配层行数预算）。
  *
@@ -593,6 +655,9 @@ std::unique_ptr<MeshletCullService> wireMeshletOverlay(Resources& resources,
 		variant = MeshletMeshVariant::debugOffset;
 	bakeMeshletEntries(uploaded, scene, deferredMode, pipelines, assets, resources, samplers,
 		rtCache, meshletGeometry, slots, variant);
+	// ★18-B1：阴影段簇路径条目（**只建条目不接 draw**，接线归 B2）。放在 bakeMeshletEntries
+	// 之后 = 同一份 slots 复用、且不打乱既有条目序之前的任何一条（本条目是纯追加）。
+	bakeShadowMeshletEntries(uploaded, pipelines, meshletGeometry, slots, cfg);
 	// ★1-a2-i：服务所有权交给调用方（装配层里先于 Renderer 声明的变量），理由 → main.cppm 声明
 	return cullService;
 }

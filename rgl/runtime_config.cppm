@@ -190,6 +190,28 @@ export enum class MeshletCoplanarMode : uint8_t {
 };
 
 /**
+ * 阴影段簇路径的**回落策略**（configs/runtime.lua `meshlet.shadow_lod_fallback` 键，★18-B1）。
+ *
+ * 🔴 **为什么在配置层另立一枚枚举**而不是 `import meshlet_lod;` 复用 `MeshletLodFallback`：
+ * 依赖图原则「配置模块不依赖执行模块」（AGENTS 依赖图原则，同 camera_config 不 import
+ * llm_debug 那条）。`meshlet_lod` 是选级模块（虽然今天恰好无设备依赖），配置层 import 它
+ * 就是给「runtime_config → 执行模块」开一条边——将来那条模块一旦要 VkDevice，配置层就跟着
+ * 拖进设备依赖。枚举值到 `MeshletLodFallback` 的映射住在**装配层**（批 B2），一处赋值。
+ * 两侧枚举值序一致（deepest=0 / l0=1），但**不靠 static_assert 跨模块钉**——映射点是显式
+ * switch，加了第三档会编译不过或走到 default，比静默错位更安全。
+ *
+ * 语义（§18.2 的结论：回落级才是成本主导项，比 D 选几更重要）：
+ *  · `deepest`（默认）= 本 prim 内 ≤ D 的最深存在级（D=5 时 5.10% L0 三角）
+ *  · `l0`            = 回落级 0（对照臂：D=7 时 34.97%，比现状全量重画还贵）
+ * 🔴 未知值 = 启动 fail-fast（`meshlet.coplanar` / `aa` / `present_mode` 同纪律：静默回落 =
+ * 判据整批假绿的地基事故，本键尤其致命——两策略在 D=7 上差 10 倍成本）。
+ */
+export enum class MeshletLodFallbackMode : uint8_t {
+	deepest = 0,  ///< 回落本 prim 内 ≤ D 的最深存在级（默认）
+	l0 = 1,       ///< 回落级 0（对照臂）
+};
+
+/**
  * `renderScale` 的合法区间（**单一真相源**：配置解析钳制与 Swapchain 派生 render extent
  * 都读它，避免两处各写一个魔数、改一个漂一个）。
  *
@@ -435,6 +457,32 @@ export struct RuntimeConfig {
 	 * 与 `meshletSwitch` 同款限制：只在 `diagnostics.cull_replay == "cpu"` 生效。
 	 */
 	bool meshletCull = false;
+
+	/**
+	 * ★18-B1 阴影段簇路径的 **uniform 选级 D**（`runtime.lua meshlet.shadow_lod`，默认 **-1 = 关**）。
+	 *
+	 * 三态语义（§18.7 已定案，别再改形态）：
+	 *  · `-1`（默认）= 本档关：装配层一条阴影条目都不建、一行日志都不打（门关 grep meshlet = 0
+	 *    护栏），阴影全部走既有 `shadowPipelineIndex` 旧管线 ⟹ 逐位不变。
+	 *  · `0` = 🔴 **阳性对照 L0 臂**（§18.6 判据 2）：同一新管线画每 prim 的 L0 前缀，先证明
+	 *    「管线画的是对的几何」，再谈 level D。
+	 *  · `N ≥ 1` = uniform 选级 D=N：每 prim 画 `min(D, 本 prim 最深级)` 那一段连续子区间
+	 *    （§18.3：每 object 的第 D 级是单一连续区间；§18.4：uniform 整级不受 §7.4 那条
+	 *    「group 粒度自适应选级」负知识影响，不读 error、不比阈值）。
+	 *
+	 * 与 `meshletEnable` 的关系：本键是**独立档**（阴影段的杠杆与主 pass 的取代档正交），但
+	 * 簇四段 buffer 的描述符槽由 `meshlet.enable` 的 wireMeshletBindings 提供 ⟹ 生效需要
+	 * `enable = true` 且本键 ≥ 0。数据推荐档 D=5 + deepest（5.10% L0 三角，§18.2）。
+	 * 🔴 类型必须是整数（走 readStrictIntKey，写成字符串/浮点 = 启动失败点名键，理由 →
+	 * readStrictBoolKey 注释那条实测纪律）。负数除 -1 以外的值不当非法（本键只把 `< 0` 当
+	 * 「关」这一件事读），但装配层不会为它们建条目以外的任何行为。
+	 */
+	int32_t meshletShadowLod = -1;
+	/**
+	 * ★18-B1 阴影段簇路径的**回落策略**（`runtime.lua meshlet.shadow_lod_fallback`，默认
+	 * `"deepest"`）。仅在 `meshletShadowLod >= 0` 时有消费者。未知值 = 启动 fail-fast。
+	 */
+	MeshletLodFallbackMode meshletShadowLodFallback = MeshletLodFallbackMode::deepest;
 
 	/** 「TAA 在不在图里」的唯一推导点（原 `scene.lua taa.enabled` 的消费者全部改走这里）。 */
 	[[nodiscard]] constexpr bool aaWantsTaa() const {
