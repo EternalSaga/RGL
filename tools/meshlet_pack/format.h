@@ -23,7 +23,7 @@
 // ## 与 docs/mdi_plan.md §7.2 数据面口径的对应
 //
 //   顶点池 138.4MB = VertexPool；L0 索引 8.5MB(8bit) + 其余级索引 8.2MB = Tris 全量
-//   （L0 = 前缀，按 group.depth==0 切分）；重映射 11.9MB(32bit) = Remap 全量。
+//   （L0 = 前缀，判据是 `refined == -1`，**不是** `group.depth == 0`——见下「语义」节的实测推翻）；重映射 11.9MB(32bit) = Remap 全量。
 //   LOD 不增顶点（简化只在原顶点集上产索引表）⟹ 全部 12 级共用同一份 VertexPool。
 //
 // ## 语义（渲染侧读法，= clusterlod.h 头注释的渲染规则）
@@ -32,6 +32,11 @@
 //   group 下标（-1 = 原始几何 L0）。簇该画 ⟺ groups[c.group].error > 阈值 且
 //   (c.refined == -1 或 groups[c.refined].error ≤ 阈值)。层级 Nodes 是每 DAG 级一棵
 //   树的森林：前 levelCount 个节点是各级根，叶节点 .group ≥ 0 指回 Groups。
+//
+//   🔴 **L0 的判据是 `c.refined == -1`，不是 `group.depth == 0`**。本文件旧版在「与 §7.2
+//   对应」处写的「按 group.depth==0 切分」是**错的**，2026-10-12 实测推翻：depth==0 只有
+//   2,518 簇，而 refined==-1 有 27,487 簇，且后者的三角和**恰等于** header.l0TriangleCount
+//   = 2,832,120（闭式锚）。引擎口径 = `meshlet_ranges_impl.cppm::isL0Cluster`，照它。
 //
 // ## 坐标系
 //

@@ -69,6 +69,12 @@ export struct MeshAsset {
 	// 且两者的去重键不同（模型按六元组、阴影按 vertexSlot）。
 	// kInvalidPipelineIndex = 未回填（门控不开时 renderListSystem 跳过阴影段）。
 	uint32_t shadowPipelineIndex = kInvalidPipelineIndex;
+	// 簇化轴 ★1-a1ii-α：簇路径**影子叠加**管线条目下标（ShaderRegistry::addMeshletEntry 返回，
+	// main 经 bindMeshletToAsset 写回）。不复用 pipelineIndex 的理由同 shadowPipelineIndex：
+	// mesh 阶段读的是簇 buffer 而非本记录的拼接顶点 buffer，去重键也不同（按纹理集，
+	// 簇路径全局只有一份顶点池）。kInvalidPipelineIndex = 未回填（门关 / 无产物 / 多产物
+	// 回落），renderListSystem 据此跳过叠加 draw。
+	uint32_t meshletPipelineIndex = kInvalidPipelineIndex;
 };
 
 /**
@@ -153,6 +159,8 @@ export class AssetTable {
 	void setPipelineIndex(uint32_t id, uint32_t pipelineIndex) { meshes[id].pipelineIndex = pipelineIndex; }
 	/** 写回阴影管线条目引用（ShaderRegistry::addShadowEntry 后由 bindShadowToAsset 调用）。 */
 	void bindShadowPipeline(uint32_t id, uint32_t entryIdx) { meshes[id].shadowPipelineIndex = entryIdx; }
+	/** 写回簇路径叠加管线条目引用（★1-a1ii-α，ShaderRegistry::addMeshletEntry 后调用）。 */
+	void bindMeshletPipeline(uint32_t id, uint32_t entryIdx) { meshes[id].meshletPipelineIndex = entryIdx; }
 	/**
 	 * 注册带索引 mesh 资产（内建几何：顶点 + 索引双 buffer/双 slot，架构债务 1 方案 B 后由
 	 * builtin_geometry 上传路径调用——Resources 不再创建 cube buffer）。

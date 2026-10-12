@@ -277,6 +277,48 @@ export void registerSceneEntities(entt::registry& registry, const UploadedAssets
 								  ShaderRegistry& pipelines);
 
 /**
+ * 簇化轴 ★1-a1ii-α：4 个簇 buffer 的 descriptor heap 槽号（装配层启动期领号一次，
+ * 烘进 meshlet 管线条目的固定 binding 17-20；docs/mdi_plan.md §10.2「全局单例进固定
+ * binding」）。字段序 = binding 升序（17/18/19/20）。
+ */
+export struct MeshletBindingSlots {
+	uint32_t vertexPool = 0;  ///< binding 17：顶点池（48B/顶点 ModelVertex 契约）
+	uint32_t clusters = 0;    ///< binding 18：簇描述表（44B/条 DiskCluster）
+	uint32_t tris = 0;        ///< binding 19：扁平 u8 三角索引流
+	uint32_t remap = 0;       ///< binding 20：扁平 u32 顶点重映射流
+};
+
+/**
+ * 簇化轴 ★1-a1ii-α：影子叠加装配总入口 = ① 簇 buffer 描述符接线（领 4 个 Runtime 段
+ * heap 槽 + 把 `MeshletGeometryStore` 四段 BDA 写成 storage buffer 描述符，binding
+ * 17-20 固定；ensureIzbSlots fallback 同法 host 直写，单份产物前提与多产物回落 →
+ * 定义处注释）→ ② 为**有簇产物的模型**逐 primitive 烘叠加管线条目（与
+ * bakePipelineEntries 同风格派生 = resolvePrimitiveSpecName 同一函数 = 同 frag；
+ * addMeshletEntry 按纹理集去重）写回资产表 meshletPipelineIndex。
+ *
+ * 调用序契约 = `bakePipelineEntries` / `addDiagnosticCloneEntries` 之后（meshlet 条目
+ * modelEntry=false 且晚于克隆调用 = picking/highlight 重放天然跳过）、`assembleBackEnd`
+ * 之前；三个 sampler/RT 槽经各自幂等 ensure 重取 = 与模型条目同号。门关
+ * （meshletEnable=false）= 连槽号都不领、一条条目都不建（逐位不变构造性成立）。
+ * @param meshletDebug true = 阳性对照 SPV 变体（`meshlet.debug`，判据 3；仅门开时生效）
+ */
+export void wireMeshletOverlay(Resources& resources, DeviceContext& device,
+	const MeshletGeometryStore& meshletGeometry, const UploadedAssets& uploaded,
+	const SceneConfig& scene, bool deferredMode, ShaderRegistry& pipelines, AssetTable& assets,
+	SamplerLibrary& samplers, RenderTargetCache& rtCache, bool meshletEnable, bool meshletDebug);
+
+/**
+ * 材质风格 → 管线规格名派生（★1-a1ii-α 起 bakePipelineEntries 与 bakeMeshletEntries
+ * **共用**——叠加与本体必须走同一 material_rules / deferred_styles 映射，否则 frag
+ * 静默接错；原为 bakePipelineEntries 内 lambda，抬出 = 单一真相源）。
+ * 风格 = prim.unlit ? "unlit" : "pbr" 再经 scene.lua material_rules pattern（有序首个
+ * 命中）；deferred 经 deferred_styles（缺失回落 deferred_geometry）、forward 经 styles
+ * 表（缺失 = 启动抛错，同原行为）。
+ */
+export std::string resolvePrimitiveSpecName(const SceneConfig& scene, bool deferredMode,
+	const GltfPrimitive& prim);
+
+/**
  * 簇化轴 ★1-a1i：把簇产物的**逐 prim 簇区间**落到 per-objectSlot 表（registry ctx
  * `ClusterRangeTable`），供 renderListSystem 每帧搬进 `SceneFrameData::clusterRanges`
  * → scene data 尾区 `ObjectClusterRange` 表（@722400，stride 16）。

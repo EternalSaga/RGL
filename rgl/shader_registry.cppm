@@ -225,6 +225,41 @@ export class ShaderRegistry {
 		uint32_t evssmMapSlot);
 
 	/**
+	 * 簇化轴 ★1-a1ii-α：簇路径**影子叠加**管线条目（docs/mdi_plan.md §10.2）。
+	 *
+	 * 与 addModelEntry 的差别只有两处：
+	 *  · **mesh SPV 换成 meshlet.mesh**（debugOffset = true 用 MESHLET_DEBUG_OFFSET 阳性
+	 *    对照变体——门 = 选 SPV 变体不是运行时 flag，2026-10-02 slang fp 重排教训）；
+	 *    frag 与同规格模型条目**同一个 SPV**（输出接口同为 ModelVertexOutput）。
+	 *  · 去重键 = (规格, base/normal/orm/emissive 纹理槽, debugOffset)，**不含顶点槽**——
+	 *    簇路径全局只有一份顶点池（§10.2「条目退化成按纹理集键控」）。
+	 * 材质绑定与模型条目逐条同值（binding 1/2/6/7/8/12/13/15/16 + 3 + 4/5），追加 4 个
+	 * 簇 buffer 的**固定 binding**（17=顶点池 / 18=簇表 / 19=Tris / 20=Remap，
+	 * §10.2「全局单例进固定 binding，不进 per-entry 描述符」；描述符内容由装配层
+	 * wireMeshletBindings 写入这些 Runtime 段槽）。
+	 * modelEntry 位 = false：picking/highlight 克隆与 DGC 候选都不吃本条目（叠加不参与
+	 * 候选序对账）。
+	 * @param specName 管线规格名（与同 primitive 的模型条目同名 = 同一 frag）
+	 * @param textureSlot/normalSlot/ormSlot/emissiveSlot 材质纹理 heap 槽（同模型条目）
+	 * @param samplerSlot 共享 sampler 槽（binding 2）
+	 * @param shadowMapSlot/shadowSamplerSlot 阴影图 + NEAREST sampler（binding 12/13）
+	 * @param evssmMapSlot EVSSM 矩图槽（binding 15）
+	 * @param clusterSlots 4 个簇 buffer 描述符槽（vertexPool/clusters/tris/remap 序）
+	 * @param debugOffset true = 阳性对照 SPV 变体（meshlet.debug）
+	 * @return 条目下标（同键重复调用返回既有下标）
+	 */
+	[[nodiscard]] uint32_t addMeshletEntry(const std::string& specName, uint32_t textureSlot,
+		uint32_t normalSlot, uint32_t ormSlot, uint32_t emissiveSlot, uint32_t samplerSlot,
+		uint32_t shadowMapSlot, uint32_t shadowSamplerSlot, uint32_t evssmMapSlot,
+		std::array<uint32_t, 4> clusterSlots, bool debugOffset);
+
+	/** 簇路径叠加条目写回资产记录（★1-a1ii-α，与 bindShadowToAsset 同节奏）。
+	 * @param assetId mesh 资产记录 id
+	 * @param entryIdx addMeshletEntry 返回的条目下标
+	 */
+	void bindMeshletToAsset(uint32_t assetId, uint32_t entryIdx);
+
+	/**
 	 * 天空盒管线条目（Phase 5.5 批次 4）：单条目（env 槽全局单例，无组合去重需求）。
 	 * mapping = binding 0/1 占位（skybox shader 不声明顶点/索引 = 空转，Phase 3/5 既证
 	 * "映射未消费无害"方向）+ binding 3 scene data（skyClipToWorld 读 invViewProj）+
@@ -584,6 +619,10 @@ export class ShaderRegistry {
 	std::map<std::string, RGL::PipelineSpec> styles;          // 风格名 → SPV 规格（scene.lua）
 	std::map<std::string, uint32_t> indexByName;              // 条目名 → 下标（启动期 name 解析）
 	std::map<std::tuple<std::string, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>, uint32_t> modelEntryBySlot;  // 模型条目去重表：(规格名, 顶点 slot, base 纹理 slot, normal slot, orm slot, emissive slot) → 下标
+	// 簇路径叠加条目去重表（★1-a1ii-α）：(规格名, base/normal/orm/emissive 纹理 slot,
+	// debugOffset) → 下标。**无顶点 slot**（全局一份顶点池，§10.2）；debugOffset 进键 =
+	// 两个 SPV 变体结构上不可能共用条目。
+	std::map<std::tuple<std::string, uint32_t, uint32_t, uint32_t, uint32_t, bool>, uint32_t> meshletEntryByKey;
 	// 阴影条目去重表：唯一变量 = vertexSlot（见 addShadowEntry 注释）
 	std::map<uint32_t, uint32_t> shadowEntryBySlot;
 	// 批 11.3-1d：IZB mask 条目表（vertexSlot → 条目下标；izbMaskEntryFor 消费）

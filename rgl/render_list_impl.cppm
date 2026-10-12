@@ -76,6 +76,33 @@ void collectShadowCasters(const RGL::MeshAsset& asset, const RGL::MaterialAsset&
 }
 
 /**
+ * 簇化轴 ★1-a1ii-α：簇路径**影子叠加** draw 采集（实体遍历内调用，视锥剔除之后——
+ * 叠加与本体同进同退）。四个发射条件（任一不满足 = 零 draw）：
+ *  1. 资产有叠加管线条目（门关 / 无产物 / 多产物回落 = kInvalidPipelineIndex）；
+ *  2. 材质非 blend（透明段按距离排序，叠加不参与——画进独立向量会破坏其排序语义）；
+ *  3. registry ctx 有簇区间表（门关 = 装配层根本不建，meshlet_ranges::ClusterRangeTable）；
+ *  4. 本 objectSlot 的 L0 簇数 > 0（无簇 = 零 group，连空 draw 都不发）。
+ * groupCount = l0Count（恒 L0 档，docs/mdi_plan.md §10.1：L0 恒为区间前缀）；pushData
+ * 与本体 draw 同一个 DrawArgs（同 objectIndex ⟹ shader 读同一套材质/MVP 表项）。
+ * @param asset/mat 本实体资产与材质（判据 1/2）
+ * @param table 簇区间表（nullptr = 门关）
+ * @param objectSlot = MeshRef.objectSlot（表下标 = shader objectIndex）
+ * @param pushData 与本体 draw 同源的 push 字节（帧局部存储，规则同 DrawCall::pushData）
+ * @param out 叠加段收集向量（实体迭代序 = 确定性）
+ */
+void collectMeshletOverlay(const RGL::MeshAsset& asset, const RGL::MaterialAsset& mat,
+    const ClusterRangeTable* table, uint32_t objectSlot,
+    std::span<const std::byte> pushData, std::vector<RGL::DrawCall>& out) {
+    if (asset.meshletPipelineIndex == kInvalidPipelineIndex || mat.alphaModeBlend
+        || table == nullptr || objectSlot >= table->bySlot.size())
+        return;
+    const uint32_t l0Count = table->bySlot[objectSlot].l0Count;
+    if (l0Count == 0)
+        return;
+    out.push_back(RGL::DrawCall{asset.meshletPipelineIndex, pushData, l0Count});
+}
+
+/**
  * 候选 × 逐级光空间体 → 阴影 draw 清单（级主序，级内实体迭代序）。
  * 一个图元可以落多级（大物体跨越多个切片）——这正是逐级剔除能把总量压在单级之上的原因。
  * @param cands 投影体候选表
@@ -134,6 +161,29 @@ std::array<ShadowVolume, kActiveShadowCascades> buildShadowVolumes(const Light& 
 		volumes[c] = buildShadowVolume(light, slices[c], casterMin, casterMax, snapGrid);
 	emitShadowCasters(cands, volumes, objectSlotCount, shadowArgs, out);
 	return volumes;
+}
+
+/**
+ * 级联包围球（自 renderListSystem 抽出 = stylecheck 函数行数预算，纯搬移零行为变化）。
+ * 级 0 的近平面用**固定小值**而非量化 near：自适应 near（下限实测 0.05）量化后可能
+ * 抬高到 0.125，视深落在 [0.05, 0.125) 的近处片元（选级 = c0）会掉出子视锥 → 出块
+ * 全亮旁路 → 脚下没影子。固定 0.02 恒低于任何自适应值，且姿态无关（不引入游动）。
+ * nearC/farC **直接传进** frustumBoundingSphere，不从子 proj 反解（2026-09-30 批 12.1
+ * 单测抓出）：float32 RH_ZO 透视矩阵在 near/far ≳1e3 时就编不准 far，反解误差被比值
+ * 线性放大到超过拟合球的保守余量 → 球装不下子视锥。见 scene_context 4 参重载注释。
+ */
+std::array<Bounds, kActiveShadowCascades> computeCascadeSpheres(const ViewProjection& viewProj,
+	float shadowNear, float shadowFar) {
+	static constexpr float kShadowNearFloor = 0.02f;
+	std::array<Bounds, kActiveShadowCascades> spheres{};
+	for (uint32_t c = 0; c < kActiveShadowCascades; ++c) {
+		const float nearC = c == 0 ? kShadowNearFloor
+			: cascadeSplitDistance(shadowNear, shadowFar, c - 1u, kActiveShadowCascades);
+		const float farC = cascadeSplitDistance(shadowNear, shadowFar, c, kActiveShadowCascades);
+		spheres[c] = frustumBoundingSphere(viewProj.view,
+			projWithDepthRange(viewProj.proj, nearC, farC), nearC, farC);
+	}
+	return spheres;
 }
 
 }  // namespace
@@ -427,6 +477,11 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	std::vector<Pending> opaque, transparent;
 	// Phase 11 批 11.2：阴影 draw 清单。**不经过主视罞剔除**（见下方注释）。
 	std::array<std::vector<Pending>, kActiveShadowCascades> shadowCasters;
+	// 簇化轴 ★1-a1ii-α：簇路径影子叠加 draw（独立向量，不进 calls/不参与候选序对账；
+	// 发射条件 → collectMeshletOverlay）。簇区间表 = 装配层启动期填的 registry ctx，
+	// 门关 = 无该条目 = nullptr = 零 draw。
+	std::vector<RGL::DrawCall> meshletPending;
+	const auto* clusterTable = rg.ctx().find<ClusterRangeTable>();
 
 	// 循环前一次性 resize（objectSlot 稠密 [0, NextObjectSlot.next)，Phase 6 instancing）：
 	// 循环内 resize 触发 realloc 会使先前存入 DrawCall 的 span 悬空（帧 0 确定性 UAF——
@@ -466,23 +521,8 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	//   用同一对量化值——两处必须同源。
 	const float shadowNear = quantizeShadowDistance(viewProj.nearPlane);
 	const float shadowFar = quantizeShadowDistance(viewProj.farPlane);
-	// 级 0 的近平面用**固定小值**而非量化 near：自适应 near（下限实测 0.05）量化后可能
-	// 抬高到 0.125，视深落在 [0.05, 0.125) 的近处片元（选级 = c0）会掉出子视锥 → 出块
-	// 全亮旁路 → 脚下没影子。固定 0.02 恒低于任何自适应值，且姿态无关（不引入游动）。
-	static constexpr float kShadowNearFloor = 0.02f;
-	std::array<Bounds, kActiveShadowCascades> cascadeSpheres{};
-	for (uint32_t c = 0; c < kActiveShadowCascades; ++c) {
-		const float nearC = c == 0 ? kShadowNearFloor
-			: cascadeSplitDistance(shadowNear, shadowFar, c - 1u, kActiveShadowCascades);
-		const float farC = cascadeSplitDistance(shadowNear, shadowFar, c, kActiveShadowCascades);
-		// nearC/farC **直接传进去**，不从子 proj 反解（2026-09-30 批 12.1 单测抓出）：
-		// float32 RH_ZO 透视矩阵在 near/far ≳1e3 时就编不准 far，反解误差被比值线性
-		// 放大到超过拟合球的保守余量 → 球装不下子视锥。而这两个值就在上面，是真值。
-		// 与 projWithDepthRange 的既有理由同源（"直接拿字段不会漂"）。见
-		// scene_context::frustumBoundingSphere 的 4 参重载注释。
-		cascadeSpheres[c] = frustumBoundingSphere(viewProj.view,
-			projWithDepthRange(viewProj.proj, nearC, farC), nearC, farC);
-	}
+	// 级 0 近平面固定值 / nearC·farC 直传理由 → computeCascadeSpheres 注释
+	const auto cascadeSpheres = computeCascadeSpheres(viewProj, shadowNear, shadowFar);
 	// Phase 7b：cullArgs 逐 candidate 填充（candidate 序 = main C3 表序——同 view 迭代序 +
 	// 同守卫：pipelineIndex 有效 / groupCount>0 / 不透明；透明留 CPU 排序路径不入候选）
 	std::vector<RGL::DrawArgs> cullArgs;
@@ -536,6 +576,9 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 			auto& bucket = mat.alphaModeBlend ? transparent : opaque;  // MASK 走 opaque（shader 内 discard，Phase 8 C1）
 			const glm::vec3 d = glm::vec3(tf.world[3]) - camera.position;  // world 平移列（无 per-entity 包围盒时的排序代理）
 			bucket.push_back(Pending{call, glm::dot(d, d)});  // 距离²（免 sqrt，排序单调等价）
+			// 簇化轴 ★1-a1ii-α：影子叠加 draw（视锥剔除后 = 与本体同进同退；条件 → helper）。
+			collectMeshletOverlay(asset, mat, clusterTable, meshRef.objectSlot,
+				std::as_bytes(std::span<const RGL::DrawArgs>{&args, 1}), meshletPending);
 		});
 
 	// 主灯（阴影矩阵要它的方向）—— 提到此处：光空间体必须在剔除之前成形
@@ -583,6 +626,9 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 			fresh.shadowCalls.push_back(p.call);
 		fresh.shadowBoundaries[c + 1] = static_cast<uint32_t>(fresh.shadowCalls.size());
 	}
+	// 簇化轴 ★1-a1ii-α：叠加段整体搬入（实体迭代序 = 确定性；执行点 = opaque 段之后，
+	// 见 vkrenderer_passrec executePassDraws）。门关 = 空向量。
+	fresh.meshletCalls = std::move(meshletPending);
 
 	// scene data（Phase 5 批次 2）：光方向归一化、color×intensity 预乘、eyePos=相机世界位置；
 	// 对象矩阵表 span 指向 state.matrices（帧局部存储，drawFrame 录制期拷进 staging）

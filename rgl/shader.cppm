@@ -443,7 +443,9 @@ export class RenderPipeline {
 	RenderPipeline(vk::raii::Device& device, const ShaderEffect& effect,
 		const PipelineBindings& bindings) {
 		const uint32_t descriptorSize = bindings.descriptorSize;
-		VkDescriptorSetAndBindingMappingEXT mappings[16]{};
+		// 容量 24（★1-a1ii-α 从 16 抬）：model 条目已用 13（base 0-5 + extra 6/7/8/12/13/15/16），
+		// meshlet 条目再 +4 个簇 buffer（17-20）= 17。上限判据 = 最多 extra 的条目，别贴边。
+		VkDescriptorSetAndBindingMappingEXT mappings[24]{};
 		// 顺序填充（Phase 5.5 批次 4 修正：原固定下标 [0/1/2/3/4/5] 假设 textured=true——
 		// 天空盒首个 textured=false+hasSceneData+hasEnv 组合下 mappings[2] 留空却计入
 		// count → VVL "sType must be..." + envSampler 被挤出 count → "no mapping for

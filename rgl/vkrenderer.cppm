@@ -248,6 +248,11 @@ export class Renderer {
 	void executePassDraws(vk::raii::CommandBuffer& cmd, const RgPassPlan& pass,
 		const FrameDrawList& list, uint32_t frameSlot);
 	/**
+	 * 簇化轴 ★1-a1ii-α：影子叠加段盲执行（executePassDraws 通用分支在 opaque 段之后
+	 * 调用；口径全在调用点注释）。空向量 = 零 draw 零开销。
+	 */
+	void executeMeshletOverlay(vk::raii::CommandBuffer& cmd, const FrameDrawList& list);
+	/**
 	 * picking 回读录制（Phase 10 批 10.5）：drawFrame ⑪.5 之后调用——服务未挂 =
 	 * 零调用；否则 PickingService::record（object_id RT 请求像素 1-texel → staging）。
 	 * @param cmd 本帧命令缓冲（录制期）

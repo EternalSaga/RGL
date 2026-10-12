@@ -278,6 +278,28 @@ void uploadEnvironment(Resources& resources, Environment& env, DeviceContext& de
 	envCtx.mipRange = static_cast<float>(envAsset.mipLevels - 1);
 }
 
+/** 风格 → 管线规格名派生（契约见 main.cppm 声明；★1-a1ii-α 起 bakePipelineEntries 与
+ *  bakeMeshletEntries 共用——原为 bakePipelineEntries 内 lambda，逐字搬出零行为变化）。 */
+std::string resolvePrimitiveSpecName(const SceneConfig& scene, bool deferredMode,
+	const GltfPrimitive& prim) {
+	std::string style = prim.unlit ? "unlit" : "pbr";
+	if (!prim.unlit) {
+		for (const auto& [pattern, styleKey] : scene.materialRules)
+			if (prim.materialName.find(pattern) != std::string::npos) {
+				style = styleKey;
+				break;
+			}
+	}
+	if (deferredMode) {
+		const auto defIt = scene.deferredStyleMap.find(style);
+		return defIt == scene.deferredStyleMap.end() ? std::string("deferred_geometry") : defIt->second;
+	}
+	const auto styleIt = scene.styleMap.find(style);
+	if (styleIt == scene.styleMap.end())
+		throw std::runtime_error(fmt::format("style not in scene.lua styles: {}", style));
+	return styleIt->second;
+}
+
 /** C1 管线条目烘焙（per unique 模型；风格派生 + 条目去重 + DIAG 分布日志）。 */
 void bakePipelineEntries(UploadedAssets& uploaded, const SceneConfig& scene, bool deferredMode,
 						 ShaderRegistry& pipelines, Resources& resources, SamplerLibrary& samplers,
@@ -306,31 +328,12 @@ void bakePipelineEntries(UploadedAssets& uploaded, const SceneConfig& scene, boo
 		// 风格键，有序首个命中；默认规则 {Emissive→light, Foliage→vegetation}）。forward 经
 		// styleMap、deferred 经 deferredStyleMap 落各自规格名（植被/光源两路专属视觉对齐；
 		// deferred 变体把类别写进 G-buffer emissive.a，light.frag 分支复刻 forward 视觉）。
-		// （lambda 独立计分：宿主认知复杂度不叠加 lambda 体——stylecheck 规则）
-		// 风格 → 管线规格名（lambda 独立计分）
-		auto resolveSpecName = [&](const GltfPrimitive& prim) -> std::string {
-			std::string style = prim.unlit ? "unlit" : "pbr";
-			if (!prim.unlit) {
-				for (const auto& [pattern, styleKey] : scene.materialRules)
-					if (prim.materialName.find(pattern) != std::string::npos) {
-						style = styleKey;
-						break;
-					}
-			}
-			if (deferredMode) {
-				const auto defIt = scene.deferredStyleMap.find(style);
-				return defIt != scene.deferredStyleMap.end() ? defIt->second
-															  : std::string("deferred_geometry");
-			}
-			const auto styleIt = scene.styleMap.find(style);
-			if (styleIt == scene.styleMap.end())
-				throw std::runtime_error(fmt::format("style not in scene.lua styles: {}", style));
-			return styleIt->second;
-		};
+		// 风格 → 管线规格名 = resolvePrimitiveSpecName 共享函数（★1-a1ii-α：派生逻辑抬出，
+		// 叠加条目与本体条目同源；原 lambda 删除——独立计分注释随宿主一并搬至定义处）。
 		auto addPrimitiveEntry = [&](const GltfPrimitive& prim, size_t i) {
 			const uint32_t id = um.assetIds[i];
 			const uint32_t entryIdx = pipelines.addModelEntry(
-				resolveSpecName(prim),
+				resolvePrimitiveSpecName(scene, deferredMode, prim),
 				assetTable.get(id).heapSlot,  // = 模型拼接顶点 slot（同模型全 primitive 相同）
 				assetTable.getTexture(texIds.base[i]).heapSlot,
 				assetTable.getTexture(texIds.normal[i]).heapSlot,

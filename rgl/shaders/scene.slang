@@ -129,9 +129,9 @@ ObjectDraw readObjectDraw(uint objectIndex)
 // kSceneDataClusterRange* 推导 + static_assert 钉死，本文件字面量手工同源）。
 // 布局走与 ObjectDraw 同一条反射路（scene_forward_schema 登记 → C API 反射生成 C++
 // 同名 struct + 逐字段 offsetof static_assert），故本声明是布局唯一真相源。
-// 🔴 **本批（★1-a1i）零消费者**：mesh shader 的读取点归 ★1-a1（`groupID.x + base` =
-// 全局簇下标；`count` 给全级档、`l0Count` 给恒 L0 档，见 docs/mdi_plan.md §10.1）。
-// 表内容由装配层写入（门关 = 全 0），写它不改任何像素。
+// 消费者 = ★1-a1ii-α 的 meshlet.mesh.slang（`groupID.x + base` = 全局簇下标；
+// 恒 L0 档用 `l0Count`，`count` 留给 ★1-a2 全级档，见 docs/mdi_plan.md §10.1）。
+// 表内容由装配层写入（门关 = 全 0），门关本区全 0 ⟹ 读取点天然零 group。
 struct ObjectClusterRange
 {
     uint base;      // 该 primitive 的簇区间起点（全局簇下标）
@@ -139,6 +139,15 @@ struct ObjectClusterRange
     uint l0Count;   // 区间**前缀**里的 L0 簇条数（产物不变量：L0 恒为前缀）
     uint reserved;  // 补齐位（★2 选级预算）
 };
+
+// 簇化轴 ★1-a1ii-α：按 objectIndex 读簇区间条目。与 readObjectDraw 同纪律：
+// Load<ObjectClusterRange> 整读（scalar layout 偏移 = 反射真值 = 生成的 C++ 布局）；
+// 基址 @722400 = scene_data.cppm kSceneDataClusterRangeOffset（static_assert 钉死），
+// 本字面量与其手工一致（同 kTrianglesPerGroup 纪律，改一侧必两端同步）。
+ObjectClusterRange readObjectClusterRange(uint objectIndex)
+{
+    return sceneData.Load<ObjectClusterRange>(722400u + objectIndex * 16u);
+}
 
 float3 worldPos(ObjectMatrix m, float3 p)
 {

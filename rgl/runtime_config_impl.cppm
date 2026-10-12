@@ -255,17 +255,19 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg) {
 }
 
 /**
- * `meshlet` 嵌套块解析（★0-b1 簇路径总门）：`meshlet = { enable = … }` 一枚布尔。
- * 缺块 / 缺键 = 保持结构体默认（`meshletEnable = false` = 门关 = 逐位不变护栏，P5 拍板）。
- * 形态先例 = readFsrBlock（嵌套块 + readBoolKey，无扁平键双读兼容）。本批**只加配置项与
- * 读取，不接线到任何渲染路径**（消费者 = ★0-b2/★1）；gate_lint 不挂号的理由与 ssr 块完全
- * 同款（runtime.lua 键不在 gate_lint 管辖的两张回显表里，→ readSsrBlock 末段）。
+ * `meshlet` 嵌套块解析（★0-b1 簇路径总门 + ★1-a1ii-α debug 档）：
+ * `meshlet = { enable = …, debug = … }` 两枚布尔。
+ * 缺块 / 缺键 = 保持结构体默认（`meshletEnable = false` = 门关 = 逐位不变护栏，P5 拍板；
+ * `meshletDebug = false` = 正常叠加档）。
+ * 形态先例 = readFsrBlock（嵌套块 + readBoolKey，无扁平键双读兼容）。gate_lint 不挂号的
+ * 理由与 ssr 块完全同款（runtime.lua 键不在 gate_lint 管辖的两张回显表里，→ readSsrBlock 末段）。
  */
 static void readMeshletBlock(const sol::table& root, RuntimeConfig& cfg) {
 	sol::table meshlet = root["meshlet"];
 	if (!meshlet.valid() || !meshlet.is<sol::table>())
 		return;
 	readBoolKey(meshlet, "enable", cfg.meshletEnable);
+	readBoolKey(meshlet, "debug", cfg.meshletDebug);
 }
 
 /** loadRuntimeConfig 定义（接口注释见 runtime_config.cppm）：headless/headless_size/win_size/show_after/present_mode/ui_font 逐一可选解析 + parseLlm。 */

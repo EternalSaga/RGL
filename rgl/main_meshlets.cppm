@@ -4,18 +4,32 @@ module;
 
 // 入口模块 main 的分区实现单元（module main:meshlets;）——簇化轴的**装配层接线**集中一处。
 // 为什么单独成篇（★1-a1 挂号 ①，docs/mdi_plan.md §9）：main_scene.cppm 已 840 行，
-// 「装配层接线别再往里塞」是上一批就记下的债；本单元只干一件事——把 CPU 侧簇产物扫描结果
-// 落到 per-objectSlot 的表上，供 scene data 尾区上传。
+// 「装配层接线别再往里塞」是上一批就记下的债；本单元只做簇轴接线——
+// ★1-a1i：CPU 侧簇产物扫描结果落到 per-objectSlot 的表（供 scene data 尾区上传）；
+// ★1-a1ii-α：簇 buffer 描述符装配（wireMeshletBindings）+ 影子叠加管线条目烘焙
+// （bakeMeshletEntries）。
 module main:meshlets;
 
 import main;  // clang 不给 partition impl unit 隐式 import 主接口——必须显式
 import rlstd;
 import rllogger;
+import rlvk;      // vk:: DeviceAddressRangeEXT / writeResourceDescriptorsEXT 描述符装配
+import vk_device;     // DeviceContext（描述符写入取 device 句柄）
+import vk_resources;  // Resources（allocSlot / descriptor heap 槽地址）
 import scene_context;  // MeshRef（asset / objectSlot）+ NextObjectSlot（实例矩阵槽计数）
 import meshlet_asset;  // MeshletAsset（只读视图：prims 身份字段）
 import meshlet_ranges;  // scanClusterRanges / MeshletRangeScan / ClusterRangeTable
 import meshlet_hand;  // traverseClusterHandedness（★0.5-c 真产物统计锚：UV 手性 CPU 参考）
+import meshlet_geometry;  // MeshletGeometryStore（4 段 GPU buffer 的 BDA，描述符内容源）
 import scene_forward_types_generated;  // ObjectClusterRange（scene data 表条目，反射生成）
+import scene_config;   // SceneConfig（resolvePrimitiveSpecName 入参）
+import scene_data;     // kShadowMapSize（阴影图边长，与模型条目同值）
+import render_graph;   // ensureShadowMapSlot（幂等，按名缓存命中同槽）
+import gltf_loader;    // GltfModel/GltfPrimitive（逐 primitive 风格派生）
+import asset_table;    // AssetTable（纹理槽号 + bindMeshletToAsset 写回）
+import shader_registry;  // ShaderRegistry（addMeshletEntry / bindMeshletToAsset）
+import sampler_library;      // SamplerLibrary（共享/point sampler 幂等重取同槽）
+import render_target_cache;  // RenderTargetCache（阴影图 RT 幂等重取同槽）
 
 namespace RGL {
 namespace {
@@ -160,6 +174,37 @@ void scanModelRanges(const UploadedAssets& assets, const MeshletAssetStore& mesh
 	}
 }
 
+/**
+ * 逐段把簇 buffer 的 BDA 写成 heap 槽 storage buffer 描述符（ensureIzbSlots fallback
+ * 同法：`writeResourceDescriptorsEXT` + `vk::DeviceAddressRangeEXT`，装配期 host 直写，
+ * 不进命令流）。自 wireMeshletBindings 抽出（stylecheck 认知复杂度预算，纯搬移）。
+ * 描述符 range = **allocBytes**（含 16B 补齐区）——meshlet.mesh.slang loadU8x3 的尾读
+ * 钳制论证依赖「range 覆盖补齐」。
+ * @return false = 某槽地址解析失败（已 WARNING，调用方回落 nullopt）
+ */
+bool writeMeshletSectionDescriptors(DeviceContext& device, Resources& resources,
+	std::span<const MeshletGeometrySection* const> sections, std::span<const uint32_t> slots,
+	std::span<const char* const> names) {
+	auto* logger = RLLogger::getInstance();
+	const vk::DeviceSize descSize = resources.getDescriptorHeap().getDescriptorSize();
+	for (size_t i = 0; i < sections.size(); ++i) {
+		const auto addr = resources.getDescriptorHeap().getSlotCpuAddress(slots[i]);
+		if (!addr) {
+			if (logger)
+				logger->warn("meshlet: 槽 {} 地址解析失败（{}）：{} —— 叠加停用", slots[i],
+					names[i], addr.error().describe());
+			return false;
+		}
+		vk::DeviceAddressRangeEXT range{sections[i]->deviceAddress, sections[i]->allocBytes};
+		vk::ResourceDescriptorInfoEXT desc{};
+		desc.type = vk::DescriptorType::eStorageBuffer;
+		desc.data.pAddressRange = &range;  // 同步 host 写，局部临时量存活到调用返回即够
+		device.getDevice().writeResourceDescriptorsEXT(desc,
+			vk::HostAddressRangeEXT{*addr, descSize});
+	}
+	return true;
+}
+
 }  // namespace
 
 /**
@@ -198,9 +243,122 @@ void wireClusterRangeTable(entt::registry& registry, const UploadedAssets& asset
 		++filled;
 	});
 	if (auto* logger = RLLogger::getInstance())
-		logger->info("meshlet: ObjectClusterRange 表已装配（scene data 尾区 @722400，本批零消费者）"
-					 "—— prims={} clusters={} l0Clusters={} / objectSlot 填充 {}/{}",
+		logger->info("meshlet: ObjectClusterRange 表已装配（scene data 尾区 @722400，消费者 = "
+					 "meshlet.mesh.slang）—— prims={} clusters={} l0Clusters={} / objectSlot 填充 {}/{}",
 			totals.primRanges, totals.clusters, totals.l0Clusters, filled, slotCount);
+}
+
+/**
+ * 簇 buffer 描述符接线（★1-a1ii-α；对外经下方 wireMeshletOverlay 总入口调用，
+ * 契约见 main.cppm 声明）。四步：门早退 → 单产物闸门 →
+ * 领 4 个 Runtime 段槽 → 逐段写 storage buffer 描述符（ensureIzbSlots fallback 同法：
+ * `writeResourceDescriptorsEXT` + `vk::DeviceAddressRangeEXT`，装配期 host 直写）。
+ *
+ * 描述符 range = 段的 **allocBytes**（含 16B 补齐区）：shader 侧 u8 三元组拼接的尾字
+ * 读可能落进补齐区（meshlet.mesh.slang loadU8x3 的钳制论证依赖「range 覆盖补齐」）。
+ */
+std::optional<MeshletBindingSlots> wireMeshletBindings(Resources& resources,
+	DeviceContext& device, const MeshletGeometryStore& meshletGeometry, bool meshletEnable) {
+	auto* logger = RLLogger::getInstance();
+	if (!meshletEnable)
+		return std::nullopt;  // 门关 = 连号都不领（逐位不变构造性成立）
+	if (meshletGeometry.byFile.empty())
+		return std::nullopt;  // 门开但无产物 / 上传失败（各自已在上游 INFO/WARNING，不重复）
+	if (meshletGeometry.byFile.size() != 1) {
+		if (logger)
+			logger->warn("meshlet: 本批叠加路径只支持**单份**簇产物，现有 {} 份 —— 叠加停用，"
+			             "全部模型回落现行路径（多顶点池要 per-entry 顶点 binding，★1-b 面）",
+				meshletGeometry.byFile.size());
+		return std::nullopt;
+	}
+	const auto& [file, geom] = *meshletGeometry.byFile.begin();
+	// binding 升序 = 字段序（17/18/19/20，addMeshletEntry 的 kClusterBindings 同源）
+	const std::array<const MeshletGeometrySection*, 4> sections{
+		&geom.vertexPool, &geom.clusters, &geom.tris, &geom.remap};
+	static constexpr std::array<const char*, 4> names{"meshlet.gpu.vertexPool",
+		"meshlet.gpu.clusters", "meshlet.gpu.tris", "meshlet.gpu.remap"};
+	std::array<uint32_t, 4> slotNumbers{};
+	for (size_t i = 0; i < sections.size(); ++i) {
+		auto slot = resources.allocSlot(SlotSegment::Runtime, names[i]);
+		if (!slot) {
+			if (logger)
+				logger->warn("meshlet: 簇 buffer 领槽失败（{}）：{} —— 叠加停用", names[i],
+					slot.error().describe());
+			return std::nullopt;
+		}
+		slotNumbers[i] = *slot;
+	}
+	if (!writeMeshletSectionDescriptors(device, resources, sections, slotNumbers, names))
+		return std::nullopt;
+	if (logger)
+		logger->info("meshlet: 簇 buffer 描述符已装配 {} —— 槽 {}/{}/{}/{}（binding 17-20，"
+					 "顶点池 {}B）",
+			file, slotNumbers[0], slotNumbers[1], slotNumbers[2], slotNumbers[3],
+			geom.vertexPool.allocBytes);
+	return MeshletBindingSlots{.vertexPool = slotNumbers[0], .clusters = slotNumbers[1],
+		.tris = slotNumbers[2], .remap = slotNumbers[3]};
+}
+
+/**
+ * 影子叠加条目烘焙（★1-a1ii-α；对外经下方 wireMeshletOverlay 总入口调用，契约见
+ * main.cppm 声明）。逐 primitive 走
+ * resolvePrimitiveSpecName（与本体条目同一函数 = 同一 frag），条目去重住在
+ * addMeshletEntry（按纹理集，§10.2）；只有**有簇产物的模型**（store 键命中）才建条目
+ * ——其余资产 meshletPipelineIndex 保持 kInvalid = render_list 零叠加 draw。
+ */
+void bakeMeshletEntries(const UploadedAssets& uploaded, const SceneConfig& scene,
+	bool deferredMode, ShaderRegistry& pipelines, AssetTable& assets, Resources& resources,
+	SamplerLibrary& samplers, RenderTargetCache& rtCache,
+	const MeshletGeometryStore& meshletGeometry, const std::optional<MeshletBindingSlots>& slots,
+	bool debugOffset) {
+	if (!slots)
+		return;  // 门关 / 无产物 / 多产物回落 = 一条条目都不建（逐位不变）
+	// 材质侧三槽幂等重取 = 与模型条目同号（bakePipelineEntries 已领；binding 12/13/15
+	// 无条件烘焙纪律同源——光照 frag 声明的 descriptor 缺 mapping 才是 VVL 错误）。
+	const uint32_t samplerSlot = samplers.ensureShared();
+	const auto shadowSlot = ensureShadowMapSlot(rtCache, kShadowMapSize);
+	if (!shadowSlot)
+		throw std::runtime_error("meshlet overlay: 阴影图 RT 创建失败: " + shadowSlot.error().describe());
+	const uint32_t shadowSamplerSlot = samplers.ensurePointSampler();
+	const auto evssmSlot = resources.ensureEvssmSampleSlot();
+	if (!evssmSlot)
+		throw std::runtime_error("meshlet overlay: EVSSM 矩图槽发号失败: " + evssmSlot.error().describe());
+	const std::array<uint32_t, 4> clusterSlots{slots->vertexPool, slots->clusters, slots->tris,
+		slots->remap};
+	uint32_t baked = 0;
+	for (const auto& um : uploaded.models) {
+		if (!meshletGeometry.byFile.contains(um.file))
+			continue;  // 该模型旁没有簇产物（或扫描/对账失败）= 无叠加条目
+		for (size_t i = 0; i < um.assetIds.size(); ++i) {
+			const uint32_t id = um.assetIds[i];
+			const uint32_t entryIdx = pipelines.addMeshletEntry(
+				resolvePrimitiveSpecName(scene, deferredMode, um.model->primitives[i]),
+				assets.getTexture(um.textureIds.base[i]).heapSlot,
+				assets.getTexture(um.textureIds.normal[i]).heapSlot,
+				assets.getTexture(um.textureIds.orm[i]).heapSlot,
+				assets.getTexture(um.textureIds.emissive[i]).heapSlot,
+				samplerSlot, *shadowSlot, shadowSamplerSlot, *evssmSlot, clusterSlots,
+				debugOffset);
+			pipelines.bindMeshletToAsset(id, entryIdx);
+			++baked;
+		}
+	}
+	if (auto* logger = RLLogger::getInstance())
+		logger->info("meshlet: 叠加管线条目已装配 —— prims={}（按纹理集去重）debug 变体={}",
+			baked, debugOffset);
+}
+
+/**
+ * 簇化轴 ★1-a1ii-α 装配总入口（main.cppm 声明）：描述符接线 + 条目烘焙两步的顺序
+ * 契约内聚在此（bake 依赖 wire 的槽号），main() 只留一次调用（装配层行数预算）。
+ */
+void wireMeshletOverlay(Resources& resources, DeviceContext& device,
+	const MeshletGeometryStore& meshletGeometry, const UploadedAssets& uploaded,
+	const SceneConfig& scene, bool deferredMode, ShaderRegistry& pipelines, AssetTable& assets,
+	SamplerLibrary& samplers, RenderTargetCache& rtCache, bool meshletEnable, bool meshletDebug) {
+	const auto slots = wireMeshletBindings(resources, device, meshletGeometry, meshletEnable);
+	bakeMeshletEntries(uploaded, scene, deferredMode, pipelines, assets, resources, samplers,
+		rtCache, meshletGeometry, slots, meshletEnable && meshletDebug);
 }
 
 }  // namespace RGL

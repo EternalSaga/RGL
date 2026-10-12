@@ -452,7 +452,22 @@ void Renderer::executePassDraws(vk::raii::CommandBuffer& cmd, const RgPassPlan& 
 		profilerAddDraws(static_cast<uint32_t>(seg.size()));
 		for (const auto& call : seg)
 			drawOne(cmd, call);
+		// 簇化轴 ★1-a1ii-α：影子叠加段 = opaque 段之后盲执行（同 pass 同动态状态；正常档
+		// 与底共面 + eLess ⟹ 零像素写入，A1/A2 逐位不变的构造性保证）。独立向量不进
+		// 候选序对账（FrameDrawList::meshletCalls 注释）；`cull_replay=gpu_sync` 走上面
+		// cullDriver 分支 = 本分支不执行 = 叠加静默跳过（本批不接 DGC，★1-b 再议）。
+		// 门 meshlet.enable 关 = 空向量 = 零 draw 零开销。
+		if (pass.drawSource == "opaque")
+			executeMeshletOverlay(cmd, list);
 	}
+}
+
+void Renderer::executeMeshletOverlay(vk::raii::CommandBuffer& cmd, const FrameDrawList& list) {
+	if (list.meshletCalls.empty())
+		return;
+	profilerAddDraws(static_cast<uint32_t>(list.meshletCalls.size()));
+	for (const auto& call : list.meshletCalls)
+		drawOne(cmd, call);
 }
 
 std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {

@@ -333,6 +333,16 @@ export struct RuntimeConfig {
 	 * 管辖的两张回显表里，→ readSsrBlock 末段）。
 	 */
 	bool meshletEnable = false;
+	/**
+	 * 簇路径**阳性对照**档（configs/runtime.lua `meshlet.debug` 键，★1-a1ii-α）。
+	 *
+	 * = true（且 enable = true）时叠加条目改用 `meshlet.mesh_MESHLET_DEBUG_OFFSET.spv`
+	 * 变体：clip.z 拉向相机 + 翻法线 ⟹ 叠加真正赢得深度测试并留下可见差异——判据 3
+	 * 「画了相同内容 vs 什么都没画」的区分器（docs/mdi_plan.md §11）。门 = 选 SPV 变体
+	 * 不是运行时 flag 分支（2026-10-02 slang fp 重排教训，同 IZB/PCSS/EVSSM 纪律）。
+	 * 默认关；enable 关时本键无意义（条目根本不建）。
+	 */
+	bool meshletDebug = false;
 
 	/** 「TAA 在不在图里」的唯一推导点（原 `scene.lua taa.enabled` 的消费者全部改走这里）。 */
 	[[nodiscard]] constexpr bool aaWantsTaa() const {

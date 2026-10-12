@@ -220,6 +220,13 @@ export struct FrameDrawList {
 	// 而阴影段的可见集与主视野不同（下方“源几何”备注），属于独立通道。
 	// drawSource = "shadow" + 分块号字符串（见 scene_context::shadowDrawSource）。
 	std::vector<DrawCall> shadowCalls;
+	// 簇化轴 ★1-a1ii-α：簇路径**影子叠加**段（**独立向量，不属于 calls**，shadowCalls 同法）。
+	// 为什么不拼进 calls：opaque 段序被 GPU culling 候选序对账（collectCpuObjectSlots）与
+	// cull_driver 重放路强依赖，插叠加 draw 会在非默认 cull 档打破对账；独立向量 = 对账
+	// 零感知。执行点 = executePassDraws 通用分支在 opaque 段之后盲执行（同 pass 同状态）；
+	// `cull_replay=gpu_sync` 走 cullDriver 分支 = 叠加静默跳过（本批不接 DGC，★1-b 再议）。
+	// 门 `meshlet.enable` 关 = 资产无 meshlet 条目 = 本向量恒空（逐位不变的构造性保证）。
+	std::vector<DrawCall> meshletCalls;
 	// 阴影段的**分块边界**（kSceneShadowCascadeCount + 1 个）：boundaries[0] = 0，boundaries[c+1] = 级 c 的段尾。
 	// 为何不用 4 个独立向量：这 4 段在**同一张图集**上、为 4 个 pass 交替渲染，
 	// 序号连续才是自然的；拼一个向量 + 边界数组与 calls/transparentStart 的现有风格一致。

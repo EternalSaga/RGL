@@ -596,6 +596,17 @@ void logStartupBaseline(const Resources& res, const ShaderRegistry& registry,
 
 }  // namespace RGL
 
+#ifdef RGL_AFTERMATH
+/** 崩溃转储挂钩（自 main() 抽出 = 装配层行数预算，纯搬移零行为变化；编译期开关须早于
+ *  任何 device 创建 = 调用点仍在 main() 首行）。 */
+void enableAftermath() {
+	GFSDK_AFTERMATH_EnableGpuCrashDumps(GFSDK_AFTERMATH_Version_API,
+		GFSDK_AFTERMATH_GpuCrashDumpWatchedApiFlags_Vulkan,
+		GFSDK_AFTERMATH_GpuCrashDumpFeatureFlags_Default,
+		rglAftermathDumpCb, nullptr, nullptr, nullptr, nullptr);
+}
+#endif
+
 /**
  * 启动流主函数（逐段契约见体内块注释；全景对照 AGENTS.md "main 启动流" 节 /
  * docs/技术概念.md §main 启动流）：
@@ -617,10 +628,7 @@ void logStartupBaseline(const Resources& res, const ShaderRegistry& registry,
  */
 int main() {
 #ifdef RGL_AFTERMATH  // 编译期开关：须早于任何 device 创建（Aftermath 文档要求）
-	GFSDK_AFTERMATH_EnableGpuCrashDumps(GFSDK_AFTERMATH_Version_API,
-		GFSDK_AFTERMATH_GpuCrashDumpWatchedApiFlags_Vulkan,
-		GFSDK_AFTERMATH_GpuCrashDumpFeatureFlags_Default,
-		rglAftermathDumpCb, nullptr, nullptr, nullptr, nullptr);
+	enableAftermath();
 #endif
 	// 配置先于窗口：llm_debug 模式影响建窗（离屏隐藏窗 + 配置尺寸）
 	auto configsOpt = loadAllConfigs();
@@ -737,6 +745,12 @@ int main() {
 		// 克隆管线条目（Phase 10 批 10.5 picking / 10.7 highlight）：契约与门控见 helper
 		// 注释；自 main() 抽出（★0-b2 装配层行数预算，纯代码搬移零行为变化）。
 		addDiagnosticCloneEntries(shaderRegistry);
+		// 簇化轴 ★1-a1ii-α：影子叠加装配（描述符接线 + 条目烘焙，顺序契约内聚在 helper）。
+		// 时序 = 克隆段之后（picking/highlight 重放天然跳过）且先于 assembleBackEnd（GpuCull
+		// 条目数快照 = 容量语义，多几条无害）。门关 = 两步各自首行早退（零条目零日志）。
+		wireMeshletOverlay(vkResources, vkDevice, meshletGeometry, assets, configs.scene, deferredMode,
+			shaderRegistry, assetTable, samplers, rtCache, configs.runtime.meshletEnable,
+			configs.runtime.meshletDebug);
 		// C2/C2b：场景实体注册（模型/cube/灯）+ 实例矩阵槽容量契约
 		registerSceneEntities(registry, assets, configs.scene, vkResources, assetTable, shaderRegistry);
 		// 簇化轴 ★1-a1i：簇区间表装配（**必须在实体注册之后**——落表读 MeshRef{asset,objectSlot}）；

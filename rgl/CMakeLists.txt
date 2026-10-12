@@ -18,6 +18,11 @@ include(${CMAKE_SOURCE_DIR}/cmake/RglMeshlets.cmake)
 rgl_shader(cube.mesh MESH_SPV types material scene)
 rgl_shader(cube.frag FRAG_SPV types)
 rgl_shader(model.mesh MODEL_MESH_SPV model material scene)
+# 簇化轴 ★1-a1ii-α：读簇产物的 mesh shader（影子叠加）。MESHLET_DEBUG_OFFSET 变体 =
+# 阳性对照（判据 3）：门 = 选 SPV 变体不是运行时 flag（2026-10-02 slang fp 重排教训，
+# 见 RglSlang.cmake 门控变体注释）。
+rgl_shader(meshlet.mesh MESHLET_MESH_SPV model material scene)
+rgl_shader_defined(meshlet.mesh MESHLET_MESH_DEBUG_SPV MESHLET_DEBUG_OFFSET model material scene)
 rgl_shader(model.frag MODEL_FRAG_SPV model material scene)
 # Phase 5 批次 3：真简化 PBR frag（mesh 复用 model.mesh.spv，import scene.slang 光照数据）
 rgl_shader(model_pbr.frag MODEL_PBR_FRAG_SPV model material scene)

@@ -134,10 +134,13 @@ return {
     -- ── ★0-b1 簇化渲染路径（meshlet 产物）总门，**默认关** ──
     -- 门关 = 逐位不变是硬护栏（docs/mdi_plan.md P5 拍板）。逐资产门**不在本键**——
     -- = 「该资产有没有簇产物」（§7.8 拍板 3：产物构建期生成、缺失 → 回落现行路径）。
-    -- 本批只落配置项与读取侧模块（rgl/meshlet_asset.cppm），**尚未接线到任何渲染路径**
-    --（消费者 = ★0-b2/★1）；默认值唯一真相源 = RuntimeConfig::meshletEnable 成员初始化。
+    -- ★1-a1ii-α 起 enable 开 = 恒 L0 簇**影子叠加**（同 objectIndex 重画一遍，正常档与底
+    -- 共面 + eLess ⟹ 零像素写入）；默认值唯一真相源 = RuntimeConfig 成员初始化。
     meshlet = {
         enable = false,
+        -- ★1-a1ii-α 阳性对照档（判据 3）：叠加改用 DEBUG_OFFSET SPV 变体（clip.z 拉向
+        -- 相机 + 翻法线）⟹ 叠加真正写像素，图像必变。enable 关时无意义。
+        debug = false,
     },
 
     -- DIAG：隐藏窗启动、第 N 帧后显示（可见窗 fault 排查；-1 = 立即显示）

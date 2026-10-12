@@ -142,6 +142,101 @@ namespace RGL {
 				fragSpvPath);
 	}
 
+	// 簇化轴 ★1-a1ii-α：簇路径叠加条目（契约见接口注释）。与 addModelEntry 的三处差别：
+	// mesh SPV 换 meshlet.mesh（按 debugOffset 选变体）、去重键去顶点 slot 加 debug 位、
+	// 追加 4 个固定 binding（17-20）。材质绑定段与 addModelEntry 逐条同值——**别合并成
+	// 一份共享代码**：两处一旦漂移（比如模型条目加 binding 而叠加条目忘跟），图像静默
+	// 错配材质；此处显式重复 + 注释互指，改一处必看见另一处。
+	uint32_t ShaderRegistry::addMeshletEntry(const std::string& specName, uint32_t textureSlot,
+			uint32_t normalSlot, uint32_t ormSlot, uint32_t emissiveSlot, uint32_t samplerSlot,
+			uint32_t shadowMapSlot, uint32_t shadowSamplerSlot, uint32_t evssmMapSlot,
+			std::array<uint32_t, 4> clusterSlots, bool debugOffset) {
+		const auto key = std::make_tuple(specName, textureSlot, normalSlot, ormSlot, emissiveSlot,
+			debugOffset);
+		if (auto it = meshletEntryByKey.find(key); it != meshletEntryByKey.end())
+			return it->second;
+
+		const RGL::PipelineSpec* base = findSpec(specName.c_str());
+		if (!base)
+			throw std::runtime_error(fmt::format("pipeline spec not found: {}", specName));
+		// mesh 阶段换 SPV（frag 原样 = 同规格模型条目同一个）；spec 缓存按 (规格, debug) 去重。
+		static std::map<std::pair<std::string, bool>, RGL::PipelineSpec> meshletSpecs;
+		const auto specIt = meshletSpecs.find({specName, debugOffset});
+		const RGL::PipelineSpec* spec = nullptr;
+		if (specIt != meshletSpecs.end())
+			spec = &specIt->second;
+		else {
+			RGL::PipelineSpec variant = *base;
+			variant.meshSpv = debugOffset
+				? "generated_shaders/meshlet.mesh_MESHLET_DEBUG_OFFSET.spv"
+				: "generated_shaders/meshlet.mesh.spv";
+			variant.name = base->name + (debugOffset ? "_meshlet_dbg" : "_meshlet");
+			spec = &meshletSpecs.emplace(std::make_pair(specName, debugOffset), std::move(variant))
+			          .first->second;
+		}
+		const uint32_t descriptorSize = res.getDescriptorHeap().getDescriptorSize();
+		const uint32_t samplerHeapOffset =
+			samplerSlot * res.getSamplerHeap().getDescriptorSize();
+		const uint32_t sceneSlot = sceneData.ensure();
+		RGL::PipelineBindings b{};
+		b.descriptorSize = descriptorSize;
+		// binding 0/1 顶点段：meshlet mesh 不声明 modelVertexBuffer（读簇顶点池 @17）⟹
+		// 本 mapping 空转无害（skybox/light 条目"映射未消费"既证方向）；slotVertex 传
+		// 纹理槽号只为占个合法值，不被任何 stage 消费。
+		b.slotVertex = textureSlot;
+		b.slotIndex = textureSlot;
+		b.slotTexture = textureSlot;
+		b.samplerHeapOffset = samplerHeapOffset;
+		b.slotSceneData = sceneSlot;
+		b.textured = true;
+		b.hasSceneData = true;
+		if (const auto* envAsset = env.get()) {
+			b.hasEnv = true;
+			b.slotEnv = envAsset->heapSlot;
+			b.envSamplerHeapOffset =
+				env.ensureSkySampler(envAsset->mipLevels) * res.getSamplerHeap().getDescriptorSize();
+		}
+		// 材质绑定段 = addModelEntry 同名注释所述（6/7/8 贴图、12/13 阴影、15/16 EVSSM；
+		// 无条件烘焙纪律同源）。
+		b.extra.push_back({.binding = 6, .sampler = false, .heapSlot = normalSlot});
+		b.extra.push_back({.binding = 7, .sampler = false, .heapSlot = ormSlot});
+		b.extra.push_back({.binding = 8, .sampler = false, .heapSlot = emissiveSlot});
+		b.extra.push_back({.binding = 12, .sampler = false, .heapSlot = shadowMapSlot});
+		b.extra.push_back({.binding = 13, .sampler = true,
+			.samplerHeapOffset = static_cast<vk::DeviceSize>(shadowSamplerSlot)
+				* res.getSamplerHeap().getDescriptorSize()});
+		b.extra.push_back({.binding = 15, .sampler = false, .heapSlot = evssmMapSlot});
+		b.extra.push_back({.binding = 16, .sampler = true,
+			.samplerHeapOffset = static_cast<vk::DeviceSize>(samplerSlot)
+				* res.getSamplerHeap().getDescriptorSize()});
+		// 簇 buffer 固定 binding（§10.2）：17=顶点池 18=簇表 19=Tris 20=Remap。
+		// 描述符内容 = 装配层 wireMeshletBindings 写入这些槽（storage buffer 描述符，
+		// ensureIzbSlots fallback 同法）；本条目只烘槽号。
+		static constexpr std::array<uint32_t, 4> kClusterBindings{17u, 18u, 19u, 20u};
+		for (size_t i = 0; i < kClusterBindings.size(); ++i)
+			b.extra.push_back({.binding = kClusterBindings[i], .sampler = false,
+				.heapSlot = clusterSlots[i]});
+		auto entry = PipelineEntry{
+			.name = fmt::format("meshlet.{}.t{}.n{}.o{}.e{}{}", specName, textureSlot, normalSlot,
+				ormSlot, emissiveSlot, debugOffset ? ".dbg" : ""),
+			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b),
+			.spec = *spec, .bindings = b};
+		const uint32_t index = static_cast<uint32_t>(entries.size());
+		indexByName[entry.name] = index;
+		meshletEntryByKey[key] = index;
+		entries.push_back(std::move(entry));
+		if (auto* logger = RLLogger::getInstance())
+			logger->debug("pipeline entry: meshlet.{} (base slot {} / cluster slots {}/{}/{}/{} / "
+				"debug {}) → 下标 {}",
+				specName, textureSlot, clusterSlots[0], clusterSlots[1], clusterSlots[2],
+				clusterSlots[3], debugOffset, index);
+		return index;
+	}
+
+	void ShaderRegistry::bindMeshletToAsset(uint32_t assetId, uint32_t entryIdx) {
+		assets.bindMeshletPipeline(assetId, entryIdx);
+	}
+
 	uint32_t ShaderRegistry::addSkyEntry() {
 		if (auto idx = pipelineIndex("skybox"))
 			return *idx;
