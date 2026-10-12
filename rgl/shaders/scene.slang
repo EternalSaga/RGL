@@ -445,48 +445,54 @@ ObjectMatrix readTaaMotion()
     return m;
 }
 
-// ── Phase 15 批 15.1 SSR 尾区 ──
+// ── Phase 15 批 15.1 SSR 尾区（迁移批 S-3 起 = 类型化载体，本文件零字节偏移）──
 //
-// 基址与 C++ 侧 scene_data.cppm kSceneDataSsrOffset / kSceneDataSsrParamsOffset /
-// kSceneDataSsrGateOffset 手写同源（**只有 C++ 那一侧有 static_assert 钉**——slang 没有能
-// 引用 C++ 常量的机制，本侧漂移只能靠端到端判据 just ssr-check 抓）：
-//   @723712  mat4 ssrViewProj —— 本帧**抖动后** proj·view（与 @64 skyInvViewProj 严格互逆、
+// 载体 = binding 31 的 `ConstantBuffer<SsrParamsBlock>`（§9.5 定案表给 SSR 区的号），物理
+// 存储仍是 scene data 单 buffer 的 SSR 区（C++ 侧 kSceneDataSsrOffset 子范围描述符）。
+// 三段合并成一个契约 struct ⟹ 原来「只有 C++ 那一侧有 static_assert 钉、shader 侧漂移
+// 只能靠端到端判据 just ssr-check 抓」的**单向钉**换成两侧同源（生成物逐字段 offsetof
+// assert + 写端整块 memcpy）。区内布局（字节 = 契约字段偏移，反射真值）：
+//   @0   mat4 viewProj —— 本帧**抖动后** proj·view（与 @64 skyInvViewProj 严格互逆、
 //   与深度缓冲配套；SSR 命中点投回屏幕 uv 用正向矩阵，消费方配 mulM/uvFromWorld 列组合惯例）。
-//   @723776  vec4 ssrParams —— (sceneRadius, maxDistanceRadii, thicknessPx, biasPx)：
+//   @64  vec4 params —— (sceneRadius, maxDistanceRadii, thicknessPx, biasPx)：
 //   x = SceneBounds.radius（世界空间场景并集包围球半径 = 尺度无关参数锚点），yzw = 由它
 //   导出的三个无量纲系数（configs/runtime.lua `ssr` 块）。
-//   @723792  vec4 ssrGate —— (roughFull, roughCutoff, blurScale, 保留)：x/y = 粗糙度门控区间
+//   @80  vec4 gate —— (roughFull, roughCutoff, blurScale, 保留)：x/y = 粗糙度门控区间
 //   （与场景尺度无关，故单独一槽；分组理由 → scene_data.cppm 同槽注释）；z = 螺旋模糊半径
 //   系数（批 15.3 子步 B，ssr_apply 消费，全分辨率 px 口径）。
 // 为什么是 CPU 直传正向矩阵而不是 shader 里 inverse(@64)：inverse(inverse(M)) 与 M 无位级
 // 契约，而 SSR 的 uv 精度直接进 ray march 采样位置（全量推导 → scene_data.cppm 同槽注释）。
+struct SsrParamsBlock
+{
+    ObjectMatrix viewProj;  // 本帧抖动后 proj·view（列主序 4 列，同阴影 VP 惯用法）
+    float4 params;          // (sceneRadius, maxDistanceRadii, thicknessPx, biasPx)
+    float4 gate;            // (roughFull, roughCutoff, blurScale, 保留)
+};
+
+[[vk::binding(31, 0)]]
+ConstantBuffer<SsrParamsBlock> sceneSsr;
+
 ObjectMatrix readSsrViewProj()
 {
-    uint base = 723712u;  // kSceneDataSsrOffset
-    ObjectMatrix m;
-    m.c0 = asfloat(sceneData.Load4(base));
-    m.c1 = asfloat(sceneData.Load4(base + 16u));
-    m.c2 = asfloat(sceneData.Load4(base + 32u));
-    m.c3 = asfloat(sceneData.Load4(base + 48u));
-    return m;
+    return sceneSsr.viewProj;
 }
 
 // SSR 尺度锚点与三个导出系数（x = SceneBounds.radius，空场景 = 0；yzw = maxDistanceRadii /
-// thicknessPx / biasPx）。消费者 = ssr.frag；口径与兜底责任 → scene_data.cppm
-// kSceneDataSsrParamsOffset。**系数无 shader 侧默认值**（唯一真相源 = RuntimeConfig）。
+// thicknessPx / biasPx）。消费者 = ssr.frag；口径与兜底责任 → scene_data.cppm SSR 区注释。
+// **系数无 shader 侧默认值**（唯一真相源 = RuntimeConfig）。
 float4 readSsrParams()
 {
-    return asfloat(sceneData.Load4(723776u));  // kSceneDataSsrParamsOffset
+    return sceneSsr.params;
 }
 
 // SSR 粗糙度门控 + 模糊旋钮（x = roughFull、y = roughCutoff、z = blurScale、w 保留）。
 // x/y 消费者 = ssr_trace.frag 的 `1 - smoothstep(x, y, roughness)`；⚠ 要求 x < y（反了 =
-// 门控反向），不变式落点与「配置层为何不校验」→ scene_data.cppm kSceneDataSsrGateOffset。
+// 门控反向），不变式落点与「配置层为何不校验」→ scene_data.cppm SSR 区注释。
 // z 消费者 = ssr_apply.frag 的螺旋模糊半径（roughness × z，**全分辨率 px**；0 = 消融档 =
 // 纯双线性上采样）。批 15.3 子步 B 起占用（此前措辞「zw 保留」，w 仍保留）。
 float4 readSsrGate()
 {
-    return asfloat(sceneData.Load4(723792u));  // kSceneDataSsrGateOffset
+    return sceneSsr.gate;
 }
 
 // ── Phase 15 批 15.2 子步 A 湿面区（迁移批 1 起 = 类型化载体，本文件零字节偏移）──

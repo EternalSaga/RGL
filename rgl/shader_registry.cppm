@@ -408,7 +408,7 @@ export class ShaderRegistry {
 	/**
 	 * 批 15.3-B：SSR **march** pass 管线条目（半分辨率，写 ssr_trace RT；门默认关不被调用 =
 	 * 条目表逐位不变）。spec = "ssr_trace"（mesh 复用 light.mesh.spv 全屏大三角 + ssr_trace.frag）。
-	 * binding：0/1 占位 + 3 sceneData（@723712 ssrViewProj = 本帧**抖动后** proj·view，ray march
+	 * binding：0/1 占位 + 3 sceneData（binding 31 的 `SsrParamsBlock.viewProj` = 本帧**抖动后** proj·view，ray march
 	 * 把命中点投回屏幕 uv 用）+ extra：4 → 本帧场景色（**恒 scene_hdr**，理由见 addSsrTraceEntry
 	 * 定义处注释）、5/6/7 → G-buffer normal/position/metalrough 采样槽（通道号镜像 light.frag）、
 	 * 8 → 深度图采样槽（与 ao/velocity/taa 复用同一份 ensureDepthSampleSlot 的槽）、

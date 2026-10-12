@@ -290,15 +290,25 @@ void Renderer::createSceneStaging(RGL::Resources& vkResources) {
 		sizeof(glm::vec4));  // 批 13.8 输入侧重建核（0 = 双线性 = 门关 → taa.frag 逐位不变）
 	std::memcpy(stage + kSceneDataTaaClipControlOffset, &list.sceneData.taaClipControl,
 		sizeof(glm::vec4));  // 批 13.11 历史裁剪消融门（0 = 现行 = 门关 → taa.frag 逐位不变）
-	// Phase 15 批 15.1 SSR 区：本帧**抖动后** proj·view（与 @64 skyInvViewProj 严格互逆）。
-	// 无条件写（64B）——交付时无消费者（scene.slang readSsrViewProj 备好待 15.1 接线），
-	// 写它不改任何像素，且省下「按门分支写」的第二条路径（同 shadow/TAA 尾区纪律）。
-	std::memcpy(stage + kSceneDataSsrOffset, &list.sceneData.ssrViewProj, sizeof(glm::mat4));
-	// Phase 15 批 15.1 收尾：SSR 参数子区（vec4，x = SceneBounds.radius = ssr_trace.frag 的尺度
-	// 锚点）。无条件写（16B，同矩阵区纪律：门关路径也保证值正确，省第二条分支）
-	std::memcpy(stage + kSceneDataSsrParamsOffset, &list.sceneData.ssrParams, sizeof(glm::vec4));
-	// Phase 15 批 15.1 参数面：SSR 阈值门控系数（@723792，紧随 ssrParams；同样无条件写，理由同上）
-	std::memcpy(stage + kSceneDataSsrGateOffset, &list.sceneData.ssrGate, sizeof(glm::vec4));
+	// Phase 15 批 15.1 SSR 区：本帧**抖动后** proj·view（与 @64 skyInvViewProj 严格互逆）
+	// + 参数 vec4 + 门控 vec4。迁移批 S-3 起三段合并成契约 `SsrParamsBlock`（binding 31
+	// 载体），**按生成 struct 整块写**：旧的三个基址常量（kSceneDataSsr{,Params,Gate}Offset）
+	// 删除，字段偏移只在反射生成物一处。无条件写（96B，交付时无消费者也不改像素，同 shadow/
+	// TAA 尾区纪律：门关路径也保证值正确，省「按门分支写」的第二条路径）。
+	// mat4 → ObjectMatrix 的**列直拷**与旧的「memcpy 64B」逐字节同（glm 是 col_major，
+	// mat[i] = 第 i 列；下面第一条 assert 钉住两者同尺寸，viewProj 在偏移 0 由生成物 assert 钉）。
+	static_assert(sizeof(ObjectMatrix) == sizeof(glm::mat4)
+			&& sizeof(SsrParamsBlock) == sizeof(glm::mat4) + 2 * sizeof(glm::vec4),
+		"ObjectMatrix 与 glm::mat4 字节形态不同源，或契约 struct 出现 padding（列直拷前提失效）");
+	const SsrParamsBlock ssrBlock {
+		.viewProj = ObjectMatrix {list.sceneData.ssrViewProj[0], list.sceneData.ssrViewProj[1],
+		                          list.sceneData.ssrViewProj[2], list.sceneData.ssrViewProj[3]},
+		.params = list.sceneData.ssrParams,
+		.gate = list.sceneData.ssrGate,
+	};
+	static_assert(sizeof(ssrBlock) == kSceneDataSsrBytes,
+		"SsrParamsBlock 尺寸与 SSR 区容量失同步（scene_data.cppm）");
+	std::memcpy(stage + kSceneDataSsrOffset, &ssrBlock, sizeof(ssrBlock));
 	// Phase 15 批 15.2 子步 A：湿面参数区（身份调制系数 @723968 + 空间变化 @723984，2×vec4）。
 	// 无条件写（同 ssrParams/ssrGate 尾区纪律：门关路径也保证值正确，省第二条分支；
 	// 本步零消费者，写它不改任何像素）

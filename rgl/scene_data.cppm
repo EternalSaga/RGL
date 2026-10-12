@@ -507,12 +507,14 @@ static_assert(kSceneDataTaaOffset == 723456 && kSceneDataTaaMotionOffset == 7235
  *  - 为什么不让 shader 自己 `inverse(@64)`：`inverse(inverse(M))` 与 M **无位级契约**
  *    （余子式展开的舍入误差被两次求逆放大），而 SSR 的 uv 精度直接进 ray march 采样位置
  *    ——误差形态不是「糊一点」而是系统性偏移。CPU 已持有正向矩阵，直传 = 零重推导。
- *  - 交付时**无消费者**（scene.slang `readSsrViewProj` 备好待 15.1 接线），无条件写、
- *    不改任何像素（同 shadow/TAA 尾区「无消费者时照写」纪律）。
- *  消费端 = scene.slang readSsrViewProj 字面量（两侧 static_assert 钉死同步）。 */
-export inline constexpr uint32_t kSceneDataSsrOffset =
-	alignUp(kSceneDataTaaOffset + kSceneDataTaaBytes, kSceneRegionAlign);
-/** SSR 系数子区（vec4, 16B）= (sceneRadius, maxDistanceRadii, thicknessPx, biasPx)。
+ *  - 接线前（批 15.1 交付时）无消费者，批 15.3 起 ssr_trace / ssr_apply 消费；**无条件写**、
+ *    门关路径也保证值正确（同 shadow/TAA 尾区纪律：省下「按门分支写」的第二条路径）。
+ *  消费端 = scene.slang `ConstantBuffer<SsrParamsBlock>`（binding 31，迁移批 S-3；本区三段
+ *  = 契约字段 viewProj / params / gate，字节偏移只存在于反射生成物一处）。三段本就同区连排
+ *  ⟹ 本批**零布局变更**；字段级常量（旧 kSceneDataSsrParamsOffset / kSceneDataSsrGateOffset）
+ *  删除，写端（writeSceneStaging）按同一个生成 struct 整块 memcpy。
+ *
+ *  **字段 params**（vec4, 16B）= (sceneRadius, maxDistanceRadii, thicknessPx, biasPx)。
  *  **语义分组 = 「尺度锚点 + 三个由它导出的系数」**——四个分量同属"射线几何量"，故同槽：
  *  - `x` = 世界空间场景并集包围球半径（boundsSystem 每帧聚合，空场景 = 0）= **尺度锚点**。
  *    旧版 kMaxDistance/kThickness/kBias 是按闭式靶（米制）调的世界单位常量，交付场景
@@ -522,13 +524,15 @@ export inline constexpr uint32_t kSceneDataSsrOffset =
  *  - `y/z/w` = 三个**无量纲系数**（configs/runtime.lua `ssr` 块，每帧量、非创建期量）：
  *    maxDistance = x·y；thickness/bias = z/w × worldPerPixel(**采样点**视深，不是起点)。
  *
- *  生产者 = fillSsrParams（可测接缝），护栏 = tests/test_ssr_params（两源结构）+
- *  tests/test_scene_config（配置往返）。**默认值唯一真相源 = `RuntimeConfig` 成员初始化值**
- *  （shader 侧无 fallback 常量——两处定义迟早漂移，见 ssr.frag.slang 参数段）。 */
-export inline constexpr uint32_t kSceneDataSsrParamsOffset = kSceneDataSsrOffset + 64u;
-/** SSR 粗糙度门控 + 模糊子区（vec4, 16B）= (roughFull, roughCutoff, blurScale, 保留)。
+ *  生产者 = fillSsrParams（可测接缝），护栏 = tests/test_ssr_params + tests/test_scene_config
+ *  （配置往返）。**默认值唯一真相源 = `RuntimeConfig` 成员初始化值**
+ *  （shader 侧无 fallback 常量——两处定义迟早漂移，见 ssr.frag.slang 参数段）。
+ *  字段位置 = `SsrParamsBlock::params`（@64，反射生成物 offsetof assert 钉死）；旧的
+ *  `kSceneDataSsrParamsOffset` 常量随迁移批 S-3 删除（写端按生成 struct 整块写）。
  *
- *  **为什么不塞进上面那个 ssrParams**（设计决策，别"顺手合并"）：那四个是"由 sceneRadius
+ *  **字段 gate**（vec4, 16B）= (roughFull, roughCutoff, blurScale, 保留)。
+ *
+ *  **为什么不塞进 params 字段**（设计决策，别"顺手合并"）：那四个是"由 sceneRadius
  *  导出的射线几何量"，本组是**与场景尺度无关的材质属性区间/像素域系数**（roughness 本身
  *  无量纲；blurScale 的单位 = 全分辨率 px，与场景尺度无关）。混进一槽 = 语义上两组旋钮
  *  共用一个名字，改任一组都要读另一组的口径。
@@ -540,15 +544,20 @@ export inline constexpr uint32_t kSceneDataSsrParamsOffset = kSceneDataSsrOffset
  *
  *  ⚠ `x < y` 是 **shader 侧不变式**（`smoothstep(x, y, roughness)` 要求等号左 ≤ 右，
  *  反了 = 门控反向 = 粗糙面满反射、光滑面全关）。配置层**不校验**，理由与不变式落点 →
- *  `SsrTuning::roughCutoff` 注释。 */
-export inline constexpr uint32_t kSceneDataSsrGateOffset = kSceneDataSsrOffset + 80u;
-export inline constexpr uint32_t kSceneDataSsrBytes = 96u;
-// 钉的是「C++ 常量 == 已知的三个基址」：改 C++ 侧必编译失败。⚠ **改 scene.slang 那一侧不会**
-// ——slang 里没有能引用 C++ 常量的机制，shader 字面量单侧漂只能靠端到端判据（just ssr-check）
-// 抓，机器对账规则尚未落地（缺口账 → docs/phase15_plan.md §3.2）。
-static_assert(kSceneDataSsrOffset == 723712 && kSceneDataSsrParamsOffset == 723776
-		&& kSceneDataSsrGateOffset == 723792,
-	"scene.slang readSsrViewProj/readSsrParams/readSsrGate literals 723712/723776/723792 out of sync with scene_data.cppm offsets");
+ *  `SsrTuning::roughCutoff` 注释。
+ *  字段位置 = `SsrParamsBlock::gate`（@80）；旧的 `kSceneDataSsrGateOffset` 常量随迁移批
+ *  S-3 删除。 */
+export inline constexpr uint32_t kSceneDataSsrOffset =
+	alignUp(kSceneDataTaaOffset + kSceneDataTaaBytes, kSceneRegionAlign);
+export inline constexpr uint32_t kSceneDataSsrBytes =
+	static_cast<uint32_t>(sizeof(SsrParamsBlock));
+// 区容量与契约 struct 同源（96 = mat4 + 2×vec4，与合并前的三段连排逐字节同 ⟹ 其后各区
+// 不动，本批**零布局变更**）。区基址这条是「上游区改尺寸 ⟹ 本区搬家」的绊线：SSR 侧
+// 已无字节字面量（迁移批 S-3），搬家时本 assert 红 = 强制确认湿面/簇区间等下游绊线同步。
+static_assert(kSceneDataSsrBytes == 96u,
+	"SsrParamsBlock (reflection-generated) size out of sync with SSR region bytes");
+static_assert(kSceneDataSsrOffset == 723712,
+	"SSR region base drifted from the documented tail offset 723712");
 
 /** Phase 15 批 15.2 子步 A 湿面参数区（2×vec4, 32B）= 身份调制系数 + 空间变化参数
  *  （尾区追加，既有偏移逐字节不动 diff0，先例 = 批 11.2 阴影 VP 区 / 批 12.6 TAA 区 /
@@ -841,6 +850,16 @@ export class SceneDataService {
 	}
 
 	/**
+	 * SSR 区 UBO 子范围槽号（迁移批 S-3，shader 端 binding 31；用法与 wetSlot 同型，
+	 * PipelineBindings::slotSceneSsr）。描述符内容 = {buffer 基址 +
+	 * kSceneDataSsrOffset, sizeof(SsrParamsBlock)} 的 eUniformBuffer。
+	 */
+	[[nodiscard]] uint32_t ssrSlot() {
+		sceneDataSlot = ensure();
+		return sceneSsrSlot;
+	}
+
+	/**
 	 * 逐对象世界矩阵表 SSBO 子范围槽号（类型化迁移 批 T1，shader 端 binding 23；
 	 * PipelineBindings::slotObjectMatrices）。描述符内容 = {buffer 基址 +
 	 * kSceneDataObjectMatrixOffset, kSceneDataObjectMatrixBytes} 的 eStorageBuffer——
@@ -873,7 +892,7 @@ export class SceneDataService {
 	/** 区槽总数（含全区 scene.data 本身）= ensure 领槽数 = writeRegionDescriptors 行数。
 	 *  🔴 每迁一区 +1 时**只改这一处**：四张 std::array 都以它取尺寸，漏写描述符行会
 	 *  编译失败（初始化列表元素多于 N），而不是留到运行期读脏槽。 */
-	static constexpr size_t kRegionSlotCount = 10;
+	static constexpr size_t kRegionSlotCount = 11;
 
 	/**
 	 * 全部区槽描述符一次写（ensure 领槽后调用；实现见文件下方）。
@@ -892,6 +911,7 @@ export class SceneDataService {
 	uint32_t sceneLightArraySlot = 0;  // 灯数组区 UBO 子范围槽号（迁移批 3，binding 24）
 	uint32_t sceneShadowViewProjSlot = 0;  // 阴影 VP 区 UBO 子范围槽号（迁移批 S-1，binding 28）
 	uint32_t sceneShadowParamsSlot = 0;  // 阴影采样参数区 UBO 子范围槽号（迁移批 S-2，binding 29）
+	uint32_t sceneSsrSlot = 0;  // SSR 区 UBO 子范围槽号（迁移批 S-3，binding 31）
 	uint32_t sceneObjectMatrixSlot = 0;  // 对象矩阵表 SSBO 子范围槽号（批 T1，binding 23）
 	uint32_t sceneObjectMvpSlot = 0;  // MVP 表 SSBO 子范围槽号（批 T1，binding 25）
 	uint32_t sceneObjectDrawSlot = 0;  // 绘制属性表 SSBO 子范围槽号（批 T1，binding 26）
@@ -1000,6 +1020,8 @@ inline uint32_t SceneDataService::ensure() {
 	sceneShadowViewProjSlot = allocRuntimeSlot("scene.shadow_vp");  // binding 28
 	// 迁移批 S-2：阴影采样参数区（UBO 子范围，binding 29）
 	sceneShadowParamsSlot = allocRuntimeSlot("scene.shadow_params");  // binding 29
+	// 迁移批 S-3：SSR 区（UBO 子范围，binding 31）
+	sceneSsrSlot = allocRuntimeSlot("scene.ssr");  // binding 31
 	// 批 T1：逐对象四张表（世界矩阵 / MVP / 绘制属性 / 簇区间）各一 SSBO 子范围槽
 	sceneObjectMatrixSlot = allocRuntimeSlot("scene.object_matrices");  // binding 23
 	sceneObjectMvpSlot = allocRuntimeSlot("scene.object_mvps");  // binding 25
@@ -1014,8 +1036,8 @@ inline uint32_t SceneDataService::ensure() {
 /**
  * 全部区槽描述符一次 writeResourceDescriptorsEXT（领槽方 = ensure，见其 allocRuntimeSlot）。
  * 载体口径：全区与批 T1 的四张表 = `eStorageBuffer`（shader 端 ByteAddressBuffer /
- * StructuredBuffer）；湿面 / 辐照度 / 灯数组 / 阴影 VP / 阴影参数 = `eUniformBuffer`
- *（shader 端 ConstantBuffer，迁移批 1/2/3/S-1/S-2）。子范围 address 对齐 = 基址 256（minAlignment）+
+ * StructuredBuffer）；湿面 / 辐照度 / 灯数组 / 阴影 VP / 阴影参数 / SSR = `eUniformBuffer`
+ *（shader 端 ConstantBuffer，迁移批 1/2/3/S-1/S-2/S-3）。子范围 address 对齐 = 基址 256（minAlignment）+
  * 区基址 256 台阶（本文件顶部布局红线）⟹ 恒过 VUID-12350（UBO）/ VUID-12351（SSBO）；
  * 闸门读数见 checkAlignmentGate。
  * 🔴 四张表的下发长度**含尾部哨兵**（`kSceneData*Bytes` = (容量+1)×步长，批 T0）：
@@ -1034,6 +1056,7 @@ inline void SceneDataService::writeRegionDescriptors() {
 		{base + kSceneDataLightArrayOffset, sizeof(LightArrayBlock)},  // — binding 24
 		{base + kSceneDataShadowMatrixOffset, sizeof(ShadowViewProjBlock)},  // — binding 28
 		{base + kSceneDataShadowParamsOffset, sizeof(ShadowParamsBlock)},  // — binding 29
+		{base + kSceneDataSsrOffset, sizeof(SsrParamsBlock)},  // — binding 31
 		{base + kSceneDataObjectMatrixOffset, kSceneDataObjectMatrixBytes},  // — binding 23
 		{base + kSceneDataMvpTableOffset, kSceneDataMvpTableBytes},  // — binding 25
 		{base + kSceneDataDrawTableOffset, kSceneDataDrawTableBytes},  // — binding 26
@@ -1045,13 +1068,14 @@ inline void SceneDataService::writeRegionDescriptors() {
 		vk::DescriptorType::eUniformBuffer,  // 灯数组
 		vk::DescriptorType::eUniformBuffer,  // 阴影光空间 VP
 		vk::DescriptorType::eUniformBuffer,  // 阴影采样参数
+		vk::DescriptorType::eUniformBuffer,  // SSR
 		vk::DescriptorType::eStorageBuffer,  // 对象世界矩阵表
 		vk::DescriptorType::eStorageBuffer,  // 对象 MVP 表
 		vk::DescriptorType::eStorageBuffer,  // 对象绘制属性表
 		vk::DescriptorType::eStorageBuffer}};  // 对象簇区间表
 	std::array<uint32_t, kRegionSlotCount> slots{{sceneDataSlot, sceneWetSlot,
 		sceneIrradianceSlot, sceneLightArraySlot, sceneShadowViewProjSlot, sceneShadowParamsSlot,
-		sceneObjectMatrixSlot,
+		sceneSsrSlot, sceneObjectMatrixSlot,
 		sceneObjectMvpSlot, sceneObjectDrawSlot, sceneObjectClusterRangeSlot}};
 	std::array<vk::ResourceDescriptorInfoEXT, kRegionSlotCount> descs{};
 	std::array<vk::HostAddressRangeEXT, kRegionSlotCount> dsts{};

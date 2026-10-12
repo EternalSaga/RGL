@@ -59,7 +59,7 @@ module;
  *   ⑤ 两子区重叠（wetSpatial 偏移写成 wetParams 的值）→ 编译期 static_assert 红
  *      （spatial = params + 16）；运行时形态 = 两个 load4 读到同一份字节 → (a) 的
  *      「两子区读回互不相等」红。
- *   ⑥ writeSceneStaging 用错常量（如误写 kSceneDataSsrParamsOffset）→ 本测试**不红**，与
+ *   ⑥ writeSceneStaging 用错基址（如误写 SSR 区基址）→ 本测试**不红**，与
  *      test_ssr_params 同款已知覆盖缺口（单测复刻 memcpy 而非调用它）；端到端护栏 =
  *      红线 A 锚（出厂画面逐位）+ imgqa 影响域判据（skill rgl-verify）。
  *

@@ -1,18 +1,22 @@
 module;
 /**
- * test_ssr_params —— Phase 15 批 15.1 参数面：SSR 区两个 vec4 子区的字节布局契约
+ * test_ssr_params —— Phase 15 批 15.1 参数面：SSR 区两个 vec4 字段的字节布局契约
  * + fillSsrParams 填值契约（纯 CPU、无设备）。
  *
- * 批 15.1 参数面把 ssrParams 的 yzw 从「恒 0 预留」换成三个可调系数，并新增 ssrGate 子区
- * （@723792，两个阈值门控系数）。**这是有意的契约变更**：原「yzw = 0」断言不是被删掉，
+ * 迁移批 S-3 起 SSR 区三段（viewProj / params / gate）= 契约 `SsrParamsBlock`（binding 31
+ * 载体），本文件的「字节子区」措辞相应改成「struct 字段」——判据本身不变，只是两源落在
+ * 字段偏移这一层（先例 = test_wet_params 批 1）。
+ *
+ * 批 15.1 参数面把 ssrParams 的 yzw 从「恒 0 预留」换成三个可调系数，并新增 ssrGate 字段
+ * （两个阈值门控系数）。**这是有意的契约变更**：原「yzw = 0」断言不是被删掉，
  * 而是改成「yzw = 配置系数」——预留位被正式占用后，"这里不该有别的值"这句话由
  * 「等于配置里的那个数」接替（更强的判据：0 只排除一个值，系数逐位钉住四个）。
  *
  * ## 钉什么
  *
- * (a) **布局**：按 vkrenderer_impl::writeSceneStaging 的 memcpy 口径把两个 vec4 写进
- *     @723776 / @723792，再按 **shader 侧提取链**（scene.slang readSsrParams / readSsrGate
- *     的 Load4 字面量）读回，断言逐位还原。抓的是**偏移错 / 步长错 / 两子区重叠**。
+ * (a) **布局**：按 vkrenderer_impl::writeSceneStaging 的口径把 `SsrParamsBlock` 整块写进
+ *     SSR 区，再按 **shader 侧提取链**（区基址 + 手抄字段偏移 64/80，镜像 scene.slang
+ *     `sceneSsr.params` / `.gate`）读回，断言逐位还原。抓的是**偏移错 / 步长错 / 两字段重叠**。
  * (b) **填值**：ssrParams = (sceneRadius, maxDistanceRadii, thicknessPx, biasPx)、
  *     ssrGate = (roughFull, roughCutoff, blurScale, 0)（z = blurScale 批 15.3B 占用），
  *     全部逐位。三条子判据：
@@ -24,35 +28,34 @@ module;
  * (c) **出厂默认值 = 批 15.1 那五个 shader 常量的原值**：红线 A（默认配置逐位不变）的
  *     前提。默认值唯一出处 = SsrTuning 成员初始化器，本测试把它钉成字面量。
  *
- * ## 两源结构（先例 = test_ssr_viewproj，理由在那不重复）
+ * ## 两源结构（先例 = test_wet_params 批 1，措辞纪律在那不重复）
  *
- * 写入侧偏移 = C++ 常量 kSceneDataSsrParamsOffset / kSceneDataSsrGateOffset，
- * **读回侧偏移 = 字面量 723776u / 723792u**（手抄 scene.slang 的两个 Load4）。
- * 编译期另有 static_assert 双保险（C++ 常量 == 本文件手抄值）。
+ * 写入侧 = C++ 常量 kSceneDataSsrOffset（区基址，镜像 vkrenderer 的 memcpy），**读回侧 =
+ * 基址 + 手抄字段偏移 64u / 80u**（手抄 scene.slang SsrParamsBlock 的字段位置）。编译期
+ * 由 `offsetof(SsrParamsBlock, params/gate)` 双钉；shader ↔ schema ↔ 生成物的三方核对在
+ * reflect 期（validator 交叉核对 + 构建 SHA1 护栏逼重跑），不在本测试进程内。
  *
- * ⚠ **本测试钉不住 shader 那一侧**（措辞纪律，别让注释把它吹成"两侧钉死"）：
- * `kSlangSsrParamsLiteral` / `kSlangSsrGateLiteral` 是**本文件手抄的 C++ 常量**，不是从
- * scene.slang 提取的。若有人只改 scene.slang 里的 `Load4(723776u)`，本测试与全部
- * static_assert **都不红**——它们只证明"C++ 常量 == 本文件手抄值"，与 shader 实际写了
- * 什么无关。所以变异①的运行时形态是"读回偏移与写入偏移不一致"，**不是**"shader 字面量
- * 单侧漂"。真正端到端抓住它的只有 `just ssr-check`（2026-10-10 实测：把 fillSsrParams 的
- * 锚点错填成 center.y ⟹ 靶覆盖率 97.2%→2.6%、判据 A 红 ⟹ 这条链路端到端有牙）。
- * 机器对账 shader 字面量 ↔ C++ 常量 = 尚未落地的护栏，缺口账见 phase15_plan §3.2。
+ * ⚠ 措辞纪律：手抄字段偏移钉的是「手抄 == 契约生成物」。迁移前本文件还钉不住"shader 字节
+ * 字面量单侧漂"（缺口账见 phase15_plan §3.2）；迁移批 S-3 起 shader 侧**没有字节字面量了**，
+ * 该缺口由「reflect 期三方核对 + 红线 A 锚」接替。端到端仍有牙的证据：2026-10-10 实测把
+ * fillSsrParams 的锚点错填成 center.y ⟹ 靶覆盖率 97.2%→2.6%、判据 A 红。
  *
  * ## 变异红线声明（哪个变异让我红）
  *
- *   ① kSceneDataSsrParamsOffset / kSceneDataSsrGateOffset 改 +16 → **编译期红**（本文件与
- *      scene_data.cppm 的 static_assert 双钉炸编译）；把本文件读回字面量改 723792u →
- *      (a) 红（读回全 0）；只改 gate 字面量 → gate 读回全 0 红。⚠ 单改 scene.slang 的字
- *      面量**不在此覆盖内**（见上）。
+ *   ① 本文件手抄字段偏移单侧漂（64u/80u 改 +16）→ **编译期红**（offsetof static_assert 炸
+ *      编译）；改 scene.slang SsrParamsBlock 字段序/类型 → reflect 期 validator 交叉核对红；
+ *      schema+shader 同步换序 → 生成物字段偏移变 ⟹ 本条钉红。运行时形态「读回偏移与写入
+ *      偏移不一致」由把 gate 读回偏移改 +16 复现 → (a) 红（读回全 0）。⚠ 改
+ *      kSceneDataSsrOffset（整区搬家）**不该红**——写侧 memcpy 与 binding 31 描述符基址
+ *      同源同值，画面逐位不变。
  *   ② fillSsrParams 把 center.x 填进 y / 把系数填错槽（如 thickness↔bias 互换）→ (b) 红
  *      （测试里 center 与四个系数互不相同，串位必撞）。
  *   ③ fillSsrParams 填 `max(radius, 某下限)`（CPU 侧兜底）→ (b)「空场景原样透传」红。
  *   ④ fillSsrParams 漏填 gate（回到批 15.1 的恒 0）→ (b)「gate = 配置系数」红。
  *   ⑤ SsrTuning 默认值被改（哪怕只改一位）→ (c) 红 ⟹ 同时是红线 A 的编译前预警。
- *   ⑥ 两子区重叠（gate 偏移写成 params 的值）→ 编译期 static_assert 红（gate = params+16）；
- *      运行时形态 = 两个 load4 读到同一份字节 → (a) 的「两子区读回互不相等」红。
- *   ⑦ writeSceneStaging 用错常量（如误写 kSceneDataSsrOffset）→ 本测试**不红**，与
+ *   ⑥ 两字段重叠（gate 字段偏移写成 params 的值）→ 编译期 static_assert 红（gate =
+ *      params+16）；运行时形态 = 两个 load4 读到同一份字节 → (a) 的「两字段读回互不相等」红。
+ *   ⑦ writeSceneStaging 用错基址（如误写湿面区基址）→ 本测试**不红**，与
  *      test_ssr_viewproj 同款已知覆盖缺口（单测复刻 memcpy 而非调用它）；端到端护栏 =
  *      just ssr-check（参数错 ⟹ 倒影位置/覆盖率现形）+ 红线 A。
  *
@@ -60,6 +63,7 @@ module;
  * 见 test_scene_config.cppm 的 ssr 块 roundtrip 用例。
  */
 #include <doctest/doctest.h>
+#include <cstddef>  // offsetof（契约生成物字段偏移双钉）
 #include <cstring>
 #include <glm/glm.hpp>
 
@@ -70,37 +74,38 @@ import render_list;      // fillSsrParams（可测接缝，fillSsrViewProj 同�
 import frame_draw_list;  // FrameDrawList / SceneFrameData.ssrParams / ssrGate
 import scene_context;    // SceneBounds
 import runtime_config;   // SsrTuning（默认值唯一出处）
-import scene_data;       // kSceneDataSsr*Offset / kSceneDataSsrBytes / kSceneDataBytes
+import scene_data;       // kSceneDataSsrOffset / kSceneDataSsrBytes / kSceneDataWetOffset / kSceneRegionAlign
+import scene_forward_types_generated;  // SsrParamsBlock（契约生成物，字段偏移双钉的对象）
 
 namespace RGL {
 namespace {
 
-/// scene.slang readSsrParams 的字面量基址（两源结构的 shader 侧镜像，勿改成常量引用）。
-constexpr uint32_t kSlangSsrParamsLiteral = 723776u;
-/// scene.slang readSsrGate 的字面量基址（同上）。
-constexpr uint32_t kSlangSsrGateLiteral = 723792u;
+/// scene.slang `sceneSsr.params` 的 struct 字段偏移（两源结构的 shader 侧镜像：手抄
+/// scene.slang SsrParamsBlock 声明顺序，勿改成常量引用——镜像失手抄价值即失效）。
+constexpr uint32_t kSlangSsrParamsFieldOffset = 64u;
+/// scene.slang `sceneSsr.gate` 的 struct 字段偏移（同上）。
+constexpr uint32_t kSlangSsrGateFieldOffset = 80u;
 
-// 编译期双保险：C++ 常量与两个 shader 字面量同钉（变异①在此炸）。
-static_assert(kSceneDataSsrParamsOffset == kSlangSsrParamsLiteral,
-	"scene.slang readSsrParams literal drifted from kSceneDataSsrParamsOffset");
-static_assert(kSceneDataSsrGateOffset == kSlangSsrGateLiteral,
-	"scene.slang readSsrGate literal drifted from kSceneDataSsrGateOffset");
-// 子区排布：params 紧贴 ssrViewProj mat4 之后、gate 紧贴 params 之后，gate 恰盖到
-// 湿面区起点（批 15.2 子步 A 在 SSR 之后追加湿面区 ⟹「最后尾区」的旧断言改钉相邻关系，
-// 无重叠无空洞；湿面区自身的相邻与末尾断言 = tests/test_wet_params）。
-static_assert(kSceneDataSsrParamsOffset == kSceneDataSsrOffset + 64u,
-	"params sub-region must sit right after the ssrViewProj mat4");
-static_assert(kSceneDataSsrGateOffset == kSceneDataSsrParamsOffset + 16u,
-	"gate sub-region must sit right after ssrParams (no overlap, no hole)");
-// 批 L（§9.7）后相邻不变式 = 「下一区基址 = alignUp(前区尾, 256)」（无重叠 + 间隙 < 256）。
-static_assert(alignUp(kSceneDataSsrGateOffset + sizeof(glm::vec4), kSceneRegionAlign) ==
-		kSceneDataWetOffset,
-	"wet region must start at the 256-aligned end of the ssrGate sub-region");
+// 编译期双保险（两源链）：手抄字段偏移 == 契约生成物字段偏移、区宽 == struct 宽
+//（变异①在此炸；shader ↔ schema ↔ 生成物三方核对在 reflect 期，见文件头）。
+static_assert(kSlangSsrParamsFieldOffset == offsetof(SsrParamsBlock, params),
+	"scene.slang SsrParamsBlock.params field offset drifted from hand-copied mirror");
+static_assert(kSlangSsrGateFieldOffset == offsetof(SsrParamsBlock, gate),
+	"scene.slang SsrParamsBlock.gate field offset drifted from hand-copied mirror");
+static_assert(sizeof(SsrParamsBlock) == kSceneDataSsrBytes,
+	"SsrParamsBlock width drifted from kSceneDataSsrBytes (sub-range descriptor range)");
+// 字段排布：params 紧贴 viewProj mat4 之后、gate 紧贴 params 之后（无重叠无空洞）。
+static_assert(offsetof(SsrParamsBlock, params) == sizeof(ObjectMatrix),
+	"params field must sit right after the viewProj mat4");
+static_assert(offsetof(SsrParamsBlock, gate) == offsetof(SsrParamsBlock, params) + 16u,
+	"gate field must sit right after params (no overlap, no hole)");
+// 批 L（§9.7）后相邻不变式 = 「下一区基址 = alignUp(前区尾, 256)」（无重叠 + 间隙 < 256）；
+// 湿面区自身的相邻与末尾断言 = tests/test_wet_params。
 static_assert(alignUp(kSceneDataSsrOffset + kSceneDataSsrBytes, kSceneRegionAlign) ==
 		kSceneDataWetOffset,
 	"SSR region must sit right before the wet tail region (batch 15.2A appended after it)");
-// 区宽 = 16B 矩阵 + 16B 正向矩阵 + 16B params + 16B gate（参数面由 80 扩到 96）。
-static_assert(kSceneDataSsrBytes == 96u, "SSR region width drifted (mat4+mat4+vec4+vec4)");
+// 区宽 = 64B 正向矩阵 + 16B params + 16B gate（参数面由 80 扩到 96）。
+static_assert(kSceneDataSsrBytes == 96u, "SSR region width drifted (mat4+vec4+vec4)");
 
 /// shader `sceneData.Load4(byteOffset)` 等价形态（test_ssr_viewproj 同款：真 memcpy）。
 glm::vec4 load4(const std::vector<std::byte>& buf, uint32_t byteOffset) {
@@ -129,7 +134,7 @@ SsrTuning distinctTuning() {
 
 }  // namespace
 
-TEST_CASE("SSR 两个 vec4 子区布局：C++ 常量写、字面量 723776/723792 读回逐位相同（两源结构）") {
+TEST_CASE("SSR 两个 vec4 字段布局：整块写、基址 + 手抄字段偏移 64/80 读回逐位相同（两源结构）") {
 	// 非退化输入：radius 取靶实测值量级；center **非零且各分量不同**——它不该出现在
 	// 任何字节里（center 混进上传区 = 第二真相源，变异②的判据前提）。
 	SceneBounds bounds;
@@ -140,21 +145,24 @@ TEST_CASE("SSR 两个 vec4 子区布局：C++ 常量写、字面量 723776/72379
 	FrameDrawList list;
 	fillSsrParams(list, bounds, tuning);
 
-	// staging 写入：vkrenderer_impl::writeSceneStaging 同款 memcpy（偏移 = C++ 常量）。
-	// 尾部 +16B 垫 = 变异①运行时形态（读回字面量 +16 单侧漂）的读取范围，避免越界 UB。
-	std::vector<std::byte> stage(kSceneDataSsrGateOffset + 2 * sizeof(glm::vec4), std::byte{0});
-	std::memcpy(stage.data() + kSceneDataSsrParamsOffset, &list.sceneData.ssrParams,
-		sizeof(glm::vec4));
-	std::memcpy(stage.data() + kSceneDataSsrGateOffset, &list.sceneData.ssrGate, sizeof(glm::vec4));
+	// staging 写入：vkrenderer_impl::writeSceneStaging 同款——按生成 struct 整块写（迁移批
+	// S-3）。尾部再垫一整区 = 变异①运行时形态（读回字段偏移 +16 单侧漂）的读取范围，免越界 UB。
+	std::vector<std::byte> stage(kSceneDataSsrOffset + 2 * kSceneDataSsrBytes, std::byte{0});
+	const SsrParamsBlock ssrBlock {
+		.params = list.sceneData.ssrParams,
+		.gate = list.sceneData.ssrGate,
+	};
+	std::memcpy(stage.data() + kSceneDataSsrOffset, &ssrBlock, sizeof(ssrBlock));
 
-	// shader 侧读回：字面量（两源结构）。
-	const glm::vec4 p = load4(stage, kSlangSsrParamsLiteral);
-	const glm::vec4 g = load4(stage, kSlangSsrGateLiteral);
+	// shader 侧读回：binding 31 子范围描述符基址（= kSceneDataSsrOffset，C++ 写描述符同源）
+	// + 手抄字段偏移（两源结构）。
+	const glm::vec4 p = load4(stage, kSceneDataSsrOffset + kSlangSsrParamsFieldOffset);
+	const glm::vec4 g = load4(stage, kSceneDataSsrOffset + kSlangSsrGateFieldOffset);
 	CHECK(p == list.sceneData.ssrParams);  // 提取链恒等（步长/偏移错在此红）
 	CHECK(g == list.sceneData.ssrGate);
 	CHECK(p.x != 0.0f);                    // 缓冲没读成全 0（变异①运行时形态的判据前提）
 	CHECK(g.x != 0.0f);
-	// 两子区互不重叠：读到同一份字节 ⟹ 变异⑥（gate 偏移写成 params 的值）。
+	// 两字段互不重叠：读到同一份字节 ⟹ 变异⑥（gate 字段偏移写成 params 的值）。
 	CHECK(p != g);
 }
 

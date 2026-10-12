@@ -1,12 +1,12 @@
 module;
 /**
- * test_ssr_viewproj —— Phase 15 批 15.1 SSR 尾区（kSceneDataSsrOffset @723712）的
- * 字节布局契约 + 抖动口径契约（纯 CPU、无设备）。
+ * test_ssr_viewproj —— Phase 15 批 15.1 SSR 尾区（kSceneDataSsrOffset，载体 =
+ *  ConstantBuffer<SsrParamsBlock> binding 31）的字节布局契约 + 抖动口径契约（纯 CPU、无设备）。
  *
  * ## 钉什么、不钉什么
  *
- * (a) **布局/互逆**：按 vkrenderer_impl::writeSceneStaging 的两条 memcpy 口径把
- *     ssrViewProj 写进 @723712、skyInvViewProj 写进 @64，再按 **shader 侧提取链**
+ * (a) **布局/互逆**：按 vkrenderer_impl::writeSceneStaging 的口径把 ssrViewProj 随
+ *     `SsrParamsBlock` 整块写进 SSR 区、skyInvViewProj 写进 @64，再按 **shader 侧提取链**
  *     （scene.slang readSsrViewProj / clipToWorld 的「列 c 在 base+16c」）读回，断言
  *     读回的 ssrViewProj ≡ inverse(读回的 skyInvViewProj)。抓的是**偏移错 / 转置错 /
  *     步长错**——glm 列主序 vs shader 列组合是本项目反复出事的口径缝（5a-8c 教训：
@@ -15,13 +15,17 @@ module;
  *     矩阵口径一旦漂成非抖动，采样位置整体偏移而画面「看着还行」= 静默漂移。
  *     开抖动 ⟹ 填值 **≠** 非抖动 proj·view（且差量有闭式解，见下）；关抖动 ⟹ **逐位 =**。
  *
- * ## 两源结构（本测试的核心设计）
+ * ## 两源结构（迁移批 S-3 后 = 「区基址 + 手抄字段偏移」，先例 = test_wet_params 批 1）
  *
- * 写入侧偏移 = C++ 常量 kSceneDataSsrOffset（镜像 vkrenderer 的 memcpy），**读回侧偏移 =
- * 字面量 723712u**（镜像 scene.slang 的 Load4 字面量）。CPU 常量与 shader 字面量是手写
- * 同源的两份真相——只测「常量写、常量读」则常量整体漂移测试永远绿（假绿）；本测试让
- * 两侧各走各的源，任一侧单独漂 = 运行时红。编译期另有 static_assert 双保险（两侧同钉
- * 723712，漂移直接编译失败，先例 = scene_data.cppm 各区 static_assert）。
+ * 写入侧 = C++ 常量 kSceneDataSsrOffset（镜像 vkrenderer 的 memcpy 基址），**读回侧 =
+ * 基址 + 手抄 struct 字段偏移 0u**（镜像 scene.slang `sceneSsr.viewProj` 的字段位置）。
+ * 迁移前这里是「常量写、字节字面量 723712u 读」；字节字面量随类型化载体删除后，两源
+ * 落在**字段偏移**这一层：只测「常量写、常量读」则整体漂移测试永远绿（假绿），故字段
+ * 偏移仍是本文件手抄的镜像，编译期由 `offsetof(SsrParamsBlock, viewProj)` 双钉。
+ *
+ * ⚠ 措辞纪律：手抄字段偏移钉的是「手抄 == 契约生成物」；scene.slang 那一侧由 reflect 期
+ * validator 交叉核对钉（shader struct ↔ schema ↔ 生成物三方比 + 构建 SHA1 护栏逼重跑），
+ * 不在本测试进程内。端到端护栏 = 红线 A 锚 + just ssr-check。
  *
  * ## 闭式差量（(b) 的独立期望值，不抄被测码）
  *
@@ -33,9 +37,12 @@ module;
  *
  * ## 变异红线声明（哪个变异让我红）
  *
- *   ① kSceneDataSsrOffset 改 +16 → **编译期红**（scene_data.cppm 与本文件的
- *      static_assert(==723712) 双钉直接炸编译）；其运行时等价形态「shader 字面量单侧漂」
- *      由本测试把读回字面量改 722288u 复现 → (a) 全红（读回全 0）。
+ *   ① 本文件手抄字段偏移单侧漂（0u 改 +16）→ **编译期红**（offsetof static_assert 炸
+ *      编译）；改 scene.slang SsrParamsBlock 字段序/类型 → reflect 期 validator 交叉核对
+ *      红；schema+shader 同步换序 → 生成物字段偏移变 ⟹ 本条钉红。运行时等价形态「读回
+ *      偏移与写入偏移不一致」由把读回字段偏移改 +64 复现 → (a) 全红（读回全 0）。
+ *      ⚠ 改 kSceneDataSsrOffset（整区搬家）**不该红**——写侧 memcpy 与 binding 31 描述符
+ *      基址同源同值，画面逐位不变（字节字面量已删，这正是迁移批 S-3 的目的）。
  *   ② fillSsrViewProj 填非抖动 proj（viewProj.projUnjittered * viewProj.view）
  *      → (b)「≠ 非抖动」红 + 闭式差量红（差量恒 0 ≠ 预测）+ (a) 互逆断言红
  *      （inverse(抖动后逆) ≠ 非抖动正）。
@@ -44,6 +51,7 @@ module;
  *   （附）提取链步长 16 改 32 / 列序打乱 → (a)「读回逐位 = 写入」红。
  */
 #include <doctest/doctest.h>
+#include <cstddef>           // offsetof（契约生成物字段偏移双钉）
 #include <initializer_list>  // 必须：modules 下 std::initializer_list 不从 import 带进来
 #include <cmath>
 #include <glm/glm.hpp>
@@ -58,20 +66,25 @@ import render_list;      // fillSsrViewProj（可测接缝，12.3d 同款）
 import frame_draw_list;  // FrameDrawList / SceneFrameData.ssrViewProj
 import scene_context;    // ViewProjection（proj = 抖动后 / projUnjittered 双份的真相源）
 import scene_data;       // kSceneDataSsrOffset / kSceneDataSsrBytes / kSceneDataSkyOffset / kSceneDataBytes
+import scene_forward_types_generated;  // SsrParamsBlock（契约生成物，字段偏移双钉的对象）
 import camera;           // Camera / cameraView（rlbase，生产同源 view）
 import taa_jitter;       // taaJitterPixels / applyProjectionJitter（生产同源抖动注入）
 
 namespace RGL {
 namespace {
 
-/// scene.slang readSsrViewProj 的字面量基址（两源结构的 shader 侧镜像，勿改成常量引用）。
-constexpr uint32_t kSlangSsrLiteral = 723712u;
+/// scene.slang `sceneSsr.viewProj` 的 struct 字段偏移（两源结构的 shader 侧镜像：手抄
+/// scene.slang SsrParamsBlock 声明顺序，勿改成常量引用——镜像失手抄价值即失效）。
+constexpr uint32_t kSlangSsrViewProjFieldOffset = 0u;
 
-// 编译期双保险：C++ 常量与 shader 字面量同钉（变异①在此炸）；SSR 区紧贴湿面区之前
-// （批 15.2 子步 A 在 SSR 之后追加湿面区 ⟹「最后尾区」的旧断言改钉相邻关系，无重叠无
-// 空洞；湿面区自身的末尾断言 = tests/test_wet_params）；不与头 128B 区重叠。
-static_assert(kSceneDataSsrOffset == kSlangSsrLiteral,
-	"scene.slang readSsrViewProj literal drifted from kSceneDataSsrOffset");
+// 编译期双保险（两源链）：手抄字段偏移 == 契约生成物字段偏移、区宽 == struct 宽
+//（变异①在此炸；shader ↔ schema ↔ 生成物三方核对在 reflect 期，见文件头）。
+static_assert(kSlangSsrViewProjFieldOffset == offsetof(SsrParamsBlock, viewProj),
+	"scene.slang SsrParamsBlock.viewProj field offset drifted from hand-copied mirror");
+static_assert(sizeof(SsrParamsBlock) == kSceneDataSsrBytes,
+	"SsrParamsBlock width drifted from kSceneDataSsrBytes (sub-range descriptor range)");
+// SSR 区紧贴湿面区之前（批 15.2 子步 A 在 SSR 之后追加湿面区 ⟹「最后尾区」的旧断言改钉
+// 相邻关系，无重叠无空洞；湿面区自身的末尾断言 = tests/test_wet_params）；不与头 128B 重叠。
 // 批 L（§9.7）后相邻不变式 = 「下一区基址 = alignUp(前区尾, 256)」。
 static_assert(alignUp(kSceneDataSsrOffset + kSceneDataSsrBytes, kSceneRegionAlign) ==
 		kSceneDataWetOffset,
@@ -123,7 +136,7 @@ void expectNearMat4(const glm::mat4& actual, const glm::mat4& expected, double r
 }  // namespace
 
 TEST_CASE("SSR 尾区布局：读回 ssrViewProj ≡ inverse(读回 skyInvViewProj)（偏移/转置/步长）") {
-	// 生产口径两份矩阵：@723712 = proj·view（接缝填）、@64 = inverse(proj·view)
+	// 生产口径两份矩阵：SSR 区 viewProj = proj·view（接缝填）、@64 = inverse(proj·view)
 	// （render_list_impl 同款表达式——本用例钉的是**字节布局**，@64 表达式本体归
 	// test_shadow_forward 的恒等链）。
 	const ViewProjection vp = makeViewProj();
@@ -131,13 +144,19 @@ TEST_CASE("SSR 尾区布局：读回 ssrViewProj ≡ inverse(读回 skyInvViewPr
 	fillSsrViewProj(list, vp);
 	const glm::mat4 invVP = glm::inverse(vp.proj * vp.view);
 
-	// staging 写入：vkrenderer_impl::writeSceneStaging 同款两条 memcpy（偏移 = C++ 常量）。
+	// staging 写入：vkrenderer_impl::writeSceneStaging 同款——SSR 区按生成 struct 整块写
+	//（迁移批 S-3；mat4 → ObjectMatrix 列直拷与旧的 memcpy 64B 逐字节同）+ @64 一条 memcpy。
 	StageBuffer stage(kSceneDataSsrOffset + kSceneDataSsrBytes, std::byte{0});
 	std::memcpy(stage.data() + kSceneDataSkyOffset, &invVP, sizeof(glm::mat4));
-	std::memcpy(stage.data() + kSceneDataSsrOffset, &list.sceneData.ssrViewProj, sizeof(glm::mat4));
+	const SsrParamsBlock ssrBlock {
+		.viewProj = ObjectMatrix {list.sceneData.ssrViewProj[0], list.sceneData.ssrViewProj[1],
+		                          list.sceneData.ssrViewProj[2], list.sceneData.ssrViewProj[3]},
+	};
+	std::memcpy(stage.data() + kSceneDataSsrOffset, &ssrBlock, sizeof(ssrBlock));
 
-	// shader 侧读回：字面量 723712 / 64（两源结构，见文件头）。
-	const glm::mat4 ssr = loadMat4(stage, kSlangSsrLiteral);
+	// shader 侧读回：binding 31 子范围描述符基址（= kSceneDataSsrOffset，C++ 写描述符同源）
+	// + 手抄字段偏移（两源结构，见文件头）；@64 那份仍是字节基址（SceneHeader 未迁）。
+	const glm::mat4 ssr = loadMat4(stage, kSceneDataSsrOffset + kSlangSsrViewProjFieldOffset);
 	const glm::mat4 inv = loadMat4(stage, 64u);
 
 	// 提取链恒等（memcpy + 列组合读 = 逐位还原写入值）：步长错 / 列序打乱在本条红。

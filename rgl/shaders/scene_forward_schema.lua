@@ -122,5 +122,20 @@ return {
                 { name = "evssmConst",  type = "vec4", offset = 112 },
             },
         },
+        -- 迁移批 S-3（§9.5 binding 31）：SSR 区类型化载体（scene.slang SsrParamsBlock，
+        -- ConstantBuffer<SsrParamsBlock> 经子范围描述符指向 scene data SSR 区
+        -- kSceneDataSsrOffset，96B = mat4 + 2×vec4）。三段本就同区连排 ⟹ **零布局变更**
+        --（区容量与合并前逐字节同，其后各区不动）。
+        -- 「契约 struct 嵌契约 struct」的**非数组**形态消费者（ObjectMatrix 直接当字段，
+        -- 批 R 那条注释列的四个用途之二）。
+        {
+            name = "SsrParamsBlock",
+            stride = 96,
+            attributes = {
+                { name = "viewProj", type = "ObjectMatrix", offset = 0 },
+                { name = "params",   type = "vec4", offset = 64 },
+                { name = "gate",     type = "vec4", offset = 80 },
+            },
+        },
     },
 }

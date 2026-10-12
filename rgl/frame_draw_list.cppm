@@ -175,17 +175,18 @@ export struct SceneFrameData {
 	///   为什么要有：`clipToAabb` 在 blend 之前替换历史 ⟹ 一次裁剪 = 一次历史重置，而 1px 高对比
 	///   细线的 box5 随抖动相位双峰 ⟹ 静止机位残余 97.8% 住在这条路上（`git:调试历史` 2026-10-06）。
 	glm::vec4 taaClipControl{0.0f};
-	// ── Phase 15 批 15.1 SSR（屏幕空间反射）帧载荷，scene data 尾区 @723712 ──
+	// ── Phase 15 批 15.1 SSR（屏幕空间反射）帧载荷，scene data 尾区 SSR 区（迁移批 S-3 起
+	//    = 契约 SsrParamsBlock 的 viewProj / params / gate 三字段，binding 31 载体）──
 	/// 本帧**抖动后** proj·view（与 @64 skyInvViewProj 严格互逆、与深度缓冲配套；口径与
 	/// 「为什么不让 shader 自己求逆」→ scene_data.cppm kSceneDataSsrOffset）。生产者 =
 	/// fillSsrViewProj（render_list_impl，可测接缝）。交付时无消费者 = 写它不改像素。
 	glm::mat4 ssrViewProj{1.0f};
-	/// · ssrParams —— SSR 系数子区 @723776（vec4）= (SceneBounds.radius, maxDistanceRadii,
-	///   thicknessPx, biasPx)：x = 尺度无关参数锚点（口径 → scene_data.cppm
-	///   kSceneDataSsrParamsOffset），yzw = 由它导出的三个无量纲系数（configs/runtime.lua
+	/// · ssrParams —— SSR 系数（vec4）= (SceneBounds.radius, maxDistanceRadii,
+	///   thicknessPx, biasPx)：x = 尺度无关参数锚点（口径 → scene_data.cppm SSR 区注释），
+	///   yzw = 由它导出的三个无量纲系数（configs/runtime.lua
 	///   `ssr` 块，**每帧量**）。生产者 = fillSsrParams（render_list_impl，可测接缝）。
 	glm::vec4 ssrParams{0.0f};
-	/// · ssrGate —— SSR 粗糙度门控子区 @723792（vec4）= (roughFull, roughCutoff, blurScale, 0)。
+	/// · ssrGate —— SSR 粗糙度门控（vec4）= (roughFull, roughCutoff, blurScale, 0)。
 	///   与场景尺度无关，故与 ssrParams 分槽（分组理由 → scene_data.cppm 该区注释）。
 	///   z = blurScale（批 15.3B，ssr_apply 螺旋模糊半径系数，全分辨率 px 口径）。
 	///   生产者同 fillSsrParams（一次填两槽，两槽永远同源同帧）。

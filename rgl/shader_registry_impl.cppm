@@ -26,6 +26,7 @@ namespace RGL {
 		b.slotSceneLights = sceneData.lightSlot();  // binding 24（迁移批 3 灯数组 UBO 载体）
 		b.slotSceneShadowViewProj = sceneData.shadowViewProjSlot();  // binding 28（迁移批 S-1 阴影 VP）
 		b.slotSceneShadowParams = sceneData.shadowParamsSlot();  // binding 29（迁移批 S-2 阴影参数）
+		b.slotSceneSsr = sceneData.ssrSlot();  // binding 31（迁移批 S-3 SSR）
 		// 类型化迁移 批 T1：逐对象四张表 SSBO 子范围载体（binding 23/25/26/33）
 		b.slotObjectMatrices = sceneData.objectMatrixSlot();
 		b.slotObjectDraws = sceneData.objectDrawSlot();
