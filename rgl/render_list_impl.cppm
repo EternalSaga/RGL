@@ -24,6 +24,7 @@ import shadow_config;  // shadowConfig() / shadowFormPlan()（阴影形态：画
 import runtime_config;  // SsrTuning / WetTuning（批 15.1 参数面 + 批 15.2A 湿面参数，fill*Params 入参）
 import taa_jitter;    // contentShiftPx（内容位移口径唯一出处；批 13.5 起 fillTaaData 要用）
 import meshlet_ranges;  // ClusterRangeTable（★1-a1i 簇区间表的 registry ctx，装配层写、本层只搬 span）
+import meshlet_lod;     // MeshletShadowLodTable（★18-B2 阴影远级联 LOD 选级表，同为 registry ctx）
 import meshlet_cull_types_generated;  // kSlotsPerCluster（★1-a2-i 规格常量，反射生成）
 
 namespace RGL {
@@ -38,58 +39,22 @@ struct Pending {
 	float distanceSq = 0.0f;
 };
 
-/** 阴影投影体候选：实体遍历内先攒，循环结束后才定光空间体。
- *
- * 为何要两段：光空间盒的 Z 下界依赖**全部投影体**的 AABB，而剔除要用这个盒 —— 顺序上
- * 必须先知道盒才能判"谁在盒内"。若在实体循环里边走边剔（像原来那样），盒就还没成形。
- * 候选表只存 5 个标量，1591 个 primitive 也只有几十 KB。
- */
-struct ShadowCandidate {
-	glm::vec3 center;     // 世界球心
-	float radius;         // 世界球半径
-	uint32_t objectSlot;  // = MeshRef.objectSlot（push.objectIndex）
-	uint32_t pipeline;    // = asset.shadowPipelineIndex
-	uint32_t groups;      // = asset.groupCount
-};
-
-/**
- * 收集阴影投影体候选（实体遍历内调用，只判材质/门控，不做级联剔除）。
- * 只收**不透明**材质：blend 体投出的影子会看不到遮挡体的背面（收下来只多花一遍光流，
- * 还会在透明体上留不可见的脊影）；MASK 背面本就被 alpha 消掉，不影响。
- * 不过 GPU culling：候选表按**主视棱**建立，用它会漏掉视野外屋顶的投影体。
- * 门控（形态决策表 `drawAtlas`）在**最前**：关时不产出任何 draw——图里的阴影 pass 仍然运行
- * （清深度），但无光栅化开销，且采样端因 enabled=0 直接返回全亮。
- * @param asset 该实体的网格资产（取 shadowPipelineIndex / groupCount）
- * @param mat 该实体绑定的材质（判 blend）
- * @param worldCenter 图元世界球心
- * @param worldRadius 图元世界球半径
- * @param objectSlot 该实体的 per-object 槽号
- * @param out 候选表（追加）
- */
-void collectShadowCasters(const RGL::MeshAsset& asset, const RGL::MaterialAsset& mat,
-    const glm::vec3& worldCenter, float worldRadius, uint32_t objectSlot,
-    std::vector<ShadowCandidate>& out) {
-    if (!shadowFormPlan(shadowConfig()).drawAtlas
-        || asset.shadowPipelineIndex == kInvalidPipelineIndex || mat.alphaModeBlend)
-        return;
-    out.push_back(ShadowCandidate{worldCenter, worldRadius, objectSlot,
-        asset.shadowPipelineIndex, asset.groupCount});
-}
-
 /**
  * 簇路径单条 draw 的 task 数（★1-a1ii-β-1 抬出 = **单一真相源**）。恒 L0 档下每簇固定
  * **2 个任务槽**：乘 2 的口径 → collectMeshletOverlay 注释（去索引发射把每任务三角数压到 85，
  * 而 L0 簇中位 121 三角、71.2% 的簇 > 85 ⟹ 每簇 2 槽，空半区在 shader 内早退）。
- * 🔴 α 的影子叠加段与 β-1 的原位取代段**必须同式**——两处各写一遍 `2 * l0Count` 迟早漂成
- * 一个只画一半几何（且画面未必看得出来，簇是空间局部的）。
- * @param l0Count 本 objectSlot 的 L0 簇数（> 0，调用方守）
+ * 🔴 **三个消费者必须同式**——① α 的影子叠加段（collectMeshletOverlay）、② β-1 的原位
+ * 取代段（makeOpaqueCall）、③ ★18-B2 阴影段簇路径（emitShadowCasters，入参 = LOD 选级簇数
+ * 而非 L0 簇数，§18.6「入参语义从 L0 簇数放宽为本 draw 要画的簇数」）。三处各写一遍
+ * `2 * count` 迟早漂成一个只画一半几何（且画面未必看得出来，簇是空间局部的）。
+ * @param clusterCount 本 draw 要画的簇数（主段 = L0 簇数；阴影段 = LOD 选级簇数；> 0，调用方守）
  */
-uint32_t meshletTaskCount(uint32_t l0Count) {
-	// l0Count 上限实测 682 ⟹ 2× 远小于 maxMeshWorkGroupCount.x = 65535，无回绕风险。
+uint32_t meshletTaskCount(uint32_t clusterCount) {
+	// clusterCount 上限实测 682 ⟹ 2× 远小于 maxMeshWorkGroupCount.x = 65535，无回绕风险。
 	// 槽数取反射生成的规格常量（meshlet_cull_schema.lua 的 kSlotsPerCluster）而不是写字面量 2：
 	// 它与 shader 里的 `cluster = base + (groupID.x >> 1)` / `half = groupID.x & 1` 是**同一个
 	// 契约的两端**，CPU 侧改了 shader 不知道 = 一半几何静默不画。
-	return kSlotsPerCluster * l0Count;
+	return kSlotsPerCluster * clusterCount;
 }
 
 /**
@@ -171,31 +136,6 @@ RGL::DrawCall makeOpaqueCall(const RGL::MeshAsset& asset, const RGL::MaterialAss
 }
 
 /**
- * 候选 × 逐级光空间体 → 阴影 draw 清单（级主序，级内实体迭代序）。
- * 一个图元可以落多级（大物体跨越多个切片）——这正是逐级剔除能把总量压在单级之上的原因。
- * @param cands 投影体候选表
- * @param volumes 各级光空间体（判定用；XY 收紧、Z 覆盖全部投影体）
- * @param objectSlotCount shadowArgs 的分块 stride（分块号 × objectSlotCount + slot）
- * @param shadowArgs 出参：填 ShadowDrawArgs（帧局部存储，生命周期同 DrawCall.pushData）
- * @param out 出参：逐级 draw 清单
- */
-void emitShadowCasters(std::span<const ShadowCandidate> cands,
-    std::span<const ShadowVolume> volumes, uint32_t objectSlotCount,
-    std::vector<RGL::ShadowDrawArgs>& shadowArgs,
-    std::array<std::vector<Pending>, kActiveShadowCascades>& out) {
-    for (const auto& cd : cands)
-        for (uint32_t c = 0; c < kActiveShadowCascades; ++c) {
-            if (!casterInShadowVolume(volumes[c], cd.center, cd.radius))
-                continue;
-            auto& sargs = shadowArgs[static_cast<size_t>(c) * objectSlotCount + cd.objectSlot];
-            sargs.objectIndex = cd.objectSlot;
-            sargs.cascadeIndex = c;
-            out[c].push_back(Pending{RGL::DrawCall{cd.pipeline,
-                std::as_bytes(std::span<const RGL::ShadowDrawArgs>{&sargs, 1}), cd.groups}, 0.0f});
-        }
-}
-
-/**
  * 建逐级光空间体并逐级剔除出阴影 draw（返回体供 fillShadowData 写 scene data）。
  * 抽出来的原因：renderListSystem 的代码行与认知复杂度已顶到阈值，而这块自成一体。
  *
@@ -208,6 +148,8 @@ void emitShadowCasters(std::span<const ShadowCandidate> cands,
  * @param cands 投影体候选
  * @param objectSlotCount shadowArgs 分块 stride
  * @param shadowArgs 出参：填 ShadowDrawArgs
+ * @param shadowMeshletArgs 出参：填 ShadowMeshletDrawArgs（★18-B2，同分块公式，调用方
+ *        循环前已 resize 到位——同 shadowArgs 的 span 悬空红线）
  * @param out 出参：逐级 draw 清单
  * @return 各级光空间体
  */
@@ -215,7 +157,8 @@ std::array<ShadowVolume, kActiveShadowCascades> buildShadowVolumes(const Light& 
     const std::array<Bounds, kActiveShadowCascades>& slices,
     std::span<const ShadowCandidate> cands, uint32_t objectSlotCount,
     std::vector<RGL::ShadowDrawArgs>& shadowArgs,
-    std::array<std::vector<Pending>, kActiveShadowCascades>& out) {
+    std::vector<RGL::ShadowMeshletDrawArgs>& shadowMeshletArgs,
+    std::array<std::vector<RGL::DrawCall>, kActiveShadowCascades>& out) {
 	glm::vec3 casterMin{0.0f}, casterMax{0.0f};
 	for (const auto& cd : cands) {
 		casterMin = glm::min(casterMin, cd.center - cd.radius);
@@ -227,7 +170,7 @@ std::array<ShadowVolume, kActiveShadowCascades> buildShadowVolumes(const Light& 
 	const uint32_t snapGrid = shadowTileSize(shadowAtlasColumns(kActiveShadowCascades));
 	for (uint32_t c = 0; c < kActiveShadowCascades; ++c)
 		volumes[c] = buildShadowVolume(light, slices[c], casterMin, casterMax, snapGrid);
-	emitShadowCasters(cands, volumes, objectSlotCount, shadowArgs, out);
+	emitShadowCasters(cands, volumes, objectSlotCount, shadowArgs, shadowMeshletArgs, out);
 	return volumes;
 }
 
@@ -255,6 +198,84 @@ std::array<Bounds, kActiveShadowCascades> computeCascadeSpheres(const ViewProjec
 }
 
 }  // namespace
+
+/**
+ * 定义（接口声明与契约见 render_list.cppm）。收集阴影投影体候选（实体遍历内调用，只判
+ * 材质/门控，不做级联剔除）。
+ * 只收**不透明**材质：blend 体投出的影子会看不到遮挡体的背面（收下来只多花一遍光流，
+ * 还会在透明体上留不可见的脊影）；MASK 背面本就被 alpha 消掉，不影响。
+ * 不过 GPU culling：候选表按**主视棱**建立，用它会漏掉视野外屋顶的投影体。
+ * 门控（形态决策表 `drawAtlas`）在**最前**：关时不产出任何 draw——图里的阴影 pass 仍然运行
+ * （清深度），但无光栅化开销，且采样端因 enabled=0 直接返回全亮。
+ */
+void collectShadowCasters(const RGL::MeshAsset& asset, const RGL::MaterialAsset& mat,
+    const glm::vec3& worldCenter, float worldRadius, uint32_t objectSlot,
+    const MeshletShadowLodTable* lodTable, std::vector<ShadowCandidate>& out) {
+    if (!shadowFormPlan(shadowConfig()).drawAtlas
+        || asset.shadowPipelineIndex == kInvalidPipelineIndex || mat.alphaModeBlend)
+        return;
+    ShadowCandidate cand{worldCenter, worldRadius, objectSlot,
+        asset.shadowPipelineIndex, asset.groupCount};
+    // ★18-B2 簇路径（c1..c3）可切判据——**四条全满足**（任一不满足 = 候选不可切 = 各级恒
+    // 旧路径，与改前逐字节同形）：
+    //  1. lodTable 非空（registry ctx 有条目 = 门开 + 设备规格 + 装配层对账通过；门关 =
+    //     装配层根本不建，「存在即生效」→ MeshletShadowLodTable 注释）；
+    //  2. 资产有阴影簇管线条目（无产物 / 本档关 / 多产物回落 = kInvalid，烘焙期逐 prim 写回，
+    //     → bakeShadowMeshletEntries）；
+    //  3. 🔴 `!mat.doubleSided` = **正确性闸门**，与 makeOpaqueCall / auditMeshletSwitch /
+    //     auditShadowLod **同一条判据、四处必须同步改**：packer 打的是原始 glb，产物里**没有**
+    //     loader duplicateForDoubleSided 追加的背面副本（实测 bistro 6 材质 279,210 三角，
+    //     docs/mdi_plan.md §16.2）⟹ 切簇路径 = 背面直接消失（阴影版表现 = 背面遮挡不再投影）；
+    //  4. 本 objectSlot 的选级簇数 > 0（无簇产物 / 选级表无条目 = 不切，与 ClusterRangeTable
+    //     的「全 0 条目 = 天然零 group」同形，count == 0 是合法「不切」不是错误）。
+    // blend 已被上方既有守卫挡在门外（与 β-1 同源：透明体不投影）。
+    if (lodTable != nullptr && objectSlot < lodTable->bySlot.size()
+        && lodTable->bySlot[objectSlot].count > 0
+        && asset.shadowMeshletPipelineIndex != kInvalidPipelineIndex && !mat.doubleSided) {
+        const auto& lod = lodTable->bySlot[objectSlot];
+        cand.meshletPipeline = asset.shadowMeshletPipelineIndex;
+        cand.meshletGroups = lod.count;  // 簇数；×2 换算在 emitShadowCasters（唯一真相源）
+        cand.clusterStart = lod.start;
+    }
+    out.push_back(cand);
+}
+
+/**
+ * 定义（接口声明与契约见 render_list.cppm）。候选 × 逐级光空间体 → 阴影 draw 清单
+ * （级主序，级内实体迭代序）。一个图元可以落多级（大物体跨越多个切片）——这正是逐级
+ * 剔除能把总量压在单级之上的原因。
+ */
+void emitShadowCasters(std::span<const ShadowCandidate> cands,
+    std::span<const ShadowVolume> volumes, uint32_t objectSlotCount,
+    std::vector<RGL::ShadowDrawArgs>& shadowArgs,
+    std::vector<RGL::ShadowMeshletDrawArgs>& shadowMeshletArgs,
+    std::array<std::vector<RGL::DrawCall>, kActiveShadowCascades>& out) {
+    for (const auto& cd : cands)
+        for (uint32_t c = 0; c < kActiveShadowCascades; ++c) {
+            if (!casterInShadowVolume(volumes[c], cd.center, cd.radius))
+                continue;
+            const size_t idx = static_cast<size_t>(c) * objectSlotCount + cd.objectSlot;
+            // 🔴 **c0 恒旧路径**（§18.6 第一刀形态零改动；IZB mask 重放 replayIzbMaskSegment
+            // 只重放 c0 段且按 8B ShadowDrawArgs 读 push，靠的就是这条）。c1..c3 且候选可切
+            // → 簇管线 + meshletTaskCount(簇数) + 12B push；**只换 draw 内容，条数逐条不变**
+            // （「原位换管线」的形状，也是候选序对账不受影响的理由）。
+            if (c >= 1u && cd.meshletPipeline != kInvalidPipelineIndex) {
+                auto& margs = shadowMeshletArgs[idx];
+                margs.objectIndex = cd.objectSlot;
+                margs.cascadeIndex = c;
+                margs.clusterStart = cd.clusterStart;
+                out[c].push_back(RGL::DrawCall{cd.meshletPipeline,
+                    std::as_bytes(std::span<const RGL::ShadowMeshletDrawArgs>{&margs, 1}),
+                    meshletTaskCount(cd.meshletGroups)});
+                continue;
+            }
+            auto& sargs = shadowArgs[idx];
+            sargs.objectIndex = cd.objectSlot;
+            sargs.cascadeIndex = c;
+            out[c].push_back(RGL::DrawCall{cd.pipeline,
+                std::as_bytes(std::span<const RGL::ShadowDrawArgs>{&sargs, 1}), cd.groups});
+        }
+}
 
 /**
  * 定义（接口声明与 @param 契约见 render_list.cppm；12.3d 接缝 = shadowPassEnabled
@@ -544,7 +565,9 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 
 	std::vector<Pending> opaque, transparent;
 	// Phase 11 批 11.2：阴影 draw 清单。**不经过主视罞剔除**（见下方注释）。
-	std::array<std::vector<Pending>, kActiveShadowCascades> shadowCasters;
+	// ★18-B2：段元素直接用 DrawCall（Pending 的 distanceSq 在阴影路径恒 0 且无人读，
+	// 抬接缝时去掉这层壳——emitShadowCasters 是导出接缝，壳留在本 TU 只会让接缝多带类型）。
+	std::array<std::vector<RGL::DrawCall>, kActiveShadowCascades> shadowCasters;
 	// 簇化轴 ★1-a1ii-α：簇路径影子叠加 draw（独立向量，不进 calls/不参与候选序对账；
 	// 发射条件 → collectMeshletOverlay）。簇区间表 = 装配层启动期填的 registry ctx，
 	// 门关 = 无该条目 = nullptr = 零 draw。
@@ -553,6 +576,9 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	// 簇化轴 ★1-a1ii-β-1：原位取代的**生效**标记（装配层 wireMeshletSwitch 判定后 emplace，
 	// 本层只读；不 emplace = 不切 = 逐位不变）。判定只有一处，理由 → MeshletSwitchOn 注释。
 	const bool meshletInPlace = rg.ctx().contains<MeshletSwitchOn>();
+	// 簇化轴 ★18-B2：阴影远级联 LOD 选级表（装配层 wireClusterRangeTable 判定后 emplace，
+	// 本层只读；不 emplace = 门关 = 候选全部不可切 = 逐位不变，「存在即生效」同 MeshletSwitchOn）
+	const auto* shadowLodTable = rg.ctx().find<MeshletShadowLodTable>();
 
 	// 循环前一次性 resize（objectSlot 稠密 [0, NextObjectSlot.next)，Phase 6 instancing）：
 	// 循环内 resize 触发 realloc 会使先前存入 DrawCall 的 span 悬空（帧 0 确定性 UAF——
@@ -567,6 +593,11 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	state.draws.resize(objectSlotCount);
 	// Phase 11 批 11.2：阴影 push 数组（分块号 × objectSlot，见 RenderListState::shadowArgs）
 	state.shadowArgs.resize(static_cast<size_t>(kActiveShadowCascades) * objectSlotCount);
+	// 簇化轴 ★18-B2：阴影簇路径 push 数组（ShadowMeshletDrawArgs 12B，同一分块公式）。
+	// 🔴 同 shadowArgs 的 resize-before-loop 红线：实体循环内 realloc 会让先前存入 DrawCall
+	// 的 span 悬空（帧 0 确定性 UAF），故必须在循环**之前**一次到位。门关 = 没人写它，
+	// 但照样 resize（与 shadowArgs 同形，容量只由 objectSlotCount 决定，与门无关）。
+	state.shadowMeshletArgs.resize(static_cast<size_t>(kActiveShadowCascades) * objectSlotCount);
 	// 批 10.7 高亮过滤表：按 objectSlot 存材质 id（kNoMaterial = 该槽本帧无实体；
 	// 视锥剔除后不在 draw list 里故不会被读到，留哨兵免得读到陈值）
 	state.materialBySlot.assign(objectSlotCount, kNoMaterial);
@@ -638,7 +669,8 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 			const float scale = std::max({glm::length(glm::vec3(modelMatrix[0])),
 				glm::length(glm::vec3(modelMatrix[1])), glm::length(glm::vec3(modelMatrix[2]))});
 			const float worldRadius = cull.radius * scale;
-			collectShadowCasters(asset, mat, wc, worldRadius, meshRef.objectSlot, shadowCandidates);
+			collectShadowCasters(asset, mat, wc, worldRadius, meshRef.objectSlot,
+				shadowLodTable, shadowCandidates);
 			if (!sphereInFrustum(frustum, wc, worldRadius))
 				return;
 			auto& bucket = mat.alphaModeBlend ? transparent : opaque;  // MASK 走 opaque（shader 内 discard，Phase 8 C1）
@@ -660,7 +692,8 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	const Light primary = fillLightData(rg, camera.position, fresh);
 
 	const std::array<ShadowVolume, kActiveShadowCascades> shadowVolumes = buildShadowVolumes(
-		primary, cascadeSpheres, shadowCandidates, objectSlotCount, state.shadowArgs, shadowCasters);
+		primary, cascadeSpheres, shadowCandidates, objectSlotCount, state.shadowArgs,
+		state.shadowMeshletArgs, shadowCasters);
 	// 批 10.7 高亮通道：把 SelectedObject ctx 的选中材质 + 过滤表搬进 draw list（执行器
 	// 据此过滤）。entity==null（未选中/已取消）→ hasSelection=false，pass 零 draw。
 	if (const auto* sel = rg.ctx().find<SelectedObject>();
@@ -697,8 +730,8 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 		total += static_cast<uint32_t>(shadowCasters[c].size());
 	fresh.shadowCalls.reserve(total);
 	for (uint32_t c = 0; c < kActiveShadowCascades; ++c) {
-		for (const auto& p : shadowCasters[c])
-			fresh.shadowCalls.push_back(p.call);
+		for (const auto& call : shadowCasters[c])
+			fresh.shadowCalls.push_back(call);
 		fresh.shadowBoundaries[c + 1] = static_cast<uint32_t>(fresh.shadowCalls.size());
 	}
 	// 簇化轴 ★1-a1ii-α：叠加段整体搬入（实体迭代序 = 确定性；执行点 = opaque 段之后，

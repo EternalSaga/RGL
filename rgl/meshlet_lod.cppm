@@ -131,6 +131,39 @@ export struct MeshletLodScan {
 };
 
 /**
+ * 阴影段远级联 LOD 的 **per-objectSlot 选级表**（★18-B2，registry ctx，装配层启动期建一次，
+ * `renderListSystem` 每帧 find 只读）。它是 `scanMeshletLod` 输出的 per-objectSlot 视图：
+ * 装配层按 `MeshRef{asset → objectSlot}` 把逐 prim 选级落进 bySlot（与 `ClusterRangeTable`
+ * 同一条反查路径、同一个落表循环，实例无关）。
+ *
+ * ## 为什么「存在即生效」（与 `MeshletSwitchOn` / `ClusterRangeTable` 同构）
+ * 「生效」只判定一次（门开 + 设备规格 + 逐资产对账通过 ⟹ emplace；任一步不过 = 不 emplace
+ * 并出声），消费者（`collectShadowCasters`）只判 ctx 里有没有这张表——**门关 = ctx 无条目 =
+ * 候选全部不可切 = 零 draw 变化 = 逐位不变的构造性保证**，不靠「读了但结果一样」。
+ * 走 ctx 而不是把配置传进 render_list 的理由同 `ClusterRangeTable`：ctx 是装配层 → system 的
+ * 既有唯一通道（ECS 规范 1），消费者重述条件 = 两处真相源迟早漂。
+ *
+ * ## `count == 0` 是合法的「不切」，不是错误
+ * 与 `ClusterRangeTable` 的「无簇产物实例 = 全 0 条目 = 天然零 group」同形：该 objectSlot 的
+ * 阴影 draw 走旧路径（c0 恒旧路径与本字段无关）。真把它当错误会在「场景里混有无产物资产」的
+ * 合法形态上误杀整张表——对账（装配层 auditShadowLod）钉的是**另一件事**：资产**有**
+ * `shadowMeshletPipelineIndex`（烘焙期按产物写回）却 `count == 0` = 表与烘焙分家 = 半切，
+ * 那才是错误。
+ */
+export struct MeshletShadowLodTable {
+	/** 一个 objectSlot 的选级结果（阴影段 c1..c3 的簇路径 draw 用它定区间）。 */
+	struct Entry {
+		/** 🔴 **相对 `ObjectClusterRange::base` 的偏移**（批 A `MeshletLodPrimRange::start`
+		 *  口径，原样进 push；shader 侧 `cluster = base + clusterStart + (groupID.x >> 1)`）。 */
+		uint32_t start = 0;
+		/** 本 draw 要画的簇数（0 = 不切，走旧路径；task 数换算唯一真相源 = meshletTaskCount）。 */
+		uint32_t count = 0;
+	};
+	/** 按 objectSlot 索引（下标 = `MeshRef.objectSlot` = shader objectIndex），容量 = 实例矩阵槽数。 */
+	std::vector<Entry> bySlot;
+};
+
+/**
  * 扫出逐 prim 选级区间并校验五条产物结构不变量（`meshlet_ranges` 的区间表 → 选级表）。
  *
  * 一趟线性扫 clusters（真产物 61,518 条，微秒级）+ 每 prim 段表上对每个候选 D 重算成本表

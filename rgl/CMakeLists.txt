@@ -369,6 +369,7 @@ set(RGL_APP_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/main_scene.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/main_wiring.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/main_meshlets.cppm"   # ★1-a1i：簇区间表装配（★1-a1 挂号 ①：装配接线不再塞 main_scene）
+    "${CMAKE_CURRENT_SOURCE_DIR}/main_meshlet_tables.cppm"  # ★18-B2：簇轴「建表半区」分区（区间表 + 阴影 LOD 表），自 main_meshlets 拆出（500 行红线）
 )
 
 # ── 归属完整性闸门（configure 期，违反即 FATAL_ERROR）────────────────────

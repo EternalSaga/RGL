@@ -16,6 +16,7 @@ import vulkan_window;       // SDLWindow
 import render_graph;        // CompiledRenderGraph
 import render_graph_config;  // RgGraphVariant（CompiledGraphResult.variant，gate_lint 交叉校验）
 import vk_device;           // DeviceContext
+import rlvk;               // vk::raii::PhysicalDevice（checkMeshletDeviceFit 入参）
 import vk_swapchain;        // Swapchain
 import vk_resources;        // Resources
 import scene_data;          // SceneDataService（架构债务续账步骤 1）
@@ -365,8 +366,9 @@ export void wireMeshletOverlayDepthCompare(Renderer& renderer, const RuntimeConf
 
 /**
  * 簇化轴 ★1-a1ii-β-1：实体注册之后的两步簇轴装配合成一次调用（`main()` 已在 120 行代码
- * 红线，`wireSceneSpinContext` 同法抽 helper）= ① `wireClusterRangeTable`（簇区间表）→
- * ② `wireMeshletSwitch`（`meshlet.switch` 落地）。顺序契约内聚在定义处：区间表**先**建，
+ * 红线，`wireSceneSpinContext` 同法抽 helper）= ① `wireClusterRangeTable`（簇区间表；★18-B2
+ * 起同一个循环还建阴影远级联 LOD 选级表）→ ② `wireMeshletSwitch`（`meshlet.switch` 落地）。
+ * 顺序契约内聚在定义处：区间表**先**建，
  * ② 的逐资产对账要读它的逐槽 l0Count。
  *
  * ② 的语义：`enable && switch` 时，门开资产（有簇管线条目 + L0 簇数 > 0 + 非 blend）在主
@@ -420,7 +422,14 @@ export std::string resolvePrimitiveSpecName(const SceneConfig& scene, bool defer
  *
  * 门 `meshlet.enable` 关 = 首行返回、ctx 不建条目 ⟹ 执行器把该区写成**全 0**（逐位不变）。
  * 门开但扫描/对账失败 = WARNING + 该模型回落现行路径（簇产物是可选加速资产，不砖引擎）。
- * 🔴 本批零消费者：读取点归 ★1-a1 的 mesh shader，写它不改任何像素。
+ *
+ * ★18-B2 起**同一个 MeshRef 落表循环还建第二张表**：阴影远级联 LOD 选级表
+ * `MeshletShadowLodTable`（registry ctx，存在即生效）。前置三步 = 门（`meshlet.shadow_lod < 0`
+ * = 零 ctx 零日志）→ 设备发射规格闸门（warnIfMeshletDeviceUnfit，理由同 β-1）→ 同一份扫描
+ * 逐模型 `scanMeshletLod`；后置两步 = 逐资产对账（`auditMeshletSwitch` 形态，「半切」挡在
+ * 生效之前）+ Σtask/派发上限机器对账 + emplace + INFO（§18.6 判据 6 的常驻输出）。任一步
+ * 不过 = **不 emplace**（阴影全走旧路径，与门关逐位相同）；LOD 停用不连坐 ClusterRangeTable。
+ * 定义在 main:meshlet_tables（建表半区，与区间表同文件保证「同一份扫描、同一个循环」）。
  * @param registry 已注册实体的 registry（读 MeshRef / NextObjectSlot，写 ctx）
  * @param assets 上传产物（`models[].file` 与 `meshlets` 同源；`assetIds` 与 prim 下标对齐）
  * @param meshlets 簇产物容器（★0-b2；门关 = 空）
@@ -429,10 +438,32 @@ export std::string resolvePrimitiveSpecName(const SceneConfig& scene, bool defer
  *        ⟹ scene data 该区与 β-1 逐位同，构造性保证不靠"读了但结果一样"）
  * @param cullService 逐簇剔除服务（★1-a2-i，可空 = 多产物回落）。门开时把刚扫出的剔除项表
  *        **就地**上传给它——cullBase 与 items 必须同生共死，分两处交出去迟早漂
+ * @param assetTable 资产表（★18-B2 逐资产对账读 shadowPipelineIndex / shadowMeshletPipelineIndex）
+ * @param cfg 运行配置（★18-B2 读 meshletShadowLod / meshletShadowLodFallback）
+ * @param device 设备上下文（★18-B2 只读物理设备属性：发射规格 + maxMeshWorkGroupCount.x 上限）
  */
 export void wireClusterRangeTable(entt::registry& registry, const UploadedAssets& assets,
 								  const MeshletAssetStore& meshlets, bool meshletEnable, bool meshletCull,
-								  MeshletCullService* cullService);
+								  MeshletCullService* cullService, const AssetTable& assetTable,
+								  const RuntimeConfig& cfg, const DeviceContext& device);
+
+/**
+ * 设备发射规格核对的结果（★1-a2-i；★18-B2 抬出 = switch 与阴影 LOD 两条装配路径共用，
+ * 定义在 main:meshlet_tables）。四个上限值供 warn 归因与「单 draw 最大 task」对账读取。
+ */
+export struct MeshletDeviceFit {
+	bool ok = true;
+	uint32_t maxOutputVertices = 0;
+	uint32_t maxOutputPrimitives = 0;
+	uint32_t maxWorkGroupInvocations = 0;
+	uint32_t maxMeshWorkGroupCountX = 0;  ///< 单 draw task 派发上限（★18-B2 阴影 LOD 对账读它）
+};
+
+/** 查询设备是否吃得下簇路径的发射规格（口径 → 定义处注释；定义在 main:meshlet_tables）。 */
+export MeshletDeviceFit checkMeshletDeviceFit(const vk::raii::PhysicalDevice& physicalDevice);
+
+/** 规格不够就 warn 并返回 false（调用方必须停用簇路径保持旧路径；定义在 main:meshlet_tables）。 */
+export bool warnIfMeshletDeviceUnfit(const DeviceContext& device);
 
 /**
  * C3+deferred+DGC+Renderer 装配产物（成员析构逆序 renderer→dgcStatic→dgc→cull，与
