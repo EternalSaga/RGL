@@ -11,8 +11,9 @@
 // 【类型化买到什么】
 //  - 元素步长由类型系统给（`buf[id]` 自动 ×stride），C++ 侧 `sizeof` 与 shader 侧元素步长在
 //    编译期对账——改结构体加字段忘改 C++ 写入 stride 是**编译错误**，不是静默读错行；
-//  - 越界访问落在 buffer 之外，可被 GPU-AV 的 buffer 越界检查覆盖（`ByteAddressBuffer`
-//    的任意偏移 Load 对它完全透明）；
+//  - 越界访问不再静默：读到尾部 poison 哨兵（下面【哨兵契约】）。🔴 **不要指望 GPU-AV**——
+//    它在 descriptor heap + shader object 架构下抓不到 shader 侧越界（三条实测障碍与
+//    "真跑起来仍 0 报告"的读数 → `docs/constantbuffer_迁移计划.md` §9.9）；
 //  - R5 的裸字节偏移计数在这四处归零（`sceneData.Load*(基址 + id * stride + 字段偏移)` 整式消失）。
 //
 // 【哨兵契约（批 T0）】
