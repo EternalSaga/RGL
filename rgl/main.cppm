@@ -414,7 +414,7 @@ export std::string resolvePrimitiveSpecName(const SceneConfig& scene, bool defer
 /**
  * 簇化轴 ★1-a1i：把簇产物的**逐 prim 簇区间**落到 per-objectSlot 表（registry ctx
  * `ClusterRangeTable`），供 renderListSystem 每帧搬进 `SceneFrameData::clusterRanges`
- * → scene data 尾区 `ObjectClusterRange` 表（@724992，stride 16）。
+ * → scene data 尾区 `ObjectClusterRange` 表（@724224，stride 16）。
  *
  * **调用序契约 = `registerSceneEntities` 之后**：落表要读 `MeshRef{asset, objectSlot}` 与
  * `NextObjectSlot`，两者都在实体注册时才成形。区间本身来自

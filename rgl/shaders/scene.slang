@@ -5,7 +5,7 @@
 // 🔴 类型化迁移（docs/constantbuffer_迁移计划.md §9）：各区逐批从「binding 3 + 手写字节
 // 偏移」迁到**类型化载体**（本文件零字节数）；已迁区 = 湿面（binding 32，批 1）、
 // 辐照度（binding 27，批 2）、灯数组（binding 24，批 3，消费端在 lights.slang）、
-// 阴影光空间 VP（binding 28，批 S-1）；
+// 阴影光空间 VP（binding 28，批 S-1）、阴影采样参数（binding 29，批 S-2，含 IZB/PCSS/EVSSM）；
 // 未迁区仍走 binding 3 字节读，**全部迁完后 binding 3 与 sceneData 声明一起删**。
 // 字节布局真相源分两段（2026-09-15 勘误：旧注释称真相源 = vkresources.cppm 的
 // LightDataGpu——该类型已删）：
@@ -13,7 +13,7 @@
 //     生成 scene_forward_types_generated.cppm（逐字段 offsetof static_assert 钉死），
 //     scene_data.cppm 的 kSceneDataEnvOffset 等派生自 sizeof(SceneLight) 并 static_assert
 //     钉死各区偏移，shader 结构漂移 = C++ 编译失败；
-//   · 其余表区（@256 矩阵表 / @263424 MVP 表 / @525824 draw 表 / @724992 簇区间表）
+//   · 其余表区（@256 矩阵表 / @263424 MVP 表 / @525824 draw 表 / @724224 簇区间表）
 //     **批 T1 起已类型化迁出本文件** → `scene_tables.slang` 的四个 `StructuredBuffer`
 //     （binding 23 / 26 / 25 / 33），本文件只留结构体声明（= 反射契约 + 布局唯一真相源），
 //     不再有任何字节字面量。C++ 侧基址/stride 仍由 scene_data.cppm 容量常量推导 +
@@ -110,7 +110,7 @@ struct ObjectDraw
 
 // readObjectDraw 已迁 **scene_tables.slang**（批 T1，StructuredBuffer<ObjectDraw> @binding 25）。
 
-// 簇化轴 ★1-a1i：per-object 的**簇区间表**条目（scene data 尾区 @724992，stride 16，
+// 簇化轴 ★1-a1i：per-object 的**簇区间表**条目（scene data 尾区 @724224，stride 16，
 // 容量 = kSceneMatrixCapacity，按 objectIndex 索引；基址/容量 = scene_data.cppm
 // kSceneDataClusterRange* 推导 + static_assert 钉死；批 T1 起读取面在 scene_tables.slang
 // 的 StructuredBuffer<ObjectClusterRange> @binding 33，本文件无字节字面量）。
@@ -135,7 +135,7 @@ struct ObjectClusterRange
 
 // readObjectClusterRange 已迁 **scene_tables.slang**（批 T1，StructuredBuffer<ObjectClusterRange>
 // @binding 33）。原纪律（Load<T> 整读 = 反射真值 = 生成的 C++ 布局）不变，只是基址改由 binding
-// 承载、步长由元素类型承载，本文件不再出现 724992 / 16 的字节字面量。
+// 承载、步长由元素类型承载，本文件不再出现 724224 / 16 的字节字面量。
 
 float3 worldPos(ObjectMatrix m, float3 p)
 {
@@ -201,21 +201,39 @@ ObjectMatrix readShadowViewProj(uint cascadeIndex)
     return sceneShadowViewProj.viewProj[cascadeIndex];
 }
 
-// 阴影采样小参数（迁移批 S-2 前仍走字节读；区内布局（本文件字面量 = C++ 侧手写同源，
-// 改一侧必编译失账）：
-//   @723200  vec4 级联分界远距（对 eyePos 的平方距离，选级用）
-//   @723216  vec4 各级阴影图 texel 世界尺寸（2·r/mapSize，normal offset 用）
-//   @723232  vec4 (depthBias, normalOffsetScale, enabled, 保留)
-//   @723248  vec4 (图集边长, 单块边长, 分块列数, 保留)
+// ── 阴影采样小参数（迁移批 S-2，§9.5 binding 29）──
+//
+// 原形态 = 7 个各 16B 的独立小区（splits/texel/params/atlas 连排 + IZB/PCSS/EVSSM/EVSSM
+// 常量各占一个 256 台阶，共吃 1024B）。类型化后合并成**一个** `ShadowParamsBlock`
+// （128B = 8×vec4，字段序 = 原物理序），载体 = scene data 阴影参数区子范围 UBO 描述符
+// （C++ 侧 kSceneDataShadowParamsOffset）。字段偏移由反射契约钉死（scene_forward_schema
+// 登记 → 生成物 ShadowParamsBlock，sizeof/offsetof assert），本文件零字节数；写端
+// （writeSceneStaging）按同一个生成 struct 整块 memcpy ⟹ 两侧不可能各写一份偏移。
+//
+// 合并顺带把其后各区往下搬 768B（3 个 256 台阶的对齐间隙），搬家口径见 §9.7。
+struct ShadowParamsBlock
+{
+    float4 splits;      // 级联分界远距（对 eyePos 的平方距离，选级用）
+    float4 texelSizes;  // 各级阴影图 texel 世界尺寸（2·r/mapSize，normal offset 用）
+    float4 params;      // (depthBias, normalOffsetScale, enabled, 保留)
+    float4 atlas;       // (图集边长, 单块边长, 分块列数, 保留)
+    float4 izb;         // IZB 消费区 (开关 1/0, 像素 W, 像素 H, 保留)——light.frag 消费
+    float4 pcss;        // PCSS (半影全宽系数 2·tan(θ/2), blocker 搜索半径, 半影半径上限, 保留)
+    float4 evssm;       // EVSSM (半坡 tan(θ/2), 搜索半径, 半影上限, 矩链最大 mip)
+    float4 evssmConst;  // (x = EVSM 指数 c, y 留白, z = 核宽下限[图集纹素], w 留白)
+};
+
+[[vk::binding(29, 0)]]
+ConstantBuffer<ShadowParamsBlock> sceneShadowParams;
 
 float4 readCascadeSplits()
 {
-    return asfloat(sceneData.Load4(723200u));
+    return sceneShadowParams.splits;
 }
 
 float4 readCascadeTexelSizes()
 {
-    return asfloat(sceneData.Load4(723216u));
+    return sceneShadowParams.texelSizes;
 }
 
 // (x = NDC 深度偏置、y = normal offset 系数（以 texel 为单位）、z = 总开关、w 保留。
@@ -223,47 +241,52 @@ float4 readCascadeTexelSizes()
 // （否则会报"采样未转换布局的图"）。
 float4 readShadowParams()
 {
-    return asfloat(sceneData.Load4(723232u));
+    return sceneShadowParams.params;
 }
 
 // (图集边长, 单块边长, 分块列数, 保留)——采样端把级联块的光空间 uv 叠到图集上
 // 用。两个长度都从 C++ 传下来（不在本文件写死）——改图集尺寸时只要改 C++ 一处。
 float4 readShadowAtlas()
 {
-    return asfloat(sceneData.Load4(723248u));
+    return sceneShadowParams.atlas;
 }
 
-// 批 11.5 PCSS 参数区（kSceneDataPcssOffset 字面量同步）：
-// (半影全宽系数 2·tan(θ/2), blocker 搜索半径[图集纹素], 半影半径上限[图集纹素], 保留)。
-// 只有 -DPCSS_SOFT 变体引用（shadow.slang），原版 SPV 不读本区。
+// IZB 消费区（批 11.3-1e；light.frag 的 -DIZB_CONSUME 变体消费，原版 SPV 不读）。
+// 迁移批 S-2 起本函数取代 light.frag 里手抄的 `sceneData.Load4(723456u)`——字面量只此一处。
+float4 readShadowIzb()
+{
+    return sceneShadowParams.izb;
+}
+
+// 批 11.5 PCSS 参数（字段语义见上面 struct）：
+// 只有 -DPCSS_SOFT 变体引用（shadow.slang），原版 SPV 不读本块。
 float4 readShadowPcss()
 {
-    return asfloat(sceneData.Load4(723712u));
+    return sceneShadowParams.pcss;
 }
 
-// 批 11.6 EVSSM 参数区（kSceneDataEvssmOffset 字面量同步）：
-// (半坡 tan(θ/2), 搜索半径[图集纹素 mip0 域], 半影半径上限[图集纹素], 矩链最大 mip)。
-// 只有 -DEVSSM_SOFT 变体引用（shadow.slang），原版 SPV 不读本区（门关红线构造性保证）。
+// 批 11.6 EVSSM 参数（字段语义见上面 struct）：
+// 只有 -DEVSSM_SOFT 变体引用（shadow.slang），原版 SPV 不读本块（门关红线构造性保证）。
 float4 readShadowEvssm()
 {
-    return asfloat(sceneData.Load4(723968u));
+    return sceneShadowParams.evssm;
 }
 
-// 批 11.6 EVSSM 常量 vec4（kSceneDataEvssmConstOffset；x = EVSM 指数 c，yzw 留白）。
+// 批 11.6 EVSSM 常量 vec4（x = EVSM 指数 c，yzw 留白）。
 // c 由 host kEvssmExponent 下发——生产/消费/fallback 三方同源，此处禁写字面量。
 float readShadowEvssmExponent()
 {
-    return asfloat(sceneData.Load(723984u));
+    return sceneShadowParams.evssmConst.x;
 }
 
-// 滤波核宽下限（批 N6d，kSceneDataEvssmConstOffset.z；单位 = 图集纹素，0 = 不设下限）。
-// ⚠ .y（722068）曾为「一致性闸门容差」，实测净负作用（foot=32 时覆盖率比 0.845→0.526）已删，
+// 滤波核宽下限（批 N6d，evssmConst.z；单位 = 图集纹素，0 = 不设下限）。
+// ⚠ evssmConst.y 曾为「一致性闸门容差」，实测净负作用（foot=32 时覆盖率比 0.845→0.526）已删，
 //   槽位保留为 0 不动布局 —— 理由与核宽权衡表见 shadow.slang STEP 2.5 注释。
 // 出厂 0.53° 下半影 < 1 纹素 ⟹ 抽点半径 0.5 纹素 ⟹ 5 抽点全落同一双线性邻域（实测单抽头
 // 变异与基线逐位相同）⟹ 核没张开、软度无从谈起。归因 → docs/shadow_routes_plan.md §4.2。
 float readShadowEvssmFootprint()
 {
-    return asfloat(sceneData.Load(723992u));
+    return sceneShadowParams.evssmConst.z;
 }
 
 float3 irradianceSH(float3 n)
@@ -386,12 +409,12 @@ float3 octDecode(float2 e)
 // ── 批 12.6 TAA（时域抗锯齿）尾区 ──
 //
 // 基址与 C++ 侧 scene_data.cppm kSceneDataTaa* 手写同源（两侧 static_assert 钉死）：
-//   @724224  mat4 prevViewProj —— 上一帧**抖动后** proj·view（产出**抖动网格**坐标）
-//   @724288  mat4 motionPrevFromCur —— prevSpin · inverse(curSpin)（spin 关 = 单位阵）
-//   @724352  vec4 (feedback, historyValid, 本帧内容位移 c_t 的 x/y px)
-//   @724368  vec4 (上一帧内容位移 c_{t−1} 的 x/y px, **AO 已施加标志** z, 保留)  —— 批 13.5/13.6
-//   @724384  vec4 (输入侧重建核选择 x, yzw 保留)  —— 批 13.8，默认 0 = 双线性 = 逐位今天
-//   @724400  vec4 (历史裁剪消融门 x, 软裁剪 λ y, zw 保留)  —— 批 13.11，默认 0 = 逐位今天
+//   @723456  mat4 prevViewProj —— 上一帧**抖动后** proj·view（产出**抖动网格**坐标）
+//   @723520  mat4 motionPrevFromCur —— prevSpin · inverse(curSpin)（spin 关 = 单位阵）
+//   @723584  vec4 (feedback, historyValid, 本帧内容位移 c_t 的 x/y px)
+//   @723600  vec4 (上一帧内容位移 c_{t−1} 的 x/y px, **AO 已施加标志** z, 保留)  —— 批 13.5/13.6
+//   @723616  vec4 (输入侧重建核选择 x, yzw 保留)  —— 批 13.8，默认 0 = 双线性 = 逐位今天
+//   @723632  vec4 (历史裁剪消融门 x, 软裁剪 λ y, zw 保留)  —— 批 13.11，默认 0 = 逐位今天
 //
 // 矩阵口径提醒（改动前必读，全量推导 → scene_data.cppm kSceneDataTaa* 区注释）：
 //   · 重建世界坐标用 sceneData@64 的 skyInvViewProj，它是**抖动后** proj·view 的逆（与深度配套）；
@@ -402,7 +425,7 @@ float3 octDecode(float2 e)
 // historyValid = 0 时 taa.frag 直接输出本帧（逐位旁路，首帧/resize/跳切走这条）。
 ObjectMatrix readTaaPrevViewProj()
 {
-    uint base = 724224u;  // kSceneDataTaaOffset
+    uint base = 723456u;  // kSceneDataTaaOffset
     ObjectMatrix m;
     m.c0 = asfloat(sceneData.Load4(base));
     m.c1 = asfloat(sceneData.Load4(base + 16u));
@@ -413,7 +436,7 @@ ObjectMatrix readTaaPrevViewProj()
 
 ObjectMatrix readTaaMotion()
 {
-    uint base = 724288u;  // kSceneDataTaaMotionOffset
+    uint base = 723520u;  // kSceneDataTaaMotionOffset
     ObjectMatrix m;
     m.c0 = asfloat(sceneData.Load4(base));
     m.c1 = asfloat(sceneData.Load4(base + 16u));
@@ -427,19 +450,19 @@ ObjectMatrix readTaaMotion()
 // 基址与 C++ 侧 scene_data.cppm kSceneDataSsrOffset / kSceneDataSsrParamsOffset /
 // kSceneDataSsrGateOffset 手写同源（**只有 C++ 那一侧有 static_assert 钉**——slang 没有能
 // 引用 C++ 常量的机制，本侧漂移只能靠端到端判据 just ssr-check 抓）：
-//   @724480  mat4 ssrViewProj —— 本帧**抖动后** proj·view（与 @64 skyInvViewProj 严格互逆、
+//   @723712  mat4 ssrViewProj —— 本帧**抖动后** proj·view（与 @64 skyInvViewProj 严格互逆、
 //   与深度缓冲配套；SSR 命中点投回屏幕 uv 用正向矩阵，消费方配 mulM/uvFromWorld 列组合惯例）。
-//   @724544  vec4 ssrParams —— (sceneRadius, maxDistanceRadii, thicknessPx, biasPx)：
+//   @723776  vec4 ssrParams —— (sceneRadius, maxDistanceRadii, thicknessPx, biasPx)：
 //   x = SceneBounds.radius（世界空间场景并集包围球半径 = 尺度无关参数锚点），yzw = 由它
 //   导出的三个无量纲系数（configs/runtime.lua `ssr` 块）。
-//   @724560  vec4 ssrGate —— (roughFull, roughCutoff, blurScale, 保留)：x/y = 粗糙度门控区间
+//   @723792  vec4 ssrGate —— (roughFull, roughCutoff, blurScale, 保留)：x/y = 粗糙度门控区间
 //   （与场景尺度无关，故单独一槽；分组理由 → scene_data.cppm 同槽注释）；z = 螺旋模糊半径
 //   系数（批 15.3 子步 B，ssr_apply 消费，全分辨率 px 口径）。
 // 为什么是 CPU 直传正向矩阵而不是 shader 里 inverse(@64)：inverse(inverse(M)) 与 M 无位级
 // 契约，而 SSR 的 uv 精度直接进 ray march 采样位置（全量推导 → scene_data.cppm 同槽注释）。
 ObjectMatrix readSsrViewProj()
 {
-    uint base = 724480u;  // kSceneDataSsrOffset
+    uint base = 723712u;  // kSceneDataSsrOffset
     ObjectMatrix m;
     m.c0 = asfloat(sceneData.Load4(base));
     m.c1 = asfloat(sceneData.Load4(base + 16u));
@@ -453,7 +476,7 @@ ObjectMatrix readSsrViewProj()
 // kSceneDataSsrParamsOffset。**系数无 shader 侧默认值**（唯一真相源 = RuntimeConfig）。
 float4 readSsrParams()
 {
-    return asfloat(sceneData.Load4(724544u));  // kSceneDataSsrParamsOffset
+    return asfloat(sceneData.Load4(723776u));  // kSceneDataSsrParamsOffset
 }
 
 // SSR 粗糙度门控 + 模糊旋钮（x = roughFull、y = roughCutoff、z = blurScale、w 保留）。
@@ -463,7 +486,7 @@ float4 readSsrParams()
 // 纯双线性上采样）。批 15.3 子步 B 起占用（此前措辞「zw 保留」，w 仍保留）。
 float4 readSsrGate()
 {
-    return asfloat(sceneData.Load4(724560u));  // kSceneDataSsrGateOffset
+    return asfloat(sceneData.Load4(723792u));  // kSceneDataSsrGateOffset
 }
 
 // ── Phase 15 批 15.2 子步 A 湿面区（迁移批 1 起 = 类型化载体，本文件零字节偏移）──
@@ -515,7 +538,7 @@ float readAoStrength()
 // 口径 = `taa_jitter.cppm::contentShiftPx` = `(+jx, −jy)`，**不是** jitterPx（差一个 y 轴翻号）。
 float4 readTaaParams()
 {
-    return asfloat(sceneData.Load4(724352u));  // kSceneDataTaaParamsOffset
+    return asfloat(sceneData.Load4(723584u));  // kSceneDataTaaParamsOffset
 }
 
 // 批 13.5 历史基空间修正：**上一帧内容位移 c_{t−1}** 像素（x/y）+ 批 13.6 AO 施加点标志（z）。
@@ -523,7 +546,7 @@ float4 readTaaParams()
 // 语义与「为什么偏移由 CPU 算好」全在 scene_data.cppm kSceneDataTaaPrevContentShiftOffset 注释里。
 float4 readTaaPrevContentShift()
 {
-    return asfloat(sceneData.Load4(724368u));  // kSceneDataTaaPrevContentShiftOffset
+    return asfloat(sceneData.Load4(723600u));  // kSceneDataTaaPrevContentShiftOffset
 }
 
 // 批 13.6：AO 是否**已在 tonemap 之前施加过**（1/0）。= 1 ⟹ tonemap 必须跳过自己的 AO
@@ -536,7 +559,7 @@ float4 readTaaPrevContentShift()
 //   又跳过」= AO 一次都不施加。零布局变更（复用 .z 保留位，static_assert 不变）。
 float readAoAppliedPreTemporal()
 {
-    return asfloat(sceneData.Load(724368u + 8u));  // kSceneDataTaaPrevContentShiftOffset + z
+    return asfloat(sceneData.Load(723600u + 8u));  // kSceneDataTaaPrevContentShiftOffset + z
 }
 
 // 历史拒收诊断门标志（`taa.diag_reject`，1/0，默认 0 = 今天）。= 1 ⟹ taa.frag 把逐像素
@@ -545,18 +568,18 @@ float readAoAppliedPreTemporal()
 // 零布局变更（复用 .w 保留位，static_assert 不变）。
 float readTaaDiagReject()
 {
-    return asfloat(sceneData.Load(724368u + 12u));  // kSceneDataTaaPrevContentShiftOffset + w
+    return asfloat(sceneData.Load(723600u + 12u));  // kSceneDataTaaPrevContentShiftOffset + w
 }
 
 // 输入侧 un-jitter 的**重建核选择**（`taa.input_kernel`，默认 0 = 双线性 = 逐位今天）。
 // 0 = 双线性（4 抽头，权重恒 ∈[0,1]）｜ 1 = Catmull-Rom 4×4（与历史侧同一份权重实现）｜
 // 2 = Lanczos3 6×6（Filament 输入侧用的那个）。消费端 = taa.frag.slang `sampleInputColor`。
-// ⚠ 本区**新增** 16B（@724384，kSceneDataTaaBytes 160 → 176）——前四个槽的四个分量
+// ⚠ 本区**新增** 16B（@723616，kSceneDataTaaBytes 160 → 176）——前四个槽的四个分量
 //   全部有主（feedback/historyValid/c_t.xy、c_{t−1}.xy/aoApplied/diagReject），无处复用。
 //   门关（0）⟹ taa.frag 走双线性分支，一个 bit 不动（红线由 `just shot` sha256 钉）。
 float readTaaInputKernel()
 {
-    return asfloat(sceneData.Load(724384u));  // kSceneDataTaaInputKernelOffset
+    return asfloat(sceneData.Load(723616u));  // kSceneDataTaaInputKernelOffset
 }
 
 /**
@@ -569,5 +592,5 @@ float readTaaInputKernel()
  */
 float4 readTaaClipControl()
 {
-    return asfloat(sceneData.Load4(724400u));  // kSceneDataTaaClipControlOffset
+    return asfloat(sceneData.Load4(723632u));  // kSceneDataTaaClipControlOffset
 }

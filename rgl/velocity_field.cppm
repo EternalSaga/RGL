@@ -164,8 +164,8 @@ export inline PixelVelocity pixelVelocity(glm::vec2 uv, float depth, const Veloc
  * `ENABLE_MOTION_VECTORS_JITTER_CANCELLATION` **不开**（基空间速度里没有 jitter 项可抵消）。
  *
  * @param velocityJittered `pixelVelocity` 的输出（两帧矩阵均为抖动后）
- * @param contentShiftCur  本帧内容位移 c_t 像素（scene data @724352.zw）
- * @param contentShiftPrev 上一帧内容位移 c_{t−1} 像素（scene data @724368.xy）
+ * @param contentShiftCur  本帧内容位移 c_t 像素（scene data @723584.zw）
+ * @param contentShiftPrev 上一帧内容位移 c_{t−1} 像素（scene data @723600.xy）
  */
 export inline glm::vec2 toBaseSpace(glm::vec2 velocityJittered, glm::vec2 contentShiftCur,
                                     glm::vec2 contentShiftPrev) {

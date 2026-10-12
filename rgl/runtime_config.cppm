@@ -53,7 +53,7 @@ export struct LlmDebugConfig {
  * ## 与 `ssrEnabled` 的区别（别混）
  *
  * `enabled` 是**创建期量**（决定渲染图里有没有 ssr pass、要不要领 ssr_applied RT，改它
- * 要走重启）；本结构的 6 枚是**每帧量**（每帧写进 scene data 尾区 @724544/@724560，
+ * 要走重启）；本结构的 6 枚是**每帧量**（每帧写进 scene data 尾区 @723776/@723792，
  * 改它不改图形态、不重建任何 RT）。⚠ 但 runtime.lua **不在热重载清单里**（热重载只套
  * scene.lua / camera.lua / log_level.json，见 `wireHotReload`）⟹ 改文件仍需重启进程才
  * 生效；"每帧量"说的是**机制**（引擎每帧现取），不是"热重载已接"。
@@ -87,7 +87,7 @@ export struct SsrTuning {
 	/// roughness 高于此 = 完全不反射（中间 smoothstep 过渡；硬切会在材质边界出现可见开关线）。
 	float roughCutoff = 0.40f;
 	/// 粗糙度感知模糊半径上限系数（**全分辨率 px**）：apply 的螺旋 taps 半径 =
-	/// roughness × 本值（scene data @724560.z，批 15.3 子步 B）。默认 8.0 ⟹ roughness
+	/// roughness × 本值（scene data @723792.z，批 15.3 子步 B）。默认 8.0 ⟹ roughness
 	/// 0.05 → 0.4px ≈ 无模糊、0.35 → 2.8px（湿区 0.05–0.35 区间标定；gate.y 以上本来
 	/// 就没有 trace 可糊）。`0` 是**合法消融档**（半径 0 = taps 全落中心 = 纯双线性上采样），
 	/// 配置层不 clamp（同 readSsrBlock 纪律：消融档必须写得出来）。
@@ -349,7 +349,7 @@ export struct RuntimeConfig {
 	 * SSR 的 6 枚**每帧**画质参数（configs/runtime.lua `ssr` 块）。**每帧量**——与上面
 	 * `ssrEnabled`（创建期量）的区别与"为什么是一个结构" → `SsrTuning` 注释。
 	 * 消费链：main 启动期 `registry.ctx().emplace<SsrTuning>(configs.runtime.ssr)` →
-	 * renderListSystem 每帧取 → fillSsrParams 写 scene data @724544/.yzw 与 @724560/.xyz
+	 * renderListSystem 每帧取 → fillSsrParams 写 scene data @723776/.yzw 与 @723792/.xyz
 	 *（z = blurScale，批 15.3B 起占用，消费者 = ssr_apply）。
 	 */
 	SsrTuning ssr;
@@ -358,7 +358,7 @@ export struct RuntimeConfig {
 	 * `ssr` 同构（湿面没有创建期开关：它不是独立 pass，是 deferred_geometry 的 G-buffer 调制，
 	 * 不改图形态；语义与「身份不占参数」→ `WetTuning` 注释）。
 	 * 消费链：main 启动期 `registry.ctx().emplace<WetTuning>(configs.runtime.wet)` →
-	 * renderListSystem 每帧取 → fillWetParams 写 scene data @724736/.xyzw 与 @724752/.xy →
+	 * renderListSystem 每帧取 → fillWetParams 写 scene data @723968/.xyzw 与 @723984/.xy →
 	 * shader 消费者 = deferred_geometry.frag.slang 湿面调制（15.2B 接线，默认开）。
 	 */
 	WetTuning wet;

@@ -1,6 +1,6 @@
 {
   "_comment": "R5 裸字节偏移棘轮基线（rgl/shaders/**：ByteAddressBuffer 的 Load*/Store* **第一个实参**（字节偏移位）含裸十进制字面量的调用点数，按文件记）。只准降不准升——上升的处置是把该区迁到类型化载体（ConstantBuffer / 反射契约 StructuredBuffer），**不是**改这里的数字。下调后用 `python3 tools/check_shader_deps.py --update-byte-offset-baseline` 重写本文件。判据与已知射程外 → docs/constantbuffer_迁移计划.md §5.2 与本脚本 docstring R5 节。",
-  "total": 99,
+  "total": 90,
   "files": {
     "rgl/shaders/ao.frag.slang": 2,
     "rgl/shaders/ao_apply.frag.slang": 0,
@@ -19,7 +19,7 @@
     "rgl/shaders/izb_mask.frag.slang": 4,
     "rgl/shaders/izb_mask.mesh.slang": 0,
     "rgl/shaders/izb_prime.comp.slang": 4,
-    "rgl/shaders/light.frag.slang": 4,
+    "rgl/shaders/light.frag.slang": 3,
     "rgl/shaders/light.mesh.slang": 0,
     "rgl/shaders/lights.slang": 0,
     "rgl/shaders/material.slang": 0,
@@ -37,7 +37,7 @@
     "rgl/shaders/model_vegetation.frag.slang": 0,
     "rgl/shaders/normalmap.slang": 0,
     "rgl/shaders/picking.frag.slang": 0,
-    "rgl/shaders/scene.slang": 34,
+    "rgl/shaders/scene.slang": 26,
     "rgl/shaders/scene_tables.slang": 0,
     "rgl/shaders/shadow.frag.slang": 0,
     "rgl/shaders/shadow.mesh.slang": 0,

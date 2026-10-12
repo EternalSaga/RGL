@@ -78,8 +78,8 @@
 // 若引入光滑植被，减法要随 materialClass 走（届时再还，别提前加绑定、别在此早退）。
 //
 // ── 绑定面（与 CPU 侧 addSsrTraceEntry 成对；G-buffer 通道号镜像 light.frag）──
-//   3 = sceneData（import scene；@724480 ssrViewProj = 本帧**抖动后** proj·view；
-//       @724544 ssrParams = 尺度锚点 + 三个导出系数；@724560 ssrGate = 粗糙度门控区间
+//   3 = sceneData（import scene；@723712 ssrViewProj = 本帧**抖动后** proj·view；
+//       @723776 ssrParams = 尺度锚点 + 三个导出系数；@723792 ssrGate = 粗糙度门控区间
 //       （本 pass 只读 x/y，z = blurScale 是 apply 的旋钮）。
 //       各槽口径与默认值真相源 → scene_data.cppm / configs/runtime.lua `ssr` 块）
 //   4 = scene_hdr（RGBA16F 线性 HDR，反射源；**全分辨率**，命中取色 Sample）
@@ -294,7 +294,7 @@ float4 main(SsrInput input) : SV_Target
     const float roughness = mr.g;
     // 粗糙度门控早退（**性能与正确性双重**：粗糙面本就不该有镜面反射，且这条早退让绝大多数
     // 像素根本不进 ray march —— 门控关掉的是整段 march 的成本，不是一个乘数）。
-    // 门控区间 = scene data @724560（configs/runtime.lua `ssr.rough_full / rough_cutoff`）：
+    // 门控区间 = scene data @723792（configs/runtime.lua `ssr.rough_full / rough_cutoff`）：
     // 低于 x = 满强度、高于 y = 完全不反射、中间 smoothstep 过渡（硬切会在材质边界出现可见的
     // 开关线）。⚠ 要求 x < y：反了 = 门控反向（光滑面全关、粗糙面满反射，实测靶上覆盖率恰 0），
     // x == y 时只有 roughness 恰等于该值的像素会 0/0 = NaN（其余被 clamp 收成 0/1）。
@@ -316,7 +316,7 @@ float4 main(SsrInput input) : SV_Target
     const float4 C0 = mulM(vp, float4(P, 1.0));
     const float4 Cd = mulM(vp, float4(R, 0.0));
 
-    // ── 尺度无关参数（scene data @724544；口径 → scene_data.cppm 该区注释）──
+    // ── 尺度无关参数（scene data @723776；口径 → scene_data.cppm 该区注释）──
     // 一次读满 vec4：x = sceneRadius（尺度锚点）、y = maxDistanceRadii、z = thicknessPx、
     // w = biasPx（configs/runtime.lua `ssr` 块，**shader 侧无默认值**）。
     const float4 ssrParams = readSsrParams();

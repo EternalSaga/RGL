@@ -33,7 +33,7 @@ return {
             },
         },
         -- 簇化轴 ★1-a1i：per-object 簇区间表条目（scene.slang ObjectClusterRange，
-        -- 表基址 @724992 stride 16，见 scene_data.cppm kSceneDataClusterRangeOffset）。
+        -- 表基址 @724224 stride 16，见 scene_data.cppm kSceneDataClusterRangeOffset）。
         -- 方案 B（docs/mdi_plan.md §10.1）：**新增独立表**而非给 ObjectDraw 加字段——
         -- 现有结构逐字节不动 ⟹「门关逐位不变」是构造性成立，不是靠"没人读新字段"。
         -- ★1-a2-i：第 4 字段由补齐位 `reserved` 转正为 `cullBase`（逐簇剔除标志数组的
@@ -100,6 +100,26 @@ return {
             stride = 256,
             attributes = {
                 { name = "viewProj", type = "ObjectMatrix[4]", offset = 0 },
+            },
+        },
+        -- 迁移批 S-2（§9.5 binding 29）：阴影采样参数区类型化载体（scene.slang
+        -- ShadowParamsBlock，ConstantBuffer<ShadowParamsBlock> 经子范围描述符指向 scene
+        -- data 阴影参数区 kSceneDataShadowParamsOffset，128B = 8×vec4）。
+        -- **合并原 7 个各 16B 的独立小区**（splits/texel/params/atlas 连排 + IZB/PCSS/
+        -- EVSSM/EVSSM 常量各占一个 256 台阶 = 1024B → 128B），字段序 = 合并前的物理序
+        --（前四段本就同区连排，逐字节同；后三段搬家，写端按本 struct 整块 memcpy）。
+        {
+            name = "ShadowParamsBlock",
+            stride = 128,
+            attributes = {
+                { name = "splits",      type = "vec4", offset = 0 },
+                { name = "texelSizes",  type = "vec4", offset = 16 },
+                { name = "params",      type = "vec4", offset = 32 },
+                { name = "atlas",       type = "vec4", offset = 48 },
+                { name = "izb",         type = "vec4", offset = 64 },
+                { name = "pcss",        type = "vec4", offset = 80 },
+                { name = "evssm",       type = "vec4", offset = 96 },
+                { name = "evssmConst",  type = "vec4", offset = 112 },
             },
         },
     },

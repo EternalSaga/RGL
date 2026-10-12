@@ -355,7 +355,7 @@ export class ShaderRegistry {
 	 * Phase 14 批 14.4：逐像素速度场 pass 管线条目（单条目，仿 addAoEntry；门默认关
 	 * **不被调用** = 条目表逐位不变）。spec = "velocity"（mesh 复用 light.mesh.spv 全屏
 	 * 大三角 + 速度场 frag）。binding：0/1 占位 + 3 sceneData（@64 invViewProj +
-	 * TAA 尾区 @724224 起两帧矩阵与内容位移）+ extra：4 → 深度图 SAMPLED_IMAGE 堆槽。
+	 * TAA 尾区 @723456 起两帧矩阵与内容位移）+ extra：4 → 深度图 SAMPLED_IMAGE 堆槽。
 	 *
 	 * **无 sampler 绑定**（与 ao 的唯一差别）：本 shader 用 `depthTex.Load(像素)` 直取，
 	 * 不过滤 ⟹ 不需要也不该占 sampler 堆槽（`vkresources.cppm:350` 记的 2026-10-04
@@ -370,13 +370,13 @@ export class ShaderRegistry {
 	/**
 	 * 批 12.6 TAA pass 管线条目（单条目，仿 addTonemapEntry；门默认关不被调用 =
 	 * 条目表逐位不变）。spec = "taa"（mesh 复用 light.mesh.spv 全屏大三角 + 时域滤波
-	 * frag）。binding：0/1 占位 + 3 sceneData（@724224 prevViewProj / @724288 motion /
-	 * @724352 params / @64 invViewProj 深度重建）+ extra：4 → 本帧 scene_hdr RT 的
+	 * frag）。binding：0/1 占位 + 3 sceneData（@723456 prevViewProj / @723520 motion /
+	 * @723584 params / @64 invViewProj 深度重建）+ extra：4 → 本帧 scene_hdr RT 的
 	 * SAMPLED_IMAGE 堆槽、5 → taa_hist RT 的 SAMPLED_IMAGE 堆槽、6 → 深度图堆槽
 	 * （重投影的世界坐标来源）、7 → 共享 sampler（历史亚像素查找取 LINEAR；本帧色
 	 * 在像素中心采样与点采等价）、8 → **point sampler**（D32Sfloat 深度不可过滤，
 	 * 同 addAoEntry 的理由）、9 → **ao RT 的 SAMPLED_IMAGE 堆槽**（批 13.6：AO 施加点搬进
-	 * taa pass = 时域滤波**之前**，与 Filament 同构；tonemap 据 scene data @724368.z 跳过）。
+	 * taa pass = 时域滤波**之前**，与 Filament 同构；tonemap 据 scene data @723600.z 跳过）。
 	 * 前提 = 两个 TAA RT 已 ensure + 领槽（ensureTaaSlots）+ 深度采样槽已领 + ao RT 已领槽。
 	 * 幂等。
 	 * @param colorSlot 本帧场景色（scene_hdr）SAMPLED_IMAGE heap 槽（binding 4）
@@ -393,7 +393,7 @@ export class ShaderRegistry {
 	 * 批 14.5 第三批：AO 施加专用 pass 管线条目（单条目，仿 addTonemapEntry——本 pass 的
 	 * 绑定面就是 tonemap 的前半段，去掉 ACES/曝光）。spec = "ao_apply"，mesh 复用
 	 * light.mesh.spv 全屏大三角。binding 0/1 顶点/索引占位、3 → scene data（@60 AO 强度
-	 * + @724352 TAA 参数取 c_t 做 baseUv）+ extra：4 → 本帧场景色 RT 的 SAMPLED_IMAGE 堆槽、
+	 * + @723584 TAA 参数取 c_t 做 baseUv）+ extra：4 → 本帧场景色 RT 的 SAMPLED_IMAGE 堆槽、
 	 * 5 → 共享 sampler（**必须 linear**：AO 走 baseUv 分数坐标，点采会随相位跳纹素，
 	 * 见 shaders/ao_apply.frag.slang 纪律②）、6 → ao RT 的 SAMPLED_IMAGE 堆槽。
 	 * 前提 = ao_applied RT 已 ensure + 领槽、ao RT 已领槽。幂等。
@@ -408,7 +408,7 @@ export class ShaderRegistry {
 	/**
 	 * 批 15.3-B：SSR **march** pass 管线条目（半分辨率，写 ssr_trace RT；门默认关不被调用 =
 	 * 条目表逐位不变）。spec = "ssr_trace"（mesh 复用 light.mesh.spv 全屏大三角 + ssr_trace.frag）。
-	 * binding：0/1 占位 + 3 sceneData（@724480 ssrViewProj = 本帧**抖动后** proj·view，ray march
+	 * binding：0/1 占位 + 3 sceneData（@723712 ssrViewProj = 本帧**抖动后** proj·view，ray march
 	 * 把命中点投回屏幕 uv 用）+ extra：4 → 本帧场景色（**恒 scene_hdr**，理由见 addSsrTraceEntry
 	 * 定义处注释）、5/6/7 → G-buffer normal/position/metalrough 采样槽（通道号镜像 light.frag）、
 	 * 8 → 深度图采样槽（与 ao/velocity/taa 复用同一份 ensureDepthSampleSlot 的槽）、

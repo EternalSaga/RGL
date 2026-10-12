@@ -217,7 +217,7 @@ static void readSsrBlock(const sol::table& root, RuntimeConfig& cfg) {
 	readFloatKey(ssr, "bias_px", cfg.ssr.biasPx);
 	readFloatKey(ssr, "rough_full", cfg.ssr.roughFull);
 	readFloatKey(ssr, "rough_cutoff", cfg.ssr.roughCutoff);
-	// 批 15.3B：模糊半径系数（@724560.z，ssr_apply 消费）。0 = 合法消融档（纯双线性上采样），
+	// 批 15.3B：模糊半径系数（@723792.z，ssr_apply 消费）。0 = 合法消融档（纯双线性上采样），
 	// 同上面两枚 px 系数一条纪律：不 clamp 不 warn（readSsrBlock 头注释的理由逐字适用）。
 	readFloatKey(ssr, "blur_scale", cfg.ssr.blurScale);
 }

@@ -20,7 +20,8 @@ namespace RGL {
  *  定值 5.5 由 RGBA16F 上限双约束 exp(2c) ≤ 65504 决定（Filament PCSS 同值，
  *  docs/evssm_plan.md §1）。消费方：EvssmShadow push constant（moments compute）、
  *  fallback far 最大矩（ensureEvssmSampleSlot 下方）；shadow.slang 消费端经
- *  scene data 常量块（kSceneDataEvssmConstOffset，readShadowEvssmExponent）取本值
+ *  scene data 阴影参数区的 evssmConst.x（迁移批 S-2 前是独立常量块，现经
+ *  readShadowEvssmExponent）取本值
  *  ——shader 侧写字面量即双源红线。 */
 export inline constexpr float kEvssmExponent = 5.5f;
 

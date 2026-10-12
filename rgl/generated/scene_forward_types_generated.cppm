@@ -71,6 +71,25 @@ namespace RGL {
     };
     static_assert(sizeof(ShadowViewProjBlock) == 256, "Size of C++ struct ShadowViewProjBlock does not match shader reflection!");
 
+    export struct ShadowParamsBlock {
+        glm::vec4 splits;
+        glm::vec4 texelSizes;
+        glm::vec4 params;
+        glm::vec4 atlas;
+        glm::vec4 izb;
+        glm::vec4 pcss;
+        glm::vec4 evssm;
+        glm::vec4 evssmConst;
+    };
+    static_assert(sizeof(ShadowParamsBlock) == 128, "Size of C++ struct ShadowParamsBlock does not match shader reflection!");
+    static_assert(offsetof(ShadowParamsBlock, texelSizes) == 16, "Field ShadowParamsBlock.texelSizes offset does not match shader reflection (scalar layout drift!)");
+    static_assert(offsetof(ShadowParamsBlock, params) == 32, "Field ShadowParamsBlock.params offset does not match shader reflection (scalar layout drift!)");
+    static_assert(offsetof(ShadowParamsBlock, atlas) == 48, "Field ShadowParamsBlock.atlas offset does not match shader reflection (scalar layout drift!)");
+    static_assert(offsetof(ShadowParamsBlock, izb) == 64, "Field ShadowParamsBlock.izb offset does not match shader reflection (scalar layout drift!)");
+    static_assert(offsetof(ShadowParamsBlock, pcss) == 80, "Field ShadowParamsBlock.pcss offset does not match shader reflection (scalar layout drift!)");
+    static_assert(offsetof(ShadowParamsBlock, evssm) == 96, "Field ShadowParamsBlock.evssm offset does not match shader reflection (scalar layout drift!)");
+    static_assert(offsetof(ShadowParamsBlock, evssmConst) == 112, "Field ShadowParamsBlock.evssmConst offset does not match shader reflection (scalar layout drift!)");
+
 
 
 

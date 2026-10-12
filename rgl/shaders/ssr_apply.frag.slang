@@ -41,7 +41,7 @@
 //     `--edge-px` 豁免带按实测重定（→ docs/phase15_plan.md §3.3 子步 B）。
 //
 // ── 绑定面（与 CPU 侧 addSsrApplyEntry 成对）──
-//   3 = sceneData（import scene；只读 @724560 ssrGate.z = blurScale，口径 → scene_data.cppm）
+//   3 = sceneData（import scene；只读 @723792 ssrGate.z = blurScale，口径 → scene_data.cppm）
 //   4 = scene_hdr（RGBA16F 线性 HDR 成片，**Load** 直通基准）
 //   5 = ssr_trace（RGBA16F premultiplied 反射贡献，**半分辨率**，模糊 taps 用 Sample）
 //   6 = gbuffer_metalrough（RGBA8_UNORM .g=rough，模糊半径的自变量）
@@ -81,7 +81,7 @@ float4 main(SsrApplyInput input) : SV_Target
     sceneHdrTex.GetDimensions(0u, pxW, pxH, mLvl);
     const float2 px = float2(float(pxW), float(pxH));
 
-    // 模糊半径 = roughness × blurScale（scene data @724560.z）。blurScale = 0 = 消融档：
+    // 模糊半径 = roughness × blurScale（scene data @723792.z）。blurScale = 0 = 消融档：
     // 半径 0 ⟹ 5 枚 tap 全落像素中心 = 纯双线性上采样（不是"跳过模糊"，是它自然退化）。
     const float4 gate = readSsrGate();
     const float roughness = metalRoughTex.Load(int3(pix, 0)).g;

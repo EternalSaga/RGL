@@ -253,19 +253,29 @@ void Renderer::createSceneStaging(RGL::Resources& vkResources) {
 		"SceneFrameData::shadowViewProj 字节数与阴影 VP 区容量失同步");
 	std::memcpy(stage + kSceneDataShadowMatrixOffset, list.sceneData.shadowViewProj.data(),
 		kSceneDataShadowMatrixBytes);
-	std::memcpy(stage + kSceneDataShadowSplitsOffset, &list.sceneData.shadowSplits,
-		sizeof(glm::vec4));
-	std::memcpy(stage + kSceneDataShadowTexelOffset, &list.sceneData.shadowTexelSizes,
-		sizeof(glm::vec4));
-	std::memcpy(stage + kSceneDataShadowParamsOffset, &list.sceneData.shadowParams,
-		sizeof(glm::vec4));
-	std::memcpy(stage + kSceneDataShadowAtlasOffset, &list.sceneData.shadowAtlas,
-		sizeof(glm::vec4));
-	// 批 11.5：PCSS 参数区（fillShadowData 填，-DPCSS_SOFT 变体消费；原版不引用）
-	std::memcpy(stage + kSceneDataPcssOffset, &list.sceneData.shadowPcss, sizeof(glm::vec4));
-	std::memcpy(stage + kSceneDataEvssmOffset, &list.sceneData.shadowEvssm, sizeof(glm::vec4));
-	std::memcpy(stage + kSceneDataEvssmConstOffset, &list.sceneData.shadowEvssmConst,
-		sizeof(glm::vec4));  // x = c（kEvssmExponent 同源，EVSSM_SOFT 变体 readShadowEvssmExponent）
+	// 迁移批 S-2：阴影采样参数（splits/texel/params/atlas/pcss/evssm/evssmConst）+ IZB 消费段
+	// 合并成一个 `ShadowParamsBlock`（binding 29 载体），**按生成 struct 整块写**（同批 3 灯
+	// 数组的做法）：字段偏移只存在于反射生成物一处，写端不再手抄 8 个基址常量（旧
+	// kSceneDataShadow{Splits,Texel,Params,Atlas}Offset / Izb / Pcss / Evssm / EvssmConst 已删）。
+	// IZB 段 (flag, W, H, 保留)：flag = izbShadow 已构造（门关恒空 = 全 0 → ×1.0 逐位旁路），
+	// W/H = mask 位图行距——原本就是**无条件写**（写全 0 也写），合并后仍无条件，逐位同。
+	const auto izbExtent = izbShadow ? izbShadow->getExtent() : vk::Extent2D {};
+	const glm::vec4 izbParams = izbShadow
+		? glm::vec4 {1.0f, static_cast<float>(izbExtent.width), static_cast<float>(izbExtent.height), 0.0f}
+		: glm::vec4 {};
+	const ShadowParamsBlock shadowBlock {
+		.splits = list.sceneData.shadowSplits,
+		.texelSizes = list.sceneData.shadowTexelSizes,
+		.params = list.sceneData.shadowParams,
+		.atlas = list.sceneData.shadowAtlas,
+		.izb = izbParams,
+		.pcss = list.sceneData.shadowPcss,
+		.evssm = list.sceneData.shadowEvssm,
+		.evssmConst = list.sceneData.shadowEvssmConst,  // x = c（kEvssmExponent 同源）
+	};
+	static_assert(sizeof(shadowBlock) == kSceneDataShadowParamsBytes,
+		"ShadowParamsBlock 尺寸与区容量失同步（scene_data.cppm）");
+	std::memcpy(stage + kSceneDataShadowParamsOffset, &shadowBlock, sizeof(shadowBlock));
 	// 批 12.6 TAA 区：上一帧**抖动后** viewProj / 全场景刚体运动补偿 / 参数四元组。
 	// 无条件写（16B+128B+16B）——TAA 关时前三段值本身无消费者（图里没有 taa pass），
 	// 写它不改任何像素，且省下「按门分支写」的第二条路径（同 shadow 尾区纪律）。
@@ -287,14 +297,14 @@ void Renderer::createSceneStaging(RGL::Resources& vkResources) {
 	// Phase 15 批 15.1 收尾：SSR 参数子区（vec4，x = SceneBounds.radius = ssr_trace.frag 的尺度
 	// 锚点）。无条件写（16B，同矩阵区纪律：门关路径也保证值正确，省第二条分支）
 	std::memcpy(stage + kSceneDataSsrParamsOffset, &list.sceneData.ssrParams, sizeof(glm::vec4));
-	// Phase 15 批 15.1 参数面：SSR 阈值门控系数（@724560，紧随 ssrParams；同样无条件写，理由同上）
+	// Phase 15 批 15.1 参数面：SSR 阈值门控系数（@723792，紧随 ssrParams；同样无条件写，理由同上）
 	std::memcpy(stage + kSceneDataSsrGateOffset, &list.sceneData.ssrGate, sizeof(glm::vec4));
-	// Phase 15 批 15.2 子步 A：湿面参数区（身份调制系数 @724736 + 空间变化 @724752，2×vec4）。
+	// Phase 15 批 15.2 子步 A：湿面参数区（身份调制系数 @723968 + 空间变化 @723984，2×vec4）。
 	// 无条件写（同 ssrParams/ssrGate 尾区纪律：门关路径也保证值正确，省第二条分支；
 	// 本步零消费者，写它不改任何像素）
 	std::memcpy(stage + kSceneDataWetParamsOffset, &list.sceneData.wetParams, sizeof(glm::vec4));
 	std::memcpy(stage + kSceneDataWetSpatialOffset, &list.sceneData.wetSpatial, sizeof(glm::vec4));
-	// 簇化轴 ★1-a1i：per-object 簇区间表（尾区 @724992，stride 16 × 4096）。表由装配层启动期
+	// 簇化轴 ★1-a1i：per-object 簇区间表（尾区 @724224，stride 16 × 4096）。表由装配层启动期
 	// 扫产物 groups 得到、经 registry ctx 走到这里（生产者与索引口径 → SceneFrameData::clusterRanges）。
 	// 写入本体在 scene_data::writeClusterRangeRegion（**无设备 ⟹ 可单测**：门关整区全 0 /
 	// 有效段之外清零两条都在 tests/test_meshlet_ranges 里逐字节验）。
@@ -304,15 +314,7 @@ void Renderer::createSceneStaging(RGL::Resources& vkResources) {
 		return std::unexpected(Error {
 			ErrorCode::Unknown,
 			"scene clusterRanges exceeds capacity (same contract as objectDraws)" });
-	// 批 11.3-1e：IZB 消费区 (flag, W, H, 保留)——light.frag izbNearShadow 消费。
-	// flag = izbShadow 已构造（门关恒空 = 全 0 → ×1.0 逐位旁路）；W/H = mask 位图行距
-	{
-		const auto ext = izbShadow ? izbShadow->getExtent() : vk::Extent2D{};
-		const std::array<float, 4> izbRegion = izbShadow
-			? std::array{1.0f, static_cast<float>(ext.width), static_cast<float>(ext.height), 0.0f}
-			: std::array{0.0f, 0.0f, 0.0f, 0.0f};
-		std::memcpy(stage + kSceneDataIzbOffset, izbRegion.data(), sizeof(izbRegion));
-	}
+	// 批 11.3-1e 的 IZB 消费段（原独立 16B 区）已并入上面 ShadowParamsBlock（迁移批 S-2）。
 	const auto matricesBytes = list.sceneData.objectMatrices.size() * sizeof(glm::mat4);
 	if (matricesBytes > kSceneMatrixCapacity * kSceneMatrixStride)
 		return std::unexpected(Error{ErrorCode::Unknown,

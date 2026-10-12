@@ -21,10 +21,10 @@
 //
 // ── 消费的 scene data 槽位**全部既有**，本 shader 不新增任何契约字段 ──
 //   @64  skyInvViewProj mat4 = inverse(proj·view)（**抖动后**，与深度缓冲配套）
-//   @724224 prevViewProj mat4（**抖动后**）
-//   @724288 motion mat4 = prevSpin·inverse(curSpin)（spin 关 = 单位阵）
-//   @724352 zw = 本帧内容位移 c_t 像素
-//   @724368 xy = 上一帧内容位移 c_{t−1} 像素
+//   @723456 prevViewProj mat4（**抖动后**）
+//   @723520 motion mat4 = prevSpin·inverse(curSpin)（spin 关 = 单位阵）
+//   @723584 zw = 本帧内容位移 c_t 像素
+//   @723600 xy = 上一帧内容位移 c_{t−1} 像素
 // ⚠ zw / xy 这一对由 `render_list_impl.cppm` 受**同一个** `taa.base_space` 门控写 0
 //   （:263 与 :285 同门）⟹ 永远成对。门关时两者皆 0 ⟹ 本 shader 自动退化为**抖动空间**
 //   速度（自洽：重建与投影都在抖动系），不是"半修正"的错误形态。

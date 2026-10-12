@@ -281,9 +281,9 @@ const std::vector<BadCase>& badCases() {
 }
 
 // ─── 尾区写入（两源结构：读回侧偏移 = 手抄 scene.slang 将用的字面量）─────────────────
-constexpr uint32_t kSlangClusterRangeLiteral = 724992;  ///< 手抄 = scene_data 的尾区基址
+constexpr uint32_t kSlangClusterRangeLiteral = 724224;  ///< 手抄 = scene_data 的尾区基址
 constexpr uint32_t kSlangClusterRangeStride = 16;       ///< 手抄 = ObjectClusterRange 的 stride
-constexpr uint32_t kSlangClusterRangeSentinelLiteral = 790528;  ///< 手抄 = 尾区表尾哨兵基址（批 T0）
+constexpr uint32_t kSlangClusterRangeSentinelLiteral = 789760;  ///< 手抄 = 尾区表尾哨兵基址（批 T0）
 static_assert(kSceneDataClusterRangeOffset == kSlangClusterRangeLiteral,
 	"尾区基址与本文件手抄值分家（scene.slang 侧字面量跟着漂）");
 static_assert(kSceneDataClusterRangeStride == kSlangClusterRangeStride,
@@ -450,7 +450,7 @@ TEST_CASE("尾区写入：逐字段落位 + 有效段之外清零 + 不踩前一
 	// 这里就不是 0x5a 而是 0x00 = 每帧拆护栏）。
 	CHECK(firstByteNot(staging, kSlangClusterRangeSentinelLiteral,
 		kSlangClusterRangeSentinelLiteral + kSlangClusterRangeStride, std::byte { 0x5a }) == -1);
-	// ③ 尾区之前（含前一个尾区湿面 @724736）一个字节都没被踩（抓「基址用错区」）
+	// ③ 尾区之前（含前一个尾区湿面 @723968）一个字节都没被踩（抓「基址用错区」）
 	CHECK(firstByteNot(staging, 0, kSlangClusterRangeLiteral, std::byte { 0x5a }) == -1);
 	// ④ 没写出 buffer 尾（哨兵区）
 	CHECK(firstByteNot(staging, kSceneDataBytes, staging.size(), std::byte { 0x5a }) == -1);

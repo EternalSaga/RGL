@@ -31,7 +31,7 @@ import scene;
 [[vk::binding(25, 0)]] StructuredBuffer<ObjectMatrix> objectMvpTable;
 // 逐对象绘制属性表（旧 sceneData 字节 525824..722432，stride 48 × 4096 + 1 哨兵）
 [[vk::binding(26, 0)]] StructuredBuffer<ObjectDraw> objectDrawTable;
-// 逐对象簇区间表（旧 sceneData 字节 724992..790528，stride 16 × 4096 + 1 哨兵）
+// 逐对象簇区间表（旧 sceneData 字节 724224..789760，stride 16 × 4096 + 1 哨兵）
 [[vk::binding(33, 0)]] StructuredBuffer<ObjectClusterRange> objectClusterRangeTable;
 
 // 以下四个读取函数**沿用批 T1 之前的名字与语义**，消费端只需多一句 `import scene_tables;`。

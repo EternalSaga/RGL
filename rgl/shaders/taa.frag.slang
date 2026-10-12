@@ -31,7 +31,7 @@
 //   · HDR 域：Reinhard 映射（x/(1+x)）后做 AABB 与裁剪（taa.mat "Reinhard" 色彩空间
 //     分支），高亮 firefly 在映射域被压回邻域范围；
 //   · 混合：mix(current, history, feedback)，feedback = configs/scene.lua taa.feedback
-//     （scene data @724352.x；Filament 0.12 ⇒ 指数窗 ≈19 帧收敛）。
+//     （scene data @723584.x；Filament 0.12 ⇒ 指数窗 ≈19 帧收敛）。
 //   YCoCg 亮度加权 AABB（taa.mat rgbToYcoCg）本批**未抄**——用 Reinhard 后的 RGB
 //   等权盒：本项目基线场景无高饱和闪烁源，YCoCg 的主要收益在高光去鬼影，列记债。
 //
@@ -73,7 +73,7 @@
 //   （mode 9 诊断图，js=1 同相位 17 帧）。剩下的 0.38% 落在真平坦区——糊一个平坦区还是那个平坦值，
 //   所以给它加盒下限是**只付风险不拿收益**（盒变宽 = 鬼影保护变松）。诊断开关已随定案删除。
 
-import scene;  // sceneData buffer（binding 3：@64 invViewProj + TAA 尾区 @724224 起）
+import scene;  // sceneData buffer（binding 3：@64 invViewProj + TAA 尾区 @723456 起）
 
 [[vk::binding(4, 0)]] Texture2D<float4> colorTex;    // 本帧成片（RGBA16F 线性 HDR）
 [[vk::binding(5, 0)]] Texture2D<float4> historyTex;  // taa_hist = 上一帧 taa_out 帧末 blit

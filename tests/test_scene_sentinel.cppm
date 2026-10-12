@@ -25,7 +25,7 @@ module;
  * ## 两源结构
  *
  * 写侧 = `scene_data.cppm` 的哨兵常量与 `writeSceneSentinels`；读回侧 = 本文件**手抄的绝对
- * 字面量**（262400 / 525568 / 722432 / 790528）+ 手抄的邻居区基址。手抄值与 C++ 常量各写
+ * 字面量**（262400 / 525568 / 722432 / 789760）+ 手抄的邻居区基址。手抄值与 C++ 常量各写
  * 一份、互为对账（先例 = test_ssr_params / test_meshlet_ranges 的"两源"）。
  *
  * ## 变异红线声明（哪个变异让我红）
@@ -64,17 +64,17 @@ namespace {
 
 /** 手抄的四个哨兵绝对字节地址（第二源；出处 = scene_data.cppm 各区派生式，此处独立写死）。
  *  期望值来源是**手算**：矩阵表 256 + 4096×64 / MVP 263424 + 4096×64 /
- *  材质表 525824 + 4096×48 / 簇区间表 724992 + 4096×16。 */
+ *  材质表 525824 + 4096×48 / 簇区间表 724224 + 4096×16。 */
 constexpr uint32_t kSentinelMatrix = 262400;
 constexpr uint32_t kSentinelMvp = 525568;
 constexpr uint32_t kSentinelDraw = 722432;
-constexpr uint32_t kSentinelCluster = 790528;
+constexpr uint32_t kSentinelCluster = 789760;
 
 /** 手抄的四张表基址与 stride（同上，独立写死，不复用被测常量做期望值）。 */
 constexpr uint32_t kBaseMatrix = 256;
 constexpr uint32_t kBaseMvp = 263424;
 constexpr uint32_t kBaseDraw = 525824;
-constexpr uint32_t kBaseCluster = 724992;
+constexpr uint32_t kBaseCluster = 724224;
 constexpr uint32_t kStrideMatrix = 64;
 constexpr uint32_t kStrideDraw = 48;
 constexpr uint32_t kStrideCluster = 16;

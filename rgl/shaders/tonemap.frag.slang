@@ -46,7 +46,7 @@
 // **红线**：本 pass 的采样坐标自批 13.5 起与「TAA 关」时的本文件逐位相同（`input.uv`）；
 // 批 13.6 的 AO 门控 `lerp(x, 1, 0) ≡ x` 位精确 ⟹ TAA 关时本 pass 整体逐位不变。
 
-import scene;  // sceneData buffer（binding 3：Load(56) 曝光 / Load(60) AO 强度 / @724368 偏移）
+import scene;  // sceneData buffer（binding 3：Load(56) 曝光 / Load(60) AO 强度 / @723600 偏移）
 
 [[vk::binding(4, 0)]] Texture2D<float4> sceneHdrTex;
 [[vk::binding(5, 0)]] SamplerState hdrSampler;

@@ -40,8 +40,10 @@ import shadow;   // Phase 11 批 11.2：级联阴影采样（binding 12/13，与
 #ifdef IZB_CONSUME
 [[vk::binding(14, 0)]] ByteAddressBuffer izbMask;
 
-// IZB 消费（批 11.3-1e，v1.5 起含覆盖外回落）：方向光硬阴影因子。消费区 @723456
-// （scene_data.cppm kSceneDataIzbOffset static_assert 钉死）= (flag, W, H, r)。
+// IZB 消费（批 11.3-1e，v1.5 起含覆盖外回落）：方向光硬阴影因子。参数 = ShadowParams
+// 的 izb 字段（迁移批 S-2 起经 scene.slang `readShadowIzb()` 取，原手抄
+// `sceneData.Load4(723456u)` + scene_data.cppm static_assert 的手写同步点已随之消失）
+// = (flag, W, H, r)。
 // flag=0 → 原样 sampleShadow1Tap（CSM 路径**逐位透传** = 门关红线）；flag=1 →
 // cascade-0 IZB mask 接管方向光阴影（bit = 帧缓冲像素，与 izb_create 的 py·W+px
 // 同向免翻转）。**patch 语义（v1.5，2026-10-02 用户拍板①）**：P 的光空间 uv 出
@@ -52,13 +54,12 @@ import shadow;   // Phase 11 批 11.2：级联阴影采样（binding 12/13，与
 // （补集判别 +177815 像素反证通路全通）。uv = light.mesh fb 归一化 y 上→下。
 float izbShadowFactor(float3 P, float3 N, float2 uv)
 {
-    // ⚠️ 两处编译期陷阱（2026-10-02「门开无影」根因，SPV 反汇编实录）：
-    // ① sceneData 浮点读数必须 asfloat()（项目惯例，本文件 EnvParamsL 同款）——
-    //    裸 Load4 赋 float4 被 slang 降低成 ConvertUToF（位模式当整数转浮点），
-    //    W/H 变 1e9 量级 = pid 恒溢出 OOB 读零；flag 位模式碰巧 ≥0.5 掩盖症状。
-    // ② ByteAddressBuffer.Load 参数 = 字节偏移（与 izb_mask.frag InterlockedOr
-    //    同口径）——传字索引 pid>>5 会被再 ÷4，读位置偏 4 倍。
-    const float4 izb = asfloat(sceneData.Load4(723456u));
+    // ⚠️ 编译期陷阱（2026-10-02「门开无影」根因，SPV 反汇编实录）：
+    // ByteAddressBuffer.Load 参数 = 字节偏移（与 izb_mask.frag InterlockedOr
+    // 同口径）——传字索引 pid>>5 会被再 ÷4，读位置偏 4 倍。（当年同处的 sceneData
+    // 浮点读数需 asfloat() 那条陷阱已随迁移批 S-2 消失：izb 现在是 ConstantBuffer
+    // 的 float4 字段，不经 Load4，没有"位模式当整数转浮点"的降低路径。）
+    const float4 izb = readShadowIzb();
     if (izb.x < 0.5)
         return sampleShadow1Tap(P, N);
     // 覆盖测试与 izb_create 同源：cascade-0 光空间（正交 w=1）；P = G-buffer 世界位
