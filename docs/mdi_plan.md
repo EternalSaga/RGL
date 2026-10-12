@@ -1,8 +1,10 @@
 # Multi Draw Indirect 路线（全面 indirect 化的可行性与阶段）
 
-> **状态**：调研（2026-10-10 立，2026-10-11 加 §7 簇化转换可行性实测，**2026-10-12 簇化轴立项开工**）。
-> **命令数轴（阶段 A/B/C/D/E）仍挂起**（交付帧时间零，见 §7.5）；**簇化轴（★0-★3）= 在做的那条**，
-> 拍板 P4-P7 见 §0，实施编排见 §9。
+> **状态**：调研（2026-10-10 立，2026-10-11 加 §7 簇化转换可行性实测，2026-10-12 簇化轴立项开工，
+> **2026-10-13 命令数轴开工 = §19**）。
+> **两条轴现在都在做**，但**宿主与形态以 §19 为准**：命令数轴（阶段 A/B/C/D/E）自 2026-10-13 起
+> 恢复推进，**起手宿主由"旧 shadow 管线"改判为"阴影段簇路径"**（改判理由与推翻条件 → §19.1）；
+> 簇化轴（★0-★3）继续，编排见 §9 / §18。交付帧时间定价不变（命令数轴 = 零，见 §7.5）。
 > ⚠ **§7 换了本文的轴**：命令数轴（阶段 A/B/C）确认不阻塞但**交付帧时间收益为零**；真正能改帧
 > 时间的是簇化轴（§7.5），而它反过来把"bistro 不是 meshlet"变成前置条件。先读 §0 追加块。
 > **代码事实一律实测**（spec 锚点 = 本地克隆 `/home/robin/program/Vulkan-Docs`，着色器编译事实 =
@@ -213,7 +215,7 @@ NV 驱动那个"push 字节数 × 序列数挂死"的红线（`material.slang` �
 | **★1 簇路径 + 簇剔除**（计划内；可行性已实测 §7.1-7.4） | 门 = "该资产有簇资产吗"；新 mesh shader 读簇描述取 ≤128 顶点；层级遍历 → 逐簇可见性；**选级恒 L0** | **G-buffer 提交几何 42.6%→1.30%（33×）、阴影段 36.3%→11.3%**（§7.3/§7.4，离线模拟）；门开破逐位（P5 已放行），门关逐位不变 |
 | **★2 DAG cut 选级（相机侧）**（计划内） | 屏幕误差选级（`boundsError` 公式，阈值 = 像素） | 实测在交付机位**免费**（§7.3：与纯簇剔除同量）⟹ 价值在远机位与阴影侧，不在当前机位 |
 | **★3 DAG cut 选级（阴影侧）**（计划内，**前置未解**） | 按图集纹素预算选级（各级联各自的纹素） | 🔴 **现成 group 级 cut 实测拿不到收益**（§7.4 带作用域与推翻条件）：先查米级误差离群簇 + 试小 `partition_size` + 逐簇选级 |
-| **A 阴影段**（P1，命令数轴） | `shadow.mesh.slang` / `izb_mask.mesh.slang` 走 §3 公式；新增 per-draw 表 + 按 (cascade, vertexSlot) 分桶；`executePassDraws` 阴影分支走桶循环 | **隔离面**：这两个 shader 自带 push 块、不 import `material.slang`，`ShadowDrawArgs` 不在 5 条反射管线里（`cmake/RglReflection.cmake:58-67`）⟹ **不触发 376 条目重建、不碰 DGC 布局** |
+| **A 阴影段**（P1，命令数轴）🔴 **2026-10-13 宿主改判 → §19.1** | ~~`shadow.mesh.slang` / `izb_mask.mesh.slang` 走 §3 公式；按 (cascade, vertexSlot) 分桶~~ ⟹ **改为 `shadow_meshlet.mesh.slang`（★18-B1 已把阴影段条目塌成全场景 1 条 ⟹ 分桶维度天然消失、无需测桶数）**；`executePassDraws` 阴影分支走 MDI 分支 | **隔离面**（原判断仍成立且更强）：该 shader 自带 push 块、不 import `material.slang`，阴影 push 不在 5 条反射管线里 ⟹ **不触发条目重建、不碰 DGC 布局、不经 cullDriver**（`shadowCalls` 是独立向量，候选序对账零感知） |
 | **B 模型段**（命令数轴） | 同上，但牵动 `material.slang` 的 DrawArgs 语义 + DGC 序列 `@8` 的解释（按 §3：不动布局）；要重测 deferred 下真实桶数 | 牵反射（`just reflect` + 提交生成物） |
 | **C 压紧上 GPU**（命令数轴） | compute 剔除直写 args/params（atomic 紧凑），消掉 CPU 读回 | 改 `cull.comp.slang` 输出布局 + 对账契约（§5.3） |
 | **D task shader**（P2 后段） | 路径 B：groupCount 也进 params、`DispatchMesh(0)` 做 per-draw 剔除 | 去 NO_TASK bit + execution set 加 task 槽（2j/2j+1 → 3 槽约定要重算）。⚠ **没有 ★1 就没有可剔的单元**——台账那条"task 给派发权不给几何单元"的结论没被推翻，被推翻的是它下面"连续三角形无邻接性"的论据（§7.6） |
@@ -1645,3 +1647,114 @@ M5 是这条纪律的证据：探针不翻 ⟹ 键被静默忽略时**该用例�
 §18 第一刀四批本身 = 结案账目 **债-104**（数据 → `docs/还债实测数据.md` §4；形态与两个截图锚 →
 本文件 §18.6 / §18.11）。同货币的 **债-82**（阴影段无时序摊销）**未结案**——本刀是"减几何量"，
 "改更新率"那条独立可叠加的收益原样还在。
+
+## 19. 命令数轴开工：真 MDI 的落地计划（2026-10-13）
+
+> **本节为什么存在**：§7.8 拍板 1 把命令数轴"挂起不删"，簇化轴 ★18 第一刀落地后它的前置变了。
+> 2026-10-13 恢复推进。**代码事实全部当日读本体核对**（`executePassDraws` / `segmentSpan` /
+> `emitShadowCasters` / `addShadowMeshletEntry` / `rgl_shader_defined` / profiler 计数口径）。
+
+### 19.1 宿主改判：起手做"阴影段簇路径"，不是 §4 原写的旧 shadow 管线
+
+三条硬依据（都是 ★18 落地之后才存在的事实）：
+
+| 依据 | 事实（当日核对） | 后果 |
+|---|---|---|
+| **条目已塌成 1** | ★18-B1 `addShadowMeshletEntry` = **全场景 1 条目**（启动日志：`条目下标 474 覆盖 prims=1591（全场景 1 条目，簇 buffer 全局单例）`） | §1.2 给阴影段算的"≈30 桶 ×4 = 120 条 MDI 调用"**作废**：簇路径下每级联 **1 次调用**，收益上限是**确定数** ⟹ 阶段 A 不再需要先测桶数（那是阶段 B 的前置） |
+| **不经 cullDriver / DGC** | 阴影段走 `executePassDraws` 的通用 `segmentSpan + drawOne` 分支；`shadowCalls` 是**独立向量**（`frame_draw_list.cppm:245-250` 注释明写"不拼进 calls 是为了不打破 GPU culling 候选序对账"） | 🔴 **P3 的 `@8 PUSH_DATA` 红线（§2.2）在本刀根本够不着**；候选序对账 / `checkCullAlignment` / DGC 序列布局一字节不动 |
+| **depth-only ⟹ 逐位不变近乎构造性** | 图集每纹素深度 = 覆盖它的所有图元的 min，**与图元序无关**（§18.9 判据 4 已用同一条论证把 D=0 臂证成逐位同） | 主判据可以是**零阈值逐位**，不必先付 P5 那套"闭式解 + 结构判据 + 统计阈值"的重仪器。**模型段拿不到这条**（deferred 写 5 张 G-buffer，深度平局有先后歧义，§5.5） |
+
+⚠ **改判作用域**：只改"起手宿主"，§4 的阶段划分本身（B/C/D/E）原样。
+**什么实验推翻本改判**：行序不变的前提下，若 MDI 形态的阴影图**不**逐位等于非 MDI 形态
+⟹ 说明 RADV 的 MDI 展开与逐条 draw 在光栅/深度上不等价 ⟹ 第三行作废，阴影段退回"结构判据"档，
+且阶段 B 的定价要重做（它原本指望复用这条推理）。
+
+### 19.2 设计定案（实现时别再讨论）
+
+**D1 行布局 = 24B**
+
+```
+行 i = [ gcX | 1 | 1 | objectIndex | clusterStart | 0 | 0 | 0 ]
+        └──── 前 12B 恰是 VkDrawMeshTasksIndirectCommandEXT ────┘└─ shader 读 word[3]/word[4] ─┘
+```
+
+- VUID-07088：stride 必为 4 的倍数且 ≥ `sizeof(VkDrawMeshTasksIndirectCommandEXT)`=12 ⟹ 24 合法；
+  spike 的 `per_draw_groupcount` 已实测 GPU 逐行读自己的 x。
+- **为什么 24 不是 20**：`clusterStart` 逐 object 不同（`min(D, 自身最深级)` 回落）⟹ 16B 的单个 word[3]
+  装不下两个索引；24 = 8 的倍数（对齐友好）+ 留 3 个保留 word 给 ★M-3（模型段要加材质/顶点块那一维）。
+  代价 = 比 20B 多 6KB。
+- 🔴 **`cascadeIndex` 不进行、走 push**：一次 MDI 调用 = 一个级联 = 一个常量。push 结构体**尺寸仍是 12B**
+  （`{rowBase, cascadeIndex, reserved}`）⟹ `static_assert(sizeof(ShadowMeshletDrawArgs)==12)` 不动、
+  执行器 `drawOne` 的通用 push 路径不动。
+- **§3 的统一公式在此就是 word0 的语义切换**：非 MDI 路 word0 = objectIndex（drawID 恒 0）、
+  MDI 路 word0 = **行基址**（`slot = rowBase + SV_DrawIndex`）。DGC 路（§2.2）不受影响——阴影段不在 DGC 里。
+
+**D2 门 = 新键 `meshlet.mdi_shadow`（默认 false）+ 新 SPV 变体，不是运行时 flag**
+
+- 纪律出处 = §12/§13"门 = 选 SPV 变体 / 选管线条目"（2026-10-02 slang fp 重排教训）。
+- 编译条目 = `rgl_shader_defined(shadow_meshlet.mesh SHADOW_MESHLET_MDI_MESH_SPV MDI_SHADOW scene scene_tables)`
+  （先例 = `rgl/CMakeLists.txt:25` 的 `MESHLET_DEBUG_OFFSET`）。
+- ⟹ **门关用的还是今天那份 SPV 与那条条目，一字节不动** = P5 硬护栏的构造性成立。
+- 挂号：本键落进 `meshlet` 块 ⟹ **债-106**（gate_lint 的 `Ctx` 不认整块）射程内，**别为它做特例**。
+
+**D3 执行器形态 = 给 `DrawCall` 加两字段，不引入 variant**
+
+```cpp
+uint32_t argsOffset = 0;   // 行表字节偏移
+uint32_t drawCount  = 1;   // >1 = 一次 MDI 调用（此时 groupCount 忽略，GPU 从行表读）
+```
+
+默认值 = 现行行为 ⟹ 既有全部 `DrawCall{pipeline, pushData, groupCount}` 聚合构造点**零改动**。
+执行器分支 = `pushDataEXT → bindShaders → drawMeshTasksIndirectEXT(buffer, offset, drawCount, 24)`，仍 3 条 vkCmd。
+🔴 **参数序红线**：真实签名是 `(..., offset, drawCount, stride)`（`vulkan_core.h:27021`）。spike §6.3 的 M4
+正是栽在"两个数相等 ⟹ 互换测不出东西"。⟹ 本刀必须把这条调用收进**唯一具名入口**，且行步长（24）与
+任何用例里的行数/偏移**都不相等**。
+
+**D4 行表载体 = 每帧 CPU 填 + ring×2 host 映射**
+
+- CPU 侧行表住 `FrameDrawList`（帧局部，与 `pushData` 同风格，执行器保持零 entt）；GPU 侧由新服务
+  `MeshletShadowArgsService`（rlscene）持有 **ring×2**（`kFramesInFlight=2`）host-visible|coherent buffer，
+  usage = `INDIRECT_BUFFER | STORAGE_BUFFER`（VUID-buffer-02709）。
+- 🔴 **为什么 ring×2 而不是 `MeshletCullService` 的"单份 + 写前依赖 barrier"**：那套的写者是 **GPU**
+  （dispatch 前一条 barrier 排开上一帧的读），本表写者是 **CPU**——barrier 排不开主机写与 GPU 读，
+  只有分帧轮转（或主机 fence，那是把同步点搬回来）。
+- 每帧量 ≈ 候选数 × 24B × 3 级联 ≈ 114KB，一次 memcpy（scene data 每帧拷 787KB，同量级）。
+- **不可见行写 `gcX = 0` 而不是从行表里删掉**：行序 = 候选序恒定 ⟹ 逐位不变的前提成立；且 spike 的
+  `zero_groupcount_noop` 已实测 **0 计数不跳号** ⟹ 孔洞流合法，**不需要压紧、不需要 atomic**
+  （§17.3 那笔代价本刀不付）。
+
+**D5 profiler 口径（§5.4 点名的坑，本刀一起收）**
+
+- `draw.count` 口径改为"**逻辑 draw 条数（含 `gcX=0` 空行）**"；新增 counter `mdi.count`（MDI 调用次数）/
+  `mdi.rows`（经 MDI 提交的行数）。`vkcmd.count` 对一次 MDI 调用记 **3 条**（不是 3N）。
+- 不给新口径就不许报"命令数下降"——否则就是把 vkcmd 下降读成 draw 下降。
+
+**D6 本刀顺手还掉债-81 的一半**
+
+spike 未覆盖两处之一 = "探针走经典 descriptor set + `vkCmdPushConstants`，引擎走 heap + `vkCmdPushDataEXT`"。
+★M-1 的 A3/A4 判据（**heap + pushDataEXT + shader object + MDI 四者同时在场**且逐位/阳性对照成立）
+**就是那一半的结案证据** ⟹ 交付时同步改 `docs/还债总账.md` 债-81 行（剩一半 = NVIDIA / Intel anv，换机收）。
+
+### 19.3 批次与判据
+
+| 批次 | 内容 | 判据（入账条件） | 渲染风险 |
+|---|---|---|---|
+| **★M-0 行表构建器** | `rgl/mdi_rows.cppm`(+`_impl`，**rlbase** 纯 CPU)：候选 + LOD 选级 + 逐级可见性 → 24B 行数组 + 聚合锚（Σ行 / Σtask / 空行数）；门 `meshlet.mdi_shadow`（默认 false）；**零消费者** | `just test` 全绿；行大小与"前 12B 恰是 `VkDrawMeshTasksIndirectCommandEXT`"由 `static_assert` + 用例**双钉**；stride 合法性（4 的倍数 ≥12）成断言；行序 = 候选序（打乱输入必须红）；不可见行 `gcX=0` **且其余字段照写**（否则红了无法定位是哪一行）；出厂/门关两锚不变（本批不碰渲染） | **零** |
+| **★M-1 GPU 载体 + shader 变体 + 执行器** | `MeshletShadowArgsService`（rlscene，ring×2 + heap 槽）；`shadow_meshlet.mesh.slang` 的 `MDI_SHADOW` 变体（binding 22 读行 + `SV_DrawIndex`）；`addShadowMeshletMdiEntry`（多烘一槽）；`DrawCall` 两字段 + `drawOne` MDI 分支；`emitShadowCasters` 每级联改发 1 条 MDI；profiler 新口径 | A1 门关 = `54e40665…`；A2 出厂默认 = `95edc8cc…`；🔴 **A3 主判据 = `mdi_shadow=true` vs 不给，终图逐位相同**；A4 阳性对照（强制全剔 ⟹ c1..c3 影子消失）；A5 收益判据（`mdi.count` = 生效级联数、`mdi.rows` = 启动对账给的闭式锚、`vkcmd.count` 相应下降）；A6 `cull_replay` 三档 + `--sync` syncval errors=0；A7 build/test/test-all/checks --strict/reflect 全绿 | 中（门关构造性不动） |
+| **★M-2 三机结案** | 换 NVIDIA / Intel anv 各跑一遍 ★M-1 判据 + 债-81 剩余半 | 三机 `just test-gpu` 绿 + A3 逐位；台账债-81 改"三机已验" | 零 |
+| **★M-3 模型段（阶段 B）** | 🔴 **前置 = 先测 deferred 下真实桶数**（§1.2 的 312 是 2026-09-28 forward+picking 临时档读数，作废待重测）；分桶后按 §3 改 `material.slang` 的 DrawArgs 语义（**不动 DGC 布局**，P3） | 破逐位（P5 门开档）：闭式解对拍 + `diffblock` 形态判据 + 红线 A 主动重锚；门关逐位不变每批重跑 | 高（deferred 5 张 G-buffer，深度平局歧义，§5.5） |
+| **★M-4 GPU 写行表（阶段 C）** | 级联体积测试进 compute、直写 `gcX`（消 CPU 侧 `casterInShadowVolume`）；需要时才付压紧/前缀和那笔（§17.3） | 与 CPU 构建器**逐元素对账**（照 `meshlet_hand` 的"序，不是计数"口径） | 中高 |
+
+**串行推进，一步一验收**（同 §9 纪律）：一次只派一个子 agent，主 agent **亲验产物本体**；每批一次 commit。
+
+⚠ **A3 的诚实边界**：门关逐位是**构造性**的（那份 SPV 一字节没动）；门开逐位是**强判据而非构造**——
+MDI 变体是另一次编译，位级不漂移是"实测出来的"。若 A3 红：先按 §15.3 做**通道级定位**，再区分
+"MDI 语义与逐条 draw 不等价"（推翻 §19.1 第三行）与"变体编译漂移"（改判成立、换结构判据）。
+
+### 19.4 与既有账的关系
+
+- **不新立债**：★M-3 的前置（桶数）与 ★M-2（三机）分别就是 §1.2 与债-81 已记的账。
+- **债-86 已结案**（P5）在本刀**用不到**——阴影段主判据是零阈值逐位（§19.1 第三行），不破逐位。
+- **债-105**（α 叠加段没有自己的门，白付 1.59ms）与本刀**正交**，但它比整条命令数轴便宜一个数量级
+  且收益在交付口径 ⟹ 建议排在 ★M-1 之后、★M-3 之前插一刀（用户拍板）。
+- **§8「不在阶段 A 顺手做 E」**继续有效：本刀不碰 mapping / push-index。
