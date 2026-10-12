@@ -76,5 +76,16 @@ return {
                 { name = "c3", type = "vec4", offset = 48 },
             },
         },
+        -- 迁移批 2（§9.5 binding 27）：辐照度区类型化载体（scene.slang IrradianceBlock，
+        -- ConstantBuffer<IrradianceBlock> 经子范围描述符指向 scene data 辐照度区
+        -- kSceneDataIrradianceOffset，144B = 9×vec4，.xyz=系数 .w 留白）。
+        -- 数组字段形态首个消费者：typeToCppType 的 Kind::Array 分支产出 std::array<glm::vec4, 9>。
+        {
+            name = "IrradianceBlock",
+            stride = 144,
+            attributes = {
+                { name = "sh", type = "vec4[9]", offset = 0 },
+            },
+        },
     },
 }

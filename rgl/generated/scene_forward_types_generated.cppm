@@ -61,6 +61,11 @@ namespace RGL {
     static_assert(offsetof(ObjectMatrix, c2) == 32, "Field ObjectMatrix.c2 offset does not match shader reflection (scalar layout drift!)");
     static_assert(offsetof(ObjectMatrix, c3) == 48, "Field ObjectMatrix.c3 offset does not match shader reflection (scalar layout drift!)");
 
+    export struct IrradianceBlock {
+        std::array<glm::vec4, 9> sh;
+    };
+    static_assert(sizeof(IrradianceBlock) == 144, "Size of C++ struct IrradianceBlock does not match shader reflection!");
+
 
 
 

@@ -125,14 +125,19 @@ static_assert(kSceneDrawStride == sizeof(ObjectDraw),
 	"scene.slang ObjectDraw (reflection-generated) stride out of sync with table stride");
 
 /** Phase 8 批次 ④a：漫反射辐照度 SH9 区（追加于材质表之后——既有各区基址逐字节不动 diff0）。
- * 9 × vec4 = 144B（.xyz=系数、.w 留白，满足 ByteAddressBuffer.Load4 16B 对齐前提；CPU env
- * 加载期从等距柱状源余弦加权投影 radiance，shader scene.slang irradiance(N) 做辐照度卷积）。
- * 基址 = 材质表尾按 256 取整（525312 + 4096×48 = 721920，scene.slang 字面量同值；
- * Phase 8 ③ stride 32→48 后本区随之后移）。 */
+ * 9 × vec4 = 144B（.xyz=系数、.w 留白；CPU env 加载期从等距柱状源余弦加权投影 radiance，
+ * shader scene.slang irradianceSH(N) 做辐照度卷积）。
+ * 基址 = 材质表尾按 256 取整（525312 + 4096×48 = 721920；Phase 8 ③ stride 32→48 后本区随之后移）。
+ * 消费端（迁移批 2 起）= scene.slang `ConstantBuffer<IrradianceBlock> sceneIrradiance`
+ * （binding 27，本区**子范围 UBO 描述符**，SceneDataService::ensure 写一次）——shader 侧零
+ * 字节字面量，本区不再需要「C++ 常量 == shader 字面量」的 static_assert（批 1 湿面同判据：
+ * 钉的对象已不存在）；区大小与契约 struct 的同步由下方 sizeof assert 钉死。 */
 export inline constexpr uint32_t kSceneDataIrradianceOffset =
 	alignUp(kSceneDataDrawTableOffset + kSceneMatrixCapacity * kSceneDrawStride,
 		kSceneRegionAlign);
 export inline constexpr uint32_t kSceneDataIrradianceBytes = 144;  // 9×vec4=144（16B 对齐）
+static_assert(sizeof(IrradianceBlock) == kSceneDataIrradianceBytes,
+	"scene.slang IrradianceBlock (reflection-generated) size out of sync with region bytes");
 
 /**
  * Phase 11 批 11.2：级联阴影**光空间 VP 矩阵区**（追加于辐照度区之后——既有各区基址
@@ -690,12 +695,23 @@ export class SceneDataService {
 		return sceneWetSlot;
 	}
 
+	/**
+	 * 辐照度区 UBO 子范围槽号（迁移批 2，shader 端 binding 27；用法与 wetSlot 同型，
+	 * PipelineBindings::slotSceneIrradiance）。描述符内容 = {buffer 基址 +
+	 * kSceneDataIrradianceOffset, sizeof(IrradianceBlock)} 的 eUniformBuffer。
+	 */
+	[[nodiscard]] uint32_t irradianceSlot() {
+		sceneDataSlot = ensure();
+		return sceneIrradianceSlot;
+	}
+
    private:
 	RGL::Resources& kernel;  // 资源内核引用（领 allocator/heap/槽）
 	RGL::DeviceContext& device;  // 设备层引用（writeResourceDescriptorsEXT）
 	RGL::VmaBuffer sceneDataBuffer;  // 设备端 scene data buffer（BDA + eTransferDst；未创建 = 空句柄）
 	uint32_t sceneDataSlot = 0;  // scene data 在 resource heap 的槽号（allocSlot 领取）
 	uint32_t sceneWetSlot = 0;   // 湿面区 UBO 子范围槽号（迁移批 1，binding 32）
+	uint32_t sceneIrradianceSlot = 0;  // 辐照度区 UBO 子范围槽号（迁移批 2，binding 27）
 	bool sceneDataReady = false;  // 就绪标记（ensure 幂等守卫）
 };
 
@@ -707,7 +723,8 @@ export class SceneDataService {
  *（§9.7 基址对齐）；创建前跑运行期对齐闸门（§3.1，不满足 = throw 点名）；slot =
  * allocSlot(Runtime, "scene.data")；描述符 = eStorageBuffer，data = buffer BDA 地址范围
  *（全 kSceneDataBytes）+ 第二槽 "scene.wet" = 湿面区子范围 eUniformBuffer（迁移批 1，
- * binding 32，两槽一次 writeResourceDescriptorsEXT）。
+ * binding 32）+ 第三槽 "scene.irradiance" = 辐照度区子范围 eUniformBuffer（迁移批 2，
+ * binding 27，三槽一次 writeResourceDescriptorsEXT）。
  */
 inline uint32_t SceneDataService::ensure() {
 	if (sceneDataReady)
@@ -782,28 +799,42 @@ inline uint32_t SceneDataService::ensure() {
 	if (!wetSlotResult)
 		throw std::runtime_error(wetSlotResult.error().describe());
 	sceneWetSlot = *wetSlotResult;
+	// 迁移批 2：辐照度区子范围 UBO 槽（同 scene.wet 形态，§9.2 每迁一区 +1 槽）
+	auto irradianceSlotResult = kernel.allocSlot(RGL::SlotSegment::Runtime, "scene.irradiance");
+	if (!irradianceSlotResult)
+		throw std::runtime_error(irradianceSlotResult.error().describe());
+	sceneIrradianceSlot = *irradianceSlotResult;
 
-	// 两槽一次写：scene.data = 全区 eStorageBuffer（binding 3 旧路，迁移期保留）；
+	// 三槽一次写：scene.data = 全区 eStorageBuffer（binding 3 旧路，迁移期保留）；
 	// scene.wet = {基址 + kSceneDataWetOffset, sizeof(WetParamsBlock)} 的 eUniformBuffer
-	//（binding 32）。子范围 address 对齐 = 基址 256（minAlignment）+ 区基址 256 台阶
-	//（本文件顶部布局红线）⟹ 恒过 VUID-12350；闸门读数见上。
-	std::array<vk::DeviceAddressRangeEXT, 2> ranges{{
+	//（binding 32）；scene.irradiance = {基址 + kSceneDataIrradianceOffset,
+	// sizeof(IrradianceBlock)} 的 eUniformBuffer（binding 27，迁移批 2）。子范围 address
+	// 对齐 = 基址 256（minAlignment）+ 区基址 256 台阶（本文件顶部布局红线）⟹ 恒过
+	// VUID-12350；闸门读数见上。
+	std::array<vk::DeviceAddressRangeEXT, 3> ranges{{
 		{sceneDataBuffer.getDeviceAddress(), kSceneDataBytes},
-		{sceneDataBuffer.getDeviceAddress() + kSceneDataWetOffset, sizeof(WetParamsBlock)}}};
-	std::array<vk::ResourceDescriptorInfoEXT, 2> descs{};
+		{sceneDataBuffer.getDeviceAddress() + kSceneDataWetOffset, sizeof(WetParamsBlock)},
+		{sceneDataBuffer.getDeviceAddress() + kSceneDataIrradianceOffset, sizeof(IrradianceBlock)}}};
+	std::array<vk::ResourceDescriptorInfoEXT, 3> descs{};
 	descs[0].type = vk::DescriptorType::eStorageBuffer;
 	descs[0].data.pAddressRange = &ranges[0];
 	descs[1].type = vk::DescriptorType::eUniformBuffer;
 	descs[1].data.pAddressRange = &ranges[1];
+	descs[2].type = vk::DescriptorType::eUniformBuffer;
+	descs[2].data.pAddressRange = &ranges[2];
 	auto slotAddr = kernel.getDescriptorHeap().getSlotCpuAddress(sceneDataSlot);
 	if (!slotAddr)
 		throw std::runtime_error(slotAddr.error().describe());
 	auto wetAddr = kernel.getDescriptorHeap().getSlotCpuAddress(sceneWetSlot);
 	if (!wetAddr)
 		throw std::runtime_error(wetAddr.error().describe());
+	auto irradianceAddr = kernel.getDescriptorHeap().getSlotCpuAddress(sceneIrradianceSlot);
+	if (!irradianceAddr)
+		throw std::runtime_error(irradianceAddr.error().describe());
 	const vk::DeviceSize heapStride = kernel.getDescriptorHeap().getDescriptorSize();
-	std::array<vk::HostAddressRangeEXT, 2> dsts{
-		vk::HostAddressRangeEXT{*slotAddr, heapStride}, vk::HostAddressRangeEXT{*wetAddr, heapStride}};
+	std::array<vk::HostAddressRangeEXT, 3> dsts{
+		vk::HostAddressRangeEXT{*slotAddr, heapStride}, vk::HostAddressRangeEXT{*wetAddr, heapStride},
+		vk::HostAddressRangeEXT{*irradianceAddr, heapStride}};
 	device.getDevice().writeResourceDescriptorsEXT(descs, dsts);
 	sceneDataReady = true;
 	return sceneDataSlot;

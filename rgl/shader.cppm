@@ -386,6 +386,8 @@ export struct PipelineBindings {
 	uint32_t slotSceneWet = 0;     // binding 32（迁移批 1，hasSceneData 恒带上）：湿面区
 	                             // UBO 子范围槽（SceneDataService::wetSlot；未声明 binding 32
 	                             // 的条目由批 M 的 SPV 声明过滤自动裁掉——不在此登记消费者）
+	uint32_t slotSceneIrradiance = 0;  // binding 27（迁移批 2，hasSceneData 恒带上）：辐照度区
+	                             // UBO 子范围槽（SceneDataService::irradianceSlot；裁未声明者同批 M）
 	uint32_t slotEnv = 0;          // binding 4（hasEnv）：env cubemap SAMPLED_IMAGE 槽
 	uint32_t envSamplerHeapOffset = 0;  // binding 5（hasEnv）：sky sampler heap 字节偏移
 	bool textured = false;
@@ -535,6 +537,8 @@ export class RenderPipeline {
 			// 登记谁用**——SPV 没声明 binding 32 的条目被上面的批 M 过滤自动裁掉（§9.3/§9.7；
 			// 「声明了未 mapping」才是 VUID-11292 启动炸，方向别记反）。
 			add(32, bindings.slotSceneWet * descriptorSize, descriptorSize);
+			// 迁移批 2：辐照度区 UBO 载体（binding 27），同批 1 纪律（恒带上、过滤裁未声明者）
+			add(27, bindings.slotSceneIrradiance * descriptorSize, descriptorSize);
 		}
 		if (bindings.hasEnv) {
 			// Phase 5.5：binding 4 → env cubemap（resource heap SAMPLED_IMAGE 槽）；

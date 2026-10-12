@@ -330,9 +330,12 @@ void Renderer::createSceneStaging(RGL::Resources& vkResources) {
 			"scene objectDraws exceeds capacity (same contract as objectMatrices)"});
 	std::memcpy(stage + kSceneDataDrawTableOffset, list.sceneData.objectDraws.data(), drawsBytes);
 	// Phase 8 批次 ④a：漫反射辐照度 SH9 上传（scene data 尾区 kSceneDataIrradianceOffset，
-	// scene.slang irradiance(N) 消费；静态数据，随每帧 mirror 拷入）
+	// 迁移批 2 起消费端 = scene.slang binding 27 的 IrradianceBlock；静态数据，随每帧 mirror
+	// 拷入）。**按生成 struct 整块写**：尺寸取 sizeof(IrradianceBlock)（与区字节数的同步
+	// 由 scene_data.cppm 的 static_assert 钉死），源 = SceneFrameData::irradianceSH
+	// （std::array<glm::vec4, 9> 与生成字段同型同布局）。
 	std::memcpy(stage + kSceneDataIrradianceOffset, list.sceneData.irradianceSH.data(),
-		kSceneDataIrradianceBytes);
+		sizeof(IrradianceBlock));
 	return {};
 }
 

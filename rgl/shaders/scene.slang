@@ -3,7 +3,8 @@
 // 单一 storage buffer（descriptor heap binding 3，Resources::ensureSceneData 创建，
 // 每帧 staging → vkCmdCopyBuffer 更新，见 vkrenderer.cppm）。
 // 🔴 类型化迁移（docs/constantbuffer_迁移计划.md §9）：各区逐批从「binding 3 + 手写字节
-// 偏移」迁到**类型化载体**（本文件零字节数）；已迁区 = 湿面（binding 32，批 1），
+// 偏移」迁到**类型化载体**（本文件零字节数）；已迁区 = 湿面（binding 32，批 1）、
+// 辐照度（binding 27，批 2）；
 // 未迁区仍走 binding 3 字节读，**全部迁完后 binding 3 与 sceneData 声明一起删**。
 // 字节布局真相源分两段（2026-09-15 勘误：旧注释称真相源 = vkresources.cppm 的
 // LightDataGpu——该类型已删）：
@@ -178,10 +179,26 @@ float4 worldTangent(ObjectMatrix m, float4 t)
 
 // ── Phase 8 批次 ④a：完整版 IBL 辅助（forward model_pbr_ibl 与 deferred light.frag 共用）──
 //
-// 漫反射辐照度 = CPU 投影的 radiance SH9（scene data 尾区 @721920，9×vec3）做辐照度余弦卷积。
+// 漫反射辐照度 = CPU 投影的 radiance SH9（scene data 尾区辐照度区）做辐照度余弦卷积。
 // 卷积常数（Karis/Green 辐照度 A 因子：π·l0 + 2π/3·l1 + π/4·l2）在求值里施加，CPU 侧只投影
 // radiance（texture_pool::projectRadianceSH9，基函数与本处逐式一致，两端必须同步）。
 // 基函数与 CPU shBasis 严格相同（real SH，归一化常数烘焙）。
+//
+// 迁移批 2（§9.5 binding 27，先例 = 批 1 湿面）：载体 = `ConstantBuffer<IrradianceBlock>`
+// 经 scene data 辐照度区**子范围 UBO 描述符**（C++ 侧 kSceneDataIrradianceOffset，
+// SceneDataService::ensure 写一次）。本文件零字节字面量——9 条手写 Load4 清零，
+// 字段偏移由 scalar layout + 反射契约（scene_forward_schema 登记 → 生成物
+// IrradianceBlock，offsetof/sizeof assert 自带）两侧同源。
+struct IrradianceBlock
+{
+    // 9 × vec4 排布（.xyz=系数，.w 留白；stride 16 与原 ByteAddressBuffer.Load4 的
+    // 16B 对齐前提同源，布局真相源 = 本声明经反射）
+    float4 sh[9];
+};
+
+[[vk::binding(27, 0)]]
+ConstantBuffer<IrradianceBlock> sceneIrradiance;
+
 // ── Phase 11 批 11.2：级联阴影（光空间 VP + 采样参数）──
 //
 // 尾区基址 @722176（= 辐照度区尾，与 scene_data.cppm kSceneDataShadowMatrixOffset
@@ -262,17 +279,17 @@ float readShadowEvssmFootprint()
 
 float3 irradianceSH(float3 n)
 {
-    uint base = 721920u;  // kSceneDataIrradianceOffset（vkresources.cppm 字面量同步）
-    // 9 × vec4 排布（.xyz=系数，.w 留白；16B 对齐满足 ByteAddressBuffer.Load4 前提）
-    float3 sh0 = asfloat(sceneData.Load4(base + 0u)).xyz;
-    float3 sh1 = asfloat(sceneData.Load4(base + 16u)).xyz;
-    float3 sh2 = asfloat(sceneData.Load4(base + 32u)).xyz;
-    float3 sh3 = asfloat(sceneData.Load4(base + 48u)).xyz;
-    float3 sh4 = asfloat(sceneData.Load4(base + 64u)).xyz;
-    float3 sh5 = asfloat(sceneData.Load4(base + 80u)).xyz;
-    float3 sh6 = asfloat(sceneData.Load4(base + 96u)).xyz;
-    float3 sh7 = asfloat(sceneData.Load4(base + 112u)).xyz;
-    float3 sh8 = asfloat(sceneData.Load4(base + 128u)).xyz;
+    // 迁移批 2：9 条手写 Load4 字节字面量清零，读 binding 27 的 IrradianceBlock（.xyz =
+    // 系数、.w 留白，与原排布逐字节同）；卷积算术一个 bit 未动。
+    float3 sh0 = sceneIrradiance.sh[0].xyz;
+    float3 sh1 = sceneIrradiance.sh[1].xyz;
+    float3 sh2 = sceneIrradiance.sh[2].xyz;
+    float3 sh3 = sceneIrradiance.sh[3].xyz;
+    float3 sh4 = sceneIrradiance.sh[4].xyz;
+    float3 sh5 = sceneIrradiance.sh[5].xyz;
+    float3 sh6 = sceneIrradiance.sh[6].xyz;
+    float3 sh7 = sceneIrradiance.sh[7].xyz;
+    float3 sh8 = sceneIrradiance.sh[8].xyz;
     float3 r = 3.14159265 * sh0 * 0.282095;
     r += 2.09439510 * sh1 * (0.48860251 * n.y);
     r += 2.09439510 * sh2 * (0.48860251 * n.z);
