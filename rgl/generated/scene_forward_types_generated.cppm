@@ -66,6 +66,11 @@ namespace RGL {
     };
     static_assert(sizeof(IrradianceBlock) == 144, "Size of C++ struct IrradianceBlock does not match shader reflection!");
 
+    export struct ShadowViewProjBlock {
+        std::array<ObjectMatrix, 4> viewProj;
+    };
+    static_assert(sizeof(ShadowViewProjBlock) == 256, "Size of C++ struct ShadowViewProjBlock does not match shader reflection!");
+
 
 
 

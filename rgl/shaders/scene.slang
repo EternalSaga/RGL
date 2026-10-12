@@ -4,7 +4,8 @@
 // 每帧 staging → vkCmdCopyBuffer 更新，见 vkrenderer.cppm）。
 // 🔴 类型化迁移（docs/constantbuffer_迁移计划.md §9）：各区逐批从「binding 3 + 手写字节
 // 偏移」迁到**类型化载体**（本文件零字节数）；已迁区 = 湿面（binding 32，批 1）、
-// 辐照度（binding 27，批 2）、灯数组（binding 24，批 3，消费端在 lights.slang）；
+// 辐照度（binding 27，批 2）、灯数组（binding 24，批 3，消费端在 lights.slang）、
+// 阴影光空间 VP（binding 28，批 S-1）；
 // 未迁区仍走 binding 3 字节读，**全部迁完后 binding 3 与 sceneData 声明一起删**。
 // 字节布局真相源分两段（2026-09-15 勘误：旧注释称真相源 = vkresources.cppm 的
 // LightDataGpu——该类型已删）：
@@ -177,23 +178,35 @@ ConstantBuffer<IrradianceBlock> sceneIrradiance;
 
 // ── Phase 11 批 11.2：级联阴影（光空间 VP + 采样参数）──
 //
-// 尾区基址 @722944（= 辐照度区尾，与 scene_data.cppm kSceneDataShadowMatrixOffset
-// 钉死两侧）。区内布局（本文件字面量 = C++ 侧手写同源，改一侧必编译失账）：
-//   @722944 + cascade*64  mat4 光空间 VP（kSceneShadowCascadeCount = 4 槽）
+// 迁移批 S-1（§9.5 binding 28，先例 = 批 2 辐照度）：4 槽光空间 VP 从「@722944 +
+// cascade*64 手写四条 Load4」迁到 `ConstantBuffer<ShadowViewProjBlock>` 的**类型化数组**
+// （载体 = scene data 阴影 VP 区子范围 UBO 描述符，C++ 侧 kSceneDataShadowMatrixOffset，
+// SceneDataService::ensure 写一次）。字段偏移/总尺寸由 scalar layout + 反射契约
+// （scene_forward_schema 登记 → 生成物 ShadowViewProjBlock，sizeof/offsetof assert 自带）
+// 两侧同源，本函数零字节数。
+//
+// 元素类型 = 本文件的 `ObjectMatrix`（列主序 4 列）——与原手写读**逐字节同构**：
+// 原来 Load4(base)/+16/+32/+48 依次填 c0..c3，现在数组元素就是同一个 ObjectMatrix，
+// 元素步长 64 = 4×vec4（scalar layout 下无 padding），故 cascade 索引即原 cascade*64。
+struct ShadowViewProjBlock
+{
+    ObjectMatrix viewProj[4];  // kSceneShadowCascadeCount = 4 槽，索引 = 级联号
+};
+
+[[vk::binding(28, 0)]]
+ConstantBuffer<ShadowViewProjBlock> sceneShadowViewProj;
+
+ObjectMatrix readShadowViewProj(uint cascadeIndex)
+{
+    return sceneShadowViewProj.viewProj[cascadeIndex];
+}
+
+// 阴影采样小参数（迁移批 S-2 前仍走字节读；区内布局（本文件字面量 = C++ 侧手写同源，
+// 改一侧必编译失账）：
 //   @723200  vec4 级联分界远距（对 eyePos 的平方距离，选级用）
 //   @723216  vec4 各级阴影图 texel 世界尺寸（2·r/mapSize，normal offset 用）
 //   @723232  vec4 (depthBias, normalOffsetScale, enabled, 保留)
 //   @723248  vec4 (图集边长, 单块边长, 分块列数, 保留)
-ObjectMatrix readShadowViewProj(uint cascadeIndex)
-{
-    uint base = 722944u + cascadeIndex * 64u;
-    ObjectMatrix m;
-    m.c0 = asfloat(sceneData.Load4(base));
-    m.c1 = asfloat(sceneData.Load4(base + 16u));
-    m.c2 = asfloat(sceneData.Load4(base + 32u));
-    m.c3 = asfloat(sceneData.Load4(base + 48u));
-    return m;
-}
 
 float4 readCascadeSplits()
 {

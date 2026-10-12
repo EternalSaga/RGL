@@ -87,5 +87,20 @@ return {
                 { name = "sh", type = "vec4[9]", offset = 0 },
             },
         },
+        -- 迁移批 S-1（§9.5 binding 28）：阴影光空间 VP 区类型化载体（scene.slang
+        -- ShadowViewProjBlock，ConstantBuffer<ShadowViewProjBlock> 经子范围描述符指向 scene
+        -- data 阴影 VP 区 kSceneDataShadowMatrixOffset，256B = 4 槽 × ObjectMatrix）。
+        -- **契约 struct 的数组字段**首个消费者（批 R 登记的 ObjectMatrix 在此被嵌进契约，
+        -- 上面那条注释列的四个用途之一）：typeToCppType 的 Kind::Array 分支取元素 struct 名
+        -- → std::array<ObjectMatrix, 4>，与 schema 侧 vertexAttrCppType 的 "T[N]" 分支同源。
+        -- 依赖方向：必须排在 ObjectMatrix 之后（发射顺序 = 本表书写顺序，见
+        -- generator.cppm::generateCppmFromSlang 的 [FAIL]）。
+        {
+            name = "ShadowViewProjBlock",
+            stride = 256,
+            attributes = {
+                { name = "viewProj", type = "ObjectMatrix[4]", offset = 0 },
+            },
+        },
     },
 }

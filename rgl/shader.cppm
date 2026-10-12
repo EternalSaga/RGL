@@ -390,6 +390,9 @@ export struct PipelineBindings {
 	                             // UBO 子范围槽（SceneDataService::irradianceSlot；裁未声明者同批 M）
 	uint32_t slotSceneLights = 0;  // binding 24（迁移批 3，hasSceneData 恒带上）：灯数组区
 	                             // UBO 子范围槽（SceneDataService::lightSlot；裁未声明者同批 M）
+	uint32_t slotSceneShadowViewProj = 0;  // binding 28（迁移批 S-1，hasSceneData 恒带上）：阴影
+	                             // 光空间 VP 区 UBO 子范围槽（SceneDataService::shadowViewProjSlot；
+	                             // 裁未声明者同批 M）
 	// 类型化迁移 批 T1：逐对象四张表的 SSBO 子范围槽（SceneDataService::objectMatrixSlot 等）。
 	// 与上面三条同纪律 = hasSceneData 一律带上、C++ 侧不登记谁用，未声明的 binding 由批 M 的
 	// SPV 声明过滤自动裁掉。元素步长由 shader 侧 StructuredBuffer<T> 的类型给（R4 逐次构建
@@ -552,6 +555,8 @@ export class RenderPipeline {
 			add(27, bindings.slotSceneIrradiance * descriptorSize, descriptorSize);
 			// 迁移批 3：灯数组区 UBO 载体（binding 24），同批 1 纪律
 			add(24, bindings.slotSceneLights * descriptorSize, descriptorSize);
+			// 迁移批 S-1：阴影光空间 VP 区 UBO 载体（binding 28），同批 1 纪律
+			add(28, bindings.slotSceneShadowViewProj * descriptorSize, descriptorSize);
 			// 类型化迁移 批 T1：逐对象四张表 SSBO 载体（binding 23/25/26/33），同批 1 纪律。
 			// 只有 import scene_tables.slang 且真用到某张表的条目才在 SPV 里声明它（未用到的
 			// 表被 Slang 死代码消除掉），批 M 过滤把剩下的裁干净 ⟹ 烘的恰好是用的。

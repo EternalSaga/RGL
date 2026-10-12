@@ -246,6 +246,11 @@ void Renderer::createSceneStaging(RGL::Resources& vkResources) {
 	// Phase 5.5 批次 4：skyboxInvViewProj 写 @64（sky.slang skyClipToWorld 消费）
 	std::memcpy(stage + kSceneDataSkyOffset, &list.sceneData.skyInvViewProj, sizeof(glm::mat4));
 	// Phase 11 批 11.2：阴影光空间 VP 区（尾区追加，4 槽）+ 采样参数子区（3 个 vec4）
+	// 迁移批 S-1：读端已换 `ConstantBuffer<ShadowViewProjBlock>`（binding 28，元素 ObjectMatrix
+	// 列主序），**写端逐字节不变**——源数组尺寸与区字节数由下面这条 assert 钉死
+	//（区字节数又与反射生成物 sizeof(ShadowViewProjBlock) 同源，见 scene_data.cppm）。
+	static_assert(sizeof(decltype(list.sceneData.shadowViewProj)) == kSceneDataShadowMatrixBytes,
+		"SceneFrameData::shadowViewProj 字节数与阴影 VP 区容量失同步");
 	std::memcpy(stage + kSceneDataShadowMatrixOffset, list.sceneData.shadowViewProj.data(),
 		kSceneDataShadowMatrixBytes);
 	std::memcpy(stage + kSceneDataShadowSplitsOffset, &list.sceneData.shadowSplits,

@@ -188,6 +188,11 @@ static_assert(sizeof(IrradianceBlock) == kSceneDataIrradianceBytes,
  * 逐字节不动，沿用 Phase 8 ④a 的追加法）。区内容 = `kSceneShadowCascadeCount` 个 mat4
  * 列主序，索引 = cascade 号，相对基址 + 64×i。
  *
+ * 🔵 **迁移批 S-1 起本区已类型化**：shader 端读路 = `ConstantBuffer<ShadowViewProjBlock>`
+ * （scene.slang binding 28，经本区**子范围 UBO 描述符**，SceneDataService::shadowViewProjSlot），
+ * 本文件不再有字节字面量与之同步；"mat4 列主序 + 64×i" 的口径由契约元素类型 ObjectMatrix
+ * （反射生成，sizeof/offsetof assert）承载，写入端（writeSceneStaging）逐字节不变。
+ *
  * **为什么一次就预留 4 槽**：cascade 是"同一张阴影图上的 4 个视口分块"，每块一张 VP。
  * 先写 1 槽、后续再加 3 槽 = 再动一次尾部基址 + 改两侧手写字面量，而这类"加区域"的
  * 最省事形态就是**一次留够**。本次（5a-1）只写 [0]（单级，拟合场景包围球），
@@ -251,6 +256,16 @@ export inline constexpr uint32_t kSceneDataShadowMatrixOffset =
 	alignUp(kSceneDataIrradianceOffset + kSceneDataIrradianceBytes, kSceneRegionAlign);
 export inline constexpr uint32_t kSceneDataShadowMatrixBytes =
 	kSceneShadowCascadeCount * static_cast<uint32_t>(sizeof(glm::mat4));
+// 迁移批 S-1（§9.5 binding 28）：本区载体 = `ConstantBuffer<ShadowViewProjBlock>`
+//（scene.slang，元素 = 契约类型 ObjectMatrix 列主序 4 列，元素步长 64）。区尺寸与反射
+// 生成物同源钉死；原「scene.slang readShadowViewProj 字面量 722944」的两侧手写同步点
+// 随字面量一起消失（本文件下方那条 assert 已删）。
+static_assert(sizeof(ShadowViewProjBlock) == kSceneDataShadowMatrixBytes,
+	"scene.slang ShadowViewProjBlock (reflection-generated) size out of sync with region bytes");
+// 级联槽数 = 契约数组长度（改一侧必编译失败：数组是 shader 侧唯一可读上界）
+static_assert(kSceneShadowCascadeCount
+		== sizeof(ShadowViewProjBlock::viewProj) / sizeof(ObjectMatrix),
+	"级联槽数与 scene.slang ShadowViewProjBlock.viewProj 数组长度失同步");
 
 /** 阴影采样参数子区（跟在 VP 区之后，各 16B）。三个 vec4 与 scene.slang 逐字面量同源：
  *  - 分界远距（x4）：每级级联的远截止平方距离，光照 shader 按片元刷实际距离选级；
@@ -302,9 +317,6 @@ static_assert(kSceneDataEvssmConstOffset == 723984,
 static_assert(kSceneDataShadowSplitsOffset == 723200 && kSceneDataShadowParamsOffset == 723232
 	&& kSceneDataShadowAtlasOffset == 723248,
 	"scene.slang shadow sampling literals drifted from scene_data.cppm offsets");
-// 与 scene.slang 的字面量基址钉死（两侧手写同步点，改一侧必编译失败）
-static_assert(kSceneDataShadowMatrixOffset == 722944,
-	"scene.slang readShadowViewProj literal 722944 out of sync with kSceneDataShadowMatrixOffset");
 
 /** 批 12.6 TAA 区（EVSSM 常量 vec4 之后 **176B**（原 160B，批 13.8 追加一段 16B），
  *  五段子区；第四段 16B 自批 13.5 改义）：
@@ -839,6 +851,16 @@ export class SceneDataService {
 	}
 
 	/**
+	 * 阴影光空间 VP 区 UBO 子范围槽号（迁移批 S-1，shader 端 binding 28；用法与 wetSlot
+	 * 同型，PipelineBindings::slotSceneShadowViewProj）。描述符内容 = {buffer 基址 +
+	 * kSceneDataShadowMatrixOffset, sizeof(ShadowViewProjBlock)} 的 eUniformBuffer。
+	 */
+	[[nodiscard]] uint32_t shadowViewProjSlot() {
+		sceneDataSlot = ensure();
+		return sceneShadowViewProjSlot;
+	}
+
+	/**
 	 * 逐对象世界矩阵表 SSBO 子范围槽号（类型化迁移 批 T1，shader 端 binding 23；
 	 * PipelineBindings::slotObjectMatrices）。描述符内容 = {buffer 基址 +
 	 * kSceneDataObjectMatrixOffset, kSceneDataObjectMatrixBytes} 的 eStorageBuffer——
@@ -868,11 +890,16 @@ export class SceneDataService {
 	}
 
    private:
+	/** 区槽总数（含全区 scene.data 本身）= ensure 领槽数 = writeRegionDescriptors 行数。
+	 *  🔴 每迁一区 +1 时**只改这一处**：四张 std::array 都以它取尺寸，漏写描述符行会
+	 *  编译失败（初始化列表元素多于 N），而不是留到运行期读脏槽。 */
+	static constexpr size_t kRegionSlotCount = 9;
+
 	/**
-	 * 八槽描述符一次写（ensure 领槽后调用；实现见文件下方）。
-	 * 🔴 表驱动的理由：「领槽」与「写描述符」是同一份知识的两半——分成两处写会出
+	 * 全部区槽描述符一次写（ensure 领槽后调用；实现见文件下方）。
+	 * 🔴 领槽与写描述符是同一份知识的两半——分成两处写会出
 	 * 「加了子范围槽、忘了写描述符」的隐蔽形态（描述符没被写过 = 读到 heap 槽里的上一个
-	 * 描述符，VVL 未必出声，画面上是随机垃圾）。两半都以本类的 8 个槽号成员为准。
+	 * 描述符，VVL 未必出声，画面上是随机垃圾）。两半都以本类的槽号成员为准。
 	 */
 	void writeRegionDescriptors();
 
@@ -883,6 +910,7 @@ export class SceneDataService {
 	uint32_t sceneWetSlot = 0;   // 湿面区 UBO 子范围槽号（迁移批 1，binding 32）
 	uint32_t sceneIrradianceSlot = 0;  // 辐照度区 UBO 子范围槽号（迁移批 2，binding 27）
 	uint32_t sceneLightArraySlot = 0;  // 灯数组区 UBO 子范围槽号（迁移批 3，binding 24）
+	uint32_t sceneShadowViewProjSlot = 0;  // 阴影 VP 区 UBO 子范围槽号（迁移批 S-1，binding 28）
 	uint32_t sceneObjectMatrixSlot = 0;  // 对象矩阵表 SSBO 子范围槽号（批 T1，binding 23）
 	uint32_t sceneObjectMvpSlot = 0;  // MVP 表 SSBO 子范围槽号（批 T1，binding 25）
 	uint32_t sceneObjectDrawSlot = 0;  // 绘制属性表 SSBO 子范围槽号（批 T1，binding 26）
@@ -938,13 +966,11 @@ if (kLargestUboRegionBytes > maxUboRange)
  * eShaderDeviceAddress | eStorageBuffer | eTransferDst，VMA_MEMORY_USAGE_AUTO
  * device-local（CPU 不直接写——每帧唯一写入方 = staging copy，勿用 createGpuBuffer 的
  * CPU_TO_GPU+MAPPED 形态）+ VmaAllocationCreateInfo::minAlignment = kSceneRegionAlign
- *（§9.7 基址对齐）；创建前跑运行期对齐闸门（§3.1，不满足 = throw 点名）；slot =
- * allocSlot(Runtime, "scene.data")；描述符 = eStorageBuffer，data = buffer BDA 地址范围
- *（全 kSceneDataBytes）+ 第二槽 "scene.wet" = 湿面区子范围 eUniformBuffer（迁移批 1，
- * binding 32）+ 第三槽 "scene.irradiance" = 辐照度区子范围 eUniformBuffer（迁移批 2，
- * binding 27）+ 第四槽 "scene.lights" = 灯数组区子范围 eUniformBuffer（迁移批 3，
- * binding 24）+ 批 T1 的四颗逐对象表子范围 eStorageBuffer（binding 23 / 26 / 25 / 33），
- * 八槽一次 writeResourceDescriptorsEXT（见 writeRegionDescriptors）。
+ *（§9.7 基址对齐）；创建前跑运行期对齐闸门（§3.1，不满足 = throw 点名）；
+ * 首槽 = allocSlot(Runtime, "scene.data")（全区 eStorageBuffer，data = buffer BDA 地址
+ * 范围，全 kSceneDataBytes），其后每迁一区再领一「子范围」槽（类型化载体口径与 binding
+ * 逐行写在 writeRegionDescriptors，数量 = kRegionSlotCount）；全部区槽一次
+ * writeResourceDescriptorsEXT。
  */
 inline uint32_t SceneDataService::ensure() {
 	if (sceneDataReady)
@@ -990,6 +1016,8 @@ inline uint32_t SceneDataService::ensure() {
 	sceneWetSlot = allocRuntimeSlot("scene.wet");  // binding 32：湿面区（迁移批 1）
 	sceneIrradianceSlot = allocRuntimeSlot("scene.irradiance");  // binding 27（迁移批 2）
 	sceneLightArraySlot = allocRuntimeSlot("scene.lights");  // binding 24（迁移批 3）
+	// 迁移批 S-1：阴影光空间 VP 区（UBO 子范围，binding 28）
+	sceneShadowViewProjSlot = allocRuntimeSlot("scene.shadow_vp");  // binding 28
 	// 批 T1：逐对象四张表（世界矩阵 / MVP / 绘制属性 / 簇区间）各一 SSBO 子范围槽
 	sceneObjectMatrixSlot = allocRuntimeSlot("scene.object_matrices");  // binding 23
 	sceneObjectMvpSlot = allocRuntimeSlot("scene.object_mvps");  // binding 25
@@ -1002,12 +1030,12 @@ inline uint32_t SceneDataService::ensure() {
 }
 
 /**
- * 八槽描述符一次 writeResourceDescriptorsEXT（领槽方 = ensure，见其 allocRuntimeSlot）。
+ * 全部区槽描述符一次 writeResourceDescriptorsEXT（领槽方 = ensure，见其 allocRuntimeSlot）。
  * 载体口径：全区与批 T1 的四张表 = `eStorageBuffer`（shader 端 ByteAddressBuffer /
- * StructuredBuffer）；湿面 / 辐照度 / 灯数组 = `eUniformBuffer`（shader 端 ConstantBuffer，
- * 迁移批 1/2/3）。子范围 address 对齐 = 基址 256（minAlignment）+ 区基址 256 台阶
- *（本文件顶部布局红线）⟹ 恒过 VUID-12350（UBO）/ VUID-12351（SSBO）；闸门读数见
- * checkAlignmentGate。
+ * StructuredBuffer）；湿面 / 辐照度 / 灯数组 / 阴影 VP = `eUniformBuffer`（shader 端
+ * ConstantBuffer，迁移批 1/2/3/S-1）。子范围 address 对齐 = 基址 256（minAlignment）+
+ * 区基址 256 台阶（本文件顶部布局红线）⟹ 恒过 VUID-12350（UBO）/ VUID-12351（SSBO）；
+ * 闸门读数见 checkAlignmentGate。
  * 🔴 四张表的下发长度**含尾部哨兵**（`kSceneData*Bytes` = (容量+1)×步长，批 T0）：
  * 越界索引因此落在描述符范围内、落在 poison 值上，而不是落在 buffer 外（后者是
  * 未定义行为，VVL 报的是"越界"而不是"越界读到哨兵"这条我们想要的信号）。
@@ -1015,29 +1043,33 @@ inline uint32_t SceneDataService::ensure() {
 inline void SceneDataService::writeRegionDescriptors() {
 	const uint64_t base = sceneDataBuffer.getDeviceAddress();
 	// 顺序 = ensure 领槽顺序；逐槽地址在下面按槽号现取（不靠下标配对，见其注释）
-	std::array<vk::DeviceAddressRangeEXT, 8> ranges{{
+	// 🔴 行数必须与 kRegionSlotCount 一致（漏一行 = 该槽描述符从未被写过 = 读到 heap 槽里
+	// 的上一个描述符，VVL 未必出声）——四张表都以本常量取尺寸，加区时只改它一处。
+	std::array<vk::DeviceAddressRangeEXT, kRegionSlotCount> ranges{{
 		{base, kSceneDataBytes},  // scene.data — binding 3
 		{base + kSceneDataWetOffset, sizeof(WetParamsBlock)},  // scene.wet — binding 32
 		{base + kSceneDataIrradianceOffset, sizeof(IrradianceBlock)},  // — binding 27
 		{base + kSceneDataLightArrayOffset, sizeof(LightArrayBlock)},  // — binding 24
+		{base + kSceneDataShadowMatrixOffset, sizeof(ShadowViewProjBlock)},  // — binding 28
 		{base + kSceneDataObjectMatrixOffset, kSceneDataObjectMatrixBytes},  // — binding 23
 		{base + kSceneDataMvpTableOffset, kSceneDataMvpTableBytes},  // — binding 25
 		{base + kSceneDataDrawTableOffset, kSceneDataDrawTableBytes},  // — binding 26
 		{base + kSceneDataClusterRangeOffset, kSceneDataClusterRangeBytes}}};  // — binding 33
-	std::array<vk::DescriptorType, 8> types{{
+	std::array<vk::DescriptorType, kRegionSlotCount> types{{
 		vk::DescriptorType::eStorageBuffer,  // scene.data（全区字节读）
 		vk::DescriptorType::eUniformBuffer,  // 湿面
 		vk::DescriptorType::eUniformBuffer,  // 辐照度
 		vk::DescriptorType::eUniformBuffer,  // 灯数组
+		vk::DescriptorType::eUniformBuffer,  // 阴影光空间 VP
 		vk::DescriptorType::eStorageBuffer,  // 对象世界矩阵表
 		vk::DescriptorType::eStorageBuffer,  // 对象 MVP 表
 		vk::DescriptorType::eStorageBuffer,  // 对象绘制属性表
 		vk::DescriptorType::eStorageBuffer}};  // 对象簇区间表
-	std::array<uint32_t, 8> slots{{sceneDataSlot, sceneWetSlot, sceneIrradianceSlot,
-		sceneLightArraySlot, sceneObjectMatrixSlot, sceneObjectMvpSlot, sceneObjectDrawSlot,
-		sceneObjectClusterRangeSlot}};
-	std::array<vk::ResourceDescriptorInfoEXT, 8> descs{};
-	std::array<vk::HostAddressRangeEXT, 8> dsts{};
+	std::array<uint32_t, kRegionSlotCount> slots{{sceneDataSlot, sceneWetSlot,
+		sceneIrradianceSlot, sceneLightArraySlot, sceneShadowViewProjSlot, sceneObjectMatrixSlot,
+		sceneObjectMvpSlot, sceneObjectDrawSlot, sceneObjectClusterRangeSlot}};
+	std::array<vk::ResourceDescriptorInfoEXT, kRegionSlotCount> descs{};
+	std::array<vk::HostAddressRangeEXT, kRegionSlotCount> dsts{};
 	const vk::DeviceSize heapStride = kernel.getDescriptorHeap().getDescriptorSize();
 	for (size_t i = 0; i < ranges.size(); ++i) {
 		descs[i].type = types[i];
