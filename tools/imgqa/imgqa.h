@@ -1029,6 +1029,26 @@ int cmdShadowKernelScale();
 int cmdDiffStruct(const std::string& aPath, const std::string& bPath,
     const std::string& gbufPath, double gate, bool expectDark, double minDelta);
 
+// ═══════════════════════════════════════════ 差异形态判据（diffblock，★0.5-b1）
+//
+// 判据本体（拍板 → docs/mdi_plan.md §11.2）= 「UV 缝边缘有差异我能接受，整块不行」的形式化：
+// M = {|luma(A)−luma(B)| ≥ τ}（线性亮度），U = area(erode(M, 圆盘半径 r))，判据 U == 0
+// ⟺ 差异处处厚度 ≤ 2r 像素。**场景无关**（同 diffstruct）：输入 = 磁盘两张 PNG，不启引擎。
+// 口径常量与 erode↔distanceTransform 等价性声明 → `diff_block_metric.h` 头注释，此处不重述。
+
+/**
+ * 形态判据。退出码 PASS（U(r)=0）= 0、FAIL = 1（进 just 脚本当闸门）。
+ * 报告必须同时给三样（§11.2，阈值不许藏）：厚度分位 / U(r) 曲线（r=0,1,2,4）/ 连通域清单；
+ * τ=0（任一位不同）的计数与 τ 的计数同时报（两数之差 = 交付颗粒噪声 vs 真差异）。
+ *
+ * @param radius   腐蚀半径 r（像素，默认 2 = 「处处 ≤ 4px 厚」）；**半径不是直径**
+ * @param tau      M 的门槛，单位 = 1 个 sRGB 量化步长（默认 1；0 = 任一位不同，严格 >0）
+ * @param top      连通域清单条数（面积降序；0 = 不打印）
+ * @param jsonPath 机器可读输出（★1-a1ii 验收脚本读它）；空 = 不出
+ */
+int cmdDiffBlock(const std::string& aPath, const std::string& bPath, int radius, double tau,
+    int top, const std::string& jsonPath);
+
 }  // namespace RGL::imgqa
 
 #endif

@@ -1,7 +1,8 @@
 // imgqa CLI。子命令：selftest / check / refuse / attribution / faces / switch / izb / swim /
 // probe / temporal / temporal-residual / temporal-motion / temporal-feedback /
 // temporal-flicker / temporal-homography / aa-coverage / taa-swim / shadow-softness /
-// shadow-kernel-scale / diffstruct / note。（权威清单 = `cli_table.cpp` 的注册表，本行只是路标。）
+// shadow-kernel-scale / diffstruct / diffblock / note。
+// （权威清单 = `cli_table.cpp` 的注册表，本行只是路标。）
 //
 // ## 本文件 = **路由**，不是仪器
 //
@@ -201,6 +202,10 @@ int dispatch(const std::string& cmd, const Args& P)
         { "diffstruct", +[](const Args& a) {
              return cmdDiffStruct(a.get("--a"), a.get("--b"), a.get("--gbuf"), a.number("--gate"),
                  a.has("--expect-dark"), a.number("--min-delta"));
+         } },
+        { "diffblock", +[](const Args& a) {
+             return cmdDiffBlock(a.get("--a"), a.get("--b"), a.integer("--r"), a.number("--tau"),
+                 a.integer("--top"), a.get("--json"));
          } },
     };
     if (const auto fn = kFlagCmd.find(cmd); fn != kFlagCmd.end())

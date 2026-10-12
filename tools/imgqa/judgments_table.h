@@ -65,6 +65,11 @@ namespace RGL::imgqa {
 /// 📄 正文在 `judgments_table_ssr.cpp`。
 [[nodiscard]] const std::vector<JudgmentInfo>& ssrDiffStructJudgments();
 
+/// 地基族 · **差异形态判据**（`diffblock`，1 条）：U(r) 恰 0 = 「差异处处够薄，没有整块」
+/// （docs/mdi_plan.md §11.2，簇化轴 ★1-a1ii 的 A3/A4 形态闸门）。族仍是 Foundation，缝按
+/// **仪器**切。📄 正文在 `judgments_table_block.cpp`。
+[[nodiscard]] const std::vector<JudgmentInfo>& mdiDiffBlockJudgments();
+
 }  // namespace RGL::imgqa
 
 #endif  // RGL_IMGQA_JUDGMENTS_TABLE_H

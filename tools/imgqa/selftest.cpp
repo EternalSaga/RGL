@@ -221,8 +221,10 @@ void testJudgmentFamilies(Checker& c)
     // PCSS 半影随高度展开）。写法照抄 `shadow-softness` 那三条，见 judgments_table_shadow.cpp。
     // 60 → 62：批 15.2 子步 D1 的 `diffstruct` 两条（变暗阳性锚点 / 域外变暗恰 0），见
     // judgments_table_ssr.cpp。
+    // 62 → 63：★0.5-b1 的 `diffblock` 一条（U(r) 恰 0 = 差异处处够薄没有整块），见
+    // judgments_table_block.cpp。
     // 这条硬计数的意义 = 族拆分/改名最容易掉条目，而掉掉的正是没人再读的那几条。
-    c.chk("判据总数 == 62（族拆分最容易掉条目）", all.size() == 62, std::to_string(all.size()));
+    c.chk("判据总数 == 63（族拆分最容易掉条目）", all.size() == 63, std::to_string(all.size()));
     size_t n[4] = {0, 0, 0, 0};
     for (const auto& j : all) {
         switch (j.family) {
@@ -426,6 +428,12 @@ int cmdSelftest()
     testShadowKernelScaleInstrument(c);
     testDiffStructMetric(c);
     testDiffStructDomainGuard(c);
+    testDiffBlockAnchors(c);
+    testDiffBlockThinShapes(c);
+    testDiffBlockRadiusSemantics(c);
+    testDiffBlockErodeEquivalence(c);
+    testDiffBlockErodeLaw(c);
+    testDiffBlockReportSurface(c);
     testCliRegistryShape(c);
     testCliArgsBehavior(c);
     std::printf("%s：%d 条失败\n", c.bad ? "自检失败" : "自检通过", c.bad);

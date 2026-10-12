@@ -16,6 +16,8 @@ add_executable(imgqa
     cli_table.cpp
     # `diffstruct` 的 spec 段（护栏逼的另立 TU：主表 481 代码行、上限 500），缝按仪器切。
     cli_table_diffstruct.cpp
+    # `diffblock` 的 spec 段（★0.5-b1，同上一条的拆法：主表撞护栏，缝按仪器切）。
+    cli_table_diffblock.cpp
     analytic.cpp
     ao_metrics.cpp
     # `ao-noise`（护栏逼的三刀：ao_noise.cpp 903 代码行 > 500），缝按仪器切、缝说明全文见
@@ -51,6 +53,8 @@ add_executable(imgqa
     judgments_table_shadow.cpp
     judgments_table_ssr.cpp
     judgments_table_tail.cpp
+    # `diffblock` 判据段（★0.5-b1，1 条 `diffblock-thickness`），缝按仪器切（同 ssr 段）。
+    judgments_table_block.cpp
     # `selftest`（护栏逼的五刀：selftest.cpp 1927 代码行 > 500），缝按**被测仪器**切、
     # 缝说明全文见 `selftest.h` 头注释。`selftest.cpp` 留**地基**（image.cpp 的图像算子 +
     # judge.cpp 的判据/反模式注册表 + cli.cpp 的 CLI 注册表）与 `cmdSelftest` 汇总路由
@@ -65,6 +69,9 @@ add_executable(imgqa
     selftest_ao_residual.cpp
     selftest_bands.cpp
     selftest_motion.cpp
+    # `diffblock` 形态判据的锚点段（★0.5-b1）：五条阳性锚点 + τ 语义 + erode↔distanceTransform
+    # 等价性（合成亮度图直测 `diff_block_metric.h` 口径层，不读 PNG 不启引擎）。
+    selftest_block.cpp
     # `temporal` / `taa-swim`（护栏逼的两刀：temporal.cpp 926 代码行 > 500，里面住着**两台
     # 仪器**），缝按仪器切、缝说明全文见 `temporal_swim.h` 头注释。`temporal.cpp` = **锚点线**
     # （静止机位 + jitter 的抑制比：yawCam / runSequence / temporalDiffStat / cmdTemporal）；
@@ -173,6 +180,11 @@ add_executable(imgqa
     # （selftest 用合成数组闭式直接测，不读图、不启引擎），`diff_struct.cpp` 是读图 + 报数 + 判决。
     diff_struct_metric.cpp
     diff_struct.cpp
+    # `diffblock`（★0.5-b1：差异的形态判据「有没有整块」，docs/mdi_plan.md §11.2）。缝同上一条
+    # （口径 vs 仪器）：`diff_block_metric.h` 是口径与常量唯一出处（纯算子声明），`diff_block.cpp`
+    # 是读图 + 距离变换 + 三样输出（厚度分位 / U(r) 曲线 / 连通域）+ 判决 + JSON。selftest 直接打
+    # 口径层（合成亮度图 → 读数），等价性自检钉住 distanceTransform 与字面 erode 的同语义。
+    diff_block.cpp
     # main.cpp 拆 TU（护栏逼的：main.cpp 726 代码行 > 500，cmdSwim 认知 38 > 30 ERROR）。
     # 缝按**仪器**切、不按行数切：一个判据命令族一个 TU（既有先例 aa_coverage.cpp /
     # shadow_softness.cpp）；main.cpp 只留路由（main + 三条分派链 + fmt6）。

@@ -521,6 +521,7 @@ std::vector<SubcommandSpec> allSpecs()
     append(specsTailAndMotion());
     append(specsFlickerAndNoise());
     append(diffStructSpecs());
+    append(diffBlockSpecs());
     return table;
 }
 
