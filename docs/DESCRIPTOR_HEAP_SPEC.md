@@ -214,7 +214,7 @@ cmd.endRendering();
 **本节原来写的是**：「HLSL/Slang 的 `StructuredBuffer` 要求元素 stride 是 16 字节的倍数
 （最小 16B）」+「修复：C++ 和 shader 端同时补齐到 32 字节」+「4 字节数据不要用
 StructuredBuffer，`StructuredBuffer<uint>` stride = 16B」。**三条都不成立**，且第二条
-（补 `float _padding[2]` 凑 32）正是 git:调试历史「灰屏」条目里点名的那个**陷阱**。
+（补 `float _padding[2]` 凑 32）正是 git:调试历史「灰屏」(2026-06-24) 条目里点名的那个**陷阱**。
 
 **实测**（本机 slangc + 项目原 flags，`struct Vertex { float3 pos; float3 color; }`，
 C++ `sizeof` = 24；完整表 → `docs/constantbuffer_迁移计划.md` §8.5）：

@@ -22,7 +22,7 @@ import meshlet_cull;   // MeshletCullItem / cullPush 契约（反射单一真相
 
 // 🔴 三张自建表全部用 `ByteAddressBuffer` + `Load<T>` 而非 `StructuredBuffer<T>`：后者触
 // `shader_dep_check` **R3 红线**（任何 .slang 出现 StructuredBuffer = ERROR，全库零使用、
-// **无豁免清单**，出处 git:调试历史「灰屏」stride 静默错位）。本文件一度改成类型化载体并实测
+// **无豁免清单**，出处 git:调试历史「灰屏」(2026-06-24) stride 静默错位）。本文件一度改成类型化载体并实测
 // 全绿（ArrayStride 8/44/4、逐位不变、阳性对照成立），但**红线未撤销前不在 rgl/ 树内引入违规**
 // ——撤销条件与配套护栏见 `docs/constantbuffer_迁移计划.md` §8。
 //

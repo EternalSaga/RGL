@@ -7,7 +7,7 @@ stdlib-only（AGENTS.md 工具语言纪律：留在 Python 的工具只准 stdli
 
 `StructuredBuffer<T>` 在 SPIR-V 里的元素步长（`ArrayStride`）**必须等于**反射生成物里
 C++ 侧的 `sizeof(T)`。不等 ⟹ GPU 从错误的字节读元素 1、2、3……**不报错、不 device
-lost、VVL 不报**，只把画面画错（git:调试历史「灰屏」）。
+lost、VVL 不报**，只把画面画错（git:调试历史「灰屏」(2026-06-24)）。
 
 ## 为什么需要它（R3 从"全禁"窄化成"只禁无契约裸 struct"的前提）
 
@@ -373,7 +373,7 @@ def run(args) -> tuple[list[str], dict[str, str]]:
                 errs.append(
                     f"{rel(module_src)}: `StructuredBuffer<{t}>` 的 SPIR-V ArrayStride = {stride}"
                     f" ≠ 反射生成物 sizeof({t}) = {want}（SPV 类型名 {spv_name}）"
-                    f"——GPU 从元素 1 起逐元素错位读，**静默**画错（git:调试历史「灰屏」）。"
+                    f"——GPU 从元素 1 起逐元素错位读，**静默**画错（git:调试历史「灰屏」(2026-06-24)）。"
                     f"口径 flags = {' '.join(flags)}；理由与实测 → docs/constantbuffer_迁移计划.md §8")
 
     stats["契约类型"] = str(len(sizes))

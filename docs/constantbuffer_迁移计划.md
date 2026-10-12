@@ -205,7 +205,7 @@ ERROR（红线明令"无豁免清单"）⟹ **已回退成 `ByteAddressBuffer` +
 `tools/check_shader_deps.py`（构建期 `shader_dep_check`，`cmake/RglChecks.cmake` 登记）：
 
 > **R3 任何 .slang 出现 StructuredBuffer（含 RW/Append/Consume）= 红线（全库零使用，
-> 无豁免清单；git:调试历史「灰屏」stride 静默错位）**
+> 无豁免清单；git:调试历史「灰屏」(2026-06-24) stride 静默错位）**
 
 只警告不阻断（醒目 ERROR 行、`--strict` 拿非零码）。规则自陈的理由是"stride ≥16B 对齐与
 C++ sizeof 静默偏离"——**这条理由的普适性已被 §8.5 实测推翻**。

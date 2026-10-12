@@ -18,7 +18,8 @@ R1  每个 rgl_shader target：主源的 `import x;` / `import "x.slang";` /
 R3  红线（2026-10-01 立"全禁"；2026-10-12 按 §8.4 第 1 条**窄化**）：任何 .slang 里
     `StructuredBuffer<T>`（含 RW/Append/Consume 变体）的元素类型 T **不在反射生成契约类型
     集合内** = ERROR。契约集合机械取自 `rgl/generated/*_types_generated.cppm`（**别手抄
-    名单**——抄名单反模式，副本必然漂）。禁的是**无契约的裸 struct**：git:调试历史「灰屏」
+    名单**——抄名单反模式，副本必然漂）。禁的是**无契约的裸 struct**：git:调试历史
+    「灰屏」(2026-06-24)
     的成因是元素 stride 与 C++ sizeof 静默偏离，而契约类型的 sizeof 由反射生成物
     `static_assert(sizeof == N)` 钉住、SPIR-V `ArrayStride` 由 **R4** 逐次构建对账，
     两侧同源于一份声明 ⟹ 那条静默偏离在这里**有机器可验的等式**，不再是裸奔。
@@ -260,7 +261,7 @@ def main() -> int:
                     f"`StructuredBuffer<{elem}>` 的元素类型 {elem} 不在反射契约类型集合内"
                     f"（集合 = {rel(GENERATED_DIR)}/*_types_generated.cppm 机械提取，"
                     f"现 {len(contracts)} 个）——无契约的裸 struct 正是 stride 静默错位的"
-                    f"发生地（git:调试历史「灰屏」）。要么把 {elem} 进 schema 走反射，"
+                    f"发生地（git:调试历史「灰屏」(2026-06-24)）。要么把 {elem} 进 schema 走反射，"
                     f"要么走 ByteAddressBuffer + .Load()；理由与实测 → "
                     f"docs/constantbuffer_迁移计划.md §8")
 
