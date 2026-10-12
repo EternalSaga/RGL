@@ -45,5 +45,21 @@ namespace RGL {
 
 
 
+    // 契约常量（schema 单一真相源；shader 端字面量必须一致，见对应 shader 头注释）
+    export inline constexpr uint32_t kMeshletMaxOutputVertices = 256;
+    // 契约常量（schema 单一真相源；shader 端字面量必须一致，见对应 shader 头注释）
+    export inline constexpr uint32_t kMeshletMaxWorkGroupInvocations = 256;
+    // 契约常量（schema 单一真相源；shader 端字面量必须一致，见对应 shader 头注释）
+    export inline constexpr uint32_t kMaxClusterVerts = 128;
+    // 契约常量（schema 单一真相源；shader 端字面量必须一致，见对应 shader 头注释）
+    export inline constexpr uint32_t kMaxClusterPrims = 128;
+    // 契约常量（schema 单一真相源；shader 端字面量必须一致，见对应 shader 头注释）
+    export inline constexpr uint32_t kTaskTris = 85;
+    // 契约常量（schema 单一真相源；shader 端字面量必须一致，见对应 shader 头注释）
+    export inline constexpr uint32_t kSlotsPerCluster = 2;
+    // 契约常量（schema 单一真相源；shader 端字面量必须一致，见对应 shader 头注释）
+    export inline constexpr uint32_t kClusterStride = 44;
+    // 契约常量（schema 单一真相源；shader 端字面量必须一致，见对应 shader 头注释）
+    export inline constexpr uint32_t kVertexStride = 48;
 
 }  // namespace RGL

@@ -521,6 +521,102 @@ _BAB_DECL_RX = re.compile(r"\b(?:RW)?ByteAddressBuffer\s+(\w+)\s*;")
 _BAB_BARE_LOAD_RX_TMPL = r"\bfloat[234]?\s+\w+\s*=\s*[^;]*\b{name}\.Load[234]?\s*\("
 
 
+def meshlet_spec_checks() -> list[Warning]:
+    """meshlet 路径规格：schema 常量 ↔ .slang 字面量 ↔ 关系式，三方对账。
+
+    ## 为什么反射不够、必须有这条
+    `tools/generator.cppm` 对 constants 的原话是「反射端无对应数据，直接由 schema 声明生成」
+    ⟹ schema 里的 `constants` **反射不校验**，它只是 C++ 侧的单一声明点。而 meshlet 这批数
+    （每任务三角数 85、簇上限 128、段步长 44/48）真正的消费者是**着色器字面量**与
+    `render_list_impl.cppm` 的 task 数——schema 漂了反射一声不吭。本规则把"schema 是真相源"
+    这句话变成构建期可执行的。
+
+    ## 三段判据（缺一段就有一类漂移隐身）
+    1. **数值对账**：schema 常量名若在任一 `.slang` 里以 `const uint <名> = <值>u;` 出现，
+       值必须相等（改了 shader 没改 schema、或反之，都红）。
+    2. 🔴 **关系对账**（比数值更要命）：`3 × kTaskTris ≤ kMeshletMaxOutputVertices`。
+       去索引发射下每任务顶点数 = 3×三角数；这条破了 = mesh shader **越界写顶点输出**，
+       不报错、只画垃圾或崩。数值各自"看着都对"而关系破了是真实形态（85→86 就是）。
+    3. **死常量**：schema 常量既不出现在任何 `.slang`、也不被任何非生成 `.cppm` 使用
+       = 本表已漂成小说（生成物 `rgl/generated/` 排除，否则它永远"被使用"）。
+
+    ## 本规则**管不到**的那一半（别把它当设备安全保证）
+    `kMeshletMaxOutputVertices = 256` 是**本机实测下限的钉值**，不是设备保证。引擎至今
+    **从不运行期查询** `maxMeshOutputVertices`（全仓只出现在注释里）⟹ 换台更低的机器，
+    本规则照样全绿而渲染已经坏了。运行期核对 + 不够就回落旧路径 = 挂号项
+    （`docs/mdi_plan.md` §17.4）。
+    """
+    warnings: list[Warning] = []
+    schema_rel = "rgl/shaders/meshlet_cull_schema.lua"
+    schema_src = read_text(Path(ROOT) / schema_rel)
+    if schema_src is None:
+        return warnings  # 文件不在 = 别的规则会点名，这里不重复出声
+
+    # ── 解析 schema constants（stdlib-only，不引 lua 解析依赖）──
+    const_rx = re.compile(r'\{\s*name\s*=\s*"([A-Za-z_]\w*)"\s*,\s*value\s*=\s*(\d+)\s*\}')
+    schema_consts: dict[str, int] = {}
+    block = re.search(r"constants\s*=\s*\{(?P<body>.*?)\n    \},", schema_src, re.S)
+    if not block:
+        return warnings
+    for name, value in const_rx.findall(block.group("body")):
+        schema_consts[name] = int(value)
+    if not schema_consts:
+        warnings.append(Warning(schema_rel, 1,
+            "meshlet schema 的 constants 块解析出 0 条（格式变了？同步改 "
+            "tools/checks/rules_text.py::meshlet_spec_checks，别让它静默全绿）"))
+        return warnings
+
+    # ── 收集 .slang 里的同名字面量声明 ──
+    decl_rx = {name: re.compile(rf"\bconst\s+uint\s+{name}\s*=\s*(\d+)u?\s*;")
+               for name in schema_consts}
+    cppm_text: list[tuple[str, str]] = []
+    for rel in rgl_tree_files(".cppm"):
+        if rel.startswith("rgl/generated/"):
+            continue
+        text = read_text(Path(ROOT) / rel)
+        if text is not None:
+            cppm_text.append((rel, text))
+
+    used: set[str] = set()
+    for rel in rgl_tree_files(".slang"):
+        src = read_text(Path(ROOT) / rel)
+        if src is None:
+            continue
+        stripped = strip_comments(src)
+        for name, rx in decl_rx.items():
+            for lineno, line in enumerate(stripped.splitlines(), 1):
+                hit = rx.search(line)
+                if not hit:
+                    continue
+                used.add(name)
+                if int(hit.group(1)) != schema_consts[name]:
+                    warnings.append(Warning(rel, lineno,
+                        f"meshlet 规格漂移：着色器字面量 {name} = {hit.group(1)}，而 "
+                        f"{schema_rel} 的 constants 声明 {name} = {schema_consts[name]}"
+                        "（两处必须同改；本表是 meshlet 路径规格的唯一声明点）"))
+
+    for rel, text in cppm_text:
+        for name in schema_consts:
+            if re.search(rf"\b{name}\b", text):
+                used.add(name)
+
+    for name, value in schema_consts.items():
+        if name not in used:
+            warnings.append(Warning(schema_rel, 1,
+                f"meshlet 规格常量 {name} = {value} 无任何消费者（.slang 与手写 .cppm 都不用它）"
+                "—— 要么接上消费者，要么删掉；留着会让本表慢慢变成不被校验的散文"))
+
+    # ── 关系对账：去索引发射的硬约束 ──
+    tris = schema_consts.get("kTaskTris")
+    max_out = schema_consts.get("kMeshletMaxOutputVertices")
+    if tris is not None and max_out is not None and 3 * tris > max_out:
+        warnings.append(Warning(schema_rel, 1,
+            f"meshlet 发射规格破了硬约束：去索引下每任务顶点数 = 3 × kTaskTris = {3 * tris}"
+            f" > kMeshletMaxOutputVertices = {max_out} ⟹ mesh shader 越界写顶点输出"
+            "（不报错，只画垃圾/崩）。改 kTaskTris 必须同时确认设备上限"))
+    return warnings
+
+
 def slang_load_bitcast_checks() -> list[Warning]:
     """rgl/shaders/*.slang：floatN 直接 = ByteAddressBuffer.Load…（无 asfloat）→ 警告。
 

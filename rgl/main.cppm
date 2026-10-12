@@ -355,9 +355,11 @@ export void wireMeshletOverlayDepthCompare(Renderer& renderer, const RuntimeConf
  * @param meshlets   簇产物容器（区间表扫描输入）
  * @param assetTable 资产表（对账读 pipelineIndex / groupCount / meshletPipelineIndex）
  * @param cfg        运行配置（读 meshletEnable / meshletSwitch / meshletCoplanar）
+ * @param device     设备上下文（**只读物理设备属性**：核对簇路径的发射规格，见 checkMeshletDeviceFit）
  */
 export void wireMeshletPostRegistration(entt::registry& registry, const UploadedAssets& uploaded,
-	const MeshletAssetStore& meshlets, const AssetTable& assetTable, const RuntimeConfig& cfg);
+	const MeshletAssetStore& meshlets, const AssetTable& assetTable, const RuntimeConfig& cfg,
+	const DeviceContext& device);
 
 /**
  * 材质风格 → 管线规格名派生（★1-a1ii-α 起 bakePipelineEntries 与 bakeMeshletEntries

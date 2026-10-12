@@ -24,6 +24,7 @@ import shadow_config;  // shadowConfig() / shadowFormPlan()（阴影形态：画
 import runtime_config;  // SsrTuning / WetTuning（批 15.1 参数面 + 批 15.2A 湿面参数，fill*Params 入参）
 import taa_jitter;    // contentShiftPx（内容位移口径唯一出处；批 13.5 起 fillTaaData 要用）
 import meshlet_ranges;  // ClusterRangeTable（★1-a1i 簇区间表的 registry ctx，装配层写、本层只搬 span）
+import meshlet_cull_types_generated;  // kSlotsPerCluster（★1-a2-i 规格常量，反射生成）
 
 namespace RGL {
 
@@ -85,7 +86,10 @@ void collectShadowCasters(const RGL::MeshAsset& asset, const RGL::MaterialAsset&
  */
 uint32_t meshletTaskCount(uint32_t l0Count) {
 	// l0Count 上限实测 682 ⟹ 2× 远小于 maxMeshWorkGroupCount.x = 65535，无回绕风险。
-	return 2u * l0Count;
+	// 槽数取反射生成的规格常量（meshlet_cull_schema.lua 的 kSlotsPerCluster）而不是写字面量 2：
+	// 它与 shader 里的 `cluster = base + (groupID.x >> 1)` / `half = groupID.x & 1` 是**同一个
+	// 契约的两端**，CPU 侧改了 shader 不知道 = 一半几何静默不画。
+	return kSlotsPerCluster * l0Count;
 }
 
 /**

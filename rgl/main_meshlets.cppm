@@ -19,6 +19,7 @@ import vk_resources;  // Resources（allocSlot / descriptor heap 槽地址）
 import scene_context;  // MeshRef（asset / objectSlot）+ NextObjectSlot（实例矩阵槽计数）
 import meshlet_asset;  // MeshletAsset（只读视图：prims 身份字段）
 import meshlet_ranges;  // scanClusterRanges / MeshletRangeScan / ClusterRangeTable
+import meshlet_cull_types_generated;  // 规格常量 kTaskTris / kMeshletMax*（★1-a2-i，反射生成）
 import meshlet_hand;  // traverseClusterHandedness（★0.5-c 真产物统计锚：UV 手性 CPU 参考）
 import meshlet_geometry;  // MeshletGeometryStore（4 段 GPU buffer 的 BDA，描述符内容源）
 import scene_forward_types_generated;  // ObjectClusterRange（scene data 表条目，反射生成）
@@ -255,6 +256,72 @@ SwitchCoverage auditMeshletSwitch(entt::registry& registry, const AssetTable& as
 	return cov;
 }
 
+/** 设备发射规格核对的结果（三个上限值仅用于 warn 日志归因）。 */
+struct MeshletDeviceFit {
+	bool ok = true;
+	uint32_t maxOutputVertices = 0;
+	uint32_t maxOutputPrimitives = 0;
+	uint32_t maxWorkGroupInvocations = 0;
+};
+
+/**
+ * 查询设备是否吃得下簇路径的**发射规格**（★1-a2-i）。
+ *
+ * ## 为什么必须有这条（schema 与 source_check 都管不到的那一半）
+ * `kMeshletMaxOutputVertices = 256` 是**本机实测下限的钉值**，不是设备保证。此前引擎
+ * **从不运行期查询** `maxMeshOutputVertices`（全仓只出现在注释里），而 `kTaskTris = 85` 是
+ * 硬编码、CPU 侧 task 数也按它算 ⟹ 换台 `maxMeshOutputVertices < 255` 的机器，mesh shader
+ * 就是**越界写顶点输出**：不报错、不触发 VVL，只画垃圾或崩。`meshlet_spec_checks` 只能验
+ * 「schema 与 shader 数值自洽 + 关系成立」，验不了「这台设备到底给多少」。
+ *
+ * ## 判据（三条，全部取反射生成的规格常量）
+ * 去索引发射（§13.2 路 C）下每任务发射 `3 × kTaskTris` 个顶点、`kTaskTris` 个三角形，
+ * 且 `[numthreads(256)]` 要 ≤ `maxMeshWorkGroupInvocations`。
+ *
+ * @param physicalDevice 待查询的物理设备（只读属性，不碰 device 创建）
+ * @return 是否可用 + 三个上限（供调用方出声）
+ */
+MeshletDeviceFit checkMeshletDeviceFit(const vk::raii::PhysicalDevice& physicalDevice) {
+	const auto props = physicalDevice.getProperties2<vk::PhysicalDeviceProperties2,
+		vk::PhysicalDeviceMeshShaderPropertiesEXT>();
+	const auto& mesh = props.get<vk::PhysicalDeviceMeshShaderPropertiesEXT>();
+	MeshletDeviceFit fit;
+	// 直接取属性值：vulkan.hpp 的包装里这三个字段是 **uint32_t**（C 结构 `VkPhysicalDevice...`
+	// 里是 int32_t，C++ 包装已归一）⟹ 无需负值钳位，写钳位反而会因类型推导冲突编不过
+	fit.maxOutputVertices = mesh.maxMeshOutputVertices;
+	fit.maxOutputPrimitives = mesh.maxMeshOutputPrimitives;
+	fit.maxWorkGroupInvocations = mesh.maxMeshWorkGroupInvocations;
+	// 🔴 顶点判据是 **3×**：去索引下每个三角形发射它自己的 3 个私有顶点
+	fit.ok = 3u * kTaskTris <= fit.maxOutputVertices
+		&& kTaskTris <= fit.maxOutputPrimitives
+		&& kMeshletMaxWorkGroupInvocations <= fit.maxWorkGroupInvocations;
+	return fit;
+}
+
+/**
+ * 规格不够就 warn 并返回 false（`wireMeshletSwitch` 的闸门体；抽出来是为了让调用方保持
+ * 早返回的扁平形态——内联进来会让它的认知复杂度越过 metrics 红线）。
+ *
+ * 停用而不是降级：不是「少画一块」，是回到一条已验证可用的路径。静默按不成立的规格发射
+ * 是本项目最不能接受的失效形态（不报错、不触发 VVL，只在画面上留下解释不了的垃圾）。
+ *
+ * @param device 设备上下文（只读物理设备属性）
+ * @return 设备吃得下 = true；false = 调用方必须停用取代、保持旧路径
+ */
+bool warnIfMeshletDeviceUnfit(const DeviceContext& device) {
+	const auto fit = checkMeshletDeviceFit(device.getPhysicalDevice());
+	if (fit.ok)
+		return true;
+	if (auto* logger = RLLogger::getInstance())
+		logger->warn("meshlet: switch 停用 —— 设备发射规格不够（maxMeshOutputVertices={} "
+					 "需 ≥ 3×kTaskTris={}；maxMeshOutputPrimitives={} 需 ≥ {}；"
+					 "maxMeshWorkGroupInvocations={} 需 ≥ {}）：去索引发射会越界写顶点输出，"
+					 "本跑保持旧路径",
+			fit.maxOutputVertices, 3u * kTaskTris, fit.maxOutputPrimitives, kTaskTris,
+			fit.maxWorkGroupInvocations, kMeshletMaxWorkGroupInvocations);
+	return false;
+}
+
 /**
  * 簇路径「opaque 段原位取代」接线（★1-a1ii-β-1；对外经 wireMeshletPostRegistration 第二步
  * 进入，完整口径 → main.cppm 声明）。四步：
@@ -266,10 +333,14 @@ SwitchCoverage auditMeshletSwitch(entt::registry& registry, const AssetTable& as
  * 装配层 → system 的既有唯一通道（`ClusterRangeTable` / `SsrTuning` / `WetTuning` 同法）。
  */
 void wireMeshletSwitch(entt::registry& registry, const AssetTable& assets,
-	const RuntimeConfig& cfg) {
+	const RuntimeConfig& cfg, const DeviceContext& device) {
 	auto* logger = RLLogger::getInstance();
 	if (!cfg.meshletEnable || !cfg.meshletSwitch)
 		return;  // 门关 / 不切 = 零 ctx 零日志（门关 grep meshlet = 0 护栏）
+	// ①.5 设备发射规格核对（口径 → checkMeshletDeviceFit）。放在门关之后、其余判据之前：
+	// 规格不成立时后面每一步都毫无意义，且这条**与配置无关**——配置一样、换机器就会变。
+	if (!warnIfMeshletDeviceUnfit(device))
+		return;
 	// ② cull 档闸门。只有 cpu 档的 opaque 段是「逐 draw 盲执行」（executePassDraws 通用分支），
 	// 段内换管线条目才落到命令流上。gpu_sync 档那段改由 cullDriver.executeOpaqueSegment 按
 	// **候选表**重放（DGC 的 push 与 task 数按旧 mesh 管线烘），换管线不在那条路上 ⟹ 不切、
@@ -534,9 +605,10 @@ void wireMeshletOverlayDepthCompare(Renderer& renderer, const RuntimeConfig& cfg
  * 顺序契约内聚在此：区间表**先**建（`wireMeshletSwitch` 的对账要读逐槽 l0Count）。
  */
 void wireMeshletPostRegistration(entt::registry& registry, const UploadedAssets& uploaded,
-	const MeshletAssetStore& meshlets, const AssetTable& assetTable, const RuntimeConfig& cfg) {
+	const MeshletAssetStore& meshlets, const AssetTable& assetTable, const RuntimeConfig& cfg,
+	const DeviceContext& device) {
 	wireClusterRangeTable(registry, uploaded, meshlets, cfg.meshletEnable, cfg.meshletCull);
-	wireMeshletSwitch(registry, assetTable, cfg);
+	wireMeshletSwitch(registry, assetTable, cfg, device);
 }
 
 }  // namespace RGL

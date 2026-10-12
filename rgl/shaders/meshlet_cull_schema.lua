@@ -38,6 +38,35 @@ return {
             },
         },
     },
+    -- ── meshlet 路径规格（★1-a2-i 定案；🔴 这里是**唯一声明点**）──────────────────
+    -- 为什么要有这块：这些数原先只以字面量散在 meshlet.mesh.slang（85/128/128/44/48）与
+    -- render_list_impl.cppm（×2），两侧靠注释对齐。而 `maxMeshOutputVertices` **全仓只出现在
+    -- 注释里、引擎从不运行期查询** ⟹ 85 这个值挂在"设备给 256"这个未验证假设上，换台机器
+    -- 就是 mesh shader 越界发射（不报错，画垃圾）。
+    -- 🔴 反射**不校验** constants（`tools/generator.cppm`：「反射端无对应数据，直接由 schema
+    -- 声明生成」）⟹ 单靠本表只是把 C++ 侧收成一份。真正的机器校验在
+    -- `tools/checks/rules_text.py::meshlet_spec_checks()`：它扫 .slang 里的同名字面量并比对
+    -- 本表，另验 3×kTaskTris ≤ kMaxOutputVertices 这条**关系**（关系错了比数值错了更致命）。
+    constants = {
+        -- 设备下限（本机 RADV STRIX_HALO 实测；引擎运行期核对，见 checkMeshletDeviceFit）。
+        -- 只列**判据真的用到**的两条。`maxMeshOutputPrimitives = 256` 与
+        -- `maxMeshOutputMemorySize = 32768` 也是本机读数，但判据用的是 `kTaskTris`
+        -- （要求设备 ≥ 85，不是 ≥ 256）⟹ 它们是**设备事实**不是**规格要求**，留在本表会被
+        -- meshlet_spec_checks 判成无消费者死常量——事实记在 docs/mdi_plan.md §17.4，别混进来。
+        { name = "kMeshletMaxOutputVertices",     value = 256 },
+        { name = "kMeshletMaxWorkGroupInvocations", value = 256 },
+        -- 产物侧上限（packer 的 buildMeshlets(128v/128t) 口径；shader 侧越界即整簇判空）
+        { name = "kMaxClusterVerts",  value = 128 },
+        { name = "kMaxClusterPrims",  value = 128 },
+        -- 发射形态：去索引 ⟹ 每任务顶点数 = 3 × 三角数 ≤ kMeshletMaxOutputVertices
+        { name = "kTaskTris",         value = 85 },   -- 3×85 = 255 ≤ 256（86 要 258，越限）
+        { name = "kSlotsPerCluster",  value = 2 },    -- 每簇固定 2 槽（半区号 = groupID.x & 1）
+        -- 段步长（MeshletClusterHeader / ModelVertex 的 sizeof，本表值由反射逐字段布局独立钉住，
+        -- 此处再钉一次是为了让 checks 能拿它跟 shader 里的字面量对）
+        { name = "kClusterStride",    value = 44 },
+        { name = "kVertexStride",     value = 48 },
+    },
+
     -- name = slang 的 **push 变量名**（cullPush），不是 struct 名（material_schema.lua 同规矩）
     pushConstants = {
         {

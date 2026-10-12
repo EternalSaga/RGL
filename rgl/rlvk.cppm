@@ -144,6 +144,7 @@ using vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT;
 using vk::PhysicalDeviceFeatures2;
 using vk::PhysicalDeviceMemoryProperties;
 using vk::PhysicalDeviceMeshShaderFeaturesEXT;
+using vk::PhysicalDeviceMeshShaderPropertiesEXT;  // ★1-a2-i 簇路径发射规格核对（main_meshlets）
 using vk::PhysicalDevicePresentId2FeaturesKHR;  // Phase 9.3 feature 结构（vkdevice 成员）
 using vk::PhysicalDevicePresentTimingFeaturesEXT;  // Phase 9.3 feature 结构（vkdevice 成员）
 using vk::PhysicalDeviceProperties;

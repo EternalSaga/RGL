@@ -69,7 +69,8 @@ from rules_layers import lib_layering_checks
 from rules_text import (agents_doc_index_checks, doc_pointer_checks,
                         judgments_pointer_checks,
                         docs_status_checks, forbidden_vulkan_checks,
-                        slang_load_bitcast_checks, modern_cpp_checks, text_checks)
+                        slang_load_bitcast_checks, meshlet_spec_checks,
+                        modern_cpp_checks, text_checks)
 from models import Thresholds, Warning
 from tool_baseline import compare as compare_baseline
 from tool_baseline import load_baseline, write_baseline
@@ -278,6 +279,7 @@ def main() -> None:
         warnings.extend(text_checks())
         warnings.extend(forbidden_vulkan_checks())
         warnings.extend(slang_load_bitcast_checks())
+        warnings.extend(meshlet_spec_checks())
         warnings.extend(modern_cpp_checks())
         warnings.extend(docs_status_checks())
         warnings.extend(agents_doc_index_checks())
