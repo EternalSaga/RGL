@@ -126,19 +126,31 @@ inline const char* vertexAttrScalarCppType(std::string_view type) {
 }
 
 // 顶点属性类型 → 生成代码中的 C++ 类型（未知/不可映射类型返回**空串**，由校验方报错）。
-// 两种形态：标量/向量名（"float"/"vec4"/"uint"…）与定长数组 "T[N]"（★1-a2-i 的
-// cullPush.planes 写 "vec4[6]"）。数组分支产出的字符串与 slang_reflect.cppm::typeToCppType
-// 的 Kind::Array 分支**逐字符相同**——validateSlangVertexLayout 比的就是这两个字符串，
-// 两边各写一份格式 = 迟早漂，改任一侧必须同步另一侧。
-export inline std::string vertexAttrCppType(std::string_view type) {
+// 三种形态：标量/向量名（"float"/"vec4"/"uint"…）、定长数组 "T[N]"（★1-a2-i 的
+// cullPush.planes 写 "vec4[6]"）、**嵌套契约 struct**（批 R §9.4：矩阵惯用法 ObjectMatrix
+// 与灯数组 GpuLight 要作为字段嵌进别的契约 struct，schema 里直接写 struct 名，
+// 数组形态写 "GpuLight[8]"）。
+// 🔴 嵌套名字的合法判据**定死**：只有出现在本次 schema 的 vertexLayouts 名单里
+// （contractStructs，调用方从 schema.vertexLayouts 构造）才算合法嵌套类型，否则仍返回
+// 空串——拼错的名字必须失败，不能"看起来像个标识符就放行"。默认空集 = 调用方没传名单时
+// 嵌套名一律不可映射（失败方向）。
+// 数组分支产出的字符串与 slang_reflect.cppm::typeToCppType 的 Kind::Array 分支**逐字符
+// 相同**——validateSlangVertexLayout 比的就是这两个字符串，两边各写一份格式 = 迟早漂，
+// 改任一侧必须同步另一侧。
+export inline std::string vertexAttrCppType(std::string_view type,
+	const std::set<std::string>& contractStructs = {}) {
 	if (const char* scalar = vertexAttrScalarCppType(type))
 		return scalar;
+	if (contractStructs.contains(std::string(type)))
+		return std::string(type);
 	std::string_view elem;
 	uint32_t count = 0;
 	if (!splitArrayAttrType(type, elem, count))
 		return {};
 	if (const char* elemType = vertexAttrScalarCppType(elem))
 		return fmt::format("std::array<{}, {}>", elemType, count);
+	if (contractStructs.contains(std::string(elem)))
+		return fmt::format("std::array<{}, {}>", elem, count);
 	return {};
 }
 

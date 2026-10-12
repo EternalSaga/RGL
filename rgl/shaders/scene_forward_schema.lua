@@ -59,5 +59,22 @@ return {
                 { name = "spatial", type = "vec4", offset = 16 },
             },
         },
+        -- 批 R（§9.4 推论）：ObjectMatrix 惯用法登记为**契约类型**（scene.slang struct，
+        -- 列主序 4×float4，stride 64）。此前它只是 shader-local——契约里的矩阵禁止
+        -- float4x4 字段（Slang 对 float4x4 成员发 RowMajor，m[0] ≠ 内存列 0，§9.4 实测），
+        -- 矩阵进 UBO 契约只能靠它**作为字段嵌进**别的契约 struct（SceneHeader.skyInvVP /
+        -- TAA 两份矩阵 / SSR.viewProj / 阴影 VP 数组），前提是它是可反射的契约类型。
+        -- 副产品：R3 契约集合机械取自生成物 ⟹ 本 struct 一进，StructuredBuffer<ObjectMatrix>
+        -- 自动放行（后续 MVP 表/对象矩阵表批直接受益）。
+        {
+            name = "ObjectMatrix",
+            stride = 64,
+            attributes = {
+                { name = "c0", type = "vec4", offset = 0 },
+                { name = "c1", type = "vec4", offset = 16 },
+                { name = "c2", type = "vec4", offset = 32 },
+                { name = "c3", type = "vec4", offset = 48 },
+            },
+        },
     },
 }

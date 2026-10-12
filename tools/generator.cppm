@@ -293,8 +293,12 @@ export std::string renderTemplate(const nlohmann::json& data,
 // ─── Slang C API 反射生成（替代 JSON 中间层，见 docs/archive/slang_api_reflection_research.md）───
 // 交叉校验：API 实查布局（编译器真值）vs schema 声明（期望值）。不等 = 漂移，致命。
 
-// vertexLayout 交叉校验：size==stride + 逐属性 name/offset/cppType 一致
-export bool validateSlangVertexLayout(const SlangStruct& api, const SchemaVertexLayout& vl) {
+// vertexLayout 交叉校验：size==stride + 逐属性 name/offset/cppType 一致。
+// contractStructs = 本次 schema 的 vertexLayouts 名单（嵌套契约 struct 名的合法判据，
+// 见 schema_loader.cppm::vertexAttrCppType）——嵌套字段**不跳过**：f.cppType（反射直出的
+// struct 名）与期望（同名）走同一条逐字段比对，批 R 的嵌套支持靠这条天然覆盖。
+export bool validateSlangVertexLayout(const SlangStruct& api, const SchemaVertexLayout& vl,
+	const std::set<std::string>& contractStructs = {}) {
 	auto* logger = RLLogger::getInstance();
 	if (api.name != vl.name) {
 		logger->error("[FAIL] vertexLayout '{}': API struct name '{}'", vl.name, api.name);
@@ -311,9 +315,10 @@ export bool validateSlangVertexLayout(const SlangStruct& api, const SchemaVertex
 	}
 	for (size_t i = 0; i < vl.attributes.size(); i++) {
 		const auto& attr = vl.attributes[i];
-		const std::string expected = vertexAttrCppType(attr.type);
+		const std::string expected = vertexAttrCppType(attr.type, contractStructs);
 		if (expected.empty()) {
-			logger->error("[FAIL] vertexLayout '{}' attr '{}': unmappable schema type '{}'",
+			logger->error("[FAIL] vertexLayout '{}' attr '{}': unmappable schema type '{}' "
+				"(嵌套契约 struct 名必须出现在本 schema 的 vertexLayouts 名单里)",
 				vl.name, attr.name, attr.type);
 			return false;
 		}
@@ -350,6 +355,26 @@ export bool validateSlangPushConst(const SlangStruct& api, const SchemaPushConst
 	return true;
 }
 
+// 从字段 cppType 字符串提取**契约 struct 依赖名**（批 R 发射顺序校验用）：
+// "std::array<X, N>" 取 X（与 typeToCppType/vertexAttrCppType 的数组格式同源），裸名取
+// 自身；带 "::" 的限定名（glm::vec4 等）返回空串——契约 struct 名 = shader struct 名，
+// 恒无命名空间限定，命中限定名必非依赖。是否真是依赖由调用方对照 vertexLayouts 名单判。
+static std::string contractDepOfCppType(const std::string& cppType) {
+	constexpr std::string_view arrPrefix = "std::array<";
+	if (cppType.rfind(arrPrefix, 0) == 0) {
+		const size_t comma = cppType.find(',');
+		if (comma == std::string::npos || comma <= arrPrefix.size())
+			return {};
+		std::string elem = cppType.substr(arrPrefix.size(), comma - arrPrefix.size());
+		while (!elem.empty() && elem.back() == ' ')  // "std::array<GpuLight, 8>" → "GpuLight"
+			elem.pop_back();
+		return elem;
+	}
+	if (cppType.find("::") != std::string::npos)
+		return {};
+	return cppType;
+}
+
 // 由 API 实查 struct 生成 .cppm（复用 types_cppm.inja 模板）。structs 顺序 = 调用方
 // 按 schema（vertexLayouts + pushConstants）查询的顺序；slots/constants 仍取 schema。
 // 与 JSON 路径的差异：逐字段 offset 用 API 真值（offsetof static_assert 全开，更严）。
@@ -359,6 +384,29 @@ export std::optional<std::string> generateCppmFromSlang(const std::vector<SlangS
 	const std::string& moduleName) {
 	auto* logger = RLLogger::getInstance();
 	logger->debug("Generating .cppm '{}' from {} API-queried structs", moduleName, structs.size());
+
+	// 🔴 批 R（§9.4 推论）：**被依赖的契约 struct 必须先发射**——生成物是单文件、字段按
+	// 名引用同文件类型，C++ 里"用在声明前"= 编译错误，而错误指向生成物而非 schema，
+	// 改 schema 的人无从定位。此处提前拦截并点名：发射顺序 = schema vertexLayouts 书写
+	// 顺序（reflection_tool 按该顺序查询入列），所以这条实际约束的是 schema 的书写顺序。
+	// 合法判据与 vertexAttrCppType 同源：契约名 = 本 schema 的 vertexLayouts 名单。
+	std::set<std::string> contractNames;
+	for (const auto& vl : schema.vertexLayouts)
+		if (!vl.name.empty())
+			contractNames.insert(vl.name);
+	std::set<std::string> emitted;
+	for (const auto& s : structs) {
+		for (const auto& f : s.fields) {
+			const std::string dep = contractDepOfCppType(f.cppType);
+			if (dep.empty() || !contractNames.contains(dep) || emitted.contains(dep))
+				continue;
+			logger->error("[FAIL] struct '{}' 字段 '{}' 引用契约 struct '{}'，但此刻它还没被发射——"
+				"把 '{}' 排在引用它的 '{}' 之前（发射顺序 = schema vertexLayouts 书写顺序）",
+				s.name, f.name, dep, dep, s.name);
+			return std::nullopt;
+		}
+		emitted.insert(s.name);
+	}
 
 	nlohmann::json data;
 	data["module_name"] = moduleName;

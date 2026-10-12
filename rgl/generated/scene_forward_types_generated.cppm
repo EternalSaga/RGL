@@ -50,6 +50,17 @@ namespace RGL {
     static_assert(sizeof(WetParamsBlock) == 32, "Size of C++ struct WetParamsBlock does not match shader reflection!");
     static_assert(offsetof(WetParamsBlock, spatial) == 16, "Field WetParamsBlock.spatial offset does not match shader reflection (scalar layout drift!)");
 
+    export struct ObjectMatrix {
+        glm::vec4 c0;
+        glm::vec4 c1;
+        glm::vec4 c2;
+        glm::vec4 c3;
+    };
+    static_assert(sizeof(ObjectMatrix) == 64, "Size of C++ struct ObjectMatrix does not match shader reflection!");
+    static_assert(offsetof(ObjectMatrix, c1) == 16, "Field ObjectMatrix.c1 offset does not match shader reflection (scalar layout drift!)");
+    static_assert(offsetof(ObjectMatrix, c2) == 32, "Field ObjectMatrix.c2 offset does not match shader reflection (scalar layout drift!)");
+    static_assert(offsetof(ObjectMatrix, c3) == 48, "Field ObjectMatrix.c3 offset does not match shader reflection (scalar layout drift!)");
+
 
 
 

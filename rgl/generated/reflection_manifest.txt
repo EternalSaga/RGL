@@ -12,7 +12,7 @@ ce1042a6aa982d83e447b84b0f7314d5d0c39a4b  rgl/shaders/model.slang
 0e2328dd17dc9788bb70f2c7ae2c46630bf66197  rgl/shaders/lights_schema.lua
 69ebae222b5acfa4efbef3230e7f24fbff769ecd  tools/templates/types_cppm.inja
 58da254f62f83dcf3fa06df08f77e560a03c3e7f  rgl/shaders/scene.slang
-343a1f908d9c4f9cd3f064aac619683e1757d4a8  rgl/shaders/scene_forward_schema.lua
+2e5ca615c3c7b43673fa1ca2781671ec9f93e7be  rgl/shaders/scene_forward_schema.lua
 69ebae222b5acfa4efbef3230e7f24fbff769ecd  tools/templates/types_cppm.inja
 db854a9ecd279d5f942795ad49d9379e91f67226  rgl/shaders/meshlet_cull.slang
 565b96ab5cb80b86ac779a54e475a0f4f6d6998c  rgl/shaders/meshlet_cull_schema.lua

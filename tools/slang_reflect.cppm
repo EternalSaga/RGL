@@ -228,6 +228,18 @@ private:
 				return "";
 			return fmt::format("std::array<{}, {}>", elem, n);
 		}
+		// 批 R（迁移计划 §9.4 推论）：**嵌套契约 struct 字段** → C++ 类型名 = struct 名直出
+		// （ObjectMatrix / GpuLight 这类惯用法的矩阵与灯都靠它嵌进 UBO 契约）。生成物与
+		// 被依赖 struct 同文件发射，"依赖先出"由 generator.cppm::generateCppmFromSlang 校验。
+		// 名字直取自 TypeReflection::getName()——**跨模块的 struct 也走这条路**（字段类型
+		// 是已解析的 TypeReflection，不经过 findTypeByName 的名字查找；跨文件可用性实测 →
+		// docs/constantbuffer_迁移计划.md §9.8 批 R 行）。拿不到名字（匿名 struct / 空名）
+		// = 空串走既有 unmappable 失败路径——🔴 不兜底成别的类型：兜底 = 生成物按错布局
+		// 发字段而 [FAIL] 永远不响（本函数 default: return "" 存在的全部理由）。
+		case slang::TypeReflection::Kind::Struct: {
+			const char* name = t->getName();
+			return name ? std::string(name) : std::string();
+		}
 		default:
 			return "";
 		}

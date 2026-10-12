@@ -109,6 +109,12 @@ int main(int argc, char* argv[]) {
 			// 按 schema 顺序查询 + 交叉校验（vertexLayouts 先，pushConstants 后）
 			std::vector<RGL::SlangStruct> structs;
 			bool ok = true;
+			// 批 R：嵌套契约 struct 名的合法判据 = 本 schema 的 vertexLayouts 名单
+			// （vertexAttrCppType / validateSlangVertexLayout 与 generateCppmFromSlang 同源）
+			std::set<std::string> contractStructs;
+			for (const auto& vl : schema.vertexLayouts)
+				if (!vl.name.empty())
+					contractStructs.insert(vl.name);
 			for (const auto& vl : schema.vertexLayouts) {
 				if (vl.name.empty()) continue;
 				auto api = ctx.queryStruct(vl.name);
@@ -117,7 +123,7 @@ int main(int argc, char* argv[]) {
 					ok = false;
 					continue;
 				}
-				if (!RGL::validateSlangVertexLayout(*api, vl)) ok = false;
+				if (!RGL::validateSlangVertexLayout(*api, vl, contractStructs)) ok = false;
 				else {
 					logger->info("[PASS] vertexLayout '{}' matches API (size={} fields={})",
 						vl.name, api->size, api->fields.size());
