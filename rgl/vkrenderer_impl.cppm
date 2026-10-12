@@ -215,13 +215,19 @@ void Renderer::createSceneStaging(RGL::Resources& vkResources) {
 				throw std::runtime_error(fmt::format(
 					"Renderer: scene staging alloc failed: {}", result.error().describe()));
 			staging = std::move(*result);
+			// 批 T0（§9.9 替代护栏）：表尾毒化哨兵元素**只在这里写一次**。之后 writeSceneStaging
+			// 每帧只写各区有效段、永不碰哨兵字节，而每帧是 kSceneDataBytes 全量 vkCmdCopyBuffer
+			// ⟹ 毒值随每次拷贝进 device buffer（GPU-AV 在本架构不可用，越界读只能靠这个变"必炸"）。
+			writeSceneSentinels(
+				std::span<std::byte> { static_cast<std::byte*>(staging.getMappedData()),
+					kSceneDataBytes });
 		}
 	}
 // （recreateSwapchainAndDepth 已随手术 4 迁 frame_session_impl.cppm）
  	/** drawFrame 定义（整体流程见接口声明 + 类头；逐步骤注记见体内 ①~⑮）：
 	 * 双 fence wait/reset → acquire（100ms 超时跳帧）→ ③.5 scene staging 写
 	 *（头 128B + 矩阵表 + 灯数组尾区）→ ⑥ heap barrier（3 dst flag）+ ⑥.5 scene 拷贝
-	 *（kSceneDataBytes=263168B）→ ⑦ heap/sampler heap 绑定 → ⑤ 逐 pass（barrier 物化 /
+	 *（kSceneDataBytes=263424B）→ ⑦ heap/sampler heap 绑定 → ⑤ 逐 pass（barrier 物化 /
 	 * beginRendering / applyDynamicState / 段内逐 draw / blit / drawLight）→ ⑪.5 帧内
 	 * 捕获回读 → ⑫ presentTransition → ⑬ submit（waitStage = 图派生）→ 捕获搬移 →
 	 * ⑭ present（present fence）→ ⑮ 帧 slot 推进。 */
@@ -276,14 +282,14 @@ void Renderer::createSceneStaging(RGL::Resources& vkResources) {
 	// Phase 15 批 15.1 收尾：SSR 参数子区（vec4，x = SceneBounds.radius = ssr_trace.frag 的尺度
 	// 锚点）。无条件写（16B，同矩阵区纪律：门关路径也保证值正确，省第二条分支）
 	std::memcpy(stage + kSceneDataSsrParamsOffset, &list.sceneData.ssrParams, sizeof(glm::vec4));
-	// Phase 15 批 15.1 参数面：SSR 阈值门控系数（@723792，紧随 ssrParams；同样无条件写，理由同上）
+	// Phase 15 批 15.1 参数面：SSR 阈值门控系数（@724560，紧随 ssrParams；同样无条件写，理由同上）
 	std::memcpy(stage + kSceneDataSsrGateOffset, &list.sceneData.ssrGate, sizeof(glm::vec4));
-	// Phase 15 批 15.2 子步 A：湿面参数区（身份调制系数 @723968 + 空间变化 @723984，2×vec4）。
+	// Phase 15 批 15.2 子步 A：湿面参数区（身份调制系数 @724736 + 空间变化 @724752，2×vec4）。
 	// 无条件写（同 ssrParams/ssrGate 尾区纪律：门关路径也保证值正确，省第二条分支；
 	// 本步零消费者，写它不改任何像素）
 	std::memcpy(stage + kSceneDataWetParamsOffset, &list.sceneData.wetParams, sizeof(glm::vec4));
 	std::memcpy(stage + kSceneDataWetSpatialOffset, &list.sceneData.wetSpatial, sizeof(glm::vec4));
-	// 簇化轴 ★1-a1i：per-object 簇区间表（尾区 @724224，stride 16 × 4096）。表由装配层启动期
+	// 簇化轴 ★1-a1i：per-object 簇区间表（尾区 @724992，stride 16 × 4096）。表由装配层启动期
 	// 扫产物 groups 得到、经 registry ctx 走到这里（生产者与索引口径 → SceneFrameData::clusterRanges）。
 	// 写入本体在 scene_data::writeClusterRangeRegion（**无设备 ⟹ 可单测**：门关整区全 0 /
 	// 有效段之外清零两条都在 tests/test_meshlet_ranges 里逐字节验）。

@@ -414,7 +414,7 @@ void fillFsrCameraInput(FrameDrawList& out, const ViewProjection& viewProj) {
 }
 
 /**
- * 批 12.6 TAA 的 scene data 载荷（尾区 @723456 / @723520 / @723584，生产端在此、
+ * 批 12.6 TAA 的 scene data 载荷（尾区 @724224 / @724288 / @724352，生产端在此、
  * 消费端 = taa.frag.slang；字节布局与「两侧口径」见 scene_data.cppm kSceneDataTaa* 注释）。
  *
  * 一句话版：`prevViewProj` = 上一帧**抖动后** proj·view（产出**抖动网格**坐标，
@@ -486,7 +486,7 @@ void fillTaaData(FrameDrawList& out, const ViewProjection& viewProj, const Scene
 	out.sceneData.taaClipControl = {env.taaClipMode, env.taaClipSoft, 1.0f, 0.0f};
 }
 
-/** Phase 15 批 15.1：填 SSR 正向矩阵（scene data 尾区 @723712）。与调用点上一帧
+/** Phase 15 批 15.1：填 SSR 正向矩阵（scene data 尾区 @724480）。与调用点上一帧
  *  skyInvViewProj **同一表达式**，唯一区别是不取逆——为什么不让 shader 自己求逆、
  *  抖动口径推导全在 scene_data.cppm kSceneDataSsrOffset 注释（重复的推导必然漂移成
  *  两个版本，此处不再重复）。可测接缝声明 → render_list.cppm。 */
@@ -494,8 +494,8 @@ void fillSsrViewProj(FrameDrawList& out, const ViewProjection& viewProj) {
 	out.sceneData.ssrViewProj = viewProj.proj * viewProj.view;
 }
 
-/** Phase 15 批 15.1 参数面：填 SSR 的两个参数子区（scene data @723776 系数
- *  vec4 + @723792 门控 vec4）。
+/** Phase 15 批 15.1 参数面：填 SSR 的两个参数子区（scene data @724544 系数
+ *  vec4 + @724560 门控 vec4）。
  *  · ssrParams = (SceneBounds.radius, maxDistanceRadii, thicknessPx, biasPx)——x 是尺度锚点
  *    （boundsSystem 每帧聚合），yzw 是 configs/runtime.lua `ssr` 块的三枚系数。ssr_trace.frag
  *    的尺度无关参数由它们导出，锚点选择与系数反推 → scene_data.cppm 该区注释。
@@ -511,8 +511,8 @@ void fillSsrParams(FrameDrawList& out, const SceneBounds& bounds, const SsrTunin
 	out.sceneData.ssrGate = {tuning.roughFull, tuning.roughCutoff, tuning.blurScale, 0.0f};
 }
 
-/** Phase 15 批 15.2 子步 A：填湿面尾区的两个参数子区（scene data @723968 身份调制系数
- *  vec4 + @723984 空间变化 vec4）。
+/** Phase 15 批 15.2 子步 A：填湿面尾区的两个参数子区（scene data @724736 身份调制系数
+ *  vec4 + @724752 空间变化 vec4）。
  *  · wetParams  = (strength, dark, roughLo, roughHi)——身份调制系数；湿面**身份**不占参数
  *    （= 1 − smoothstep(ssrGate.x, ssrGate.y, roughness)，与 SSR 门控同区间同源，理由 →
  *    scene_data.cppm 湿面区注释）。

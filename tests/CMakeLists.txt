@@ -73,6 +73,7 @@ set(RGL_TEST_SOURCES
     test_meshlet_asset.cppm      # ★0-b1 meshlet 产物读取侧：合成缓冲正向 + 21 条反向（错误串两两不同 = 可归因）
     test_meshlet_cull.cppm       # ★0.5-a CPU 参考簇剔除器：六面逐条归因 + 保守判据 + 半径缩放上界 + 三角合计
     test_meshlet_ranges.cppm     # ★1-a1i 逐 prim 簇区间扫描：四条产物不变量各配反向用例（错误串两两不同）+ 尾区写入逐字节
+    test_scene_sentinel.cppm     # 迁移批 T0 表尾毒化哨兵护栏：毒值三型有毒 / 位置=容量×stride / 容量语义不变 / 写侧不覆盖
     test_meshlet_lod.cppm        # §18 批 A 逐 prim 选级扫描：五条不变量各配反向用例 + 手算 costTable + base-shift 序锚 + Lcg 契约全量钉
     test_meshlet_hand.cppm       # ★0.5-c UV 手性 CPU 参考 + 簇→三角寻址：闭式五形态锚点 + 跨簇偏移混淆四变异 + 8bit 断言 + Lcg 公式对拍
     test_shadow_forward.cppm     # shadow.slang 选级 forward 提取式数学恒等（invVP 列叉积，5a-8c 回归，12.3d-C）

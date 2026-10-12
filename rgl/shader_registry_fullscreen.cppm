@@ -144,7 +144,7 @@ namespace RGL {
 		b.descriptorSize = descriptorSize;
 		b.slotVertex = 0;   // binding 0/1 占位（mesh = light.mesh 全屏大三角，不声明顶点）
 		b.slotIndex = 1;
-		b.slotSceneData = sceneData.ensure();  // binding 3：@60 AO 强度 + @723584 c_t
+		b.slotSceneData = sceneData.ensure();  // binding 3：@60 AO 强度 + @724352 c_t
 		b.slotSceneWet = sceneData.wetSlot();  // binding 32（迁移批 1 湿面 UBO 载体；批 M 过滤裁未声明者）
 		b.slotSceneIrradiance = sceneData.irradianceSlot();  // binding 27（迁移批 2 辐照度 UBO 载体；批 M 过滤裁未声明者）
 		b.slotSceneLights = sceneData.lightSlot();  // binding 24（迁移批 3 灯数组 UBO 载体；批 M 过滤裁未声明者）
@@ -178,7 +178,7 @@ uint32_t ShaderRegistry::addTaaEntry(uint32_t colorSlot, uint32_t historySlot,
 		b.descriptorSize = descriptorSize;
 		b.slotVertex = 0;   // binding 0/1 占位（taa mesh = light.mesh.spv 全屏大三角）
 		b.slotIndex = 1;
-		b.slotSceneData = sceneData.ensure();  // binding 3：@723456 起 TAA 尾区 + @64 重建
+		b.slotSceneData = sceneData.ensure();  // binding 3：@724224 起 TAA 尾区 + @64 重建
 		b.slotSceneWet = sceneData.wetSlot();  // binding 32（迁移批 1 湿面 UBO 载体；批 M 过滤裁未声明者）
 		b.slotSceneIrradiance = sceneData.irradianceSlot();  // binding 27（迁移批 2 辐照度 UBO 载体；批 M 过滤裁未声明者）
 		b.slotSceneLights = sceneData.lightSlot();  // binding 24（迁移批 3 灯数组 UBO 载体；批 M 过滤裁未声明者）
@@ -225,7 +225,7 @@ uint32_t ShaderRegistry::addTaaEntry(uint32_t colorSlot, uint32_t historySlot,
 		b.descriptorSize = descriptorSize;
 		b.slotVertex = 0;   // binding 0/1 占位（mesh = light.mesh 全屏大三角，不声明顶点）
 		b.slotIndex = 1;
-		b.slotSceneData = sceneData.ensure();  // binding 3：@723712 ssrViewProj（ray march 投回屏幕）
+		b.slotSceneData = sceneData.ensure();  // binding 3：@724480 ssrViewProj（ray march 投回屏幕）
 		b.slotSceneWet = sceneData.wetSlot();  // binding 32（迁移批 1 湿面 UBO 载体；批 M 过滤裁未声明者）
 		b.slotSceneIrradiance = sceneData.irradianceSlot();  // binding 27（迁移批 2 辐照度 UBO 载体；批 M 过滤裁未声明者）
 		b.slotSceneLights = sceneData.lightSlot();  // binding 24（迁移批 3 灯数组 UBO 载体；批 M 过滤裁未声明者）

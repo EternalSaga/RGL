@@ -200,10 +200,10 @@ export Light fillLightData(entt::registry& rg, const glm::vec3& eyePos, FrameDra
 export void fillSsrViewProj(FrameDrawList& out, const ViewProjection& viewProj);
 
 /**
- * 每帧填 SSR 尾区的**两个参数子区**（scene data @723776 系数 vec4 + @723792 门控 vec4；
+ * 每帧填 SSR 尾区的**两个参数子区**（scene data @724544 系数 vec4 + @724560 门控 vec4；
  * 口径 → scene_data.cppm 各区注释）。定义在 render_list_impl（partition impl unit，实现侧
  * 不写 export）。导出为**可测接缝**（fillSsrViewProj 同款先例）：回归断言 =
- * tests/test_ssr_params（两源结构：写入侧 C++ 常量、读回侧字面量 723776/723792）；
+ * tests/test_ssr_params（两源结构：写入侧 C++ 常量、读回侧字面量 724544/724560）；
  * 上游配置往返（lua 文本 → loadRuntimeConfig）另测于 tests/test_scene_config。
  *
  * **一次填两槽**是刻意的：两槽永远同源同帧（同一个 SsrTuning 派生），拆成两个接缝 =
@@ -219,10 +219,10 @@ export void fillSsrParams(FrameDrawList& out, const SceneBounds& bounds,
 	const SsrTuning& tuning);
 
 /**
- * 每帧填湿面尾区的**两个参数子区**（scene data @723968 身份调制系数 vec4 + @723984
+ * 每帧填湿面尾区的**两个参数子区**（scene data @724736 身份调制系数 vec4 + @724752
  * 空间变化 vec4；口径 → scene_data.cppm 各区注释）。定义在 render_list_impl（partition
  * impl unit，实现侧不写 export）。导出为**可测接缝**（fillSsrParams 同款先例）：回归断言 =
- * tests/test_wet_params（两源结构：写入侧 C++ 常量、读回侧字面量 723968/723984）；
+ * tests/test_wet_params（两源结构：写入侧 C++ 常量、读回侧字面量 724736/724752）；
  * 上游配置往返（lua 文本 → loadRuntimeConfig）另测于 tests/test_scene_config。
  *
  * **一次填两槽**是刻意的：两槽永远同源同帧（同一个 WetTuning 派生），拆成两个接缝 =

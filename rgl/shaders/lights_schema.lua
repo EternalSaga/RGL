@@ -18,7 +18,7 @@ return {
     constants = {
         { name = "kMaxLights", value = 8 },
         { name = "kGpuLightStride", value = 64 },
-        { name = "kSceneDataLightArrayBase", value = 262400 },
+        { name = "kSceneDataLightArrayBase", value = 262656 },
     },
 
     -- GpuLight struct（stride 64，4×vec4 packed；生成 C++ struct + static_assert(sizeof==64)）

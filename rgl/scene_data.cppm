@@ -52,6 +52,24 @@ export constexpr uint32_t alignUp(uint32_t value, uint32_t align) {
 	return (value + align - 1u) & ~(align - 1u);
 }
 
+/** 迁移批 T0（§9.9 替代护栏）：**表尾毒化哨兵元素**的填充模式——每个 4 字节字一个词。
+ *
+ *  为什么需要它：各区**紧邻**（表大小都是 256 的整数倍，下一区正好接在表尾），越界读读到的是
+ *  邻居区的**合法数据** = 静默错值，逐位锚点看不见。GPU-AV 在本架构不可用（§9.9 三条实测障碍，
+ *  别再试），所以用**结构性的**办法把"静默"变成"必炸"：每张表尾追加一个元素、写成毒化模式，
+ *  越界读 ⟹ 毒值进着色器 ⟹ 锚点必炸。
+ *
+ *  为什么是 `0xFFC00000`：三种元素类型读出来**都有毒**——float 读出来是 NaN（指数全 1、尾数
+ *  非 0 ⟹ 非 inf）、uint 读出来是 4290772992（远超任何表容量/下标）、int 读出来是负数
+ *  （`-4194304`，任何无符号语义的下标/计数都越界）。写 0 或写邻居的合法值 = 护栏恒不咬人。
+ *
+ *  🔴 生命周期：只在 **staging 分配时一次性**写（`Renderer::createSceneStaging`），
+ *  `writeSceneStaging` **永不碰**哨兵字节——每帧是 `kSceneDataBytes` 全量 `vkCmdCopyBuffer`
+ *  （vkrenderer_passrec.cppm ⑥.5 与 GpuCull::recordCullPass 两处都是全量），所以"写一次就在
+ *  一直在"成立，代价 = 零每帧开销。任何"把整区 memset 到区尾"的写法都会覆盖哨兵 = 拆护栏，
+ *  `writeClusterRangeRegion` 的清零段因此**止于哨兵之前**（tests/test_scene_sentinel 钉死）。 */
+export inline constexpr uint32_t kSceneSentinelWord = 0xFFC00000u;
+
 /** Phase 5.5：env 参数偏移（envIntensity float @48 + envMipRange float @52；env.slang
  * readEnvParams 的 Load(48)/Load(52) 字面量必须与本值一致——scene.slang 先例）。派生自
  * sizeof(SceneLight)（C API 反射生成），shader 布局漂移即编译失败。 */
@@ -85,22 +103,30 @@ export inline constexpr uint32_t kSceneDataObjectMatrixOffset =
 	alignUp(kSceneDataHeaderBytes, kSceneRegionAlign);
 static_assert(kSceneDataObjectMatrixOffset == 256,
 	"scene.slang readObjectMatrix / cull kSceneMatrixBase literal 256 out of sync");
+/** 对象矩阵表**区字节数** = (可用容量 + 1 个哨兵元素) × stride（批 T0，§9.9）。
+ *  🔴 可用容量仍是 `kSceneMatrixCapacity`（4096）——本常量多出来的那一个元素**不是**槽位，
+ *  是毒化哨兵；把容量常量本身改成 4097 = 把"能装多少实例"这个语义弄脏（且越界写会静默
+ *  踩进哨兵而不是被容量闸门拦下）。 */
+export inline constexpr uint32_t kSceneDataObjectMatrixBytes =
+	(kSceneMatrixCapacity + 1u) * kSceneMatrixStride;
+/** 对象矩阵表哨兵元素的字节偏移（= 表基址 + 可用容量 × stride，即"下标 4096 那一格"）。 */
+export inline constexpr uint32_t kSceneDataObjectMatrixSentinelOffset =
+	kSceneDataObjectMatrixOffset + kSceneMatrixCapacity * kSceneMatrixStride;
 
 /** Phase 7 D3：多灯数组区（追加于对象矩阵表之后——@0-128 头逐字节不动，forward/env/sky
- * shader 零改动 diff0）。基址 = 矩阵表尾按 256 取整（= 256 + 4096×64 = 262400）。
+ * shader 零改动 diff0）。基址 = 矩阵表尾按 256 取整（= 256 + 4097×64 = 262464 → 262656；批 T0 起表尾多一个哨兵元素）。
  * 消费端（迁移批 3 起）= lights.slang `ConstantBuffer<LightArrayBlock> lightArray`
  * （binding 24，本区**子范围 UBO 描述符**，SceneDataService::ensure 写一次）——shader 侧
  * 零字节字面量。static_assert 的三方同步降为两方 + 测试第三算（lights.slang 字面量已清零
  * = 被钉的第三方不存在了）：本派生式 ↔ 生成常量 kSceneDataLightArrayBase（lights_schema.lua
  * 字面量）↔ tests/test_reflection_layout 独立重推导，矩阵容量/头尺寸单边改动仍被抓住。 */
 export inline constexpr uint32_t kSceneDataLightArrayOffset =
-	alignUp(kSceneDataObjectMatrixOffset + kSceneMatrixCapacity * kSceneMatrixStride,
-		kSceneRegionAlign);
+	alignUp(kSceneDataObjectMatrixOffset + kSceneDataObjectMatrixBytes, kSceneRegionAlign);
 static_assert(kSceneDataLightArrayOffset == kSceneDataLightArrayBase,
 	"scene data light-array offset drifted from lights_schema.lua kSceneDataLightArrayBase");
 /** 灯数组区字节数 = 16B lightCount 头 + kMaxLights × kGpuLightStride（= 16 + 8×64 = 528；
  * 区布局 = lights.slang LightArrayBlock 经反射，与旧字节布局逐字节同）。
- * 🔴 本值是下游 MVP 表基址的派生输入（scene.slang readObjectMvp 字面量 263168 手工同源，
+ * 🔴 本值是下游 MVP 表基址的派生输入（scene.slang readObjectMvp 字面量 263424 手工同源，
  * 该区暂无独立 assert 链——尺寸漂移由下方 sizeof assert + schema 交叉校验先抓）。 */
 export inline constexpr uint32_t kSceneDataLightArrayBytes = 16u + kMaxLights * kGpuLightStride;
 static_assert(sizeof(LightArrayBlock) == kSceneDataLightArrayBytes,
@@ -111,37 +137,48 @@ static_assert(sizeof(LightArrayBlock) == kSceneDataLightArrayBytes,
  * scene.slang readObjectMvp 按 objectIndex 读——DrawArgs 去 mvp 字段后 push 36B（当时值，
  * 后 bindless 化终态 4B，见 kSceneDataDrawTableOffset），
  * 绕 NV DGC PUSH token >83B 多序列挂死（见 git:调试历史）。
- * 基址 = 灯数组尾按 256 取整（262400 + 528 = 262928 → 263168，scene.slang 字面量同值）。 */
+ * 基址 = 灯数组尾按 256 取整（262656 + 528 = 263184 → 263424，scene.slang 字面量同值）。 */
 export inline constexpr uint32_t kSceneDataMvpTableOffset =
 	alignUp(kSceneDataLightArrayOffset + kSceneDataLightArrayBytes, kSceneRegionAlign);
+/** MVP 表**区字节数** = (可用容量 + 1 个哨兵元素) × stride（批 T0，§9.9，对象矩阵表同形）。 */
+export inline constexpr uint32_t kSceneDataMvpTableBytes =
+	(kSceneMatrixCapacity + 1u) * kSceneMatrixStride;
+/** MVP 表哨兵元素字节偏移（= 表基址 + 可用容量 × stride）。 */
+export inline constexpr uint32_t kSceneDataMvpTableSentinelOffset =
+	kSceneDataMvpTableOffset + kSceneMatrixCapacity * kSceneMatrixStride;
 
 /** Phase 7b+（NV DGC 规避，续 MVP 表）：per-object 材质/几何表区（DrawArgs 去 mvp 后
  * 仍剩 baseColor/roughnessMetallic/totalTriangles/vertexOffset 是 per-object 数据，一并
  * 进 heap，DrawArgs 最终只留 objectIndex（4B push）——彻底绕开 NV DGC push 挂死）。
- * 基址 = MVP 表尾按 256 取整（263168 + 4096×64 = 525312，scene.slang 字面量同值，下方
+ * 基址 = MVP 表尾按 256 取整（263424 + 4097×64 = 525632 → 525824，scene.slang 字面量同值，下方
  * static_assert 钉死）。stride 48（`ObjectDraw`，scene_forward_types_generated 生成；
  * Phase 8 ③ 加 emissive 后 32→48）。 */
 export inline constexpr uint32_t kSceneDataDrawTableOffset =
-	alignUp(kSceneDataMvpTableOffset + kSceneMatrixCapacity * kSceneMatrixStride,
-		kSceneRegionAlign);
+	alignUp(kSceneDataMvpTableOffset + kSceneDataMvpTableBytes, kSceneRegionAlign);
 export inline constexpr uint32_t kSceneDrawStride = 48;
+/** 材质表**区字节数** = (可用容量 + 1 个哨兵元素) × stride（批 T0，§9.9）。 */
+export inline constexpr uint32_t kSceneDataDrawTableBytes =
+	(kSceneMatrixCapacity + 1u) * kSceneDrawStride;
+/** 材质表哨兵元素字节偏移（= 表基址 + 可用容量 × stride）。 */
+export inline constexpr uint32_t kSceneDataDrawTableSentinelOffset =
+	kSceneDataDrawTableOffset + kSceneMatrixCapacity * kSceneDrawStride;
 // Phase 10 批 10.2a：钉死 scene.slang readObjectDraw 的字面量基址/stride——容量常量若变
 // 而 shader 字面量未同步 = 此处编译报错（shader 侧无编译期反射通道，kTrianglesPerGroup 同纪律）
-static_assert(kSceneDataDrawTableOffset == 525312, "scene.slang readObjectDraw literal 525312 out of sync");
+static_assert(kSceneDataDrawTableOffset == 525824,
+	"scene.slang readObjectDraw literal 525824 out of sync");
 static_assert(kSceneDrawStride == sizeof(ObjectDraw),
 	"scene.slang ObjectDraw (reflection-generated) stride out of sync with table stride");
 
 /** Phase 8 批次 ④a：漫反射辐照度 SH9 区（追加于材质表之后——既有各区基址逐字节不动 diff0）。
  * 9 × vec4 = 144B（.xyz=系数、.w 留白；CPU env 加载期从等距柱状源余弦加权投影 radiance，
  * shader scene.slang irradianceSH(N) 做辐照度卷积）。
- * 基址 = 材质表尾按 256 取整（525312 + 4096×48 = 721920；Phase 8 ③ stride 32→48 后本区随之后移）。
+ * 基址 = 材质表尾按 256 取整（525824 + 4097×48 = 722480 → 722688；Phase 8 ③ stride 32→48 后本区随之后移）。
  * 消费端（迁移批 2 起）= scene.slang `ConstantBuffer<IrradianceBlock> sceneIrradiance`
  * （binding 27，本区**子范围 UBO 描述符**，SceneDataService::ensure 写一次）——shader 侧零
  * 字节字面量，本区不再需要「C++ 常量 == shader 字面量」的 static_assert（批 1 湿面同判据：
  * 钉的对象已不存在）；区大小与契约 struct 的同步由下方 sizeof assert 钉死。 */
 export inline constexpr uint32_t kSceneDataIrradianceOffset =
-	alignUp(kSceneDataDrawTableOffset + kSceneMatrixCapacity * kSceneDrawStride,
-		kSceneRegionAlign);
+	alignUp(kSceneDataDrawTableOffset + kSceneDataDrawTableBytes, kSceneRegionAlign);
 export inline constexpr uint32_t kSceneDataIrradianceBytes = 144;  // 9×vec4=144（16B 对齐）
 static_assert(sizeof(IrradianceBlock) == kSceneDataIrradianceBytes,
 	"scene.slang IrradianceBlock (reflection-generated) size out of sync with region bytes");
@@ -234,8 +271,8 @@ export inline constexpr uint32_t kSceneDataShadowAuxBytes = 64u;  // 分界远�
 export inline constexpr uint32_t kSceneDataIzbOffset =
 	alignUp(kSceneDataShadowAtlasOffset + 16u, kSceneRegionAlign);
 export inline constexpr uint32_t kSceneDataIzbBytes = 16u;
-static_assert(kSceneDataIzbOffset == 722688,
-	"light.frag izb 字面量 722688 与 scene_data.cppm 失去同步");
+static_assert(kSceneDataIzbOffset == 723456,
+	"light.frag izb 字面量 723456 与 scene_data.cppm 失去同步");
 
 /** PCSS 参数区（批 11.5，IZB 区之后 16B）：(x = 半影全宽系数 2·tan(θ/2)（θ = 太阳视直径，
  *  半影全宽 = Δz·x）、y = blocker 搜索半径（图集纹素）、z = 半影半径上限（图集纹素）、w 保留)。
@@ -244,8 +281,8 @@ static_assert(kSceneDataIzbOffset == 722688,
 export inline constexpr uint32_t kSceneDataPcssOffset =
 	alignUp(kSceneDataIzbOffset + kSceneDataIzbBytes, kSceneRegionAlign);
 export inline constexpr uint32_t kSceneDataPcssBytes = 16u;
-static_assert(kSceneDataPcssOffset == 722944,
-	"scene.slang readShadowPcss literal 722944 与 scene_data.cppm 失去同步");
+static_assert(kSceneDataPcssOffset == 723712,
+	"scene.slang readShadowPcss literal 723712 与 scene_data.cppm 失去同步");
 
 /** 批 11.6 EVSSM 块（2 × vec4，32B）：
  *  @+0  参数 vec4（半坡 tan(θ/2), 搜索半径[图集纹素], 半影上限[图集纹素], 矩链最大 mip）
@@ -258,16 +295,16 @@ export inline constexpr uint32_t kSceneDataEvssmOffset =
 export inline constexpr uint32_t kSceneDataEvssmBytes = 32u;
 /** 常量 vec4 偏移（x = c；scene.slang readShadowEvssmConst 字面量同步点）。 */
 export inline constexpr uint32_t kSceneDataEvssmConstOffset = kSceneDataEvssmOffset + 16u;
-static_assert(kSceneDataEvssmOffset == 723200,
-	"scene.slang readShadowEvssm literal 723200 与 scene_data.cppm 失去同步");
-static_assert(kSceneDataEvssmConstOffset == 723216,
-	"scene.slang readShadowEvssmConst literal 723216 与 scene_data.cppm 失去同步");
-static_assert(kSceneDataShadowSplitsOffset == 722432 && kSceneDataShadowParamsOffset == 722464
-	&& kSceneDataShadowAtlasOffset == 722480,
+static_assert(kSceneDataEvssmOffset == 723968,
+	"scene.slang readShadowEvssm literal 723968 与 scene_data.cppm 失去同步");
+static_assert(kSceneDataEvssmConstOffset == 723984,
+	"scene.slang readShadowEvssmConst literal 723984 与 scene_data.cppm 失去同步");
+static_assert(kSceneDataShadowSplitsOffset == 723200 && kSceneDataShadowParamsOffset == 723232
+	&& kSceneDataShadowAtlasOffset == 723248,
 	"scene.slang shadow sampling literals drifted from scene_data.cppm offsets");
 // 与 scene.slang 的字面量基址钉死（两侧手写同步点，改一侧必编译失败）
-static_assert(kSceneDataShadowMatrixOffset == 722176,
-	"scene.slang readShadowViewProj literal 722176 out of sync with kSceneDataShadowMatrixOffset");
+static_assert(kSceneDataShadowMatrixOffset == 722944,
+	"scene.slang readShadowViewProj literal 722944 out of sync with kSceneDataShadowMatrixOffset");
 
 /** 批 12.6 TAA 区（EVSSM 常量 vec4 之后 **176B**（原 160B，批 13.8 追加一段 16B），
  *  五段子区；第四段 16B 自批 13.5 改义）：
@@ -319,7 +356,7 @@ export inline constexpr uint32_t kSceneDataTaaParamsOffset = kSceneDataTaaOffset
 /**
  * 批 13.5 历史基空间修正：**上一帧内容位移** c_{t−1}（vec4 = x/y = 像素，**z = 批 13.6 AO
  * 施加点标志**，w 保留）。
- * 偏移 @723600 = 复用批 13.2「基空间输出」删除后空出的槽 ⟹ **零布局变更**（static_assert 不变）。
+ * 偏移 @724368 = 复用批 13.2「基空间输出」删除后空出的槽 ⟹ **零布局变更**（static_assert 不变）。
  *
  * 为什么需要它（一句话）：批 13.2 只把**显示**搬回基空间（在 tonemap 加 `+c_t` 采样偏移），
  * 而**累积**那一半没动——历史图仍住抖动空间 ⟹ 静止机位下每帧按 `δ_t = c_t − c_{t−1}`
@@ -467,9 +504,9 @@ export inline constexpr uint32_t kSceneDataTaaInputKernelOffset = kSceneDataTaaO
  */
 export inline constexpr uint32_t kSceneDataTaaClipControlOffset = kSceneDataTaaOffset + 176u;
 export inline constexpr uint32_t kSceneDataTaaBytes = 192u;
-static_assert(kSceneDataTaaOffset == 723456 && kSceneDataTaaMotionOffset == 723520
-	&& kSceneDataTaaParamsOffset == 723584 && kSceneDataTaaPrevContentShiftOffset == 723600
-	&& kSceneDataTaaInputKernelOffset == 723616 && kSceneDataTaaClipControlOffset == 723632,
+static_assert(kSceneDataTaaOffset == 724224 && kSceneDataTaaMotionOffset == 724288
+	&& kSceneDataTaaParamsOffset == 724352 && kSceneDataTaaPrevContentShiftOffset == 724368
+	&& kSceneDataTaaInputKernelOffset == 724384 && kSceneDataTaaClipControlOffset == 724400,
 	"scene.slang taa literals drifted from scene_data.cppm offsets");
 
 /** Phase 15 批 15.1 SSR 区（mat4 + 2×vec4, 96B）= 本帧**抖动后** proj·view + 尺度锚点与
@@ -524,9 +561,9 @@ export inline constexpr uint32_t kSceneDataSsrBytes = 96u;
 // 钉的是「C++ 常量 == 已知的三个基址」：改 C++ 侧必编译失败。⚠ **改 scene.slang 那一侧不会**
 // ——slang 里没有能引用 C++ 常量的机制，shader 字面量单侧漂只能靠端到端判据（just ssr-check）
 // 抓，机器对账规则尚未落地（缺口账 → docs/phase15_plan.md §3.2）。
-static_assert(kSceneDataSsrOffset == 723712 && kSceneDataSsrParamsOffset == 723776
-		&& kSceneDataSsrGateOffset == 723792,
-	"scene.slang readSsrViewProj/readSsrParams/readSsrGate literals 723712/723776/723792 out of sync with scene_data.cppm offsets");
+static_assert(kSceneDataSsrOffset == 724480 && kSceneDataSsrParamsOffset == 724544
+		&& kSceneDataSsrGateOffset == 724560,
+	"scene.slang readSsrViewProj/readSsrParams/readSsrGate literals 724480/724544/724560 out of sync with scene_data.cppm offsets");
 
 /** Phase 15 批 15.2 子步 A 湿面参数区（2×vec4, 32B）= 身份调制系数 + 空间变化参数
  *  （尾区追加，既有偏移逐字节不动 diff0，先例 = 批 11.2 阴影 VP 区 / 批 12.6 TAA 区 /
@@ -590,7 +627,7 @@ export inline constexpr uint32_t kSceneDataWetBytes = 32u;
  *
  *  容量与对象矩阵表同 = `kSceneMatrixCapacity`（表按 objectIndex 索引，容量必须一致，
  *  否则越界写的是**下一个字节**——本区是尾区，越界即写出 buffer 外）。
- *  ⚠ 每帧 staging 写入面因此从 724000B 涨到 789760B（+65536B ≈ +9%）：scene data 是单
+ *  ⚠ 每帧 staging 写入面因此从 724768B 涨到 790544B（+65552B ≈ +9%）：scene data 是单
  *  buffer 整区 vkCmdCopyBuffer，追加尾区的成本按容量线性走，这条账记在 ★1-a 的性能面。 */
 export inline constexpr uint32_t kSceneDataClusterRangeOffset =
 	alignUp(kSceneDataWetOffset + kSceneDataWetBytes, kSceneRegionAlign);
@@ -598,25 +635,29 @@ export inline constexpr uint32_t kSceneDataClusterRangeOffset =
 export inline constexpr uint32_t kSceneDataClusterRangeStride = sizeof(ObjectClusterRange);
 /** 容量与其余三张 per-object 表同（按 objectIndex 索引 ⟹ 容量必须同）。 */
 export inline constexpr uint32_t kSceneDataClusterRangeCapacity = kSceneMatrixCapacity;
+/** 簇区间表**区字节数** = (可用容量 + 1 个哨兵元素) × stride（批 T0，§9.9）。 */
 export inline constexpr uint32_t kSceneDataClusterRangeBytes =
-	kSceneDataClusterRangeCapacity * kSceneDataClusterRangeStride;
+	(kSceneDataClusterRangeCapacity + 1u) * kSceneDataClusterRangeStride;
+/** 簇区间表哨兵元素字节偏移（= 表基址 + 可用容量 × stride）。 */
+export inline constexpr uint32_t kSceneDataClusterRangeSentinelOffset =
+	kSceneDataClusterRangeOffset + kSceneDataClusterRangeCapacity * kSceneDataClusterRangeStride;
 // 钉的是「C++ 常量 == 已知的基址/布局」：改 scene_data.cppm 一侧必编译失败（本区暂无
 // shader 字面量消费者，★1-a1 接线时再补 scene.slang 侧字面量的同步注释）。
-static_assert(kSceneDataClusterRangeOffset == 724224,
-	"cluster-range region drifted from the documented tail offset 724224");
+static_assert(kSceneDataClusterRangeOffset == 724992,
+	"cluster-range region drifted from the documented tail offset 724992");
 static_assert(kSceneDataClusterRangeStride == 16, "ObjectClusterRange stride drifted from 16B");
 static_assert(kSceneDataClusterRangeCapacity == kSceneMatrixCapacity,
 	"cluster range capacity must equal the object matrix capacity (both index by objectIndex)");
 
-/** scene data buffer 总字节数 = **尾区（簇区间表）末端**（= 724224 + 65536 = 789760B，
+/** scene data buffer 总字节数 = **尾区（簇区间表）末端**（= 724992 + 65552 = 790544B，
  * 编译期派生）。批 L 起各区基址按 256 取整、区间存在对齐间隙 ⟹ 旧的「各区字节数求和」
  * 公式失真（求和会漏掉间隙），改为直接取尾区末端——它同时就是「最后一个区无重叠无空洞
  * 且贴 buffer 尾」的构造性定义。SceneDataService::ensure 的分配尺寸与 drawFrame 每帧
  * staging 拷贝区尺寸均为本值（vkrenderer.cppm ⑥.5）。 */
 export inline constexpr vk::DeviceSize kSceneDataBytes =
 	kSceneDataClusterRangeOffset + kSceneDataClusterRangeBytes;
-static_assert(kSceneDataBytes == 789760,
-	"kSceneDataBytes drifted from the documented 789760 (tail region end)");
+static_assert(kSceneDataBytes == 790544,
+	"kSceneDataBytes drifted from the documented 790544 (tail region end)");
 
 /** 批 L 布局红线（§9.7）：**所有区基址 256B 对齐**——子范围描述符（§9.2）的唯一前置。
  *  新增区时把基址加进本组（漏加 = 本 assert 红，而不是运行期 VUID 炸）。 */
@@ -635,6 +676,73 @@ static_assert(kSceneDataObjectMatrixOffset % kSceneRegionAlign == 0
 	&& kSceneDataWetOffset % kSceneRegionAlign == 0
 	&& kSceneDataClusterRangeOffset % kSceneRegionAlign == 0,
 	"every scene data region base must be kSceneRegionAlign (256B) aligned (VUID-12350/12351)");
+
+/** 批 T0 哨兵红线（§9.9）：四张 per-object 表的**区大小 = 可用容量 + 1 个元素**，且哨兵恒在
+ *  「下标 capacity 那一格」。这四条是护栏本身的位置定义——任何一侧漂了（区大小忘了 +1、
+ *  哨偏移写成 capacity-1、容量常量被偷偷改成 4097）都在编译期炸，而不是让护栏静默失效。
+ *  另两条同样致命的性质（毒值三型有毒、写侧不覆盖哨兵）断言写不出字节语义，落测：
+ *  tests/test_scene_sentinel。 */
+static_assert(kSceneDataObjectMatrixBytes == (kSceneMatrixCapacity + 1u) * kSceneMatrixStride
+		&& kSceneDataMvpTableBytes == (kSceneMatrixCapacity + 1u) * kSceneMatrixStride
+		&& kSceneDataDrawTableBytes == (kSceneMatrixCapacity + 1u) * kSceneDrawStride
+		&& kSceneDataClusterRangeBytes
+			== (kSceneDataClusterRangeCapacity + 1u) * kSceneDataClusterRangeStride,
+	"per-object table region must be capacity + 1 elements wide (the extra one is the poison sentinel)");
+static_assert(kSceneMatrixCapacity == 4096u && kSceneDataClusterRangeCapacity == 4096u,
+	"usable capacity must stay 4096 — the sentinel widens the REGION, never the capacity");
+/** 哨兵相对各自表基址的偏移恒 = 可用容量 × stride（= "下标 capacity 那一格"），且它正是该区
+ *  最后一个元素（哨兵尾 = 区尾 = 下一区尾对齐前的最后一个字节）。 */
+static_assert(kSceneDataObjectMatrixSentinelOffset - kSceneDataObjectMatrixOffset
+			== kSceneMatrixCapacity * kSceneMatrixStride
+		&& kSceneDataMvpTableSentinelOffset - kSceneDataMvpTableOffset
+			== kSceneMatrixCapacity * kSceneMatrixStride
+		&& kSceneDataDrawTableSentinelOffset - kSceneDataDrawTableOffset
+			== kSceneMatrixCapacity * kSceneDrawStride
+		&& kSceneDataClusterRangeSentinelOffset - kSceneDataClusterRangeOffset
+			== kSceneDataClusterRangeCapacity * kSceneDataClusterRangeStride,
+	"sentinel must sit exactly at index == capacity of its own table (that is the first OOB slot)");
+static_assert(kSceneDataObjectMatrixSentinelOffset + kSceneMatrixStride
+			== kSceneDataObjectMatrixOffset + kSceneDataObjectMatrixBytes
+		&& kSceneDataMvpTableSentinelOffset + kSceneMatrixStride
+			== kSceneDataMvpTableOffset + kSceneDataMvpTableBytes
+		&& kSceneDataDrawTableSentinelOffset + kSceneDrawStride
+			== kSceneDataDrawTableOffset + kSceneDataDrawTableBytes
+		&& kSceneDataClusterRangeSentinelOffset + kSceneDataClusterRangeStride
+			== kSceneDataClusterRangeOffset + kSceneDataClusterRangeBytes,
+	"sentinel must be the LAST element of its region (region = capacity+1 elements, no slack)");
+/** 哨兵落点的**绝对地址**（手抄字面量 = 第二源）：区大小或任何前区尺寸单边漂移都会在这里炸，
+ *  而上面的派生式对那种漂移是"跟着一起漂"的（派生式自己抓不到"整体错位"）。 */
+static_assert(kSceneDataObjectMatrixSentinelOffset == 262400
+		&& kSceneDataMvpTableSentinelOffset == 525568
+		&& kSceneDataDrawTableSentinelOffset == 722432
+		&& kSceneDataClusterRangeSentinelOffset == 790528,
+	"sentinel absolute address drifted (region width or some upstream region changed size)");
+
+/**
+ * 把四张 per-object 表尾的**毒化哨兵元素**写进 staging（批 T0，§9.9 替代护栏本体）。
+ *
+ * 调用点**只有一个**：`Renderer::createSceneStaging` 分配每个 staging ring slot 之后各调一次。
+ * 之后 `writeSceneStaging` 每帧只写各区的有效段（矩阵/MVP/材质三表 memcpy 长度 = 实际条目数，
+ * 簇区间表的清零段止于哨兵之前），**永不碰**这 4×(48|64|16) 字节；每帧的 `kSceneDataBytes`
+ * 全量 `vkCmdCopyBuffer` 把毒值原样带进 device buffer ⟹ "分配时写一次"就一直在。
+ *
+ * 判据（有牙）：把任一 read 的下标临时 +capacity（正好读进哨兵）→ 两档锚点 sha 必变；
+ * 还原回锚。这条排掉"哨兵其实没被毒化 / 位置不对 / 每帧被覆盖"三种护栏失效。
+ *
+ * @param staging 整块 scene data staging（大小须 ≥ `kSceneDataBytes`）
+ */
+export inline void writeSceneSentinels(std::span<std::byte> staging) {
+	const auto fill = [&](uint32_t offset, uint32_t bytes) {
+		for (uint32_t i = 0; i < bytes; i += sizeof(uint32_t)) {
+			const uint32_t word = kSceneSentinelWord;
+			std::memcpy(staging.data() + offset + i, &word, sizeof(word));
+		}
+	};
+	fill(kSceneDataObjectMatrixSentinelOffset, kSceneMatrixStride);
+	fill(kSceneDataMvpTableSentinelOffset, kSceneMatrixStride);
+	fill(kSceneDataDrawTableSentinelOffset, kSceneDrawStride);
+	fill(kSceneDataClusterRangeSentinelOffset, kSceneDataClusterRangeStride);
+}
 
 /**
  * 把 per-object 簇区间表写进 staging 的 ★1-a1i 尾区（**可测接缝**：本函数不需要 VkDevice，
@@ -657,7 +765,12 @@ export [[nodiscard]] inline bool writeClusterRangeRegion(
 	auto* tail = staging.data() + kSceneDataClusterRangeOffset;
 	if (usedBytes > 0)
 		std::memcpy(tail, ranges.data(), usedBytes);
-	std::memset(tail + usedBytes, 0, kSceneDataClusterRangeBytes - usedBytes);
+	// 🔴 清零段**止于哨兵之前**（批 T0）：写成 `kSceneDataClusterRangeBytes - usedBytes` 会把
+	// 表尾那个毒化哨兵元素一起抹成 0 = 每帧拆一次护栏（§9.9 的"写一次就一直在"前提正是
+	// "没人每帧覆盖它"）。tests/test_scene_sentinel 的「写侧不覆盖哨兵」用例钉死这条。
+	std::memset(tail + usedBytes, 0,
+		static_cast<size_t>(kSceneDataClusterRangeCapacity) * sizeof(ObjectClusterRange)
+			- usedBytes);
 	return true;
 }
 

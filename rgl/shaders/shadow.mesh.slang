@@ -16,7 +16,7 @@
 //
 // 契约常量与 model.mesh.slang 同源（同一份拼接顶点流、同一份 ObjectDraw 表）：
 //   kTrianglesPerGroup = 10 / kVertexStride = 48（model_schema.lua 单一真相源）
-//   ObjectDraw 表基址 525312（scene.slang readObjectDraw）
+//   ObjectDraw 表基址 525824（scene.slang readObjectDraw）
 //
 // push constant：**不 import material.slang**，自带 ShadowDrawArgs（objectIndex + cascadeIndex，
 // 8B）。material.slang 的 drawArgs 是 4B 单字段且被全部既有管线共享，阴影要多带一个

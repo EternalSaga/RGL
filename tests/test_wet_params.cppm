@@ -3,7 +3,7 @@ module;
  * test_wet_params —— Phase 15 批 15.2 子步 A：湿面区两个 vec4 子区的字节布局契约
  * + fillWetParams 填值契约（纯 CPU、无设备）。
  *
- * 湿面区（@723968 身份调制系数 vec4 + @723984 空间变化 vec4）是批 15.2A 的纯新增尾区；
+ * 湿面区（@724736 身份调制系数 vec4 + @724752 空间变化 vec4）是批 15.2A 的纯新增尾区；
  * 消费者 = deferred_geometry 湿面 G-buffer 调制（15.2B 已接线，默认开）。消费端载体自
  * **scene data 迁移批 1** 起 = scene.slang `ConstantBuffer<WetParamsBlock> sceneWet`
  * （binding 32 子范围 UBO 描述符，shader 侧零字节字面量）。红线 A（出厂画面逐位不变）

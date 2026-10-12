@@ -281,12 +281,15 @@ const std::vector<BadCase>& badCases() {
 }
 
 // ─── 尾区写入（两源结构：读回侧偏移 = 手抄 scene.slang 将用的字面量）─────────────────
-constexpr uint32_t kSlangClusterRangeLiteral = 724224;  ///< 手抄 = scene_data 的尾区基址
+constexpr uint32_t kSlangClusterRangeLiteral = 724992;  ///< 手抄 = scene_data 的尾区基址
 constexpr uint32_t kSlangClusterRangeStride = 16;       ///< 手抄 = ObjectClusterRange 的 stride
+constexpr uint32_t kSlangClusterRangeSentinelLiteral = 790528;  ///< 手抄 = 尾区表尾哨兵基址（批 T0）
 static_assert(kSceneDataClusterRangeOffset == kSlangClusterRangeLiteral,
 	"尾区基址与本文件手抄值分家（scene.slang 侧字面量跟着漂）");
 static_assert(kSceneDataClusterRangeStride == kSlangClusterRangeStride,
 	"ObjectClusterRange stride 与本文件手抄值分家");
+static_assert(kSceneDataClusterRangeSentinelOffset == kSlangClusterRangeSentinelLiteral,
+	"尾区哨兵基址与本文件手抄值分家（哨兵漂了 = 越界读读到的是邻居区而不是毒值）");
 static_assert(kSceneDataClusterRangeOffset + kSceneDataClusterRangeBytes == kSceneDataBytes,
 	"尾区必须是最后一个区（否则「越界写」的形态是踩下一个区，本测试的哨兵判据判不住）");
 
@@ -438,22 +441,30 @@ TEST_CASE("尾区写入：逐字段落位 + 有效段之外清零 + 不踩前一
 		CHECK(readU32(staging, slot + 8) == ranges[i].l0Count);
 		CHECK(readU32(staging, slot + 12) == ranges[i].cullBase);
 	}
-	// ② 有效段之后清零（★1-a2 的「无簇产物实例 = 空区间」依赖这条）
+	// ② 有效段之后清零（★1-a2 的「无簇产物实例 = 空区间」依赖这条）。🔴 批 T0：清零段**止于
+	// 表尾哨兵之前**，所以这里钉的是 [usedEnd, 哨兵)，而不是整区——写成整区就等于把
+	// 「writeClusterRangeRegion 会不会每帧抹掉哨兵」这条护栏失效读成正常行为。
 	const uint64_t usedEnd = kSlangClusterRangeLiteral + ranges.size() * kSlangClusterRangeStride;
-	const uint64_t regionEnd = kSlangClusterRangeLiteral + kSceneDataClusterRangeBytes;
-	CHECK(regionAllZero(staging, usedEnd, regionEnd));
-	// ③ 尾区之前（含前一个尾区湿面 @723968）一个字节都没被踩（抓「基址用错区」）
+	CHECK(regionAllZero(staging, usedEnd, kSlangClusterRangeSentinelLiteral));
+	// ②b 哨兵元素一个字节都不动（本函数若把 memset 长度写回 kSceneDataClusterRangeBytes，
+	// 这里就不是 0x5a 而是 0x00 = 每帧拆护栏）。
+	CHECK(firstByteNot(staging, kSlangClusterRangeSentinelLiteral,
+		kSlangClusterRangeSentinelLiteral + kSlangClusterRangeStride, std::byte { 0x5a }) == -1);
+	// ③ 尾区之前（含前一个尾区湿面 @724736）一个字节都没被踩（抓「基址用错区」）
 	CHECK(firstByteNot(staging, 0, kSlangClusterRangeLiteral, std::byte { 0x5a }) == -1);
 	// ④ 没写出 buffer 尾（哨兵区）
 	CHECK(firstByteNot(staging, kSceneDataBytes, staging.size(), std::byte { 0x5a }) == -1);
 }
 
-TEST_CASE("尾区写入：门关（表空）⟹ 整区全 0，其余字节逐字节不动（红线 A 的构造性保证）") {
+TEST_CASE("尾区写入：门关（表空）⟹ 可用区全 0，其余字节逐字节不动（红线 A 的构造性保证）") {
 	auto staging = makeStaging();
 	REQUIRE(writeClusterRangeRegion(staging, std::span<const ObjectClusterRange> {}));
 	CHECK(regionAllZero(staging, kSceneDataClusterRangeOffset,
-		kSceneDataClusterRangeOffset + kSceneDataClusterRangeBytes));
+		kSceneDataClusterRangeSentinelOffset));
 	CHECK(firstByteNot(staging, 0, kSceneDataClusterRangeOffset, std::byte { 0x5a }) == -1);
+	// 表尾哨兵同样不被"门关清零"顺带抹掉（否则门关档反而比门开档更早拆护栏）
+	CHECK(firstByteNot(staging, kSceneDataClusterRangeSentinelOffset, kSceneDataBytes,
+		std::byte { 0x5a }) == -1);
 }
 
 TEST_CASE("尾区写入：容量边界 = 恰好满表必须成功（`>` 写成 `>=` 的漏检形态）") {

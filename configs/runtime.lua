@@ -88,7 +88,7 @@ return {
 
         -- ⚠ 本块并存**两类量**（Phase 15 批 15.1 参数面起）：上面 `enabled` 是**创建期量**（决定渲染
         -- 图里有没有 ssr pass、要不要领 ssr_applied RT，改它要重启）。下面六项是**每帧量**——
-        -- 每帧经 FrameDrawList 写进 scene data 尾区的 ssrParams(@723776) / ssrGate(@723792)，
+        -- 每帧经 FrameDrawList 写进 scene data 尾区的 ssrParams(@724544) / ssrGate(@724560)，
         -- shader 读内存：不重编译着色器、不重建管线、不改图形态。
         -- 但 runtime.lua **没有热重载**（RuntimeConfig 只在启动期 load() 一次，热重载只套
         -- scene.lua / camera.lua / log_level.json）⟹ 改这六项同样要重启进程才读得到，
@@ -108,7 +108,7 @@ return {
         rough_cutoff = 0.40,        -- kRoughCutoff：粗糙度高于此 = 不反射（中间 smoothstep 过渡）
         blur_scale = 8.0,           -- 批 15.3B：粗糙度感知模糊半径 = roughness × 本值（**全分辨率 px**，
                                     -- ssr_apply 螺旋 taps；0.05→0.4px ≈ 无模糊、0.35→2.8px）。
-                                    -- 0 = 合法消融档（纯双线性上采样）。写进 @723792.z
+                                    -- 0 = 合法消融档（纯双线性上采样）。写进 @724560.z
     },
 
     -- ── 批 15.2 湿面参数（6 枚全部是**每帧量**；子步 B 起消费者已接线）──

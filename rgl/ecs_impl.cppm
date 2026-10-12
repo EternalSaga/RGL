@@ -419,7 +419,7 @@ void taaSystem(entt::registry& rg) {
 	taa.historyValid = taaHistoryUsable(env.taaEnabled, taa.frameIndex, taa.prevExtent, now,
 		taa.prevCamPos, camPos, taa.prevForward, forward, bounds.radius);
 
-	// ②b 本帧权重（scene data @723584.x = taaParams.x）**不经 TaaState**：批 13.14b 删掉
+	// ②b 本帧权重（scene data @724352.x = taaParams.x）**不经 TaaState**：批 13.14b 删掉
 	// 静态机位权重提升（static boost）后 taaSystem 不再产出 feedback，载荷直接取
 	// env.taaFeedback（写载荷处 = `render_list_impl.cppm::fillTaaData`，它拿得到 env）。
 	// ⚠ 方向红线：它是**本帧权重**（taa.frag: lerp(clipped, cur, x)）⟹ **调小 = 更信历史**。
