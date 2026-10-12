@@ -57,6 +57,7 @@
 //   （clodDefaultConfig(128) 全默认）的 FNV-1a（字段序逐字段哈希，见 packer.cpp）。
 //   ★0-b 的缓存键 = 两者拼接 + toolVersion。
 //
+#include <cstddef>  // offsetof（ModelVertexLayout 的字段偏移由它算）
 #include <cstdint>
 
 namespace RGL::meshpack {
@@ -67,6 +68,27 @@ inline constexpr uint32_t kToolVersion = 1;    ///< 打包器版本（算法改�
 inline constexpr uint32_t kSectionAlign = 16;
 inline constexpr uint32_t kVertexStride = 48;  ///< ModelVertex 契约（model_schema.lua）
 inline constexpr uint32_t kHierarchyNodeWidth = 8;  ///< §7.2 层级 8,705 节点的口径
+
+// 顶点内字段**字节**偏移（由下面的类型化视图 `ModelVertexLayout` 用 offsetof 算出，编译器背书）。
+// 写侧/读侧一律用这组常量，🔴 **不要写裸的 float 下标或裸字节数**：packer 曾把 tangent.w 写成
+// `float[10]` = 字节 40 = **tangent.z**，于是每个顶点的真实烘焙切线 z 被覆写成 1.0、而 w 留在 0——
+// 簇路径法线通道因此在全屏 15.4% 的像素上偏 5~6 个量化步长，由 ★0.5-b2 共面双臂 equal 档抓到
+// （→ docs/mdi_plan.md §15）。那种差一在 `float[10]` 的写法下**看不出来**，在 offsetof 下写不出来。
+struct ModelVertexLayout {
+    float pos[3];  ///< 字节 0
+    float nrm[3];  ///< 字节 12
+    float uv[2];   ///< 字节 24
+    float tan[4];  ///< 字节 32（xyz = 烘焙切线，w = 规范值 +1）
+};
+static_assert(sizeof(ModelVertexLayout) == kVertexStride, "ModelVertex 契约 48B，改字段要抬 kFormatVersion");
+
+inline constexpr uint32_t kVertPos = static_cast<uint32_t>(offsetof(ModelVertexLayout, pos));
+inline constexpr uint32_t kVertNormal = static_cast<uint32_t>(offsetof(ModelVertexLayout, nrm));
+inline constexpr uint32_t kVertUv = static_cast<uint32_t>(offsetof(ModelVertexLayout, uv));
+inline constexpr uint32_t kVertTangent = static_cast<uint32_t>(offsetof(ModelVertexLayout, tan));
+/// tangent.w 的字节偏移 = tangent 之后第 3 个 float（写侧写法：`[kVertTangentW / sizeof(float)]`）
+inline constexpr uint32_t kVertTangentW = kVertTangent + 3u * static_cast<uint32_t>(sizeof(float));
+static_assert(kVertTangent + 16u == kVertexStride, "tangent 是 ModelVertex 的最后一个字段");
 
 // 文件头：固定大小、字段即偏移表。新增字段 = 抬 kFormatVersion。
 struct FileHeader {

@@ -122,11 +122,11 @@ void readPrimVertices(const tinygltf::Model& model, const tinygltf::Primitive& p
     out.vertexCount = uint32_t(model.accessors[size_t(posAcc)].count);
     out.vertices.resize(size_t(out.vertexCount) * kVertexStride, 0);
 
-    readFloatsInto(model, "POSITION", posAcc, TINYGLTF_TYPE_VEC3, out.vertices, 0, 12);
+    readFloatsInto(model, "POSITION", posAcc, TINYGLTF_TYPE_VEC3, out.vertices, kVertPos, 12);
     if (int a = findAttribute(prim, "NORMAL"); a >= 0)
-        readFloatsInto(model, "NORMAL", a, TINYGLTF_TYPE_VEC3, out.vertices, 12, 12);
+        readFloatsInto(model, "NORMAL", a, TINYGLTF_TYPE_VEC3, out.vertices, kVertNormal, 12);
     if (int a = findAttribute(prim, "TEXCOORD_0"); a >= 0) {
-        readFloatsInto(model, "TEXCOORD_0", a, TINYGLTF_TYPE_VEC2, out.vertices, 24, 8);
+        readFloatsInto(model, "TEXCOORD_0", a, TINYGLTF_TYPE_VEC2, out.vertices, kVertUv, 8);
         out.hasUv = true;
     }
     if (int a = findAttribute(prim, "TANGENT"); a >= 0) {
@@ -134,10 +134,18 @@ void readPrimVertices(const tinygltf::Model& model, const tinygltf::Primitive& p
         // glb 里 TANGENT 可能是 vec3（bistro = vec3，bistro_pack.py 烘的 Lengyel 平滑
         // 切线）或 vec4；vec4 只取 xyz。
         const int type = model.accessors[size_t(a)].type == TINYGLTF_TYPE_VEC4 ? TINYGLTF_TYPE_VEC4 : TINYGLTF_TYPE_VEC3;
-        readFloatsInto(model, "TANGENT", a, type, out.vertices, 32, 12);
+        readFloatsInto(model, "TANGENT", a, type, out.vertices, kVertTangent, 12);
     }
+    // tangent.w 统一写规范值 +1（理由见 format.h 坐标系一节；手性由 shader 端逐三角重算，本值
+    // 只是给"朴素读侧"一个可用值——写 0 会把 bitangent 整个清零，是个静默陷阱）。
+    // 🔴 这里原本写的是 `[10]`：kVertexStride 是**字节**，转 float* 后下标 10 = 字节 40 =
+    // **tangent.z**，于是真实烘焙切线的 z 被逐顶点覆写成 1.0，而 w 留在 0。后果 = 簇路径
+    // TBN 的切线轴方向错 ⟹ 法线贴图扰动不同 ⟹ 全屏 15.4% 像素法线偏 5~6 个量化步长。
+    // 抓到它的不是任何单测，是 ★0.5-b2 的共面双臂 equal 档（→ docs/mdi_plan.md §15）。
+    // 偏移改用 format.h 的常量，static_assert 钉住"44 = tangent 之后第 12 字节"。
     for (uint32_t v = 0; v < out.vertexCount; ++v)
-        reinterpret_cast<float*>(out.vertices.data() + size_t(v) * kVertexStride)[10] = 1.0f;
+        reinterpret_cast<float*>(out.vertices.data() + size_t(v) * kVertexStride)
+            [kVertTangentW / sizeof(float)] = 1.0f;
 }
 
 // 索引段：有索引 accessor = 按组件宽度读 u32；无索引 = 顺序展开（dump.py 同法，
