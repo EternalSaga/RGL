@@ -29,6 +29,28 @@ R4  StructuredBuffer 元素 stride 对账（**R3 能窄化的前提**，同一�
     `tools/check_spirv_stride.py` 跑，见 cmake/RglChecks.cmake）：对每个契约类型断言
     SPIR-V `ArrayStride` == 反射生成物 `sizeof`。R3 管"只准用有契约的类型"，
     R4 管"有契约的类型 stride 真的对"——两条合起来才闭合。
+ R5  **裸字节偏移棘轮**（批 G，2026-10-12；判据 = docs/constantbuffer_迁移计划.md §5.2）：
+    对 `ByteAddressBuffer` / `RWByteAddressBuffer` 的字节偏移读/写调用
+    （`Load`/`Load2`/`Load3`/`Load4`/`Store`/`Store2`/`Store3`/`Store4`，含 `Load<T>()`
+    泛型形态），其**第一个实参（字节偏移所在位）里出现裸十进制字面量** = ERROR。字节偏移 =
+    类型在 CPU/GPU 边界被擦除后手工再物化布局，是本项目"双源"问题的制造者
+    （`sceneData.Load4(721952u)` 与 C++ 侧 `kSceneData*Offset` 各写一份，改另一边谁都不出声）。
+    判据是"**偏移实参里含裸数字字面量**"，不是"函数名叫 Load"——`buf.Load<T>(i * sizeof(T))`
+    与 `sceneData.Load4(base)` 是**目标形态**，不在射程内（写成后者就把合法形态全禁了）。
+    两处必要的收窄：① **接收者声明类型**必须是 ByteAddressBuffer——纹理也有
+    `tex.Load(int3(p, 0))` / `tex.Store(gid, v)`，按函数名判会把它们全禁了；② 只看**第一个**
+    实参——`Store` 的第 2 位是写入值，`Store(o, 0u)`（清零一个槽）的 `0u` 不是偏移，
+    而 `Load` 只有一个实参，同一条规则天然覆盖。
+    存量走**棘轮**（机制先例 = `tools/checks/tool_baseline.py`）：基线
+    `tools/checks/byte_offset_baseline.json` **按文件记条数**（不是全局一个数——否则
+    「A 文件迁掉 3 条、B 文件加 3 条」互相抵消，上升被掩盖），只准减不准增；
+    上升 = ERROR（处置是迁移该区，**不是**改基线），下降 = 警告并打印收账命令。
+    🔴 基线文件缺失 / JSON 坏 / 格式不符 ⟹ **ERROR 并声明"本次未做任何对账"**，绝不
+    静默当 0 条放行（`tool_baseline.load_baseline` 的"缺失→空表按未登记"宽松形态在这里
+    会被读成"零违规" = 假绿，故 R5 比它更严）。
+    已知射程外（读数在汇总行出声，别读成"0 条违规"）：① `Interlocked*` 同样吃字节偏移，
+    未纳入棘轮；② 偏移字面量若**先存进变量再传参**（`const uint o = 48u; buf.Load(o)`）
+    本规则看不见——棘轮数的是"调用点内联字面量"，不是"字节偏移总量"。
 
 ## 输出形态与退出码（先例 = tools/checks/main.py）
 
@@ -44,9 +66,11 @@ custom target 无 OUTPUT 产物 = ninja 判恒过期（与 reflection_check/sour
 图真相源在此脚本一处，imgqa 不二次解析 CMakeLists（避免双实现漂移）。
 
     用法：python3 tools/check_shader_deps.py [--strict] [--emit-manifest PATH]
+                [--update-byte-offset-baseline]
 """
 
 import argparse
+import json
 import re
 import sys
 from collections import deque
@@ -65,8 +89,9 @@ SLANG_BUILTIN_MODULES = {"glsl"}
 # 短名相对 shaders/、不带 .slang 扩展（可含 .frag/.mesh/.comp 等点段）。
 RE_RGL_SHADER = re.compile(r"\brgl_shader\s*\(([^)]*)\)")
 
-RE_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
-RE_LINE_COMMENT = re.compile(r"[ \t]*//[^\n]*")
+# 注释剥离：单遍扫描（见 strip_comments）。两条正则做不到正确——「先块后行」会让行注释里
+# 出现的 `/*` 被当成块注释起点（`// 口径见 configs/*.lua` 实测吞掉 taa.frag.slang 224 行
+# 真代码），「先行后块」则反过来让块注释里的 `//` 吃掉收尾的 `*/`。
 RE_IMPORT = re.compile(
     r"^\s*(?:public\s+)?import\s+(?:\"([^\"]+)\""
     r"|([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*))\s*;")
@@ -90,6 +115,37 @@ SCALAR_ELEMENT_TYPES = frozenset({
     "half2", "half3", "half4",
 })
 
+# ─── R5：ByteAddressBuffer 裸字节偏移棘轮（批 G，2026-10-12）─────────────────
+# 基线文件与收账命令（形态先例 = config.TOOL_BASELINE_FILE / main.py 的
+# --update-tool-baseline）。路径写死在代码里 = 唯一真相源，文档只指针不抄。
+BYTE_OFFSET_BASELINE_FILE = ROOT / "tools" / "checks" / "byte_offset_baseline.json"
+BYTE_OFFSET_UPDATE_CMD = ("python3 tools/check_shader_deps.py "
+                          "--update-byte-offset-baseline")
+BYTE_OFFSET_BASELINE_COMMENT = (
+    "R5 裸字节偏移棘轮基线（rgl/shaders/**：ByteAddressBuffer 的 Load*/Store* **第一个实参**"
+    "（字节偏移位）含裸十进制字面量的调用点数，按文件记）。只准降不准升——上升的处置是把该区"
+    "迁到类型化载体（ConstantBuffer / 反射契约 StructuredBuffer），**不是**改这里的数字。"
+    f"下调后用 `{BYTE_OFFSET_UPDATE_CMD}` 重写本文件。判据与已知射程外 → "
+    "docs/constantbuffer_迁移计划.md §5.2 与本脚本 docstring R5 节。")
+
+# ByteAddressBuffer 声明（全局 / 形参 / 局部同形；`readonly` 与 `[[vk::binding()]]`
+# 前缀不影响 `类型 名` 的相邻性）。一并吃 `a, b` 逗号声明形态。
+RE_BYTE_ADDRESS_BUFFER = re.compile(
+    r"\b(?:RW)?ByteAddressBuffer\s*\*?\s*"
+    r"([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)")
+# 「任意 `类型 名` 声明」探测——只为把**非** ByteAddressBuffer 的接收者排除掉：纹理也有
+# `tex.Load(int3(p, 0))` / `tex.Store(gid, v)`，实参里同样有裸字面量，按名字判会全误报。
+# 接收者既不在 BAB 集合、也查不到任何声明时 → 上报「无法判定」（R5 自曝盲区，不静默）。
+RE_DECLARED_TYPE = re.compile(
+    r"([A-Za-z_]\w*(?:\s*<[^<>]*>)?\s*\*?)\s+([A-Za-z_]\w*)\s*(?=[\[;=,)])")
+# 字节偏移读/写调用点（长名在前，避免 Load4 被 Load 分支吃掉后靠回溯兜）。
+RE_BAB_CALL = re.compile(
+    r"\b([A-Za-z_]\w*)\s*\.\s*"
+    r"(Load4|Load3|Load2|Load|Store4|Store3|Store2|Store)\b")
+# 裸十进制字面量：数字且左侧不是标识符字符/点（`kVertexStride2` 的 2、`float4x4` 的 4
+# 都不算；`48u` / `24` / `0x10` 都算）。
+RE_BARE_DECIMAL = re.compile(r"(?<![A-Za-z0-9_.])\d")
+
 
 def contract_types(generated_dir: Path) -> set[str]:
     """反射生成物里的契约 struct 名（R3 的放行面）。空 = 规则失效，调用处必须出声。"""
@@ -109,9 +165,41 @@ def rel(p: Path) -> str:
 
 
 def strip_comments(text: str) -> str:
-    """剥块/行注释；块注释按换行数回填，保持行号与源文件一致（报错要点行）。"""
-    text = RE_BLOCK_COMMENT.sub(lambda m: "\n" * m.group(0).count("\n"), text)
-    return RE_LINE_COMMENT.sub("", text)
+    """剥块/行注释，**逐字符等长**（注释字符换成空格、换行原样保留）——行列偏移与源
+    文件完全对齐，报错要点行、R5 还要从命中位置回切实参文本。
+
+    为什么不是两条正则（旧实现，2026-10-12 批 G 换掉）：`//` 与 `/* */` 互相嵌套出现时
+    两种先后顺序都会误吞真代码——本项目实测踩的是「先块后行」：行注释里写 `configs/*.lua`
+    含 `/*`，被当成块注释起点一路吞到下一个 `*/`，taa.frag.slang 一次少扫 224 行
+    （R5 变异实验拿 taa.frag.slang 对账时暴露）。字符串字面量里的 `//` 同样要跳过。
+    """
+    out: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        nxt = text[i + 1] if i + 1 < n else ""
+        if c == "/" and nxt == "/":
+            j = text.find("\n", i)
+            j = n if j < 0 else j
+            out.append(" " * (j - i))
+            i = j
+        elif c == "/" and nxt == "*":
+            j = text.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            out.append("".join("\n" if ch == "\n" else " "
+                               for ch in text[i:j]))
+            i = j
+        elif c in "\"'":
+            j = i + 1
+            while j < n and text[j] != c:
+                j += 2 if text[j] == "\\" else 1
+            j = min(j + 1, n)
+            out.append(text[i:j])
+            i = j
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
 
 
 def read_lines(path: Path) -> list[str]:
@@ -185,6 +273,194 @@ def chain_str(target_file: Path, f: Path, parent: dict) -> str:
     return " ← ".join(parts)
 
 
+# ─── R5：ByteAddressBuffer 裸字节偏移棘轮 ────────────────────────────────────
+
+def _skip_ws(text: str, i: int) -> int:
+    while i < len(text) and text[i].isspace():
+        i += 1
+    return i
+
+
+def call_arg_text(text: str, i: int) -> str | None:
+    """方法名末位下标 → 实参串（跳过可选 `<T>` 泛型实参）；不是调用 → None。
+
+    括号按深度配对（`Load(min(a + 4u, b))` 里的嵌套括号不会截早）；泛型实参里遇到
+    `;` / `}` 视为「这不是 `<T>`」直接放弃（防 `x.Load < y` 之类把扫描放羊）。
+    """
+    i = _skip_ws(text, i)
+    if i < len(text) and text[i] == "<":
+        depth = 0
+        while i < len(text):
+            c = text[i]
+            if c in ";}":
+                return None
+            if c == "<":
+                depth += 1
+            elif c == ">":
+                depth -= 1
+                if depth == 0:
+                    i += 1
+                    break
+            i += 1
+        else:
+            return None
+        i = _skip_ws(text, i)
+    if i >= len(text) or text[i] != "(":
+        return None
+    depth, start = 0, i
+    while i < len(text):
+        c = text[i]
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return text[start + 1:i]
+        i += 1
+    return None
+
+
+def first_top_level_arg(args: str) -> str:
+    """实参串 → **第一个**实参（字节偏移所在位）。顶层逗号才分参数，
+    `Store(min(a, 4u), 0u)` 的第一个实参是 `min(a, 4u)`。
+
+    为什么只看第一个实参：`Store` 的字节偏移在第 1 位，第 2 位是**写入值**——
+    `buf.Store(o, 0u)`（清零一个槽）里那个 `0u` 与"手写字节偏移"毫无关系，按整串
+    实参判就是误报。`Load` 只有一个实参，同一条规则天然覆盖。
+    """
+    depth = 0
+    for i, c in enumerate(args):
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif c == "," and depth == 0:
+            return args[:i]
+    return args
+
+
+def scan_byte_offsets(texts: dict[Path, str]) -> tuple[dict[Path, list[tuple[int, str]]],
+                                                       set[str]]:
+    """R5 扫描（输入 = 已剥注释的 {文件: 文本}）。
+
+    两步判据：**① 接收者是 ByteAddressBuffer**（纹理的 `tex.Load(int3(p, 0))` 实参里
+    也有裸字面量，不按类型过滤 = 大量误报）；**② 第一个实参（字节偏移所在位）含裸十进制
+    字面量**（`Store` 的第 2 个实参是写入值，`Store(o, 0u)` 的 `0u` 不是偏移，见
+    `first_top_level_arg`）。
+    返回 ({文件: [(行号, 偏移实参串)]}, 无法判定类型的接收者名集合)。
+
+    接收者类型取自**全体 .slang 的并集**而非单文件：shader 全局量经 `import` 跨文件可见
+    （`scene.slang` 声明 `sceneData`，`light.frag.slang` 里读它），按单文件判会漏掉
+    全部跨文件读取。代价 = 同名跨类型会误判成 BAB（当前无此碰撞；且误判方向是**误报**，
+    吵在明处，比静默漏检可接受）。
+    """
+    bab_names: set[str] = set()
+    declared: set[str] = set()
+    for text in texts.values():
+        for m in RE_BYTE_ADDRESS_BUFFER.finditer(text):
+            bab_names |= {n for n in re.split(r"\s*,\s*", m.group(1)) if n}
+        declared |= {m.group(2) for m in RE_DECLARED_TYPE.finditer(text)}
+
+    hits: dict[Path, list[tuple[int, str]]] = {}
+    unknown: set[str] = set()
+    for path, text in texts.items():
+        for m in RE_BAB_CALL.finditer(text):
+            name = m.group(1)
+            if name in bab_names:
+                pass
+            elif name in declared:
+                continue          # 纹理 / 其它类型的 Load/Store：不在射程内
+            else:
+                unknown.add(name)  # R5 自曝盲区：判不出类型 → 不静默跳过
+                continue
+            args = call_arg_text(text, m.end())
+            if args is None:
+                continue
+            offset = first_top_level_arg(args)
+            if not RE_BARE_DECIMAL.search(offset):
+                continue
+            hits.setdefault(path, []).append(
+                (text.count("\n", 0, m.start()) + 1, " ".join(offset.split())))
+    return hits, unknown
+
+
+def load_byte_offset_baseline(path: Path) -> tuple[dict[str, int], str | None]:
+    """读 R5 基线 → ({rel: 允许条数}, 不可用原因)。
+
+    🔴 与 `tool_baseline.load_baseline`（缺失/坏 → 空表按未登记）**故意不同**：R5 的
+    空表会被下游读成「零违规」，那是"失效不出声 = 假绿"的教科书形态。这里缺失 / 坏 JSON /
+    格式不符一律返回原因串，调用处必须 ERROR 出声并声明本次未对账。
+    """
+    if not path.is_file():
+        return {}, f"基线文件不存在: {rel(path)}"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        return {}, f"基线文件读不出来: {rel(path)}（{type(e).__name__}: {e}）"
+    if not isinstance(data, dict):
+        return {}, f"基线顶层不是 JSON 对象: {rel(path)}"
+    files = data.get("files")
+    if not isinstance(files, dict):
+        return {}, f"基线缺 `files` 对象（格式不符）: {rel(path)}"
+    bad = sorted(str(k) for k, v in files.items()
+                 if isinstance(v, bool) or not isinstance(v, int))
+    if bad:
+        return {}, f"基线 `files` 有非整数条数（格式不符）: {rel(path)} 的 {bad[:3]}"
+    return {str(k): int(v) for k, v in files.items()}, None
+
+
+def write_byte_offset_baseline(counts: dict[str, int], path: Path) -> str:
+    """按当前条数重写 R5 基线（收账）；返回写入路径。"""
+    files = {k: int(v) for k, v in sorted(counts.items())}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(
+        {"_comment": BYTE_OFFSET_BASELINE_COMMENT,
+         "total": sum(files.values()), "files": files},
+        ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return rel(path)
+
+
+def compare_byte_offsets(counts: dict[str, int], baseline: dict[str, int]
+                         ) -> tuple[list[tuple[str, str]], list[tuple[str, str]],
+                                    int, int]:
+    """逐文件棘轮比对 → (ERROR 行, WARNING 行, 当前总条数, 基线总条数)。
+
+    当前 > 基线（或不在基线里且 > 0）= ERROR；当前 < 基线 = WARNING + 收账命令。
+    总数只统计**磁盘上还在**的文件（已删除文件的基线条数原样保留，等收账时一并归零，
+    否则一次误删就把基线悄悄清零）。
+    """
+    errs: list[tuple[str, str]] = []
+    warns: list[tuple[str, str]] = []
+    cur_total = base_total = 0
+    for name in sorted(set(counts) | set(baseline)):
+        cur, base = counts.get(name, 0), baseline.get(name, 0)
+        if name not in counts:
+            if base > 0:
+                warns.append((name,
+                    f"R5 基线仍记 {base} 条但该文件已不在磁盘上（或已无任何命中）——"
+                    f"用 `{BYTE_OFFSET_UPDATE_CMD}` 收账"))
+            continue
+        cur_total += cur
+        base_total += base
+        if name not in baseline:
+            if cur > 0:
+                errs.append((name,
+                    f"R5 裸字节偏移基线未登记：当前 {cur} 条（新文件必须显式登记进 "
+                    f"{rel(BYTE_OFFSET_BASELINE_FILE)}——但**先确认**这些偏移本该存在，"
+                    f"新增裸偏移的处置是走类型化载体，不是登记额度）"))
+            continue
+        if cur > base:
+            errs.append((name,
+                f"R5 裸字节偏移基线上升 {cur} > {base}——处置是把该区迁到类型化载体"
+                f"（ConstantBuffer / 反射契约 StructuredBuffer），**不是**改基线"
+                f"（基线只准降；确实降了才用 `{BYTE_OFFSET_UPDATE_CMD}` 收账）"))
+        elif cur < base:
+            warns.append((name,
+                f"R5 裸字节偏移可下调 {cur} < {base}——用 `{BYTE_OFFSET_UPDATE_CMD}` "
+                f"收账（悄悄漂移等于没有基线）"))
+    return errs, warns, cur_total, base_total
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="Shader DEP 表检查（import 闭包 ⊆ rgl_shader DEP + StructuredBuffer "
@@ -193,12 +469,19 @@ def main() -> int:
                     help="有问题时 exit 1（默认只警告不阻断，先例 tools/checks/main.py）")
     ap.add_argument("--emit-manifest", default=None, metavar="PATH",
                     help="写出 spv→源闭包清单（供 imgqa checkShadersFresh 逐 spv 比 mtime）")
+    ap.add_argument("--update-byte-offset-baseline", action="store_true",
+                    help="用当前 R5 裸字节偏移条数重写 byte_offset_baseline.json"
+                         "（迁移掉一批偏移后收账用；基线只准降，上升的处置是迁移不是改这里）")
     args = ap.parse_args()
 
     errors: list[tuple[str, str]] = []
+    warnings: list[tuple[str, str]] = []
 
     def err(loc: str, msg: str) -> None:
         errors.append((loc, msg))
+
+    def warn(loc: str, msg: str) -> None:
+        warnings.append((loc, msg))
 
     if not CMAKE_FILE.exists():
         print(f"\033[1;31m[shader-dep-check-ERROR] {rel(CMAKE_FILE)}: 找不到 CMakeLists，"
@@ -265,11 +548,45 @@ def main() -> int:
                     f"要么走 ByteAddressBuffer + .Load()；理由与实测 → "
                     f"docs/constantbuffer_迁移计划.md §8")
 
+    # ── R5：ByteAddressBuffer 裸字节偏移棘轮（批 G，判据 §5.2）────────────────
+    # 扫描面复用 R3 的 slang_files；注释必须先剥（`// Load4(64)` 是散文不是调用，
+    # 不剥 = 大量误报，见 strip_comments：块注释按换行回填，行号仍与源文件一致）。
+    shader_texts = {p: strip_comments(p.read_text(encoding="utf-8", errors="replace"))
+                    for p in slang_files}
+    bo_hits, bo_unknown = scan_byte_offsets(shader_texts)
+    bo_counts = {rel(p): len(bo_hits.get(p, [])) for p in slang_files}
+    bo_now = sum(bo_counts.values())
+    if args.update_byte_offset_baseline:
+        print(f"[shader-dep-check] R5 基线已重写: {bo_now} 条 / "
+              f"{sum(1 for v in bo_counts.values() if v)} 个文件 → "
+              f"{write_byte_offset_baseline(bo_counts, BYTE_OFFSET_BASELINE_FILE)}")
+    bo_baseline, bo_bad = load_byte_offset_baseline(BYTE_OFFSET_BASELINE_FILE)
+    if bo_bad:
+        err(rel(BYTE_OFFSET_BASELINE_FILE),
+            f"R5 基线不可用（{bo_bad}）——本次**未做任何对账**，磁盘上现 {bo_now} 条裸字节"
+            f"偏移**一条都没被检查**；请勿把「零警告」读成「干净」。基线是已提交产物："
+            f"恢复它，而不是删掉规则")
+        bo_allowed = -1
+    else:
+        bo_errs, bo_warns, bo_cur, bo_allowed = compare_byte_offsets(
+            bo_counts, bo_baseline)
+        errors.extend(bo_errs)
+        warnings.extend(bo_warns)
+    for name in sorted(bo_unknown):
+        warn(f"{rel(SHADERS_DIR)}",
+             f"R5 判不出 `{name}` 的类型（既不是 ByteAddressBuffer，也查不到任何声明）——"
+             f"若它其实是 ByteAddressBuffer，**它的裸偏移本次漏检了**（R5 自曝盲区）")
+
     for loc, msg in errors:
         print(f"\033[1;31m[shader-dep-check-ERROR] {loc}: {msg}\033[0m")
-    print(f"[shader-dep-check] 汇总: {len(errors)} 问题（ERROR {len(errors)}） / "
+    for loc, msg in warnings:
+        print(f"\033[1;33m[shader-dep-check-WARN] {loc}: {msg}\033[0m")
+    print(f"[shader-dep-check] 汇总: {len(errors)} 问题（ERROR {len(errors)}、"
+          f"WARNING {len(warnings)}） / "
           f"{len(calls)} 个 rgl_shader target、{len(slang_files)} 个 .slang、"
-          f"StructuredBuffer 使用 {len(sb_uses)} 处（契约类型 {len(contracts)} 个放行面）")
+          f"StructuredBuffer 使用 {len(sb_uses)} 处（契约类型 {len(contracts)} 个放行面）、"
+          f"R5 裸字节偏移 "
+          f"{'**无读数 = 本次未做任何对账**' if bo_allowed < 0 else f'当前 {bo_cur} 条 / 基线 {bo_allowed} 条（{len(bo_counts)} 个 .slang 参与）'}）")
 
     if args.emit_manifest and manifest_rows:
         out = Path(args.emit_manifest)
