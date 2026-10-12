@@ -750,7 +750,7 @@ int main() {
 		// 条目数快照 = 容量语义，多几条无害）。门关 = 两步各自首行早退（零条目零日志）。
 		wireMeshletOverlay(vkResources, vkDevice, meshletGeometry, assets, configs.scene, deferredMode,
 			shaderRegistry, assetTable, samplers, rtCache, configs.runtime.meshletEnable,
-			configs.runtime.meshletDebug);
+			configs.runtime.meshletDebug, configs.runtime.meshletTint);
 		// C2/C2b：场景实体注册（模型/cube/灯）+ 实例矩阵槽容量契约
 		registerSceneEntities(registry, assets, configs.scene, vkResources, assetTable, shaderRegistry);
 		// 簇化轴 ★1-a1i：簇区间表装配（**必须在实体注册之后**——落表读 MeshRef{asset,objectSlot}）；
@@ -763,6 +763,10 @@ int main() {
 			std::move(graphResult), registry, configs.scene,
 			// 批 14.6：FSR 开关 = aa 三态推导（原 fsr_upscaler 键已删）；两枚调参留在 fsr 块
 			configs.runtime.aaWantsFsr(), configs.runtime.fsrTemporal, configs.runtime.fsrJitter);
+		// 簇化轴 ★0.5-b2：共面双臂深度比较接线（**必须在 assembleBackEnd 之后**——Renderer
+		// 已构造，与 wireMeshletOverlay 的「之前」契约互补）。门关 = 零调用零日志；门开 =
+		// INFO 打印生效档（四臂假绿的第二道机器护栏，→ main.cppm 声明注释）。
+		wireMeshletOverlayDepthCompare(backEnd.renderer, configs.runtime);
 
 		// Phase 9.2：GPU 时间戳会话（声明序在 backEnd/vkDevice 后 = 析构序其先，
 		// query pool 不越过 device 生命周期——GPU 资源所有权规则；profiler=0 /

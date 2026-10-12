@@ -177,6 +177,20 @@ export class Renderer {
 	void setPickingService(PickingService* svc) { pickingService = svc; }
 
 	/**
+	 * 簇化轴 ★0.5-b2：共面双臂的叠加段深度比较覆写（main 在 assembleBackEnd 之后装配，
+	 * 接线 = `wireMeshletOverlayDepthCompare`；同 setPickingService 的「装配后挂」惯例）。
+	 *
+	 * 🔴 nullopt（默认 = coplanar off / 门关）⟹ `executeMeshletOverlay` **一条
+	 * setDepthCompareOp 都不发** ⟹ 门关与 off 档的动态状态序列逐 bit 不变（A1 判据的
+	 * 构造性保证）。eEqual/eNotEqual = 只作用叠加那批 draw（loop 前 set、loop 后复原
+	 * pass 原值），pass 与旧路径的状态不许动。
+	 * @param compareOp nullopt = off；否则 = 叠加 draw 携带的深度比较
+	 */
+	void setMeshletOverlayDepthCompareOp(std::optional<vk::CompareOp> compareOp) {
+		meshletOverlayDepthCompareOp = compareOp;
+	}
+
+	/**
 	 * 编译渲染图只读访问（Phase 10 批 10.5：PickingService 构造需附件表定位 object_id
 	 * slot；同 getSwapchainRef 惯例）。
 	 * @return 图 const 引用
@@ -250,8 +264,15 @@ export class Renderer {
 	/**
 	 * 簇化轴 ★1-a1ii-α：影子叠加段盲执行（executePassDraws 通用分支在 opaque 段之后
 	 * 调用；口径全在调用点注释）。空向量 = 零 draw 零开销。
+	 *
+	 * ★0.5-b2 共面双臂：若 `meshletOverlayDepthCompareOp` 有值（coplanar = equal/ne），
+	 * **loop 前** set 该比较、**loop 后**复原 `passDepthCompareOp`——状态窗口恰好盖住叠加
+	 * 那几条 draw。nullopt（off/门关）= 两条 set 都不发 = 动态状态序列逐 bit 不变（A1
+	 * 构造性保证）。
+	 * @param passDepthCompareOp 本 pass 段首 applyDynamicState 用的深度比较（复原目标）
 	 */
-	void executeMeshletOverlay(vk::raii::CommandBuffer& cmd, const FrameDrawList& list);
+	void executeMeshletOverlay(vk::raii::CommandBuffer& cmd, const FrameDrawList& list,
+		vk::CompareOp passDepthCompareOp);
 	/**
 	 * picking 回读录制（Phase 10 批 10.5）：drawFrame ⑪.5 之后调用——服务未挂 =
 	 * 零调用；否则 PickingService::record（object_id RT 请求像素 1-texel → staging）。
@@ -412,6 +433,10 @@ export class Renderer {
 	// picking 服务（Phase 10 批 10.5，setPickingService 装配；nullptr = 零开销）。
 	// 非空 = 执行器 picking pass 走克隆管线重放 + 帧末 record + submit 后 collect。
 	PickingService* pickingService = nullptr;
+	// 簇化轴 ★0.5-b2：共面双臂的叠加段深度比较覆写（setMeshletOverlayDepthCompareOp 装配；
+	// nullopt = 默认 = coplanar off/门关 = executeMeshletOverlay 零 set = 动态状态序列
+	// 逐 bit 不变，A1 判据的构造性保证）。
+	std::optional<vk::CompareOp> meshletOverlayDepthCompareOp;
 	// edS3：depth clip enable 动态状态能力门 + 四段 RenderState 值集合 + 状态名解析
 	//（Phase 10 批次 0 手术 1：状态表迁出至 StateKit——pass.state 词表与状态值的唯一
 	// 持有者；Phase 10 阴影新增状态集中改该模块一处）

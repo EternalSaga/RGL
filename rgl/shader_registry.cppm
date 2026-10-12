@@ -32,6 +32,23 @@ export enum class ClonePurpose : uint8_t {
 };
 
 /**
+ * 簇路径叠加条目的 **mesh SPV 变体**（★1-a1ii-α debug 档 + ★0.5-b2 tint 档）。
+ *
+ * 门 = 选 SPV 变体不是运行时 flag（2026-10-02 slang fp 重排教训，同 IZB/PCSS/EVSSM 纪律）：
+ *  · `base`        = `meshlet.mesh.spv`（正常叠加：共面 + eLess ⟹ 零写入）
+ *  · `debugOffset` = `meshlet.mesh_MESHLET_DEBUG_OFFSET.spv`（clip.z 拉向相机 + 翻法线）
+ *  · `tint`        = `meshlet.mesh_MESHLET_TINT.spv`（着色输入写常数、clip 不动；共面双臂
+ *                    的阳性对照，`meshlet.coplanar` 的 equal/ne 两臂靠它做非空洞证明）
+ * tint/debug 同真时装配层选 tint 优先 + warn（判据 3 只用 tint、判据 4 只用 offset，
+ * 从不同时用，不建组合变体）。
+ */
+export enum class MeshletMeshVariant : uint8_t {
+	base = 0,        ///< 正常叠加档
+	debugOffset = 1, ///< `meshlet.debug`：沿视向偏移 + 翻法线
+	tint = 2,        ///< `meshlet.tint`：着色输入写常数、深度不动
+};
+
+/**
  * 管线表一条（Phase 4 批次 2：从 vkrenderer.cppm 迁入，Vulkan 层零 entt）：
  * shader 风格名 + 其 RenderPipeline（shader object + 烘焙的 descriptor heap binding mapping）
  * + 显式 push constant 元数据（L5 解决：argsSize/pushDataSet 替代旧 "set 0 被两种 struct
@@ -228,10 +245,10 @@ export class ShaderRegistry {
 	 * 簇化轴 ★1-a1ii-α：簇路径**影子叠加**管线条目（docs/mdi_plan.md §10.2）。
 	 *
 	 * 与 addModelEntry 的差别只有两处：
-	 *  · **mesh SPV 换成 meshlet.mesh**（debugOffset = true 用 MESHLET_DEBUG_OFFSET 阳性
-	 *    对照变体——门 = 选 SPV 变体不是运行时 flag，2026-10-02 slang fp 重排教训）；
+	 *  · **mesh SPV 换成 meshlet.mesh**（variant 选正常/DEBUG_OFFSET/TINT 变体——门 = 选
+	 *    SPV 变体不是运行时 flag，2026-10-02 slang fp 重排教训）；
 	 *    frag 与同规格模型条目**同一个 SPV**（输出接口同为 ModelVertexOutput）。
-	 *  · 去重键 = (规格, base/normal/orm/emissive 纹理槽, debugOffset)，**不含顶点槽**——
+	 *  · 去重键 = (规格, base/normal/orm/emissive 纹理槽, variant)，**不含顶点槽**——
 	 *    簇路径全局只有一份顶点池（§10.2「条目退化成按纹理集键控」）。
 	 * 材质绑定与模型条目逐条同值（binding 1/2/6/7/8/12/13/15/16 + 3 + 4/5），追加 4 个
 	 * 簇 buffer 的**固定 binding**（17=顶点池 / 18=簇表 / 19=Tris / 20=Remap，
@@ -245,13 +262,13 @@ export class ShaderRegistry {
 	 * @param shadowMapSlot/shadowSamplerSlot 阴影图 + NEAREST sampler（binding 12/13）
 	 * @param evssmMapSlot EVSSM 矩图槽（binding 15）
 	 * @param clusterSlots 4 个簇 buffer 描述符槽（vertexPool/clusters/tris/remap 序）
-	 * @param debugOffset true = 阳性对照 SPV 变体（meshlet.debug）
+	 * @param variant mesh SPV 变体（base/debugOffset/tint，见 MeshletMeshVariant）
 	 * @return 条目下标（同键重复调用返回既有下标）
 	 */
 	[[nodiscard]] uint32_t addMeshletEntry(const std::string& specName, uint32_t textureSlot,
 		uint32_t normalSlot, uint32_t ormSlot, uint32_t emissiveSlot, uint32_t samplerSlot,
 		uint32_t shadowMapSlot, uint32_t shadowSamplerSlot, uint32_t evssmMapSlot,
-		std::array<uint32_t, 4> clusterSlots, bool debugOffset);
+		std::array<uint32_t, 4> clusterSlots, MeshletMeshVariant variant);
 
 	/** 簇路径叠加条目写回资产记录（★1-a1ii-α，与 bindShadowToAsset 同节奏）。
 	 * @param assetId mesh 资产记录 id
@@ -620,9 +637,11 @@ export class ShaderRegistry {
 	std::map<std::string, uint32_t> indexByName;              // 条目名 → 下标（启动期 name 解析）
 	std::map<std::tuple<std::string, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>, uint32_t> modelEntryBySlot;  // 模型条目去重表：(规格名, 顶点 slot, base 纹理 slot, normal slot, orm slot, emissive slot) → 下标
 	// 簇路径叠加条目去重表（★1-a1ii-α）：(规格名, base/normal/orm/emissive 纹理 slot,
-	// debugOffset) → 下标。**无顶点 slot**（全局一份顶点池，§10.2）；debugOffset 进键 =
-	// 两个 SPV 变体结构上不可能共用条目。
-	std::map<std::tuple<std::string, uint32_t, uint32_t, uint32_t, uint32_t, bool>, uint32_t> meshletEntryByKey;
+	// variant) → 下标。**无顶点 slot**（全局一份顶点池，§10.2）；variant 进键 =
+	// 三个 SPV 变体（base/debug/tint）结构上不可能共用条目。
+	std::map<std::tuple<std::string, uint32_t, uint32_t, uint32_t, uint32_t, MeshletMeshVariant>,
+		uint32_t>
+		meshletEntryByKey;
 	// 阴影条目去重表：唯一变量 = vertexSlot（见 addShadowEntry 注释）
 	std::map<uint32_t, uint32_t> shadowEntryBySlot;
 	// 批 11.3-1d：IZB mask 条目表（vertexSlot → 条目下标；izbMaskEntryFor 消费）

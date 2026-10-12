@@ -301,11 +301,32 @@ export struct MeshletBindingSlots {
  * 之前；三个 sampler/RT 槽经各自幂等 ensure 重取 = 与模型条目同号。门关
  * （meshletEnable=false）= 连槽号都不领、一条条目都不建（逐位不变构造性成立）。
  * @param meshletDebug true = 阳性对照 SPV 变体（`meshlet.debug`，判据 3；仅门开时生效）
+ * @param meshletTint true = tint SPV 变体（`meshlet.tint`，★0.5-b2 双臂阳性对照；仅门开
+ *   时生效；与 meshletDebug 同真时 tint 优先 + warn，不建组合变体）
  */
 export void wireMeshletOverlay(Resources& resources, DeviceContext& device,
 	const MeshletGeometryStore& meshletGeometry, const UploadedAssets& uploaded,
 	const SceneConfig& scene, bool deferredMode, ShaderRegistry& pipelines, AssetTable& assets,
-	SamplerLibrary& samplers, RenderTargetCache& rtCache, bool meshletEnable, bool meshletDebug);
+	SamplerLibrary& samplers, RenderTargetCache& rtCache, bool meshletEnable, bool meshletDebug,
+	bool meshletTint);
+
+/**
+ * 簇化轴 ★0.5-b2：共面双臂深度比较接线（`meshlet.coplanar` → Renderer 叠加段的动态
+ * `depthCompareOp`）。**调用序契约 = `assembleBackEnd` 之后**（Renderer 已构造；与
+ * `wireMeshletOverlay` 的「之前」契约互补，两步各自门早退）。
+ *
+ * 语义：off = 传 nullopt = 执行器**一条 setDepthCompareOp 都不发**（门关与 off 档的
+ * 动态状态序列逐 bit 不变 = A1 判据的构造性保证）；equal/ne = 叠加那批 draw 的深度比较
+ * 换成 eEqual/eNotEqual（只作用叠加 draw，pass 与旧路径状态不动）。
+ *
+ * 🔴 门开时 INFO 打印**生效**档（独立于图像的生效证据）：本批主判据 = 四臂截图哈希全同，
+ * 若 coplanar 静默落回 off，四臂照样全绿 = 整批假绿——解析期 fail-fast 拦不住「Lua 里
+ * 值写成裸标识符 = nil = 键缺失」这一种，故生效日志是第二道机器护栏。门关 = 零日志
+ * （门关 grep meshlet = 0 的护栏）。
+ * @param renderer 已装配的后端（setMeshletOverlayDepthCompareOp 目标）
+ * @param cfg 运行配置（读 meshletEnable / meshletCoplanar 两字段）
+ */
+export void wireMeshletOverlayDepthCompare(Renderer& renderer, const RuntimeConfig& cfg);
 
 /**
  * 材质风格 → 管线规格名派生（★1-a1ii-α 起 bakePipelineEntries 与 bakeMeshletEntries

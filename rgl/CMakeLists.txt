@@ -23,6 +23,10 @@ rgl_shader(model.mesh MODEL_MESH_SPV model material scene)
 # 见 RglSlang.cmake 门控变体注释）。
 rgl_shader(meshlet.mesh MESHLET_MESH_SPV model material scene)
 rgl_shader_defined(meshlet.mesh MESHLET_MESH_DEBUG_SPV MESHLET_DEBUG_OFFSET model material scene)
+# ★0.5-b2 共面双臂阳性对照变体（门 `meshlet.tint`）：只把着色输入写常数、clip 不动（与
+# DEBUG_OFFSET 正交，见 meshlet.mesh.slang 内注释）。tint/debug 同真时 tint 优先（不建
+# 组合变体，判据 3 只用 tint、判据 4 只用 offset）。
+rgl_shader_defined(meshlet.mesh MESHLET_MESH_TINT_SPV MESHLET_TINT model material scene)
 rgl_shader(model.frag MODEL_FRAG_SPV model material scene)
 # Phase 5 批次 3：真简化 PBR frag（mesh 复用 model.mesh.spv，import scene.slang 光照数据）
 rgl_shader(model_pbr.frag MODEL_PBR_FRAG_SPV model material scene)

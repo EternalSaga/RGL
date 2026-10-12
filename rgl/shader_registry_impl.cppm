@@ -143,35 +143,42 @@ namespace RGL {
 	}
 
 	// 簇化轴 ★1-a1ii-α：簇路径叠加条目（契约见接口注释）。与 addModelEntry 的三处差别：
-	// mesh SPV 换 meshlet.mesh（按 debugOffset 选变体）、去重键去顶点 slot 加 debug 位、
-	// 追加 4 个固定 binding（17-20）。材质绑定段与 addModelEntry 逐条同值——**别合并成
-	// 一份共享代码**：两处一旦漂移（比如模型条目加 binding 而叠加条目忘跟），图像静默
-	// 错配材质；此处显式重复 + 注释互指，改一处必看见另一处。
+	// mesh SPV 换 meshlet.mesh（按 variant 选 base/DEBUG_OFFSET/TINT 变体）、去重键去顶点
+	// slot 加变体位、追加 4 个固定 binding（17-20）。材质绑定段与 addModelEntry 逐条同值
+	// ——**别合并成一份共享代码**：两处一旦漂移（比如模型条目加 binding 而叠加条目忘跟），
+	// 图像静默错配材质；此处显式重复 + 注释互指，改一处必看见另一处。
 	uint32_t ShaderRegistry::addMeshletEntry(const std::string& specName, uint32_t textureSlot,
 			uint32_t normalSlot, uint32_t ormSlot, uint32_t emissiveSlot, uint32_t samplerSlot,
 			uint32_t shadowMapSlot, uint32_t shadowSamplerSlot, uint32_t evssmMapSlot,
-			std::array<uint32_t, 4> clusterSlots, bool debugOffset) {
+			std::array<uint32_t, 4> clusterSlots, MeshletMeshVariant variant) {
 		const auto key = std::make_tuple(specName, textureSlot, normalSlot, ormSlot, emissiveSlot,
-			debugOffset);
+			variant);
 		if (auto it = meshletEntryByKey.find(key); it != meshletEntryByKey.end())
 			return it->second;
 
 		const RGL::PipelineSpec* base = findSpec(specName.c_str());
 		if (!base)
 			throw std::runtime_error(fmt::format("pipeline spec not found: {}", specName));
-		// mesh 阶段换 SPV（frag 原样 = 同规格模型条目同一个）；spec 缓存按 (规格, debug) 去重。
-		static std::map<std::pair<std::string, bool>, RGL::PipelineSpec> meshletSpecs;
-		const auto specIt = meshletSpecs.find({specName, debugOffset});
+		// mesh 阶段换 SPV（frag 原样 = 同规格模型条目同一个）；spec 缓存按 (规格, variant) 去重。
+		// 变体名/后缀表 = 条目名与 spec 名的唯一拼写点（★0.5-b2 起三档，别在别处再拼一遍）。
+		static constexpr std::array<std::string_view, 3> kVariantSpv{
+			"generated_shaders/meshlet.mesh.spv",
+			"generated_shaders/meshlet.mesh_MESHLET_DEBUG_OFFSET.spv",
+			"generated_shaders/meshlet.mesh_MESHLET_TINT.spv"};
+		static constexpr std::array<std::string_view, 3> kVariantSuffix{"", ".dbg", ".tint"};
+		static constexpr std::array<std::string_view, 3> kVariantSpecSuffix{"_meshlet",
+			"_meshlet_dbg", "_meshlet_tint"};
+		const size_t vi = static_cast<size_t>(variant);
+		static std::map<std::pair<std::string, MeshletMeshVariant>, RGL::PipelineSpec> meshletSpecs;
+		const auto specIt = meshletSpecs.find({specName, variant});
 		const RGL::PipelineSpec* spec = nullptr;
 		if (specIt != meshletSpecs.end())
 			spec = &specIt->second;
 		else {
-			RGL::PipelineSpec variant = *base;
-			variant.meshSpv = debugOffset
-				? "generated_shaders/meshlet.mesh_MESHLET_DEBUG_OFFSET.spv"
-				: "generated_shaders/meshlet.mesh.spv";
-			variant.name = base->name + (debugOffset ? "_meshlet_dbg" : "_meshlet");
-			spec = &meshletSpecs.emplace(std::make_pair(specName, debugOffset), std::move(variant))
+			RGL::PipelineSpec mvSpec = *base;
+			mvSpec.meshSpv = std::string(kVariantSpv[vi]);
+			mvSpec.name = base->name + std::string(kVariantSpecSuffix[vi]);
+			spec = &meshletSpecs.emplace(std::make_pair(specName, variant), std::move(mvSpec))
 			          .first->second;
 		}
 		const uint32_t descriptorSize = res.getDescriptorHeap().getDescriptorSize();
@@ -218,7 +225,7 @@ namespace RGL {
 				.heapSlot = clusterSlots[i]});
 		auto entry = PipelineEntry{
 			.name = fmt::format("meshlet.{}.t{}.n{}.o{}.e{}{}", specName, textureSlot, normalSlot,
-				ormSlot, emissiveSlot, debugOffset ? ".dbg" : ""),
+				ormSlot, emissiveSlot, kVariantSuffix[vi]),
 			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b),
 			.spec = *spec, .bindings = b};
 		const uint32_t index = static_cast<uint32_t>(entries.size());
@@ -227,9 +234,9 @@ namespace RGL {
 		entries.push_back(std::move(entry));
 		if (auto* logger = RLLogger::getInstance())
 			logger->debug("pipeline entry: meshlet.{} (base slot {} / cluster slots {}/{}/{}/{} / "
-				"debug {}) → 下标 {}",
+				"variant {}（0=base 1=debug 2=tint）) → 下标 {}",
 				specName, textureSlot, clusterSlots[0], clusterSlots[1], clusterSlots[2],
-				clusterSlots[3], debugOffset, index);
+				clusterSlots[3], vi, index);
 		return index;
 	}
 

@@ -170,6 +170,26 @@ export enum class AaMode {
 };
 
 /**
+ * 簇路径叠加的**共面双臂**深度比较档（configs/runtime.lua `meshlet.coplanar` 键，★0.5-b2）。
+ *
+ * 为什么必须是 enum + fail-fast（同 `AaMode` / `present_mode` 纪律，本批尤其致命）：
+ * 本批主判据 = 「门关 / off / equal / ne **四臂截图哈希全同**」。若笔误值被静默回落成
+ * `off`，四臂照样全绿 ⟹ **整批假绿**（equal/ne 两臂根本没跑）。故未知值 = 启动报错，
+ * 且每臂 INFO 打印**生效**档（独立于图像的生效证据，见 `wireMeshletOverlayDepthCompare`）。
+ *
+ * 三档语义（叠加 draw 与旧路径几何共面，pass 现行深度比较 = `eLess` ⟹ 全拒零写入）：
+ *  · `off`   = 不碰动态状态（零额外 vkCmd，A1 逐 bit 不变的构造性保证）
+ *  · `equal` = `eEqual`：共面像素放行写回 ⟹ 与门关逐位同 = 属性/材质/手性全对
+ *  · `ne`    = `eNotEqual`：存在「簇覆盖但深度 ≠ 旧深度」即写 ⟹ 与门关逐位同 =
+ *              位置逐位同 + 覆盖集同
+ */
+export enum class MeshletCoplanarMode : uint8_t {
+	off,    // 默认 = 现行 eLess（叠加零写入，门关/off 动态状态序列逐 bit 不变）
+	equal,  // 叠加 draw 深度比较 = vk::CompareOp::eEqual
+	ne,     // 叠加 draw 深度比较 = vk::CompareOp::eNotEqual
+};
+
+/**
  * `renderScale` 的合法区间（**单一真相源**：配置解析钳制与 Swapchain 派生 render extent
  * 都读它，避免两处各写一个魔数、改一个漂一个）。
  *
@@ -343,6 +363,39 @@ export struct RuntimeConfig {
 	 * 默认关；enable 关时本键无意义（条目根本不建）。
 	 */
 	bool meshletDebug = false;
+	/**
+	 * 簇路径叠加的**共面双臂**深度比较档（configs/runtime.lua `meshlet.coplanar` 键，★0.5-b2）。
+	 *
+	 * 叠加那批 draw 与旧路径几何**共面**，而 pass 的动态深度比较是 `eLess`（`shader.cppm`
+	 * `RenderState::depthCompareOp` 默认值）⟹ 共面 ⟹ 深度测试全拒 ⟹ 一个像素都不写。
+	 * 于是 α/α″ 的位比判据证明的是「旧路径没被碰坏」，**不是**「簇路径画得对」
+	 * （`docs/mdi_plan.md` §14.1 两条变异钉死）。本键把叠加 draw 的深度比较换成
+	 * `eEqual` / `eNotEqual`（**动态状态**，`depthCompareOp` 在本引擎是 per-draw 可改的，
+	 * 不用新建管线），把屏幕切成两类且都要求逐位不变：
+	 *  · `equal`：共面像素写回 ⟹ 与门关逐位同 = 属性/材质绑定/切线手性全对（盲区 = 不共面像素）
+	 *  · `ne`：存在「簇覆盖但深度 ≠ 旧深度」即写 ⟹ 与门关逐位同 = 位置逐位同 + 覆盖集同
+	 *    （盲区 = 簇没覆盖的像素，由已有的 `meshlet.debug` 覆盖臂补，M = 34.267%）
+	 *
+	 * 🔴 `off`（默认）= **一条 setDepthCompareOp 都不发** ⟹ 门关与 off 档的动态状态序列
+	 * 逐 bit 不变（A1 判据的构造性保证）。未知值 = 启动 fail-fast（`aa` 三态键同纪律：
+	 * 静默回落会让「四臂哈希全同」的主判据整批假绿）。仅 `meshletEnable` 为真时有意义。
+	 */
+	MeshletCoplanarMode meshletCoplanar = MeshletCoplanarMode::off;
+	/**
+	 * 簇路径叠加的 **tint** SPV 变体档（configs/runtime.lua `meshlet.tint` 键，★0.5-b2）。
+	 *
+	 * = true（且 enable = true）时叠加条目改用 `meshlet.mesh_MESHLET_TINT.spv`：着色输入
+	 * 全写死成常数（normal/uv/tangent），**clip 一 bit 不动** ⟹ 深度与覆盖集与底逐位同，
+	 * 只有写回的颜色不同（逐 primitive 平色块）。它是双臂的**阳性对照**：
+	 *  · `coplanar=equal` + tint 图**必须变** = equal 臂的**非空洞证明**（若簇几何深度与旧
+	 *    路径差哪怕 1 ULP，eEqual 处处拒绝 ⟹ 恒绿但毫无意义）
+	 *  · `coplanar=off` + tint 必须仍 = 基线锚（证明变化来自「共面写回」，不是 tint 本身可见）
+	 *
+	 * 与 `meshletDebug` 同真时**本键优先**（判据 3 只用 tint、判据 4 只用 offset，从不同时
+	 * 用，故不建第 4 个组合变体，改由装配层 warn 出声）。门 = 选 SPV 变体不是运行时 flag
+	 * （2026-10-02 slang fp 重排教训，同 `meshletDebug`）。默认关；enable 关时无意义。
+	 */
+	bool meshletTint = false;
 
 	/** 「TAA 在不在图里」的唯一推导点（原 `scene.lua taa.enabled` 的消费者全部改走这里）。 */
 	[[nodiscard]] constexpr bool aaWantsTaa() const {

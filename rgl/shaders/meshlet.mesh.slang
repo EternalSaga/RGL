@@ -8,7 +8,10 @@ import scene;    // readObjectMvp / readObjectClusterRange（binding 3 scene dat
 // 绑定，在 opaque 段之后重画一遍恒 L0 簇；正常档与既有深度共面 + eLess ⟹ 一个像素
 // 都不写（A1/A2 逐位不变的构造性保证）。`MESHLET_DEBUG_OFFSET` 变体（阳性对照，
 // 门 = 选 SPV 变体不是运行时 flag——2026-10-02 slang fp 重排教训）把 clip.z 拉向相机
-// 且翻法线，让叠加真正赢得深度测试并留下可见差异。
+// 且翻法线，让叠加真正赢得深度测试并留下可见差异。`MESHLET_TINT` 变体（★0.5-b2 共面
+// 双臂的阳性对照）与 DEBUG_OFFSET 正相反：只把着色输入写成常数（逐 primitive 平色块），
+// clip 一 bit 不动 ⟹ 深度/覆盖集与底逐位同，专供 eEqual/eNotEqual 双臂做「真在写、
+// 真在验色」的非空洞证明（main 侧 coplanar=equal/ne + tint 必须变图）。
 //
 // 🔴 发射形态 = **去索引**（§13.2 路 C，α″ 用它换掉 α 的共享顶点发射）：每个三角形发射
 // 它自己的 3 个私有顶点 ⟹ 顶点输出 = 3 × 三角形数。为什么：逐顶点接口装不下逐三角量
@@ -186,9 +189,25 @@ void main(
         clip.z *= 0.999;
 #endif
         verts[ti].position = clip;
+#if defined(MESHLET_TINT)
+        // 共面双臂阳性对照（★0.5-b2，门 `meshlet.tint`）：着色输入（normal/uv/切线+手性）
+        // 全写死成常数 ⟹ 叠加写回**逐 primitive 的平色块**；position/positionOS 一 bit
+        // 不动 ⟹ 深度与覆盖集与底**逐位同**（= 与 DEBUG_OFFSET 正相反：那个动深度动着色，
+        // 这个只动着色）。于是 coplanar=equal + 本变体图**必须变**（共面像素经 eEqual 放行
+        // 写回不同颜色 = equal 臂的非空洞证明），coplanar=off + 本变体图**必须不变**
+        //（eLess 共面全拒 = 反证「变化来自共面写回，不是 tint 本身可见」）。
+        // 「常色」的上限说明（拍板记录）：frag 与旧路径共用、albedo = 材质 factor × 贴图
+        // 采样，mesh 侧控制不了材质项 ⟹ 全屏单一常色在 mesh-only 变体里数学上做不到；
+        // 逐 primitive 平色块（无纹理细节、法线固定）是 mesh-only 能给出的最强可读形态，
+        // 且 M 的连通域恰好就是「共面 ∩ 被簇覆盖」像素集。
+        verts[ti].normal = float3(0.0, 1.0, 0.0);
+        verts[ti].uv = float2(0.5, 0.5);
+        verts[ti].tangentOS = float4(1.0, 0.0, 0.0, 1.0);  // w（手性）也是着色输入：进 TBN 副切线符号
+#else
         verts[ti].normal = nrm;
         verts[ti].uv = uv;
         verts[ti].tangentOS = float4(tan.xyz, w);
+#endif
         verts[ti].positionOS = pos;  // frag 侧世界变换与 model 路同约定
     }
 

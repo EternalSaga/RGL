@@ -457,17 +457,40 @@ void Renderer::executePassDraws(vk::raii::CommandBuffer& cmd, const RgPassPlan& 
 		// 候选序对账（FrameDrawList::meshletCalls 注释）；`cull_replay=gpu_sync` 走上面
 		// cullDriver 分支 = 本分支不执行 = 叠加静默跳过（本批不接 DGC，★1-b 再议）。
 		// 门 meshlet.enable 关 = 空向量 = 零 draw 零开销。
+		// ★0.5-b2：叠加 draw 自带深度比较（coplanar = equal/ne 时 loop 前 set loop 后复原，
+		// 复原目标 = 本 pass 段首 applyDynamicState 用的值）；off/门关 = 零 set，本 pass 的
+		// 命令流与旧逐 bit 同（→ executeMeshletOverlay 注释）。
 		if (pass.drawSource == "opaque")
-			executeMeshletOverlay(cmd, list);
+			executeMeshletOverlay(cmd, list,
+				stateKit.stateFor(pass.state).depthCompareOp);
 	}
 }
 
-void Renderer::executeMeshletOverlay(vk::raii::CommandBuffer& cmd, const FrameDrawList& list) {
+void Renderer::executeMeshletOverlay(vk::raii::CommandBuffer& cmd, const FrameDrawList& list,
+	vk::CompareOp passDepthCompareOp) {
 	if (list.meshletCalls.empty())
-		return;
+		return;  // 门关 / 无叠加条目 = 零 draw 零命令（连深度 set 都不发）
+	// ★0.5-b2 共面双臂：叠加 draw 携带自己的深度比较（`meshlet.coplanar` = equal/ne，
+	// 装配 = wireMeshletOverlayDepthCompare → setter）。
+	// 🔴 nullopt（off / 门关）⟹ 本函数**一条 setDepthCompareOp 都不发** ⟹ 门关与 off 档
+	// 的动态状态序列逐 bit 不变 = A1 判据的构造性保证（改这条 = 撞 A1 红线）。
+	// equal/ne = loop 前 set、loop 后复原 pass 原值：状态窗口恰好盖住叠加那几条 draw，
+	// pass 与旧路径的状态序列不动（旧路径 draw 已在本 loop 之前提交；后续 pass 各有段首
+	// applyDynamicState，复原本身也不被它们观察到——复原只是把「叠加自己改的」还原，
+	// 让本函数对 pass 外零影响，RADV「显式 set ≠ 从不 set」教训的防御性写法）。
+	const bool overrideCompare =
+		meshletOverlayDepthCompareOp && *meshletOverlayDepthCompareOp != passDepthCompareOp;
+	if (overrideCompare) {
+		cmd.setDepthCompareOp(*meshletOverlayDepthCompareOp);
+		profilerAddCommands(1);  // 批 9.5 vkcmd.count 口径：与 applyDynamicState 同法入账
+	}
 	profilerAddDraws(static_cast<uint32_t>(list.meshletCalls.size()));
 	for (const auto& call : list.meshletCalls)
 		drawOne(cmd, call);
+	if (overrideCompare) {
+		cmd.setDepthCompareOp(passDepthCompareOp);
+		profilerAddCommands(1);
+	}
 }
 
 std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {

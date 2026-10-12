@@ -255,19 +255,73 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg) {
 }
 
 /**
- * `meshlet` 嵌套块解析（★0-b1 簇路径总门 + ★1-a1ii-α debug 档）：
- * `meshlet = { enable = …, debug = … }` 两枚布尔。
- * 缺块 / 缺键 = 保持结构体默认（`meshletEnable = false` = 门关 = 逐位不变护栏，P5 拍板；
- * `meshletDebug = false` = 正常叠加档）。
- * 形态先例 = readFsrBlock（嵌套块 + readBoolKey，无扁平键双读兼容）。gate_lint 不挂号的
- * 理由与 ssr 块完全同款（runtime.lua 键不在 gate_lint 管辖的两张回显表里，→ readSsrBlock 末段）。
+ * `meshlet.coplanar` 三态字符串键解析（★0.5-b2 共面双臂；形态先例 = `applyAaKey`）。
+ *
+ * 缺键 = 保持默认 `off`（= 不碰动态状态 = 门关/off 动态状态序列逐 bit 不变，A1 构造性
+ * 保证）。**未知值 = 返回错误消息由调用方 fail-fast**，不静默回落（present_mode/aa 的既有
+ * 纪律，本批尤其致命：主判据 = 四臂截图哈希全同，笔误值静默回落成 off 会让 equal/ne 两臂
+ * 根本没跑而四臂照样全绿 = 整批假绿）。
+ * @param root meshlet 块表（与 readMeshletBlock 同层）
+ * @param cfg  写入目标（仅在键存在且合法时被写）
+ * @param path 仅用于错误消息（与 aa/present_mode 同口径带配置文件路径）
+ * @return nullopt = 合法（含缺键）；有值 = 错误消息
  */
-static void readMeshletBlock(const sol::table& root, RuntimeConfig& cfg) {
+[[nodiscard]] static std::optional<std::string> applyMeshletCoplanarKey(const sol::table& root,
+	RuntimeConfig& cfg, std::string_view path) {
+	sol::optional<std::string> raw = root["coplanar"];
+	if (!raw)
+		return std::nullopt;
+	if (*raw == "off")
+		cfg.meshletCoplanar = MeshletCoplanarMode::off;
+	else if (*raw == "equal")
+		cfg.meshletCoplanar = MeshletCoplanarMode::equal;
+	else if (*raw == "ne")
+		cfg.meshletCoplanar = MeshletCoplanarMode::ne;
+	else
+		return fmt::format(
+			"runtime config ({}): meshlet.coplanar must be \"off\", \"equal\" or \"ne\", got \"{}\"",
+			path, *raw);
+	return std::nullopt;
+}
+
+/**
+ * `meshlet` 嵌套块解析（★0-b1 簇路径总门 + ★1-a1ii-α debug 档 + ★0.5-b2 coplanar/tint）：
+ * `meshlet = { enable = …, debug = …, coplanar = …, tint = … }`。
+ * 缺块 / 缺键 = 保持结构体默认（`meshletEnable = false` = 门关 = 逐位不变护栏，P5 拍板；
+ * `meshletDebug = false` = 正常叠加档；`meshletCoplanar = off` = 不碰动态状态；
+ * `meshletTint = false` = 不选 tint 变体）。
+ * 形态先例 = readFsrBlock（嵌套块 + readBoolKey，无扁平键双读兼容）；coplanar 三态键先例 =
+ * applyAaKey（未知值 fail-fast，错误经返回值上抛给调用方）。gate_lint 不挂号的理由与 ssr
+ * 块完全同款（runtime.lua 键不在 gate_lint 管辖的两张回显表里，→ readSsrBlock 末段）。
+ * @param root runtime.lua 顶层表
+ * @param cfg  写入目标
+ * @param path 仅用于 coplanar 错误消息
+ * @return nullopt = 合法；有值 = coplanar 未知值的错误消息（调用方 fail-fast）
+ */
+[[nodiscard]] static std::optional<std::string> readMeshletBlock(const sol::table& root,
+	RuntimeConfig& cfg, std::string_view path) {
 	sol::table meshlet = root["meshlet"];
 	if (!meshlet.valid() || !meshlet.is<sol::table>())
-		return;
+		return std::nullopt;
 	readBoolKey(meshlet, "enable", cfg.meshletEnable);
 	readBoolKey(meshlet, "debug", cfg.meshletDebug);
+	readBoolKey(meshlet, "tint", cfg.meshletTint);  // ★0.5-b2 阳性对照变体（与 debug 同真时 tint 优先）
+	return applyMeshletCoplanarKey(meshlet, cfg, path);
+}
+
+/**
+ * fail-fast 键链（★0.5-b2，认知复杂度预算）：把「解析失败返回错误消息」的键串成一条，
+ * `loadRuntimeConfig` 只留一个 if+return（两处各一个曾把认知复杂度顶到 16>15）。
+ * 新增 fail-fast 键 = 在此加一行，不再往 loadRuntimeConfig 里添 if。
+ * 顺序契约：applyAaKey 必须先于 readFsrBlock（aa=fsr 隐含 velocity_field 在其内一行）；
+ * readMeshletBlock 只读 meshlet 块、与其他键零耦合，链尾即可。
+ * @return nullopt = 全部合法；有值 = 首个错误消息
+ */
+[[nodiscard]] static std::optional<std::string> applyFailFastKeys(const sol::table& root,
+	RuntimeConfig& cfg, std::string_view path) {
+	if (auto err = applyAaKey(root, cfg, path))
+		return err;
+	return readMeshletBlock(root, cfg, path);  // ★0-b1 簇路径总门 + ★0.5-b2 coplanar 三态键
 }
 
 /** loadRuntimeConfig 定义（接口注释见 runtime_config.cppm）：headless/headless_size/win_size/show_after/present_mode/ui_font 逐一可选解析 + parseLlm。 */
@@ -325,12 +379,13 @@ static void readMeshletBlock(const sol::table& root, RuntimeConfig& cfg) {
 		// pass）。「FSR 依赖 velocity」的判据不在这里——运行期取实际图形态，见 RuntimeConfig
 		// 注释；批 14.6 起 aa 为 fsr 时本键被隐含打开（唯一发生点 = applyAaKey 内一行）。
 		readBoolKey(root, "velocity_field", cfg.velocityField);
-		if (auto err = applyAaKey(root, cfg, path))
+		// fail-fast 键链（aa 三态 + ★0.5-b2 meshlet.coplanar 三态；未知值 = 启动报错退出，
+		// 不静默回落——四臂主判据的假绿防线，→ applyFailFastKeys 注释）
+		if (auto err = applyFailFastKeys(root, cfg, path))
 			return std::unexpected(Error{ErrorCode::ConfigLoadFailed, *err});
 		readFsrBlock(root, cfg);  // 批 14.6：FSR 调参收进嵌套块（无扁平键双读兼容）
 		readSsrBlock(root, cfg);  // 批 15.1：SSR 总开关（嵌套块，缺块/缺键 = false = 图里没有 ssr pass）
 		readWetBlock(root, cfg);  // 批 15.2：湿面参数（嵌套块，缺块/缺键 = WetTuning 默认；消费者 = deferred_geometry 湿面调制）
-		readMeshletBlock(root, cfg);  // ★0-b1：簇路径总门（嵌套块，缺块/缺键 = false = 门关逐位护栏；本批无消费者）
 		sol::optional<int> showAfter = root["show_after"];
 		if (showAfter)
 			cfg.showAfter = *showAfter;

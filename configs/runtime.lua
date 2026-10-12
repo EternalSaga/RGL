@@ -141,6 +141,25 @@ return {
         -- ★1-a1ii-α 阳性对照档（判据 3）：叠加改用 DEBUG_OFFSET SPV 变体（clip.z 拉向
         -- 相机 + 翻法线）⟹ 叠加真正写像素，图像必变。enable 关时无意义。
         debug = false,
+        -- ★0.5-b2 共面双臂：叠加那批 draw 自带的深度比较档（动态状态，只作用叠加 draw，
+        -- pass 与旧路径状态序列不动；off = 不碰 = 与门关逐 bit 同 = A1 构造性保证）。
+        --   "off"   = 现行 eLess（共面 ⟹ 全拒零写入）
+        --   "equal" = eEqual：共面像素放行写回 ⟹ 截图与门关逐位相同 = 簇路径属性/材质/
+        --             切线手性与旧路径逐位同（盲区 = 不共面像素，EQUAL 不通过不写）
+        -- 🔴 "ne" = eNotEqual：**不是判据，只能人工看**。它原本想验"位置逐位同 + 覆盖集同"，
+        --   但叠加画的是该资产的**全套 primitive（含被遮挡面）**，而被遮挡面的深度永远 ≠ buffer
+        --   里那个正面的深度 ⟹ NOT_EQUAL 在被遮挡区**恒放行**（实测放行 29.6% 屏 = 被遮挡面积，
+        --   且链式写到最后画的 primitive 赢）。要救它得先把叠加限制到前向可见像素（stencil/prepass）。
+        --   位置逐位同这条改由 equal 臂的**放行集**承担：实测 32.74% ≈ debug 覆盖足迹 34.27%。
+        -- 未知值 = 启动 fail-fast（aa/present_mode 纪律：静默回落 = 四臂假绿的地基事故）。
+        -- 与 debug/tint 正交；enable 关时无意义（叠加零 draw）。
+        coplanar = "off",
+        -- ★0.5-b2 双臂阳性对照用：叠加改用 TINT SPV 变体（着色输入 = 常数：normal/uv/
+        -- tangent 全写死，clip 一 bit 不动 ⟹ 深度与覆盖集与底逐位同，只有"写回的颜色"
+        -- 不同 ⟹ 逐 primitive 平色块）。coplanar=equal + tint 图必须变 = equal 臂的
+        -- 非空洞证明；coplanar=off + tint 必须 = 基线（eLess 共面全拒）。
+        -- 与 debug 同真时 tint 优先（warn 出声，不建组合变体）。enable 关时无意义。
+        tint = false,
     },
 
     -- DIAG：隐藏窗启动、第 N 帧后显示（可见窗 fault 排查；-1 = 立即显示）

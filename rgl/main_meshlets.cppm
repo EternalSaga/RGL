@@ -23,6 +23,8 @@ import meshlet_hand;  // traverseClusterHandedness（★0.5-c 真产物统计锚
 import meshlet_geometry;  // MeshletGeometryStore（4 段 GPU buffer 的 BDA，描述符内容源）
 import scene_forward_types_generated;  // ObjectClusterRange（scene data 表条目，反射生成）
 import scene_config;   // SceneConfig（resolvePrimitiveSpecName 入参）
+import runtime_config;  // RuntimeConfig / MeshletCoplanarMode（★0.5-b2 wireMeshletOverlayDepthCompare 入参）
+import vk_renderer;  // Renderer（★0.5-b2 setMeshletOverlayDepthCompareOp 目标；main 已 export import 链上，此处显式）
 import scene_data;     // kShadowMapSize（阴影图边长，与模型条目同值）
 import render_graph;   // ensureShadowMapSlot（幂等，按名缓存命中同槽）
 import gltf_loader;    // GltfModel/GltfPrimitive（逐 primitive 风格派生）
@@ -305,12 +307,13 @@ std::optional<MeshletBindingSlots> wireMeshletBindings(Resources& resources,
  * resolvePrimitiveSpecName（与本体条目同一函数 = 同一 frag），条目去重住在
  * addMeshletEntry（按纹理集，§10.2）；只有**有簇产物的模型**（store 键命中）才建条目
  * ——其余资产 meshletPipelineIndex 保持 kInvalid = render_list 零叠加 draw。
+ * @param variant mesh SPV 变体（base/debug/tint，★0.5-b2 起三档；优先级在调用点定）
  */
 void bakeMeshletEntries(const UploadedAssets& uploaded, const SceneConfig& scene,
 	bool deferredMode, ShaderRegistry& pipelines, AssetTable& assets, Resources& resources,
 	SamplerLibrary& samplers, RenderTargetCache& rtCache,
 	const MeshletGeometryStore& meshletGeometry, const std::optional<MeshletBindingSlots>& slots,
-	bool debugOffset) {
+	MeshletMeshVariant variant) {
 	if (!slots)
 		return;  // 门关 / 无产物 / 多产物回落 = 一条条目都不建（逐位不变）
 	// 材质侧三槽幂等重取 = 与模型条目同号（bakePipelineEntries 已领；binding 12/13/15
@@ -338,27 +341,75 @@ void bakeMeshletEntries(const UploadedAssets& uploaded, const SceneConfig& scene
 				assets.getTexture(um.textureIds.orm[i]).heapSlot,
 				assets.getTexture(um.textureIds.emissive[i]).heapSlot,
 				samplerSlot, *shadowSlot, shadowSamplerSlot, *evssmSlot, clusterSlots,
-				debugOffset);
+				variant);
 			pipelines.bindMeshletToAsset(id, entryIdx);
 			++baked;
 		}
 	}
 	if (auto* logger = RLLogger::getInstance())
-		logger->info("meshlet: 叠加管线条目已装配 —— prims={}（按纹理集去重）debug 变体={}",
-			baked, debugOffset);
+		logger->info("meshlet: 叠加管线条目已装配 —— prims={}（按纹理集去重）mesh 变体={}"
+					 "（0=base 1=debug 2=tint）",
+			baked, static_cast<uint32_t>(variant));
 }
 
 /**
  * 簇化轴 ★1-a1ii-α 装配总入口（main.cppm 声明）：描述符接线 + 条目烘焙两步的顺序
  * 契约内聚在此（bake 依赖 wire 的槽号），main() 只留一次调用（装配层行数预算）。
+ *
+ * ★0.5-b2 起 mesh SPV 变体三档（base/debug/tint）：tint 与 debug 同真时 **tint 优先 +
+ * warn**（判据 3 只用 tint、判据 4 只用 offset，从不同时用，故不建第 4 个组合变体；
+ * warn 只在门开时出——门关 grep meshlet = 0 的护栏）。
  */
 void wireMeshletOverlay(Resources& resources, DeviceContext& device,
 	const MeshletGeometryStore& meshletGeometry, const UploadedAssets& uploaded,
 	const SceneConfig& scene, bool deferredMode, ShaderRegistry& pipelines, AssetTable& assets,
-	SamplerLibrary& samplers, RenderTargetCache& rtCache, bool meshletEnable, bool meshletDebug) {
+	SamplerLibrary& samplers, RenderTargetCache& rtCache, bool meshletEnable, bool meshletDebug,
+	bool meshletTint) {
 	const auto slots = wireMeshletBindings(resources, device, meshletGeometry, meshletEnable);
+	// mesh SPV 变体选档（门关 = bakeMeshletEntries 首行早退，variant 不被读；warn 也
+	// 必须门开才出声——门关 grep meshlet = 0 的护栏）
+	MeshletMeshVariant variant = MeshletMeshVariant::base;
+	if (meshletTint) {
+		variant = MeshletMeshVariant::tint;
+		if (meshletEnable && meshletDebug && RLLogger::getInstance())
+			RLLogger::getInstance()->warn(
+				"meshlet: tint 与 debug 同真 ⟹ tint 优先（不建组合 SPV 变体；判据 3 只用 "
+				"tint、判据 4 只用 debug，从不同时用）—— 本跑走 TINT 变体");
+	} else if (meshletDebug)
+		variant = MeshletMeshVariant::debugOffset;
 	bakeMeshletEntries(uploaded, scene, deferredMode, pipelines, assets, resources, samplers,
-		rtCache, meshletGeometry, slots, meshletEnable && meshletDebug);
+		rtCache, meshletGeometry, slots, variant);
+}
+
+/**
+ * 共面双臂深度比较接线（★0.5-b2，main.cppm 声明；调用序契约 = assembleBackEnd 之后）。
+ * 三步：门关早退（零日志）→ coplanar 档映射为 optional<vk::CompareOp>（off = nullopt =
+ * 执行器零 set）→ 交 setter + INFO 打印**生效**档（四臂假绿的第二道机器护栏）。
+ */
+void wireMeshletOverlayDepthCompare(Renderer& renderer, const RuntimeConfig& cfg) {
+	if (!cfg.meshletEnable)
+		return;  // 门关 = 零调用零日志（门关 grep meshlet = 0 护栏；setter 保持默认 nullopt）
+	std::optional<vk::CompareOp> op;
+	std::string_view modeName = "off";
+	std::string_view opName = "eLess（pass 现行，执行器零 set）";
+	switch (cfg.meshletCoplanar) {
+	case MeshletCoplanarMode::off: break;
+	case MeshletCoplanarMode::equal:
+		op = vk::CompareOp::eEqual;
+		modeName = "equal";
+		opName = "eEqual";
+		break;
+	case MeshletCoplanarMode::ne:
+		op = vk::CompareOp::eNotEqual;
+		modeName = "ne";
+		opName = "eNotEqual";
+		break;
+	}
+	renderer.setMeshletOverlayDepthCompareOp(op);
+	if (auto* logger = RLLogger::getInstance())
+		logger->info("meshlet: coplanar 双臂生效档 = {}（叠加 draw depthCompare = {}；"
+					 "只作用叠加 draw，pass 与旧路径状态不动）",
+			modeName, opName);
 }
 
 }  // namespace RGL
