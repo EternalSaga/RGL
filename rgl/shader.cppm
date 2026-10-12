@@ -383,6 +383,8 @@ export struct PipelineBindings {
 	uint32_t slotTexture = 0;      // binding 1（textured 形态）：SAMPLED_IMAGE 槽
 	uint32_t samplerHeapOffset = 0;  // binding 2（textured）：sampler heap 字节偏移
 	uint32_t slotSceneData = 0;    // binding 3（hasSceneData）：scene data storage 槽
+	uint32_t slotSceneHeader = 0;  // binding 22（迁移批 S-5，hasSceneData 恒带上）：头区
+	                             // UBO 子范围槽（SceneDataService::headerSlot；裁未声明者同批 M）
 	uint32_t slotSceneWet = 0;     // binding 32（迁移批 1，hasSceneData 恒带上）：湿面区
 	                             // UBO 子范围槽（SceneDataService::wetSlot；未声明 binding 32
 	                             // 的条目由批 M 的 SPV 声明过滤自动裁掉——不在此登记消费者）
@@ -560,7 +562,8 @@ export class RenderPipeline {
 			// （>100 代码行的拆分红线）。批 T1 的四张表只有 import scene_tables.slang 且真用到
 			// 某张表的条目才在 SPV 里声明它（未用到的被 Slang 死代码消除）⟹ 烘的恰好是用的。
 			const std::pair<uint32_t, uint32_t> sceneRegions[] = {
-				{3, bindings.slotSceneData}, {32, bindings.slotSceneWet},
+				{3, bindings.slotSceneData}, {22, bindings.slotSceneHeader},
+				{32, bindings.slotSceneWet},
 				{27, bindings.slotSceneIrradiance}, {24, bindings.slotSceneLights},
 				{28, bindings.slotSceneShadowViewProj}, {29, bindings.slotSceneShadowParams},
 				{31, bindings.slotSceneSsr}, {30, bindings.slotSceneTaa},

@@ -108,9 +108,10 @@ import scene;  // sceneData + readSsrViewProj + readSsrParams + readSsrGate + oc
 [[vk::binding(11, 0)]] TextureCube<float4> envMapL;     // 环境立方图（GGX 预滤波 mip 链，减法项）
 [[vk::binding(12, 0)]] SamplerState envSamplerL;        // sky sampler（maxLod = mipLevels-1）
 
-// env 参数（scene data @48 intensity / @52 mipRange，light.frag EnvParamsL 同款布局直读）。
+// env 参数（头区契约字段 SceneHeaderBlock::envParams.xy，light.frag EnvParamsL 同款本地
+// 成对取值；偏移与读取面在 scene.slang readEnvIntensity / readEnvMipRange 一处）。
 // **为什么不 import env.slang**：其 envMap/envSampler 声明在 binding 4/5，与本 pass 的
-// sceneHdr(4) 冲突（light.frag:25 同款理由）——env 绑定本地声明在 11/12，参数从 sceneData 直读。
+// sceneHdr(4) 冲突（light.frag:25 同款理由）——env 绑定本地声明在 11/12，参数走头区 UBO。
 struct EnvParamsS
 {
     float intensity;
@@ -119,8 +120,8 @@ struct EnvParamsS
 EnvParamsS readEnvParamsS()
 {
     EnvParamsS e;
-    e.intensity = asfloat(sceneData.Load(48));
-    e.mipRange  = asfloat(sceneData.Load(52));
+    e.intensity = readEnvIntensity();
+    e.mipRange  = readEnvMipRange();
     return e;
 }
 

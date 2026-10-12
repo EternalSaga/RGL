@@ -6,11 +6,11 @@
 // 偏移」迁到**类型化载体**（本文件零字节数）；已迁区 = 湿面（binding 32，批 1）、
 // 辐照度（binding 27，批 2）、灯数组（binding 24，批 3，消费端在 lights.slang）、
 // 阴影光空间 VP（binding 28，批 S-1）、阴影采样参数（binding 29，批 S-2，含 IZB/PCSS/EVSSM）、
-// SSR（binding 31，批 S-3）、TAA（binding 30，批 S-4）；
-// 未迁区仍走 binding 3 字节读，**全部迁完后 binding 3 与 sceneData 声明一起删**。
+// SSR（binding 31，批 S-3）、TAA（binding 30，批 S-4）、**头区**（binding 22，批 S-5）
+// —— 读取面已全量类型化，binding 3 与 sceneData 声明随批 N+1 删除。
 // 字节布局真相源分两段（2026-09-15 勘误：旧注释称真相源 = vkresources.cppm 的
 // LightDataGpu——该类型已删）：
-//   · SceneLight（@0-48 头）真相源 = **本文件**——scene_forward 反射管线从本文件
+//   · SceneLight（头区 @0）真相源 = **本文件**——scene_forward 反射管线从本文件
 //     生成 scene_forward_types_generated.cppm（逐字段 offsetof static_assert 钉死），
 //     scene_data.cppm 的 kSceneDataEnvOffset 等派生自 sizeof(SceneLight) 并 static_assert
 //     钉死各区偏移，shader 结构漂移 = C++ 编译失败；
@@ -19,11 +19,12 @@
 //     （binding 23 / 26 / 25 / 33），本文件只留结构体声明（= 反射契约 + 布局唯一真相源），
 //     不再有任何字节字面量。C++ 侧基址/stride 仍由 scene_data.cppm 容量常量推导 +
 //     static_assert 钉死。
-//   @0   direction vec3 | @12 eyePos vec3 | @24 color vec3（CPU 预乘 intensity）| @36 ambient vec3
-//        （两个 intensity 语义：光色在此 CPU 预乘成最终值；env intensity 是 @48 的裸标量、
-//          GPU 端乘——env 颜色在 GPU 侧无法预乘，调光两条路线各改各 config 的一个 intensity）
-//   @48  env 参数（Phase 5.5，env.slang readEnvParams 消费）| @64 skyboxInvViewProj
-//        mat4 列主序（Phase 5.5 批次 4，sky.slang skyClipToWorld 消费）
+//   头区 SceneHeaderBlock（批 S-5，binding 22）：
+//     @0   direction vec3 | @12 eyePos vec3 | @24 color vec3（CPU 预乘 intensity）| @36 ambient vec3
+//          （两个 intensity 语义：光色在此 CPU 预乘成最终值；env intensity 是 @48 的裸标量、
+//            GPU 端乘——env 颜色在 GPU 侧无法预乘，调光两条路线各改各 config 的一个 intensity）
+//     @48  env 参数（Phase 5.5，env.slang readEnvParams 消费）| @64 skyboxInvViewProj
+//          mat4 列主序（Phase 5.5 批次 4，sky.slang skyClipToWorld 消费）
 //   @256 对象矩阵表（批 L 起 256B 对齐，头 128B 后为对齐间隙）：mat4 列主序 ×
 //        kSceneMatrixCapacity(4096)，[objectIndex] = spin·world
 //        （DrawArgs.objectIndex = MeshRef.objectSlot，实例级槽，Phase 6 instancing）
@@ -41,9 +42,15 @@
 // unlit 风格不 import 本文件）。法线变换取 mat3 直接乘（假定均匀缩放——glTF 节点
 // 基本满足；非均匀缩放失真为本期已知近似，Phase 7 真实 normalMatrix 再议）。
 
+// 🔴 批 S-5 起本声明**已无任何 .slang 消费者**（头区是最后一个迁出的区，剥注释后
+// grep sceneData 在 rgl/shaders/**.slang 命中 0 条）；Slang 把未用声明 DCE 掉 ⟹ 不进 SPV、
+// mapping 由批 M 过滤。声明与其 heap 槽留到**批 N+1** 一并删除（删除 + 永久护栏同批，
+// 见 docs/constantbuffer_迁移计划.md §9.8 N+1 行）。
 [[vk::binding(3, 0)]]
 ByteAddressBuffer sceneData;
 
+// 🔴 头区（@0 主光 / @48 env 参数 / @64 skyboxInvViewProj）批 S-5 起走**类型化 UBO**
+// （binding 22，SceneHeaderBlock）——本文件读取面零字节数。
 struct SceneLight
 {
     float3 direction;  // 照射方向（世界空间，归一化）
@@ -52,21 +59,72 @@ struct SceneLight
     float3 ambient;
 };
 
-SceneLight readSceneLight()
-{
-    SceneLight l;
-    l.direction = asfloat(sceneData.Load3(0));
-    l.eyePos    = asfloat(sceneData.Load3(12));
-    l.color     = asfloat(sceneData.Load3(24));
-    l.ambient   = asfloat(sceneData.Load3(36));
-    return l;
-}
-
 // 对象世界矩阵（列主序 4 列显式读，列组合变换——无行/列主序约定歧义）
 struct ObjectMatrix
 {
     float4 c0, c1, c2, c3;
 };
+
+// 场景头区（scene data @0，128B）的**类型化载体**（批 S-5，docs/constantbuffer_迁移计划.md
+// §9.2 / §9.4）。与 C++ 写入侧 vkrenderer_impl.cppm writeSceneStaging 的头区三段 memcpy
+// **逐字段对账**（SceneLight / envParams / skyInvVP 各一段，偏移由 scene_data.cppm 的
+// kSceneDataEnvOffset / kSceneDataSkyOffset 派生并 static_assert 钉死）：
+//   · light @0        —— 主光（forward 直接光 + 各 pass 的 eyePos 同源）
+//   · envParams @48   —— x=envIntensity y=envMipRange z=exposure w=aoStrength
+//   · skyInvVP @64    —— inverse(proj·view) 列主序 4 列（skybox 反投影 / SSR 反投影 /
+//                        shadow 级联选级取 camRight·camUp 三处同源）
+// 头区总 128B（= kSceneDataHeaderBytes，后 16B 是 128B 对齐填充：写入侧不写、读取侧不读）。
+struct SceneHeaderBlock
+{
+    SceneLight light;       // @0
+    float4 envParams;       // @48
+    ObjectMatrix skyInvVP;  // @64
+};
+
+[[vk::binding(22, 0)]]
+ConstantBuffer<SceneHeaderBlock> sceneHeader;
+
+SceneLight readSceneLight()
+{
+    return sceneHeader.light;
+}
+
+// 头区 env 参数读取面（契约字段 SceneHeaderBlock::envParams：x=envIntensity
+// y=envMipRange z=exposure w=aoStrength）。
+//   · readEnvIntensity() / readEnvMipRange()：env.slang 的 mip 选择与 light.frag /
+//     ssr_trace.frag 的环境项**三处共用**（批 S-5 起删掉后两文件各自的本地副本，
+//     原形 = `asfloat(envData.Load(48))` / `asfloat(envData.Load(52))`）。
+//     ⚠ 本文件**不**提供 `readEnvParams()`——那个名字是 env.slang 返回 `EnvParams` 结构
+//     的同名函数（无参重载撞不上，但同名不同返回类型 = 直接编译错误），别再新增。
+//   · readExposure()：tonemap.frag.slang 唯一消费者（原形 = `envData.Load(56)`）。
+//   · readSceneEyePos()：ao.frag.slang 把 SSAO 半分辨率深度线性化用（原形 =
+//     `asfloat(sceneData.Load3(12))` = 主光 eyePos，装配层每帧写）。
+//   · readSkyInvViewProj()：sky.slang 反投影与 shadow.slang 级联选级**两处共用**
+//     （列主序 4 列；消费方按列取，勿 float4x4(c0,c1,c2,c3)——见 clipToWorld）。
+float readEnvIntensity()
+{
+    return sceneHeader.envParams.x;
+}
+
+float readEnvMipRange()
+{
+    return sceneHeader.envParams.y;
+}
+
+float readExposure()
+{
+    return sceneHeader.envParams.z;
+}
+
+float3 readSceneEyePos()
+{
+    return sceneHeader.light.eyePos;
+}
+
+ObjectMatrix readSkyInvViewProj()
+{
+    return sceneHeader.skyInvVP;
+}
 
 // 表读取函数 readObjectMatrix / readObjectMvp 已迁 **scene_tables.slang**（批 T1，
 // StructuredBuffer<ObjectMatrix> @binding 23 / 26）——本文件零字节数，消费端 import 它。
@@ -348,7 +406,7 @@ float3 envBrdfFactor(float NoV, float roughness, float3 F0)
 // ⚠ 口径（改任何一行都要同步 `rgl/velocity_field.cppm` 的 CPU 侧镜像与它的单测）：
 //   · ndc.x = uv.x·2−1，**ndc.y = 1 − uv.y·2**（framebuffer uv 原点左上、NDC 原点左下）；
 //   · ndc.z = Vulkan 深度 [0,1] 直接用（0 = near、1 = far，`GLM_FORCE_DEPTH_ZERO_TO_ONE`）；
-//   · 用的矩阵是 sceneData@64 = inverse(proj·view) 的**抖动后**口径（与深度缓冲配套）。
+//   · 用的矩阵是头区契约字段 `SceneHeaderBlock::skyInvVP` = inverse(proj·view) 的**抖动后**口径（与深度缓冲配套）。
 
 // ObjectMatrix（列 c0..c3）× 列向量：clip/M 变换一律"列组合"写法（同 sky/ao 的
 // clipToWorld 惯例；勿按行主序点乘——ObjectMatrix 存的是列）。
@@ -357,15 +415,11 @@ float4 mulM(ObjectMatrix m, float4 v)
     return m.c0 * v.x + m.c1 * v.y + m.c2 * v.z + m.c3 * v.w;
 }
 
-// clip → world（sceneData@64 = inverse(proj·view)，**抖动后**口径；字面量 64/80/96/112
-// 与 scene_data.cppm kSceneDataSkyOffset + 16*i 一致）
+// clip → world（头区 skyInvVP = inverse(proj·view)，**抖动后**口径；批 S-5 起走类型化
+// 载体 SceneHeaderBlock，列组合口径不变 = mulM 展开后与本式逐运算子一致）
 float4 clipToWorld(float4 clip)
 {
-    float4 c0 = asfloat(sceneData.Load4(64));
-    float4 c1 = asfloat(sceneData.Load4(80));
-    float4 c2 = asfloat(sceneData.Load4(96));
-    float4 c3 = asfloat(sceneData.Load4(112));
-    return c0 * clip.x + c1 * clip.y + c2 * clip.z + c3 * clip.w;
+    return mulM(sceneHeader.skyInvVP, clip);
 }
 
 // 屏幕 uv + 深度 → 世界坐标（y 翻转，Vulkan 深度直接用）
@@ -423,7 +477,7 @@ float3 octDecode(float2 e)
 //   clipControl      (历史裁剪消融门 x, 软裁剪 λ y, zw 保留) —— 批 13.11，默认 0 = 逐位今天
 //
 // 矩阵口径提醒（改动前必读）：
-//   · 重建世界坐标用 sceneData@64 的 skyInvViewProj，它是**抖动后** proj·view 的逆（与深度配套）；
+//   · 重建世界坐标用头区契约字段 `SceneHeaderBlock::skyInvVP`，它是**抖动后** proj·view 的逆（与深度配套）；
 //   · 投回上一帧用这里的 prevViewProj（**也是抖动后**），产出**抖动网格**坐标；
 //   · 批 13.5 起历史住**基空间** ⟹ 上一步的抖动网格坐标要**减 c_{t−1}** 才对齐历史。
 //     ⚠ 这三条**成对**：prevViewProj 的口径与「减不减 c_{t−1}」必须二选一配套，
@@ -538,12 +592,12 @@ float4 readWetSpatial()
     return sceneWet.spatial;
 }
 
-// AO 施加强度：scene data @60，configs/scene.lua ao.strength，0 = 逐位旁路。
+// AO 施加强度：契约字段 SceneHeaderBlock::envParams.w，configs/scene.lua ao.strength，0 = 逐位旁路。
 // ⚠ 自批 13.6 起有**两个**消费者（taa.frag 施加 / tonemap 按标志施加），故从 tonemap 的
-//   局部函数**抬进本模块**——同一个 @60 字面量写两处必然漂移（本项目反复踩过）。
+//   局部函数**抬进本模块**——同一个标量写两处必然漂移（本项目反复踩过）。
 float readAoStrength()
 {
-    return asfloat(sceneData.Load(60u));
+    return sceneHeader.envParams.w;
 }
 
 // (x = feedback 本帧权重, y = historyValid 1/0, z/w = **本帧内容位移 c_t** 像素)。

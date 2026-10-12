@@ -21,6 +21,7 @@ namespace RGL {
 // A 方案）：SPV 加载 + 管线创建函数体移出接口 TU；本单元是叶子边。
 
 	void ShaderRegistry::fillSceneRegionSlots(RGL::PipelineBindings& b) {
+		b.slotSceneHeader = sceneData.headerSlot();  // binding 22（迁移批 S-5 头区 UBO 载体）
 		b.slotSceneWet = sceneData.wetSlot();  // binding 32（迁移批 1 湿面 UBO 载体）
 		b.slotSceneIrradiance = sceneData.irradianceSlot();  // binding 27（迁移批 2 辐照度 UBO 载体）
 		b.slotSceneLights = sceneData.lightSlot();  // binding 24（迁移批 3 灯数组 UBO 载体）

@@ -99,6 +99,15 @@ namespace RGL {
     static_assert(offsetof(SsrParamsBlock, params) == 64, "Field SsrParamsBlock.params offset does not match shader reflection (scalar layout drift!)");
     static_assert(offsetof(SsrParamsBlock, gate) == 80, "Field SsrParamsBlock.gate offset does not match shader reflection (scalar layout drift!)");
 
+    export struct SceneHeaderBlock {
+        SceneLight light;
+        glm::vec4 envParams;
+        ObjectMatrix skyInvVP;
+    };
+    static_assert(sizeof(SceneHeaderBlock) == 128, "Size of C++ struct SceneHeaderBlock does not match shader reflection!");
+    static_assert(offsetof(SceneHeaderBlock, envParams) == 48, "Field SceneHeaderBlock.envParams offset does not match shader reflection (scalar layout drift!)");
+    static_assert(offsetof(SceneHeaderBlock, skyInvVP) == 64, "Field SceneHeaderBlock.skyInvVP offset does not match shader reflection (scalar layout drift!)");
+
     export struct TaaParamsBlock {
         ObjectMatrix prevViewProj;
         ObjectMatrix motion;

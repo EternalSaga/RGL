@@ -23,7 +23,7 @@
 //   · 法线来自 2×2 quad 导数，深度量化误差表现为轻微块状（1280×720 下不可见）。
 //   · 深度 == 1.0（天空像素，skybox 不写深度）直接输出 0 = 不遮蔽。
 
-import scene;  // sceneData buffer（binding 3，仅读 @12 eyePos 与 @64 invViewProj）
+import scene;  // 头区 UBO（binding 22）：readSceneEyePos / readAoStrength + worldFromDepth
 
 [[vk::binding(4, 0)]] Texture2D<float> depthTex;  // eD32Sfloat 深度图（eDepth aspect）
 [[vk::binding(5, 0)]] SamplerState pointSampler;  // AO 专用 NEAREST sampler（不可用共享
@@ -77,7 +77,7 @@ float main(AoInput input) : SV_Target
     // 法线 = 重建世界坐标的屏幕空间导数叉积。SAO 论文的取法：不必额外采 4 个邻域，
     // ddx/ddy 在 2×2 quad 上求值即得面法线。
     float3 N = normalize(cross(ddx(P), ddy(P)));
-    const float3 eye = asfloat(sceneData.Load3(12));
+    const float3 eye = readSceneEyePos();
     const float3 viewDir = normalize(eye - P);  // 视线：P → 相机
     // 叉积手性取决于 quad 内 uv 递增方向，叉出的法线可能朝里；统一翻成朝向相机。
     if (dot(N, viewDir) < 0.0)
@@ -96,10 +96,10 @@ float main(AoInput input) : SV_Target
     const float2 stepUv = max(kRadius / pixelWorld, 1.0) * texel;
 
     // ===== 分支区：以下不再有任何求导 =====
-    // 强度 = 0 = 关闭（configs/scene.lua ao.strength 缺省 0 → scene data @60）。早退让
+    // 强度 = 0 = 关闭（configs/scene.lua ao.strength 缺省 0 → 头区 envParams.w）。早退让
     // "默认关闭"真正零成本：12 采样核整段跳过，只留一次纹理读 + 导数。tonemap 侧按同一
     // strength 旁路，故关闭时输出逐位等于加 AO 之前（BIT-IDENTICAL 基线不受影响）。
-    if (asfloat(sceneData.Load(60)) <= 0.0)
+    if (readAoStrength() <= 0.0)
         return 1.0;
     // 天空像素：深度 = 远平面清值（skybox 大三角 z=1 靠 depth clear + LEQUAL，不写深度）
     // → 无遮蔽。阈值 0.9999 而非 ==1.0：clear 值位级未必精确是 1。

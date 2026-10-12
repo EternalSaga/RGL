@@ -29,7 +29,7 @@ static const float kShadowFarFadeK = 4.0;
 // 代码里可见（当前 4 抽头等权，改 9 抽头只动一个数）。本项目已有先例：
 // ao.frag 同样用普通 pointSampler 采深度后手动比较。
 
-import scene;  // binding 3：sceneData + readShadowViewProj / readCascadeSplits / readShadowParams
+import scene;  // readSceneLight / readSkyInvViewProj（头区 UBO binding 22）+ readShadowViewProj / readCascadeSplits / readShadowParams
 
 #if defined(PCSS_SOFT) || defined(EVSSM_SOFT)
 // 批 11.5：本 slangc 不自动提供 gl_FragCoord（实测 E30015；__system_value 亦移除），
@@ -297,15 +297,17 @@ float sampleShadow1Tap(float3 worldPos, float3 N)
     //   inverse(proj·view)。其第 0 列的前三分量 ∝ 相机右向量、第 1 列 ∝ 相机上向量
     //   （右/上向量在 invV 里就是这两列，透视只贡献正标量），故 forward = normalize(cross(up, right))
     //   ——对任意 pitch/yaw 精确、与 fov/aspect/n/f 无关。
-    //   **踩过的坑**（5a-8 首版，勿回退）：曾用 `-normalize(Load4(96).xyz)`（invVP 第 2 列）
+    //   **踩过的坑**（5a-8 首版，勿回退）：曾用 invVP **第 2 列**的前三分量取反
+    //   （旧字节形态 `-normalize(Load4(96).xyz)`，类型化后 = `-normalize(invVP.c2.xyz)`）
     //   当 forward，注释称"w=0 无平移项混入"——**实测 w = 7.76 ≠ 0**，方向与真 forward 点积
     //   −0.43（近乎垂直）。后果：视深算错 → 绝大多数片元被判成"未越过 split0" → 全落最小的
     //   c0（半径 0.29 的盒）→ 远处一律出块旁路全亮 → **远处整片没影子，且该旁路边界随相机
     //   推进在世界面上扫过 = 用户报的"远处影子边缘往前移动"**。探针 probe6b 逐候选实测：
     //   第 2 列 −0.43 / cross(col1,col0) 0.94 / cross(row1,row0) **1.000000**。
     const float3 eyePos = readSceneLight().eyePos;
-    const float3 camRight = asfloat(sceneData.Load4(64)).xyz;   // invVP 第 0 列前三分量
-    const float3 camUp = asfloat(sceneData.Load4(80)).xyz;      // invVP 第 1 列前三分量
+    const ObjectMatrix invVP = readSkyInvViewProj();
+    const float3 camRight = invVP.c0.xyz;   // invVP 第 0 列前三分量
+    const float3 camUp = invVP.c1.xyz;      // invVP 第 1 列前三分量
     // ⚠️ 本提取式（cross(col1,col0)）的数学同一性由 tests/test_shadow_forward.cppm
     // 钉住（500 随机姿态 dot≥1−1e-5；错误形态 −col2 / 叉积倒序 / 偏移互换各验红）——
     // 改动本式必须同步该测试（12.3d-C）。

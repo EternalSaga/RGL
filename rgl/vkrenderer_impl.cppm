@@ -236,15 +236,25 @@ void Renderer::createSceneStaging(RGL::Resources& vkResources) {
 	// ③.5 scene data 上传（Phase 5 批次 2；手术 5：块体提为私有方法，语义零改动）。
 	auto z = zone("drawFrame.staging");  // 批 9.5 观测：scene data 逐字段 memcpy 进 mapped 块
 	auto* stage = static_cast<std::byte*>(sceneStaging[frameSlot].getMappedData());
-	std::memcpy(stage, &list.sceneData.light, sizeof(SceneLight));
-	// Phase 5.5：env 参数写 @48（light 48B 之后、64B 头内——与 objectMatrices 区无重叠）
-	std::memcpy(stage + kSceneDataEnvOffset, &list.sceneData.envParams, sizeof(glm::vec2));
-	// Phase 8 收尾：tonemap 曝光写 @56（env 16B 保留区内；tonemap.frag Load(56) 消费）
-	std::memcpy(stage + kSceneDataExposureOffset, &list.sceneData.exposure, sizeof(float));
-	// Phase 11 批 11.4：SSAO 强度写 @60（头部保留区最后一格；tonemap.frag Load(60) 消费）
-	std::memcpy(stage + kSceneDataAoOffset, &list.sceneData.aoStrength, sizeof(float));
-	// Phase 5.5 批次 4：skyboxInvViewProj 写 @64（sky.slang skyClipToWorld 消费）
-	std::memcpy(stage + kSceneDataSkyOffset, &list.sceneData.skyInvViewProj, sizeof(glm::mat4));
+	// 头区（128B）：迁移批 S-5 起合并成契约 `SceneHeaderBlock`（binding 22 载体），**按生成
+	// struct 整块写**——旧的五段 memcpy（light @0 / envParams @48 / exposure @56 /
+	// aoStrength @60 / skyInvVP @64）删除，字段偏移只在反射生成物一处。
+	// envParams 的 xy = env 两参数、z = tonemap 曝光、w = SSAO 强度（原本就是三个独立标量
+	// 各自 memcpy 进同一段 16B 保留区，合并后字节形态逐位同：vec4 的 z/w 就是 @56/@60 两格）。
+	// mat4 → ObjectMatrix 的**列直拷**与旧的「memcpy 64B」逐字节同（glm 是 col_major）。
+	static_assert(sizeof(SceneHeaderBlock) == kSceneDataHeaderBytes
+			&& sizeof(ObjectMatrix) == sizeof(glm::mat4),
+		"SceneHeaderBlock 字节形态与头区容量不同源（列直拷前提失效）");
+	const SceneHeaderBlock headerBlock {
+		.light = list.sceneData.light,
+		.envParams = glm::vec4 {list.sceneData.envParams.x, list.sceneData.envParams.y,
+			list.sceneData.exposure, list.sceneData.aoStrength},
+		.skyInvVP = ObjectMatrix {list.sceneData.skyInvViewProj[0],
+		                          list.sceneData.skyInvViewProj[1],
+		                          list.sceneData.skyInvViewProj[2],
+		                          list.sceneData.skyInvViewProj[3]},
+	};
+	std::memcpy(stage + kSceneDataHeaderOffset, &headerBlock, sizeof(headerBlock));
 	// Phase 11 批 11.2：阴影光空间 VP 区（尾区追加，4 槽）+ 采样参数子区（3 个 vec4）
 	// 迁移批 S-1：读端已换 `ConstantBuffer<ShadowViewProjBlock>`（binding 28，元素 ObjectMatrix
 	// 列主序），**写端逐字节不变**——源数组尺寸与区字节数由下面这条 assert 钉死

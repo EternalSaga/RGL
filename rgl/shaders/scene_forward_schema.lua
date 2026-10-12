@@ -137,6 +137,21 @@ return {
                 { name = "gate",     type = "vec4", offset = 80 },
             },
         },
+        -- 迁移批 S-5（§9.5 binding 22）：场景**头区**类型化载体（scene.slang
+        -- SceneHeaderBlock，ConstantBuffer<SceneHeaderBlock> 经子范围描述符指向 scene data
+        -- 头区 kSceneDataHeaderOffset = 0，128B = kSceneDataHeaderBytes）。
+        -- 字段序 = 头区物理序：主光 @0（sizeof(SceneLight) = 48）、env 参数 @48
+        -- （= kSceneDataEnvOffset 的派生式，本处把它变成**声明**）、skyInvVP @64
+        -- （= kSceneDataSkyOffset）。后 16B 是 128B 对齐填充（写入侧不写、读取侧不读）。
+        {
+            name = "SceneHeaderBlock",
+            stride = 128,
+            attributes = {
+                { name = "light",      type = "SceneLight", offset = 0 },
+                { name = "envParams",  type = "vec4",       offset = 48 },
+                { name = "skyInvVP",   type = "ObjectMatrix", offset = 64 },
+            },
+        },
         -- 迁移批 S-4（§9.5 binding 30）：TAA 区类型化载体（scene.slang TaaParamsBlock，
         -- ConstantBuffer<TaaParamsBlock> 经子范围描述符指向 scene data TAA 区
         -- kSceneDataTaaOffset，192B = 2×ObjectMatrix + 4×vec4）。六段自批 13.11 起本就同区

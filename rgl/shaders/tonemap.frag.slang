@@ -46,18 +46,14 @@
 // **红线**：本 pass 的采样坐标自批 13.5 起与「TAA 关」时的本文件逐位相同（`input.uv`）；
 // 批 13.6 的 AO 门控 `lerp(x, 1, 0) ≡ x` 位精确 ⟹ TAA 关时本 pass 整体逐位不变。
 
-import scene;  // sceneData buffer（binding 3：Load(56) 曝光 / Load(60) AO 强度 / @723600 偏移）
+import scene;  // 头区 UBO（binding 22）：readExposure 曝光 / readAoStrength AO 强度 + TAA 区读取面
 
 [[vk::binding(4, 0)]] Texture2D<float4> sceneHdrTex;
 [[vk::binding(5, 0)]] SamplerState hdrSampler;
 [[vk::binding(6, 0)]] Texture2D<float> aoTex;  // SSAO **可见度**（r8_unorm，ao pass 产出，1=通透）
 
-// 曝光（ACES 输入前的线性倍率）：scene data @56，configs/scene.lua exposure，
-// 1.0 = 直通（默认，与旧写死常量逐位一致）。
-float readExposure()
-{
-    return asfloat(sceneData.Load(56));
-}
+// 曝光（ACES 输入前的线性倍率）= `scene.slang::readExposure()`（头区契约字段
+// SceneHeaderBlock::envParams.z，configs/scene.lua exposure，1.0 = 直通 = 与旧写死常量逐位一致）。
 
 // AO 施加强度 = `scene.slang::readAoStrength()`（批 13.6 起 taa.frag 也要它，已抬进模块）。
 

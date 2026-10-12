@@ -7,27 +7,32 @@ module;
 #include <cmath>                         // std::sqrt（自由函数不经 BMI 保证传递，GMF 自带）
 
 // shadow.slang 级联选级 forward 提取式的数学回归（批 12.3d-C，5a-8c 回归）——
-// 被测公式 = rgl/shaders/shadow.slang L65-67：
-//   camRight = asfloat(sceneData.Load4(64)).xyz;   // invVP 第 0 列前三分量
-//   camUp    = asfloat(sceneData.Load4(80)).xyz;   // invVP 第 1 列前三分量
-//   forward  = normalize(cross(camUp, camRight));
+// 被测公式 = rgl/shaders/shadow.slang（迁移批 S-5 起类型化）：
+//   invVP      = readSkyInvViewProj();          // 头区 SceneHeaderBlock::skyInvVP
+//   camRight   = invVP.c0.xyz;                  // invVP 第 0 列前三分量
+//   camUp      = invVP.c1.xyz;                  // invVP 第 1 列前三分量
+//   forward    = normalize(cross(camUp, camRight));
+// 本测试仍按**字节**复刻（`load4(h, kSceneDataSkyOffset + 16c)`）：类型化只换了 shader 侧
+// 写法，头区物理布局一 bit 未动（c0 = 字节 64..79），而"字节偏移→列"正是 5a-8c 踩的坑本身，
+// 换成 glm 下标反而把要钉的东西钉掉了。
 //
 // ## 诚实声明（本测试钉什么、不钉什么）
 //
 // 钉的是**数学同一性**：对 invVP = inverse(proj·view)（列主序 memcpy 进 scene data
 // @kSceneDataSkyOffset），"字节偏移→列→叉积"这条提取链恒等于 CPU 侧 cameraForward。
-// 它**不解析 shader 源**——shadow.slang 该式（字节偏移 64/80、叉积顺序、取反）**任何
+// 它**不解析 shader 源**——shadow.slang 该式（列 0/1、叉积顺序、取反）**任何
 // 改动必须同步本测试**（本文件是恒等式的 C++ 侧镜像）。生产侧注释同步建议已列入
 // 12.3d-C 交付报告（建议 shader 注释反向指回本文件）。
 //
 // ## 钉住的同源链（断言按源码写，不照记忆写）
 //
-//   · CPU 写入侧：render_list_impl.cppm L408 `skyInvViewProj = glm::inverse(viewProj.proj
+//   · CPU 写入侧：render_list_impl.cppm `skyInvViewProj = glm::inverse(viewProj.proj
 //     * viewProj.view)`；view = cameraView(camera)（camera.cppm，fps 分支 = lookAt(pos,
 //     pos+cameraForward, cameraUp)）、proj = glm::perspective(fov, aspect, near, far)
 //     （ecs_impl.cppm projectionSystem；rlbase PUBLIC 定义 GLM_FORCE_DEPTH_ZERO_TO_ONE，
 //     测试链 rlbase 同宏生效）——本测试逐环节走同一构造函数，不另起炉灶。
-//   · 字节布局：vkrenderer_impl.cppm L208 memcpy(&skyInvViewProj → kSceneDataSkyOffset)；
+//   · 字节布局：vkrenderer_impl.cppm writeSceneStaging 把 `skyInvViewProj` 的四列摊进
+//     `SceneHeaderBlock::skyInvVP` 后整块 memcpy 到 @kSceneDataSkyOffset（批 S-5 起）；
 //     glm mat4 列主序 → Load4(64+16c) = 第 c 列（5a-8c 教训 #2："内存第 c 个 vec4 =
 //     第 c 列"，本测试用真 memcpy + load4 复刻，不经 glm 下标，混不了）。
 //
@@ -41,10 +46,11 @@ module;
 //
 // ## 变异红线声明（改复刻式哪一处 → 哪条红）
 //
-//   提取式换历史错误形态 `-normalize(load4(96).xyz)` → 随机用例红（各机位 dot 散布在
-//   ±1 之间，无一过阈），锚点用例三条全红；
+//   提取式换历史错误形态 `-normalize(load4(96).xyz)`（= shader 侧 `-normalize(invVP.c2.xyz)`）
+//   → 随机用例红（各机位 dot 散布在 ±1 之间，无一过阈），锚点用例三条全红；
 //   `cross(camUp, camRight)` 顺序颠倒 → dot ≈ −1，两用例全红；
-//   字节偏移 64↔80 互换（= 叉积顺序颠倒的内存形态）→ col∝right/up 两条断言先红。
+//   列 0↔1 互换（= 字节偏移 64↔80 互换 = 叉积顺序颠倒的内存形态）→ col∝right/up
+//   两条断言先红。批 S-5 的阳性对照走的正是最后这条，实测出厂默认档截图离开锚。
 
 export module test_shadow_forward;
 
@@ -59,7 +65,7 @@ namespace {
 using testing::expectNear;
 using testing::Lcg;
 
-// shader 端 Load4(64) 字面量与 scene_data 常量的同步锚（漂移 = 编译期红）。
+// shader 端 `skyInvVP` 的列 0 落在字节 64 与 scene_data 常量的同步锚（漂移 = 编译期红）。
 static_assert(kSceneDataSkyOffset == 64);
 
 /// scene data 头（128B）仿真：vkrenderer_impl writeSceneStaging 同款 memcpy 写入 invVP。
@@ -110,10 +116,10 @@ TEST_CASE("锚点机位：提取式 = (0,0,−1) 约定值 + col2 是平移泄�
 	const Pose p = makePose(cam, 45.0f * glm::pi<float>() / 180.0f, 1.5f, 0.1f, 100.0f);
 	const SceneHeader h = makeHeader(p.invVP);
 
-	const glm::vec3 camRight(load4(h, kSceneDataSkyOffset));      // shadow.slang L65（.xyz = 显式截断，glm 默认无 swizzle）
-	const glm::vec3 camUp(load4(h, kSceneDataSkyOffset + 16));    // shadow.slang L66
-	const glm::vec4 col2 = load4(h, kSceneDataSkyOffset + 32);    // 历史错误取材点（L96）
-	const glm::vec3 forward = glm::normalize(glm::cross(camUp, camRight));  // shadow.slang L67
+	const glm::vec3 camRight(load4(h, kSceneDataSkyOffset));      // shadow.slang invVP.c0.xyz（.xyz = 显式截断，glm 默认无 swizzle）
+	const glm::vec3 camUp(load4(h, kSceneDataSkyOffset + 16));    // shadow.slang invVP.c1.xyz
+	const glm::vec4 col2 = load4(h, kSceneDataSkyOffset + 32);    // 历史错误取材点（旧 Load4(96) = invVP.c2）
+	const glm::vec3 forward = glm::normalize(glm::cross(camUp, camRight));  // shadow.slang forward 式
 
 	// 约定锚点：forward = (0,0,−1)（camera.cppm L108 注释的同款约定）。
 	expectNear(forward.x, 0.0, 0.0, 1e-6);

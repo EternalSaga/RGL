@@ -71,7 +71,8 @@ float izbShadowFactor(float3 P, float3 N, float2 uv)
 }
 #endif
 
-// env 参数（scene data @48 intensity / @52 mipRange，env.slang readEnvParams 同款布局直读）
+// env 参数（头区契约字段 SceneHeaderBlock::envParams.xy，scene.slang readEnvIntensity /
+// readEnvMipRange 共用读取面；本结构只是本地成对取值，无字节偏移）
 struct EnvParamsL
 {
     float intensity;
@@ -80,8 +81,8 @@ struct EnvParamsL
 EnvParamsL readEnvParamsL()
 {
     EnvParamsL e;
-    e.intensity = asfloat(sceneData.Load(48));
-    e.mipRange  = asfloat(sceneData.Load(52));
+    e.intensity = readEnvIntensity();
+    e.mipRange  = readEnvMipRange();
     return e;
 }
 
