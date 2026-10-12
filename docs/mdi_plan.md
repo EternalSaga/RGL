@@ -1206,3 +1206,65 @@ primitive 不接管，与我从 glb 独立算出的 **61** 逐位吻合；gated 
    `diagnostics.cull_replay` 没有**——判据关键的键都该 fail-fast（挂号）。
 2. **`smoke.py:gbuf_channel()` 对 `dump_gbuf=0` 返回 None**（`n if n > 0 else None`），
    而引擎 0..4 都是合法通道 ⟹ ch0 采集每次报"没拿到截图"。子 agent 发现并绕过，已修。
+
+## 17. ★1-a2 逐簇剔除：定价实测与设计定案（2026-12 拍板）
+
+### 17.1 定价：β-1 的 −4.1% 全部来自主 pass，阴影一分未动
+
+`profiler=120` / `--frames 130` / 单实例串行 / aa 默认档 / 本机 8060S。GPU 时间戳取 `n=117` 那组
+（`n=119` 是 CPU zone，两组同名，**读错组会把 CPU 录制时间当成 GPU**）。
+
+| GPU pass | 门关 | 取代档（β-1） | Δ |
+|---|---|---|---|
+| `geometry`（G-buffer） | 2.322 ms | **1.966 ms** | **−15.3%** |
+| `shadow` + `shadow1..3` | 6.608 ms | 6.587 ms | 0（β-1 只切主 opaque 段） |
+| `gpu.frame` | 9.212 ms | 8.834 ms | −4.1% |
+
+与 §16 报的 −4.6% 同向（那次是两次独立 GPU 帧读数，本次是 profiler 在场档）。三条推论：
+
+1. **★1-a2 在主 pass 上的绝对天花板 = 1.966 ms**。提交几何砍 39×（§7.3 的 42.6%→1.08%）后
+   屏幕上该画的还得画，现实预期 **1.3–1.7 ms（帧的 15–19%）**。
+2. 🔴 **阴影 6.587 ms 是主 pass 的 3.4 倍**，而 §7.4 只给它 3.2× 的提交几何下降。基数差太多
+   ⟹ **β-2 的期望收益高于 ★1-a2**。剔除基础设施两边共用（剔除器必须**接受任意视锥**，
+   阴影 = 4 级联 4 次调用），所以 ★1-a2 先做仍成立，但**别把它当终点**。
+3. 本表推翻了"先做完 ★1 再测 §7.4"里隐含的排序假设——阴影侧的账现在就有 per-pass 读数，
+   不必等 ★1（债-82 的级联体数仍待实测，那是另一件事）。
+
+### 17.2 设计定案：标志位早退（★1-a2-i），不做压紧、不做 indirect
+
+**为什么不需要 indirect**：每个 primitive 本来就是**独立 draw、taskCount 由 CPU 给**
+（`meshletTaskCount(l0Count)` = 2×L0 簇数）。所以"少画"有两种实现——CPU 改 taskCount（要 GPU→CPU
+读回 = 卡帧）或 GPU 让空任务自己早退。选后者。
+
+**★1-a2-i 的形态**（本批）：
+
+| 件 | 内容 |
+|---|---|
+| 剔除项表 | 启动期一次性上传，**object 主序**逐 L0 簇一项：`{clusterIdx u32, objectSlot u32}`（8B × 27,487 ≈ 220 KB）。同 `cullTable` 的建法 |
+| `ObjectClusterRange` | 复用现成的 `reserved` 字段承载 **`cullBase`**（该 object 首剔除项的全局下标 = l0Count 的 object 前缀和）。🔴 **不用 `base + local` 做下标**：`base` 是全局簇下标，同资产被两个 object 复用时两者撞同一槽 ⟹ 一个对象的可见性替另一个决定 = **几何凭空消失**。16B 步长不变 = scene data 布局不动 |
+| 剔除 compute | 新 `meshlet_cull.comp.slang`，一线程一剔除项。球变换与 6 面保守测试**逐式复用** `cull.comp.slang`（`wc = m0·c.x+m1·c.y+m2·c.z+m3`、`scale = max(三列长度)`、`dot+n.w < -r` 才剔），视锥走 push。写 `RWByteAddressBuffer` 的 u32 标志 |
+| dispatch 位置 | 主 CB 内、`recordFixedDataPath` **之后**（scene staging 已拷完 + 屏障已过）、pass 循环**之前**。渲染图**没有 compute pass 概念**（`ao` 是全屏光栅不是 compute）⟹ 手插图外数据通路段 |
+| mesh shader | `if (flag[range.cullBase + localCluster] == 0) { SetMeshOutputCounts(0,0); return; }` |
+| 门 | `meshlet.cull`（默认 false）。门关 = 不 dispatch、mesh 不读 = 与 β-1 逐位同 |
+
+**确定性**：标志位方案**无 atomic、无顺序依赖** ⟹ 天然逐帧确定（压紧方案要 atomicAdd，
+会引入提交序抖动，那是 ★1-a2-ii 才付的代价）。
+
+**🔴 本批最值钱的判据**：保守视锥剔除**按构造不可能改变交付图像**——被剔的簇整个在视锥外，
+一个像素都贡献不了。所以主判据是零阈值的
+
+> **`cull=on` 截图 逐位 = `cull=off` 截图**（不是"差异小于地板"）
+
+配套三条，缺一条就是假绿：
+- **阳性对照**：一个"强制全剔"的调试档必须把主 opaque 段整个抹掉（否则"剔除器根本没跑"也满足上式）；
+- **反向对照**：`meshlet.enable=false` 仍 = 门关基线锚 `54e40665…`；
+- **收益判据**：`geometry` pass 的 GPU 时间戳必须降（保守剔除若没剔掉任何东西，图像也"逐位不变"，
+  上式照样绿 ⟹ 图像判据对"剔了个寂寞"全盲，必须配性能读数）。
+
+### 17.3 ★1-a2-ii（挂号，本批不做）：压紧 + GPU 写 groupCount
+
+标志位方案仍要发射 2×27,487 = 55K 个任务，其中被剔的那些只是早退。若实测早退开销吃掉收益，
+再做压紧：`cull.comp.slang` 已经在**逐 candidate 覆盖 `meshCmd.x`（groupCount）**
+（不可见 → 0 = no-op draw），所以 GPU 写 taskCount 的通路**现成**。缺的只是**顺序稳定的压紧**
+（两趟：先 per-object 计数、再前缀和写紧凑簇下标表）——不能用裸 atomicAdd，那会让同 object 内
+可见簇的顺序逐帧抖，深度平局像素跟着抖。
