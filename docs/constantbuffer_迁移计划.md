@@ -13,6 +13,7 @@
 | C1 | 分支拓扑：迁移从 master 切，还是从 MDI tip 切 | 🔴 **从 MDI tip 切**（理由 §6.2，这条决定另一会话怎么开） |
 | C2 | 迁移粒度：每区一 buffer，还是"标量合并一 UBO + 大表各自 SSBO" | 先做批 0 测量再定，**别先定形态再找理由** |
 | C3 | `cull.comp.slang` 遗留偏移是否并入本计划 | 并入，但排最后（它是纯遗留，不阻塞任何新功能） |
+| 🔴 **C4** | **R3 红线（禁 StructuredBuffer）是否按 §8.4 三条件改精确** | 未决。🔴 **未获放行前 §2 目标形态在 `rgl/` 树内不得实施**——★1-a2 已按此回退 |
 
 ## 1. 为什么现在能做（事实基线，**别再重查一遍**）
 
@@ -62,7 +63,7 @@ NVIDIA 常见 **65536** ⟹ 在本机把 787KB 的 scene data 整体做成一个
 | 大 per-object 表（对象矩阵、draw 表、簇区间表） | `StructuredBuffer<T>`（SSBO） | **无基址**，只有下标 | 同上，`ArrayStride` 进产物 |
 | 确需按字节切的大池（簇顶点池等，若仍适用） | `ByteAddressBuffer` | 有 | 🔴 必须**申报**（§5.2 棘轮），逐个写明为什么不能类型化 |
 
-**目标 idiom（★1-a2-i 的 GPU 侧要照这个写，它就是这个计划的第一块砖）**：
+**目标 idiom**：
 
 ```slang
 // 契约：struct 声明在反射契约文件里，schema 登记 → 生成 C++ struct + static_assert
@@ -71,6 +72,11 @@ StructuredBuffer<uint>            clusterVisible;
 ```
 
 对照现状（要消失的形态）：`sceneData.Load<ObjectDraw>(524944u + objectIndex * 48u)`。
+
+> 🔴🔴 **本计划的整个 §2 目标形态被一条现存红线挡着，未获撤销前不得在 `rgl/` 树内实施**：
+> `shader_dep_check` **R3**（`tools/check_shader_deps.py`）——「任何 .slang 出现
+> StructuredBuffer = ERROR，全库零使用，**无豁免清单**」，出处 git:调试历史「灰屏」stride
+> 静默错位。冲突经过、撤销条件与配套护栏见 **§8**。**这条是用户决策，不是工程默认。**
 
 > 🔴 **本计划的成功判据不是"偏移被生成对了"，是"偏移写不出来了"**。凡是最后落成"生成一份
 > 偏移常量给 shader 用"的批次，都说明那块没真正迁完，只是把双源搬了个家。
@@ -159,11 +165,18 @@ StructuredBuffer<uint>            clusterVisible;
 **从 MDI tip 切迁移分支**（不是 master），迁移会话自己带一份有效锚点，MDI 落完后 rebase——
 rebase 是平凡的，因为它本来就是后代。
 
-### 6.3 ★1-a2-i 用新 idiom 写 = 第一块砖
+### 6.3 ★1-a2-i 试过用新 idiom 写，**已因 R3 撤销**（见 §8）
 
-MDI 的 GPU 侧（剔除项表、可见标志 buffer）是**新代码、无逐位锚点**，用 `StructuredBuffer<T>`
-写等于零风险地把新机制在渲染路径跑通一遍，同时**给迁移会话立好目标 idiom 的实际样例**——
-避免两个会话各造一套新写法。这也是本文件要在 ★1-a2 之前写的原因。
+原判断：MDI 的 GPU 侧（剔除项表、可见标志 buffer）是新代码、无逐位锚点，用 `StructuredBuffer<T>`
+写等于零风险把新机制在渲染路径跑通一遍，顺便给本计划立好实际样例。
+
+**实测结果**：三张表全部类型化后，`ArrayStride` = 8/44/4、`cull=on` 与 `cull=off` 逐位相同、
+阳性对照（强制标志全 0）几何整块消失——**功能与布局都对**。但 `shader_dep_check` R3 报 4 条
+ERROR（红线明令"无豁免清单"）⟹ **已回退成 `ByteAddressBuffer` + `Load<T>`**，功能不受影响。
+
+> 保留的一点：`Load<T>` 形态下步长与字段位置**仍由编译器从契约 struct 算**，所以 ★1-a2 至今
+> 没有手抄的字段偏移。R3 挡的是 stride 布局的静默偏离，与"不写字面量"是两件事——别把回退读成
+> 回到了 `cull.comp.slang` 那种手抄偏移。
 
 ## 7. 明确不做
 
@@ -172,3 +185,51 @@ MDI 的 GPU 侧（剔除项表、可见标志 buffer）是**新代码、无逐�
 - **不动 descriptor heap 机制本身**（spike 已证它不是障碍）。
 - **不在本计划里改 scene data 的任何语义或数值**——那是功能改动，会污染逐位判据。
 - **不追求"一个区都不剩"**：§2 第三类允许保留 `ByteAddressBuffer`，但必须申报理由。
+
+## 8. 🔴 未决冲突：R3 红线 vs 本计划的目标形态（**等用户拍板**）
+
+### 8.1 红线本体
+
+`tools/check_shader_deps.py`（构建期 `shader_dep_check`，`cmake/RglChecks.cmake` 登记）：
+
+> **R3 任何 .slang 出现 StructuredBuffer（含 RW/Append/Consume）= 红线（全库零使用，
+> 无豁免清单；git:调试历史「灰屏」stride 静默错位）**
+
+只警告不阻断（醒目 ERROR 行、`--strict` 拿非零码）。规则自陈的理由是"stride ≥16B 对齐与
+C++ sizeof 静默偏离"。
+
+### 8.2 今天发生的事，按时间顺序（**含一个我该早点发现的疏漏**）
+
+1. spike（`tests/test_descriptor_heap_ubo.cppm`）用 `StructuredBuffer<Mvp>` 验通了 heap 内的
+   SSBO/UBO。**但 R3 只扫 `rgl/` 树、不扫 `tests/shaders/`** ⟹ **spike 是绕着红线跑的，
+   不是红线认可了它**。我在写 §2 目标形态时没有先查这条规则，这是疏漏。
+2. ★1-a2-i 的 GPU 侧按 §2 写成类型化载体（3 张表），实测：`ArrayStride` = 8/44/4、
+   `cull=on` 逐位 = `cull=off` = 取代档锚点 `0233baacea7b2654…`、阳性对照 sha `734124f3…`
+   （两次独立跑同值）。**功能与布局都正确。**
+3. 代价 = R3 报 4 条 ERROR。红线写明"无豁免清单"，⟹ **已回退** `ByteAddressBuffer` + `Load<T>`，
+   回退后逐位仍 = `0233baacea7b2654…`、R3 归零。
+
+### 8.3 这条红线**盖住了什么**、**没盖住什么**（别照字面读宽）
+
+- 它怕的失效形态是真的：元素 stride 在 shader 侧与 C++ 侧不一致 → 静默错位 → 灰屏。
+- 但它**一刀切**的形态下，"元素类型来自反射契约"这一类**恰好是最不可能静默偏离的**：C++
+  `sizeof` 与 SPIR-V `ArrayStride` 同源于一份声明，生成物还带 `static_assert(sizeof == N)`。
+  也就是说 R3 现在**把它的解药和病毒一起禁了**。
+- 反过来，R3 **不**保证现存 `ByteAddressBuffer` 路径是对的——那条路上偏移是手抄的，
+  真出错时同样静默。今天 `MeshletClusterHeader` 那批字面量就是靠人肉发现才删掉的。
+
+### 8.4 撤销条件（要三条同时成立，缺一条就是拿灰屏风险换整洁）
+
+1. **R3 改精确**：从"出现 StructuredBuffer 即 ERROR"改成"**元素类型未走反射契约**才 ERROR"。
+   保留牙（无契约的裸 struct 仍然红），去掉误伤（契约类型放行）。
+2. **stride 实测护栏**：给 `tests/` 的 gpu 套件加**实际在用的 stride**（8 / 44 / 4，含 44 这个
+   非 16 倍数的奇数 stride）的**设备端往返**用例——写已知模式到元素 1、经 shader 读回比对。
+   理由：R3 的理由是一条**驱动/布局事实**，事实只能测，不能靠注释或推理定案。
+3. **逐位护栏**：迁移批次逐条 `just regress`（§3.2），且**阳性对照必须真变**（§3.4 第一条：
+   漏写/接错描述符是完全静默的）。
+
+### 8.5 为什么这条**必须**用户拍板
+
+"全库零使用、无豁免清单"是一条**意图声明**，不是一条技术结论。工程侧能证明"带反射契约的
+StructuredBuffer 在本机 stride 正确"，但**推翻一条用户定下的红线不是工程权限**。
+所以在 §8.4 三条落地并获放行之前，本计划的 §2 目标形态**在 `rgl/` 树内一律不得实施**。

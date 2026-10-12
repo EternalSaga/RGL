@@ -50,6 +50,22 @@ ByteAddressBuffer meshletTris;        // 扁平 u8 三角索引流
 [[vk::binding(20, 0)]]
 ByteAddressBuffer meshletRemap;       // 扁平 u32 顶点重映射流
 
+// 簇化轴 ★1-a2-i：逐簇视锥剔除的**可见标志**（`meshlet_cull.comp.slang` 每帧写，1 = 画）。
+// 下标 = `range.cullBase + 簇内序`（= **剔除项表**下标，🔴 不是全局簇下标：同资产的簇被多个
+// objectSlot 共享，用全局下标会让一个实例的可见性替另一个决定 = 几何凭空消失）。
+// 🔴 本 binding **无条件声明**——mesh SPV 只有一份，β-1 取代档与 cull 档共用，而 descriptor heap
+// 下「shader 声明了 binding 却无 mapping」是 VVL 错误（反向的「有 mapping 未声明」才空转无害，
+// 见 shader.cppm 的 binding 3 注释）。⟹ 门关时装配层照样建 buffer 并**填全 1**，本行恒不成立。
+[[vk::binding(21, 0)]]
+// 🔴 用 `ByteAddressBuffer` 而非 `StructuredBuffer<uint>`：后者触 `shader_dep_check` **R3 红线**
+// （任何 .slang 出现 StructuredBuffer = ERROR，全库零使用、**无豁免清单**，出处 git:调试历史
+// 「灰屏」stride 静默错位）。本 binding 一度写成 `StructuredBuffer<uint>` 并留了「不改成
+// ByteAddressBuffer」的拍板注——那条拍板**已撤销**，理由见 `docs/constantbuffer_迁移计划.md`
+// §8：R3 与「类型化载体」这条线冲突未决前，rgl/ 树内一律走 sanctioned 的 ByteAddressBuffer 形态。
+// 唯一的例外通道 = 先按 §8 把 R3 从「一刀切」改成「元素类型未走反射契约才报错」并配 stride
+// 实测护栏；在那之前不新增 R3 违规。
+ByteAddressBuffer clusterVisible;
+
 // 读一个 u8 三元组（Tris 段字节地址处）。ByteAddressBuffer 只能 4B 对齐读：
 // 读 base 与 base+4 两个字拼接。尾字地址钳制到 buffer 末字（GetDimensions =
 // 描述符 range = 分配字节数，16B 对齐 ⟹ dim ≥ 16、dim−4 恒可读）：r>0 时被钳掉
@@ -119,6 +135,16 @@ void main(
     const uint clusterIdx = range.base + (groupID.x >> 1u);  // 每簇固定 2 槽（恒 L0 档：group 序 = L0 前缀内簇序）
     const uint half = groupID.x & 1u;                         // 半区号：0 = 前 85 三角，1 = 其余
     const uint cBase = clusterIdx * kClusterStride;
+
+    // 簇化轴 ★1-a2-i **逐簇视锥剔除早退**：mesh shader 没有 discard，「这一簇不画」的唯一手段是
+    // 一个输出都不写（`SetMeshOutputCounts(0, 0)` + return，与下方三条断言早退同形）。标志由
+    // `meshlet_cull.comp.slang` 每帧在 opaque 段之前的一次 compute 写好（保守球测试，宁可少剔）。
+    // 门 `meshlet.cull` 关 = cullBase 恒 0（CPU 侧根本不建剔除项表）+ 整张标志表被装配层填成 1
+    // ⟹ 本条件恒不成立 = 逐位不变（不靠「读了但结果一样」，靠门关不写任何非 1 字节）。
+    if (clusterVisible.Load((range.cullBase + (groupID.x >> 1u)) * 4u) == 0u) {
+        SetMeshOutputCounts(0, 0);
+        return;
+    }
 
     // 断言形态 ①（表坏/groupCount 算错的探测器）：簇条目必须整个落在簇表内 → 否则空组。
     uint clustersBytes;

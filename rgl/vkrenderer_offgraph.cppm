@@ -37,6 +37,7 @@ import vulkan_utils;     // layoutDrift（图外布局对账的判定 + 值可�
 import izb_shadow;
 import evssm_shadow;
 import fsr_upscaler;
+import meshlet_cull_service;  // ★1-a2-i：逐簇视锥剔除（帧首图外 compute）
 import pass_vocabulary;  // kTonemapState（批 14.5 FSR 认 tonemap pass）
 import taa_jitter;        // contentShiftPx（批 14.5 第七批：申报给 FSR 的是内容位移，非投影注入量）
 
@@ -387,6 +388,20 @@ void Renderer::logFirstFrameMemory() {
 		return;
 	memStatsLogged = true;
 	resources->logMemoryStats("first_frame");
+}
+
+// 簇化轴 ★1-a2-i：逐簇视锥剔除的帧首 dispatch（位置契约三条 → vkrenderer.cppm 声明注释；
+// barrier 与 push 的内容全在 MeshletCullService::recordDispatch 里，本函数只做门控与计数）。
+// 门关 = 恒 nullptr = 一次指针判空、**零命令**（逐位不变的构造性保证：判据是「有没有指针」，
+// 不是「dispatch 了但标志全是 1」）。
+void Renderer::recordMeshletCullDispatch(vk::raii::CommandBuffer& cmd, const FrameDrawList& list) {
+	if (meshletCull == nullptr)
+		return;
+	auto z = zone("drawFrame.meshletCull");
+	meshletCull->recordDispatch(cmd, list.cullInput.planes);
+	// vkcmd.count 口径：2 条 pipelineBarrier2 + bindShadersEXT + pushDataEXT + dispatch = 5。
+	// 改 MeshletCullService::recordDispatch 的命令流必须同步改这里（同 recordFixedDataPath 的纪律）。
+	profilerAddCommands(5);
 }
 
 // 批 11.6d-2：EVSSM sandwich（与 izbLightPassPre 同位；门空早退 = 零命令）。

@@ -748,15 +748,17 @@ int main() {
 		// 簇化轴 ★1-a1ii-α：影子叠加装配（描述符接线 + 条目烘焙，顺序契约内聚在 helper）。
 		// 时序 = 克隆段之后（picking/highlight 重放天然跳过）且先于 assembleBackEnd（GpuCull
 		// 条目数快照 = 容量语义，多几条无害）。门关 = 两步各自首行早退（零条目零日志）。
-		wireMeshletOverlay(vkResources, vkDevice, meshletGeometry, assets, configs.scene, deferredMode,
-			shaderRegistry, assetTable, samplers, rtCache, configs.runtime.meshletEnable,
-			configs.runtime.meshletDebug, configs.runtime.meshletTint);
+		// ★1-a2-i：返回逐簇剔除服务（🔴 所有权在装配层，声明序 = 本行 = backEnd 之前 ⟹ 析构序
+		// 在其后；本类持两张 GPU buffer，Renderer 只持裸指针，块尾析构 = 帧循环读到已销毁的 VA）。
+		auto meshletCullService = wireMeshletOverlay(vkResources, vkDevice, meshletGeometry, assets,
+			configs.scene, deferredMode, shaderRegistry, assetTable, samplers, rtCache, configs.runtime, sceneData);
 		// C2/C2b：场景实体注册（模型/cube/灯）+ 实例矩阵槽容量契约
 		registerSceneEntities(registry, assets, configs.scene, vkResources, assetTable, shaderRegistry);
 		// 簇化轴 ★1-a1i + ★1-a1ii-β-1：簇区间表装配 + 原位取代开关落地（**必须在实体注册之后**——
 		// 两步都读 MeshRef，且开关的逐资产对账要读区间表；顺序契约内聚在 helper）。门关 = 两步
 		// 各自首行返回，ctx 不建条目 ⟹ scene data 尾区 @722400 全 0（逐位不变）。
-		wireMeshletPostRegistration(registry, assets, meshletAssets, assetTable, configs.runtime, vkDevice);
+		// ★1-a2-i：扫出来的剔除项表就地交给 meshletCullService（cullBase 与 items 同生共死）。
+		wireMeshletPostRegistration(registry, assets, meshletAssets, assetTable, configs.runtime, vkDevice, meshletCullService.get());
 
 		// C3 GPU culling 候选表 + GpuCull + skybox + deferred G-buffer/HDR + DGC + Renderer
 		//（装配时序契约见 assembleBackEnd 接口注释；graph 在此 move 进 Renderer）
@@ -768,6 +770,9 @@ int main() {
 		// 已构造，与 wireMeshletOverlay 的「之前」契约互补）。门关 = 零调用零日志；门开 =
 		// INFO 打印生效档（四臂假绿的第二道机器护栏，→ main.cppm 声明注释）。
 		wireMeshletOverlayDepthCompare(backEnd.renderer, configs.runtime);
+		// 簇化轴 ★1-a2-i：逐簇视锥剔除生效档（同「Renderer 构造后再挂」惯例）。门关 = 零调用
+		// 零日志，Renderer 成员恒 nullptr ⟹ 帧首零新命令。
+		wireMeshletCull(backEnd.renderer, registry, configs.runtime, meshletCullService.get());
 
 		// Phase 9.2：GPU 时间戳会话（声明序在 backEnd/vkDevice 后 = 析构序其先，
 		// query pool 不越过 device 生命周期——GPU 资源所有权规则；profiler=0 /

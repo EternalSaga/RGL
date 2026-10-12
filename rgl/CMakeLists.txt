@@ -311,6 +311,8 @@ set(RGL_SCENE_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/render_list.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/render_list_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/frame_draw_list.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/meshlet_cull_service.cppm"   # ★1-a2-i：逐簇剔除的 GPU 侧载体（要 VkDevice + scene data → rlscene）
+    "${CMAKE_CURRENT_SOURCE_DIR}/meshlet_cull_service_impl.cppm"
 )
 
 set(RGL_FRAME_MODULE_SOURCES

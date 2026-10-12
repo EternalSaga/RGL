@@ -27,7 +27,8 @@ import scene_config;   // SceneConfig（resolvePrimitiveSpecName 入参）
 import runtime_config;  // RuntimeConfig / MeshletCoplanarMode（★0.5-b2 wireMeshletOverlayDepthCompare 入参）
 import diagnostics;  // diagnostics().cullReplay / cullReplayName（★1-a1ii-β-1 wireMeshletSwitch 的 cull 档闸门）
 import vk_renderer;  // Renderer（★0.5-b2 setMeshletOverlayDepthCompareOp 目标；main 已 export import 链上，此处显式）
-import scene_data;     // kShadowMapSize（阴影图边长，与模型条目同值）
+import scene_data;     // kShadowMapSize（阴影图边长，与模型条目同值）+ SceneDataService（★1-a2-i 剔除服务入参）
+import meshlet_cull_service;  // MeshletCullService（★1-a2-i 逐簇剔除的 GPU 侧载体，装配层构造）
 import render_graph;   // ensureShadowMapSlot（幂等，按名缓存命中同槽）
 import gltf_loader;    // GltfModel/GltfPrimitive（逐 primitive 风格派生）
 import asset_table;    // AssetTable（纹理槽号 + bindMeshletToAsset 写回）
@@ -393,7 +394,8 @@ void wireMeshletSwitch(entt::registry& registry, const AssetTable& assets,
  * 共享同一份区间，资产 id 反查天然实例无关，也不依赖 registerScene 的分配序。
  */
 void wireClusterRangeTable(entt::registry& registry, const UploadedAssets& assets,
-                           const MeshletAssetStore& meshlets, bool meshletEnable, bool meshletCull) {
+                           const MeshletAssetStore& meshlets, bool meshletEnable, bool meshletCull,
+                           MeshletCullService* cullService) {
 	if (!meshletEnable)
 		return;  // 门关 = 一行都不走（逐位不变构造性成立；表不建 ⟹ scene data 该区全 0）
 	std::map<std::string, MeshletRangeScan> scans;
@@ -425,6 +427,14 @@ void wireClusterRangeTable(entt::registry& registry, const UploadedAssets& asset
 	if (meshletCull) {
 		auto& items = registry.ctx().emplace<MeshletCullItemTable>();
 		items = buildClusterCullItems(table);
+		// 就地上传给 GPU 侧（cullBase 与 items 同生共死，见 main.cppm 声明）。服务缺位 =
+		// 多产物回落（`wireMeshletBindings` 没建服务）⟹ 没有簇管线条目、mesh shader 根本不跑，
+		// 表白扫但无害；出声是为了让「配置说开了而实际没跑」在日志里看得见。
+		if (cullService)
+			cullService->uploadItems(items.items);
+		else if (auto* logger = RLLogger::getInstance())
+			logger->warn("meshlet: meshlet.cull 开但剔除服务未装配（多产物回落 / 无产物）—— "
+						 "逐簇剔除不运行，本跑只有 CPU 侧实例级剔除");
 		if (auto* logger = RLLogger::getInstance())
 			logger->info("meshlet: 逐簇剔除项表已装配（★1-a2-i，消费者 = meshlet_cull.comp.slang）"
 						 "—— cullItems={}（应 == l0Clusters={}）",
@@ -438,18 +448,25 @@ void wireClusterRangeTable(entt::registry& registry, const UploadedAssets& asset
 
 /**
  * 簇 buffer 描述符接线（★1-a1ii-α；对外经下方 wireMeshletOverlay 总入口调用，
- * 契约见 main.cppm 声明）。四步：门早退 → 单产物闸门 →
+ * 契约见 main.cppm 声明）。五步：门早退 → 单产物闸门 →
  * 领 4 个 Runtime 段槽 → 逐段写 storage buffer 描述符（ensureIzbSlots fallback 同法：
- * `writeResourceDescriptorsEXT` + `vk::DeviceAddressRangeEXT`，装配期 host 直写）。
+ * `writeResourceDescriptorsEXT` + `vk::DeviceAddressRangeEXT`，装配期 host 直写）→
+ * 构造逐簇剔除服务（★1-a2-i）。
  *
  * 描述符 range = 段的 **allocBytes**（含 16B 补齐区）：shader 侧 u8 三元组拼接的尾字
  * 读可能落进补齐区（meshlet.mesh.slang loadU8x3 的钳制论证依赖「range 覆盖补齐」）。
+ *
+ * 🔴 第⑤步的判据是「走到这里」而不是「`meshlet.cull` 开」：mesh SPV 只有一份、binding 21
+ * 无条件声明 ⟹ 标志 buffer 与它的描述符在门关时也必须存在（内容 = 全 1 = 全可见）。
+ * 门关的「零新命令」由 `wireMeshletCull` 不把服务交给 Renderer 来保证。
  */
 std::optional<MeshletBindingSlots> wireMeshletBindings(Resources& resources,
-	DeviceContext& device, const MeshletGeometryStore& meshletGeometry, bool meshletEnable) {
+	DeviceContext& device, const MeshletGeometryStore& meshletGeometry, bool meshletEnable,
+	SceneDataService& sceneData, std::unique_ptr<MeshletCullService>& cullService) {
 	auto* logger = RLLogger::getInstance();
 	if (!meshletEnable)
 		return std::nullopt;  // 门关 = 连号都不领（逐位不变构造性成立）
+	cullService.reset();  // 下面任何一条回落路径都必须让服务为空（Renderer 据此零命令）
 	if (meshletGeometry.byFile.empty())
 		return std::nullopt;  // 门开但无产物 / 上传失败（各自已在上游 INFO/WARNING，不重复）
 	if (meshletGeometry.byFile.size() != 1) {
@@ -478,13 +495,21 @@ std::optional<MeshletBindingSlots> wireMeshletBindings(Resources& resources,
 	}
 	if (!writeMeshletSectionDescriptors(device, resources, sections, slotNumbers, names))
 		return std::nullopt;
+	// ⑤ 逐簇剔除服务（★1-a2-i）。容量 = 簇头表条数（= 标志下标 `cullBase + 簇内序` 的上界，
+	// 与 itemCount 无关，口径 → MeshletCullService 类注释）；簇头槽**复用** binding 18 那一槽
+	// （同一张表两份描述符没有任何收益，descriptor 内容不变、只是多一个 binding 指它）。
+	const uint32_t clusterCapacity =
+		static_cast<uint32_t>(geom.clusters.bytes / static_cast<vk::DeviceSize>(kClusterStride));
+	cullService = std::make_unique<MeshletCullService>(device, resources, sceneData,
+		slotNumbers[1], clusterCapacity);
 	if (logger)
 		logger->info("meshlet: 簇 buffer 描述符已装配 {} —— 槽 {}/{}/{}/{}（binding 17-20，"
-					 "顶点池 {}B）",
+					 "顶点池 {}B）；可见标志槽 {}（binding 21）",
 			file, slotNumbers[0], slotNumbers[1], slotNumbers[2], slotNumbers[3],
-			geom.vertexPool.allocBytes);
+			geom.vertexPool.allocBytes, cullService->visibleSlot());
 	return MeshletBindingSlots{.vertexPool = slotNumbers[0], .clusters = slotNumbers[1],
-		.tris = slotNumbers[2], .remap = slotNumbers[3]};
+		.tris = slotNumbers[2], .remap = slotNumbers[3],
+		.clusterVisible = cullService->visibleSlot()};
 }
 
 /**
@@ -512,8 +537,8 @@ void bakeMeshletEntries(const UploadedAssets& uploaded, const SceneConfig& scene
 	const auto evssmSlot = resources.ensureEvssmSampleSlot();
 	if (!evssmSlot)
 		throw std::runtime_error("meshlet overlay: EVSSM 矩图槽发号失败: " + evssmSlot.error().describe());
-	const std::array<uint32_t, 4> clusterSlots{slots->vertexPool, slots->clusters, slots->tris,
-		slots->remap};
+	const std::array<uint32_t, 5> clusterSlots{slots->vertexPool, slots->clusters, slots->tris,
+		slots->remap, slots->clusterVisible};
 	uint32_t baked = 0;
 	for (const auto& um : uploaded.models) {
 		if (!meshletGeometry.byFile.contains(um.file))
@@ -546,25 +571,30 @@ void bakeMeshletEntries(const UploadedAssets& uploaded, const SceneConfig& scene
  * warn**（判据 3 只用 tint、判据 4 只用 offset，从不同时用，故不建第 4 个组合变体；
  * warn 只在门开时出——门关 grep meshlet = 0 的护栏）。
  */
-void wireMeshletOverlay(Resources& resources, DeviceContext& device,
+std::unique_ptr<MeshletCullService> wireMeshletOverlay(Resources& resources,
+	DeviceContext& device,
 	const MeshletGeometryStore& meshletGeometry, const UploadedAssets& uploaded,
 	const SceneConfig& scene, bool deferredMode, ShaderRegistry& pipelines, AssetTable& assets,
-	SamplerLibrary& samplers, RenderTargetCache& rtCache, bool meshletEnable, bool meshletDebug,
-	bool meshletTint) {
-	const auto slots = wireMeshletBindings(resources, device, meshletGeometry, meshletEnable);
+	SamplerLibrary& samplers, RenderTargetCache& rtCache, const RuntimeConfig& cfg,
+	SceneDataService& sceneData) {
+	std::unique_ptr<MeshletCullService> cullService;
+	const auto slots = wireMeshletBindings(resources, device, meshletGeometry, cfg.meshletEnable,
+		sceneData, cullService);
 	// mesh SPV 变体选档（门关 = bakeMeshletEntries 首行早退，variant 不被读；warn 也
 	// 必须门开才出声——门关 grep meshlet = 0 的护栏）
 	MeshletMeshVariant variant = MeshletMeshVariant::base;
-	if (meshletTint) {
+	if (cfg.meshletTint) {
 		variant = MeshletMeshVariant::tint;
-		if (meshletEnable && meshletDebug && RLLogger::getInstance())
+		if (cfg.meshletEnable && cfg.meshletDebug && RLLogger::getInstance())
 			RLLogger::getInstance()->warn(
 				"meshlet: tint 与 debug 同真 ⟹ tint 优先（不建组合 SPV 变体；判据 3 只用 "
 				"tint、判据 4 只用 debug，从不同时用）—— 本跑走 TINT 变体");
-	} else if (meshletDebug)
+	} else if (cfg.meshletDebug)
 		variant = MeshletMeshVariant::debugOffset;
 	bakeMeshletEntries(uploaded, scene, deferredMode, pipelines, assets, resources, samplers,
 		rtCache, meshletGeometry, slots, variant);
+	// ★1-a2-i：服务所有权交给调用方（装配层里先于 Renderer 声明的变量），理由 → main.cppm 声明
+	return cullService;
 }
 
 /**
@@ -599,6 +629,46 @@ void wireMeshletOverlayDepthCompare(Renderer& renderer, const RuntimeConfig& cfg
 }
 
 /**
+ * 逐簇视锥剔除生效接线（★1-a2-i，main.cppm 声明；调用序契约 = assembleBackEnd 之后）。
+ * 四步：门关早退（零调用零日志——门关「帧首零新命令」的构造性保证就在这第一行）→ 服务缺位
+ * 而出声（配置说开了而实际没跑 = 判据全绿而结论是假的，同 switch/coplanar 的第二道护栏）→
+ * 无消费者（switch 关）出声且不 dispatch → setter + INFO 打印生效档。
+ */
+void wireMeshletCull(Renderer& renderer, entt::registry& registry, const RuntimeConfig& cfg,
+	MeshletCullService* cullService) {
+	if (!cfg.meshletEnable || !cfg.meshletCull)
+		return;  // 门关 = 零调用零日志（Renderer 成员恒 nullptr ⟹ 帧首一条命令都不多）
+	auto* logger = RLLogger::getInstance();
+	if (cullService == nullptr) {
+		if (logger)
+			logger->warn("meshlet: meshlet.cull 开但剔除服务未装配（多产物回落 / 无产物 / 扫描全数"
+						 "失败）—— 逐簇剔除**不运行**，本跑画面与门关逐位相同");
+		return;
+	}
+	// 🔴 消费者 = **已生效**的取代档（ctx 里有没有 `MeshletSwitchOn`），读生效事实而不是配置意图：
+	// switch 的三条回落路（设备规格 / 非 cpu cull 档 / 对账失败）都不写配置，读配置会让剔除在
+	// 那些档下照跑而取代根本没发生。switch 关时簇 draw 只存在于 α 影子叠加段，而叠加默认
+	// coplanar="off" = 共面全拒零像素写入 ⟹ 剔它纯属白干；更坏的是 debug 档（DEBUG_OFFSET 变体
+	// 把 clip.z 拉向相机）下几何已被位移，用**未位移**位置做的视锥测试会剔掉"位移后其实在屏内"
+	// 的簇 = 让诊断档的图少画东西。故这里**不 dispatch**（标志表恒为启动期填的 1，叠加段照画），
+	// 只出声。承诺出处 = runtime_config.cppm meshletCull 注释「单独开 = 无消费者，装配层 warn
+	// 出声（静默空开关是本项目反复踩的形态）」。
+	if (!registry.ctx().contains<MeshletSwitchOn>()) {
+		if (logger)
+			logger->warn("meshlet: meshlet.cull 开但取代档未生效（meshlet.switch 关 / 设备规格不够 / "
+						 "非 cpu cull 档 / 逐资产对账失败）—— 标志数组没有消费者，逐簇剔除**不运行**，"
+						 "本跑画面与 meshlet.cull 关逐位相同");
+		return;
+	}
+	renderer.setMeshletCullService(cullService);
+	if (logger)
+		logger->info("meshlet: 逐簇视锥剔除生效档 = gpu —— 帧首（recordFixedDataPath 之后、pass "
+					 "循环之前）dispatch meshlet_cull.comp，标志表 {} 条；mesh 侧按 cullBase+簇内序"
+					 "早退（SetMeshOutputCounts(0,0)）",
+			cullService->itemCount());
+}
+
+/**
  * 接口声明与完整口径 → main.cppm `wireMeshletPostRegistration`。本定义只做一件事：
  * 把「实体注册之后」的两步簇轴装配合成一次调用（`main()` 已在 120 行代码红线，
  * `wireSceneSpinContext` / `bakeMeshletEntries` 同法抽 helper，零行为变化）。
@@ -606,8 +676,9 @@ void wireMeshletOverlayDepthCompare(Renderer& renderer, const RuntimeConfig& cfg
  */
 void wireMeshletPostRegistration(entt::registry& registry, const UploadedAssets& uploaded,
 	const MeshletAssetStore& meshlets, const AssetTable& assetTable, const RuntimeConfig& cfg,
-	const DeviceContext& device) {
-	wireClusterRangeTable(registry, uploaded, meshlets, cfg.meshletEnable, cfg.meshletCull);
+	const DeviceContext& device, MeshletCullService* cullService) {
+	wireClusterRangeTable(registry, uploaded, meshlets, cfg.meshletEnable, cfg.meshletCull,
+		cullService);
 	wireMeshletSwitch(registry, assetTable, cfg, device);
 }
 

@@ -543,6 +543,13 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 	// 批 9.5：zone "drawFrame.dataPath" 在 recordFixedDataPath 首行
 	recordFixedDataPath(cmd, frameSlot);
 
+	// 簇化轴 ★1-a2-i 逐簇视锥剔除（图外 compute，定义在 :offgraph）。位置三条硬约束：
+	// ① 必须在 recordFixedDataPath **之后**——heap 已绑定、scene data 已拷完（剔除要读对象矩阵
+	//    表 @128）；② 必须在 pass 循环**之前**——还在 gpu.frame 内、任何 render pass 外（barrier
+	//    的 eHost stage 不能在 pass 内），且 geometry pass 的 mesh shader 是本 dispatch 的消费者；
+	// ③ 门关 = meshletCull 恒 nullptr ⟹ 一次指针判空、**零新命令**（逐位不变的构造性保证）。
+	recordMeshletCullDispatch(cmd, list);
+
 	// 11.3-1d IZB 帧首段（dump 收割 + 门控构造/重建；门关 = 一次布尔判断）
 	// 批 9.5：两个图外帧首段各自成 zone（drawFrame.izbPre / drawFrame.evssmPre）
 	izbPreFrame();

@@ -150,7 +150,7 @@ namespace RGL {
 	uint32_t ShaderRegistry::addMeshletEntry(const std::string& specName, uint32_t textureSlot,
 			uint32_t normalSlot, uint32_t ormSlot, uint32_t emissiveSlot, uint32_t samplerSlot,
 			uint32_t shadowMapSlot, uint32_t shadowSamplerSlot, uint32_t evssmMapSlot,
-			std::array<uint32_t, 4> clusterSlots, MeshletMeshVariant variant) {
+			std::array<uint32_t, 5> clusterSlots, MeshletMeshVariant variant) {
 		const auto key = std::make_tuple(specName, textureSlot, normalSlot, ormSlot, emissiveSlot,
 			variant);
 		if (auto it = meshletEntryByKey.find(key); it != meshletEntryByKey.end())
@@ -216,10 +216,12 @@ namespace RGL {
 		b.extra.push_back({.binding = 16, .sampler = true,
 			.samplerHeapOffset = static_cast<vk::DeviceSize>(samplerSlot)
 				* res.getSamplerHeap().getDescriptorSize()});
-		// 簇 buffer 固定 binding（§10.2）：17=顶点池 18=簇表 19=Tris 20=Remap。
+		// 簇 buffer 固定 binding（§10.2）：17=顶点池 18=簇表 19=Tris 20=Remap
+		// 21=逐簇可见标志（★1-a2-i，🔴 无条件烘：mesh SPV 无条件声明 binding 21，缺 mapping
+		// 就是 VVL 错误；门关时那张表内容 = 全 1，见 addMeshletEntry 接口注释）。
 		// 描述符内容 = 装配层 wireMeshletBindings 写入这些槽（storage buffer 描述符，
 		// ensureIzbSlots fallback 同法）；本条目只烘槽号。
-		static constexpr std::array<uint32_t, 4> kClusterBindings{17u, 18u, 19u, 20u};
+		static constexpr std::array<uint32_t, 5> kClusterBindings{17u, 18u, 19u, 20u, 21u};
 		for (size_t i = 0; i < kClusterBindings.size(); ++i)
 			b.extra.push_back({.binding = kClusterBindings[i], .sampler = false,
 				.heapSlot = clusterSlots[i]});

@@ -6,10 +6,13 @@ import meshlet_cull;   // MeshletCullItem / cullPush 契约（反射单一真相
 // 下压到**簇**（LOD DAG 的 L0 前缀），产出逐簇可见标志供 mesh shader 早退。两者互不替代：
 // 实例级剔掉的是"整个 object 不提交"，簇级剔掉的是"这个 object 的这一块簇不画"。
 //
-// 🔴 布局契约走反射，不走 cull.comp.slang 的手写字节偏移：MeshletCullItem 与 cullPush 的字段
-// 偏移由 meshlet_cull.slang 经 C API 反射生成 C++ struct（generated/meshlet_cull_types_generated.cppm），
-// shader 侧则直接 `Load<MeshletCullItem>` 让**编译器自己**决定字段位置（见下）——两侧都没有
-// 手抄的偏移。唯一必须写死的字节数是 DiskCluster 的包围球字段（下注其出处）。
+// 🔴 布局契约走反射，不走 cull.comp.slang 的手写字节偏移：MeshletCullItem / MeshletClusterHeader
+// 与 cullPush 的字段偏移由 meshlet_cull.slang 经 C API 反射生成 C++ struct
+// （generated/meshlet_cull_types_generated.cppm），shader 侧则用 `Load<T>` 让**编译器自己**决定
+// 元素与字段位置——两侧都没有手抄的字段偏移。
+//
+// sceneData（对象矩阵表 @128 + slot×64）仍写死偏移：那是 scene data 巨型异构 buffer，它的类型化
+// 是独立一条线（`docs/constantbuffer_迁移计划.md` §4 分批 + §8 R3 冲突，要逐位护栏），不在本文件顺手做。
 //
 // 保守性口径（与 CPU 参考实现同式）：球心到某平面距离 < −r 才判不可见，**跨界与内含一律判可见**。
 // 误剔没有任何错误信号（图像上就是"少画一块"），所以宁可少剔。
@@ -17,6 +20,15 @@ import meshlet_cull;   // MeshletCullItem / cullPush 契约（反射单一真相
 // 矩阵约定与 cull.comp.slang 完全一致（无行/列主序歧义）：对象矩阵按"内存 chunk j = 数学列 j"
 // 处理（C++ 侧 glm 列主序），世界球心用列组合展开，不依赖 Slang 矩阵构造函数 / operator[] 语义。
 
+// 🔴 三张自建表全部用 `ByteAddressBuffer` + `Load<T>` 而非 `StructuredBuffer<T>`：后者触
+// `shader_dep_check` **R3 红线**（任何 .slang 出现 StructuredBuffer = ERROR，全库零使用、
+// **无豁免清单**，出处 git:调试历史「灰屏」stride 静默错位）。本文件一度改成类型化载体并实测
+// 全绿（ArrayStride 8/44/4、逐位不变、阳性对照成立），但**红线未撤销前不在 rgl/ 树内引入违规**
+// ——撤销条件与配套护栏见 `docs/constantbuffer_迁移计划.md` §8。
+//
+// 注意：`Load<T>` 形态下**步长与字段位置都由编译器从契约 struct 算**（`sizeof(T)` + 编译器决定的
+// 字段偏移），所以本文件仍然**没有任何手抄的字段偏移**——这与 cull.comp.slang 的手写字节偏移
+// 是两回事。R3 挡的是 stride 布局的静默偏离，不是挡"不写字面量"。
 [[vk::binding(0, 0)]]
 readonly ByteAddressBuffer cullItems;    // MeshletCullItem × cullPush.itemCount
 [[vk::binding(1, 0)]]
@@ -44,9 +56,8 @@ void main(uint3 tid : SV_DispatchThreadID)
         cullItems.Load<MeshletCullItem>(tid.x * uint(sizeof(MeshletCullItem)));
 
     // 簇包围球（源 glb 单位，未乘对象矩阵——世界换算在下面）。步长与字段位置**都**取自契约
-    // 结构体本身（与上面 cullItems 同读法）：编译器按 meshlet_cull.slang 的
-    // MeshletClusterHeader 定偏移，本文件一个字节偏移都不写（改 format.h 而忘了同步契约
-    // = 反射 [FAIL] / 生成物 static_assert 编译红，不再是"读着隔壁字段还像个数"的静默错）
+    // 结构体本身（与上面 cullItems 同读法）：改 format.h 而忘了同步契约 = 反射 [FAIL] /
+    // 生成物 static_assert 编译红，不再是"读着隔壁字段还像个数"的静默错
     const MeshletClusterHeader cluster =
         clusters.Load<MeshletClusterHeader>(item.clusterIdx * uint(sizeof(MeshletClusterHeader)));
     const float3 c = cluster.center;

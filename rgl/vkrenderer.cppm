@@ -30,6 +30,7 @@ import evssm_shadow;  // 批 11.6d-2：EVSSM 矩图数据层（同门控模式�
 import vkerror;
 import diagnostics;  // no_present 诊断单例（configs/diagnostics.lua）
 import fsr_upscaler;   // 批 14.5：FSR 3.1.4 upscaler（图外 compute，门控构造）
+import meshlet_cull_service;  // ★1-a2-i：逐簇视锥剔除（图外 compute，装配后挂裸指针）
 
 // 绘制契约（DrawCall/SceneFrameData/FrameDrawList）拆出为独立模块——本模块 export import
 // 保持 Renderer::drawFrame 接口类型对外可见（2026-09-02 拆分）
@@ -189,6 +190,18 @@ export class Renderer {
 	void setMeshletOverlayDepthCompareOp(std::optional<vk::CompareOp> compareOp) {
 		meshletOverlayDepthCompareOp = compareOp;
 	}
+
+	/**
+	 * 簇化轴 ★1-a2-i：逐簇视锥剔除服务（main 在 assembleBackEnd 之后装配，接线 =
+	 * `wireMeshletCull`；同 setMeshletOverlayDepthCompareOp 的「装配后挂」惯例）。
+	 *
+	 * 🔴 nullptr（默认 = 门关 / 服务未装配）⟹ 帧首**一条命令都不发**（连 barrier 都不发）。
+	 * 「门关逐位不变」的构造性保证在这里：判据是「有没有这个指针」，不是「dispatch 了但标志
+	 * 全是 1」。门开时它在每帧 `recordFixedDataPath` 之后、pass 循环之前录一次 compute
+	 * dispatch（见 `recordMeshletCullDispatch`）。
+	 * @param service 剔除服务（装配层持有所有权；本类只持裸指针，声明序保证它比 Renderer 长寿）
+	 */
+	void setMeshletCullService(MeshletCullService* service) { meshletCull = service; }
 
 	/**
 	 * 编译渲染图只读访问（Phase 10 批 10.5：PickingService 构造需附件表定位 object_id
@@ -351,6 +364,18 @@ export class Renderer {
 	/** 批 14.5：按名字找图附件 slot（FSR 的三个输入都从编译图现查，**不缓存下标**，
 	 *  同 TAA 锚点「现搜不缓存」的纪律）。 @return 未找到 = -1 */
 	int32_t findAttachmentSlot(std::string_view name) const;
+	/**
+	 * 簇化轴 ★1-a2-i：帧首录一次**逐簇视锥剔除** compute（图外 compute，定义在 :offgraph）。
+	 *
+	 * 位置契约 = `recordFixedDataPath` **之后**（heap 已绑定、scene data 已拷完）、pass 循环
+	 * **之前**（还在 `gpu.frame` 时间戳内、任何 render pass 外——barrier 的 eHost stage 不能在
+	 * pass 内）。消费方 = meshlet.mesh.slang binding 21 的早退，它在随后的 geometry pass 里。
+	 *
+	 * 门关 = `meshletCull` 恒 nullptr ⟹ 本函数一次指针判空、零命令（逐位不变的构造性保证）。
+	 * @param cmd 本帧主命令缓冲（录制期）
+	 * @param list 每帧绘制列表（cullInput.planes = 与 CPU 剔除同源同值的视锥 6 面）
+	 */
+	void recordMeshletCullDispatch(vk::raii::CommandBuffer& cmd, const FrameDrawList& list);
 	/** 批 9.5 补：首帧补打一次显存统计（`vma[first_frame]`）。动机 = IzbShadow /
 	 *  EvssmShadow 均首帧懒构造，而 `logStartupBaseline` 在帧循环之前 ⟹ `vma[startup]`
 	 *  不含这两个模块的资源（实测开/关 EVSSM 档的 startup 统计逐字节相同）。
@@ -437,6 +462,10 @@ export class Renderer {
 	// nullopt = 默认 = coplanar off/门关 = executeMeshletOverlay 零 set = 动态状态序列
 	// 逐 bit 不变，A1 判据的构造性保证）。
 	std::optional<vk::CompareOp> meshletOverlayDepthCompareOp;
+	// 簇化轴 ★1-a2-i：逐簇视锥剔除服务（setMeshletCullService 装配；**门关 = 恒 nullptr，
+	// 帧首零命令逐位不变**，同 pickingService 的「装配后挂裸指针」惯例）。所有权在装配层
+	// （main 的 unique_ptr，声明序在 backEnd 之前 = 析构序在其后，AGENTS 生命周期红线）。
+	MeshletCullService* meshletCull = nullptr;
 	// edS3：depth clip enable 动态状态能力门 + 四段 RenderState 值集合 + 状态名解析
 	//（Phase 10 批次 0 手术 1：状态表迁出至 StateKit——pass.state 词表与状态值的唯一
 	// 持有者；Phase 10 阴影新增状态集中改该模块一处）
