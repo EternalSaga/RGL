@@ -231,6 +231,8 @@ set(RGL_BASE_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/meshlet_cull.cppm"       # ★0.5-a：CPU 参考簇剔除器（线性扫描，GPU 版的对账伙伴；纯 CPU 无设备）
     "${CMAKE_CURRENT_SOURCE_DIR}/meshlet_ranges.cppm"     # ★1-a1i：逐 prim 簇区间扫描（四条产物不变量探测器；纯 CPU 无设备）
     "${CMAKE_CURRENT_SOURCE_DIR}/meshlet_ranges_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/meshlet_lod.cppm"        # §18 批 A：逐 prim 选级扫描（远级联 LOD 第一刀的纯函数层 + 五条不变量；纯 CPU 无设备）
+    "${CMAKE_CURRENT_SOURCE_DIR}/meshlet_lod_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/meshlet_hand.cppm"       # ★0.5-c：UV 手性 CPU 参考实现 + 簇→三角寻址遍历（★1-a1ii mesh shader 的对账伙伴；纯 CPU 无设备）
     "${CMAKE_CURRENT_SOURCE_DIR}/meshlet_hand_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/timing_util.cppm"      # 时间戳/时间统计纯函数层（自 profiler / present_timing / gpu_profiler 三处收敛）

@@ -28,6 +28,8 @@ import meshlet_cull_types_generated;   // MeshletCullItem（★1-a2-i 剔除项�
  * | 4 | 每 prim 的 **L0 簇是其区间前缀** | 1591 / 1591 = 100% | 恒 L0 档就不能只看 `(base, l0Count)`，必须上传 Groups 逐簇选级 |
  *
  * 四条各带**各自不同**的错误串（前缀 `invariant N`），失效形态直接打进日志就能归因，不必读代码。
+ * 注：**级内连续**（每 prim 区间内 `groups[cluster.group].depth` 单调不减）这条不变量由
+ * `meshlet_lod` 扫描负责（错误串前缀 `meshlet lod: invariant 2`，§18.2「要补的那条」）。
  *
  * ## L0 判据 = `cluster.refined == -1`（"产出本簇的更细 group = 无" = 原始几何）
  * 真产物上该口径与「所属 group 的 `depth == 0`」两条**给出同一个合计 27,487**（★1-a1i 实测），

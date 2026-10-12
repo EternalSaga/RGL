@@ -23,7 +23,7 @@
 // ## 与 docs/mdi_plan.md §7.2 数据面口径的对应
 //
 //   顶点池 138.4MB = VertexPool；L0 索引 8.5MB(8bit) + 其余级索引 8.2MB = Tris 全量
-//   （L0 = 前缀，判据是 `refined == -1`，**不是** `group.depth == 0`——见下「语义」节的实测推翻）；重映射 11.9MB(32bit) = Remap 全量。
+//   （L0 = 前缀，口径取 `refined == -1`；`group.depth == 0` 在真产物上与它同集合，见下「语义」节）；重映射 11.9MB(32bit) = Remap 全量。
 //   LOD 不增顶点（简化只在原顶点集上产索引表）⟹ 全部 12 级共用同一份 VertexPool。
 //
 // ## 语义（渲染侧读法，= clusterlod.h 头注释的渲染规则）
@@ -33,10 +33,13 @@
 //   (c.refined == -1 或 groups[c.refined].error ≤ 阈值)。层级 Nodes 是每 DAG 级一棵
 //   树的森林：前 levelCount 个节点是各级根，叶节点 .group ≥ 0 指回 Groups。
 //
-//   🔴 **L0 的判据是 `c.refined == -1`，不是 `group.depth == 0`**。本文件旧版在「与 §7.2
-//   对应」处写的「按 group.depth==0 切分」是**错的**，2026-10-12 实测推翻：depth==0 只有
-//   2,518 簇，而 refined==-1 有 27,487 簇，且后者的三角和**恰等于** header.l0TriangleCount
-//   = 2,832,120（闭式锚）。引擎口径 = `meshlet_ranges_impl.cppm::isL0Cluster`，照它。
+//   🔴 **L0 的口径取 `c.refined == -1`**（它是本文件对 L0 的**定义**，且不依赖 group 二次跳转）。
+//   两条口径在真产物上**实测完全一致**（2026-10-12 直接读产物本体复核：`refined==-1` 与
+//   `groups[c.group].depth==0` 给出**同一个簇集合** = 27,487 簇 / 2,832,120 三角 = header
+//   .l0TriangleCount）。本文件旧版与 `docs/mdi_plan.md` §12.3/§18.2 曾写「depth==0 只有
+//   2,518 簇」——**那个读数错了**（口径方向没错，数字是脚本量错），已按实测改写。两条口径
+//   从此不再是散文断言：一致性由 `rgl/meshlet_lod.cppm` 的 **invariant 3** 机器钉住
+//   （分家即报错并点名 prim）。引擎口径 = `meshlet_ranges_impl.cppm::isL0Cluster`，照它。
 //
 // ## 坐标系
 //
