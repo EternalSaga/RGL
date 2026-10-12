@@ -623,3 +623,43 @@ descriptors bound that we can't detect if needed or not later" ⟹ descriptor he
 同构表（簇化 / cull / IZB / 顶点池）的类型化（另一条线：先给它们上反射契约）、
 `uvFromWorld` 零调用者但非 scene data 读取面（§9.8 已记不删理由）、
 R5 自曝盲区（`InterLocked*` 与"偏移先存变量再传参"看不见）。
+
+### 9.12 收口后复查：两个复活点 + 一条**声称存在但不存在的护栏**（2026-10-13）
+
+收口当夜只做了"迁移批是否逐位不变"的验收，第二天按"双源能不能复活"重审一遍写侧，抓到三件事：
+
+1. 🔴 **湿面区写端是半截工程**（批 1 明确 defer、收口批 N+1 没捡回来）：`writeSceneStaging`
+   仍是两次 memcpy + 两个子区常量 `kSceneDataWetParamsOffset` / `kSceneDataWetSpatialOffset`
+   （后者 = `区首 + 16u`，**字面量 16**），而同一事实的另一份在反射生成物
+   `offsetof(WetParamsBlock, spatial)` 里。R5 / R6 / 反射**三个护栏都看不见它**（写端是 C++，
+   shader 侧零偏移）。✅ 已修：改成按契约 `WetParamsBlock` 整块写，两个子区常量删除
+   ⟹ "spatial 在区内第 16 字节"只剩反射一处。
+2. 🔴 **`scene_data.cppm` 旧注释声称的护栏实际不存在**：原文写"C++ 写侧子区偏移与契约 struct
+   字段偏移的同步 = 生成物 offsetof static_assert + `tests/test_wet_params` 的
+   「写侧子区 == 生成 struct 字段偏移」**双钉**"。去测试里数了一遍——**第二钉不存在**：
+   测试钉的是 `kSceneDataWetSpatialOffset == kSceneDataWetParamsOffset + 16u`，
+   **字面量对字面量**，与契约 `offsetof` 没有任何连线。
+   ⟹ 教训形态：**"文档说这里有护栏"比"这里没护栏"更坏**——后者还会有人去补，前者不会。
+   写护栏声明的同一批就要把那条 assert 写出来，写不出就别声明（同 §5 顺序红线的同一条纪律，
+   只是这次违规的是我自己前一天的产出）。
+3. 🟡 **矩阵表步长只有间接牙**：`kSceneMatrixStride = sizeof(glm::mat4)` 与契约 `ObjectMatrix`
+   的 `ArrayStride` 各自被钉成 64，靠"两边都等于 64"传递，没有直接连线。旧注释还写着
+   "shader 端字面量 64u 须与本值一致——**无反射端对应**"——批 R 之后 `ObjectMatrix` 就是契约
+   类型、批 T1 之后 shader 侧矩阵基址/步长字面量已清零，那句话整体过时（会把人引去搜不存在
+   的字面量）。✅ 已修：`static_assert(kSceneMatrixStride == sizeof(ObjectMatrix))` + 注释改事实。
+
+**两条判据（实测，原始输出见 git message）**：
+
+- **变异 A（新 assert 有牙）**：`kSceneMatrixStride = sizeof(glm::mat4) + 16u` →
+  `error: static assertion failed due to requirement 'kSceneMatrixStride == sizeof(RGL::ObjectMatrix)':
+  矩阵表步长与契约 ObjectMatrix 不同源（CPU 写步长 ↔ GPU ArrayStride 错位 = 逐元素错读）`，构建退 1。
+- **变异 B（整块写路径真的被消费）**：写端两槽互换（`.params = wetSpatial, .spatial = wetParams`）
+  → 门关 `1b3f63be…` / 默认 `5caad5fa…`，两档**都变**；还原后回锚。
+
+**修完的验收**：两档锚点逐位不变（写侧换形是像素中性的）· `just test` 384 例 / `test-gpu` 27 例
+/ `just checks` 0 警告 / `just smoke --sync` errors=0 hazard 0 · R5 49 条 R6 0 命中不变。
+
+**复查方法学（下次开工照这个起手，别只跑锚点）**：逐位锚点证明的是**这一帧这一台机器**没变，
+它不证明**双源被消除**——半截迁移照样逐位不变。要问的是"**这个事实现在住在几个地方？**"，
+而问法很具体：**grep 每个 `kSceneData*Offset` 的消费者，凡是"位置/步长/容量"类常量在 C++ 侧
+还留着一份、而契约生成物里也有一份的，就是复活点**。今天用这条抓到 2 个（湿面写侧、矩阵步长）。

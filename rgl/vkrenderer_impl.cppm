@@ -331,11 +331,20 @@ void Renderer::createSceneStaging(RGL::Resources& vkResources) {
 	static_assert(sizeof(ssrBlock) == kSceneDataSsrBytes,
 		"SsrParamsBlock 尺寸与 SSR 区容量失同步（scene_data.cppm）");
 	std::memcpy(stage + kSceneDataSsrOffset, &ssrBlock, sizeof(ssrBlock));
-	// Phase 15 批 15.2 子步 A：湿面参数区（身份调制系数 @723968 + 空间变化 @723984，2×vec4）。
-	// 无条件写（同 ssrParams/ssrGate 尾区纪律：门关路径也保证值正确，省第二条分支；
-	// 本步零消费者，写它不改任何像素）
-	std::memcpy(stage + kSceneDataWetParamsOffset, &list.sceneData.wetParams, sizeof(glm::vec4));
-	std::memcpy(stage + kSceneDataWetSpatialOffset, &list.sceneData.wetSpatial, sizeof(glm::vec4));
+	// Phase 15 批 15.2 子步 A：湿面参数区（身份调制系数 + 空间变化形状参数，2×vec4）。
+	// 无条件写（同 ssrParams/ssrGate 尾区纪律：门关路径也保证值正确，省第二条分支）。
+	// 🔴 迁移批复补（scene data 收口后补做批 1 明确 defer 的**写侧半截**）：改成按契约
+	// `WetParamsBlock` **整块写**，与其余 11 个区同形。旧写法是两次 memcpy，用
+	// `kSceneDataWetSpatialOffset = 区首 + 16u` 这个**字面量 16** 表达 spatial 的位置，
+	// 而同一事实的另一份在反射生成物 `offsetof(WetParamsBlock, spatial)` 里——两源之间
+	// 当时**没有任何 assert 相连**（`scene_data.cppm` 旧注释声称的"双钉"第二钉实际不存在，
+	// 那种"文档说有护栏"比"没护栏"更坏）。整块写之后字面量与子区常量一起消失，
+	// 字段位置只剩契约一处；调换 shader 侧字段序 ⟹ 写端自动跟随，不再有读错成员的形态。
+	static_assert(sizeof(WetParamsBlock) == kSceneDataWetBytes
+		, "WetParamsBlock 字节形态与湿面区容量不同源（子范围描述符 range 会失同步）");
+	const WetParamsBlock wetBlock {
+		.params = list.sceneData.wetParams, .spatial = list.sceneData.wetSpatial };
+	std::memcpy(stage + kSceneDataWetOffset, &wetBlock, sizeof(wetBlock));
 	// 簇化轴 ★1-a1i：per-object 簇区间表（尾区 @724224，stride 16 × 4096）。表由装配层启动期
 	// 扫产物 groups 得到、经 registry ctx 走到这里（生产者与索引口径 → SceneFrameData::clusterRanges）。
 	// 写入本体在 scene_data::writeClusterRangeRegion（**无设备 ⟹ 可单测**：门关整区全 0 /

@@ -103,15 +103,24 @@ static_assert(kSceneDataEnvOffset == 48 && kSceneDataSkyOffset == 64 &&
  *  尺寸不一致，UBO 越界读未定义）。 */
 static_assert(kSceneDataHeaderOffset == 0 && kSceneDataHeaderBytes == sizeof(SceneHeaderBlock),
 	"头区容量与 SceneHeaderBlock 不一致（批 S-5 的 descriptor range 就是这个 sizeof）");
-/** mat4 列主序 stride：派生自 sizeof(glm::mat4) 而非裸字面量（C++ 侧漂移即编译失败；
- * shader 端 scene.slang 的字面量 64u 须与本值一致——无反射端对应，见 scene.slang 头注释）。 */
+/** mat4 列主序 stride：派生自 `sizeof(glm::mat4)` 而非裸字面量。
+ *  🔴 与契约 `ObjectMatrix`（shader 侧元素类型，`StructuredBuffer<ObjectMatrix>` 的 T）
+ *  **直接钉死**：CPU 按 `kSceneMatrixStride` 逐步长写、GPU 按 `ArrayStride` 逐步长读，
+ *  两者不同源 ⟹ 改 `ObjectMatrix` 加字段时区容量仍按 64 算、描述符 range 不变，而 shader
+ *  按新步长索引 = **逐元素错位读**（画面渐变式坏掉，不是编译错误）。旧注释写的是
+ *  "shader 端字面量 64u 须与本值一致——无反射端对应"，那条**已过时**：批 R 把
+ *  `ObjectMatrix` 登记进 schema、批 T1 把 shader 侧矩阵基址/步长字面量清零，现在
+ *  `sizeof(ObjectMatrix)` 就是反射端真相，直接钉即可（间接牙换直接牙）。 */
 export inline constexpr uint32_t kSceneMatrixStride = sizeof(glm::mat4);
+static_assert(kSceneMatrixStride == sizeof(ObjectMatrix)
+	, "矩阵表步长与契约 ObjectMatrix 不同源（CPU 写步长 ↔ GPU ArrayStride 错位 = 逐元素错读）");
 export inline constexpr uint32_t kSceneMatrixCapacity = 4096;   // 对象矩阵表容量（Phase 7：Bistro 1591 primitive 各一实例，1024 不够；scene data 缓冲随之 256KB）
 
 /** 批 L（§9.7）：对象矩阵表基址 = 头(128) 尾之后按 256 取整 = **256**（原 @128 过不了
- * 子范围描述符对齐）。scene.slang readObjectMatrix / cull.comp.slang /
- * meshlet_cull.comp.slang 的 kSceneMatrixBase 字面量与本值手工一致（头 128B 与本区之间
- * 128B 为对齐间隙，无常驻内容、无消费者）。 */
+ * 子范围描述符对齐）。🔴 shader 侧**已无基址字面量**（批 T1：`scene_tables.slang` 的
+ * `StructuredBuffer<ObjectMatrix> objectMatrixTable` = binding 23，基址由子范围描述符承载），
+ * 本常量只剩 C++ 写侧与描述符两个消费者。头 128B 与本区之间 128B 为对齐间隙，
+ * 无常驻内容、无消费者。 */
 export inline constexpr uint32_t kSceneDataObjectMatrixOffset =
 	alignUp(kSceneDataHeaderBytes, kSceneRegionAlign);
 static_assert(kSceneDataObjectMatrixOffset == 256,
@@ -597,31 +606,33 @@ static_assert(kSceneDataSsrOffset == 723712,
  *  本区因此不再需要「C++ 常量 == shader 字面量」的 static_assert（钉的对象已不存在）。 */
 export inline constexpr uint32_t kSceneDataWetOffset =
 	alignUp(kSceneDataSsrOffset + kSceneDataSsrBytes, kSceneRegionAlign);
-/** 湿面身份调制系数子区（vec4, 16B）= (strength, dark, roughLo, roughHi)。
- *  - `x` = 总开关兼强度（0 = 关 = 消融档；**默认 1.0 = 开**，用户拍板「湿面默认开」）。
- *  - `y` = 湿区 albedo 压暗系数（×0.5–0.7 区间取中）。
- *  - `z/w` = 水洼/湿石粗糙度端点（🔴 shader 侧不变式 `z < w`，反了 = 空间调制方向倒置；
- *    配置层**不校验**，理由 → readWetBlock 注释）。
- *  **默认值唯一真相源 = `WetTuning` 成员初始化值**（shader 侧无 fallback 常量——两处定义
- *  迟早漂移，见 SsrTuning 同款纪律）。生产者 = fillWetParams（可测接缝），护栏 =
- *  tests/test_wet_params（两源结构）+ tests/test_scene_config（配置往返）。 */
-export inline constexpr uint32_t kSceneDataWetParamsOffset = kSceneDataWetOffset;
-/** 湿面空间变化参数子区（vec4, 16B）= (rippleAmp, puddleFreqRadii, 保留, 保留)。
- *
- *  **为什么不塞进上面那个 wetParams**（设计决策，别"顺手合并"，分组理由照 ssrParams/
- *  ssrGate 那条）：上四个是**身份调制系数**（压暗/粗糙度端点，逐湿面常数），本两个是
- *  **空间变化的形状参数**（水膜扰动幅度/水洼噪声频率，逐像素自变量不同）。混进一槽 =
- *  语义上两组旋钮共用一个名字，改任一组都要读另一组的口径。
- *
- *  `y` = puddleFreqRadii：噪声频率 = 本值 / sceneRadius（**尺度无关**口径，锚点与 SSR
- *  的 ssrParams.x 同一颗 SceneBounds.radius 球）。 */
-export inline constexpr uint32_t kSceneDataWetSpatialOffset = kSceneDataWetOffset + 16u;
+// ── 湿面区两槽**语义**（迁移批复补后：两槽的**位置**只剩契约 `WetParamsBlock` 一处，
+//    下面两段只记语义，不再声明偏移；写端 = writeSceneStaging 整块 memcpy）
+//
+// `WetParamsBlock::params`（vec4）= (strength, dark, roughLo, roughHi)
+//   - `x` = 总开关兼强度（0 = 关 = 消融档；**默认 1.0 = 开**，用户拍板「湿面默认开」）。
+//   - `y` = 湿区 albedo 压暗系数（×0.5–0.7 区间取中）。
+//   - `z/w` = 水洼/湿石粗糙度端点（🔴 shader 侧不变式 `z < w`，反了 = 空间调制方向倒置；
+//     配置层**不校验**，理由 → readWetBlock 注释）。
+//   **默认值唯一真相源 = `WetTuning` 成员初始化值**（shader 侧无 fallback 常量——两处定义
+//   迟早漂移，见 SsrTuning 同款纪律）。生产者 = fillWetParams（可测接缝），护栏 =
+//   tests/test_wet_params（两源结构）+ tests/test_scene_config（配置往返）。
+//
+// `WetParamsBlock::spatial`（vec4）= (rippleAmp, puddleFreqRadii, 保留, 保留)
+//   **为什么不塞进 params**（设计决策，别"顺手合并"，分组理由照 ssrParams/ssrGate 那条）：
+//   params 四个是**身份调制系数**（压暗/粗糙度端点，逐湿面常数），本两个是**空间变化的
+//   形状参数**（水膜扰动幅度/水洼噪声频率，逐像素自变量不同）。混进一槽 = 语义上两组旋钮
+//   共用一个名字，改任一组都要读另一组的口径。
+//   `y` = puddleFreqRadii：噪声频率 = 本值 / sceneRadius（**尺度无关**口径，锚点与 SSR
+//   的 ssrParams.x 同一颗 SceneBounds.radius 球）。
 export inline constexpr uint32_t kSceneDataWetBytes = 32u;
 // 迁移批 1：原「C++ 常量 == scene.slang 湿面字面量」的 static_assert 已删——shader 侧
 // 改读 binding 32 的 ConstantBuffer<WetParamsBlock>（子范围描述符基址 = 本区常量，
-// C++ 写侧与描述符**同源同值**，不存在可单侧漂移的第二份字面量）。C++ 写侧子区偏移与
-// 契约 struct 字段偏移的同步 = 生成物 WetParamsBlock 的 offsetof static_assert +
-// tests/test_wet_params 的「写侧子区 == 生成 struct 字段偏移」双钉。
+// C++ 写侧与描述符**同源同值**，不存在可单侧漂移的第二份字面量）。
+// 🔴 收口后的**补做**（原注释在此声称"写侧子区 == 生成 struct 字段偏移双钉"，实测**第二钉
+// 不存在**：测试只钉了 `子区B == 子区A + 16u`，字面量对字面量，与契约 `offsetof` 无连线）：
+// 写端改为按 `WetParamsBlock` 整块写，两个子区常量随之删除 ⟹ "spatial 在区内第 16 字节"
+// 这个事实**只剩反射一处**。同步链从"三段两钉"变成"两段一钉 + 一处根本不需要钉"。
 
 /** 簇化轴 ★1-a1i：per-object **簇区间表**区（湿面区之后，尾区追加，既有偏移逐字节不动
  *  diff0，先例 = 批 11.2 阴影 VP 区 / 批 15.1 SSR 区 / 批 15.2 湿面区）。

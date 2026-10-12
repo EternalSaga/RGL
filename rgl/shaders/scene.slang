@@ -585,7 +585,7 @@ float4 readWetParams()
 // 湿面空间变化参数（x = rippleAmp 水膜法线扰动幅度、y = puddleFreqRadii 水洼噪声频率
 // = 本值 / sceneRadius，尺度无关口径同 ssrParams.x 的锚点；zw 保留）。消费者 = deferred
 // _geometry 湿面 G-buffer 调制（15.2B 已接线）；⚠ wetParams 的 z < w（roughLo < roughHi，反了 = 空间
-// 调制方向倒置），不变式落点与「配置层为何不校验」→ scene_data.cppm kSceneDataWetParamsOffset。
+// 调制方向倒置），不变式落点与「配置层为何不校验」→ scene_data.cppm 湿面区语义注释（params 槽）。
 float4 readWetSpatial()
 {
     return sceneWet.spatial;
