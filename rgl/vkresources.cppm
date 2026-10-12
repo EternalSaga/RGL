@@ -196,7 +196,7 @@ export class Resources {
 	 * EVSSM 矩图采样槽号（批 11.6d-2，ensureIzbSlots 同盘：只发号不写描述符——
 	 * 内容 = EvssmShadow 的矩图，其构造时以真 view 覆写同槽；重建换图重写同槽）。
 	 * 槽号终身稳定（管线条目 binding 15 启动期 bake）。幂等。
-	 * 门关 = 槽存在但 variant SPV 不声明 binding 15 = 空转无害（binding 4/5 既证先例）。
+	 * 门关 = 槽存在但 variant SPV 不声明 binding 15 = 批 M 过滤不烘（binding 4/5 先例）。
 	 * @return 槽号；Error = 槽段耗尽
 	 */
 	[[nodiscard]] std::expected<uint32_t, Error> ensureEvssmSampleSlot() {
@@ -525,7 +525,8 @@ export class Resources {
 	/** IZB 四槽号（批 11.3-1d 后半，ensureIzbSlots 发号；内容描述符由 IzbShadow 写）。 */
 	IzbSlots izbSlots{};
 	/** EVSSM 矩图采样槽号（批 11.6d-2，ensureEvssmSampleSlot 发号；binding 15 无条件
-	 * bake；真描述符由 EvssmShadow 构造时覆写，门关 = variant 不声明 = 空转）。 */
+	 * 传入，批 M 按声明过滤烘焙；真描述符由 EvssmShadow 构造时覆写，门关 = variant
+	 * 不声明 = 不烘）。 */
 	uint32_t evssmSampleSlot = kNoEvssmSampleSlot;
 	uint32_t fsrSampleSlot = kNoFsrSampleSlot;  ///< 批 14.5：FSR 输出采样槽（ensureFsrSampleSlot 发号）
 	/** EVSSM 矩图槽 fallback 1×1 RGBA16F 零图（批 11.6d-2，发号时创建，同

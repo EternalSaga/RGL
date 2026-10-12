@@ -29,6 +29,10 @@ constexpr uint32_t kOpConstant = 43;
 constexpr uint32_t kOpSpecConstant = 50;
 constexpr uint32_t kOpVariable = 59;
 
+// SPIR-V decoration 号（spvDeclaredBindings 判据用；签名解析器按设计不硬编码 decoration
+// 语义——原始集相等即语义相等，本函数要的是 Binding 号本身，仅此一处点名）
+constexpr uint32_t kDecorationBinding = 33;
+
 /** 指令流一遍切分的产物（类型/常量定义表 + decoration 表 + 接口变量清单）。 */
 struct SpvModule {
 	std::unordered_map<uint32_t, std::vector<uint32_t>> defs;  // 类型/常量 id → 指令词
@@ -246,6 +250,36 @@ std::string spvInterfaceSignature(const std::vector<uint32_t>& spv) {
 		sig += t;
 	}
 	return sig;
+}
+
+/** spvDeclaredBindings 定义（契约见接口注释）。复用 spvSplit 的遍历与 decoration 采集
+ *  （与 spvInterfaceSignature 同一套机制——两套解析器必然漂移）。判据 = 带 Binding(33)
+ *  装饰的 OpVariable 的 binding 号：resource heap 与 sampler heap（OpTypeSampler 变量）
+ *  同路采集；push constant 无 Binding 装饰天然排除。结构不认识（截断的 OpVariable、
+ *  Binding 装饰无操作数）与 spvSplit 失败一样返回 nullopt——失败 ≠ 空集，调用方据此
+ *  退回全烘。 */
+std::optional<std::set<uint32_t>> spvDeclaredBindings(const std::vector<uint32_t>& spv) {
+	SpvModule mod;
+	std::vector<std::string> tokens;  // 本函数不消费签名 token，仅满足 spvSplit 出参
+	if (!spvSplit(spv, mod, tokens))
+		return std::nullopt;  // 魔数不对/截断 = 解析失败，不是「什么都不声明」
+	std::set<uint32_t> bindings;
+	for (const auto& v : mod.variables) {
+		// OpVariable 字 2 = 结果 id（decs 键）；不足 4 词 = 结构不认识 → fail-safe
+		if (v.size() < 4)
+			return std::nullopt;
+		auto it = mod.decs.find(v[2]);
+		if (it == mod.decs.end())
+			continue;  // 无 decoration 的变量（函数局部量等）
+		for (const auto& [decKind, operands] : it->second) {
+			if (decKind != kDecorationBinding)
+				continue;
+			if (operands.empty())
+				return std::nullopt;  // Binding 装饰缺操作数 = 坏码流
+			bindings.insert(operands[0]);
+		}
+	}
+	return bindings;
 }
 
 }  // namespace RGL

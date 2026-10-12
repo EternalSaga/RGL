@@ -47,7 +47,8 @@ namespace RGL {
 			{.binding = 6, .sampler = false, .heapSlot = aoSlot},
 		};
 		auto entry = PipelineEntry{.name = "tonemap",
-			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b),
+			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b,
+				"tonemap"),
 			.spec = *spec, .bindings = b};
 		const uint32_t index = static_cast<uint32_t>(entries.size());
 		indexByName[entry.name] = index;
@@ -80,7 +81,8 @@ namespace RGL {
 			{.binding = 5, .sampler = true, .samplerHeapOffset = samplerHeapOffset},
 		};
 		auto entry = PipelineEntry{.name = "ao",
-			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b),
+			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b,
+				"ao"),
 			.spec = *spec, .bindings = b};
 		const uint32_t index = static_cast<uint32_t>(entries.size());
 		indexByName[entry.name] = index;
@@ -109,7 +111,8 @@ namespace RGL {
 			{.binding = 4, .sampler = false, .heapSlot = depthSlot},
 		};
 		auto entry = PipelineEntry{.name = "velocity",
-			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b),
+			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b,
+				"velocity"),
 			.spec = *spec, .bindings = b};
 		const uint32_t index = static_cast<uint32_t>(entries.size());
 		indexByName[entry.name] = index;
@@ -142,7 +145,8 @@ namespace RGL {
 			{.binding = 6, .sampler = false, .heapSlot = aoSlot},
 		};
 		auto entry = PipelineEntry{.name = "ao_apply",
-			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b),
+			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b,
+				"ao_apply"),
 			.spec = *spec, .bindings = b};
 		const uint32_t index = static_cast<uint32_t>(entries.size());
 		indexByName[entry.name] = index;
@@ -178,7 +182,8 @@ uint32_t ShaderRegistry::addTaaEntry(uint32_t colorSlot, uint32_t historySlot,
 			{.binding = 9, .sampler = false, .heapSlot = aoSlot},
 		};
 		auto entry = PipelineEntry{.name = "taa",
-			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b),
+			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b,
+				"taa"),
 			.spec = *spec, .bindings = b};
 		const uint32_t index = static_cast<uint32_t>(entries.size());
 		indexByName[entry.name] = index;
@@ -241,7 +246,8 @@ uint32_t ShaderRegistry::addTaaEntry(uint32_t colorSlot, uint32_t historySlot,
 			b.extra.push_back({.binding = 12, .sampler = true, .samplerHeapOffset = 0});
 		}
 		auto entry = PipelineEntry{.name = "ssr_trace",
-			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b),
+			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b,
+				"ssr_trace"),
 			.spec = *spec, .bindings = b};
 		const uint32_t index = static_cast<uint32_t>(entries.size());
 		indexByName[entry.name] = index;
@@ -278,7 +284,8 @@ uint32_t ShaderRegistry::addTaaEntry(uint32_t colorSlot, uint32_t historySlot,
 			{.binding = 7, .sampler = true, .samplerHeapOffset = samplerHeapOffset},
 		};
 		auto entry = PipelineEntry{.name = "ssr",
-			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b),
+			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b,
+				"ssr"),
 			.spec = *spec, .bindings = b};
 		const uint32_t index = static_cast<uint32_t>(entries.size());
 		indexByName[entry.name] = index;

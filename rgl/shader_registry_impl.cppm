@@ -36,8 +36,8 @@ namespace RGL {
 		const uint32_t descriptorSize = res.getDescriptorHeap().getDescriptorSize();
 		const uint32_t samplerHeapOffset =
 			samplerSlot * res.getSamplerHeap().getDescriptorSize();
-		// Phase 5 批次 2：模型管线恒绑 scene data（binding 3，幂等创建；unlit frag 不声明
-		// = 映射空转，同 mesh 阶段对 binding 1/2 的既证行为）
+		// Phase 5 批次 2：模型管线恒传 scene data（binding 3，幂等创建；批 M 按 SPV 声明过滤：
+		// 不声明 binding 3 的 frag/mesh 该条不烘，声明了照烘——mesh 读对象矩阵即声明方）
 		const uint32_t sceneSlot = sceneData.ensure();
 		RGL::PipelineBindings b{};
 		b.descriptorSize = descriptorSize;
@@ -48,8 +48,8 @@ namespace RGL {
 		b.slotSceneData = sceneSlot;
 		b.textured = true;
 		b.hasSceneData = true;
-		// Phase 5.5：env cubemap 已上传 → 全模型条目烘焙 binding 4/5（env 槽全局单例
-		// 恒等，不进组合去重 key；不 import env.slang 的 frag 不声明 = 映射空转，同上既证行为）
+		// Phase 5.5：env cubemap 已上传 → 全模型条目传 binding 4/5（env 槽全局单例
+		// 恒等，不进组合去重 key；不 import env.slang 的 frag 不声明 = 批 M 过滤不烘）
 		if (const auto* envAsset = env.get()) {
 			b.hasEnv = true;
 			b.slotEnv = envAsset->heapSlot;
@@ -58,31 +58,35 @@ namespace RGL {
 		}
 		// Phase 8 ③a：normal（binding 6）+ ORM（binding 7）贴图槽；Phase 8 ③：emissive
 		//（binding 8）贴图槽（resource heap SAMPLED_IMAGE，extra 追加，仿 addLightEntry 的
-		// extra 用法；不 import model.slang 或 Slang 剔除未用全局的 frag 不声明 = 映射空转，
-		// 同上既证行为——deferred_geometry 不声明 binding 8 亦无害空转）
+		// extra 用法；不 import model.slang 或 Slang 剔除未用全局的 frag 不声明 = 批 M 过滤
+		// 不烘——deferred_geometry 不声明 binding 8 亦不烘，声明了才要求有 mapping）
 		b.extra.push_back({.binding = 6, .sampler = false, .heapSlot = normalSlot});
 		b.extra.push_back({.binding = 7, .sampler = false, .heapSlot = ormSlot});
 		b.extra.push_back({.binding = 8, .sampler = false, .heapSlot = emissiveSlot});
-		// Phase 11 批 11.2：阴影图（binding 12）+ 专用 NEAREST sampler（binding 13）。**无条件烘焙**
+		// Phase 11 批 11.2：阴影图（binding 12）+ 专用 NEAREST sampler（binding 13）。**无条件传入**
 		// ——不能看 shadow.lua 的 mode：光照管线条目一旦少了这个描述槽，开关时
 		// 图不存在就会在采样侧报 VVL。unlit / phong 等不 import shadow.slang 的风格不声明
-		// 它们 → 空转（既证无害，同 binding 4/5 对不 import env 的风格）。
+		// 它们 → 批 M 过滤不烘（同 binding 4/5 对不 import env 的风格；「声明了未传」才是
+		// VVL 错误，import 了 = 声明了 = 这里必须传）。
 		b.extra.push_back({.binding = 12, .sampler = false, .heapSlot = shadowMapSlot});
 		b.extra.push_back({.binding = 13, .sampler = true,
 			.samplerHeapOffset = static_cast<vk::DeviceSize>(shadowSamplerSlot)
 				* res.getSamplerHeap().getDescriptorSize()});
-		// 批 11.6d-2：EVSSM 矩图集 15 + 矩 sampler 16（**无条件 bake**，同 binding 12 纪律；
-		// 门关 = -DEVSSM_SOFT 变体不存在、binding 不声明 = 空转无害，binding 4/5 既证先例）。
+		// 批 11.6d-2：EVSSM 矩图集 15 + 矩 sampler 16（**无条件传入**，同 binding 12 纪律；
+		// 门关 = -DEVSSM_SOFT 变体不存在、binding 不声明 = 批 M 过滤不烘，binding 4/5 先例）。
 		// binding 16 复用本条目共享 LINEAR sampler（矩图集过滤 = mip 高斯核要 linear；
 		// uv 恒 clamp 块内 → wrap 模式无关）。
 		b.extra.push_back({.binding = 15, .sampler = false, .heapSlot = evssmMapSlot});
 		b.extra.push_back({.binding = 16, .sampler = true,
 			.samplerHeapOffset = static_cast<vk::DeviceSize>(samplerSlot)
 				* res.getSamplerHeap().getDescriptorSize()});
+		// 条目名先落局部（批 M：RenderPipeline 的 warn/throw 消息要带条目名定位）
+		const std::string entryName = fmt::format("{}.v{}.t{}.n{}.o{}.e{}", specName, vertexSlot,
+			textureSlot, normalSlot, ormSlot, emissiveSlot);
 		auto entry = PipelineEntry{
-			.name = fmt::format("{}.v{}.t{}.n{}.o{}.e{}", specName, vertexSlot, textureSlot, normalSlot,
-				ormSlot, emissiveSlot),
-			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b),
+			.name = entryName,
+			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b,
+				entryName),
 			.spec = *spec, .bindings = b, .modelEntry = true};
 		const uint32_t index = static_cast<uint32_t>(entries.size());
 		indexByName[entry.name] = index;
@@ -97,7 +101,7 @@ namespace RGL {
 
 	// 克隆条目定义（Phase 10 批 10.5 picking / 10.7 highlight，契约见接口注释）：model 族
 	// 条目逐个 (mesh = 原 mesh SPV + frag = 传入的克隆 frag)，bindings 原样——克隆 frag
-	// 不声明的 descriptor 映射空转无害（skybox 条目"映射未消费"既证方向）。
+	// 不声明的 descriptor 由批 M 的 SPV 声明过滤（mesh+frag 并集）在烘焙期滤掉，不再白烘。
 	void ShaderRegistry::addCloneEntries(ClonePurpose purpose, const std::string& fragSpvPath) {
 		// 用途后缀 = 克隆条目名与 spec 名的区分标记（picking / highlight）
 		const char* const suffix = purpose == ClonePurpose::picking ? "picking" : "highlight";
@@ -126,9 +130,11 @@ namespace RGL {
 				it = meshCache.emplace(entries[i].spec.meshSpv, std::move(*meshResult)).first;
 			}
 			RGL::ShaderEffect effect{.meshStageSpv = it->second, .fragStageSpv = *fragResult};
+			const std::string cloneName = entries[i].name + "." + suffix;
 			auto clone = PipelineEntry{
-				.name = entries[i].name + "." + suffix,
-				.pipeline = RGL::RenderPipeline(device.getDevice(), effect, entries[i].bindings),
+				.name = cloneName,
+				.pipeline = RGL::RenderPipeline(device.getDevice(), effect, entries[i].bindings,
+					cloneName),
 				// spec = 克隆真实来源对（热重载基线读回 = 同一对 SPV）；name 不参与查找
 				.spec = RGL::PipelineSpec{.name = entries[i].spec.name + "_" + suffix,
 					.meshSpv = entries[i].spec.meshSpv, .fragSpv = fragSpvPath},
@@ -188,7 +194,7 @@ namespace RGL {
 		RGL::PipelineBindings b{};
 		b.descriptorSize = descriptorSize;
 		// binding 0/1 顶点段：meshlet mesh 不声明 modelVertexBuffer（读簇顶点池 @17）⟹
-		// 本 mapping 空转无害（skybox/light 条目"映射未消费"既证方向）；slotVertex 传
+		// 批 M 过滤把这两条滤掉（不声明 = 不烘，skybox/light 条目同）；slotVertex 传
 		// 纹理槽号只为占个合法值，不被任何 stage 消费。
 		b.slotVertex = textureSlot;
 		b.slotIndex = textureSlot;
@@ -204,7 +210,7 @@ namespace RGL {
 				env.ensureSkySampler(envAsset->mipLevels) * res.getSamplerHeap().getDescriptorSize();
 		}
 		// 材质绑定段 = addModelEntry 同名注释所述（6/7/8 贴图、12/13 阴影、15/16 EVSSM；
-		// 无条件烘焙纪律同源）。
+		// 无条件传入 + 批 M 按声明过滤烘焙纪律同源）。
 		b.extra.push_back({.binding = 6, .sampler = false, .heapSlot = normalSlot});
 		b.extra.push_back({.binding = 7, .sampler = false, .heapSlot = ormSlot});
 		b.extra.push_back({.binding = 8, .sampler = false, .heapSlot = emissiveSlot});
@@ -217,18 +223,21 @@ namespace RGL {
 			.samplerHeapOffset = static_cast<vk::DeviceSize>(samplerSlot)
 				* res.getSamplerHeap().getDescriptorSize()});
 		// 簇 buffer 固定 binding（§10.2）：17=顶点池 18=簇表 19=Tris 20=Remap
-		// 21=逐簇可见标志（★1-a2-i，🔴 无条件烘：mesh SPV 无条件声明 binding 21，缺 mapping
-		// 就是 VVL 错误；门关时那张表内容 = 全 1，见 addMeshletEntry 接口注释）。
+		// 21=逐簇可见标志（★1-a2-i，🔴 无条件传入：mesh SPV 无条件声明 binding 21，缺 mapping
+		// 就是 VVL 错误；批 M 过滤按声明烘，声明了 ⟹ 照烘，门关时那张表内容 = 全 1，
+		// 见 addMeshletEntry 接口注释）。
 		// 描述符内容 = 装配层 wireMeshletBindings 写入这些槽（storage buffer 描述符，
 		// ensureIzbSlots fallback 同法）；本条目只烘槽号。
 		static constexpr std::array<uint32_t, 5> kClusterBindings{17u, 18u, 19u, 20u, 21u};
 		for (size_t i = 0; i < kClusterBindings.size(); ++i)
 			b.extra.push_back({.binding = kClusterBindings[i], .sampler = false,
 				.heapSlot = clusterSlots[i]});
+		const std::string entryName = fmt::format("meshlet.{}.t{}.n{}.o{}.e{}{}", specName,
+			textureSlot, normalSlot, ormSlot, emissiveSlot, kVariantSuffix[vi]);
 		auto entry = PipelineEntry{
-			.name = fmt::format("meshlet.{}.t{}.n{}.o{}.e{}{}", specName, textureSlot, normalSlot,
-				ormSlot, emissiveSlot, kVariantSuffix[vi]),
-			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b),
+			.name = entryName,
+			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b,
+				entryName),
 			.spec = *spec, .bindings = b};
 		const uint32_t index = static_cast<uint32_t>(entries.size());
 		indexByName[entry.name] = index;
@@ -266,7 +275,8 @@ namespace RGL {
 		b.envSamplerHeapOffset =
 			env.ensureSkySampler(envAsset->mipLevels) * res.getSamplerHeap().getDescriptorSize();
 		auto entry = PipelineEntry{.name = "skybox",
-			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b),
+			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b,
+				"skybox"),
 			.spec = *spec, .bindings = b};
 		const uint32_t index = static_cast<uint32_t>(entries.size());
 		indexByName[entry.name] = index;
@@ -292,7 +302,7 @@ namespace RGL {
 		const uint32_t descriptorSize = res.getDescriptorHeap().getDescriptorSize();
 		RGL::PipelineBindings b{};
 		b.descriptorSize = descriptorSize;
-		b.slotVertex = 0;   // binding 0/1 占位（light mesh 不声明 = 空转，skybox 既证）
+		b.slotVertex = 0;   // binding 0/1 占位槽号（light mesh 不声明 = 批 M 过滤不烘，skybox 同）
 		b.slotIndex = 1;
 		b.slotSceneData = sceneData.ensure();  // binding 3：readSceneLight 单灯
 		b.hasSceneData = true;
@@ -327,8 +337,8 @@ namespace RGL {
 		b.extra.push_back({.binding = 13, .sampler = true,
 			.samplerHeapOffset = static_cast<vk::DeviceSize>(shadowSamplerSlot)
 				* res.getSamplerHeap().getDescriptorSize()});
-		// 批 11.6d-2：EVSSM 矩图集 15 + 矩 sampler 16（无条件 bake + 复用共享 LINEAR，
-		// 细则见 addModelEntry 同名注释）。
+		// 批 11.6d-2：EVSSM 矩图集 15 + 矩 sampler 16（无条件传入 + 复用共享 LINEAR，
+		// 细则见 addModelEntry 同名注释；不声明 = 批 M 过滤不烘）。
 		b.extra.push_back({.binding = 15, .sampler = false, .heapSlot = evssmMapSlot});
 		b.extra.push_back({.binding = 16, .sampler = true,
 			.samplerHeapOffset = static_cast<vk::DeviceSize>(samplerSlot)
@@ -343,7 +353,8 @@ namespace RGL {
 			b.extra.push_back({.binding = 14, .sampler = false, .heapSlot = izb->mask});
 		}
 		auto entry = PipelineEntry{.name = "light",
-			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b),
+			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b,
+				"light"),
 			.spec = *spec, .bindings = b};
 		const uint32_t index = static_cast<uint32_t>(entries.size());
 		indexByName[entry.name] = index;
@@ -365,13 +376,15 @@ namespace RGL {
 		RGL::PipelineBindings b{};
 		b.descriptorSize = res.getDescriptorHeap().getDescriptorSize();
 		b.slotVertex = vertexSlot;  // binding 0 = 顶点 buffer 槽（modelVertexBuffer 真正消费）
-		b.slotIndex = vertexSlot;   // binding 1 = 占位（shadow mesh 不声明 = 空转，同 light/ao 条目做法）
+		b.slotIndex = vertexSlot;   // binding 1 = 占位槽号（shadow mesh 不声明 = 批 M 过滤不烘，同 light/ao 条目做法）
 		b.slotSceneData = sceneData.ensure();  // binding 3 = scene data（VP 区/对象矩阵/ObjectDraw）
 		b.hasSceneData = true;
 		// textured=false → 不烘焙 binding 1 的 baseColor 形态（上面 slotIndex 占位即此）；
 		// 不烘焙 env（612）、不纹理纹理槽（6-8）——两个 shader 文件均未声明它们。
-		auto entry = PipelineEntry{.name = fmt::format("shadow.v{}", vertexSlot),
-			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b),
+		const std::string entryName = fmt::format("shadow.v{}", vertexSlot);
+		auto entry = PipelineEntry{.name = entryName,
+			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b,
+				entryName),
 			.spec = *spec, .bindings = b};
 		const uint32_t index = static_cast<uint32_t>(entries.size());
 		indexByName[entry.name] = index;
@@ -398,16 +411,18 @@ namespace RGL {
 			throw std::runtime_error("pipeline spec not found: shadow_meshlet");
 		RGL::PipelineBindings b{};
 		b.descriptorSize = res.getDescriptorHeap().getDescriptorSize();
-		// binding 0/1 = 合法占位（本管线 mesh/frag 两 stage 都不声明它们：mesh 不 import model、
-		// frag 是 depth-only 空壳）⟹ mapping 空转无害，方向与 addSkyEntry/addLightEntry 的
-		// 0/1 占位同（"声明未映射"才是 VVL 错误，反向无害）。取 0/1 两个真实存在的低段槽号。
+		// binding 0/1 = 合法占位槽号（本管线 mesh/frag 两 stage 都不声明它们：mesh 不 import model、
+		// frag 是 depth-only 空壳）⟹ 批 M 过滤不烘（批 M 前是「烘了空转无害」，现在根本不烘），
+		// 方向与 addSkyEntry/addLightEntry 的 0/1 占位同（「声明未映射」才是 VVL 错误，
+		// 过滤只敢滤没声明的）。取 0/1 两个真实存在的低段槽号。
 		b.slotVertex = 0;
 		b.slotIndex = 1;
 		b.slotSceneData = sceneData.ensure();  // binding 3：簇区间/对象矩阵/ShadowViewProj 三张表
 		b.hasSceneData = true;
-		// textured = false → 不烘 binding 1 的 baseColor 形态；不烘 env、不烘 6/7/8/12/13/15/16
-		// ——两个 shader 文件均未声明它们（烘了是空转，但空转的 mapping 也要占 descriptor，
-		// 不占 = 不参与"槽号从哪来"的账，同 addShadowEntry 的取舍）。
+		// textured = false → 不传 binding 1 的 baseColor 形态；不传 env、不传 6/7/8/12/13/15/16
+		// ——两个 shader 文件均未声明它们（批 M 后即使传了也不会烘，但「不传」让槽号来源
+		// 不参与账目，同 addShadowEntry 的取舍；🔴 若将来 shader 声明了其中之一，这里必须
+		// 补传——「声明了未 mapping」仍是 VVL 错误）。
 		// 簇 buffer 固定 binding（§10.2，与 addMeshletEntry 的 kClusterBindings 前 4 项同源）：
 		// 17=顶点池 18=簇表 19=Tris 20=Remap。🔴 **不含 21**（逐簇可见标志）——本管线不声明
 		// 该 binding，条目侧也不烘（两侧同向，理由 → 接口注释）。
@@ -416,7 +431,8 @@ namespace RGL {
 			b.extra.push_back({.binding = kClusterBindings[i], .sampler = false,
 				.heapSlot = clusterSlots[i]});
 		auto entry = PipelineEntry{.name = "shadow_meshlet",
-			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b),
+			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b,
+				"shadow_meshlet"),
 			// ShadowMeshletDrawArgs = objectIndex + cascadeIndex + clusterStart（12B，scalar
 			// layout；frame_draw_list.cppm 的 static_assert 与本 shader 的 struct 同源）
 			.argsSize = 12,
@@ -451,12 +467,14 @@ namespace RGL {
 		b.slotIndex = vertexSlot;    // binding 1 = 占位（两 stage 不声明，同 shadow 做法）
 		b.slotSceneData = sceneData.ensure();  // binding 3（readObjectDraw/Matrix/ShadowViewProj）
 		b.hasSceneData = true;
-		// 5/6/7 = IZB head/nodes/mask（frag 声明；mesh 不声明 = 空转无害）
+		// 5/6/7 = IZB head/nodes/mask（frag 声明 = 必须传；mesh 不声明也无妨，过滤取并集）
 		b.extra.push_back({.binding = 5, .heapSlot = slots->head});
 		b.extra.push_back({.binding = 6, .heapSlot = slots->nodes});
 		b.extra.push_back({.binding = 7, .heapSlot = slots->mask});
-		auto entry = PipelineEntry{.name = fmt::format("izb_mask.v{}", vertexSlot),
-			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b),
+		const std::string entryName = fmt::format("izb_mask.v{}", vertexSlot);
+		auto entry = PipelineEntry{.name = entryName,
+			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b,
+				entryName),
 			.argsSize = 12,  // ShadowDrawArgs 8B + gridDim 4B（重放点拼接）
 			.spec = *spec, .bindings = b};
 		const uint32_t index = static_cast<uint32_t>(entries.size());
@@ -485,12 +503,14 @@ namespace RGL {
 		b.slotVertex = cubeAsset.heapSlot;
 		b.slotIndex = *cubeAsset.indexHeapSlot;
 		// Phase 7b+（NV DGC 规避）：cube mesh 也走 readObjectMvp（binding 3 scene data，
-		// 同 model 条目恒烘焙；cube 的 mvp 由 render_list 循环填进 mvp 表，objectIndex 有效）
+		// 同 model 条目恒传入——cube mesh 声明了它 ⟹ 批 M 过滤照烘；cube 的 mvp 由
+		// render_list 循环填进 mvp 表，objectIndex 有效）
 		b.slotSceneData = sceneData.ensure();
 		b.hasSceneData = true;
 		auto entry = PipelineEntry{
 			.name = "cube",
-			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*cubeSpec), b),
+			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*cubeSpec), b,
+				"cube"),
 			.spec = *cubeSpec, .bindings = b};
 		const uint32_t index = static_cast<uint32_t>(entries.size());
 		indexByName[entry.name] = index;

@@ -162,7 +162,8 @@ export class ShaderRegistry {
 	 *         catch 后保留旧管线）
 	 */
 	[[nodiscard]] RGL::RenderPipeline buildReplacement(uint32_t index, const RGL::ShaderEffect& effect) {
-		return RGL::RenderPipeline(device.getDevice(), effect, entries[index].bindings);
+		return RGL::RenderPipeline(device.getDevice(), effect, entries[index].bindings,
+			entries[index].name);
 	}
 
 	/**
@@ -179,8 +180,9 @@ export class ShaderRegistry {
 	/**
 	 * 克隆条目（Phase 10 批 10.5 picking / 10.7 highlight 共用机制）：把当前表
 	 * **全部 model 族条目**克隆出指定 frag 的变体——mesh SPV = 原条目 mesh、frag SPV
-	 * = 传入的克隆 frag、bindings 原样（克隆 frag 不声明的 descriptor 映射空转无害，
-	 * skybox 条目同先例）。非 model 条目（cube/天空盒/光 = mesh 输出接口非
+	 * = 传入的克隆 frag、bindings 原样（批 M：克隆 frag 不声明的 binding 由 RenderPipeline
+	 * 按 mesh+frag 并集的 SPV 声明过滤在烘焙期滤掉，不再白烘；克隆 frag 若声明了 bindings
+	 * 形态里没有的号，仍是「声明未 mapping」VVL 错误——两侧同向约束不因克隆放松）。非 model 条目（cube/天空盒/光 = mesh 输出接口非
 	 * ModelVertexOutput）不克隆——重放路对其跳过。
 	 * 装配时序契约 = main 于模型注册完成后调用（门 = diagnostics.picking；先于
 	 * addSkyEntry/addLightEntry = 克隆段追加在 model 条目后）；既有条目下标语义零改动。
@@ -211,7 +213,8 @@ export class ShaderRegistry {
 	 * 顶点 slot + 纹理槽（binding 0 = 顶点 buffer 槽、binding 1 = resource heap 的
 	 * baseColor SAMPLED_IMAGE 描述符槽、binding 2 = sampler heap 槽——OpTypeSampler 映射，
 	 * 共享一份 sampler 描述符，偏移 = samplerSlot * samplerHeap.getDescriptorSize()；
-	 * binding 3 = scene data、4/5 = env 恒烘焙；binding 6/7 = normal/orm 贴图槽
+	 * binding 3 = scene data、4/5 = env 恒传入（批 M 按 SPV 声明过滤烘焙）；binding 6/7 =
+	 * normal/orm 贴图槽
 	 *（Phase 8 ③a）、binding 8 = emissive 贴图槽（Phase ③，extra 追加，见 impl））。
 	 * 首参 specName = 管线规格名（Phase 4 批次 3：风格→规格名映射在 main.cpp 经 scene.lua
 	 * styles 表完成，本函数只认规格名）；按 (规格, 顶点 slot, base 纹理 slot, normal slot,
@@ -226,13 +229,14 @@ export class ShaderRegistry {
 	 * @param ormSlot ORM 贴图 SAMPLED_IMAGE heap 槽（binding 7；无贴图 = 白纹理槽）
 	 * @param emissiveSlot emissive 贴图 SAMPLED_IMAGE heap 槽（binding 8；无贴图 = 白纹理槽）
 	 * @param samplerSlot 共享 sampler 的 sampler heap 槽（binding 2，ensureSharedSampler 产物）
-	 * @param shadowMapSlot 阴影图 SAMPLED_IMAGE 槽（**binding 12**，Phase 11 批 11.2；无条件烘焙，
-	 *        因此不声明 shadow.slang 的风格也不会误用）
+	 * @param shadowMapSlot 阴影图 SAMPLED_IMAGE 槽（**binding 12**，Phase 11 批 11.2；无条件
+	 *        传入，批 M 按 SPV 声明过滤烘焙——不 import shadow.slang 的风格不声明 = 不烘，
+	 *        import 了 = 声明了 = 必有此条）
 	 * @param shadowSamplerSlot 阴影专用 NEAREST sampler 槽（**binding 13**；不能用共享的 LINEAR，
 	 *        深度格式无 filterable 能力）
 	 * @param evssmMapSlot EVSSM 矩图 SAMPLED_IMAGE 槽（**binding 15**，批 11.6d-2；无条件
-	 *        bake（同 binding 12 纪律），门关 = -DEVSSM_SOFT 变体不存在、binding 不声明 =
-	 *        空转无害；binding 16 = 矩 sampler **复用本条目共享 LINEAR sampler**（矩图集
+	 *        传入（同 binding 12 纪律），门关 = -DEVSSM_SOFT 变体不存在、binding 不声明 =
+	 *        批 M 过滤不烘；binding 16 = 矩 sampler **复用本条目共享 LINEAR sampler**（矩图集
 	 *        linear 过滤 = mip 高斯核；uv 恒 clamp 在块内 → wrap 模式无关））
 	 * @return 条目下标（新组合 = entries 追加）
 	 */
@@ -254,9 +258,10 @@ export class ShaderRegistry {
 	 * **固定 binding**（17=顶点池 / 18=簇表 / 19=Tris / 20=Remap / 21=逐簇可见标志，
 	 * §10.2「全局单例进固定 binding，不进 per-entry 描述符」；描述符内容由装配层
 	 * wireMeshletBindings 写入这些 Runtime 段槽）。
-	 * 🔴 binding 21（★1-a2-i）**无条件烘**：mesh SPV 只有一份、shader 侧无条件声明该 binding，
-	 * 而 descriptor heap 下「声明了 binding 却无 mapping」是 VVL 错误（反向的「有 mapping 未
-	 * 声明」才空转无害）。门关时那张表的内容是全 1（= 全可见），不是「没有这张表」。
+	 * 🔴 binding 21（★1-a2-i）**无条件传入**：mesh SPV 只有一份、shader 侧无条件声明该 binding，
+	 * 而 descriptor heap 下「声明了 binding 却无 mapping」是 VVL 错误。批 M 的按声明过滤
+	 * **不豁免它**——真声明了 ⟹ 照烘（依据从「多烘一条空转无害」变成「声明了就必须烘」，
+	 * 未声明的条目侧传了才被滤）。门关时那张表的内容是全 1（= 全可见），不是「没有这张表」。
 	 * modelEntry 位 = false：picking/highlight 克隆与 DGC 候选都不吃本条目（叠加不参与
 	 * 候选序对账）。
 	 * @param specName 管线规格名（与同 primitive 的模型条目同名 = 同一 frag）
@@ -282,9 +287,10 @@ export class ShaderRegistry {
 
 	/**
 	 * 天空盒管线条目（Phase 5.5 批次 4）：单条目（env 槽全局单例，无组合去重需求）。
-	 * mapping = binding 0/1 占位（skybox shader 不声明顶点/索引 = 空转，Phase 3/5 既证
-	 * "映射未消费无害"方向）+ binding 3 scene data（skyClipToWorld 读 invViewProj）+
-	 * binding 4/5 env（skybox.frag import env 声明——"声明未映射"才是错误，本条目恒烘焙）。
+	 * mapping = binding 0/1 占位槽号（skybox shader 不声明顶点/索引 = 批 M 过滤不烘，
+	 * 槽号只是 PipelineBindings 形态的合法占位）+ binding 3 scene data（skyClipToWorld 读
+	 * invViewProj）+ binding 4/5 env（skybox.frag import env 声明——"声明未映射"才是错误，
+	 * 声明了 ⟹ 过滤后照烘）。
 	 * 前提 = env 已上传（main 调用点保证）；幂等（既有 "skybox" 条目直接返回下标）。
 	 * @return 条目下标；规格缺失 / env 未上传抛 runtime_error
 	 */
@@ -292,7 +298,8 @@ export class ShaderRegistry {
 
 	/**
 	 * Phase 7 D1：deferred light pass 管线条目（单条目，仿 addSkyEntry）。spec = "light"
-	 *（全屏 mesh + 采样 frag）。binding：0/1 占位（light mesh 不声明 = 空转）+ 3 sceneData
+	 *（全屏 mesh + 采样 frag）。binding：0/1 占位槽号（light mesh 不声明 = 批 M 过滤不烘）
+	 * + 3 sceneData
 	 *（readSceneLight 单灯）+ extra：4-8 → 5 个 G-buffer RT 的 SAMPLED_IMAGE 堆槽
 	 *、8 → 共享 sampler、9/10 → env、**11 → emissive 第 5 通道**（Phase 8 剩余批次 B；
      * emissive 排尾——4-10 已被旧布局占用，勿按 kGBufferAttachments 序推断 binding）。
@@ -306,7 +313,8 @@ export class ShaderRegistry {
 	 * @param shadowMapSlot 阴影图 SAMPLED_IMAGE 槽（**binding 12**，与 forward 模型条目同号）
 	 * @param shadowSamplerSlot 阴影专用 NEAREST sampler 槽（**binding 13**）
 	 * @param evssmMapSlot EVSSM 矩图 SAMPLED_IMAGE 槽（**binding 15**，批 11.6d-2；
-	 *        无条件 bake + binding 16 复用本条目 LINEAR sampler，细则见 addModelEntry）
+	 *        无条件传入（批 M 按声明过滤烘焙）+ binding 16 复用本条目 LINEAR sampler，
+	 *        细则见 addModelEntry）
 	 * @return 条目下标；规格缺失抛 runtime_error
 	 */
 	[[nodiscard]] uint32_t addLightEntry(uint32_t albedoSlot, uint32_t normalSlot,
@@ -456,9 +464,10 @@ export class ShaderRegistry {
 	 * 不存在“同纹理槽但纹理槽不同”的需求；新建独立去重表会让“两套不同的去重键”
 	 * 同时存在（模型空闲槽为什么不能用阴影空闲槽——两者绑的不是同一个纹理 buffer）。
 	 *
-	 * binding 映射：0 = 顶点 buffer 槽；1 = 索引槽（占位，shadow mesh 不声明 = 空转）；
-	 * 3 = scene data（VP 区 + 对象矩阵表 + ObjectDraw 表）。**不纹理 / 不 sampler / 不 env**
-	 * ——因为 shadow mesh/frag 两个文件都不声明它们，烘焙了也是空转（既证无害）。
+	 * binding 映射：0 = 顶点 buffer 槽；1 = 索引槽（占位槽号，shadow mesh 不声明 = 批 M
+	 * 过滤不烘）；3 = scene data（VP 区 + 对象矩阵表 + ObjectDraw 表）。**不纹理 / 不 sampler /
+	 * 不 env**——shadow mesh/frag 两个文件都不声明它们（批 M 前是「烘了空转」，现在传了也
+	 * 不烘；若将来 shader 声明了其中之一，条目侧必须补传——「声明了未 mapping」仍是 VVL 错误）。
 	 * @param vertexSlot 顶点 buffer heap 槽（binding 0）
 	 * @return 条目下标（同槽重复调用返回既有下标）
 	 */
@@ -503,16 +512,19 @@ export class ShaderRegistry {
 	 * ## binding 映射
 	 *
 	 *  · 0/1 = 合法占位槽号：本管线的 mesh/frag **两个 stage 都不声明 binding 0/1**（mesh 不
-	 *    import model，frag 是空壳）⟹ mapping 空转无害。🔴 方向别记反：「有 mapping 未声明」
-	 *    无害，「声明了未 mapping」才是 VVL 错误（addSkyEntry/addLightEntry 的 0/1 占位既证方向）。
+	 *    import model，frag 是空壳）⟹ 批 M 的按声明过滤在烘焙期把这两条**滤掉**（批 M 前是
+	 *    「烘了空转无害」，现在根本不烘）。🔴 方向别记反：「声明了未 mapping」才是 VVL 错误
+	 *    ——过滤只敢滤「没声明的」，声明了的（如 3/17-20）照烘（addSkyEntry/addLightEntry 的
+	 *    0/1 占位既证方向）。
 	 *  · 3 = scene data（`hasSceneData = true`）：readObjectClusterRange / readObjectMatrix /
 	 *    readShadowViewProj 三张表都在这一份 buffer 里。
 	 *  · 17/18/19/20 = 簇四段 buffer（顶点池/簇表/Tris/Remap），内容 = 装配层
 	 *    wireMeshletBindings 写入的 Runtime 段槽（与主 pass 的 meshlet 条目**同一批槽号**）。
-	 *  · 🔴 **不烘 binding 21**（`clusterVisible`）：本管线不声明它（阴影段本批不做逐簇剔除），
-	 *    而「声明了未 mapping」才是 VVL 错误 ⟹ 条目侧烘了 21 只会多一条无人消费的 mapping，
-	 *    而将来 shader 若声明它又漏烘就是 VVL 错误——两侧同向（都不带 21）是当前形态的约束。
-	 *  · 不烘 env、不烘 6/7/8/12/13/15/16：两个 shader 文件都不声明它们（`textured = false`）。
+	 *  · 🔴 **不传 binding 21**（`clusterVisible`）：本管线不声明它（阴影段本批不做逐簇剔除）
+	 *    ⟹ 批 M 后即使条目侧传了也不会烘（没声明）；而「声明了未 mapping」仍是 VVL 错误
+	 *    ⟹ 将来 shader 若声明它又漏传就是 VVL 错误——两侧同向（都不带 21）是当前形态的约束。
+	 *  · 不传 env、不传 6/7/8/12/13/15/16：两个 shader 文件都不声明它们（`textured = false`；
+	 *    批 M 后传了也不烘，但「不传」让槽号来源不参与账目）。
 	 *
 	 * 幂等：同名条目（"shadow_meshlet"）命中直接返回既有下标（同 addSkyEntry 的写法）——
 	 * 装配层逐 primitive 调用它，去重住在本函数。

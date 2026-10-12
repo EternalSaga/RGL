@@ -8,6 +8,7 @@ import rlstd;
 import rlvk;
 import vkerror;
 import profiler;  // 批 9.5：applyDynamicState 的 vkcmd.count 计数（rlbase，只向下依赖）
+import rllogger;  // 批 M：RenderPipeline 构造期 SPV 解析失败退回全烘的 warn 出声
 
 namespace RGL {
 
@@ -206,6 +207,24 @@ export struct ShaderEffect {
  * member decoration 集采集覆盖（appendDecos 的 MD 行）。
  */
 export std::string spvInterfaceSignature(const std::vector<uint32_t>& spv);
+
+/**
+ * SPV 实际声明的 descriptor binding 集合（批 M，docs/constantbuffer_迁移计划.md §9.3：
+ * mapping 按声明过滤，启动面不随 binding 总数线性膨胀）。
+ *
+ * 判据 = 所有**带 `Binding` 装饰（33）的 OpVariable** 的 binding 号：resource heap 描述符
+ * 与 **sampler heap 描述符**（OpTypeSampler 变量同样带 Binding 装饰，漏了它 = 采样器没映射
+ * = 画面坏）同路采集；push constant 变量无 Binding 装饰，天然不在集合里。复用
+ * spvInterfaceSignature 的同一套遍历/decoration 采集机制（spvSplit），不另起解析器。
+ *
+ * 已知边界同 spvInterfaceSignature：OpGroupDecorate 不解析（slangc 直出 OpDecorate）。
+ *
+ * @param spv SPV 码流（word 数组）
+ * @return 声明的 binding 号集合（可为空集 = 该 SPV 确实什么都不声明）；
+ *         **nullopt = 解析失败**（魔数不对/截断/结构不认识）——调用方必须 fail-safe 退回
+ *         全烘，**不可**把失败读成空集（空集 = 滤掉全部 mapping = 静默读零）
+ */
+export std::optional<std::set<uint32_t>> spvDeclaredBindings(const std::vector<uint32_t>& spv);
 
 /**
  * 动态状态（Dynamic State）：与 shader object 解耦的"pass 状态"值集合。
@@ -422,6 +441,11 @@ export class RenderPipeline {
 	/**
 	 * 创建 mesh + frag 两个 VkShaderEXT（vk::createShadersEXT 一次两个），
 	 * binding mapping 按 bindings 形态烘焙（running index 连续填，firstBinding 显式）。
+	 * 🔴 批 M（§9.3）：**只为 mesh + frag 两份 SPV 并集里真声明了的 binding 发 mapping**
+	 *（判据 = spvDeclaredBindings）；未声明的 binding 即使 bindings 形态里带了也不烘。
+	 * 任一份 SPV 解析失败 ⟹ 退回全烘（= 批 M 之前的行为，恒正确）+ warn 点名条目。
+	 * 方向不变的红线：「SPV 声明了却无 mapping」是 VVL 错误——所以过滤只敢滤「没声明的」，
+	 * 声明了的一定向烘（两侧同向约束见 ShaderRegistry 各 add*Entry 注释）。
 	 * bindings.textured 缺省 = cube 形态（2 条目：binding 0/1）。
 	 * textured=true = 模型形态（3 条目，Phase 3）：binding 1 → SAMPLED_IMAGE 描述符槽
 	 *（resource heap，slotTexture），binding 2 → sampler heap 槽（OpTypeSampler 映射，
@@ -431,21 +455,39 @@ export class RenderPipeline {
 	 * 交叉测试两者三驱动均 PASS（docs/archive/heap_texture_research.md §九），此处维持独立
 	 * sampler heap（docs/archive/phase3_plan.md R1 回退链的既选路径，已验证可用）。
 	 * hasSceneData=true（Phase 5 批次 2，模型形态）追加 binding 3 → scene data storage
-	 * buffer 槽（光照 + 对象矩阵表，SceneDataService::ensure；模型 mesh/unlit frag 不
-	 * 声明 binding 3 = 映射空转无副作用，同 mesh 阶段不声明 binding 1/2 的既证行为）。
+	 * buffer 槽（光照 + 对象矩阵表，SceneDataService::ensure；不声明 binding 3 的
+	 * mesh/unlit frag 该条被批 M 过滤掉，不再白烘）。
 	 * hasEnv=true（Phase 5.5）追加 binding 4/5 → env cubemap 槽 + sky sampler 偏移
-	 *（仅 import env.slang 的风格消费——pbr/phong/unlit 不声明 = 映射空转，同上既证行为）。
+	 *（仅 import env.slang 的风格消费——pbr/phong/unlit 不声明 = 批 M 后不烘）。
 	 * extra（Phase 7 D1）续 base 追加（light pass 采 G-buffer 4 RT + sampler）。
 	 * @param device 设备句柄
 	 * @param effect mesh + frag 两阶段 SPV 码流
 	 * @param bindings mapping 烘焙参数（见 PipelineBindings）
+	 * @param debugName 条目名（仅进 warn/throw 消息定位用，批 M：解析失败退全烘要点名条目）
 	 */
 	RenderPipeline(vk::raii::Device& device, const ShaderEffect& effect,
-		const PipelineBindings& bindings) {
+		const PipelineBindings& bindings, std::string_view debugName = {}) {
 		const uint32_t descriptorSize = bindings.descriptorSize;
 		// 容量 24（★1-a1ii-α 从 16 抬）：model 条目已用 13（base 0-5 + extra 6/7/8/12/13/15/16），
 		// meshlet 条目再 +4 个簇 buffer（17-20）= 17。上限判据 = 最多 extra 的条目，别贴边。
+		// 批 M 后过滤只让条目数减不让它增，越界保护（add 内 throw 点名条目）防的是未来
+		// extra 列表继续加长时静默越界写栈。
 		VkDescriptorSetAndBindingMappingEXT mappings[24]{};
+		// 批 M（§9.3）：mesh + frag 两份 SPV 声明 binding 的**并集**（一个 binding 可能只在
+		// 一侧声明，如纹理/sampler 只在 frag）。任一解析失败（nullopt）= filter 关 = 全烘
+		// + warn——全烘恒正确（「有 mapping 未声明」空转无害既证），静默滤错才是画面事故。
+		const auto meshDeclared = spvDeclaredBindings(effect.meshStageSpv);
+		const auto fragDeclared = spvDeclaredBindings(effect.fragStageSpv);
+		const bool filter = meshDeclared.has_value() && fragDeclared.has_value();
+		std::set<uint32_t> declared;
+		if (filter) {
+			declared = *meshDeclared;
+			declared.insert(fragDeclared->begin(), fragDeclared->end());
+		} else if (auto* logger = RLLogger::getInstance()) {
+			logger->warn("spvDeclaredBindings: 条目 '{}' 的 SPV 解析失败（mesh 解析={} frag "
+				"解析={}），本条目退回全烘（批 M 过滤失效方向 = 正确方向，但启动面收益丢失）",
+				debugName, meshDeclared.has_value(), fragDeclared.has_value());
+		}
 		// 顺序填充（Phase 5.5 批次 4 修正：原固定下标 [0/1/2/3/4/5] 假设 textured=true——
 		// 天空盒首个 textured=false+hasSceneData+hasEnv 组合下 mappings[2] 留空却计入
 		// count → VVL "sType must be..." + envSampler 被挤出 count → "no mapping for
@@ -453,6 +495,13 @@ export class RenderPipeline {
 		uint32_t n = 0;
 		const auto add = [&](uint32_t firstBinding, vk::DeviceSize heapOffset,
 			vk::DeviceSize arrayStride) {
+			// 批 M：SPV 没声明的 binding 不烘（解析失败时 filter 关 = 恒烘，行为 = 批 M 前）
+			if (filter && !declared.contains(firstBinding))
+				return;
+			if (n >= 24)
+				throw std::runtime_error(fmt::format(
+					"RenderPipeline '{}': mapping 条目数超过 mappings[24] 容量（binding {} 无处放）",
+					debugName, firstBinding));
 			auto& m = mappings[n++];
 			m.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
 			m.descriptorSet = 0;

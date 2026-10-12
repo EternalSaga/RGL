@@ -311,8 +311,8 @@ void bakePipelineEntries(UploadedAssets& uploaded, const SceneConfig& scene, boo
 	// assembleHdrAoChain 里的同名 ensure 是幂等的（deferred light 条目用）。
 	const auto shadowSlot = orThrow(ensureShadowMapSlot(rtCache, kShadowMapSize),
 		"阴影图 RT 创建失败");
-	// 批 11.6d-2：EVSSM 矩图槽条目烘焙前发号（binding 15 **无条件 bake**，shadowSlot
-	// 同纪律；门关 = -DEVSSM_SOFT 变体不声明该 binding = 空转无害，真描述符由
+	// 批 11.6d-2：EVSSM 矩图槽条目传入前发号（binding 15 **无条件传入**，shadowSlot
+	// 同纪律；门关 = -DEVSSM_SOFT 变体不声明该 binding = 批 M 过滤不烘，真描述符由
 	// EvssmShadow 构造时覆写同槽）。幂等，失败处理收 evssmMomentsSlotOf。
 	const uint32_t evssmSlot = evssmMomentsSlotOf(resources);
 	for (auto& um : uploaded.models) {
