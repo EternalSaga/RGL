@@ -2,6 +2,9 @@
 //
 // 单一 storage buffer（descriptor heap binding 3，Resources::ensureSceneData 创建，
 // 每帧 staging → vkCmdCopyBuffer 更新，见 vkrenderer.cppm）。
+// 🔴 类型化迁移（docs/constantbuffer_迁移计划.md §9）：各区逐批从「binding 3 + 手写字节
+// 偏移」迁到**类型化载体**（本文件零字节数）；已迁区 = 湿面（binding 32，批 1），
+// 未迁区仍走 binding 3 字节读，**全部迁完后 binding 3 与 sceneData 声明一起删**。
 // 字节布局真相源分两段（2026-09-15 勘误：旧注释称真相源 = vkresources.cppm 的
 // LightDataGpu——该类型已删）：
 //   · SceneLight（@0-48 头）真相源 = **本文件**——scene_forward 反射管线从本文件
@@ -457,22 +460,31 @@ float4 readSsrGate()
     return asfloat(sceneData.Load4(723792u));  // kSceneDataSsrGateOffset
 }
 
-// ── Phase 15 批 15.2 子步 A 湿面尾区 ──
+// ── Phase 15 批 15.2 子步 A 湿面区（迁移批 1 起 = 类型化载体，本文件零字节偏移）──
 //
-// 基址与 C++ 侧 scene_data.cppm kSceneDataWetParamsOffset / kSceneDataWetSpatialOffset
-// 手写同源（**只有 C++ 那一侧有 static_assert 钉**——slang 没有能引用 C++ 常量的机制，
-// 本侧漂移只能靠端到端判据抓，SSR 区同款纪律）：
-//   @723968  vec4 wetParams —— (strength, dark, roughLo, roughHi) = 身份调制系数。
-//   @723984  vec4 wetSpatial —— (rippleAmp, puddleFreqRadii, 保留, 保留) = 空间变化参数。
+// 载体 = binding 32 的 `ConstantBuffer<WetParamsBlock>`（§9.5 定案表给湿面区的号）。
+// 物理存储仍是 scene data 单 buffer 的湿面区（C++ 侧 kSceneDataWetOffset 子范围描述符，
+// SceneDataService::ensure 写一次），但**本文件不再有任何字节字面量**——字段偏移由
+// scalar layout + 反射契约（scene_forward_schema 登记 → scene_forward_types_generated）
+// 两侧同源，C++ 写侧子区偏移与 struct 字段偏移的同步由生成物 static_assert 兜底。
 // 湿面**身份**（哪些面湿）不占参数 = `1 - smoothstep(readSsrGate().x, readSsrGate().y,
 // roughness)`，与 SSR 粗糙度门控同区间同源（结构上排除「反射了但没压暗」的错配；
 // 理由 → scene_data.cppm 湿面区注释）。
 // 消费者 = deferred_geometry.frag.slang 湿面 G-buffer 调制（15.2B 已接线，默认开；
 // 消融档 `--set strength=0` 实测逐位 = 换锚前旧图）。
 // **系数无 shader 侧默认值**（唯一真相源 = WetTuning 成员初始化器，rgl/runtime_config.cppm）。
+struct WetParamsBlock
+{
+    float4 params;   // (strength, dark, roughLo, roughHi) = 身份调制系数（@0）
+    float4 spatial;  // (rippleAmp, puddleFreqRadii, 保留, 保留) = 空间变化参数（@16）
+};
+
+[[vk::binding(32, 0)]]
+ConstantBuffer<WetParamsBlock> sceneWet;
+
 float4 readWetParams()
 {
-    return asfloat(sceneData.Load4(723968u));  // kSceneDataWetParamsOffset
+    return sceneWet.params;
 }
 
 // 湿面空间变化参数（x = rippleAmp 水膜法线扰动幅度、y = puddleFreqRadii 水洼噪声频率
@@ -481,7 +493,7 @@ float4 readWetParams()
 // 调制方向倒置），不变式落点与「配置层为何不校验」→ scene_data.cppm kSceneDataWetParamsOffset。
 float4 readWetSpatial()
 {
-    return asfloat(sceneData.Load4(723984u));  // kSceneDataWetSpatialOffset
+    return sceneWet.spatial;
 }
 
 // AO 施加强度：scene data @60，configs/scene.lua ao.strength，0 = 逐位旁路。

@@ -43,6 +43,13 @@ namespace RGL {
     static_assert(offsetof(ObjectClusterRange, l0Count) == 8, "Field ObjectClusterRange.l0Count offset does not match shader reflection (scalar layout drift!)");
     static_assert(offsetof(ObjectClusterRange, cullBase) == 12, "Field ObjectClusterRange.cullBase offset does not match shader reflection (scalar layout drift!)");
 
+    export struct WetParamsBlock {
+        glm::vec4 params;
+        glm::vec4 spatial;
+    };
+    static_assert(sizeof(WetParamsBlock) == 32, "Size of C++ struct WetParamsBlock does not match shader reflection!");
+    static_assert(offsetof(WetParamsBlock, spatial) == 16, "Field WetParamsBlock.spatial offset does not match shader reflection (scalar layout drift!)");
+
 
 
 

@@ -3,17 +3,19 @@ module;
  * test_wet_params —— Phase 15 批 15.2 子步 A：湿面区两个 vec4 子区的字节布局契约
  * + fillWetParams 填值契约（纯 CPU、无设备）。
  *
- * 湿面区（@723968 身份调制系数 vec4 + @723984 空间变化 vec4）是**纯新增尾区**：既有偏移
- * 逐字节不动（diff0），本步**零渲染消费者**（scene.slang 只备 readWetParams/readWetSpatial
- * 读取函数、无调用点，先例 = 批 15.1 readSsrViewProj「本步无调用点」）。红线 A（出厂画面
- * 逐位不变）由 just regress ab 钉，本文件钉的是**管线本身**：六枚系数从 WetTuning 到
- * scene data 字节的映射正确。
+ * 湿面区（@723968 身份调制系数 vec4 + @723984 空间变化 vec4）是批 15.2A 的纯新增尾区；
+ * 消费者 = deferred_geometry 湿面 G-buffer 调制（15.2B 已接线，默认开）。消费端载体自
+ * **scene data 迁移批 1** 起 = scene.slang `ConstantBuffer<WetParamsBlock> sceneWet`
+ * （binding 32 子范围 UBO 描述符，shader 侧零字节字面量）。红线 A（出厂画面逐位不变）
+ * 由锚点截图钉（skill rgl-verify 口径），本文件钉的是**管线本身**：六枚系数从 WetTuning
+ * 到 scene data 字节的映射正确。
  *
  * ## 钉什么
  *
  * (a) **布局**：按 vkrenderer_impl::writeSceneStaging 的 memcpy 口径把两个 vec4 写进
- *     @723968 / @723984，再按 **shader 侧提取链**（scene.slang readWetParams / readWetSpatial
- *     的 Load4 字面量）读回，断言逐位还原。抓的是**偏移错 / 步长错 / 两子区重叠**。
+ *     湿面区两个子区，再按 **shader 侧提取链**（scene.slang `sceneWet.params` /
+ *     `sceneWet.spatial` = 描述符基址 kSceneDataWetOffset + struct 字段偏移，本文件手抄
+ *     为 0u / 16u）读回，断言逐位还原。抓的是**字段偏移错 / 步长错 / 两子区重叠**。
  * (b) **填值**：wetParams = (strength, dark, roughLo, roughHi)、
  *     wetSpatial = (rippleAmp, puddleFreqRadii, 0, 0)，全部逐位；**两槽不互换**由
  *     「六枚探针值两两不等 + 逐槽钉死 + 跨槽显式互斥」三层保证。
@@ -23,24 +25,31 @@ module;
  * (d) **消融档透传**：strength = 0 原样落槽为 0（CPU 不 clamp——`strength = 0` 是合法
  *     消融档，配置层与填值层都不校验，理由 → readWetBlock 注释）。
  *
- * ## 两源结构（先例 = test_ssr_params / test_ssr_viewproj，理由在那不重复）
+ * ## 两源结构（迁移批 1 换形：字面量对字面量 → 字段偏移对契约生成物）
  *
- * 写入侧偏移 = C++ 常量 kSceneDataWetParamsOffset / kSceneDataWetSpatialOffset，
- * **读回侧偏移 = 字面量 723968u / 723984u**（手抄 scene.slang 的两个 Load4）。
- * 编译期另有 static_assert 双保险（C++ 常量 == 本文件手抄值）。
+ * 写入侧偏移 = C++ 常量 kSceneDataWetParamsOffset / kSceneDataWetSpatialOffset；
+ * **读回侧 = 描述符基址（同一个 C++ 常量，shader 经 binding 32 子范围描述符看区首）
+ * + struct 字段偏移（本文件手抄 scene.slang WetParamsBlock 声明 = 0u / 16u）**。
+ * 旧的「shader Load4 字节字面量」第二源已随迁移批 1 消失，同步链变成三段、段段有钉：
+ *   ① scene.slang struct ↔ scene_forward_schema.lua 声明 = `just reflect` 期 validator
+ *      交叉核对（vertexLayout vs SPV 反射逐字段，tools/validator.cppm；构建开头 SHA1
+ *      护栏强制改 shader 必重跑 reflect）；
+ *   ② schema → 生成物 WetParamsBlock（scene_forward_types_generated）自带 offsetof /
+ *      sizeof static_assert；
+ *   ③ 生成物 ↔ 本文件手抄字段偏移 = 下面的 offsetof static_assert（本文件的钉）。
  *
- * ⚠ **本测试钉不住 shader 那一侧**（措辞纪律，别让注释把它吹成"两侧钉死"）：
- * `kSlangWetParamsLiteral` / `kSlangWetSpatialLiteral` 是**本文件手抄的 C++ 常量**，不是从
- * scene.slang 提取的。若有人只改 scene.slang 里的 `Load4(723968u)`，本测试与全部
- * static_assert **都不红**。本步零消费者的端到端护栏 = just regress ab（红线 A，画面必须
- * 不动）；15.2B 接消费者后须立湿面专属判据（缺口账与 SSR 同款 → phase15_plan §3.2）。
+ * ⚠ 措辞纪律：kSlangWetParamsFieldOffset / kSlangWetSpatialFieldOffset 仍是**本文件手抄
+ * 常量**（钉的是「手抄 == 契约生成物」）；scene.slang 那一侧由 ① 的 reflect 期核对钉，
+ * 不在本测试进程内。端到端护栏 = 红线 A 锚 + 影响域判据（phase15_plan §3.2）。
  *
  * ## 变异红线声明（哪个变异让我红）
  *
- *   ① kSceneDataWetParamsOffset / kSceneDataWetSpatialOffset 改 +16 → **编译期红**（本文件与
- *      scene_data.cppm 的 static_assert 双钉炸编译）；把本文件读回字面量改 723984u →
- *      (a) 红（params 读回的是 spatial 的字节，p != wetParams）。⚠ 单改 scene.slang 的字
- *      面量**不在此覆盖内**（见上）。
+ *   ① 本文件手抄字段偏移单侧漂（0u/16u 改 +16）→ **编译期红**（offsetof static_assert 炸
+ *      编译）；改 scene.slang struct 字段序/类型 → reflect 期 validator 交叉核对红（①段
+ *      链，构建 SHA1 护栏逼重跑）；只改 schema 不改 shader → 同上红；schema+shader 同步
+ *      换序 → 生成物字段偏移变 ⟹ 本文件 ③ 段钉红。⚠ 改 kSceneDataWetOffset（整区搬家）
+ *      **不该红**——写侧 memcpy 与 binding 32 描述符基址**同源同值**，画面逐位不变
+ *      （字面量第二源已删，这正是迁移批 1 的目的）。
  *   ② fillWetParams 两槽互换（wetParams ↔ wetSpatial 整体）或槽内任意两枚互换 → (b) 红
  *      （测试里六枚值两两不等，串位必撞逐槽 CHECK 或跨槽互斥 CHECK）。
  *   ③ WetTuning 默认值被改（哪怕只改一枚一位）→ (c) 红 ⟹ 同时是红线 A 与「默认开」拍板
@@ -52,12 +61,13 @@ module;
  *      「两子区读回互不相等」红。
  *   ⑥ writeSceneStaging 用错常量（如误写 kSceneDataSsrParamsOffset）→ 本测试**不红**，与
  *      test_ssr_params 同款已知覆盖缺口（单测复刻 memcpy 而非调用它）；端到端护栏 =
- *      红线 A（本步零消费者 ⟹ just regress ab 逐位不变就是护栏）。
+ *      红线 A 锚（出厂画面逐位）+ imgqa 影响域判据（skill rgl-verify）。
  *
  * 配置解析侧（缺块回落 / 逐键覆盖 / 消融档可写出 / 无扁平键双读）不在本文件——那是 loader
  * 契约，见 test_scene_config.cppm 的 wet 块 roundtrip 用例。
  */
 #include <doctest/doctest.h>
+#include <cstddef>    // offsetof（契约生成物字段偏移双钉）
 #include <cstring>
 #include <glm/glm.hpp>
 
@@ -68,20 +78,25 @@ import render_list;      // fillWetParams（可测接缝，fillSsrParams 同款�
 import frame_draw_list;  // FrameDrawList / SceneFrameData.wetParams / wetSpatial
 import runtime_config;   // WetTuning（默认值唯一出处）
 import scene_data;       // kSceneDataWet*Offset / kSceneDataWetBytes / kSceneDataBytes
+import scene_forward_types_generated;  // WetParamsBlock（契约生成物，③ 段钉的对象）
 
 namespace RGL {
 namespace {
 
-/// scene.slang readWetParams 的字面量基址（两源结构的 shader 侧镜像，勿改成常量引用）。
-constexpr uint32_t kSlangWetParamsLiteral = 723968u;
-/// scene.slang readWetSpatial 的字面量基址（同上）。
-constexpr uint32_t kSlangWetSpatialLiteral = 723984u;
+/// scene.slang `sceneWet.params` 的 struct 字段偏移（两源结构的 shader 侧镜像：手抄
+/// scene.slang WetParamsBlock 声明顺序，勿改成常量引用——镜像失手抄价值即失效）。
+constexpr uint32_t kSlangWetParamsFieldOffset = 0u;
+/// scene.slang `sceneWet.spatial` 的 struct 字段偏移（同上）。
+constexpr uint32_t kSlangWetSpatialFieldOffset = 16u;
 
-// 编译期双保险：C++ 常量与两个 shader 字面量同钉（变异①在此炸）。
-static_assert(kSceneDataWetParamsOffset == kSlangWetParamsLiteral,
-	"scene.slang readWetParams literal drifted from kSceneDataWetParamsOffset");
-static_assert(kSceneDataWetSpatialOffset == kSlangWetSpatialLiteral,
-	"scene.slang readWetSpatial literal drifted from kSceneDataWetSpatialOffset");
+// 编译期双保险（两源链 ③ 段）：手抄字段偏移 == 契约生成物字段偏移、区宽 == struct 宽
+//（变异①在此炸；①② 段链 = reflect 期 validator 核对 + 生成物自带 assert，见文件头）。
+static_assert(kSlangWetParamsFieldOffset == offsetof(WetParamsBlock, params),
+	"scene.slang WetParamsBlock.params field offset drifted from hand-copied mirror");
+static_assert(kSlangWetSpatialFieldOffset == offsetof(WetParamsBlock, spatial),
+	"scene.slang WetParamsBlock.spatial field offset drifted from hand-copied mirror");
+static_assert(sizeof(WetParamsBlock) == kSceneDataWetBytes,
+	"WetParamsBlock width drifted from kSceneDataWetBytes (sub-range descriptor range)");
 // 子区排布：wetParams 居湿面区首、wetSpatial 紧随其后，wetSpatial 恰盖到**簇区间表起点**
 //（簇化轴 ★1-a1i 在湿面之后追加 `ObjectClusterRange` 尾区 ⟹「湿面区是最后一个尾区」的旧断言
 //  改钉相邻关系，照 test_ssr_params 批 15.2 的同款处置；无重叠无空洞。尾区末尾断言 =
@@ -127,14 +142,14 @@ WetTuning distinctTuning() {
 
 }  // namespace
 
-TEST_CASE("湿面两个 vec4 子区布局：C++ 常量写、字面量 723968/723984 读回逐位相同（两源结构）") {
+TEST_CASE("湿面两个 vec4 子区布局：C++ 常量写、基址 + 手抄字段偏移 0/16 读回逐位相同（两源结构）") {
 	const WetTuning tuning = distinctTuning();
 
 	FrameDrawList list;
 	fillWetParams(list, tuning);
 
 	// staging 写入：vkrenderer_impl::writeSceneStaging 同款 memcpy（偏移 = C++ 常量）。
-	// 尾部 +16B 垫 = 变异①运行时形态（读回字面量 +16 单侧漂）的读取范围，避免越界 UB。
+	// 尾部 +16B 垫 = 变异①运行时形态（读回字段偏移 +16 单侧漂）的读取范围，避免越界 UB。
 	std::vector<std::byte> stage(kSceneDataWetSpatialOffset + 2 * sizeof(glm::vec4),
 		std::byte{0});
 	std::memcpy(stage.data() + kSceneDataWetParamsOffset, &list.sceneData.wetParams,
@@ -142,9 +157,10 @@ TEST_CASE("湿面两个 vec4 子区布局：C++ 常量写、字面量 723968/723
 	std::memcpy(stage.data() + kSceneDataWetSpatialOffset, &list.sceneData.wetSpatial,
 		sizeof(glm::vec4));
 
-	// shader 侧读回：字面量（两源结构）。
-	const glm::vec4 p = load4(stage, kSlangWetParamsLiteral);
-	const glm::vec4 s = load4(stage, kSlangWetSpatialLiteral);
+	// shader 侧读回：binding 32 子范围描述符基址（= kSceneDataWetOffset，C++ 写描述符
+	// 同源）+ 手抄字段偏移（两源结构）。
+	const glm::vec4 p = load4(stage, kSceneDataWetOffset + kSlangWetParamsFieldOffset);
+	const glm::vec4 s = load4(stage, kSceneDataWetOffset + kSlangWetSpatialFieldOffset);
 	CHECK(p == list.sceneData.wetParams);  // 提取链恒等（步长/偏移错在此红）
 	CHECK(s == list.sceneData.wetSpatial);
 	CHECK(p.x != 0.0f);                    // 缓冲没读成全 0（变异①运行时形态的判据前提）

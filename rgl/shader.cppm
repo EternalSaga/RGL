@@ -383,6 +383,9 @@ export struct PipelineBindings {
 	uint32_t slotTexture = 0;      // binding 1（textured 形态）：SAMPLED_IMAGE 槽
 	uint32_t samplerHeapOffset = 0;  // binding 2（textured）：sampler heap 字节偏移
 	uint32_t slotSceneData = 0;    // binding 3（hasSceneData）：scene data storage 槽
+	uint32_t slotSceneWet = 0;     // binding 32（迁移批 1，hasSceneData 恒带上）：湿面区
+	                             // UBO 子范围槽（SceneDataService::wetSlot；未声明 binding 32
+	                             // 的条目由批 M 的 SPV 声明过滤自动裁掉——不在此登记消费者）
 	uint32_t slotEnv = 0;          // binding 4（hasEnv）：env cubemap SAMPLED_IMAGE 槽
 	uint32_t envSamplerHeapOffset = 0;  // binding 5（hasEnv）：sky sampler heap 字节偏移
 	bool textured = false;
@@ -468,11 +471,12 @@ export class RenderPipeline {
 	RenderPipeline(vk::raii::Device& device, const ShaderEffect& effect,
 		const PipelineBindings& bindings, std::string_view debugName = {}) {
 		const uint32_t descriptorSize = bindings.descriptorSize;
-		// 容量 24（★1-a1ii-α 从 16 抬）：model 条目已用 13（base 0-5 + extra 6/7/8/12/13/15/16），
-		// meshlet 条目再 +4 个簇 buffer（17-20）= 17。上限判据 = 最多 extra 的条目，别贴边。
-		// 批 M 后过滤只让条目数减不让它增，越界保护（add 内 throw 点名条目）防的是未来
-		// extra 列表继续加长时静默越界写栈。
-		VkDescriptorSetAndBindingMappingEXT mappings[24]{};
+		// 容量 48（迁移批 1 从 24 抬，§9.7 红线：过滤发生在计数之后，容量必须盖过「全烘」
+		// 的最坏条目数 + 后续批 +12 binding 的扩张面）：model 条目已用 14（base 0-5 +
+		// binding 32 + extra 6/7/8/12/13/15/16），meshlet 条目再 +5 个簇 buffer（17-21）。
+		// 上限判据 = 最多 extra 的条目，别贴边。批 M 过滤只让**实际烘焙数**减不让它增，
+		// 越界保护（add 内 throw 点名条目）防的是未来 extra 列表继续加长时静默越界写栈。
+		VkDescriptorSetAndBindingMappingEXT mappings[48]{};
 		// 批 M（§9.3）：mesh + frag 两份 SPV 声明 binding 的**并集**（一个 binding 可能只在
 		// 一侧声明，如纹理/sampler 只在 frag）。任一解析失败（nullopt）= filter 关 = 全烘
 		// + warn——全烘恒正确（「有 mapping 未声明」空转无害既证），静默滤错才是画面事故。
@@ -498,9 +502,9 @@ export class RenderPipeline {
 			// 批 M：SPV 没声明的 binding 不烘（解析失败时 filter 关 = 恒烘，行为 = 批 M 前）
 			if (filter && !declared.contains(firstBinding))
 				return;
-			if (n >= 24)
+			if (n >= 48)
 				throw std::runtime_error(fmt::format(
-					"RenderPipeline '{}': mapping 条目数超过 mappings[24] 容量（binding {} 无处放）",
+					"RenderPipeline '{}': mapping 条目数超过 mappings[48] 容量（binding {} 无处放）",
 					debugName, firstBinding));
 			auto& m = mappings[n++];
 			m.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
@@ -525,8 +529,13 @@ export class RenderPipeline {
 			//（spike 首版同款，docs/archive/heap_texture_research.md §九.2 根因 2）
 			add(2, bindings.samplerHeapOffset, 0);
 		}
-		if (bindings.hasSceneData)
+		if (bindings.hasSceneData) {
 			add(3, bindings.slotSceneData * descriptorSize, descriptorSize);
+			// 迁移批 1：湿面区 UBO 载体（binding 32）。**hasSceneData 一律带上、不在 C++ 侧
+			// 登记谁用**——SPV 没声明 binding 32 的条目被上面的批 M 过滤自动裁掉（§9.3/§9.7；
+			// 「声明了未 mapping」才是 VUID-11292 启动炸，方向别记反）。
+			add(32, bindings.slotSceneWet * descriptorSize, descriptorSize);
+		}
 		if (bindings.hasEnv) {
 			// Phase 5.5：binding 4 → env cubemap（resource heap SAMPLED_IMAGE 槽）；
 			// binding 5 → sky sampler（sampler heap 字节偏移，OpTypeSampler 映射规则同 binding 2）

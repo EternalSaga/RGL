@@ -48,5 +48,16 @@ return {
                 { name = "cullBase",  type = "uint", offset = 12 },
             },
         },
+        -- 迁移批 1（§9.5 binding 32）：湿面区类型化载体（scene.slang WetParamsBlock，
+        -- ConstantBuffer<WetParamsBlock> 经子范围描述符指向 scene data 湿面区
+        -- kSceneDataWetOffset，32B = 2×vec4）。字段语义 → scene.slang 湿面区注释。
+        {
+            name = "WetParamsBlock",
+            stride = 32,
+            attributes = {
+                { name = "params",  type = "vec4", offset = 0 },
+                { name = "spatial", type = "vec4", offset = 16 },
+            },
+        },
     },
 }

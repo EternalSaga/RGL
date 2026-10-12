@@ -527,7 +527,9 @@ static_assert(kSceneDataSsrOffset == 723712 && kSceneDataSsrParamsOffset == 7237
  *    ⟹ 结构上排除「反射了但没压暗」的错配。本区只放**空间变化与调制系数**。
  *  - 消费者 = deferred_geometry.frag.slang 湿面 G-buffer 调制（15.2B 接线，**默认开**）；
  *    无条件写（同 shadow/TAA/SSR 尾区纪律），`strength = 0` 消融档实测逐位 = 换锚前旧图。
- *  消费端 = scene.slang readWetParams/readWetSpatial 字面量（两侧 static_assert 钉死同步）。 */
+ *  消费端（迁移批 1 起）= scene.slang `ConstantBuffer<WetParamsBlock> sceneWet`（binding 32，
+ *  本区**子范围 UBO 描述符**，SceneDataService::ensure 写一次）——shader 侧零字节字面量，
+ *  本区因此不再需要「C++ 常量 == shader 字面量」的 static_assert（钉的对象已不存在）。 */
 export inline constexpr uint32_t kSceneDataWetOffset =
 	alignUp(kSceneDataSsrOffset + kSceneDataSsrBytes, kSceneRegionAlign);
 /** 湿面身份调制系数子区（vec4, 16B）= (strength, dark, roughLo, roughHi)。
@@ -550,14 +552,11 @@ export inline constexpr uint32_t kSceneDataWetParamsOffset = kSceneDataWetOffset
  *  的 ssrParams.x 同一颗 SceneBounds.radius 球）。 */
 export inline constexpr uint32_t kSceneDataWetSpatialOffset = kSceneDataWetOffset + 16u;
 export inline constexpr uint32_t kSceneDataWetBytes = 32u;
-// 钉的是「C++ 常量 == 已知的两个基址」：改 C++ 侧必编译失败。⚠ **改 scene.slang 那一侧不会**
-// ——slang 里没有能引用 C++ 常量的机制，shader 字面量单侧漂只能靠端到端判据抓（15.2B 已接消费者：
-// 漂移的可见形态 = 湿面调制读错系数，红线 A `54e40665` + 影响域判据（≥gate.y 像素差分恒 0）都抓），
-// 机器对账规则尚未落地
-// （缺口账与 SSR 同款 → docs/phase15_plan.md §3.2）。
-static_assert(kSceneDataWetOffset == 723968 && kSceneDataWetParamsOffset == 723968
-		&& kSceneDataWetSpatialOffset == 723984,
-	"scene.slang readWetParams/readWetSpatial literals 723968/723984 out of sync with scene_data.cppm offsets");
+// 迁移批 1：原「C++ 常量 == scene.slang 湿面字面量」的 static_assert 已删——shader 侧
+// 改读 binding 32 的 ConstantBuffer<WetParamsBlock>（子范围描述符基址 = 本区常量，
+// C++ 写侧与描述符**同源同值**，不存在可单侧漂移的第二份字面量）。C++ 写侧子区偏移与
+// 契约 struct 字段偏移的同步 = 生成物 WetParamsBlock 的 offsetof static_assert +
+// tests/test_wet_params 的「写侧子区 == 生成 struct 字段偏移」双钉。
 
 /** 簇化轴 ★1-a1i：per-object **簇区间表**区（湿面区之后，尾区追加，既有偏移逐字节不动
  *  diff0，先例 = 批 11.2 阴影 VP 区 / 批 15.1 SSR 区 / 批 15.2 湿面区）。
@@ -681,11 +680,22 @@ export class SceneDataService {
 	 * 目标；未创建 = 空句柄，drawFrame 跳过拷贝——无模型场景 ensure 未被调用） */
 	[[nodiscard]] const RGL::VmaBuffer& getBuffer() const { return sceneDataBuffer; }
 
+	/**
+	 * 湿面区 UBO 子范围槽号（迁移批 1，shader 端 binding 32；ShaderRegistry 烘 mapping 用，
+	 * PipelineBindings::slotSceneWet）。幂等取号语义同 ensure（内部先 ensure）；描述符内容 =
+	 * {buffer 基址 + kSceneDataWetOffset, sizeof(WetParamsBlock)} 的 eUniformBuffer。
+	 */
+	[[nodiscard]] uint32_t wetSlot() {
+		sceneDataSlot = ensure();  // 幂等取号（nodiscard 顺手回填，同 ensure 返回值）
+		return sceneWetSlot;
+	}
+
    private:
 	RGL::Resources& kernel;  // 资源内核引用（领 allocator/heap/槽）
 	RGL::DeviceContext& device;  // 设备层引用（writeResourceDescriptorsEXT）
 	RGL::VmaBuffer sceneDataBuffer;  // 设备端 scene data buffer（BDA + eTransferDst；未创建 = 空句柄）
 	uint32_t sceneDataSlot = 0;  // scene data 在 resource heap 的槽号（allocSlot 领取）
+	uint32_t sceneWetSlot = 0;   // 湿面区 UBO 子范围槽号（迁移批 1，binding 32）
 	bool sceneDataReady = false;  // 就绪标记（ensure 幂等守卫）
 };
 
@@ -696,7 +706,8 @@ export class SceneDataService {
  * CPU_TO_GPU+MAPPED 形态）+ VmaAllocationCreateInfo::minAlignment = kSceneRegionAlign
  *（§9.7 基址对齐）；创建前跑运行期对齐闸门（§3.1，不满足 = throw 点名）；slot =
  * allocSlot(Runtime, "scene.data")；描述符 = eStorageBuffer，data = buffer BDA 地址范围
- *（全 kSceneDataBytes）。
+ *（全 kSceneDataBytes）+ 第二槽 "scene.wet" = 湿面区子范围 eUniformBuffer（迁移批 1，
+ * binding 32，两槽一次 writeResourceDescriptorsEXT）。
  */
 inline uint32_t SceneDataService::ensure() {
 	if (sceneDataReady)
@@ -740,7 +751,10 @@ inline uint32_t SceneDataService::ensure() {
 	vk::BufferCreateInfo info{};
 	info.size = kSceneDataBytes;
 	info.usage = vk::BufferUsageFlagBits::eShaderDeviceAddress |
-		vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst;
+		vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eUniformBuffer |
+		vk::BufferUsageFlagBits::eTransferDst;  // eUniformBuffer（迁移批 1）：湿面区子范围
+	// UBO 描述符要求 VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT（VUID-VkResourceDescriptorInfoEXT-
+	// type-11461，§9.2 事实基线），同 buffer 双 usage 合法
 	VmaAllocationCreateInfo alloc{};
 	// device-local：CPU 不直接写（每帧唯一写入方 = staging copy），勿用 createGpuBuffer 的
 	// CPU_TO_GPU+MAPPED 形态
@@ -762,18 +776,35 @@ inline uint32_t SceneDataService::ensure() {
 	if (!slotResult)
 		throw std::runtime_error(slotResult.error().describe());
 	sceneDataSlot = *slotResult;
+	// 迁移批 1：湿面区**子范围 UBO 描述符**独立领一个 Runtime 段槽（§9.2「拆描述符不拆
+	// buffer」的第一颗钉；后续批每迁一区 +1 槽，运行时段容量 1024 用不完）
+	auto wetSlotResult = kernel.allocSlot(RGL::SlotSegment::Runtime, "scene.wet");
+	if (!wetSlotResult)
+		throw std::runtime_error(wetSlotResult.error().describe());
+	sceneWetSlot = *wetSlotResult;
 
-	vk::DeviceAddressRangeEXT range{sceneDataBuffer.getDeviceAddress(), kSceneDataBytes};
-	vk::ResourceDescriptorInfoEXT desc{};
-	desc.type = vk::DescriptorType::eStorageBuffer;
-	desc.data.pAddressRange = &range;
+	// 两槽一次写：scene.data = 全区 eStorageBuffer（binding 3 旧路，迁移期保留）；
+	// scene.wet = {基址 + kSceneDataWetOffset, sizeof(WetParamsBlock)} 的 eUniformBuffer
+	//（binding 32）。子范围 address 对齐 = 基址 256（minAlignment）+ 区基址 256 台阶
+	//（本文件顶部布局红线）⟹ 恒过 VUID-12350；闸门读数见上。
+	std::array<vk::DeviceAddressRangeEXT, 2> ranges{{
+		{sceneDataBuffer.getDeviceAddress(), kSceneDataBytes},
+		{sceneDataBuffer.getDeviceAddress() + kSceneDataWetOffset, sizeof(WetParamsBlock)}}};
+	std::array<vk::ResourceDescriptorInfoEXT, 2> descs{};
+	descs[0].type = vk::DescriptorType::eStorageBuffer;
+	descs[0].data.pAddressRange = &ranges[0];
+	descs[1].type = vk::DescriptorType::eUniformBuffer;
+	descs[1].data.pAddressRange = &ranges[1];
 	auto slotAddr = kernel.getDescriptorHeap().getSlotCpuAddress(sceneDataSlot);
 	if (!slotAddr)
 		throw std::runtime_error(slotAddr.error().describe());
-	vk::HostAddressRangeEXT dst{*slotAddr, kernel.getDescriptorHeap().getDescriptorSize()};
-	device.getDevice().writeResourceDescriptorsEXT(
-		std::array<vk::ResourceDescriptorInfoEXT, 1>{desc},
-		std::array<vk::HostAddressRangeEXT, 1>{dst});
+	auto wetAddr = kernel.getDescriptorHeap().getSlotCpuAddress(sceneWetSlot);
+	if (!wetAddr)
+		throw std::runtime_error(wetAddr.error().describe());
+	const vk::DeviceSize heapStride = kernel.getDescriptorHeap().getDescriptorSize();
+	std::array<vk::HostAddressRangeEXT, 2> dsts{
+		vk::HostAddressRangeEXT{*slotAddr, heapStride}, vk::HostAddressRangeEXT{*wetAddr, heapStride}};
+	device.getDevice().writeResourceDescriptorsEXT(descs, dsts);
 	sceneDataReady = true;
 	return sceneDataSlot;
 }
