@@ -103,6 +103,8 @@ StructuredBuffer<uint>            clusterVisible;
 
 🔴 **分支点锚点必须在开批之前记下**，事后补锚点 = 把"和什么比"这件事交给记忆。
 现行锚点：门关 `54e406655f16faf0674b382818bd589f875c8ee0705cdec1c109d5ff1a72df4f`。
+⚠ 2026-10-12 起**门关 ≠ 出厂默认**（★18-C 翻了 `meshlet` 默认）：到达门关要显式
+`--set meshlet.enable=false --set meshlet.shadow_lod=-1`，出厂默认是另一个锚 → 总账红线声明块。
 
 ### 3.3 反射接入门槛
 
