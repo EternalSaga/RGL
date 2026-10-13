@@ -2085,9 +2085,15 @@ decorations with Task and Mesh shader stages"）；`maxDrawIndirectCount = 42949
 上 ★M-1b 逐位绿**：门关 vs 门开终图 diff = **0 px**，且 MDI 真在跑（`mdi_shadow 生效` INFO、
 `vkcmd=6452 / mdi.count=3 / mdi.rows=4590` 与 §19.9、§19.10 读数逐字同）。
 
+> 🔴 **能力列（mesh/task 上限、granularity、`graphicsIndirect`）的唯一现读口** =
+> `python3 tools/smoke.py smoke` 摘要里的 `设备规格` 行（本体 = 启动日志
+> `Mesh/task device caps:`，`rgl/utils.cppm::logMeshTaskDeviceCaps`：选完设备**无条件**打、
+> 与配置门无关，描述引擎**实际选中**的那台）。下表是 2026-10-13 各机快照，**别拿它当权威**
+> ——这类数字换机器就漂（三机轮换 + `run-igpu/dgpu/intel`），漂了还会被下一个会话平铺直叙地读。
+
 | 设备 | mesh/task 上限 | M-1b 引擎级 | 机制级（test-gpu MDI 12 条） | DGC graphicsIndirect |
 |---|---|---|---|---|
-| STRIX_HALO（8060S 机，RDNA3.5） | （出事机） | 🔴 红（mesh 入口声明 DrawIndex 毒化后续 draw） | 未单测 | false |
+| STRIX_HALO（8060S 机，RDNA3.5） | 现读口补（此前未查）：mesh 硬上限 256 但 **preferred 只有 128** ⟹ 组合手术取 128 线程**不只迁就 NV**，RADV 自己也推荐这一档 | 🔴 红（mesh 入口声明 DrawIndex 毒化后续 draw） | 未单测 | false |
 | **RAPHAEL（本机核显，RDNA2）** | task 1024 / **mesh 256** | ✅ **逐位绿** | —（可补） | false |
 | ANV BMG G21 | 1024 / 1024 | ✅ 逐位绿（§19.10） | ✅ 全绿 | false |
 | NV RTX 5090 | **128 / 128** | ⛔ 不可达 = 本文件 mesh 声明 256 **超 NV 上限**（07295/07298），与上屏/离屏无关；驱动在建 shader 时 SIGSEGV | ✅ **12/12 绿**（含 MDI 自证回路） | **true**（三机唯一） |
@@ -2424,3 +2430,24 @@ gfx1151（Strix Halo）+ **mesh 入口**声明 `DrawIndex` 毒化同提交后续
 理由：下一批尚未拍板，留一套无消费者、无测试、且已把 `RenderPipeline` 构造顶过样式阈值
 （129>120 行 / 复杂度 21>15）的死代码不划算；**可重做的知识**（含 slang 拼写、payload 两侧真读、
 DMI、NO_TASK 反向 VUID、nextStage 链）全部落在 §19.14 + 本节，那是一份**已执行过且已纠错**的规格。
+
+#### 顺带：设备能力现读口（用户提的"别写死"）
+
+§19.12 四机矩阵此前把 mesh/task 上限与 granularity **手抄进表**，而引擎侧的查询面撑不起它：
+`maxMeshOutputVertices` 等只在 `checkMeshletDeviceFit` **不够用时**才 warn，且调用点排在
+`wireMeshletSwitch` 的门关早退**之后** ⟹ 门关就查不到；task 侧上限与两个 granularity 全仓从未查询。
+（`graphicsIndirect` 反倒是够的——`DGC path:` 三条分支都带，只是 smoke 摘要没打这个字段。）
+
+落地 = `rgl/utils.cppm::MeshTaskDeviceCaps` + `logMeshTaskDeviceCaps`，紧跟
+`Selected rendering GPU` **无条件**打一行；smoke 摘要多一行 `设备规格`（含从 `DGC path:` 行拼来的
+`graphicsIndirect`）。**现读口 = `python3 tools/smoke.py smoke` 的 `设备规格` 行。**
+
+🔴 一条不显然的口径：能力必须描述**引擎实际选中的那台**设备。`pickPhysicalDevice` 是打分制选一台，
+本项目又跑 `run-igpu/dgpu/intel` ⟹ **独立 vkinfo 式工具会报"枚举到的某台"，与引擎选路可以不一致**。
+这就是现读口长在选设备之后、而不是做成 `tools/` 可执行的原因。
+
+现读口第一次跑就补上了表里的空格，并给出一条**改变设计取向**的结论：本机 STRIX
+`maxMeshWorkGroupInvocations=256` 但 `maxPreferredMeshWorkGroupInvocations=`**`128`**
+（`maxPreferredTaskWorkGroupInvocations=64`、granularity 1/1、`maxTaskPayloadSize=16384`）
+⟹ 组合手术把 mesh 降到 128 线程**不只是迁就 NV 的硬上限**，RADV 自己的推荐档也是 128。
+其余数值（含 payload 预算 16KiB）不再抄进文档——按上面的现读口读。

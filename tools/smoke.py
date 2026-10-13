@@ -495,6 +495,24 @@ def gpu_of(log: str) -> str:
     return f"{m.group(1)} (score={m.group(2)})" if m else "未取到（引擎没走到选设备？）"
 
 
+def caps_of(log: str) -> str:
+    """设备 mesh/task 能力 + DGC `graphicsIndirect` —— 四机矩阵那类能力表的**唯一现读口**。
+
+    🔴 文档只准写"现读口 = `just smoke` 的本行 / 启动日志 `Mesh/task device caps` 行"，
+    **不准把数值抄进文档**：换机器就漂（三机轮换 + `run-igpu/dgpu/intel` 强制换设备），
+    而漂了的能力列会被下一个会话当权威读。
+
+    数值本体 = `rgl/utils.cppm::logMeshTaskDeviceCaps`（选完设备**无条件**打，与配置门无关，
+    描述的是引擎**实际选中**的那台）；`graphicsIndirect` 取自 `DGC path:` 行（三条分支都带）。
+    """
+    m = re.search(r"Mesh/task device caps: (.+)", log)
+    if not m:
+        return "未取到（旧构建没有 caps 行？引擎没走到选设备？）"
+    caps = m.group(1).strip()
+    g = re.search(r"DGC path: device='[^']*' graphicsIndirect=(\S+)", log)
+    return f"{caps} graphicsIndirect={g.group(1) if g else '未取到'}"
+
+
 def parse_size(text: str | None) -> tuple[int, int] | None:
     """`--size` 解析（WxH）。给 regress 复用，免得两处对同一旗标有两种宽容度。"""
     if not text:
@@ -536,6 +554,7 @@ def report(log: str) -> tuple[list[str], list[str]]:
     errors, warnings = count_severities(log)
     dgc = re.search(r"DGC path: device='[^']*'.*?-> (.+)", log)
     print(f"GPU    : {gpu_of(log)}")
+    print(f"设备规格: {caps_of(log)}")
     print(f"DGC 路 : {dgc.group(1).strip() if dgc else '未取到'}")
     # 阳性锚点：headless 真生效了吗——否则本次跑的是一次交互窗，判据全废
     if "headless 模式" not in log:

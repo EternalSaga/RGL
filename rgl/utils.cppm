@@ -214,6 +214,86 @@ void addDeviceCandidate(const vk::raii::PhysicalDevice& device, uint64_t score,
 }
 
 /**
+ * 设备 mesh/task 能力快照 —— "这台设备到底给多少"的**唯一现读口**（★M-3T）。
+ *
+ * ## 为什么长在这里、为什么必须无条件打印
+ * 计划文档的四机矩阵此前手抄 mesh/task 上限与 granularity，而这类数字**换机器就漂**（三机
+ * 轮换 + `run-igpu/dgpu/intel` 强制换设备）。引擎侧原有的查询面也不够当现读口：
+ * `maxMeshOutputVertices` 等只在 `checkMeshletDeviceFit` **不够用时**才 warn，且调用点排在
+ * `wireMeshletSwitch` 的门关早退**之后** ⟹ 门关的机器根本查不到；而 task 侧上限与两个
+ * granularity 全仓从未查询——偏偏它们正是"mesh 线程数能不能降到 128 / payload 有多大预算"
+ * 那一类问题的判据。本行**与任何配置门无关**。
+ *
+ * 🔴 **口径 = `pickPhysicalDevice` 实际选中的那台设备**，不是"枚举到的某台"。独立 vkinfo 式
+ * 工具在双显卡机器上会给出与引擎选路不一致的答案，所以现读口必须长在选设备这一步之后。
+ *
+ * 🔴 只读属性、不碰 device 创建。mesh shader 扩展缺席时各字段留 **0**（含义是"没有这个能力"，
+ * 不是"上限为 0"）；读侧按 0 判不支持。
+ *
+ * @note 与 `checkMeshletDeviceFit` 的关系：那边是**闸门**（拿规格常量判够不够、不够就停用
+ *       簇路径），这边是**读数**（不带阈值）。两者各自查一次属性，没有第二份阈值。
+ */
+export struct MeshTaskDeviceCaps {
+	uint32_t maxMeshWorkGroupInvocations = 0;  // mesh 入口 numthreads 的硬上限
+	uint32_t maxTaskWorkGroupInvocations = 0;  // task 入口 numthreads 上限（与 mesh 上限正交）
+	uint32_t maxPreferredMeshWorkGroupInvocations = 0;  // 性能取向（硬上限之下的"推荐值"）
+	uint32_t maxPreferredTaskWorkGroupInvocations = 0;
+	uint32_t maxMeshOutputVertices = 0;  // 去索引发射的判据是 **3×** 三角形数（见 checkMeshletDeviceFit）
+	uint32_t maxMeshOutputPrimitives = 0;
+	uint32_t meshOutputPerVertexGranularity = 0;  // 输出声明要按它向上取整
+	uint32_t meshOutputPerPrimitiveGranularity = 0;
+	uint32_t maxMeshWorkGroupCountX = 0;  // 单 draw 的 groupCount 上界（MDI 行表 groupCount 判据）
+	uint32_t maxTaskPayloadSize = 0;  // task→mesh payload 的字节预算（spec 名就叫这个，不是 …MemoryEXT）
+};
+
+/**
+ * 查询 mesh/task 能力（纯属性读取，不碰 device 创建）。
+ * @param device 待查询的物理设备（只读）
+ * @return 能力快照（口径与 0 值语义见 MeshTaskDeviceCaps）
+ */
+export MeshTaskDeviceCaps queryMeshTaskDeviceCaps(const vk::raii::PhysicalDevice& device) {
+	const auto props = device.getProperties2<vk::PhysicalDeviceProperties2,
+		vk::PhysicalDeviceMeshShaderPropertiesEXT>();
+	const auto& m = props.get<vk::PhysicalDeviceMeshShaderPropertiesEXT>();
+	return MeshTaskDeviceCaps{
+		.maxMeshWorkGroupInvocations = m.maxMeshWorkGroupInvocations,
+		.maxTaskWorkGroupInvocations = m.maxTaskWorkGroupInvocations,
+		.maxPreferredMeshWorkGroupInvocations = m.maxPreferredMeshWorkGroupInvocations,
+		.maxPreferredTaskWorkGroupInvocations = m.maxPreferredTaskWorkGroupInvocations,
+		.maxMeshOutputVertices = m.maxMeshOutputVertices,
+		.maxMeshOutputPrimitives = m.maxMeshOutputPrimitives,
+		.meshOutputPerVertexGranularity = m.meshOutputPerVertexGranularity,
+		.meshOutputPerPrimitiveGranularity = m.meshOutputPerPrimitiveGranularity,
+		.maxMeshWorkGroupCountX = m.maxMeshWorkGroupCount[0],
+		.maxTaskPayloadSize = m.maxTaskPayloadSize,
+	};
+}
+
+/**
+ * 无条件打印一行能力快照（现读口本体）。
+ *
+ * 键名与 Vulkan 属性**逐字同名** ⟹ 文档只准写"现读口 = 启动日志 `Mesh/task device caps` 行"，
+ * 不准再抄一遍数值。
+ * @param device 引擎实际选中的物理设备
+ */
+export void logMeshTaskDeviceCaps(const vk::raii::PhysicalDevice& device) {
+	auto* logger = RLLogger::getInstance();
+	if (!logger)
+		return;
+	const auto c = queryMeshTaskDeviceCaps(device);
+	logger->info("Mesh/task device caps: maxMeshWorkGroupInvocations={} maxTaskWorkGroupInvocations={} "
+				 "maxPreferredMeshWorkGroupInvocations={} maxPreferredTaskWorkGroupInvocations={} "
+				 "maxMeshOutputVertices={} maxMeshOutputPrimitives={} "
+				 "meshOutputPerVertexGranularity={} meshOutputPerPrimitiveGranularity={} "
+				 "maxMeshWorkGroupCountX={} maxTaskPayloadSize={}",
+		c.maxMeshWorkGroupInvocations, c.maxTaskWorkGroupInvocations,
+		c.maxPreferredMeshWorkGroupInvocations, c.maxPreferredTaskWorkGroupInvocations,
+		c.maxMeshOutputVertices, c.maxMeshOutputPrimitives,
+		c.meshOutputPerVertexGranularity, c.meshOutputPerPrimitiveGranularity,
+		c.maxMeshWorkGroupCountX, c.maxTaskPayloadSize);
+}
+
+/**
  * GPU 选择（打分制，取最高分）：score = 核心数 × 1000（AMD 经
  * ShaderCorePropertiesAMD 精确计算，其余设备回落 maxComputeWorkGroupInvocations）
  * + 设备本地显存 GiB × 10 + 设备类型（DiscreteGpu +500 / IntegratedGpu +200）。
@@ -252,6 +332,9 @@ pickPhysicalDevice(const vk::raii::PhysicalDevices& physicalDevices) {
 	if (logger)
 		logger->info("Selected rendering GPU: {} (score={})",
 			deviceNames.at(selectedDevice), bestScore);
+	// 设备能力现读口（口径 → MeshTaskDeviceCaps）：紧跟选设备打，**与任何配置门无关**——
+	// 门关 / 簇路径停用 / 换 igpu 都得能查到，否则文档里的能力列又只能手抄。
+	logMeshTaskDeviceCaps(*selectedDevice);
 	return selectedDevice;
 }
 
