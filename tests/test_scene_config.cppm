@@ -3,6 +3,7 @@ module;
 #include <algorithm>   // std::ranges::count（回显全量条目计数；先例 test_evssm_math.cppm）
 #include <glm/glm.hpp>
 #include <filesystem>  // 临时 lua 落盘（AGENTS.md GMF 例外清单成员）
+#include <iterator>    // std::istreambuf_iterator（LogTailer 读日志增量；modules 下不靠传递 include——rgl-test-discipline §modules 环境坑同款）
 
 // 五份配置 loader 的解析契约（批 12.1 · B1；批 N6a 加 shadow_config）——被测对象 =
 // scene_config / camera_config / runtime_config / diagnostics / shadow_config
@@ -37,6 +38,7 @@ import diagnostics;
 import shadow_config;
 import gbuffer_contract;
 import vkerror;
+import rllogger;  // LogTailer 逼出 logger 构造（warn 阳性锚点的观测通道，见类注释）
 
 namespace RGL {
 namespace {
@@ -68,6 +70,64 @@ class TempLua {
 void expectVec(const glm::vec3& got, const glm::vec3& want, double absTol = 1e-5) {
 	for (int k = 0; k < 3; ++k)
 		expectNear(got[k], want[k], 0.0, absTol);
+}
+
+/**
+ * 日志增量锚点（债-11 阳性锚点的观测通道）：RLLogger 是进程单例劫持不了
+ *（tests/test_mdi_shadow_emit 同结论），但它的 file sink **逐条 flush**
+ *（flush_on(warn)）且路径 = configs/log_level.json 的 log_file——本文件的 loader
+ * 未知键 lint 早已依赖「CWD = 仓库根能读到 configs/log_level.json」这一事实
+ *（`just test` 保证；diagnostics 侧既有用例同款），这里只是把同一事实用到**读**上。
+ * 构造时先逼出 logger 构造（含 file sink 的 truncate，**必须早于记大小**），
+ * delta() = 自构造起新增的日志文本。
+ * ⚠ 读不到日志文件 = REQUIRE 响亮失败，不静默空增量（空增量会被正向断言读成红、
+ *   却被「不该喊」的负向断言读成绿——所以锚点自身不许假绿）。
+ */
+class LogTailer {
+  public:
+	LogTailer() {
+		RLLogger::getInstance();  // 逼出构造（含 truncate），顺序必须早于 file_size
+		std::error_code ec;
+		offset_ = std::filesystem::file_size(path(), ec);
+		if (ec)
+			offset_ = 0;  // 文件不存在 = 从头读（下一条 REQUIRE 会点名"为什么没有"）
+	}
+	LogTailer(const LogTailer&) = delete;
+	LogTailer& operator=(const LogTailer&) = delete;
+	/** 自构造以来新增的日志文本。 */
+	std::string delta() const {
+		std::ifstream in(path(), std::ios::binary);
+		REQUIRE(in.is_open());  // 读不到 = 判据不存在，FAIL 不 SKIP
+		std::string data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+		if (data.size() < offset_)
+			return {};  // 文件被再次截断（进程内二次构造 logger）——按空增量处理，正向断言会红
+		return data.substr(static_cast<size_t>(offset_));
+	}
+
+  private:
+	/** log_file 路径（configs/log_level.json 的字符串扫描，stdlib-only；键缺失 = 响亮红）。 */
+	static const std::filesystem::path& path() {
+		static const std::filesystem::path cached = [] {
+			std::ifstream json{"configs/log_level.json"};
+			REQUIRE(json.is_open());  // 与 loader lint 同一条 CWD 依赖
+			std::string text((std::istreambuf_iterator<char>(json)), std::istreambuf_iterator<char>());
+			const auto keyPos = text.find("\"log_file\"");
+			REQUIRE(keyPos != std::string::npos);
+			const auto open = text.find('"', keyPos + 10);
+			REQUIRE(open != std::string::npos);
+			const auto close = text.find('"', open + 1);
+			REQUIRE(close != std::string::npos);
+			return std::filesystem::path(text.substr(open + 1, close - open - 1));
+		}();
+		return cached;
+	}
+
+	std::uint64_t offset_ = 0;
+};
+
+/** 断言 delta 里出现「<前缀>: 未知键 '<key>'」warn 行（与三份 loader 的文案逐字同拼写）。 */
+bool hasUnknownKeyWarn(const std::string& delta, std::string_view prefix, std::string_view key) {
+	return delta.find(std::string(prefix) + ": 未知键 '" + std::string(key) + "'") != std::string::npos;
 }
 
 }  // namespace
@@ -1686,6 +1746,151 @@ TEST_CASE("diagnostics 旧阴影键 fail-fast：9 键逐个出现 = 启动失败
 	REQUIRE(r.has_value());
 	CHECK(r->noVvl == true);
 	CHECK(r->rpcPort == 9000u);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 债-11：scene/runtime/camera 三份 loader 的键轨迹 + 未知键 lint + 覆盖率护栏
+// （diagnostics/shadow 已建好的解法回灌；判据形状照 tests 里 diagnostics 的既有
+//  覆盖率护栏，不另立第二套。与 diagnostics 既有用例的**一处加强**：那边"warn 测不到
+// ——只测判据本体"，本组用 LogTailer 把 warn 本身钉住 = lint 接线被删必须红。）
+// ═══════════════════════════════════════════════════════════════════════════
+
+namespace {
+
+/** 三份 loader 的键轨迹护栏共用的覆盖率断言（双向 set 相等 + 恰好读一遍）。 */
+template <typename Trace, typename Loader, typename KeysFn>
+void expectFullCoverage(Loader&& load, KeysFn&& knownKeys, std::string_view tag) {
+	TempLua f(std::string(tag) + "_cov", "return {}\n");
+	Trace trace;
+	REQUIRE(load(f.pathStr(), &trace).has_value());
+	const auto keys = knownKeys();
+	CHECK_FALSE(keys.empty());              // 键表为空 = 判据不存在，先钉扫描面
+	CHECK(trace.read.size() == keys.size());  // 解析器恰好读一遍（重复读 = 记录点放错层）
+	for (const auto& k : keys)
+		CHECK(containsKey(trace.read, k));  // 表列了而解析器不读 = 陈旧键
+	for (const auto& k : trace.read)
+		CHECK(containsKey(keys, k));        // 解析器读了而表不列 = 表撒谎
+}
+
+}  // namespace
+
+TEST_CASE("债-11 scene 覆盖率护栏：读过的键集合 == 键表键集合（双向）") {
+	// 变异红线：kSceneKeys 删任一条目 → 「陈旧键」方向红；解析器删任一 emplace_back →
+	// 「表撒谎」方向红；两处任一侧改拼写 → 两侧同时红。
+	expectFullCoverage<SceneKeyTrace>(
+		[](std::string_view p, SceneKeyTrace* t) { return loadSceneConfig(p, t); },
+		sceneConfigKnownKeys, "sc_cov");
+}
+
+TEST_CASE("债-11 runtime 覆盖率护栏：读过的键集合 == 键表键集合（双向）") {
+	// 变异红线同 scene 侧（kRuntimeKeys / emplace_back 任一侧动 = 对应方向红）。
+	expectFullCoverage<RuntimeKeyTrace>(
+		[](std::string_view p, RuntimeKeyTrace* t) { return loadRuntimeConfig(p, t); },
+		runtimeConfigKnownKeys, "rt_cov");
+}
+
+TEST_CASE("债-11 camera 覆盖率护栏：读过的键集合 == 键表键集合（双向）") {
+	// 变异红线同 scene 侧（kCameraKeys / emplace_back 任一侧动 = 对应方向红）。
+	expectFullCoverage<CameraKeyTrace>(
+		[](std::string_view p, CameraKeyTrace* t) { return loadCameraConfig(p, t); },
+		cameraConfigKnownKeys, "cm_cov");
+}
+
+TEST_CASE("债-11 scene 未知键阳性锚点：拼错的键**真的打出 warn**（日志增量捕获）；正确键不误报") {
+	// 阳性锚点（rgl-test-discipline）：如果 lint 接线从未生效，本用例绿吗？——不：
+	// delta 里不会出现 warn 行 → 红。变异红线：lintUnknownSceneKeys 函数体删空 /
+	// loadSceneConfig 里的调用删掉 → 前两条 CHECK 红。
+	LogTailer log;
+	TempLua f("sc_typo", "return { explosure_g5 = 2.0, spin2_g5 = true, spin = false }\n");
+	SceneKeyTrace trace;
+	auto r = loadSceneConfig(f.pathStr(), &trace);
+	REQUIRE(r.has_value());
+	const std::string delta = log.delta();
+	CHECK(hasUnknownKeyWarn(delta, "scene", "explosure_g5"));
+	CHECK(hasUnknownKeyWarn(delta, "scene", "spin2_g5"));
+	// 反向用例（常错的 lint = 被静音的 lint）：拼写正确的键不喊（带闭引号精确匹配，
+	// 不被 'spin2_g5' 的行前缀命中）
+	CHECK(delta.find("未知键 'spin'") == std::string::npos);
+	// 解析本身不受影响：正确键照常生效
+	CHECK(r->spin == false);
+	// 判据本体（present 采集 + 读集边界）同步钉住
+	CHECK(trace.present.size() == 3u);
+	CHECK_FALSE(containsKey(trace.read, "explosure_g5"));
+	CHECK(containsKey(trace.read, "spin"));
+}
+
+TEST_CASE("债-11 runtime 未知键阳性锚点：拼错的键**真的打出 warn**；meshlet 块内字段拼错不在射程（顶层口径）") {
+	// 变异红线：lintUnknownRuntimeKeys 函数体删空 / loadRuntimeConfig 里的调用删掉 → 红。
+	LogTailer log;
+	TempLua f("rt_typo", "return { velocity_feeld_g5 = true, meshlet2_g5 = { enable = true }, headless = true }\n");
+	RuntimeKeyTrace trace;
+	auto r = loadRuntimeConfig(f.pathStr(), &trace);
+	REQUIRE(r.has_value());
+	const std::string delta = log.delta();
+	CHECK(hasUnknownKeyWarn(delta, "runtime", "velocity_feeld_g5"));
+	CHECK(hasUnknownKeyWarn(delta, "runtime", "meshlet2_g5"));  // 未知**表名**同样喊
+	CHECK(delta.find("未知键 'headless'") == std::string::npos);
+	CHECK(r->headless == true);  // 正确键照常生效
+	CHECK(trace.present.size() == 3u);
+}
+
+TEST_CASE("债-11 camera 未知键阳性锚点：拼错的键**真的打出 warn**；keys 表名本身不算未知键") {
+	// 变异红线：lintUnknownCameraKeys 函数体删空 / loadCameraConfig 里的调用删掉 → 红。
+	// keys/trackball/fps 是 `表名.字段` 键名的表名前缀 → 前缀判据的正向对照（探针表名
+	// 同款，diagnostics 的 probetab 用例同形）。
+	LogTailer log;
+	TempLua f("cm_typo", "return { fovvDegrees_g5 = 60.0, keys = { forward = \"W\" }, trackball = { sensitivity = 0.01 } }\n");
+	CameraKeyTrace trace;
+	auto r = loadCameraConfig(f.pathStr(), &trace);
+	REQUIRE(r.has_value());
+	const std::string delta = log.delta();
+	CHECK(hasUnknownKeyWarn(delta, "camera", "fovvDegrees_g5"));
+	CHECK(delta.find("未知键 'keys'") == std::string::npos);       // 表名 = 前缀命中，不喊
+	CHECK(delta.find("未知键 'trackball'") == std::string::npos);  // 同上
+	CHECK(trace.present.size() == 3u);
+}
+
+TEST_CASE("债-11 扫描面非空 + 交付 configs 零 warn：configs/{scene,runtime,camera}.lua 实文件实测") {
+	// 护栏静默失效比没有更坏（rules_layers 同款纪律）：若 collectPresentKeys 在某种
+	// 排版下扫出零个键，未知键 warn 永远不响 = 假绿。本用例把「扫描面非空」钉在**交付
+	// 配置实文件**上（CWD = 仓库根，`just test` 保证；LogTailer 注释同一条 CWD 依赖），
+	// 并顺带完成「交付 configs 零 warn」断言（改了交付配置引入拼错键 → 这里红）。
+	// 变异红线：collectPresentKeys 函数体删空 → present 空 → 三条 REQUIRE 全红；
+	// 交付配置塞任一拼错顶层键 → delta 含 warn → 红。
+	struct DeliveryConfig {
+		const char* file;
+		const char* probeKey;  // 该文件必有的特征顶层键（扫描面内容哨兵）
+	};
+	static constexpr std::array<DeliveryConfig, 3> configs{{
+		{"configs/scene.lua", "entities"},
+		{"configs/runtime.lua", "meshlet"},
+		{"configs/camera.lua", "keys"},
+	}};
+	for (const auto& cfg : configs) {
+		LogTailer log;
+		SceneKeyTrace sceneTrace;
+		RuntimeKeyTrace runtimeTrace;
+		CameraKeyTrace cameraTrace;
+		std::vector<std::string> present;
+		if (std::string_view{cfg.file}.ends_with("scene.lua")) {
+			auto r = loadSceneConfig(cfg.file, &sceneTrace);
+			REQUIRE(r.has_value());
+			present = sceneTrace.present;
+		} else if (std::string_view{cfg.file}.ends_with("runtime.lua")) {
+			auto r = loadRuntimeConfig(cfg.file, &runtimeTrace);
+			REQUIRE(r.has_value());
+			present = runtimeTrace.present;
+		} else {
+			auto r = loadCameraConfig(cfg.file, &cameraTrace);
+			REQUIRE(r.has_value());
+			present = cameraTrace.present;
+		}
+		// ① 扫描面非空（假绿守卫）+ 特征键在场（扫到了**对的东西**，不只是"扫到了什么"）
+		CHECK_FALSE(present.empty());
+		CHECK(containsKey(present, cfg.probeKey));
+		// ② 交付配置上未知键 warn **零条**（warn 走日志，这里读的就是日志增量本体）
+		CHECK(log.delta().find("未知键") == std::string::npos);
+	}
 }
 
 }  // namespace RGL

@@ -12,6 +12,105 @@ namespace RGL {
 
 // loadRuntimeConfig 定义（sol2 解析整体移出接口 TU，GMF 只 sol/fmt；本单元是叶子边）。
 
+namespace {
+
+/**
+ * 键表 = 「解析器认识哪些键」的单一真相源（diagnostics 的 kGateEcho 同角色，债-11）：
+ * ① 未知键 lint 的判据表；② tests 里「读过的键集合 == 键表键集合」双向覆盖率断言的输入。
+ * 嵌套块字段用 `表名.字段`；数组形字段（headless_size/win_size 的 [1][2]）无键名只记
+ * 表名；llm_debug 有布尔/表两形态（表内字段与 llm_shot 同名）只记一个键——lint 只看
+ * 顶层，子表内部键不在射程（diagnostics 同边界）。
+ * ⚠ **原生数组**（尺寸自动推导）不是 `std::array<T, N>`——shadow_config_impl 同款教训。
+ */
+constexpr std::string_view kRuntimeKeys[]{
+	"headless",
+	"headless_size",
+	"win_size",
+	"render_scale",
+	"velocity_field",
+	"aa",
+	"fsr.temporal",
+	"fsr.jitter",
+	"ssr.enabled",
+	"ssr.max_distance_radii",
+	"ssr.thickness_px",
+	"ssr.bias_px",
+	"ssr.rough_full",
+	"ssr.rough_cutoff",
+	"ssr.blur_scale",
+	"wet.strength",
+	"wet.dark",
+	"wet.rough_lo",
+	"wet.rough_hi",
+	"wet.ripple_amp",
+	"wet.puddle_freq_radii",
+	"meshlet.enable",
+	"meshlet.overlay",
+	"meshlet.debug",
+	"meshlet.tint",
+	"meshlet.switch",
+	"meshlet.cull",
+	"meshlet.shadow_lod",
+	"meshlet.shadow_lod_fallback",
+	"meshlet.mdi_shadow",
+	"meshlet.coplanar",
+	"show_after",
+	"present_mode",
+	"ui_font",
+	"ui_font_size",
+	"llm_debug",
+	"llm_shot.delay_frames",
+	"llm_shot.file",
+	"llm_shot.size",
+};
+
+/**
+ * 「文件里实际出现的顶层键」采集（diagnostics 的 collectPresentKeys 同构，未知键 lint
+ * 的输入；子表只记表名——present 来自文件本体不来自读取动作）。
+ * @param root 配置根表
+ * @param trace 键轨迹（present 追加目标）
+ */
+void collectPresentKeys(const sol::table& root, RuntimeKeyTrace& trace) {
+	for (auto&& kv : root) {
+		if (sol::optional<std::string> k = kv.first.as<sol::optional<std::string>>())
+			trace.present.push_back(*k);
+	}
+}
+
+/**
+ * 未知键 lint（lintUnknownDiagnosticsKeys 同判据，债-11）：文件里出现的顶层键，凡键表
+ * 键名的「`.` 前缀」都不等于它 = 解析器没人读它（拼错的键，此前完全静默）。判据来自
+ * 键表本身（= 解析器键名真相源），不另立名单——覆盖率护栏（测试）保证键表 ⊥ 解析器
+ * 不会漂移，本函数因此只需查一张表。
+ * @param trace 解析期键轨迹
+ */
+void lintUnknownRuntimeKeys(const RuntimeKeyTrace& trace) {
+	auto* logger = RLLogger::getInstance();
+	if (!logger)
+		return;
+	for (const auto& key : trace.present) {
+		bool known = false;
+		for (const auto& k : kRuntimeKeys)
+			if (k.substr(0, k.find('.')) == key) {  // 无 `.` 时 = 全名比对
+				known = true;
+				break;
+			}
+		if (!known)
+			logger->warn("runtime: 未知键 '{}'（解析器不读它，拼错？已忽略）", key);
+	}
+}
+
+}  // namespace
+
+/** runtimeConfigKnownKeys 定义（接口注释见 runtime_config.cppm）。 */
+std::vector<std::string> runtimeConfigKnownKeys() {
+	std::vector<std::string> keys;
+	keys.reserve(std::size(kRuntimeKeys));
+	for (const auto& k : kRuntimeKeys)
+		keys.emplace_back(k);
+	return keys;
+}
+
 /**
  * render_scale 解析（Phase 14 批 14.3）：内部渲染分辨率倍率。
  *
@@ -23,8 +122,11 @@ namespace RGL {
  * @param root runtime.lua 根表
  * @param scale 写入目标（传入值 = 当前默认，缺键时原样保留）
  * @param logger 可为空（无日志器时静默按默认处理）
+ * @param trace 键轨迹（缺键也记 = 解析器读过它，覆盖率护栏的输入）
  */
-static void applyRenderScale(sol::table root, float& scale, RLLogger* logger) {
+static void applyRenderScale(sol::table root, float& scale, RLLogger* logger,
+	RuntimeKeyTrace& trace) {
+	trace.read.emplace_back("render_scale");
 	sol::optional<float> raw = root["render_scale"];
 	if (!raw)
 		return;
@@ -67,10 +169,17 @@ static void applyShotFields(sol::table shot, LlmDebugConfig& llm) {
  * llm_debug/llm_shot 解析（自 camera_config 迁入，语义不变）：
  * llm_shot 常驻 {file,size,delay_frames} 先填，llm_debug 覆盖 enabled；
  * 向后兼容 llm_debug = table（旧格式 = 启用 + 细字段，覆盖 llm_shot）。
+ * 键轨迹：llm_debug 记一个键（布尔/表两形态同名，子表内部键不在 lint 射程）；
+ * llm_shot 记三个字段键（**无条件**记 = 覆盖率护栏输入，同 shadow applyTuningBlock 口径）。
  * @param root 配置根表
  * @param llm 输出：解析好的截图配置（缺字段保留当前值 = 默认或前段已填值）
+ * @param trace 键轨迹
  */
-static void parseLlm(sol::table& root, LlmDebugConfig& llm) {
+static void parseLlm(sol::table& root, LlmDebugConfig& llm, RuntimeKeyTrace& trace) {
+	trace.read.emplace_back("llm_debug");
+	trace.read.emplace_back("llm_shot.delay_frames");
+	trace.read.emplace_back("llm_shot.file");
+	trace.read.emplace_back("llm_shot.size");
 	sol::table shotTable = root["llm_shot"];
 	if (shotTable.valid() && shotTable.is<sol::table>())
 		applyShotFields(shotTable, llm);
@@ -92,8 +201,11 @@ static void parseLlm(sol::table& root, LlmDebugConfig& llm) {
  * 抽成小函数以守住主解析函数的认知复杂度阈值。
  * @param root 配置根表
  * @param cfg 输出（只写 uiFont / uiFontSize 两字段）
+ * @param trace 键轨迹（两键**无条件**记 = 覆盖率护栏输入）
  */
-static void readUiFont(sol::table& root, RuntimeConfig& cfg) {
+static void readUiFont(sol::table& root, RuntimeConfig& cfg, RuntimeKeyTrace& trace) {
+	trace.read.emplace_back("ui_font");
+	trace.read.emplace_back("ui_font_size");
 	if (sol::optional<std::string> uiFont = root["ui_font"])
 		cfg.uiFont = *uiFont;
 	if (sol::optional<double> size = root["ui_font_size"]; size && *size > 0.0)
@@ -132,10 +244,12 @@ void readFloatKey(const sol::table& root, const char* key, float& dst) {
  * @param root runtime.lua 顶层表
  * @param cfg  写入目标（仅在键存在且合法时被写）
  * @param path 仅用于错误消息（与 present_mode 同口径带配置文件路径）
+ * @param trace 键轨迹（缺键也记 = 解析器读过它，覆盖率护栏的输入）
  * @return nullopt = 合法（含缺键）；有值 = 错误消息
  */
 [[nodiscard]] static std::optional<std::string> applyAaKey(const sol::table& root,
-	RuntimeConfig& cfg, std::string_view path) {
+	RuntimeConfig& cfg, std::string_view path, RuntimeKeyTrace& trace) {
+	trace.read.emplace_back("aa");
 	sol::optional<std::string> raw = root["aa"];
 	if (!raw)
 		return std::nullopt;
@@ -160,8 +274,11 @@ void readFloatKey(const sol::table& root, const char* key, float& dst) {
  * `fsr` 嵌套块解析（批 14.6）：`fsr = { temporal = …, jitter = … }` 两枚调参。
  * 缺块 / 缺键 = 保持结构体默认（true/true = FSR 设计点，理由 → RuntimeConfig 字段注释）。
  * 键的归属就是本函数——**没有**扁平键的兼容双读：两个真相源是本项目反复登记的反模式。
+ * 键轨迹在块入口**无条件**记全两枚调参键（覆盖率护栏输入，同 shadow applyTuningBlock 口径）。
  */
-static void readFsrBlock(const sol::table& root, RuntimeConfig& cfg) {
+static void readFsrBlock(const sol::table& root, RuntimeConfig& cfg, RuntimeKeyTrace& trace) {
+	trace.read.emplace_back("fsr.temporal");
+	trace.read.emplace_back("fsr.jitter");
 	sol::table fsr = root["fsr"];
 	if (!fsr.valid() || !fsr.is<sol::table>())
 		return;
@@ -205,8 +322,16 @@ static void readFsrBlock(const sol::table& root, RuntimeConfig& cfg) {
  * 要么把 runtime.lua 键混进 diagnostics 的回显语义（那张表按"诊断门"组织，画质系数不是）。
  * 本块键的"生效前置"本来也不依赖设备/图形态（`enabled` 的前置 = 渲染图支持 ssr，那条已由
  * `decorateSsrPass` 自己出 warn），lint 无话可说。
+ * 键轨迹在块入口**无条件**记全七枚键（覆盖率护栏输入，同 shadow applyTuningBlock 口径）。
  */
-static void readSsrBlock(const sol::table& root, RuntimeConfig& cfg) {
+static void readSsrBlock(const sol::table& root, RuntimeConfig& cfg, RuntimeKeyTrace& trace) {
+	trace.read.emplace_back("ssr.enabled");
+	trace.read.emplace_back("ssr.max_distance_radii");
+	trace.read.emplace_back("ssr.thickness_px");
+	trace.read.emplace_back("ssr.bias_px");
+	trace.read.emplace_back("ssr.rough_full");
+	trace.read.emplace_back("ssr.rough_cutoff");
+	trace.read.emplace_back("ssr.blur_scale");
 	sol::table ssr = root["ssr"];
 	if (!ssr.valid() || !ssr.is<sol::table>())
 		return;
@@ -240,8 +365,15 @@ static void readSsrBlock(const sol::table& root, RuntimeConfig& cfg) {
  * ⟹ 本函数**原样透传**，一条 warn 都不发（warn 会在每次跑消融档时刷屏，教人不信任日志）。
  * 不变式的权威措辞在 `WetTuning` 字段注释。gate_lint 不挂号的理由与 ssr 块完全同款
  * （runtime.lua 键不在 gate_lint 管辖的两张回显表里，→ readSsrBlock 末段）。
+ * 键轨迹在块入口**无条件**记全六枚调参键（覆盖率护栏输入，同 shadow applyTuningBlock 口径）。
  */
-static void readWetBlock(const sol::table& root, RuntimeConfig& cfg) {
+static void readWetBlock(const sol::table& root, RuntimeConfig& cfg, RuntimeKeyTrace& trace) {
+	trace.read.emplace_back("wet.strength");
+	trace.read.emplace_back("wet.dark");
+	trace.read.emplace_back("wet.rough_lo");
+	trace.read.emplace_back("wet.rough_hi");
+	trace.read.emplace_back("wet.ripple_amp");
+	trace.read.emplace_back("wet.puddle_freq_radii");
 	sol::table wet = root["wet"];
 	if (!wet.valid() || !wet.is<sol::table>())
 		return;
@@ -396,10 +528,22 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg) {
  * @param root runtime.lua 顶层表
  * @param cfg  写入目标
  * @param path 仅用于错误消息
+ * @param trace 键轨迹（十枚键在块入口**无条件**记全 = 覆盖率护栏输入；两枚三态字符串键
+ *              由本函数记，不进 applyMeshlet*Key 内部记——每键恰好记一次）
  * @return nullopt = 合法；有值 = 首个错误消息（调用方 fail-fast）
  */
 [[nodiscard]] static std::optional<std::string> readMeshletBlock(const sol::table& root,
-	RuntimeConfig& cfg, std::string_view path) {
+	RuntimeConfig& cfg, std::string_view path, RuntimeKeyTrace& trace) {
+	trace.read.emplace_back("meshlet.enable");
+	trace.read.emplace_back("meshlet.overlay");
+	trace.read.emplace_back("meshlet.debug");
+	trace.read.emplace_back("meshlet.tint");
+	trace.read.emplace_back("meshlet.switch");
+	trace.read.emplace_back("meshlet.cull");
+	trace.read.emplace_back("meshlet.shadow_lod");
+	trace.read.emplace_back("meshlet.shadow_lod_fallback");
+	trace.read.emplace_back("meshlet.mdi_shadow");
+	trace.read.emplace_back("meshlet.coplanar");
 	sol::table meshlet = root["meshlet"];
 	if (!meshlet.valid() || !meshlet.is<sol::table>())
 		return std::nullopt;
@@ -438,18 +582,55 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg) {
  * 新增 fail-fast 键 = 在此加一行，不再往 loadRuntimeConfig 里添 if。
  * 顺序契约：applyAaKey 必须先于 readFsrBlock（aa=fsr 隐含 velocity_field 在其内一行）；
  * readMeshletBlock 只读 meshlet 块、与其他键零耦合，链尾即可。
+ * @param root runtime.lua 顶层表
+ * @param cfg  写入目标
+ * @param path 仅用于错误消息
+ * @param trace 键轨迹（透传给链上各键）
  * @return nullopt = 全部合法；有值 = 首个错误消息
  */
 [[nodiscard]] static std::optional<std::string> applyFailFastKeys(const sol::table& root,
-	RuntimeConfig& cfg, std::string_view path) {
-	if (auto err = applyAaKey(root, cfg, path))
+	RuntimeConfig& cfg, std::string_view path, RuntimeKeyTrace& trace) {
+	if (auto err = applyAaKey(root, cfg, path, trace))
 		return err;
-	return readMeshletBlock(root, cfg, path);  // ★0-b1 簇路径总门 + ★0.5-b2 coplanar 三态键
+	return readMeshletBlock(root, cfg, path, trace);  // ★0-b1 簇路径总门 + ★0.5-b2 coplanar 三态键
 }
 
-/** loadRuntimeConfig 定义（接口注释见 runtime_config.cppm）：headless/headless_size/win_size/show_after/present_mode/ui_font 逐一可选解析 + parseLlm。 */
-[[nodiscard]] std::expected<RuntimeConfig, Error> loadRuntimeConfig(std::string_view path) {
+/**
+ * `present_mode` 键解析（批 9.3 present 模式偏好；抽函数 = loadRuntimeConfig 认知
+ * 复杂度红线，先例 applyAaKey）。缺键 = 保持默认 immediate；未知值 = 返回错误消息由
+ * 调用方 fail-fast（与类型错误同级，不静默回落）。
+ * @param root runtime.lua 顶层表
+ * @param cfg  写入目标（仅在键存在且合法时被写）
+ * @param path 仅用于错误消息（与 aa 同口径带配置文件路径）
+ * @param trace 键轨迹（缺键也记 = 解析器读过它，覆盖率护栏的输入）
+ * @return nullopt = 合法（含缺键）；有值 = 错误消息
+ */
+[[nodiscard]] static std::optional<std::string> applyPresentModeKey(const sol::table& root,
+	RuntimeConfig& cfg, std::string_view path, RuntimeKeyTrace& trace) {
+	trace.read.emplace_back("present_mode");
+	sol::optional<std::string> presentMode = root["present_mode"];
+	if (!presentMode)
+		return std::nullopt;
+	if (*presentMode == "immediate")
+		cfg.presentMode = PresentModePref::immediate;
+	else if (*presentMode == "fifo")
+		cfg.presentMode = PresentModePref::fifo;
+	else
+		return fmt::format(
+			"runtime config ({}): present_mode must be \"immediate\" or \"fifo\", got \"{}\"",
+			path, *presentMode);
+	return std::nullopt;
+}
+
+/** loadRuntimeConfig 定义（接口注释见 runtime_config.cppm）：headless/headless_size/win_size/show_after/present_mode/ui_font 逐一可选解析 + parseLlm。键轨迹 + 未知键 lint 同 diagnostics（债-11）。 */
+[[nodiscard]] std::expected<RuntimeConfig, Error> loadRuntimeConfig(
+	std::string_view path, RuntimeKeyTrace* trace) {
 	auto* logger = RLLogger::getInstance();
+	// 键轨迹**总是**记录（未知键 lint 在启动期就要工作，main 传 nullptr 也不例外）；
+	// 调用方给了出参就带出去，没给就落在本地局部量（diagnostics 同口径）。
+	RuntimeKeyTrace fallback;
+	if (!trace)
+		trace = &fallback;
 
 	{
 		std::ifstream probe{std::string(path)};
@@ -479,10 +660,13 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg) {
 	try {
 		sol::table root = result[0].as<sol::table>();
 		RuntimeConfig cfg;
+		collectPresentKeys(root, *trace);
 
-		sol::optional<bool> headless = root["headless"];
-		if (headless)
-			cfg.headless = *headless;
+		trace->read.emplace_back("headless");
+		readBoolKey(root, "headless", cfg.headless);
+		// 数组形尺寸表（{w, h}）无字段键名 ⟹ 键轨迹只记表名一个键（口径见 kRuntimeKeys 注释）
+		trace->read.emplace_back("headless_size");
+		trace->read.emplace_back("win_size");
 		auto readSize = [&](const char* key, uint32_t& w, uint32_t& h) {
 			sol::table t = root[key];
 			if (t.valid() && t.is<sol::table>()) {
@@ -497,39 +681,35 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg) {
 		readSize("headless_size", cfg.headlessWidth, cfg.headlessHeight);
 		readSize("win_size", cfg.winWidth, cfg.winHeight);
 
-		applyRenderScale(root, cfg.renderScale, logger);  // 批 14.3：内部渲染分辨率倍率
+		applyRenderScale(root, cfg.renderScale, logger, *trace);  // 批 14.3：内部渲染分辨率倍率
 		// velocity_field（批 14.4）= 逐像素速度场总开关（缺键 = false = 图里没有 velocity
 		// pass）。「FSR 依赖 velocity」的判据不在这里——运行期取实际图形态，见 RuntimeConfig
 		// 注释；批 14.6 起 aa 为 fsr 时本键被隐含打开（唯一发生点 = applyAaKey 内一行）。
+		trace->read.emplace_back("velocity_field");
 		readBoolKey(root, "velocity_field", cfg.velocityField);
 		// fail-fast 键链（aa 三态 + ★0.5-b2 meshlet.coplanar 三态；未知值 = 启动报错退出，
 		// 不静默回落——四臂主判据的假绿防线，→ applyFailFastKeys 注释）
-		if (auto err = applyFailFastKeys(root, cfg, path))
+		if (auto err = applyFailFastKeys(root, cfg, path, *trace); err)
 			return std::unexpected(Error{ErrorCode::ConfigLoadFailed, *err});
-		readFsrBlock(root, cfg);  // 批 14.6：FSR 调参收进嵌套块（无扁平键双读兼容）
-		readSsrBlock(root, cfg);  // 批 15.1：SSR 总开关（嵌套块，缺块/缺键 = false = 图里没有 ssr pass）
-		readWetBlock(root, cfg);  // 批 15.2：湿面参数（嵌套块，缺块/缺键 = WetTuning 默认；消费者 = deferred_geometry 湿面调制）
+		readFsrBlock(root, cfg, *trace);  // 批 14.6：FSR 调参收进嵌套块（无扁平键双读兼容）
+		readSsrBlock(root, cfg, *trace);  // 批 15.1：SSR 总开关（嵌套块，缺块/缺键 = false = 图里没有 ssr pass）
+		readWetBlock(root, cfg, *trace);  // 批 15.2：湿面参数（嵌套块，缺块/缺键 = WetTuning 默认；消费者 = deferred_geometry 湿面调制）
+		trace->read.emplace_back("show_after");
 		sol::optional<int> showAfter = root["show_after"];
 		if (showAfter)
 			cfg.showAfter = *showAfter;
 
 		// present_mode：窗口 present 模式偏好（PresentModePref；headless 忽略）。
-		// 未知值 = 配置笔误，fail-fast（与类型错误同级，不静默回落）。
-		sol::optional<std::string> presentMode = root["present_mode"];
-		if (presentMode) {
-			if (*presentMode == "immediate")
-				cfg.presentMode = PresentModePref::immediate;
-			else if (*presentMode == "fifo")
-				cfg.presentMode = PresentModePref::fifo;
-			else
-				return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
-					fmt::format("runtime config ({}): present_mode must be \"immediate\" or \"fifo\", got \"{}\"",
-						path, *presentMode)});
-		}
+		// 未知值 = 配置笔误，fail-fast（与类型错误同级，不静默回落；抽函数 = 认知复杂度红线）。
+		if (auto err = applyPresentModeKey(root, cfg, path, *trace); err)
+			return std::unexpected(Error{ErrorCode::ConfigLoadFailed, *err});
 
-		parseLlm(root, cfg.llm);
+		parseLlm(root, cfg.llm, *trace);
 
-		readUiFont(root, cfg);  // imgui 面板字体（Phase 10b 批 11b.1）
+		readUiFont(root, cfg, *trace);  // imgui 面板字体（Phase 10b 批 11b.1）
+
+		// 未知键 lint（债-11：runtime.lua 里拼错的键此前完全静默）
+		lintUnknownRuntimeKeys(*trace);
 		return cfg;
 	} catch (const std::exception& e) {
 		return std::unexpected(Error{ErrorCode::ConfigLoadFailed,

@@ -156,6 +156,25 @@ export struct SceneConfig {
 };
 
 /**
+ * 解析器键轨迹（`DiagnosticsKeyTrace` 同形，债-11：docs/gate_lint_plan.md §3-B 的
+ * 未知键 lint + 覆盖率护栏回灌 scene.lua）。键名书写与 Lua 路径一致，子表字段用
+ * `表名.字段`（如 `ao.strength`）。本 loader 没有门回显行 ⟹ 判据表叫 KnownKeys 而非
+ * EchoKeys：与 kGateEcho 同角色（未知键 lint 的判据表 + 覆盖率断言的输入），只是无回显输出。
+ */
+export struct SceneKeyTrace {
+	std::vector<std::string> read;     ///< 解析器读过的键（解析器总是全量问一遍 = 与文件内容无关）
+	std::vector<std::string> present;  ///< 文件里实际出现的顶层键名（子表只记表名）
+};
+
+/**
+ * 键表的全部键名（与 `SceneKeyTrace::read` 同拼写）——单测据此做「读过的键集合 ==
+ * 键表键集合」的双向覆盖率断言（解析器读了而表不列 = 表撒谎，表列了而解析器不读 =
+ * 陈旧键）；表本体在实现单元（不把 fmt 拉进本模块接口）。
+ * @return 键名列表（顺序 = 键表顺序）
+ */
+export std::vector<std::string> sceneConfigKnownKeys();
+
+/**
  * 默认配置：cube + model + model_pbr + model_phong（+model_pbr_ibl + skybox）
  * 六条内建 pipeline（SPV 路径与构建产物对应），无模型，开启旋转。
  * 默认 styles：unlit→model / pbr→model_pbr（Phase 4 批次 3，styles 表可选回落；
@@ -169,8 +188,10 @@ export SceneConfig defaultSceneConfig();
  * 文件缺失 → 返回默认 SceneConfig + warn；脚本/类型错误 → std::unexpected。
  * 沙箱限制与 camera.cppm / tools/schema_loader 一致：禁用 dofile/loadfile/package/require。
  * @param path 配置文件路径
+ * @param trace 可选出参：键轨迹（覆盖率护栏与未知键 lint 的输入；传 nullptr = 不记录）
  * @return 解析好的 SceneConfig；失败返回 ConfigLoadFailed
  */
-export [[nodiscard]] std::expected<SceneConfig, Error> loadSceneConfig(std::string_view path);
+export [[nodiscard]] std::expected<SceneConfig, Error> loadSceneConfig(
+	std::string_view path, SceneKeyTrace* trace = nullptr);
 
 }  // namespace RGL

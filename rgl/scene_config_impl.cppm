@@ -88,6 +88,97 @@ SceneConfig defaultSceneConfig() {
 namespace {
 
 /**
+ * 键表 = 「解析器认识哪些键」的单一真相源（diagnostics 的 kGateEcho 同角色，债-11）：
+ * ① 未知键 lint 的判据表；② tests 里「读过的键集合 == 键表键集合」双向覆盖率断言的输入。
+ * 子表字段用 `表名.字段`；map 段（styles/deferred_styles）键名任意只记表名，
+ * 数组段（entities/pipelines/lights）按条目字段记 `表名.字段`（条目内字段名固定）。
+ * ⚠ **原生数组**（尺寸自动推导）不是 `std::array<T, N>`——shadow_config_impl 同款教训：
+ * N 写错时 std::array 不报错而是零填充。
+ */
+constexpr std::string_view kSceneKeys[]{
+	"model",
+	"spin",
+	"spin_frame_angle",
+	"spin_axis",
+	"cube",
+	"exposure",
+	"ao.strength",
+	"taa.feedback",
+	"taa.jitter_scale",
+	"taa.motion_compensation",
+	"taa.base_space",
+	"taa.reprojection",
+	"taa.diag_reject",
+	"taa.input_kernel",
+	"taa.clip_mode",
+	"taa.clip_soft",
+	"entities.type",
+	"entities.file",
+	"entities.position",
+	"entities.rotation",
+	"entities.scale",
+	"pipelines.name",
+	"pipelines.mesh",
+	"pipelines.frag",
+	"light.direction",
+	"light.color",
+	"light.intensity",
+	"light.ambient",
+	"lights.direction",
+	"lights.position",
+	"lights.color",
+	"lights.intensity",
+	"lights.range",
+	"lights.type",
+	"environment.dir",
+	"environment.faces",
+	"environment.intensity",
+	"environment.skybox",
+	"environment.hdr",
+	"environment.hdr_size",
+	"styles",
+	"material_styles.pattern",
+	"material_styles.style",
+	"deferred_styles",
+};
+
+/**
+ * 「文件里实际出现的顶层键」采集（diagnostics 的 collectPresentKeys 同构，未知键 lint
+ * 的输入；子表只记表名——present 来自文件本体不来自读取动作）。
+ * @param root 配置根表
+ * @param trace 键轨迹（present 追加目标）
+ */
+void collectPresentKeys(const sol::table& root, SceneKeyTrace& trace) {
+	for (auto&& kv : root) {
+		if (sol::optional<std::string> k = kv.first.as<sol::optional<std::string>>())
+			trace.present.push_back(*k);
+	}
+}
+
+/**
+ * 未知键 lint（lintUnknownDiagnosticsKeys 同判据，债-11）：文件里出现的顶层键，凡键表
+ * 键名的「`.` 前缀」都不等于它 = 解析器没人读它（拼错的键，此前完全静默）。判据来自
+ * 键表本身（= 解析器键名真相源），不另立名单——覆盖率护栏（测试）保证键表 ⊥ 解析器
+ * 不会漂移，本函数因此只需查一张表。
+ * @param trace 解析期键轨迹
+ */
+void lintUnknownSceneKeys(const SceneKeyTrace& trace) {
+	auto* logger = RLLogger::getInstance();
+	if (!logger)
+		return;
+	for (const auto& key : trace.present) {
+		bool known = false;
+		for (const auto& k : kSceneKeys)
+			if (k.substr(0, k.find('.')) == key) {  // 无 `.` 时 = 全名比对
+				known = true;
+				break;
+			}
+		if (!known)
+			logger->warn("scene: 未知键 '{}'（解析器不读它，拼错？已忽略）", key);
+	}
+}
+
+/**
  * entities 单条目解析（type/file/position/rotation/scale；错误消息逐字保持拆分前文案）。
  * @param item 条目表
  * @param i 条目序号（1 起，错误信息用）
@@ -119,11 +210,20 @@ std::expected<SceneEntityDesc, Error> parseEntityItem(sol::table item, int i) {
  * entities 段解析（Phase 6 批次 5：场景构成数据驱动列表，非空 = 权威；缺段 =
  * 回落旧 model/cube 字段合成，既有配置零改动等价）。type "model"|"cube"|"aa_target"，
  * transform 全可选（position/rotation 欧拉角度/scale 均匀）。
+ * 键轨迹在段入口**无条件**记全五个字段键（解析器全量问一遍 = 覆盖率护栏的输入，
+ * 同 shadow applyTuningBlock 的口径；条目内重复读不重复记）。
  * @param root 配置根表
  * @param cfg 目标配置（读 modelPath/showCube 做缺段合成，写 entities）
+ * @param trace 键轨迹
  * @return 结构违例（未知 type / model 缺 file / scale≤0）= Error
  */
-std::expected<void, Error> parseEntities(sol::table root, SceneConfig& cfg) {
+std::expected<void, Error> parseEntities(sol::table root, SceneConfig& cfg,
+	SceneKeyTrace& trace) {
+	trace.read.emplace_back("entities.type");
+	trace.read.emplace_back("entities.file");
+	trace.read.emplace_back("entities.position");
+	trace.read.emplace_back("entities.rotation");
+	trace.read.emplace_back("entities.scale");
 	sol::table entities = root["entities"];
 	if (entities.valid() && entities.is<sol::table>()) {
 		cfg.entities.clear();
@@ -147,11 +247,17 @@ std::expected<void, Error> parseEntities(sol::table root, SceneConfig& cfg) {
 
 /**
  * pipelines 段解析（条目名 → SPV 路径规格表，非空覆盖默认六条）。
+ * 键轨迹在段入口无条件记全三个字段键（同 parseEntities 口径）。
  * @param root 配置根表
  * @param cfg 目标配置（写 pipelines）
+ * @param trace 键轨迹
  * @return 缺 name = Error
  */
-std::expected<void, Error> parsePipelines(sol::table root, SceneConfig& cfg) {
+std::expected<void, Error> parsePipelines(sol::table root, SceneConfig& cfg,
+	SceneKeyTrace& trace) {
+	trace.read.emplace_back("pipelines.name");
+	trace.read.emplace_back("pipelines.mesh");
+	trace.read.emplace_back("pipelines.frag");
 	sol::table pipelines = root["pipelines"];
 	if (!(pipelines.valid() && pipelines.is<sol::table>()))
 		return {};
@@ -176,10 +282,22 @@ std::expected<void, Error> parsePipelines(sol::table root, SceneConfig& cfg) {
  *（场景共享项，仅 lights[0] 进 scene data @36）。type=0 定向 / 1 点光。
  * ambient 语义：light 段是唯一可配源——lights 段被采用时 lights[0].ambient 也取
  * light 段值（否则 lights 段一存在，light.ambient 就成死配置、静默回落组件默认）。
+ * 键轨迹在段入口无条件记全 light 四键 + lights 六键（同 parseEntities 口径）。
  * @param root 配置根表
  * @param cfg 目标配置（写 light/lights）
+ * @param trace 键轨迹
  */
-void parseLights(sol::table root, SceneConfig& cfg) {
+void parseLights(sol::table root, SceneConfig& cfg, SceneKeyTrace& trace) {
+	trace.read.emplace_back("light.direction");
+	trace.read.emplace_back("light.color");
+	trace.read.emplace_back("light.intensity");
+	trace.read.emplace_back("light.ambient");
+	trace.read.emplace_back("lights.direction");
+	trace.read.emplace_back("lights.position");
+	trace.read.emplace_back("lights.color");
+	trace.read.emplace_back("lights.intensity");
+	trace.read.emplace_back("lights.range");
+	trace.read.emplace_back("lights.type");
 	sol::table light = root["light"];
 	if (light.valid() && light.is<sol::table>()) {
 		cfg.light.direction = readVec3(light, "direction", cfg.light.direction);
@@ -220,12 +338,21 @@ void parseLights(sol::table root, SceneConfig& cfg) {
 /**
  * environment 段解析（Phase 5.5；缺段 = 不启用）。faces 按 Vulkan 层序 0-5 排列。
  * Phase 8 ②b 新增 hdr（.hdr 环境路径，非空优先于 faces）+ hdr_size（重投影面边长，
- * 必须 2 的幂，默认 2048）。
+ * 必须 2 的幂，默认 2048）。键轨迹在段入口无条件记全六个字段键（同 parseEntities 口径，
+ * 记录先于一切早退分支）。
  * @param root 配置根表
  * @param cfg 目标配置（写 environment）
+ * @param trace 键轨迹
  * @return hdr_size 非 2 的幂 = Error
  */
-std::expected<void, Error> parseEnvironment(sol::table root, SceneConfig& cfg) {
+std::expected<void, Error> parseEnvironment(sol::table root, SceneConfig& cfg,
+	SceneKeyTrace& trace) {
+	trace.read.emplace_back("environment.dir");
+	trace.read.emplace_back("environment.faces");
+	trace.read.emplace_back("environment.intensity");
+	trace.read.emplace_back("environment.skybox");
+	trace.read.emplace_back("environment.hdr");
+	trace.read.emplace_back("environment.hdr_size");
 	sol::table envTable = root["environment"];
 	if (!(envTable.valid() && envTable.is<sol::table>()))
 		return {};
@@ -255,8 +382,10 @@ std::expected<void, Error> parseEnvironment(sol::table root, SceneConfig& cfg) {
 	return {};
 }
 
-/** styles 表解析（风格名→管线规格名，Phase 4 批次 3；非空覆盖默认 {unlit,pbr}）。 */
-void parseStyles(sol::table root, SceneConfig& cfg) {
+/** styles 表解析（风格名→管线规格名，Phase 4 批次 3；非空覆盖默认 {unlit,pbr}）。
+ *  map 段键名任意 ⟹ 键轨迹只记表名（与 lint 的「`.` 前缀」判据一致）。 */
+void parseStyles(sol::table root, SceneConfig& cfg, SceneKeyTrace& trace) {
+	trace.read.emplace_back("styles");
 	sol::table styles = root["styles"];
 	if (!(styles.valid() && styles.is<sol::table>()))
 		return;
@@ -266,8 +395,10 @@ void parseStyles(sol::table root, SceneConfig& cfg) {
 }
 
 /** material_styles 解析（Phase 8 批次 F，材质名连连看：数组 { pattern=..., style=... }，
- * 有序首个命中；非空覆盖默认）。 */
-void parseMaterialStyles(sol::table root, SceneConfig& cfg) {
+ * 有序首个命中；非空覆盖默认）。键轨迹在段入口无条件记 pattern/style 两键。 */
+void parseMaterialStyles(sol::table root, SceneConfig& cfg, SceneKeyTrace& trace) {
+	trace.read.emplace_back("material_styles.pattern");
+	trace.read.emplace_back("material_styles.style");
 	sol::table rules = root["material_styles"];
 	if (!(rules.valid() && rules.is<sol::table>()))
 		return;
@@ -284,8 +415,9 @@ void parseMaterialStyles(sol::table root, SceneConfig& cfg) {
 }
 
 /** deferred_styles 解析（Phase 8 批次 F，风格名→deferred 规格名；非空覆盖默认。
- * 未列出的风格在 deferred 下回落 deferred_geometry 本体）。 */
-void parseDeferredStyles(sol::table root, SceneConfig& cfg) {
+ * 未列出的风格在 deferred 下回落 deferred_geometry 本体）。map 段只记表名。 */
+void parseDeferredStyles(sol::table root, SceneConfig& cfg, SceneKeyTrace& trace) {
+	trace.read.emplace_back("deferred_styles");
 	sol::table styles = root["deferred_styles"];
 	if (!(styles.valid() && styles.is<sol::table>()))
 		return;
@@ -296,9 +428,15 @@ void parseDeferredStyles(sol::table root, SceneConfig& cfg) {
 
 }  // namespace
 
-/** loadSceneConfig 定义（接口注释见 scene_config.cppm）：沙箱 dofile + 段调度（entities/pipelines/lights/environment/styles 各 parse* helper，Phase ②b 拆债）；缺文件回落默认。 */
-[[nodiscard]] std::expected<SceneConfig, Error> loadSceneConfig(std::string_view path) {
+/** loadSceneConfig 定义（接口注释见 scene_config.cppm）：沙箱 dofile + 段调度（entities/pipelines/lights/environment/styles 各 parse* helper，Phase ②b 拆债）；缺文件回落默认。键轨迹 + 未知键 lint 同 diagnostics（债-11）。 */
+[[nodiscard]] std::expected<SceneConfig, Error> loadSceneConfig(
+	std::string_view path, SceneKeyTrace* trace) {
 	auto* logger = RLLogger::getInstance();
+	// 键轨迹**总是**记录（未知键 lint 在启动期就要工作，main 传 nullptr 也不例外）；
+	// 调用方给了出参就带出去，没给就落在本地局部量（diagnostics 同口径）。
+	SceneKeyTrace fallback;
+	if (!trace)
+		trace = &fallback;
 
 	{
 		std::string pathStr{std::string(path)};
@@ -329,20 +467,37 @@ void parseDeferredStyles(sol::table root, SceneConfig& cfg) {
 		// 同 camera.cppm：此版本 sol2 的 stack_proxy→sol::table 隐式转换有坑，用 .as<>
 		sol::table root = result[0].as<sol::table>();
 		SceneConfig cfg = defaultSceneConfig();
+		collectPresentKeys(root, *trace);
 
+		trace->read.emplace_back("model");
 		readStr(root, "model", cfg.modelPath);
+		trace->read.emplace_back("spin");
 		readBool(root, "spin", cfg.spin);
 		// 帧驱动 spin（诊断激励门，默认 0 = 关 = 逐位今天；判据本体 = frameDrivenSpinAngle）
+		trace->read.emplace_back("spin_frame_angle");
 		readFloat(root, "spin_frame_angle", cfg.spinFrameAngle);
+		trace->read.emplace_back("spin_axis");
 		cfg.spinAxis = readVec3(root, "spin_axis", cfg.spinAxis);
+		trace->read.emplace_back("cube");
 		readBool(root, "cube", cfg.showCube);
+		trace->read.emplace_back("exposure");
 		readFloat(root, "exposure", cfg.exposure);  // Phase 8 收尾：tonemap 曝光（可选，1.0 = 直通）
 		// Phase 11 批 11.4：SSAO 强度（可选段 ao.strength，0 = 逐位旁路）
+		trace->read.emplace_back("ao.strength");
 		if (sol::table ao = root["ao"]; ao.valid() && ao.is<sol::table>())
 			readFloat(ao, "strength", cfg.aoStrength);
 		// 批 12.6 TAA（可选段 taa）：批 14.6 起本段**只有调参**（feedback / jitterScale /
 		// motionCompensation / baseSpace / 各消融门）；原 `enabled` 图形态开关已删，
 		// 「TAA 在不在图里」由 runtime.lua 的 aa 三态推导（RuntimeConfig::aaWantsTaa）。
+		trace->read.emplace_back("taa.feedback");
+		trace->read.emplace_back("taa.jitter_scale");
+		trace->read.emplace_back("taa.motion_compensation");
+		trace->read.emplace_back("taa.base_space");
+		trace->read.emplace_back("taa.reprojection");
+		trace->read.emplace_back("taa.diag_reject");
+		trace->read.emplace_back("taa.input_kernel");
+		trace->read.emplace_back("taa.clip_mode");
+		trace->read.emplace_back("taa.clip_soft");
 		if (sol::table taa = root["taa"]; taa.valid() && taa.is<sol::table>()) {
 			readFloat(taa, "feedback", cfg.taaFeedback);
 			readFloat(taa, "jitter_scale", cfg.taaJitterScale);
@@ -360,22 +515,34 @@ void parseDeferredStyles(sol::table root, SceneConfig& cfg) {
 			readFloat(taa, "clip_soft", cfg.taaClipSoft);
 		}
 
-		if (auto r = parseEntities(root, cfg); !r)
+		if (auto r = parseEntities(root, cfg, *trace); !r)
 			return std::unexpected(r.error());
-		if (auto r = parsePipelines(root, cfg); !r)
+		if (auto r = parsePipelines(root, cfg, *trace); !r)
 			return std::unexpected(r.error());
-		parseLights(root, cfg);
-		if (auto r = parseEnvironment(root, cfg); !r)
+		parseLights(root, cfg, *trace);
+		if (auto r = parseEnvironment(root, cfg, *trace); !r)
 			return std::unexpected(r.error());
-		parseStyles(root, cfg);
-		parseMaterialStyles(root, cfg);
-		parseDeferredStyles(root, cfg);
+		parseStyles(root, cfg, *trace);
+		parseMaterialStyles(root, cfg, *trace);
+		parseDeferredStyles(root, cfg, *trace);
+
+		// 未知键 lint（债-11：scene.lua 里拼错的键此前完全静默）
+		lintUnknownSceneKeys(*trace);
 
 		return cfg;
 	} catch (const std::exception& e) {
 		return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
 			fmt::format("scene config ({}): {}", path, e.what())});
 	}
+}
+
+/** sceneConfigKnownKeys 定义（接口注释见 scene_config.cppm）。 */
+std::vector<std::string> sceneConfigKnownKeys() {
+	std::vector<std::string> keys;
+	keys.reserve(std::size(kSceneKeys));
+	for (const auto& k : kSceneKeys)
+		keys.emplace_back(k);
+	return keys;
 }
 
 }  // namespace RGL

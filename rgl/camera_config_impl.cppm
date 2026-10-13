@@ -17,6 +17,79 @@ namespace RGL {
 // loadCameraConfig + keyNameToSdlKey 定义（2026-09-02 编译提速 A 方案）：sol2 解析
 // 实现整体移出接口 TU，sol/glm/fmt GMF 不再进接口；本单元是叶子边。
 
+namespace {
+
+/**
+ * 键表 = 「解析器认识哪些键」的单一真相源（diagnostics 的 kGateEcho 同角色，债-11）：
+ * ① 未知键 lint 的判据表；② tests 里「读过的键集合 == 键表键集合」双向覆盖率断言的输入。
+ * 子表字段用 `表名.字段`（keys.forward / trackball.sensitivity / fps.speed …）。
+ * ⚠ **原生数组**（尺寸自动推导）不是 `std::array<T, N>`——shadow_config_impl 同款教训。
+ */
+constexpr std::string_view kCameraKeys[]{
+	"mode",
+	"position",
+	"target",
+	"fovDegrees",
+	"near",
+	"far",
+	"frame_yaw",
+	"trackball.sensitivity",
+	"trackball.zoom",
+	"fps.speed",
+	"fps.sensitivity",
+	"keys.forward",
+	"keys.back",
+	"keys.left",
+	"keys.right",
+};
+
+/**
+ * 「文件里实际出现的顶层键」采集（diagnostics 的 collectPresentKeys 同构，未知键 lint
+ * 的输入；子表只记表名——present 来自文件本体不来自读取动作）。
+ * @param root 配置根表
+ * @param trace 键轨迹（present 追加目标）
+ */
+void collectPresentKeys(const sol::table& root, CameraKeyTrace& trace) {
+	for (auto&& kv : root) {
+		if (sol::optional<std::string> k = kv.first.as<sol::optional<std::string>>())
+			trace.present.push_back(*k);
+	}
+}
+
+/**
+ * 未知键 lint（lintUnknownDiagnosticsKeys 同判据，债-11）：文件里出现的顶层键，凡键表
+ * 键名的「`.` 前缀」都不等于它 = 解析器没人读它（拼错的键，此前完全静默）。判据来自
+ * 键表本身（= 解析器键名真相源），不另立名单——覆盖率护栏（测试）保证键表 ⊥ 解析器
+ * 不会漂移，本函数因此只需查一张表。
+ * @param trace 解析期键轨迹
+ */
+void lintUnknownCameraKeys(const CameraKeyTrace& trace) {
+	auto* logger = RLLogger::getInstance();
+	if (!logger)
+		return;
+	for (const auto& key : trace.present) {
+		bool known = false;
+		for (const auto& k : kCameraKeys)
+			if (k.substr(0, k.find('.')) == key) {  // 无 `.` 时 = 全名比对
+				known = true;
+				break;
+			}
+		if (!known)
+			logger->warn("camera: 未知键 '{}'（解析器不读它，拼错？已忽略）", key);
+	}
+}
+
+}  // namespace
+
+/** cameraConfigKnownKeys 定义（接口注释见 camera_config.cppm）。 */
+std::vector<std::string> cameraConfigKnownKeys() {
+	std::vector<std::string> keys;
+	keys.reserve(std::size(kCameraKeys));
+	for (const auto& k : kCameraKeys)
+		keys.emplace_back(k);
+	return keys;
+}
+
 /**
  * 键名（configs/camera.lua 的 keys 字段值）→ SDL 键码（仅 loadCameraConfig 内部使用）。
  * 单字母/数字不区分大小写（A-Z / 0-9）；方向键用 Up/Down/Left/Right；另有
@@ -97,11 +170,15 @@ namespace RGL {
 /**
  * mode 字段读取（仅 loadCameraConfig 内部使用）：缺失 = 保持默认 trackball；
  * "fps" 切换模式；其余串 = ConfigLoadFailed（消息格式逐字保持拆分前内联实现）。
+ * 键轨迹无条件记 mode（解析器全量问一遍 = 覆盖率护栏的输入）。
  * @param root 配置根表
  * @param camera 写入目标（仅 mode 存在且合法时写）
+ * @param trace 键轨迹
  * @return 成功 = void；mode 串非法 = ConfigLoadFailed
  */
-[[nodiscard]] std::expected<void, Error> readCameraMode(sol::table root, Camera& camera) {
+[[nodiscard]] std::expected<void, Error> readCameraMode(sol::table root, Camera& camera,
+	CameraKeyTrace& trace) {
+	trace.read.emplace_back("mode");
 	sol::optional<std::string> mode = root["mode"];
 	if (mode) {
 		if (*mode == "fps") {
@@ -120,10 +197,14 @@ namespace RGL {
  * 对齐 world-up）。与 trackball 拖拽时"forward 恒指向 target"的反推约定一致——
  * llm_debug 工作流"编辑 position/target 即定机位"依赖此行为——此前朝向固定
  * yaw=0/-z，导致只改 position/target 时相机并不看向 target。
+ * 键轨迹无条件记 position/target（解析器全量问一遍 = 覆盖率护栏的输入）。
  * @param root 配置根表
  * @param camera 写入目标（position/target/pitch/yaw/up）
+ * @param trace 键轨迹
  */
-void readCameraPlacement(sol::table root, Camera& camera) {
+void readCameraPlacement(sol::table root, Camera& camera, CameraKeyTrace& trace) {
+	trace.read.emplace_back("position");
+	trace.read.emplace_back("target");
 	auto readVec3 = [&](const char* key) -> std::optional<glm::vec3> {
 		sol::table v = root[key];
 		if (v.valid() && v.is<sol::table>()) {
@@ -152,11 +233,17 @@ void readCameraPlacement(sol::table root, Camera& camera) {
 
 /**
  * fovDegrees/near/far/frame_yaw 标量字段读取（仅 loadCameraConfig 内部使用）：缺字段回落
- * camera 当前值；fov 度转弧度。
+ * camera 当前值；fov 度转弧度。键轨迹无条件记四枚标量键（解析器全量问一遍 =
+ * 覆盖率护栏的输入）。
  * @param root 配置根表
  * @param camera 写入目标（fov/nearPlane/farPlane/frameYaw）
+ * @param trace 键轨迹
  */
-void readCameraScalars(sol::table root, Camera& camera) {
+void readCameraScalars(sol::table root, Camera& camera, CameraKeyTrace& trace) {
+	trace.read.emplace_back("fovDegrees");
+	trace.read.emplace_back("near");
+	trace.read.emplace_back("far");
+	trace.read.emplace_back("frame_yaw");
 	sol::optional<float> fov = root["fovDegrees"];
 	if (fov)
 		camera.fov = *fov * glm::pi<float>() / 180.0f;
@@ -175,10 +262,16 @@ void readCameraScalars(sol::table root, Camera& camera) {
 /**
  * 两模式参数子表读取（仅 loadCameraConfig 内部使用）：trackball.sensitivity/zoom、
  * fps.speed/sensitivity；子表缺失/非表或字段缺失 = 回落 camera 当前值。
+ * 键轨迹无条件记四枚字段键（解析器全量问一遍 = 覆盖率护栏的输入）。
  * @param root 配置根表
  * @param camera 写入目标（trackballSensitivity/zoomSpeed/fpsSpeed/fpsSensitivity）
+ * @param trace 键轨迹
  */
-void readCameraModeParams(sol::table root, Camera& camera) {
+void readCameraModeParams(sol::table root, Camera& camera, CameraKeyTrace& trace) {
+	trace.read.emplace_back("trackball.sensitivity");
+	trace.read.emplace_back("trackball.zoom");
+	trace.read.emplace_back("fps.speed");
+	trace.read.emplace_back("fps.sensitivity");
 	auto readModeTable = [&](const char* key) -> std::optional<sol::table> {
 		sol::table t = root[key];
 		if (t.valid() && t.is<sol::table>())
@@ -203,9 +296,15 @@ void readCameraModeParams(sol::table root, Camera& camera) {
 	}
 }
 
-/** loadCameraConfig 定义（接口注释见 camera_config.cppm）。要点：初始朝向由 position→target 反推（yaw/pitch + trackball up 对齐 world-up）；keys 四字段逐一校验，任一未知键名整体失败。 */
-[[nodiscard]] std::expected<CameraConfig, Error> loadCameraConfig(std::string_view path) {
+/** loadCameraConfig 定义（接口注释见 camera_config.cppm）。要点：初始朝向由 position→target 反推（yaw/pitch + trackball up 对齐 world-up）；keys 四字段逐一校验，任一未知键名整体失败。键轨迹 + 未知键 lint 同 diagnostics（债-11）。 */
+[[nodiscard]] std::expected<CameraConfig, Error> loadCameraConfig(
+	std::string_view path, CameraKeyTrace* trace) {
 	auto* logger = RLLogger::getInstance();
+	// 键轨迹**总是**记录（未知键 lint 在启动期就要工作，main 传 nullptr 也不例外）；
+	// 调用方给了出参就带出去，没给就落在本地局部量（diagnostics 同口径）。
+	CameraKeyTrace fallback;
+	if (!trace)
+		trace = &fallback;
 
 	{
 		std::string pathStr{std::string(path)};
@@ -236,20 +335,30 @@ void readCameraModeParams(sol::table root, Camera& camera) {
 	try {
 		// 注意：此版本 sol2 的 stack_proxy→sol::table 隐式转换有坑，用 schema_loader 同款 .as<>
 		sol::table root = result[0].as<sol::table>();
+		collectPresentKeys(root, *trace);
 
 		Camera camera{};
-		if (auto mode = readCameraMode(root, camera); !mode)
+		if (auto mode = readCameraMode(root, camera, *trace); !mode)
 			return std::unexpected(std::move(mode).error());
 
-		readCameraPlacement(root, camera);
-		readCameraScalars(root, camera);
-		readCameraModeParams(root, camera);
+		readCameraPlacement(root, camera, *trace);
+		readCameraScalars(root, camera, *trace);
+		readCameraModeParams(root, camera, *trace);
 
-		// 键位绑定（可选字段回落默认 WASD；字段存在但键名无法识别 → 报错退出）
+		// 键位绑定（可选字段回落默认 WASD；字段存在但键名无法识别 → 报错退出）。
+		// keys.* 四键在**表存在性判断之外**记：解析器全量问一遍，缺表也记（覆盖率护栏
+		// 的输入与文件内容无关，diagnostics 同口径）。
+		trace->read.emplace_back("keys.forward");
+		trace->read.emplace_back("keys.back");
+		trace->read.emplace_back("keys.left");
+		trace->read.emplace_back("keys.right");
 		sol::table keysTable = root["keys"];
 		if (keysTable.valid() && keysTable.is<sol::table>())
 			if (auto keys = readCameraKeys(keysTable, camera, path); !keys)
 				return std::unexpected(std::move(keys).error());
+
+		// 未知键 lint（债-11：camera.lua 里拼错的键此前完全静默）
+		lintUnknownCameraKeys(*trace);
 
 		return CameraConfig{camera};
 	} catch (const std::exception& e) {
