@@ -474,15 +474,16 @@ void Harness::writeAllDescriptors(bool withUbo, bool decoys) {
 }
 
 void Harness::runDispatch(const std::string& spvPath, const std::string& entryName) {
-    // 引擎的 mapping 烘焙：binding → 真槽号（**不是** binding == 槽）
-    const std::array<std::pair<uint32_t, uint32_t>, 4> bindingToSlot{{
-        {0, slotHdr_},
-        {1, slotMvps_},
-        {2, slotRaw_},
-        {3, slotOut_},
+    // 引擎的 mapping 烘焙：binding → 真槽号（**不是** binding == 槽；HeapSlot 强类型
+    // 声明"这里传槽"，×descriptorSize 在 makeMappedCompute 内——坑 5 护栏）
+    const std::array<std::pair<uint32_t, RGL::HeapSlot>, 4> bindingToSlot{{
+        {0, RGL::HeapSlot{slotHdr_}},
+        {1, RGL::HeapSlot{slotMvps_}},
+        {2, RGL::HeapSlot{slotRaw_}},
+        {3, RGL::HeapSlot{slotOut_}},
     }};
     auto shaderObj = RGL::makeMappedCompute(fx_.device(), spvPath,
-        std::span<const std::pair<uint32_t, uint32_t>>(bindingToSlot), descriptorSize());
+        std::span<const std::pair<uint32_t, RGL::HeapSlot>>(bindingToSlot), descriptorSize());
 
     fx_.submitAndWait([&](vk::raii::CommandBuffer& cmd) {
         // host 写（描述符 + buffer 内容）→ GPU 读。dst 必须含 eResourceHeapReadEXT：
@@ -720,13 +721,13 @@ void StrideHarness::writeDescriptors() {
 }
 
 void StrideHarness::runDispatch(const std::string& spvPath) {
-    const std::array<std::pair<uint32_t, uint32_t>, 3> bindingToSlot{{
-        {0, slotItems_},
-        {1, slotHeaders_},
-        {2, slotOut_},
+    const std::array<std::pair<uint32_t, RGL::HeapSlot>, 3> bindingToSlot{{
+        {0, RGL::HeapSlot{slotItems_}},
+        {1, RGL::HeapSlot{slotHeaders_}},
+        {2, RGL::HeapSlot{slotOut_}},
     }};
     auto shaderObj = RGL::makeMappedCompute(fx_.device(), spvPath,
-        std::span<const std::pair<uint32_t, uint32_t>>(bindingToSlot), heap_.getDescriptorSize());
+        std::span<const std::pair<uint32_t, RGL::HeapSlot>>(bindingToSlot), heap_.getDescriptorSize());
 
     fx_.submitAndWait([&](vk::raii::CommandBuffer& cmd) {
         // host 写（描述符 + buffer 内容）→ GPU 读。dst 必须含 eResourceHeapReadEXT：

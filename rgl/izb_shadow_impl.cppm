@@ -1,5 +1,5 @@
 module;
-#include <vulkan/vulkan.h>  // VK_* 宏/C 函数（rlvk 不含宏）+ VK_QUEUE_FAMILY_IGNORED
+#include <vulkan/vulkan.h>  // VK_* 宏/C 函数（rlvk 不含宏）+ VK_QUEUE_FAMILY_IGNORED；offsetof 经其 stddef.h 提供（mip_gen_impl 先例）
 #include <vk_mem_alloc.h>   // VmaAllocationCreateInfo / VMA_MEMORY_USAGE_*（VmaRaii 的 C 面）
 #include <glm/glm.hpp>
 #include <fmt/format.h>
@@ -20,7 +20,10 @@ namespace RGL {
 namespace {
 
 /** IzbCreatePush —— 与 izb_create.comp.slang 同名 struct 逐字段一致（glm 列主序
- *  mat4 = 4×float4 连续 = shader 侧 float4[4]；总 144B ≤ maxPushDataSize）。 */
+ *  mat4 = 4×float4 连续 = shader 侧 float4[4]；总 144B ≤ maxPushDataSize）。
+ *  期望值出处 = shader 侧字段手算（scalar block layout）：float4 invVPM[4] @0 占 64B +
+ *  float4 lightVP[4] @64 占 64B + int pixelW@128 + int pixelH@132 + int gridDim@136 +
+ *  float emptyDepth@140 = 144B。债-12 护栏：任何一侧改字段/顺序而另一侧不动 = 编译失败。 */
 struct IzbCreatePush {
 	glm::mat4 invVPM;
 	glm::mat4 lightVP;
@@ -29,14 +32,30 @@ struct IzbCreatePush {
 	int32_t gridDim;
 	float emptyDepth;
 };
+static_assert(sizeof(IzbCreatePush) == 144,
+	"IzbCreatePush 与 izb_create.comp.slang IzbCreatePush 漂移：float4 invVPM[4]@0 + float4 lightVP[4]@64 + int pixelW@128 + int pixelH@132 + int gridDim@136 + float emptyDepth@140 = 144B（scalar layout 手算）");
+static_assert(offsetof(IzbCreatePush, invVPM) == 0, "izb_create.comp.slang: invVPM[4] @0（push 区首）");
+static_assert(offsetof(IzbCreatePush, lightVP) == 64, "izb_create.comp.slang: lightVP[4] 紧跟 invVPM[4]（4×float4=64B）@64");
+static_assert(offsetof(IzbCreatePush, pixelW) == 128, "izb_create.comp.slang: pixelW @128（两矩阵段之后）");
+static_assert(offsetof(IzbCreatePush, pixelH) == 132, "izb_create.comp.slang: pixelH @132");
+static_assert(offsetof(IzbCreatePush, gridDim) == 136, "izb_create.comp.slang: gridDim @136");
+static_assert(offsetof(IzbCreatePush, emptyDepth) == 140, "izb_create.comp.slang: emptyDepth @140（struct 尾 = 144B）");
 
-/** IzbPrimePush —— 与 izb_prime.comp.slang 同名 struct 逐字段一致。 */
+/** IzbPrimePush —— 与 izb_prime.comp.slang 同名 struct 逐字段一致。
+ *  期望值出处 = shader 侧字段手算：int gridDim@0 + int pixelTotal@4 + int _pad0@8 +
+ *  int _pad1@12 = 16B（补齐 = push 区 16B 对齐习惯，两侧同拼写）。 */
 struct IzbPrimePush {
 	int32_t gridDim;
 	int32_t pixelTotal;
 	int32_t pad0;
 	int32_t pad1;
 };
+static_assert(sizeof(IzbPrimePush) == 16,
+	"IzbPrimePush 与 izb_prime.comp.slang IzbPrimePush 漂移：int gridDim@0 + int pixelTotal@4 + int _pad0@8 + int _pad1@12 = 16B");
+static_assert(offsetof(IzbPrimePush, gridDim) == 0, "izb_prime.comp.slang: gridDim @0");
+static_assert(offsetof(IzbPrimePush, pixelTotal) == 4, "izb_prime.comp.slang: pixelTotal @4");
+static_assert(offsetof(IzbPrimePush, pad0) == 8, "izb_prime.comp.slang: _pad0 @8（补齐位也要同拼写——删它 = shader 侧字段整体上移）");
+static_assert(offsetof(IzbPrimePush, pad1) == 12, "izb_prime.comp.slang: _pad1 @12（struct 尾 = 16B）");
 
 constexpr uint32_t kNone = 0xFFFFFFFFu;
 
@@ -203,11 +222,11 @@ IzbShadow::IzbShadow(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
 
 	const uint32_t descriptorSize = resources->getDescriptorHeap().getDescriptorSize();
 	createShader.emplace(makeMappedCompute(dev, "generated_shaders/izb_create.comp.spv",
-		std::vector<std::pair<uint32_t, uint32_t>>{
-			{0, headSlot}, {1, nodesSlot}, {2, depthSlot}}, descriptorSize));
+		std::vector<std::pair<uint32_t, RGL::HeapSlot>>{
+			{0, HeapSlot{headSlot}}, {1, HeapSlot{nodesSlot}}, {2, HeapSlot{depthSlot}}}, descriptorSize));
 	primeShader.emplace(makeMappedCompute(dev, "generated_shaders/izb_prime.comp.spv",
-		std::vector<std::pair<uint32_t, uint32_t>>{
-			{0, headSlot}, {1, nodesSlot}, {3, primedSlot}}, descriptorSize));
+		std::vector<std::pair<uint32_t, RGL::HeapSlot>>{
+			{0, HeapSlot{headSlot}}, {1, HeapSlot{nodesSlot}}, {3, HeapSlot{primedSlot}}}, descriptorSize));
 
 	if (auto* lg = RLLogger::getInstance())
 		lg->info("izb: 开门 grid={} extent={}x{} head={}B nodes={}B（cascade-0 近场 v1，"

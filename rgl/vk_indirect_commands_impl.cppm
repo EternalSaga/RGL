@@ -74,14 +74,14 @@ void DgcCommands::createLayout() {
 	tokens[0].sType = VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_TOKEN_EXT;
 	tokens[0].type = VK_INDIRECT_COMMANDS_TOKEN_TYPE_EXECUTION_SET_EXT;
 	tokens[0].data.pExecutionSet = &execToken;
-	tokens[0].offset = 0;  // 2×u32：frag@0（FRAGMENT = LSB）/ mesh@4
+	tokens[0].offset = kCullSeqExecSlotFrag;  // 2×u32：frag@0（FRAGMENT = LSB）/ mesh@4
 	tokens[1].sType = VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_TOKEN_EXT;
 	tokens[1].type = VK_INDIRECT_COMMANDS_TOKEN_TYPE_PUSH_DATA_EXT;
 	tokens[1].data.pPushConstant = &pushToken;
-	tokens[1].offset = 8;  // DrawArgs（descriptor heap push 区，Phase 7b+ 起 4B）
+	tokens[1].offset = kCullSeqDrawArgs;  // DrawArgs（descriptor heap push 区，Phase 7b+ 起 4B）
 	tokens[2].sType = VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_TOKEN_EXT;
 	tokens[2].type = VK_INDIRECT_COMMANDS_TOKEN_TYPE_DRAW_MESH_TASKS_EXT;
-	tokens[2].offset = 108;  // VkDrawMeshTasksIndirectCommandEXT 12B
+	tokens[2].offset = kCullSeqMeshCmd;  // VkDrawMeshTasksIndirectCommandEXT 12B
 	VkIndirectCommandsLayoutCreateInfoEXT layoutInfo{};
 	layoutInfo.sType = VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_CREATE_INFO_EXT;
 	layoutInfo.flags = 0;
@@ -297,10 +297,10 @@ DgcStaticCommands::DgcStaticCommands(RGL::DeviceContext& vkDevice, const RGL::Sh
 	tokens[0].sType = VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_TOKEN_EXT;
 	tokens[0].type = VK_INDIRECT_COMMANDS_TOKEN_TYPE_PUSH_DATA_EXT;
 	tokens[0].data.pPushConstant = &pushToken;
-	tokens[0].offset = 8;  // DrawArgs（descriptor heap push 区，4B）
+	tokens[0].offset = kCullSeqDrawArgs;  // DrawArgs（descriptor heap push 区，4B）
 	tokens[1].sType = VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_TOKEN_EXT;
 	tokens[1].type = VK_INDIRECT_COMMANDS_TOKEN_TYPE_DRAW_MESH_TASKS_EXT;
-	tokens[1].offset = 108;  // VkDrawMeshTasksIndirectCommandEXT 12B
+	tokens[1].offset = kCullSeqMeshCmd;  // VkDrawMeshTasksIndirectCommandEXT 12B
 	VkIndirectCommandsLayoutCreateInfoEXT layoutInfo{};
 	layoutInfo.sType = VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_CREATE_INFO_EXT;
 	layoutInfo.flags = 0;

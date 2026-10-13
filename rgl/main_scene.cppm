@@ -734,7 +734,7 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 			cullEntries.push_back(CullEntry{
 				cull.center, cull.radius, meshRef.objectSlot, asset.pipelineIndex,
 				asset.groupCount, asset.triangleCount, asset.vertexOffset,
-				mat.baseColor, glm::vec2(mat.roughness, mat.metallic)});
+				mat.baseColor, roughnessMetallic(mat)});  // 字段序单源 = asset_table::roughnessMetallic
 		});
 	// 静态 shader DGC 路选路（spike，docs/archive/radv_static_dgc_spike.md）：IES 路缺席
 	// （非 graphicsIndirect）但全集含 MESH 且 diagnostics.dgcStatic 开 → per-entry 流

@@ -117,9 +117,9 @@ void MeshletCullService::createCullShader() {
 	// 槽，mesh 侧 binding 21 烘的也是同一个号 ⟹ 读写两侧天然一致。
 	// 「单份 buffer 跨帧复用」不是省事的选择，是这里的形状决定的（→ 类注释）。
 	cullShader = makeMappedCompute(device.getDevice(), "generated_shaders/meshlet_cull.comp.spv",
-	    std::vector<std::pair<uint32_t, uint32_t>>{
-	        {0, itemsSlot}, {1, clusterHeaderSlot}, {4, visibleBufferSlot},
-	        {23, objectMatrixSlot}},
+	    std::vector<std::pair<uint32_t, RGL::HeapSlot>>{
+	        {0, RGL::HeapSlot{itemsSlot}}, {1, RGL::HeapSlot{clusterHeaderSlot}},
+	        {4, RGL::HeapSlot{visibleBufferSlot}}, {23, RGL::HeapSlot{objectMatrixSlot}}},
 	    resources.getDescriptorHeap().getDescriptorSize());
 }
 

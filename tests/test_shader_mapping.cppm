@@ -1,8 +1,10 @@
 module;
 #include <doctest/doctest.h>
+#include <vulkan/vulkan.h>  // VK_DESCRIPTOR_MAPPING_SOURCE_* / VK_SPIRV_RESOURCE_TYPE_* 枚举常量（rlvk 只出类型不出这些）
 #include <fstream>
 #include <initializer_list>  // 范围 for / 聚合初始化的花括号列表（modules 下不从 import 带进来）
 #include <set>
+#include <stdexcept>  // std::runtime_error（容量边界用例的 catch 目标类型）
 #include <string>
 #include <vector>
 
@@ -35,6 +37,26 @@ module;
  *
  * 被测两个函数是**纯函数**（输入码流 + binding 形态，输出集合 / 条数），不要 VkDevice、不建任何
  * 设备对象 ⟹ 按分层判据（"这段逻辑需不需要一个 VkDevice 才能跑"）它属于无设备层。
+ *
+ * ## 债-13 追加两条（2026-10-14，编译期护栏之外的数值/边界判据）
+ *
+ * 单位换算（坑 5：heapOffset = 字节不是槽）与输出容量边界在实现侧已上强类型
+ * （shaderDetail::HeapByteOffset / slotBytes，传裸槽号 = 编译失败），本文件补**数值**与
+ * **边界**两条判据——强类型拦"忘乘"，这两条拦"乘错"（乘子/被乘数互换、stride 填错）
+ * 与"边界删了"。变异红线（逐条实测，2026-10-14）：
+ *   6. slotBytes 忘乘（实跑形态 `* (descriptorSize / descriptorSize)` 保留参数使用——
+ *      直接 `return {slot}` 撞 -Wunused-parameter，拿到的是"编译失败"不是"判据红"
+ *      → skill rgl-test-discipline 谓词类变异条）→ 「字节单位」用例红
+ *      （heapOffset 拿到 8 ≠ 512）。
+ *   7. extra 的 sampler 分支改走 slotBytes（单位互换）→ 同条用例红（binding 3 的
+ *      heapOffset 拿到 0 ≠ 96——正是 shader_registry_fullscreen.cppm 头注释 15.1 事故的
+ *      消费端形态：sampler 条目读了资源堆换算值）。
+ *   8. 资源侧 heapArrayStride 传 0（数组步进丢失）→ 同条用例红。
+ *   9. 容量守卫失效（实跑形态 `if (n >= out.size())` → `if (false)`，= 删守卫的等价
+ *      形态）→ 「容量边界」用例红（thrown 恒 false）。
+ *   10. 边界弱化成恒抛（条件写反）→ 「容量边界」的反向半红（capacity 恰好够也抛）。
+ * 期望值出处 = docs/DESCRIPTOR_HEAP_SPEC.md 坑 5 的 ✅ 例子（槽 8 × descriptorSize 64 =
+ * 字节 512），不抄被测码。
  */
 
 export module test_shader_mapping;
@@ -154,4 +176,59 @@ TEST_CASE("mapping_bake：烘的恰好是声明的（消费者侧条数；task �
 		CHECK(out[0].firstBinding == 0u);
 		CHECK(out[1].firstBinding == 3u);
 	}
+}
+
+TEST_CASE("mapping_bake：heapOffset/heapArrayStride 是字节单位（坑 5），资源槽与 sampler 字节两种单位各归各") {
+	// 期望值出处 = docs/DESCRIPTOR_HEAP_SPEC.md 坑 5 的 ✅ 例子（槽 8 × descriptorSize 64
+	// = 字节 512），不是被测码。slotVertex 取 8 而非 0/1：非平凡槽号下"字节当槽/槽当字节"
+	// 都不会碰巧相等（0 会让两种单位互换后仍绿 = 假绿输入形态）。
+	PipelineBindings bindings;
+	bindings.descriptorSize = 64;
+	bindings.slotVertex = 8;
+	// extra binding 3 = sampler 字节偏移形态（96 = 现成字节值，不再 ×64；heapSlot 留 0 =
+	// 故意留坑：实现若读错字段，heapOffset 会拿到 0 而不是 96）
+	bindings.extra = {PipelineExtraBinding{3, true, 0, 96}};
+
+	VkDescriptorSetAndBindingMappingEXT out[8]{};
+	const auto effect = makeWithTask();  // 声明 = {0,3} ⟹ 两种单位各烘恰好一条
+	const uint32_t n = bakeBindingMappings(effect, bindings, "units", out);
+	REQUIRE(n == 2);
+
+	// 资源堆侧（binding 0）：heapOffset = 8×64 = 512 **字节**（不是 8），stride = descriptorSize
+	CHECK(out[0].firstBinding == 0u);
+	CHECK(out[0].source == VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT);
+	CHECK(out[0].descriptorSet == 0u);
+	CHECK(out[0].bindingCount == 1u);
+	CHECK(out[0].resourceMask == VK_SPIRV_RESOURCE_TYPE_ALL_EXT);
+	CHECK(out[0].sourceData.constantOffset.heapOffset == 8u * 64u);
+	CHECK(out[0].sourceData.constantOffset.heapArrayStride == 64u);
+	// sampler 堆侧（binding 3）：字节偏移 96 **原样**进 heapOffset（不乘），stride = 0
+	//（单 sampler 无数组步进——envSampler 同形态；乘了 = 指到 heap 外）
+	CHECK(out[1].firstBinding == 3u);
+	CHECK(out[1].sourceData.constantOffset.heapOffset == 96u);
+	CHECK(out[1].sourceData.constantOffset.heapArrayStride == 0u);
+}
+
+TEST_CASE("mapping_bake：输出容量不足必须 throw 点名条目与 binding（边界守卫），恰好够不 throw（反向）") {
+	// 守卫本体 = bakeBindingMappings 的 `if (n >= out.size()) throw`（防 extra 加长时
+	// 静默越界写栈）。反向半边防"恒抛"变异：恰好够的容量必须正常返回。
+	PipelineBindings bindings;
+	bindings.descriptorSize = 64;
+	bindings.extra = {PipelineExtraBinding{3, false, 7, 0}};
+	const auto effect = makeWithTask();  // 声明 {0,3} ⟹ 恰好烘 2 条
+
+	VkDescriptorSetAndBindingMappingEXT fits[2]{};
+	CHECK(bakeBindingMappings(effect, bindings, "fits_exactly", fits) == 2);  // 不抛 = 本行能跑完
+
+	VkDescriptorSetAndBindingMappingEXT small[1]{};
+	bool thrown = false;
+	try {
+		bakeBindingMappings(effect, bindings, "overflow_entry", small);
+	} catch (const std::runtime_error& e) {
+		thrown = true;
+		const std::string msg{e.what()};
+		CHECK(msg.find("overflow_entry") != std::string::npos);  // 点名条目（批 M 同纪律）
+		CHECK(msg.find("binding 3") != std::string::npos);       // 点名无处放的那条
+	}
+	CHECK(thrown);  // 阳性锚点：守卫被删 = 这里不抛 = 红
 }

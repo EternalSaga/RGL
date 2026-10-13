@@ -1,5 +1,5 @@
 module;
-#include <vulkan/vulkan.h>  // VK_* 宏/C 函数（rlvk 不含宏）
+#include <vulkan/vulkan.h>  // VK_* 宏/C 函数（rlvk 不含宏）；offsetof 经其 stddef.h 提供（mip_gen_impl 先例）
 #include <vk_mem_alloc.h>   // VmaAllocationCreateInfo / VMA_MEMORY_USAGE_*（VmaRaii 的 C 面）
 #include <fmt/format.h>
 module evssm_shadow:impl;
@@ -18,19 +18,32 @@ namespace RGL {
 
 namespace {
 
-/** MomentsPush —— 与 evssm_moments.comp.slang 同名 struct 逐字段一致（12B）。 */
+/** MomentsPush —— 与 evssm_moments.comp.slang EvssmMomentsPush 逐字段一致（12B）。
+ *  期望值出处 = shader 侧字段手算（scalar block layout）：uint mapSize@0 + uint cols@4 +
+ *  float exponent@8 = 12B。债-12 护栏：任何一侧改字段/顺序而另一侧不动 = 编译失败。 */
 struct MomentsPush {
 	uint32_t mapSize;
 	uint32_t cols;
 	float exponent;
 };
+static_assert(sizeof(MomentsPush) == 12,
+	"MomentsPush 与 evssm_moments.comp.slang EvssmMomentsPush 漂移：uint mapSize@0 + uint cols@4 + float exponent@8 = 12B（scalar layout 手算）");
+static_assert(offsetof(MomentsPush, mapSize) == 0, "evssm_moments.comp.slang: mapSize @0");
+static_assert(offsetof(MomentsPush, cols) == 4, "evssm_moments.comp.slang: cols @4");
+static_assert(offsetof(MomentsPush, exponent) == 8, "evssm_moments.comp.slang: exponent @8（struct 尾 = 12B）");
 
-/** DownPush —— 与 evssm_downsample.comp.slang 同名 struct 逐字段一致（12B）。 */
+/** DownPush —— 与 evssm_downsample.comp.slang EvssmDownPush 逐字段一致（12B）。
+ *  期望值出处 = shader 侧字段手算：uint level@0 + uint cols@4 + uint baseTileTexels@8 = 12B。 */
 struct DownPush {
 	uint32_t level;
 	uint32_t cols;
 	uint32_t baseTileTexels;
 };
+static_assert(sizeof(DownPush) == 12,
+	"DownPush 与 evssm_downsample.comp.slang EvssmDownPush 漂移：uint level@0 + uint cols@4 + uint baseTileTexels@8 = 12B（scalar layout 手算）");
+static_assert(offsetof(DownPush, level) == 0, "evssm_downsample.comp.slang: level @0");
+static_assert(offsetof(DownPush, cols) == 4, "evssm_downsample.comp.slang: cols @4");
+static_assert(offsetof(DownPush, baseTileTexels) == 8, "evssm_downsample.comp.slang: baseTileTexels @8（struct 尾 = 12B）");
 
 /** 全局 stage/access barrier（MemoryBarrier2 载体、无 image/memory 条目）：只建执行
  *  依赖，不碰布局（v357 头 VkDependencyInfo 无 stage 字段，stage/access 挂在 barrier
@@ -168,12 +181,13 @@ EvssmShadow::EvssmShadow(RGL::DeviceContext& vkDevice, RGL::Resources& vkResourc
 
 	// ── compute shader objects（binding→槽一对一，常量偏移映射）──
 	momentsShader = makeMappedCompute(dev, "generated_shaders/evssm_moments.comp.spv",
-		std::vector<std::pair<uint32_t, uint32_t>>{{0, shadowMapSlot}, {1, mipSlots[0]}}, descSize);
+		std::vector<std::pair<uint32_t, RGL::HeapSlot>>{
+			{0, HeapSlot{shadowMapSlot}}, {1, HeapSlot{mipSlots[0]}}}, descSize);
 	downShaders.reserve(mipLevels - 1);
 	for (uint32_t level = 1; level < mipLevels; ++level)
 		downShaders.push_back(makeMappedCompute(dev, "generated_shaders/evssm_downsample.comp.spv",
-			std::vector<std::pair<uint32_t, uint32_t>>{
-				{0, mipSlots[level - 1]}, {1, mipSlots[level]}}, descSize));
+			std::vector<std::pair<uint32_t, RGL::HeapSlot>>{
+				{0, HeapSlot{mipSlots[level - 1]}}, {1, HeapSlot{mipSlots[level]}}}, descSize));
 
 	if (auto* logger = RLLogger::getInstance())
 		logger->info("EvssmShadow: {}x{} RGBA16F x{} mip（GENERAL）| {} heap 槽 | 矩从 D32 派生（C 方案）",

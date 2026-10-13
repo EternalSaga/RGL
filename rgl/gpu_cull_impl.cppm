@@ -1,7 +1,7 @@
 module;
 #include <vulkan/vulkan.h>  // VK_* 宏/C 函数（rlvk 不含宏；C 头解析 ~0.4s）
 #include <vk_mem_alloc.h>  // VMA 分配类型（VmaRaii 不导出 C 层，各 impl 同款自含）
-#include <fmt/format.h>  // fmt::format（契约违例报错）
+#include <fmt/format.h>  // fmt::format（契约违例报错）；offsetof 经 vulkan.h 的 stddef.h 提供（mip_gen_impl 先例）
 module gpu_cull:impl;
 
 import gpu_cull;  // clang 不给 partition impl unit 隐式 import 主接口——必须显式
@@ -18,6 +18,22 @@ import VmaRaii;
 import material_types_generated;
 
 namespace RGL {
+
+namespace {
+
+/** FanoutPush —— 与 stream_fanout.comp.slang 同名 struct 逐字段一致（uint sequenceCount，
+ *  4B push data；recordFanoutDispatch 经 pushDataEXT 推出）。债-12 结构体化：原形态是裸
+ *  `uint32_t fanPush[1]`，无类型无断言；推出字节 = sequenceCount 的 4B 小端（改前后逐位
+ *  一致：sizeof/alignof/offsetof 三条断言钉死）。 */
+struct FanoutPush {
+	uint32_t sequenceCount;  // candidate 数（grid.x 上取整 64，尾线程守卫——kernel 头注释契约）
+};
+static_assert(sizeof(FanoutPush) == 4,
+	"FanoutPush 与 stream_fanout.comp.slang FanoutPush {{ uint sequenceCount; }} 漂移（4B push data，pushDataEXT 按 sizeof 推）");
+static_assert(offsetof(FanoutPush, sequenceCount) == 0,
+	"sequenceCount 必须在 @0（kernel 读 push.sequenceCount = push 区首 4B）");
+
+}  // namespace
 
 // 构造器 / recordCullPass / readCullResult 实现（契约见接口声明）。
 
@@ -206,16 +222,18 @@ void GpuCull::createCullShaders(vk::raii::Device& device) {
 	const uint32_t descriptorSize = resources.getDescriptorHeap().getDescriptorSize();
 
 	cullShader = makeMappedCompute(device, "generated_shaders/cull.comp.spv",
-		std::vector<std::pair<uint32_t, uint32_t>>{
-			{0, tableSlot}, {2, sequenceSlot}, {4, countSlot}, {23, objectMatrixSlot}},
+		std::vector<std::pair<uint32_t, RGL::HeapSlot>>{
+			{0, HeapSlot{tableSlot}}, {2, HeapSlot{sequenceSlot}}, {4, HeapSlot{countSlot}},
+			{23, HeapSlot{objectMatrixSlot}}},
 		descriptorSize);
 
 	// stream fanout shader object（静态 DGC 路；3 binding：0=table 1=sequences(ro) 2=streams(rw)，
 	// heap 映射同款模式——仅启用时建，docs/archive/radv_static_dgc_spike.md §3.3）
 	if (nEntryStreams > 0) {
 		fanoutShader = makeMappedCompute(device, "generated_shaders/stream_fanout.comp.spv",
-			std::vector<std::pair<uint32_t, uint32_t>>{
-				{0, tableSlot}, {1, sequenceSlot}, {2, streamsSlot}}, descriptorSize);
+			std::vector<std::pair<uint32_t, RGL::HeapSlot>>{
+				{0, HeapSlot{tableSlot}}, {1, HeapSlot{sequenceSlot}}, {2, HeapSlot{streamsSlot}}},
+			descriptorSize);
 	}
 }
 
@@ -232,11 +250,11 @@ void GpuCull::writeSequenceStaging(uint32_t slot, const std::vector<RGL::DrawArg
 		// 2j+1 = mesh；序列 @0 = frag 位（FRAGMENT = shaderStages LSB）、@4 = mesh 位
 		const uint32_t execFrag = 2 * entryTable[i].pipelineIndex;
 		const uint32_t execMesh = 2 * entryTable[i].pipelineIndex + 1;
-		std::memcpy(s, &execFrag, sizeof(uint32_t));
-		std::memcpy(s + 4, &execMesh, sizeof(uint32_t));
-		std::memcpy(s + 8, &args[i], sizeof(RGL::DrawArgs));  // DrawArgs @8（4B 仅 objectIndex，Phase 7b+ bindless 化；mvp/材质字段走 scene data 表）
+		std::memcpy(s + kCullSeqExecSlotFrag, &execFrag, sizeof(uint32_t));
+		std::memcpy(s + kCullSeqExecSlotMesh, &execMesh, sizeof(uint32_t));
+		std::memcpy(s + kCullSeqDrawArgs, &args[i], sizeof(RGL::DrawArgs));  // DrawArgs @8（4B 仅 objectIndex，Phase 7b+ bindless 化；mvp/材质字段走 scene data 表）
 		const uint32_t meshCmd[3] = {entryTable[i].groupCount, 1, 1};
-		std::memcpy(s + 108, meshCmd, sizeof(meshCmd));  // meshCmd @108 基值（GPU 覆盖 x）
+		std::memcpy(s + kCullSeqMeshCmd, meshCmd, sizeof(meshCmd));  // meshCmd @108 基值（GPU 覆盖 x）
 	}
 }
 
@@ -389,9 +407,9 @@ void GpuCull::recordFanoutDispatch(vk::raii::CommandBuffer& cmd) {
 	std::array<vk::ShaderStageFlagBits, 1> fanStages = {vk::ShaderStageFlagBits::eCompute};
 	std::array<vk::ShaderEXT, 1> fanHandles = {*fanoutShader};
 	cmd.bindShadersEXT(fanStages, fanHandles);
-	const uint32_t fanPush[1] = {nCandidates};  // FanoutPush.sequenceCount（kernel 头注释契约）
+	const FanoutPush fanPush{nCandidates};  // 契约 = stream_fanout.comp.slang FanoutPush（断言见本文件匿名段）
 	cmd.pushDataEXT(vk::PushDataInfoEXT(0, vk::HostAddressRangeConstEXT(
-		reinterpret_cast<const std::byte*>(fanPush), sizeof(fanPush))));
+		reinterpret_cast<const std::byte*>(&fanPush), sizeof(fanPush))));
 	cmd.dispatch((nCandidates + 63) / 64, nEntryStreams, 1);
 }
 
@@ -402,7 +420,7 @@ uint32_t GpuCull::readCullResult(uint32_t slot) {
 	uint32_t visible = 0;
 	for (uint32_t i = 0; i < nCandidates; ++i) {
 		const auto* s = readbackSeqPtr[slot] + static_cast<size_t>(i) * kCullSequenceStride;
-		const uint32_t x = *reinterpret_cast<const uint32_t*>(s + 108);  // meshCmd.x@108
+		const uint32_t x = *reinterpret_cast<const uint32_t*>(s + kCullSeqMeshCmd);  // meshCmd.x@108
 		visibleFlags[i] = (x != 0);
 		visible += (x != 0);
 	}

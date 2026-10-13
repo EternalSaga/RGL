@@ -33,6 +33,18 @@ loadShaderSpv(const std::string& filename) {
 }
 
 /**
+ * descriptor heap **槽号**的强类型包装（债-13 护栏，docs/DESCRIPTOR_HEAP_SPEC.md 坑 5：
+ * `heapOffset`/`heapArrayStride` 单位是**字节**不是 slot——把槽号当字节偏移传 = 静默读错
+ * 槽，VVL 一条都抓不到）。**无 uint32_t 隐式转换**：调用点必须写 `HeapSlot{slot}` 显式
+ * 声明"我传的是槽号"，槽→字节的乘法只发生在换算现场（makeMappedCompute 内 /
+ * shaderDetail::slotBytes）。命名同纪律：`slotXxx` 字段 = 槽、`xxxOffset` 字段 = 字节。
+ * 拦住的真实错法 = 把 `slot * descriptorSize` 的乘积再喂进"槽号"参数（乘两次）。
+ */
+export struct HeapSlot {
+	uint32_t slot;
+};
+
+/**
  * heap 映射的 compute shader object：binding→heap 槽一对一。
  *
  * push constant 无需映射条目——descriptor heap 下 push data 区自动供给（vkCmdPushDataEXT）。
@@ -40,13 +52,14 @@ loadShaderSpv(const std::string& filename) {
  *
  * @param dev            逻辑设备
  * @param spvPath        .spv 路径（相对 CWD，即 build/rgl/）
- * @param bindingToSlot  (binding, heap 槽) 对列表；binding 不必连续
- * @param descriptorSize descriptor heap 的槽大小
+ * @param bindingToSlot  (binding, 槽号) 对列表；binding 不必连续。🔴 第二元 = **槽号**
+ *                       （HeapSlot 强类型，坑 5 护栏），×descriptorSize 的换算在本函数内
+ * @param descriptorSize resource heap 的槽大小（字节）
  * @throw std::runtime_error SPV 加载失败
  */
 export [[nodiscard]] vk::raii::ShaderEXT
 makeMappedCompute(vk::raii::Device& dev, const std::string& spvPath,
-	std::span<const std::pair<uint32_t, uint32_t>> bindingToSlot,
+	std::span<const std::pair<uint32_t, HeapSlot>> bindingToSlot,
 	uint32_t descriptorSize) {
 	auto spvResult = loadShaderSpv(spvPath);
 	if (!spvResult)
@@ -55,7 +68,7 @@ makeMappedCompute(vk::raii::Device& dev, const std::string& spvPath,
 
 	std::vector<VkDescriptorSetAndBindingMappingEXT> mappings;
 	mappings.reserve(bindingToSlot.size());
-	for (const auto& [binding, slot] : bindingToSlot) {
+	for (const auto& [binding, heapSlot] : bindingToSlot) {
 		VkDescriptorSetAndBindingMappingEXT m{};
 		m.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
 		m.descriptorSet = 0;
@@ -63,7 +76,7 @@ makeMappedCompute(vk::raii::Device& dev, const std::string& spvPath,
 		m.bindingCount = 1;
 		m.resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
 		m.source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
-		m.sourceData.constantOffset.heapOffset = slot * descriptorSize;
+		m.sourceData.constantOffset.heapOffset = heapSlot.slot * descriptorSize;  // 槽→字节换算现场（坑 5）
 		m.sourceData.constantOffset.heapArrayStride = descriptorSize;
 		mappings.push_back(m);
 	}
@@ -464,6 +477,22 @@ export inline ShaderObjectStats shaderObjectStats() {
 /** RenderPipeline 的内部拼装细节（不导出：只服务本模块的构造函数）。 */
 namespace shaderDetail {
 	/**
+	 * heap **字节偏移**（heapOffset 终值）的强类型载体（债-13 护栏，坑 5：heapOffset
+	 * 单位 = 字节）。bakeBindingMappings 的 add() 只收本类型 ⟹「忘乘 descriptorSize
+	 * 直接把槽号传进 heapOffset」= 编译失败（原形态是裸 uint32_t，槽/字节同型可互换，
+	 * shader_registry_fullscreen.cppm 头注释记的 15.1 sampler 偏移事故即此族）。
+	 * 资源堆槽走 slotBytes()（乘法在唯一一处），sampler 堆字节偏移走显式聚合初始化
+	 * ——两种单位在 add() 边界上必须各自表态。
+	 */
+	export struct HeapByteOffset {
+		vk::DeviceSize bytes;
+	};
+	/** 资源堆槽号 → 字节偏移（坑 5 的「×descriptorSize」唯一合法拼写）。 */
+	export inline HeapByteOffset slotBytes(uint32_t slot, uint32_t descriptorSize) {
+		return {static_cast<vk::DeviceSize>(slot) * descriptorSize};
+	}
+
+	/**
 	 * 拼一份 shader object 的 createInfo（★M-3T-a，docs/mdi_plan.md §19.16）。
 	 *
 	 * 抽出来的理由很实在：task 可选之后 stage 有 2~3 段同构拼装，各写一遍会把 RenderPipeline
@@ -561,7 +590,10 @@ namespace shaderDetail {
 		const auto declared = declaredBindingsUnion(effect, debugName);
 		const bool filter = declared.has_value();  // nullopt = 有 stage 解析失败 = 恒烘（= 批 M 前行为）
 		uint32_t n = 0;
-		const auto add = [&](uint32_t firstBinding, vk::DeviceSize heapOffset,
+		// 🔴 heapOffset 参数 = HeapByteOffset 强类型（坑 5 护栏）：资源堆槽一律经
+		// slotBytes()（×descriptorSize 的唯一拼写处），sampler 堆字节偏移显式包装——
+		// 传裸槽号进本 lambda = 编译失败，不是 review 意见。
+		const auto add = [&](uint32_t firstBinding, HeapByteOffset heapOffset,
 			vk::DeviceSize arrayStride) {
 			// 批 M：SPV 没声明的 binding 不烘（解析失败时 filter 关 = 恒烘，行为 = 批 M 前）
 			if (filter && !declared->contains(firstBinding))
@@ -577,13 +609,13 @@ namespace shaderDetail {
 			m.bindingCount = 1;
 			m.resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
 			m.source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
-			m.sourceData.constantOffset.heapOffset = heapOffset;
+			m.sourceData.constantOffset.heapOffset = heapOffset.bytes;
 			m.sourceData.constantOffset.heapArrayStride = arrayStride;
 		};
 
-		add(0, bindings.slotVertex * descriptorSize, descriptorSize);
+		add(0, slotBytes(bindings.slotVertex, descriptorSize), descriptorSize);
 		// binding 1：非纹理形态 = 索引 slot；纹理形态 = SAMPLED_IMAGE 描述符槽（resource heap）
-		add(1, (bindings.textured ? bindings.slotTexture : bindings.slotIndex) * descriptorSize,
+		add(1, slotBytes(bindings.textured ? bindings.slotTexture : bindings.slotIndex, descriptorSize),
 			descriptorSize);
 		if (bindings.textured) {
 			// OpTypeSampler 映射：sampler heap 槽（字节偏移，共享一份 sampler 描述符）。
@@ -591,7 +623,7 @@ namespace shaderDetail {
 			// sampler heap 偏移写 heapOffset（"mapped resource or sampler"）；samplerHeapOffset
 			// 字段仅组合 image sampler 用（:1671-1674）——2026-08-27 交叉测试定位的字段误用
 			//（spike 首版同款，docs/archive/heap_texture_research.md §九.2 根因 2）
-			add(2, bindings.samplerHeapOffset, 0);
+			add(2, HeapByteOffset{bindings.samplerHeapOffset}, 0);
 		}
 		if (bindings.hasSceneData) {
 			// scene data 各载体（binding 号 = §9.5 定案表）。**hasSceneData 一律全带上、不在
@@ -610,18 +642,19 @@ namespace shaderDetail {
 				{23, bindings.slotObjectMatrices}, {25, bindings.slotObjectMVPs},
 				{26, bindings.slotObjectDraws}, {33, bindings.slotObjectClusterRanges}};
 			for (const auto& [regionBinding, regionSlot] : sceneRegions)
-				add(regionBinding, regionSlot * descriptorSize, descriptorSize);
+				add(regionBinding, slotBytes(regionSlot, descriptorSize), descriptorSize);
 		}
 		if (bindings.hasEnv) {
 			// Phase 5.5：binding 4 → env cubemap（resource heap SAMPLED_IMAGE 槽）；
 			// binding 5 → sky sampler（sampler heap 字节偏移，OpTypeSampler 映射规则同 binding 2）
-			add(4, bindings.slotEnv * descriptorSize, descriptorSize);
-			add(5, bindings.envSamplerHeapOffset, 0);
+			add(4, slotBytes(bindings.slotEnv, descriptorSize), descriptorSize);
+			add(5, HeapByteOffset{bindings.envSamplerHeapOffset}, 0);
 		}
 		// Phase 7 D1：追加映射（light pass 采样 G-buffer 4 RT + sampler 等），running index 续 base
 		for (const auto& e : bindings.extra)
 			add(e.binding,
-				e.sampler ? e.samplerHeapOffset : descriptorSize * e.heapSlot,
+				e.sampler ? HeapByteOffset{e.samplerHeapOffset}
+				          : slotBytes(e.heapSlot, descriptorSize),
 				e.sampler ? 0 : descriptorSize);
 		return n;
 	}

@@ -693,7 +693,7 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 			draw.totalTriangles = asset.triangleCount;
 			draw.vertexOffset = asset.vertexOffset;  // 拼接 buffer 内块字节偏移（Phase 4 批次 2）
 			draw.baseColor = mat.baseColor;
-			draw.roughnessMetallic = {mat.roughness, mat.metallic};  // Phase 5 接线（pbr frag 消费；10.2a 单源化 = 生成 ObjectDraw.vec2）
+			draw.roughnessMetallic = roughnessMetallic(mat);  // Phase 5 接线（pbr frag 消费；字段序单源 = asset_table::roughnessMetallic）
 			// Phase 8 ③：自发光 xyz=factor；Phase 8 C1：w = MASK alphaCutoff（alphaDiscard：
 			// w>0 且 alpha<w 才丢；非 MASK 写 0 = 恒不测，逐位不变）
 			draw.emissive = glm::vec4(mat.emissive, mat.alphaModeMask ? mat.alphaCutoff : 0.0f);

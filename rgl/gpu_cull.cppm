@@ -49,6 +49,26 @@ static_assert(sizeof(CullEntry) == 60, "CullEntry layout drifted from cull.comp.
  * DGC 路消费（值 = 2×pipelineIndex / 2×pipelineIndex+1，execution set 下标约定见
  * vk_indirect_commands.cppm）。≤ RADV maxIndirectCommandsIndirectStride 2048。 */
 export inline constexpr uint32_t kCullSequenceStride = 120;
+/**
+ * 序列行内字段字节偏移（债-12 护栏：C++ 侧唯一拼写处——writeSequenceStaging 写基值、
+ * readCullResult 读 meshCmd.x、vk_indirect_commands_impl 两条 layout 的 token.offset
+ * 全部引用本组常量，不再各写裸字面量 0/4/8/108）。
+ * 🔴 契约的另一半拼写在 shader 侧字面量：cull.comp.slang `kSequenceStride = 120u` 与
+ * `+108u`（meshCmd.x 覆盖点）、stream_fanout.comp.slang `kSequenceStride = 120u` 与
+ * `8u..120u` 拷贝段。本表不接反射管线（CullEntry 先例），跨侧漂移靠下面三条
+ * static_assert 拦 C++ 侧单边改动 + 两侧注释互指（改任一偏移 = 必须同步改两个
+ * .slang 并重跑 just smoke，本组红线 = shader 不动）。
+ */
+export inline constexpr uint32_t kCullSeqExecSlotFrag = 0;  ///< u32 = 2×pipelineIndex（EXECUTION_SET token 第 1 位 = FRAGMENT，shaderStages 位 LSB）
+export inline constexpr uint32_t kCullSeqExecSlotMesh = 4;  ///< u32 = 2×pipelineIndex+1（token 第 2 位 = MESH）
+export inline constexpr uint32_t kCullSeqDrawArgs = 8;  ///< DrawArgs 4B（@8..108 槽区保留 100B 宽度，余 96B 空置不写）
+export inline constexpr uint32_t kCullSeqMeshCmd = 108;  ///< VkDrawMeshTasksIndirectCommandEXT 12B（CPU 写基值，GPU 覆盖 x）
+static_assert(kCullSeqExecSlotFrag + 4 == kCullSeqExecSlotMesh && kCullSeqExecSlotMesh + 4 == kCullSeqDrawArgs,
+	"cull 序列 execSlot 2×u32 @0/@4 与 DrawArgs@8 的相邻契约漂移（另一半 = cull.comp.slang 头注释 sequences 布局 + vk_indirect_commands EXECUTION_SET token 读 2 连续 u32）");
+static_assert(kCullSeqMeshCmd + sizeof(VkDrawMeshTasksIndirectCommandEXT) == kCullSequenceStride,
+	"meshCmd 12B 必须恰好收尾于 stride 末端：stride 的另一半拼写在 cull.comp.slang / stream_fanout.comp.slang 的 kSequenceStride = 120u 字面量（改本断言任一常量 = 两个 shader 同步改 + just smoke 重验）");
+static_assert(sizeof(RGL::DrawArgs) <= kCullSeqMeshCmd - kCullSeqDrawArgs,
+	"DrawArgs 超出 @8..108 的 100B 保留槽区 = 序列布局契约破裂（DrawArgs 是反射生成物，4B 契约见 tests/test_reflection_layout.cppm 组 2；DGC PUSH_DATA token 按 sizeof(DrawArgs) 推）");
 /** count buffer 字节数（@0 保留未用——旧 visible atomicAdd 无人清零已删，2026-09-15
  * | @4 total 每帧 thread0 写；64B 对齐留白）。 */
 export inline constexpr uint32_t kCullCountBytes = 64;
