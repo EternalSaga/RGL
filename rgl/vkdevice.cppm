@@ -180,18 +180,9 @@ export class DeviceContext {
 	vk::Queue getGraphicsQueue() const { return graphicsQueue; }
 	/** @return 图形队列 family 下标（QueueFamilyManager 派生；Phase 10 imgui 后端 init 等按值场景）。 */
 	uint32_t getGraphicsQueueFamily() const { return queueManager.getFamilyIndex(RGL::QueueFamilyRole::Graphics); }
-	/** @return 计算队列（C 句柄，按值）；保留给未来使用，当前未用（见 AGENTS.md 已知问题）。 */
-	vk::Queue getComputeQueue() const { return computeQueue; }
-	/** @return 传输队列（C 句柄，按值）；保留给未来使用，当前未用（见 AGENTS.md 已知问题）。 */
-	vk::Queue getTransferQueue() const { return transferQueue; }
 	/** @return 图形命令池（const 引用；eResetCommandBuffer）；主渲染（Renderer）/ 资产
 	 * 上传（模型 / 纹理）的命令缓冲分配与录制。 */
 	const vk::raii::CommandPool& getGraphicsCommandPool() const { return graphicsCommandPool; }
-	/** @return 计算命令池（const 引用；eResetCommandBuffer）；保留给未来使用，当前未用。 */
-	const vk::raii::CommandPool& getComputeCommandPool() const { return computeCommandPool; }
-	/** @return 传输命令池（const 引用；eTransient | eResetCommandBuffer）；保留给未来
-	 * 使用，当前未用。 */
-	const vk::raii::CommandPool& getTransferCommandPool() const { return transferCommandPool; }
 	/** @return 队列 family 管理器引用（非 const / const 两重载，同一对象）；Swapchain
 	 * 用它做 checkPresentAbility 等。 */
 	RGL::QueueFamilyManager& getQueueManager() { return queueManager; }

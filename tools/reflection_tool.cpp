@@ -13,12 +13,15 @@ import rllogger;
 import schema_loader;
 import validator;
 import generator;
-import slang_reflect;
+#ifdef RGL_TOOLS_WITH_SLANG
+import slang_reflect;  // 债-25：Slang C API 面——库缺失时不登记（tools/CMakeLists.txt）
+#endif
 
 namespace po = boost::program_options;
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 
+#ifdef RGL_TOOLS_WITH_SLANG
 // SLANG_FLAGS 缺省值：与 rgl/CMakeLists.txt 逐字一致（CMake 恒显式传 --flags 覆盖，
 // 此处缺省仅供 CLI 手跑；-fvk-use-scalar-layout 是布局关键，不可省）。
 static const std::vector<std::string> kDefaultSlangFlags = {
@@ -28,6 +31,7 @@ static const std::vector<std::string> kDefaultSlangFlags = {
 	"-fvk-use-scalar-layout",
 	"-no-codegen",
 };
+#endif
 
 static void printUsage() {
 	auto* logger = RGL::RLLogger::getInstance();
@@ -72,6 +76,7 @@ int main(int argc, char* argv[]) {
 
 		// slang 子命令不消费 JSON（直接链接 libslang.so 查 API）
 		if (command == "slang") {
+#ifdef RGL_TOOLS_WITH_SLANG
 			if (shaderPaths.empty()) {
 				logger->error("--shader is required for 'slang'");
 				return 1;
@@ -162,6 +167,12 @@ int main(int argc, char* argv[]) {
 			out << *cppm;
 			logger->info("[OK] Generated {} (slang API path)", outputPath);
 			return 0;
+#else
+			// 债-25：configure 未找到 Slang C API 库时的可归因出口（编译面已剔除 slang_reflect）
+			logger->error("'slang' 子命令不可用：本构建未链接 Slang C API（SLANG_PREBUILT_DIR "
+				"缺失或不完整）。Linux 先 just config 触发 FetchContent 再 just reflect（债-25）");
+			return 1;
+#endif
 		}
 
 		// validate / generate / render 走 JSON 路径

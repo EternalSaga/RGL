@@ -669,8 +669,32 @@ std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer& rende
 		pickingTick(rg);
 
 		// 脚本化输入探针（2026-09-28 输入链回归护栏；配置门控，默认关 = 早退零开销）
-		uiClickProbeTick();
-		cameraProbeTick(rg);
+		// 债-27：input_probe 住 rlbase 不认识 SDL，合成事件在此适配成 SDL_Event 入队
+		// （SDL3 include 面归属 = 拥有该 TU 的库层，见 rgl/CMakeLists.txt 头注释）
+		auto pushProbeEvent = [](const ProbeEvent& e) {
+			SDL_Event ev{};
+			switch (e.kind) {
+				case ProbeEventKind::KeyDown:
+					ev.type = SDL_EVENT_KEY_DOWN;
+					ev.key.key = e.key;
+					break;
+				case ProbeEventKind::KeyUp:
+					ev.type = SDL_EVENT_KEY_UP;
+					ev.key.key = e.key;
+					break;
+				case ProbeEventKind::MouseLeftDown:
+				case ProbeEventKind::MouseLeftUp:
+					ev.type = e.kind == ProbeEventKind::MouseLeftDown
+						? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
+					ev.button.button = SDL_BUTTON_LEFT;
+					ev.button.x = static_cast<Sint32>(e.x);
+					ev.button.y = static_cast<Sint32>(e.y);
+					break;
+			}
+			SDL_PushEvent(&ev);
+		};
+		uiClickProbeTick(pushProbeEvent);
+		cameraProbeTick(rg, pushProbeEvent);
 
 		float ticks = static_cast<float>(SDL_GetTicks());
 		// dt 限幅：窗口卡顿/切后台回来时防止相机瞬移

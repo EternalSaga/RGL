@@ -5,12 +5,15 @@
 # ─── 变量定义 ──────────────────────────────────────────────────────────────────
 # just 启动时急切求值所有 backtick——必须用两个平台都能执行的命令
 # 使用 cmd.exe /c 在 Windows 上执行，sh -c 在 Linux 上执行
+# 机器相关参数走环境变量（债-29，三机轮换）：VCPKG_ROOT 未设时 Windows 落回
+# E:/program/vcpkg（原硬编码值 = 默认，不设也不走错路）；Linux 落回 PATH 上的 vcpkg。
 WORKSPACE := `python -c "import os; print(os.getcwd())"`
 BUILD := WORKSPACE / "build"
-VCPKG_DIR := `python -c "import os,shutil; print('E:/program/vcpkg' if os.name=='nt' else (os.environ.get('VCPKG_ROOT') or (os.path.dirname(shutil.which('vcpkg')) if shutil.which('vcpkg') else '')))"`
+VCPKG_DIR := `python -c "import os,shutil; w=shutil.which('vcpkg'); print(os.environ.get('VCPKG_ROOT') or ('E:/program/vcpkg' if os.name=='nt' else (os.path.dirname(w) if w else '')))"`
 LLVM_DIR := `python -c "import os; print('C:/Program Files/LLVM' if os.name=='nt' else '')"`
 NPROC := `python -c "import os; print(os.cpu_count() or 4)"`
-NINJA_EXE := `python -c "import os; p='E:/program/vcpkg/downloads/tools/ninja/1.13.1-windows/ninja.exe'; print(p if os.path.isfile(p) else 'ninja')"`
+# vcpkg 自带 ninja 的路径随 VCPKG_ROOT 走（同根派生，不另设第二个硬编码）；找不到落回 PATH 上的 ninja（原语义）
+NINJA_EXE := `python -c "import os; root=os.environ.get('VCPKG_ROOT') or 'E:/program/vcpkg'; p=os.path.join(root,'downloads','tools','ninja','1.13.1-windows','ninja.exe'); print(p if os.path.isfile(p) else 'ninja')"`
 
 # ─── CMake 配置 ───────────────────────────────────────────────────────────────
 # 用法:
@@ -318,7 +321,8 @@ run-igpu:
     fi; \
     (cd {{ BUILD }}/rgl && VK_DRIVER_FILES="$RADV_ICD" ./rgl)
 
-# 独显运行（Linux NVIDIA prime offload；PROVIDER=3 为本机 dGPU 的 offload provider 编号）
+# 独显运行（Linux NVIDIA prime offload；provider 编号绑机器——默认 3 = 本机 dGPU 的
+# offload provider 编号，换机用 RGL_DGPU_PROVIDER 覆盖，债-29 三机轮换）
 # 必须用 VK_DRIVER_FILES 隐藏 radeon ICD —— prime offload 环境变量对 Vulkan 设备枚举无过滤作用
 # （实测：NV_optimus 层激活后设备列表仍是 iGPU+dGPU 两个，选择完全取决于应用内打分器）
 run-dgpu:
@@ -330,7 +334,7 @@ run-dgpu:
     fi; \
     (cd {{ BUILD }}/rgl && VK_DRIVER_FILES="$NV_ICD" \
         __NV_PRIME_RENDER_OFFLOAD=1 \
-        __NV_PRIME_RENDER_OFFLOAD_PROVIDER=3 \
+        __NV_PRIME_RENDER_OFFLOAD_PROVIDER="${RGL_DGPU_PROVIDER:-3}" \
         __GLX_VENDOR_LIBRARY_NAME=zink \
         __VK_LAYER_NV_optimus=NVIDIA_only \
         ./rgl)

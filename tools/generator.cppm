@@ -9,7 +9,9 @@ export module generator;
 import rlstd;
 import rllogger;
 import schema_loader;
-import slang_reflect;
+#ifdef RGL_TOOLS_WITH_SLANG
+import slang_reflect;  // 债-25：Slang C API 面——库缺失时本模块不登记（tools/CMakeLists.txt）
+#endif
 
 namespace RGL {
 
@@ -292,6 +294,9 @@ export std::string renderTemplate(const nlohmann::json& data,
 
 // ─── Slang C API 反射生成（替代 JSON 中间层，见 docs/archive/slang_api_reflection_research.md）───
 // 交叉校验：API 实查布局（编译器真值）vs schema 声明（期望值）。不等 = 漂移，致命。
+// 债-25：整段住 RGL_TOOLS_WITH_SLANG 条件编译面（Slang C API 库缺失时 slang_reflect
+// 不登记，本段随之退出——validate/generate/render 三个 JSON 子命令不受影响）。
+#ifdef RGL_TOOLS_WITH_SLANG
 
 // vertexLayout 交叉校验：size==stride + 逐属性 name/offset/cppType 一致。
 // contractStructs = 本次 schema 的 vertexLayouts 名单（嵌套契约 struct 名的合法判据，
@@ -450,5 +455,6 @@ export std::optional<std::string> generateCppmFromSlang(const std::vector<SlangS
 	logger->debug("inja rendered (slang API path), {} bytes", result.size());
 	return result;
 }
+#endif  // RGL_TOOLS_WITH_SLANG
 
 }  // namespace RGL
