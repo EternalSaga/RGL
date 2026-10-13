@@ -1521,7 +1521,7 @@ fallback)` → 逐 prim `(start, count, level, triangles)` + 聚合锚 + **`cost
    `c>=1`→`c>=2`（c1 静默退回旧路径）→ 红 3；**MB** `start`↔`count` 字段互换 → 红 1（只被
    collect 侧抓到，emit 侧用例吃手搭候选 = 测试文件已明写的缺口）；**MC** `objectIndex`
    off-by-one → 红 3；**MD** task 数取错字段（拿旧 `groupCount` 当簇数）→ 红 2。四条还原后基线全绿。
-8. **AGENTS 红线**：`cull_replay` 三档（`cpu`/`gpu_sync`/`gpu_lagged`）× `--sync` syncval 全部
+8. **cull 三档红线**（门形与"非默认档必须单独冒烟 + syncval"的口径 → `docs/cpu_perf_plan.md` §4.1/§4.4）：`cull_replay` 三档（`cpu`/`gpu_sync`/`gpu_lagged`）× `--sync` syncval 全部
    errors=0 / hazard=0。`just build` / `test`（376 passed）/ `checks --strict` / `shader-dep --strict`
    零新增。
 9. 🔴 **本批抓到一条静默失效（已修）**：`meshlet.shadow_lod = 5` 而 `meshlet.enable = false` 时

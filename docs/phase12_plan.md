@@ -145,7 +145,7 @@ DEFER（跨机）= **0 条**——DGC/NVIDIA 系列全是硬件观察或已闭�
 - D3 方案：字节锚点 → **每机登记表**（`imgqa selftest --record-anchor` 生成该机
   anchors 文件 + 闭式解 vs 实测容差 ±2 LSB）；无登记表的新机器降级为容差模式
   （闭式解 vs 实测 ≤2 LSB 即绿），**不是**把本机字节硬编码搬来判红。
-  容差理由要写：跨驱动 float32 FMA 收缩序无位级契约（AGENTS.md 已知问题节同款论据）。
+  容差理由要写：跨驱动 float32 FMA 收缩序无位级契约（`rgl/shaders/cull.comp.slang` 注记同款论据）。
 - D8：imgqa 加 CMake 开关（如 `RGL_BUILD_IMGQA`，Windows 默认关到有首编实测）。
 - **验收**：NVIDIA 机与 Intel 机上 attribution + faces 绿（容差模式）；
   Windows 至少 configure+imgqa 编译通过。

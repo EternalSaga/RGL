@@ -4,8 +4,8 @@
 - text_checks：A3 分层零 entt + 点名禁止 import 边 + 模块优先（rgl/ 禁 .h/.hpp/.hh、
   .cpp 白名单、禁内部头 #include "）+ GMF STL 白名单 + 模块结构四条
 - modern_cpp_checks / docs_status_checks / forbidden_vulkan_checks /
-  agents_doc_index_checks / doc_pointer_checks：见各自 docstring 与
-  docs/风格检查规则.md §1–§2
+  agents_doc_index_checks / agents_index_status_checks / doc_pointer_checks：见各自
+  docstring 与 docs/风格检查规则.md §1–§2
 """
 
 import json
@@ -13,7 +13,8 @@ import re
 from pathlib import Path
 from typing import NamedTuple
 
-from config import (ALLOWED_CPP, AGENTS_FILE, AGENTS_INDEX_EXEMPT_DIRS,
+from config import (ALLOWED_CPP, AGENTS_DOC_INDEX_SECTION, AGENTS_FILE,
+                    AGENTS_INDEX_EXEMPT_DIRS, AGENTS_INDEX_STATUS_WORDS,
                     DOC_POINTER_BARE_EXTS, DOC_POINTER_BASELINE_COMMENT,
                     DOC_POINTER_BASELINE_FILE, DOC_POINTER_EXAMPLE_FILES,
                     DOC_POINTER_IMGQA_CLI_TABLE, DOC_POINTER_JUSTFILE,
@@ -1025,4 +1026,61 @@ def slang_load_bitcast_checks() -> list[Warning]:
                 warnings.append(Warning(rel, lineno,
                     "ByteAddressBuffer.Load 返回 uint 位模式——floatN 裸赋值会被 slang "
                     "降低成 ConvertUToF（数值转换非位转，静默出错）；须 asfloat(buf.Load…)"))
+    return warnings
+
+
+# ─── AGENTS「其他文档」条目禁状态摘要（§1.9）──────────────────────────────────
+
+_AGENTS_SECTION_HEAD_RX = re.compile(
+    rf"^## {re.escape(AGENTS_DOC_INDEX_SECTION)}[^\n]*\n", re.M)
+_AGENTS_DATE_RX = re.compile(r"20\d{2}-\d{2}-\d{2}")
+_AGENTS_BATCH_RX = re.compile(r"批\s*\d+(?:\.\d+)?")
+
+
+def agents_index_status_checks() -> list[Warning]:
+    """AGENTS「其他文档」的**索引条目**里不得出现日期 / 批次号 / 进度状态词。
+
+    **立论**：本节第一句就写「每篇文档头部带状态」，条目里再写一遍 = 给同一个状态开第二份副本，
+    而副本必然漂——推进文档的人不会记得同步 AGENTS，**漏一次就永久错**。实测抓到两条已漂且方向
+    是误导：一条把文档明写的「非反转」写成「已反转」，一条把已恢复推进的轴写成「挂起」。
+    §1.6 只对账**文件名** ⟹ 加挂号有构建奖励、摘要过期零惩罚 = 单向棘轮。本条把「摘要会漂」
+    从节规变成机器判据（判据不判"该不该写这条"，只判"是不是状态副本"）。
+
+    **判定**（warning 级）：本节 bullet 行命中 ① `20YY-MM-DD` ② `批 N[.M]` ③
+    `config.AGENTS_INDEX_STATUS_WORDS` 任一项。**`>` 引言块豁免**——那里是规则说明区，写日期
+    属于论证不属于状态（本节自己的「教训写哪（2026-10-08 换轨…）」就是这条豁免的活体反向用例：
+    它必须恒为静默）。
+
+    **失效出声**（error 级）：AGENTS 读不到 / 找不到本节 ⟹ 本节被改名或删掉会让护栏**静默变瞎**，
+    而"零警告"会被读成"摘要干净"（同 §1.6 / §5 / §8 的取向）。
+    """
+    agents = read_text(Path(ROOT) / AGENTS_FILE)
+    if agents is None:
+        return [Warning(AGENTS_FILE, 1,
+            f"读不到 {AGENTS_FILE}——索引状态摘要检查**无法执行**（这不是「摘要干净」）", "error")]
+    head = _AGENTS_SECTION_HEAD_RX.search(agents)
+    if head is None:
+        return [Warning(AGENTS_FILE, 1,
+            f"找不到「## {AGENTS_DOC_INDEX_SECTION}」节——本节被改名/删除会让本规则静默变瞎，"
+            "要么把节改回来、要么同步 config.AGENTS_DOC_INDEX_SECTION", "error")]
+    body = agents[head.end():]
+    nxt = re.search(r"^## ", body, re.M)
+    if nxt:
+        body = body[:nxt.start()]
+    head_line = agents[:head.end()].count("\n")
+    warnings: list[Warning] = []
+    for offset, line in enumerate(body.splitlines(), 1):
+        if not line.strip() or line.lstrip().startswith(">"):
+            continue  # 空行 / 引言块 = 规则说明区，不判
+        hits: list[str] = []
+        if date := _AGENTS_DATE_RX.search(line):
+            hits.append(f"日期 `{date.group(0)}`")
+        if batch := _AGENTS_BATCH_RX.search(line):
+            hits.append(f"批次号 `{batch.group(0)}`")
+        hits += [f"状态词 `{w}`" for w in AGENTS_INDEX_STATUS_WORDS if w in line]
+        if hits:
+            warnings.append(Warning(AGENTS_FILE, head_line + offset,
+                "「其他文档」条目写状态摘要（" + "、".join(hits) + "）——状态只住文档头部，"
+                "本节只写「什么时候该读它」与「读哪一节省钱」；文档一推进这条就静默变错"
+                "（写法 → skill rgl-doc-placement）"))
     return warnings

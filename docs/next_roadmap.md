@@ -28,7 +28,7 @@ Phase 0–6 已全部完成（各阶段结论一段话归档于下，实施细�
 5. **bindless 原则**（Phase 5 定案，推翻"push constant 传递轻量"）：push constant 冻结在
    "mvp + 索引"级别，场景级/每帧变化数据一律进 descriptor heap（scene data）。
    **（Phase 7b+ 已更新**：DrawArgs 缩到纯索引 `objectIndex` 4B，mvp 迁入 scene data per-object 表；
-   现行口径见 AGENTS.md「已知问题 → GPU culling」与 skill `rgl-shader-contract`。）
+   现行口径见 `docs/cpu_perf_plan.md` §4.1 与 skill `rgl-shader-contract`。）
 
 ## C++ 风格备忘（遗留方向）
 

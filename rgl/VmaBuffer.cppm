@@ -33,9 +33,9 @@ export struct AllocRecord {
  * VmaBuffer/VmaImage 都持本控制块的 shared_ptr，销毁时控制块必然还活着（不会拿到已析构
  * 的全局 vector），而台账语义恰好是"与该分配器同生共死的存活分配"。
  *
- * 🔴 台账**无锁**：登记/销账只发生在主线程（本项目不做多线程录制，见 AGENTS「渲染图边界」；
- * 全项目唯一线程 = debug_rpc，它不创建也不销毁任何 VMA 资源）。将来若引入多线程上传，
- * 这两个 vector 与 VMA 自身的线程安全性要一起重新裁决。
+ * 🔴 台账**无锁**：登记/销账只发生在主线程（本项目不做多线程录制，裁决见
+ * `docs/还债总账.md`；全项目唯一线程 = debug_rpc，它不创建也不销毁任何 VMA 资源）。将来若
+ * 引入多线程上传，这两个 vector 与 VMA 自身的线程安全性要一起重新裁决。
  */
 struct AllocatorControlBlock {
 	VmaAllocator handle;

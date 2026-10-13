@@ -284,8 +284,6 @@ CSM/HFTS 共同硬前提。
 ## 7. 文档回写
 
 - [ ] `next_roadmap.md` §Phase 11：插入批 11.0 段 + 修正 L182-189 延后项（§2.4）
-- [ ] `AGENTS.md` 已知问题：新增"地面水质感"三缺口（AO/湿面 roughness/局部反射）
-- [ ] `AGENTS.md` 运行要点：RPC 测量纪律补 `pgrep -cx rgl`
 - [ ] `git:调试历史` 2026-09-29 条目：绿光源根因（`pack.py` remap 缺漏）+ 光照配比 75:1
 - [ ] 收口时把本文归档进 `docs/archive/`
 

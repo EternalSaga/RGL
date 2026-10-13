@@ -72,7 +72,8 @@ from rules_ecs import (ecs_component_home_checks, ecs_component_purity_checks,
 from rules_metrics import evaluate_metrics
 from rules_layers import lib_layering_checks
 from rules_reflection import reflection_contract_checks, scan_readout
-from rules_text import (agents_doc_index_checks, doc_pointer_checks,
+from rules_text import (agents_doc_index_checks, agents_index_status_checks,
+                        doc_pointer_checks,
                         doc_pointer_counts, doc_pointer_readout,
                         judgments_pointer_checks,
                         docs_status_checks, forbidden_vulkan_checks,
@@ -299,6 +300,7 @@ def main() -> None:
         warnings.extend(modern_cpp_checks())
         warnings.extend(docs_status_checks())
         warnings.extend(agents_doc_index_checks())
+        warnings.extend(agents_index_status_checks())
         # 反引号指针棘轮收账（先扫一遍拿计数 → 重写基线 → 下面正式跑时与**新**基线比对，
         # 形态同 --update-tool-baseline：重写必然持平，不会自己喊自己上升）
         if args.update_doc_pointer_baseline:

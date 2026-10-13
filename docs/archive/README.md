@@ -36,4 +36,4 @@
 ## 已解决问题总账
 
 已解决的已知问题（含根因/误诊复盘指引）见 [issue_history.md](issue_history.md)。
-AGENTS.md「已知问题」节只保留**未解决**项。
+未解决项在 `docs/还债总账.md`（AGENTS.md 已不设「已知问题」节）。

@@ -64,8 +64,6 @@ just clean / clean-all / all           # 增量清理 / 删 build 目录 / clean
 
 ## 测试体系
 
-> **下一步做什么** → `docs/phase15_plan.md`；本节 = 现状机制描述。
-
 **分层，边界按"要不要 GPU / 要不要窗口"划**（覆盖清单以 `tests/` 与 `tools/imgqa/` 本体为准，别在此抄）：
 
 | 层 | 位置 | 需设备 | 入口 |
@@ -180,53 +178,14 @@ vk_indirect_commands 显式使用）外**均无显式使用但被其他已启用
 `vkinstance.cppm` 的 `VK_EXT_SWAPCHAIN_COLOR_SPACE` 同理。**KHR/EXT 别名**：
 `VkSwapchainPresentFenceInfoKHR/EXT` 是同一结构（typedef alias），代码用 EXT。
 
-## 已知问题
-
-> 只列**未解决问题**、标「现行」的**契约**、以及**已结案但防止重复排查的结论**（如 AO 噪点）。
-> 已解决问题的根因/误诊复盘见 `docs/archive/issue_history.md`。性能数字一律标机器、结论全文放
-> phase 计划，本节只留"每次开工都得知道"的边界。
-
-- **本机 1280×720 帧时间构成（2026-10-09 重测 + 债-30 还账后，绑机；旧结论"CPU 侧无余量"已作废）**：
-  交付路径（VVL 关）= **frame 10.66ms vs GPU 10.30ms ⟹ GPU-bound 且已贴地板（差 0.36ms）**；
-  开 VVL 后 CPU 录制翻到 15ms（VVL ≈ 0.73µs/条 vkCmd）⟹ **"CPU-bound" 只在开发环境成立**。
-  **CPU 侧读数必须带 VVL 档**，且"CPU 真干"要减掉**两处**主机等待（cull 读回 + 帧首 fence）——
-  债-30 还掉后背压不消失只**搬家**（实测从 cull 等待 10.78ms 搬到帧首 6.73ms）。
-  读数/口径/方案 → `docs/cpu_perf_plan.md`；重测 = `just cpu`。present_timing 跨机复测仍未做（债-07）
-- **渲染近似（现行边界）**：世界法线 mat3 直乘（假定均匀缩放）；透明排序 per-primitive 距离²（非 OIT）
-  且开背面剔除；BRDF LUT 仍无；mip blit NEAREST（sRGB LINEAR 违 VUID-00239）；单环境贴图；大三角 z=1
-  依赖 depth clear + LEQUAL；**light/env 两个 intensity 语义不对称**（light CPU 预乘、env shader 端乘，
-  亮度跨路线不可直接对比）；skybox 背景在 deferred light pass 内合成（非独立 pass）
-- **渲染图边界（现行）**：线性 pass 序（无拓扑排序/fusion/aliasing）；单 swapchain attachment；多线程录制不做。
-  两个图字符串字段的词表单一真相源 = **`pass_vocabulary`**（按 scope 分档），**两档不可并成扁平表**
-  （并集会让 kind 与 state 串味的图放行到执行器深处）
-- **SSAO 三条固有边界**：① depth-only → **法线贴图细节看不见**（开阔地面 AO 恒 1.000，**不是 bug**）；
-  ② 螺旋采样无投影 range check → 前景轮廓外一圈光晕；③ 施加点在 tonemap 合成处，**连直接光一起压**。
-  `ao.strength=0` 逐位旁路，无常驻成本。**AO 噪点已量化结案：别再当"噪点闪烁"的嫌疑**（交付颗粒
-  < 1 量化步长 = 不可见；TAA 关时 AO 逐帧静止）；可见形态是**屏幕锚定的相机移动爬行** → `git:调试历史` 2026-10-04
-- **湿面（15.2 已落地，旧边界「只加高光不压暗」已结案）**：wetness 身份 = roughness 通道
-  （与 SSR 粗糙度门控同源）⟹ **跨场景光滑介质会被误判成湿**，需材质白名单；三项调制
-  （压暗/水洼粗糙度/水膜法线扰动）在 deferred_geometry 的 G-buffer，法线扰动**同时进
-  NdotL/AO/SSR**（不只反射项）；参数 = runtime.lua `wet` 块，`strength=0` = 逐位旁路
-  （湿面关锚 `5ff793bf…`）→ `docs/phase15_plan.md` §3.3
-- **灯契约（现行）**：`Light` 组件 + `index` = 列表位正序（画不画 = 实体有无；forward 读 index 0 = 主光，
-  延迟按 index 落槽）；`SceneLight`/`GpuLight` 布局均走 C API 反射生成，无手写双源
-- **GPU culling（现行）**：三态门 **`diagnostics.cull_replay`，默认 `cpu`** = opaque 段由 **CPU 剔除**驱动、
-  GPU compute culling 退为**异步对账验证器**（债-30 还账，实测逐位不变）；`gpu_sync` = 旧的"compute culling +
-  **读回重放**"同帧形态，`gpu_lagged` = GPU 集照跑但滞后一帧对账。**非默认档必须单独冒烟 + syncval**——
-  默认档不提交 cull CB，fence 生命周期与跨帧依赖错误只在两 GPU 臂现形（`just cpu` 的 `cull-gpu-*` 两臂）。
-  DGC execute 仅 NVIDIA graphicsIndirect=true 可走，RADV 与 Intel anv 实测均 false → 重放；RADV 静态 shader
-  模式功能通但性能亏 1.85× → `diagnostics.dgc_static` 门默认关（`cull_replay≠gpu_sync` 时该路根本走不到，
-  gate-lint 会喊）。CPU 剔除保留为兜底 + 每帧对账基准（不一致告警不中断）；
-  mvp 由 CPU 算进 scene data（GPU float4x4 FMA 收缩序与 glm 无位级契约，保 forward diff0）。
-  驱动级细节 → `docs/nvidia_compatibility_report.md` / `docs/archive/radv_static_dgc_spike.md`
-- **VMA + zero-init 冲突**：VMA 对 BDA buffer 自动加内部 DEVICE_ADDRESS flags，与用户 ZERO_INITIALIZE
-  pNext 必撞——该扩展已回退，真实需求走原生 `vkAllocateMemory` 绕 VMA（`docs/vulkan_extensions_2025_调研.md` §十二/§13.1）
-
 ## 其他文档
 
-> 每篇文档头部带状态（`现行`/`历史`/`调研`）。现状权威 = 本文件；**下一步路由 → `docs/phase14_plan.md`**。
+> 每篇文档头部带状态（`现行`/`历史`/`调研`）——**状态只住那里**。本节写日期 / 批次号 /"已落地·
+> 挂起·冻结"= 给文档状态开第二份副本，文档一动它就静默变错（实测抓到两条已漂，方向是误导）。
+> **本节只写两件事：① 什么时候该读它（触发条件）② 读哪一节省钱**。
+> 现状权威 = 本文件；**下一步 = 下方「计划」首条**（路由只挂号一次，别处写第二份文件名已漂过）。
 > 本节与 `docs/` 由 source_checks **双向对账**（docs 漏索引 / 本节悬空指针即警告，规则
-> `agents_doc_index_checks`）——新建 docs 不在此挂号会被构建点名。**本节只做索引，不写摘要**（摘要会漂）。
+> `agents_doc_index_checks`）——新建 docs 不在此挂号会被构建点名。
 >
 > **教训写哪（2026-10-08 换轨：全局调试历史已删除，不再重建）**：能落成测试 / 护栏的**必须**落成
 > （`TEST:` / `GUARD:`）；写不出断言的教训**就近写当前任务文档**，且**可改写**——被实测推翻的旧教训
@@ -234,39 +193,30 @@ vk_indirect_commands 显式使用）外**均无显式使用但被其他已启用
 > 误导后来者）。引用已删文档的旧条目写 `git:调试历史 <日期>`。写法与裁决树 → skill `rgl-doc-placement`；
 > 护栏 = `doc_pointer_checks`（悬空文档指针 / 退役文档名复发，规则 §1.7）。
 
-- **台账 / 现状**：`docs/还债总账.md`（**全项目技术债唯一台账**；勾账三态 = 结案/否决/降级；
-  **结案账目只留一行终态 + 指针，数字在 `docs/还债实测数据.md`**）·
-  `docs/还债实测数据.md`（结案账目的**实测数据 + 主 agent 亲验记录**载体；标了「权威载体」的小节以那里为准）·
-  `docs/cpu_perf_plan.md`（**CPU/GPU 性能读数与还账方案**：量具 `just cpu` 的口径 + 基线表 +
-  债-30 三档方案与**落地实测/验收**；本文件"帧时间构成"那条结论的全文在这里）·
-  `docs/技术概念.md`（机制深版：§模块表 / §核心运行时模块表 = **唯一模块职责表** / §main 启动流 /
-  §RPC 调试通道 / §构建检查工具机制 / §构建 Windows 前置）· `docs/gate_lint_plan.md`（**门配置自检的权威载体**；加诊断门前看）
-- **现行计划**：`docs/phase15_plan.md`（**下一步从这里读**：屏幕空间反射 + 湿面输入面；§0 = D1
-  豁免与「成本不设上限」两条拍板；§1.3 = Filament SSR 的可抄/不可抄面，**别再重读一遍 filament**）·
-  `docs/phase14_plan.md`（时域线换轨 = 逐像素速度场 + vendor
-  FSR 3.1.4 的 VK 后端；§1 = 本机核实的 FSR 事实基线，**别再重查一遍**；剩余 14.7/14.8/14.9
-  不阻塞 Phase 15）·
-  `docs/phase13_plan.md`（TAA 收口，**2026-10-07 冻结**；§1.22 = 冻结立论）·
-  `docs/taa_history_space_plan.md`（**批 13.5 已落地** = 历史住基空间；批 12.6 T4 的「未抖
-  prevViewProj 是错的」裁决**已反转**）·
-  `docs/taa_plan.md`（TAA 机制与踩坑账，§7 第 11/12 条 = 根因）· `docs/evssm_plan.md`（远场软影
-  权威路线，HFTS 已降级 backlog）· `docs/shadow_routes_plan.md`（**阴影路线形态唯一定案载体**：`configs/shadow.lua` 的 `mode` 枚举形状与四条红线；改阴影配置键/门形前看）·
-  `docs/constantbuffer_迁移计划.md`（scene data 类型化迁移的**唯一计划载体 + spike 已定案事实基线**；
-  **动 scene data 访问形态前看**，§1 别再重查、§6.2 是分支拓扑拍板、✅ §8 = R3 红线已窄化放行）· `docs/hfts_izb_plan.md` · `docs/shader_object_组合成本与优化预留.md`
-  （优化**未实施**）· `docs/脚本长期规划.md` + `script_spike/`（脚本长期线，独立于 Phase 编号）
-- **调研 / 活文档**：`docs/mdi_plan.md`（Multi Draw Indirect 路线**可行性定案载体**，**2026-10-12 簇化轴
-  立项开工（§0 拍板 P4-P7、§9 编排）**、命令数轴挂起：
-  DGC 的 `@8 PUSH_DATA` 为何不可删 / `push.base + DrawIndex` 统一公式 / 阶段划分与风险；
-  动 indirect 前先读，别重推一遍） · `docs/DESCRIPTOR_HEAP_SPEC.md` · `docs/FSR输入契约.md`（Phase 14 批 14.2：
-  FSR3-upscaler 四个每帧输入的**口径权威载体**——单位/坐标系/符号/采样时刻 + 逐条出处；
-  接 FSR 前必读，别靠读源码"认为一致"） · `docs/nvidia_compatibility_report.md`
-  （三平台；**不写"本机"是哪台**）· `docs/device_generated_commands_research.md` ·
-  `docs/vulkan_extensions_2025_调研.md` · `docs/device_fault_调研.md`（**未实施**）·
-  `docs/风格检查规则.md`（规则全景；参数真相源 = `config.py`）· `docs/快捷键配置.md`（与代码无关）
-- **历史 / 归档**：`docs/next_roadmap.md`（Phase 0–7 结论存档）· `docs/phase8_plan.md` ·
-  `docs/phase9_plan.md`（§10 性能判定全文）· `docs/phase11_plan.md` · `docs/phase12_plan.md`
-  （测试体系账本）· `docs/phase7_devlog.md` · `docs/phase10b_plan.md` · `docs/archive/`
-  （phase6_record、ecs 审查、**issue_history 总账**、radv_static_dgc_spike、阴影失效排查、静态审查升级路线等）
+- **台账 / 现状**：`docs/还债总账.md`（**全项目技术债唯一台账**；结案账目只留一行终态 + 指针）·
+  `docs/还债实测数据.md`（结案账目的实测数据 + 主 agent 亲验记录）· `docs/cpu_perf_plan.md`
+  （CPU/GPU 读数与还账方案；`just cpu` 口径 + 基线表）· `docs/技术概念.md`（机制深版：
+  §核心运行时模块表 = **唯一模块职责表** / §main 启动流 / §RPC 调试通道 / §构建检查工具机制 /
+  §构建 Windows 前置）· `docs/gate_lint_plan.md`（**加诊断门前看**）
+- **计划**（首条 = 下一步做什么）：`docs/phase15_plan.md`（屏幕空间反射 + 湿面输入面；§1.3 =
+  Filament SSR 的可抄/不可抄面，**别再重读一遍 filament**）· `docs/phase14_plan.md`（时域线换轨 =
+  逐像素速度场 + vendor FSR 的 VK 后端；§1 = 本机核实的 FSR 事实基线，**别再重查一遍**）·
+  `docs/phase13_plan.md`（TAA 收口）· `docs/taa_history_space_plan.md`（TAA 历史住基空间）·
+  `docs/taa_plan.md`（TAA 机制与踩坑账）· `docs/evssm_plan.md`（远场软影）·
+  `docs/shadow_routes_plan.md`（**阴影路线形态唯一定案载体**；**改阴影配置键/门形前看**）·
+  `docs/constantbuffer_迁移计划.md`（scene data 类型化迁移的事实基线；**动 scene data 访问形态前看**）·
+  `docs/hfts_izb_plan.md` · `docs/shader_object_组合成本与优化预留.md`（优化预留方向）·
+  `docs/脚本长期规划.md` + `script_spike/`（脚本长期线，独立于 Phase 编号）
+- **调研 / 活文档**：`docs/mdi_plan.md`（Multi Draw Indirect **可行性定案载体**；**动 indirect 前读，
+  别重推一遍**）· `docs/DESCRIPTOR_HEAP_SPEC.md` · `docs/FSR输入契约.md`（FSR3-upscaler 四个每帧
+  输入的**口径权威载体**；**接 FSR 前必读**，别靠读源码"认为一致"）·
+  `docs/nvidia_compatibility_report.md`（三平台驱动事实；**不写"本机"是哪台**）·
+  `docs/device_generated_commands_research.md` · `docs/vulkan_extensions_2025_调研.md`（含 zero_init
+  回退定案）· `docs/device_fault_调研.md` · `docs/风格检查规则.md`（规则全景；参数真相源 =
+  `config.py`）· `docs/快捷键配置.md`（与代码无关）
+- **历史 / 归档**：`docs/next_roadmap.md`（Phase 0–7 结论）· `docs/phase7_devlog.md` ·
+  `docs/phase8_plan.md` · `docs/phase9_plan.md` · `docs/phase10b_plan.md` · `docs/phase11_plan.md` ·
+  `docs/phase12_plan.md` · `docs/archive/`（**索引见其 README**，本文件不抄目录内容）
 - **离线参考**：本地克隆 `/home/robin/program/Vulkan-Docs`（在线检索被 Cloudflare 拦截时用）。
   ⚠ spec 比系统头/loader 新，**结构体字段以系统头为准**，spec 只作语义依据
 - **已删除的最小复现子项目**：`min_mesh_crash/`、`heap_texture_spike/`（墓碑 = `docs/archive/*_已删除.md`；

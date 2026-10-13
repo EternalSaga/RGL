@@ -71,7 +71,7 @@ export [[nodiscard]] std::expected<uint32_t, Error> uploadTexture(RGL::Resources
  * @param size 面边长（必须 2 的幂）
  * @param name 日志名
  * @note mipmap 链 blit 降采样用 NEAREST——sRGB 格式 blit LINEAR 违 VUID-vkCmdBlitImage-
- *   filter-00239（已知近似：无 prefiltered / BRDF LUT，见 AGENTS.md Phase 5.5 近似清单）
+ *   filter-00239（已知近似：无 prefiltered / BRDF LUT，远期候选见 `docs/next_roadmap.md`）
  * @return void（成功）；失败 Error（size 非 2 幂 / VMA 图创建 / submit / fence）
  */
 export [[nodiscard]] std::expected<void, Error> uploadCubeMap(RGL::Resources& resources,

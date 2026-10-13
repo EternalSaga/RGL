@@ -113,7 +113,7 @@
   不是少个数字，是那本账不再证明任何东西（债-34 同形态）。
 - 先记账、别先动刀：用它自带的 `GetEffectGpuMemoryUsageVK` 补一行科目。改那 4 行的触发条件见 §2 批 14.8。
 - ⚠ 我们**自己就干过反方向的事**：VMA + zero-init 冲突那次是"真实需求走原生 `vkAllocateMemory`
-  绕 VMA"（AGENTS 已知问题 / `vulkan_extensions_2025_调研.md` §十二）。同一个权衡，别双标。
+  绕 VMA"（`vulkan_extensions_2025_调研.md` §12.3/§13.1）。同一个权衡，别双标。
 
 ### 1.6 输入契约（`ffx_fsr3upscaler.h` @ 1.1.4，权威字段表）
 

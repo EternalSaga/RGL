@@ -349,7 +349,7 @@ const std::vector<JudgmentInfo>& attachmentJudgments()
             "全是观察量（交付字节Δ 在 AO 生效处均值 8.24 / p99 32 / 最大 51 LSB，颗粒/渐变 0.60 "
             "—— 但 bistro 的 AO 场自己就贴着立面几何，颗粒里混合法高频，该比值只是噪声占比的"
             "**上界**）。",
-            {"AGENTS.md 已知问题：开阔地面 AO 恒 1.000（契约，非 bug）",
+            {"docs/phase11_plan.md §8.4：开阔地面 AO 恒 1.000 = depth-only 的代价（契约，非 bug）",
                 "docs/phase11_plan.md:351（拿无闭式的量当主判据的反例）",
                 "rgl/shaders/ao.frag.slang:118（strength≤0 位级早退）/ :134（hash12 只吃 "
                 "SV_Position ⟹ 噪声屏幕锚定）"},},
