@@ -18,7 +18,9 @@ return {
     -- EVSSM 其实跑的是 CSM"是本项目最怕的失效形态）。
     --   "none"  = 无阴影（旧 shadow_pass=false）
     --   "csm"   = 级联阴影 + 4 抽头 PCF（交付形态，旧 shadow_pass=true）
-    --   "pcss"  = 接触硬化软阴影（旧 shadow_pcss=true，docs/phase11_plan.md 批 11.5）
+    --   "pcss"  = 接触硬化软阴影（旧 shadow_pcss=true；mode 枚举形状与逐位锚 → shadow_routes_plan.md §2。
+    --             旧写法「docs/phase11_plan.md 批 11.5」是断头指针：该文档没有 11.5 章节，
+    --             「批 11.5」只是当年的批次号，不是文档锚点）
     --   "evssm" = 远场软影矩图（旧 shadow_evssm=true，docs/evssm_plan.md；生效性边界 → shadow_routes_plan.md §4）
     mode = "csm",
 

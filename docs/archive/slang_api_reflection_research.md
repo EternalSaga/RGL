@@ -1,8 +1,10 @@
 # Slang C API 直接反射（替代 slangc CLI → JSON 中间层）
 
-> **状态**：现行（2026-09-10 落地，分支 `research/slang-api-reflection`；spike = `slang_api_spike/`，
-> 工具 = `tools/slang_reflect.cppm` + `reflection_tool slang` 子命令，5 条管线已切 C API 路径，
-> forward BIT-IDENTICAL 维持）。
+> **状态**：调研（结论已落地并吸收进现行反射管线 ⟹ 归档；2026-09-10 落地，分支
+> `research/slang-api-reflection`；spike = `slang_api_spike/`，工具 = `tools/slang_reflect.cppm`
+> + `reflection_tool slang` 子命令，slang 管线已全部切 C API 路径——**条数以
+> `cmake/RglReflection.cmake` 为准，别在此抄**（原文写"5 条"，现已漂）。forward BIT-IDENTICAL
+> 维持。现状权威 = AGENTS.md + `docs/技术概念.md §构建检查工具机制`）。
 > 触发：Phase 7 前向头 `SceneLight` 反射时发现——slangc 反射 JSON **不捕获非资源 struct**（`GpuLight`/
 > `SceneLight` 走 schema `vertexLayouts` 声明 + 生成，无反射端数据，C++↔shader 双源纯手工信任）。
 > 调研目标：链接 `libslang.so` 经 C API 直接查询编译器**实际**布局，真消除双源。

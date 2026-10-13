@@ -27,10 +27,10 @@
 | [教程拆解发现_20260902.md](教程拆解发现_20260902.md) | 已修复 | 兄弟教程双实现对账查出 5 项（GGX epsilon/mesh 减法/契约检查/ambient/intensity 语义），2026-09-03 全部落地 | 各修复已附代码注释指针（4 处 shader 引本文件 archive 路径） |
 | [light_entity_plan.md](light_entity_plan.md) | 历史 | 灯 entity 化实施计划（ECS 规范 3，2026-09-10 完成，BIT-IDENTICAL） | 正文冒烟命令曾含 `RADV_EXPERIMENTAL`，Mesa ≥26.2.3 已不需要（2026-09-24） |
 | [radv_static_dgc_spike.md](radv_static_dgc_spike.md) | 历史 | RADV 静态 shader DGC spike（2026-09-10 完结：功能验证通过、满槽实现性能净亏 1.85× → 定案默认不开，`dgc_static` 门保留；紧凑分桶翻盘时以本文为设计底稿） | 无 |
-| [slang_api_reflection_research.md](slang_api_reflection_research.md) | 现行 | Slang C API 直接反射调研 + 实施记录（2026-09-10 落地，`reflection_tool slang` 替代 slangc CLI→JSON 中间层，5 条管线已切，真消除 C++↔shader 双源） | 无 |
+| [slang_api_reflection_research.md](slang_api_reflection_research.md) | 调研 | Slang C API 直接反射调研 + 实施记录（2026-09-10 落地，`reflection_tool slang` 替代 slangc CLI→JSON 中间层，slang 管线已全切，真消除 C++↔shader 双源） | 2026-10-14 清账：原标「现行」与归档规则（archive 头部只带 `历史`/`调研`）自相矛盾，已改标调研；原文"5 条管线"数字已漂，改指 `cmake/RglReflection.cmake` |
 | [架构债务-Resources职责拆分.md](架构债务-Resources职责拆分.md) | 已完成 | Resources 职责拆分（2026-09-19 完成：SceneData/RenderTargetCache/Environment/SamplerLibrary/AssetTable 拆出，allocSlot 三段化） | 无 |
 | [架构债务-依赖方向审计.md](架构债务-依赖方向审计.md) | 已完成 | 依赖方向审计（2026-09-08：债务 1 方案 B + 债务 2 已修，债务 3 缓行——`vk_resources` 不添第四种角色） | 无 |
-| [静态审查升级路线.md](静态审查升级路线.md) | 现行 | LLVM 23 + `-Wlifetime-safety` 两阶段落地计划（2026-09-24 定稿，尚未实施，等系统 LLVM 23；改 `tools/checks` clangbind 前先读） | 无 |
+| [静态审查升级路线.md](静态审查升级路线.md) | 调研 | LLVM 23 + `-Wlifetime-safety` 两阶段落地计划（2026-09-24 定稿，尚未实施，等系统 LLVM 23；改 `tools/checks` clangbind 前先读） | 2026-10-14 清账：原标「现行」与归档规则自相矛盾，已改标调研；原文"预计 ~20 天内"失效（本机 clang 仍 22.1.8），头部已删去该排期 |
 | [阴影失效排查.md](阴影失效排查.md) | 已解决 | Phase 11 批 11.2 阴影失效排查交接日志（2026-09-29 同日收口；权威结论 = 调试历史 2026-09-29 条目，本文留档排查过程与哨兵定位手段） | 无 |
 
 ## 已解决问题总账

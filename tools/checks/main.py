@@ -68,10 +68,12 @@ from rules_metrics import evaluate_metrics
 from rules_layers import lib_layering_checks
 from rules_reflection import reflection_contract_checks, scan_readout
 from rules_text import (agents_doc_index_checks, doc_pointer_checks,
+                        doc_pointer_counts, doc_pointer_readout,
                         judgments_pointer_checks,
                         docs_status_checks, forbidden_vulkan_checks,
                         slang_load_bitcast_checks, meshlet_spec_checks,
-                        modern_cpp_checks, text_checks)
+                        modern_cpp_checks, text_checks, load_doc_pointer_baseline,
+                        write_doc_pointer_baseline)
 from models import Thresholds, Warning
 from tool_baseline import compare as compare_baseline
 from tool_baseline import load_baseline, write_baseline
@@ -165,6 +167,10 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--update-tool-baseline", action="store_true",
                     help="用当前工具侧条数重写 tool_baseline.json（样式警告降了之后收账；"
                          "上升时**不要**用它，那是拆函数的活儿）")
+    ap.add_argument("--update-doc-pointer-baseline", action="store_true",
+                    help="用当前反引号指针命中条数重写 doc_pointer_baseline.json"
+                         "（§1.7 判定 ③④ 的存量棘轮收账；**先确认**没有新写的假指针再用它，"
+                         "上升时不要用它，那是改指针的活儿）")
     return ap.parse_args()
 
 
@@ -284,6 +290,25 @@ def main() -> None:
         warnings.extend(modern_cpp_checks())
         warnings.extend(docs_status_checks())
         warnings.extend(agents_doc_index_checks())
+        # 反引号指针棘轮收账（先扫一遍拿计数 → 重写基线 → 下面正式跑时与**新**基线比对，
+        # 形态同 --update-tool-baseline：重写必然持平，不会自己喊自己上升）
+        if args.update_doc_pointer_baseline:
+            doc_pointer_checks()
+            # 🔴 扫描面没跑起来就**拒绝落笔**：把"没数"写进基线 = 之后每次跑都零命中 =
+            # 护栏永久变瞎而"零警告"照旧（同本规则"失效必须出声"的纪律）。
+            if not doc_pointer_readout():
+                print("[style-check-ERROR] 反引号指针基线**未重写**：本次扫描面未运行"
+                      "（覆盖面读数为空）——先修规则，别把「没数」写进基线", file=sys.stderr)
+                sys.exit(2)
+            # 🔴 基线 = **本次命中**，不是"旧基线 ∪ 本次命中"。踩过的坑：并集写法让清零的
+            # 文件永远留在基线里（update 只覆盖同名键、不删已清零的键），于是正式跑时
+            # 那条"基线仍记 N 条但该文件已清零"的警告**用收账命令本身消不掉** ——
+            # 收账命令自己造出一个它要求你去收的账。
+            old = load_doc_pointer_baseline()[0]
+            merged = {k: v for k, v in doc_pointer_counts().items() if v > 0}
+            path = write_doc_pointer_baseline(merged)
+            print(f"[style-check] 反引号指针基线已重写: {sum(old.values())} → "
+                  f"{sum(merged.values())} 条 / {len(old)} → {len(merged)} 个文件 → {path}")
         warnings.extend(doc_pointer_checks())
         warnings.extend(judgments_pointer_checks())
         warnings.extend(lib_layering_checks())
@@ -366,6 +391,9 @@ def main() -> None:
         readout = scan_readout()
         print("[style-check] 反射三方对账: "
               + (readout if readout else "**本次未执行**（规则没跑到）"))
+        bp_readout = doc_pointer_readout()
+        print("[style-check] 反引号指针对账: "
+              + (bp_readout if bp_readout else "**本次未执行**（规则没跑到）"))
         if rgl_notready:
             print("[style-check] 提示: 跳过 = modmap/BMI 构建产物缺失（clean 后首次构建属正常，"
                   "与编译并行时尚未生成）；本次仅跑纯文本规则，编译完成后重跑即全量生效")

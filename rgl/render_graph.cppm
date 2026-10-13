@@ -602,14 +602,15 @@ export std::array<uint32_t, 4> shadowTile(uint32_t c, uint32_t tileSize, uint32_
  * drawMesh pass（state="shadow"、drawSource="shadow"），插在**图首**——阴影深度不依赖相机
  * 深度，放最前使 barrier 推导最短，且保证它先于任何读阴影图的 pass。
  *
- * **当前状态（诚实声明）**：`drawSource="shadow"` 段目前是**空段**（FrameDrawList 尚无阴影
- * 段，见 vkrenderer segmentRange），即该 pass 只建附件 / 清深度 / 零 draw → **画面逐位不变**。
- * 本函数的交付物是"渲染图能表达 depth-only pass"这条基建（新 kind + 深度词表 + eDepth
- * 屏障 + 独立 extent + 状态词表，全链 BIT-IDENTICAL 验证），深度-only 管线与阴影采样
- * 归批 11.2 剩余部分。
+ * 阴影段（`drawSource="shadow"`）现在真的有 draw：载体 = `FrameDrawList::shadowCalls`
+ * （逐 cascade 分段，边界数组 `shadowBoundaries`、取段 `shadowSegment(c)`；源几何与主视野
+ * 不同 ⟹ 独立向量不拼进 calls，见 frame_draw_list.cppm 该字段注释）。
  *
- * 调用点 = main_impl::compileGraphOrThrow，`diagnostics.shadow_pass` 门控
- * （默认关 = 不调用 = 图逐位同，沿用 D10 纪律）。
+ * 调用点 = main_impl::compileGraphOrThrow，**无条件装饰**（不再由 diagnostics 门控：光照管线
+ * 条目无条件把阴影图的描述槽烘进去，图里必须无条件有这张图与其布局链，否则开关时采样它报
+ * VVL）。门控在**渲染侧** = `configs/shadow.lua` 的 `mode`（形态表 drawAtlas，唯一真相源见
+ * docs/shadow_routes_plan.md）：`mode = "none"` 或无投影体 ⟹ 段内零 draw、只清深度（近乎免费）、
+ * 图内全是 1.0 = 无遮挡 ⟹ 采样结果恒为全亮 ⟹ 成片逐位不变（D10 纪律换了落点，没换）。
  * @param desc 图声明（原地修改：追加 attachment + 图首插 pass）
  * @param mapSize 阴影图边长（调用方传入 scene_data::kShadowMapSize —— 图模块不认识
  *        scene data 契约，故不做隐式依赖；1 级 cascade = 整幅，将来 4 级走 2×2 tile

@@ -66,7 +66,7 @@ just clean / clean-all / all           # 增量清理 / 删 build 目录 / clean
 | 设备原语层 | `tests/` 的 `TEST_SUITE("gpu")`——后端原语 golden | 全部 | `just test-all` / `test-gpu` |
 | 闭式解探针 | `tools/imgqa/` probe + `qa/configs/analytic/`——「某像素**该**是多少」的独立第二实现，**不需要基线图像** | 全部 | `just analytic` |
 | 区域归因判据 | `tools/imgqa/`（**不进 ALL**）——区域来自几何而非图像。**排查渲染问题的默认起手** | 全部 | `just imgqa selftest` / … |
-| 进程级集成层 | `qa/`（**部分落地**：量化 harness 未落地） | 全部 | 场景生成 `tools/qa_scenes.py` |
+| 进程级集成层 | `qa/`（冻结配置目录 + 追加式调用台账 `qa/log/`）；**量化 harness = imgqa 自身**（RPC 驱动 + 量化 + 台账），不另建第二套 → `docs/phase12_plan.md` D7 | 全部 | 场景生成 `tools/qa_scenes.py` |
 
 - **分流靠 doctest 测试套件**，不是 tag 也不是链接面：本构建 doctest 的 `TEST_CASE` 宏**只接受一个
   参数**（tag 形态不存在），设备级用例写进 `TEST_SUITE("gpu")`，`just test` = `--test-suite-exclude=gpu`。

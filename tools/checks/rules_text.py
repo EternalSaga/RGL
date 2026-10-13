@@ -8,12 +8,18 @@
   docs/风格检查规则.md §1–§2
 """
 
+import json
 import re
 from pathlib import Path
 from typing import NamedTuple
 
 from config import (ALLOWED_CPP, AGENTS_FILE, AGENTS_INDEX_EXEMPT_DIRS,
-                    DOC_POINTER_REF_ROOTS, DOCS_STATUS_MAX_LINES, EXCLUDE_FILES,
+                    DOC_POINTER_BARE_EXTS, DOC_POINTER_BASELINE_COMMENT,
+                    DOC_POINTER_BASELINE_FILE, DOC_POINTER_EXAMPLE_FILES,
+                    DOC_POINTER_IMGQA_CLI_TABLE, DOC_POINTER_JUSTFILE,
+                    DOC_POINTER_PATH_EXTS, DOC_POINTER_PATH_ROOTS,
+                    DOC_POINTER_REF_ROOTS, DOC_POINTER_UPDATE_CMD,
+                    DOCS_STATUS_MAX_LINES, EXCLUDE_FILES,
                     EXPORT_NAMESPACE_EXEMPT, FORBIDDEN_EDGES,
                     FORBIDDEN_VULKAN_APIS, FORBIDDEN_VULKAN_MSG, JUDGMENTS_TABLE_GLOB,
                      MODERN_BANNED,
@@ -321,17 +327,27 @@ def doc_pointer_checks() -> list[Warning]:
     调试时间线文档那类 MOVE：一份文档被 70+ 处引用（docs 与代码注释各占一半），删完文件
     留下满仓悬空指针 = 后来者按指针找不到东西，比从没有过指针更贵（会怀疑是自己没找到）。
 
-    两条判定（均 error 级）：
+    四条判定（均 error 级）：
     1. **悬空**：`<项目目录>/**.md` 磁盘上不存在。含通配（`*`）或 `~` 的写法跳过——
        那是模式不是路径（`docs/archive/*_已删除.md`）。
     2. **退役**：出现 `config.RETIRED_DOC_NAMES` 里的文件名（裸名或带目录都算）。
        删文档的复发形态是"从 git 捞回来重建一份"，只查悬空查不到（文件一回来指针就"有效"了），
        故退役名单单独点名，并在消息里给出**现在的归宿**。
+    3. **反引号内的项目路径**（债-111）：`` `tools/x/` `` / `` `rgl/x.cppm` `` / `` `docs/x.md` ``
+       这类形态磁盘上不存在。判据形态与**排除形态**见 `_bad_backtick_path`。
+    4. **反引号内的命令名**（债-111）：`` `just <配方>` `` / `` `imgqa <子命令>` `` 的第二 token
+       不在真相源（Justfile / imgqa 注册表）里。
+
+    ③④ 的存量走**棘轮基线**（`config.DOC_POINTER_BASELINE_FILE`，机制先例 =
+    `tool_baseline.py` / `byte_offset_baseline.json`）：只准降不准升，新增一条即红；
+    🔴 基线不可用 / 扫描面为空 / 真相源解析出 0 条 ⟹ 一律 error 声明「本次未做任何对账」，
+    绝不把"零警告"读成"指针都有效"（同 `rules_layers` / `rules_reflection` 的纪律）。
 
     扫描面/排除面见 `config.DOC_POINTER_*`（tools/checks/ 自身不扫：规则必然写出被禁名）。
     """
     warnings: list[Warning] = []
-    for rel in doc_pointer_files():
+    files = doc_pointer_files()
+    for rel in files:
         src = read_text(Path(ROOT) / rel)
         if src is None:
             continue
@@ -348,7 +364,301 @@ def doc_pointer_checks() -> list[Warning]:
                 warnings.append(Warning(rel, src[:m.start()].count("\n") + 1,
                     f"悬空文档指针 {path} 磁盘上不存在——先补目的地再修指针"
                     "（见 skill rgl-doc-placement）", "error"))
+    warnings.extend(_backtick_pointer_checks(files))
     return warnings
+
+
+# ─── 判定 ③④：反引号内的项目路径 / 命令名（债-111）────────────────────────────
+
+# 反引号片段。单行、上限 120 字符：跨行反引号在本仓是排版事故，不是指针。
+_BACKTICK_RX = re.compile(r"`([^`\n]{1,120})`")
+# 出现即**不是路径**的字符：通配与占位 ⟹ 那是模式（`docs/*.md`、`rgl/scene_config*.cppm`、
+# `third_party/{meshoptimizer,vcpkg-ports}/`、`build/rgl/*`），按存在性判必误报。
+_MODE_CHARS = frozenset("*?[]{}~<>$%…")
+# `x.cppm:12-30` / `x.cppm::Sym` / `docs/x.md §段` —— 行号 / 符号 / 段号后缀不是路径的一部分。
+# 🔴 只截到路径为止：**符号存在性是台账明写的第二步**（要 grep/ctags 兜底，误报面大）。
+_SUFFIX_RX = re.compile(r"::|[:§]")
+# 判定 ④ 的真相源解析：Justfile 配方行（`name:` / `name ARGS="x":`，**不含** `VAR := …` 变量行）
+# 与 imgqa 注册表条目名（`SubcommandSpec{ "名字"`，权威清单 = cli_table.cpp 本体）。
+# ⚠ 变量行的排除**不能**写成 `[^:=]*`（那是"既不含 : 也不含 ="，`test *ARGS=""` 里的 = 会把
+# 整条配方判没，实测 44 条只解析出 18 条 ⟹ 真配方被报成"没有这一条"= 规则说谎）。
+_JUST_RECIPE_RX = re.compile(
+    r"(?m)^(?!@?[A-Za-z_][A-Za-z0-9_-]*\s*[:?+]?=)(@?[A-Za-z_][A-Za-z0-9_-]*)(?:\s.*)?:\s*$")
+_IMGQA_SUB_RX = re.compile(r'SubcommandSpec\{\s*"([a-z][a-z0-9_-]*)"')
+# 反引号里写成命令时**不算子命令名**的第二 token：flag、可选参数、交替简写、占位
+_CMD_PLACEHOLDER = ("-", "[", "<", "(", '"', "“", "…", "|", "*", "$")
+
+# 最近一次反引号指针对账的覆盖面读数（取向同 rules_reflection.SCAN：一条"什么都没抓到"的
+# 规则与一条"扫错了目录"的规则，输出必须不同）。
+SCAN_BACKTICK: dict[str, int] = {}
+# 最近一次执行逐文件命中的条数（`--update-doc-pointer-baseline` 收账时的输入）
+LAST_BACKTICK_COUNTS: dict[str, int] = {}
+
+
+def doc_pointer_readout() -> str:
+    """最近一次反引号指针对账的覆盖面读数；没跑过 = 空串（调用方据此判规则有没有跑）。"""
+    if not SCAN_BACKTICK:
+        return ""
+    return " / ".join(f"{k} {v}" for k, v in SCAN_BACKTICK.items())
+
+
+def doc_pointer_counts() -> dict[str, int]:
+    """最近一次执行逐文件命中的条数（收账命令的输入；未跑过 = 空表）。"""
+    return dict(LAST_BACKTICK_COUNTS)
+
+
+def _basename_index() -> set[str]:
+    """裸名判据的存在性索引 = 各仓库根目录下所有文件的基名（不含 build/ 与 .git/）。
+
+    裸名指针（`` `render_graph.cppm` ``）写的时候不带目录，存在性只能问"全仓有没有这个文件"；
+    索引面 = `config.DOC_POINTER_PATH_ROOTS` **再加仓库根散文件**（实测踩过两次：漏了 `logger/`
+    把真存在的 `rllogger.cppm` 判成悬空、漏了仓库根把 `AGENTS.md` 判成悬空 ×27）。
+    """
+    out: set[str] = {p.name for p in Path(ROOT).iterdir() if p.is_file()}
+    for d in DOC_POINTER_PATH_ROOTS:
+        base = Path(ROOT) / d
+        if not base.is_dir():
+            continue
+        for p in base.rglob("*"):
+            if p.is_file():
+                out.add(p.name)
+    return out
+
+
+def _bad_backtick_path(span: str, names: set[str]) -> tuple[bool, str | None]:
+    """反引号片段 → (是不是**路径候选**, 磁盘上不存在的判定串或 None)。
+
+    反引号里绝大多数内容不是路径（实测 24933 个片段里只有约 1500 个像路径），判据必须收窄。
+    **排除形态**（逐条都有实测误报作依据，别当保守删掉）：
+
+    - 含空白 / `=`：命令行与配置键（`just reflect`、`aa = "off"`、`shadow_lod = -1`）；
+    - 含通配与占位（`_MODE_CHARS`）：`docs/*.md`、`aa_coverage.{h,cpp}`、`<项目目录>`；
+    - 含 `xxx` / `yyy`：示例占位（`xxx_impl.cppm`）；
+    - 斜杠路径但首段不是项目根：外部与系统路径（`vulkan/vulkan.hpp`、`glm/glm.hpp`、
+      `github.com/…`、`~/…`、`C:/…`），以及 `build/…`（构建产物随机器漂，不是源码指针）；
+    - 斜杠路径的中间段带扩展名：`rgl/diagnostics.cppm/_impl.cppm` 是「主接口 + 实现单元」
+      **两个文件**的简写，不是路径（本仓 7 处，全在 archive）；
+    - 裸名但扩展名不是项目自有（`.h` / `.hpp` / `.cpp` / `.glsl` / `.json`）：本仓大量按裸名
+      引用**上游与 SDK 文件**（`ShadowMap.cpp` = Filament、`vulkan_core.h` = SDK、
+      `callbacks_glsl.h` = FSR vendor），磁盘上本来就没有 ⟹ 判悬空是纯误报，且没有
+      "上游文件白名单"这种不漂的真相源可写；
+    - 裸名以 `_` / `.` 开头：那是**命名模式**不是文件（`_impl.cppm`、`_schema.lua`、
+      `.manifest.json`、`.mesh.slang`）。
+    """
+    s = span.strip()
+    if not s or any(c in s for c in _MODE_CHARS) or "=" in s:
+        return False, None
+    if any(c.isspace() for c in s):
+        return False, None
+    s = _SUFFIX_RX.split(s, maxsplit=1)[0]
+    if not s or "xxx" in s.lower() or "yyy" in s.lower():
+        return False, None
+    if "/" in s:
+        segs = s.split("/")
+        if any("." in seg for seg in segs[:-1]):
+            return False, None
+        if segs[0] not in DOC_POINTER_PATH_ROOTS:
+            return False, None
+        if (Path(ROOT) / s).exists():
+            return True, None
+        # 无扩展名的文件指针：`tests/test_scene_config` 指的就是 test_scene_config.cppm
+        return (True, None) if any(Path(ROOT, s + e).exists()
+                                   for e in DOC_POINTER_PATH_EXTS) else (True, s)
+    if s.startswith(("_", ".")) or Path(s).suffix.lower() not in DOC_POINTER_BARE_EXTS:
+        return False, None
+    return (True, None) if s in names else (True, s)
+
+
+def _bad_backtick_command(span: str, recipes: set[str], subs: set[str]) -> tuple[bool, str | None]:
+    """反引号片段 → (是不是**命令候选**, 不在真相源里的判定串或 None)。
+
+    只做 `just X` 与 `imgqa X` 两条：它们有**机器可读的真相源**（Justfile 配方行 /
+    imgqa 注册表本体），零歧义。不做"任意命令名存在性"——实测含空格的反引号片段 2872 处、
+    首 token 755 种，绝大多数是散文/公式/代码片段（`if (flag)`、`gate = saturate(2 − motion)`、
+    `base = ti*3`），没有不漂的外部命令白名单可写，硬做就把护栏变成没人敢写反引号的墙。
+    """
+    s = span.strip()
+    for tool, truth, label in (("just", recipes, "Justfile 配方"),
+                               ("imgqa", subs, "imgqa 子命令注册表")):
+        if s != tool and not s.startswith(tool + " "):
+            continue
+        rest = s[len(tool):].strip().split()
+        if not rest:
+            return False, None
+        tok = rest[0]
+        # `just cpu [--arms …]` / `just regress ab|floor|burst` / `just run-*` / `imgqa <子命令>`
+        # —— 参数位上的占位与交替简写不是配方名
+        if tok.startswith(_CMD_PLACEHOLDER) or any(c in tok for c in "*|…()<>"):
+            return False, None
+        return (True, None) if tok in truth else (
+            True, f"{tool} {tok}（{label}里没有这一条）")
+    return False, None
+
+
+def load_doc_pointer_baseline() -> tuple[dict[str, int], str | None]:
+    """读反引号指针棘轮基线 → ({rel: 允许条数}, 不可用原因)。
+
+    🔴 与 `tool_baseline.load_baseline`（缺失 → 空表按未登记）**故意不同**：这里的空表会被
+    下游读成「零悬空指针」，正是"失效不出声 = 假绿"。缺失 / 坏 JSON / 格式不符一律返回原因串
+    （先例 = `check_shader_deps.py::load_byte_offset_baseline`）。
+    """
+    path = Path(ROOT) / DOC_POINTER_BASELINE_FILE
+    if not path.is_file():
+        return {}, f"基线文件不存在：{DOC_POINTER_BASELINE_FILE}"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        return {}, f"基线文件读不出来：{DOC_POINTER_BASELINE_FILE}（{type(e).__name__}: {e}）"
+    if not isinstance(data, dict):
+        return {}, f"基线顶层不是 JSON 对象：{DOC_POINTER_BASELINE_FILE}"
+    files = data.get("files")
+    if not isinstance(files, dict):
+        return {}, f"基线缺 `files` 对象（格式不符）：{DOC_POINTER_BASELINE_FILE}"
+    bad = sorted(str(k) for k, v in files.items()
+                 if isinstance(v, bool) or not isinstance(v, int))
+    if bad:
+        return {}, f"基线 `files` 有非整数条数（格式不符）：{DOC_POINTER_BASELINE_FILE} 的 {bad[:3]}"
+    return {str(k): int(v) for k, v in files.items()}, None
+
+
+def write_doc_pointer_baseline(counts: dict[str, int]) -> str:
+    """按当前条数重写棘轮基线（收账）；返回写入路径。"""
+    files = {k: int(v) for k, v in sorted(counts.items())}
+    path = Path(ROOT) / DOC_POINTER_BASELINE_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(
+        {"_comment": DOC_POINTER_BASELINE_COMMENT,
+         "total": sum(files.values()), "files": files},
+        ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return DOC_POINTER_BASELINE_FILE
+
+
+def _truth_source(pattern: str, rx: re.Pattern[str], label: str) -> tuple[set[str], str | None]:
+    """解析一个真相源（Justfile 配方 / imgqa 子命令表，路径可 glob）→ (名字集合, 失效原因)。
+
+    解析出 **0 条**（或 glob 打不到文件）= 真相源格式变了而本规则没跟上 ⟹ 判定 ④ 空跑。
+    空跑必须出声（同 `meshlet_spec_checks` 的「constants 块解析不到」纪律），绝不把
+    "零命中"读成"全对"。
+    """
+    files = sorted(Path(ROOT).glob(pattern))
+    if not files:
+        return set(), f"真相源 {pattern} 一个文件都没找到（改名了？）"
+    names: set[str] = set()
+    for f in files:
+        src = read_text(f)
+        if src is None:
+            return set(), f"真相源 {rel_posix(f)} 读不到"
+        names |= {n.lstrip("@") for n in rx.findall(src)}
+    if not names:
+        return set(), f"真相源 {pattern} 解析出 0 条{label}（格式变了？同步改正则，别让判定 ④ 空跑）"
+    return names, None
+
+
+def _backtick_pointer_checks(files: list[str]) -> list[Warning]:
+    """判定 ③④ 的驱动：扫反引号片段 → 逐文件计数 → 与棘轮基线比对。"""
+    warnings: list[Warning] = []
+    SCAN_BACKTICK.clear()
+    if not files:
+        SCAN_BACKTICK["文件"] = 0
+        return [Warning("tools/checks/config.py", 1,
+            "反引号指针对账（§1.7 判定 ③④）**本次未做任何对账**：扫描面为空"
+            "（doc_pointer_files() 返回 0 个文件）——「零警告」不是「指针都有效」", "error")]
+
+    recipes, bad_just = _truth_source(DOC_POINTER_JUSTFILE, _JUST_RECIPE_RX, "配方")
+    subs, bad_sub = _truth_source(DOC_POINTER_IMGQA_CLI_TABLE, _IMGQA_SUB_RX, "子命令")
+    # 真相源坏了只停判定 ④（路径判定照跑），并在下面出声——不许静默把 ④ 读成"已通过"
+    cmd_off = bool(bad_just or bad_sub)
+    names = _basename_index()
+
+    counts: dict[str, int] = {}
+    hits: dict[str, list[tuple[int, str]]] = {}
+    spans = paths = cmds = 0
+    for rel in files:
+        if rel in DOC_POINTER_EXAMPLE_FILES:
+            continue  # 规则全景文档必须原样写出被禁形态（见 config 注释），①② 仍管它
+        src = read_text(Path(ROOT) / rel)
+        if src is None:
+            continue
+        for m in _BACKTICK_RX.finditer(src):
+            spans += 1
+            span = m.group(1)
+            line = src[:m.start()].count("\n") + 1
+            cand, bad = _bad_backtick_path(span, names)
+            kind = "项目路径"
+            if not cand and not cmd_off:
+                cand, bad = _bad_backtick_command(span, recipes, subs)
+                kind = "命令"
+            if not cand:
+                continue
+            if kind == "项目路径":
+                paths += 1
+            else:
+                cmds += 1
+            if bad is None:
+                continue
+            why = (f"反引号里的{kind} {bad} 磁盘上不存在——凭记忆写的指针（先 ls / grep 再写）"
+                   if kind == "项目路径" else
+                   f"反引号里的命令 {bad}——凭记忆写的子命令/配方名")
+            counts[rel] = counts.get(rel, 0) + 1
+            hits.setdefault(rel, []).append((line, why))
+
+    base_total = sum(counts.values())
+    LAST_BACKTICK_COUNTS.clear()
+    LAST_BACKTICK_COUNTS.update(counts)
+    baseline, bad_base = load_doc_pointer_baseline()
+    SCAN_BACKTICK.update({"文件": len(files) - len(DOC_POINTER_EXAMPLE_FILES),
+                          "反例豁免": len(DOC_POINTER_EXAMPLE_FILES),
+                          "反引号": spans, "路径候选": paths,
+                          "命令候选": cmds, "命中": base_total,
+                          "基线": sum(baseline.values()) if not bad_base else 0})
+    # 🔴 三条"规则空转"失效：扫描面非空却一个反引号都没抓到（正则坏了）、真相源解析出 0 条、
+    # 基线不可用。任何一种都不许把"零警告"读成"已对账"。
+    if not spans:
+        warnings.append(Warning("tools/checks/rules_text.py", 1,
+            f"反引号指针对账**本次未做任何对账**：扫了 {len(files)} 个文件却一个反引号片段"
+            "都没抓到（_BACKTICK_RX 坏了？）", "error"))
+    for bad in (bad_just, bad_sub):
+        if bad:
+            warnings.append(Warning("tools/checks/rules_text.py", 1,
+                f"判定 ④（命令名）**本次未做任何对账**：{bad}", "error"))
+    if not names:
+        warnings.append(Warning("tools/checks/config.py", 1,
+            "判定 ③（裸名指针）**本次未做任何对账**：基名索引为空"
+            "（DOC_POINTER_PATH_ROOTS 一个目录都打不到？），别把「零命中」读成「裸名都对」",
+            "error"))
+    if bad_base:
+        warnings.append(Warning(DOC_POINTER_BASELINE_FILE, 1,
+            f"反引号指针棘轮**本次未做任何对账**：{bad_base}（当前命中 {base_total} 条未比对）"
+            "——先修基线文件，别把「没数」读成「零悬空指针」", "error"))
+        return warnings
+
+    for rel in sorted(set(counts) | set(baseline)):
+        cur, base = counts.get(rel, 0), baseline.get(rel, 0)
+        if rel not in counts:
+            if base > 0:
+                warnings.append(Warning(rel, 0,
+                    f"反引号指针基线仍记 {base} 条但该文件已不在扫描面上（或已清零）——"
+                    f"用 `{DOC_POINTER_UPDATE_CMD}` 收账"))
+            continue
+        if cur > base:  # 未登记按 base=0 处理，同样进这一支
+            for line, why in hits[rel]:
+                warnings.append(Warning(rel, line, why, "error"))
+            if rel not in baseline:
+                warnings.append(Warning(rel, 0,
+                    f"反引号指针基线未登记：当前 {cur} 条（新文件要显式登记进 "
+                    f"{DOC_POINTER_BASELINE_FILE}——但**先确认**这些指针本该存在，"
+                    "新增一条的处置是改指针，不是来这里登记额度）", "error"))
+            else:
+                warnings.append(Warning(rel, 0,
+                    f"反引号指针基线上升 {cur} > {base}——处置是把凭记忆写的指针改成真实存在的"
+                    f"名字，**不是**改基线（基线只准降；确实清了才用 `{DOC_POINTER_UPDATE_CMD}`）",
+                    "error"))
+        elif cur < base:
+            warnings.append(Warning(rel, 0,
+                f"反引号指针可下调 {cur} < {base}——用 `{DOC_POINTER_UPDATE_CMD}` 收账"
+                "（悄悄漂移等于没有基线）"))
+    return warnings
+
 
 
 # ─── 判据契约表的「出处指针」有效性（§1.8）────────────────────────────────────

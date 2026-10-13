@@ -227,7 +227,9 @@ void Renderer::createSceneStaging(RGL::Resources& vkResources) {
  	/** drawFrame 定义（整体流程见接口声明 + 类头；逐步骤注记见体内 ①~⑮）：
 	 * 双 fence wait/reset → acquire（100ms 超时跳帧）→ ③.5 scene staging 写
 	 *（头 128B + 矩阵表 + 灯数组尾区）→ ⑥ heap barrier（3 dst flag）+ ⑥.5 scene 拷贝
-	 *（kSceneDataBytes=263424B）→ ⑦ heap/sampler heap 绑定 → ⑤ 逐 pass（barrier 物化 /
+	 *（kSceneDataBytes 全量——**字节数不在注释里抄**，真相源 = scene_data.cppm 的
+	 * `static_assert(kSceneDataBytes == …)`，抄一份就多一个会漂的真相）
+	 * → ⑦ heap/sampler heap 绑定 → ⑤ 逐 pass（barrier 物化 /
 	 * beginRendering / applyDynamicState / 段内逐 draw / blit / drawLight）→ ⑪.5 帧内
 	 * 捕获回读 → ⑫ presentTransition → ⑬ submit（waitStage = 图派生）→ 捕获搬移 →
 	 * ⑭ present（present fence）→ ⑮ 帧 slot 推进。 */

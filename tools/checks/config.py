@@ -234,6 +234,40 @@ DOC_POINTER_EXCLUDE_DIRS = ("tools/checks/", ".opencode/node_modules/", "qa/log/
 # 路径形如 `<root>/….md` 的引用（rules_text 用它拼正则）——只认仓库根起的项目目录
 DOC_POINTER_REF_ROOTS = ("docs", "tools", "tests", "rgl", "qa", "cmake", "configs",
                          "third_party", "script_spike", ".opencode")
+# ─── 反引号内的项目路径 / 命令名（rules_text.doc_pointer_checks 判定 ③④，债-111）────
+# 判据形态与**排除形态**的理由 → docs/风格检查规则.md §1.7（本文只放参数，不抄判据）。
+# 斜杠路径允许的首段 = 指针可能指向的仓库顶层目录。刻意**不含** build/ 与 vcpkg 安装树：
+# 构建产物随机器与构建状态变化，拿它判存在性 = 造一条"换台机器就红"的假判据。
+DOC_POINTER_PATH_ROOTS = DOC_POINTER_REF_ROOTS + ("rlstd", "logger", "assets")
+# 斜杠路径的"无扩展名文件指针"补全表：`tests/test_scene_config` 指的就是
+# tests/test_scene_config.cppm，只按字面判存在性会误报。
+DOC_POINTER_PATH_EXTS = (".cppm", ".cpp", ".h", ".hpp", ".md", ".py", ".lua",
+                         ".slang", ".cmake", ".json", ".txt", ".toml", ".yaml", ".yml")
+# 裸名（不含 `/`）判据只认**项目自有扩展名**。`.h` / `.hpp` / `.cpp` / `.glsl` / `.json`
+# 的裸名在本仓大量指上游与 SDK 文件（`ShadowMap.cpp` = Filament、`vulkan_core.h` = SDK、
+# `callbacks_glsl.h` = FSR vendor、`accumulate.h` 同理），磁盘上本来就没有 ⟹ 判它们悬空
+# 是纯误报（实测 100+ 条，且没有"上游文件白名单"这种不漂的真相源可写）。
+DOC_POINTER_BARE_EXTS = frozenset({".cppm", ".slang", ".md", ".lua", ".cmake", ".py"})
+# 判定 ③④ 的**反例豁免文件**：规则全景文档必须把被禁形态原样写出来才讲得清（`docs/风格检查规则.md`
+# §1.7 要举 `tools/meshlet_gen/` 这类编造名字当例子）。同 `tools/checks/` 整目录排除的理由，
+# 但只免 ③④——①②（.md 悬空 / 退役名）在该文件里照管，它同样写满真文档指针。
+DOC_POINTER_EXAMPLE_FILES = ("docs/风格检查规则.md",)
+# 命令名判据（判定 ④）的真相源本体——**别在文档或代码里抄配方/子命令名单**（抄名单反模式）
+DOC_POINTER_JUSTFILE = "Justfile"
+# imgqa 注册表**拆过文件**（cli_table.cpp + cli_table_diffblock.cpp + cli_table_diffstruct.cpp），
+# 故真相源是 glob 不是单文件：实测只指单文件会漏掉 diffstruct / diffblock 两条真子命令，
+# 被规则报成"注册表里没有这一条" = 规则说谎比漏报更贵。
+DOC_POINTER_IMGQA_CLI_TABLE = "tools/imgqa/cli_table*.cpp"
+# 存量棘轮基线（机制先例 = tool_baseline.py / byte_offset_baseline.json；只准降不准升）
+DOC_POINTER_BASELINE_FILE = "tools/checks/doc_pointer_baseline.json"
+DOC_POINTER_UPDATE_CMD = "python3 tools/checks/main.py --update-doc-pointer-baseline"
+DOC_POINTER_BASELINE_COMMENT = (
+    "反引号指针棘轮基线（§1.7 判定 ③④：反引号里写成项目路径 / `just 配方` / `imgqa 子命令`"
+    "却磁盘上不存在或不在真相源里的条数，按文件记）。这些是**存量**——历史台账里写过的已删工具、"
+    "上游文件、计划中未落地的文件名；只准降不准升：新增一条 = 有人凭记忆写了不存在的指针，"
+    f"处置是改指针，不是来这里登记额度。确实清掉一批后用 `{DOC_POINTER_UPDATE_CMD}` 收账。"
+    "判据与排除形态 → docs/风格检查规则.md §1.7。")
+
 # 退役文档：文件名（含后缀）→ 退役理由 + 现在的归宿。名字**再次出现**即 error——
 # 删一份文档只有在全仓指针清零后才成立，而"从 git 里捞回来重建一份"是最容易复发的形态。
 RETIRED_DOC_NAMES = {

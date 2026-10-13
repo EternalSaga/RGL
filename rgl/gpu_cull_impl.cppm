@@ -261,8 +261,10 @@ void GpuCull::writeSequenceStaging(uint32_t slot, const std::vector<RGL::DrawArg
 void GpuCull::recordCullPass(vk::raii::CommandBuffer& cmd, const CullFrameInput& input,
 	RGL::VmaBuffer& sceneStaging, uint32_t slot) {
 	// 自含数据通路（独立于主 CB 的 ⑥/⑥.5/⑦ 固定段——独立命令缓冲须自带 heap
-	// 状态：barrier + 拷贝 + 绑定。scene data 与主 CB 双拷同一内容（幂等，262KB/帧
-	// 可忽略）——保持主 CB 路径零改动 = forward diff0 硬约束最小化）
+	// 状态：barrier + 拷贝 + 绑定。scene data 与主 CB 双拷同一内容（幂等，每帧全量
+	// kSceneDataBytes——**字节数不在注释里抄**，真相源 = scene_data.cppm 的
+	// `static_assert(kSceneDataBytes == …)`；双拷的成本账在债-21）——保持主 CB 路径零改动
+	// = forward diff0 硬约束最小化）
 
 	// heap barrier（host 写 → heap 读 + transfer 读 + shader 读；eHost 不能在 render
 	// pass 内，本 CB 全程 pass 外——docs/DESCRIPTOR_HEAP_SPEC.md 坑 8）
