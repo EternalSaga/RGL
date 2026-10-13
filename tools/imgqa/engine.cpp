@@ -164,8 +164,6 @@ struct Engine::Impl {
     }
 };
 
-namespace {
-
 /**
  * 引擎日志尾部（「配置写出来必须能被引擎接受」这条自检的**取证**部分）。
  *
@@ -174,8 +172,11 @@ namespace {
  * 拿着"超时"或 `strerror(status)`（对 wait status 用 strerror = 驴唇不对马嘴）去排查，
  * 而引擎早就把 `[error] ... ConfigLoadFailed ...` 写进了日志——把尾部原样带进异常，
  * 失效当场可读（本轮缺陷 B：REF 组 runtime.lua 被写成嵌套表，报错只有半行截断路径）。
+ *
+ * 声明在 `imgqa.h`（不在匿名 namespace：selftest 要直接喂合成日志核尾部口径——
+ * 债-92 的教训正是「存在理由被静默废掉而无人红过闸门」，这条判据不许只活在注释里）。
  */
-std::string logTail(const std::string& path, int lines = 12)
+std::string logTail(const std::string& path, int lines)
 {
     std::ifstream in(path, std::ios::binary);
     if (!in)
@@ -190,11 +191,14 @@ std::string logTail(const std::string& path, int lines = 12)
     std::ostringstream out;
     if (n == 0)
         return "(日志为空)";
-    const long start = n > lines ? n : 0;
+    const long start = n > lines ? n - lines : 0;  // n 行取尾 lines 行：起点 = n − lines（债-92：
+    // 写成 n 时循环体一次不进 = 恒空串，两个调用点全绿着把取证废掉）
     for (long i = start; i < n; ++i)
         out << "\n    | " << ring[static_cast<size_t>(i % lines)];
     return out.str();
 }
+
+namespace {
 
 // ── 子进程与 RPC 就绪（从 `Engine` 构造切出：构造本体只留「守卫 → fork → 挂 http」）────
 

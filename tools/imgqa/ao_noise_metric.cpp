@@ -4,8 +4,9 @@
 // 缝，先例 = `shadow_kernel_metric.cpp` / `diff_struct_metric.cpp`）。
 //
 // 本文件每一条都是**搬**过来的，函数体一字未改（验收 = 原始二进制 vs 当前二进制的结构签名
-// 对拍 + 字面量对账）。已知在场但本批**不许修**的一条照原样搬着：`printAoScanline` 在全图
-// 拉普拉斯能量恒 0 时带着 `bestRow = -1` 去 `ao.ptr<uint8_t>(-1)` 越界读（→ 交付报告）。
+// 对拍 + 字面量对账）。搬来时在场的一条越界读已于 P1-G1（债-91）修复：`printAoScanline`
+// 在全图拉普拉斯能量恒 0 时不再带着 `bestRow = −1` 去 `ao.ptr<uint8_t>(−1)`，改为明说
+// 「AO 场全平」且不出数（阳性锚点 = `selftest_ao_noise.cpp`）。
 #include "ao_noise_metric.h"
 
 #include "imgqa.h"
@@ -78,9 +79,12 @@ FrameDiff diffFrames(const cv::Mat& a, const cv::Mat& b, const cv::Mat& mask)
     cv::Mat gm;
     cv::bitwise_and(g, mask, gm);
     d.changed = cv::countNonZero(gm);
-    cv::Mat v;
-    cv::meanStdDev(gm, v, v);  // mask 外是 0，均值是「含零填充」的，故按像素数自己除
-    d.mean = d.changed > 0 ? v.at<double>(0) * gm.total() / static_cast<double>(cv::countNonZero(mask))
+    // ⚠ mean 与 stddev **必须两个 Mat 分别接**（债-90：曾写进同一个 `v`，第二次写覆盖
+    // 第一次 ⟹ 当「均值」用的其实是 stddev，组 4 两行读数与 temporalHasResolution 全被
+    // 喂错量）。mask 外是 0，均值是「含零填充」的，故按像素数自己除。
+    cv::Mat meanMat, sdMat;
+    cv::meanStdDev(gm, meanMat, sdMat);
+    d.mean = d.changed > 0 ? meanMat.at<double>(0) * gm.total() / static_cast<double>(cv::countNonZero(mask))
                            : 0.0;
     double hi = 0.0;
     cv::minMaxLoc(gm, nullptr, &hi);
@@ -222,6 +226,13 @@ void printAoScanline(const cv::Mat& ao)
             bestLap = sum;
             bestRow = y;
         }
+    }
+    // 全图拉普拉斯能量恒 0（AO 场全平）⟹ bestRow 停在 −1：扫描线**无定义**，明说并**不出数**
+    // （债-91：曾带着 −1 去 ao.ptr<uint8_t>(−1) 越界读，把堆上的鬼数当剖面印出来；「出个 0」
+    // 或「出 NaN」也不行——出数就会被读成「测到了」，无定义必须占不了数）。
+    if (bestRow < 0) {
+        std::printf("  扫描线：AO 场全平（全图拉普拉斯能量恒 0），扫描线无定义，不出数\n");
+        return;
     }
     const uint8_t* r = ao.ptr<uint8_t>(bestRow);
     int lo = 255, loX = -1;

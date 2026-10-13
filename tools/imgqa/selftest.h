@@ -1,6 +1,6 @@
 #pragma once
 //
-// selftest.h —— `imgqa selftest` 的**跨 TU 共享层**（Checker + 一个共享断言辅助 + 36 条
+// selftest.h —— `imgqa selftest` 的**跨 TU 共享层**（Checker + 两个共享断言辅助 + 39 条
 // testXxx 声明）。
 //
 //   为什么拆：`selftest.cpp` 到 1927 代码行（工具侧上限 500）被文件护栏逼出刀。缝按**被测
@@ -11,8 +11,8 @@
 //                                    连通域 / 任一通道差 / 分簇）+ `judge.cpp` 的判据与反模式
 //                                    注册表 + `cli.cpp` 的 CLI 注册表 + `cmdSelftest` 汇总路由
 //     · `selftest_judgments.cpp`   = **判定口径与配置解析**：`temporal.cpp` 的 temporalDiffStat /
-//                                    `makeProfile` 的键名校验 / `analytic.cpp` 闭式解 /
-//                                    `aa_coverage.cpp` 的覆盖率反解
+//                                    `makeProfile` 的键名校验 / `engine.cpp` 的 logTail 取证 /
+//                                    `analytic.cpp` 闭式解 / `aa_coverage.cpp` 的覆盖率反解
 //     · `selftest_shadow.cpp`      = **阴影族两台量具**（shadow-softness / shadow-kernel-scale）：
 //                                    profile 生成面（lua 覆写门）+ 度量算子面（闭式）
 //     · `selftest_ao_residual.cpp` = `ao_metrics.cpp` 的度量层 + `temporal_residual.cpp` 的
@@ -24,22 +24,29 @@
 //     · `selftest_block.cpp`       = **diffblock 形态判据**（★0.5-b1）：五条阳性锚点 /
 //                                    τ 语义 / erode↔distanceTransform 等价性（合成亮度图直测
 //                                    口径层，不读 PNG 不启引擎）
+//     · `selftest_ao_noise.cpp`    = **ao-noise 口径层**（债-90/91）：diffFrames 帧差三量闭式 /
+//                                    printAoScanline 的「无定义不出数」纪律（合成小图直测）
+//     · `selftest_swim.cpp`        = **taa-swim 仪器层输出面**（债-94）：lagTable 输出行数
+//                                    不随实测噪声变（合成帧序列 + captureStdout 直测打印形态）
 //
 //   为什么 Checker 必须住在这里：`chk` **只在失败时打印** ⟹ 全绿时 stdout 只有一句汇总，
 //   这套自检**没有「逐条通过」的正向读数**。每个 TU 各抄一份 Checker 的后果不是编译不过，
-//   而是 `bad` 变成七份，`cmdSelftest` 只看得见自己那一份 = 另外六份的失败**静默吞掉**。
-//   共享小工具（throwsStd）同理：单一出处，别处不许再抄第二份。
+//   而是 `bad` 变成九份，`cmdSelftest` 只看得见自己那一份 = 另外八份的失败**静默吞掉**。
+//   共享小工具（throwsStd / captureStdout）同理：单一出处，别处不许再抄第二份。
 //
 //   ⚠ 断言条数 = 本文件的机械护栏：**口径必须连命令一起写死**，否则两个人数出两个数（实测踩过：
 //   旧注释只写"grep -cE 数 chk 调用点"，改前用 `c\.chk\(` 数 .cpp 得 338、用 `\bchk\b` 连 .h 与
 //   注释一起数得 343，护栏当场不可证伪）。**唯一口径**：
-//       grep -cE 'c\.chk\(' tools/imgqa/selftest*.cpp | awk -F: '{s+=$2} END {print s}'   # = 339
-//   （只数 .cpp 里的调用点，**不含** selftest.h 的成员函数定义、不含注释）。
+//       grep -cE 'c\.chk\(' tools/imgqa/selftest*.cpp | awk -F: '{s+=$2} END {print s}'   # = 362
+//   （只数 .cpp 里的调用点，**不含** selftest.h 的成员函数定义、不含注释。P1-G1 实测：
+//    注释里的旧数 339 在 HEAD 上就已漂成 343 —— 本行已按同一口径重数并写死为 362。）
 //   丢一条断言**不会让任何东西变红**，它只会让「0 条失败」少守一件事——所以这条计数比编译更值得守。
 //   ⚠ 它目前**只是文档约定，没有机器执行**（2026-10-12 实测：加一条断言后无人改动，数就漂了）。
 //   机械化挂号 → docs/mdi_plan.md §11.5。
 //
 #include "imgqa.h"
+
+#include <unistd.h>  // captureStdout 的 fd 换绑（dup/dup2/close）
 
 #include <cstdio>
 #include <exception>
@@ -78,7 +85,43 @@ bool throwsStd(F fn)
     }
 }
 
-// ── 36 条测试的声明（定义按仪器族分散在七个 TU；调用顺序只写在 `cmdSelftest`）──
+/// 捕获 `fn` 打印到 stdout 的内容（printf 级，含中文）。输出面自检共用（单一出处，
+/// 同 `throwsStd` 的理由）：`printAoScanline`（债-91「不出数」= 输出里**没有**那行）与
+/// `lagTable`（债-94 输出行数稳定性）判据的都是**打印形态**，只能从 stdout 上断言。
+/// 实现 = 临时文件换绑 fd（`std::printf` 走 C 层 fd 1，C++ 流重定向管不到它）；
+/// `fn` 抛异常也先把 stdout 换回来再传播——闸门自己不许把 stdout 弄丢。
+template <class F>
+std::string captureStdout(F fn)
+{
+    std::fflush(stdout);
+    const int saved = ::dup(::fileno(stdout));
+    std::FILE* tmp = saved < 0 ? nullptr : std::tmpfile();
+    if (tmp == nullptr) {  // 兜底：环境造不出临时文件就照常执行不出捕获（断言会因空串红）
+        fn();
+        return {};
+    }
+    ::dup2(::fileno(tmp), ::fileno(stdout));
+    std::exception_ptr err = nullptr;
+    try {
+        fn();
+    } catch (...) {
+        err = std::current_exception();
+    }
+    std::fflush(stdout);
+    ::dup2(saved, ::fileno(stdout));
+    ::close(saved);
+    if (err)
+        std::rethrow_exception(err);
+    std::rewind(tmp);
+    std::string out;
+    char buf[4096];
+    for (size_t n = 0; (n = std::fread(buf, 1, sizeof buf, tmp)) > 0;)
+        out.append(buf, n);
+    std::fclose(tmp);
+    return out;
+}
+
+// ── 39 条测试的声明（定义按仪器族分散在九个 TU；调用顺序只写在 `cmdSelftest`）──
 void testSrgb(Checker& c);
 void testObjectId(Checker& c);
 void testRegion(Checker& c);
@@ -117,5 +160,8 @@ void testDiffBlockErodeLaw(Checker& c);
 void testDiffBlockReportSurface(Checker& c);
 void testCliRegistryShape(Checker& c);
 void testCliArgsBehavior(Checker& c);
+void testEngineLogTail(Checker& c);
+void testAoNoiseMetric(Checker& c);
+void testSwimLagTableSurface(Checker& c);
 
 }  // namespace RGL::imgqa

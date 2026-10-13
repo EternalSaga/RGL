@@ -58,11 +58,13 @@ add_executable(imgqa
     # `selftest`（护栏逼的五刀：selftest.cpp 1927 代码行 > 500），缝按**被测仪器**切、
     # 缝说明全文见 `selftest.h` 头注释。`selftest.cpp` 留**地基**（image.cpp 的图像算子 +
     # judge.cpp 的判据/反模式注册表 + cli.cpp 的 CLI 注册表）与 `cmdSelftest` 汇总路由
-    # （32 个 `testXxx(c)` 的调用顺序 = 失败时的打印顺序，**一字不许换**）；其余按仪器族分五个
+    # （39 个 `testXxx(c)` 的调用顺序 = 失败时的打印顺序，**一字不许换**）；其余按仪器族分八个
     # TU：judgments（判定口径与配置解析）/ shadow（阴影族两台量具）/ ao_residual（AO 度量 +
-    # 时域绝对残差）/ bands（不读图不启引擎的纯度量层）/ motion（运动态时域族）。
+    # 时域绝对残差）/ bands（不读图不启引擎的纯度量层）/ motion（运动态时域族）/
+    # ao_noise（ao-noise 口径层，债-90/91）/ swim（taa-swim 输出面，债-94）/ block（diffblock）。
     # 跨 TU 的 `Checker` 与共享断言辅助唯一出处 = `selftest.h`：每个 TU 各抄一份 Checker 不会
-    # 编译失败，只会把 `bad` 变成六份、cmdSelftest 只看得见自己那一份 = 另外五份的失败静默吞掉。
+    # 编译失败，只会把 `bad` 变成每 TU 一份、cmdSelftest 只看得见自己那一份 = 其余 TU 的失败
+    # 静默吞掉。
     selftest.cpp
     selftest_judgments.cpp
     selftest_shadow.cpp
@@ -72,6 +74,10 @@ add_executable(imgqa
     # `diffblock` 形态判据的锚点段（★0.5-b1）：五条阳性锚点 + τ 语义 + erode↔distanceTransform
     # 等价性（合成亮度图直测 `diff_block_metric.h` 口径层，不读 PNG 不启引擎）。
     selftest_block.cpp
+    # `ao-noise` 口径层（债-90/91）与 `taa-swim` 仪器层输出面（债-94）的自检段（P1-G1）：
+    # 合成小图/合成帧序列直测打印形态，不启引擎。
+    selftest_ao_noise.cpp
+    selftest_swim.cpp
     # `temporal` / `taa-swim`（护栏逼的两刀：temporal.cpp 926 代码行 > 500，里面住着**两台
     # 仪器**），缝按仪器切、缝说明全文见 `temporal_swim.h` 头注释。`temporal.cpp` = **锚点线**
     # （静止机位 + jitter 的抑制比：yawCam / runSequence / temporalDiffStat / cmdTemporal）；

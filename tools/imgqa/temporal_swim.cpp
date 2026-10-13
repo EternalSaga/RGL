@@ -236,37 +236,6 @@ void reportPhaseAndLambda(const SwimGroups& g, PhaseScan& ps, ScanCurve& scan)
         100.0 * scan.best / (scan.zero > 0 ? scan.zero : 1.0));
 }
 
-/// 一组连拍的逐 lag 平移检验读数表（打印逐字）；返回 {搬对相位残差/实测, 搬错相位/实测}
-/// ——判决线 temporal-swim-discriminative 的那两个数。
-std::array<double, 2> lagTable(const char* name, const std::vector<cv::Mat>& frames,
-    double jitterScale, uint32_t phase)
-{
-    std::printf("  %s\n", name);
-    double sumWrong = 0.0, sumMeas = 0.0, sumResid = 0.0;
-    int counted = 0;
-    for (int k = 1; k <= static_cast<int>(kTaaJitterPeriod); ++k) {
-        const LagStat s = lagTranslation(frames, k, jitterScale, phase);
-        if (s.meas == 0.0 && s.pred == 0.0 && k > 1)
-            continue;
-        std::printf("  %-4d %-8.3f %-10.3f %-10.3f %-10.3f %-10.1f%%  符号%+d\n", s.lag,
-            s.pred, s.meas, s.resid, s.wrong, 100.0 * s.resid / (s.meas > 0 ? s.meas : 1.0),
-            s.sign);
-        if (k < static_cast<int>(kTaaJitterPeriod)) {
-            sumWrong += s.wrong;
-            sumMeas += s.meas;
-            sumResid += s.resid;
-            ++counted;
-        }
-    }
-    std::printf("  → 汇总（lag 1..15）：搬对相位残差 %.3f  搬错相位 %.3f  实测 %.3f"
-        "  ⟹ 搬对压到 %.1f%%、搬错压到 %.1f%%\n",
-        sumResid / counted, sumWrong / counted, sumMeas / counted,
-        100.0 * sumResid / (sumMeas > 0 ? sumMeas : 1.0),
-        100.0 * sumWrong / (sumMeas > 0 ? sumMeas : 1.0));
-    return std::array<double, 2>{sumResid / (sumMeas > 0 ? sumMeas : 1.0),
-        sumWrong / (sumMeas > 0 ? sumMeas : 1.0)};
-}
-
 /// 绝对抖动传递段：拟合器三探针 + 五组 absMeasure + 全部读数打印（打印逐字）。
 void reportAbsoluteTransfer(const SwimGroups& g, const cv::Mat& ref, AbsReadings& ar)
 {
@@ -575,6 +544,44 @@ void pushCalibrationVerdicts(std::vector<Verdict>& vs, const AbsReadings& ar, co
 }
 
 }  // namespace
+
+/// 一组连拍的逐 lag 平移检验读数表（打印逐字）；返回 {搬对相位残差/实测, 搬错相位/实测}
+/// ——判决线 temporal-swim-discriminative 的那两个数。
+/// 声明在 `temporal_swim.h`（不在匿名 namespace：selftest 要直接喂合成帧序列核「输出行数
+/// 不随噪声变」——债-94 的形态正是 stdout 行数是彩票，任何逐行/逐字节下游判据全失效）。
+std::array<double, 2> lagTable(const char* name, const std::vector<cv::Mat>& frames,
+    double jitterScale, uint32_t phase)
+{
+    std::printf("  %s\n", name);
+    double sumWrong = 0.0, sumMeas = 0.0, sumResid = 0.0;
+    int counted = 0;
+    for (int k = 1; k <= static_cast<int>(kTaaJitterPeriod); ++k) {
+        const LagStat s = lagTranslation(frames, k, jitterScale, phase);
+        // 跳过条件**按语义**写（债-94）：k = 抖动周期那行是免费标定（预测位移恰为 0，不是
+        // 逐 lag 读数），恒不进表。旧写法 `s.meas == 0.0 && s.pred == 0.0 && k > 1` 拿实测
+        // 浮点精确相等当条件 ⟹ meas 随噪声离开 0 的那一行就多印一行——stdout 行数是彩票
+        // （台账实测同一份代码两轮 15 行 vs 16 行），任何逐行/逐字节的下游判据全失效。
+        // 汇总不受影响（`k < kTaaJitterPeriod` 本就把这行排除在累加外）。
+        if (k == static_cast<int>(kTaaJitterPeriod))
+            continue;
+        std::printf("  %-4d %-8.3f %-10.3f %-10.3f %-10.3f %-10.1f%%  符号%+d\n", s.lag,
+            s.pred, s.meas, s.resid, s.wrong, 100.0 * s.resid / (s.meas > 0 ? s.meas : 1.0),
+            s.sign);
+        if (k < static_cast<int>(kTaaJitterPeriod)) {
+            sumWrong += s.wrong;
+            sumMeas += s.meas;
+            sumResid += s.resid;
+            ++counted;
+        }
+    }
+    std::printf("  → 汇总（lag 1..15）：搬对相位残差 %.3f  搬错相位 %.3f  实测 %.3f"
+        "  ⟹ 搬对压到 %.1f%%、搬错压到 %.1f%%\n",
+        sumResid / counted, sumWrong / counted, sumMeas / counted,
+        100.0 * sumResid / (sumMeas > 0 ? sumMeas : 1.0),
+        100.0 * sumWrong / (sumMeas > 0 ? sumMeas : 1.0));
+    return std::array<double, 2>{sumResid / (sumMeas > 0 ? sumMeas : 1.0),
+        sumWrong / (sumMeas > 0 ? sumMeas : 1.0)};
+}
 
 int cmdTaaSwim(int pairs, int warm, const std::string& variant)
 {

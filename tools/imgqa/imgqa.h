@@ -296,6 +296,11 @@ struct EngineCameraPose {
     double fovDegrees = 0.0;
 };
 
+/// 引擎日志尾部（默认尾 12 行，每行前缀 `\n    | `）：`Engine` 构造失败时把日志尾部带进
+/// 异常的取证件（定义在 `engine.cpp`，理由全文见那里的头注释）。selftest 直接喂合成日志
+/// 核「n 行取尾 lines 行」的口径（债-92：起点写成 `n` 让本函数在 n>lines 时恒返回空串）。
+[[nodiscard]] std::string logTail(const std::string& path, int lines = 12);
+
 /// 引擎进程：起 headless、RPC 驱动、干净退出。单实例纪律 = 起跑前 pgrep，有残留拒跑
 /// （并行实例互相遮挡合成，会把画面与帧率双双扭曲，AGENTS.md 测量教训同源）。
 /// 起跑前先过 SPV 新鲜度守卫（.slang 比其所属 spv 新 = 疑似 stale 拒跑，批 12.3d-D2）。

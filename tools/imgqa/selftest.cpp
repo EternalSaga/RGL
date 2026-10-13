@@ -1,7 +1,7 @@
 // 自检：判据自己要有判据。**断言全部照实测/源码写，不照记忆写**（本项目纪律：
 // 「我以为的行为」一轮写出过 10 处，全部是错的）。闭式解锚点来源逐条注明。
 //
-// 拆文件后的**地基族** + 汇总路由（六路缝的说明全文见 `selftest.h` 头注释）。本 TU 收三台
+// 拆文件后的**地基族** + 汇总路由（缝的说明全文见 `selftest.h` 头注释）。本 TU 收三台
 // 「谁都要踩一脚」的仪器：`image.cpp` 的图像算子、`judge.cpp` 的判据与反模式注册表、
 // `cli.cpp` 的 CLI 注册表（默认值的唯一出处）。它们与 `cmdSelftest` 同处的理由不是「行数
 // 还剩得多」，而是**注册表类自检的失败最会伪装成「什么都没发生」**（空表让后面所有断言恒真
@@ -436,6 +436,9 @@ int cmdSelftest()
     testDiffBlockReportSurface(c);
     testCliRegistryShape(c);
     testCliArgsBehavior(c);
+    testEngineLogTail(c);
+    testAoNoiseMetric(c);
+    testSwimLagTableSurface(c);
     std::printf("%s：%d 条失败\n", c.bad ? "自检失败" : "自检通过", c.bad);
     return c.bad ? 1 : 0;
 }

@@ -1,10 +1,12 @@
 // selftest_judgments.cpp —— **判定口径与配置解析**（拆文件的缝说明全文见 `selftest.h`）。
 //
-// 四台仪器同处的理由 = 它们都是「判据能不能被信」的**前置口径**，且全部**不启引擎**：
-//   · `testTemporalDiff`  —— temporalDiffStat（所有时域判据的统计面本体）
-//   · `testKeyValidation` —— makeProfile 的键名校验器（校验静默失效比没有校验更糟）
-//   · `testAnalytic`      —— analytic.cpp 的闭式解（与实机截图逐字节对拍过的锚点）
-//   · `testAaCoverage`    —— aa_coverage.cpp 的 ACES 反解（整条覆盖率判据都压在它上面）
+// 五台仪器同处的理由 = 它们都是「判据能不能被信」的**前置口径**，且全部**不启引擎**：
+//   · `testTemporalDiff`   —— temporalDiffStat（所有时域判据的统计面本体）
+//   · `testKeyValidation`  —— makeProfile 的键名校验器（校验静默失效比没有校验更糟）
+//   · `testEngineLogTail`  —— engine.cpp 的 logTail（与上一条同属「配置必须被引擎接受」
+//                             这条自检：键名校验是判定面，logTail 是失效取证面）
+//   · `testAnalytic`       —— analytic.cpp 的闭式解（与实机截图逐字节对拍过的锚点）
+//   · `testAaCoverage`     —— aa_coverage.cpp 的 ACES 反解（整条覆盖率判据都压在它上面）
 // 加新用例先问「它测的是哪台仪器」，别按行数往这里塞。
 //
 // 搬动纪律：断言本体逐字搬自拆分前的 selftest.cpp（一条不多、一条不少、不改判定方向与阈值）。
@@ -286,6 +288,47 @@ void testAaCoverage(Checker& c)
         std::abs(rods.front().widthPx - 0.652) < 0.01
             && std::abs(rods.back().widthPx - 6.518) < 0.01,
         std::to_string(rods.front().widthPx) + " " + std::to_string(rods.back().widthPx));
+}
+
+void testEngineLogTail(Checker& c)
+{
+    // logTail = 「配置写出来必须能被引擎接受」这条自检的**取证**部分（Engine 构造失败时
+    // 把日志尾部带进异常）。债-92：起点写成 `n > lines ? n : 0` ⟹ n>lines 时**恒返回空串**
+    // ——存在理由被静默废掉而两个调用点全绿。锚点直接喂合成日志，期望串按闭式整串构造
+    // （行数、内容、顺序、前缀一次全钉；变异红线：起点写成 n → 空串红；写成 n−lines−1 →
+    //  行数 13 红；按 ring 序打印不取模 → 40 行档顺序红）。
+    const std::string path = "/tmp/imgqa_selftest_logtail.log";
+    const auto writeLog = [&path](int n) {
+        std::ofstream f(path);
+        for (int i = 1; i <= n; ++i)
+            f << "L" << i << "\n";
+    };
+    const auto expectTail = [](int first, int last) {
+        std::string want;
+        for (int i = first; i <= last; ++i)
+            want += "\n    | L" + std::to_string(i);
+        return want;
+    };
+
+    // 13 行 → 尾 12 行 = L2..L13（默认 lines=12；n 恰好越过边界，ring 回绕被踩到）
+    writeLog(13);
+    c.chk("logTail：13 行取尾 12 行 = 闭式 L2..L13 整串（债-92 改前恒空串）",
+        logTail(path) == expectTail(2, 13), "实得 [" + logTail(path) + "]");
+    // 40 行 → 尾 12 行 = L29..L40（回绕两圈多，起点若再错一格这里先红）
+    writeLog(40);
+    c.chk("logTail：40 行取尾 12 行 = 闭式 L29..L40（顺序 + 内容 + 前缀）",
+        logTail(path) == expectTail(29, 40), "实得 [" + logTail(path) + "]");
+    // 反向用例（边界不许顺手改坏）：n == lines 全量输出、n < lines 也全量输出
+    writeLog(12);
+    c.chk("logTail：n = lines 全量 12 行（边界不许多砍一行）",
+        logTail(path) == expectTail(1, 12));
+    writeLog(5);
+    c.chk("logTail：n < lines 全量 5 行", logTail(path) == expectTail(1, 5));
+    // 空文件与读不到：文案是排查者唯一能看见的东西，逐字核
+    writeLog(0);
+    c.chk("logTail：空文件 → (日志为空)", logTail(path) == "(日志为空)", logTail(path));
+    c.chk("logTail：文件不存在 → (日志读不到: …)",
+        logTail("/tmp/imgqa_selftest_logtail_不存在.log").rfind("(日志读不到: ", 0) == 0);
 }
 
 }  // namespace RGL::imgqa

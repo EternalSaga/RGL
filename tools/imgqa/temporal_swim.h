@@ -174,4 +174,10 @@ ScanCurve lambdaScan(const std::vector<cv::Mat>& frames, double jitterScale, uin
 /// 纯算子不打印；逐帧读数表由仪器层（temporal_swim.cpp）打印。
 AbsMeasure absMeasure(const cv::Mat& ref, const std::vector<cv::Mat>& frames, double js);
 
+/// 一组连拍的逐 lag 平移检验读数表（仪器层打印，**打印逐字是契约**）；返回
+/// {搬对相位残差/实测, 搬错相位/实测} = 判决线 temporal-swim-discriminative 的两个输入。
+/// 声明在此 = selftest 能直接喂合成帧序列核「输出行数不随噪声变」（债-94）。
+std::array<double, 2> lagTable(const char* name, const std::vector<cv::Mat>& frames,
+    double jitterScale, uint32_t phase);
+
 }  // namespace RGL::imgqa
