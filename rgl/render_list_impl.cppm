@@ -40,52 +40,15 @@ struct Pending {
 };
 
 /**
- * 簇路径单条 draw 的 task 数（★1-a1ii-β-1 抬出 = **单一真相源**）。恒 L0 档下每簇固定
- * **2 个任务槽**：乘 2 的口径 → collectMeshletOverlay 注释（去索引发射把每任务三角数压到 85，
- * 而 L0 簇中位 121 三角、71.2% 的簇 > 85 ⟹ 每簇 2 槽，空半区在 shader 内早退）。
- * 🔴 **三个消费者必须同式**——① α 的影子叠加段（collectMeshletOverlay）、② β-1 的原位
- * 取代段（makeOpaqueCall）、③ ★18-B2 阴影段簇路径（emitShadowCasters，入参 = LOD 选级簇数
- * 而非 L0 簇数，§18.6「入参语义从 L0 簇数放宽为本 draw 要画的簇数」）。三处各写一遍
- * `2 * count` 迟早漂成一个只画一半几何（且画面未必看得出来，簇是空间局部的）。
- * @param clusterCount 本 draw 要画的簇数（主段 = L0 簇数；阴影段 = LOD 选级簇数；> 0，调用方守）
+ * 簇轴的**生效**对（overlay 采集开 / switch 原位取代生效）——两枚 registry ctx 标记一次读齐
+ * （`MeshletOverlayOn` = 债-105 的叠加段自有门，`MeshletSwitchOn` = ★1-a1ii-β-1）。
+ * 存在即生效：判定全在装配层（`wireMeshletOverlayActivation` / `wireMeshletSwitch`），本层只读，
+ * 而 `collectMeshletOverlay` 是唯一的判点（两条都作为入参交给它，调用点不再各写一遍 `if`）。
+ * 抽成 helper 的另一半原因是 `renderListSystem` 的代码行数已顶到 120 行红线。
+ * @return {叠加段采集开, 原位取代生效}
  */
-uint32_t meshletTaskCount(uint32_t clusterCount) {
-	// clusterCount 上限实测 682 ⟹ 2× 远小于 maxMeshWorkGroupCount.x = 65535，无回绕风险。
-	// 槽数取反射生成的规格常量（meshlet_cull_schema.lua 的 kSlotsPerCluster）而不是写字面量 2：
-	// 它与 shader 里的 `cluster = base + (groupID.x >> 1)` / `half = groupID.x & 1` 是**同一个
-	// 契约的两端**，CPU 侧改了 shader 不知道 = 一半几何静默不画。
-	return kSlotsPerCluster * clusterCount;
-}
-
-/**
- * 簇化轴 ★1-a1ii-α：簇路径**影子叠加** draw 采集（实体遍历内调用，视锥剔除之后——
- * 叠加与本体同进同退）。四个发射条件（任一不满足 = 零 draw）：
- *  1. 资产有叠加管线条目（门关 / 无产物 / 多产物回落 = kInvalidPipelineIndex）；
- *  2. 材质非 blend（透明段按距离排序，叠加不参与——画进独立向量会破坏其排序语义）；
- *  3. registry ctx 有簇区间表（门关 = 装配层根本不建，meshlet_ranges::ClusterRangeTable）；
- *  4. 本 objectSlot 的 L0 簇数 > 0（无簇 = 零 group，连空 draw 都不发）。
- * groupCount = **2 × l0Count**（恒 L0 档，docs/mdi_plan.md §10.1：L0 恒为区间前缀）。乘 2 的理由
- * = 簇路径去索引发射（§13.2 路 C）把每任务的三角形数压到 85（3×85 = 255 ≤ maxMeshOutputVertices
- * 256），而 L0 簇中位 121 三角、71.2% 的簇 > 85 ⟹ **每簇固定 2 个任务槽**（shader 侧
- * `cluster = base + (groupID.x >> 1)`、`half = groupID.x & 1`；空半区 SetMeshOutputCounts(0,0)
- * 早退）。固定 2 槽而非前缀和：零额外 buffer、零每帧扫描，代价 = 空任务（实测 28.8% 的簇的第二槽）。
- * pushData 与本体 draw 同一个 DrawArgs（同 objectIndex ⟹ shader 读同一套材质/MVP 表项）。
- * @param asset/mat 本实体资产与材质（判据 1/2）
- * @param table 簇区间表（nullptr = 门关）
- * @param objectSlot = MeshRef.objectSlot（表下标 = shader objectIndex）
- * @param pushData 与本体 draw 同源的 push 字节（帧局部存储，规则同 DrawCall::pushData）
- * @param out 叠加段收集向量（实体迭代序 = 确定性）
- */
-void collectMeshletOverlay(const RGL::MeshAsset& asset, const RGL::MaterialAsset& mat,
-    const ClusterRangeTable* table, uint32_t objectSlot,
-    std::span<const std::byte> pushData, std::vector<RGL::DrawCall>& out) {
-    if (asset.meshletPipelineIndex == kInvalidPipelineIndex || mat.alphaModeBlend
-        || table == nullptr || objectSlot >= table->bySlot.size())
-        return;
-    const uint32_t l0Count = table->bySlot[objectSlot].l0Count;
-    if (l0Count == 0)
-        return;
-    out.push_back(RGL::DrawCall{asset.meshletPipelineIndex, pushData, meshletTaskCount(l0Count)});
+std::pair<bool, bool> meshletActivations(const entt::registry& rg) {
+	return {rg.ctx().contains<MeshletOverlayOn>(), rg.ctx().contains<MeshletSwitchOn>()};
 }
 
 /**
@@ -198,6 +161,58 @@ std::array<Bounds, kActiveShadowCascades> computeCascadeSpheres(const ViewProjec
 }
 
 }  // namespace
+
+/**
+ * 定义（接口声明与契约见 render_list.cppm）——簇路径单条 draw 的 task 数（★1-a1ii-β-1 抬出 =
+ * **单一真相源**）。恒 L0 档下每簇固定 **2 个任务槽**：乘 2 的口径 → collectMeshletOverlay 注释
+ * （去索引发射把每任务三角数压到 85，而 L0 簇中位 121 三角、71.2% 的簇 > 85 ⟹ 每簇 2 槽，
+ * 空半区在 shader 内早退）。
+ * 🔴 **三个消费者必须同式**——① α 的影子叠加段（collectMeshletOverlay）、② β-1 的原位
+ * 取代段（makeOpaqueCall）、③ ★18-B2 阴影段簇路径（emitShadowCasters，入参 = LOD 选级簇数
+ * 而非 L0 簇数，§18.6「入参语义从 L0 簇数放宽为本 draw 要画的簇数」）。三处各写一遍
+ * `2 * count` 迟早漂成一个只画一半几何（且画面未必看得出来，簇是空间局部的）。
+ * 🔴 **债-105 起与 `collectMeshletOverlay` 一起抬成导出接缝**：叠加段的 task 数要在无 GPU 的单测里
+ * 钉「同一入口」，留在匿名 namespace 就只能写字面 2（test_shadow_lod_emit 文件头把这条登记成
+ * 已知缺口，本批就地还掉）。
+ * @param clusterCount 本 draw 要画的簇数（主段 = L0 簇数；阴影段 = LOD 选级簇数；> 0，调用方守）
+ */
+uint32_t meshletTaskCount(uint32_t clusterCount) {
+	// clusterCount 上限实测 682 ⟹ 2× 远小于 maxMeshWorkGroupCount.x = 65535，无回绕风险。
+	// 槽数取反射生成的规格常量（meshlet_cull_schema.lua 的 kSlotsPerCluster）而不是写字面量 2：
+	// 它与 shader 里的 `cluster = base + (groupID.x >> 1)` / `half = groupID.x & 1` 是**同一个
+	// 契约的两端**，CPU 侧改了 shader 不知道 = 一半几何静默不画。
+	return kSlotsPerCluster * clusterCount;
+}
+
+/**
+ * 定义（接口声明与六条判据见 render_list.cppm）——簇化轴 ★1-a1ii-α：簇路径**影子叠加**
+ * draw 采集（实体遍历内调用，视锥剔除之后 = 叠加与本体同进同退）。
+ * 🔴 **判据全部在这里**（债-105）：本函数是这块逻辑唯一能无 GPU 单测的纯函数，任何一条挪回
+ * 调用点（renderListSystem）= 那条判据从此只有代码阅读在担保。编号沿用「四条既有 + 第五枚
+ * 叠加段门 + 第六枚 β-1 互斥抑制」，前四条的号**不动**（别处注释按 1..4 引用过它们）。
+ * @param asset/mat 本实体资产与材质（判据 1 / 2）
+ * @param table 簇区间表（nullptr = 门关 = 判据 3；槽越界那一支也归它）
+ * @param objectSlot = MeshRef.objectSlot（表下标 = shader objectIndex）
+ * @param overlayActive **第五枚**：叠加段**自己的**门 `meshlet.overlay` 的生效标记——ctx 里有没有
+ *        `MeshletOverlayOn`（装配层 wireMeshletOverlayActivation 判定一次，本层不重述条件）
+ * @param meshletInPlace **第六枚**：β-1 原位取代的生效标记 = 与本体 draw 的互斥抑制（★1-a1ii-β-1
+ *        既有那条，原本写在调用点的 `if (!meshletInPlace)` 上，本批把判点搬进函数 = 同一个
+ *        `MeshletSwitchOn` 事实不再有两处表达；与 makeOpaqueCall 的入参同源）
+ * @param pushData 与本体 draw 同源的 push 字节（帧局部存储，规则同 DrawCall::pushData）
+ * @param out 叠加段收集向量（实体迭代序 = 确定性）
+ */
+void collectMeshletOverlay(const RGL::MeshAsset& asset, const RGL::MaterialAsset& mat,
+     const ClusterRangeTable* table, uint32_t objectSlot, bool overlayActive, bool meshletInPlace,
+     std::span<const std::byte> pushData, std::vector<RGL::DrawCall>& out) {
+     // 判据 5/6 在前（「本段要不要存在」），1-4 在后（「本图元能不能画」）。
+     if (!overlayActive || meshletInPlace || asset.meshletPipelineIndex == kInvalidPipelineIndex
+         || mat.alphaModeBlend || table == nullptr || objectSlot >= table->bySlot.size())
+         return;
+     const uint32_t l0Count = table->bySlot[objectSlot].l0Count;
+     if (l0Count == 0)
+         return;
+     out.push_back(RGL::DrawCall{asset.meshletPipelineIndex, pushData, meshletTaskCount(l0Count)});
+}
 
 /**
  * 定义（接口声明与契约见 render_list.cppm）。收集阴影投影体候选（实体遍历内调用，只判
@@ -575,7 +590,11 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	const auto* clusterTable = rg.ctx().find<ClusterRangeTable>();
 	// 簇化轴 ★1-a1ii-β-1：原位取代的**生效**标记（装配层 wireMeshletSwitch 判定后 emplace，
 	// 本层只读；不 emplace = 不切 = 逐位不变）。判定只有一处，理由 → MeshletSwitchOn 注释。
-	const bool meshletInPlace = rg.ctx().contains<MeshletSwitchOn>();
+	// 簇化轴：两枚 ctx 生效标记一次读齐（overlay = 债-105 的叠加段自有门，出厂关 ⟹ 一条叠加
+	// draw 都不采 = 拿回 +1571 draws / +1.59ms；inPlace = ★1-a1ii-β-1 原位取代）。🔴 overlay 的
+	// 生效条件**不含** meshlet.enable（同 mdi_shadow 定性）；enable 关时条目没烘，那种孤立组合由
+	// 装配层 wireMeshletOverlayActivation 按事实出声，不在这里静默，也不在这里补条件。
+	const auto [meshletOverlay, meshletInPlace] = meshletActivations(rg);
 	// 簇化轴 ★18-B2：阴影远级联 LOD 选级表（装配层 wireClusterRangeTable 判定后 emplace，
 	// 本层只读；不 emplace = 门关 = 候选全部不可切 = 逐位不变，「存在即生效」同 MeshletSwitchOn）
 	const auto* shadowLodTable = rg.ctx().find<MeshletShadowLodTable>();
@@ -680,12 +699,15 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 			bucket.push_back(Pending{makeOpaqueCall(asset, mat, clusterTable, meshRef.objectSlot,
 				std::as_bytes(std::span<const RGL::DrawArgs>{&args, 1}), meshletInPlace),
 				glm::dot(d, d)});  // 距离²（免 sqrt，排序单调等价）
-			// 簇化轴 ★1-a1ii-α：影子叠加 draw（视锥剔除后 = 与本体同进同退；条件 → helper）。
-			// ★1-a1ii-β-1 互斥：switch 生效时那批几何已经**原位**画过一遍，再叠加 = 同一几何画
-			// 两遍（且叠加段在段尾，与透明/天空盒的相对序也跟着变）⟹ 整段不采（装配层 warn 出声）。
-			if (!meshletInPlace)
-				collectMeshletOverlay(asset, mat, clusterTable, meshRef.objectSlot,
-					std::as_bytes(std::span<const RGL::DrawArgs>{&args, 1}), meshletPending);
+			// 簇化轴 ★1-a1ii-α：影子叠加 draw（视锥剔除后 = 与本体同进同退；五条发射条件 +
+			// 互斥抑制**全部在 helper 内判**，本行只搬事实 = 债-105 把「条件集中在唯一可单测的
+			// 纯函数里」这条做到底：叠加段自己的门（`meshletOverlay`）与 ★1-a1ii-β-1 既有的
+			// switch 互斥（switch 生效时那批几何已**原位**画过一遍，再叠加 = 同一几何画两遍，
+			// 且叠加段在段尾会连带挪动与透明/天空盒的相对序）都在 collectMeshletOverlay 里
+			// 判，同一个 `MeshletSwitchOn` 事实不再有两处表达；装配层照旧 warn 出声）。
+			collectMeshletOverlay(asset, mat, clusterTable, meshRef.objectSlot,
+				meshletOverlay, meshletInPlace,
+				std::as_bytes(std::span<const RGL::DrawArgs>{&args, 1}), meshletPending);
 		});
 
 	// 主灯（阴影矩阵要它的方向）—— 提到此处：光空间体必须在剔除之前成形

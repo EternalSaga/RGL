@@ -375,10 +375,10 @@ export struct RuntimeConfig {
 	 * 拍板时明写的三条代价（读数绑本机 AMD 8060S，→ §18.9）：
 	 *  · 显存 **+175.5 MiB**（4 段簇 buffer，顶点池 138MB 占大头）
 	 *  · 启动 **+1.2s**（解析 184MB 产物 + 上传）
-	 *  · 🔴 **连带打开 α 影子叠加段 = 白付 1.59ms/帧**：`collectMeshletOverlay` 的激活条件
-	 *    只有「有簇管线条目 + 区间表存在」，**没有自己的门**。α 是 ★1-a1ii-α 的验证脚手架
-	 *    （同批几何在 opaque 之后重画一遍、靠共面 + eLess 一个像素不写），β-1 的 `switch` 档
-	 *    会把整段清空 ⟹ 它已完工却仍绑死产品路径的开关。解耦 = §18.11 欠账 ④。
+	 *  · ~~**连带打开 α 影子叠加段 = 白付 1.59ms/帧**~~ —— 这条代价**已由债-105 摘掉**：叠加段
+	 *    现在有自己独立的门 `meshlet.overlay`（默认关），本键开 ≠ 叠加段开。原委（α 是
+	 *    ★1-a1ii-α 的验证脚手架、共面 + eLess 一个像素不写、却绑在产品路径开关上）→
+	 *    `docs/mdi_plan.md` §18.11 欠账 ④ 与本文件 `meshletOverlay` 注释。
 	 *
 	 * 逐资产门不在本键 = 「该资产有没有簇产物」（§7.8 拍板 3：产物缺失 → 回落现行路径，
 	 * 未打包资产零风险）。形态先例 = readSsrBlock（嵌套块，无扁平键双读兼容——两个真相源是
@@ -387,6 +387,29 @@ export struct RuntimeConfig {
 	 */
 	bool meshletEnable = true;
 	/**
+	 * α 影子**叠加段自己的**门（configs/runtime.lua `meshlet.overlay` 键，债-105，默认**关**）。
+	 *
+	 * 🔴 **本键的宿主是叠加段，不是 `meshlet.enable`**——生效条件里**不含** `enable`（同
+	 * `meshlet.mdi_shadow` 的定性：`meshlet` 块里生效条件不依赖 `enable` 的键）。理由不是洁癖：
+	 * 叠加条目的**烘焙**条件是 `wireMeshletBindings` 的 `slots`（= `enable`），而这些条目同时是
+	 * β-1 `switch` 原位取代的宿主（`makeOpaqueCall` 读 `asset.meshletPipelineIndex`）⟹ 把烘焙挂到
+	 * 本键门下会让 `switch` **静默失去宿主**（见 `bakeMeshletEntries` 的钉死注释）。本键只决定
+	 * **采不采叠加 draw**，一条条目都不增减。
+	 *
+	 * **为什么要单独一枚**（债-105 的原文）：★18-C 翻默认后 `enable = true` 出厂，而叠加段的激活
+	 * 条件当时只有「有簇管线条目 + 区间表存在」⟹ 白付 **+1571 draws / +1.59ms 每帧**买一个
+	 * **一像素都不写**的验证脚手架（共面 + `eLess` 全拒）。α 已完工（★1-a1ii-α 的四臂判据），
+	 * 不该再绑在产品路径的开关上。
+	 *
+	 * ⚠ `overlay = true` 而 `enable = false` 时确实**没有条目可采**（`slots = nullopt` = 烘焙整段
+	 * 早退）——这种孤立组合装配层**出声**（`wireMeshletOverlay`），不静默空开关。
+	 *
+	 * 🔴 本键关 ⟹ `meshlet.debug` / `meshlet.tint` 这两枚**条目级 SPV 变体位**一律取 base
+	 * （它们烘进的是 `switch` 也要用的那批条目，让叠加仪器改条目 = 诊断渗进产品取代路；
+	 * 偏离默认时装配层 warn 出声，口径 → `wireMeshletOverlay` 变体选档注释）。
+	 */
+	bool meshletOverlay = false;
+	/**
 	 * 簇路径**阳性对照**档（configs/runtime.lua `meshlet.debug` 键，★1-a1ii-α）。
 	 *
 	 * = true（且 enable = true）时叠加条目改用 `meshlet.mesh_MESHLET_DEBUG_OFFSET.spv`
@@ -394,6 +417,9 @@ export struct RuntimeConfig {
 	 * 「画了相同内容 vs 什么都没画」的区分器（docs/mdi_plan.md §11）。门 = 选 SPV 变体
 	 * 不是运行时 flag 分支（2026-10-02 slang fp 重排教训，同 IZB/PCSS/EVSSM 纪律）。
 	 * 默认关；enable 关时本键无意义（条目根本不建）。
+	 * 🔴 **overlay 关时本键被强制归 base**（债-105）——变体烘进的是 `switch` 原位取代共用的那批
+	 * 条目，让叠加仪器改条目 = 把「clip.z 拉向相机」的几何错位带进产品路。偏离默认时装配层 warn
+	 * 出声（`wireMeshletOverlay` 的变体选档）。
 	 */
 	bool meshletDebug = false;
 	/**
@@ -412,6 +438,8 @@ export struct RuntimeConfig {
 	 * 🔴 `off`（默认）= **一条 setDepthCompareOp 都不发** ⟹ 门关与 off 档的动态状态序列
 	 * 逐 bit 不变（A1 判据的构造性保证）。未知值 = 启动 fail-fast（`aa` 三态键同纪律：
 	 * 静默回落会让「四臂哈希全同」的主判据整批假绿）。仅 `meshletEnable` 为真时有意义。
+	 * 🔴 **债-105 起还要 `meshlet.overlay` 为真才有消费者**：叠加段关 = 双臂没有任何 draw 可作用，
+	 * 生效档 INFO 会当场点出这件事（不点出来会被读成「双臂还在跑」）。
 	 */
 	MeshletCoplanarMode meshletCoplanar = MeshletCoplanarMode::off;
 	/**

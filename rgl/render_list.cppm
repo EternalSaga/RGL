@@ -13,6 +13,7 @@ import asset_table;
 import scene_context;
 import scene_data;    // kActiveShadowCascades（阴影段清单的级数；阴影 draw 构造接缝入参）
 import meshlet_lod;   // MeshletShadowLodTable（★18-B2 阴影远级联 LOD 选级表，collectShadowCasters 入参）
+import meshlet_ranges;  // ClusterRangeTable（债-105 起 collectMeshletOverlay 抬为接缝，接口侧要这个入参类型）
 import runtime_config;  // SsrTuning / WetTuning（批 15.1 参数面 + 批 15.2A 湿面参数：系数唯一默认值载体，fill*Params 入参）
 import camera;
 
@@ -174,6 +175,49 @@ export void emitShadowCasters(std::span<const ShadowCandidate> cands,
 	std::vector<ShadowDrawArgs>& shadowArgs,
 	std::vector<ShadowMeshletDrawArgs>& shadowMeshletArgs,
 	std::array<std::vector<DrawCall>, kActiveShadowCascades>& out);
+
+/**
+ * 簇路径单条 draw 的 task 数（★1-a1ii-β-1 抬出 = **单一真相源**；定义在 render_list_impl，
+ * 实现侧不写 export）。导出为**可测接缝**（债-105 与 `collectMeshletOverlay` 同批抬出：
+ * 叠加段的 ×2 口径要在无 GPU 的单测里钉「同一入口」，此前它藏在 impl 的匿名 namespace 里，
+ * `tests/test_shadow_lod_emit.cppm` 只能写字面 2 并把这登记成已知缺口）。
+ * 恒 L0 档下每簇固定 **2 个任务槽**（去索引发射把每任务三角数压到 85，而 L0 簇中位 121 三角、
+ * 71.2% 的簇 > 85）；槽数取反射生成的规格常量 `kSlotsPerCluster`，不写字面量 2。
+ * 🔴 **三个消费者必须同式**：α 影子叠加段（`collectMeshletOverlay`）、β-1 原位取代段
+ * （`makeOpaqueCall`）、★18-B2 阴影段簇路径（`emitShadowCasters`，入参 = LOD 选级簇数）。
+ * @param clusterCount 本 draw 要画的簇数（主段 = L0 簇数；阴影段 = LOD 选级簇数；> 0，调用方守）
+ */
+export uint32_t meshletTaskCount(uint32_t clusterCount);
+
+/**
+ * 簇化轴 ★1-a1ii-α：簇路径**影子叠加** draw 采集（实体遍历内调用，视锥剔除之后——叠加与本体
+ * 同进同退）。定义在 render_list_impl（partition impl unit，实现侧不写 export）。导出为**可测
+ * 接缝**（`collectShadowCasters` 同款先例）：债-105 给它加了第五枚条件（叠加段**自己的**门），
+ * 而这块逻辑的全部判据只在这个纯函数里成立才有意义——回归断言 = `tests/test_meshlet_overlay`。
+ *
+ * 六条判据（任一不满足 = 零 draw）：
+ *  1. 资产有叠加管线条目（门关 / 无产物 / 多产物回落 = `kInvalidPipelineIndex`）；
+ *  2. 材质非 blend（透明段按距离排序，叠加不参与——画进独立向量会破坏其排序语义）；
+ *  3. registry ctx 有簇区间表（门关 = 装配层根本不建）且不越界（表比实例矩阵槽短 = 不采）；
+ *  4. 本 objectSlot 的 L0 簇数 > 0（无簇 = 零 group，连空 draw 都不发）；
+ *  5. 🔴 **`meshlet.overlay` 生效**（债-105 新增，`overlayActive` 入参）——叠加段是 ★1-a1ii-α
+ *     的验证脚手架（同批几何重画一遍、共面 + `eLess` 一像素不写），出厂默认不再连带它；
+ *  6. β-1 原位取代**未**生效（`meshletInPlace` 入参）——同一批几何不能既原位取代又再叠加画第二遍。
+ *
+ * 🔴 判据 5/6 是**入参**而不是写在 `renderListSystem` 的调用点上，理由 = 条件集中在唯一可单测
+ * 的纯函数里；调用点只负责把 ctx 的**生效事实**搬进来（`MeshletOverlayOn` / `MeshletSwitchOn`），
+ * 不重述任何条件。
+ * @param asset/mat 本实体资产与材质（判据 1 / 2）
+ * @param table 簇区间表（nullptr = 门关 = 判据 3）
+ * @param objectSlot = MeshRef.objectSlot（表下标 = shader objectIndex）
+ * @param overlayActive 判据 5（ctx 有没有 `MeshletOverlayOn`）
+ * @param meshletInPlace 判据 6（ctx 有没有 `MeshletSwitchOn`，与 `makeOpaqueCall` 同源）
+ * @param pushData 与本体 draw 同源的 push 字节（帧局部存储，规则同 DrawCall::pushData）
+ * @param out 叠加段收集向量（实体迭代序 = 确定性）
+ */
+export void collectMeshletOverlay(const RGL::MeshAsset& asset, const RGL::MaterialAsset& mat,
+	const ClusterRangeTable* table, uint32_t objectSlot, bool overlayActive, bool meshletInPlace,
+	std::span<const std::byte> pushData, std::vector<RGL::DrawCall>& out);
 
 /**
  * 每帧填灯数据（scene data 头单灯 + 尾区灯数组），并返回主灯。定义在

@@ -165,4 +165,21 @@ export MeshletCullItemTable buildClusterCullItems(ClusterRangeTable& table);
  */
 export struct MeshletSwitchOn {};
 
+/**
+ * α 影子**叠加段**的**生效**标记（债-105，`meshlet.overlay`，默认关）。
+ *
+ * 与 `MeshletSwitchOn` 同一个生产者/消费者一对、同一种「存在即生效」形态：装配层
+ * `wireMeshletOverlayActivation` 在启动期判定并 emplace，`renderListSystem` 每帧 find 只读，
+ * 判据落在 `collectMeshletOverlay` 的第五枚条件上。
+ *
+ * 🔴 **生效条件不含 `meshlet.enable`**（本键与 `mdi_shadow` 同定性）：本标记只决定「叠加段采不采
+ * draw」，条目的烘焙条件仍挂在 `enable` 上（那些条目同时是 `switch` 原位取代的宿主）。二者解耦的
+ * 后果是 `overlay = true` + `enable = false` 这种**孤立组合**——装配层出声（判据 = 有没有条目这个
+ * 事实，不是配置意图），不静默空开关。
+ *
+ * 关（默认）= 不 emplace = 叠加段一条 draw 都不采 ⟹ 出厂拿回 +1571 draws / +4713 vkCmd /
+ * +1.59ms 每帧（`docs/mdi_plan.md` §18.9 判据 5 的 counters 口径、§18.11 欠账 ④）。
+ */
+export struct MeshletOverlayOn {};
+
 }  // namespace RGL

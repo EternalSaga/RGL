@@ -376,18 +376,19 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg) {
 /**
  * `meshlet` 嵌套块解析（★0-b1 簇路径总门 + ★1-a1ii-α debug 档 + ★0.5-b2 coplanar/tint +
  * ★1-a1ii-β-1 switch 原位取代档 + ★1-a2-i cull + ★18-B1 shadow_lod 阴影段选级 +
- * ★M-0 mdi_shadow 真 MDI 档）：
- * `meshlet = { enable, debug, coplanar, tint, switch, cull, shadow_lod, shadow_lod_fallback,
- * mdi_shadow }`。
+ * ★M-0 mdi_shadow 真 MDI 档 + **债-105** overlay α 叠加段自己的门）：
+ * `meshlet = { enable, overlay, debug, coplanar, tint, switch, cull, shadow_lod,
+ * shadow_lod_fallback, mdi_shadow }`。
  * 缺块 / 缺键 = 保持结构体默认（🔴 ★18-C 起 `meshletEnable = true` + `meshletShadowLod = 5`
  * = 出厂即开簇路径与阴影远级联 LOD，2026-10-12 用户拍板。P5「门关 = 逐位不变」**仍是硬护栏**，
  * 只是门关态现在要显式 `enable = false` + `shadow_lod = -1`（实测精确复现旧锚 54e40665…）。
- * 逐键默认值唯一真相源 = RuntimeConfig 成员初始化，本行只列其余形态：`meshletDebug = false` =
+ * 逐键默认值唯一真相源 = RuntimeConfig 成员初始化，本行只列其余形态：`meshletOverlay = false` =
+ * α 叠加段不采 draw（债-105，出厂不再白付 1.59ms）；`meshletDebug = false` =
  * 正常叠加档；`meshletCoplanar = off` = 不碰动态状态；`meshletTint = false` = 不选 tint 变体；
  * `meshletSwitch = false` = 不取代；`shadow_lod_fallback = deepest`；`meshletMdiShadow = false`
  * = 不走 MDI（★M-0 起本键**零消费者**，读到也不改变任何一帧行为）。
  * 形态先例 = readFsrBlock（嵌套块，无扁平键双读兼容）；coplanar / shadow_lod_fallback 两枚
- * 三态键先例 = applyAaKey（未知值 fail-fast，错误经返回值上抛给调用方）。五枚布尔走
+ * 三态键先例 = applyAaKey（未知值 fail-fast，错误经返回值上抛给调用方）。六枚布尔走
  * readStrictBoolKey、shadow_lod 走 readStrictIntKey（类型错 = 启动失败，理由 → 各自注释）。
  * gate_lint 不挂号的理由 → docs/mdi_plan.md §18.10 欠账 ③（其 Ctx 不含 RuntimeConfig，
  * 整块孤立组合静默；本批只就近堵了 shadow_lod 那一枚 → main_meshlet_tables.cppm 的
@@ -404,6 +405,9 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg) {
 		return std::nullopt;
 	// 顺序 = 键在 configs/runtime.lua 里的出现序；任一失败即返回（fail-fast，不收集后合并）
 	if (auto err = readStrictBoolKey(meshlet, "enable", cfg.meshletEnable, path))
+		return err;
+	// 债-105 α 影子叠加段自己的门（默认 false ⟹ 出厂不再白付 +1.59ms）
+	if (auto err = readStrictBoolKey(meshlet, "overlay", cfg.meshletOverlay, path))
 		return err;
 	if (auto err = readStrictBoolKey(meshlet, "debug", cfg.meshletDebug, path))
 		return err;

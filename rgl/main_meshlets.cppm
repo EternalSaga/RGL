@@ -69,6 +69,107 @@ bool writeMeshletSectionDescriptors(DeviceContext& device, Resources& resources,
 	return true;
 }
 
+/**
+ * α 影子叠加段的**生效**接线（债-105，`meshlet.overlay` → registry ctx 标记 `MeshletOverlayOn`；
+ * 对外经 `wireMeshletPostRegistration` 第三步进入）。三步：门关早退（零 ctx 零日志 = 「门关
+ * `grep -ci meshlet` = 0」护栏）→ emplace 生效标记 → 按**事实**出声或打印生效档。
+ *
+ * 🔴 **生效条件里没有 `meshlet.enable`**（同 `mdi_shadow` 的定性：`meshlet` 块里生效条件不依赖
+ * `enable` 的键）——本键的宿主是叠加段自己。但条目的**烘焙**条件挂在 `wireMeshletBindings` 的
+ * `slots`（= `enable`）上 ⟹「overlay 开 + enable 关」= 没有条目可采 = **零 draw 而日志一行不出**
+ * 的静默空开关（§18.9 第 9 条抓到的同一形态）。所以这里读**事实**（有没有资产带着簇管线条目）
+ * 而不是配置意图：无产物 / 多产物回落 / 零模型命中这几条回落路都不写配置，只比 `enable` 会漏。
+ * 孤立组合 = **出声但仍 emplace**（标记只代表「本段采集开启」，画不画由 `collectMeshletOverlay`
+ * 的判据 1 决定）——别把门改成 `enable && overlay`，那等于把两件事焊回一处，`switch` 的宿主与
+ * 叠加段的门重新纠缠。
+ * @param registry 场景 registry（emplace 目标 + MeshRef 事实扫描；🔴 **必须在实体注册之后**）
+ * @param assets   资产表（读 `meshletPipelineIndex` = 条目宿主在不在）
+ * @param cfg      运行配置（读本键）
+ */
+void wireMeshletOverlayActivation(entt::registry& registry, const AssetTable& assets,
+	const RuntimeConfig& cfg) {
+	if (!cfg.meshletOverlay)
+		return;  // 门关（出厂默认）= 零 ctx 零日志
+	registry.ctx().emplace<MeshletOverlayOn>();
+	auto* logger = RLLogger::getInstance();
+	uint32_t hosts = 0;
+	registry.view<MeshRef>().each([&](const MeshRef& meshRef) {
+		if (assets.get(meshRef.asset).meshletPipelineIndex != kInvalidPipelineIndex)
+			++hosts;
+	});
+	if (hosts == 0) {
+		if (logger)
+			logger->warn("meshlet: overlay 开但**没有一条簇管线条目可采**（meshlet.enable 关 / 无簇产物 "
+						 "/ 多产物回落 / 零模型命中）—— 叠加段零 draw，本跑画面与 overlay 关逐位相同；"
+						 "要它生效请把 meshlet.enable 一并置 true（条目的烘焙条件挂在那枚门上）");
+		return;
+	}
+	if (logger)
+		logger->info("meshlet: overlay 生效档 = on —— α 影子叠加段采集 {} 个宿主图元（每 draw 的 task 数 "
+					 "= meshletTaskCount(L0 簇数)；正常档共面 + eLess ⟹ 一像素不写 = 验证脚手架）。"
+					 "代价与两锚的口径 → docs/mdi_plan.md §18.9 / §18.11",
+			hosts);
+}
+
+/**
+ * 叠加 mesh SPV 变体选档（★0.5-b2 的三档 base/debug/tint + **债-105** 的归属裁决）。
+ *
+ * 🔴 变体位**归叠加段所有**：`overlay = false` 时**一律 base**——这两枚是**条目级**开关（变体经
+ * `bakeMeshletEntries` 的 `variant` 烘进**条目**），而那批条目同时是 β-1 原位取代的宿主
+ * （`makeOpaqueCall` 读 `asset.meshletPipelineIndex`）⟹ 叠加段关着也能改产品路的几何
+ * （DEBUG_OFFSET 把 clip.z 拉向相机 = 取代段整体错位；TINT 把着色输入写死 = 产品路变平色块）。
+ * 这不是「仪器没宿主」而是「仪器渗进产品」。孤立组合的出声 = `warnMeshletVariantInstruments`。
+ *
+ * 优先级与 ★0.5-b2 一致：tint 与 debug 同真 = **tint 优先**（判据 3 只用 tint、判据 4 只用
+ * offset，从不同时用 ⟹ 不建第 4 个组合变体）。
+ * @param cfg 运行配置（读 overlay / tint / debug 三字段）
+ * @return 本跑该烘的 mesh SPV 变体
+ */
+MeshletMeshVariant pickMeshletMeshVariant(const RuntimeConfig& cfg) {
+	if (!cfg.meshletOverlay)
+		return MeshletMeshVariant::base;
+	if (cfg.meshletTint)
+		return MeshletMeshVariant::tint;
+	if (cfg.meshletDebug)
+		return MeshletMeshVariant::debugOffset;
+	return MeshletMeshVariant::base;
+}
+
+/** 哪几枚叠加仪器被打开（只用于告警文案点名键，不决定任何行为）。 */
+std::string_view meshletInstrumentNames(const RuntimeConfig& cfg) {
+	if (!cfg.meshletTint)
+		return "debug";
+	return cfg.meshletDebug ? "debug 与 tint" : "tint";
+}
+
+/**
+ * 叠加仪器（`debug` / `tint`）的**孤立组合**告警：只在**门开**且**偏离默认**时喊。
+ *
+ * 门关（`meshlet.enable = false`）时条目根本不烘、变体不被读 ⟹ 喊出来会破「门关
+ * `grep -ci meshlet` = 0」的护栏（同 `warnIfShadowLodOrphaned` 的纪律，只在偏离默认时出声）。
+ * 为什么必须喊：本批把「overlay 关」的变体强制归 base 之后，「overlay 关 + debug/tint 开」跑出来
+ * 就是**出厂那张图**（A6b），不点出来会被读成「仪器坏了」；而「tint 与 debug 同真」则是
+ * ★0.5-b2 的老一条（tint 优先，从不同时用）。
+ * @param cfg 运行配置（读 enable / overlay / debug / tint 四字段）
+ */
+void warnMeshletVariantInstruments(const RuntimeConfig& cfg) {
+	if (!cfg.meshletEnable || (!cfg.meshletDebug && !cfg.meshletTint))
+		return;  // 门关 / 两枚都默认 = 无话可说
+	auto* logger = RLLogger::getInstance();
+	if (logger == nullptr)
+		return;
+	if (!cfg.meshletOverlay) {
+		logger->warn("meshlet: overlay 关而 meshlet.{} 非默认 —— 叠加仪器是**条目级** SPV 变体位，而条目"
+					 "是 switch 原位取代的宿主 ⟹ 本跑把变体强制归 base（否则诊断会改掉产品路几何）。"
+					 "要么开 meshlet.overlay 让仪器有消费者，要么把它们归零",
+			meshletInstrumentNames(cfg));
+		return;
+	}
+	if (cfg.meshletTint && cfg.meshletDebug)
+		logger->warn("meshlet: tint 与 debug 同真 ⟹ tint 优先（不建组合 SPV 变体；判据 3 只用 "
+					 "tint、判据 4 只用 debug，从不同时用）—— 本跑走 TINT 变体");
+}
+
 /** 原位取代对账的两个计数（口径 → auditMeshletSwitch）。 */
 struct SwitchCoverage {
 	uint32_t gated = 0;       ///< 旧路径出 draw 且带簇条目的图元数（= 被取代的 draw 数）
@@ -166,8 +267,8 @@ void wireMeshletSwitch(entt::registry& registry, const AssetTable& assets,
 	if (logger && cov.gated == 0)
 		logger->warn("meshlet: switch 生效但**零图元可取代**（没有任何簇产物通过扫描/对账）—— 本档"
 					 "与门关逐位相同，阳性对照必须另外跑");
-	// 与 α 影子叠加互斥（render_list 侧的抑制 = `if (!meshletInPlace)` 包住 collectMeshletOverlay
-	// 调用点）。coplanar 双臂只作用**叠加**那批 draw ⟹ 叠加清空后它在本档下没有消费者，
+	// 与 α 影子叠加互斥（render_list 侧的抑制 = `collectMeshletOverlay` 的第六枚判据，入参
+	// `meshletInPlace`；债-105 把判定点从调用点的 `if` 搬进函数，事实仍是同一个 `MeshletSwitchOn`）。coplanar 双臂只作用**叠加**那批 draw ⟹ 叠加清空后它在本档下没有消费者，
 	// 而 wireMeshletOverlayDepthCompare 的 INFO 照打不误 —— 不点出来会被读成"双臂还在跑"。
 	if (logger)
 		logger->warn("meshlet: switch 生效 ⟹ α 影子叠加段（meshletCalls / executeMeshletOverlay）整段"
@@ -257,6 +358,12 @@ void bakeMeshletEntries(const UploadedAssets& uploaded, const SceneConfig& scene
 	SamplerLibrary& samplers, RenderTargetCache& rtCache,
 	const MeshletGeometryStore& meshletGeometry, const std::optional<MeshletBindingSlots>& slots,
 	MeshletMeshVariant variant) {
+	// 🔴 **关 overlay ≠ 关条目**（债-105 的宿主契约，别再往这条门上挂任何东西）：本函数的存在
+	// 条件只有 `slots`（= `meshlet.enable`），而**不**看 `meshlet.overlay`。理由是这批条目同时是
+	// 两个消费者的宿主——① α 影子叠加段（`collectMeshletOverlay`，由 overlay 门决定采不采 draw）、
+	// ② β-1 的原位取代（`makeOpaqueCall` 读 `asset.meshletPipelineIndex`）。把烘焙挪进 overlay 门下
+	// ⟹ `overlay = false` 时 `switch` **静默失去宿主**（取代分支整个不成立，画面回到旧路径而日志
+	// 里没有任何东西说它没切）。叠加段关 = **不采 draw**，条目照烘。
 	if (!slots)
 		return;  // 门关 / 无产物 / 多产物回落 = 一条条目都不建（逐位不变）
 	// 材质侧三槽幂等重取 = 与模型条目同号（bakePipelineEntries 已领；binding 12/13/15
@@ -364,6 +471,10 @@ void bakeShadowMeshletEntries(const UploadedAssets& uploaded, ShaderRegistry& pi
  * ★0.5-b2 起 mesh SPV 变体三档（base/debug/tint）：tint 与 debug 同真时 **tint 优先 +
  * warn**（判据 3 只用 tint、判据 4 只用 offset，从不同时用，故不建第 4 个组合变体；
  * warn 只在门开时出——门关 grep meshlet = 0 的护栏）。
+ *
+ * 🔴 债-105 起变体位**归叠加段所有**：`meshlet.overlay` 关 = 变体一律 base + 偏离默认时 warn
+ * （变体烘进条目、条目是 β-1 取代的宿主 ⟹ 不归位会让关掉叠加段的跑仍然被诊断改掉产品路几何）。
+ * 本函数**不**因为 overlay 关而少烘一条条目——见 `bakeMeshletEntries` 的宿主契约注释。
  */
 std::unique_ptr<MeshletCullService> wireMeshletOverlay(Resources& resources,
 	DeviceContext& device,
@@ -374,17 +485,11 @@ std::unique_ptr<MeshletCullService> wireMeshletOverlay(Resources& resources,
 	std::unique_ptr<MeshletCullService> cullService;
 	const auto slots = wireMeshletBindings(resources, device, meshletGeometry, cfg.meshletEnable,
 		sceneData, cullService);
-	// mesh SPV 变体选档（门关 = bakeMeshletEntries 首行早退，variant 不被读；warn 也
-	// 必须门开才出声——门关 grep meshlet = 0 的护栏）
-	MeshletMeshVariant variant = MeshletMeshVariant::base;
-	if (cfg.meshletTint) {
-		variant = MeshletMeshVariant::tint;
-		if (cfg.meshletEnable && cfg.meshletDebug && RLLogger::getInstance())
-			RLLogger::getInstance()->warn(
-				"meshlet: tint 与 debug 同真 ⟹ tint 优先（不建组合 SPV 变体；判据 3 只用 "
-				"tint、判据 4 只用 debug，从不同时用）—— 本跑走 TINT 变体");
-	} else if (cfg.meshletDebug)
-		variant = MeshletMeshVariant::debugOffset;
+	// mesh SPV 变体选档（门关 = bakeMeshletEntries 首行早退，variant 不被读；warn 也必须门开
+	// 才出声——门关 grep meshlet = 0 的护栏）。一件事一个函数：选档 = pickMeshletMeshVariant，
+	// 孤立组合出声 = warnMeshletVariantInstruments。
+	const MeshletMeshVariant variant = pickMeshletMeshVariant(cfg);
+	warnMeshletVariantInstruments(cfg);
 	bakeMeshletEntries(uploaded, scene, deferredMode, pipelines, assets, resources, samplers,
 		rtCache, meshletGeometry, slots, variant);
 	// ★18-B1：阴影段簇路径条目（**只建条目不接 draw**，接线归 B2）。放在 bakeMeshletEntries
@@ -419,10 +524,16 @@ void wireMeshletOverlayDepthCompare(Renderer& renderer, const RuntimeConfig& cfg
 		break;
 	}
 	renderer.setMeshletOverlayDepthCompareOp(op);
+	// ⚠ 叠加段关（债-105 的出厂默认）时双臂**没有消费者**——叠加零 draw ⟹ 这条 INFO 若不加
+	// 说明会被读成"双臂还在跑"（与 wireMeshletSwitch 的互斥告警同一条例）。
+	const std::string_view orphan = (!cfg.meshletOverlay && cfg.meshletCoplanar != MeshletCoplanarMode::off)
+		                                ? "；🔴 meshlet.overlay 关 ⟹ 叠加段零 draw，本档**没有消费者**"
+		                                  "（要跑共面双臂请同时置 meshlet.overlay = true）"
+		                                : "";
 	if (auto* logger = RLLogger::getInstance())
 		logger->info("meshlet: coplanar 双臂生效档 = {}（叠加 draw depthCompare = {}；"
-					 "只作用叠加 draw，pass 与旧路径状态不动）",
-			modeName, opName);
+					 "只作用叠加 draw，pass 与旧路径状态不动）{}",
+			modeName, opName, orphan);
 }
 
 /**
@@ -467,9 +578,10 @@ void wireMeshletCull(Renderer& renderer, entt::registry& registry, const Runtime
 
 /**
  * 接口声明与完整口径 → main.cppm `wireMeshletPostRegistration`。本定义只做一件事：
- * 把「实体注册之后」的两步簇轴装配合成一次调用（`main()` 已在 120 行代码红线，
+ * 把「实体注册之后」的三步簇轴装配合成一次调用（`main()` 已在 120 行代码红线，
  * `wireSceneSpinContext` / `bakeMeshletEntries` 同法抽 helper，零行为变化）。
- * 顺序契约内聚在此：区间表**先**建（`wireMeshletSwitch` 的对账要读逐槽 l0Count）。
+ * 顺序契约内聚在此：区间表**先**建（`wireMeshletSwitch` 的对账要读逐槽 l0Count），叠加段生效标记
+ * 最后 emplace（债-105：它只读配置 + 资产表，不依赖前两步，但与前两步同属「注册之后」这一段）。
  */
 void wireMeshletPostRegistration(entt::registry& registry, const UploadedAssets& uploaded,
 	const MeshletAssetStore& meshlets, const AssetTable& assetTable, const RuntimeConfig& cfg,
@@ -477,6 +589,7 @@ void wireMeshletPostRegistration(entt::registry& registry, const UploadedAssets&
 	wireClusterRangeTable(registry, uploaded, meshlets, cfg.meshletEnable, cfg.meshletCull,
 		cullService, assetTable, cfg, device);
 	wireMeshletSwitch(registry, assetTable, cfg, device);
+	wireMeshletOverlayActivation(registry, assetTable, cfg);
 }
 
 }  // namespace RGL

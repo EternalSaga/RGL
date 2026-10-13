@@ -63,7 +63,8 @@ module;
  *   · `collectShadowCasters` 的 `drawAtlas` 门读 `shadowConfig()` 单例（形态决策表在实现内），
  *     本文件经 `setShadowConfig` 两态直打（先例 = test_render_list_shadow 的按档分立用例）
  *     ——**测得到两态，测不到「配置解析 → 该单例」那一段**（归 test_scene_config）。
- *   · `meshletTaskCount` 在 impl 匿名 namespace 内不可直连，本文件用**字面 2** 写期望并另钉
+ *   · task 槽数用**字面 2** 写期望（🔴 **刻意不取被测函数 `meshletTaskCount`**——它自债-105 起已抬成导出接缝，
+ *     取它 = 把 ×2 抄进第二处、用例与实现同错同绿）；另钉
  *     `kSlotsPerCluster == 2`；契约的另一端（shader 里 `cluster = base + (groupID.x >> 1)`）
  *     不在单测射程内，归 §18.6 判据 2 的 L0 臂阳性对照。
  *   · 「阴影段总条数与改前逐条相等」在真场景上的读数属验收判据 5（profiler draw 数），

@@ -65,6 +65,7 @@ set(RGL_TEST_SOURCES
     test_frisvad_tangent.cppm    # Frisvad 切线兜底：轴向/±Z 奇点/随机有限性（黑面 bug 回归）
     test_render_list_shadow.cppm # fillShadowData 尾区契约：splits 哨兵/VP 拷贝/texel/params 两态（12.3d）
     test_shadow_lod_emit.cppm    # §18 批 B2 阴影段 draw 构造：c0 恒旧路径/×2 唯一真相源/条数不变/索引公式（collect+emit 接缝）
+    test_meshlet_overlay.cppm    # 债-105 α 叠加段自有门 meshlet.overlay：门关零 draw/真值表四格/四条既有判据反向/×2 同一入口/配置键探针
     test_render_list_light.cppm  # fillLightData 落槽契约：按 index 落槽/计数封顶/重复 index（12.3d）
     test_features_gates.cppm     # 能力门真值表：depthClip 双条件/presentTiming 三合一/扩展清单（12.3d）
     test_asset_table.cppm        # AssetTable::expectedGeometrySlot 槽号算术契约（12.3d）

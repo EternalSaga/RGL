@@ -1847,3 +1847,47 @@ MDI 变体是另一次编译，位级不漂移是"实测出来的"。若 A3 红�
   ⟹ `shadow_lod` 那条"孤立门就近 WARNING"对它**不适用**；而 gate_lint 仍不认整块（**债-106**）。
   ★M-1 若给 binding 22 的槽号从 `enable` 的 `nullopt` 链取，**必须回头改这条注释**——
   否则"`= false` 时零消费者"会变成"`= false` 时静默不生效 + 无人出声"。
+
+### 19.7 债-105 交付记录（2026-10-13，插在 ★M-1 前，用户拍板"先还债"）
+
+**这批不在命令数轴上**，但它是 ★M-1 的干净前提：叠加段留在出厂路径里，任何 MDI 收益读数都得先减掉它。
+
+交付 = `meshlet.overlay`（默认 **false**，严格 bool）+ ctx 标记 `MeshletOverlayOn`（与 `MeshletSwitchOn` 同构）
++ `collectMeshletOverlay` 的第五枚判据**进函数**（不再只写在调用点）+ `pickMeshletMeshVariant`
+（overlay 关 ⟹ 变体一律 base）+ `warnMeshletVariantInstruments` + `tests/test_meshlet_overlay.cppm`（9 用例）。
+
+**读数 → 数据 §4.6**（两臂 counters 6601/19994 vs 8172/24707、同批差 **1.541ms**、三锚逐位命中）。
+台账债-105 已移进 §1 结案表。
+
+**四条要记住的**：
+
+1. 🔴 **"关 overlay" ≠ "关条目"**。叠加条目同时是 **β-1 原位取代的宿主**（`makeOpaqueCall` 用
+   `asset.meshletPipelineIndex`）⟹ 把 `bakeMeshletEntries` 一起挪到 overlay 门下 = **switch 静默失去宿主**
+   （取代变零、图像回到旧路径、而且没有任何错误信号）。烘焙条件仍只挂 `enable` 的 `slots`，
+   overlay 只管**采不采 draw**，此约束已在 `bakeMeshletEntries` 头注释钉死。端到端证据：
+   `switch=true`（overlay 关）仍取 `dc846396…` 且日志 `取代图元 1530 个`。
+2. 🔴 **叠加仪器是"条目级"SPV 变体位 ⟹ 它本来就能改掉产品取代路的几何**。`debug` 变体把 clip.z 拉向相机，
+   若 overlay=false 而 `debug=true` 仍烘进条目，则 `switch` 臂画的是**错位几何**——一条"诊断开关污染产品路"
+   的通路，此前没人堵。本批处置 = overlay 关时**强制 base 变体 + 告警**（`A6b`：图 = 出厂锚且 warnings=1）。
+   ⟹ 这条是 ★M-1 的现成类比：**凡是"条目级"的位，都要问它的宿主被谁共用**。
+3. **我（计划作者）的 A6 判据写错了一格**：我要求 `overlay=true + tint=true` 必须变图。物理上不可能——
+   TINT 变体 clip 一 bit 不动、共面、`coplanar=off` 的 `eLess` ⟹ **零像素写入**（`runtime.lua` 与
+   `meshletTint` 注释都明写"coplanar=off + tint 必须 = 基线"）。执行者**没有为凑绿放宽判据**，
+   而是上报并换正确口径：`overlay=true + tint=true + coplanar=equal` → `1262cfbc…`（变图，且与改前逐位同）。
+   ⟹ **记进本文件防止重犯**：给"叠加形态"立阳性对照判据时，先问该变体改不改深度；`debug` 改深度 ⟹ 单用即变图，
+   `tint` 不改深度 ⟹ 必须配 `coplanar=equal` 臂才变图（同 §14.1"位比判据对叠加形态全盲"一族）。
+4. **主 agent 独立变异 MA 的前两次注入都是"构建红不是判据红"**（`//` 注释吃掉同行后半截条件；
+   摘掉判点后形参变 unused）。第三次改成 `if ((!overlayActive && false) || meshletInPlace || …)` 才有效：
+   红 3 条且归因干净（主判据 / 真值表 / Lcg）。⟹ **变异必须"能编过、只坏语义"**；"构建红"不是抓到了，是没测。
+   另外我自己的测量脚本第一版把两臂跑成了同一档（`$2` 恒空）⟹ **"两臂数字全同"要先怀疑量具**。
+
+**★M-1 接线前的三条新前置**（本批挣到的，已并入 §19.3/§19.5 的执行注意）：
+
+- 🔴 **新增管线条目必须纯追加**（`addShadowMeshletMdiEntry` 只能排在旧条目之后）。若插到旧条目之前，
+  `asset.shadowMeshletPipelineIndex` 指向的条目就变了 ⟹ **"门关用的还是今天那份 SPV"这条护栏静默破**
+  （与第 2 条同族失效形态，且截图未必立刻红）。入账判据里加一条"旧条目下标不变"的启动对账。
+- `renderListSystem` 现贴着 **120 行红线**（本批靠把两枚 ctx 读点收成 `meshletActivations(rg)` 才腾出位置）。
+  ★M-1 若还要往 draw 采集里塞第三枚生效标记，**扩 `meshletActivations` 的返回或再抽函数，别直接加行**。
+- ~~`tests/test_shadow_lod_emit.cppm` 的"已知覆盖缺口"里"`meshletTaskCount` 在匿名 namespace 不可直连"~~
+  **本批已把它抬成导出接缝**，该句过时；已就地更正为"用**字面 2** 是刻意的独立期望（不取被测函数，
+  免得把 ×2 抄进第二处），另一端 `kSlotsPerCluster == 2` 另钉"。

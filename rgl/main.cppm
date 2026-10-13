@@ -309,7 +309,9 @@ export struct MeshletBindingSlots {
  * 之前；三个 sampler/RT 槽经各自幂等 ensure 重取 = 与模型条目同号。门关
  * （meshletEnable=false）= 连槽号都不领、一条条目都不建（逐位不变构造性成立）。
  * @param cfg 运行配置（读 meshletEnable 门 + meshletDebug/meshletTint 两枚 SPV 变体位：
- *   debug = 阳性对照（判据 3），tint = ★0.5-b2 双臂阳性对照，同真时 tint 优先 + warn）
+ *   debug = 阳性对照（判据 3），tint = ★0.5-b2 双臂阳性对照，同真时 tint 优先 + warn。
+ *   🔴 债-105 起这两枚**只在 meshlet.overlay 开时**才被采纳——变体烘进的是 `switch` 原位取代
+ *   共用的那批条目，叠加段关着也能改条目 = 诊断渗进产品路 ⟹ 关时强制 base + 偏离默认才 warn）
  * @param sceneData scene data 服务（★1-a2-i：`MeshletCullService` 要它的槽号与 buffer 句柄）
  * @return 逐簇视锥剔除服务（★1-a2-i）；门不开 / 无产物 / 多产物回落 = nullptr。
  *   🔴 **构造判据是 `meshlet.enable` 而不是 `meshlet.cull`**——mesh SPV 只有一份、binding 21
@@ -365,11 +367,12 @@ export void wireMeshletCull(Renderer& renderer, entt::registry& registry,
 export void wireMeshletOverlayDepthCompare(Renderer& renderer, const RuntimeConfig& cfg);
 
 /**
- * 簇化轴 ★1-a1ii-β-1：实体注册之后的两步簇轴装配合成一次调用（`main()` 已在 120 行代码
+ * 簇化轴 ★1-a1ii-β-1：实体注册之后的簇轴装配合成一次调用（`main()` 已在 120 行代码
  * 红线，`wireSceneSpinContext` 同法抽 helper）= ① `wireClusterRangeTable`（簇区间表；★18-B2
- * 起同一个循环还建阴影远级联 LOD 选级表）→ ② `wireMeshletSwitch`（`meshlet.switch` 落地）。
+ * 起同一个循环还建阴影远级联 LOD 选级表）→ ② `wireMeshletSwitch`（`meshlet.switch` 落地）
+ * → ③ `wireMeshletOverlayActivation`（债-105：`meshlet.overlay` 落地）。
  * 顺序契约内聚在定义处：区间表**先**建，
- * ② 的逐资产对账要读它的逐槽 l0Count。
+ * ② 的逐资产对账要读它的逐槽 l0Count；③ 只读配置 + 资产表里的**条目事实**。
  *
  * ② 的语义：`enable && switch` 时，门开资产（有簇管线条目 + L0 簇数 > 0 + 非 blend）在主
  * opaque 段里由簇路径 draw **1:1 原位**顶掉旧 mesh draw（同 objectIndex / 同 pushData /
@@ -385,7 +388,11 @@ export void wireMeshletOverlayDepthCompare(Renderer& renderer, const RuntimeConf
  * 🔴 门开且切档时 INFO 打印**生效**档（同 coplanar 的第二道机器护栏：主判据是截图哈希，
  * 开关静默不落地时哈希也可能全绿）。门关 = 零 ctx 零日志。
  *
- * 调用序契约 = `registerSceneEntities` 之后（两步都读 MeshRef）；与
+ * ③ 的语义（**债-105**）：`meshlet.overlay` 落地 = emplace `MeshletOverlayOn`，消费者 =
+ * `collectMeshletOverlay` 的第五枚判据。生效条件**不含** `enable`（本键的宿主是叠加段自己），
+ * 但 enable 关时条目没烘 ⟹ 孤立组合按**事实**（有无资产带簇管线条目）出声，不静默空开关。
+ *
+ * 调用序契约 = `registerSceneEntities` 之后（三步都读 MeshRef）；与
  * `wireMeshletOverlayDepthCompare` 互不依赖。
  * @param registry   场景 registry（区间表与生效标记的 emplace 目标）
  * @param uploaded   已上传资产（区间表扫描输入）
