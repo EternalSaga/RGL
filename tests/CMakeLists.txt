@@ -95,6 +95,7 @@ set(RGL_TEST_SOURCES
     test_izb_mask.cppm               # gpu 套件 11.3-1d：光空间保守光栅 × IZB 走链 mask 判定
     test_izb_engine_contract.cppm    # gpu 套件 11.3 补账：引擎真 SPV 的 ndc 口径/字节偏移/guard 契约
     test_mdi_drawindex.cppm          # gpu 套件 MDI 门：DrawIndex 语义 × stride16 × 零计数不跳号（docs/mdi_plan.md §6）
+    test_mdi_task_probe.cppm         # gpu 套件 ★M-2 task 路机制探针：DrawIndex 只在 task 入口 + payload 通路自证 + 守卫 mesh 毒化检测器（docs/mdi_plan.md §19.12）
     test_meshlet_geometry.cppm       # gpu 套件 ★1-a0：簇产物 4 段 GPU 上传的设备级逐字节回读校验
     test_meshlet_shadow_args.cppm    # gpu 套件 ★M-1a（§19.5）：MDI 行表 GPU 载体的**设备侧往返** + 🔴 argsOffset↔rowBase 同源的自证回路（一次真 MDI 展开 + 孔洞行阳性对照）
     test_descriptor_heap_ubo.cppm    # gpu 套件能力 spike：resource heap 能否放 eUniformBuffer 并被 ConstantBuffer<T> 读（+ binding→槽机制证伪）；dheap 4/5 = StructuredBuffer 元素 stride 8/44 设备端往返（R3 撤销条件第 2 条）
@@ -123,6 +124,13 @@ compile_slang("${CMAKE_CURRENT_SOURCE_DIR}/shaders/mdi_groups.mesh.slang" MDI_GR
 # ★M-1a（docs/mdi_plan.md §19.5）行表载体的 DrawIndex↔行 探针：24B 行 × ring×2 一张 buffer ×
 # 两个数据字段（word[3]/word[4]）——🔴 判据是「argsOffset 与 rowBase 同源」，截图看不见（tests/test_meshlet_shadow_args.cppm）
 compile_slang("${CMAKE_CURRENT_SOURCE_DIR}/shaders/mdi_shadow_rows.mesh.slang" MDI_SHADOW_ROWS_MESH_SPV)
+# ★M-2 task 路机制探针（docs/mdi_plan.md §19.12）：DrawIndex 只在 task 入口声明、行信息经
+# payload 交给 mesh（mesh 侧完全不碰 DrawIndex）+ 守卫 mesh（不声明 DrawIndex 的后续直接
+# draw = STRIX 毒化检测器）。🔴 task/mesh 刻意分模块编译——slang#10123：同模块 payload 变量
+# 复制成两份，spirv-val 放行而 NVIDIA 实测越界读（合并 = 测成编译器缺陷，判据作废）。
+compile_slang("${CMAKE_CURRENT_SOURCE_DIR}/shaders/mdi_task_probe.task.slang" MDI_TASK_PROBE_TASK_SPV)
+compile_slang("${CMAKE_CURRENT_SOURCE_DIR}/shaders/mdi_task_probe.mesh.slang" MDI_TASK_PROBE_MESH_SPV)
+compile_slang("${CMAKE_CURRENT_SOURCE_DIR}/shaders/mdi_task_probe_guard.mesh.slang" MDI_TASK_PROBE_GUARD_MESH_SPV)
 # descriptor heap × UBO 能力 spike（tests/test_descriptor_heap_ubo.cppm）：
 # 主判据体 + 阳性对照体（同 binding/同 heap，只差读哪个成员/索引）
 compile_slang("${CMAKE_CURRENT_SOURCE_DIR}/shaders/dheap_ubo.comp.slang" DHEAP_UBO_COMP_SPV)
@@ -161,6 +169,7 @@ target_sources(rgl_tests PRIVATE ${IZB_SPIKE_MESH_SPV} ${IZB_SPIKE_FRAG_SPV}
     ${IZB_CREATE_SPV} ${IZB_PRIME_SPV} ${IZB_MASK_MESH_SPV} ${IZB_MASK_FRAG_SPV}
     ${MDI_SPIKE_MESH_SPV} ${MDI_SPIKE_FRAG_SPV} ${MDI_GROUPS_MESH_SPV}
     ${MDI_SHADOW_ROWS_MESH_SPV}
+    ${MDI_TASK_PROBE_TASK_SPV} ${MDI_TASK_PROBE_MESH_SPV} ${MDI_TASK_PROBE_GUARD_MESH_SPV}
     ${DHEAP_UBO_COMP_SPV} ${DHEAP_UBO_WRONG_COMP_SPV}
     ${DHEAP_STRIDE_COMP_SPV} ${DHEAP_STRIDE_WRONG_COMP_SPV})
 # 链接面：rlbase 之外**也**链 rlgfx/rlscene/rlframe（批 12.2d）。

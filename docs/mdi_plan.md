@@ -2018,3 +2018,123 @@ decorations with Task and Mesh shader stages"）；`maxDrawIndirectCount = 42949
   上验（代码已就位，成本最低）；② 改走 **task shader 路**（task 读 `DrawIndex` 经 payload 传给
   mesh）——spec 正统形态，但要新增一个 stage，且**未验证** RADV 的 task 路是否也坏；
   ③ 换宿主（§19.1 的原始宿主 = 旧 shadow 管线，它不用 mesh shader，绕开整件事）。
+
+### 19.10 ★M-1b ANV 验证（2026-10-13，机器 = Ryzen 9950X 主机 + Intel Arc Pro B50（BMG G21）/ Mesa 26.2.3，`VK_DRIVER_FILES` 只留 intel ICD）
+
+**结论：M-1b 在 ANV 上工作 —— RADV 那条红坐实为驱动缺陷，代码面没有机器相关的潜在问题。**
+★M-2 三机结案进度 = Intel anv 已验（本节），NVIDIA 待验；债-81 的 heap 那一半**仍未结案**（等三机齐）。
+
+判据逐条（同一次构建 `96887ba`，双臂同会话）：
+
+| 判据 | 读数 | 判定 |
+|---|---|---|
+| A3 主判据 | 门关 vs `mdi_shadow=true` 终图 **逐位相同**（`56f2ff18…` = `56f2ff18…`） | ✓ |
+| A5 读数 | 关 `vkcmd=19994 mdi.count=0`；开 `vkcmd=6452 mdi.count=3 mdi.rows=4590 draw.count=6674` —— **与 §19.9（8060S 机）逐字同** | ✓ MDI 路径真在跑 |
+| A4 形态 | 门开 vs `shadow_lod=-1`（回旧管线）= **46 px / 0.005% 碎差、无整块** | ✓（8060S 为 3670 px，绝对值绑机，只形态跨机可比） |
+| A6 syncval | 门开 + `VK_LAYER_VALIDATE_SYNC=1` errors=0 | ✓ |
+| `just test-gpu`（ANV 设备） | 32/32、24850 断言（含 M-1a 的 MDI 自证回路在 anv 上真发 `vkCmdDrawMeshTasksIndirectEXT`） | ✓ |
+
+启动对账三元也与 §19.9 同构：新条目 475 / 旧 474 / `entries_total=476`；DGC `graphicsIndirect=false` ⟹ 重放路（与 RADV 臂同形态，NVIDIA 的 execute 路仍只归 ★M-2 的 5090 那半）。
+
+**两条机器绑定读数（拿槽号/像素数做跨机对照的批次注意）**：
+
+1. 行表 heap 槽 = **8234**（8060S 机 = 8258，绝对槽号随设备限额/分段走；相对结构同 = 可见标志槽 +1，
+   旧簇槽 8228-8231 + 标志 8233 未动）。**文档里的槽号一律只作单机对照锚，不是跨机契约。**
+2. c1..c3 的 LOD 细节足迹本机 = 46 px（8060S = 3670 px）——LOD5 vs 全 mesh 的深度差经不同驱动
+   光栅化/量化后差两个量级很正常；**跨机只比形态（碎差无整块），别比绝对像素数**。
+
+（环境账：本机 clang 22 不在 PATH、vcpkg registry fetch 网络抖动——构建由用户手工完成，与 M-1b 无关。）
+
+### 19.11 ★M-1b NVIDIA 验证（2026-10-13，同机 RTX 5090 / driver 615.71.09）：机制绿、**引擎路被 256 线程超规结构性挡住**
+
+**两条相互独立的结论，别混：**
+
+1. **MDI 状态在 NVIDIA 上工作**：`--test-case="*mdi*,*shadow_args*,*MDI*"` = **12/12 passed**
+   （含 `shadow_args_mdi_expansion` 自证回路真发 `vkCmdDrawMeshTasksIndirectEXT`、DrawIndex 递增 /
+   push rowBase / 每 draw groupCount / shader object 绑定形态全部正确）。⟹ NV 驱动没有 RADV 那味
+   `SV_DrawIndex` 毒化；**M-1b 机制无机器相关的潜在问题**（与 §19.10 互证）。
+2. **引擎级 A3 在 5090 上此刻跑不了，且与上屏/离屏无关**：`meshlet.mesh.slang` / `shadow_meshlet.mesh.slang`
+   声明 `[numthreads(256)]`，而 NV `maxMeshWorkGroupInvocations = maxMeshWorkGroupSize[0] = 128`
+   （ANV=1024、RADV 宽松，故此前两机从未现形）⟹ `vkCreateShadersEXT` 被 VVL 点名
+   VUID-RuntimeSpirv-MeshEXT-07295/07298 **真超规**，调用照进 ICD 后在 `libnvidia-gpucomp.so` 内
+   SIGSEGV（驱动对非法入参未干净失败，行为未定义归它，超规归我们）。窗口模式（KWin wayland 隐藏窗
+   llm_debug，实测建窗与设备创建全通过）与 headless 一样死在建 shader 那一步——**崩点在任何 draw 之前**。
+
+**连带定案两笔**：
+
+- **`VK_EXT_headless_surface` NVIDIA ICD 不提供**（NV-only `VK_DRIVER_FILES` 下 createInstance 直接
+  ExtensionNotPresent；3-ICD 清单里那条来自 Mesa）⟹ **5090 上离屏冒烟不可用，验证只能上屏**
+  （WAYLAND_DISPLAY=wayland-0 的隐藏窗 llm_debug 路实测可起跑）；test-gpu 则靠多 ICD 并集过 instance、
+  评分器仍选 5090（score=1024810）。
+- **NV 的 DGC `graphicsIndirect=true`**（三机唯一，RADV/ANV 均 false）⟹ ★M-2 execute 路的前提成立，
+  但被本节的 256 线程墙压在后面。
+
+**5090 的 `just test-gpu` = 28/32，红 4 条全部是既有 Mesa golden 换机（无一条 MDI 族）**：
+`izb_1b 能力面`（`maxExtraPrimitiveOverestimationSize==0` golden）、`UNORM 取整`（0.5→128 的 tie
+舍入 NV 不同）、`dheap 0`（heap 通路 `szUbo==szSsbo` 等式 NV 不成立）、`izb_1d`（保守光栅 mask 参考值）。
+⟹ ★M-2 的「三机 test-gpu 绿」要先把这四条改写成**设备相对断言**（读能力报差异、不钉 Mesa 数值）。
+
+**新挂号（★M-2 NVIDIA 半的前置）**：簇 mesh shader 若要上 NV 需 **≤128 线程变体**——现设计
+1 三角形/线程、`256 ≥ 3×85` 两类线程都排得下，128 装不下 ⟹ 循环化改造（每线程多顶点），独立小批、
+待拍板；不做则 NV 半只认机制级（本节的 12/12）。
+
+### 19.12 四机矩阵与 §19.9 根因**修正**：RADV 毒化 = STRIX_HALO 特有，不是 RADV 仿真路通病（2026-10-13 实测）
+
+本机 9950X 核显 **RAPHAEL_MENDOCINO（gfx1036，Mesa 26.2.3，与出事机 STRIX_HALO/gfx1151 同版本）
+上 ★M-1b 逐位绿**：门关 vs 门开终图 diff = **0 px**，且 MDI 真在跑（`mdi_shadow 生效` INFO、
+`vkcmd=6452 / mdi.count=3 / mdi.rows=4590` 与 §19.9、§19.10 读数逐字同）。
+
+| 设备 | mesh/task 上限 | M-1b 引擎级 | 机制级（test-gpu MDI 12 条） | DGC graphicsIndirect |
+|---|---|---|---|---|
+| STRIX_HALO（8060S 机，RDNA3.5） | （出事机） | 🔴 红（mesh 入口声明 DrawIndex 毒化后续 draw） | 未单测 | false |
+| **RAPHAEL（本机核显，RDNA2）** | task 1024 / **mesh 256** | ✅ **逐位绿** | —（可补） | false |
+| ANV BMG G21 | 1024 / 1024 | ✅ 逐位绿（§19.10） | ✅ 全绿 | false |
+| NV RTX 5090 | **128 / 128** | ⛔ 不可达 = 本文件 mesh 声明 256 **超 NV 上限**（07295/07298），与上屏/离屏无关；驱动在建 shader 时 SIGSEGV | ✅ **12/12 绿**（含 MDI 自证回路） | **true**（三机唯一） |
+
+⟹ **§19.9「驱动缺陷（RDNA3 无硬件 mesh shader 走仿真路）」定性过宽，修正为：同版本 Mesa 在
+gfx1036 仿真路上正确、gfx1151 上毒化 = STRIX_HALO 特有的仿真路径缺陷**。给 Mesa 提 issue 时
+**靶要钉 gfx1151 + DrawIndex-in-mesh**，并附 RAPHAEL 绿作对照（同 Mesa 版本、同仿真机制、不同 SI 家族）。
+
+**对「走 task shader 传统路（§19.9 选项②）能否三家都没问题」的分析**（Slang `task` stage 实测可编译
+`OpExecutionModel TaskEXT`）：
+
+- **不能只靠 task**：NV 的墙是 **mesh 线程数 256>128**（task 上限也是 128，且与 mesh 墙正交）——
+  不改 mesh 线程数，task 路在 NV 上照样建不出来。ANV/RAPHAEL 已绿，无需救。
+- **真正要救的只有 STRIX**，而 task 路读 DrawIndex 是否绕开毒化 = **本机不可测**（RAPHAEL 不复现），
+  只能带探针去 8060S 机。
+- ⟹ 唯一可能"三家都过"的形态 = **task 化 + mesh 循环化 ≤128 的组合手术**（一次重做两件事）：
+  task 读 DrawIndex + 查行 → payload 传 mesh；mesh 每线程多顶点。顺带得到 D3D12 便携形态
+  （128 线程 / 32 粒度；注意 NV `meshOutputPerVertex/PrimitiveGranularity=32`、`maxMeshOutputVertices=256`），
+  并解锁 NV 的 DGC execute 路。**代价一整批**：两枚 mesh SPV 工作布局重写 + 新 task 入口 +
+  `gcX` 语义从 mesh 组数换成 task 数（`kSlotsPerCluster=2` 是 mesh-only 设计的产物）+ A5 闭式锚重算 +
+  反射管线 + 逐位锚各机重立 + STRIX 机复测收线。
+- **拍板前建议的廉价前置**（本机半日）：写机制探针（task 读 DrawIndex → payload → mesh≤128，
+  经 `vkCmdDrawMeshTasksIndirectEXT`，复用 mdi 测试 rig 形态）先在本机三设备跑绿；然后去 STRIX 机
+  跑同一探针决定 task 路对 gfx1151 是否有救。
+
+**前置①已完成（2026-10-13 当晚）**——`tests/test_mdi_task_probe.cppm` + 三枚 SPV
+（`mdi_task_probe.task/.mesh/_guard.mesh.slang`，🔴 task/mesh 分模块编译规避 slang#10123 的
+NV 越界读坑；`[numthreads(1,1,1)]` 全档 ≤ NV 的 128）：
+
+- 四条用例 × 三设备（NV 5090 / ANV B50 / RADV RAPHAEL，VVL 常开）= **12/12 绿**。
+  判据骨架 = task 侧 DrawIndex 递增 + payload 通路同源自证 + 孔洞不跳号 + **守卫探测器**
+  （task-MDI 之后同提交直接 mesh draw，守卫列必须出像素 = 毒化检测器本体）。
+- 变异验红（主 agent 亲做）：M1 `rowBase + 0u*drawID` ⟹ increments/zero/poison 数据列红、
+  control 绿（drawCount=1 无信息，同旧 rig 纪律）；M2 task 侧 col/value 互换 ⟹ **control 也红**
+  且守卫列不假阳性（payload 坏与毒化坏签名可分辨）。还原后基线复绿 + 全量 `just test` 93698 断言绿。
+- **证据边界（别读宽）**：本机三设备的守卫绿只证"机制无障碍"；**毒化问题对 STRIX 的裁决必须带
+  `task_probe_poison_guard` + 它的 control 去 8060S 机重跑**（RAPHAEL 连 mesh 路都不毒化，
+  它绿不能外推 STRIX 的 task 路也绿）。重跑 =
+  `VK_DRIVER_FILES=<radeon_icd.json> ./build/tests/rgl_tests --test-suite=gpu --test-case="task_probe*"`
+  （CWD = 仓库根，先 `cmake --build build --target rgl_tests`）。
+
+**STRIX 复跑裁决卡（8060S 机，git pull 到本提交后跑）**：
+
+| 读数 | 裁决 | 后续 |
+|---|---|---|
+| 4 条全绿（尤其 `task_probe_poison_guard` 守卫列出像素） | **task 路对 gfx1151 有救** | 立"task 化 + mesh ≤128 循环化"重做批（§19.12 组合手术） |
+| `poison_guard` 红、`control` 绿 | **task 侧 DrawIndex 同病**（守卫列 = 0 = 后续直接 mesh draw 不产出像素） | 选项② 作废 ⟹ 回选项①（Mesa issue + 门默认关）或③（换宿主） |
+| `control` 也红 | 用例/环境坏（回读链或 SPV 没重建），毒化判据**不成立**，别下结论 | 先查 rig（对照本机 12/12 绿与 `mdi_*` 旧族），修好再重跑 |
+
+**提 Mesa issue 的靶（§19.12 修正后）**：gfx1151（Strix Halo）+ mesh 入口声明 `DrawIndex` 毒化
+同提交后续 mesh draw；**同版本 Mesa 的 RAPHAEL（gfx1036）逐位绿 = 现成对照证据**。
