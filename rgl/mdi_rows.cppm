@@ -35,6 +35,12 @@ import rlstd;
  * `render_list_impl.cppm::meshletTaskCount`（`meshlet_lod.cppm` 文件头已为这条立过规矩：那里
  * 不乘、这里也不乘，第三个消费者出现时仍然只有一处乘）。本模块出现槽数常量 = 造第二个真相源。
  *
+ * ## ★M-1a：行表的**尺寸/偏移算术**同样住在本模块（rlbase，`just test` 可钉）
+ * `mdiShadowSliceBytes` / `mdiShadowArgsCapacityBytes` / `mdiShadowTailBytes` /
+ * `mdiShadowRangeFits` / `mdiShadowRowLocation` 是「byte ↔ row」这一层唯一的算式产地
+ * （§19.5）。它们错了不崩：越界读只是 VU 违例（07089/07090），读歪一行只是「画的是另一条
+ * 合法命令」。设备侧（`meshlet_shadow_args`）只做**校验 + memcpy**，不自算第二个偏移。
+ *
  * ## 行序 = 输入候选序，逐元素对应（**这是契约，不是实现细节**）
  * 「逐位不变」的前提就是这条：★M-1 的 A3 主判据是「MDI 形态 vs 逐条 draw 形态终图逐位相同」，
  * 而 depth-only 图集的 min 语义只在**同一覆盖集**上才与图元序无关。行序一旦变成「按可见性压紧」
@@ -112,6 +118,108 @@ export constexpr uint32_t kMdiShadowRowStride = static_cast<uint32_t>(sizeof(Mdi
 static_assert(kMdiShadowRowStride == 24,
 	"kMdiShadowRowStride is no longer 24 — §19.2 D1 fixed the row layout at 24B (first 12B must "
 	"stay exactly VkDrawMeshTasksIndirectCommandEXT)");
+
+/**
+ * GPU 真正读走的命令本体字节数 = `sizeof(VkDrawMeshTasksIndirectCommandEXT)`（§19.5 末两条
+ * buffer 边界 VUID 的那个 `+12` 加数）。
+ *
+ * 🔴 与 `kMdiShadowRowStride`（24）**是两个数**：行表按 24 逐行跳，设备每行只读前 12B。
+ * 把两者混成一个常量 = 「容量算多了 12B/行」这种**看起来更安全**的错（VUID 边界算式随之失去
+ * 意义：`stride × (drawCount−1) + offset + 12` 退化成 `stride × drawCount`，永远成立）。
+ * rlbase 不许 import rlvk ⟹ 这里只能是裸常量，**第二钉**在 tests/test_mdi_rows
+ * （`static_assert(kMdiShadowCommandBytes == sizeof(VkDrawMeshTasksIndirectCommandEXT))`）。
+ */
+export constexpr uint32_t kMdiShadowCommandBytes = 12;
+static_assert(kMdiShadowCommandBytes <= kMdiShadowRowStride,
+	"the indirect command body must not exceed the row stride (VUID-…-drawCount-07088 wants "
+	"stride >= sizeof(VkDrawMeshTasksIndirectCommandEXT))");
+
+/**
+ * 一次 MDI 调用的**行位置对**（§19.5 的核心：GPU 侧字节偏移与 shader 侧行基址必须同源）。
+ *
+ * 🔴 两个数各算一遍迟早漂，而漂的症状是 **shader 读错行 = 画错几何**，不报错、不触发 VVL
+ * （行表是裸字节算术，越界读落在同一张 buffer 里就是「另一行的合法数据」）。故本项目里
+ * 这对数**只有一个产地** = `mdiShadowRowLocation`，调用点不许自己乘步长、不许自己加帧槽偏移。
+ */
+export struct MdiShadowRowLocation {
+	/** GPU 侧：`vkCmdDrawMeshTasksIndirectEXT` 的 `offset` 参数（**字节**）。 */
+	uint64_t argsOffset = 0;
+	/** shader 侧：`slot = rowBase + SV_DrawIndex` 的 `rowBase`（**行号**，进 12B push）。 */
+	uint32_t rowBase = 0;
+};
+
+/**
+ * 一个帧槽（slice）的字节数 = `rowCount × kMdiShadowRowStride`（§19.5：slice = 一帧的整张行表，
+ * 覆盖本级联段之外的所有段；轮转落在**偏移**上而不是句柄上，故描述符只需覆盖整张）。
+ */
+export constexpr uint64_t mdiShadowSliceBytes(uint32_t rowCount) {
+	return static_cast<uint64_t>(rowCount) * kMdiShadowRowStride;
+}
+
+/**
+ * 整张 ring buffer 的字节容量 = `slices` 个 slice（`slices` = 帧槽数 = `kFramesInFlight`）。
+ *
+ * 🔴 尺寸只有这一条公式：`argsOffset` 由 `mdiShadowRowLocation` 算、容量由本函数算，
+ * 两者共用同一个 `kMdiShadowRowStride` 与同一个 `sliceRows` ⟹「最后一行越界」在构造上
+ * 不可能出现（不是靠 rows×stride 大概够）。越界读不会崩，只是 VU 违例（门关档不跑 VVL
+ * 就不现形），所以它必须是一条**闭式**公式而不是各处加加减减。
+ */
+export constexpr uint64_t mdiShadowArgsCapacityBytes(uint32_t rowCount, uint32_t slices) {
+	return mdiShadowSliceBytes(rowCount) * slices;
+}
+
+/**
+ * 一次调用在行表里读到的**末字节 +1**（= 末行的 `offset + 12`）。
+ *
+ * 🔴 VUID-vkCmdDrawMeshTasksIndirectEXT-drawCount-07089（`drawCount == 1`：`offset + 12 ≤
+ * buffer 大小`）与 -07090（`drawCount > 1`：`stride × (drawCount − 1) + offset + 12 ≤
+ * buffer 大小`）在 `drawCount == 1` 时重合（`stride × 0 = 0`）⟹ **一条闭式判据同时是两个 VUID**。
+ * `drawCount == 0` = spec 允许的「一条都不发」，不读任何字节 ⟹ 尾 = 起点（不许在此处
+ * 让 `drawCount − 1` 无符号回绕成 `2^32−1` 个 stride，那会把「容量够不够」读成永远不够）。
+ */
+export constexpr uint64_t mdiShadowTailBytes(uint64_t argsOffset, uint32_t drawCount) {
+	if (drawCount == 0u)
+		return argsOffset;
+	return argsOffset + static_cast<uint64_t>(kMdiShadowRowStride) * (drawCount - 1u)
+	     + kMdiShadowCommandBytes;
+}
+
+/**
+ * buffer 边界闸门（07089/07090 合一）：本次调用读到的最后一个字节必须落在容量内。
+ *
+ * 期望的失效形态不是崩溃而是 VU 违例（症状 = 驱动读到 buffer 尾外的**别人的**内存当命令），
+ * 所以写侧（`MeshletShadowArgsRing::upload`）与容量算式共用本判据，两道都过才写。
+ */
+export constexpr bool mdiShadowRangeFits(uint64_t capacityBytes, uint64_t argsOffset,
+	uint32_t drawCount) {
+	return mdiShadowTailBytes(argsOffset, drawCount) <= capacityBytes;
+}
+
+/**
+ * 🔴 **同源 pair 的唯一具名入口**：给定「每帧槽行数 + 帧槽号 + 段起点行号」，一次产出
+ * GPU 侧字节偏移与 shader 侧行基址。
+ *
+ * 两者由**同一个** `row = frameSlot * sliceRows + firstRow` 推出（`argsOffset = row × stride`、
+ * `rowBase = row`）⟹ 结构上不可能各算一边。§19.5 的 ring×2 免第二槽解法完全依赖这条：
+ * 描述符覆盖整张、管线条目与 shader object 启动期烘一次不动，轮转只改这两个数。
+ *
+ * 前置（由载体创建时的容量闸门守，见 `createMeshletShadowArgsRing`）：
+ *  · `frameSlot < slices`、`firstRow < sliceRows`（调用方守；越界 = 段起点落进下一个 slice
+ *    = 把上一帧的行当本帧读，画面表现为「影子滞后一帧」而不报错）；
+ *  · `row ≤ UINT32_MAX`（`rowBase` 是 push 里的 32 位行号）。
+ *
+ * @param sliceRows 一个帧槽的行数（= 载体的 `sliceRows`，两处必须同一个变量）
+ * @param frameSlot 帧槽号（= `FrameSession::currentFrame`，🔴 不许与 GPU 侧另取一个）
+ * @param firstRow  本段（本级联）在 slice 内的起始行号
+ */
+export constexpr MdiShadowRowLocation mdiShadowRowLocation(uint32_t sliceRows, uint32_t frameSlot,
+	uint32_t firstRow) {
+	const uint64_t row = static_cast<uint64_t>(frameSlot) * sliceRows + firstRow;
+	return MdiShadowRowLocation {
+		.argsOffset = row * kMdiShadowRowStride,
+		.rowBase = static_cast<uint32_t>(row),
+	};
+}
 
 /**
  * 一个候选（一个级联内的一条阴影投影体候选，字段口径 = `ShadowCandidate` 的可切那半）。

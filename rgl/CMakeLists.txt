@@ -322,6 +322,8 @@ set(RGL_SCENE_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/frame_draw_list.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/meshlet_cull_service.cppm"   # ★1-a2-i：逐簇剔除的 GPU 侧载体（要 VkDevice + scene data → rlscene）
     "${CMAKE_CURRENT_SOURCE_DIR}/meshlet_cull_service_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/meshlet_shadow_args.cppm"    # ★M-1a（§19.5）：真 MDI 阴影段行表的 GPU 载体（ring×2 + 一 heap 槽，要 VkDevice → rlscene；零消费者）
+    "${CMAKE_CURRENT_SOURCE_DIR}/meshlet_shadow_args_impl.cppm"
 )
 
 set(RGL_FRAME_MODULE_SOURCES

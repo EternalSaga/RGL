@@ -77,6 +77,7 @@ set(RGL_TEST_SOURCES
     test_scene_sentinel.cppm     # 迁移批 T0 表尾毒化哨兵护栏：毒值三型有毒 / 位置=容量×stride / 容量语义不变 / 写侧不覆盖
     test_meshlet_lod.cppm        # §18 批 A 逐 prim 选级扫描：五条不变量各配反向用例 + 手算 costTable + base-shift 序锚 + Lcg 契约全量钉
     test_mdi_rows.cppm           # ★M-0（§19.3）MDI 行表构建器：行序=候选序 + 前 12B 对账 Vk 结构 + stride 合法性 + 四条不变量反向用例（错误串两两不同）+ 配置键探针
+                                 # + ★M-1a（§19.5）尺寸/偏移算术：🔴 argsOffset 与 rowBase 同源 + 07089/07090 合一闭式边界 + 容量少 1 字节必红
     test_meshlet_hand.cppm       # ★0.5-c UV 手性 CPU 参考 + 簇→三角寻址：闭式五形态锚点 + 跨簇偏移混淆四变异 + 8bit 断言 + Lcg 公式对拍
     test_shadow_forward.cppm     # shadow.slang 选级 forward 提取式数学恒等（invVP 列叉积，5a-8c 回归，12.3d-C）
     test_ssr_viewproj.cppm       # 批 15.1 SSR 尾区 @723712：字节布局互逆 + 抖动口径闭式差量（fillSsrViewProj 接缝）
@@ -93,6 +94,7 @@ set(RGL_TEST_SOURCES
     test_izb_engine_contract.cppm    # gpu 套件 11.3 补账：引擎真 SPV 的 ndc 口径/字节偏移/guard 契约
     test_mdi_drawindex.cppm          # gpu 套件 MDI 门：DrawIndex 语义 × stride16 × 零计数不跳号（docs/mdi_plan.md §6）
     test_meshlet_geometry.cppm       # gpu 套件 ★1-a0：簇产物 4 段 GPU 上传的设备级逐字节回读校验
+    test_meshlet_shadow_args.cppm    # gpu 套件 ★M-1a（§19.5）：MDI 行表 GPU 载体的**设备侧往返** + 🔴 argsOffset↔rowBase 同源的自证回路（一次真 MDI 展开 + 孔洞行阳性对照）
     test_descriptor_heap_ubo.cppm    # gpu 套件能力 spike：resource heap 能否放 eUniformBuffer 并被 ConstantBuffer<T> 读（+ binding→槽机制证伪）；dheap 4/5 = StructuredBuffer 元素 stride 8/44 设备端往返（R3 撤销条件第 2 条）
 )
 
@@ -116,6 +118,9 @@ compile_slang("${CMAKE_CURRENT_SOURCE_DIR}/shaders/mdi_spike.frag.slang" MDI_SPI
 # per-draw groupCount 探针（列=row*3+gid.x、值=tag+gid.x）——Phase A 的 1591 draw 各有不同
 # groupCount，这条才真正担保"GPU 逐 draw 读到自己那行的 x"
 compile_slang("${CMAKE_CURRENT_SOURCE_DIR}/shaders/mdi_groups.mesh.slang" MDI_GROUPS_MESH_SPV)
+# ★M-1a（docs/mdi_plan.md §19.5）行表载体的 DrawIndex↔行 探针：24B 行 × ring×2 一张 buffer ×
+# 两个数据字段（word[3]/word[4]）——🔴 判据是「argsOffset 与 rowBase 同源」，截图看不见（tests/test_meshlet_shadow_args.cppm）
+compile_slang("${CMAKE_CURRENT_SOURCE_DIR}/shaders/mdi_shadow_rows.mesh.slang" MDI_SHADOW_ROWS_MESH_SPV)
 # descriptor heap × UBO 能力 spike（tests/test_descriptor_heap_ubo.cppm）：
 # 主判据体 + 阳性对照体（同 binding/同 heap，只差读哪个成员/索引）
 compile_slang("${CMAKE_CURRENT_SOURCE_DIR}/shaders/dheap_ubo.comp.slang" DHEAP_UBO_COMP_SPV)
@@ -153,6 +158,7 @@ target_compile_features(rgl_tests PRIVATE cxx_std_23)
 target_sources(rgl_tests PRIVATE ${IZB_SPIKE_MESH_SPV} ${IZB_SPIKE_FRAG_SPV}
     ${IZB_CREATE_SPV} ${IZB_PRIME_SPV} ${IZB_MASK_MESH_SPV} ${IZB_MASK_FRAG_SPV}
     ${MDI_SPIKE_MESH_SPV} ${MDI_SPIKE_FRAG_SPV} ${MDI_GROUPS_MESH_SPV}
+    ${MDI_SHADOW_ROWS_MESH_SPV}
     ${DHEAP_UBO_COMP_SPV} ${DHEAP_UBO_WRONG_COMP_SPV}
     ${DHEAP_STRIDE_COMP_SPV} ${DHEAP_STRIDE_WRONG_COMP_SPV})
 # 链接面：rlbase 之外**也**链 rlgfx/rlscene/rlframe（批 12.2d）。

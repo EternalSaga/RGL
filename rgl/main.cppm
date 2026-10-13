@@ -31,6 +31,7 @@ import texture_pool;        // ModelTextureIds
 import shader_registry;     // ShaderRegistry
 import gpu_cull;            // GpuCull
 import meshlet_cull_service;  // MeshletCullService（★1-a2-i 逐簇剔除的 GPU 侧载体，装配层持有）
+import meshlet_shadow_args;   // MeshletShadowArgsService（★M-1a 真 MDI 行表的 GPU 载体，装配层持有）
 import vk_indirect_commands;  // DgcCommands / DgcStaticCommands
 import picking;              // PickingService（wirePicking 签名，Phase 10 批 10.5）
 import vk_renderer;         // Renderer
@@ -297,6 +298,23 @@ export struct MeshletBindingSlots {
 };
 
 /**
+ * 簇化轴的两个 **GPU 侧服务**持有者（★M-1a 起；🔴 装配层里那个变量的声明序 = 本结构的生命周期
+ * 契约，见 `wireMeshletOverlay` 的 @return）。
+ *
+ * 为什么合成一份而不是两个 `auto`：`main()` 的代码行数已顶到红线（120），而两格的所有权规则
+ * **完全相同**（都要比 Renderer 活得久）、时序却不同（cull 服务在注册**前**建、行表载体必须
+ * 在注册**后**建 = 它要读选级表这个生效事实）。⟹ 一次装配出两格，各自在能算出闭式的那一刻填，
+ * 而不是为第二格再要一行声明。
+ *
+ * ⚠ 两格都可以是 nullptr（门关 / 无产物 / 多产物回落 / 生效事实没成立）；「nullptr 是不是
+ * 应该出声」由各接线函数自己判读（配置说开了而没跑 = 空开关，本项目反复踩的形态）。
+ */
+export struct MeshletAssembly {
+	std::unique_ptr<MeshletCullService> cullService;       ///< ★1-a2-i 逐簇剔除的 GPU 载体
+	std::unique_ptr<MeshletShadowArgsService> shadowArgs;  ///< ★M-1a 真 MDI 行表的 GPU 载体（零消费者）
+};
+
+/**
  * 簇化轴 ★1-a1ii-α：影子叠加装配总入口 = ① 簇 buffer 描述符接线（领 4 个 Runtime 段
  * heap 槽 + 把 `MeshletGeometryStore` 四段 BDA 写成 storage buffer 描述符，binding
  * 17-20 固定；ensureIzbSlots fallback 同法 host 直写，单份产物前提与多产物回落 →
@@ -313,19 +331,37 @@ export struct MeshletBindingSlots {
  *   🔴 债-105 起这两枚**只在 meshlet.overlay 开时**才被采纳——变体烘进的是 `switch` 原位取代
  *   共用的那批条目，叠加段关着也能改条目 = 诊断渗进产品路 ⟹ 关时强制 base + 偏离默认才 warn）
  * @param sceneData scene data 服务（★1-a2-i：`MeshletCullService` 要它的槽号与 buffer 句柄）
- * @return 逐簇视锥剔除服务（★1-a2-i）；门不开 / 无产物 / 多产物回落 = nullptr。
- *   🔴 **构造判据是 `meshlet.enable` 而不是 `meshlet.cull`**——mesh SPV 只有一份、binding 21
- *   无条件声明 ⟹ 标志 buffer 与它的描述符在门关时也必须存在（内容 = 全 1 = 全可见）。
- *   「门开但要不要 dispatch」是另一件事，归 `wireMeshletCull`。
- *   🔴 所有权必须落到装配层里**先于 Renderer** 声明的变量（本类持两张 GPU buffer，Renderer 只
+ * @return 簇化轴的 GPU 侧服务持有者 `MeshletAssembly`（★M-1a 起两格）：
+ *   · `cullService`（★1-a2-i）= 逐簇视锥剔除服务；门不开 / 无产物 / 多产物回落 = nullptr。
+ *     🔴 **构造判据是 `meshlet.enable` 而不是 `meshlet.cull`**——mesh SPV 只有一份、binding 21
+ *     无条件声明 ⟹ 标志 buffer 与它的描述符在门关时也必须存在（内容 = 全 1 = 全可见）。
+ *     「门开但要不要 dispatch」是另一件事，归 `wireMeshletCull`。
+ *   · `shadowArgs`（★M-1a）**本函数恒留空**：行表载体的每段行数上界要读注册**之后**才 emplace
+ *     的选级表（生效事实），填它的时机 = `wireMeshletPostRegistration` 第四步。
+ *   🔴 所有权必须落到装配层里**先于 Renderer** 声明的变量（两格都持 GPU buffer，Renderer 只
  *   持裸指针；AGENTS 生命周期红线：块尾析构 = 帧循环里读到已销毁的 VA）。
  */
-export std::unique_ptr<MeshletCullService> wireMeshletOverlay(
+export MeshletAssembly wireMeshletOverlay(
 	Resources& resources, DeviceContext& device,
 	const MeshletGeometryStore& meshletGeometry, const UploadedAssets& uploaded,
 	const SceneConfig& scene, bool deferredMode, ShaderRegistry& pipelines, AssetTable& assets,
 	SamplerLibrary& samplers, RenderTargetCache& rtCache, const RuntimeConfig& cfg,
 	SceneDataService& sceneData);
+
+/**
+ * ★M-1a（docs/mdi_plan.md §19.5）：真 MDI 阴影段**行表 GPU 载体**的接线（零消费者，一条 draw 都不接）。
+ * **调用点 = `wireMeshletPostRegistration` 第四步**（要读它 emplace 的 `MeshletShadowLodTable`
+ * = 「阴影簇路径真生效」的事实），产物落进 `MeshletAssembly::shadowArgs`（🔴 声明序先于
+ * Renderer = 析构序在其后；本服务持一张 GPU buffer，AGENTS 生命周期红线）。
+ *
+ * 建不建 = 宿主条件 `meshlet.enable` + `meshlet.shadow_lod ≥ 0` + 选级表在 ctx；门关 =
+ * **连号都不领**（先例 `wireMeshletBindings`）。🔴 生效条件里**不含** `meshlet.mdi_shadow`
+ * （§19.6 挂号那条：载体与「改用 MDI 形态」是两件事，后者才选 SPV 变体 / 选条目）。
+ * @param registry 场景 registry（🔴 必须**实体注册之后**：读选级表这个生效事实）
+ * @return 载体服务；门关 / 阴影簇路径未生效 / 每段行数上界为 0 = nullptr
+ */
+export std::unique_ptr<MeshletShadowArgsService> wireMeshletShadowArgs(entt::registry& registry,
+	Resources& resources, DeviceContext& device, const RuntimeConfig& cfg);
 
 /**
  * 簇化轴 ★1-a2-i：逐簇视锥剔除的**生效开关**（`meshlet.cull` → Renderer 帧首 dispatch）。
@@ -400,12 +436,14 @@ export void wireMeshletOverlayDepthCompare(Renderer& renderer, const RuntimeConf
  * @param assetTable 资产表（对账读 pipelineIndex / groupCount / meshletPipelineIndex）
  * @param cfg        运行配置（读 meshletEnable / meshletSwitch / meshletCoplanar）
  * @param device     设备上下文（**只读物理设备属性**：核对簇路径的发射规格，见 checkMeshletDeviceFit）
- * @param cullService ★1-a2-i：`wireMeshletOverlay` 构造好的逐簇剔除服务（可空）。剔除项表
- *   扫出来后**就地上传**给它（同一处产出 cullBase 与 items，分两处传 = 迟早漂）
+ * @param assembly   ★1-a2-i / ★M-1a：`wireMeshletOverlay` 装配出来的服务持有者（就地填两格）。
+ *   `cullService` = 逐簇剔除服务，剔除项表扫出来后**就地上传**给它（同一处产出 cullBase 与
+ *   items，分两处传 = 迟早漂）；`shadowArgs` = 本函数**第四步**新建的 MDI 行表载体（🔴 只能
+ *   在这里建：它的每段行数上界要读第三步 emplace 的选级表 = 生效事实）。
  */
 export void wireMeshletPostRegistration(entt::registry& registry, const UploadedAssets& uploaded,
-	const MeshletAssetStore& meshlets, const AssetTable& assetTable, const RuntimeConfig& cfg,
-	const DeviceContext& device, MeshletCullService* cullService);
+	const MeshletAssetStore& meshlets, const AssetTable& assetTable, Resources& resources,
+	const RuntimeConfig& cfg, DeviceContext& device, MeshletAssembly& assembly);
 
 /**
  * 材质风格 → 管线规格名派生（★1-a1ii-α 起 bakePipelineEntries 与 bakeMeshletEntries

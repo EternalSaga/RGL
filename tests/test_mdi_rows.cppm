@@ -7,7 +7,8 @@ module;
 #include <fstream>
 
 /**
- * test_mdi_rows —— ★M-0（docs/mdi_plan.md §19.3）：真 MDI 阴影段的行表构建器（纯 CPU 套件）。
+ * test_mdi_rows —— ★M-0 + ★M-1a（docs/mdi_plan.md §19.3 / §19.5）：真 MDI 阴影段的行表构建器
+ * 与它的尺寸/偏移算术（纯 CPU 套件）。
  *
  * 被测对象 = `rgl/mdi_rows.cppm` + `rgl/mdi_rows_impl.cppm`（rlbase）。**不是** `TEST_SUITE("gpu")`：
  * 构建器只读一段候选 span，一个设备都不碰（判据 = 「需不需要一个 VkDevice 才能跑」）。
@@ -42,7 +43,8 @@ module;
  * （🔴 禁 `git checkout`/`git stash`：本批三个新文件是**未跟踪**的，`stash -u` 会把它们一起卷走）、
  * 显式 `cmake --build build --target rgl_tests`（tests/ 是 EXCLUDE_FROM_ALL，`just build` 不编它）
  * 并核对**构建自身**的返回码（构建红 ≠ 判据红，那种读数作废）、每条还原后重跑全量基线断言全绿。
- * 下面「红 N 条」= 该变异下失败的 TEST_CASE 条数（本文件共 11 条 TEST_CASE）。
+ * 下面「红 N 条」= 该变异下失败的 TEST_CASE 条数（本文件共 **15** 条 TEST_CASE：
+ * ★M-0 十一条 + ★M-1a 四条尺寸/偏移算术用例）。
  *
  *   ① 压紧不可见行（`out.rows.push_back(row)` 外套 `if (row.groupCountX != 0u)`）→ 红 **8** 条
  *      （正向锚点 + 行序 + 不可见行身份 + Lcg + 前 12B 对账 + inv2 边界 + 两条反向表）
@@ -69,6 +71,32 @@ module;
  *   ⑫ 配置默认值翻成 true → 红 **1** 条（同一条配置用例，内含 4 处断言失败）
  *   ⑬ 不变量 2 判据短路（`visible && taskCount == 0` → `&& false`）→ 红 **3** 条（inv2 只在构建器
  *      + 全部坏形态 + 两两不同）
+ *
+ * ### ★M-1a 追加（§19.5 尺寸/偏移算术；harness 编号 N1-N4 / N14-N15，2026-10-13 实测）
+ * 四条新判据的专属信号（🔴 每条**同时**打到设备用例——同源 pair 是 CPU/GPU 两侧的共用产地；
+ * 设备侧用例名见 `tests/test_meshlet_shadow_args.cppm` 的文件头）：
+ *   ⑭ **N1** `mdiShadowTailBytes` 把 `stride × (drawCount − 1)` 写成 `stride × drawCount`
+ *      → 红 **2** 条（`闭式边界` + `Lcg 属性组二`）+ 设备侧 2 条。这正是「`stride × drawCount`
+ *      对任何合法输入都 ≤ 容量 ⟹ VUID 判据被读成恒真」的那类写法。
+ *   ⑮ **N2** `argsOffset = row × stride + 4`（字节偏移被挪而 `rowBase` 不动 = 两侧分家）
+ *      → 红 **4** 条（同源 pair + 容量 + 闭式边界 + Lcg 组二）+ 设备侧 **5** 条全红。
+ *   ⑯ **N3** `rowBase = frameSlot × sliceRows`（丢掉 `firstRow` 项 = 分家的另一半形态）
+ *      → 红 **2** 条（🔴 **只有**同源 pair 与 Lcg 组二：聚合量用例不碰 firstRow，容量用例也不碰）
+ *      + 设备侧 4 条。这条是「用例必须钉同源这件事本身」的实测理由。
+ *   ⑰ **N4** `drawCount == 0` 的尾写成 `argsOffset + stride`（不回绕但多读一整行）
+ *      → 红 **1** 条（`闭式边界`）+ 设备侧 1 条。
+ *   ⑱ **N14** `mdiShadowArgsCapacityBytes` 漏乘 `slices`（恒取一份 slice）→ 红 **3** 条 + 设备侧 5 条。
+ *      ⚠ 首版写成 `* 1u` ⟹ 形参 `slices` 变 unused → **-Werror 构建红**，读数作废；改成
+ *      `* (slices * 0u + 1u)` 才拿到判据红（skill「谓词类变异要保留参数使用」的第 N 次命中）。
+ *   ⑲ **N15** `mdiShadowSliceBytes` 把步长换成命令体 12（`stride` 与 `sizeof(Vk…)` 混用）
+ *      → 红 **3** 条 + 设备侧 5 条。
+ *
+ * ### 两条**自我纠错**（首版期望值出处写错，靠变异才发现，已就地改对并留注）
+ *   · 「容量少 1 字节必须报」首版写成 `fits(capacity − 1, …)` ⟹ **永不红**：容量按 stride 算而每行
+ *     只读 12B，`capacity − 1 ≥ tail` 恒成立。判据本体是**末行尾**，于是钉成两条：
+ *     `fits(tail)` 放行（spec 是 less than or equal）+ `fits(tail − 1)` 必报。
+ *   · Lcg 组二里 `if (wantTail == wantCapacity)` 包住的反向断言是**永不执行的死代码**
+ *     （尾 ≡ 12 (mod 24) 而容量 ≡ 0 (mod 24)）⟹ 那半边从来没牙，已改成无条件两条。
  *
  * ## 已知覆盖缺口（写出来，别让「全绿」被读成「全验过」）
  *   · 真产物对账（1591 候选 × 3 级联的 Σ gcX 闭式锚）不在这里做：本批零消费者，没有真候选序列
@@ -463,7 +491,10 @@ TEST_CASE("stride 合法性（VUID-07088：4 的倍数且 ≥ 12）+ 🔴 与用
 	constexpr uint32_t caseNumbers [] {
 		5u, 3u, 1u,               // 用例里的行数 / 候选数
 		3u, 11u, 17u, 1001u, 7u,  // 用例里的 clusterStart（偏移）
-		0u, 4u, 8u, 12u, 16u, 20u  // 用例里的字节偏移
+		0u, 4u, 8u, 12u, 16u, 20u,  // 用例里的字节偏移
+		// ★M-1a 尺寸算术用例的输入与读数（🔴 同一条纪律：pair 的两个成员与 stride 相等时，
+		// 「偏移↔行号互换」「乘 sliceRows 还是乘 slices」这类写反都测不出东西）
+		2u, 7u, 10u, 5u, 72u, 192u, 168u, 240u, 336u, 324u, 4773u, 8u, 1u, 0u
 	};
 	for (uint32_t n : caseNumbers) {
 		INFO("用例数值 ", n);
@@ -592,7 +623,112 @@ TEST_CASE("runtime_config：meshlet.mdi_shadow 默认 false、探针 true 命中
 // Lcg 属性组（写死种子；期望值 = 闭式契约，不抄被测码）
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ★M-1a：尺寸/偏移算术（§19.5 末两条 buffer 边界 VUID + 🔴 argsOffset 与 rowBase 同源）
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST_CASE("🔴 同源 pair：argsOffset == rowBase × stride，且两者由同一个 row 推出") {
+	// 数值全部互不相等（slices=2 / sliceRows=7 / frameSlot=1 / firstRow=3，spike §6.3 的 M4
+	// 教训同族：两个数取成相等 ⟹ 偏移↔步长互换也测不出东西）。
+	// 手算期望（出处 = §19.5 的公式，不抄被测码）：
+	//   row      = frameSlot*sliceRows + firstRow = 1*7 + 3 = 10
+	//   rowBase  = 10
+	//   argsOff  = 10*24 = 240
+	const auto loc = mdiShadowRowLocation(7u, 1u, 3u);
+	CHECK(loc.rowBase == 10u);
+	CHECK(loc.argsOffset == 240u);
+	// 🔴 同源这件事本身（pair 的两半必须来自同一个 row —— 任一半单独乘/加都红）
+	CHECK(loc.argsOffset == static_cast<uint64_t>(loc.rowBase) * kMdiShadowRowStride);
+	// 两个数**不相等**才有牙（若哪天它们巧合相等，互换的变异就隐形）
+	CHECK(loc.argsOffset != loc.rowBase);
+	CHECK(loc.rowBase != 7u);   // 不是 sliceRows
+	CHECK(loc.rowBase != 2u);   // 不是 slices
+	CHECK(loc.rowBase != 3u);   // 不是 firstRow
+	CHECK(loc.argsOffset != 7u);
+	CHECK(loc.argsOffset != 2u);
+	CHECK(loc.argsOffset != 3u);
+	CHECK(loc.argsOffset != 24u);  // 也不是 stride（stride 只做乘数，不当值用）
+	// 恒等半边：frameSlot = 0 时 rowBase == firstRow，但 offset 仍是它的 24 倍
+	const auto zero = mdiShadowRowLocation(7u, 0u, 3u);
+	CHECK(zero.rowBase == 3u);
+	CHECK(zero.argsOffset == 72u);
+	CHECK(zero.argsOffset != zero.rowBase);
+	// 换 sliceRows 时两个数一起跟着走（🔴 不许出现「offset 按 sliceRows 算而 rowBase 不跟」，
+	// 那正是 shader 读错行、vkCmd 读对地方的分家形态）
+	const auto other = mdiShadowRowLocation(5u, 1u, 3u);
+	CHECK(other.rowBase == 8u);
+	CHECK(other.argsOffset == 192u);
+	CHECK(other.argsOffset == static_cast<uint64_t>(other.rowBase) * kMdiShadowRowStride);
+	CHECK(other.argsOffset != loc.argsOffset);
+	CHECK(other.rowBase != loc.rowBase);
+	// offset 必须是 4 的倍数（VUID-…-offset-02710）
+	CHECK(loc.argsOffset % 4u == 0u);
+	CHECK(zero.argsOffset % 4u == 0u);
+	CHECK(other.argsOffset % 4u == 0u);
+}
+
+TEST_CASE("slice 与整张容量：capacity == slices × sliceBytes == rows × slices × stride") {
+	// 手算期望（24B 行、互不相等的数）：rows=7 slices=2 ⟹ slice=168、capacity=336
+	CHECK(mdiShadowSliceBytes(7u) == 168u);
+	CHECK(mdiShadowArgsCapacityBytes(7u, 2u) == 336u);
+	CHECK(mdiShadowArgsCapacityBytes(7u, 2u) == 2u * mdiShadowSliceBytes(7u));
+	// 真产物口径（★M-1a 装配日志该打出的量：可切上界 1591 × 级联段 3 = sliceRows 4773，
+	// ring×2 ⟹ capacity 229,104B）——独立闭式，不被测码读走
+	CHECK(mdiShadowSliceBytes(4773u) == 4773ull * 24ull);
+	CHECK(mdiShadowArgsCapacityBytes(4773u, 2u) == 4773ull * 24ull * 2ull);
+	// 零行 = 零字节（装配层据此拒绝建载体，见 createMeshletShadowArgsRing 闸门①）
+	CHECK(mdiShadowSliceBytes(0u) == 0u);
+	CHECK(mdiShadowArgsCapacityBytes(0u, 2u) == 0u);
+	// 🔴 容量 == 最后一个 slice 的 argsOffset 上界：末 slice 的段起点偏移 == (slices−1)×sliceBytes
+	const auto last = mdiShadowRowLocation(7u, 1u, 0u);
+	CHECK(last.argsOffset == mdiShadowSliceBytes(7u));  // 帧槽 1 的 0 行 = 第 2 个 slice 的起点
+	CHECK(last.argsOffset + mdiShadowSliceBytes(7u) == mdiShadowArgsCapacityBytes(7u, 2u));
+}
+
+TEST_CASE("🔴 闭式边界：末行 offset+12 落在容量内；容量少 1 字节必须报") {
+	// 两条 VUID 收成一条公式（spec 原文 = drawing.adoc:2596-2606）：
+	//   07089（drawCount==1）：offset + 12 ≤ size
+	//   07090（drawCount> 1）：stride×(drawCount−1) + offset + 12 ≤ size
+	// drawCount==1 时 07090 退化成 07089（stride×0 = 0）⟹ 同一条 tail 判据同时是两个 VUID。
+	CHECK(kMdiShadowCommandBytes == 12u);
+	CHECK(kMdiShadowCommandBytes < kMdiShadowRowStride);  // 12 < 24：每行只读前一半（多读 = 容量算错）
+	// 独立写的两份期望（不取被测 tail 的读数）
+	const uint64_t off = mdiShadowRowLocation(7u, 1u, 0u).argsOffset;  // = 168
+	CHECK(mdiShadowTailBytes(off, 1u) == off + 12u);                   // 07089 手算
+	CHECK(mdiShadowTailBytes(off, 7u) == off + 24u * 6u + 12u);        // 07090 手算
+	CHECK(mdiShadowTailBytes(off, 0u) == off);  // 零 draw 不读任何字节（不许无符号回绕）
+	// 最坏那一格：末个帧槽、段起点 0、一次读完整个 slice
+	const uint64_t worst = mdiShadowTailBytes(off, 7u);                // = 168+144+12 = 324
+	CHECK(worst == 324u);
+	const uint64_t capacity = mdiShadowArgsCapacityBytes(7u, 2u);      // = 336
+	CHECK(mdiShadowRangeFits(capacity, off, 7u));
+	// 🔴 真正的约束点是「末行尾字节」，不是整张容量：容量按 stride 算（每行 24B），而设备每行
+	// 只读 12B ⟹ 最小够用容量 == worst（= capacity − stride + 12 = 324）。所以"少 1 字节必须报"
+	// 要拿 **worst** 减 1 来测——拿 capacity 减 1 测到的是**留在容量里的那 12B 余量**，判据当然
+	// 还是绿（首版就写错过一次，红在这里才发现期望值出处错了）。
+	CHECK(mdiShadowRangeFits(worst, off, 7u));      // 恰等号成立（spec 写的是 less than or equal）
+	CHECK_FALSE(mdiShadowRangeFits(worst - 1u, off, 7u));  // 少 1 字节 ⟹ 立刻不成立
+	// 越界一行的形态也拦得住（slice 1 的 firstRow 6 + 7 行 ⟹ 尾越出整张容量）
+	const uint64_t pastOffset = mdiShadowRowLocation(7u, 1u, 6u).argsOffset;  // = 13×24 = 312
+	const uint64_t past = mdiShadowTailBytes(pastOffset, 7u);  // = 312 + 6×24 + 12 = 468
+	CHECK(pastOffset == 312u);
+	CHECK(past == 468u);
+	CHECK(past > capacity);  // 越界 = VU 违例（不崩、不报错，只是读越界当命令）
+	CHECK_FALSE(mdiShadowRangeFits(capacity, pastOffset, 7u));
+	// 逐 (slice, firstRow, drawCount) 全扫一遍：合法组合一个都不许报
+	for (uint32_t slice = 0; slice < 2u; ++slice)
+		for (uint32_t first = 0; first < 7u; ++first)
+			for (uint32_t count = 1u; first + count <= 7u; ++count) {
+				const uint64_t o = mdiShadowRowLocation(7u, slice, first).argsOffset;
+				INFO("slice ", slice, " first ", first, " count ", count);
+				CHECK(mdiShadowRangeFits(capacity, o, count));
+				// 尾随字节跨度 = tail − offset（= 载体 argsBytes 的口径，不许是 count×stride）
+				CHECK(mdiShadowTailBytes(o, count) - o == 24ull * (count - 1u) + 12ull);
+			}
+}
+
 TEST_CASE("Lcg 属性组（种子 20261013）：随机候选序列的闭式契约 + 打乱后行序跟着走") {
+
 	testing::Lcg rng(20261013);
 	int cases = 0, nonEmpty = 0;
 	for (int iter = 0; iter < 60; ++iter) {
@@ -667,6 +803,50 @@ TEST_CASE("Lcg 属性组（种子 20261013）：随机候选序列的闭式契�
 	}
 	CHECK(cases == 60);     // 前提守卫：一条都没造出来 = 上面全是空遍历假绿
 	CHECK(nonEmpty > 40);   // 非空形态必须占多数（否则「行序」那组断言整批空跑）
+}
+
+TEST_CASE("Lcg 属性组二（种子 20261013，★M-1a 尺寸算术）：pair 恒等 × 容量全扫 × 少 1 字节必红") {
+	// 期望值全部由本文件的**独立算式**给出（`wantRow` / `wantTail` 手写），不取被测函数读数
+	// ——skill `rgl-test-discipline`「断言独立于实现」。三个数互不相等由 rng 保证（下界见 uniformInt）。
+	testing::Lcg rng(20261013);
+	int cases = 0;
+	for (int iter = 0; iter < 40; ++iter) {
+		const uint32_t sliceRows = static_cast<uint32_t>(rng.uniformInt(2, 40));
+		const uint32_t slices = static_cast<uint32_t>(rng.uniformInt(2, 5));
+		const uint32_t frameSlot = static_cast<uint32_t>(rng.uniformInt(0, static_cast<int>(slices) - 1));
+		const uint32_t firstRow = static_cast<uint32_t>(rng.uniformInt(0, static_cast<int>(sliceRows) - 1));
+		const uint32_t drawCount = static_cast<uint32_t>(
+		    rng.uniformInt(1, static_cast<int>(sliceRows - firstRow)));
+		// 独立算式（出处 = §19.5 的公式，不是被测函数）
+		const uint64_t wantRow = static_cast<uint64_t>(frameSlot) * sliceRows + firstRow;
+		const uint64_t wantSliceBytes = static_cast<uint64_t>(sliceRows) * 24ull;
+		const uint64_t wantCapacity = wantSliceBytes * slices;
+		const uint64_t wantTail = wantRow * 24ull + 24ull * (drawCount - 1ull) + 12ull;
+		INFO("iter ", iter, " rows ", sliceRows, " slices ", slices, " slot ", frameSlot,
+			" first ", firstRow, " count ", drawCount);
+		const auto loc = mdiShadowRowLocation(sliceRows, frameSlot, firstRow);
+		CHECK(static_cast<uint64_t>(loc.rowBase) == wantRow);
+		CHECK(loc.argsOffset == wantRow * 24ull);
+		// 🔴 同源恒等（两半必须来自同一个 row）
+		CHECK(loc.argsOffset == static_cast<uint64_t>(loc.rowBase) * kMdiShadowRowStride);
+		CHECK(mdiShadowSliceBytes(sliceRows) == wantSliceBytes);
+		CHECK(mdiShadowArgsCapacityBytes(sliceRows, slices) == wantCapacity);
+		CHECK(mdiShadowTailBytes(loc.argsOffset, drawCount) == wantTail);
+		// 合法组合必须放行（最后一个 slice 的最后一段恰好贴到容量）
+		CHECK(mdiShadowRangeFits(wantCapacity, loc.argsOffset, drawCount));
+		// 🔴 边界两半各钉一条。判据本体是「末行尾」而不是整张容量：容量按 stride 算（24B/行）而
+		// 设备每行只读 12B ⟹ 真容量恒留 `stride − 12` 的余量，「容量 − 1 必报」那种写法**永不红**
+		// （首版就写成那样，被抓后改成以尾为锚）。等号成立 = 放行（spec: less than or equal），
+		// 尾减 1 = 必须报。
+		CHECK(mdiShadowRangeFits(wantTail, loc.argsOffset, drawCount));
+		CHECK_FALSE(mdiShadowRangeFits(wantTail - 1u, loc.argsOffset, drawCount));
+		// 尾随跨度 == argsBytes 的口径（stride×(count−1)+12，不是 count×stride）
+		CHECK(mdiShadowTailBytes(loc.argsOffset, drawCount) - loc.argsOffset
+			== 24ull * (drawCount - 1ull) + 12ull);
+		CHECK(loc.argsOffset % 4u == 0u);  // VUID-…-offset-02710
+		++cases;
+	}
+	CHECK(cases == 40);  // 前提守卫
 }
 
 }  // namespace RGL

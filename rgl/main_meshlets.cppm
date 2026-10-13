@@ -26,6 +26,10 @@ import runtime_config;  // RuntimeConfig / MeshletCoplanarMode（★0.5-b2 wireM
 import diagnostics;  // diagnostics().cullReplay / cullReplayName（★1-a1ii-β-1 wireMeshletSwitch 的 cull 档闸门）
 import vk_renderer;  // Renderer（★0.5-b2 setMeshletOverlayDepthCompareOp 目标；main 已 export import 链上，此处显式）
 import scene_data;     // kShadowMapSize（阴影图边长，与模型条目同值）+ SceneDataService（★1-a2-i 剔除服务入参）
+                      // + kActiveShadowCascades（★M-1a：MDI 级联段数 = 本值 − 1，c0 恒旧路径）
+import meshlet_lod;   // MeshletShadowLodTable（★M-1a：载体的生效事实与「每段行数上界」的来源）
+import meshlet_shadow_args;  // MeshletShadowArgsService（★M-1a：真 MDI 行表的 GPU 载体，装配层持有）
+import frame_session;        // FrameSession::kFramesInFlight（★M-1a：ring×2 的轮转节奏唯一真相源）
 import meshlet_cull_service;  // MeshletCullService（★1-a2-i 逐簇剔除的 GPU 侧载体，装配层构造）
 import meshlet_cull_types_generated;  // kClusterStride（簇头表条数 = 剔除标志下标上界，★1-a2-i）
 import render_graph;   // ensureShadowMapSlot（幂等，按名缓存命中同槽）
@@ -464,6 +468,74 @@ void bakeShadowMeshletEntries(const UploadedAssets& uploaded, ShaderRegistry& pi
 			cfg.meshletShadowLodFallback == MeshletLodFallbackMode::l0 ? "l0" : "deepest");
 }
 
+// ─── ★M-1a：阴影段真 MDI 行表 GPU 载体的接线（零消费者，一条 draw 都不接）───────────
+/**
+ * 载体接线（§19.5 的 ★M-1 接缝）。四步，顺序即代码：
+ *  ① 门关早退（`!meshletEnable` 或 `meshletShadowLod < 0`）= **连号都不领**（先例 =
+ *     `wireMeshletBindings` 首行；「门关 grep -ci meshlet = 0」的护栏）；
+ *  ② 读**生效事实**而不是配置意图：ctx 里没有 `MeshletShadowLodTable` = 阴影簇路径根本没生效
+ *     （设备规格不够 / 逐资产对账失败 / 零槽可切 三条回落路都不写配置）⟹ 不建载体，
+ *     也不出声——出声归 `wireClusterRangeTable` 自己（它已经点过名，重复出声会让「门关零日志」
+ *     的护栏在别的档下失真）；
+ *  ③ 闭式算出 `sliceRows`（每帧槽行数）后构造服务；
+ *  ④ 所有权交给调用方（🔴 声明序必须**先于 Renderer**——本服务持 GPU buffer，块尾析构 =
+ *     帧循环读到已销毁的 VA，见 AGENTS 生命周期红线与 `issue_history` 的 UAF 先例）。
+ *
+ * 🔴 **★M-1b 必须处理的时序接缝**：本步在**注册之后**（第④步），而管线条目的烘焙在
+ * `wireMeshletOverlay`（注册之前）——条目要拿 `argSlot()` 的槽号，此刻槽号还不存在。
+ * 环层与服务层的分界就是为这条留的：**领槽可以前移**（一个 `allocSlot` 调用，门关早退同形），
+ * **buffer 与容量留在本步**（`MeshletShadowArgsRing` 由 `createMeshletShadowArgsRing` 后建，
+ * 描述符在 BDA 已知之后写）。别为了凑槽号把行数猜成启动期未知的数。
+ *
+ * 🔴 生效条件里**不含** `meshlet.mdi_shadow`（§19.6 挂号那条）：载体是「行表住在 GPU 里」，
+ * 与「阴影 draw 改用 MDI 形态」（那条才是选 SPV 变体/选条目的门，§19.2 D2）是两件事。
+ * ⟹ 出厂默认（`mdi_shadow = false`）也建载体但零消费者，图像逐位不变。
+ * ★M-1b 若把 binding 22 的槽号改成从 `enable` 的 nullopt 链取，**必须回头改这段注释**——
+ * 否则「`= false` 时零消费者」会漂成「`= false` 时静默不生效 + 无人出声」。
+ *
+ * ## `sliceRows` 的闭式（每帧槽 = 所有级联段的并）
+ * `MDI 级联段数 × 每段行数上界`，两个因子各有出处：
+ *  · **段数 = `kActiveShadowCascades − 1`**（🔴 c0 恒旧路径，§18.6 第一刀零改动；IZB mask 重放
+ *    按 8B push 读 c0 段靠的就是这条）⟹ c1..c3 = 3 段；
+ *  · **每段行数上界 = 选级表里 `count > 0` 的 objectSlot 数**：每个可切候选占**自己**一个
+ *    objectSlot（下标 = `MeshRef.objectSlot` = shader 的 objectIndex），所以它是「一段能有多少
+ *    行」的**上界**而不是精确值——差的那几行正是 doubleSided / blend 这些「有选级条目但不进
+ *    MDI」的实体（本机真产物 = 1591 上界 vs §19.5 的 1530 可切）。按上界建 ⟹ 结构上不可能
+ *    越界写，而多出来的行恒 0（`gcX = 0` = 空转，§19.2 D4 的孔洞流本来就是合法形态）。
+ *    🔴 不在这里重述 `collectShadowCasters` 的四条判据（那是第三处真相源）。
+ * @param registry 场景 registry（读 `MeshletShadowLodTable` = 生效事实；🔴 必须注册之后）
+ * @param resources 资源层（领槽 + VMA 分配器 + 描述符堆）
+ * @param cfg       运行配置（读 `meshletEnable` / `meshletShadowLod` 两枚宿主条件）
+ * @return 载体服务；门关 / 阴影簇路径未生效 / 上界为 0 = nullptr（零 buffer 零槽零日志）
+ * @throw std::runtime_error 服务构造失败（领槽 / buffer / 描述符；启动期一次性路径）
+ */
+std::unique_ptr<MeshletShadowArgsService> wireMeshletShadowArgs(entt::registry& registry,
+	Resources& resources, DeviceContext& device, const RuntimeConfig& cfg) {
+	if (!cfg.meshletEnable || cfg.meshletShadowLod < 0)
+		return nullptr;  // 门关 = 连号都不领
+	const auto* lod = registry.ctx().find<MeshletShadowLodTable>();
+	if (lod == nullptr)
+		return nullptr;  // 阴影簇路径没生效（三条回落路都只出声不写配置，读事实不读意图）
+	uint32_t rowsPerCascade = 0;
+	for (const auto& entry : lod->bySlot)
+		rowsPerCascade += entry.count > 0u ? 1u : 0u;
+	// 级联段数：c1..cN（🔴 c0 恒旧路径，不进表）。写成减法而不是字面 3 = 切级联时不漏校验
+	// （同 frame_draw_list 对 `kActiveShadowCascades` 的那条纪律）。
+	const uint32_t mdiCascades = kActiveShadowCascades - 1u;
+	const uint32_t sliceRows = rowsPerCascade * mdiCascades;
+	if (sliceRows == 0u) {
+		// 表在但全零 = 与门关逐位相同（同 `wireMeshletCull` 的「服务缺位而出声」第二道护栏：
+		// 「配置说开了而实际没跑」必须在日志里看得见，别让下一位拿旧锚读成生效）。
+		if (auto* logger = RLLogger::getInstance())
+			logger->warn("meshlet: mdi_shadow 载体未建 —— 选级表全零条目（可切候选 0 个）：本档与"
+						 "门关逐位相同，要它生效必须有至少一个资产过四条可切判据");
+		return nullptr;
+	}
+	// 🔴 轮转节奏的唯一真相源（本类不抄字面 2）。main 在分层里位于 frame 之上，import 方向合法。
+	return std::make_unique<MeshletShadowArgsService>(device, resources, sliceRows,
+		FrameSession::kFramesInFlight);
+}
+
 /**
  * 簇化轴 ★1-a1ii-α 装配总入口（main.cppm 声明）：描述符接线 + 条目烘焙两步的顺序
  * 契约内聚在此（bake 依赖 wire 的槽号），main() 只留一次调用（装配层行数预算）。
@@ -476,15 +548,15 @@ void bakeShadowMeshletEntries(const UploadedAssets& uploaded, ShaderRegistry& pi
  * （变体烘进条目、条目是 β-1 取代的宿主 ⟹ 不归位会让关掉叠加段的跑仍然被诊断改掉产品路几何）。
  * 本函数**不**因为 overlay 关而少烘一条条目——见 `bakeMeshletEntries` 的宿主契约注释。
  */
-std::unique_ptr<MeshletCullService> wireMeshletOverlay(Resources& resources,
+MeshletAssembly wireMeshletOverlay(Resources& resources,
 	DeviceContext& device,
 	const MeshletGeometryStore& meshletGeometry, const UploadedAssets& uploaded,
 	const SceneConfig& scene, bool deferredMode, ShaderRegistry& pipelines, AssetTable& assets,
 	SamplerLibrary& samplers, RenderTargetCache& rtCache, const RuntimeConfig& cfg,
 	SceneDataService& sceneData) {
-	std::unique_ptr<MeshletCullService> cullService;
+	MeshletAssembly assembly;
 	const auto slots = wireMeshletBindings(resources, device, meshletGeometry, cfg.meshletEnable,
-		sceneData, cullService);
+		sceneData, assembly.cullService);
 	// mesh SPV 变体选档（门关 = bakeMeshletEntries 首行早退，variant 不被读；warn 也必须门开
 	// 才出声——门关 grep meshlet = 0 的护栏）。一件事一个函数：选档 = pickMeshletMeshVariant，
 	// 孤立组合出声 = warnMeshletVariantInstruments。
@@ -495,8 +567,10 @@ std::unique_ptr<MeshletCullService> wireMeshletOverlay(Resources& resources,
 	// ★18-B1：阴影段簇路径条目（**只建条目不接 draw**，接线归 B2）。放在 bakeMeshletEntries
 	// 之后 = 同一份 slots 复用、且不打乱既有条目序之前的任何一条（本条目是纯追加）。
 	bakeShadowMeshletEntries(uploaded, pipelines, meshletGeometry, slots, cfg);
-	// ★1-a2-i：服务所有权交给调用方（装配层里先于 Renderer 声明的变量），理由 → main.cppm 声明
-	return cullService;
+	// ★1-a2-i / ★M-1a：两格服务的所有权交给调用方（装配层里**先于 Renderer** 声明的变量），
+	// 理由 → main.cppm 声明。🔴 `shadowArgs` 这一格**本函数不填**：它的每段行数上界要读
+	// `registerSceneEntities` 之后才 emplace 的选级表（生效事实），填它 = 第四步。
+	return assembly;
 }
 
 /**
@@ -577,19 +651,23 @@ void wireMeshletCull(Renderer& renderer, entt::registry& registry, const Runtime
 }
 
 /**
- * 接口声明与完整口径 → main.cppm `wireMeshletPostRegistration`。本定义只做一件事：
- * 把「实体注册之后」的三步簇轴装配合成一次调用（`main()` 已在 120 行代码红线，
+ * 接口声明与完整口径 → main.cppm `wireMeshletPostRegistration`。本定义做四步：
+ * 把「实体注册之后」的簇轴装配合成一次调用（`main()` 已在 120 行代码红线，
  * `wireSceneSpinContext` / `bakeMeshletEntries` 同法抽 helper，零行为变化）。
  * 顺序契约内聚在此：区间表**先**建（`wireMeshletSwitch` 的对账要读逐槽 l0Count），叠加段生效标记
  * 最后 emplace（债-105：它只读配置 + 资产表，不依赖前两步，但与前两步同属「注册之后」这一段）。
+ * 🔴 第四步（★M-1a）必须排在第①步之后：MDI 行表载体的容量读的是**选级表**（存在即生效），
+ * 而选级表是①里对账通过才 emplace 的。
  */
 void wireMeshletPostRegistration(entt::registry& registry, const UploadedAssets& uploaded,
-	const MeshletAssetStore& meshlets, const AssetTable& assetTable, const RuntimeConfig& cfg,
-	const DeviceContext& device, MeshletCullService* cullService) {
+	const MeshletAssetStore& meshlets, const AssetTable& assetTable, Resources& resources,
+	const RuntimeConfig& cfg, DeviceContext& device, MeshletAssembly& assembly) {
 	wireClusterRangeTable(registry, uploaded, meshlets, cfg.meshletEnable, cfg.meshletCull,
-		cullService, assetTable, cfg, device);
+		assembly.cullService.get(), assetTable, cfg, device);
 	wireMeshletSwitch(registry, assetTable, cfg, device);
 	wireMeshletOverlayActivation(registry, assetTable, cfg);
+	// ④ ★M-1a：真 MDI 阴影段的行表 GPU 载体（零消费者；门关 = 连号都不领，零 INFO）。
+	assembly.shadowArgs = wireMeshletShadowArgs(registry, resources, device, cfg);
 }
 
 }  // namespace RGL
