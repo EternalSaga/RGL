@@ -41,6 +41,10 @@ constexpr uint32_t kChunkJson = 0x4E4F534A;
 
 /// 读 glb 的 JSON chunk 原文。逐 chunk **找** JSON（chunk 1 = BIN，必须跳过；顺序不保证，
 /// 所以是"找"不是"读第二段"）。任何一步读不出来都抛（调用方不许静默给空表）。
+/// 债-99：旧版只校验头 magic，**不读 totalLength、不校验 chunk 长度** ⟹ 坏文件的实际行为
+/// 是"一直读到 EOF"而不是报错（台账实测：假 totalLength 两版行为一致 = 都不读它）。
+/// 长度校验的口径 = 文件大小是唯一可信分母：头声明的 totalLength 与每个 chunk 声明的
+/// 长度都**不得越过文件尾**，越界即抛（文案带 文件多大 / 声明多大 / chunk 声明多大）。
 std::string readGlbJsonChunk(const std::string& glbPath)
 {
     std::ifstream in(glbPath, std::ios::binary);
@@ -51,19 +55,38 @@ std::string readGlbJsonChunk(const std::string& glbPath)
     in.read(reinterpret_cast<char*>(head), 12);
     if (!in || std::memcmp(head, "glTF", 4) != 0)
         throw std::runtime_error("不是 glb（头不是 'glTF'）: " + glbPath);
+    const auto u32le = [](const uint8_t* p) -> uint64_t {
+        return static_cast<uint64_t>(p[0]) | (static_cast<uint64_t>(p[1]) << 8)
+            | (static_cast<uint64_t>(p[2]) << 16) | (static_cast<uint64_t>(p[3]) << 24);
+    };
+    const uint64_t declaredTotal = u32le(head + 8);
+    in.seekg(0, std::ios::end);
+    const uint64_t fileSize = static_cast<uint64_t>(in.tellg());
+    in.seekg(12, std::ios::beg);
+    if (declaredTotal > fileSize)
+        throw std::runtime_error("glb 头声明 totalLength = " + std::to_string(declaredTotal)
+            + " 越过文件尾（文件只有 " + std::to_string(fileSize) + " 字节）: " + glbPath);
     std::string jsonText;
-    while (in) {
+    uint64_t pos = 12;  // 当前 chunk 头之前的字节偏移（长度校验的分母 = 真实文件大小）
+    while (pos + 8 <= fileSize) {
         uint32_t clen = 0, ctype = 0;
         in.read(reinterpret_cast<char*>(&clen), 4);
         in.read(reinterpret_cast<char*>(&ctype), 4);
         if (!in)
             break;
+        pos += 8;
+        if (pos + clen > fileSize)
+            throw std::runtime_error("glb chunk 声明长度 " + std::to_string(clen)
+                + " 越过文件尾（文件 " + std::to_string(fileSize) + " 字节，chunk 头声明在字节 "
+                + std::to_string(pos - 8) + "，头声明 totalLength = " + std::to_string(declaredTotal)
+                + "）: " + glbPath);
         if (ctype == kChunkJson) {
             std::string buf(clen, '\0');
             in.read(buf.data(), static_cast<std::streamsize>(clen));
             jsonText = std::move(buf);
             break;
         }
+        pos += clen;
         in.seekg(clen, std::ios::cur);  // 4 字节对齐的填充由长度本身吸收，不用额外处理
     }
     if (jsonText.empty())

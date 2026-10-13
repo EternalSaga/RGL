@@ -153,10 +153,17 @@ void replaceValueInBlock(std::string& text, const std::string& file, const std::
     const auto bpos = text.find(bhead);
     if (bpos == std::string::npos)
         throw std::runtime_error("交付配置 " + file + " 里没有表 `" + block + "`，无法覆写 " + key);
+    // 表尾边界（债-93）：旧版从表头一路找到**文件尾** ⟹ 目标表缺该键时静默命中后面那张表
+    // （`environment` 没有 `intensity` 而其后的 `light` 有 ⟹ 改掉的是 `light.intensity`，
+    // 一声不响——改的就是判据输入）。边界口径与 `overrideValueInTable` 一致：`valueSpanAt`
+    // 按花括号配对收尾，表跨度内未命中 = 抛，**不越界去别的表找**。（本原语找表头是字面量
+    // `"block = {"`，排版必须恰好一个空格——那是它与此前那条注释 ② 的既有分工，不在本次范围。）
+    const auto span = valueSpanAt(text, bpos + bhead.size() - 1, file, block);
     const std::string head = key + " = ";
-    const auto at = text.find(head, bpos);
-    if (at == std::string::npos)
-        throw std::runtime_error("交付配置 " + file + " 的 `" + block + "` 表里没有键 `" + key + "`");
+    const auto at = text.find(head, bpos + bhead.size());
+    if (at == std::string::npos || at >= span.first + span.second)
+        throw std::runtime_error("交付配置 " + file + " 的 `" + block + "` 表里没有键 `" + key
+            + "`（表跨度内未命中 = 不越界去别的表找，那会改错块）");
     const auto eol = text.find_first_of(",\n", at + head.size());
     if (eol == std::string::npos)
         throw std::runtime_error("交付配置 " + file + " 的键 `" + block + "." + key + "` 形状不认识");
@@ -266,6 +273,11 @@ std::string topLevelValueOf(const std::string& text, const std::string& key,
         throw std::runtime_error("交付配置 " + file + " 里顶层键 `" + key + "` 命中 "
             + std::to_string(hits.size()) + " 处（要恰好 1 处）——自检无法定位");
     const size_t eq = text.find('=', hits[0] + key.size());
+    // 与 `overrideTopLevelValue` 同形的防御守卫（债-93）：缺了它 `eq + 1` 在 npos 处回绕成 0，
+    // 会把**文件开头**的值读成自检读数。今天 isKeyHit 已保证命中必带 `=`（不可达），但两条
+    // 同定位判据的路径必须同守卫——漂移只会发生在"其中一条被改"的那天。
+    if (eq == std::string::npos)
+        throw std::runtime_error("交付配置 " + file + " 的键 `" + key + "` 后面没有 `=`");
     const auto span = valueSpanAt(text, eq + 1, file, key);
     const std::string v = text.substr(span.first, span.second);
     const auto a = v.find_first_not_of(" \t\r\n");

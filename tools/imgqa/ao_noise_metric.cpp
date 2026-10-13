@@ -3,10 +3,13 @@
 // 拆出本 TU 的理由与缝的划法见 `ao_noise_metric.h` 头注释（一句话：口径与仪器不是同一条改动
 // 缝，先例 = `shadow_kernel_metric.cpp` / `diff_struct_metric.cpp`）。
 //
-// 本文件每一条都是**搬**过来的，函数体一字未改（验收 = 原始二进制 vs 当前二进制的结构签名
-// 对拍 + 字面量对账）。搬来时在场的一条越界读已于 P1-G1（债-91）修复：`printAoScanline`
-// 在全图拉普拉斯能量恒 0 时不再带着 `bestRow = −1` 去 `ao.ptr<uint8_t>(−1)`，改为明说
-// 「AO 场全平」且不出数（阳性锚点 = `selftest_ao_noise.cpp`）。
+// 本文件此前每一条都是**搬**过来的，函数体一字未改（验收 = 原始二进制 vs 当前二进制的结构签名
+// 对拍 + 字面量对账）。搬来时在场的两条已于 P1-G1/G2 修复并挂号：`printAoScanline` 在全图
+// 拉普拉斯能量恒 0 时不再带着 `bestRow = −1` 去 `ao.ptr<uint8_t>(−1)`，改为明说「AO 场全平」
+// 且不出数（债-91）；`oidOf` 认不出 piece 名不再返回 0 = 背景，改为**抛**且信息带认出的
+// piece 名清单（债-96）。`burstDiffFiles` = 组 4 的逐帧差累计，从 `ao_noise_groups.cpp` 的
+// `burstDiff` 拆到口径层并补「不足 2 帧早退出声」守卫（债-96：拆层是为了让 selftest 不吃
+// Engine 直接测这条早退）。阳性锚点 = `selftest_ao_noise.cpp`。
 #include "ao_noise_metric.h"
 
 #include "imgqa.h"
@@ -16,11 +19,13 @@
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
 #include <numeric>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -156,11 +161,67 @@ void saveStretched(const cv::Mat& ao, double lo, double hi, const std::string& p
 
 // ───────────────────────── 共享类型的小算子 ─────────────────────────
 
-/// piece 名 → objectID；认不出 = 0（= 背景，调用方自己决定跳过还是照算）。
+/// piece 名 → objectID；认不出 = **抛**（债-96：曾返回 0 = 背景 ⟹ `--glb` 换靶后锚点在
+/// 「背景 vs 背景」上求值，判据静默失效、不报错也不告警——warn 的失效形态与返回 0 只差一点，
+/// 也不许）。异常信息列出认出的 piece 名清单：换靶的人一眼看到该写什么，而不是对着
+/// 0 像素的接触环查半天。
 int32_t oidOf(const Collected& col, const std::string& n)
 {
     const auto i = col.oidByName.find(n);
-    return i == col.oidByName.end() ? 0 : i->second;
+    if (i != col.oidByName.end())
+        return i->second;
+    std::string known;
+    for (const auto& [name, oid] : col.oidByName)
+        known += (known.empty() ? "" : ", ") + name;
+    throw std::runtime_error("ao-noise 认不出 piece 名 `" + n + "`（`--glb` 换靶了？本靶认出的 piece: "
+        + (known.empty() ? "（一个都没有——区域归因没跑成？）" : known) + "）");
+}
+
+/**
+ * 一轮 burst 的逐帧差累计（下标 0 = 全图，1 = 契约区，2 = 接触环）+ 全图非零像素合计。
+ *
+ * 强度切换后先丢 `warmFrames` 帧洗掉 TAA 历史（feedback 0.12 ⟹ 收敛要几十帧），
+ * 再取 `nBurst` 帧；两张相邻帧的差按三个区域各累一次。本函数从 `ao_noise_groups.cpp`
+ * 的 `burstDiff` 搬来（债-96 拆层：早退守卫要能被 selftest 不吃 Engine 直接测），循环体一字未改。
+ */
+std::pair<std::array<FrameDiff, 3>, int64_t> burstDiffFiles(const std::vector<std::string>& files,
+    const cv::Mat& flat, const cv::Mat& contactMask, const std::string& tag,
+    const std::string& outDir)
+{
+    std::array<FrameDiff, 3> acc;
+    int64_t changed = 0;
+    // 债-96：旧版假定 /shotburst 至少返回 2 帧 ⟹ 部分失败时 `files[1]` 越界 +
+    // `files.size() − 1` 下溢成 0 = 整数除零（正常路径走不到，坏在「部分失败」那天）。
+    // 不足 2 帧对逐帧差是**无定义**输入：早退且**出声**——「0 对帧」与「测到了没噪声」
+    // 是两回事，静默早退会被读成后者（同 printAoScanline 的「无定义不出数」纪律）。
+    if (files.size() < 2) {
+        std::printf("  ⚠ burst %s 只拿到 %zu 帧（< 2）⟹ 逐帧差无定义，本组不出数"
+                    "（/shotburst 部分失败 ≠ 「AO 没有噪声」）\n",
+            tag.c_str(), files.size());
+        return {acc, changed};
+    }
+    for (size_t i = 1; i < files.size(); ++i) {
+        const cv::Mat x = readPngBgr(files[i - 1]), y = readPngBgr(files[i]);
+        // 0 = 全图，1 = 契约区，2 = 接触环
+        const std::array<FrameDiff, 3> d{diffFrames(x, y), diffFrames(x, y, flat),
+            diffFrames(x, y, contactMask)};
+        for (size_t k = 0; k < acc.size(); ++k) {
+            acc[k].changed += d[k].changed;
+            acc[k].mean += d[k].mean / static_cast<double>(files.size() - 1);
+            acc[k].mx = std::max(acc[k].mx, d[k].mx);
+        }
+        changed += d[0].changed;
+    }
+    for (auto& a : acc)
+        a.changed /= static_cast<int64_t>(files.size() - 1);
+    keep(files[0], outDir, "g4_" + tag + "_f0.png");
+    keep(files[1], outDir, "g4_" + tag + "_f1.png");
+    cv::Mat dd;
+    cv::absdiff(readPngBgr(files[0]), readPngBgr(files[1]), dd);
+    cv::Mat dAbs;
+    cv::convertScaleAbs(dd, dAbs, 255.0 * 16.0);
+    cv::imwrite(outDir + "/g4_" + tag + "_diff_x16.png", dAbs);
+    return std::pair<std::array<FrameDiff, 3>, int64_t>{acc, changed};
 }
 
 // ────────────────── 取值分布与扫描线（组 2 的读数面）──────────────────

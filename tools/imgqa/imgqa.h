@@ -523,6 +523,12 @@ struct Attribution {
 [[nodiscard]] std::vector<std::pair<double, int64_t>> lumaClusters(cv::InputArray luma,
     double gap = 0.02, double minFraction = 0.02);
 
+/// 排序序列上取百分位（实现 = `image.cpp`，`fillReadout` 的底座）。⚠ `q` 是 **0..100**，与
+/// `temporal_residual.h` 的 `percentileOf`（p = 0..1）**不是同一个刻度**，故刻意不叫那个名字。
+/// 空集**抛**（债-99）：`size() − 1` 下溢成 SIZE_MAX = 越界读，把堆上的鬼数当分位数印出来；
+/// 「无分位数」必须与「分位数是 0」可区分——0 是合法读数，占不了这个位置。
+[[nodiscard]] double percentile100(const std::vector<double>& sorted, double q);
+
 // ═══════════════════════════════════════════ 判据 + 反模式 + 台账
 
 struct Verdict {

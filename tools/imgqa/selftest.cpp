@@ -186,6 +186,32 @@ void testClusters(Checker& c)
     c.chk("空输入 = 空簇", lumaClusters(cv::Mat()).empty());
 }
 
+/// 债-99：`percentile100` 空集时 `size() − 1` 下溢成 SIZE_MAX = **越界读**（触发条件真实
+/// 存在：mask 全灭时 `sortedLumaInMask` 返回空 vector）。修法 = 抛；锚点必须同时钉住
+/// 「0 是合法分位数」——否则「改成返回 0 哨兵」也能骗绿（本函数自己的注释写着两个刻度
+/// 传错时「分位数静默变成 0」，修法不许再造同一个静默形态）。
+void testPercentile100(Checker& c)
+{
+    bool threw = false;
+    double got = -1.0;
+    try {
+        got = percentile100({}, 50.0);
+    } catch (const std::exception&) {
+        threw = true;
+    }
+    c.chk("percentile100：空集 → 抛（改前 size()−1 下溢 = 越界读，堆上鬼数当读数）", threw,
+        "实得 " + std::to_string(got));
+    // 可区分性：0.0 是**合法分位数**不是失败码——空集抛、含零正常出 0。
+    c.chk("percentile100：全零序列 p50 = 0.0（0 是合法读数，与「空集抛」可区分）",
+        percentile100(std::vector<double>{0.0, 0.0}, 50.0) == 0.0);
+    // 闭式（截断下标口径，不做线性插值）：n=5 ⟹ p50 = sorted[0.5·4]=sorted[2]；
+    // p95 = sorted[⌊0.95·4⌋]=sorted[3]；p100 = sorted[4]。变异红线：改成四舍五入/向上取整 → 后两条红。
+    const std::vector<double> v{10.0, 20.0, 30.0, 40.0, 50.0};
+    c.chk("percentile100：p50 = 闭式 30（下标 0.5·4 = 2 截断）", percentile100(v, 50.0) == 30.0);
+    c.chk("percentile100：p95 = 闭式 40（下标 3.8 截断为 3，不插值）", percentile100(v, 95.0) == 40.0);
+    c.chk("percentile100：p100 = 末元素（下标恰 n−1，不许越界）", percentile100(v, 100.0) == 50.0);
+}
+
 void testRegistry(Checker& c)
 {
     c.chk("反模式登记含 ssim/psnr/global-epsilon",
@@ -439,6 +465,9 @@ int cmdSelftest()
     testEngineLogTail(c);
     testAoNoiseMetric(c);
     testSwimLagTableSurface(c);
+    testLuaEditBlockBoundary(c);
+    testGlbChunkValidation(c);
+    testPercentile100(c);
     std::printf("%s：%d 条失败\n", c.bad ? "自检失败" : "自检通过", c.bad);
     return c.bad ? 1 : 0;
 }

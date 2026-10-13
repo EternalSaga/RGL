@@ -290,9 +290,10 @@ void collect(const Ctx& ctx, Collected& col)
     flat = cv::Mat::zeros(attr.ids.size(), CV_8UC1);
     cv::Mat band = cv::Mat::zeros(attr.ids.size(), CV_8UC1);
     for (const auto& name : at.visiblePieces()) {
+        // oidOf 在这条循环里抛不了：name 与 oidByName 同出 nameByOid 一份来源
+        //（债-96 把它改成认不出即抛；旧代码的 `oid == 0 continue` 兜的是「返回 0 = 背景」
+        // 的旧契约，那个形态本身已不存在）。
         const int32_t oid = oidOf(col, name);
-        if (oid == 0)
-            continue;
         const cv::Mat f = flatRegion(attr.ids, dist, oid, static_cast<double>(radius));
         cv::bitwise_or(flat, f, flat);
         cv::bitwise_or(band, bandOf(attr.ids, dist, oid, 2.0, static_cast<double>(radius)), band);

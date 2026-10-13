@@ -1,6 +1,6 @@
 #pragma once
 //
-// selftest.h —— `imgqa selftest` 的**跨 TU 共享层**（Checker + 两个共享断言辅助 + 39 条
+// selftest.h —— `imgqa selftest` 的**跨 TU 共享层**（Checker + 两个共享断言辅助 + 44 条
 // testXxx 声明）。
 //
 //   为什么拆：`selftest.cpp` 到 1927 代码行（工具侧上限 500）被文件护栏逼出刀。缝按**被测
@@ -8,10 +8,13 @@
 //   `shadow_kernel_metric.h`；同一个命令的整块不切两刀）：
 //
 //     · `selftest.cpp`             = **地基**：`image.cpp` 的图像算子（sRGB 往返 / ID 解码 /
-//                                    连通域 / 任一通道差 / 分簇）+ `judge.cpp` 的判据与反模式
-//                                    注册表 + `cli.cpp` 的 CLI 注册表 + `cmdSelftest` 汇总路由
+//                                    连通域 / 任一通道差 / 分簇 / percentile100 空集守卫）+
+//                                    `judge.cpp` 的判据与反模式注册表 + `cli.cpp` 的 CLI 注册表
+//                                    + `cmdSelftest` 汇总路由
 //     · `selftest_judgments.cpp`   = **判定口径与配置解析**：`temporal.cpp` 的 temporalDiffStat /
 //                                    `makeProfile` 的键名校验 / `engine.cpp` 的 logTail 取证 /
+//                                    `engine_lua_edit.cpp` 的表跨度边界（债-93）/
+//                                    `material_attribution.cpp` 的 glb 长度校验（债-99）/
 //                                    `analytic.cpp` 闭式解 / `aa_coverage.cpp` 的覆盖率反解
 //     · `selftest_shadow.cpp`      = **阴影族两台量具**（shadow-softness / shadow-kernel-scale）：
 //                                    profile 生成面（lua 覆写门）+ 度量算子面（闭式）
@@ -24,8 +27,9 @@
 //     · `selftest_block.cpp`       = **diffblock 形态判据**（★0.5-b1）：五条阳性锚点 /
 //                                    τ 语义 / erode↔distanceTransform 等价性（合成亮度图直测
 //                                    口径层，不读 PNG 不启引擎）
-//     · `selftest_ao_noise.cpp`    = **ao-noise 口径层**（债-90/91）：diffFrames 帧差三量闭式 /
-//                                    printAoScanline 的「无定义不出数」纪律（合成小图直测）
+//     · `selftest_ao_noise.cpp`    = **ao-noise 口径层**（债-90/91/96）：diffFrames 帧差三量闭式 /
+//                                    printAoScanline 的「无定义不出数」纪律 / oidOf 认不出即抛 /
+//                                    burstDiffFiles 帧数不足早退出声（合成小图直测）
 //     · `selftest_swim.cpp`        = **taa-swim 仪器层输出面**（债-94）：lagTable 输出行数
 //                                    不随实测噪声变（合成帧序列 + captureStdout 直测打印形态）
 //
@@ -37,9 +41,12 @@
 //   ⚠ 断言条数 = 本文件的机械护栏：**口径必须连命令一起写死**，否则两个人数出两个数（实测踩过：
 //   旧注释只写"grep -cE 数 chk 调用点"，改前用 `c\.chk\(` 数 .cpp 得 338、用 `\bchk\b` 连 .h 与
 //   注释一起数得 343，护栏当场不可证伪）。**唯一口径**：
-//       grep -cE 'c\.chk\(' tools/imgqa/selftest*.cpp | awk -F: '{s+=$2} END {print s}'   # = 362
-//   （只数 .cpp 里的调用点，**不含** selftest.h 的成员函数定义、不含注释。P1-G1 实测：
-//    注释里的旧数 339 在 HEAD 上就已漂成 343 —— 本行已按同一口径重数并写死为 362。）
+//       grep -cE 'c\.chk\(' tools/imgqa/selftest*.cpp | awk -F: '{s+=$2} END {print s}'   # = 383
+//   （只数 .cpp 里的调用点，**不含** selftest.h 的成员函数定义、不含注释。P1-G2 实测：
+//    P1-G1 写死的 362 在 P1-G2 改动后按同一口径重数为 383（+25 −2：债-93 lua 表边界 7、
+//    债-96 ao-noise 输入校验 8、债-99 分位空集 5 + glb 长度校验 3，🔴 再 **−2** = 删掉
+//    `topLevelValueOf` 那两条**永不可红**的断言——npos 分支经 findKeyHits 不可达，改前改后都绿
+//    的锚点买了信心不买覆盖，见 selftest_judgments.cpp 同处注释）。）
 //   丢一条断言**不会让任何东西变红**，它只会让「0 条失败」少守一件事——所以这条计数比编译更值得守。
 //   ⚠ 它目前**只是文档约定，没有机器执行**（2026-10-12 实测：加一条断言后无人改动，数就漂了）。
 //   机械化挂号 → docs/mdi_plan.md §11.5。
@@ -163,5 +170,8 @@ void testCliArgsBehavior(Checker& c);
 void testEngineLogTail(Checker& c);
 void testAoNoiseMetric(Checker& c);
 void testSwimLagTableSurface(Checker& c);
+void testLuaEditBlockBoundary(Checker& c);
+void testGlbChunkValidation(Checker& c);
+void testPercentile100(Checker& c);
 
 }  // namespace RGL::imgqa

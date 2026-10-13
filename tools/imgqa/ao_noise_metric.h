@@ -30,9 +30,11 @@
 
 #include <opencv2/core.hpp>
 
+#include <array>
 #include <cstdint>
 #include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace RGL::imgqa {
@@ -169,8 +171,21 @@ void saveAmp(const cv::Mat& x, const cv::Mat& mask, double gain, const std::stri
 void saveMaskOverlay(const cv::Mat& base, const cv::Mat& mask, const std::string& path);
 void saveStretched(const cv::Mat& ao, double lo, double hi, const std::string& path);
 
-/// piece 名 → objectID（认不出 = 0 = 背景，调用方自己决定跳过还是照算）。
+/// piece 名 → objectID（认不出 = **抛**，信息带认出的 piece 名清单——债-96：返回 0 = 背景
+/// 会让换靶后的锚点在「背景 vs 背景」上求值，判据静默失效）。
 int32_t oidOf(const Collected& col, const std::string& n);
+
+/**
+ * 一轮 burst 的逐帧差累计（下标 0 = 全图，1 = 契约区，2 = 接触环）+ 全图非零像素合计。
+ *
+ * 从 `ao_noise_groups.cpp` 的 `burstDiff` 拆出（债-96）：`/shotburst` 部分失败（<2 帧）时
+ * 旧实现直接 `files[1]` 越界 + `files.size() − 1` 下溢成 0 = 整数除零。帧数不足是**无定义**
+ * 输入 ⟹ 早退并**出声**（「0 对帧」与「测到了没噪声」是两回事，静默会被读成后者）。
+ * 拆到口径层的理由 = selftest 能不吃 Engine 直接测这条早退（先例 = diffFrames / printAoScanline）。
+ */
+std::pair<std::array<FrameDiff, 3>, int64_t> burstDiffFiles(const std::vector<std::string>& files,
+    const cv::Mat& flat, const cv::Mat& contactMask, const std::string& tag,
+    const std::string& outDir);
 
 /// AO 场取值分布四件套：直方图 / 非契约取值 / 分桶 / 扫描线（组 2 的读数面）。
 std::vector<int> aoHistogram(const cv::Mat& ao);

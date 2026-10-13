@@ -150,15 +150,6 @@ std::vector<double> sortedLumaInMask(const Frame& f, const cv::Mat& mask)
     return vals;
 }
 
-/// 排序序列上取百分位：下标 = q/100·(n−1) 截断，**不做线性插值**——观测与闭式解都按这条取，
-/// 换插值口径 = 换一台仪器。⚠ 本函数的 `q` 是 **0..100**，与 `temporal_residual.h` 导出的
-/// `percentileOf`（p = **0..1**）**不是同一个刻度**，所以刻意不叫那个名字——两个同名不同刻度的
-/// 量在同一工具里 = 迟早有人传错（传错不报错，只是分位数静默变成 0 或最后一个）。
-double percentile100(const std::vector<double>& sorted, double q)
-{
-    return sorted[static_cast<size_t>(q / 100.0 * (sorted.size() - 1))];
-}
-
 /// 把排序后的亮度序列读数填进 `PieceStat` 的四个观测字段（中位数 / p05 / p95 与暗像素
 /// 占比；暗阈 `darkEps` 由调用方给，判据侧可调）。
 void fillReadout(PieceStat& st, const std::vector<double>& sorted, double darkEps)
@@ -230,6 +221,21 @@ void checkChromaOrdering(Attribution& at, int32_t oid, const std::string& piece,
             + "——分配顺序假设或材质颜色之一变了");
 }
 }  // namespace
+
+/// 排序序列上取百分位：下标 = q/100·(n−1) 截断，**不做线性插值**——观测与闭式解都按这条取，
+/// 换插值口径 = 换一台仪器。⚠ 本函数的 `q` 是 **0..100**，与 `temporal_residual.h` 导出的
+/// `percentileOf`（p = **0..1**）**不是同一个刻度**，所以刻意不叫那个名字——两个同名不同刻度的
+/// 量在同一工具里 = 迟早有人传错（传错不报错，只是分位数静默变成 0 或最后一个）。
+/// 空集**抛**（债-99）：`size() − 1` 下溢成 SIZE_MAX = 越界读，堆上的鬼数会被当分位数印出来；
+/// 「无分位数」与「分位数是 0」必须可区分，所以不许返回 0 哨兵——抛是唯一与任何数都不同的形态。
+double percentile100(const std::vector<double>& sorted, double q)
+{
+    if (sorted.empty())
+        throw std::runtime_error(
+            "percentile100：空集没有分位数（mask 全灭 = 区域归因与像素对不上？）。"
+            "不许读成 0——0 是合法分位数，「无分位数」必须与它可区分");
+    return sorted[static_cast<size_t>(q / 100.0 * (sorted.size() - 1))];
+}
 
 Attribution attribute(const Frame& f, const Manifest& man, std::array<double, 3> lightDir,
     double lightIntensity, double darkEps, double chromaMinLuma)

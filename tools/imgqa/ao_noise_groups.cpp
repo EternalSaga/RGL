@@ -9,6 +9,8 @@
 // 搬动纪律：段内代码**逐字**搬（打印顺序 = 验收的结构签名）。只有整函数级的换位——
 // `burstDiff` / `printTemporalRow` / `printBistroRow` 是本组私有小工具（匿名 namespace），
 // 必须排在用它们的组 4 / 组 6 之前。纯函数换位不改行为：本文件**没有任何静态存储期状态**。
+// （P1-G2 债-96：`burstDiff` 的逐帧差累计体拆到口径层 `burstDiffFiles`（早退守卫要可测），
+//  本文件的 `burstDiff` 只剩「切强度 → 预热 → 连拍 → 交口径层」的仪器部分。）
 //
 // 已知在场但本批**不许修**的一条照原样搬着：组 4 的分区掩码（`col.flat` / `res.contactMask`）
 // 是主进程机位算出来的，却套在 TAA profile 自己那台机位的 burst 上（→ 交付报告）。
@@ -35,10 +37,8 @@ namespace {
 // ──────────── 组 4 / 组 6 的私有小工具（原顺序里就在各自组之前）────────────
 
 /**
- * 一轮 burst 的逐帧差累计（下标 0 = 全图，1 = 契约区，2 = 接触环）+ 全图非零像素合计。
- *
- * 强度切换后先丢 `warmFrames` 帧洗掉 TAA 历史（feedback 0.12 ⟹ 收敛要几十帧），
- * 再取 `nBurst` 帧；两张相邻帧的差按三个区域各累一次。
+ * 一轮 burst 的逐帧差累计（口径与「帧数不足早退出声」在 `burstDiffFiles`，债-96）。
+ * 本函数只负责仪器：切强度 → 丢预热帧洗历史 → 连拍 → 交给口径层累计。
  */
 std::pair<std::array<FrameDiff, 3>, int64_t> burstDiff(Engine& eng, const std::string& tag,
     double aoStrength, uint32_t nBurst, uint32_t warmFrames, const cv::Mat& flat,
@@ -46,31 +46,8 @@ std::pair<std::array<FrameDiff, 3>, int64_t> burstDiff(Engine& eng, const std::s
 {
     eng.setParam(kAoPage, kAoLabel, aoStrength);
     static_cast<void>(eng.shotBurst("screenshots", warmFrames, "aot_w" + tag));
-    const auto files = eng.shotBurst("screenshots", nBurst, "aot_c" + tag);
-    std::array<FrameDiff, 3> acc;
-    int64_t changed = 0;
-    for (size_t i = 1; i < files.size(); ++i) {
-        const cv::Mat x = readPngBgr(files[i - 1]), y = readPngBgr(files[i]);
-        // 0 = 全图，1 = 契约区，2 = 接触环
-        const std::array<FrameDiff, 3> d{diffFrames(x, y), diffFrames(x, y, flat),
-            diffFrames(x, y, contactMask)};
-        for (size_t k = 0; k < acc.size(); ++k) {
-            acc[k].changed += d[k].changed;
-            acc[k].mean += d[k].mean / static_cast<double>(files.size() - 1);
-            acc[k].mx = std::max(acc[k].mx, d[k].mx);
-        }
-        changed += d[0].changed;
-    }
-    for (auto& a : acc)
-        a.changed /= static_cast<int64_t>(files.size() - 1);
-    keep(files[0], outDir, "g4_" + tag + "_f0.png");
-    keep(files[1], outDir, "g4_" + tag + "_f1.png");
-    cv::Mat dd;
-    cv::absdiff(readPngBgr(files[0]), readPngBgr(files[1]), dd);
-    cv::Mat dAbs;
-    cv::convertScaleAbs(dd, dAbs, 255.0 * 16.0);
-    cv::imwrite(outDir + "/g4_" + tag + "_diff_x16.png", dAbs);
-    return std::pair<std::array<FrameDiff, 3>, int64_t>{acc, changed};
+    return burstDiffFiles(eng.shotBurst("screenshots", nBurst, "aot_c" + tag), flat, contactMask,
+        tag, outDir);
 }
 
 /// 组 4 的一行：同一区域的地板（AO 关）与信号（AO 开）逐帧差 + 比值。

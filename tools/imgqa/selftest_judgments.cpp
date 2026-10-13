@@ -13,7 +13,9 @@
 #include "selftest.h"
 
 #include "aa_coverage.h"
+#include "engine_lua_edit.h"
 #include "imgqa.h"
+#include "material_attribution.h"
 
 #include <algorithm>
 #include <array>
@@ -329,6 +331,137 @@ void testEngineLogTail(Checker& c)
     c.chk("logTail：空文件 → (日志为空)", logTail(path) == "(日志为空)", logTail(path));
     c.chk("logTail：文件不存在 → (日志读不到: …)",
         logTail("/tmp/imgqa_selftest_logtail_不存在.log").rfind("(日志读不到: ", 0) == 0);
+}
+
+/// 债-93：`replaceValueInBlock` 从表头往后找键、**没有表尾边界** ⟹ 目标表缺该键时静默
+/// 命中**后面那张表**里的同名键（`environment` 没有 `intensity` 而其后的 `light` 有 ⟹
+/// 改掉的是 `light.intensity`，且一声不响——改的就是判据输入）。边界语义与
+/// `overrideValueInTable` 同口径：`valueSpanAt` 按花括号配对收尾，表跨度内未命中 = 抛，
+/// **不越界去别的表找**。靶 = 合成 lua（scene.lua 的形状：environment 无 intensity、light 有）。
+void testLuaEditBlockBoundary(Checker& c)
+{
+    const std::string kScene = R"lua(return {
+    environment = {
+        exposure = 1.0,
+    },
+    light = {
+        intensity = 1.0,
+    },
+})lua";
+
+    // 反向：environment 没有 intensity ⟹ 必须抛，且**文本一字未动**（抛发生在替换之前）。
+    // 改前这两条正是缺陷证据：第一条 FAIL（没抛），第二条 FAIL 并把 light.intensity 被
+    // 改成 9.9 之后的整份文本打出来——红输出本身就是「跨表改键」的证据。
+    std::string t = kScene;
+    c.chk("lua 表内覆写：目标表缺键 → 抛（改前静默改到后面那张表的同名键）",
+        throwsStd([&] { replaceValueInBlock(t, "scene.lua", "environment", "intensity", "9.9"); }));
+    c.chk("lua 表内覆写：抛后文本未动（light.intensity 保持原值；红时 extra 即跨表改键证据）",
+        t.find("intensity = 1.0") != std::string::npos, "实得文本: " + t);
+
+    // 阳性锚点（堵「加了边界后连正常路径也不灵」）：environment 确有该键 ⟹ 只改 environment
+    // 那份，light.intensity 原样。变异红线：搜索起点写成表尾、或跨度写成全文 → 本断言红。
+    std::string both = R"lua(return {
+    environment = {
+        exposure = 1.0,
+        intensity = 2.0,
+    },
+    light = {
+        intensity = 1.0,
+    },
+})lua";
+    replaceValueInBlock(both, "scene.lua", "environment", "intensity", "0.25");
+    c.chk("lua 表内覆写阳性锚点：键在场时只改 environment 那份（light.intensity 仍是 1.0）",
+        both.find("intensity = 0.25") != std::string::npos
+            && both.find("intensity = 1.0") != std::string::npos
+            && both.find("intensity = 0.25") < both.find("light = {"),
+        "实得文本: " + both);
+
+    // 真交付靶阳性锚点（selftest_shadow「交付配置改了形」同款形状）：消费方 = makeProfile 的
+    // envIntensity 覆写门（engine_profile.cpp）。边界若把交付路径一起杀掉，这里先红；
+    // environment 里若哪天没了 intensity，这里同样先红（那时该改的是调用方，不是静默改错块）。
+    std::ifstream sceneIn(projectRoot() + "/configs/scene.lua");
+    const std::string scene{std::istreambuf_iterator<char>{sceneIn}, {}};
+    std::string scene2 = scene;
+    bool sceneOk = true;
+    try {
+        replaceValueInBlock(scene2, "scene.lua", "environment", "intensity", "0.125");
+    } catch (const std::exception& e) {
+        sceneOk = false;
+        std::printf("  （交付 scene.lua 覆写抛: %s）\n", e.what());
+    }
+    c.chk("lua 表内覆写·真交付 scene.lua：environment.intensity 覆写成功且 light 那份原样",
+        sceneOk && scene2.find("intensity = 0.125") != std::string::npos
+            && scene2.find("intensity = 12.0") != std::string::npos,
+        "environment 无 intensity / 表头排版变了 / 边界误杀交付路径，三选一");
+
+    // 债-93 另一半 = `topLevelValueOf` 缺 `eq == npos` 守卫（与 `overrideTopLevelValue` 不对称，
+    // `eq + 1` 会回绕）。守卫已补，🔴 但**不给它写锚点**：npos 分支经 `findKeyHits` 不可达
+    // （`isKeyHit` 已要求命中必带 `=`）⟹「键后无 `=`」的输入根本进不到那一行，它抛的是
+    // 「找不到键」那条**另一条**路径。写出来的断言改前改后都绿 = 假锚点（买了信心不买覆盖），
+    // 故删。守卫本身作为防御性对称保留。
+    // 阳性锚点：正常读回值不受影响（与 overrideTopLevelValue 同一套定位判据）。
+    c.chk("topLevelValueOf 阳性锚点：读回 mode 的值 = \"csm\"",
+        topLevelValueOf("return {\n    mode = \"csm\",\n}\n", "mode", "shadow.lua") == "\"csm\"");
+}
+
+/// 债-99：`readGlbJsonChunk` 只校验头 magic，**不读 totalLength、不校验 chunk 长度是否越过
+/// 文件尾** ⟹ 坏文件的实际行为是「一直读到 EOF」而不是报错（台账实测：假 totalLength 两版
+/// 行为一致 = 都不读它）。锚点直接构造 glb 字节流（假 totalLength / chunk 越尾 / BIN chunk
+/// 在前的正常件）写进 /tmp 喂 `parseGlbPrimitives`——不落盘仓库。
+void testGlbChunkValidation(Checker& c)
+{
+    const std::string jsonChunk
+        = R"({"meshes":[{"name":"m0","primitives":[{"attributes":{},"material":0}]}],"materials":[{"name":"mat0"}]})";
+    std::string padded = jsonChunk;  // chunk 按 4 字节对齐（glTF：JSON 空格补齐）
+    while (padded.size() % 4 != 0)
+        padded += ' ';
+    const auto u32 = [](uint32_t v) {
+        return std::string{static_cast<char>(v & 0xFF), static_cast<char>((v >> 8) & 0xFF),
+            static_cast<char>((v >> 16) & 0xFF), static_cast<char>((v >> 24) & 0xFF)};
+    };
+    const auto writeGlb = [](const std::string& path, const std::string& bytes) {
+        std::ofstream f(path, std::ios::binary);
+        f << bytes;
+    };
+    const std::string dir = "/tmp/imgqa_selftest_glb";
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+
+    // ① 假 totalLength（比文件尾还大 4 KiB）：改前没人读它 ⟹ 照常解析成功；改后必须抛。
+    const std::string big = dir + "/fake_total_length.glb";
+    writeGlb(big,
+        "glTF" + u32(2) + u32(static_cast<uint32_t>(28 + padded.size() + 4096))
+            + u32(static_cast<uint32_t>(padded.size())) + u32(0x4E4F534A) + padded);
+    c.chk("glb：假 totalLength（越过文件尾）→ 抛（改前根本不读它，照常解析）",
+        throwsStd([&] { (void)parseGlbPrimitives(big); }));
+
+    // ② chunk 声明长度越过文件尾：必须抛且文案带「越过文件尾」——改前这里**也**抛，但抛的是
+    // 「JSON chunk 解析失败」（读到 EOF 后把 NUL 补齐的缓冲当 JSON），排查方向被带去怀疑
+    // JSON 本体，而真正坏的是长度字段。文案断言就是这条的区分力。
+    const std::string over = dir + "/chunk_over.glb";
+    writeGlb(over, "glTF" + u32(2) + u32(static_cast<uint32_t>(20 + padded.size()))
+            + u32(1u << 20) + u32(0x4E4F534A) + padded);
+    std::string msg;
+    try {
+        (void)parseGlbPrimitives(over);
+    } catch (const std::exception& e) {
+        msg = e.what();
+    }
+    c.chk("glb：chunk 声明长度越过文件尾 → 抛且文案可归因（改前抛「解析失败」，方向错）",
+        msg.find("越过文件尾") != std::string::npos, msg);
+
+    // ③ 阳性锚点：BIN chunk 在前的**正常**文件（逐 chunk「找」JSON 是原注释的契约）照常解析
+    // 出 1 个 primitive。堵修法反向打坏正常路径（偏移累加错一格这里先红）。
+    const std::string good = dir + "/good.glb";
+    const std::string bin = std::string(8, '\0');
+    const uint32_t total = 28 + static_cast<uint32_t>(bin.size() + padded.size());
+    writeGlb(good, "glTF" + u32(2) + u32(total) + u32(static_cast<uint32_t>(bin.size()))
+            + u32(0x004E4942) + bin + u32(static_cast<uint32_t>(padded.size())) + u32(0x4E4F534A)
+            + padded);
+    const auto prims = parseGlbPrimitives(good);
+    c.chk("glb 阳性锚点：BIN chunk 在前的正常件 → 1 个 primitive、材质名 mat0",
+        prims.size() == 1 && prims[0].material == "mat0" && prims[0].mesh == "m0",
+        "实得 " + std::to_string(prims.size()) + " 条");
 }
 
 }  // namespace RGL::imgqa
