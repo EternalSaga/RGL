@@ -2016,7 +2016,8 @@ decorations with Task and Mesh shader stages"）；`maxDrawIndirectCount = 42949
   基线在之后挂）；**NVIDIA DGC execute 路本机不可测，仍归 ★M-2**。
 - **下一步三选一**（待拍板）：① 门保持默认关 + 给 Mesa 提 issue + 等 ★M-2 在 NVIDIA/Intel
   上验（代码已就位，成本最低）；② 改走 **task shader 路**（task 读 `DrawIndex` 经 payload 传给
-  mesh）——spec 正统形态，但要新增一个 stage，且**未验证** RADV 的 task 路是否也坏；
+  mesh）——spec 正统形态，但要新增一个 stage；RADV 的 task 路当日**未验证**
+  ⟹ **现已判毕（§19.15）：gfx1151 上 task 入口声明 `DrawIndex` 不毒化 ⟹ ② 成立**；
   ③ 换宿主（§19.1 的原始宿主 = 旧 shadow 管线，它不用 mesh shader，绕开整件事）。
 
 ### 19.10 ★M-1b ANV 验证（2026-10-13，机器 = Ryzen 9950X 主机 + Intel Arc Pro B50（BMG G21）/ Mesa 26.2.3，`VK_DRIVER_FILES` 只留 intel ICD）
@@ -2100,8 +2101,8 @@ gfx1036 仿真路上正确、gfx1151 上毒化 = STRIX_HALO 特有的仿真路�
 
 - **不能只靠 task**：NV 的墙是 **mesh 线程数 256>128**（task 上限也是 128，且与 mesh 墙正交）——
   不改 mesh 线程数，task 路在 NV 上照样建不出来。ANV/RAPHAEL 已绿，无需救。
-- **真正要救的只有 STRIX**，而 task 路读 DrawIndex 是否绕开毒化 = **本机不可测**（RAPHAEL 不复现），
-  只能带探针去 8060S 机。
+- **真正要救的只有 STRIX**，而 task 路读 DrawIndex 是否绕开毒化 = **本机不可测**（RAPHAEL 不复现）
+  ⟹ 只能带探针去 8060S 机。**✅ 已判毕（§19.15）：不毒化。**
 - ⟹ 唯一可能"三家都过"的形态 = **task 化 + mesh 循环化 ≤128 的组合手术**（一次重做两件事）：
   task 读 DrawIndex + 查行 → payload 传 mesh；mesh 每线程多顶点。顺带得到 D3D12 便携形态
   （128 线程 / 32 粒度；注意 NV `meshOutputPerVertex/PrimitiveGranularity=32`、`maxMeshOutputVertices=256`），
@@ -2128,16 +2129,15 @@ NV 越界读坑；`[numthreads(1,1,1)]` 全档 ≤ NV 的 128）：
   `VK_DRIVER_FILES=<radeon_icd.json> ./build/tests/rgl_tests --test-suite=gpu --test-case="task_probe*"`
   （CWD = 仓库根，先 `cmake --build build --target rgl_tests`）。
 
-**STRIX 复跑裁决卡（8060S 机，git pull 到本提交后跑）**：
+**STRIX 裁决（现行 = §19.15 引擎级探针实测；rig 层那张卡已删——§19.13 已证它测不出这种毒化，
+留着只会诱导别人去跑一个空判据）**：
 
-| 读数 | 裁决 | 后续 |
+| 问题 | 裁决 | 依据 |
 |---|---|---|
-| 4 条全绿（尤其 `task_probe_poison_guard` 守卫列出像素） | **task 路对 gfx1151 有救** | 立"task 化 + mesh ≤128 循环化"重做批（§19.12 组合手术） |
-| `poison_guard` 红、`control` 绿 | **task 侧 DrawIndex 同病**（守卫列 = 0 = 后续直接 mesh draw 不产出像素） | 选项② 作废 ⟹ 回选项①（Mesa issue + 门默认关）或③（换宿主） |
-| `control` 也红 | 用例/环境坏（回读链或 SPV 没重建），毒化判据**不成立**，别下结论 | 先查 rig（对照本机 12/12 绿与 `mdi_*` 旧族），修好再重跑 |
-
-🔴 **本卡第一行已被 §19.13 作废**：守卫"绿"在没有"本设备测得出毒化"的阳性对照时，与"这个 rig
-根本测不出这种失效"**不可分辨**。STRIX 实测就是这种绿（两条 `mdi_poison_control*` 对照全绿）。
+| rig 层 `task_probe_poison_guard` 能不能判 task 路有没有救 | **不能**（守卫"绿"与"rig 根本测不出"不可分辨） | §19.13 |
+| `DrawIndex` 声明在 **task** 入口是否也毒化同提交后续 mesh draw（gfx1151） | ✅ **不毒化** ⟹ **选项② 成立** | §19.15（G-buffer ch0/ch3 逐位相同 + 探测器同 session 会响） |
+| task→mesh payload 通路 + `SV_DrawIndex` 是否 = 段内行号（gfx1151） | ✅ **通**（阴影几乎复原，残差仅 2721 px） | §19.15 附加实验 |
+| 下一步 | 立"task 化 + mesh ≤128 循环化"组合手术批（NV 的 256>128 墙仍在，那一批一并解） | §19.15 末「下一批的输入事实」 |
 
 **提 Mesa issue 的靶（§19.12 修正后）**：gfx1151（Strix Halo）+ mesh 入口声明 `DrawIndex` 毒化
 同提交后续 mesh draw；**同版本 Mesa 的 RAPHAEL（gfx1036）逐位绿 = 现成对照证据**。
@@ -2206,7 +2206,7 @@ bistro 在不在**（§19.9 的九臂矩阵里"bistro 在不在"就是现成的�
 
 比"task 化 + mesh ≤128 循环化"省掉：行表接入、`gcX` 语义换成 task 数、A5 闭式锚重算、
 逐位锚各机重立。它只回答那一个会决定一整批去向的问题。
-### 19.14 ★M-3T 引擎级最小 task 探针（**实现就绪规格**，2026-10-13 写；下一个 session 照此执行）
+### 19.14 ★M-3T 引擎级最小 task 探针（**实现就绪规格**，2026-10-13 写；✅ 当日已在出事机执行完毕 ⟹ 结论 **§19.15**）
 
 **唯一要回答的问题**：`DrawIndex` 声明在 **task** stage 是否也毒化后续 mesh draw？
 **唯一判据**：主视图那栋 bistro **在不在**（不是逐位相等——阴影在这个探针里是故意错的）。
@@ -2219,8 +2219,19 @@ task **恒发 1 个 mesh group、不读行表**；mesh 变体**不声明** `Draw
 
 #### 改动清单（6 处，位置已核过本体）
 
-1. **新** `rgl/shaders/shadow_meshlet_task.task.slang`：`[shader("task")]` + `uint drawID : SV_DrawIndex`
-   + **非可折叠守卫** `if (drawID != 0xFFFFFFFFu) EmitMeshTasksEXT(1u, 1u, 1u);`
+1. **新** `rgl/shaders/shadow_meshlet_task.task.slang`：`uint drawID : SV_DrawIndex`
+   + **非可折叠守卫** `if (drawID != 0xFFFFFFFFu) DispatchMesh(1u, 1u, 1u, p);`
+   - 🔴 **本规格原写的 `[shader("task")]` + `EmitMeshTasksEXT` 是错的**（执行当日实测，
+     pinned slangc 2026.16 与系统 2026.18.3 **同结论**）：Slang 的 HLSL 侧没有 `EmitMeshTasksEXT`
+     这个名字（`error[E30015]: undefined identifier`）。Slang 走 D3D12 拼写
+     **`[shader("amplification")]` + `DispatchMesh`**，产物仍是 `OpEntryPoint TaskEXT` +
+     `OpDecorate … BuiltIn DrawIndex`（= Vulkan 侧 task stage 同一物）。先例 =
+     `tests/shaders/mdi_task_probe.task.slang`（§19.12 前置① 已在该形态上三机跑绿）。
+     ⟹ **不必换系统 slang**（换了反而作废 `95edc8cc…` / `54e40665…` 两个逐位锚）。
+   - 🔴 **规格没写的一条硬约束**：`DispatchMesh` 的 payload 是**必填泛参**（不传 =
+     `error[E30439]: generic parameter could not be inferred`），而 slang 把 mesh 侧**没读过**的
+     payload 从入口接口里**整个裁掉**（实测：入口接口只剩 position/indices）⟹ mesh 侧必须
+     **真读一次**，否则 task 有 payload 输出、mesh 无 payload 输入 = 两侧不同向。
    - 🔴 **DCE 陷阱（本探针唯一的假绿来源）**：`drawID` 若只喂给一个死存储/死 payload，
      Slang 会把 builtin 整个删掉 ⟹ 触发源消失 ⟹ "bistro 在"变成**必然**而不是结论。
      守卫必须让值参与**运行时判定**（上面那句编译器无法证伪）。
@@ -2231,8 +2242,9 @@ task **恒发 1 个 mesh group、不读行表**；mesh 变体**不声明** `Draw
      ```
      **必须 ≥ 1**。对照基线（本机已量）：`shadow_meshlet.mesh.spv` = 0、
      `shadow_meshlet.mesh_MDI_SHADOW.spv` = 1（同一命令顺带可验非 MDI 那份仍恒 0 = 逐位不变的 SPV 面证据）。
-   - `compile_slang` 不传 `-stage`（slangc 从 `[shader("task")]` 推阶段，见 `cmake/RglSlang.cmake:37-63`）
-     ⟹ **CMake 侧零门槛**，rgl/shaders 里此前没有 `.task` 先例，这是第一枚。
+   - `compile_slang` 不传 `-stage`（slangc 从 `[shader(...)]` 属性推阶段，见
+     `cmake/RglSlang.cmake:37-63`）⟹ **CMake 侧零门槛**，rgl/shaders 里此前没有 `.task` 先例，
+     这是第一枚（产物名 = 把 `.slang` 换 `.spv` ⟹ `shadow_meshlet_task.task.spv`，双扩展名天然不撞）。
 2. `rgl/shaders/shadow_meshlet.mesh.slang`：加第三档 `MDI_SHADOW_TASK` = 现有 `MDI_SHADOW` 分支
    但 `drawID` 恒 `0u`（= §19.9 已证的"入口不声明 `SV_DrawIndex`"那一臂，已知单独不毒化）。
 3. `rgl/CMakeLists.txt`：task 用**无 define** 的 `rgl_shader(shadow_meshlet_task.task SHADOW_MESHLET_TASK_SPV scene scene_tables)`
@@ -2301,3 +2313,114 @@ python3 tools/smoke.py shot --name t_task    --frames 8 --set meshlet.mdi_shadow
 **唯一未排除的结构差 = `VK_EXT_descriptor_heap`**（引擎的 descriptor 来自 heap 烘焙偏移）。
 issue 里该点明这一条，它比"mesh+DrawIndex 就坏"精确得多，也更好复现（引擎九臂矩阵即最小复现骨架）。
 同 Mesa 26.2.3 在 gfx1036（RAPHAEL）逐位绿、gfx1151（STRIX_HALO）毒化 = 现成的家族对照。
+**§19.15 又收窄一层**（task 入口声明不触发），现行靶以 §19.15 末那条为准。
+
+---
+
+### 19.15 ★M-3T 执行记录与裁决：**task 入口声明 DrawIndex 不毒化** ⟹ 选项② 成立（2026-10-13 实测，机器 = 出事机 8060S / RADV STRIX_HALO / Mesa 26.2.3）
+
+**裁决（一句话）**：`DrawIndex` 声明在 **task** 入口（mesh 入口不声明），同提交后续 mesh draw
+正常产出像素，主视图 G-buffer **逐 bit 未动** ⟹ §19.9 的毒化收窄到"**在 mesh 入口**声明
+`DrawIndex`"，**选项② 成立**，可立"task 化 + mesh ≤128 循环化"组合手术批。
+
+#### 前提自检（四条 + 两条顺带，全过；任一不过则本节结论不成立）
+
+| # | 自检 | 读数 |
+|---|---|---|
+| ① | task SPV 里有 DrawIndex builtin（🔴 **本探针唯一的假绿来源 = DCE**） | `shadow_meshlet_task.task.spv`：`OpEntryPoint TaskEXT %main "main" %17 %__EmitMeshTasks_Payload` + `OpDecorate %17 BuiltIn DrawIndex`，`grep -c BuiltIn.DrawIndex` = **1** |
+| ①′ | 三枚 mesh SPV 的 builtin 面没漂 | `shadow_meshlet.mesh.spv` = **0**（非 MDI 那份没动）· `_MDI_SHADOW.spv` = **1** · `_MDI_SHADOW_MDI_SHADOW_TASK.spv` = **0** 且 `%taskPayload` **在入口接口里**（payload 活着、没被 slang 裁掉） |
+| ② | MDI 真在下发 | `mdi.count=3` / `mdi.rows=4590`（与 §19.9 / §19.12 读数逐字同） |
+| ③ | 条目序没漂 | 启动 INFO 新条目 **475** / 旧 `shadow_meshlet` **474** / `entries_total=476`；行表槽 8258 |
+| ③′ | **task 句柄真建了**（机器可读，比"编译过了"硬） | `handles` 出厂 **958 = 2×479** → 门开 **961 = 2×480 + 1**（多的一枚正是 task） |
+| ④ | 图必须不同于 `b1c6afca` | 探针臂 = **`da768bfb…`** ≠ `b1c6afca…` ✅ |
+
+#### 判据读数（三态判据落在第一格）
+
+- 探针臂终图 = **`da768bfb…`** —— 与 §19.9 九臂矩阵"门开 + **不发** MDI 命令"那一格**逐位相同**，
+  而那一格记录的正是 **"bistro 在"**。成因自洽：task 恒发 1 组 + 🔴 `SV_GroupID` 在 task 之下是
+  **本 task 内的局部 id**（spec：mesh 阶段 WorkgroupId = "position within the current mesh task"）
+  ⟹ 恒 0 ⟹ 每 draw 只画第一个簇 ⟹ c1..c3 阴影对终图的贡献塌到 0 px，与"整段不发"同图。
+- `diffblock(factory vs 探针)`：M = 50,161 px / 2202 个连通域 / 最大 27,098 px @
+  `bbox=[434,311,312,409]` / 最厚 **30.56px**。**没有** bistro 消失签名
+  （315,692 px / `bbox=[332,148,948,572]` / 最厚 150.16px）。
+- 🔴 **探测器会响（§19.13 的教训就地补上，否则这条绿又是空的）**：同 session 用**改前构建**复现
+  `b1c6afca`，`diffblock` 打出的正是 §19.9 记录的三个数（315,692 / `[332,148,948,572]` / 150.16）
+  ⟹ 同一台机、同一 Mesa、同一判据，**响与不响可分辨**。
+- **零阈值仪器定案（比 diffblock 强一档，判"主视图几何动没动"该用它）**：
+  `gbuffer_albedo`(ch0) = `ea84ed5e…`、`gbuffer_metalrough`(ch3) = `7df898fd…`，出厂臂与探针臂
+  **逐字节相同**（且与 §11.4 演练读数同）。G-buffer 由**主视图几何 pass** 写、天然不带阴影
+  ⟹ 主视图几何（含 bistro）**一 bit 未动**。bistro 若被毒化，ch0 会有 34% 屏幕归零，
+  零阈值逐位对拍直接抓走，不需要"看连通域像不像整块"这种解释。
+- **task 真跑了的阳性对照**（排掉"task 建了但没执行"这一假绿）：shadow1/2/3 GPU 时间戳 =
+  **0.774 / 0.645 / 0.512 ms**，**高于**同次 profiler 会话的出厂对照 0.512 / 0.500 / 0.359 ms
+  （窗口 120 / warmup 60 / `no_vvl` 臂）。两臂 mesh 组数同为 ΣgcX，多出来的正是每 mesh 组一次
+  task 调用。
+- VVL 常开冒烟 + `--sync`：**errors=0 / hazard=0**。
+
+#### 附加实验（**超出 §19.14 规格**，主判据不受它污染）
+
+主判据出完之后追加一格：把 mesh 的 `drawID` 从恒 `0u` 换成 payload 里的值（守卫同时改成按
+`mdiShadowArgs.GetDimensions` 派生的行表上界兜底，不给"越界读行表"的机会）：
+
+- 终图 = **`0d0a17fc…`**，与出厂只差 **2721 px = 0.295%**、最厚 **5.73px**、363 个细碎连通域
+  （对比 `drawID` 恒 0 那臂的 50,161 px / 最厚 30.56px）。G-buffer ch0/ch3 仍逐位相同。
+- ⟹ **task→mesh 的 payload 通路在 gfx1151 上通，且 task 侧 `SV_DrawIndex` 给的是正确的段内行号**
+  ——行寻址 `rowBase + drawID` 几乎已把阴影复原，残余只来自"每 task 只发 1 组 ⟹ 每对象只画第一个簇
+  的前 85 三角"这一条**探针故意留下**的错误。
+- ⚠ **证据边界**：这**不是** A5 级闭式判据（"每对象只画第一簇"本身没有闭式锚），它只证"行号对到
+  让阴影几乎复原"。若 drawID 是"变化但错"的值，行会散到别的对象上，差值不可能只剩 0.295%。
+  严格逐行相等要等组合手术批的 A5 锚。
+- 🔴 **这笔流程账要记**：§19.14 红线写的是"别为了阴影对去接 payload"。实际执行顺序 =
+  **先按规格出主判据（`drawID` 恒 0 那臂 + G-buffer 逐位）→ 再追加实验**，主判据没有被追加实验
+  回头改写，追加实验也没入库（随探针一起 revert）。红线当时防的是"把探针做成手术"——
+  判据先定案、实验后追加，这个顺序是这条红线能不能这么用的关键，别只记结论。
+
+#### 成本读数（给下一批拍板用，**非干净 A/B**）
+
+| 臂 | shadow 组 GPU 合计 | frame p50 |
+|---|---|---|
+| 出厂（c0 旧路 + c1..c3 簇 LOD5） | 2.149 ms | 4.790 ms |
+| task 探针（同 mesh 组数 + 每 mesh 组一次 task） | 2.685 ms | 5.475 ms |
+
+⟹ 本形态下 task 阶段在 shadow 组上的量级 ≈ **+0.54ms**（+25%~+50%/级联）。🔴 **别当纯 task 开销读**：
+两臂 mesh 组数相同但**内容不同**（探针臂每对象只画第一簇）。真要定 task 化净成本，等组合手术批
+拿正确形态（task 读行表决定 `DispatchMesh(2*count, 1, 1)`）再量。
+
+#### 与规格的两处偏差（都朝"更小"，不是扩大形态）
+
+1. task 的 `rgl_shader` **不带 DEP**（规格第 3 步写了 `scene scene_tables`）：本 task 入口不 import
+   任何模块，R1 查的是"import 闭包 ⊆ DEP"，无 import ⟹ 空 DEP 才正确（挂了反而给 task 加一条
+   假编译前置）。
+2. mesh 侧 payload **必须真读一次**（规格没写）：见 §19.14 第 1 步补的那条。读出来喂一条
+   "正常值下恒不触发"的守卫，几何与 `MDI_SHADOW` 档同。
+3. 另记一条构建面事实：`PipelineSpec` / `ShaderEffect` 的新字段**必须带默认成员初始化器 `= {}`**——
+   本构建开 `-Werror,-Wmissing-field-initializers`，不带 DMI 则全部 20 处三元素 brace-init
+   （含 `shader_hot_reload_impl.cppm` 的 `ShaderEffect{mesh, frag}`）当场编不过。
+
+#### 给 Mesa issue 的再收窄（接 §19.14 末段，现行靶）
+
+gfx1151（Strix Halo）+ **mesh 入口**声明 `DrawIndex` 毒化同提交后续 mesh draw；
+**同一提交里改由 task 入口声明 `DrawIndex`（mesh 入口不声明）⟹ 不触发**（§19.15）。
+⟹ 排除"`DrawIndex` builtin 本身在 gfx1151 仿真路上坏了"，嫌疑钉在 **mesh 阶段的 DrawIndex 取值
+路径**；再叠加 §19.13 的"经典管线 / shader object / 1 与 256 线程 / 同 pass 与跨 pass 全部不复现，
+唯一未排除结构差 = `VK_EXT_descriptor_heap`"。同 Mesa 26.2.3 的 gfx1036（RAPHAEL）逐位绿 = 家族对照。
+
+#### 下一批（组合手术）的输入事实
+
+| 事实 | 状态 |
+|---|---|
+| task 路在 gfx1151 无毒化 | ✅ 本批 |
+| task→mesh payload 通、`SV_DrawIndex` = 段内行号 | ✅ 本批（附加实验） |
+| shader object 侧 task 接入形态（NO_TASK bit 条件化 / nextStage 链 / mapping 共用 / `bindShaders` 第 5 槽 / `stats.handles` 口径） | ✅ 本批跑通，**形态记在 §19.14 第 6 步**（代码不入库，见下） |
+| NV 的墙：mesh 256 > 128（task 上限亦 128，两墙正交） | ⛔ 未解，那一批一并解（§19.11） |
+| ANV BMG G21 / RAPHAEL 已绿 | ✅ §19.10 / §19.12 |
+| 待做 | mesh 循环化 ≤128 + task 读行表定 `DispatchMesh(2*count,1,1)` + `gcX` 语义从 mesh 组数换 task 数（`kSlotsPerCluster=2` 是 mesh-only 产物）+ A5 闭式锚重算 + 逐位锚各机重立 + STRIX 复测收线 |
+
+#### 探针处置（用户拍板：全部 revert，知识只留文档）
+
+`shadow_meshlet_task.task.slang`、CMake 两行、spec 表那条 `shadow_meshlet_mdi_task`、`findSpec`
+改行、mesh 的 `MDI_SHADOW_TASK` 档、以及第 4/5/6 步的引擎侧 task stage 支持 **全部 revert**
+（`git status` 回干净、出厂锚 `95edc8cc…` 复现、`handles` 回 958）。
+理由：下一批尚未拍板，留一套无消费者、无测试、且已把 `RenderPipeline` 构造顶过样式阈值
+（129>120 行 / 复杂度 21>15）的死代码不划算；**可重做的知识**（含 slang 拼写、payload 两侧真读、
+DMI、NO_TASK 反向 VUID、nextStage 链）全部落在 §19.14 + 本节，那是一份**已执行过且已纠错**的规格。
