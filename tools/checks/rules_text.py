@@ -521,6 +521,15 @@ _BAB_DECL_RX = re.compile(r"\b(?:RW)?ByteAddressBuffer\s+(\w+)\s*;")
 _BAB_BARE_LOAD_RX_TMPL = r"\bfloat[234]?\s+\w+\s*=\s*[^;]*\b{name}\.Load[234]?\s*\("
 
 
+# ─── 纯文本：meshlet 路径规格三方对账（schema ↔ shader ↔ 关系式）─────────────
+
+# mesh stage 的线程数声明：`[numthreads(N, 1, 1)]`，N 允许是字面量或本文件/schema 的常量名
+# （★M-3T-b 起两枚 meshlet mesh shader 都写常量名，见各自文件内注释）
+_MESH_NUMTHREADS_RX = re.compile(r"\[\s*numthreads\s*\(\s*([A-Za-z_]\w*|\d+)\s*,")
+# 文件内的 `const uint 名 = N u?;` 声明（用于把 numthreads 里的标识符还原成数值）
+_MESH_CONST_DECL_RX = re.compile(r"\bconst\s+uint\s+(\w+)\s*=\s*(\d+)u?\s*;")
+
+
 def meshlet_spec_checks() -> list[Warning]:
     """meshlet 路径规格：schema 常量 ↔ .slang 字面量 ↔ 关系式，三方对账。
 
@@ -531,13 +540,27 @@ def meshlet_spec_checks() -> list[Warning]:
     `render_list_impl.cppm` 的 task 数——schema 漂了反射一声不吭。本规则把"schema 是真相源"
     这句话变成构建期可执行的。
 
-    ## 三段判据（缺一段就有一类漂移隐身）
+    ## 四段判据（缺一段就有一类漂移隐身）
     1. **数值对账**：schema 常量名若在任一 `.slang` 里以 `const uint <名> = <值>u;` 出现，
        值必须相等（改了 shader 没改 schema、或反之，都红）。
-    2. 🔴 **关系对账**（比数值更要命）：`3 × kTaskTris ≤ kMeshletMaxOutputVertices`。
+    2. 🔴 **关系对账 ①**（比数值更要命）：`3 × kTaskTris ≤ kMeshletMaxOutputVertices`。
        去索引发射下每任务顶点数 = 3×三角数；这条破了 = mesh shader **越界写顶点输出**，
        不报错、只画垃圾或崩。数值各自"看着都对"而关系破了是真实形态（85→86 就是）。
-    3. **死常量**：schema 常量既不出现在任何 `.slang`、也不被任何非生成 `.cppm` 使用
+    3. 🔴 **关系对账 ②**（★M-3T-b 的再武装路径，与关系对账 ① 同族）：任一 `rgl/shaders/*.mesh.slang`
+       的 `[numthreads(N, …)]` 之 **N ≤ `kMeshletMaxWorkGroupInvocations`**（= 我们支持的
+       设备下限，三机最小值 = NVIDIA 的 128）。
+       **为什么规则 1 管不到这一半**：规则 1 是「出现才对账」——它只在 `.slang` 里真出现
+       `const uint <schema 常量名> = <值>u;` 时才生效。哪天有人把那个常量删掉、`numthreads`
+       直接写回 `256`，规则 1 一声不响；规则 4（死常量）也救不了，因为
+       `main_meshlet_tables.cppm::checkMeshletDeviceFit` 永远是该常量的 C++ 侧消费者、它恒
+       "被使用" ⟹ 构建全绿，而 NV 上 `vkCreateShadersEXT` 启动就撞
+       VUID-RuntimeSpirv-MeshEXT-07295/07298（本批修的就是这个 bug）。本条把**声明的线程数
+       本身**纳入射程。取 ≤ 而非 =：其余六枚 mesh shader 本来就远低于上限（`cube` / `model` /
+       `shadow` / `izb_mask` = 32，`light` / `skybox` = 3），它们不需要恰好等于。
+       🔴 **失效必须出声**（同 `rules_layers` 的纪律：失效不出声，"零警告"会被读成"分层干净"）：
+       schema 常量缺失、某枚 `.mesh.slang` 解析不到 `[numthreads(…)]`、线程数是个还原不出数值
+       的标识符 ⟹ 三种情形都出警告，不许静默跳过本条。
+    4. **死常量**：schema 常量既不出现在任何 `.slang`、也不被任何非生成 `.cppm` 使用
        = 本表已漂成小说（生成物 `rgl/generated/` 排除，否则它永远"被使用"）。
 
     ## 本规则**管不到**的那一半（别把它当设备安全保证）
@@ -557,6 +580,11 @@ def meshlet_spec_checks() -> list[Warning]:
     schema_consts: dict[str, int] = {}
     block = re.search(r"constants\s*=\s*\{(?P<body>.*?)\n    \},", schema_src, re.S)
     if not block:
+        # 🔴 失效出声：constants 块整块解析不到 = 本函数四条判据全部空跑（格式变了没同步本规则）。
+        # 静默 return 会让"零警告"被读成"规格自洽"（同 rules_layers 的失效必出声纪律）。
+        warnings.append(Warning(schema_rel, 1,
+            "meshlet schema 的 constants 块整块解析不到（格式变了？同步改 "
+            "tools/checks/rules_text.py::meshlet_spec_checks，别让它静默全绿）"))
         return warnings
     for name, value in const_rx.findall(block.group("body")):
         schema_consts[name] = int(value)
@@ -614,6 +642,50 @@ def meshlet_spec_checks() -> list[Warning]:
             f"meshlet 发射规格破了硬约束：去索引下每任务顶点数 = 3 × kTaskTris = {3 * tris}"
             f" > kMeshletMaxOutputVertices = {max_out} ⟹ mesh shader 越界写顶点输出"
             "（不报错，只画垃圾/崩）。改 kTaskTris 必须同时确认设备上限"))
+
+    # ── 关系对账 ②：mesh stage 声明的线程数 ≤ 设备下限（判据与"为什么规则 1 不够"见 docstring）──
+    max_wgi = schema_consts.get("kMeshletMaxWorkGroupInvocations")
+    if max_wgi is None:
+        warnings.append(Warning(schema_rel, 1,
+            "meshlet schema 缺常量 kMeshletMaxWorkGroupInvocations ⟹ 「mesh 线程数 ≤ 设备下限」"
+            f"这条对账无上限可比（本批刚为它加判据，别让它空跑）：{schema_rel} 的 constants 补回来"))
+        return warnings
+    for rel in rgl_tree_files(".slang"):
+        if not rel.endswith(".mesh.slang"):
+            continue
+        src = read_text(Path(ROOT) / rel)
+        if src is None:
+            continue
+        stripped = strip_comments(src)  # 注释里的 numthreads 字样不算声明
+        hit = _MESH_NUMTHREADS_RX.search(stripped)
+        if not hit:
+            warnings.append(Warning(rel, 1,
+                "mesh shader 解析不到 `[numthreads(N, …)]`（写法变了？同步改 "
+                "tools/checks/rules_text.py::meshlet_spec_checks 的 _MESH_NUMTHREADS_RX）"
+                "—— 本条线程数上限判据对它是空跑，别把这种空跑读成通过"))
+            continue
+        token, lineno = hit.group(1), stripped[:hit.start()].count("\n") + 1
+        n: int | None = None
+        if token.isdigit():
+            n = int(token)
+        elif token in schema_consts:
+            n = schema_consts[token]
+        else:
+            # 常量名 → 本文件的 `const uint 名 = Nu;`（两枚 meshlet mesh shader 的形态：
+            # 文件级 static const uint 拼写 schema 常量，值由规则 1 另行钉成相等）
+            n = {name: int(v) for name, v in _MESH_CONST_DECL_RX.findall(stripped)}.get(token)
+        if n is None:
+            warnings.append(Warning(rel, lineno,
+                f"[numthreads({token}, …)] 的线程数还原不出数值：既不是字面量，也不是 schema 常量，"
+                "本文件内也没有 `const uint " + token + " = <值>u;` 声明 ⟹ 本条判据空跑"))
+            continue
+        if n > max_wgi:
+            warnings.append(Warning(rel, lineno,
+                f"mesh shader 声明的线程数 {n} > kMeshletMaxWorkGroupInvocations = {max_wgi}"
+                f"（{schema_rel}，= 我们支持的设备下限，三机最小值 = NVIDIA 的 maxMeshWorkGroupInvocations）"
+                " ⟹ NV 上 vkCreateShadersEXT 撞 VUID-RuntimeSpirv-MeshEXT-07295/07298，"
+                "shader 根本建不出来。要么降线程数并循环化覆盖输出（见 meshlet.mesh.slang 的 strided 循环），"
+                "要么先重测三机能力矩阵再动 schema"))
     return warnings
 
 

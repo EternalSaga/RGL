@@ -110,11 +110,24 @@ float uvTriangleHandedness(float2 u0, float2 u1, float2 u2)
     return (s1x * s2y - s2x * s1y) < 0.0 ? -1.0 : 1.0;
 }
 
+// ★M-3T-b：本管线 mesh 线程数降档 256 → **128**（docs/mdi_plan.md §19.16 末「★M-3T-b 的输入事实」）。
+// 🔴 单一拼写：`numthreads` 与下方两段 strided 循环的步长**共用这一个常量** ⟹ 以后改线程数只改
+// 这里 + schema 一处（两边由 `meshlet_spec_checks` 规则 1 钉成**相等**，改一侧不改另一侧即出警告）。
+//
+// 128 的出处（三机口径，2026-10-13 现读，别抄旧注释里的"本机上限 256"）：
+//  · **NVIDIA `maxMeshWorkGroupInvocations = 128` 是硬上限**：声明 256 时 `vkCreateShadersEXT`
+//    被 VVL 点名 VUID-RuntimeSpirv-MeshEXT-07295/07298 ⟹ MDI 路在 NV 上根本建不出 shader。
+//  · 本机 AMD Radeon 8060S（RADV STRIX_HALO）`maxPreferredMeshWorkGroupInvocations = 128`
+//    （它的 maxMeshWorkGroupInvocations 给到 256，但 preferred 才是"不亏性能"的那一档）。
+//  · 数值真相源 = schema `kMeshletMaxWorkGroupInvocations`（meshlet_cull_schema.lua，本文件只是
+//    它的 shader 侧拼写）；同一个量还兼作两条管线共用的**运行期设备下限闸门**（checkMeshletDeviceFit）。
+//
+// 线程数 128 < 顶点输出上限 255 **不再**意味着"高下标的顶点没人写"——那是"一线程一元素 + if
+// 守卫"时代的论证（本文件旧注释正是那么写的），现在是 strided 循环，覆盖集 = [0, 3nTri) 与线程数解耦。
+static const uint kMeshletMaxWorkGroupInvocations = 128u;
+
 [shader("mesh")]
-// 256 = 本机 maxMeshWorkGroupInvocations，也是填满顶点输出所需的最小线程数（去索引后
-// 顶点输出上限 255 ⟹ 255 条顶点线程）。取 256 而非更小：线程数 < 顶点数时高下标顶点
-// 永远没人写（未定义输出），且 256 恰好一三角一线程 + 一顶点一线程各跑一遍。
-[numthreads(256, 1, 1)]
+[numthreads(kMeshletMaxWorkGroupInvocations, 1, 1)]
 [outputtopology("triangle")]
 void main(
     uint ti : SV_GroupIndex,
@@ -126,8 +139,8 @@ void main(
     const uint kMaxClusterVerts = 128u;
     const uint kMaxClusterPrims = 128u;
     // 每任务三角形上限：去索引 ⟹ 顶点输出 = 3 × 三角形数 ≤ maxMeshOutputVertices(256)
-    // ⟹ 85（3×85 = 255；86 要 258 个顶点，越限）。out indices 上限同此值：每任务
-    // 1 三角形/线程，且 numthreads(256) ≥ 3×85 让两类线程都排得下。
+    // ⟹ 85（3×85 = 255；86 要 258 个顶点，越限）。out indices 上限同此值；两类输出都靠
+    // strided 循环各自覆盖 [0, 3nTri) 与 [0, nTri)，与线程数无关（★M-3T-b，见上方常量注释）。
     const uint kTaskTris = 85u;
     const uint kClusterStride = 44u;   // DiskCluster（format.h static_assert）
     const uint kVertexStride = 48u;    // ModelVertex（model_schema.lua）
@@ -180,11 +193,16 @@ void main(
     }
     SetMeshOutputCounts(3u * nTri, nTri);
 
-    if (ti < 3u * nTri) {
-        // 去索引：本线程 = 本任务第 ti/3 个三角形的第 ti%3 个角。三角形的 3 个角各是一个
+    // ★M-3T-b：128 线程要填满 3×85 = 255 个顶点输出 ⟹ 每线程最多 2 个元素，故 if 改 strided 循环。
+    // 🔴 逐位不变的论证（且本批**实测**，不靠论证）：每个输出元素仍由**恰好一个**线程用**同一个
+    // 表达式**计算一次，迭代之间无累积量、体内无跨线程依赖、无 groupshared（`SetMeshOutputCounts`
+    // 之后活跃线程数可小于 numthreads，跨线程同步本来就不许用）⟹ 不存在可重排的结合序。
+    // 步长取线程数常量而非写死 128，是为了让"覆盖集 = [0, 3nTri)"与线程数解耦。
+    for (uint v = ti; v < 3u * nTri; v += kMeshletMaxWorkGroupInvocations) {
+        // 去索引：本元素 = 本任务第 v/3 个三角形的第 v%3 个角。三角形的 3 个角各是一个
         // 私有输出顶点（局部索引只用来查 remap 读哪个全局顶点，不再共享输出）。
-        const uint3 local = loadLocalTri(triOffset, triStart + (ti / 3u));
-        const uint corner = ti % 3u;
+        const uint3 local = loadLocalTri(triOffset, triStart + (v / 3u));
+        const uint corner = v % 3u;
         const uint localIdx = corner == 0u ? local.x : (corner == 1u ? local.y : local.z);
         const uint vb = meshletRemap.Load((remapOffset + localIdx) * 4u) * kVertexStride;
         float3 pos = asfloat(meshletVertexPool.Load3(vb));         // @0
@@ -215,7 +233,7 @@ void main(
         // 像素外逐位必赢；代价 = 能穿透深度差 <0.1% 远面的遮挡，调试档可接受）。
         clip.z *= 0.999;
 #endif
-        verts[ti].position = clip;
+        verts[v].position = clip;
 #if defined(MESHLET_TINT)
         // 共面双臂阳性对照（★0.5-b2，门 `meshlet.tint`）：着色输入（normal/uv/切线+手性）
         // 全写死成常数 ⟹ 叠加写回**逐 primitive 的平色块**；position/positionOS 一 bit
@@ -227,22 +245,24 @@ void main(
         // 采样，mesh 侧控制不了材质项 ⟹ 全屏单一常色在 mesh-only 变体里数学上做不到；
         // 逐 primitive 平色块（无纹理细节、法线固定）是 mesh-only 能给出的最强可读形态，
         // 且 M 的连通域恰好就是「共面 ∩ 被簇覆盖」像素集。
-        verts[ti].normal = float3(0.0, 1.0, 0.0);
-        verts[ti].uv = float2(0.5, 0.5);
-        verts[ti].tangentOS = float4(1.0, 0.0, 0.0, 1.0);  // w（手性）也是着色输入：进 TBN 副切线符号
+        verts[v].normal = float3(0.0, 1.0, 0.0);
+        verts[v].uv = float2(0.5, 0.5);
+        verts[v].tangentOS = float4(1.0, 0.0, 0.0, 1.0);  // w（手性）也是着色输入：进 TBN 副切线符号
 #else
-        verts[ti].normal = nrm;
-        verts[ti].uv = uv;
-        verts[ti].tangentOS = float4(tan.xyz, w);
+        verts[v].normal = nrm;
+        verts[v].uv = uv;
+        verts[v].tangentOS = float4(tan.xyz, w);
 #endif
-        verts[ti].positionOS = pos;  // frag 侧世界变换与 model 路同约定
+        verts[v].positionOS = pos;  // frag 侧世界变换与 model 路同约定
     }
 
-    // 去索引的索引自然连续：本任务第 ti 个三角形 = 本组 verts[3ti .. 3ti+2]。
+    // 去索引的索引自然连续：本任务第 p 个三角形 = 本组 verts[3p .. 3p+2]。
     // 注意 out indices 引用的是本组 verts 数组下标，不是全局顶点索引（同 model.mesh.slang
     // 踩过的坑：写全局索引在 RADV 上被 mod 回绕掩盖、NVIDIA 上直接崩形）。
-    if (ti < nTri) {
-        const uint base = ti * 3u;
-        triangles[ti] = uint3(base, base + 1u, base + 2u);
+    // ★M-3T-b：今天 nTri ≤ 85 < 128 ⟹ 恒跑一轮（相对改前零成本）；改循环是为了让"线程数 <
+    // 输出元素数"这一类未来漂移不会静默少写（改 if 的形态下它会画出一个悄悄少一批三角形的图）。
+    for (uint p = ti; p < nTri; p += kMeshletMaxWorkGroupInvocations) {
+        const uint base = p * 3u;
+        triangles[p] = uint3(base, base + 1u, base + 2u);
     }
 }

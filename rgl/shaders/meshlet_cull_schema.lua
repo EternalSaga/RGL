@@ -48,13 +48,19 @@ return {
     -- `tools/checks/rules_text.py::meshlet_spec_checks()`：它扫 .slang 里的同名字面量并比对
     -- 本表，另验 3×kTaskTris ≤ kMaxOutputVertices 这条**关系**（关系错了比数值错了更致命）。
     constants = {
-        -- 设备下限（本机 RADV STRIX_HALO 实测；引擎运行期核对，见 checkMeshletDeviceFit）。
+        -- 设备下限（🔴 取**三机最小值**，不是本机读数；引擎运行期核对，见 checkMeshletDeviceFit）。
         -- 只列**判据真的用到**的两条。`maxMeshOutputPrimitives = 256` 与
         -- `maxMeshOutputMemorySize = 32768` 也是本机读数，但判据用的是 `kTaskTris`
         -- （要求设备 ≥ 85，不是 ≥ 256）⟹ 它们是**设备事实**不是**规格要求**，留在本表会被
         -- meshlet_spec_checks 判成无消费者死常量——事实记在 docs/mdi_plan.md §17.4，别混进来。
         { name = "kMeshletMaxOutputVertices",     value = 256 },
-        { name = "kMeshletMaxWorkGroupInvocations", value = 256 },
+        -- 🔴 128 = **NVIDIA 的硬上限**（`maxMeshWorkGroupInvocations`；声明 256 时 vkCreateShadersEXT
+        -- 被 VVL 点名 VUID-RuntimeSpirv-MeshEXT-07295/07298 ⟹ NV 上根本建不出 shader）。本机 RADV
+        -- STRIX_HALO 的 maxPreferredMeshWorkGroupInvocations 同为 128（它的 max 给到 256，但 preferred
+        -- 才是"不亏性能"那一档）。★M-3T-b 起两枚 meshlet mesh shader 的 `[numthreads]` 都吃本常量
+        -- （strided 循环化让覆盖集与线程数解耦 ⟹ 降档逐位不变，实测三锚全中），两侧由
+        -- meshlet_spec_checks 的「数值相等」+「numthreads ≤ 本上限」两条对账钉住，别只改一侧。
+        { name = "kMeshletMaxWorkGroupInvocations", value = 128 },
         -- 产物侧上限（packer 的 buildMeshlets(128v/128t) 口径；shader 侧越界即整簇判空）
         { name = "kMaxClusterVerts",  value = 128 },
         { name = "kMaxClusterPrims",  value = 128 },

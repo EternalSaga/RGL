@@ -407,7 +407,8 @@ void activateShadowLodTable(entt::registry& registry, MeshletShadowLodTable&& ta
  *
  * ## 判据（三条，全部取反射生成的规格常量）
  * 去索引发射（§13.2 路 C）下每任务发射 `3 × kTaskTris` 个顶点、`kTaskTris` 个三角形，
- * 且 `[numthreads(256)]` 要 ≤ `maxMeshWorkGroupInvocations`。
+ * 且 `[numthreads(kMeshletMaxWorkGroupInvocations)]` 要 ≤ `maxMeshWorkGroupInvocations`
+ * （★M-3T-b 起该规格常量 = 128 = 三机最小值，NVIDIA 的硬上限；本机 256 也照样放行）。
  *
  * @param physicalDevice 待查询的物理设备（只读属性，不碰 device 创建）
  * @return 是否可用 + 上限值（供调用方出声与 LOD task 上限对账）

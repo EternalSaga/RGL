@@ -142,32 +142,33 @@ uint3 loadLocalTri(uint triOffset, uint k)
 }
 
 // ★M-3T-b：本管线 mesh 线程数降档 256 → **128**（docs/mdi_plan.md §19.16 末「★M-3T-b 的输入事实」）。
-// 🔴 单一拼写：`numthreads` 与下方两段 strided 循环的步长**共用这一个常量** ⟹ 以后改线程数
-// 只改这里，不用回来改循环。
+// 🔴 单一拼写：`numthreads` 与下方两段 strided 循环的步长**共用这一个常量** ⟹ 以后改线程数只改
+// 这里 + schema 一处，不用回来改循环。
+//
+// 本常量 = schema 常量 `kMeshletMaxWorkGroupInvocations`（meshlet_cull_schema.lua）的 **shader 侧
+// 拼写**，由 `meshlet_spec_checks` **规则 1** 对账：它把 `.slang` 里以 `const uint <schema 常量名>
+// = <值>u;` 出现的字面量与 schema 数值钉成**相等**，改一侧不改另一侧即被构建期点名。同一个 schema
+// 常量还兼作两条管线共用的**运行期设备下限闸门**（main_meshlet_tables.cppm::checkMeshletDeviceFit）。
 //
 // 128 的出处（三机口径，2026-10-13 现读，别抄旧注释里的"本机上限 256"）：
 //  · **NVIDIA `maxMeshWorkGroupInvocations = 128` 是硬上限**：声明 256 时 `vkCreateShadersEXT`
 //    被 VVL 点名 VUID-RuntimeSpirv-MeshEXT-07295/07298 ⟹ MDI 路在 NV 上根本建不出 shader。
 //  · 本机 AMD Radeon 8060S（RADV STRIX_HALO）`maxPreferredMeshWorkGroupInvocations = 128`
 //    （它的 maxMeshWorkGroupInvocations 给到 256，但 preferred 才是"不亏性能"的那一档）。
-//  · schema 常量 `kMeshletMaxWorkGroupInvocations = 256`（meshlet_cull_schema.lua）是**两条
-//    管线共用的运行期闸门**（checkMeshletDeviceFit 拿它核对设备下限），本批**不动**——降档要等
-//    主 pass `meshlet.mesh.slang` 一起改（那一步动红线 A，故先在本文件隔离"循环化会不会引起
-//    fp 逐位漂移"这个问题）。
-// 🔴 也正因如此，本常量与那个 schema 常量此刻是**两个不同的量**（本管线的线程数 128 vs 两条
-//    管线共用的设备下限 256）⟹ 名字**必须分开**，别"顺手统一"：`meshlet_spec_checks` 规则 1 把
-//    .slang 里以 `const uint <schema 常量名> = <值>u;` 出现的字面量与 schema 数值钉成**相等**，
-//    同名不同值会被构建期点名为规格漂移（实测 2026-10-13：本常量最初就写成 schema 那个名字，
-//    `meshlet_spec_checks` 当场出一警告）。等下一步主 pass 与 schema 一起降到 128，本常量并回
-//    schema 那份、本名退役（那时才真的做到"numthreads 吃 schema 常量"的单一真相源，不必为线程数
-//    另加一条护栏）。
+//  · 三机最小值 = NV 的 128 ⟹ schema 降到 128 之后，"numthreads 吃 schema 常量"的单一真相源才
+//    真的成立（本批之前 schema 还是 256，故本文件一度只能另起一名，见下）。
+//
+// 🔴 教训（2026-10-13 实测，防在别的场景重犯）：本常量曾与 schema 那个**同名不同值**（本管线先降到
+//    128、schema 当时仍是 256），`meshlet_spec_checks` 规则 1 当场把这一警告打出来、判成规格漂移。
+//    规则 1 的语义是"同名必须等值" ⟹ 两个量**只要此刻不是同一个量就必须分开名字**，别"顺手统一"；
+//    反过来，确认它们已是同一个量之后就应当并回同一个名字，否则留下一份没人对账的平行拼写。
 //
 // 线程数 128 < 顶点输出上限 255 **不再**意味着"高下标的顶点没人写"——那是"一线程一元素 + if
 // 守卫"时代的论证（旧注释正是那么写的），现在是 strided 循环，覆盖集 = [0, 3nTri) 与线程数解耦。
-static const uint kShadowMeshWorkGroupInvocations = 128u;
+static const uint kMeshletMaxWorkGroupInvocations = 128u;
 
 [shader("mesh")]
-[numthreads(kShadowMeshWorkGroupInvocations, 1, 1)]
+[numthreads(kMeshletMaxWorkGroupInvocations, 1, 1)]
 [outputtopology("triangle")]
 void main(
     uint ti : SV_GroupIndex,
@@ -268,7 +269,7 @@ void main(
     // 之后活跃线程数可小于 numthreads，跨线程同步本来就不许用）⟹ 不存在可重排的结合序。
     // 步长取线程数常量而非写死 128，是为了让"覆盖集 = [0, 3nTri)"与线程数解耦（以后改线程数不用
     // 回来改这里）。
-    for (uint v = ti; v < 3u * nTri; v += kShadowMeshWorkGroupInvocations) {
+    for (uint v = ti; v < 3u * nTri; v += kMeshletMaxWorkGroupInvocations) {
         // 去索引：本元素 = 本任务第 v/3 个三角形的第 v%3 个角（与 meshlet.mesh 同法）。
         // 只取位置：depth-only 不着色 ⟹ 法线/uv/切线一个都不读（顶点池里它们就在同一 48B 内，
         // 少读三个向量 = 本管线相对主 pass 的真实成本差）。
@@ -294,7 +295,7 @@ void main(
     // 那条坑：写全局索引在 RADV 上被 mod 回绕掩盖、NVIDIA 上直接崩形）。
     // ★M-3T-b：今天 nTri ≤ 85 < 128 ⟹ 恒跑一轮（相对改前零成本）；改循环是为了让"线程数 <
     // 输出元素数"这一类未来漂移不会静默少写（改 if 的形态下它会画出一个悄悄少一批三角形的图）。
-    for (uint p = ti; p < nTri; p += kShadowMeshWorkGroupInvocations) {
+    for (uint p = ti; p < nTri; p += kMeshletMaxWorkGroupInvocations) {
         const uint base = p * 3u;
         triangles[p] = uint3(base, base + 1u, base + 2u);
     }
