@@ -11,14 +11,15 @@ import rlstd;
  * GPU 逐行读自己的 `groupCountX`（spike 的 `per_draw_groupcount` 已实测）。本模块只做
  * 「候选序列 → 行数组 + 聚合锚」这一步纯 CPU 换算，**零消费者**（★M-1 才接 GPU 载体与 shader）。
  *
- * ## 行布局（§19.2 D1，逐字节照做）
+ * ## 行布局（§19.2 D1 的 24B；🔴 ★M-3T-c 起第 6 个 word 已启用）
  * ```
- * 行 i = [ gcX | 1 | 1 | objectIndex | clusterStart | 0 ]   共 24B = 6 word
- *         └──── 前 12B 恰是 VkDrawMeshTasksIndirectCommandEXT ────┘└ shader 读 word[3]/word[4] ┘
+ * 行 i = [ gcX | 1 | 1 | objectIndex | clusterStart | meshGroupCount ]   共 24B = 6 word
+ *         └──── 前 12B 恰是 VkDrawMeshTasksIndirectCommandEXT ────┘└ task 读 word[3]/[4]/[5] ┘
  * ```
  * 为什么 24 不是 20：`clusterStart` 逐 object 不同（LOD 回落）⟹ 16B 的单个 word[3] 装不下两个
- * 索引；24 = 8 的倍数（对齐友好）+ 留**一枚**保留 word 给 ★M-3（模型段那一维）。代价 = 比 20B
- * 每级联多 6KB（1591 行 × 4B）。🔴 计划正文的 ASCII 图把保留位画成三枚 0（那是 32B），与同节
+ * 索引；24 = 8 的倍数（对齐友好）。🔴 **原本"留给 ★M-3"的那枚保留 word 已被 ★M-3T-c 的
+ * `meshGroupCount` 用掉** ⟹ ★M-3 真要加「材质/顶点块」那一维时得把行扩到 32B（8 word），
+ * 代价 = 行表多 6KB（1530 行 × 8B × 3 级联），换来的是 ×2 不必在 shader 里再拼一遍。🔴 计划正文的 ASCII 图把保留位画成三枚 0（那是 32B），与同节
  * 标题「行布局 = 24B」、D3 的 `drawMeshTasksIndirectEXT(…, 24)` 与「候选数 × 24B × 3 级联 ≈
  * 114KB」三处冲突 ⟹ 本模块按 **24B** 落地（三处对一处），差异已写进交付报告。
  * 🔴 `cascadeIndex` **不进行、走 push**（一次 MDI 调用 = 一个级联 = 一个常量），故
@@ -30,10 +31,14 @@ import rlstd;
  * 结构"这条由 **tests/test_mdi_rows** 做第二钉（`tests/` 链全部四层库，可以 `import rlvk;`）——
  * 计划里写的「`static_assert` + 用例**双钉**」= 本文件的 24B/stride 断言 + 测试里的逐字段偏移对账。
  *
- * ## 🔴 task 槽数不在本模块乘
- * `taskCount` 由**调用方算好传进来**，本模块只搬运。唯一真相源 =
+ * ## 🔴 mesh 组槽数不在本模块乘
+ * 候选带来的 `meshGroupCount`（= 每簇 2 槽那个 ×2 的成品数）由**调用方算好传进来**，本模块只搬运。
+ * 唯一真相源 =
  * `render_list_impl.cppm::meshletTaskCount`（`meshlet_lod.cppm` 文件头已为这条立过规矩：那里
  * 不乘、这里也不乘，第三个消费者出现时仍然只有一处乘）。本模块出现槽数常量 = 造第二个真相源。
+ * 🔴 ★M-3T-c 起这个 ×2 成品数喂的是 `meshGroupCount`（task 拿去当 `DispatchMesh` 的 X），
+ * **不再是** `groupCountX`（后者 = 每 draw 一枚 task：可见 ? 1 : 0）。把 ×2 挪进 task shader
+ * 同样算造第二个真相源，所以行里直接带成品数。
  *
  * ## ★M-1a：行表的**尺寸/偏移算术**同样住在本模块（rlbase，`just test` 可钉）
  * `mdiShadowSliceBytes` / `mdiShadowArgsCapacityBytes` / `mdiShadowTailBytes` /
@@ -51,7 +56,7 @@ import rlstd;
  * 身份字段（`objectIndex` / `clusterStart`）在不可见行上照样落值：红了要能定位是**哪一行**，
  * 而「整行清零」让行表失去可归因性（且与「身份字段与可见性无关」这条 §19.2 D4 口径一致）。
  *
- * ## 四条不变量 = 构建器/对账器的断言，每条一个**两两不同**的错误串
+ * ## 五条不变量 = 构建器/对账器的断言，每条一个**两两不同**的错误串
  * 前缀 `mdi rows: invariant N`（读日志即可归因，不必回来读代码；同 `meshlet_ranges` /
  * `meshlet_lod` 的纪律）。任务书要求「至少覆盖」三条（下表 1-3），第 4 条是**行序契约**本身——
  * 它不在聚合量上留痕迹（两行互换 ⟹ 三个锚一位不变），不钉就等于没写。
@@ -59,9 +64,10 @@ import rlstd;
  * | # | 不变量 | 不成立时意味着 |
  * |---|---|---|
  * | 1 | 行数 == 候选数（且 `rowCount` 锚 == 行数）| 构建器自己漏行/多行，或有人给行表做了压紧 |
- * | 2 | **可见**候选的 `taskCount > 0` | 上游契约破了（`meshletTaskCount(0)` 或选级表 count 为 0 却仍判可见）；宁可报错也不发一条「可见但零 task」的行 |
+ * | 2 | **可见**候选的 `meshGroupCount > 0` | 上游契约破了（`meshletTaskCount(0)` 或选级表 count 为 0 却仍判可见）；宁可报错也不发一枚 `DispatchMesh(0)` 的空 task |
  * | 3 | 聚合锚自洽：`Σ gcX` == 逐行求和、`emptyRows` == 行数中 `gcX==0` 者、且后者 == **不可见候选数** | 锚与行分家 = ★M-1 的 `mdi.rows` 闭式锚失效，收益判据读不到数 |
- * | 4 | 行 i 恰是候选 i 的行（逐元素：gcX / objectIndex / clusterStart）| 行序不再是候选序（排序/互换/错位），A3 的逐位论证失去依据 |
+ * | 3b | `Σ gcX == rowCount − emptyRows`（🔴 ★M-3T-c：`gcX ∈ {0,1}`，每**可见**行恰一枚 task）| 有人把 ×2 又乘回 gcX、或给一个 draw 发了多枚 task ⟹ task 数回到 mesh 组数量级，本批 3.4× 收益静默归零 |
+ * | 4 | 行 i 恰是候选 i 的行（逐元素：gcX / objectIndex / clusterStart / **meshGroupCount**）| 行序不再是候选序（排序/互换/错位），A3 的逐位论证失去依据 |
  *
  * 不变量 2 只在**构建器**判（它是输入契约）；1/3/4 住在 `validateMdiShadowRows`——构建器返回前
  * 跑它（自检），★M-4「GPU 写行表 vs CPU 构建器逐元素对账」也跑它（同一份判据，两处真相源迟早漂）。
@@ -82,11 +88,19 @@ namespace RGL {
  * 派发是一维的），故它们只在默认值里出现一次。
  */
 export struct MdiShadowRow {
-	/** 本行的 task 数（= 调用方给的 `taskCount`）；🔴 不可见候选 = 0（GPU 空转，spike 实测不跳号）。 */
+	/**
+	 * 本行的 **task** 数。★M-3T-c 起 = `可见 ? 1 : 0`（🔴 语义从"mesh 组数"变成"task 数"）：
+	 * 一个 draw 发**一枚** task，由它读行表后一次 `DispatchMesh(meshGroupCount, 1, 1)` 把本对象
+	 * 本级联的全部 mesh 组发出来。不可见候选 = 0（GPU 空转，spike 实测不跳号）。
+	 *
+	 * 🔴 **为什么不是"每 mesh 组一枚 task"**（★M-3T-a 的初版形态）：那样 task 数 = mesh 组数
+	 * （实测每级联 5132），task 自身开销把 MDI 的命令数收益在 GPU 侧倒赔掉约 0.5ms
+	 * （→ §19.16 代价读数）。收成每 draw 一枚后 task 数 = 可见行数（1530 量级，3.4×）。
+	 */
 	uint32_t groupCountX = 0u;
 	uint32_t groupCountY = 1u;  ///< 恒 1（一维派发）
 	uint32_t groupCountZ = 1u;  ///< 恒 1（一维派发）
-	/** = `MeshRef.objectSlot` = shader 的 objectIndex（word[3]，shader 直读）。 */
+	/** = `MeshRef.objectSlot` = shader 的 objectIndex（word[3]，task 读后进 payload）。 */
 	uint32_t objectIndex = 0u;
 	/**
 	 * 🔴 **相对 `ObjectClusterRange::base` 的偏移**，不是全局簇下标（口径 = `MeshletLodPrimRange::start`
@@ -96,11 +110,16 @@ export struct MdiShadowRow {
 	 */
 	uint32_t clusterStart = 0u;
 	/**
-	 * 保留 word（§19.2 D1：24B = 20B 载荷 + 本 word，留给 ★M-3 模型段那一维）。现在恒 0，
-	 * 非 0 = 有人抢跑 ★M-3。🔴 只有**一枚**：24B 装得下 6 个 word，前 5 个已被上面占用
-	 * （计划正文 ASCII 图里的三枚 0 与「留 3 个保留 word」按 24B 口径收敛成一枚，见交付报告）。
+	 * 本行的 **mesh 组**数（= `meshletTaskCount(选级后簇数)`；「每簇 2 槽」的 ×2 唯一真相源在 C++
+	 * 侧，🔴 shader 里不得再拼一遍 ×2）。task 拿它当 `DispatchMesh` 的 X；mesh 侧 `groupID.x`
+	 * 的取值域因此 = `[0, meshGroupCount)`，与 ★M-3T-a 之前的 `SV_GroupID.x` **逐值同**
+	 * ⟹ mesh 的派发算式不必为 MDI 特化（★M-3T-a 那版得从 payload 拿 slot 就是因为 gcX 当时是
+	 * mesh 组数、task 之下 `groupID.x` 恒 0）。
+	 *
+	 * 🔴 本 word 占用了 §19.2 D1 那枚**保留 word**（原留给 ★M-3 模型段那一维）⟹ ★M-3 真要加
+	 * 那一维时得把行扩到 32B（8 word）。
 	 */
-	uint32_t reserved0 = 0u;
+	uint32_t meshGroupCount = 0u;
 };
 static_assert(sizeof(MdiShadowRow) == 24,
 	"MdiShadowRow layout drifted from docs/mdi_plan.md §19.2 D1 (24B MDI row: the first 12B "
@@ -224,14 +243,18 @@ export constexpr MdiShadowRowLocation mdiShadowRowLocation(uint32_t sliceRows, u
 /**
  * 一个候选（一个级联内的一条阴影投影体候选，字段口径 = `ShadowCandidate` 的可切那半）。
  *
- * 🔴 **本结构不携带 task 槽数口径**：`taskCount` 是「本行要发多少 task」的**成品数**，由调用方
- * 经 `meshletTaskCount(簇数)` 算好（唯一真相源，文件头）。构建器只搬运它。
+ * 🔴 **本结构不携带 mesh 组槽数口径**：`meshGroupCount` 是「本行要发多少 mesh 组」的**成品数**，
+ * 由调用方经 `meshletTaskCount(簇数)` 算好（唯一真相源，文件头）。构建器只搬运它。
  */
 export struct MdiShadowCandidate {
 	/** = `MeshRef.objectSlot`（进 word[3]，与 `ObjectClusterRange` 等 per-object 表同一条索引）。 */
 	uint32_t objectSlot = 0u;
-	/** 本候选的 task 数（成品数，🔴 不在本模块乘槽数）；可见时必须 > 0（不变量 2）。 */
-	uint32_t taskCount = 0u;
+	/**
+	 * 本候选的 **mesh 组**数（= `meshletTaskCount(选级后簇数)` 的成品数，🔴 不在本模块乘槽数）；
+	 * 可见时必须 > 0（不变量 2）。★M-3T-c 起它喂 `MdiShadowRow::meshGroupCount`（task 拿去当
+	 * `DispatchMesh` 的 X），**不再**喂 `groupCountX`（后者 = 每 draw 一枚 task）。
+	 */
+	uint32_t meshGroupCount = 0u;
 	/** 🔴 相对 `ObjectClusterRange::base` 的偏移（进 word[4]，与 push 里的同值同源）。 */
 	uint32_t clusterStart = 0u;
 	/** 本候选在本级联是否落进光空间体（`casterInShadowVolume` 的结论）。 */
@@ -242,15 +265,28 @@ export struct MdiShadowCandidate {
  * 一次构建的产物：行数组 + 三个聚合锚。
  *
  * 三个锚不是便利品，是**判据**（§19.3 ★M-0 的「聚合锚」= §19.2 D5 的 profiler 口径原料）：
- * `rowCount` 是 ★M-1 判据 A5 里 `mdi.rows` 的闭式锚，`sumGroupCountX` 是「MDI 形态总共发了多少
- * task」的对账量（与逐条 draw 形态的 Σ groupCount 必须相等），`emptyRows` 是「孔洞流」的规模。
+ * `rowCount` 是 ★M-1 判据 A5 里 `mdi.rows` 的闭式锚，`sumMeshGroupCount` 是「与逐条 draw 形态的
+ * Σ groupCount 必须相等」的对账量（task 化不改 mesh 组总数 ⟹ 跨形态可比），`sumGroupCountX` 是
+ * 「总共发了多少 task」的**收益**读数，`emptyRows` 是「孔洞流」的规模。
  * 三者与行数组的自洽 = 不变量 3。
  */
 export struct MdiShadowRowTable {
 	/** 行数组，**下标 = 候选下标**（行序 = 候选序，文件头契约）。 */
 	std::vector<MdiShadowRow> rows;
-	/** Σ `groupCountX`（含 0 行；== 逐条 draw 形态的 Σ task）。 */
+	/**
+	 * Σ `groupCountX` = 本级联发出的 **task** 总数（= 本批的**收益**读数：★M-3T-a 的形态下它
+	 * = mesh 组数 5132 量级，★M-3T-c 起 = 可见行数 1530 量级）。🔴 `gcX ∈ {0,1}` ⟹ 本量恒等于
+	 * `rowCount − emptyRows`（不变量 3b）。
+	 */
 	uint64_t sumGroupCountX = 0;
+	/**
+	 * Σ **可见行**的 `meshGroupCount` = 本级联真正发出去的 **mesh 组**总数。**它才是**「与逐条 draw
+	 * 形态的 Σ groupCount 必须相等」的那个对账量（★M-3T-c 前挂在 `sumGroupCountX` 上，语义随 gcX
+	 * 改单位一起搬到这里）。task 化只改"谁发"、不改"发多少 mesh 组" ⟹ 本量是 task 化前后**必须
+	 * 不变**的锚。🔴 **不可见行不计**（逐条形态不为它们发 draw；全行求和会得到一个不随可见性动的
+	 * 死数，实测三档级联一位不变 ⟹ 对账价值为零）。
+	 */
+	uint64_t sumMeshGroupCount = 0;
 	/** `groupCountX == 0` 的行数（= 本级联不可见候选数）。 */
 	uint64_t emptyRows = 0;
 	/** 行数（== 候选数，不变量 1）。 */

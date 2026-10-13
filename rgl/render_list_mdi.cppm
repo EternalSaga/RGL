@@ -145,7 +145,7 @@ std::vector<MdiShadowCandidate> mdiCascadeInputs(std::span<const ShadowCandidate
 			continue;
 		MdiShadowCandidate in;
 		in.objectSlot = cd.objectSlot;
-		in.taskCount = meshletTaskCount(cd.meshletGroups);  // ×2 唯一真相源（成品数喂构建器）
+		in.meshGroupCount = meshletTaskCount(cd.meshletGroups);  // ×2 唯一真相源（喂 word5，非 gcX）
 		in.clusterStart = cd.clusterStart;
 		in.visible = casterInShadowVolume(volume, cd.center, cd.radius);
 		inputs.push_back(in);

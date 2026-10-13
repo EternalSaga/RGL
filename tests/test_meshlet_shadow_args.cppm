@@ -17,10 +17,12 @@ module;
  * ## 🔴 还有一条截图永远测不到的判据：`argsOffset` 与 `rowBase` 必须同源
  * 这对数一旦分家，症状是 **GPU 画的是另一条合法命令**（不报错、不触发 VVL、位比也可能照过）。
  * 用例 4（`mdi_expansion`）用一条**自证回路**钉它：
- *   ① CPU 按 `upload(frameSlot=1, firstRow=3)` 写两行（每行四个字段两两不同）
+ *   ① CPU 按 `upload(frameSlot=1, firstRow=3)` 写两行（每行五个字段两两不同）
  *   → ② 对同一个载体发**一次真 MDI**：`drawMeshTasksIndirectEXT(buffer, argsOffset, 2, 24)`
  *   → ③ 测试自带 SPV（`tests/shaders/mdi_shadow_rows.mesh.slang`）里
- *      `row = rowBase + SV_DrawIndex`，从同一张 buffer 读那一行的 word[3]/word[4]，拼成 tag
+ *      `row = rowBase + SV_DrawIndex`，从同一张 buffer 读那一行的 word[3]/word[4]/🔴word[5]，
+ *      拼成 tag（🔴 ★M-3T-c 起 word[5] = meshGroupCount 是**真载荷**——真机上 task 读它当
+ *      `DispatchMesh` 的 X，自证面必须覆盖它，否则「读歪 word[5]」在设备上一格都不现形）
  *   → ④ R32_UINT 整数附件按列（列号 == 行号）回读。
  * 判据 = 「**按 rowBase 索引到的那一行，就是设备按 argsOffset 取到的那一行**」，且同一次调用里
  * 混一条 `gcX = 0` 的孔洞行与 slice 0 的空白对照。用例 5 是它的**阳性对照**（把行 10 的 `gcX`
@@ -36,9 +38,10 @@ module;
  *
  * ## 数值纪律（🔴 两个数相等 ⟹ 互换测不出东西；spike §6.3 的 M4 教训同族）
  * `kMdiShadowRowStride` = 24。本文件的 sliceRows = 7、slices = 2、frameSlot = 1、firstRow = 3、
- * drawCount = 2、objectIndex = 37/41、clusterStart = 13/19、groupCountX = 1/2
- * ⟹ **没有一个等于 24**；`argsOffset`(240) ≠ `rowBase`(10) ≠ sliceRows(7) ≠ slices(2)；
- * 每行的四个字段两两不同 ⟹ 「读歪一格」「字段互换」「帧槽项被丢」三种坏形态各有专属信号。
+ * drawCount = 2、objectIndex = 37/41、clusterStart = 13/19、groupCountX = 1/2、
+ * meshGroupCount = 5/9 ⟹ **没有一个等于 24**；`argsOffset`(240) ≠ `rowBase`(10) ≠ sliceRows(7)
+ * ≠ slices(2)；每行的五个字段两两不同 ⟹ 「读歪一格」「字段互换」「帧槽项被丢」三种坏形态各有
+ * 专属信号（tag 公式 obj×16+start×4+groups 的三个乘数互错开 = 三字段读歪各有专属 tag）。
  *
  * ## 变异红线声明（2026-10-13 全部实测；harness = `/tmp/opencode/m1a/mutate.py`，
  * 注入点 `rgl/meshlet_shadow_args_impl.cppm`；「红 N 条」= 失败的 TEST_CASE 数，本文件共 5 条。
@@ -127,6 +130,8 @@ constexpr uint32_t kCaseStartA = 13u;     ///< 行 10 的 clusterStart（word[4]
 constexpr uint32_t kCaseStartB = 19u;     ///< 行 11 的 clusterStart
 constexpr uint32_t kCaseTasksA = 1u;      ///< 行 10 的 groupCountX（用例 5 把它改成 0 = 阳性对照）
 constexpr uint32_t kCaseTasksB = 2u;      ///< 行 11 的 groupCountX（两个 task 同列同值 = 无害重复）
+constexpr uint32_t kCaseGroupsA = 5u;     ///< 行 10 的 meshGroupCount（word[5]，🔴 ★M-3T-c 起进自证面）
+constexpr uint32_t kCaseGroupsB = 9u;     ///< 行 11 的 meshGroupCount
 constexpr uint32_t kClearSentinel = 0u;   ///< 附件 clear 值：未画到的列必须保持它（空白对照）
 constexpr vk::Format kFmt = vk::Format::eR32Uint;  // 整数附件：tag 是判据本体，不走颜色链路
 
@@ -135,19 +140,70 @@ static_assert(offsetof(RGL::MdiShadowRow, objectIndex) == 12u,
 	"SPV 侧 kObjBytes = 12（word[3]）；偏移漂了列值就对不上");
 static_assert(offsetof(RGL::MdiShadowRow, clusterStart) == 16u,
 	"SPV 侧 kStartBytes = 16（word[4]）");
+static_assert(offsetof(RGL::MdiShadowRow, meshGroupCount) == 20u,
+	"SPV 侧 kMeshGroupsBytes = 20（word[5]，★M-3T-c 起 task 拿去当 DispatchMesh 的 X）");
 
 /** 本用例写进 (frameSlot=1, firstRow=3) 的两行（行序 = 候选序；孔洞由用例 5 现造）。 */
 std::vector<MdiShadowRow> caseRows(uint32_t tasksA = kCaseTasksA) {
 	std::vector<MdiShadowRow> rows;
-	rows.push_back(MdiShadowRow { tasksA, 1u, 1u, kCaseObjectA, kCaseStartA, 0u });
-	rows.push_back(MdiShadowRow { kCaseTasksB, 1u, 1u, kCaseObjectB, kCaseStartB, 0u });
+	rows.push_back(MdiShadowRow { tasksA, 1u, 1u, kCaseObjectA, kCaseStartA, kCaseGroupsA });
+	rows.push_back(MdiShadowRow { kCaseTasksB, 1u, 1u, kCaseObjectB, kCaseStartB, kCaseGroupsB });
 	return rows;
 }
 
-/** SPV 侧的 tag 公式（`obj × 4 + start`，与 mdi_shadow_rows.mesh.slang 手工同源）。 */
-constexpr uint32_t wantTag(uint32_t objectIndex, uint32_t clusterStart) {
-	return objectIndex * 4u + clusterStart;
+/**
+ * SPV 侧的 tag 公式（`obj × 16 + start × 4 + meshGroups`，与 mdi_shadow_rows.mesh.slang 手工同源）。
+ * 🔴 ★M-3T-c 起 word[5] 是**真载荷**（真机上 task 读它当 DispatchMesh 的 X）⟹ 自证面从两个字段
+ * 扩到三个：三个乘数互错开（16/4/1）⟹ 任一字段读歪一格（含「start 位读到 groups」）tag 必变。
+ */
+constexpr uint32_t wantTag(uint32_t objectIndex, uint32_t clusterStart, uint32_t meshGroups) {
+	return objectIndex * 16u + clusterStart * 4u + meshGroups;
 }
+
+/*
+ * 🔴 tag 公式**不是天生单射**（乘数 16/4 会进位：groups ≥ 4 就吃 start 的位、start ≥ 4 就吃 obj
+ * 的位）。上面注释那句"乘数互错开 ⟹ 任一字段读歪 tag 必变"真正的依据是**本用例挑的这组取值**，
+ * 不是乘数本身 ⟹ 把它写成机器断言，否则以后改用例值就把这条依据悄悄改没了。
+ * 判据 = 对每一行：① 三字段任意互换后 tag 都变；② 任一字段换成"本行另一个字段的值"tag 都变；
+ * ③ 两行的 tag 互不相同（整列错行读必须露）。全部编译期判，零运行期成本。
+ */
+/*
+ * 🔴 tag 公式**不是天生单射**（乘数 16/4 会进位：groups ≥ 4 吃 start 的位、start ≥ 4 吃 obj 的位）。
+ * 上面"乘数互错开 ⟹ 任一字段读歪 tag 必变"真正的依据是**本用例挑的这组取值**，不是乘数本身
+ * ⟹ 写成机器断言，否则以后换用例取值就把这条依据悄悄改没了。
+ *
+ * 覆盖面 = **单字段**错位（读错 word 的真实形状：一个字段读到本行另一字段的值）+ **整体错一格
+ * word**（偏移常量写错 systematic 形状）。🔴 **两字段同时错不在覆盖面内**，且实测确实有一格碰撞：
+ * 行 A 的 `(obj, groups, obj) = (37, 5, 37)` 与正确 tag 同为 649 —— 那需要两个独立偏移同时写错，
+ * 不是任何单一 bug 的形状，故接受；换用例取值时若这条变了，重跑本块断言即可（它不会静默）。
+ */
+constexpr uint32_t kTagA = wantTag(kCaseObjectA, kCaseStartA, kCaseGroupsA);
+constexpr uint32_t kTagB = wantTag(kCaseObjectB, kCaseStartB, kCaseGroupsB);
+static_assert(kTagA != kTagB, "两行 tag 相同 ⟹ 整列错行读不出来");
+
+// 行 A：六个单字段错位（每个字段各读到另两个字段的值）tag 必须全部 ≠ 正确值。
+static_assert(wantTag(kCaseStartA, kCaseStartA, kCaseGroupsA) != kTagA  // obj ← start
+		&& wantTag(kCaseGroupsA, kCaseStartA, kCaseGroupsA) != kTagA     // obj ← groups
+		&& wantTag(kCaseObjectA, kCaseObjectA, kCaseGroupsA) != kTagA    // start ← obj
+		&& wantTag(kCaseObjectA, kCaseGroupsA, kCaseGroupsA) != kTagA    // start ← groups
+		&& wantTag(kCaseObjectA, kCaseStartA, kCaseObjectA) != kTagA     // groups ← obj
+		&& wantTag(kCaseObjectA, kCaseStartA, kCaseStartA) != kTagA,     // groups ← start
+	"行 A 有单字段错位查不出来（换用例取值时先回来看这条）");
+// 行 B：同上六格。
+static_assert(wantTag(kCaseStartB, kCaseStartB, kCaseGroupsB) != kTagB
+		&& wantTag(kCaseGroupsB, kCaseStartB, kCaseGroupsB) != kTagB
+		&& wantTag(kCaseObjectB, kCaseObjectB, kCaseGroupsB) != kTagB
+		&& wantTag(kCaseObjectB, kCaseGroupsB, kCaseGroupsB) != kTagB
+		&& wantTag(kCaseObjectB, kCaseStartB, kCaseObjectB) != kTagB
+		&& wantTag(kCaseObjectB, kCaseStartB, kCaseStartB) != kTagB,
+	"行 B 有单字段错位查不出来");
+// 整体错一格 word（偏移常量 12/16/20 写成 8/12/16 或 16/20/24 的形状）：读到的是相邻 word 的
+// 值组合，必须与正确 tag 不同。行 A 前一格 = (gcY=1, obj, start)，后一格 = (start, groups, 下行 gcX)。
+static_assert(wantTag(1u, kCaseObjectA, kCaseStartA) != kTagA
+		&& wantTag(kCaseStartA, kCaseGroupsA, kCaseTasksB) != kTagA
+		&& wantTag(1u, kCaseObjectB, kCaseStartB) != kTagB,
+	"整体错一格 word 后 tag 不变 ⟹ 偏移常量写错查不出来");
+
 
 /** 读 SPV（缺失 = 响亮失败；产物由 tests/CMakeLists.txt 的 compile_slang 产出）。 */
 std::vector<uint32_t> readSpirv(const std::string& path) {
@@ -260,7 +316,8 @@ std::span<const std::byte> rowBytes(const MdiShadowRow& r) {
 /** 一行的可读文本（失败时直接看出是哪一行、哪个字段）。 */
 std::string rowText(const MdiShadowRow& r) {
 	return "gcX=" + std::to_string(r.groupCountX) + " obj=" + std::to_string(r.objectIndex)
-	     + " start=" + std::to_string(r.clusterStart) + " res=" + std::to_string(r.reserved0);
+	     + " start=" + std::to_string(r.clusterStart)
+	     + " groups=" + std::to_string(r.meshGroupCount);
 }
 
 // ─── 用例 4/5 的量具：mesh+frag 管线 + R32_UINT 整数附件（照 test_mdi_drawindex 的形态）───
@@ -502,6 +559,8 @@ using RGL::testing::shadowargs::HostBuf;
 using RGL::testing::shadowargs::kCaseDrawCount;
 using RGL::testing::shadowargs::kCaseFirstRow;
 using RGL::testing::shadowargs::kCaseFrameSlot;
+using RGL::testing::shadowargs::kCaseGroupsA;
+using RGL::testing::shadowargs::kCaseGroupsB;
 using RGL::testing::shadowargs::kCaseObjectA;
 using RGL::testing::shadowargs::kCaseObjectB;
 using RGL::testing::shadowargs::kCaseRtRows;
@@ -715,17 +774,17 @@ TEST_CASE("shadow_args_mdi_expansion（🔴 自证回路）：一次真 MDI 展�
 		drawMdiShadowRows(cmd, ring->buffer.buffer, loc.argsOffset, kCaseDrawCount);
 	});
 	INFO(dumpCols(px));
-	// 🔴 判据：第 10 列 == 行 10 的两个字段拼出来的 tag（**期望值 = 本文件手算**，
-	// 出处 = §19.2 D1 的行布局 + SPV 里的 obj*4+start 公式），且**整列 8 行**都必须该值
+	// 🔴 判据：第 10 列 == 行 10 的三个字段拼出来的 tag（**期望值 = 本文件手算**，
+	// 出处 = §19.2 D1 的行布局 + SPV 里的 obj*16+start*4+groups 公式），且**整列 8 行**都必须该值
 	// ——只有一行对 = 覆盖不足也会读成绿（首版就是只读第 0 行，被这条自己绊了一下：
 	// 14×1 的附件让 readImage 的 staging buffer 只有 56B，踩 VUID-vkBindBufferMemory-None-10741
 	// 而回读全 0，「列没画到」与「量具坏」当场分不开）。
 	CHECK(px.size() == static_cast<size_t>(kCaseTotalRows) * kCaseRtRows);
 	{
-		const uint32_t badA = firstRowDiffers(px, 10u, wantTag(kCaseObjectA, kCaseStartA));
+		const uint32_t badA = firstRowDiffers(px, 10u, wantTag(kCaseObjectA, kCaseStartA, kCaseGroupsA));
 		INFO("列 10：" << colAllRows(px, 10u) << "首个不符行 " << badA);
 		CHECK(badA == kCaseRtRows);
-		const uint32_t badB = firstRowDiffers(px, 11u, wantTag(kCaseObjectB, kCaseStartB));
+		const uint32_t badB = firstRowDiffers(px, 11u, wantTag(kCaseObjectB, kCaseStartB, kCaseGroupsB));
 		INFO("列 11：" << colAllRows(px, 11u) << "首个不符行 " << badB);
 		CHECK(badB == kCaseRtRows);
 	}
@@ -750,10 +809,12 @@ TEST_CASE("shadow_args_groupcount（阳性对照）：行 10 的 groupCountX 改
 		kCaseSlices);
 	REQUIRE(ring.has_value());
 	REQUIRE(ring->deviceAddress != 0);
-	// 🔴 行 10 的 gcX = 0 而**其余字段照写**（§19.3 ★M-0 口径：整行清零会让行表失去可归因性）
+	// 🔴 行 10 的 gcX = 0 而**其余字段照写**（§19.3 ★M-0 口径：整行清零会让行表失去可归因性；
+	// ★M-3T-c 起「其余字段」也包括 word[5] meshGroupCount——孔洞行只是不发 task，身份照落值）
 	const std::vector<MdiShadowRow> rows = caseRows(0u);
 	REQUIRE(rows [0].groupCountX == 0u);
 	REQUIRE(rows [0].objectIndex == kCaseObjectA);
+	REQUIRE(rows [0].meshGroupCount == kCaseGroupsA);
 	REQUIRE_FALSE(ring->upload(kCaseFrameSlot, kCaseFirstRow, rows).has_value());
 	const auto loc = ring->location(kCaseFrameSlot, kCaseFirstRow);
 
@@ -770,7 +831,7 @@ TEST_CASE("shadow_args_groupcount（阳性对照）：行 10 的 groupCountX 改
 	INFO(dumpCols(px));
 	CHECK(firstRowDiffers(px, 10u, kClearSentinel) == kCaseRtRows);   // 孔洞行 = 没画（合法空转）
 	{
-		const uint32_t badB = firstRowDiffers(px, 11u, wantTag(kCaseObjectB, kCaseStartB));
+		const uint32_t badB = firstRowDiffers(px, 11u, wantTag(kCaseObjectB, kCaseStartB, kCaseGroupsB));
 		INFO("列 11：" << colAllRows(px, 11u) << "首个不符行 " << badB);
 		CHECK(badB == kCaseRtRows);   // 后一列照旧 = **不跳号**（0 计数不跳号，§19.2 D4）
 	}

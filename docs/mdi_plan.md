@@ -1748,6 +1748,7 @@ spike 未覆盖两处之一 = "探针走经典 descriptor set + `vkCmdPushConsta
 | **★M-2 三机结案** | 换 NVIDIA / Intel anv 各跑一遍 ★M-1 判据 + 债-81 剩余半 | 三机 `just test-gpu` 绿 + A3 逐位；台账债-81 改"三机已验" | 零 |
 | **★M-3T-a task 化**（✅ **已落地 §19.16**，2026-10-13） | 为绕 §19.9 的 gfx1151 毒化而插队：`SV_DrawIndex` 声明处从 mesh 搬进 task + `shadow_meshlet.task.slang` 纯中继（payload 转交 drawID/slot）+ 引擎侧可选 task stage（`PipelineSpec::taskSpv` / `RenderPipeline` 第三句柄 / `NO_TASK_SHADER_BIT` 条件化）。🔴 `gcX` **单位**变 task 数、**数值不变** ⟹ 行表/执行器/采集侧/A5 锚零改动 | **A3 在出事机由红转绿**（门开 = 门关 = `95edc8cc…`）；门关 mesh SPV 与 HEAD 重编逐字节同；task 产物两 builtin 计数 = 2；A5/A6/A7 全中；shader 侧两条变异各落在 §19.15 已记锚上；`TEST: tests/test_shader_mapping.cppm` | 中（门关构造性不动，已 `cmp` 钉住） |
 | **★M-3T-b mesh 循环化 ≤128**（✅ **已落地 §19.17**，2026-10-13） | 两枚 meshlet mesh 的 `[numthreads(256)]`→128（`numthreads` 吃 schema 常量）+ 两段输出 `if` 改 strided 循环 + schema `kMeshletMaxWorkGroupInvocations` 256→128 + 新护栏「任一 `.mesh.slang` 的 `numthreads` ≤ 设备下限（三条失效路径出声）」 | 实测**三锚全不变**（出厂 `95edc8cc…` / 红线 A `54e40665…` / 门开 = 出厂）⟹ **无需重锚**；五枚 SPV 全 `LocalSize 128 1 1`；同会话 A/B 代价 = 0。🔴 但"NV 上能跑"仍是推定（本机不是 NV）→ 债-81 | 中（动主 pass，但实测零漂移） |
+| **★M-3T-c task 真干活**（✅ **已落地 §19.18**，2026-10-13） | task 读行表（word[3]/[4]/[5]）拿身份 + mesh 组数，一次 `DispatchMesh(meshGroupCount,1,1)` 发完整批；`gcX` 单位改 task（可见 ? 1 : 0）；word[5] `reserved0`→`meshGroupCount`（🔴 用掉 ★M-3 那枚保留 word）；mesh 派发序号回到 `groupID.x`、不再声明 binding 34 | 三锚实测**全部不变**（出厂 `95edc8cc…` / 红线 A `54e40665…` / 门开 = 出厂）；task 数 13684 → 4517（**3.03×**）；syncval 三档 hazard 0。🔴 **负收益如实记**：shadow 段 2.01 → 1.86，残余 +0.35ms 不随 task 数缩放（= amplification 依赖级本身），门保持默认关 | 中 |
 | **★M-3 模型段（阶段 B）** | 🔴 **前置 = 先测 deferred 下真实桶数**（§1.2 的 312 是 2026-09-28 forward+picking 临时档读数，作废待重测）；分桶后按 §3 改 `material.slang` 的 DrawArgs 语义（**不动 DGC 布局**，P3） | 破逐位（P5 门开档）：闭式解对拍 + `diffblock` 形态判据 + 红线 A 主动重锚；门关逐位不变每批重跑 | 高（deferred 5 张 G-buffer，深度平局歧义，§5.5） |
 | **★M-4 GPU 写行表（阶段 C）** | 级联体积测试进 compute、直写 `gcX`（消 CPU 侧 `casterInShadowVolume`）；需要时才付压紧/前缀和那笔（§17.3） | 与 CPU 构建器**逐元素对账**（照 `meshlet_hand` 的"序，不是计数"口径） | 中高 |
 
@@ -2637,3 +2638,101 @@ task 开销直接进 GPU 时间。
 
 **本批只让 shader 在 NV 的规格内**，本机不是 NV ⟹ "NV 上现在能跑 MDI"仍是**推定**，
 要收线必须去 NV 机跑 `--set meshlet.mdi_shadow=true` 的 A3（债-81 的换机面）。
+---
+
+### 19.18 ★M-3T-c 落地：task 从"每 mesh 组一枚"收成"每 draw 一枚"，行寻址整体搬进 task（2026-10-13，机器 = 8060S / RADV STRIX_HALO）
+
+**一句话**：task shader 不再只当中继（★M-3T-a 的"残废形态"），它现在**读行表**拿身份与 mesh 组数、
+一次 `DispatchMesh(meshGroupCount,1,1)` 发完整批 ⟹ 每级联 task 数 **4724 → 1530（3.03×）**，
+而**三枚逐位锚全部不变**（门开 MDI 仍 = 出厂 `95edc8cc…`）。
+
+#### 形态（三处协同，中间态是坏的，故一批做完）
+
+| 处 | 改动 |
+|---|---|
+| 行表 word[0] `gcX` | 🔴 **单位从 mesh 组变成 task**：`可见 ? 1 : 0` |
+| 行表 word[5] | `reserved0` → **`meshGroupCount`**（= `meshletTaskCount(选级后簇数)` 的成品数，**与可见性无关照写**）。🔴 占用了 §19.2 D1 留给 ★M-3 的那枚保留 word ⟹ ★M-3 真要加"材质/顶点块"那一维得把行扩到 32B |
+| task | 读 `row = rowBase(push.word0) + SV_DrawIndex` 的 word[3]/[4]/[5]，payload 只带 `{objectIndex, clusterStart}`，`DispatchMesh(meshGroupCount,…)`。**不再声明 `SV_GroupID`**（每 task 发多组后它恒 0，留着就是死输入） |
+| mesh | 派发序号**回到 `groupID.x`**（spec 语义 = "position within the current mesh task"，取值域 `[0, meshGroupCount)` **逐值等于**旧 mesh 组号）；身份从 payload 取；**不再声明 binding 34** |
+
+两个设计收益比原计划更干净：① mesh 的 `groupID.x` 复活 ⟹ **MDI 与非 MDI 两条路径的算式完全同形**
+（只差身份从 push 还是 payload 来），`half` 那两段 `#ifdef` 直接收成一行；② mesh 不认识行表 ⟹
+**行表契约的 shader 侧拼写从两份收成一份**，§19.16 记的那笔"契约两份拼写"重复顺带消掉。
+🔴 ×2（每簇 2 槽）**仍只拼在 C++ 侧**（`meshletTaskCount`）——行里直接带成品数，task 里不出现 ×2，
+否则就是第三个真相源。
+
+#### 判据（主 agent 亲跑）
+
+| 判据 | 实测 |
+|---|---|
+| 出厂默认 / 门关旧路径（红线 A）/ 门开 MDI | `95edc8cc…` / `54e40665…` / **= 出厂** ✅ 三锚全不变，三次 smoke 均 `warnings=0` |
+| task SPV 接口面 | `BuiltIn DrawIndex` = **1**、`BuiltIn WorkgroupId` = **0**（本批改判据：★M-3T-a 是 2）、`OpEmitMeshTasksEXT` = 1、binding 34 在此侧 |
+| mesh MDI SPV | binding 34 引用 = **0**、入口含 `gl_WorkGroupID` + `mdiPayload` |
+| 测试 | `just test` **422 例 / 94022 断言**（+3 用例）· `just test-all` **460 / 118990，0 skipped** · `checks --strict` 0 警告 |
+| syncval 三档 `cull_replay`（cpu / gpu_sync / gpu_lagged）× 门开 | **hazard 0 条**，三档全 PASS |
+
+#### 收益实测（探针取数，见下）
+
+每级联（真产物 bistro 场景，`mdi.count=3`）：
+
+| 级联 | 行数 | task 数（= 可见行） | 可见行 mesh 组总数 |
+|---|---|---|---|
+| c1 | 1530 | **1530** | 4724 |
+| c2 | 1530 | **1511** | 4636 |
+| c3 | 1530 | **1476** | 4324 |
+| Σ | 4590 | **4517** | **13684** |
+
+⟹ task 数 **13684 → 4517 = 3.03×**（★M-3T-a 形态下 task 数 = mesh 组数）。
+`sumMeshGroupCount`（13684）是**跨形态对账量**：逐条 draw 形态的 Σ groupCount 必须等于它
+（A3 逐位相同是它的图像侧证据）。
+
+#### 🔴 负收益：task 化在 GPU 侧仍是净亏，且残余不随 task 数缩放
+
+同会话、直接消费者 GPU zone（`shadow1/2/3` 合计，口径 → `docs/cpu_perf_plan.md` §1 条 4）：
+
+| 形态 | shadow 合计 | 相对逐条 |
+|---|---|---|
+| 门关（逐条 draw，无 task） | 1.519 / 1.504 | — |
+| 门开 ★M-3T-a（每 mesh 组一枚 task） | ≈2.01（当天早先同机读数） | **+0.50ms** |
+| 门开 ★M-3T-c（每 draw 一枚 task） | **1.851 / 1.864** | **+0.35ms** |
+
+**task 数降 3.03× 只收回 0.15ms**（0.50 → 0.35）。⟹ 残余 0.35ms **不是 task 数量的开销**，而是
+amplification 阶段本身插进了一条**依赖级**（mesh 组必须等它的 task 跑完才能开始），那部分延迟不随
+task 数缩放。结论落定：**本机（GPU-bound）上 MDI+task 的阴影段比逐条 draw 慢 0.35ms**，命令数收益
+（`vkcmd` −68%）只在 CPU-bound 的开发环境（开 VVL）里才可能兑现。
+**门 `meshlet.mdi_shadow` 保持默认关的理由，从"没量过所以不敢开"变成"量过了：GPU 侧净亏"**。
+★M-3T-c 原定的量化目标（"代价应大部分收回"）**没达成**，如实记这条，别读成"再优化一下就好"。
+
+#### 两条被当场抓出的错（都不是渲染错，但都会骗过逐位判据）
+
+1. **`sumMeshGroupCount` 口径写错**：第一版按**全部行**求和。探针一跑发现三档级联这个数一位不变
+   （恒 4724）——因为不可见行的 word[5] 照写。而逐条 draw 形态**不为不可见候选发 draw**，
+   全行求和就不是"与逐条形态相等"的那个对账量了（一个不随可见性动的死数 = 对账价值为零）。
+   改成只累加可见行后读数变成 4724/4636/4324（随可见性动）⟹ 口径修正。**教训**：新加聚合锚
+   必须当场看它**会不会随它声称要反映的那个量动**，不动就是死数。
+2. **收益没有运行期计数器**：`mdi.count` / `mdi.rows` 有，**task 数没有**。本批的头条收益
+   （13684 → 4517）只能靠一次性探针（插日志 → 跑 → 还原）取数。已挂 **债-113**。
+
+#### 测试面（子 agent 执行、主 agent 亲验）
+
+- `just test` 编译不过 = 本批语义改动的**第一个信号**（`reserved0` / `taskCount` 都不存在了）。
+  改名之外真正的语义重写：`reserved0 == 0` 那类"保留位必须为 0"的断言在新语义下是**错的**，
+  换成"word[5] = 候选的 meshGroupCount 且不可见行照写"。
+- 三条新用例：`Σ gcX == rowCount − emptyRows`（3b）· `sumMeshGroupCount` 只算可见行 ·
+  **只换 word[5] 的两行互换**必须红 `invariant 4`（不加这条，"meshGroupCount 进逐元素比对面"
+  这件事没有任何测试守着）。
+- 设备自证回路（`tests/shaders/mdi_shadow_rows.mesh.slang`）自证面从 word[3]/[4] **扩到 word[5]**
+  ——本批起 word[5] 是真载荷（真机上 task 拿它当 `DispatchMesh` 的 X）。
+- 🔴 **tag 公式的单射性不是天生的**：`obj×16 + start×4 + groups` 会进位（groups ≥ 4 吃 start 的位）。
+  主 agent 补机器断言时**当场撞出一格碰撞**：行 A 的 `(obj, groups, obj) = (37,5,37)` 与正确 tag
+  同为 649。那是**两字段同时错位**（不可能是任何单一 bug 的形状），故接受覆盖面 = 单字段错位 +
+  整体错一格 word，并把这条边界**写进断言注释**（换用例取值时断言会响，不会静默）。
+- 变异红线 24 条实跑。**🔴 一条如实申报的存活**：M23（3b 判据短路）红 **0** 条——`validate` 路径上
+  逐行对账（invariant 4）先跑，任何来自候选的表都到不了 3b ⟹ **3b 目前是哨兵不是判据**，
+  专属信号只在构建器自检路径（M20「×2 乘回 gcX」时逐字报 3b）。组合变异 M24（M23+M20）红 10 条
+  ⟹ 哨兵短路不静默。保留 3b 的理由：它是"锚自洽"类判据，若以后有人把 gcX 从逐元素比对面摘掉，
+  它是唯一的兜底。
+
+#### 边界（别读宽）
+
+本机不是 NV ⟹ "NV 上现在能跑 MDI"仍是**推定**（★M-3T-b 拆掉了超规墙，但没人替 NV 跑过 A3）→ 债-81。

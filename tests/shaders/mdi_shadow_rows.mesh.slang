@@ -8,8 +8,9 @@
 //
 // ## 与 mdi_spike.mesh.slang 的区别（为什么要另开一份，而不是给 spike 加个宏）
 //   · 行步长 **24B**（= `RGL::kMdiShadowRowStride`，6 word），spike 那份是 16B 旧形态；
-//   · 载荷 = word[3] `objectIndex` **与** word[4] `clusterStart` **两个**字段（spike 只读一枚 tag）
-//     ⟹ 「字段互换」与「整行读歪」两种坏形态可分辨；
+//   · 载荷 = word[3] `objectIndex` **与** word[4] `clusterStart` **与** word[5] `meshGroupCount`
+//     **三个**字段（spike 只读一枚 tag；🔴 ★M-3T-c 起 word[5] 是真载荷——真机上 task 读它当
+//     `DispatchMesh` 的 X，读歪它 = 发错 mesh 组数）⟹ 「字段互换」与「整行读歪」两种坏形态可分辨；
 //   · 行表是 **ring×2 的一张 buffer**（列数 = sliceRows × slices），于是「帧槽轮转落在偏移上」
 //     这件事本身进了判据面：写 slice 1 的时候 slice 0 的列必须保持哨兵；
 //   · 本用例的 4 行里混一条 `groupCountX = 0` 的孔洞行（§19.2 D4），孔洞列必须空白。
@@ -18,16 +19,18 @@
 //
 // ## 值与列的构造（判据本体）
 //   · **画在哪一列** = `rowBase + SV_DrawIndex`（索引类信息；错 → 整列空白 / 串列）
-//   · **写什么值**   = `objectIndex × 4 + clusterStart`（**同一行**的两个数据字段；错 → 值与列不符）
-// 两者同出一个 `row`，所以「索引坏」与「数据坏」可分辨。`×4` 是因为本探针的期望值与 clear
-// 哨兵 0 天然可辨（C++ 侧手算期望 = tests/test_meshlet_shadow_args.cppm 的 `wantTag`）。
+//   · **写什么值**   = `objectIndex × 16 + clusterStart × 4 + meshGroupCount`（**同一行**的三个
+//     数据字段；错 → 值与列不符）。三个乘数互错开 ⟹ 任一字段读歪一格 tag 必变。`×16/×4` 是为了
+//     本探针的期望值与 clear 哨兵 0 天然可辨（C++ 侧手算期望 = tests/test_meshlet_shadow_args.cppm
+//     的 `wantTag`）。
 //
 // ## 手工同源的常量（🔴 与 C++ 侧改动必须同步，否则列映射整体错位 = 本探针立刻红）
-//   kRowBytes   = 24 = `RGL::kMdiShadowRowStride`
-//   kObjBytes   = 12 = `offsetof(MdiShadowRow, objectIndex)`（word[3]）
-//   kStartBytes = 16 = `offsetof(MdiShadowRow, clusterStart)`（word[4]）
-//   kCols       = 14 = C++ 侧 `kCaseSliceRows(7) × kCaseSlices(2)`（整张行表的行数 = RT 宽）
-// 无反射管线（spike 先例）；C++ 侧用 `static_assert` + 逐列期望把这四个数钉住（见测试文件头）。
+//   kRowBytes        = 24 = `RGL::kMdiShadowRowStride`
+//   kObjBytes        = 12 = `offsetof(MdiShadowRow, objectIndex)`（word[3]）
+//   kStartBytes      = 16 = `offsetof(MdiShadowRow, clusterStart)`（word[4]）
+//   kMeshGroupsBytes = 20 = `offsetof(MdiShadowRow, meshGroupCount)`（word[5]，★M-3T-c 新增）
+//   kCols            = 14 = C++ 侧 `kCaseSliceRows(7) × kCaseSlices(2)`（整张行表的行数 = RT 宽）
+// 无反射管线（spike 先例）；C++ 侧用 `static_assert` + 逐列期望把这五个数钉住（见测试文件头）。
 //
 // ## y 向 / 绕序
 // 每列纵向铺满 [-1,1] ⟹ viewport 的 y 翻向不进判据（对称覆盖，坐标系那条已由 izb_1b 结案）；
@@ -45,6 +48,7 @@ struct ShadowRowsPush
 static const uint kRowBytes = 24u;    // = C++ kMdiShadowRowStride
 static const uint kObjBytes = 12u;    // word[3] = objectIndex
 static const uint kStartBytes = 16u;  // word[4] = clusterStart
+static const uint kMeshGroupsBytes = 20u;  // word[5] = meshGroupCount（★M-3T-c 起是真载荷）
 static const uint kCols = 14u;        // = C++ 侧 sliceRows(7) × slices(2) = 整张行表的行数
 
 struct Vert
@@ -68,6 +72,8 @@ void main(
     const uint row = push.rowBase + drawID;
     const uint obj = args.Load(row * kRowBytes + kObjBytes);
     const uint start = args.Load(row * kRowBytes + kStartBytes);
+    // 🔴 ★M-3T-c：word[5] = meshGroupCount（真机上 task 读它当 DispatchMesh 的 X）——自证面扩到这里
+    const uint groups = args.Load(row * kRowBytes + kMeshGroupsBytes);
 
     // 第 row 列的 NDC 横带（x 左→右，与 framebuffer x 同向，不受 y 翻向影响）
     const float x0 = float(row) * (2.0f / float(kCols)) - 1.0f;
@@ -78,7 +84,7 @@ void main(
     verts[2].position = float4(x1,  1.0f, 0.5f, 1.0f);
     verts[3].position = float4(x0,  1.0f, 0.5f, 1.0f);
     for (uint i = 0u; i < 4u; ++i)
-        verts[i].tag = obj * 4u + start;
+        verts[i].tag = obj * 16u + start * 4u + groups;
 
     triangles[0] = uint3(0u, 1u, 2u);
     triangles[1] = uint3(0u, 2u, 3u);

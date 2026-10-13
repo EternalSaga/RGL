@@ -24,12 +24,21 @@ module;
  *
  * ## 不变量 1/3/4 的反向用例走 `validateMdiShadowRows`，不走构建器（可达性写清楚）
  * 构建器自己产出的行表**按构造**满足 1/3/4（同一趟循环写行与锚）⟹ 那三条在构建器入口上是
- * **哨兵**（防的是"以后有人改坏构建器"，变异 ①②③⑨⑩ 与三条判据短路 ⑤⑦⑧ 实测让它们各自变红）。
+ * **哨兵**（防的是"以后有人改坏构建器"，变异与判据短路让它们各自变红，逐条读数见下方红线表）。
  * 要让它们有**可达的**反向用例，激励必须来自外部：行表 + 候选清单两个入参都是调用方给的
  * （★M-4 的 GPU 行表对账就是这个形态），于是导出的 `validateMdiShadowRows` 是它们真正的入口。
- * 不变量 2 相反——它是
- * **输入**契约，只有构建器判（对账器里同形态由不变量 3 的「空行数 vs 不可见候选数」点名，
- * 那条也配了一条手搭行表的反向用例）。
+ * 不变量 2 相反——它是 **输入**契约，只有构建器判。
+ *
+ * ## 🔴 ★M-3T-c 改判据顺序后的两条**新哨兵**（validate 路径打不到，别把它们读成"没测"）
+ * `validateMdiShadowRows` 的顺序是 行数 → 逐行对账（不变量 4）→ 聚合锚。★M-3T-c 起
+ * `rowFor` 的 gcX 恒 ∈ {0,1}，而不变量 4 逐元素比 gcX ⟹ 凡通过逐行对账的表，
+ * 「可见候选发出空行」与「Σ gcX ≠ rowCount − emptyRows（3b）」**结构上不可达**：
+ *   · 外部表把某行 gcX 改成 2 ⟹ 先被不变量 4 点名（错误串逐字打印 got/want 的 gcX，可归因）；
+ *   · 3b 的专属信号在**构建器路径**：`rowFor` 是构建器与对账器共用的唯一映射公式，
+ *     「有人把 ×2 乘回 gcX」这类变异下逐行对账两边一起变、抓不到，只有 3b 红（红线表 ⑳ 实测）。
+ * 「空行数 vs 不可见候选数」那条分支在**外部表**路径上同理成哨兵；但它**不是纯摆设**——
+ * `rowFor` 级变异（红线表 ④：gcX 恒 1）让两侧一起变、逐行对账与 3b 全部静默，聚合锚里
+ * 唯一出声的就是它（④ 的 10 条读数里有它一份）。
  *
  * ## 🔴 数值纪律：`kMdiShadowRowStride`(=24) 与本文件任何用例的行数/偏移都不相等
  * spike §6.3 的 M4 教训（`test_mdi_drawindex.cppm` 文件头记着全文）：两个数相等 ⟹ 参数序写反
@@ -38,51 +47,75 @@ module;
  * 不作为行数/偏移）。
  * 「stride 与这些数都不相等」本身也钉成断言（`strideDistinctFromCaseNumbers`），凑数即红。
  *
- * ## 变异红线声明（哪个变异让我红；**十三条全部实测** 2026-10-13，编号 = harness 的 M01…M13）
- * 方法学四条防线：备份/还原用 `shutil.copyfile`（**不带 mtime**）+ 还原后 `os.utime` 抬 mtime
- * （🔴 禁 `git checkout`/`git stash`：本批三个新文件是**未跟踪**的，`stash -u` 会把它们一起卷走）、
- * 显式 `cmake --build build --target rgl_tests`（tests/ 是 EXCLUDE_FROM_ALL，`just build` 不编它）
- * 并核对**构建自身**的返回码（构建红 ≠ 判据红，那种读数作废）、每条还原后重跑全量基线断言全绿。
- * 下面「红 N 条」= 该变异下失败的 TEST_CASE 条数（本文件共 **15** 条 TEST_CASE：
- * ★M-0 十一条 + ★M-1a 四条尺寸/偏移算术用例）。
+ * ## 变异红线声明（★M-3T-c 后**全部重新实测** 2026-10-13；编号 = harness 的 M01…M24 / N1…N15，
+ * 旧「十三条」数字全部作废——判据面随语义改判据重写过，旧读数对新判据面没有意义）
+ * 方法学四条防线：备份/还原用 `shutil.copyfile`（**不带 mtime**，抬 mtime 到未来时刻会让 clang
+ * 跳过重编、读到半写 BMI 崩出假构建红）+ 显式 `cmake --build build --target rgl_tests`（tests/ 是
+ * EXCLUDE_FROM_ALL，`just build` 不编它）并核对**构建自身**的返回码（构建红 ≠ 判据红，那种读数
+ * 作废）、每条还原后重跑全量基线断言全绿。🔴 **禁 `git checkout`/`git stash`**：工作树里有主
+ * agent 未提交的改动，任何 git 还原命令都会把它卷走。
+ * 下面「红 N 条」= 该变异下失败的 TEST_CASE 条数（本文件共 **18** 条 TEST_CASE；「+发射 K」=
+ * 同时打到 `test_mdi_shadow_emit.cppm`；「+设备 K」= 同时打到 `test_meshlet_shadow_args.cppm`
+ * 的设备自证用例——同源 pair 是 CPU/GPU 两侧的共用产地）。
  *
- *   ① 压紧不可见行（`out.rows.push_back(row)` 外套 `if (row.groupCountX != 0u)`）→ 红 **8** 条
- *      （正向锚点 + 行序 + 不可见行身份 + Lcg + 前 12B 对账 + inv2 边界 + 两条反向表）
- *   ② 不可见行整行清零（`rowFor` 里不可见即 `return row`，身份字段一起归零）→ 红 **5** 条
- *      （正向锚点 + 不可见行身份 + 行序 + Lcg + 前 12B 对账）。🔴 **不含任何反向用例**：整行清零
- *      仍留 2 条空行 ⟹ 三个聚合锚一位不变，只有逐字段判据（不变量 4）抓得到
- *   ③ 身份字段错位（`row.objectIndex = c.clusterStart`）→ 红 **6** 条（正向锚点 + 行序 +
- *      不可见行身份 + Lcg + 前 12B 对账 + 全部坏形态）
- *   ④ 可见性判据弱化（`c.visible ? c.taskCount : 0u` → 恒 `c.taskCount`）→ 红 **8** 条（同 ①）
+ *   ① 压紧不可见行（`out.rows.push_back(row)` 外套 `if (row.groupCountX != 0u)`）→ 红 **10** 条
+ *      +发射 5（正向锚点 + 行序 + 不可见行身份 + Lcg + 前 12B 对账 + inv2 边界 + 三条反向表 +
+ *      聚合锚诚实）
+ *   ② 不可见行整行清零（`rowFor` 里不可见即 `return row`，身份字段一起归零）→ 红 **7** 条 +发射 3。
+ *      🔴 **不含任何反向用例**：整行清零仍留空行数 ⟹ 四个聚合锚一位不变，只有逐字段判据
+ *      （不变量 4）抓得到
+ *   ③ 身份字段错位（`row.objectIndex = c.clusterStart`）→ 红 **5** 条 +发射 2（正向锚点 + 行序 +
+ *      不可见行身份 + Lcg + 前 12B 对账）
+ *   ④ 🔴 **可见性判据弱化 = gcX 恒 1**（`rowFor` 的 `c.visible ? 1u : 0u` → `1u`，剔除失效）→ 红
+ *      **10** 条 +发射 5。旧红线「`c.visible ? c.taskCount : 0u` → 恒 `c.taskCount`」的判据在新语义
+ *      下**不存在了**——gcX 表达式里已没有可弱化的 mesh 组数因子，这条改钉「恒 1 绕过 0」。
+ *      两侧共用 `rowFor` ⟹ 逐行对账静默、3b 等式仍成立（Σ gcX = 行数 − 空行数），聚合锚里
+ *      **唯一出声的是「空行数 vs 不可见候选数」那条分支**（它不是纯哨兵的实测证据）
  *   ⑤ `rowCount` 锚判据短路（`&& false`）→ 红 **2** 条（全部坏形态 + 两两不同）
  *   ⑥ 🔴 行数判据**弱化**（`rows.size() != candidateCount` → `>`，只挡多行、放过少行）→ 红 **2**
- *      条（全部坏形态 + 两两不同），且**全部来自形态 A′**（该变异下全树仅失败 2 条断言 = A′ 在这
- *      两条用例里各触发一次 `REQUIRE(err.has_value())`）。形态 A（`pop_back` 不重算锚）**抓不到**
- *      它：漏行时姊妹判据 `rowCount != rows.size()` 会出声且归因正确（invariant 1）。⟹ 只有
- *      `badRowDroppedHonestAnchors`（删**最后一行** + 三个锚按剩下的行**重算** + 补进来的候选可见）
- *      把这条弱化变成**完全静默**——同 `test_meshlet_ranges` ⑫ 同型的「弱化不只测删除」缺口
+ *      条，且**全部来自形态 A′**（形态 A 漏行时姊妹判据 `rowCount != rows.size()` 出声且归因正确）。
+ *      ⟹ 只有 `badRowDroppedHonestAnchors`（删**最后一行** + 四个锚按剩下的行**重算** + 补进来的
+ *      候选可见）把这条弱化变成**完全静默**——同 `test_meshlet_ranges` ⑫ 同型的「弱化不只测删除」缺口
  *   ⑦ 空行数锚判据短路 → 红 **2** 条（同 ⑤）
- *   ⑧ 逐行对账判据弱化（比较后恒 `continue`）→ 红 **2** 条（同 ⑤）
- *   ⑨ 构建后按 `objectIndex` 排序（"看着更像序"）→ 红 **8** 条（同 ①）
- *   ⑩ `Σ gcX` 只加可见行（锚与行分家）→ 红 **8** 条（同 ①）
- *   ⑪ 配置解析键名打错（`"mdi_shadow"` → `"_mdi_shadow"`，键被静默忽略）→ 红 **1** 条（配置键
- *      用例的「显式命中」半边）——🔴 探针必须取 **true**（≠ 默认 false）才抓得住：探针取默认同值时
- *      「键没读到」与「读到了默认值」不可区分，该变异会全绿（§18.11 纪律）
+ *   ⑧ 逐行对账判据弱化（整条比较 `|| true` 恒 continue）→ 红 **4** 条（全部坏形态 + 两两不同 +
+ *      两条新哨兵用例）。⚠ 首版写成「去掉 `!empty[i] ||` 短路」是**构建红**（gcX 越界分支变不可达
+ *      ⟹ -Werror unreachable），读数作废；改成 `(...) || true` 形态才拿到判据红
+ *   ⑨ 构建后按 `objectIndex` 排序（"看着更像序"）→ 红 **10** 条 +发射 1（同 ①）
+ *   ⑩ 🔴 **构建器 sumMesh 丢可见性门**（累加式 `row.groupCountX == 0u ? 0u : row.meshGroupCount`
+ *      → 恒 `row.meshGroupCount`）→ 红 **10** 条 +发射 5（同 ①）。这是 ★M-3T-c 把「Σ 只加可见行」
+ *      从 gcX 迁到 meshGroupCount 之后的**新形态**（旧红线 ⑩「Σ gcX 只加可见行」的等价物）
+ *   ⑪ 配置解析键名打错（`"mdi_shadow"` → `"_mdi_shadow"`）→ 红 **1** 条（配置键用例的「显式命中」
+ *      半边；探针必须取 **true** ≠ 默认 false 才抓得住——探针取默认同值时「键没读到」与「读到默认值」
+ *      不可区分，该变异全绿）
  *   ⑫ 配置默认值翻成 true → 红 **1** 条（同一条配置用例，内含 4 处断言失败）
- *   ⑬ 不变量 2 判据短路（`visible && taskCount == 0` → `&& false`）→ 红 **3** 条（inv2 只在构建器
- *      + 全部坏形态 + 两两不同）
+ *   ⑬ 不变量 2 判据短路（`visible && meshGroupCount == 0` → `&& false`）→ 红 **3** 条（inv2 只在
+ *      构建器 + 全部坏形态 + 两两不同）
+ *   ⑳ 🔴 **★M-3T-c 头号回归：×2 乘回 gcX**（`rowFor` 的 `c.visible ? 1u : 0u` → `? 2u : 0u`，
+ *      一个 draw 两枚 task）→ 红 **11** 条 +发射 4。两侧共用 `rowFor` ⟹ 逐行对账静默，构建器
+ *      自检的出声者**逐字是 3b**（错误串见「两条新哨兵」节）——**本表对 ★M-3T-c 最对症的一条**
+ *   ㉑ **不变量 4 丢 meshGroupCount 比对面**（逐元素比较删掉 `meshGroupCount ==` 一项）→ 红 **3**
+ *      条（全部坏形态 + 两两不同 + word[5] 专属用例）。这是 ★M-3T-c 把 word[5] 升为载荷后新增
+ *      比对面的专属信号：没有「只换 word[5]」那条反向用例，此变异只剩聚合锚一条腿
+ *   ㉒ **对账器 sumMesh 重算丢可见性门**（判据侧 `sumMesh += row.meshGroupCount` 全行求和）→ 红
+ *      **10** 条 +发射 5（同 ⑩）。与 ⑩ 是同一判据的**两侧**：⑩ 谎报、㉒ 瞎判；㉒ 单独变异时
+ *      「谎报成全行求和」的反向用例恰好被放行——构建侧与判据侧必须同纪律的实测理由
+ *   ㉓ **不变量 3b 哨兵短路**（validate 的 `sumX != rows.size() − emptyRows` 判据 `&& false`）→
+ *      红 **0** 条 = **存活**。这是**设计使然**，不是缺口：validate 先跑逐行对账，gcX≥2 的外部表
+ *      永远走不到 3b（归因到不变量 4，见「两条新哨兵」节），3b 在外部 validate 路径上是纯哨兵。
+ *      它的**专属信号是构建器自检路径** = ⑳（实测 11 条里含 3b 逐字出声）。组合变异 M24（3b 短路
+ *      **且** ⑳ 的 ×2 乘回）实测仍红 **10** 条 +发射 5——per-row `gcX ≤ 1`（不变量 4 + 发射器
+ *      闭式）独立兜住 task 数语义，哨兵短路不造成静默
  *
- * ### ★M-1a 追加（§19.5 尺寸/偏移算术；harness 编号 N1-N4 / N14-N15，2026-10-13 实测）
- * 四条新判据的专属信号（🔴 每条**同时**打到设备用例——同源 pair 是 CPU/GPU 两侧的共用产地；
- * 设备侧用例名见 `tests/test_meshlet_shadow_args.cppm` 的文件头）：
+ * ### ★M-1a 尺寸/偏移算术追加（harness 编号 N1-N4 / N14-N15，2026-10-13 **全部重测**）
+ * 每条**同时**打到发射器与设备用例（设备侧用例名见 `tests/test_meshlet_shadow_args.cppm` 的文件头）：
  *   ⑭ **N1** `mdiShadowTailBytes` 把 `stride × (drawCount − 1)` 写成 `stride × drawCount`
  *      → 红 **2** 条（`闭式边界` + `Lcg 属性组二`）+ 设备侧 2 条。这正是「`stride × drawCount`
  *      对任何合法输入都 ≤ 容量 ⟹ VUID 判据被读成恒真」的那类写法。
  *   ⑮ **N2** `argsOffset = row × stride + 4`（字节偏移被挪而 `rowBase` 不动 = 两侧分家）
- *      → 红 **4** 条（同源 pair + 容量 + 闭式边界 + Lcg 组二）+ 设备侧 **5** 条全红。
+ *      → 红 **4** 条（同源 pair + 容量 + 闭式边界 + Lcg 组二）+ 发射 2 + 设备侧 **5** 条全红。
  *   ⑯ **N3** `rowBase = frameSlot × sliceRows`（丢掉 `firstRow` 项 = 分家的另一半形态）
  *      → 红 **2** 条（🔴 **只有**同源 pair 与 Lcg 组二：聚合量用例不碰 firstRow，容量用例也不碰）
- *      + 设备侧 4 条。这条是「用例必须钉同源这件事本身」的实测理由。
+ *      + 发射 2 + 设备侧 4 条。这条是「用例必须钉同源这件事本身」的实测理由。
  *   ⑰ **N4** `drawCount == 0` 的尾写成 `argsOffset + stride`（不回绕但多读一整行）
  *      → 红 **1** 条（`闭式边界`）+ 设备侧 1 条。
  *   ⑱ **N14** `mdiShadowArgsCapacityBytes` 漏乘 `slices`（恒取一份 slice）→ 红 **3** 条 + 设备侧 5 条。
@@ -99,7 +132,8 @@ module;
  *     （尾 ≡ 12 (mod 24) 而容量 ≡ 0 (mod 24)）⟹ 那半边从来没牙，已改成无条件两条。
  *
  * ## 已知覆盖缺口（写出来，别让「全绿」被读成「全验过」）
- *   · 真产物对账（1591 候选 × 3 级联的 Σ gcX 闭式锚）不在这里做：本批零消费者，没有真候选序列
+ *   · 真产物对账（1591 候选 × 3 级联的 Σ meshGroupCount 闭式锚；★M-3T-c 起 Σ gcX 退化为
+ *     「可见候选数」的平凡量，跨形态对账量换成了它）不在这里做：本批零消费者，没有真候选序列
  *     可喂（装配层不产它）。★M-1 接上后由启动日志常驻出声（同 `meshlet_lod` 批 B 的裁决）。
  *   · 「GPU 逐行读自己的 groupCountX」是设备级事实，spike 已实测（`per_draw_groupcount`），
  *     本文件只钉字节布局；跨层那一条 = ★M-1 判据 A3/A4。
@@ -117,21 +151,25 @@ namespace {
 /**
  * 正向锚点的候选序列（5 条：3 可见 2 不可见）。
  *
- * 手算期望（出处 = §19.2 D1 的行布局，不抄被测码）：
+ * 手算期望（出处 = §19.2 D1 的行布局 + ★M-3T-c 的 task 化语义，不抄被测码）：
  *
- * | i | objectSlot | taskCount | clusterStart | visible | ⟹ gcX |
+ * | i | objectSlot | meshGroupCount | clusterStart | visible | ⟹ gcX |
  * |---|---|---|---|---|---|
- * | 0 | 7    | 6  | 3    | true  | 6  |
- * | 1 | 21   | 0  | 11   | false | 0  |
- * | 2 | 19   | 9  | 17   | true  | 9  |
- * | 3 | 1000 | 2  | 1001 | false | 0  |
- * | 4 | 3    | 11 | 7    | true  | 11 |
+ * | 0 | 7    | 6  | 3    | true  | 1 |
+ * | 1 | 21   | 0  | 11   | false | 0 |
+ * | 2 | 19   | 9  | 17   | true  | 1 |
+ * | 3 | 1000 | 2  | 1001 | false | 0 |
+ * | 4 | 3    | 11 | 7    | true  | 1 |
  *
- * 聚合锚：Σ gcX = 6+9+11 = **26**；空行数 = **2**；行数 = **5**。
- * 三个设计点：① 候选 1 的 `taskCount = 0` 与候选 3 的 `taskCount = 2` 都是不可见 ⟹ 钉「不可见
- * 时不看 taskCount，`visible = false` 说话」；② 每行 objectSlot ≠ clusterStart（字段互换必红），
- * 而候选 3 的 1000 / 1001 只差 1（写错一位也红）；③ 候选 4 的 objectSlot = 3 与候选 0 的
- * clusterStart = 3 同值 ⟹ 「行内字段错位」与「跨行错位」是两种不同的红，互不掩盖。
+ * 聚合锚：Σ gcX = **3**（每可见行恰一枚 task，恒等于 rowCount − emptyRows = 5 − 2，不变量 3b）；
+ * sumMeshGroupCount = 6+9+11 = **26**（🔴 只算可见行；全行求和是 28，两者不等才有判别力）；
+ * 空行数 = **2**；行数 = **5**。
+ * 四个设计点：① 候选 3 **不可见但 meshGroupCount = 2** ⟹ 钉「word[5] 与可见性无关照写」
+ * （gcX = 0 而 word[5] 非 0 的那一格）；② 候选 4 可见且 meshGroupCount = 11（表内最大）而
+ * gcX 仍是 1 ⟹ 钉「gcX 单位是 task，不再乘 ×2 / 不携带 mesh 组数」；③ 每行 objectSlot ≠
+ * clusterStart（字段互换必红），而候选 3 的 1000 / 1001 只差 1（写错一位也红）；④ 候选 4 的
+ * objectSlot = 3 与候选 0 的 clusterStart = 3 同值 ⟹ 「行内字段错位」与「跨行错位」是两种
+ * 不同的红，互不掩盖。
  */
 const std::vector<MdiShadowCandidate>& anchor() {
 	static const std::vector<MdiShadowCandidate> cands {
@@ -146,21 +184,24 @@ const std::vector<MdiShadowCandidate>& anchor() {
 
 /** 锚点里第 i 条候选**该**发出的行（期望值 = 上面那张表，逐字段独立写死）。 */
 MdiShadowRow expectedRow(size_t i) {
-	static constexpr uint32_t gcX [] { 6u, 0u, 9u, 0u, 11u };
+	// 🔴 ★M-3T-c：gcX 的单位是 **task**（可见 ? 1 : 0），mesh 组数住在 word[5]
+	static constexpr uint32_t gcX [] { 1u, 0u, 1u, 0u, 1u };
 	static constexpr uint32_t obj [] { 7u, 21u, 19u, 1000u, 3u };
 	static constexpr uint32_t start [] { 3u, 11u, 17u, 1001u, 7u };
+	static constexpr uint32_t groups [] { 6u, 0u, 9u, 2u, 11u };  // 与可见性无关照写
 	MdiShadowRow row;
 	row.groupCountX = gcX[i];
 	row.objectIndex = obj[i];
 	row.clusterStart = start[i];
-	return row;  // Y/Z = 1、reserved = 0 由默认成员初始化给（= 契约的一部分，正向用例逐字段钉）
+	row.meshGroupCount = groups[i];
+	return row;  // Y/Z = 1 由默认成员初始化给（= 契约的一部分，正向用例逐字段钉）
 }
 
 /** 逐字段比较（被测结构体不带 operator==；比较器住测试侧，先例 test_meshlet_lod）。 */
 bool rowEq(const MdiShadowRow& a, const MdiShadowRow& b) {
 	return a.groupCountX == b.groupCountX && a.groupCountY == b.groupCountY
 		&& a.groupCountZ == b.groupCountZ && a.objectIndex == b.objectIndex
-		&& a.clusterStart == b.clusterStart && a.reserved0 == b.reserved0;
+		&& a.clusterStart == b.clusterStart && a.meshGroupCount == b.meshGroupCount;
 }
 
 /** 把行表逐行摊成「objectIndex 序列」（行序判据的读图：错位一格立刻看出来）。 */
@@ -217,10 +258,10 @@ MdiShadowRowTable builtAnchor() {
 	return *built;
 }
 
-/** 不变量 2（**构建器路径**）：可见候选 taskCount = 0 —— 上游契约破了，宁可报错也不发空行。 */
+/** 不变量 2（**构建器路径**）：可见候选 meshGroupCount = 0 —— 上游契约破了，宁可报错也不发空行。 */
 std::optional<std::string> badVisibleNoTasks() {
 	std::vector<MdiShadowCandidate> cands = anchor();
-	cands[2].taskCount = 0u;  // 可见 + 零 task
+	cands[2].meshGroupCount = 0u;  // 可见 + 零 mesh 组（🔴 ★M-3T-c 判的是 meshGroupCount，不是 gcX）
 	const auto built = buildMdiShadowRows(cands);
 	return built ? std::nullopt : std::optional<std::string> { built.error() };
 }
@@ -249,10 +290,12 @@ std::optional<std::string> badRowCompacted() {
  *      这件事本身没有专属信号（形态 A `badRowDropped` 就是这个形状，它靠邻居救场）。
  *   ② 删**中间**那一行 ⟹ 后面的行整体前移，出声的是不变量 4（"行 i 不是候选 i"）——实测该形态
  *      下 M06 只红 1 条且点名的是错的不变量。⟹ 必须删**最后一行**，剩下的行才与候选 0..3 对齐。
- * 于是本用例：删最后一行（前提 `anchor()[4].visible`，钉成 REQUIRE）+ 三个锚按剩下的行**重算**
+ * 于是本用例：删最后一行（前提 `anchor()[4].visible`，钉成 REQUIRE）+ 四个锚按剩下的行**重算**
  * + 补进来的候选可见（`emptyRows == 不可见候选数` 仍成立）⟹ 判据面只剩「行数 == 候选数」一条，
  * 弱化即**静默**（skill `rgl-test-discipline`：「变异要测弱化，不只测删除」）。
  * 形态也真实：将来真做压紧的人一定连锚一起重算，不会留着一个谎报的 rowCount。
+ * 🔴 ★M-3T-c 起「诚实重算」多了一枚 `sumMeshGroupCount`（漏了它 ⟹ 出声的是不变量 3 的 mesh 锚
+ * 分支而非行数判据，本用例就白隔离了）。
  */
 std::optional<std::string> badRowDroppedHonestAnchors() {
 	REQUIRE(anchor()[4].visible);  // 前提：末位候选可见 ⟹ 删它那一行不改变「不可见候选数」
@@ -261,12 +304,14 @@ std::optional<std::string> badRowDroppedHonestAnchors() {
 	MdiShadowRowTable table = builtAnchor();
 	table.rows.pop_back();  // 🔴 删**最后一行**：剩下的 4 行仍与候选 0..3 逐位对齐
 	// （删中间行会让后面的行整体错位 ⟹ 出声的是不变量 4「行 i 不是候选 i」，本用例就白写了）
-	// 🔴 三个锚按剩下的行**重算**（诚实）——谎报是形态 C 的职责。
+	// 🔴 四个锚按剩下的行**重算**（诚实）——谎报是形态 C 的职责。
 	table.rowCount = table.rows.size();
 	table.sumGroupCountX = 0u;
+	table.sumMeshGroupCount = 0u;
 	table.emptyRows = 0u;
 	for (const MdiShadowRow& r : table.rows) {
 		table.sumGroupCountX += r.groupCountX;
+		table.sumMeshGroupCount += r.groupCountX == 0u ? 0u : r.meshGroupCount;  // 只算可见行
 		table.emptyRows += r.groupCountX == 0u ? 1u : 0u;
 	}
 	return validateMdiShadowRows(table, cands);
@@ -291,11 +336,13 @@ std::optional<std::string> badEmptyAnchor() {
 	return validateMdiShadowRows(table, anchor());
 }
 /**
- * 不变量 3（**前两条查不到的那格**）：一个可见候选发出了空行，而两个锚都与行数组对得上。
- *
+ * 「可见候选发出空行」——🔴 ★M-3T-c 起这条由**不变量 4** 点名（旧语义下 gcX 可以是 0，
+ * 该形态要走到不变量 3 的「空行数 vs 不可见候选数」分支才出声；新语义下可见候选的 want gcX
+ * 恒 1，got gcX = 0 在逐行对账处当场现形，错误串逐字打印 got/want 的 gcX，归因照样可定位）。
+ * 「空行数 vs 不可见候选数」那条分支由此变成**哨兵**（validate 路径结构上到不了，只有
+ * rowFor 级变异才打到它——见文件头「两条新哨兵」与红线表 ④）。
  * 手搭行表 = 唯一激励（构建器路径下不变量 2 先拦），而 ★M-4 的 GPU 行表正是「行表与候选清单
- * 分别由两个实现产出」的形态 ⟹ 这条不是假想敌。它与「锚谎报」两条合起来把不变量 3 的三个
- * 分支各钉一处（`!=` 弱化成任一半边的变异由逐条独立用例分别按死）。
+ * 分别由两个实现产出」的形态 ⟹ 这条不是假想敌。
  */
 std::optional<std::string> badVisibleEmittedEmptyRow() {
 	const std::vector<MdiShadowCandidate> cands { MdiShadowCandidate { 5u, 0u, 3u, true } };
@@ -305,6 +352,42 @@ std::optional<std::string> badVisibleEmittedEmptyRow() {
 	table.emptyRows = 1u;        // 与行数组对得上
 	table.rowCount = 1u;
 	return validateMdiShadowRows(table, cands);
+}
+/**
+ * 不变量 3b 的期望激励（**外部表**形态）：手工把某行 gcX 改成 2（「一个 draw 发多枚 task」的
+ * 字节形态）。🔴 实测归因（2026-10-13）：validate 先跑逐行对账，而 `rowFor` 永不产出 gcX=2
+ * ⟹ 出声的是不变量 4（错误串逐字打印 got 的 `gcX 2`，可归因）；3b 本体的专属信号在**构建器
+ * 路径**（rowFor 是两侧共用的唯一公式，逐行对账两边一起变抓不到）——红线表 ⑳ 用变异实测。
+ */
+std::optional<std::string> badGcXMultiTask() {
+	MdiShadowRowTable table = builtAnchor();
+	table.rows[2].groupCountX = 2u;  // 一个 draw 发两枚 task（×2 被乘回 gcX 的形态）
+	return validateMdiShadowRows(table, anchor());
+}
+/**
+ * 不变量 3（`sumMeshGroupCount` 谎报成「全行求和」）——🔴 这正是新语义下最容易写错的谎法：
+ * 锚 = 6+0+9+2+11 = 28（把不可见行的 word[5] 也计进来），而判据期望 = 可见行之和 26。
+ * 两数不等 ⟹ 这条反向用例有牙（若锚本来就是全行求和，谎报值 == 诚实值，用例恒真）。
+ */
+std::optional<std::string> badSumMeshAnchorAllRows() {
+	MdiShadowRowTable table = builtAnchor();
+	table.sumMeshGroupCount = 28u;  // 全行求和（正确值 26 = 只算可见行）
+	return validateMdiShadowRows(table, anchor());
+}
+/**
+ * 不变量 4（**word[5] 进了逐元素比对面**的专属激励）：两行只有 meshGroupCount 不同
+ * （gcX 都是 1、objectIndex / clusterStart 相同）⟹ 互换后三个聚合锚一位不变、身份字段
+ * 全对得上——若 meshGroupCount 不在比对面，这个坏形态会**完全静默**。
+ */
+std::optional<std::string> badMeshGroupsSwapped() {
+	const std::vector<MdiShadowCandidate> cands {
+		MdiShadowCandidate { 7u, 6u, 3u, true },
+		MdiShadowCandidate { 7u, 9u, 3u, true },  // 同槽同 start，只有 meshGroupCount 不同
+	};
+	auto built = buildMdiShadowRows(cands);
+	REQUIRE(built.has_value());
+	std::swap(built->rows[0], built->rows[1]);
+	return validateMdiShadowRows(*built, cands);
 }
 /** 不变量 4（序）：两行互换 —— 三个聚合锚**一位不变**，只有逐行判据抓得到。 */
 std::optional<std::string> badRowsSwapped() {
@@ -321,18 +404,22 @@ std::optional<std::string> badIdentityRewritten() {
 
 const std::vector<BadCase>& badCases() {
 	static const std::vector<BadCase> table = {
-		{ "可见候选 taskCount = 0（构建器路径）", badVisibleNoTasks, "invariant 2" },
+		{ "可见候选 meshGroupCount = 0（构建器路径）", badVisibleNoTasks, "invariant 2" },
 		{ "行数组少一行（漏行）", badRowDropped, "invariant 1" },
-		{ "漏行且三个锚全部诚实（只有行数判据抓得到）", badRowDroppedHonestAnchors,
+		{ "漏行且四个锚全部诚实（只有行数判据抓得到）", badRowDroppedHonestAnchors,
 			"but the candidate list holds" },
 		{ "压紧不可见行（行序破了）", badRowCompacted, "invariant 1" },
 		{ "rowCount 锚谎报", badRowCountAnchor, "rowCount says" },
 		{ "sumGroupCountX 锚谎报", badSumAnchor, "sumGroupCountX says" },
+		{ "sumMeshGroupCount 谎报成全行求和", badSumMeshAnchorAllRows, "sumMeshGroupCount says" },
 		{ "emptyRows 锚谎报", badEmptyAnchor, "emptyRows says" },
-		{ "可见候选发出空行（两锚都对得上）", badVisibleEmittedEmptyRow,
-			"a visible candidate emitted an empty row" },
+		{ "可见候选发出空行（★M-3T-c 起由不变量 4 点名）", badVisibleEmittedEmptyRow,
+			"invariant 4" },
 		{ "两行互换（聚合量一位不变）", badRowsSwapped, "invariant 4" },
 		{ "行内身份字段被改写", badIdentityRewritten, "invariant 4" },
+		{ "一个 draw 发多枚 task（gcX 手改成 2）", badGcXMultiTask, "invariant 4" },
+		{ "只有 meshGroupCount 不同的两行互换（word[5] 进比对面）", badMeshGroupsSwapped,
+			"invariant 4" },
 	};
 	return table;
 }
@@ -351,7 +438,7 @@ std::string errorOf(const BadCase& bad) {
 // 正向锚点（期望值 = 上面那张手算表）
 // ─────────────────────────────────────────────────────────────────────────────
 
-TEST_CASE("正向锚点：五行候选的行数组逐字段 + 三个聚合锚等于手算常量") {
+TEST_CASE("正向锚点：五行候选的行数组逐字段 + 四个聚合锚等于手算常量") {
 	const auto built = buildMdiShadowRows(anchor());
 	REQUIRE(built.has_value());
 	REQUIRE(built->rows.size() == 5u);  // 前提守卫：下面的逐行遍历不能是空遍历
@@ -362,20 +449,26 @@ TEST_CASE("正向锚点：五行候选的行数组逐字段 + 三个聚合锚等
 		// 一个把两个字段同时写歪的变异可能撞上另一个用例，失败信息也指不到字段名）
 		CHECK(built->rows[i].groupCountY == 1u);   // 恒 1（一维派发）
 		CHECK(built->rows[i].groupCountZ == 1u);   // 恒 1（一维派发）
-		CHECK(built->rows[i].reserved0 == 0u);     // 保留位恒 0（★M-3 才启用）
+		// 🔴 ★M-3T-c：word[5] 不再是保留位，= 候选带来的 meshGroupCount（不可见行也照写）
+		CHECK(built->rows[i].meshGroupCount == anchor()[i].meshGroupCount);
 		CHECK(built->rows[i].objectIndex == anchor()[i].objectSlot);
 		CHECK(built->rows[i].clusterStart == anchor()[i].clusterStart);
 	}
-	CHECK(built->sumGroupCountX == 26u);  // 6+9+11
+	CHECK(built->sumGroupCountX == 3u);   // 🔴 task 数 = 可见行数（1+1+1），不再是 mesh 组数 26
+	CHECK(built->sumMeshGroupCount == 26u);  // 🔴 6+9+11（只算可见行；全行求和是 28）
 	CHECK(built->emptyRows == 2u);        // 候选 1、3
 	CHECK(built->rowCount == 5u);
+	// 🔴 不变量 3b（★M-3T-c 新契约）：Σ gcX == rowCount − emptyRows（每可见行恰一枚 task）
+	CHECK(built->sumGroupCountX == built->rowCount - built->emptyRows);
 	// 自洽契约：锚 == 逐行独立重算（★M-1 的 mdi.count / mdi.rows 直接取这两个锚，分家 = 收益判据读错臂）
-	uint64_t sum = 0, empty = 0;
+	uint64_t sum = 0, sumMesh = 0, empty = 0;
 	for (const MdiShadowRow& r : built->rows) {
 		sum += r.groupCountX;
+		sumMesh += r.groupCountX == 0u ? 0u : r.meshGroupCount;  // 只累加可见行
 		empty += r.groupCountX == 0u ? 1u : 0u;
 	}
 	CHECK(built->sumGroupCountX == sum);
+	CHECK(built->sumMeshGroupCount == sumMesh);
 	CHECK(built->emptyRows == empty);
 	CHECK(built->rowCount == built->rows.size());
 	// 构建器返回前自检过 ⟹ 对外再验一次必须自洽（同一份判据，两处调用点必须同结论）
@@ -401,7 +494,8 @@ TEST_CASE("🔴 行序 = 候选序：换三种顺序 ⟹ 行数组逐元素跟�
 			CHECK(rowEq(built->rows[i], expectedRow(order[i])));
 		}
 		// 聚合量与序无关（这三条**不是**行序判据，写在这里是为了让「只有逐行断言抓得到」可读）
-		CHECK(built->sumGroupCountX == 26u);
+		CHECK(built->sumGroupCountX == 3u);      // task 数（可见行数）
+		CHECK(built->sumMeshGroupCount == 26u);  // 可见行 mesh 组数
 		CHECK(built->emptyRows == 2u);
 		CHECK(built->rowCount == 5u);
 		seen.push_back(objectIndexSequence(*built));
@@ -412,7 +506,7 @@ TEST_CASE("🔴 行序 = 候选序：换三种顺序 ⟹ 行数组逐元素跟�
 	CHECK_FALSE(seen[1] == seen[2]);
 }
 
-TEST_CASE("不可见行：gcX = 0 而 objectIndex / clusterStart 照写（红了要能定位是哪一行）") {
+TEST_CASE("不可见行：gcX = 0 而 objectIndex / clusterStart / meshGroupCount 照写（红了要能定位是哪一行）") {
 	const auto built = buildMdiShadowRows(anchor());
 	REQUIRE(built.has_value());
 	REQUIRE(built->rows.size() == 5u);
@@ -427,16 +521,22 @@ TEST_CASE("不可见行：gcX = 0 而 objectIndex / clusterStart 照写（红了
 		CHECK(built->rows[i].clusterStart == c.clusterStart);
 		CHECK(built->rows[i].groupCountY == 1u);
 		CHECK(built->rows[i].groupCountZ == 1u);
-		CHECK(built->rows[i].reserved0 == 0u);
+		// 🔴 ★M-3T-c：word[5] 是**载荷**不是保留位，且**与可见性无关照写**（候选 3 不可见而
+		// meshGroupCount = 2 —— 这一格钉的就是「不可见行 word[5] 非 0」；task 只在 gcX=1 才读它，
+		// 但红了要能定位是哪一行）
+		CHECK(built->rows[i].meshGroupCount == c.meshGroupCount);
 	}
-	// 候选 1 不可见且 taskCount = 0、候选 3 不可见但 taskCount = 2 ⟹ 两条同读数（visible 说话，
-	// 不可见时**不看** taskCount；调用方不必特意清零）
+	// 候选 1 不可见且 meshGroupCount = 0、候选 3 不可见但 meshGroupCount = 2 ⟹ 两条 gcX 同读数
+	// （visible 说话，不可见时**不看** meshGroupCount；调用方不必特意清零），而 word[5] 读数不同
 	CHECK(built->rows[1].groupCountX == 0u);
 	CHECK(built->rows[3].groupCountX == 0u);
-	// 反向半边：可见候选的 taskCount 必须**原样**进 gcX（不多不少，尤其不乘任何槽数）
-	CHECK(built->rows[0].groupCountX == anchor()[0].taskCount);
-	CHECK(built->rows[2].groupCountX == anchor()[2].taskCount);
-	CHECK(built->rows[4].groupCountX == anchor()[4].taskCount);
+	CHECK(built->rows[3].meshGroupCount == 2u);  // 🔴 不可见行的 word[5] 不是 0
+	// 反向半边：可见行的 gcX **恒 1**（meshGroupCount 再大也不进 gcX——候选 4 的 11 是最强探针；
+	// 🔴 旧断言「taskCount 原样进 gcX」在新语义下是**错**的，单位已经从 mesh 组换成 task）
+	CHECK(built->rows[0].groupCountX == 1u);
+	CHECK(built->rows[2].groupCountX == 1u);
+	CHECK(built->rows[4].groupCountX == 1u);
+	CHECK(built->rows[4].meshGroupCount == 11u);  // mesh 组数住在 word[5]，不在 gcX
 }
 
 TEST_CASE("🔴 前 12B 逐字段对账 VkDrawMeshTasksIndirectCommandEXT（rlbase 不能 import rlvk 的第二钉）") {
@@ -455,29 +555,95 @@ TEST_CASE("🔴 前 12B 逐字段对账 VkDrawMeshTasksIndirectCommandEXT（rlba
 		"shader reads word[3] = byte offset 12 (objectIndex)");
 	static_assert(offsetof(MdiShadowRow, clusterStart) == 16,
 		"shader reads word[4] = byte offset 16 (clusterStart)");
-	static_assert(offsetof(MdiShadowRow, reserved0) == 20, "reserved word must be word[5] of 24B");
+	static_assert(offsetof(MdiShadowRow, meshGroupCount) == 20,
+		"task reads word[5] = byte offset 20 (meshGroupCount, ★M-3T-c 起是真载荷)");
 
 	const auto built = buildMdiShadowRows(anchor());
 	REQUIRE(built.has_value());
 	REQUIRE(built->rows.size() == 5u);
 	for (size_t i = 0; i < built->rows.size(); ++i) {
 		INFO("行 ", i);
-		// 前 12B 拷进真结构体 ⟹ 逐字段必须等于候选的 (taskCount|0, 1, 1)
+		// 前 12B 拷进真结构体 ⟹ 逐字段必须等于 (可见 ? 1 : 0, 1, 1)（🔴 ★M-3T-c：gcX 单位 = task）
 		VkDrawMeshTasksIndirectCommandEXT cmd {};
 		std::memcpy(&cmd, &built->rows[i], sizeof(cmd));
-		const uint32_t wantX = anchor()[i].visible ? anchor()[i].taskCount : 0u;
+		const uint32_t wantX = anchor()[i].visible ? 1u : 0u;
 		CHECK(cmd.groupCountX == wantX);
 		CHECK(cmd.groupCountY == 1u);
 		CHECK(cmd.groupCountZ == 1u);
-		// 后 12B：word[3]/word[4] 是 shader 直读的两个索引，word[5] 保留
+		// 后 12B：word[3]/word[4] 是 shader 直读的两个索引，word[5] = meshGroupCount（task 拿去当
+		// DispatchMesh 的 X；真机上它已被设备读取，不再是「保留、恒 0」）
 		const auto* words = reinterpret_cast<const uint32_t*>(&built->rows[i]);
-		CHECK(words[3] == anchor()[i].objectSlot);   // 不是 taskCount（字段互换的变异在这里红）
+		CHECK(words[3] == anchor()[i].objectSlot);   // 不是 meshGroupCount（字段互换的变异在这里红）
 		CHECK(words[4] == anchor()[i].clusterStart);
-		CHECK(words[5] == 0u);
+		CHECK(words[5] == anchor()[i].meshGroupCount);  // 不可见行也照写（候选 3 = 2）
 	}
 	// 行表是**连续**的 24B 行（★M-1 直接把 rows.data() memcpy 进 ring buffer，按 stride 逐行跳）
 	CHECK(sizeof(MdiShadowRow) == kMdiShadowRowStride);
 	CHECK(&built->rows[4] - &built->rows[0] == 4);  // 相邻行无 padding（指针差按元素算）
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ★M-3T-c 三条新契约（task 化 gcX / 可见行对账量 / word[5] 进比对面）
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST_CASE("🔴 3b task 数：Σ gcX == rowCount − emptyRows（每可见行恰一枚 task）+ 反向 gcX=2 必报") {
+	const auto built = buildMdiShadowRows(anchor());
+	REQUIRE(built.has_value());
+	// 正向逐行半边：gcX ∈ {0,1}（「一个 draw 一枚 task」的字节形态；×2 若被乘回 gcX 红在这里）
+	for (size_t i = 0; i < built->rows.size(); ++i) {
+		INFO("行 ", i);
+		CHECK(built->rows[i].groupCountX <= 1u);
+	}
+	// 正向聚合半边：期望值出处 = 手算表（3 枚可见行 × 1 = 3 = 5 − 2），不取被测锚互证
+	CHECK(built->sumGroupCountX == 3u);
+	CHECK(built->sumGroupCountX == built->rowCount - built->emptyRows);
+	// 反向：手工把行 2 的 gcX 改成 2（「一个 draw 发多枚 task」的字节形态）⟹ validate 必须红。
+	// 🔴 归因实测（2026-10-13）：validate 先跑逐行对账而 rowFor 永不产出 gcX=2 ⟹ 出声的是
+	// 不变量 4，错误串逐字打印 got 的 `gcX 2`（可归因）；3b 本体的专属信号在构建器路径
+	// （rowFor 两侧共用、逐行对账抓不到自己的公式），见文件头红线表 ⑳ 的实测错误串。
+	const std::optional<std::string> err = badGcXMultiTask();
+	REQUIRE(err.has_value());
+	CHECK(err->find("mdi rows: invariant") != std::string::npos);
+	CHECK(err->find("gcX 2") != std::string::npos);  // 错误串点名了那枚 2
+}
+
+TEST_CASE("sumMeshGroupCount 只算可见行（跨形态对账量）+ 反向：谎报成全行求和必报") {
+	const auto built = buildMdiShadowRows(anchor());
+	REQUIRE(built.has_value());
+	// 正向：期望 = 可见行（0、2、4）的 6+9+11 = 26；全行求和 = 28（候选 3 不可见而 word[5]=2）。
+	// 🔴 两个数**不相等**才是判别力：实现若全行求和会得 28，第一条断言当场红。
+	CHECK(built->sumMeshGroupCount == 26u);
+	CHECK(built->sumMeshGroupCount != 28u);
+	// 激励本身就在锚点表里：不可见行的 word[5] 照写（2）但不进对账量
+	CHECK(built->rows[3].groupCountX == 0u);
+	CHECK(built->rows[3].meshGroupCount == 2u);
+	// 反向：把锚谎报成全行求和（28）⟹ 不变量 3 的 sumMeshGroupCount 分支点名
+	const std::optional<std::string> err = badSumMeshAnchorAllRows();
+	REQUIRE(err.has_value());
+	CHECK(err->find("sumMeshGroupCount says") != std::string::npos);
+}
+
+TEST_CASE("🔴 meshGroupCount 进不变量 4 的逐元素比对面：只换 word[5] 的两行互换必须红") {
+	// 两行可见候选：gcX 都是 1、objectIndex / clusterStart 相同，只有 meshGroupCount 不同（6/9）
+	// ⟹ 互换后三个聚合锚一位不变、gcX 与身份字段全对得上——word[5] 若不在比对面，这个坏形态
+	// 会**完全静默**（本批把 meshGroupCount 加进比对面这件事就没有任何测试守着）。
+	const std::vector<MdiShadowCandidate> cands {
+		MdiShadowCandidate { 7u, 6u, 3u, true },
+		MdiShadowCandidate { 7u, 9u, 3u, true },
+	};
+	const auto built = buildMdiShadowRows(cands);
+	REQUIRE(built.has_value());
+	MdiShadowRowTable swapped = *built;
+	std::swap(swapped.rows[0], swapped.rows[1]);
+	// 前提守卫：锚随表原样带走，而互换确实动不了它们（两行 gcX 都是 1、求和与序无关）
+	CHECK(swapped.sumGroupCountX == built->sumGroupCountX);
+	CHECK(swapped.sumMeshGroupCount == built->sumMeshGroupCount);
+	CHECK(swapped.emptyRows == built->emptyRows);
+	const auto err = validateMdiShadowRows(swapped, cands);
+	REQUIRE(err.has_value());
+	INFO("错误串：", *err);
+	CHECK(err->find("invariant 4") != std::string::npos);
+	CHECK(err->find("meshGroupCount") != std::string::npos);  // 错误串要能点名 word[5]（可归因）
 }
 
 TEST_CASE("stride 合法性（VUID-07088：4 的倍数且 ≥ 12）+ 🔴 与用例里的行数/偏移都不相等") {
@@ -492,6 +658,7 @@ TEST_CASE("stride 合法性（VUID-07088：4 的倍数且 ≥ 12）+ 🔴 与用
 		5u, 3u, 1u,               // 用例里的行数 / 候选数
 		3u, 11u, 17u, 1001u, 7u,  // 用例里的 clusterStart（偏移）
 		0u, 4u, 8u, 12u, 16u, 20u,  // 用例里的字节偏移
+		26u, 28u,                 // ★M-3T-c 的聚合锚（可见行和 / 全行和——两者都别撞上 24）
 		// ★M-1a 尺寸算术用例的输入与读数（🔴 同一条纪律：pair 的两个成员与 stride 相等时，
 		// 「偏移↔行号互换」「乘 sliceRows 还是乘 slices」这类写反都测不出东西）
 		2u, 7u, 10u, 5u, 72u, 192u, 168u, 240u, 336u, 324u, 4773u, 8u, 1u, 0u
@@ -507,6 +674,7 @@ TEST_CASE("边界：空候选序列 = 合法空表（不是错误），且对账
 	REQUIRE(built.has_value());
 	CHECK(built->rows.empty());
 	CHECK(built->sumGroupCountX == 0u);
+	CHECK(built->sumMeshGroupCount == 0u);
 	CHECK(built->emptyRows == 0u);
 	CHECK(built->rowCount == 0u);
 	CHECK_FALSE(validateMdiShadowRows(*built, {}).has_value());
@@ -519,7 +687,7 @@ TEST_CASE("边界：空候选序列 = 合法空表（不是错误），且对账
 // ─────────────────────────────────────────────────────────────────────────────
 
 TEST_CASE("反向：全部坏形态各自报出自己的不变量（关键词逐条钉死）") {
-	REQUIRE(badCases().size() == 10u);  // 前提守卫：表被删空 = 下面的遍历恒真是假绿
+	REQUIRE(badCases().size() == 13u);  // 前提守卫：表被删空 = 下面的遍历恒真是假绿
 	for (const BadCase& bad : badCases()) {
 		const std::string err = errorOf(bad);
 		INFO("坏形态：", bad.name, " 错误串：", err);
@@ -528,18 +696,20 @@ TEST_CASE("反向：全部坏形态各自报出自己的不变量（关键词逐
 	}
 }
 
-TEST_CASE("反向：十条错误串两两不同（可归因判据本身也要有牙）") {
+TEST_CASE("反向：十三条错误串两两不同（可归因判据本身也要有牙）") {
 	std::vector<std::string> errors;
 	errors.reserve(badCases().size());
 	for (const BadCase& bad : badCases())
 		errors.push_back(errorOf(bad));
-	REQUIRE(errors.size() == 10u);
+	REQUIRE(errors.size() == 13u);
 	for (size_t i = 0; i < errors.size(); ++i)
 		for (size_t j = i + 1; j < errors.size(); ++j) {
 			INFO("错误串 ", i, " 与 ", j, " 相同：", errors[i]);
 			CHECK_FALSE(errors[i] == errors[j]);
 		}
-	// 四条不变量各至少出现一次（只钉「两两不同」会让「四条其实只实现了一条」照样绿）
+	// 五条不变量各至少出现一次（只钉「两两不同」会让「几条其实只实现了一条」照样绿；
+	// 🔴 3b 不在其列——它在 validate 路径是哨兵（文件头「两条新哨兵」），可达激励全被不变量 4
+	// 先接住，其本体由红线表 ⑳ 的构建器路径变异实测，不在此凑数）
 	for (const char* prefix : { "invariant 1", "invariant 2", "invariant 3", "invariant 4" }) {
 		INFO("缺少不变量：", prefix);
 		CHECK(std::ranges::any_of(errors,
@@ -547,29 +717,32 @@ TEST_CASE("反向：十条错误串两两不同（可归因判据本身也要有
 	}
 }
 
-TEST_CASE("反向：不变量 2 只在构建器判（对账器不重复判输入契约），且不可见候选的 taskCount 不被看") {
-	// 半边 A：可见 + 零 task ⟹ 构建器拒绝（宁可报错也不发一条「可见但零 task」的行）
+TEST_CASE("反向：不变量 2 只在构建器判（对账器不重复判输入契约），且不可见候选的 meshGroupCount 不被看") {
+	// 半边 A：可见 + 零 mesh 组 ⟹ 构建器拒绝（宁可报错也不发一条 DispatchMesh(0) 的空 task；
+	// 🔴 ★M-3T-c 判的是 meshGroupCount——可见行 gcX 恒 1，坏上游在 gcX 上完全看不出来）
 	std::vector<MdiShadowCandidate> cands = anchor();
-	cands[4].taskCount = 0u;
+	cands[4].meshGroupCount = 0u;
 	const auto bad = buildMdiShadowRows(cands);
 	REQUIRE_FALSE(bad.has_value());
 	CHECK(bad.error().find("invariant 2") != std::string::npos);
-	CHECK(bad.error().find("visible with taskCount 0") != std::string::npos);
-	// 半边 B：不可见 + 零 task ⟹ 合法（**不许**把它也当错误：那是把「不可见」读成「上游坏了」）
+	CHECK(bad.error().find("visible with meshGroupCount 0") != std::string::npos);
+	// 半边 B：不可见 + 零 mesh 组 ⟹ 合法（**不许**把它也当错误：那是把「不可见」读成「上游坏了」）
 	std::vector<MdiShadowCandidate> okInvisible = anchor();
-	okInvisible[1].taskCount = 0u;
+	okInvisible[1].meshGroupCount = 0u;
 	okInvisible[1].visible = false;
 	const auto ok = buildMdiShadowRows(okInvisible);
 	REQUIRE(ok.has_value());
 	CHECK(ok->rows[1].groupCountX == 0u);
-	// 半边 C：不可见 + **非零** task ⟹ 同样合法（gcX 仍是 0；调用方不必特意清零）
+	// 半边 C：不可见 + **非零** mesh 组 ⟹ 同样合法（gcX 仍是 0、word[5] 照写 77；调用方不必清零）
 	std::vector<MdiShadowCandidate> okNonZero = anchor();
-	okNonZero[1].taskCount = 77u;
+	okNonZero[1].meshGroupCount = 77u;
 	okNonZero[1].visible = false;
 	const auto ok2 = buildMdiShadowRows(okNonZero);
 	REQUIRE(ok2.has_value());
 	CHECK(ok2->rows[1].groupCountX == 0u);
-	CHECK(ok2->sumGroupCountX == 26u);  // 77 不进 Σ（不可见 ⟹ gcX 0）
+	CHECK(ok2->rows[1].meshGroupCount == 77u);   // 与可见性无关照写
+	CHECK(ok2->sumGroupCountX == 3u);            // 不可见 ⟹ gcX 0，不进 Σ task
+	CHECK(ok2->sumMeshGroupCount == 26u);        // 🔴 77 也不进对账量（不可见行不计）
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -738,10 +911,10 @@ TEST_CASE("Lcg 属性组（种子 20261013）：随机候选序列的闭式契�
 		for (size_t i = 0; i < n; ++i) {
 			MdiShadowCandidate c;
 			c.objectSlot = static_cast<uint32_t>(rng.uniformInt(0, 4000));
-			// 可见候选的 taskCount 必须 > 0（不变量 2 的定义域）；不可见的故意给 0..4000 两态
+			// 可见候选的 meshGroupCount 必须 > 0（不变量 2 的定义域）；不可见的故意给 0..4000 两态
 			const bool visible = rng.uniformInt(0, 1) == 1;
-			c.taskCount = static_cast<uint32_t>(visible ? rng.uniformInt(1, 4000)
-			                                            : rng.uniformInt(0, 4000));
+			c.meshGroupCount = static_cast<uint32_t>(visible ? rng.uniformInt(1, 4000)
+			                                                 : rng.uniformInt(0, 4000));
 			c.clusterStart = static_cast<uint32_t>(rng.uniformInt(0, 4000));
 			c.visible = visible;
 			cands.push_back(c);
@@ -753,31 +926,36 @@ TEST_CASE("Lcg 属性组（种子 20261013）：随机候选序列的闭式契�
 		if (n > 0)
 			++nonEmpty;
 
-		// ① 行数 == 候选数 + 逐行闭式期望（gcX = visible ? taskCount : 0，身份字段照抄）
+		// ① 行数 == 候选数 + 逐行闭式期望（🔴 ★M-3T-c：gcX = visible ? 1 : 0，身份字段与
+		// meshGroupCount 照抄——word[5] 与可见性无关）
 		REQUIRE(built->rows.size() == n);
-		uint64_t wantSum = 0, wantEmpty = 0;
+		uint64_t wantSum = 0, wantMeshSum = 0, wantEmpty = 0;
 		for (size_t i = 0; i < n; ++i) {
 			const MdiShadowRow& r = built->rows[i];
 			const MdiShadowCandidate& c = cands[i];
-			const uint32_t wantX = c.visible ? c.taskCount : 0u;
+			const uint32_t wantX = c.visible ? 1u : 0u;
 			INFO("iter ", iter, " 行 ", i);
 			CHECK(r.groupCountX == wantX);
 			CHECK(r.objectIndex == c.objectSlot);
 			CHECK(r.clusterStart == c.clusterStart);
+			CHECK(r.meshGroupCount == c.meshGroupCount);
 			CHECK(r.groupCountY == 1u);
 			CHECK(r.groupCountZ == 1u);
-			CHECK(r.reserved0 == 0u);
 			wantSum += wantX;
+			wantMeshSum += wantX == 0u ? 0u : c.meshGroupCount;  // 只算可见行
 			wantEmpty += wantX == 0u ? 1u : 0u;
 		}
 		// ② 聚合锚 == 独立重算（期望值出处 = 上面那份闭式 wantX，不是被测累加器）
 		CHECK(built->sumGroupCountX == wantSum);
+		CHECK(built->sumMeshGroupCount == wantMeshSum);
 		CHECK(built->emptyRows == wantEmpty);
 		CHECK(built->rowCount == n);
+		// 🔴 不变量 3b 的随机形态读数：每可见行恰一枚 task（wantSum 由 wantX 独立累加）
+		CHECK(built->sumGroupCountX == built->rowCount - built->emptyRows);
 		// ③ 构建器产物必过对账（同一份判据的两个调用点）
 		CHECK_FALSE(validateMdiShadowRows(*built, cands).has_value());
 
-		// ④ 打乱输入 ⟹ 行数组按同一置换重排，而三个聚合锚**不变**（序是契约、聚合量不是）
+		// ④ 打乱输入 ⟹ 行数组按同一置换重排，而聚合锚**不变**（序是契约、聚合量不是）
 		if (n >= 2u) {
 			std::vector<size_t> order(n);
 			for (size_t i = 0; i < n; ++i)
@@ -797,6 +975,7 @@ TEST_CASE("Lcg 属性组（种子 20261013）：随机候选序列的闭式契�
 			REQUIRE(shuf.has_value());
 			CHECK(objectIndexSequence(*shuf) == wantOrder);
 			CHECK(shuf->sumGroupCountX == built->sumGroupCountX);
+			CHECK(shuf->sumMeshGroupCount == built->sumMeshGroupCount);
 			CHECK(shuf->emptyRows == built->emptyRows);
 			CHECK(shuf->rowCount == built->rowCount);
 		}

@@ -15,44 +15,51 @@ namespace {
  */
 constexpr const char* kInv1RowCount = "mdi rows: invariant 1 (one row per candidate)";
 constexpr const char* kInv2VisibleTasks =
-	"mdi rows: invariant 2 (a visible candidate carries tasks)";
+	"mdi rows: invariant 2 (a visible candidate carries mesh groups)";
 constexpr const char* kInv3Anchors =
 	"mdi rows: invariant 3 (aggregate anchors agree with the rows)";
+constexpr const char* kInv3bTaskPerRow = "mdi rows: invariant 3b (one task per visible row)";
 constexpr const char* kInv4RowOrder = "mdi rows: invariant 4 (row i is candidate i)";
 
 /**
  * 候选 → 行的**唯一**映射公式（构建器写行、对账器算期望，两边共用这一份）。
  *
- * 两处各写一遍迟早漂（漂成「构建器写 gcX=0 而对账器期望 gcX=taskCount」时，对账恰好失去意义），
- * 所以公式只住这里。两条口径都在这一行上：
- *  · `groupCountX` = 可见 ? taskCount : 0（不可见 = GPU 空转，spike 的 `zero_groupcount_noop`
- *    实测 0 计数**不跳号** ⟹ 不压紧、不 atomic，§19.2 D4）；
- *  · 身份字段（objectIndex / clusterStart）**与可见性无关**，不可见行照写（红了要能定位是哪一行）。
- * 🔴 这里不出现 task 槽数：`taskCount` 是调用方算好的成品数（唯一真相源 = meshletTaskCount）。
+ * 两处各写一遍迟早漂（漂成「构建器写 gcX=0 而对账器期望 gcX=meshGroupCount」时，对账恰好失去
+ * 意义），所以公式只住这里。三条口径都在这一行上：
+ *  · `groupCountX` = 可见 ? 1 : 0（🔴 ★M-3T-c：**单位是 task，不是 mesh 组**——一个 draw 发一枚
+ *    task，由它 `DispatchMesh(meshGroupCount, …)` 发全部 mesh 组。不可见 = 0 枚 task，GPU 空转，
+ *    spike 的 `zero_groupcount_noop` 实测 0 计数**不跳号** ⟹ 不压紧、不 atomic，§19.2 D4）；
+ *  · `meshGroupCount` **与可见性无关**照写（task 只在 gcX=1 时才读它，但红了要能定位是哪一行）；
+ *  · 身份字段（objectIndex / clusterStart）同样与可见性无关。
+ * 🔴 这里不出现 mesh 组槽数：`meshGroupCount` 是调用方算好的成品数（唯一真相源 = meshletTaskCount）。
  */
 MdiShadowRow rowFor(const MdiShadowCandidate& c) {
-	MdiShadowRow row;  // Y/Z = 1、保留 word = 0 由默认成员初始化给（接口文件）
-	row.groupCountX = c.visible ? c.taskCount : 0u;
+	MdiShadowRow row;  // Y/Z = 1 由默认成员初始化给（接口文件）
+	row.groupCountX = c.visible ? 1u : 0u;
 	row.objectIndex = c.objectSlot;
 	row.clusterStart = c.clusterStart;
+	row.meshGroupCount = c.meshGroupCount;
 	return row;
 }
 
 /**
- * 不变量 2：**可见**候选的 `taskCount > 0`（输入契约，只有构建器判——对账器的输入是「已建好的
- * 行表」，那里同样的坏形态由不变量 3 的「空行数 vs 不可见候选数」点名）。
+ * 不变量 2：**可见**候选的 `meshGroupCount > 0`（输入契约，只有构建器判——对账器的输入是「已建好
+ * 的行表」，那里同样的坏形态由不变量 3 的「空行数 vs 不可见候选数」点名）。
+ *
+ * 🔴 ★M-3T-c 起这条**不能**改成判 `groupCountX`：可见行的 gcX 恒 1，坏上游（选级表 count 为 0）
+ * 在 gcX 上完全看不出来，只有 meshGroupCount 会露出 0。
  *
  * 为什么宁可报错也不发一条 `gcX = 0` 的行：可见候选发空行 = 那块几何**该投影却没投**，而阴影图
  * 少一块影子在截图上完全可能没人看出来；报错让上游（LOD 选级表 count 为 0 却仍判可见 /
- * meshletTaskCount 被喂 0）当场现形。不可见候选的 `taskCount` 是 0 还是非 0 都不看（调用方
+ * meshletTaskCount 被喂 0）当场现形。不可见候选的 `meshGroupCount` 是 0 还是非 0 都不看（调用方
  * 不必特意清零，`visible = false` 说话）。
  */
 std::optional<std::string> checkVisibleTasks(std::span<const MdiShadowCandidate> cands) {
 	for (size_t i = 0; i < cands.size(); ++i)
-		if (cands[i].visible && cands[i].taskCount == 0u)
+		if (cands[i].visible && cands[i].meshGroupCount == 0u)
 			return fmt::format(
-				"{}: candidate {} (objectSlot {}) is visible with taskCount 0 — refusing to "
-				"emit a row that draws nothing (upstream contract broken)",
+				"{}: candidate {} (objectSlot {}) is visible with meshGroupCount 0 — refusing to "
+				"emit a row whose task would DispatchMesh(0) (upstream contract broken)",
 				kInv2VisibleTasks, i, cands[i].objectSlot);
 	return std::nullopt;
 }
@@ -92,13 +99,15 @@ std::optional<std::string> checkRowOrder(
 		const MdiShadowRow want = rowFor(cands[i]);
 		const MdiShadowRow& got = table.rows[i];
 		if (got.groupCountX == want.groupCountX && got.objectIndex == want.objectIndex
-			&& got.clusterStart == want.clusterStart)
+			&& got.clusterStart == want.clusterStart && got.meshGroupCount == want.meshGroupCount)
 			continue;
 		return fmt::format(
-			"{}: row {} holds {{gcX {}, objectIndex {}, clusterStart {}}} but candidate {} maps "
-			"to {{gcX {}, objectIndex {}, clusterStart {}}} — rows must follow the candidate "
-			"order element by element", kInv4RowOrder, i, got.groupCountX, got.objectIndex,
-			got.clusterStart, i, want.groupCountX, want.objectIndex, want.clusterStart);
+			"{}: row {} holds {{gcX {}, objectIndex {}, clusterStart {}, meshGroupCount {}}} but "
+			"candidate {} maps to {{gcX {}, objectIndex {}, clusterStart {}, meshGroupCount {}}} — "
+			"rows must follow the candidate order element by element",
+			kInv4RowOrder, i, got.groupCountX, got.objectIndex, got.clusterStart,
+			got.meshGroupCount, i, want.groupCountX, want.objectIndex, want.clusterStart,
+			want.meshGroupCount);
 	}
 	return std::nullopt;
 }
@@ -110,23 +119,44 @@ std::optional<std::string> checkRowOrder(
  * 第三条（空行数 vs 不可见候选数）是前两条查不到的那格：`sumGroupCountX` 与 `emptyRows` 各自
  * 与行数组对得上，却仍可能「一个可见候选发出了空行」——那是 §19.2 D5 的 `mdi.rows` 闭式锚
  * 直接读错臂的形态（收益判据 A5 就靠它）。
+ *
+ * 🔴 ★M-3T-c 加两条：`sumMeshGroupCount`（mesh 组总数 = 跨形态对账量）与 **3b**
+ * `Σ gcX == rowCount − emptyRows`。3b 是「每可见行恰一枚 task」的机器断言——gcX 现在只允许
+ * {0,1}，有人把 ×2 乘回 gcX 或给一个 draw 发多枚 task，本条立刻红而旧三条一位都不动
+ * （Σ gcX 与 emptyRows 各自仍能与行数组对上）。
  */
 std::optional<std::string> checkAnchors(
 	const MdiShadowRowTable& table, std::span<const MdiShadowCandidate> cands) {
 	uint64_t sumX = 0;
+	uint64_t sumMesh = 0;
 	uint64_t emptyRows = 0;
 	for (const MdiShadowRow& row : table.rows) {
 		sumX += row.groupCountX;
+		// 🔴 只累加**可见**行（gcX != 0）：逐条 draw 形态根本不为不可见候选发 draw，把空行的
+		// meshGroupCount 也计进来就不是"与逐条形态相等"的那个量了（实测：全行求和恒 4724/级联、
+		// 三档级联一位不变 = 一个不随可见性动的死数，对账价值为零）。
+		sumMesh += row.groupCountX == 0u ? 0u : row.meshGroupCount;
 		emptyRows += row.groupCountX == 0u ? 1u : 0u;
 	}
 	if (table.sumGroupCountX != sumX)
 		return fmt::format(
 			"{}: sumGroupCountX says {} but the rows sum to {} — the task-count anchor and "
 			"the row array diverged", kInv3Anchors, table.sumGroupCountX, sumX);
+	if (table.sumMeshGroupCount != sumMesh)
+		return fmt::format(
+			"{}: sumMeshGroupCount says {} but the rows sum to {} — the mesh-group-count anchor "
+			"(the cross-form reconciliation quantity) and the row array diverged", kInv3Anchors,
+			table.sumMeshGroupCount, sumMesh);
 	if (table.emptyRows != emptyRows)
 		return fmt::format(
 			"{}: emptyRows says {} but {} rows carry groupCountX 0 — the empty-row anchor and "
 			"the row array diverged", kInv3Anchors, table.emptyRows, emptyRows);
+	if (sumX != table.rows.size() - emptyRows)
+		return fmt::format(
+			"{}: sum(groupCountX) = {} but {} rows - {} empty rows = {} - every visible row must "
+			"carry exactly ONE task (gcX must be in {{0,1}}); someone multiplied the mesh-group count "
+			"back into gcX and the star M-3T-c task-count win is silently gone", kInv3bTaskPerRow,
+			sumX, table.rows.size(), emptyRows, table.rows.size() - emptyRows);
 	uint64_t invisible = 0;
 	for (const MdiShadowCandidate& c : cands)
 		invisible += c.visible ? 0u : 1u;
@@ -159,6 +189,7 @@ std::expected<MdiShadowRowTable, std::string> buildMdiShadowRows(
 	for (const MdiShadowCandidate& c : cands) {
 		const MdiShadowRow row = rowFor(c);
 		out.sumGroupCountX += row.groupCountX;
+		out.sumMeshGroupCount += row.groupCountX == 0u ? 0u : row.meshGroupCount;  // 只算可见行
 		out.emptyRows += row.groupCountX == 0u ? 1u : 0u;
 		out.rows.push_back(row);
 	}

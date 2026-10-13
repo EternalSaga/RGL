@@ -24,8 +24,9 @@ module;
  * 候选：A(slot 2, x=0)、B(slot 5, x=2.5)、C(slot 9, x=4.5) 三枚可切（带 MDI 宿主）；
  * N(slot 3, x=0.2) 簇可切但**无 MDI 宿主**（混合形态的另一半）；D(slot 4, x=0.4) 全旧路径。
  * 级联可见集（闭式手算，逐级 c1/c2/c3）：A 恒可见；B 全可见（|2.5|≤2.5）；
- * C 仅 c3（4.5 ≤ 4+0.5）⟹ 逐行 gcX 期望 = c1 [8,2,0] / c2 [8,2,0] / c3 [8,2,14]
- * （taskCount = 2×簇数：A 4→8、B 1→2、C 7→14）。
+ * C 仅 c3（4.5 ≤ 4+0.5）⟹ 逐行 gcX 期望 = c1 [1,1,0] / c2 [1,1,0] / c3 [1,1,1]
+ * （🔴 ★M-3T-c：gcX 单位 = **task**，可见 ? 1 : 0；mesh 组数进 word[5] meshGroupCount =
+ *  2×簇数：A 8、B 2、C 14，**与可见性无关照写**——旧期望 [8,2,0]/[8,2,0]/[8,2,14] 已作废）。
  * 同源 pair 闭式：sliceRows=12、frameSlot=1 ⟹ row = 1×12 + firstRow，firstRow 逐级 0/3/6
  * ⟹ rowBase = 12/15/18、argsOffset = row×24 = 288/360/432（**全部写死字面**，
  *  不在期望侧调用 mdiShadowRowLocation = 不把被测映射抄进期望）。
@@ -42,7 +43,7 @@ module;
  *   M8 桥常量被漂移（schema 改数字不改 shader，或反之）→ 桥用例直接编译期红
  *   M9 `firstRow += gate.rowsPerCascade` 写成 `+= 1` → 红「c2/c3 的 pair 数字 360/432」
  *   M10 构建器输入 `in.visible = casterInShadowVolume(...)` 恒置 true（剔除判据失效）
- *      → 红「逐行 gcX == [8,2,0]/[8,2,0]/[8,2,14]」
+ *      → 红「逐行 gcX == [1,1,0]/[1,1,0]/[1,1,1] + word[5] == 2×簇数」
  *
  * ## 已知覆盖缺口（诚实声明）
  *   · 执行器 `prepareMdiShadowRows` 的四道 fail-fast 与 `drawOne` 的 MDI 分支要真设备 +
@@ -71,6 +72,7 @@ constexpr uint32_t kOldEntry = 12;    // 全旧路径条目
 /** 行表规格常量（offsetof 是**期望值侧**的独立量：编译器实查，不经任何被测代码）。 */
 constexpr uint32_t kObjOff = static_cast<uint32_t>(offsetof(MdiShadowRow, objectIndex));
 constexpr uint32_t kStartOff = static_cast<uint32_t>(offsetof(MdiShadowRow, clusterStart));
+constexpr uint32_t kMeshGroupsOff = static_cast<uint32_t>(offsetof(MdiShadowRow, meshGroupCount));
 
 std::array<ShadowVolume, kActiveShadowCascades> makeVolumes() {
 	std::array<ShadowVolume, kActiveShadowCascades> vols{};
@@ -170,9 +172,12 @@ TEST_CASE("★M-1b constexpr 桥：schema 生成常量 ↔ mdi_rows 真相源") 
 	CHECK(kMdiShadowRowStrideBytes == sizeof(MdiShadowRow));
 	CHECK(kMdiShadowObjectIndexByteOffset == kObjOff);
 	CHECK(kMdiShadowClusterStartByteOffset == kStartOff);
+	// 🔴 ★M-3T-c 新增：word[5] meshGroupCount 的字节偏移（task 拿去当 DispatchMesh 的 X）
+	CHECK(kMdiShadowMeshGroupCountByteOffset == kMeshGroupsOff);
 	CHECK(kMdiShadowRowStrideBytes == 24u);  // §19.2 D1 定案值（字面钉死，防「两边一起漂」）
 	CHECK(kMdiShadowObjectIndexByteOffset == 12u);
 	CHECK(kMdiShadowClusterStartByteOffset == 16u);
+	CHECK(kMdiShadowMeshGroupCountByteOffset == 20u);  // word[5] = 行尾那枚（24−4）
 	// 命令本体与步长是两个数（VUID-07088/07090 算式里不可互换）
 	CHECK(kMdiShadowCommandBytes == 12u);
 	CHECK(kMdiShadowCommandBytes != kMdiShadowRowStride);
@@ -224,8 +229,8 @@ TEST_CASE("生效档：每级联恰一条 MDI DrawCall + 同源 pair 闭式字�
 	CHECK(peek<RGL::ShadowMeshletDrawArgs>(f.out[1][1].pushData).objectIndex == 3u);  // N 的槽
 }
 
-TEST_CASE("生效档：行内容 = 构建器闭式（可见 gcX、不可见 0 且身份字段照写）") {
-	// 变异红线 M10：`in.visible` 恒真（剔除判据失效）→ c1/c2 的第三行必须红。
+TEST_CASE("生效档：行内容 = 构建器闭式（可见 gcX=1、不可见 0；身份字段与 word[5] 照写）") {
+	// 变异红线 M10：`in.visible` 恒真（剔除判据失效）→ c1/c2 的第三行 gcX 必须红。
 	MdiFixture f;
 	f.prepare(10u);
 	const auto cands = makeCands();
@@ -233,9 +238,9 @@ TEST_CASE("生效档：行内容 = 构建器闭式（可见 gcX、不可见 0 �
 	REQUIRE(f.rows.size() == 9u);  // 3 级联 × 3 可切候选（上界口径见回落组的容量用例）
 
 	const uint32_t expGc[3][3] = {
-		{8u, 2u, 0u},   // c1：A、B 可见；C(x=4.5) 不可见
-		{8u, 2u, 0u},   // c2：同上
-		{8u, 2u, 14u},  // c3：全可见（4.5 ≤ 4+0.5）
+		{1u, 1u, 0u},   // c1：A、B 可见（各一枚 task）；C(x=4.5) 不可见
+		{1u, 1u, 0u},   // c2：同上
+		{1u, 1u, 1u},   // c3：全可见（4.5 ≤ 4+0.5）
 	};
 	// 逐行独立重推可见性（期望值出处 = visClosed + 2×簇数），行序 = 候选序（A,B,C 的 slot）
 	for (uint32_t c = 1u; c < kActiveShadowCascades; ++c)
@@ -244,12 +249,14 @@ TEST_CASE("生效档：行内容 = 构建器闭式（可见 gcX、不可见 0 �
 			const uint32_t slot = (k == 0u) ? 2u : (k == 1u ? 5u : 9u);
 			const uint32_t clusters = (k == 0u) ? 4u : (k == 1u ? 1u : 7u);
 			const float x = (k == 0u) ? 0.0f : (k == 1u ? 2.5f : 4.5f);
-			CHECK(row.groupCountX == (visClosed(c, x, 0.5f) ? 2u * clusters : 0u));
+			// 🔴 ★M-3T-c：gcX = task 数（可见 ? 1 : 0），mesh 组数（2×簇数）搬进 word[5]
+			CHECK(row.groupCountX == (visClosed(c, x, 0.5f) ? 1u : 0u));
 			CHECK(row.groupCountX == expGc[c - 1u][k]);
 			CHECK(row.groupCountY == 1u);
 			CHECK(row.groupCountZ == 1u);
 			CHECK(row.objectIndex == slot);      // 身份字段照写（M-0 口径：红了能定位是哪一行）
-			CHECK(row.reserved0 == 0u);
+			// 🔴 word[5] = meshletTaskCount(簇数) = 2×簇数，**与可见性无关照写**（不可见的 C 也写 14）
+			CHECK(row.meshGroupCount == 2u * clusters);
 		}
 	// clusterStart 逐行对位（A=3、B=0、C=11 —— 不可见行也写，孔洞流语义）
 	for (uint32_t c = 0u; c < 3u; ++c) {
@@ -297,8 +304,12 @@ TEST_CASE("生效档：全不可见级联 = 孔洞流照发一条（段尾），
 	f.emit(std::span<const ShadowCandidate>{far});
 	REQUIRE(f.segments.size() == 3u);
 	CHECK(f.rows.size() == 9u);
-	for (const auto& row : f.rows)
+	for (const auto& row : f.rows) {
 		CHECK(row.groupCountX == 0u);  // 全空转行（身份字段照写，前面用例钉的是形态）
+		// 🔴 ★M-3T-c：全不可见 ⟹ Σ task = 0，但 word[5]（2×簇数：8/2/14）**照写**——
+		// 「与可见性无关」在这一格钉死（若实现把不可见行的 word[5] 清零，这里红）
+		CHECK(row.meshGroupCount != 0u);
+	}
 	for (uint32_t c = 1u; c < kActiveShadowCascades; ++c) {
 		REQUIRE(countMdi(f.out[c]) == 1u);
 		CHECK(*firstMdi(f.out[c]) == f.out[c].size() - 1u);  // 挂在**段尾**

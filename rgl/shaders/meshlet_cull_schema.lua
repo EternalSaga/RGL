@@ -80,6 +80,10 @@ return {
         { name = "kMdiShadowRowStrideBytes",      value = 24 },  -- VUID-07088 的 stride（4 的倍数且 ≥12）
         { name = "kMdiShadowObjectIndexByteOffset", value = 12 }, -- 行 word[3]
         { name = "kMdiShadowClusterStartByteOffset", value = 16 }, -- 行 word[4]
+        -- ★M-3T-c：task 读 word[5] 拿本行的 **mesh 组**数当 DispatchMesh 的 X（gcX 的单位已是
+        -- task 数，mesh 组数只能从这里来）。消费者 = shadow_meshlet.task.slang（🔴 不是 mesh，
+        -- 行寻址本批起整体住在 task 里，mesh 不认识行表）。
+        { name = "kMdiShadowMeshGroupCountByteOffset", value = 20 }, -- 行 word[5]
     },
 
     -- name = slang 的 **push 变量名**（cullPush），不是 struct 名（material_schema.lua 同规矩）
