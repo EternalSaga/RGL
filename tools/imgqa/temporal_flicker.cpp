@@ -89,6 +89,9 @@ struct SeriesOpts {
     bool overrideEnv;
     bool overrideAo;
     const FlickerArm* arm;
+    /// 债-89：burst 的**绝对帧号锚点** = kBurstAnchorBase + kWarm。仪器内部常量、不是参数
+    /// （调用侧没有"换个锚点"的合法用法），默认值即唯一真相源。
+    uint32_t anchor = kBurstAnchorBase + kWarm;
 };
 
 /// 连拍的产物：burst 文件表 + 中点姿态补拍的彩色（落位自证用；比对**必须**等 g.luma 填完，
@@ -168,11 +171,21 @@ SeriesBurst burstFlickerSeries(Engine& eng, const SeriesOpts& s, FlickerSeries& 
     // `frame_yaw`）。这里取 burst **之前**的 yaw 作锚点；「每帧角是不是真值」由尺子 1 的
     // 对齐自证（残差在 α=1 见底）兜底——Δψ 错了那条守卫当场红。
     const double yawPre = eng.cameraYawDegrees();
+    // yaw 回显落在第几帧：`/camera` 与 `GET /` 是两次请求，配对有 ±1 帧残差（帧边界 drain
+    // 时序），残差由下面的 yawErrPx 自证行暴露——口径与此前一致，只是此前 burst 紧跟 yawPre
+    // 读、锚定后两者隔着 lead 帧，**必须**用 yawFrame 换算，不能再假设 yawPre 就在 anchor−1 帧。
+    const uint32_t yawFrame = eng.frameCount();
     const double yawStepDeg = s.yawRadPerFrame * 180.0 / 3.14159265358979323846;
-    out.files = eng.shotBurst("screenshots", static_cast<uint32_t>(s.frames), s.tag + "_c");
+    // 债-89：连拍从**绝对帧号**起（引擎到锚才登记首张）⟹ 抖动相位与 frame_yaw 机位跨进程
+    // 逐帧确定；锚已过 = 抛，不静默退回相对。
+    out.files = eng.shotBurstAt("screenshots", static_cast<uint32_t>(s.frames), s.anchor,
+        s.tag + "_c");
     g.framePost = eng.frameCount();
     if (s.wantObjectId && !s.edgeTarget && s.frames >= 2) {
-        const double yawMid = yawPre + yawStepDeg * (1.0 + 0.5 * static_cast<double>(s.frames - 1));
+        // burst 帧 = anchor..anchor+frames-1，中点帧 = anchor + (frames-1)/2；yaw 是帧号
+        // 纯函数 ⟹ yawMid = yawPre + 每帧角 × (中点帧 − yawFrame)。
+        const double yawMid = yawPre + yawStepDeg * (static_cast<double>(s.anchor)
+            - static_cast<double>(yawFrame) + 0.5 * static_cast<double>(s.frames - 1));
         // 标定「一次 /shot 会把 yaw 推进多少」：/shot 落在第几帧由 HTTP 时序决定，**不能假设**。
         // 用同一种请求标定同一种请求，比数帧号可靠；标定与使用之间不夹任何别的写相机操作。
         const double y1 = eng.cameraYawDegrees();
@@ -293,7 +306,8 @@ void matchFlickerIdFrame(cv::Mat idChk, const Engine::Camera& camera, FlickerSer
 }
 
 /// 一组采集的主流程（captureFlickerSeries 的实现体）：profile → 起引擎 → 钉机位 →
-/// 热身（空转不写盘）→ /shotburst 逐帧连续采集 → 逐帧读图 → 出 series。
+/// 空转热身（不写盘）到**绝对锚点**（债-89）→ /shotburst 从锚点起逐帧连续采集 →
+/// 逐帧读图 → 出 series。
 FlickerSeries captureFlickerSeriesImpl(const SeriesOpts& s)
 {
     FlickerSeries g;
@@ -303,10 +317,19 @@ FlickerSeries captureFlickerSeriesImpl(const SeriesOpts& s)
 
     Engine eng(s.dir);
     const Engine::Camera camera{ o.cameraPosition, o.cameraTarget, o.cameraFov };
-    eng.setCamera(camera);
+    // 债-89：机位与连拍**同一个绝对帧号**（= 锚点）。为什么不能只钉连拍：`frame_yaw` 下
+    // yaw = 基准 + 每帧角·帧号，而「基准」由 RPC 写入落帧重定基——落帧由 HTTP 时序决定
+    // （本机 headless ~6000fps ⟹ ±36 帧量级 ≈ 4.5px）。改前热身只有 16 帧，这段漂移小到
+    // 看不见；锚点把连拍推到第 528 帧后它变成 484 帧 = 4.0° ≈ 60px，白板边缘直接跑出 ROI
+    // （实测「跳变量 0.0000」）。引擎侧 `yaw_at_frame` 把基准解成帧号的函数 ⟹ 与落帧无关。
+    const uint32_t yawPinFrame = s.yawRadPerFrame != 0.0 ? s.anchor : 0u;
+    eng.setCamera(camera, yawPinFrame);
     g.liveFeedback = eng.paramValue("", kTaaFeedbackLabel);  // label 改名 ⟹ 抛，不静默
-    eng.advanceFrames(static_cast<uint32_t>(kWarm));
-    g.framePre = eng.frameCount();
+    // 债-89：热身与锚点一次到位——「再渲染 kWarm 帧」改成「渲染到第 anchor 帧」，burst 从
+    // anchor 起拍。到锚帧引擎已渲染 anchor 帧 ≥ kWarm，热身语义保持；长等待走客户端
+    // （advanceToFrame，300s 预算 + 卡死检测），引擎侧只等最后 kAnchorLead 帧。
+    eng.advanceToFrame(s.anchor - kAnchorLead);
+    g.framePre = s.anchor;  // burst 起始帧 = 锚点（不再是「大约第 N 帧」）
     const SeriesBurst burst = burstFlickerSeries(eng, s, g);
     if (burst.files.empty())
         throw std::runtime_error(s.name + "：/shotburst 一张都没拿到");
@@ -318,8 +341,9 @@ FlickerSeries captureFlickerSeriesImpl(const SeriesOpts& s)
 }  // namespace
 
 /**
- * 跑一组：profile → 起引擎 → 钉机位 → 热身（空转不写盘）→ /shotburst 逐帧连续采集。
- * 两条判据（flicker / homography）共用，见 temporal_flicker.h 的 FlickerSeries 注释。
+ * 跑一组：profile → 起引擎 → 钉机位 → 空转热身到绝对锚点（债-89）→ /shotburst 从锚点起
+ * 逐帧连续采集。两条判据（flicker / homography）共用，见 temporal_flicker.h 的
+ * FlickerSeries 注释。
  */
 FlickerSeries captureFlickerSeries(const std::string& dir, const std::string& name, const std::string& tag,
     bool edgeTarget, const BistroCam* cam, bool taaOn, double yawRadPerFrame, int frames,

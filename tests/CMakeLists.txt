@@ -44,6 +44,7 @@ find_package(Vulkan REQUIRED)
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 find_package(SDL3 CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)  # test_burst_protocol 的入参类型（rlbase 里 PRIVATE 链接，不传递到测试）
 
 set(RGL_TEST_SOURCES
     test_main.cppm              # DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN + main()
@@ -60,6 +61,7 @@ set(RGL_TEST_SOURCES
     test_timing_util.cppm        # 时间戳/时间统计叶子：toMs 定义值 / percentile 口径逐点手算 / 时钟单调（三处副本收敛的护栏）
     test_scene_spin.cppm         # 帧驱动 spin 角闭式（门 spin_frame_angle 判据本体，跨进程 A/B 对齐的地基）
     test_camera_frame_yaw.cppm   # 帧驱动相机 yaw 闭式（门 frame_yaw 判据本体，temporal-motion 相机运动激励的地基）
+    test_burst_protocol.cppm     # /shotburst 协议判据：形状六反向 + 绝对帧号锚点三态（债-89，跨进程逐帧复现的地基）
     test_aa_target.cppm          # 细线抗锯齿靶几何：数据自洽 / "确实细"载体判据（批 12.6 T4）
     test_gate_lint.cppm          # 门组合自检：38 门申报表 + variant 交叉校验（gate_lint 批）
     test_frisvad_tangent.cppm    # Frisvad 切线兜底：轴向/±Z 奇点/随机有限性（黑面 bug 回归）
@@ -194,7 +196,8 @@ target_sources(rgl_tests PRIVATE ${IZB_SPIKE_MESH_SPV} ${IZB_SPIKE_FRAG_SPV}
 # 不是 tag，也不是链接面。
 target_link_libraries(rgl_tests
     PUBLIC rgl_test_support rlbase rlgfx rlscene rlframe
-    PRIVATE Vulkan::Vulkan GPUOpen::VulkanMemoryAllocator SDL3::SDL3 imgui::imgui)
+    PRIVATE Vulkan::Vulkan GPUOpen::VulkanMemoryAllocator SDL3::SDL3 imgui::imgui
+            nlohmann_json::nlohmann_json)  # test_burst_protocol 的入参类型（rlbase 里是 PRIVATE，不传递）
 # 图像编解码/tinygltf 随 rlbase 传递（静态库 PRIVATE 链接经 $<LINK_ONLY:…> 保序），
 # 这里不重复列出。
 

@@ -198,6 +198,36 @@ std::string logTail(const std::string& path, int lines)
     return out.str();
 }
 
+// ── 债-89：连拍锚校验（纯函数，selftest 喂合成值直测，先例 = logTail 的「判据不许只活在
+//    注释里」）──────────────────────────────────────────────────────────────────────
+
+std::string burstAnchorMissError(uint32_t startFrame, uint32_t frameNow)
+{
+    // `==` 还来得及：请求在帧首钩子里 drain，本帧 drawFrame 尚未跑（引擎侧同口径，见
+    // rpcHandleShotBurst）。只有**越过**才算错过。
+    if (frameNow <= startFrame)
+        return {};
+    return "连拍锚点帧 " + std::to_string(startFrame) + " 已过（引擎当前帧 "
+        + std::to_string(frameNow) + "）——锚点 = 绝对帧号，必须高于 RPC 就绪落在的第几帧："
+          "抬高 kBurstAnchorBase，或查引擎是否被上一次 burst/卡死拖慢；**不许静默退回相对锚**"
+          "（债-89：那等于把彩票藏起来）";
+}
+
+std::string burstAnchorEchoError(uint32_t startFrame, bool echoedPresent, uint32_t echoedFrame)
+{
+    // 缺回显 = 旧构建不认识 start_frame 字段（HTTP 层对未知字段静默宽容）⟹ burst 实际按
+    // 相对锚跑了，而读数看起来完全正常 = 债-89 要消灭的正是这种「藏起来的彩票」。
+    if (!echoedPresent)
+        return "/shotburst 应答没有 startFrame 回显（请求锚点 " + std::to_string(startFrame)
+            + "）——引擎构建不认识 start_frame，连拍实际按相对锚在跑（静默退化）。"
+              "确认 rgl 是含债-89 锚点支持的构建后重跑";
+    if (echoedFrame != startFrame)
+        return "连拍首张落帧 " + std::to_string(echoedFrame) + " ≠ 锚点 "
+            + std::to_string(startFrame) + "（锚帧被 acquire 跳帧？）——采集相位不是请求的"
+              "相位，本组数作废，重跑或换锚点";
+    return {};
+}
+
 namespace {
 
 // ── 子进程与 RPC 就绪（从 `Engine` 构造切出：构造本体只留「守卫 → fork → 挂 http」）────
@@ -270,22 +300,37 @@ Engine::Engine(std::string profileDir, int port) : impl_(new Impl{.profileDir = 
         }
         if (impl_->http->Get("/"))
             return;
-        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        // 10ms（原 250ms，债-89）：`GET /` 只在**帧边界**被 drain，就绪检测落在第几帧 =
+        // 轮询粒度 × 帧率——250ms 粒度在本机 2500fps headless 下把就绪帧甩到 ~1260（改前
+        // 亲验 burst 起始帧 194/1280 同命令两臂差 6 倍），绝对锚点基座就没有可信的上界。
+        // 收紧到 10ms 后就绪帧 ≤ ~30，kBurstAnchorBase=512 留出一个数量级的余量。
+        // 代价 = bind 前每轮一次 loopback 拒连（微秒级），60s 预算内 ≤ 数千次，可忽略。
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     impl_->killTree();
     throw std::runtime_error("RPC 端口 " + std::to_string(port) + " 60s 未就绪，见 "
         + impl_->logPath + logTail(impl_->logPath));
 }
 
-void Engine::setCamera(const Camera& cam)
+void Engine::setCamera(const Camera& cam, uint32_t yawAtFrame)
 {
     // fps 模式下引擎先读 position 再读 target 反推朝向（引擎实现约定）。
-    const json body = {{"mode", "fps"}, {"position", cam.position},
+    json body = {{"mode", "fps"}, {"position", cam.position},
         {"target", cam.target}, {"fovDegrees", cam.fovDegrees}};
+    if (yawAtFrame != 0)
+        body["yaw_at_frame"] = yawAtFrame;
     auto res = impl_->http->Post("/camera", body.dump(), "application/json");
     if (!res || res->status != 200)
         throw std::runtime_error("POST /camera 失败: "
-            + (res ? std::to_string(res->status) : "无响应"));
+            + (res ? std::to_string(res->status) + ": " + res->body : "无响应"));
+    if (yawAtFrame == 0)
+        return;
+    // 回显自证（同 /shotburst 的 startFrame）：没回显 = 引擎没钉（旧构建 / 字段被吞），
+    // 那机位就还是「写入落帧」的函数 = 彩票，必须抛，而不是继续跑出一组假可复现的数。
+    const json out = json::parse(res->body);
+    if (!out.contains("yawPinnedFrame") || out.at("yawPinnedFrame").get<uint32_t>() != yawAtFrame)
+        throw std::runtime_error("/camera 没回显 yawPinnedFrame=" + std::to_string(yawAtFrame)
+            + "（机位锚点未生效，读数不可复现）: " + res->body);
 }
 
 void Engine::setParam(const std::string& page, const std::string& label, double value)
@@ -387,19 +432,36 @@ void Engine::setCameraYaw(double yawDegrees)
             + (res ? std::to_string(res->status) : "无响应"));
 }
 
-uint32_t Engine::frameCount()
+namespace {
+
+/// `GET /` 的 `frame` 字段（`Engine::frameCount` 与锚点预检共用一份解析；预检住在
+/// postShotBurst 里，那里只拿得到 Impl，见其注释）。
+[[nodiscard]] uint32_t readFrame(httplib::Client& http)
 {
-    auto res = impl_->http->Get("/");
+    auto res = http.Get("/");
     if (!res || res->status != 200)
         throw std::runtime_error("GET / 失败: " + (res ? std::to_string(res->status) : "无响应"));
     const json out = json::parse(res->body);
     return out.at("frame").get<uint32_t>();
 }
 
+}  // namespace
+
+uint32_t Engine::frameCount()
+{
+    return readFrame(*impl_->http);
+}
+
 void Engine::advanceFrames(uint32_t n, int timeoutSec)
 {
-    // 目标 = 当前计数 + n。用**相对**目标而不是绝对帧号：RPC 登记落在第几帧由启动时序决定
-    // （`temporal.cpp` 里 φ 每次启动不等的同一原因），绝对号会让热身长度本身带噪声。
+    // 目标 = 当前计数 + n。**相对只许用于「纯热身」**——它要的性质仅仅是「又渲染了 n 帧」，
+    // 落点在第几帧无所谓。旧注释在此主张「用相对目标而不是绝对帧号：RPC 登记落在第几帧由
+    // 启动时序决定，绝对号会让热身长度本身带噪声」——**该立场已被债-89 实测推翻**：它把
+    // burst 落点的彩票扣在热身长度头上，而 burst 起始的绝对帧号**本身就是测量点**（抖动
+    // 相位 = Halton(绝对帧号)、frame_yaw 机位 = 帧号纯函数；亲验同配置三跑边缘列飘 ±2px、
+    // 一次整组 rc=1）。旧注释指出的困难是真的（RPC 就绪时引擎可能已跑过目标绝对帧号），
+    // 现在的正面解法 = `advanceToFrame` + `shotBurstAt`：锚点选在远高于启动时序抖动
+    // （kBurstAnchorBase），真错过 = 响亮抛，**永不**静默退回相对。
     const uint32_t target = frameCount() + n;
     const auto deadline
         = std::chrono::steady_clock::now() + std::chrono::seconds(timeoutSec);
@@ -423,19 +485,74 @@ void Engine::advanceFrames(uint32_t n, int timeoutSec)
     }
 }
 
-std::vector<std::string> Engine::shotBurst(const std::string& dir, uint32_t n,
-    const std::string& prefix, const std::string& attachment)
+void Engine::advanceToFrame(uint32_t absFrame, int timeoutSec)
+{
+    // 调用时锚点已过 = 测量点已经丢了 ⟹ 当场抛（文案可归因到「抬基座/查卡死」，见
+    // burstAnchorMissError）。这里**没有**「那就改成相对推进」的分支——那是债-89 判死的
+    // 静默退化形态。
+    if (const auto err = burstAnchorMissError(absFrame, frameCount()); !err.empty())
+        throw std::runtime_error(err);
+    const auto deadline
+        = std::chrono::steady_clock::now() + std::chrono::seconds(timeoutSec);
+    uint32_t last = 0;
+    int stalled = 0;
+    while (true) {
+        const uint32_t now = frameCount();
+        if (now >= absFrame)
+            return;
+        // 卡死检测与 advanceFrames 同口径（静默少热身 = 在历史瞬态上下判据）。
+        stalled = now == last ? stalled + 1 : 0;
+        last = now;
+        if (stalled > 200)
+            throw std::runtime_error("帧计数停在 " + std::to_string(now) + "（引擎卡死？），"
+                + "绝对锚点帧 " + std::to_string(absFrame) + " 未到——拒绝在瞬态里继续采集");
+        if (std::chrono::steady_clock::now() > deadline)
+            throw std::runtime_error("advanceToFrame 超时：绝对锚点帧 " + std::to_string(absFrame)
+                + "，停在 " + std::to_string(now));
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+}
+
+namespace {
+
+/// 债-89 锚点闸门③：应答回显自证（burstAnchorEchoError 的文案直接做异常体）。拆成独立
+/// 函数是认知复杂度红线，不是复用——只有 postShotBurst 调它。
+void requireBurstAnchorEcho(const json& out, uint32_t startFrame)
+{
+    const bool present = out.contains("startFrame") && out["startFrame"].is_number_integer();
+    const uint32_t echoed = present
+        ? static_cast<uint32_t>(out["startFrame"].get<int64_t>()) : 0u;
+    if (const auto err = burstAnchorEchoError(startFrame, present, echoed); !err.empty())
+        throw std::runtime_error(err);
+}
+
+/// /shotburst 共用实现（`shotBurst` / `shotBurstAt` 两个入口；只吃 http 客户端——
+/// `Engine::Impl` 是私有嵌套类型，自由函数点名越不过访问检查）。startFrame = 0 = **不发**
+/// `start_frame` 字段（相对锚，现行为逐位不变）；> 0 = 绝对锚（债-89）。锚点路径的三道
+/// 闸门全部响亮：① 发请求前预检帧计数（`burstAnchorMissError`）；② 引擎侧锚已过 = 409
+/// 走 status 分支转抛（带引擎原文）；③ 应答回显自证（`burstAnchorEchoError`，缺回显 =
+/// 旧构建静默忽略 start_frame，同样抛）。少任何一道，旧构建的静默忽略就会把判据悄悄退回
+/// 彩票——三道都不许合并或省略。
+std::vector<std::string> postShotBurst(httplib::Client& http, const std::string& dir,
+    uint32_t n, uint32_t startFrame, const std::string& prefix, const std::string& attachment)
 {
     json body{{"dir", dir}, {"n", static_cast<int>(n)}, {"prefix", prefix}};
     if (!attachment.empty())
         body["attachment"] = attachment;  // 具名附件连拍（temporal-motion 的 taa_out alpha 掩膜）
+    if (startFrame != 0) {
+        if (const auto err = burstAnchorMissError(startFrame, readFrame(http)); !err.empty())
+            throw std::runtime_error(err);
+        body["start_frame"] = startFrame;
+    }
     // **读超时按张数放大**：/shotburst 的响应在最后一张写完才兑现 ⟹ 响应时间 = N×(帧时间 +
     // PNG 编码)。2560×1440 的 REF 组单张编码实测数百毫秒 ⟹ 32 张远超客户端默认 20s，
     // 症状是「POST /shotburst 无响应」（其实是客户端先挂断，引擎随后正常返回）。
     // 预算 8s/张（≈ 默认 20s 的 12 倍余量），上限 10 分钟；其它端点保持 20s（它们慢 = 真卡死）。
-    impl_->http->set_read_timeout(std::min(600, std::max(20, static_cast<int>(n) * 8)), 0);
-    auto res = impl_->http->Post("/shotburst", body.dump(), "application/json");
-    impl_->http->set_read_timeout(20, 0);
+    // 带锚点的请求还含「等锚」段——调用侧先用 `advanceToFrame` 等到 lead 帧内才发（长等待
+    // 留在客户端 300s 预算里），引擎侧等待 ≪ 本预算，也 ≪ 引擎侧 120s 的 burst 应答预算。
+    http.set_read_timeout(std::min(600, std::max(20, static_cast<int>(n) * 8)), 0);
+    auto res = http.Post("/shotburst", body.dump(), "application/json");
+    http.set_read_timeout(20, 0);
     if (!res)
         throw std::runtime_error(
             "POST /shotburst 无响应（引擎没起来，或用的是没有该端点的旧构建）");
@@ -443,6 +560,8 @@ std::vector<std::string> Engine::shotBurst(const std::string& dir, uint32_t n,
         throw std::runtime_error(
             "POST /shotburst 失败 " + std::to_string(res->status) + ": " + res->body);
     const json out = json::parse(res->body);
+    if (startFrame != 0)
+        requireBurstAnchorEcho(out, startFrame);
     auto files = out.at("files").get<std::vector<std::string>>();
     // 少交一张就是采集不完整——宁可抛，也不要拿缺帧的序列去算相邻帧差（那会把
     // 「跨了两帧」悄悄当成「跨了一帧」，正是本端点要修的那个 bug 的翻版）。
@@ -453,6 +572,20 @@ std::vector<std::string> Engine::shotBurst(const std::string& dir, uint32_t n,
         if (!fs::exists(f))
             throw std::runtime_error("/shotburst 返回的路径不存在: " + f);
     return files;
+}
+
+}  // namespace
+
+std::vector<std::string> Engine::shotBurst(const std::string& dir, uint32_t n,
+    const std::string& prefix, const std::string& attachment)
+{
+    return postShotBurst(*impl_->http, dir, n, 0, prefix, attachment);
+}
+
+std::vector<std::string> Engine::shotBurstAt(const std::string& dir, uint32_t n,
+    uint32_t startFrame, const std::string& prefix, const std::string& attachment)
+{
+    return postShotBurst(*impl_->http, dir, n, startFrame, prefix, attachment);
 }
 
 Engine::~Engine()

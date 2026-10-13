@@ -212,7 +212,14 @@ SwimRun runSwimSequence(const std::string& dir, bool taa, double feedback, doubl
     Engine eng(dir);
     eng.setCamera(kUserCamera);
     std::ignore = eng.shotBurst("screenshots", static_cast<uint32_t>(warm), tag + "_w");
-    const auto files = eng.shotBurst("screenshots", static_cast<uint32_t>(shots), tag + "_c");
+    // 债-89：热身连拍**不锚**（PNG 即弃，历史只依赖渲染过的帧序列，起点落在第几帧无所谓），
+    // 采集连拍**必须**从绝对帧号起——否则抖动相位是彩票，`temporal-swim-anchor` 的
+    // lag-16 判据 PASS↔FAIL 随启动时序互换（债-89 亲验）。锚点 = 基座 + 热身：到锚帧
+    // 引擎已渲染 anchor ≥ warm 帧，热身语义保持。
+    const uint32_t anchor = kBurstAnchorBase + static_cast<uint32_t>(warm);
+    eng.advanceToFrame(anchor - kAnchorLead);
+    const auto files = eng.shotBurstAt("screenshots", static_cast<uint32_t>(shots), anchor,
+        tag + "_c");
 
     SwimRun r;
     r.bytes.reserve(files.size());

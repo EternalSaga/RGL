@@ -85,6 +85,42 @@ export float frameDrivenCameraYaw(float yawBase, float yawPerFrame, uint32_t fra
 }
 
 /**
+ * `frameDrivenYawPin` 的返回值：一对要写进 `Camera` 的 (yawBase, yaw)。
+ */
+export struct YawPin {
+	float yawBase;  ///< 写入 `Camera::yawBase`
+	float yaw;      ///< 写入 `Camera::yaw`（= 本帧的纯函数期望值，见 `frameDrivenYawPin`）
+};
+
+/**
+ * 把「第 pinnedFrame 帧**渲染出来**的 yaw」钉成 yawPinned（债-89：RPC 机位锚点）。
+ *
+ * 为什么需要它（客户端预补偿为什么必然失败）：`applyFrameDrivenYaw` 以「yaw ≠ 期望值」
+ * 识别外部写入并重定基 ⟹ 写入后 yaw(帧) = 写入值 + 每帧角·(帧 − 落帧帧号)，而**落帧帧号
+ * 由 HTTP 时序决定**。本机 headless ~6000fps、loopback 往返 ~1ms ⟹ 落帧抖动 ±36 帧量级
+ * = 0.125px/帧 × 36 ≈ 4.5px，与要消除的噪声同量级——客户端无论怎么算补偿都补不掉自己
+ * 请求的落帧不确定性。唯一正解 = 把补偿写成**帧号的函数**：给定目标帧直接解出 yawBase。
+ *
+ * 约定（与 `applyFrameDrivenYaw` 的「先加后用」逐字对齐，off-by-one 由单测钉死）：
+ * 帧首钩子先 `++帧计数` 再跑 system 链，而 `applyFrameDrivenYaw` 先自增 `frameIndex`
+ * 再取值 ⟹ 第 X 帧渲染用的 yaw = yawBase + yawPerFrame·(frameIndexNow + (X − 帧计数) + 1)。
+ * 令它等于 yawPinned 即得 base；`yaw` 分量取本帧期望值，是为了让紧随其后的 cameraSystem
+ * 认定「无外部写入」而**不重定基**——否则本针当场被抹掉。
+ * @param yawPinned 第 pinnedFrame 帧要渲染出的 yaw（rad）
+ * @param yawPerFrame 每帧角增量（rad，= `Camera::frameYaw`，门开时非零）
+ * @param frameIndexNow `Camera::yawFrameIndex` 当前值（自增前）
+ * @param engineFrameNow 引擎帧计数当前值（= RPC 回显的那个计数）
+ * @param pinnedFrame 目标帧号（≥ engineFrameNow；更早的帧无从钉）
+ * @return 要写入的 (yawBase, yaw)
+ */
+export YawPin frameDrivenYawPin(float yawPinned, float yawPerFrame, uint32_t frameIndexNow,
+	uint32_t engineFrameNow, uint32_t pinnedFrame) {
+	const uint32_t indexAtPinned = frameIndexNow + (pinnedFrame - engineFrameNow) + 1u;
+	const float base = yawPinned - yawPerFrame * static_cast<float>(indexAtPinned);
+	return { base, frameDrivenCameraYaw(base, yawPerFrame, frameIndexNow) };
+}
+
+/**
  * 输入事件（eventSystem 产生，cameraSystem 消费即清空）：
  * 键事件带 SDL 键码——键位映射不在 eventSystem，消费方按 Camera.keys 解释
  *（E5.4：输入是事件流不是共享 level-state 袋）；鼠标按键事件带 button + pressed，

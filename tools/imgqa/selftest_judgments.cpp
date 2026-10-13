@@ -5,6 +5,8 @@
 //   · `testKeyValidation`  —— makeProfile 的键名校验器（校验静默失效比没有校验更糟）
 //   · `testEngineLogTail`  —— engine.cpp 的 logTail（与上一条同属「配置必须被引擎接受」
 //                             这条自检：键名校验是判定面，logTail 是失效取证面）
+//   · `testBurstAnchor`    —— engine.cpp 的债-89 锚点校验纯函数（预检 + 回显自证的判定
+//                             方向与文案可归因性，同属「采集口径必须可信」的前置）
 //   · `testAnalytic`       —— analytic.cpp 的闭式解（与实机截图逐字节对拍过的锚点）
 //   · `testAaCoverage`     —— aa_coverage.cpp 的 ACES 反解（整条覆盖率判据都压在它上面）
 // 加新用例先问「它测的是哪台仪器」，别按行数往这里塞。
@@ -331,6 +333,40 @@ void testEngineLogTail(Checker& c)
     c.chk("logTail：空文件 → (日志为空)", logTail(path) == "(日志为空)", logTail(path));
     c.chk("logTail：文件不存在 → (日志读不到: …)",
         logTail("/tmp/imgqa_selftest_logtail_不存在.log").rfind("(日志读不到: ", 0) == 0);
+}
+
+/// 债-89：连拍锚点校验的纯函数层（预检与回显自证的判定方向 + 文案可归因性；引擎侧 409
+/// 与实机演示在交付报告，这里钉的是**判据不许只活在注释里**的那部分——先例 = logTail）。
+/// 变异红线：miss 的 `frameNow <= startFrame` 改成 `<` ⟹ 边界（== 还来得及）用例红；改成
+/// `>=` ⟹ 已过用例红；删 echo 的「缺回显」分支 ⟹ 旧构建静默退化用例红（这条正是「旧构建
+/// 忽略 start_frame 把彩票藏起来」的唯一防线）；`echoedFrame != startFrame` 写成 `==` ⟹
+/// 相符与不符两条一起红。
+void testBurstAnchor(Checker& c)
+{
+    // ① 锚点已过 = 必须报错，且文案点名锚点与当前帧两个帧号（可归因：这类失效的唯一正确
+    //    响应是「抬高 kBurstAnchorBase」，排查者必须当场看到）。
+    const std::string miss = burstAnchorMissError(1, 5);
+    c.chk("锚点：帧计数已越过锚点 → 报错", !miss.empty(), miss);
+    c.chk("锚点：已过文案点名「锚点帧 1」与「当前帧 5」",
+        miss.find("锚点帧 1") != std::string::npos && miss.find("当前帧 5") != std::string::npos,
+        miss);
+    // ② 反向用例：未过（含边界 == ——请求在帧首 drain，本帧 drawFrame 尚未跑）不许报错，
+    //    否则守卫把合法采集也拦死 = 判据自己坏掉。
+    c.chk("锚点：帧计数 == 锚点还来得及（边界不误报）", burstAnchorMissError(5, 5).empty());
+    c.chk("锚点：帧计数 < 锚点 = 未过", burstAnchorMissError(6, 5).empty());
+    // ③ 缺回显 = 旧构建静默忽略 start_frame（burst 实际按相对锚跑了，读数看起来完全正常）
+    //    ⟹ 必须报；落帧 ≠ 锚点（锚帧被 acquire 跳帧）= 采集相位不是请求的相位，同样必须报。
+    const std::string noEcho = burstAnchorEchoError(99, false, 0);
+    c.chk("锚点：应答缺 startFrame 回显（旧构建静默退化）→ 报错", !noEcho.empty(), noEcho);
+    c.chk("锚点：缺回显文案点名 start_frame 字段",
+        noEcho.find("start_frame") != std::string::npos, noEcho);
+    const std::string wrong = burstAnchorEchoError(99, true, 42);
+    c.chk("锚点：落帧 42 ≠ 锚点 99 → 报错且文案点名两个帧号",
+        !wrong.empty() && wrong.find("落帧 42") != std::string::npos
+            && wrong.find("锚点 99") != std::string::npos,
+        wrong);
+    // ④ 正向锚点：回显 == 锚点 = 通过（本守卫不是永远红的摆设，绿例就在断言里）。
+    c.chk("锚点：回显 == 锚点 → 通过", burstAnchorEchoError(99, true, 99).empty());
 }
 
 /// 债-93：`replaceValueInBlock` 从表头往后找键、**没有表尾边界** ⟹ 目标表缺该键时静默

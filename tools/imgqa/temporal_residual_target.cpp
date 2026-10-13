@@ -5,9 +5,9 @@
 //   「按口径把连拍取回来、折成 `Run`」；七个阈值怎么判、打印什么文案、退出码是什么，全在
 //   `temporal_residual_target_verdicts.cpp`。`Run` 是两层之间唯一的数据通道（定义在内部头）。
 //
-//   ⚠ 采集口径本身就是判据的一部分：热身走 `Engine::advanceFrames`（读 RPC 帧计数空转、
-//   **不写盘**）、机位一次钉死全程不动、配置一律走 `makeProfile`（红线 3：scene.lua 缺
-//   `environment` 段 = aa_target 整帧全黑而残差恰好「完美为 0」= 最阴的假绿）。
+//   ⚠ 采集口径本身就是判据的一部分：热身走 `Engine::advanceToFrame`（读 RPC 帧计数空转到
+//   **绝对锚点**、债-89）、机位一次钉死全程不动、配置一律走 `makeProfile`（红线 3：scene.lua
+//   缺 `environment` 段 = aa_target 整帧全黑而残差恰好「完美为 0」= 最阴的假绿）。
 //   `runWindowSweep` 的四组**不判**的理由见它上方注释（判据 ⑤ 是带，长窗读数撞短窗的带 =
 //   把「变好了」判成「不合格」）。
 
@@ -35,8 +35,8 @@ const Engine::Camera kTargetCamera{
  * 一组采集。配置一律走 `makeProfile`（红线 3：scene.lua 的 `environment` 段由它写，缺段
  * aa_target 整帧全黑而残差恰好「完美为 0」= 最阴的假绿）。
  *
- * 热身走 `Engine::advanceFrames`（读 RPC 帧计数空转，**不写盘**）：α=0.002 要 3000 帧，
- * 用 `/shotburst` 热身就是写 3000 张 PNG（实测直接超时）。
+ * 热身走 `Engine::advanceToFrame`（读 RPC 帧计数空转到绝对锚点，**不写盘**；债-89）：
+ * α=0.002 要 3000 帧，用 `/shotburst` 热身就是写 3000 张 PNG（实测直接超时）。
  */
 Run runGroup(const std::string& dir, const std::string& name, const std::string& tag, bool taa,
     double feedback, double jitterScale, const std::string& variant, int periods,
@@ -82,8 +82,13 @@ Run runGroup(const std::string& dir, const std::string& name, const std::string&
     const int frames = kResidualPeriod * periods;
     Engine eng(dir);
     eng.setCamera(kTargetCamera);  // 机位一次钉死，全程不动（唯一变化 = jitter 相位）
-    eng.advanceFrames(static_cast<uint32_t>(r.warm));
-    const auto files = eng.shotBurst("screenshots", static_cast<uint32_t>(frames), tag + "_c");
+    // 债-89：热身 + 采集一步走 = 「空转到**绝对锚点**，burst 从锚点起」。到锚帧引擎已渲染
+    // anchor = 基座 + warm 帧 ≥ warm，热身口径保持；burst 起始帧跨进程确定 ⟹ 抖动相位
+    // 不再是彩票（改前 pristine 连跑结构签名都会变）。
+    const uint32_t anchor = kBurstAnchorBase + static_cast<uint32_t>(r.warm);
+    eng.advanceToFrame(anchor - kAnchorLead);
+    const auto files = eng.shotBurstAt("screenshots", static_cast<uint32_t>(frames), anchor,
+        tag + "_c");
 
     std::vector<Frame> shots;
     shots.reserve(files.size());

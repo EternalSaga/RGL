@@ -123,8 +123,13 @@ BistroRun runBistroGroup(const std::string& dir, const std::string& name, const 
     const int frames = kResidualPeriod * periods;
     Engine eng(dir);
     eng.setCamera({cam.position, cam.target, cam.fov});
-    eng.advanceFrames(static_cast<uint32_t>(r.warm));  // 空转不写盘（红线 2）
-    const auto files = eng.shotBurst("screenshots", static_cast<uint32_t>(frames), tag + "_c");
+    // 债-89：空转到**绝对锚点**（= 基座 + 热身，到锚帧已渲染 ≥ warm 帧，红线 2 的空转
+    // 口径保持）后从锚点起连拍——G0「TAA 全关连拍 = 确定性地板」要恒真，burst 起始的
+    // 绝对帧号必须确定（改前 pristine 五连跑出 2 种结构签名 = 相位彩票）。
+    const uint32_t anchor = kBurstAnchorBase + static_cast<uint32_t>(r.warm);
+    eng.advanceToFrame(anchor - kAnchorLead);
+    const auto files = eng.shotBurstAt("screenshots", static_cast<uint32_t>(frames), anchor,
+        tag + "_c");
 
     std::vector<Frame> shots;
     shots.reserve(files.size());
@@ -245,9 +250,12 @@ BistroReject runBistroRejectGroup(const std::string& dir, const std::string& nam
 
     Engine eng(dir);
     eng.setCamera({cam.position, cam.target, cam.fov});
-    eng.advanceFrames(static_cast<uint32_t>(warm));
-    const auto files = eng.shotBurst("screenshots", static_cast<uint32_t>(kResidualPeriod * periods),
-        tag + "_c", "taa_out");
+    // 债-89：锚点采集，与 runBistroGroup 同口径（拒收码依赖历史状态，到锚帧已渲染
+    // anchor ≥ warm 帧，热身口径保持）。
+    const uint32_t anchor = kBurstAnchorBase + static_cast<uint32_t>(warm);
+    eng.advanceToFrame(anchor - kAnchorLead);
+    const auto files = eng.shotBurstAt("screenshots", static_cast<uint32_t>(kResidualPeriod * periods),
+        anchor, tag + "_c", "taa_out");
 
     for (size_t i = 0; i < files.size(); ++i) {
         cv::Mat img = cv::imread(files[i], cv::IMREAD_UNCHANGED);

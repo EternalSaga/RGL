@@ -79,4 +79,49 @@ TEST_CASE("camera_frame_yaw：纯函数性（同输入逐位相同、与调用�
 	CHECK(std::abs(static_cast<double>(frameDrivenCameraYaw(base, a, n)) - exact) < 1e-4);
 }
 
+/**
+ * 机位锚点（债-89，RPC `yaw_at_frame` 的算术本体）。
+ *
+ * ## 期望值出处（不抄实现）
+ * 约定 = 「帧首钩子先 `++帧计数`、cameraSystem 先自增 `frameIndex` 再取值」⟹ 第 X 帧渲染
+ * 的 yaw 用索引 `i_now + (X − n_now) + 1`。本用例把该索引**手算成常量**（525 = 40+484+1），
+ * 再用已单独钉死的 `frameDrivenCameraYaw` 求值——实现若把 `+1` 或 `(X−n_now)` 写错，
+ * 手算索引处就对不上 `pin`。步长取 2^-9 ⟹ 全程 float32 精确，断言写成恰等。
+ *
+ * ## 变异红线（哪条变异让我红）
+ *  丢 `+1u`（先加后用读成后用先加）→ 全部恰等断言红；`(pinnedFrame − engineFrameNow)`
+ *  写成 `pinnedFrame`（把「帧计数与 yaw 索引的偏移」当成 0）→ 偏移非 1 的两条红；
+ *  `yaw` 分量取成 `yawPinned`（而非本帧期望值）→ 「不重定基」不变式红 = 紧随的
+ *  cameraSystem 当场把锚点抹掉（`applyFrameDrivenYaw` 以「yaw ≠ 期望值」判外部写入）；
+ *  符号反（base = pin + a·idx）→ 全红。
+ */
+TEST_CASE("camera_frame_yaw：yaw_at_frame 锚点 = 第 N 帧渲染值恰等于钉入值（含当帧边界与计数器偏移）") {
+	constexpr float a2 = 0.001953125f;  // 2^-9 rad/帧（float32 精确缩放）
+	constexpr float pin = 0.5f;
+	// ① 常规锚点：yaw 索引 40 / 帧计数 44（**两者不同**，实测本机就是这种偏移）→ 第 528 帧
+	//   渲染用的索引 = 40 + (528 − 44) + 1 = 525（手算）。
+	const YawPin p = frameDrivenYawPin(pin, a2, 40u, 44u, 528u);
+	CHECK(frameDrivenCameraYaw(p.yawBase, a2, 525u) == pin);
+	//   锚点只钉一帧：相邻索引必须**不是** pin（钉歪一帧 = 0.125px/帧量级的机位彩票）。
+	CHECK(frameDrivenCameraYaw(p.yawBase, a2, 524u) != pin);
+	CHECK(frameDrivenCameraYaw(p.yawBase, a2, 526u) != pin);
+	//   不重定基不变式：写回的 yaw 必须恰等于本帧期望值，否则 applyFrameDrivenYaw 判成
+	//   外部写入 → 重定基 → 锚点当场作废。
+	CHECK(p.yaw == frameDrivenCameraYaw(p.yawBase, a2, 40u));
+	// ② 当帧边界（pinnedFrame == 帧计数）：本帧的 cameraSystem 还没跑 ⟹ 还来得及，
+	//   渲染索引 = 40 + 0 + 1 = 41。
+	const YawPin now = frameDrivenYawPin(pin, a2, 40u, 44u, 44u);
+	CHECK(frameDrivenCameraYaw(now.yawBase, a2, 41u) == pin);
+	CHECK(now.yaw == frameDrivenCameraYaw(now.yawBase, a2, 40u));
+	// ③ 反向用例：偏移 = 0（两个计数器恰好相等）时锚点仍落在第 N 帧——堵「实现里偷偷
+	//   假设 yawFrameIndex == 帧计数 − 1」的写法（那样这条必然差一帧）。
+	const YawPin off0 = frameDrivenYawPin(pin, a2, 44u, 44u, 528u);
+	CHECK(frameDrivenCameraYaw(off0.yawBase, a2, 529u) == pin);  // 44 + 484 + 1
+	CHECK(frameDrivenCameraYaw(off0.yawBase, a2, 528u) != pin);
+	// ④ 门关值（每帧角 = 0）：任何帧都停在钉入值，锚点退化成「就是这一角」。
+	const YawPin gateOff = frameDrivenYawPin(pin, 0.0f, 7u, 9u, 528u);
+	CHECK(gateOff.yawBase == pin);
+	CHECK(gateOff.yaw == pin);
+}
+
 }  // namespace RGL

@@ -546,6 +546,7 @@ int cmdSelftest()
     testCliRegistryShape(c);
     testCliArgsBehavior(c);
     testEngineLogTail(c);
+    testBurstAnchor(c);
     testAoNoiseMetric(c);
     testSwimLagTableSurface(c);
     testLuaEditBlockBoundary(c);

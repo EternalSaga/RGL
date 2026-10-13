@@ -168,9 +168,12 @@ struct ProfileOpts {
     ///
     /// 为什么必须有这根线而不是走 RPC `Engine`：**帧号**。交付场景 `spin` 在转，同配置第 8 帧
     /// 与第 12 帧的影覆盖差 0.12pp（§4.1）⟹ 帧号是量具的一部分。RPC 的 `/shot` 落在哪一帧
-    /// 取决于 HTTP 往返与帧首钩子的先后（= 墙钟），`advanceFrames` 之后也是"大约第 N 帧"；
-    /// 而 `llm_shot.delay_frames` 是引擎在**第 N 帧渲染完成后**截图 = 精确钉死，同配置两跑
-    /// 逐位相同（evssm_plan §6.1 的确定性实测就是这条形态）。
+    /// 取决于 HTTP 往返与帧首钩子的先后（= 墙钟）——单张没有锚，先等帧号再发也只有
+    /// "大约第 N 帧"；而 `llm_shot.delay_frames` 是引擎在**第 N 帧渲染完成后**截图 = 精确
+    /// 钉死，同配置两跑逐位相同（evssm_plan §6.1 的确定性实测就是这条形态）。
+    /// ⚠ 债-89 后的口径：「帧号钉不死」只对**单张 `/shot`** 成立——连拍形态已有 RPC 侧锚
+    /// （`/shotburst` 的 `start_frame`，见 `Engine::shotBurstAt`，同配置两跑逐帧相同）。
+    /// 本形态仍然必要：它不依赖 RPC 门、拍完引擎自退，单张精确钉帧仍只有它。
     bool overrideLlmShot = false;
     std::string llmShotFile;       ///< `llm_shot.file`（相对引擎 CWD build/rgl；门开时必填）
     int llmShotDelayFrames = 8;    ///< `llm_shot.delay_frames`（消费方写死，别用默认值——理由见上）
@@ -301,6 +304,41 @@ struct EngineCameraPose {
 /// 核「n 行取尾 lines 行」的口径（债-92：起点写成 `n` 让本函数在 n>lines 时恒返回空串）。
 [[nodiscard]] std::string logTail(const std::string& path, int lines = 12);
 
+// ── 债-89：连拍锚 = 绝对帧号（时域判据可复现性的地基）────────────────────────────
+//
+// 为什么必须有锚点：抖动相位 = Halton(**绝对帧号**)、frame_yaw 机位 = 帧号纯函数，而
+// 相对锚（`advanceFrames` + 裸 `shotBurst`）下 burst 起始帧 = RPC 就绪落在第几帧 + 墙钟
+// ⟹ 相位是彩票（债-89 亲验：同配置三跑边缘列飘 ±2px、一次整组 rc=1；`temporal-swim-anchor`
+// PASS↔FAIL 互换；bistro G0 五连跑出 2 种结构签名）。
+//
+// 锚点基座必须**远高于**「RPC 就绪落在第几帧」的抖动（该抖动 = 就绪轮询粒度 × 帧率；
+// 轮询粒度已收紧到 10ms，见 Engine 构造注释；本机 1280×720 headless 实测就绪帧 ≤ ~60）。
+// 锚点被超过 = 引擎 409 / 客户端立刻抛 = 响亮失败，**唯一正确响应是抬高本常量**，
+// 永远不许静默退回相对锚（那等于把彩票藏起来，比诚实的彩票更坏）。
+inline constexpr uint32_t kBurstAnchorBase = 512;
+/// `advanceToFrame` 与 `shotBurstAt` 之间的前置帧数：长等待留在客户端（300s 预算 + 卡死
+/// 检测走 `GET /` 轮询），引擎侧只等最后 lead 帧（远低于 120s 的 burst 应答预算）。lead 必须
+/// ≫「轮询过冲 + HTTP 往返」的帧数（本机 2500fps：20ms 轮询 ≈ 50 帧 + 往返 ≈ 3 帧）。
+inline constexpr uint32_t kAnchorLead = 256;
+
+/**
+ * 债-89：burst 锚点校验的**纯函数**（selftest 直接喂合成值核口径，不吃 GPU；先例 = logTail）。
+ *
+ * 锚点已过 = 帧计数已越过 startFrame（**相等还来得及**：请求在帧首钩子里 drain，本帧
+ * drawFrame 尚未跑）。已过 ⟹ 返回可归因错误文案（点名锚点、当前帧、正确响应）；未过 = 空串。
+ */
+[[nodiscard]] std::string burstAnchorMissError(uint32_t startFrame, uint32_t frameNow);
+
+/**
+ * 债-89：burst 锚点落帧自证的**纯函数**（同上，selftest 喂合成值）。
+ *
+ * 引擎回显首张实际落帧。**缺回显 = 旧构建静默忽略了 `start_frame`**——burst 实际按相对锚
+ * 跑了而读数看起来完全正常 = 最贵的静默退化，必须报；落帧 ≠ 锚点（如锚帧被 acquire 跳帧）
+ * 同样必须报：采集点已经不是请求的那个相位。通过 = 空串。
+ */
+[[nodiscard]] std::string burstAnchorEchoError(uint32_t startFrame, bool echoedPresent,
+    uint32_t echoedFrame);
+
 /// 引擎进程：起 headless、RPC 驱动、干净退出。单实例纪律 = 起跑前 pgrep，有残留拒跑
 /// （并行实例互相遮挡合成，会把画面与帧率双双扭曲，AGENTS.md 测量教训同源）。
 /// 起跑前先过 SPV 新鲜度守卫（.slang 比其所属 spv 新 = 疑似 stale 拒跑，批 12.3d-D2）。
@@ -316,7 +354,17 @@ public:
         std::array<double, 3> target;
         double fovDegrees = 60.0;
     };
-    void setCamera(const Camera& cam);
+    /**
+     * 钉机位（RPC `POST /camera`）。
+     *
+     * @param yawAtFrame 债-89 机位锚点：>0 = 「第该帧**渲染出来**的朝向 = 本次写入的朝向」，
+     *   引擎据此解 `yawBase`（`frameDrivenYawPin`）。为什么客户端自己预补偿不行：写入落帧
+     *   由 HTTP 时序决定（本机 headless ~6000fps ⟹ 落帧抖动 ±36 帧量级 ≈ 4.5px），补偿量
+     *   无论怎么算都带着这个不确定性；只有把机位写成**绝对帧号的函数**才与落帧无关。
+     *   前提 = 该 profile 的 `camera.lua frame_yaw ≠ 0`（否则引擎 400 响亮拒绝）；锚已过 = 409。
+     *   静止机位的仪器（无 frame_yaw）传 0 = 现行为逐位不变。
+     */
+    void setCamera(const Camera& cam, uint32_t yawAtFrame = 0);
 
     /**
      * 读回引擎当前的 yaw（度）。`/camera` 的空 body = 只读回显。
@@ -393,10 +441,30 @@ public:
      * 6/α = 3000 帧。用 `/shotburst` 热身 = 写 3000 张 PNG，直接超时。本机 headless 实测
      * ≈2500 fps（`GET /` 的 frame 计数在 5s 内走了 12593），3000 帧 ≈ 1.2s，于是 α 可以
      * 一路推到 0.002 而整条判据仍是分钟级。
+     *
+     * 🔴 **不许拿它当连拍锚**（债-89）：相对推进只保证「又渲染了 n 帧」，burst 会落在第几帧
+     * 由 RPC 就绪时序 + 墙钟决定，而抖动相位 = Halton(绝对帧号) ⟹ 读数成彩票。连拍锚走
+     * `advanceToFrame` + `shotBurstAt`（绝对帧号）。本函数只留给「只要渲染够久就行、burst
+     * 落点无所谓」的旧调用点（temporal-step / temporal-motion，转绝对锚 = 各自债的账）。
      * @param n 要推进的帧数（相对调用时刻）
      * @param timeoutSec 帧计数不推进 = 引擎卡死，超时抛错而不是静默少热身
      */
     void advanceFrames(uint32_t n, int timeoutSec = 300);
+
+    /**
+     * 空转推进到**绝对帧号** absFrame（不写盘；债-89，连拍锚的等待原语）。
+     *
+     * 与 `advanceFrames` 的分工：那边「再跑 n 帧」，这边「跑到第 N 帧」——只有后者能让
+     * burst 的抖动相位（= Halton(绝对帧号)）与 frame_yaw 机位跨进程逐帧复现。长等待走这里
+     * （客户端 300s 预算 + 卡死检测），随后 `shotBurstAt(absFrame + lead)` 让引擎只等最后
+     * lead 帧——两段拼起来把 burst 起点钉死在绝对帧号上。
+     *
+     * 调用时帧计数已越过 absFrame = 锚点错过 ⟹ **立刻抛**（可归因文案）。绝不静默退回
+     * 「再跑 n 帧」：那会把彩票藏进看起来正常的读数里（债-89 的教训本体）。
+     * @param absFrame 目标绝对帧号（RPC 帧计数，引擎进程起跑记 0，帧首 +1）
+     * @param timeoutSec 帧计数不推进 = 引擎卡死，超时/停滞抛错而不是静默少热身
+     */
+    void advanceToFrame(uint32_t absFrame, int timeoutSec = 300);
 
     /**
      * 连续采 n 帧（POST /shotburst）——**时域差分唯一合法的采集口**。
@@ -404,6 +472,8 @@ public:
      * 帧首钩子的先后（= 墙钟），相邻两张根本不是相邻两帧，逐帧差于是测的是随机相位窗
      * （实测同一个量随预热长度差 3 倍）。`/shotburst` 的「下一张」由引擎在帧首结算
      * 钩子里自己登记（该钩子先于 drawFrame）⇒ 采集落在连续的第 N..N+n-1 帧上。
+     * ⚠ 连续性 ≠ 可复现：本重载的 N（起始帧）仍由 HTTP 时序决定 = 相对锚。判据采集走
+     * `shotBurstAt`（绝对锚，债-89）；本重载只留给「起点无所谓」的旧调用点与热身连拍。
      * @param dir 引擎 CWD（build/rgl）下的输出目录
      * @param n 张数（≥1）
      * @param prefix 文件名前缀（引擎写 `<prefix>%03d.png`）
@@ -413,6 +483,22 @@ public:
      */
     [[nodiscard]] std::vector<std::string> shotBurst(const std::string& dir, uint32_t n,
         const std::string& prefix = "f", const std::string& attachment = "");
+
+    /**
+     * 从**绝对帧号** startFrame 起连续采 n 帧（POST /shotburst 的 `start_frame`；债-89）。
+     *
+     * 引擎在帧首钩子里等帧计数到 startFrame 才登记首张 ⇒ 采集恰落第 startFrame..
+     * startFrame+n-1 帧，抖动相位与 frame_yaw 机位跨进程逐帧确定——W29/W30/W31/W37 的
+     * 可复现性全押在这一句上。三道响亮闸门，任何一道都不静默：
+     *  1. 发请求前预检：帧计数已越过锚点 ⟹ `burstAnchorMissError` 抛；
+     *  2. 引擎侧：请求到得晚、锚已过 ⟹ 409（本函数转抛，带引擎原文）；
+     *  3. 应答回显 `startFrame` ≠ 请求值（含**旧构建无回显**= 静默忽略 start_frame）
+     *     ⟹ `burstAnchorEchoError` 抛。
+     * @param startFrame 锚点绝对帧号（须 > 当前帧；用 `kBurstAnchorBase + 热身` 量级）
+     */
+    [[nodiscard]] std::vector<std::string> shotBurstAt(const std::string& dir, uint32_t n,
+        uint32_t startFrame, const std::string& prefix = "f",
+        const std::string& attachment = "");
 
 private:
     struct Impl;

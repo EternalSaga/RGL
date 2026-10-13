@@ -259,6 +259,7 @@ set(RGL_BASE_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/param_registry.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/debug_rpc.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/debug_rpc_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/debug_rpc_burst.cppm"  # /shotburst 协议判据（形状解析 + 绝对帧号锚点裁决，零设备）
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/types_generated.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/material_types_generated.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/lights_types_generated.cppm"

@@ -14,6 +14,7 @@ import diagnostics;  // 门 diagnostics.rpc + rpcPort
 import param_pages;  // buildDebugParamPages（/state、/param 复用面板参数页）
 import param_registry;   // ParamPage / DebugPanelState（页结构 + 材质选择器）
 import camera;       // Camera ctx（/camera 写、/state 读）
+import debug_rpc_burst;  // /shotburst 协议判据（形状解析 + 锚点裁决，rlbase 层纯逻辑）
 import asset_table;  // AssetTable（参数页构建）
 import vk_renderer;  // Renderer（/shot 帧捕获 + writeCapturePng 宿主）
 import llm_debug;    // writeCapturePng（/shot 落盘，同 main 的 llm 截图出口）
@@ -213,6 +214,9 @@ struct RpcWiring {
 	uint32_t burstRemaining = 0;               ///< 还差几张（0 = 本批已交齐）
 	uint32_t burstIndex = 0;                   ///< 下一张的序号（文件名后缀）
 	std::vector<std::string> burstFiles;       ///< 已写盘的绝对路径（完成时在应答里回显）
+	// ── 债-89：连拍锚 = 绝对帧号（`start_frame`）──
+	uint32_t burstStartFrame = 0;              ///< >0 = 锚点未到（帧首钩子里等帧边界；0 = 无锚/已触发）
+	uint32_t burstActualStart = 0;             ///< 首张实际落帧（应答回显；首张写盘时记 = 跳帧时也是真相）
 	std::string pendingShotFile;              // 期望 PNG 相对路径（gbuf 通道路径由写盘方定）
 	uint32_t shotSeq = 0;                     // 缺省文件名序号（screenshots/rpc_<N>.png）
 	uint32_t frame = 0;                       // 帧计数（/state 与根路由回显，纯观测）
@@ -273,6 +277,40 @@ bool rpcApplyCameraMode(const nlohmann::json& body, Camera& cam) {
 }
 
 /**
+ * `yaw_at_frame` 套用（债-89 机位锚点；从 `rpcHandleCamera` 拆出 = 认知复杂度红线）。
+ *
+ * 为什么必须在引擎侧（客户端预补偿必然失败）：`frame_yaw` 下写入落帧由 HTTP 时序决定，
+ * 本机 headless ~6000fps 下落帧抖动 ±36 帧量级 = 0.125px/帧 × 36 ≈ 4.5px，与要消的噪声
+ * 同源——只有把机位基准解成**绝对帧号的函数**（`frameDrivenYawPin`）才与落帧无关。
+ * @param body 请求体
+ * @param frameNow 引擎当前帧计数（`RpcWiring::frame`）
+ * @param cam 已套用完本请求其他字段的相机（锚的是**套用后**的朝向）
+ * @param pinned 通过时写入锚点帧号（0 = 本请求没带该字段）
+ * @return 失败应答（形状错 = 400、锚已过 = 409）；空 = 通过
+ */
+std::optional<RpcOutcome> rpcApplyYawAnchor(const nlohmann::json& body, uint32_t frameNow,
+	Camera& cam, uint32_t& pinned) {
+	pinned = 0;
+	if (!body.contains("yaw_at_frame"))
+		return {};
+	const auto& v = body.at("yaw_at_frame");
+	if (!v.is_number_integer() || v.get<int64_t>() < 1 || v.get<int64_t>() > 0xFFFFFFFFLL)
+		return rpcFail(400, "'yaw_at_frame' must be an integer in [1, 2^32)");
+	const uint32_t n = static_cast<uint32_t>(v.get<int64_t>());
+	// 门红线：`frame_yaw = 0` 时 yaw 不是帧号函数 ⟹ 无从钉，响亮拒绝，不静默忽略。
+	if (cam.frameYaw == 0.0f)
+		return rpcFail(400, "yaw_at_frame needs camera.lua frame_yaw != 0 —— yaw 不是帧号纯函数时无从钉");
+	if (n < frameNow)
+		return rpcFail(409, "yaw_at_frame " + std::to_string(n) + " already passed (frame "
+			+ std::to_string(frameNow) + ") — 机位锚点是绝对帧号：更早发请求或抬高锚点");
+	const YawPin pin = frameDrivenYawPin(cam.yaw, cam.frameYaw, cam.yawFrameIndex, frameNow, n);
+	cam.yawBase = pin.yawBase;
+	cam.yaw = pin.yaw;  // = 本帧期望值 ⟹ 紧随的 cameraSystem 不重定基（否则本针当场被抹）
+	pinned = n;
+	return {};
+}
+
+/**
  * POST /camera：任意子集套用（缺字段不改；形状错 → 400）。
  * 直接写 `Camera` ctx —— cameraSystem 只在有输入时改姿态，帧首套用本帧即生效。
  * @param w 装配态
@@ -302,7 +340,14 @@ RpcOutcome rpcHandleCamera(RpcWiring& w, const nlohmann::json& body) {
 	if (body.contains("pitchDegrees"))
 		cam.pitch = glm::radians(body.at("pitchDegrees").get<float>());
 	if (body.contains("fovDegrees")) cam.fov = glm::radians(body.at("fovDegrees").get<float>());
-	return rpcOk({{"ok", true}, {"camera", rpcCameraJson(cam)}});
+	// 债-89：机位锚点（`yaw_at_frame = N` = 第 N 帧渲染出来的朝向 = 本请求套用后的朝向）。
+	uint32_t yawPinned = 0;
+	if (auto fail = rpcApplyYawAnchor(body, w.frame, cam, yawPinned); fail)
+		return *fail;
+	nlohmann::json out{ {"ok", true}, {"camera", rpcCameraJson(cam)} };
+	if (yawPinned != 0)
+		out["yawPinnedFrame"] = yawPinned;  // 回显自证：客户端核对锚点帧号（没回显 = 没钉）
+	return rpcOk(std::move(out));
 }
 
 /**
@@ -396,29 +441,14 @@ void rpcHandleShot(RpcWiring& w, const nlohmann::json& body, RpcResponder respon
 }
 
 /**
- * @brief 解析 /shotburst 的 `attachment` 字段（temporal-motion 的 taa_out 拒收掩膜连拍）。
- *
- * 白名单只两条：`swapchain`（= 不传，旧行为逐位不变）与 `taa_out`（具名附件回读）。
- * 抽成独立函数的原因：把 4 个校验分支挪出 handler，认知复杂度回到红线内。
- *
- * @param body 请求体
- * @param out  通过时写入附件名（未传 = 空串 = swapchain 路）
- * @return 错误消息（空 = 通过）
+ * @brief 登记一张回读（swapchain 与具名附件二选一）。三处调用（锚点登记 / 到锚首张 /
+ *        逐张续拍）同源一份——回读源选择在 burst 生命周期里必须处处一致。
  */
-std::string parseBurstAttachment(const nlohmann::json& body, std::string& out) {
-	out.clear();
-	if (!body.contains("attachment"))
-		return {};
-	if (body.contains("gbuf"))
-		return "'attachment' and 'gbuf' are mutually exclusive";
-	if (!body["attachment"].is_string())
-		return "'attachment' must be a string";
-	out = body["attachment"].get<std::string>();
-	if (out.empty())
-		return "'attachment' must be a non-empty name";
-	if (out != "swapchain" && out != "taa_out")
-		return "'attachment' only supports swapchain | taa_out";
-	return {};
+void rpcRequestBurstCapture(RpcWiring& w) {
+	if (w.burstAttachment.empty())
+		w.renderer.requestFrameCapture(w.burstGbuf);
+	else
+		w.renderer.requestFrameCapture(std::string_view(w.burstAttachment));
 }
 
 /**
@@ -429,10 +459,15 @@ std::string parseBurstAttachment(const nlohmann::json& body, std::string& out) {
  * （见 `rpcSettleShot`），该钩子先于 drawFrame ⟹ 第 N、N+1、N+2… 帧逐张采集。
  * 时域差分（相邻帧差）只有后者测得准（`imgqa temporal`，docs/taa_plan.md §7 第 8 条）。
  *
+ * 连续性只保证「相邻」，不保证「第几帧」——债-89：抖动相位 = Halton(绝对帧号)，起始帧
+ * 随 HTTP 时序漂移 = 判据读数成彩票。`start_frame` 把起点也钉死：首张 = 第 N 帧，
+ * 应答回显 `startFrame` 供调用侧自证；锚已过 = 409（**不静默退回相对**）。
+ *
  * @param w 装配态
  * @param body 请求体对象（`n` 必填 ≥1、`dir` 必填输出目录、`prefix?` 文件名前缀、
  *   `gbuf?` 回读通道、`attachment?` 具名附件回读（与 gbuf 互斥；temporal-motion 取
- *   taa_out alpha 的拒收掩膜连拍）；`n` 越界或类型错 = 400）
+ *   taa_out alpha 的拒收掩膜连拍）、`start_frame?` **绝对帧号锚点**（债-89：首张保证落在
+ *   第 N 帧；已过 = 409 响亮失败，绝不静默退回相对）；`n` 越界或类型错 = 400）
  * @param responder 跨帧响应句柄（移交给 w.pendingBurst）
  */
 void rpcHandleShotBurst(RpcWiring& w, const nlohmann::json& body, RpcResponder responder) {
@@ -453,73 +488,92 @@ void rpcHandleShotBurst(RpcWiring& w, const nlohmann::json& body, RpcResponder r
 		rpcReject(responder, 409, "another /shotburst is still pending");
 		return;
 	}
-	if (!body.contains("n") || !body.at("n").is_number_integer() || body.at("n").get<int>() < 1
-		|| body.at("n").get<int>() > 1024) {
-		rpcReject(responder, 400, "'n' must be an integer in [1, 1024]");
-		return;
-	}
-	if (!body.contains("dir") || !body.at("dir").is_string()
-		|| body.at("dir").get<std::string>().empty()) {
-		rpcReject(responder, 400, "'dir' must be a non-empty path");
-		return;
-	}
-	w.burstDir = body.at("dir").get<std::string>();
-	if (body.contains("prefix"))
-		w.burstPrefix = body.at("prefix").get<std::string>();
-	// attachment（temporal-motion 的 taa_out alpha 掩膜连拍）：与 gbuf 互斥，同 /shot 的约定。
-	if (auto err = parseBurstAttachment(body, w.burstAttachment); !err.empty()) {
+	// 形状解析与锚点裁决住在 debug_rpc_burst（rlbase，可在 just test 里逐条钉死）；本处
+	// 只做「解析 → 套用装配态 → 无锚则立即登记首帧」。错误分类不变：形状 = 400、锚已过 = 409。
+	BurstRequest req;
+	if (auto err = parseBurstRequest(body, req); !err.empty()) {
 		rpcReject(responder, 400, err);
 		return;
 	}
-	w.burstGbuf = body.contains("gbuf") ? body.at("gbuf").get<int>() : -1;
-	w.burstRemaining = static_cast<uint32_t>(body.at("n").get<int>());
+	w.burstDir = req.dir;
+	if (req.prefix)
+		w.burstPrefix = *req.prefix;
+	w.burstAttachment = req.attachment;
+	w.burstGbuf = req.gbuf;
+	w.burstRemaining = req.n;
 	w.burstIndex = 0;
 	w.burstFiles.clear();
-
-	if (w.burstAttachment.empty())
-		w.renderer.requestFrameCapture(w.burstGbuf);  // 第一张 = 本帧 drawFrame 回读
-	else
-		w.renderer.requestFrameCapture(std::string_view(w.burstAttachment));
+	uint32_t armed = 0;
+	if (auto err = resolveBurstAnchor(w.frame, req.startFrame, armed); !err.empty()) {
+		rpcReject(responder, 409, err);
+		return;
+	}
+	w.burstStartFrame = armed;
+	if (w.burstStartFrame == 0)
+		rpcRequestBurstCapture(w);  // 无锚/锚恰在本帧：第一张 = 本帧 drawFrame 回读
 	w.pendingBurst = std::move(responder);
+}
+
+/**
+ * /shotburst 帧首结算（从 `rpcSettleShot` 拆出——突发分支 = 锚点等待 + 逐张写盘 + 逐张
+ * 登记，与单张路径同函数会把认知复杂度顶破红线）。
+ *
+ * 「连续 N 帧」的全部机制：写完一张就在**本钩子**里登记下一张——本钩子先于 drawFrame，
+ * 所以登记立刻作用在本帧。带 `start_frame` 锚点（债-89）时还负责「到锚才起跑」：锚点未到
+ * = 直接返回，到锚帧在本钩子里登记首张 ⟹ 首张恰落第 start_frame 帧。
+ * @param w 装配态（调用方保证 pendingBurst 在途）
+ */
+void rpcSettleBurst(RpcWiring& w) {
+	if (w.burstStartFrame != 0) {
+		// 债-89 锚点未到：不登记回读、不写盘，只等帧边界（零 GPU 成本）。本钩子先于
+		// drawFrame ⟹ 到锚帧在这里登记首张，采集就恰好落在第 burstStartFrame 帧。
+		if (w.frame < w.burstStartFrame)
+			return;
+		w.burstStartFrame = 0;
+		rpcRequestBurstCapture(w);
+		return;  // 首张产物 = 本帧 drawFrame，下个帧边界结算
+	}
+	if (!w.renderer.hasFrameCapture())
+		return;  // 本帧无产物（acquire 跳帧）：请求保持 pending，下个帧边界重试
+	LlmDebugConfig shot;
+	shot.file = fmt::format("{}/{}{:03d}.png", w.burstDir, w.burstPrefix, w.burstIndex);
+	auto file = writeCapturePng(w.renderer, shot);
+	if (!file) {
+		auto responder = std::move(*w.pendingBurst);
+		w.pendingBurst.reset();
+		w.burstRemaining = 0;
+		rpcReject(responder, 500, file.error().message);
+		return;
+	}
+	if (w.burstIndex == 0)
+		// 首张落帧自证：产物 = 上一帧 drawFrame 画的（锚帧被 acquire 跳帧时这里记的
+		// 才是真正出图的那一帧——回显与请求锚点不符会被客户端判抛，不静默）。
+		w.burstActualStart = w.frame - 1;
+	++w.burstIndex;
+	w.burstFiles.push_back(*file);
+	if (--w.burstRemaining == 0) {
+		auto responder = std::move(*w.pendingBurst);
+		w.pendingBurst.reset();
+		// startFrame 回显（债-89）：首张实际落帧。带 start_frame 的调用侧拿它自证
+		// 「落帧 == 锚点」；不带锚点的旧调用多一个字段无害（少一个字段才有害——
+		// 旧构建对 start_frame 静默无回显，客户端据此抛，见 Engine::shotBurstAt）。
+		responder.resolve(200, rpcOk({{"ok", true}, {"count", w.burstIndex},
+			{"startFrame", w.burstActualStart}, {"files", w.burstFiles}}).body.dump());
+		return;
+	}
+	// 下一张 = 本帧（连续，不跨 HTTP）；回读源与首张同款选择
+	rpcRequestBurstCapture(w);
 }
 
 /**
  * /shot 跨帧结算（帧首、drain 之前调用）：捕获产物就绪 → 写 PNG → 兑现响应。
  * 未就绪 = 保持 pending（acquire 超时跳帧时请求保持 pending 重试，同 llm_debug）。
- *
- * **突发分支先走**（与单张互斥，不会两边都活）：写完一张就在**本钩子**里登记下一张——
- * 本钩子先于 drawFrame，所以登记立刻作用在本帧，这就是「连续 N 帧」的全部机制。
+ * 突发分支先走（与单张互斥，不会两边都活），本体见 `rpcSettleBurst`。
  * @param w 装配态
  */
 void rpcSettleShot(RpcWiring& w) {
 	if (w.pendingBurst) {
-		if (!w.renderer.hasFrameCapture())
-			return;  // 本帧无产物（acquire 跳帧）：请求保持 pending，下个帧边界重试
-		LlmDebugConfig shot;
-		shot.file = fmt::format("{}/{}{:03d}.png", w.burstDir, w.burstPrefix, w.burstIndex);
-		auto file = writeCapturePng(w.renderer, shot);
-		if (!file) {
-			auto responder = std::move(*w.pendingBurst);
-			w.pendingBurst.reset();
-			w.burstRemaining = 0;
-			rpcReject(responder, 500, file.error().message);
-			return;
-		}
-		++w.burstIndex;
-		w.burstFiles.push_back(*file);
-		if (--w.burstRemaining == 0) {
-			auto responder = std::move(*w.pendingBurst);
-			w.pendingBurst.reset();
-			responder.resolve(200,
-				rpcOk({{"ok", true}, {"count", w.burstIndex}, {"files", w.burstFiles}})
-					.body.dump());
-			return;
-		}
-		// 下一张 = 本帧（连续，不跨 HTTP）；回读源与首张同款选择
-		if (w.burstAttachment.empty())
-			w.renderer.requestFrameCapture(w.burstGbuf);
-		else
-			w.renderer.requestFrameCapture(std::string_view(w.burstAttachment));
+		rpcSettleBurst(w);
 		return;
 	}
 	if (!w.pendingShot)
