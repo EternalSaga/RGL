@@ -1758,3 +1758,29 @@ MDI 变体是另一次编译，位级不漂移是"实测出来的"。若 A3 红�
 - **债-105**（α 叠加段没有自己的门，白付 1.59ms）与本刀**正交**，但它比整条命令数轴便宜一个数量级
   且收益在交付口径 ⟹ 建议排在 ★M-1 之后、★M-3 之前插一刀（用户拍板）。
 - **§8「不在阶段 A 顺手做 E」**继续有效：本刀不碰 mapping / push-index。
+
+### 19.5 ★M-1 接缝实测（2026-10-13 主 agent 当日读本体，实现前照做，别再重查）
+
+| 接缝 | 事实（文件:行） | 对 ★M-1 的后果 |
+|---|---|---|
+| **SPV 变体机制** | `addMeshletEntry` 用**三张平行表**拼变体：`kVariantSpv` / `kVariantSuffix` / `kVariantSpecSuffix`（`shader_registry_impl.cppm:189-193`），并明写"变体名/后缀表 = **唯一拼写点**，别在别处再拼一遍" | 阴影段的 MDI 变体**照同一形态**加，不在执行器里拼字符串。`rgl_shader_defined` 先例在 `rgl/CMakeLists.txt:25/29` |
+| **领槽 API** | `resources.allocSlot(SlotSegment::Runtime, "<名字>")` + `writeMeshletSectionDescriptors(...)`（`main_meshlets.cppm:218-229`） | args buffer 走同一条路；名字带 `meshlet.gpu.` 前缀的既有命名法 |
+| **声明 / mapping 必须同向** | 条目侧多烘的 binding 若 SPV 未声明，会被"批 M 过滤"裁掉；**反过来（声明了未 mapping）是 VVL 错误**（`addShadowMeshletEntry:439-455` 注释） | 🔴 MDI 变体**声明** binding 22 的那一侧，条目必须**同时**给 22 领槽；旧 `shadow_meshlet` 条目**不声明也不烘** 22（两侧同向） |
+| **push 尺寸是条目属性** | `PipelineEntry::argsSize = 12` 与 `ShadowMeshletDrawArgs` 的 `static_assert` 同源 | D1 的 push 不改尺寸 ⟹ `argsSize` 不动、执行器通用 push 路径不动 |
+| **执行器已知 frameSlot** | `executePassDraws(cmd, pass, list, frameSlot)` | 见下方 ring×2 的免第二槽解法 |
+
+🔴 **ring×2 不需要第二个描述符槽（本轮设计收获）**：`MeshletCullService` 用"单份 + 写前依赖 barrier"
+是因为它的写者是 GPU；本表写者是 CPU，必须分帧轮转。但**不必**领两槽、也不必逐帧改描述符：
+
+- 一张 buffer = `kFramesInFlight` 个等长 slice 首尾相接，描述符覆盖**整张**；
+- GPU 侧 `argsOffset` 与 shader 侧 `rowBase` **都由同一个 frameSlot 推出来**
+  （`argsOffset = frameSlot*sliceBytes + 级联段起点`、`rowBase = frameSlot*sliceRows + 段起点行号`）；
+- ⟹ 分帧轮转落在**偏移**上，不落在句柄上，管线条目与 shader object 的启动期烘焙一次不动
+  （这正是 `MeshletCullService` 注释里骂过的"ring×2 要把条目表翻倍"那个代价，本形态绕开了）。
+
+⚠ 前提是 `argsOffset` 与 `rowBase` **必须同源于同一个 frameSlot** ——两处各算一遍迟早漂，
+收进一个具名入口（同 D3 把 vkCmd 参数序收进唯一入口的那条纪律）。
+
+**★M-1 的 A5 收益判据要有闭式锚**：启动对账打印 `Σrows = 级联数 × 可切候选数`（现值：3 × 1530）与
+`Σtask`，并打印"预期 vkcmd 下降 = 3 × (可见 meshlet 行数 − 生效级联数)"。
+没有闭式锚的性能读数会被读成"大概降了"，spike §6.3 那条 M4 教训的同族形态。
