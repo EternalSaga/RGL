@@ -1,0 +1,63 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# 🔴🔴 本文件是**骨架**，且**从未在任何远端跑过一次**（落地当日实测：仓里没有 GitHub
+# 远端，origin 是自建 Gitea；GitHub Actions 与 Gitea Actions 都没执行过它）。
+#
+# 它存在的意义只有一条：把「`just test` 的 435 例只在有人记得敲时才存在」这件事
+# （债-10）在**没有本地钩子的机器**上也接上执行者。本地那条路已经落地 =
+# `tools/hooks/pre-push` + `just install-hooks`。
+#
+# 在有人把它跑绿之前，本文件**不构成**「CI 已就绪」的声明。下面每一条前置都是 TODO，
+# 刻意不编造版本号 / 安装命令（照抄上游文档 = 把"看起来能跑"当成"跑过"，正是本仓
+# 反复付过钱的那类错）。vcpkg / Vulkan SDK 的前置口径 → docs/技术概念.md
+# §构建（Windows 前置与 vcpkg platform expressions）；Linux 侧的前置**同样没核实过**。
+# ══════════════════════════════════════════════════════════════════════════════
+name: build-and-test（未验证远端 · 骨架）
+
+# 触发面刻意窄：只跑 just test（无设备子集）。gpu 套件（38 例）要真设备 + VVL，
+# 🔴 **不要**因为"CI 绿了"就以为它们被跑过——它们在这里根本不会跑。
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  unit:
+    # TODO(未验证)：ubuntu-latest 上 clang 版本、libclang 是否随附（just checks 要）、
+    #   ninja 是否预装、vcpkg 的 x64-linux-native 自定义 triplet 在 runner 上是否成立
+    #   ——**这条 triplet 是本机原生 triplet**，runner 上大概率要换 x64-linux。
+    runs-on: ubuntu-latest
+    timeout-minutes: 60          # TODO(未验证)：全量编译在 runner 上要多久，没测过
+
+    steps:
+      - uses: actions/checkout@v4
+        # TODO(未验证)：本仓 assets/ 下有 Git LFS 对象（git lfs ls-files 可见）。
+        #   不拉 LFS ⟹ 依赖真实贴图/模型 的用例可能红或 SKIP。要拉就得显式配
+        #   lfs: true ——但**先确认 runner 能连到 LFS 服务**，本仓远端是内网 Gitea。
+
+      # TODO(未验证)：just 不在 ubuntu-latest 上预装（至少这个版本不确定）。装哪个渠道、
+      #   哪个版本，等真跑的时候再定；这里不放一条"看起来对"的 curl 安装命令。
+      # - run: <安装 just>
+
+      # TODO(未验证)：vcpkg。仓库用 VCPKG_ROOT / vcpkg.json manifest 模式 +
+      #   custom-triplets/ + third_party/vcpkg-ports/（见 Justfile 的 config 配方），
+      #   runner 上要么自带要么自己 clone，**版本没钉死过**。
+      # TODO(未验证)：Vulkan SDK / 驱动。just test 的默认子集**不需要设备**（本机实测：
+      #   屏蔽全部 ICD 后 435 例仍全绿，见 docs/还债总账.md 债-10 的落地记录），但
+      #   rlvk / VMA 的**头文件与链接**仍要 Vulkan 开发包 —— 装不装得起来没验证。
+      # TODO(未验证)：Slang 由 cmake/SlangFetch.cmake 在 configure 期下载，runner 的
+      #   出网策略是否允许，没测过。
+
+      - name: Configure
+        run: just config         # TODO(未验证)：默认 clang + Release + x64-linux-native
+
+      - name: Build
+        run: just build          # 含 reflection_check（SHA1 护栏）与 source_checks
+
+      - name: Checks (strict)
+        run: just checks --strict   # 验收仪式：0 警告；🔴 未验证 = libclang 在 runner 上找不找得到
+
+      - name: Unit tests（无设备子集）
+        run: just test           # = rgl_tests --test-suite-exclude=gpu
+
+      # 刻意**不放**这些（它们要真设备 / 要窗口，runner 上跑出来的红不可归因）：
+      #   just test-all / just test-gpu / just smoke / just shot / just regress / just analytic

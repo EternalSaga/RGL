@@ -37,6 +37,11 @@ just cpu [--arms default,no-vvl --json f.json --compare f.json --list-arms]  # C
 just run-igpu / run-dgpu / run-intel   # 强制核显 / NVIDIA prime 独显 / Intel anv
 just test                # 单元测试（tests/，**无 GPU 无窗口**，毫秒级；排除 gpu 套件）
 just test-all / test-gpu # 含设备级原语用例（要真设备 + VVL；无设备**FAIL 不 SKIP**）
+just install-hooks       # 装 pre-push 钩子（push 前跑 just test，实测 2s）；🔴 **每台机器 / 每个
+                      # worktree 各装一次**，没装 = 回归网只在有人记得敲时才存在（钩子本体在
+                      # `tools/hooks/`，接管原 LFS 钩子并在测试通过后接力；`just pre-push` 当命令自检）
+just coverage            # 分层测试覆盖量具（rlbase/rlgfx/rlscene/rlframe 谁有 tests/ 消费者；
+                      # **只出数不裁决**，口径真相源 = `tools/checks/coverage_layers.py` docstring）
 just analytic            # 闭式解探针：算像素「该是多少」并与实机截图逐字节对拍（要 GPU）
 just imgqa <子命令>       # 区域归因判据工具箱（子命令与默认值 → `imgqa -h`；判据纪律 → skill rgl-verify）
 just fsr-blobs / fsr-check / fsr-smoke   # Phase 14 vendor FSR 3.1.4：重生成排列产物 / SHA1 护栏 /

@@ -62,6 +62,7 @@ from config import (DEFAULT_COGNITIVE_ERROR_THRESHOLD, DEFAULT_COGNITIVE_THRESHO
                     TOOL_COGNITIVE_ERROR_THRESHOLD, TOOL_COGNITIVE_THRESHOLD,
                     TOOL_DISABLED_RULES, TOOL_FILE_THRESHOLD, TOOL_FUNC_THRESHOLD,
                     TOOL_UNIT_PREFIXES, TOOL_UNIT_SUFFIXES)
+from coverage_layers import coverage_checks, coverage_readout
 from fs import read_text
 from rules_doxygen import interface_declared_names, rule_doxygen
 from rules_metrics import evaluate_metrics
@@ -313,6 +314,9 @@ def main() -> None:
         warnings.extend(judgments_pointer_checks())
         warnings.extend(lib_layering_checks())
         warnings.extend(reflection_contract_checks())
+        # 分层测试覆盖（债-15）：**只出数不裁决**，本行只可能因「扫描面为空 / 清单解析不到」
+        # 报 error。全表在 `just coverage`，不在这里印（每次构建印一张没人裁决的表 = 噪声）。
+        warnings.extend(coverage_checks())
 
     # 工具侧基线（只准降不准升）：--update-tool-baseline 先重写再比对（必然持平）。
     # 未解析的 TU 不参与比对，其基线条数原样保留（否则 clean 后一跑就把基线清零）。
@@ -394,6 +398,12 @@ def main() -> None:
         bp_readout = doc_pointer_readout()
         print("[style-check] 反引号指针对账: "
               + (bp_readout if bp_readout else "**本次未执行**（规则没跑到）"))
+        # 覆盖量具的读数（债-15）：一行，不是全表。留这一行的理由 = 这工具若静默烂掉，
+        # 下一次需要它的人拿到的是一张假表；有读数才有「它今天跑了、覆盖面多大」的凭据。
+        cov_readout = coverage_readout()
+        print("[style-check] 分层测试覆盖: "
+              + (cov_readout if cov_readout else "**本次未执行**（规则没跑到）")
+              + "（全表 just coverage）")
         if rgl_notready:
             print("[style-check] 提示: 跳过 = modmap/BMI 构建产物缺失（clean 后首次构建属正常，"
                   "与编译并行时尚未生成）；本次仅跑纯文本规则，编译完成后重跑即全量生效")

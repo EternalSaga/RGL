@@ -54,6 +54,27 @@ def rgl_tree_files(*suffixes: str) -> list[str]:
     return sorted(out)
 
 
+def tests_cppm_files(dirs: tuple[str, ...]) -> tuple[list[str], list[str]]:
+    """测试侧扫描面：给定目录下全部 `.cppm` → (可读文件, 读失败文件)。
+
+    读失败**必须带回来**而不是静默跳过：覆盖量具是「数数」的工具，少扫一个文件不是
+    「少一条警告」而是**一个偏低的覆盖率**——它读起来像真数（同 rules_reflection
+    「扫描面为空必须出声」的纪律，只是这里失效的方向是悄悄少算）。
+    """
+    ok: list[str] = []
+    bad: list[str] = []
+    for d in dirs:
+        base = Path(ROOT) / d
+        if not base.is_dir():
+            continue
+        for p in sorted(base.rglob("*.cppm")):
+            if not p.is_file():
+                continue
+            rel = rel_posix(p)
+            (ok if read_text(Path(ROOT) / rel) is not None else bad).append(rel)
+    return sorted(ok), sorted(bad)
+
+
 def docs_markdown_files() -> list[str]:
     """docs/（含子目录）全部 .md，仓库相对 POSIX 路径（排序）。"""
     base = Path(ROOT) / "docs"

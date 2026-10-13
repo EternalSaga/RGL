@@ -1,0 +1,237 @@
+#!/usr/bin/env python3
+"""pre-push —— push 前跑毫秒级无设备回归（债-10：`just test` 此前**完全依赖人记得敲**）。
+
+## 为什么是钩子，不是 CI
+
+`tests/` 是 EXCLUDE_FROM_ALL：`just build` 不编它、CTest 虽然注册了但没有执行者。
+于是 435 例 / 94345 条断言的回归网，**只在有人显式敲 `just test` 时才存在**。
+本钩子就是那个"有人"：把 `just test` 接到 push 这个必然发生的动作上。
+
+## 只跑 `just test`，不跑 `just build`、不碰任何要设备的东西
+
+钩子的**响应时间决定它能活多久**：慢到让人难受，所有人学会 `--no-verify`，护栏就死了
+（这类工具最常见的死法）。所以射程刻意窄：
+
+- 构建只到 `--target rgl_tests`（= `just test` 自己的第一行），**不碰 rgl 可执行 / imgqa /
+  fsr_smoke**，更不碰 `just build` 的全量；
+- 跑的是 `--test-suite-exclude=gpu` 的无设备子集（无 GPU、无窗口、毫秒级）；
+- 真设备那 38 例（`TEST_SUITE("gpu")`）留给 `just test-all` / `just smoke`，**不进钩子**。
+
+## 三种「其实没在测」的状态必须报可归因的错
+
+`just test` 红有三类根因，报成同一句「测试失败」就是把人往错的方向送：
+
+| 状态 | 钩子的报错（可归因） |
+|---|---|
+| 没有 `build/` | 这台机器还没配置过 → `just config && just build` |
+| 有 `build/` 没 `build.ninja` | **未 configure**（不是测试红）→ `just config` |
+| 测试目标编译不过 | **构建红**，不是用例红 → 看它贴出的 ninja 输出 |
+| 用例红 | 用例红 → 贴 doctest 的失败段 |
+
+「测试二进制过期」**不是**错误状态：钩子每次都先构建 `rgl_tests`，过期就重建
+（modules 环境下"改了没重建照样全绿"那个坑，正是靠这一步挡掉的）。
+
+## 逃生门
+
+`git push --no-verify` 是 git 的标准逃生门，本钩子**不试图堵它**（堵 = 逼人换工具）。
+需要它的时候，请顺手把红的那条修掉，别让它变成习惯。
+
+## 接力（本仓特有，别删）
+
+`.git/hooks/pre-push` 原本被 **Git LFS** 占着（`git lfs ls-files` 里确有 `assets/` 下的对象），
+钩子**不能覆盖**它——覆盖了 = push 时 LFS 对象不再上传，症状出现在远端，离真因八跳。
+`just install-hooks FORCE=1` 会把原钩子另存成 `pre-push.local`，本钩子在测试通过后
+**原样接力**（stdin 的 ref 行与 argv 一并转过去，退出码取它的）。
+"""
+
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+IS_WIN = os.name == "nt"
+TEST_TARGET = "rgl_tests"
+TEST_BIN = "rgl_tests.exe" if IS_WIN else "rgl_tests"
+TEST_TIMEOUT_S = 600          # 与 tests/CMakeLists.txt 的 CTest TIMEOUT 同量级（无设备子集实测量级 ~1s）
+TAIL_LINES = 40               # 兜底回吐的行数（digest 抓不到东西时才用；再多就没人读了）
+DOCTEST_SEP = re.compile(r"={15,}\n")
+
+
+def _die(why: str, hint: str = "") -> None:
+    """拦下 push。消息一律 `pre-push:` 前缀——git 的输出很杂，可归因从行首开始。"""
+    print("\npre-push: ✗ 已拦下（未 push）", file=sys.stderr)
+    print(f"pre-push:   {why}", file=sys.stderr)
+    if hint:
+        for ln in hint.splitlines():
+            print(f"pre-push:   {ln}", file=sys.stderr)
+    print("pre-push:   逃生门：git push --no-verify（绕过一次可以，别让它变成习惯）",
+          file=sys.stderr, flush=True)
+    sys.exit(1)
+
+
+def _tail(text: str) -> str:
+    lines = (text or "").splitlines()
+    return "\n".join(lines[-TAIL_LINES:]) if lines else "(无输出)"
+
+
+def _failure_digest(out: str) -> str:
+    """用例红时只回吐**失败块 + doctest 汇总**，不是整段测试日志。
+
+    为什么：本项目的用例会打满屏 info/warning 日志（配置解析、SPV 解析失败的阳性锚点…），
+    整段回吐 = 失败原因被埋。doctest 用 `=====` 分隔每个失败块，按它切块再挑失败块。
+    两个坑（都实测踩过）：
+
+    1. **切块后必须丢掉第 0 块**（它是 doctest 之前的全部 stdout+stderr 日志），且判据要认
+       `ERROR:` 带冒号——`[shader-dep-check] 汇总: 0 问题（ERROR 0…）` 这种构建步骤的行含
+       "ERROR" 字样，按裸 "ERROR" 过滤会把整段日志当失败块打印出来（第一版就是这么翻车的）。
+    2. 抓不到失败块（崩在断言之外的情况）时回落 `_tail`，绝不"没抓到就当没输出"。
+    """
+    blocks = DOCTEST_SEP.split(out)[1:]          # [0] = doctest 之前的全部日志，丢掉
+    fails = [b.strip() for b in blocks if "ERROR:" in b or "FATAL ERROR:" in b]
+    summary = [ln for ln in out.splitlines() if ln.startswith("[doctest]")]
+    if not fails:
+        return _tail(out)
+    kept = "\n\n".join("\n".join(b.splitlines()[:40]) for b in fails[:8])
+    if len(fails) > 8:
+        kept += f"\n\n…（另有 {len(fails) - 8} 个失败块未打印）"
+    return kept + "\n" + "\n".join(summary[-3:])
+
+
+def _git(*args: str) -> str | None:
+    """跑 git 拿 stdout（失败返回 None，调用方决定是不是致命）。"""
+    try:
+        r = subprocess.run(["git", *args], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def _repo_root() -> Path:
+    """仓库根。git 跑钩子时 CWD 就是根；`just pre-push` 手动跑时也是。"""
+    top = _git("rev-parse", "--show-toplevel")
+    if not top:
+        _die("找不到仓库根（`git rev-parse --show-toplevel` 失败）——钩子无法定位 build/。")
+    return Path(top)
+
+
+def _read_stdin(no_stdin: bool) -> bytes:
+    """git 通过 stdin 传 ref 行；`just pre-push` 手跑时**不读**（`--no-stdin`）。
+
+    🔴 为什么要有这个开关：钩子被 git 跑时 stdin 一定是管道（读完就 EOF），但被 `just
+    pre-push` 从 IDE / 脚本里跑时 stdin 可能是一条**永不关闭**的管道 ⟹ `read()` 挂死，
+    表现成"钩子把 push 卡住"。宁可少读，不可挂住。
+    """
+    if no_stdin:
+        return b""
+    try:
+        if sys.stdin is None or sys.stdin.isatty():
+            return b""
+        return sys.stdin.buffer.read()
+    except (OSError, ValueError):
+        return b""
+
+
+def _preflight(root: Path, build: Path) -> None:
+    """把「其实没在测」的三种前置状态各自报成各自的样子（见模块 docstring 的表）。"""
+    for tool in ("just", "cmake"):
+        if shutil.which(tool) is None:
+            _die(f"`{tool}` 不在钩子的 PATH 上（GUI 客户端 / IDE 里跑 git 时尤其常见），"
+                 "本钩子**不会**因为跑不动就放行。",
+                 f"要么把 {tool} 装进 PATH，要么在有终端的地方 push。")
+    if not build.is_dir():
+        _die(f"没有构建目录：{build}\n"
+             "         这台机器（或这个 worktree）还没配置过，钩子无从跑起。",
+             "先：just config && just build")
+    # build.ninja 与 CMakeCache.txt 缺一个就是「没配置好」，与「测试红」是两回事。
+    # 只查 build.ninja 会被手搓一个空文件骗过去（实测：cmake 自己报 "not a CMake build
+    # directory"，被归因成"编译红"——不算错，但"CMakeCache.txt 都没有"更准）。
+    missing = [f.name for f in (build / "build.ninja", build / "CMakeCache.txt")
+               if not f.is_file()]
+    if missing:
+        _die(f"build/ 在，但缺 {'、'.join(missing)} ⟹ **未 configure**（不是测试红）：{build}",
+             "先：just config")
+
+
+def _run_build(root: Path, build: Path) -> None:
+    """构建测试目标——单独一步只为**归因**：编译红必须说清是编译红。
+
+    为什么这里要自己敲一遍 cmake 而不是直接 `just test` 一把梭：`just test` 的 rc 分不清
+    「ninja 编不过」与「用例红」，而这两种红的处置完全不同。构建命令本身仍以 Justfile 的
+    `test` 配方为准（同一条 cmake 命令），**套件过滤刻意不在这里重复**——那是语义，
+    唯一真相源留在 Justfile。
+    """
+    cmd = ["cmake", "--build", str(build), "--target", TEST_TARGET]
+    r = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
+    if r.returncode != 0:
+        _die(f"**测试目标构建失败**（`{TEST_TARGET}`）——这是**编译红**，不是用例红。",
+             _tail((r.stdout or "") + "\n" + (r.stderr or "")))
+
+
+def _run_tests(root: Path, build: Path) -> None:
+    """跑 `just test`（= 无设备子集）。成功只留 doctest 那几行，失败回吐失败块。"""
+    try:
+        r = subprocess.run(["just", "test"], cwd=str(root), capture_output=True,
+                           text=True, encoding="utf-8", errors="replace",
+                           timeout=TEST_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        _die(f"`just test` 超过 {TEST_TIMEOUT_S}s 没结束——无设备子集本该毫秒级，"
+             "先怀疑有用例卡在设备/IO 上（那正是它不该待在默认子集里的信号）。",
+             "单独复现：just test")
+    out = (r.stdout or "") + "\n" + (r.stderr or "")
+    if r.returncode != 0:
+        _die("**单元测试红**（`just test`，无设备子集）。", _failure_digest(out))
+    keep = [ln for ln in out.splitlines() if ln.startswith("[doctest] ")]
+    for ln in keep[-3:]:
+        print(f"pre-push:   {ln}")
+    if not (build / "tests" / TEST_BIN).exists():
+        _die(f"测试通过但找不到 {build / 'tests' / TEST_BIN}——读数来路不明，不放行。")
+
+
+def _chain(root: Path, argv: list[str], stdin_data: bytes) -> int:
+    """接力被让位的前任钩子（本仓 = Git LFS 的 pre-push）。"""
+    hooks = _git("rev-parse", "--git-path", "hooks")
+    if not hooks:
+        return 0
+    hd = Path(hooks)
+    if not hd.is_absolute():
+        hd = root / hd
+    prev = hd / "pre-push.local"
+    if not prev.is_file():
+        return 0
+    print("pre-push:   测试通过，接力 pre-push.local（安装前占着这位置的原钩子）")
+    try:
+        p = subprocess.run([str(prev), *argv], cwd=str(root), input=stdin_data)
+    except OSError as e:
+        _die(f"接力 pre-push.local 失败：{e}\n"
+             "         它没脸被静默跳过——要么修好它，要么把它移走。")
+    return p.returncode
+
+
+def main(argv: list[str]) -> int:
+    # 行缓冲：钩子的进度走 stdout、拦截走 stderr，git 把两路并到一个终端；stdout 默认
+    # 块缓冲 ⟹ 进度行会**跑到拦截行后面**（实测输出顺序错乱）。行缓冲换回真实顺序。
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except (AttributeError, OSError):
+        pass
+    no_stdin = "--no-stdin" in argv
+    argv = [a for a in argv if a != "--no-stdin"]
+    stdin_data = _read_stdin(no_stdin)      # 先读干净，后面才敢转给接力的钩子
+    t0 = time.time()
+    root = _repo_root()
+    build = root / "build"
+    print("pre-push: 跑无设备回归 `just test`（债-10；不跑 just build、不碰 GPU 用例）")
+    _preflight(root, build)
+    _run_build(root, build)
+    _run_tests(root, build)
+    print(f"pre-push: ✓ just test 通过（{time.time() - t0:.1f}s）")
+    return _chain(root, argv, stdin_data)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

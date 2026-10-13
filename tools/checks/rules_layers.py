@@ -46,8 +46,8 @@ _CMAKE_LIST_ENTRY = re.compile(r'^\s*"?\$\{CMAKE_CURRENT_SOURCE_DIR\}/([\w./-]+\
 _MODULE_DECL = re.compile(r"^\s*(?:export\s+)?module\s+([\w]+)\s*(?::[\w]+)?\s*;")
 
 
-def _parse_layer_of_file() -> dict[str, int]:
-    """从 rgl/CMakeLists.txt 抽「源文件 → 层序号」。
+def parse_layer_of_file() -> dict[str, int]:
+    """从 rgl/CMakeLists.txt 抽「源文件 → 层序号」（**归属唯一真相源**，coverage_layers 共用）。
 
     清单是**唯一真相源**（configure 期另有一道「每个 .cppm 恰好登记一次」的闸门）。
     这里刻意不反向用「GLOB 全部 cppm 减掉已登记」——那会让漏登记的文件静默落进
@@ -71,8 +71,12 @@ def _parse_layer_of_file() -> dict[str, int]:
     return layer_of_file
 
 
-def _module_names(layer_of_file: dict[str, int]) -> dict[str, tuple[int, str]]:
-    """建「模块名 → (层序号, 声明它的文件)」。分区按其主模块归层。"""
+def module_names(layer_of_file: dict[str, int]) -> dict[str, tuple[int, str]]:
+    """建「模块名 → (层序号, 声明它的文件)」。分区按其主模块归层。
+
+    与 `parse_layer_of_file` 一起被 `coverage_layers` 复用（债-15 的归属面）——**分层归属
+    只有这一套解析**，另起一套 = 两个真相源，正是本仓最忌讳的事。
+    """
     names: dict[str, tuple[int, int]] = {}
     file_of: dict[str, str] = {}
     for rel, layer in sorted(layer_of_file.items()):
@@ -94,14 +98,14 @@ def lib_layering_checks() -> list[Warning]:
 
     @return 每条逆向边一个 error 级 Warning（行号 = import 那一行）
     """
-    layer_of_file = _parse_layer_of_file()
+    layer_of_file = parse_layer_of_file()
     if not layer_of_file:
         # 清单读不到 = 规则失效。失效必须出声，否则「零警告」会被读成「分层干净」。
         return [Warning("rgl/CMakeLists.txt", 0,
             "libcore_closure: 读不到库分层清单（LIB_LAYER_LIST_VARS 与 "
             "CMakeLists 的 set() 名不匹配？），本规则未执行", "error")]
 
-    module_layer = _module_names(layer_of_file)
+    module_layer = module_names(layer_of_file)
     warnings: list[Warning] = []
     for rel in rgl_cppm_files():
         src = read_text(f"{ROOT}/{rel}")

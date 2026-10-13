@@ -218,6 +218,37 @@ build-tools:
     @cmake --build {{ BUILD }} --target meshlet_pack
     just checks
 
+# 分层测试覆盖量具（债-15）：rlbase/rlgfx/rlscene/rlframe 哪些模块有 tests/ 消费者。
+# **只出数不裁决**：没有阈值、永远不会"红"，补谁不补谁是人的裁决（口径 direct/offline 的
+# 唯一真相源 = tools/checks/coverage_layers.py 的模块 docstring，本文不抄）。
+#   just coverage           按层汇总表 + 逐模块清单
+#   just coverage --json    机器可读形态（自己排序/切片）
+# 为什么不并进 just checks：checks 每次 just build 都跑，一张没人裁决的表每次构建都印 =
+# 训练人跳过它（噪声判据比没有判据更贵）。但"完全没人跑的工具会静默烂掉"是债-10 同一种病，
+# 所以 checks 里留**一行读数** + 扫描面为空报 error，全表按需出。
+coverage *ARGS="":
+    @python "{{ WORKSPACE }}/tools/checks/coverage_layers.py" {{ ARGS }}
+
+# ─── 护栏接执行者（债-10）───────────────────────────────────────────────────────
+# pre-push 钩子 = push 前跑 `just test`（毫秒级无设备回归）。**钩子本体住仓里**
+# （tools/hooks/pre-push，可评审、可 diff、跟着分支走），而 .git/hooks/ 不进版本库
+# ⟹ 换机器 / 重新 clone / 新建 worktree 之后要再跑一次 install-hooks（这就是"依赖人记得"
+#  的本体，能做的只是让"记得"变成一条命令）。
+#   just install-hooks             装；已存在的钩子**绝不静默覆盖**（本仓那一位原本是
+#                                  Git LFS 的，覆盖 = push 不再上传 LFS 对象）
+#   just install-hooks FORCE=1     接管：原钩子另存成 pre-push.local，测试通过后原样接力
+#   just pre-push                  当命令跑一遍（不 push）——验收与日常自检用
+# 🔴 钩子里只有 just test（构建也只到 --target rgl_tests）：慢钩子 = 人人心跳
+#    --no-verify = 护栏死亡。要加东西先进 just test，别直接塞进钩子。
+# 与 Git LFS 的相处（实测）：git lfs install 撞上本钩子会**拒绝覆盖**并打印
+#   "Hook already exists: pre-push"（它也不礼貌地抢位置）；反过来 git lfs update --force
+#   会把本钩子换掉——届时重跑 just install-hooks 即可（幂等，且会重新接上 pre-push.local）。
+install-hooks *ARGS="":
+    @python "{{ WORKSPACE }}/tools/hooks/install_hooks.py" {{ ARGS }}
+
+pre-push:
+    @python "{{ WORKSPACE }}/tools/hooks/pre-push" --no-stdin origin local-dryrun
+
 # 全量编译基准: clean-all + config + 计时编译
 profile:
     just clean-all

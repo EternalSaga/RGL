@@ -129,6 +129,14 @@ LIB_LAYER_LIST_VARS = (
 )
 LIB_LAYER_ORDER = ("rlbase", "rlgfx", "rlscene", "rlframe", "rgl")
 
+# ─── 分层测试覆盖量具（债-15；工具 = coverage_layers.py）─────────────────────────
+# **只出数不裁决** ⟹ 本工具没有阈值、没有"覆盖率下限"，唯一报 error 的条件是
+# 「扫描面为空 / 清单解析不到 / 有文件读不进去」——数不出来 ≠ 数出来是 0（同
+# rules_layers / rules_reflection 的失效必须出声）。口径定义（direct / offline）
+# 的唯一真相源 = coverage_layers.py 模块 docstring，本文与 docs 都不抄。
+COVERAGE_TEST_DIRS = ("tests",)   # 消费者扫描面：递归收 *.cppm 的目录（归属面复用五份清单）
+COVERAGE_GPU_SUITE = "gpu"        # 设备级 doctest 套件名（`just test` 默认 --test-suite-exclude 它）
+
 # ─── 模块优先（rgl/ 下 .h/.hpp/.hh 全禁，.cpp 仅单头库实现单元）─────────────────
 # （tinygltf/VMA 是单头 C 库，实现宏只能放普通 .cpp——既有例外，勿删；
 #  入口 = main.cppm 模块实现单元（module main;，main() 合法于实现单元），
