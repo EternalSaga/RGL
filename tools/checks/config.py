@@ -267,3 +267,46 @@ USING_NAMESPACE_EXEMPT = {"rgl/main_impl.cppm"}
 
 # export namespace 豁免（rlvk 的 vk re-export 字典；且 rlvk 在 EXCLUDE_FILES）
 EXPORT_NAMESPACE_EXEMPT = {"rgl/rlvk.cppm"}
+
+# ─── 反射三方对账（债-12；规则 = rules_reflection.reflection_contract_checks）────
+# 对账面、与 reflection_check SHA1 护栏的分工、不覆盖面 → **rules_reflection.py 模块
+# docstring**（本文档不抄判据，抄一次漂一次）。本节只放参数。
+
+# 管线配对清单的**唯一真相源**：`rgl_reflect_slang(<slang> <schema> <module>)` 六条。
+# 刻意不在本文件抄「哪条管线配哪个 schema」——抄名单反模式（AGENTS 明文），改名即静默漏检。
+REFLECTION_PIPELINE_CMAKE = "cmake/RglReflection.cmake"
+
+# scalar block layout 的字段字节表（**slang 侧类型名**为键）。口径与
+# tools/schema_loader.cppm::vertexAttrSize 一致：vec3 = 12B、零 padding。
+# ⚠ 这是同一口径的第二份拼写（Python 读不了 C++ 常量）。它**漂了会吵**：面 4 手算的偏移
+#   会同时与 schema 声明和 generated 常量两侧对不上 ⟹ 现状 0 条立刻变红。
+REFLECTION_SCALAR_TYPE_SIZE = {
+    "float": 4, "int": 4, "uint": 4,
+    "float2": 8, "int2": 8, "uint2": 8,
+    "float3": 12, "int3": 12, "uint3": 12,
+    "float4": 16, "int4": 16, "uint4": 16,
+}
+
+# schema 侧类型名 → 生成物里的 C++ 类型（与 schema_loader.cppm::vertexAttrCppType 同口径）。
+# 数组形态 "T[N]" 由规则递归映射成 std::array<T', N>；嵌套契约 struct 名原样透传。
+REFLECTION_SCHEMA_TO_CPP_TYPE = {
+    "float": "float",
+    "vec2": "glm::vec2", "vec3": "glm::vec3", "vec4": "glm::vec4",
+    "ivec2": "glm::ivec2", "ivec3": "glm::ivec3", "ivec4": "glm::ivec4",
+    "int": "int32_t", "uint": "uint32_t",
+}
+
+# descriptorSlots 的 shape → 可接受的 .slang 声明类型（面 6）。
+# byteAddressBuffer 放行 RW 变体：schema 用 shape 描述「怎么被读」，读写同类型族。
+REFLECTION_SHAPE_TO_SLANG_TYPES = {
+    "byteAddressBuffer": ("ByteAddressBuffer", "RWByteAddressBuffer"),
+    "texture2D": ("Texture2D",),
+    "samplerState": ("SamplerState",),
+    "constantBuffer": ("ConstantBuffer",),
+}
+
+# 面 3（schema 常量 ↔ .slang 字面量）的豁免 schema。
+# meshlet_cull_schema.lua 的 constants 已由 rules_text.meshlet_spec_checks 覆盖，且它还多
+# 两条**关系**对账（3×kTaskTris ≤ kMeshletMaxOutputVertices、numthreads ≤ 设备下限）。
+# 同一处漂移报两遍只会训练人忽略警告 ⟹ 本面对它整份让位，不是漏了它。
+REFLECTION_CONSTANTS_SHADER_EXEMPT = ("rgl/shaders/meshlet_cull_schema.lua",)

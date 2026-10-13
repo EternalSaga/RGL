@@ -66,6 +66,7 @@ from fs import read_text
 from rules_doxygen import interface_declared_names, rule_doxygen
 from rules_metrics import evaluate_metrics
 from rules_layers import lib_layering_checks
+from rules_reflection import reflection_contract_checks, scan_readout
 from rules_text import (agents_doc_index_checks, doc_pointer_checks,
                         judgments_pointer_checks,
                         docs_status_checks, forbidden_vulkan_checks,
@@ -286,6 +287,7 @@ def main() -> None:
         warnings.extend(doc_pointer_checks())
         warnings.extend(judgments_pointer_checks())
         warnings.extend(lib_layering_checks())
+        warnings.extend(reflection_contract_checks())
 
     # 工具侧基线（只准降不准升）：--update-tool-baseline 先重写再比对（必然持平）。
     # 未解析的 TU 不参与比对，其基线条数原样保留（否则 clean 后一跑就把基线清零）。
@@ -359,6 +361,11 @@ def main() -> None:
         err_note = f"（其中 ERROR {n_err}）" if n_err else ""
         print(f"[style-check] 汇总: {len(style_warnings)} 警告{err_note} / {rgl_total} 个 .cppm"
               f"（缓存命中 {hits}、解析 {parsed}、失败 {len(errors)}{skipped_note}）")
+        # 反射三方对账的覆盖面读数（rules_reflection）：一条「什么都没找到」的规则与一条
+        # 「扫错了目录」的规则输出必须不同，所以读数每次构建都印，不藏进 --verbose。
+        readout = scan_readout()
+        print("[style-check] 反射三方对账: "
+              + (readout if readout else "**本次未执行**（规则没跑到）"))
         if rgl_notready:
             print("[style-check] 提示: 跳过 = modmap/BMI 构建产物缺失（clean 后首次构建属正常，"
                   "与编译并行时尚未生成）；本次仅跑纯文本规则，编译完成后重跑即全量生效")
