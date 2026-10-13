@@ -61,5 +61,11 @@ namespace RGL {
     export inline constexpr uint32_t kClusterStride = 44;
     // 契约常量（schema 单一真相源；shader 端字面量必须一致，见对应 shader 头注释）
     export inline constexpr uint32_t kVertexStride = 48;
+    // 契约常量（schema 单一真相源；shader 端字面量必须一致，见对应 shader 头注释）
+    export inline constexpr uint32_t kMdiShadowRowStrideBytes = 24;
+    // 契约常量（schema 单一真相源；shader 端字面量必须一致，见对应 shader 头注释）
+    export inline constexpr uint32_t kMdiShadowObjectIndexByteOffset = 12;
+    // 契约常量（schema 单一真相源；shader 端字面量必须一致，见对应 shader 头注释）
+    export inline constexpr uint32_t kMdiShadowClusterStartByteOffset = 16;
 
 }  // namespace RGL

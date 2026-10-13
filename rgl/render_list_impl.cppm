@@ -113,6 +113,7 @@ RGL::DrawCall makeOpaqueCall(const RGL::MeshAsset& asset, const RGL::MaterialAss
  * @param shadowArgs 出参：填 ShadowDrawArgs
  * @param shadowMeshletArgs 出参：填 ShadowMeshletDrawArgs（★18-B2，同分块公式，调用方
  *        循环前已 resize 到位——同 shadowArgs 的 span 悬空红线）
+ * @param mdi ★M-1b：真 MDI 采集上下文（nullptr = 门关 = emit 走逐条形态，零新命令）
  * @param out 出参：逐级 draw 清单
  * @return 各级光空间体
  */
@@ -121,7 +122,8 @@ std::array<ShadowVolume, kActiveShadowCascades> buildShadowVolumes(const Light& 
     std::span<const ShadowCandidate> cands, uint32_t objectSlotCount,
     std::vector<RGL::ShadowDrawArgs>& shadowArgs,
     std::vector<RGL::ShadowMeshletDrawArgs>& shadowMeshletArgs,
-    std::array<std::vector<RGL::DrawCall>, kActiveShadowCascades>& out) {
+    std::array<std::vector<RGL::DrawCall>, kActiveShadowCascades>& out,
+	const MdiShadowEmitContext* mdi = nullptr) {
 	glm::vec3 casterMin{0.0f}, casterMax{0.0f};
 	for (const auto& cd : cands) {
 		casterMin = glm::min(casterMin, cd.center - cd.radius);
@@ -133,7 +135,7 @@ std::array<ShadowVolume, kActiveShadowCascades> buildShadowVolumes(const Light& 
 	const uint32_t snapGrid = shadowTileSize(shadowAtlasColumns(kActiveShadowCascades));
 	for (uint32_t c = 0; c < kActiveShadowCascades; ++c)
 		volumes[c] = buildShadowVolume(light, slices[c], casterMin, casterMax, snapGrid);
-	emitShadowCasters(cands, volumes, objectSlotCount, shadowArgs, shadowMeshletArgs, out);
+	emitShadowCasters(cands, volumes, objectSlotCount, shadowArgs, shadowMeshletArgs, out, mdi);
 	return volumes;
 }
 
@@ -249,49 +251,21 @@ void collectShadowCasters(const RGL::MeshAsset& asset, const RGL::MaterialAsset&
         && asset.shadowMeshletPipelineIndex != kInvalidPipelineIndex && !mat.doubleSided) {
         const auto& lod = lodTable->bySlot[objectSlot];
         cand.meshletPipeline = asset.shadowMeshletPipelineIndex;
+        // ★M-1b：真 MDI 条目下标随资产字段搬运——MDI 门未开/载体未建时该字段天然 kInvalid
+        // （烘焙与回填补齐同一步，见 main.cppm `wireMeshletMdiShadowActivation`），本层**不**
+        // 重述生效条件；emitShadowCasters 只在 ctx 生效标记存在时才读它（两道各自成立）。
+        cand.meshletMdiPipeline = asset.shadowMeshletMdiPipelineIndex;
         cand.meshletGroups = lod.count;  // 簇数；×2 换算在 emitShadowCasters（唯一真相源）
         cand.clusterStart = lod.start;
     }
     out.push_back(cand);
 }
 
-/**
- * 定义（接口声明与契约见 render_list.cppm）。候选 × 逐级光空间体 → 阴影 draw 清单
- * （级主序，级内实体迭代序）。一个图元可以落多级（大物体跨越多个切片）——这正是逐级
- * 剔除能把总量压在单级之上的原因。
- */
-void emitShadowCasters(std::span<const ShadowCandidate> cands,
-    std::span<const ShadowVolume> volumes, uint32_t objectSlotCount,
-    std::vector<RGL::ShadowDrawArgs>& shadowArgs,
-    std::vector<RGL::ShadowMeshletDrawArgs>& shadowMeshletArgs,
-    std::array<std::vector<RGL::DrawCall>, kActiveShadowCascades>& out) {
-    for (const auto& cd : cands)
-        for (uint32_t c = 0; c < kActiveShadowCascades; ++c) {
-            if (!casterInShadowVolume(volumes[c], cd.center, cd.radius))
-                continue;
-            const size_t idx = static_cast<size_t>(c) * objectSlotCount + cd.objectSlot;
-            // 🔴 **c0 恒旧路径**（§18.6 第一刀形态零改动；IZB mask 重放 replayIzbMaskSegment
-            // 只重放 c0 段且按 8B ShadowDrawArgs 读 push，靠的就是这条）。c1..c3 且候选可切
-            // → 簇管线 + meshletTaskCount(簇数) + 12B push；**只换 draw 内容，条数逐条不变**
-            // （「原位换管线」的形状，也是候选序对账不受影响的理由）。
-            if (c >= 1u && cd.meshletPipeline != kInvalidPipelineIndex) {
-                auto& margs = shadowMeshletArgs[idx];
-                margs.objectIndex = cd.objectSlot;
-                margs.cascadeIndex = c;
-                margs.clusterStart = cd.clusterStart;
-                out[c].push_back(RGL::DrawCall{cd.meshletPipeline,
-                    std::as_bytes(std::span<const RGL::ShadowMeshletDrawArgs>{&margs, 1}),
-                    meshletTaskCount(cd.meshletGroups)});
-                continue;
-            }
-            auto& sargs = shadowArgs[idx];
-            sargs.objectIndex = cd.objectSlot;
-            sargs.cascadeIndex = c;
-            out[c].push_back(RGL::DrawCall{cd.pipeline,
-                std::as_bytes(std::span<const RGL::ShadowDrawArgs>{&sargs, 1}), cd.groups});
-        }
-}
-
+// ★M-1b（docs/mdi_plan.md §19.2 D4）：真 MDI 阴影段的采集机械室（MdiCascadePlan /
+// buildMdiShadowPlans 三段 / makeMdiShadowDrawCall / emitShadowCasters 定义）已拆至
+// partition render_list:mdi（文件代码行红线 500；判据与回落规则的权威注释在那份里，本单元
+// 只留 system 管道：makeMdiShadowContext 组 ctx、buildShadowVolumes 经接口声明调用导出接缝
+// emitShadowCasters）。拆出为纯结构搬运，无行为改动。
 /**
  * 定义（接口声明与 @param 契约见 render_list.cppm；12.3d 接缝 = shadowPassEnabled
  * 显式入参取代内部单例读取，调用点传形态决策表的 `drawAtlas`）。
@@ -569,10 +543,66 @@ void mirrorObjectTables(FrameDrawList& out, entt::registry& rg, const RenderList
 		out.sceneData.clusterRanges = std::span<const ObjectClusterRange>{ranges->bySlot};
 }
 
+/**
+ * 帧局部 push/matrix 存储的循环前一次性 resize（★M-1b 自 renderListSystem 搬出 = 纯结构
+ * 搬运，120 行红线；调用点 = 唯一消费者）。
+ *
+ * 🔴 **resize-before-loop 红线**（span 悬空 = 帧 0 确定性 UAF）：实体循环内 realloc 会让
+ * 先前存入 DrawCall 的 span 悬空（span 活到 drawFrame 录制期读取，
+ * vkrenderer drawOne 的 pushData.data()），故**全部**帧局部存储必须在循环之前一次到位。
+ * Phase 6 instancing：args/matrices 按**实例矩阵槽**（MeshRef.objectSlot）索引而非资产 id
+ * ——同 asset 多实例各持独立变换；容量 = NextObjectSlot.next（main 启动期契约检查
+ * ≤ kSceneMatrixCapacity）。门关数组照样 resize（容量只由 objectSlotCount 决定、与门无关，
+ * makeMdiShadowContext 才能无条件给 ctx 挂指针）。
+ * @param state 每帧状态（被 resize 的存储持有者）
+ * @param objectSlotCount 实例矩阵槽总数（NextObjectSlot.next）
+ */
+void resizeFrameStorage(RenderListState& state, uint32_t objectSlotCount) {
+	state.args.resize(objectSlotCount);
+	state.matrices.resize(objectSlotCount, glm::mat4(1.0f));
+	state.mvps.resize(objectSlotCount, glm::mat4(1.0f));
+	state.draws.resize(objectSlotCount);
+	// Phase 11 批 11.2：阴影 push 数组（分块号 × objectSlot，见 RenderListState::shadowArgs）
+	state.shadowArgs.resize(static_cast<size_t>(kActiveShadowCascades) * objectSlotCount);
+	// 簇化轴 ★18-B2：阴影簇路径 push 数组（ShadowMeshletDrawArgs 12B，同一分块公式）
+	state.shadowMeshletArgs.resize(static_cast<size_t>(kActiveShadowCascades) * objectSlotCount);
+	// ★M-1b：MDI push 存储（**每级联 1 槽**，下标 = 分块号，非 objectSlot 分块——一级联一条
+	// MDI draw，push 只装 {rowBase, cascade, 0}）
+	state.shadowMeshletMdiArgs.resize(kActiveShadowCascades);
+	// 批 10.7 高亮过滤表：按 objectSlot 存材质 id（kNoMaterial = 该槽本帧无实体；
+	// 视锥剔除后不在 draw list 里故不会被读到，留哨兵免得读到陈值）
+	state.materialBySlot.assign(objectSlotCount, kNoMaterial);
+}
+
+/**
+ * ★M-1b：真 MDI 采集上下文组装（存在即生效同 `meshletActivations`——判定全在装配层
+ * `wireMeshletPostRegistration` 第五步，本层只搬事实）。门关（ctx 无 `MeshletMdiShadowActivation`）
+ * = nullopt = emitShadowCasters 走逐条形态 = 零新命令（逐位不变的构造性保证）。
+ * 抽成 helper 的另一半原因 = §19.7 前置 2：`renderListSystem` 贴 120 行红线，第三枚生效
+ * 标记不许直接塞行。frameSlot 由调用方（ecs 帧循环）在 drawFrame **之前**取——slot 只在
+ * drawFrame 末尾 advance ⟹ 采集期与录制期同值（执行器 prepareMdiShadowRows 有机器核对，
+ * 失配 = 抛，见雷 3 处置）。
+ * @return 生效档上下文（指针字段全指 state 帧局部存储）；门关 = nullopt
+ */
+std::optional<MdiShadowEmitContext> makeMdiShadowContext(const entt::registry& rg,
+	RenderListState& state, uint32_t frameSlot) {
+	const auto* activation = rg.ctx().find<MeshletMdiShadowActivation>();
+	if (activation == nullptr)
+		return std::nullopt;
+	return MdiShadowEmitContext{
+		.sliceRows = activation->sliceRows,
+		.slices = activation->slices,
+		.frameSlot = frameSlot,
+		.rows = &state.mdiRows,
+		.segments = &state.mdiSegments,
+		.pushArgs = &state.shadowMeshletMdiArgs,
+	};
+}
+
 void renderListSystem(entt::registry& rg, RGL::Resources&,
-	RGL::Environment& envService, const RGL::AssetTable& assets, RenderListState& state) {
-	auto& list = rg.ctx().get<FrameDrawList>();
-	const auto& viewProj = rg.ctx().get<ViewProjection>();
+	RGL::Environment& envService, const RGL::AssetTable& assets, RenderListState& state,
+	uint32_t frameSlot) {
+	auto& list = rg.ctx().get<FrameDrawList>();	const auto& viewProj = rg.ctx().get<ViewProjection>();
 	const auto& spin = rg.ctx().get<SceneSpin>();
 	const auto& camera = rg.ctx().get<Camera>();
 	const auto& env = rg.ctx().get<SceneEnv>();  // Phase 5.5（天空盒 draw 生成 + env 参数）
@@ -606,20 +636,10 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	// 资产 id——同 asset 多实例各持独立变换；容量 = NextObjectSlot.next（main 启动期
 	// 契约检查 ≤ kSceneMatrixCapacity）
 	const uint32_t objectSlotCount = rg.ctx().get<NextObjectSlot>().next;
-	state.args.resize(objectSlotCount);
-	state.matrices.resize(objectSlotCount, glm::mat4(1.0f));
-	state.mvps.resize(objectSlotCount, glm::mat4(1.0f));
-	state.draws.resize(objectSlotCount);
-	// Phase 11 批 11.2：阴影 push 数组（分块号 × objectSlot，见 RenderListState::shadowArgs）
-	state.shadowArgs.resize(static_cast<size_t>(kActiveShadowCascades) * objectSlotCount);
-	// 簇化轴 ★18-B2：阴影簇路径 push 数组（ShadowMeshletDrawArgs 12B，同一分块公式）。
-	// 🔴 同 shadowArgs 的 resize-before-loop 红线：实体循环内 realloc 会让先前存入 DrawCall
-	// 的 span 悬空（帧 0 确定性 UAF），故必须在循环**之前**一次到位。门关 = 没人写它，
-	// 但照样 resize（与 shadowArgs 同形，容量只由 objectSlotCount 决定，与门无关）。
-	state.shadowMeshletArgs.resize(static_cast<size_t>(kActiveShadowCascades) * objectSlotCount);
-	// 批 10.7 高亮过滤表：按 objectSlot 存材质 id（kNoMaterial = 该槽本帧无实体；
-	// 视锥剔除后不在 draw list 里故不会被读到，留哨兵免得读到陈值）
-	state.materialBySlot.assign(objectSlotCount, kNoMaterial);
+	// 循环前一次性 resize 全部帧局部 push/matrix 存储（span 悬空红线 = resize-before-loop，
+	// 明细与逐数组口径 → resizeFrameStorage 头注释；★M-1b 起 renderListSystem 贴 120 行红线，
+	// 该块整体搬出 = 纯结构搬运零行为改动）。
+	resizeFrameStorage(state, objectSlotCount);
 
 	// fresh 提前声明：光空间体要用主灯方向（fillLightData），而灯原本在循环后才取 ——
 	// 故把 fillLightData 提到循环前，fresh 也得先于它存在。
@@ -712,10 +732,11 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 
 	// 主灯（阴影矩阵要它的方向）—— 提到此处：光空间体必须在剔除之前成形
 	const Light primary = fillLightData(rg, camera.position, fresh);
-
+	// ★M-1b：MDI 采集上下文（门关 = nullopt = emit 逐条形态；判据与预检见 helper/buildMdiShadowPlans）
+	const auto mdiCtx = makeMdiShadowContext(rg, state, frameSlot);
 	const std::array<ShadowVolume, kActiveShadowCascades> shadowVolumes = buildShadowVolumes(
 		primary, cascadeSpheres, shadowCandidates, objectSlotCount, state.shadowArgs,
-		state.shadowMeshletArgs, shadowCasters);
+		state.shadowMeshletArgs, shadowCasters, mdiCtx ? &*mdiCtx : nullptr);
 	// 批 10.7 高亮通道：把 SelectedObject ctx 的选中材质 + 过滤表搬进 draw list（执行器
 	// 据此过滤）。entity==null（未选中/已取消）→ hasSelection=false，pass 零 draw。
 	if (const auto* sel = rg.ctx().find<SelectedObject>();
@@ -759,6 +780,9 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	// 簇化轴 ★1-a1ii-α：叠加段整体搬入（实体迭代序 = 确定性；执行点 = opaque 段之后，
 	// 见 vkrenderer_passrec executePassDraws）。门关 = 空向量。
 	fresh.meshletCalls = std::move(meshletPending);
+	// ★M-1b：MDI 级联段搬入（rows span 指 state.mdiRows——与 pushData 同一条帧局部生命周期
+	// 规则，录制期读取即完成使命；门关 / 回落 = 空向量 = 执行器零 upload 零新命令）。
+	fresh.mdiSegments = std::move(state.mdiSegments);
 
 	// scene data（Phase 5 批次 2）：光方向归一化、color×intensity 预乘、eyePos=相机世界位置；
 	// 对象矩阵表 span 指向 state.matrices（帧局部存储，drawFrame 录制期拷进 staging）

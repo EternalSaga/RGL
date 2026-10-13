@@ -543,6 +543,34 @@ export class ShaderRegistry {
 	void bindShadowMeshletToAsset(uint32_t assetId, uint32_t entryIdx);
 
 	/**
+	 * ★M-1b（docs/mdi_plan.md §19.2 D2 / §19.5）：阴影段**真 MDI** 管线条目
+	 * （spec = "shadow_meshlet_mdi"：shadow_meshlet.mesh_MDI_SHADOW.spv + **复用**
+	 * shadow.frag.spv）。与 addShadowMeshletEntry 的全部差别 = mesh SPV 换变体 +
+	 * 多烘一枚 binding 34（行表），12B push / argsSize / scene data 面**一字节不动**
+	 * （§19.5 表末「push 尺寸是条目属性」那行：word0 语义切行基址，尺寸不变）。
+	 *
+	 * 🔴 **声明与 mapping 同向**（§19.5）：MDI 变体 SPV 声明 binding 34 ⟹ 本条目**必须**烘
+	 * 22（缺 mapping = VVL 错误）；旧 "shadow_meshlet" 条目不声明也不烘 22（两侧同向）。
+	 * 🔴 **纯追加**：本条目只能排在 addShadowMeshletEntry（474）之后（§19.7 前置 1：插到
+	 * 之前 = 旧资产字段指向的条目变掉，「门关用的还是今天那份 SPV」静默破）。调用侧的时序
+	 * 契约见 main.cppm `wireMeshletPostRegistration`（烘焙在行表载体**建成之后**——argSlot
+	 * 此刻才是真值，别拿启动期算不出来的东西凑槽号）。
+	 * 幂等：同名条目（"shadow_meshlet_mdi"）命中直接返回既有下标（旧条目同法）。
+	 * @param clusterSlots 4 个簇 buffer 堆槽号（binding 17-20，与旧条目同一批，口径同上）
+	 * @param argsSlot 行表 heap 槽号（binding 34 = MeshletShadowArgsService::argSlot()；定案号 22
+	 * 被 sceneHeader 占用，见 shadow_meshlet.mesh.slang 的 ⚠ 注）
+	 * @return 条目下标（重复调用返回同一个下标）；规格缺失抛 runtime_error
+	 */
+	[[nodiscard]] uint32_t addShadowMeshletMdiEntry(std::array<uint32_t, 4> clusterSlots,
+		uint32_t argsSlot);
+
+	/** 真 MDI 阴影条目写回资产记录（★M-1b，与 bindShadowMeshletToAsset 同节奏）。
+	 * @param assetId mesh 资产记录 id
+	 * @param entryIdx addShadowMeshletMdiEntry 返回的条目下标
+	 */
+	void bindShadowMeshletMdiToAsset(uint32_t assetId, uint32_t entryIdx);
+
+	/**
 	 * 内建几何管线条目（架构债务 1 方案 B）：spec = "cube"，binding mapping = 传入资产记录的
 	 * 顶点/索引 heap 槽（无纹理/无 scene data = cube 形态，binding 0 = 顶点槽、
 	 * binding 1 落索引槽——非 textured 形态）。
@@ -674,7 +702,9 @@ export class ShaderRegistry {
 			return light;
 		// 尾部词表（tonemap/shadow/izb_mask/ao/taa）：批 12.6 起表驱动查表——旧 if 链
 		// 每加一词控制复杂度 +1（taa 加进来正撞 16>15 红线），表长不受此税。
-		static const std::array<RGL::PipelineSpec, 10> kTailSpecs{{
+		// ★M-1b 追加 shadow_meshlet_mdi：表长 10 → **11**（改表忘改长度 = 编译期直接红，
+		// brace-init 元素数与 std::array<N> 不符，编译器替我们盯着）。
+		static const std::array<RGL::PipelineSpec, 11> kTailSpecs{{
 			{"tonemap", "generated_shaders/light.mesh.spv",
 				"generated_shaders/tonemap.frag.spv"},  // mesh 复用全屏大三角（Phase 8 ①）
 			{"shadow", "generated_shaders/shadow.mesh.spv", "generated_shaders/shadow.frag.spv"},
@@ -682,6 +712,12 @@ export class ShaderRegistry {
 			// @17-20 + 12B push），frag **复用** shadow.frag.spv（输出接口同为 ShadowVertexOutput
 			// = 只一个 SV_Position，两 mesh 的 frag 侧完全等价）。
 			{"shadow_meshlet", "generated_shaders/shadow_meshlet.mesh.spv",
+				"generated_shaders/shadow.frag.spv"},
+			// ★M-1b（docs/mdi_plan.md §19.2 D2）：真 MDI 变体 = frag 复用 shadow.frag.spv、
+			// mesh 换 shadow_meshlet.mesh_MDI_SHADOW.spv（push word0 = rowBase + binding 34
+			// 读 24B 行表）。🔴 **表尾纯追加**（同上方 shadow_meshlet 当年的加法）：旧
+			// "shadow_meshlet" 规格一字未动 = 门关/出厂选的还是今天那份 SPV、那条条目。
+			{"shadow_meshlet_mdi", "generated_shaders/shadow_meshlet.mesh_MDI_SHADOW.spv",
 				"generated_shaders/shadow.frag.spv"},
 			{"izb_mask", "generated_shaders/izb_mask.mesh.spv",
 				"generated_shaders/izb_mask.frag.spv"},

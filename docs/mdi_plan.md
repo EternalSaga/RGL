@@ -1947,3 +1947,74 @@ N11（`row ≤ UINT32_MAX` 闸门要 ~100GB 行表才有激励）。
 **并发这件事本轮又发生了一次（且这次它自己发现了）**：它的变异 harness 被我双启，两个进程同时写同一批文件，
 留下 `mdi_rows.cppm` 处于变异态；它的解法是加两道闸门（**进场即校验所有被改文件 == 基线快照，不符拒跑** +
 **检测到多实例就拒跑**）。这两道比我上一批记的"只加还原后复核"更对——**污染要在进场时拦，不是在还原时发现**。
+
+### 19.9 ★M-1b 交付记录与**根因**：`SV_DrawIndex` 在 mesh stage 毒化后续 mesh draw（2026-10-13，主 agent 接手定位）
+
+**状态：代码面六件全部落地且构建/检查全绿，但 A3 主判据红 —— 根因已定位到驱动，本批不能收线。**
+
+#### 接手现场（记一笔流程账）
+
+第二位执行者做到变异阶段被取消，**把一个变异体留在了树上**且构建是绿的（只坏语义不坏编译）：
+`vkrenderer_passrec.cppm` 里 `if (true) continue;  // MUTANT(kappa): 跳过 upload`。
+它被取消时 A3 已经红、正在做通道级定位，**顺序反了**（A3 未结清就去做变异 = 在坏地基上盖楼）。
+⟹ 收线三查里 `grep -rn MUTANT rgl/ tests/` 这一条**救了一次**，别省。
+
+#### 已实测为**正确**的部分（下一个人别再查这些）
+
+| 面 | 读数（启动期打点实测） |
+|---|---|
+| 条目纯追加 | 新条目 **475**、旧 `shadow_meshlet` 仍 **474**、`entries_total=476`；旧簇槽 8252-8255 + 可见标志 8257 未动，行表槽 8258 |
+| 段与行 | `segments=3`，c1/c2/c3 各 `rowCount=1530`，`row0{gcX=2 oi=1590 cs=11}`（真值非零） |
+| 同源 pair | `argsOffset = rowBase × 24` 三级联全对（0 / 36720 / 73440） |
+| 上传 | `prepareMdiShadowRows` 每帧调用、`upload` 返回无错、`mdiArgsPtr=true` |
+| 命令数口径 | 门关 `vkcmd=19994` = 6601×3+191；开档 `6452` = (2084 逐条 + 3 MDI)×3+191；`draw.count 6674` = 6601−4517+4590 ⟹ **D5 口径自洽** |
+| 门关逐位不变 | A1 `54e40665` ✓ / A2 出厂 `95edc8cc` ✓（多次复跑逐位同） |
+
+#### 根因：单变量二分矩阵（同一次构建，`sha256` 前 16 位）
+
+| 臂 | 图像 | bistro |
+|---|---|---|
+| 出厂（门关） | `95edc8cc…` | 在 |
+| 门开 + **不发** MDI 命令（条目/push/bindShaders/上传全在） | `da768bfb…` | **在** |
+| 门开 + MDI 命令，`drawCount` 截到 **1** 行 | `b1c6afca…` | **没了** |
+| 门开 + MDI 命令，全 1530 行 | `b1c6afca…` | 没了 |
+| 门开 + 所有行强制 `gcX=0`（展开**零任务**） | `b1c6afca…` | 没了 |
+| 门开 + 同条目改走**直接** `drawMeshTasksEXT` | `b1c6afca…` | 没了 |
+| 门开 + 同条目只把 mesh SPV 换回**非 MDI** 那份 | `da768bfb…` | **在** |
+| 门开 + MDI SPV 但**入口不声明** `SV_DrawIndex` | `da768bfb…` | **在** |
+| 门开 + MDI SPV 声明 `SV_DrawIndex` 但行号 `min(…,4772)` 夹住 | `b1c6afca…` | 没了 |
+
+**结论（一句话）**：在 **AMD Radeon 8060S Graphics (RADV STRIX_HALO) / Mesa 26.2.3** 上，
+mesh shader 入口**一声明 `DrawIndex` 这个 system value，同一提交里后续所有 `vkCmdDrawMeshTasksEXT`
+直接 draw 就不产出任何像素**——主视图那栋 bistro 整块消失（`diffblock`：34.27% 像素、单个 315692px
+连通域、最厚 150px = "整块没了"，不是边缘漂移）。
+
+🔴 **不是我们的用法错**：`DrawIndex` 在 mesh/task 阶段的内置清单里（本地 spec
+`appendices/VK_EXT_mesh_shader.adoc:80`，ChangeLog 亦记 "Add … VUs for DrawIndex BuiltIn
+decorations with Task and Mesh shader stages"）；`maxDrawIndirectCount = 4294967295`；
+`vkCmdDrawMeshTasksIndirectEXT` 的 drawCount 相关 VUID 只有 07088/07089/07090（§19.5 已核）。
+也**不是越界读**：夹住行号无效，且 `rowBytes` 最大 73452 « capacity 229104。
+⟹ **驱动缺陷**（RDNA3 无硬件 mesh shader，走仿真路；`gl_DrawID` 在 mesh 入口的接线大概没做）。
+
+#### 连带发现（对判据设计有直接影响，别再当新问题查）
+
+`--set meshlet.shadow_lod=-1`（c1..c3 退回旧 shadow 管线）与出厂**只差 3670 px = 0.398%**，
+600 个碎连通块、无整块 ⟹ **交付机位下 c1..c3 簇阴影的可见足迹就这么大**。
+所以：① A3「逐位不变」**不是空判据**（正确实现必须逐位复现这 3670 px）；② 但它被 bistro
+整块消失（34%）完全淹没，A3 红的时候**看不出阴影对不对**；③ A4 阳性对照（强制全剔）在
+本批**必然只出 3670 px 量级的差**，做的时候别拿整块当预期。
+
+#### 对 §19.1 / §19.2 的处置
+
+- **§2.1 路 A（mesh stage 直读 `SV_DrawIndex`）在本机不可用** ⟹ §19.1 第三行"同几何同行序
+  ⟹ 逐位不变"的前提**不是被证伪，而是被驱动挡在门外**：MDI 展开根本没跑到，谈不上等价性。
+- **D2 的 binding 号 22 → 34**（`import scene` 把 `sceneHeader` UBO 带进同一 SPV，22 重复声明
+  = `vkCreateShadersEXT` mapping 冲突，实测首跑现形）。已接受，shader 头注释与启动 INFO 都记了。
+- **§19.8 的"领槽前移"接缝被第⑤步形态消解**（条目烘焙排在载体建成之后、仍在 `assembleBackEnd`
+  之前 ⟹ DGC/GpuCull 的 `entries.size()` 快照天然含新条目，零槽序扰动）。雷 1/雷 2 的时序论证
+  已在 `wireMeshletMdiShadowActivation` 头注释逐条给（`cloneEntryFor` 有界内守卫、hot_reload
+  基线在之后挂）；**NVIDIA DGC execute 路本机不可测，仍归 ★M-2**。
+- **下一步三选一**（待拍板）：① 门保持默认关 + 给 Mesa 提 issue + 等 ★M-2 在 NVIDIA/Intel
+  上验（代码已就位，成本最低）；② 改走 **task shader 路**（task 读 `DrawIndex` 经 payload 传给
+  mesh）——spec 正统形态，但要新增一个 stage，且**未验证** RADV 的 task 路是否也坏；
+  ③ 换宿主（§19.1 的原始宿主 = 旧 shadow 管线，它不用 mesh shader，绕开整件事）。

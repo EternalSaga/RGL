@@ -57,15 +57,43 @@ ByteAddressBuffer meshletTris;        // 扁平 u8 三角索引流
 [[vk::binding(20, 0)]]
 ByteAddressBuffer meshletRemap;       // 扁平 u32 顶点重映射流
 
+// ─── ★M-1b 真 MDI 变体（-DMDI_SHADOW，docs/mdi_plan.md §19.2 D1/D2）────────────────
+// 门 = 选 SPV 变体而不是运行时 flag（上方第 2 条理由同一条纪律）。本分支生效时：
+//  · push 的 word0（字段名仍叫 objectIndex，12B 尺寸不变 ⟹ 条目 argsSize 与执行器通用
+//    push 路径一字节不动）**语义切换成行基址 rowBase**（§3 的统一公式 `slot = rowBase +
+//    SV_DrawIndex` 就是这条切换）；
+//  · 逐 draw 的身份（objectIndex / clusterStart）从 binding 34 的 24B 行表里读。
+// 🔴 行表布局的**唯一真相源 = rgl/mdi_rows.cppm**（MdiShadowRow + kMdiShadowRowStride +
+//    kMdiShadowCommandBytes）。main() 里的三个同名常数是行表契约在 shader 侧的**第二份也是
+//    最后一份**拼写（slang 的全局 const 需 static，本文件照 meshlet.mesh 先例把规格常量放
+//    main 体内）：数值对账 = `meshlet_spec_checks`（schema `meshlet_cull_schema.lua constants`
+//    ↔ 本文件字面量）；跨语言对账 = tests/test_meshlet_shadow_args 的设备自证回路（真发一次
+//    vkCmdDrawMeshTasksIndirectEXT，C++ 写行 / shader 读行逐字节对拍）+
+//    tests/test_mdi_shadow_emit 的 constexpr 桥。**别在这里加第四份形态**（手算常量/宏等）。
+#ifdef MDI_SHADOW
+// 行表载体 = ★M-1a 的 ring×2 一张 buffer（rgl/meshlet_shadow_args），heap 槽由
+// MeshletShadowArgsService 领号、装配烘进本条目 binding 34。🔴 声明与 mapping 同向：
+// 只有本变体声明 34 ⟹ 只有 MDI 条目烘 34；旧 shadow_meshlet 条目两侧都**不**带 34。
+// ⚠ **定案号 22 已被占用**（§19.2 D2 原写 binding 22 = 与 scene.slang 的 sceneHeader UBO
+// 冲突：本文件 import scene，SPV 同时声明两个 22 ⟹ mapping 重复 = vkCreateShadersEXT
+// conflicts 报错，实测 2026-10-13 首跑现形）。全树 0..33 已满（scene data 类型化迁移批
+// S/T 占位），行表落**第一个空闲号 34**。
+[[vk::binding(34, 0)]]
+ByteAddressBuffer mdiShadowArgs;
+#endif
+
 // push constant：**不 import material.slang**，自带 ShadowMeshletDrawArgs（12B，scalar layout）。
 // 理由与 shadow.mesh.slang 的自带 push 块同源（共享的 DrawArgs 契约不能为一条管线加字段），
 // 本管线再多一个 clusterStart = 阴影 push 的 8B 之上加 4B。三个字段全是**纯索引/偏移**
 // （AGENTS bindless 原则）；CPU 侧对偶 = frame_draw_list.cppm::ShadowMeshletDrawArgs（static_assert 钉 12B）。
 struct ShadowMeshletDrawArgs
 {
-    uint objectIndex;   // scene data 各 per-object 表下标 = MeshRef.objectSlot（同 DrawArgs）
+    uint objectIndex;   // scene data 各 per-object 表下标 = MeshRef.objectSlot（同 DrawArgs）；
+                        // 🔴 MDI_SHADOW 变体下**语义切换 = 行基址 rowBase**（§19.2 D1），
+                        //    尺寸与字段序不变（word1 = cascadeIndex、word2 在 MDI 下不用）
     uint cascadeIndex;  // 阴影图分块号，选 readShadowViewProj 槽
-    uint clusterStart;  // 🔴 相对 ObjectClusterRange::base 的偏移（批 A MeshletLodPrimRange::start 口径）
+    uint clusterStart;  // 🔴 相对 ObjectClusterRange::base 的偏移（批 A MeshletLodPrimRange::start 口径）；
+                        //    MDI_SHADOW 变体下此位 = reserved（clusterStart 进行表 word[4]）
 };
 
 [[vk::push_constant]] ShadowMeshletDrawArgs shadowMeshletDrawArgs;
@@ -111,6 +139,11 @@ uint3 loadLocalTri(uint triOffset, uint k)
 void main(
     uint ti : SV_GroupIndex,
     uint3 groupID : SV_GroupID,
+#ifdef MDI_SHADOW
+    // §2.1 路 A：mesh stage 直读 SV_DrawIndex（NO_TASK_SHADER_BIT 已设，spike §6 的
+    // 设备用例实测 0 计数不跳号 ⟹ 孔洞行的 DrawIndex 仍等于段内行号）。flag 不动。
+    uint drawID : SV_DrawIndex,
+#endif
     out vertices ShadowVertexOutput verts[256],
     out indices uint3 triangles[85])
 {
@@ -123,9 +156,28 @@ void main(
     const uint kClusterStride = 44u;   // DiskCluster（format.h static_assert）
     const uint kVertexStride = 48u;    // ModelVertex（model_schema.lua）
 
+#ifdef MDI_SHADOW
+    // 行表规格常量（口径与对账链 → 文件头 ★M-1b 注释块；写法 = meshlet.mesh.slang 的
+    // `const uint kClusterStride = 44u;` 函数内形态同构）。
+    const uint kMdiShadowRowStrideBytes = 24u;          // = kMdiShadowRowStride（VUID-07088 的 stride）
+    const uint kMdiShadowObjectIndexByteOffset = 12u;   // 行 word[3]
+    const uint kMdiShadowClusterStartByteOffset = 16u;  // 行 word[4]
+    // 🔴 身份来源 = 行表（§19.2 D1）：row = rowBase(push.word0) + SV_DrawIndex，
+    // objectIndex/clusterStart 逐行读。行序 = 候选序（构建器契约），不可见行 gcX = 0
+    // 根本不发射 ⟹ 这里被调度到的行恒为可见行。
+    const uint rowBytes = (shadowMeshletDrawArgs.objectIndex + drawID) * kMdiShadowRowStrideBytes;
+    const uint mdiObjectIndex = mdiShadowArgs.Load(rowBytes + kMdiShadowObjectIndexByteOffset);
+    const uint mdiClusterStart = mdiShadowArgs.Load(rowBytes + kMdiShadowClusterStartByteOffset);
     // 🔴 clusterStart 在 base 之后加：批 A 的 start 是**相对 base 的偏移**，不是全局簇下标。
+    const ObjectClusterRange range = readObjectClusterRange(mdiObjectIndex);
+    const uint clusterIdx = range.base + mdiClusterStart + (groupID.x >> 1u);
+#else
+    // 🔴 clusterStart 在 base 之后加：批 A 的 start 是**相对 base 的偏移**，不是全局簇下标。
+    // 🟰 非 MDI 这一支与改前**逐 token 同**（🔴 红线：门关/出厂用的还是今天那份 SPV——
+    //    构建期用 sha256 对拍 generated_shaders/shadow_meshlet.mesh.spv 钉住，见交付报告）。
     const ObjectClusterRange range = readObjectClusterRange(shadowMeshletDrawArgs.objectIndex);
     const uint clusterIdx = range.base + shadowMeshletDrawArgs.clusterStart + (groupID.x >> 1u);
+#endif
     const uint half = groupID.x & 1u;                         // 半区号：0 = 前 85 三角，1 = 其余
     const uint cBase = clusterIdx * kClusterStride;
 
@@ -175,7 +227,11 @@ void main(
         // 变换链与 shadow.mesh.slang **逐式同**（两段矩阵：world 在对象矩阵表 @128 已有现成
         // 一份，VP 区是每帧 4 槽定长装不下 per-object 预乘）。列组合走 scene.slang 的
         // worldPos / clipPos（无行/列主序约定歧义）。
+#ifdef MDI_SHADOW
+        const float3 world = worldPos(readObjectMatrix(mdiObjectIndex), pos);
+#else
         const float3 world = worldPos(readObjectMatrix(shadowMeshletDrawArgs.objectIndex), pos);
+#endif
         verts[ti].position = clipPos(readShadowViewProj(shadowMeshletDrawArgs.cascadeIndex), world);
     }
 

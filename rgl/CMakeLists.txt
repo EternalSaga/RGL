@@ -78,6 +78,9 @@ rgl_shader(shadow.frag SHADOW_FRAG_SPV)
 # 不 import material（自带 12B push 块，理由照 shadow.mesh.slang 头注释）。frag **复用**
 # shadow.frag.spv（输出接口同为 ShadowVertexOutput）→ 本行不新增 frag target。
 rgl_shader(shadow_meshlet.mesh SHADOW_MESHLET_MESH_SPV scene scene_tables)
+# ★M-1b（docs/mdi_plan.md §19.2 D2）真 MDI 变体：门 = 选 SPV 变体（同 MESHLET_DEBUG_OFFSET 先例），
+# 门关用的还是上面那份原版 SPV、那条原管线条目，一字节不动 = 逐位不变构造性保证。
+rgl_shader_defined(shadow_meshlet.mesh SHADOW_MESHLET_MDI_MESH_SPV MDI_SHADOW scene scene_tables)
 # Phase 8 批次 ①：HDR tonemap frag（mesh 复用 light.mesh.spv；import scene 读 @56 曝光）
 rgl_shader(tonemap.frag TONEMAP_FRAG_SPV scene)
 # Phase 11 批 11.4：SSAO frag（mesh 复用 light.mesh.spv 全屏大三角；import scene 读
@@ -319,6 +322,7 @@ set(RGL_SCENE_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/builtin_geometry_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/render_list.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/render_list_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/render_list_mdi.cppm"    # ★M-1b（§19.2 D4）：真 MDI 阴影段采集机械室（partition render_list:mdi）
     "${CMAKE_CURRENT_SOURCE_DIR}/frame_draw_list.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/meshlet_cull_service.cppm"   # ★1-a2-i：逐簇剔除的 GPU 侧载体（要 VkDevice + scene data → rlscene）
     "${CMAKE_CURRENT_SOURCE_DIR}/meshlet_cull_service_impl.cppm"
@@ -357,6 +361,7 @@ set(RGL_FRAME_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/shader_registry.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/shader_registry_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/shader_registry_fullscreen.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shader_registry_shadow.cppm"  # ★18-B1 / ★M-1b：阴影簇条目 + 真 MDI 变体条目（partition :shadow）
     "${CMAKE_CURRENT_SOURCE_DIR}/shader_hot_reload.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/shader_hot_reload_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/ecs.cppm"

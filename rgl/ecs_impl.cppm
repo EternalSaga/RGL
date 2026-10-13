@@ -644,7 +644,10 @@ std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer& rende
 		{"bounds",     [](entt::registry& rg, float) { boundsSystem(rg); }},
 		{"projection", [](entt::registry& rg, float) { projectionSystem(rg); }},
 		{"taa",        [](entt::registry& rg, float) { taaSystem(rg); }},
-		{"renderlist", [&](entt::registry& rg, float) { renderListSystem(rg, resources, renderer.getEnvironmentRef(), assets, renderListState); }},
+		{"renderlist", [&](entt::registry& rg, float) { renderListSystem(rg, resources, renderer.getEnvironmentRef(), assets, renderListState,
+			// ★M-1b：本帧录制槽（drawFrame **之前**取；slot 只在 drawFrame 末尾 advance ⟹
+			// 采集期与录制期同值，执行器 prepareMdiShadowRows 有机器核对，失配 = 抛）
+			renderer.currentFrameSlot()); }},
 	};
 
 	float prevTicks = static_cast<float>(SDL_GetTicks());

@@ -8,6 +8,7 @@ import lights_types_generated;
 import material_types_generated;  // DrawArgs（Phase 7b cullArgs：GPU culling 候选 args）
 import scene_forward_types_generated;  // 前向头 SceneLight（C API 反射生成，替换原 LightDataGpu）
 import scene_data;  // kSceneShadowCascadeCount（阴影 VP 区容量；单向依赖：scene_data 不认识本模块）
+import mdi_rows;    // MdiShadowRow（★M-1b：真 MDI 行表的行类型；FrameDrawList::mdiSegments 的行）
 
 namespace RGL {
 
@@ -28,6 +29,11 @@ export struct DrawCall {
 	uint32_t pipeline;                    // 管线表下标（ShaderRegistry::entries 下标）
 	std::span<const std::byte> pushData;  // push constant 字节序列（DrawArgs，帧局部存储）
 	uint32_t groupCount;                  // mesh task group 数（资产记录 MeshAsset.groupCount）
+	// ── ★M-1b 真 MDI（docs/mdi_plan.md §19.2 D3：两字段带默认值 = 现行行为，既有全部
+	// 聚合构造点零改动）🔴 drawCount > 1 是唯一判据：此时 groupCount 被忽略（GPU 逐行读
+	// 行表里的 groupCountX，含 gcX=0 的空转行），push 的 word0 = rowBase（12B 尺寸不变）。
+	uint32_t argsOffset = 0;              // 行表字节偏移（= mdiShadowRowLocation 同源 pair 的 argsOffset）
+	uint32_t drawCount = 1;               // >1 = 一次 vkCmdDrawMeshTasksIndirectEXT（行数 = 行表段内行数）
 };
 
 /**
@@ -57,6 +63,10 @@ static_assert(sizeof(ShadowDrawArgs) == 8,
  * data 变更、零反射重跑、旧 shadow 管线一字节不动。
  *
  * 三个字段全是**纯索引/偏移**（AGENTS bindless 原则）。
+ *
+ * 🔴 ★M-1b MDI 变体（spec "shadow_meshlet_mdi"）下**同尺寸换语义**（§19.2 D1）：word0 =
+ * `rowBase`（行基址，不是 objectIndex）、word2 = reserved（clusterStart 进行表 word[4]）。
+ * 尺寸不变 = 条目 argsSize 与执行器通用 push 路径一字节不动——这正是 D1 选 12B 复用块的理由。
  */
 export struct ShadowMeshletDrawArgs {
 	uint32_t objectIndex = 0;    // 与 DrawArgs.objectIndex 同值（MeshRef.objectSlot）
@@ -71,6 +81,27 @@ export struct ShadowMeshletDrawArgs {
 };
 static_assert(sizeof(ShadowMeshletDrawArgs) == 12,
 	"ShadowMeshletDrawArgs layout drifted from shadow_meshlet.mesh.slang ShadowMeshletDrawArgs (scalar layout)");
+
+/**
+ * 真 MDI 阴影段的**一个级联段**（★M-1b，docs/mdi_plan.md §19.2 D4 / §19.5）。
+ *
+ * CPU 侧行表（帧局部，与 DrawCall::pushData 同一条生命周期规则：录制期读取即完成使命），
+ * 执行器录制期经 `MeshletShadowArgsService::upload(frameSlot, firstRow, rows)` 落 GPU。
+ * 🔴 `loc` 的两个字段 = **同一次** `mdiShadowRowLocation(sliceRows, frameSlot, firstRow)`
+ * 的返回（§19.5：`argsOffset` 与 `rowBase` 各算一遍迟早漂，漂了 = shader 读错行 = 画错几何
+ * 且不报错）。采集侧只准经那一个具名入口算一次并把整对存下来；`sliceRows` 取载体的
+ * `sliceRows()`（装配层 ctx 搬入），帧槽起点 = `firstRow`（段在 slice 内的行号，由采集侧
+ * 按级联打包，录制期 upload 用同一对输入 → 落点与读数构造性同源）。
+ */
+export struct MdiShadowSegment {
+	uint32_t cascadeIndex = 0;      // 阴影图分块号（c1..c3——c0 恒旧路径，§18.6）
+	uint32_t firstRow = 0;          // 本段在**一个帧槽 slice 内**的起始行号（行序 = 候选序）
+	uint32_t rowCount = 0;          // 本段行数（= 本帧可切候选数，各级联同值；含 gcX=0 空行）
+	uint32_t pipeline = 0;          // MDI 管线条目下标（asset.shadowMeshletMdiPipelineIndex）
+	uint32_t frameSlot = 0;         // 🔴 算 pair 依据的帧槽号（录制侧核对同帧，失配 = 契约破）
+	RGL::MdiShadowRowLocation loc;  // argsOffset + rowBase（同源 pair，唯一产地见上）
+	std::span<const RGL::MdiShadowRow> rows;  // 本段行（帧局部存储，规则同 pushData）
+};
 
 /**
  * 场景级每帧动态数据（Phase 5 批次 2，bindless）：渲染 system 产出、drawFrame 消费——
@@ -260,6 +291,13 @@ export struct FrameDrawList {
 	// 序号连续才是自然的；拼一个向量 + 边界数组与 calls/transparentStart 的现有风格一致。
 	// 长度固定为 kSceneShadowCascadeCount + 1，未启用的级区间为空（段边界相等 → 该 pass 零 draw）。
 	std::array<uint32_t, kSceneShadowCascadeCount + 1> shadowBoundaries{};
+	// ★M-1b 真 MDI：阴影段每级联的**行表段**（一生效级联一条，c0 恒旧路径不进表）。与
+	// shadowCalls 的关系：本向量非空时，shadowCalls 的 c1..c3 段里**每一条**管线=MDI 条目的
+	// DrawCall（drawCount>1）都对应本表同 cascadeIndex 的段；执行器录制期先逐段 upload 落
+	// GPU，再盲执行 shadowCalls（MDI 分支读 DrawCall 自带的同源 pair 字段，不自算偏移）。
+	// 门关（meshlet.mdi_shadow=false / 无载体 / 容量不足）= 本向量恒空 + shadowCalls 无
+	// drawCount>1 条目 = 零 upload 零 barrier 零新命令（逐位不变的构造性保证）。
+	std::vector<MdiShadowSegment> mdiSegments;
 
 	/** 阴影第 c 级的 draw 序列（c 超出已启用级数时返回空 span）。
 	 *  @param c 分块号（受控于 boundaries 长度 = 区容量）

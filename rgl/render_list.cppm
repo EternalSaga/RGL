@@ -7,6 +7,7 @@ import rlstd;
 import material_types_generated;  // Phase 4：统一 DrawArgs 超集（Phase 4 时 scalar 100B，Phase 7b+ 起 4B = 仅 objectIndex）
 import scene_forward_types_generated;  // 前向头 SceneLight + ObjectDraw（Phase 10 批 10.2a 单源化）
 import frame_draw_list;
+import mdi_rows;    // ★M-1b：MdiShadowRow/MdiShadowSegment（采集上下文的存储类型；rlbase 纯 CPU）
 import vk_resources;
 import environment;  // Environment（irradianceSH，架构债务续账步骤 3）
 import asset_table;
@@ -64,6 +65,15 @@ export struct RenderListState {
 	// shadowArgs 同一条 **resize-before-loop** 红线——实体循环内 realloc 会让先前存入
 	// DrawCall 的 span 悬空（帧 0 确定性 UAF，见 renderListSystem 里那条原话注释）。
 	std::vector<RGL::ShadowMeshletDrawArgs> shadowMeshletArgs;
+	// ── ★M-1b 真 MDI 阴影段（三件，全部帧局部，span 生命周期规则同 pushData）──
+	// MDI 级联的 push 存储（**每级联 1 槽**，下标 = 分块号；内容是 {rowBase, cascade, 0}，
+	// rowBase = 载体同源 pair 的 rowBase）。resize-before-loop：循环前固定 kActiveShadowCascades
+	// 槽，emit 内不再 realloc（同 shadowArgs 那条 UAF 红线）。
+	std::vector<RGL::ShadowMeshletDrawArgs> shadowMeshletMdiArgs;
+	// 行表存储：各级联段**首尾相接**的 24B 行（FrameDrawList::mdiSegments 的 rows span 指这里）。
+	std::vector<RGL::MdiShadowRow> mdiRows;
+	// 各级联段描述（emit 产，renderListSystem 搬进 FrameDrawList::mdiSegments）。
+	std::vector<RGL::MdiShadowSegment> mdiSegments;
 	// Phase 7 批次 4：CPU frustum culling 可见统计（renderListSystem 每帧填；可见/剔除计数）
 	uint32_t visibleCount = 0;
 	uint32_t culledCount = 0;
@@ -107,9 +117,13 @@ export struct RenderListState {
  * @param env 环境服务（irradianceSH 每帧拷入 scene data，架构债务续账步骤 3）
  * @param assets 资产表（mesh/material 记录解析；F 拆出不再经内核取）
  * @param state 每帧 push constant 存储（args/matrices/skyboxArgs 填充 + culling 统计）
+ * @param frameSlot ★M-1b：本帧**录制槽**号（= `FrameSession::currentFrameSlot()`，由调用它的
+ *   帧循环在 drawFrame **之前**取——slot 只在 drawFrame 末尾 advance ⟹ 采集与录制同值）。
+ *   仅 MDI 生效档消费（同源 pair 的一半输入）；门关时传什么都不影响画面。
  */
 export void renderListSystem(entt::registry& rg, RGL::Resources& resources,
-	RGL::Environment& envService, const RGL::AssetTable& assets, RenderListState& state);
+	RGL::Environment& envService, const RGL::AssetTable& assets, RenderListState& state,
+	uint32_t frameSlot);
 
 /**
  * 每帧填阴影 scene data（尾区阴影 VP 区 + 4 个 vec4 采样参数子区）。定义在
@@ -146,6 +160,9 @@ export struct ShadowCandidate {
 	uint32_t groups;      // = asset.groupCount（旧管线的 task 数）
 	// ── 簇路径（★18-B2 远级联 LOD）：发射条件四条 → collectShadowCasters ──
 	uint32_t meshletPipeline = kInvalidPipelineIndex;  ///< = asset.shadowMeshletPipelineIndex（无效 = 不切）
+	/** ★M-1b：真 MDI 条目下标（= asset.shadowMeshletMdiPipelineIndex）。kInvalid = 本帧没有
+	 *  MDI 宿主（门关未烘 / 载体未建）⟹ emitShadowCasters 对可切候选继续走逐条簇 draw。 */
+	uint32_t meshletMdiPipeline = kInvalidPipelineIndex;
 	/** 🔴 **选级簇数**（LOD 表 bySlot[slot].count），**不是** task 数——×2 换算唯一真相源 =
 	 *  render_list_impl 的 meshletTaskCount（emitShadowCasters 消费点执行）。 */
 	uint32_t meshletGroups = 0;
@@ -164,17 +181,64 @@ export void collectShadowCasters(const RGL::MeshAsset& asset, const RGL::Materia
 	const MeshletShadowLodTable* lodTable, std::vector<ShadowCandidate>& out);
 
 /**
+ * ★M-1b 真 MDI 采集上下文（docs/mdi_plan.md §19.2 D4 / §19.5）。非空 = 生效档事实
+ * （ctx 里有 `MeshletMdiShadowActivation`，装配层判定一次，本层不重述条件——
+ * `collectMeshletOverlay` 判据 5/6 同纪律）。三个数/两个口的来源各有红线：
+ *  · `sliceRows` = 载体的 `sliceRows()`（装配层从 ring 读入——**别自己凑**，容量口径的
+ *    唯一真相源是 `wireMeshletShadowArgs` 的闭式锚）；
+ *  · `frameSlot` = `FrameSession::currentFrameSlot()`（ecs 帧循环在 drawFrame **之前**取，
+ *    slot 只在 drawFrame 末尾 advance ⟹ 采集期与录制期同值；失配有机器核对，见执行器）；
+ *  · `slices` = 载体的 `slices()`（帧槽轮转分母；**采集期**就查 `frameSlot < slices`——
+ *    ring×2 的写安全前提是"只写本帧槽"，不留到录制期才现形，★M-1b 雷 3 处置）；
+ *  · `rows` / `segments` = `RenderListState` 的帧局部存储（span 生命周期规则同 pushData，
+ *    容量闸门在 `buildMdiShadowRows` 的调用点判，越界段整帧回落逐条 draw）。
+ */
+export struct MdiShadowEmitContext {
+	uint32_t sliceRows = 0;
+	uint32_t slices = 0;
+	uint32_t frameSlot = 0;
+	std::vector<MdiShadowRow>* rows = nullptr;
+	std::vector<MdiShadowSegment>* segments = nullptr;
+	/** MDI push 存储（固定 kActiveShadowCascades 槽、循环前 resize——同 shadowMeshletArgs 的
+	 *  resize-before-loop 红线；下标 = 分块号）。内容 = {rowBase, cascadeIndex, 0}。 */
+	std::vector<ShadowMeshletDrawArgs>* pushArgs = nullptr;
+};
+
+/**
+ * ★M-1b：MDI 阴影段的**生效**载体（registry ctx，存在即生效，同 `MeshletSwitchOn` 一族的
+ * 「装配层判定一次、消费者只搬事实」纪律）。emplace 者 = 装配层 bake 步骤（条目烘成 +
+ * 行表载体已建 + binding 34 已烘），消费者 = `renderListSystem`。
+ * 只带采集侧需要的闭式数，不带服务指针（render_list 不 import 设备层服务 = 接缝可无设备单测）。
+ */
+export struct MeshletMdiShadowActivation {
+	uint32_t sliceRows = 0;  ///< 载体每帧槽行数（= ring->sliceRows()，容量闸门输入）
+	uint32_t slices = 0;     ///< 帧槽数（= ring->slices() = FrameSession::kFramesInFlight，雷 3 采集期预检输入）
+};
+
+/**
  * 候选 × 逐级光空间体 → 阴影 draw 清单（★18-B2 抬为可测接缝，同上先例）。级主序、级内
  * 实体迭代序；**draw 条数与切不切无关**（原位换管线形状：只换 draw 内容，不增减）。
  * c0 恒旧路径（8B push）；c1..c3 且候选可切 → 簇管线 + meshletTaskCount(簇数) + 12B push。
  * @param shadowMeshletArgs 出参：填 ShadowMeshletDrawArgs（帧局部存储，生命周期同 pushData；
  *        调用方**必须在实体循环之前** resize 到位——循环内 realloc = 先前 span 悬空）
+ * 🔴 ★M-1b `mdi` 非空时的形态（生效档，§19.2 D4 孔洞流）：c1..c3 每级联的行表 =
+ * **全部可切候选**（含本级不可见的，行照发、`gcX = 0`）按候选序喂
+ * `buildMdiShadowRows`（不许自己拼行），产出一条 `MdiShadowSegment` + 一条
+ * `DrawCall{pipeline=MDI 条目, pushData={rowBase, cascadeIndex, 0}, drawCount=行数,
+ * argsOffset=同源 pair}`；不可切候选继续逐条旧 draw（**混合形态**，别塞进行表）。
+ * 行序 = 候选序 = 今天的 draw 相对序（§19.1 逐位不变的前提）；MDI 条目在 out[c] 里的
+ * 位置 = 本级联**首个可见可切候选**的位置（该级联无一可见时挂段尾——depth-only 图集的
+ * 逐纹素 min 与 draw 序无关，§19.1 第三行；行**序**契约在行表内部仍成立）。
+ * **压紧/重排 = 立刻让判据失去依据**。
+ * 容量不足（3 段总行数 > sliceRows）/ 构建器不变量破 = WARNING + 本帧整体回落逐条
+ * draw（不静默半切）；`mdi->segments` 保持空 ⟹ 执行器零新命令。
  */
 export void emitShadowCasters(std::span<const ShadowCandidate> cands,
 	std::span<const ShadowVolume> volumes, uint32_t objectSlotCount,
 	std::vector<ShadowDrawArgs>& shadowArgs,
 	std::vector<ShadowMeshletDrawArgs>& shadowMeshletArgs,
-	std::array<std::vector<DrawCall>, kActiveShadowCascades>& out);
+	std::array<std::vector<DrawCall>, kActiveShadowCascades>& out,
+	const MdiShadowEmitContext* mdi = nullptr);
 
 /**
  * 簇路径单条 draw 的 task 数（★1-a1ii-β-1 抬出 = **单一真相源**；定义在 render_list_impl，

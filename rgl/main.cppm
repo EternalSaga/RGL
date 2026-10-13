@@ -312,6 +312,10 @@ export struct MeshletBindingSlots {
 export struct MeshletAssembly {
 	std::unique_ptr<MeshletCullService> cullService;       ///< ★1-a2-i 逐簇剔除的 GPU 载体
 	std::unique_ptr<MeshletShadowArgsService> shadowArgs;  ///< ★M-1a 真 MDI 行表的 GPU 载体（零消费者）
+	/** ★1-a1ii-α 的 4+1 簇 buffer heap 槽快照（★M-1b：第⑤步烘 MDI 条目要复用 binding 17-20，
+	 *  而 slots 的产地在 `wireMeshletOverlay` 的局部——nullopt = 门关 / 无产物 / 多产物回落，
+	 *  与 `bakeShadowMeshletEntries` 的早退判据同一个事实）。 */
+	std::optional<MeshletBindingSlots> bindingSlots;
 };
 
 /**
@@ -403,6 +407,18 @@ export void wireMeshletCull(Renderer& renderer, entt::registry& registry,
 export void wireMeshletOverlayDepthCompare(Renderer& renderer, const RuntimeConfig& cfg);
 
 /**
+ * 「Renderer 装配后挂」三连（★M-1b；调用序契约 = assembleBackEnd 之后，main_impl 一次调用）：
+ * coplanar 双臂 → 逐簇剔除生效档 → MDI 行表载体指针。成员函数各自的判据/出声口径不变，
+ * 本入口只固定顺序与 main() 的行数预算（三行合一行；定义在 main:meshlets）。
+ * @param registry 场景 registry（wireMeshletCull 读取代生效事实）
+ * @param renderer 已装配的后端
+ * @param cfg 运行配置
+ * @param assembly 服务持有者（cullService / shadowArgs 裸指针的来源）
+ */
+export void wireMeshletRendererServices(entt::registry& registry, Renderer& renderer,
+	const RuntimeConfig& cfg, MeshletAssembly& assembly);
+
+/**
  * 簇化轴 ★1-a1ii-β-1：实体注册之后的簇轴装配合成一次调用（`main()` 已在 120 行代码
  * 红线，`wireSceneSpinContext` 同法抽 helper）= ① `wireClusterRangeTable`（簇区间表；★18-B2
  * 起同一个循环还建阴影远级联 LOD 选级表）→ ② `wireMeshletSwitch`（`meshlet.switch` 落地）
@@ -440,9 +456,14 @@ export void wireMeshletOverlayDepthCompare(Renderer& renderer, const RuntimeConf
  *   `cullService` = 逐簇剔除服务，剔除项表扫出来后**就地上传**给它（同一处产出 cullBase 与
  *   items，分两处传 = 迟早漂）；`shadowArgs` = 本函数**第四步**新建的 MDI 行表载体（🔴 只能
  *   在这里建：它的每段行数上界要读第三步 emplace 的选级表 = 生效事实）。
+ * @param pipelines  ★M-1b：管线表（第五步烘真 MDI 条目 + 逐资产回填的目标，
+ *   `addShadowMeshletMdiEntry` 的槽号读 `assembly.shadowArgs->argSlot()`——时序接缝的解法
+ *   是「条目烘焙排在载体建成之后（第⑤步）」而不是领槽前移，理由与雷 1/雷 2 的快照分析
+ *   → wireMeshletMdiShadowActivation 头注释；本函数整体仍在 `assembleBackEnd` **之前**）。
  */
 export void wireMeshletPostRegistration(entt::registry& registry, const UploadedAssets& uploaded,
-	const MeshletAssetStore& meshlets, const AssetTable& assetTable, Resources& resources,
+	const MeshletAssetStore& meshlets, const AssetTable& assetTable, ShaderRegistry& pipelines,
+	Resources& resources,
 	const RuntimeConfig& cfg, DeviceContext& device, MeshletAssembly& assembly);
 
 /**

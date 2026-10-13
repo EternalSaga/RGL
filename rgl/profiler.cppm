@@ -125,20 +125,36 @@ export void profilerPushCounter(const CounterRecord& rec);
  * 单次成本 = 一次整数加，profiler 关时也只是累加到恒被清零的计数器上。
  *
  * 计数口径（vkcmd.count 是**已计数发射点覆盖**的口径，不是驱动侧真值）：
- * - `draw.count` = 本帧 `vkCmdDrawMeshTasksEXT` 发射次数（四路全计：普通段 drawOne /
- *   GPU culling 读回重放 / drawLight 全屏 / IZB mask 重放；picking/highlight 克隆同计）。
- *   DGC execute 路（NVIDIA）draw 数在 CPU 侧不可见 → 不计，本机（RADV）不走该路。
- * - `vkcmd.count` = 上述每次 draw 记 3 条（pushDataEXT + bindShadersEXT + drawMeshTasksEXT）
+ * - `draw.count` = 本帧**逻辑 draw 条数**（★M-1b / §19.2 D5 起含 `gcX=0` 的空行：一次 MDI
+ *   调用展开 N 行就计 N，四路全计：普通段 drawOne / GPU culling 读回重放 / drawLight 全屏 /
+ *   IZB mask 重放；picking/highlight 克隆同计）。DGC execute 路（NVIDIA）draw 数在 CPU 侧
+ *   不可见 → 不计，本机（RADV）不走该路。
+ * - `vkcmd.count` = 上述每次 draw 记 3 条（pushDataEXT + bindShadersEXT + drawMeshTasksEXT；
+ *   ★M-1b：一次 MDI 调用同样记 **3** 条——drawMeshTasksIndirectEXT 只替换那条 draw，
+ *   **不是 3N**，MDI 的收益正是在这里现形）
  *   + barrier / beginRendering / endRendering / blit / applyDynamicState / 固定数据通路段
  *   逐条实计。**未计残项**（量级 O(passes)，非 O(draws)）：cull CB 内命令、IZB/EVSSM 图外
  *   compute dispatch、capturer/picking 回读段、imgui 帧末段。
+ * - `mdi.count` = 本帧 `vkCmdDrawMeshTasksIndirectEXT` 的**调用次数**（★M-1b：生效档阴影段
+ *   = 生效级联数，关 = 0）。
+ * - `mdi.rows` = 经 MDI 提交的**行数**（含 `gcX=0` 空行；与 `mdi.count` 一起给 A5 收益判据
+ *   的闭式锚对账口径，容量读上界、实际读可切数，两口径别混 → §19.5）。
  */
 export void profilerAddDraws(uint32_t n);
 /** @see profilerAddDraws 命令口径说明 */
 export void profilerAddCommands(uint32_t n);
 /**
- * 帧末收口（drawFrame 录制完毕处调用一次）：把本帧累加值推成两条 CounterRecord 并清零。
- * profiler 关 = profilerPushCounter 自身静默丢，累加器也每帧被清零（不泄漏、不增长）。
+ * ★M-1b：一次真 MDI 调用的入账（drawOne 的 `drawCount > 1` 分支调用）。
+ * 一次调用 = 1 条 mdi.count + `rows` 条 mdi.rows；`draw.count` 的**逻辑**口径修正在这里补
+ * `rows − 1`（段级入账 `profilerAddDraws(seg.size())` 已把这条 DrawCall 记作 1 条；
+ * 差值补加 = 不改动既有四路的任何数字）；`vkcmd.count` **不补**——MDI 与逐条同为 3 条命令。
+ * @param rows 本次调用展开的行数（> 1）
+ */
+export void profilerAddMdi(uint32_t rows);
+/**
+ * 帧末收口（drawFrame 录制完毕处调用一次）：把本帧累加值推成**四**条 CounterRecord
+ * （draw/vkcmd/mdi.count/mdi.rows）并清零。profiler 关 = profilerPushCounter 自身静默丢，
+ * 累加器也每帧被清零（不泄漏、不增长）。
  */
 export void profilerFlushFrameCounters();
 
@@ -147,12 +163,21 @@ namespace {
 uint64_t g_frameDraws = 0;
 /** 本帧 vkCmd 累加（口径见 profilerAddDraws 注释）。 */
 uint64_t g_frameCommands = 0;
-/** 每次 mesh draw 的命令数（pushDataEXT + bindShadersEXT + drawMeshTasksEXT）。 */
+/** ★M-1b：本帧 MDI **调用次数**累加（profilerAddMdi 写、flush 清零）。 */
+uint64_t g_frameMdiCalls = 0;
+/** ★M-1b：本帧经 MDI 提交的**行数**累加（含 gcX=0 空行；同上生命周期）。 */
+uint64_t g_frameMdiRows = 0;
+/** 每次 mesh draw 的命令数（pushDataEXT + bindShadersEXT + drawMeshTasksEXT；
+ *  MDI 调用同值 = drawMeshTasksIndirectEXT 只替换那条 draw，见 profilerAddMdi）。 */
 constexpr uint64_t kCommandsPerDraw = 3;
 /** counter 名（静态字面量 = CounterRecord.name 生命周期要求）。 */
 constexpr std::string_view kCounterDraws = "draw.count";
 /** @see kCounterDraws */
 constexpr std::string_view kCounterCommands = "vkcmd.count";
+/** @see kCounterDraws（★M-1b §19.2 D5 新口径） */
+constexpr std::string_view kCounterMdiCalls = "mdi.count";
+/** @see kCounterMdiCalls */
+constexpr std::string_view kCounterMdiRows = "mdi.rows";
 }  // namespace
 
 /**
@@ -172,18 +197,40 @@ void profilerAddDraws(uint32_t n) {
  */
 void profilerAddCommands(uint32_t n) { g_frameCommands += n; }
 
-/** profilerFlushFrameCounters 定义（口径见其声明注释）：取数 → 清零 → 推两条计数。 */
+/**
+ * profilerAddMdi 定义（口径见其声明注释）：调用数/行数入账 + draw 口径的差值修正。
+ * 🔴 `rows − 1` 而非 `rows`：段级 `profilerAddDraws(seg.size())` 已把这条 DrawCall 记作 1
+ * （门关形态它就是一条 = 正确数字），MDI 分支只补「一次调用展开多行」多出来的部分；
+ * vkcmd 不补（MDI 与逐条同为 kCommandsPerDraw=3 条命令，收益 = 条目数从 N 降到 1 时
+ * 段级入账自动少记 3×(N−1)）。
+ * @param rows 本次 MDI 调用展开的行数（> 1，调用方守）
+ */
+void profilerAddMdi(uint32_t rows) {
+	g_frameMdiCalls += 1;
+	g_frameMdiRows += rows;
+	g_frameDraws += rows - 1u;
+}
+
+/** profilerFlushFrameCounters 定义（口径见其声明注释）：取数 → 清零 → 推四条计数。 */
 void profilerFlushFrameCounters() {
 	const uint64_t frame = profilerCurrentFrame();
 	const uint64_t ts = steadyNowNs();
 	const uint64_t draws = g_frameDraws;
 	const uint64_t commands = g_frameCommands;
+	const uint64_t mdiCalls = g_frameMdiCalls;
+	const uint64_t mdiRows = g_frameMdiRows;
 	g_frameDraws = 0;
 	g_frameCommands = 0;
+	g_frameMdiCalls = 0;
+	g_frameMdiRows = 0;
 	profilerPushCounter(CounterRecord{.frame = frame, .tsNs = ts, .value = draws,
 		.name = kCounterDraws});
 	profilerPushCounter(CounterRecord{.frame = frame, .tsNs = ts, .value = commands,
 		.name = kCounterCommands});
+	profilerPushCounter(CounterRecord{.frame = frame, .tsNs = ts, .value = mdiCalls,
+		.name = kCounterMdiCalls});
+	profilerPushCounter(CounterRecord{.frame = frame, .tsNs = ts, .value = mdiRows,
+		.name = kCounterMdiRows});
 }
 
 /**

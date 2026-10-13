@@ -86,6 +86,12 @@ export struct MeshAsset {
 	// 字段判「这个资产能不能走簇路径」，故**没有簇产物的资产必须天然保持 kInvalid**（逐 prim
 	// 调用的烘焙形态见 bakeShadowMeshletEntries 注释）。
 	uint32_t shadowMeshletPipelineIndex = kInvalidPipelineIndex;
+	// ★M-1b：阴影段**真 MDI** 管线条目下标（ShaderRegistry::addShadowMeshletMdiEntry 返回，
+	// 装配层经 bindShadowMeshletMdiToAsset 写回）。与上一条**并存不互斥**：同一条几何的第三种
+	// 管线（逐条 draw 的簇路径 vs 每级联一次 MDI 的孔洞流行表），门 meshlet.mdi_shadow 决定采哪
+	// 条——条目侧两下标各自 kInvalid = 各自不可用（MDI 条目只在行表载体**建成并烘好 binding 34**
+	// 后回填，声明/mapping 同向由装配层单点保证 → main.cppm wireMeshletPostRegistration）。
+	uint32_t shadowMeshletMdiPipelineIndex = kInvalidPipelineIndex;
 };
 
 /**
@@ -175,6 +181,10 @@ export class AssetTable {
 	/** 写回簇路径**阴影段**管线条目引用（★18-B1，ShaderRegistry::addShadowMeshletEntry 后调用）。 */
 	void bindShadowMeshletPipeline(uint32_t id, uint32_t entryIdx) {
 		meshes[id].shadowMeshletPipelineIndex = entryIdx;
+	}
+	/** 写回阴影段**真 MDI** 管线条目引用（★M-1b，addShadowMeshletMdiEntry 后调用）。 */
+	void bindShadowMeshletMdiPipeline(uint32_t id, uint32_t entryIdx) {
+		meshes[id].shadowMeshletMdiPipelineIndex = entryIdx;
 	}
 	/**
 	 * 注册带索引 mesh 资产（内建几何：顶点 + 索引双 buffer/双 slot，架构债务 1 方案 B 后由

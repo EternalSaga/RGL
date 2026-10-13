@@ -30,6 +30,8 @@ import diagnostics;
 import vulkan_utils;  // createImageBarrier（物化用）
 import VmaRaii;
 import frame_draw_list;  // segmentSpan（段名 → draw 序列）
+import meshlet_shadow_args;  // ★M-1b：MeshletShadowArgsService::upload + 间接 buffer 句柄
+import mdi_rows;             // ★M-1b：kMdiShadowRowStride（MDI 步长唯一真相源，不写字面 24）
 import scene_context;  // shadowDrawSource（IZB mask 重放段名单一来源，批 11.3-1d）
 import material_types_generated;  // DrawArgs
 import lights_types_generated;
@@ -205,8 +207,15 @@ void beginPassRendering(vk::raii::CommandBuffer& cmd, const SlotResolver& slots,
 // partition（主因：那个文件碰到 500 代码行红线，而本块内容内联、与其余部分无关）。
 // 命令录制顺序、每条 vk 调用参数、错误路径逐字不变（逐块搬移，非重写）。
 
-// ④⑥⑥.5⑦ 数据通路固定段（heap barrier → scene staging 拷贝/屏障 → heap/sampler heap 绑定，Phase 6 起不入图——非 attachment 状态同步；旧 color/depth attachment barrier 已由图 passes[0].barriers 推导发射、与此处 heap barrier 相互独立、命令流先后对换无语义影响）
-void Renderer::recordFixedDataPath(vk::raii::CommandBuffer& cmd, uint32_t frameSlot) {
+// ④⑥⑥.5⑦ 数据通路固定段（heap barrier + scene staging 拷贝/屏障 + heap/sampler heap
+// 绑定，Phase 6 起不入图——非 attachment 状态同步；手术 6：块体提为 recordFixedDataPath
+// 私有方法，命令流逐条不变）。旧 color/depth attachment barrier 已由图 passes[0].barriers
+// 推导发射、与此处 heap barrier 相互独立、命令流先后对换无语义影响。
+// ★M-1b：本函数尾部追加 `prepareMdiShadowRows`（**host 直写**行表进 ring 本帧槽，
+// 一条 vkCmd 都不发、fixedCmds 计数不动；位置仍在 pass 循环前 = 图首阴影段的行表先于
+// 任何 draw 落位）。门关/回落 = mdiSegments 空 = 首行早退（逐位不变的构造性保证）。
+void Renderer::recordFixedDataPath(vk::raii::CommandBuffer& cmd, const FrameDrawList& list,
+	uint32_t frameSlot) {
 	auto z = zone("drawFrame.dataPath");  // 批 9.5 观测：heap barrier + staging 拷贝 + heap 绑定
 	// ⑥ Descriptor heap 同步：描述符此前由 vkWriteResourceDescriptorsEXT 写进
 	// CPU mapped 区域（vkresources.cppm），GPU 读取前需要 host write →
@@ -285,6 +294,10 @@ void Renderer::recordFixedDataPath(vk::raii::CommandBuffer& cmd, uint32_t frameS
 	// ⑦ 把两个 descriptor heap 绑定到命令缓冲（必须在 beginRendering 之前）
 	bindDescriptorHeaps(cmd);
 	profilerAddCommands(fixedCmds + 2);  // 批 9.5：+2 = bindResourceHeapEXT + bindSamplerHeapEXT
+	// ★M-1b 真 MDI 行表落 GPU（host memcpy+flush 进 ring 本帧槽，**不进命令流**，上面计数
+	// 不含它；此时 beginFrame 的 fence wait 已完成 = 写本槽不踩在途读）。fail-fast 四道与
+	// 理由 → prepareMdiShadowRows 定义；采集期预检（同源对账/容量/轮转）在 render_list:mdi。
+	prepareMdiShadowRows(list, frameSlot);
 }
 
 // 坑 9（docs/DESCRIPTOR_HEAP_SPEC.md §坑 9）的正主。抽成函数是因为它现在有**第二个**
@@ -318,13 +331,76 @@ void Renderer::bindDescriptorHeaps(vk::raii::CommandBuffer& cmd) const {
 
 // 图外 compute 编舞（IZB / EVSSM 帧首与光照 pass 前段）已拆至 vkrenderer_offgraph.cppm（批 14.3 文件长度红线；职责边界 = 图内 pass 录制 vs 图外编舞）
 
-// 单个 mesh draw：push DrawArgs（pushDataEXT）+ bindShaders + drawMeshTasksEXT。
+namespace {
+
+/**
+ * ★M-1b（§19.2 D3 参数序红线）：`vkCmdDrawMeshTasksIndirectEXT` 的**唯一具名入口**。
+ *
+ * 真实签名 = `(commandBuffer, buffer, offset, drawCount, stride)`（vulkan_core.h:27021）。
+ * spike §6.3 的 M4 教训：`offset == drawCount == 2` 这类"两个数相等 ⟹ 互换测不出东西"
+ * 曾让参数序变异静默存活 ⟹ 本入口的形参名逐一对应 vkCmd 语义，且**全项目只此一处**调用
+ * （行步长取 kMdiShadowRowStride = 24，而实测行数 1530/偏移 KB 级/12 的命令尾——四个数
+ * 两两不等，互换必现形；`just test-all` 的自证回路 + A4 阳性对照是它的牙）。
+ * @param cmd          本帧命令缓冲（录制期）
+ * @param buffer       行表 VkBuffer（MeshletShadowArgsService 的 ring 整张）
+ * @param offsetBytes  行表字节偏移（= DrawCall::argsOffset，同源 pair 的一半）
+ * @param drawCount    行数（> 1，调用方守；VUID-07090 的边界核对在 upload 采集两侧都拦）
+ * @param strideBytes  行步长（= kMdiShadowRowStride，调用点不许写数值）
+ */
+void recordMeshTasksIndirectEXT(vk::raii::CommandBuffer& cmd, vk::Buffer buffer,
+	uint64_t offsetBytes, uint32_t drawCount, uint64_t strideBytes) {
+	cmd.drawMeshTasksIndirectEXT(buffer, offsetBytes, drawCount, strideBytes);
+}
+
+}  // namespace
+
+// 单个 mesh draw：push DrawArgs（pushDataEXT）→ bindShaders → drawMeshTasksEXT
+//（★M-1b：drawCount > 1 = 唯一判据，第三条换成一次 MDI 展开，见接口注释）。
 void Renderer::drawOne(vk::raii::CommandBuffer& cmd, const DrawCall& call) {
 	const auto& entry = registry.entry(call.pipeline);
 	cmd.pushDataEXT(vk::PushDataInfoEXT(
 		entry.pushDataSet, vk::HostAddressRangeConstEXT(call.pushData.data(), call.pushData.size())));
 	entry.pipeline.bindShaders(cmd);
+	if (call.drawCount > 1u) {
+		// 行表载体必然在位：prepareMdiShadowRows 已在 pass 循环前把段写好并核对过服务指针
+		// （段非空而指针空 = 那里已 throw，走到这里 mdiShadowArgs 非空是构造性事实）。
+		recordMeshTasksIndirectEXT(cmd, vk::Buffer{mdiShadowArgs->buffer()}, call.argsOffset,
+			call.drawCount, kMdiShadowRowStride);
+		profilerAddMdi(call.drawCount);  // mdi.count/mdi.rows + draw.count 的逻辑口径修正
+		return;
+	}
 	cmd.drawMeshTasksEXT(call.groupCount, 1, 1);
+}
+
+// ★M-1b：录制期行表落 GPU（契约与四道 fail-fast 见 vkrenderer.cppm::prepareMdiShadowRows 声明）。
+void Renderer::prepareMdiShadowRows(const FrameDrawList& list, uint32_t frameSlot) {
+	if (list.mdiSegments.empty())
+		return;  // 门关 / 回落 = 零 upload 零新命令（逐位不变的构造性保证；首行判空即全退）
+	// 🔴 雷 3 定案：以下每一条按构造都不可达（采集期预检全数拦下 + 装配层同点接线），
+	// 到达 = 接线 bug，一律 throw —— upload 被拒后照常提交 = GPU 拿陈旧行表画影子，
+	// 「画面错但没有任何信号」正是 §19.8 第 3 条与债-105 反复堵的形态。
+	if (mdiShadowArgs == nullptr)
+		throw std::runtime_error(fmt::format(
+			"mdi shadow: draw list 带 {} 段但行表载体未挂（装配层 setMeshletShadowArgsService "
+			"漏接或 MeshletAssembly 生命周期错位）", list.mdiSegments.size()));
+	// MDI DrawCall 条数 = 段数（每段恰一条 draw；分家 = A5 读数骗人 + 某级联读陈旧行）。
+	uint32_t mdiCalls = 0;
+	for (const auto& call : list.shadowCalls)
+		if (call.drawCount > 1u)
+			++mdiCalls;
+	if (mdiCalls != static_cast<uint32_t>(list.mdiSegments.size()))
+		throw std::runtime_error(fmt::format(
+			"mdi shadow: shadowCalls 内 drawCount>1 条目 {} ≠ mdiSegments {}（行表与 draw 分家）",
+			mdiCalls, list.mdiSegments.size()));
+	for (const auto& seg : list.mdiSegments) {
+		if (seg.frameSlot != frameSlot)
+			throw std::runtime_error(fmt::format(
+				"mdi shadow: 段 c{} 自带 frameSlot {} ≠ 本帧录制槽 {}（写错槽 = 踩在途帧读，"
+				"ring×2 前提破）", seg.cascadeIndex, seg.frameSlot, frameSlot));
+		if (auto err = mdiShadowArgs->upload(seg.frameSlot, seg.firstRow, seg.rows); err)
+			throw std::runtime_error(fmt::format("mdi shadow: c{} upload 被拒 —— {}",
+				seg.cascadeIndex, *err));
+	}
 }
 
 /**
@@ -541,7 +617,7 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 	// 绑定，Phase 6 起不入图——非 attachment 状态同步；手术 6：块体提为 recordFixedDataPath
 	// 私有方法，命令流逐条不变）
 	// 批 9.5：zone "drawFrame.dataPath" 在 recordFixedDataPath 首行
-	recordFixedDataPath(cmd, frameSlot);
+	recordFixedDataPath(cmd, list, frameSlot);
 
 	// 簇化轴 ★1-a2-i 逐簇视锥剔除（图外 compute，定义在 :offgraph）。位置三条硬约束：
 	// ① 必须在 recordFixedDataPath **之后**——heap 已绑定、scene data 已拷完（剔除要读对象矩阵

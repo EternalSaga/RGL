@@ -31,6 +31,8 @@ import vkerror;
 import diagnostics;  // no_present 诊断单例（configs/diagnostics.lua）
 import fsr_upscaler;   // 批 14.5：FSR 3.1.4 upscaler（图外 compute，门控构造）
 import meshlet_cull_service;  // ★1-a2-i：逐簇视锥剔除（图外 compute，装配后挂裸指针）
+import meshlet_shadow_args;   // ★M-1b：真 MDI 行表载体（upload + 间接 buffer，装配后挂裸指针）
+import mdi_rows;              // ★M-1b：kMdiShadowRowStride（drawMeshTasksIndirectEXT 的 stride 唯一真相源）
 
 // 绘制契约（DrawCall/SceneFrameData/FrameDrawList）拆出为独立模块——本模块 export import
 // 保持 Renderer::drawFrame 接口类型对外可见（2026-09-02 拆分）
@@ -204,6 +206,28 @@ export class Renderer {
 	void setMeshletCullService(MeshletCullService* service) { meshletCull = service; }
 
 	/**
+	 * 簇化轴 ★M-1b：真 MDI 行表载体（main 在 assembleBackEnd 之后挂，同 setMeshletCullService
+	 * 的「装配后挂」惯例；所有权在装配层 meshletAssembly，声明序先于 Renderer）。
+	 *
+	 * 🔴 本指针**不是**生效档判据：mdi_shadow=false 的出厂态载体照建、指针照挂（宿主条件见
+	 * `wireMeshletShadowArgs`），生效与否的唯一事实 = `FrameDrawList::mdiSegments` 是否非空
+	 * （产地 = 采集侧读 registry ctx 的 `MeshletMdiShadowActivation`）。空段 ⟹
+	 * `prepareMdiShadowRows` 首行早退 = 零 upload 零 barrier 零新命令（逐位不变的构造性保证）。
+	 * @param service 行表载体（nullptr = 宿主条件不成立；此时采集侧必零段，指针无人解引用）
+	 */
+	void setMeshletShadowArgsService(MeshletShadowArgsService* service) {
+		mdiShadowArgs = service;
+	}
+
+	/**
+	 * ★M-1b：本帧录制槽号（ecs 帧循环在 drawFrame **之前**调，传给 `renderListSystem` 做
+	 * MDI 同源 pair 的一半输入）。slot 只在 drawFrame 末尾 advance（FrameSession::advance）
+	 * ⟹ 采集期与录制期取到同一个数；执行器 `prepareMdiShadowRows` 逐段核对失配即抛。
+	 * @return 本帧槽（< FrameSession::kFramesInFlight）
+	 */
+	[[nodiscard]] uint32_t currentFrameSlot() const { return session.currentFrameSlot(); }
+
+	/**
 	 * 编译渲染图只读访问（Phase 10 批 10.5：PickingService 构造需附件表定位 object_id
 	 * slot；同 getSwapchainRef 惯例）。
 	 * @return 图 const 引用
@@ -240,9 +264,11 @@ export class Renderer {
 	 * barrier → resource heap / sampler heap 绑定。手术 6：块体自 drawFrame 摘出，命令流
 	 * 逐条不变。
 	 * @param cmd 本帧命令缓冲（录制期）
-	 * @param frameSlot 本帧 staging slot（scene staging 拷贝源）
+	 * @param list 每帧绘制列表（★M-1b：尾部 host 上传 MDI 行表的数据源，门关 = 空段早退）
+	 * @param frameSlot 本帧 staging slot（scene staging 拷贝源 + 行表轮转槽）
 	 */
-	void recordFixedDataPath(vk::raii::CommandBuffer& cmd, uint32_t frameSlot);
+	void recordFixedDataPath(vk::raii::CommandBuffer& cmd, const FrameDrawList& list,
+		uint32_t frameSlot);
 	/**
 	 * 绑定 resource heap + sampler heap 到命令缓冲（坑 9：与 classic descriptor set 互斥）。
 	 *
@@ -294,10 +320,31 @@ export class Renderer {
 	void pickingRecord(vk::raii::CommandBuffer& cmd);
 	/**
 	 * 单个 mesh draw：push DrawArgs（pushDataEXT）→ bindShaders → drawMeshTasksEXT。
+	 * ★M-1b：`call.drawCount > 1` 是唯一判据走 MDI 分支（此时 groupCount 被忽略，GPU 逐行
+	 * 读行表里的 groupCountX，含 gcX=0 空转行）——push/bind 两条命令与逐条形态**同一个函数
+	 * 同一条路**（argsSize 12B 不变 = D1 的复用块理由），只差第三条换成
+	 * `drawMeshTasksIndirectEXT(buffer, call.argsOffset, call.drawCount, kMdiShadowRowStride)`
+	 * （经唯一具名入口 `recordMeshTasksIndirectEXT`，参数序红线 → 其定义注释）。
+	 * 🔴 本分支要求行表已落 GPU：段级 upload 在 `prepareMdiShadowRows`（pass 循环之前，
+	 * 一次逐段），缺位 = 读到陈旧行 = 静默错影子，所以那里对 upload 失败**抛**（雷 3）。
 	 * @param cmd 本帧命令缓冲（录制期）
-	 * @param call 绘制条目（pipeline / pushData / groupCount）
+	 * @param call 绘制条目（pipeline / pushData / groupCount；★M-1b + argsOffset / drawCount）
 	 */
 	void drawOne(vk::raii::CommandBuffer& cmd, const DrawCall& call);
+	/**
+	 * ★M-1b：录制期把 `list.mdiSegments` 的 CPU 行表逐段写进载体本帧槽（host memcpy+flush，
+	 * 无命令流；ring×2 的写安全 = 只写 frameSlot——beginFrame 已等完本槽 fence）。
+	 * 首行判空早退（门关/回落 = 零新命令 = 逐位不变构造性保证）。
+	 * 🔴 fail-fast（雷 3 定案：采集期预检全数拦下后，这里任何一条不过 = 接线 bug，静默
+	 * 继续 = GPU 拿陈旧行表照常画，本项目反复堵的「错了不报错只图像错」形态）：
+	 *  · 段非空但服务未挂 → throw；
+	 *  · MDI DrawCall 条数 ≠ 段数 → throw（行表与 draw 分家 = A5 读数会骗人）；
+	 *  · 段自带 frameSlot ≠ 本帧槽 → throw（写错槽 = 踩在途帧）；
+	 *  · upload 返回错误串 → throw（原样带出四道前置的名字）。
+	 * @param list 每帧绘制列表（mdiSegments）
+	 * @param frameSlot 本帧录制槽（drawFrame ① 取的同一个数）
+	 */
+	void prepareMdiShadowRows(const FrameDrawList& list, uint32_t frameSlot);
 	/** materialFilter 哨兵 = 不过滤（整段重放，picking 用）。 */
 	static constexpr uint32_t kNoMaterialFilter = 0xFFFFFFFFu;
 	/**
@@ -466,6 +513,10 @@ export class Renderer {
 	// 帧首零命令逐位不变**，同 pickingService 的「装配后挂裸指针」惯例）。所有权在装配层
 	// （main 的 unique_ptr，声明序在 backEnd 之前 = 析构序在其后，AGENTS 生命周期红线）。
 	MeshletCullService* meshletCull = nullptr;
+	// 簇化轴 ★M-1b：真 MDI 行表载体（setMeshletShadowArgsService 装配；裸指针，所有权在
+	// 装配层 meshletAssembly，声明序先于本类 = 长寿契约同族）。⚠ 非生效档判据（出厂态也
+	// 挂得上）；生效判据唯一 = FrameDrawList::mdiSegments 非空（prepareMdiShadowRows 首行）。
+	MeshletShadowArgsService* mdiShadowArgs = nullptr;
 	// edS3：depth clip enable 动态状态能力门 + 四段 RenderState 值集合 + 状态名解析
 	//（Phase 10 批次 0 手术 1：状态表迁出至 StateKit——pass.state 词表与状态值的唯一
 	// 持有者；Phase 10 阴影新增状态集中改该模块一处）

@@ -759,7 +759,8 @@ int main() {
 		// 各自首行返回，ctx 不建条目 ⟹ scene data 尾区 @724224 全 0（逐位不变）。
 		// ★1-a2-i：扫出来的剔除项表就地交给 cull 服务（cullBase 与 items 同生共死）；
 		// ★M-1a：第四步就地建 MDI 行表载体（容量读的是本函数 emplace 的选级表 = 生效事实）。
-		wireMeshletPostRegistration(registry, assets, meshletAssets, assetTable, vkResources, configs.runtime, vkDevice, meshletAssembly);
+		wireMeshletPostRegistration(registry, assets, meshletAssets, assetTable, shaderRegistry,
+			vkResources, configs.runtime, vkDevice, meshletAssembly);
 
 		// C3 GPU culling 候选表 + GpuCull + skybox + deferred G-buffer/HDR + DGC + Renderer
 		//（装配时序契约见 assembleBackEnd 接口注释；graph 在此 move 进 Renderer）
@@ -767,13 +768,11 @@ int main() {
 			std::move(graphResult), registry, configs.scene,
 			// 批 14.6：FSR 开关 = aa 三态推导（原 fsr_upscaler 键已删）；两枚调参留在 fsr 块
 			configs.runtime.aaWantsFsr(), configs.runtime.fsrTemporal, configs.runtime.fsrJitter);
-		// 簇化轴 ★0.5-b2：共面双臂深度比较接线（**必须在 assembleBackEnd 之后**——Renderer
-		// 已构造，与 wireMeshletOverlay 的「之前」契约互补）。门关 = 零调用零日志；门开 =
-		// INFO 打印生效档（四臂假绿的第二道机器护栏，→ main.cppm 声明注释）。
-		wireMeshletOverlayDepthCompare(backEnd.renderer, configs.runtime);
-		// 簇化轴 ★1-a2-i：逐簇视锥剔除生效档（同「Renderer 构造后再挂」惯例）。门关 = 零调用
-		// 零日志，Renderer 成员恒 nullptr ⟹ 帧首零新命令。
-		wireMeshletCull(backEnd.renderer, registry, configs.runtime, meshletAssembly.cullService.get());
+		// 簇化轴 ★0.5-b2 / ★1-a2-i / ★M-1b：「Renderer 装配后挂」三连（coplanar 双臂 INFO +
+		// 逐簇剔除生效档 + MDI 行表载体指针；顺序契约与各自早退口径 → main:meshlets 定义处）。
+		// 🔴 必须在 assembleBackEnd 之后（Renderer 已构造，与 wireMeshletOverlay 的「之前」
+		// 契约互补）。门关 = 零调用零日志；门开 = INFO 打印生效档（四臂假绿的第二道机器护栏）。
+		wireMeshletRendererServices(registry, backEnd.renderer, configs.runtime, meshletAssembly);
 
 		// Phase 9.2：GPU 时间戳会话（声明序在 backEnd/vkDevice 后 = 析构序其先，
 		// query pool 不越过 device 生命周期——GPU 资源所有权规则；profiler=0 /

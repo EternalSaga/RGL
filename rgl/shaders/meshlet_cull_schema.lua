@@ -65,6 +65,15 @@ return {
         -- 此处再钉一次是为了让 checks 能拿它跟 shader 里的字面量对）
         { name = "kClusterStride",    value = 44 },
         { name = "kVertexStride",     value = 48 },
+        -- ★M-1b MDI 行表规格（docs/mdi_plan.md §19.2 D1）。🔴 C++ 侧唯一真相源 = rgl/mdi_rows.cppm
+        -- 的 sizeof(MdiShadowRow) + static_assert；本表是它在 checks 射程里的第二拼写：
+        -- meshlet_spec_checks 对账 schema ↔ shadow_meshlet.mesh.slang 字面量，
+        -- tests/test_mdi_shadow_emit 对账本表 ↔ kMdiShadowRowStride/CommandBytes（constexpr 桥），
+        -- tests/test_meshlet_shadow_args 用一次真 MDI 展开钉跨语言字节序（三处合起来 = 无第四形态）。
+        -- 名字带 Bytes 后缀而**不叫 kMdiShadowRowStride**：生成 constexpr 与 mdi_rows 导出同名会撞。
+        { name = "kMdiShadowRowStrideBytes",      value = 24 },  -- VUID-07088 的 stride（4 的倍数且 ≥12）
+        { name = "kMdiShadowObjectIndexByteOffset", value = 12 }, -- 行 word[3]
+        { name = "kMdiShadowClusterStartByteOffset", value = 16 }, -- 行 word[4]
     },
 
     -- name = slang 的 **push 变量名**（cullPush），不是 struct 名（material_schema.lua 同规矩）
