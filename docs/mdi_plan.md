@@ -2206,3 +2206,98 @@ bistro 在不在**（§19.9 的九臂矩阵里"bistro 在不在"就是现成的�
 
 比"task 化 + mesh ≤128 循环化"省掉：行表接入、`gcX` 语义换成 task 数、A5 闭式锚重算、
 逐位锚各机重立。它只回答那一个会决定一整批去向的问题。
+### 19.14 ★M-3T 引擎级最小 task 探针（**实现就绪规格**，2026-10-13 写；下一个 session 照此执行）
+
+**唯一要回答的问题**：`DrawIndex` 声明在 **task** stage 是否也毒化后续 mesh draw？
+**唯一判据**：主视图那栋 bistro **在不在**（不是逐位相等——阴影在这个探针里是故意错的）。
+
+#### 为什么这个形态是"最小"的（别把它做成手术）
+
+task **恒发 1 个 mesh group、不读行表**；mesh 变体**不声明** `DrawIndex`、继续读 push 的 `rowBase`。
+⟹ **行表 / 执行器 / 采集侧 / profiler / A5 闭式锚 全部零改动**。阴影必然画错，**故意不管**——
+它只用来确认"task stage 真的在管线里跑了"，不用来判断对错。
+
+#### 改动清单（6 处，位置已核过本体）
+
+1. **新** `rgl/shaders/shadow_meshlet_task.task.slang`：`[shader("task")]` + `uint drawID : SV_DrawIndex`
+   + **非可折叠守卫** `if (drawID != 0xFFFFFFFFu) EmitMeshTasksEXT(1u, 1u, 1u);`
+   - 🔴 **DCE 陷阱（本探针唯一的假绿来源）**：`drawID` 若只喂给一个死存储/死 payload，
+     Slang 会把 builtin 整个删掉 ⟹ 触发源消失 ⟹ "bistro 在"变成**必然**而不是结论。
+     守卫必须让值参与**运行时判定**（上面那句编译器无法证伪）。
+   - 🔴 **验收不看"编译过了"**：必须确认产物里真有 DrawIndex builtin，否则触发源不存在。
+     已实测可用的命令（`spirv-dis` 在 `/usr/bin`，token 是 `BuiltIn.DrawIndex` 不是 `DrawIndex`）：
+     ```bash
+     spirv-dis build/rgl/generated_shaders/shadow_meshlet_task.task.spv | grep -c BuiltIn.DrawIndex
+     ```
+     **必须 ≥ 1**。对照基线（本机已量）：`shadow_meshlet.mesh.spv` = 0、
+     `shadow_meshlet.mesh_MDI_SHADOW.spv` = 1（同一命令顺带可验非 MDI 那份仍恒 0 = 逐位不变的 SPV 面证据）。
+   - `compile_slang` 不传 `-stage`（slangc 从 `[shader("task")]` 推阶段，见 `cmake/RglSlang.cmake:37-63`）
+     ⟹ **CMake 侧零门槛**，rgl/shaders 里此前没有 `.task` 先例，这是第一枚。
+2. `rgl/shaders/shadow_meshlet.mesh.slang`：加第三档 `MDI_SHADOW_TASK` = 现有 `MDI_SHADOW` 分支
+   但 `drawID` 恒 `0u`（= §19.9 已证的"入口不声明 `SV_DrawIndex`"那一臂，已知单独不毒化）。
+3. `rgl/CMakeLists.txt`：task 用**无 define** 的 `rgl_shader(shadow_meshlet_task.task SHADOW_MESHLET_TASK_SPV scene scene_tables)`
+   （`rgl_shader_defined` 第三参是 DEFINE 不是 DEP，别误用）；mesh 第三档用已有的
+   `rgl_shader_defined2(shadow_meshlet.mesh SHADOW_MESHLET_MDI_TASK_MESH_SPV MDI_SHADOW MDI_SHADOW_TASK scene scene_tables)`
+   ⟹ 产物 `shadow_meshlet.mesh_MDI_SHADOW_MDI_SHADOW_TASK.spv`（define 拼接序 = 参数序，
+   与 registry 侧路径拼接约定一致，见 `cmake/RglSlang.cmake:110-125`）。
+   这样 shader 侧只需把入口那段的条件从 `#ifdef MDI_SHADOW` 改成
+   `#if defined(MDI_SHADOW) && !defined(MDI_SHADOW_TASK)`，行表读取块两档共用，改动面最小。
+4. `rgl/scene_config.cppm::PipelineSpec`（:19）：`+ std::string taskSpv;`（**空 = 无 task stage**，
+   其余条目零影响）。
+5. `rgl/shader.cppm::ShaderEffect`：`+ std::vector<uint32_t> taskStageSpv;`；`loadShaderEffect`
+   按 `spec.taskSpv` 非空可选读入。
+6. `rgl/shader.cppm::RenderPipeline` 构造（:593-628）——**本探针真正的成本所在**：
+   - `VK_SHADER_CREATE_NO_TASK_SHADER_BIT_EXT`（:598 现无条件带）**改为条件**：有 task stage 时**不能带**
+     （VUID-…-08695 的反向要求；`tests/test_mdi_drawindex.cppm` 的 shader-object 变体注释记过这条，
+     漏 flag 的历史代价 = NVIDIA Xid 13，见 `docs/nvidia_compatibility_report.md` §十）。
+   - `createInfos` 由 2 条变 3 条，**nextStage 链要重接**：`task.nextStage = MESH`、`mesh.nextStage = FRAG`
+     （现在只有 mesh→frag）。
+   - task 的 createInfo 同样要 `DESCRIPTOR_HEAP_BIT | INDIRECT_BINDABLE_BIT` ＋ **同一个 `mappingInfo`**
+     （照 mesh 那份写，binding 映射是条目级的，不分 stage）。
+   - `bindShaders` 第 5 槽（`eTaskEXT`）从 `nullptr` 换成 task 句柄。
+   - `stats.handles += 2`（:622 注释"mesh + frag"）要跟着变——**否则 shader object 句柄计数从此是假的**。
+7. `rgl/shader_registry_shadow.cppm`：探针期**只改一行**——`addShadowMeshletMdiEntry` 里
+   `findSpec("shadow_meshlet_mdi")` → `"shadow_meshlet_mdi_task"`（spec 表新增该条：
+   `meshSpv` 指向 `_MDI_SHADOW_TASK` 产物、`taskSpv` 指向新 task 产物、`fragSpv` 复用 `shadow.frag`）。
+
+#### 判据（三态，含两条前提自检）
+
+| 读数 | 结论 | 后续 |
+|---|---|---|
+| bistro **在** | DrawIndex 换 stage 即绕开毒化 | 选项②成立 ⟹ 可立"task 化 + mesh ≤128 循环化"组合手术批 |
+| bistro **没了** | 毒化与 stage 无关（"这条提交里声明过 DrawIndex"就够） | **选项②作废** ⟹ 回选项①（Mesa issue + 门默认关） |
+| 图与 `b1c6afca` **逐位相同** | task stage 根本没生效 | **判据不成立**，先查 1/3/6 步（十有八九是 DCE 把 builtin 删了） |
+
+前提自检（任一不过就别读结论）：① SPV 里有 `BuiltIn DrawIndex`；② `mdi.count=3 / mdi.rows=4590`
+照旧；③ 启动 INFO 新条目 475 / 旧 474 / `entries_total=476` 照旧；④ 图**必须不同于** `b1c6afca`
+（task 恒发 1 group ⟹ 阴影形态必变）。
+
+#### 命令（本机 = STRIX_HALO，出事机）
+
+```bash
+just reflect && just build
+python3 tools/smoke.py shot --name t_factory --frames 8
+python3 tools/smoke.py shot --name t_task    --frames 8 --set meshlet.mdi_shadow=true
+./build/tools/imgqa/imgqa diffblock --a build/rgl/screenshots/t_factory.png \
+                                    --b build/rgl/screenshots/t_task.png
+```
+
+判读**不用哈希相等**（阴影故意错），用 `diffblock` 的连通域签名：bistro 消失的签名 = 单个
+~31.6 万 px 巨型连通域 + `bbox≈[332,148,948,572]` + 最厚 ~150px（§19.9 实测）。
+**没有**这种整块 = bistro 在。
+
+#### 红线
+
+- **别为了"让阴影对"去接行表 / payload** ⟹ 那就成了手术，本探针的价值恰恰是便宜。
+- **别拿逐位相等当判据**（阴影必错，必然红，会把人误导成"毒化"）。
+- 探针**不入库**：spec 表那条 `shadow_meshlet_mdi_task` 与 `findSpec` 的改行属临时物，收线时删掉；
+  若 task stage 支持（第 6 步）判为要留，就单独一笔提交并写明"零消费者"（★M-1a 的先例）。
+- 结论写 **§19.15**，并**就地改写 §19.12 裁决卡**（别新开"更正"段留两层误导后来者）。
+
+#### 顺带：给 Mesa issue 补的一条新证据
+
+§19.13 的"rig 层测不出"不是坏消息——它把触发条件从"mesh 入口声明 DrawIndex"**收窄**了：
+经典管线 / shader object / 1 与 256 线程 / 同 pass 与跨 pass 全部不复现，
+**唯一未排除的结构差 = `VK_EXT_descriptor_heap`**（引擎的 descriptor 来自 heap 烘焙偏移）。
+issue 里该点明这一条，它比"mesh+DrawIndex 就坏"精确得多，也更好复现（引擎九臂矩阵即最小复现骨架）。
+同 Mesa 26.2.3 在 gfx1036（RAPHAEL）逐位绿、gfx1151（STRIX_HALO）毒化 = 现成的家族对照。
