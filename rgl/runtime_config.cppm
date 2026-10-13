@@ -498,6 +498,24 @@ export struct RuntimeConfig {
 	 */
 	MeshletLodFallbackMode meshletShadowLodFallback = MeshletLodFallbackMode::deepest;
 
+	/**
+	 * ★M-0（docs/mdi_plan.md §19.2 D2）阴影段**真 MDI** 档（`runtime.lua meshlet.mdi_shadow`，
+	 * 默认关）。
+	 *
+	 * 开 = 阴影段 c1..c3 的簇路径 draw 由「逐候选一条 draw」换成「每级联一次
+	 * `drawMeshTasksIndirectEXT`」（行表 = `mdi_rows.cppm` 的 24B 行数组）。
+	 *
+	 * 🔴 **本批（★M-0）零消费者**：行表构建器已落地但没有任何人调用它，本键被读到也不改变
+	 * 任何一帧的行为（出厂默认态截图锚 `95edc8cc…` 必须逐位不变 = 本批的判据之一）。消费者 =
+	 * ★M-1（GPU 载体 `MeshletShadowArgsService` + `MDI_SHADOW` SPV 变体 + 执行器分支）。
+	 *
+	 * 形态与 `meshletSwitch` / `meshletCull` 同款：**门 = 选 SPV 变体 / 选管线条目**，不是运行时
+	 * flag（§12/§13 的 2026-10-02 slang fp 重排教训）⟹ 门关用的还是今天那份 SPV 与那条条目，
+	 * 一字节不动 = P5 硬护栏的构造性成立。本键落进 `meshlet` 块 ⟹ 债-106（gate_lint 的 `Ctx`
+	 * 不认整块）射程内，**不为它做特例**。
+	 */
+	bool meshletMdiShadow = false;
+
 	/** 「TAA 在不在图里」的唯一推导点（原 `scene.lua taa.enabled` 的消费者全部改走这里）。 */
 	[[nodiscard]] constexpr bool aaWantsTaa() const {
 		return aa == AaMode::taa;

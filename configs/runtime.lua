@@ -196,6 +196,15 @@ return {
         -- 🔴 它比 D 更主导成本（§18.2：D=7 下 deepest = 3.32% 而 l0 = 34.97% 的 L0 三角），
         -- 故未知值 = 启动 fail-fast（coplanar/aa/present_mode 纪律：静默回落 = 成本判据整批读错臂）。
         shadow_lod_fallback = "deepest",
+        -- ★M-0（docs/mdi_plan.md §19.2 D2）阴影段**真 MDI** 档：= true 时 c1..c3 的簇路径 draw 由
+        -- 「逐候选一条 draw」换成「每级联一次 drawMeshTasksIndirectEXT」（行表 = rgl/mdi_rows.cppm
+        -- 的 24B 行数组，不可见候选写 gcX=0 而不是删行 ⟹ 行序 = 候选序，逐位不变的前提）。
+        -- 🔴 **★M-0 本批零消费者**：行表构建器已落地但没人调用它，本键被读到也不改变任何一帧的
+        -- 行为（出厂默认态截图锚 95edc8cc… 必须逐位不变 = 本批判据之一）。消费者 = ★M-1
+        -- （GPU 载体 MeshletShadowArgsService + MDI_SHADOW SPV 变体 + 执行器 drawOne 分支）。
+        -- 门 = 选 SPV 变体 / 选管线条目，不是运行时 flag（§12/§13 的 2026-10-02 教训）⟹ 门关用的
+        -- 还是今天那份 SPV 与那条条目，一字节不动。🔴 必须是布尔（写成字符串/数字 = 启动失败点名键）。
+        mdi_shadow = false,
     },
 
     -- DIAG：隐藏窗启动、第 N 帧后显示（可见窗 fault 排查；-1 = 立即显示）

@@ -240,6 +240,8 @@ set(RGL_BASE_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/meshlet_lod_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/meshlet_hand.cppm"       # ★0.5-c：UV 手性 CPU 参考实现 + 簇→三角寻址遍历（★1-a1ii mesh shader 的对账伙伴；纯 CPU 无设备）
     "${CMAKE_CURRENT_SOURCE_DIR}/meshlet_hand_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/mdi_rows.cppm"           # ★M-0（§19.3）：真 MDI 阴影段行表构建器（24B 行 + 聚合锚；纯 CPU 无设备，零消费者）
+    "${CMAKE_CURRENT_SOURCE_DIR}/mdi_rows_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/timing_util.cppm"      # 时间戳/时间统计纯函数层（自 profiler / present_timing / gpu_profiler 三处收敛）
     "${CMAKE_CURRENT_SOURCE_DIR}/profiler.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/profiler_impl.cppm"

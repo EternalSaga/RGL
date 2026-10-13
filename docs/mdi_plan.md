@@ -1674,14 +1674,18 @@ M5 是这条纪律的证据：探针不翻 ⟹ 键被静默忽略时**该用例�
 **D1 行布局 = 24B**
 
 ```
-行 i = [ gcX | 1 | 1 | objectIndex | clusterStart | 0 | 0 | 0 ]
-        └──── 前 12B 恰是 VkDrawMeshTasksIndirectCommandEXT ────┘└─ shader 读 word[3]/word[4] ─┘
+行 i = [ gcX | 1 | 1 | objectIndex | clusterStart | 0 ]     共 24B（**6 个 word**）
+        └──── 前 12B 恰是 VkDrawMeshTasksIndirectCommandEXT ────┘└ word[3] ┘└ word[4] ┘└ w[5] ┘
 ```
 
-- VUID-07088：stride 必为 4 的倍数且 ≥ `sizeof(VkDrawMeshTasksIndirectCommandEXT)`=12 ⟹ 24 合法；
-  spike 的 `per_draw_groupcount` 已实测 GPU 逐行读自己的 x。
+- VUID-07088：stride 必为 4 的倍数且 ≥ `sizeof(VkDrawMeshTasksIndirectCommandEXT)`=12 ⟹ 24 合法
+  （spec 原文与 `sizeof`/`offsetof` 均当日实测，见 §19.5 末；spike 的 `per_draw_groupcount` 已实测
+  GPU 逐行读自己的 x）。
+- 🔴 **本节原图是计划作者写错的**：图里画了 8 个 word（= 32B）却标"24B"，"留 3 个保留 word"跟着一起错。
+  ★M-0 执行者**发现后上报而不是照图硬填**，落地形态 = 前 5 个 word 已占用 ⟹ **只剩一枚** `reserved0`。
+  可复用的教训：**ASCII 布局图必须能反向数回字节数**——散文写 24、图数出 32，只有逐字段量一遍才暴露。
 - **为什么 24 不是 20**：`clusterStart` 逐 object 不同（`min(D, 自身最深级)` 回落）⟹ 16B 的单个 word[3]
-  装不下两个索引；24 = 8 的倍数（对齐友好）+ 留 3 个保留 word 给 ★M-3（模型段要加材质/顶点块那一维）。
+  装不下两个索引；24 = 8 的倍数（对齐友好）+ 那一枚保留 word 给 ★M-3（模型段要加材质/顶点块那一维）。
   代价 = 比 20B 多 6KB。
 - 🔴 **`cascadeIndex` 不进行、走 push**：一次 MDI 调用 = 一个级联 = 一个常量。push 结构体**尺寸仍是 12B**
   （`{rowBase, cascadeIndex, reserved}`）⟹ `static_assert(sizeof(ShadowMeshletDrawArgs)==12)` 不动、
@@ -1784,3 +1788,62 @@ MDI 变体是另一次编译，位级不漂移是"实测出来的"。若 A3 红�
 **★M-1 的 A5 收益判据要有闭式锚**：启动对账打印 `Σrows = 级联数 × 可切候选数`（现值：3 × 1530）与
 `Σtask`，并打印"预期 vkcmd 下降 = 3 × (可见 meshlet 行数 − 生效级联数)"。
 没有闭式锚的性能读数会被读成"大概降了"，spike §6.3 那条 M4 教训的同族形态。
+🔴 **★M-1 的 buffer 尺寸另有两条我定案时没写的 VUID**（当日读 spec 原文 `drawing.adoc:2592-2606`）：
+`drawCount-07089`（`drawCount == 1`：`offset + 12 ≤ buffer 大小`）与
+`drawCount-07090`（`drawCount > 1`：`stride × (drawCount−1) + offset + 12 ≤ buffer 大小`）。
+违例的症状**不是崩溃也不是画面错**，而是 VU 违例——门关档不跑 VVL 就不现形。⟹ slice 尺寸必须由**一个
+具名公式**算（`sliceBytes = rows × kMdiShadowRowStride`，且 `argsOffset` 与它同源），不许各处加加减减。
+
+### 19.6 ★M-0 交付记录（2026-10-13，子 agent 实现 + 主 agent 亲验）
+
+交付 = `rgl/mdi_rows.cppm`(+`_impl`，**rlbase**) + `tests/test_mdi_rows.cppm`（10 条用例）+
+`runtime_config` 门 `meshlet.mdi_shadow`（默认 false）+ `configs/runtime.lua` + 两处 CMake 登记。
+🔴 **零消费者、渲染路径零改动**（`rgl/shaders` / `render_list` / `vkrenderer` / `frame_draw_list` 一行未动）。
+
+**主 agent 亲验（全部自己跑，不采信汇报）**：
+
+1. **布局我自己量**（不读它的断言、独立编一份）：`sizeof(VkDrawMeshTasksIndirectCommandEXT)` = **12**、
+   `offsetof(X/Y/Z)` = **0/4/8** ⟹ 与 `MdiShadowRow` 前 12B 同；`sizeof(MdiShadowRow)` = 24 = **6 word**。
+2. **基线**：`just test` = **395 passed / 0 failed / 27 skipped，92732 断言**（它的终态读数，我复现）。
+3. **三档截图锚我自己跑**：出厂默认 `95edc8cc…` / 门关（`--set meshlet.enable=false --set
+   meshlet.shadow_lod=-1`）`54e40665…` / `--set meshlet.mdi_shadow=true` = `95edc8cc…`（零消费者 = 必须不变）。
+4. **我的两条独立变异（形态与它的 13 条不同）**：
+   - **MA** = `validateMdiShadowRows` 里 `checkRowCount` 的**判决被丢** → 红 **2 条**（归因 = 全部坏形态
+     + 十条两两不同，与它 M06 的终态红名单一致）✅
+   - **MB** = `rowFor` 显式写 `groupCountY/Z = 0`（"每行 gcX 有值而 GPU 一条都不画、三个锚却全自洽"
+     这种静默灾难形态）→ 红 **5 条**（正向锚点逐字段 / 行序=候选序 / 不可见行身份 / 前 12B 对账 …）✅
+   还原后 sha256 与进场快照逐字节相同（`40ef4a5a92023266…`），基线复绿，`just checks --strict` **0 警告**。
+5. **它的 13 条变异终态**（`/tmp/opencode/mutation_m0_final2.txt`，对**此刻这棵树**跑）：13/13 全部捕获。
+   两条曾被误读的要紧账：**M06**（`!=`→`>`）首版红 **0** 条 = 真缺口，补 `badRowDroppedHonestAnchors`
+   后红 2 条；**M11**（配置键名打错 = 键被静默忽略）首版是**构建红**（`// MUTANT` 注进了调用括号里，
+   语法崩）= 读数作废，改成纯字面量替换后红 1 条、靠"探针取 `true` ≠ 默认 `false`"才有牙。
+
+**三条要记住的**：
+
+1. 🔴 **两个写入者都假设自己是唯一的，双方各错一次**。它的 `finally` 按进场快照逐字节写回，
+   **抹掉过我注入的 MA/MB**；而我据此断言"它汇报的改名没落地"——实际我读到的是被回滚的旧版
+   （`476 行"九条" vs 现树 499 行"十条"`）。**两边都是真错**：它的 harness 缺并发防护，
+   我没跑一次就急着下结论。防线已落进 harness（进场记 sha256 / 进场即含 `MUTANT` 拒跑 /
+   每次还原后逐字节复核，不符即抛"现场污染"作废读数）。
+   ⟹ **★M-1 起写成硬前置**：主 agent 跑独立变异前必须 `pgrep -af "ninja|rgl_tests|mutate_"` +
+   `grep -rn MUTANT rgl/ tests/` **双检**；子 agent 的 harness 一律带还原后复核闸门。
+2. **计划的图要能反向数回字节数**（§19.2 D1 那条 32B/24B 就是我画错的，见上）。
+   执行者**上报而不是照图硬填**，这条是本批最值钱的执行侧判断。
+3. 🔴 **`rowFor` 是构建器与对账器共用的唯一映射公式**（刻意只留一份，防两侧各写一遍漂成
+   "构建器写 gcX=0 而对账器期望 gcX=taskCount"）。代价已被 MB 精确暴露：**共用公式 ⟹ 任何发射
+   形态的漂移两侧同变，`validate` 那条链结构上抓不到**，信号只剩钉死字面量的用例。
+   ⟹ 对 **★M-4**（GPU 行表 vs CPU 构建器逐元素对账）有直接后果：**对账伙伴若与生产者共用公式，
+   就不是独立第二实现**（同 `meshlet_cull` 故意用最笨的线性扫描那条纪律）。★M-4 必须显式分开。
+
+**本批挂号（不阻塞 ★M-1，别忘）**：
+
+- 🔴 **"多一行"（`rows > candidates`）方向无人钉**：`checkRowCount` 现在是 `!=`（两个方向都红），
+  但**没有用例专门钉 `<` 半边**（`!=`→`<` 的漂移只挡少行、放过**多行**）。而那里藏着一个比漏检更硬的
+  东西：`checkRowOrder` 的循环把"行数已相等"当前提，一旦放过 `rows > cands`，它就是 **`std::span`
+  上的越界读（UB，无边界检查）**。修法 = 补"锚诚实 + 多一行"用例 + 把该前置写成显式契约。
+  ⚠ 注意"多一行"**打不出 M06 的 `>` 半边**（`6 > 5` 仍真）——它钉的是另一条边，别当成同一条账。
+- **`meshlet.mdi_shadow` 是 `meshlet` 块里第一枚"生效条件不依赖 `enable`"的键**（阴影段旧管线条目
+  恒在 ⟹ `enable=false` 时它照样有合法宿主，本批刻意没加"必须同时开 `enable`"的隐含耦合）。
+  ⟹ `shadow_lod` 那条"孤立门就近 WARNING"对它**不适用**；而 gate_lint 仍不认整块（**债-106**）。
+  ★M-1 若给 binding 22 的槽号从 `enable` 的 `nullopt` 链取，**必须回头改这条注释**——
+  否则"`= false` 时零消费者"会变成"`= false` 时静默不生效 + 无人出声"。

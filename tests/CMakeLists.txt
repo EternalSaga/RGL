@@ -75,6 +75,7 @@ set(RGL_TEST_SOURCES
     test_meshlet_ranges.cppm     # ★1-a1i 逐 prim 簇区间扫描：四条产物不变量各配反向用例（错误串两两不同）+ 尾区写入逐字节
     test_scene_sentinel.cppm     # 迁移批 T0 表尾毒化哨兵护栏：毒值三型有毒 / 位置=容量×stride / 容量语义不变 / 写侧不覆盖
     test_meshlet_lod.cppm        # §18 批 A 逐 prim 选级扫描：五条不变量各配反向用例 + 手算 costTable + base-shift 序锚 + Lcg 契约全量钉
+    test_mdi_rows.cppm           # ★M-0（§19.3）MDI 行表构建器：行序=候选序 + 前 12B 对账 Vk 结构 + stride 合法性 + 四条不变量反向用例（错误串两两不同）+ 配置键探针
     test_meshlet_hand.cppm       # ★0.5-c UV 手性 CPU 参考 + 簇→三角寻址：闭式五形态锚点 + 跨簇偏移混淆四变异 + 8bit 断言 + Lcg 公式对拍
     test_shadow_forward.cppm     # shadow.slang 选级 forward 提取式数学恒等（invVP 列叉积，5a-8c 回归，12.3d-C）
     test_ssr_viewproj.cppm       # 批 15.1 SSR 尾区 @723712：字节布局互逆 + 抖动口径闭式差量（fillSsrViewProj 接缝）

@@ -375,20 +375,23 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg) {
 
 /**
  * `meshlet` 嵌套块解析（★0-b1 簇路径总门 + ★1-a1ii-α debug 档 + ★0.5-b2 coplanar/tint +
- * ★1-a1ii-β-1 switch 原位取代档 + ★1-a2-i cull + ★18-B1 shadow_lod 阴影段选级）：
- * `meshlet = { enable, debug, coplanar, tint, switch, cull, shadow_lod, shadow_lod_fallback }`。
+ * ★1-a1ii-β-1 switch 原位取代档 + ★1-a2-i cull + ★18-B1 shadow_lod 阴影段选级 +
+ * ★M-0 mdi_shadow 真 MDI 档）：
+ * `meshlet = { enable, debug, coplanar, tint, switch, cull, shadow_lod, shadow_lod_fallback,
+ * mdi_shadow }`。
  * 缺块 / 缺键 = 保持结构体默认（🔴 ★18-C 起 `meshletEnable = true` + `meshletShadowLod = 5`
  * = 出厂即开簇路径与阴影远级联 LOD，2026-10-12 用户拍板。P5「门关 = 逐位不变」**仍是硬护栏**，
  * 只是门关态现在要显式 `enable = false` + `shadow_lod = -1`（实测精确复现旧锚 54e40665…）。
  * 逐键默认值唯一真相源 = RuntimeConfig 成员初始化，本行只列其余形态：`meshletDebug = false` =
  * 正常叠加档；`meshletCoplanar = off` = 不碰动态状态；`meshletTint = false` = 不选 tint 变体；
- * `meshletSwitch = false` = 不取代；`shadow_lod_fallback = deepest`）。
+ * `meshletSwitch = false` = 不取代；`shadow_lod_fallback = deepest`；`meshletMdiShadow = false`
+ * = 不走 MDI（★M-0 起本键**零消费者**，读到也不改变任何一帧行为）。
  * 形态先例 = readFsrBlock（嵌套块，无扁平键双读兼容）；coplanar / shadow_lod_fallback 两枚
- * 三态键先例 = applyAaKey（未知值 fail-fast，错误经返回值上抛给调用方）。四枚布尔走
+ * 三态键先例 = applyAaKey（未知值 fail-fast，错误经返回值上抛给调用方）。五枚布尔走
  * readStrictBoolKey、shadow_lod 走 readStrictIntKey（类型错 = 启动失败，理由 → 各自注释）。
  * gate_lint 不挂号的理由 → docs/mdi_plan.md §18.10 欠账 ③（其 Ctx 不含 RuntimeConfig，
  * 整块孤立组合静默；本批只就近堵了 shadow_lod 那一枚 → main_meshlet_tables.cppm 的
- * warnIfShadowLodOrphaned）。
+ * warnIfShadowLodOrphaned）。★M-0 的 mdi_shadow 同处债-106 射程，**不为单个键做特例**。
  * @param root runtime.lua 顶层表
  * @param cfg  写入目标
  * @param path 仅用于错误消息
@@ -418,6 +421,9 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg) {
 		return err;
 	// ★18-B1 回落策略（三态字符串键，未知值 fail-fast）
 	if (auto err = applyMeshletShadowLodFallbackKey(meshlet, cfg, path))
+		return err;
+	// ★M-0（§19.2 D2）真 MDI 阴影段档（本批零消费者 = 读到也不改变任何一帧行为）
+	if (auto err = readStrictBoolKey(meshlet, "mdi_shadow", cfg.meshletMdiShadow, path))
 		return err;
 	return applyMeshletCoplanarKey(meshlet, cfg, path);
 }
