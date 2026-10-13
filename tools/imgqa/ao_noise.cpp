@@ -181,6 +181,9 @@ AbPair captureAb(Engine& eng, const Engine::Camera* cam, double strength,
 }
 
 /// 建一个本工具的合成 profile 并返回目录（原 profileOf lambda：ao/env/skybox 的口径只有一份）。
+/// 🔴 **从不设机位**（不置 `ProfileOpts::hasCamera` ⟹ 不产出 camera.lua）：主进程组的机位由
+/// RPC 逐次摆（`captureAb` 的 `cam` 参数），组 4 不 RPC 摆 ⟹ 跑在**引擎默认机位**上，而它的
+/// 分区掩码来自主进程机位（债-95；读数表如何自证这件事见 `group4Temporal` 函数头）。
 std::string profileOf(const Ctx& ctx, const std::string& name, double aoStrength, bool taa,
     double feedback)
 {
@@ -499,8 +502,8 @@ void addOptionalChecks(const Ctx& ctx, const Results& res,
             res.floorChanged > 0,
             "地板非零像素合计 " + std::to_string(res.floorChanged)
                 + "（= 0 说明 burst 交的是同一帧，本组任何读数都是假的）");
-        std::printf("  [观察] TAA 开态下 AO 的时间贡献：契约区逐帧差%s（地板 = TAA jitter 自身，"
-                    "非零）\n",
+        std::printf("  [观察] TAA 开态下 AO 的时间贡献：契约区掩码（主进程机位，机位口径见组 4 ⚠ 行）"
+                    "逐帧差%s（地板 = TAA jitter 自身，非零）\n",
             res.temporalHasResolution ? "与地板有 >5% 的差（AO 的时间贡献可见）"
                                       : "与地板无 >5% 的差（AO 的时间贡献淹在 jitter 里，本量具测不出）");
     }

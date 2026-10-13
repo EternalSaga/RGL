@@ -246,12 +246,23 @@ int main(int argc, char** argv)
         }
         const Args P(rest, *spec);
         P.rejectUnknown();  // 拼错的 flag 不许被静默忽略（那等于在默认值上跑判据）
-        return dispatch(cmd, P);
+        // 债-101①：耗时起点 = 进 dispatch 前（解析已结束，命令从这里起才**真正干活**）。
+        // UsageError 只可能由解析层抛出（cli.cpp）⟹ 走到 catch(std::exception) 的必然是
+        // 「已经干过活」的命令，崩溃记录天然有 secs 可写。
+        markCallStart();
+        const int rc = dispatch(cmd, P);
+        // 未自记命令的兜底信封（logCallEnvelope 内部认 logCall 写过的富记录，不重复落笔）。
+        // `note` 排除：它**回填最后一行**，信封再追一行会把下一次 note 的目标偷走。
+        if (cmd != "note")
+            logCallEnvelope(cmd, rest, rc);
+        return rc;
     } catch (const UsageError& e) {
         std::fprintf(stderr, "错误: %s\n", e.what());
         return 2;
     } catch (const std::exception& e) {
         std::fprintf(stderr, "错误: %s\n", e.what());
+        // 崩溃也进台账（债-101①：崩掉的那次最想知道多久；已写过富记录则不动作）。
+        logCallEnvelope(cmd, rest, 3, e.what());
         return 3;
     }
 }

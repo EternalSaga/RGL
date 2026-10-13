@@ -19,6 +19,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -28,10 +29,13 @@
 #include <string>
 #include <vector>
 
+#include <nlohmann/json.hpp>
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
 
 namespace RGL::imgqa {
+
+using nlohmann::json;
 
 namespace {
 
@@ -419,6 +423,85 @@ void testCliArgsBehavior(Checker& c)
     c.chk("-h 不再写 [--static-boost 0.02]", usage.find("[--static-boost 0.02]") == std::string::npos);
 }
 
+/**
+ * 债-101①：调用台账 schema 的**端到端**锚点（写盘的那一行真有 secs，不是只测构造器）。
+ *
+ * 机位 = `RGL_IMGQA_CALLLOG` 覆写路径（judge.cpp::callLogPath）→ 临时探针文件，**不碰真台账**。
+ * 哪个改动会让它红：judge.cpp 里 logCall/logCallEnvelope 任一条 `rec["secs"]`（或 rc/error/
+ * argv）被删改名、守卫失效（富记录之后信封又写第二行）、写出非法 JSON、secs 计算成负数或
+ * 倒序——全部红。测完必须 `clearCallLoggedForSelftest()`：守卫旗子不清，本进程 selftest
+ * 自己的信封行会被刚验过的守卫吞掉（验收读数被验收工具吃掉）。
+ */
+void testCallLedger(Checker& c)
+{
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const fs::path probe = fs::temp_directory_path(ec) / "imgqa_calllog_probe.jsonl";
+    if (ec) {  // 探针落不了地 = 整组测不到，必须**出声**（静默 return = 假绿）
+        c.chk("台账探针: 临时目录可用", false, ec.message());
+        return;
+    }
+    fs::remove(probe, ec);
+    ::setenv("RGL_IMGQA_CALLLOG", probe.string().c_str(), 1);
+    // ① 崩溃信封（未记录 → 写）② 再来一发信封（守卫必须吞）③ 富记录（照写）
+    // ④ 富记录之后又一发信封（守卫也必须吞）。期望落盘恰两行。
+    logCallEnvelope("probe-cmd", { "--flag", "1" }, 3, "boom");
+    logCallEnvelope("probe-cmd", {}, 0);
+    logCall("probe-cmd", { { "k", "v" } },
+        { Verdict{ "probe判据", true, "observed", "探针容差", { "探针守卫" } } });
+    logCallEnvelope("probe-cmd", {}, 0);
+    ::unsetenv("RGL_IMGQA_CALLLOG");
+    clearCallLoggedForSelftest();
+    std::vector<std::string> lines;
+    {
+        std::ifstream in(probe.string());
+        for (std::string l; std::getline(in, l);)
+            if (!l.empty())
+                lines.push_back(l);
+    }
+    fs::remove(probe, ec);
+    c.chk("台账: 四次调用只落两行（崩溃信封 + 富记录，信封守卫生效）", lines.size() == 2,
+        "实得 " + std::to_string(lines.size()) + " 行");
+    if (lines.size() != 2)
+        return;
+    json e, r;
+    bool parsed = true;
+    try {
+        e = json::parse(lines[0]);
+        r = json::parse(lines[1]);
+    } catch (const std::exception&) {
+        parsed = false;
+    }
+    c.chk("台账: 两行都是合法 JSON", parsed);
+    if (!parsed)
+        return;
+    c.chk("台账: 崩溃信封有 secs（数值 ≥ 0）与 rc/error/argv/空 verdicts",
+        e.contains("secs") && e["secs"].is_number() && e["secs"].get<double>() >= 0.0
+            && e["rc"] == 3 && e["error"] == "boom" && e["argv"].is_array()
+            && e["argv"].size() == 2 && e["verdicts"].is_array() && e["verdicts"].empty(),
+        lines[0]);
+    c.chk("台账: 富记录有 secs（数值 ≥ 0，债-101① 的新字段）",
+        r.contains("secs") && r["secs"].is_number() && r["secs"].get<double>() >= 0.0, lines[1]);
+    c.chk("台账: 富记录旧字段齐全（ts/cmd/args/verdicts/outcome——只增不改的旧面）",
+        r.contains("ts") && r.contains("cmd") && r.contains("args") && r.contains("verdicts")
+            && r.contains("outcome"),
+        lines[1]);
+    c.chk("台账: verdicts 往返（name/ok/observed）",
+        r["verdicts"].size() == 1 && r["verdicts"][0]["name"] == "probe判据"
+            && r["verdicts"][0]["ok"] == true && r["verdicts"][0]["observed"] == "observed",
+        lines[1]);
+    c.chk("台账: secs 单调不减（先写的崩溃信封 ≤ 后写的富记录）",
+        e.contains("secs") && r.contains("secs") && e["secs"].is_number() && r["secs"].is_number()
+            && r["secs"].get<double>() >= e["secs"].get<double>(),
+        e.value("secs", json()).dump() + " vs " + r.value("secs", json()).dump());
+    // 信封判据（note 靠它把"回填到兜底记录"说出来）：判据必须**两边都验**——只验信封行为真
+    // = 恒真的判据，富记录也被当成信封时 note 会对着正常记录喊 ⚠，喊几次之后就没人看了。
+    c.chk("台账: 信封判据认得出信封行（判据 = 带原始 argv）", isEnvelopeRecord(lines[0]), lines[0]);
+    c.chk("台账: 信封判据不把富记录当信封（有 args 无 argv → false）",
+        !isEnvelopeRecord(lines[1]), lines[1]);
+    c.chk("台账: 信封判据对坏行不出声（返回 false，不是抛）", !isEnvelopeRecord("{ 坏 JSON"));
+}
+
 // 调用顺序 = 失败时的打印顺序，**一字不许换**（排查记录与台账按这个顺序引用失败行）；
 // 汇总行文案与退出码语义（非 0 → 1）同样不许动。
 int cmdSelftest()
@@ -468,6 +551,7 @@ int cmdSelftest()
     testLuaEditBlockBoundary(c);
     testGlbChunkValidation(c);
     testPercentile100(c);
+    testCallLedger(c);
     std::printf("%s：%d 条失败\n", c.bad ? "自检失败" : "自检通过", c.bad);
     return c.bad ? 1 : 0;
 }

@@ -653,6 +653,20 @@ struct AntiPatternInfo {
 // ── 调用记录（判据可信度的一手数据：哪条判据真在排查里被调用、事后看对不对）──
 void logCall(const std::string& cmd, const std::vector<std::pair<std::string, std::string>>& args,
     const std::vector<Verdict>& verdicts);
+/// 债-101①：命令耗时起点打点（main.cpp 在进 dispatch 前调 = 解析结束、命令真正开始干活的
+/// 地方）。台账的 `secs` 字段 = 打点到该条记录写出时刻的秒数（毫秒精度）。
+void markCallStart();
+/// 未自记命令的兜底信封（债-101①）：本次调用已写过富记录则不动作；`error` 非空 = 崩溃
+/// 路径的记录（崩掉的那次最想知道多久）。口径全文在 judge.cpp 定义处。
+void logCallEnvelope(const std::string& cmd, const std::vector<std::string>& argv, int rc,
+    const std::string& error = "");
+/// 台账某一行是不是**信封行**（判据 = 带原始 `argv`；富记录用策展的 `args`，两者互斥）。
+/// `note` 用它把"回填目标是一条兜底记录"这件事**大声说出来**——不拦（跑完只有信封记录的
+/// 命令再 note 是正当用法），但数据侧的错挂是静默的。口径全文在 judge.cpp 定义处。
+[[nodiscard]] bool isEnvelopeRecord(const std::string& line);
+/// ⚠ **只给 selftest**：清掉探针测试置起的「已记录」旗（否则 selftest 自己的信封行会被
+/// 探针验过的守卫吞掉）。生产路径无人调。理由全文在 judge.cpp 定义处。
+void clearCallLoggedForSelftest();
 /// 回填最后一条调用的事后真相（note 子命令）。
 int noteLastCall(const std::string& text);
 

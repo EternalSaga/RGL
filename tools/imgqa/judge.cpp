@@ -1,6 +1,9 @@
 // 判据 + 反模式登记 + 调用台账。
 #include "imgqa.h"
 
+#include <chrono>
+#include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -323,11 +326,58 @@ const std::map<std::string, AntiPatternInfo>& antiPatterns()
 
 // ── 调用记录（判据可信度的一手数据；**没有记录，「打磨」就只是随手加 flag**）──
 
+// 台账路径。`RGL_IMGQA_CALLLOG` 覆写 = 让 selftest 能端到端验记录 schema 而**不碰真台账**
+// （债-101① 的锚点；env 覆写先例 = `engine.cpp` 的 RGL_ROOT）。平时无人设置，行为不变。
 static fs::path callLogPath()
 {
+    if (const char* env = std::getenv("RGL_IMGQA_CALLLOG"); env != nullptr && *env != '\0') {
+        const fs::path p(env);
+        std::error_code ec;
+        fs::create_directories(p.parent_path(), ec);
+        return p;
+    }
     fs::path p = fs::path(projectRoot()) / "qa/log";
     fs::create_directories(p);
     return p / "imgqa_calls.jsonl";
+}
+
+// ── 债-101①：命令耗时（`secs` 字段）──────────────────────────────────────
+//
+// 起点由 main() 在**进 dispatch 前**打点（`markCallStart`）：那是解析结束、命令真正开始
+// 干活的地方。不在 logCall 里取起点——那只能量到 logCall 自己（微秒级），而债-101 的
+// 「哪条命令慢」全貌 = 引擎进程数 × boot 成本，全在打点与落笔之间。
+// 口径：`secs` = 起点到**本条记录写出时刻**的秒数（毫秒精度）。一条命令写多条记录时
+// （temporal-feedback 的分支表）每条各是写出时刻，单调不减。
+// 🔴 jsonl 是**只增历史**：旧条目没有 secs = 它们当时的真相，不追溯回填（同文件先例 =
+// `temporal_residual_target.cpp` 的旧标签保留、分界 = 引入字段的 commit）。
+namespace {
+struct CallClock {
+    std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+    bool logged = false;  ///< 本次调用是否已写过正式记录（envelope 只兜未自记的命令）
+};
+CallClock& callClock()
+{
+    static CallClock c;
+    return c;
+}
+double elapsedSecs()
+{
+    const auto s = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - callClock().start).count();
+    return std::round(s * 1000.0) / 1000.0;  // 台账是人读的表，15 位浮点是噪声不是信息
+}
+std::string nowStamp()
+{
+    const auto t = std::time(nullptr);
+    char buf[32];
+    std::strftime(buf, sizeof buf, "%Y-%m-%dT%H:%M:%S", std::localtime(&t));
+    return buf;
+}
+}  // namespace
+
+void markCallStart()
+{
+    callClock().start = std::chrono::steady_clock::now();
 }
 
 void logCall(const std::string& cmd,
@@ -335,21 +385,70 @@ void logCall(const std::string& cmd,
     const std::vector<Verdict>& verdicts)
 {
     json rec;
-    {
-        const auto t = std::time(nullptr);
-        char buf[32];
-        std::strftime(buf, sizeof buf, "%Y-%m-%dT%H:%M:%S", std::localtime(&t));
-        rec["ts"] = buf;
-    }
+    rec["ts"] = nowStamp();
     rec["cmd"] = cmd;
     for (const auto& [k, v] : args)
         rec["args"][k] = v;
+    rec["secs"] = elapsedSecs();  // 债-101①；只增字段，旧条目无此键 = 当时的真相
     rec["verdicts"] = json::array();
     for (const auto& v : verdicts)
         rec["verdicts"].push_back({{"name", v.name}, {"ok", v.ok}, {"observed", v.observed}});
     rec["outcome"] = "";  // 事后由 note 回填：这次判据说的对吗？真相是什么？
+    callClock().logged = true;
     std::ofstream out(callLogPath(), std::ios::app);
     out << rec.dump() << "\n";
+}
+
+/**
+ * 未自记命令的兜底信封（债-101①）：`ao-noise` / `temporal-flicker` / `selftest` / `check` /
+ * `refuse` **从不写台账**（git 全史无 `logCall("ao-noise"` —— jsonl 里那条 2026-10-04 是
+ * 开发期未提交代码写的；selftest 本来就没有）⟹ 「哪条命令慢」对它们永远不可见——包括台账
+ * 实测 4.5s 的 ao-noise。本函数给它们补一行 {ts, cmd, argv, secs, rc, verdicts:[], outcome:""}；
+ * 已写过富记录（`logged`）则**不动作**——信封是兜底，不是第二条记录。
+ *
+ * 异常路径也走这里（`error` 非空、rc = main 的退出码 3）：**崩掉的那次最想知道多久**，
+ * 没有 secs 的崩溃记录 = 白记。`note` 的正常路径由 main 排除（它回填最后一行，信封再
+ * 追一行会把下一次 note 的目标偷走）；note 自己崩了仍会留痕。
+ */
+void logCallEnvelope(const std::string& cmd, const std::vector<std::string>& argv, int rc,
+    const std::string& error)
+{
+    if (callClock().logged)
+        return;
+    callClock().logged = true;  // 先立旗再落笔：写一半抛了也不许 main 的 catch 再补一条
+    json rec;
+    rec["ts"] = nowStamp();
+    rec["cmd"] = cmd;
+    rec["argv"] = argv;  // 原始 argv（富记录的 args 是逐命令策展的，信封没有策展人）
+    rec["secs"] = elapsedSecs();
+    rec["rc"] = rc;
+    if (!error.empty())
+        rec["error"] = error;
+    rec["verdicts"] = json::array();
+    rec["outcome"] = "";
+    std::ofstream out(callLogPath(), std::ios::app);
+    out << rec.dump() << "\n";
+}
+
+/// ⚠ **只给 selftest**（先例 = `diff_block_metric.h` 的 erode 参考实现）：台账探针
+/// （`testCallLedger`）就地测信封守卫，会把 `logged` 置真；探针结束必须清回去，否则本进程
+/// selftest 自己的信封行（main 在 cmdSelftest 返回后补）会被刚被验过的守卫吞掉 = 守卫
+/// 反过来吃掉自己的验收读数。生产路径无人调它。
+void clearCallLoggedForSelftest()
+{
+    callClock().logged = false;
+}
+
+bool isEnvelopeRecord(const std::string& line)
+{
+    try {
+        const json rec = json::parse(line);
+        // 判据 = 有 `argv`（原始参数）。富记录的参数是逐命令策展的 `args`，两者互斥；
+        // 判据写成"有没有 args 的反面"会在策展人新加字段时悄悄翻脸，故取正向判据。
+        return rec.is_object() && rec.contains("argv");
+    } catch (const std::exception&) {
+        return false;  // 坏行不是信封（note 那边 parse 自己会抛，不归本函数判）
+    }
 }
 
 int noteLastCall(const std::string& text)
@@ -370,6 +469,15 @@ int noteLastCall(const std::string& text)
     if (lines.empty())
         return 2;
     json rec = json::parse(lines.back());
+    // 🔴 目标可能是**信封行**（债-101① 的兜底记录）：跑完 selftest/check 这类不写富记录的
+    // 命令再 note，结论就挂到那条兜底记录上了。不拦——跑完只有信封记录的目标再 note 是
+    // **正当用法**（那些命令从此也要记结论）——但必须大声说，"打印了 cmd 名"不等于守住了：
+    // 数据侧的错挂是静默的，只有读 stdout 的人才看得见。
+    if (isEnvelopeRecord(lines.back())) {
+        std::printf("⚠ 回填目标是**信封行**（兜底记录：无策展 args、rc = %s）——若你想记的"
+            "是另一条命令，请在它跑完之后立刻 note（中间跑过 selftest/check 会占住最后一条）\n",
+            rec.contains("rc") ? rec["rc"].dump().c_str() : "无");
+    }
     rec["outcome"] = text;
     lines.back() = rec.dump();
     std::ofstream out(p, std::ios::trunc);

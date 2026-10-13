@@ -12,8 +12,11 @@
 // （P1-G2 债-96：`burstDiff` 的逐帧差累计体拆到口径层 `burstDiffFiles`（早退守卫要可测），
 //  本文件的 `burstDiff` 只剩「切强度 → 预热 → 连拍 → 交口径层」的仪器部分。）
 //
-// 已知在场但本批**不许修**的一条照原样搬着：组 4 的分区掩码（`col.flat` / `res.contactMask`）
-// 是主进程机位算出来的，却套在 TAA profile 自己那台机位的 burst 上（→ 交付报告）。
+// 债-95（组 4 机位不副实）按 **B 案「文案自证」**落地：组 4 的分区掩码（`col.flat` /
+// `res.contactMask`）是主进程机位算出来的，套在引擎默认机位（profileOf 不产出 camera.lua）
+// 的 burst 上。A 案「组 4 显式设机位」被否——它换掉本组输入画面 = 换仪器（三行比值是
+// 已发表读数），而进判据的只有全图地板（与机位无关）。修法 = 读数表自证（⚠ 行 + 区域名
+// 带「掩码（主进程机位）」），理由全文在 `group4Temporal` 的函数头。
 #include "ao_noise_metric.h"
 
 #include "imgqa.h"
@@ -208,6 +211,14 @@ void group5Grazing(const Ctx& ctx, const Collected& col, const Results& res)
  *
  * 本组**只判量具**：地板非零（TAA jitter 自己每帧改画面）⟹ 比值不可解释，理由见文件头
  * 第二条被推翻的初版口径。AO 的时域结论走 TAA 关态的两条零锚点。
+ *
+ * 🔴 **本组 burst 的机位 = 引擎默认**（债-95，定案走 B「文案自证」而非 A「显式设机位」）：
+ * `profileOf` 从不置 `ProfileOpts::hasCamera` ⟹ 不产出 camera.lua，而两张分区掩码
+ * （`col.flat` / `res.contactMask`）是主进程机位算的 ⟹ 「契约区 / 接触环」套在另一台机位
+ * 的画面上名不副实。选 B 的理由：进判据的只有全图地板（与机位无关），A 会换掉本组输入
+ * 画面 = 换仪器（下面三行比值是已发表读数，台账定级「读数误导、判定不误导」）——判定
+ * 本来就不该被这条改动影响，那就绝不为它付读数漂移的代价。机位不副实这件事从此由
+ * **输出里的 ⚠ 行 + 区域名**自证，不再只靠注释守。
  */
 void group4Temporal(const Ctx& ctx, const Collected& col, Results& res)
 {
@@ -225,6 +236,12 @@ void group4Temporal(const Ctx& ctx, const Collected& col, Results& res)
     const uint32_t kWarmFrames = 6 * static_cast<uint32_t>(kJitterPeriod);
     std::printf("  burst %u 帧（预热 %u 帧洗历史；两轮间隔 %u 帧 = 抖动周期的整数倍）\n", nBurst,
         kWarmFrames, kWarmFrames + nBurst);
+    // 债-95：机位来源在**读数表旁边**自证（读者不该要靠读源码才知道这两行的区域语义
+    // 不成立）。全图行不受影响：它不吃掩码，也是本组唯一进判据的一行。
+    std::printf(
+        "  ⚠ 本组 burst 机位 = **引擎默认**（profileOf 不产出 camera.lua）；下面两行是主进程\n"
+        "     机位 `%s` 的掩码套在本画面上的**空间窗口**，区域内容语义不成立（判定只取全图地板，与机位无关）\n",
+        ctx.camera.c_str());
     const auto off = burstDiff(eng, "off", 0.0, nBurst, kWarmFrames, col.flat, res.contactMask,
         ctx.outDir);
     const auto on = burstDiff(eng, "on", ctx.strength, nBurst, kWarmFrames, col.flat,
@@ -232,8 +249,8 @@ void group4Temporal(const Ctx& ctx, const Collected& col, Results& res)
     floorChanged = off.second;
     std::printf("\n");
     printTemporalRow("全图", off.first[0], on.first[0]);
-    printTemporalRow("契约区（平坦）", off.first[1], on.first[1]);
-    printTemporalRow("接触环（AO 生效）", off.first[2], on.first[2]);
+    printTemporalRow("契约区掩码（主进程机位）", off.first[1], on.first[1]);
+    printTemporalRow("接触环掩码（主进程机位）", off.first[2], on.first[2]);
     std::printf(
         "  ⚠ 地板非 0（TAA jitter 自己每帧都在改画面）⟹ **比值不可解释**（分母不是零，\n"
         "     也不是「AO 之外唯一变量」的对照，正是已登记反模式 screen-space-l1-frame-diff\n"

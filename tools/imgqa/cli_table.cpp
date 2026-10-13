@@ -436,7 +436,10 @@ std::vector<SubcommandSpec> specsFlickerAndNoise()
                 FlagSpec{"--target", "edge", "edge = aa_target 白板左边缘（闭式适用，主判据）；<bistro 机位名> = 交付配置口径（闭式只作参考刻度）", FlagKind::String},
                 FlagSpec{"--sweep", "0.125", nullptr, FlagKind::Number},
                 FlagSpec{"--frames", "32", nullptr, FlagKind::Number},
-                FlagSpec{"--halfwidth", "8", nullptr, FlagKind::Number},
+                FlagSpec{"--halfwidth", "8",
+                    "ROI 宽度（px）。⚠ 两分支口径不同（债-98，拍板不统一）：--target edge = 半宽"
+                    "（ROI 宽 2×）；--target <bistro 机位> = **全宽**（ROI = 自身×自身）",
+                    FlagKind::Number},
                 FlagSpec{"--rowfrac", "0.14", nullptr, FlagKind::Number},
                 FlagSpec{"--verbose", nullptr, nullptr, FlagKind::Bool},
                 FlagSpec{"--kernel", "0", "批 13.8 输入侧重建核（0 双线性 / 1 CR 4×4 / 2 Lanczos3），**只作用于 TAA 开组** ⟹ TAA 关组 = 闭式无 AA 锚点", FlagKind::Number},

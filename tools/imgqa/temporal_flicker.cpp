@@ -436,6 +436,8 @@ bool placeFlickerRois(std::vector<Group>& groups, bool edgeTarget, double halfWi
         }
     }
     else {
+        // 债-98：这里 `halfWidth` 当**全宽**用（strongestRoi 的 ROI = 参数×参数），与上面
+        // edgeRoi 的半宽语义不同——口径写进函数名与表头，几何不许动（已发表读数）。
         cv::Point2d at(0, 0);
         const cv::Rect roi = strongestRoi(groups[0].luma, halfWidth, at);
         for (auto& g: groups) {
@@ -562,8 +564,14 @@ int cmdTemporalFlicker(const std::string& target, double sweepPxPerFrame, int fr
     std::printf("=== 运动态时间闪烁（闭式解判据 temporal-flicker）===\n");
     std::printf("  目标: %s\n", edgeTarget ? "aa_target 白板左边缘（闭式**适用**，主判据）"
                                            : "bistro 交付配置 ROI（闭式只作**参考刻度**）");
-    std::printf("  名义扫速 %g px/帧 → 每帧偏航 %s°（f=%.1fpx @ fov %g°）；帧数 %d；ROI 半宽 %gpx\n",
-        sweepPxPerFrame, d5(yawDeg).c_str(), focal, kFovDeg, frames, halfWidth);
+    // 债-98：`--halfwidth` 在两分支语义不同（合成靶 = 半宽 → ROI 宽 2×；bistro = **全宽** →
+    // ROI = 自身）。这是已发表读数的口径，**不统一几何是拍板**（改 ROI 像素 = 换仪器），
+    // 修法 = 表头按分支各报自己的口径，读者不必记差异；逐组自证行里的 `ROI WxH@x,y` 是实际值。
+    std::printf("  名义扫速 %g px/帧 → 每帧偏航 %s°（f=%.1fpx @ fov %g°）；帧数 %d；ROI %s %gpx\n",
+        sweepPxPerFrame, d5(yawDeg).c_str(), focal, kFovDeg, frames,
+        edgeTarget ? "半宽（合成靶：ROI 宽 = 2×半宽）"
+                   : "**全宽**（bistro 分支：--halfwidth 当全宽用，ROI = 自身×自身）",
+        halfWidth);
     // 批 13.8：输入侧重建核。**只作用于 TAA 开那一组**（TAA 关 = 图里没有 taa pass，键无消费者）
     // ⟹ TAA 关那组是「闭式无 AA 锚点」，逐次重测它 = 跨运行的可比性自证（核不该动它一根毫毛）。
     static const char* kKernelNames[3] = { "0 双线性", "1 Catmull-Rom 4×4", "2 Lanczos3 6×6" };

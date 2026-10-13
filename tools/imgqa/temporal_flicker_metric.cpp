@@ -62,7 +62,7 @@ cv::Rect edgeRoi(const std::vector<cv::Mat>& luma, double expectedX, double& edg
     return roi;
 }
 
-cv::Rect strongestRoi(const std::vector<cv::Mat>& luma, double halfWidth, cv::Point2d& at)
+cv::Rect strongestRoi(const std::vector<cv::Mat>& luma, double fullWidth, cv::Point2d& at)
 {
     const int w = luma[0].cols, h = luma[0].rows;
     cv::Mat g;
@@ -81,8 +81,10 @@ cv::Rect strongestRoi(const std::vector<cv::Mat>& luma, double halfWidth, cv::Po
             }
         }
     at = cv::Point2d(bx, by);
-    const int hw = std::max(4, static_cast<int>(std::lround(halfWidth)));
-    cv::Rect roi(bx - hw / 2, by - hw / 2, hw, hw);
+    // 🔴 `fullWidth` 是**全宽**（ROI = side×side），与 `edgeRoi` 的半宽语义不同——债-98 定案：
+    // 这是已发表读数的口径，改几何 = 换仪器，只准把口径写进名字/打印，不许动这里的算式。
+    const int side = std::max(4, static_cast<int>(std::lround(fullWidth)));
+    cv::Rect roi(bx - side / 2, by - side / 2, side, side);
     roi.x = std::clamp(roi.x, 0, w - roi.width);
     roi.y = std::clamp(roi.y, 0, h - roi.height);
     return roi;

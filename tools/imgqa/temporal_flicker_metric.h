@@ -58,13 +58,22 @@ struct Group: FlickerSeries {
 /// 把 ROI 钉到边缘上：在**期望位置 ±16px** 的窗内取列剖面最陡处（全图 argmax 会被白板上的
 /// 黑杆抢走——TAA 开时边缘被时域累积抹平，最陡处反而是阶梯杆，实测踩过），并返回该处的
 /// 列剖面跳变量（阳性锚点：跳变量 ≈0 = 根本没找到边缘）。
+/// 口径（债-98）：`halfWidth` 在这里是**半宽**语义 —— ROI 宽 = `2 × halfWidth`。
 cv::Rect edgeRoi(const std::vector<cv::Mat>& luma, double expectedX, double& edgeX,
     double& edgeStep, double halfWidth, double rowFrac);
 
-/// 画面里**最强梯度**处的方形窗（bistro 模式：闭式不适用，只出同口径的 ρ 做 on/off 对比）。
-/// 为什么不能钉画面中心：中心可能是块平墙，ρ 恒 0 而 on/off 比是 0/0；窗口必须落在边缘带上。
-/// 定位用 TAA 关那一组（无抖动），两组共用同一个窗。
-cv::Rect strongestRoi(const std::vector<cv::Mat>& luma, double halfWidth, cv::Point2d& at);
+/**
+ * 画面里**最强梯度**处的方形窗（bistro 模式：闭式不适用，只出同口径的 ρ 做 on/off 对比）。
+ * 为什么不能钉画面中心：中心可能是块平墙，ρ 恒 0 而 on/off 比是 0/0；窗口必须落在边缘带上。
+ * 定位用 TAA 关那一组（无抖动），两组共用同一个窗。
+ *
+ * 🔴 口径（债-98）：`fullWidth` 在这里是**全宽**语义 —— ROI = `fullWidth × fullWidth`，
+ * CLI 的 `--halfwidth` 传到这里当全宽用（默认 8 → ROI 8×8，而合成靶分支同参数是 16×200）。
+ * **两个分支几何不统一是拍板不是疏忽**：这是已发表读数的口径（bistro 组 ρ 的窗口大小），
+ * 把它改成 `2 × halfwidth` = 换仪器、读数全部要重标。修法 = 把语义写进名字与打印，
+ * 让读者不必记住差异（表头行见 `temporal_flicker.cpp` 的「ROI 全宽」）。
+ */
+cv::Rect strongestRoi(const std::vector<cv::Mat>& luma, double fullWidth, cv::Point2d& at);
 
 /// ROI 内的两端观测电平（p0.5 / p99.5）+ 时间序列 + 半谱
 void measureGroup(Group& g);

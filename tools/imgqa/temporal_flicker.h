@@ -155,10 +155,11 @@ struct FlickerAnchor {
  * 相机移动下的时间闪烁（闭式解判据）：TAA 开 / 关各采一段连拍，报闪烁增益 G 与归一位置 ζ。
  *
  * @param target "edge" = aa_target 白板左边缘（闭式**适用**，主判据）；或 bistro 机位名
- *               （doorframe / wetground / doorpanel，闭式只作**参考刻度**，ROI 是画面中心窗）
+ *               （doorframe / wetground / doorpanel，闭式只作**参考刻度**，ROI 是最强梯度窗）
  * @param sweepPxPerFrame 名义扫速（px/帧，主点处；亚像素，(0,1) 开区间）
  * @param frames 连拍帧数（≥16）
- * @param halfWidth ROI 半宽（px）
+ * @param halfWidth ROI 宽度参数（px）。⚠ **两分支语义不同**（债-98 口径，拍板不统一）：
+ *                  合成靶 = 半宽（ROI 宽 2×）；bistro 机位 = **全宽**（ROI = 自身×自身）
  * @param rowFrac ROI 半高占画面高的比例
  * @param verbose 打印 ROI 均值时间序列与 Hann 半谱（诊断用）
  * @param kernel 输入侧重建核（`taa.input_kernel`，批 13.8）：0 双线性（默认 = 已发表口径）/

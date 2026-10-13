@@ -1,6 +1,6 @@
 #pragma once
 //
-// selftest.h —— `imgqa selftest` 的**跨 TU 共享层**（Checker + 两个共享断言辅助 + 44 条
+// selftest.h —— `imgqa selftest` 的**跨 TU 共享层**（Checker + 两个共享断言辅助 + 45 条
 // testXxx 声明）。
 //
 //   为什么拆：`selftest.cpp` 到 1927 代码行（工具侧上限 500）被文件护栏逼出刀。缝按**被测
@@ -41,12 +41,14 @@
 //   ⚠ 断言条数 = 本文件的机械护栏：**口径必须连命令一起写死**，否则两个人数出两个数（实测踩过：
 //   旧注释只写"grep -cE 数 chk 调用点"，改前用 `c\.chk\(` 数 .cpp 得 338、用 `\bchk\b` 连 .h 与
 //   注释一起数得 343，护栏当场不可证伪）。**唯一口径**：
-//       grep -cE 'c\.chk\(' tools/imgqa/selftest*.cpp | awk -F: '{s+=$2} END {print s}'   # = 383
+//       grep -cE 'c\.chk\(' tools/imgqa/selftest*.cpp | awk -F: '{s+=$2} END {print s}'   # = 394
 //   （只数 .cpp 里的调用点，**不含** selftest.h 的成员函数定义、不含注释。P1-G2 实测：
 //    P1-G1 写死的 362 在 P1-G2 改动后按同一口径重数为 383（+25 −2：债-93 lua 表边界 7、
 //    债-96 ao-noise 输入校验 8、债-99 分位空集 5 + glb 长度校验 3，🔴 再 **−2** = 删掉
 //    `topLevelValueOf` 那两条**永不可红**的断言——npos 分支经 findKeyHits 不可达，改前改后都绿
-//    的锚点买了信心不买覆盖，见 selftest_judgments.cpp 同处注释）。）
+//    的锚点买了信心不买覆盖，见 selftest_judgments.cpp 同处注释）。P1-G3：383 → **391**
+//    （+8 = 债-101① 台账 schema 端到端探针 `testCallLedger`，逐条可红：secs/rc/error/argv
+//    任一字段的写出、信封守卫、JSON 合法性、secs 单调性）。）
 //   丢一条断言**不会让任何东西变红**，它只会让「0 条失败」少守一件事——所以这条计数比编译更值得守。
 //   ⚠ 它目前**只是文档约定，没有机器执行**（2026-10-12 实测：加一条断言后无人改动，数就漂了）。
 //   机械化挂号 → docs/mdi_plan.md §11.5。
@@ -128,7 +130,7 @@ std::string captureStdout(F fn)
     return out;
 }
 
-// ── 39 条测试的声明（定义按仪器族分散在九个 TU；调用顺序只写在 `cmdSelftest`）──
+// ── 45 条测试的声明（定义按仪器族分散在九个 TU；调用顺序只写在 `cmdSelftest`）──
 void testSrgb(Checker& c);
 void testObjectId(Checker& c);
 void testRegion(Checker& c);
@@ -173,5 +175,6 @@ void testSwimLagTableSurface(Checker& c);
 void testLuaEditBlockBoundary(Checker& c);
 void testGlbChunkValidation(Checker& c);
 void testPercentile100(Checker& c);
+void testCallLedger(Checker& c);
 
 }  // namespace RGL::imgqa
