@@ -2136,5 +2136,73 @@ NV 越界读坑；`[numthreads(1,1,1)]` 全档 ≤ NV 的 128）：
 | `poison_guard` 红、`control` 绿 | **task 侧 DrawIndex 同病**（守卫列 = 0 = 后续直接 mesh draw 不产出像素） | 选项② 作废 ⟹ 回选项①（Mesa issue + 门默认关）或③（换宿主） |
 | `control` 也红 | 用例/环境坏（回读链或 SPV 没重建），毒化判据**不成立**，别下结论 | 先查 rig（对照本机 12/12 绿与 `mdi_*` 旧族），修好再重跑 |
 
+🔴 **本卡第一行已被 §19.13 作废**：守卫"绿"在没有"本设备测得出毒化"的阳性对照时，与"这个 rig
+根本测不出这种失效"**不可分辨**。STRIX 实测就是这种绿（两条 `mdi_poison_control*` 对照全绿）。
+
 **提 Mesa issue 的靶（§19.12 修正后）**：gfx1151（Strix Halo）+ mesh 入口声明 `DrawIndex` 毒化
 同提交后续 mesh draw；**同版本 Mesa 的 RAPHAEL（gfx1036）逐位绿 = 现成对照证据**。
+### 19.13 STRIX 复跑裁决：`task_probe_poison_guard` 的绿是**空的**（rig 层测不出这种毒化）（2026-10-13 实测，机器 = 出事机 8060S / STRIX_HALO）
+
+**裁决：§19.12 裁决卡第一行不成立。** task 路对 gfx1151 是否有救 = **未知，rig 层不可判**，
+不能据此立"task 化 + mesh ≤128 循环化"那一整批。
+
+#### 复跑读数（`git pull` 到 `9d0ab76` 后本机重编重跑）
+
+```
+VK_DRIVER_FILES=/usr/share/vulkan/icd.d/radeon_icd.x86_64.json \
+  ./build/tests/rgl_tests --test-suite=gpu --test-case="task_probe*"
+→ 4 | 4 passed（含 task_probe_poison_guard）
+```
+
+按卡面这就是"task 路有救"。**但它成立的前提从没被量过**：守卫绿只说"这次提交里后面的 draw
+画出来了"，而 §19.9 的毒化是在**引擎**里复现的——**这个 rig 到底测不测得出这种毒化，从没验过**。
+若它复现不出，"绿"与"失明"是同一个读数。
+
+#### 两条阳性对照（新增，长在 `test_mdi_drawindex.cppm`）
+
+不放进 task 探针文件：那里的 rig 用经典 descriptor set + 1 线程，而 `mdi_*` 的 rig 用的正是
+**§19.9 的触发形态**（`mdi_spike.mesh.slang`：mesh 入口声明 `SV_DrawIndex`）且**已证在 STRIX 能画出来**
+（`mdi_drawindex_increments` 等 13 条本机全绿）。探测器要判"毒化没发生"，触发必须先被证明"发生了"。
+
+不必新写守卫 shader：同一条管线 push 换 `rowBase` 再**直接** draw 一次，画的就是另一列。
+
+| 用例 | 形态 | STRIX 读数 |
+|---|---|---|
+| `mdi_poison_control` | 同提交同 pass：MDI(行 0..5) → 直接 draw(行 6) | 列 0..5 对 **且列 6 = 1006** ⟹ 复现不出 |
+| `mdi_poison_control_two_pass` | **跨 render pass**（贴引擎 shadow pass → deferred pass 的几何） | pass1 列 0..5 对、pass2 列 6 = 1006 ⟹ 复现不出 |
+
+两条的守卫读数走 `MESSAGE` 不走 `CHECK`（两种极性都合法，取决于设备）；`CHECK` 只钉"触发真的跑过"。
+
+#### 四条"为什么 rig 不复现"的结构假设，逐一排除
+
+| 假设 | 探针（临时改，已还原） | STRIX 读数 |
+|---|---|---|
+| 经典管线不毒化，要 shader object | 给 `mdi_shader_object_variant`（shader object + 引擎动态态配方）追加一枚直接 draw | 列 6 = 1006，复现不出 |
+| 1 线程不毒化，产品是 `[numthreads(256)]` | `mdi_spike.mesh.slang` 改 `numthreads(256,1,1)` | 复现不出 |
+| 同 pass 不毒化，引擎跨 pass | `mdi_poison_control_two_pass` | 复现不出 |
+| 同管线不毒化，引擎换管线 | `task_probe_poison_guard` 本来就换 guard 管线 | 复现不出 |
+
+**唯一没量的结构差 = descriptor heap**（rig 用经典 descriptor set；`test_mdi_drawindex.cppm`
+文件头自己划过这条界："本条补的是 shader object 绑定这一半，**不含** descriptor heap"）。
+补它基本等于把引擎机制搬进测试，不划算。
+
+#### 纪律沉淀（跨用例形态的阳性锚点）
+
+**守卫型用例的"绿"必须配一条"本设备测得出"的阳性对照**，否则"绿"与"失明"不可分辨。
+这是 `rgl-test-discipline` 的阳性锚点在**跨用例**下的版本：锚点不能只锚"数据通路通"
+（`task_probe_control` 锚的是这个），还要锚"**探测器会响**"。写不出反向断言时（本例两种极性
+都合法），至少把读数 `MESSAGE` 出来并把"绿不等于通过"写进用例头注释与裁决卡。
+
+#### 下一步：唯一能真判的形态，比组合手术便宜一个量级
+
+**引擎级最小 task 探针**——给产品阴影 MDI 管线加一枚**平凡 task stage**（task 声明 `DrawIndex`、
+只发 1 个 mesh group、行表先不接），mesh 侧**停止声明** `DrawIndex`。**不看阴影对不对，只看
+bistro 在不在**（§19.9 的九臂矩阵里"bistro 在不在"就是现成的二值判据，成本 = 一次截图 + 一次哈希）：
+
+| 读数 | 结论 | 后续 |
+|---|---|---|
+| bistro 在（`95edc8cc` 形态） | DrawIndex 换 stage 即绕开毒化 | 组合手术的 STRIX 收益**成立**，可立批 |
+| bistro 仍没 | 毒化与 stage 无关（"这条提交里声明过 DrawIndex"就够） | **选项② 直接作废** ⟹ 回选项①（Mesa issue + 门默认关） |
+
+比"task 化 + mesh ≤128 循环化"省掉：行表接入、`gcX` 语义换成 task 数、A5 闭式锚重算、
+逐位锚各机重立。它只回答那一个会决定一整批去向的问题。

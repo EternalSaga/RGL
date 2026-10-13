@@ -422,7 +422,9 @@ struct Rig {
 TEST_SUITE("gpu") {
 
 using RGL::testing::mdi::ArgsRow;
+using RGL::testing::mdi::beginRender;
 using RGL::testing::mdi::colValue;
+using RGL::testing::mdi::endRender;
 using RGL::testing::mdi::drawMdi;
 using RGL::testing::mdi::dumpCols;
 using RGL::testing::mdi::kClearSentinel;
@@ -669,6 +671,93 @@ TEST_CASE("mdi_shader_object_variant：引擎的绑定形态（shader object + �
 	INFO(dumpCols(px));
 	for (uint32_t c = 0; c < kCols; ++c)
 		CHECK(colValue(px, c) == kTagBase + c);
+}
+
+TEST_CASE("mdi_poison_control（阳性对照）：mesh 声明 DrawIndex 的 MDI 之后，同提交的**直接** mesh draw 还画不画得出") {
+	const Fixture fx;
+	// 🔴 这条是 `task_probe_poison_guard`（§19.12 的 STRIX 裁决卡）的**判据强度前置**。
+	//
+	// 那条守卫用例的绿要说成"task 路对 gfx1151 有救"，前提是**本 rig 在本设备测得出这种毒化**。
+	// 而 §19.9 的毒化是在**引擎**里复现的；本文件的 `mdi_drawindex_increments` 只量"触发 draw
+	// 自己画得对不对"，**从没有一条用例在同一次提交里跟着一枚直接 mesh draw** ⟹ 毒化从来没在
+	// rig 层被量过。若 rig 复现不出，守卫绿就只是"这条路上没东西被杀"，不能外推到引擎。
+	//
+	// 触发形态 = §19.9 原样，且用的是**本文件已证在 STRIX 能画出来**的那枚管线
+	// （`mdi_spike.mesh.slang`：mesh 入口声明 `SV_DrawIndex`）——不必新写 shader，也不必第二枚
+	// 守卫 mesh：同一条管线 push 换 `rowBase` 再**直接** draw 一次，画的就是另一列。
+	//   · 列 0..5 对 + 列 6 对   → 本 rig 复现不了毒化 ⟹ poison_guard 的绿**不构成裁决**
+	//   · 列 0..5 对 + 列 6 丢   → 本 rig 复现毒化 ⟹ poison_guard 的绿是真裁决
+	// 两种读数都合法（取决于设备），所以本条只 CHECK"触发真的跑过"，守卫读数走 MESSAGE；
+	// 真正的跨用例结论由 §19.13 的裁决卡按两个读数联立给出。
+	const Rig rig(fx);
+	const uint32_t headBase = 0u;   // MDI：行 0..5 → 列 0..5
+	const uint32_t guardBase = 6u;  // 直接 draw：DrawIndex 恒 0 → 行 6 → 列 6
+	const auto px = renderAndRead(fx, rig.target, [&](vk::raii::CommandBuffer& cmd) {
+		cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, *rig.pipe);
+		cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *rig.lp.pipeLayout, 0,
+			*rig.lp.sets[0], {});
+		cmd.pushConstants(*rig.lp.pipeLayout, vk::ShaderStageFlagBits::eMeshEXT, 0, 4u, &headBase);
+		drawMdi(cmd, rig.args.buffer, 6u);                        // ← 触发源（mesh 入口声明 DrawIndex）
+		cmd.pushConstants(*rig.lp.pipeLayout, vk::ShaderStageFlagBits::eMeshEXT, 0, 4u, &guardBase);
+		cmd.drawMeshTasksEXT(1u, 1u, 1u);                         // ← 探测器：同管线直接 draw
+	});
+	INFO(dumpCols(px));
+	for (uint32_t c = 0; c < 6u; ++c)
+		CHECK(colValue(px, c) == kTagBase + c);  // 触发真的跑过（没这条，守卫读数不说明任何问题）
+	const bool guardAlive = colValue(px, 6u) == kTagBase + 6u;
+	MESSAGE("mesh-DrawIndex MDI 之后的直接 mesh draw 列 6 = ", colValue(px, 6u));
+	if (guardAlive)
+		MESSAGE("→ 本 rig 复现【不出】毒化：task_probe_poison_guard 的绿在本设备不构成裁决");
+	else
+		MESSAGE("→ 本 rig 复现毒化：task_probe_poison_guard 的绿是真裁决");
+	for (uint32_t c = 7u; c < kCols; ++c)
+		CHECK(colValue(px, c) == kClearSentinel);  // 负向锚点：没有多画
+}
+
+TEST_CASE("mdi_poison_control_two_pass（阳性对照·跨 pass）：跨 render pass 也测不测得出毒化") {
+	const Fixture fx;
+	// `mdi_poison_control` 的同提交变体，差别 = 两枚 draw 之间**跨一次 render pass**——这才是
+	// §19.9 引擎里的真实几何（shadow pass 里 MDI → deferred pass 里主视图 meshlet draw）。
+	// 它比同 pass 那格更值得留：pass1 的列 0..5 是**同一次提交内的触发锚点**（不必借别的用例
+	// 证明"触发真的跑过"），pass2 的列 6 是探测器。
+	// 与同 pass 那格同样的极性纪律：两种读数都合法（取决于设备），守卫读数走 MESSAGE 不走 CHECK。
+	const Rig rig(fx);
+	const auto t2 = makeTarget(fx);
+	const uint32_t headBase = 0u;   // pass1：MDI 行 0..5 → 列 0..5
+	const uint32_t guardBase = 6u;  // pass2：直接 draw，DrawIndex 恒 0 → 行 6 → 列 6
+	fx.submitAndWait([&](vk::raii::CommandBuffer& cmd) {
+		beginRender(cmd, rig.target);
+		cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, *rig.pipe);
+		cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *rig.lp.pipeLayout, 0,
+			*rig.lp.sets[0], {});
+		cmd.pushConstants(*rig.lp.pipeLayout, vk::ShaderStageFlagBits::eMeshEXT, 0, 4u, &headBase);
+		drawMdi(cmd, rig.args.buffer, 6u);  // ← 触发源（mesh 入口声明 DrawIndex）
+		endRender(cmd, rig.target);
+		beginRender(cmd, t2);  // ← 跨 pass（引擎里这里还换了附件与管线）
+		cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, *rig.pipe);
+		cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *rig.lp.pipeLayout, 0,
+			*rig.lp.sets[0], {});
+		cmd.pushConstants(*rig.lp.pipeLayout, vk::ShaderStageFlagBits::eMeshEXT, 0, 4u, &guardBase);
+		cmd.drawMeshTasksEXT(1u, 1u, 1u);  // ← 探测器
+		endRender(cmd, t2);
+	});
+	auto read = [&](const auto& t) {
+		const auto bytes = RGL::testing::gpu::readImage(fx, t.img);
+		std::vector<uint32_t> px(bytes.size() / 4u);
+		std::memcpy(px.data(), bytes.data(), bytes.size());
+		return px;
+	};
+	const auto p1 = read(rig.target);
+	const auto p2 = read(t2);
+	INFO("pass1 ", dumpCols(p1), " || pass2 ", dumpCols(p2));
+	for (uint32_t c = 0; c < 6u; ++c)
+		CHECK(colValue(p1, c) == kTagBase + c);  // 触发锚点（同一次提交内）
+	const bool guardAlive = colValue(p2, 6u) == kTagBase + 6u;
+	MESSAGE("跨 pass 的直接 mesh draw 列 6 = ", colValue(p2, 6u));
+	if (guardAlive)
+		MESSAGE("→ 跨 pass 也复现【不出】毒化");
+	else
+		MESSAGE("→ 跨 pass 复现毒化：这才与 §19.9 的引擎形态同型");
 }
 
 }  // TEST_SUITE("gpu")
