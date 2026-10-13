@@ -17,6 +17,14 @@
 3. **主口径 = p50，不是 avg**：帧边界钩子（本工具轮询 `/state`、配置热重载）只污染墙钟的少数
    样本，p50 对这种单点 outlier 天然免疫；avg 一并报出，两者差得远 = 有 outlier 要查。
 
+**会话内噪声带**（债-112 的最小修法，2026-10-14）：`--repeat N` 让每臂**同配置连跑 N 次**，把逐
+指标的 min..max 作为**噪声带**随读数打印，并给每个指标一句"能不能拿来 A/B"的提示。为什么要它：
+`frame p50` 的会话内波动比 0.1ms 级的改动大一个量级（台账债-112：本机同代码四跑跨 **0.69ms**），
+而同一张表里的 pass 级 GPU zone 只有 0.01~0.02ms ⟹ **同一张表里有的指标能 A/B、有的不能**，
+工具把这件事**印出来**，不靠人记（踩过：把一次零代价改动记成"退化 +0.14ms"）。
+🔴 默认（不带 `--repeat`）**不印带、输出与旧版逐字相同**——`docs/cpu_perf_plan.md` 与
+`docs/还债实测数据.md` 的基线表全部引用它，改口径 = 让所有历史读数失效。
+
 **观察者效应**：profiler 开着的开销实测 +0.20%（债-01 收账），且 profiler 关时交付逐位不变。
 本工具**只读**：不改任何配置副本（`RGL_CONFIG_DIR` 注入 staging 目录，契约见 `rgl/main.cppm`
 configDir 注释），不写 golden，不存基线哈希。
@@ -29,9 +37,11 @@ configDir 注释），不写 golden，不存基线哈希。
 用法:
     just cpu                                  # 全部臂（串行，每臂约 15~25s）
     just cpu --arms default,no-vvl            # 只跑两臂
+    just cpu --arms default --repeat 4        # 同配置连跑 4 次 → 逐指标噪声带（债-112）
     just cpu --window 200 --warmup 60         # 加长窗口（帧数，不是墙钟）
     just cpu --json /tmp/base.json            # 落机器可读读数
     just cpu --compare /tmp/base.json         # 与上次读数逐项对差（改渲染后用）
+    just cpu --selftest                       # 量具自检（合成读数，不跑引擎，毫秒级）
 
 退出码: 0 = 全部臂量到 · 1 = 任一臂没量到（前置不满足 / 引擎没起 / 窗口没填满）。
 **量不到就响亮失败**，绝不输出半张表——半张表会被读成"这一臂没问题"。
@@ -40,6 +50,7 @@ configDir 注释），不写 golden，不存基线哈希。
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import re
@@ -48,7 +59,9 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from contextlib import redirect_stdout
 from pathlib import Path
+from statistics import median
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import smoke  # 采集层复用：staging / patch_lua / 单实例检查 / error 计数 / 设备行 / git 现场
@@ -138,6 +151,31 @@ FIXED_SEGMENTS = (
     "drawFrame.capture", "drawFrame.collect", "drawFrame.picking", "drawFrame.cmdEnd",
     "fenceWait", "acquire", "submit", "present",
 )
+
+# ── 会话内噪声带（债-112 最小修法：把"同会话可重复性"随读数一起印出来）────────────────
+# 判据 = **带 ≤ max(AB_ABS_MS, AB_REL × 中位) ⟹ 该指标可拿来 A/B**。两个阈值不是拍的，锚在台账
+# 那组数上（`docs/还债总账.md` 债-112，2026-10-13 本机同代码四跑）：`frame_p50` 跨 0.69ms
+# （中位 ≈5.4ms ⟹ 判据线 0.11ms）**必须判不可**；同期 `shadow` 合计跨 0.014ms、`geometry` 跨
+# 0.019ms（判据线 = 0.05ms 绝对地板）**必须判可**。判据要复现的正是"同一张表里有的指标能 A/B、
+# 有的不能"。绝对地板 0.05ms 的理由：本仓性能问题的最小关心粒度是 0.1ms 级（债-112 原文），带
+# 不到它一半 = 这个量级的差异不会被带吃掉；相对项 2% 的理由：大指标（cpu.record 28ms）的绝对带
+# 天然大，纯绝对判据会把"在 28ms 上分辨 1ms"误判成不可 A/B。
+# 🔴 这是**提示不是闸门**：不出 error、不阻断、不改判定。带只量"同配置同会话的可重复性"，它
+#    盖不住跨会话漂移（换会话仍要先复测），也不保证归因正确（一个很稳的指标照样可能被别的东西
+#    带着动 —— 例如 cull.fenceWait 稳如磐石，但它跟着 gpu.frame 走，不是你要改的那个东西）。
+AB_ABS_MS = 0.05
+AB_REL = 0.02
+# n=2 的"带"只是两点差（极差估 σ 还要除 d2≈1.128），当不了判据 ⟹ 只印带不印结论。
+MIN_BAND_RUNS = 3
+# 噪声带表里固定点名的关键读数（顺序 = 打印顺序）；pass / seg 行由代表跑动态补齐。
+# 值 = 打印标签（ASCII 为主：带表要按列对齐，CJK 宽度对不齐）。
+BAND_KEYS = ("frame_p50", "frame_avg", "cpu_record", "gpu_frame", "cull_stall", "frame_wait",
+             "cpu_useful")
+BAND_LABELS = {
+    "frame_p50": "frame_p50", "frame_avg": "frame_avg", "cpu_record": "cpu.record",
+    "gpu_frame": "gpu.frame", "cull_stall": "cull.fenceWait", "frame_wait": "frame.fenceWait",
+    "cpu_useful": "cpu_useful", "unattr_p50": "unattr_p50", "unattr_max": "unattr_max",
+}
 
 
 class ArmFail(RuntimeError):
@@ -403,7 +441,126 @@ def report(arm: str, zones: dict, top: dict, unattr: dict, info: dict) -> dict:
             "errors": info["errors"], "warnings": info["warnings"]}
 
 
-def compare(arm: str, cur: dict, base: dict) -> None:
+def flat_metrics(s: dict) -> dict[str, float | None]:
+    """一臂读数摊平成 {指标标签: ms}——噪声带逐指标算的就是这张表（值来自 summarize，不另立口径）。"""
+    out: dict[str, float | None] = {BAND_LABELS[k]: s.get(k) for k in BAND_KEYS}
+    un = s.get("unattributed") or {}
+    out[BAND_LABELS["unattr_p50"]] = un.get("p50_ms")
+    out[BAND_LABELS["unattr_max"]] = un.get("max_ms")
+    for key, v in (s.get("zones") or {}).items():  # 键形如 "cpu|geometry" → 标签 "cpu:geometry"
+        kind, _, name = key.partition("|")
+        out[f"{kind}:{name}"] = v
+    return out
+
+
+def band_order(zones: dict) -> list[str]:
+    """带表的行序：关键读数 → pass（**GPU 在前**，债-112 的"读直接消费者的 GPU zone"）→ cull 四段 → 固定段。"""
+    order = [BAND_LABELS[k] for k in BAND_KEYS]
+    order += [BAND_LABELS["unattr_p50"], BAND_LABELS["unattr_max"]]
+    for name in pass_names(zones):
+        order += [f"gpu:{name}", f"cpu:{name}"]
+    order += [f"cpu:{n}" for n in CULL_STEPS]
+    order += [f"cpu:{n}" for n in FIXED_SEGMENTS]
+    return order
+
+
+def noise_bands(flats: list[dict]) -> dict[str, dict]:
+    """逐指标噪声带：同配置 n 次连跑 ⟹ 带 = max−min。
+
+    🔴 n<2 **不出带**（lo/hi/spread 一律 None、判据写"缺测"）——把"没测"印成"噪声带 0.000ms"
+    会被读成"这个指标很稳"，比不印更糟。n 在 [2, MIN_BAND_RUNS) 之间只印带不印 A/B 结论。
+    """
+    out: dict[str, dict] = {}
+    for key in dict.fromkeys(k for f in flats for k in f):
+        vals = [f[key] for f in flats if isinstance(f.get(key), (int, float))]
+        n = len(vals)
+        if n < 2:
+            out[key] = {"n": n, "lo": None, "hi": None, "med": None, "spread": None, "rel": None,
+                        "verdict": f"缺测(n={n})"}
+            continue
+        lo, hi, med = min(vals), max(vals), median(vals)
+        spread = hi - lo
+        if n < MIN_BAND_RUNS:
+            verdict = f"样本不足(n={n})"
+        elif spread <= max(AB_ABS_MS, AB_REL * abs(med)):
+            verdict = "可 A/B"
+        else:
+            verdict = "带内不可 A/B"
+        out[key] = {"n": n, "lo": lo, "hi": hi, "med": med, "spread": spread,
+                    "rel": (spread / med) if med else None, "verdict": verdict}
+    return out
+
+
+def band_mark(b: dict | None) -> str:
+    """带表里的角标：空格 = 可 A/B · ✗ = 带太宽分辨不出 · ? = 样本不足或缺测（**别读成"稳"**）。"""
+    if not b:
+        return " "
+    return {"可 A/B": " "}.get(b["verdict"], "✗" if b["verdict"] == "带内不可 A/B" else "?")
+
+
+def print_bands(flats: list[dict], bands: dict, order: list[str]) -> None:
+    """把逐指标带打出来（advisory：只印数与提示，不参与任何判定、不阻断）。"""
+    n = len(flats)
+    ser = [f.get(BAND_LABELS["frame_p50"]) for f in flats]
+    print(f"    会话内连跑 {n} 次 · frame p50 逐次 = "
+          + " / ".join("—" if v is None else f"{v:.3f}" for v in ser))
+    print(f"    噪声带（带 = max−min · 中位 = {n} 次中位 · 判据：带 ≤ "
+          f"max({AB_ABS_MS}ms, {100 * AB_REL:.0f}%×中位) ⟹ 可 A/B）")
+    print(f"      {'指标':<24}{'中位':>9}{'带':>8}{'相对':>8}  判据")
+    for label in order:
+        b = bands.get(label)
+        if b is None:
+            continue
+        print(f"      {label:<24}{fmt(b['med'], 9)}{fmt(b['spread'], 8)}"
+              + (f"{100 * b['rel']:>7.1f}%" if b["rel"] is not None else "—".rjust(8))
+              + f"  {b['verdict']}")
+    ok = [k for k, b in bands.items() if b["verdict"] == "可 A/B"]
+    bad = sorted(((b["spread"], k) for k, b in bands.items() if b["verdict"] == "带内不可 A/B"),
+                 reverse=True)
+    print(f"    ⟹ 逐指标判据：可 A/B {len(ok)} · 不可 {len(bad)}"
+          + ("（不可的按带宽降序：" + " · ".join(f"{k} {s:.3f}" for s, k in bad[:6]) + "）"
+             if bad else ""))
+    if len(bands) > len(order):
+        extra = [k for k in bands if k not in set(order)]
+        if extra:
+            print(f"      （另有 {len(extra)} 个 zone 未点名，带在 --json 的 bands 里）")
+    print("      （带只量同配置同会话的可重复性：盖不住跨会话漂移，也不保证归因正确"
+          " → docs/cpu_perf_plan.md §1 条 4）")
+
+
+def report_arm(arm: str, runs: list[dict]) -> dict:
+    """一臂 = 同配置连跑 N 次（N=1 时输出与旧版逐字相同）。返回摘要（--json / --compare 用）。
+
+    主体读数取**代表跑** = `frame_p50` 最接近 n 次中位的那一次，而不是逐指标各取中位：派生量必须
+    自洽（`cpu 真干 = cpu.record − 两处等待`、`bound` 由 cpu/gpu 比出来），逐指标中位拼出来的是一台
+    不存在的机器。带是**额外印出来**的东西，一毫米都不改主体口径。
+    """
+    sums = [{**summarize(r["zones"], r["top"]), "unattributed": r["unattr"]} for r in runs]
+    p50 = [s["frame_p50"] for s in sums]
+    idx = 0
+    if len(p50) > 1 and all(isinstance(v, (int, float)) for v in p50):
+        idx = min(range(len(p50)), key=lambda i: abs(p50[i] - median(p50)))
+    s = report(arm, runs[idx]["zones"], runs[idx]["top"], runs[idx]["unattr"], runs[idx]["info"])
+    flats = [flat_metrics(x) for x in sums]
+    out = {**s, "repeat": len(runs), "rep_run": idx, "runs": flats, "bands": {}}
+    out["stats_file"] = runs[idx]["stats"]
+    out["stats_files"] = [r["stats"] for r in runs]
+    # 各次跑的测点必须一致，否则"带"量的是两件不同的事（尺寸漂 = 可见集漂 = 根本不是同一台机器）
+    if len({r["info"]["extent"] for r in runs}) > 1 or len({r["info"]["device"] for r in runs}) > 1:
+        devs = " / ".join(sorted({r["info"]["device"] for r in runs}))
+        exts = " / ".join(sorted({r["info"]["extent"] for r in runs}))
+        print(f"    ⚠ 各次跑的 device/render 尺寸不一致——测点在漂，带不可用：{devs} / {exts}")
+    # 非代表跑的 error 行不能被"代表"掉：任何一次跑出错都要出声（只印首行，全量在日志里）
+    for i, r in enumerate(runs):
+        if i != idx and r["info"]["error_lines"]:
+            print(f"    [error] 第 {i + 1} 次跑：{r['info']['error_lines'][0]}")
+    if len(runs) >= 2:
+        out["bands"] = noise_bands(flats)
+        print_bands(flats, out["bands"], band_order(runs[idx]["zones"]))
+    return out
+
+
+def compare(arm: str, cur: dict, base: dict, bands: dict | None = None) -> None:
     """与上次读数逐项对差（改渲染/改代码后的验收位；只报数不判好坏）。"""
     keys = ("frame_p50", "cpu_record", "gpu_frame", "cull_stall", "frame_wait", "cpu_useful",
             "draws", "cmds")
@@ -416,7 +573,124 @@ def compare(arm: str, cur: dict, base: dict) -> None:
         w = "d" if isinstance(a, int) and isinstance(b, int) else ".3f"
         d = a - b
         pct = f"{100 * d / b:+6.1f}%" if b else "     —"
-        print(f"      {k:<12} {b:>{10}{w}} → {a:>{10}{w}}  Δ{d:>+8.3f} ({pct})")
+        line = f"      {k:<12} {b:>{10}{w}} → {a:>{10}{w}}  Δ{d:>+8.3f} ({pct})"
+        # 带只在 --repeat≥2 时存在（旧基线 JSON 没有 bands 键也走这条路）：Δ 与"同配置连跑的带"
+        # 同量级 = 这次对差分辨不出改动，别记成退化/收益。🔴 仍是提示，不改判定。
+        bd = (bands or {}).get(BAND_LABELS.get(k, k))
+        if bd and bd.get("spread") is not None:
+            line += (f"   ⟂ 本臂带 {bd['spread']:.3f}"
+                     + ("（Δ 在带内 = 分辨不出）" if abs(d) <= bd["spread"] else "（Δ 超带）"))
+        print(line)
+
+
+def selftest() -> int:
+    """量具自检（`just cpu --selftest`，毫秒级、**不碰 GPU / 不碰配置**）——债-112 的常驻护栏。
+
+    为什么 Python 工具也要自检：`just test` 只覆盖 C++ 侧，而本文件的纯函数那半（带 / 判据 /
+    代表跑 / 缺测）没有断言就等于没有——判据被改坏是**静默的**（照样出一张表，只是把不可 A/B 的
+    指标印成"可 A/B"，正是本工具要防的那类错）。三条锚：
+      ① 台账那组数（债-112）：`frame_p50` 跨 0.69ms 必须判不可、`shadow`/`geometry` 必须判可；
+      ② **默认口径逐字不变**：n=1 时 `report_arm` 的输出必须与 `report` 逐字节相同（带表一行都不许漏进默认路径）；
+      ③ 样本不足不许伪装成"很稳"：n<2 不出带、n=2 不出判据。
+    """
+    bad: list[str] = []
+
+    def check(name: str, ok: bool, extra: str = "") -> None:
+        print(f"  {'ok  ' if ok else 'FAIL'} {name}{'' if ok else '   ' + extra}")
+        if not ok:
+            bad.append(name)
+
+    def make(seed: int, p50: float, shadow: float, geom: float, drop: str | None = None,
+             gshadow: float | None = None, ggeom: float | None = None) -> dict:
+        """合成一臂读数（形状 = load_zones/unattributed 的产物，值随便给：自检只验判据不验数值）。
+
+        🔴 **`shadow`/`geom` 是 `cpu:` 录制段，`gshadow`/`ggeom` 是 `gpu:` pass 段，两者不可混**。
+        债-112 那组 0.014 / 0.019 是 **GPU zone** 的跨度（`docs/mdi_plan.md` 原文"而 GPU zone
+        四次波动 0.014ms"），把它们挂到 `cpu:` 上会造出一条**说反话的锚**：本晚实测
+        `cpu:geometry` 同会话带 **0.21ms**（判不可），而 `gpu:geometry` 只有 0.002ms（判可）
+        —— 差两个量级，正是 §1 条 4 那句"读直接消费者的 GPU zone"的全部依据。
+        """
+        zones = {
+            ("cpu", "drawFrame"): {"mean_ms": p50 - 0.1}, ("gpu", "gpu.frame"): {"mean_ms": 5.35},
+            ("cpu", "geometry"): {"mean_ms": geom},
+            ("gpu", "geometry"): {"mean_ms": geom / 1.7 if ggeom is None else ggeom},
+            ("cpu", "shadow1"): {"mean_ms": shadow},
+            ("gpu", "shadow1"): {"mean_ms": shadow / 4 if gshadow is None else gshadow},
+            ("cpu", "fenceWait"): {"mean_ms": 0.022}, ("cpu", "present"): {"mean_ms": 0.011},
+        }
+        if drop:
+            del zones[("cpu", drop)]
+        top = {"frames": 120, "drops": 0, "frame_ms": {"p50_ms": p50, "avg_ms": p50 + 0.02},
+               "counters": {"draw.count": {"min": 6601, "max": 6601},
+                            "vkcmd.count": {"min": 19994, "max": 19994}}}
+        return {"zones": zones, "top": top,
+                "unattr": {"frames": 120, "mean_ms": 0.003, "p50_ms": 0.003, "max_ms": 0.004},
+                "info": {"device": "自检", "extent": "1280x720", "errors": 0, "warnings": 0,
+                         "error_lines": []},
+                "stats": f"stats_{seed}.json"}
+
+    def arm(runs: list[dict]) -> tuple[str, dict]:
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            out = report_arm("default", runs)
+        return buf.getvalue(), out
+
+    print("=== cpu_baseline 自检（合成读数，不跑引擎）")
+    one = make(1, 14.07, 3.08, 3.99)
+    old = io.StringIO()
+    with redirect_stdout(old):
+        report("default", one["zones"], one["top"], one["unattr"], one["info"])
+    text1, out1 = arm([one])
+    check("n=1 输出与 report() 逐字节相同（默认口径没被带表污染）", old.getvalue() == text1)
+    check("n=1 不印带（bands 空 = --json 里也不出带）", out1["bands"] == {} and "噪声带" not in text1)
+    check("n=1 stats_file 语义不变（= 唯一那次跑的 stats）", out1["stats_file"] == "stats_1.json")
+
+    _, out2 = arm([make(1, 14.07, 3.08, 3.99), make(2, 13.90, 3.09, 3.98)])
+    two = [b for b in out2["bands"].values() if b["n"] == 2]
+    check("n=2 只印带不印 A/B 结论", bool(two) and all(b["verdict"].startswith("样本不足")
+                                                  for b in two))
+
+    # ① 台账锚（债-112 同代码四跑：`frame_p50` 跨 0.693ms；GPU zone 的 shadow 合计跨 0.014、
+    #    geometry 跨 0.019 → `docs/mdi_plan.md` 原文"而 GPU zone 四次波动 0.014ms"）。
+    #    🔴 第四条是本晚实测补的**反向锚**：`cpu:geometry` 同会话带 0.215ms 判**不可** ——
+    #    同一份 geometry 数据，GPU 侧可 A/B、CPU 侧不可，差两个量级。少了这条，判据被改成
+    #    "什么都判可" 时前三条锚可能照样绿（它们全是小数值），有了它才锚住 §1 条 4 的实质。
+    _, out4 = arm([make(i, p, 3.08, cg, gshadow=gs, ggeom=gg) for i, (p, cg, gs, gg) in enumerate(
+        [(5.729, 3.985, 1.512, 3.980), (5.712, 3.900, 1.507, 3.975),
+         (5.338, 4.050, 1.521, 3.994), (5.036, 3.835, 1.512, 3.978)], 1)])
+    b4 = out4["bands"]
+    check("台账锚：frame_p50 跨 0.693ms → 判不可 A/B", b4["frame_p50"]["verdict"] == "带内不可 A/B",
+          str(b4["frame_p50"]))
+    check("台账锚：gpu:shadow1 跨 0.014ms → 判可 A/B", b4["gpu:shadow1"]["verdict"] == "可 A/B",
+          str(b4["gpu:shadow1"]))
+    check("台账锚：gpu:geometry 跨 0.019ms → 判可 A/B", b4["gpu:geometry"]["verdict"] == "可 A/B",
+          str(b4["gpu:geometry"]))
+    check("反向锚：cpu:geometry 跨 0.215ms → 判不可 A/B（同指标 GPU 侧可、CPU 侧不可）",
+          b4["cpu:geometry"]["verdict"] == "带内不可 A/B", str(b4["cpu:geometry"]))
+    check("代表跑 = p50 居中那次（派生量自洽的前提）", out4["rep_run"] in (1, 2), str(out4["rep_run"]))
+    check("主体读数是真实一次跑（cpu 真干 = cpu.record − 两处等待）",
+          abs(out4["cpu_useful"] - (out4["cpu_record"] - out4["frame_wait"])) < 1e-9)
+
+    # ③ 缺测：某次跑没有该 zone → 只有一条样本，绝不能印成"带 0.000 = 很稳"
+    _, out3 = arm([make(1, 14.0, 3.08, 3.99), make(2, 14.0, 3.08, 3.99, drop="present"),
+                   make(3, 14.0, 3.08, 3.99, drop="present")])
+    miss = out3["bands"]["cpu:present"]
+    check("缺测(n=1) 不出带值（verdict 点名缺测、spread=None）",
+          miss["verdict"] == "缺测(n=1)" and miss["spread"] is None, str(miss))
+
+    drift = [make(1, 14.0, 3.08, 3.99), make(2, 14.0, 3.08, 3.99)]
+    drift[1]["info"]["extent"] = "1600x900"
+    text5, _ = arm(drift)
+    check("各次跑测点尺寸不一致要出声（带不可用）", "测点在漂" in text5)
+
+    old_fmt = io.StringIO()
+    with redirect_stdout(old_fmt):
+        compare("default", out1, out1, {})
+    check("compare 无带时不追加任何标注（旧 --compare 输出不变）",
+          "⟂" not in old_fmt.getvalue() and "Δ vs 基线" in old_fmt.getvalue())
+
+    print("=== 自检 " + ("全部通过" if not bad else f"FAIL：{bad}"))
+    return 1 if bad else 0
 
 
 def main() -> int:
@@ -425,15 +699,28 @@ def main() -> int:
     ap.add_argument("--window", type=int, default=120, help="profiler 帧窗口（默认 120）")
     ap.add_argument("--warmup", type=int, default=40, help="窗口前丢弃的帧数（默认 40）")
     ap.add_argument("--timeout", type=int, default=240, help="单臂等帧数上限秒（默认 240）")
+    # 默认 None（不是 1）= 分得清"没要带"与"明说要 1 次"：后者要出声（N=1 没有带，别让人以为
+    # 表上没写带就是"很稳"）。repeat=1 时输出与旧版逐字相同。
+    ap.add_argument("--repeat", type=int, default=None,
+                    help="同配置连跑 N 次 → 逐指标噪声带（债-112）；默认 1 = 不印带、口径逐字不变")
     ap.add_argument("--json", type=Path, help="把读数写到该路径")
     ap.add_argument("--compare", type=Path, help="与该基线 JSON 逐项对差")
     ap.add_argument("--list-arms", action="store_true", help="列出臂表并退出")
+    ap.add_argument("--selftest", action="store_true",
+                    help="只跑量具自检（合成读数，不碰 GPU / 不碰配置，毫秒级）并退出")
     a = ap.parse_args()
+
+    if a.selftest:
+        return selftest()
 
     if a.list_arms:
         for name, (why, _) in ARMS.items():
             print(f"{name:<12} {why}")
         return 0
+
+    repeat = 1 if a.repeat is None else a.repeat
+    if repeat < 1:
+        smoke.fail("--repeat 要 ≥1（0 次跑不出任何东西，含噪声带）")
 
     arms = [x.strip() for x in a.arms.split(",") if x.strip()]
     unknown = [x for x in arms if x not in ARMS]
@@ -445,20 +732,39 @@ def main() -> int:
     port_free_or_die(RPC_PORT)
     print(f"[cpu] {smoke.git_state()} · 窗口 {a.window} 帧 / 热身 {a.warmup} 帧 · 臂 {arms}")
     print("[cpu] 串行跑（并行 = 读数作废），每臂约 15~25s，启动本身约 10s")
+    if a.repeat == 1:
+        print(f"[cpu] --repeat 1：**单次跑，无噪声带**（N≥2 才有带、N≥{MIN_BAND_RUNS} 才出 A/B 判据，建议 4）")
+    elif repeat >= 2:
+        print(f"[cpu] 每臂同配置连跑 {repeat} 次 = 墙钟约 ×{repeat}"
+              f"（{len(arms)} 臂 × {repeat} 次 = {len(arms) * repeat} 次引擎跑）；带随读数打印")
 
+    wall0 = time.monotonic()
     results: dict[str, dict] = {}
     failed: list[str] = []
     for arm in arms:
-        try:
-            stats, trace, info = run_engine(arm, a.window, a.warmup, a.timeout)
-            zones, top = load_zones(stats)
-            if top["frames"] < a.window:
-                raise ArmFail(f"窗口只填了 {top['frames']}/{a.window} 帧——读数不可用")
-            results[arm] = report(arm, zones, top, unattributed(trace), info)
-            results[arm]["stats_file"] = stats.name
-        except ArmFail as e:
+        runs: list[dict] = []
+        why: str | None = None
+        for i in range(repeat):
+            if i:  # 连跑之间同样要单实例（上一臂没退干净 = 后面所有读数作废）
+                smoke.single_instance_or_die()
+            try:
+                stats, trace, info = run_engine(arm, a.window, a.warmup, a.timeout)
+                zones, top = load_zones(stats)
+                if top["frames"] < a.window:
+                    raise ArmFail(f"窗口只填了 {top['frames']}/{a.window} 帧——读数不可用")
+                runs.append({"zones": zones, "top": top, "unattr": unattributed(trace),
+                             "info": info, "stats": stats.name})
+            except ArmFail as e:
+                # 失败通常是环境问题（引擎没起 / 端口被占 / 窗口没填满），连跑只会连败 ⟹ 不烧时间
+                why = f"{e}" if repeat == 1 else f"第 {i + 1}/{repeat} 次跑失败：{e}"
+                break
+        if runs:
+            results[arm] = report_arm(arm, runs)
+        if why:
             failed.append(arm)
-            print(f"\n=== 臂 {arm} FAIL: {e}")
+            print(f"\n=== 臂 {arm} FAIL: {why}"
+                  + (f"（已量到的 {len(runs)} 次照常打印，带按 n={len(runs)} 出）"
+                     if runs and repeat > 1 else ""))
         # 下一臂起跑前再确认没有残留进程（残留 = 两实例争用 = 后面所有臂的读数作废）
         smoke.single_instance_or_die()
     if results:
@@ -470,16 +776,30 @@ def main() -> int:
             print(f"    {arm:<12}{fmt(s['frame_p50'], 8)}{fmt(s['cpu_record'], 9)}"
                   f"{fmt(s['gpu_frame'], 8)}{fmt(sum(waits) if waits else None, 8)}"
                   f"{fmt(s['cpu_useful'], 9)}{str(s['draws']):>8}{str(s['cmds']):>8}  {s['bound']}")
+    if repeat >= 2 and results:
+        # 关键指标的带单独再来一张表：汇总表的读数来自代表跑，读者第一反应是"这数能信几毛"，
+        # 这张表就是回答它的（✗ = 该指标的带盖不住 0.1ms 级差异，别拿它 A/B）。
+        cols = ("frame_p50", "cpu_record", "gpu_frame", "cpu_useful")
+        print("\n=== 会话内噪声带（同配置连跑，带 = max−min ms）")
+        print(f"    {'arm':<12}{'n':>3}" + "".join(f"{BAND_LABELS[c]:>12}" for c in cols)
+              + "   （✗ = 带太宽分辨不出 · ? = 样本不足）")
+        for arm, s in results.items():
+            cells = "".join(f"{fmt((s['bands'].get(BAND_LABELS[c]) or {}).get('spread'), 11)}"
+                            f"{band_mark(s['bands'].get(BAND_LABELS[c]))}" for c in cols)
+            print(f"    {arm:<12}{s['repeat']:>3}{cells}")
     if a.compare and a.compare.is_file():
         base = json.loads(a.compare.read_text(encoding="utf-8"))["arms"]
         for arm, s in results.items():
             if arm in base:
-                compare(arm, s, base[arm])
+                compare(arm, s, base[arm], s.get("bands"))
     if a.json:
         payload = json.dumps({"git": smoke.git_state(), "arms": results},
                              ensure_ascii=False, indent=1)
         a.json.write_text(payload, encoding="utf-8")
         print(f"\n[cpu] 读数已写 {a.json}")
+    if repeat >= 2:
+        # 开销诚实：带是拿墙钟换的，全臂 ×N 要多久印出来，让人自己选 N（口径不因此改变）。
+        print(f"\n[cpu] 本次墙钟 {time.monotonic() - wall0:.1f}s（{len(arms)} 臂 × {repeat} 次，串行）")
     if failed:
         smoke.fail(f"这些臂没量到：{failed}")
     return 0
