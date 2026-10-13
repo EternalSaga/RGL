@@ -717,8 +717,12 @@ export class ShaderRegistry {
 			// mesh 换 shadow_meshlet.mesh_MDI_SHADOW.spv（push word0 = rowBase + binding 34
 			// 读 24B 行表）。🔴 **表尾纯追加**（同上方 shadow_meshlet 当年的加法）：旧
 			// "shadow_meshlet" 规格一字未动 = 门关/出厂选的还是今天那份 SPV、那条条目。
+			// ★M-3T-a（docs/mdi_plan.md §19.16）：第四元素 = taskSpv。本条目的 mesh 变体**不再
+			// 声明** `SV_DrawIndex`（§19.9 实测它在 mesh 入口毒化 gfx1151 后续 mesh draw），行号与
+			// 派发序号由这枚 task 经 payload 转交 ⟹ 挂 task 是这条条目的**正确性前提**，不是可选项。
 			{"shadow_meshlet_mdi", "generated_shaders/shadow_meshlet.mesh_MDI_SHADOW.spv",
-				"generated_shaders/shadow.frag.spv"},
+				"generated_shaders/shadow.frag.spv",
+				"generated_shaders/shadow_meshlet.task.spv"},
 			{"izb_mask", "generated_shaders/izb_mask.mesh.spv",
 				"generated_shaders/izb_mask.frag.spv"},
 			{"ao", "generated_shaders/light.mesh.spv",

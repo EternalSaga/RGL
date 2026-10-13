@@ -20,6 +20,12 @@ export struct PipelineSpec {
 	std::string name;    // "cube" / "model"
 	std::string meshSpv; // mesh shader SPV 相对路径
 	std::string fragSpv; // fragment shader SPV 相对路径
+	/** task stage 的 SPV 相对路径（★M-3T-a，docs/mdi_plan.md §19.16）。
+	 *  🔴 **空 = 无 task stage**（= 改前形态：两条 createInfo + `NO_TASK_SHADER_BIT`）。
+	 *  本字段是聚合**末尾**追加 + 带默认成员初始化器 ⟹ 既有全部三元素 brace-init 点不到它。
+	 *  🔴 `= {}` 不是可选写法：本构建开 `-Werror,-Wmissing-field-initializers`，不带 DMI 则
+	 *  20 处三元素 brace-init 当场编不过（实测；带 DMI 后该规则不对"有默认值的成员"出声）。 */
+	std::string taskSpv = {};
 };
 
 /**

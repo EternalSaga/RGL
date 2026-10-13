@@ -80,6 +80,7 @@ set(RGL_TEST_SOURCES
                                  # + ★M-1a（§19.5）尺寸/偏移算术：🔴 argsOffset 与 rowBase 同源 + 07089/07090 合一闭式边界 + 容量少 1 字节必红
     test_mdi_shadow_emit.cppm    # ★M-1b（§19.2 D4 / §19.5）生效档采集判据：constexpr 桥（schema↔mdi_rows）+ 每级联一条 MDI + 同源 pair 闭式字面 + 混合形态/孔洞流/五档回落 + 行序=候选序
                                  # + ★M-1a（§19.5）尺寸/偏移算术：🔴 argsOffset 与 rowBase 同源 + 07089/07090 合一闭式边界 + 容量少 1 字节必红
+    test_shader_mapping.cppm     # ★M-3T-a（§19.16）批 M mapping 过滤契约：🔴 无 task stage 不得判成解析失败（实踩：479 条误退全烘而终图逐位不变）+ task 声明进并集 + 三侧坏码流各触发 nullopt + 消费者侧条数与 running index 序
     test_meshlet_hand.cppm       # ★0.5-c UV 手性 CPU 参考 + 簇→三角寻址：闭式五形态锚点 + 跨簇偏移混淆四变异 + 8bit 断言 + Lcg 公式对拍
     test_shadow_forward.cppm     # shadow.slang 选级 forward 提取式数学恒等（invVP 列叉积，5a-8c 回归，12.3d-C）
     test_ssr_viewproj.cppm       # 批 15.1 SSR 尾区 @723712：字节布局互逆 + 抖动口径闭式差量（fillSsrViewProj 接缝）
@@ -131,6 +132,9 @@ compile_slang("${CMAKE_CURRENT_SOURCE_DIR}/shaders/mdi_shadow_rows.mesh.slang" M
 compile_slang("${CMAKE_CURRENT_SOURCE_DIR}/shaders/mdi_task_probe.task.slang" MDI_TASK_PROBE_TASK_SPV)
 compile_slang("${CMAKE_CURRENT_SOURCE_DIR}/shaders/mdi_task_probe.mesh.slang" MDI_TASK_PROBE_MESH_SPV)
 compile_slang("${CMAKE_CURRENT_SOURCE_DIR}/shaders/mdi_task_probe_guard.mesh.slang" MDI_TASK_PROBE_GUARD_MESH_SPV)
+# 批 M mapping 过滤用例（tests/test_shader_mapping.cppm）的 task 判据产物：唯一职责 = 声明一个
+# tests 里所有 mesh/frag 都不声明的 binding 3，好让"task 的声明漏进/漏出并集"两种实现给出不同集合。
+compile_slang("${CMAKE_CURRENT_SOURCE_DIR}/shaders/mapping_task.task.slang" MAPPING_TASK_TASK_SPV)
 # descriptor heap × UBO 能力 spike（tests/test_descriptor_heap_ubo.cppm）：
 # 主判据体 + 阳性对照体（同 binding/同 heap，只差读哪个成员/索引）
 compile_slang("${CMAKE_CURRENT_SOURCE_DIR}/shaders/dheap_ubo.comp.slang" DHEAP_UBO_COMP_SPV)
@@ -170,6 +174,7 @@ target_sources(rgl_tests PRIVATE ${IZB_SPIKE_MESH_SPV} ${IZB_SPIKE_FRAG_SPV}
     ${MDI_SPIKE_MESH_SPV} ${MDI_SPIKE_FRAG_SPV} ${MDI_GROUPS_MESH_SPV}
     ${MDI_SHADOW_ROWS_MESH_SPV}
     ${MDI_TASK_PROBE_TASK_SPV} ${MDI_TASK_PROBE_MESH_SPV} ${MDI_TASK_PROBE_GUARD_MESH_SPV}
+    ${MAPPING_TASK_TASK_SPV}
     ${DHEAP_UBO_COMP_SPV} ${DHEAP_UBO_WRONG_COMP_SPV}
     ${DHEAP_STRIDE_COMP_SPV} ${DHEAP_STRIDE_WRONG_COMP_SPV})
 # 链接面：rlbase 之外**也**链 rlgfx/rlscene/rlframe（批 12.2d）。

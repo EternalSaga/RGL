@@ -1744,8 +1744,10 @@ spike 未覆盖两处之一 = "探针走经典 descriptor set + `vkCmdPushConsta
 | 批次 | 内容 | 判据（入账条件） | 渲染风险 |
 |---|---|---|---|
 | **★M-0 行表构建器** | `rgl/mdi_rows.cppm`(+`_impl`，**rlbase** 纯 CPU)：候选 + LOD 选级 + 逐级可见性 → 24B 行数组 + 聚合锚（Σ行 / Σtask / 空行数）；门 `meshlet.mdi_shadow`（默认 false）；**零消费者** | `just test` 全绿；行大小与"前 12B 恰是 `VkDrawMeshTasksIndirectCommandEXT`"由 `static_assert` + 用例**双钉**；stride 合法性（4 的倍数 ≥12）成断言；行序 = 候选序（打乱输入必须红）；不可见行 `gcX=0` **且其余字段照写**（否则红了无法定位是哪一行）；出厂/门关两锚不变（本批不碰渲染） | **零** |
-| **★M-1 GPU 载体 + shader 变体 + 执行器** | `MeshletShadowArgsService`（rlscene，ring×2 + heap 槽）；`shadow_meshlet.mesh.slang` 的 `MDI_SHADOW` 变体（binding 22 读行 + `SV_DrawIndex`）；`addShadowMeshletMdiEntry`（多烘一槽）；`DrawCall` 两字段 + `drawOne` MDI 分支；`emitShadowCasters` 每级联改发 1 条 MDI；profiler 新口径 | A1 门关 = `54e40665…`；A2 出厂默认 = `95edc8cc…`；🔴 **A3 主判据 = `mdi_shadow=true` vs 不给，终图逐位相同**；A4 阳性对照（强制全剔 ⟹ c1..c3 影子消失）；A5 收益判据（`mdi.count` = 生效级联数、`mdi.rows` = 启动对账给的闭式锚、`vkcmd.count` 相应下降）；A6 `cull_replay` 三档 + `--sync` syncval errors=0；A7 build/test/test-all/checks --strict/reflect 全绿 | 中（门关构造性不动） |
+| **★M-1 GPU 载体 + shader 变体 + 执行器** | `MeshletShadowArgsService`（rlscene，ring×2 + heap 槽）；`shadow_meshlet.mesh.slang` 的 `MDI_SHADOW` 变体（binding 22 读行 + `SV_DrawIndex`）；`addShadowMeshletMdiEntry`（多烘一槽）；`DrawCall` 两字段 + `drawOne` MDI 分支；`emitShadowCasters` 每级联改发 1 条 MDI；profiler 新口径 | A1 门关 = `54e40665…`；A2 出厂默认 = `95edc8cc…`；🔴 **A3 主判据 = `mdi_shadow=true` vs 不给，终图逐位相同**；A4 阳性对照（强制全剔 ⟹ c1..c3 影子消失）；A5 收益判据（`mdi.count` = 生效级联数、`mdi.rows` = 启动对账给的闭式锚、`vkcmd.count` 相应下降）；A6 `cull_replay` 三档 + `--sync` syncval errors=0；A7 build/test/test-all/checks --strict/reflect 全绿。🔴 **A3 在 STRIX 上本批不可达**（§19.9 毒化），由插队的 ★M-3T-a 转绿 → §19.16 | 中（门关构造性不动） |
 | **★M-2 三机结案** | 换 NVIDIA / Intel anv 各跑一遍 ★M-1 判据 + 债-81 剩余半 | 三机 `just test-gpu` 绿 + A3 逐位；台账债-81 改"三机已验" | 零 |
+| **★M-3T-a task 化**（✅ **已落地 §19.16**，2026-10-13） | 为绕 §19.9 的 gfx1151 毒化而插队：`SV_DrawIndex` 声明处从 mesh 搬进 task + `shadow_meshlet.task.slang` 纯中继（payload 转交 drawID/slot）+ 引擎侧可选 task stage（`PipelineSpec::taskSpv` / `RenderPipeline` 第三句柄 / `NO_TASK_SHADER_BIT` 条件化）。🔴 `gcX` **单位**变 task 数、**数值不变** ⟹ 行表/执行器/采集侧/A5 锚零改动 | **A3 在出事机由红转绿**（门开 = 门关 = `95edc8cc…`）；门关 mesh SPV 与 HEAD 重编逐字节同；task 产物两 builtin 计数 = 2；A5/A6/A7 全中；shader 侧两条变异各落在 §19.15 已记锚上；`TEST: tests/test_shader_mapping.cppm` | 中（门关构造性不动，已 `cmp` 钉住） |
+| **★M-3T-b mesh 循环化 ≤128**（未开工） | 两枚 mesh SPV 工作布局重写（每线程多顶点）+ `kMeshletMaxWorkGroupInvocations` 降档（🔴 该常量两条管线**共用** ⟹ 绕不过主 pass）| 红线 A `54e40665…` 各机**主动重锚**；门关/出厂锚逐位不变（循环化本身不换输出元素的算法，但 slang fp 重排**必须实测不许推定**）；NV 上 `vkCreateShadersEXT` 不再撞 VUID-07295/07298 | 高（动主 pass 红线） |
 | **★M-3 模型段（阶段 B）** | 🔴 **前置 = 先测 deferred 下真实桶数**（§1.2 的 312 是 2026-09-28 forward+picking 临时档读数，作废待重测）；分桶后按 §3 改 `material.slang` 的 DrawArgs 语义（**不动 DGC 布局**，P3） | 破逐位（P5 门开档）：闭式解对拍 + `diffblock` 形态判据 + 红线 A 主动重锚；门关逐位不变每批重跑 | 高（deferred 5 张 G-buffer，深度平局歧义，§5.5） |
 | **★M-4 GPU 写行表（阶段 C）** | 级联体积测试进 compute、直写 `gcX`（消 CPU 侧 `casterInShadowVolume`）；需要时才付压紧/前缀和那笔（§17.3） | 与 CPU 构建器**逐元素对账**（照 `meshlet_hand` 的"序，不是计数"口径） | 中高 |
 
@@ -2109,12 +2111,17 @@ gfx1036 仿真路上正确、gfx1151 上毒化 = STRIX_HALO 特有的仿真路�
   不改 mesh 线程数，task 路在 NV 上照样建不出来。ANV/RAPHAEL 已绿，无需救。
 - **真正要救的只有 STRIX**，而 task 路读 DrawIndex 是否绕开毒化 = **本机不可测**（RAPHAEL 不复现）
   ⟹ 只能带探针去 8060S 机。**✅ 已判毕（§19.15）：不毒化。**
-- ⟹ 唯一可能"三家都过"的形态 = **task 化 + mesh 循环化 ≤128 的组合手术**（一次重做两件事）：
-  task 读 DrawIndex + 查行 → payload 传 mesh；mesh 每线程多顶点。顺带得到 D3D12 便携形态
+- ⟹ 唯一可能"三家都过"的形态 = **task 化 + mesh 循环化 ≤128**（两件事）。顺带得到 D3D12 便携形态
   （128 线程 / 32 粒度；注意 NV `meshOutputPerVertex/PrimitiveGranularity=32`、`maxMeshOutputVertices=256`），
-  并解锁 NV 的 DGC execute 路。**代价一整批**：两枚 mesh SPV 工作布局重写 + 新 task 入口 +
-  `gcX` 语义从 mesh 组数换成 task 数（`kSlotsPerCluster=2` 是 mesh-only 设计的产物）+ A5 闭式锚重算 +
-  反射管线 + 逐位锚各机重立 + STRIX 机复测收线。
+  并解锁 NV 的 DGC execute 路。
+  **🔴 原本写"一次重做两件事"是错的，已拆两批（2026-10-13 落地时拍板）**：两件事**耦合点为零**
+  （task 化不需要 ≤128，≤128 也不需要 task），而 ≤128 的影响面大一个量级——`meshlet.mesh.slang`
+  （主 pass，红线 A `54e40665…`）同样声明 `[numthreads(256)]`，且 `kMeshletMaxWorkGroupInvocations = 256`
+  在 `rgl/shaders/meshlet_cull_schema.lua` 是**两条管线共用**的唯一真相源 ⟹ 降 128 必然动主 pass +
+  schema + 分管线闸门，并在每台机器重锚红线 A。捆在一起 = 把"能转绿的判据"和"会破红线 A 的改动"
+  混进同一次验收。拆分后：
+  - **★M-3T-a = task 化**（✅ **已落地 §19.16**，本机 A3 由红转绿，逐位锚零改动）——解 STRIX 毒化。
+  - **★M-3T-b = mesh 循环化 ≤128**（未开工）——解 NV 的 `vkCreateShadersEXT` 超规墙，要重锚红线 A。
 - **拍板前建议的廉价前置**（本机半日）：写机制探针（task 读 DrawIndex → payload → mesh≤128，
   经 `vkCmdDrawMeshTasksIndirectEXT`，复用 mdi 测试 rig 形态）先在本机三设备跑绿；然后去 STRIX 机
   跑同一探针决定 task 路对 gfx1151 是否有救。
@@ -2143,7 +2150,7 @@ NV 越界读坑；`[numthreads(1,1,1)]` 全档 ≤ NV 的 128）：
 | rig 层 `task_probe_poison_guard` 能不能判 task 路有没有救 | **不能**（守卫"绿"与"rig 根本测不出"不可分辨） | §19.13 |
 | `DrawIndex` 声明在 **task** 入口是否也毒化同提交后续 mesh draw（gfx1151） | ✅ **不毒化** ⟹ **选项② 成立** | §19.15（G-buffer ch0/ch3 逐位相同 + 探测器同 session 会响） |
 | task→mesh payload 通路 + `SV_DrawIndex` 是否 = 段内行号（gfx1151） | ✅ **通**（阴影几乎复原，残差仅 2721 px） | §19.15 附加实验 |
-| 下一步 | 立"task 化 + mesh ≤128 循环化"组合手术批（NV 的 256>128 墙仍在，那一批一并解） | §19.15 末「下一批的输入事实」 |
+| 下一步 | ~~立"task 化 + mesh ≤128 循环化"组合手术批~~ → **已拆两批、第一批已落地**：★M-3T-a task 化 ✅（本机 A3 转绿）、★M-3T-b mesh ≤128 未开工（NV 的 256>128 墙那一批解） | §19.16 |
 
 **提 Mesa issue 的靶（§19.12 修正后）**：gfx1151（Strix Halo）+ mesh 入口声明 `DrawIndex` 毒化
 同提交后续 mesh draw；**同版本 Mesa 的 RAPHAEL（gfx1036）逐位绿 = 现成对照证据**。
@@ -2451,3 +2458,108 @@ DMI、NO_TASK 反向 VUID、nextStage 链）全部落在 §19.14 + 本节，那�
 （`maxPreferredTaskWorkGroupInvocations=64`、granularity 1/1、`maxTaskPayloadSize=16384`）
 ⟹ 组合手术把 mesh 降到 128 线程**不只是迁就 NV 的硬上限**，RADV 自己的推荐档也是 128。
 其余数值（含 payload 预算 16KiB）不再抄进文档——按上面的现读口读。
+
+---
+
+### 19.16 ★M-3T-a 落地：**task 化上线，A3 主判据在出事机由红转绿**（2026-10-13 实测，机器 = 出事机 8060S / RADV STRIX_HALO / Mesa 26.2.3）
+
+**一句话**：把 `SV_DrawIndex` 的声明处从 **mesh** 入口搬进 **task** 入口之后，`meshlet.mdi_shadow=true`
+与门关**终图逐位相同**（`95edc8cc…`）——§19.9 那张"门开 = 主视图 bistro 整块消失"的红判据转绿。
+一条零阈值判据同时证明两件事：**没毒化**（主视图在）+ **MDI 语义等价**（阴影逐位对）。
+
+#### 形态：`gcX` 的**单位**变了、**数值**没变 ⟹ 行表/执行器/采集侧/A5 锚零改动
+
+| | 改前 | 改后 |
+|---|---|---|
+| MDI 行 `gcX` 的单位 | mesh 组数 | **task 数** |
+| 数值 | 2 × 选级后簇数（每簇固定 2 槽） | **同一个数**（每 task 恰好发 1 个 mesh group） |
+| mesh 拿行号 | 入口 `SV_DrawIndex` | `payload.drawID`（task 转交） |
+| mesh 拿派发序号 | 入口 `SV_GroupID.x` | `payload.slot`（task 转交） |
+
+🔴 **task 不是"多余的一层"**：spec 里 mesh 阶段的 `WorkgroupId` = "position within the **current mesh
+task**"，而本管线每 task 只发 1 组 ⟹ mesh 侧 `groupID.x` **恒 0**。旧派发契约里它承担的那一维
+（半区号 + 簇内偏移）**必须**由 task 的 `SV_GroupID`（= 本 draw 内 task 序号，取值域恰好等于旧
+`groupID.x`）经 payload 转交，否则每个 draw 只画第一个簇。§19.15 探针"阴影故意画错"的根因就是这条。
+
+改动 7 处：新增 `rgl/shaders/shadow_meshlet.task.slang`（纯中继，1 线程）·
+`shadow_meshlet.mesh.slang` 的 `MDI_SHADOW` 分支改收 payload（**非 MDI 分支逐 token 未动**）·
+`rgl/CMakeLists.txt` 加 task target（🔴 DEP 为空是对的：纯中继不 import，挂了就是假编译前置）·
+`PipelineSpec::taskSpv` / `ShaderEffect::taskStageSpv`（均**末尾追加 + `= {}`**）·
+`loadShaderEffect` 非空才读、读不到直接抛 · `RenderPipeline` 可选第三句柄 + `NO_TASK_SHADER_BIT`
+条件化 + `bindShaders` 第 5 槽 · 管线表 `shadow_meshlet_mdi` 加第四元素。
+另：`shader_hot_reload_impl.cppm` **跳过带 task 的条目**并出声（本工具只认 mesh+frag，重建会丢
+task ⟹ mesh 在等的 payload 无生产者 = 静默画错；热重载与 `mdi_shadow` 双双默认关，但"静默错"
+不在可接受形态里）。
+
+#### 判据结果（§19.3 的 A1–A7 全中）
+
+| 判据 | 读数 |
+|---|---|
+| A1/A2 门关 / 出厂 | `95edc8cc…` ✅ 不变 |
+| **A3 主判据** | 门开 = `95edc8cc…` **逐位相同** ✅（改前 = `b1c6afca…` 毒化） |
+| 门关 SPV 未被污染 | 与 `git HEAD` 版源码重编**逐字节相同**（`cmp` 过）✅ |
+| task 产物接口面 | `spirv-dis` 里 `BuiltIn DrawIndex` + `BuiltIn WorkgroupId` 计数 = **2** ✅ |
+| A4 阳性对照 | **构造性成立**：task 若没跑就没有 mesh 组 ⟹ c1..c3 影子消失 ⟹ 必不等于 `95edc8cc…`。A3 逐位绿本身即"task 真跑了且画对了" |
+| A5 收益 | `mdi.count=3`、`mdi.rows=4590`（= 启动对账闭式锚）、`vkcmd.count` **19994→6452**、`draw.count` 6601→6674（含空行，口径 D5） |
+| A6 | `cull_replay` 三档（`cpu`/`gpu_sync`/`gpu_lagged`）× `--sync` = **hazard 0 / errors 0** ✅ |
+| A7 | `just test` 419 例 / 93746 断言 · `just test-all` 457 例 / 118713 断言 · `checks --strict` 0 警告 · `reflect` 幂等 ✅ |
+| 句柄数 | `handles` 960 → **961**（多的那枚正是 task；口径已同步进 `ShaderObjectStats::handles` 注释） |
+
+#### 变异验红（shader 侧两条，各自落在 §19.15 **已记过**的锚上）
+
+| 变异 | 结果 | 含义 |
+|---|---|---|
+| `p.slot = 0u`（task 只搬 DrawIndex、不转交派发序号） | `0d0a17fc…` | = §19.15「payload 寻址」那一格 |
+| `p.drawID = 0u`（行号不转交） | `da768bfb…` | = §19.15「task 探针 drawID 恒 0」那一格 |
+
+两个维度各退化成一个**此前已独立观测到**的形态，比"随便红一下"强：说明实现路径没有第三条歧途。
+还原后复跑 A3 复绿。
+
+#### 代价读数（A3 逐位相同 ⟹ 内容完全一致，差异只可能来自派发形态）
+
+`frame_p50` **4.849 → 5.515ms**（+0.67）；`shadow1/2/3` 0.516/0.504/0.363 → **0.777/0.654/0.520**
+（合计 +0.57ms）。即：**本形态买到的是"能用"，不是"更快"**——命令数收益（`vkcmd` −68%）在 CPU 侧，
+而这台机器 GPU-bound，于是 GPU 侧多付的 task 开销直接进帧时间。
+**下一批（★M-3T-c）的量化目标因此明确**：task 从"每 mesh 组一个"改成"每 draw 一个"（task 读行表拿
+簇数、发 `DispatchMesh(2×簇数,1,1)`），每级联 task 数 5132 → 1530（3.4×），代价应大部分收回。
+代价 = `gcX` 语义真变成 task 数（行表构建器 + 采集侧 + A5 闭式锚要跟着重算，簇数得挪进保留 word）。
+
+#### 三条实测纠错 / 教训（带沉淀地址）
+
+1. **`§19.14` 那条"必须加不可折叠守卫防 DCE"是多余的**。实测：task 里 `p.drawID = drawID` 这类
+   **payload 输出存储**本身就足以让 `DrawIndex` 与 `WorkgroupId` 都留在接口里（pinned slangc 2026.16，
+   无守卫直接编出两个 `OpDecorate ... BuiltIn`）。原守卫防的是"只喂**死**存储"，而 task payload 是
+   输出接口、slang 看不见 mesh 侧就不敢裁。生产形态因此是干净中继。`DOC:`（本条）
+2. **"没有这个 stage"和"这个 stage 解析失败"不能用同一个值表示**。落地时两者都写成 `std::nullopt`
+   ⟹ 全部 **479 条**条目被误判成解析失败、退回全烘 + 启动刷屏，而**终图逐位不变**（全烘是"恒正确"
+   的失效方向）⟹ **A3 照样绿，唯一信号是人眼扫到 `warnings=479`**。修法 = 不存在的 stage 根本不进
+   列表（列表里没有 = 不存在，无需第三种状态）。
+   `TEST: tests/test_shader_mapping.cppm`（用例 1 直接钉这一格；五条变异实测全红）。
+   **可复用的判据学结论：逐位图像判据对"启动面/性能回归"和"朝正确方向失效的过滤"天然失明 ⟹ 验收
+   必须同时看 smoke 的 `warnings` 计数，不能只看哈希。**
+3. **纯函数就该在 `just test` 里测**：`declaredBindingsUnion` / `bakeBindingMappings` 不要 VkDevice，
+   按分层判据（"这段逻辑需不需要一个 VkDevice 才能跑"）从 `RenderPipeline` 构造函数抽成
+   `shaderDetail::` 具名函数并导出（顺带把构造函数从复杂度 28 / 103 行降到阈值内，样式 0 警告）。
+   判据产物 `tests/shaders/mapping_task.task.slang` 的唯一职责 = 声明一个 tests 里所有 mesh/frag
+   都不声明的 binding 3——**否则"task 的声明进不进并集"两种实现给出同一个集合，测不出来**（仓内既有
+   task 产物声明的 binding 0 与每个 mesh 产物重合，拿它是假绿）。
+
+#### 一条未归因的单像素离群（`DOC:`，别再当新账）
+
+门开首跑出现过一次 `c7d5ddf3…`：与基准差 **1 个像素**（`imgqa diffblock` bbox=`[697,319,1,1]`，
+仅 1 字节不同、不足 1 个 sRGB 亮度台阶，`U(2)=0` 判据 PASS）。此后 **16 次门开 + 4 次门关**
+（含 3 次紧跟 `just test-all` 的同前提复跑）**全部**回到 `95edc8cc…`，未再现。
+不是阴影语义差（那会是成片区域）。**处置**：A3 作为闸门若撞哈希不符，先 `imgqa diffblock` 看厚度
+分布再定性——单像素亚台阶属未归因环境级离群，重跑即可；成片/成域差异才算本批判据的真红。
+不要为这一条立债：它既不可复现、也不在本批改动面上（门关路径同样可能中招，只是尚未观测到）。
+
+#### ★M-3T-b（mesh ≤128）的输入事实
+
+- 本机现读口（§19.15 末）：`maxMeshWorkGroupInvocations=256` 但 **`maxPreferredMeshWorkGroupInvocations=128`**
+  ⟹ 降 128 不只迁就 NV 硬上限，RADV 自己的推荐档也是 128。
+- 闸门是**共享**的：`kMeshletMaxWorkGroupInvocations = 256`（`rgl/shaders/meshlet_cull_schema.lua`）
+  同时闸 `meshlet.mesh.slang`（主 pass）与 `shadow_meshlet.mesh.slang`。降档要么两枚一起降、要么拆成
+  两枚常量 + 分管线闸门——**这一步绕不过主 pass 红线 A `54e40665…`**。
+- 循环化本身逐位风险低（每个输出元素仍由恰好一个线程用同一表达式算一次，只是换了线程），但本项目
+  已有"slang 对源码差异做 fp 重排，flag=0 的分支也漂"的教训 ⟹ **必须实测，不许推定**。
+- task 数上限：NV 的 task 上限也是 128（`maxTaskWorkGroupInvocations`），本批 task 取 1 线程恒合规。

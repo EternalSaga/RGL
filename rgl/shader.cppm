@@ -183,6 +183,12 @@ makePerLevelComputeShader(vk::raii::Device& dev, const std::vector<uint32_t>& co
 export struct ShaderEffect {
 	std::vector<uint32_t> meshStageSpv;
 	std::vector<uint32_t> fragStageSpv;
+	/** 可选 task stage 的码流（★M-3T-a，docs/mdi_plan.md §19.16）。
+	 *  🔴 **空 = 无 task stage** ⟹ RenderPipeline 走改前形态（两条 createInfo +
+	 *  `NO_TASK_SHADER_BIT` + bindShaders 第 5 槽传 null）。
+	 *  🔴 `= {}` 同 `PipelineSpec::taskSpv`：本构建开 `-Werror,-Wmissing-field-initializers`，
+	 *  不带 DMI 则 `ShaderEffect{mesh, frag}`（shader_hot_reload_impl.cppm）当场编不过。 */
+	std::vector<uint32_t> taskStageSpv = {};
 };
 
 /**
@@ -433,7 +439,8 @@ export struct PipelineBindings {
  */
 export struct ShaderObjectStats {
 	uint64_t pipelines = 0;  // RenderPipeline 构造次数（启动期 = 管线表条目数）
-	uint64_t handles = 0;    // VkShaderEXT 句柄数（恒 = 2 × pipelines）；**只含管线表**——
+	uint64_t handles = 0;    // VkShaderEXT 句柄数（无 task stage 的条目 = 2 × pipelines；带 task 的
+	                         // ★M-3T-a 条目 = 3，判据 = `spec.taskSpv` 非空）；**只含管线表**——
 	                         // mip_gen / env_prefilter 的 compute shader object 直接调
 	                         // vkCreateShadersEXT、不走本类，不在本账内
 	uint64_t mappings = 0;   // binding mapping 条数累计（条目爆炸的第二维度）
@@ -454,14 +461,185 @@ export inline ShaderObjectStats shaderObjectStats() {
 	return shaderStatsDetail::mutableStats();
 }
 
+/** RenderPipeline 的内部拼装细节（不导出：只服务本模块的构造函数）。 */
+namespace shaderDetail {
+	/**
+	 * 拼一份 shader object 的 createInfo（★M-3T-a，docs/mdi_plan.md §19.16）。
+	 *
+	 * 抽出来的理由很实在：task 可选之后 stage 有 2~3 段同构拼装，各写一遍会把 RenderPipeline
+	 * 构造函数顶过样式阈值（120 代码行 / 复杂度 15），而三段之间**只有 stage / nextStage /
+	 * flags 三个参数不同**——参数化比复制三份更不容易漂。
+	 * @param spv         本阶段 SPV 码流
+	 * @param stage       本阶段位
+	 * @param nextStage   后继阶段位（frag 无后继 = 0）
+	 * @param flags       DESCRIPTOR_HEAP / INDIRECT_BINDABLE / NO_TASK_SHADER 的组合，由调用方定
+	 * @param mappingInfo 条目级 binding mapping（各 stage **共用同一份**：映射是条目级的，不分 stage）
+	 * @return C 侧 createInfo（pCode/pNext 是**借用**，调用方须保证两者活到 createShadersEXT 返回）
+	 */
+	inline VkShaderCreateInfoEXT makeStageCreateInfo(const std::vector<uint32_t>& spv,
+		VkShaderStageFlags stage, VkShaderStageFlags nextStage,
+		VkShaderCreateFlagsEXT flags, const void* mappingInfo) {
+		VkShaderCreateInfoEXT info{};
+		info.sType = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT;
+		info.pNext = mappingInfo;
+		info.flags = flags;
+		// createInfo 的 stage/nextStage 字段是 **FlagBits**（单值枚举）而非 Flags，故显式回落；
+		// 参数收 Flags 是为了让调用点能写 0 表示"无后继阶段"（frag 那一档）。
+		info.stage = static_cast<VkShaderStageFlagBits>(stage);
+		info.nextStage = static_cast<VkShaderStageFlagBits>(nextStage);
+		info.codeType = VK_SHADER_CODE_TYPE_SPIRV_EXT;
+		info.codeSize = spv.size() * sizeof(uint32_t);
+		info.pCode = spv.data();
+		info.pName = "main";  // 全项目 shader 入口统一叫 main（Slang 侧 [shader(...)] 的函数名）
+		return info;
+	}
+
+	/**
+	 * **全部 stage** SPV 声明 binding 的并集（批 M，§9.3）。一个 binding 可能只在一侧声明，
+	 * 如纹理/sampler 只在 frag。
+	 *
+	 * @return 并集；**任一 stage 解析失败 = nullopt**，调用方据此退回全烘（全烘恒正确——
+	 *         「有 mapping 未声明」空转无害既证，静默滤错才是画面事故，失效方向 = 正确方向）。
+	 *
+	 * 🔴 ★M-3T-a 起 stage 数是 2~3（task 可选），必须**全部**进并集：漏 task 的后果不是"少烘
+	 * 一条"而是反方向——将来 task 一声明 descriptor 就被滤掉 = 「声明了却无 mapping」=
+	 * VUID-11292 启动炸。今天的 task 不声明任何 binding ⟹ 本改动对既有条目逐字节等价。
+	 *
+	 * 导出理由：本函数是**纯函数**（输入码流、输出集合，不要 VkDevice）⟹ 按分层判据必须能在
+	 * `just test` 里测。用例 = `tests/test_shader_mapping.cppm`。
+	 */
+	export inline std::optional<std::set<uint32_t>> declaredBindingsUnion(
+		const ShaderEffect& effect, std::string_view debugName) {
+		// 🔴 **只把存在的 stage 放进列表**：用 nullopt 当"本条目没有这个 stage"的哨兵，会和
+		// "解析失败"撞成同一个值（实测踩过：479 条全部误判成解析失败 → 全烘 + 刷屏，而终图
+		// 逐位不变，A3 照样绿 ⟹ 只有 warnings 计数暴露它）。列表里没有 = 不存在，无需第三种状态。
+		std::vector<std::optional<std::set<uint32_t>>> byStage;
+		byStage.reserve(3);
+		byStage.push_back(spvDeclaredBindings(effect.meshStageSpv));
+		byStage.push_back(spvDeclaredBindings(effect.fragStageSpv));
+		if (!effect.taskStageSpv.empty())
+			byStage.push_back(spvDeclaredBindings(effect.taskStageSpv));
+		static constexpr std::array<std::string_view, 3> kStageNames{"mesh", "frag", "task"};
+		std::set<uint32_t> merged;
+		for (size_t s = 0; s < byStage.size(); ++s) {
+			if (byStage[s]) {
+				merged.insert(byStage[s]->begin(), byStage[s]->end());
+				continue;
+			}
+			if (auto* logger = RLLogger::getInstance())
+				logger->warn("spvDeclaredBindings: 条目 '{}' 的 {} 阶段 SPV 解析失败，本条目退回全烘"
+					"（批 M 过滤失效方向 = 正确方向，但启动面收益丢失）",
+					debugName, kStageNames[s]);
+			return std::nullopt;
+		}
+		return merged;
+	}
+
+	/**
+	 * 烘一个条目的 descriptor heap binding mapping。
+	 *
+	 * ★M-3T-a 起从 RenderPipeline 构造函数里抽出来：它跟"创建 shader object"本来就是两件事
+	 * （输入只有 SPV 与 binding 形态、不碰 device），混在一起会把构造函数顶过样式阈值。
+	 *
+	 * 顺序填充（Phase 5.5 批次 4 修正：原固定下标 [0/1/2/3/4/5] 假设 textured=true——天空盒首个
+	 * textured=false+hasSceneData+hasEnv 组合下 mappings[2] 留空却计入 count → VVL
+	 * "sType must be..." + envSampler 被挤出 count → "no mapping for binding 5"）⟹ 按 running
+	 * index 连续填实际启用的 binding，firstBinding 显式携带。
+	 * @param effect    各阶段 SPV（批 M「声明了什么」的判据来源，见 declaredBindingsUnion）
+	 * @param bindings  mapping 烘焙参数（见 PipelineBindings）
+	 * @param debugName 条目名（仅进 warn/throw 消息定位用，批 M：解析失败退全烘要点名条目）
+	 * @param out       输出缓冲，**容量即上限**（越界 throw 点名条目，防未来 extra 列表加长时静默越界写栈）
+	 * @return 实际写入的 mapping 条数
+	 *
+	 * 导出理由同 declaredBindingsUnion（纯函数、无设备）：批 M「烘的恰好是声明的」这条契约的
+	 * 唯一可机器验收面就是本函数的返回值，用例 = `tests/test_shader_mapping.cppm`。
+	 */
+	export inline uint32_t bakeBindingMappings(const ShaderEffect& effect,
+		const PipelineBindings& bindings, std::string_view debugName,
+		std::span<VkDescriptorSetAndBindingMappingEXT> out) {
+		const uint32_t descriptorSize = bindings.descriptorSize;
+		const auto declared = declaredBindingsUnion(effect, debugName);
+		const bool filter = declared.has_value();  // nullopt = 有 stage 解析失败 = 恒烘（= 批 M 前行为）
+		uint32_t n = 0;
+		const auto add = [&](uint32_t firstBinding, vk::DeviceSize heapOffset,
+			vk::DeviceSize arrayStride) {
+			// 批 M：SPV 没声明的 binding 不烘（解析失败时 filter 关 = 恒烘，行为 = 批 M 前）
+			if (filter && !declared->contains(firstBinding))
+				return;
+			if (n >= out.size())
+				throw std::runtime_error(fmt::format(
+					"RenderPipeline '{}': mapping 条目数超过输出容量 {}（binding {} 无处放）",
+					debugName, out.size(), firstBinding));
+			auto& m = out[n++];
+			m.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
+			m.descriptorSet = 0;
+			m.firstBinding = firstBinding;
+			m.bindingCount = 1;
+			m.resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
+			m.source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
+			m.sourceData.constantOffset.heapOffset = heapOffset;
+			m.sourceData.constantOffset.heapArrayStride = arrayStride;
+		};
+
+		add(0, bindings.slotVertex * descriptorSize, descriptorSize);
+		// binding 1：非纹理形态 = 索引 slot；纹理形态 = SAMPLED_IMAGE 描述符槽（resource heap）
+		add(1, (bindings.textured ? bindings.slotTexture : bindings.slotIndex) * descriptorSize,
+			descriptorSize);
+		if (bindings.textured) {
+			// OpTypeSampler 映射：sampler heap 槽（字节偏移，共享一份 sampler 描述符）。
+			// spec（descriptorheaps.adoc :1664-1665 + VUID 11253）：独立 OpTypeSampler 的
+			// sampler heap 偏移写 heapOffset（"mapped resource or sampler"）；samplerHeapOffset
+			// 字段仅组合 image sampler 用（:1671-1674）——2026-08-27 交叉测试定位的字段误用
+			//（spike 首版同款，docs/archive/heap_texture_research.md §九.2 根因 2）
+			add(2, bindings.samplerHeapOffset, 0);
+		}
+		if (bindings.hasSceneData) {
+			// scene data 各载体（binding 号 = §9.5 定案表）。**hasSceneData 一律全带上、不在
+			// C++ 侧登记谁用**——SPV 没声明的那条被上面的批 M 过滤自动裁掉（§9.3/§9.7；
+			// 「声明了却未 mapping」才是 VUID-11292 启动炸，方向别记反）。
+			// 表驱动而非逐条 add()：迁移加区只加一个条目，本函数不随区数一条条长胖。
+			// 批 T1 的四张表只有 import scene_tables.slang 且真用到某张表的条目才在 SPV 里声明它
+			//（未用到的被 Slang 死代码消除）⟹ 烘的恰好是用的。
+			// 🔴 批 N+1：binding 3（全区 sceneData）这一条已删——scene.slang 不再声明它，
+			// 留着 = 给一个不存在的 binding 烘 mapping。
+			const std::pair<uint32_t, uint32_t> sceneRegions[] = {
+				{22, bindings.slotSceneHeader}, {32, bindings.slotSceneWet},
+				{27, bindings.slotSceneIrradiance}, {24, bindings.slotSceneLights},
+				{28, bindings.slotSceneShadowViewProj}, {29, bindings.slotSceneShadowParams},
+				{31, bindings.slotSceneSsr}, {30, bindings.slotSceneTaa},
+				{23, bindings.slotObjectMatrices}, {25, bindings.slotObjectMVPs},
+				{26, bindings.slotObjectDraws}, {33, bindings.slotObjectClusterRanges}};
+			for (const auto& [regionBinding, regionSlot] : sceneRegions)
+				add(regionBinding, regionSlot * descriptorSize, descriptorSize);
+		}
+		if (bindings.hasEnv) {
+			// Phase 5.5：binding 4 → env cubemap（resource heap SAMPLED_IMAGE 槽）；
+			// binding 5 → sky sampler（sampler heap 字节偏移，OpTypeSampler 映射规则同 binding 2）
+			add(4, bindings.slotEnv * descriptorSize, descriptorSize);
+			add(5, bindings.envSamplerHeapOffset, 0);
+		}
+		// Phase 7 D1：追加映射（light pass 采样 G-buffer 4 RT + sampler 等），running index 续 base
+		for (const auto& e : bindings.extra)
+			add(e.binding,
+				e.sampler ? e.samplerHeapOffset : descriptorSize * e.heapSlot,
+				e.sampler ? 0 : descriptorSize);
+		return n;
+	}
+}
+
 /**
  * RenderPipeline：纯 shader object 包装（mesh + frag 两个 VkShaderEXT + 烘焙的
- * descriptor heap binding mapping）。动态状态不再内聚于此——见
+ * descriptor heap binding mapping；★M-3T-a 起可再带**可选的第三个** task 句柄，判据 =
+ * `ShaderEffect::taskStageSpv` 非空）。动态状态不再内聚于此——见
  * RenderState / applyDynamicState。RAII：设备销毁前由本对象持有句柄。
  */
 export class RenderPipeline {
 	vk::raii::ShaderEXT meshShader = nullptr;
 	vk::raii::ShaderEXT fragShader = nullptr;
+	/** 可选 task 阶段句柄（★M-3T-a，docs/mdi_plan.md §19.16）。
+	 *  🔴 `taskHasStage == false` 时**保持空且不解引用**——`taskShaderHandle()` 是唯一出口。 */
+	vk::raii::ShaderEXT taskShader = nullptr;
+	bool taskHasStage = false;
 
     public:
 	/**
@@ -493,141 +671,68 @@ export class RenderPipeline {
 	 */
 	RenderPipeline(vk::raii::Device& device, const ShaderEffect& effect,
 		const PipelineBindings& bindings, std::string_view debugName = {}) {
-		const uint32_t descriptorSize = bindings.descriptorSize;
 		// 容量 48（迁移批 1 从 24 抬，§9.7 红线：过滤发生在计数之后，容量必须盖过「全烘」
 		// 的最坏条目数 + 后续批 +12 binding 的扩张面）：model 条目已用 14（base 0-5 +
 		// binding 32 + extra 6/7/8/12/13/15/16），meshlet 条目再 +5 个簇 buffer（17-21），
-		// 批 T1 再 +4 张逐对象表（23/25/26/33）。
-		// 上限判据 = 最多 extra 的条目，别贴边。批 M 过滤只让**实际烘焙数**减不让它增，
-		// 越界保护（add 内 throw 点名条目）防的是未来 extra 列表继续加长时静默越界写栈。
+		// 批 T1 再 +4 张逐对象表（23/25/26/33）。上限判据 = 最多 extra 的条目，别贴边。
+		// 批 M 过滤只让**实际烘焙数**减不让它增；越界保护在 bakeBindingMappings 内 throw
+		// 点名条目，防的是未来 extra 列表继续加长时静默越界写栈。
 		VkDescriptorSetAndBindingMappingEXT mappings[48]{};
-		// 批 M（§9.3）：mesh + frag 两份 SPV 声明 binding 的**并集**（一个 binding 可能只在
-		// 一侧声明，如纹理/sampler 只在 frag）。任一解析失败（nullopt）= filter 关 = 全烘
-		// + warn——全烘恒正确（「有 mapping 未声明」空转无害既证），静默滤错才是画面事故。
-		const auto meshDeclared = spvDeclaredBindings(effect.meshStageSpv);
-		const auto fragDeclared = spvDeclaredBindings(effect.fragStageSpv);
-		const bool filter = meshDeclared.has_value() && fragDeclared.has_value();
-		std::set<uint32_t> declared;
-		if (filter) {
-			declared = *meshDeclared;
-			declared.insert(fragDeclared->begin(), fragDeclared->end());
-		} else if (auto* logger = RLLogger::getInstance()) {
-			logger->warn("spvDeclaredBindings: 条目 '{}' 的 SPV 解析失败（mesh 解析={} frag "
-				"解析={}），本条目退回全烘（批 M 过滤失效方向 = 正确方向，但启动面收益丢失）",
-				debugName, meshDeclared.has_value(), fragDeclared.has_value());
-		}
-		// 顺序填充（Phase 5.5 批次 4 修正：原固定下标 [0/1/2/3/4/5] 假设 textured=true——
-		// 天空盒首个 textured=false+hasSceneData+hasEnv 组合下 mappings[2] 留空却计入
-		// count → VVL "sType must be..." + envSampler 被挤出 count → "no mapping for
-		// binding 5"。改 running index 按实际启用的 binding 连续填，firstBinding 显式携带）
-		uint32_t n = 0;
-		const auto add = [&](uint32_t firstBinding, vk::DeviceSize heapOffset,
-			vk::DeviceSize arrayStride) {
-			// 批 M：SPV 没声明的 binding 不烘（解析失败时 filter 关 = 恒烘，行为 = 批 M 前）
-			if (filter && !declared.contains(firstBinding))
-				return;
-			if (n >= 48)
-				throw std::runtime_error(fmt::format(
-					"RenderPipeline '{}': mapping 条目数超过 mappings[48] 容量（binding {} 无处放）",
-					debugName, firstBinding));
-			auto& m = mappings[n++];
-			m.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
-			m.descriptorSet = 0;
-			m.firstBinding = firstBinding;
-			m.bindingCount = 1;
-			m.resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
-			m.source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
-			m.sourceData.constantOffset.heapOffset = heapOffset;
-			m.sourceData.constantOffset.heapArrayStride = arrayStride;
-		};
-
-		add(0, bindings.slotVertex * descriptorSize, descriptorSize);
-		// binding 1：非纹理形态 = 索引 slot；纹理形态 = SAMPLED_IMAGE 描述符槽（resource heap）
-		add(1, (bindings.textured ? bindings.slotTexture : bindings.slotIndex) * descriptorSize,
-			descriptorSize);
-		if (bindings.textured) {
-			// OpTypeSampler 映射：sampler heap 槽（字节偏移，共享一份 sampler 描述符）。
-			// spec（descriptorheaps.adoc :1664-1665 + VUID 11253）：独立 OpTypeSampler 的
-			// sampler heap 偏移写 heapOffset（"mapped resource or sampler"）；samplerHeapOffset
-			// 字段仅组合 image sampler 用（:1671-1674）——2026-08-27 交叉测试定位的字段误用
-			//（spike 首版同款，docs/archive/heap_texture_research.md §九.2 根因 2）
-			add(2, bindings.samplerHeapOffset, 0);
-		}
-		if (bindings.hasSceneData) {
-			// scene data 各载体（binding 号 = §9.5 定案表）。**hasSceneData 一律全带上、不在
-			// C++ 侧登记谁用**——SPV 没声明的那条被上面的批 M 过滤自动裁掉（§9.3/§9.7；
-			// 「声明了却未 mapping」才是 VUID-11292 启动炸，方向别记反）。
-			// 表驱动而非逐条 add()：迁移加区只加一个条目，本构造函数不随区数一条条长胖
-			// （>100 代码行的拆分红线）。批 T1 的四张表只有 import scene_tables.slang 且真用到
-			// 某张表的条目才在 SPV 里声明它（未用到的被 Slang 死代码消除）⟹ 烘的恰好是用的。
-			// 🔴 批 N+1：binding 3（全区 sceneData）这一条已删——scene.slang 不再声明它，
-			// 留着 = 给一个不存在的 binding 烘 mapping。
-			const std::pair<uint32_t, uint32_t> sceneRegions[] = {
-				{22, bindings.slotSceneHeader}, {32, bindings.slotSceneWet},
-				{27, bindings.slotSceneIrradiance}, {24, bindings.slotSceneLights},
-				{28, bindings.slotSceneShadowViewProj}, {29, bindings.slotSceneShadowParams},
-				{31, bindings.slotSceneSsr}, {30, bindings.slotSceneTaa},
-				{23, bindings.slotObjectMatrices}, {25, bindings.slotObjectMVPs},
-				{26, bindings.slotObjectDraws}, {33, bindings.slotObjectClusterRanges}};
-			for (const auto& [regionBinding, regionSlot] : sceneRegions)
-				add(regionBinding, regionSlot * descriptorSize, descriptorSize);
-		}
-		if (bindings.hasEnv) {
-			// Phase 5.5：binding 4 → env cubemap（resource heap SAMPLED_IMAGE 槽）；
-			// binding 5 → sky sampler（sampler heap 字节偏移，OpTypeSampler 映射规则同 binding 2）
-			add(4, bindings.slotEnv * descriptorSize, descriptorSize);
-			add(5, bindings.envSamplerHeapOffset, 0);
-		}
-		// Phase 7 D1：追加映射（light pass 采样 G-buffer 4 RT + sampler 等），running index 续 base
-		for (const auto& e : bindings.extra)
-			add(e.binding,
-				e.sampler ? e.samplerHeapOffset : descriptorSize * e.heapSlot,
-				e.sampler ? 0 : descriptorSize);
-		const uint32_t mappingCount = n;
+		const uint32_t mappingCount = shaderDetail::bakeBindingMappings(effect, bindings, debugName, mappings);
 
 		VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{};
 		mappingInfo.sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT;
 		mappingInfo.mappingCount = mappingCount;
 		mappingInfo.pMappings = mappings;
 
-		VkShaderCreateInfoEXT meshCreateInfoRaw{};
-		meshCreateInfoRaw.sType = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT;
-		meshCreateInfoRaw.pNext = &mappingInfo;
-		// INDIRECT_BINDABLE：进 DGC execution set 的 shader 必须带（VUID-11032/11154；
-		// 非 DGC 路无害，统一加免得管线表再分两类）
-		meshCreateInfoRaw.flags = VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT | VK_SHADER_CREATE_NO_TASK_SHADER_BIT_EXT | VK_SHADER_CREATE_INDIRECT_BINDABLE_BIT_EXT;
-		meshCreateInfoRaw.stage = VK_SHADER_STAGE_MESH_BIT_EXT;
-		meshCreateInfoRaw.nextStage = VK_SHADER_STAGE_FRAGMENT_BIT;
-		meshCreateInfoRaw.codeType = VK_SHADER_CODE_TYPE_SPIRV_EXT;
-		meshCreateInfoRaw.codeSize = effect.meshStageSpv.size() * sizeof(uint32_t);
-		meshCreateInfoRaw.pCode = effect.meshStageSpv.data();
-		meshCreateInfoRaw.pName = "main";
-		vk::ShaderCreateInfoEXT meshCreateInfo(meshCreateInfoRaw);
+		// ★M-3T-a（docs/mdi_plan.md §19.16）：可选 task stage。**空 = 完全走改前形态**（两条
+		// createInfo + NO_TASK_SHADER_BIT + bindShaders 第 5 槽 null），其余条目一字节不动。
+		const bool hasTask = !effect.taskStageSpv.empty();
 
-		VkShaderCreateInfoEXT fragCreateInfoRaw{};
-		fragCreateInfoRaw.sType = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT;
-		fragCreateInfoRaw.pNext = &mappingInfo;
-		fragCreateInfoRaw.flags = VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT | VK_SHADER_CREATE_INDIRECT_BINDABLE_BIT_EXT;
-		fragCreateInfoRaw.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-		fragCreateInfoRaw.codeType = VK_SHADER_CODE_TYPE_SPIRV_EXT;
-		fragCreateInfoRaw.codeSize = effect.fragStageSpv.size() * sizeof(uint32_t);
-		fragCreateInfoRaw.pCode = effect.fragStageSpv.data();
-		fragCreateInfoRaw.pName = "main";
-		vk::ShaderCreateInfoEXT fragCreateInfo(fragCreateInfoRaw);
+		// DESCRIPTOR_HEAP + INDIRECT_BINDABLE 三段同值（后者：进 DGC execution set 的 shader
+		// 必须带，VUID-11032/11154；非 DGC 路无害，统一加免得管线表再分两类）
+		constexpr VkShaderCreateFlagsEXT kStageFlags = VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT
+			| VK_SHADER_CREATE_INDIRECT_BINDABLE_BIT_EXT;
+		// 🔴 `NO_TASK_SHADER_BIT` **只在没有 task stage 时带**。该 bit 的语义是"本 mesh 不存在配对的
+		// task"，带上了还往 bindShaders 的 task 槽塞实句柄 = VUID-VkShaderCreateInfoEXT-flags-08695
+		// 的反向违例。**反过来漏带**的历史代价 = NVIDIA Xid 13 engine reset（mesh 不带该 bit 而 task
+		// 绑 null → 驱动查空指针，docs/nvidia_compatibility_report.md §十）。两个方向都在此钉住。
+		const VkShaderCreateFlagsEXT meshFlags = kStageFlags
+			| (hasTask ? VkShaderCreateFlagsEXT(0) : VK_SHADER_CREATE_NO_TASK_SHADER_BIT_EXT);
 
-		std::vector<vk::ShaderCreateInfoEXT> createInfos = {meshCreateInfo, fragCreateInfo};
+		// 数组序 = 返回句柄的下标序：task(可选) → mesh → frag。🔴 与 nextStage 链**无关**
+		//（链是 stage 属性：task.nextStage=MESH、mesh.nextStage=FRAG、frag 无后继 = 0）。
+		std::vector<vk::ShaderCreateInfoEXT> createInfos;
+		createInfos.reserve(hasTask ? 3 : 2);
+		if (hasTask)
+			createInfos.push_back(vk::ShaderCreateInfoEXT(shaderDetail::makeStageCreateInfo(
+				effect.taskStageSpv, VK_SHADER_STAGE_TASK_BIT_EXT, VK_SHADER_STAGE_MESH_BIT_EXT,
+				kStageFlags, &mappingInfo)));
+		createInfos.push_back(vk::ShaderCreateInfoEXT(shaderDetail::makeStageCreateInfo(
+			effect.meshStageSpv, VK_SHADER_STAGE_MESH_BIT_EXT, VK_SHADER_STAGE_FRAGMENT_BIT,
+			meshFlags, &mappingInfo)));
+		createInfos.push_back(vk::ShaderCreateInfoEXT(shaderDetail::makeStageCreateInfo(
+			effect.fragStageSpv, VK_SHADER_STAGE_FRAGMENT_BIT, 0, kStageFlags, &mappingInfo)));
+
 		// 批 9.5 观测：条目/句柄/mapping 计数 + vkCreateShadersEXT wall clock（口径见
 		// ShaderObjectStats 注释）。纯计数，不改任何创建参数。
 		const auto createBegin = std::chrono::steady_clock::now();
 		auto shaders = device.createShadersEXT(createInfos);
 		auto& stats = shaderStatsDetail::mutableStats();
 		++stats.pipelines;
-		stats.handles += 2;  // mesh + frag（本函数唯一句柄产出点）
+		stats.handles += createInfos.size();  // mesh + frag（+ 可选 task）；本函数唯一句柄产出点
 		stats.mappings += mappingCount;
 		stats.createNs += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
 			std::chrono::steady_clock::now() - createBegin).count());
-		meshShader = std::move(shaders[0]);
-		fragShader = std::move(shaders[1]);
+		if (hasTask) {
+			taskShader = std::move(shaders[0]);
+			taskHasStage = true;
+			meshShader = std::move(shaders[1]);
+			fragShader = std::move(shaders[2]);
+		} else {
+			meshShader = std::move(shaders[0]);
+			fragShader = std::move(shaders[1]);
+		}
 	}
 	/**
 	 * 绑定 mesh + frag shader object 到命令缓冲（未使用的传统 stage 传 VK_NULL_HANDLE）。
@@ -647,11 +752,17 @@ export class RenderPipeline {
 		std::array<vk::ShaderEXT, 7> shaderHandles = {
 			vk::ShaderEXT(nullptr), vk::ShaderEXT(nullptr),
 			vk::ShaderEXT(nullptr), vk::ShaderEXT(nullptr),
-			vk::ShaderEXT(nullptr),
+			taskShaderHandle(),  // ★M-3T-a：无 task stage 的条目恒 = VK_NULL_HANDLE（= 改前形态）
 			vk::ShaderEXT(*meshShader),
 			vk::ShaderEXT(*fragShader)};
 
 		cmd.bindShadersEXT(stages, shaderHandles);
+	}
+	/** @return task 阶段 shader 句柄；**无 task stage 的条目 = VK_NULL_HANDLE**（★M-3T-a）。
+	 *  bindShaders 的第 5 槽（`eTaskEXT`）只经本函数取值 ⟹ "有没有 task"只有一个判定点，
+	 *  不会出现"句柄存在但 flags 带了 NO_TASK"那种两侧不同向的形态。 */
+	[[nodiscard]] vk::ShaderEXT taskShaderHandle() const {
+		return taskHasStage ? vk::ShaderEXT(*taskShader) : vk::ShaderEXT(nullptr);
 	}
 	/** @return mesh 阶段 shader 句柄（DGC execution set 一次性写入，Phase 7b；inactive 路不消费）。 */
 	[[nodiscard]] vk::ShaderEXT meshShaderHandle() const { return *meshShader; }

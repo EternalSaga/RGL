@@ -80,6 +80,16 @@ ByteAddressBuffer meshletRemap;       // 扁平 u32 顶点重映射流
 // S/T 占位），行表落**第一个空闲号 34**。
 [[vk::binding(34, 0)]]
 ByteAddressBuffer mdiShadowArgs;
+
+// ─── ★M-3T-a：DrawIndex 的声明处搬进 task（docs/mdi_plan.md §19.16）───────────────────
+// 本分支**不再声明** `SV_DrawIndex`（§19.9 实测它在 mesh 入口毒化 gfx1151 的后续 mesh draw）。
+// 两个身份改由 `shadow_meshlet.task.slang` 经 payload 转交：drawID = 段内行号、slot = 派发序号。
+// 🔴 与 task 侧那份**逐字段同构**（跨模块无法共享声明，两份 .slang 各编各的；改一侧必同改另一侧）。
+struct MdiShadowPayload
+{
+    uint drawID;
+    uint slot;
+};
 #endif
 
 // push constant：**不 import material.slang**，自带 ShadowMeshletDrawArgs（12B，scalar layout）。
@@ -140,9 +150,11 @@ void main(
     uint ti : SV_GroupIndex,
     uint3 groupID : SV_GroupID,
 #ifdef MDI_SHADOW
-    // §2.1 路 A：mesh stage 直读 SV_DrawIndex（NO_TASK_SHADER_BIT 已设，spike §6 的
-    // 设备用例实测 0 计数不跳号 ⟹ 孔洞行的 DrawIndex 仍等于段内行号）。flag 不动。
-    uint drawID : SV_DrawIndex,
+    // ★M-3T-a：这里**不收** `SV_DrawIndex` 了（§19.9 实测它在 mesh 入口毒化 gfx1151 后续 mesh
+    // draw；§19.15 实测同一 builtin 声明在 task 入口不触发）。两个身份经 payload 进来。
+    // 🔴 mesh 侧**必须真读一次** payload：slang 会把没读过的 payload 从入口接口整个裁掉
+    //（§19.15 实测），裁掉就等于 task 有 payload 输出、mesh 无输入 = 两侧不同向。
+    payload MdiShadowPayload mdiPayload,
 #endif
     out vertices ShadowVertexOutput verts[256],
     out indices uint3 triangles[85])
@@ -162,15 +174,20 @@ void main(
     const uint kMdiShadowRowStrideBytes = 24u;          // = kMdiShadowRowStride（VUID-07088 的 stride）
     const uint kMdiShadowObjectIndexByteOffset = 12u;   // 行 word[3]
     const uint kMdiShadowClusterStartByteOffset = 16u;  // 行 word[4]
-    // 🔴 身份来源 = 行表（§19.2 D1）：row = rowBase(push.word0) + SV_DrawIndex，
+    // 🔴 身份来源 = 行表（§19.2 D1）：row = rowBase(push.word0) + drawID，
     // objectIndex/clusterStart 逐行读。行序 = 候选序（构建器契约），不可见行 gcX = 0
     // 根本不发射 ⟹ 这里被调度到的行恒为可见行。
-    const uint rowBytes = (shadowMeshletDrawArgs.objectIndex + drawID) * kMdiShadowRowStrideBytes;
+    // ★M-3T-a：drawID 现在来自 payload（改前是 mesh 入口的 SV_DrawIndex，值**同一个**——
+    // task 的 SV_DrawIndex 就是段内行号，§19.15 附加实验已实测行寻址因此逐位等价）。
+    const uint rowBytes = (shadowMeshletDrawArgs.objectIndex + mdiPayload.drawID) * kMdiShadowRowStrideBytes;
     const uint mdiObjectIndex = mdiShadowArgs.Load(rowBytes + kMdiShadowObjectIndexByteOffset);
     const uint mdiClusterStart = mdiShadowArgs.Load(rowBytes + kMdiShadowClusterStartByteOffset);
     // 🔴 clusterStart 在 base 之后加：批 A 的 start 是**相对 base 的偏移**，不是全局簇下标。
+    // 🔴 派发序号取 payload.slot 而**不是** groupID.x：mesh 的 WorkgroupId 在 task 之下是
+    //    "position within the current mesh task"（spec），本管线每 task 只发 1 组 ⟹ 恒 0。
+    //    口径与改前逐值同（旧 groupID.x = 本 draw 内的 mesh 组号 = 今 task 号）。
     const ObjectClusterRange range = readObjectClusterRange(mdiObjectIndex);
-    const uint clusterIdx = range.base + mdiClusterStart + (groupID.x >> 1u);
+    const uint clusterIdx = range.base + mdiClusterStart + (mdiPayload.slot >> 1u);
 #else
     // 🔴 clusterStart 在 base 之后加：批 A 的 start 是**相对 base 的偏移**，不是全局簇下标。
     // 🟰 非 MDI 这一支与改前**逐 token 同**（🔴 红线：门关/出厂用的还是今天那份 SPV——
@@ -178,7 +195,13 @@ void main(
     const ObjectClusterRange range = readObjectClusterRange(shadowMeshletDrawArgs.objectIndex);
     const uint clusterIdx = range.base + shadowMeshletDrawArgs.clusterStart + (groupID.x >> 1u);
 #endif
-    const uint half = groupID.x & 1u;                         // 半区号：0 = 前 85 三角，1 = 其余
+    // 半区号：0 = 前 85 三角，1 = 其余。序号来源同 clusterIdx —— MDI 走 payload，非 MDI 直取
+    // groupID.x（那是出厂那份 SPV 的逐 token 契约，不为两边对称去动它）。
+#ifdef MDI_SHADOW
+    const uint half = mdiPayload.slot & 1u;
+#else
+    const uint half = groupID.x & 1u;
+#endif
     const uint cBase = clusterIdx * kClusterStride;
 
     // 断言形态 ①（表坏/groupCount 算错的探测器）：簇条目必须整个落在簇表内 → 否则空组。

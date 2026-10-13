@@ -81,6 +81,12 @@ rgl_shader(shadow_meshlet.mesh SHADOW_MESHLET_MESH_SPV scene scene_tables)
 # ★M-1b（docs/mdi_plan.md §19.2 D2）真 MDI 变体：门 = 选 SPV 变体（同 MESHLET_DEBUG_OFFSET 先例），
 # 门关用的还是上面那份原版 SPV、那条原管线条目，一字节不动 = 逐位不变构造性保证。
 rgl_shader_defined(shadow_meshlet.mesh SHADOW_MESHLET_MDI_MESH_SPV MDI_SHADOW scene scene_tables)
+# ★M-3T-a（docs/mdi_plan.md §19.16）：DrawIndex 的声明处从 mesh 入口搬进 **task** 入口
+# ——§19.9 实测它在 mesh 入口毒化 gfx1151 的后续 mesh draw，§19.15 实测声明在 task 入口不触发。
+# 🔴 必须独立编译：slang#10123（task 与 mesh 同模块时 payload 变量被复制成两份，NV 实测越界读）。
+# 🔴 DEP 为空是对的：本文件是纯中继、不 import 任何模块，而 R1 查的是"import 闭包 ⊆ DEP"
+#    ——挂个用不上的 DEP 只会给 task 加一条假编译前置（`rgl_shader_defined` 的第三参是 DEFINE 不是 DEP）。
+rgl_shader(shadow_meshlet.task SHADOW_MESHLET_TASK_SPV)
 # Phase 8 批次 ①：HDR tonemap frag（mesh 复用 light.mesh.spv；import scene 读 @56 曝光）
 rgl_shader(tonemap.frag TONEMAP_FRAG_SPV scene)
 # Phase 11 批 11.4：SSAO frag（mesh 复用 light.mesh.spv 全屏大三角；import scene 读

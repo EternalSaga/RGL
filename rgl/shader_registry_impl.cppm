@@ -512,6 +512,13 @@ namespace RGL {
 		RGL::ShaderEffect effect;
 		effect.meshStageSpv = std::move(*meshResult);
 		effect.fragStageSpv = std::move(*fragResult);
+		// taskSpv **非空才读**（空 = 无 task stage，其余条目零影响）。🔴 非空却读不到 = 直接抛：
+		// 配错路径绝不能静默退化成"没有 task"——那条管线的 mesh 正在等 payload，退化 = 静默画错。
+		if (!spec.taskSpv.empty()) {
+			auto taskResult = RGL::loadShaderSpv(spec.taskSpv);
+			if (!taskResult) throw std::runtime_error(taskResult.error().describe());
+			effect.taskStageSpv = std::move(*taskResult);
+		}
 		return effect;
 	}
 

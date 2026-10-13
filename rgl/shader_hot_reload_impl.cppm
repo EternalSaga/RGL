@@ -180,6 +180,17 @@ std::vector<ShaderHotReloader::Candidate> ShaderHotReloader::collectCandidates(
 	std::vector<Candidate> candidates;
 	for (uint32_t i = 0; i < stageSources.size(); ++i) {
 		const auto& stages = stageSources[i];
+		// 🔴 **带 task stage 的条目不参与热重载**（★M-3T-a，docs/mdi_plan.md §19.16）：本工具只
+		// 认 mesh + frag 两阶段，重建出的 ShaderEffect 会丢 taskSpv ⟹ RenderPipeline 退回
+		// 「两条 createInfo + NO_TASK_SHADER_BIT」形态，而 mesh 那份 SPV 已经在等 payload
+		// ⟹ payload 无生产者 = 静默画错。热重载与 `meshlet.mdi_shadow` 双双默认关，但"静默错"
+		// 不在可接受形态里，故出声并保留旧管线（要热换 task 条目请重启）。
+		if (!registry.entriesView()[i].spec.taskSpv.empty()) {
+			if (logger)
+				logger->info("shader_hot_reload: 跳过条目 {}（{}）——带 task stage，本工具只认 mesh+frag",
+					i, registry.entriesView()[i].name);
+			continue;
+		}
 		const auto& mesh = compiled.at(stages[0].slang.string());
 		const auto& frag = compiled.at(stages[1].slang.string());
 		const std::array<uint64_t, 2> hash{spvHash(mesh), spvHash(frag)};
