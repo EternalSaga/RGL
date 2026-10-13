@@ -141,10 +141,33 @@ uint3 loadLocalTri(uint triOffset, uint k)
     return uint3(v & 0xFFu, (v >> 8u) & 0xFFu, (v >> 16u) & 0xFFu);
 }
 
+// ★M-3T-b：本管线 mesh 线程数降档 256 → **128**（docs/mdi_plan.md §19.16 末「★M-3T-b 的输入事实」）。
+// 🔴 单一拼写：`numthreads` 与下方两段 strided 循环的步长**共用这一个常量** ⟹ 以后改线程数
+// 只改这里，不用回来改循环。
+//
+// 128 的出处（三机口径，2026-10-13 现读，别抄旧注释里的"本机上限 256"）：
+//  · **NVIDIA `maxMeshWorkGroupInvocations = 128` 是硬上限**：声明 256 时 `vkCreateShadersEXT`
+//    被 VVL 点名 VUID-RuntimeSpirv-MeshEXT-07295/07298 ⟹ MDI 路在 NV 上根本建不出 shader。
+//  · 本机 AMD Radeon 8060S（RADV STRIX_HALO）`maxPreferredMeshWorkGroupInvocations = 128`
+//    （它的 maxMeshWorkGroupInvocations 给到 256，但 preferred 才是"不亏性能"的那一档）。
+//  · schema 常量 `kMeshletMaxWorkGroupInvocations = 256`（meshlet_cull_schema.lua）是**两条
+//    管线共用的运行期闸门**（checkMeshletDeviceFit 拿它核对设备下限），本批**不动**——降档要等
+//    主 pass `meshlet.mesh.slang` 一起改（那一步动红线 A，故先在本文件隔离"循环化会不会引起
+//    fp 逐位漂移"这个问题）。
+// 🔴 也正因如此，本常量与那个 schema 常量此刻是**两个不同的量**（本管线的线程数 128 vs 两条
+//    管线共用的设备下限 256）⟹ 名字**必须分开**，别"顺手统一"：`meshlet_spec_checks` 规则 1 把
+//    .slang 里以 `const uint <schema 常量名> = <值>u;` 出现的字面量与 schema 数值钉成**相等**，
+//    同名不同值会被构建期点名为规格漂移（实测 2026-10-13：本常量最初就写成 schema 那个名字，
+//    `meshlet_spec_checks` 当场出一警告）。等下一步主 pass 与 schema 一起降到 128，本常量并回
+//    schema 那份、本名退役（那时才真的做到"numthreads 吃 schema 常量"的单一真相源，不必为线程数
+//    另加一条护栏）。
+//
+// 线程数 128 < 顶点输出上限 255 **不再**意味着"高下标的顶点没人写"——那是"一线程一元素 + if
+// 守卫"时代的论证（旧注释正是那么写的），现在是 strided 循环，覆盖集 = [0, 3nTri) 与线程数解耦。
+static const uint kShadowMeshWorkGroupInvocations = 128u;
+
 [shader("mesh")]
-// 256 = 本机 maxMeshWorkGroupInvocations，也是填满顶点输出所需的最小线程数（去索引后
-// 顶点输出上限 255 ⟹ 255 条顶点线程）。取 256 的理由与 meshlet.mesh.slang 逐字同。
-[numthreads(256, 1, 1)]
+[numthreads(kShadowMeshWorkGroupInvocations, 1, 1)]
 [outputtopology("triangle")]
 void main(
     uint ti : SV_GroupIndex,
@@ -190,8 +213,10 @@ void main(
     const uint clusterIdx = range.base + mdiClusterStart + (mdiPayload.slot >> 1u);
 #else
     // 🔴 clusterStart 在 base 之后加：批 A 的 start 是**相对 base 的偏移**，不是全局簇下标。
-    // 🟰 非 MDI 这一支与改前**逐 token 同**（🔴 红线：门关/出厂用的还是今天那份 SPV——
-    //    构建期用 sha256 对拍 generated_shaders/shadow_meshlet.mesh.spv 钉住，见交付报告）。
+    // 🟰 非 MDI 这一支与改前**逐 token 同**（🔴 红线：门关/出厂的**交付图像**逐位不变 = 出厂锚
+    //    `95edc8cc…`）。⚠ ★M-3T-b 起这条红线的钉法从「对拍本 SPV 的 sha256」换成「对拍截图哈希」：
+    //    线程数 256→128 与两段 strided 循环**必然改 SPV 字节**（LocalSize 与循环结构），但每个输出
+    //    元素仍由恰好一个线程用同一表达式算一次 ⟹ 图像逐位不变（实测 2026-10-13，见交付报告）。
     const ObjectClusterRange range = readObjectClusterRange(shadowMeshletDrawArgs.objectIndex);
     const uint clusterIdx = range.base + shadowMeshletDrawArgs.clusterStart + (groupID.x >> 1u);
 #endif
@@ -237,12 +262,18 @@ void main(
     }
     SetMeshOutputCounts(3u * nTri, nTri);
 
-    if (ti < 3u * nTri) {
-        // 去索引：本线程 = 本任务第 ti/3 个三角形的第 ti%3 个角（与 meshlet.mesh 同法）。
+    // ★M-3T-b：128 线程要填满 3×85 = 255 个顶点输出 ⟹ 每线程最多 2 个元素，故 if 改 strided 循环。
+    // 🔴 逐位不变的论证（且本批**实测**，不靠论证）：每个输出元素仍由**恰好一个**线程用**同一个
+    // 表达式**计算一次，迭代之间无累积量、体内无跨线程依赖、无 groupshared（`SetMeshOutputCounts`
+    // 之后活跃线程数可小于 numthreads，跨线程同步本来就不许用）⟹ 不存在可重排的结合序。
+    // 步长取线程数常量而非写死 128，是为了让"覆盖集 = [0, 3nTri)"与线程数解耦（以后改线程数不用
+    // 回来改这里）。
+    for (uint v = ti; v < 3u * nTri; v += kShadowMeshWorkGroupInvocations) {
+        // 去索引：本元素 = 本任务第 v/3 个三角形的第 v%3 个角（与 meshlet.mesh 同法）。
         // 只取位置：depth-only 不着色 ⟹ 法线/uv/切线一个都不读（顶点池里它们就在同一 48B 内，
         // 少读三个向量 = 本管线相对主 pass 的真实成本差）。
-        const uint3 local = loadLocalTri(triOffset, triStart + (ti / 3u));
-        const uint corner = ti % 3u;
+        const uint3 local = loadLocalTri(triOffset, triStart + (v / 3u));
+        const uint corner = v % 3u;
         const uint localIdx = corner == 0u ? local.x : (corner == 1u ? local.y : local.z);
         const uint vb = meshletRemap.Load((remapOffset + localIdx) * 4u) * kVertexStride;
         const float3 pos = asfloat(meshletVertexPool.Load3(vb));  // @0
@@ -255,14 +286,16 @@ void main(
 #else
         const float3 world = worldPos(readObjectMatrix(shadowMeshletDrawArgs.objectIndex), pos);
 #endif
-        verts[ti].position = clipPos(readShadowViewProj(shadowMeshletDrawArgs.cascadeIndex), world);
+        verts[v].position = clipPos(readShadowViewProj(shadowMeshletDrawArgs.cascadeIndex), world);
     }
 
-    // 去索引的索引自然连续：本任务第 ti 个三角形 = 本组 verts[3ti .. 3ti+2]。
+    // 去索引的索引自然连续：本任务第 p 个三角形 = 本组 verts[3p .. 3p+2]。
     // out indices 引用的是本组 verts 数组下标，不是全局顶点索引（同 meshlet.mesh.slang 记的
     // 那条坑：写全局索引在 RADV 上被 mod 回绕掩盖、NVIDIA 上直接崩形）。
-    if (ti < nTri) {
-        const uint base = ti * 3u;
-        triangles[ti] = uint3(base, base + 1u, base + 2u);
+    // ★M-3T-b：今天 nTri ≤ 85 < 128 ⟹ 恒跑一轮（相对改前零成本）；改循环是为了让"线程数 <
+    // 输出元素数"这一类未来漂移不会静默少写（改 if 的形态下它会画出一个悄悄少一批三角形的图）。
+    for (uint p = ti; p < nTri; p += kShadowMeshWorkGroupInvocations) {
+        const uint base = p * 3u;
+        triangles[p] = uint3(base, base + 1u, base + 2u);
     }
 }
