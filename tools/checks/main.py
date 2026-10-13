@@ -65,6 +65,10 @@ from config import (DEFAULT_COGNITIVE_ERROR_THRESHOLD, DEFAULT_COGNITIVE_THRESHO
 from coverage_layers import coverage_checks, coverage_readout
 from fs import read_text
 from rules_doxygen import interface_declared_names, rule_doxygen
+from rules_ecs import (ecs_component_home_checks, ecs_component_purity_checks,
+                       ecs_global_baseline_counts, ecs_global_readout,
+                       ecs_global_state_checks, ecs_rules_readout,
+                       ecs_scheduler_ban_checks, write_ecs_global_baseline)
 from rules_metrics import evaluate_metrics
 from rules_layers import lib_layering_checks
 from rules_reflection import reflection_contract_checks, scan_readout
@@ -172,6 +176,10 @@ def parse_args() -> argparse.Namespace:
                     help="用当前反引号指针命中条数重写 doc_pointer_baseline.json"
                          "（§1.7 判定 ③④ 的存量棘轮收账；**先确认**没有新写的假指针再用它，"
                          "上升时不要用它，那是改指针的活儿）")
+    ap.add_argument("--update-ecs-global-baseline", action="store_true",
+                    help="用当前 namespace 作用域可变全局条数重写 ecs_global_baseline.json"
+                         "（§9 R-EC4 的存量棘轮收账；上升时**不要**用它，"
+                         "处置是把全局搬进 context/参数/成员）")
     return ap.parse_args()
 
 
@@ -314,6 +322,21 @@ def main() -> None:
         warnings.extend(judgments_pointer_checks())
         warnings.extend(lib_layering_checks())
         warnings.extend(reflection_contract_checks())
+        # ECS 规范护栏（债-14）：规范 2 调度器禁令 + 规范 5 组件纯度/定义位 + 规范 3 全局可变状态
+        warnings.extend(ecs_scheduler_ban_checks())
+        warnings.extend(ecs_component_purity_checks())
+        warnings.extend(ecs_component_home_checks())
+        if args.update_ecs_global_baseline:
+            ecs_global_state_checks()  # 先跑一遍拿计数
+            if not ecs_global_readout():
+                print("[style-check-ERROR] ECS 全局可变状态基线**未重写**：本次扫描面未运行"
+                      "（覆盖面读数为空）——先修规则，别把「没数」写进基线", file=sys.stderr)
+                sys.exit(2)
+            merged = {k: v for k, v in ecs_global_baseline_counts().items() if v > 0}
+            path = write_ecs_global_baseline(merged)
+            print(f"[style-check] ECS 全局可变状态基线已重写: {sum(merged.values())} 条 / "
+                  f"{len(merged)} 个文件 → {path}")
+        warnings.extend(ecs_global_state_checks())
         # 分层测试覆盖（债-15）：**只出数不裁决**，本行只可能因「扫描面为空 / 清单解析不到」
         # 报 error。全表在 `just coverage`，不在这里印（每次构建印一张没人裁决的表 = 噪声）。
         warnings.extend(coverage_checks())
@@ -404,6 +427,14 @@ def main() -> None:
         print("[style-check] 分层测试覆盖: "
               + (cov_readout if cov_readout else "**本次未执行**（规则没跑到）")
               + "（全表 just coverage）")
+        # ECS 规范护栏的读数（债-14）：同覆盖量具的纪律——有读数才有「它今天跑了、
+        # 覆盖面多大」的凭据（判据与盲区 → docs/风格检查规则.md §9）。
+        # 🔴 收账守卫只看 R-EC4 自己的读数（ecs_global_readout），混不得（见 rules_ecs 注释）。
+        ecs_rules = ecs_rules_readout()
+        ecs_global = ecs_global_readout()
+        print("[style-check] ECS 规范护栏: "
+              + (f"{ecs_rules} / " if ecs_rules else "")
+              + (ecs_global if ecs_global else "**本次未执行**（规则没跑到）"))
         if rgl_notready:
             print("[style-check] 提示: 跳过 = modmap/BMI 构建产物缺失（clean 后首次构建属正常，"
                   "与编译并行时尚未生成）；本次仅跑纯文本规则，编译完成后重跑即全量生效")

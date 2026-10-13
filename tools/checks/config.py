@@ -352,3 +352,26 @@ REFLECTION_SHAPE_TO_SLANG_TYPES = {
 # 两条**关系**对账（3×kTaskTris ≤ kMeshletMaxOutputVertices、numthreads ≤ 设备下限）。
 # 同一处漂移报两遍只会训练人忽略警告 ⟹ 本面对它整份让位，不是漏了它。
 REFLECTION_CONSTANTS_SHADER_EXEMPT = ("rgl/shaders/meshlet_cull_schema.lua",)
+
+# ─── ECS 规范护栏（债-14；规则 = rules_ecs.ecs_*_checks，判据全景 → docs/风格检查规则.md §9）──
+# 五条规范里静态可判的片段与**不可判**的裁决全部写在 rules_ecs.py 模块 docstring
+# （规范 1 与 3 的 config 腿、5 的「下标 vs ID」区分静态判不了——别在这里加规则凑数）。
+
+# 组件唯一定义位（契约模块，叶子值类型层）。R-EC1 的扫描面 = 本文件的 export struct；
+# R-EC2 把「被当组件用的类型」钉回本文件，否则纯度检查对新组件静默漏检。
+ECS_COMPONENT_MODULE = "rgl/scene_context.cppm"
+
+# 规范 2 括号里的拍板：显式 system 列表，不用 entt::scheduler（process 调度器执行顺序
+# 无保证，ecs_compliance_review 处置记录 2026-08-24）。名单为空 = 规则被掏空 ⟹ error。
+ECS_BANNED_TOKENS = ("entt::scheduler", "entt::basic_scheduler", "entt::scheduling")
+
+# R-EC4（namespace 作用域可变全局）的存量棘轮基线（机制先例 = doc_pointer §1.7；只准降不准升）。
+# 存量 = profiler 的帧累加器（匿名 namespace，非场景状态）。新增一条的处置是改代码
+# （进 context/参数/成员），不是登记额度。
+ECS_GLOBAL_BASELINE_FILE = "tools/checks/ecs_global_baseline.json"
+ECS_GLOBAL_UPDATE_CMD = "python3 tools/checks/main.py --update-ecs-global-baseline"
+ECS_GLOBAL_BASELINE_COMMENT = (
+    "ECS 全局可变状态棘轮基线（§9 R-EC4：rgl/*.cppm 列 0 的 namespace 作用域可变变量条数，"
+    "按文件记）。存量 = profiler 帧累加器（非场景状态）。只准降不准升：新增一条 = 有人"
+    "在拿全局变量携带状态，处置是搬进 registry context/函数参数/类成员，不是来这里登记额度。"
+    f"确实清掉一批后用 `{ECS_GLOBAL_UPDATE_CMD}` 收账。判据与盲区 → docs/风格检查规则.md §9。")
