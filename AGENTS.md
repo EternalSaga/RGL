@@ -37,6 +37,9 @@ just cpu [--arms default,no-vvl --json f.json --compare f.json --list-arms]  # C
 just run-igpu / run-dgpu / run-intel   # 强制核显 / NVIDIA prime 独显 / Intel anv
 just test                # 单元测试（tests/，**无 GPU 无窗口**，毫秒级；排除 gpu 套件）
 just test-all / test-gpu # 含设备级原语用例（要真设备 + VVL；无设备**FAIL 不 SKIP**）
+just gates               # 三道门禁一条命令（build → test → checks --strict，**逐条取退出码**）。
+                       # 🔴 别拿 `just checks 2>&1 | grep 汇总` 判绿——管道只返回最后一段的状态
+                       # ⟹ 退出码被吞成 grep 的 0，而"0 警告"那行有没有 ERROR 都会被打
 just install-hooks       # 装 pre-push 钩子（push 前跑 just test，实测 2s）；🔴 **每台机器 / 每个
                       # worktree 各装一次**，没装 = 回归网只在有人记得敲时才存在（钩子本体在
                       # `tools/hooks/`，接管原 LFS 钩子并在测试通过后接力；`just pre-push` 当命令自检）

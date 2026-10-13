@@ -249,6 +249,19 @@ install-hooks *ARGS="":
 pre-push:
     @python "{{ WORKSPACE }}/tools/hooks/pre-push" --no-stdin origin local-dryrun
 
+# 🔴 **三道门禁一条命令，逐条取退出码**（收尾 / 每组验收用）。为什么要有这条：
+# `just checks 2>&1 | grep 汇总` 把退出码**吞成 grep 的 0**——管道只返回最后一段的状态，
+# 而"0 警告"那行无论有没有 ERROR 都会被 grep 打到（汇总行本身就在），于是红树看起来是绿的。
+# 2026-10-14 通宵单实测踩过：据此把一条 3-ERROR 的树 commit 了出去（后 amend 修）。
+# 正确姿势要么 `cmd >log 2>&1; echo rc=$?`，要么直接 `just gates`。
+gates:
+    @echo "[gates] build → test → checks --strict（逐条取退出码，任一红则本条红）"
+    @rc=0; for r in build test "checks --strict"; do \
+      if just $r >/tmp/rgl_gate.log 2>&1; then echo "  ok   just $r"; \
+      else echo "  FAIL just $r —— 日志 /tmp/rgl_gate.log 末 25 行："; tail -25 /tmp/rgl_gate.log; rc=1; fi; \
+    done; \
+    if [ $rc -eq 0 ]; then echo "[gates] 全绿"; else echo "[gates] 🔴 有门禁红，别 commit"; fi; exit $rc
+
 # 全量编译基准: clean-all + config + 计时编译
 profile:
     just clean-all
