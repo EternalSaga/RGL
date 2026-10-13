@@ -163,12 +163,24 @@ export class CullDriver {
 	void reconcileLagged(const FrameDrawList& list);
 
 	/**
-	 * 对账结论落地：节流（计数/失配变化才打日志，静止不刷屏）+ 失配 warn（含 GPU 侧前 8 项
-	 * 与当前档名——三档下"哪一侧驱动 draw"必须能从日志里读出来）。
-	 * @param cpuSlots CPU 侧 objectSlot 多重集（本函数内部排序）
-	 * @param gpuSlots GPU 侧 objectSlot 多重集（本函数内部排序）
+	 * 对账结论落地（债-22 门控 + 日志节流两层，两层判据不同、缺一不可）：
+	 *
+	 * 1. **门控**（本条债要补的那层）：本轮两侧序列与上一轮**逐元素相同** ⟹ 排序后的多重集
+	 *    相同 ⟹ 比对结论相同 ⟹ 两次 `sort` 与比对整体免做。判据取"被比的那两份数据本身"，
+	 *    不取上游版本号（相机 / spin / 候选表各记一号 = 三处都要记得 bump，漏一处对账就
+	 *    **永久失明且不出声**）；它与被跳过的计算同源，构造上没有"漏"这个口子。
+	 *    🔴 不失明的论证：结论是这两份序列的**纯函数**（排序 + `==`，无状态 / 无时钟 / 无
+	 *    RNG），输入未变 ⟹ 结论未变 ⟹ 上一轮的告警（若有）已经打过，跳过不产生新的静默。
+	 *    反过来，任何**新**失配必然伴随至少一侧序列变化 ⟹ 必然走到比对。首帧无基准 ⟹ 必算。
+	 * 2. **日志节流**（既有，不动）：计数 / 失配状态变化才打，静止不刷屏。门控命中时连这层
+	 *    都不进，且两者判据等价（输入相同 ⟹ 节流状态相同），故日志行为与门控前逐帧一致。
+	 *
+	 * 顺序契约自检 `checkCullAlignment` **不在本函数、也不受本门控影响**——它是结构性守卫，
+	 * 每帧无条件跑（理由见 reconcile / reconcileLagged 注释）。
+	 * @param cpuSlots CPU 侧 objectSlot 序列（调用方每帧重建的采集缓冲；**本函数就地排序**）
+	 * @param gpuSlots GPU 侧 objectSlot 序列（同上）
 	 */
-	void reportReconcile(std::vector<uint32_t> cpuSlots, std::vector<uint32_t> gpuSlots);
+	void reportReconcile(std::vector<uint32_t>& cpuSlots, std::vector<uint32_t>& gpuSlots);
 
 	RGL::DeviceContext& device;
 	RGL::GpuCull* gpuCull;
@@ -186,6 +198,16 @@ export class CullDriver {
 	std::vector<uint32_t> pendingCpuSet;
 	uint32_t lastReconcileVisible = 0xFFFFFFFF;  // 对账日志节流（计数/失配变化才打）
 	bool lastReconcileMatch = false;
+	// ── 债-22 对账门控的上一轮输入（判据与不失明论证见 reportReconcile 声明注释）──
+	// 存的是**采集序**（GPU 侧按 candidate 升序、CPU 侧按 opaque 段序），不是排序后的多重集：
+	// 门控要在 sort 之前判，排序后存就没有"免 sort"这回事了。两侧各留一份本轮采集缓冲 +
+	// 一份上一轮基准 = 四个 vector 常驻，稳态零堆分配（原形态是每帧 4 次分配：两个 collect
+	// 各一次 + reportReconcile 按值形参各拷一次）。
+	std::vector<uint32_t> cpuSlotsScratch;  ///< 本轮 CPU 侧序列缓冲（collect 写入，就地排序）
+	std::vector<uint32_t> gpuSlotsScratch;  ///< 本轮 GPU 侧序列缓冲（同上）
+	std::vector<uint32_t> memoCpuSlots;     ///< 上一轮 CPU 侧序列（采集序）
+	std::vector<uint32_t> memoGpuSlots;     ///< 上一轮 GPU 侧序列（采集序）
+	bool reconcileMemoValid = false;        ///< false = 还没有上一轮（首帧），本轮必算
 };
 
 }  // namespace RGL

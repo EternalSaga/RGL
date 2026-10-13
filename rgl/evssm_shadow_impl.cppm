@@ -121,7 +121,7 @@ EvssmShadow::EvssmShadow(RGL::DeviceContext& vkDevice, RGL::Resources& vkResourc
 	VmaAllocationCreateInfo ai{};
 	ai.usage = VMA_MEMORY_USAGE_AUTO;
 	ai.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;  // 采样 image（RT 缓存先例同款）
-	auto img = resources->getAllocator().createImage(ii, ai);
+	auto img = resources->getAllocator().createImage(ii, ai, nullptr, "evssm_shadow/mipmaps");
 	if (!img)
 		throw std::runtime_error(
 			fmt::format("EvssmShadow: 矩图创建失败: {}", img.error().describe()));

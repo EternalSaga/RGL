@@ -146,7 +146,7 @@ inline std::expected<RtAttachment*, Error> RenderTargetCache::ensure(
 				  | vk::ImageUsageFlagBits::eSampled);
 		VmaAllocationCreateInfo alloc{};
 		alloc.usage = VMA_MEMORY_USAGE_AUTO;
-		auto imageResult = kernel.getAllocator().createImage(info, alloc);
+		auto imageResult = kernel.getAllocator().createImage(info, alloc, nullptr, "render_target_cache/rt");
 		if (!imageResult)
 			return std::unexpected(std::move(imageResult).error());
 

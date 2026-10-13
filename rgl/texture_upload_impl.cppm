@@ -177,7 +177,7 @@ vk::Format selectUploadFormat(RGL::DeviceContext& device, bool linear, const cha
 	//（最终定性 = TexturePool 生命周期 UAF，见 docs/archive/heap_texture_research.md §12.6）
 	imageAlloc.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
 	VmaAllocationInfo imageAllocData{};
-	auto imageResult = allocator.createImage(imageInfo, imageAlloc, &imageAllocData);
+	auto imageResult = allocator.createImage(imageInfo, imageAlloc, &imageAllocData, "texture_upload/image");
 	if (!imageResult) return std::unexpected(std::move(imageResult).error());
 	auto image = std::move(*imageResult);
 
@@ -202,7 +202,7 @@ vk::Format selectUploadFormat(RGL::DeviceContext& device, bool linear, const cha
 	stagingAlloc.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
 	stagingAlloc.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
 	VmaAllocationInfo stagingAllocData{};
-	auto stagingResult = allocator.createImage(stagingInfo, stagingAlloc, &stagingAllocData);
+	auto stagingResult = allocator.createImage(stagingInfo, stagingAlloc, &stagingAllocData, "texture_upload/staging");
 	if (!stagingResult) return std::unexpected(std::move(stagingResult).error());
 	auto staging = std::move(*stagingResult);
 	fillLinearStaging(dev, staging, stagingAllocData, rgba, w, h);

@@ -64,7 +64,7 @@ bool FrameCapturer::ensureCaptureStaging(VkDeviceSize bytes) {
 	alloc.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT |
 		VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
 	VmaAllocationInfo allocData{};
-	auto result = resources.getAllocator().createBuffer(info, alloc, &allocData);
+	auto result = resources.getAllocator().createBuffer(info, alloc, &allocData, "frame_capture/staging");
 	if (!result) {
 		auto logger = RLLogger::getInstance();
 		if (logger)

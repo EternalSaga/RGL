@@ -87,7 +87,7 @@ std::expected<RGL::VmaImage, Error> Resources::createDepthImage(RGL::VmaAllocato
 		depthAllocInfo.usage = VMA_MEMORY_USAGE_AUTO;
 		depthAllocInfo.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
 
-		return allocator.createImage(depthImageInfo, depthAllocInfo);
+		return allocator.createImage(depthImageInfo, depthAllocInfo, nullptr, "resources/depth");
 	}
 
 /** 契约见接口注释。实现：e2D / eD32Sfloat / eDepth aspect / levelCount = layerCount = 1
@@ -135,7 +135,8 @@ std::expected<RGL::VmaDescriptorHeap, Error> Resources::createDescriptorHeap() {
 			capacity, descriptorSize,
 			vk::BufferUsageFlagBits::eDescriptorHeapEXT,
 			reservedSlots,
-			resourceHeapAlignment);
+			resourceHeapAlignment,
+			"resources/descriptor_heap");
 	}
 
 /**
@@ -161,14 +162,82 @@ std::expected<RGL::VmaDescriptorHeap, Error> Resources::createSamplerHeap() {
 			capacity, samplerSize,
 			vk::BufferUsageFlagBits::eDescriptorHeapEXT,
 			reservedSlots,
-			heapProps.samplerHeapAlignment);
+			heapProps.samplerHeapAlignment,
+			"resources/sampler_heap");
 	}
 
 /**
- * 显存账（批 9.5 观测面，声明注释见接口）。三行：总量 / 逐 heap / 逐内存类型。
- * 数据源 vmaCalculateStatistics（VMA 全块遍历，只准启动期调用）；heap 的 usage/budget
- * 走 vmaGetHeapBudgets（VK_EXT_memory_budget 缺位时两者为 0，不是"没占显存"）。
- * 刻意不用 vmaBuildStatsString：整棵 JSON 树（含每块每空洞）进日志既读不动也没法回归。
+ * 债-31 逐分配归因（logMemoryStats 的第四段）：把存活分配台账按挂号名聚合成
+ * "哪个模块占了多少显存"的点名表，并与 vmaCalculateStatistics 的 allocationBytes 自检。
+ *
+ * 数据源是自己的台账（AllocatorControlBlock::liveAllocs，随分配建销）而**不是**
+ * vmaBuildStatsString：后者给的是逐块/逐空洞的 JSON 树，点不出"谁分配的"，整棵树进日志
+ * 也没法逐位回归。台账只存静态字面量指针，聚合只在此处（日志期）做，分配路径零开销。
+ * @param stage 阶段标签（与前三段同 `vma[stage]:` 前缀）
+ * @param records 存活分配台账（VmaAllocatorRAII::allocations()）
+ * @param alloc 分配器句柄（查内存类型 property 用）
+ * @param memProps 内存属性表（可为 nullptr）
+ * @param typeCount 内存类型数（越界防护）
+ * @param vmaAllocBytes vmaCalculateStatistics 的 allocationBytes（自检基准）
+ * @param vmaAllocCount vmaCalculateStatistics 的 allocationCount（自检基准：条数差非 0 =
+ *                      有分配点绕过了 registerAllocation，比任何单测都硬）
+ */
+void logAllocationAttribution(std::string_view stage, const std::vector<AllocRecord>& records,
+	VmaAllocator alloc, const VkPhysicalDeviceMemoryProperties* memProps, uint32_t typeCount,
+	uint64_t vmaAllocBytes, uint64_t vmaAllocCount) {
+	auto* logger = RLLogger::getInstance();
+	if (!logger)
+		return;
+	constexpr double mib = 1024.0 * 1024.0;
+
+	/** 一个挂号名聚合成一行。 */
+	struct NameAgg {
+		std::string_view name;       ///< 挂号名（"未挂号" = 绕过登记面的分配，正常应为 0 项）
+		uint64_t bytes = 0;          ///< 该名下分配的字节合计
+		uint32_t count = 0;          ///< 该名下的分配条数（循环 / 逐帧槽分配 >1）
+		uint32_t memoryType = 0xFFFFFFFF;  ///< 首条记录的内存类型号（同名分配同类型，实测成立）
+	};
+	std::vector<NameAgg> aggs;
+	uint64_t ledgerBytes = 0;
+	for (const auto& rec : records) {
+		ledgerBytes += rec.size;
+		const std::string_view nm = rec.name ? std::string_view{rec.name} : std::string_view{"未挂号"};
+		if (const auto hit = std::ranges::find(aggs, nm, &NameAgg::name); hit != aggs.end()) {
+			hit->bytes += rec.size;
+			++hit->count;
+		}
+		else
+			aggs.push_back(NameAgg{nm, rec.size, 1u, rec.memoryType});
+	}
+	// 排序 = 字节降序、同字节按名升序：迭代序不确定的容器直接打日志会让逐位回归漂
+	std::ranges::sort(aggs, [](const NameAgg& a, const NameAgg& b) {
+		if (a.bytes != b.bytes)
+			return a.bytes > b.bytes;
+		return a.name < b.name;
+	});
+	logger->info("vma[{}]:   归因 {} 项 合计 {:.2f}MiB（台账自检 {} 条 {}B，与 vma 差 {} 条 {}B；"
+		"差非 0 = 有分配点绕过登记面；未挂号分配单列成\"未挂号\"行）",
+		stage, aggs.size(), static_cast<double>(ledgerBytes) / mib, records.size(), ledgerBytes,
+		static_cast<int64_t>(vmaAllocCount) - static_cast<int64_t>(records.size()),
+		static_cast<int64_t>(vmaAllocBytes) - static_cast<int64_t>(ledgerBytes));
+	for (const auto& a : aggs) {
+		VkMemoryPropertyFlags flags = 0;
+		if (memProps && a.memoryType < typeCount)
+			vmaGetMemoryTypeProperties(alloc, a.memoryType, &flags);
+		logger->info("vma[{}]:     {:.2f}MiB x{:<4} {} [{}{} type{}]",
+			stage, static_cast<double>(a.bytes) / mib, a.count, a.name,
+			(flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ? "DEV_LOCAL" : "HOST_ONLY",
+			(flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) ? " HOST_VISIBLE" : "",
+			a.memoryType);
+	}
+}
+
+/**
+ * 显存账（批 9.5 观测面，声明注释见接口）。四段：总量 / 逐 heap / 逐内存类型 /
+ * 逐分配归因（债-31）。前三段数据源 vmaCalculateStatistics（VMA 全块遍历，只准启动期
+ * 调用）；heap 的 usage/budget 走 vmaGetHeapBudgets（VK_EXT_memory_budget 缺位时两者为 0，
+ * 不是"没占显存"）。刻意不用 vmaBuildStatsString：整棵 JSON 树（含每块每空洞）进日志既
+ * 读不动也没法回归。
  */
 void Resources::logMemoryStats(std::string_view stage) const {
 	auto* logger = RLLogger::getInstance();
@@ -222,6 +291,10 @@ void Resources::logMemoryStats(std::string_view stage) const {
 			static_cast<double>(ts.blockBytes) / mib,
 			static_cast<double>(ts.allocationBytes) / mib);
 	}
+
+	// 第四段 = 债-31 逐分配归因（聚合与自检见 logAllocationAttribution）
+	logAllocationAttribution(stage, allocator.allocations(), alloc, memProps, typeCount,
+		st.total.statistics.allocationBytes, st.total.statistics.allocationCount);
 }
 
 }  // namespace RGL

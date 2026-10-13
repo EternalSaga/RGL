@@ -302,7 +302,7 @@ GpuBuf makeBuf(const RGL::VmaAllocatorRAII& alloc, vk::raii::Device& device, uin
     ai.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
     ai.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
     VmaAllocationInfo ad{};
-    auto made = alloc.createBufferWithAddress(device, bi, ai, &ad);
+    auto made = alloc.createBufferWithAddress(device, bi, ai, &ad, "test/heap_scratch");
     REQUIRE(made.has_value());
     auto* p = static_cast<std::byte*>(ad.pMappedData);
     std::memset(p, 0, bytes);  // 显式清零：不靠"新页恰好是零"
@@ -395,7 +395,8 @@ Harness::Harness(const Fixture& fx)
     // 32 个用户槽够用：真槽 4 + 诱饵槽 4，且要能放到"绝不等于 binding 号"的位置
     const uint32_t capacity = reservedSlots + 32;
     auto made = alloc_.createDescriptorHeap(fx.device(), capacity, descriptorSize,
-        vk::BufferUsageFlagBits::eDescriptorHeapEXT, reservedSlots, hp.resourceHeapAlignment);
+        vk::BufferUsageFlagBits::eDescriptorHeapEXT, reservedSlots, hp.resourceHeapAlignment,
+        "test/heap_under_test");
     REQUIRE(made.has_value());
     heap_ = std::move(*made);
     reservedRangeSize_ = static_cast<vk::DeviceSize>(reservedSlots) * descriptorSize;
@@ -690,7 +691,8 @@ StrideHarness::StrideHarness(const Fixture& fx)
     const uint32_t reservedSlots = static_cast<uint32_t>(
         (hp.minResourceHeapReservedRange + descriptorSize - 1) / descriptorSize);
     auto made = alloc_.createDescriptorHeap(fx.device(), reservedSlots + 16, descriptorSize,
-        vk::BufferUsageFlagBits::eDescriptorHeapEXT, reservedSlots, hp.resourceHeapAlignment);
+        vk::BufferUsageFlagBits::eDescriptorHeapEXT, reservedSlots, hp.resourceHeapAlignment,
+        "test/heap_under_test");
     REQUIRE(made.has_value());
     heap_ = std::move(*made);
     reservedRangeSize_ = static_cast<vk::DeviceSize>(reservedSlots) * descriptorSize;

@@ -66,7 +66,7 @@ static void verifyVertexUpload(RGL::DeviceContext& vkDevice, RGL::Resources& res
 	ai.usage = VMA_MEMORY_USAGE_GPU_TO_CPU;
 	ai.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
 	VmaAllocationInfo ad;
-	auto sr = res.getAllocator().createBuffer(si, ai, &ad);
+	auto sr = res.getAllocator().createBuffer(si, ai, &ad, "model_importer/vertex_staging");
 	if (!sr) {
 		logger->error("vtx canary: staging alloc FAIL");
 		return;
@@ -158,7 +158,8 @@ static std::expected<void, Error> uploadChunk(RGL::DeviceContext& vkDevice, RGL:
 	allocInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT |
 		VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
 	VmaAllocationInfo allocData;
-	auto bufResult = res.getAllocator().createBufferWithAddress(device, bufferInfo, allocInfo, &allocData);
+	auto bufResult = res.getAllocator().createBufferWithAddress(device, bufferInfo, allocInfo, &allocData,
+		"model_importer/vertex_index");
 	if (!bufResult)
 		return std::unexpected(std::move(bufResult).error());
 	auto buffer = std::move(*bufResult);

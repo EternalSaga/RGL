@@ -81,7 +81,7 @@ void texelCanaryCheck(RGL::Resources& resources, const RGL::AssetTable& assets,
 	rbAlloc.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
 	rbAlloc.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
 	VmaAllocationInfo rbData{};
-	auto rbResult = resources.getAllocator().createBuffer(rbInfo, rbAlloc, &rbData);
+	auto rbResult = resources.getAllocator().createBuffer(rbInfo, rbAlloc, &rbData, "gpu_canary/readback");
 	if (!rbResult) {
 		if (logger)
 			logger->error("texel canary (frame {}): 回读缓冲创建失败 ({})", frame,

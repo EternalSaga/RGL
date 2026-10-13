@@ -115,7 +115,7 @@ std::expected<MeshletShadowArgsRing, Error> createMeshletShadowArgsRing(
 	alloc.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT
 	           | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
 	VmaAllocationInfo allocData{};
-	auto created = allocator.createBufferWithAddress(device, info, alloc, &allocData);
+	auto created = allocator.createBufferWithAddress(device, info, alloc, &allocData, "meshlet_shadow_args/ring");
 	if (!created)
 		return std::unexpected(std::move(created).error());
 	auto* mapped = static_cast<std::byte*>(allocData.pMappedData);

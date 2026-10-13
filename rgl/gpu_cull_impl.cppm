@@ -76,7 +76,7 @@ void GpuCull::createCullBuffers(vk::raii::Device& device) {
 		ta.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT |
 			VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
 		VmaAllocationInfo tadata{};
-		auto tableResult = allocator.createBufferWithAddress(device, ti, ta, &tadata);
+		auto tableResult = allocator.createBufferWithAddress(device, ti, ta, &tadata, "gpu_cull/candidate_table");
 		if (!tableResult)
 			throw std::runtime_error(tableResult.error().describe());
 		tableBuffer = std::move(*tableResult);
@@ -95,7 +95,7 @@ void GpuCull::createCullBuffers(vk::raii::Device& device) {
 			vk::BufferUsageFlagBits::eTransferDst;  // 序列 staging 拷贝目标（CPU 基值入 device）
 		VmaAllocationCreateInfo sa{};
 		sa.usage = VMA_MEMORY_USAGE_AUTO;
-		auto seqResult = allocator.createBufferWithAddress(device, si, sa);
+		auto seqResult = allocator.createBufferWithAddress(device, si, sa, nullptr, "gpu_cull/sequence");
 		if (!seqResult)
 			throw std::runtime_error(seqResult.error().describe());
 		sequenceBuffer = std::move(*seqResult);
@@ -106,7 +106,7 @@ void GpuCull::createCullBuffers(vk::raii::Device& device) {
 			vk::BufferUsageFlagBits::eShaderDeviceAddress |
 			vk::BufferUsageFlagBits::eIndirectBuffer |  // DGC sequenceCountAddress 源（VUID-11072）
 			vk::BufferUsageFlagBits::eTransferSrc;
-		auto cntResult = allocator.createBufferWithAddress(device, ci, sa);
+		auto cntResult = allocator.createBufferWithAddress(device, ci, sa, nullptr, "gpu_cull/sequence_count");
 		if (!cntResult)
 			throw std::runtime_error(cntResult.error().describe());
 		countBuffer = std::move(*cntResult);
@@ -122,7 +122,7 @@ void GpuCull::createCullBuffers(vk::raii::Device& device) {
 			vk::BufferUsageFlagBits::eIndirectBuffer;  // DGC execute indirectAddress（VUID-12407）
 		VmaAllocationCreateInfo fa{};
 		fa.usage = VMA_MEMORY_USAGE_AUTO;
-		auto streamResult = allocator.createBufferWithAddress(device, fi, fa);
+		auto streamResult = allocator.createBufferWithAddress(device, fi, fa, nullptr, "gpu_cull/entry_streams");
 		if (!streamResult)
 			throw std::runtime_error(streamResult.error().describe());
 		streamsBuffer = std::move(*streamResult);
@@ -142,7 +142,7 @@ void GpuCull::createHostRings() {
 		sa2.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT |
 			VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
 		VmaAllocationInfo sa2data{};
-		auto s2Result = allocator.createBuffer(si2, sa2, &sa2data);
+		auto s2Result = allocator.createBuffer(si2, sa2, &sa2data, "gpu_cull/sequence_staging");
 		if (!s2Result)
 			throw std::runtime_error(s2Result.error().describe());
 		seqStaging[s] = std::move(*s2Result);
@@ -159,7 +159,7 @@ void GpuCull::createHostRings() {
 		ra.usage = VMA_MEMORY_USAGE_GPU_TO_CPU;
 		ra.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
 		VmaAllocationInfo rada{};
-		auto rbResult = allocator.createBuffer(ri, ra, &rada);
+		auto rbResult = allocator.createBuffer(ri, ra, &rada, "gpu_cull/readback");
 		if (!rbResult)
 			throw std::runtime_error(rbResult.error().describe());
 		readback[s] = std::move(*rbResult);

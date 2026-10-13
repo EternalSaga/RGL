@@ -1052,7 +1052,8 @@ inline void SceneDataService::ensure() {
 	// §9.7：基址钉 256 对齐（子范围描述符 address = 基址 + 区基址，两侧都要 256 台阶）。
 	// 字段名注：VMA 3.4 起叫 minAlignment（3.0–3.3 名 allocationAlignment，计划文本用旧名）
 	alloc.minAlignment = kSceneRegionAlign;
-	auto bufResult = kernel.getAllocator().createBufferWithAddress(device.getDevice(), info, alloc);
+	auto bufResult = kernel.getAllocator().createBufferWithAddress(device.getDevice(), info, alloc, nullptr,
+		"scene_data/storage");
 	if (!bufResult)
 		throw std::runtime_error(bufResult.error().describe());
 	sceneDataBuffer = std::move(*bufResult);

@@ -240,7 +240,7 @@ void poisonPool(const RGL::VmaAllocatorRAII& allocator) {
 	ai.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT
 	         | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
 	VmaAllocationInfo ad;
-	auto poison = allocator.createBuffer(bi, ai, &ad);  // 出作用域即 vmaDestroyBuffer → 脏块回池
+	auto poison = allocator.createBuffer(bi, ai, &ad, "test/poison_pool");  // 出作用域即 vmaDestroyBuffer → 脏块回池
 	REQUIRE(poison.has_value());
 	std::memset(ad.pMappedData, 0xCD, static_cast<size_t>(kPoisonBytes));
 }

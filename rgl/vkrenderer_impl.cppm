@@ -210,7 +210,7 @@ void Renderer::createSceneStaging(RGL::Resources& vkResources) {
 				VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
 			VmaAllocationInfo allocData{};
 			auto result = vkResources.getAllocator().createBufferWithAddress(
-				vkDevice.getDevice(), info, alloc, &allocData);
+				vkDevice.getDevice(), info, alloc, &allocData, "renderer/scene_staging");
 			if (!result)
 				throw std::runtime_error(fmt::format(
 					"Renderer: scene staging alloc failed: {}", result.error().describe()));

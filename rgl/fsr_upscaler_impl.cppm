@@ -161,7 +161,7 @@ struct FsrUpscaler::Impl {
 		VmaAllocationCreateInfo ai{};
 		ai.usage = VMA_MEMORY_USAGE_AUTO;
 		ai.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
-		auto img = resources->getAllocator().createImage(ii, ai);
+		auto img = resources->getAllocator().createImage(ii, ai, nullptr, "fsr_upscaler/private_rt");
 		if (!img)
 			throw std::runtime_error(
 				fmt::format("FsrUpscaler: {} 创建失败: {}", what, img.error().describe()));

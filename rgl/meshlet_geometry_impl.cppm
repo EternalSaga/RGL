@@ -53,7 +53,7 @@ std::expected<MeshletGeometrySection, Error> uploadSection(const VmaAllocatorRAI
 	allocInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT |
 	    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
 	VmaAllocationInfo allocData;
-	auto created = allocator.createBufferWithAddress(device, bufferInfo, allocInfo, &allocData);
+	auto created = allocator.createBufferWithAddress(device, bufferInfo, allocInfo, &allocData, "meshlet_geometry/chunk");
 	if (!created)
 		return std::unexpected(std::move(created).error());
 	auto* dst = static_cast<std::byte*>(allocData.pMappedData);

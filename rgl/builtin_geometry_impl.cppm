@@ -33,7 +33,8 @@ namespace {
  * @param device 设备（createBufferWithAddress）
  * @param data CPU 源数据（顶点 / 索引数组）
  * @param bytes 字节数（= data 大小）
- * @param name 日志名（如 "cube.vertices"）
+ * @param name 日志名（如 "cube.vertices"）；同时作债-31 逐分配归因名——台账只存指针不拷贝，
+ *        **必须静态存活**（本文件两处调用方均传字符串字面量，新增调用方勿传临时 std::string）
  * @return VmaBuffer（带 BDA 设备地址）；失败 Error（VMA buffer 创建）
  */
 std::expected<RGL::VmaBuffer, Error> makeGeometryBuffer(RGL::Resources& res,
@@ -48,7 +49,7 @@ std::expected<RGL::VmaBuffer, Error> makeGeometryBuffer(RGL::Resources& res,
 	alloc.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT |
 		VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
 	VmaAllocationInfo allocData;
-	auto result = res.getAllocator().createBufferWithAddress(device, info, alloc, &allocData);
+	auto result = res.getAllocator().createBufferWithAddress(device, info, alloc, &allocData, name);
 	if (!result)
 		return std::unexpected(std::move(result).error());
 	std::memcpy(allocData.pMappedData, data, bytes);

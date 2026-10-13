@@ -173,7 +173,7 @@ export class Resources {
 			fa.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
 			fa.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
 			VmaAllocationInfo fad{};
-			auto buf = allocator.createBufferWithAddress(vkDevice.getDevice(), fi, fa, &fad);
+			auto buf = allocator.createBufferWithAddress(vkDevice.getDevice(), fi, fa, &fad, "resources/izb_mask_fallback");
 			if (!buf)
 				return std::unexpected(std::move(buf).error());
 			auto* bytes = static_cast<std::byte*>(fad.pMappedData);
@@ -229,7 +229,7 @@ export class Resources {
 			fi.sharingMode = vk::SharingMode::eExclusive;
 			VmaAllocationCreateInfo fa{};
 			fa.usage = VMA_MEMORY_USAGE_AUTO;
-			auto img = allocator.createImage(fi, fa);
+			auto img = allocator.createImage(fi, fa, nullptr, "resources/evssm_fallback");
 			if (!img)
 				return std::unexpected(std::move(img).error());
 			evssmFallback = std::move(*img);
@@ -325,9 +325,12 @@ export class Resources {
 	 * 显存账（批 9.5 观测面）：把"谁吃了多少显存"打成**可回归的启动日志**，而不是散在
 	 * 四份文档注释里的预算数字（EVSSM 44.7MB / 阴影图集 16MB / …）。
 	 *
-	 * 三行：① 总量（VkDeviceMemory 块数 / 块字节 / 分配字节 / 空洞）② 逐 heap
+	 * 四行：① 总量（VkDeviceMemory 块数 / 块字节 / 分配字节 / 空洞）② 逐 heap
 	 * （含 VK_EXT_memory_budget 的 usage/budget，缺扩展时为 0）③ 逐内存类型
-	 * （只打非空类型，带 property flags 位）。数据源 = `vmaCalculateStatistics`
+	 * （只打非空类型，带 property flags 位）④ 逐分配归因（债-31：按**分配点挂号名**聚合的
+	 * 点名表，按字节降序 + 名称升序稳定排序，末行带"台账合计 vs ① 的 allocationBytes"自检，
+	 * 差值非 0 = 有分配点绕过了登记面；数据源 = VmaRaii 的存活分配台账，见
+	 * `VmaAllocatorRAII::allocations`）。①–③ 数据源 = `vmaCalculateStatistics`
 	 * （比 `vmaBuildStatsString` 的整棵 JSON 树紧凑，且无需 vmaFreeStatsString）。
 	 *
 	 * 成本：VMA 侧全块遍历（"slower to calculate"），**只准启动期/显式诊断调用，

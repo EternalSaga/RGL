@@ -34,7 +34,7 @@ bool PickingService::ensureStaging() {
 	alloc.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT |
 		VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
 	VmaAllocationInfo allocData{};
-	auto result = resources.getAllocator().createBuffer(info, alloc, &allocData);
+	auto result = resources.getAllocator().createBuffer(info, alloc, &allocData, "picking/staging");
 	if (!result) {
 		if (auto* logger = RLLogger::getInstance())
 			logger->error("picking: staging alloc failed: {}", result.error().describe());

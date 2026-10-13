@@ -10,15 +10,87 @@ import vkerror;
 namespace RGL {
 
 /**
+ * 逐分配归因台账的一条记录（债-31）：一条 = 一个**当前存活**的 VMA 分配。
+ *
+ * `name` 指向分配点传入的**静态字面量**（台账只存指针，不拷贝、不拥有）——这就是"不得引入
+ * 运行期字符串分配开销"这条约束的落点：分配点写字符串字面量，登记面零分配零格式化。
+ * 与 VMA 本体里的名字（`vmaSetAllocationName`，VMA 内部会拷一份）是两条独立通道：前者给
+ * 外部工具（RenderDoc / vmaBuildStatsString）看，后者给本项目的 `logMemoryStats` 逐模块
+ * 点名用，两边同源同一个字面量。
+ */
+export struct AllocRecord {
+	VmaAllocation allocation = nullptr;  ///< VMA 分配句柄（销账键；移动 VmaBuffer 不改它）
+	const char* name = nullptr;          ///< 分配点挂号名（静态字面量；nullptr = 未挂号）
+	VkDeviceSize size = 0;               ///< 分配字节数（与 VmaTotalStatistics::allocationBytes 同口径）
+	uint32_t memoryType = 0xFFFFFFFF;    ///< VMA 内存类型号（heap / property 由它查）
+};
+
+/**
  * VMA 分配器控制块（shared_ptr 载荷）：持有裸 VmaAllocator 句柄，
  * 最后一个 SharedAllocator 引用消失时经 deleter 调 vmaDestroyAllocator。
+ *
+ * 顺带承载**逐分配归因台账**（债-31）：住在这里而不是全局，是为了让生命周期天然对齐——
+ * VmaBuffer/VmaImage 都持本控制块的 shared_ptr，销毁时控制块必然还活着（不会拿到已析构
+ * 的全局 vector），而台账语义恰好是"与该分配器同生共死的存活分配"。
+ *
+ * 🔴 台账**无锁**：登记/销账只发生在主线程（本项目不做多线程录制，见 AGENTS「渲染图边界」；
+ * 全项目唯一线程 = debug_rpc，它不创建也不销毁任何 VMA 资源）。将来若引入多线程上传，
+ * 这两个 vector 与 VMA 自身的线程安全性要一起重新裁决。
  */
 struct AllocatorControlBlock {
 	VmaAllocator handle;
+	std::vector<AllocRecord> liveAllocs;  // 存活分配台账（建/销随分配同生命周期）
 };
 
 /** 共享分配器控制块（同进程内 VmaBuffer/VmaImage 共享一份；分配器随最后一个引用销毁）。 */
 export using SharedAllocator = std::shared_ptr<AllocatorControlBlock>;
+
+/**
+ * 登记一条存活分配（三个 create* 出口调用）：读回 VMA 的 size / memoryType 落台账，并把
+ * 名字写进 VMA 本体。
+ *
+ * 🔴 名字走 `vmaSetAllocationName` 而**不是** `VmaAllocationCreateInfo::pName`：本机 VMA
+ * = 3.4.0（vcpkg `GPUOpen::VulkanMemoryAllocator`，头 = build/vcpkg_installed/.../
+ * vk_mem_alloc.h，`VmaAllocationCreateInfo` 实测字段只有 flags/usage/requiredFlags/
+ * preferredFlags/memoryTypeBits/pool/pUserData/priority/minAlignment，**没有 pName**；
+ * pName 只在**输出**结构 `VmaAllocationInfo` 里，写入面只有 vmaSetAllocationName 这一条）。
+ * 也**不需要**开 VMA_STATISTICS / 任何 debug 宏：`VMA_STATS_STRING_ENABLED` 默认 1，
+ * 而本台账压根不读 vmaBuildStatsString（整棵 JSON 树进日志既读不动也没法回归，见
+ * Resources::logMemoryStats 注释）。
+ * 唯一成本 = VMA 内部对字面量拷一份**主机**字符串（走分配器的 VkAllocationCallbacks，
+ * 本机未设 ⟹ 主机 new），发生在分配时（启动 / resize），**不进设备内存、不进每帧热路径**，
+ * 也不计入 vmaCalculateStatistics 的显存口径（实测两级读数逐字节不变）。
+ * @param block 分配器控制块
+ * @param allocation 刚建好的分配句柄
+ * @param name 分配点挂号名（静态字面量；nullptr = 未挂号，台账里点名成"未挂号"行）
+ */
+inline void registerAllocation(const SharedAllocator& block, VmaAllocation allocation,
+	const char* name) {
+	if (!block || !block->handle || !allocation)
+		return;
+	VmaAllocationInfo info{};
+	vmaGetAllocationInfo(block->handle, allocation, &info);
+	block->liveAllocs.push_back(AllocRecord{allocation, name, info.size, info.memoryType});
+	if (name)
+		vmaSetAllocationName(block->handle, allocation, name);
+}
+
+/**
+ * 销账（VmaBuffer / VmaImage 的销毁路径调用）：按句柄线性查删。
+ * O(存活数) 但只在分配销毁时跑（启动 / resize / 首帧懒构造），不在每帧热路径；swap-remove
+ * 保序无意义（台账消费方自己按名字聚合排序）。
+ * @param block 分配器控制块
+ * @param allocation 要注销的分配句柄
+ */
+inline void unregisterAllocation(const SharedAllocator& block, VmaAllocation allocation) {
+	if (!block || !allocation)
+		return;
+	const auto hit = std::ranges::find(block->liveAllocs, allocation, &AllocRecord::allocation);
+	if (hit == block->liveAllocs.end())
+		return;  // 未登记过（理论不可达：三个 create* 出口全登记）——**不得**误删他人记录
+	*hit = std::move(block->liveAllocs.back());
+	block->liveAllocs.pop_back();
+}
 
 /**
  * VMA 托管 buffer 的 RAII 包装：持有 (buffer, allocation) 对，析构时
@@ -46,10 +118,12 @@ export struct VmaBuffer {
 	VmaBuffer(SharedAllocator allocBlock, VkBuffer buf, VmaAllocation alloctn, vk::DeviceAddress addr = 0, void* mapped = nullptr)
 		: allocatorBlock(std::move(allocBlock)), buffer(buf), allocation(alloctn), deviceAddress(addr), pMappedData(mapped) {}
 
-	/** 析构：buffer/allocation 均有效时 vmaDestroyBuffer（经控制块的分配器句柄）。 */
+	/** 析构：buffer/allocation 均有效时 vmaDestroyBuffer（经控制块的分配器句柄）+ 销账。 */
 	~VmaBuffer() {
-		if (allocatorBlock && allocatorBlock->handle && buffer && allocation)
+		if (allocatorBlock && allocatorBlock->handle && buffer && allocation) {
+			unregisterAllocation(allocatorBlock, allocation);
 			vmaDestroyBuffer(allocatorBlock->handle, buffer, allocation);
+		}
 	}
 
 	/** 拷贝删除：GPU 资源所有权唯一（move-only）。 */
@@ -66,11 +140,13 @@ export struct VmaBuffer {
 		o.pMappedData = nullptr;
 	}
 
-	/** 移动赋值：先销毁本对象持有的旧 buffer，再接管源对象资源并清空源。 */
+	/** 移动赋值：先销毁本对象持有的旧 buffer（一并销账），再接管源对象资源并清空源。 */
 	VmaBuffer& operator=(VmaBuffer&& o) noexcept {
 		if (this != &o) {
-			if (allocatorBlock && allocatorBlock->handle && buffer && allocation)
+			if (allocatorBlock && allocatorBlock->handle && buffer && allocation) {
+				unregisterAllocation(allocatorBlock, allocation);
 				vmaDestroyBuffer(allocatorBlock->handle, buffer, allocation);
+			}
 			allocatorBlock = std::move(o.allocatorBlock);
 			buffer = o.buffer;
 			allocation = o.allocation;
@@ -112,10 +188,12 @@ export struct VmaImage {
 	VmaImage(SharedAllocator allocBlock, VkImage img, VmaAllocation alloctn)
 		: allocatorBlock(std::move(allocBlock)), image(img), allocation(alloctn) {}
 
-	/** 析构：image/allocation 均有效时 vmaDestroyImage（经控制块的分配器句柄）。 */
+	/** 析构：image/allocation 均有效时 vmaDestroyImage（经控制块的分配器句柄）+ 销账。 */
 	~VmaImage() {
-		if (allocatorBlock && allocatorBlock->handle && image && allocation)
+		if (allocatorBlock && allocatorBlock->handle && image && allocation) {
+			unregisterAllocation(allocatorBlock, allocation);
 			vmaDestroyImage(allocatorBlock->handle, image, allocation);
+		}
 	}
 
 	/** 拷贝删除：GPU 资源所有权唯一（move-only）。 */
@@ -130,11 +208,13 @@ export struct VmaImage {
 		o.allocation = nullptr;
 	}
 
-	/** 移动赋值：先销毁本对象持有的旧 image，再接管源对象资源并清空源。 */
+	/** 移动赋值：先销毁本对象持有的旧 image（一并销账），再接管源对象资源并清空源。 */
 	VmaImage& operator=(VmaImage&& o) noexcept {
 		if (this != &o) {
-			if (allocatorBlock && allocatorBlock->handle && image && allocation)
+			if (allocatorBlock && allocatorBlock->handle && image && allocation) {
+				unregisterAllocation(allocatorBlock, allocation);
 				vmaDestroyImage(allocatorBlock->handle, image, allocation);
+			}
 			allocatorBlock = std::move(o.allocatorBlock);
 			image = o.image;
 			allocation = o.allocation;
@@ -290,7 +370,7 @@ export class VmaAllocatorRAII {
 		if (vmaCreateAllocator(&allocatorInfo, &raw) != VK_SUCCESS) {
 			throw std::runtime_error("Failed to create VMA Allocator");
 		}
-		allocatorBlock = SharedAllocator(new AllocatorControlBlock{raw},
+		allocatorBlock = SharedAllocator(new AllocatorControlBlock{raw, {}},
 			[](AllocatorControlBlock* p) {
 				if (p) {
 					if (p->handle) vmaDestroyAllocator(p->handle);
@@ -314,9 +394,12 @@ export class VmaAllocatorRAII {
 	 * @param bufferInfo buffer 创建参数
 	 * @param allocInfo 分配参数（usage/flags）
 	 * @param pAllocInfo 可选输出：分配信息（含 mapped 指针）
+	 * @param name 逐分配归因名（债-31，**静态字面量**；登记进台账 + VMA 本体）。🔴 **无默认值**：
+	 *        新增分配点漏挂号 = 编译失败，比运行期发现早一个阶段（运行期兜底 = logMemoryStats
+	 *        的台账自检行，拦的是"显式传 nullptr"这种形态）
 	 * @return VmaBuffer；VMA 失败返回 VMASuccessFailed
 	 */
-	[[nodiscard]] std::expected<VmaBuffer, Error> createBuffer(const vk::BufferCreateInfo& bufferInfo, const VmaAllocationCreateInfo& allocInfo, VmaAllocationInfo* pAllocInfo = nullptr) const {
+	[[nodiscard]] std::expected<VmaBuffer, Error> createBuffer(const vk::BufferCreateInfo& bufferInfo, const VmaAllocationCreateInfo& allocInfo, VmaAllocationInfo* pAllocInfo, const char* name) const {
 		VkBuffer buffer;
 		VmaAllocation allocation;
 		VkResult result = vmaCreateBuffer(allocatorBlock->handle, reinterpret_cast<const VkBufferCreateInfo*>(&bufferInfo), &allocInfo, &buffer, &allocation, pAllocInfo);
@@ -324,6 +407,7 @@ export class VmaAllocatorRAII {
 			return std::unexpected(Error{ErrorCode::VMASuccessFailed,
 				"VMA failed to create buffer"});
 		}
+		registerAllocation(allocatorBlock, allocation, name);
 		return VmaBuffer(allocatorBlock, buffer, allocation);
 	}
 
@@ -333,9 +417,12 @@ export class VmaAllocatorRAII {
 	 * @param bufferInfo buffer 创建参数
 	 * @param allocInfo 分配参数
 	 * @param pAllocInfo 可选输出：分配信息（createDescriptorHeap 从 pMappedData 读映射地址）
+	 * @param name 逐分配归因名（债-31，**静态字面量**；登记进台账 + VMA 本体）。🔴 **无默认值**：
+	 *        新增分配点漏挂号 = 编译失败，比运行期发现早一个阶段（运行期兜底 = logMemoryStats
+	 *        的台账自检行，拦的是"显式传 nullptr"这种形态）
 	 * @return VmaBuffer（deviceAddress 与 pMappedData 均已填）；VMA 失败返回 VMASuccessFailed
 	 */
-	[[nodiscard]] std::expected<VmaBuffer, Error> createBufferWithAddress(const vk::raii::Device& device, const vk::BufferCreateInfo& bufferInfo, const VmaAllocationCreateInfo& allocInfo, VmaAllocationInfo* pAllocInfo = nullptr) const {
+	[[nodiscard]] std::expected<VmaBuffer, Error> createBufferWithAddress(const vk::raii::Device& device, const vk::BufferCreateInfo& bufferInfo, const VmaAllocationCreateInfo& allocInfo, VmaAllocationInfo* pAllocInfo, const char* name) const {
 		VkBuffer buffer;
 		VmaAllocation allocation;
 		VkResult result = vmaCreateBuffer(allocatorBlock->handle,
@@ -344,6 +431,7 @@ export class VmaAllocatorRAII {
 		if (result != VK_SUCCESS) {
 			return std::unexpected(Error{ErrorCode::VMASuccessFailed, "VMA failed to create buffer"});
 		}
+		registerAllocation(allocatorBlock, allocation, name);
 		vk::BufferDeviceAddressInfo addrInfo{};
 		addrInfo.buffer = buffer;
 		vk::DeviceAddress addr = device.getBufferAddress(addrInfo);
@@ -355,15 +443,19 @@ export class VmaAllocatorRAII {
 	 * @param imageInfo image 创建参数
 	 * @param allocInfo 分配参数
 	 * @param pAllocInfo 可选输出：分配信息
+	 * @param name 逐分配归因名（债-31，**静态字面量**；登记进台账 + VMA 本体）。🔴 **无默认值**：
+	 *        新增分配点漏挂号 = 编译失败，比运行期发现早一个阶段（运行期兜底 = logMemoryStats
+	 *        的台账自检行，拦的是"显式传 nullptr"这种形态）
 	 * @return VmaImage；VMA 失败返回 VMASuccessFailed
 	 */
-	[[nodiscard]] std::expected<VmaImage, Error> createImage(const vk::ImageCreateInfo& imageInfo, const VmaAllocationCreateInfo& allocInfo, VmaAllocationInfo* pAllocInfo = nullptr) const {
+	[[nodiscard]] std::expected<VmaImage, Error> createImage(const vk::ImageCreateInfo& imageInfo, const VmaAllocationCreateInfo& allocInfo, VmaAllocationInfo* pAllocInfo, const char* name) const {
 		VkImage image;
 		VmaAllocation allocation;
 		VkResult result = vmaCreateImage(allocatorBlock->handle, reinterpret_cast<const VkImageCreateInfo*>(&imageInfo), &allocInfo, &image, &allocation, pAllocInfo);
 		if (result != VK_SUCCESS) {
 			return std::unexpected(Error{ErrorCode::VMASuccessFailed, "VMA failed to create image"});
 		}
+		registerAllocation(allocatorBlock, allocation, name);
 		return VmaImage(allocatorBlock, image, allocation);
 	}
 
@@ -383,6 +475,7 @@ export class VmaAllocatorRAII {
 	 * @param extraUsageFlags 追加 usage flags（必须含 eDescriptorHeapEXT）
 	 * @param reservedSlots 驱动保留槽位数（头部 [0, reservedSlots) 范围）
 	 * @param resourceHeapAlignment 设备 heap 对齐
+	 * @param name 逐分配归因名（债-31，**静态字面量**；透传给底层 buffer 分配，**必填**）
 	 * @return VmaDescriptorHeap；底层 buffer 创建失败时透传 VMASuccessFailed
 	 * @note eShaderDeviceAddress 与 eDescriptorHeapEXT 两个 usage flag 必须同时设置，
 	 *       缺任一个都是 undefined behavior（spec 3.3）
@@ -393,7 +486,8 @@ export class VmaAllocatorRAII {
 		uint32_t descriptorSize,
 		vk::BufferUsageFlags extraUsageFlags,
 		uint32_t reservedSlots,
-		vk::DeviceSize resourceHeapAlignment) const {
+		vk::DeviceSize resourceHeapAlignment,
+		const char* name) const {
 		vk::BufferCreateInfo bufferInfo{};
 		bufferInfo.size = static_cast<vk::DeviceSize>(descriptorSize) * capacity;  // 总分配 = 槽位数 × 槽大小，不超额分配
 		// 两个 usage flag 必须同时设置：缺 eShaderDeviceAddress 或 eDescriptorHeapEXT
@@ -406,7 +500,7 @@ export class VmaAllocatorRAII {
 			.usage = VMA_MEMORY_USAGE_AUTO};
 
 		VmaAllocationInfo allocInfo;
-		auto storageResult = createBufferWithAddress(device, bufferInfo, allocCreateInfo, &allocInfo);
+		auto storageResult = createBufferWithAddress(device, bufferInfo, allocCreateInfo, &allocInfo, name);
 		if (!storageResult) return std::unexpected(storageResult.error());
 
 		vk::DeviceAddress rawAddr = storageResult->getDeviceAddress();
@@ -442,6 +536,16 @@ export class VmaAllocatorRAII {
 
 	/** 裸 VmaAllocator 句柄（控制块为空时返回 nullptr）。 */
 	VmaAllocator get() const { return allocatorBlock ? allocatorBlock->handle : nullptr; }
+
+	/**
+	 * 逐分配归因台账（债-31）：当前**存活**分配的挂号名 / 字节数 / 内存类型。
+	 * 消费方 = `Resources::logMemoryStats`（按名字聚合成"哪个模块占多少显存"的点名表）。
+	 * @return 台账只读引用；控制块为空（被移动走）时返回空表
+	 */
+	[[nodiscard]] const std::vector<AllocRecord>& allocations() const {
+		static const std::vector<AllocRecord> kEmpty{};  // 空控制块的稳定空表
+		return allocatorBlock ? allocatorBlock->liveAllocs : kEmpty;
+	}
 };
 
 }  // namespace RGL

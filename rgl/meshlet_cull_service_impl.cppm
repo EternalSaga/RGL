@@ -80,7 +80,8 @@ void MeshletCullService::createVisibleFlags() {
 	// device-local：每帧被 compute 写；host 映射形态会在无 large-BAR 的独显上把它落到系统内存
 	VmaAllocationCreateInfo alloc{};
 	alloc.usage = VMA_MEMORY_USAGE_AUTO;
-	auto created = resources.getAllocator().createBufferWithAddress(vkDevice, info, alloc);
+	auto created = resources.getAllocator().createBufferWithAddress(vkDevice, info, alloc, nullptr,
+		"meshlet_cull/visible_flags");
 	if (!created)
 		throw std::runtime_error(created.error().describe());
 	visibleBuffer = std::move(*created);
@@ -162,7 +163,8 @@ void MeshletCullService::uploadItems(std::span<const MeshletCullItem> items) {
 	    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
 	VmaAllocationInfo allocData{};
 	auto created =
-	    resources.getAllocator().createBufferWithAddress(device.getDevice(), info, alloc, &allocData);
+	    resources.getAllocator().createBufferWithAddress(device.getDevice(), info, alloc, &allocData,
+	    "meshlet_cull/items");
 	if (!created)
 		throw std::runtime_error(created.error().describe());
 	auto* dst = static_cast<std::byte*>(allocData.pMappedData);

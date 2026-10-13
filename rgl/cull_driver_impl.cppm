@@ -15,6 +15,7 @@ import gpu_cull;
 import diagnostics;  // 债-30 方案 C：cull_replay 三态门（docs/cpu_perf_plan.md §4）
 import gpu_profiler;  // Phase 9.2：cull CB 时间戳（cull 区域与主 CB gpu.frame 同槽配对）
 import profiler;      // 批 9.5：cull 四段 CPU zone（cull.fenceWait = Phase 9 从未量过的那次同步）
+import timing_util;   // 债-22：门控读数的采样时刻（CounterRecord::tsNs）
 import vk_indirect_commands;
 import shader_registry;
 import frame_draw_list;
@@ -25,15 +26,22 @@ namespace RGL {
 
 namespace {
 
-/** 收集 CPU opaque 段（[0, skyboxStart)）各 draw 的 objectIndex（对账 CPU 侧多重集源）。 */
-std::vector<uint32_t> collectCpuObjectSlots(const FrameDrawList& list) {
-	std::vector<uint32_t> cpuSlots;
-	cpuSlots.reserve(list.skyboxStart);
+/**
+ * 债-22 门控读数计数器名（CounterRecord::name 要求生命周期 ≥ dump ⟹ 静态字面量）。
+ * 口径：每轮对账推一条，值 1 = 本轮两侧输入未变被跳过、0 = 本轮真算
+ * ⟹ stats JSON `counters` 里 count = 对账轮数、avg = 跳过率、sum = 跳过数。
+ */
+constexpr std::string_view kCounterReconcileSkip = "cull.reconcileSkip";
+
+/** 收集 CPU opaque 段（[0, skyboxStart)）各 draw 的 objectIndex（对账 CPU 侧多重集源）。
+ *  写入调用方复用的缓冲（债-22：clear 不缩容 ⟹ 稳态零堆分配）。 */
+void collectCpuObjectSlots(const FrameDrawList& list, std::vector<uint32_t>& out) {
+	out.clear();
+	out.reserve(list.skyboxStart);
 	for (uint32_t i = 0; i < list.skyboxStart; ++i) {
 		const auto* a = reinterpret_cast<const RGL::DrawArgs*>(list.calls[i].pushData.data());
-		cpuSlots.push_back(a->objectIndex);
+		out.push_back(a->objectIndex);
 	}
-	return cpuSlots;
 }
 
 /** cullArgs[i] ↔ entries[i] 同 objectSlot 顺序契约自检（Phase 7b）；首个失配 warn 后即返（等价原 break）。 */
@@ -48,14 +56,14 @@ void checkCullAlignment(const FrameDrawList& list, const RGL::GpuCull& gpuCull) 
 	}
 }
 
-/** 收集 GPU 可见 candidate 的 objectSlot（对账 GPU 侧多重集源，candidate 序）。 */
-std::vector<uint32_t> collectGpuVisibleSlots(const RGL::GpuCull& gpuCull) {
-	std::vector<uint32_t> gpuSlots;
-	gpuSlots.reserve(gpuCull.candidateCount());
+/** 收集 GPU 可见 candidate 的 objectSlot（对账 GPU 侧多重集源，candidate 序）。
+ *  写入调用方复用的缓冲（债-22：稳态零堆分配）。 */
+void collectGpuVisibleSlots(const RGL::GpuCull& gpuCull, std::vector<uint32_t>& out) {
+	out.clear();
+	out.reserve(gpuCull.candidateCount());
 	for (uint32_t i = 0; i < gpuCull.candidateCount(); ++i)
 		if (gpuCull.isVisible(i))
-			gpuSlots.push_back(gpuCull.entries()[i].objectSlot);
-	return gpuSlots;
+			out.push_back(gpuCull.entries()[i].objectSlot);
 }
 
 }  // namespace
@@ -162,7 +170,7 @@ std::expected<void, Error> CullDriver::submitCullPass(uint32_t frameSlot, uint64
 	// 本帧 CPU opaque 表挂进待收清单：滞后档在下一帧拿它跟 GPU 结果比（"同一帧的两侧、
 	// 只是晚一帧报"，理由见 reconcileLagged 注释）。
 	pendingSlot = frameSlot;
-	pendingCpuSet = collectCpuObjectSlots(list);
+	collectCpuObjectSlots(list, pendingCpuSet);
 	harvestPending = true;
 	return {};
 }
@@ -193,10 +201,15 @@ std::expected<void, Error> CullDriver::harvest(uint32_t slot, const FrameDrawLis
 		device_.resetFences(*cullFences[slot]);
 		harvestPending = false;
 		gpuCull->readCullResult(slot);
-		if (replayMode == CullReplayMode::gpuLagged)
-			reconcileLagged(list);
-		else
-			reconcile(list);
+		{
+			// 债-22：对账单独成段——此前它埋在 cull.readback 里与 fence 复位 / mapped 读回
+			// 混在一起，门控省掉了多少无从读出（批 9.5 "未归因段"同一病灶）
+			auto zr = zone("cull.reconcile");
+			if (replayMode == CullReplayMode::gpuLagged)
+				reconcileLagged(list);
+			else
+				reconcile(list);
+		}
 	}
 	return {};
 }
@@ -250,8 +263,11 @@ void CullDriver::executeOpaqueSegment(vk::raii::CommandBuffer& cmd, const FrameD
 void CullDriver::reconcile(const FrameDrawList& list) {
 	// 对齐自检（Phase 7b 顺序契约）：cullArgs[i] ↔ entries[i] 必须同 objectSlot
 	//（render_list 与 main C3 同守卫同序的运行时证明；失配 = args 错位 → 重放画错矩阵）
+	// 🔴 不受债-22 门控影响：这是结构性守卫，每帧无条件跑（门控只覆盖下面的多重集比对）。
 	checkCullAlignment(list, *gpuCull);
-	reportReconcile(collectCpuObjectSlots(list), collectGpuVisibleSlots(*gpuCull));
+	collectCpuObjectSlots(list, cpuSlotsScratch);
+	collectGpuVisibleSlots(*gpuCull, gpuSlotsScratch);
+	reportReconcile(cpuSlotsScratch, gpuSlotsScratch);
 }
 
 void CullDriver::reconcileLagged(const FrameDrawList& list) {
@@ -259,11 +275,30 @@ void CullDriver::reconcileLagged(const FrameDrawList& list) {
 	// 候选表构造顺序），与"GPU 结果晚一帧"无关。可见集合的比对则必须用提交那一帧记下的
 	// CPU 表——相机每帧跟着动，拿本帧表比 GPU 的上一帧结果 = 一动就必然失配 = 告警永久化。
 	checkCullAlignment(list, *gpuCull);
-	reportReconcile(pendingCpuSet, collectGpuVisibleSlots(*gpuCull));
+	cpuSlotsScratch = pendingCpuSet;  // 采集序原样搬进缓冲（容量复用 = 稳态零分配）
+	collectGpuVisibleSlots(*gpuCull, gpuSlotsScratch);
+	reportReconcile(cpuSlotsScratch, gpuSlotsScratch);
 }
 
-void CullDriver::reportReconcile(std::vector<uint32_t> cpuSlots,
-		std::vector<uint32_t> gpuSlots) {
+void CullDriver::reportReconcile(std::vector<uint32_t>& cpuSlots, std::vector<uint32_t>& gpuSlots) {
+	// ── 债-22 门控（判据与不失明论证见声明注释）──
+	// 两侧序列与上一轮逐元素相同 ⟹ 排序后的多重集相同 ⟹ 结论相同 ⟹ 两次 sort 与比对免做。
+	// 判据取"被比的那两份数据本身"，不取上游版本号：结论是本函数的纯函数（排序 + ==，
+	// 无状态 / 无时钟 / 无 RNG），输入未变就必然结论未变；而任何**新**失配必然伴随至少
+	// 一侧序列变化 ⟹ 必然走到下面的比对。首帧无基准 = 必算。
+	const bool unchanged = reconcileMemoValid && cpuSlots == memoCpuSlots
+		&& gpuSlots == memoGpuSlots;
+	// 门控读数（profiler 关时 profilerPushCounter 自身静默丢）：1 = 本轮跳过、0 = 本轮真算
+	// ⟹ stats JSON 里 avg = 跳过率、count = 对账轮数、sum = 跳过数。
+	profilerPushCounter(CounterRecord{
+		.frame = profilerCurrentFrame(), .tsNs = steadyNowNs(),
+		.value = unchanged ? 1ULL : 0ULL, .name = kCounterReconcileSkip});
+	if (unchanged)
+		return;
+	reconcileMemoValid = true;
+	memoCpuSlots = cpuSlots;  // 存**采集序**（下面就地排序，基准必须是排序前的序）
+	memoGpuSlots = gpuSlots;
+
 	// CPU opaque 段（[0, skyboxStart)）的 objectSlot 多重集 vs GPU 可见 candidate 的
 	// objectSlot 多重集（逐 candidate 固定槽，顺序无关 → 排序后多重集比对）
 	bool match = cpuSlots.size() == gpuSlots.size();

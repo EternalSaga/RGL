@@ -81,7 +81,7 @@ std::expected<CubeImages, Error> createCubeImages(RGL::Resources& resources, uin
 	VmaAllocationCreateInfo imageAlloc{};
 	imageAlloc.usage = VMA_MEMORY_USAGE_GPU_ONLY;
 	imageAlloc.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;  // 独占分配（2D 路径现状一致）
-	auto imageResult = allocator.createImage(imageInfo, imageAlloc);
+	auto imageResult = allocator.createImage(imageInfo, imageAlloc, nullptr, "texture_upload/cube_env");
 	if (!imageResult)
 		return std::unexpected(std::move(imageResult).error());
 
@@ -105,7 +105,7 @@ std::expected<CubeImages, Error> createCubeImages(RGL::Resources& resources, uin
 	stagingAlloc.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
 	for (uint32_t face = 0; face < 6; ++face) {
 		auto stagingResult = allocator.createImage(stagingInfo, stagingAlloc,
-			&out.stagingData[face]);
+			&out.stagingData[face], "texture_upload/cube_staging");
 		if (!stagingResult)
 			return std::unexpected(std::move(stagingResult).error());
 		out.stagings.push_back(std::move(*stagingResult));
@@ -389,7 +389,7 @@ void cubeCanary(RGL::Resources& resources, RGL::DeviceContext& device, CubeImage
 	rbAlloc.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
 	rbAlloc.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
 	VmaAllocationInfo rbData{};
-	auto rbResult = allocator.createBuffer(rbInfo, rbAlloc, &rbData);
+	auto rbResult = allocator.createBuffer(rbInfo, rbAlloc, &rbData, "texture_upload/cube_readback");
 	if (!rbResult)
 		return;
 	auto& rb = *rbResult;

@@ -137,6 +137,8 @@ IzbShadow::IzbShadow(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
 
 	const auto makeDevBuf = [&](vk::DeviceSize bytes, vk::BufferUsageFlags extra,
 	                             const char* name) -> RGL::VmaBuffer {
+		// name 既进错误消息也进债-31 归因台账（台账存指针不拷贝 ⟹ 调用方必须传字面量，
+		// 本文件四处均是）
 		vk::BufferCreateInfo bi{};
 		bi.size = bytes;
 		bi.usage = vk::BufferUsageFlagBits::eStorageBuffer
@@ -146,7 +148,7 @@ IzbShadow::IzbShadow(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
 		ai.usage = VMA_MEMORY_USAGE_GPU_ONLY;
 		// createBufferWithAddress（gpu_cull 同款）：普通 createBuffer 不查询 BDA，
 		// getDeviceAddress() 恒 0（首跑 VVL 实录：写描述符 address is zero）
-		auto r = resources->getAllocator().createBufferWithAddress(dev, bi, ai);
+		auto r = resources->getAllocator().createBufferWithAddress(dev, bi, ai, nullptr, name);
 		if (!r)
 			throw std::runtime_error(fmt::format("izb: {} buffer: {}", name, r.error().describe()));
 		return std::move(*r);
@@ -174,7 +176,7 @@ IzbShadow::IzbShadow(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
 		sa.usage = VMA_MEMORY_USAGE_GPU_TO_CPU;
 		sa.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
 		VmaAllocationInfo sad{};
-		auto r = resources->getAllocator().createBuffer(si, sa, &sad);
+		auto r = resources->getAllocator().createBuffer(si, sa, &sad, "izb/readback_ring");
 		if (!r)
 			throw std::runtime_error(fmt::format("izb: staging: {}", r.error().describe()));
 		staging[s] = std::move(*r);
