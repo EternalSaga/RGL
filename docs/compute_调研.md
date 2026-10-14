@@ -666,6 +666,54 @@ cull CB 与主 CB 都提交到 `getGraphicsQueue()`，且 cull CB 先提交 ⟹ 
 
 
 
+
+### 7.9 L2 可行性 spike（2026-10-14 实测）：**不用碰 SPV 码流**，反射直接给方向
+
+**问题**（= 债-117）：L1 只数「已登记的边」。要抓「该同步却压根没写一条边」，需要一个**独立于
+边表**的来源回答「这个 dispatch 会写哪些 buffer」。原设想 = 从 SPV 码流读 `NonWritable`
+decoration（§7.3 写下时按"只能这样"处理），且当时 grep Slang C++ 反射头找不到 `isReadOnly`
+类 API ⟹ 当时把 L2 标成**高不确定**。
+
+**实测结论：`slangc -reflection-json` 里 `parameters[].type.access` 就是那个来源。**
+取值 `readWrite` = 声明可写；**字段整个缺失 = 只读**。八种形态一次跑齐（本机 slangc 2026.16）：
+
+| binding | 声明 | `baseShape` | `type.access` |
+|---|---|---|---|
+| 0 | `readonly ByteAddressBuffer` | byteAddressBuffer | （无字段） |
+| 1 | `ByteAddressBuffer` | byteAddressBuffer | （无字段） |
+| 2 | `RWByteAddressBuffer` | byteAddressBuffer | **`readWrite`** |
+| 3 | `StructuredBuffer<T>` | structuredBuffer | （无字段） |
+| 4 | `RWStructuredBuffer<T>` | structuredBuffer | **`readWrite`** |
+| 5 | `ConstantBuffer<T>` | — | （无字段） |
+| 6 | `Texture2D<float4>` | texture2D | （无字段） |
+| 7 | `RWTexture2D<float4>` | texture2D | **`readWrite`** |
+
+复算命令（判据本体，别只信这张表）：
+
+```bash
+build/_deps/slang-prebuilt-src/bin/slangc <shader>.slang -target spirv \
+  -capability spvDescriptorHeapEXT -profile sm_6_6+spirv_1_6 -fvk-use-scalar-layout \
+  -entry main -stage compute -reflection-json out.json -o out.spv
+# 然后读 out.json 的 parameters[].type.access（本项目 flags 唯一声明点 = cmake/RglSlang.cmake）
+```
+
+**三条口径限制**（不写清就会被读宽）：
+
+1. 🔴 **声明级，不是使用级**：`RWStructuredBuffer` 即使本 entry point 只读不写，也照样报
+   `readWrite` ⟹ 判据是**保守**的（宁可多要求一条边）。方向是安全的（过度同步 ≠ 漏同步，
+   与 §7.8 那条 `size` 等价性同一条理）；代价是"消掉误报"要回去把 shader 改成 `readonly`
+   ——**这反而好**：shader 侧的 `readonly` 从注释变成机器可校验的声明。
+2. `writable ConstantBuffer` **不是 Slang 语法**（实测 `E20001 unexpected token`）⟹ 「CB 被
+   shader 写」这条路在本项目的语言里不存在，判据不必为它设计。
+3. 🔴 **主要工作量不在判据，在前置**：这些 compute shader **根本没进反射管线**
+   （`rgl/shaders/cull.comp.slang` 头注释自述"首版不接反射管线"）。L2 动手 = 先把 compute
+   纳入反射（或单开一条只出 binding 方向的轻量 pass），再谈与边表对账。
+
+**结论**：L2 从「高不确定（可能拿不到信息）」降成「**判据已定、工作量在接反射管线**」。
+B2 排期时按后者估。
+
+
+
 ---
 
 ## 8. 待挂号（本批**未落**总账，等用户选处置）
