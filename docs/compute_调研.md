@@ -274,7 +274,8 @@ B 档否决理由③：**barrier 改由图发 ⟹ 模块无从返回真实布局
 
 | | 内容 | 独立收益 | 风险 |
 |---|---|---|---|
-| **B1**（= 原 Increment 1，起手不变） | **图外工作的申报面**：compute/图外用户向执行器申报 `(挂点, 读的资源, 写的资源, 期望真实布局)`；执行器 ① **校验位置契约** ② **对账 buffer 侧同步**（barrier 仍由模块发，申报"我为谁发了什么"，现场核对）。附带把 sandwich 钩子的挂点判据从 C++ 里的字符串比较搬进图声明 | 债-75 结案；meshlet_cull 三条约束从注释变断言；FSR 那条"VVL 抓不到的 UB"进对账 | 低——**不改 pass kind、不改执行器分发**，可逐模块推 |
+| **B1a**（**已落地 2026-10-14 → §7.1**） | **图外工作的申报面 · 挂点那一半**：四个图外 compute 向执行器申报挂点，执行器 ① **校验位置契约**（帧内相位）② **覆盖对账**（门开⟺录过，两半边）。sandwich 钩子的挂点判据从 C++ 里的字符串比较搬进申报表 | meshlet_cull 三条约束 + 三个 sandwich 的「录在 pass 外」从注释变断言；图与模块的锚点错配提前到**启动期** | 低——**不改 pass kind、不改执行器分发**，实测逐位不变 |
+| **B1b**（B1 的第二刀，**未做**） | 申报面补**读写面** + **对账 buffer 侧同步**（barrier 仍由模块发，申报"我为谁发了什么"，现场核对） | **债-75 结案**；FSR 那条"VVL 抓不到的 UB"进对账 | 低——同一模块内加字段与一次现场核对 |
 | **B2**（= 原 Increment 2 + D1 第 1 条） | **扩资源词表**（buffer 档 + storage 读写）+ 申报面升成**依赖图**（资源 → 生产者 → 消费者）+ 尺寸/句柄按名注册 | 校验"有没有未申报的写后读"（这才是替代"录制顺序恰好正确"的东西）；EVSSM 矩图与 IZB 那几块 buffer 有家；**重建粒度从"整个模块对象"降到"一个资源"**（§2.1） | 中 |
 | **B3**（**明确不做**） | 把 barrier **发射权**交给图 / `RgPassKind::compute` 执行器分发 | 统一"谁执行" | 高，且这是 §5.2 否决的形态——**只有在判据 6 有牙之后才允许重新讨论** |
 
@@ -293,6 +294,56 @@ B 档否决理由③：**barrier 改由图发 ⟹ 模块无从返回真实布局
 7. **resize 后 heapSlot 不变**（B2，EVSSM 矩图迁入的验收）——改窗口尺寸触发重建后，采样侧 baked 的
    槽号必须仍是同一个（RT 缓存的 `heapSlot` 跨 resize 复用是本次迁入的**唯一**结构性收益来源，
    它不成立就等于白搬）。
+
+### 7.1 B1 第一刀已落地（2026-10-14）：挂点从注释变成断言
+
+**做了什么**（新模块 `rgl/offgraph_contract.cppm` + `_impl.cppm`，住 rlscene，判据在
+`tests/test_offgraph_contract.cppm`；接线在 `vk_renderer:offgraph` 与 `drawFrame`）：
+
+- **申报表** = `Renderer::offGraphWorkDecls()`（唯一真相源，四项：`meshlet_cull` / `izb_mask` /
+  `evssm_moments` / `fsr_upscale`）。它替代的正是本行原来写的那句"把 sandwich 钩子的挂点判据
+  从 C++ 里的字符串比较搬进图声明"——`pass.kind == drawLight && pass.state == "light"` 这类
+  比较现在只剩钩子体内一份冗余，权威在表里，且**锚点用 `pass_vocabulary` 的状态名常量**
+  （改名会启动期 throw，而不是画面悄悄不对）。
+- **相位模型**（帧内单调计数）：帧首段 = 1、第 i 个 pass 之前 = `2+2i`、其**体内** = `2+2i+1`、
+  循环之后 = `2+2N`。两条不显然的设计，都是被变异逼出来的：
+  ① **为什么是相位而不是布尔**——判据若写成"在不在 pass 循环里"，把 meshlet_cull 挪到循环
+  **之后**时布尔会重新变 false ⟹ 判据 2 要求的变异全绿。
+  ② **为什么 pass 还要再分两档**——三个 sandwich 的真实契约是「录在 dynamic rendering **之外**」
+  （IZB 自己 `beginMaskPass`、FSR 发 barrier + compute），只按 pass 分档的话，把挂点从
+  `beginRendering` 之前挪到之后就完全 invisible。并档变异实测：只有"建表"那条红，
+  所以「体内录制必须红」这条用例是**独立**的判据，不是重复。
+- **两条机器可查的判据**：`enter()` 查位置契约（相位对不上 = 出声并点名期望/实际）；
+  `checkCoverage()` 查覆盖，**两个半边**——门开着却整帧没录（静默旁路）、门关了却录了
+  （破「门关零命令」这条逐位不变红线）。门位在**帧末**求值（IZB / EVSSM 首帧懒构造），
+  且必须关于**门与输入**，不许写成"刚才 enter 过没有"（那会让断言自证）。
+- **plan-only 红线守住了**：本层零 barrier、零执行权，`drawFrame` 的命令流一条不多
+  （判据 1 实测见下）。申报失败只 `logger->error` 出声，不改行为。
+- 顺带：`drawFrame` 因加了 4 处相位推进越过 100 行红线，按本文件既有口径把 blit 块提为
+  文件内函数 `recordBlitPass`（命令与参数逐条不变，判据 1 覆盖）。
+
+**没做什么**（别把这一刀读成 B1 完成）：读写面与 **buffer 侧 barrier 对账 = B1-b**，
+所以 **债-75 仍未结案**；`RgOffGraphWorkDecl` 里刻意**没有** reads/writes 字段——那份名单必须
+逐条照抄各模块真实发的 barrier，现在填一份"看起来对"的会被读成已接线。
+
+**判据实测**：
+
+| 判据 | 读数 |
+|---|---|
+| 1 门关逐位不变 | `just regress floor --runs 3 --expect 95edc8ccd7a4` → 3/3 同哈希、0 像素差 |
+| 2 位置契约能红 | 单元层 9 条变异全红在预期用例（含 `!=`→`>` 弱化、两档并档）；**真程序**三条：删执行器的 `advanceTo` → `'evssm_moments' 位置契约违例——申报相位 12，实际相位 11`；挂点挪进 pass 体内 → `实际相位 13`；删 hook 调用 → `门开着却整帧没录 = 静默旁路` |
+| 4 gates + 冒烟 | `just gates` 全绿；出厂 / IZB / EVSSM / FSR / meshlet-cull 五态冒烟 errors=0 |
+
+> 🔴 **教训：变异必须在门开着的配置上跑，门关着测判据 = 假验收。**
+> 第一版接线变异拿 `meshlet_cull` 开刀，三条全绿——因为出厂配置 `meshlet.cull = false`，
+> 那道门**本来就是关的**（`wireMeshletCull` 直接早退，Renderer 成员恒 nullptr）。
+> 每条变异跑之前要先在日志里**证明门是开的**（下表"在场证据"），否则"没红"根本不构成读数。
+> 门开配方（`--set` 的字符串值要自己带引号；`just` 会吃掉引号，直连 `python3 tools/smoke.py`）：
+> `--set shadow:izb.on=true` / `--set 'shadow:mode="evssm"'`（在场证据 = 日志 `EvssmShadow:`）/
+> `--aa fsr` / `--set runtime:meshlet.switch=true --set runtime:meshlet.cull=true`
+> （在场证据 = 日志「逐簇视锥剔除生效档 = gpu」）。
+> **沉淀地址**：`TEST: tests/test_offgraph_contract.cppm`（契约逻辑本身与门无关，恒可测）+
+> `DOC: 本节配方`（"门开着才测得到"这件事做不成断言，但它已经是**命令**而不是感想）。
 
 ---
 

@@ -172,6 +172,22 @@ Renderer::Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RG
 		if (fsrEnabled)
 			initFsr();
 		validateRenderGraphForExecutor(this->renderGraph);
+		// 批次 B1：图外工作申报面对着**编译图**解析成相位表。失败即 throw（同下面
+		// drawLight 缺管线条目的口径：图与模块的错配没有「运行期才知道」的理由——图构造完
+		// 就不再变）。项数与 kOffGraphWorkCount 不符也在这里抓：那意味着申报表加了项而
+		// 帧末门位数组没跟上，放着不管 = 新增的图外工作静默不参与对账。
+		if (auto schedule = OffGraphSchedule::build(offGraphWorkDecls(), this->renderGraph.passes);
+			schedule) {
+			this->offGraph = std::move(*schedule);
+			if (offGraph.workCount() != kOffGraphWorkCount)
+				throw std::runtime_error(fmt::format(
+					"Renderer: off-graph work table has {} entries but kOffGraphWorkCount is {}"
+					" (offGraphWorkDecls and the frame-end gate array must stay in lockstep)",
+					offGraph.workCount(), kOffGraphWorkCount));
+		}
+		else
+			throw std::runtime_error(fmt::format(
+				"Renderer: off-graph work contract rejected: {}", schedule.error().describe()));
 		for (const auto& warning : this->renderGraph.warnings) {
 			auto logger = RLLogger::getInstance();
 			if (logger) logger->warn("RenderGraph: {}", warning);

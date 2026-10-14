@@ -201,6 +201,39 @@ void beginPassRendering(vk::raii::CommandBuffer& cmd, const SlotResolver& slots,
 	profilerAddCommands(1);  // 批 9.5：每 pass 恰 1 条 vkCmdBeginRendering
 }
 
+/**
+ * blit pass 的整幅缩放拷贝（批次 4 语义；批次 B1 随 drawFrame 越 100 行红线提为文件内函数，
+ * 命令流与参数逐条不变，口径同本文件 `beginPassRendering` 的「手术 6」摘出）。
+ *
+ * 两端布局转换**不在这里**——已由 `pass.barriers` 完成（scene_rt CAO→TransferSrc、
+ * swapchain 帧首 Undefined→TransferDst）。
+ *
+ * @param cmd       录制中的命令缓冲
+ * @param srcImage  源（transferRead 侧）
+ * @param dstImage  目标（transferWrite 侧）
+ * @param srcExtent 源 slot 自己的 extent（批 14.3：renderScale≠1 时两端不再等尺寸）
+ * @param dstExtent 目标 slot 自己的 extent
+ */
+void recordBlitPass(vk::raii::CommandBuffer& cmd, VkImage srcImage, VkImage dstImage,
+	vk::Extent2D srcExtent, vk::Extent2D dstExtent) {
+	vk::ImageBlit blitRegion{};
+	blitRegion.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+	blitRegion.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+	// 两端尺寸**各取自自己那个 slot**（批 14.3）：renderScale≠1 时源（scene_rt，渲染分辨率）
+	// 与目标（后缓冲，窗口分辨率）不再等尺寸，旧的"1:1 同尺寸"假设会把放大静默截成左上角
+	// 拷贝。LINEAR + 满幅两端 = 双线性缩放。
+	// hpp ArrayWrapper1D 不接受 brace 整体赋值，逐元素填（同旧 DIAG 通路写法）
+	blitRegion.srcOffsets[0] = vk::Offset3D{0, 0, 0};
+	blitRegion.srcOffsets[1] = vk::Offset3D{asI32(srcExtent.width), asI32(srcExtent.height), 1};
+	blitRegion.dstOffsets[0] = vk::Offset3D{0, 0, 0};
+	blitRegion.dstOffsets[1] = vk::Offset3D{asI32(dstExtent.width), asI32(dstExtent.height), 1};
+	::vkCmdBlitImage(*cmd, srcImage,
+		VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dstImage,
+		VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+		reinterpret_cast<const VkImageBlit*>(&blitRegion), VK_FILTER_LINEAR);
+	profilerAddCommands(1);  // 批 9.5：blit pass 恰 1 条 vkCmdBlitImage
+}
+
 }  // namespace
 
 // ===== Phase 11 批 11.2（2026-09-29）：将 drawFrame 录制主流程与其原语从 vkrenderer_impl.cppm 整块搬出到本
@@ -592,6 +625,8 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 		auto& cmd = session.commandBuffer();           // 本帧命令缓冲（录制期）
 		const uint32_t frameSlot = session.currentFrameSlot();
 		const uint32_t imageIndex = session.imageIndex();
+		// 批次 B1：图外工作申报面本帧记账清零（相位归 0；位置/覆盖两条判据的现场都从这里起）
+		offGraph.beginFrame();
 
 	// Phase 9.2：GPU 时间戳——读回本槽上一轮两段（beginFrame 已等完 fence → 必就绪）+
 	// 主段复位记入主 CB 头（cull 段复位在 cull CB，两段不相交）+ gpu.frame 跨度起点
@@ -624,6 +659,9 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 	// 私有方法，命令流逐条不变）
 	// 批 9.5：zone "drawFrame.dataPath" 在 recordFixedDataPath 首行
 	recordFixedDataPath(cmd, list, frameSlot);
+	// 批次 B1：进入「帧首段」相位——meshlet_cull 的申报挂点就在这里（它必须在 heap 已绑定、
+	// scene data 已拷完，且任何 render pass 之外）。
+	offGraph.advanceTo(offGraph.prologuePhase());
 
 	// 簇化轴 ★1-a2-i 逐簇视锥剔除（图外 compute，定义在 :offgraph）。位置三条硬约束：
 	// ① 必须在 recordFixedDataPath **之后**——heap 已绑定、scene data 已拷完（剔除要读对象矩阵
@@ -670,8 +708,13 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 	// label 直接复用 pass.name（RgPassPlan.name 是 std::string，活在编译图里 ≥ dump，满足
 	// ZoneRecord.name 生命周期要求）→ 热循环零分配零字符串构造，profiler 关时只多一次分支。
 	// stats JSON 里按 kind=cpu / kind=gpu 区分同名两侧（Perfetto 也天然分轨）。
-	for (const auto& pass : renderGraph.passes) {
+	for (uint32_t passIndex = 0; passIndex < static_cast<uint32_t>(renderGraph.passes.size());
+			++passIndex) {
+		const auto& pass = renderGraph.passes[passIndex];
 		auto z = zone(pass.name);
+		// 批次 B1：推进到「第 passIndex 个 pass 之前」相位（图外工作按相位对账，
+		// 单调递增 ⟹ 挂点被挪到循环内/循环后都会与申报相位对不上）。
+		offGraph.advanceTo(offGraph.beforePassPhase(passIndex));
 		gpuProfilerBegin(cmd, pass.name);  // Phase 9.2：pass 时间戳（barrier 段计入）
 		slots.emitBarriers(pass.barriers);
 		// 11.3-1d IZB 创建 sandwich（图外 compute，录在 deferred light pass 头部；
@@ -681,30 +724,11 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 		fsrTonemapPassPre(cmd, pass, list);  // 批 14.5 FSR（图外 compute，录在 tonemap
 		                                     // 之前；门关 = fsr 恒空，本调用零命令）
 		// blit pass（批次 4，offscreen 图变体的 composite）：transferRead 源 → transferWrite
-		// 目标整幅拷贝（1:1 同尺寸同格式，LINEAR = 精确拷贝）；两端布局转换已由 pass.barriers
-		// 完成（scene_rt CAO→TransferSrc、swapchain 帧首 Undefined→TransferDst），无绘制、
-		// 无动态状态
+		// 目标整幅拷贝；两端布局转换已由 pass.barriers 完成，无绘制、无动态状态。
 		if (pass.kind == RgPassKind::blit) {
-			VkImage srcImage = slots.imageForSlot(*pass.blitSource);
-			VkImage dstImage = slots.imageForSlot(*pass.blitTarget);
-			vk::ImageBlit blitRegion{};
-			blitRegion.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-			blitRegion.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-			// 两端尺寸**各取自自己那个 slot**（批 14.3）：renderScale≠1 时源（scene_rt，
-			// 渲染分辨率）与目标（后缓冲，窗口分辨率）不再等尺寸，旧的"1:1 同尺寸"假设
-			// 会把放大静默截成左上角拷贝。LINEAR + 满幅两端 = 双线性缩放。
-			const auto srcExtent = slots.extentForSlot(*pass.blitSource);
-			const auto dstExtent = slots.extentForSlot(*pass.blitTarget);
-			// hpp ArrayWrapper1D 不接受 brace 整体赋值，逐元素填（同旧 DIAG 通路写法）
-			blitRegion.srcOffsets[0] = vk::Offset3D{0, 0, 0};
-			blitRegion.srcOffsets[1] = vk::Offset3D{asI32(srcExtent.width), asI32(srcExtent.height), 1};
-			blitRegion.dstOffsets[0] = vk::Offset3D{0, 0, 0};
-			blitRegion.dstOffsets[1] = vk::Offset3D{asI32(dstExtent.width), asI32(dstExtent.height), 1};
-			::vkCmdBlitImage(*cmd, srcImage,
-				VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dstImage,
-				VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
-				reinterpret_cast<const VkImageBlit*>(&blitRegion), VK_FILTER_LINEAR);
-			profilerAddCommands(1);  // 批 9.5：blit pass 恰 1 条 vkCmdBlitImage
+			recordBlitPass(cmd, slots.imageForSlot(*pass.blitSource),
+				slots.imageForSlot(*pass.blitTarget), slots.extentForSlot(*pass.blitSource),
+				slots.extentForSlot(*pass.blitTarget));
 			gpuProfilerEnd(cmd);  // blit 无渲染段，pass 时间戳就地收口
 			continue;
 		}
@@ -712,6 +736,10 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 		// 的 pass = 该 RT 自己的 extent，并受 pass.viewport 子矩形约束（图集分块；见 SlotResolver::renderRectFor）
 		const auto renderRect = slots.renderRectFor(pass);
 		beginPassRendering(cmd, slots, pass, renderRect);
+		// 批次 B1：进入「本 pass 体内」相位。分这一档是为了让「sandwich 挂点从 pass 外
+		// 漂进 pass 内」可归因——IZB 自己 beginMaskPass、FSR 发 barrier + compute，这些命令
+		// 都不能出现在 dynamic rendering 实例里，而只按 pass 分档的话那种漂移完全 invisible。
+		offGraph.advanceTo(offGraph.inPassPhase(passIndex));
 		// 动态状态在 draw 时采样（spec chapters/shaders.adoc "Setting State"），与
 		// bindShadersEXT 先后无约束；段首各 applyDynamicState 一次（Phase 5 语义，
 		// 状态对象经 pass.state 名解析——opaque/skybox/transparent 三成员不变；
@@ -726,6 +754,9 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 		profilerAddCommands(1);  // 批 9.5：每 pass 恰 1 条 vkCmdEndRendering
 		gpuProfilerEnd(cmd);  // Phase 9.2：pass 时间戳收口（render 段完整窗口）
 	}
+	// 批次 B1：帧末覆盖对账（申报了却没录 = 静默旁路；门关了却录了 = 破逐位不变红线）。
+	// 放在这里而不是 CB end 之后：四个图外工作的挂点全在 pass 循环之内/之前，此刻门位已定。
+	offGraphEndFrame();
 
 	// ⑪.5 帧内捕获（Phase 10 批次 0 手术 2：块体迁 FrameCapturer::record——后缓冲/
 	// GB 通道两分支的布局追踪推进语义见 frame_capture.cppm 声明注释）。

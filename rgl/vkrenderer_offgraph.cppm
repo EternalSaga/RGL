@@ -43,6 +43,28 @@ import taa_jitter;        // contentShiftPx（批 14.5 第七批：申报给 FSR
 
 namespace RGL {
 
+namespace {
+
+/**
+ * 四个图外工作的**申报名**（批次 B1）。
+ *
+ * 申报表（`Renderer::offGraphWorkDecls`）与四个 `offGraphEnter` 调用点共用这批常量：
+ * 名字一旦两处各写一份字面量，拼错的那一份会退化成「未申报」运行期报错，
+ * 而不是编译期或启动期发现。
+ */
+constexpr std::string_view kWorkMeshletCull = "meshlet_cull";
+constexpr std::string_view kWorkIzbMask = "izb_mask";
+constexpr std::string_view kWorkEvssmMoments = "evssm_moments";
+constexpr std::string_view kWorkFsrUpscale = "fsr_upscale";
+
+/** 违规出声（A 档口径：只点名不改行为，交付路径命令流逐位不变）。 */
+void reportOffGraphViolation(const Error& err) {
+	if (auto* lg = RLLogger::getInstance())
+		lg->error("{}", err.describe());  // describe() 自带 [Code] 前缀，消息本体已含归因
+}
+
+}  // namespace
+
 // 11.3-1d IZB 帧首段（声明注释见 vkrenderer.cppm）。deferred 图判据 = 存在
 // drawLight "light" pass；重建前 waitIdle（旧 buffer 可能被上一帧命令引用，RT 缓存
 // 同款规则）。门关 = 本函数不被进入（izbShadow 恒空 + 单布尔判断）。
@@ -76,6 +98,10 @@ void Renderer::izbLightPassPre(vk::raii::CommandBuffer& cmd, const RgPassPlan& p
 	const FrameDrawList& list) {
 	if (!izbShadow || pass.kind != RgPassKind::drawLight || pass.state != "light")
 		return;
+	// 批次 B1：位置契约申报（挂点 = 编译图里 drawLight "light" 之前，见 offGraphWorkDecls）。
+	// 上面那半条 kind/state 判据在 B1 之后是**冗余**的（锚点唯一性由构造期保证，图里出现
+	// 第二个 drawLight "light" 会直接启动失败），留着是因为它零成本且读起来更直给。
+	offGraphEnter(kWorkIzbMask);
 	// 批 14.4b A 档护栏：图外 sandwich 的「进出同值」从**约定**变**断言**。
 	// 为什么必须有：追踪表 `attachmentLayouts` 的唯一写者就是执行器自己，图外模块发的
 	// barrier 它一概不知 ⟹ 漂移后执行器下一跳会拿**错的 oldLayout** 去转布局（债-72）。
@@ -261,19 +287,14 @@ void Renderer::fsrTonemapPassPre(vk::raii::CommandBuffer& cmd, const RgPassPlan&
 	const FrameDrawList& list) {
 	if (!fsr || pass.kind != RgPassKind::drawLight || pass.state != kTonemapState)
 		return;
-	// 两个图属输入按**编译图里的附件名**去 RT 缓存取（drawFrame 的 ensureOffscreenAttachments
-	// 已在 pass 循环之前跑完 ⟹ 此处必已存在；取不到就是装配错，直接不录而不是崩）。
-	// 不在调用点传 VkImage 的理由：那要把本文件私有的 SlotResolver 暴露进接口分区。
-	const auto attImage = [this](int32_t slot) -> vk::Image {
-		if (slot < 0)
-			return {};
-		auto* att = rtCache->find(renderGraph.attachments[static_cast<size_t>(slot)].name);
-		return att ? static_cast<vk::Image>(att->image.image) : vk::Image{};
-	};
-	const vk::Image colorImage = attImage(fsrColorSlot);
-	const vk::Image velocityImage = attImage(fsrVelocitySlot);
-	if (!colorImage || !velocityImage)
+	// 两个图属输入的解析已提为 `fsrInputs()`：帧末覆盖对账要问「这帧到底该不该录」，
+	// 判据必须与这里的早退**是同一个表达式**，否则「输入取不到所以没录」会被读成静默旁路。
+	const auto inputs = fsrInputs();
+	if (!inputs)
 		return;
+	const vk::Image colorImage = inputs->color;
+	const vk::Image velocityImage = inputs->velocity;
+	offGraphEnter(kWorkFsrUpscale);  // 批次 B1：门 = fsr 且两输入可解析，两者都过了才申报
 
 	// ① 速度场在挂点处于 COLOR_ATTACHMENT_OPTIMAL —— 它是全图唯一不达 FSR 要求的输入
 	//   （velocity pass 刻意没有下游消费者，布局停在 CAO 且因 attachmentLayouts 跨帧持久
@@ -398,6 +419,9 @@ void Renderer::recordMeshletCullDispatch(vk::raii::CommandBuffer& cmd, const Fra
 	if (meshletCull == nullptr)
 		return;
 	auto z = zone("drawFrame.meshletCull");
+	// 批次 B1：位置契约从注释变成断言——本函数被挪到 pass 循环之内/之后，帧末对账之前就会
+	// error 出声（申报相位 = 帧首段，见 offGraphWorkDecls）。
+	offGraphEnter(kWorkMeshletCull);
 	meshletCull->recordDispatch(cmd, list.cullInput.planes);
 	// vkcmd.count 口径：2 条 pipelineBarrier2 + bindShadersEXT + pushDataEXT + dispatch = 5。
 	// 改 MeshletCullService::recordDispatch 的命令流必须同步改这里（同 recordFixedDataPath 的纪律）。
@@ -408,6 +432,7 @@ void Renderer::recordMeshletCullDispatch(vk::raii::CommandBuffer& cmd, const Fra
 void Renderer::evssmLightPassPre(vk::raii::CommandBuffer& cmd, const RgPassPlan& pass) {
 	if (!evssmShadow || pass.kind != RgPassKind::drawLight || pass.state != "light")
 		return;
+	offGraphEnter(kWorkEvssmMoments);  // 批次 B1：位置契约申报（同 izbLightPassPre 挂点）
 	evssmShadow->recordFrame(cmd);
 }
 
@@ -504,4 +529,78 @@ std::expected<void, Error> Renderer::ensureOffscreenAttachments(vk::Extent2D ext
 	}
 	return {};
 }
+// ── 批次 B1：图外工作申报面接线（定案 → docs/compute_调研.md §6 D1；批次与判据 → §7）──
+
+std::vector<RgOffGraphWorkDecl> Renderer::offGraphWorkDecls() {
+	// 顺序 = 帧末门位数组的顺序（offGraphEndFrame），项数 = kOffGraphWorkCount（构造期核对）。
+	// 锚点用 pass_vocabulary 的状态名常量，不用字面量：状态名一旦改名，这里跟着走，
+	// 而原先写在 C++ 里的字符串比较会静默失配（判据 = 启动期 throw，不是画面悄悄不对）。
+	return {
+		RgOffGraphWorkDecl{
+			.name = std::string{kWorkMeshletCull},
+			.anchor = RgOffGraphAnchor{.kind = RgOffGraphAnchor::Kind::framePrologue},
+		},
+		RgOffGraphWorkDecl{
+			.name = std::string{kWorkIzbMask},
+			.anchor = RgOffGraphAnchor{
+				.kind = RgOffGraphAnchor::Kind::beforePass,
+				.passKind = RgPassKind::drawLight,
+				.passState = std::string{kDeferredLightState},
+			},
+		},
+		RgOffGraphWorkDecl{
+			.name = std::string{kWorkEvssmMoments},
+			.anchor = RgOffGraphAnchor{
+				.kind = RgOffGraphAnchor::Kind::beforePass,
+				.passKind = RgPassKind::drawLight,
+				.passState = std::string{kDeferredLightState},
+			},
+		},
+		RgOffGraphWorkDecl{
+			.name = std::string{kWorkFsrUpscale},
+			.anchor = RgOffGraphAnchor{
+				.kind = RgOffGraphAnchor::Kind::beforePass,
+				.passKind = RgPassKind::drawLight,
+				.passState = std::string{kTonemapState},
+			},
+		},
+	};
+}
+
+void Renderer::offGraphEnter(std::string_view name) {
+	if (auto r = offGraph.enter(name); !r)
+		reportOffGraphViolation(r.error());
+}
+
+void Renderer::offGraphEndFrame() {
+	offGraph.advanceTo(offGraph.frameEndPhase());
+	// 门位在**帧末**求值：IZB / EVSSM 是首帧 drawFrame 内懒构造（izbPreFrame / evssmPreFrame
+	// 在 pass 循环之前），帧首求值会把它们误判成「不该发生」。
+	// 🔴 三条判据都必须关于**门与输入**，不许写成「刚才 enter 过没有」——后者让这条断言自证。
+	const std::array<bool, kOffGraphWorkCount> active{
+		meshletCull != nullptr,
+		izbShadow != nullptr,
+		evssmShadow != nullptr,
+		fsr != nullptr && fsrInputs().has_value(),
+	};
+	if (auto r = offGraph.checkCoverage(std::span<const bool>{active}); !r)
+		reportOffGraphViolation(r.error());
+}
+
+std::optional<Renderer::FsrInputs> Renderer::fsrInputs() {
+	// 两个图属输入按**编译图里的附件名**去 RT 缓存取（drawFrame 的 ensureOffscreenAttachments
+	// 已在 pass 循环之前跑完 ⟹ 此处必已存在；取不到就是装配错，直接不录而不是崩）。
+	// 不在调用点传 VkImage 的理由：那要把本文件私有的 SlotResolver 暴露进接口分区。
+	const auto attImage = [this](int32_t slot) -> vk::Image {
+		if (slot < 0)
+			return {};
+		auto* att = rtCache->find(renderGraph.attachments[static_cast<size_t>(slot)].name);
+		return att ? static_cast<vk::Image>(att->image.image) : vk::Image{};
+	};
+	const FsrInputs inputs{attImage(fsrColorSlot), attImage(fsrVelocitySlot)};
+	if (!inputs.color || !inputs.velocity)
+		return {};
+	return inputs;
+}
+
 }  // namespace RGL

@@ -31,6 +31,7 @@ import vkerror;
 import diagnostics;  // no_present 诊断单例（configs/diagnostics.lua）
 import fsr_upscaler;   // 批 14.5：FSR 3.1.4 upscaler（图外 compute，门控构造）
 import meshlet_cull_service;  // ★1-a2-i：逐簇视锥剔除（图外 compute，装配后挂裸指针）
+import offgraph_contract;  // 批次 B1：图外工作申报面（挂点/相位表；零设备调用，判据在 tests/）
 import meshlet_shadow_args;   // ★M-1b：真 MDI 行表载体（upload + 间接 buffer，装配后挂裸指针）
 import mdi_rows;              // ★M-1b：kMdiShadowRowStride（drawMeshTasksIndirectEXT 的 stride 唯一真相源）
 
@@ -423,6 +424,59 @@ export class Renderer {
 	 * @param list 每帧绘制列表（cullInput.planes = 与 CPU 剔除同源同值的视锥 6 面）
 	 */
 	void recordMeshletCullDispatch(vk::raii::CommandBuffer& cmd, const FrameDrawList& list);
+	// ── 批次 B1：图外工作申报面（定案与批次 → `docs/compute_调研.md` §6/§7）──────────
+	/**
+	 * 图外工作申报表（**唯一真相源**，实现在 `:offgraph`）。
+	 *
+	 * 它替代的是原先散在 C++ 里的两类东西：① 挂点判据（`pass.kind == drawLight &&
+	 * pass.state == "light"` 这类字符串比较）；② 只活在注释里的位置契约
+	 * （`recordMeshletCullDispatch` 声明上那三条硬约束）。
+	 *
+	 * 🔴 **新增图外录制点必须在这里挂号**：没挂号的 `offGraphEnter` 会报「未申报」，
+	 * 挂号了却没录的会在帧末报「静默旁路」。
+	 */
+	static std::vector<RgOffGraphWorkDecl> offGraphWorkDecls();
+	/**
+	 * 图外工作开录：查位置契约（当前相位是否 = 申报相位）。
+	 *
+	 * 违规**只出声不改行为**（同 `layoutDrift` 的 A 档口径：护栏不改变交付路径的命令流）。
+	 * 必须在门判据**之后**调用——门关 = 零命令，也就零申报。
+	 * @param name 申报名（须出现在 `offGraphWorkDecls()` 里）
+	 */
+	void offGraphEnter(std::string_view name);
+	/**
+	 * 帧末覆盖对账：推进到帧末相位 + 核对「门开着 ⟺ 本帧录过」。
+	 *
+	 * 两个方向都要（缺一半就是摆设）：门开着没录 = 挂点被静默删掉；门关着却录了 = 破
+	 * 「门关零命令」这条逐位不变红线。门位在**帧末**求值（IZB / EVSSM 首帧懒构造）。
+	 */
+	void offGraphEndFrame();
+	/** FSR 挂点要的两个图属输入（色 + 速度场）；任一解析不到时整体为 nullopt。 */
+	struct FsrInputs {
+		vk::Image color = {};     ///< 图属色输入（tonemap 的上游 RT）
+		vk::Image velocity = {};  ///< 图属速度场输入（挂点处需转布局的那张）
+	};
+	/**
+	 * FSR 挂点要的两个图属输入（挂点与帧末门判据**共用同一个表达式**，防两处漂）。
+	 *
+	 * 取不到 = 装配错（`ensureOffscreenAttachments` 在 pass 循环之前跑完，正常路径必已存在）
+	 * ⟹ 不录。把它单独成函数是为了让帧末覆盖对账能问「这帧到底该不该录」，而不是把
+	 * 「没录」误判成静默旁路。
+	 * @return 两个 VkImage；任一解析不到 = nullopt
+	 */
+	std::optional<FsrInputs> fsrInputs();
+	/**
+	 * 申报表项数（= `offGraphWorkDecls()` 的长度 = `offGraphEndFrame` 门位数组的长度）。
+	 *
+	 * 三处之一改动而另两处没跟上 ⟹ 构造期 throw（不是每帧一条 error，也不是静默漏对账）。
+	 */
+	static constexpr uint32_t kOffGraphWorkCount = 4;
+	/**
+	 * 相位表（构造期对着**编译图**建，锚点解析不到即 throw）。
+	 *
+	 * 编译图构造完就不再变 ⟹ 锚点与图的错配没有「运行期才知道」的理由。
+	 */
+	OffGraphSchedule offGraph;
 	/** 批 9.5 补：首帧补打一次显存统计（`vma[first_frame]`）。动机 = IzbShadow /
 	 *  EvssmShadow 均首帧懒构造，而 `logStartupBaseline` 在帧循环之前 ⟹ `vma[startup]`
 	 *  不含这两个模块的资源（实测开/关 EVSSM 档的 startup 统计逐字节相同）。

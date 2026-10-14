@@ -314,6 +314,8 @@ set(RGL_SCENE_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/render_graph_rtslot.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/render_graph_config.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/render_graph_config_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/offgraph_contract.cppm"    # 批次 B1：图外工作申报面（挂点/读写面 → 数据；零设备调用 → just test 可测）
+    "${CMAKE_CURRENT_SOURCE_DIR}/offgraph_contract_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/gate_lint.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/gate_lint_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/environment.cppm"
