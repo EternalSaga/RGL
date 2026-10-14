@@ -10,6 +10,8 @@ add_compile_options(
     "$<$<CXX_COMPILER_ID:Clang,GNU,AppleClang>:-Wall;-Wextra>"
     "$<$<CXX_COMPILER_ID:MSVC>:/W4>"
 )
+# PROBE-FLAG（隔离实验，稍后删）
+add_compile_options("$<$<CXX_COMPILER_ID:Clang,AppleClang>:-Wcovered-switch-default>")
 # 有意保留的第一方警告抑制：
 # - main-attached-to-named-module：main() 放 module main:impl 是 AGENTS 约定（标准合法）
 # - missing-designated-field-initializers：部分 designated init（缺字段走默认值）是有意风格

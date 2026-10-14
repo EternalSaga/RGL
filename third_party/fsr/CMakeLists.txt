@@ -87,6 +87,11 @@ endif()
 
 target_compile_options(ffx_fsr3upscaler_vk PRIVATE
     $<$<CXX_COMPILER_ID:Clang,GNU,AppleClang>:-Wno-error;-g>
+    # vendor 是上游代码，**风格类**警告不由我们背账（上面 `-Wno-error` 就是这个意思）。
+    # `-Wcovered-switch-default` 在 vendor 树实测命中 14 处（上游 switch 已穷尽仍写 default，
+    # 纯风格），而 `-Wno-error` 只降级不消音 ⟹ 每次构建刷 14 条没人读的警告，正是本文件头注释
+    # 点名的失败模式，所以直接消掉。第一方那 10 处穷尽 switch 由根 CMakeLists 的该旗守着。
+    $<$<CXX_COMPILER_ID:Clang,AppleClang>:-Wno-covered-switch-default>
     $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:${FFX_BUG_CLASS_WARNINGS}>
     $<$<CXX_COMPILER_ID:MSVC>:/WX->)
 
