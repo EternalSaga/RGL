@@ -510,10 +510,25 @@ std::expected<void, Error> Renderer::ensureOffscreenAttachments(vk::Extent2D ext
 	for (uint32_t s = 0; s < renderGraph.attachments.size(); ++s) {
 		const auto& att = renderGraph.attachments[s];
 		// 图属 RT 两类同走本缓存（批 11.2 基建）：offscreen = 颜色档，
-		// depthOffscreen = 深度档（阴影图，aspect 随格式走深度面）
-		const bool depthRt = att.kind == RgAttachmentKind::depthOffscreen;
-		if (!depthRt && att.kind != RgAttachmentKind::offscreen)
-			continue;
+		// depthOffscreen = 深度档（阴影图，aspect 随格式走深度面）。
+		// 🔴 为什么写成穷尽 switch 而不是原来的「两个 kind 白名单 + 其余 continue」：本函数
+		// 是逐附件布局追踪表 `attachmentLayouts` **唯一的重置入口**（RT 重建 → 该槽归零）。
+		// 白名单形态下第五个 kind 静默落进 continue ⟹ 它的布局槽永不随资源重建归零，下帧首
+		// 条 barrier 拿陈旧 oldLayout —— 与批 12.6 T4 那条「每帧抹成 eUndefined」是同一个
+		// 变量的反方向漂移（那次是抹太狠，这次是漏抹），症状同样只在重建帧现形。
+		// 穷尽 switch 把「这一档占不占 RT 缓存、走哪个 aspect」变成编译期必答。
+		vk::ImageAspectFlags rtAspect = {};
+		switch (att.kind) {
+			case RgAttachmentKind::swapchain:  // 后缓冲：录制期按 imageIndex 解析，不占 RT
+			case RgAttachmentKind::depth:      // 主深度图：Resources 持有
+				continue;
+			case RgAttachmentKind::offscreen:
+				rtAspect = vk::ImageAspectFlagBits::eColor;
+				break;
+			case RgAttachmentKind::depthOffscreen:
+				rtAspect = vk::ImageAspectFlagBits::eDepth;
+				break;
+		}
 		const auto fmt = RGL::resolveRgFormat(att.format, swapchain->getFormat().format);
 		// 尺寸：声明了独立 extent 就用它，否则跟随 swapchain（× extentScale，批 15.3B：
 		// ssr_trace 半分辨率——缩放口径与 ensureSsrTraceSlot 共用 scaleRtExtent，两处各写
@@ -522,8 +537,7 @@ std::expected<void, Error> Renderer::ensureOffscreenAttachments(vk::Extent2D ext
 		const vk::Extent2D follow = scaleRtExtent(extent, att.extentScale);
 		const vk::Extent2D rtExtent{att.extent[0] != 0u ? att.extent[0] : follow.width,
 			att.extent[1] != 0u ? att.extent[1] : follow.height};
-		auto rtResult = rtCache->ensure(att.name, rtExtent, fmt,
-			depthRt ? vk::ImageAspectFlagBits::eDepth : vk::ImageAspectFlagBits::eColor);
+		auto rtResult = rtCache->ensure(att.name, rtExtent, fmt, rtAspect);
 		if (!rtResult)
 			return std::unexpected(std::move(rtResult).error());
 		offscreenRt[s] = *rtResult;

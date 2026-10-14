@@ -66,6 +66,35 @@ export enum class RgAttachmentKind : uint8_t {
 };
 
 /**
+ * 附件 kind 的可读名（**只服务报错归因**）。
+ *
+ * 为什么住在接口而不是 impl 分区：kind 是导出类型，「它叫什么」是它自己的属性；住在
+ * 接口才能让任何按 kind 报错的位置共用同一份拼写。此前四个 `validateAttachment*` 各写
+ * 一条三元式兜底（`kind == swapchain ? "swapchain" : "depth"`），加第五个 kind 后未知档
+ * 会被叫成 `"depth"` / `"depthOffscreen"` = **归因错**，而附件注册发生在 main 启动流
+ * 构造期，现场只剩这一行日志，归因错 = 查不到。
+ *
+ * 与 Lua 配置词表（`render_graph_config_impl` 的 `{"swapchain","depth","offscreen"}`）
+ * **不是一件事**：那张表回答「Lua 里能写哪几档」（未登记的串响亮报错），本函数回答
+ * 「这一档叫什么」，两者各自演化，不要合并。
+ *
+ * 🔴 穷尽 switch、**不许写 `default:`**：`-Wswitch` 只对「switch 缺 case」出声，写了
+ * default 就永远不缺 —— 给本枚举加第五个值时这里必须编译不过（`-Wall` + `-Werror`），
+ * 逼着改的人逐处回答每个按 kind 分派的位置。
+ * @param kind 附件种类
+ * @return 与枚举值一一对应的可读名
+ */
+export inline constexpr std::string_view kindName(RgAttachmentKind kind) {
+	switch (kind) {
+		case RgAttachmentKind::swapchain: return "swapchain";
+		case RgAttachmentKind::depth: return "depth";
+		case RgAttachmentKind::offscreen: return "offscreen";
+		case RgAttachmentKind::depthOffscreen: return "depthOffscreen";
+	}
+	return "?";  // 不可达（穷尽），消 -Wreturn-type
+}
+
+/**
  * attachment 在 pass 中的角色。写角色进 outputs，读角色进 inputs。
  * usage → {layout, stage, access} 推导规则单一真相源 = impl 的 usageInfo 查表（见模块头注释）。
  */

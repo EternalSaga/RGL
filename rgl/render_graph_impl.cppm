@@ -76,19 +76,82 @@ bool isReadUsage(RgUsage u) {
 	return u == RgUsage::sampleRead || u == RgUsage::transferRead;
 }
 
-/** 附件 kind → aspect mask（depth / depthOffscreen → eDepth，其余 → eColor）。 */
+// ── 三个 kind 谓词：全部写成**穷尽 switch、无 default**（正面样板 = vkrenderer_passrec
+//    的 imageForSlot）。为什么不许写 default、也不许留三元式：`-Wswitch` 只对「switch 缺
+//    case」出声，写了 default 就永远不缺；三元式 `a || b ? X : Y` 更是把「其余一律 Y」这个
+//    兜底写进了语义里。本枚举下一批要加第五个值（buffer 档），届时这三个谓词是整条链的
+//    源头（aspect 进 barrier / view / 描述符，两个布尔位进校验与 clearValue 选择），
+//    兜底 = 新 kind 静默按 image 档走完全链，而 docs/compute_调研.md §7.10 点名的正是这条。
+//    穷尽 switch 把失效方向换成「编译不过」：加值的人必须在这里逐个回答它是什么面、
+//    是不是图属 RT、走不走深度面——答不出来就说明机制还没想清楚，这正是需要的刹车。
+
+/**
+ * 附件 kind → aspect mask（深度两档 eDepth，颜色两档 eColor）。
+ * @param kind 附件种类
+ * @return 该附件全链（barrier / view / 描述符）使用的 aspect mask
+ */
 vk::ImageAspectFlags aspectOf(RgAttachmentKind kind) {
-	return kind == RgAttachmentKind::depth || kind == RgAttachmentKind::depthOffscreen
-		       ? vk::ImageAspectFlagBits::eDepth
-		       : vk::ImageAspectFlagBits::eColor;
+	switch (kind) {
+		case RgAttachmentKind::swapchain: return vk::ImageAspectFlagBits::eColor;
+		case RgAttachmentKind::depth: return vk::ImageAspectFlagBits::eDepth;
+		case RgAttachmentKind::offscreen: return vk::ImageAspectFlagBits::eColor;
+		case RgAttachmentKind::depthOffscreen: return vk::ImageAspectFlagBits::eDepth;
+	}
+	return {};  // 不可达（穷尽），消 -Wreturn-type
 }
-/** 是否"图属 RT"（执行器按名 ensure 的两类：颜色 offscreen + 深度 depthOffscreen）。 */
+/**
+ * 是否"图属 RT"（执行器按名 ensure 的两类：颜色 offscreen + 深度 depthOffscreen）。
+ * 判据 = 「资源由渲染图按名申请」，不是「是不是 image」——buffer 档若走的是另一套
+ * 申请路径，这里就该答 false（穷尽 switch 逼着当场回答，见上方注释）。
+ * @param kind 附件种类
+ * @return true = 执行器按名 ensure 的图属 RT
+ */
 bool isRtBackedKind(RgAttachmentKind kind) {
-	return kind == RgAttachmentKind::offscreen || kind == RgAttachmentKind::depthOffscreen;
+	switch (kind) {
+		case RgAttachmentKind::swapchain: return false;  // 后缓冲：imageIndex 录制期解析
+		case RgAttachmentKind::depth: return false;  // 主深度图：Resources 持有
+		case RgAttachmentKind::offscreen: return true;
+		case RgAttachmentKind::depthOffscreen: return true;
+	}
+	return false;  // 不可达（穷尽），消 -Wreturn-type
 }
-/** 是否深度类附件（主深度图 / 图属深度 RT）——clearValue 取 depth 分量、aspect 走深度面。 */
+/**
+ * 是否深度类附件（主深度图 / 图属深度 RT）——clearValue 取 depth 分量、aspect 走深度面。
+ * @param kind 附件种类
+ * @return true = 走深度面（clearValue 用 depth、depthWrite 合法、blit 两端不得用）
+ */
 bool isDepthKind(RgAttachmentKind kind) {
-	return kind == RgAttachmentKind::depth || kind == RgAttachmentKind::depthOffscreen;
+	switch (kind) {
+		case RgAttachmentKind::swapchain: return false;
+		case RgAttachmentKind::depth: return true;
+		case RgAttachmentKind::offscreen: return false;
+		case RgAttachmentKind::depthOffscreen: return true;
+	}
+	return false;  // 不可达（穷尽），消 -Wreturn-type
+}
+
+/**
+ * 帧首写是否走"内容丢弃"规则（决定 barrier 的 oldLayout 取 eUndefined 还是取执行器
+ * 跨帧追踪值）：swapchain/depth/depthOffscreen 每帧内容按 loadOp 重建（阴影图每帧整幅
+ * clear 亦归此档）；offscreen 是持久图，必须追踪真实布局。
+ *
+ * 🔴 为什么这里是穷尽 switch 而不是 `kind != offscreen`：本函数**就在 barrier 物化链上**
+ * （RgCompiledAttachment::frameStartDiscard → planBarrier → RgBarrierPlan::oldLayoutDiscard
+ * → SlotResolver::emitBarriers 的 oldLayout 选择）。写成不等式，第五个 kind 会静默落进
+ * "丢弃"档 = 每帧首写把 oldLayout 报成 eUndefined，而 eUndefined 的语义是"旧内容随便
+ * 丢"——若那一档其实是需要跨帧存活的资源，症状是隔一帧才现的内容丢失，且 VVL 不报
+ * （eUndefined 作 oldLayout 合法）。与三个 kind 谓词同一条理由，见上方注释块。
+ * @param kind 附件种类
+ * @return true = 帧首写可丢弃旧布局
+ */
+bool frameStartDiscards(RgAttachmentKind kind) {
+	switch (kind) {
+		case RgAttachmentKind::swapchain: return true;
+		case RgAttachmentKind::depth: return true;
+		case RgAttachmentKind::offscreen: return false;  // 持久图：跨帧追踪真实布局
+		case RgAttachmentKind::depthOffscreen: return true;
+	}
+	return false;  // 不可达（穷尽），消 -Wreturn-type
 }
 
 /** 统一错误构造：ErrorCode::RenderGraphInvalid + message。 */
@@ -160,8 +223,7 @@ std::expected<void, Error> validateAttachmentFormat(const RgAttachmentDesc& att)
 	if (att.format != "inherit")
 		return std::unexpected(rgError(fmt::format(
 			"render graph: {} attachment '{}' must use format 'inherit' (got '{}')",
-			att.kind == RgAttachmentKind::swapchain ? "swapchain" : "depth", att.name,
-			att.format)));
+			kindName(att.kind), att.name, att.format)));
 	return {};
 }
 
@@ -175,7 +237,7 @@ std::expected<void, Error> validateAttachmentExtent(const RgAttachmentDesc& att)
 		return {};
 	return std::unexpected(rgError(fmt::format(
 		"render graph: {} attachment '{}' must leave extent {{0,0}} (follows swapchain)",
-		att.kind == RgAttachmentKind::swapchain ? "swapchain" : "depth", att.name)));
+		kindName(att.kind), att.name)));
 }
 
 /**
@@ -191,10 +253,7 @@ std::expected<void, Error> validateAttachmentExtentScale(const RgAttachmentDesc&
 	if (att.kind != RgAttachmentKind::offscreen)
 		return std::unexpected(rgError(fmt::format(
 			"render graph: extentScale is only allowed on offscreen attachments, but '{}' is {}",
-			att.name,
-			att.kind == RgAttachmentKind::swapchain      ? "swapchain"
-			: att.kind == RgAttachmentKind::depth        ? "depth"
-			                                             : "depthOffscreen")));
+			att.name, kindName(att.kind))));
 	if (!(att.extentScale > 0.0f && att.extentScale <= 1.0f))
 		return std::unexpected(rgError(fmt::format(
 			"render graph: attachment '{}' extentScale must be in (0,1], got {}",
@@ -211,9 +270,7 @@ std::expected<void, Error> validateAttachmentHistory(const RgAttachmentDesc& att
 	if (att.kind != RgAttachmentKind::offscreen)
 		return std::unexpected(rgError(fmt::format(
 			"render_graph: history=true requires kind=offscreen, but attachment '{}' is {}",
-			att.name, att.kind == RgAttachmentKind::swapchain      ? "swapchain"
-			: att.kind == RgAttachmentKind::depth ? "depth"
-		                                          : "depthOffscreen")));
+			att.name, kindName(att.kind))));
 	return {};
 }
 
@@ -243,10 +300,8 @@ std::expected<void, Error> registerAttachment(const RgAttachmentDesc& att, Compi
 		.extent = att.extent,  // 独立 RT 尺寸透传（执行器装配消费；非图属 RT 恒 {0,0}）
 		.extentScale = att.extentScale,  // 跟随缩放档透传（批 15.3B；非图属 RT 恒 0）
 		.aspect = aspectOf(att.kind),
-		// 帧首丢弃规则：swapchain/depth/depthOffscreen 每帧内容按 loadOp 重建（现 ④ 的
-		// oldLayout=eUndefined 约定；阴影图每帧整幅 clear 亦归此档）；
-		// offscreen 持久图必须追踪真实布局
-		.frameStartDiscard = att.kind != RgAttachmentKind::offscreen,
+		// 帧首丢弃规则见 frameStartDiscards（穷尽 switch 谓词，理由写在那儿）
+		.frameStartDiscard = frameStartDiscards(att.kind),
 		.history = att.history,  // 跨帧历史（planBarrier 帧首 src 提档的依据）
 	});
 	ctx.slots.emplace_back();

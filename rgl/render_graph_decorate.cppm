@@ -18,11 +18,30 @@ namespace RGL {
 
 namespace {
 
-/** 按名查附件是否算"色附件"（非 depth；名不在表内 = 未知，按色处理）。 */
+/**
+ * 按名查附件是否算"色附件"（本判据的语义 = **不是主深度图**，不是"aspect 是颜色面"：
+ * depthOffscreen（阴影图那类）在这里按色处理，既有语义见 tests/test_render_graph.cppm
+ * 「decorateHighlightPass：采样深度的全屏 pass（ao 形态）不算色消费者」的精确语义注记。
+ * 名不在表内 = 未知，按色处理（原语义，未改）。
+ *
+ * 🔴 为什么写成穷尽 switch 而不是 `kind != depth`：本判据**没有上游穷尽闸门**——它能
+ * 到达任何 `sampleRead` 输入（`validatePassRef` 只 gate `depthWrite`，读角色不限 kind），
+ * 所以第五个 kind 会静默被判成"色附件"，把 `sampledColorName` 找到的"首个色消费者"
+ * 换成那个附件 ⟹ 高亮/TAA/velocity 三个装饰器的插入点一起挪位（图形态错，不是文案错）。
+ * 与 `aspectOf` 那一族同一条理由：穷尽 switch 把"这一档算不算色"变成编译期必答。
+ */
 bool isColorAttachment(const RgGraphDesc& desc, const std::string& name) {
 	const auto it = std::ranges::find_if(desc.attachments,
 		[&name](const RgAttachmentDesc& a) { return a.name == name; });
-	return it == desc.attachments.end() || it->kind != RgAttachmentKind::depth;
+	if (it == desc.attachments.end())
+		return true;  // 名不在表内 = 未知，按色处理（原语义）
+	switch (it->kind) {
+		case RgAttachmentKind::swapchain: return true;
+		case RgAttachmentKind::depth: return false;  // 主深度图必须排除（撞名史见上）
+		case RgAttachmentKind::offscreen: return true;
+		case RgAttachmentKind::depthOffscreen: return true;  // 阴影图按色（既有语义，未改）
+	}
+	return true;  // 不可达（穷尽），消 -Wreturn-type
 }
 
 /** pass 是否写 depth（含 depthWrite 角色的输出）。 */

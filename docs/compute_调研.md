@@ -1181,6 +1181,74 @@ shader 改名、把写侧改成只读，表照样全绿。真正互锁的是 `te
 | **B2-2** 反射方向 × 资源身份 → hazard 派生，与边表对账 | ✅ 本刀；**输入清单被改准（去掉"相位"）** |
 | B2-3 / B2-4（buffer 档 + 拒绝面 + 资源迁入） | ⏳ 形态由首发消费者定，见 §7.10 |
 
+### 7.16 B2-3 重切：先铺「加 kind 必须被迫回答每一处」这块地基（2026-10-14 实测）
+
+#### 为什么不能照 §7.10 的表直接开 B2-3
+
+§7.10 自己就写了反对它排在这的理由：**「buffer 档 + 按名注册现在做 = 给一个还没有消费者的机制猜
+形状（RT 缓存的 buffer 版要不要 heapSlot、usage 要哪些位、尺寸漂移按字节还是元素——只有首发消费者
+meshlet_cull 能定）」**，而 meshlet_cull 排在 B2-4。所以「B2-3 机制刀 → B2-4 迁入」这个顺序**是
+自相矛盾的**：机制的形状要由迁入方定。
+
+**重切结论：B2-3 里唯一与消费者无关的部分先做，其余并进首发消费者那一刀。** 与消费者无关的部分
+= §7.10 点名那条「顺带要修的静默坑」，而且它比那一条大得多。
+
+#### 本刀的产出：「加第五个 kind 会在哪里静默走错」的**全量答案 = 10 处**
+
+判据形态 = **穷尽 `switch`、不加 `default:`**，让 `-Wswitch` + `-Werror` 在加档当天编译失败点名。
+`default:` 一写就等于把护栏拆掉（`-Wswitch` 只对「switch 缺 case」出声）。
+
+变异实测（主 agent 亲跑第一处）：给 `RgAttachmentKind` 加第五个值 `buffer`、**什么都不接线** →
+`render_graph.cppm:89: error: enumeration value 'buffer' not handled in switch [-Werror,-Wswitch]`，
+构建失败。全量点名 10 处 / 5 文件，与人工审计逐条一致，`-Wswitch` 面内**零残留静默点**。
+
+其中六处**原本是静默的**，本刀改掉。「静默后果」那一列才是本刀的真实价值——它们是六个当时还不存在
+的 bug：
+
+| 位置 | 原形态 | 第五档进来后的静默后果 |
+|---|---|---|
+| `aspectOf` | 三元式 | 拿错 aspect → barrier / attachment 全链走错方向（§7.10 点名的那条） |
+| `isRtBackedKind` | `\|\|` 式 | extent 校验被跳过 |
+| `isDepthKind` | `\|\|` 式 | clearValue 只写 `.color`、`depthWrite` 误拒 |
+| `frameStartDiscards` | `kind != offscreen` | **就在 barrier 物化链上**，首帧 discard 形态错 |
+| `isColorAttachment`（decorate） | `kind != depth` | 「首个色消费者」换人 ⟹ 高亮 / TAA / velocity **三个装饰器插入点一起挪位**（图形态错，不是文案错） |
+| `ensureOffscreenAttachments` | 两档白名单 + 其余 `continue` | 布局槽永不随资源重建归零 ⟹ 下帧首条 barrier 拿**陈旧 `oldLayout`** |
+
+另外四处（`kindName` + 三个执行器 `imageForSlot` / `viewForSlot` / `extentForSlot`）：三个执行器
+switch **原本就穷尽**，是本刀的正面样板（M1 也点名它们，证明穷尽形态确实有效）；`kindName` 是新增的
+——四个 `validateAttachment*` 的错误消息原先用 `kind == swapchain ? "swapchain" : "depth"` 兜底，
+**未知档会被叫成 `"depth"`**，而附件注册在构造期、现场只剩一行日志 ⟹ 归因错。改用 `kindName` 后
+🔴 **对现有四种 kind 消息逐字节不变**（连 `render graph:` 与 `render_graph:` 两种前缀写法都原样保留
+——那是既有的不一致，本刀不顺手统一，统一会打掉逐字节断言的意义）。
+
+**判为「无关」的四类**（即"这里不需要穷尽"的裁决，写下来免得下次有人以为是漏网）：① `find` / `count`
+只挑某个具体档（`== swapchain` 数引用数、`== depthOffscreen` 找阴影图）——第五档本就不该被计入，
+穷尽化反而是在给它塞不该去的桶；② **reject-rest 分支**（`validateAttachmentFormat` 的两表分立、
+extentScale、history 的「不是 offscreen 就拒」）——第五档落进兜底是**拒得响亮**，本刀只把归因文案修准；
+③ **经已穷尽的谓词间接把关**（如 `pass.depth` 的档集合已被穷尽的 `isDepthKind` 卡住）；④ Lua 词表
+`parseEnum` 未登记串**响亮报错**。判据一句话：**只有"对 kind 全集做分类"的点才必须穷尽**，挑档式的
+过滤不是分类，强行穷尽化 = 给第五档编一个没人要的语义。
+
+#### 一条测试可测性事实（写下来省下次再撞）
+
+**impl partition 从模块外不可 import**（`import render_graph:impl;` 语法即非法），而四个谓词住在 impl
+的匿名 namespace ⟹ 判据全部经 `compileRenderGraph` **公开面**覆盖（`isRtBackedKind` 用 extent 校验
+触发、`isDepthKind` 用 clearValue 分量 + `depthWrite` 反向、`frameStartDiscards` 用编译产物字段）。
+**没有为了测试把 impl 提升成接口**——那是拿分层换测试便利，方向反了。
+
+#### 验收读数
+
+出厂锚 `95edc8ccd7a4` 3/3 命中（本刀**零行为变化**）；`just gates` 全绿（485 用例 / +11）；变异 M3
+（把某条期望消息改一个字符）只有新的逐字节用例红、既有 substring 用例全绿 ⟹ 逐字节断言是**净增强度**。
+
+#### 切刀表（覆盖 §7.15 的表）
+
+| 刀 | 状态 |
+|---|---|
+| **B2-3 前置** 加 kind 的穷尽性护栏（本刀） | ✅ 本刀 |
+| **B2-3 本体** buffer 档 + storage usage + 按名注册 + 拒绝面 | 🔴 **并进 B2-4 首发消费者那一刀**（形状由 meshlet_cull 定，不猜） |
+| **B2-4** 迁入首发 | ⏳ 二选一，见 §6 D2 ①/②：EVSSM 矩图（image，先扩 RT 缓存多描述符）或 meshlet_cull（buffer 档首发） |
+
 ---
 
 ## 8. 待挂号（本批**未落**总账，等用户选处置）
