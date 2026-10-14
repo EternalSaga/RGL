@@ -42,7 +42,7 @@ namespace RGL {
  * 🔴 **原子 = 语义角色，不是"观测到的掩码集合"**。后者会让"词表覆盖全部形态"变成恒真的废话
  * （18 个匿名掩码换个地方存而已）。
  *
- * **宽档必须单独命名并写明为什么宽**，否则就是静默的过度同步。本词表现有四个宽档，
+ * **宽档必须单独命名并写明为什么宽**，否则就是静默的过度同步。本词表现有六个宽档，
  * 宽的**原因**各不相同，这才是它们不能并成一个"随便一个宽档"的理由：
  *
  * | 宽档 | 为什么宽 |
@@ -50,9 +50,14 @@ namespace RGL {
  * | `anyWriteGlobal` | 生产者**本模块无句柄**（EVSSM 的阴影图归 RT 缓存）⟹ 表达不成 buffer 档 |
  * | `allCommandsWrite` | 生产者是一条 **API 命令**（`vkCmdFillBuffer`），它没有"只写这一档"的窄 access 可给 |
  * | `priorAccessWideCs` / `Gfx` | **跨帧**依赖的源侧：上一帧最后访问点取决于当时的门（dump 开没开），拿不准的一律纳入 |
+ * | `heapReadWide` | 消费者是 **EXT 描述符堆**——它是一个扩展对象、不是本层能命名句柄的 buffer ⟹ 表达不成 buffer 档，只能走无句柄执行序 |
+ * | `priorAccessSceneData` | **跨帧 + 跨命令缓冲**依赖的源侧：scene data 单份跨 frames-in-flight 共享且每帧**两个写者**（主 CB 与 cull CB），本帧 copy 与"上一帧的读 / 另一 CB 的写"之间必须自建依赖 |
  *
  * 两条 `priorAccessWide*` 只差 compute 一档，**是刻意分开的**：head 被 compute 写过、mask 没有。
  * 合成一个"最宽的"确实更省事，但省掉的那一位正是"这个资源到底被谁碰过"这条信息本身。
+ * 同理 `priorAccessSceneData` 也不是 `priorAccessWideCs` 的复制品——两者 stage 同宽，但 access
+ * **方向不同**：scene data 只被 shader 读、被**另一条 CB** 拷写 ⟹ 少 `ShaderWrite` / `TransferRead`
+ * 却多 `TransferWrite`（Cs 那一支的源侧没有"另一个写者"，因为 head 只有一个写者）。
  */
 export enum class RgSyncUsage : uint8_t {
 	computeWrite,      ///< compute 写 storage（CS / ShaderWrite）
@@ -65,10 +70,13 @@ export enum class RgSyncUsage : uint8_t {
 	transferRead,      ///< 拷贝**读**它（作为拷贝源；TR / TransferRead）
 	transferWrite,     ///< 拷贝**写**它（作为拷贝目的；TR / TransferWrite）
 	hostRead,          ///< host 读 mapped 内存（Host / HostRead）
+	hostWrite,         ///< host **写**它（本层唯一 host 写侧原子；cull 的 CPU 侧填 descriptor heap）
 	anyWriteGlobal,    ///< 宽档兜底：无句柄的全局写序（AG / MemoryWrite）
 	allCommandsWrite,  ///< 宽档兜底：**任意阶段**的写（AllCommands / MemoryWrite）
 	priorAccessWideCs, ///< 宽档兜底：上一帧「图形 + compute + 传输读」的全部访问（跨帧依赖）
 	priorAccessWideGfx,///< 宽档兜底：同上但**不含 compute**（该资源不经 compute）
+	heapReadWide,      ///< 宽档兜底：图形阶段读 **EXT 描述符堆**（AG / ResHeapRead|SamplerHeapRead|TransferRead|ShaderRead）
+	priorAccessSceneData, ///< 宽档兜底：scene data 的跨帧 + 跨 CB 前序访问（AG|CS|TR / ShaderRead|TransferWrite）
 	count,             ///< 原子数（单测遍历词表用，不是原子）
 };
 
@@ -100,16 +108,18 @@ export enum class RgSyncGate : uint8_t {
 	izb,            ///< `IzbShadow` 在场（门关 = 对象根本不被构造 = 零分配零命令）
 	izbDump,        ///< 本帧是 izb 的 dump 帧（`shadow.lua` 的 `izb.dump_frame`）
 	izbMaskSegment, ///< 本帧 shadow0 段非空 ⟹ mask pass 真的录了（段空 = 整段跳过，债-32）
+	cull,           ///< GPU cull 数据通路本档要录 + 提交 cull CB（`CullDriver::gpuPassRuns()`）
+	cullFanout,     ///< 且静态 DGC 流已建（`GpuCull::entryStreamsEnabled()`）——条件边挂自己的门
 };
 
 /**
  * 门的数量（= 帧末 `checkEmission` 的 active 长度要求）。
  *
- * 🔴 **门之间不独立**：`izbDump ⊂ izb`、`izbMaskSegment ⊂ izb`。帧末门位表必须自己带上
- * 这个包含关系（`izbOn && …`），否则"运行中途把 IZB 关掉"会让 dump 门按配置算成开、
- * 而 barrier 一条没发 ⟹ **假阳性**。这类"门位算错"由单测的门开/门关两条用例分别守。
+ * 🔴 **门之间不独立**：`izbDump ⊂ izb`、`izbMaskSegment ⊂ izb`、`cullFanout ⊂ cull`。帧末门位表
+ * 必须自己带上这个包含关系（`izbOn && …` / `cullOn && …`），否则"运行中途把 IZB 关掉"会让 dump
+ * 门按配置算成开、而 barrier 一条没发 ⟹ **假阳性**。这类"门位算错"由单测的门开/门关两条用例分别守。
  */
-export constexpr uint32_t kSyncGateCount = 4;
+export constexpr uint32_t kSyncGateCount = 6;
 
 /** 已登记的同步边（顺序 = 内部计数数组下标）。 */
 export enum class RgSyncEdgeId : uint8_t {
@@ -130,6 +140,16 @@ export enum class RgSyncEdgeId : uint8_t {
 	izbHeadToMaskPass,     ///< mask pass 开：head compute 写 → frag 读（跨 pass 边界）
 	izbNodesToMaskPass,    ///< 同上但资源是 nodes
 	izbMaskToLight,        ///< mask pass 收：frag atomic 写 → light.frag Load 读
+	// —— 以下 8 条 = GpuCull（批次 B1b 第三刀；6 条 buffer 档 + 2 条无句柄执行序档）。
+	// 序号 ①②③… 沿用 `recordCullPass` 里的注释序号，红了能直接对着那段代码读。
+	cullHeapHostToReads,    ///< ① host 写 heap → 图形阶段读 heap（无句柄：heap 不是 buffer）
+	cullScenePriorToCopy,   ///< ② scene data 拷贝**前**的跨帧 + 跨 CB 依赖（宽档，见 usage 表）
+	cullSceneCopyToReads,   ///< ③ scene data 拷入 → 图形阶段读
+	cullSeqUploadToCreate,  ///< ④ 序列 staging 拷入 → cull dispatch 写
+	cullSeqWriteToReadback, ///< ⑤ cull dispatch 写 → 读回拷出（序列）
+	cullCountWriteToReadback,///< ⑤ 同上但资源是 count（与上一条 masks 全同、资源不同）
+	cullReadbackToHost,     ///< ⑥ 读回拷入 → host 读 mapped 内存（无句柄执行序）
+	cullSeqFanoutChain,     ///< ⑤.5 序列 compute 写 → fanout dispatch 既读又写（静态 DGC 流才发）
 	count,
 };
 

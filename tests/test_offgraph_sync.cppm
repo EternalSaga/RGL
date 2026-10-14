@@ -16,8 +16,10 @@ module;
  *
  * 全部掩码期望值 = **迁移前**各模块代码里 barrier 调用点的字面量：EVSSM 三处 =
  * `rgl/evssm_shadow_impl.cppm` 的 `stageBarrier(...)`；IZB 十三处 = `rgl/izb_shadow_impl.cppm`
- * 的 `bufferBarrier(...)`（两处 helper 现已删除，git 可查）。应发次数同理：`mipLevels − 1`
- * 来自 EVSSM ③ 那个循环的圈数（`level = 1; level < mipLevels`）。
+ * 的 `bufferBarrier(...)`（两处 helper 现已删除，git 可查）；GpuCull 八处 =
+ * `rgl/gpu_cull_impl.cppm` 的 `recordCullPass` / `recordFanoutDispatch` 里就地手写的八个
+ * `vk::MemoryBarrier2` / `vk::BufferMemoryBarrier2` 现场（本就没有 helper，现已删除，git 可查）。
+ * 应发次数同理：`mipLevels − 1` 来自 EVSSM ③ 那个循环的圈数（`level = 1; level < mipLevels`）。
  *
  * ## 变异红线（哪个变异让我红；答不出 = 摆设）
  *
@@ -38,6 +40,11 @@ module;
  *   8. 门位表长度不校验 → 「长度不符」那条红（新增门而帧末没跟上 = 静默漏对账）。
  *   9. 词表养闲原子（加了没人用的条目）→ 「每个原子都被某条边用到」那条红。
  *  10. IZB 十三条里漏一条（发射点删掉而边表没删）→ 「IZB 门开着发够」那条红并点名漏的边。
+ *  11. GpuCull 八条里漏一条 → 「cull 八条边全发够」那条红并点名漏的边；把 `cull_seq_fanout_chain`
+ *      的 gate 从 `cullFanout` 改成 `cull`（子门并父门）→ 边表用例 + 「子门关着却发」那条同时红。
+ *  12. 三个 `priorAccess*` 宽档并成一个（让 `priorAccessSceneData` 直接返回 Cs 那对掩码）→
+ *      「词表逐位」里那条 **access 不等式**变回等式 ⟹ 红（scene data 的源侧没有 ShaderWrite、
+ *      却有另一个写者的 TransferWrite，方向不同 = 不是同一件事）。
  *
  * 🔴 **本文件测不到的**（说清楚，别把"全绿"读成"同步对了"）：`emit` 里有没有忘调
  * `recordEmission`，以及"该发 barrier 的地方根本没写边"。前者由真程序变异覆盖（删一次
@@ -66,11 +73,13 @@ struct Gates {
 	bool izb = false;
 	bool izbDump = false;
 	bool izbMask = false;
+	bool cull = false;
+	bool cullFanout = false;
 };
 
 /** 门位数组（顺序 = `RgSyncGate` 声明序；帧末真实现场用**具名赋值**，见 §7.5）。 */
 constexpr std::array<bool, kSyncGateCount> gates(const Gates& g) {
-	return {g.evssm, g.izb, g.izbDump, g.izbMask};
+	return {g.evssm, g.izb, g.izbDump, g.izbMask, g.cull, g.cullFanout};
 }
 
 /** 失败消息（绿 = 空串）；口径同 `test_offgraph_contract`。 */
@@ -91,6 +100,17 @@ constexpr RgSyncEdgeId kIzbEdges[] = {
 	RgSyncEdgeId::izbDumpHead, RgSyncEdgeId::izbDumpNodes, RgSyncEdgeId::izbDumpMask,
 	RgSyncEdgeId::izbDumpStagingToHost, RgSyncEdgeId::izbHeadToMaskPass,
 	RgSyncEdgeId::izbNodesToMaskPass, RgSyncEdgeId::izbMaskToLight,
+};
+
+/**
+ * GpuCull 全部 8 条边（含挂在**子门** `cullFanout` 上的那条扇出边）。
+ * 「cull 门开着发够」那条按它逐个发；「全发够」的现场门位因此是 `{.cull = true, .cullFanout = true}`。
+ */
+constexpr RgSyncEdgeId kCullEdges[] = {
+	RgSyncEdgeId::cullHeapHostToReads, RgSyncEdgeId::cullScenePriorToCopy,
+	RgSyncEdgeId::cullSceneCopyToReads, RgSyncEdgeId::cullSeqUploadToCreate,
+	RgSyncEdgeId::cullSeqWriteToReadback, RgSyncEdgeId::cullCountWriteToReadback,
+	RgSyncEdgeId::cullReadbackToHost, RgSyncEdgeId::cullSeqFanoutChain,
 };
 
 }  // namespace
@@ -146,6 +166,31 @@ TEST_CASE("offgraph_sync: usage 词表逐位钉死（期望值 = 迁移前各模
 	CHECK(syncUsageMasks(RgSyncUsage::priorAccessWideCs).stage
 		!= syncUsageMasks(RgSyncUsage::priorAccessWideGfx).stage);
 
+	// —— GpuCull（出处：迁移前 gpu_cull_impl.cppm 的 recordCullPass 七处 + recordFanoutDispatch
+	// 一处现场）——
+	// heapBarrier 的 src：旧代码 `eHost, eHostWrite`（本层唯一 host **写**侧原子）
+	CHECK(syncUsageMasks(RgSyncUsage::hostWrite).stage == Stage::eHost);
+	CHECK(syncUsageMasks(RgSyncUsage::hostWrite).access == Acc::eHostWrite);
+	// heapBarrier 的 dst：四个 access **一个都不能少**——少哪一位，那种读法就失去排序
+	CHECK(syncUsageMasks(RgSyncUsage::heapReadWide).stage == Stage::eAllGraphics);
+	CHECK(syncUsageMasks(RgSyncUsage::heapReadWide).access
+		== (Acc::eResourceHeapReadEXT | Acc::eSamplerHeapReadEXT | Acc::eTransferRead
+			| Acc::eShaderRead));
+	// preBarrier 的 src：AG|CS|TR / SR|TW（scene data 只被 shader 读、被另一条 CB 拷写）
+	CHECK(syncUsageMasks(RgSyncUsage::priorAccessSceneData).stage
+		== (Stage::eAllGraphics | Stage::eComputeShader | Stage::eTransfer));
+	CHECK(syncUsageMasks(RgSyncUsage::priorAccessSceneData).access
+		== (Acc::eShaderRead | Acc::eTransferWrite));
+	// 阳性对照（变异 12）：三条宽档**不许并成一个**。sceneData 与 Cs 的 stage 恰好同宽，但
+	// access 方向不同（少 SW|TR、多 TW）——那几位之差正是"谁碰过它、往哪个方向碰"本身。
+	CHECK(syncUsageMasks(RgSyncUsage::priorAccessSceneData).access
+		!= syncUsageMasks(RgSyncUsage::priorAccessWideCs).access);
+	CHECK(syncUsageMasks(RgSyncUsage::heapReadWide).access
+		!= syncUsageMasks(RgSyncUsage::graphicsRead).access);
+	// 词表规模（守的变异 = 「加/删原子却没动本文件」：数字对不上立刻红，逼后来者为新原子补
+	// 上面那组逐位断言，而不是只往枚举里塞一行就完事）
+	CHECK(static_cast<uint32_t>(RgSyncUsage::count) == 17);
+
 	// 变异 9：词表不养闲原子——每个原子至少被某条边的某一侧用到。加原子而没人用 = 白占一个
 	// "看起来已覆盖"的名额，后面铺客户时会被当成现成的档乱用。
 	for (uint32_t u = 0; u < static_cast<uint32_t>(RgSyncUsage::count); ++u) {
@@ -159,7 +204,7 @@ TEST_CASE("offgraph_sync: usage 词表逐位钉死（期望值 = 迁移前各模
 	}
 }
 
-TEST_CASE("offgraph_sync: 边表逐条钉死 = 旧代码 16 处 barrier 调用的等价形态") {
+TEST_CASE("offgraph_sync: 边表逐条钉死 = 旧代码 24 处 barrier 调用的等价形态") {
 	struct Expect {
 		RgSyncEdgeId id;
 		std::string_view name;
@@ -173,7 +218,8 @@ TEST_CASE("offgraph_sync: 边表逐条钉死 = 旧代码 16 处 barrier 调用�
 	using enum RgSyncGate;
 	using enum RgSyncScope;
 	// 逐字段出处：迁移前 evssm_shadow_impl.cppm 的 ①/③/④ 与 izb_shadow_impl.cppm 的 ②③④⑤⑦⑧
-	// + beginMaskPass / endMaskPass 三处调用点。
+	// + beginMaskPass / endMaskPass 三处调用点，以及 gpu_cull_impl.cppm 的 recordCullPass
+	// 七处（heap / scene 前后 / 序列上传 / 序列+count 读回 / host 读回）+ recordFanoutDispatch 一处。
 	constexpr Expect expects[] = {
 		{RgSyncEdgeId::evssmDepthToCompute, "evssm_depth_to_compute", executionOrder, evssm,
 			Stage::eAllGraphics, Acc::eMemoryWrite, Stage::eComputeShader, Acc::eShaderRead},
@@ -213,6 +259,31 @@ TEST_CASE("offgraph_sync: 边表逐条钉死 = 旧代码 16 处 barrier 调用�
 			Stage::eComputeShader, Acc::eShaderWrite, Stage::eAllGraphics, Acc::eShaderRead},
 		{RgSyncEdgeId::izbMaskToLight, "izb_mask_to_light", buffer, izbMaskSegment,
 			Stage::eAllGraphics, Acc::eShaderWrite, Stage::eAllGraphics, Acc::eShaderRead},
+		// —— GpuCull 八条（出处：迁移前 gpu_cull_impl.cppm 的 recordCullPass 七处 +
+		// recordFanoutDispatch 一处，逐条对应当时的字面量）——
+		{RgSyncEdgeId::cullHeapHostToReads, "cull_heap_host_to_reads", executionOrder, cull,
+			Stage::eHost, Acc::eHostWrite, Stage::eAllGraphics,
+			Acc::eResourceHeapReadEXT | Acc::eSamplerHeapReadEXT | Acc::eTransferRead
+				| Acc::eShaderRead},
+		{RgSyncEdgeId::cullScenePriorToCopy, "cull_scene_prior_to_copy", buffer, cull,
+			Stage::eAllGraphics | Stage::eComputeShader | Stage::eTransfer,
+			Acc::eShaderRead | Acc::eTransferWrite, Stage::eTransfer, Acc::eTransferWrite},
+		{RgSyncEdgeId::cullSceneCopyToReads, "cull_scene_copy_to_reads", buffer, cull,
+			Stage::eTransfer, Acc::eTransferWrite, Stage::eAllGraphics, Acc::eShaderRead},
+		{RgSyncEdgeId::cullSeqUploadToCreate, "cull_seq_upload_to_create", buffer, cull,
+			Stage::eTransfer, Acc::eTransferWrite, Stage::eComputeShader, Acc::eShaderWrite},
+		{RgSyncEdgeId::cullSeqWriteToReadback, "cull_seq_write_to_readback", buffer, cull,
+			Stage::eComputeShader, Acc::eShaderWrite, Stage::eTransfer, Acc::eTransferRead},
+		// 与上一条四条掩码**逐位相同**（旧代码就是 `cntBarrier = seqBarrier` 只换 buffer），
+		// 但资源不同 ⟹ 刻意两条边（漏发时点名资源），先例 = izb_nodes_create_to_prime
+		{RgSyncEdgeId::cullCountWriteToReadback, "cull_count_write_to_readback", buffer, cull,
+			Stage::eComputeShader, Acc::eShaderWrite, Stage::eTransfer, Acc::eTransferRead},
+		{RgSyncEdgeId::cullReadbackToHost, "cull_readback_to_host", executionOrder, cull,
+			Stage::eTransfer, Acc::eTransferWrite, Stage::eHost, Acc::eHostRead},
+		// 唯一挂**子门**的一条：`recordFanoutDispatch` 只在 nEntryStreams>0 时被调
+		{RgSyncEdgeId::cullSeqFanoutChain, "cull_seq_fanout_chain", buffer, cullFanout,
+			Stage::eComputeShader, Acc::eShaderWrite, Stage::eComputeShader,
+			Acc::eShaderRead | Acc::eShaderWrite},
 	};
 	// 边数也要钉：加边不写用例 = 新边没人验（这条红比"某条边写错"更常见）。
 	REQUIRE(std::size(expects) == OffGraphSync::kEdgeCount);
@@ -285,6 +356,60 @@ TEST_CASE("offgraph_sync: IZB 十三条边全发够才绿；漏一条就点名�
 	}
 }
 
+TEST_CASE("offgraph_sync: cull 八条边全发够才绿；逐条漏发各点名一条") {
+	// 现场门位 = 两道门全开（八条里有 1 条挂在子门 cullFanout 上，见边表）
+	const auto on = gates({.cull = true, .cullFanout = true});
+	OffGraphSync sync;
+
+	// 阳性锚点：cull 两道门全开、8 条各发一次 ⟹ 绿（cull 没有循环边，应发次数全是 1）
+	sync.beginFrame();
+	for (const auto edge : kCullEdges) emitTimes(sync, edge);
+	CHECK(messageOf(sync.checkEmission(std::span<const bool>{on})).empty());
+	CHECK(std::size(kCullEdges) == 8);
+
+	// 变异 11：漏一条（发射点被删而边表还在）。逐条漏一遍 = 每条边都被判据覆盖过。
+	for (const auto skip : kCullEdges) {
+		sync.beginFrame();
+		for (const auto edge : kCullEdges) {
+			if (edge != skip) emitTimes(sync, edge);
+		}
+		const auto msg = messageOf(sync.checkEmission(std::span<const bool>{on}));
+		REQUIRE_FALSE(msg.empty());
+		INFO("漏掉的边：" << syncEdgeDesc(skip).name);
+		CHECK(msg.find(syncEdgeDesc(skip).name) != std::string::npos);
+	}
+}
+
+TEST_CASE("offgraph_sync: 子门 cullFanout 关着却发了 = 红（cull 侧的条件边）") {
+	// 现场：cull 档在跑，但静态 DGC 流**没建**（`dgcStatic` 关 / NV 路 = 出厂常见形态）
+	const auto parentOnly = gates({.cull = true});
+	OffGraphSync sync;
+
+	// 阳性锚点：只发 cull 门那 7 条 ⟹ 绿（子门关 = 扇出边必须零条）
+	sync.beginFrame();
+	for (const auto edge : kCullEdges) {
+		if (edge != RgSyncEdgeId::cullSeqFanoutChain) emitTimes(sync, edge);
+	}
+	CHECK(messageOf(sync.checkEmission(std::span<const bool>{parentOnly})).empty());
+
+	// 子门关着却发了那条 ⟹ 红且点名（= 没建流的 cull 档命令流多了一条 barrier）
+	sync.beginFrame();
+	for (const auto edge : kCullEdges) emitTimes(sync, edge);
+	const auto bad = messageOf(sync.checkEmission(std::span<const bool>{parentOnly}));
+	REQUIRE_FALSE(bad.empty());
+	CHECK(bad.find("cull_seq_fanout_chain") != std::string::npos);
+
+	// 反向：子门开着却没发 ⟹ 同样红（流建了 = 那条边一条不能少）
+	const auto withFanout = gates({.cull = true, .cullFanout = true});
+	sync.beginFrame();
+	for (const auto edge : kCullEdges) {
+		if (edge != RgSyncEdgeId::cullSeqFanoutChain) emitTimes(sync, edge);
+	}
+	const auto low = messageOf(sync.checkEmission(std::span<const bool>{withFanout}));
+	REQUIRE_FALSE(low.empty());
+	CHECK(low.find("cull_seq_fanout_chain") != std::string::npos);
+}
+
 TEST_CASE("offgraph_sync: 子门（dump / mask 段）关着却发了 = 红（§7.5 条件边的机器判据）") {
 	// 现场：IZB 本体开着，但本帧**不是** dump 帧、shadow0 段也空（= 出厂 IZB 档的常态）
 	const auto parentOnly = gates({.izb = true});
@@ -327,7 +452,7 @@ TEST_CASE("offgraph_sync: 子门（dump / mask 段）关着却发了 = 红（§7
 }
 
 TEST_CASE("offgraph_sync: 门关着必须零命令（逐位不变红线的同步侧）") {
-	const auto off = gates({});  // 四道门全关
+	const auto off = gates({});  // 六道门全关
 	OffGraphSync sync;
 	// 门关 + 一条没发 = 唯一合法形态
 	sync.beginFrame();
@@ -346,6 +471,14 @@ TEST_CASE("offgraph_sync: 门关着必须零命令（逐位不变红线的同步
 	const auto bad2 = messageOf(sync.checkEmission(std::span<const bool>{off}));
 	REQUIRE_FALSE(bad2.empty());
 	CHECK(bad2.find("izb_mask_to_light") != std::string::npos);
+
+	// cull 侧同型：`cull_replay=cpu` 档（出厂默认）整条 GPU 集不上 CB ⟹ 八条一条都不该发，
+	// 发一条就是「门关时命令流多了一条 barrier」= 破逐位不变
+	sync.beginFrame();
+	emitTimes(sync, RgSyncEdgeId::cullReadbackToHost);
+	const auto bad3 = messageOf(sync.checkEmission(std::span<const bool>{off}));
+	REQUIRE_FALSE(bad3.empty());
+	CHECK(bad3.find("cull_readback_to_host") != std::string::npos);
 }
 
 TEST_CASE("offgraph_sync: 构造期申报的次数跨帧生效，本帧计数每帧清零") {

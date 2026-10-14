@@ -12,6 +12,7 @@ import vkerror;
 import vk_device;
 import vk_resources;
 import gpu_cull;
+import offgraph_sync;  // 批次 B1b：ctor 形参类型 + 转交给录制点（partition impl 不传递 import）
 import diagnostics;  // 债-30 方案 C：cull_replay 三态门（docs/cpu_perf_plan.md §4）
 import gpu_profiler;  // Phase 9.2：cull CB 时间戳（cull 区域与主 CB gpu.frame 同槽配对）
 import profiler;      // 批 9.5：cull 四段 CPU zone（cull.fenceWait = Phase 9 从未量过的那次同步）
@@ -69,8 +70,9 @@ void collectGpuVisibleSlots(const RGL::GpuCull& gpuCull, std::vector<uint32_t>& 
 }  // namespace
 
 CullDriver::CullDriver(RGL::DeviceContext& vkDevice, RGL::GpuCull* vkGpuCull,
-		RGL::DgcCommands* vkDgc, RGL::DgcStaticCommands* vkDgcStatic, uint32_t vkFramesInFlight)
-	: device(vkDevice), gpuCull(vkGpuCull), dgc(vkDgc), dgcStatic(vkDgcStatic),
+		RGL::DgcCommands* vkDgc, RGL::DgcStaticCommands* vkDgcStatic, uint32_t vkFramesInFlight,
+		OffGraphSync& vkSync)
+	: device(vkDevice), sync(vkSync), gpuCull(vkGpuCull), dgc(vkDgc), dgcStatic(vkDgcStatic),
 	  framesInFlight(vkFramesInFlight), replayMode(diagnostics().cullReplay) {
 	allocateCommandBuffers();
 	allocateFences();
@@ -144,7 +146,7 @@ std::expected<void, Error> CullDriver::submitCullPass(uint32_t frameSlot, uint64
 		// 序列 CPU 侧基值（execSlot + DrawArgs + meshCmd 基值；args 序 = candidate 序
 		// 契约校验在 writeSequenceStaging 内——size 不符即抛）
 		gpuCull->writeSequenceStaging(frameSlot, list.cullArgs);
-		gpuCull->recordCullPass(ccmd, cullInput, sceneStaging, frameSlot);
+		gpuCull->recordCullPass(ccmd, cullInput, sceneStaging, frameSlot, sync);
 		gpuProfilerEnd(ccmd);  // Phase 9.2：cull CB 终点时间戳（dispatch+barrier 完整窗口）
 		ccmd.end();
 	}

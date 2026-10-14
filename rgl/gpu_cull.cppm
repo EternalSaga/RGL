@@ -10,6 +10,7 @@ import vkerror;
 import vk_device;
 import vk_resources;
 import scene_data;  // SceneDataService（架构债务续账步骤 1：scene data buffer 移出内核）
+import offgraph_sync;  // 批次 B1b：图外同步发射账（8 条 barrier 的参数由边表物化）
 import VmaRaii;
 import frame_draw_list;
 import material_types_generated;  // DrawArgs（writeSequenceStaging：序列 CPU 侧基值）
@@ -122,18 +123,23 @@ export class GpuCull {
 	 */
 	void writeSequenceStaging(uint32_t slot, const std::vector<RGL::DrawArgs>& args);
 	/**
-	 * 在指定命令缓冲上录制 culling 数据通路（自含：heap barrier → scene data 拷贝 →
-	 * 序列 staging 拷贝（CPU 基值 → device 序列）+ Transfer→Compute 屏障 → heap 绑定 →
+	 * 在指定命令缓冲上录制 culling 数据通路（自含：heap 边 → scene data 拷贝 →
+	 * 序列 staging 拷贝（CPU 基值 → device 序列）+ Transfer→Compute 边 → heap 绑定 →
 	 * bindShadersEXT + pushDataEXT + dispatch（GPU 覆盖 meshCmd.x + count）→
-	 * Compute→Transfer 屏障 → 读回拷贝 → Transfer→HostRead 屏障）。调用方提交本 CB
+	 * Compute→Transfer 边 → 读回拷贝 → Transfer→HostRead 边）。调用方提交本 CB
 	 * 并同步等 fence 后调 readCullResult。
 	 * @param cmd 命令缓冲（录制期；调用方负责 begin/end/submit）
 	 * @param input 每帧 culling 输入（视锥 6 面 + candidate 数）
 	 * @param sceneStaging scene data staging ring 本帧 slot（拷贝源；调用方已写完）
 	 * @param slot 帧 slot（staging/读回 ring 下标，0/1）
+	 * @param sync 图外同步发射账（批次 B1b：8 条 barrier 的参数由 `offgraph_sync` 的 usage
+	 *        词表物化，本模块只写边名 + buffer 句柄，不写 stage/access 字面量）。
+	 *        🔴 **为什么是形参而不是成员**：本类在 `main_scene.cppm` 构造，**早于 Renderer**
+	 *        （Renderer 只持其裸指针），而 `OffGraphSync` 是 `Renderer` 的成员 ⟹ 构造期那个
+	 *        引用根本还不存在。IzbShadow / EvssmShadow 能存成员是因为它们在 Renderer 内懒构造。
 	 */
 	void recordCullPass(vk::raii::CommandBuffer& cmd, const CullFrameInput& input,
-		RGL::VmaBuffer& sceneStaging, uint32_t slot);
+		RGL::VmaBuffer& sceneStaging, uint32_t slot, OffGraphSync& sync);
 	/**
 	 * 读回结果（调用方已同步等待本帧 culling 提交 fence）：visible 计数 + 逐 candidate
 	 * 可见位（不可见 = 序列 meshCmd.x == 0）。
@@ -191,11 +197,12 @@ export class GpuCull {
 	void createCullShaders(vk::raii::Device& device);
 	/**
 	 * 静态 DGC 路：基础序列 → per-entry 流扇出 dispatch（recordCullPass 内 nEntryStreams>0
-	 * 分支抽出）。Compute→Compute 屏障后绑 fanoutShader + pushData(sequenceCount) +
+	 * 分支抽出）。Compute→Compute 边后绑 fanoutShader + pushData(sequenceCount) +
 	 * dispatch(candidate, nEntryStreams)。nEntryStreams==0 时调用方跳过（NV/重放路零开销）。
 	 * @param cmd recordCullPass 正在录制的同一命令缓冲（pass 外）
+	 * @param sync 同 recordCullPass（形参而非成员的理由写在那处）
 	 */
-	void recordFanoutDispatch(vk::raii::CommandBuffer& cmd);
+	void recordFanoutDispatch(vk::raii::CommandBuffer& cmd, OffGraphSync& sync);
 
 	RGL::Resources& resources;  // 资源层引用（记录期 heap 信息；main 栈对象生命周期覆盖）
 	RGL::SceneDataService& sceneData;  // scene data 服务引用（buffer / 槽；架构债务续账步骤 1）

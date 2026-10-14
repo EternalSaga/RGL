@@ -11,6 +11,7 @@ import shader_registry;
 import frame_draw_list;
 import vkerror;
 import diagnostics;
+import offgraph_sync;  // 批次 B1b：把 Renderer 的发射账转交给 GpuCull 的录制点（本类不发 barrier）
 
 namespace RGL {
 
@@ -55,9 +56,11 @@ export class CullDriver {
 	 * @param vkDgcStatic 静态 shader DGC 路（nullptr = 关；RADV spike，
 	 *   docs/archive/radv_static_dgc_spike.md——IES 路缺席时接管 opaque 段，两者皆 null 走重放）
 	 * @param framesInFlight 帧 slot 数（= Renderer::MAX_FRAMES_IN_FLIGHT，cull CB/fence 按 slot 分配）
+	 * @param vkSync 图外同步发射账（Renderer 成员，声明在 `cullDriver` **之前** ⟹ 构造期已存在；
+	 *   本类只把它转交给 `GpuCull::recordCullPass`，自己不发边）
 	 */
 	CullDriver(RGL::DeviceContext& vkDevice, RGL::GpuCull* vkGpuCull, RGL::DgcCommands* vkDgc,
-		RGL::DgcStaticCommands* vkDgcStatic, uint32_t framesInFlight);
+		RGL::DgcStaticCommands* vkDgcStatic, uint32_t framesInFlight, OffGraphSync& vkSync);
 
 	/**
 	 * culling 数据通路是否存在（null/inactive = false）。
@@ -71,6 +74,18 @@ export class CullDriver {
 	 */
 	[[nodiscard]] bool gpuPassRuns() const {
 		return active() && replayMode != CullReplayMode::cpu;
+	}
+
+	/**
+	 * 本帧是否**应当**录静态 DGC 的扇出 dispatch（= 同步对账 `cullFanout` 子门的启用位）。
+	 *
+	 * 判据是「门 + 结构」（cull 档在跑 且 构造期建了 per-entry 流），🔴 **不许**改成「刚才调过
+	 * `recordFanoutDispatch` 没有」——那会让帧末对账自证（流没建时两边一起不成立 = 什么都测不到，
+	 * 口径同 `Renderer::offGraphEndFrame` 里 mask 段那条「重算段跨度」的注释）。
+	 * @return true = cull 数据通路在跑且静态 DGC 流已建
+	 */
+	[[nodiscard]] bool fanoutRuns() const {
+		return gpuPassRuns() && gpuCull && gpuCull->entryStreamsEnabled();
 	}
 
 	/**
@@ -183,6 +198,7 @@ export class CullDriver {
 	void reportReconcile(std::vector<uint32_t>& cpuSlots, std::vector<uint32_t>& gpuSlots);
 
 	RGL::DeviceContext& device;
+	OffGraphSync& sync;  // 图外同步发射账（Renderer 成员，声明序在 cullDriver 之前；转交给录制点）
 	RGL::GpuCull* gpuCull;
 	RGL::DgcCommands* dgc;
 	RGL::DgcStaticCommands* dgcStatic;  // 静态 shader DGC 路（nullptr = 关；IES 路优先）

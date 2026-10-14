@@ -145,8 +145,11 @@ Renderer::Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RG
 	  registry(shaderRegistry),
 	  renderGraph(std::move(renderGraph)),
 	  // culling 帧编舞（手术 3）：④c 提交时序 + opaque 段三路（IES/静态 DGC/重放）+ 对账
-	  // 全迁 CullDriver，构造期即分配 cull CB（inactive = 不分配，行为中性与摘出前一致）
-	  cullDriver(vkDevice, vkGpuCull, vkDgc, vkDgcStatic, FrameSession::kFramesInFlight),
+	  // 全迁 CullDriver，构造期即分配 cull CB（inactive = 不分配，行为中性与摘出前一致）。
+	  // 末位实参 = 图外同步发射账：offGraphSync 声明在 cullDriver **之前**（vkrenderer.cppm）
+	  // ⟹ 此刻已构造完，传引用安全（B1b 第三刀：cull 的 8 条边由它物化 + 对账）
+	  cullDriver(vkDevice, vkGpuCull, vkDgc, vkDgcStatic, FrameSession::kFramesInFlight,
+		offGraphSync),
 	  attachmentLayouts(this->renderGraph.attachments.size(), vk::ImageLayout::eUndefined),
 	  // RT generation 跨帧快照（批 12.6 T4）：初值 0 = 「还没见过任何 RT」，首帧 ensure 后
 	  // 记下真实 generation，此后只在重建（+1）那一次才重置布局追踪

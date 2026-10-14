@@ -593,6 +593,7 @@ void Renderer::offGraphEndFrame(const FrameDrawList& list) {
 	// 批次 B1b：图外**同步边**的帧末对账（实发次数 vs 应发次数）。与上面那条独立出声——
 	// 一个查「工作项有没有在挂点录」，一个查「barrier 有没有发够」，两件事的修复位置不同。
 	const bool izbOn = izbShadow != nullptr;
+	const bool cullOn = cullDriver.gpuPassRuns();
 	const std::array<bool, kSyncGateCount> syncActive{
 		evssmShadow != nullptr,
 		izbOn,
@@ -602,6 +603,11 @@ void Renderer::offGraphEndFrame(const FrameDrawList& list) {
 		// mask pass 的门 = shadow0 段非空。**重算段跨度**而不是记「刚才调过 beginMaskPass 没有」：
 		// 后者让这条断言自证（段真被跳过时它也"没调过"，两边一起消失 = 什么都测不到）。
 		izbOn && !segmentSpan(shadowDrawSource(0), list).empty(),
+		// cull 数据通路的门 = 本档真的录 + 提交 cull CB（`cpu` 档 = false ⟹ 一条边都不该发）。
+		// 判据是**档**而不是「刚才录过没有」，理由同上一条。
+		cullOn,
+		// 扇出边挂**子门**（cullFanout ⊂ cull）：带父门的理由与 izbOn 那两条完全相同。
+		cullOn && cullDriver.fanoutRuns(),
 	};
 	if (auto r = offGraphSync.checkEmission(std::span<const bool>{syncActive}); !r)
 		reportOffGraphViolation(r.error());

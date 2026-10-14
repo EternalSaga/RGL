@@ -14,6 +14,7 @@ import vk_resources;
 import scene_data;  // kSceneDataBytes + SceneDataService（架构债务续账步骤 1）
 import frame_draw_list;
 import shader;
+import offgraph_sync;  // 批次 B1b：8 条 barrier 的参数由 usage 词表物化（发射点只写边名）
 import VmaRaii;
 import material_types_generated;
 
@@ -259,76 +260,60 @@ void GpuCull::writeSequenceStaging(uint32_t slot, const std::vector<RGL::DrawArg
 }
 
 void GpuCull::recordCullPass(vk::raii::CommandBuffer& cmd, const CullFrameInput& input,
-	RGL::VmaBuffer& sceneStaging, uint32_t slot) {
+	RGL::VmaBuffer& sceneStaging, uint32_t slot, OffGraphSync& sync) {
 	// 自含数据通路（独立于主 CB 的 ⑥/⑥.5/⑦ 固定段——独立命令缓冲须自带 heap
-	// 状态：barrier + 拷贝 + 绑定。scene data 与主 CB 双拷同一内容（幂等，每帧全量
+	// 状态：边 + 拷贝 + 绑定。scene data 与主 CB 双拷同一内容（幂等，每帧全量
 	// kSceneDataBytes——**字节数不在注释里抄**，真相源 = scene_data.cppm 的
 	// `static_assert(kSceneDataBytes == …)`；双拷的成本账在债-21）——保持主 CB 路径零改动
 	// = forward diff0 硬约束最小化）
 
-	// heap barrier（host 写 → heap 读 + transfer 读 + shader 读；eHost 不能在 render
-	// pass 内，本 CB 全程 pass 外——docs/DESCRIPTOR_HEAP_SPEC.md 坑 8）
-	vk::MemoryBarrier2 heapBarrier{};
-	heapBarrier.srcStageMask = vk::PipelineStageFlagBits2::eHost;
-	heapBarrier.srcAccessMask = vk::AccessFlagBits2::eHostWrite;
-	heapBarrier.dstStageMask = vk::PipelineStageFlagBits2::eAllGraphics;
-	heapBarrier.dstAccessMask = vk::AccessFlagBits2::eResourceHeapReadEXT |
-		vk::AccessFlagBits2::eSamplerHeapReadEXT | vk::AccessFlagBits2::eTransferRead |
-		vk::AccessFlagBits2::eShaderRead;
-	vk::DependencyInfo heapDep{};
-	heapDep.setMemoryBarriers(heapBarrier);
-	cmd.pipelineBarrier2(heapDep);
+	// ① heap 边（host 写 → heap 读 + transfer 读 + shader 读；eHost 不能在 render
+	// pass 内，本 CB 全程 pass 外——docs/DESCRIPTOR_HEAP_SPEC.md 坑 8）。
+	// 无句柄重载：descriptor heap 是扩展对象、不是本层能命名句柄的 buffer ⟹ 只能走执行序
+	// （宽档 `heapReadWide` 的成因 → offgraph_sync.cppm 的 usage 表）。
+	// 🔴 别再在这里加回一个本地 barrier helper、也别把六个 stage/access 字面量写回来 ——
+	// 那等于把"谁都能写 mask 字面量"这件事重新发明，而对账会立刻看不见它（它不在边表里）。
+	// 形态与理由 → `docs/compute_调研.md` §7.2 / §7.4（先例：izb_shadow_impl.cppm 同位注释）。
+	sync.emit(cmd, RgSyncEdgeId::cullHeapHostToReads);
 
 	// scene data 拷贝（staging → device buffer；compute 读对象矩阵表 @128）
 	const auto& sceneBuffer = sceneData.getBuffer();
 	if (sceneBuffer.buffer != VK_NULL_HANDLE) {
-		// 🔴 写前依赖 barrier（与主 CB recordFixedDataPath 的同一条，理由逐字在那边写全，
+		// 🔴 写前依赖边（与主 CB recordFixedDataPath 的同一条，理由逐字在那边写全，
 		// 要点：scene data 单份跨帧共享 + 每帧两个写者（本 CB 与主 CB）+ kFramesInFlight=2
 		// ⟹ 本帧 copy 与"上一帧的读 / 另一 CB 的写"之间必须自己建依赖，post-copy 那条
 		// dst=AllGraphics/ShaderRead 覆盖不到下一次 copy 的 TransferWrite）。
-		vk::BufferMemoryBarrier2 preBarrier{};
-		preBarrier.srcStageMask = vk::PipelineStageFlagBits2::eAllGraphics
-			| vk::PipelineStageFlagBits2::eComputeShader
-			| vk::PipelineStageFlagBits2::eTransfer;
-		preBarrier.srcAccessMask = vk::AccessFlagBits2::eShaderRead
-			| vk::AccessFlagBits2::eTransferWrite;
-		preBarrier.dstStageMask = vk::PipelineStageFlagBits2::eTransfer;
-		preBarrier.dstAccessMask = vk::AccessFlagBits2::eTransferWrite;
-		preBarrier.buffer = sceneBuffer.buffer;
-		preBarrier.size = kSceneDataBytes;
-		vk::DependencyInfo preDep{};
-		preDep.setBufferMemoryBarriers(preBarrier);
-		cmd.pipelineBarrier2(preDep);
+		// ⚠ size 等价性：原现场是 `size = kSceneDataBytes` 而非 VK_WHOLE_SIZE，而 emit 的
+		// buffer 重载刻意不留 size 参数（接口注释给了理由）。等价性的**出处** =
+		// `rgl/scene_data.cppm:1042`——scene data buffer 创建时 `info.size = kSceneDataBytes`，
+		// 即 buffer 恰好等于该长度 ⟹ 两者逐字节等价。若哪天 buffer 变大，WHOLE_SIZE 只会
+		// **更宽**（过度同步，不是漏同步）。
+		sync.emit(cmd, RgSyncEdgeId::cullScenePriorToCopy, sceneBuffer.buffer);
 
 		VkBufferCopy region{0, 0, static_cast<VkDeviceSize>(kSceneDataBytes)};
 		::vkCmdCopyBuffer(*cmd, *sceneStaging, sceneBuffer.buffer, 1, &region);
-		vk::BufferMemoryBarrier2 sceneBarrier{};
-		sceneBarrier.srcStageMask = vk::PipelineStageFlagBits2::eTransfer;
-		sceneBarrier.srcAccessMask = vk::AccessFlagBits2::eTransferWrite;
-		sceneBarrier.dstStageMask = vk::PipelineStageFlagBits2::eAllGraphics;
-		sceneBarrier.dstAccessMask = vk::AccessFlagBits2::eShaderRead;
-		sceneBarrier.buffer = sceneBuffer.buffer;
-		sceneBarrier.size = kSceneDataBytes;
-		vk::DependencyInfo sceneDep{};
-		sceneDep.setBufferMemoryBarriers(sceneBarrier);
-		cmd.pipelineBarrier2(sceneDep);
+		sync.emit(cmd, RgSyncEdgeId::cullSceneCopyToReads, sceneBuffer.buffer);  // size 同上
+	}
+	else {
+		// 🔴 走到这里 = **已经是 bug**，不是可容忍的降级：cull dispatch 要从 scene data @128
+		// 读对象矩阵表，buffer 还不存在 ⟹ 那一读本来就在读垃圾。此前这个分支**静默跳过**
+		// 拷贝与两条边，把 bug 一起吞了。
+		// 批次 B1b 之后它还多一重坏：帧末同步对账会报「`cull` 门开着却发了 0 次」，而那条
+		// 读数**是真的**（确实没发）——但它指不出根因。所以这里先出声，两条读数一起看才成立：
+		// 本条说"为什么没发"，帧末那条说"没发这件事本身违了什么约"。**不要**为了消掉帧末
+		// 那条而给这两条边另挂一道门——门位口径会变成「scene buffer 就绪没」，那是把 bug
+		// 重新藏进护栏里（条件边的正确形态见 `docs/compute_调研.md` §7.5 第 1 条）。
+		if (auto logger = RLLogger::getInstance())
+			logger->error("GpuCull: scene data buffer 未就绪（ensure 未跑），"
+						  "本帧 cull 的 scene data 拷贝与两条同步边一并跳过");
 	}
 
 	// 序列 staging 拷贝（CPU 基值 → device 序列；compute 随后只覆盖 meshCmd.x@104 +
-	// count——args 不经 GPU，BIT-IDENTICAL 契约）。staging 的 host 写由上方 heap
-	// barrier（eHost→eAllGraphics 含 eTransferRead）覆盖
+	// count——args 不经 GPU，BIT-IDENTICAL 契约）。staging 的 host 写由上方 ① heap
+	// 边（eHost→eAllGraphics 含 eTransferRead）覆盖
 	VkBufferCopy seqUp{0, 0, static_cast<VkDeviceSize>(nCandidates) * kCullSequenceStride};
 	::vkCmdCopyBuffer(*cmd, *seqStaging[slot], *sequenceBuffer, 1, &seqUp);
-	vk::BufferMemoryBarrier2 seqUpBarrier{};
-	seqUpBarrier.srcStageMask = vk::PipelineStageFlagBits2::eTransfer;
-	seqUpBarrier.srcAccessMask = vk::AccessFlagBits2::eTransferWrite;
-	seqUpBarrier.dstStageMask = vk::PipelineStageFlagBits2::eComputeShader;
-	seqUpBarrier.dstAccessMask = vk::AccessFlagBits2::eShaderWrite;
-	seqUpBarrier.buffer = *sequenceBuffer;
-	seqUpBarrier.size = VK_WHOLE_SIZE;
-	vk::DependencyInfo seqUpDep{};
-	seqUpDep.setBufferMemoryBarriers(seqUpBarrier);
-	cmd.pipelineBarrier2(seqUpDep);
+	sync.emit(cmd, RgSyncEdgeId::cullSeqUploadToCreate, *sequenceBuffer);
 
 	// heap 绑定（必须在任何描述符引用前——坑 9：与 descriptor set 状态互斥）
 	vk::DeviceAddressRangeEXT heapRange{};
@@ -353,24 +338,13 @@ void GpuCull::recordCullPass(vk::raii::CommandBuffer& cmd, const CullFrameInput&
 
 	// 静态 DGC 路：per-entry 流扇出（门控 = 构造期是否建流，NV/重放路零开销）
 	if (nEntryStreams > 0)
-		recordFanoutDispatch(cmd);
+		recordFanoutDispatch(cmd, sync);
 
-	// 输出 buffer：Compute 写 → Transfer 读（序列 + count）
-	vk::BufferMemoryBarrier2 seqBarrier{};
-	seqBarrier.srcStageMask = vk::PipelineStageFlagBits2::eComputeShader;
-	seqBarrier.srcAccessMask = vk::AccessFlagBits2::eShaderWrite;
-	seqBarrier.dstStageMask = vk::PipelineStageFlagBits2::eTransfer;
-	seqBarrier.dstAccessMask = vk::AccessFlagBits2::eTransferRead;
-	seqBarrier.buffer = *sequenceBuffer;
-	seqBarrier.size = VK_WHOLE_SIZE;
-	vk::DependencyInfo outDep{};
-	outDep.setBufferMemoryBarriers(seqBarrier);
-	cmd.pipelineBarrier2(outDep);
-	vk::BufferMemoryBarrier2 cntBarrier = seqBarrier;
-	cntBarrier.buffer = *countBuffer;
-	vk::DependencyInfo cntDep{};
-	cntDep.setBufferMemoryBarriers(cntBarrier);
-	cmd.pipelineBarrier2(cntDep);
+	// 输出 buffer：Compute 写 → Transfer 读（序列 + count）。两条 masks 逐位相同、资源不同，
+	// 刻意分成两条边而不是 expected=2 的一条：漏发时消息直接点名是哪个资源
+	// （先例 = izb_head_create_to_prime / izb_nodes_create_to_prime）。
+	sync.emit(cmd, RgSyncEdgeId::cullSeqWriteToReadback, *sequenceBuffer);
+	sync.emit(cmd, RgSyncEdgeId::cullCountWriteToReadback, *countBuffer);
 
 	// 读回拷贝（count 区 + 序列区 → readback[slot]）
 	const VkDeviceSize seqBytes = static_cast<VkDeviceSize>(nCandidates) * kCullSequenceStride;
@@ -379,32 +353,20 @@ void GpuCull::recordCullPass(vk::raii::CommandBuffer& cmd, const CullFrameInput&
 	::vkCmdCopyBuffer(*cmd, *countBuffer, *readback[slot], 1, &countCopy);
 	::vkCmdCopyBuffer(*cmd, *sequenceBuffer, *readback[slot], 1, &seqCopy);
 
-	// Transfer 写 → Host 读（CPU 在 submit + fence wait 后读 readback[slot]）
-	vk::MemoryBarrier2 hostBarrier{};
-	hostBarrier.srcStageMask = vk::PipelineStageFlagBits2::eTransfer;
-	hostBarrier.srcAccessMask = vk::AccessFlagBits2::eTransferWrite;
-	hostBarrier.dstStageMask = vk::PipelineStageFlagBits2::eHost;
-	hostBarrier.dstAccessMask = vk::AccessFlagBits2::eHostRead;
-	vk::DependencyInfo hostDep{};
-	hostDep.setMemoryBarriers(hostBarrier);
-	cmd.pipelineBarrier2(hostDep);
+	// Transfer 写 → Host 读（CPU 在 submit + fence wait 后读 readback[slot]）。无句柄重载：
+	// host 侧读的是 map 出来的主机内存，原现场也是 MemoryBarrier2 而非 buffer 档。
+	sync.emit(cmd, RgSyncEdgeId::cullReadbackToHost);
 }
 
 // recordFanoutDispatch 定义（接口注释见 gpu_cull.cppm 私有段）。流写完后由主 CB
 // DGC preprocess 消费——同队列提交序 + 同帧 fence 执行依赖，与 NV 路序列消费同款
 // 前提，帧内无跨在途帧读写。grid.y = entryCount；写全 (i,j) 行（孔洞 = x=0），
 // 无脏行残留（spike §3.3）。
-void GpuCull::recordFanoutDispatch(vk::raii::CommandBuffer& cmd) {
-	vk::BufferMemoryBarrier2 fanBarrier{};
-	fanBarrier.srcStageMask = vk::PipelineStageFlagBits2::eComputeShader;
-	fanBarrier.srcAccessMask = vk::AccessFlagBits2::eShaderWrite;
-	fanBarrier.dstStageMask = vk::PipelineStageFlagBits2::eComputeShader;
-	fanBarrier.dstAccessMask = vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite;
-	fanBarrier.buffer = *sequenceBuffer;
-	fanBarrier.size = VK_WHOLE_SIZE;
-	vk::DependencyInfo fanDep{};
-	fanDep.setBufferMemoryBarriers(fanBarrier);
-	cmd.pipelineBarrier2(fanDep);
+void GpuCull::recordFanoutDispatch(vk::raii::CommandBuffer& cmd, OffGraphSync& sync) {
+	// 序列：compute 写（cull dispatch）→ 本 dispatch 既读又写同一 buffer（dst 给
+	// ShaderRead|ShaderWrite = WAW 与 WAR 一并挡住）。挂**子门** cullFanout：本函数只在
+	// nEntryStreams>0 时被调，挂父门会让"没建流的 cull 档"帧末假阳性。
+	sync.emit(cmd, RgSyncEdgeId::cullSeqFanoutChain, *sequenceBuffer);
 
 	std::array<vk::ShaderStageFlagBits, 1> fanStages = {vk::ShaderStageFlagBits::eCompute};
 	std::array<vk::ShaderEXT, 1> fanHandles = {*fanoutShader};
