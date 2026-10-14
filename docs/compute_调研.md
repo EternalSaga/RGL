@@ -345,6 +345,70 @@ B 档否决理由③：**barrier 改由图发 ⟹ 模块无从返回真实布局
 > **沉淀地址**：`TEST: tests/test_offgraph_contract.cppm`（契约逻辑本身与门无关，恒可测）+
 > `DOC: 本节配方`（"门开着才测得到"这件事做不成断言，但它已经是**命令**而不是感想）。
 
+### 7.2 B1b 形态定案（2026-10-14，用户拍板 A 档 + 二合一约束）
+
+**问题**：A 档（逐条 barrier 申报）的"申报"若是**另写一份**，就得到第二份命令流——两份事实
+必然漂，而漂了没人查的护栏比没有更坏。用户给的约束是「申报边/计算节点这个过程，和定义计算
+节点/边二合一，**绝对不能手抄**」。
+
+**定案 = 申报即发射（declare-by-emit）+ 边表独立于发射调用做双向对账**。本仓已有两个半成品，
+B1b 是把它们合起来推广到 buffer/global 侧：
+
+| 先例 | 它已经证明的事 |
+|---|---|
+| `Renderer::transitionAndTrack` | 「**为什么必须是一个函数**而不是调用方自己发 barrier 再自己写表：两个独立字面量一旦分家，表就可能与真实布局脱钩，而**读表的护栏随之退化成同义反复**」 |
+| `usageInfo`（`render_graph_impl.cppm:49`） | usage → `{layout, stage, access}` **查表生成命令参数**，所以图内根本不存在"声明与命令流分家" |
+
+**形态**：
+
+1. **usage 词表**（rlgfx 新模块 `offgraph_sync`）：原子 usage → `{stage, access}`，
+   边 = `(生产者 usage, 消费者 usage, 资源引用)`。barrier 的 masks 由边**物化**，
+   模块侧一行都不写 mask。
+2. **发射即申报**：模块调 `emitSync(cmd, edgeId)`，同一次调用 ① 发命令 ② 记"本帧这条边被覆盖了"。
+   于是「申报了却没发」与「发了但挡错对象」**在写法上不可能**——这正是 `transitionAndTrack`
+   那条红线的 buffer 侧版本。
+3. 🔴 **但二合一本身不抓"忘发 barrier"**——那是债-75 真正的痛处（"缺 barrier VVL 抓不到"），
+   而 declare-by-emit 只保证已发的一致，**没发的它看不见**。所以边表必须**独立于发射调用**写
+   （谁产谁消，B2 的依赖图），帧末做**双向**对账：门都开着 ⟹ 这条边必须被覆盖；门关 ⟹ 不许出现。
+   **形状与 B1a 的 `checkCoverage` 完全同构**（同一个"门开⟺发生过"的两半边），不是新发明。
+   少了第 3 条，二合一就是一台把冗余搬进查表的打字机——省了手抄，没省漂移。
+
+**发射权仍在模块**（plan-only 红线）：让执行器在节点边界自动插 barrier = 发射权交给图，
+正是 §5.2 仍有效的 14.4b B 档否决。所以模块侧**保留一行** `emitSync(edgeId)`（一个名字，
+不是六个 mask 字面量），这是红线的价格，不是没做到二合一。
+
+**不用通用图容器（BGL 之类）的三条理由**：① 这里不需要任何图算法——节点 = B1a 的 4 个工作项、
+边十几条、拓扑由编译图 + 帧内顺序**给定**，判据只有"集合覆盖"；② 通用容器会把判据形状摊平，
+本仓的护栏靠的正是形状写死（`checkCoverage` 两个半边各一条）；③ 引擎侧新依赖要走 vcpkg。
+
+**现场勘察（2026-10-14 实测，逐条到行号，主 agent 抽查复核）**：逐帧 buffer/global barrier
+共 **33 条目 / 31 条命令**，去重后 **19 种形态**，其中 **8 种覆盖 22 条目（2/3）**；
+全部形态都是「某类写 → 某类读」或其写前依赖镜像，**没有需要 attachment 布局语义的异形**
+⟹ 二维查表（生产者 usage × 消费者 usage）可表达全部 19 种。分布：
+
+| 模块 | 条目 | 门 |
+|---|---|---|
+| `Renderer::recordFixedDataPath` | 3（1G+2B） | 无条件逐帧 |
+| `GpuCull::recordCullPass`/`recordFanoutDispatch` | 8（2G+6B） | GPU cull 档（**独立 cull CB**） |
+| `MeshletCullService::recordDispatch` | 4（1G+3B，**合一成 2 条命令**） | 指针非空 |
+| `IzbShadow` | 9（9B）+ 4 条诊断门控 | 指针非空 |
+| `EvssmShadow::recordFrame` | 9（9G，**全部无句柄纯执行序**） | 指针非空 |
+| `fsr_upscaler` | **0**（逐帧侧零 barrier；`toGeneral` 是建期一次 image） | — |
+
+三处**必须承认的异形**（词表要留兜底档，不许为此放弃二合一）：`vkCmdFillBuffer` 没有专属
+stage/access，只能拿 `AllCommands/MemoryWrite` 兜底（IZB 4 条）；EVSSM 的 depth-write → compute
+是无句柄全局序（access 用 `eMemoryWrite` 通配）；meshlet 把 heap 与 scene data 两条语义**并进
+一条 global**（词表要允许"合并档"或 entries 分层）。另有一处**条件发射**（meshlet 的 scene data
+条目 `if (buffer != VK_NULL_HANDLE)`）——declare-by-emit 天然处理它（没发就不记账），
+但也因此**只有第 3 条的独立边表能发现"该发而没发"**，再次说明三者缺一不可。
+
+**顺带纠正本篇一处旧措辞**：§7 B1b 行原写"FSR 那条 VVL 抓不到的 UB 进对账"。实测 FSR 逐帧侧
+**零 buffer/global barrier**，它的两条是 **image 但 `oldLayout == newLayout == eGeneral`**
+（`vkrenderer_offgraph.cppm:381-393`）——即"布局不变、纯执行依赖"，`transitionAndTrack` 的
+同布局早退会**跳过**它。所以它仍然属于"VVL 抓不到"那一类，但要收的是**执行依赖**而不是布局，
+归 B1b 词表的"同布局执行档"，不是 image 布局档。
+
+
 ---
 
 ## 8. 待挂号（本批**未落**总账，等用户选处置）
