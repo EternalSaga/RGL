@@ -782,6 +782,7 @@ meshlet_cull 能定）。D2 ② 说的「buffer 档首发」就是这个意思�
 `ByteAddressBuffer` 与 `RWByteAddressBuffer`。头文件与 JSON 都指向能，**但没实测**。
 拿 `cull.comp.slang` 测：binding 2 / 4 必须报 `READ_WRITE`、binding 0（`readonly`）必须报 `READ`。
 跑不出来 → 退回 `slangc -reflection-json` 那条路（**形态换、判据不换**）。
+✅ **2026-10-14 已跑，通过**（三条期望全中），读数与两条当场有用的推论 → **§7.11**。
 
 | 刀 | 内容 | 判据 |
 |---|---|---|
@@ -793,6 +794,42 @@ meshlet_cull 能定）。D2 ② 说的「buffer 档首发」就是这个意思�
 ⚠ **B2-3 有一条顺带要修的静默坑**：`aspectOf(kind)` 对未知 kind **回落 `eColor`**（
 `render_graph_impl.cppm:80-84`）——加第五个 kind 不报错、直接被当色附件。buffer 档必须显式给值，
 且那条回落要改成编译不过（去掉 `default` 分支让 `-Wswitch` 接管）。
+
+### 7.11 B2-1 证伪点已跑（2026-10-14 实测）：C++ 反射侧口径
+
+**结论：通过，且比 JSON 细。** 走 `SlangContext::compile` 同一条 API 路径
+（`createGlobalSession → createSession → createCompileRequest → processCommandLineArguments
+→ compile → ShaderReflection::get`，即 `tools/slang_reflect.cppm:75-112` 那套），
+读 `getParameterByIndex(i)->getTypeLayout()->getType()->getResourceAccess()`。
+八种形态一次跑齐（本机 slangc 2026.16，与 §7.9 的 JSON 表同一支 shader）：
+
+| 声明 | `getResourceAccess()` |
+|---|---|
+| `readonly ByteAddressBuffer` / `ByteAddressBuffer` / `StructuredBuffer<T>` / `Texture2D<T>` | `READ` |
+| `RWByteAddressBuffer` / `RWStructuredBuffer<T>` / `RWTexture2D<T>` | `READ_WRITE` |
+| `ConstantBuffer<T>`（以及 push constant） | **`NONE`** |
+
+🔴 **`NONE` 的语义必须写进判据**：它 = 「不是资源访问型参数」（CB / push），**实测从不与可写重合**
+⟹ 判据里它要**跳过**，既不算读也不算写。这条不写清就是一个静默洞：把 `NONE` 当成"分类失败的
+可写资源"会误报，当成"只读"会在哪天反射分类变化时漏报。
+
+**九枚 compute 的可写 binding 全貌**（同一支 spike 拉出来的，13 处）：`cull` 2/4 ·
+`env_prefilter` 1 · `evssm_downsample` **0**/1 · `evssm_moments` 1 · `izb_create` 0/1 ·
+`izb_prime` 3 · `meshlet_cull` 4 · `mip_gen` 1 · `stream_fanout` 2。两条当场有用的读数：
+
+1. **声明级过近似的自家实证**：`evssm_downsample` 的 binding 0 `mipSrc` 声明成 `RWTexture2D`
+   ⟹ 反射报可写，但它体内**只读不写**（四次 `mipSrc[...]` 读、写的是 `mipDst`）。用 RW 是因为
+   要从 GENERAL 布局的图里 load。⟹ §7.9 那条"判据是声明级、会有假阳性"的代价**不是假设，
+   第一个就撞上了**，基线里要登记它并写明原因（"GENERAL load 路径要求 RW"）。
+2. **判据形态被一个真实案例定下来了**：`izb_prime` 写 binding 3 `primed`，而 `primedBuffer`
+   全仓**没有任何消费者**（只有建 / 领槽 / 写描述符 / 绑 prime 四处引用），shader 头注释写明
+   是「阶段 2」预留输出。它**不需要边**（无读者 ⟹ 无写后读 hazard）。
+   ⟹ 判据**必须同时看读侧**：「某 dispatch 写 R **且** 之后有 dispatch 读 R」才要求边；
+   只看写侧会把 `primed` 报成假阳性。（本条排查的初始假设"IZB 少一条边"**是错的**，已证否。）
+
+> 复算：spike 是一次性程序（API 路径照 `SlangContext` 抄），**不入库**；B2-1 落地后同一份事实
+> 由 `just reflect` 的生成物给出，届时以生成物为准。JSON 侧的复算命令在 §7.9。
+
 
 
 
