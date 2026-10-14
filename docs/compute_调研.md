@@ -674,8 +674,14 @@ cull CB 与主 CB 都提交到 `getGraphicsQueue()`，且 cull CB 先提交 ⟹ 
 decoration（§7.3 写下时按"只能这样"处理），且当时 grep Slang C++ 反射头找不到 `isReadOnly`
 类 API ⟹ 当时把 L2 标成**高不确定**。
 
-**实测结论：`slangc -reflection-json` 里 `parameters[].type.access` 就是那个来源。**
-取值 `readWrite` = 声明可写；**字段整个缺失 = 只读**。八种形态一次跑齐（本机 slangc 2026.16）：
+**实测结论：读写方向拿得到，两条路都通。** `slangc -reflection-json` 里
+`parameters[].type.access` 取值 `readWrite` = 声明可写、**字段整个缺失 = 只读**；
+🔴 **C++ 反射侧同样有**（先前本节写过「C++ 那条路本来就走不通」= **错的**，当时只 grep 了
+`isReadOnly` 这个名字）：`slang::ParameterReflection::getResourceAccess()`（`slang.h:2957`，
+转发 `getType()->getResourceAccess()`）返回 `SlangResourceAccess`，取值比 JSON **更细**：
+`NONE / READ / READ_WRITE / RASTER_ORDERED / APPEND / CONSUME / WRITE / FEEDBACK`
+（`slang.h:2214-2224`）⟹ 落地走**已有 C++ 反射工具**那条路，不必为它单开一条 slangc 调用点。
+JSON 侧八种形态一次跑齐（本机 slangc 2026.16）：
 
 | binding | 声明 | `baseShape` | `type.access` |
 |---|---|---|---|
