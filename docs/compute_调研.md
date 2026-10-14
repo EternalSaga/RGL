@@ -813,7 +813,7 @@ meshlet_cull 能定）。D2 ② 说的「buffer 档首发」就是这个意思�
 ⟹ 判据里它要**跳过**，既不算读也不算写。这条不写清就是一个静默洞：把 `NONE` 当成"分类失败的
 可写资源"会误报，当成"只读"会在哪天反射分类变化时漏报。
 
-**九枚 compute 的可写 binding 全貌**（同一支 spike 拉出来的，13 处）：`cull` 2/4 ·
+**九枚 compute 的可写 binding 全貌**（同一支 spike 拉出来的，**12 处**；⚠ 本行原写「13 处」是我数错了——同一条枚举自己加起来就是 12，实现时子 agent 用 JSON 侧独立复算顶回来才抓到。**枚举没错、只有那个总数错**）：`cull` 2/4 ·
 `env_prefilter` 1 · `evssm_downsample` **0**/1 · `evssm_moments` 1 · `izb_create` 0/1 ·
 `izb_prime` 3 · `meshlet_cull` 4 · `mip_gen` 1 · `stream_fanout` 2。两条当场有用的读数：
 

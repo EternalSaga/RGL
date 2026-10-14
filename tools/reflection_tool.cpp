@@ -1,6 +1,9 @@
 #include <boost/program_options.hpp>
+#include <algorithm>
 #include <filesystem>
+#include <map>
 #include <nlohmann/json.hpp>
+#include <string_view>
 #ifdef _WIN32
 #include <process.h>
 #define getpid _getpid
@@ -31,6 +34,27 @@ static const std::vector<std::string> kDefaultSlangFlags = {
 	"-fvk-use-scalar-layout",
 	"-no-codegen",
 };
+
+// compute-access 产物的 JSON 字符串字面量转义（不含外层引号）。
+// 手写而不是 nlohmann::dump：本产物是**已提交文件**且进 SHA1 护栏，格式必须我们自己钉死
+// （2 空格缩进 + 每行一条 param + 键序 binding/param/access）才有人读得动 diff；
+// dump(2) 的键序是字典序、每个键各占一行，改不动。
+static std::string jsonString(std::string_view s)
+{
+	std::string out;
+	out.reserve(s.size() + 2);
+	for (const char c : s) {
+		switch (c) {
+		case '"': out += "\\\""; break;
+		case '\\': out += "\\\\"; break;
+		case '\n': out += "\\n"; break;
+		case '\t': out += "\\t"; break;
+		case '\r': out += "\\r"; break;
+		default: out.push_back(c);
+		}
+	}
+	return out;
+}
 #endif
 
 static void printUsage() {
@@ -40,6 +64,7 @@ static void printUsage() {
 	logger->info("  reflection_tool generate  --json <path> --schema <path> --output <path> --module-name <name> --template <path>");
 	logger->info("  reflection_tool render     --json <path> --output <path> --template <path>");
 	logger->info("  reflection_tool slang      --shader <path> [--shader <path>...] --schema <path> --output <path> --module-name <name> --template <path> [--flags <a b c ...>]");
+	logger->info("  reflection_tool compute-access --shader <path> [--shader <path>...] --output <path> [--flags <a b c ...>] [--include <path>]");
 }
 
 int main(int argc, char* argv[]) {
@@ -171,6 +196,115 @@ int main(int argc, char* argv[]) {
 			// 债-25：configure 未找到 Slang C API 库时的可归因出口（编译面已剔除 slang_reflect）
 			logger->error("'slang' 子命令不可用：本构建未链接 Slang C API（SLANG_PREBUILT_DIR "
 				"缺失或不完整）。Linux 先 just config 触发 FetchContent 再 just reflect（债-25）");
+			return 1;
+#endif
+		}
+
+		// compute-access 子命令：compute entry 的 binding 读写方向表。产物 = 已提交 JSON
+		// （rgl/generated/compute_access.json），消费者 = tools/checks/rules_compute_access.py。
+		// 立论 → docs/compute_调研.md §7.10/§7.11：图外 compute 的同步对账要回答「这个 dispatch
+		// 会写哪些资源」，而人工申报的申报者与被判者是同一个人 ⟹ 需要一条独立机器来源。
+		if (command == "compute-access") {
+#ifdef RGL_TOOLS_WITH_SLANG
+			if (shaderPaths.empty()) {
+				logger->error("--shader is required for 'compute-access'");
+				return 1;
+			}
+			if (outputPath.empty()) {
+				logger->error("--output is required for 'compute-access'");
+				return 1;
+			}
+			// flags：--flags 单串 split（缺省 = kDefaultSlangFlags）；-I 搜索路径追加
+			std::vector<std::string> flags;
+			if (slangFlagsStr.empty()) {
+				flags = kDefaultSlangFlags;
+			} else {
+				std::string remaining = slangFlagsStr;
+				size_t pos;
+				while ((pos = remaining.find(' ')) != std::string::npos) {
+					flags.push_back(remaining.substr(0, pos));
+					remaining.erase(0, pos + 1);
+				}
+				if (!remaining.empty())
+					flags.push_back(remaining);
+			}
+			for (const auto& inc : includePaths) {
+				flags.push_back("-I");
+				flags.push_back(inc);
+			}
+			// 入口名回写进产物：它由 --flags 决定（CMake 传 -entry main）。写死 "main" 的话，
+			// 改了 flags 产物会**谎报入口**——方向表谎报入口比少一条更难查。
+			std::string entry = "main";
+			for (size_t i = 0; i + 1 < flags.size(); ++i)
+				if (flags[i] == "-entry")
+					entry = flags[i + 1];
+			struct ParamRow {
+				uint32_t binding = 0;
+				std::string param;
+				std::string access;
+			};
+			// 一个 shader 一个 SlangContext：那个类禁止 compile 两次（第二次直接 error），
+			// 而方向表要覆盖全部 compute 入口。std::map 的键序 = shader 名字典序（产物排序
+			// 的一半在这里免费拿到，另一半是 params 显式 sort）。
+			std::map<std::string, std::vector<ParamRow>> byShader;
+			for (const auto& shader : shaderPaths) {
+				RGL::SlangContext ctx;
+				std::string diag;
+				// 🔴 错误必须归因到具体文件：多 shader 一次调用只转述 diag 的话，人会去改
+				// 最后动过的那一枚——诊断指错文件 = 让人靠猜决定改哪个 shader。
+				if (!ctx.compile(std::vector<std::string>{ shader }, flags, diag)) {
+					logger->error("[FAIL] compute-access 编译 {} 失败：{}", shader, diag);
+					return 1;
+				}
+				const std::string base = fs::path(shader).filename().string();
+				// basename 是产物的键（绝对路径进产物 = 产物不可移植，换机器/换 worktree 全
+				// 量假 diff）。同名输入会让键互相覆盖 = 产物静默少一枚 shader。
+				if (byShader.contains(base)) {
+					logger->error("[FAIL] compute-access：{} 与既有输入 basename 同名（{}）"
+						"——产物的 shader 键会互相覆盖，去掉重复输入", shader, base);
+					return 1;
+				}
+				auto& rows = byShader[base];
+				for (const auto& g : ctx.queryGlobalParams())
+					rows.push_back(ParamRow{ g.binding, g.name, g.access });
+				// 🔴 确定性排序：产物是**已提交文件**且进 SHA1 护栏，不排序 = 每次 just
+				// reflect 都可能产生与语义无关的假 diff（假 diff 教人跳过 diff，护栏就废了）。
+				std::ranges::sort(rows, [](const ParamRow& a, const ParamRow& b) {
+					return a.binding != b.binding ? a.binding < b.binding : a.param < b.param;
+				});
+				logger->info("[OK] compute-access {}: {} 个 global 参数", base, rows.size());
+			}
+			// 全部 shader 编译成功才落笔：半途失败留下半份产物 = 下一轮 checks 拿它当真相。
+			std::string text = "{\n"
+				"  \"note\": \"compute entry point 的 binding 读写方向；真相源 = Slang 反射，勿手改\",\n"
+				"  \"shaders\": [\n";
+			for (auto it = byShader.begin(); it != byShader.end(); ++it) {
+				text += "    {\n      \"shader\": \"" + jsonString(it->first)
+					+ "\",\n      \"entry\": \"" + jsonString(entry)
+					+ "\",\n      \"params\": [";
+				for (size_t i = 0; i < it->second.size(); ++i)
+					text += (i ? ",\n" : "\n") + std::string("        {\"binding\": ")
+						+ std::to_string(it->second[i].binding) + ", \"param\": \""
+						+ jsonString(it->second[i].param) + "\", \"access\": \""
+						+ jsonString(it->second[i].access) + "\"}";
+				text += it->second.empty() ? "]\n    }" : "\n      ]\n    }";
+				text += std::next(it) == byShader.end() ? "\n" : ",\n";
+			}
+			text += "  ]\n}\n";
+			std::ofstream out(outputPath);
+			if (!out.is_open()) {
+				logger->error("Cannot open output file: {}", outputPath);
+				return 1;
+			}
+			out << text;
+			logger->info("[OK] Generated {} ({} 枚 compute shader)", outputPath, byShader.size());
+			return 0;
+#else
+			// 与 'slang' 子命令同一个可归因出口：静默产出空产物 = 规则侧拿一份**看起来正常**
+			// 的方向表去对账，比直接失败危险得多（假绿的入口往往是"看起来成功"的工具）。
+			logger->error("'compute-access' 子命令不可用：本构建未链接 Slang C API（"
+				"SLANG_PREBUILT_DIR 缺失或不完整）。Linux 先 just config 触发 FetchContent "
+				"再 just reflect（债-25）");
 			return 1;
 #endif
 		}

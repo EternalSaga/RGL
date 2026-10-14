@@ -1,0 +1,18 @@
+{
+  "note": "已评审过的 compute 可写 binding。新增 = 必须先想清楚要不要加同步边，写 reason 说明。",
+  "review": "判据 = rgl/generated/compute_access.json 里 access ∈ {readWrite, write, append, rasterOrdered} 的项必须在此登记（口径 → docs/compute_调研.md §7.11）。⚠ 判据是**声明级**：RW 声明即使体内只读也算可写，所以 reason 要写清「实际写不写」——那条信息只能人给，正是这份基线存在的理由。",
+  "writes": [
+    {"shader": "cull.comp.slang", "binding": 2, "param": "sequences", "reason": "GPU 只覆盖 meshCmd.x@108（可见 → groupCount，不可见 → 0 = no-op draw），序列其余字节由 CPU 每帧写基值；DGC 执行路与 CPU 读回重放路消费同一份序列内容（BIT-IDENTICAL 前提）。同一条 command buffer 内 CPU 写 → compute → DGC 顺序天然成边。"},
+    {"shader": "cull.comp.slang", "binding": 4, "param": "countBuf", "reason": "thread0 每帧写 @4 = candidate 数，DGC push 的 sequenceCountAddress 指向此处（@0 保留未用）。读侧 = 紧随其后的 DGC execute，同队列顺序即同步。"},
+    {"shader": "env_prefilter.comp.slang", "binding": 1, "param": "dst", "reason": "启动期一次性 GGX 重要性采样预滤波的目标 mip 级（RWTexture2DArray，cube 第 level 级 6 层，GENERAL 布局写）。读侧 = 运行期 env 采样（布局转换在 render graph 外，靠宿主记录的 barrier 收口）。"},
+    {"shader": "evssm_downsample.comp.slang", "binding": 0, "param": "mipSrc", "reason": "🔴 实测**只读不写**——声明成 RWTexture2D 只为从 GENERAL 布局的 mip L−1 view 里 load（Filament vsmMipmap 同款自定义 2×2 box，texelFetch 语义禁硬件 bilinear），体内四次 mipSrc[...] 全是读、写的是 mipDst。这是 §7.11「声明级判据会假阳性」的自家实证：登记它并写明原因，而不是把 shader 改窄（改窄要换布局，代价在别处）。"},
+    {"shader": "evssm_downsample.comp.slang", "binding": 1, "param": "mipDst", "reason": "矩 mip 链降采样（1 级 1 dispatch，dispatch z = 级联 tile）的目标层 mip L。层级依赖 = dispatch 间 barrier（宿主记录）；per-tile 独立过滤保证 box 读域永不跨块 = 零级联互染。"},
+    {"shader": "evssm_moments.comp.slang", "binding": 1, "param": "moments", "reason": "从 D32 阴影图集派生 RGBA16F 矩组 (z, z², −1/z, 1/z²)，输出与阴影图集同构（同位置同 tile，零重排）。读侧 = EVSM 阴影采样；写方 = 本 pass 独占。"},
+    {"shader": "izb_create.comp.slang", "binding": 0, "param": "head", "reason": "IZB 链头（G² 个 u32，NONE 哨兵），每帧由 CPU 侧 vkCmdFillBuffer 0xFFFFFFFF 清空，本 pass 原子换头。读侧 = izb_prime 与 mask pass。"},
+    {"shader": "izb_create.comp.slang", "binding": 1, "param": "nodes", "reason": "节点池 16B/像素（u, v, lightDepth, next），**地址即像素 ID**（1c 定案）。写 = 每像素写自己那一格 + 填 next；读侧 = izb_prime 走链、mask mesh 读 payload。"},
+    {"shader": "izb_prime.comp.slang", "binding": 3, "param": "primed", "reason": "每 cell 的链上 lightDepth 最大值（空 cell = 0）。🔴 全仓**无读侧**（只有建/领槽/写描述符/绑 prime 四处引用），shader 头注释写明是「阶段 2」预留输出 ⟹ 无写后读 hazard、**不需要同步边**（§7.11 读数 2：判据必须同时看读侧，只看写侧会把它报成假阳性）。"},
+    {"shader": "meshlet_cull.comp.slang", "binding": 4, "param": "clusterVisible", "reason": "逐簇可见位（u32 × itemCount，1 = 可见）。读侧 = mesh shader 按 cullBase + 簇内序读，同一条 render pass 内 compute → mesh 顺序即同步。"},
+    {"shader": "mip_gen.comp.slang", "binding": 1, "param": "dstTex", "reason": "逐层 mip 生成的目标层（每层一次 dispatch，读同纹理的上一层 srcTex）。读侧 = 同链下一级的 srcTex 采样 + 运行期材质采样；层级 barrier 由宿主记录。"},
+    {"shader": "stream_fanout.comp.slang", "binding": 2, "param": "streams", "reason": "紧凑化后的 per-stream 序列行：把 sequences 的 @8..120（DrawArgs 槽区 + meshCmd）拷进流槽并把 meshCmd 高 12B 归零。读侧 = DGC execute，同队列顺序即同步。"}
+  ]
+}

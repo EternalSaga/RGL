@@ -49,9 +49,45 @@ function(rgl_reflect_slang slang_rel schema_rel module_name)
     set(REFLECTION_PAIRS "${_pair_list}" PARENT_SCOPE)
 endfunction()
 
+# 调用：rgl_reflect_compute_access(<产物名 相对 generated/> <相对 rgl/ 的 shader>...)
+# compute entry point 的 binding **读写方向**表。与 rgl_reflect_slang 的差别不是"另一条同类
+# 管线"，而是**另一个问题**：那条反射 `*.slang` 契约文件的 struct 布局（C++ 要按它发字段），
+# 本条反射 `*.comp.slang` 入口的 binding 表 + 方向（C++ 不消费，消费者是 checks 规则）。
+# 产物是 JSON 不是 .cppm ⟹ **不进 RGL_GENERATED_CPPM**（没有 C++ 消费者），但**必须进
+# REFLECTION_PAIRS**——不进护栏的产物就是没人守的漂移产物：方向表过期时"零警告"会被读成
+# 「同步边对过账」，那正是它存在的理由的反面。立论 → docs/compute_调研.md §7.10。
+# 🔴 护栏输入 = 显式列的 comp shader **+ 整个 rgl/shaders/*.slang 的 glob**：方向会从被
+# import 的文件来（cull.comp.slang 的 objectMatrixTable 来自 `import scene_tables`），只列
+# 直接输入 = 改了被 import 的文件不触发护栏 = 静默使用过期方向表。代价是**任何** shader
+# 改动都会触发一次护栏——这是**故意的保守**：宁可多跑一次 just reflect（秒级），不要静默
+# 拿一份过期方向表去对同步边（对错的同步边看不出来）。glob 展开见 ReflectionManifest.cmake
+# 的 expand_inputs（write/check 共用同一个函数）。
+function(rgl_reflect_compute_access product)
+    set(json "${GEN_SRC_DIR}/${product}")
+    set(shader_args "")
+    set(pair_ins "")
+    foreach(shard ${ARGN})
+        list(APPEND shader_args --shader "${CMAKE_CURRENT_SOURCE_DIR}/${shard}")
+        list(APPEND pair_ins "${CMAKE_CURRENT_SOURCE_DIR}/${shard}")
+    endforeach()
+    add_custom_command(TARGET reflect PRE_BUILD
+        COMMAND reflection_tool compute-access
+                ${shader_args}
+                --output ${json}
+                --flags "${SLANG_FLAGS_STR} -no-codegen -entry main -stage compute"
+                --include "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
+        VERBATIM)
+    # glob 串不能含 `,`（PAIRS 的输入分隔符）或 `|`（产物/输入分隔符）——本仓路径不含。
+    # configure 期就拼成绝对路径：清单脚本跑在 `cmake -P` 里，那里没有 CMAKE_SOURCE_DIR。
+    list(APPEND pair_ins "glob:${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.slang")
+    string(REPLACE ";" "," pair_ins "${pair_ins}")
+    set(_pair_list ${REFLECTION_PAIRS} "${json}|${pair_ins}")
+    set(REFLECTION_PAIRS "${_pair_list}" PARENT_SCOPE)
+endfunction()
+
 # reflect：显式重建全部反射产物（工具由 add_dependencies 先建；管线无条件重跑）。
 add_custom_target(reflect
-    COMMENT "重跑 8 条反射管线（6 条 slangc reflection + features + param_semantics）")
+    COMMENT "重跑 9 条反射管线（6 条 slangc reflection + features + param_semantics + compute_access）")
 add_dependencies(reflect reflection_tool)
 
 # types 管线
@@ -67,6 +103,24 @@ rgl_reflect_slang(shaders/lights.slang shaders/lights_schema.lua lights_types_ge
 rgl_reflect_slang(shaders/scene.slang shaders/scene_forward_schema.lua scene_forward_types_generated)
 # 逐簇剔除契约（★1-a2-i）：MeshletCullItem / cullPush 经 C API 反射生成 C++ struct
 rgl_reflect_slang(shaders/meshlet_cull.slang shaders/meshlet_cull_schema.lua meshlet_cull_types_generated)
+
+# compute binding 读写方向表（B2，docs/compute_调研.md §7.10/§7.11）。九枚按名字典序列出，
+# 与产物的 shaders 段同序（产物自己也会排一遍，这里同序只为 diff 好读）。
+rgl_reflect_compute_access(compute_access.json
+    shaders/cull.comp.slang
+    shaders/env_prefilter.comp.slang
+    shaders/evssm_downsample.comp.slang
+    shaders/evssm_moments.comp.slang
+    shaders/izb_create.comp.slang
+    shaders/izb_prime.comp.slang
+    shaders/meshlet_cull.comp.slang
+    shaders/mip_gen.comp.slang
+    shaders/stream_fanout.comp.slang)
+
+# 🔴 上面 6 条 rgl_reflect_slang 的护栏输入**至今只列直接文件、不含 import 闭包**——同一个
+# 洞（改了被 import 的 `*.slang` 不触发 SHA1 守卫 = 静默使用过期生成码），只是它落在布局
+# 契约上、比方向表更贵。本条管线用 glob 把这个洞堵上了，那 6 条**本批不修**：改它们的输入
+# 集要重跑并复核全部 6 份已提交 .cppm，是独立的一刀。账 → docs/compute_调研.md §7.10。
 
 # features 管线（config JSON → 模板渲染，无 slangc 步骤）
 set(FEATURES_CPPM "${GEN_SRC_DIR}/features_generated.cppm")

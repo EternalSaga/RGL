@@ -42,7 +42,32 @@ export struct SlangGlobalParam {
 	uint32_t binding = 0;
 	uint32_t space = 0;
 	std::string cppType;
+	// 读写方向（"read" / "readWrite" / "none" / …，见 accessToString）。
+	// 立论：图外 compute 的同步对账要回答「这个 dispatch 会写哪些资源」，而人工申报的
+	// 申报者与被判者同源（docs/compute_调研.md §7.10）——本字段是那条问题的**独立机器来源**。
+	std::string access;
 };
+
+// SlangResourceAccess → 产物里的人读字符串（口径 → docs/compute_调研.md §7.11 的八种声明
+// 映射表）。文件内 static：它是本模块的**编码细节**，导出它等于给下游一份第二口径，而下游
+// 要判的是「可写集合」——那份集合归 tools/checks/config.py 登记，不在这里复制。
+// 🔴 未识别的枚举值落 "unknown"，绝不映射成任何已知值：slang 升级新增 access 种类时，
+// "unknown" 在产物里看得见、规则侧按非可写跳过（保守 = 少报同步边，但漂移可归因）；
+// 猜成 readWrite 会凭空造边，猜成 read 会静默漏边——两个猜测都比「承认不知道」更坏。
+static std::string accessToString(SlangResourceAccess a)
+{
+	switch (a) {
+	case SLANG_RESOURCE_ACCESS_NONE: return "none";
+	case SLANG_RESOURCE_ACCESS_READ: return "read";
+	case SLANG_RESOURCE_ACCESS_READ_WRITE: return "readWrite";
+	case SLANG_RESOURCE_ACCESS_RASTER_ORDERED: return "rasterOrdered";
+	case SLANG_RESOURCE_ACCESS_APPEND: return "append";
+	case SLANG_RESOURCE_ACCESS_CONSUME: return "consume";
+	case SLANG_RESOURCE_ACCESS_WRITE: return "write";
+	case SLANG_RESOURCE_ACCESS_FEEDBACK: return "feedback";
+	default: return "unknown";
+	}
+}
 
 	// 持有 slang 全局 session + ISession + 编译请求 + 反射（RAII，release 在析构）。
 	// 仅 reflection_tool 一个 importer，且它链接 libslang.so——查询函数内联无妨。
@@ -157,7 +182,17 @@ export struct SlangGlobalParam {
 			g.name = p->getName();
 			g.binding = p->getBindingIndex();
 			g.space = p->getBindingSpace();
-			g.cppType = typeToCppType(p->getTypeLayout()->getType());
+			// 🔴 getTypeLayout()/getType() 任一为空 → 填 "unknown"，**不解引用**：本产物是
+			// 「哪个 dispatch 会写哪块资源」的唯一机器来源，一条空指针崩在 just reflect 里
+			// 只留下一个栈回溯，而 "unknown" 会留在产物里被规则侧和人都看见。
+			slang::TypeLayoutReflection* tl = p->getTypeLayout();
+			slang::TypeReflection* t = tl ? tl->getType() : nullptr;
+			g.access = accessToString(t ? t->getResourceAccess() : SLANG_RESOURCE_ACCESS_UNKNOWN);
+			// 复用上面那个**已判空**的 t：`typeToCppType` 第一行就 `t->getKind()`，而本函数原先
+			// 是 `p->getTypeLayout()->getType()` 裸取——同一个循环里新字段判空、旧字段不判，
+			// 等于把崩溃路径留在自己刚立完护栏的旁边。（`queryPushConst` 等处的同型裸取是
+			// 既有形态，不在本函数路径上，未一并改。）
+			g.cppType = t ? typeToCppType(t) : std::string{};
 			out.push_back(std::move(g));
 		}
 		return out;

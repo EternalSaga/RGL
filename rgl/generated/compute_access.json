@@ -1,0 +1,115 @@
+{
+  "note": "compute entry point 的 binding 读写方向；真相源 = Slang 反射，勿手改",
+  "shaders": [
+    {
+      "shader": "cull.comp.slang",
+      "entry": "main",
+      "params": [
+        {"binding": 0, "param": "cullTable", "access": "read"},
+        {"binding": 0, "param": "push", "access": "none"},
+        {"binding": 2, "param": "sequences", "access": "readWrite"},
+        {"binding": 4, "param": "countBuf", "access": "readWrite"},
+        {"binding": 22, "param": "sceneHeader", "access": "none"},
+        {"binding": 23, "param": "objectMatrixTable", "access": "read"},
+        {"binding": 25, "param": "objectMvpTable", "access": "read"},
+        {"binding": 26, "param": "objectDrawTable", "access": "read"},
+        {"binding": 27, "param": "sceneIrradiance", "access": "none"},
+        {"binding": 28, "param": "sceneShadowViewProj", "access": "none"},
+        {"binding": 29, "param": "sceneShadowParams", "access": "none"},
+        {"binding": 30, "param": "sceneTaa", "access": "none"},
+        {"binding": 31, "param": "sceneSsr", "access": "none"},
+        {"binding": 32, "param": "sceneWet", "access": "none"},
+        {"binding": 33, "param": "objectClusterRangeTable", "access": "read"}
+      ]
+    },
+    {
+      "shader": "env_prefilter.comp.slang",
+      "entry": "main",
+      "params": [
+        {"binding": 0, "param": "push", "access": "none"},
+        {"binding": 0, "param": "srcEnv", "access": "read"},
+        {"binding": 1, "param": "dst", "access": "readWrite"},
+        {"binding": 2, "param": "srcSampler", "access": "none"}
+      ]
+    },
+    {
+      "shader": "evssm_downsample.comp.slang",
+      "entry": "main",
+      "params": [
+        {"binding": 0, "param": "mipSrc", "access": "readWrite"},
+        {"binding": 0, "param": "push", "access": "none"},
+        {"binding": 1, "param": "mipDst", "access": "readWrite"}
+      ]
+    },
+    {
+      "shader": "evssm_moments.comp.slang",
+      "entry": "main",
+      "params": [
+        {"binding": 0, "param": "push", "access": "none"},
+        {"binding": 0, "param": "shadowDepth", "access": "read"},
+        {"binding": 1, "param": "moments", "access": "readWrite"}
+      ]
+    },
+    {
+      "shader": "izb_create.comp.slang",
+      "entry": "main",
+      "params": [
+        {"binding": 0, "param": "head", "access": "readWrite"},
+        {"binding": 0, "param": "push", "access": "none"},
+        {"binding": 1, "param": "nodes", "access": "readWrite"},
+        {"binding": 2, "param": "depthTex", "access": "read"}
+      ]
+    },
+    {
+      "shader": "izb_prime.comp.slang",
+      "entry": "main",
+      "params": [
+        {"binding": 0, "param": "head", "access": "read"},
+        {"binding": 0, "param": "push", "access": "none"},
+        {"binding": 1, "param": "nodes", "access": "read"},
+        {"binding": 3, "param": "primed", "access": "readWrite"}
+      ]
+    },
+    {
+      "shader": "meshlet_cull.comp.slang",
+      "entry": "main",
+      "params": [
+        {"binding": 0, "param": "cullItems", "access": "read"},
+        {"binding": 0, "param": "cullPush", "access": "none"},
+        {"binding": 1, "param": "clusters", "access": "read"},
+        {"binding": 4, "param": "clusterVisible", "access": "readWrite"},
+        {"binding": 22, "param": "sceneHeader", "access": "none"},
+        {"binding": 23, "param": "objectMatrixTable", "access": "read"},
+        {"binding": 25, "param": "objectMvpTable", "access": "read"},
+        {"binding": 26, "param": "objectDrawTable", "access": "read"},
+        {"binding": 27, "param": "sceneIrradiance", "access": "none"},
+        {"binding": 28, "param": "sceneShadowViewProj", "access": "none"},
+        {"binding": 29, "param": "sceneShadowParams", "access": "none"},
+        {"binding": 30, "param": "sceneTaa", "access": "none"},
+        {"binding": 31, "param": "sceneSsr", "access": "none"},
+        {"binding": 32, "param": "sceneWet", "access": "none"},
+        {"binding": 33, "param": "objectClusterRangeTable", "access": "read"}
+      ]
+    },
+    {
+      "shader": "mip_gen.comp.slang",
+      "entry": "main",
+      "params": [
+        {"binding": 0, "param": "push", "access": "none"},
+        {"binding": 0, "param": "srcTex", "access": "read"},
+        {"binding": 1, "param": "dstTex", "access": "readWrite"},
+        {"binding": 2, "param": "linearSampler", "access": "none"}
+      ]
+    },
+    {
+      "shader": "stream_fanout.comp.slang",
+      "entry": "main",
+      "params": [
+        {"binding": 0, "param": "cullTable", "access": "read"},
+        {"binding": 0, "param": "push", "access": "none"},
+        {"binding": 1, "param": "sequences", "access": "read"},
+        {"binding": 2, "param": "streams", "access": "readWrite"}
+      ]
+    }
+  ]
+}

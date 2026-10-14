@@ -28,6 +28,41 @@ function(rel out path)
     set(${out} "${r}" PARENT_SCOPE)
 endfunction()
 
+# 输入项展开：`glob:<pattern>` → 该 glob 命中的全部文件；其余原样追加。
+# 🔴 write 与 check **必须共用本函数**：两处各写一份展开逻辑 = 一致性 bug 的温床——只要
+# 有一处忘了同步，清单记录的输入集合与守卫看到的输入集合就不是同一份，结果是「护栏永远绿
+# 但产物已过期」，正是本机制存在的理由的反面。
+# glob 串由 configure 期拼成绝对路径（脚本模式里没有 CMAKE_SOURCE_DIR），且不能含 `,` 或
+# `|`——那两个字符分别是 PAIRS 的输入分隔符与产物/输入分隔符。
+function(expand_inputs out specs)
+    set(expanded "")
+    foreach(spec ${specs})
+        if(spec MATCHES "^glob:(.*)$")
+            file(GLOB_RECURSE hits LIST_DIRECTORIES false "${CMAKE_MATCH_1}")
+            # 🔴 glob 命中 0 个 = 模式漂了（目录改名 / 后缀变了），而 write 与 check 会**一致地**
+            # 展开成空 ⟹ 清单与守卫永远对得上、护栏全绿，闭包却已经整块消失。这是本机制唯一
+            # 一种「两处同步所以测不出来」的失效，只能在展开点当场夺非零码。
+            list(LENGTH hits n_hits)
+            if(n_hits EQUAL 0)
+                message(FATAL_ERROR
+                    "ReflectionManifest: glob 模式 '${CMAKE_MATCH_1}' 命中 0 个文件——"
+                    "模式漂了（目录改名？后缀变了？）。继续跑会得到一份**看起来全绿**但闭包"
+                    "已整块消失的清单，那比没有护栏更坏。")
+            endif()
+            list(APPEND expanded ${hits})
+        else()
+            list(APPEND expanded "${spec}")
+        endif()
+    endforeach()
+    # 去重：显式列出的文件常常也在同一条 glob 里（compute-access 的 9 枚 comp shader 就是）。
+    # 不去重不会算错（同一文件哈希相同），但清单会多出重复行——清单是已提交文件，
+    # 多出来的行会让人怀疑「这两行为什么不一样」，而它们一模一样。
+    if(expanded)
+        list(REMOVE_DUPLICATES expanded)
+    endif()
+    set(${out} ${expanded} PARENT_SCOPE)
+endfunction()
+
 if(MODE STREQUAL "write")
     set(lines "")
     foreach(entry IN LISTS PAIRS)
@@ -35,7 +70,8 @@ if(MODE STREQUAL "write")
         list(GET parts 0 out)
         list(GET parts 1 ins)
         string(REPLACE "," ";" ins "${ins}")
-        foreach(in ${ins})
+        expand_inputs(ins_expanded "${ins}")
+        foreach(in ${ins_expanded})
             file(SHA1 "${in}" h)
             rel(r "${in}")
             string(APPEND lines "${h}  ${r}\n")
@@ -66,7 +102,8 @@ foreach(entry IN LISTS PAIRS)
     list(GET parts 0 out)
     list(GET parts 1 ins)
     string(REPLACE "," ";" ins "${ins}")
-    foreach(in ${ins})
+    expand_inputs(ins_expanded "${ins}")
+    foreach(in ${ins_expanded})
         if(NOT EXISTS "${in}")
             string(APPEND stale "\n  缺失输入: ${in}")
             continue()

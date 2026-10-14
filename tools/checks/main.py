@@ -64,6 +64,8 @@ from config import (DEFAULT_COGNITIVE_ERROR_THRESHOLD, DEFAULT_COGNITIVE_THRESHO
                     TOOL_UNIT_PREFIXES, TOOL_UNIT_SUFFIXES)
 from coverage_layers import coverage_checks, coverage_readout
 from fs import read_text
+from rules_compute_access import (compute_write_coverage_checks,
+                                  scan_readout as compute_access_readout)
 from rules_doxygen import interface_declared_names, rule_doxygen
 from rules_ecs import (ecs_component_home_checks, ecs_component_purity_checks,
                        ecs_global_baseline_counts, ecs_global_readout,
@@ -324,6 +326,8 @@ def main() -> None:
         warnings.extend(judgments_pointer_checks())
         warnings.extend(lib_layering_checks())
         warnings.extend(reflection_contract_checks())
+        # compute 可写 binding 对账（B2）：反射产物 ↔ 人工基线，双向缺/陈旧都是 error。
+        warnings.extend(compute_write_coverage_checks())
         # ECS 规范护栏（债-14）：规范 2 调度器禁令 + 规范 5 组件纯度/定义位 + 规范 3 全局可变状态
         warnings.extend(ecs_scheduler_ban_checks())
         warnings.extend(ecs_component_purity_checks())
@@ -420,6 +424,9 @@ def main() -> None:
         readout = scan_readout()
         print("[style-check] 反射三方对账: "
               + (readout if readout else "**本次未执行**（规则没跑到）"))
+        ca_readout = compute_access_readout()
+        print("[style-check] compute 可写 binding 对账: "
+              + (ca_readout if ca_readout else "**本次未执行**（规则没跑到）"))
         bp_readout = doc_pointer_readout()
         print("[style-check] 反引号指针对账: "
               + (bp_readout if bp_readout else "**本次未执行**（规则没跑到）"))
