@@ -40,15 +40,35 @@ namespace RGL {
  * 同步**原子 usage**：`{stage, access}` 的唯一来源。
  *
  * 🔴 **原子 = 语义角色，不是"观测到的掩码集合"**。后者会让"词表覆盖全部形态"变成恒真的废话
- * （18 个匿名掩码换个地方存而已）。宽档（`anyWriteGlobal` 这类）是 `vkCmdFillBuffer` 之类
- * 没有专属 stage/access 逼出来的兜底，**必须单独命名并写明为什么宽**，否则就是静默的过度同步。
+ * （18 个匿名掩码换个地方存而已）。
+ *
+ * **宽档必须单独命名并写明为什么宽**，否则就是静默的过度同步。本词表现有四个宽档，
+ * 宽的**原因**各不相同，这才是它们不能并成一个"随便一个宽档"的理由：
+ *
+ * | 宽档 | 为什么宽 |
+ * |---|---|
+ * | `anyWriteGlobal` | 生产者**本模块无句柄**（EVSSM 的阴影图归 RT 缓存）⟹ 表达不成 buffer 档 |
+ * | `allCommandsWrite` | 生产者是一条 **API 命令**（`vkCmdFillBuffer`），它没有"只写这一档"的窄 access 可给 |
+ * | `priorAccessWideCs` / `Gfx` | **跨帧**依赖的源侧：上一帧最后访问点取决于当时的门（dump 开没开），拿不准的一律纳入 |
+ *
+ * 两条 `priorAccessWide*` 只差 compute 一档，**是刻意分开的**：head 被 compute 写过、mask 没有。
+ * 合成一个"最宽的"确实更省事，但省掉的那一位正是"这个资源到底被谁碰过"这条信息本身。
  */
 export enum class RgSyncUsage : uint8_t {
 	computeWrite,      ///< compute 写 storage（CS / ShaderWrite）
 	computeRead,       ///< compute 读（CS / ShaderRead）
 	computeReadWrite,  ///< 下一个 dispatch **既读又写**同一资源（CS / ShaderRead|ShaderWrite）
-	fragmentRead,      ///< fragment 采样读（FS / ShaderRead）
+	fragmentRead,      ///< fragment 采样读（**FS** / ShaderRead）
+	graphicsWrite,     ///< 图形阶段写（**AG** / ShaderWrite）——IZB mask frag 的 atomic 写
+	graphicsRead,      ///< 图形阶段读（**AG** / ShaderRead）
+	graphicsReadWrite, ///< 图形阶段既写又读（AG / ShaderRead|ShaderWrite）
+	transferRead,      ///< 拷贝**读**它（作为拷贝源；TR / TransferRead）
+	transferWrite,     ///< 拷贝**写**它（作为拷贝目的；TR / TransferWrite）
+	hostRead,          ///< host 读 mapped 内存（Host / HostRead）
 	anyWriteGlobal,    ///< 宽档兜底：无句柄的全局写序（AG / MemoryWrite）
+	allCommandsWrite,  ///< 宽档兜底：**任意阶段**的写（AllCommands / MemoryWrite）
+	priorAccessWideCs, ///< 宽档兜底：上一帧「图形 + compute + 传输读」的全部访问（跨帧依赖）
+	priorAccessWideGfx,///< 宽档兜底：同上但**不含 compute**（该资源不经 compute）
 	count,             ///< 原子数（单测遍历词表用，不是原子）
 };
 
@@ -76,17 +96,40 @@ export enum class RgSyncScope : uint8_t {
 
 /** 一条边归属的**门**（帧末覆盖对账按它取启用位；口径同 B1a 的工作项门）。 */
 export enum class RgSyncGate : uint8_t {
-	evssm,  ///< `EvssmShadow` 在场（Renderer 的 `evssmShadow` 非空）
+	evssm,          ///< `EvssmShadow` 在场（Renderer 的 `evssmShadow` 非空）
+	izb,            ///< `IzbShadow` 在场（门关 = 对象根本不被构造 = 零分配零命令）
+	izbDump,        ///< 本帧是 izb 的 dump 帧（`shadow.lua` 的 `izb.dump_frame`）
+	izbMaskSegment, ///< 本帧 shadow0 段非空 ⟹ mask pass 真的录了（段空 = 整段跳过，债-32）
 };
 
-/** 门的数量（= 帧末 `checkEmission` 的 active 长度要求）。 */
-export constexpr uint32_t kSyncGateCount = 1;
+/**
+ * 门的数量（= 帧末 `checkEmission` 的 active 长度要求）。
+ *
+ * 🔴 **门之间不独立**：`izbDump ⊂ izb`、`izbMaskSegment ⊂ izb`。帧末门位表必须自己带上
+ * 这个包含关系（`izbOn && …`），否则"运行中途把 IZB 关掉"会让 dump 门按配置算成开、
+ * 而 barrier 一条没发 ⟹ **假阳性**。这类"门位算错"由单测的门开/门关两条用例分别守。
+ */
+export constexpr uint32_t kSyncGateCount = 4;
 
 /** 已登记的同步边（顺序 = 内部计数数组下标）。 */
 export enum class RgSyncEdgeId : uint8_t {
 	evssmDepthToCompute,  ///< 阴影图 depth-write → 矩派生 read（无句柄纯执行序）
 	evssmMomentsChain,    ///< 矩链级间 compute→compute（**每帧 mipLevels−1 次**，构造期申报）
 	evssmMomentsToLight,  ///< 矩链 compute write → light pass fragment 采样
+	// —— 以下 13 条 = IzbShadow（批次 B1b 第二刀；资源档全是 buffer）——
+	izbHeadPriorToClear,   ///< ② head 清零**前**的跨帧依赖（宽档，见 usage 表）
+	izbHeadClearToCreate,  ///< ② FillBuffer 写 → create dispatch 写
+	izbHeadCreateToPrime,  ///< ③ create 写 → ⑤ prime 读（head）
+	izbNodesCreateToPrime, ///< ④ 同上但资源是 nodes（与上一条 masks 全同、资源不同）
+	izbMaskPriorToClear,   ///< ⑧ mask 清零前的跨帧依赖（含 dump 帧的 Transfer 读 = WAR）
+	izbMaskClearToPass,    ///< ⑧ mask 清零 → mask pass 写 / light.frag 读（段空时靠它排序）
+	izbDumpHead,           ///< ⑦ dump：head compute 写 → 拷出读
+	izbDumpNodes,          ///< ⑦ dump：nodes compute 写 → 拷出读
+	izbDumpMask,           ///< ⑦ dump：mask 图形写 → 拷出读
+	izbDumpStagingToHost,  ///< ⑦ dump：staging 拷入 → host 读（mapped 内存）
+	izbHeadToMaskPass,     ///< mask pass 开：head compute 写 → frag 读（跨 pass 边界）
+	izbNodesToMaskPass,    ///< 同上但资源是 nodes
+	izbMaskToLight,        ///< mask pass 收：frag atomic 写 → light.frag Load 读
 	count,
 };
 

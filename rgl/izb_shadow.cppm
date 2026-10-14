@@ -7,6 +7,7 @@ import rlvk;
 import vk_device;
 import vk_resources;
 import VmaRaii;
+import offgraph_sync;  // 批次 B1b：图外同步发射账（13 条 buffer barrier 由边表物化）
 
 namespace RGL {
 
@@ -42,9 +43,11 @@ public:
 	 * @param resources descriptor heap + depthSampleSlot（SSAO 同款深度采样描述符共享）
 	 * @param extent 像素分辨率（深度图尺寸；resize 由调用方重建本对象）
 	 * @param gridDim 光空间网格边长 G（shadow.lua 的 izb.grid）
+	 * @param sync 图外同步发射账（批次 B1b：13 条 buffer barrier 的参数由 `offgraph_sync`
+	 *        的 usage 词表物化，本模块只写边名 + buffer 句柄，不写 stage/access 字面量）
 	 */
 	IzbShadow(RGL::DeviceContext& vkDevice, RGL::Resources& resources,
-		vk::Extent2D extent, uint32_t gridDim);
+		vk::Extent2D extent, uint32_t gridDim, OffGraphSync& sync);
 
 	/**
 	 * 图外 sandwich（录在 light pass 的 pass 循环迭代顶部）：
@@ -111,6 +114,8 @@ private:
 
 	RGL::DeviceContext* deviceCtx = nullptr;
 	RGL::Resources* resources = nullptr;
+	/// 图外同步发射账（批次 B1b；Renderer 持有，生命周期覆盖本模块）
+	OffGraphSync& sync;
 	vk::Extent2D extent{};
 	uint32_t gridDim = 0;
 

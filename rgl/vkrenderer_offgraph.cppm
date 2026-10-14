@@ -89,7 +89,7 @@ void Renderer::izbPreFrame() {
 	if (!izbShadow || izbShadow->getExtent() != extent) {
 		vkDevice.getDevice().waitIdle();
 		izbShadow = std::make_unique<RGL::IzbShadow>(
-			vkDevice, *resources, extent, shadowConfig().izbGrid);
+			vkDevice, *resources, extent, shadowConfig().izbGrid, offGraphSync);
 	}
 }
 
@@ -118,8 +118,7 @@ void Renderer::izbLightPassPre(vk::raii::CommandBuffer& cmd, const RgPassPlan& p
 		// N 帧起每 30 帧转一次（ppm 覆盖写 + 直方图日志行）——一次性判等会被 RPC
 		// 截图时序甩开（imgqa izb 判据要求 mask 与截图同相机状态，机位是 RPC 后设的）
 		// 门在 shadow.lua 的 izb.dump_frame（N6b：原 diagnostics.izb_dump_frame）
-		shadowConfig().izbDumpFrame != 0 && izbFrameNo >= shadowConfig().izbDumpFrame
-			&& (izbFrameNo - shadowConfig().izbDumpFrame) % 30 == 0);
+		izbDumpDue());
 	// 判定与值可读化走 `vulkan_utils::layoutDrift`（批 14.4b 步 2 收成单点纯函数），
 	// **后果说明留在本处**——它与下面 FSR 那段的诊断语义不同（一个是"执行器下一跳拿错
 	// oldLayout"，一个是"vendor 跳过转换"），不该并成一份。
@@ -439,6 +438,12 @@ void Renderer::evssmLightPassPre(vk::raii::CommandBuffer& cmd, const RgPassPlan&
 // IZB mask pass（批 11.3-1d 后半）：beginRendering(G×G 零附件) + izb_mask 动态态
 // （OVERESTIMATE/双面/无深度）+ shadow0 段逐 draw 重放——管线条目按 vertexSlot
 // 换 izb_mask 形态，push = ShadowDrawArgs 8B 原样 + gridDim 4B（render_list 零改动）。
+// izb dump 帧判据（声明处写了"为什么只准有一处"：它同时是**行为**的开关与**护栏**的门位）。
+bool Renderer::izbDumpDue() const {
+	const uint32_t from = shadowConfig().izbDumpFrame;
+	return from != 0 && izbFrameNo >= from && (izbFrameNo - from) % 30 == 0;
+}
+
 void Renderer::replayIzbMaskSegment(vk::raii::CommandBuffer& cmd, const FrameDrawList& list) {
 	const auto seg = segmentSpan(shadowDrawSource(0), list);
 	if (seg.empty()) {
@@ -572,7 +577,7 @@ void Renderer::offGraphEnter(std::string_view name) {
 		reportOffGraphViolation(r.error());
 }
 
-void Renderer::offGraphEndFrame() {
+void Renderer::offGraphEndFrame(const FrameDrawList& list) {
 	offGraph.advanceTo(offGraph.frameEndPhase());
 	// 门位在**帧末**求值：IZB / EVSSM 是首帧 drawFrame 内懒构造（izbPreFrame / evssmPreFrame
 	// 在 pass 循环之前），帧首求值会把它们误判成「不该发生」。
@@ -587,8 +592,17 @@ void Renderer::offGraphEndFrame() {
 		reportOffGraphViolation(r.error());
 	// 批次 B1b：图外**同步边**的帧末对账（实发次数 vs 应发次数）。与上面那条独立出声——
 	// 一个查「工作项有没有在挂点录」，一个查「barrier 有没有发够」，两件事的修复位置不同。
-	// 门位口径同上（关于门与输入，不许关于「刚才发过没有」）。
-	const std::array<bool, kSyncGateCount> syncActive{evssmShadow != nullptr};
+	const bool izbOn = izbShadow != nullptr;
+	const std::array<bool, kSyncGateCount> syncActive{
+		evssmShadow != nullptr,
+		izbOn,
+		// 门之间不独立（dump ⊂ izb、mask 段 ⊂ izb）：不带上 `izbOn`，运行中途关掉 IZB 会让
+		// 这两道门按**配置/场景**算成开、而 barrier 一条没发 ⟹ 假阳性（§7.5 第 1 条）。
+		izbOn && izbDumpDue(),
+		// mask pass 的门 = shadow0 段非空。**重算段跨度**而不是记「刚才调过 beginMaskPass 没有」：
+		// 后者让这条断言自证（段真被跳过时它也"没调过"，两边一起消失 = 什么都测不到）。
+		izbOn && !segmentSpan(shadowDrawSource(0), list).empty(),
+	};
 	if (auto r = offGraphSync.checkEmission(std::span<const bool>{syncActive}); !r)
 		reportOffGraphViolation(r.error());
 }

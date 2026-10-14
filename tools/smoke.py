@@ -263,13 +263,29 @@ def patch_lua(path: Path, key: str, value: str) -> None:
     """
     parent, _, child = key.rpartition(".")
     if parent:
-        lo, hi = _lua_block_span(text := path.read_text(encoding="utf-8"), parent)
+        text = path.read_text(encoding="utf-8")
+        lo, hi = _lua_block_span(text, parent)
         scope = text[lo:hi]
         offset = lo
     else:
         scope = text = path.read_text(encoding="utf-8")
         offset = 0
-    rx = re.compile(rf"^([ \t]*){re.escape(child)}[ \t]*=[ \t]*+(.*)$", re.M)
+    # 🔴 **单行子表**（`izb = { on = false, grid = 512, dump_frame = 0 }`）必须走另一条式子。
+    # 行锚定式子在块作用域里靠 `^` 找行首，而 `re.M` 的 `^` **也匹配 scope 的 0 号位**——
+    # 单行块的 scope 起点在行中间 ⟹ 第一个键命中，`.*$` 一路吃到行尾，替换时把
+    # **后面的兄弟键连同 `}` 一起吃掉**（实测：`--set shadow:izb.on=true` 把
+    # `grid`/`dump_frame` 静默删成 lua 默认值，护栏全绿、量的是默认档）。其余子键则
+    # 反过来命中 0 次（`--set shadow:izb.dump_frame=1` 直接红）。
+    inline = bool(parent) and "\n" not in scope
+    if inline:
+        # 前缀 `[{},]?` 与后缀 `[,}]?` 都是**可选**的：块作用域从 `{` 之后开始、到 `}` 之前
+        # 结束 ⟹ 第一个键前面什么都没有、最后一个键后面也没有分隔符。
+        # 值式子只吃标量——单行块里再嵌一层表（`{ a = { 1, 2 } }`）本工具不支持，那种键要改
+        # 请先把配置改成多行形态（切在逗号处会写出坏 lua，引擎解析期就炸，不会静默）。
+        rx = re.compile(
+            rf"([{{,}}]?[ \t]*){re.escape(child)}[ \t]*=[ \t]*([^,}}\n]*)([ \t]*)([,}}]?)")
+    else:
+        rx = re.compile(rf"^([ \t]*){re.escape(child)}[ \t]*=[ \t]*+(.*)$", re.M)
     hits = list(rx.finditer(scope))
     if len(hits) != 1:
         where = f"块 `{parent}` 内的键 `{child}`" if parent else f"键 `{key}`"
@@ -280,15 +296,20 @@ def patch_lua(path: Path, key: str, value: str) -> None:
     # `mode = pcss`，pcss 是个未定义全局 = nil，解析器按「缺键回落默认」处理 ⟹ 引擎照跑默认档、
     # patch_lua 的「键命中 ≠ 1」护栏全绿、smoke 报 PASS errors=0，而**量的是默认档**。判据 =
     # 原值是带引号字符串而新值是裸标识符 ⟹ 几乎必然是漏引号（真要写裸值，自己把引号写全）。
-    oldRaw = _split_value_comment(m.group(2))[0].strip()
+    if inline:
+        oldRaw, comma, comment = m.group(2).strip(), "", m.group(3) + m.group(4)
+        a, b = offset + m.start(), offset + m.end()
+        new_line = f"{m.group(1)}{child} = {value}{comment}"
+    else:
+        oldRaw = _split_value_comment(m.group(2))[0].strip()
+        a, b = offset + m.start(), offset + m.end()
+        _, comma, comment = _split_value_comment(m.group(2))
+        new_line = f"{m.group(1)}{child} = {value}{',' if comma else ''}{comment}"
     newRaw = value.strip()
     if oldRaw[:1] in {'"', "'"} and newRaw[:1] not in {'"', "'"}:
         fail(f"{rel(path)} 的键 `{child}` 原值是**字符串**（{oldRaw}），而 --set 给的是裸值 "
              f"{newRaw!r} ⟹ 写进 lua 是 `{child} = {newRaw}`，那是个未定义全局 = nil = 回落默认，"
              f"配置改了但引擎读不到（静默空操作）。要字符串值请带引号：--set '{child}=\"{newRaw}\"'")
-    _, comma, comment = _split_value_comment(m.group(2))
-    new_line = f"{m.group(1)}{child} = {value}{',' if comma else ''}{comment}"
-    a, b = offset + m.start(), offset + m.end()
     path.write_text(text[:a] + new_line + text[b:], encoding="utf-8")
 
 
@@ -930,6 +951,74 @@ def main() -> int:
     print(f"结果   : {'FAIL' if errors else 'PASS'}  errors={len(errors)}"
           f"  warnings={len(warnings)}  用时 {secs:.1f}s")
     return 1 if errors else 0
+
+
+def selftest(quiet: bool = False) -> list[str]:
+    """`patch_lua` 的自检（无引擎、毫秒级；由 `regress selftest` 调用）。
+
+    **为什么必须有它**：单行子表那个 bug 的失效形态是**静默改坏配置**——护栏全绿、smoke 报
+    PASS errors=0，而量的是默认档（`--set shadow:izb.on=true` 曾把同块的 `grid`/`dump_frame`
+    一起吃掉）。"看起来在工作其实没有"这类错，靠下一次人肉跑发现不了，只能靠一条每次都跑的
+    自检。断言全部打在**真配置的临时副本**上 ⟹ 配置格式变了（比如 izb 块改成多行）也会在这里
+    红，而不是在某次判据里静默失效。
+    """
+    import tempfile
+
+    done: list[str] = []
+
+    def ok(cond: bool, what: str) -> None:
+        done.append(what)
+        if not cond:
+            raise RuntimeError(f"smoke 自检失败：{what}")
+
+    def patched(src: Path, *pairs: tuple[str, str]) -> str:
+        with tempfile.TemporaryDirectory() as d:
+            cp = Path(d) / src.name
+            cp.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+            for key, value in pairs:
+                patch_lua(cp, key, value)
+            return cp.read_text(encoding="utf-8")
+
+    def line(text: str, needle: str) -> str:
+        return next((l.strip() for l in text.splitlines() if needle in l), "")
+
+    def exits(src: Path, key: str, value: str) -> bool:
+        try:
+            patched(src, (key, value))
+            return False
+        except SystemExit:
+            return True
+
+    shadow = ROOT / "configs/shadow.lua"
+    runtime = ROOT / "configs/runtime.lua"
+    single = line(shadow.read_text(encoding="utf-8"), "izb = {")
+    ok("izb = {" in single and "grid" in single,
+       f"configs/shadow.lua 的 izb 仍是单行子表（形态变了请同步改自检）：{single}")
+
+    # ① 阳性锚点（那个 bug 本体）：改单行块的**首键**不许吃掉兄弟键
+    one = patched(shadow, ("izb.on", "true"))
+    ok("on = true" in one and "grid = 512" in one and "dump_frame = 0" in one,
+       f"单行子表改首键后兄弟键必须还在：{line(one, 'izb = {')}")
+    ok(one.count("}") >= single.count("}"), "单行子表的右花括号不许被吃掉")
+
+    # ② 单行块的**非首键**要能命中（旧实现直接红在"命中 0 次"）
+    two = patched(shadow, ("izb.dump_frame", "7"))
+    ok("dump_frame = 7" in two, f"单行子表末键可改：{line(two, 'izb = {')}")
+    both = patched(shadow, ("izb.on", "true"), ("izb.grid", "1024"))
+    ok("on = true" in both and "grid = 1024" in both,
+       f"同块两键连改互不破坏：{line(both, 'izb = {')}")
+
+    # ③ 多行块与顶层键的旧路径逐字不变
+    ok("enable = true" in patched(runtime, ("meshlet.enable", "true")), "多行块子键仍可改")
+    ok("{ 800, 600 }" in patched(runtime, ("headless_size", "{ 800, 600 }")), "顶层键仍可改")
+
+    # ④ 两条护栏不能被上面的改动顺手关掉
+    ok(exits(shadow, "mode", "pcss"), "漏引号（原值是字符串而给的是裸值）必须红")
+    ok(exits(shadow, "izb.nope", "1"), "拼错键必须红")
+
+    if not quiet:
+        print(f"[smoke] 自检 {len(done)} 项通过（patch_lua：单行子表 / 多行块 / 两条护栏）")
+    return done
 
 
 if __name__ == "__main__":

@@ -31,11 +31,39 @@ RgSyncMasks syncUsageMasks(RgSyncUsage usage) {
 		return {Stage::eComputeShader, Acc::eShaderRead | Acc::eShaderWrite};
 	case RgSyncUsage::fragmentRead:
 		return {Stage::eFragmentShader, Acc::eShaderRead};
+	case RgSyncUsage::graphicsWrite:
+		return {Stage::eAllGraphics, Acc::eShaderWrite};
+	case RgSyncUsage::graphicsRead:
+		return {Stage::eAllGraphics, Acc::eShaderRead};
+	case RgSyncUsage::graphicsReadWrite:
+		return {Stage::eAllGraphics, Acc::eShaderRead | Acc::eShaderWrite};
+	case RgSyncUsage::transferRead:
+		return {Stage::eTransfer, Acc::eTransferRead};
+	case RgSyncUsage::transferWrite:
+		return {Stage::eTransfer, Acc::eTransferWrite};
+	case RgSyncUsage::hostRead:
+		return {Stage::eHost, Acc::eHostRead};
 	case RgSyncUsage::anyWriteGlobal:
 		// 宽档：EVSSM 的阴影图**本模块无句柄**（归 RT 缓存），depth-write → compute-read
 		// 这条序只能表达成"全局写 → compute 读"，access 用 eMemoryWrite 通配。
 		// ⚠ 不许悄悄当默认档用——它比真实访问宽，宽出来的部分是本模块白付的同步成本。
 		return {Stage::eAllGraphics, Acc::eMemoryWrite};
+	case RgSyncUsage::allCommandsWrite:
+		// 宽档：生产者是一条 `vkCmdFillBuffer`（IZB 的 head/mask 每帧清零）。清零是 API 命令、
+		// 不是 shader 访问，dst 侧要覆盖"接下来谁都可能先碰它"，所以 stage 给 AllCommands。
+		return {Stage::eAllCommands, Acc::eMemoryWrite};
+	case RgSyncUsage::priorAccessWideCs:
+		// 宽档（跨帧）：head 是**单份跨 frames-in-flight 共享**的 buffer，本帧的 FillBuffer
+		// 与上一帧对它的 compute 写 / mask pass frag 读 / dump 拷读之间必须有声明过的执行依赖
+		// （债-30 方案 C 暴露）。src 三档全给 = 上一帧最后的访问点取决于 dump 门开没开，
+		// 拿不准的一律纳入；代价 = 每帧一条 barrier，换"不靠上一帧恰好排空了"。
+		return {Stage::eAllGraphics | Stage::eComputeShader | Stage::eTransfer,
+			Acc::eShaderWrite | Acc::eShaderRead | Acc::eTransferRead};
+	case RgSyncUsage::priorAccessWideGfx:
+		// 同上，但 mask 位图**不经 compute**（frag 写 + 拷出读）⟹ 少 CS 一档。
+		// 这两条刻意分开：省掉的那一位正是"这个资源到底被谁碰过"。
+		return {Stage::eAllGraphics | Stage::eTransfer,
+			Acc::eShaderWrite | Acc::eShaderRead | Acc::eTransferRead};
 	default:
 		// 只可能是 `count`（遍历哨兵）。写出来而不是留空：新增原子忘了配掩码时，
 		// 这里会静默给出 eTopOfPipe/eNone = 一条**什么都不挡**的 barrier，那种错必须靠
@@ -74,6 +102,101 @@ const RgSyncEdgeDesc& syncEdgeDesc(RgSyncEdgeId id) {
 			.dst = RgSyncUsage::fragmentRead,
 			.gate = RgSyncGate::evssm,
 			.expectedPerFrame = 1,
+		},
+		// —— IzbShadow（B1b 第二刀）。13 条全是 buffer 档：句柄由发射点给（词表不持资源）。
+		// ②③④⑤⑦⑧ 的编号沿用 `recordFrame` 里的注释序号，红了能直接对着那段代码读。
+		RgSyncEdgeDesc{
+			.name = "izb_head_prior_to_clear",
+			.scope = RgSyncScope::buffer,
+			.src = RgSyncUsage::priorAccessWideCs,
+			.dst = RgSyncUsage::allCommandsWrite,
+			.gate = RgSyncGate::izb,
+		},
+		RgSyncEdgeDesc{
+			.name = "izb_head_clear_to_create",
+			.scope = RgSyncScope::buffer,
+			.src = RgSyncUsage::allCommandsWrite,
+			.dst = RgSyncUsage::computeWrite,
+			.gate = RgSyncGate::izb,
+		},
+		RgSyncEdgeDesc{
+			.name = "izb_head_create_to_prime",
+			.scope = RgSyncScope::buffer,
+			.src = RgSyncUsage::computeWrite,
+			.dst = RgSyncUsage::computeRead,
+			.gate = RgSyncGate::izb,
+		},
+		// 与上一条 masks **逐位相同**，但资源不同（nodes）。刻意不并成一条 expected=2 的边：
+		// 并了以后"漏了 nodes 那条"只会报"少发一次"，而分开两条直接点名是哪个资源。
+		RgSyncEdgeDesc{
+			.name = "izb_nodes_create_to_prime",
+			.scope = RgSyncScope::buffer,
+			.src = RgSyncUsage::computeWrite,
+			.dst = RgSyncUsage::computeRead,
+			.gate = RgSyncGate::izb,
+		},
+		RgSyncEdgeDesc{
+			.name = "izb_mask_prior_to_clear",
+			.scope = RgSyncScope::buffer,
+			.src = RgSyncUsage::priorAccessWideGfx,
+			.dst = RgSyncUsage::allCommandsWrite,
+			.gate = RgSyncGate::izb,
+		},
+		RgSyncEdgeDesc{
+			.name = "izb_mask_clear_to_pass",
+			.scope = RgSyncScope::buffer,
+			.src = RgSyncUsage::allCommandsWrite,
+			.dst = RgSyncUsage::graphicsReadWrite,
+			.gate = RgSyncGate::izb,
+		},
+		RgSyncEdgeDesc{
+			.name = "izb_dump_head",
+			.scope = RgSyncScope::buffer,
+			.src = RgSyncUsage::computeWrite,
+			.dst = RgSyncUsage::transferRead,
+			.gate = RgSyncGate::izbDump,
+		},
+		RgSyncEdgeDesc{
+			.name = "izb_dump_nodes",
+			.scope = RgSyncScope::buffer,
+			.src = RgSyncUsage::computeWrite,
+			.dst = RgSyncUsage::transferRead,
+			.gate = RgSyncGate::izbDump,
+		},
+		RgSyncEdgeDesc{
+			.name = "izb_dump_mask",
+			.scope = RgSyncScope::buffer,
+			.src = RgSyncUsage::graphicsWrite,
+			.dst = RgSyncUsage::transferRead,
+			.gate = RgSyncGate::izbDump,
+		},
+		RgSyncEdgeDesc{
+			.name = "izb_dump_staging_to_host",
+			.scope = RgSyncScope::buffer,
+			.src = RgSyncUsage::transferWrite,
+			.dst = RgSyncUsage::hostRead,
+			.gate = RgSyncGate::izbDump,
+		},
+		RgSyncEdgeDesc{
+			.name = "izb_head_to_mask_pass",
+			.scope = RgSyncScope::buffer,
+			.src = RgSyncUsage::computeWrite,
+			.dst = RgSyncUsage::graphicsRead,
+			.gate = RgSyncGate::izbMaskSegment,
+		},
+		RgSyncEdgeDesc{
+			.name = "izb_nodes_to_mask_pass",
+			.scope = RgSyncScope::buffer,
+			.src = RgSyncUsage::computeWrite,
+			.dst = RgSyncUsage::graphicsRead,
+			.gate = RgSyncGate::izbMaskSegment,
+		},
+		RgSyncEdgeDesc{
+			.name = "izb_mask_to_light",
+			.scope = RgSyncScope::buffer,
+			.src = RgSyncUsage::graphicsWrite,
+			.dst = RgSyncUsage::graphicsRead,
+			.gate = RgSyncGate::izbMaskSegment,
 		},
 	};
 	return table[syncEdgeIndex(id)];

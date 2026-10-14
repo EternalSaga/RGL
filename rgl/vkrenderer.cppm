@@ -450,8 +450,11 @@ export class Renderer {
 	 *
 	 * 两个方向都要（缺一半就是摆设）：门开着没录 = 挂点被静默删掉；门关着却录了 = 破
 	 * 「门关零命令」这条逐位不变红线。门位在**帧末**求值（IZB / EVSSM 首帧懒构造）。
+	 *
+	 * @param list 本帧的 draw list——同步边的 `izbMaskSegment` 门要**关于输入**判 shadow0 段
+	 *        是否为空（读"刚才调过 `beginMaskPass` 没有"会让那条断言自证）
 	 */
-	void offGraphEndFrame();
+	void offGraphEndFrame(const FrameDrawList& list);
 	/** FSR 挂点要的两个图属输入（色 + 速度场）；任一解析不到时整体为 nullopt。 */
 	struct FsrInputs {
 		vk::Image color = {};     ///< 图属色输入（tonemap 的上游 RT）
@@ -492,6 +495,14 @@ export class Renderer {
 	/** 批 11.3-1d 后半：光空间 mask pass（零附件 G×G + izb_mask 态 + shadow0 段
 	 *  重放，push 尾缀 gridDim；shadow0 段空 = warn-once 跳过）。 */
 	void replayIzbMaskSegment(vk::raii::CommandBuffer& cmd, const FrameDrawList& list);
+	/**
+	 * 本帧是否是 izb 的 dump 帧（`shadow.lua` 的 `izb.dump_frame`：第 N 帧起每 30 帧转一次）。
+	 *
+	 * 抽成一处是因为它有**两个消费者**：`izbLightPassPre`（决定要不要录 dump 拷贝）与帧末
+	 * 同步对账（`izbDump` 门的启用位）。两处各写一遍表达式 = 门位算错时护栏**假阳性**，
+	 * 而假阳性的护栏三个月后只会被关掉（`docs/compute_调研.md` §7.5 第 1 条）。
+	 */
+	bool izbDumpDue() const;
 	// recreateSwapchainAndDepth（swapchain+depth 重建）已随手术 4 迁 FrameSession。
 	RGL::DeviceContext& vkDevice;  // 设备层引用（队列 / 命令池 / fence 等待 / 能力探测）
 	RGL::Swapchain* swapchain;      // 交换链层（main 持有，析构序在 Renderer 之后）

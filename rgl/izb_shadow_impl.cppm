@@ -6,6 +6,7 @@ module;
 module izb_shadow:impl;
 
 import izb_shadow;  // clang 不给 partition impl unit 隐式 import 主接口——必须显式
+import offgraph_sync;  // 批次 B1b：RgSyncEdgeId / emit（import 不传递，接口里的不算）
 import rlstd;
 import rlvk;
 import rllogger;
@@ -79,21 +80,11 @@ std::pair<size_t, bool> walkChainAt(const uint32_t* nodeData, uint32_t head, siz
 	return {len, h == kNone};
 }
 
-/** 单 buffer 的 sync2 barrier（录制 + 执行；本模块内多条同构 barrier 的公共体）。 */
-void bufferBarrier(vk::raii::CommandBuffer& cmd, vk::Buffer buffer,
-	vk::PipelineStageFlags2 srcStage, vk::AccessFlags2 srcAccess,
-	vk::PipelineStageFlags2 dstStage, vk::AccessFlags2 dstAccess) {
-	vk::BufferMemoryBarrier2 b{};
-	b.srcStageMask = srcStage;
-	b.srcAccessMask = srcAccess;
-	b.dstStageMask = dstStage;
-	b.dstAccessMask = dstAccess;
-	b.buffer = buffer;
-	b.size = VK_WHOLE_SIZE;
-	vk::DependencyInfo dep{};
-	dep.setBufferMemoryBarriers(b);
-	cmd.pipelineBarrier2(dep);
-}
+// 单 buffer 的 sync2 barrier 曾住在这里（`bufferBarrier`，13 个调用点各写六个 mask 字面量）。
+// 批次 B1b 第二刀把它删了：mask 的**唯一来源**改成 `offgraph_sync` 的 usage 词表，发射点只写
+// 边名 + 句柄（`sync.emit(cmd, edge, buffer)`），帧末按边对账实发次数。
+// ⚠ 别再在这里加回一个本地 barrier helper —— 那等于把"谁都能写 mask 字面量"这件事重新发明，
+// 而对账会立刻看不见它（它不在边表里）。形态与理由 → `docs/compute_调研.md` §7.2 / §7.4。
 
 /**
  * 深度图（eDepth aspect 单 level/layer）布局转换 barrier（sandwich 进/出两条共用）。
@@ -128,8 +119,9 @@ vk::ImageLayout depthLayoutBarrier(vk::raii::CommandBuffer& cmd, vk::Image image
 }  // namespace
 
 IzbShadow::IzbShadow(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
-	vk::Extent2D extent_, uint32_t gridDim_)
-	: deviceCtx(&vkDevice), resources(&vkResources), extent(extent_), gridDim(gridDim_) {
+	vk::Extent2D extent_, uint32_t gridDim_, OffGraphSync& sync_)
+	: deviceCtx(&vkDevice), resources(&vkResources), sync(sync_), extent(extent_),
+	  gridDim(gridDim_) {
 	auto& dev = vkDevice.getDevice();
 	const uint32_t pixels = extent.width * extent.height;
 	const auto headBytes = static_cast<vk::DeviceSize>(gridDim) * gridDim * 4;
@@ -256,34 +248,24 @@ vk::ImageLayout IzbShadow::recordFrame(vk::raii::CommandBuffer& cmd,
 
 	// ② 清 head（NONE 哨兵 = 「地址即像素 ID」布局的帧初始化；节点数组无需清：
 	// 旧节点从新 head 不可达）。FillBuffer 要 eTransferDst（VVL 实录）
-	// ⚠ 清零**前面**这条 barrier 是跨帧依赖（债-30 方案 C 暴露，2026-10-09）：head 是
-	//   **单份**跨 frames-in-flight 共享的 buffer，本帧的 FillBuffer 写与上一帧对它的
+	// ⚠ 清零**前面**这条边（`izb_head_prior_to_clear`）是跨帧依赖（债-30 方案 C 暴露，2026-10-09）：
+	//   head 是**单份**跨 frames-in-flight 共享的 buffer，本帧的 FillBuffer 写与上一帧对它的
 	//   compute 写 / mask pass frag 读 / dump 拷读之间必须有声明过的执行依赖。此前"没写也
 	//   没事"是因为 cull 每帧同步等待把帧序列整个串行化了（等 = 等上一帧整帧排空，正是
 	//   债-30 那笔账）；串行一去掉，syncval 立刻报 WRITE_AFTER_WRITE（实测 cpu / gpu_lagged
-	//   两档各 8 条，gpu_sync 档 0 条 = 旧串行还在时看不见）。src 三档全给：head 上一帧的
-	//   最后访问点取决于 dump 门开没开（Transfer 读只在 dumpHead 时发生），拿不准的一律
-	//   纳入源作用域，代价 = 每帧一条 barrier，换 VVL 沉默 + 不靠"上一帧恰好排空了"。
-	//   同一条依赖在 mask 清零处本来就有（下面 ⑧），head 是漏的那个。
-	bufferBarrier(cmd, *headBuffer,
-		vk::PipelineStageFlagBits2::eAllGraphics | vk::PipelineStageFlagBits2::eComputeShader
-			| vk::PipelineStageFlagBits2::eTransfer,
-		vk::AccessFlagBits2::eShaderWrite | vk::AccessFlagBits2::eShaderRead
-			| vk::AccessFlagBits2::eTransferRead,
-		vk::PipelineStageFlagBits2::eAllCommands, vk::AccessFlagBits2::eMemoryWrite);
+	//   两档各 8 条，gpu_sync 档 0 条 = 旧串行还在时看不见）。src 三档全给（宽档
+	//   `priorAccessWideCs` 的成因）：head 上一帧的最后访问点取决于 dump 门开没开（Transfer 读
+	//   只在 dumpHead 时发生），拿不准的一律纳入源作用域，代价 = 每帧一条 barrier，
+	//   换 VVL 沉默 + 不靠"上一帧恰好排空了"。同一条依赖在 mask 清零处本来就有（下面 ⑧），
+	//   head 是漏的那个。
+	sync.emit(cmd, RgSyncEdgeId::izbHeadPriorToClear, *headBuffer);
 	::vkCmdFillBuffer(*cmd, *headBuffer, 0, VK_WHOLE_SIZE, static_cast<uint32_t>(kNone));
-	bufferBarrier(cmd, *headBuffer, vk::PipelineStageFlagBits2::eAllCommands,
-		vk::AccessFlagBits2::eMemoryWrite,
-		vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderWrite);
+	sync.emit(cmd, RgSyncEdgeId::izbHeadClearToCreate, *headBuffer);
 
 	// ③④⑤ create →（链 barrier）→ prime
 	recordCreateDispatch(cmd, input);
-	bufferBarrier(cmd, *headBuffer, vk::PipelineStageFlagBits2::eComputeShader,
-		vk::AccessFlagBits2::eShaderWrite,
-		vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderRead);
-	bufferBarrier(cmd, *nodesBuffer, vk::PipelineStageFlagBits2::eComputeShader,
-		vk::AccessFlagBits2::eShaderWrite,
-		vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderRead);
+	sync.emit(cmd, RgSyncEdgeId::izbHeadCreateToPrime, *headBuffer);
+	sync.emit(cmd, RgSyncEdgeId::izbNodesCreateToPrime, *nodesBuffer);
 	recordPrimeDispatch(cmd);
 
 	// ⑥ 深度 layout 还原（进出同值 = 渲染图布局追踪表零漂移；返回值即护栏的断言输入）
@@ -310,15 +292,9 @@ vk::ImageLayout IzbShadow::recordFrame(vk::raii::CommandBuffer& cmd,
 	//   barrier：src 含 Transfer 读 = dump 帧的 WAR（上一行刚把 mask 拷进 staging）；
 	//   dst 同时给 ShaderWrite|ShaderRead = 段空时**没有** endMaskPass 那条写→读 barrier，
 	//   light.frag 的 Load 读得由这里排序（段不空时 endMaskPass 仍在 mask pass 后补一条）。
-	bufferBarrier(cmd, *maskBuffer,
-		vk::PipelineStageFlagBits2::eAllGraphics | vk::PipelineStageFlagBits2::eTransfer,
-		vk::AccessFlagBits2::eShaderWrite | vk::AccessFlagBits2::eShaderRead
-			| vk::AccessFlagBits2::eTransferRead,
-		vk::PipelineStageFlagBits2::eAllCommands, vk::AccessFlagBits2::eMemoryWrite);
+	sync.emit(cmd, RgSyncEdgeId::izbMaskPriorToClear, *maskBuffer);
 	::vkCmdFillBuffer(*cmd, *maskBuffer, 0, VK_WHOLE_SIZE, 0u);
-	bufferBarrier(cmd, *maskBuffer, vk::PipelineStageFlagBits2::eAllCommands,
-		vk::AccessFlagBits2::eMemoryWrite, vk::PipelineStageFlagBits2::eAllGraphics,
-		vk::AccessFlagBits2::eShaderWrite | vk::AccessFlagBits2::eShaderRead);
+	sync.emit(cmd, RgSyncEdgeId::izbMaskClearToPass, *maskBuffer);
 	parity ^= 1u;
 	return depth;
 }
@@ -351,15 +327,9 @@ void IzbShadow::recordDumpCopy(vk::raii::CommandBuffer& cmd) {
 	const uint32_t slot = parity;
 	const auto headB = static_cast<VkDeviceSize>(gridDim) * gridDim * 4;
 	const auto nodeB = static_cast<VkDeviceSize>(extent.width) * extent.height * 16;
-	bufferBarrier(cmd, *headBuffer, vk::PipelineStageFlagBits2::eComputeShader,
-		vk::AccessFlagBits2::eShaderWrite,
-		vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead);
-	bufferBarrier(cmd, *nodesBuffer, vk::PipelineStageFlagBits2::eComputeShader,
-		vk::AccessFlagBits2::eShaderWrite,
-		vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead);
-	bufferBarrier(cmd, *maskBuffer, vk::PipelineStageFlagBits2::eAllGraphics,
-		vk::AccessFlagBits2::eShaderWrite,
-		vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead);
+	sync.emit(cmd, RgSyncEdgeId::izbDumpHead, *headBuffer);
+	sync.emit(cmd, RgSyncEdgeId::izbDumpNodes, *nodesBuffer);
+	sync.emit(cmd, RgSyncEdgeId::izbDumpMask, *maskBuffer);
 	// head → staging[0..headB)，nodes → staging[headB..)，mask → 尾段
 	// （VkBufferCopy 的 size 必须显式——VK_WHOLE_SIZE 此字段非法，VVL 实录）
 	const auto maskB = (static_cast<vk::DeviceSize>(extent.width) * extent.height + 31) / 32 * 4;
@@ -369,20 +339,14 @@ void IzbShadow::recordDumpCopy(vk::raii::CommandBuffer& cmd) {
 	::vkCmdCopyBuffer(*cmd, *nodesBuffer, *staging[slot], 1, &c1);
 	VkBufferCopy c2{0, headB + nodeB, maskB};
 	::vkCmdCopyBuffer(*cmd, *maskBuffer, *staging[slot], 1, &c2);
-	bufferBarrier(cmd, *staging[slot], vk::PipelineStageFlagBits2::eTransfer,
-		vk::AccessFlagBits2::eTransferWrite,
-		vk::PipelineStageFlagBits2::eHost, vk::AccessFlagBits2::eHostRead);
+	sync.emit(cmd, RgSyncEdgeId::izbDumpStagingToHost, *staging[slot]);
 	dumpPending[slot] = true;
 }
 
 void IzbShadow::beginMaskPass(vk::raii::CommandBuffer& cmd) {
 	// head/nodes：compute 写（create）→ 本 pass frag 读，跨 pass 边界显式同步
-	bufferBarrier(cmd, *headBuffer, vk::PipelineStageFlagBits2::eComputeShader,
-		vk::AccessFlagBits2::eShaderWrite,
-		vk::PipelineStageFlagBits2::eAllGraphics, vk::AccessFlagBits2::eShaderRead);
-	bufferBarrier(cmd, *nodesBuffer, vk::PipelineStageFlagBits2::eComputeShader,
-		vk::AccessFlagBits2::eShaderWrite,
-		vk::PipelineStageFlagBits2::eAllGraphics, vk::AccessFlagBits2::eShaderRead);
+	sync.emit(cmd, RgSyncEdgeId::izbHeadToMaskPass, *headBuffer);
+	sync.emit(cmd, RgSyncEdgeId::izbNodesToMaskPass, *nodesBuffer);
 	// ⚠ mask 的 FillBuffer 清零**不在这里**（债-32，2026-10-09 搬走）：清零若留在本函数，
 	// 则"跳过 mask pass"与"跳过清零"是同一件事，而调用点确实会跳过本 pass（shadow0 段为空）。
 	// 现在 mask 由 `recordFrame` 第 ⑧ 步每帧无条件清零，本函数只负责开 pass。
@@ -399,9 +363,7 @@ void IzbShadow::endMaskPass(vk::raii::CommandBuffer& cmd) {
 	// 批 11.3-1e：mask frag atomic 写 → light.frag Load 读——**两个 render pass 之间
 	// 无隐式依赖**，必须显式同步（VVL 不报错 ≠ 数据可见：首挂实录 = 无此 barrier 时
 	// light 读恒 0，画面与门关逐位一致）
-	bufferBarrier(cmd, *maskBuffer, vk::PipelineStageFlagBits2::eAllGraphics,
-		vk::AccessFlagBits2::eShaderWrite,
-		vk::PipelineStageFlagBits2::eAllGraphics, vk::AccessFlagBits2::eShaderRead);
+	sync.emit(cmd, RgSyncEdgeId::izbMaskToLight, *maskBuffer);
 }
 
 void IzbShadow::drainReadback() {

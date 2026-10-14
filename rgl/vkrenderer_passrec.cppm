@@ -758,7 +758,7 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 	}
 	// 批次 B1：帧末覆盖对账（申报了却没录 = 静默旁路；门关了却录了 = 破逐位不变红线）。
 	// 放在这里而不是 CB end 之后：四个图外工作的挂点全在 pass 循环之内/之前，此刻门位已定。
-	offGraphEndFrame();
+	offGraphEndFrame(list);
 
 	// ⑪.5 帧内捕获（Phase 10 批次 0 手术 2：块体迁 FrameCapturer::record——后缓冲/
 	// GB 通道两分支的布局追踪推进语义见 frame_capture.cppm 声明注释）。

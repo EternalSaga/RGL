@@ -433,6 +433,14 @@ def selftest(quiet: bool = False) -> None:
     else:
         checks.append("真实截图：无（跳过；跑过 just shot 后会自动纳入自检）")
 
+    # ⑥ 采集层的旗标守卫也在自检范围内：`--set` 若静默改坏配置，两侧量的都不是想要的档，
+    # 而 ab/floor 全程绿（0 像素差照样判"逐位相同"）。smoke.selftest 的注释记着那次实测。
+    # 包成 RegressError：量具自检的红要走本工具的报错口径，不要甩裸 traceback。
+    try:
+        checks.extend(smoke.selftest(quiet=True))
+    except RuntimeError as err:
+        raise RegressError(str(err)) from err
+
     if not quiet:
         print(f"[regress] 自检 {len(checks)} 项通过")
         for c in checks:
