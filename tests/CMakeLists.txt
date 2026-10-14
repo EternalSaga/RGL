@@ -58,6 +58,7 @@ set(RGL_TEST_SOURCES
     test_state_kit.cppm         # 十段 RenderState 表 + stateFor 分派（纯逻辑）
     test_render_graph.cppm       # 图编译：校验 / barrier 推导 / 装饰 / RT slot
     test_offgraph_contract.cppm  # 批次 B1 图外工作申报面：建表三 guard 各配反向 + 位置契约三种偏离
+    test_offgraph_sync.cppm      # 批次 B1b 图外同步：词表/边表逐位钉死（迁移没改语义）+ 次数账双向
                                  # （含 §7 判据 2 的变异本体「调用点挪到 pass 循环之后」的单元等价形态）+ 覆盖对账两半边
     test_taa_jitter.cppm         # TAA 纯函数层：Halton / jitter→投影闭式解 / 跳切与历史判据（批 12.6）
     test_timing_util.cppm        # 时间戳/时间统计叶子：toMs 定义值 / percentile 口径逐点手算 / 时钟单调（三处副本收敛的护栏）

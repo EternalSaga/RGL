@@ -409,6 +409,123 @@ stage/access，只能拿 `AllCommands/MemoryWrite` 兜底（IZB 4 条）；EVSSM
 归 B1b 词表的"同布局执行档"，不是 image 布局档。
 
 
+### 7.3 检查机制定案（2026-10-14）：装什么判据，以及"可选"选的是什么
+
+二合一抓不到"忘发 barrier"（§7.2 第 3 条）。用户提：**在二合一自己造一个可选开关的拦截机制**。
+裁决 = 做，但**开关不产生判据**，它只是"什么时候付钱 / 要不要阻断"的旋钮 ⟹ 真问题是往里装什么。
+
+**三档判据**：
+
+| 档 | 判据来源 | 抓得到 | 抓不到 | 归期 |
+|---|---|---|---|---|
+| **L1 应发次数账** | 边表每条带 `expectedPerFrame`（0/1/N） | 忘发、少发、多发、门关却发 | **表里根本没这条边** | **B1b 本刀** |
+| **L2 访问对推导** | 着色器**实际读写方向** + 命令序：writer 与 reader 之间无覆盖 barrier ⟹ 报 | 根本没写这条边 | 跨帧/跨 CB 的序（要另建账） | **B2 第一件事** |
+| L3 外部工具拦截 | — | — | — | **不做** |
+
+**L2 的数据源现在不存在**（三处实测，别再找第二遍）：`rgl/generated/*_types_generated.cppm`
+只有**类型布局**；`PipelineBindings`（`shader.cppm:398`）的 binding→槽是 C++ **手拼**、无方向字段；
+`spvDeclaredBindings`（`shader.cppm:234`）只采"带 Binding 装饰的 OpVariable 的号"。
+可行路径 = 扩既有 SPV 骨架（`spvSplit` + decoration 采集）去采 storage class 与
+`NonWritable`/`Coherent`，或扫该变量上的 `OpStore`/`OpAtomicStore`。**读写方向从码流里读出来
+而不是人抄** ⟹ 它既是 L2 的判据源，也顺带是 B2 依赖图的第一块数据源（同一份事实，别做两遍）。
+
+**L3 已实测无效，别重新发明**：syncval 对 shader 侧 buffer 访问 0 条（删 IZB 那条 barrier 的变异
+开与不开都 0）；GPU-AV 故意越界读 `sceneData.Load(4000000u)`（buffer 仅 789760B）也 0 条，
+而同一次运行截图 1376KB→1360KB 证明那次读真执行了。
+
+**🔴 落地形态 = 检查常开 + 一律 error，没有开关**（这一条**推翻**了我自己先写的"warn / 闸门档
+error 分档"方案，也偏离用户"可开可关"的字面要求；推翻理由必须留在这里）：
+
+原方案是"检查常开、开关只切严重度（日常 warn、`just smoke --check-sync` 档 error）"。实现时
+发现那个开关**买不到任何东西**：① 违规只出声不中断（`reportOffGraphViolation` 只 `log->error`），
+所以"阻断"从来不是真阻断，代价上限 = 冒烟 errors 计数红一次；② 而 L1 的判据是**确定性**的
+（实发次数 vs 边表应发次数），不存在"这个配置下少发 3 条是合法的"那种现场——**能误报的只有
+边表本身写错**，而边表写错会在迁移当口被自己的冒烟抓到（errors>0 就是本次验收的判据本身）；
+③ 加一档严重度 = 多一个配置键 + 一条 gate_lint 规则行 + 一个 smoke 旗标，**为还没发生的误报
+预留逃生舱**，正是本仓反复删的那类东西。于是"可选"整个概念在这里退化掉了：
+**判据常开、出声常开、只有边表是人写的**。
+
+> 真遇到"条件边"（IZB 的 dump 门控那 4 条：dump 开 = 发 4 次、关 = 0 次）怎么办？
+> **在边表里写成两条边、各挂各的门**（dump 门与 IZB 门是两个门），而不是回来加严重度档。
+> 这条是 B1b 第二刀铺 IZB 时的硬约束——写不出第二条边就说明门位口径没定对，那是要修的事。
+
+**两条红线**（仍然有效，且不依赖有没有开关）：① **判据不许换路径**——对账走的就是交付路径上
+那一次 `emit` 记的账，没有"检查模式专用"的第二条录制路径（`--sync` 档同型要求）；
+② L1 的 `expectedPerFrame` 是人写的整数，**残留一份手抄**（抄次数而不是抄 6 个 mask）——
+它必须被变异直接覆盖（EVSSM 的 7 改 6 必红），不许被读成零成本。
+
+**沉淀地址**：`TEST: tests/test_offgraph_sync.cppm`（词表 masks 逐位 + 边表逐条 + 次数账双向 +
+10 条变异）；`DOC: 本节`（L2 数据源三处实测 = 负知识，做不成断言）；`GUARD:` **无独立入口**——
+判据就在交付路径上，`just smoke` 的 errors 计数就是它的闸门（这正是"不加开关"的推论：
+加了开关就得再养一个"有人自动跑它"的入口，那是给护栏再套一层"没人按就失效"）。
+
+### 7.4 B1b 第一刀已落地（2026-10-14）：EVSSM 的 9 条 barrier 换成 3 个边名
+
+**做了什么**（新模块 `rgl/offgraph_sync.cppm` + `_impl.cppm`，住 **rlgfx**——判据核零设备，
+但 `emit` 要 `CommandBuffer`，按"需不需要 VkDevice"的分流它属设备层；接线在 `EvssmShadow`
+与 `vkrenderer_*`）：
+
+- **usage 词表**（`RgSyncUsage` → `{stage, access}` 唯一来源）。🔴 **原子 = 语义角色，不是
+  "观测到的掩码集合"**——后者会让"词表覆盖全部 19 形态"变成恒真的废话（18 个匿名掩码换个地方
+  存而已）。宽档 `anyWriteGlobal`（AG / MemoryWrite）是 EVSSM 阴影图**本模块无句柄**逼出来的
+  兜底，单独命名 + 注释写明"宽出来的部分是本模块白付的同步成本"。
+- **边表**（`RgSyncEdgeDesc`：scope / src / dst / 归属门 / 应发次数）。EVSSM 三条边
+  `evssm_depth_to_compute` / `evssm_moments_chain` / `evssm_moments_to_light`，
+  模块侧从**六个 mask 字面量**变成**一个边名**；`stageBarrier` helper 随之删除。
+- **`emit` = 物化 + 发命令 + 记账同一次调用**（§7.2 的"二合一"）。于是「申报了却没发」与
+  「发了但挡错 mask」在写法上不可能。
+- **L1 次数账**（`checkEmission`，两半边同 B1a 的 `checkCoverage` 同构，只是比**次数**不是比
+  布尔）。应发次数由 `EvssmShadow` **构造期** `expectCount(chain, mipLevels − 1)` 供——
+  录制期申报等于自己出题自己答，那条判据就自证了（这是本刀唯一不显然的时序设计）。
+- **发射权仍在模块**：plan-only 红线守住了，`emit` 由 `recordFrame` 发起，本层零决策。
+
+**没做什么**（别把这一刀读成 B1b 完成）：IZB（9 条 + 4 条 dump 门控）与 GpuCull（8 条，
+跨独立 cull CB）未迁 ⟹ **债-75 不结案**；`buffer` 档的边一条没有（EVSSM 三条全是无句柄执行序），
+所以 `emit(cmd, edge, buffer)` 这个重载**在真程序里还没跑过**（只有单测与编译覆盖它）——
+IZB 那一刀才是它的首次实测。L2（读写方向从 SPV 码流读）没做，"忘写一条边"仍然没人抓。
+
+> 🔴 **教训（本刀实测踩到，代价 = 九个文件的编辑重做）：变异脚本在跑的时候，不要编辑它盯的
+> 文件。** 脚本的还原是 `copy(备份 → 原路径)`，备份取的是**脚本启动那一刻**的内容 ⟹ 期间手改
+> 的东西会被**静默覆盖**（不报错、不冲突，就像从没写过）。本刀两处注释改在 `offgraph_sync*.cppm`
+> 上，脚本跑完就没了，靠重读文件才发现。两条护栏：① **一个能编译的完整改动做完立刻提交**，
+> 别攒着（本刀攒了 9 个文件）；② 变异脚本开头写死它盯哪些文件，跑之前先看一眼。
+> 顺带一条同族的坑：`pgrep -f <脚本名>` 会匹配到**发起检查的那条命令自身** ⟹ 恒假阳性
+> （本仓 regress 那条纪律的同型问题，实测又踩一次），要看得看进程表里有没有真的 `python3 …`。
+
+### 7.5 下一刀（B1b 第二刀 = IZB）的两条硬约束
+
+1. **条件边写成两条边、各挂各的门**。IZB 的 dump 门控那 4 条：dump 开 = 发 4 次、关 = 0 次。
+   不要回来给 L1 加"严重度档 / 豁免"（§7.3 已裁决不加），正确形态 = dump 门与 IZB 门是两个门，
+   两条边各带自己的 `expectedPerFrame`。**写不出第二条边就说明门位口径没定对，那是要修的事。**
+2. `buffer` 档首次实测就在这一刀：`izb_shadow_impl.cppm` 的 `bufferBarrier` 写死 `VK_WHOLE_SIZE`
+   （接口为此不留 `size` 参数），迁移时顺手确认"整块"这个口径真的没窄化过任何一条。
+
+### 7.6 判据实测（B1b 第一刀，2026-10-14，本机 AMD Radeon 8060S / RADV STRIX_HALO）
+
+| 判据 | 读数 |
+|---|---|
+| 单元层 | `just test` **450/450**（本刀新增 6 用例）；`just gates` 全绿（build + test + `checks --strict`） |
+| **变异 · 单元层 10 条** | 全红且**归因到期望用例**：词表改位 ×2（`computeReadWrite` 少一位 / `anyWriteGlobal` 被收窄）→ 词表 + 边表两条同时红；边 src/dst 对调；对账**两半边各删一次**；判据从"次数"弱化成"有没有"（只有「门开多发」那条能抓）；`beginFrame` 不清账；`expectCount` 不生效；门位表长度校验删掉；词表养一个闲原子 |
+| **变异 · 真程序 3 条**（EVSSM 门开） | 全红且**点名边**：① 忘发（循环里删一条）→ `边 'evssm_moments_chain' 门开着却发了 0 次，应发 7 次`；② 应发次数抄错（`mipLevels−1` → `mipLevels`）→ `发了 7 次，应发 8 次`；③ 多发（depth→compute 发两遍）→ `'evssm_depth_to_compute' … 2 次，应发 1 次`。每条跑前先证明门开（在场证据 = 日志 `EvssmShadow: 2048x2048 RGBA16F x8 mip`），基线 errors=0 |
+| 门开冒烟 | `--set 'shadow:mode="evssm"' --frames 12` → **errors=0 warnings=0**；`--sync`（VVL syncval）→ **hazard 0 条** |
+| 门关逐位不变 | `regress floor --runs 3 --expect 95edc8ccd7a4` → 3/3 同哈希、0 像素差（出厂锚未漂） |
+| **门开逐位不变 = 迁移没改语义** | `regress ab --set 'shadow:mode="evssm"' --runs 3`（工作树 vs `1207770`）→ **两侧同哈希 `865fd1aa5a82`、A×B 跨构建 0 像素差** ⟹ 判定逐位相同 ✅ |
+
+> **`865fd1aa5a82…` = EVSSM 开档（出厂机位、`aa` 随配置、frames 8）的文件哈希锚**。
+> 之前本仓只有出厂档 `95edc8ccd7a4` 一个锚，门控特性一直没有——因为 `regress ab` 过去**没有
+> `--set`**，门开的配置根本进不了 A/B。本刀顺手补了 `--set` 透传（`tools/regress.py`，与
+> `just smoke --set` 同一个 `patch_lua` 护栏）。⚠ 走 `just regress` 时引号会被 just 吃掉，
+> 字符串值要直连 `python3 tools/regress.py`。
+> 这条 A/B 还顺带自证了 `--set` 真生效：EVSSM 档哈希 `865fd1aa` ≠ 出厂档 `95edc8cc`。
+
+**已知软处（写清楚，别读成"全都被机器守着"）**：`expectCount` 是 public，理论上模块可以在
+录制期反复调它把判据喂成自证——**运行时守不住**（EVSSM 首帧懒构造，本来就发生在第一帧
+`beginFrame` 之后，任何"只许启动期调"的硬闸门都会误伤合法用法）。现在的约束是接口注释里的
+那条理由 + 单测「构造期申报」用例。**沉淀地址**：`TEST: tests/test_offgraph_sync.cppm`
+（十条变异的出处）+ `DOC: 本节`（门开配方与两个哈希锚）。
+
+
+
 ---
 
 ## 8. 待挂号（本批**未落**总账，等用户选处置）

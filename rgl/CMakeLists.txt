@@ -274,6 +274,8 @@ set(RGL_GFX_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/rlvk.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/VmaBuffer.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/utils.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/offgraph_sync.cppm"        # 批次 B1b：图外同步申报即发射（usage 词表 + 发射账；零模块知识）
+    "${CMAKE_CURRENT_SOURCE_DIR}/offgraph_sync_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/sdl3window.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/QueueFamilyManager.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/features.cppm"

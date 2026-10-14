@@ -5,6 +5,7 @@ module;
 module evssm_shadow:impl;
 
 import evssm_shadow;  // clang 不给 partition impl unit 隐式 import 主接口——必须显式
+import offgraph_sync;  // 批次 B1b：RgSyncEdgeId / emit（import 不传递，接口里的不算）
 import rlstd;
 import rlvk;
 import rllogger;
@@ -45,23 +46,6 @@ static_assert(offsetof(DownPush, level) == 0, "evssm_downsample.comp.slang: leve
 static_assert(offsetof(DownPush, cols) == 4, "evssm_downsample.comp.slang: cols @4");
 static_assert(offsetof(DownPush, baseTileTexels) == 8, "evssm_downsample.comp.slang: baseTileTexels @8（struct 尾 = 12B）");
 
-/** 全局 stage/access barrier（MemoryBarrier2 载体、无 image/memory 条目）：只建执行
- *  依赖，不碰布局（v357 头 VkDependencyInfo 无 stage 字段，stage/access 挂在 barrier
- *  本体——IZB barrier 同款形态）。矩图全程 GENERAL 零转移；阴影图归 RT 缓存（本模块
- *  无句柄）——「依赖要、布局免」的正解就是这种纯 stage barrier（IZB 的 layout
- *  sandwich 是因为它要改场景深度布局）。 */
-void stageBarrier(vk::raii::CommandBuffer& cmd, vk::PipelineStageFlags2 srcStage,
-	vk::AccessFlags2 srcAccess, vk::PipelineStageFlags2 dstStage, vk::AccessFlags2 dstAccess) {
-	vk::MemoryBarrier2 mb{};
-	mb.srcStageMask = srcStage;
-	mb.srcAccessMask = srcAccess;
-	mb.dstStageMask = dstStage;
-	mb.dstAccessMask = dstAccess;
-	vk::DependencyInfo dep{};
-	dep.setMemoryBarriers(mb);
-	cmd.pipelineBarrier2(dep);
-}
-
 /** 一次性 layout 转移 CB（vulkan_utils::submitCmdBufferAndWait 同款机制——raii 局部
  *  cmd/fence 函数尾销毁；提交 graphics 队列 + fence 等待——但本站失败直接抛，
  *  = 启动期 fail-fast 契约，故不复用那个返回 expected 的版本）。 */
@@ -89,10 +73,13 @@ void runOnce(vk::raii::Device& dev, const vk::raii::CommandPool& pool, VkQueue q
 
 EvssmShadow::EvssmShadow(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
 	uint32_t mapSize_, uint32_t cols_, uint32_t mipLevels_, float exponent_,
-	uint32_t shadowMapSlot_, uint32_t momentsSampleSlot_)
-	: deviceCtx(&vkDevice), resources(&vkResources), mapSize(mapSize_), cols(cols_),
+	uint32_t shadowMapSlot_, uint32_t momentsSampleSlot_, OffGraphSync& sync_)
+	: sync(sync_), deviceCtx(&vkDevice), resources(&vkResources), mapSize(mapSize_), cols(cols_),
 	  mipLevels(mipLevels_), exponent(exponent_), shadowMapSlot(shadowMapSlot_),
 	  sampleSlot(momentsSampleSlot_) {
+	// 批次 B1b：级间 barrier 每帧恰发 `mipLevels − 1` 次（③ 那个循环的圈数）。**构造期**申报
+	// 这个事实，帧末对账才独立——录制期申报等于自己出题自己答，那条判据就自证了。
+	sync.expectCount(RgSyncEdgeId::evssmMomentsChain, mipLevels - 1u);
 	auto& dev = vkDevice.getDevice();
 	const uint32_t descSize = static_cast<uint32_t>(resources->getDescriptorHeap().getDescriptorSize());
 
@@ -195,11 +182,12 @@ EvssmShadow::EvssmShadow(RGL::DeviceContext& vkDevice, RGL::Resources& vkResourc
 }
 
 void EvssmShadow::recordFrame(vk::raii::CommandBuffer& cmd) {
-	// ① 阴影图 depth-write → 本链 read（全局 stage barrier：无句柄、纯执行依赖，
-	//    覆盖 shadow pass 写 → compute 读；布局由 PCF 侧既有转移保证，本模块零漂移）
-	stageBarrier(cmd, vk::PipelineStageFlagBits2::eAllGraphics,
-		vk::AccessFlagBits2::eMemoryWrite,
-		vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderRead);
+	// ① 阴影图 depth-write → 本链 read（边 `evssm_depth_to_compute`：无句柄、纯执行依赖，
+	//    覆盖 shadow pass 写 → compute 读；布局由 PCF 侧既有转移保证，本模块零漂移）。
+	//    为什么是纯执行序边而不是 layout sandwich（IZB 那种）：矩图全程 GENERAL 零转移、
+	//    阴影图归 RT 缓存本模块无句柄 ⟹「依赖要、布局免」。masks 出处 = usage 词表
+	//    （`offgraph_sync`），本模块不写 stage/access 字面量。
+	sync.emit(cmd, RgSyncEdgeId::evssmDepthToCompute);
 
 	// ② 矩派生（全幅同 tile 布局恒等映射）
 	{
@@ -214,10 +202,8 @@ void EvssmShadow::recordFrame(vk::raii::CommandBuffer& cmd) {
 	// ③ 逐级 box 降采样（dispatch z = tile；级间 compute→compute barrier）
 	const uint32_t baseTile = mapSize / cols;
 	for (uint32_t level = 1; level < mipLevels; ++level) {
-		stageBarrier(cmd, vk::PipelineStageFlagBits2::eComputeShader,
-			vk::AccessFlagBits2::eShaderWrite,
-			vk::PipelineStageFlagBits2::eComputeShader,
-			vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite);
+		// 级间边（`evssm_moments_chain`）：本循环圈数 = 构造期申报的应发次数
+		sync.emit(cmd, RgSyncEdgeId::evssmMomentsChain);
 		std::array<vk::ShaderStageFlagBits, 1> stages = {vk::ShaderStageFlagBits::eCompute};
 		std::array<vk::ShaderEXT, 1> handles = {downShaders[level - 1]};
 		cmd.bindShadersEXT(stages, handles);
@@ -227,10 +213,8 @@ void EvssmShadow::recordFrame(vk::raii::CommandBuffer& cmd) {
 		cmd.dispatch((dstTile + 7u) / 8u, (dstTile + 7u) / 8u, cols * cols);
 	}
 
-	// ④ 收尾：compute write → light pass fragment 采样 read
-	stageBarrier(cmd, vk::PipelineStageFlagBits2::eComputeShader,
-		vk::AccessFlagBits2::eShaderWrite,
-		vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderRead);
+	// ④ 收尾：compute write → light pass fragment 采样 read（边 `evssm_moments_to_light`）
+	sync.emit(cmd, RgSyncEdgeId::evssmMomentsToLight);
 }
 
 }  // namespace RGL

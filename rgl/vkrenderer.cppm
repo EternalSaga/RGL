@@ -32,6 +32,7 @@ import diagnostics;  // no_present 诊断单例（configs/diagnostics.lua）
 import fsr_upscaler;   // 批 14.5：FSR 3.1.4 upscaler（图外 compute，门控构造）
 import meshlet_cull_service;  // ★1-a2-i：逐簇视锥剔除（图外 compute，装配后挂裸指针）
 import offgraph_contract;  // 批次 B1：图外工作申报面（挂点/相位表；零设备调用，判据在 tests/）
+import offgraph_sync;      // 批次 B1b：图外同步发射账（barrier 由 usage 词表物化 + 帧末次数对账）
 import meshlet_shadow_args;   // ★M-1b：真 MDI 行表载体（upload + 间接 buffer，装配后挂裸指针）
 import mdi_rows;              // ★M-1b：kMdiShadowRowStride（drawMeshTasksIndirectEXT 的 stride 唯一真相源）
 
@@ -477,6 +478,12 @@ export class Renderer {
 	 * 编译图构造完就不再变 ⟹ 锚点与图的错配没有「运行期才知道」的理由。
 	 */
 	OffGraphSchedule offGraph;
+	/**
+	 * 图外同步发射账（批次 B1b → `docs/compute_调研.md` §7.2）：图外模块经它**申报即发射**
+	 * （barrier 参数由 usage 词表物化，模块不写 mask 字面量），帧末 `offGraphEndFrame` 对账
+	 * 实发次数 vs 应发次数。
+	 */
+	OffGraphSync offGraphSync;
 	/** 批 9.5 补：首帧补打一次显存统计（`vma[first_frame]`）。动机 = IzbShadow /
 	 *  EvssmShadow 均首帧懒构造，而 `logStartupBaseline` 在帧循环之前 ⟹ `vma[startup]`
 	 *  不含这两个模块的资源（实测开/关 EVSSM 档的 startup 统计逐字节相同）。

@@ -458,6 +458,10 @@ class Cfg:
     fsr_temporal: bool = False
     fsr_jitter: bool = False
     timeout: int = 120
+    # 与 just smoke --set 同源的通用配置注入（两侧必须同源：配置不同 = 比的不是同一件事）。
+    # 为什么要有它：门控特性（EVSSM / IZB / meshlet-cull）的 A/B 只能在对开的档上做，
+    # 而"门关逐位不变"单独构成假绿——B1b 迁移 barrier 时门开侧才是被测路径。
+    overrides: tuple[str, ...] = ()
 
     def describe(self) -> str:
         return ("variant=" + (self.variant or "(随配置)")
@@ -466,7 +470,8 @@ class Cfg:
                 + f" frames={self.frames}"
                 + f" render_scale={self.render_scale if self.render_scale is not None else '(随配置)'}"
                 + f" velocity_field={'on' if self.velocity_field else '(随配置)'}"
-                + (f" clip={self.clip}" if self.clip is not None else ""))
+                + (f" clip={self.clip}" if self.clip is not None else "")
+                + (f" set={list(self.overrides)}" if self.overrides else ""))
 
 
 @dataclasses.dataclass
@@ -490,7 +495,8 @@ class Shot:
 def stage(cfg: Cfg, shot_file: str) -> None:
     smoke.stage_configs(False, cfg.variant, shot_file, cfg.frames, cfg.size,
                         cfg.render_scale, cfg.velocity_field, cfg.aa,
-                        cfg.clip, cfg.fsr_temporal, cfg.fsr_jitter)
+                        cfg.clip, cfg.fsr_temporal, cfg.fsr_jitter,
+                        overrides=list(cfg.overrides))
 
 
 def capture(tag: str, cfg: Cfg, runs: int, quiet: bool = False) -> list[Shot]:
@@ -1010,7 +1016,7 @@ def cfg_from(args: argparse.Namespace) -> Cfg:
                frames=args.frames, render_scale=args.render_scale,
                velocity_field=args.velocity_field, clip=args.clip,
                fsr_temporal=args.fsr_temporal, fsr_jitter=args.fsr_jitter,
-               timeout=args.timeout)
+               timeout=args.timeout, overrides=tuple(args.overrides or ()))
 
 
 def add_cfg_args(p: argparse.ArgumentParser) -> None:
@@ -1023,6 +1029,11 @@ def add_cfg_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--clip", type=int)
     p.add_argument("--fsr-temporal", action="store_true")
     p.add_argument("--fsr-jitter", action="store_true")
+    # 与 just smoke --set 完全同源（同一个 patch_lua 护栏：键命中 ≠ 1 即 FAIL）。
+    # ⚠ 走 `just regress` 时引号会被 just 吃掉，字符串值要直连 `python3 tools/regress.py`。
+    p.add_argument("--set", dest="overrides", action="append", default=None,
+                   metavar="[FILE:]KEY=VALUE",
+                   help="通用配置注入（可重复），作用在具名旗标之后；门控特性的 A/B 靠它开档")
     p.add_argument("--timeout", type=int, default=120)
 
 

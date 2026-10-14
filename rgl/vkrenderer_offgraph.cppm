@@ -180,7 +180,7 @@ void Renderer::evssmPreFrame() {
 	evssmShadow = std::make_unique<RGL::EvssmShadow>(
 		vkDevice, *resources, kShadowMapSize,
 		shadowAtlasColumns(kActiveShadowCascades), kEvssmMipLevels, 5.5f,
-		*shadowSlot, *momentsSlot);
+		*shadowSlot, *momentsSlot, offGraphSync);
 }
 
 
@@ -584,6 +584,12 @@ void Renderer::offGraphEndFrame() {
 		fsr != nullptr && fsrInputs().has_value(),
 	};
 	if (auto r = offGraph.checkCoverage(std::span<const bool>{active}); !r)
+		reportOffGraphViolation(r.error());
+	// 批次 B1b：图外**同步边**的帧末对账（实发次数 vs 应发次数）。与上面那条独立出声——
+	// 一个查「工作项有没有在挂点录」，一个查「barrier 有没有发够」，两件事的修复位置不同。
+	// 门位口径同上（关于门与输入，不许关于「刚才发过没有」）。
+	const std::array<bool, kSyncGateCount> syncActive{evssmShadow != nullptr};
+	if (auto r = offGraphSync.checkEmission(std::span<const bool>{syncActive}); !r)
 		reportOffGraphViolation(r.error());
 }
 

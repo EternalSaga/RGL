@@ -627,6 +627,8 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 		const uint32_t imageIndex = session.imageIndex();
 		// 批次 B1：图外工作申报面本帧记账清零（相位归 0；位置/覆盖两条判据的现场都从这里起）
 		offGraph.beginFrame();
+		// 批次 B1b：图外同步发射账清零（应发次数是启动期事实，跨帧保留）
+		offGraphSync.beginFrame();
 
 	// Phase 9.2：GPU 时间戳——读回本槽上一轮两段（beginFrame 已等完 fence → 必就绪）+
 	// 主段复位记入主 CB 头（cull 段复位在 cull CB，两段不相交）+ gpu.frame 跨度起点

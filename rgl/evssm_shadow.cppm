@@ -7,6 +7,7 @@ import rlvk;
 import vk_device;
 import vk_resources;
 import VmaRaii;
+import offgraph_sync;  // 批次 B1b：图外同步发射账（barrier 由边表物化，本模块不写 mask）
 
 namespace RGL {
 
@@ -46,16 +47,21 @@ export class EvssmShadow {
 	 * @param momentsSampleSlot 矩图 sampled 槽（Resources::ensureEvssmSampleSlot 发号，
 	 *        binding 15 已 bake 此槽号——本构造以真 view **覆写**同槽描述符，同 IzbShadow
 	 *        mask 槽模式；重建换图重写同槽）
+	 * @param sync 图外同步发射账（批次 B1b：barrier 由边表物化，本模块不写 mask 字面量）。
+	 *        构造期用它申报 `evssm_moments_chain` 的应发次数 = `mipLevels − 1`——**必须在构造期**，
+	 *        录制期申报等于自己出题自己答，那条判据就自证了。
 	 */
 	EvssmShadow(RGL::DeviceContext& vkDevice, RGL::Resources& resources,
 		uint32_t mapSize, uint32_t cols, uint32_t mipLevels, float exponent,
-		uint32_t shadowMapSlot, uint32_t momentsSampleSlot);
+		uint32_t shadowMapSlot, uint32_t momentsSampleSlot, OffGraphSync& sync);
 
 	/**
 	 * 图外 sandwich（录在 light pass 迭代顶部、izb sandwich 同款位置）：
-	 * 全局 barrier（graphics→compute，覆盖阴影图 depth-write→本 pass read）
-	 * → moments dispatch → 逐级 downsample（级间 compute→compute barrier）
-	 * → 收尾 barrier（compute→fragment，light pass 采样前）。
+	 * 边 `evssm_depth_to_compute`（graphics→compute，覆盖阴影图 depth-write→本 pass read）
+	 * → moments dispatch → 逐级 downsample（级间边 `evssm_moments_chain`，compute→compute）
+	 * → 收尾边 `evssm_moments_to_light`（compute→fragment，light pass 采样前）。
+	 * 🔴 三条边的 stage/access **不在本模块写**——由 `offgraph_sync` 的 usage 词表物化，
+	 * 本模块只负责"在哪发"（批次 B1b → `docs/compute_调研.md` §7.2）。
 	 * @param cmd pass 循环所在命令缓冲（heap 已绑定）
 	 */
 	void recordFrame(vk::raii::CommandBuffer& cmd);
@@ -67,6 +73,8 @@ export class EvssmShadow {
 
    private:
 	struct PushImpl;  // 两个 push 布局在 impl unit（避免接口拖宏）
+	/// 图外同步发射账（批次 B1b；Renderer 持有，生命周期覆盖本模块）
+	OffGraphSync& sync;
 	DeviceContext* deviceCtx = nullptr;
 	Resources* resources = nullptr;
 	uint32_t mapSize = 0;
