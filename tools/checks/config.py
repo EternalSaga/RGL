@@ -364,24 +364,6 @@ REFLECTION_SHAPE_TO_SLANG_TYPES = {
 # 同一处漂移报两遍只会训练人忽略警告 ⟹ 本面对它整份让位，不是漏了它。
 REFLECTION_CONSTANTS_SHADER_EXEMPT = ("rgl/shaders/meshlet_cull_schema.lua",)
 
-# ─── compute 可写 binding 对账（B2；规则 = rules_compute_access.compute_write_coverage_checks）
-# 判据与不覆盖面 → rules_compute_access.py 模块 docstring（本文档不抄判据）。本节只放参数。
-
-# 产物 = 第 9 条反射管线的输出（真相源 = Slang 反射，勿手改）。它同时是**规则输入**：
-# 规则读的是产物而不是重新反射一遍——两份实现口径不一致时，护栏会去追一个不存在的漂移。
-COMPUTE_ACCESS_PRODUCT = "rgl/generated/compute_access.json"
-
-# 人工基线（已评审的可写 binding + reason）。它是「这条写要不要同步边」的**唯一人工裁决**
-# 载体：机器答得出"这里会写"，答不出"写完谁读"（docs/compute_调研.md §7.11 读数 2）。
-COMPUTE_WRITE_BASELINE = "tools/checks/compute_write_baseline.json"
-
-# 算「可写」的 access 取值集合。四个都来自 SlangResourceAccess（slang.h:2214-2224）：
-# readWrite = RW* 声明 · write / append / rasterOrdered = 本仓暂未使用但同属"会写"。
-# 🔴 刻意**不含** "none"（= ConstantBuffer / push constant，实测从不与可写重合，§7.11）
-# 与 "read"；也刻意**不含** "unknown"（反射分类失败/ slang 新增取值）——它既不算读也不算写，
-# 但会出现在产物里，规则把它单独计数并在读数里出声（当成可写会误报，当成只读会静默漏报）。
-COMPUTE_WRITABLE_ACCESS = frozenset({"readWrite", "write", "append", "rasterOrdered"})
-
 # ─── ECS 规范护栏（债-14；规则 = rules_ecs.ecs_*_checks，判据全景 → docs/风格检查规则.md §9）──
 # 五条规范里静态可判的片段与**不可判**的裁决全部写在 rules_ecs.py 模块 docstring
 # （规范 1 与 3 的 config 腿、5 的「下标 vs ID」区分静态判不了——别在这里加规则凑数）。

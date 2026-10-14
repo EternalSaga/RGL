@@ -772,11 +772,15 @@ B2 排期时按后者估。
 （RT 缓存的 buffer 版要不要 heapSlot、usage 要哪些位、尺寸漂移按字节还是元素——只有首发消费者
 meshlet_cull 能定）。D2 ② 说的「buffer 档首发」就是这个意思。
 
-**L2 产物形态（本刀拍板）**：**已提交的生成物 + 一条 `tools/checks/` 规则**，不是运行期检查。
-理由：它守的是「shader 加了个 `RW` buffer 而边表没加对应边」，那是**两份已提交产物之间的静态关系**，
-不需要设备；本仓已有 `tools/checks/byte_offset_baseline.json` 这个基线对账先例可套。
-代价写清：判据是**声明级**的（`RW*` 即使本 entry point 只读也算写）⟹ 会有假阳性，消它要更新基线
-并写明理由；方向安全（宁可多要一条边，同 §7.8 那条 `size` 等价性同理）。
+**L2 产物形态（本刀拍板）**：**已提交的生成物**，不是运行期检查。理由：它守的是「shader 加了个
+`RW` buffer 而边表没加对应边」，那是**已提交产物之间的静态关系**，不需要设备。代价写清：判据是
+**声明级**的（`RW*` 即使本 entry point 只读也算写）⟹ 会有假阳性；方向安全（宁可多要一条边，
+同 §7.8 那条 `size` 等价性同理）。
+
+> 🔴 **本段原写「生成物 + 一条 `tools/checks/` 规则」，并拿 `byte_offset_baseline.json` 当先例——
+> 两处都错，规则已撤回（判据 → §7.12）**。先例引错了是承重的错：那份基线是**棘轮**（只准降不准升，
+> 新增即红），我建的却是**登记表**（补一行带 reason 就绿）——名字都叫"基线"，牙完全不同。
+> 生成物一侧照旧落地，见 §7.11 末。
 
 **证伪点（刀 1 的第一步，跑不出来就换路）**：`getResourceAccess()` 能不能区分
 `ByteAddressBuffer` 与 `RWByteAddressBuffer`。头文件与 JSON 都指向能，**但没实测**。
@@ -786,8 +790,8 @@ meshlet_cull 能定）。D2 ② 说的「buffer 档首发」就是这个意思�
 
 | 刀 | 内容 | 判据 |
 |---|---|---|
-| **B2-1** | 反射工具读 `getResourceAccess()`，为 9 枚 compute 出「entry point × binding × 方向」的已提交产物 + `tools/checks/` 基线规则 | **证伪点**（上）；阳性锚点 = cull 的 2/4 报写、0 报读；反向 = 把某个 `RW` 改回只读，生成物必须变；变异红线 = 基线漏更新必须红 |
-| **B2-2** | 申报面升成依赖图（资源 → 生产者 → 消费者），与边表对账「有没有未申报的写后读」 | 判据 3 的加强版：故意让一个 compute 写一个没边的资源，必须点名 |
+| **B2-1** | 反射工具读 `getResourceAccess()`，为 9 枚 compute 出「entry point × binding × 方向」的已提交产物。✅ **已落**（`3eae652`）；配套的 `tools/checks/` 基线规则**已撤回**（§7.12） | **证伪点**（上）；阳性锚点 = cull 的 2/4 报写、0 报读；反向 = 把某个 `RW` 改回只读，生成物必须变 |
+| **B2-2** | 申报面升成依赖图（资源 → 生产者 → 消费者），与边表对账「有没有未申报的写后读」。🔴 **人工声明与消费它的检查必须同一刀落**，不许先建声明（§7.12） | 判据 3 的加强版：故意让一个 compute 写一个没边的资源，必须点名 |
 | **B2-3** | `RgAttachmentKind::buffer` + `RgUsage::storage*` + **按名注册尺寸** + **拒绝面落进 `registerAttachment`** | 每条拒绝分支一条用例；buffer 档出现在 barrier 计划里 = 编译期/断言红（plan-only 的结构性护栏） |
 | **B2-4** | 资源迁入：EVSSM 矩图（先扩 RT 缓存多描述符）→ meshlet_cull（buffer 档首发，**由它定 buffer 档的形状**）→ IZB（最后，保 A 档 `layoutDrift`） | 判据 1 / 5 / 6 / 7（口径已改准） |
 
@@ -829,6 +833,75 @@ meshlet_cull 能定）。D2 ② 说的「buffer 档首发」就是这个意思�
 
 > 复算：spike 是一次性程序（API 路径照 `SlangContext` 抄），**不入库**；B2-1 落地后同一份事实
 > 由 `just reflect` 的生成物给出，届时以生成物为准。JSON 侧的复算命令在 §7.9。
+
+**B2-1 落地读数**（2026-10-14，`3eae652`）：产物 = `rgl/generated/compute_access.json`（第 9 条
+反射管线，56 个 global 参数全解析、12 条可写、连跑两次字节相同）。**顺手补了反射护栏一个机制性洞**：
+`REFLECTION_PAIRS` 只列直接输入、**不含 import 闭包**，而方向信息恰恰从 import 来（`objectMatrixTable`
+来自 `import scene_tables`）⟹ `ReflectionManifest.cmake` 加 `glob:` 输入展开，write / check **共用
+同一个展开函数**（两处逻辑分叉 = 一致性 bug 温床），glob 命中 0 个文件 = FATAL。实测改
+`scene_tables.slang`（被 import、不是任何管线的直接输入）能触发守卫。**现有 6 条管线的同型洞未修**，
+已在 `RglReflection.cmake` 挂号——那是另一刀的账。
+
+
+### 7.12 B2-1 的规则半边已撤回（2026-10-14，用户质疑后复核）
+
+**撤掉的**：checks 侧那条规则 `rules_compute_access` 与它的基线 `compute_write_baseline`（12 条带
+reason 的人工条目）+ config 三项 + `风格检查规则.md` §10（三份文件已删，名字留这儿供 git 检索）。
+**留下的**：反射产物本身 + 上面那条 import 闭包修复（独立的机制修复，与规则无关）。
+
+**判据——本节唯一要长期留着的东西**：
+
+> 🔴 **双相对账成立的前提 = 两个来源各自携带对方推不出的信息。**
+
+拿本仓真正在跑的三条对账验这条，它们都满足；我建的那条不满足：
+
+| 对账 | 来源 A | 来源 B | **B 里 A 推不出的东西** |
+|---|---|---|---|
+| 面 6 `descriptorSlots` ↔ shader `[[vk::binding]]` | `*_schema.lua` | 反射 | `heapSlotOffset` / `cppName`（运行期槽 = `reservedSlots() + offset`，是 C++ 侧分配策略，**shader 里根本没有**） |
+| R5 裸字节偏移 | 基线计数 | 源码扫描 | 「存量已评审」+ **只准降不准升**的口径本身 |
+| ❌ 已撤的那条 | 反射产物 | 人工基线 | **只有 `reason` 那串散文**；三元组 `(shader, binding, param)` 产物里本来就有 |
+
+第三行不是双源，是**单源 + 一份评论文件**。它两条判据里，"基线登记了而产物已不可写"（陈旧基线）
+有一点独立信息，"产物可写而基线没登记"——也就是它存在的理由——**完全没有**。
+
+更要紧的是**它的通过条件是"写一句话"**：新增一条 `RW` → 补一行带 reason 的条目 → 绿。我引先例时
+把 `byte_offset_baseline.json` 当成同类，**那是错的**：它是**棘轮**（新增即红、只准降），糊不过去；
+我建的是**登记表**（补一行就绿）。名字都叫基线，牙完全不同。
+
+**为什么当时会做错**（写下来是为了下次认出同一个形态）：**产物先有了，就顺手给它配一个"对账"**。
+顺序反了。正确顺序是先问"要拦哪一类错、那个错需要哪两个独立事实"。B2-1 的产物答"这里会写"，而真正
+要拦的错是"写完有人读而中间没边"——它还需要**资源身份**与**读者**两个事实（§7.11 读数 2 已经把
+它们点出来了）。只补一个 reason 字段 = 在离目标还差两格的地方立终点线。
+
+**知识不跟着机制一起扔**。那 12 条 reason 是第一次有人逐条写下"每个 compute 写的读侧是谁、靠什么
+同步"，正是 B2-2 要消费的那张表。落此处（方向列真相源 = `just reflect` 产物；边名 = `offgraph_sync_impl.cppm` 的 `kEdgeTable`）：
+
+| compute · binding | 实测方向 | 读侧 | 靠什么同步 |
+|---|---|---|---|
+| `cull` · 2 `sequences` | 写 | fanout dispatch、读回拷贝、DGC execute | `cull_seq_fanout_chain`、`cull_seq_write_to_readback`；DGC 走同 CB 顺序 |
+| `cull` · 4 `countBuf` | 写 | 读回拷贝、DGC push 的 `sequenceCountAddress` | `cull_count_write_to_readback`；DGC 走同队列顺序 |
+| `env_prefilter` · 1 `dst` | 写 | 运行期 env 采样 | 启动期一次性，图外宿主 barrier |
+| `evssm_downsample` · 0 `mipSrc` | **声明可写、体内只读** | —— | 不需要边（§7.11 读数 1） |
+| `evssm_downsample` · 1 `mipDst` | 写 | 同链下一级的 `srcTex` | `evssm_moments_chain` |
+| `evssm_moments` · 1 `moments` | 写 | EVSM 阴影采样 | `evssm_moments_to_light` |
+| `izb_create` · 0 `head` | 写 | `izb_prime`、mask pass | `izb_head_create_to_prime`、`izb_head_to_mask_pass` |
+| `izb_create` · 1 `nodes` | 写 | `izb_prime` 走链、mask mesh 读 payload | `izb_nodes_create_to_prime`、`izb_nodes_to_mask_pass` |
+| `izb_prime` · 3 `primed` | 写 | **全仓无读者** | 不需要边（§7.11 读数 2） |
+| `meshlet_cull` · 4 `clusterVisible` | 写 | mesh shader 按 `cullBase` + 簇内序读 | 同 render pass 内 compute → mesh 顺序 |
+| `mip_gen` · 1 `dstTex` | 写 | 同链下一级 `srcTex`、运行期材质采样 | 层级 barrier 由宿主记录（图外） |
+| `stream_fanout` · 2 `streams` | 写 | DGC execute | 同队列顺序，**无边** |
+
+⚠ **本表不是护栏，没有机器在读。** 它是人工核对过的现状表，作用是给 B2-2 当人工半边——B2-2 要验的
+正是"最后一列能不能从边表 + 相位顺序**推**出来"。推得出 = 那张表可以删；推不出来的那些行 = 真缺口。
+
+**撤回后的诚实账**（让出了哪一格，别糊）：
+
+| 仍会响 | **不再响**（本次让出） |
+|---|---|
+| 改任何 `.slang`（含被 import 的）没 `just reflect` → 构建期 SHA1 守卫 FATAL 点名文件 | 新增一条 `RW` 而没加同步边 → 只在 `just reflect` 的 diff 里多一行 `readWrite`，**没人看 diff 就过去了** |
+
+让出这一格是**有意的**：一条拦不住这个错的规则，比没有更糟——它会把"已对账"的错觉一并交付。
+B2-2 落"资源身份 + 读者"时，**同一刀**把护栏建回来（§7.10 的 B2-2 行已加这条硬约束）。
 
 
 

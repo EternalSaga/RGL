@@ -201,7 +201,10 @@ int main(int argc, char* argv[]) {
 		}
 
 		// compute-access 子命令：compute entry 的 binding 读写方向表。产物 = 已提交 JSON
-		// （rgl/generated/compute_access.json），消费者 = tools/checks/rules_compute_access.py。
+		// （rgl/generated/compute_access.json）。🔴 **当前无机器消费者**——它是 B2-2 依赖图的输入；
+		// 曾配过一条 checks 基线规则，经复核不合格已撤（单源 + 评论文件 ≠ 双相对账，
+		// 判据 → docs/compute_调研.md §7.12）。别因为"没有消费者"就删它：产物是九枚 compute 的
+		// binding 表第一次成为已提交的机器可读事实，新鲜度由 reflection_manifest 的 SHA1 守卫守。
 		// 立论 → docs/compute_调研.md §7.10/§7.11：图外 compute 的同步对账要回答「这个 dispatch
 		// 会写哪些资源」，而人工申报的申报者与被判者是同一个人 ⟹ 需要一条独立机器来源。
 		if (command == "compute-access") {
