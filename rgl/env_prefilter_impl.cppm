@@ -4,6 +4,7 @@ module;
 module env_prefilter:impl;
 
 import env_prefilter;  // clang 不给 partition impl unit 隐式 import 主接口
+import compute_push_types_generated;  // EnvPrefilterPush（反射产物，布局有出处；不进接口 unit）
 import rlstd;
 import rlvk;
 import rllogger;
@@ -30,10 +31,15 @@ std::vector<uint32_t> loadEnvPrefilterSpv() {
 	return *spv;
 }
 
-/** 本模块 push data 布局（24B）：@0 EnvPrefilterPush（12B shader push constant）+ 2 u32 留白 +
- * @20 heap push index（u32，恒 0）。descriptor heap 下 push constant 经 vkCmdPushDataEXT
- * 供给（vkCmdPushConstants 与 descriptor heap 互斥——见 descriptorheaps.adoc :962-965）。
- * static_assert 锁死 heapIndex 落在 kPushIndexByte（共享常量，现居 shader.cppm；漂移即编译失败）。 */
+/** 本模块 push data 布局（24B）：@0 EnvPrefilterPush（12B shader push constant，**类型来自反射
+ * 生成物**）+ 2 u32 留白 + @20 heap push index（u32，恒 0）。descriptor heap 下 push constant 经
+ * vkCmdPushDataEXT 供给（vkCmdPushConstants 与 descriptor heap 互斥——见 descriptorheaps.adoc :962-965）。
+ * static_assert 锁死 heapIndex 落在 kPushIndexByte（共享常量，现居 shader.cppm；漂移即编译失败）。
+ *
+ * 🔴 下面两条 assert **不是**同义反复，别跟着 §7.13 那批一起删：它们量的对象（留白 + heapIndex
+ * 落在 @20 + 24B 总长）在 shader 里**根本不存在**——descriptor heap 的 push data 分帧是纯 C++ 侧
+ * 事实。内层 push 契约一旦变长，heapIndex 会被顶离 offset 20，这两条必须炸。判据：断言量的是
+ * shader 里有的东西 → 同义反复，删；量的是 shader 里没有的 C++ 侧布局 → 真不变量，留。 */
 struct EnvPrefilterPushData {
 	EnvPrefilterPush push;
 	uint32_t pad[2];

@@ -32,18 +32,16 @@ namespace RGL {
 // 持本类型成员，无环；heap 引用经 init 注入）。per-level 视图 create info 存成员 deque
 // （不 realloc → pView 指针稳定，活过提交 + fence wait——驱动可延迟解析）。
 
-/**
- * EnvPrefilterPush：env_prefilter.comp.slang 的 push constant（12B，3×u32 scalar 布局）。
- * 契约单一真相源 = shader 同名 struct（12B 字面量一致，任一侧漂移本 static_assert /
- * shader 布局错配——MipGenPush 先例，无反射管线对应）。descriptor heap 下 push constant
- * 经 vkCmdPushDataEXT 的 push data 区供给（offset 0..11），heap push index 落在 offset 20。
- */
-export struct EnvPrefilterPush {
-	uint32_t level = 0;       // 目标 mip 级（1..mipLevels−1）
-	uint32_t mipLevels = 0;   // 总级数（roughness = level/(mipLevels−1)，与采样端一致）
-	uint32_t faceSize = 0;    // 目标级面边长（= max(1, mip0Size >> level)，C++/shader 同式）
-};
-static_assert(sizeof(EnvPrefilterPush) == 12, "EnvPrefilterPush 须与 env_prefilter.comp.slang push 布局一致（12B）");
+// EnvPrefilterPush（env_prefilter.comp.slang 的 push constant，12B / 3×u32 scalar 布局）**不进本
+// 接口 unit**：它现在是 compute-push 反射管线的产物（generated/compute_push_types_generated.cppm），
+// 只被 `env_prefilter:impl` import，接口因此不拖生成物的 GMF 宏面（glm / cstddef）——先例 =
+// evssm_shadow.cppm。本模块外部零消费者（唯一使用点在 impl 的 push data 包装里），故不再导出。
+//
+// 🔴 原先此处是手抄 `export struct EnvPrefilterPush {…}` + `static_assert(sizeof == 12)`，删它的
+// 理由是**那条 assert 是关于 C++ 侧的同义反复**：量的是手抄的 C++ struct，不是 shader ⟹ shader 把
+// 两个同类型字段换序而 C++ 没跟着动时它照样全过，而 C++ 写的字节与 shader 读的字节已经错位，静默。
+// 现在布局由反射派生、生成物自带 sizeof/offsetof assert；"期望值 = 去 shader 逐字段手算"这条独立
+// 判据没有丢，它挪进了 tests/test_compute_push_layout.cppm。判据与红线 → docs/compute_调研.md §7.13。
 
 /**
  * EnvPrefilter：GGX 预滤波环境 cubemap 生成器（Phase 8 ④b，启动期一次性基础设施）。

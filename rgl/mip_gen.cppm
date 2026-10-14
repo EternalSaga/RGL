@@ -33,18 +33,16 @@ namespace RGL {
 //     SamplerLibrary 持本类型成员，无环；heap 引用经 init 注入）。per-level 视图 create info
 //     存成员 deque（不 realloc → pView 指针稳定，活过提交 + fence wait——驱动可延迟解析）。
 
-/**
- * MipGenPush：mip_gen.comp.slang 的 push constant（12B，3×u32 scalar 布局）。
- * 契约单一真相源 = shader 同名 struct（12B 字面量一致，任一侧漂移本 static_assert /
- * shader 布局错配——CullPush 先例，无反射管线对应）。descriptor heap 下 push constant
- * 经 vkCmdPushDataEXT 的 push data 区供给（offset 0..11），heap push index 落在 offset 20。
- */
-export struct MipGenPush {
-	uint32_t srcMip = 0;      // 源 mip 级（被降采样；= 目标级 − 1）
-	uint32_t dstWidth = 0;    // 目标 mip 宽（= max(1, srcW>>1)，C++/shader 同式）
-	uint32_t dstHeight = 0;   // 目标 mip 高（= max(1, srcH>>1)）
-};
-static_assert(sizeof(MipGenPush) == 12, "MipGenPush 须与 mip_gen.comp.slang push 布局一致（12B）");
+// MipGenPush（mip_gen.comp.slang 的 push constant，12B / 3×u32 scalar 布局）**不进本接口 unit**：
+// 它现在是 compute-push 反射管线的产物（generated/compute_push_types_generated.cppm），只被
+// `mip_gen:impl` import，接口因此不拖生成物的 GMF 宏面（glm / cstddef）——先例 = evssm_shadow.cppm。
+// 本模块外部零消费者（唯一使用点在 impl 的 push data 包装里），故不再导出。
+//
+// 🔴 原先此处是手抄 `export struct MipGenPush {…}` + `static_assert(sizeof == 12)`，删它的理由是
+// **那条 assert 是关于 C++ 侧的同义反复**：量的是手抄的 C++ struct，不是 shader ⟹ shader 把两个
+// 同类型字段换序而 C++ 没跟着动时它照样全过，而 C++ 写的字节与 shader 读的字节已经错位，静默。
+// 现在布局由反射派生、生成物自带 sizeof/offsetof assert；"期望值 = 去 shader 逐字段手算"这条独立
+// 判据没有丢，它挪进了 tests/test_compute_push_layout.cppm。判据与红线 → docs/compute_调研.md §7.13。
 
 /**
  * MipGen：2D 纹理 compute mip 链生成器（Phase 8 ③b，启动期一次性基础设施）。
