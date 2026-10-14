@@ -300,6 +300,7 @@ set(RGL_GFX_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/fsr_upscaler.cppm"      # 批 14.5：FSR 3.1.4 upscaler 封装（图外 compute，门控构造）
     "${CMAKE_CURRENT_SOURCE_DIR}/fsr_upscaler_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/render_target_cache.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/render_target_cache_impl.cppm"  # 多描述符 ensure 的实现（partition :impl，接口 BMI 不含函数体）
     "${CMAKE_CURRENT_SOURCE_DIR}/sampler_library.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/mip_gen.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/mip_gen_impl.cppm"

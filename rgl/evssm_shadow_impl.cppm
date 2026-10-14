@@ -1,6 +1,5 @@
 module;
 #include <vulkan/vulkan.h>  // VK_* 宏/C 函数（rlvk 不含宏）
-#include <vk_mem_alloc.h>   // VmaAllocationCreateInfo / VMA_MEMORY_USAGE_*（VmaRaii 的 C 面）
 #include <fmt/format.h>
 module evssm_shadow:impl;
 
@@ -13,7 +12,7 @@ import rllogger;
 import vkerror;
 import vk_device;
 import vk_resources;
-import VmaRaii;
+import render_target_cache;  // 矩图托管：RtAttachmentSpec / RenderTargetCache::ensure
 import shader;  // loadShaderSpv（evssm_moments/evssm_downsample.comp.slang）
 
 namespace RGL {
@@ -54,11 +53,40 @@ void runOnce(vk::raii::Device& dev, const vk::raii::CommandPool& pool, VkQueue q
 		throw std::runtime_error("EvssmShadow: 一次性 fence 超时");
 }
 
+/** 矩图的规格申报（RT 缓存托管的唯一形态来源；本模块不再自己建图 / 领槽 / 持 view）。 */
+RtAttachmentSpec momentsSpec(uint32_t mipLevels, uint32_t momentsSampleSlot) {
+	RtAttachmentSpec spec{};
+	spec.aspect = vk::ImageAspectFlagBits::eColor;
+	spec.mipLevels = mipLevels;
+	// 无 color/transfer flag：矩图只被 compute 写（STORAGE）+ light pass 采（SAMPLED）
+	spec.usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled;
+	spec.dedicatedMemory = true;  // 采样 image（RT 缓存先例同款）
+	spec.allocationName = "evssm_shadow/mipmaps";  // vma 日志归属名（迁入前后同名，账可比）
+	spec.descriptors.reserve(mipLevels + 1);
+	// 每 mip 一个 STORAGE_IMAGE（降采样链逐级读写），描述符 layout 一律 GENERAL
+	for (uint32_t i = 0; i < mipLevels; ++i)
+		spec.descriptors.push_back(RtDescriptorSpec{
+			.range = {vk::ImageAspectFlagBits::eColor, i, 1, 0, 1},
+			.type = vk::DescriptorType::eStorageImage,
+			.layout = vk::ImageLayout::eGeneral,
+			.heapSlot = std::nullopt,  // 由缓存领号（模块侧不再自领 Runtime 段槽）
+		});
+	// 全 mip SAMPLED（light pass binding 15）：🔴 **预发号**——槽号装配期就要烘进管线，
+	// 而图首帧才懒构造，两段式不可合并（见 Resources::ensureEvssmSampleSlot）
+	spec.descriptors.push_back(RtDescriptorSpec{
+		.range = {vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0, 1},
+		.type = vk::DescriptorType::eSampledImage,
+		.layout = vk::ImageLayout::eGeneral,
+		.heapSlot = momentsSampleSlot,
+	});
+	return spec;
+}
+
 }  // namespace
 
 EvssmShadow::EvssmShadow(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
-	uint32_t mapSize_, uint32_t cols_, uint32_t mipLevels_, float exponent_,
-	uint32_t shadowMapSlot_, uint32_t momentsSampleSlot_, OffGraphSync& sync_)
+	RGL::RenderTargetCache& rtCache, uint32_t mapSize_, uint32_t cols_, uint32_t mipLevels_,
+	float exponent_, uint32_t shadowMapSlot_, uint32_t momentsSampleSlot_, OffGraphSync& sync_)
 	: sync(sync_), deviceCtx(&vkDevice), resources(&vkResources), mapSize(mapSize_), cols(cols_),
 	  mipLevels(mipLevels_), exponent(exponent_), shadowMapSlot(shadowMapSlot_),
 	  sampleSlot(momentsSampleSlot_) {
@@ -68,38 +96,31 @@ EvssmShadow::EvssmShadow(RGL::DeviceContext& vkDevice, RGL::Resources& vkResourc
 	auto& dev = vkDevice.getDevice();
 	const uint32_t descSize = static_cast<uint32_t>(resources->getDescriptorHeap().getDescriptorSize());
 
-	// ── heap 槽：每 mip 一个 storage 视图槽（本模块自有）；sampled 全 mip 槽 =
-	// Resources 预发号（binding 15 启动期已 bake 槽号，此处覆写真描述符）──
-	mipSlots.reserve(mipLevels);
-	for (uint32_t i = 0; i < mipLevels; ++i) {
-		auto slot = resources->allocSlot(RGL::SlotSegment::Runtime, "evssm.moments.mip");
-		if (!slot)
-			throw std::runtime_error(fmt::format("EvssmShadow: mip {} 槽领取失败: {}", i,
-				slot.error().describe()));
-		mipSlots.push_back(*slot);
-	}
+	// ── 矩图：向 RT 缓存按规格 ensure（幂等；本模块零私有资源）──
+	auto moments = rtCache.ensure(std::string{kEvssmMomentsName},
+		vk::Extent2D{mapSize, mapSize}, vk::Format::eR16G16B16A16Sfloat,
+		momentsSpec(mipLevels, momentsSampleSlot_));
+	if (!moments)
+		throw std::runtime_error(fmt::format("EvssmShadow: 矩图 ensure 失败: {}",
+			moments.error().describe()));
+	RtAttachment& rt = **moments;
+	// 到手描述符必须与规格逐项同号同类（下面按**规格顺序**取 storage 槽，序即契约：
+	// 前 mipLevels 项 = 每 mip 一个 storage，末项 = 全 mip sampled）
+	if (rt.descriptors.size() != mipLevels + 1u)
+		throw std::runtime_error(fmt::format(
+			"EvssmShadow: 矩图描述符数 {} ≠ 规格 {}（缓存没照规格发号）",
+			rt.descriptors.size(), mipLevels + 1u));
+	const auto mipSlot = [&](uint32_t level) {
+		const auto& d = rt.descriptors[level];
+		if (d.type != vk::DescriptorType::eStorageImage)
+			throw std::runtime_error(fmt::format(
+				"EvssmShadow: 矩图第 {} 个描述符不是 STORAGE_IMAGE", level));
+		return d.heapSlot;
+	};
 
-	// ── 矩图：mapSize² RGBA16F，mipLevels 级，STORAGE|SAMPLED，全程 GENERAL ──
-	vk::ImageCreateInfo ii{};
-	ii.imageType = vk::ImageType::e2D;
-	ii.format = vk::Format::eR16G16B16A16Sfloat;
-	ii.extent = vk::Extent3D(mapSize, mapSize, 1);
-	ii.mipLevels = mipLevels;
-	ii.arrayLayers = 1;
-	ii.samples = vk::SampleCountFlagBits::e1;
-	ii.tiling = vk::ImageTiling::eOptimal;
-	ii.usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled;
-	ii.sharingMode = vk::SharingMode::eExclusive;
-	VmaAllocationCreateInfo ai{};
-	ai.usage = VMA_MEMORY_USAGE_AUTO;
-	ai.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;  // 采样 image（RT 缓存先例同款）
-	auto img = resources->getAllocator().createImage(ii, ai, nullptr, "evssm_shadow/mipmaps");
-	if (!img)
-		throw std::runtime_error(
-			fmt::format("EvssmShadow: 矩图创建失败: {}", img.error().describe()));
-	momentsImage = std::move(*img);
-
-	// 初始 UNDEFINED → GENERAL（一次性 CB；此后帧内零 layout 转移）
+	// 初始 UNDEFINED → GENERAL（一次性 CB；此后帧内零 layout 转移）。图本体归缓存，本模块
+	// 只在构造期对它发这一次：矩图 extent = kShadowMapSize 与窗口解耦、模块一旦构造就不再
+	// 重建（generation 恒 1）。若将来它变成会重建的附件，这里要跟着 generation 重发。
 	runOnce(dev, vkDevice.getGraphicsCommandPool(), vkDevice.getGraphicsQueue(), [&](vk::raii::CommandBuffer& cmd) {
 		vk::ImageMemoryBarrier2 b{};
 		b.srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe;
@@ -109,62 +130,27 @@ EvssmShadow::EvssmShadow(RGL::DeviceContext& vkDevice, RGL::Resources& vkResourc
 		b.newLayout = vk::ImageLayout::eGeneral;
 		b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 		b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		b.image = *momentsImage;
+		b.image = rt.image.image;
 		b.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0, 1};
 		vk::DependencyInfo dep{};
 		dep.setImageMemoryBarriers(b);
 		cmd.pipelineBarrier2(dep);
 	});
 
-	// ── 描述符写入（v341 heap 语义：pView 指 view create info——常驻成员，随槽存活）──
-	const auto writeSlot = [&](uint32_t slot, vk::ImageViewCreateInfo& viewCreate,
-	                           vk::DescriptorType type) {
-		vk::ImageDescriptorInfoEXT imgDesc{};
-		imgDesc.pView = &viewCreate;
-		imgDesc.layout = vk::ImageLayout::eGeneral;
-		vk::ResourceDescriptorInfoEXT resDesc{};
-		resDesc.type = type;
-		resDesc.data.pImage = &imgDesc;
-		const auto addr = resources->getDescriptorHeap().getSlotCpuAddress(slot);
-		if (!addr)
-			throw std::runtime_error(fmt::format("EvssmShadow: 槽 {} 地址解析失败", slot));
-		dev.writeResourceDescriptorsEXT(resDesc,
-			vk::HostAddressRangeEXT{*addr, static_cast<VkDeviceSize>(descSize)});
-	};
-	mipViewCreates.clear();
-	for (uint32_t i = 0; i < mipLevels; ++i) {
-		vk::ImageViewCreateInfo vc{};
-		vc.image = *momentsImage;
-		vc.viewType = vk::ImageViewType::e2D;
-		vc.format = vk::Format::eR16G16B16A16Sfloat;
-		vc.subresourceRange = {vk::ImageAspectFlagBits::eColor, i, 1, 0, 1};
-		mipViewCreates.push_back(vc);
-		writeSlot(mipSlots[i], mipViewCreates.back(), vk::DescriptorType::eStorageImage);
-	}
-	{
-		vk::ImageViewCreateInfo vc{};
-		vc.image = *momentsImage;
-		vc.viewType = vk::ImageViewType::e2D;
-		vc.format = vk::Format::eR16G16B16A16Sfloat;
-		vc.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0, 1};
-		sampleViewCreate = vc;
-		writeSlot(sampleSlot, *sampleViewCreate, vk::DescriptorType::eSampledImage);
-	}
-
 	// ── compute shader objects（binding→槽一对一，常量偏移映射）──
 	// 键 = shader 里的 binding **变量名**（号由构建期接口表查得）：以前这里手抄 `{0, …}`，
 	// shader 把 `[[vk::binding(0)]]` 改成别的号时 C++ 一声不响地往错堆槽读数据。
 	momentsShader = makeMappedCompute(dev, "generated_shaders/evssm_moments.comp.spv",
 		std::vector<std::pair<std::string_view, RGL::HeapSlot>>{
-			{"shadowDepth", HeapSlot{shadowMapSlot}}, {"moments", HeapSlot{mipSlots[0]}}}, descSize,
+			{"shadowDepth", HeapSlot{shadowMapSlot}}, {"moments", HeapSlot{mipSlot(0)}}}, descSize,
 		&resources->computeAccessLog());
 	downShaders.reserve(mipLevels - 1);
 	for (uint32_t level = 1; level < mipLevels; ++level)
 		// 逐级各建一个 shader object：同一份 SPV，mipSrc/mipDst 烘不同槽（级间换视图）
 		downShaders.push_back(makeMappedCompute(dev, "generated_shaders/evssm_downsample.comp.spv",
 			std::vector<std::pair<std::string_view, RGL::HeapSlot>>{
-				{"mipSrc", HeapSlot{mipSlots[level - 1]}},
-				{"mipDst", HeapSlot{mipSlots[level]}}}, descSize,
+				{"mipSrc", HeapSlot{mipSlot(level - 1)}},
+				{"mipDst", HeapSlot{mipSlot(level)}}}, descSize,
 			&resources->computeAccessLog()));
 
 	if (auto* logger = RLLogger::getInstance())

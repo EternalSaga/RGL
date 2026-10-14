@@ -109,6 +109,7 @@ set(RGL_TEST_SOURCES
     test_meshlet_geometry.cppm       # gpu 套件 ★1-a0：簇产物 4 段 GPU 上传的设备级逐字节回读校验
     test_meshlet_shadow_args.cppm    # gpu 套件 ★M-1a（§19.5）：MDI 行表 GPU 载体的**设备侧往返** + 🔴 argsOffset↔rowBase 同源的自证回路（一次真 MDI 展开 + 孔洞行阳性对照）
     test_descriptor_heap_ubo.cppm    # gpu 套件能力 spike：resource heap 能否放 eUniformBuffer 并被 ConstantBuffer<T> 读（+ binding→槽机制证伪）；dheap 4/5 = StructuredBuffer 元素 stride 8/44 设备端往返（R3 撤销条件第 2 条）
+    test_render_target_cache.cppm    # gpu 套件 RT 缓存多描述符：跨重建槽复用（EVSSM 矩图迁入的结构性收益）+ 逐项独立领号 + 预发号不重复领 + 规格漂移报错不动已有附件
 )
 
 # ─── 11.3-1b 探针 SPIR-V（izb_spike mesh/frag，测试专用不入引擎 SPV 面）──────

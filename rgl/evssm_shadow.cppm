@@ -6,7 +6,7 @@ import rlstd;
 import rlvk;
 import vk_device;
 import vk_resources;
-import VmaRaii;
+import render_target_cache;  // 矩图托管：RT 缓存规格入口（多 mip + 多描述符 + 预发号）
 import offgraph_sync;  // 批次 B1b：图外同步发射账（barrier 由边表物化，本模块不写 mask）
 
 namespace RGL {
@@ -15,16 +15,27 @@ namespace RGL {
  *  scene data shadowEvssm.w 由 render_list 从本常量导出——禁双源写死 7）。 */
 export inline constexpr uint32_t kEvssmMipLevels = 8;
 
+/** 矩图在 RT 缓存里的 attachment 名（缓存 key）。不与编译图附件名相撞——矩图**不进图**
+ *  （全程 GENERAL、从不参与 dynamic rendering），只借缓存托管图与描述符。 */
+export inline constexpr std::string_view kEvssmMomentsName = "evssm_moments";
+
 /**
  * EVSSM 软阴影的矩图数据层（批 11.6d；docs/evssm_plan.md §4.1 C 方案）。
  *
  * 图外 compute（IzbShadow 同族编舞，render_graph 无 compute kind）：
  * 阴影图集 D32（PCF 同槽只读）→ RGBA16F 矩图 mip0（Filament 矩组
  * z=exp(c·(2d−1))）→ 7 级 per-tile box 降采样链（免 sampler2DArray 的对齐论证
- * = 11.6b）。shadow pass / RT 缓存 / graph **零改动**。
+ * = 11.6b）。shadow pass / graph **零改动**。
+ *
+ * 矩图资源形态（RT 缓存托管，本模块**不持有任何 GPU 资源**）：图 / 视图 / 描述符 /
+ * heap 槽全在 RenderTargetCache 侧，本模块只在构造期把形态申报成一份 RtAttachmentSpec
+ * （多 mip + 自定义 usage + 每 mip 一个 storage 描述符 + 一个全 mip 采样描述符）。
+ * 模块侧原先的私有 `VmaImage` + 自领 8 个 Runtime 段 storage 槽 + 自持 view create
+ * info 已删——那是"每个图外 pass 各持一套私有资源"的形态。
  *
  * 生命周期 = Renderer 在 shadow.lua 的 mode="evssm" 时构造；
- * **门关 = 本对象根本不被构造**（逐位旁路红线，同 izb_shadow）。
+ * **门关 = 本对象根本不被构造**（逐位旁路红线，同 izb_shadow）⟹ 矩图（2048²×8 mip
+ * RGBA16F）也只在门开时存在。
  *
  * 布局策略：矩图全程 GENERAL（探针 /tmp/opencode/evssm_probe 已证 RADV 可行），
  * 帧内零 layout 转移；跨阶段依赖用**全局 stage/access barrier**（无需 image 句柄
@@ -37,7 +48,9 @@ export class EvssmShadow {
    public:
 	/**
 	 * @param vkDevice   设备层
-	 * @param resources  descriptor heap（9 槽领取 + 描述符写入）
+	 * @param resources  descriptor heap（描述符写入 / compute 访问日志）
+	 * @param rtCache    offscreen RT 缓存——**矩图的持有者**（本构造按规格 ensure，
+	 *        拿到图句柄与逐 mip storage 槽号；生命周期由 main 持有，覆盖本模块）
 	 * @param mapSize    阴影图集整幅边长（2048，= kShadowMapSize）
 	 * @param cols       级联分块列数（shadowAtlasColumns）
 	 * @param mipLevels  矩链级数（8 = 探针口径；含 mip0）
@@ -45,15 +58,15 @@ export class EvssmShadow {
 	 *        scene data 常量块同源，勿传其他值）
 	 * @param shadowMapSlot 阴影图集采样 heap 槽（ensureShadowMapSlot 结果，只读复用）
 	 * @param momentsSampleSlot 矩图 sampled 槽（Resources::ensureEvssmSampleSlot 发号，
-	 *        binding 15 已 bake 此槽号——本构造以真 view **覆写**同槽描述符，同 IzbShadow
-	 *        mask 槽模式；重建换图重写同槽）
+	 *        binding 15 已 bake 此槽号——本构造把它作为**预发号**写进规格，缓存只往
+	 *        同槽写真描述符、不再领号；重建换图重写同槽）
 	 * @param sync 图外同步发射账（批次 B1b：barrier 由边表物化，本模块不写 mask 字面量）。
 	 *        构造期用它申报 `evssm_moments_chain` 的应发次数 = `mipLevels − 1`——**必须在构造期**，
 	 *        录制期申报等于自己出题自己答，那条判据就自证了。
 	 */
 	EvssmShadow(RGL::DeviceContext& vkDevice, RGL::Resources& resources,
-		uint32_t mapSize, uint32_t cols, uint32_t mipLevels, float exponent,
-		uint32_t shadowMapSlot, uint32_t momentsSampleSlot, OffGraphSync& sync);
+		RGL::RenderTargetCache& rtCache, uint32_t mapSize, uint32_t cols, uint32_t mipLevels,
+		float exponent, uint32_t shadowMapSlot, uint32_t momentsSampleSlot, OffGraphSync& sync);
 
 	/**
 	 * 图外 sandwich（录在 light pass 迭代顶部、izb sandwich 同款位置）：
@@ -85,12 +98,9 @@ export class EvssmShadow {
 	uint32_t mipLevels = 0;
 	float exponent = kEvssmExponent;  // vk_resources 唯一权威源（scene data 常量块同源下发）
 	uint32_t shadowMapSlot = 0;
-	uint32_t sampleSlot = 0;                 // 全 mip sampled（binding 15）
-	std::vector<uint32_t> mipSlots;          // 每 mip storage 槽（size = mipLevels）
-	// view create info 常驻（描述符 heap 语义 = pView 指 create info，随槽存活）
-	std::vector<vk::ImageViewCreateInfo> mipViewCreates;
-	std::optional<vk::ImageViewCreateInfo> sampleViewCreate;
-	RGL::VmaImage momentsImage;
+	uint32_t sampleSlot = 0;  // 全 mip sampled（binding 15）= 矩图采样描述符的预发号
+	// 🔴 矩图本体 / 逐 mip storage 槽 / view create info **都不是本模块成员**：它们住在
+	// RenderTargetCache 的 map 节点里（节点地址稳定，描述符指针链因此成立）。
 	std::optional<vk::raii::ShaderEXT> momentsShader;
 	std::vector<vk::raii::ShaderEXT> downShaders;  // index = level−1（level 1..mipLevels−1）
 };

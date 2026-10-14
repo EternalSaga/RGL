@@ -1,5 +1,4 @@
 module;
-#include <vk_mem_alloc.h>  // VMA 分配类型（VmaRaii 不导出 C 层，使用方自含）
 export module render_target_cache;
 
 import rlstd;
@@ -12,13 +11,76 @@ import vk_resources;  // 架构债务续账步骤 2：RT 缓存从内核拆出�
 namespace RGL {
 
 /**
+ * RT 附件的**一个描述符附件项**（多描述符能力单元；EVSSM 矩图迁入时长出）。
+ *
+ * 一个附件可以有多个描述符（例：矩图 = 每 mip 一个 STORAGE_IMAGE + 一个全 mip
+ * SAMPLED_IMAGE），它们共用同一张图、各自持自己的 view 子资源范围 / 描述符类型 /
+ * image layout。**本结构体是描述符链的唯一持有者**——原先"一个附件一个采样描述符"
+ * 的三个平铺字段（heapSlot / hasSampleDescriptor / sampleViewCreate）已收敛进
+ * RtAttachment::descriptors，不留两份真相源。
+ *
+ * 🔴 指针链生命周期前提（v341 writeResourceDescriptors 语义，同 TextureAsset）：
+ * imageDesc.pView → 本项的 viewCreate、resourceDesc.data.pImage → 本项的 imageDesc，
+ * 三者都指向**本结构体内部**，所以本结构体的地址必须终身稳定。它住在
+ * RtAttachment::descriptors（std::vector）里，而该 vector **只在首建时定容、此后
+ * 永不 resize**（重建只原地改字段）——reallocation 会让已交给驱动的指针链悬空。
+ * 该不变式由 ensure 的规格对账（项数不符即报错）机器守住，不靠注释自觉。
+ */
+export struct RtDescriptor {
+	vk::ImageViewCreateInfo viewCreate{};  // imageDesc.pView 的稳定指向目标（重建只换 .image 句柄）
+	vk::ImageDescriptorInfoEXT imageDesc{};  // data.pImage 链上游（v341：pView 指 create info）
+	vk::ResourceDescriptorInfoEXT resourceDesc{};  // 描述符定义（type + data.pImage 链）
+	vk::HostAddressRangeEXT dst{};  // 描述符写入目标槽范围（getSlotCpuAddress 解析）
+	uint32_t heapSlot = 0;  // 本项的 heap 槽号（首建定号、跨重建复用）
+	vk::DescriptorType type = vk::DescriptorType::eSampledImage;  // 描述符类型（采样项的判据）
+	vk::ImageLayout layout = vk::ImageLayout::eShaderReadOnlyOptimal;  // 描述符声明的 image layout
+	vk::ImageSubresourceRange range{};  // 本项 view 的子资源范围（不随重建变）
+};
+
+/**
+ * 一个描述符附件项的**规格**（调用方申报，缓存照此领号 + 写描述符）。
+ */
+export struct RtDescriptorSpec {
+	vk::ImageSubresourceRange range{};  // 本项 view 的子资源范围（aspect + mip 段）
+	vk::DescriptorType type = vk::DescriptorType::eSampledImage;  // 描述符类型
+	vk::ImageLayout layout = vk::ImageLayout::eShaderReadOnlyOptimal;  // 描述符 image layout
+	/**
+	 * 预发号（有值 = 用外部台账已发的槽号，缓存**不**再领号）。
+	 * 存在的理由 = 时序：装配期要把槽号烘进管线条目，而图可能首帧才建（EVSSM 矩图的
+	 * 采样槽即此，见 Resources::ensureEvssmSampleSlot）。nullopt = 首建时由缓存
+	 * 在 Runtime 段领号（模块侧不再自领槽）。
+	 */
+	std::optional<uint32_t> heapSlot{};
+};
+
+/**
+ * 附件规格（image 侧形态 + 描述符清单）。走这个入口 = 多 mip / 自定义 usage /
+ * 多描述符。**老四参入口 = 本规格的一份取值**（mipLevels 1 + 默认 usage 档 +
+ * 一个全图采样项），它逐字节复刻过去靠把这份取值传进同一个实现来保证——
+ * 老路径没有第二条实现可漂。
+ */
+export struct RtAttachmentSpec {
+	vk::ImageAspectFlags aspect = vk::ImageAspectFlagBits::eColor;  // 附件主 view 的 aspect
+	uint32_t mipLevels = 1;  // 图 mip 数（老入口恒 1）
+	/** image usage；**空 = 按 aspect 取既有默认档**（颜色档 = COLOR_ATTACHMENT|TRANSFER_SRC
+	 * |TRANSFER_DST|SAMPLED，深度档 = DEPTH_STENCIL_ATTACHMENT|SAMPLED）——老入口正是靠
+	 * 这条拿到与过去逐字节相同的 usage，默认档在本文件只写一次 */
+	vk::ImageUsageFlags usage{};
+	bool dedicatedMemory = false;  // VMA 独占内存（采样图先例；老入口恒 false）
+	const char* allocationName = "render_target_cache/rt";  // VMA 调试名（vma 日志归属用）
+	/** 描述符清单（逐项 = 领号 + 建 view create info + 写描述符）；**空 = 本附件不写任何
+	 * 描述符**（老入口不靠这个默认值，它显式给出那一个全图 SAMPLED_IMAGE 项） */
+	std::vector<RtDescriptorSpec> descriptors{};
+};
+
+/**
  * offscreen RT 缓存条目（Phase 6 批次 4；架构债务续账步骤 2 随 RenderTargetCache 拆出，
  * 原 Resources::RtAttachment）。key = attachment 名，幂等创建 / extent 失配重建（随
  * swapchain resize，重建前 waitIdle——双帧在飞下旧 RT 可能仍被另一帧命令引用，同
  * recreateDepthImage 规则）。
- * usage = COLOR_ATTACHMENT | TRANSFER_SRC | TRANSFER_DST | SAMPLED（blit 上屏与
- * shader 采样两条消费路都预留）；format 由调用点解析（"inherit" = swapchain 格式，
- * blit 到后缓冲要求同格式类，LINEAR filter 的 VUL 兼容前提）。
+ * 默认（不传规格）usage = COLOR_ATTACHMENT | TRANSFER_SRC | TRANSFER_DST | SAMPLED
+ *（blit 上屏与 shader 采样两条消费路都预留）；format 由调用点解析（"inherit" =
+ * swapchain 格式，blit 到后缓冲要求同格式类，LINEAR filter 的 VUL 兼容前提）。
  * 存于 std::map，节点地址稳定（view 的 raii 对象与描述符指针链不 move）。
  */
 export struct RtAttachment {
@@ -29,17 +91,24 @@ export struct RtAttachment {
 	// 重建计数：extent/format 漂移换新图（真实布局回 Undefined）——消费方
 	//（Renderer 布局追踪）据此重置，旧值失配 = spec 违例
 	uint64_t generation = 0;
-	// Phase 7 gap ④：供 deferred light pass 采样的 SAMPLED_IMAGE 描述符链。
-	// heapSlot 首建 allocSlot 分配、跨 resize 复用（重建只换 image/view、槽不变，
-	// 故 light 管线 baked 的槽号永久有效）。描述符指针链（imageDesc.pView→
-	// sampleViewCreate、resourceDesc.data.pImage→imageDesc）存本结构体——std::map
-	// 节点地址稳定，满足 v341 writeResourceDescriptors 指针生命周期前提（同 TextureAsset）
-	uint32_t heapSlot = 0;  // SAMPLED_IMAGE 槽号（首建 allocSlot，跨 resize 复用）
-	bool hasSampleDescriptor = false;  // 采样描述符已建标记（首建后恒 true）
-	vk::ImageViewCreateInfo sampleViewCreate{};  // imageDesc.pView 的稳定指向目标
-	vk::ImageDescriptorInfoEXT imageDesc{};  // data.pImage 链上游（v341：pView 指 create info）
-	vk::ResourceDescriptorInfoEXT resourceDesc{};  // eSampledImage 描述符定义
-	vk::HostAddressRangeEXT dst{};  // 描述符写入目标槽范围（getSlotCpuAddress 解析）
+	/**
+	 * 本附件的全部描述符附件项（**唯一真相源**；规格顺序 = 本向量顺序）。
+	 * 🔴 首建定容后永不 resize（指针链稳定前提，见 RtDescriptor 头注释）；重建只
+	 * 原地换 viewCreate.image 并重写描述符，**槽号跨重建复用**（管线 baked 的槽号
+	 * 因此永久有效——这也是"图迁入缓存"的结构性收益来源）。
+	 */
+	std::vector<RtDescriptor> descriptors;
+
+	/**
+	 * @return 本附件的 SAMPLED_IMAGE 描述符（heapSlot 查询面的语义本体）；无采样项 →
+	 * nullptr。不是"取第 0 项"的碰运气查找：一个附件至多一个采样描述符是 ensure 的
+	 * 规格校验守住的不变式（多要即报错），所以这个谓词至多一元。
+	 */
+	[[nodiscard]] const RtDescriptor* sampleDescriptor() const {
+		auto it = std::ranges::find_if(descriptors,
+			[](const RtDescriptor& d) { return d.type == vk::DescriptorType::eSampledImage; });
+		return it == descriptors.end() ? nullptr : &*it;
+	}
 };
 
 /**
@@ -63,6 +132,9 @@ export class RenderTargetCache {
 	 * 幂等创建（或 extent/format 失配时重建）一个 offscreen RT，返回 map 节点稳定指针
 	 *（std::expected 不支持引用类型，AGENTS 规范）。行为契约见 RtAttachment 注释。
 	 *
+	 * **本重载 = 老行为逐字节不变**：mipLevels=1、usage 按 aspect 取颜色/深度档、
+	 * 一个全图 SAMPLED_IMAGE 描述符（eShaderReadOnlyOptimal）、槽由缓存在 Runtime 段领。
+	 *
 	 * **深度 RT（批 11.2 基建）**：aspect = eDepth 时三处随深度面走——① image usage 用
 	 * `DEPTH_STENCIL_ATTACHMENT | SAMPLED`（**不加** transfer 两端：深度格式对 transfer
 	 * 的支持按格式而异，且本缓存无需求，多要一个 flag 就多一份驱动差异面）；② RT view 与
@@ -81,14 +153,34 @@ export class RenderTargetCache {
 		vk::Extent2D extent, vk::Format format,
 		vk::ImageAspectFlags aspect = vk::ImageAspectFlagBits::eColor);
 
+	/**
+	 * 规格入口（多 mip / 自定义 usage / 多描述符）。幂等语义与老入口完全相同：
+	 * 命中 = 已存在且 extent/format 均匹配；重建 = waitIdle 后换 image/view、
+	 * generation+1、**描述符槽号跨重建复用**。
+	 *
+	 * 规格是调用方的**终身契约**：同名二次调用若换了描述符项数 / 类型 / layout /
+	 * 子资源范围，ensure 直接报错而不是静默改——烘进管线条目的槽号只对"规格不变、
+	 * 只有图在换"这一种漂移有意义，别的漂移必须点名。
+	 * @param name 缓存 key（也是领号时写进槽台账的 owner 名）
+	 * @param extent 图 extent
+	 * @param format 图格式
+	 * @param spec 附件规格（aspect / mip 数 / usage / 描述符清单，见 RtAttachmentSpec）
+	 * @return 稳定指针；Error = 规格漂移 / 采样描述符多于一个 / VMA 图像创建 /
+	 *   allocSlot / 槽地址查询失败
+	 */
+	[[nodiscard]] std::expected<RtAttachment*, Error> ensure(const std::string& name,
+		vk::Extent2D extent, vk::Format format, const RtAttachmentSpec& spec);
+
 	/** @return RT 的 SAMPLED_IMAGE heap 槽号（ensure 首建分配、跨 resize
 	 * 复用，管线 baked 永久有效）；尚未 ensure 的 RT 名 → nullopt（调用方须先 ensure
-	 * 该 RT） */
+	 * 该 RT）；已 ensure 但规格里没有采样描述符 → 同样 nullopt（= 老
+	 * hasSampleDescriptor==false 的形态） */
 	[[nodiscard]] std::optional<uint32_t> heapSlot(const std::string& name) const {
 		auto it = rtAttachments.find(name);
-		if (it == rtAttachments.end() || !it->second.hasSampleDescriptor)
+		if (it == rtAttachments.end())
 			return std::nullopt;
-		return it->second.heapSlot;
+		const auto* sampled = it->second.sampleDescriptor();
+		return sampled == nullptr ? std::nullopt : std::optional<uint32_t>{sampled->heapSlot};
 	}
 
 	/** @return 已存在 RT 的稳定指针（帧内捕获直读 GB image/extent/format；未建 =
@@ -103,94 +195,5 @@ export class RenderTargetCache {
 	RGL::DeviceContext& device;  // 设备层引用（waitIdle / writeResourceDescriptorsEXT）
 	std::map<std::string, RtAttachment> rtAttachments;  // std::map 节点地址稳定（RtAttachment 指针链前提）
 };
-
-/**
- * 创建/重建行为契约见 RtAttachment 注释。实现：命中 = 已存在且 extent/format
- * 均匹配（不重建）；重建先 waitIdle（双帧在飞安全）再换 image/view、generation+1；
-	 * SAMPLED_IMAGE 槽首建 allocSlot Runtime、跨 resize 复用（槽号永久有效，light 管线 baked 不失效）；
- * 描述符指针链存 map 节点（v341 契约：imageDesc.pView 指 create info 而非 VkImageView，
- * 见体内注释）；forward/offscreen 图不 bind 此槽 = 无副作用（行为中性）。
- */
-inline std::expected<RtAttachment*, Error> RenderTargetCache::ensure(
-		const std::string& name, vk::Extent2D extent, vk::Format format,
-		vk::ImageAspectFlags aspect) {
-		const bool isDepth = aspect == vk::ImageAspectFlagBits::eDepth;
-		auto& descriptorHeap = kernel.getDescriptorHeap();
-		auto it = rtAttachments.find(name);
-		if (it != rtAttachments.end() && it->second.extent == extent &&
-			it->second.format == format)
-			return &it->second;
-
-		// 重建（extent 随 swapchain resize / 格式漂移）：双帧在飞下旧 RT 可能仍被
-		// 另一帧命令引用 → waitIdle 后替换（同 recreateDepthImage 规则）
-		device.getDevice().waitIdle();
-
-		vk::ImageCreateInfo info{};
-		info.imageType = vk::ImageType::e2D;
-		info.format = format;
-		info.extent = vk::Extent3D(extent.width, extent.height, 1);
-		info.mipLevels = 1;
-		info.arrayLayers = 1;
-		info.samples = vk::SampleCountFlagBits::e1;
-		info.tiling = vk::ImageTiling::eOptimal;
-		info.initialLayout = vk::ImageLayout::eUndefined;
-		// 消费面：colorWrite（渲入）+ transferRead/Write（blit 两端）+ sampleRead
-		//（shader 采样，后处理类图预留）。深度档（批 11.2 阴影图）：DEPTH_STENCIL_ATTACHMENT
-		// + SAMPLED，**不申请 transfer 两端**（深度格式的 transfer 支持按格式而异，
-		// 且本缓存对深度 RT 无 blit 需求——少要一个 flag 少一分驱动差异面）
-		info.usage = isDepth
-			? (vk::ImageUsageFlagBits::eDepthStencilAttachment
-				  | vk::ImageUsageFlagBits::eSampled)
-			: (vk::ImageUsageFlagBits::eColorAttachment
-				  | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst
-				  | vk::ImageUsageFlagBits::eSampled);
-		VmaAllocationCreateInfo alloc{};
-		alloc.usage = VMA_MEMORY_USAGE_AUTO;
-		auto imageResult = kernel.getAllocator().createImage(info, alloc, nullptr, "render_target_cache/rt");
-		if (!imageResult)
-			return std::unexpected(std::move(imageResult).error());
-
-		RtAttachment& slot = rtAttachments[name];  // 覆盖旧值（map 节点地址稳定）
-		const uint64_t prevGeneration = slot.generation;
-		slot.image = std::move(*imageResult);
-		slot.extent = extent;
-		slot.format = format;
-		slot.generation = prevGeneration + 1;
-		vk::ImageViewCreateInfo viewInfo{};
-		viewInfo.image = slot.image.image;
-		viewInfo.viewType = vk::ImageViewType::e2D;
-		viewInfo.format = format;
-		viewInfo.subresourceRange = {aspect, 0, 1, 0, 1};
-		slot.view.emplace(device.getDevice(), viewInfo);
-
-		// Phase 7 gap ④：写 SAMPLED_IMAGE 描述符供 deferred light pass 采样。首建 allocSlot Runtime，
-		// 跨 resize 复用同槽（重建只换 image→更新 sampleViewCreate，指针链稳定）；light 管线
-		// baked 的槽号因此永久有效。forward/offscreen 图不 bind 此槽 = 无副作用（行为中性）。
-		if (!slot.hasSampleDescriptor) {
-			auto sampleSlot = kernel.allocSlot(RGL::SlotSegment::Runtime, name.c_str());
-			if (!sampleSlot)
-				return std::unexpected(std::move(sampleSlot).error());
-			slot.heapSlot = *sampleSlot;
-			slot.hasSampleDescriptor = true;
-		}
-		slot.sampleViewCreate = vk::ImageViewCreateInfo{};
-		slot.sampleViewCreate.image = slot.image.image;
-		slot.sampleViewCreate.viewType = vk::ImageViewType::e2D;
-		slot.sampleViewCreate.format = format;
-		slot.sampleViewCreate.subresourceRange = {aspect, 0, 1, 0, 1};
-		slot.imageDesc = vk::ImageDescriptorInfoEXT{};
-		slot.imageDesc.pView = &slot.sampleViewCreate;  // v341 契约：pView 指 create info（非 VkImageView）
-		slot.imageDesc.layout = vk::ImageLayout::eShaderReadOnlyOptimal;
-		slot.resourceDesc = vk::ResourceDescriptorInfoEXT{};
-		slot.resourceDesc.type = vk::DescriptorType::eSampledImage;
-		slot.resourceDesc.data.pImage = &slot.imageDesc;
-		auto slotAddr = descriptorHeap.getSlotCpuAddress(slot.heapSlot);
-		if (!slotAddr)
-			return std::unexpected(std::move(slotAddr).error());
-		slot.dst = vk::HostAddressRangeEXT{*slotAddr, descriptorHeap.getDescriptorSize()};
-		device.getDevice().writeResourceDescriptorsEXT(slot.resourceDesc, slot.dst);
-
-		return &slot;
-	}
 
 }  // namespace RGL

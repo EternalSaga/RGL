@@ -177,7 +177,7 @@ void Renderer::evssmPreFrame() {
 	// GPU 执行上一帧期间），同 IzbShadow 重建规则。旧注释称「热开门（RPC 拨开关）」
 	// 已不成立：setDiagnostics 全仓仅启动期一处调用，门进程内不可变（2026-10-02 核对）。
 	evssmShadow = std::make_unique<RGL::EvssmShadow>(
-		vkDevice, *resources, kShadowMapSize,
+		vkDevice, *resources, *rtCache, kShadowMapSize,
 		shadowAtlasColumns(kActiveShadowCascades), kEvssmMipLevels, 5.5f,
 		*shadowSlot, *momentsSlot, offGraphSync);
 }
