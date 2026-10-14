@@ -43,11 +43,25 @@ module;
  *   M8 桥常量被漂移（schema 改数字不改 shader，或反之）→ 桥用例直接编译期红
  *   M9 `firstRow += gate.rowsPerCascade` 写成 `+= 1` → 红「c2/c3 的 pair 数字 360/432」
  *   M10 构建器输入 `in.visible = casterInShadowVolume(...)` 恒置 true（剔除判据失效）
- *      → 红「逐行 gcX == [1,1,0]/[1,1,0]/[1,1,1] + word[5] == 2×簇数」
+ *      → 红「逐行 gcX == [1,1,0]/[1,1,0]/[1,1,1] + word[5] == 2×簇数」+「全不可见级联 gcX 全 0」
+ *        +「债-113 taskCount」（本批新增，期望 2/2/3 变 3/3/3）
+ *   M11 `.taskCount = table->rows.size()`（把行数当 task 数）→ 红「债-113 taskCount」
+ *   M12 `.taskCount = table->sumMeshGroupCount`（搬错锚）→ 红「债-113 taskCount」
+ *   M13 `.taskCount` 不搬（留默认 0）→ 红「债-113 taskCount」
+ *
+ * ### 2026-10-14 追加（债-113 `mdi.tasks`）变异**实测**读数
+ * harness = `/tmp/opencode/mutate_mdi_tasks.py`（四条防线齐，进场基线 sha256 `fd00dcebd8638fa7`，
+ * 每条还原后逐字节复核 + 全量基线复绿）：M11 / M12 / M13 各红 **1** 条（全部来自「债-113
+ * taskCount」用例）；M10 由旧记录的 1 条变 **3** 条（连带「全不可见级联」与本批新增那条）。
+ * ⚠ 本小节数字是**先写后测**的教训当场抓出来的：初稿凭推断写「M10 → 2 条」，实测是 3 条
+ * （漏了「全不可见级联」也断言 `gcX == 0`）——已按实测改对。
  *
  * ## 已知覆盖缺口（诚实声明）
  *   · 执行器 `prepareMdiShadowRows` 的四道 fail-fast 与 `drawOne` 的 MDI 分支要真设备 +
  *     Renderer 对象，单测打不到 ⟹ 归 A3/A4/A6（实机）+ 变异 harness（临时复现档）。
+ *   · 债-113 只测到**上游锚**（段.taskCount）。`mdi.tasks` 计数器本身（`profilerAddMdiTasks`
+ *     ← `prepareMdiShadowRows` 累加 ← flush 推第五条 CounterRecord）在单测射程外：它要 Renderer
+ *     录制一帧。验收按债-113 原文走实机读数（同配置两次逐次相同 + 门关档恒 0），不硬凑假绿。
  *   · 「回落时 WARNING 出声」断言的是**形态**（segments 清空 + 逐条 draw 原样），文案归因
  *     靠人工读日志（RLLogger 是进程单例，不适合在单测里劫持）。
  */
@@ -269,6 +283,56 @@ TEST_CASE("生效档：行内容 = 构建器闭式（可见 gcX=1、不可见 0�
 		REQUIRE(seg.rows.size() == 3u);
 		CHECK(seg.rows.data() == f.rows.data() + seg.firstRow);
 		CHECK(seg.frameSlot == 1u);
+	}
+}
+
+/**
+ * 债-113：`MdiShadowSegment::taskCount` = 本段 task 数（= Σ gcX）—— `mdi.tasks` 计数器的**唯一**
+ * 上游读数。它存在的意义是「★M-3T-c 的头条收益（每级联 4724 → 1530）会不会静默回退」，
+ * 所以这一格必须有牙：搬错锚（行数 / mesh 组数之和 / 干脆没搬）都要红。
+ * 期望值出处 = 文件头闭式可见集手算（A 恒可见、B 全可见、C 仅 c3）⟹ 2 / 2 / 3，
+ * 🔴 不读 `sumGroupCountX`（那是被测锚，抄进期望 = 断言被测码自己）。
+ */
+TEST_CASE("债-113：段 taskCount = Σ gcX 闭式（2/2/3），全不可见档 = 0 而行数照旧") {
+	// 变异红线 M11 `.taskCount = table->rows.size()`（行数当 task 数）→ 本用例红（c1/c2 是 3≠2）
+	// 变异红线 M12 `.taskCount = table->sumMeshGroupCount`（搬错锚 = 2×簇数之和 24/24/44）→ 红
+	// 变异红线 M13 `.taskCount` 不搬（默认 0）→ 红（第一段就红，且第二段以下不再 REQUIRE 挡路）
+	MdiFixture f;
+	f.prepare(10u);
+	const auto cands = makeCands();
+	f.emit(std::span<const ShadowCandidate>{cands});
+	REQUIRE(f.segments.size() == 3u);
+	const uint32_t expTasks[3] = {2u, 2u, 3u};  // c1/c2 各少一枚（C 不可见）、c3 全可见
+	for (uint32_t c = 1u; c < kActiveShadowCascades; ++c) {
+		const auto& seg = f.segments[c - 1u];
+		CHECK(seg.taskCount == expTasks[c - 1u]);
+		CHECK(seg.rowCount == 3u);
+		CHECK(seg.taskCount <= seg.rowCount);  // 逐行 gcX ≤ 1（不变量 4）⟹ task 数不超行数
+		// 锚与行数组对账：期望侧**独立**从 seg.rows 重算一遍（不是把锚抄一遍）
+		uint32_t sum = 0u;
+		for (const auto& row : seg.rows)
+			sum += row.groupCountX;
+		CHECK(seg.taskCount == sum);
+	}
+	// 🔴 c1/c2 有一枚不可见行 ⟹ task 数**严格小于**行数。这一格是「把 rowCount 当 taskCount」
+	// 唯一的信号来源：c3 两数相等（3=3）⟹ 只钉 c3 的写法对 M11 完全失明（同 test_mdi_rows
+	// 「弱化不只测删除」那条：判据要落在两个候选值不重合的输入上）。
+	CHECK(f.segments[0].taskCount < f.segments[0].rowCount);
+	CHECK(f.segments[1].taskCount < f.segments[1].rowCount);
+
+	// 全不可见档（孔洞流）：行数照旧 3、task 数归零 —— 门关/零 task 形态的单元级锚点
+	MdiFixture far;
+	far.prepare(10u);
+	std::vector<ShadowCandidate> away = {
+		cand(2u, 100.0f, kOldEntry, kClusterEntry, kMdiEntry, 4u, 3u),
+		cand(5u, -100.0f, kOldEntry, kClusterEntry, kMdiEntry, 1u, 0u),
+		cand(9u, 100.0f, kOldEntry, kClusterEntry, kMdiEntry, 7u, 11u),
+	};
+	far.emit(std::span<const ShadowCandidate>{away});
+	REQUIRE(far.segments.size() == 3u);
+	for (const auto& seg : far.segments) {
+		CHECK(seg.taskCount == 0u);
+		CHECK(seg.rowCount == 3u);  // 行不压紧（行序 = 候选序），归零的只有 task 数
 	}
 }
 

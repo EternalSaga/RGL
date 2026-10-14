@@ -86,15 +86,17 @@ export class DeviceContext {
 	 * dgcSupport（DGC 能力位派生）→ queueManager → optionalFeatures（探测）→ featuresChain（required 链）→
 	 * eds3Feature → depthClipBaseFeature → robustness2Feature → presentTimingFeature →
 	 * presentId2Feature（五个 optional 结构，
-	 * 按支持位初始化）→ checked（校验前移）→ device → 三队列
-	 * （graphics/compute/transfer）→ 三命令池（graphics/compute =
-	 * eResetCommandBuffer，transfer = eTransient | eResetCommandBuffer）。
+	 * 按支持位初始化）→ checked（校验前移）→ device → 图形队列 + 图形命令池
+	 *（eResetCommandBuffer）。**只有一条队列**：桌面 / APU 的 family 0 是全功能族，
+	 * 旧版多出来的 compute/transfer 两个句柄恒被钳回同一条队列且零使用，已删
+	 *（判据与"将来怎么拿第二条队列"的形态 → `QueueFamilyManager` 类注释）。
 	 * @param vkInstance 实例层（读 raii Instance 枚举物理设备）
 	 * @note 失败路径：pickPhysicalDevice 失败 / precheckDevice 扩展或 feature 缺失抛
 	 *   std::runtime_error（describe() 带 [Code]）；raii Device / CommandPool 构造
 	 *   失败抛 vk::SystemError（createCommandPool 的 expected Error 分支是预留路径，
-	 *   不可达）；queueManager 与三个 getQueue 的 .value() 安全（create 当前恒成功；
-	 *   三角色恒被 QueueFamilyManager 回落分配，QueueNotAllocated 不可达）
+	 *   不可达）；queueManager 与 getQueue 的 .value() 在**物理设备无 eGraphics family**
+	 *   时抛 bad_expected_access（打分制不查图形能力，故此路径理论可达；旧版此处是
+	 *   std::map::at 抛 out_of_range，语义相同、信息更少）
 	 */
 	DeviceContext(RGL::AppContext& vkInstance)
 		: vkInstance(vkInstance),
@@ -133,17 +135,9 @@ export class DeviceContext {
 	   *（旧实现在构造体校验 = 失败路径死代码）。本成员只为钉死初始化顺序。 */
 	  checked(precheckDevice(*physicalDevice, featuresChain)),
 	  device(createDevice(*physicalDevice, queueManager, featuresChain, optionalFeatures, eds3Feature, depthClipBaseFeature, robustness2Feature, presentTimingFeature, presentId2Feature)),
-		  graphicsQueue(queueManager.getQueue(device, RGL::QueueFamilyRole::Graphics).value()),
-		  computeQueue(queueManager.getQueue(device, RGL::QueueFamilyRole::Compute).value()),
-		  transferQueue(queueManager.getQueue(device, RGL::QueueFamilyRole::Transfer).value()),
-		  graphicsCommandPool(createCommandPool(device, queueManager.getFamilyIndex(RGL::QueueFamilyRole::Graphics),
+		  graphicsQueue(queueManager.getQueue(device).value()),
+		  graphicsCommandPool(createCommandPool(device, queueManager.getFamilyIndex(),
 			  vk::CommandPoolCreateFlagBits::eResetCommandBuffer)
-				  .value()),
-		  computeCommandPool(createCommandPool(device, queueManager.getFamilyIndex(RGL::QueueFamilyRole::Compute),
-			  vk::CommandPoolCreateFlagBits::eResetCommandBuffer)
-				  .value()),
-		  transferCommandPool(createCommandPool(device, queueManager.getFamilyIndex(RGL::QueueFamilyRole::Transfer),
-			  vk::CommandPoolCreateFlagBits::eTransient | vk::CommandPoolCreateFlagBits::eResetCommandBuffer)
 				  .value()) {
 		if (auto logger = RLLogger::getInstance()) {
 			logger->info("Device DGC support: graphicsIndirect={} computeIndirect={} staticGraphicsIndirect={}",
@@ -179,7 +173,7 @@ export class DeviceContext {
 	/** @return 图形队列（vk::Queue 为 C 句柄，按值返回）；主渲染队列。 */
 	vk::Queue getGraphicsQueue() const { return graphicsQueue; }
 	/** @return 图形队列 family 下标（QueueFamilyManager 派生；Phase 10 imgui 后端 init 等按值场景）。 */
-	uint32_t getGraphicsQueueFamily() const { return queueManager.getFamilyIndex(RGL::QueueFamilyRole::Graphics); }
+	uint32_t getGraphicsQueueFamily() const { return queueManager.getFamilyIndex(); }
 	/** @return 图形命令池（const 引用；eResetCommandBuffer）；主渲染（Renderer）/ 资产
 	 * 上传（模型 / 纹理）的命令缓冲分配与录制。 */
 	const vk::raii::CommandPool& getGraphicsCommandPool() const { return graphicsCommandPool; }
@@ -472,12 +466,10 @@ export class DeviceContext {
 	vk::PhysicalDevicePresentId2FeaturesKHR presentId2Feature;  // Phase 9.3（同组，与 presentTiming 整组同进退）
 	bool checked;  // 仅用于钉死初始化顺序：precheckDevice 先于 device 构造（见构造器）
 	vk::raii::Device device;  // raii Device（初始化列表由 createDevice 构造；扩展/feature 校验已前移到 checked）
-	vk::Queue graphicsQueue;  // 图形队列（vk::Queue C 句柄，按值）；主渲染队列
-	vk::Queue computeQueue;  // 计算队列（保留给未来使用，当前未用）
-	vk::Queue transferQueue;  // 传输队列（保留给未来使用，当前未用）
+	vk::Queue graphicsQueue;  // 图形队列（vk::Queue C 句柄，按值）；主渲染队列，也是**唯一**队列
+	                          //（全功能族 ⟹ 它同时跑 compute / transfer；第二条队列的形态见
+	                          // `QueueFamilyManager` 类注释）
 	vk::raii::CommandPool graphicsCommandPool;  // 图形命令池（eResetCommandBuffer）
-	vk::raii::CommandPool computeCommandPool;  // 计算命令池（eResetCommandBuffer；保留给未来使用，当前未用）
-	vk::raii::CommandPool transferCommandPool;  // 传输命令池（eTransient | eResetCommandBuffer；保留给未来使用，当前未用）
 };
 
 }  // namespace RGL

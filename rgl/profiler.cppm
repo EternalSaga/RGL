@@ -139,6 +139,9 @@ export void profilerPushCounter(const CounterRecord& rec);
  *   = 生效级联数，关 = 0）。
  * - `mdi.rows` = 经 MDI 提交的**行数**（含 `gcX=0` 空行；与 `mdi.count` 一起给 A5 收益判据
  *   的闭式锚对账口径，容量读上界、实际读可切数，两口径别混 → §19.5）。
+ * - `mdi.tasks` = 经 MDI 提交的 **task 数** = Σ 各行 `groupCountX`（★M-3T-c 起 gcX 的单位就是
+ *   task）。债-113 立项理由：★M-3T-c 的头条收益（每级联 4724 → 1530）当时**没有计数器**，只能
+ *   靠一次性探针取数 ⟹ 收益漂了没人发现。`mdi.rows / mdi.tasks` 之比 = 空行占比。
  */
 export void profilerAddDraws(uint32_t n);
 /** @see profilerAddDraws 命令口径说明 */
@@ -152,21 +155,43 @@ export void profilerAddCommands(uint32_t n);
  */
 export void profilerAddMdi(uint32_t rows);
 /**
- * 帧末收口（drawFrame 录制完毕处调用一次）：把本帧累加值推成**四**条 CounterRecord
- * （draw/vkcmd/mdi.count/mdi.rows）并清零。profiler 关 = profilerPushCounter 自身静默丢，
+ * 债-113：本帧 MDI **task 数**入账（= Σ `groupCountX`，构建侧的聚合锚 `sumGroupCountX`）。
+ *
+ * 🔴 **入账点 = 录制期的行表落地点（`Renderer::prepareMdiShadowRows`），两处都不是**：
+ *  · 不在 `drawOne`：那是**盲执行器**，只认 `drawCount`，让它算 task 等于把行表语义漏进
+ *    盲执行器（ECS 规范 4，债-113 原文明令禁止的那条）。
+ *  · 也不在采集侧（`render_list:mdi`）：那里算得出同一个锚，但 `mdi.count` / `mdi.rows` 是
+ *    **录制期**入账的，把 tasks 放采集期会让四条同源计数跨两个阶段 —— 将来录制期一旦新增
+ *    回落分支（今天的容量/轮转预检都在采集期），tasks 就会在"没提交"的帧上报出非零值，
+ *    而这条计数器存在的意义正是"收益会不会静默回退"。落地点 = 行表真的写进 ring 之后。
+ * @param tasks 本帧全部 MDI 段的 task 数之和（门关 = 不调用 ⟹ 恒 0）
+ */
+export void profilerAddMdiTasks(uint32_t tasks);
+/**
+ * 帧末收口（drawFrame 录制完毕处调用一次）：把本帧累加值推成**五**条 CounterRecord
+ * （draw/vkcmd/mdi.count/mdi.rows/mdi.tasks）并清零。profiler 关 = profilerPushCounter 自身静默丢，
  * 累加器也每帧被清零（不泄漏、不增长）。
  */
 export void profilerFlushFrameCounters();
 
 namespace {
-/** 本帧 draw 累加（profilerAddDraws 写、profilerFlushFrameCounters 清零）。 */
-uint64_t g_frameDraws = 0;
-/** 本帧 vkCmd 累加（口径见 profilerAddDraws 注释）。 */
-uint64_t g_frameCommands = 0;
-/** ★M-1b：本帧 MDI **调用次数**累加（profilerAddMdi 写、flush 清零）。 */
-uint64_t g_frameMdiCalls = 0;
-/** ★M-1b：本帧经 MDI 提交的**行数**累加（含 gcX=0 空行；同上生命周期）。 */
-uint64_t g_frameMdiRows = 0;
+/**
+ * 本帧计数器（债-113 起五条）。🔴 **刻意收成一个结构体**，而不是五个 namespace 作用域全局：
+ *  · R-EC4（ECS 规范 3 的静态代理）数的是「列 0 可变全局条数」，五个字段合成**一条**命中
+ *    ⟹ 本文件基线 4 → 1（棘轮只准降；加一条计数器不该来基线要额度）。
+ *  · 真正的理由在 flush：旧写法要**逐字段手写清零**，而"新增一条计数器"得同时改
+ *    取数 / 清零 / 推记录三处 —— 单漏「清零」那处 = 该计数器跨帧累加、读数一路涨且零信号
+ *    （观察者自己造出静默漂移，正是债-113 要堵的那类形态）。整体赋值让它在结构上不可能漏。
+ */
+struct FrameCounters {
+	uint64_t draws = 0;     ///< 本帧逻辑 draw 条数（口径见 profilerAddDraws）
+	uint64_t commands = 0;  ///< 本帧 vkCmd 条数（同上）
+	uint64_t mdiCalls = 0;  ///< ★M-1b：MDI 调用次数（profilerAddMdi 写）
+	uint64_t mdiRows = 0;   ///< ★M-1b：经 MDI 提交的行数（含 gcX=0 空行）
+	uint64_t mdiTasks = 0;  ///< 债-113：经 MDI 提交的 task 数（= Σ gcX）
+};
+/** 本帧累加器（写侧 = 采集/录制路径，读侧 = profilerFlushFrameCounters 取数后整体清零）。 */
+FrameCounters g_frame;
 /** 每次 mesh draw 的命令数（pushDataEXT + bindShadersEXT + drawMeshTasksEXT；
  *  MDI 调用同值 = drawMeshTasksIndirectEXT 只替换那条 draw，见 profilerAddMdi）。 */
 constexpr uint64_t kCommandsPerDraw = 3;
@@ -178,6 +203,8 @@ constexpr std::string_view kCounterCommands = "vkcmd.count";
 constexpr std::string_view kCounterMdiCalls = "mdi.count";
 /** @see kCounterMdiCalls */
 constexpr std::string_view kCounterMdiRows = "mdi.rows";
+/** @see profilerAddMdiTasks 口径说明 */
+constexpr std::string_view kCounterMdiTasks = "mdi.tasks";
 }  // namespace
 
 /**
@@ -187,15 +214,15 @@ constexpr std::string_view kCounterMdiRows = "mdi.rows";
  * @param n 本次发射的 draw 条数
  */
 void profilerAddDraws(uint32_t n) {
-	g_frameDraws += n;
-	g_frameCommands += kCommandsPerDraw * n;  // 每 draw 的三条命令同处发射
+	g_frame.draws += n;
+	g_frame.commands += kCommandsPerDraw * n;  // 每 draw 的三条命令同处发射
 }
 
 /**
  * profilerAddCommands 定义（口径见 profilerAddDraws 声明注释）。
  * @param n 本次发射的 vkCmd 条数
  */
-void profilerAddCommands(uint32_t n) { g_frameCommands += n; }
+void profilerAddCommands(uint32_t n) { g_frame.commands += n; }
 
 /**
  * profilerAddMdi 定义（口径见其声明注释）：调用数/行数入账 + draw 口径的差值修正。
@@ -206,31 +233,34 @@ void profilerAddCommands(uint32_t n) { g_frameCommands += n; }
  * @param rows 本次 MDI 调用展开的行数（> 1，调用方守）
  */
 void profilerAddMdi(uint32_t rows) {
-	g_frameMdiCalls += 1;
-	g_frameMdiRows += rows;
-	g_frameDraws += rows - 1u;
+	g_frame.mdiCalls += 1;
+	g_frame.mdiRows += rows;
+	g_frame.draws += rows - 1u;
 }
 
-/** profilerFlushFrameCounters 定义（口径见其声明注释）：取数 → 清零 → 推四条计数。 */
+/**
+ * profilerAddMdiTasks 定义（口径与"为什么不在执行器/采集侧入账"见其声明注释）：纯累加，
+ * 与 `mdi.count` / `mdi.rows` 同生命周期（flush 时一并清零）。
+ * @param tasks 本帧 MDI task 数（= Σ gcX）
+ */
+void profilerAddMdiTasks(uint32_t tasks) { g_frame.mdiTasks += tasks; }
+
+/** profilerFlushFrameCounters 定义（口径见其声明注释）：取数 → 整体清零 → 推五条计数。 */
 void profilerFlushFrameCounters() {
 	const uint64_t frame = profilerCurrentFrame();
 	const uint64_t ts = steadyNowNs();
-	const uint64_t draws = g_frameDraws;
-	const uint64_t commands = g_frameCommands;
-	const uint64_t mdiCalls = g_frameMdiCalls;
-	const uint64_t mdiRows = g_frameMdiRows;
-	g_frameDraws = 0;
-	g_frameCommands = 0;
-	g_frameMdiCalls = 0;
-	g_frameMdiRows = 0;
-	profilerPushCounter(CounterRecord{.frame = frame, .tsNs = ts, .value = draws,
-		.name = kCounterDraws});
-	profilerPushCounter(CounterRecord{.frame = frame, .tsNs = ts, .value = commands,
-		.name = kCounterCommands});
-	profilerPushCounter(CounterRecord{.frame = frame, .tsNs = ts, .value = mdiCalls,
-		.name = kCounterMdiCalls});
-	profilerPushCounter(CounterRecord{.frame = frame, .tsNs = ts, .value = mdiRows,
-		.name = kCounterMdiRows});
+	const FrameCounters c = g_frame;
+	g_frame = {};  // 🔴 整体清零 = 新增计数器不需要在这里补行（漏清零的形态结构上不存在）
+	profilerPushCounter(
+		CounterRecord{.frame = frame, .tsNs = ts, .value = c.draws, .name = kCounterDraws});
+	profilerPushCounter(
+		CounterRecord{.frame = frame, .tsNs = ts, .value = c.commands, .name = kCounterCommands});
+	profilerPushCounter(CounterRecord{
+		.frame = frame, .tsNs = ts, .value = c.mdiCalls, .name = kCounterMdiCalls});
+	profilerPushCounter(
+		CounterRecord{.frame = frame, .tsNs = ts, .value = c.mdiRows, .name = kCounterMdiRows});
+	profilerPushCounter(
+		CounterRecord{.frame = frame, .tsNs = ts, .value = c.mdiTasks, .name = kCounterMdiTasks});
 }
 
 /**

@@ -36,8 +36,10 @@ import rlstd;
  * 本批只落**纯函数层 + 单测**，尚无调用方。渲染 pass 侧的落点已勘察：用**全屏
  * `fullscreenPass`（`drawLight` kind）**而不是 plan 原文写的 compute pass —— tonemap /
  * ao / taa 三个 pass 全是这个形状（全屏 draw 读纹理写 RGBA16F RT），走它就不需要
- * `RgPassKind` 新增 compute kind、不依赖批 14.4b 的图外布局护栏、也不碰闲置的
- * computeQueue（债-24）。勘察结论与代价对比 → `docs/phase14_plan.md` §1.10。
+ * `RgPassKind` 新增 compute kind、不依赖批 14.4b 的图外布局护栏、也不涉及独立计算队列
+ *（⚠ 那条队列**并不存在**：申请的是 family 0 的名额、被钳回与图形同一条 → `docs/compute_调研.md` §3）。
+ * 勘察结论与代价对比 → `docs/phase14_plan.md` §1.10；其中「图无 compute kind」那条理由已被
+ * `docs/compute_调研.md` §6 D1 定案消掉，但「全屏 draw 的 vertex 开销可忽略」仍成立 ⟹ 形态不变。
  */
 
 namespace RGL {

@@ -218,6 +218,9 @@ bool mdiBuildShadowSegments(std::span<const ShadowCandidate> cands,
 			.cascadeIndex = c,
 			.firstRow = firstRow,
 			.rowCount = static_cast<uint32_t>(table->rows.size()),
+			// 锚是 uint64_t，但不变量 3b 保证它恒等于 `rowCount − emptyRows`（逐行 gcX ≤ 1）
+			// ⟹ 上界就是 rowCount（uint32_t）⟹ 这条窄化不会回卷
+			.taskCount = static_cast<uint32_t>(table->sumGroupCountX),
 			.pipeline = gate.pipeline,
 			.frameSlot = mdi.frameSlot,
 			.loc = loc,

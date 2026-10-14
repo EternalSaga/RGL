@@ -10,59 +10,70 @@ import vkerror;
 namespace RGL {
 
 /**
- * 队列 family 角色（选择/分配的最小单位）：Graphics（图形）、Compute（计算）、
- * Transfer（传输）。三者可能落在同一个 family（核显常见）。
- */
-export enum class QueueFamilyRole {
-	Graphics,
-	Compute,
-	Transfer
-};
-
-/** 一个角色的队列分配结果：family 下标 + family 内物理队列下标。 */
-struct QueueAllocation {
-	uint32_t familyIndex;
-	uint32_t baseQueueIndex;
-};
-
-/**
- * 队列 family 选择与分配（vkdevice 层）：按 Graphics/Compute/Transfer 三个角色
- * 各选一个 family + 一个物理队列下标，并产出 vk::DeviceQueueCreateInfo
- *（priorities 为类成员，须比 vkCreateDevice 长寿）。
- * 选择逻辑（构造期）：
- * - Graphics/Compute = 首个带对应 flag 的 family（按序取第一个）；
- * - Transfer 优先**专用** transfer family（仅带 eTransfer、不带 graphics/compute），
- *   无专用则回落任意带 eTransfer 的 family，再回落 graphics family；
- *   Compute 无匹配时同样回落 graphics family；
- * - 同一 family 被多角色共享时在 hardware queueCount 内分配不同队列下标，
- *   超出 queueCount 时钳到 queueCount-1（共享末队列）。
+ * 队列 family 选择与分配（vkdevice 层）：**只申请一条图形队列**，产出
+ * vk::DeviceQueueCreateInfo（priorities 为类成员，须比 vkCreateDevice 长寿）。
+ *
+ * ## 为什么只有一个角色（2026-10-14 定案 → `docs/compute_调研.md` §3 / §6 D3）
+ * 旧版按 Graphics / Compute / Transfer 三个角色各选一条队列，但**任何有图形队列的桌面 / APU
+ * 上 family 0 必然带 COMPUTE** ⟹ Compute 的"首个带 eCompute 的族"恒命中 family 0，Transfer 的
+ * "专用族"判据又要求不含 graphics/compute 而恒不命中 ⟹ 三角色全被回落钳到**同一条物理队列**
+ *（本机 family 0 `queueCount = 1`，三角色坍缩成 `{0, 0}`）。那两个多出来的句柄因此是"从没被
+ * 读过的死状态"，而注释「保留给未来使用」会误导读代码的人以为"有独立队列，只是没用"。
+ *
+ * 🔴 **独立 compute 队列不是设备保证，是运行期查询结果**（很多设备的族是全功能的），所以它
+ * 不得建模成常驻成员。将来真要第二条队列时的形态三条，缺一不做：
+ * ① 能力查询返回 `optional` + **查不到就打日志出声**（"本机无独立 compute 族"），禁常驻成员；
+ * ② 提交面分叉的两个必要条件——查询真的拿到独立族 **且** 图派生的"本帧无消费者"集合非空
+ *（后者 = `docs/compute_调研.md` §7 批次 B2 的产物）；
+ * ③ 跨界资源的 queue-family 所有权转移要一并补（全仓现为 0 处，barrier 里恒 `QUEUE_FAMILY_IGNORED`）。
+ * 且注意 **独立族存在 ≠ 独立执行资源存在**（同文 §9 N4）：收益只取决于后者。
+ *
+ * 选择逻辑（构造期）：取首个带 `eGraphics` 的 family，申请其 index 0 一条队列。
  */
 export class QueueFamilyManager {
    public:
+	/** 物理设备上找不到带 eGraphics 的 family 时的哨兵值。 */
+	static constexpr uint32_t kNoFamily = 0xFFFFFFFFu;
+
 	/**
 	 * 工厂入口（成功语义封装）：构造 QueueFamilyManager 并包进 expected。
 	 * @param physicalDevice 物理设备（读 queue family 属性）
-	 * @return 构造好的管理器（当前实现恒成功，失败路径预留）
+	 * @return 构造好的管理器；无图形 family 时返回 QueueNotAllocated
 	 */
 	static std::expected<QueueFamilyManager, Error>
 	create(const vk::raii::PhysicalDevice& physicalDevice) {
 		QueueFamilyManager mgr{physicalDevice};
+		if (mgr.familyIndex == kNoFamily) {
+			return std::unexpected(Error{ErrorCode::QueueNotAllocated,
+				"No queue family with eGraphics on this physical device!"});
+		}
 		return mgr;
 	}
 
 	/**
-	 * 构造：扫描 queue family 属性，按类注释的选择逻辑填充 allocations 与
-	 * queueCreateInfos（每 family 一条 create info，优先级全 1.0f）。
+	 * 构造：扫描 queue family 属性，取首个带 eGraphics 的 family 并申请其 index 0 一条队列，
+	 * 产出 queueCreateInfos（一条，优先级 1.0f）。
 	 * @param physicalDevice 物理设备（引用成员，须比本对象长寿）
 	 */
-	QueueFamilyManager(const vk::raii::PhysicalDevice& physicalDevice)
+	explicit QueueFamilyManager(const vk::raii::PhysicalDevice& physicalDevice)
 		: physicalDevice(physicalDevice) {
-		auto queueFamilies = physicalDevice.getQueueFamilyProperties();
 		logger = RLLogger::getInstance();
+		const auto props = physicalDevice.getQueueFamilyProperties();
+		const auto firstGraphics = std::ranges::find_if(props,
+			[](const vk::QueueFamilyProperties& p) {
+				// 不写 `!= vk::QueueFlags{}`：rlvk 只导出 vulkan_enums.hpp（原始枚举），
+				// vk::QueueFlags 这个 bitmask 别名名不可见（缺名该补 rlvk 的 export using，
+				// 但这里用 Flags 的 operator bool 就够，不为省一个 cast 去扩导出面）
+				return static_cast<bool>(p.queueFlags & vk::QueueFlagBits::eGraphics);
+			});
+		if (firstGraphics == props.end())
+			return;  // familyIndex 留 kNoFamily，出声权在 create()
 
-		const auto roleToFamilies = selectRoleFamilies(queueFamilies);
-		const auto familyAllocatedCount = allocateQueues(roleToFamilies, queueFamilies);
-		buildQueueCreateInfos(familyAllocatedCount);
+		familyIndex = static_cast<uint32_t>(std::ranges::distance(props.begin(), firstGraphics));
+		// priorities 此后不再增长 ⟹ data() 指的那块堆内存在本对象存活期内稳定（vector 移动
+		// 转移的是缓冲区指针，元素地址不变，故 create() 按值返回也不悬空）
+		priorities.assign(1, 1.0f);
+		queueCreateInfos.emplace_back(vk::DeviceQueueCreateFlags{}, familyIndex, 1, priorities.data());
 	}
 
 	/** vkCreateDevice 用的 queue create info 列表（priorities 由本对象持有）。 */
@@ -71,30 +82,24 @@ export class QueueFamilyManager {
 	}
 
 	/**
-	 * 按角色取逻辑队列句柄。
+	 * 取本引擎唯一的逻辑队列句柄——图形队列（它同时带 compute / transfer 能力：桌面 / APU 的
+	 * family 0 是全功能族，这也是"独立 compute 队列"在本类里不成立的原因，见类注释）。
 	 * @param device 已创建的设备
-	 * @param role 队列角色
-	 * @return 该角色的 vk::Queue；角色未分配时返回 QueueNotAllocated
+	 * @return vk::Queue；无图形 family 时返回 QueueNotAllocated
 	 */
-	[[nodiscard]] std::expected<vk::Queue, Error>
-	getQueue(const vk::Device& device, QueueFamilyRole role) const {
-		auto it = allocations.find(role);
-		if (it == allocations.end()) {
+	[[nodiscard]] std::expected<vk::Queue, Error> getQueue(const vk::Device& device) const {
+		if (familyIndex == kNoFamily) {
 			return std::unexpected(Error{ErrorCode::QueueNotAllocated,
-				"Requested queue role not allocated!"});
+				"Graphics queue family not allocated!"});
 		}
-		return device.getQueue(it->second.familyIndex, it->second.baseQueueIndex);
+		return device.getQueue(familyIndex, 0);
 	}
 
 	/**
-	 * 角色对应的 queue family 下标。
-	 * @param role 队列角色
-	 * @return family 下标
-	 * @note 角色未分配时 std::map::at 抛 std::out_of_range（调用点均保证已分配）
+	 * 图形队列的 family 下标（present 能力检查 / 命令池创建 / timestampValidBits 族判定用）。
+	 * @return family 下标；未找到图形 family 时为 kNoFamily
 	 */
-	uint32_t getFamilyIndex(QueueFamilyRole role) const {
-		return allocations.at(role).familyIndex;
-	}
+	uint32_t getFamilyIndex() const { return familyIndex; }
 
 	/**
 	 * 检查 graphics family 能否向 surface present。
@@ -102,7 +107,7 @@ export class QueueFamilyManager {
 	 * @return 空值 = 可 present；不可时打 critical 日志并返回 SurfaceNotPresentable
 	 */
 	[[nodiscard]] std::expected<void, Error> checkPresentAbility(const vk::raii::SurfaceKHR& surface) const {
-		uint32_t graphicsFamilyIdx = getFamilyIndex(QueueFamilyRole::Graphics);
+		uint32_t graphicsFamilyIdx = getFamilyIndex();
 
 		if (!physicalDevice.getSurfaceSupportKHR(graphicsFamilyIdx, *surface)) {
 			const auto errMsg = fmt::format(
@@ -116,86 +121,9 @@ export class QueueFamilyManager {
 	}
 
    private:
-	/** 首轮选择：Graphics/Compute 取首个带 flag 的 family；Transfer 优先专用（仅 eTransfer）。 */
-	static std::map<QueueFamilyRole, uint32_t> selectRoleFamilies(
-		const std::vector<vk::QueueFamilyProperties>& queueFamilies) {
-		std::map<QueueFamilyRole, uint32_t> roleToFamilies;
-		for (uint32_t i = 0; i < queueFamilies.size(); ++i) {
-			const auto& props = queueFamilies[i];
-			if (!roleToFamilies.contains(QueueFamilyRole::Graphics) &&
-				(props.queueFlags & vk::QueueFlagBits::eGraphics))
-				roleToFamilies[QueueFamilyRole::Graphics] = i;
-			if (!roleToFamilies.contains(QueueFamilyRole::Compute) &&
-				(props.queueFlags & vk::QueueFlagBits::eCompute))
-				roleToFamilies[QueueFamilyRole::Compute] = i;
-			// Prefer dedicated transfer queue
-			if (!roleToFamilies.contains(QueueFamilyRole::Transfer) &&
-				(props.queueFlags & vk::QueueFlagBits::eTransfer) &&
-				!(props.queueFlags & vk::QueueFlagBits::eGraphics) &&
-				!(props.queueFlags & vk::QueueFlagBits::eCompute))
-				roleToFamilies[QueueFamilyRole::Transfer] = i;
-		}
-		applyRoleFallbacks(roleToFamilies, queueFamilies);
-		return roleToFamilies;
-	}
-
-	/** Transfer 无专用 → 任意 eTransfer → graphics；Compute 无匹配 → graphics。 */
-	static void applyRoleFallbacks(std::map<QueueFamilyRole, uint32_t>& roleToFamilies,
-		const std::vector<vk::QueueFamilyProperties>& queueFamilies) {
-		if (!roleToFamilies.contains(QueueFamilyRole::Transfer)) {
-			for (uint32_t i = 0; i < queueFamilies.size(); ++i) {
-				if (queueFamilies[i].queueFlags & vk::QueueFlagBits::eTransfer) {
-					roleToFamilies[QueueFamilyRole::Transfer] = i;
-					break;
-				}
-			}
-			if (!roleToFamilies.contains(QueueFamilyRole::Transfer))
-				roleToFamilies[QueueFamilyRole::Transfer] = roleToFamilies[QueueFamilyRole::Graphics];
-		}
-		if (!roleToFamilies.contains(QueueFamilyRole::Compute))
-			roleToFamilies[QueueFamilyRole::Compute] = roleToFamilies[QueueFamilyRole::Graphics];
-	}
-
-	/** 同一 family 被多角色共享时在 hardware queueCount 内分配不同队列下标。 */
-	[[nodiscard]] std::map<uint32_t, uint32_t> allocateQueues(
-		const std::map<QueueFamilyRole, uint32_t>& roleToFamilies,
-		const std::vector<vk::QueueFamilyProperties>& queueFamilies) {
-		std::map<uint32_t, uint32_t> familyAllocatedCount;
-		constexpr std::array<QueueFamilyRole, 3> roleOrder = {
-			QueueFamilyRole::Graphics, QueueFamilyRole::Compute, QueueFamilyRole::Transfer};
-		for (QueueFamilyRole role : roleOrder) {
-			const uint32_t familyIdx = roleToFamilies.at(role);
-			const uint32_t maxAvailable = queueFamilies[familyIdx].queueCount;
-			const uint32_t currentAllocated = familyAllocatedCount[familyIdx];
-			if (currentAllocated < maxAvailable) {
-				allocations[role] = {familyIdx, currentAllocated};
-				familyAllocatedCount[familyIdx]++;
-			} else {
-				allocations[role] = {familyIdx, maxAvailable - 1};
-			}
-		}
-		return familyAllocatedCount;
-	}
-
-	/** Build vk::DeviceQueueCreateInfo（priorities must outlive vkCreateDevice → 类成员）。 */
-	void buildQueueCreateInfos(const std::map<uint32_t, uint32_t>& familyAllocatedCount) {
-		priorities.clear();
-		queueCreateInfos.clear();
-		for (const auto& [familyIdx, count] : familyAllocatedCount) {
-			const size_t startIdx = priorities.size();
-			for (uint32_t i = 0; i < count; ++i)
-				priorities.push_back(1.0f);
-			queueCreateInfos.emplace_back(
-				vk::DeviceQueueCreateFlags{},
-				familyIdx,
-				count,
-				&priorities[startIdx]);
-		}
-	}
-
 	std::vector<vk::DeviceQueueCreateInfo> queueCreateInfos;
 	std::vector<float> priorities;
-	std::map<QueueFamilyRole, QueueAllocation> allocations;
+	uint32_t familyIndex = kNoFamily;
 	const vk::raii::PhysicalDevice& physicalDevice;
 	RLLogger* logger;
 };

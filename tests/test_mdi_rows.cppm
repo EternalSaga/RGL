@@ -48,7 +48,8 @@ module;
  * 「stride 与这些数都不相等」本身也钉成断言（`strideDistinctFromCaseNumbers`），凑数即红。
  *
  * ## 变异红线声明（★M-3T-c 后**全部重新实测** 2026-10-13；编号 = harness 的 M01…M24 / N1…N15，
- * 旧「十三条」数字全部作废——判据面随语义改判据重写过，旧读数对新判据面没有意义）
+ * 旧「十三条」数字全部作废——判据面随语义改判据重写过，旧读数对新判据面没有意义。
+ * 🔴 **2026-10-14 追加 ㉔-㉗ 四条并重测 ⑥**（§19.6 挂号收账，见下方「2026-10-14 追加」小节））
  * 方法学四条防线：备份/还原用 `shutil.copyfile`（**不带 mtime**，抬 mtime 到未来时刻会让 clang
  * 跳过重编、读到半写 BMI 崩出假构建红）+ 显式 `cmake --build build --target rgl_tests`（tests/ 是
  * EXCLUDE_FROM_ALL，`just build` 不编它）并核对**构建自身**的返回码（构建红 ≠ 判据红，那种读数
@@ -72,14 +73,21 @@ module;
  *      两侧共用 `rowFor` ⟹ 逐行对账静默、3b 等式仍成立（Σ gcX = 行数 − 空行数），聚合锚里
  *      **唯一出声的是「空行数 vs 不可见候选数」那条分支**（它不是纯哨兵的实测证据）
  *   ⑤ `rowCount` 锚判据短路（`&& false`）→ 红 **2** 条（全部坏形态 + 两两不同）
- *   ⑥ 🔴 行数判据**弱化**（`rows.size() != candidateCount` → `>`，只挡多行、放过少行）→ 红 **2**
- *      条，且**全部来自形态 A′**（形态 A 漏行时姊妹判据 `rowCount != rows.size()` 出声且归因正确）。
- *      ⟹ 只有 `badRowDroppedHonestAnchors`（删**最后一行** + 四个锚按剩下的行**重算** + 补进来的
- *      候选可见）把这条弱化变成**完全静默**——同 `test_meshlet_ranges` ⑫ 同型的「弱化不只测删除」缺口
+ *   ⑥ 🔴 行数判据**弱化**（`rows.size() != candidateCount` → `>`，只挡多行、放过少行）→ 红 **1**
+ *      条（全部坏形态），且**全部来自形态 A′**（形态 A 漏行时姊妹判据 `rowCount != rows.size()` 出声
+ *      且归因正确）。⟹ 只有 `badRowDroppedHonestAnchors`（删**最后一行** + 四个锚按剩下的行**重算** +
+ *      补进来的候选可见）把这条弱化变成**归因错**——同 `test_meshlet_ranges` ⑫ 同型的「弱化不只测
+ *      删除」缺口。
+ *      🔴 **2026-10-14 重测：2 → 1**，不是检测力变弱，是**失效形态变了**：本批给 `checkRowOrder`
+ *      加了显式前置（§19.6 挂号），少行的表如今在那里出声而不是**静默通过**，于是「两两不同」那条
+ *      用例不再因 `REQUIRE(has_value)` 红（它只在错误串彼此相同或压根没错误串时红）。红 1 仍是红。
  *   ⑦ 空行数锚判据短路 → 红 **2** 条（同 ⑤）
  *   ⑧ 逐行对账判据弱化（整条比较 `|| true` 恒 continue）→ 红 **4** 条（全部坏形态 + 两两不同 +
  *      两条新哨兵用例）。⚠ 首版写成「去掉 `!empty[i] ||` 短路」是**构建红**（gcX 越界分支变不可达
- *      ⟹ -Werror unreachable），读数作废；改成 `(...) || true` 形态才拿到判据红
+ *      ⟹ -Werror unreachable），读数作废；改成 `(...) || true` 形态才拿到判据红。
+ *      ⚠ **2026-10-14 未重测**（两次注入都是构建红：`... || true` 撞 `-Wlogical-op-parentheses`、
+ *      `... || i == i` 撞 `-Wtautological-compare`），读数沿用 2026-10-13。它不可能被本批改动影响：
+ *      前置哨兵只在不变量 1 被弱化时可达，而 ⑧ 不动不变量 1（同日抽测 ⑤⑦㉓ 三条读数逐字不变）
  *   ⑨ 构建后按 `objectIndex` 排序（"看着更像序"）→ 红 **10** 条 +发射 1（同 ①）
  *   ⑩ 🔴 **构建器 sumMesh 丢可见性门**（累加式 `row.groupCountX == 0u ? 0u : row.meshGroupCount`
  *      → 恒 `row.meshGroupCount`）→ 红 **10** 条 +发射 5（同 ①）。这是 ★M-3T-c 把「Σ 只加可见行」
@@ -105,6 +113,28 @@ module;
  *      它的**专属信号是构建器自检路径** = ⑳（实测 11 条里含 3b 逐字出声）。组合变异 M24（3b 短路
  *      **且** ⑳ 的 ×2 乘回）实测仍红 **10** 条 +发射 5——per-row `gcX ≤ 1`（不变量 4 + 发射器
  *      闭式）独立兜住 task 数语义，哨兵短路不造成静默
+ *
+ * ### 2026-10-14 追加四条（§19.6 挂号收账：不变量 1 的 `<` 半边 + `checkRowOrder` 显式前置）
+ * 这四条是**本批新写判据的实测**（harness = `/tmp/opencode/mutate_mdi_rows_extra{,2,3,4}.py`，
+ * 四条防线齐；进场基线 sha256 `0af3451f29e8507c`，每条还原后逐字节复核 + 全量基线复绿）：
+ *   ㉔ 🔴 **不变量 1 弱化到 `<`**（`!=` → `<`，只挡少行、**放过**多行）→ 红 **1** 条（全部坏形态）。
+ *      这是 §19.6 点名「无人钉」的那半边：旧表 ①⑥⑨ 全是**少行**形态，`<` 漂移下它们照样红
+ *      ⟹ 旧判据面对这条漂移**完全静默**。新增的 `badRowExtraHonestAnchors`（多一行 + 四个锚诚实）
+ *      是唯一有牙的一条，needle 里带 `holds 6 rows but the candidate list holds 5` 两个数
+ *      ⟹ 比较符被写反也红
+ *   ㉕ **validate 顺序调换**（逐行对账先于不变量 1）→ 红 **1** 条。钉的是**前置本身**：多行的表
+ *      在 `checkRowOrder` 的新前置处出声（错误串前缀 `mdi rows: precondition`，刻意不含
+ *      `invariant` ⟹ 归因用例的 `mdi rows: invariant` 前缀判据与 needle 双双不中）
+ *   ㉖ **前置哨兵短路**（`&& false`）→ 红 **0** 条 = **存活**，判定为**等价变异**（同 ㉓ 同族）：
+ *      不变量 1 完好时该分支结构上不可达。它的价值不在"多一条判据"，见 ㉗
+ *   ㉗ 🔴 **顺序调换 + 前置摘掉**（= 没有本批前置时 ㉕ 的真形态）→ 红 **2** 条（两条表用例），
+ *      但**错误串归因是错的**，这才是本批前置的立项证据。实测原文：
+ *      `invariant 4: row 5 holds {gcX 1, objectIndex 3, clusterStart 7, meshGroupCount 11} but
+ *      candidate 5 maps to {gcX 0, objectIndex 137, clusterStart 529, meshGroupCount 0}`
+ *      —— `137 / 529` 是**越候选尾读来的堆上邻接字节**（用例数据里没有这两个数），错误串把
+ *      「行数不匹配」报成「行序不对 + 数值不等」。堆布局一变（换分配器 / 换用例顺序）它也可能
+ *      **恰好相等而彻底静默**。⟹ 前置的作用是把这一格从「归因指错对象、且可能全绿」换成
+ *      「确定性点名前置没跑」= §15.3 那条「归因错误比不归因更贵」的机器化
  *
  * ### ★M-1a 尺寸/偏移算术追加（harness 编号 N1-N4 / N14-N15，2026-10-13 **全部重测**）
  * 每条**同时**打到发射器与设备用例（设备侧用例名见 `tests/test_meshlet_shadow_args.cppm` 的文件头）：
@@ -316,6 +346,34 @@ std::optional<std::string> badRowDroppedHonestAnchors() {
 	}
 	return validateMdiShadowRows(table, cands);
 }
+/**
+ * 不变量 1（形态 A″：**多一行而四个锚全部诚实**）——与形态 A′ 镜像的另一半边（§19.6 挂号）。
+ *
+ * 🔴 为什么必须单独一条：`rows.size() != candidateCount` 弱化成本地正确的 `<`（只挡少行、
+ * **放过**多行）时，形态 A/A′/B 全是「少行」⟹ 它们照样红，**这条漂移完全静默**。而多行比少行
+ * 更危险：`checkRowOrder` 的循环按 `rows.size()` 跑，多出来的那一行会拿 `cands[5]` 做期望
+ * = `std::span` 越界读（无边界检查、无信号）。
+ * 形态也真实：段边界算重一格（把下一段的首行也算进本级联）、或给一个可见候选双发一行，
+ * 都会连锚一起重算 —— 谎报的 rowCount 是形态 C 的职责，这里要的是**诚实**的多行。
+ * 期望值出处 = 不变量 1 第一条判据的**方向**（"holds 6 rows but ... holds 5"），不抄被测码：
+ * needle 里带上 6/5 两个数，比较符被写反也红。
+ */
+std::optional<std::string> badRowExtraHonestAnchors() {
+	MdiShadowRowTable table = builtAnchor();
+	const MdiShadowRow extra = table.rows.back();  // 先取副本（push_back 自引用是 UB 温床）
+	table.rows.push_back(extra);                   // 多一行（形态 = 段边界重一格 / 双发）
+	// 🔴 四个锚按 6 行**重算**（诚实）——不重算则出声的是不变量 3，行数判据没有专属信号。
+	table.rowCount = table.rows.size();
+	table.sumGroupCountX = 0u;
+	table.sumMeshGroupCount = 0u;
+	table.emptyRows = 0u;
+	for (const MdiShadowRow& r : table.rows) {
+		table.sumGroupCountX += r.groupCountX;
+		table.sumMeshGroupCount += r.groupCountX == 0u ? 0u : r.meshGroupCount;  // 只算可见行
+		table.emptyRows += r.groupCountX == 0u ? 1u : 0u;
+	}
+	return validateMdiShadowRows(table, anchor());  // 候选仍是 5 条
+}
 /** 不变量 1（形态 C：锚与数组分家）：`rowCount` 谎报。 */
 std::optional<std::string> badRowCountAnchor() {
 
@@ -408,6 +466,8 @@ const std::vector<BadCase>& badCases() {
 		{ "行数组少一行（漏行）", badRowDropped, "invariant 1" },
 		{ "漏行且四个锚全部诚实（只有行数判据抓得到）", badRowDroppedHonestAnchors,
 			"but the candidate list holds" },
+		{ "多一行且四个锚全部诚实（不变量 1 的 `<` 半边）", badRowExtraHonestAnchors,
+			"holds 6 rows but the candidate list holds 5" },
 		{ "压紧不可见行（行序破了）", badRowCompacted, "invariant 1" },
 		{ "rowCount 锚谎报", badRowCountAnchor, "rowCount says" },
 		{ "sumGroupCountX 锚谎报", badSumAnchor, "sumGroupCountX says" },
@@ -687,7 +747,7 @@ TEST_CASE("边界：空候选序列 = 合法空表（不是错误），且对账
 // ─────────────────────────────────────────────────────────────────────────────
 
 TEST_CASE("反向：全部坏形态各自报出自己的不变量（关键词逐条钉死）") {
-	REQUIRE(badCases().size() == 13u);  // 前提守卫：表被删空 = 下面的遍历恒真是假绿
+	REQUIRE(badCases().size() == 14u);  // 前提守卫：表被删空 = 下面的遍历恒真是假绿
 	for (const BadCase& bad : badCases()) {
 		const std::string err = errorOf(bad);
 		INFO("坏形态：", bad.name, " 错误串：", err);
@@ -696,12 +756,12 @@ TEST_CASE("反向：全部坏形态各自报出自己的不变量（关键词逐
 	}
 }
 
-TEST_CASE("反向：十三条错误串两两不同（可归因判据本身也要有牙）") {
+TEST_CASE("反向：十四条错误串两两不同（可归因判据本身也要有牙）") {
 	std::vector<std::string> errors;
 	errors.reserve(badCases().size());
 	for (const BadCase& bad : badCases())
 		errors.push_back(errorOf(bad));
-	REQUIRE(errors.size() == 13u);
+	REQUIRE(errors.size() == 14u);
 	for (size_t i = 0; i < errors.size(); ++i)
 		for (size_t j = i + 1; j < errors.size(); ++j) {
 			INFO("错误串 ", i, " 与 ", j, " 相同：", errors[i]);

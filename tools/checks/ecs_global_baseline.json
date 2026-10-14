@@ -1,7 +1,7 @@
 {
   "_comment": "ECS 全局可变状态棘轮基线（§9 R-EC4：rgl/*.cppm 列 0 的 namespace 作用域可变变量条数，按文件记）。存量 = profiler 帧累加器（非场景状态）。只准降不准升：新增一条 = 有人在拿全局变量携带状态，处置是搬进 registry context/函数参数/类成员，不是来这里登记额度。确实清掉一批后用 `python3 tools/checks/main.py --update-ecs-global-baseline` 收账。判据与盲区 → docs/风格检查规则.md §9。",
-  "total": 4,
+  "total": 1,
   "files": {
-    "rgl/profiler.cppm": 4
+    "rgl/profiler.cppm": 1
   }
 }

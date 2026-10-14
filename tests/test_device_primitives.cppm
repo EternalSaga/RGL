@@ -28,7 +28,7 @@ module;
  * 首版在这里手写裸 Vulkan 引导（自建 instance + 挑设备 + 建队列），理由是「本层要最小
  * 自足，不该把引擎启动流拖进来」。**改主意的理由**：
  *   ① 引擎那两个类已经把这些事做对了（raii 成员初始化列表顺序、required feature 链、
- *      三队列三命令池、headless 用 VK_EXT_headless_surface），手写一遍等于把这些
+ *      一条队列一个命令池、headless 用 VK_EXT_headless_surface），手写一遍等于把这些
  *      结论重新赌一次——而 AGENTS.md 把「验证工具自己错」列为反复出现的元 bug。
  *   ② 本层要担保的恰恰是**引擎实际使用的那条链路**（AppContext→DeviceContext→
  *      图形队列→image→buffer）。自造一条更干净的路，测的就不是引擎那条路了。
@@ -48,6 +48,7 @@ import rlstd;
 import rlvk;
 import vk_instance;  // AppContext（headless 引导）
 import vk_device;    // DeviceContext（物理设备选择 + 图形队列 + 命令池）
+import queue_family_manager;  // QueueFamilyManager（D3 定案护栏用例直接构造它）
 import vulkan_window;  // SDLWindow 前置类型（AppContext 形参；本层传 nullptr）
 
 namespace RGL::testing::gpu {
@@ -279,6 +280,35 @@ TEST_CASE("反向用例：同一张图连续读两次必须拿到相同内容（
         INFO("pixel index " << i / 4);
         CHECK(got == 0x00AABBCCu);
     }
+}
+
+TEST_CASE("队列管理器只申请一条队列（D3 定案护栏：不得再长回三角色）") {
+    // 定案与判据 → docs/compute_调研.md §3.1。旧版按 Graphics/Compute/Transfer 三角色各选一条，
+    // 而任何有图形队列的桌面/APU 上 family 0 必带 COMPUTE ⟹ 三角色恒坍缩成同一条物理队列，
+    // 多出来的两个句柄是"从没被读过的死状态"。**本用例钉住的是"只有一条"这个决定本身**——
+    // 变异红线：把 queueCreateInfos 的 queueCount 改成 2、或重新加回一个角色（多一条 create
+    // info / 多一个 family），下面两条 REQUIRE 必须红。
+    const Fixture fx;
+    const RGL::QueueFamilyManager mgr{fx.physical()};
+    const auto& infos = mgr.getQueueCreateInfos();
+    REQUIRE(infos.size() == 1);
+    CHECK(infos[0].queueCount == 1);
+
+    // family = 首个带 eGraphics 的族。**独立重算**当第二实现——复用被测的选择逻辑会恒真。
+    const auto props = fx.physical().getQueueFamilyProperties();
+    uint32_t want = RGL::QueueFamilyManager::kNoFamily;
+    for (uint32_t i = 0; i < props.size(); ++i) {
+        if (static_cast<bool>(props[i].queueFlags & vk::QueueFlagBits::eGraphics)) {
+            want = i;
+            break;
+        }
+    }
+    INFO("families on " << fx.deviceName());
+    REQUIRE(want != RGL::QueueFamilyManager::kNoFamily);  // 引擎能起 ⟹ 必有图形族；没有就是失败不 skip
+    CHECK(mgr.getFamilyIndex() == want);
+    // 选中的族必须真带 graphics：若它只带 compute，说明"独立 compute 队列"又被建模成常驻角色
+    //（D3 已裁：那条形态必须是**能力查询 + 出声回落**，不许是常驻成员）。
+    CHECK(static_cast<bool>(props[mgr.getFamilyIndex()].queueFlags & vk::QueueFlagBits::eGraphics));
 }
 
 }  // TEST_SUITE("gpu")

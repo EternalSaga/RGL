@@ -14,7 +14,7 @@ import diagnostics;  // diagnostics().profiler（帧窗口开关，main 启动�
 import profiler;     // profilerCurrentFrame（归属帧）+ profilerPushRecord（归并回填）
 import timing_util;  // steadyNowNs（与校准 mono 域同域的取时刻；自本文件收敛）
 import vk_device;
-import queue_family_manager;  // QueueFamilyRole::Graphics（timestampValidBits 族判定）
+import queue_family_manager;  // getFamilyIndex（timestampValidBits 族判定）
 
 namespace RGL {
 
@@ -37,7 +37,7 @@ GpuProfiler::GpuProfiler(DeviceContext& dev) : device(dev) {
 	// 校准设备 tick 同掩）。族判定与提交族一致（drawFrame/cull 全走 graphics queue）。
 	const auto families = device.getPhysicalDevice().getQueueFamilyProperties();
 	const uint32_t family =
-		device.getQueueManager().getFamilyIndex(RGL::QueueFamilyRole::Graphics);
+		device.getQueueManager().getFamilyIndex();
 	const uint32_t validBits = families[family].timestampValidBits;
 	validMask = validBits >= 64 ? ~uint64_t{0} : ((uint64_t{1} << validBits) - 1);
 

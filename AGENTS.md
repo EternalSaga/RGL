@@ -208,7 +208,8 @@ vk_indirect_commands 显式使用）外**均无显式使用但被其他已启用
   `docs/hfts_izb_plan.md` · `docs/shader_object_组合成本与优化预留.md`（优化预留方向）·
   `docs/脚本长期规划.md` + `script_spike/`（脚本长期线，独立于 Phase 编号）
 - **调研 / 活文档**：`docs/mdi_plan.md`（Multi Draw Indirect **可行性定案载体**；**动 indirect 前读，
-  别重推一遍**）· `docs/DESCRIPTOR_HEAP_SPEC.md` · `docs/FSR输入契约.md`（FSR3-upscaler 四个每帧
+  别重推一遍**）· `docs/compute_调研.md`（图外 compute 全景 / 渲染图**真实边界** / 队列归属事实基线 /
+  **扩渲染图形态的定案载体**；**动 compute 或扩渲染图前读**，§6 D1 定案 + §5 历史裁决 + §9 负知识别再重查）· `docs/DESCRIPTOR_HEAP_SPEC.md` · `docs/FSR输入契约.md`（FSR3-upscaler 四个每帧
   输入的**口径权威载体**；**接 FSR 前必读**，别靠读源码"认为一致"）·
   `docs/nvidia_compatibility_report.md`（三平台驱动事实；**不写"本机"是哪台**）·
   `docs/device_generated_commands_research.md` · `docs/vulkan_extensions_2025_调研.md`（含 zero_init

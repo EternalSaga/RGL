@@ -92,11 +92,18 @@ static_assert(sizeof(ShadowMeshletDrawArgs) == 12,
  * 且不报错）。采集侧只准经那一个具名入口算一次并把整对存下来；`sliceRows` 取载体的
  * `sliceRows()`（装配层 ctx 搬入），帧槽起点 = `firstRow`（段在 slice 内的行号，由采集侧
  * 按级联打包，录制期 upload 用同一对输入 → 落点与读数构造性同源）。
+ *
+ * `taskCount`（债-113）= 本段 task 数 = Σ 各行 `groupCountX`（★M-3T-c 起 gcX 的单位就是 task）。
+ * 🔴 **唯一产地 = 构建器的聚合锚 `MdiShadowRowTable::sumGroupCountX`**（该锚已被不变量 3 逐行
+ * 对账过），录制侧只搬运不重算 —— 它是 `mdi.tasks` 计数器的读数来源，而那条计数器的意义就是
+ * 「task 形态的收益会不会静默回退」，所以**只准有一个出处**：在录制侧另算一遍 = 锚与读数分家，
+ * 也正是「把行表语义漏进盲执行器」（ECS 规范 4）的入口。
  */
 export struct MdiShadowSegment {
 	uint32_t cascadeIndex = 0;      // 阴影图分块号（c1..c3——c0 恒旧路径，§18.6）
 	uint32_t firstRow = 0;          // 本段在**一个帧槽 slice 内**的起始行号（行序 = 候选序）
 	uint32_t rowCount = 0;          // 本段行数（= 本帧可切候选数，各级联同值；含 gcX=0 空行）
+	uint32_t taskCount = 0;         // 本段 task 数 = Σ gcX（唯一产地 = 构建侧锚，见上）
 	uint32_t pipeline = 0;          // MDI 管线条目下标（asset.shadowMeshletMdiPipelineIndex）
 	uint32_t frameSlot = 0;         // 🔴 算 pair 依据的帧槽号（录制侧核对同帧，失配 = 契约破）
 	RGL::MdiShadowRowLocation loc;  // argsOffset + rowBase（同源 pair，唯一产地见上）

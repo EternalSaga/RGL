@@ -20,6 +20,13 @@ constexpr const char* kInv3Anchors =
 	"mdi rows: invariant 3 (aggregate anchors agree with the rows)";
 constexpr const char* kInv3bTaskPerRow = "mdi rows: invariant 3b (one task per visible row)";
 constexpr const char* kInv4RowOrder = "mdi rows: invariant 4 (row i is candidate i)";
+/**
+ * `checkRowOrder` 的**前置**（不是第六条不变量，前缀因此刻意不带 `invariant`）。
+ *
+ * 它存在的理由不是"多一条判据"，而是**把越界读换成可归因错误**：见 `checkRowOrder` 头注释。
+ */
+constexpr const char* kPreRowOrder =
+	"mdi rows: precondition (invariant 1 must reject a row-count mismatch first)";
 
 /**
  * 候选 → 行的**唯一**映射公式（构建器写行、对账器算期望，两边共用这一份）。
@@ -70,6 +77,11 @@ std::optional<std::string> checkVisibleTasks(std::span<const MdiShadowCandidate>
  *
  * 这条最可能怎么破（不是假想）：有人「顺手」把不可见行压紧（少发几条空行看着像优化），
  * 行序就不再等于候选序 ⟹ §19.1 第三行那条「depth-only ⟹ 逐位不变近乎构造性」的论证失效。
+ *
+ * 🔴 **两个方向各有一条用例钉**（`!=` 弱化成本地正确的 `>` 或 `<` 只挡一边，是判据最真实的
+ * 漂移形态）：少行 = 测试的 `badRowDroppedHonestAnchors`（红线 ⑥），多行 =
+ * `badRowExtraHonestAnchors`（红线 ㉔，§19.6 挂号收账）。两条都必须**锚诚实**，否则出声的是
+ * 不变量 3，行数判据本身没有专属信号。
  */
 std::optional<std::string> checkRowCount(const MdiShadowRowTable& table,
 	size_t candidateCount) {
@@ -91,10 +103,25 @@ std::optional<std::string> checkRowCount(const MdiShadowRowTable& table,
  * 🔴 判据钉的是「逐元素」，不是聚合量：`Σ gcX` / 空行数在整体错位或两行互换时**一位不变**
  * （`test_meshlet_lod` 的 base-shift 教训：对账伙伴模块只钉聚合量 ⟹ 逐元素静默错位还报
  * 「对上了」）。这条也是 ★M-4「GPU 直写行表 vs CPU 构建器逐元素对账」的判据本体。
- * 前置：行数已等于候选数（不变量 1 先跑，否则这里越界读）。
+ *
+ * ## 🔴 前置 = 显式契约（§19.6 挂号，2026-10-14 收）
+ * 下面的循环以「行数已等于候选数」为前提，而它读的是 `std::span` —— **无边界检查**。
+ * 该前提此前只写在注释里，而有一条真实的漂移会把它踩空：不变量 1 的 `rows.size() !=
+ * candidateCount` 若弱化成本地正确的 `<`（只挡少行、**放过**多行，正是 §19.6 点名没人钉的那
+ * 半边），本函数就会拿 `cands[i]` 读越候选尾 —— 不崩、不报错，只是把别人的栈/堆字节当合法
+ * 候选比一遍（比出来"对上了"就是假绿，比出"不对"就是归因错到行序上）。
+ * ⟹ 前置在此**出声**：正常路径不可达（`validateMdiShadowRows` 先跑不变量 1），所以它是
+ * **哨兵**；它的专属信号 = 红线表 ㉔（不变量 1 弱化后，「多一行且锚诚实」那条用例拿到的错误串
+ * 不再是 invariant 1 → 两条表用例红）。同文件「两条新哨兵」一节同纪律。
  */
 std::optional<std::string> checkRowOrder(
 	const MdiShadowRowTable& table, std::span<const MdiShadowCandidate> cands) {
+	if (table.rows.size() != cands.size())
+		return fmt::format(
+			"{}: the row table holds {} rows while the candidate list holds {} — this loop reads "
+			"cands[i] up to rows.size(), so invariant 1 must reject the mismatch before it runs "
+			"(an unguarded span read has no signal)", kPreRowOrder, table.rows.size(),
+			cands.size());
 	for (size_t i = 0; i < table.rows.size(); ++i) {
 		const MdiShadowRow want = rowFor(cands[i]);
 		const MdiShadowRow& got = table.rows[i];

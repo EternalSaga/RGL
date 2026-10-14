@@ -392,6 +392,8 @@ void Renderer::prepareMdiShadowRows(const FrameDrawList& list, uint32_t frameSlo
 		throw std::runtime_error(fmt::format(
 			"mdi shadow: shadowCalls 内 drawCount>1 条目 {} ≠ mdiSegments {}（行表与 draw 分家）",
 			mdiCalls, list.mdiSegments.size()));
+	uint32_t tasks = 0;  // 债-113：本帧 MDI task 数（= Σ 段锚）。上界 = 总行数（不变量 4 逐行守
+	                     // gcX ≤ 1 ⟹ tasks ≤ rows ≤ ring 容量），uint32_t 内不会回卷
 	for (const auto& seg : list.mdiSegments) {
 		if (seg.frameSlot != frameSlot)
 			throw std::runtime_error(fmt::format(
@@ -400,7 +402,11 @@ void Renderer::prepareMdiShadowRows(const FrameDrawList& list, uint32_t frameSlo
 		if (auto err = mdiShadowArgs->upload(seg.frameSlot, seg.firstRow, seg.rows); err)
 			throw std::runtime_error(fmt::format("mdi shadow: c{} upload 被拒 —— {}",
 				seg.cascadeIndex, *err));
+		tasks += seg.taskCount;
 	}
+	// 债-113：`mdi.tasks` 入账 = 全部段真的落进 ring 之后（与 mdi.count/mdi.rows 同为录制期口径；
+	// 为什么不在 drawOne、也不在采集侧 → profiler.cppm::profilerAddMdiTasks 声明注释）。
+	profilerAddMdiTasks(tasks);
 }
 
 /**

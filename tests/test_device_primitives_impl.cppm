@@ -82,12 +82,23 @@ HostBuffer makeHostBuffer(const Fixture& fx, VkDeviceSize bytes, vk::BufferUsage
 
     // raii 句柄自带 getMemoryRequirements()（句柄认识自己的 device/physical device），
     // 比 physical().getBufferMemoryRequirements(*buf) 少绕一层，也没有 const 歧义。
-    const uint32_t t = findMemoryType(fx.physical(), buf.getMemoryRequirements().memoryTypeBits,
+    const vk::MemoryRequirements req = buf.getMemoryRequirements();
+    const uint32_t t = findMemoryType(fx.physical(), req.memoryTypeBits,
         vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
     if (t == kNoIndex)
         throw std::runtime_error("test_device_primitives: 找不到 host-visible+coherent 内存类型");
+    // 🔴 分配大小取**需求** `req.size`，不是请求的 `bytes`（§19.8 挂号，2026-10-14 收账）。
+    // 为什么旧写法一直没出声：本机（RADV STRIX_HALO）这四个夹具的 42 次分配实测
+    // `req.size ≡ bytes`（对齐 16，请求值全是 16 的倍数）⟹ 两种写法**数值相同**。
+    // 但它不是假想风险，**同一后端**在别的夹具上咬过：`testing::gpu::readImage` 的 56B staging
+    // buffer 实测报 `requirements size 64 vs allocationSize 56`（VUID-vkBindBufferMemory-None-10741）
+    // 且回读全 0 = 判据假空 —— 原文与规避方式见 `test_meshlet_shadow_args.cppm` 文件头。
+    // 下面这条守的是「驱动把需求报得比请求还小」——真发生时就地定位，别留到绑定之后猜。
+    if (req.size < static_cast<VkDeviceSize>(bytes))
+        throw std::runtime_error(
+            "test_device_primitives: 内存需求小于请求大小（驱动异常，宁抛不猜）");
     vk::MemoryAllocateInfo ai{};
-    ai.allocationSize = bytes;
+    ai.allocationSize = req.size;
     ai.memoryTypeIndex = t;
     vk::raii::DeviceMemory mem(fx.device(), ai);
     buf.bindMemory(mem, 0);

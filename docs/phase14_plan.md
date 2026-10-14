@@ -271,7 +271,9 @@ plan 原文写「compute pass 由两帧相机矩阵 + depthTex 解析算出每�
   速度场 pass 与它们同形。
 - 走它的收益（每条都是 compute 路线要付的代价）：**不需要**给 `RgPassKind` 新增 compute
   kind（现只有 `drawMesh/blit/drawLight`）；**不依赖批 14.4b** 的图外布局护栏（图内 pass 的
-  布局由编译图负责，单一真相源已存在）；**不碰**闲置的 `computeQueue`（债-24）；
+  布局由编译图负责，单一真相源已存在）；**不涉及独立计算队列**（⚠ 本句旧版写「不碰闲置的
+  `computeQueue`（债-24）」是误导——那条队列**从来不存在**（三角色恒坍缩成同一条），成员已删，
+  判据 → `docs/compute_调研.md` §3）；
   加一个状态 = `pass_vocabulary::kAllPassStates` 加一行 + StateKit 加成员（漏实现编译不过）。
 - 唯一损失是"用 compute 更省"这一条未量化的假设——本 pass 是每像素几条矩阵乘法，
   与 taa pass 同量级，而 taa 就在 fragment 里跑得好好的。

@@ -121,7 +121,9 @@ HostSsbo makeHostSsbo(const Fixture& fx, size_t bytes, const void* src) {
     }
     REQUIRE(type != UINT32_MAX);
     vk::MemoryAllocateInfo ai{};
-    ai.allocationSize = bytes;
+    // 🔴 分配取需求 req.size 而非请求 bytes（本机数值相同 ⟹ 旧写法不出声，换后端即越界绑定；
+    // 完整理由 + 实测先例 → `test_device_primitives_impl.cppm::makeHostBuffer`）
+    ai.allocationSize = req.size;
     ai.memoryTypeIndex = type;
     vk::raii::DeviceMemory mem(fx.device(), ai);
     buf.bindMemory(mem, 0);

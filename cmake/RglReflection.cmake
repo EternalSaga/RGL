@@ -51,7 +51,7 @@ endfunction()
 
 # reflect：显式重建全部反射产物（工具由 add_dependencies 先建；管线无条件重跑）。
 add_custom_target(reflect
-    COMMENT "重跑 6 条反射管线（slangc reflection + validate + generate/render）")
+    COMMENT "重跑 8 条反射管线（6 条 slangc reflection + features + param_semantics）")
 add_dependencies(reflect reflection_tool)
 
 # types 管线
