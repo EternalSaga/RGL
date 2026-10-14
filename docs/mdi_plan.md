@@ -242,7 +242,7 @@ NV 驱动那个"push 字节数 × 序列数挂死"的红线（`material.slang` �
 | **B 模型段**（命令数轴） | 同上，但牵动 `material.slang` 的 DrawArgs 语义 + DGC 序列 `@8` 的解释（按 §3：不动布局）；要重测 deferred 下真实桶数 | 牵反射（`just reflect` + 提交生成物） |
 | **C 压紧上 GPU**（命令数轴） | compute 剔除直写 args/params（atomic 紧凑），消掉 CPU 读回 | 改 `cull.comp.slang` 输出布局 + 对账契约（§5.3） |
 | **D task shader** 🔶 **阴影段宿主已交付**（★M-3T-a/b/c：`shadow_meshlet.task.slang` 上线、`NO_TASK_SHADER_BIT` 改成只在无 task stage 时带；「per-draw 剔除」由 `gcX=0 ⟹ 零 task` 实现）（P2 后段） | 路径 B：groupCount 也进 params、`DispatchMesh(0)` 做 per-draw 剔除 | 去 NO_TASK bit + execution set 加 task 槽（2j/2j+1 → 3 槽约定要重算）。⚠ **没有 ★1 就没有可剔的单元**——台账那条"task 给派发权不给几何单元"的结论没被推翻，被推翻的是它下面"连续三角形无邻接性"的论据（§7.6） |
-| **E 路线级（独立决策，别混）** | mapping 换 `HEAP_WITH_PUSH_INDEX` / `HEAP_WITH_INDIRECT_INDEX_ARRAY` ⟹ 条目 376→spec 数、桶数→~3 | `docs/shader_object_组合成本与优化预留.md` §4/§5.4 明写"路线级决策"，且把 per-draw 解析成本带回来。⚠ ★1 的**单一全局顶点池**会自己消掉条目 key 的"30 顶点块"那一维（§7.5 附带红利，推断未实测）⟹ 两条路对条目数的作用重叠，**别重复计收益** |
+| **E 路线级（独立决策，别混）** | mapping 换 `HEAP_WITH_PUSH_INDEX` / `HEAP_WITH_INDIRECT_INDEX_ARRAY` ⟹ 条目 376→spec 数、桶数→~3 | ✅ **2026-10-14 用户定案 = 走 INDIRECT_INDEX（非 push-index），已翻案 §3 否决**；定案 + 五步判据 → `docs/shader_object_组合成本与优化预留.md` §1.0/§5（⚠ push data 4B→16B："零增长"不可能——所有 per-draw 源都从 push data 取值）。⚠ ★1 的**单一全局顶点池**会自己消掉条目 key 的"30 顶点块"那一维（§7.5 附带红利，推断未实测）⟹ 两条路对条目数的作用重叠，**别重复计收益**（present：vertex 索引进表后那一轴由本刀消掉，★1 赚的是 BDA buffer 数与池化，不再是条目数） |
 
 ## 5. 风险与坑（逐条带出处）
 

@@ -1,10 +1,56 @@
-# Shader object 组合成本与优化预留（312 条目从哪来、付了什么、以后怎么优化）
+# Shader object 组合成本：条目爆炸根因与「砍掉创建期烘焙」定案
 
-> **状态**：现行（2026-09-28 立）。记录管线表条目数的生成机制、实测成本账本与优化预留方向。
-> 优化项**均未实施**——触发条件（§5.1）满足前不动手。数据基准 = bistro_exterior 场景 +
-> 2026-09-28 19:57 启动日志（forward，build 侧 diagnostics.picking 临时开）。
+> **状态**：现行（2026-09-28 立；**2026-10-14 改写：砍烘焙已定案，定案 + 开工清单在 §5**）。
+> 记录管线表条目数的生成机制、实测成本账本，以及 2026-10-14 用户拍板的定案形态与次日开工清单。
+> §2/§3 的机制与账本仍然有效；§5 原"优化预留（未实施）"部分已按定案改写，原缓存路线作废
+> （理由见 §5.3）。数据基准 = bistro_exterior 场景 + §7 锚点（每次启动由 `logStartupBaseline`
+> 自动重打，不必翻旧日志）。
 
 ## §1 结论速览
+
+### 1.0 定案（2026-10-14，用户拍板）：砍掉创建期烘焙
+
+**动作**：模型条目的五个 **per-draw** binding——0 顶点 / 1 base / 6 normal / 7 orm / 8 emissive——
+从 `VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT` 改为
+`VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_INDIRECT_INDEX_EXT`。索引不再烘进 shader object 身份，
+改为住在**现有 per-object 表**（`objectDraws`，binding 26）里；push data 只多一个 **device address**
+（4B → 16B：`@0` objectIndex 不动、`@8` 放地址）。**五个 mapping 共用同一个 pushOffset（同一个
+地址），各按自己的 `addressOffset` 取自己那一项**——一条 12 字节增量喂满五个绑定。
+sampler 侧（binding 2/5/13/16，sampler heap）**不动**：全场景共享单值，无 per-draw 变化。
+
+| 项 | 现在（2026-10-04 基线） | 定案后（预期） |
+|---|---|---|
+| registry 条目 | 376 | **3–7（= spec 数）** |
+| VkShaderEXT 句柄 | 752 | ~14 |
+| DGC 执行集槽 | 624 | ~14 |
+| picking 克隆条目 | 312 | 3 |
+| binding mapping 条数 | 4358 | ~30 |
+| 启动创建耗时 | 1.13s（3.01 ms/条） | ~20 ms |
+| push data | 4B | 16B（+12B，只一个地址） |
+| 每帧 draw 数 | 现状（与条目数无关） | **不变**（本刀减的是对象身份，不减 draw） |
+
+🔴 **负知识（别再去找第三条路）**：**任何 per-draw 解析源都从 push data 取值，"push data 零增长"
+在这个 API 里不存在。** 本地 `Vulkan-Docs/chapters/descriptorheaps.adoc` 逐个源核过的取值处：
+
+- constant offset = 创建期常量（= 本刀砍掉的对象）；
+- push index = `((uint32_t*)pPushData)[pushOffset/4]`，且索引 20bit + sampler 12bit 打包
+  （`& 0xFFFFF` / `>> 20 & 0xFFF`）；
+- **indirect index = `((VkDeviceAddress*)pPushData)[pushOffset/8]`** —— 索引在 buffer，但
+  **buffer 的地址在 push data**（VUID-11260 要求 8 对齐、11261 ≤ `maxPushDataSize − 8`、
+  11262 `addressOffset` 4 对齐计数）；
+- indirect index **array** 的 `arrayIndex` 项是 **shader 绑定数组下标**
+  （`shaderIndex = (Binding − firstBinding) + arrayIndex`），**不是 draw index** ⟹ 全部 11 种
+  source 里**没有"按 draw 序号取 buffer"这一档**。
+
+⟹ 选 indirect index 而非 push index：两者都要 push data 增长，前者 +12B（一个地址）且
+**五个 binding 复用它**，后者 +16B（四个索引）且带 20bit 打包限制。
+**什么实验会推翻本段**：本地 spec 添了"按 draw index 取索引"的新 source；或 indirect index
+的 `pushOffset` 出现可省略模式（二者当前都不存在）。
+
+⚠ **RADV 上 `INDIRECT_INDEX` 零先例**：仓内 push-index 先例只在 **storage image** 上跑过
+（`mip_gen` / `env_prefilter`，每次启动都跑）；sampled image + indirect index 本机没跑过 ⟹
+**开工清单 ① = 最小 indirect-index spike 当第一个 commit**，`just regress floor` 逐位验收。
+"机理上必然可行"不构成跳过它的理由——没跑过的东西必须当天上午兑现成数据，而不是赌下午。
 
 > **📊 基线已重测（2026-10-04，批 9.5 顺带；下表 312/626/1252/2.3s 是 2026-09-28 那次
 > forward + picking 临时开的运行，已过期）**：现行配置（deferred + 4 级阴影 + IZB + AO）实测
@@ -14,8 +60,9 @@
 > 不必再靠翻旧日志。⚠ **两个数不可直接比**：旧 2.3s 是**日志时间戳差（含 SPV 读盘）**，
 > 新 1.13s 是纯创建调用；条目 312→376 的增量来自此后新增的 TAA(binding 4-8) 与
 > EVSSM(15/16) 相关条目。**"条目爆炸"这条债的痛点（启动时间）实测比文档记载的轻**——
-> 但 376 条目 / 752 句柄 / 752 DGC 槽的结构性成本仍在，根因（§4）未变。
-> 全文 → `git:调试历史` 2026-10-04、`docs/还债总账.md` 债-04/债-23。
+> 但 376 条目 / 752 句柄 / 752 DGC 槽的结构性成本仍在。⚠ **2026-10-14 起"根因未变"这句只到
+> 定案前有效**：根因（§4）**已定案砍掉**（§1.0 / §5），本表读数是**砍之前**的基线，
+> 也是开工 ② 的对照起点。全文 → `git:调试历史` 2026-10-04、`docs/还债总账.md` 债-04/债-23。
 
 当前场景（`models/bistro_exterior.glb`，1591 primitive / 132 材质 / 395 图片）的管线表：
 
@@ -129,9 +176,9 @@ v1.4.360 与系统头 v357 均含全部取值）：
 
 | source | 槽怎么定 | 效果 |
 |---|---|---|
-| `HEAP_WITH_CONSTANT_OFFSET`（本项目，shader.cppm:253） | 创建期常量 | 纹理 = 对象身份 → 组合枚举 |
-| `HEAP_WITH_PUSH_INDEX` | `base + *(pushData + pushOffset)`，per-draw | 一个对象服务所有纹理 |
-| `HEAP_WITH_INDIRECT_INDEX(_ARRAY)` | GPU buffer 读索引 | 同上，GPU 侧索引 |
+| `HEAP_WITH_CONSTANT_OFFSET`（本项目，shader.cppm:253） | 创建期常量 | 纹理 = 对象身份 → 组合枚举（**2026-10-14 定案砍掉**） |
+| `HEAP_WITH_PUSH_INDEX` | `base + *(pushData + pushOffset)`，per-draw | 一个对象服务所有纹理（本机先例只在 storage image） |
+| `HEAP_WITH_INDIRECT_INDEX(_ARRAY)` | **索引在 buffer**，buffer 地址在 push data（`(VkDeviceAddress*)pPushData)[pushOffset/8]` | 同上，且 5 个 binding 共用一个地址 ⇒ **定案选此路**（§1.0） |
 
 类比：constant offset = 静态链接（每纹理组合一个"二进制"，运行期零解析）；push index =
 动态链接/PLT（draw 时查一次）。选 constant offset 的理由：本机 CPU-bound（Phase 9 基线
@@ -140,49 +187,95 @@ frame 7.10ms ≈ cpu.record 7.03ms，CPU 侧零余量，`docs/phase9_plan.md` §
 `docs/DESCRIPTOR_HEAP_SPEC.md`、`heap_texture_spike`）；DGC 路径下执行集合绑定完全静态，
 push-index 会扩大 GPU 生成序列的正确性面。
 
-## §5 优化方向（预留，未实施）
+**2026-10-14 定案时这三条理由的现状**（就地改写，不留"旧结论 + 更正"双层）：
+① **CPU-bound 零余量已推翻**——此后 CPU 负载持续压缩（`docs/cpu_perf_plan.md`、实测
+`drawFrame.dataPath` 0.025ms 级），这条不再是"方向相反"而是"有待价"；② **RADV 实验特性，
+已部分消解**：push-index 在 storage image 上有本机先例（mip_gen / env_prefilter），
+但 sampled image + indirect index 仍零先例 ⟹ 转成开工清单 ①（§5.2）；③ **DGC 绑定静态，
+仍成立且升级为唯一待决策项**：NVIDIA DGC 对 push constant 增长有潜在 bug（用户持有细节），
+本机 RADV 不走该路 ⟹ 节点见 §5.5。
 
-### 5.1 触发条件（满足任一再动手）
+## §5 定案与开工清单（2026-10-14）
 
-- 启动时间成为痛点（shader 高频迭代 / CI 跑测 / 换场景后条目数量级增长）；
-- 或 §6 尽调项 ①③ 已在别的工作里顺手确认，实施成本骤降。
+> 本节原是"优化方向（预留，未实施）"，触发条件是"启动时间成为痛点"。
+> **2026-10-14 用户拍板砍掉创建期烘焙**，动机换成结构性判据：**per-draw 数据被烘成对象身份**
+> （场景 1591 个 primitive 的 draw 只分属 3–7 个 spec 程序，却为它们造了 376 个对象身份）
+> 本身是债，不再按启动时间定价。原缓存路线（L0/L1）随定案作废（§5.3）。
+> §2/§3 的机制与账本不变，仍是 ② 的对照基线。
 
-### 5.2 L0：运行内 SPV 字节缓存（低成本先做，收益小）
+### 5.1 定案形态
 
-模型路径按 (path, mtime/内容 hash) 缓存 SPV 字节，312 条只读 1 + 3 次文件。仿 picking 的
-`meshCache` 先例。收益 ~几十 ms（读盘非瓶颈），价值主要是消灭重复 I/O。
+1. **五个 binding 换源**：0（顶点）/ 1（base）/ 6（normal）/ 7（orm）/ 8（emissive）从
+   constant offset 改 `HEAP_WITH_INDIRECT_INDEX`。**sampler 侧不动**（binding 2/5/13/16 走
+   sampler heap constant offset）：全场景共享单值，无 per-draw 变化，换了纯风险零收益。
+2. **索引住在现有表**：per-object 索引表并入 `objectDraws`（binding 26，
+   `StructuredBuffer<ObjectDraw>`，容量 `kSceneMatrixCapacity` = 4096）——每对象 +5 个 uint
+   = 20B，@4096 = +80KB，可忽略。**不新开 buffer、不领新槽**：正是"加到现有 constant buffer 里"。
+3. **push data 4B → 16B**：`@0` objectIndex 不动，`@8` 放索引表 device address
+   （VUID-11260 要求 8 对齐、11261 ≤ `maxPushDataSize − 8`；双驱动实测 256B，
+   `vkdevice.cppm:154-161`）。五个 mapping **共用同一个 pushOffset**（同一个地址），各按
+   `addressOffset` = `offsetof(ObjectIndexRow, item)` 取自己那一项（VUID-11262 要求 4 对齐计数）。
+4. **去重 key 塌成 spec**：`addModelEntry` 的六元组（`shader_registry_impl.cppm:43`）退化为
+   `specName`；条目名退化为 spec 名；`modelEntryBySlot` 键随之退化（可整体换成 `map<string,uint32_t>`）。
+5. **接线随身份塌缩**：`addCloneEntries` 每 model 条目一条克隆 → 每 spec 一条（312 → 3）；
+   `dgcStatic` 每管线条目一次 Execute（376 → 3 次）；`izbMaskEntryFor(vertexSlot)` 的键从
+   "顶点槽"改成 spec（vertex 索引进表后它不再是身份）。
 
-### 5.3 L1：磁盘二进制缓存（真正的启动优化，"binary hint"）
+🔴 **一条必须写进表契约的 spec 约束**：`indirectAddress` 的读被定义为 **non-volatile uniform
+buffer read**，且**"值在飞行中必须保持静态，否则数据竞争"**（`descriptorheaps.adoc` indirect-index
+节末段）。scene data device buffer 是跨帧单份、每帧整块重写，现有解法 = `recordFixedDataPath` 的
+**写前依赖 barrier** 兜 RAW/WAW（`vkrenderer_passrec.cppm:263-275`）⟹ 沿用同一机制即可，但这条
+必须显式写进索引表注释——否则它是第三条隐式依赖（前两条 = heap barrier 与 scene data 拷贝）。
 
-API 真实存在（本地 spec v1.4.360 + 系统头 v357）：
+### 5.2 开工清单（明天动工；每步判据同条写死，不绿不进下一步）
 
-- `vkGetShaderBinaryDataEXT(device, shader, &size, data)`：取回驱动编译二进制
-  （`VK_INCOMPLETE` = 缓冲区不足，全有或全无）；
-- `codeType = VK_SHADER_CODE_TYPE_BINARY_EXT` + `pCode`（16B 对齐）：免 SPIR-V 编译重建。
+| # | 动作 | 验收判据 |
+|---|---|---|
+| ① | **最小 INDIRECT_INDEX spike = 第一个 commit**：单 binding（base 纹理）、单 spec、push data 16B | `just regress floor` **逐位**（本机 sampled image + indirect index 零先例，这一步证伪整条路线就当天上午改道，不损失下午）；VVL/syncval 0 条（含 VUID-11260/11261/11262） |
+| ② | 五 binding 全换 + 索引表字段 + push data 16B + 去重 key 塌成 spec | `just regress floor` 逐位；`logStartupBaseline` 新读数 = 条目 ≈ spec 数 / 句柄 ≈ 2×条目 / mappings ≈ 30（对照 §1 基线表）；**条目数断言进 `tests/`**：换材质/换块不新增条目，且"新增 spec 组合不新增条目"可变异 |
+| ③ | emit 侧全部路径（opaque / skybox / transparent / shadow / meshlet / MDI）+ `list.cullArgs[i]` 与 draw 同值（BIT-IDENTICAL 的既有真相源） | `just regress floor/burst` 逐位；`just test-all`（设备层 + DGC 路） |
+| ④ | DGC 两条路：NV 序列 stride 与 PUSH_DATA token 4B → 16B（`vk_indirect_commands.cppm:26`，`DRAW_MESH_TASKS` 从 @108 后移）+ fanout 把索引表地址写进流；RADV 静态 shader 路执行次数随条目塌缩 | `just test-all`；dgcStatic Execute 次数 = 条目数；⚠ 本机走重放路 ⟹ ③ 的逐位**已是本机的实际验收**，④ 的正确性靠单测/设备层用例兜 |
+| ⑤ | 收账：债-04/债-23 结案 + 本文档基线读数改写 + `还债总账` §3 翻案行改终态 | `just gates` 全绿 |
 
-**Key 设计**（spec 依据：`chapters/shaders.adoc` "Mappings are ignored when codeType is
-VK_SHADER_CODE_TYPE_BINARY_EXT" → mapping 在首次创建时**编进二进制**，二进制是 mapping 相关的）：
+**变异红线（开工当天配好，别等 ⑤ 补）**：把索引表里任一槽索引改错、把某 binding 的
+`addressOffset` 改成相邻字段、把 push data 的地址写成上一行的表基址——**必须**有东西红
+（逐位回归 + 条目数断言 + VVL 三件套三者至少各一）。它们的共同性质是**错法不崩、VVL 大多
+不报、画面静默错**，正是本仓反复堵的形态。
 
-```
-key = (driverID, driverUUID, apiVersion,        // 二进制 specific to physical device，驱动更新即失效
-       hash(mesh SPV 字节), hash(frag SPV 字节), // just reflect / 热重载改 SPV → 自然失效
-       六元组 ≈ 条目名去掉 spec 前缀)            // 与现有去重 key 同源，零新机制
-```
+### 5.3 原 L0 / L1 缓存路线：作废
 
-流程：查 key → 命中 `codeType=BINARY` 创建 → **失败回落 SPIR-V 并删坏缓存**（同
-`shader_hot_reload` 的 buildReplacement 失败降级模式）；未命中 SPIR-V 创建 →
-`vkGetShaderBinaryDataEXT` 尽力落盘（失败不影响启动）。缓存目录放 build/ 下即可
-（clean-all 清掉无妨）。理论命中 312/312（§3 的均匀 7.4ms 推断驱动无跨调用去重），
-二启后启动最多省 ~2s。
+根因（376 条目）已除 ⟹ 3–7 条目 × 3.01 ms ≈ 20 ms，**缓存没有可省的**。原 §5.2/§5.3
+（运行内 SPV 字节缓存 / 磁盘二进制缓存 + key 设计 + "二启省 ~2s"）与 §6 三条尽调项**全部作废**。
+原文保留仅为历史：留着标注比删干净更能防止"有人再提二进制缓存"这一种反复。
 
-### 5.4 路线级（减对象数，非缓存能解）
+### 5.4 原路线级两条的现状
 
-- 16MB 顶点块粒度调大（如 256MB → ~2 块）→ 条目趋近材质数 132；
-- push-index mapping（§4 表）→ 条目 ≈ spec 数 3，但 per-draw 解析成本回来，属路线级决策。
+- **16MB 顶点块调大**（`kVertexChunkBytes` → 256MB ≈ 2 块）→ 仍可做，但与 5.1 **收益重叠**：
+  vertex 索引进表后 chunk 维度本就不再分裂条目，调大块只省 BDA buffer 条数与 allocator 压力。
+  ⚠ `docs/mdi_plan.md` §E 路线级原把这条与 mapping 替换记成"别重复计收益"——现在那一轴被 5.1
+  消掉，**该告警的对象已变，以本节为准**。
+- **push-index mapping** → 不选：+16B（四个索引）且带 20bit 打包限制，而 indirect index 用
+  +12B（一个地址）喂满五个 binding。理由与公式 → §1.0。
 
-缓存（§5.3）只压缩创建时间，312 句柄 / 624 DGC 槽 / 每帧 bind 一个都不少。
+### 5.5 待用户决策（明天开工前定，全案只有这一条没有数据）
 
-## §6 实施前尽调项（L1 开工前必须收口）
+**NVIDIA DGC 的 push constant 增长 bug**（细节由用户持有，本机 RADV 不触发该路）：④ 的 NV 路
+PUSH_DATA token 需 +12B。两个分支：
+
+- **(a) fanout 把索引表地址一起写进流**——地址 = 表基址 + `objectIndex × stride`，compute 侧
+  一行；NV 路与 CPU/RADV 路形态统一（都靠 indirect index）。
+- **(b) NV 路保留 constant offset 旁路**——不碰那个 bug，但等于**没砍干净**：条目数仍是
+  (spec × chunk × 材质) 量级，且多一条"两条路径两种映射源"的验证面。
+
+**默认按 (a)**，用户确认后开工。若选 (b)，②的条目数断言要分路径写（NV 档不塌缩），
+`logStartupBaseline` 的读数也要按当前路径解释。
+
+## §6 实施前尽调项 ——【作废，2026-10-14】
+
+> 以下三条是 **L1 磁盘二进制缓存**开工前的尽调项；该路线已随定案作废（§5.3）⟹ 三条一并作废。
+> 保留原文，防止"再提一次二进制缓存"时不记得它们曾经为什么被写下来。**唯一仍然有效的教训**
+> = 第 2 条的精神：新机制上机前先确认驱动**自己**有没有缓存，别把驱动白送的算成自己的收益
+> （INDIRECT_INDEX 的对应问题 = RADV 对 indirect index 有没有内部去重，开工 ① 的顺带观察项）。
 
 1. **linked object 的二进制语义（第一风险）**：本项目 mesh+frag 一次 linked 创建
    （`mesh.nextStage = FRAGMENT`）。`vkGetShaderBinaryDataEXT` 返回 per-stage 二进制还是 linked
@@ -207,6 +300,21 @@ key = (driverID, driverUUID, apiVersion,        // 二进制 specific to physica
 | DGC 容量 2×条目 | `rgl/vk_indirect_commands.cppm:38-39` |
 | 材质风格规则 | `configs/scene.lua`（`material_styles` / `styles`） |
 | 基准日志 | `build/rgl/logs/gllog.txt`（2026-09-28 19:57 运行；build 侧 picking 临时开） |
+
+**本刀要动的符号本体**（2026-10-14 定案；行号会漂，改前以 grep 为准）：
+
+| 符号 | 位置 | 动什么 |
+|---|---|---|
+| `bakeBindingMappings` | `rgl/shader.cppm` | 五个 binding 的 `m.source` 与 `sourceData`（constant offset → indirect index，共用 pushOffset、各带 addressOffset） |
+| `PipelineBindings` + `b.extra`（binding 6/7/8） | `rgl/shader.cppm` / `shader_registry_impl.cppm:81-83` | per-draw 槽字段从"身份"降为"表字段引用" |
+| `addModelEntry` 六元组去重 + 条目名 | `rgl/shader_registry_impl.cppm:43,102-103` | key 塌成 `specName`；条目名退化为 spec |
+| `addCloneEntries` | `rgl/shader_registry_impl.cppm` | 每 model 条目克隆 → 每 spec 一条 |
+| `izbMaskEntryFor(vertexSlot)` | `rgl/shader_registry.cppm` | 键从顶点槽改 spec |
+| `DrawArgs`（push data 4B） | `rgl/generated/material_types_generated.cppm` + 各 emit 点 | 4B → 16B（`@8` 索引表地址）；mip_gen/env_prefilter 侧不变（它们仍用 push-index，`kPushIndexByte = 20`） |
+| `objectDraws`（binding 26） | `scene_data` 子范围载体 | 每对象 +5 uint 索引列 |
+| DGC 序列 stride + PUSH_DATA token | `rgl/vk_indirect_commands.cppm:26`（`@8` 4B → 16B，`DRAW_MESH_TASKS` 后移） | NV 路；fanout 把地址写进流 |
+| `logStartupBaseline` 读数 | `rgl/shader.cppm`（`ShaderObjectStats`） | ②⑤ 的验收数字（条目 / 句柄 / mappings / createTotal） |
+| spec 公式与 VUID | `Vulkan-Docs/chapters/descriptorheaps.adoc`（indirect-index 节：11260/11261/11262 + "值在飞行中保持静态"段） | 定案依据；别靠记忆写参数 |
 
 ## 附录 A：312 的独立复现（raw glb + 项目算法，2026-09-28 逐项吻合）
 
