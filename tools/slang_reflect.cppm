@@ -46,6 +46,12 @@ export struct SlangGlobalParam {
 	// 立论：图外 compute 的同步对账要回答「这个 dispatch 会写哪些资源」，而人工申报的
 	// 申报者与被判者同源（docs/compute_调研.md §7.10）——本字段是那条问题的**独立机器来源**。
 	std::string access;
+	// 参数类别是否 = descriptor-table-slot（compute-bindings 产物的收录判据）。
+	// 🔴 判别子只能走 `getTypeLayout()->getParameterCategory()`，与 queryPushConstParamNames
+	// 同一个理由：类型判体（"是不是 ConstantBuffer"）分不开 push 常量块与真 CB。本字段为真
+	// 的参数才需要 descriptor heap 映射条目；push constant 由 vkCmdPushDataEXT 自动供给，
+	// 给它建映射条目是无意义的（shader.cppm 的 makeMappedCompute 头注释同口径）。
+	bool descriptorTableSlot = false;
 };
 
 // SlangResourceAccess → 产物里的人读字符串（口径 → docs/compute_调研.md §7.11 的八种声明
@@ -208,6 +214,10 @@ static std::string accessToString(SlangResourceAccess a)
 			slang::TypeLayoutReflection* tl = p->getTypeLayout();
 			slang::TypeReflection* t = tl ? tl->getType() : nullptr;
 			g.access = accessToString(t ? t->getResourceAccess() : SLANG_RESOURCE_ACCESS_UNKNOWN);
+			// 判空同 access：拿不到 layout 就判"不是 table slot"（保守 = 少收一条，
+			// 而产物少一条会让消费端"名字不在表里"直接抛——比多收一条静默更安全）
+			g.descriptorTableSlot =
+				tl && tl->getParameterCategory() == slang::ParameterCategory::DescriptorTableSlot;
 			// 复用上面那个**已判空**的 t：`typeToCppType` 第一行就 `t->getKind()`，而本函数原先
 			// 是 `p->getTypeLayout()->getType()` 裸取——同一个循环里新字段判空、旧字段不判，
 			// 等于把崩溃路径留在自己刚立完护栏的旁边。（`queryPushConst` 等处的同型裸取是

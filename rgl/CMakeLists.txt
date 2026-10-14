@@ -267,6 +267,7 @@ set(RGL_BASE_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/scene_forward_types_generated.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/meshlet_cull_types_generated.cppm"   # ★1-a2-i：MeshletCullItem / cullPush（反射单一真相源）
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/compute_push_types_generated.cppm"  # compute push 契约（无 schema；替换 evssm/izb 手写镜像 struct）
+    "${CMAKE_CURRENT_SOURCE_DIR}/generated/compute_bindings_generated.cppm"    # compute binding 名 → 号 接口表（makeMappedCompute 的查表对象；纯查表无设备 ⟹ rlbase）
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/param_semantics_generated.cppm"
 )
 

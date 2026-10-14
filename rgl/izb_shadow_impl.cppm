@@ -192,12 +192,16 @@ IzbShadow::IzbShadow(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
 	writeDesc(maskBuffer, maskBytes, maskSlot);
 
 	const uint32_t descriptorSize = resources->getDescriptorHeap().getDescriptorSize();
+	// 键 = shader 里的 binding **变量名**（号由构建期接口表查得）：以前这里手抄 `{0, …}{3, …}`，
+	// shader 改号而 C++ 不动 = 静默往错堆槽读数据（izb_prime 的 primed 就是那种 0/1/3 跳号）。
 	createShader.emplace(makeMappedCompute(dev, "generated_shaders/izb_create.comp.spv",
-		std::vector<std::pair<uint32_t, RGL::HeapSlot>>{
-			{0, HeapSlot{headSlot}}, {1, HeapSlot{nodesSlot}}, {2, HeapSlot{depthSlot}}}, descriptorSize));
+		std::vector<std::pair<std::string_view, RGL::HeapSlot>>{
+			{"head", HeapSlot{headSlot}}, {"nodes", HeapSlot{nodesSlot}},
+			{"depthTex", HeapSlot{depthSlot}}}, descriptorSize));
 	primeShader.emplace(makeMappedCompute(dev, "generated_shaders/izb_prime.comp.spv",
-		std::vector<std::pair<uint32_t, RGL::HeapSlot>>{
-			{0, HeapSlot{headSlot}}, {1, HeapSlot{nodesSlot}}, {3, HeapSlot{primedSlot}}}, descriptorSize));
+		std::vector<std::pair<std::string_view, RGL::HeapSlot>>{
+			{"head", HeapSlot{headSlot}}, {"nodes", HeapSlot{nodesSlot}},
+			{"primed", HeapSlot{primedSlot}}}, descriptorSize));
 
 	if (auto* lg = RLLogger::getInstance())
 		lg->info("izb: 开门 grid={} extent={}x{} head={}B nodes={}B（cascade-0 近场 v1，"

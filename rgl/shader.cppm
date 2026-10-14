@@ -45,27 +45,71 @@ export struct HeapSlot {
 };
 
 /**
- * heap 映射的 compute shader object：binding→heap 槽一对一。
+ * compute binding **变量名** → shader 里 `[[vk::binding(N)]]` 号（构建期接口表查表）。
  *
- * push constant 无需映射条目——descriptor heap 下 push data 区自动供给（vkCmdPushDataEXT）。
- * 原三处同款模式（evssm_shadow / izb_shadow / gpu_cull）收成本点。
+ * 🔴 **纯函数**：不碰 VkDevice、不读 SPV、不做运行期反射——查的是构建期产物
+ * `rgl/generated/compute_bindings_generated.cppm`（compute-access 管线的第二份产物，
+ * 与 compute_access.json 同源同次生成）。引擎运行期拿不到「名字→号」映射（SPV 不持有名字），
+ * 所以这张表**只能**在构建期生成，运行期只是一次查表；不引入 SPIRV-Reflect / slang 运行期
+ * 查询是定案（判据 → docs/compute_调研.md §7.12）。
  *
- * @param dev            逻辑设备
- * @param spvPath        .spv 路径（相对 CWD，即 build/rgl/）
- * @param bindingToSlot  (binding, 槽号) 对列表；binding 不必连续。🔴 第二元 = **槽号**
- *                       （HeapSlot 强类型，坑 5 护栏），×descriptorSize 的换算在本函数内
- * @param descriptorSize resource heap 的槽大小（字节）
- * @throw std::runtime_error SPV 加载失败
+ * @param shader      shader 文件名（basename，如 "izb_create.comp.slang"，见 computeShaderKey）
+ * @param bindingName shader 里的 binding 变量名（如 "head"）
+ * @return 命中 = binding 号；未命中 = nullopt（**不抛**——「shader 不在表里」与「名字不在该
+ *         shader 里」是两类错、消息不同，分开报归调用方，见 resolveComputeBindings）
  */
-export [[nodiscard]] vk::raii::ShaderEXT
-makeMappedCompute(vk::raii::Device& dev, const std::string& spvPath,
-	std::span<const std::pair<uint32_t, HeapSlot>> bindingToSlot,
-	uint32_t descriptorSize) {
-	auto spvResult = loadShaderSpv(spvPath);
-	if (!spvResult)
-		throw std::runtime_error(spvResult.error().describe());
-	const auto spv = std::move(*spvResult);
+export [[nodiscard]] std::optional<uint32_t>
+resolveComputeBinding(std::string_view shader, std::string_view bindingName);
 
+/**
+ * spvPath → 接口表的 shader 键：取 basename、`.spv` 换成 `.slang`。
+ *
+ * `generated_shaders/izb_create.comp.spv` → `izb_create.comp.slang`。路径不以 `.spv` 结尾时
+ * **不猜**：派生出的键查不到 ⟹ 调用方抛"shader 不在表里"并原样点名这个键（比静默兜底成
+ * 别的名字可归因）。
+ */
+export [[nodiscard]] std::string computeShaderKey(const std::string& spvPath);
+
+/**
+ * 把调用点按**名字**声明的映射条目解析成 (binding 号, 堆槽)——makeMappedCompute 的前置。
+ *
+ * 存在的理由 = 杀掉「手抄 binding 号」这条静默错：调用点原先写 `{0, HeapSlot{headSlot}}`，
+ * shader 里把 `[[vk::binding(0)]]` 改成 5 时**没有任何东西会响**（无编译错、无反射校验、
+ * 无 VVL 报错），只是往错的堆槽读数据。现在写 `{"head", HeapSlot{headSlot}}`，号查构建期
+ * 接口表，shader 改号 C++ 不动 = 行为跟着 shader 走；shader 改名 = 启动即抛并点名。
+ *
+ * 🔴 **构造期红线**：本函数（以及它查的表）只准在 shader object 创建时调用。查表本身是
+ * 个位数长度的线性扫，白送的每帧开销不是重点——重点是它一旦被挪进每帧路径，「创建期烘死」
+ * 这个 makeMappedCompute 的语义就没了（vkCreateShadersEXT 之后映射不可改）。
+ * 低成本护栏 = 本函数唯一的调用者 makeMappedCompute 返回 move-only 的 shader object 句柄，
+ * 天然只出现在构造路径；没加"调用次数计数器"那类运行期断言——那要给模块加全局可变状态
+ * （ECS 护栏的计数基线会因此漂），不划算。
+ *
+ * 🔴 与 makeMappedCompute 分开（而不是并成一个函数）= 让这三类错误在**无 GPU 无窗口**的
+ * `just test` 里就能测到消息本体（tests/test_compute_bindings.cppm）。
+ *
+ * @param spvPath  .spv 路径（shader 身份由它推导，见 computeShaderKey）
+ * @param named    (binding 变量名, 堆槽) 对列表；名字不必连续、也不必覆盖 shader 的全部 binding
+ * @throw std::runtime_error 三类错误，消息各不同且都可归因：
+ *                           ① shader 不在接口表里（消息列出表里有哪些 shader）
+ *                           ② binding 名不在该 shader 里（点名 shader + 错名 + 全部合法名）
+ *                           ③ 同一个名字传了两次（一个 binding 只能映射到一个堆槽）
+ */
+export [[nodiscard]] std::vector<std::pair<uint32_t, HeapSlot>> resolveComputeBindings(
+	const std::string& spvPath,
+	std::span<const std::pair<std::string_view, HeapSlot>> named);
+
+namespace {
+/**
+ * 烘 (binding 号, 堆槽) → mapping 并建 shader object（两个公开入口的共同后半）。
+ *
+ * 🔴 **不导出**：公开面只有 `makeMappedCompute`（名字键，产品代码唯一入口）与
+ * `makeMappedComputeByBinding`（按号，只给接口表面不到的探针 shader）。把这段留在匿名
+ * 作用域，是为了让"绕过接口表直接给号"在模块外**没有第三条路**可走。
+ */
+[[nodiscard]] vk::raii::ShaderEXT createMappedCompute(
+	vk::raii::Device& dev, const std::vector<uint32_t>& spv,
+	std::span<const std::pair<uint32_t, HeapSlot>> bindingToSlot, uint32_t descriptorSize) {
 	std::vector<VkDescriptorSetAndBindingMappingEXT> mappings;
 	mappings.reserve(bindingToSlot.size());
 	for (const auto& [binding, heapSlot] : bindingToSlot) {
@@ -97,6 +141,57 @@ makeMappedCompute(vk::raii::Device& dev, const std::string& spvPath,
 	vk::ShaderCreateInfoEXT createInfo(raw);
 	auto shaders = dev.createShadersEXT(std::vector<vk::ShaderCreateInfoEXT>{createInfo});
 	return std::move(shaders[0]);
+}
+
+}  // namespace
+
+/**
+ * heap 映射的 compute shader object：binding→heap 槽一对一（**产品代码唯一入口**）。
+ *
+ * push constant 无需映射条目——descriptor heap 下 push data 区自动供给（vkCmdPushDataEXT）。
+ * 原三处同款模式（evssm_shadow / izb_shadow / gpu_cull）收成本点。
+ *
+ * 🔴 映射表的键 = shader 里的 **binding 变量名**（不是号）。号由构建期接口表查得
+ * （见 resolveComputeBindings），调用点手抄号的那条静默错就此消失。
+ *
+ * @param dev            逻辑设备
+ * @param spvPath        .spv 路径（相对 CWD，即 build/rgl/）
+ * @param bindingToSlot  (binding 变量名, 槽号) 对列表；名字不必连续，也不必覆盖 shader 全部
+ *                       binding（没给映射的 binding 走驱动默认）。🔴 第二元 = **槽号**
+ *                       （HeapSlot 强类型，坑 5 护栏），×descriptorSize 的换算在本函数内
+ * @param descriptorSize resource heap 的槽大小（字节）
+ * @throw std::runtime_error SPV 加载失败，或 binding 名解析失败（三类，见 resolveComputeBindings）
+ */
+export [[nodiscard]] vk::raii::ShaderEXT
+makeMappedCompute(vk::raii::Device& dev, const std::string& spvPath,
+	std::span<const std::pair<std::string_view, HeapSlot>> bindingToSlot,
+	uint32_t descriptorSize) {
+	auto spvResult = loadShaderSpv(spvPath);
+	if (!spvResult)
+		throw std::runtime_error(spvResult.error().describe());
+	const auto spv = std::move(*spvResult);
+	// 名字 → 号（构造期一次，见 resolveComputeBindings 的构造期红线）
+	const auto resolved = resolveComputeBindings(spvPath, bindingToSlot);
+	return createMappedCompute(dev, spv, resolved, descriptorSize);
+}
+
+/**
+ * 按 **binding 号**直填的 heap 映射 compute shader object——🔴 **产品代码不要用**。
+ *
+ * 存在的唯一理由：`tests/shaders/` 下那几枚驱动语义探针（dheap_*.comp.slang）不在
+ * 接口表面里（接口表只反射 `rgl/shaders/`，把测试探针塞进引擎产物 = 让引擎的 binding 表
+ * 跟着测试走）。它们要验的是**驱动怎么解释 mapping**，与"名字→号"无关，所以直接给号，
+ * 但仍复用同一段烘映射的代码（复制那段 = 探针测的不再是引擎的烘焙路径）。
+ *
+ * 与 makeMappedCompute 的唯一差别 = 不查表、不校验。产品代码请走名字键版。
+ */
+export [[nodiscard]] vk::raii::ShaderEXT
+makeMappedComputeByBinding(vk::raii::Device& dev, const std::string& spvPath,
+	std::span<const std::pair<uint32_t, HeapSlot>> bindingToSlot, uint32_t descriptorSize) {
+	auto spvResult = loadShaderSpv(spvPath);
+	if (!spvResult)
+		throw std::runtime_error(spvResult.error().describe());
+	return createMappedCompute(dev, *spvResult, bindingToSlot, descriptorSize);
 }
 
 /**

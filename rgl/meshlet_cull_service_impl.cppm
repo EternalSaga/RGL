@@ -114,13 +114,16 @@ void MeshletCullService::createVisibleFlags() {
 
 void MeshletCullService::createCullShader() {
 	// binding 号 ≠ 槽号：四张表各自领/借来的槽号在此**逐 binding 烘死**（vkCreateShadersEXT 之后
-	// 不可改）。簇头表走的是 mesh binding 18 那个槽（复用，不新建描述符）；标志表走本服务领的
-	// 槽，mesh 侧 binding 21 烘的也是同一个号 ⟹ 读写两侧天然一致。
+	// 不可改）。键写 binding **变量名**（号查构建期接口表）——本 compute 的 0/1/4 是私有布局，
+	// 挪号历史上要 shader 与这里同步改两处，现在只改 shader。簇头表走的是 mesh binding 18 那个槽
+	// （复用，不新建描述符）；标志表走本服务领的槽，mesh 侧 binding 21 烘的也是同一个号
+	// ⟹ 读写两侧天然一致。
 	// 「单份 buffer 跨帧复用」不是省事的选择，是这里的形状决定的（→ 类注释）。
 	cullShader = makeMappedCompute(device.getDevice(), "generated_shaders/meshlet_cull.comp.spv",
-	    std::vector<std::pair<uint32_t, RGL::HeapSlot>>{
-	        {0, RGL::HeapSlot{itemsSlot}}, {1, RGL::HeapSlot{clusterHeaderSlot}},
-	        {4, RGL::HeapSlot{visibleBufferSlot}}, {23, RGL::HeapSlot{objectMatrixSlot}}},
+	    std::vector<std::pair<std::string_view, RGL::HeapSlot>>{
+	        {"cullItems", RGL::HeapSlot{itemsSlot}}, {"clusters", RGL::HeapSlot{clusterHeaderSlot}},
+	        {"clusterVisible", RGL::HeapSlot{visibleBufferSlot}},
+	        {"objectMatrixTable", RGL::HeapSlot{objectMatrixSlot}}},
 	    resources.getDescriptorHeap().getDescriptorSize());
 }
 

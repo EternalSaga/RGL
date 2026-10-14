@@ -1,7 +1,10 @@
+module;
+#include <fmt/format.h>  // fmt::format（compute binding 名解析失败的三类报错消息）
 module shader:impl;
 
 import shader;  // clang 不给 partition impl unit 隐式 import 主接口——必须显式
 import rlstd;
+import compute_bindings_generated;  // B2-1″：compute binding 名 → 号 接口表（构建期反射产物，rlbase）
 
 namespace RGL {
 
@@ -280,6 +283,95 @@ std::optional<std::set<uint32_t>> spvDeclaredBindings(const std::vector<uint32_t
 		}
 	}
 	return bindings;
+}
+
+namespace {
+
+/**
+ * 报错消息用的名字清单拼接（逗号分隔）。契约见 resolveComputeBindings 的接口注释。
+ *
+ * 空清单写 `<无>`：消息里出现空清单会被读成"消息坏了"，而它真正的意思是"这一层是空的"
+ * （接口表整条没生成 / 该 shader 一个 binding 都没有）——两种空必须能从消息里区分出来。
+ */
+std::string joinNames(const std::vector<std::string>& items) {
+	std::string out;
+	for (const auto& item : items)
+		out += (out.empty() ? "" : ", ") + item;
+	return out.empty() ? std::string{"<无>"} : out;
+}
+
+/** 报错消息用：接口表里有哪些 shader。 */
+std::string knownComputeShaderNames() {
+	std::vector<std::string> names;
+	for (const auto& shader : computeShaderNames())
+		names.emplace_back(shader);
+	return joinNames(names);
+}
+
+/** 报错消息用：某 shader 的全部合法 binding 名（带号，省得再开 shader 查）。 */
+std::string legalComputeBindingNames(std::string_view shader) {
+	std::vector<std::string> names;
+	for (const auto& b : computeBindings(shader))
+		names.push_back(fmt::format("{}({})", b.name, b.binding));
+	return joinNames(names);
+}
+
+}  // namespace
+
+/** resolveComputeBinding 定义（契约见接口注释）。查的是构建期接口表，无设备、无反射。 */
+std::optional<uint32_t>
+resolveComputeBinding(std::string_view shader, std::string_view bindingName) {
+	for (const auto& b : computeBindings(shader))
+		if (b.name == bindingName)
+			return b.binding;
+	return std::nullopt;
+}
+
+/** computeShaderKey 定义（契约见接口注释）。不引 <filesystem>：只要 basename，两个斜杠字符够了。 */
+std::string computeShaderKey(const std::string& spvPath) {
+	const auto slash = spvPath.find_last_of("/\\");
+	std::string key = slash == std::string::npos ? spvPath : spvPath.substr(slash + 1);
+	if (std::string_view(key).ends_with(".spv"))
+		key.resize(key.size() - 4);
+	key += ".slang";
+	return key;
+}
+
+/** resolveComputeBindings 定义（契约与三类报错的口径见接口注释）。 */
+std::vector<std::pair<uint32_t, HeapSlot>> resolveComputeBindings(
+	const std::string& spvPath,
+	std::span<const std::pair<std::string_view, HeapSlot>> named) {
+	const std::string shader = computeShaderKey(spvPath);
+	// ① shader 身份先判：它不在表里时，后面每条名字的报错都会退化成"合法名：<无>"这种
+	// 指错方向的消息（真因是这枚 shader 根本没进管线名单）。
+	if (std::ranges::find(computeShaderNames(), std::string_view{shader})
+	    == computeShaderNames().end())
+		throw std::runtime_error(fmt::format(
+			"makeMappedCompute: shader '{}' 不在 compute binding 接口表里（spvPath={}）。"
+			"表由 compute-access 反射管线生成（名单见 cmake/RglReflection.cmake），表里现有：{}",
+			shader, spvPath, knownComputeShaderNames()));
+	std::vector<std::pair<uint32_t, HeapSlot>> resolved;
+	resolved.reserve(named.size());
+	for (const auto& [bindingName, heapSlot] : named) {
+		const auto binding = resolveComputeBinding(shader, bindingName);
+		// ② 名字不在该 shader 里：点名 shader + 错名 + 全部合法名（带号）
+		if (!binding)
+			throw std::runtime_error(fmt::format(
+				"makeMappedCompute: binding 名 '{}' 不在 shader '{}' 的接口表里（spvPath={}）。"
+				"该 shader 的合法 binding 名（号）：{}",
+				bindingName, shader, spvPath, legalComputeBindingNames(shader)));
+		// ③ 同名两次（等价于同 binding 两次）：两个堆槽抢一个 binding，后写的映射覆盖
+		// 先写的 = 静默丢一个绑定
+		const auto taken = std::ranges::find_if(resolved,
+			[b = *binding](const auto& e) { return e.first == b; });
+		if (taken != resolved.end())
+			throw std::runtime_error(fmt::format(
+				"makeMappedCompute: shader '{}' 的 binding 名 '{}' 传了两次（堆槽 {} 与 {}）"
+				"——一个 binding 只能映射到一个堆槽",
+				shader, bindingName, taken->second.slot, heapSlot.slot));
+		resolved.emplace_back(*binding, heapSlot);
+	}
+	return resolved;
 }
 
 }  // namespace RGL

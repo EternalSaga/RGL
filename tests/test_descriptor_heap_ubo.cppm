@@ -483,7 +483,7 @@ void Harness::runDispatch(const std::string& spvPath, const std::string& entryNa
         {2, RGL::HeapSlot{slotRaw_}},
         {3, RGL::HeapSlot{slotOut_}},
     }};
-    auto shaderObj = RGL::makeMappedCompute(fx_.device(), spvPath,
+    auto shaderObj = RGL::makeMappedComputeByBinding(fx_.device(), spvPath,
         std::span<const std::pair<uint32_t, RGL::HeapSlot>>(bindingToSlot), descriptorSize());
 
     fx_.submitAndWait([&](vk::raii::CommandBuffer& cmd) {
@@ -728,7 +728,7 @@ void StrideHarness::runDispatch(const std::string& spvPath) {
         {1, RGL::HeapSlot{slotHeaders_}},
         {2, RGL::HeapSlot{slotOut_}},
     }};
-    auto shaderObj = RGL::makeMappedCompute(fx_.device(), spvPath,
+    auto shaderObj = RGL::makeMappedComputeByBinding(fx_.device(), spvPath,
         std::span<const std::pair<uint32_t, RGL::HeapSlot>>(bindingToSlot), heap_.getDescriptorSize());
 
     fx_.submitAndWait([&](vk::raii::CommandBuffer& cmd) {

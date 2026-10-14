@@ -49,21 +49,29 @@ function(rgl_reflect_slang slang_rel schema_rel module_name)
     set(REFLECTION_PAIRS "${_pair_list}" PARENT_SCOPE)
 endfunction()
 
-# 调用：rgl_reflect_compute_access(<产物名 相对 generated/> <相对 rgl/ 的 shader>...)
-# compute entry point 的 binding **读写方向**表。与 rgl_reflect_slang 的差别不是"另一条同类
-# 管线"，而是**另一个问题**：那条反射 `*.slang` 契约文件的 struct 布局（C++ 要按它发字段），
-# 本条反射 `*.comp.slang` 入口的 binding 表 + 方向（C++ 不消费，消费者是 checks 规则）。
-# 产物是 JSON 不是 .cppm ⟹ **不进 RGL_GENERATED_CPPM**（没有 C++ 消费者），但**必须进
-# REFLECTION_PAIRS**——不进护栏的产物就是没人守的漂移产物：方向表过期时"零警告"会被读成
-# 「同步边对过账」，那正是它存在的理由的反面。立论 → docs/compute_调研.md §7.10。
-# 🔴 护栏输入 = 显式列的 comp shader **+ 整个 rgl/shaders/*.slang 的 glob**：方向会从被
-# import 的文件来（cull.comp.slang 的 objectMatrixTable 来自 `import scene_tables`），只列
-# 直接输入 = 改了被 import 的文件不触发护栏 = 静默使用过期方向表。代价是**任何** shader
+# 调用：rgl_reflect_compute_access(<JSON 产物名 相对 generated/> <cppm 模块名> <相对 rgl/ 的 shader>...)
+# compute entry point 的 binding 表。与 rgl_reflect_slang 的差别不是"另一条同类管线"，而是
+# **另一个问题**：那条反射 `*.slang` 契约文件的 struct 布局（C++ 要按它发字段），本条反射
+# `*.comp.slang` 入口的 binding 表（号 + 变量名 + 读写方向）。
+#
+# 🔴 **一次调用出两份产物**（同一次编译遍历，工具端同一个 byShader）：
+#   · `<JSON 产物名>`  = binding × 读写方向，消费者 = B2-2 的图外依赖图；
+#   · `<cppm 模块名>`  = binding **变量名 → 号** 的接口表，消费者 = `rgl/shader.cppm` 的
+#     `makeMappedCompute`（调用点按名声明堆槽，号查表得到 ⟹ 不再手抄 shader 里的号）。
+# 一份 binding 表查两次 = 给将来留一对可能互不一致的口径，所以**同一次生成**是这条管线的
+# 承重形状，不是顺手。cppm 是 C++ 消费者 ⟹ **进 RGL_GENERATED_CPPM**（JSON 那份不进）。
+#
+# 两份都**必须进 REFLECTION_PAIRS**——不进护栏的产物就是没人守的漂移产物：接口表过期时
+# "零警告"会被读成「名字与号对过账」，那正是它存在的理由的反面。立论 → docs/compute_调研.md §7.10。
+# 🔴 护栏输入 = 显式列的 comp shader **+ 整个 rgl/shaders/*.slang 的 glob**：方向与 binding 声明
+# 都会从被 import 的文件来（cull.comp.slang 的 objectMatrixTable 来自 `import scene_tables`），
+# 只列直接输入 = 改了被 import 的文件不触发护栏 = 静默使用过期表。代价是**任何** shader
 # 改动都会触发一次护栏——这是**故意的保守**：宁可多跑一次 just reflect（秒级），不要静默
-# 拿一份过期方向表去对同步边（对错的同步边看不出来）。glob 展开见 ReflectionManifest.cmake
-# 的 expand_inputs（write/check 共用同一个函数）。
-function(rgl_reflect_compute_access product)
+# 拿一份过期表去对账（对错的表看不出来）。glob 展开见 ReflectionManifest.cmake 的 expand_inputs
+# （write/check 共用同一个函数）。
+function(rgl_reflect_compute_access product cppm_module)
     set(json "${GEN_SRC_DIR}/${product}")
+    set(cppm "${GEN_SRC_DIR}/${cppm_module}.cppm")
     set(shader_args "")
     set(pair_ins "")
     foreach(shard ${ARGN})
@@ -74,6 +82,7 @@ function(rgl_reflect_compute_access product)
         COMMAND reflection_tool compute-access
                 ${shader_args}
                 --output ${json}
+                --output-cppm ${cppm} --module-name ${cppm_module}
                 --flags "${SLANG_FLAGS_STR} -no-codegen -entry main -stage compute"
                 --include "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
         VERBATIM)
@@ -81,7 +90,10 @@ function(rgl_reflect_compute_access product)
     # configure 期就拼成绝对路径：清单脚本跑在 `cmake -P` 里，那里没有 CMAKE_SOURCE_DIR。
     list(APPEND pair_ins "glob:${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.slang")
     string(REPLACE ";" "," pair_ins "${pair_ins}")
-    set(_pair_list ${REFLECTION_PAIRS} "${json}|${pair_ins}")
+    # 两份产物同一组输入 ⟹ 两条 pair 的输入串逐字相同（改任一 shader 两份都判过期）
+    set(_cppm_list ${RGL_GENERATED_CPPM} ${cppm})
+    set(_pair_list ${REFLECTION_PAIRS} "${json}|${pair_ins}" "${cppm}|${pair_ins}")
+    set(RGL_GENERATED_CPPM "${_cppm_list}" PARENT_SCOPE)
     set(REFLECTION_PAIRS "${_pair_list}" PARENT_SCOPE)
 endfunction()
 
@@ -129,7 +141,7 @@ endfunction()
 
 # reflect：显式重建全部反射产物（工具由 add_dependencies 先建；管线无条件重跑）。
 add_custom_target(reflect
-    COMMENT "重跑 10 条反射管线（6 条 slangc reflection + features + param_semantics + compute_access + compute_push）")
+    COMMENT "重跑 10 条反射管线（6 条 slangc reflection + features + param_semantics + compute_access（一条出两份产物：JSON 方向表 + binding 名接口表 .cppm）+ compute_push）")
 add_dependencies(reflect reflection_tool)
 
 # types 管线
@@ -146,9 +158,10 @@ rgl_reflect_slang(shaders/scene.slang shaders/scene_forward_schema.lua scene_for
 # 逐簇剔除契约（★1-a2-i）：MeshletCullItem / cullPush 经 C API 反射生成 C++ struct
 rgl_reflect_slang(shaders/meshlet_cull.slang shaders/meshlet_cull_schema.lua meshlet_cull_types_generated)
 
-# compute binding 读写方向表（B2，docs/compute_调研.md §7.10/§7.11）。九枚按名字典序列出，
-# 与产物的 shaders 段同序（产物自己也会排一遍，这里同序只为 diff 好读）。
-rgl_reflect_compute_access(compute_access.json
+# compute binding 表（B2，docs/compute_调研.md §7.10/§7.11）——**一条管线两份产物**：
+# compute_access.json（binding × 方向）+ compute_bindings_generated.cppm（binding 名 → 号）。
+# 九枚按名字典序列出，与产物的 shaders 段同序（产物自己也会排一遍，这里同序只为 diff 好读）。
+rgl_reflect_compute_access(compute_access.json compute_bindings_generated
     shaders/cull.comp.slang
     shaders/env_prefilter.comp.slang
     shaders/evssm_downsample.comp.slang

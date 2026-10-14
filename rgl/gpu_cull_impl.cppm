@@ -214,23 +214,24 @@ void GpuCull::createCullShaders(vk::raii::Device& device) {
 	// compute shader object（stage=COMPUTE + heap bit + binding 映射；
 	// shader 模块 makeMappedCompute 单阶段版——push constant 无需映射条目，
 	// descriptor heap 下经 vkCmdPushDataEXT 的 push data 区自动供给）
-	// 🔴 binding 号 = cull.comp.slang 的显式声明（批 T1 后：0 表 / 2 序列 / 4 计数 / 23 对象矩阵；
-	// 旧的 1=scene data 全 buffer 字节读已删，3 号位让给 scene.slang 的 sceneData 声明避免
-	// slangc E39001 显式撞号警告）。
+	// 🔴 键 = cull.comp.slang 的 binding **变量名**，号查构建期接口表（批 T1 那次 3→4 挪号
+	// 曾要 shader 与这里同步改，现在只改 shader 一处）。只映射本 kernel 真读写的四条：
+	// scene.slang 随 import 带进来的其余声明（sceneHeader 等）未被引用、不进 SPV，无需条目。
 	const uint32_t descriptorSize = resources.getDescriptorHeap().getDescriptorSize();
 
 	cullShader = makeMappedCompute(device, "generated_shaders/cull.comp.spv",
-		std::vector<std::pair<uint32_t, RGL::HeapSlot>>{
-			{0, HeapSlot{tableSlot}}, {2, HeapSlot{sequenceSlot}}, {4, HeapSlot{countSlot}},
-			{23, HeapSlot{objectMatrixSlot}}},
+		std::vector<std::pair<std::string_view, RGL::HeapSlot>>{
+			{"cullTable", HeapSlot{tableSlot}}, {"sequences", HeapSlot{sequenceSlot}},
+			{"countBuf", HeapSlot{countSlot}}, {"objectMatrixTable", HeapSlot{objectMatrixSlot}}},
 		descriptorSize);
 
-	// stream fanout shader object（静态 DGC 路；3 binding：0=table 1=sequences(ro) 2=streams(rw)，
+	// stream fanout shader object（静态 DGC 路；cullTable / sequences(ro) / streams(rw)，
 	// heap 映射同款模式——仅启用时建，docs/archive/radv_static_dgc_spike.md §3.3）
 	if (nEntryStreams > 0) {
 		fanoutShader = makeMappedCompute(device, "generated_shaders/stream_fanout.comp.spv",
-			std::vector<std::pair<uint32_t, RGL::HeapSlot>>{
-				{0, HeapSlot{tableSlot}}, {1, HeapSlot{sequenceSlot}}, {2, HeapSlot{streamsSlot}}},
+			std::vector<std::pair<std::string_view, RGL::HeapSlot>>{
+				{"cullTable", HeapSlot{tableSlot}}, {"sequences", HeapSlot{sequenceSlot}},
+				{"streams", HeapSlot{streamsSlot}}},
 			descriptorSize);
 	}
 }

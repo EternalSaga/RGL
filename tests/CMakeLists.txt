@@ -51,6 +51,7 @@ set(RGL_TEST_SOURCES
     test_shadow_geometry.cppm   # 级联拟合球/切分/光空间盒/剔除（5a-3→5a-9 回归链）
     test_reflection_layout.cppm # 反射生成物字节布局契约
     test_compute_push_layout.cppm # compute push 契约（compute-push 管线产物）：八枚逐字段布局 + 总数锚 + 反向锚
+    test_compute_bindings.cppm    # B2-1″ compute binding 名→号 接口表：调用点七枚逐条阳性锚 + 反向 + 覆盖锚（9 枚）+ 三类报错可归因
     test_scene_config.cppm      # 四份配置解析契约
     test_render_scale.cppm      # 批 14.3 渲染倍率纯算术：1.0 档逐像素红线 / 取整 / 钳制 / 非退化
     test_velocity_field.cppm    # 批 14.4 逐像素速度场：显式相机基参考 / 旋转光流闭式 / 天空与无效判据
