@@ -1,6 +1,5 @@
 module;
-#include <glm/glm.hpp>
-#include <vulkan/vulkan.h>  // C 句柄/地址类型（VkBuffer/VkDeviceAddress 访问器返回）
+#include <vulkan/vulkan.h>  // C 句柄/地址类型（VkBuffer/VkDeviceAddress 访问器返回）；offsetof 经其 stddef.h 提供
 export module gpu_cull;
 
 import rlstd;
@@ -13,65 +12,56 @@ import scene_data;  // SceneDataService（架构债务续账步骤 1：scene dat
 import offgraph_sync;  // 批次 B1b：图外同步发射账（8 条 barrier 的参数由边表物化）
 import VmaRaii;
 import frame_draw_list;
-import material_types_generated;  // DrawArgs（writeSequenceStaging：序列 CPU 侧基值）
+import material_types_generated;  // DrawArgs（writeSequenceStaging：序列 CPU 侧基值 + 槽区宽度断言）
+
+/**
+ * GPU culling 三张 buffer 的**元素契约**（`CullEntry` / `CullSequence` / `CullCount`）。
+ * 真相源 = `rgl/shaders/cull_tables.slang`，经 `cull_tables_schema.lua` 反射出本生成物；
+ * `cull.comp.slang` 与 `stream_fanout.comp.slang` 读的是**同一份声明**。迁移前这里是手写
+ * `struct CullEntry` + `kCullSequenceStride` + `kCullSeq*` 四常量 + 三条 `static_assert`，
+ * shader 侧再手抄第三、四份（`kEntryStride = 60u` / `kSequenceStride = 120u` / `+108u` /
+ * `8u..120u` 拷贝段），机器只比 C++ 单边——原注释自己承认："跨侧漂移靠三条 static_assert 拦
+ * C++ 侧单边改动 + 两侧注释互指"。现在**抄写那一步不存在了**：改 shader 字段 ⟹ 生成物跟着变 ⟹
+ * 本模块与 vk_indirect_commands 的 offsetof 取值点自动跟上；改不动的是 schema 交叉校验
+ * （just reflect 期 [FAIL]）。
+ * 🔴 **为什么 `export import`**：本模块的公开接口直接吃/吐这些类型（构造参数与 `entries()` 收
+ * `std::vector<CullEntry>`、`readbackSequences()` 的步长 = `sizeof(CullSequence)`），而 C++20
+ * 的 import **不传递** ⟹ 不 export 就得让 main_scene / cull_driver / vk_indirect_commands 各补
+ * 一句 import（先例 = `features.cppm` 的 `export import features_generated;`）。
+ */
+export import cull_tables_types_generated;
 
 namespace RGL {
 
 /**
- * GPU culling 静态候选表条目（Phase 7b 批次 5）：per-candidate 一次性上传（host 写，
- * 每帧不变）。C++/shader 布局契约单一真相源 = 本 struct（cull.comp.slang 字面量必须
- * 一致——scene.slang 先例，本表不接反射管线）：
- *   @0  center vec3（node-local 剔除球心，与 CullSphere 组件同源）
- *   @12 radius
- *   @16 objectSlot（scene data 对象矩阵表下标 = MeshRef.objectSlot，实例级）
- *   @20 pipelineIndex（管线表下标 = DGC execution set 槽 / 重放管线表下标）
- *   @24 groupCount（mesh task group 数 = MeshAsset.groupCount）
- *   @28 totalTriangles / @32 vertexOffset（DrawArgs 透传字段，MeshAsset 同源）
- *   @36 baseColor vec4 / @52 roughnessMetallic vec2（MaterialAsset 同源，x=roughness）
+ * 序列行内不变式（债-12 护栏的**继任者**：原三条 static_assert 量的是手抄进 C++ 的常量，是关于
+ * 副本的同义反复——shader 单边改布局时它们照样全过；本组量的是反射实查的 shader 布局）。
+ * 逐字段偏移由生成物自带的 sizeof/offsetof assert 钉；这里补的是**关系**——生成物逐字段报偏移，
+ * 不报"它们必须相邻 / 恰好收尾"。运行期的同一批不变式另有独立判据
+ * （tests/test_cull_tables_layout.cppm，期望值出处 = 迁移前人工核对过的字节表，不抄生成物）。
  */
-export struct CullEntry {
-	glm::vec3 center{0.0f};
-	float radius = 0.0f;
-	uint32_t objectSlot = 0;
-	uint32_t pipelineIndex = 0;
-	uint32_t groupCount = 0;
-	uint32_t totalTriangles = 0;
-	uint32_t vertexOffset = 0;
-	glm::vec4 baseColor{1.0f};
-	glm::vec2 roughnessMetallic{0.0f};
-};
-static_assert(sizeof(CullEntry) == 60, "CullEntry layout drifted from cull.comp.slang");
+// #1 execSlot 2×u32 必须**连续**：DGC EXECUTION_SET token 按 shaderStages 位 LSB→MSB 读 2 个
+//     连续 u32（第 1 位 = FRAGMENT = LSB、第 2 位 = MESH），execution set 下标约定 2j = frag /
+//     2j+1 = mesh（CPU writeSequenceStaging 按同约定写值）。
+static_assert(offsetof(CullSequence, execSlotFrag) + 4 == offsetof(CullSequence, execSlotMesh)
+		&& offsetof(CullSequence, execSlotMesh) + 4 == offsetof(CullSequence, drawArgs),
+	"cull 序列 execSlot 2×u32 与 DrawArgs 的相邻契约漂移（消费者 = vk_indirect_commands 的 "
+	"EXECUTION_SET token：它按 shaderStages 位读 2 个连续 u32，中间插字段 = execution set 下标读错）");
+// #2 meshCmd 12B 必须恰好收尾于序列行末端：DGC DRAW_MESH_TASKS token 从 token.offset 起按
+//     sizeof(VkDrawMeshTasksIndirectCommandEXT) 取字节，越出行 = 读进下一条序列。
+static_assert(offsetof(CullSequence, meshCmdX) + sizeof(VkDrawMeshTasksIndirectCommandEXT)
+		== sizeof(CullSequence),
+	"meshCmd 12B 必须恰好收尾于序列行末端（序列步长的另一半现在住在 CullSequence 这个类型里，"
+	"不再是 cull.comp.slang / stream_fanout.comp.slang 的 kSequenceStride = 120u 字面量）");
+// #3 DrawArgs 不得超出 drawArgs..meshCmdX 的保留槽区（DGC PUSH_DATA token 按 sizeof(DrawArgs) 推）。
+static_assert(sizeof(RGL::DrawArgs)
+		<= offsetof(CullSequence, meshCmdX) - offsetof(CullSequence, drawArgs),
+	"DrawArgs 超出 DrawArgs 槽区保留宽度 = 序列布局契约破裂（DrawArgs 是反射生成物，4B 契约见 "
+	"tests/test_reflection_layout.cppm 组 2；DGC PUSH_DATA token 按 sizeof(DrawArgs) 推）");
 
-/** 输出序列步长（120B：execSlot 2×u32（@0 frag / @4 mesh——DGC EXECUTION_SET token 按
- * shaderStages 位 LSB→MSB 读 u32 数组）+ DrawArgs 槽区（@8..108 共 100B 保留宽度，
- * DrawArgs 本身 Phase 7b+ 起 4B = 仅 objectIndex，其余 96B 空置不写）+
- * VkDrawMeshTasksIndirectCommandEXT 12（@108）；cull.comp.slang / DGC layout token
- * 偏移同源）。读回重放路只消费可见性（@108.x）与 CPU 侧 cullArgs——execSlot 仅
- * DGC 路消费（值 = 2×pipelineIndex / 2×pipelineIndex+1，execution set 下标约定见
- * vk_indirect_commands.cppm）。≤ RADV maxIndirectCommandsIndirectStride 2048。 */
-export inline constexpr uint32_t kCullSequenceStride = 120;
-/**
- * 序列行内字段字节偏移（债-12 护栏：C++ 侧唯一拼写处——writeSequenceStaging 写基值、
- * readCullResult 读 meshCmd.x、vk_indirect_commands_impl 两条 layout 的 token.offset
- * 全部引用本组常量，不再各写裸字面量 0/4/8/108）。
- * 🔴 契约的另一半拼写在 shader 侧字面量：cull.comp.slang `kSequenceStride = 120u` 与
- * `+108u`（meshCmd.x 覆盖点）、stream_fanout.comp.slang `kSequenceStride = 120u` 与
- * `8u..120u` 拷贝段。本表不接反射管线（CullEntry 先例），跨侧漂移靠下面三条
- * static_assert 拦 C++ 侧单边改动 + 两侧注释互指（改任一偏移 = 必须同步改两个
- * .slang 并重跑 just smoke，本组红线 = shader 不动）。
- */
-export inline constexpr uint32_t kCullSeqExecSlotFrag = 0;  ///< u32 = 2×pipelineIndex（EXECUTION_SET token 第 1 位 = FRAGMENT，shaderStages 位 LSB）
-export inline constexpr uint32_t kCullSeqExecSlotMesh = 4;  ///< u32 = 2×pipelineIndex+1（token 第 2 位 = MESH）
-export inline constexpr uint32_t kCullSeqDrawArgs = 8;  ///< DrawArgs 4B（@8..108 槽区保留 100B 宽度，余 96B 空置不写）
-export inline constexpr uint32_t kCullSeqMeshCmd = 108;  ///< VkDrawMeshTasksIndirectCommandEXT 12B（CPU 写基值，GPU 覆盖 x）
-static_assert(kCullSeqExecSlotFrag + 4 == kCullSeqExecSlotMesh && kCullSeqExecSlotMesh + 4 == kCullSeqDrawArgs,
-	"cull 序列 execSlot 2×u32 @0/@4 与 DrawArgs@8 的相邻契约漂移（另一半 = cull.comp.slang 头注释 sequences 布局 + vk_indirect_commands EXECUTION_SET token 读 2 连续 u32）");
-static_assert(kCullSeqMeshCmd + sizeof(VkDrawMeshTasksIndirectCommandEXT) == kCullSequenceStride,
-	"meshCmd 12B 必须恰好收尾于 stride 末端：stride 的另一半拼写在 cull.comp.slang / stream_fanout.comp.slang 的 kSequenceStride = 120u 字面量（改本断言任一常量 = 两个 shader 同步改 + just smoke 重验）");
-static_assert(sizeof(RGL::DrawArgs) <= kCullSeqMeshCmd - kCullSeqDrawArgs,
-	"DrawArgs 超出 @8..108 的 100B 保留槽区 = 序列布局契约破裂（DrawArgs 是反射生成物，4B 契约见 tests/test_reflection_layout.cppm 组 2；DGC PUSH_DATA token 按 sizeof(DrawArgs) 推）");
-/** count buffer 字节数（@0 保留未用——旧 visible atomicAdd 无人清零已删，2026-09-15
- * | @4 total 每帧 thread0 写；64B 对齐留白）。 */
+/** count buffer 字节数（`CullCount` 只占前 sizeof(CullCount) 字节，其余是历史留白——旧 visible
+ * atomicAdd 无人清零已删，2026-09-15；64B 对齐留白）。buffer 尺寸**不在**契约类型里：契约管元素
+ * 布局，这里管分配；total 的落点由 `offsetof(CullCount, total)` 取（见 countTotalAddress）。 */
 export inline constexpr uint32_t kCullCountBytes = 64;
 
 /**
@@ -96,8 +86,8 @@ export class GpuCull {
 	 * @param sceneData scene data 服务（幂等领 buffer/槽 + staging 拷贝目标，架构债务续账步骤 1）
 	 * @param entries 候选表（main 从 registry 构建，顺序契约见类注释）；空 = inactive
 	 * @param entryStreamCount 静态 shader DGC 路的 per-entry 流数（>0 = 启用：分配
-	 *   entryStreamCount × candidateCount × 120B 流 buffer + fanout shader object，
-	 *   recordCullPass 尾部追加扇出 dispatch；0 = 不建，NV/重放路零开销——
+	 *   entryStreamCount × candidateCount × sizeof(CullSequence) 流 buffer + fanout shader
+	 *   object，recordCullPass 尾部追加扇出 dispatch；0 = 不建，NV/重放路零开销——
 	 *   docs/archive/radv_static_dgc_spike.md §3.2/§3.3）
 	 */
 	GpuCull(RGL::DeviceContext& vkDevice, RGL::Resources& resources,
@@ -112,11 +102,10 @@ export class GpuCull {
 	[[nodiscard]] const std::vector<CullEntry>& entries() const { return entryTable; }
 	/**
 	 * 序列 staging 写 CPU 侧基值（recordCullPass 之前调用）：逐 candidate
-	 * execSlotFrag@0（= 2×pipelineIndex）+ execSlotMesh@4（= 2×pipelineIndex+1）+
-	 * DrawArgs@8（4B = objectIndex，material_types_generated；mvp 走 scene data
-	 * per-object 表，CPU = 位级真相源）+ meshCmd@108（x=groupCount y=z=1，
-	 * GPU dispatch 只覆盖 x）——偏移与 gpu_cull_impl.cppm writeSequenceStaging
-	 * 实现及 cull.comp.slang 头注释同源。
+	 * execSlotFrag（= 2×pipelineIndex）+ execSlotMesh（= 2×pipelineIndex+1）+
+	 * DrawArgs（4B = objectIndex，material_types_generated；mvp 走 scene data
+	 * per-object 表，CPU = 位级真相源）+ meshCmd 三量（x=groupCount y=z=1，
+	 * GPU dispatch 只覆盖 x）——落点全部经 `CullSequence` 的字段取，本模块零字节字面量。
 	 * @param slot 帧 slot（staging ring 下标，0/1）
 	 * @param args 逐 candidate DrawArgs（candidate 序，render_list 产出；
 	 *             size 必须 = candidateCount，否则越界）
@@ -125,7 +114,7 @@ export class GpuCull {
 	/**
 	 * 在指定命令缓冲上录制 culling 数据通路（自含：heap 边 → scene data 拷贝 →
 	 * 序列 staging 拷贝（CPU 基值 → device 序列）+ Transfer→Compute 边 → heap 绑定 →
-	 * bindShadersEXT + pushDataEXT + dispatch（GPU 覆盖 meshCmd.x + count）→
+	 * bindShadersEXT + pushDataEXT + dispatch（GPU 覆盖 meshCmdX + count）→
 	 * Compute→Transfer 边 → 读回拷贝 → Transfer→HostRead 边）。调用方提交本 CB
 	 * 并同步等 fence 后调 readCullResult。
 	 * @param cmd 命令缓冲（录制期；调用方负责 begin/end/submit）
@@ -142,9 +131,9 @@ export class GpuCull {
 		RGL::VmaBuffer& sceneStaging, uint32_t slot, OffGraphSync& sync);
 	/**
 	 * 读回结果（调用方已同步等待本帧 culling 提交 fence）：visible 计数 + 逐 candidate
-	 * 可见位（不可见 = 序列 meshCmd.x == 0）。
+	 * 可见位（不可见 = 序列 meshCmdX == 0）。
 	 * @param slot 帧 slot（与 recordCullPass 同值）
-	 * @return 可见序列数（由序列 meshCmd.x 位统计，非 count buffer @0——@0 保留未用）
+	 * @return 可见序列数（由序列 meshCmdX 位统计，非 count buffer 的 reserved——它保留未用）
 	 */
 	uint32_t readCullResult(uint32_t slot);
 	/** @return candidate i 是否可见（readCullResult 后有效）。 */
@@ -153,18 +142,19 @@ export class GpuCull {
 	[[nodiscard]] VkBuffer sequenceBufferHandle() const { return *sequenceBuffer; }
 	/** @return 序列 buffer device 地址（DGC execute/preprocess 的 indirectAddress）。 */
 	[[nodiscard]] VkDeviceAddress sequenceAddress() const { return sequenceBuffer.getDeviceAddress(); }
-	/** @return count buffer @4（total = candidate 数，GPU thread0 写）device 地址
-	 *（DGC sequenceCountAddress；非紧凑语义）。 */
-	[[nodiscard]] VkDeviceAddress countTotalAddress() const { return countBuffer.getDeviceAddress() + 4; }
+	/** @return count 区的 `CullCount::total`（= candidate 数，GPU thread0 写）的 device 地址
+	 *（DGC sequenceCountAddress；非紧凑语义）。偏移取自契约类型，不写裸 4。 */
+	[[nodiscard]] VkDeviceAddress countTotalAddress() const {
+		return countBuffer.getDeviceAddress() + offsetof(CullCount, total);
+	}
 	/**
-	 * @return 本帧读回的序列区 host 指针（布局 = kCullSequenceStride 步长，
-	 * [slot 区基址 + i×120]：execSlot@0/@4 / DrawArgs@8 / meshCmd@108；重放消费）。
-	 * 未 readCullResult = nullptr。
+	 * @return 本帧读回的序列区 host 指针（元素 = `CullSequence`，步长 sizeof(CullSequence)；
+	 * 重放消费 execSlot 两量 / DrawArgs / meshCmd 三量）。未 readCullResult = nullptr。
 	 */
 	[[nodiscard]] const std::byte* readbackSequences(uint32_t slot) const { return readbackSeqPtr[slot]; }
 	/** @return 静态 DGC 路的 per-entry 流是否启用（= 构造期 entryStreamCount > 0）。 */
 	[[nodiscard]] bool entryStreamsEnabled() const { return nEntryStreams > 0; }
-	/** @return 流 buffer device 地址（条目 j 流基址 = 此值 + j × candidateCount × kCullSequenceStride）。 */
+	/** @return 流 buffer device 地址（条目 j 流基址 = 此值 + j × candidateCount × sizeof(CullSequence)）。 */
 	[[nodiscard]] VkDeviceAddress streamsAddress() const { return streamsBuffer.getDeviceAddress(); }
 
    private:
@@ -210,7 +200,7 @@ export class GpuCull {
 	uint32_t nCandidates = 0;
 
 	RGL::VmaBuffer tableBuffer;  // 静态表（host-visible + BDA + eStorageBuffer；启动期 memcpy）
-	RGL::VmaBuffer sequenceBuffer;  // 输出序列（device-local + BDA + eTransferSrc/Dst；candidateCount × 120B）
+	RGL::VmaBuffer sequenceBuffer;  // 输出序列（device-local + BDA + eTransferSrc/Dst；candidateCount × sizeof(CullSequence)）
 	RGL::VmaBuffer countBuffer;  // 输出计数（device-local + BDA + eTransferSrc；64B）
 	std::array<RGL::VmaBuffer, 2> seqStaging;  // 序列 staging ring（×2 host-visible；CPU 写基值 → 拷入 device 序列）
 	std::array<void*, 2> seqStagingMapped{};  // 序列 staging 映射指针
@@ -226,7 +216,7 @@ export class GpuCull {
 	// 静态 shader DGC 路（spike，docs/archive/radv_static_dgc_spike.md §3.2/§3.3；
 	// nEntryStreams = 0 时以下全不创建，NV/重放路零开销）
 	uint32_t nEntryStreams = 0;         // per-entry 流数（= 构造期管线表条目数）
-	RGL::VmaBuffer streamsBuffer;      // per-entry 满槽孔洞流（N×candidateCount×120B；
+	RGL::VmaBuffer streamsBuffer;      // per-entry 满槽孔洞流（N×candidateCount×sizeof(CullSequence)；
 	                                   // device-local + BDA + INDIRECT_BUFFER[VUID-12407]）
 	uint32_t streamsSlot = 0;          // 流 buffer heap 槽（fanout kernel binding 2）
 	vk::raii::ShaderEXT fanoutShader = nullptr;  // stream_fanout.comp（3 binding；仅启用时建）

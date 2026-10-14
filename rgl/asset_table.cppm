@@ -149,7 +149,7 @@ export struct MaterialAsset {
  * MaterialAsset → roughnessMetallic vec2（**x=roughness / y=metallic**）——该字段序在
  * C++ 侧的唯一拼写处（债-12 单源化）。shader 侧字段序契约 = ObjectDraw.roughnessMetallic
  * @8（scene.slang，deferred_geometry.frag 按 x=roughness y=metallic 消费）与
- * CullEntry @52（cull.comp.slang 头注释）；两个写端（render_list 写 ObjectDraw、
+ * CullEntry.roughnessMetallic（cull_tables.slang 契约，@52）；两个写端（render_list 写 ObjectDraw、
  * main C3 写 CullEntry）都经本函数，字段序不可能只改一处。
  */
 export inline glm::vec2 roughnessMetallic(const MaterialAsset& mat) {

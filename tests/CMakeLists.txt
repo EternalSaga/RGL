@@ -50,6 +50,7 @@ set(RGL_TEST_SOURCES
     test_main.cppm              # DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN + main()
     test_shadow_geometry.cppm   # 级联拟合球/切分/光空间盒/剔除（5a-3→5a-9 回归链）
     test_reflection_layout.cppm # 反射生成物字节布局契约
+    test_cull_tables_layout.cppm # GPU cull 三张表元素契约（cull_tables 管线产物）：60/120/8 逐字段锚 + 旧三条 assert 的不变式接棒 + 总数与反向锚
     test_compute_push_layout.cppm # compute push 契约（compute-push 管线产物）：八枚逐字段布局 + 总数锚 + 反向锚
     test_compute_bindings.cppm    # B2-1″ compute binding 名→号 接口表：调用点七枚逐条阳性锚 + 反向 + 覆盖锚（9 枚）+ 三类报错可归因
     test_compute_hazard.cppm      # B2-3 compute hazard 机器派生 + 双源对账：判据四条各配反向 + 按类去重 + 🔴 人工半边↔反射互锁 + 数量锚 5 + 全产品面复算
@@ -226,6 +227,10 @@ target_compile_definitions(rgl_tests PRIVATE RGL_ENGINE_SHADER_DIR="${CMAKE_BINA
 # 所以只能读文本。生成物是已提交文件，源树路径稳定。
 target_compile_definitions(rgl_tests PRIVATE
     RGL_COMPUTE_PUSH_CPPM="${CMAKE_SOURCE_DIR}/rgl/generated/compute_push_types_generated.cppm")
+# cull_tables 生成物的**源树路径**（tests/test_cull_tables_layout.cppm 的总数锚与反向锚同样要数
+# 产物文本里的 `export struct`，理由与上面那条完全相同：探测未声明的名字是硬错误而非 SFINAE）。
+target_compile_definitions(rgl_tests PRIVATE
+    RGL_CULL_TABLES_CPPM="${CMAKE_SOURCE_DIR}/rgl/generated/cull_tables_types_generated.cppm")
 # 引擎 SPV 由 rgl 目标的 slang 规则产出：rgl_tests 直接依赖它，否则 `just test-gpu`
 # 单测目标时拿到陈旧 SPV（"改完 shader 没重建就报全通过"的 modules 环境坑同款）。
 add_dependencies(rgl_tests rgl)

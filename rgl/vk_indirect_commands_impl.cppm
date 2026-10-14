@@ -1,5 +1,5 @@
 module;
-#include <vulkan/vulkan.h>  // DGC C 结构体 + PFN（v357 vulkan.hpp 无 vk:: 包装）
+#include <vulkan/vulkan.h>  // DGC C 结构体 + PFN（v357 vulkan.hpp 无 vk:: 包装）；offsetof 经其 stddef.h 提供
 #include <fmt/format.h>  // 契约违例/失败报错
 module vk_indirect_commands:impl;
 
@@ -74,19 +74,22 @@ void DgcCommands::createLayout() {
 	tokens[0].sType = VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_TOKEN_EXT;
 	tokens[0].type = VK_INDIRECT_COMMANDS_TOKEN_TYPE_EXECUTION_SET_EXT;
 	tokens[0].data.pExecutionSet = &execToken;
-	tokens[0].offset = kCullSeqExecSlotFrag;  // 2×u32：frag@0（FRAGMENT = LSB）/ mesh@4
+	tokens[0].offset = static_cast<uint32_t>(offsetof(RGL::CullSequence, execSlotFrag));
+	// ↑ 2×u32：execSlotFrag（FRAGMENT = shaderStages LSB）+ 紧邻的 execSlotMesh（MESH）
 	tokens[1].sType = VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_TOKEN_EXT;
 	tokens[1].type = VK_INDIRECT_COMMANDS_TOKEN_TYPE_PUSH_DATA_EXT;
 	tokens[1].data.pPushConstant = &pushToken;
-	tokens[1].offset = kCullSeqDrawArgs;  // DrawArgs（descriptor heap push 区，Phase 7b+ 起 4B）
+	tokens[1].offset = static_cast<uint32_t>(offsetof(RGL::CullSequence, drawArgs));
+	// DrawArgs（descriptor heap push 区，Phase 7b+ 起 4B）
 	tokens[2].sType = VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_TOKEN_EXT;
 	tokens[2].type = VK_INDIRECT_COMMANDS_TOKEN_TYPE_DRAW_MESH_TASKS_EXT;
-	tokens[2].offset = kCullSeqMeshCmd;  // VkDrawMeshTasksIndirectCommandEXT 12B
+	tokens[2].offset = static_cast<uint32_t>(offsetof(RGL::CullSequence, meshCmdX));
+	// VkDrawMeshTasksIndirectCommandEXT 12B
 	VkIndirectCommandsLayoutCreateInfoEXT layoutInfo{};
 	layoutInfo.sType = VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_CREATE_INFO_EXT;
 	layoutInfo.flags = 0;
 	layoutInfo.shaderStages = VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT;
-	layoutInfo.indirectStride = kCullSequenceStride;  // 120（序列步长单一真相源 = gpu_cull）
+	layoutInfo.indirectStride = static_cast<uint32_t>(sizeof(RGL::CullSequence));  // 序列步长 = 契约类型
 	layoutInfo.pipelineLayout = VK_NULL_HANDLE;  // descriptor heap 模式允许 null（spec :119）
 	layoutInfo.tokenCount = 3;
 	layoutInfo.pTokens = tokens;
@@ -251,7 +254,7 @@ void DgcCommands::recordExecute(vk::raii::CommandBuffer& cmd, VkDeviceAddress se
 	info.indirectExecutionSet = executionSet;
 	info.indirectCommandsLayout = layout;
 	info.indirectAddress = sequenceAddress;
-	info.indirectAddressSize = static_cast<VkDeviceSize>(seqCapacity) * kCullSequenceStride;
+	info.indirectAddressSize = static_cast<VkDeviceSize>(seqCapacity) * sizeof(RGL::CullSequence);
 	info.preprocessAddress = preprocessAddress + preprocessSlotStride * frameSlot;
 	info.preprocessSize = preprocessSize;
 	info.maxSequenceCount = seqCapacity;
@@ -297,15 +300,17 @@ DgcStaticCommands::DgcStaticCommands(RGL::DeviceContext& vkDevice, const RGL::Sh
 	tokens[0].sType = VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_TOKEN_EXT;
 	tokens[0].type = VK_INDIRECT_COMMANDS_TOKEN_TYPE_PUSH_DATA_EXT;
 	tokens[0].data.pPushConstant = &pushToken;
-	tokens[0].offset = kCullSeqDrawArgs;  // DrawArgs（descriptor heap push 区，4B）
+	tokens[0].offset = static_cast<uint32_t>(offsetof(RGL::CullSequence, drawArgs));
+	// DrawArgs（descriptor heap push 区，4B）
 	tokens[1].sType = VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_TOKEN_EXT;
 	tokens[1].type = VK_INDIRECT_COMMANDS_TOKEN_TYPE_DRAW_MESH_TASKS_EXT;
-	tokens[1].offset = kCullSeqMeshCmd;  // VkDrawMeshTasksIndirectCommandEXT 12B
+	tokens[1].offset = static_cast<uint32_t>(offsetof(RGL::CullSequence, meshCmdX));
+	// VkDrawMeshTasksIndirectCommandEXT 12B
 	VkIndirectCommandsLayoutCreateInfoEXT layoutInfo{};
 	layoutInfo.sType = VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_CREATE_INFO_EXT;
 	layoutInfo.flags = 0;
 	layoutInfo.shaderStages = VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT;
-	layoutInfo.indirectStride = kCullSequenceStride;
+	layoutInfo.indirectStride = static_cast<uint32_t>(sizeof(RGL::CullSequence));
 	layoutInfo.pipelineLayout = VK_NULL_HANDLE;  // descriptor heap 模式允许 null
 	layoutInfo.tokenCount = 2;
 	layoutInfo.pTokens = tokens;
@@ -418,7 +423,7 @@ void DgcStaticCommands::recordExecute(vk::raii::CommandBuffer& cmd, uint32_t ent
 	info.indirectExecutionSet = VK_NULL_HANDLE;  // VU-10241：无 EXECUTION_SET token → NULL
 	info.indirectCommandsLayout = layout;
 	info.indirectAddress = streamAddress;  // 该条目流（VU-12407 INDIRECT_BUFFER usage 在 GpuCull 侧置位）
-	info.indirectAddressSize = static_cast<VkDeviceSize>(seqCapacity) * kCullSequenceStride;
+	info.indirectAddressSize = static_cast<VkDeviceSize>(seqCapacity) * sizeof(RGL::CullSequence);
 	info.preprocessAddress = preprocessAddress +
 		preprocessSlotStride * (static_cast<VkDeviceSize>(entryIndex * framesPerEntry + frameSlot));
 	info.preprocessSize = preprocessSize;

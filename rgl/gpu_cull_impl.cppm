@@ -5,6 +5,7 @@ module;
 module gpu_cull:impl;
 
 import gpu_cull;  // clang 不给 partition impl unit 隐式 import 主接口——必须显式
+                 // （CullEntry / CullSequence / CullCount 经主接口的 export import 可见）
 import rlstd;
 import rlvk;
 import rllogger;
@@ -32,6 +33,10 @@ namespace RGL {
 // 量的才是编译器实查的 shader 布局）。判据与先例 → docs/compute_调研.md §7.13。
 // 注：本文件早先的形态是裸 `uint32_t fanPush[1]`（债-12 才结构体化），推出字节 = sequenceCount
 // 的 4B 小端，换成本生成物后逐位不变。
+//
+// 🔴 序列/候选表/count 三张 buffer 的**元素布局**同理已迁到反射生成物（cull_tables 管线，
+// 理由与判据见 gpu_cull.cppm 文件头）。本文件自此**零字节字面量**：步长 = sizeof(CullSequence)，
+// 字段落点 = 成员访问，buffer 尺寸 = nCandidates × sizeof(元素)。
 
 // 构造器 / recordCullPass / readCullResult 实现（契约见接口声明）。
 
@@ -54,9 +59,9 @@ GpuCull::GpuCull(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
 
 	if (auto logger = RLLogger::getInstance())
 		logger->info("gpu cull: {} candidates ({} sequences × {}B) — table slots {}/{}/{}{}",
-			nCandidates, nCandidates, kCullSequenceStride, tableSlot, sequenceSlot, countSlot,
+			nCandidates, nCandidates, sizeof(CullSequence), tableSlot, sequenceSlot, countSlot,
 			nEntryStreams > 0 ? fmt::format(" + streams {}×{}B @slot {}", nEntryStreams,
-				static_cast<uint64_t>(nCandidates) * kCullSequenceStride, streamsSlot) : std::string());
+				static_cast<uint64_t>(nCandidates) * sizeof(CullSequence), streamsSlot) : std::string());
 }
 
 void GpuCull::createCullBuffers(vk::raii::Device& device) {
@@ -66,7 +71,7 @@ void GpuCull::createCullBuffers(vk::raii::Device& device) {
 	// 每帧可见性由 recordCullPass 的 heap barrier（eHost→eAllGraphics）覆盖）
 	if (nCandidates > 0) {
 		vk::BufferCreateInfo ti{};
-		ti.size = static_cast<vk::DeviceSize>(nCandidates) * 60;
+		ti.size = static_cast<vk::DeviceSize>(nCandidates) * sizeof(CullEntry);
 		ti.usage = vk::BufferUsageFlagBits::eStorageBuffer |
 			vk::BufferUsageFlagBits::eShaderDeviceAddress;
 		VmaAllocationCreateInfo ta{};
@@ -85,7 +90,7 @@ void GpuCull::createCullBuffers(vk::raii::Device& device) {
 	// 输出 buffer（device-local + BDA + eTransferSrc——读回拷贝源）
 	if (nCandidates > 0) {
 		vk::BufferCreateInfo si{};
-		si.size = static_cast<vk::DeviceSize>(nCandidates) * kCullSequenceStride;
+		si.size = static_cast<vk::DeviceSize>(nCandidates) * sizeof(CullSequence);
 		si.usage = vk::BufferUsageFlagBits::eStorageBuffer |
 			vk::BufferUsageFlagBits::eShaderDeviceAddress |
 			vk::BufferUsageFlagBits::eIndirectBuffer |  // DGC execute 消费序列（VUID-12407）
@@ -114,7 +119,7 @@ void GpuCull::createCullBuffers(vk::raii::Device& device) {
 	// 仅启用时建——NV/重放路零开销）
 	if (nEntryStreams > 0) {
 		vk::BufferCreateInfo fi{};
-		fi.size = static_cast<vk::DeviceSize>(nEntryStreams) * nCandidates * kCullSequenceStride;
+		fi.size = static_cast<vk::DeviceSize>(nEntryStreams) * nCandidates * sizeof(CullSequence);
 		fi.usage = vk::BufferUsageFlagBits::eStorageBuffer |  // fanout kernel 写（heap binding）
 			vk::BufferUsageFlagBits::eShaderDeviceAddress |
 			vk::BufferUsageFlagBits::eIndirectBuffer;  // DGC execute indirectAddress（VUID-12407）
@@ -133,7 +138,7 @@ void GpuCull::createHostRings() {
 	// 序列 staging ring（×2 host-visible；CPU 每帧写基值 → 拷入 device 序列 buffer）
 	for (uint32_t s = 0; s < 2; ++s) {
 		vk::BufferCreateInfo si2{};
-		si2.size = static_cast<vk::DeviceSize>(nCandidates) * kCullSequenceStride;
+		si2.size = static_cast<vk::DeviceSize>(nCandidates) * sizeof(CullSequence);
 		si2.usage = vk::BufferUsageFlagBits::eTransferSrc;
 		VmaAllocationCreateInfo sa2{};
 		sa2.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
@@ -151,7 +156,7 @@ void GpuCull::createHostRings() {
 	for (uint32_t s = 0; s < 2; ++s) {
 		vk::BufferCreateInfo ri{};
 		ri.size = static_cast<vk::DeviceSize>(kCullCountBytes) +
-			static_cast<vk::DeviceSize>(nCandidates) * kCullSequenceStride;
+			static_cast<vk::DeviceSize>(nCandidates) * sizeof(CullSequence);
 		ri.usage = vk::BufferUsageFlagBits::eTransferDst;
 		VmaAllocationCreateInfo ra{};
 		ra.usage = VMA_MEMORY_USAGE_GPU_TO_CPU;
@@ -187,6 +192,9 @@ void GpuCull::allocRuntimeSlots() {
 
 void GpuCull::writeHeapDescriptors(vk::raii::Device& device) {
 	// 描述符写入（eStorageBuffer + BDA 全范围——SceneDataService::ensure 同款模式）
+	// 🔴 这里的 size 就是描述符里那份 `VkDeviceAddressRangeEXT`，也就是 shader 侧
+	// `StructuredBuffer<T>` 的**元素个数上限**（= size / sizeof(T)）——越界可检的前提之一，
+	// 所以它必须与 buffer 分配处（createCullBuffers）用同一个 sizeof，不许各写一份。
 	if (nCandidates > 0) {
 		const auto writeDesc = [&](RGL::VmaBuffer& buf, vk::DeviceSize size, uint32_t slot) {
 			vk::DeviceAddressRangeEXT range{buf.getDeviceAddress(), size};
@@ -201,12 +209,12 @@ void GpuCull::writeHeapDescriptors(vk::raii::Device& device) {
 				std::array<vk::ResourceDescriptorInfoEXT, 1>{desc},
 				std::array<vk::HostAddressRangeEXT, 1>{dst});
 		};
-		writeDesc(tableBuffer, static_cast<vk::DeviceSize>(nCandidates) * 60, tableSlot);
-		writeDesc(sequenceBuffer, static_cast<vk::DeviceSize>(nCandidates) * kCullSequenceStride, sequenceSlot);
+		writeDesc(tableBuffer, static_cast<vk::DeviceSize>(nCandidates) * sizeof(CullEntry), tableSlot);
+		writeDesc(sequenceBuffer, static_cast<vk::DeviceSize>(nCandidates) * sizeof(CullSequence), sequenceSlot);
 		writeDesc(countBuffer, kCullCountBytes, countSlot);
 		if (nEntryStreams > 0)
 			writeDesc(streamsBuffer,
-				static_cast<vk::DeviceSize>(nEntryStreams) * nCandidates * kCullSequenceStride, streamsSlot);
+				static_cast<vk::DeviceSize>(nEntryStreams) * nCandidates * sizeof(CullSequence), streamsSlot);
 	}
 }
 
@@ -242,18 +250,23 @@ void GpuCull::writeSequenceStaging(uint32_t slot, const std::vector<RGL::DrawArg
 		throw std::runtime_error(fmt::format(
 			"GpuCull::writeSequenceStaging: args.size()={} != candidateCount={}",
 			args.size(), nCandidates));
-	auto* dst = static_cast<std::byte*>(seqStagingMapped[slot]);
+	auto* rows = static_cast<CullSequence*>(seqStagingMapped[slot]);
 	for (uint32_t i = 0; i < nCandidates; ++i) {
-		auto* s = dst + static_cast<size_t>(i) * kCullSequenceStride;
+		CullSequence& row = rows[i];
 		// DGC execution set 下标约定（vk_indirect_commands.cppm）：2j = entry j 的 frag，
-		// 2j+1 = mesh；序列 @0 = frag 位（FRAGMENT = shaderStages LSB）、@4 = mesh 位
-		const uint32_t execFrag = 2 * entryTable[i].pipelineIndex;
-		const uint32_t execMesh = 2 * entryTable[i].pipelineIndex + 1;
-		std::memcpy(s + kCullSeqExecSlotFrag, &execFrag, sizeof(uint32_t));
-		std::memcpy(s + kCullSeqExecSlotMesh, &execMesh, sizeof(uint32_t));
-		std::memcpy(s + kCullSeqDrawArgs, &args[i], sizeof(RGL::DrawArgs));  // DrawArgs @8（4B 仅 objectIndex，Phase 7b+ bindless 化；mvp/材质字段走 scene data 表）
-		const uint32_t meshCmd[3] = {entryTable[i].groupCount, 1, 1};
-		std::memcpy(s + kCullSeqMeshCmd, meshCmd, sizeof(meshCmd));  // meshCmd @108 基值（GPU 覆盖 x）
+		// 2j+1 = mesh；execSlotFrag = FRAGMENT（shaderStages 位 LSB）、execSlotMesh = MESH
+		const uint32_t pipelineIndex = entryTable[i].pipelineIndex;
+		row.execSlotFrag = 2 * pipelineIndex;
+		row.execSlotMesh = 2 * pipelineIndex + 1;
+		// DrawArgs 整只 memcpy 进 drawArgs 字段的落点：不假设它只有一个字段（当前 4B = 仅
+		// objectIndex，Phase 7b+ bindless 化；mvp/材质字段走 scene data 表）。它能整只落在
+		// drawArgs..meshCmdX 的保留槽区内 = gpu_cull.cppm 的 static_assert #3。
+		std::memcpy(&row.drawArgs, &args[i], sizeof(RGL::DrawArgs));
+		// meshCmd 基值（GPU dispatch 只覆盖 x）：x=groupCount y=z=1
+		row.meshCmdX = entryTable[i].groupCount;
+		row.meshCmdY = 1;
+		row.meshCmdZ = 1;
+		// 🔴 drawArgsSlack（保留宽度）**刻意不写**——迁移前的 memcpy 也没碰它，逐字节保持现状
 	}
 }
 
@@ -306,10 +319,10 @@ void GpuCull::recordCullPass(vk::raii::CommandBuffer& cmd, const CullFrameInput&
 						  "本帧 cull 的 scene data 拷贝与两条同步边一并跳过");
 	}
 
-	// 序列 staging 拷贝（CPU 基值 → device 序列；compute 随后只覆盖 meshCmd.x@104 +
+	// 序列 staging 拷贝（CPU 基值 → device 序列；compute 随后只覆盖 meshCmdX +
 	// count——args 不经 GPU，BIT-IDENTICAL 契约）。staging 的 host 写由上方 ① heap
 	// 边（eHost→eAllGraphics 含 eTransferRead）覆盖
-	VkBufferCopy seqUp{0, 0, static_cast<VkDeviceSize>(nCandidates) * kCullSequenceStride};
+	VkBufferCopy seqUp{0, 0, static_cast<VkDeviceSize>(nCandidates) * sizeof(CullSequence)};
 	::vkCmdCopyBuffer(*cmd, *seqStaging[slot], *sequenceBuffer, 1, &seqUp);
 	sync.emit(cmd, RgSyncEdgeId::cullSeqUploadToCreate, *sequenceBuffer);
 
@@ -345,7 +358,7 @@ void GpuCull::recordCullPass(vk::raii::CommandBuffer& cmd, const CullFrameInput&
 	sync.emit(cmd, RgSyncEdgeId::cullCountWriteToReadback, *countBuffer);
 
 	// 读回拷贝（count 区 + 序列区 → readback[slot]）
-	const VkDeviceSize seqBytes = static_cast<VkDeviceSize>(nCandidates) * kCullSequenceStride;
+	const VkDeviceSize seqBytes = static_cast<VkDeviceSize>(nCandidates) * sizeof(CullSequence);
 	VkBufferCopy countCopy{0, 0, kCullCountBytes};
 	VkBufferCopy seqCopy{0, kCullCountBytes, seqBytes};
 	::vkCmdCopyBuffer(*cmd, *countBuffer, *readback[slot], 1, &countCopy);
@@ -380,14 +393,14 @@ void GpuCull::recordFanoutDispatch(vk::raii::CommandBuffer& cmd, OffGraphSync& s
 
 uint32_t GpuCull::readCullResult(uint32_t slot) {
 	readbackSeqPtr[slot] = static_cast<const std::byte*>(readbackMapped[slot]) + kCullCountBytes;
-	// 可见数由 meshCmd.x 位统计（count buffer @0 保留未用——旧 visible atomicAdd
+	// 可见数由 meshCmdX 位统计（count 区的 reserved 保留未用——旧 visible atomicAdd
 	// 无人清零已删，2026-09-15）
+	const auto* rows = reinterpret_cast<const CullSequence*>(readbackSeqPtr[slot]);
 	uint32_t visible = 0;
 	for (uint32_t i = 0; i < nCandidates; ++i) {
-		const auto* s = readbackSeqPtr[slot] + static_cast<size_t>(i) * kCullSequenceStride;
-		const uint32_t x = *reinterpret_cast<const uint32_t*>(s + kCullSeqMeshCmd);  // meshCmd.x@108
-		visibleFlags[i] = (x != 0);
-		visible += (x != 0);
+		const bool seen = rows[i].meshCmdX != 0;
+		visibleFlags[i] = seen;
+		visible += seen;
 	}
 	lastVisible = visible;
 	return lastVisible;

@@ -103,8 +103,10 @@ rgl_shader(ao_apply.frag AO_APPLY_FRAG_SPV scene)
 rgl_shader(ssr_trace.frag SSR_TRACE_FRAG_SPV scene)
 rgl_shader(ssr_apply.frag SSR_APPLY_FRAG_SPV scene)
 rgl_shader(taa.frag TAA_FRAG_SPV scene)
-# Phase 7b（批次 5）：GPU culling compute（独立契约 cull.comp.slang 头注释，无 import 契约文件）
-rgl_shader(cull.comp CULL_SPV scene scene_tables)
+# Phase 7b（批次 5）：GPU culling compute。契约 = cull_tables.slang（三张表的元素类型，
+# 经 cull_tables_schema.lua 反射成 C++ 侧同一份布局；本文件自此零字节字面量）。🔴 契约**必须列
+# DEP**：漏登 = 改契约不触发本 SPV 重编译（stale SPV 静默残留，check_shader_deps R1 点名）。
+rgl_shader(cull.comp CULL_SPV scene scene_tables cull_tables)
 # 簇化轴 ★1-a2-i：逐簇视锥剔除 compute（一线程一剔除项）。契约 = meshlet_cull.slang
 #（C API 反射单一真相源，非 cull.comp 那套手写字节偏移）。🔴 契约**必须列 DEP**：漏登 =
 # 改契约不触发本 SPV 重编译（stale SPV 静默残留，check_shader_deps R1 点名）。
@@ -130,8 +132,9 @@ rgl_shader(mip_gen.comp MIP_GEN_SPV)
 # Phase 8 批次 ④b：GGX 预滤波 env cubemap compute（独立契约 env_prefilter.comp.slang 头注释，
 # 无 import 契约文件；descriptor heap + shader object，mip_gen 变体，见 env_prefilter.cppm）
 rgl_shader(env_prefilter.comp ENV_PREFILTER_SPV)
-# 静态 shader DGC spike：per-entry 序列流扇出（独立契约 kernel 头注释，docs/archive/radv_static_dgc_spike.md）
-rgl_shader(stream_fanout.comp STREAM_FANOUT_SPV)
+# 静态 shader DGC spike：per-entry 序列流扇出（docs/archive/radv_static_dgc_spike.md）。
+# 契约 = cull_tables.slang（与 cull.comp **同一份**元素类型，故本文件也零字节字面量）。
+rgl_shader(stream_fanout.comp STREAM_FANOUT_SPV cull_tables)
 
 # tinygltf_impl.cpp：tinygltf C++ API 实现 TU（v3 非 header-only，见该文件头注释）。
 # 曾用 -O0（-O2 下编译吃内存，24 并发时打爆 swap）；2026-09-02 用户调整内存/显存
@@ -267,6 +270,7 @@ set(RGL_BASE_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/model_types_generated.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/scene_forward_types_generated.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/meshlet_cull_types_generated.cppm"   # ★1-a2-i：MeshletCullItem / cullPush（反射单一真相源）
+    "${CMAKE_CURRENT_SOURCE_DIR}/generated/cull_tables_types_generated.cppm"   # GPU cull 三张表的元素契约：CullEntry / CullSequence / CullCount（cull.comp 与 stream_fanout.comp 共用；替换 gpu_cull.cppm 手抄镜像）
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/compute_push_types_generated.cppm"  # compute push 契约（无 schema；替换 evssm/izb 手写镜像 struct）
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/compute_bindings_generated.cppm"    # compute binding 名 → 号 接口表（makeMappedCompute 的查表对象；纯查表无设备 ⟹ rlbase）
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/param_semantics_generated.cppm"

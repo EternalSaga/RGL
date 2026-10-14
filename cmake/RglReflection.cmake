@@ -141,7 +141,7 @@ endfunction()
 
 # reflect：显式重建全部反射产物（工具由 add_dependencies 先建；管线无条件重跑）。
 add_custom_target(reflect
-    COMMENT "重跑 10 条反射管线（6 条 slangc reflection + features + param_semantics + compute_access（一条出两份产物：JSON 方向表 + binding 名接口表 .cppm）+ compute_push）")
+    COMMENT "重跑 11 条反射管线（7 条 slangc reflection + features + param_semantics + compute_access（一条出两份产物：JSON 方向表 + binding 名接口表 .cppm）+ compute_push）")
 add_dependencies(reflect reflection_tool)
 
 # types 管线
@@ -157,6 +157,10 @@ rgl_reflect_slang(shaders/lights.slang shaders/lights_schema.lua lights_types_ge
 rgl_reflect_slang(shaders/scene.slang shaders/scene_forward_schema.lua scene_forward_types_generated)
 # 逐簇剔除契约（★1-a2-i）：MeshletCullItem / cullPush 经 C API 反射生成 C++ struct
 rgl_reflect_slang(shaders/meshlet_cull.slang shaders/meshlet_cull_schema.lua meshlet_cull_types_generated)
+# GPU culling 三张 buffer 的元素契约（CullEntry / CullSequence / CullCount）：替换 gpu_cull.cppm
+# 里手抄的 CullEntry struct + kCullSeq* 四常量。契约类型**必须**住在可 import 的 .slang 里
+# （住在入口单元 = R4 探针结构性不可达），形态先例 = scene.slang / meshlet_cull.slang。
+rgl_reflect_slang(shaders/cull_tables.slang shaders/cull_tables_schema.lua cull_tables_types_generated)
 
 # compute binding 表（B2，docs/compute_调研.md §7.10/§7.11）——**一条管线两份产物**：
 # compute_access.json（binding × 方向）+ compute_bindings_generated.cppm（binding 名 → 号）。

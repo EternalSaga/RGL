@@ -7,7 +7,7 @@ import rlvk;
 import rllogger;
 import vk_device;
 import shader_registry;
-import gpu_cull;  // kCullSequenceStride（layout indirectStride / token 偏移同源）
+import gpu_cull;  // CullSequence（layout indirectStride 与 token 偏移同源；经其 export import）
 
 namespace RGL {
 
@@ -15,16 +15,18 @@ namespace RGL {
  * DGC（VK_EXT_device_generated_commands）命令生成子系统（Phase 7b 批次 5；**NVIDIA 路**——
  * main 仅在 DeviceContext::getDgcSupport().graphicsIndirect = true 时构造；RADV graphics
  * 能力 = false → 不构造，Renderer 走读回重放回退）。消费与 GpuCull 同一条 cull 序列
- *（CPU args + GPU 可见性，kCullSequenceStride 步长），执行集/序列地址/计数全经
+ *（CPU args + GPU 可见性，sizeof(CullSequence) 步长），执行集/序列地址/计数全经
  * VkGeneratedCommandsInfoEXT 随 execute 传递（v357 形态——无
  * vkCmdBindIndirectExecutionSet/SetSequenceAddress 命令，见 docs/device_generated_commands_research.md）。
- * 布局契约（layout TOC，indirectStride = kCullSequenceStride = 120，descriptor heap 下
+ * 布局契约（layout TOC，indirectStride = sizeof(CullSequence)，descriptor heap 下
  * pipelineLayout = null）：
- *   @0   EXECUTION_SET（shaderStages = MESH|FRAGMENT → 序列读 2 个连续 u32，
+ *   execSlotFrag EXECUTION_SET（shaderStages = MESH|FRAGMENT → 序列读 2 个连续 u32，
  *        LSB→MSB = frag@0 / mesh@4；execution set 下标 2j = 条目 j 的 frag、2j+1 = mesh，
  *        CPU writeSequenceStaging 按同约定写 execSlot）
- *   @8   PUSH_DATA（DrawArgs 4B = 仅 objectIndex，Phase 7b+ → 序列原始字节推入 shader push 区）
- *   @108 DRAW_MESH_TASKS（VkDrawMeshTasksIndirectCommandEXT；x=0 = 被剔 no-op）
+ *   drawArgs PUSH_DATA（DrawArgs 4B = 仅 objectIndex，Phase 7b+ → 序列原始字节推入 shader push 区）
+ *   meshCmdX DRAW_MESH_TASKS（VkDrawMeshTasksIndirectCommandEXT；x=0 = 被剔 no-op）
+ * 三个 token.offset 全部 = offsetof(RGL::CullSequence, …)（cull_tables 反射生成物），
+ * 本文件零字节字面量；逐字段偏移的独立判据 = tests/test_cull_tables_layout.cppm。
  * 每帧单段（隐式 preprocess——isPreprocessed=FALSE 驱动内部完成生成+同步，显式两段路
  * 需为 preprocess 另备"录制中且绑好初始 shader 态"的 stateCommandBuffer，复杂度不值）：
  *   bindInitialShaders + execute：主 CB opaque pass 内（render pass 中）——

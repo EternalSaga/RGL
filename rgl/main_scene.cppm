@@ -731,10 +731,15 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 			const auto& mat = assets.getMaterial(matRef.material);
 			if (mat.alphaModeBlend)
 				return;
-			cullEntries.push_back(CullEntry{
-				cull.center, cull.radius, meshRef.objectSlot, asset.pipelineIndex,
-				asset.groupCount, asset.triangleCount, asset.vertexOffset,
-				mat.baseColor, roughnessMetallic(mat)});  // 字段序单源 = asset_table::roughnessMetallic
+			// 🔴 **指定初始化**不是风格选择（债-118 实测教训）：位置聚合初始化与字段名**无关**——
+			// CullEntry 现在是反射生成物，改 cull_tables.slang 的字段名会编译失败，但**同类型字段换序**
+			// （objectSlot/pipelineIndex/groupCount… 全是 uint32_t）在位置初始化下照样编得过、值静默串位。
+			// C++20 要求指定初始化按声明序书写 ⟹ 换序也编不过。两个洞一起堵，本处才是"改布局要编译期
+			// 知道"的承重墙（同款理由逐字见 gpu_cull_impl.cppm 的 FanoutPush 注释）。
+			cullEntries.push_back(CullEntry{.centerX = cull.center.x, .centerY = cull.center.y, .centerZ = cull.center.z,
+				.radius = cull.radius, .objectSlot = meshRef.objectSlot, .pipelineIndex = asset.pipelineIndex,
+				.groupCount = asset.groupCount, .totalTriangles = asset.triangleCount, .vertexOffset = asset.vertexOffset,
+				.baseColor = mat.baseColor, .roughnessMetallic = roughnessMetallic(mat)});  // 字段序单源 = asset_table::roughnessMetallic
 		});
 	// 静态 shader DGC 路选路（spike，docs/archive/radv_static_dgc_spike.md）：IES 路缺席
 	// （非 graphicsIndirect）但全集含 MESH 且 diagnostics.dgcStatic 开 → per-entry 流

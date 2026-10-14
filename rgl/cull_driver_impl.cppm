@@ -236,10 +236,10 @@ void CullDriver::executeOpaqueSegment(vk::raii::CommandBuffer& cmd, const FrameD
 		// 静态 shader DGC 路（RADV spike，docs/archive/radv_static_dgc_spike.md）：每管线条目一次
 		// Execute（pNext 静态 frag+mesh，无 EXECUTION_SET token → 无需 bindInitialShaders）。
 		// 序列 = GpuCull fanout 满槽孔洞流（条目内 candidate 序；孔洞 x=0 = RADV 原生跳过）；
-		// sequenceCount 全条目复用 count buffer @4（= candidate 数，GPU 写）
+		// sequenceCount 全条目复用 count 区的 CullCount.total（= candidate 数，GPU 写）
 		const VkDeviceAddress streamsBase = gpuCull->streamsAddress();
 		const VkDeviceSize entryStreamBytes =
-			static_cast<VkDeviceSize>(gpuCull->candidateCount()) * kCullSequenceStride;
+			static_cast<VkDeviceSize>(gpuCull->candidateCount()) * sizeof(RGL::CullSequence);
 		for (uint32_t j = 0; j < dgcStatic->entryCount(); ++j)
 			dgcStatic->recordExecute(cmd, j, streamsBase + entryStreamBytes * j,
 				gpuCull->countTotalAddress(), frameSlot);
