@@ -999,10 +999,89 @@ shader）；③ 键查表只准在构造期，**一旦有人挪进 `recordFrame`
 |---|---|
 | B2-1 compute 方向表进反射（`compute_access.json`） | ✅ `3eae652`；配套基线规则已撤（§7.12） |
 | **B2-1′** compute push 布局进反射、换掉手写镜像（evssm + izb 四枚） | ✅ 本刀 |
-| **B2-1′-b** 余下四枚：`CullFrameInput`（🔴 BIT-IDENTICAL 的 CPU 读回重放路，最险）、`EnvPrefilterPush`（在接口 unit 导出）、`FanoutPush`、mip_gen 镜像 | ⏳ |
+| **B2-1′-b** 余下四枚：`CullFrameInput`（🔴 BIT-IDENTICAL 的 CPU 读回重放路，最险）、`EnvPrefilterPush`（在接口 unit 导出）、`FanoutPush`、mip_gen 镜像 | ✅ 已落，**并连带定案了 §7.14 那条** |
 | **B2-1″** `makeMappedCompute` 键 → binding 名 + 构建期接口表 | ⏳ 这一刀才有设计含量 |
 | **B2-2** 容器申报 × 反射方向 × 相位 → 与边表对账 | ⏳ 消费 B2-1″ |
 | B2-3 / B2-4（buffer 档 + 拒绝面 + 资源迁入） | ⏳ 形态由首发消费者定，见 §7.10 |
+
+
+### 7.14 B2-1′-b 落地 + 一条新机制知识：**生成物本身不带来编译期保护**（2026-10-14 实测）
+
+**落地**：八枚 compute push 契约现在**全部**是反射生成物，手写镜像清零。本刀四枚——`CullFrameInput`
+改类型别名、`EnvPrefilterPush` / `MipGenPush` 从接口 unit 删除且不再导出、`FanoutPush` 删除。
+
+`CullFrameInput` 的形态 = `export using CullFrameInput = CullPush;`。**别名不是改名**：`CullFrameInput`
+说的是"每帧 GPU culling 输入、由 render system 产出"（谁生产它），比只描述字节的 `CullPush` 信息量
+大；而布局必须单源于 shader。两个名字各管一件事，删掉任何一个都丢信息。
+
+#### 🔴 本刀真正的产出：它推翻了我上一刀写进提交信息的结论
+
+`a06c5b7` 写「改字段名 → 产品代码编译失败 = 布局第一次有出处」——**有隐含前提：调用点按名访问**。
+实测反例（`9e0634c` 的提交信息里已就地纠正）：
+
+```cpp
+const EnvPrefilterPushData pushData{EnvPrefilterPush{level, mipLevels, levelFs}, {0, 0}, 0u};
+//                                        ^^^^^^ 位置聚合初始化 ⟹ 与字段名完全无关
+```
+
+| 变异 | 换成生成物（位置初始化） | 换成生成物 + **指定初始化** |
+|---|---|---|
+| shader 改字段名 | 🔴 `just build` **退出码 0** | ✅ 编译失败并点名调用点 |
+| 同类型字段换序 | 🔴 `just build` **不红** | ✅ 编译失败（`-Wreorder-init-list`） |
+| 改字段类型 / 尺寸 | ✅ 红 | ✅ 红 |
+
+⟹ **「C++ 写错 shader 内变量名要编译期知道」这条目标的承重件，不是"布局来自反射"，而是"调用点
+必须点名生成物字段"。** 不点名就不存在"写错名"这件事——布局再单源，也只是把一份手抄换成另一份手抄。
+C++20 还要求指定初始化**按声明序**书写 ⟹ 换序一起红。**一个约定堵两个洞。**
+
+**已立约定**：对生成物类型的聚合初始化必须写 `.字段 =` 形式。外层 24B push data 包装
+（`MipGenPushData` / `EnvPrefilterPushData`）**不要求**——它们不是生成物类型。
+
+**顺带把"哪些 assert 该删"的判据钉死了**（这条容易做错成两个方向）：**断言量的是 shader 里存在的
+东西 = 同义反复，删；量的是 shader 里不存在的 C++ 侧布局（`heapIndex@20` / 留白 / 24B 总长）=
+真不变量，一条不删。**
+
+#### ⚠ 两条残留，别读成"已闭合"
+
+1. 换序那条的红是 clang `-Wreorder-init-list` **被 `-Werror` 抬成 error** 的结果；关掉 `-Werror`
+   它退化成警告。
+2. 🔴 **没有任何护栏守"必须指定初始化"这条约定**——新代码写回位置初始化不会有人响。做成文本
+   checks 规则要处理注释误报，脆；当前裁决 = **先记债不硬凑**（脆护栏会把人训练成忽略警告）。
+   要推翻这条裁决很容易：一条 `StructuredBuffer<...>` 式的正则 + 注释剥离，先有阳性锚点再谈入册。
+
+#### 别名删掉默认成员初始化器的连锁（"删一份手抄"的副作用，容易漏）
+
+手写版有 `planes[6]{}` / `sequenceCount = 0`，生成物一个都没有；而 `glm::vec4` 在本项目 GLM 宏配置下
+（只有 `GLM_FORCE_RADIANS` / `GLM_FORCE_DEPTH_ZERO_TO_ONE`）默认构造**不清零** ⟹ `list.cullInput.sequenceCount`
+是从未写过的**不确定值**，而原先那句 `auto cullInput = list.cullInput;` 整份拷贝会读它（按标准是 UB，
+实测无害——"实测无害的 UB"正是最难查的那类）。
+
+修法**不是**给生成物加初始化器（生成物是产物，加 = C++ 侧偷偷改契约），而是改成按名逐字段取：
+
+```cpp
+CullFrameInput cullInput{.planes = list.cullInput.planes, .sequenceCount = gpuCull->candidateCount()};
+```
+
+与上面那条约定同向，一次改动同时消掉 UB 和一次多余的结构体拷贝。
+
+#### 覆盖诚实账：`FanoutPush` 出厂锚**零覆盖**
+
+出厂 `dgcStatic=false` ⟹ `nEntryStreams=0` ⟹ `recordFanoutDispatch` 根本不进；而 `dgc_static`
+**不在 `configs/diagnostics.lua` 里** ⟹ `--set` 被 `patch_lua` 的「键须恰好命中 1 次」护栏拒
+⟹ **判据"看日志有没有 `+ streams` 后缀"在默认配置下永远看不到**。本刀用 `--config-base`（仓库外
+配置副本，塞 `dgc_static = true`）补验：`+ streams 475×190920B @slot 8262` 出现 + `cullFanout`
+子门对账绿 ⟹ 那行真在跑（该臂截图哈希 ≠ 出厂锚，预期：`dgc_static=true` 是另一条渲染路线）。
+
+这是**存量限制**，不是本刀引入。`FanoutPush` 在出厂锚下唯一的防线是
+`tests/test_compute_push_layout.cppm` 的编译期 offsetof。
+
+**判据（主 agent 亲验）**：`just gates` 全绿（457 用例）；出厂锚 + `cull_replay=gpu_sync` 档锚各
+3/3 命中 `95edc8ccd7a4`；四条变异（改名 ×2、换序 ×2）**全部 rc=1 且点名调用点**——其中三条在
+上一刀是不红的。
+
+顺带：子 agent 撞见 AGENTS 一条过期断言（「构建内置两个检查步骤均只警告不阻断」），实测
+`reflection_check` **FATAL 阻断**，已按代码就地改准——变异后只还原 `.slang` 与生成物、不还原
+`reflection_manifest.txt`，会剩一条建不过去的构建。
 
 
 

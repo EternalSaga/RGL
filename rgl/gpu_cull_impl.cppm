@@ -368,7 +368,10 @@ void GpuCull::recordFanoutDispatch(vk::raii::CommandBuffer& cmd, OffGraphSync& s
 	std::array<vk::ShaderStageFlagBits, 1> fanStages = {vk::ShaderStageFlagBits::eCompute};
 	std::array<vk::ShaderEXT, 1> fanHandles = {*fanoutShader};
 	cmd.bindShadersEXT(fanStages, fanHandles);
-	const FanoutPush fanPush{nCandidates};  // 契约 = stream_fanout.comp.slang FanoutPush（生成物，见文件头 import）
+	// 🔴 指定初始化器不是风格选择：位置聚合初始化与字段名**无关**，改 shader 里的字段名/换序
+	// 都不会红（实测：上一刀换生成物后 `just build` 退出码仍是 0）。C++20 还要求指定初始化
+	// 按声明序书写 ⟹ 同类型字段换序也红。两个洞一起堵 = "写错名要编译期知道"的承重墙。
+	const FanoutPush fanPush{.sequenceCount = nCandidates};  // 契约 = stream_fanout.comp.slang FanoutPush（生成物，见文件头 import）
 	cmd.pushDataEXT(vk::PushDataInfoEXT(0, vk::HostAddressRangeConstEXT(
 		reinterpret_cast<const std::byte*>(&fanPush), sizeof(fanPush))));
 	cmd.dispatch((nCandidates + 63) / 64, nEntryStreams, 1);

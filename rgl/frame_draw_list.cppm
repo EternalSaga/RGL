@@ -9,6 +9,7 @@ import material_types_generated;  // DrawArgs（Phase 7b cullArgs：GPU culling 
 import scene_forward_types_generated;  // 前向头 SceneLight（C API 反射生成，替换原 LightDataGpu）
 import scene_data;  // kSceneShadowCascadeCount（阴影 VP 区容量；单向依赖：scene_data 不认识本模块）
 import mdi_rows;    // MdiShadowRow（★M-1b：真 MDI 行表的行类型；FrameDrawList::mdiSegments 的行）
+import compute_push_types_generated;  // CullPush（cull.comp.slang push constant 的反射生成物 = CullFrameInput 的布局单源）
 
 namespace RGL {
 
@@ -257,15 +258,26 @@ export struct SceneFrameData {
 /**
  * 每帧 GPU culling 输入（Phase 7b 批次 5；render system 产出 → drawFrame 经 push
  * constant 传给 culling compute）：planes 与 CPU 剔除路径同源同值（extractFrustum
- * 产物）——GPU/CPU 对账基准一致的保证。布局（cull.comp.slang CullPush 同字节，
- * scalar layout 无尾 pad = 100B ≤ maxPushDataSize 256B）：
- *   @0 planes[6] float4 | @96 sequenceCount u32（mvp 不经 push——CPU 算进序列）
+ * 产物）——GPU/CPU 对账基准一致的保证。
+ *
+ * **形态 = 类型别名，不是改名**（批次 B2-1′-b 下刀）。两个名字各管一件事，删掉任何一个都会
+ * 丢信息：`CullFrameInput` 是 **C++ 侧的概念名**——它说的是"每帧 GPU culling 输入、由 render
+ * system 产出"这件事，比 shader 侧那个只描述字节的 `CullPush` 信息量大（改名 = 纯 churn，且
+ * 把"谁生产它"这条从名字里抹掉）；而**布局**必须单源于 `cull.comp.slang`（100B：@0 planes[6]
+ * float4 | @96 sequenceCount u32，scalar layout 无尾 pad ≤ maxPushDataSize 256B）。别名同时
+ * 满足两者——原先这里是手写镜像 struct + 一条 sizeof assert，即布局的第二份真相源，已删；
+ * 布局与字段偏移现由第 10 条反射管线的生成物自带 assert 担保。
+ *
+ * 🔴 **前提：生成物没有任何默认成员初始化器**（手写版的 `planes[6]{}` / `sequenceCount = 0`
+ * 随镜像一起删，且**不能加回去**——生成物是产物，加初始化器 = C++ 侧偷偷改契约）。而
+ * `render_list_impl` 里 `FrameDrawList fresh;` 是默认初始化、`glm::vec4` 默认构造在本项目的
+ * GLM 宏配置下（只有 RADIANS / DEPTH_ZERO_TO_ONE，无 ZERO_UNINITIALIZED）**不清零**
+ * ⟹ 两个字段都**依赖调用点先写后读**：
+ *   · planes        ← render_list_impl 每帧无条件 std::copy（唯一生产者，该函数无早退路径）
+ *   · sequenceCount ← cull_driver_impl 在 recordCullPass **之前**填（= GpuCull::candidateCount）
+ * 新增读取点若排在上述写入之前，读到的是未初始化值——不报错、非确定性，比布局错更难查。
  */
-export struct CullFrameInput {
-	glm::vec4 planes[6]{};
-	uint32_t sequenceCount = 0;
-};
-static_assert(sizeof(CullFrameInput) == 100, "CullFrameInput layout drifted from cull.comp.slang CullPush");
+export using CullFrameInput = CullPush;
 
 /**
  * 每帧绘制列表：顺序 = 绘制顺序（Phase 5 透明排序已落地：不透明段在前、透明段按

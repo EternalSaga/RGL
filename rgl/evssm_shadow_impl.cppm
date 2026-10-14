@@ -179,7 +179,9 @@ void EvssmShadow::recordFrame(vk::raii::CommandBuffer& cmd) {
 		std::array<vk::ShaderStageFlagBits, 1> stages = {vk::ShaderStageFlagBits::eCompute};
 		std::array<vk::ShaderEXT, 1> handles = {*momentsShader};
 		cmd.bindShadersEXT(stages, handles);
-		const EvssmMomentsPush push{mapSize, cols, exponent};
+		// 指定初始化器 = 让"shader 里改字段名/换序"在本调用点编译期红（理由同 mip_gen_impl，
+		// 一句话版：位置聚合初始化与字段名无关；C++20 要求指定初始化按声明序 ⟹ 换序也红）
+		const EvssmMomentsPush push{.mapSize = mapSize, .cols = cols, .exponent = exponent};
 		cmd.pushDataEXT(vk::PushDataInfoEXT(0, vk::HostAddressRangeConstEXT(&push, sizeof(push))));
 		cmd.dispatch(mapSize / 8u, mapSize / 8u, 1);
 	}
@@ -192,7 +194,8 @@ void EvssmShadow::recordFrame(vk::raii::CommandBuffer& cmd) {
 		std::array<vk::ShaderStageFlagBits, 1> stages = {vk::ShaderStageFlagBits::eCompute};
 		std::array<vk::ShaderEXT, 1> handles = {downShaders[level - 1]};
 		cmd.bindShadersEXT(stages, handles);
-		const EvssmDownPush push{level, cols, baseTile};
+		// 指定初始化器 = 同上（字段名以生成物为准：baseTileTexels，本地短名 baseTile）
+		const EvssmDownPush push{.level = level, .cols = cols, .baseTileTexels = baseTile};
 		cmd.pushDataEXT(vk::PushDataInfoEXT(0, vk::HostAddressRangeConstEXT(&push, sizeof(push))));
 		const uint32_t dstTile = baseTile >> level;
 		cmd.dispatch((dstTile + 7u) / 8u, (dstTile + 7u) / 8u, cols * cols);

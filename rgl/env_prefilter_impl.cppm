@@ -200,7 +200,11 @@ std::expected<void, Error> EnvPrefilter::recordPrefilter(vk::raii::CommandBuffer
 		// bind 该 level 的 shader object（烘焙到本 level 的固定 src/dst 槽）+ push data + dispatch
 		std::array<vk::ShaderEXT, 1> handles = {*shaders[level]};
 		cmd.bindShadersEXT(stages, handles);
-		const EnvPrefilterPushData pushData{EnvPrefilterPush{level, mipLevels, levelFs}, {0, 0}, 0u};
+		// 内层 EnvPrefilterPush 用指定初始化器 = 让"shader 里改字段名/换序"在**本调用点**编译期红
+		//（位置聚合初始化与字段名无关，实测不红；C++20 另要求指定初始化按声明序 ⟹ 换序也红）。
+		// 外层 24B 包装不是生成物类型（@20 是本模块 heap push index），保持位置初始化不动。
+		const EnvPrefilterPushData pushData{
+		    EnvPrefilterPush{.level = level, .mipLevels = mipLevels, .faceSize = levelFs}, {0, 0}, 0u};
 		cmd.pushDataEXT(vk::PushDataInfoEXT(0, vk::HostAddressRangeConstEXT(
 			reinterpret_cast<const std::byte*>(&pushData), sizeof(pushData))));
 		cmd.dispatch((levelFs + 7) / 8, (levelFs + 7) / 8, 6);

@@ -141,8 +141,13 @@ std::expected<void, Error> CullDriver::submitCullPass(uint32_t frameSlot, uint64
 		ccmd.reset();
 		ccmd.begin(vk::CommandBufferBeginInfo{});
 		gpuProfilerCullBegin(ccmd);  // Phase 9.2：cull 段复位（本 CB 先执行）+ cull 起点时间戳
-		auto cullInput = list.cullInput;  // 值拷贝：sequenceCount 由本处填（render_list 不感知 GPU 表）
-		cullInput.sequenceCount = gpuCull->candidateCount();
+		// 🔴 **按名逐字段取，不做整结构体值拷贝**。`list.cullInput.sequenceCount` 从未被写过
+		// （render_list 不感知 GPU 候选表），整份拷贝会搬 4 字节**不确定值**——`CullFrameInput`
+		// 现在是反射生成物的别名，手写版那句 `= 0` 随镜像一起删了且**不能加回去**（生成物是产物），
+		// 而那 4 字节读出来按标准是 UB（实测无害，但"实测无害的 UB"正是最难查的那类）。
+		// 顺带兑现「调用点必须点名生成物字段」这条约定（→ docs/compute_调研.md §7.13）。
+		CullFrameInput cullInput{.planes = list.cullInput.planes,
+		                          .sequenceCount = gpuCull->candidateCount()};
 		// 序列 CPU 侧基值（execSlot + DrawArgs + meshCmd 基值；args 序 = candidate 序
 		// 契约校验在 writeSequenceStaging 内——size 不符即抛）
 		gpuCull->writeSequenceStaging(frameSlot, list.cullArgs);

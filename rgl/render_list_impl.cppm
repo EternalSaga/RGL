@@ -815,7 +815,10 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	// Phase 7b：GPU culling 每帧输入（与上方 CPU 剔除同源同值——planes = 同一 frustum
 	// 对象，GPU/CPU 对账基准一致）；sequenceCount 由 Renderer 填
 	//（= GpuCull::candidateCount，render_list 不感知 GPU 候选表）
-	std::copy(frustum.planes, frustum.planes + 6, fresh.cullInput.planes);
+	// 🔴 本行是 planes 的**唯一写入点**，也是"生成物无默认成员初始化器"那条前提的兑现处
+	//（前提全文 → frame_draw_list 的 CullFrameInput 别名注释）：目标现在是反射生成物的
+	// std::array（不再是 C 数组）⟹ 不隐式退化成指针，必须 .data()。
+	std::copy(frustum.planes, frustum.planes + 6, fresh.cullInput.planes.data());
 
 	list = std::move(fresh);
 }

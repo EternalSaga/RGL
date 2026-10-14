@@ -304,8 +304,11 @@ void IzbShadow::recordPrimeDispatch(vk::raii::CommandBuffer& cmd) {
 	std::array<vk::ShaderStageFlagBits, 1> stages = {vk::ShaderStageFlagBits::eCompute};
 	std::array<vk::ShaderEXT, 1> handles = {*primeShader};
 	cmd.bindShadersEXT(stages, handles);
-	const IzbPrimePush push{static_cast<int32_t>(gridDim),
-		static_cast<int32_t>(extent.width * extent.height), 0, 0};
+	// 指定初始化器 = 同上（位置聚合初始化与字段名无关；C++20 要求按声明序 ⟹ 换序也红）。
+	// 两个 padding 字段照旧显式写 0：它们也是反射出来的契约面（shader 里加/删字段就会挪位），
+	// 按名写出来才在"改 shader"时出声。
+	const IzbPrimePush push{.gridDim = static_cast<int32_t>(gridDim),
+	    .pixelTotal = static_cast<int32_t>(extent.width * extent.height), ._pad0 = 0, ._pad1 = 0};
 	cmd.pushDataEXT(vk::PushDataInfoEXT(0, vk::HostAddressRangeConstEXT(&push, sizeof(push))));
 	cmd.dispatch((gridDim * gridDim + 63u) / 64u, 1, 1);
 }

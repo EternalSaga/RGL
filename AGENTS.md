@@ -54,9 +54,12 @@ just clean / clean-all / all           # 增量清理 / 删 build 目录 / clean
 
 - **CMake 无独立构建目录**——必须从根目录构建（`cmake -B build -S .`）。`tests/` 是
   EXCLUDE_FROM_ALL，故**不进 `just build`**（要 `just test` 自己拉）。
-- **构建内置两个检查步骤**（均只警告不阻断）：`reflection_check`（反射产物 SHA1 护栏，与编译并行）
-  + `source_checks`（样式 + Doxygen 单入口 `tools/checks/`；**红线：依赖 rgl 编译完成后才跑——
-  libclang 读半写 BMI 会崩，勿删该 add_dependencies**）。规则参数唯一真相源 = `tools/checks/config.py`，
+- **构建内置两个检查步骤，阻断性不同**（原写「均只警告不阻断」是错的，2026-10-14 实测改准）：
+  `reflection_check`（反射产物 SHA1 护栏，与编译并行）**输入变了即 FATAL 阻断构建**——所以临时改
+  shader 做变异之后，要么 `just reflect`，要么连 `rgl/generated/reflection_manifest.txt` 一起还原，
+  只还原 `.slang` 与生成物会剩一条建不过去的构建；`source_checks`（样式 + Doxygen 单入口
+  `tools/checks/`；**红线：依赖 rgl 编译完成后才跑——
+  libclang 读半写 BMI 会崩，勿删该 add_dependencies**）只警告不阻断。规则参数唯一真相源 = `tools/checks/config.py`，
   规则全景 = `docs/风格检查规则.md`（**别在文档里抄规则清单**）。内部机制 → `docs/技术概念.md §构建检查工具机制`。
 - **工具语言纪律**（用户拍板，三机测试）：要依赖的工具一律 **C++ + vcpkg**；**留在 Python 的工具
   只准 stdlib-only**，不引入任何需要 pip 的依赖。
