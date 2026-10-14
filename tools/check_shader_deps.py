@@ -25,6 +25,15 @@ R3  红线（2026-10-01 立"全禁"；2026-10-12 按 §8.4 第 1 条**窄化**�
     两侧同源于一份声明 ⟹ 那条静默偏离在这里**有机器可验的等式**，不再是裸奔。
     标量/向量元素（uint/int/float/…）没有 C++ 侧对偶可漂，不在射程内（§2 目标形态本身
     就用 `StructuredBuffer<uint>`）。完整理由与实测 → `docs/constantbuffer_迁移计划.md` §8。
+    🔴 **放行面 = 生成物 − 入口单元类型**（2026-10-14，第 10 条 compute-push 管线逼出来的）：
+    定义在 `*.comp.slang` / `*.mesh.slang` / `*.task.slang` 里的 struct **不配当 buffer 元素契约**，
+    即使反射生成物里有它的名字。两条理由：① slang 的 `import` 把 `.` 当路径分隔符 ⟹ 入口单元
+    **导不进去**，这些类型只在自己文件内可见；② push / payload / 顶点输出契约与 buffer 元素
+    契约是**两类不同的契约**，反射生成它 ≠ 它能当元素用。不减会怎样：compute-push 的八个 push
+    契约一进生成物，R3 就从「拦得住 `StructuredBuffer<CullPush>`」变成放行，而 R4 对入口单元类型
+    又探针不可达（同一个 import 机制，见 `check_spirv_stride.py` 的「入口单元不可探针」读数）
+    ⟹ **两条判据对同一个误用一起变哑**。集合构成每次打在汇总行：
+    `放行面 N = 生成物 M − 入口单元不可导入 K`。
 R4  StructuredBuffer 元素 stride 对账（**R3 能窄化的前提**，同一次构建里由
     `tools/check_spirv_stride.py` 跑，见 cmake/RglChecks.cmake）：对每个契约类型断言
     SPIR-V `ArrayStride` == 反射生成物 `sizeof`。R3 管"只准用有契约的类型"，
@@ -194,6 +203,32 @@ def contract_types(generated_dir: Path) -> set[str]:
         for f in sorted(generated_dir.glob("*_types_generated.cppm")):
             out |= set(RE_GENERATED_STRUCT.findall(
                 f.read_text(encoding="utf-8", errors="replace")))
+    return out
+
+
+# 入口单元（`*.comp.slang` / `*.mesh.slang` / `*.task.slang`）里定义的 struct。
+# 🔴 它们**不配进 R3 的放行面**，即使反射生成物里有它们的名字。理由是一条机制事实而非偏好：
+# slang 的模块名 = 文件名去 `.slang`（含 `.comp` 这个点段），而 `import` 把 `.` 当**路径分隔符**
+# （`import cull.comp` 实测去找 `cull/comp.slang` 后失败）⟹ 入口单元导不进去，这些类型只在
+# 自己那个文件里可见。第 10 条反射管线（compute-push）把八枚 compute push 契约带进了生成物，
+# 照单全收就等于放行「把 push 契约当 `StructuredBuffer` 元素用」——那是**两类不同的契约**
+# （push 布局 vs buffer 元素 stride），而 R4 对入口单元类型又**探针不可达**（同一个 import 机制，
+# 见 `check_spirv_stride.py` 的「入口单元不可探针」读数）⟹ 两条判据会对同一个误用**一起变哑**。
+RE_ENTRY_UNIT_FILE = re.compile(r"\.(?:comp|mesh|task)\.slang$")
+RE_STRUCT_DEF = re.compile(r"^\s*struct\s+([A-Za-z_]\w*)\b", re.M)
+
+
+def entry_unit_structs(shaders_dir: Path) -> set[str]:
+    """入口单元里定义的 struct 名（导不进去 ⟹ 不可能、也不应该是有契约的 buffer 元素）。
+
+    从 shader 侧现算而不是硬编码产物名：将来再有管线吃入口单元，这里自动跟上。
+    """
+    out: set[str] = set()
+    if shaders_dir.is_dir():
+        for f in sorted(shaders_dir.rglob("*.slang")):
+            if RE_ENTRY_UNIT_FILE.search(f.name):
+                out |= set(RE_STRUCT_DEF.findall(
+                    f.read_text(encoding="utf-8", errors="replace")))
     return out
 
 
@@ -566,12 +601,20 @@ def main() -> int:
 
     # ── R3：StructuredBuffer 元素类型必须是反射契约类型（2026-10-12 窄化，见 §8）──
     slang_files = sorted(SHADERS_DIR.rglob("*.slang"))
-    contracts = contract_types(GENERATED_DIR)
-    if not contracts:
+    generated_contracts = contract_types(GENERATED_DIR)
+    # 放行面 = 反射生成物 − 入口单元类型（为什么减 → RE_ENTRY_UNIT_FILE 处）
+    entry_structs = entry_unit_structs(SHADERS_DIR)
+    contracts = generated_contracts - entry_structs
+    if not generated_contracts:
         err(rel(GENERATED_DIR),
             "反射生成物里一个契约 struct 都没解析到（生成物被清空？正则漂了？）——"
             "R3 的放行面为空，本次**任何 StructuredBuffer 都会被误判成违规**，"
             "规则已不可信，请勿把「零警告」读成「干净」")
+    if generated_contracts and not contracts:
+        err(rel(GENERATED_DIR),
+            f"反射生成物有 {len(generated_contracts)} 个 struct，减去入口单元类型后**放行面为空**"
+            "（生成物现在只来自入口单元？还是入口单元判定漂了？）——R3 已不可信，"
+            "请勿把「零警告」读成「干净」")
     sb_uses: list[tuple[Path, int, str]] = []
     for p in slang_files:
         for lineno, line in enumerate(read_lines(p), 1):
@@ -584,7 +627,11 @@ def main() -> int:
                     f"`StructuredBuffer<{elem}>` 的元素类型 {elem} 不在反射契约类型集合内"
                     f"（集合 = {rel(GENERATED_DIR)}/*_types_generated.cppm 机械提取，"
                     f"现 {len(contracts)} 个）——无契约的裸 struct 正是 stride 静默错位的"
-                    f"发生地（git:调试历史「灰屏」(2026-06-24)）。要么把 {elem} 进 schema 走反射，"
+                    f"发生地（git:调试历史「灰屏」(2026-06-24)）。"
+                    + (f"⚠ {elem} 是**入口单元里定义的 struct**：它导不进去，而 push / payload / "
+                       f"顶点输出契约与 buffer 元素契约是两类不同的东西，反射生成它不代表它能当元素用。"
+                       if elem in entry_structs else "")
+                    + f"要么把 {elem} 进 schema 走反射，"
                     f"要么走 ByteAddressBuffer + .Load()；理由与实测 → "
                     f"docs/constantbuffer_迁移计划.md §8")
 
@@ -648,7 +695,8 @@ def main() -> int:
     print(f"[shader-dep-check] 汇总: {len(errors)} 问题（ERROR {len(errors)}、"
           f"WARNING {len(warnings)}） / "
           f"{len(calls)} 个 rgl_shader target、{len(slang_files)} 个 .slang、"
-          f"StructuredBuffer 使用 {len(sb_uses)} 处（契约类型 {len(contracts)} 个放行面）、"
+          f"StructuredBuffer 使用 {len(sb_uses)} 处（放行面 {len(contracts)} = 生成物 "
+          f"{len(generated_contracts)} − 入口单元不可导入 {len(generated_contracts & entry_structs)}）、"
           f"R5 裸字节偏移 "
           f"{'**无读数 = 本次未做任何对账**' if bo_allowed < 0 else f'当前 {bo_cur} 条 / 基线 {bo_allowed} 条（{len(bo_counts)} 个 .slang 参与）'}、"
           f"R6 sceneData 全区读 "

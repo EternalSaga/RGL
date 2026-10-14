@@ -44,6 +44,13 @@ slangc 找不到 / 探针编译失败 / binding 在 SPV 里解析不到 / 契约
 struct 定义 / 契约集合为空 —— 一律 ERROR 点名，并显式打印「本次**未检查** M 个类型」。
 正常路径也打印「已检查 N 个」，让"检查跑过且覆盖面是多大"每次构建都看得见。
 
+**一类例外走 NOTE 而不走 ERROR**：定义在**入口单元**（`*.comp.slang` / `*.mesh.slang` /
+`*.task.slang`）里的契约类型探针不可达——slang 的 import 把 `.` 当路径分隔符
+（`import cull.comp` 去找 `cull/comp.slang`），入口单元导不进去。这类类型因此不可能成为
+别处的 `StructuredBuffer<T>` 元素，本护栏的不变量对它们**空真**；数量进汇总
+（`入口单元不可探针 N`）、清单进 `[stride-check-NOTE]`。把不适用的前提长期报成 ERROR
+= 训练人忽略红，与"出声"是两回事。compute push 契约（compute-push 管线的产物）正落在这里。
+
 ## 输出形态与退出码（与 tools/check_shader_deps.py 同型）
 
 ERROR 行红粗体醒目，**默认不阻断构建**（exit 0）；`--strict` 时有问题 exit 1。
@@ -300,27 +307,34 @@ def strides_by_binding(spv: Path) -> tuple[dict[int, tuple[int, str]], str]:
 
 # ─── 主流程 ──────────────────────────────────────────────────────────────────
 
-def run(args) -> tuple[list[str], dict[str, str]]:
-    """→ (ERROR 文案列表, 汇总读数)。"""
+def run(args) -> tuple[list[str], dict[str, str], list[str]]:
+    """→ (ERROR 文案列表, 汇总读数, 说明行列表)。
+
+    说明行（notes）与 ERROR 的区别是**判定**而不是音量：ERROR = 「护栏该咬而没咬到」，
+    note = 「护栏的适用前提对这批对象不成立，且为什么成立得说出来」。两者都不阻断，但把
+    不适用的前提长期报成 ERROR = 训练人忽略红（项目明文纪律「失效必须出声」要的是出声，
+    不是要一直喊）。
+    """
     errs: list[str] = []
     stats: dict[str, str] = {}
+    notes: list[str] = []
 
     sizes, problems = contract_sizes(GENERATED_DIR)
     errs += problems
     if not sizes:
         errs.append(f"{rel(GENERATED_DIR)}/\u002a_types_generated.cppm 里一个 sizeof 都没解析到"
                     f"（正则漂了？生成物改名了？）——本护栏本次**未检查任何类型**")
-        return errs, stats
+        return errs, stats, notes
 
     defs = struct_defining_modules(SHADERS_DIR)
     flags, why = slang_flags_from_cmake(SLANG_CMAKE)
     if why:
         errs.append(f"{why}——拿不到构建期编译口径，本护栏本次**未检查任何类型**")
-        return errs, stats
+        return errs, stats, notes
     slangc, why = find_slangc(args.slangc, Path(args.build_dir) if args.build_dir else ROOT / "build")
     if why:
         errs.append(f"{why}——无法现场编探针，本护栏本次**未检查 {len(sizes)} 个契约类型**")
-        return errs, stats
+        return errs, stats, notes
 
     # 契约类型 → 定义模块（同类型在多个模块各定义一次 = 双源，先出声）
     by_module: dict[Path, list[str]] = {}
@@ -336,6 +350,8 @@ def run(args) -> tuple[list[str], dict[str, str]]:
         by_module.setdefault(where[0], []).append(t)
 
     checked: dict[str, int] = {}
+    # 探针不可达的契约类型（定义在入口单元，见循环内注释）——读数 + 说明行，不是 ERROR。
+    unreachable: list[str] = []
     tmp = tempfile.TemporaryDirectory(prefix="rgl-stride-probe-")
     tmpdir = Path(args.probe_dir) if args.probe_dir else Path(tmp.name)
     tmpdir.mkdir(parents=True, exist_ok=True)
@@ -343,6 +359,18 @@ def run(args) -> tuple[list[str], dict[str, str]]:
     for module_src in sorted(by_module):
         types = sorted(by_module[module_src])
         module = module_src.stem  # slang 模块名 = 文件名（去 .slang；含 .comp/.mesh 点段）
+        # 🔴 入口单元（`*.comp.slang` / `*.mesh.slang` / `*.task.slang` / …）里的 struct
+        # **探针不可达**，而且这不是"护栏坏了"，是"**护栏的适用前提对它不成立**"：slang 的模块名
+        # = 文件名去 .slang（含 `.comp` 这个点段），而 `import` 把 `.` 当**路径分隔符**
+        # （`import cull.comp` 实测去找 `cull/comp.slang` 后失败）⟹ 没有任何文件能 import 进一个
+        # 入口单元，探针那句 `import <模块>;` 对它必然编译失败。
+        # 不报 ERROR 的依据是这条**推论**，不是"懒得报"：既然导不进去，这些类型就不可能成为别处的
+        # `StructuredBuffer<T>` 元素，而 R4 断言的正是那条不变量（若真有人在入口单元内部写
+        # `StructuredBuffer<CullPush>`，下面「元素类型不在反射契约集合内」那条 ERROR 会点名它）。
+        # 它们的布局另有出处：生成物自带的 sizeof/offsetof assert，量的就是反射实查真值。
+        if "." in module:
+            unreachable += [f"{t}（{rel(module_src)}）" for t in types]
+            continue
         probe = tmpdir / f"stride_probe_{module}.slang"
         probe.write_text(make_probe(module, types), encoding="utf-8")
         out_spv = tmpdir / f"stride_probe_{module}.spv"
@@ -378,7 +406,14 @@ def run(args) -> tuple[list[str], dict[str, str]]:
 
     stats["契约类型"] = str(len(sizes))
     stats["已检查"] = str(len(checked))
-    stats["未检查"] = str(len(sizes) - len(checked))
+    stats["未检查"] = str(len(sizes) - len(checked) - len(unreachable))
+    stats["入口单元不可探针"] = str(len(unreachable))
+    if unreachable:
+        notes.append(
+            "入口单元（*.comp / *.mesh / *.task.slang）里的契约类型**探针不可达**：slang 的 import 把"
+            " `.` 当路径分隔符 ⟹ 入口单元导不进去，探针的 `import <模块>;` 对它必然失败。因此这些"
+            "类型不可能成为别处的 StructuredBuffer 元素（R4 断言的不变量对它们空真），其布局由生成物"
+            "自带的 sizeof/offsetof assert 守 —— 清单：" + "、".join(unreachable))
     stats["探针模块"] = str(len(by_module))
     stats["flags"] = " ".join(flags)
     uses = structured_buffer_uses(SHADERS_DIR)
@@ -390,7 +425,7 @@ def run(args) -> tuple[list[str], dict[str, str]]:
                     f"类型集合内——本护栏**查不到它的 stride**（无 C++ 侧 sizeof 可对账）。"
                     f"要么让它进 schema，要么走 ByteAddressBuffer；"
                     f"理由 → docs/constantbuffer_迁移计划.md §8")
-    return errs, stats
+    return errs, stats, notes
 
 
 def main() -> int:
@@ -406,9 +441,11 @@ def main() -> int:
                     help="探针 .slang/.spv 落盘目录（缺省用临时目录；排查时指到构建目录看产物）")
     args = ap.parse_args()
 
-    errs, stats = run(args)
+    errs, stats, notes = run(args)
     for msg in errs:
         print(f"\033[1;31m[stride-check-ERROR] {msg}\033[0m")
+    for msg in notes:
+        print(f"[stride-check-NOTE] {msg}")
     readout = " / ".join(f"{k} {v}" for k, v in stats.items())
     print(f"[stride-check] 汇总: {len(errs)} 问题（ERROR {len(errs)}）"
           + (f" / {readout}" if readout else " / **无读数 = 本次未做任何对账**"))

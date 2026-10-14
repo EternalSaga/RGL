@@ -170,6 +170,26 @@ static std::string accessToString(SlangResourceAccess a)
 		return std::nullopt;
 	}
 
+	// 全局参数里 push constant 的**变量名**清单（compute-push 管线的提取判据）。
+	// 🔴 判别子只能走 `getTypeLayout()->getParameterCategory()`：`VariableLayoutReflection`
+	// 自己没有 getParameterCategory()（slang.h 里它只在 TypeLayoutReflection 上），而
+	// 「类型是不是 ConstantBuffer」也**不能**当判别子——slang 把 push 常量块的类型同样报成
+	// ConstantBuffer，category 才是把 `[[vk::push_constant]] push` 与 `sceneHeader` 这类真
+	// CB 分开的那一位。用类型判体会把真 CB 一起捞进产物 = 生成一份 shader 里不存在的布局。
+	std::vector<std::string> queryPushConstParamNames() const
+	{
+		std::vector<std::string> out;
+		if (!reflection)
+			return out;
+		for (unsigned i = 0; i < reflection->getParameterCount(); i++) {
+			slang::VariableLayoutReflection* p = reflection->getParameterByIndex(i);
+			slang::TypeLayoutReflection* tl = p->getTypeLayout();
+			if (tl && tl->getParameterCategory() == slang::ParameterCategory::PushConstantBuffer)
+				out.push_back(p->getName());
+		}
+		return out;
+	}
+
 	// 全局资源参数（binding/space，用于 descriptorSlots 交叉校验）
 	std::vector<SlangGlobalParam> queryGlobalParams() const
 	{

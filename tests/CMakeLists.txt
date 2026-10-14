@@ -50,6 +50,7 @@ set(RGL_TEST_SOURCES
     test_main.cppm              # DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN + main()
     test_shadow_geometry.cppm   # 级联拟合球/切分/光空间盒/剔除（5a-3→5a-9 回归链）
     test_reflection_layout.cppm # 反射生成物字节布局契约
+    test_compute_push_layout.cppm # compute push 契约（compute-push 管线产物）：八枚逐字段布局 + 总数锚 + 反向锚
     test_scene_config.cppm      # 四份配置解析契约
     test_render_scale.cppm      # 批 14.3 渲染倍率纯算术：1.0 档逐像素红线 / 取整 / 钳制 / 非退化
     test_velocity_field.cppm    # 批 14.4 逐像素速度场：显式相机基参考 / 旋转光流闭式 / 天空与无效判据
@@ -214,6 +215,13 @@ target_compile_definitions(rgl_tests PRIVATE RGL_TEST_SHADER_DIR="${CMAKE_CURREN
 # 11.3 补账：引擎**真产物**目录（izb_engine_contract 测的就是这份 SPV 本体——测
 # spike 副本会重演「两份实现漂移」的 1c 盲区，2026-10-02 ndc 镜像 bug 实证）。
 target_compile_definitions(rgl_tests PRIVATE RGL_ENGINE_SHADER_DIR="${CMAKE_BINARY_DIR}/rgl/generated_shaders")
+# compute-push 生成物的**源树路径**（tests/test_compute_push_layout.cppm 的总数锚与反向锚要数
+# 产物文本里的 `export struct`）。「恰好 8 个 struct」「没有 MeshletCullPush」这两条在 C++ 类型
+# 层面写不出来——探测一个未声明的名字是**硬错误**而不是 SFINAE（`requires { typename RGL::X; }`
+# 里 X 不依赖模板参数 ⟹ 名字查找失败落在概念定义点，clang 22 实测直接报 "no type named"），
+# 所以只能读文本。生成物是已提交文件，源树路径稳定。
+target_compile_definitions(rgl_tests PRIVATE
+    RGL_COMPUTE_PUSH_CPPM="${CMAKE_SOURCE_DIR}/rgl/generated/compute_push_types_generated.cppm")
 # 引擎 SPV 由 rgl 目标的 slang 规则产出：rgl_tests 直接依赖它，否则 `just test-gpu`
 # 单测目标时拿到陈旧 SPV（"改完 shader 没重建就报全通过"的 modules 环境坑同款）。
 add_dependencies(rgl_tests rgl)

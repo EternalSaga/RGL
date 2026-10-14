@@ -1,5 +1,5 @@
 module;
-#include <vulkan/vulkan.h>  // VK_* 宏/C 函数（rlvk 不含宏）+ VK_QUEUE_FAMILY_IGNORED；offsetof 经其 stddef.h 提供（mip_gen_impl 先例）
+#include <vulkan/vulkan.h>  // VK_* 宏/C 函数（rlvk 不含宏）+ VK_QUEUE_FAMILY_IGNORED
 #include <vk_mem_alloc.h>   // VmaAllocationCreateInfo / VMA_MEMORY_USAGE_*（VmaRaii 的 C 面）
 #include <glm/glm.hpp>
 #include <fmt/format.h>
@@ -7,6 +7,7 @@ module izb_shadow:impl;
 
 import izb_shadow;  // clang 不给 partition impl unit 隐式 import 主接口——必须显式
 import offgraph_sync;  // 批次 B1b：RgSyncEdgeId / emit（import 不传递，接口里的不算）
+import compute_push_types_generated;  // IzbCreatePush / IzbPrimePush（反射产物，布局有出处）
 import rlstd;
 import rlvk;
 import rllogger;
@@ -20,43 +21,19 @@ namespace RGL {
 
 namespace {
 
-/** IzbCreatePush —— 与 izb_create.comp.slang 同名 struct 逐字段一致（glm 列主序
- *  mat4 = 4×float4 连续 = shader 侧 float4[4]；总 144B ≤ maxPushDataSize）。
- *  期望值出处 = shader 侧字段手算（scalar block layout）：float4 invVPM[4] @0 占 64B +
- *  float4 lightVP[4] @64 占 64B + int pixelW@128 + int pixelH@132 + int gridDim@136 +
- *  float emptyDepth@140 = 144B。债-12 护栏：任何一侧改字段/顺序而另一侧不动 = 编译失败。 */
-struct IzbCreatePush {
-	glm::mat4 invVPM;
-	glm::mat4 lightVP;
-	int32_t pixelW;
-	int32_t pixelH;
-	int32_t gridDim;
-	float emptyDepth;
-};
-static_assert(sizeof(IzbCreatePush) == 144,
-	"IzbCreatePush 与 izb_create.comp.slang IzbCreatePush 漂移：float4 invVPM[4]@0 + float4 lightVP[4]@64 + int pixelW@128 + int pixelH@132 + int gridDim@136 + float emptyDepth@140 = 144B（scalar layout 手算）");
-static_assert(offsetof(IzbCreatePush, invVPM) == 0, "izb_create.comp.slang: invVPM[4] @0（push 区首）");
-static_assert(offsetof(IzbCreatePush, lightVP) == 64, "izb_create.comp.slang: lightVP[4] 紧跟 invVPM[4]（4×float4=64B）@64");
-static_assert(offsetof(IzbCreatePush, pixelW) == 128, "izb_create.comp.slang: pixelW @128（两矩阵段之后）");
-static_assert(offsetof(IzbCreatePush, pixelH) == 132, "izb_create.comp.slang: pixelH @132");
-static_assert(offsetof(IzbCreatePush, gridDim) == 136, "izb_create.comp.slang: gridDim @136");
-static_assert(offsetof(IzbCreatePush, emptyDepth) == 140, "izb_create.comp.slang: emptyDepth @140（struct 尾 = 144B）");
-
-/** IzbPrimePush —— 与 izb_prime.comp.slang 同名 struct 逐字段一致。
- *  期望值出处 = shader 侧字段手算：int gridDim@0 + int pixelTotal@4 + int _pad0@8 +
- *  int _pad1@12 = 16B（补齐 = push 区 16B 对齐习惯，两侧同拼写）。 */
-struct IzbPrimePush {
-	int32_t gridDim;
-	int32_t pixelTotal;
-	int32_t pad0;
-	int32_t pad1;
-};
-static_assert(sizeof(IzbPrimePush) == 16,
-	"IzbPrimePush 与 izb_prime.comp.slang IzbPrimePush 漂移：int gridDim@0 + int pixelTotal@4 + int _pad0@8 + int _pad1@12 = 16B");
-static_assert(offsetof(IzbPrimePush, gridDim) == 0, "izb_prime.comp.slang: gridDim @0");
-static_assert(offsetof(IzbPrimePush, pixelTotal) == 4, "izb_prime.comp.slang: pixelTotal @4");
-static_assert(offsetof(IzbPrimePush, pad0) == 8, "izb_prime.comp.slang: _pad0 @8（补齐位也要同拼写——删它 = shader 侧字段整体上移）");
-static_assert(offsetof(IzbPrimePush, pad1) == 12, "izb_prime.comp.slang: _pad1 @12（struct 尾 = 16B）");
+// 两个 push 布局（IzbCreatePush / IzbPrimePush）**不在本文件**——由 compute-push 反射管线生成
+// （generated/compute_push_types_generated.cppm，import 见文件头）。生成物与 shader 同名，调用点
+// 一个字符都不用改。
+//
+// 🔴 这里原来是两个手写镜像 struct + 一整套 `static_assert(sizeof/offsetof …)`。删它们的理由不是
+// "清理冗余"，而是**那套 assert 是关于 C++ 侧的同义反复**：量的是手抄进 C++ 的 struct，不是
+// shader。shader 改字段名/换序而 C++ 没跟着动时 assert 全过，C++ 按旧布局发字段而 shader 按新布局
+// 读 —— 静默（IZB 只在 shadow.lua 的 izb 开门时跑，图像上表现为 mask 几何错位，离真因三跳）。
+// 布局现在由反射派生，生成物自带 sizeof/offsetof assert；在这里再留一份手抄数值 = 造第二个真相源。
+// 唯一一处**类型**变化：shader 的 `float4 invVPM[4]` 生成的是 `std::array<glm::vec4, 4>`（不是
+// 手写的 `glm::mat4`）——两者内存同构（glm 列主序 mat4 = 4 个连续 float4 列），调用点逐列拷，
+// 与 MeshletCullPush.planes（同为反射生成的 std::array）在 meshlet_cull_service_impl 里的写法同款。
+// "期望值 = 去 shader 逐字段手算"这条独立判据挪进了 tests/test_compute_push_layout.cppm。
 
 constexpr uint32_t kNone = 0xFFFFFFFFu;
 
@@ -305,10 +282,20 @@ void IzbShadow::recordCreateDispatch(vk::raii::CommandBuffer& cmd, const IzbFram
 	std::array<vk::ShaderStageFlagBits, 1> stages = {vk::ShaderStageFlagBits::eCompute};
 	std::array<vk::ShaderEXT, 1> handles = {*createShader};
 	cmd.bindShadersEXT(stages, handles);
-	const IzbCreatePush push{
-		input.invViewProj, input.lightViewProj,
-		static_cast<int32_t>(extent.width), static_cast<int32_t>(extent.height),
-		static_cast<int32_t>(gridDim), 1.0f};
+	IzbCreatePush push{};
+	// shader 侧是 `float4 invVPM[4]` / `float4 lightVP[4]` ⟹ 反射生成物的字段类型是
+	// std::array<glm::vec4, 4>（不是原先手写的 glm::mat4）。glm 列主序 mat4 的内存就是 4 个连续
+	// float4 列，逐列赋值即可，与 MeshletCullPush.planes（同为反射生成的 std::array）在
+	// meshlet_cull_service_impl 里的写法同款。🔴 不用 reinterpret_cast：那会把"两侧内存同构"
+	// 从编译器能查的逐列赋值降级成一句谁都没法验的断言。
+	for (int col = 0; col < 4; ++col) {
+		push.invVPM[col] = input.invViewProj[col];
+		push.lightVP[col] = input.lightViewProj[col];
+	}
+	push.pixelW = static_cast<int32_t>(extent.width);
+	push.pixelH = static_cast<int32_t>(extent.height);
+	push.gridDim = static_cast<int32_t>(gridDim);
+	push.emptyDepth = 1.0f;  // 深度 ≥ 此值 = far 面 miss，不建节点
 	cmd.pushDataEXT(vk::PushDataInfoEXT(0, vk::HostAddressRangeConstEXT(&push, sizeof(push))));
 	cmd.dispatch((extent.width * extent.height + 63u) / 64u, 1, 1);
 }

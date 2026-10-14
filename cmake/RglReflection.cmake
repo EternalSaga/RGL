@@ -85,9 +85,51 @@ function(rgl_reflect_compute_access product)
     set(REFLECTION_PAIRS "${_pair_list}" PARENT_SCOPE)
 endfunction()
 
+# 调用：rgl_reflect_compute_push(<module_name> <相对 rgl/ 的 shader>...)
+# compute shader 的 push constant → C++ struct（产物 = generated/<module_name>.cppm）。
+#
+# 🔴 与 rgl_reflect_slang 的差别**不是"另一条同类管线"，而是没有 schema**，且这个"没有"是
+# 定案不是省事（docs/compute_调研.md §7.12：双相对账成立的前提 = 两个来源各自携带对方推不出
+# 的信息）。那条的 *_schema.lua 带 heapSlotOffset（运行期堆槽 = reservedSlots() + offset，
+# C++ 侧分配策略，shader 里根本没有）⟹ 配得上当第二来源；而 compute push 契约只能携带
+# stride/offset/字段名——**全部是从 shader 手抄的派生信息**，按同一条判据它不是真第二来源。
+# 所以本条的提取清单是**隐式**的（= 调用处那份 shader 名单），参数里没有 schema 位。
+#
+# 与 rgl_reflect_compute_access 的差别 = 消费面：那条产 JSON、消费者是 checks 规则；本条产
+# .cppm、消费者是产品代码（evssm/izb 原先手写的镜像 push struct）。手写镜像的那几条
+# `static_assert(offsetof(...))` 量的是**手抄的 C++ struct 而不是 shader** ⟹ shader 换序而
+# C++ 没动时 assert 全过（关于 C++ 侧的同义反复）。本条让那份布局第一次有出处。
+function(rgl_reflect_compute_push module_name)
+    set(cppm "${GEN_SRC_DIR}/${module_name}.cppm")
+    set(shader_args "")
+    set(pair_ins "")
+    foreach(shard ${ARGN})
+        list(APPEND shader_args --shader "${CMAKE_CURRENT_SOURCE_DIR}/${shard}")
+        list(APPEND pair_ins "${CMAKE_CURRENT_SOURCE_DIR}/${shard}")
+    endforeach()
+    # 工具端一枚 shader 一个 SlangContext（八枚都有全局 `push`/`main`，同批编译必炸），
+    # 所以这里只是把名单传下去，不在 CMake 侧循环起进程。
+    add_custom_command(TARGET reflect PRE_BUILD
+        COMMAND reflection_tool compute-push
+                ${shader_args}
+                --output ${cppm} --module-name ${module_name} --template ${TYPES_TEMPLATE}
+                --flags "${SLANG_FLAGS_STR} -no-codegen"
+                --include "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
+        VERBATIM)
+    # glob 闭包同 rgl_reflect_compute_access（理由见那里的注释）：push struct 的字段声明可能
+    # 住在被 import 的文件里，只列直接输入 = 改了被 import 的文件不触发护栏 = 静默使用过期
+    # 布局。glob 串不能含 `,` 或 `|`（PAIRS 的分隔符）——本仓路径不含。
+    list(APPEND pair_ins "glob:${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.slang")
+    string(REPLACE ";" "," pair_ins "${pair_ins}")
+    set(_cppm_list ${RGL_GENERATED_CPPM} ${cppm})
+    set(_pair_list ${REFLECTION_PAIRS} "${cppm}|${pair_ins}")
+    set(RGL_GENERATED_CPPM "${_cppm_list}" PARENT_SCOPE)
+    set(REFLECTION_PAIRS "${_pair_list}" PARENT_SCOPE)
+endfunction()
+
 # reflect：显式重建全部反射产物（工具由 add_dependencies 先建；管线无条件重跑）。
 add_custom_target(reflect
-    COMMENT "重跑 9 条反射管线（6 条 slangc reflection + features + param_semantics + compute_access）")
+    COMMENT "重跑 10 条反射管线（6 条 slangc reflection + features + param_semantics + compute_access + compute_push）")
 add_dependencies(reflect reflection_tool)
 
 # types 管线
@@ -121,6 +163,20 @@ rgl_reflect_compute_access(compute_access.json
 # 洞（改了被 import 的 `*.slang` 不触发 SHA1 守卫 = 静默使用过期生成码），只是它落在布局
 # 契约上、比方向表更贵。本条管线用 glob 把这个洞堵上了，那 6 条**本批不修**：改它们的输入
 # 集要重跑并复核全部 6 份已提交 .cppm，是独立的一刀。账 → docs/compute_调研.md §7.10。
+
+# compute push constant 的 C++ struct（无 schema，理由见函数头注释）。八枚按名字典序列出。
+# 🔴 **不含 meshlet_cull.comp.slang**：它的 push（`cullPush` → MeshletCullPush）已由上面
+# meshlet_cull_schema.lua 那条 slang 管线产出，这里再产一份 = 给同一个契约造第二个真相源
+# （反向锚点 = tests/test_compute_push_layout.cppm）。
+rgl_reflect_compute_push(compute_push_types_generated
+    shaders/cull.comp.slang
+    shaders/env_prefilter.comp.slang
+    shaders/evssm_downsample.comp.slang
+    shaders/evssm_moments.comp.slang
+    shaders/izb_create.comp.slang
+    shaders/izb_prime.comp.slang
+    shaders/mip_gen.comp.slang
+    shaders/stream_fanout.comp.slang)
 
 # features 管线（config JSON → 模板渲染，无 slangc 步骤）
 set(FEATURES_CPPM "${GEN_SRC_DIR}/features_generated.cppm")

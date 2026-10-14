@@ -1,11 +1,12 @@
 module;
-#include <vulkan/vulkan.h>  // VK_* 宏/C 函数（rlvk 不含宏）；offsetof 经其 stddef.h 提供（mip_gen_impl 先例）
+#include <vulkan/vulkan.h>  // VK_* 宏/C 函数（rlvk 不含宏）
 #include <vk_mem_alloc.h>   // VmaAllocationCreateInfo / VMA_MEMORY_USAGE_*（VmaRaii 的 C 面）
 #include <fmt/format.h>
 module evssm_shadow:impl;
 
 import evssm_shadow;  // clang 不给 partition impl unit 隐式 import 主接口——必须显式
 import offgraph_sync;  // 批次 B1b：RgSyncEdgeId / emit（import 不传递，接口里的不算）
+import compute_push_types_generated;  // EvssmMomentsPush / EvssmDownPush（反射产物，布局有出处）
 import rlstd;
 import rlvk;
 import rllogger;
@@ -19,32 +20,16 @@ namespace RGL {
 
 namespace {
 
-/** MomentsPush —— 与 evssm_moments.comp.slang EvssmMomentsPush 逐字段一致（12B）。
- *  期望值出处 = shader 侧字段手算（scalar block layout）：uint mapSize@0 + uint cols@4 +
- *  float exponent@8 = 12B。债-12 护栏：任何一侧改字段/顺序而另一侧不动 = 编译失败。 */
-struct MomentsPush {
-	uint32_t mapSize;
-	uint32_t cols;
-	float exponent;
-};
-static_assert(sizeof(MomentsPush) == 12,
-	"MomentsPush 与 evssm_moments.comp.slang EvssmMomentsPush 漂移：uint mapSize@0 + uint cols@4 + float exponent@8 = 12B（scalar layout 手算）");
-static_assert(offsetof(MomentsPush, mapSize) == 0, "evssm_moments.comp.slang: mapSize @0");
-static_assert(offsetof(MomentsPush, cols) == 4, "evssm_moments.comp.slang: cols @4");
-static_assert(offsetof(MomentsPush, exponent) == 8, "evssm_moments.comp.slang: exponent @8（struct 尾 = 12B）");
-
-/** DownPush —— 与 evssm_downsample.comp.slang EvssmDownPush 逐字段一致（12B）。
- *  期望值出处 = shader 侧字段手算：uint level@0 + uint cols@4 + uint baseTileTexels@8 = 12B。 */
-struct DownPush {
-	uint32_t level;
-	uint32_t cols;
-	uint32_t baseTileTexels;
-};
-static_assert(sizeof(DownPush) == 12,
-	"DownPush 与 evssm_downsample.comp.slang EvssmDownPush 漂移：uint level@0 + uint cols@4 + uint baseTileTexels@8 = 12B（scalar layout 手算）");
-static_assert(offsetof(DownPush, level) == 0, "evssm_downsample.comp.slang: level @0");
-static_assert(offsetof(DownPush, cols) == 4, "evssm_downsample.comp.slang: cols @4");
-static_assert(offsetof(DownPush, baseTileTexels) == 8, "evssm_downsample.comp.slang: baseTileTexels @8（struct 尾 = 12B）");
+// 两个 push 布局（EvssmMomentsPush / EvssmDownPush）**不在本文件**——由 compute-push 反射管线
+// 生成（generated/compute_push_types_generated.cppm，import 见文件头）。
+//
+// 🔴 这里原来是一对 `struct MomentsPush { … }` + `static_assert(sizeof/offsetof …)`。删掉它们的
+// 理由不是"清理冗余"，而是**那几条 assert 是关于 C++ 侧的同义反复**：量的是手抄进 C++ 的 struct，
+// 不是 shader。shader 把 `mapSize` 与 `cols` 换序而 C++ 没跟着动时三条 assert 全过，C++ 写
+// mapSize@0 而 shader 读 mapSize@4 —— 静默。布局现在由反射派生，生成物自带 sizeof/offsetof assert
+// （那份 assert 量的才是编译器实查的 shader 布局）；在这里再留一份手抄数值 = 造第二个真相源。
+// "期望值 = 去 shader 逐字段手算"这条独立判据没有丢，它挪进了 tests/test_compute_push_layout.cppm
+// ——红在测试里，而不是静默在渲染里。
 
 /** 一次性 layout 转移 CB（vulkan_utils::submitCmdBufferAndWait 同款机制——raii 局部
  *  cmd/fence 函数尾销毁；提交 graphics 队列 + fence 等待——但本站失败直接抛，
@@ -194,7 +179,7 @@ void EvssmShadow::recordFrame(vk::raii::CommandBuffer& cmd) {
 		std::array<vk::ShaderStageFlagBits, 1> stages = {vk::ShaderStageFlagBits::eCompute};
 		std::array<vk::ShaderEXT, 1> handles = {*momentsShader};
 		cmd.bindShadersEXT(stages, handles);
-		const MomentsPush push{mapSize, cols, exponent};
+		const EvssmMomentsPush push{mapSize, cols, exponent};
 		cmd.pushDataEXT(vk::PushDataInfoEXT(0, vk::HostAddressRangeConstEXT(&push, sizeof(push))));
 		cmd.dispatch(mapSize / 8u, mapSize / 8u, 1);
 	}
@@ -207,7 +192,7 @@ void EvssmShadow::recordFrame(vk::raii::CommandBuffer& cmd) {
 		std::array<vk::ShaderStageFlagBits, 1> stages = {vk::ShaderStageFlagBits::eCompute};
 		std::array<vk::ShaderEXT, 1> handles = {downShaders[level - 1]};
 		cmd.bindShadersEXT(stages, handles);
-		const DownPush push{level, cols, baseTile};
+		const EvssmDownPush push{level, cols, baseTile};
 		cmd.pushDataEXT(vk::PushDataInfoEXT(0, vk::HostAddressRangeConstEXT(&push, sizeof(push))));
 		const uint32_t dstTile = baseTile >> level;
 		cmd.dispatch((dstTile + 7u) / 8u, (dstTile + 7u) / 8u, cols * cols);

@@ -72,7 +72,10 @@ export class EvssmShadow {
 	[[nodiscard]] uint32_t getMipLevels() const { return mipLevels; }
 
    private:
-	struct PushImpl;  // 两个 push 布局在 impl unit（避免接口拖宏）
+	// 两个 push 布局（EvssmMomentsPush / EvssmDownPush）**不进本接口 unit**：它们是 compute-push
+	// 反射管线的产物（generated/compute_push_types_generated.cppm），只被 impl unit import，接口
+	// 因此不拖生成物的 GMF 宏面（glm / cstddef）。原先此处是 `struct PushImpl;` 前置声明占位，但
+	// PushImpl 从未定义、全仓零引用 = 纯装饰，删；上面那句"布局不进接口 unit"才是它想表达的东西。
 	/// 图外同步发射账（批次 B1b；Renderer 持有，生命周期覆盖本模块）
 	OffGraphSync& sync;
 	DeviceContext* deviceCtx = nullptr;

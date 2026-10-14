@@ -25,7 +25,7 @@ Vulkan 现代特性学习项目。Mesh shader 渲染管线，使用 ShaderObject
 ```bash
 just config              # CMake 配置（默认 clang, Release）；just config gcc Debug 指定编译器/类型
 just build               # 增量编译（需先 config）；just build-release / build-debug = 一键配置+编译
-just reflect             # 重跑 9 条反射管线（改动 shader 契约/schema/模板后必须，见 skill rgl-shader-contract）
+just reflect             # 重跑 10 条反射管线（改动 shader 契约/schema/模板后必须，见 skill rgl-shader-contract）
 just checks / doc-check / style-check [--strict]  # 源码检查统一入口（每次 just build 已随 source_checks 跑、只警告）
 just build-tools         # 构建 imgqa + 跑 checks（imgqa 不进 ALL，`just build` 不编它 ⟹ 它编译失败没人发现）
 just run                 # 运行

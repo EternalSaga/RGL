@@ -65,6 +65,7 @@ static void printUsage() {
 	logger->info("  reflection_tool render     --json <path> --output <path> --template <path>");
 	logger->info("  reflection_tool slang      --shader <path> [--shader <path>...] --schema <path> --output <path> --module-name <name> --template <path> [--flags <a b c ...>]");
 	logger->info("  reflection_tool compute-access --shader <path> [--shader <path>...] --output <path> [--flags <a b c ...>] [--include <path>]");
+	logger->info("  reflection_tool compute-push --shader <path> [--shader <path>...] --output <path> --module-name <name> --template <path> [--flags <a b c ...>] [--include <path>]");
 }
 
 int main(int argc, char* argv[]) {
@@ -306,6 +307,137 @@ int main(int argc, char* argv[]) {
 			// 与 'slang' 子命令同一个可归因出口：静默产出空产物 = 规则侧拿一份**看起来正常**
 			// 的方向表去对账，比直接失败危险得多（假绿的入口往往是"看起来成功"的工具）。
 			logger->error("'compute-access' 子命令不可用：本构建未链接 Slang C API（"
+				"SLANG_PREBUILT_DIR 缺失或不完整）。Linux 先 just config 触发 FetchContent "
+				"再 just reflect（债-25）");
+			return 1;
+#endif
+		}
+
+		// compute-push 子命令：从 compute shader 反射 push constant 的 C++ struct（产 .cppm）。
+		//
+		// 🔴 **本管线没有 schema，也不该有**（docs/compute_调研.md §7.12 定案：双相对账成立的
+		// 前提 = 两个来源各自携带对方推不出的信息）。图形侧 6 份 *_schema.lua 配得上存在，是因为
+		// 它带 heapSlotOffset（运行期堆槽 = reservedSlots() + offset，C++ 侧分配策略，shader 里
+		// 根本没有）；而 compute push 的 schema 只能写 stride/offset/字段名——**全部是从 shader
+		// 手抄的派生信息**，按那条判据它不是真第二来源。本管线的提取清单是**隐式**的：「给定这些
+		// shader，每个的 push constant」，所以参数里只有 shader 名单。
+		//
+		// 修的现实：八枚 compute 的 push 契约在 C++ 侧手写镜像 struct，而它们那几条
+		// `static_assert(offsetof(...))` **量的是手抄的 C++ struct、不是 shader** ⟹ shader 把两个
+		// uint 换序而 C++ 没动时三条 assert 全过（关于 C++ 侧的同义反复）。本产物让布局第一次
+		// 有出处：字段名/偏移/尺寸 = 编译器实查真值，改 shader 字段名 = 产品代码编译失败。
+		if (command == "compute-push") {
+#ifdef RGL_TOOLS_WITH_SLANG
+			if (shaderPaths.empty()) {
+				logger->error("--shader is required for 'compute-push'");
+				return 1;
+			}
+			if (outputPath.empty() || moduleName.empty() || templatePath.empty()) {
+				logger->error("'compute-push' requires --output --module-name --template");
+				return 1;
+			}
+			// flags：--flags 单串 split（缺省 = kDefaultSlangFlags）；-I 搜索路径追加
+			std::vector<std::string> flags;
+			if (slangFlagsStr.empty()) {
+				flags = kDefaultSlangFlags;
+			} else {
+				std::string remaining = slangFlagsStr;
+				size_t pos;
+				while ((pos = remaining.find(' ')) != std::string::npos) {
+					flags.push_back(remaining.substr(0, pos));
+					remaining.erase(0, pos + 1);
+				}
+				if (!remaining.empty())
+					flags.push_back(remaining);
+			}
+			for (const auto& inc : includePaths) {
+				flags.push_back("-I");
+				flags.push_back(inc);
+			}
+			// 一枚 shader 一个 SlangContext（与 compute-access 同形）：八枚 compute 全都声明
+			// 全局 `push` 与 `main`，塞进同一次编译请求必炸（conflicting declaration /
+			// function 'main' already has a body / ambiguous reference to 'push'）。
+			//
+			// std::map 的键序 = 类型名字典序 ⟹ 确定性排序的一半免费拿到（另一半是字段按 offset
+			// 显式 sort）。产物是**已提交文件**且进 SHA1 护栏，不排序 = 每次 just reflect 都可能
+			// 产生与语义无关的假 diff。
+			std::map<std::string, RGL::SlangStruct> byType;
+			for (const auto& shader : shaderPaths) {
+				RGL::SlangContext ctx;
+				std::string diag;
+				// 🔴 错误必须归因到具体文件（compute-access 同款）：多 shader 一次调用只转述
+				// diag 的话，人会去改最后动过的那一枚。
+				if (!ctx.compile(std::vector<std::string>{ shader }, flags, diag)) {
+					logger->error("[FAIL] compute-push 编译 {} 失败：{}", shader, diag);
+					return 1;
+				}
+				const std::string base = fs::path(shader).filename().string();
+				// 🔴 selectivity 自检（先于一切提取）：判别子必须**恰好**命中 1 个全局参数。
+				//   · 命中 0 = 这枚 shader 没有 push constant，或判别子失效；
+				//   · 命中 >1 = 判别子过宽，会把 sceneHeader 这类真 ConstantBuffer 一起捞进产物
+				//     = 生成一份 shader 里根本不存在的布局。
+				// 两种都不是"少一个 struct"的小事，而是产物整体不再等于「shader 的 push 契约」
+				// ⟹ 直接失败并点名实测命中数，绝不静默产出一份看起来正常的产物（假绿的入口
+				// 往往是"看起来成功"的工具）。
+				const std::vector<std::string> names = ctx.queryPushConstParamNames();
+				if (names.size() != 1) {
+					std::string seen;
+					for (const auto& n : names) {
+						if (!seen.empty())
+							seen += ", ";
+						seen += n;
+					}
+					logger->error("[FAIL] compute-push {}：判别子命中 {} 个 push constant 参数"
+						"（应为恰好 1 个；命中名：{}）",
+						base, names.size(), names.empty() ? std::string("<无>") : seen);
+					return 1;
+				}
+				auto api = ctx.queryPushConst(names[0]);
+				if (!api) {
+					logger->error("[FAIL] compute-push {}：push 参数 '{}' 的元素不是 struct"
+						"（queryPushConst 拒收）", base, names[0]);
+					return 1;
+				}
+				// 字段按 offset 升序：反射的字段序本就等于声明序，显式排一次是为了让"产物按
+				// offset 单调可读"成为不依赖 slang 版本迭代序的性质。
+				std::ranges::sort(api->fields, [](const RGL::SlangField& a, const RGL::SlangField& b) {
+					return a.offset < b.offset;
+				});
+				logger->info("[OK] compute-push {}: push '{}' -> struct '{}' (size={} {} 字段)",
+					base, names[0], api->name, api->size, api->fields.size());
+				// 同名 struct 撞车 = 产物里两份同名定义（编译期才炸，且错误指向生成物）。
+				// 现在不拦，将来加第二枚同 push 类型的 shader 时会拿到一份编不过的产物。
+				if (!byType.emplace(api->name, *api).second) {
+					logger->error("[FAIL] compute-push {}：struct 名 '{}' 已被前面的输入产出"
+						"——产物会出现重复定义，去掉重复输入", base, api->name);
+					return 1;
+				}
+			}
+			// 全部 shader 成功才落笔：半途失败留下半份产物 = 下一轮拿它当真相。
+			// 生成走**现成模板 + 现成 generator 路径**（types_cppm.inja + generateCppmFromSlang），
+			// 空 Schema = 无 slots/constants：本产物只有 struct，没有堆槽与契约常量。
+			std::vector<RGL::SlangStruct> structs;
+			structs.reserve(byType.size());
+			for (auto& [name, s] : byType)
+				structs.push_back(std::move(s));
+			std::optional<std::string> cppm =
+				RGL::generateCppmFromSlang(structs, RGL::Schema{}, templatePath, moduleName);
+			if (!cppm) {
+				logger->error("[FAIL] compute-push 生成中止（见 [FAIL] 条目）");
+				return 1;
+			}
+			std::ofstream out(outputPath);
+			if (!out.is_open()) {
+				logger->error("Cannot open output file: {}", outputPath);
+				return 1;
+			}
+			out << *cppm;
+			logger->info("[OK] Generated {} ({} 个 push struct)", outputPath, byType.size());
+			return 0;
+#else
+			// 与 slang / compute-access 同一个可归因出口：静默产出空产物 = 消费者按一份
+			// "看起来正常"的布局发字段（假绿）。
+			logger->error("'compute-push' 子命令不可用：本构建未链接 Slang C API（"
 				"SLANG_PREBUILT_DIR 缺失或不完整）。Linux 先 just config 触发 FetchContent "
 				"再 just reflect（债-25）");
 			return 1;

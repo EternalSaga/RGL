@@ -904,6 +904,108 @@ reason 的人工条目）+ config 三项 + `风格检查规则.md` §10（三份
 B2-2 落"资源身份 + 读者"时，**同一刀**把护栏建回来（§7.10 的 B2-2 行已加这条硬约束）。
 
 
+### 7.13 compute 侧契约形态定案（2026-10-14，用户问「schema 那套哲学套在 compute 上成立吗」）
+
+**问题原样**：schema + shader 反射当初立起来的唯一目的是——① C++ 写错 shader 内变量名要**编译期**
+知道；② shader 要有命名规范，不能天天改名导致引擎重编。这套哲学套在 compute 上还成立吗？
+
+**答：成立。但要先分清「要钉的契约」在 compute 上换成了什么，而且 schema 文件本身不是哲学。**
+
+四条实测（本机跑的，不是推断）：
+
+| 实测 | 读数 | 推论 |
+|---|---|---|
+| `rgl_reflect_slang` 的编译路径能不能吃 `.comp.slang` | 能，**不需要** `-entry`/`-stage`：`[PASS] pushConst 'push' -> struct 'EvssmMomentsPush' matches API (size=12)` | 机器现成 |
+| 八枚 `.comp.slang` 塞进**同一次**编译请求 | `conflicting declaration` / `function 'main' already has a body` / `ambiguous reference to 'push'` | 必须每枚一个 `SlangContext`（第 10 条管线就这么写） |
+| shader 改名 `mapSize`、schema 仍声明旧名 | `[FAIL] pushConst 'push': schema field 'mapSize' not in API struct` → 拒生成 rc=1 | **目标 ① 达成** |
+| shader 里两个 uint **换序** | schema 对账 **PASS**（只比 size + 字段存在性，不比顺序） | 顺序 hazard 不靠"检出"，靠**生成物跟着反射走**消掉；真正消不掉的是**语义**换序，那个任何机制都看不见 |
+
+**哲学里承重的不是 schema，是「单一来源声明 + 另一方消费 + 机器拒生成」。** 图形侧 schema 之所以还
+多带一份，是因为它携带 `heapSlotOffset`（运行期槽 = `reservedSlots() + offset`，C++ 侧分配策略，
+shader 里没有）——按 §7.12 判据那才是真第二来源。
+
+#### 🔴 定案：compute push **不做 schema**
+
+它只能携带 stride / offset / 字段名，**全部是从 shader 手抄的派生信息** ⟹ 按 §7.12 判据不是真第二
+来源。而 `meshlet_cull_schema.lua` 头部自己就写着：「把它当『第二份布局』来维护是多余的，改 shader
+后同步本表只为让提取清单继续指得对」——**布局那半是冗余，只有提取清单承重**；而 compute 的提取
+清单可以隐式（"给定这些 shader，每个的 push constant"，判别子 = `ParameterCategory::PushConstantBuffer`，
+值 11；注意 `VariableLayoutReflection` **没有** `getParameterCategory()`，必须走 `getTypeLayout()`）。
+
+> ⚠ **这条是给后来人设的路障：别"顺手补上"一份 compute_push_schema.lua。** 补了就是造第二个
+> 真相源，而且比图形侧那份更糟——图形侧那份至少带 `heapSlotOffset`。
+
+#### 要钉的契约，在 compute 上换成两样
+
+| 面 | 靠不靠偏移量 | 状态 |
+|---|---|---|
+| **push 布局（资源里的字节）** | 靠，但偏移量必须**由反射生成**，不手算 | ✅ B2-1′ 已落 |
+| **binding 身份（哪个资源）** | 🔴 **完全不靠**：键 = shader 里的 binding 名，索引由构建期生成的接口表给 | ⏳ B2-1″ |
+
+界线一句话：**「哪个资源」用名字，「资源里的字节」用生成的 struct。** 前者多变、后者不变——正好
+对上"schema 确定不变的部分"那句原话。
+
+#### B2-1′ 落地读数（2026-10-14）
+
+第 10 条反射管线 `compute-push` → `rgl/generated/compute_push_types_generated.cppm`（8 个 struct，
+**零 schema**；`meshlet_cull` 刻意排除——它的 `MeshletCullPush` 已由 schema 生成，别造第二个）。
+换掉 evssm + izb 四个手写镜像 struct，删掉 **20 条同义反复 `static_assert`**（4 个 struct 各
+4/4/7/5 条；主 agent 亲数——**子 agent 报的 16 是错的**，今天它第二次数错数）。那些 assert 量的是
+手抄的 C++ struct，不是 shader ⟹ shader 换序它们照样全过。
+
+- **三锚主 agent 自己重跑全命中**（逐位不变）：出厂 `95edc8ccd7a4`、EVSSM 开档 `865fd1aa5a82`、
+  IZB 开档 `2316b566b113`。
+- **变异**：换序 → `just reflect` → 测试红（**正是旧 assert 抓不到的那种**，且生成物自带 assert 全过）；
+  改字段名 → **产品代码编译失败**（`no member named 'pixelW' in 'RGL::IzbCreatePush'`）= 布局第一次有出处。
+- **两处被我的产物撞出来的口径洞**（都是真回归，不是"顺手改"）：
+  ① `check_spirv_stride.py` 的探针机制对**入口单元**结构性无效（`import cull.comp` 被 slang 当
+  路径 `cull/comp.slang`）⟹ 改走 NOTE + 汇总读数（`入口单元不可探针 8`），依据是一条推论：导不进去
+  ⟹ 不可能成为别处的 `StructuredBuffer<T>` 元素 ⟹ R4 不变量对它空真。原有 18 个覆盖面一位没少。
+  ② 🔴 **R3 放行面被生成物 glob 从 18 静默扩到 26**——`StructuredBuffer<CullPush>` 从"拦得住"变成
+  放行，而 R4 对它又探针不可达 ⟹ **两条判据对同一个误用一起变哑**。已收口成
+  `放行面 = 生成物 − 入口单元类型`（从 shader 侧现算，不硬编码产物名），变异验过现在会咬。
+
+#### B2-1″ 定案形态（用户拍板：**暂时不值得为 shader 做全面运行时反射**）
+
+`rgl/shader.cppm:61` 的 `makeMappedCompute` **已经是那个容器**（9 个调用点覆盖 7/9 枚），错的只是
+键的类型：
+
+```cpp
+std::vector<std::pair<uint32_t, RGL::HeapSlot>>{ {0, HeapSlot{headSlot}}, {3, HeapSlot{primedSlot}} }
+//                     ^^^^^^^^ 索引字面量 ⟹ shader 改号，C++ 静默绑错：无编译错、无运行期错
+```
+
+键换成 binding 名，索引由**构建期生成的接口表**给（不是运行期反射——SPV 侧不持有名字→binding 映射，
+已 grep 确认；而全面运行期反射已被否）。输入恰好是第 9 条管线的 `compute_access.json`——
+**它交付时没有消费者，这一刀让它有了**。
+
+过 §7.12 判据：容器申报带「哪个资源绑哪个名字」（C++ 独有），接口表带「这名字存不存在、第几号、
+可不可写」（shader 独有）⟹ **真双源**。
+
+三条代价，落地前先认：① 名字打错是**启动期**才炸不是编译期 ⟹ 补一条纯文本 checks 扫 `bind("x", …)`
+字面量与接口表对账（两侧各持一半信息，过 §7.12）；② 容器只覆盖走 `makeMappedCompute` 的 7/9，
+`env_prefilter` / `mip_gen` 是启动期一次性自己写描述符，**明确不收**（别为覆盖率去改两枚启动期
+shader）；③ 键查表只准在构造期，**一旦有人挪进 `recordFrame` 就是白送的每帧开销**——这条要落成
+断言，不能靠自觉。
+
+#### B2-2 = 这个容器的第二个消费者，不是独立一刀
+
+容器申报（资源身份）× 反射（方向）× 相位（顺序）→ 该有哪些边，与 `offgraph_sync` 边表对账。
+§7.12 那张 12 行表是它的**人工半边**：要验的是"最后一列（靠什么同步）能不能推出来"——推得出就删表。
+
+#### 切刀表（覆盖 §7.10 的表）
+
+| 刀 | 状态 |
+|---|---|
+| B2-1 compute 方向表进反射（`compute_access.json`） | ✅ `3eae652`；配套基线规则已撤（§7.12） |
+| **B2-1′** compute push 布局进反射、换掉手写镜像（evssm + izb 四枚） | ✅ 本刀 |
+| **B2-1′-b** 余下四枚：`CullFrameInput`（🔴 BIT-IDENTICAL 的 CPU 读回重放路，最险）、`EnvPrefilterPush`（在接口 unit 导出）、`FanoutPush`、mip_gen 镜像 | ⏳ |
+| **B2-1″** `makeMappedCompute` 键 → binding 名 + 构建期接口表 | ⏳ 这一刀才有设计含量 |
+| **B2-2** 容器申报 × 反射方向 × 相位 → 与边表对账 | ⏳ 消费 B2-1″ |
+| B2-3 / B2-4（buffer 档 + 拒绝面 + 资源迁入） | ⏳ 形态由首发消费者定，见 §7.10 |
+
+
+
 
 
 
