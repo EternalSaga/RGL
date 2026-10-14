@@ -62,12 +62,27 @@
 三个枚举本体（**图的全部词汇表**）：
 
 - `RgPassKind` = `drawMesh` / `blit` / `drawLight` —— **无 compute**
-- `RgUsage` = `read` / `write` / `readDepth` / `writeDepth` / `blitRead` —— **无 storage 读写**
+- `RgUsage` = `colorWrite` / `depthWrite` / `sampleRead` / `transferRead` / `transferWrite`
+  —— **无 storage 读写**（⚠ 本行 2026-10-14 前写的是 `read`/`write`/`readDepth`/`writeDepth`/
+  `blitRead`，那是改名前的旧名，**已漂**；名单口径按 §0 的规矩读枚举本体 `render_graph.cppm:72-78`）
 - `RgAttachmentKind` = `swapchain` / `depth` / `offscreen` / `depthOffscreen` —— **无 buffer kind**
 
 图的产出 = 每 attachment 的**最终 layout** + `beginRendering` 的 layout 条目 + `RgBarrierPlan`
-（pass 间 barrier）。`usageInfo`（`rgl/render_graph_impl.cppm`）是 usage → {layout, stage, access}
-的**唯一推导点**——加 compute 必改它，`precheckPass` 也要改（它按 kind 查词表，未知 kind 直接抛）。
+（pass 间 barrier）。`usageInfo`（`render_graph_impl.cppm:49`）是 usage → {layout, stage, access}
+的**唯一推导点**——加 compute 必改它（配套的两个角色判据 `isWriteUsage` / `isReadUsage` 同改）。
+
+⚠ **kind 的校验落点分两处，别记成一处**（2026-10-14 实测，先前本行写「`precheckPass` 按 kind
+查词表，未知 kind 直接抛」是把两处混了）：
+
+| 校验 | 位置 | 形态 |
+|---|---|---|
+| **附件级**（格式 / extent / extentScale / history 四张 kind 白名单） | `registerAttachment` 调的四个 `validateAttachment*`（`render_graph_impl.cppm:145/173/188/208`） | 返回 `std::unexpected(RenderGraphInvalid)`，**不抛** |
+| **pass 级** | `precheckPass`（`:336`） | 只按 `pass.kind` **三路分派**，不查任何 kind 词表 |
+| **执行器构造期**（state 按 kind 分档、段名查词表） | `validateRenderGraphForExecutor`（`vkrenderer_impl.cppm:51`） | `throw std::runtime_error` |
+
+⟹ **加 buffer 档要改的是第一行那四处 + 三个 kind 谓词**（`aspectOf` / `isRtBackedKind` /
+`isDepthKind`，`:80-92`），而 `aspectOf` 对未知 kind **回落 `eColor`** = 一个静默的错方向，
+新 kind 必须显式给出取值而不是靠回落。
 
 🔴 **真正的不变式不是「compute 全在图外」，是「图只跟 image attachment 的布局链」。**
 
@@ -77,7 +92,9 @@
 **图的边界之外、本来就不该进图的部分**（这些不是债，是设计）：descriptor/sampler heap 的
 host-write barrier、scene data staging 拷贝、swapchain 信号量、帧槽 fence。
 任何"扩图"方案都不该碰它们。⚠ `RgAttachmentKind` 一旦有 buffer 档，**最大的诱惑就是把 scene
-data staging 塞进来**——这条拒绝要落进 `precheckPass` 的失败分支，不能只写在这里。
+data staging 塞进来**——这条拒绝要落进**附件级校验的失败分支**（`registerAttachment` 那条链，
+🔴 不是 `precheckPass`，见 §2 的校验落点对照表），不能只写在这里。可执行形态 = 「buffer 档名
+必须在 C++ 注册表里，未注册即拒」一条规则，五类诱惑一起杀掉。
 
 ### 2.1 但边界上的**机器**已经建好了（2026-10-14 重裁时实测）
 
@@ -252,15 +269,29 @@ B 档否决理由③：**barrier 改由图发 ⟹ 模块无从返回真实布局
      f(renderExtent)（IZB 的 nodes / mask）或 f(资产量)（meshlet 标志表），而算这个字节数的函数今天
      就在模块里——让 Lua 声明尺寸 = 给同一事实开第二份载体。**dispatch 实际写的上界必须与 ensure 出的字节数对账。**
   4. **拒绝面**：scene data staging / heap host-write / pushData / 信号量 / fence 一律不许声明成附件
-     （§2 那五类），且拒绝要落进 `precheckPass` 的失败分支。
+     （§2 那五类），且拒绝要落进**附件级校验的失败分支**（= `registerAttachment` 那条链，
+     🔴 **不是 `precheckPass`**——那是 pass 级、不查 kind 词表，落点见 §2 的三行对照表）。
+     可执行的形态是一条**双向规则**：buffer 档附件名必须在 C++ 侧注册表里（注册 = 提供算尺寸的
+     函数），**未注册即拒**——这一条同时杀掉那五类诱惑（它们都不在表里），而不是靠列黑名单。
 
   改动面以**符号本体**为准，本文不维护落点清单：三个枚举 + `usageInfo` + `precheckPass` +
   barrier 物化函数（现返回 image 形状）+ 执行器的逐附件布局追踪表（现按"每槽一个 image layout"建模）。
 - **D2 第一个吃螃蟹的模块选谁？→ 改成 EVSSM 矩图**（原选 meshlet_cull，那是从"申报面"出发的排序，
   在定案形态下不成立）。新排序与理由：
-  ① **EVSSM 矩图**——它是 **image** ⟹ 走**已有**的 RT 缓存路径、**零新机器**；搬过去就**删代码**
-  （模块不再持私有图、不再自己管重建）；且顺手解掉"本模块只有 heap 槽、没有句柄"那条——依赖从全局
-  stage barrier 变成可声明的 storage-write → sample-read 边。
+  ① **EVSSM 矩图**——它是 **image** ⟹ 走**已有**的 RT 缓存路径；搬过去**删代码**（模块不再持
+  私有 `VmaImage`、不再自领 8 个 Runtime 段 per-mip storage 槽）。
+  ⚠ **2026-10-14 实测修正本行原文的三处过度承诺**（原文：「**零新机器**」「模块不再持私有图、
+  **不再自己管重建**」「依赖从全局 stage barrier 变成**可声明的** storage-write → sample-read 边」）：
+  - **不是零新机器**：矩图要 **8 个 per-mip storage 视图 + 1 个全 mip sampled 视图**，而 RT 缓存
+    现在只支持「一个 image + 一个 view + 一个 `SAMPLED_IMAGE` 堆槽」（`RtAttachment` 的
+    `hasSampleDescriptor` / `sampleViewCreate` 是**单个**描述符链）⟹ 得先给它长出**多描述符附件**
+    能力。这一刀的真实内容 = 扩 RT 缓存 + 迁入，不是纯搬。
+  - **「不再自己管重建」对 EVSSM 收益为零**：它本来就不重建（尺寸 = `kShadowMapSize` 与窗口解耦、
+    构造门位早退）。判据 7 因此恒真，口径已就地改准（见 §7 判据 7）。
+  - **「变成可声明的边」要说清是哪种可声明**：EVSSM 那 9 条全局 stage barrier 早在 B1b 就换成了
+    3 个边名（`offgraph_sync`），而 plan-only 红线 ⟹ **图不代发 barrier** ⟹ 迁入的收益是
+    「依赖变成图**可校验**的对象」（校验有没有未申报的写后读），**不是**「图替它发」。
+    把它读成后者就会去动 B3。
   ② **meshlet_cull** = **buffer 档首发**（零 image、纯 buffer、位置契约最明确），要新 kind，第二刀。
   ③ **IZB 放最后**——sandwich + 已有 A 档护栏，动它必须保住既有对账（§5.2 的断言输入不能断）。
 - **D3 `computeQueue` / `transferQueue` 怎么处置？→ ✅ 定案并执行：删**（2026-10-14，本仓一贯
@@ -294,9 +325,15 @@ B 档否决理由③：**barrier 改由图发 ⟹ 模块无从返回真实布局
    断言必须点名；还原回绿。防的是"图校验一个虚构"（声明与真实写面分家）。
 6. **申报通道不许被图取代**（plan-only 的护栏，也是 B3 的准入门）——让某模块**谎报**它离开时的真实
    布局，对账必须炸。**若这条测不出红，说明发射权已经在图手里 ⟹ 红线已破**，此时不是补测试，是回退形态。
-7. **resize 后 heapSlot 不变**（B2，EVSSM 矩图迁入的验收）——改窗口尺寸触发重建后，采样侧 baked 的
-   槽号必须仍是同一个（RT 缓存的 `heapSlot` 跨 resize 复用是本次迁入的**唯一**结构性收益来源，
-   它不成立就等于白搬）。
+7. **尺寸漂移后 heapSlot 不变**（B2，EVSSM 矩图迁入的验收）——重建后采样侧 baked 的槽号必须仍是
+   同一个（RT 缓存的 `heapSlot` 跨重建复用是本次迁入的**唯一**结构性收益来源，它不成立就等于白搬）。
+   🔴 **判据口径 2026-10-14 改过：原文写的是「改窗口尺寸（resize）触发重建后」，那个触发条件对
+   EVSSM 恒不成立**——矩图尺寸 = `kShadowMapSize`（2048）**与窗口 extent 解耦**，且 `evssmShadow`
+   全仓仅一处赋值、门位 `if (evssmShadow || …) return;` ⟹ **模块对象一旦构造永不重建**（对照 IZB：
+   extent 漂了就 `make_unique` 换整个对象）。照原文测 = 一条**恒真**的判据，测不出有意义的红。
+   改后的口径：**单测直接对同一个 name 调两次 `ensure` 传不同 extent**，断言 `generation` 变了而
+   `heapSlot` 没变——不需要真 resize。（真程序侧另留一条：EVSSM 出厂档 resize 冒烟，断言
+   `generation` **不漂**，防的是"迁入后莫名每帧重建"。）
 
 ### 7.1 B1 第一刀已落地（2026-10-14）：挂点从注释变成断言
 
@@ -717,6 +754,46 @@ build/_deps/slang-prebuilt-src/bin/slangc <shader>.slang -target spirv \
 
 **结论**：L2 从「高不确定（可能拿不到信息）」降成「**判据已定、工作量在接反射管线**」。
 B2 排期时按后者估。
+
+### 7.10 B2 切刀（2026-10-14 定，用户拍板「先完成 B2」）
+
+**顺序 = L2 数据面 → 依赖图对账 → 词表 + 拒绝面 → 资源迁入。** 与 §7 批次表原读法的差别只有一处，
+但是承重的一处：**L2 排第一，不是排最后**。
+
+**为什么 L2 必须第一**（两条，第二条是硬的）：
+
+1. §7.3 的表本来就写「L2 …… **B2 第一件事**」。
+2. 🔴 **依赖图没有 L2 就做不出来**。B1a 把 `RgOffGraphWorkDecl` 的读写面**刻意留空**，留空理由写在
+   字段注释里：「那份名单必须逐条照抄各模块真实发的 barrier，现在填一份『看起来对』的会被读成
+   已接线」——**能替代手抄的只有反射**。所以「申报面升成依赖图」排在 L2 之前 = 逼着手抄一份名单，
+   正是 B1a 拒绝的那个形态。
+
+**为什么词表那一刀往后放**：buffer 档 + 按名注册现在做 = **给一个还没有消费者的机制猜形状**
+（RT 缓存的 buffer 版要不要 heapSlot、usage 要哪些位、尺寸漂移按字节还是元素——只有首发消费者
+meshlet_cull 能定）。D2 ② 说的「buffer 档首发」就是这个意思。
+
+**L2 产物形态（本刀拍板）**：**已提交的生成物 + 一条 `tools/checks/` 规则**，不是运行期检查。
+理由：它守的是「shader 加了个 `RW` buffer 而边表没加对应边」，那是**两份已提交产物之间的静态关系**，
+不需要设备；本仓已有 `tools/checks/byte_offset_baseline.json` 这个基线对账先例可套。
+代价写清：判据是**声明级**的（`RW*` 即使本 entry point 只读也算写）⟹ 会有假阳性，消它要更新基线
+并写明理由；方向安全（宁可多要一条边，同 §7.8 那条 `size` 等价性同理）。
+
+**证伪点（刀 1 的第一步，跑不出来就换路）**：`getResourceAccess()` 能不能区分
+`ByteAddressBuffer` 与 `RWByteAddressBuffer`。头文件与 JSON 都指向能，**但没实测**。
+拿 `cull.comp.slang` 测：binding 2 / 4 必须报 `READ_WRITE`、binding 0（`readonly`）必须报 `READ`。
+跑不出来 → 退回 `slangc -reflection-json` 那条路（**形态换、判据不换**）。
+
+| 刀 | 内容 | 判据 |
+|---|---|---|
+| **B2-1** | 反射工具读 `getResourceAccess()`，为 9 枚 compute 出「entry point × binding × 方向」的已提交产物 + `tools/checks/` 基线规则 | **证伪点**（上）；阳性锚点 = cull 的 2/4 报写、0 报读；反向 = 把某个 `RW` 改回只读，生成物必须变；变异红线 = 基线漏更新必须红 |
+| **B2-2** | 申报面升成依赖图（资源 → 生产者 → 消费者），与边表对账「有没有未申报的写后读」 | 判据 3 的加强版：故意让一个 compute 写一个没边的资源，必须点名 |
+| **B2-3** | `RgAttachmentKind::buffer` + `RgUsage::storage*` + **按名注册尺寸** + **拒绝面落进 `registerAttachment`** | 每条拒绝分支一条用例；buffer 档出现在 barrier 计划里 = 编译期/断言红（plan-only 的结构性护栏） |
+| **B2-4** | 资源迁入：EVSSM 矩图（先扩 RT 缓存多描述符）→ meshlet_cull（buffer 档首发，**由它定 buffer 档的形状**）→ IZB（最后，保 A 档 `layoutDrift`） | 判据 1 / 5 / 6 / 7（口径已改准） |
+
+⚠ **B2-3 有一条顺带要修的静默坑**：`aspectOf(kind)` 对未知 kind **回落 `eColor`**（
+`render_graph_impl.cppm:80-84`）——加第五个 kind 不报错、直接被当色附件。buffer 档必须显式给值，
+且那条回落要改成编译不过（去掉 `default` 分支让 `-Wswitch` 接管）。
+
 
 
 
