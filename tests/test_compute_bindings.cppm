@@ -42,6 +42,10 @@ module;
 //   ⑤ **调用点名字打错一个字母**（`"head"` → `"headX"`）→ 本文件不红（本文件测表，不测
 //      调用点字面量），**启动即抛**并点名 shader + 错名 + 合法名清单。写在这里是为了说明
 //      这条的落点在运行期，不在本文件；它的单元等价形态 = 下面「三类报错各自可归因」的 ②。
+//   ⑥ **方向编码坏掉**（B2-3 加的 writable/readable：`accessToFlags` 把 `none` 也编成
+//      readable，或把 `readWrite` 编成只读）→ 「七个调用点」里逐条的 writable/readable 断言
+//      **必须红**（期望值出处 = 同一行的声明类型，不是生成物）；`none` 那条另由
+//      「none 编码锚点」独立守——两个方向不对称的失效面不该共用一条断言。
 //
 // ## 为什么这些用例能在 `just test`（无 GPU 无窗口）里跑
 //
@@ -98,56 +102,118 @@ TEST_CASE("阳性锚点：izb_create 的 head/nodes/depthTex（期望值 = shade
 	// push constant **不入表**（heap 下由 vkCmdPushDataEXT 自动供给，没有映射条目可映射）。
 	// 出处 = 同文件 :34 `[[vk::push_constant]] IzbCreatePush push;`
 	CHECK_FALSE(resolveComputeBinding("izb_create.comp.slang", "push").has_value());
+
+	// 🔴 方向（B2-3 加的第二个问题）：同一批源码行读声明类型 —— RW* = 会写，Texture2D = 只读。
+	// hazard 判据（compute_access_log）吃的就是这两个 bool，方向错 = 漏报或误报 hazard。
+	const auto rows = computeBindings("izb_create.comp.slang");
+	auto find = [&](std::string_view name) {
+		for (const auto& b : rows)
+			if (b.name == name)
+				return b;
+		return RgComputeBinding{"", 0, false, false};
+	};
+	CHECK(find("head").writable);
+	CHECK(find("head").readable);      // RWByteAddressBuffer（:30）
+	CHECK(find("nodes").writable);     // RWByteAddressBuffer（:31）
+	CHECK_FALSE(find("depthTex").writable);
+	CHECK(find("depthTex").readable);  // Texture2D（:32）只读
 }
 
-TEST_CASE("阳性锚点：七个调用点用到的每个名字都解析到 shader 里的那个号") {
-	// 这张表 = 「调用点写的名字」与「shader 里的号」的对应关系本体（= 改前手抄的那些字面量）。
-	// 期望值逐条出处见行尾注释（打开 shader 读 `[[vk::binding(N)]]` 实参，不抄生成物）。
+TEST_CASE("阳性锚点：七个调用点用到的每个名字都解析到 shader 里的那个号（含方向）") {
+	// 这张表 = 「调用点写的名字」与「shader 里的号 + 读写方向」的对应关系本体（= 改前手抄的那些
+	// 字面量）。号与名字逐条出处见行尾注释（打开 shader 读 `[[vk::binding(N)]]` 实参）；方向的
+	// 出处 = **同一行的声明类型**（`RW*` → writable，`readonly` / `StructuredBuffer` / `Texture2D`
+	// → 只读），🔴 不抄 compute_access.json、不抄生成物。
 	struct Expect {
 		std::string_view shader;
 		std::string_view name;
 		uint32_t binding;
+		bool writable;
+		bool readable;
 	};
 	static constexpr Expect kExpects[] = {
 		// izb_create.comp.slang:30-32（izb_shadow_impl.cppm 的 createShader）
-		{"izb_create.comp.slang", "head", 0},
-		{"izb_create.comp.slang", "nodes", 1},
-		{"izb_create.comp.slang", "depthTex", 2},
+		{"izb_create.comp.slang", "head", 0, true, true},        // RWByteAddressBuffer
+		{"izb_create.comp.slang", "nodes", 1, true, true},       // RWByteAddressBuffer
+		{"izb_create.comp.slang", "depthTex", 2, false, true},   // Texture2D<float>
 		// izb_prime.comp.slang:19-21（izb_shadow_impl.cppm 的 primeShader）
 		// 🔴 primed 是 3 不是 2：跳号是 shader 侧真形态，手抄时最容易"顺手写 2"
-		{"izb_prime.comp.slang", "head", 0},
-		{"izb_prime.comp.slang", "nodes", 1},
-		{"izb_prime.comp.slang", "primed", 3},
+		{"izb_prime.comp.slang", "head", 0, false, true},        // ByteAddressBuffer（只读！）
+		{"izb_prime.comp.slang", "nodes", 1, false, true},       // ByteAddressBuffer
+		{"izb_prime.comp.slang", "primed", 3, true, true},       // RWByteAddressBuffer
 		// evssm_moments.comp.slang:23-24（evssm_shadow_impl.cppm 的 momentsShader）
-		{"evssm_moments.comp.slang", "shadowDepth", 0},
-		{"evssm_moments.comp.slang", "moments", 1},
+		{"evssm_moments.comp.slang", "shadowDepth", 0, false, true},  // Texture2D<float>
+		{"evssm_moments.comp.slang", "moments", 1, true, true},       // RWTexture2D<float4>
 		// evssm_downsample.comp.slang:20-21（evssm_shadow_impl.cppm 的 downShaders）
-		{"evssm_downsample.comp.slang", "mipSrc", 0},
-		{"evssm_downsample.comp.slang", "mipDst", 1},
+		{"evssm_downsample.comp.slang", "mipSrc", 0, true, true},     // RWTexture2D（读侧也 RW）
+		{"evssm_downsample.comp.slang", "mipDst", 1, true, true},     // RWTexture2D
 		// cull.comp.slang:43-48（gpu_cull_impl.cppm 的 cullShader）
-		{"cull.comp.slang", "cullTable", 0},
-		{"cull.comp.slang", "sequences", 2},
-		{"cull.comp.slang", "countBuf", 4},
+		{"cull.comp.slang", "cullTable", 0, false, true},        // readonly ByteAddressBuffer
+		{"cull.comp.slang", "sequences", 2, true, true},         // RWByteAddressBuffer
+		{"cull.comp.slang", "countBuf", 4, true, true},          // RWByteAddressBuffer
 		// scene_tables.slang:27（cull / meshlet_cull 都经 import scene_tables 拿到它）
-		{"cull.comp.slang", "objectMatrixTable", 23},
-		{"meshlet_cull.comp.slang", "objectMatrixTable", 23},
+		{"cull.comp.slang", "objectMatrixTable", 23, false, true},       // StructuredBuffer
+		{"meshlet_cull.comp.slang", "objectMatrixTable", 23, false, true},
 		// stream_fanout.comp.slang:20-25（gpu_cull_impl.cppm 的 fanoutShader）
 		// ⚠ 与 cull.comp.slang 同名的两个 binding 号**不同**（sequences 在 cull 是 2、
 		// 在 fanout 是 1）——这正是"按 shader 分表"而不是全局一张名字表的原因。
-		{"stream_fanout.comp.slang", "cullTable", 0},
-		{"stream_fanout.comp.slang", "sequences", 1},
-		{"stream_fanout.comp.slang", "streams", 2},
+		// ⚠ 方向也**不同**：sequences 在 cull 是 RW、在 fanout 是只读 ⟹ hazard 的写侧唯一。
+		{"stream_fanout.comp.slang", "cullTable", 0, false, true},  // readonly ByteAddressBuffer
+		{"stream_fanout.comp.slang", "sequences", 1, false, true},  // ByteAddressBuffer（只读）
+		{"stream_fanout.comp.slang", "streams", 2, true, true},     // RWByteAddressBuffer
 		// meshlet_cull.comp.slang:34-39（meshlet_cull_service_impl.cppm 的 cullShader）
-		{"meshlet_cull.comp.slang", "cullItems", 0},
-		{"meshlet_cull.comp.slang", "clusters", 1},
-		{"meshlet_cull.comp.slang", "clusterVisible", 4},
+		{"meshlet_cull.comp.slang", "cullItems", 0, false, true},       // readonly ByteAddressBuffer
+		{"meshlet_cull.comp.slang", "clusters", 1, false, true},        // readonly ByteAddressBuffer
+		{"meshlet_cull.comp.slang", "clusterVisible", 4, true, true},   // RWByteAddressBuffer
 	};
 	for (const auto& e : kExpects) {
 		INFO("shader=" << e.shader << " name=" << e.name);
 		const auto got = resolveComputeBinding(e.shader, e.name);
 		REQUIRE(got.has_value());
 		CHECK(*got == e.binding);
+		// 方向按 (shader, name) 回查生成物（resolveComputeBinding 只回答号）。
+		bool seen = false;
+		for (const auto& b : computeBindings(e.shader)) {
+			if (b.name != e.name)
+				continue;
+			seen = true;
+			INFO("方向断言：writable/readable");
+			CHECK(b.writable == e.writable);
+			CHECK(b.readable == e.readable);
+		}
+		CHECK(seen);
 	}
+}
+
+TEST_CASE("none 编码锚点：CB 型参数两个方向 bool 都 false（判据里必须跳过）") {
+	// 出处 = scene.slang 的 `[[vk::constant_buffer]]` 区（sceneHeader / sceneIrradiance / …）：
+	// 它们是 descriptor-table-slot 型（所以**入表**），但 getResourceAccess() 给 none
+	// ⟹ writable/readable 两个都 false。hazard 判据的第 ③ 条靠这两个 false 跳过它们；
+	// 若编码把 none 误编成 readable，每个 UBO 槽都会与别人的写槽撞出一条假 hazard。
+	static constexpr std::string_view kNoneParams[] = {
+		"sceneHeader", "sceneIrradiance", "sceneShadowViewProj", "sceneShadowParams",
+		"sceneTaa", "sceneSsr", "sceneWet",
+	};
+	for (std::string_view shader : {"cull.comp.slang", "meshlet_cull.comp.slang"}) {
+		for (std::string_view name : kNoneParams) {
+			INFO("shader=" << shader << " name=" << name);
+			bool seen = false;
+			for (const auto& b : computeBindings(shader)) {
+				if (b.name != name)
+					continue;
+				seen = true;
+				CHECK_FALSE(b.writable);
+				CHECK_FALSE(b.readable);
+			}
+			CHECK(seen);  // 不在表里 = 判别子漂了，也算红（别把"查不到"读成"跳过了"）
+		}
+	}
+	// 反向的一半：同表里真读真写的参数必须**不是**双 false（否则上面那条恒真）。
+	for (const auto& b : computeBindings("cull.comp.slang"))
+		if (b.name == "sequences") {
+			CHECK(b.writable);
+			CHECK(b.readable);
+		}
 }
 
 TEST_CASE("反向用例：不存在的名字 / 不存在的 shader → nullopt（区分「没找到」与「坏掉了」）") {

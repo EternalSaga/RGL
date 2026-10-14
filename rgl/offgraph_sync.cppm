@@ -3,6 +3,7 @@ export module offgraph_sync;
 import rlstd;
 import rlvk;
 import vkerror;
+import compute_access_log;  // B2-3：RgComputeHazardClass（rlbase 派生的 hazard，本层只做对账）
 
 namespace RGL {
 
@@ -27,13 +28,22 @@ namespace RGL {
  *
  * ## 🔴 本层**不**做什么
  *
- * - **不抓"忘写一条边"**：declare-by-emit 只保证已发的一致，没发的它看不见。抓那个需要
- *   **访问对推导**（读写方向从 SPV 码流里读，不是人抄）= L2，归 B2 第一件事（§7.3）。
- *   本层的 L1 只到「应发次数」：忘发 / 少发 / 多发 / 门关却发。
+ * - **只抓 compute ↔ compute 那部分的「忘写一条边」**（B2-3 起，见下方 hazard 表）。
+ *   declare-by-emit 本身只保证**已发的**一致，没发的它看不见；补上那一格的是**访问对推导**
+ *   （读写方向从 SPV 码流里反射出来，不是人抄）：`compute_access_log` 把「反射方向 ×
+ *   `makeMappedCompute` 的堆槽绑定」相交成 hazard，本模块的 hazard 表拿它对账，未覆盖即
+ *   **构造期抛**（挂点 = 工厂，它是唯一同时知道 (shader, param → 槽) 全事实的地方）。
+ *   🔴 **射程边界**：两个参与者**都是 compute** 的访问对才看得见——反射的收录面只有
+ *   `*.comp.slang` 的入口参数。非 compute 参与者（frag / mesh / 拷贝 / host）没有条目
+ *   ⟹「矩链 compute 写 → light.frag 采样」这类边仍只由 `expectedPerFrame` 的应发次数守，
+ *   hazard 表管不到它们。
+ *   本层的 L1 仍是「应发次数」：忘发 / 少发 / 多发 / 门关却发。
  * - **不接管发射权**（plan-only 红线，§5.2 仍有效的 14.4b B 档否决）：发射仍由模块发起，
  *   模块侧保留一行 `emit(...)`（一个边名，不是六个 mask 字面量）。这是红线的价格。
  * - **不认识任何具体模块**：边表按归属命名，但机制本身零模块知识（期望次数由模块构造期
- *   `expectCount` 供给，见 `EvssmShadow` 的用法）。
+ *   `expectCount` 供给，见 `EvssmShadow` 的用法）。hazard 表是**这张规则唯一的例外**——
+ *   它的存在理由就是把「哪两枚 compute 经哪个 binding 共享资源」写成人能复核的申报，
+ *   零模块知识在这里不是优点而是漏报。
  */
 
 /**
@@ -177,6 +187,60 @@ export const RgSyncEdgeDesc& syncEdgeDesc(RgSyncEdgeId id);
 export constexpr uint32_t syncEdgeIndex(RgSyncEdgeId edge) {
 	return static_cast<uint32_t>(edge);
 }
+
+/**
+ * 一条 **compute ↔ compute hazard 的申报**（本刀唯一新增的人工半边）。
+ *
+ * ## 为什么这一张表是「人工半边」而不是又一份注释
+ *
+ * hazard 的**存在**由机器派生（`compute_access_log`：反射方向 × 工厂的堆槽绑定），本表只回答
+ * 「这条 hazard 靠哪条边同步」。两侧缺一侧都不成立：只有表 = 注释（shader 改名/删 binding
+ * 没人红），只有派生 = 不知道哪条边算覆盖。互锁由 `tests/test_compute_hazard.cppm` 的双源
+ * 对账用例执行（每条声明的 writer 必须在生成物里 `writable`、reader 必须 `readable`）。
+ *
+ * ## 🔴 匹配是**对称**的（已知限制，别假装它管）
+ *
+ * 我们只有**方向**、没有**执行顺序**（反射不知道谁先跑，本层刻意不引入相位模型——见
+ * `compute_access_log` 文件头），所以查表按 `(shader, param)` 的**无序对**：只要这一对之间
+ * 存在任意一条申报边就**通过**。
+ * ⟹ **边的 src/dst mask 是否与真实先后匹配，本判据不管**。那由两件事各自负责：模块自己的
+ * 发射点（它知道顺序）+ 现有 `expectedPerFrame` 的应发次数对账（忘发/少发/多发/门关却发）。
+ * `writer*` / `reader*` 的命名因此只是**给双源对账用的角色声明**（谁该 writable、谁该 readable），
+ * 不参与匹配。
+ *
+ * ## 🔴 本表**没有**「不需要边」的豁免位
+ *
+ * 没有 reason 字段、没有「声明这条 hazard 无需同步」的口子。理由：一条「补一行带 reason 就绿」
+ * 的登记表没有牙（本仓刚因此撤回过一条规则；判据 = 双相对账成立的前提是两个来源各自携带对方
+ * 推不出的信息，而人写的 reason 不是第二个来源）。真出现不需要边的新 hazard 时，那是另一次
+ * 设计讨论，不是在这里预留形状的地方。
+ */
+export struct RgComputeHazardEdge {
+	std::string_view writerShader;  ///< 写侧 shader 文件名（"izb_create.comp.slang"）
+	std::string_view writerParam;   ///< 写侧 binding 变量名（"head"）
+	std::string_view readerShader;  ///< 读侧 shader 文件名
+	std::string_view readerParam;   ///< 读侧 binding 变量名
+	RgSyncEdgeId edge;              ///< 覆盖它的同步边
+};
+
+/**
+ * hazard 表（唯一真相源的数据面在 `offgraph_sync_impl.cppm`，本函数是访问器）。
+ *
+ * 条目数由表本身给出（不另开一个 constexpr 计数——那会给「有人偷偷加了一条」多一个可以不动的
+ * 地方；数量锚直接钉 `computeHazardEdges().size()`）。
+ * @return 全部申报条目
+ */
+export std::span<const RgComputeHazardEdge> computeHazardEdges();
+
+/**
+ * 对账一条 hazard 类：它有没有被 hazard 表里的某条边覆盖。
+ *
+ * 🔴 **只在 shader object 创建期调用**（工厂内），不每帧重算——EVSSM / IZB 是首帧懒构造，
+ * 对账就在那一刻发生，之后日志与表都不再变。
+ * @param hazard 日志派生出的一条 hazard 类
+ * @return 覆盖它的边；未覆盖 = Error（消息点名**两侧**的 shader + param + 槽号并指路表名）
+ */
+export std::expected<RgSyncEdgeId, Error> checkComputeHazard(const RgComputeHazardClass& hazard);
 
 /**
  * 帧内发射账（Renderer 持有一个实例，按引用传给各图外模块）。

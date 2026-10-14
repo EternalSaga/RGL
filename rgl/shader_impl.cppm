@@ -5,6 +5,10 @@ module shader:impl;
 import shader;  // clang 不给 partition impl unit 隐式 import 主接口——必须显式
 import rlstd;
 import compute_bindings_generated;  // B2-1″：compute binding 名 → 号 接口表（构建期反射产物，rlbase）
+import compute_access_log;  // B2-3：RgComputeBindingDecl / ComputeAccessLog（rlbase，纯值）
+import offgraph_sync;      // B2-3：checkComputeHazard / syncEdgeDesc（同层 rlgfx；工厂是唯一
+                             // 同时知道 (shader, param → 槽) 全事实的地方，所以挂点在这）
+import rllogger;           // B2-3：hazard 类首次确认覆盖时的一行 info
 
 namespace RGL {
 
@@ -372,6 +376,36 @@ std::vector<std::pair<uint32_t, HeapSlot>> resolveComputeBindings(
 		resolved.emplace_back(*binding, heapSlot);
 	}
 	return resolved;
+}
+
+/** logComputeAccess 定义（四步契约见接口注释）。 */
+void logComputeAccess(const std::string& spvPath,
+	std::span<const std::pair<std::string_view, HeapSlot>> named, ComputeAccessLog& log) {
+	const std::string shader = computeShaderKey(spvPath);
+	// 名字 → 方向（同 resolveComputeBindings 查的那张表，同源 ⟹ 名字一定查得到）。
+	// 查不到时按 none 记（两个 bool 都 false = 判据跳过这条）：这里**不**报错，因为「名字不在
+	// 表里」上一句 resolveComputeBindings 已经抛过了，走到这里查不到只可能是实现坏了，
+	// 而把它读成 hazard 会抛出一条指错方向的消息。真正的方向缺失在 compute_access.json 里可见。
+	const auto table = computeBindings(shader);
+	std::vector<RgComputeBindingDecl> decls;
+	decls.reserve(named.size());
+	for (const auto& [bindingName, heapSlot] : named) {
+		const auto it = std::ranges::find_if(table,
+			[&](const RgComputeBinding& b) { return b.name == bindingName; });
+		decls.push_back(RgComputeBindingDecl{bindingName, heapSlot.slot,
+			it == table.end() ? false : it->writable, it == table.end() ? false : it->readable});
+	}
+	for (const auto& hazard : log.add(shader, decls)) {
+		const auto edge = checkComputeHazard(hazard);
+		if (!edge)
+			throw std::runtime_error(edge.error().describe());
+		// 🔴 每类**首次**确认覆盖时打一行（add 已按类去重 ⟹ 天然只打一次）。这行日志是判据
+		// **跑过**的证据：没有它，「锚命中」可能只是判据根本没跑（假绿三重里的第三重）。
+		if (auto* logger = RLLogger::getInstance())
+			logger->info("compute hazard: {}.{} ↔ {}.{}（heap 槽 {}）由边 '{}' 覆盖",
+				hazard.shaderA, hazard.paramA, hazard.shaderB, hazard.paramB, hazard.slot,
+				syncEdgeDesc(*edge).name);
+	}
 }
 
 }  // namespace RGL

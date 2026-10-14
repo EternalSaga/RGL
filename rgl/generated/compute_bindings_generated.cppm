@@ -10,99 +10,113 @@
 //
 // 收录范围 = 全部 descriptor-table-slot 型全局参数；`[[vk::push_constant]]` 不入表
 // （descriptor heap 下 push data 由 vkCmdPushDataEXT 自动供给，没有映射条目可映射）。
+//
+// ## 方向（writable / readable）的编码表 —— 真相源 = 同一次遍历的 getResourceAccess()
+//   none    → 两个都 false   「不是资源访问型参数」（CB / push constant），判据里跳过
+//   read    → readable
+//   readWrite → 两个都 true
+//   其余非 unknown 的 UAV 访问（write / rasterOrdered / append / consume / feedback）
+//             → writable（「是 UAV 访问就算会写」：这里漏报 = 静默漏 barrier，多报 =
+//             构造期一条可归因的抛，两种代价不对称 ⟹ 判据往吵的方向偏）
+//   unknown → 两个都 false   与 slang_reflect::accessToString 同一个「承认不知道」方向
+// 消费者 = rgl/compute_access_log.cppm 的 hazard 判据（同槽 + 至少一方写 = 需要 barrier）
+// 与 tests/test_compute_hazard.cppm 的双源对账（人工申报的 hazard 表拿它互锁）。
 export module compute_bindings_generated;
 
 import rlstd;
 
 namespace RGL {
 
-	// 一枚 binding：shader 里的 binding 变量名 + 它的 `[[vk::binding(N)]]` 号。
+	// 一枚 binding：shader 里的 binding 变量名 + 它的 `[[vk::binding(N)]]` 号 + 读写方向
+	// （方向的编码表见本文件头；两个 bool 编码三态，none = 两个都 false）。
 	export struct RgComputeBinding {
 		std::string_view name;
 		uint32_t binding;
+		bool writable;
+		bool readable;
 	};
 
 	// cull.comp.slang（14 个 descriptor-table-slot 参数）
 	inline constexpr std::array<RgComputeBinding, 14> kComputeBindings_cull_comp_slang{{
-		{"cullTable", 0},
-		{"sequences", 2},
-		{"countBuf", 4},
-		{"sceneHeader", 22},
-		{"objectMatrixTable", 23},
-		{"objectMvpTable", 25},
-		{"objectDrawTable", 26},
-		{"sceneIrradiance", 27},
-		{"sceneShadowViewProj", 28},
-		{"sceneShadowParams", 29},
-		{"sceneTaa", 30},
-		{"sceneSsr", 31},
-		{"sceneWet", 32},
-		{"objectClusterRangeTable", 33},
+		{"cullTable", 0, false, true},
+		{"sequences", 2, true, true},
+		{"countBuf", 4, true, true},
+		{"sceneHeader", 22, false, false},
+		{"objectMatrixTable", 23, false, true},
+		{"objectMvpTable", 25, false, true},
+		{"objectDrawTable", 26, false, true},
+		{"sceneIrradiance", 27, false, false},
+		{"sceneShadowViewProj", 28, false, false},
+		{"sceneShadowParams", 29, false, false},
+		{"sceneTaa", 30, false, false},
+		{"sceneSsr", 31, false, false},
+		{"sceneWet", 32, false, false},
+		{"objectClusterRangeTable", 33, false, true},
 	}};
 
 	// env_prefilter.comp.slang（3 个 descriptor-table-slot 参数）
 	inline constexpr std::array<RgComputeBinding, 3> kComputeBindings_env_prefilter_comp_slang{{
-		{"srcEnv", 0},
-		{"dst", 1},
-		{"srcSampler", 2},
+		{"srcEnv", 0, false, true},
+		{"dst", 1, true, true},
+		{"srcSampler", 2, false, false},
 	}};
 
 	// evssm_downsample.comp.slang（2 个 descriptor-table-slot 参数）
 	inline constexpr std::array<RgComputeBinding, 2> kComputeBindings_evssm_downsample_comp_slang{{
-		{"mipSrc", 0},
-		{"mipDst", 1},
+		{"mipSrc", 0, true, true},
+		{"mipDst", 1, true, true},
 	}};
 
 	// evssm_moments.comp.slang（2 个 descriptor-table-slot 参数）
 	inline constexpr std::array<RgComputeBinding, 2> kComputeBindings_evssm_moments_comp_slang{{
-		{"shadowDepth", 0},
-		{"moments", 1},
+		{"shadowDepth", 0, false, true},
+		{"moments", 1, true, true},
 	}};
 
 	// izb_create.comp.slang（3 个 descriptor-table-slot 参数）
 	inline constexpr std::array<RgComputeBinding, 3> kComputeBindings_izb_create_comp_slang{{
-		{"head", 0},
-		{"nodes", 1},
-		{"depthTex", 2},
+		{"head", 0, true, true},
+		{"nodes", 1, true, true},
+		{"depthTex", 2, false, true},
 	}};
 
 	// izb_prime.comp.slang（3 个 descriptor-table-slot 参数）
 	inline constexpr std::array<RgComputeBinding, 3> kComputeBindings_izb_prime_comp_slang{{
-		{"head", 0},
-		{"nodes", 1},
-		{"primed", 3},
+		{"head", 0, false, true},
+		{"nodes", 1, false, true},
+		{"primed", 3, true, true},
 	}};
 
 	// meshlet_cull.comp.slang（14 个 descriptor-table-slot 参数）
 	inline constexpr std::array<RgComputeBinding, 14> kComputeBindings_meshlet_cull_comp_slang{{
-		{"cullItems", 0},
-		{"clusters", 1},
-		{"clusterVisible", 4},
-		{"sceneHeader", 22},
-		{"objectMatrixTable", 23},
-		{"objectMvpTable", 25},
-		{"objectDrawTable", 26},
-		{"sceneIrradiance", 27},
-		{"sceneShadowViewProj", 28},
-		{"sceneShadowParams", 29},
-		{"sceneTaa", 30},
-		{"sceneSsr", 31},
-		{"sceneWet", 32},
-		{"objectClusterRangeTable", 33},
+		{"cullItems", 0, false, true},
+		{"clusters", 1, false, true},
+		{"clusterVisible", 4, true, true},
+		{"sceneHeader", 22, false, false},
+		{"objectMatrixTable", 23, false, true},
+		{"objectMvpTable", 25, false, true},
+		{"objectDrawTable", 26, false, true},
+		{"sceneIrradiance", 27, false, false},
+		{"sceneShadowViewProj", 28, false, false},
+		{"sceneShadowParams", 29, false, false},
+		{"sceneTaa", 30, false, false},
+		{"sceneSsr", 31, false, false},
+		{"sceneWet", 32, false, false},
+		{"objectClusterRangeTable", 33, false, true},
 	}};
 
 	// mip_gen.comp.slang（3 个 descriptor-table-slot 参数）
 	inline constexpr std::array<RgComputeBinding, 3> kComputeBindings_mip_gen_comp_slang{{
-		{"srcTex", 0},
-		{"dstTex", 1},
-		{"linearSampler", 2},
+		{"srcTex", 0, false, true},
+		{"dstTex", 1, true, true},
+		{"linearSampler", 2, false, false},
 	}};
 
 	// stream_fanout.comp.slang（3 个 descriptor-table-slot 参数）
 	inline constexpr std::array<RgComputeBinding, 3> kComputeBindings_stream_fanout_comp_slang{{
-		{"cullTable", 0},
-		{"sequences", 1},
-		{"streams", 2},
+		{"cullTable", 0, false, true},
+		{"sequences", 1, false, true},
+		{"streams", 2, true, true},
 	}};
 
 	// 一张表 = shader 文件名（basename，与 SPV 同名只差后缀）+ 它的 binding 表。

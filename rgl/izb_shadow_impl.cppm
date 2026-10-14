@@ -197,11 +197,11 @@ IzbShadow::IzbShadow(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
 	createShader.emplace(makeMappedCompute(dev, "generated_shaders/izb_create.comp.spv",
 		std::vector<std::pair<std::string_view, RGL::HeapSlot>>{
 			{"head", HeapSlot{headSlot}}, {"nodes", HeapSlot{nodesSlot}},
-			{"depthTex", HeapSlot{depthSlot}}}, descriptorSize));
+			{"depthTex", HeapSlot{depthSlot}}}, descriptorSize, &resources->computeAccessLog()));
 	primeShader.emplace(makeMappedCompute(dev, "generated_shaders/izb_prime.comp.spv",
 		std::vector<std::pair<std::string_view, RGL::HeapSlot>>{
 			{"head", HeapSlot{headSlot}}, {"nodes", HeapSlot{nodesSlot}},
-			{"primed", HeapSlot{primedSlot}}}, descriptorSize));
+			{"primed", HeapSlot{primedSlot}}}, descriptorSize, &resources->computeAccessLog()));
 
 	if (auto* lg = RLLogger::getInstance())
 		lg->info("izb: 开门 grid={} extent={}x{} head={}B nodes={}B（cascade-0 近场 v1，"

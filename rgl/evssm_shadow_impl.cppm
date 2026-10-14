@@ -156,14 +156,16 @@ EvssmShadow::EvssmShadow(RGL::DeviceContext& vkDevice, RGL::Resources& vkResourc
 	// shader 把 `[[vk::binding(0)]]` 改成别的号时 C++ 一声不响地往错堆槽读数据。
 	momentsShader = makeMappedCompute(dev, "generated_shaders/evssm_moments.comp.spv",
 		std::vector<std::pair<std::string_view, RGL::HeapSlot>>{
-			{"shadowDepth", HeapSlot{shadowMapSlot}}, {"moments", HeapSlot{mipSlots[0]}}}, descSize);
+			{"shadowDepth", HeapSlot{shadowMapSlot}}, {"moments", HeapSlot{mipSlots[0]}}}, descSize,
+		&resources->computeAccessLog());
 	downShaders.reserve(mipLevels - 1);
 	for (uint32_t level = 1; level < mipLevels; ++level)
 		// 逐级各建一个 shader object：同一份 SPV，mipSrc/mipDst 烘不同槽（级间换视图）
 		downShaders.push_back(makeMappedCompute(dev, "generated_shaders/evssm_downsample.comp.spv",
 			std::vector<std::pair<std::string_view, RGL::HeapSlot>>{
 				{"mipSrc", HeapSlot{mipSlots[level - 1]}},
-				{"mipDst", HeapSlot{mipSlots[level]}}}, descSize));
+				{"mipDst", HeapSlot{mipSlots[level]}}}, descSize,
+			&resources->computeAccessLog()));
 
 	if (auto* logger = RLLogger::getInstance())
 		logger->info("EvssmShadow: {}x{} RGBA16F x{} mip（GENERAL）| {} heap 槽 | 矩从 D32 派生（C 方案）",

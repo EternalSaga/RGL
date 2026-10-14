@@ -990,8 +990,10 @@ shader）；③ 键查表只准在构造期，**一旦有人挪进 `recordFrame`
 
 #### B2-2 = 这个容器的第二个消费者，不是独立一刀
 
-容器申报（资源身份）× 反射（方向）× 相位（顺序）→ 该有哪些边，与 `offgraph_sync` 边表对账。
+容器申报（资源身份）× 反射（方向）→ 该有哪些边，与 `offgraph_sync` 边表对账。
 §7.12 那张 12 行表是它的**人工半边**：要验的是"最后一列（靠什么同步）能不能推出来"——推得出就删表。
+⚠ 本段原列的第三项输入「相位（顺序）」**已被 §7.15 实测否掉**（相位粒度是工作项级，排不了同一工作项内
+那 4 类；而 RAW/WAR/WAW 都要 barrier ⟹ 判据与顺序无关）。落地读数 → §7.15。
 
 #### 切刀表（覆盖 §7.10 的表）
 
@@ -1000,8 +1002,8 @@ shader）；③ 键查表只准在构造期，**一旦有人挪进 `recordFrame`
 | B2-1 compute 方向表进反射（`compute_access.json`） | ✅ `3eae652`；配套基线规则已撤（§7.12） |
 | **B2-1′** compute push 布局进反射、换掉手写镜像（evssm + izb 四枚） | ✅ 本刀 |
 | **B2-1′-b** 余下四枚：`CullFrameInput`（🔴 BIT-IDENTICAL 的 CPU 读回重放路，最险）、`EnvPrefilterPush`（在接口 unit 导出）、`FanoutPush`、mip_gen 镜像 | ✅ 已落，**并连带定案了 §7.14 那条** |
-| **B2-1″** `makeMappedCompute` 键 → binding 名 + 构建期接口表 | ⏳ 这一刀才有设计含量 |
-| **B2-2** 容器申报 × 反射方向 × 相位 → 与边表对账 | ⏳ 消费 B2-1″ |
+| **B2-1″** `makeMappedCompute` 键 → binding 名 + 构建期接口表 | ✅ `39c46e1`，读数 → §7.15 |
+| **B2-2** 容器申报 × 反射方向 → 与边表对账（**无相位项**，见上） | ✅ 本批，读数 → §7.15 |
 | B2-3 / B2-4（buffer 档 + 拒绝面 + 资源迁入） | ⏳ 形态由首发消费者定，见 §7.10 |
 
 
@@ -1087,6 +1089,97 @@ CullFrameInput cullInput{.planes = list.cullInput.planes, .sequenceCount = gpuCu
 
 
 
+
+### 7.15 B2-1″ / B2-2 落地：**hazard 判据不需要顺序模型**，而人工半边必须被机器消费（2026-10-14 实测）
+
+#### B2-1″ 落地读数（`39c46e1`）
+
+`makeMappedCompute` 的映射键 = binding 变量名，号由构建期接口表给（与 `compute_access.json` 同一次
+编译遍历产出 ⟹ 两份产物结构上不可能互不一致；`compute_access.json` 至此有了消费者）。
+
+🎯 **收益的实测形态**：把 `izb_prime` 的 `primed` 从 `[[vk::binding(3)]]` 改成 `(7)` → 接口表跟着变
+→ **IZB 开档锚 `2316b566b113` 0 像素差异命中，C++ 一个字没改**。改号不再静默错位（旧形态：构建全绿、
+VVL 沉默、运行期往错堆槽读数据）。错误路径：调用点名打错一个字母 → 启动抛并列出该 shader 全部合法名。
+
+#### 🔴 B2-2 的定案纠正了 §7.10 / §7.13 给它写的输入清单
+
+两节原话都是「容器申报（资源身份）× 反射（方向）× **相位（顺序）** → 该有哪些边」。**相位那一项是
+多余的，而且用不上**：
+
+1. **用不上**：现有 `OffGraphSchedule` 的相位粒度是**工作项**级（四个工作项），而派生出的 5 类 hazard
+   里 **4 类发生在同一个工作项内部**（IZB 的 create→prime 在 `izb_mask` 内、EVSSM 矩链在 `evssm_moments`
+   内、cull→fanout 在 cull 段内）——相位模型结构上排不了它们的序。
+2. **不需要**：同一资源上一写一读（或两写），**无论谁先跑都要 barrier**（RAW / WAR / WAW 三种 hazard
+   都要）。⟹ 判据取「同槽 ∧ 至少一方写」，**与顺序无关，保守安全**。
+
+所以输入是**两样**：反射方向 × 资源身份。资源身份 = **descriptor heap 槽号**（同槽 = 同资源），而它
+恰好已经在调用点上（B2-1″ 之后调用点本来就写着 `{"head", HeapSlot{headSlot}}`）。
+
+#### 派生集合恰好 5 类，且全部已有边 ⟹ 判据出厂即绿、有牙、**零豁免**
+
+| 共享资源（heap 槽） | 写侧 | 读侧 | 覆盖它的边 |
+|---|---|---|---|
+| `mipSlots[0]` | `evssm_moments` · `moments` | `evssm_downsample` · `mipSrc` | `evssm_moments_chain` |
+| `mipSlots[L]` | `evssm_downsample` · `mipDst` | 下一级 · `mipSrc` | `evssm_moments_chain` |
+| `headSlot` | `izb_create` · `head` | `izb_prime` · `head` | `izb_head_create_to_prime` |
+| `nodesSlot` | `izb_create` · `nodes` | `izb_prime` · `nodes` | `izb_nodes_create_to_prime` |
+| `sequenceSlot` | `cull` · `sequences` | `stream_fanout` · `sequences` | `cull_seq_fanout_chain` |
+
+**正确放过、不成为 hazard 的**（假阳性守卫，逐条有单测）：`primed` / `countBuf` / `streams` /
+`clusterVisible`（写侧有、**compute** 读者无）、`cullTable` / `objectMatrixTable`（同槽两读）、
+`depthTex` / `shadowDepth`（compute 只读，写者是图形阶段/拷贝，反射看不见）。
+
+🔴 **表里零豁免条目是设计约束，不是"今天刚好不需要"**：不预留 `reason` 字段、不预留"声明不需要边"
+的口子。理由 = §7.12 那条判据——一条"补一行带 reason 就绿"的登记表没有牙，本仓刚因此撤回过一条规则。
+真出现不需要边的新 hazard 时，那是另一次设计讨论，不是现在猜形状的地方。
+
+#### 🔴 表本身不是护栏，**被测试消费**才是
+
+`kComputeHazardEdges` 是人工声明（边不携带资源身份，这一格只能人给）。它单独存在时**与注释等价**：
+shader 改名、把写侧改成只读，表照样全绿。真正互锁的是 `tests/test_compute_hazard.cppm` 那条双源对账：
+遍历表里每条声明，断言 ① 两个 `(shader, param)` 都存在于反射生成物 ② 写侧 `writable`、读侧 `readable`。
+
+变异实测（主 agent 亲验 ①，其余为子 agent 读数）：
+
+| 变异 | 读数 |
+|---|---|
+| 表里 head 那条的 `readerShader` 改成不存在的 shader → 跑 IZB 开档 | 🔴 **构造期抛**，两侧全点名 + 槽号：`未申报的 compute hazard——'izb_create.comp.slang.head'（heap 槽 8252）与 'izb_prime.comp.slang.head'（heap 槽 8252）…`（**主 agent 自己复跑**） |
+| 给 `izb_create` 加 `primed` 只读绑定（= §7.12 说的"阶段 2 预留输出"真被接上） | 抛，点名 `izb_create.primed ↔ izb_prime.primed`（同槽 8254）——**本刀要拦的那类错** |
+| `izb_prime.head` 改成 `RWByteAddressBuffer`（方向变宽） | **不抛**、锚仍命中 ⟹ 匹配确实与方向无关（对称） |
+| `izb_create.head` 改成只读 | 双源对账用例红 ⟹ 人工半边与反射第一次互锁 |
+
+四锚逐位不变（`95edc8cc` / `865fd1aa` / `2316b566` / cull 开档 `95edc8cc`）= **零命令红线**的证据：
+本刀没发一条 Vulkan 命令，纯记账 + 抛。
+
+#### 覆盖诚实账：护栏**只建回来了一半**
+
+§7.12 撤回规则时让出的那一格（「新增一条 `RW` 而没加同步边」），本刀收回 **compute ↔ compute** 那部分。
+**非 compute 参与者仍然看不见**：frag 采样（`moments` → light.frag、`dstTex` → 材质）、mesh shader 读
+`clusterVisible`、拷贝读回、host 读——反射只覆盖 compute 自己的参数。⟹ §7.12 那张 12 行表现在
+**5 行被机器消费、7 行仍是人工**。这条边界落成 **债-119**，别读成"buffer 侧同步已对账"。
+
+两条"锚命中但其实没跑"的假绿守卫，读数如实记：
+
+- **出厂默认档 hazard 日志 = 0 行**（csm 档、izb/evssm/dgc_static 全关 ⟹ 7 个调用点里没有跨实例同槽
+  访问对）。这是**关于场景的事实**，不是判据失效；判据活着的证据 = 开档档里那 5 行 + 变异①②会抛。
+- **第 5 类（`cull` ↔ `stream_fanout`）在四个锚里跑不出来**：fanout 的 shader object 只在 `dgc_static`
+  为真时创建，而 `diagnostics.lua` 没有这个键（`--set` 命中 0 次被白名单拒）。子 agent 用仓库外配置副本
+  补验，日志实机出现。**与 §7.14 末 `FanoutPush` 出厂锚零覆盖是同一条债**（同一个键、同一个原因）。
+
+#### 机制坑一条：存进日志的名字必须自己持有
+
+`RgComputeBindingRecord` 第一版按草图用 `std::string_view shader`，而 shader 键来自
+`computeShaderKey()`——它**返回局部 `std::string`** ⟹ view 悬空。症状不是崩溃而是**抛出的消息里是乱码**
+（最难查的那类：护栏在响，但读不出在说什么）。修法不是加 `std::move`，是**分层**：瞬时入参留
+`string_view`（`add()` 的形参），**存进日志的记录体用 `std::string` 自己持有**。
+
+#### 切刀表（覆盖 §7.13 的表）
+
+| 刀 | 状态 |
+|---|---|
+| **B2-1″** `makeMappedCompute` 键 → binding 名 + 构建期接口表 | ✅ `39c46e1` |
+| **B2-2** 反射方向 × 资源身份 → hazard 派生，与边表对账 | ✅ 本刀；**输入清单被改准（去掉"相位"）** |
+| B2-3 / B2-4（buffer 档 + 拒绝面 + 资源迁入） | ⏳ 形态由首发消费者定，见 §7.10 |
 
 ---
 

@@ -56,13 +56,52 @@ static std::string jsonString(std::string_view s)
 	return out;
 }
 
-// compute-bindings 产物里的一个条目：binding 变量名 + `[[vk::binding(N)]]` 的号。
+// compute-bindings 产物里的一个条目：binding 变量名 + `[[vk::binding(N)]]` 的号 + 读写方向。
 // 与 JSON 产物同一次遍历产出（见 compute-access 子命令），只是**过滤后**的子集：
 // 只含 descriptor-table-slot 型参数。
 struct ComputeBindingEntry {
 	std::string name;
 	uint32_t binding = 0;
+	bool writable = false;
+	bool readable = false;
 };
+
+// SlangResourceAccess 的字符串（accessToString 的产物）→ (writable, readable)。
+//
+// 🔴 为什么方向要**进 .cppm 产物**而不是让 C++ 侧再去读 JSON：hazard 判据（rlbase 的
+// compute_access_log）与调用点的堆槽在同一个构造期求值，它要的是「这一枚 binding 会不会写」；
+// 若那份信息只活在 JSON 里，C++ 侧就得开一份 JSON 或手抄一份方向表——后者正是本刀要杀的
+// 「人工申报者与被判者是同一个人」。方向与名字**同源同次生成**才互斥不了。
+//
+// 编码表（唯一口径，产物头注释同步抄一份，两边由本函数保证一致）：
+//   none    → (0, 0)  「不是资源访问型参数」（CB / push constant），判据里直接跳过
+//   read    → (0, 1)
+//   其余非 unknown 的 UAV 访问（readWrite / write / rasterOrdered / append / consume /
+//           feedback）→ writable = 1；readWrite 另带 readable = 1
+//   unknown → (0, 0)  与 slang_reflect::accessToString 同一个「承认不知道」的方向：
+//           反射拿不到方向时**不猜**，产物里 JSON 那份仍写着 unknown 供人查
+//
+// ⚠ 除 unknown 外一律「是 UAV 访问就算会写」是**刻意的不对称**：这里少报 = 静默漏一条 barrier
+//   （正是本刀的存在理由），多报 = 构造期一条点名两侧的抛（当场可归因、加一行申报即绿）。
+//   两种代价不对称 ⟹ 判据往吵的方向偏，与 accessToString「不要凭空造边」的方向不同是**分场景**
+//   的：那边造边的代价是白付同步、这边漏边的代价是未定义行为。
+static void accessToFlags(const std::string& access, bool& writable, bool& readable)
+{
+	writable = false;
+	readable = false;
+	if (access == "read") {
+		readable = true;
+		return;
+	}
+	if (access == "readWrite") {
+		writable = true;
+		readable = true;
+		return;
+	}
+	if (access == "none" || access == "unknown")
+		return;  // 见上：none = 非资源访问型；unknown = 承认不知道
+	writable = true;  // write / rasterOrdered / append / consume / feedback
+}
 
 // shader 文件名 → C++ 标识符片段（`izb_create.comp.slang` → `izb_create_comp`）。
 // 非 [A-Za-z0-9_] 一律换成 '_'：产物里的数组名要能编过，而文件名由 shader 目录决定。
@@ -102,16 +141,30 @@ static std::string generateComputeBindingsCppm(
 		"//\n"
 		"// 收录范围 = 全部 descriptor-table-slot 型全局参数；`[[vk::push_constant]]` 不入表\n"
 		"// （descriptor heap 下 push data 由 vkCmdPushDataEXT 自动供给，没有映射条目可映射）。\n"
+		"//\n"
+		"// ## 方向（writable / readable）的编码表 —— 真相源 = 同一次遍历的 getResourceAccess()\n"
+		"//   none    → 两个都 false   「不是资源访问型参数」（CB / push constant），判据里跳过\n"
+		"//   read    → readable\n"
+		"//   readWrite → 两个都 true\n"
+		"//   其余非 unknown 的 UAV 访问（write / rasterOrdered / append / consume / feedback）\n"
+		"//             → writable（「是 UAV 访问就算会写」：这里漏报 = 静默漏 barrier，多报 =\n"
+		"//             构造期一条可归因的抛，两种代价不对称 ⟹ 判据往吵的方向偏）\n"
+		"//   unknown → 两个都 false   与 slang_reflect::accessToString 同一个「承认不知道」方向\n"
+		"// 消费者 = rgl/compute_access_log.cppm 的 hazard 判据（同槽 + 至少一方写 = 需要 barrier）\n"
+		"// 与 tests/test_compute_hazard.cppm 的双源对账（人工申报的 hazard 表拿它互锁）。\n"
 		"export module " + moduleName + ";\n"
 		"\n"
 		"import rlstd;\n"
 		"\n"
 		"namespace RGL {\n"
 		"\n"
-		"\t// 一枚 binding：shader 里的 binding 变量名 + 它的 `[[vk::binding(N)]]` 号。\n"
+		"\t// 一枚 binding：shader 里的 binding 变量名 + 它的 `[[vk::binding(N)]]` 号 + 读写方向\n"
+		"\t// （方向的编码表见本文件头；两个 bool 编码三态，none = 两个都 false）。\n"
 		"\texport struct RgComputeBinding {\n"
 		"\t\tstd::string_view name;\n"
 		"\t\tuint32_t binding;\n"
+		"\t\tbool writable;\n"
+		"\t\tbool readable;\n"
 		"\t};\n";
 	for (const auto& [shader, rows] : byShader) {
 		if (rows.empty())
@@ -120,7 +173,9 @@ static std::string generateComputeBindingsCppm(
 		t += "\tinline constexpr std::array<RgComputeBinding, " + std::to_string(rows.size())
 			+ "> kComputeBindings_" + bindingIdentifier(shader) + "{{\n";
 		for (const auto& r : rows)
-			t += "\t\t{\"" + jsonString(r.name) + "\", " + std::to_string(r.binding) + "},\n";
+			t += "\t\t{\"" + jsonString(r.name) + "\", " + std::to_string(r.binding)
+				+ ", " + (r.writable ? "true" : "false") + ", " + (r.readable ? "true" : "false")
+				+ "},\n";
 		t += "\t}};\n";
 	}
 	t += "\n\t// 一张表 = shader 文件名（basename，与 SPV 同名只差后缀）+ 它的 binding 表。\n"
@@ -440,8 +495,11 @@ int main(int argc, char* argv[]) {
 					// 覆盖锚点就分不清，而消费端还会对一枚合法 shader 抛"不在表里"。
 					auto& dst = slots[shader];
 					for (const auto& r : rows)
-						if (r.tableSlot)
-							dst.push_back(ComputeBindingEntry{ r.param, r.binding });
+						if (r.tableSlot) {
+							ComputeBindingEntry entry{ r.param, r.binding };
+							accessToFlags(r.access, entry.writable, entry.readable);
+							dst.push_back(std::move(entry));
+						}
 				}
 				// 数组名由文件名消毒而来：两个不同文件名撞成同一个标识符 = 产物重复定义
 				// （编译期才炸、且错误指向生成物）。现在拦，别留给下游。

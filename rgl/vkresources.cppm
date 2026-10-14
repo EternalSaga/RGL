@@ -13,6 +13,7 @@ import vk_device;
 import vk_swapchain;
 import vkerror;
 import slot_ledger;  // sampler heap 用户槽申报制台账（2026-10-04 槽相撞事故护栏，纯逻辑在 rlbase）
+import compute_access_log;  // B2-3：compute 访问日志宿主（纯值、零设备，rlbase；账本挂这里的理由见 computeAccessLog()）
 
 namespace RGL {
 
@@ -318,6 +319,19 @@ export class Resources {
 	 * vkCmdBindSamplerHeapEXT 绑定）；共享 sampler（SamplerLibrary）/ sky sampler
 	 *（Environment）槽位在其中。 */
 	const RGL::VmaDescriptorHeap& getSamplerHeap() const { return samplerHeap; }
+	/**
+	 * compute 访问日志（B2-3：hazard 派生 + 与 `offgraph_sync` 的 hazard 表对账的账本）。
+	 *
+	 * 挂在 `Resources` 的理由 = 它本来就持有那座 descriptor heap，而 hazard 的**资源身份就是
+	 * 槽号**（「哪个槽被哪个 dispatch 碰过」是它的话题）；7 处 `makeMappedCompute` 调用点分属
+	 * 四个模块，但都持有同一个 `Resources` ⟹ 跨模块的那条 hazard（cull 写 → fanout 读）才
+	 * 看得见。换宿主（DeviceContext）也能跑，但那会把「heap 的账」挂到「设备的账」上。
+	 *
+	 * 🔴 只在 shader object 创建期由工厂追加；无每帧路径、无清空口（有清空口 = 允许每帧重算，
+	 * 那是本刀明确不要的形态）。
+	 * @return 日志本体（可写——工厂要 add）
+	 */
+	RGL::ComputeAccessLog& computeAccessLog() { return accessLog; }
 	/** @return VMA 分配器 const 引用（const 重载，与下方非 const 重载同一对象）；
 	 * 创建 GPU 资源走非 const 重载。 */
 	const RGL::VmaAllocatorRAII& getAllocator() const { return allocator; }
@@ -548,6 +562,9 @@ export class Resources {
 	/** sampler heap 用户槽申报制台账（2026-10-04 槽相撞护栏）。基址/容量在构造期从
 	 * samplerHeap 取（reserved 区不可用），此后只由 claimSamplerSlot 追加。 */
 	RGL::SlotLedger samplerSlots;
+	/** compute 访问日志（B2-3，工厂在 createShadersEXT 之前 add；纯值、零设备，见
+	 * compute_access_log.cppm 的头注释）。与 samplerSlots 同族：都是「heap 的账」。 */
+	RGL::ComputeAccessLog accessLog;
 	/** 三段 slot 分配器：每段独立 [begin, next, end) 游标，跨段不抢占。 */
 	static constexpr size_t kSlotSegmentCount = 3;
 	std::array<uint32_t, kSlotSegmentCount> segmentBegins{};

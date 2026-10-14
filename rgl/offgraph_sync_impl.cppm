@@ -7,6 +7,7 @@ import offgraph_sync;  // clang 不给 partition impl unit 隐式 import 主接�
 import rlstd;
 import rlvk;
 import vkerror;
+import compute_access_log;  // B2-3：RgComputeHazardClass（hazard 对账的入参；import 不传递）
 
 namespace RGL {
 
@@ -307,6 +308,105 @@ constexpr std::array<RgSyncEdgeDesc, static_cast<size_t>(RgSyncEdgeId::count)> k
 
 const RgSyncEdgeDesc& syncEdgeDesc(RgSyncEdgeId id) {
 	return kEdgeTable[syncEdgeIndex(id)];
+}
+
+namespace {
+
+/**
+ * hazard 表（人工半边；数据面在此，契约与「为什么是对称匹配」见 `offgraph_sync.cppm`）。
+ *
+ * 内容 = 「7 处产品调用点的 (shader, binding 名 → heap 槽) 与反射方向相交后，共享同一 heap 槽
+ * 且至少一方写的跨 dispatch 访问对」的**全集**，一条不多一条不少。不成为 hazard 的（写侧有但
+ * compute 读者无 / 两侧都只读 / 写者是图形阶段或拷贝因而反射看不见）刻意**不**登记——登记了
+ * 就是给未来的真 hazard 占掉一个"看起来已申报"的位置。
+ *
+ * 顺序无意义（查表是线性扫 + 无序对比较），但每条都写**为什么这条边覆盖它**：红了要能就地判断
+ * 是「漏申报」还是「这条 hazard 本就不该存在」，而不是再去读一遍两个模块的录制代码。
+ */
+constexpr std::array<RgComputeHazardEdge, 5> kComputeHazardEdges = {
+	// EVSSM 矩链第一跳：moments dispatch 把矩写进 mip0（mipSlots[0]，storage image），
+	// 第一级 downsample 的 mipSrc 读同一个槽。覆盖边 = evssm_moments_chain：recordFrame 的
+	// ③ 循环在**每次** downsample dispatch 之前发它一次，第一条正好夹在 moments 写之后；
+	// 应发次数 mipLevels−1 由 EvssmShadow 构造期 expectCount 钉死（少发一条当场红）。
+	RgComputeHazardEdge{
+		.writerShader = "evssm_moments.comp.slang",
+		.writerParam = "moments",
+		.readerShader = "evssm_downsample.comp.slang",
+		.readerParam = "mipSrc",
+		.edge = RgSyncEdgeId::evssmMomentsChain,
+	},
+	// EVSSM 矩链级间：第 L 级把结果写进 mipSlots[L]（mipDst），第 L+1 级把同一个槽当 mipSrc 读。
+	// 还是那条 chain 边——它排在每次 downsample 之前，天然覆盖「上一级写 → 本级读」；该边的
+	// dst 是 computeReadWrite（既读又写），正是因为本级对 mipSrc 读、对 mipDst 写，窄一档就漏。
+	RgComputeHazardEdge{
+		.writerShader = "evssm_downsample.comp.slang",
+		.writerParam = "mipDst",
+		.readerShader = "evssm_downsample.comp.slang",
+		.readerParam = "mipSrc",
+		.edge = RgSyncEdgeId::evssmMomentsChain,
+	},
+	// IZB head：create dispatch 用 InterlockedExchange 压链（写 headSlot），prime dispatch 走链
+	// 要先 Load head（读同一个槽）。izb_head_create_to_prime 是 buffer 档、句柄就是 headBuffer，
+	// 发射点夹在 ③ create 与 ⑤ prime 两个 dispatch 之间。
+	RgComputeHazardEdge{
+		.writerShader = "izb_create.comp.slang",
+		.writerParam = "head",
+		.readerShader = "izb_prime.comp.slang",
+		.readerParam = "head",
+		.edge = RgSyncEdgeId::izbHeadCreateToPrime,
+	},
+	// IZB nodes：同一条链的第二条资源（create 按 16B/像素写节点，prime 沿 next 指针读）。
+	// 刻意不与 head 那条并成 expected=2：并了以后「漏了 nodes 那条」只会报"少发一次"，
+	// 分开两条直接点名是哪个资源（边表里同款取舍见 izb_nodes_create_to_prime 的行注释）。
+	RgComputeHazardEdge{
+		.writerShader = "izb_create.comp.slang",
+		.writerParam = "nodes",
+		.readerShader = "izb_prime.comp.slang",
+		.readerParam = "nodes",
+		.edge = RgSyncEdgeId::izbNodesCreateToPrime,
+	},
+	// cull 序列：cull dispatch 写 sequences（readWrite：先读 CPU 基值、再覆盖 meshCmd.x），
+	// fanout dispatch 读它逐条展开成 streams。cull_seq_fanout_chain 挂自己的子门 cullFanout
+	// （只有静态 DGC 流建了才发），发射点 = recordFanoutDispatch 的 dispatch 之前。
+	RgComputeHazardEdge{
+		.writerShader = "cull.comp.slang",
+		.writerParam = "sequences",
+		.readerShader = "stream_fanout.comp.slang",
+		.readerParam = "sequences",
+		.edge = RgSyncEdgeId::cullSeqFanoutChain,
+	},
+};
+
+}  // namespace
+
+std::span<const RgComputeHazardEdge> computeHazardEdges() {
+	return kComputeHazardEdges;
+}
+
+/**
+ * checkComputeHazard 定义（契约见接口注释）。
+ *
+ * 匹配按**无序对**：`forward` 是「表里 writer 落在 hazard 的 A 侧」，`backward` 是反过来。
+ * 两个方向都通过 = 刻意（我们只有方向、没有执行顺序），限制逐字写在接口注释里。
+ */
+std::expected<RgSyncEdgeId, Error> checkComputeHazard(const RgComputeHazardClass& hazard) {
+	for (const auto& e : kComputeHazardEdges) {
+		const bool forward = e.writerShader == hazard.shaderA && e.writerParam == hazard.paramA
+			&& e.readerShader == hazard.shaderB && e.readerParam == hazard.paramB;
+		const bool backward = e.writerShader == hazard.shaderB && e.writerParam == hazard.paramB
+			&& e.readerShader == hazard.shaderA && e.readerParam == hazard.paramA;
+		if (forward || backward)
+			return e.edge;
+	}
+	// 两侧都点名（shader + param + 槽号）+ 指路表名：这条消息是构造期抛出的，现场只有日志。
+	return std::unexpected(syncError(fmt::format(
+		"off-graph sync: 未申报的 compute hazard——'{}.{}'（heap 槽 {}）与 '{}.{}'（heap 槽 {}）"
+		"共享同一个 descriptor heap 槽且至少一方写，但 hazard 表里没有覆盖它的同步边"
+		"（表 = rgl/offgraph_sync_impl.cppm 的 kComputeHazardEdges，现 {} 条）。"
+		"RAW/WAR/WAW 三种 hazard 都要 barrier（判据与执行顺序无关）⟹ 要么在表里补一条 "
+		"(shader,param)↔RgSyncEdgeId 申报并在归属模块发那条边，要么这条共享本身就是错的",
+		hazard.shaderA, hazard.paramA, hazard.slot, hazard.shaderB, hazard.paramB, hazard.slot,
+		kComputeHazardEdges.size())));
 }
 
 void OffGraphSync::beginFrame() {

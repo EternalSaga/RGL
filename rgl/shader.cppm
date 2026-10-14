@@ -7,6 +7,7 @@ export module shader;
 import rlstd;
 import rlvk;
 import vkerror;
+import compute_access_log;  // B2-3：ComputeAccessLog（工厂在此追加访问记录；纯值模块，rlbase）
 import profiler;  // 批 9.5：applyDynamicState 的 vkcmd.count 计数（rlbase，只向下依赖）
 import rllogger;  // 批 M：RenderPipeline 构造期 SPV 解析失败退回全烘的 warn 出声
 
@@ -99,6 +100,28 @@ export [[nodiscard]] std::vector<std::pair<uint32_t, HeapSlot>> resolveComputeBi
 	const std::string& spvPath,
 	std::span<const std::pair<std::string_view, HeapSlot>> named);
 
+/**
+ * 追加 compute 访问日志并与 hazard 表对账（B2-3；`makeMappedCompute` 的构造期后半）。
+ *
+ * 🔴 **挂点在工厂 = 它是唯一同时知道 (shader, param → 槽) 全事实的地方**：反射只给方向
+ * （`compute_bindings_generated`）、`offgraph_sync` 只给边、各模块只知道自己那几个槽，
+ * 只有这里三样同时在场。挂到别处（各模块自己调）= 把「记得申报」重新变成人工的。
+ *
+ * 四步：① `ComputeAccessLog::add` 把本次绑定与既有记录相交，返回**新增** hazard 类（按类去重）
+ * ② 每条新增查 hazard 表（`offgraph_sync`，同层 rlgfx）③ 未覆盖 → throw（与「binding 名不在
+ * 接口表里」同形：构造期 fail-fast，不留运行期）④ 覆盖 → **首次确认**时打一行 info。
+ *
+ * 🔴 **零命令**：本函数不发任何 Vulkan 命令、不碰 barrier，纯记账 + 抛（逐位不变是硬验收）。
+ * 🔴 **构造期**：只在 shader object 创建时调用；EVSSM / IZB 首帧懒构造 ⟹ 对账也在那一刻，
+ * 不每帧重算（日志是 append-only、没有清空口，形态上就不给每帧路径留位置）。
+ * @param spvPath .spv 路径（shader 身份由它推导，同 resolveComputeBindings）
+ * @param named   调用点给的 (binding 变量名, 堆槽) 列表（方向由接口表按名字查）
+ * @param log     访问日志宿主（产品侧 = `Resources::computeAccessLog()`）
+ * @throw std::runtime_error 存在未被 hazard 表覆盖的访问对（消息点名两侧 + 槽号 + 表名）
+ */
+export void logComputeAccess(const std::string& spvPath,
+	std::span<const std::pair<std::string_view, HeapSlot>> named, ComputeAccessLog& log);
+
 namespace {
 /**
  * 烘 (binding 号, 堆槽) → mapping 并建 shader object（两个公开入口的共同后半）。
@@ -160,18 +183,27 @@ namespace {
  *                       binding（没给映射的 binding 走驱动默认）。🔴 第二元 = **槽号**
  *                       （HeapSlot 强类型，坑 5 护栏），×descriptorSize 的换算在本函数内
  * @param descriptorSize resource heap 的槽大小（字节）
- * @throw std::runtime_error SPV 加载失败，或 binding 名解析失败（三类，见 resolveComputeBindings）
+ * @param log            compute 访问日志宿主（B2-3）。给了就在**烘映射之前**追加记录并与
+ *                       `offgraph_sync` 的 hazard 表对账，未覆盖即抛（构造期 fail-fast）。
+ *                       缺省 nullptr = 零知识（`just test` 里的设备级探针与不需要对账的调用方）
+ * @throw std::runtime_error SPV 加载失败，或 binding 名解析失败（三类，见 resolveComputeBindings），
+ *                           或存在未申报的 compute hazard（见 logComputeAccess）
  */
 export [[nodiscard]] vk::raii::ShaderEXT
 makeMappedCompute(vk::raii::Device& dev, const std::string& spvPath,
 	std::span<const std::pair<std::string_view, HeapSlot>> bindingToSlot,
-	uint32_t descriptorSize) {
+	uint32_t descriptorSize, ComputeAccessLog* log = nullptr) {
 	auto spvResult = loadShaderSpv(spvPath);
 	if (!spvResult)
 		throw std::runtime_error(spvResult.error().describe());
 	const auto spv = std::move(*spvResult);
 	// 名字 → 号（构造期一次，见 resolveComputeBindings 的构造期红线）
 	const auto resolved = resolveComputeBindings(spvPath, bindingToSlot);
+	// 🔴 hazard 对账排在 createShadersEXT **之前**：未覆盖就抛，一个句柄都不建（零命令红线）。
+	//    放在之后也能抛，但那时已经付了一次 vkCreateShadersEXT，且"构造期 fail-fast"的现场
+	//    会多一个刚建好就销毁的句柄——归因时容易怀疑到 mapping 上。
+	if (log)
+		logComputeAccess(spvPath, bindingToSlot, *log);
 	return createMappedCompute(dev, spv, resolved, descriptorSize);
 }
 
@@ -183,7 +215,8 @@ makeMappedCompute(vk::raii::Device& dev, const std::string& spvPath,
  * 跟着测试走）。它们要验的是**驱动怎么解释 mapping**，与"名字→号"无关，所以直接给号，
  * 但仍复用同一段烘映射的代码（复制那段 = 探针测的不再是引擎的烘焙路径）。
  *
- * 与 makeMappedCompute 的唯一差别 = 不查表、不校验。产品代码请走名字键版。
+ * 与 makeMappedCompute 的唯一差别 = 不查表、不校验、🔴 **也不接访问日志**（B2-3：探针 shader
+ * 不在 compute-access 反射面里，接了日志只会派生出查不到方向的假 hazard）。产品代码请走名字键版。
  */
 export [[nodiscard]] vk::raii::ShaderEXT
 makeMappedComputeByBinding(vk::raii::Device& dev, const std::string& spvPath,

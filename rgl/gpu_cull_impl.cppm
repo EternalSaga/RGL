@@ -223,7 +223,7 @@ void GpuCull::createCullShaders(vk::raii::Device& device) {
 		std::vector<std::pair<std::string_view, RGL::HeapSlot>>{
 			{"cullTable", HeapSlot{tableSlot}}, {"sequences", HeapSlot{sequenceSlot}},
 			{"countBuf", HeapSlot{countSlot}}, {"objectMatrixTable", HeapSlot{objectMatrixSlot}}},
-		descriptorSize);
+		descriptorSize, &resources.computeAccessLog());
 
 	// stream fanout shader object（静态 DGC 路；cullTable / sequences(ro) / streams(rw)，
 	// heap 映射同款模式——仅启用时建，docs/archive/radv_static_dgc_spike.md §3.3）
@@ -232,7 +232,7 @@ void GpuCull::createCullShaders(vk::raii::Device& device) {
 			std::vector<std::pair<std::string_view, RGL::HeapSlot>>{
 				{"cullTable", HeapSlot{tableSlot}}, {"sequences", HeapSlot{sequenceSlot}},
 				{"streams", HeapSlot{streamsSlot}}},
-			descriptorSize);
+			descriptorSize, &resources.computeAccessLog());
 	}
 }
 

@@ -124,7 +124,7 @@ void MeshletCullService::createCullShader() {
 	        {"cullItems", RGL::HeapSlot{itemsSlot}}, {"clusters", RGL::HeapSlot{clusterHeaderSlot}},
 	        {"clusterVisible", RGL::HeapSlot{visibleBufferSlot}},
 	        {"objectMatrixTable", RGL::HeapSlot{objectMatrixSlot}}},
-	    resources.getDescriptorHeap().getDescriptorSize());
+	    resources.getDescriptorHeap().getDescriptorSize(), &resources.computeAccessLog());
 }
 
 void MeshletCullService::writeSlotDescriptor(vk::DeviceAddress address, vk::DeviceSize bytes,
