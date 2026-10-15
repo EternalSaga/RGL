@@ -38,6 +38,20 @@ return {
     -- 未知值 = 启动失败（不静默回落：否则"以为在测 GPU 路其实跑的是 CPU 路"）。
     cull_replay = "cpu",
 
+    -- 债-120：RADV 静态 shader DGC 路（staticGraphicsIndirect 设备的 spike 门，默认关，
+    -- spike 全文 → docs/archive/radv_static_dgc_spike.md）。设备有 static 而无
+    -- graphicsIndirect、且本键开、且全集非空 ⟹ 构造 DgcStaticCommands：streams buffer
+    -- 分配（启动日志「gpu cull: … + streams …」后缀）+ fanout dispatch 进 cull CB +
+    -- vkCmdExecuteGeneratedCommandsEXT 驱动 draw（启动日志「DGC path: … DGC static
+    -- execute」行）；cull 第 5 类 hazard 边 cull.sequences ↔ stream_fanout.sequences
+    -- 自此才有消费者。**要整条路真被走到还需 cull_replay="gpu_sync"**——cpu 档 cull GPU
+    -- 集整条不上 CB，gate_lint[cull_replay] 会 warn 点名这一点（设备不支持时另有
+    -- gate_lint[dgc_static] warn）。非布尔值 = **静默回落 false**（readBool 走
+    -- sol::optional<bool>，类型检查失败即取默认；实测 "yes" 与 1 均无 warn 无 error，
+    -- 与 cull_replay 三态键的「未知值 = 启动失败」不同——那是字符串键，这是 bool 族
+    -- 的既有共同行为，本刀不修族）。
+    dgc_static = false,
+
     rpc = false,      -- Phase 10b HTTP POST RPC 调试通道（true=帧边界命令队列，仅绑 127.0.0.1；GET /state 发现参数，POST /camera /param /shot；独立于 imgui 门，headless 可用，见 docs/phase10b_plan.md）
     rpc_port = 8788,  -- RPC 监听端口（bind 失败只降级关，不崩）
 

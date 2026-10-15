@@ -738,11 +738,18 @@ cull CB 与主 CB 都提交到 `getGraphicsQueue()`，且 cull CB 先提交 ⟹ 
 | 门关逐位不变 | `regress floor --runs 3 --expect 95edc8ccd7a4` → 3/3 命中出厂锚、0 像素差 |
 | **门开逐位不变 = 迁移没改语义** | `regress ab --set diagnostics:cull_replay="gpu_sync" --runs 3` → A×B 跨构建 0 对不同哈希、**逐位相同**。哈希 = `95edc8cc` **与出厂锚同一个**，与 `configs/diagnostics.lua` 那条"三档截图逐位不变"的既有断言自洽（换的是**谁驱动 draw**，不是像素） |
 
-> ⚠ **门开配方的一条存量限制**：开 `cullFanout` 子门要 `dgc_static`，而它**不在
-> `configs/diagnostics.lua` 里**、只有代码默认值 `false` ⟹ `--set diagnostics:dgc_static=true`
-> 会被 `patch_lua` 的"键命中 0 次"护栏红掉。于是本机默认档下子门**只能真跑"关"这一侧**，
-> "开着发够"那一侧靠单测 + 门位变异（R3 的反向）覆盖。要真跑得先把该键补进配置——**没顺手补**
-> （补一个配置键 = 动出厂配置面，不属本刀）。
+> ✅ **门开配方的存量限制已修**（债-120，2026-10-15）：`dgc_static` 已补进
+> `configs/diagnostics.lua`（默认 `false` = 原代码默认值，出厂锚逐位不变实测 3/3），
+> `--set diagnostics:dgc_static=true` 不再被 `patch_lua` 的"键命中 0 次"护栏红掉。
+> 立锚读数（本机 AMD 8060S）：`dgc_static=true` 单开（cull_replay 默认 cpu）哈希 =
+> `95edc8ccd7a4` **与出厂锚同一个**——构造路径像素中性，execute 路不被走到是
+> gate_lint[cull_replay] 明说的（warn 点名要 `cull_replay="gpu_sync"`）；**全路径档**
+> `--set diagnostics:dgc_static=true --set diagnostics:cull_replay='"gpu_sync"'` =
+> `32d0c3c1a0947aa9…`（floor 3/3、0 像素差），逐字凭据 = `DGC path: … DGC static execute
+> (475 entries × vkCmdExecuteGeneratedCommandsEXT) [cull_replay=gpu_sync]` +
+> `+ streams 475×190920B @slot 8262`。与出厂锚的差 = diffstruct **3 像素 ±1 LSB**，与
+> spike 文档「跨条目 tie 深度 ±像素（静态路 draw 序 = 条目优先）」预期同量级；
+> `gpu_sync` 单开 = `95edc8cc`（GPU 集 draw 与 CPU 逐位同）⟹ 差来自 execute 路本身。
 
 
 
@@ -1109,16 +1116,21 @@ CullFrameInput cullInput{.planes = list.cullInput.planes, .sequenceCount = gpuCu
 
 与上面那条约定同向，一次改动同时消掉 UB 和一次多余的结构体拷贝。
 
-#### 覆盖诚实账：`FanoutPush` 出厂锚**零覆盖**
+#### 覆盖诚实账：`FanoutPush` 出厂锚**零覆盖**（债-120 已修，2026-10-15）
 
 出厂 `dgcStatic=false` ⟹ `nEntryStreams=0` ⟹ `recordFanoutDispatch` 根本不进；而 `dgc_static`
-**不在 `configs/diagnostics.lua` 里** ⟹ `--set` 被 `patch_lua` 的「键须恰好命中 1 次」护栏拒
+**当时不在 `configs/diagnostics.lua` 里** ⟹ `--set` 被 `patch_lua` 的「键须恰好命中 1 次」护栏拒
 ⟹ **判据"看日志有没有 `+ streams` 后缀"在默认配置下永远看不到**。本刀用 `--config-base`（仓库外
 配置副本，塞 `dgc_static = true`）补验：`+ streams 475×190920B @slot 8262` 出现 + `cullFanout`
 子门对账绿 ⟹ 那行真在跑（该臂截图哈希 ≠ 出厂锚，预期：`dgc_static=true` 是另一条渲染路线）。
 
-这是**存量限制**，不是本刀引入。`FanoutPush` 在出厂锚下唯一的防线是
-`tests/test_compute_push_layout.cppm` 的编译期 offsetof。
+**债-120 结案后本账的处置**：键已进配置，`--set` 直开；全路径档（`dgc_static=true` +
+`cull_replay="gpu_sync"`）已立逐位锚 `32d0c3c1a0947aa9…`（floor 3/3），`--sync`（VVL syncval）
+errors=0 ⟹ `recordFanoutDispatch` 与第 5 类 hazard 边自此有真程序覆盖，不再依赖仓库外副本。
+读数与归因 → §7.14 末的 ✅ 块。**注意单开 `dgc_static`（cpu 档）只覆盖构造路径**——execute 与
+fanout dispatch 都不录，像素与出厂锚同一个；「键被读到」≠「路被走到」。
+`FanoutPush` 在出厂锚下唯一的防线仍是 `tests/test_compute_push_layout.cppm` 的编译期 offsetof
+（出厂锚语义不变，这是刻意保留的）。
 
 **判据（主 agent 亲验）**：`just gates` 全绿（457 用例）；出厂锚 + `cull_replay=gpu_sync` 档锚各
 3/3 命中 `95edc8ccd7a4`；四条变异（改名 ×2、换序 ×2）**全部 rc=1 且点名调用点**——其中三条在
@@ -1206,8 +1218,12 @@ shader 改名、把写侧改成只读，表照样全绿。真正互锁的是 `te
 - **出厂默认档 hazard 日志 = 0 行**（csm 档、izb/evssm/dgc_static 全关 ⟹ 7 个调用点里没有跨实例同槽
   访问对）。这是**关于场景的事实**，不是判据失效；判据活着的证据 = 开档档里那 5 行 + 变异①②会抛。
 - **第 5 类（`cull` ↔ `stream_fanout`）在四个锚里跑不出来**：fanout 的 shader object 只在 `dgc_static`
-  为真时创建，而 `diagnostics.lua` 没有这个键（`--set` 命中 0 次被白名单拒）。子 agent 用仓库外配置副本
+  为真时创建，而当时 `diagnostics.lua` 没有这个键（`--set` 命中 0 次被白名单拒）。子 agent 用仓库外配置副本
   补验，日志实机出现。**与 §7.14 末 `FanoutPush` 出厂锚零覆盖是同一条债**（同一个键、同一个原因）。
+  **债-120 结案后已可达**（2026-10-15）：键进配置 + 全路径档立锚 `32d0c3c1a0947aa9…`，
+  `--sync --set diagnostics:dgc_static=true --set diagnostics:cull_replay='"gpu_sync"'`
+  errors=0（边 `cull_seq_fanout_chain` 的启动覆盖行 + fanout dispatch 真录 + VVL syncval 无报）；
+  ⚠ 单开 `dgc_static` 的 cpu 档**仍然跑不出第 5 类**——cull GPU 集整条不上 CB（见 §7.14 末 ✅ 块）。
 
 #### 机制坑一条：存进日志的名字必须自己持有
 
