@@ -67,6 +67,8 @@ set(RGL_TEST_SOURCES
                                  # + 组 8（B2-4③′）：注册字节 >0 拒绝面 + 同名替换正常路径
     test_dynamic_render_graph.cppm  # B2-4③′（D5 第一刀）：按名结转（结转≠重置）+ 逐出台账正反
                                  # + declareBufferProductions 幂等/末尾追加/试编译 fail-fast + 计数
+    test_attachment_sync.cppm      # B2-4④′：declareBufferConsumptions 语义 + 图声明面↔附件↔边表
+                                 # 双源对账（正向缺边/反向半申报/休眠）+ 名字钉死 + EVSSM 实测锚点
     test_izb_sizes.cppm          # B2-4③′ IZB 迁入：尺寸公式闭式期望 + 写上界配对对账（判据 5）
                                  # + extent 漂移同名替换的机器可观测面 + 附件名常量钉死
     test_offgraph_contract.cppm  # 批次 B1 图外工作申报面：建表三 guard 各配反向 + 位置契约三种偏离

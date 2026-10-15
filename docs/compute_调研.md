@@ -1290,7 +1290,7 @@ extentScale、history 的「不是 offscreen 就拒」）——第五档落进�
 | **B2-4①** EVSSM 矩图迁入 RT 缓存托管 | ✅ `f7d455d`（RT 缓存长出多描述符附件能力 + 迁入；「不升成图附件」与「装配期发号 / 首帧建图两段式」两条设计定案见该 commit 说明） |
 | **B2-4②** meshlet_cull 迁入（buffer 档首发） | ✅ 本刀（2026-10-15）→ §7.17 |
 | **B2-4③′** IZB 动态性首发（资源级动态 + erase/结转，还债-124；**按 D5 重切**，原「迁入」刀） | ✅ 本刀（2026-10-15）→ §7.18 |
-| **B2-4④′** 升级存量：meshlet / EVSSM 升成图附件（试点后近乎免费；EVSSM 收益仅「依赖被图看见」） | ⏳ 未动（D5） |
+| **B2-4④′** 升级存量：meshlet / EVSSM 升成图附件（试点后近乎免费；EVSSM 收益仅「依赖被图看见」） | ✅ 本刀（2026-10-15）：meshlet 半边迁入 + 图声明面↔边表双源对账；**EVSSM 半边裁决为不做**（实测依据与代价账 → §7.19） |
 | **B2-5** pass 级动态（运行期效果开关；相位表 / barrier 计划随重编译自动跟；这条才碰 B1a 索引形态） | ⏳ 未动（D5） |
 
 ### 7.17 B2-4② 落地实况（2026-10-15）：buffer 档 + 按名注册 + meshlet 迁入（B2-3 本体同刀）
@@ -1367,6 +1367,61 @@ throw 点名两侧 / A 档 sandwich 不还布局在**含重编译的 IZB 开档*
 
 **过程记录**：本刀第一轮实现被外部 `git checkout/clean` 整体抹除（11:51 事件），按 HEAD 重建 + 快照
 `/tmp/opencode/b24_snap/`；工作树完整性以 `regress ab` 逐位 + 全量测试为证。
+
+### 7.19 B2-4④′ 落地实况（2026-10-15）：meshlet 标志表升成图附件 + 图声明面↔边表双源对账（EVSSM 裁决不做）
+
+**机制侧**（图的第一批**真消费者**声明）：
+- `DynamicRenderGraph::declareBufferConsumptions(pass, names)`：向目标 pass 追加 `storageRead`
+  输入。与生产者声明的三个差别都是语义而非细节——附件必须已在图中（生产者先行，错误直接指路
+  而不是让试编译报一句间接的"读前置"）；落账前跑对账（消费者声明 = 「成对形态完成」那一步）；
+  幂等 / 试编译 fail-fast 同口径。storageRead 与 storageWrite 同样**不进** barrier 计划
+  （B2-3 的 plan-only 结构性护栏）⟹ 声明对命令流中性，这是五锚不动的构造性依据。
+- **附件↔边表** `kAttachmentSyncEdges`（`offgraph_sync`，人工半边，与 `kComputeHazardEdges`
+  同型但按**图附件名**索引）+ `reconcileAttachmentSyncEdges`（`dynamic_render_graph`，判据核）：
+  正向 = buffer 附件双声明（storageWrite×storageRead）⟹ 表必须有行（抓「共享肉眼可见地成立、
+  同步却没人记账」——buffer 档图绿不代表同步存在）；反向 = 表行指向的附件出现在 desc 里 ⟹
+  两侧声明都必须存在（半申报 = 两个来源各说各话）；附件不在图里 = 休眠（门关档形态）。
+  运行点三处：构造（抛 = 启动期）/ 消费者声明（Error 在调用现场）/ `recompile()`（安全点兜底，
+  失败脏位保留）。**生产者声明不跑对账**——producer-only 是合法中间形态（IZB 就住在这里）。
+- 表行名字写**字面量**（本模块在 rlgfx，逆向 import 不了 rlscene 的模块常量），两侧一致性由单测
+  钉死（`tests/test_attachment_sync.cppm` 断言表行 == `kMeshletVisibleFlagsAttachment` =
+  两侧唯一相遇点）。**已知限制（同 hazard 表口径）**：对账只查「有没有边」，不查 mask 方向；
+  「方向谎报」的红由编译 fail-fast 各自负责——消费排在生产之前 = 读前置拒、同 pass 读写 =
+  countRole 拒（两条用例各自红）。
+
+**迁入侧**：`meshletVisibleFlags` 经 `setMeshletCullService` → `syncMeshletGraphAttachments()`
+声明进图。**生产者锚点 = 图首 pass**（实测落点 `shadow`）：cull dispatch 录在帧首 prologue =
+一切 pass 之前，图能表达的最强事实就是「先于一切消费者」；shadow 级 0 由 `decorateShadowPass`
+无条件前插 = 任何图形态的 pass 0，且 `shadow_meshlet.mesh.slang` 不声明 binding 21 ⟹ 同 pass 无
+读写 feedback。**消费者锚点判据 = 首个 `drawSource=="opaque"` 的 drawMesh pass**（实测落点：
+deferred = `geometry`、forward = `opaque`；用 drawSource 而不是 pass 名 = 两形态一个判据；
+picking / highlight 也吃 `drawSource="opaque"` 但插在锚点之后，`find_if` 首命中不受影响）。
+meshlet.switch 只替换主 opaque 段 ⟹ 消费者就是它，声明诚实。
+
+**EVSSM 半边裁决 = 不做**（本刀实测依据）：moments 图是 RT 缓存里 **always-GENERAL** 的 image
+（8 个 per-mip storage view + 1 个 sampled view），而现有四个 image 附件档里 `sampleRead`
+**进布局链**——`usageInfo(sampleRead)` 给非 nullopt 的 ShaderReadOnlyOptimal ⟹ 图会为它发布局
+转换条目（单元实测锚钉死这对不对称：同图 sampleRead 产条目、storage 档零条目）。迁入 = 图把
+GENERAL 转走 = VVL mismatch + `865fd1aa` 锚必动 + 矩链 compute 的 storage view 与图转换的布局
+互相打架。干净路径 = 第六个附件档（storage-only image：进校验不进布局链）+ Lua 词表 + kind
+加档 10 处静默点必答 + RT 缓存 ensure 从图 desc 派生——而 D5 给这一刀的收益只有「依赖被图
+看见」。矩链同步现由 `evssm_moments_chain` / `evssm_moments_to_light` 两条边 + `expectCount`
+守，迁入不改变这一点。**若将来做**（B2-5 或新需求触发），先重读本段再立第六档的形态案。
+
+**验收读数**：五锚逐位（出厂 `95edc8cc` 3/3、meshlet 门关 `54e40665`、cull 开档 `dc846396`、
+EVSSM `865fd1aa`、IZB `2316b566`，全部 A×B 逐位相同）；重编译读数 = 出厂 **0** / cull 开档 **1**
+（双声明一次重编译吃到，日志 `meshletVisibleFlags=246080B`）/ IZB 1（无新增）；resize 冒烟
+（cull 开档）`/resize` 后与全新同尺寸 run 逐位相同（`ea4bb78a`），resize 不触发额外重编译；
+单元变异 8 条（删表行 / 名字漂 / 删正向 / 删反向 / 三处运行点各删一次 / 去「附件须在图中」）
+逐条红、还原逐条基线绿；**真程序变异**（删表行）= cull 开档启动 throw 点名
+`meshletVisibleFlags` 由 `shadow` 生产、`geometry` 消费 + 表名，出厂档同变异保持绿（休眠半边
+在真程序里成立）；`just gates` 全绿（521 用例 + gpu 46）；`--sync` cull 开档 hazard 0 条
+（N3 负知识对 meshlet 边继续成立——红只能来自对账与结构护栏）。
+
+**诚实账**：① 对账的机器半边 = 图声明面（谁产谁消），人工半边 = 附件↔边表行；互锁 = 名字钉死 +
+正反两向用例，**边有没有真发**仍是 `expectedPerFrame` 帧末对账的账（本刀未动发射路径）。
+② 债-119 的「mesh shader 读」一类就此进入机器管辖（首例）；「frag 采样」（EVSSM 未迁）/
+拷贝读回 / host 读三类 + 无句柄执行序边**仍归人工**——别把本刀读成「非 compute 参与者已对账」。
 
 ---
 

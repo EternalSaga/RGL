@@ -214,7 +214,14 @@ export class Renderer {
 	 * dispatch（见 `recordMeshletCullDispatch`）。
 	 * @param service 剔除服务（装配层持有所有权；本类只持裸指针，声明序保证它比 Renderer 长寿）
 	 */
-	void setMeshletCullService(MeshletCullService* service) { meshletCull = service; }
+	void setMeshletCullService(MeshletCullService* service) {
+		meshletCull = service;
+		// B2-4④′：服务在场 = 「标志表被图内 mesh draw 读」成为事实 → 把这份共享声明进图
+		// （生产者 + 消费者双声明 + 附件↔边对账，见 syncMeshletGraphAttachments）。
+		// 门关（nullptr）= 零声明零日志，图里永远没有这个附件（逐位不变的构造性保证）。
+		if (service)
+			syncMeshletGraphAttachments();
+	}
 
 	/**
 	 * 簇化轴 ★M-1b：真 MDI 行表载体（main 在 assembleBackEnd 之后挂，同 setMeshletCullService
@@ -321,6 +328,19 @@ export class Renderer {
 	 *（幂等 + 试编译 fail-fast；首建标脏，下个安全点重编译吃到，延迟 ≤1 帧合规）。
 	 */
 	void syncIzbGraphAttachments();
+	/**
+	 * meshlet 可见标志表附件的图侧同步（B2-4④′；setMeshletCullService 挂服务后调）：
+	 * declareBufferProductions(**图首 pass**, {meshletVisibleFlags}) →
+	 * declareBufferConsumptions(**首个 drawSource=opaque 的 drawMesh pass**, 同)。
+	 * 🔴 生产者锚点 = 图首 pass 的理由：cull dispatch 录在帧首 prologue（所有 pass 之前），
+	 * 图能表达的最强事实就是「先于一切消费者」；shadow 级 0 由 decorateShadowPass **无条件**
+	 * 前插 = 任何图形态的 pass 0，且 shadow_meshlet.mesh.slang 不声明 binding 21（不读标志）
+	 * ⟹ 同 pass 无读写 feedback。消费者锚点判据用 drawSource 而不是 pass 名：deferred 的
+	 * 主 opaque 段叫 "geometry"（drawSource 仍是 "opaque"），forward 叫 "opaque"；
+	 * meshlet.switch 只替换主 opaque 段 ⟹ 消费者就是它。失败 = throw（装配期路径，
+	 * 同 syncIzbGraphAttachments 写上界对账的 fail-fast 口径；对账缺边红在声明现场）。
+	 */
+	void syncMeshletGraphAttachments();
 	/**
 	 * pass draw 三路分发（手术 6：自 drawFrame pass 循环摘出）：drawLight 固定全屏单 group
 	 *（无 push constant，条目按 pass.state 名解析）/ opaque 段 GPU culling（DGC execute 或

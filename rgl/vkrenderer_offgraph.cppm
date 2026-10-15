@@ -144,6 +144,37 @@ void Renderer::syncIzbGraphAttachments() {
 		reportOffGraphViolation(declared.error());
 }
 
+// B2-4④′ meshlet 标志表的图侧同步（声明注释见 vkrenderer.cppm）。与 IZB 的差别不是细节：
+// IZB 是 producer-only（图里没有消费者，barrier 全走图外边表），meshlet 是**图的第一批
+// 真消费者声明**——storageRead 进 pass inputs 后，「off-graph 写 × in-graph 读」这份共享
+// 对图可见，并由 declareBufferConsumptions 落账前的附件↔边对账机器核对（缺边 = 下面的
+// throw 在装配现场，消息点名附件 + 两侧 pass + 表名）。两条声明都**不产任何命令**
+// （buffer 档 storage usage 结构性不进 barrier / beginRendering），逐位不变量不受影响。
+void Renderer::syncMeshletGraphAttachments() {
+	const auto& passes = graph.desc().passes;  // desc = 真相源（初始图已在 main 装饰并编译）
+	if (passes.empty())
+		throw std::runtime_error("Renderer: meshlet 图声明失败——desc 里没有 pass（装配错）");
+	// 生产者锚点 = 图首 pass（cull dispatch 在帧首 prologue = 一切 pass 之前；图能表达的
+	// 最强事实是「先于一切消费者」，shadow 级 0 无条件前插 = 任何形态的 pass 0）。
+	const std::string producerPass = passes.front().name;
+	const auto consumer = std::ranges::find_if(passes, [](const RgPassDesc& p) {
+		return p.kind == RgPassKind::drawMesh && p.drawSource == "opaque";
+	});
+	if (consumer == passes.end())
+		throw std::runtime_error("Renderer: meshlet 图声明失败——图里没有 drawSource=opaque 的 "
+		                         "drawMesh pass（meshlet 取代段无处落点，装配错）");
+	if (auto r = graph.declareBufferProductions(producerPass,
+			{ std::string{kMeshletVisibleFlagsAttachment} });
+		!r)
+		throw std::runtime_error(fmt::format("Renderer: meshlet 标志表生产者声明失败：{}",
+			r.error().describe()));
+	if (auto r = graph.declareBufferConsumptions(consumer->name,
+			{ std::string{kMeshletVisibleFlagsAttachment} });
+		!r)
+		throw std::runtime_error(fmt::format("Renderer: meshlet 标志表消费者声明失败：{}",
+			r.error().describe()));
+}
+
 // 11.3-1d IZB sandwich（声明注释见 vkrenderer.cppm；门关 = izbShadow 恒空早退）。
 void Renderer::izbLightPassPre(vk::raii::CommandBuffer& cmd, const RgPassPlan& pass,
 	const FrameDrawList& list) {

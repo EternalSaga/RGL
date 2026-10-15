@@ -268,6 +268,44 @@ export std::span<const RgComputeHazardEdge> computeHazardEdges();
 export std::expected<RgSyncEdgeId, Error> checkComputeHazard(const RgComputeHazardClass& hazard);
 
 /**
+ * 一条 **图附件共享的同步边申报**（批次 B2-4④′：双源对账的人工半边，与
+ * `RgComputeHazardEdge` 同型但按**图附件名**索引）。
+ *
+ * ## 这一张表回答什么
+ *
+ * 图里一个 `kind=buffer` 附件同时出现「storageWrite 声明 × storageRead 声明」= 图**看见了**
+ * 一次跨 pass 共享，但图对它**零产物**（storage usage 结构性不进 barrier 计划，B2-3 的
+ * plan-only 护栏）——真实同步仍由模块经边表发。本表把「这份共享靠哪条边同步」写成
+ * 机器可查的申报：图的声明面（`RgGraphDesc`）与这张表在 `dynamic_render_graph` 的
+ * `reconcileAttachmentSyncEdges` 里对账，**缺边 = 启动期/声明期/重编译期点名抛错**。
+ *
+ * ## 🔴 匹配只看「有没有边」，不看 mask 方向（与 hazard 表同一条已知限制）
+ *
+ * 表里 `edge` 的 src/dst 是否与真实先后匹配，本判据**不管**——那是发射点（它知道顺序）与
+ * `expectedPerFrame` 应发次数对账的账。把「方向谎报」变红的机制是**编译 fail-fast**：
+ * 消费声明排在生产声明之前 = 读前置拒；同 pass 读写 = countRole 拒。两条各自红。
+ *
+ * ## 🔴 本表同样**没有**「不需要边」的豁免位（同 hazard 表：豁免位没有牙）
+ */
+export struct RgAttachmentSyncEdge {
+	std::string_view attachment;  ///< 图附件名（kind=buffer；名字单一来源 = 归属模块的常量）
+	RgSyncEdgeId edge;            ///< 覆盖这份共享的同步边
+};
+
+/**
+ * 附件↔边 表（唯一真相源的数据面在 `offgraph_sync_impl.cppm`，本函数是访问器）。
+ * @return 全部申报条目（条目数由表本身给出，不另开 constexpr 计数）
+ */
+export std::span<const RgAttachmentSyncEdge> attachmentSyncEdges();
+
+/**
+ * 查一个图附件名有没有被附件↔边 表覆盖。
+ * @param name 图附件名（如 "meshletVisibleFlags"）
+ * @return 覆盖它的边；未覆盖 = Error（消息点名附件并指路表名，口径同 `checkComputeHazard`）
+ */
+export std::expected<RgSyncEdgeId, Error> checkAttachmentSyncEdge(std::string_view name);
+
+/**
  * 帧内发射账（Renderer 持有一个实例，按引用传给各图外模块）。
  *
  * 判据形状与 B1a 的 `OffGraphSchedule::checkCoverage` **同构**（门开 ⟺ 发生过），差别只在

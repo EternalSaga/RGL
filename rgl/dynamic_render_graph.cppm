@@ -55,6 +55,32 @@ template <typename T>
 }  // export（doc-check 只跳 `template` 起始行，export 前缀走块式导出）
 
 /**
+ * 图声明面 ↔ 附件↔边 表的**双源对账**（批次 B2-4④′，与 `checkComputeHazard` 的双源
+ * 对账同型；表本体在 `offgraph_sync`，本函数是消费它的判据核）。
+ *
+ * 两条规则（各有单测，`tests/test_attachment_sync.cppm`）：
+ *  - **正向**：`kind=buffer` 附件在图里有 storageWrite 声明**且**有 storageRead 声明
+ *    ⟹ 附件↔边 表必须有它的行。缺行 = Error（点名附件 + 生产者/消费者 pass + 表名）。
+ *    这条抓的是「共享肉眼可见地成立、同步却没人记账」——buffer 档对图 plan-only
+ *    （零 barrier 产物），图绿不代表同步存在。
+ *  - **反向**：表行指向的附件**出现在 desc 里** ⟹ 两侧声明都必须存在。半申报（只有写
+ *    或只有读）= Error——申报说「图里有一处读」而图看不见它，两个来源就各说各话。
+ *    附件不在 desc 里 = 该条休眠（门关档 / 服务未装配），不报。
+ *
+ * 🔴 **不查边 mask 的方向**（同 hazard 表：只有方向、没有执行顺序的口径反过来同样成立——
+ * 本判据只有「有没有」，没有「挡得对不对」）。方向谎报的红由编译 fail-fast 各自负责：
+ * 消费声明排在生产之前 = 读前置拒；同 pass 读写 = countRole 拒。
+ *
+ * 运行点：`DynamicRenderGraph` 构造（失败抛 = 启动期）、`declareBufferConsumptions`
+ * 的试编译之后（成对形态落账前）、`recompile()`（安全点兜底，半申报的脏图在这里红）。
+ * `declareBufferProductions` **不**跑它——生产者单独在场是合法形态（IZB 的 head/nodes
+ * 就是 producer-only + 无表行，反向规则对它休眠）。
+ * @param desc 待对账的图描述
+ * @return 空值 = 两向都闭合；否则 Error（首条违规）
+ */
+export std::expected<void, Error> reconcileAttachmentSyncEdges(const RgGraphDesc& desc);
+
+/**
  * frames-in-flight **逐出台账**已下沉 rlbase 叶子模块 `pending_evictions`（债-124；
  * `RenderTargetCache` 也要吃它，而 rlgfx 不能 import rlscene）。本模块的文档口径：
  * 逐出必须等 in-flight 用户的判据本体在 `pending_evictions.cppm`。
@@ -64,8 +90,9 @@ template <typename T>
  * 脏驱动的图派生件（D5 的载体；执行器侧唯一写者 = `Renderer::recompileGraphIfNeeded`）。
  *
  * 生命周期：main 装配期把**初始 desc** move 进来（初始图已在 main 编译并校验过，
- * 本类不重复首编译）；运行期模块经 `declareBufferProductions` 追加 buffer 附件与
- * 生产者声明（幂等 + 试编译 fail-fast），Renderer 在安全点 `recompile()`。
+ * 本类不重复首编译；构造期跑附件↔边 对账，不闭合 = **抛** = 启动期失败）；运行期模块经
+ * `declareBufferProductions` / `declareBufferConsumptions` 追加 buffer 附件与
+ * 生产者/消费者声明（幂等 + 试编译 fail-fast），Renderer 在安全点 `recompile()`。
  *
  * 🔴 附件**只准追加在末尾**（FrameCapturer/PickingService 构造期缓存 slot；
  * slot 稳定性由 Renderer 侧重编译路径机器核对，见 vkrenderer_impl）。
@@ -100,6 +127,21 @@ export class DynamicRenderGraph {
 	 * @param attachmentNames  buffer 附件名（必须已 registerBufferAttachment 且 >0 字节）
 	 */
 	[[nodiscard]] std::expected<void, Error> declareBufferProductions(std::string_view passName,
+		std::vector<std::string> attachmentNames);
+
+	/**
+	 * 声明「pass X 读模块拥有的 buffer 附件」（B2-4④′：图的第一批**真消费者**声明）：
+	 * 给目标 pass 追加 storageRead 输入。与生产者声明的三个差别都是语义而非细节：
+	 *  - 附件**必须已在图中**（生产者声明先行——读前置校验本就要求先写，这里把时序
+	 *    提到 API 面上，错误消息直接指路而不是让试编译报一句间接的"读前置"）；
+	 *  - 落账前跑 `reconcileAttachmentSyncEdges`：消费者声明是"成对形态完成"那一步，
+	 *    完成后的 desc 必须过双源对账（缺边 = Error 在调用现场，而不是留给安全点）；
+	 *  - 幂等口径同生产者侧（该 pass 已声明读同名附件 = 空操作、不标脏）。
+	 * 试编译 fail-fast 同样在：同 pass 读写 feedback / 消费排在生产之前，都在调用现场炸。
+	 * @param passName         消费者 pass 名（如首个 drawSource=opaque 的 drawMesh pass）
+	 * @param attachmentNames  buffer 附件名（必须已由生产者声明进图）
+	 */
+	[[nodiscard]] std::expected<void, Error> declareBufferConsumptions(std::string_view passName,
 		std::vector<std::string> attachmentNames);
 
 	/**

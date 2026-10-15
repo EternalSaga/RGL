@@ -474,6 +474,48 @@ std::expected<RgSyncEdgeId, Error> checkComputeHazard(const RgComputeHazardClass
 		kComputeHazardEdges.size())));
 }
 
+namespace {
+
+/**
+ * 附件↔边 表（人工半边；契约与「为什么不查 mask 方向」见 `offgraph_sync.cppm`）。
+ *
+ * 条目 = 「图里 storageWrite×storageRead 双声明的 buffer 附件」的**全集**（对账判据的
+ * 正向半边逐附件查这张表；反向半边逐表行查图）。名字写**字面量**而不是 import 归属模块的
+ * 常量：本模块在 rlgfx，`meshlet_cull_service` 在 rlscene，逆向 import 立刻被
+ * `rules_layers.py` 点名——名字的一致性由单测钉死（`tests/test_attachment_sync.cppm`
+ * 断言表行 == `kMeshletVisibleFlagsAttachment`，两侧任何一侧改名都红）。
+ */
+constexpr std::array<RgAttachmentSyncEdge, 1> kAttachmentSyncEdges = {
+	// meshlet 可见标志表：compute 写（帧首 prologue，图侧以 pass 0 为生产者锚点）→
+	// mesh shader 读（binding 21 早退，图侧以首个 drawSource=opaque 的 drawMesh pass 为
+	// 消费者锚点）。覆盖边 = meshlet_visible_write_to_mesh；跨帧写前依赖是另一条边
+	// （meshlet_visible_prior_to_write），它挡的是**上一帧**的访问，不在图的本帧视野里。
+	RgAttachmentSyncEdge{
+		.attachment = "meshletVisibleFlags",
+		.edge = RgSyncEdgeId::meshletVisibleWriteToMesh,
+	},
+};
+
+}  // namespace
+
+std::span<const RgAttachmentSyncEdge> attachmentSyncEdges() {
+	return kAttachmentSyncEdges;
+}
+
+std::expected<RgSyncEdgeId, Error> checkAttachmentSyncEdge(std::string_view name) {
+	for (const auto& e : kAttachmentSyncEdges)
+		if (e.attachment == name)
+			return e.edge;
+	// 消息点名附件 + 表名（这条错在启动期/声明期抛出，现场只有日志；口径同 hazard 侧）。
+	// 措辞按「会被对账判据核带 pass 名包装后转发」设计：本句是核心，包装句只补归因。
+	return std::unexpected(syncError(fmt::format(
+		"附件↔边 表里没有覆盖图附件 '{}' 的同步边（表 = rgl/offgraph_sync_impl.cppm 的 "
+		"kAttachmentSyncEdges，现 {} 条）。buffer 档对图是 plan-only（零 barrier 产物）⟹ 真实"
+		"同步只在这张表里记账：要么补一条 (附件名)→RgSyncEdgeId 申报并在归属模块发那条边，"
+		"要么这份共享本身是错的",
+		name, kAttachmentSyncEdges.size())));
+}
+
 void OffGraphSync::beginFrame() {
 	counts.fill(0);
 }
