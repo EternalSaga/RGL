@@ -78,8 +78,11 @@ description: 修改 AGENTS.md 前的归宿裁决——新知识先问"能不能�
   正确形态 = 指向真相源（`config.py` / `CMakeLists.txt` / `imgqa refuse` / 条目名）。
   2026-10-07 一次瘦身里同批抓到 4 处：skill 抄了 checks 规则清单、AGENTS 抄了模块清单、
   台账手抄了 6/8 条反模式名、台账写死"债-00…债-29"（实际已到 64）。
-- **新建 `docs/*.md` 不在 AGENTS「其他文档」挂号** → 对新会话等于该文档不存在。已机制化：
-  `agents_doc_index_checks` 双向对账（docs 漏索引 = warning、AGENTS 指向不存在的路径 = error）。
+- **AGENTS.md 指向不存在的文档路径** → error（`agents_doc_index_checks` 保留的**单向反查**）。
+  🔴 **「新建 `docs/*.md` 须在 AGENTS 挂号」这条已于 2026-10-15 随正查一起退役**（owner 拍板「索引在我
+  脑子里」，判据真相源 = `tools/checks/rules_text.py` 的 `agents_doc_index_checks` docstring）
+  ⟹ 新建文档**不需要**挂号，`ls docs/` 是真相源；AGENTS「其他文档」只挂 owner 主动挂号的少数
+  **条件路由**条目，判据是"每次开工都可能需要"，不是"这篇文档有用"。
 - **AGENTS 索引条目写文档状态**（日期 / 批次号 /"已落地·挂起·冻结"）：文档头部已有状态行，索引再写
   一遍 = 同一状态两份载体，而推进文档的人不会记得同步 AGENTS ⟹ **漏一次永久错**。2026-10-14 实测
   抓到 3 条已漂，且都漂在会误导的方向（把文档明写的"非反转"记成"已反转"、把已恢复推进的轴记成
