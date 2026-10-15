@@ -24,7 +24,10 @@ from config import (ALLOWED_CPP, AGENTS_DOC_INDEX_SECTION, AGENTS_FILE,
                     EXPORT_NAMESPACE_EXEMPT, FORBIDDEN_EDGES,
                     FORBIDDEN_VULKAN_APIS, FORBIDDEN_VULKAN_MSG, JUDGMENTS_TABLE_GLOB,
                      MODERN_BANNED,
-                    NEW_DELETE_EXEMPT, RETIRED_DOC_NAMES, ROOT, STL_GMF_EXCEPTIONS,
+                    NEW_DELETE_EXEMPT, RETIRED_DOC_NAMES, ROOT,
+                    RPC_ROUTE_DISPATCH_FILE, RPC_ROUTE_DISPATCH_RE,
+                    RPC_ROUTE_REGISTER_FILE, RPC_ROUTE_REGISTER_RE,
+                    STL_GMF_EXCEPTIONS,
                     STL_HEADERS, USING_NAMESPACE_EXEMPT, VULKAN_HPP_INCLUDE_FILES,
                     ZERO_ENTT_MODULES)
 from fs import (docs_markdown_files, doc_pointer_files, rgl_cppm_files,
@@ -1076,4 +1079,91 @@ def agents_index_status_checks() -> list[Warning]:
                 "「其他文档」条目写状态摘要（" + "、".join(hits) + "）——状态只住文档头部，"
                 "本节只写「什么时候该读它」与「读哪一节省钱」；文档一推进这条就静默变错"
                 "（写法 → skill rgl-doc-placement）"))
+    return warnings
+
+
+# ─── RPC 路由 ↔ dispatch 双向对账（债-125，§10）───────────────────────────────
+
+SCAN_RPC_ROUTES: dict[str, str] = {}
+
+
+def rpc_route_readout() -> str:
+    """两侧路由条数的覆盖面读数；没跑过 = 空串（main.py 读数段据此打「未执行」）。"""
+    if not SCAN_RPC_ROUTES:
+        return ""
+    return (f"注册 {SCAN_RPC_ROUTES['registered']} 条 / dispatch {SCAN_RPC_ROUTES['dispatch']} 条")
+
+
+def _rpc_route_hits(rel: str, pattern: str) -> tuple[list[tuple[int, str]], str | None]:
+    """扫一侧的 path 字面量 → ([(行号, path)], 失效原因)。
+
+    文件读不到 / 解析出 **0 条** = 扫描面塌了（文件改名搬走 / 字面量形态换了而正则没跟上）
+    ⟹ 返回失效原因，调用方报 error——「零警告」不许被读成「两份名单对上了」
+    （同 `_truth_source` / rules_layers / meshlet_spec 的失效必须出声纪律）。
+    """
+    src = read_text(Path(ROOT) / rel)
+    if src is None:
+        return [], f"扫描面 {rel} 读不到（改名 / 搬走了？同步改 tools/checks/config.py 的 RPC_ROUTE_*_FILE）"
+    hits = [(src[:m.start()].count("\n") + 1, m.group(1))
+            for m in re.finditer(pattern, src)]
+    if not hits:
+        return [], (f"扫描面 {rel} 解析出 0 条路由（字面量形态变了？同步改 tools/checks/config.py "
+                    "的 RPC_ROUTE_*_RE，别让这条规则静默空跑）")
+    return hits, None
+
+
+def rpc_route_checks() -> list[Warning]:
+    """RPC 路由 ↔ dispatch **双向集合相等**（债-125；B2-5 首例的形态）。
+
+    ## 病根（为什么单元层全绿而真程序 404）
+    server 路由注册（`debug_rpc_impl.cppm`）与 dispatch 分支（`debug_rpc_exec_impl.cppm`）
+    是**两份名单**，靠人同步。B2-5 真撞过：`/pass` 的 dispatch 写了、路由没注册 ⟹
+    真程序首调 404，而单测不经 HTTP、全绿——失效面恰在截图锚与 syncval 都够不着的层。
+
+    ## 判据（双向相等，不是单向 ⊆）
+    - dispatch 有分支、注册侧没有 = ERROR（真程序 404，B2-5 原形态）；
+    - 注册侧有、dispatch 没有 = ERROR（**同样是 404 形态**：路由接了、请求进来落到
+      unknown-route 兜底 = 没人解析。「注册了但没实现」不是无害的，所以反向半边不是
+      装饰——实测当前两侧集合相等，反向半边今天就能落地，不留半边护栏）。
+    - ERROR 点名缺的那一侧 + 具体 path + 两个文件路径 + 另一侧完整名单
+      （照本仓「未登记的名字一律 Error 且点名 + 带在册名单」的既有口径）。
+
+    ## 失效必须出声
+    两个文件任一读不到 / 任一扫描面解析出 0 条 ⟹ ERROR（"没数不是相等"）。
+    改名/搬文件要红，不许静默变成"0 警告"。
+
+    ## 盲区（写下来不装没看见）
+    - **方法不判**：注册侧的 Get/Post 与 dispatch 侧的 `request.method` 分流不做交叉校验
+      （GET 端点写成 POST 注册、dispatch 里走 POST 分支 = 本规则看不见）——当前 9 条两侧
+      方法一致，形态漂移再补。
+    - 正则只认 `server.Get("…")` / `request.path == "…"` 两种字面量形态；raw string、
+      常量拼接、循环注册都会扫不到——但**扫不到 ≠ 扫错**：条数掉到 0 会 error 出声，
+      掉不到 0 的漂移（改一半）会表现为集合不等而红。
+    - 同文件里的超时选择（`request.path == "/shot"`）与探端口（`probe.Get("/")`）靠
+      「各自只在自己的文件里扫 + `server\\.` 锚定」排除在扫描面外（config.py 注释）。
+    """
+    reg_hits, reg_bad = _rpc_route_hits(RPC_ROUTE_REGISTER_FILE, RPC_ROUTE_REGISTER_RE)
+    disp_hits, disp_bad = _rpc_route_hits(RPC_ROUTE_DISPATCH_FILE, RPC_ROUTE_DISPATCH_RE)
+    SCAN_RPC_ROUTES.clear()
+    if reg_bad or disp_bad:
+        bad = "；".join(x for x in (reg_bad, disp_bad) if x)
+        return [Warning("tools/checks/config.py", 0,
+            f"RPC 路由双向对账（债-125）**本次未做任何对账**：{bad}"
+            "——「零警告」不是「两份名单相等」", "error")]
+    reg = {p for _l, p in reg_hits}
+    disp = {p for _l, p in disp_hits}
+    SCAN_RPC_ROUTES.update({"registered": str(len(reg)), "dispatch": str(len(disp))})
+    reg_line = {p: l for l, p in reg_hits}
+    disp_line = {p: l for l, p in disp_hits}
+    warnings: list[Warning] = []
+    for path in sorted(disp - reg):
+        warnings.append(Warning(RPC_ROUTE_DISPATCH_FILE, disp_line[path],
+            f"dispatch 有 '{path}' 分支，但 server 未在 {RPC_ROUTE_REGISTER_FILE} 注册该路由 "
+            f"= 真程序首调 404，而单测不经 HTTP 全绿（B2-5 的 /pass 正是这一形态）。"
+            f"注册侧在册名单：{'、'.join(sorted(reg))}", "error"))
+    for path in sorted(reg - disp):
+        warnings.append(Warning(RPC_ROUTE_REGISTER_FILE, reg_line[path],
+            f"server 注册了路由 '{path}'，但 {RPC_ROUTE_DISPATCH_FILE} 没有解析它的分支 "
+            f"= 请求进得来、没人处理，落 unknown-route 兜底 = 同样是 404 形态。"
+            f"dispatch 侧在册名单：{'、'.join(sorted(disp))}", "error"))
     return warnings

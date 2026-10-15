@@ -379,9 +379,22 @@ ECS_BANNED_TOKENS = ("entt::scheduler", "entt::basic_scheduler", "entt::scheduli
 # 存量 = profiler 的帧累加器（匿名 namespace，非场景状态）。新增一条的处置是改代码
 # （进 context/参数/成员），不是登记额度。
 ECS_GLOBAL_BASELINE_FILE = "tools/checks/ecs_global_baseline.json"
+
 ECS_GLOBAL_UPDATE_CMD = "python3 tools/checks/main.py --update-ecs-global-baseline"
 ECS_GLOBAL_BASELINE_COMMENT = (
     "ECS 全局可变状态棘轮基线（§9 R-EC4：rgl/*.cppm 列 0 的 namespace 作用域可变变量条数，"
     "按文件记）。存量 = profiler 帧累加器（非场景状态）。只准降不准升：新增一条 = 有人"
     "在拿全局变量携带状态，处置是搬进 registry context/函数参数/类成员，不是来这里登记额度。"
     f"确实清掉一批后用 `{ECS_GLOBAL_UPDATE_CMD}` 收账。判据与盲区 → docs/风格检查规则.md §9。")
+
+# ─── RPC 路由 ↔ dispatch 双向对账（债-125；规则 = rules_text.rpc_route_checks，§10）──
+# 两份名单住在同一模块的两个文件里，**各自只在自己的文件里扫**：注册侧文件里另有
+# `request.path == "/shot"` 形态的**超时选择**字面量（debug_rpc_impl.cppm:217-219）与
+# 客户端探端口 `probe.Get("/")`（:126）——跨文件扫或正则放宽（去掉 `server\.` 锚定）
+# 都会把它们当路由 = 规则说谎比漏报更贵。
+# dispatch 侧的 `!=` 形态（GET 分支 `request.path != "/state"`）**也算「dispatch 认识这个
+# path」**——不算则 /state 一上来就误报（实测：`==` 与 `!=` 两种比较合起来两侧集合相等）。
+RPC_ROUTE_REGISTER_FILE = "rgl/debug_rpc_impl.cppm"
+RPC_ROUTE_DISPATCH_FILE = "rgl/debug_rpc_exec_impl.cppm"
+RPC_ROUTE_REGISTER_RE = r'server\.(?:Get|Post)\("([^"]+)"'
+RPC_ROUTE_DISPATCH_RE = r'request\.path\s*(?:==|!=)\s*"([^"]+)"'
