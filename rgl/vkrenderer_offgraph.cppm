@@ -100,7 +100,7 @@ void Renderer::izbPreFrame() {
 	const auto depthIt = std::ranges::find_if(renderGraph.attachments,
 		[](const auto& a) { return a.kind == RgAttachmentKind::depth; });
 	// 非 deferred 在此静默早退是**合法运行期形态**（图判定不该在录制路径打日志）；
-	// 「izb 配了却必然无效」由 gate_lint 启动期 error 喊（R-02，2026-10-02）。
+	// 「izb 配了却必然无效」由 gate_lint 启动期 error 喊（规则按门名 `izb` 登记，2026-10-02）。
 	if (!deferred || depthIt == renderGraph.attachments.end())
 		return;
 	depthAttSlot = static_cast<int32_t>(depthIt - renderGraph.attachments.begin());
@@ -240,9 +240,9 @@ void Renderer::evssmPreFrame() {
 	// mode==pcss 时图集照画但不建矩图。
 	if (evssmShadow || !shadowFormPlan(shadowConfig()).buildEvssmMoments)
 		return;
-	// 非 deferred 组合由 gate_lint 启动期 error（R-03，2026-10-02 从这里的 warn-once
-	// 迁走——不走到这一帧就永远不喊的病灶收口）；运行期早退保留（消费点在 deferred
-	// light pass，判据不变）。
+	// 非 deferred 组合由 gate_lint 启动期 error（规则按门名 `mode` 的 evssm 档登记，
+	// 2026-10-02 从这里的 warn-once 迁走——不走到这一帧就永远不喊的病灶收口）；
+	// 运行期早退保留（消费点在 deferred light pass，判据不变）。
 	if (!graphHasDeferredLight(renderGraph.passes))
 		return;
 	// 阴影图槽 = RT 缓存按名查（启动期 ensureShadowMapSlot 无条件建，deferred 判据
@@ -651,6 +651,11 @@ std::vector<RgOffGraphWorkDecl> Renderer::offGraphWorkDecls() {
 	// 顺序 = 帧末门位数组的顺序（offGraphEndFrame），项数 = kOffGraphWorkCount（构造期核对）。
 	// 锚点用 pass_vocabulary 的状态名常量，不用字面量：状态名一旦改名，这里跟着走，
 	// 而原先写在 C++ 里的字符串比较会静默失配（判据 = 启动期 throw，不是画面悄悄不对）。
+	// 🔴 三条 beforePass 全部标了 mayBeAbsent（债-128：申报集不随变体缩小——forward 图没有
+	// drawLight "light"，offscreen 图没有 tonemap），meshlet_cull 挂帧首段恒可解析（且
+	// framePrologue + mayBeAbsent 被 build 拒）。容忍仍是**逐条显式**：每条自带理由与兜底
+	// （见各条注释），新申报默认必须命中 ⟹「state 改名 = 装配错」的启动期护栏对所有未标
+	// 项活着（单元红点 = tests 债-128 段 ④；扩到第四条的读数 → §7.21 M-d/M-e）。
 	return {
 		RgOffGraphWorkDecl{
 			.name = std::string{kWorkMeshletCull},
@@ -658,26 +663,46 @@ std::vector<RgOffGraphWorkDecl> Renderer::offGraphWorkDecls() {
 		},
 		RgOffGraphWorkDecl{
 			.name = std::string{kWorkIzbMask},
+			// 债-128：forward 图没有 drawLight "light" ⟹ 锚点**可缺席**（= 本图不可调度）。
+			// 「izb 在 forward 被静默打开」不会发生：gate_lint 门名 `izb` 的启动期 error
+			// 拦配置（配了却必然无效），izbPreFrame 的非 deferred 早退保证 izbShadow 恒空
+			// = 门恒关 = 帧末对账不响。
 			.anchor = RgOffGraphAnchor{
 				.kind = RgOffGraphAnchor::Kind::beforePass,
 				.passKind = RgPassKind::drawLight,
 				.passState = std::string{kDeferredLightState},
+				.mayBeAbsent = true,
 			},
 		},
 		RgOffGraphWorkDecl{
 			.name = std::string{kWorkEvssmMoments},
+			// 债-128：同 izb_mask（gate_lint 门名 `mode` 的 evssm 规则 + evssmPreFrame 的
+			// deferred 判据保证 forward 下 evssmShadow 恒空）。
 			.anchor = RgOffGraphAnchor{
 				.kind = RgOffGraphAnchor::Kind::beforePass,
 				.passKind = RgPassKind::drawLight,
 				.passState = std::string{kDeferredLightState},
+				.mayBeAbsent = true,
 			},
 		},
 		RgOffGraphWorkDecl{
 			.name = std::string{kWorkFsrUpscale},
+			// 债-128 第二刀：offscreen 内建图没有 tonemap pass（三段渲 scene_rt + composite
+			// blit，SDR）⟹ FSR 在该图本无落点。**拿什么换了什么**：换掉的 = 本条申报
+			// 「锚点命中 0 = 启动期 throw」；换回的 = offscreen 变体能起跑（forward 图有
+			// tonemap，该形态下本条**仍可调度**，单测钉住）。残余风险（输入齐备却没有
+			// tonemap pass）不静默，三条兜底：
+			// ① kTonemapState 是编译期常量——状态名改名走编译，不是运行期静默改名；
+			// ② computeFsrUsable（main_scene）启动期 warn 点名原因位（velocityDecorated /
+			//    shader16 / 输入齐备），输入不齐 = 不构造 fsr = 门恒关（Renderer::initFsr
+			//    是同一判据的另一半，不一致即抛）；
+			// ③ 输入齐备**且**无 tonemap pass = 门开而无锚点 ⟹ 帧末对账每帧点名
+			//    「门开着却整帧没录 = 静默旁路」——响亮的位置从启动期挪到帧末，归因不变。
 			.anchor = RgOffGraphAnchor{
 				.kind = RgOffGraphAnchor::Kind::beforePass,
 				.passKind = RgPassKind::drawLight,
 				.passState = std::string{kTonemapState},
+				.mayBeAbsent = true,
 			},
 		},
 	};

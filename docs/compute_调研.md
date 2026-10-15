@@ -1539,6 +1539,132 @@ error 点名到具体相位」的活判据——而且它红的方式是**归因
   字面量 ⊆ server 注册的路由集合」，两条字面量清单都在同一个模块的两个文件里，纯文本可判）；
   建好之前，这条只能靠真程序验收兜住。
 
+### 7.21 债-128 落地实况（2026-10-15）：锚点可缺席——申报集不随图缩小，但容忍必须逐条显式
+
+#### 病根与形态
+
+`--variant forward` 起不来（债-128）：`offGraphWorkDecls()` 是编译期定死的静态表，`build` 拿它
+对着 forward 编译图解析 ⟹ `izb_mask` 锚点（drawLight `light`）必然命中 0 pass ⟹ 启动期 throw。
+`--set shadow:izb.on=false` 不绕行——申报集**既不看变体也不看门位**（这正是它作为护栏的本职，
+坏在把「这张图没有这个 pass」也判成装配错）。
+
+裁决形态 = **申报项显式声明「锚点可缺席」**：`RgOffGraphAnchor` 加 `mayBeAbsent`（默认 false），
+命中 0 时 `build` 不再报错，而是把该项标成**不可调度**（相位 = `kUnschedulablePhase` 不可达哨兵）
+并打一条启动期 warn。申报集**不缩小**（`kOffGraphWorkCount` 与构造期项数核对不受影响），
+三个变体吃同一张表。第一刀标 `izb_mask` / `evssm_moments`（forward 无 drawLight `light`）；
+**第二刀同日补 `fsr_upscale`**（offscreen 无 tonemap，见下面「第二刀」一节）——表里三条
+beforePass 全部可缺席，`meshlet_cull` 挂帧首段恒可解析（且 `framePrologue + mayBeAbsent` 被拒）。
+
+#### 为什么「可缺席」必须逐条显式（本刀的全部判据都挂在这条上）
+
+全局容忍 0 命中 = 把 B1 第一刀立的「state 改名 = 装配错」启动期护栏**整个拆掉**——以后任何人把
+`light` 改名、或装饰器把 pass 插没了，`build` 都会静默吞掉，四条申报全部退化成「有锚点就录、
+没锚点就当没事」。逐条字段让「容忍」成为**每条申报自己的声明**：变异 M-a（`mayBeAbsent || true`）
+红在用例的**不可缺席半边**（`beforePassWork` 同图同锚点仍必须 Error），这条红就是「逐条」与
+「全局」的机器区分点。配套两条：
+
+- `framePrologue + mayBeAbsent` = 无意义组合（帧首段不查图、恒可解析）⟹ `build` **拒绝**并点名，
+  不静默忽略——静默忽略会让「以为声明了」与「忘了声明」不可区分。
+- 命中**多个**不受豁免（歧义与缺席是两件事：容忍缺席不该顺手把「相位无法确定」也吞掉）；
+  命中 1 时可缺席申报必须**正常可调度**（正向半边，出厂档逐位不变靠的就是它）。
+
+#### 两条变异方向各自有牙（这是形态的判据本体）
+
+不可调度 ≠ 免责。两条方向各配一条红：
+
+| 方向 | 判据 | 落点 |
+|---|---|---|
+| **没锚点却录了** = 挂点错 | `enter()` 打在不可调度项上 = Error，消息点名「不可调度…挂点错」，**不借**「位置契约违例」那条（装配错 ≠ 录错时机，修复位置不同） | `OffGraphSchedule::enter` 哨兵分支 |
+| **门开着却整帧没录** = 静默旁路 | 帧末对账**复用既有消息族**（`active && !called` → 「门开着却整帧没录」），不新造判据；门恒关 = 不响（forward 的正常旁路形态） | `checkCoverage` 一字未改 |
+
+forward 下「门恒关」不是假设，是两条既有事实：gate_lint 启动期 error（`izb` × 非 deferred 图 /
+`mode="evssm"` × 非 deferred 图）+ `izbPreFrame` / `evssmPreFrame` 的非 deferred 早退
+（`izbShadow` / `evssmShadow` 恒空 = 门位查询恒 false）。
+
+#### 职责分层（gate_lint 管「配了却必然无效」，申报面管「锚点与录制的一致性」）
+
+实测归因：forward + `--set shadow:izb.on=true` 的唯一 error 是
+`gate_lint[izb]: IZB 只接 deferred 光照 pass…`，**不是**锚点 0 命中那条 ⟹ 两层的消息不会互相
+顶掉，用户看到的归因指向真正的错（配置组合），而不是申报面的下游症状。锚点条件化因此**不会**
+造成「izb 在 forward 被静默打开」——那条护栏本来就不在申报面手里。
+（顺带修掉两处悬空注释指针：`:offgraph` 里引用的 gate_lint 旧规则 ID `R-02` / `R-03` 早已改成
+按门名登记，就地改成门名 `izb` / `mode`。）
+
+#### 第二刀：`fsr_upscale` 也标可缺席（offscreen 变体）——拿什么换了什么
+
+offscreen 内建图（三段渲 scene_rt + composite blit，SDR）**没有 tonemap pass** ⟹ FSR 在该图
+本无落点，`fsr_upscale` 的锚点必然命中 0。第一刀后 offscreen 仍起不来（失败点从 `izb_mask`
+挪到 `fsr_upscale`），裁决 = 同一笔债不留半吊子，`fsr_upscale` 也标 `mayBeAbsent = true`。
+
+**换掉的** = `fsr_upscale` 这一条的「锚点命中 0 = 启动期 throw」；**换回的** = offscreen 变体
+能起跑（forward 图有 tonemap，该形态下本条**仍可调度**——单测把 forward/offscreen 两半各钉一条，
+不许拿「offscreen 标了」推成「fsr 永远不可调度」）。**残余风险只剩一种**：输入齐备却没有
+tonemap pass（`fsr != nullptr` 且 `fsrInputs()` 有值 = 门开而无锚点）。它不静默，三条兜底：
+
+| 兜底 | 时机 | 内容 |
+|---|---|---|
+| `kTonemapState` 编译期常量 | 编译 | 状态名改名走编译，不是运行期静默改名 |
+| `computeFsrUsable`（main_scene） | 启动期 | warn **点名原因位**（velocityDecorated / shader16 / 输入齐备）；输入不齐 = 不构造 `fsr` = 门恒关（`Renderer::initFsr` 是同一判据的另一半，不一致即抛） |
+| 帧末覆盖对账 | **每帧** | 门开而无锚点 = 「门开着却整帧没录 = 静默旁路」每帧点名——响亮的位置从启动期挪到帧末，归因不变 |
+
+实测残余风险在 offscreen 上不可达：`--variant offscreen --set 'runtime:aa="fsr"'` 落点是
+`computeFsrUsable` 的启动期 warn（`velocityDecorated=false shader16=true 输入齐备=false`）
+= 门根本没开，日志 0 条「静默旁路」。**没有新增 gate_lint 规则**——这条降级路径的启动期
+出声早就存在，本刀只是让申报面不再抢在它前面 throw。
+
+工具侧顺带一处（同判据补齐）：`tools/smoke.py` 的 aa=fsr 生效核对原先硬要求
+「FsrUpscaler: context 就绪」行，不认引擎既有的「开门但接不起来」降级 warn——该臂此前
+不可达（offscreen 起不来），offscreen 能起跑后暴露。改法照 velocity/SSR 的「图形态不支持」
+放行模式：**必须真看到那条 warn 才放行**，两条都没有仍 FAIL（正向对照：deferred + `--aa fsr`
+仍走 context 行）。顺带删掉一条死分支（`fsr: 输入附件不齐` 文案引擎里不存在，且"输入不齐"
+现行设计就是降级 warn 不是失败）。
+
+#### 验收读数（本机 AMD 8060S / RADV STRIX_HALO）
+
+- **结案判据**：`just smoke --variant forward` → **PASS errors=0** warnings=2（两条 = izb_mask /
+  evssm_moments 的「本图不可调度」启动期打点，逐字含「不可调度」）。
+- forward + `--set shadow:izb.on=true` → FAIL **errors=1**，error 逐字 = `gate_lint[izb]: IZB 只接
+  deferred 光照 pass…`（归因分层成立）。
+- **五锚逐位不变**（`regress floor --runs 3 --expect`，全部 3/3 命中、0 像素差）：出厂
+  `95edc8ccd7a4`、meshlet 门关（`--set meshlet.enable=false --set meshlet.shadow_lod=-1`）
+  `54e40665`、cull 开档（`--set meshlet.switch=true`）`dc846396`、EVSSM（`--set 'shadow:mode="evssm"'`）
+  `865fd1aa`、IZB（`--set shadow:izb.on=true`）`2316b566` ⟹ deferred 路径零行为变化。
+- **出厂档日志 0 条「不可调度」**（`just smoke` PASS errors=0 warnings=0 + grep 计数 0 = deferred
+  图四条锚点全命中，打点只在真缺席时出现）。
+- `just gates` 全绿；`just test` **539 用例**（本批 +4 条，变异红线声明在测试文件头部 14-19）。
+- **变异三条实跑全红、还原逐条回基线**（备份 = 不带 `-p` 的 cp，构建显式 `--target rgl_tests`）：
+  M-a 全局容忍（`mayBeAbsent || true`）→ 3 条红（新用例 ④ 段 + 既有「建表反向②」+「兜底 fail-fast」
+  ——后两条红说明全局容忍连 B2-5 的兜底护栏一起吃掉，正是它被否决的原因）；
+  M-b 对账跳过不可调度项 → 「三向判据」红；M-c `enter` 静默记账 → 「三向判据」红
+  （`enter` 的无记账副作用半边由「门关 + called = 门关着却录了」补刀，两把刀不重叠）。
+- **第二刀（offscreen）**：`just smoke --variant offscreen` → **PASS errors=0** warnings=3
+  （三条 = izb_mask / evssm_moments / fsr_upscale 的「本图不可调度」打点）；
+  `--variant offscreen --set 'runtime:aa="fsr"'` → **PASS errors=0**，落点 = `computeFsrUsable`
+  的 warn 点名原因位（`velocityDecorated=false shader16=true 输入齐备=false`），日志
+  **0 条「静默旁路」**（残余风险判断成立：offscreen 上门根本开不了）；
+  正向对照 `just smoke --aa fsr`（deferred）→ `FSR: context 就绪` + errors=0。
+  真程序变异两条：**M-d** 把 `mayBeAbsent` 扩到 `meshlet_cull` → 出厂档 smoke 红，逐字
+  `'meshlet_cull' 声明了 framePrologue + mayBeAbsent = 无意义组合`（build 拒 = 帧首段那条
+  想标都标不上）；**M-e** `fsr_upscale` 标记回退成必须命中 → offscreen smoke 红
+  （`'fsr_upscale' 的锚点 beforePass(kind=drawLight, state="tonemap") …命中 0 个 pass`）。
+  两条还原后各自回基线 PASS。
+
+#### 诚实账与残留缺口
+
+- **三个 variant（forward / deferred / offscreen）冒烟 errors=0 全部实测**（offscreen = 当日
+  第二刀，读数与职责分层见上面「第二刀」一节）。残留 = **自定义 Lua 图**若配出「FSR 输入齐备
+  但无 tonemap pass」的形态，落点是帧末每帧红而不是启动期 throw（响亮程度不变、时机变差一格）
+  ——内置图不可达，未为此加规则，真撞上时归因消息（「门开着却整帧没录」+ 项名）足以定位。
+- 「启动期打一条日志」住在 `OffGraphSchedule::build`（warn 档）而不是调用方：一处落点同时覆盖
+  构造期与安全点重编译期。代价 = **每次重编译**缺席就各打一条（forward + picking 反复插拔会
+  重复出现）；判据口径按「每次 build 一条」读，不当一次性打点。单元层不测这条日志本身
+  （测试进程无 logger 实例，`getInstance()` 恒空），它的判据 = 真程序日志 grep（上面那条 0 计数）。
+- **warn 档不是随手选的**：console sink = warn（`rllogger.cppm`），info 到不了 smoke 抓的 stdout
+  ⟹「不静默」若写成 info，判据（日志 grep）会恒 0 命中而全绿。
+- `isSchedulable` 是查询不是事务（名字不在表也返回 false，与 `OffGraphWorkTable::isActive` 同形态）；
+  哨兵相位 `kUnschedulablePhase` 公开是为了让 `resolveAnchor`（impl 自由函数）能返回它，
+  判据一律问 `isSchedulable`，不拿哨兵做算术。
+
 ## 8. 待挂号（本批**未落**总账，等用户选处置）
 
 1. ~~`RenderTargetCache` 没有 erase 路径~~ **已挂号 = 债-124**（2026-10-15 D5 裁决转正；原观察、

@@ -615,6 +615,8 @@ export class Renderer {
 	 *
 	 * 编译图构造完就不再变 ⟹ 锚点与图的错配没有「运行期才知道」的理由。
 	 * ⚠ B2-5 起它**会**变：安全点重编译时对着新图重建（pass 进出 ⇒ 相位 2+2i 全体挪位）。
+	 * ⚠ 债-128 起「解析不到」分两档：`mayBeAbsent` 锚点命中 0 = 不 throw，该项标成
+	 * 不可调度（启动期 warn 打点）；其余锚点命中 0 / 命中多个仍 throw。
 	 */
 	OffGraphSchedule offGraph;
 	/**

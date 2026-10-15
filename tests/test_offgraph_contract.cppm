@@ -45,6 +45,26 @@ module;
  *      按名取」那条红。该用例把两种取位形态**同时编码**：按名段必须绿、按位段必须红且点名
  *      被错位的那条申报——只留其中一半就是半瞎判据（对称判据的每一半边各要一条）。
  *
+ * 以下 14-18 属债-128（锚点可缺席 = 申报集不随编译图缩小，forward 图起不来那笔）：
+ *
+ *  14. **可缺席做成全局容忍**（去掉逐条字段判据 / 恒容忍命中 0）→ 「逐条显式」那条的 ④ 段红
+ *      （既有「建表反向②」也红）。这条就是裁决里点名的 M-a：全局容忍把「state 改名 = 装配错」
+ *      整个拆掉，红必须落在**不可缺席**的那半，不是缺席的那半。
+ *  15. `checkCoverage` 跳过不可调度项（"门开着却整帧没录"对它失效）→ 「三向判据」那条的 ② 段红。
+ *  16. `enter` 对不可调度项改成静默记账（返回成功）→ 「三向判据」那条的 ⑥ 段红；若它只记账
+ *      不返回成功，③ 段（门关 + called = "门关着却录了"）补刀。
+ *  17. `framePrologue + mayBeAbsent` 静默接受（不拒绝无意义组合）→ 「逐条显式」那条的帧首段段红。
+ *  18. 容忍写歪成「mayBeAbsent 一律不可调度」（命中 1 也标不可调度）或扩到命中多个
+ *      （`hits != 1` 走容忍）→ 「可缺席只管命中 0」那条红（正向半边：deferred 图里可缺席
+ *      申报必须正常可调度；歧义半边：命中多个仍 Error）。
+ *  19. 把 `mayBeAbsent` 扩成三条申报以外的一切形态（第二刀：fsr_upscale 也标可缺席后）：
+ *      标到帧首段项（meshlet_cull）= build 拒「无意义组合」并点名，单元层等价形态由
+ *      「锚点可缺席（逐条显式）」的帧首段段钉住，真程序读数 = 启动 throw（M-d → §7.21）；
+ *      反向把三条的标记回退成必须命中 = offscreen/forward 变体重新起不来，判据在**真程序层**
+ *      （生产表不是单测输入，M-e = `just smoke --variant offscreen` 必须红 → §7.21）。
+ *      未标项命中 0 仍 Error 的半边由 ④ 段常驻守着——「扩」与「缩」各有一把刀，缺一把
+ *      「三条」这个口径就只是注释。
+ *
  * ## 期望值的出处（不抄被测码）
  *
  * 相位口径来自**接口注释里写死的帧内模型**（帧首段 = 1、第 i 个 pass 之前 = 2+i、
@@ -111,6 +131,48 @@ RgOffGraphWorkDecl highlightWork(std::string name = "hl_work") {
 			.passKind = RgPassKind::drawMesh,
 			.passState = "highlight",
 		},
+	};
+}
+
+/** 一条**可缺席**的「某 pass 之前」申报（债-128：izb_mask / evssm_moments 的形状）。 */
+RgOffGraphWorkDecl absentWork(std::string name, std::string state) {
+	return RgOffGraphWorkDecl{
+		.name = std::move(name),
+		.anchor = RgOffGraphAnchor{
+			.kind = RgOffGraphAnchor::Kind::beforePass,
+			.passKind = RgPassKind::drawLight,
+			.passState = std::move(state),
+			.mayBeAbsent = true,
+		},
+	};
+}
+
+/**
+ * forward 形态的 pass 序列（照 `configs/render_graph.lua` 的 passes 缩到锚点相关的那几个）：
+ * opaque / skybox / transparent / ao / tonemap —— **没有 drawLight "light"**，债-128 的病根。
+ * tonemap 保留是判据的一半：fsr_upscale 的锚点在 forward 也必须命中（不许顺手也标可缺席）。
+ */
+std::vector<RgPassPlan> forwardLikePasses() {
+	return {
+		pass("opaque", RgPassKind::drawMesh, "opaque"),
+		pass("skybox", RgPassKind::drawMesh, "skybox"),
+		pass("transparent", RgPassKind::drawMesh, "transparent"),
+		pass("ao", RgPassKind::drawLight, "ao"),
+		pass("tonemap", RgPassKind::drawLight, "tonemap"),
+	};
+}
+
+/**
+ * offscreen 形态的 pass 序列（照 `offscreenRenderGraphDesc`：三段渲 scene_rt + composite
+ * blit，SDR）：**没有 tonemap**（也没有 drawLight "light"）——债-128 第二刀里
+ * fsr_upscale 的锚点在该图缺席的直接来源。
+ */
+std::vector<RgPassPlan> offscreenLikePasses() {
+	return {
+		pass("opaque", RgPassKind::drawMesh, "opaque"),
+		pass("skybox", RgPassKind::drawMesh, "skybox"),
+		pass("transparent", RgPassKind::drawMesh, "transparent"),
+		pass("composite", RgPassKind::blit, ""),
 	};
 }
 
@@ -615,6 +677,175 @@ TEST_CASE("兜底 fail-fast：忘了摘申报 → 重推相位表当场 Error �
 	auto ok = OffGraphSchedule::build(table.activeDecls(), passes);
 	INFO(errOf(ok));
 	CHECK(ok.has_value());
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 债-128：锚点可缺席（申报集不随编译图缩小，forward 图起不来那笔）。
+//
+// 失效形态不是"锚点解析对不对"（上面已验），而是**容忍的范围**：全局容忍 0 命中会把
+// 「state 改名 = 装配错」这条启动期护栏整个拆掉（B1 第一刀立它的理由）。所以每条用例
+// 都把「可缺席」与「不可缺席」两种形态**同图对照**——只测可缺席那半边就是半瞎判据。
+// ═══════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("锚点可缺席（逐条显式）：命中 0 → 建表成功 + 该项不可调度；不可缺席同形态仍红；帧首段组合被拒") {
+	const auto passes = forwardLikePasses();  // 没有 drawLight "light"
+
+	// ① 生产申报集（四条，forward 形态）：build 成功、**申报集不缩小**，
+	//    锚 light 的两条不可调度，锚帧首段 / tonemap 的两条正常可调度。
+	{
+		const std::vector<RgOffGraphWorkDecl> decls = {
+			prologueWork("meshlet_cull"),
+			absentWork("izb_mask", "light"),
+			absentWork("evssm_moments", "light"),
+			beforePassWork("fsr_upscale", "tonemap"),
+		};
+		auto built = OffGraphSchedule::build(decls, passes);
+		INFO(errOf(built));
+		REQUIRE(built.has_value());
+		CHECK(built->workCount() == 4u);  // 申报集不随图缩小（kOffGraphWorkCount 口径不受影响）
+		CHECK(built->isSchedulable("meshlet_cull"));
+		CHECK_FALSE(built->isSchedulable("izb_mask"));
+		CHECK_FALSE(built->isSchedulable("evssm_moments"));
+		CHECK(built->isSchedulable("fsr_upscale"));  // forward 有 tonemap ⟹ 必须仍可调度
+	}
+	// ④ 🔴 正向锚点（变异 M-a「全局容忍」的红点）：同图同锚点，**只把 mayBeAbsent 翻回 false**
+	//    ⟹ 仍 Error。做成全局容忍时这段会绿 = 「state 改名 = 装配错」被拆掉。
+	{
+		const std::vector<RgOffGraphWorkDecl> decls = {beforePassWork("izb_mask", "light")};
+		auto built = OffGraphSchedule::build(decls, passes);
+		REQUIRE_FALSE(built.has_value());
+		CHECK(errOf(built).find("izb_mask") != std::string::npos);
+		CHECK(errOf(built).find("0 个 pass") != std::string::npos);
+	}
+	// 帧首段锚点恒可解析 ⟹「可缺席」对它无意义，build **拒绝**这种组合并点名（静默忽略
+	// 会让「以为声明了」与「忘了声明」不可区分）。
+	{
+		const RgOffGraphWorkDecl decl = {
+			.name = "prologue_absent",
+			.anchor = RgOffGraphAnchor{
+				.kind = RgOffGraphAnchor::Kind::framePrologue,
+				.mayBeAbsent = true,
+			},
+		};
+		auto built = OffGraphSchedule::build(std::span<const RgOffGraphWorkDecl>{&decl, 1}, passes);
+		REQUIRE_FALSE(built.has_value());
+		CHECK(errOf(built).find("prologue_absent") != std::string::npos);
+	}
+}
+
+TEST_CASE("可缺席只管「命中 0」：命中多个仍歧义红；命中 1 时可缺席申报必须正常可调度") {
+	// 歧义半边：forward + 两个 drawLight "light" ⟹ 命中 2，mayBeAbsent 不豁免
+	//（歧义与缺席是两件事：容忍缺席不该顺手把"相位无法确定"也吞掉）。
+	{
+		auto ambiguous = forwardLikePasses();
+		ambiguous.push_back(pass("light", RgPassKind::drawLight, "light"));
+		ambiguous.push_back(pass("light2", RgPassKind::drawLight, "light"));
+		const std::vector<RgOffGraphWorkDecl> decls = {absentWork("izb_mask", "light")};
+		auto built = OffGraphSchedule::build(decls, ambiguous);
+		REQUIRE_FALSE(built.has_value());
+		CHECK(errOf(built).find("歧义") != std::string::npos);
+	}
+	// 正向半边：同一条可缺席申报在 deferred 图里必须**正常可调度**（期望值按接口注释的
+	// 闭式手算：light 是下标 2 → 之前 = 2 + 2×2 = 6）。容忍写歪成「mayBeAbsent 一律不可
+	// 调度」时这段红——出厂档四条锚点全命中必须逐位不变，靠的就是这半边。
+	{
+		const std::vector<RgOffGraphWorkDecl> decls = {absentWork("izb_mask", "light")};
+		auto built = OffGraphSchedule::build(decls, builtinLikePasses());
+		REQUIRE(built.has_value());
+		CHECK(built->isSchedulable("izb_mask"));
+		built->beginFrame();
+		built->advanceTo(built->beforePassPhase(2));
+		CHECK(built->enter("izb_mask").has_value());
+	}
+}
+
+TEST_CASE("不可调度项的三向判据：没锚点却录了红 / 门开着没录红 / 门关绿") {
+	const std::vector<RgOffGraphWorkDecl> decls = {
+		absentWork("izb_mask", "light"),
+		prologueWork("meshlet_cull"),
+	};
+	auto built = OffGraphSchedule::build(decls, forwardLikePasses());
+	REQUIRE(built.has_value());
+
+	// ⑥ 没锚点却录了 = 挂点错。消息点名该项，且**不借**「位置契约违例」那条
+	//    （归因方向：装配错 ≠ 录错时机，修复位置也不同）。
+	built->beginFrame();
+	{
+		const auto err = errOf(built->enter("izb_mask"));
+		REQUIRE_FALSE(err.empty());
+		CHECK(err.find("izb_mask") != std::string::npos);
+		CHECK(err.find("不可调度") != std::string::npos);
+	}
+	// enter 必须**无记账副作用**：若变异成静默记账，这条门关对账会红在
+	// 「门关着却录了」（M-c 的第二把刀，不依赖 beginFrame 之前的状态）。
+	{
+		const bool active[2] = {false, false};
+		const auto cov = built->checkCoverage(std::span<const bool>{active, 2});
+		INFO(errOf(cov));
+		CHECK(cov.has_value());
+	}
+	// ② 门开着（izb 门 = true）却整帧没录 = 静默旁路（复用既有消息族，不新造判据；
+	//    变异 M-b「对账跳过不可调度项」红在这里）。
+	built->beginFrame();
+	{
+		const bool active[2] = {true, false};  // izb 门开、meshlet 门关
+		const auto cov = built->checkCoverage(std::span<const bool>{active, 2});
+		REQUIRE_FALSE(cov.has_value());
+		CHECK(errOf(cov).find("izb_mask") != std::string::npos);
+		CHECK(errOf(cov).find("静默旁路") != std::string::npos);
+	}
+	// ③ 门关 = 不响（forward 的正常旁路形态；缺这条就分不清「护栏没触发」与「护栏坏了」）。
+	built->beginFrame();
+	{
+		const bool active[2] = {false, false};
+		const auto cov = built->checkCoverage(std::span<const bool>{active, 2});
+		INFO(errOf(cov));
+		CHECK(cov.has_value());
+	}
+}
+
+TEST_CASE("offscreen 形态（无 tonemap）：fsr_upscale 不可调度而 meshlet_cull 仍可；门开着没录仍红") {
+	// 生产申报集在 offscreen 图的形状（四条全申报，**申报集不缩小**）：izb/evssm/fsr 三条
+	// 可缺席锚点全部命中 0，帧首段的 meshlet_cull 恒可解析。
+	const std::vector<RgOffGraphWorkDecl> decls = {
+		prologueWork("meshlet_cull"),
+		absentWork("izb_mask", "light"),
+		absentWork("evssm_moments", "light"),
+		absentWork("fsr_upscale", "tonemap"),
+	};
+	auto built = OffGraphSchedule::build(decls, offscreenLikePasses());
+	INFO(errOf(built));
+	REQUIRE(built.has_value());
+	CHECK(built->workCount() == 4u);
+	CHECK(built->isSchedulable("meshlet_cull"));      // 帧首段不查图，恒可解析
+	CHECK_FALSE(built->isSchedulable("izb_mask"));
+	CHECK_FALSE(built->isSchedulable("evssm_moments"));
+	CHECK_FALSE(built->isSchedulable("fsr_upscale")); // offscreen 无 tonemap pass
+
+	// 三向半边（fsr_upscale 版，形状照「不可调度项的三向判据」）：门开（fsr != nullptr 且
+	// 输入可解析）却整帧没录 = 静默旁路 —— 残余风险「输入齐备却没有 tonemap pass」的
+	// 每帧红就是它的真程序形态；门关（computeFsrUsable 输入不齐 = 不构造 fsr）= 不响。
+	built->beginFrame();
+	{
+		const bool active[4] = {false, false, false, true};  // 只有 fsr 门开
+		const auto cov = built->checkCoverage(std::span<const bool>{active, 4});
+		REQUIRE_FALSE(cov.has_value());
+		CHECK(errOf(cov).find("fsr_upscale") != std::string::npos);
+		CHECK(errOf(cov).find("静默旁路") != std::string::npos);
+	}
+	built->beginFrame();
+	{
+		const bool active[4] = {false, false, false, false};
+		const auto cov = built->checkCoverage(std::span<const bool>{active, 4});
+		INFO(errOf(cov));
+		CHECK(cov.has_value());
+	}
+	// 反向半边（不许删）：同一条可缺席申报在 **forward** 图里必须仍可调度 —— 「offscreen
+	// 标了可缺席」不等于「fsr_upscale 永远不可调度」，forward 的 FSR 档全靠这半边。
+	auto fwd = OffGraphSchedule::build(decls, forwardLikePasses());
+	REQUIRE(fwd.has_value());
+	CHECK(fwd->isSchedulable("fsr_upscale"));
+	CHECK_FALSE(fwd->isSchedulable("izb_mask"));  // forward 有 tonemap、没有 light：两半各归各
 }
 
 }  // namespace RGL

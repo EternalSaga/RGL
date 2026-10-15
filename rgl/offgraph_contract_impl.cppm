@@ -4,6 +4,7 @@ module offgraph_contract:impl;
 
 import offgraph_contract;  // clang 不给 partition impl unit 隐式 import 主接口——必须显式
 import rlstd;
+import rllogger;  // 可缺席锚点命中 0 的启动期打点（债-128；warn 档 = console sink 可见）
 import vkerror;
 import render_graph;
 
@@ -52,12 +53,21 @@ std::string describeAnchor(const RgOffGraphAnchor& anchor) {
  * @param decl 待解析的申报项（错误消息里要点名它）
  * @param passes 编译图的 pass 计划
  * @param passCount passes.size()（调用方已算，避免这里再取一次 size_t）
- * @return 相位；命中 0 个或多个 pass = RenderGraphInvalid
+ * @return 相位；命中 0 个或多个 pass = RenderGraphInvalid（例外：`mayBeAbsent` 的锚点
+ *         命中 0 返回 `kUnschedulablePhase` 并打一条启动期 warn，不报错）
  */
 std::expected<uint32_t, Error> resolveAnchor(const RgOffGraphWorkDecl& decl,
 	const std::vector<RgPassPlan>& passes, uint32_t passCount) {
-	if (decl.anchor.kind == RgOffGraphAnchor::Kind::framePrologue)
+	if (decl.anchor.kind == RgOffGraphAnchor::Kind::framePrologue) {
+		// 帧首段恒可解析（不查图）⟹「可缺席」对它没有任何可表达的语义。静默忽略会让
+		// 「以为声明了可缺席」与「忘了声明」不可区分，所以**拒绝**而不是吞掉（债-128）。
+		if (decl.anchor.mayBeAbsent)
+			return std::unexpected(contractError(fmt::format(
+				"off-graph contract: '{}' 声明了 framePrologue + mayBeAbsent = 无意义组合"
+				"（帧首段锚点不查编译图、恒可解析，'可缺席' 只对 beforePass 有意义）",
+				decl.name)));
 		return OffGraphSchedule::kProloguePhase;
+	}
 
 	uint32_t hits = 0;
 	uint32_t hitIndex = 0;
@@ -69,6 +79,18 @@ std::expected<uint32_t, Error> resolveAnchor(const RgOffGraphWorkDecl& decl,
 			continue;
 		++hits;
 		hitIndex = i;
+	}
+	if (hits == 0 && decl.anchor.mayBeAbsent) {
+		// 债-128：**逐条显式**的容忍档。同一张申报表服务多张编译图（forward 图没有
+		// drawLight "light"），命中 0 的含义从「装配错」变成「本图不可调度」：相位给
+		// 不可达哨兵 ⟹ enter 打上来必红（挂点错）、帧末门开着必红（静默旁路）。
+		// 日志不静默且必须在 warn 档（console sink = warn，info 到不了 smoke 抓的 stdout）；
+		// 出厂（deferred）图四条锚点全命中，这行**不该**出现，出现了就是图形态不对。
+		if (auto* lg = RLLogger::getInstance())
+			lg->warn("off-graph contract: '{}' 的锚点 {} 在本编译图里命中 0 个 pass（共 {} 个）"
+				"= 本图不可调度（门开着却整帧没录会每帧点名；门关 = 正常旁路）",
+				decl.name, describeAnchor(decl.anchor), passCount);
+		return OffGraphSchedule::kUnschedulablePhase;
 	}
 	if (hits == 0)
 		return std::unexpected(contractError(fmt::format(
@@ -114,6 +136,13 @@ std::expected<void, Error> OffGraphSchedule::enter(std::string_view name) {
 	for (auto& entry : entries) {
 		if (entry.name != name)
 			continue;
+		// 债-128：本图无锚点的申报**不可录**。不许落到下面的相位比较去报一条
+		// 「位置契约违例——申报相位 4294967295」——那是把「挂点错」伪装成「录错时机」，
+		// 归因方向整个错掉（修复位置也不同：一个是装配错，一个是调用点错）。
+		if (entry.phase == kUnschedulablePhase)
+			return std::unexpected(contractError(fmt::format(
+				"off-graph contract: '{}' 在本图不可调度（锚点命中 0）却被录制 = 挂点错"
+				"（可缺席锚点只在锚点命中的图里可录；这张图里录它 = 装配错）", name)));
 		if (entry.phase != currentPhase)
 			return std::unexpected(contractError(fmt::format(
 				"off-graph contract: '{}' 位置契约违例——申报相位 {}，实际相位 {}"
@@ -149,6 +178,13 @@ std::expected<void, Error> OffGraphSchedule::checkCoverage(std::span<const bool>
 				entry.name)));
 	}
 	return {};
+}
+
+bool OffGraphSchedule::isSchedulable(std::string_view name) const {
+	for (const auto& entry : entries)
+		if (entry.name == name)
+			return entry.phase != kUnschedulablePhase;
+	return false;  // 名字不在表 = 不可调度（查询语义，同 OffGraphWorkTable::isActive）
 }
 
 // ── 批次 B2-5：申报面的撤回 / 恢复（pass 级动态插拔的配套一半）─────────────────────

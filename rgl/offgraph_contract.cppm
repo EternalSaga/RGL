@@ -42,6 +42,12 @@ namespace RGL {
  * `pass.kind == RgPassKind::drawLight && pass.state == "light"` 这类字符串比较）：
  * 两个条件都必须命中。匹配到 0 个或多个 pass 都是申报错误，在**启动期**出声——
  * 编译图构造完就不再变，所以这类错没有"运行期才知道"的理由。
+ *
+ * 例外只有一档（债-128）：`mayBeAbsent = true` 的锚点允许命中 0。同一张申报表要服务
+ * 多张编译图（forward 图没有 drawLight "light"），命中 0 的含义从「装配错」变成
+ * 「该工作项在本图**不可调度**」（见 `OffGraphSchedule`）。🔴 它必须**逐条显式**声明，
+ * 没有全局容忍档——全局容忍 0 命中会把上面那条启动期护栏整个拆掉（state 改名 = 装配错
+ * 就再也报不出来，B1 第一刀立它的理由）。
  */
 export struct RgOffGraphAnchor {
 	/** 挂点种类：帧首段，或某个 pass 之前。 */
@@ -52,6 +58,14 @@ export struct RgOffGraphAnchor {
 	Kind kind = Kind::framePrologue;
 	RgPassKind passKind = RgPassKind::drawLight;  ///< 仅 beforePass 有意义
 	std::string passState;                        ///< 仅 beforePass 有意义（空 = 不按 state 匹配）
+	/**
+	 * 仅 beforePass 有意义：锚点允许在本编译图命中 0 个 pass（命中 0 = 该工作项在本图
+	 * 不可调度，`enter` 打上来必 Error、帧末门开着必 Error）。
+	 * 🔴 逐条显式声明，无全局档；帧首段锚点不查编译图、恒可解析，`build` **拒绝**
+	 * `framePrologue + mayBeAbsent` 这种无意义组合（静默忽略会让"以为声明了"与
+	 * "忘了声明"不可区分）。命中**多个**不受本字段豁免——歧义与缺席是两件事。
+	 */
+	bool mayBeAbsent = false;
 };
 
 /**
@@ -92,7 +106,10 @@ export class OffGraphSchedule {
 	 * 启动期建表：把申报表对着**编译图**解析成相位表（实现见 `offgraph_contract_impl.cppm`）。
 	 *
 	 * 失败即返回（调用方 fail-fast，不留到运行期）：申报重名、`beforePass` 锚点
-	 * 命中 0 个 pass（图里没有那个 pass / state 改名了）、命中多个（锚点有歧义）。
+	 * 命中 0 个 pass（图里没有那个 pass / state 改名了）、命中多个（锚点有歧义）、
+	 * `framePrologue + mayBeAbsent` 无意义组合。
+	 * 例外（债-128）：`anchor.mayBeAbsent` 的锚点命中 0 **不是**失败——该项标成不可调度
+	 * （相位 = `kUnschedulablePhase`）并打一条启动期 warn（不静默）；命中多个仍失败。
 	 * @param decls 申报的工作项列表（顺序 = `checkCoverage` 的 active 位序）
 	 * @param passes 编译图的 pass 计划（`CompiledRenderGraph::passes`）
 	 * @return 相位表；申报与图不一致时返回 RenderGraphInvalid
@@ -112,7 +129,8 @@ export class OffGraphSchedule {
 	/**
 	 * 图外工作项开录：查位置契约。
 	 * @param name 申报名
-	 * @return 空值 = 位置正确（并已记账）；未申报 / 位置不对 / 同帧重复录制 = Error（带归因）
+	 * @return 空值 = 位置正确（并已记账）；未申报 / 位置不对 / 同帧重复录制 /
+	 *         打在不可调度项上（债-128：没有锚点却录了 = 挂点错）= Error（带归因）
 	 */
 	std::expected<void, Error> enter(std::string_view name);
 
@@ -122,10 +140,20 @@ export class OffGraphSchedule {
 	 * `active` 由调用方在**帧末**求值（不是帧首——IZB / EVSSM 是首帧 `drawFrame` 内懒构造，
 	 * 帧首求值会把它们误判成"不该发生"），且**必须是关于门与输入的事实**，
 	 * 不能是"刚才 enter 过没有"——后者会让这条断言自证。
+	 * 不可调度项（债-128）走**同一条**判据不另造：门开着 = 每帧点名"门开着却整帧没录"
+	 * （门开着却没有锚点可录 = 静默旁路），门关 = 不响（forward 的正常旁路形态）。
 	 * @param active 与申报表同序的启用位（门关 = false）
 	 * @return 空值 = 覆盖一致；否则 Error（首条违规，消息含工作项名）
 	 */
 	std::expected<void, Error> checkCoverage(std::span<const bool> active) const;
+
+	/**
+	 * 该申报在**本编译图**里是否可调度（债-128）。
+	 * @param name 申报名
+	 * @return true = 锚点命中 1 个 pass；false = 可缺席锚点命中 0，或名字不在表
+	 *         （查询、不是事务；与 `OffGraphWorkTable::isActive` 同形态）
+	 */
+	bool isSchedulable(std::string_view name) const;
 
 	/** @return 帧首段相位 */
 	static constexpr uint32_t prologuePhase() { return kProloguePhase; }
@@ -154,12 +182,18 @@ export class OffGraphSchedule {
 	static constexpr uint32_t kProloguePhase = 1;
 	/** 相位常量：第 0 个 pass 之前。 */
 	static constexpr uint32_t kFirstPassPhase = 2;
+	/**
+	 * 相位哨兵（债-128）：可缺席锚点命中 0 = 本图**不可调度**。
+	 * 任何真实相位（≤ 帧末 = 2+2N）都到不了它 ⟹ `enter` 打上来必红；判据请问
+	 * `isSchedulable`，不要拿它做算术。
+	 */
+	static constexpr uint32_t kUnschedulablePhase = ~uint32_t{0};
 
    private:
 	/** 一条申报解析后的运行时条目。 */
 	struct Entry {
 		std::string name;
-		uint32_t phase = 0;   ///< 申报要求的相位
+		uint32_t phase = 0;   ///< 申报要求的相位（`kUnschedulablePhase` = 本图无锚点）
 		bool called = false;  ///< 本帧是否录过
 	};
 

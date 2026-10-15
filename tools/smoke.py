@@ -852,13 +852,19 @@ def main() -> int:
     # 正向 = 门开必须看到 vendor context 构造行；反向 = 门关**一行都不许有**——FSR 是
     # 图外 compute，门关不拢时截图未必变（本批它的输出尚无消费者），只看画面会漏。
     fsr = re.search(r"FsrUpscaler: context 就绪[^\n]*?render=(\d+)x(\d+) upscale=(\d+)x(\d+)", log)
-    fsrOff = re.search(r"fsr: 输入附件不齐", log)
+    # 引擎自己的「开门但接不起来」降级（computeFsrUsable，main_scene）：图形态不支持
+    # （offscreen 图无 scene_hdr/velocity/tonemap，或缺 shader16）时 warn **点名原因位**
+    # 并正常不接 = 正确行为。与 velocity/SSR 的「图形态不支持」放行同判据：必须真看到
+    # 那条 warn 才算数，不许拿"不支持"当遮羞布。（原 `fsr: 输入附件不齐` 分支是死码：
+    # 引擎无此文案，且"输入不齐"现行设计就是这条降级 warn，不是失败。）
+    fsrDegraded = re.search(r'aa="fsr" 开门但接不起来[^\n]*', log)
     if fsrRequested and not fsr:
-        if fsrOff:
-            fail(f"请求 --aa fsr 但引擎报输入附件不齐（{fsrOff.group(0)}）"
-                 " ⟹ velocity/depth/色输入三者有一个没进图，FSR 无从接起")
+        if fsrDegraded:
+            print(f"FSR    : 本图变体接不起来，引擎已 warn 点名原因位 ✓ 非错误"
+                  f"（{fsrDegraded.group(0).split('] ')[-1].strip()}）")
         else:
-            fail("请求 --aa fsr 但日志里没有「FsrUpscaler: context 就绪」行"
+            fail("请求 --aa fsr 但日志里没有「FsrUpscaler: context 就绪」行，"
+                 "也没有「aa=\"fsr\" 开门但接不起来」降级告警"
                  " ⟹ 装饰/门链路静默没落图（配置键名漂了 / 生效判据被改 / 构造日志文案改了）")
     if not fsrRequested and fsr:
         fail(f"默认档（aa 不是 fsr）却构造了 FSR context：{fsr.group(0)}"
