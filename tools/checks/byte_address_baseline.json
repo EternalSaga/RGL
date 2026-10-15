@@ -1,0 +1,33 @@
+{
+  "_comment": "R7 基线：rgl/shaders/** 里 ByteAddressBuffer / RWByteAddressBuffer 的**存量声明**（键 = `相对路径::变量名`，值 = 该键出现次数）。新增键 = ERROR（改名规避也是新键）；键消失 = ERROR（要求下调，不许让陈旧条目静默漂着）。正确出路 = 契约 struct 住可 import 的 .slang + schema 登记 + 两侧吃反射生成物，样板 = rgl/shaders/cull_tables.slang。下调命令 = `python3 tools/check_shader_deps.py --update-byte-address-baseline`。真相源另见 docs/constantbuffer_迁移计划.md §5.2 与本脚本 docstring R7 节。",
+  "total": 27,
+  "decls": {
+    "rgl/shaders/izb_create.comp.slang::head": 1,
+    "rgl/shaders/izb_create.comp.slang::nodes": 1,
+    "rgl/shaders/izb_mask.frag.slang::head": 1,
+    "rgl/shaders/izb_mask.frag.slang::mask": 1,
+    "rgl/shaders/izb_mask.frag.slang::nodes": 1,
+    "rgl/shaders/izb_prime.comp.slang::head": 1,
+    "rgl/shaders/izb_prime.comp.slang::nodes": 1,
+    "rgl/shaders/izb_prime.comp.slang::primed": 1,
+    "rgl/shaders/light.frag.slang::izbMask": 1,
+    "rgl/shaders/meshlet.mesh.slang::buf": 1,
+    "rgl/shaders/meshlet.mesh.slang::clusterVisible": 1,
+    "rgl/shaders/meshlet.mesh.slang::meshletClusters": 1,
+    "rgl/shaders/meshlet.mesh.slang::meshletRemap": 1,
+    "rgl/shaders/meshlet.mesh.slang::meshletTris": 1,
+    "rgl/shaders/meshlet.mesh.slang::meshletVertexPool": 1,
+    "rgl/shaders/meshlet_cull.comp.slang::clusterVisible": 1,
+    "rgl/shaders/meshlet_cull.comp.slang::clusters": 1,
+    "rgl/shaders/meshlet_cull.comp.slang::cullItems": 1,
+    "rgl/shaders/model.slang::modelVertexBuffer": 1,
+    "rgl/shaders/shadow_meshlet.mesh.slang::buf": 1,
+    "rgl/shaders/shadow_meshlet.mesh.slang::meshletClusters": 1,
+    "rgl/shaders/shadow_meshlet.mesh.slang::meshletRemap": 1,
+    "rgl/shaders/shadow_meshlet.mesh.slang::meshletTris": 1,
+    "rgl/shaders/shadow_meshlet.mesh.slang::meshletVertexPool": 1,
+    "rgl/shaders/shadow_meshlet.task.slang::mdiShadowArgs": 1,
+    "rgl/shaders/types.slang::indexBuffer": 1,
+    "rgl/shaders/types.slang::vertexBuffer": 1
+  }
+}

@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from config import (ALLOWED_CPP, AGENTS_DOC_INDEX_SECTION, AGENTS_FILE,
-                    AGENTS_INDEX_EXEMPT_DIRS, AGENTS_INDEX_STATUS_WORDS,
+                    AGENTS_INDEX_STATUS_WORDS,
                     DOC_POINTER_BARE_EXTS, DOC_POINTER_BASELINE_COMMENT,
                     DOC_POINTER_BASELINE_FILE, DOC_POINTER_EXAMPLE_FILES,
                     DOC_POINTER_IMGQA_CLI_TABLE, DOC_POINTER_JUSTFILE,
@@ -276,39 +276,32 @@ _AGENTS_DOC_PATH_RX = re.compile(r"docs/[0-9A-Za-z_\u4e00-\u9fff./\-]*\.md")
 
 
 def agents_doc_index_checks() -> list[Warning]:
-    """AGENTS.md「其他文档」与 docs/ **双向**对账——同一份清单在两处维护 = 双源漂移。
+    """AGENTS.md 写出的文档指针须**指向存在的路径**（单向反查）。
 
-    **正查**（漏索引）：docs/ 下每个 .md（除 AGENTS_INDEX_EXEMPT_DIRS）的文件名须出现在
-    AGENTS.md。漏索引的代价不是"少一行"而是**新会话永远找不到它**：AGENTS 是 agent 唯一
-    的开机路由表，没被索引的文档等于不存在（实测：执行中的 docs/taa_plan.md 全仓 0 处
-    AGENTS 引用，而 AGENTS 把"下一步"指向了 phase12_plan）。
-    按**文件名**匹配而非整路径：AGENTS 既写 `docs/x.md` 也写裸 `x.md`（§引用形如
-    `技术概念.md §RPC` 不该被要求带目录前缀）；docs/ 非豁免文件基名唯一（实测），不致误配。
+    🔴 **正查（「docs/ 下每篇都须出现在 AGENTS」）已于 2026-10-16 退役**，用户拍板：
+    「AGENTS.md 不需要索引，索引在我脑子里。」正查的前提是 *AGENTS 是唯一开机路由表*，
+    而这个前提被它的 owner 当面否证 ⟹ 继续跑它只会产出每次构建 24 条与真实工作无关的警告，
+    而**脆护栏的实际效果是把人训练成忽略警告**（债-118 的同一取向：先有阳性锚点再谈入册，
+    前提没了就直接撤）。撤的是判据，不是记忆——想查有哪些文档，`ls docs/` 就是真相源。
 
-    **反查**（悬空指针）：AGENTS 里写出的 `docs/**.md` 磁盘上须存在——文档撒谎比缺文档更贵，
-    error 级。通配写法（`docs/archive/*_已删除.md`）不作单文件判定。
+    **保留的半边**（反查，error）：`AGENTS.md` 里写出的 `docs/**.md` 磁盘上须存在——
+    文档撒谎比缺文档更贵，这一条与"谁持有索引"无关，故不受正查退役影响。
+    通配写法（`docs/archive/*_已删除.md`）不作单文件判定。
 
-    AGENTS.md 读不到 → error 级**出声**而不是静默通过（"零警告"会被读成"索引干净"，
+    AGENTS.md 读不到 → error 级**出声**而不是静默通过（"零警告"会被读成"指针干净"，
     同 rules_layers.py 失效也报 error 的取向）。
     """
     agents = read_text(Path(ROOT) / AGENTS_FILE)
     if agents is None:
         return [Warning(AGENTS_FILE, 1,
-            f"读不到 {AGENTS_FILE}——文档索引对账**无法执行**（这不是「索引干净」）", "error")]
+            f"读不到 {AGENTS_FILE}——文档指针对账**无法执行**（这不是「指针干净」）", "error")]
     warnings: list[Warning] = []
-    for rel in docs_markdown_files():
-        if any(rel.startswith(d) for d in AGENTS_INDEX_EXEMPT_DIRS):
-            continue
-        if rel.rsplit("/", 1)[-1] not in agents:
-            warnings.append(Warning(rel, 1,
-                "未入 AGENTS.md「其他文档」索引——新会话按 AGENTS 路由找不到本文档；"
-                "已结题就搬进 docs/archive/ 并同步其 README"))
     for path in sorted(set(_AGENTS_DOC_PATH_RX.findall(agents))):
         if "*" in path or "~" in path:
             continue
         if not (Path(ROOT) / path).exists():
             warnings.append(Warning(AGENTS_FILE, 1,
-                f"索引里的 {path} 磁盘上不存在——悬空指针（先补目的地再修指针，"
+                f"AGENTS 本节写出的 {path} 磁盘上不存在——悬空指针（先补目的地再修指针，"
                 "见 skill rgl-doc-placement）", "error"))
     return warnings
 

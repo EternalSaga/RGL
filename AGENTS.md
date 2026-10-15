@@ -3,12 +3,31 @@
 Vulkan 现代特性学习项目。Mesh shader 渲染管线，使用 ShaderObject + DescriptorHeap + DynamicState。
 核心代码位于 rgl 目录下。（旧 OpenGL 项目 legacy/ 已删，历史见 git history @ < 2026-09-08。）
 
-## 给大模型
+## 项目哲学（切分形态的裁决依据）
 
-优先使用中文回复用户，除非用户说使用英文回复。
-随时思考是否可以拆分子任务给子 agent 执行。**主 agent 必须校验子 agent 结果**（实测踩过：子 agent
-把 sizeof 生成物 4B 报成 100B）；**困难任务主 agent 亲自执行**。只读调研（代码/文档定位）可委派
-`researcher` 子 agent，涉及产物布局/大小须自己复核生成物本体。
+四条，冲突时按序号让位。**「文档只记录不阻止」对这一段本身同样成立**：每条都点名了为它红过的
+机器；写不出机器判据的「必须」当场开债，不许只留注释。本项目反复实测的真正对手不是"缺规则"，
+是**看起来已完工的半吊子**——`Load<T>` 像类型化、躺在仓库里的反射产物像单一来源、注释里的
+"必须同步"像护栏。
+
+1. **单一来源不承重，「访问路径必须消费那个来源」才承重。** 反射算得出偏移、`static_assert` 也在，
+   只要访问路径吃的是抄下来的 `108u`，那份反射产物就只是**一份写得很好的副本**。
+2. **人不算偏移。** C++ ↔ shader 之间的布局事实只准由反射生成物承载：契约 struct 住**可 import**
+   的 `.slang`（声明在入口单元的类型对 R4 探针**结构性不可达**）→ schema 登记 → 两侧吃生成物。
+   样板 = `rgl/shaders/cull_tables.slang`；闸门 = `check_shader_deps.py` 的 R5/R6/R7（R7：**新增
+   `ByteAddressBuffer` 声明即 ERROR**，RT 线开工前它就在那儿）。
+   ⚠ 已知漏洞：调用点用**位置聚合初始化**时生成物重新失去保护（债-118，**无机器判据**）——
+   跨侧布局的 struct 一律指定初始化（一个约定同时堵改名与换序两个洞）。
+3. **申报 ≠ 发射权**（plan-only 红线）：申报面只拿"计划 + 校验"，barrier 与真实布局仍由模块给。
+   否则 `layoutDrift` 那类对账**变成恒真**——这是本项目唯一一类"加了东西反而让判据失效"的形态。
+4. **让错的东西编不过 > 让错的东西被看见。** 穷尽 switch 不写 `default`（`-Wcovered-switch-default`
+   已第一方启用）、布局断言由生成物自带（`sizeof` / 逐字段 `offsetof`，期望值**不抄生成物**）；
+   注释与 code review 是最后手段，不是防线。
+
+## 给大模型
+- 随时思考是否可以拆分子任务给子 agent 执行。**主 agent 必须校验子 agent 结果**。
+- 只读调研（代码/文档定位）可委派`researcher` 子 agent，主agent简要查验结果。
+- 优先分解执行任务给`worker`子agent执行。
 
 ## 项目 Skills（按需加载，命中触发词先 skill 工具读取）
 
@@ -174,54 +193,25 @@ Slang → SPV 构建时编译到 `build/rgl/generated_shaders/`。硬规则：**
 `just reflect` 并随改动提交生成产物**（`generated/*.cppm` 是已提交产物，构建开头 SHA1 护栏比对）。
 完整流程、bindless 原则、关键契约文件位置表 → skill `rgl-shader-contract`。
 
-## 隐式扩展依赖
-
-`features.cppm` 的 `kDeviceExtensions()` 9 项里，除 `VK_EXT_DEVICE_GENERATED_COMMANDS`（gpu_cull /
-vk_indirect_commands 显式使用）外**均无显式使用但被其他已启用扩展隐式依赖，不可随意删除**；
-`vkinstance.cppm` 的 `VK_EXT_SWAPCHAIN_COLOR_SPACE` 同理。**KHR/EXT 别名**：
-`VkSwapchainPresentFenceInfoKHR/EXT` 是同一结构（typedef alias），代码用 EXT。
-
 ## 其他文档
 
 > 每篇文档头部带状态（`现行`/`历史`/`调研`）——**状态只住那里**。本节写日期 / 批次号 /"已落地·
 > 挂起·冻结"= 给文档状态开第二份副本，文档一动它就静默变错（实测抓到两条已漂，方向是误导）。
-> **本节只写两件事：① 什么时候该读它（触发条件）② 读哪一节省钱**。
-> 现状权威 = 本文件；**下一步 = 下方「计划」首条**（路由只挂号一次，别处写第二份文件名已漂过）。
-> 本节与 `docs/` 由 source_checks **双向对账**（docs 漏索引 / 本节悬空指针即警告，规则
-> `agents_doc_index_checks`）——新建 docs 不在此挂号会被构建点名。
+> 本节**不是文档索引**（用户拍板：索引在人脑里，`ls docs/` 是真相源）——这里只挂**每次开工都可能
+> 需要路由**的几篇。护栏因此只做单向反查：本节写出的 `docs/**.md` 磁盘上须存在，悬空即 error
+> （规则 `agents_doc_index_checks`，§1.6；原"每篇都得挂号"的正查已随此决定退役）。
 >
 > **教训写哪（2026-10-08 换轨：全局调试历史已删除，不再重建）**：能落成测试 / 护栏的**必须**落成
 > （`TEST:` / `GUARD:`）；写不出断言的教训**就近写当前任务文档**，且**可改写**——被实测推翻的旧教训
 > **直接删**，只留正确做法，发现矛盾以新发现为准就地改（错误版本靠 git 沉淀，不留"旧结论 + 更正"双层
 > 误导后来者）。引用已删文档的旧条目写 `git:调试历史 <日期>`。写法与裁决树 → skill `rgl-doc-placement`；
 > 护栏 = `doc_pointer_checks`（悬空文档指针 / 退役文档名复发，规则 §1.7）。
-
 - **台账 / 现状**：`docs/还债总账.md`（**全项目技术债唯一台账**；结案账目只留一行终态 + 指针）·
   `docs/还债实测数据.md`（结案账目的实测数据 + 主 agent 亲验记录）· `docs/cpu_perf_plan.md`
   （CPU/GPU 读数与还账方案；`just cpu` 口径 + 基线表）· `docs/技术概念.md`（机制深版：
   §核心运行时模块表 = **唯一模块职责表** / §main 启动流 / §RPC 调试通道 / §构建检查工具机制 /
   §构建 Windows 前置）· `docs/gate_lint_plan.md`（**加诊断门前看**）
-- **计划**（首条 = 下一步做什么）：`docs/phase15_plan.md`（屏幕空间反射 + 湿面输入面；§1.3 =
-  Filament SSR 的可抄/不可抄面，**别再重读一遍 filament**）· `docs/phase14_plan.md`（时域线换轨 =
-  逐像素速度场 + vendor FSR 的 VK 后端；§1 = 本机核实的 FSR 事实基线，**别再重查一遍**）·
-  `docs/phase13_plan.md`（TAA 收口）· `docs/taa_history_space_plan.md`（TAA 历史住基空间）·
-  `docs/taa_plan.md`（TAA 机制与踩坑账）· `docs/evssm_plan.md`（远场软影）·
-  `docs/shadow_routes_plan.md`（**阴影路线形态唯一定案载体**；**改阴影配置键/门形前看**）·
-  `docs/constantbuffer_迁移计划.md`（scene data 类型化迁移的事实基线；**动 scene data 访问形态前看**）·
-  `docs/hfts_izb_plan.md` · `docs/shader_object_组合成本与优化预留.md`（动 mapping 源 / 条目数 / 启动基线前读）·
-  `docs/脚本长期规划.md` + `script_spike/`（脚本长期线，独立于 Phase 编号）
 - **调研 / 活文档**：`docs/mdi_plan.md`（Multi Draw Indirect **可行性定案载体**；**动 indirect 前读，
   别重推一遍**）· `docs/compute_调研.md`（图外 compute 全景 / 渲染图**真实边界** / 队列归属事实基线 /
-  **扩渲染图形态的定案载体**；**动 compute 或扩渲染图前读**，§6 D1 定案 + §5 历史裁决 + §9 负知识别再重查）· `docs/DESCRIPTOR_HEAP_SPEC.md` · `docs/FSR输入契约.md`（FSR3-upscaler 四个每帧
-  输入的**口径权威载体**；**接 FSR 前必读**，别靠读源码"认为一致"）·
-  `docs/nvidia_compatibility_report.md`（三平台驱动事实；**不写"本机"是哪台**）·
-  `docs/device_generated_commands_research.md` · `docs/vulkan_extensions_2025_调研.md`（含 zero_init
-  回退定案）· `docs/device_fault_调研.md` · `docs/风格检查规则.md`（规则全景；参数真相源 =
-  `config.py`）· `docs/快捷键配置.md`（与代码无关）
-- **历史 / 归档**：`docs/next_roadmap.md`（Phase 0–7 结论）· `docs/phase7_devlog.md` ·
-  `docs/phase8_plan.md` · `docs/phase9_plan.md` · `docs/phase10b_plan.md` · `docs/phase11_plan.md` ·
-  `docs/phase12_plan.md` · `docs/archive/`（**索引见其 README**，本文件不抄目录内容）
 - **离线参考**：本地克隆 `/home/robin/program/Vulkan-Docs`（在线检索被 Cloudflare 拦截时用）。
   ⚠ spec 比系统头/loader 新，**结构体字段以系统头为准**，spec 只作语义依据
-- **已删除的最小复现子项目**：`min_mesh_crash/`、`heap_texture_spike/`（墓碑 = `docs/archive/*_已删除.md`；
-  根因/三驱动结论在 `docs/archive/issue_history.md` / `heap_texture_research.md`，代码见 git history）

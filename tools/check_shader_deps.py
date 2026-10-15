@@ -72,6 +72,19 @@ R4  StructuredBuffer 元素 stride 对账（**R3 能窄化的前提**，同一�
     "什么都没找到"的规则与一条"扫错了目录"的规则**输出一模一样**。故 R6 先要求扫描面里
     确实有 `scene.slang`（sceneData 曾经的唯一声明地、也是这条规则唯一可能咬人的文件），
     看不见它 ⟹ ERROR「本次未做任何对账」，绝不把"零命中"当成"已退役"。
+ R7  **新增 `ByteAddressBuffer` / `RWByteAddressBuffer` 声明即回归**（2026-10-15 立，RT 线前置）。
+    R5 棘轮数的是**裸偏移字面量条数**，R6 只禁 `sceneData` 一个名字 ⟹ **今天新声明一个
+    `ByteAddressBuffer foo` 依然一声不响**，而它一旦落地，偏移就又开始被人手抄。Ray tracing 一开
+    （instance 数组 / SBT 记录 / BLAS 顶点格式全是"固定 Vulkan 侧布局 + 按字节访问"的头号温床）
+    就会在几周内攒出第二个 R5 存量，所以这条必须在开工**之前**立。
+    判据 = 基线记**存量声明**（键 = `文件::变量名`），**新增键即 ERROR**（改名规避 = 新键，也咬），
+    **基线里的键消失也 ERROR**（要求下调，不许让陈旧条目静默漂着）。没有豁免名单。
+    🔴 与 R5 同为**严格基线**：基线缺失 / 坏 JSON / 格式不符 ⟹ 声明「本次未做任何对账」并 ERROR，
+    绝不把空表读成"零违规"。自检锚 = 扫描面必须含 `izb_prime.comp.slang`（现存 BAB 声明最密的
+    文件之一），看不见 ⟹ ERROR「零命中是扫错目录的产物」。
+    正确出路（报错消息里也这么指）= 契约 struct 住**可 import** 的 .slang（入口单元里的类型
+    `check_spirv_stride.py` 的 R4 探针结构性不可达）+ schema 登记 + 两侧吃生成物；
+    完整样板 = `rgl/shaders/cull_tables.slang` → `cull_tables_types_generated.cppm`。
 
 ## 输出形态与退出码（先例 = tools/checks/main.py）
 
@@ -194,6 +207,68 @@ def scan_scene_data_retired(texts: dict[Path, str]) -> list[tuple[Path, int, str
             if RE_SCENE_DATA_DECL.search(line) or RE_SCENE_DATA_READ.search(line):
                 hits.append((path, lineno, line.strip()))
     return hits
+
+
+# ─── R7：新增 ByteAddressBuffer 声明即回归（2026-10-15，RT 线前置）─────────────
+# 为什么 R5/R6 都不够：R5 数**裸偏移字面量**，所以「先声明一个没偏移的新 BAB、下一批再往里写
+# 偏移」两步走完全合法；R6 只认 `sceneData` 一个名字。缺的是**入口本身**的闸门。
+BYTE_ADDRESS_BASELINE_FILE = ROOT / "tools" / "checks" / "byte_address_baseline.json"
+BYTE_ADDRESS_BASELINE_COMMENT = (
+    "R7 基线：rgl/shaders/** 里 ByteAddressBuffer / RWByteAddressBuffer 的**存量声明**"
+    "（键 = `相对路径::变量名`，值 = 该键出现次数）。新增键 = ERROR（改名规避也是新键）；"
+    "键消失 = ERROR（要求下调，不许让陈旧条目静默漂着）。正确出路 = 契约 struct 住可 import 的 "
+    ".slang + schema 登记 + 两侧吃反射生成物，样板 = rgl/shaders/cull_tables.slang。"
+    "下调命令 = `python3 tools/check_shader_deps.py --update-byte-address-baseline`。"
+    "真相源另见 docs/constantbuffer_迁移计划.md §5.2 与本脚本 docstring R7 节。")
+# `RWByteAddressBuffer` 必须排在前面，否则 `ByteAddressBuffer` 分支会从 RW 版本的中段咬进去，
+# 变量名就退化成捕获不到（`\b` 在 `W|B` 之间不成立，实测靠交替顺序而非边界兜住）。
+RE_BYTE_ADDRESS_DECL = re.compile(r"\b(RWByteAddressBuffer|ByteAddressBuffer)\s+([A-Za-z_]\w*)")
+# 自检锚：现存 BAB 声明最密的文件之一。扫描面里看不见它 = 扫错目录 = 「零命中」是假绿。
+BYTE_ADDRESS_SELF_CHECK_FILE = "izb_prime.comp.slang"
+
+
+def scan_byte_address_decls(texts: dict[Path, str]) -> dict[str, list[tuple[Path, int, str]]]:
+    """R7 扫描（输入 = 已剥注释的 {文件: 文本}）→ {`文件::变量名`: [(文件, 行号, 行文本)]}。
+
+    键含**文件**是刻意的：只按变量名建键会放行「在一个全新文件里再声明一个同名 BAB」——
+    那正是本刀要拦的形态（RT 的 instance 数组就会落在新文件里）。
+    """
+    out: dict[str, list[tuple[Path, int, str]]] = {}
+    for path, text in texts.items():
+        for lineno, line in enumerate(text.splitlines(), 1):
+            for match in RE_BYTE_ADDRESS_DECL.finditer(line):
+                key = f"{rel(path)}::{match.group(2)}"
+                out.setdefault(key, []).append((path, lineno, line.strip()))
+    return out
+
+
+def load_byte_address_baseline(path: Path) -> tuple[dict[str, int], str | None]:
+    """读 R7 基线 → ({`文件::变量名`: 次数}, 不可用原因)。
+
+    🔴 与 R5 同理（也与 `tool_baseline.load_baseline` 的宽松形态故意不同）：空表会被下游读成
+    「零存量声明」= 假绿，故缺失 / 坏 JSON / 格式不符一律返回原因串，调用处必须 ERROR 出声。
+    """
+    if not path.is_file():
+        return {}, f"基线文件不存在: {rel(path)}"
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {}, f"基线文件读不出: {rel(path)}（{exc}）"
+    decls = raw.get("decls") if isinstance(raw, dict) else None
+    if not isinstance(decls, dict) or not decls:
+        return {}, f"基线格式不符或为空: {rel(path)}（应为 {{\"decls\": {{\"文件::名\": 条数}}}}）"
+    if not all(isinstance(k, str) and isinstance(v, int) for k, v in decls.items()):
+        return {}, f"基线条目类型不符: {rel(path)}（键须字符串、值须整数）"
+    return decls, None
+
+
+def write_byte_address_baseline(path: Path, decls: dict[str, list]) -> None:
+    """写 R7 基线（收账方向只有一个：**降**）。"""
+    path.write_text(json.dumps({
+        "_comment": BYTE_ADDRESS_BASELINE_COMMENT,
+        "total": sum(len(v) for v in decls.values()),
+        "decls": {k: len(v) for k, v in sorted(decls.items())},
+    }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def contract_types(generated_dir: Path) -> set[str]:
@@ -547,6 +622,9 @@ def main() -> int:
     ap.add_argument("--update-byte-offset-baseline", action="store_true",
                     help="用当前 R5 裸字节偏移条数重写 byte_offset_baseline.json"
                          "（迁移掉一批偏移后收账用；基线只准降，上升的处置是迁移不是改这里）")
+    ap.add_argument("--update-byte-address-baseline", action="store_true",
+                    help="用当前 R7 ByteAddressBuffer 存量声明重写 byte_address_baseline.json"
+                         "（迁走一个 BAB 后收账用；只准降——新增键是 ERROR，不是靠改基线放行）")
     args = ap.parse_args()
 
     errors: list[tuple[str, str]] = []
@@ -688,6 +766,50 @@ def main() -> int:
     else:
         sd_hits = -1
 
+    # ── R7：新增 ByteAddressBuffer 声明即回归（2026-10-15，RT 线前置）────────────
+    # 自检先于判据（同 R5/R6）：扫描面里必须看得见一个现存 BAB 声明密集的文件，否则「零新增」
+    # 只是扫错目录的产物。基线不可用 ⟹ 声明本次未对账，绝不把空表读成「零存量」。
+    ba_scanned = {p.name for p in shader_texts}
+    ba_decls = scan_byte_address_decls(shader_texts)
+    if BYTE_ADDRESS_SELF_CHECK_FILE not in ba_scanned:
+        ba_ok = False
+        err(f"{rel(SHADERS_DIR)}",
+            f"R7 本次**未做任何对账**：扫描面（现 {len(shader_texts)} 个 .slang）里没有 "
+            f"{BYTE_ADDRESS_SELF_CHECK_FILE}——现存 ByteAddressBuffer 声明不在射程内，"
+            f"「零新增」是扫错目录的产物，不是干净；请勿把「零警告」读成「没有新 BAB」")
+        ba_cur, ba_allowed = -1, -1
+    else:
+        ba_ok = True
+        # 收账先于对账（同 R5 的顺序）：先按当前磁盘状态重写基线，再用新基线比 —— 否则「收账」
+        # 那一趟会先吃一遍自己刚修掉的陈旧 ERROR，读数自相矛盾。
+        if args.update_byte_address_baseline:
+            write_byte_address_baseline(BYTE_ADDRESS_BASELINE_FILE, ba_decls)
+            print(f"[shader-dep-check] R7 基线已重写: {len(ba_decls)} 个声明 → "
+                  f"{rel(BYTE_ADDRESS_BASELINE_FILE)}")
+        ba_baseline, ba_bad = load_byte_address_baseline(BYTE_ADDRESS_BASELINE_FILE)
+        if ba_bad:
+            err(rel(BYTE_ADDRESS_BASELINE_FILE),
+                f"R7 基线不可用（{ba_bad}）——本次**未做任何对账**，磁盘上现 {len(ba_decls)} 个 "
+                f"ByteAddressBuffer 声明**一个都没被检查**；请勿把「零警告」读成「干净」。"
+                f"基线是已提交产物：恢复它，而不是删掉规则")
+            ba_cur, ba_allowed = len(ba_decls), -1
+        else:
+            ba_cur, ba_allowed = len(ba_decls), len(ba_baseline)
+            for key in sorted(set(ba_decls) - set(ba_baseline)):
+                path, lineno, line = ba_decls[key][0]
+                err(f"{rel(path)}:{lineno}",
+                    f"R7 新增 ByteAddressBuffer 声明 `{key.split('::')[1]}`（不在基线，"
+                    f"改名规避也是新键）——它一旦落地，字节偏移就又开始被人手抄，正是本仓刚花 "
+                    f"49→39 一条刀清掉的形态。正确出路 = 契约 struct 住**可 import** 的 .slang"
+                    f"（入口单元里的类型 check_spirv_stride.py 的 R4 探针结构性不可达）"
+                    f"+ schema 登记 + 两侧吃反射生成物；完整样板 = "
+                    f"rgl/shaders/cull_tables.slang → cull_tables_types_generated.cppm。"
+                    f"命中 = `{line}`")
+            for key in sorted(set(ba_baseline) - set(ba_decls)):
+                err(rel(BYTE_ADDRESS_BASELINE_FILE),
+                    f"R7 基线陈旧：`{key}` 已不在磁盘上（存量只准降）——迁移做完就收账："
+                    f"`python3 tools/check_shader_deps.py --update-byte-address-baseline`")
+
     for loc, msg in errors:
         print(f"\033[1;31m[shader-dep-check-ERROR] {loc}: {msg}\033[0m")
     for loc, msg in warnings:
@@ -700,7 +822,9 @@ def main() -> int:
           f"R5 裸字节偏移 "
           f"{'**无读数 = 本次未做任何对账**' if bo_allowed < 0 else f'当前 {bo_cur} 条 / 基线 {bo_allowed} 条（{len(bo_counts)} 个 .slang 参与）'}、"
           f"R6 sceneData 全区读 "
-          f"{'**本次未做任何对账**' if sd_hits < 0 else f'{sd_hits} 处命中（必须 0）'}）")
+          f"{'**本次未做任何对账**' if sd_hits < 0 else f'{sd_hits} 处命中（必须 0）'}、"
+          f"R7 ByteAddressBuffer 声明 "
+          f"{'**本次未做任何对账**' if ba_allowed < 0 else f'当前 {ba_cur} 个 / 基线 {ba_allowed} 个（新增即 ERROR）'}）")
 
     if args.emit_manifest and manifest_rows:
         out = Path(args.emit_manifest)

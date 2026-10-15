@@ -215,11 +215,10 @@ VULKAN_HPP_INCLUDE_FILES = {"rgl/rlvk.cppm"}
 # docs/** 状态头：文件前 N 行内须出现状态行（`> **状态**` / 行首 `状态：` 等）
 DOCS_STATUS_MAX_LINES = 10
 
-# AGENTS.md 文档索引双向对账（rules_text.agents_doc_index_checks，§1.6）：
-# 索引豁免目录——archive/ 的索引由 docs/archive/README.md 承载（AGENTS 只指到目录），
-# 参考资料/ 是文献目录（其 README 自带清单，且不是"开工要路由的文档"）。
+# AGENTS.md 文档指针反查（rules_text.agents_doc_index_checks，§1.6）：
+# ⚠ 原 `AGENTS_INDEX_EXEMPT_DIRS`（正查的索引豁免目录）已随正查一起退役（2026-10-16，
+# 用户拍板「AGENTS.md 不需要索引」）——别把它改回来，它服务的那半边判据不存在了。
 AGENTS_FILE = "AGENTS.md"
-AGENTS_INDEX_EXEMPT_DIRS = ("docs/archive/", "docs/参考资料/")
 
 # AGENTS「其他文档」条目禁状态摘要（rules_text.agents_index_status_checks，§1.9）：
 # 本节第一句就写「每篇文档头部带状态」，条目里再写一遍 = 给同一个状态开第二份副本 ⟹ 文档一推进
