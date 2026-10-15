@@ -464,8 +464,8 @@ stage/access，只能拿 `AllCommands/MemoryWrite` 兜底（IZB 4 条）；EVSSM
 | L3 外部工具拦截 | — | — | — | **不做** |
 
 **L2 的数据源现在不存在**（三处实测，别再找第二遍）：`rgl/generated/*_types_generated.cppm`
-只有**类型布局**；`PipelineBindings`（`shader.cppm:398`）的 binding→槽是 C++ **手拼**、无方向字段；
-`spvDeclaredBindings`（`shader.cppm:234`）只采"带 Binding 装饰的 OpVariable 的号"。
+只有**类型布局**；`PipelineBindings`（`rgl/shader.cppm`）的 binding→槽是 C++ **手拼**、无方向字段；
+`spvDeclaredBindings`（同文件）只采"带 Binding 装饰的 OpVariable 的号"。
 可行路径 = 扩既有 SPV 骨架（`spvSplit` + decoration 采集）去采 storage class 与
 `NonWritable`/`Coherent`，或扫该变量上的 `OpStore`/`OpAtomicStore`。**读写方向从码流里读出来
 而不是人抄** ⟹ 它既是 L2 的判据源，也顺带是 B2 依赖图的第一块数据源（同一份事实，别做两遍）。
@@ -608,7 +608,7 @@ L2（读写方向从着色器码流读）仍没做，"忘写一条边"仍然没�
 > `drainReadback` 会打 `izb: cell N 链长触顶（坏链/环！）`，**HEAD 上同样有**，且条数在同构建
 > 连跑之间会漂（实测 4 ↔ 5），而**截图逐位相同**。三条读数放一起 = 交付画面不受影响，
 > 触顶的是 CPU 侧沿 `nodes` 链表走的那段诊断，链表**节点分配顺序本身是原子的、跨运行不确定**。
-> 要不要处理属 IZB 自己的账（它默认关，缺陷登记在 `shadow_routes_plan.md` §7），不记在债-75。
+> 要不要处理属 IZB 自己的账（它默认关；本段就是这条观察的唯一承载，未单独挂号），不记在债-75。
 
 **判据实测**（本机 AMD Radeon 8060S / RADV STRIX_HALO）：
 
@@ -967,7 +967,7 @@ shader 里没有）——按 §7.12 判据那才是真第二来源。
 
 #### B2-1″ 定案形态（用户拍板：**暂时不值得为 shader 做全面运行时反射**）
 
-`rgl/shader.cppm:61` 的 `makeMappedCompute` **已经是那个容器**（9 个调用点覆盖 7/9 枚），错的只是
+`rgl/shader.cppm` 的 `makeMappedCompute` **已经是那个容器**（9 个调用点覆盖 7/9 枚），错的只是
 键的类型：
 
 ```cpp
@@ -1246,8 +1246,10 @@ extentScale、history 的「不是 offscreen 就拒」）——第五档落进�
 | 刀 | 状态 |
 |---|---|
 | **B2-3 前置** 加 kind 的穷尽性护栏（本刀） | ✅ 本刀 |
-| **B2-3 本体** buffer 档 + storage usage + 按名注册 + 拒绝面 | 🔴 **并进 B2-4 首发消费者那一刀**（形状由 meshlet_cull 定，不猜） |
-| **B2-4** 迁入首发 | ⏳ 二选一，见 §6 D2 ①/②：EVSSM 矩图（image，先扩 RT 缓存多描述符）或 meshlet_cull（buffer 档首发） |
+| **B2-3 本体** buffer 档 + storage usage + 按名注册 + 拒绝面 | 🔴 **并进 B2-4② meshlet_cull 那一刀**（buffer 档形状由它定，不猜） |
+| **B2-4①** EVSSM 矩图迁入 RT 缓存托管 | ✅ `f7d455d`（RT 缓存长出多描述符附件能力 + 迁入；「不升成图附件」与「装配期发号 / 首帧建图两段式」两条设计定案见该 commit 说明） |
+| **B2-4②** meshlet_cull 迁入（buffer 档首发） | ⏳ 未动，与 B2-3 本体同一刀 |
+| **B2-4③** IZB 迁入（最后，保 A 档 `layoutDrift`） | ⏳ 未动 |
 
 ---
 

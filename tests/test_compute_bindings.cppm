@@ -42,7 +42,7 @@ module;
 //   ⑤ **调用点名字打错一个字母**（`"head"` → `"headX"`）→ 本文件不红（本文件测表，不测
 //      调用点字面量），**启动即抛**并点名 shader + 错名 + 合法名清单。写在这里是为了说明
 //      这条的落点在运行期，不在本文件；它的单元等价形态 = 下面「三类报错各自可归因」的 ②。
-//   ⑥ **方向编码坏掉**（B2-3 加的 writable/readable：`accessToFlags` 把 `none` 也编成
+//   ⑥ **方向编码坏掉**（B2-2 加的 writable/readable：`accessToFlags` 把 `none` 也编成
 //      readable，或把 `readWrite` 编成只读）→ 「七个调用点」里逐条的 writable/readable 断言
 //      **必须红**（期望值出处 = 同一行的声明类型，不是生成物）；`none` 那条另由
 //      「none 编码锚点」独立守——两个方向不对称的失效面不该共用一条断言。
@@ -103,7 +103,7 @@ TEST_CASE("阳性锚点：izb_create 的 head/nodes/depthTex（期望值 = shade
 	// 出处 = 同文件 :34 `[[vk::push_constant]] IzbCreatePush push;`
 	CHECK_FALSE(resolveComputeBinding("izb_create.comp.slang", "push").has_value());
 
-	// 🔴 方向（B2-3 加的第二个问题）：同一批源码行读声明类型 —— RW* = 会写，Texture2D = 只读。
+	// 🔴 方向（B2-2 加的第二个问题）：同一批源码行读声明类型 —— RW* = 会写，Texture2D = 只读。
 	// hazard 判据（compute_access_log）吃的就是这两个 bool，方向错 = 漏报或误报 hazard。
 	const auto rows = computeBindings("izb_create.comp.slang");
 	auto find = [&](std::string_view name) {

@@ -5,10 +5,10 @@ module shader:impl;
 import shader;  // clang 不给 partition impl unit 隐式 import 主接口——必须显式
 import rlstd;
 import compute_bindings_generated;  // B2-1″：compute binding 名 → 号 接口表（构建期反射产物，rlbase）
-import compute_access_log;  // B2-3：RgComputeBindingDecl / ComputeAccessLog（rlbase，纯值）
-import offgraph_sync;      // B2-3：checkComputeHazard / syncEdgeDesc（同层 rlgfx；工厂是唯一
+import compute_access_log;  // B2-2：RgComputeBindingDecl / ComputeAccessLog（rlbase，纯值）
+import offgraph_sync;      // B2-2：checkComputeHazard / syncEdgeDesc（同层 rlgfx；工厂是唯一
                              // 同时知道 (shader, param → 槽) 全事实的地方，所以挂点在这）
-import rllogger;           // B2-3：hazard 类首次确认覆盖时的一行 info
+import rllogger;           // B2-2：hazard 类首次确认覆盖时的一行 info
 
 namespace RGL {
 

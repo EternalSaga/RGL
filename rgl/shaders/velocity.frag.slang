@@ -16,7 +16,8 @@
 // ── 为什么落点是全屏 pass 而不是 compute pass ──
 // tonemap / ao / taa 三个 pass 全是「全屏 draw 读纹理 → 写 RGBA16F offscreen RT」这个形状
 // （`pass_vocabulary` 的 `fullscreenPass` 档 + `light.mesh` 全屏大三角）。走它就不需要给
-// `RgPassKind` 新增 compute kind、不依赖批 14.4b 的图外布局护栏、也不碰闲置的 computeQueue。
+// `RgPassKind` 新增 compute kind、不依赖批 14.4b 的图外布局护栏、也不引入对第二条队列的依赖
+// （引擎只持一条队列 = D3 定案，→ `docs/compute_调研.md` §3.1）。
 // 勘察全文 → `docs/phase14_plan.md` §1.10。
 //
 // ── 消费的 scene data 槽位**全部既有**，本 shader 不新增任何契约字段 ──

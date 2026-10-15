@@ -7,7 +7,7 @@ import offgraph_sync;  // clang 不给 partition impl unit 隐式 import 主接�
 import rlstd;
 import rlvk;
 import vkerror;
-import compute_access_log;  // B2-3：RgComputeHazardClass（hazard 对账的入参；import 不传递）
+import compute_access_log;  // B2-2：RgComputeHazardClass（hazard 对账的入参；import 不传递）
 
 namespace RGL {
 

@@ -176,10 +176,10 @@ rgl_reflect_compute_access(compute_access.json compute_bindings_generated
     shaders/mip_gen.comp.slang
     shaders/stream_fanout.comp.slang)
 
-# 🔴 上面 6 条 rgl_reflect_slang 的护栏输入**至今只列直接文件、不含 import 闭包**——同一个
+# 🔴 上面列出的全部 rgl_reflect_slang 管线的护栏输入**至今只列直接文件、不含 import 闭包**——同一个
 # 洞（改了被 import 的 `*.slang` 不触发 SHA1 守卫 = 静默使用过期生成码），只是它落在布局
-# 契约上、比方向表更贵。本条管线用 glob 把这个洞堵上了，那 6 条**本批不修**：改它们的输入
-# 集要重跑并复核全部 6 份已提交 .cppm，是独立的一刀。账 → docs/compute_调研.md §7.10。
+# 契约上、比方向表更贵。本条管线用 glob 把这个洞堵上了，那些管线**本批不修**：改它们的输入
+# 集要重跑并复核全部已提交的 .cppm，是独立的一刀。账 → docs/compute_调研.md §7.11 末。
 
 # compute push constant 的 C++ struct（无 schema，理由见函数头注释）。八枚按名字典序列出。
 # 🔴 **不含 meshlet_cull.comp.slang**：它的 push（`cullPush` → MeshletCullPush）已由上面

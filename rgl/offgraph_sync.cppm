@@ -3,7 +3,7 @@ export module offgraph_sync;
 import rlstd;
 import rlvk;
 import vkerror;
-import compute_access_log;  // B2-3：RgComputeHazardClass（rlbase 派生的 hazard，本层只做对账）
+import compute_access_log;  // B2-2：RgComputeHazardClass（rlbase 派生的 hazard，本层只做对账）
 
 namespace RGL {
 
@@ -28,7 +28,7 @@ namespace RGL {
  *
  * ## 🔴 本层**不**做什么
  *
- * - **只抓 compute ↔ compute 那部分的「忘写一条边」**（B2-3 起，见下方 hazard 表）。
+ * - **只抓 compute ↔ compute 那部分的「忘写一条边」**（B2-2 起，见下方 hazard 表）。
  *   declare-by-emit 本身只保证**已发的**一致，没发的它看不见；补上那一格的是**访问对推导**
  *   （读写方向从 SPV 码流里反射出来，不是人抄）：`compute_access_log` 把「反射方向 ×
  *   `makeMappedCompute` 的堆槽绑定」相交成 hazard，本模块的 hazard 表拿它对账，未覆盖即

@@ -72,7 +72,7 @@ a9533637f0711159ea5fb8d44af3be28862135a8  rgl/shaders/skybox.mesh.slang
 24743f1859900c86b7453f93a27aa80de2513d58  rgl/shaders/taa.frag.slang
 3bddb1da2dc074b275a47dc1df4abdaab6beafbe  rgl/shaders/tonemap.frag.slang
 fef42a9140ddaf3d94c17a35f786de989536d5a2  rgl/shaders/types.slang
-59b20ac6a50c3fc25331fc86ab3ce9918b46d5ba  rgl/shaders/velocity.frag.slang
+cfcbcb48b3523c97460f0917c215831192b60ba8  rgl/shaders/velocity.frag.slang
 f9ddf8af6a22f93a526bc40d43f21c7238cf24eb  rgl/shaders/cull.comp.slang
 eaba0a5499a2469c14e9fec46a359222c497cbe2  rgl/shaders/env_prefilter.comp.slang
 b823e0c7dcda2ab805da35003bb22db9bc27705a  rgl/shaders/evssm_downsample.comp.slang
@@ -125,7 +125,7 @@ a9533637f0711159ea5fb8d44af3be28862135a8  rgl/shaders/skybox.mesh.slang
 24743f1859900c86b7453f93a27aa80de2513d58  rgl/shaders/taa.frag.slang
 3bddb1da2dc074b275a47dc1df4abdaab6beafbe  rgl/shaders/tonemap.frag.slang
 fef42a9140ddaf3d94c17a35f786de989536d5a2  rgl/shaders/types.slang
-59b20ac6a50c3fc25331fc86ab3ce9918b46d5ba  rgl/shaders/velocity.frag.slang
+cfcbcb48b3523c97460f0917c215831192b60ba8  rgl/shaders/velocity.frag.slang
 f9ddf8af6a22f93a526bc40d43f21c7238cf24eb  rgl/shaders/cull.comp.slang
 eaba0a5499a2469c14e9fec46a359222c497cbe2  rgl/shaders/env_prefilter.comp.slang
 b823e0c7dcda2ab805da35003bb22db9bc27705a  rgl/shaders/evssm_downsample.comp.slang
@@ -178,7 +178,7 @@ a9533637f0711159ea5fb8d44af3be28862135a8  rgl/shaders/skybox.mesh.slang
 24743f1859900c86b7453f93a27aa80de2513d58  rgl/shaders/taa.frag.slang
 3bddb1da2dc074b275a47dc1df4abdaab6beafbe  rgl/shaders/tonemap.frag.slang
 fef42a9140ddaf3d94c17a35f786de989536d5a2  rgl/shaders/types.slang
-59b20ac6a50c3fc25331fc86ab3ce9918b46d5ba  rgl/shaders/velocity.frag.slang
+cfcbcb48b3523c97460f0917c215831192b60ba8  rgl/shaders/velocity.frag.slang
 de01fc38b71e62544fec716ee7415fea21775a58  rgl/features_config.json
 466d23d4488547c694a978f192043fda391ae176  tools/templates/features_cppm.inja
 56b0abc4169eeddac39f5aa8981642a583de52af  rgl/param_semantics.json

@@ -216,7 +216,7 @@ VULKAN_HPP_INCLUDE_FILES = {"rgl/rlvk.cppm"}
 DOCS_STATUS_MAX_LINES = 10
 
 # AGENTS.md 文档指针反查（rules_text.agents_doc_index_checks，§1.6）：
-# ⚠ 原 `AGENTS_INDEX_EXEMPT_DIRS`（正查的索引豁免目录）已随正查一起退役（2026-10-16，
+# ⚠ 原 `AGENTS_INDEX_EXEMPT_DIRS`（正查的索引豁免目录）已随正查一起退役（2026-10-15，
 # 用户拍板「AGENTS.md 不需要索引」）——别把它改回来，它服务的那半边判据不存在了。
 AGENTS_FILE = "AGENTS.md"
 

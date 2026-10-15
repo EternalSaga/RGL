@@ -1,6 +1,6 @@
 module;
 /**
- * test_compute_hazard —— compute ↔ compute hazard 的**机器派生**与**双源对账**（批次 B2-3）
+ * test_compute_hazard —— compute ↔ compute hazard 的**机器派生**与**双源对账**（批次 B2-2）
  *
  * 被测三面：
  *   ① `compute_access_log`（rlbase）的 hazard 判据与按类去重（纯逻辑、零设备）；
