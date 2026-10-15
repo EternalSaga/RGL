@@ -50,6 +50,8 @@ module;
  *      随便丢"，而它的真实对应物是单份 buffer 跨 frames-in-flight 复用）。
  *  12. Lua 词表漏一条（债-122 的原始形态：枚举有、词表没有）→ 组 7 红。反向（未知串被放行）
  *      由组 7 最后一条钉。
+ *  13. （B2-4③′）删掉 `validateAttachmentBufferName` 的「注册字节 >0」检查 → 组 8 红
+ *      （0 字节附件被放行 = 校验吃 0，「资源还没建就来声明附件」静默进图）。
  *
  * 🔴 **本文件测不到的**：真程序里 meshlet 那两张 buffer 的**实际**字节数与写上界是否对上 ——
  * 那是启动期对账（`uploadItems` 里那次 `checkBufferWriteBound`），判据 = 真程序变异（把注册
@@ -463,6 +465,35 @@ TEST_CASE("Lua 词表：kind 认 buffer/depthOffscreen、usage 认 storage 两�
 	const auto ru = loadRenderGraphConfig(badUsage.pathStr());
 	REQUIRE_FALSE(ru.has_value());
 	CHECK(ru.error().message.find("colorRead") != std::string::npos);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 组 8（B2-4③′）：拒绝面扩展 —— 注册字节必须 >0；同名替换 = 尺寸漂移的正常路径
+// ═══════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("注册字节 = 0 → 编译期拒；同名替换成 >0 后必须编得过（变异 13 的靶子）") {
+	// 现场：模块在资源还没建时就注册（lambda 返回 0 / 尺寸公式算漏）。图对 buffer 档的
+	// 全部产物就是校验，校验吃 0 等于没校验 ⟹ 编译期即拒（B2-4③′ 契约④）。
+	const auto name = registerBuf("rtmpZeroBytes", 0);
+	RgGraphDesc d;
+	d.attachments = {
+		RgAttachmentDesc{.name = "swapchain", .kind = RgAttachmentKind::swapchain},
+		RgAttachmentDesc{.name = name, .kind = RgAttachmentKind::buffer},
+	};
+	d.passes = {RgPassDesc{.name = "opaque", .kind = RgPassKind::drawMesh, .state = "opaque",
+		.drawSource = "opaque",
+		.outputs = {RgPassAttachment{.attachment = "swapchain", .usage = RgUsage::colorWrite}}}};
+	const auto msg = errOf(compileRenderGraph(d));
+	REQUIRE(msg.find("<编译竟然通过了>") == std::string::npos);
+	// 消息必须与"未注册"那条**可区分**（两种坏法的修复位置不同：一个是没注册，
+	// 一个是注册了但字节是 0），并点名 >0 这条拒绝面是谁加的。
+	CHECK(msg.find("registered with 0 bytes") != std::string::npos);
+	CHECK(msg.find(name) != std::string::npos);
+
+	// 阳性锚点（同名替换 = extent 漂移的正常路径，B2-4③′）：同一个名字登记成 >0 之后
+	// **必须**编得过。少了这条，上面的红可能只是"buffer 档整个编不过"。
+	registerBuf("rtmpZeroBytes", 64);
+	CHECK_MESSAGE(compileRenderGraph(d).has_value(), errOf(compileRenderGraph(d)).c_str());
 }
 
 }  // namespace RGL

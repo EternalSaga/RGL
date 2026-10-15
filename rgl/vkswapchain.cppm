@@ -75,6 +75,11 @@ export class Swapchain {
 		float renderScaleIn = 1.0f)
 		: vkDevice(vkDevice),
 		  window(window),
+		  headlessMode(headless),
+		  // B2-4③′：headless 的「SDL 替身」= 这个请求尺寸（requestHeadlessExtent 改它，
+		  // recreate() 读它）；初值 = 构造尺寸 → 没人请求就 recreate() 判 unchanged。
+		  headlessRequestedExtent(headless ? vk::Extent2D{headlessWidth, headlessHeight}
+		                                   : vk::Extent2D{}),
 		  surface(headless ? createHeadlessSurface(vkDevice.getVkInstance().getInstance())
 		                   : createSurface(vkDevice.getVkInstance().getInstance(), *window)),
 		  format(headless ? selectHeadlessFormat(vkDevice.getPhysicalDevice().getSurfaceFormatsKHR(*surface))
@@ -144,28 +149,55 @@ export class Swapchain {
 	uint32_t getPresentTimingQueueCapacity() const { return imageCount * 2; }
 
 	/**
+	 * headless 模式请求新尺寸（B2-4③′ resize 冒烟；RPC /resize 的落点）：记下请求值，
+	 * 由下一次 `recreate()` 真正重建（窗口路径不走这里——那条路 extent 由 SDL 重查）。
+	 * @param width 新交换链宽
+	 * @param height 新交换链高
+	 * @return true = 请求已记（等 recreate()）；false = 非 headless（出声并忽略）
+	 */
+	bool requestHeadlessExtent(uint32_t width, uint32_t height) {
+		if (!headlessMode) {
+			if (auto* logger = RLLogger::getInstance())
+				logger->warn("Swapchain: requestHeadlessExtent 只对 headless 模式有意义（窗口路径 "
+				             "extent 由 SDL 重查），本次请求忽略");
+			return false;
+		}
+		headlessRequestedExtent = vk::Extent2D{width, height};
+		return true;
+	}
+
+	/**
 	 * 重查 caps/format/presentMode/presentTiming 后按需重建。仅按 extent 判断（旧实现）会漏掉
 	 * format/颜色空间/transform 漂移（如 HDR 状态切换）：acquire OUT_OF_DATE 后 extent 未变
 	 * 时静默 no-op → 每帧再失败的死循环。changed = extent / format / colorSpace /
 	 * presentMode / currentTransform / presentTiming.active 任一不同；重建 = device waitIdle → 销毁旧 swapchain
 	 * （swapchain = nullptr：raii nullptr_t 临时 + 移动赋值，旧对象在语句末析构）→ 按
 	 * 重查值（非构造期缓存）建新 swapchain + 刷新 images/views。
-	 * @pre window 必非空（重查全走 window 的 selectFormat / getSwapchainExtend /
-	 *   getImageCount）——仅非 headless 路径可用
+	 * @pre 非 headless 时 window 必非空（重查走 window 的 selectFormat / getSwapchainExtend /
+	 *   getImageCount）；headless 时 extent 取 requestHeadlessExtent 的请求值、
+	 *   format/presentMode 走构造期同款静态选择器（B2-4③′ resize 冒烟）
 	 * @return true = 已重建（extent 可能已变，调用方须重建深度图等附属资源）；
 	 *   false = 全部未变（重建无益），调用方负责观测（日志）且不得重建深度图等
 	 *   附属资源
 	 * @note 调用方：resizeSystem（窗口 resize，ecs_impl）/
 	 *   Renderer::recreateSwapchainAndDepth（acquire OUT_OF_DATE / present
-	 *   OUT_OF_DATE·SUBOPTIMAL）
+	 *   OUT_OF_DATE·SUBOPTIMAL）/ RPC /resize（headless，B2-4③′）
 	 */
 	[[nodiscard]] bool recreate() {
-		auto newCaps = vkDevice.getPhysicalDevice().getSurfaceCapabilitiesKHR(*surface);
-		auto newFormat = window->selectFormat(
-			vkDevice.getPhysicalDevice().getSurfaceFormatsKHR(*surface));
-		auto newPresentMode = createPresentMode(vkDevice, surface, presentModePref);
-		auto newPresentTiming = probePresentTiming(vkDevice, surface, newPresentMode);
-		const vk::Extent2D newExtent = window->getSwapchainExtend(newCaps);
+		const auto newCaps = vkDevice.getPhysicalDevice().getSurfaceCapabilitiesKHR(*surface);
+		// B2-4③′（resize 冒烟）：headless 无 SDL 窗口——format/presentMode 走构造期同款
+		// 静态选择器，extent 取 requestHeadlessExtent 的请求值（没请求过 = 现值 →
+		// changed=false → no-op，与旧行为一致）。
+		const auto newFormat = headlessMode
+			? selectHeadlessFormat(vkDevice.getPhysicalDevice().getSurfaceFormatsKHR(*surface))
+			: window->selectFormat(vkDevice.getPhysicalDevice().getSurfaceFormatsKHR(*surface));
+		const auto newPresentMode = headlessMode
+			? selectHeadlessPresentMode(
+				vkDevice.getPhysicalDevice().getSurfacePresentModesKHR(*surface))
+			: createPresentMode(vkDevice, surface, presentModePref);
+		const auto newPresentTiming = probePresentTiming(vkDevice, surface, newPresentMode);
+		const vk::Extent2D newExtent = headlessMode ? headlessRequestedExtent
+		                                            : window->getSwapchainExtend(newCaps);
 
 		const bool changed =
 			newExtent.width != extent.width || newExtent.height != extent.height ||
@@ -192,8 +224,9 @@ export class Swapchain {
 		// 漏这一行 = resize 后深度图/RT 停在旧渲染尺寸而 swapchain 已是新尺寸，
 		// 症状是"缩窗口后画面比例错/边缘漏画"，且只在 renderScale≠1 时出现。
 		renderExtent = toExtent(computeRenderSize(extent.width, extent.height, renderScale));
-		imageCount = window->getImageCount(surfaceCapabilities.minImageCount,
-			surfaceCapabilities.maxImageCount);
+		imageCount = headlessMode ? surfaceCapabilities.minImageCount
+		                          : window->getImageCount(surfaceCapabilities.minImageCount,
+		                                surfaceCapabilities.maxImageCount);
 		swapchain = vk::raii::SwapchainKHR(vkDevice.getDevice(), buildSwapchainCreateInfo());
 		setupPresentTiming();  // 批 9.3：新链重设结果队列容量（未激活 = no-op）
 		swapchainImages = swapchain.getImages();
@@ -552,6 +585,10 @@ export class Swapchain {
 
 	RGL::DeviceContext& vkDevice;  // 设备层引用（最先初始化）；surface/swapchain/images/views 均经它创建
 	RGL::SDLWindow* window;  // headless 时为空（surface 经 headless 扩展创建）；窗口路径必非空，recreate() 重查依赖它
+	// B2-4③′（resize 冒烟）：headless 标志 + 请求尺寸（headless 无 SDL，recreate() 的
+	// extent/format 重查需要非 SDL 来源；requestHeadlessExtent 就是这个来源）
+	bool headlessMode;
+	vk::Extent2D headlessRequestedExtent{};
 	vk::raii::SurfaceKHR surface;  // raii surface（GPU 成员中先于 format/presentMode/caps 初始化——后三者经它查询）
 	vk::SurfaceFormatKHR format;  // 交换链格式（headless 优先 B8G8R8A8Srgb/eSrgbNonlinear；窗口路径 = SDLWindow::selectFormat）
 	PresentModePref presentModePref;  // 窗口 present 模式偏好（runtime.lua present_mode；headless 忽略；recreate() 复选用）

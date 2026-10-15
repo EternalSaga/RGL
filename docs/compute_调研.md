@@ -1289,7 +1289,7 @@ extentScale、history 的「不是 offscreen 就拒」）——第五档落进�
 | **B2-3 本体** buffer 档 + storage usage + 按名注册 + 拒绝面 | ✅ **与 B2-4② 同刀交付**（buffer 档形状由迁入方定，落地 → §7.17） |
 | **B2-4①** EVSSM 矩图迁入 RT 缓存托管 | ✅ `f7d455d`（RT 缓存长出多描述符附件能力 + 迁入；「不升成图附件」与「装配期发号 / 首帧建图两段式」两条设计定案见该 commit 说明） |
 | **B2-4②** meshlet_cull 迁入（buffer 档首发） | ✅ 本刀（2026-10-15）→ §7.17 |
-| **B2-4③′** IZB 动态性首发（资源级动态 + erase/结转，还债-124；**按 D5 重切**，原「迁入」刀） | ⏳ 未动 |
+| **B2-4③′** IZB 动态性首发（资源级动态 + erase/结转，还债-124；**按 D5 重切**，原「迁入」刀） | ✅ 本刀（2026-10-15）→ §7.18 |
 | **B2-4④′** 升级存量：meshlet / EVSSM 升成图附件（试点后近乎免费；EVSSM 收益仅「依赖被图看见」） | ⏳ 未动（D5） |
 | **B2-5** pass 级动态（运行期效果开关；相位表 / barrier 计划随重编译自动跟；这条才碰 B1a 索引形态） | ⏳ 未动（D5） |
 
@@ -1331,6 +1331,42 @@ extentScale、history 的「不是 offscreen 就拒」）——第五档落进�
 `865fd1aa`、IZB `2316b566`）；判据 3/5/6 逐条红且归因到点名边/两侧字节数/结构位；变异 10 条（单元 7 +
 真程序 3）。**量具坑一条**：还原变异用 `cp -p` 保留旧 mtime ⟹ ninja 不重编，「还原后基线」跑的仍是
 变异体——还原必须不带 `-p` 或显式 `touch`。
+
+### 7.18 B2-4③′ 落地实况（2026-10-15）：动态图第一刀——安全点重编译 + 按名结转 + 延迟逐出（债-124 结案）
+
+**机制三件套**（D5 第 1/2/3 条的落地形态）：
+- `dynamic_render_graph`(.cppm+`_impl`)：派生件容器——生产者声明**幂等 + 试编译 fail-fast**（编译不过的
+  desc 当场拒，不让它落进真相源后每帧刷失败日志）；重编译失败**脏位不清**、下帧安全点重试；重编译次数
+  打点进日志（`DynamicGraph: recompiled (count=N)`）= 零命令红线的观测面。
+- `carryOverPerSlot`：逐 slot 跨帧表（布局追踪等）**按名字结转**。「结转 ≠ 重置」是判据级的：布局表被
+  重置成 `eUndefined` 后下帧首条 barrier 的 src 就错了，且错法延迟、归因成本极高 ⟹ 变异「结转改重置」
+  必须红（`tests/test_dynamic_render_graph.cppm`）。
+- `pending_evictions`（rlbase 叶子）：frames-in-flight 逐出台账——登记帧 D 的 due = D + framesInFlight，
+  到期帧安全点（围栏后）才销毁；**同名未到期再次 schedule = Error**（「有 in-flight 用户逐出必须炸」）。
+  纯算术就该住 rlbase 被单测锁死，而不是散在 Renderer 里。
+
+**安全点** = beginFrame 围栏后、录制前（`vkrenderer_passrec` 调 `recompileGraphIfNeeded`，void 返回 +
+失败内部出声 = drawFrame 零分支）。IZB 迁入：`izb_head` / `izb_nodes` 注册为 buffer 附件，两侧来源
+独立 = 真对账（注册侧 f(extent) 公式 vs dispatch 写上界，闭式期望）；extent 漂移 → 重建 → 重注册 →
+标脏 → 下个安全点吃到新尺寸。sandwich 钩子与 13 条边一行没动（pass 级动态 = B2-5）。
+
+**零命令红线（出厂态新判据）**：出厂配置永不变脏 ⟹ 重编译 = 0。实测：出厂 smoke 打点 **0 条**（主 agent
+亲验）、IZB 开档 = 1；`regress ab` 出厂 A×B 逐位相同（主 agent 亲验）。
+
+**resize 冒烟抓出的真 bug**（🔴 五锚永远抓不到，教训进 §1.2 同族）：retire-on-drift 让漂移后的 `ensure`
+走首建分支领**新描述符槽**，而消费方描述符集仍指退役节点的指针链 ⟹ 退役窗口内持续采旧尺寸 G-buffer
+（症状 = resize 后整幅横向压缩 720/800），due 后悬空。修复 = 同名退役条目**继承 `descriptors` vector**
+（move 转移缓冲 = 链地址不变、槽号随名字留下、旧图 due 才毁）+ 继承路径跳过 `waitIdle`（逐出成常态后
+这条整设备停顿不能每帧付）。**教训：固定尺寸锚抓不到漂移流 bug——resize 冒烟是唯一那张网，验收清单
+必须带它。**
+
+**验收读数**：五锚逐位（含 IZB 开档 `2316b566`）；resize 冒烟与全新同尺寸 run 逐位相同（`3b04944c`）；
+`just gates` 全绿（511 用例 + gpu 46）；变异逐条红：结转改重置（7 断言）/ nodes 公式 ×8（闭式）/
+债-124 正反两半 / M8 删继承块 / 判据 6 拆 `UsageInfo::layout` optional / 真程序 write-bound ×2 启动
+throw 点名两侧 / A 档 sandwich 不还布局在**含重编译的 IZB 开档**逐帧咬。
+
+**过程记录**：本刀第一轮实现被外部 `git checkout/clean` 整体抹除（11:51 事件），按 HEAD 重建 + 快照
+`/tmp/opencode/b24_snap/`；工作树完整性以 `regress ab` 逐位 + 全量测试为证。
 
 ---
 

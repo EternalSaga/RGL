@@ -101,8 +101,9 @@ IzbShadow::IzbShadow(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
 	  gridDim(gridDim_) {
 	auto& dev = vkDevice.getDevice();
 	const uint32_t pixels = extent.width * extent.height;
-	const auto headBytes = static_cast<vk::DeviceSize>(gridDim) * gridDim * 4;
-	const auto nodeBytes = static_cast<vk::DeviceSize>(pixels) * 16;
+	// B2-4③′：尺寸公式走接口自由函数（图侧注册/对账与这里分 buffer **同一个真相源**）
+	const auto headBytes = izbHeadBytes(gridDim);
+	const auto nodeBytes = izbNodesBytes(extent);
 
 	const auto makeDevBuf = [&](vk::DeviceSize bytes, vk::BufferUsageFlags extra,
 	                             const char* name) -> RGL::VmaBuffer {

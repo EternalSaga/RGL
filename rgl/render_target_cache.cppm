@@ -7,6 +7,7 @@ import vkerror;
 import VmaRaii;
 import vk_device;
 import vk_resources;  // 架构债务续账步骤 2：RT 缓存从内核拆出——缓存向内核引 allocator/heap/槽，单向
+import pending_evictions;  // B2-4③′ 债-124：frames-in-flight 逐出台账（rlbase 叶子）
 
 namespace RGL {
 
@@ -32,6 +33,10 @@ export struct RtDescriptor {
 	vk::ResourceDescriptorInfoEXT resourceDesc{};  // 描述符定义（type + data.pImage 链）
 	vk::HostAddressRangeEXT dst{};  // 描述符写入目标槽范围（getSlotCpuAddress 解析）
 	uint32_t heapSlot = 0;  // 本项的 heap 槽号（首建定号、跨重建复用）
+	// B2-4③′ 债-124：本项槽号是否由**缓存**在首建时领取（true = 缓存自有，erase/retire
+	// 到期时归还 Resources::freeSlot；false = 外部台账预发号（spec.heapSlot 有值，
+	// EVSSM 矩图类），缓存只写描述符，逐出时**不**归还——槽的归属没变）。
+	bool slotOwnedByCache = false;
 	vk::DescriptorType type = vk::DescriptorType::eSampledImage;  // 描述符类型（采样项的判据）
 	vk::ImageLayout layout = vk::ImageLayout::eShaderReadOnlyOptimal;  // 描述符声明的 image layout
 	vk::ImageSubresourceRange range{};  // 本项 view 的子资源范围（不随重建变）
@@ -190,10 +195,51 @@ export class RenderTargetCache {
 		return it == rtAttachments.end() ? nullptr : &it->second;
 	}
 
+	/**
+	 * **退役**一个 RT（B2-4③′ 债-124；extent 漂移的正规路径）：立刻从活动表摘除
+	 *（下帧 ensure 按新尺寸重建），GPU 资源进退役区，**到期帧的安全点**才销毁 +
+	 * 归还自有堆槽。in-flight 帧继续安全地引用退役区的旧图直到 due。
+	 *
+	 * 🔴 「有 in-flight 用户逐出必须炸」= 同名未到期再次 retire → Error
+	 *（`PendingEvictions::schedule` 的不变式，单测正反两半都在）。
+	 * @param name     活动表里的 RT 名
+	 * @param dueFrame 销毁帧号（调用方给 = 发现帧 + frames-in-flight）
+	 * @return 空值 = 已退役；Error = 名不在活动表 / 已在退役台账
+	 */
+	[[nodiscard]] std::expected<void, Error> retire(const std::string& name, uint64_t dueFrame);
+
+	/**
+	 * 收割到期退役项（安全点每帧调；销毁图 + 归还**自有**堆槽，预发号槽不归还）。
+	 * @param frame 当前帧号
+	 */
+	void processRetired(uint64_t frame);
+
+	/**
+	 * **立即**逐出并销毁一个 RT（毁图/view + 归还自有堆槽；不经退役窗口）。
+	 * 帧路径请用 `retire` + `processRetired`；本入口给「确定无 in-flight 用户」的
+	 * 场景与单测（槽复用判据）用。
+	 * @param name RT 名
+	 * @return true = 找到并销毁；false = 名不存在
+	 */
+	bool erase(const std::string& name);
+
+	/** @return 名字是否在退役台账里（调用方避免重复 retire） */
+	bool retiredPending(const std::string& name) const { return evictions.pending(name); }
+
    private:
+	/** 归还一个附件的全部**自有**堆槽（slotOwnedByCache 项；预发号项跳过——归属没变） */
+	static void freeOwnedSlots(RGL::Resources& kernel, RtAttachment& att);
+
 	RGL::Resources& kernel;  // 资源内核引用（allocator / descriptorHeap / allocSlot）
 	RGL::DeviceContext& device;  // 设备层引用（waitIdle / writeResourceDescriptorsEXT）
 	std::map<std::string, RtAttachment> rtAttachments;  // std::map 节点地址稳定（RtAttachment 指针链前提）
+	// B2-4③′ 债-124：退役区（活动表摘除 ≠ 销毁；到期帧才毁图 + 还槽）+ 到期台账
+	std::map<std::string, RtAttachment> retired;
+	PendingEvictions evictions;
+	// generation 连续性台账（B2-4③′）：retire/erase 时记下该名的最后 generation，
+	// ensure 重建时以其为地板（+1）——否则「退役后重建」会复用旧 gen 值，与 Renderer 的
+	// 跨帧快照相撞（快照判据 = generation 变化，相撞 = 新图布局不重置 → 静默错布局）。
+	std::map<std::string, uint64_t> generationFloor;
 };
 
 }  // namespace RGL

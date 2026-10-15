@@ -64,6 +64,11 @@ set(RGL_TEST_SOURCES
     test_attachment_kind.cppm   # RgAttachmentKind 分派点穷尽性：kindName 拼写 + 四 validator 消息逐字节
     test_attachment_buffer.cppm  # 批次 B2-3 本体：buffer 档按名注册拒绝面 + storage×kind 双向规则
                                  # + plan-only 做成类型（buffer 不进 barrier 计划/渲染条目）+ Lua 词表
+                                 # + 组 8（B2-4③′）：注册字节 >0 拒绝面 + 同名替换正常路径
+    test_dynamic_render_graph.cppm  # B2-4③′（D5 第一刀）：按名结转（结转≠重置）+ 逐出台账正反
+                                 # + declareBufferProductions 幂等/末尾追加/试编译 fail-fast + 计数
+    test_izb_sizes.cppm          # B2-4③′ IZB 迁入：尺寸公式闭式期望 + 写上界配对对账（判据 5）
+                                 # + extent 漂移同名替换的机器可观测面 + 附件名常量钉死
     test_offgraph_contract.cppm  # 批次 B1 图外工作申报面：建表三 guard 各配反向 + 位置契约三种偏离
     test_offgraph_sync.cppm      # 批次 B1b 图外同步：词表/边表逐位钉死（迁移没改语义）+ 次数账双向
                                  # （含 §7 判据 2 的变异本体「调用点挪到 pass 循环之后」的单元等价形态）+ 覆盖对账两半边

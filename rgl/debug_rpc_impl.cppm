@@ -103,6 +103,7 @@ bool DebugRpcServer::start(std::string host, int port) {
 	p->server.Post("/param", serve);
 	p->server.Post("/shot", serve);
 	p->server.Post("/shotburst", serve);
+	p->server.Post("/resize", serve);  // B2-4③′：headless 改尺寸（冒烟用）
 	p->server.Post("/quit", serve);
 	// httplib 对**所有** status≥400 都回调 error handler（返回值只控制 range 应用），
 	// 故必须只补空体：我们 handler 自产的 400/404/409/503/504 载荷不能被覆盖。

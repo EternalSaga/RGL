@@ -37,6 +37,7 @@ import lights_types_generated;
 import material_types_generated;  // DrawArgs（GPU culling 对账经 objectIndex 映射 CPU draw）
 import features;
 import render_graph;
+import dynamic_render_graph;  // B2-4③′：DynamicRenderGraph / carryOverPerSlot（recompileGraphIfNeeded）
 
 namespace RGL {
 
@@ -134,6 +135,7 @@ void validateRenderGraphForExecutor(const RGL::CompiledRenderGraph& graph) {
 Renderer::Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RGL::Resources& vkResources,
 		RGL::SceneDataService& sceneData, RGL::Environment& env, RGL::RenderTargetCache& rtCache,
 		RGL::ShaderRegistry& shaderRegistry, RGL::CompiledRenderGraph renderGraph,
+		RGL::RgGraphDesc graphDesc,
 		RGL::GpuCull* vkGpuCull, RGL::DgcCommands* vkDgc, RGL::DgcStaticCommands* vkDgcStatic,
 		bool fsrEnabled, bool fsrTemporal)
 	: vkDevice(vkDevice),
@@ -144,6 +146,8 @@ Renderer::Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RG
 	  rtCache(&rtCache),
 	  registry(shaderRegistry),
 	  renderGraph(std::move(renderGraph)),
+	  // B2-4③′：desc move 进派生件（首编译已在 main 完成并校验，这里不重复编译）
+	  graph(std::move(graphDesc)),
 	  // culling 帧编舞（手术 3）：④c 提交时序 + opaque 段三路（IES/静态 DGC/重放）+ 对账
 	  // 全迁 CullDriver，构造期即分配 cull CB（inactive = 不分配，行为中性与摘出前一致）。
 	  // 末位实参 = 图外同步发射账：offGraphSync 声明在 cullDriver **之前**（vkrenderer.cppm）
@@ -213,6 +217,80 @@ Renderer::Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RG
 		createSceneStaging(vkResources);  // 同步对象/命令缓冲已随手术 4 迁 FrameSession ctor
 	}
 // （captureBpp / Renderer::ensureCaptureStaging 已随手术 2 迁 frame_capture_impl.cppm）
+
+namespace {
+/** 安全点重编译失败出声（B2-4③′；失败形态 = 编程错，本帧继续用旧图、脏位保留下帧重试）。 */
+void reportRecompileFailure(const Error& err) {
+	if (auto* lg = RLLogger::getInstance())
+		lg->error("DynamicGraph: 安全点重编译失败（本帧继续用旧图，脏位保留下帧重试）：{}",
+			err.describe());
+}
+}  // namespace
+
+// B2-4③′（D5 第一刀）：安全点重编译。时序契约 = 调用点在 beginFrame（围栏）之后、
+// gpuProfilerFrameBegin（第一条录制）之前；OffGraphSchedule 相位表随新图重建后
+// drawFrame 才继续（offGraph.beginFrame 在重编译之后调，相位从新表起算）。
+// 🔴 「全部可失败步骤先跑完才换图」是原子的来源：换图之后任何一步再失败都会留下
+// 「新图 + 旧相位表」的半态——那是录制期才炸的形态，比不重编译坏得多。
+void Renderer::recompileGraphIfNeeded() {
+	if (!graph.isDirty())
+		return;
+	// 编译图的附件名序列（结转与 slot 核对的键；不存第二份真相源，每次现取）
+	const auto namesOf = [](const RGL::CompiledRenderGraph& g) {
+		std::vector<std::string> names;
+		names.reserve(g.attachments.size());
+		for (const auto& a : g.attachments)
+			names.push_back(a.name);
+		return names;
+	};
+	const std::vector<std::string> oldNames = namesOf(renderGraph);
+	auto oldLayouts = attachmentLayouts;  // 结转源取**副本**：失败路径旧表原样
+	auto oldGens = rtGenerations;
+	// ① 重编译（失败 = 脏位保留、旧图旧表原样，下帧安全点重试）
+	auto fresh = graph.recompile();
+	if (!fresh) {
+		reportRecompileFailure(fresh.error());
+		return;
+	}
+	// ② slot 稳定核对（「附件只准追加在末尾」的机器守卫）：每个旧名在新图里必须还在
+	// 同一 slot。中段插入 = FrameCapturer 的 swapchain slot / PickingService 的
+	// object_id slot（构造期缓存）读错附件，且**不会有任何报错**——所以在这里炸。
+	for (size_t s = 0; s < oldNames.size(); ++s) {
+		const auto it = std::ranges::find(fresh->attachments, oldNames[s],
+			[](const RgCompiledAttachment& a) { return a.name; });
+		const size_t newSlot = static_cast<size_t>(it - fresh->attachments.begin());
+		if (it == fresh->attachments.end() || newSlot != s) {
+			reportRecompileFailure(Error{ErrorCode::RenderGraphInvalid,
+				fmt::format("dynamic graph: 附件 '{}' 的 slot 从 {} 变成 {}（附件只准追加在末尾——"
+				            "FrameCapturer/PickingService 构造期缓存 slot，中段插入不可接受）",
+					oldNames[s], s, it == fresh->attachments.end() ? ~size_t{0} : newSlot)});
+			return;
+		}
+	}
+	// ③ 相位表对**新图**重建（申报与图不一致 = Error，旧图原样）
+	auto schedule = OffGraphSchedule::build(offGraphWorkDecls(), fresh->passes);
+	if (!schedule) {
+		reportRecompileFailure(schedule.error());
+		return;
+	}
+	// ④ drawLight 管线条目核对（与 ctor 同判据：新图若引入缺条目的 state，装配错）
+	for (const auto& p : fresh->passes)
+		if (p.kind == RgPassKind::drawLight && !fullscreenPipelineIdx.contains(p.state)) {
+			reportRecompileFailure(Error{ErrorCode::RenderGraphInvalid,
+				fmt::format("dynamic graph: 新图含 drawLight pass (state '{}') 但管线表无对应条目",
+					p.state)});
+			return;
+		}
+	// —— 从这里起不再有任何可失败步骤：换图 + 按名结转 + 换相位表 ——
+	renderGraph = std::move(*fresh);
+	// 🔴 结转不是重置：同名保旧值（重置 = 下帧首条 barrier 拿 Undefined 当 oldLayout
+	// 转一个有内容的图）；新名拿默认值（新 RT 首帧布局本来就是 Undefined）。
+	const std::vector<std::string> newNames = namesOf(renderGraph);
+	attachmentLayouts = carryOverPerSlot(oldNames, oldLayouts, newNames,
+		vk::ImageLayout::eUndefined);
+	rtGenerations = carryOverPerSlot(oldNames, oldGens, newNames, uint64_t{0});
+	offGraph = std::move(*schedule);
+}
 
 // （createSyncObjects / allocateCommandBuffers 已随手术 4 迁 frame_session_impl.cppm）
 void Renderer::createSceneStaging(RGL::Resources& vkResources) {

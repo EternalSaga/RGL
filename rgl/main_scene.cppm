@@ -839,7 +839,7 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 	const bool temporal = resolveFsrTemporal(fsrUsable, fsrTemporal, taaDecorated);
 	return RenderBackEnd{std::move(cull), std::move(dgc), std::move(dgcStatic),
 		Renderer(device, swapchain, resources, sceneData, env, rtCache, pipelines,
-			std::move(graphResult.graph), cullRaw, dgcRaw, dgcStaticRaw,
+			std::move(graphResult.graph), std::move(graphResult.desc), cullRaw, dgcRaw, dgcStaticRaw,
 			// 批 14.5：FSR 生效判据 = 配置键 **且** velocity 真的进了图（FSR 的 motionVectors
 			// 输入就是那张图；装饰失败时本键自动失效。取实际图形态的先例 = AO 施加点）。
 			fsrUsable, temporal)};

@@ -28,11 +28,13 @@ import rlvk;
 import rllogger;
 import vk_swapchain;     // izbPreFrame 按渲染 extent 重建 mask（批 14.3）
 import vk_resources;
+import frame_session;    // B2-4③′ 债-124：kFramesInFlight（RT 退役 due 帧计算）
 import shadow_config;    // shadowConfig() / shadowFormPlan()（IZB 与 EVSSM 两扇图外门，批 N6b）
 import profiler;         // zone（IZB / EVSSM 帧首段观测）
 import frame_draw_list;  // segmentSpan（mask 重放段名 → draw 序列）
 import scene_context;    // shadowDrawSource（段名单一来源，批 11.3-1d）
-import render_graph;     // RgAttachmentKind（重放后布局回正）
+import render_graph;     // RgAttachmentKind（重放后布局回正）+ B2-4③′：registerBufferAttachment / checkBufferWriteBound
+import dynamic_render_graph;  // B2-4③′：graph 成员类型（syncIzbGraphAttachments 调 declareBufferProductions）
 import vulkan_utils;     // layoutDrift（图外布局对账的判定 + 值可读化，批 14.4b 步 2）
 import izb_shadow;
 import evssm_shadow;
@@ -63,6 +65,23 @@ void reportOffGraphViolation(const Error& err) {
 		lg->error("{}", err.describe());  // describe() 自带 [Code] 前缀，消息本体已含归因
 }
 
+/**
+ * extent 漂移 → **退役**（B2-4③′ 债-124；ensureOffscreenAttachments 的判据本体）。
+ *
+ * 发现帧 D：立刻摘出活动表（下帧 ensure 按新尺寸重建），GPU 资源到 D + frames-in-flight
+ * 才销毁——in-flight 帧继续安全引用退役区旧图。「有 in-flight 用户逐出必须炸」= 台账拒
+ * 重复 retire（Error 出声；连续 resize 的销毁记账吞并形态在这里红）。
+ * 三个否定分支一行早退（认知复杂度：ensure 主循环是逐附件布局表唯一重置入口，红线留给它）。
+ */
+void requestRetireOnDrift(RenderTargetCache& cache, const std::string& name,
+                          vk::Extent2D want, uint64_t frame) {
+	auto* live = cache.find(name);
+	if (!live || live->extent == want || cache.retiredPending(name))
+		return;
+	if (auto r = cache.retire(name, frame + FrameSession::kFramesInFlight); !r)
+		reportOffGraphViolation(r.error());
+}
+
 }  // namespace
 
 // 11.3-1d IZB 帧首段（声明注释见 vkrenderer.cppm）。deferred 图判据 = 存在
@@ -90,7 +109,39 @@ void Renderer::izbPreFrame() {
 		vkDevice.getDevice().waitIdle();
 		izbShadow = std::make_unique<RGL::IzbShadow>(
 			vkDevice, *resources, extent, shadowConfig().izbGrid, offGraphSync);
+		// B2-4③′ 迁入：首建/漂移重建后把 head/nodes 声明进图（注册 + 写上界对账 +
+		// declareBufferProductions，幂等）；标脏后**下个安全点**重编译吃到（延迟 ≤1 帧，
+		// D5 第 5 条明确允许）。门关 = 本函数不被进入 = 图里永远没有 izb 附件。
+		syncIzbGraphAttachments();
 	}
+}
+
+// B2-4③′ IZB 附件的图侧同步（声明注释见 vkrenderer.cppm）。注册动作住 rlframe 而不是
+// izb_shadow（rlgfx）的理由：注册表在 render_graph（rlscene），逆向 import 立刻链接失败；
+// 尺寸/写上界公式仍住 izb_shadow 接口（唯一真相源，两侧同吃）。
+void Renderer::syncIzbGraphAttachments() {
+	const auto extent = izbShadow->getExtent();
+	const auto grid = izbShadow->getGridDim();
+	const vk::DeviceSize headBytes = izbHeadBytes(grid);
+	const vk::DeviceSize nodesBytes = izbNodesBytes(extent);
+	// 同名替换 = extent 漂移的正常路径（B2-4③′ 契约④）；**按值捕获字节**，不捕获
+	// izbShadow——注册表是进程级单例，比模块活得久。
+	registerBufferAttachment(kIzbHeadAttachment, [headBytes] { return headBytes; });
+	registerBufferAttachment(kIzbNodesAttachment, [nodesBytes] { return nodesBytes; });
+	// 🔴 写上界对账（判据 5）：注册字节 ≥ dispatch 写上界，失败 = throw 在**变异现场**
+	//（消息点名两侧字节数与差值；meshlet B2-4② 的先例口径）。
+	if (auto bound = checkBufferWriteBound(kIzbHeadAttachment, izbHeadWriteBound(grid)); !bound)
+		throw std::runtime_error(fmt::format("Renderer: IZB head 附件对账失败：{}",
+			bound.error().describe()));
+	if (auto bound = checkBufferWriteBound(kIzbNodesAttachment, izbNodesWriteBound(extent)); !bound)
+		throw std::runtime_error(fmt::format("Renderer: IZB nodes 附件对账失败：{}",
+			bound.error().describe()));
+	// 生产者声明（幂等 + 试编译 fail-fast；pass 名 = builtin 的 drawLight "light"）。
+	// 失败只出声不落脏位：试编译拒了说明注册/声明本身错，落脏位只会让每帧安全点重复失败刷日志。
+	if (auto declared = graph.declareBufferProductions("light",
+			{ std::string{kIzbHeadAttachment}, std::string{kIzbNodesAttachment} });
+		!declared)
+		reportOffGraphViolation(declared.error());
 }
 
 // 11.3-1d IZB sandwich（声明注释见 vkrenderer.cppm；门关 = izbShadow 恒空早退）。
@@ -500,10 +551,15 @@ void Renderer::replayIzbMaskSegment(vk::raii::CommandBuffer& cmd, const FrameDra
 }
 
 // offscreen attachment RT 幂等 ensure（批次 4；extent 随 resize 重建含 waitIdle，录制期调用安全；format 经词表解析，"inherit"=swapchain 格式、具名=显式 RT）。出参 offscreenRt 按 slot 填（非 offscreen 槽留 null）。
+// B2-4③′ 债-124：extent 漂移改走**退役窗口**（retire → due 帧销毁 + 还槽），不再依赖
+// ensure 原地重建的 waitIdle；布局表在 due 前**不动**（旧 RT 仍在役，重置 = 下条 barrier
+// 拿错 oldLayout），重建那一帧由 generation 失配自然触发重置。
 std::expected<void, Error> Renderer::ensureOffscreenAttachments(vk::Extent2D extent,
-	std::vector<RtAttachment*>& offscreenRt) {
+		uint64_t frame, std::vector<RtAttachment*>& offscreenRt) {
 	auto z = zone("drawFrame.offscreen");  // 批 9.5 观测：offscreen RT 幂等 ensure（稳态 = 查表）
 	offscreenRt.assign(renderGraph.attachments.size(), nullptr);
+	// 到期退役收割（安全点语义：本函数跑在 beginFrame 围栏之后，due 帧的 GPU 引用已终结）
+	rtCache->processRetired(frame);
 	// RT 重建检测：generation 变化（新图布局 Undefined）→ 同步重置 attachmentLayouts，否则下帧首 barrier oldLayout 失配（resize 必现）。
 	// ⚠ rtGenerations 是**成员**（跨帧快照），不是本函数的局部量——见 vkrenderer.cppm 成员
 	// 注释：局部量每帧归零会让本判断恒真，把每个 offscreen 附件每帧抹成 eUndefined，
@@ -545,6 +601,8 @@ std::expected<void, Error> Renderer::ensureOffscreenAttachments(vk::Extent2D ext
 		const vk::Extent2D follow = scaleRtExtent(extent, att.extentScale);
 		const vk::Extent2D rtExtent{att.extent[0] != 0u ? att.extent[0] : follow.width,
 			att.extent[1] != 0u ? att.extent[1] : follow.height};
+		// B2-4③′ 债-124：extent 漂移 → 退役（判据与本体见 requestRetireOnDrift）。
+		requestRetireOnDrift(*rtCache, att.name, rtExtent, frame);
 		auto rtResult = rtCache->ensure(att.name, rtExtent, fmt, rtAspect);
 		if (!rtResult)
 			return std::unexpected(std::move(rtResult).error());

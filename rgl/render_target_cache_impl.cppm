@@ -10,6 +10,8 @@ import VmaRaii;
 import vk_device;
 import vk_resources;
 
+import pending_evictions;  // B2-4③′ 债-124：退役台账类型（接口分区非导出 import，impl 要自备）
+
 namespace RGL {
 
 namespace {
@@ -100,6 +102,7 @@ std::expected<void, Error> syncDescriptors(RtAttachment& slot, const std::string
 		if (dspec.heapSlot) {
 			// 外部台账预发号（装配期已烘进管线的槽）：缓存只写描述符，不领号
 			d.heapSlot = *dspec.heapSlot;
+			d.slotOwnedByCache = false;  // B2-4③′ 债-124：逐出时不归还（归属没变）
 		} else if (firstBuild) {
 			// 🔴 跨重建复用守卫：只有首建领号，重建换图**不换槽**（去掉这个
 			// firstBuild 守卫 = 每次重建重新领号 = 管线 baked 的槽号失效）
@@ -107,6 +110,7 @@ std::expected<void, Error> syncDescriptors(RtAttachment& slot, const std::string
 			if (!sampleSlot)
 				return std::unexpected(std::move(sampleSlot).error());
 			d.heapSlot = *sampleSlot;
+			d.slotOwnedByCache = true;  // B2-4③′ 债-124：缓存自有槽，erase/退役到期时归还
 		}
 		d.viewCreate = vk::ImageViewCreateInfo{};
 		d.viewCreate.image = slot.image.image;
@@ -163,9 +167,23 @@ std::expected<RtAttachment*, Error> RenderTargetCache::ensure(
 	if (existing != nullptr && existing->extent == extent && existing->format == format)
 		return &rtAttachments[name];  // 命中：不重建（drawFrame 图循环每帧调用走这条）
 
+	// B2-4③′（resize 冒烟实测抓出的洞）：同名退役条目在场 = 本次是「重建」不是「新建」——
+	// **继承它的描述符链**。消费方描述符集指向的是本 vector 数据缓冲里的链（指针链稳定前提
+	// = 首建定容后永不 resize），vector move 转移缓冲地址 ⟹ 消费方无需改写即可见新 view；
+	// 槽号随之留下（名字还在，槽还归它），旧图到期才毁。不继承 = 领新号，退役窗口内消费方
+	// 继续采旧尺寸旧图、到期后描述符悬空（实测症状：resize 后 light pass 采旧 720 G-buffer，
+	// 整幅画面横向压缩 720/800）。
+	if (existing == nullptr) {
+		if (const auto rit = retired.find(name); rit != retired.end())
+			rtAttachments[name].descriptors = std::move(rit->second.descriptors);
+	}
+
 	// 重建（extent 随 swapchain resize / 格式漂移）：双帧在飞下旧 RT 可能仍被
-	// 另一帧命令引用 → waitIdle 后替换（同 recreateDepthImage 规则）
-	device.getDevice().waitIdle();
+	// 另一帧命令引用 → waitIdle 后替换（同 recreateDepthImage 规则）。
+	// existing == nullptr 跳过：本路径不销毁任何旧图（纯新建，或上面刚继承完退役链的
+	// 退役重建——旧图在退役区活到 due 才毁，这正是退役窗口存在的理由）。
+	if (existing != nullptr)
+		device.getDevice().waitIdle();
 
 	vk::ImageCreateInfo info{};
 	info.imageType = vk::ImageType::e2D;
@@ -192,7 +210,12 @@ std::expected<RtAttachment*, Error> RenderTargetCache::ensure(
 	// 🔴 首建标记必须在覆盖旧值**之前**读：descriptors 空 = 这个 key 第一次建
 	//（重建路径上它非空 ⟹ 不 resize、不重新领号）
 	const bool firstBuild = slot.descriptors.empty();
-	const uint64_t prevGeneration = slot.generation;
+	uint64_t prevGeneration = slot.generation;
+	// B2-4③′ 债-124：generation 地板 = 同名退役/逐出前的最后值（保证「退役→重建」
+	// 的 gen 严格递增，Renderer 的跨帧快照必然失配 → 布局重置必触发；无地板时两者
+	// 相撞 = 新图带着旧布局值继续跑，静默错布局）
+	if (const auto floorIt = generationFloor.extract(name); !floorIt.empty())
+		prevGeneration = std::max(prevGeneration, floorIt.mapped());
 	slot.image = std::move(*imageResult);
 	slot.extent = extent;
 	slot.format = format;
@@ -207,6 +230,52 @@ std::expected<RtAttachment*, Error> RenderTargetCache::ensure(
 	if (auto synced = syncDescriptors(slot, name, spec, firstBuild, kernel, device); !synced)
 		return std::unexpected(std::move(synced).error());
 	return &slot;
+}
+
+// ── B2-4③′ 债-124：逐出路径（退役窗口 + 到期销毁 + 堆槽归还）─────────────────────
+
+void RenderTargetCache::freeOwnedSlots(RGL::Resources& kernel, RtAttachment& att) {
+	for (auto& d : att.descriptors)
+		if (d.slotOwnedByCache)
+			kernel.freeSlot(RGL::SlotSegment::Runtime, d.heapSlot);
+}
+
+bool RenderTargetCache::erase(const std::string& name) {
+	const auto it = rtAttachments.find(name);
+	if (it == rtAttachments.end())
+		return false;
+	freeOwnedSlots(kernel, it->second);  // 先还槽（map 节点析构毁图/view）
+	generationFloor[name] = it->second.generation;  // gen 连续性（重建必让快照失配）
+	rtAttachments.erase(it);
+	return true;
+}
+
+std::expected<void, Error> RenderTargetCache::retire(const std::string& name, uint64_t dueFrame) {
+	const auto it = rtAttachments.find(name);
+	if (it == rtAttachments.end())
+		return std::unexpected(Error{ErrorCode::VulkanError,
+			name + ": retire 的名字不在活动表里（退役只对 extent 漂移的在役 RT 有意义）"});
+	// 🔴 不变式「有 in-flight 用户逐出必须炸」：同名未到期再次逐出 = Error。
+	// 顺序刻意是 schedule 先于搬移——台账拒了就得原样退回，不能留下「活动表已摘、
+	// 退役区没进、台账没记」的三不管资源。
+	if (auto booked = evictions.schedule(name, dueFrame); !booked)
+		return std::unexpected(std::move(booked).error());
+	generationFloor[name] = it->second.generation;  // gen 连续性（重建必让快照失配）
+	retired.emplace(name, std::move(it->second));  // map 节点 move = raii 成员转移所有权
+	rtAttachments.erase(it);
+	return {};
+}
+
+void RenderTargetCache::processRetired(uint64_t frame) {
+	// 到期 = 发现帧 + frames-in-flight 的安全点（beginFrame 的 fence 已等完 = 最后
+	// 引用它的那帧已在 GPU 上完成）；此刻毁图 + 还槽才安全。
+	for (const auto& name : evictions.popDue(frame)) {
+		const auto it = retired.find(name);
+		if (it == retired.end())
+			continue;  // 台账与退役区理论上同进同出；真到这一步是编程错，静默跳过比崩好
+		freeOwnedSlots(kernel, it->second);
+		retired.erase(it);  // map 节点析构 = VmaImage/view 销毁
+	}
 }
 
 }  // namespace RGL

@@ -76,6 +76,13 @@ export enum class RgAttachmentKind : uint8_t {
 	//      而不是靠列黑名单（`docs/compute_调研.md` §6 D1 第 4 条）。
 	//   ③ **barrier 发射权仍在模块**（plan-only 红线，同文 §5.2）：模块走 `offgraph_sync`
 	//      的边名发 barrier，图**一行命令都不代发**。
+	// 🔴 批次 B2-4③′（D5 动态图第一刀）起图是**脏驱动派生件**，本档随两条新契约走：
+	//   ④ 注册表**同名替换 = 尺寸漂移的正常路径**（不是冲突）：资源模块在 extent 漂移处
+	//      重注册新字节，图在下个安全点重编译吃到它；注册字节必须 **>0**（拒绝面，
+	//      `render_graph_impl.cppm`），0 字节 = 资源还没建就来声明附件，编译期即拒。
+	//   ⑤ 附件**只准追加在 `RgGraphDesc::attachments` 末尾**（执行器侧 FrameCapturer /
+	//      PickingService 构造期缓存既有 slot）；重编译后旧名 slot 不变由
+	//      `Renderer::recompileGraphIfNeeded` 机器核对。
 	buffer,
 };
 
@@ -250,10 +257,11 @@ export bool isKnownDepthRgFormat(const std::string& name);
 //
 // ## 线程与生命周期
 //
-// 只在**启动期装配阶段**写（各模块构造期），运行期只读。装配阶段是单线程的（main 顺序装配），
-// 所以刻意不加锁——真要支持运行期注册，先改这里再改调用点。表是进程级单例：图在启动期编译完
-// 就不再变（`RenderTargetCache` 无 erase 路径那条前提，见 `docs/compute_调研.md` §8 第 1 条），
-// 所以"注册先于编译"这个顺序成立，也不需要按图分表。
+// 写在**启动期装配阶段**（各模块构造期）与**渲染线程的帧安全点**（B2-4③′ 起 extent 漂移处
+// 同名替换，见 `RgAttachmentKind::buffer` 契约④），两处都不并发（main 顺序装配；渲染线程
+// 单线程录制），所以刻意不加锁。表是进程级单例：B2-4③′（D5）起图是**脏驱动派生件**，
+// "注册先于编译"升级为"**注册先于重编译的安全点**"——注册晚到 = 标脏，下个安全点自然吃到；
+// 依然不需要按图分表。
 
 /**
  * 注册一个 buffer 附件的尺寸来源（模块构造期调用；同名重复注册 = 覆盖，便于热重载与单测）。

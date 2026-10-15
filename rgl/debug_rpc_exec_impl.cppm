@@ -17,6 +17,7 @@ import camera;       // Camera ctx（/camera 写、/state 读）
 import debug_rpc_burst;  // /shotburst 协议判据（形状解析 + 锚点裁决，rlbase 层纯逻辑）
 import asset_table;  // AssetTable（参数页构建）
 import vk_renderer;  // Renderer（/shot 帧捕获 + writeCapturePng 宿主）
+import vk_swapchain;  // B2-4③′：/resize 经 Renderer::getSwapchainRef 调 requestHeadlessExtent
 import llm_debug;    // writeCapturePng（/shot 落盘，同 main 的 llm 截图出口）
 import runtime_config;  // LlmDebugConfig（writeCapturePng 入参，只需 file 字段）
 
@@ -79,7 +80,7 @@ void rpcReject(const RpcResponder& responder, int status, std::string message) {
 nlohmann::json rpcRoutesJson(uint32_t frame) {
 	return nlohmann::json{{"ok", true}, {"frame", frame},
 		{"routes", {"GET /", "GET /state", "POST /camera", "POST /param", "POST /shot",
-			"POST /shotburst", "POST /quit"}}};
+			"POST /shotburst", "POST /resize", "POST /quit"}}};
 }
 
 /**
@@ -610,6 +611,29 @@ RpcOutcome rpcHandleQuit(RpcWiring& w) {
 }
 
 /**
+ * POST /resize {width, height}（B2-4③′ resize 冒烟）：**headless** 模式改交换链尺寸。
+ *
+ * 写 WindowExtent ctx + `Swapchain::requestHeadlessExtent`；真正的重建由**下一帧**
+ * resizeSystem 完成——与窗口拖拽 resize 完全同一条路（本端点只是把"SDL 拖窗口"换成
+ * "发数字"），退役窗口 / 布局结转 / IZB 重建全部走既有判据。窗口模式 =
+ * requestHeadlessExtent 出声拒（false）→ 400（那条路的 extent 真相源是 SDL）。
+ * @param w 装配态
+ * @param body {"width": N, "height": M}
+ */
+RpcOutcome rpcHandleResize(RpcWiring& w, const nlohmann::json& body) {
+	const auto width = body.at("width").get<uint32_t>();
+	const auto height = body.at("height").get<uint32_t>();
+	if (width == 0 || height == 0)
+		return rpcFail(400, "resize: width/height must be > 0");
+	if (!w.renderer.getSwapchainRef().requestHeadlessExtent(width, height))
+		return rpcFail(400, "resize: headless 模式专用（窗口路径 extent 由 SDL 重查）");
+	auto& extent = w.registry.ctx().get<WindowExtent>();
+	extent.width = width;
+	extent.height = height;
+	return rpcOk({{"ok", true}, {"width", width}, {"height", height}, {"frame", w.frame}});
+}
+
+/**
  * POST 路由（`/camera`、`/param`、`/shot`、`/quit`；body 解析在此，畸形 = 400）。
  * 异常由 rpcDispatch 的 try 统一转 400/500 —— 本函数在它的 try 内被调用。
  * @param w 装配态
@@ -646,6 +670,10 @@ void rpcDispatchPost(RpcWiring& w, const RpcRequest& request, RpcResponder respo
 	if (request.path == "/quit") {
 		// body 恒可解析（上面已兜 400），本端点无参
 		reply(rpcHandleQuit(w));
+		return;
+	}
+	if (request.path == "/resize") {
+		reply(rpcHandleResize(w, body));
 		return;
 	}
 	reply(rpcFail(404, fmt::format("unknown route: {}", request.path)));

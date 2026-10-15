@@ -157,13 +157,23 @@ std::expected<void, Error> validateAttachmentHistory(const RgAttachmentDesc& att
 std::expected<void, Error> validateAttachmentBufferName(const RgAttachmentDesc& att) {
 	if (att.kind != RgAttachmentKind::buffer)
 		return {};  // 非 buffer 档与注册表无关
-	if (isBufferAttachmentRegistered(att.name))
-		return {};
-	return std::unexpected(rgError(fmt::format(
-		"render graph: buffer attachment '{}' is not registered in the C++ buffer registry "
-		"(register it with registerBufferAttachment before compiling the graph; the registry is "
-		"the only place a buffer's byte size may come from — see rgl/render_graph_buffers.cppm)",
-		att.name)));
+	if (!isBufferAttachmentRegistered(att.name))
+		return std::unexpected(rgError(fmt::format(
+			"render graph: buffer attachment '{}' is not registered in the C++ buffer registry "
+			"(register it with registerBufferAttachment before compiling the graph; the registry is "
+			"the only place a buffer's byte size may come from — see rgl/render_graph_buffers.cppm)",
+			att.name)));
+	// B2-4③′ 拒绝面扩展：注册字节必须 **>0**。0 字节 = 资源还没建就来声明附件（或尺寸公式
+	// 算漏了），编译期即拒——图对 buffer 档的全部产物就是校验，校验吃 0 等于没校验。
+	// 重编译日志（DynamicRenderGraph::recompile）逐名打印这里的注册字节，机器可观测。
+	if (const auto bytes = bufferAttachmentBytes(att.name); !bytes || *bytes == 0)
+		return std::unexpected(rgError(fmt::format(
+			"render graph: buffer attachment '{}' is registered with {} bytes — a buffer "
+			"attachment whose byte size is unknown or zero means the owning module registered "
+			"before its resource existed (register the real size from registerBufferAttachment; "
+			"the >0 check is the rejection face added by B2-4③′)",
+			att.name, bytes ? "0" : "no")));
+	return {};
 }
 
 /** ① 单 attachment 校验与落图：空名 / 重名 / swapchain 计数 / 格式（validateAttachmentFormat）/ 尺寸（validateAttachmentExtent）/ 缩放（validateAttachmentExtentScale）/ 历史（validateAttachmentHistory）/ buffer 注册（validateAttachmentBufferName）→ 名字→slot + 图记录 + 游标。@return 失败带定位 Error */

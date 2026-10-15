@@ -33,6 +33,8 @@ import fsr_upscaler;   // 批 14.5：FSR 3.1.4 upscaler（图外 compute，门�
 import meshlet_cull_service;  // ★1-a2-i：逐簇视锥剔除（图外 compute，装配后挂裸指针）
 import offgraph_contract;  // 批次 B1：图外工作申报面（挂点/相位表；零设备调用，判据在 tests/）
 import offgraph_sync;      // 批次 B1b：图外同步发射账（barrier 由 usage 词表物化 + 帧末次数对账）
+import dynamic_render_graph;  // B2-4③′（D5 第一刀）：脏驱动的图派生件（安全点重编译 + 按名结转）
+import pending_evictions;     // B2-4③′ 债-124：RT 退役台账（frames-in-flight 到期销毁）
 import meshlet_shadow_args;   // ★M-1b：真 MDI 行表载体（upload + 间接 buffer，装配后挂裸指针）
 import mdi_rows;              // ★M-1b：kMdiShadowRowStride（drawMeshTasksIndirectEXT 的 stride 唯一真相源）
 
@@ -86,6 +88,11 @@ export class Renderer {
 	 * defaultRenderGraph()）——构造期校验执行器可解析性（validateRenderGraphForExecutor：
 	 * swapchain/depth 各恰一次 / state 与 drawSource 名字 / blit 两端齐 / drawLight state
 	 * 必 "light"），不可解析 = 启动 fail-fast，录制期零图错误。
+	 * graphDesc（B2-4③′，D5 第一刀）：图描述本体 move 进本类的 DynamicRenderGraph——
+	 * 图自此是**脏驱动派生件**：资源事实在运行期变（IZB 首建 / extent 漂移）→ 标脏 →
+	 * 下个安全点（beginFrame 围栏后、任何录制前）重编译，逐 slot 跨帧表按名结转。
+	 * renderGraph 仍是首编译产物（main 已校验过，本类不重复首编译）；重编译次数出厂档
+	 * 判据 = 0（日志 "DynamicGraph: recompiled" 打点，IZB 开档 = 1）。
 	 * @param vkDevice 设备层（队列 / 命令池 / fence 等待 / 能力探测）
 	 * @param vkSwapchain 交换链层（acquire / recreate / extent）
 	 * @param vkResources 资源层（descriptor heap / 深度图 / offscreen RT）
@@ -93,7 +100,8 @@ export class Renderer {
 	 * @param env 环境服务（ecs renderListSystem 经 getEnvironmentRef 读，架构债务续账步骤 3）
 	 * @param rtCache offscreen RT 缓存（drawFrame 每帧 ensure，架构债务续账步骤 2）
 	 * @param shaderRegistry 管线表（条目查找 + bindShaders；main 先于 Renderer 构造）
-	 * @param renderGraph 编译渲染图（构造后不变；不可解析启动期抛出）
+	 * @param renderGraph 编译渲染图（首编译产物；重编译经 graph 派生后按名结转替换）
+	 * @param graphDesc 图描述（move 进 DynamicRenderGraph；重编译的真相源）
 	 * @param gpuCull GPU culling 子系统（Phase 7b；main 先于 Renderer 构造。inactive
 	 *   （候选表空）时 drawFrame 全路径不碰 culling = 行为中性）
 	 * @param dgc DGC 命令生成子系统（Phase 7b NVIDIA 路；main 仅 graphicsIndirect=true
@@ -104,6 +112,7 @@ export class Renderer {
 	Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RGL::Resources& vkResources,
 		RGL::SceneDataService& sceneData, RGL::Environment& env, RGL::RenderTargetCache& rtCache,
 		RGL::ShaderRegistry& shaderRegistry, RGL::CompiledRenderGraph renderGraph,
+		RGL::RgGraphDesc graphDesc,
 		RGL::GpuCull* gpuCull, RGL::DgcCommands* dgc, RGL::DgcStaticCommands* dgcStatic = nullptr,
 		bool fsrEnabled = false, bool fsrTemporal = false);
 	/** @return 交换链层引用（extent / recreate / 后缓冲）。 */
@@ -285,12 +294,33 @@ export class Renderer {
 	 * RenderTargetCache::ensure（extent 随 swapchain resize 重建，重建含 waitIdle，录制期调用安全）。
 	 * generation 变化（新图布局 Undefined）→ 重置 attachmentLayouts[slot]，防下帧首 barrier
 	 * oldLayout 失配。手术 6：块体自 drawFrame 摘出（rtGenerations 归本函数局部）。
+	 * B2-4③′ 债-124：extent 漂移 → `RenderTargetCache::retire`（发现帧 + frames-in-flight
+	 * 到期销毁 + 还槽）；到期收割也跑在本函数（安全点内）。
 	 * @param extent 当前 swapchain extent
+	 * @param frame 当前帧号（退役 due 计算与收割；= session.frameNumber()）
 	 * @param offscreenRt 出参：按图 slot 填 RT 指针（非 offscreen 槽留 null），大小 = 附件数
 	 * @return void；RenderTargetCache::ensure 失败 → Error
 	 */
 	[[nodiscard]] std::expected<void, Error> ensureOffscreenAttachments(vk::Extent2D extent,
-		std::vector<RtAttachment*>& offscreenRt);
+		uint64_t frame, std::vector<RtAttachment*>& offscreenRt);
+	/**
+	 * 安全点重编译（B2-4③′，D5 第一刀；drawFrame 在 beginFrame 之后、任何录制之前调）。
+	 * 不脏 = 零成本空转。脏 = 重编译 + **全部可失败步骤先跑完**（编译 / slot 稳定核对 /
+	 * 相位表重建 / drawLight 管线条目核对），任一失败**旧图旧表原样、脏位保留**（下帧
+	 * 重试）；全过才换图 + 按名结转 attachmentLayouts / rtGenerations + 重建 OffGraphSchedule。
+	 * slot 稳定核对 = 「附件只准追加在末尾」的机器守卫：旧名在新图里的 slot 必须不变
+	 *（FrameCapturer / PickingService 构造期缓存 slot，中段插入 = 它们读错附件）。
+	 * 失败**内部出声**（error 日志）后返回——本帧继续用旧图、脏位保留下帧重试；
+	 * drawFrame 调用点零分支（认知复杂度红线：安全点若逼调用点写 if，红线记账就转嫁给 drawFrame）。
+	 */
+	void recompileGraphIfNeeded();
+	/**
+	 * IZB buffer 附件的图侧同步（B2-4③′ 迁入；izbPreFrame 构造/重建后调）：
+	 * 注册 head/nodes 字节（同名替换 = extent 漂移的正常路径）→ 写上界对账
+	 *（失败 = throw，变异现场 fail-fast）→ declareBufferProductions("light", …)
+	 *（幂等 + 试编译 fail-fast；首建标脏，下个安全点重编译吃到，延迟 ≤1 帧合规）。
+	 */
+	void syncIzbGraphAttachments();
 	/**
 	 * pass draw 三路分发（手术 6：自 drawFrame pass 循环摘出）：drawLight 固定全屏单 group
 	 *（无 push constant，条目按 pass.state 名解析）/ opaque 段 GPU culling（DGC execute 或
@@ -513,8 +543,14 @@ export class Renderer {
 	// 管线表（Phase 4 批次 2：迁出至 ShaderRegistry，零 entt；main 先于 Renderer 构造并持引用，
 	// 析构序 Renderer 先于 registry 安全）
 	RGL::ShaderRegistry& registry;
-	// Phase 6：编译渲染图（构造传入，main 启动期 compileRenderGraph 产出，之后不变）
+	// Phase 6：编译渲染图（构造传入，main 启动期 compileRenderGraph 产出）
+	// B2-4③′（D5 第一刀）起它不再是「之后不变」：安全点重编译成功后被整体替换，
+	// 逐 slot 跨帧表按名结转（FrameCapturer/PickingService 持本成员引用——替换是
+	// **原地赋值**不换对象地址，引用恒有效）。
 	RGL::CompiledRenderGraph renderGraph;
+	// B2-4③′：脏驱动的图派生件（desc 真相源 + 脏位 + 重编译计数；声明在 renderGraph
+	// 之后 = 初始化列表顺序，构造只吃 desc 不碰 renderGraph）。
+	RGL::DynamicRenderGraph graph;
 	// Phase 7b：GPU culling 子系统（main 持有，构造序先于 Renderer → 析构序其后安全）；
 	// Phase 10 批次 0 手术 3：④c 提交时序 + opaque 段双路 + 对账全迁 CullDriver
 	//（本类构造期以 main 传入的裸指针建 driver；inactive = 全路径不碰 culling 语义不变）

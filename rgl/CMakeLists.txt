@@ -225,6 +225,7 @@ set(RGL_BASE_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/vkerror.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/gbuffer_contract.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/slot_ledger.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/pending_evictions.cppm"  # B2-4③′ 债-124：frames-in-flight 逐出台账（纯逻辑，rlgfx/rlscene 两侧共用）
     "${CMAKE_CURRENT_SOURCE_DIR}/compute_access_log.cppm"  # B2-2：compute 访问日志 + hazard 派生（纯值 + 一次查表，零设备 ⟹ rlbase；裁决在 rlgfx 的 offgraph_sync）
     "${CMAKE_CURRENT_SOURCE_DIR}/pass_vocabulary.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/taa_jitter.cppm"
@@ -317,6 +318,8 @@ set(RGL_SCENE_MODULE_SOURCES
     # ── 场景数据 / 渲染图 / 环境 / 纹理 / 模型 / draw list ──
     "${CMAKE_CURRENT_SOURCE_DIR}/scene_data.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/render_graph.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/dynamic_render_graph.cppm"  # B2-4③′：脏驱动的图派生件（D5 第一刀，纯逻辑可 just test）
+    "${CMAKE_CURRENT_SOURCE_DIR}/dynamic_render_graph_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/render_graph_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/render_graph_formats.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/render_graph_usage.cppm"  # B2-3：usage 推导表 + 四个 kind 谓词（解 impl 的 500 代码行红线）

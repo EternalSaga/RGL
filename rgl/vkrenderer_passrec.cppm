@@ -631,6 +631,11 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 		auto& cmd = session.commandBuffer();           // 本帧命令缓冲（录制期）
 		const uint32_t frameSlot = session.currentFrameSlot();
 		const uint32_t imageIndex = session.imageIndex();
+		// B2-4③′（D5 第一刀）**安全点**：围栏后（beginFrame 的 fence wait 已完成）、任何
+		// 录制前（gpuProfilerFrameBegin 会录命令）——脏则重编译，相位表随新图重建后再继续
+		// （offGraph.beginFrame 因此跑在新表上）。失败只出声不中断：本帧继续用旧图，
+		// 脏位保留下帧重试（重编译失败 = 编程错，日志点名后由测试/冒烟收口）。
+		recompileGraphIfNeeded();  // 失败内部出声（void 返回 = drawFrame 零分支，认知复杂度不转嫁）
 		// 批次 B1：图外工作申报面本帧记账清零（相位归 0；位置/覆盖两条判据的现场都从这里起）
 		offGraph.beginFrame();
 		// 批次 B1b：图外同步发射账清零（应发次数是启动期事实，跨帧保留）
@@ -705,7 +710,7 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 	// 块体提为 ensureOffscreenAttachments 私有方法）
 	// 批 9.5：zone "drawFrame.offscreen" 在 ensureOffscreenAttachments 首行
 	std::vector<RtAttachment*> offscreenRt;
-	if (auto r = ensureOffscreenAttachments(renderExtent, offscreenRt); !r)
+	if (auto r = ensureOffscreenAttachments(renderExtent, frame, offscreenRt); !r)
 		return std::unexpected(std::move(r).error());
 
 	// slot → VkImage/View 解析 + barrier 物化（手术 6：三个 lambda 改造为文件内 struct）

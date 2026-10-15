@@ -77,6 +77,9 @@ export std::optional<StartupConfigs> loadAllConfigs();
  *  variant 随产物带出供 gate_lint 交叉校验（意图 vs 图事实，docs/gate_lint_plan.md §3-A）。 */
 export struct CompiledGraphResult {
 	CompiledRenderGraph graph;
+	// B2-4③′（D5 第一刀）：图描述本体随产物带出 → move 进 Renderer::DynamicRenderGraph。
+	// 图自此是脏驱动派生件；`graph` 只是**首编译**产物（main 已校验，Renderer 不重复编译）。
+	RgGraphDesc desc;
 	bool deferredMode = false;
 	RgGraphVariant variant = RgGraphVariant::forward;
 	/// 批 12.6：TAA 装饰是否落图（门开且图形态支持）。装配层据此决定 TAA RT/条目

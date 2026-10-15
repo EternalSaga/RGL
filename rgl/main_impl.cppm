@@ -530,7 +530,8 @@ CompiledGraphResult compileGraphOrThrow(const char* path, const RuntimeConfig& r
 	if (!compiledGraph)
 		throw std::runtime_error(fmt::format("render graph compile failed: {}",
 			compiledGraph.error().describe()));
-	return CompiledGraphResult{std::move(*compiledGraph), deferredMode, graphConfig->variant,
+	return CompiledGraphResult{std::move(*compiledGraph), std::move(graphConfig->desc),
+		deferredMode, graphConfig->variant,
 		taaDecorated, velocityDecorated, aoApplyDecorated, ssrDecorated};
 }
 

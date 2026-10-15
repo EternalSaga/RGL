@@ -368,21 +368,53 @@ export class Resources {
 	 * gpu_canary / Renderer staging）。 */
 	/**
 	 * 分用途段 slot 分配器：每个 SlotSegment 在 descriptor heap 内拥有独立连续段，
-	 * 段内单调分配；跨段互不抢占，避免运行时辅助槽插入几何/纹理契约段。
+	 * 段内**归还者优先（最小号优先，确定性）**，无归还则段内单调分配（= 旧行为逐位不变）；
+	 * 跨段互不抢占，避免运行时辅助槽插入几何/纹理契约段。
 	 * @param segment 槽用途段
 	 * @param name 槽用途名（仅日志，如 "scene.data" / RT 名）
 	 * @return 槽号；段容量越界 → DescriptorSlotOutOfBounds 错误
 	 */
 	[[nodiscard]] std::expected<uint32_t, Error> allocSlot(SlotSegment segment, const char* name) {
 		const size_t i = segmentIndex(segment);
+		auto* logger = RLLogger::getInstance();
+		// B2-4③′ 债-124：free-list 归还者优先（最小号优先 = 确定性；出厂档无任何归还，
+		// 发号序列与旧行为逐位相同）。
+		auto& frees = freeSlots[i];
+		auto best = frees.begin();
+		for (auto it = frees.begin(); it != frees.end(); ++it)
+			if (best == frees.end() || *it < *best)
+				best = it;
+		if (best != frees.end()) {
+			const uint32_t slot = *best;
+			frees.erase(best);
+			if (logger)
+				logger->debug("descriptor heap slot {}: {} ({}, reused)", slot, name,
+					segmentName(segment));
+			return slot;
+		}
 		if (nextSlots[i] >= segmentEnds[i])
 			return std::unexpected(Error{ErrorCode::DescriptorSlotOutOfBounds,
 				fmt::format("{} slot capacity exceeded ({} >= {}): {}",
 					segmentName(segment), nextSlots[i], segmentEnds[i], name)});
-		auto* logger = RLLogger::getInstance();
 		const uint32_t slot = nextSlots[i]++;
 		if (logger) logger->debug("descriptor heap slot {}: {} ({})", slot, name, segmentName(segment));
 		return slot;
+	}
+
+	/**
+	 * 归还一个槽（B2-4③′ 债-124：RT 缓存逐出时归还**自有**的 Runtime 段槽）。
+	 *
+	 * 🔴 调用方义务（本函数无法机器核对的那半）：归还时刻起不得再有 in-flight 帧的
+	 * 描述符集引用该槽——正确路径是 `RenderTargetCache::processRetired` 在
+	 * 「发现帧 + frames-in-flight」的**安全点**销毁 RT 时调用（PendingEvictions 台账
+	 * 守的就是这条）。槽进段内 free-list，allocSlot 最小号优先复用。
+	 * @param segment 槽所属用途段
+	 * @param slot    此前由 allocSlot 发出的槽号
+	 */
+	void freeSlot(SlotSegment segment, uint32_t slot) {
+		freeSlots[segmentIndex(segment)].push_back(slot);
+		if (auto* logger = RLLogger::getInstance())
+			logger->debug("descriptor heap slot {} freed ({})", slot, segmentName(segment));
 	}
 
 	/** @return 指定用途段的起始槽号（如纹理段首槽 = 白纹理契约槽）。 */
@@ -570,6 +602,9 @@ export class Resources {
 	std::array<uint32_t, kSlotSegmentCount> segmentBegins{};
 	std::array<uint32_t, kSlotSegmentCount> segmentEnds{};
 	std::array<uint32_t, kSlotSegmentCount> nextSlots{};
+	/** 段内 free-list（B2-4③′ 债-124）：freeSlot 归还进账，allocSlot 最小号优先复用；
+	 *  出厂档无归还 = 恒空 = 发号序列与旧行为逐位相同。 */
+	std::array<std::vector<uint32_t>, kSlotSegmentCount> freeSlots{};
 	/** 用户段固定容量（与场景内容解耦；统一步长 = max(buffer, image) descriptorSize，
 	 * 运行时查询）。纹理段保留 4096 以容纳 Phase 8 ③a 四元组去重后的 bistro 纹理槽。 */
 	static constexpr uint32_t kGeometrySlotCapacity = 4096;

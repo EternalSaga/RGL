@@ -22,6 +22,43 @@ export struct IzbFrameInput {
 	glm::mat4 lightViewProj{1.0f}; ///< shadowViewProj[cascade0]（world→光 ndc）
 };
 
+// ── B2-4③′ IZB 迁入渲染图：附件名 + 尺寸/写上界公式（**唯一真相源**）──────────────
+// 图侧（Renderer::syncIzbGraphAttachments 注册 + 对账 + declareBufferProductions）与
+// 模块侧（构造期分 buffer）**必须吃同一组公式**——抄两份就是两个真相源，extent 漂移时
+// 必漂其一（本仓「看起来已接线」的经典形态）。注册动作住 rlframe 而不是本模块的理由：
+// 注册表在 render_graph（rlscene），rlgfx 逆向 import 立刻链接失败（分层闸门）。
+
+/** head 附件名（G² uint，NONE 哨兵；create dispatch 的 atomic 交换目标） */
+export inline constexpr std::string_view kIzbHeadAttachment = "izb_head";
+/** nodes 附件名（W·H × 16B 链节点；create dispatch 逐像素写） */
+export inline constexpr std::string_view kIzbNodesAttachment = "izb_nodes";
+
+/** head 字节数 = G² × 4B（与 buffer 分配同源；grid-of-lists 的 head 表）。 */
+export constexpr vk::DeviceSize izbHeadBytes(uint32_t gridDim) {
+	return static_cast<vk::DeviceSize>(gridDim) * gridDim * 4;
+}
+
+/** nodes 字节数 = W·H × 16B（u, v, lightDepth, next）。 */
+export constexpr vk::DeviceSize izbNodesBytes(vk::Extent2D extent) {
+	return static_cast<vk::DeviceSize>(extent.width) * extent.height * 16;
+}
+
+/**
+ * head 的 dispatch 写上界 = 全表（create 的 atomic 目标恒 < G²，shader 守卫
+ * `cell < gridDim²`；FillBuffer 清表也恰是全表）。
+ */
+export constexpr vk::DeviceSize izbHeadWriteBound(uint32_t gridDim) {
+	return izbHeadBytes(gridDim);
+}
+
+/**
+ * nodes 的 dispatch 写上界 = 全表（create 逐像素一线程，守卫 `p >= pixelW*pixelH`
+ * 早退 ⟹ 写入下界 ≤ W·H 项 × 16B）。
+ */
+export constexpr vk::DeviceSize izbNodesWriteBound(vk::Extent2D extent) {
+	return izbNodesBytes(extent);
+}
+
 /**
  * FTIZB 硬阴影的 IZB 数据层（批 11.3-1d；docs/hfts_izb_plan.md）。
  *
