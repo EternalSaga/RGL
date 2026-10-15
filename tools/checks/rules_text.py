@@ -25,6 +25,8 @@ from config import (ALLOWED_CPP, AGENTS_DOC_INDEX_SECTION, AGENTS_FILE,
                     FORBIDDEN_VULKAN_APIS, FORBIDDEN_VULKAN_MSG, JUDGMENTS_TABLE_GLOB,
                      MODERN_BANNED,
                     NEW_DELETE_EXEMPT, RETIRED_DOC_NAMES, ROOT,
+                    RG_ENUM_VOCAB_ENUMS, RG_ENUM_VOCAB_SOURCE_FILE,
+                    RG_ENUM_VOCAB_TABLE_FILE,
                     RPC_ROUTE_DISPATCH_FILE, RPC_ROUTE_DISPATCH_RE,
                     RPC_ROUTE_REGISTER_FILE, RPC_ROUTE_REGISTER_RE,
                     STL_GMF_EXCEPTIONS,
@@ -1166,4 +1168,105 @@ def rpc_route_checks() -> list[Warning]:
             f"server 注册了路由 '{path}'，但 {RPC_ROUTE_DISPATCH_FILE} 没有解析它的分支 "
             f"= 请求进得来、没人处理，落 unknown-route 兜底 = 同样是 404 形态。"
             f"dispatch 侧在册名单：{'、'.join(sorted(disp))}", "error"))
+    return warnings
+
+
+# ─── 渲染图 Lua 词表对账（债-122 另一半，§11）─────────────────────────────────
+
+SCAN_RG_ENUM_VOCAB: dict[str, str] = {}
+
+
+def rg_enum_vocab_readout() -> str:
+    """五张表的覆盖面读数（`RgAttachmentKind 5/5 · …`）；没跑过 = 空串。"""
+    if not SCAN_RG_ENUM_VOCAB:
+        return ""
+    return " · ".join(f"{k} {v}" for k, v in SCAN_RG_ENUM_VOCAB.items())
+
+
+def rg_enum_vocab_checks() -> list[Warning]:
+    """枚举本体 → Lua 词表右值 **逐个对账**（债-122 另一半）。
+
+    ## 病根（债-122 前一半的真实形态）
+    `depthOffscreen` 在 `RgAttachmentKind` 里住很久，词表却没挂号 ⟹「配置里写
+    depthOffscreen 报词表错」而内建图用同一个 kind 跑得好好的 = **两条路只通了一条**。
+    以后再加 `RgAttachmentKind` / `RgUsage` 档，漏词表只能靠 `parseEnum` 运行期响亮
+    报错，没有构建期判据——本条把它变成构建期 ERROR。
+
+    ## 判据（口径 = 右值引用，不是字符串出现）
+    - 枚举本体（`RG_ENUM_VOCAB_SOURCE_FILE`）逐个解析 `enum class RgXxx { … };` 的
+      枚举子名单（先 `strip_comments` 再切分：吃掉行内注释与 `= 值` 形态；
+      `RgLoadOp`/`RgStoreOp` 是单行体，同一式子覆盖）。
+    - 词表侧（`RG_ENUM_VOCAB_TABLE_FILE`）收集 `RgXxx::<enumerator>` 形态的**右值**集合
+      （也先剥注释——注释里提一嘴不算挂号）。🔴 不能拿「枚举名当串在文件里找」：
+      `RgPassKind::drawMesh` 的 Lua 拼写是 `"draw"`，照串找 = 规则第一天就说谎。
+    - 枚举声明了、右值集合没有 = ERROR，点名枚举 + 缺的枚举子 + 两文件 + 词表已覆盖
+      名单，症状句写进消息（「两条路只通了一条」）。
+
+    ## 失效必须出声（"没数不是相等"）
+    - 两文件任一读不到 ⟹ ERROR。
+    - `RG_ENUM_VOCAB_ENUMS` 清单里的枚举在源文件**找不到定义** ⟹ ERROR
+      （改名/搬走要红，不许静默少对一张表——清单写死在 config.py 就是为了让它红）。
+    - 某枚举体解析出 0 个枚举子 / 某表词表右值扫出 0 条 ⟹ ERROR（格式变了没同步）。
+
+    ## 盲区（写下来不装没看见）
+    - **只查「枚举子有没有被右值引用」，不查 Lua 侧拼写本身**——`{"draw", …}` 的键名
+      漂了（比如和别的表重名/改拼写）本规则看不见；拼写是 Lua 配置面的 API，改动会
+      红在配置解析期（parseEnum 报词表错），不归本条。
+    - 反向不查：词表右值引用了枚举里没有的档 = 编译不过（C++ 类型检查），不需要本条。
+    - 枚举体里的 `#if` 条件编译档会扫不到（本仓 rgl/*.cppm 无此形态）。
+    """
+    src = read_text(Path(ROOT) / RG_ENUM_VOCAB_SOURCE_FILE)
+    tbl = read_text(Path(ROOT) / RG_ENUM_VOCAB_TABLE_FILE)
+    SCAN_RG_ENUM_VOCAB.clear()
+    if src is None or tbl is None:
+        missing = "、".join(f
+                            for f, ok in ((RG_ENUM_VOCAB_SOURCE_FILE, src),
+                                          (RG_ENUM_VOCAB_TABLE_FILE, tbl)) if not ok)
+        return [Warning("tools/checks/config.py", 0,
+            f"渲染图词表对账（债-122）**本次未做任何对账**：扫描面 {missing} 读不到"
+            "（改名 / 搬走了？同步改 tools/checks/config.py 的 RG_ENUM_VOCAB_*_FILE）"
+            "——「零警告」不是「五张表都齐」", "error")]
+    src, tbl = strip_comments(src), strip_comments(tbl)
+    warnings: list[Warning] = []
+    for enum_name in RG_ENUM_VOCAB_ENUMS:
+        m = re.search(rf"enum class {enum_name}\b[^{{;]*\{{([^}}]*)\}}", src)
+        if m is None:
+            warnings.append(Warning(RG_ENUM_VOCAB_SOURCE_FILE, 1,
+                f"清单里的枚举 {enum_name} 在 {RG_ENUM_VOCAB_SOURCE_FILE} 找不到定义"
+                f"（改名 / 搬走了？同步改 tools/checks/config.py 的 RG_ENUM_VOCAB_ENUMS，"
+                "不许静默少对一张表）", "error"))
+            continue
+        members: list[str] = []
+        for part in m.group(1).split(","):
+            ident = part.split("=")[0].strip()
+            if ident:
+                if not re.fullmatch(r"[A-Za-z_]\w*", ident):
+                    warnings.append(Warning(RG_ENUM_VOCAB_SOURCE_FILE, 1,
+                        f"{enum_name} 的枚举体切分出非标识符片段 {ident!r}"
+                        "（枚举体里出现了本规则没料到的形态，同步改规则）", "error"))
+                    break
+                members.append(ident)
+        if not members:
+            warnings.append(Warning(RG_ENUM_VOCAB_SOURCE_FILE, 1,
+                f"{enum_name} 的枚举体解析出 0 个枚举子（格式变了？同步改 "
+                "tools/checks/rules_text.py::rg_enum_vocab_checks，别让它静默空跑）", "error"))
+            continue
+        rvals = set(re.findall(rf"\b{enum_name}::(\w+)", tbl))
+        if not rvals:
+            warnings.append(Warning(RG_ENUM_VOCAB_TABLE_FILE, 1,
+                f"{enum_name} 在 {RG_ENUM_VOCAB_TABLE_FILE} 扫出 0 条词表右值"
+                f"（词表被搬走 / 右值形态变了？本表 {len(members)} 个枚举子全部对账未发生）",
+                "error"))
+            continue
+        covered = sorted(set(members) & rvals)
+        SCAN_RG_ENUM_VOCAB[enum_name] = f"{len(covered)}/{len(members)}"
+        missing = [x for x in members if x not in rvals]
+        if missing:
+            warnings.append(Warning(RG_ENUM_VOCAB_SOURCE_FILE,
+                src[:m.start()].count("\n") + 1,
+                f"{enum_name} 的枚举子 {'、'.join(missing)} 没有被 {RG_ENUM_VOCAB_TABLE_FILE} "
+                f"的任何词表右值 {enum_name}::<档> 引用 = 配置里写不出来这个档，"
+                f"而内建图用同一个值跑得好好的 = 两条路只通了一条（债-122 的 "
+                f"depthOffscreen 就住在这里）。词表已覆盖："
+                f"{'、'.join(covered) if covered else '（空）'}", "error"))
     return warnings

@@ -77,6 +77,7 @@ from rules_text import (agents_doc_index_checks, agents_index_status_checks,
                         doc_pointer_counts, doc_pointer_readout,
                         judgments_pointer_checks,
                         docs_status_checks, forbidden_vulkan_checks,
+                        rg_enum_vocab_checks, rg_enum_vocab_readout,
                         rpc_route_checks, rpc_route_readout,
                         slang_load_bitcast_checks, meshlet_spec_checks,
                         modern_cpp_checks, text_checks, load_doc_pointer_baseline,
@@ -345,6 +346,8 @@ def main() -> None:
         warnings.extend(coverage_checks())
         # RPC 路由 ↔ dispatch 双向对账（债-125）：两份名单漏一条 = 真程序 404 而单元全绿。
         warnings.extend(rpc_route_checks())
+        # 渲染图 Lua 词表对账（债-122 另一半）：枚举加了档、词表没挂号 = 配置面写不出来。
+        warnings.extend(rg_enum_vocab_checks())
 
     # 工具侧基线（只准降不准升）：--update-tool-baseline 先重写再比对（必然持平）。
     # 未解析的 TU 不参与比对，其基线条数原样保留（否则 clean 后一跑就把基线清零）。
@@ -445,6 +448,10 @@ def main() -> None:
         rpc_readout = rpc_route_readout()
         print("[style-check] RPC 路由对账: "
               + (rpc_readout if rpc_readout else "**本次未执行**（规则没跑到）"))
+        # 渲染图词表对账的读数（债-122）：五张表逐张「覆盖/总数」，没数与数出全过必须区分。
+        vocab_readout = rg_enum_vocab_readout()
+        print("[style-check] 渲染图词表对账: "
+              + (vocab_readout if vocab_readout else "**本次未执行**（规则没跑到）"))
         if rgl_notready:
             print("[style-check] 提示: 跳过 = modmap/BMI 构建产物缺失（clean 后首次构建属正常，"
                   "与编译并行时尚未生成）；本次仅跑纯文本规则，编译完成后重跑即全量生效")

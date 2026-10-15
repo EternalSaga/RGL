@@ -1321,7 +1321,8 @@ extentScale、history 的「不是 offscreen 就拒」）——第五档落进�
 进程级单例，服务只保证比 Renderer 久）。拒绝面落 `registerAttachment`（D1 第 4 条双向规则：buffer
 附件名未注册即拒，五类诱惑不进黑名单）。Lua 词表补 `buffer` 与 `depthOffscreen`（债-122），且
 **format 前置校验改按 kind 分派**——只补词表则 `depthOffscreen` 配深度格式仍报未知格式 = 「补了词表
-还是不能用」的半吊子形态，债-122 的另一半就此收掉。kind 加档的 10 处静默点全部必答；`kindCases()`
+还是不能用」的半吊子形态，债-122 的另一半就此收掉（此句指 format 腿；**对账护栏腿**——「枚举值必须
+全部出现在 Lua 词表」的机器判据——2026-10-15 建成 → `docs/风格检查规则.md` §11）。kind 加档的 10 处静默点全部必答；`kindCases()`
 的 aspect 列从布尔改 `vk::ImageAspectFlags`（buffer 的正确答案 = 空 mask，布尔表达不出来）。
 
 **迁入侧**：`visibleBuffer` / `itemsBuffer` 按名注册；`recordDispatch` 的 4 条手抄 barrier → 4 个边名，

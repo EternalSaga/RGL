@@ -398,3 +398,12 @@ RPC_ROUTE_REGISTER_FILE = "rgl/debug_rpc_impl.cppm"
 RPC_ROUTE_DISPATCH_FILE = "rgl/debug_rpc_exec_impl.cppm"
 RPC_ROUTE_REGISTER_RE = r'server\.(?:Get|Post)\("([^"]+)"'
 RPC_ROUTE_DISPATCH_RE = r'request\.path\s*(?:==|!=)\s*"([^"]+)"'
+
+# ─── 渲染图 Lua 词表对账（债-122 另一半；规则 = rules_text.rg_enum_vocab_checks，§11）──
+# 枚举本体是真相源，本清单只钉「哪几张表要对账」——**枚举改名/搬走必须红**（清单里的名字
+# 在源文件找不到定义 = error，不许静默少对一张表）。五张表都经 parseEnum；右值口径见
+# 规则 docstring：`RgXxx::<enumerator>` 形态的词表右值，**不是**「枚举名当串在文件里找」
+# （RgPassKind::drawMesh 的 Lua 拼写是 "draw"，照串找一上来就误报）。
+RG_ENUM_VOCAB_SOURCE_FILE = "rgl/render_graph.cppm"
+RG_ENUM_VOCAB_TABLE_FILE = "rgl/render_graph_config_impl.cppm"
+RG_ENUM_VOCAB_ENUMS = ("RgAttachmentKind", "RgUsage", "RgLoadOp", "RgStoreOp", "RgPassKind")
