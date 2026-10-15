@@ -40,6 +40,12 @@ bool isColorAttachment(const RgGraphDesc& desc, const std::string& name) {
 		case RgAttachmentKind::depth: return false;  // 主深度图必须排除（撞名史见上）
 		case RgAttachmentKind::offscreen: return true;
 		case RgAttachmentKind::depthOffscreen: return true;  // 阴影图按色（既有语义，未改）
+		// buffer 档**不是**色附件。这里判 false 的实际作用比"分类正确"更具体：本判据的下游是
+		// `sampledColorName`，它只扫 `sampleRead` 输入，而 buffer 只能被 storage* 引用
+		// （`validatePassRef` 那条双向规则），所以严格说走不到这里——但"走不到"是**另一处**
+		// 判据给的保证，本函数不许依赖它（装饰器跑在 compile 之前，那时那条规则还没执行）。
+		// 判 true 的静默后果正是 §7.16 表里那一行：高亮 / TAA / velocity 三个装饰器的插入点一起挪位。
+		case RgAttachmentKind::buffer: return false;
 	}
 	return true;  // 不可达（穷尽），消 -Wreturn-type
 }

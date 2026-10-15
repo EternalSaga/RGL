@@ -15,6 +15,7 @@ import vk_resources;
 import scene_data;
 import VmaRaii;
 import shader;  // makeMappedCompute（binding→heap 槽一对一的 compute shader object 工厂）
+import render_graph;  // B2-3：buffer 附件的按名注册表（registerBufferAttachment / checkBufferWriteBound）
 import meshlet_cull_types_generated;
 
 namespace RGL {
@@ -110,6 +111,12 @@ void MeshletCullService::createVisibleFlags() {
 			throw std::runtime_error("meshlet cull: 可见标志初值 fence 超时");
 	}
 	writeSlotDescriptor(visibleBuffer.getDeviceAddress(), bytes, visibleBufferSlot);
+	// 批次 B2-3：把「这张 buffer 有多少字节」交给 render_graph 的**按名注册表**（注册表同时就是
+	// 图侧 `kind=buffer` 附件的拒绝面：名字没登记就不许声明成 buffer 附件）。
+	// 🔴 lambda **按值捕获字节数**、绝不捕获 `this`：注册表是进程级单例，而本服务按生命周期红线
+	// 只保证比 Renderer 活得久（不保证比进程久）——捕获 this 等于留一条"注册表里的 lambda 悬空"
+	// 的路，而它只在对账调用那一刻才炸，离根因隔着整个启动流程。
+	registerBufferAttachment(kMeshletVisibleFlagsAttachment, [bytes] { return bytes; });
 }
 
 void MeshletCullService::createCullShader() {
@@ -181,60 +188,49 @@ void MeshletCullService::uploadItems(std::span<const MeshletCullItem> items) {
 	itemsBuffer = std::move(*created);
 	writeSlotDescriptor(address, bytes, itemsSlot);
 	nItems = static_cast<uint32_t>(items.size());
+	// 批次 B2-3：剔除项表登记进按名注册表（与标志表同侧，见 createVisibleFlags 的理由）。
+	registerBufferAttachment(kMeshletCullItemsAttachment, [bytes] { return bytes; });
+	// 🔴 **写上界对账**（启动期一次，违规 throw）。两侧来源**必须独立**才成立：注册字节数来自
+	// `createVisibleFlags` 的**容量公式**（按总簇数），写上界来自**本函数的 itemCount**（按扫描
+	// 结果）。上面那条容量闸门拿的是 `clusterCapacity` 字段，改容量公式它不跟；这条拿的是实际
+	// 分配出来的字节数，改公式它立刻红。两个方向不对称 ⟹ 不是同义反复。
+	// 写上界出处 = `meshlet_cull.comp.slang` 的 `clusterVisible.Store(tid.x * 4u, …)`，
+	// 守卫 `tid.x < itemCount` ⟹ 最高写到 itemCount*4 字节。
+	if (auto r = checkBufferWriteBound(kMeshletVisibleFlagsAttachment,
+	        static_cast<vk::DeviceSize>(nItems) * 4u); !r)
+		throw std::runtime_error(r.error().message);
+	// ⚠ 剔除项表**故意不对账**：它的字节数与写上界同出 `items.size_bytes()` 一个表达式
+	// （注册 = alignUp16(它)、写 = 它），判据恒真 = 假护栏。登记名字是为了让图侧能按名申报，
+	// 不是为了这条对账——写清楚免得后来者"补上"一条永远不会红的断言。
 	if (auto* logger = RLLogger::getInstance())
 		logger->info("meshlet: 逐簇剔除项表已上传 GPU —— items={}（{}B，槽 {}），dispatch 组数={}",
 		    nItems, bytes, itemsSlot, (nItems + kCullWorkgroupSize - 1) / kCullWorkgroupSize);
 }
 
 void MeshletCullService::recordDispatch(vk::raii::CommandBuffer& cmd,
-	std::span<const glm::vec4, 6> planes) {
+	std::span<const glm::vec4, 6> planes, OffGraphSync& sync) {
 	if (nItems == 0)
 		return;  // uploadItems 没跑过 = 没有任何剔除项，一条命令都不该发（门关路径零命令）
 	const auto& sceneBuffer = sceneData.getBuffer();
 
-	// ── dispatch 前的依赖（一次 pipelineBarrier2 装三条，源点相同 ⟹ 合并成一条命令）────────
-	// (a) **host 写 / Transfer 写 → compute 读 + heap 读**：`recordFixedDataPath` 那两条 barrier
-	//     的 dstStageMask 都只有 `eAllGraphics`，**不含 `eComputeShader`**——heap barrier 覆盖
-	//     描述符的 host 写、post-copy barrier 覆盖 scene data 的 Transfer 写，两者都只保证到
-	//     图形阶段。compute 读 heap 描述符与 scene data 的这条依赖必须自己补（GpuCull 在独立
-	//     cull CB 里同样自带一套，见 gpu_cull_impl.cppm::recordCullPass）。
-	// (b) **scene data：Transfer 写 → compute 读**（同 (a) 的理由，落到具体 buffer 区间）。
-	// (c) **可见标志：写前依赖**（上一帧 mesh 读 / 上一帧 compute 写 → 本帧 compute 写）。
-	//     单份 buffer 跨 frames-in-flight 复用的 WAR/WAW 补齐，选型理由 → 类注释。pipeline
-	//     barrier 的 first 作用域含同队列更早提交的命令（跨 submission），故一条补齐两帧之间
-	//     的读写序；缺它的症状是 syncval 的 WRITE_AFTER_* hazard（scene data 同型实测）。
-	vk::MemoryBarrier2 toCompute{};
-	toCompute.srcStageMask = vk::PipelineStageFlagBits2::eHost | vk::PipelineStageFlagBits2::eTransfer;
-	toCompute.srcAccessMask = vk::AccessFlagBits2::eHostWrite | vk::AccessFlagBits2::eTransferWrite;
-	toCompute.dstStageMask = vk::PipelineStageFlagBits2::eComputeShader;
-	toCompute.dstAccessMask =
-	    vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eResourceHeapReadEXT;
-	std::vector<vk::BufferMemoryBarrier2> preBuffers;
-	preBuffers.reserve(2);
-	if (sceneBuffer.buffer != VK_NULL_HANDLE) {
-		vk::BufferMemoryBarrier2 sceneToCompute{};
-		sceneToCompute.srcStageMask = vk::PipelineStageFlagBits2::eTransfer;
-		sceneToCompute.srcAccessMask = vk::AccessFlagBits2::eTransferWrite;
-		sceneToCompute.dstStageMask = vk::PipelineStageFlagBits2::eComputeShader;
-		sceneToCompute.dstAccessMask = vk::AccessFlagBits2::eShaderRead;
-		sceneToCompute.buffer = sceneBuffer.buffer;
-		sceneToCompute.size = kSceneDataBytes;
-		preBuffers.push_back(sceneToCompute);
-	}
-	vk::BufferMemoryBarrier2 flagsBeforeWrite{};
-	flagsBeforeWrite.srcStageMask =
-	    vk::PipelineStageFlagBits2::eAllGraphics | vk::PipelineStageFlagBits2::eComputeShader;
-	flagsBeforeWrite.srcAccessMask =
-	    vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite;
-	flagsBeforeWrite.dstStageMask = vk::PipelineStageFlagBits2::eComputeShader;
-	flagsBeforeWrite.dstAccessMask = vk::AccessFlagBits2::eShaderWrite;
-	flagsBeforeWrite.buffer = visibleBuffer.buffer;
-	flagsBeforeWrite.size = VK_WHOLE_SIZE;
-	preBuffers.push_back(flagsBeforeWrite);
-	vk::DependencyInfo preDep{};
-	preDep.setMemoryBarriers(toCompute);
-	preDep.setBufferMemoryBarriers(preBuffers);
-	cmd.pipelineBarrier2(preDep);
+	// ── dispatch 前的依赖（B2-4②：四条边各一次 emit，掩码由 offgraph_sync 的 usage 词表物化）──
+	// 语义逐条对应迁移前的手抄 barrier，出处写在边表行注释里：
+	// (a) heap 描述符的 host 写 + scene data 的 Transfer 写 → compute 读它俩。上游
+	//     `recordFixedDataPath` 那两条 barrier 的 dstStageMask 只到 eAllGraphics，不含 CS。
+	// (b) scene data：Transfer 写 → compute 读（落到具体 buffer 区间）。
+	// (c) 可见标志：写前依赖（上一帧 mesh 读 / 上一帧 compute 写 → 本帧 compute 写）。
+	//     单份 buffer 跨 frames-in-flight 复用的 WAR/WAW 补齐，选型理由 → 类注释。
+	sync.emit(cmd, RgSyncEdgeId::meshletHeapSceneToCompute);
+	if (sceneBuffer.buffer != VK_NULL_HANDLE)
+		sync.emit(cmd, RgSyncEdgeId::meshletSceneCopyToCompute, sceneBuffer.buffer);
+	else if (auto* logger = RLLogger::getInstance())
+		// 🔴 走到这里已经是 bug：dispatch 要从 scene data 读对象矩阵表，buffer 不存在 ⟹ 那一读
+		// 本来就在读垃圾。原代码在 else 侧**什么都不做**（静默分支），迁移时改成出声（同 §7.8 对
+		// `recordCullPass` 的处置）。不要为此给那条边另挂"scene buffer 就绪没"的门——理由逐字写在
+		// `RgSyncGate::meshlet` 注释里；帧末会同时报"边发了 0 次"，那是症状，这条才是根因。
+		logger->error("meshlet cull: scene data buffer 不存在 → 本帧 dispatch 读不到对象矩阵表，"
+		              "且 scene→compute 那条边发不出（画面可能整块错，根因在 SceneDataService::ensure）");
+	sync.emit(cmd, RgSyncEdgeId::meshletVisiblePriorToWrite, visibleBuffer.buffer);
 
 	// dispatch（push = MeshletCullPush 100B ≤ maxPushDataSize；planes 与 CPU 剔除同源同值 =
 	// 对账基准一致，与 cull.comp 那条线同一条纪律）。vkCmdPushDataEXT 在**录制期**把数据拷进
@@ -249,19 +245,10 @@ void MeshletCullService::recordDispatch(vk::raii::CommandBuffer& cmd,
 	    vk::PushDataInfoEXT(0, vk::HostAddressRangeConstEXT(&push, sizeof(MeshletCullPush))));
 	cmd.dispatch((nItems + kCullWorkgroupSize - 1) / kCullWorkgroupSize, 1, 1);
 
-	// ── compute 写标志 → mesh shader 读（`eAllGraphics` 含 MeshShaderStage）─────────────────
-	// 消费方 = meshlet.mesh.slang binding 21 的早退。缺这条 = mesh 可能读到上一帧的标志
+	// compute 写标志 → mesh shader 读（`eAllGraphics` 含 MeshShaderStage）。消费方 =
+	// meshlet.mesh.slang binding 21 的早退。缺这条 = mesh 可能读到上一帧的标志
 	// （边界簇闪烁），且 VVL BUFFER_SYNC 直接报 hazard。
-	vk::BufferMemoryBarrier2 flagsToMesh{};
-	flagsToMesh.srcStageMask = vk::PipelineStageFlagBits2::eComputeShader;
-	flagsToMesh.srcAccessMask = vk::AccessFlagBits2::eShaderWrite;
-	flagsToMesh.dstStageMask = vk::PipelineStageFlagBits2::eAllGraphics;
-	flagsToMesh.dstAccessMask = vk::AccessFlagBits2::eShaderRead;
-	flagsToMesh.buffer = visibleBuffer.buffer;
-	flagsToMesh.size = VK_WHOLE_SIZE;
-	vk::DependencyInfo outDep{};
-	outDep.setBufferMemoryBarriers(flagsToMesh);
-	cmd.pipelineBarrier2(outDep);
+	sync.emit(cmd, RgSyncEdgeId::meshletVisibleWriteToMesh, visibleBuffer.buffer);
 }
 
 }  // namespace RGL

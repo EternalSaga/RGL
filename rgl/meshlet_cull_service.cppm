@@ -9,10 +9,23 @@ import vkerror;
 import vk_device;
 import vk_resources;
 import scene_data;  // SceneDataService（barrier 要 scene data buffer 句柄）+ kSceneDataBytes
+import offgraph_sync;  // OffGraphSync（B2-4②：barrier 参数由 usage 词表物化，本模块只发边名）
 import VmaRaii;
 import meshlet_cull_types_generated;  // MeshletCullItem / MeshletCullPush（反射单一真相源）
 
 namespace RGL {
+
+/**
+ * 两张 buffer 在 `render_graph` **按名注册表**里的登记名（B2-3 的 buffer 附件名，单一来源）。
+ *
+ * 名字是这条链上唯一的连接件：图侧 `kind=buffer` 的附件、注册表的键、对账的入参三处都吃它，
+ * 拼错一个字母不会编译失败，只会让 barrier 挂在一个不存在的资源上（`registerAttachment` 的
+ * 拒绝面因此存在）。住在这里而不是注册表侧：本模块是这两张 buffer 的**所有者**，名字应当跟
+ * 资源一起走；注册表刻意零模块知识（同 `OffGraphSync` 的口径）。
+ */
+export inline constexpr std::string_view kMeshletCullItemsAttachment = "meshletCullItems";
+/** @see kMeshletCullItemsAttachment */
+export inline constexpr std::string_view kMeshletVisibleFlagsAttachment = "meshletVisibleFlags";
 
 /**
  * meshlet_cull_service —— **逐簇视锥剔除的 GPU 侧载体**（簇化轴 ★1-a2-i，rlscene）。
@@ -52,7 +65,7 @@ namespace RGL {
  * 因此钉在 `backEnd` 之前（AGENTS「长生命周期 GPU 资源不得声明在 main() 局部块内」）。
  */
 export class MeshletCullService {
-   public:
+	public:
 	/**
 	 * 构造（启动期一次，门 `meshlet.enable` 开且簇产物就绪才建）：领两张 heap 槽 +
 	 * 建标志 buffer（device-local，`vkCmdFillBuffer` 填 1）+ 建 compute shader object
@@ -95,17 +108,25 @@ export class MeshletCullService {
 
 	/**
 	 * 录一次剔除 dispatch（**调用方负责门控**：门关 / 服务为空时根本不该进来）。命令流固定
-	 * 五条：`pipelineBarrier2`（scene data 的 Transfer 写 → compute 读 + 标志表的写前依赖 +
-	 * host 写 → heap/compute 读）→ `bindShadersEXT` → `pushDataEXT`（100B）→ `dispatch` →
+	 * 七条：`pipelineBarrier2` ×3（heap+scene 的合并执行序 → scene data 的 Transfer 写 → compute 读
+	 * → 标志表的写前依赖）→ `bindShadersEXT` → `pushDataEXT`（100B）→ `dispatch` →
 	 * `pipelineBarrier2`（compute 写 → 全图形读）。
+	 *
+	 * 🔴 批次 B2-4② 起 barrier **不再由本函数手抄掩码**：四条边各调一次 `OffGraphSync::emit`，
+	 * 参数由 `offgraph_sync` 的 usage 词表物化（申报即发射）。代价 = 原本"一条命令装三条 barrier"
+	 * 变成三条命令（不变式「一条边 = 一条命令」，见边表行注释），命令数 5→7，
+	 * `recordMeshletCullDispatch` 的 `profilerAddCommands` 必须同步。
 	 *
 	 * 🔴 调用位置契约 = `recordFixedDataPath` **之后**（heap 已绑定、scene data 已拷完）、
 	 * pass 循环**之前**（还在 `gpu.frame` 内、任何 render pass 外；eHost stage 不能在 pass 内）。
 	 *
 	 * @param cmd 本帧主命令缓冲（录制期）
 	 * @param planes 视锥 6 面（`FrameDrawList::cullInput.planes`，与 CPU 剔除同源同值）
+	 * @param sync 图外同步发射账（Renderer 成员，按引用转交；形参而非成员的形态先例 =
+	 *        `GpuCull::recordFanoutDispatch`——本服务由装配层构造，拿不到 Renderer 的成员引用）
 	 */
-	void recordDispatch(vk::raii::CommandBuffer& cmd, std::span<const glm::vec4, 6> planes);
+	void recordDispatch(vk::raii::CommandBuffer& cmd, std::span<const glm::vec4, 6> planes,
+		OffGraphSync& sync);
 
    private:
 	/** 构造期：领 items / visible 两个 Runtime 段 heap 槽（scene data 槽 = ensure 幂等返回）。 */

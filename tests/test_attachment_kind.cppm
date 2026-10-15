@@ -4,12 +4,16 @@ module;
  *
  * ## 被测契约（不是被测函数）
  *
- * `RgAttachmentKind` 下一批要加第五个值（buffer 档）。本文件钉的契约只有一条：
- * **加那个值时，代码里每一个按 kind 分派的位置都必须变成编译错误**，而不是静默
+ * `RgAttachmentKind` 现在有五档（第五档 = buffer，批次 B2-3 已落地）。本文件钉的契约只有一条：
+ * **再加一个值时，代码里每一个按 kind 分派的位置都必须变成编译错误**，而不是静默
  * 继承某一档的语义。最坏的一种静默是 `aspectOf` 的三元式回落（未知 kind → eColor
  * = 往错的方向走到底，docs/compute_调研.md §7.10 点名条目），本刀把它和同类的
  * `isRtBackedKind` / `isDepthKind` / `frameStartDiscards` 一起改成穷尽 switch，
  * 并把四个 `validateAttachment*` 的 kind 名兜底三元式换成 `kindName`。
+ *
+ * 🔴 **这条契约今天被机器验了一遍**：buffer 档落地时本文件的数量锚（组 0）先红，
+ * 补完全表才绿；`aspect` 那一列也因此从"是否深度面"的布尔改成显式 mask —— 第五档的
+ * 正确答案是**空 mask**，布尔表达不出来，而"表达不出来"正是当初没给它留位置的那个洞。
  *
  * ## 可测性结论（先验证后写用例）
  *
@@ -76,7 +80,10 @@ struct KindCase {
 	RgAttachmentKind kind;
 	std::string_view name;     // kindName 期望值
 	std::string_view format;   // 该 kind 的合法格式（避免先撞格式 guard）
-	bool expectDepthAspect;    // aspectOf 期望值
+	// aspectOf 期望值。**显式写 mask 而不是"是否深度面"的布尔**：第五档（buffer）的正确答案
+	// 既不是 eColor 也不是 eDepth 而是**空 mask**（"这不是 image"的记号），布尔表达不出来，
+	// 而"表达不出来"正是当初没给它留位置的那个洞——列改成值，加档就被迫当场回答。
+	vk::ImageAspectFlags expectAspect;
 	bool expectRtBacked;       // isRtBackedKind 期望值
 	bool expectDepthKind;      // isDepthKind 期望值
 	bool expectFrameStartDiscard;  // frameStartDiscards 期望值
@@ -84,25 +91,53 @@ struct KindCase {
 
 const std::vector<KindCase>& kindCases() {
 	// 出处（逐列）：
-	//   name    ← Lua 词表 {swapchain,depth,offscreen} + validator 消息里已有的三个字面量
-	//             + 枚举成员名（三者对现有四档互相印证）
-	//   format  ← render_graph.cppm::isKnownRgFormat / isKnownDepthRgFormat 的注释词表
+	//   name    ← Lua 词表 {swapchain,depth,offscreen,depthOffscreen,buffer} + validator
+	//             消息里已有的字面量 + 枚举成员名（三者互相印证）
+	//   format  ← render_graph.cppm::isKnownRgFormat / isKnownDepthRgFormat 的注释词表；
+	//             非 RT 两档与 buffer 一律 "inherit"（validateAttachmentFormat 的兜底分支）
 	//   aspect  ← RgCompiledAttachment 注释「aspect 按 kind 推导（depth/depthOffscreen →
-	//             eDepth，其余 → eColor）」
+	//             eDepth，其余 → eColor）」；buffer 档 = 空 mask，出处是它自己的枚举注释
+	//             （「没有 aspect —— 那是 image 子资源的概念」）
 	//   rtBacked← RgCompiledAttachment::extent 注释「非图属 RT 恒 {0,0}」+ 枚举注释
-	//             「offscreen/depthOffscreen = 执行器按名 ensure」
+	//             「offscreen/depthOffscreen = 执行器按名 ensure」；buffer 的资源归**模块**申请
 	//   depth   ← RgClearValue 注释「kind=depth 用 depth，其余用 color」+ 枚举注释
 	//             「depthOffscreen ② aspect = eDepth」
 	//   discard ← RgCompiledAttachment::frameStartDiscard 注释「swapchain/depth/
-	//             depthOffscreen = true；offscreen = false 需跨帧追踪布局」
+	//             depthOffscreen = true；offscreen = false 需跨帧追踪布局」；buffer 与
+	//             offscreen 同侧（单份 buffer 跨 frames-in-flight 复用，见 MeshletCullService）
 	static const std::vector<KindCase> kCases = {
-		{RgAttachmentKind::swapchain, "swapchain", "inherit", false, false, false, true},
-		{RgAttachmentKind::depth, "depth", "inherit", true, false, true, true},
-		{RgAttachmentKind::offscreen, "offscreen", "rgba8_unorm", false, true, false, false},
-		{RgAttachmentKind::depthOffscreen, "depthOffscreen", "d32_sfloat", true, true, true,
-			true},
+		{RgAttachmentKind::swapchain, "swapchain", "inherit",
+			vk::ImageAspectFlagBits::eColor, false, false, true},
+		{RgAttachmentKind::depth, "depth", "inherit", vk::ImageAspectFlagBits::eDepth, false,
+			true, true},
+		{RgAttachmentKind::offscreen, "offscreen", "rgba8_unorm",
+			vk::ImageAspectFlagBits::eColor, true, false, false},
+		{RgAttachmentKind::depthOffscreen, "depthOffscreen", "d32_sfloat",
+			vk::ImageAspectFlagBits::eDepth, true, true, true},
+		{RgAttachmentKind::buffer, "buffer", "inherit", vk::ImageAspectFlags{}, false, false,
+			false},
 	};
 	return kCases;
+}
+
+/**
+ * 把 buffer 档要用到的附件名登记进按名注册表（批次 B2-3 的拒绝面）。
+ *
+ * 🔴 **必须在编译图之前跑**，且**每个用到的名字都要**：`kind=buffer` 的名字没登记就直接拒，
+ * 于是本文件里那些"遍历五档"的用例会红在注册而不是红在它们真正要测的那一列。注册表是进程级
+ * 单例，所以这里用 `static` 幂等一次即可；名字 "att"/"x" 是其它用例复用的通用名，登记它们
+ * **不影响**那些用例（非 buffer 档根本不查注册表）。
+ */
+void registerBufferAttachmentsForCases() {
+	static const bool done = [] {
+		for (const auto& c : kindCases())
+			if (c.kind == RgAttachmentKind::buffer)
+				registerBufferAttachment(c.name, [] { return vk::DeviceSize{256}; });
+		registerBufferAttachment("att", [] { return vk::DeviceSize{256}; });
+		registerBufferAttachment("x", [] { return vk::DeviceSize{256}; });
+		return true;
+	}();
+	(void)done;
 }
 
 /** 只含一个附件、零 pass 的图：注册期校验最先开火，测 validator 消息不受 pass 规则干扰。 */
@@ -127,13 +162,15 @@ std::string errOfSingle(RgAttachmentDesc att) {
 // 组 0：空集合守卫（对空集合遍历 = 恒真假绿，先钉名单非空且恰好四档）
 // ═══════════════════════════════════════════════════════════════════════════
 
-TEST_CASE("kind 名单非空且恰好四档（第五个 kind 落地时本条先红，提醒补全整张表）") {
+TEST_CASE("kind 名单非空且恰好五档（再加一档时本条先红，提醒补全整张表）") {
+	registerBufferAttachmentsForCases();
 	const auto& cases = kindCases();
 	REQUIRE_FALSE(cases.empty());
-	// 数量锚：本文件所有遍历都建立在"四档全在"之上。加第五个值而没补这张表时，
-	// 后面每一组都会"遍历到四档全绿"= 假绿；这条先红，把假绿堵在门口。
-	CHECK(cases.size() == 4);
-	// 名单自身不得重复（重复 = 某一档其实没被覆盖，而 size 仍是 4）
+	// 数量锚：本文件所有遍历都建立在"五档全在"之上。加第六个值而没补这张表时，
+	// 后面每一组都会"遍历到五档全绿"= 假绿；这条先红，把假绿堵在门口。
+	// （第五档 buffer 就是被这条逼出来的：加它时本文件从 4 改到 5，一处没漏就过不了。）
+	CHECK(cases.size() == 5);
+	// 名单自身不得重复（重复 = 某一档其实没被覆盖，而 size 仍是 5）
 	for (size_t i = 0; i < cases.size(); ++i)
 		for (size_t j = i + 1; j < cases.size(); ++j)
 			CHECK(cases[i].kind != cases[j].kind);
@@ -143,7 +180,8 @@ TEST_CASE("kind 名单非空且恰好四档（第五个 kind 落地时本条先�
 // 组 1：kindName 阳性锚点（接口导出，直接断言拼写）
 // ═══════════════════════════════════════════════════════════════════════════
 
-TEST_CASE("kindName：四档拼写逐个钉死（构造期现场只剩日志，归因错 = 查不到）") {
+TEST_CASE("kindName：五档拼写逐个钉死（构造期现场只剩日志，归因错 = 查不到）") {
+	registerBufferAttachmentsForCases();
 	const auto& cases = kindCases();
 	REQUIRE_FALSE(cases.empty());
 	for (const auto& c : cases) {
@@ -161,8 +199,9 @@ TEST_CASE("kindName：四档拼写逐个钉死（构造期现场只剩日志，�
 // 组 2：aspectOf（经公开面 RgCompiledAttachment::aspect）
 // ═══════════════════════════════════════════════════════════════════════════
 
-TEST_CASE("aspectOf：深度两档 eDepth / 颜色两档 eColor（§7.10 静默回落的本体）") {
-	// 图形态：四档各一个附件 + 一个写 swapchain 的 pass（否则帧末 present 规则先报错）。
+TEST_CASE("aspectOf：深度两档 eDepth / 颜色两档 eColor / buffer 空 mask（§7.10 静默回落的本体）") {
+	registerBufferAttachmentsForCases();
+	// 图形态：五档各一个附件 + 一个写 swapchain 的 pass（否则帧末 present 规则先报错）。
 	// 附件顺序 = kindCases 顺序，slot 即下标。
 	RgGraphDesc d;
 	for (const auto& c : kindCases())
@@ -176,14 +215,14 @@ TEST_CASE("aspectOf：深度两档 eDepth / 颜色两档 eColor（§7.10 静默�
 			RgPassAttachment{.attachment = "depth", .usage = RgUsage::depthWrite}}}};
 
 	const auto g = compileRenderGraph(d);
-	REQUIRE(g.has_value());
-	REQUIRE(g->attachments.size() == 4);
+	REQUIRE_MESSAGE(g.has_value(), errOf(g).c_str());
+	REQUIRE(g->attachments.size() == 5);
 	for (size_t i = 0; i < kindCases().size(); ++i) {
 		const auto& c = kindCases()[i];
 		INFO("kind=" << c.name);
-		CHECK(g->attachments[i].aspect
-			== (c.expectDepthAspect ? vk::ImageAspectFlagBits::eDepth
-			                        : vk::ImageAspectFlagBits::eColor));
+		// 逐档比**整个 mask**（不是"像不像深度面"）：buffer 的期望值是空 mask，
+		// 回落成 eColor 或 eDepth 都在这里红，而不是伪装成 image 继续往下走。
+		CHECK(g->attachments[i].aspect == c.expectAspect);
 	}
 }
 
@@ -191,7 +230,8 @@ TEST_CASE("aspectOf：深度两档 eDepth / 颜色两档 eColor（§7.10 静默�
 // 组 3：frameStartDiscards（经公开面 RgCompiledAttachment::frameStartDiscard）
 // ═══════════════════════════════════════════════════════════════════════════
 
-TEST_CASE("frameStartDiscard：只有 offscreen 是持久图（变异红线 3：改 true 会红）") {
+TEST_CASE("frameStartDiscard：只有 offscreen 与 buffer 是持久档（变异红线 3：改 true 会红）") {
+	registerBufferAttachmentsForCases();
 	RgGraphDesc d;
 	for (const auto& c : kindCases())
 		d.attachments.push_back(RgAttachmentDesc{
@@ -307,9 +347,11 @@ TEST_CASE("validateAttachmentHistory：三档非 offscreen 的拒绝消息逐字
 // 组 5：isRtBackedKind（经公开面：独立 extent 只对图属 RT 开放）
 // ═══════════════════════════════════════════════════════════════════════════
 
-TEST_CASE("isRtBackedKind：图属两档可声明独立 extent，非图属两档填了必被拒") {
+TEST_CASE("isRtBackedKind：图属两档可声明独立 extent，非图属三档填了必被拒") {
+	registerBufferAttachmentsForCases();
 	const auto& cases = kindCases();
 	REQUIRE_FALSE(cases.empty());
+	size_t rejected = 0;  // 空集合守卫：非图属档必须**真的覆盖到**，否则 else 分支空真
 	for (const auto& c : cases) {
 		RgAttachmentDesc att;
 		att.name = "att";
@@ -319,9 +361,15 @@ TEST_CASE("isRtBackedKind：图属两档可声明独立 extent，非图属两档
 		INFO("kind=" << c.name << " err=" << errOfSingle(att));
 		if (c.expectRtBacked)
 			CHECK(compileRenderGraph(singleAttGraph(att)).has_value());
-		else
+		else {
 			CHECK_FALSE(compileRenderGraph(singleAttGraph(att)).has_value());
+			++rejected;
+		}
 	}
+	// swapchain + depth + buffer 三档都要被拒。buffer 这一档的意义在"它不是因为没注册
+	// 才被拒"——注册已在上面做过，所以红的原因必须是 extent guard（同文件 buffer 专测里
+	// 逐字节钉着那条消息）。
+	CHECK(rejected == 3);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -353,6 +401,7 @@ TEST_CASE("isDepthKind：写角色的 clearValue 走 depth 分量的恰好是深
 	};
 
 	const auto& cases = kindCases();
+	registerBufferAttachmentsForCases();
 	REQUIRE_FALSE(cases.empty());
 	size_t covered = 0;  // 空集合守卫的第二半：确认深度档确实覆盖到了两档
 	for (const auto& c : cases) {
@@ -380,6 +429,7 @@ TEST_CASE("isDepthKind：写角色的 clearValue 走 depth 分量的恰好是深
 
 TEST_CASE("isDepthKind 反向：非深度档被 depthWrite 时拒绝消息逐字节点名该附件") {
 	const auto& cases = kindCases();
+	registerBufferAttachmentsForCases();
 	REQUIRE_FALSE(cases.empty());
 	size_t covered = 0;
 	for (const auto& c : cases) {
@@ -399,7 +449,7 @@ TEST_CASE("isDepthKind 反向：非深度档被 depthWrite 时拒绝消息逐字
 		REQUIRE_FALSE(g.has_value());
 		CHECK(errOf(g) == "render_graph: pass 'p' depthWrites non-depth attachment 'x'");
 	}
-	CHECK(covered == 2);  // swapchain + offscreen 两档都覆盖到了
+	CHECK(covered == 3);  // swapchain + offscreen + buffer 三档都覆盖到了
 }
 
 }  // namespace RGL

@@ -8,6 +8,7 @@ import rlvk;
 import vkerror;
 import vulkan_utils;  // createImageBarrier（物化用）
 import pass_vocabulary;  // kDeferredLightState
+import :usage;  // usageInfo / isWriteUsage / isReadUsage + 四个 kind 谓词（兄弟分区，B2-3 拆出）
 
 namespace RGL {
 
@@ -20,139 +21,6 @@ namespace RGL {
 // ④storeOp 完整性（后续还被使用的写必须 store）⑤帧末 present 转换。
 
 namespace {
-
-/** usage 推导三元组：目标布局 + 管线 stage + access mask。 */
-struct UsageInfo {
-	vk::ImageLayout layout;
-	vk::PipelineStageFlags2 stage;
-	vk::AccessFlags2 access;
-};
-
-/**
- * usage → {layout, stage, access} 推导表（接口注释速览的权威实现，单一真相源）：
- * colorWrite→CAO/写/ColorAttachmentOutput；depthWrite→DSAO/读+写/Early+LateFragmentTests；
- * sampleRead→SRO/ShaderRead/AllGraphics；transferRead→TsrcO/TransferRead/Transfer；
- * transferWrite→TdstO/TransferWrite/Transfer。
- *
- * 🔴 depthWrite 的 stage 必须是 **Early | Late 两段并集**（syncval 实测：只给 Early 时
- * VVL 报 `WRITE_AFTER_WRITE hazard ... layout transition ... previously written at the end
- * of the render pass instance by the attachment storeOp`）。依据 spec
- * `synchronization-pipeline-stages`：EARLY_FRAGMENT_TESTS 覆盖早期深度测试与该格式附件的
- * **load**（clear）操作，LATE_FRAGMENT_TESTS 覆盖晚期深度测试与该格式附件的 **store** 操作
- * ——本表同时当 barrier 的 src（上次 usage）与 dst（本次 usage）用，作 src 时漏掉 Late
- * 就等于"深度写入不需要等"，作 dst 时漏掉 Late 就等于"本 pass 不在晚期写深度"。
- * 两段并集是 spec 允许的最小覆盖（不是兜底 AllGraphics；IZB 图外 barrier 用 AllGraphics
- * 是另一条路径，见 izb_shadow_impl）。
- * @param u 附件角色
- * @return 推导三元组（枚举穷尽，末条 return 不可达）
- */
-UsageInfo usageInfo(RgUsage u) {
-	using Stage = vk::PipelineStageFlagBits2;
-	using Acc = vk::AccessFlagBits2;
-	switch (u) {
-		case RgUsage::colorWrite:
-			return {vk::ImageLayout::eColorAttachmentOptimal, Stage::eColorAttachmentOutput,
-				Acc::eColorAttachmentWrite};
-		case RgUsage::depthWrite:
-			return {vk::ImageLayout::eDepthStencilAttachmentOptimal,
-				Stage::eEarlyFragmentTests | Stage::eLateFragmentTests,
-				Acc::eDepthStencilAttachmentRead | Acc::eDepthStencilAttachmentWrite};
-		case RgUsage::sampleRead:
-			return {vk::ImageLayout::eShaderReadOnlyOptimal, Stage::eAllGraphics, Acc::eShaderRead};
-		case RgUsage::transferRead:
-			return {vk::ImageLayout::eTransferSrcOptimal, Stage::eTransfer, Acc::eTransferRead};
-		case RgUsage::transferWrite:
-			return {vk::ImageLayout::eTransferDstOptimal, Stage::eTransfer, Acc::eTransferWrite};
-	}
-	return {vk::ImageLayout::eUndefined, Stage::eTopOfPipe, Acc::eNone};  // 不可达（枚举穷尽）
-}
-
-/** 写角色判定（colorWrite/depthWrite/transferWrite）。 */
-bool isWriteUsage(RgUsage u) {
-	return u == RgUsage::colorWrite || u == RgUsage::depthWrite || u == RgUsage::transferWrite;
-}
-/** 读角色判定（sampleRead/transferRead）。 */
-bool isReadUsage(RgUsage u) {
-	return u == RgUsage::sampleRead || u == RgUsage::transferRead;
-}
-
-// ── 三个 kind 谓词：全部写成**穷尽 switch、无 default**（正面样板 = vkrenderer_passrec
-//    的 imageForSlot）。为什么不许写 default、也不许留三元式：`-Wswitch` 只对「switch 缺
-//    case」出声，写了 default 就永远不缺；三元式 `a || b ? X : Y` 更是把「其余一律 Y」这个
-//    兜底写进了语义里。本枚举下一批要加第五个值（buffer 档），届时这三个谓词是整条链的
-//    源头（aspect 进 barrier / view / 描述符，两个布尔位进校验与 clearValue 选择），
-//    兜底 = 新 kind 静默按 image 档走完全链，而 docs/compute_调研.md §7.10 点名的正是这条。
-//    穷尽 switch 把失效方向换成「编译不过」：加值的人必须在这里逐个回答它是什么面、
-//    是不是图属 RT、走不走深度面——答不出来就说明机制还没想清楚，这正是需要的刹车。
-
-/**
- * 附件 kind → aspect mask（深度两档 eDepth，颜色两档 eColor）。
- * @param kind 附件种类
- * @return 该附件全链（barrier / view / 描述符）使用的 aspect mask
- */
-vk::ImageAspectFlags aspectOf(RgAttachmentKind kind) {
-	switch (kind) {
-		case RgAttachmentKind::swapchain: return vk::ImageAspectFlagBits::eColor;
-		case RgAttachmentKind::depth: return vk::ImageAspectFlagBits::eDepth;
-		case RgAttachmentKind::offscreen: return vk::ImageAspectFlagBits::eColor;
-		case RgAttachmentKind::depthOffscreen: return vk::ImageAspectFlagBits::eDepth;
-	}
-	return {};  // 不可达（穷尽），消 -Wreturn-type
-}
-/**
- * 是否"图属 RT"（执行器按名 ensure 的两类：颜色 offscreen + 深度 depthOffscreen）。
- * 判据 = 「资源由渲染图按名申请」，不是「是不是 image」——buffer 档若走的是另一套
- * 申请路径，这里就该答 false（穷尽 switch 逼着当场回答，见上方注释）。
- * @param kind 附件种类
- * @return true = 执行器按名 ensure 的图属 RT
- */
-bool isRtBackedKind(RgAttachmentKind kind) {
-	switch (kind) {
-		case RgAttachmentKind::swapchain: return false;  // 后缓冲：imageIndex 录制期解析
-		case RgAttachmentKind::depth: return false;  // 主深度图：Resources 持有
-		case RgAttachmentKind::offscreen: return true;
-		case RgAttachmentKind::depthOffscreen: return true;
-	}
-	return false;  // 不可达（穷尽），消 -Wreturn-type
-}
-/**
- * 是否深度类附件（主深度图 / 图属深度 RT）——clearValue 取 depth 分量、aspect 走深度面。
- * @param kind 附件种类
- * @return true = 走深度面（clearValue 用 depth、depthWrite 合法、blit 两端不得用）
- */
-bool isDepthKind(RgAttachmentKind kind) {
-	switch (kind) {
-		case RgAttachmentKind::swapchain: return false;
-		case RgAttachmentKind::depth: return true;
-		case RgAttachmentKind::offscreen: return false;
-		case RgAttachmentKind::depthOffscreen: return true;
-	}
-	return false;  // 不可达（穷尽），消 -Wreturn-type
-}
-
-/**
- * 帧首写是否走"内容丢弃"规则（决定 barrier 的 oldLayout 取 eUndefined 还是取执行器
- * 跨帧追踪值）：swapchain/depth/depthOffscreen 每帧内容按 loadOp 重建（阴影图每帧整幅
- * clear 亦归此档）；offscreen 是持久图，必须追踪真实布局。
- *
- * 🔴 为什么这里是穷尽 switch 而不是 `kind != offscreen`：本函数**就在 barrier 物化链上**
- * （RgCompiledAttachment::frameStartDiscard → planBarrier → RgBarrierPlan::oldLayoutDiscard
- * → SlotResolver::emitBarriers 的 oldLayout 选择）。写成不等式，第五个 kind 会静默落进
- * "丢弃"档 = 每帧首写把 oldLayout 报成 eUndefined，而 eUndefined 的语义是"旧内容随便
- * 丢"——若那一档其实是需要跨帧存活的资源，症状是隔一帧才现的内容丢失，且 VVL 不报
- * （eUndefined 作 oldLayout 合法）。与三个 kind 谓词同一条理由，见上方注释块。
- * @param kind 附件种类
- * @return true = 帧首写可丢弃旧布局
- */
-bool frameStartDiscards(RgAttachmentKind kind) {
-	switch (kind) {
-		case RgAttachmentKind::swapchain: return true;
-		case RgAttachmentKind::depth: return true;
-		case RgAttachmentKind::offscreen: return false;  // 持久图：跨帧追踪真实布局
-		case RgAttachmentKind::depthOffscreen: return true;
-	}
-	return false;  // 不可达（穷尽），消 -Wreturn-type
-}
 
 /** 统一错误构造：ErrorCode::RenderGraphInvalid + message。 */
 Error rgError(std::string message) {
@@ -274,7 +142,31 @@ std::expected<void, Error> validateAttachmentHistory(const RgAttachmentDesc& att
 	return {};
 }
 
-/** ① 单 attachment 校验与落图：空名 / 重名 / swapchain 计数 / 格式（validateAttachmentFormat）/ 尺寸（validateAttachmentExtent）/ 缩放（validateAttachmentExtentScale）/ 历史（validateAttachmentHistory）→ 名字→slot + 图记录 + 游标。@return 失败带定位 Error */
+/**
+ * ① **buffer 档的按名注册对账**（批次 B2-3 本体的拒绝面，落点就在附件级校验链上）。
+ *
+ * 🔴 为什么落 `registerAttachment` 而不是 `precheckPass`：本判据问的是"这个**资源**能不能被
+ * 声明成附件"，与任何 pass 无关。`precheckPass` 是 pass 级、根本不查 kind 词表，落在那里的话
+ * "声明了一个非法附件但还没有 pass 引用它"就逃过了（`docs/compute_调研.md` §6 D1 第 4 条点名
+ * 的就是这个落点）。
+ *
+ * 判据是**双向规则**的一条边：buffer 附件名必须在 C++ 注册表里。未注册即拒 ⟹ scene data
+ * staging / heap host-write / pushData / 信号量 / fence 那五类一律声明不出来，不需要黑名单。
+ * @return 失败带定位 Error（消息点名注册表与注册入口）
+ */
+std::expected<void, Error> validateAttachmentBufferName(const RgAttachmentDesc& att) {
+	if (att.kind != RgAttachmentKind::buffer)
+		return {};  // 非 buffer 档与注册表无关
+	if (isBufferAttachmentRegistered(att.name))
+		return {};
+	return std::unexpected(rgError(fmt::format(
+		"render graph: buffer attachment '{}' is not registered in the C++ buffer registry "
+		"(register it with registerBufferAttachment before compiling the graph; the registry is "
+		"the only place a buffer's byte size may come from — see rgl/render_graph_buffers.cppm)",
+		att.name)));
+}
+
+/** ① 单 attachment 校验与落图：空名 / 重名 / swapchain 计数 / 格式（validateAttachmentFormat）/ 尺寸（validateAttachmentExtent）/ 缩放（validateAttachmentExtentScale）/ 历史（validateAttachmentHistory）/ buffer 注册（validateAttachmentBufferName）→ 名字→slot + 图记录 + 游标。@return 失败带定位 Error */
 std::expected<void, Error> registerAttachment(const RgAttachmentDesc& att, CompileCtx& ctx) {
 	if (att.name.empty())
 		return std::unexpected(rgError("render_graph: attachment with empty name"));
@@ -292,6 +184,8 @@ std::expected<void, Error> registerAttachment(const RgAttachmentDesc& att, Compi
 	if (auto r = validateAttachmentExtentScale(att); !r)
 		return std::unexpected(std::move(r).error());
 	if (auto r = validateAttachmentHistory(att); !r)
+		return std::unexpected(std::move(r).error());
+	if (auto r = validateAttachmentBufferName(att); !r)
 		return std::unexpected(std::move(r).error());
 	ctx.graph.attachments.push_back(RgCompiledAttachment{
 		.name = att.name,
@@ -313,6 +207,25 @@ std::expected<void, Error> registerAttachments(const RgGraphDesc& desc, CompileC
 	for (const auto& att : desc.attachments)
 		if (auto r = registerAttachment(att, ctx); !r)
 			return std::unexpected(std::move(r).error());
+	return {};
+}
+
+/**
+ * pass 输入侧的 usage 白名单（drawMesh 与 drawLight 两档**同一条**规则：只准采样读或
+ * storage 读）。批次 B2-3 给两边各加了一个 `|| storageRead`，加完两处的认知复杂度都过线；
+ * 抽成共享函数既降复杂度，也堵住"以后只改一边"的漂移面（两个 pass 形态的输入规则本来
+ * 就是同一句话，写两遍才是问题）。
+ * @param pass  所属 pass（错误信息用）
+ * @param kindLabel 错误信息里的 pass 形态名（"draw" / "light"，逐字沿用原两条文案）
+ * @return 失败带 Error（首个非法输入）
+ */
+std::expected<void, Error> precheckReadUsages(
+	const RgPassDesc& pass, std::string_view kindLabel) {
+	for (const auto& a : pass.inputs)
+		if (a.usage != RgUsage::sampleRead && a.usage != RgUsage::storageRead)
+			return std::unexpected(rgError(fmt::format(
+				"render_graph: {} pass '{}' input '{}' must be sampleRead or storageRead",
+				kindLabel, pass.name, a.attachment)));
 	return {};
 }
 
@@ -338,11 +251,8 @@ std::expected<void, Error> precheckDrawPass(const RgPassDesc& pass) {
 		return std::unexpected(rgError(fmt::format(
 			"render_graph: draw pass '{}' has {} depthWrite outputs (max 1)", pass.name,
 			depthWrites)));
-	for (const auto& a : pass.inputs)
-		if (a.usage != RgUsage::sampleRead)
-			return std::unexpected(rgError(fmt::format(
-				"render_graph: draw pass '{}' input '{}' must be sampleRead", pass.name,
-				a.attachment)));
+	if (auto r = precheckReadUsages(pass, "draw"); !r)
+		return std::unexpected(std::move(r).error());
 	for (const auto& a : pass.outputs)
 		if (!isWriteUsage(a.usage))
 			return std::unexpected(rgError(fmt::format(
@@ -367,6 +277,9 @@ std::expected<void, Error> precheckFullscreenPass(const RgPassDesc& pass) {
 			++colorWrites;
 		else if (a.usage == RgUsage::depthWrite)
 			++depthWrites;
+		else if (a.usage == RgUsage::storageWrite)
+			;  // buffer 附件的写（批次 B2-3）：不占 color/depth 名额，"恰一 colorWrite"那条判据
+			   // 因此仍然只数真正的颜色附件——storageWrite 混进来不会把它挤掉
 		else
 			return std::unexpected(rgError(fmt::format(
 				"render_graph: light pass '{}' output '{}' must be colorWrite", pass.name,
@@ -379,12 +292,7 @@ std::expected<void, Error> precheckFullscreenPass(const RgPassDesc& pass) {
 	if (depthWrites != 0)
 		return std::unexpected(rgError(fmt::format(
 			"render_graph: light pass '{}' must have no depth output", pass.name)));
-	for (const auto& a : pass.inputs)
-		if (a.usage != RgUsage::sampleRead)
-			return std::unexpected(rgError(fmt::format(
-				"render_graph: light pass '{}' input '{}' must be sampleRead", pass.name,
-				a.attachment)));
-	return {};
+	return precheckReadUsages(pass, "light");
 }
 
 /** ② 逐 pass 预检分派（kind 三形态；blit = 恰一 transferWrite + 一 transferRead）。 */
@@ -428,6 +336,22 @@ std::expected<RgAttachmentSlot, Error> validatePassRef(const RgPassDesc& pass,
 		return std::unexpected(rgError(fmt::format(
 			"render_graph: pass '{}' depthWrites non-depth attachment '{}'", pass.name,
 			a.attachment)));
+	// usage 与 kind 匹配（**双向**，批次 B2-3 本体；两条各配一条单测，少一条就是半边判据）：
+	//  · 非 buffer 附件用 storage 档 → 拒。image 的同步语义是**布局**，把它写成 storage 等于声明
+	//    "这块 image 我不转布局"——那是静默的漏同步，而"布局对、缺顺序"正是 syncval 的实测盲区
+	//    （`docs/compute_调研.md` §4 / N3），所以必须在编译期拦。
+	//  · buffer 附件用非 storage 档 → 拒。colorWrite/depthWrite/sampleRead/transfer* 对 buffer
+	//    都没有意义（dynamic rendering 附件与 blit 两端都只吃 image），能写成这样的一定是笔误。
+	const bool storageUsage = a.usage == RgUsage::storageRead || a.usage == RgUsage::storageWrite;
+	const bool bufferAttachment = compiled.kind == RgAttachmentKind::buffer;
+	if (storageUsage && !bufferAttachment)
+		return std::unexpected(rgError(fmt::format(
+			"render_graph: pass '{}' uses storage usage on non-buffer attachment '{}'", pass.name,
+			a.attachment)));
+	if (bufferAttachment && !storageUsage)
+		return std::unexpected(rgError(fmt::format(
+			"render_graph: pass '{}' references buffer attachment '{}' with non-storage usage",
+			pass.name, a.attachment)));
 	// 读前置：本帧尚无写入的 attachment 不可读。**跨帧历史附件豁免**——"本帧未写先读"
 	// 正是 history 的语义（读的是上一帧留下的内容；论证与红线见
 	// RgAttachmentDesc::history 注释与 docs/taa_plan.md §2 gap ①）。非 history 附件
@@ -453,13 +377,21 @@ std::expected<RgAttachmentSlot, Error> validatePassRef(const RgPassDesc& pass,
 void planBarrier(const RgPassAttachment& a, RgAttachmentSlot slot,
 	const RgCompiledAttachment& compiled, const UsageInfo& target, const SlotState& state,
 	RgPassPlan& plan) {
+	// 🔴 **plan-only 的结构性护栏**（本函数第一行不是偶然）：storage 档的 target.layout 是
+	// nullopt（buffer 没有布局）⟹ 这里直接不产计划。于是"buffer 附件出现在 barrier 计划里"
+	// 在代码路径上写不出来，而 `RgBarrierPlan::newLayout` 是非 optional 的 image 布局——想绕过
+	// 本早退就得去改 `usageInfo` 的类型，那会撞遍全仓。判据 =
+	// tests/test_attachment_buffer.cppm「buffer 档不进 barrier 计划」那条（阳性锚点：同图里
+	// 必须同时有一个 image 附件产生 barrier，否则"零 barrier"会因为图本身非法而恒真）。
+	if (!target.layout)
+		return;
 	const bool sameLayoutRead = state.lastUse && isReadUsage(*state.lastUse)
 		&& isReadUsage(a.usage) && usageInfo(*state.lastUse).layout == target.layout;
 	if (!sameLayoutRead) {
 		RgBarrierPlan barrier{};
 		barrier.attachment = slot;
 		barrier.aspect = compiled.aspect;
-		barrier.newLayout = target.layout;
+		barrier.newLayout = *target.layout;
 		barrier.dstStage = target.stage;
 		barrier.dstAccess = target.access;
 		if (state.lastUse) {
@@ -491,10 +423,16 @@ void planBarrier(const RgPassAttachment& a, RgAttachmentSlot slot,
 void planBeginRenderingEntry(const RgPassDesc& pass, const RgPassAttachment& a,
 	RgAttachmentSlot slot, const RgCompiledAttachment& compiled, const UsageInfo& target,
 	RgPassPlan& plan) {
+	// storage 档不进 beginRendering（buffer 不是 dynamic rendering 附件；与 planBarrier 同一条
+	// plan-only 护栏的另一半）。注意**游标照常推进**——调用方 planPassUses 之后统一 advanceCursors,
+	// storageWrite 计为写、storageRead 计为读，所以"读前置"与"store 完整性"两条校验对 buffer
+	// 依然生效。图对 buffer 的全部产物就是这两条校验，一行命令都不产。
+	if (!target.layout)
+		return;
 	if (isWriteUsage(a.usage)) {
 		RgAttachmentPlan ap{};
 		ap.slot = slot;
-		ap.layout = target.layout;
+		ap.layout = *target.layout;
 		ap.loadOp = toVkLoad(a.loadOp);
 		ap.storeOp = toVkStore(a.storeOp);
 		ap.clearValue = isDepthKind(compiled.kind)

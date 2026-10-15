@@ -86,6 +86,26 @@ RgSyncMasks syncUsageMasks(RgSyncUsage usage) {
 		// 拷出读，但会被另一条 CB 拷写 ⟹ 少 SW|TR、多 TransferWrite。
 		return {Stage::eAllGraphics | Stage::eComputeShader | Stage::eTransfer,
 			Acc::eShaderRead | Acc::eTransferWrite};
+	case RgSyncUsage::hostAndCopyWrite:
+		// 宽档（src 侧，两个生产者）：meshlet 的 dispatch 之前，heap 描述符由 host 侧
+		// `writeResourceDescriptorsEXT` 写、scene data 由 `recordFixedDataPath` 的拷贝写，而
+		// 它们要挡的消费者是**同一个** dispatch ⟹ 一条序带两个源。为什么上游那两条 barrier 挡不住：
+		// 它们的 dstStageMask 只到 `eAllGraphics`，**不含 `eComputeShader`**（原注释逐字记着这件事）。
+		// 宽的代价 = host 写与拷贝写互相失去区分；换到的是"少一条命令"，这笔账写在边表行注释里。
+		return {Stage::eHost | Stage::eTransfer, Acc::eHostWrite | Acc::eTransferWrite};
+	case RgSyncUsage::computeReadWithHeap:
+		// 上一条的 dst 半边：同一个 compute dispatch 既经描述符堆拿描述符、又直接读 buffer。
+		// 少 `ResourceHeapReadEXT` = 放过描述符的 host 写（读到旧描述符 = 读错地址，比读旧数据坏）；
+		// 少 `ShaderRead` = 放过 scene data 的拷贝写（读到未初始化显存）。两位各挡一个源，不可并。
+		return {Stage::eComputeShader, Acc::eShaderRead | Acc::eResourceHeapReadEXT};
+	case RgSyncUsage::priorAccessGfxCsReadWrite:
+		// 宽档（跨帧）：可见标志表是**单份**跨 frames-in-flight 复用，上一帧被 mesh shader 读
+		// （binding 21 早退）也被 compute 写，本帧的 compute 写对这两者分别是 WAR 与 WAW
+		// ⟹ access 必须**同时**含读与写。与 `priorAccessWideCs` 的区别正是这个方向：那条只挡写与
+		// 拷读（head 只有一个写者、且被拷出读），这条要挡的是"上一帧的读"。
+		// pipeline barrier 的 first 作用域含同队列更早提交的命令（跨 submission），故一条补齐两帧。
+		return {Stage::eAllGraphics | Stage::eComputeShader,
+			Acc::eShaderRead | Acc::eShaderWrite};
 	default:
 		// 只可能是 `count`（遍历哨兵）。写出来而不是留空：新增原子忘了配掩码时，
 		// 这里会静默给出 eTopOfPipe/eNone = 一条**什么都不挡**的 barrier，那种错必须靠
@@ -301,6 +321,51 @@ constexpr std::array<RgSyncEdgeDesc, static_cast<size_t>(RgSyncEdgeId::count)> k
 		.src = RgSyncUsage::computeWrite,
 		.dst = RgSyncUsage::computeReadWrite,
 		.gate = RgSyncGate::cullFanout,
+	},
+	// ===== 以下 4 条 = MeshletCullService（批次 B2-4②）=====
+	// (a) 原代码把 heap 序与 scene data 序**并进一条 global**（§7.1 勘察里点名的第三处异形）。
+	// 迁移取「合并档」而不是 entries 分层：src/dst 各用一个具名宽原子（两个生产者 / 两个消费者
+	// 各占一位 access），于是仍然是一条 `VkMemoryBarrier2`、掩码逐位同原代码。
+	// 🔴 为什么这条只能是**无句柄执行序**：dst 里的 `ResourceHeapReadEXT` 作用在描述符堆对象上，
+	// 它不是 buffer，给不了句柄（同 `cull_heap_host_to_reads` 的口径）。
+	// ⚠ 命令流代价：原「一条命令装三条 barrier」变成三条命令，见 recordMeshletCullDispatch。
+	RgSyncEdgeDesc{
+		.name = "meshlet_heap_scene_to_compute",
+		.scope = RgSyncScope::executionOrder,
+		.src = RgSyncUsage::hostAndCopyWrite,
+		.dst = RgSyncUsage::computeReadWithHeap,
+		.gate = RgSyncGate::meshlet,
+	},
+	// (b) scene data 拷入 → compute 读对象矩阵表。`emit` 的 buffer 重载走 VK_WHOLE_SIZE，
+	// 原代码写的是 `kSceneDataBytes`；等价性出处 = scene_data.cppm 里 buffer 创建处
+	// `info.size = kSceneDataBytes`（逐字节等价；真变大时 WHOLE 只会更宽 = 过度同步，不是漏同步）。
+	// 🔴 条件发射（scene buffer 缺位）不挂子门，理由逐字写在 `RgSyncGate::meshlet` 的注释里。
+	RgSyncEdgeDesc{
+		.name = "meshlet_scene_copy_to_compute",
+		.scope = RgSyncScope::buffer,
+		.src = RgSyncUsage::transferWrite,
+		.dst = RgSyncUsage::computeRead,
+		.gate = RgSyncGate::meshlet,
+	},
+	// (c) 标志表**写前**依赖（跨帧 WAR/WAW）。资源与下一条相同、方向不同，故是两条边：
+	// 并成一条 expected=2 会让"漏发写前那条"只报"少发一次"而说不出是哪个方向
+	// （同款取舍见 izb_head/nodes 与 cull_seq/count 那两对）。
+	RgSyncEdgeDesc{
+		.name = "meshlet_visible_prior_to_write",
+		.scope = RgSyncScope::buffer,
+		.src = RgSyncUsage::priorAccessGfxCsReadWrite,
+		.dst = RgSyncUsage::computeWrite,
+		.gate = RgSyncGate::meshlet,
+	},
+	// compute 写标志 → mesh shader 读（消费方 = meshlet.mesh.slang binding 21 的早退）。
+	// dst 用 `graphicsRead`（AG）而不是 fragmentRead：MeshShaderStage 含在 AllGraphics 里，
+	// 而本层没有"mesh 阶段"这个原子——少给一档 = mesh 读到上一帧的标志（边界簇闪烁）。
+	RgSyncEdgeDesc{
+		.name = "meshlet_visible_write_to_mesh",
+		.scope = RgSyncScope::buffer,
+		.src = RgSyncUsage::computeWrite,
+		.dst = RgSyncUsage::graphicsRead,
+		.gate = RgSyncGate::meshlet,
 	},
 };  // kEdgeTable
 

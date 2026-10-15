@@ -63,6 +63,20 @@ export enum class RgAttachmentKind : uint8_t {
 	depth,      // 深度图（Resources 持有）
 	offscreen,  // 图属 transient RT（执行器按名确保分配；帧末布局跨帧追踪）
 	depthOffscreen,  // 图属深度 RT（阴影图类；深度词表 + eDepth aspect + 可独立 extent）
+	// 图属 **buffer**（批次 B2-3 本体；首发客户 = `MeshletCullService` 的两张表）。它与上面
+	// 四档走**完全不同**的一条路，三条差别都是机制而非细节：
+	//   ① **不进布局链**：buffer 没有 `VkImageLayout` ⟹ 编译产物里它**不产生任何
+	//      `RgBarrierPlan`、也不进 beginRendering 条目**（结构性 plan-only 护栏，判据 =
+	//      `tests/test_attachment_buffer.cppm`）。图对它的唯一产物是**校验**：谁产谁消、
+	//      读前置、写上界对账。
+	//   ② **资源不由图申请**：字节数与句柄都在归属模块手里，图只按名向 C++ 注册表要
+	//      "有多少字节"（`registerBufferAttachment`）。名字**未注册即拒**，落点 =
+	//      `render_graph_impl.cppm` 的 `registerAttachment`。这条双向规则同时杀掉那五类诱惑
+	//      （scene data staging / heap host-write / pushData / 信号量 / fence 都不在表里），
+	//      而不是靠列黑名单（`docs/compute_调研.md` §6 D1 第 4 条）。
+	//   ③ **barrier 发射权仍在模块**（plan-only 红线，同文 §5.2）：模块走 `offgraph_sync`
+	//      的边名发 barrier，图**一行命令都不代发**。
+	buffer,
 };
 
 /**
@@ -90,6 +104,7 @@ export inline constexpr std::string_view kindName(RgAttachmentKind kind) {
 		case RgAttachmentKind::depth: return "depth";
 		case RgAttachmentKind::offscreen: return "offscreen";
 		case RgAttachmentKind::depthOffscreen: return "depthOffscreen";
+		case RgAttachmentKind::buffer: return "buffer";
 	}
 	return "?";  // 不可达（穷尽），消 -Wreturn-type
 }
@@ -97,6 +112,17 @@ export inline constexpr std::string_view kindName(RgAttachmentKind kind) {
 /**
  * attachment 在 pass 中的角色。写角色进 outputs，读角色进 inputs。
  * usage → {layout, stage, access} 推导规则单一真相源 = impl 的 usageInfo 查表（见模块头注释）。
+ *
+ * 🔴 **storage 两档是 buffer 附件的唯一合法引用方式**（批次 B2-3 本体），且这条规则是**双向**的
+ * （`validatePassRef` 两侧各一条，各有单测）：
+ *  · 非 buffer 附件用 storage 档引用 ⟹ 拒（image 的同步语义是**布局**，写成 storage 就是
+ *    声明"这块 image 我不转布局"——那是静默的漏同步，VVL 里"布局对、缺顺序"正是盲区）；
+ *  · buffer 附件用非 storage 档引用 ⟹ 拒（buffer 没有 colorWrite/depthWrite/sampleRead 的
+ *    任何一种语义，能落到这里的一定是笔误）。
+ * 为什么 storage 档**没有 layout**：`VkBuffer` 不在任何布局状态机里。所以 `usageInfo` 对这两档
+ * 返回 `layout = nullopt`，而 `planBarrier` / `planBeginRenderingEntry` 见到 nullopt 直接早退
+ * ⟹ **buffer 附件出现在 barrier 计划里这件事，在代码路径上写不出来**。这就是 §7.10 要的
+ * "plan-only 的结构性护栏"，而不是一句注释。
  */
 export enum class RgUsage : uint8_t {
 	colorWrite,    // 渲染颜色附件（dynamic rendering color attachment）
@@ -104,6 +130,8 @@ export enum class RgUsage : uint8_t {
 	sampleRead,    // 图形阶段 shader 采样读
 	transferRead,  // blit/copy 源读
 	transferWrite, // blit/copy 目标写
+	storageRead,   // compute/graphics shader 读 storage buffer（**仅 buffer 档**，无布局）
+	storageWrite,  // compute/graphics shader 写 storage buffer（**仅 buffer 档**，无布局）
 };
 
 /** 加载操作（仅写角色有意义）：clear = 清值重建，load = 保留上帧内容。 */
@@ -202,6 +230,70 @@ export vk::Format resolveRgFormat(const std::string& name, vk::Format inheritFal
  * @return true = 深度词表内（"inherit" **不算**——深度 RT 必须显式给格式）
  */
 export bool isKnownDepthRgFormat(const std::string& name);
+
+// ── buffer 附件的**按名注册表**（批次 B2-3 本体；数据面在 `render_graph:buffers` 分区）──────
+//
+// ## 为什么需要它（一句话：让"图校验一个虚构"写不出来）
+//
+// buffer 的字节数是 `f(资产量)`（meshlet 标志表）或 `f(renderExtent)`（IZB 的 nodes/mask），而
+// **算这个字节数的函数今天就在归属模块里**。让 Lua 或图声明去写尺寸 = 给同一个事实开第二份载体，
+// 漂了没人查（`docs/compute_调研.md` §6 D1 第 3 条）。所以分工是：
+//  · **C++ 侧注册**：名字 → 一个算字节数的函数（注册 = 提供那个函数，不是抄一个数）；
+//  · **声明侧**（Lua / RgGraphDesc）：只声明"这个 buffer 存在 + 谁产谁消"。
+//
+// ## 🔴 这张表同时就是**拒绝面**（D1 第 4 条）
+//
+// `registerAttachment` 对 `kind == buffer` 的附件要求名字**必须**在本表里，未注册即拒。
+// 这是一条**双向规则**而不是黑名单：scene data staging / heap host-write / pushData / 信号量 /
+// fence 那五类"看着也像图外资源"的东西**都不在表里** ⟹ 声明不出来，不需要为它们各写一条
+// `if (name == "…") 拒`。黑名单会随新增资源类型漏一类，双向规则不会。
+//
+// ## 线程与生命周期
+//
+// 只在**启动期装配阶段**写（各模块构造期），运行期只读。装配阶段是单线程的（main 顺序装配），
+// 所以刻意不加锁——真要支持运行期注册，先改这里再改调用点。表是进程级单例：图在启动期编译完
+// 就不再变（`RenderTargetCache` 无 erase 路径那条前提，见 `docs/compute_调研.md` §8 第 1 条），
+// 所以"注册先于编译"这个顺序成立，也不需要按图分表。
+
+/**
+ * 注册一个 buffer 附件的尺寸来源（模块构造期调用；同名重复注册 = 覆盖，便于热重载与单测）。
+ *
+ * 🔴 传**函数**而不是字节数，是这条机制的承重部分：字节数往往是 `f(资产量)`，注册那一刻就抄成
+ * 常量的话，资产变了它不会红（正是本项目反复踩的"看起来已接线"）。函数按值捕获自己需要的量，
+ * **不要捕获 `this`**——注册表是进程级单例，比绝大多数模块活得久，捕获 `this` 就是悬空。
+ * @param name 附件名（与 `RgAttachmentDesc::name` 同一字符串）
+ * @param sizeOf 字节数的来源（`registerAttachment` / `bufferAttachmentBytes` 调用它）
+ */
+export void registerBufferAttachment(std::string_view name, std::function<vk::DeviceSize()> sizeOf);
+
+/**
+ * 名字是否已在注册表里 = `registerAttachment` 的拒绝判据（也是单测的"注册面非空"锚点）。
+ * @param name 附件名
+ * @return true = 已注册（该名字可以声明成 buffer 档附件）
+ */
+export bool isBufferAttachmentRegistered(std::string_view name);
+
+/**
+ * 取注册时登记的字节数（对账与日志归因用）。
+ * @param name 附件名
+ * @return 字节数；未注册 = nullopt（调用方自己决定是错还是问句）
+ */
+export std::optional<vk::DeviceSize> bufferAttachmentBytes(std::string_view name);
+
+/**
+ * 🔴 **写上界对账**（§7 判据 5 的落点）：模块申报"我最多往这个 buffer 里写这么多字节"，
+ * 注册登记的字节数必须 ≥ 它。
+ *
+ * 这条判据防的是**声明与真实写面分家**：注册表里的字节数如果是拍脑袋写的，图侧一切"看起来
+ * 都校验过了"，而 GPU 上正在往 buffer 外写。方向刻意是**单向**的（注册 ≥ 写上界）：注册得比
+ * 写上界大是允许的（多分配是成本问题，不是正确性问题），把它也判红会逼着调用点抄一个精确值,
+ * 反而又造出一份手抄。
+ * @param name 附件名（必须已注册；未注册 = Error，消息点名注册表位置）
+ * @param writeBound dispatch 实际写入的字节上界
+ * @return 空值 = 对账通过；否则 Error（消息含两侧字节数与差值）
+ */
+export std::expected<void, Error> checkBufferWriteBound(std::string_view name,
+	vk::DeviceSize writeBound);
 
 /**
  * pass 内一条附件引用（RgPassDesc.outputs/inputs 元素）：attachment 名引用

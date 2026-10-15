@@ -91,7 +91,12 @@ std::expected<RgPassAttachment, Error> readPassAttachment(sol::table item,
 		std::initializer_list<std::pair<std::string_view, RgUsage>>{
 			{"colorWrite", RgUsage::colorWrite}, {"depthWrite", RgUsage::depthWrite},
 			{"sampleRead", RgUsage::sampleRead}, {"transferRead", RgUsage::transferRead},
-			{"transferWrite", RgUsage::transferWrite}},
+			{"transferWrite", RgUsage::transferWrite},
+			// storage 两档 = buffer 附件的唯一合法引用方式（kind 侧双向规则见
+			// validateAttachmentBufferName）。词表漏一条的后果不是"配不出来"而是
+			// "配置期报词表错、根因却要读到 compile 层才发现"，故与枚举同步加。
+			{"storageRead", RgUsage::storageRead},
+			{"storageWrite", RgUsage::storageWrite}},
 		"usage", path);
 	if (!usageResult)
 		return std::unexpected(std::move(usageResult).error());
@@ -146,9 +151,37 @@ std::expected<std::vector<RgPassAttachment>, Error> readRoleList(sol::table list
 }
 
 /**
+ * 附件 format 的**词表前置校验**（按 kind 分派；从 readAttachments 里抽出来是为了让那条
+ * 主路径的认知复杂度留在红线内 —— 但更主要的原因是"按 kind 分派词表"本身是一件独立的事，
+ * 混在解析循环里正好是它当年被漏掉的那次的原因）。
+ * @param att  已填好 kind 的附件描述（就地写回 format）
+ * @param fmt  配置里写的格式串
+ * @param path 配置路径（错误信息用）
+ * @return 失败带 Error（消息含 kind 归因：同一个格式串在颜色档合法、在深度档非法）
+ */
+std::expected<void, Error> validateLoadedFormat(RgAttachmentDesc& att,
+	const std::string& fmt, std::string_view path) {
+	// 🔴 词表**必须按 kind 分派**，这是债-122 的另一半：只补 kind 词表而这里仍单查
+	// 颜色表，`kind = "depthOffscreen"` 依旧写不出来（配 `d32_sfloat` 报"未知格式"，
+	// 配 `inherit` 又被 compile 层的深度词表拒 ⟹ 该档在 Lua 里**根本不可表示**）。
+	// 与 compile 层的 `validateAttachmentFormat` 同口径：offscreen 查颜色表、
+	// depthOffscreen 查深度表、其余只认 "inherit"（那一半仍归 compile，这里不重复）。
+	const bool formatOk = att.kind == RgAttachmentKind::depthOffscreen
+		? isKnownDepthRgFormat(fmt)
+		: isKnownRgFormat(fmt);
+	if (!formatOk)
+		return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
+			fmt::format("render graph config ({}): attachment '{}' (kind={}) has unknown "
+				"format '{}'",
+				path, att.name, kindName(att.kind), fmt)});
+	att.format = std::string(fmt);
+	return {};
+}
+
+/**
  * 解析顶层 attachments 数组（name 必填；kind 走 parseEnum 词表；format 经
- * isKnownRgFormat 词表前置校验——结构规则如 swapchain/depth 必须 inherit 仍归
- * compileRenderGraph）。
+ * validateLoadedFormat 的按-kind 词表前置校验——结构规则如 swapchain/depth 必须 inherit
+ * 仍归 compileRenderGraph）。
  * @param root 配置根表（attachments 缺失/非表 = 空列表，透传给 compile 判定）
  * @param path 配置路径（错误信息用）
  * @return 附件描述列表；缺 name/词表串非法返回 Error
@@ -173,23 +206,22 @@ std::expected<std::vector<RgAttachmentDesc>, Error> readAttachments(sol::table r
 				std::initializer_list<std::pair<std::string_view, RgAttachmentKind>>{
 					{"swapchain", RgAttachmentKind::swapchain},
 					{"depth", RgAttachmentKind::depth},
-					{"offscreen", RgAttachmentKind::offscreen}},
+					// 债-122：`depthOffscreen` 在枚举里住了很久（阴影图类），词表却一直没挂号——
+					// 症状是"配置里写 depthOffscreen 报词表错"，而内建图用同一个 kind 跑得好好的，
+					// 于是"图支持这个 kind"与"配置能写出这个 kind"是两条独立的路，只通了一条。
+					{"depthOffscreen", RgAttachmentKind::depthOffscreen},
+					{"offscreen", RgAttachmentKind::offscreen},
+					// buffer 档：不持资源的名字申报（资源归模块申请），见 render_graph.cppm 契约注释
+					{"buffer", RgAttachmentKind::buffer}},
 				"attachment kind", path);
 			if (!kindResult)
 				return std::unexpected(std::move(kindResult).error());
 			att.kind = *kindResult;
 		}
 		sol::optional<std::string> format = item["format"];
-		if (format) {
-			// 词表前置校验（错误带配置路径；结构规则如 swapchain/depth
-			// 必须 inherit 仍归 compileRenderGraph）
-			if (!isKnownRgFormat(*format))
-				return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
-					fmt::format("render graph config ({}): attachment '{}' has unknown "
-						"format '{}'",
-						path, att.name, *format)});
-			att.format = *format;
-		}
+		if (format)
+			if (auto r = validateLoadedFormat(att, *format, path); !r)
+				return std::unexpected(std::move(r).error());
 		out.push_back(std::move(att));
 	}
 	return out;

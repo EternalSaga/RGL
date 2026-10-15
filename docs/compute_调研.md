@@ -1148,7 +1148,7 @@ shader 改名、把写侧改成只读，表照样全绿。真正互锁的是 `te
 | `izb_prime.head` 改成 `RWByteAddressBuffer`（方向变宽） | **不抛**、锚仍命中 ⟹ 匹配确实与方向无关（对称） |
 | `izb_create.head` 改成只读 | 双源对账用例红 ⟹ 人工半边与反射第一次互锁 |
 
-四锚逐位不变（`95edc8cc` / `865fd1aa` / `2316b566` / cull 开档 `95edc8cc`）= **零命令红线**的证据：
+四锚逐位不变（`95edc8cc` / `865fd1aa` / `2316b566` / cull 开档 `dc846396`，态 = `switch=true` 且 overlay 关——债-105 让 overlay 独立成默认关的门后该臂不再是出厂锚，→ `docs/mdi_plan.md` §19）= **零命令红线**的证据：
 本刀没发一条 Vulkan 命令，纯记账 + 抛。
 
 #### 覆盖诚实账：护栏**只建回来了一半**
@@ -1246,10 +1246,47 @@ extentScale、history 的「不是 offscreen 就拒」）——第五档落进�
 | 刀 | 状态 |
 |---|---|
 | **B2-3 前置** 加 kind 的穷尽性护栏（本刀） | ✅ 本刀 |
-| **B2-3 本体** buffer 档 + storage usage + 按名注册 + 拒绝面 | 🔴 **并进 B2-4② meshlet_cull 那一刀**（buffer 档形状由它定，不猜） |
+| **B2-3 本体** buffer 档 + storage usage + 按名注册 + 拒绝面 | ✅ **与 B2-4② 同刀交付**（buffer 档形状由迁入方定，落地 → §7.17） |
 | **B2-4①** EVSSM 矩图迁入 RT 缓存托管 | ✅ `f7d455d`（RT 缓存长出多描述符附件能力 + 迁入；「不升成图附件」与「装配期发号 / 首帧建图两段式」两条设计定案见该 commit 说明） |
-| **B2-4②** meshlet_cull 迁入（buffer 档首发） | ⏳ 未动，与 B2-3 本体同一刀 |
+| **B2-4②** meshlet_cull 迁入（buffer 档首发） | ✅ 本刀（2026-10-15）→ §7.17 |
 | **B2-4③** IZB 迁入（最后，保 A 档 `layoutDrift`） | ⏳ 未动 |
+
+### 7.17 B2-4② 落地实况（2026-10-15）：buffer 档 + 按名注册 + meshlet 迁入（B2-3 本体同刀）
+
+**机制侧**：`RgAttachmentKind::buffer` + `RgUsage::storageRead/storageWrite`；`UsageInfo::layout` 改
+`std::optional`（storage = `nullopt` ⟹ barrier 计划与 beginRendering 条目首行早退）——**plan-only 红线
+做成类型**，`eUndefined` 作 newLayout 是合法 Vulkan 值、VVL 不报，兜底写法会把红线降级成注释。
+按名注册表 = impl 分区 `render_graph:buffers`（lambda **按值捕获字节数、绝不捕获 `this`**：注册表是
+进程级单例，服务只保证比 Renderer 久）。拒绝面落 `registerAttachment`（D1 第 4 条双向规则：buffer
+附件名未注册即拒，五类诱惑不进黑名单）。Lua 词表补 `buffer` 与 `depthOffscreen`（债-122），且
+**format 前置校验改按 kind 分派**——只补词表则 `depthOffscreen` 配深度格式仍报未知格式 = 「补了词表
+还是不能用」的半吊子形态，债-122 的另一半就此收掉。kind 加档的 10 处静默点全部必答；`kindCases()`
+的 aspect 列从布尔改 `vk::ImageAspectFlags`（buffer 的正确答案 = 空 mask，布尔表达不出来）。
+
+**迁入侧**：`visibleBuffer` / `itemsBuffer` 按名注册；`recordDispatch` 的 4 条手抄 barrier → 4 个边名，
+门 6→7、命令流 5→7（**一条边 = 一条命令**，合并档只合并掩码语义）。三个裁决：
+① 异形①取**合并档**（3 个具名宽原子 `hostAndCopyWrite` / `computeReadWithHeap` /
+`priorAccessGfxCsReadWrite`）而非 entries 分层；② 🔴 **meshlet 只一道门、刻意无子门**——scene buffer
+缺位本身是 bug，挂「就绪没」子门 = 护栏在状态坏掉那刻主动闭嘴（§7.8 对 `recordCullPass` 的同型裁决），
+正确形态 = 四条边全挂父门 + else 侧无条件 `error` 点名根因（原代码 else 静默）；③ `itemsBuffer`
+登记但**故意不对账**——注册字节与写上界同出一个表达式 ⟹ 恒真护栏；`visibleBuffer` 两侧来源独立
+（容量公式 vs itemCount）才是真对账。
+
+**🔴 诚实账（引用本刀前必读）**：
+- **出厂编译图不含 meshlet buffer 附件**（`compileGraphOrThrow` 先于 meshlet 装配；为机制形状改构造
+  骨架 = §7.8 同型否决）。⟹ **D1 第 3 条的 Lua 半边（「存在 + 谁产谁消」）本刀无消费者**——生产上
+  注册表与拒绝面只被 meshlet 启动期 `checkBufferWriteBound` 吃到。**「依赖变成图可校验对象」对
+  meshlet 未兑现**；兑现的是：尺寸单一来源 + 对账能红（判据 5）+ barrier 进边表记账（B1b 机制）+
+  机制就位。与 EVSSM B2-4①「不升成图附件」同形——buffer 档首发的收益就到「有家」为止。
+  **B2-4③（IZB）动手前先裁这个岔路**：IZB 尺寸 = f(renderExtent) 且 extent 漂了换整个模块对象，
+  构造顺序问题比 meshlet 更硬，可能绕不开「首帧建图两段式」（EVSSM 先例）。
+- syncval 对 meshlet 的边 **0 条**（与 §4 既有实测同形）⟹ 判据 6 的红只能来自对账与结构护栏，
+  不能指望 VVL。
+
+**验收读数**：五锚逐位（出厂 `95edc8cc` 3/3、meshlet 门关 `54e40665`、cull 开档 `dc846396`、EVSSM
+`865fd1aa`、IZB `2316b566`）；判据 3/5/6 逐条红且归因到点名边/两侧字节数/结构位；变异 10 条（单元 7 +
+真程序 3）。**量具坑一条**：还原变异用 `cp -p` 保留旧 mtime ⟹ ninja 不重编，「还原后基线」跑的仍是
+变异体——还原必须不带 `-p` 或显式 `touch`。
 
 ---
 

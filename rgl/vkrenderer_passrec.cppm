@@ -65,13 +65,17 @@ struct SlotResolver {
 	const std::vector<RtAttachment*>& offscreenRt;
 	std::vector<vk::ImageLayout>& layouts;
 	vk::raii::CommandBuffer& cmd;
-	/** slot → VkImage（四 kind 穷尽）。 */
+	/** slot → VkImage（五 kind 穷尽）。buffer 档没有 image 可给：它的资源归模块持有，
+	 * 图侧只是名字申报（plan-only），且 buffer 附件的 usage 必然带 `layout == nullopt`
+	 * ⟹ 根本进不了物化路径（materializeBarrier 只吃 image barrier 计划）。给 NULL 而不是
+	 * 编一个句柄：真走到这里说明上面那条不变式被破，NULL 会让 VVL 立刻点名。 */
 	VkImage imageForSlot(RgAttachmentSlot slot) const {
 		switch (attachments[slot].kind) {
 			case RgAttachmentKind::swapchain: return swapchainImage;
 			case RgAttachmentKind::depth: return depthImage;
 			case RgAttachmentKind::depthOffscreen:  // 阴影图类：同走 RT 缓存
 			case RgAttachmentKind::offscreen: return offscreenRt[slot]->image.image;
+			case RgAttachmentKind::buffer: return VK_NULL_HANDLE;  // 见函数注释：不可达
 		}
 		return VK_NULL_HANDLE;  // 不可达（穷尽），消 warning
 	}
@@ -82,6 +86,7 @@ struct SlotResolver {
 			case RgAttachmentKind::depth: return depthView;
 			case RgAttachmentKind::depthOffscreen:  // 阴影图类：同走 RT 缓存
 			case RgAttachmentKind::offscreen: return **offscreenRt[slot]->view;  /* optional 解引用 + raii handle */
+			case RgAttachmentKind::buffer: return VK_NULL_HANDLE;  // buffer 档无 view，见 imageForSlot 注释
 		}
 		return VK_NULL_HANDLE;
 	}
@@ -94,6 +99,7 @@ struct SlotResolver {
 			case RgAttachmentKind::depth: return renderExtent;  // 深度图按渲染 extent 分配（见成员注释）
 			case RgAttachmentKind::depthOffscreen:  // 阴影图类：同走 RT 缓存
 			case RgAttachmentKind::offscreen: return offscreenRt[slot]->extent;
+			case RgAttachmentKind::buffer: return {};  // buffer 档无 extent（blit 两端只允许 image kind）
 		}
 		return {};  // 不可达（穷尽）
 	}

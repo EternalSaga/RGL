@@ -45,6 +45,11 @@ module;
  *  12. 三个 `priorAccess*` 宽档并成一个（让 `priorAccessSceneData` 直接返回 Cs 那对掩码）→
  *      「词表逐位」里那条 **access 不等式**变回等式 ⟹ 红（scene data 的源侧没有 ShaderWrite、
  *      却有另一个写者的 TransferWrite，方向不同 = 不是同一件事）。
+ *  13. **B2-4② meshlet 四条**：漏一条（`recordDispatch` 里删一次 `sync.emit`）→ 「meshlet 四条
+ *      边全发够」那条红并点名漏的那条；门关（服务为空 / itemCount=0）却发 → 「门关着却发了边」
+ *      那条红；`meshlet_scene_copy_to_compute` 的 gate 从 `meshlet` 改成任何子门 → 边表用例红
+ *      （= 把 §7.8 那条"不要把 bug 藏进护栏里"的裁决改回去了）；`computeReadWithHeap` 少
+ *      `eResourceHeapReadEXT` 一位 → 「词表逐位」的**不等式**（与窄档 computeRead 比）变等式 ⟹ 红。
  *
  * 🔴 **本文件测不到的**（说清楚，别把"全绿"读成"同步对了"）：`emit` 里有没有忘调
  * `recordEmission`，以及"该发 barrier 的地方根本没写边"。前者由真程序变异覆盖（删一次
@@ -75,11 +80,12 @@ struct Gates {
 	bool izbMask = false;
 	bool cull = false;
 	bool cullFanout = false;
+	bool meshlet = false;
 };
 
 /** 门位数组（顺序 = `RgSyncGate` 声明序；帧末真实现场用**具名赋值**，见 §7.5）。 */
 constexpr std::array<bool, kSyncGateCount> gates(const Gates& g) {
-	return {g.evssm, g.izb, g.izbDump, g.izbMask, g.cull, g.cullFanout};
+	return {g.evssm, g.izb, g.izbDump, g.izbMask, g.cull, g.cullFanout, g.meshlet};
 }
 
 /** 失败消息（绿 = 空串）；口径同 `test_offgraph_contract`。 */
@@ -111,6 +117,17 @@ constexpr RgSyncEdgeId kCullEdges[] = {
 	RgSyncEdgeId::cullSceneCopyToReads, RgSyncEdgeId::cullSeqUploadToCreate,
 	RgSyncEdgeId::cullSeqWriteToReadback, RgSyncEdgeId::cullCountWriteToReadback,
 	RgSyncEdgeId::cullReadbackToHost, RgSyncEdgeId::cullSeqFanoutChain,
+};
+
+/**
+ * MeshletCullService 全部 4 条边（批次 B2-4②；出处 = 迁移前 `recordDispatch` 里手抄的
+ * 四条 barrier：一条 global + 两条 buffer 合并在一次 `pipelineBarrier2`，加 dispatch 后一条）。
+ * 🔴 四条**全挂父门** `meshlet`，没有子门——scene data 那条虽是条件发射，也不给它挂
+ * "scene buffer 就绪没"的门（裁决与理由 → `RgSyncGate::meshlet` 的注释 + §7.8）。
+ */
+constexpr RgSyncEdgeId kMeshletEdges[] = {
+	RgSyncEdgeId::meshletHeapSceneToCompute, RgSyncEdgeId::meshletSceneCopyToCompute,
+	RgSyncEdgeId::meshletVisiblePriorToWrite, RgSyncEdgeId::meshletVisibleWriteToMesh,
 };
 
 }  // namespace
@@ -187,9 +204,36 @@ TEST_CASE("offgraph_sync: usage 词表逐位钉死（期望值 = 迁移前各模
 		!= syncUsageMasks(RgSyncUsage::priorAccessWideCs).access);
 	CHECK(syncUsageMasks(RgSyncUsage::heapReadWide).access
 		!= syncUsageMasks(RgSyncUsage::graphicsRead).access);
+	// —— MeshletCullService（出处：迁移前 meshlet_cull_service_impl.cppm 的 recordDispatch
+	// 里手抄的 barrier 字面量，一次 pipelineBarrier2 装了「一条 global + 两条 buffer」）——
+	// (a) 的 src：`eHost | eTransfer` / `eHostWrite | eTransferWrite`（两个生产者：heap 描述符
+	// 的 host 写 + scene data 的拷贝写）。**两个位都要在**——少 Host 那位 = 放过描述符的 host 写，
+	// 后果是 compute 拿旧描述符去读（读错地址），比读旧数据坏一档。
+	CHECK(syncUsageMasks(RgSyncUsage::hostAndCopyWrite).stage
+		== (Stage::eHost | Stage::eTransfer));
+	CHECK(syncUsageMasks(RgSyncUsage::hostAndCopyWrite).access
+		== (Acc::eHostWrite | Acc::eTransferWrite));
+	// (a) 的 dst：`eComputeShader` / `eShaderRead | eResourceHeapReadEXT`。与窄档 computeRead
+	// 的**唯一**差别就是 heap 那一位 ⟹ 阳性对照钉"这一位不许被顺手抹掉"。
+	CHECK(syncUsageMasks(RgSyncUsage::computeReadWithHeap).stage == Stage::eComputeShader);
+	CHECK(syncUsageMasks(RgSyncUsage::computeReadWithHeap).access
+		== (Acc::eShaderRead | Acc::eResourceHeapReadEXT));
+	CHECK(syncUsageMasks(RgSyncUsage::computeReadWithHeap).access
+		!= syncUsageMasks(RgSyncUsage::computeRead).access);
+	// (c) 的 src：`eAllGraphics | eComputeShader` / `eShaderRead | eShaderWrite`（跨帧 WAR + WAW）。
+	// 与两条 priorAccessWide* 的差别是**两处**：stage 少 Transfer（标志表不被拷出读）、
+	// access 少 TransferRead 但**多 ShaderWrite**（上一帧的 compute 写也要挡）。
+	CHECK(syncUsageMasks(RgSyncUsage::priorAccessGfxCsReadWrite).stage
+		== (Stage::eAllGraphics | Stage::eComputeShader));
+	CHECK(syncUsageMasks(RgSyncUsage::priorAccessGfxCsReadWrite).access
+		== (Acc::eShaderRead | Acc::eShaderWrite));
+	CHECK(syncUsageMasks(RgSyncUsage::priorAccessGfxCsReadWrite).stage
+		!= syncUsageMasks(RgSyncUsage::priorAccessWideCs).stage);
+	CHECK(syncUsageMasks(RgSyncUsage::priorAccessGfxCsReadWrite).access
+		!= syncUsageMasks(RgSyncUsage::priorAccessWideCs).access);
 	// 词表规模（守的变异 = 「加/删原子却没动本文件」：数字对不上立刻红，逼后来者为新原子补
 	// 上面那组逐位断言，而不是只往枚举里塞一行就完事）
-	CHECK(static_cast<uint32_t>(RgSyncUsage::count) == 17);
+	CHECK(static_cast<uint32_t>(RgSyncUsage::count) == 20);
 
 	// 变异 9：词表不养闲原子——每个原子至少被某条边的某一侧用到。加原子而没人用 = 白占一个
 	// "看起来已覆盖"的名额，后面铺客户时会被当成现成的档乱用。
@@ -284,6 +328,26 @@ TEST_CASE("offgraph_sync: 边表逐条钉死 = 旧代码 24 处 barrier 调用�
 		{RgSyncEdgeId::cullSeqFanoutChain, "cull_seq_fanout_chain", buffer, cullFanout,
 			Stage::eComputeShader, Acc::eShaderWrite, Stage::eComputeShader,
 			Acc::eShaderRead | Acc::eShaderWrite},
+		// —— MeshletCullService 四条（出处：迁移前 meshlet_cull_service_impl.cppm 的
+		// recordDispatch 里手抄的四条 barrier，逐位对应当时的字面量）——
+		// (a) 合并档：一条 global 同时挡 heap 描述符的 host 写与 scene data 的拷贝写。
+		// 它只能是 executionOrder —— dst 里的 ResourceHeapReadEXT 作用在堆对象上，给不了句柄。
+		{RgSyncEdgeId::meshletHeapSceneToCompute, "meshlet_heap_scene_to_compute",
+			executionOrder, meshlet, Stage::eHost | Stage::eTransfer,
+			Acc::eHostWrite | Acc::eTransferWrite, Stage::eComputeShader,
+			Acc::eShaderRead | Acc::eResourceHeapReadEXT},
+		// (b) scene data 拷入 → compute 读（旧代码 size 写 kSceneDataBytes，与 WHOLE_SIZE 等价）
+		{RgSyncEdgeId::meshletSceneCopyToCompute, "meshlet_scene_copy_to_compute", buffer,
+			meshlet, Stage::eTransfer, Acc::eTransferWrite, Stage::eComputeShader,
+			Acc::eShaderRead},
+		// (c) 标志表写前依赖（跨帧 WAR/WAW）。与下一条同资源、不同方向 ⟹ 刻意两条
+		{RgSyncEdgeId::meshletVisiblePriorToWrite, "meshlet_visible_prior_to_write", buffer,
+			meshlet, Stage::eAllGraphics | Stage::eComputeShader,
+			Acc::eShaderRead | Acc::eShaderWrite, Stage::eComputeShader, Acc::eShaderWrite},
+		// compute 写标志 → mesh shader 读（dst 是 AG 而不是 FS：MeshShaderStage 含在 AG 里）
+		{RgSyncEdgeId::meshletVisibleWriteToMesh, "meshlet_visible_write_to_mesh", buffer,
+			meshlet, Stage::eComputeShader, Acc::eShaderWrite, Stage::eAllGraphics,
+			Acc::eShaderRead},
 	};
 	// 边数也要钉：加边不写用例 = 新边没人验（这条红比"某条边写错"更常见）。
 	REQUIRE(std::size(expects) == OffGraphSync::kEdgeCount);
@@ -377,6 +441,55 @@ TEST_CASE("offgraph_sync: cull 八条边全发够才绿；逐条漏发各点名�
 		REQUIRE_FALSE(msg.empty());
 		INFO("漏掉的边：" << syncEdgeDesc(skip).name);
 		CHECK(msg.find(syncEdgeDesc(skip).name) != std::string::npos);
+	}
+}
+
+TEST_CASE("offgraph_sync: meshlet 四条边全发够才绿；逐条漏发各点名一条") {
+	// 现场门位 = 只开 meshlet 一道门。🔴 四条边**全挂父门**，所以这里没有"子门开/关"两半：
+	// scene data 那条虽是条件发射，也**不**给它挂子门（裁决 → `RgSyncGate::meshlet` 注释）。
+	// 于是本用例同时是那条裁决的机器判据：谁给那条边换了门，边表用例立刻红。
+	const auto on = gates({.meshlet = true});
+	OffGraphSync sync;
+
+	// 阳性锚点：门开着、4 条各发一次 ⟹ 绿（应发次数全是 1：一次 dispatch 一条边）
+	sync.beginFrame();
+	for (const auto edge : kMeshletEdges) emitTimes(sync, edge);
+	CHECK(messageOf(sync.checkEmission(std::span<const bool>{on})).empty());
+	CHECK(std::size(kMeshletEdges) == 4);
+
+	// 漏一条（发射点被删而边表还在）。逐条漏一遍 = 每条边都被判据覆盖过。
+	// 这四条里 (b) 与 (c) 同资源不同方向、(a) 与 (b) 部分语义重叠 ⟹ "少发一次"必须
+	// 能点名到具体哪条，否则红了分不清是漏了写前依赖还是漏了 dispatch 后的读序。
+	for (const auto skip : kMeshletEdges) {
+		sync.beginFrame();
+		for (const auto edge : kMeshletEdges) {
+			if (edge != skip) emitTimes(sync, edge);
+		}
+		const auto msg = messageOf(sync.checkEmission(std::span<const bool>{on}));
+		REQUIRE_FALSE(msg.empty());
+		INFO("漏掉的边：" << syncEdgeDesc(skip).name);
+		CHECK(msg.find(syncEdgeDesc(skip).name) != std::string::npos);
+	}
+}
+
+TEST_CASE("offgraph_sync: meshlet 门关着却发了边 = 红（门关零命令 = 逐位不变红线）") {
+	// 现场：meshlet 门**关**（服务为空，或有服务但 itemCount = 0 ⟹ recordDispatch 第一行早退）。
+	// 其余门全关，所以任何一条边出现都只可能来自 meshlet 那四条。
+	const auto allOff = gates({});
+	OffGraphSync sync;
+
+	// 阳性锚点：门关且零发射 ⟹ 绿（不许反过来把"门关零发射"也判红）
+	sync.beginFrame();
+	CHECK(messageOf(sync.checkEmission(std::span<const bool>{allOff})).empty());
+
+	// 门关却发 ⟹ 逐条点名（= 门关路径多了一条 barrier = 破逐位不变）
+	for (const auto edge : kMeshletEdges) {
+		sync.beginFrame();
+		emitTimes(sync, edge);
+		const auto msg = messageOf(sync.checkEmission(std::span<const bool>{allOff}));
+		REQUIRE_FALSE(msg.empty());
+		INFO("门关却发的边：" << syncEdgeDesc(edge).name);
+		CHECK(msg.find(syncEdgeDesc(edge).name) != std::string::npos);
 	}
 }
 

@@ -52,7 +52,7 @@ namespace RGL {
  * 🔴 **原子 = 语义角色，不是"观测到的掩码集合"**。后者会让"词表覆盖全部形态"变成恒真的废话
  * （18 个匿名掩码换个地方存而已）。
  *
- * **宽档必须单独命名并写明为什么宽**，否则就是静默的过度同步。本词表现有六个宽档，
+ * **宽档必须单独命名并写明为什么宽**，否则就是静默的过度同步。本词表现有九个宽档，
  * 宽的**原因**各不相同，这才是它们不能并成一个"随便一个宽档"的理由：
  *
  * | 宽档 | 为什么宽 |
@@ -62,6 +62,9 @@ namespace RGL {
  * | `priorAccessWideCs` / `Gfx` | **跨帧**依赖的源侧：上一帧最后访问点取决于当时的门（dump 开没开），拿不准的一律纳入 |
  * | `heapReadWide` | 消费者是 **EXT 描述符堆**——它是一个扩展对象、不是本层能命名句柄的 buffer ⟹ 表达不成 buffer 档，只能走无句柄执行序 |
  * | `priorAccessSceneData` | **跨帧 + 跨命令缓冲**依赖的源侧：scene data 单份跨 frames-in-flight 共享且每帧**两个写者**（主 CB 与 cull CB），本帧 copy 与"上一帧的读 / 另一 CB 的写"之间必须自建依赖 |
+ * | `hostAndCopyWrite` | 一条序有**两个生产者**（heap 描述符的 host 写 + scene data 的 Transfer 写），而它们要挡的**消费者是同一个** dispatch ⟹ 拆成两条边会多付一条命令，合并的代价 = 两个源 mask 取并 |
+ * | `computeReadWithHeap` | 上一条的 dst 半边：同一个 dispatch 既经 heap 读描述符、又直接读 buffer ⟹ 少 `ResourceHeapReadEXT` 那位就放过了描述符写，少 `ShaderRead` 那位就放过了拷贝写 |
+ * | `priorAccessGfxCsReadWrite` | **跨帧**依赖的源侧，但方向是"读 + 写都要挡"：单份标志表上一帧被 mesh shader 读、被 compute 写，本帧 compute 写对两者分别是 WAR 与 WAW ⟹ 只给读会漏 WAW、只给写会漏 WAR |
  *
  * 两条 `priorAccessWide*` 只差 compute 一档，**是刻意分开的**：head 被 compute 写过、mask 没有。
  * 合成一个"最宽的"确实更省事，但省掉的那一位正是"这个资源到底被谁碰过"这条信息本身。
@@ -87,6 +90,10 @@ export enum class RgSyncUsage : uint8_t {
 	priorAccessWideGfx,///< 宽档兜底：同上但**不含 compute**（该资源不经 compute）
 	heapReadWide,      ///< 宽档兜底：图形阶段读 **EXT 描述符堆**（AG / ResHeapRead|SamplerHeapRead|TransferRead|ShaderRead）
 	priorAccessSceneData, ///< 宽档兜底：scene data 的跨帧 + 跨 CB 前序访问（AG|CS|TR / ShaderRead|TransferWrite）
+	// —— 以下 3 条 = 批次 B2-4②（meshlet 逐簇剔除迁入）新增 ——
+	hostAndCopyWrite,  ///< 宽档：host 写 **与** 拷贝写两个生产者共用一条序（Host|TR / HostWrite|TransferWrite）
+	computeReadWithHeap, ///< 宽档：compute 读它 **且** 经描述符堆读（CS / ShaderRead|ResourceHeapReadEXT）
+	priorAccessGfxCsReadWrite, ///< 宽档兜底：上一帧「图形读 + compute 写」的全部前序访问（AG|CS / ShaderRead|ShaderWrite）
 	count,             ///< 原子数（单测遍历词表用，不是原子）
 };
 
@@ -120,6 +127,7 @@ export enum class RgSyncGate : uint8_t {
 	izbMaskSegment, ///< 本帧 shadow0 段非空 ⟹ mask pass 真的录了（段空 = 整段跳过，债-32）
 	cull,           ///< GPU cull 数据通路本档要录 + 提交 cull CB（`CullDriver::gpuPassRuns()`）
 	cullFanout,     ///< 且静态 DGC 流已建（`GpuCull::entryStreamsEnabled()`）——条件边挂自己的门
+	meshlet,        ///< 逐簇剔除本档要录（服务在场 **且** 有剔除项；两个半边都是门/输入，见下方注释）
 };
 
 /**
@@ -128,8 +136,16 @@ export enum class RgSyncGate : uint8_t {
  * 🔴 **门之间不独立**：`izbDump ⊂ izb`、`izbMaskSegment ⊂ izb`、`cullFanout ⊂ cull`。帧末门位表
  * 必须自己带上这个包含关系（`izbOn && …` / `cullOn && …`），否则"运行中途把 IZB 关掉"会让 dump
  * 门按配置算成开、而 barrier 一条没发 ⟹ **假阳性**。这类"门位算错"由单测的门开/门关两条用例分别守。
+ *
+ * 🔴 **meshlet 只有道一门，刻意没有子门**（B2-4② 定案）。它四条边里 scene data 那条是条件发射
+ * （`if (sceneBuffer.buffer != VK_NULL_HANDLE)`），给它挂一道"scene buffer 就绪没"的子门是**错的**：
+ * 门位口径一旦变成"这个状态合法吗"，护栏就在状态坏掉的那一刻**主动闭嘴**，而那个状态本身是 bug
+ * （dispatch 要从 scene data 读对象矩阵表，buffer 不存在 ⟹ 那一读在读垃圾）。同一条裁决的先例见
+ * `docs/compute_调研.md` §7.8 对 `recordCullPass` 的处置（"不要把 bug 重新藏进护栏里"）。
+ * 正确形态 = 四条边全挂父门 + else 侧无条件 `error` 日志点名根因：帧末读数此时是**症状**、
+ * 那条日志是**根因**，两个都要出声，而不是让前者替后者消音。
  */
-export constexpr uint32_t kSyncGateCount = 6;
+export constexpr uint32_t kSyncGateCount = 7;
 
 /** 已登记的同步边（顺序 = 内部计数数组下标）。 */
 export enum class RgSyncEdgeId : uint8_t {
@@ -160,6 +176,15 @@ export enum class RgSyncEdgeId : uint8_t {
 	cullCountWriteToReadback,///< ⑤ 同上但资源是 count（与上一条 masks 全同、资源不同）
 	cullReadbackToHost,     ///< ⑥ 读回拷入 → host 读 mapped 内存（无句柄执行序）
 	cullSeqFanoutChain,     ///< ⑤.5 序列 compute 写 → fanout dispatch 既读又写（静态 DGC 流才发）
+	// —— 以下 4 条 = MeshletCullService（批次 B2-4②；3 条 buffer 档 + 1 条无句柄执行序档）。
+	// 序号沿用 `MeshletCullService::recordDispatch` 里的 (a)(b)(c) 注释，红了能直接对着那段读。
+	// 🔴 迁移把原本"一条 pipelineBarrier2 装三条"拆成了三条命令（命令流 2→4，见
+	// `recordMeshletCullDispatch` 的 profiler 计数）——不变式是「一条边 = 一条命令」，
+	// 合并档只合并**掩码语义**（`hostAndCopyWrite` 那种），不合并命令。
+	meshletHeapSceneToCompute, ///< (a) heap 描述符 host 写 + scene data 拷写 → compute 读它俩（无句柄：heap 不是 buffer）
+	meshletSceneCopyToCompute, ///< (b) scene data 拷入 → compute 读（条件发射，门位口径见 `RgSyncGate::meshlet`）
+	meshletVisiblePriorToWrite,///< (c) 标志表写前依赖：上一帧图形读 + compute 写 → 本帧 compute 写（WAR/WAW）
+	meshletVisibleWriteToMesh, ///< 标志表 compute 写 → mesh shader 读（缺它 = 边界簇闪烁 + BUFFER_SYNC hazard）
 	count,
 };
 

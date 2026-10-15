@@ -421,10 +421,11 @@ void Renderer::recordMeshletCullDispatch(vk::raii::CommandBuffer& cmd, const Fra
 	// 批次 B1：位置契约从注释变成断言——本函数被挪到 pass 循环之内/之后，帧末对账之前就会
 	// error 出声（申报相位 = 帧首段，见 offGraphWorkDecls）。
 	offGraphEnter(kWorkMeshletCull);
-	meshletCull->recordDispatch(cmd, list.cullInput.planes);
-	// vkcmd.count 口径：2 条 pipelineBarrier2 + bindShadersEXT + pushDataEXT + dispatch = 5。
+	meshletCull->recordDispatch(cmd, list.cullInput.planes, offGraphSync);
+	// vkcmd.count 口径：3 条 pipelineBarrier2（B2-4② 起一条边一条命令，原先是一条装三条）
+	// + bindShadersEXT + pushDataEXT + dispatch + 1 条 pipelineBarrier2 = 7。
 	// 改 MeshletCullService::recordDispatch 的命令流必须同步改这里（同 recordFixedDataPath 的纪律）。
-	profilerAddCommands(5);
+	profilerAddCommands(7);
 }
 
 // 批 11.6d-2：EVSSM sandwich（与 izbLightPassPre 同位；门空早退 = 零命令）。
@@ -528,6 +529,13 @@ std::expected<void, Error> Renderer::ensureOffscreenAttachments(vk::Extent2D ext
 			case RgAttachmentKind::depthOffscreen:
 				rtAspect = vk::ImageAspectFlagBits::eDepth;
 				break;
+			// buffer 档不占 RT 缓存（资源归模块申请），故与 swapchain/depth 同侧 continue。
+			// 上面那条"漏抹布局"的担心对它不成立：`attachmentLayouts[s]` 只在 planBarrier
+			// 生成的 image barrier 计划里被读，而 buffer 档的 usage 带 `layout == nullopt`
+			// ⟹ 它的槽**结构性不会**进任何计划（见 render_graph_impl.cppm 的 UsageInfo）。
+			// 也就是说这里 continue 的安全性来自那条不变式，而不是"记得写 continue"。
+			case RgAttachmentKind::buffer:
+				continue;
 		}
 		const auto fmt = RGL::resolveRgFormat(att.format, swapchain->getFormat().format);
 		// 尺寸：声明了独立 extent 就用它，否则跟随 swapchain（× extentScale，批 15.3B：
@@ -622,6 +630,11 @@ void Renderer::offGraphEndFrame(const FrameDrawList& list) {
 		cullOn,
 		// 扇出边挂**子门**（cullFanout ⊂ cull）：带父门的理由与 izbOn 那两条完全相同。
 		cullOn && cullDriver.fanoutRuns(),
+		// 逐簇剔除的门 = 服务在场 **且** 有剔除项。两个半边都是"门与输入"而不是"刚才录过没有"：
+		// 前者是装配期事实（门关 = 恒 nullptr），后者是 uploadItems 的产物（空表 = recordDispatch
+		// 第一行早退 = 零命令）。少掉后半边会让"注册了服务但一个剔除项都没有"的档帧末假阳性。
+		// 🔴 四条边全挂这一道门，scene data 那条**不另挂子门**，理由见 RgSyncGate::meshlet 注释。
+		meshletCull != nullptr && meshletCull->itemCount() > 0,
 	};
 	if (auto r = offGraphSync.checkEmission(std::span<const bool>{syncActive}); !r)
 		reportOffGraphViolation(r.error());
