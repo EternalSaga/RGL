@@ -213,5 +213,6 @@ Slang → SPV 构建时编译到 `build/rgl/generated_shaders/`。硬规则：**
   §构建 Windows 前置）· `docs/gate_lint_plan.md`（**加诊断门前看**）
 - **调研 / 活文档**：`docs/mdi_plan.md`（Multi Draw Indirect **可行性定案载体**；**动 indirect 前读，
   别重推一遍**）· `docs/compute_调研.md`（图外 compute 全景 / 渲染图**真实边界** / 队列归属事实基线 /
+  **扩渲染图形态的定案载体**；**动 compute 或扩渲染图前读**，§9 负知识别再重查）
 - **离线参考**：本地克隆 `/home/robin/program/Vulkan-Docs`（在线检索被 Cloudflare 拦截时用）。
   ⚠ spec 比系统头/loader 新，**结构体字段以系统头为准**，spec 只作语义依据
