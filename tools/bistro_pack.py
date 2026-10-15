@@ -52,7 +52,19 @@ images = g["images"]
 materials = g["materials"]
 
 def uri_to_src(u):
-    return os.path.join(TEXDIR, os.path.basename(u.replace("\\", "/")))
+    # 大小写兜底（2026-10-15，ZeroDay/MEASURE_ONE 首转实测）：FBX 里引用 `tex\floor_BaseColor.dds`
+    # 而磁盘上是 `FLOOR_BaseColor.dds`——作者机是 Windows（大小写不敏感）⟹ 这个洞只在 Linux 暴露，
+    # 且**只有两张图**中招（同目录其余 736 张精确命中），所以不是"整个资产路径风格不同"。
+    # 精确名命中优先；不中才在同目录按大小写不敏感找一次；再不中交回精确路径让调用方报 MISSING。
+    name = os.path.basename(u.replace("\\", "/"))
+    exact = os.path.join(TEXDIR, name)
+    if os.path.exists(exact):
+        return exact
+    low = name.lower()
+    for entry in sorted(os.listdir(TEXDIR)):
+        if entry.lower() == low:
+            return os.path.join(TEXDIR, entry)
+    return exact
 
 # 1. Decide per-image output kind + role, collect referenced indices.
 #    Determine role by filename tag (authoritative from Bistro naming convention).
@@ -242,20 +254,30 @@ def has_real_alpha(png_blob):
         return False
 
 done = 0
+failed = []       # 没能转成 PNG 的引用图（旧版只 print 不拦 ⟹ 后面 remap 抛 `KeyError: 46`，
+                  # 症状与"脚本坏了"无法区分，2026-10-15 ZeroDay 首转踩到；下面就地退出并点名）
 alpha_real = {}   # old image idx -> baseColor alpha 非平凡（MASK 判据）
 for i in sorted(referenced):
     src = uri_to_src(images[i]["uri"])
     if not os.path.exists(src):
-        print("MISSING", src); continue
+        print("MISSING", src); failed.append((i, "MISSING", src)); continue
     png = os.path.join(tmp, f"t{i}.png")
     if not run_ff(src, png, kind[i] == "normal"):
-        print("FFMPEG FAIL", src); continue
+        print("FFMPEG FAIL", src); failed.append((i, "FFMPEG FAIL", src)); continue
     blob = open(png, "rb").read()
     new_images.append({"bufferView": append_bv(blob), "mimeType": "image/png"})
     old2new[i] = len(new_images) - 1
     if kind[i] == "base":
         alpha_real[i] = has_real_alpha(blob)
     done += 1
+
+if failed:
+    print(f"FAIL: {len(failed)}/{len(referenced)} 张被材质引用的贴图没能转成 PNG：")
+    for i, why, src in failed:
+        print(f"  image[{i}] {why}  {src}")
+    print("不继续写 glb：漏一张就会让该材质的 texture.index 指向错图（旧版在此之后 KeyError，"
+          "或更坏——写出一份只有 JSON 变了、贴图错位的 glb）。补素材/补大小写后重跑。")
+    sys.exit(1)
 
 # 3b. Metadata backfill (see header): MASK from baseColor alpha scan, doubleSided from
 #     name, emissive strength on emissive materials. Runs BEFORE the index remap in step 5

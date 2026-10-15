@@ -401,6 +401,11 @@ build_min/
 Bistro_v5_2/
 novel-ignore-it/
 
+# Epic/ORCA UE4 sample scene packs（2026-10-15）：zip 原件 + 解包工作目录（FBX + DDS，
+# 单个 0.6~2 GB）。入库的只有 tools/bistro_pack.py 转出的 assets/*.glb（走 LFS）。
+/*.zip
+/assets_raw/
+
 # 本机 vulkaninfo 输出（400KB+ 实测快照，见 nvidia_compatibility_report 同类文件）
 VP_VULKANINFO_*.json
 
