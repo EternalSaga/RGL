@@ -7,6 +7,11 @@ CXString=16B 值类型——照旧例程写必段错误。
 另：clang_makeRange 在 LLVM 22 已更名 clang_getRange（CXSourceLocation.h，
 旧名 ctypes 查找必 AttributeError）。
 
+另：clang 驱动升级后**必须连 `build/checks_cache` 一起清**再验——`just clean` 只跑 cmake clean
+不动缓存，而缓存命中时汇总是「缓存命中 151、解析 0」，那个「0 警告」对新 libclang 一条都没验过
+（2026-10-16 实测踩到）。清后真解析读数基线：151 TU 失败 0 / doc-check 1671 声明 / 工具侧 80 TU，
+在 clang 22.1.8 下与升级前逐项相同。
+
 坑 7（2026-09-23 实测，声明抽取唯一通路）：`-std=gnu++23` + `-x c++-module`
 下 clang 的 export 声明在 libclang cursor 树里映射为 UnexposedDecl 且
 clang_visitChildren 返回 0 子——**export 子树对游标遍历完全不可见**（任何
