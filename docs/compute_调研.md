@@ -2,6 +2,9 @@
 
 > **状态**：`现行`（2026-10-14 立，同日 **§6 D1 定案**）。本篇 = **图外 compute 的事实基线 + 扩渲染图
 > 形态的定案载体**；批次切分在 §7，**没有排期**。
+> 🔴 **读这篇先读 §7.22**：B1a / B1b / B2 各刀（含 D5 路线重切后的 ③′ / ④′ / B2-5）与其后四笔小账
+> （债-128 / 125 / 120 / 122 另一半）**均已落地**。§7 里的切刀表是**层层覆盖**式历史，现行表只有
+> §7.16 那一张；"还剩什么 / 明确不做什么"只在 §7.22。
 > 触发：用户把优先级从「规模上限」（已判定不处理，→ `docs/还债总账.md` §3 降级条）让到
 > 「把 compute 纳入声明式渲染图」，先普查现状。
 > 🔴 **动手前先读 §2.1 与 §6**：形态定案 = **扩资源词表（buffer 档 + storage usage）+ plan-only**。
@@ -21,8 +24,8 @@
 | 提交落点全集 | `grep -rn vkQueueSubmit rgl/*.cppm` | 14 处，**全部** `getGraphicsQueue()` |
 | 图能表达什么 | `RgAttachmentKind` / `RgUsage` / `RgPassKind` 三个枚举本体（`rgl/render_graph.cppm`） | 见 §2 |
 | 队列族现场 | `vulkaninfo \| grep -E "queueFlags\|queueCount"` | 见 §3 |
-| 图外同步的既有账 | `docs/还债总账.md` **债-75** | buffer 侧零对账 |
-| 图属 transient 资源的生命周期机器在哪 | `RenderTargetCache` 本体（`ensure` 幂等 / `generation` 漂移 / `heapSlot` 跨 resize 复用三条语义看它，别信摘要） | 已建好，**只管 image**（§2.1） |
+| 图外同步的对账管辖面 | `rgl/offgraph_sync_impl.cppm` 的 `kComputeHazardEdges` + `kAttachmentSyncEdges` 两张表本体（**别信任何"已对账/零对账"的摘要**） | 快照 2026-10-15：compute↔compute 5 条 + 图附件 1 条已进机器管辖，其余归人工（管辖面与四类残留 = 债-119 行；原债-75 已结案） |
+| 图属 transient 资源的生命周期机器在哪 | `RenderTargetCache` 本体（`ensure` 幂等 / `generation` 漂移 / `heapSlot` 跨 resize 复用三条语义看它，别信摘要）+ `pending_evictions`（延迟逐出台账） | 已建好，**RT 缓存只管 image**（§2.1）；buffer 附件的资源归模块、图侧只有按名注册的字节数（§7.17） |
 
 ---
 
@@ -64,11 +67,12 @@
 - `RgPassKind` = `drawMesh` / `blit` / `drawLight` —— **无 compute**
 - `RgUsage` = `colorWrite` / `depthWrite` / `sampleRead` / `transferRead` / `transferWrite`
   —— **无 storage 读写**（⚠ 本行 2026-10-14 前写的是 `read`/`write`/`readDepth`/`writeDepth`/
-  `blitRead`，那是改名前的旧名，**已漂**；名单口径按 §0 的规矩读枚举本体 `render_graph.cppm:72-78`）
+  `blitRead`，那是改名前的旧名，**已漂**；名单口径按 §0 的规矩读枚举本体 `RgUsage`（`render_graph.cppm`，**行号会漂故不写**））
 - `RgAttachmentKind` = `swapchain` / `depth` / `offscreen` / `depthOffscreen` —— **无 buffer kind**
 
 图的产出 = 每 attachment 的**最终 layout** + `beginRendering` 的 layout 条目 + `RgBarrierPlan`
-（pass 间 barrier）。`usageInfo`（`render_graph_impl.cppm:49`）是 usage → {layout, stage, access}
+（pass 间 barrier）。`usageInfo`（`render_graph_usage.cppm`，B2-3 起是兄弟分区 `render_graph:usage`）
+ 是 usage → {layout, stage, access}
 的**唯一推导点**——加 compute 必改它（配套的两个角色判据 `isWriteUsage` / `isReadUsage` 同改）。
 
 ⚠ **kind 的校验落点分两处，别记成一处**（2026-10-14 实测，先前本行写「`precheckPass` 按 kind
@@ -76,12 +80,12 @@
 
 | 校验 | 位置 | 形态 |
 |---|---|---|
-| **附件级**（格式 / extent / extentScale / history 四张 kind 白名单） | `registerAttachment` 调的四个 `validateAttachment*`（`render_graph_impl.cppm:145/173/188/208`） | 返回 `std::unexpected(RenderGraphInvalid)`，**不抛** |
-| **pass 级** | `precheckPass`（`:336`） | 只按 `pass.kind` **三路分派**，不查任何 kind 词表 |
-| **执行器构造期**（state 按 kind 分档、段名查词表） | `validateRenderGraphForExecutor`（`vkrenderer_impl.cppm:51`） | `throw std::runtime_error` |
+| **附件级**（格式 / extent / extentScale / history 四张 kind 白名单） | `registerAttachment` 调的四个 `validateAttachment*`（`render_graph_impl.cppm`，**行号会漂故不写**） | 返回 `std::unexpected(RenderGraphInvalid)`，**不抛** |
+| **pass 级** | `precheckPass`（同文件） | 只按 `pass.kind` **三路分派**，不查任何 kind 词表 |
+| **执行器构造期**（state 按 kind 分档、段名查词表） | `validateRenderGraphForExecutor`（`vkrenderer_impl.cppm`） | `throw std::runtime_error` |
 
 ⟹ **加 buffer 档要改的是第一行那四处 + 三个 kind 谓词**（`aspectOf` / `isRtBackedKind` /
-`isDepthKind`，`:80-92`），而 `aspectOf` 对未知 kind **回落 `eColor`** = 一个静默的错方向，
+`isDepthKind`，同文件 `render_graph.cppm` 的四个 kind 谓词段），而 `aspectOf` 对未知 kind **回落 `eColor`** = 一个静默的错方向，
 新 kind 必须显式给出取值而不是靠回落。
 
 🔴 **真正的不变式不是「compute 全在图外」，是「图只跟 image attachment 的布局链」。**
@@ -440,7 +444,7 @@ B1b 是把它们合起来推广到 buffer/global 侧：
 | 先例 | 它已经证明的事 |
 |---|---|
 | `Renderer::transitionAndTrack` | 「**为什么必须是一个函数**而不是调用方自己发 barrier 再自己写表：两个独立字面量一旦分家，表就可能与真实布局脱钩，而**读表的护栏随之退化成同义反复**」 |
-| `usageInfo`（`render_graph_impl.cppm:49`） | usage → `{layout, stage, access}` **查表生成命令参数**，所以图内根本不存在"声明与命令流分家" |
+| `usageInfo`（`render_graph_usage.cppm`） | usage → `{layout, stage, access}` **查表生成命令参数**，所以图内根本不存在"声明与命令流分家" |
 
 **形态**：
 
@@ -1311,6 +1315,7 @@ extentScale、history 的「不是 offscreen 就拒」）——第五档落进�
 | **B2-4③′** IZB 动态性首发（资源级动态 + erase/结转，还债-124；**按 D5 重切**，原「迁入」刀） | ✅ 本刀（2026-10-15）→ §7.18 |
 | **B2-4④′** 升级存量：meshlet / EVSSM 升成图附件（试点后近乎免费；EVSSM 收益仅「依赖被图看见」） | ✅ 本刀（2026-10-15）：meshlet 半边迁入 + 图声明面↔边表双源对账；**EVSSM 半边裁决为不做**（实测依据与代价账 → §7.19） |
 | **B2-5** pass 级动态（运行期效果开关；相位表 / barrier 计划随重编译自动跟；这条才碰 B1a 索引形态） | ✅ 本刀（2026-10-15）：试点 = highlight pass，开关 = 一笔复合事务；落地实况与往返判据 → §7.20 |
+| **B2 之后的四笔小账**（债-128 / 125 / 120 / 122 另一半） | ✅ 2026-10-15 全收 → **§7.22**（含"这条线还剩什么"与"明确不做"清单） |
 
 ### 7.17 B2-4② 落地实况（2026-10-15）：buffer 档 + 按名注册 + meshlet 迁入（B2-3 本体同刀）
 
@@ -1682,6 +1687,55 @@ tonemap pass（`fsr != nullptr` 且 `fsrInputs()` 有值 = 门开而无锚点）
 - `isSchedulable` 是查询不是事务（名字不在表也返回 false，与 `OffGraphWorkTable::isActive` 同形态）；
   哨兵相位 `kUnschedulablePhase` 公开是为了让 `resolveAnchor`（impl 自由函数）能返回它，
   判据一律问 `isSchedulable`，不拿哨兵做算术。
+
+### 7.22 渲染图线收尾（2026-10-15）：四笔账 + **这条线到底还剩什么**
+
+B2 五刀 + D5 之后，这条线剩下的不是机制而是**四笔小账**。本批全收，逐笔的落地细节在各自载体里，
+本节只做两件事：**登记一个新锚**、**写清下次开工该往哪走**（含"明确不做"，免得有人重新发明）。
+
+#### 四笔账（一行一笔，细节在指针里）
+
+| 账 | 一句话 | 载体 |
+|---|---|---|
+| **债-128** | 申报面学会「锚点可缺席」（**逐条显式**）⟹ `--variant forward` / `offscreen` 起死回生 | §7.21 |
+| **债-125** | RPC 路由 ↔ dispatch **双向集合相等**（两侧同为 404 形态，不留半边护栏） | `docs/风格检查规则.md` §10 |
+| **债-120** | `dgc_static` 进配置 + 静态 DGC 路线立逐位锚（**键被读到 ≠ 路被走到**） | §7.14 末 ✅ 块 |
+| **债-122 另一半** | 渲染图五张 Lua 词表 ↔ 枚举本体对账（口径 = **右值引用不是串**） | `docs/风格检查规则.md` §11 |
+
+#### 本批的三条判据级知识（前两条是三笔护栏账的共同形态，第三条是债-120 的）
+
+1. **护栏账的验收标准 = ERROR 必须点名「哪一侧缺」+ 带另一侧在册名单**，不是"有没有红"。
+   三条新护栏（RPC 路由 / 词表对账 / 申报锚点）都按这条写：只报"不一致"的护栏会在半年后被
+   读成"又是误报"，点名到侧与名字的才会被用来定位。
+2. **失效必须出声**：三条都写成「扫描面读不到 / 扫出 0 条 = 本次未做任何对账」的 ERROR，
+   并各配一条**失效注入**当判据（改文件名、改正则、清单里塞不存在的枚举名）。
+   理由同 `rules_reflection` / `coverage_layers`：**"零警告"会被读成"对上了"**，而"没数"不是"相等"。
+3. **配置键的可达性可能是多枚键的合取**（债-120）：单开 `dgc_static` 的截图哈希 = **出厂锚同一个**，
+   因为 cpu 剔除档下 cull GPU 集整条不上 CB，execute 与 fanout 都不录。
+   ⟹ 立锚时必须证明**阳性凭据在日志里出现**（`DGC static execute` / `+ streams`），
+   否则立住的是一个"配置能起跑"的假锚。`gate_lint[cull_replay]` 早就把这条写成 warn——
+   **先读 gate_lint 再设计验收配方**，能省掉一整次假绿。
+
+#### 新锚登记（本机 AMD 8060S / RADV STRIX_HALO）
+
+- **静态 DGC 全路径档** = `32d0c3c1a0947aa9…`
+  （`--set diagnostics:dgc_static=true --set diagnostics:cull_replay='"gpu_sync"'`，floor 3/3、0 像素差）。
+  与出厂锚差 = diffstruct 3 像素 ±1 LSB（spike 文档「跨条目 tie 深度 ±像素」预期同量级）；
+  `gpu_sync` 单开 = `95edc8cc` ⟹ 差来自 execute 路本身。**引用它必须带这两枚键**，
+  单开 `dgc_static` 得到的是出厂锚。
+
+#### 这条线明确**剩下**的（下次开工从这里接，别再从 §7 的表倒推）
+
+| 事项 | 规模 | 现状 |
+|---|---|---|
+| **债-119** 剩余三类 + 无句柄执行序边（frag 采样 / 拷贝读回 / host 读） | M-L | 台账明写无排期；B2-4④′ 已收回「mesh shader 读」首例，**别读成"buffer 侧同步已对账"** |
+| **§7.20 缺口①** IZB / EVSSM / FSR 三个 sandwich 钩子的运行期可撤 | M-L | 「那是另一刀」——要连模块对象生命周期一起裁；B2-5 只保证图内 pass 可开关 |
+| **债-118** 「调用点必须指定初始化」文本护栏 | S-M | 裁决 = 先有阳性锚点再谈入册；编译器给不了这条已查证（§7.14 末） |
+| 附件表 append-only（撤回不删附件、slot 不回收） | — | **红线不是缺口**，代价已写清（§7.20） |
+
+**明确不做**（本批复核过，别重开）：B3 发射权交图（§7 表 + §5.2 否决仍有效）、D4 队列归属（§9 N1/N4）、
+EVSSM 矩图升图附件 = 第六档 storage-only image（§7.19 实测依据）、compute push 的 schema（§7.13）、
+L3 外部工具拦截（§7.3）、给 L1 检查加严重度档（§7.3）、跨命令缓冲依赖进边表（§7.8）。
 
 ## 8. 待挂号（本批**未落**总账，等用户选处置）
 
