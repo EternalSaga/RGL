@@ -842,7 +842,9 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 			std::move(graphResult.graph), std::move(graphResult.desc), cullRaw, dgcRaw, dgcStaticRaw,
 			// 批 14.5：FSR 生效判据 = 配置键 **且** velocity 真的进了图（FSR 的 motionVectors
 			// 输入就是那张图；装饰失败时本键自动失效。取实际图形态的先例 = AO 施加点）。
-			fsrUsable, temporal)};
+			// B2-5：highlight 的装饰申报单（门开 = 登记成可撤回；门关 = 留作「从零插上它」的
+			// 配方）。原值只在装饰前问得到，所以只能由编译期这条链带进来。
+			fsrUsable, temporal, std::move(graphResult.highlightPlan))};
 }
 
 }  // namespace RGL

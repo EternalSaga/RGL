@@ -101,24 +101,165 @@ std::optional<size_t> swapchainColorConsumerIndex(const RgGraphDesc& desc) {
 }
 
 /**
- * 插入点之前**最后一个写 depth 的 pass** 的 depth 附件名（借它做可见性测试），并就地把它
- * 的 storeOp 修正为 store——否则 forward 图的 transparent 段按"depth 后续无人用"的优化
- * 声明 dontCare，高亮读到的是未定义内容。
- * @return depth 附件名；插入点之前无人写 depth 时 nullopt（高亮会糊成一片，判不支持）
+ * 补丁目标 usage（**按名字定位**，与 `RgStoreOpPatch` 的红线一致）；找不到 = nullptr。
+ * @param desc 图描述
+ * @param patch 补丁（passName + attachment + usage 三元组定位）
+ * @return 指向那条 output 的只读指针
  */
-std::optional<std::string> borrowDepthFromPriorWriter(RgGraphDesc& desc, size_t insertIdx) {
+const RgPassAttachment* findUsage(const RgGraphDesc& desc, const RgStoreOpPatch& patch) {
+	for (const auto& pass : desc.passes) {
+		if (pass.name != patch.passName)
+			continue;
+		for (const auto& out : pass.outputs)
+			if (out.attachment == patch.attachment && out.usage == patch.usage)
+				return &out;
+	}
+	return nullptr;
+}
+
+/**
+ * 插入点之前**最后一个写 depth 的 pass**（纯查询版，B2-5）。
+ *
+ * 为什么从 `borrowDepthFromPriorWriter`（边查边改）拆成纯查询：B2-5 起「改前驱 storeOp」这件事
+ * 要能被**记录 + 还原**（撤 pass 时必须还原成原值），于是补丁得先算成数据（`RgStoreOpPatch`）
+ * 再由 apply 落盘 —— 边查边改的函数产不出「原值是什么」这条信息。
+ *
+ * @return {pass 下标, 那条 depthWrite 输出}；插入点之前无人写 depth 时 nullopt
+ *         （高亮会糊成一片，判不支持）
+ */
+std::optional<std::pair<size_t, RgPassAttachment>> priorDepthWriter(const RgGraphDesc& desc,
+	size_t insertIdx) {
 	for (size_t i = insertIdx; i-- > 0;) {
-		for (auto& out : desc.passes[i].outputs) {
+		for (const auto& out : desc.passes[i].outputs) {
 			if (out.usage != RgUsage::depthWrite)
 				continue;
-			out.storeOp = RgStoreOp::store;  // 装饰的一部分；门关 = 不调用 = 图逐位同
-			return out.attachment;
+			return std::pair { i, out };
 		}
 	}
 	return std::nullopt;
 }
 
+/**
+ * 上面那条的「边查边改」版：查到就顺手把它的 storeOp 改成 store 并返回附件名。
+ *
+ * B2-5 起 highlight 不再走它（要走纯查询 + 可还原的补丁），但 taa / ssr / velocity 三个装饰器
+ * 仍在用——它们没有「撤回」这一档（一次性启动期装饰），保留原形态即可。
+ */
+std::optional<std::string> borrowDepthFromPriorWriter(RgGraphDesc& desc, size_t insertIdx) {
+	const auto prior = priorDepthWriter(desc, insertIdx);
+	if (!prior)
+		return std::nullopt;
+	for (auto& out : desc.passes[prior->first].outputs)
+		if (out.usage == RgUsage::depthWrite && out.attachment == prior->second.attachment) {
+			out.storeOp = RgStoreOp::store;  // 装饰的一部分；门关 = 不调用 = 图逐位同
+			break;
+		}
+	return prior->second.attachment;
+}
+
 }  // namespace
+
+/**
+ * planHighlightDecoration 定义（契约见 render_graph.cppm 的 `RgHighlightPlan`）。
+ *
+ * 插入点与 depth 来源均按角色反查（见本文件头部纪律）；颜色写既有场景色附件（load 保留成片，
+ * 高亮 alpha 混合叠加），插图末 = 落在 tonemap 之后、盖不到上屏内容，故必须插在消费 pass 之前。
+ *
+ * 跨 pass 补丁 = 前一个 depth 写者的 storeOp 改 store（否则 forward 图的 transparent 段按
+ * "depth 后续无人用"的优化声明 dontCare，高亮读到未定义内容）。
+ */
+RgHighlightPlan planHighlightDecoration(const RgGraphDesc& desc) {
+	RgHighlightPlan plan;
+	const auto consumeIdx = firstColorConsumerIndex(desc);
+	if (!consumeIdx)
+		return plan;  // 图形态不支持（无「采样色附件」的消费 pass = 无成片可叠加）
+	const auto prior = priorDepthWriter(desc, *consumeIdx);
+	if (!prior)
+		return plan;  // 插入点前无人写 depth = 高亮会糊成一片，判不支持
+	plan.applicable = true;
+	// 插入点记成**名字**而不是下标：动态插拔会让下标漂移，而「排在谁之前」不会。
+	plan.decl.insertBefore = desc.passes[*consumeIdx].name;
+	// 写场景色（load 保留成片，alpha 混合叠加）+ depth（load；实际是否真写由 state_kit
+	// highlightState 关掉，此处 depthWrite 是「渲染深度附件」的声明位）
+	plan.decl.pass = RgPassDesc {
+		.name = "highlight",
+		.state = "highlight",
+		.drawSource = "opaque",
+		.outputs = {
+			RgPassAttachment { .attachment = *sampledColorName(desc, desc.passes[*consumeIdx]),
+				.usage = RgUsage::colorWrite, .loadOp = RgLoadOp::load, .storeOp = RgStoreOp::store },
+			RgPassAttachment { .attachment = prior->second.attachment, .usage = RgUsage::depthWrite,
+				.loadOp = RgLoadOp::load, .storeOp = RgStoreOp::store }
+		}
+	};
+	// ⚠ 只在**真的需要改**时才发补丁：内建图里前驱本来就是 store（deferred / forward 皆然），
+	// 发一条 store→store 的补丁只会给撤回添一个「还原成什么」的悬案。原值**在这里**读、且只能
+	// 在这里读——补丁落盘后就再也问不到「申报前它是什么」（见 RgStoreOpPatch::originalStoreOp）。
+	if (prior->second.storeOp != RgStoreOp::store)
+		plan.decl.patches.push_back(RgStoreOpPatch {
+			.passName = desc.passes[prior->first].name,
+			.attachment = prior->second.attachment,
+			.usage = RgUsage::depthWrite,
+			.newStoreOp = RgStoreOp::store,
+			.originalStoreOp = prior->second.storeOp,
+		});
+	return plan;
+}
+
+/**
+ * 落一条跨 pass 补丁到 desc。
+ * @return 是否命中目标 usage（未命中 = 计划与图不符）
+ */
+bool applyOnePatch(RgGraphDesc& desc, const RgStoreOpPatch& patch) {
+	for (auto& pass : desc.passes) {
+		if (pass.name != patch.passName)
+			continue;
+		for (auto& out : pass.outputs)
+			if (out.attachment == patch.attachment && out.usage == patch.usage) {
+				out.storeOp = patch.newStoreOp;
+				return true;
+			}
+	}
+	return false;
+}
+
+/**
+ * applyHighlightPlan 定义（契约见 render_graph.cppm 的 `RgHighlightPlan`）。
+ *
+ * 两道校验都是「图在算计划与落计划之间被人改过」的出声口，任一不过就**拒落且不动 desc**：
+ *  1. `insertBefore` 必须仍是本 desc 的首个颜色消费者；
+ *  2. 每条补丁目标当前值必须 = 申报的 `originalStoreOp`。
+ * 静默按过期计划落图 = 产出一张编译得过、语义却错（load 未定义内容）的图。
+ */
+bool applyHighlightPlan(RgGraphDesc& desc, const RgHighlightPlan& plan) {
+	if (!plan.applicable)
+		return false;
+	const auto consumeIdx = firstColorConsumerIndex(desc);
+	if (!consumeIdx || desc.passes[*consumeIdx].name != plan.decl.insertBefore)
+		return false;
+	// 补丁先核对再落（先核对全部，避免"改了一半"）
+	for (const auto& patch : plan.decl.patches) {
+		const auto* usage = findUsage(desc, patch);
+		if (!usage || usage->storeOp != patch.originalStoreOp)
+			return false;
+	}
+	desc.passes.insert(desc.passes.begin() + static_cast<long>(*consumeIdx), plan.decl.pass);
+	// 目标存在性上面已逐条核对过 ⟹ 这里不可能落空（落空只可能是上面那条判据被改坏）
+	for (const auto& patch : plan.decl.patches)
+		applyOnePatch(desc, patch);
+	return true;
+}
+
+/**
+ * decorateHighlightPass 定义（契约见 render_graph.cppm 接口注释）。
+ *
+ * B2-5 起 = `planHighlightDecoration` + `applyHighlightPlan` 的薄壳（行为与拆壳前逐位相同）。
+ * 拆壳不是为了好看：运行期动态插拔（`DynamicRenderGraph::declarePass`）必须吃**同一份**计划，
+ * 否则「出厂图」与「运行期插回同一 pass」各自拼一份 desc，A→B→A 往返判据就成了自证。
+ */
+bool decorateHighlightPass(RgGraphDesc& desc) {
+	return applyHighlightPlan(desc, planHighlightDecoration(desc));
+}
 
 /**
  * decoratePickingPass 定义（契约见 render_graph.cppm 接口注释）。depth 附件名从锚点
@@ -154,31 +295,6 @@ bool decoratePickingPass(RgGraphDesc& desc) {
 				.clear = RgClearValue{{0.0f, 0.0f, 0.0f, 0.0f}, 1.0f}},
 			RgPassAttachment{.attachment = depthAtt, .usage = RgUsage::depthWrite,
 				.loadOp = RgLoadOp::load, .storeOp = RgStoreOp::store}}});
-	return true;
-}
-
-/**
- * decorateHighlightPass 定义（契约见 render_graph.cppm 接口注释）。插入点与 depth 来源
- * 均按角色反查（见本文件头部纪律）；颜色写既有场景色附件（load 保留成片，高亮 alpha
- * 混合叠加），插图末 = 落在 tonemap 之后、盖不到上屏内容，故必须插在消费 pass 之前。
- */
-bool decorateHighlightPass(RgGraphDesc& desc) {
-	auto consumeIdx = firstColorConsumerIndex(desc);
-	if (!consumeIdx)
-		return false;  // 图形态不支持（无「采样色附件」的消费 pass = 无成片可叠加）
-	auto colorAtt = sampledColorName(desc, desc.passes[*consumeIdx]);  // 上一步已保证有值
-	auto depthAtt = borrowDepthFromPriorWriter(desc, *consumeIdx);
-	if (!depthAtt)
-		return false;
-	// 写场景色（load 保留成片，alpha 混合叠加）+ depth（load；实际是否真写由 state_kit
-	// highlightState 关掉，此处 depthWrite 是「渲染深度附件」的声明位）
-	desc.passes.insert(desc.passes.begin() + static_cast<long>(*consumeIdx),
-		RgPassDesc{.name = "highlight", .state = "highlight", .drawSource = "opaque",
-			.outputs = {
-				RgPassAttachment{.attachment = *colorAtt, .usage = RgUsage::colorWrite,
-					.loadOp = RgLoadOp::load, .storeOp = RgStoreOp::store},
-				RgPassAttachment{.attachment = *depthAtt, .usage = RgUsage::depthWrite,
-					.loadOp = RgLoadOp::load, .storeOp = RgStoreOp::store}}});
 	return true;
 }
 

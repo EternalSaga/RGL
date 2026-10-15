@@ -137,8 +137,13 @@ Renderer::Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RG
 		RGL::ShaderRegistry& shaderRegistry, RGL::CompiledRenderGraph renderGraph,
 		RGL::RgGraphDesc graphDesc,
 		RGL::GpuCull* vkGpuCull, RGL::DgcCommands* vkDgc, RGL::DgcStaticCommands* vkDgcStatic,
-		bool fsrEnabled, bool fsrTemporal)
-	: vkDevice(vkDevice),
+		bool fsrEnabled, bool fsrTemporal, RGL::RgHighlightPlan highlightPlan)
+	: // B2-5：图外工作在册表 = 静态申报表（规范序的唯一出处）的**运行期投影**；此刻全部
+	  // 在场，pass 级开关会在安全点撤掉挂在被撤 pass 上的那些。
+	  // ⚠ 排最前不是随手：成员**声明序**里 offGraphWorks 在 vkDevice 之前（-Werror=reorder-ctor
+	  // 逐字管这件事）；要改这里的顺序，得先挪 vkrenderer.cppm 里的声明。
+	  offGraphWorks(offGraphWorkDecls()),
+	  vkDevice(vkDevice),
 	  swapchain(&vkSwapchain),
 	  resources(&vkResources),
 	  sceneData(&sceneData),
@@ -179,17 +184,19 @@ Renderer::Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RG
 		if (fsrEnabled)
 			initFsr();
 		validateRenderGraphForExecutor(this->renderGraph);
+		registerHighlightRecipe(highlightPlan);
 		// 批次 B1：图外工作申报面对着**编译图**解析成相位表。失败即 throw（同下面
 		// drawLight 缺管线条目的口径：图与模块的错配没有「运行期才知道」的理由——图构造完
 		// 就不再变）。项数与 kOffGraphWorkCount 不符也在这里抓：那意味着申报表加了项而
 		// 帧末门位数组没跟上，放着不管 = 新增的图外工作静默不参与对账。
-		if (auto schedule = OffGraphSchedule::build(offGraphWorkDecls(), this->renderGraph.passes);
+		const auto activeWorks = offGraphWorks.activeDecls();
+		if (auto schedule = OffGraphSchedule::build(activeWorks, this->renderGraph.passes);
 			schedule) {
 			this->offGraph = std::move(*schedule);
 			if (offGraph.workCount() != kOffGraphWorkCount)
 				throw std::runtime_error(fmt::format(
 					"Renderer: off-graph work table has {} entries but kOffGraphWorkCount is {}"
-					" (offGraphWorkDecls and the frame-end gate array must stay in lockstep)",
+					" (offGraphWorkDecls and the frame-end gate rules must stay in lockstep)",
 					offGraph.workCount(), kOffGraphWorkCount));
 		}
 		else
@@ -267,8 +274,13 @@ void Renderer::recompileGraphIfNeeded() {
 			return;
 		}
 	}
-	// ③ 相位表对**新图**重建（申报与图不一致 = Error，旧图原样）
-	auto schedule = OffGraphSchedule::build(offGraphWorkDecls(), fresh->passes);
+	// ③ 相位表对**新图**重建（申报与图不一致 = Error，旧图原样）。
+	// 🔴 吃在册表的**在场投影**而不是静态申报表（B2-5）：pass 被撤掉之后，挂在它上面的申报
+	// 已经跟着撤回，拿全量表建表会报「命中 0 个 pass」——那是把「事务没做全」伪装成「装配错」。
+	// 而重建本身（2+2i 按新序重算）就是「相位表随插拔重推」的落点：highlight 插在 light 之前
+	// ⇒ light 下标 +1 ⇒ IZB / EVSSM 的申报相位跟着 +2。
+	const auto activeWorks = offGraphWorks.activeDecls();
+	auto schedule = OffGraphSchedule::build(activeWorks, fresh->passes);
 	if (!schedule) {
 		reportRecompileFailure(schedule.error());
 		return;
@@ -290,6 +302,112 @@ void Renderer::recompileGraphIfNeeded() {
 		vk::ImageLayout::eUndefined);
 	rtGenerations = carryOverPerSlot(oldNames, oldGens, newNames, uint64_t{0});
 	offGraph = std::move(*schedule);
+}
+
+namespace {
+/** pass 开关失败出声（B2-5；与 `reportRecompileFailure` 同口径：本帧旧图、不留半态）。 */
+void reportPassToggleFailure(std::string_view passName, const Error& err) {
+	if (auto* lg = RLLogger::getInstance())
+		lg->error("PassToggle: pass '{}' 开关事务失败（本帧继续用旧图）：{}", passName,
+			err.describe());
+}
+}  // namespace
+
+/**
+ * B2-5：把 highlight 的装饰申报单登记进动态图。
+ *
+ * **图里有它**才 `adoptPass`（启动期装饰落过图 = 登记成可撤回）；**没有**（门关档）就只留
+ * 配方，收到 on 时按它首插。判据用「图里有没有」而不是再加一个 bool 标志：那正是事实本身，
+ * 多一个标志就多一份会漂的真相源。
+ */
+void Renderer::registerHighlightRecipe(const RgHighlightPlan& highlightPlan) {
+	if (!highlightPlan.applicable)
+		return;
+	if (graph.hasPass(highlightPlan.decl.pass.name)) {
+		if (auto r = graph.adoptPass(highlightPlan.decl); !r)
+			throw std::runtime_error(fmt::format(
+				"Renderer: 启动期 highlight 装饰无法登记为动态 pass：{}", r.error().describe()));
+	}
+	passRecipes.push_back(highlightPlan.decl);
+}
+
+/** 复合事务的撤出半笔（时序契约：锚点必须在 **pass 还在场**时解析）。 */
+std::expected<void, Error> Renderer::withdrawPassTransaction(std::string_view passName) {
+	// ① 挂在它上面的图外申报先撤（对着**旧编译图**解析锚点）
+	if (auto withdrawn = offGraphWorks.withdrawAnchoredTo(renderGraph.passes, passName); !withdrawn)
+		return std::unexpected(std::move(withdrawn).error());
+	// ② pass 本体离场（试编译 fail-fast 在 graph 里）
+	if (auto r = graph.withdrawPass(passName); !r) {
+		// 反向补偿：申报恢复原状，整笔事务不留半态（半态 = 图里 pass 还在而申报没了
+		// = 帧末「门关必须零命令」查不到它，静默旁路）。补偿本身不可失败（名字一定在册），
+		// 但**不许**因此丢掉返回值——真出错时它是最难查的那一条。
+		if (auto back = offGraphWorks.redeclareAnchoredTo(passName); !back)
+			reportPassToggleFailure(passName, back.error());
+		return std::unexpected(std::move(r).error());
+	}
+	return {};
+}
+
+/** 复合事务的进场半笔。 */
+std::expected<void, Error> Renderer::restorePassTransaction(std::string_view passName) {
+	// 已在册（曾撤回过 / 装配期 adopt 过）→ 重插**在册那份**；不在册 → 用装配期登记的配方首插。
+	// 两条路的申报单同出 `planHighlightDecoration` 一个纯函数，字节同源。
+	if (graph.isDynamic(passName)) {
+		if (auto r = graph.redeclarePass(passName); !r)
+			return r;
+	}
+	else {
+		const auto recipe = std::ranges::find_if(passRecipes,
+			[&](const RgPassDeclaration& d) { return d.pass.name == passName; });
+		if (recipe == passRecipes.end())
+			return std::unexpected(Error { ErrorCode::RenderGraphInvalid,
+				fmt::format("pass '{}' 既不在册也没有装配期登记的申报单"
+				            "（装配层没把它登记成可开关的 pass，RPC 拒得明确）",
+				            passName) });
+		if (auto r = graph.declarePass(*recipe); !r)
+			return r;
+	}
+	// 挂在它上面的申报跟着恢复（不可失败：当初就是按这个名字撤的；仍不丢返回值）
+	if (auto back = offGraphWorks.redeclareAnchoredTo(passName); !back)
+		return std::unexpected(std::move(back).error());
+	return {};
+}
+
+// B2-5 复合事务（时序契约 = 与 recompileGraphIfNeeded 同一个安全点，且**在它之前**：
+// 图在这里变，紧随其后的重编译才吃得到新 desc）。三件事的顺序是刻意的：
+//   ① 图外申报的锚点必须在 **pass 还在场**时解析（撤掉之后再问「它排第几」问不出来）；
+//   ② pass 本体进出是可失败步骤，失败要能把 ① 撤掉的申报**反向补偿**回去；
+//   ③ 门位与相位表都是派生件，不在这里动（前者帧末现求，后者由重编译重建）。
+void Renderer::applyPassToggles() {
+	if (!pendingPassToggle)
+		return;
+	const std::string passName = pendingPassToggle->passName;
+	const bool wantOn = pendingPassToggle->on;
+	pendingPassToggle.reset();  // 先摘单：失败也不重放（重放 = 每帧刷同一条 error）
+	if (wantOn == graph.hasPass(passName))
+		return;  // 幂等：意图已满足（重复收单，或别的请求已经把它带到位）
+	auto transaction = wantOn ? restorePassTransaction(passName)
+	                          : withdrawPassTransaction(passName);
+	if (!transaction) {
+		reportPassToggleFailure(passName, transaction.error());
+		return;
+	}
+	if (auto* lg = RLLogger::getInstance())
+		lg->info("PassToggle: pass '{}' → {}（desc pass 数 = {}，脏位 = {}，下个安全点重编译）",
+			passName, wantOn ? "on（插回）" : "off（撤回）", graph.desc().passes.size(),
+			graph.isDirty());
+}
+
+Renderer::GraphStatus Renderer::graphStatus() const {
+	GraphStatus status;
+	status.passCount = static_cast<uint32_t>(graph.desc().passes.size());
+	status.dynamicPasses = graph.dynamicPassNames();
+	status.recompiles = graph.recompileCount();
+	status.lastRecompileNs = graph.lastRecompileNs();
+	status.presentPasses.reserve(graph.desc().passes.size());
+	for (const auto& pass : graph.desc().passes)
+		status.presentPasses.push_back(pass.name);
+	return status;
 }
 
 // （createSyncObjects / allocateCommandBuffers 已随手术 4 迁 frame_session_impl.cppm）

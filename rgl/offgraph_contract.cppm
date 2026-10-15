@@ -168,4 +168,119 @@ export class OffGraphSchedule {
 	uint32_t currentPhase = 0;
 };
 
+/**
+ * 图外工作的**在册表**（批次 B2-5）：规范序 + 在场位 + 按锚点批量撤 / 复。
+ *
+ * ## 为什么需要它（B1 的申报表为什么不够）
+ *
+ * B1 的 `offGraphWorkDecls()` 是一个 static 函数：申报集在编译期就定死了，`build` 只在启动期
+ * 与重编译时吃它。B2-5 让 pass 能在安全点进出图，于是出现一个新的失效形态：
+ *
+ * > 一条申报的锚点是「drawLight `light` 之前」，而 `light` 这个 pass 被动态撤掉了。
+ *
+ * 此时 `build` 会报「命中 0 个 pass」——**报得对，但报错了地方**：图与申报表本来就该一起变，
+ * 让安全点每帧红等于把「事务没做全」伪装成「装配错」。所以申报面必须也有撤回这一档，
+ * 与 pass 级同相位、同事务地生效。
+ *
+ * ## 三条不显然的口径
+ *
+ *  - **规范序永不变**：`entries` 的顺序 = 构造入参顺序，撤回只清在场位、**不删条目**。
+ *    帧末门位数组（`checkCoverage` 的 active）按规范序求值，若撤回把条目删了，
+ *    剩余项的位序就整体前移，而门位数组是按名字写的 ⟹ 两者错位 = 对账指错工作项。
+ *  - **幂等**：撤两次 / 复两次都是空操作（复合事务重放同一意图不该炸）；
+ *    但**名字不在册 = Error**——拼错的名字静默成功 = 以为撤了其实没撤，正是本层要抓的形态。
+ *  - **批量按锚点**（`withdrawAnchoredTo`）：调用方只知道「哪个 pass 要没了」，而申报写的是
+ *    `(kind, state)`。把「锚点解析到哪个 pass」这件事放在本层做（锚点语义的持有者），
+ *    而不是让 Renderer 自己比对 state 字符串——那会把锚点口径复制一份出去，
+ *    两份口径漂移时判据不会红（AGENTS 红线一：访问路径必须消费那个来源）。
+ *
+ * 零设备调用 ⟹ 与 `OffGraphSchedule` 同进 `just test` 的无设备子集。
+ */
+export class OffGraphWorkTable {
+  public:
+	/**
+	 * @param decls 全部申报（顺序 = 规范序 = 帧末门位数组的位序；此后不重排）
+	 */
+	explicit OffGraphWorkTable(std::vector<RgOffGraphWorkDecl> decls);
+
+	/** @return 全部申报（含已撤回的；规范序） */
+	[[nodiscard]] std::vector<RgOffGraphWorkDecl> all() const;
+
+	/**
+	 * @return 在场申报（规范序子集）—— `OffGraphSchedule::build` 的唯一合法输入
+	 */
+	[[nodiscard]] std::vector<RgOffGraphWorkDecl> activeDecls() const;
+
+	/**
+	 * @param name 申报名
+	 * @return 该申报是否在场（名字不在册 = false；与 withdraw 的「未知名字 = Error」是两回事，
+	 *         本函数是查询、不是事务）
+	 */
+	[[nodiscard]] bool isActive(std::string_view name) const;
+
+	/**
+	 * 撤回一条申报（幂等）。
+	 * @param name 申报名
+	 * @return 空值 = 已撤回或本就不在场；未知名字 = Error（点名 + 在册名单）
+	 */
+	[[nodiscard]] std::expected<void, Error> withdraw(std::string_view name);
+
+	/**
+	 * 恢复一条申报（幂等；与 `withdraw` 成对）。
+	 * @param name 申报名
+	 * @return 空值 = 已恢复或本就在场；未知名字 = Error
+	 */
+	[[nodiscard]] std::expected<void, Error> redeclare(std::string_view name);
+
+	/**
+	 * 撤掉所有「锚点解析到 passName」的在场申报（复合事务用；记下撤回原因供反向恢复）。
+	 *
+	 * 🔴 必须对着**撤 pass 之前**的编译图调用：pass 已经不在图里时锚点解析不出下标，
+	 * 那时调用会返回 Error（而不是静默什么都不撤 —— 静默不撤 = 下一帧安全点报「命中 0 个
+	 * pass」，把事务内部没做全伪装成装配错）。
+	 * @param passes   当前（旧）编译图的 pass 计划
+	 * @param passName 即将离场的 pass 名
+	 * @return 被撤的名字（规范序；空 = 没有申报挂在这个 pass 上，highlight 就是这一档）
+	 */
+	[[nodiscard]] std::expected<std::vector<std::string>, Error>
+	withdrawAnchoredTo(const std::vector<RgPassPlan>& passes, std::string_view passName);
+
+	/**
+	 * 恢复当初因 `passName` 撤掉的申报（复合事务用；与上面那条成对）。
+	 * @param passName 重新进场的 pass 名
+	 * @return 被恢复的名字（规范序；空 = 当初就没撤过）
+	 */
+	[[nodiscard]] std::expected<std::vector<std::string>, Error>
+	redeclareAnchoredTo(std::string_view passName);
+
+	/** @return 在册申报项数（= 帧末门位数组的长度要求） */
+	[[nodiscard]] uint32_t size() const { return static_cast<uint32_t>(entries.size()); }
+
+  private:
+	/** 一条在册申报 + 在场位 + 撤回原因（= 因哪个 pass 离场而被撤；空 = 非批量撤）。 */
+	struct Entry {
+		RgOffGraphWorkDecl decl;
+		bool active = true;
+		std::string withdrawnBy;
+	};
+
+	/**
+	 * 锚点解析出的 pass 下标（与 `OffGraphSchedule::build` 同一套匹配口径）。
+	 * @param decl   待解析的申报
+	 * @param passes 编译图的 pass 计划
+	 * @return pass 下标；帧首段锚点或解析不出唯一命中时 nullopt
+	 */
+	static std::optional<uint32_t>
+	anchorPassIndex(const RgOffGraphWorkDecl& decl, const std::vector<RgPassPlan>& passes);
+
+	/**
+	 * 在册名单（错误消息归因用；成员函数——`Entry` 是私有嵌套类型，自由函数点不到它的字段）。
+	 * @param items 待列出的条目（通常是全部在册项）
+	 * @return "a,b,c" 形态
+	 */
+	static std::string knownNames(const std::vector<Entry>& items);
+
+	std::vector<Entry> entries;  ///< 规范序（构造入参序；撤回只翻在场位，**不删项**）
+};
+
 }  // namespace RGL

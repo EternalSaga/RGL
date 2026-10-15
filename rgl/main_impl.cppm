@@ -485,8 +485,16 @@ CompiledGraphResult compileGraphOrThrow(const char* path, const RuntimeConfig& r
 			logger->warn("picking: 图形态不支持 object_id pass 装饰（锚点 = 首个 drawSource=opaque "
 				"且输出 depth 的 drawMesh pass，未找到），点选不可用");
 	}
-	// 批 10.7：高亮 pass 装饰（写既有 scene_hdr + depth，插图末；同门 = 默认关不调用）
-	if (diagnostics().picking && !decorateHighlightPass(graphConfig->desc)) {
+	// 批 10.7：高亮 pass 装饰（写既有 scene_hdr + depth，插图末；同门 = 默认关不调用）。
+	// B2-5 起拆成 plan + apply 两步，且**计划无条件算**（纯函数、无副作用）：
+	//  - 门开 → 落图，并把这张单子交给 Renderer 登记成「可撤回」；
+	//  - 门关 → 不落图，但单子照样带出去当「从零插上它」的配方（RPC 打开关才有的可插）。
+	// 为什么不能等运行期再算：撤回要还原的跨 pass 补丁**原值**只在「装饰落图之前」问得到
+	// （见 RgStoreOpPatch::originalStoreOp），事后重算问到的已经是装饰后的值。
+	CompiledGraphResult result;  // 只用来带 highlightPlan 出去（其余字段末尾聚合初始化）
+	result.highlightPlan = planHighlightDecoration(graphConfig->desc);
+	if (diagnostics().picking && !applyHighlightPlan(graphConfig->desc, result.highlightPlan)) {
+		result.highlightPlan = {};  // 没落图 = 没有可登记的东西（别去撤一个不存在的 pass）
 		if (auto* logger = RLLogger::getInstance())
 			logger->warn("highlight: 图形态不支持高亮 pass 装饰（锚点 = 首个采样场景色附件的 pass "
 				"之前，且其前须有 depth 写者可借），选中无视觉高亮");
@@ -532,7 +540,8 @@ CompiledGraphResult compileGraphOrThrow(const char* path, const RuntimeConfig& r
 			compiledGraph.error().describe()));
 	return CompiledGraphResult{std::move(*compiledGraph), std::move(graphConfig->desc),
 		deferredMode, graphConfig->variant,
-		taaDecorated, velocityDecorated, aoApplyDecorated, ssrDecorated};
+		taaDecorated, velocityDecorated, aoApplyDecorated, ssrDecorated,
+		std::move(result.highlightPlan)};
 }
 
 /**

@@ -29,6 +29,22 @@ module;
  *   5. `beginFrame` 不清 `called` → 跨帧那条红（第二帧门开着没录必须红）。
  *   6. `enter` 不记账（漏 `entry.called = true`）→ 「门关着却录了」那条红。
  *
+ * 以下 7-12 属批次 B2-5（申报**表**：开关要能撤，申报表就得能摘）。新风险不是"锚点解析
+ * 对不对"，而是**序**——帧末门位数组按申报的规范序取位，而撤回让"在册四条"与"在场三条"
+ * 两种序并存；位序错一格通常还是 true，于是**没人报错**：
+ *
+ *   7. `withdraw`/`redeclare` 未知名改成静默成功 → 「撤回/恢复幂等」那条红（以为撤了其实
+ *      没撤 = 安全点拿旧锚点建表，最坏失效方向）。
+ *   8. 撤回**删除条目**而不是改在场位 → 「规范序」那条红（all() 少一项 = 后面所有门集体错位）。
+ *   9. `activeDecls()` 忽略在场位（退化成 all()）→ 规范序 / 门位 / 兜底三条同时红。
+ *  10. `withdrawAnchoredTo` 对已离场 pass 静默不撤 → 该用例红（把"事务没做全"伪装成装配错）。
+ *  11. `redeclareAnchoredTo` 不看撤回原因 → 该用例红（手动关的东西被别人一次开档悄悄抵消）。
+ *  12. 锚点解析忽略命中下标（恒用 pass 0）→ 「相位表随插拔重推」那条红（旧相位不被拒 =
+ *      插拔后图外工作录在错的 pass 前，且**只有画面**会发现）。
+ *  13. 帧末门位**按位**取而不是按名取（变异住在 `Renderer::offGraphGateActive`）→ 「门位必须
+ *      按名取」那条红。该用例把两种取位形态**同时编码**：按名段必须绿、按位段必须红且点名
+ *      被错位的那条申报——只留其中一半就是半瞎判据（对称判据的每一半边各要一条）。
+ *
  * ## 期望值的出处（不抄被测码）
  *
  * 相位口径来自**接口注释里写死的帧内模型**（帧首段 = 1、第 i 个 pass 之前 = 2+i、
@@ -36,6 +52,7 @@ module;
  * 红的是实现，而不是测试跟着改。
  */
 #include <doctest/doctest.h>
+#include <array>             // 帧末门位数组（vector<bool> 构不成 span<const bool>）
 #include <initializer_list>  // 必须：modules 下 std::initializer_list 不从 import rlstd 带进来
 #include <string>
 #include <vector>
@@ -83,6 +100,46 @@ RgOffGraphWorkDecl beforePassWork(std::string name, std::string state) {
 			.passState = std::move(state),
 		},
 	};
+}
+
+/** 一条挂在 highlight 上的申报（= 动态 pass 自带图外工作的形状）。 */
+RgOffGraphWorkDecl highlightWork(std::string name = "hl_work") {
+	return RgOffGraphWorkDecl{
+		.name = std::move(name),
+		.anchor = RgOffGraphAnchor{
+			.kind = RgOffGraphAnchor::Kind::beforePass,
+			.passKind = RgPassKind::drawMesh,
+			.passState = "highlight",
+		},
+	};
+}
+
+/**
+ * 出厂序列 + highlight（插在 light **之前**）= 动态插拔后的图。
+ * 下标：shadow 0 / geometry 1 / highlight 2 / light 3 / tonemap 4。
+ */
+std::vector<RgPassPlan> withHighlightBeforeLight() {
+	auto passes = builtinLikePasses();
+	passes.insert(passes.begin() + 2, pass("highlight", RgPassKind::drawMesh, "highlight"));
+	return passes;
+}
+
+/** 四条申报的表（照生产 offGraphWorkDecls 的规范序，另加一条挂在 highlight 上）。 */
+std::vector<RgOffGraphWorkDecl> tableDecls() {
+	return {
+		prologueWork("meshlet_cull"),
+		beforePassWork("izb_mask", "light"),
+		highlightWork("hl_work"),
+		beforePassWork("fsr_upscale", "tonemap"),
+	};
+}
+
+/** 申报名序列（规范序判据的读法）。 */
+std::vector<std::string> namesOf(const std::vector<RgOffGraphWorkDecl>& decls) {
+	std::vector<std::string> out;
+	for (const auto& decl : decls)
+		out.push_back(decl.name);
+	return out;
 }
 
 /** 建表并把错误消息取出来（失败时给 INFO 用；成功时返回空串）。 */
@@ -371,6 +428,193 @@ TEST_CASE("beginFrame 跨帧清账：第二帧门开着没录必须红（记账�
 		REQUIRE_FALSE(coverage.has_value());
 		CHECK(errOf(coverage).find("meshlet_cull") != std::string::npos);
 	}
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 批次 B2-5：申报**表**（OffGraphWorkTable）——开关要能撤，申报表就得能摘。
+//
+// 这一档的新风险不是"锚点解析对不对"（上面已验），而是**序**：帧末门位数组按申报的
+// 规范序取位，而撤回会把表变成"在册四条 / 在场三条"两种序并存。位序一错，
+// 门就集体错位一格——错的那格通常还是 true，于是**没人报错**。
+// ═══════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("OffGraphWorkTable：撤回/恢复幂等；未知名字必须 Error（与 pass 级 API 同口径）") {
+	OffGraphWorkTable table(tableDecls());
+	CHECK(table.size() == 4u);
+	CHECK(table.isActive("izb_mask"));
+
+	REQUIRE(errOf(table.withdraw("izb_mask")).empty());
+	CHECK_FALSE(table.isActive("izb_mask"));
+	// 幂等：复合事务重放同一意图不该炸（pass 撤回 + 申报撤回是一笔事务，可能重放）
+	REQUIRE(errOf(table.withdraw("izb_mask")).empty());
+	CHECK_FALSE(table.isActive("izb_mask"));
+
+	// 恢复与撤回成对，且也幂等
+	REQUIRE(errOf(table.redeclare("izb_mask")).empty());
+	CHECK(table.isActive("izb_mask"));
+	REQUIRE(errOf(table.redeclare("izb_mask")).empty());
+	CHECK(table.isActive("izb_mask"));
+
+	// 🔴 未知名字 = Error 且点名 + 带在册名单：拼错的名字若静默成功 = 以为撤了其实没撤，
+	//    下个安全点还会拿旧锚点建表（最坏失效方向 = 看起来关了自己还开着）。
+	const auto typo = errOf(table.withdraw("izb_msk"));
+	REQUIRE_FALSE(typo.empty());
+	CHECK(typo.find("izb_msk") != std::string::npos);
+	CHECK(typo.find("izb_mask") != std::string::npos);  // 在册名单在消息里（归因）
+	REQUIRE_FALSE(errOf(table.redeclare("izb_msk")).empty());
+	CHECK(table.isActive("izb_mask"));  // 拒绝无副作用
+}
+
+TEST_CASE("OffGraphWorkTable：规范序 = 帧末门位的位序，撤回只改在场位、绝不重排或删除") {
+	OffGraphWorkTable table(tableDecls());
+	const std::vector<std::string> canonical
+		= {"meshlet_cull", "izb_mask", "hl_work", "fsr_upscale"};
+	CHECK(namesOf(table.all()) == canonical);
+
+	REQUIRE(errOf(table.withdraw("izb_mask")).empty());
+	REQUIRE(errOf(table.withdraw("meshlet_cull")).empty());
+
+	// 🔴 all() 仍是四条、仍是原序：门位数组按它取位，删项 = 后面所有门集体错位一格。
+	//    （"撤回顺手清理"是最容易被写出来的那种错，所以这条要单独钉。）
+	CHECK(namesOf(table.all()) == canonical);
+	CHECK(table.size() == 4u);
+	// activeDecls() = **保序**子集（不是按名排序、不是倒序）
+	CHECK(namesOf(table.activeDecls()) == std::vector<std::string> {"hl_work", "fsr_upscale"});
+}
+
+TEST_CASE("withdrawAnchoredTo：必须对着**撤 pass 之前**的图调用；反向恢复只恢复那一批") {
+	OffGraphWorkTable table(tableDecls());
+	const auto passes = withHighlightBeforeLight();
+
+	// 正向：hl_work 挂在 highlight 上 → 撤 highlight 时它一起离场，返回值点名它
+	const auto gone = table.withdrawAnchoredTo(passes, "highlight");
+	REQUIRE(gone.has_value());
+	CHECK(gone.value() == std::vector<std::string> {"hl_work"});
+	CHECK_FALSE(table.isActive("hl_work"));
+	CHECK(table.isActive("izb_mask"));  // 别人的申报不许被顺手撤掉
+
+	// 幂等：同一意图重放 = 空集（不 Error）
+	const auto again = table.withdrawAnchoredTo(passes, "highlight");
+	REQUIRE(again.has_value());
+	CHECK(again.value().empty());
+
+	// 没有申报挂在这个 pass 上 → 空集（生产里的 highlight 正是这一档：撤它不牵动任何申报）
+	const auto none = table.withdrawAnchoredTo(passes, "geometry");
+	REQUIRE(none.has_value());
+	CHECK(none.value().empty());
+
+	// 反向恢复：只恢复**因 highlight 撤掉**的那批
+	const auto back = table.redeclareAnchoredTo("highlight");
+	REQUIRE(back.has_value());
+	CHECK(back.value() == std::vector<std::string> {"hl_work"});
+	CHECK(table.isActive("hl_work"));
+
+	// 手动撤的不该被 anchored 恢复捞回来——否则"我关了它"会被别人的一次开档悄悄抵消
+	REQUIRE(errOf(table.withdraw("izb_mask")).empty());
+	REQUIRE(table.redeclareAnchoredTo("highlight").has_value());
+	CHECK_FALSE(table.isActive("izb_mask"));
+
+	// 🔴 pass 已经不在图里时调用 = Error（静默不撤会把"事务没做全"伪装成装配错）
+	std::vector<RgPassPlan> passesAfter = passes;
+	passesAfter.erase(std::ranges::find_if(passesAfter,
+		[](const RgPassPlan& p) { return p.name == "highlight"; }));
+	const auto late = errOf(table.withdrawAnchoredTo(passesAfter, "highlight"));
+	REQUIRE_FALSE(late.empty());
+	CHECK(late.find("highlight") != std::string::npos);
+}
+
+TEST_CASE("相位表随插拔重推：highlight 插到 light 之前 ⟹ izb_mask 的合法相位 6 → 8") {
+	const std::vector<RgOffGraphWorkDecl> decls
+		= {prologueWork("meshlet_cull"), beforePassWork("izb_mask", "light")};
+
+	// A：出厂序列，light 是下标 2 → 之前 = 2 + 2×2 = 6
+	auto sa = OffGraphSchedule::build(decls, builtinLikePasses());
+	REQUIRE(sa.has_value());
+	sa->beginFrame();
+	sa->advanceTo(sa->beforePassPhase(2));
+	REQUIRE(sa->enter("izb_mask").has_value());
+
+	// B：highlight 插到 light 之前 → light 下标 3 → 之前 = 8。
+	// 🔴 期望值按**新图的闭式**手算，不抄 A 的读数：这条钉的是「build 真按传入的 passes
+	// 重推相位」，而不是「模块记得上次算过什么」。Renderer 侧若缓存旧表，红的是 GPU 验收
+	// （IZB 开档那条变异）；这里守的是模块这半边的无状态性。
+	auto sb = OffGraphSchedule::build(decls, withHighlightBeforeLight());
+	REQUIRE(sb.has_value());
+	CHECK(sb->beforePassPhase(2) == 6u);  // 相位函数本身与图无关（纯函数）
+	CHECK(sb->frameEndPhase() == 12u);    // 帧末 = 2 + 2×5（N 也随插拔变）
+	sb->beginFrame();
+	sb->advanceTo(sb->beforePassPhase(2));  // A 里合法的那个位置
+	const auto stale = errOf(sb->enter("izb_mask"));
+	REQUIRE_FALSE(stale.empty());  // 旧位置必须被拒 = 表没跟着挪就会在这里红
+	sb->advanceTo(sb->beforePassPhase(3));
+	CHECK(sb->enter("izb_mask").has_value());
+}
+
+TEST_CASE("帧末门位必须**按名**取：按位取 = 把别人的门当成它的门（撤回后位序错位）") {
+	// 场景 = highlight 撤档后：在册四条、在场三条，而 fsr_upscale 的门本来就是关的。
+	OffGraphWorkTable table(tableDecls());
+	REQUIRE(errOf(table.withdraw("hl_work")).empty());
+	const auto passes = builtinLikePasses();  // highlight 已离场
+	auto built = OffGraphSchedule::build(table.activeDecls(), passes);
+	REQUIRE(built.has_value());
+	REQUIRE(built->workCount() == 3u);
+
+	// 门的事实（按名登记 = Renderer::offGraphGateActive 的形态；只有 fsr 关着）
+	auto gateOf = [](std::string_view name) { return name != "fsr_upscale"; };
+	auto recordTwo = [&]() {
+		built->beginFrame();
+		built->advanceTo(built->prologuePhase());
+		REQUIRE(built->enter("meshlet_cull").has_value());
+		built->advanceTo(built->beforePassPhase(2));
+		REQUIRE(built->enter("izb_mask").has_value());
+		built->advanceTo(built->frameEndPhase());
+	};
+
+	// ✅ 按名取位：三条在场申报各查各的门
+	// （容器必须是 std::array 而不是 vector<bool>：后者是位压缩特化，既拿不到 .data()
+	//   也构不成 span<const bool> —— 生产侧的帧末门位数组踩的是同一个坑）
+	std::array<bool, 3> byName{};
+	size_t bit = 0;
+	for (const auto& decl : table.activeDecls())
+		byName[bit++] = gateOf(decl.name);
+	REQUIRE(bit == 3u);
+	recordTwo();
+	{
+		const auto cov = built->checkCoverage(std::span<const bool>(byName));
+		INFO(errOf(cov));
+		CHECK(cov.has_value());
+	}
+
+	// ❌ 按位取位（从**全表**的门位数组顺序取前三 = 撤回后最常见的错位）：fsr_upscale
+	//    拿到的是 hl_work 的门（true）⟹ "门开着却整帧没录"。这条红就是"门位数组必须按名"
+	//    的机器判据：没有它，把 offGraphGateActive 改回按位取是**全绿**的。
+	recordTwo();
+	{
+		const std::array<bool, 3> byPosition = {true, true, true};
+		const auto cov = built->checkCoverage(std::span<const bool>(byPosition));
+		REQUIRE_FALSE(cov.has_value());
+		// 点名必须是 fsr_upscale —— 被错位当成它门的那条申报（消息点不出名字 = 归因失败）
+		CHECK(errOf(cov).find("fsr_upscale") != std::string::npos);
+	}
+}
+
+TEST_CASE("兜底 fail-fast：忘了摘申报 → 重推相位表当场 Error 并点名那条申报") {
+	// 事务只做了一半的真实形态：pass 撤了，挂在它上面的申报没摘。
+	// 判据：既不能静默丢申报，也不能留到运行期由 enter 报"命中 0 个 pass"——建表这一步
+	// 就得红，且消息点名是哪条申报、锚在哪个 state 上（这条是**兜底**，不是主防线：
+	// 主防线是 withdrawAnchoredTo 在事务里被调用，见上一条用例）。
+	OffGraphWorkTable table(tableDecls());
+	const auto passes = builtinLikePasses();  // highlight 已离场，但 hl_work 仍在场
+	const auto err = errOf(OffGraphSchedule::build(table.activeDecls(), passes));
+	REQUIRE_FALSE(err.empty());
+	CHECK(err.find("hl_work") != std::string::npos);
+	CHECK(err.find("highlight") != std::string::npos);
+
+	// 摘干净之后同一次重推必须绿（否则"guard 坏了"会被读成"建表一直有效"）
+	REQUIRE(errOf(table.withdraw("hl_work")).empty());
+	auto ok = OffGraphSchedule::build(table.activeDecls(), passes);
+	INFO(errOf(ok));
+	CHECK(ok.has_value());
 }
 
 }  // namespace RGL

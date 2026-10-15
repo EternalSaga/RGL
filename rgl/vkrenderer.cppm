@@ -108,13 +108,17 @@ export class Renderer {
 	 *   时构造，否则 null → 看 dgcStatic / 读回重放）
 	 * @param dgcStatic 静态 shader DGC 路（RADV spike，docs/archive/radv_static_dgc_spike.md；
 	 *   main 按 staticGraphicsIndirect + diagnostics.dgcStatic 条件构造，null = 关）
+	 * @param highlightPlan 批 B2-5：highlight 装饰**实际落图的那张申报单**（门没开 / 图形态
+	 *   不支持 = `applicable = false`，本参数整体空转）。非空即登记为「可动态撤回」——
+	 *   原值只在装饰前问得到，所以必须由装配层带进来，不能在 Renderer 里重算。
 	 */
 	Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RGL::Resources& vkResources,
 		RGL::SceneDataService& sceneData, RGL::Environment& env, RGL::RenderTargetCache& rtCache,
 		RGL::ShaderRegistry& shaderRegistry, RGL::CompiledRenderGraph renderGraph,
 		RGL::RgGraphDesc graphDesc,
 		RGL::GpuCull* gpuCull, RGL::DgcCommands* dgc, RGL::DgcStaticCommands* dgcStatic = nullptr,
-		bool fsrEnabled = false, bool fsrTemporal = false);
+		bool fsrEnabled = false, bool fsrTemporal = false,
+		RGL::RgHighlightPlan highlightPlan = {});
 	/** @return 交换链层引用（extent / recreate / 后缓冲）。 */
 	RGL::Swapchain& getSwapchainRef() const { return *swapchain; }
 	/** @return 资源层引用（深度图 / descriptor heap / RT 缓存）。 */
@@ -251,6 +255,40 @@ export class Renderer {
 	 * @return 图 const 引用
 	 */
 	[[nodiscard]] const RGL::CompiledRenderGraph& getRenderGraphRef() const { return renderGraph; }
+
+	// ── 批次 B2-5：pass 级动态开关（D5 收官一刀；定案 → docs/compute_调研.md §6 D5）─────
+	/**
+	 * 收单「把这个 pass 插上 / 拔掉」（B2-5；RPC 帧边界调，**不改图**）。
+	 *
+	 * 为什么是收单而不是直接改：改图是**复合事务**（pass 进出 + 挂在它上面的图外申报 +
+	 * 相位表重推），必须整体落在安全点（围栏后、录制前），否则就是「半张图 + 旧相位表」
+	 * 那种录制期才炸的形态。收单让调用方（HTTP 线程 / 帧边界钩子）与生效点解耦，
+	 * 延迟 ≤1 帧（宪法口径：正确性 + ≤1 帧延迟，逐帧切换是**测试模态**不是 SLA）。
+	 *
+	 * 幂等：同一意图重复收单 = 最后一次说了算；意图与现状相同时 `applyPassToggles` 空转。
+	 * @param passName 可开关的 pass 名（必须是装配期登记过的那一个，否则出声）
+	 * @param on       true = 在场；false = 撤回
+	 */
+	void requestPassToggle(std::string_view passName, bool on) {
+		pendingPassToggle = PassToggleRequest { .passName = std::string { passName }, .on = on };
+	}
+
+	/**
+	 * pass 开关的观测面（RPC `/state` 的 graph 段；判据「开关真的发生了」读这里，
+	 * 而不是数截图——highlight 无选中时零 draw，画面本来就不该变）。
+	 */
+	struct GraphStatus {
+		uint32_t passCount = 0;             ///< 当前 desc 里的 pass 数（插拔的直接读数）
+		std::vector<std::string> dynamicPasses;  ///< 在册可开关的 pass 名（含已撤回的）
+		std::vector<std::string> presentPasses;  ///< 当前在场的 pass 名（顺序 = 执行序）
+		uint32_t recompiles = 0;            ///< 累计重编译次数（出厂档判据 = 0）
+		uint64_t lastRecompileNs = 0;       ///< 最近一次重编译耗时（ns；0 = 还没重编译过）
+	};
+
+	/**
+	 * @return pass 开关观测面快照（现取，不存第二份真相源）
+	 */
+	[[nodiscard]] GraphStatus graphStatus() const;
 
    private:
 	/**
@@ -505,6 +543,53 @@ export class Renderer {
 	 *        是否为空（读"刚才调过 `beginMaskPass` 没有"会让那条断言自证）
 	 */
 	void offGraphEndFrame(const FrameDrawList& list);
+	/**
+	 * 单条图外工作的**门位**（帧末覆盖对账的输入；B2-5 起按名字求值）。
+	 *
+	 * 为什么从「一个 `std::array<bool, N>` 按下标写死」改成按名字问：申报面能撤回之后，
+	 * 在场项的**位序**会随插拔变，而下标形态的门位数组隐含「第 i 个门 = 第 i 条申报」——
+	 * 两者一旦错位，覆盖对账就指错工作项（报「meshlet_cull 静默旁路」而真凶是别的项）。
+	 * 按名字问还白送一条判据：**在册却没有门位规则 = 出声**（新增图外工作只挂号不加门位，
+	 * 原先会静默不参与对账）。
+	 *
+	 * 🔴 三条判据都必须关于**门与输入**，不许写成「刚才 enter 过没有」——后者让断言自证。
+	 * @param name 申报名
+	 * @param list 本帧 draw list（IZB mask 段那道边要它；本函数不用，签名与调用点对齐）
+	 * @return 门是否开着；nullopt = 这个名字没有门位规则（调用方出声）
+	 */
+	std::optional<bool> offGraphGateActive(std::string_view name, const FrameDrawList& list);
+	/**
+	 * 消费在途的 pass 开关意图（B2-5 **复合事务**；drawFrame 在 `recompileGraphIfNeeded`
+	 * **之前**调，两者落在同一个安全点内）。
+	 *
+	 * 一笔事务做三件事，顺序是**先做可失败的**：
+	 *  ① 撤 / 插 pass 本体（`withdrawPass` / `declarePass` / `redeclarePass`，各有试编译
+	 *     fail-fast）——失败就整笔不生效，图与册子都不动；
+	 *  ② 跟着撤 / 复挂在它上面的**图外申报**（`OffGraphWorkTable`，按锚点解析）——不可失败，
+	 *     但必须在 ① 之前问锚点（pass 还在的时候才问得出它排第几）；
+	 *  ③ 门位与相位表不需要在这里动：它们都是**派生件**，前者帧末按在册项现求，后者由紧随
+	 *     其后的 `recompileGraphIfNeeded` 对着新图重建。
+	 *
+	 * 失败**内部出声**（error 日志）后继续跑下一格意图：本帧用旧图，不留半态。
+	 */
+	void applyPassToggles();
+	/**
+	 * 构造期登记 highlight 的装饰申报单（图里有 → `adoptPass`；没有 → 只留首插配方）。
+	 * @param highlightPlan 装配层算好的装饰计划（纯函数产物，门关档时 applicable=false）
+	 */
+	void registerHighlightRecipe(const RgHighlightPlan& highlightPlan);
+	/**
+	 * `applyPassToggles` 的**撤出半笔**（拆出来只为认知复杂度红线，判据一条没挪）。
+	 * @param passName 即将离场的 pass 名
+	 * @return 空值 = 申报与 pass 都已离场；失败带 Error（此时申报已被反向补偿回原状）
+	 */
+	std::expected<void, Error> withdrawPassTransaction(std::string_view passName);
+	/**
+	 * `applyPassToggles` 的**进场半笔**（同上）。
+	 * @param passName 即将进场的 pass 名
+	 * @return 空值 = pass 与挂在它上面的申报都已就位
+	 */
+	std::expected<void, Error> restorePassTransaction(std::string_view passName);
 	/** FSR 挂点要的两个图属输入（色 + 速度场）；任一解析不到时整体为 nullopt。 */
 	struct FsrInputs {
 		vk::Image color = {};     ///< 图属色输入（tonemap 的上游 RT）
@@ -529,8 +614,32 @@ export class Renderer {
 	 * 相位表（构造期对着**编译图**建，锚点解析不到即 throw）。
 	 *
 	 * 编译图构造完就不再变 ⟹ 锚点与图的错配没有「运行期才知道」的理由。
+	 * ⚠ B2-5 起它**会**变：安全点重编译时对着新图重建（pass 进出 ⇒ 相位 2+2i 全体挪位）。
 	 */
 	OffGraphSchedule offGraph;
+	/**
+	 * 图外工作**在册表**（B2-5）：规范序的申报 + 在场位。
+	 *
+	 * 为什么从 static 函数变成成员：`offGraphWorkDecls()` 那份静态表是「申报集编译期定死」的
+	 * 载体，而 pass 能进出图之后，挂在某个 pass 上的申报必须跟着进出（否则安全点会拿旧锚点
+	 * 建表，报一句「命中 0 个 pass」把「事务没做全」伪装成「装配错」）。静态表保留为
+	 * **构造输入**（规范序的唯一出处），在册表是它的运行期投影。
+	 */
+	OffGraphWorkTable offGraphWorks;
+	/**
+	 * 装配期登记的「可开关 pass 名单」（B2-5）：pass 名 → 从**无到有**时用的申报单。
+	 *
+	 * 为什么需要第二张表：启动期装饰已把 pass 插进 desc 的，走 `adoptPass`（登记即可撤）；
+	 * 而门没开、图里根本没有它的，收到 `on` 时得知道**怎么把它造出来**。两种来源共用
+	 * `applyPassToggles` 这一条事务路径，差别只在"从哪张单子拿申报"。
+	 */
+	std::vector<RgPassDeclaration> passRecipes;
+	/** 在途的开关意图（B2-5；单格 = 最后一次收单说了算，同 FrameCapturer 的 request 口径）。 */
+	struct PassToggleRequest {
+		std::string passName;  ///< 目标 pass 名
+		bool on = true;        ///< 期望状态
+	};
+	std::optional<PassToggleRequest> pendingPassToggle;
 	/**
 	 * 图外同步发射账（批次 B1b → `docs/compute_调研.md` §7.2）：图外模块经它**申报即发射**
 	 * （barrier 参数由 usage 词表物化，模块不写 mask 字面量），帧末 `offGraphEndFrame` 对账

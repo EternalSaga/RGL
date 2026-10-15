@@ -635,6 +635,10 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 		// 录制前（gpuProfilerFrameBegin 会录命令）——脏则重编译，相位表随新图重建后再继续
 		// （offGraph.beginFrame 因此跑在新表上）。失败只出声不中断：本帧继续用旧图，
 		// 脏位保留下帧重试（重编译失败 = 编程错，日志点名后由测试/冒烟收口）。
+		// B2-5：pass 级开关的复合事务落在**同一个安全点**、重编译之前——图在这里变，
+		// 紧随其后的重编译才吃得到新 desc（≤1 帧延迟）。两者合起来才是"一个安全点"：
+		// 分开调就变成两个事务，中间那一帧会拿着「新申报 + 旧图」建相位表。
+		applyPassToggles();  // 无在途意图 = 一次 optional 判空（出厂档零成本）
 		recompileGraphIfNeeded();  // 失败内部出声（void 返回 = drawFrame 零分支，认知复杂度不转嫁）
 		// 批次 B1：图外工作申报面本帧记账清零（相位归 0；位置/覆盖两条判据的现场都从这里起）
 		offGraph.beginFrame();

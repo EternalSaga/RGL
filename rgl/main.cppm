@@ -100,6 +100,16 @@ export struct CompiledGraphResult {
 	/// 「ssr_applied 档」接上（taa / ao_apply / tonemap 的色输入槽跟着换）。与 taaDecorated
 	/// 是**串联**关系（SSR 先合成、TAA 后滤波），不互斥。判据全文 → `shaders/ssr_trace.frag.slang`。
 	bool ssrDecorated = false;
+	/**
+	 * B2-5：highlight 装饰**实际落图的那张申报单**（`applicable = false` = 门没开或图形态
+	 * 不支持，与图里没有 highlight 一一对应）。
+	 *
+	 * 为什么必须随产物带出（而不是让装配层事后"重新算一遍"）：撤回这个 pass 时要还原的
+	 * 跨 pass 补丁**原值**只存在于「装饰落图之前」的那一刻，事后重算问不到（图已经是
+	 * 装饰后的样子）。装配层拿它调 `DynamicRenderGraph::adoptPass` 把它登记成可撤 ——
+	 * 于是「启动期装饰」与「运行期插拔」吃的是同一张单子，A→B→A′ 往返判据不是自证。
+	 */
+	RgHighlightPlan highlightPlan;
 };
 
 /**

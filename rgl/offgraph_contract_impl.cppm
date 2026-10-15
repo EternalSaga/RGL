@@ -151,4 +151,130 @@ std::expected<void, Error> OffGraphSchedule::checkCoverage(std::span<const bool>
 	return {};
 }
 
+// ── 批次 B2-5：申报面的撤回 / 恢复（pass 级动态插拔的配套一半）─────────────────────
+
+
+/**
+ * 在册名单（错误消息里点名"你给的名字不在这些里面"，而不是让人回去翻代码）。
+ * 是成员函数而不是自由函数：`Entry` 是私有嵌套类型，自由函数点不到它的字段。
+ */
+std::string OffGraphWorkTable::knownNames(const std::vector<Entry>& items) {
+	std::string out;
+	for (const auto& entry : items)
+		out += (out.empty() ? "" : ",") + entry.decl.name;
+	return out;
+}
+
+OffGraphWorkTable::OffGraphWorkTable(std::vector<RgOffGraphWorkDecl> decls) {
+	entries.reserve(decls.size());
+	for (auto& decl : decls)
+		entries.push_back(Entry { .decl = std::move(decl) });
+}
+
+std::vector<RgOffGraphWorkDecl> OffGraphWorkTable::all() const {
+	std::vector<RgOffGraphWorkDecl> out;
+	out.reserve(entries.size());
+	for (const auto& entry : entries)
+		out.push_back(entry.decl);
+	return out;
+}
+
+std::vector<RgOffGraphWorkDecl> OffGraphWorkTable::activeDecls() const {
+	std::vector<RgOffGraphWorkDecl> out;
+	out.reserve(entries.size());
+	for (const auto& entry : entries)
+		if (entry.active)
+			out.push_back(entry.decl);
+	return out;
+}
+
+bool OffGraphWorkTable::isActive(std::string_view name) const {
+	for (const auto& entry : entries)
+		if (entry.decl.name == name)
+			return entry.active;
+	return false;
+}
+
+std::expected<void, Error> OffGraphWorkTable::withdraw(std::string_view name) {
+	for (auto& entry : entries)
+		if (entry.decl.name == name) {
+			entry.active = false;  // 幂等：已撤回再撤一次 = 同样的 false
+			entry.withdrawnBy.clear();
+			return {};
+		}
+	return std::unexpected(contractError(fmt::format(
+		"off-graph contract: withdraw 拒绝——申报 '{}' 不在册（在册：{}）。"
+		"拼错的名字静默成功 = 以为撤了其实没撤，安全点会拿旧锚点建表",
+		name, knownNames(entries))));
+}
+
+std::expected<void, Error> OffGraphWorkTable::redeclare(std::string_view name) {
+	for (auto& entry : entries)
+		if (entry.decl.name == name) {
+			entry.active = true;
+			entry.withdrawnBy.clear();
+			return {};
+		}
+	return std::unexpected(contractError(fmt::format(
+		"off-graph contract: redeclare 拒绝——申报 '{}' 不在册（在册：{}）",
+		name, knownNames(entries))));
+}
+
+std::optional<uint32_t> OffGraphWorkTable::anchorPassIndex(
+	const RgOffGraphWorkDecl& decl, const std::vector<RgPassPlan>& passes) {
+	if (decl.anchor.kind != RgOffGraphAnchor::Kind::beforePass)
+		return std::nullopt;  // 帧首段锚点不挂在任何 pass 上（pass 进出与它无关）
+	uint32_t hits = 0;
+	uint32_t hitIndex = 0;
+	for (uint32_t i = 0; i < passes.size(); ++i) {
+		if (passes[i].kind != decl.anchor.passKind)
+			continue;
+		if (!decl.anchor.passState.empty() && passes[i].state != decl.anchor.passState)
+			continue;
+		++hits;
+		hitIndex = i;
+	}
+	// 命中数不是 1 时**不猜**：build 会用它自己的口径报「命中 0 个 / 有歧义」，
+	// 这里若跟着猜一个下标，就会把「申报与图不一致」这件事在批量撤的路径上静默吞掉。
+	if (hits != 1)
+		return std::nullopt;
+	return hitIndex;
+}
+
+std::expected<std::vector<std::string>, Error> OffGraphWorkTable::withdrawAnchoredTo(
+	const std::vector<RgPassPlan>& passes, std::string_view passName) {
+	const auto target = std::ranges::find(passes, passName, &RgPassPlan::name);
+	if (target == passes.end())
+		return std::unexpected(contractError(fmt::format(
+			"off-graph contract: withdrawAnchoredTo 拒绝——编译图里没有 pass '{}'。"
+			"本函数必须对着**撤 pass 之前**的图调用：图已经变了再来问锚点挂在哪个 pass 上，"
+			"问不出答案（静默不撤 = 下一帧安全点报「命中 0 个 pass」，把事务没做全伪装成装配错）",
+			passName)));
+	const uint32_t targetIndex = static_cast<uint32_t>(target - passes.begin());
+	std::vector<std::string> withdrawn;
+	for (auto& entry : entries) {
+		if (!entry.active)
+			continue;  // 已撤回的不动（也不改它的撤回原因，否则 redeclare 会漏恢复）
+		if (anchorPassIndex(entry.decl, passes) != targetIndex)
+			continue;
+		entry.active = false;
+		entry.withdrawnBy = std::string { passName };
+		withdrawn.push_back(entry.decl.name);
+	}
+	return withdrawn;
+}
+
+std::expected<std::vector<std::string>, Error>
+OffGraphWorkTable::redeclareAnchoredTo(std::string_view passName) {
+	std::vector<std::string> restored;
+	for (auto& entry : entries) {
+		if (entry.active || entry.withdrawnBy != passName)
+			continue;
+		entry.active = true;
+		entry.withdrawnBy.clear();
+		restored.push_back(entry.decl.name);
+	}
+	return restored;
+}
+
 }  // namespace RGL

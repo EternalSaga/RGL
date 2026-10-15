@@ -688,19 +688,47 @@ void Renderer::offGraphEnter(std::string_view name) {
 		reportOffGraphViolation(r.error());
 }
 
+// 门位规则（B2-5 起按名字问；每条都必须关于**门与输入**，不许写成「刚才 enter 过没有」
+// ——后者让覆盖对账自证。名字常量与 offGraphWorkDecls 同源，不写字面量）。
+std::optional<bool> Renderer::offGraphGateActive(
+	std::string_view name, const FrameDrawList& /*list*/) {
+	if (name == kWorkMeshletCull)
+		return meshletCull != nullptr;
+	if (name == kWorkIzbMask)
+		return izbShadow != nullptr;
+	if (name == kWorkEvssmMoments)
+		return evssmShadow != nullptr;
+	if (name == kWorkFsrUpscale)
+		return fsr != nullptr && fsrInputs().has_value();
+	// 在册却没有规则 = 申报表加了项而门位没跟上。返回 nullopt 让调用方出声：
+	// 原先的 `std::array<bool, N>` 形态下这种漏法是**编译不过**（长度不符），改成
+	// 按名求值后必须留一条运行期的等价护栏，否则「新增图外工作静默不参与对账」复活。
+	return std::nullopt;
+}
+
 void Renderer::offGraphEndFrame(const FrameDrawList& list) {
 	offGraph.advanceTo(offGraph.frameEndPhase());
 	// 门位在**帧末**求值：IZB / EVSSM 是首帧 drawFrame 内懒构造（izbPreFrame / evssmPreFrame
 	// 在 pass 循环之前），帧首求值会把它们误判成「不该发生」。
-	// 🔴 三条判据都必须关于**门与输入**，不许写成「刚才 enter 过没有」——后者让这条断言自证。
-	const std::array<bool, kOffGraphWorkCount> active{
-		meshletCull != nullptr,
-		izbShadow != nullptr,
-		evssmShadow != nullptr,
-		fsr != nullptr && fsrInputs().has_value(),
-	};
-	if (auto r = offGraph.checkCoverage(std::span<const bool>{active}); !r)
-		reportOffGraphViolation(r.error());
+	// 位序 = 在册表的**在场投影**（与 OffGraphSchedule::build 的输入同一个表达式，
+	// 两处各写一份就会漂 ⟹ checkCoverage 的「同序同长」要求靠同源而不是靠自觉）。
+	std::array<bool, kOffGraphWorkCount> gate{};
+	size_t gateCount = 0;
+	bool missingGateRule = false;
+	for (const auto& decl : offGraphWorks.activeDecls()) {
+		if (const auto g = offGraphGateActive(decl.name, list); g)
+			gate[gateCount++] = *g;
+		else {
+			missingGateRule = true;
+			reportOffGraphViolation(Error{ErrorCode::RenderGraphInvalid, fmt::format(
+				"off-graph contract: 在册申报 '{}' 没有门位规则（offGraphGateActive 少一条）"
+				"——只挂号不加门位 = 这一项静默不参与覆盖对账，比不挂号更糟", decl.name)});
+		}
+	}
+	if (!missingGateRule)
+		if (auto r = offGraph.checkCoverage(
+			    std::span<const bool>{gate.data(), gateCount}); !r)
+			reportOffGraphViolation(r.error());
 	// 批次 B1b：图外**同步边**的帧末对账（实发次数 vs 应发次数）。与上面那条独立出声——
 	// 一个查「工作项有没有在挂点录」，一个查「barrier 有没有发够」，两件事的修复位置不同。
 	const bool izbOn = izbShadow != nullptr;

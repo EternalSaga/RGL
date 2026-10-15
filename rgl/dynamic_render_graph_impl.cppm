@@ -7,6 +7,7 @@ import rlstd;
 import rllogger;
 import vkerror;
 import render_graph;    // compileRenderGraph / bufferAttachmentBytes / RgGraphDesc
+import timing_util;     // steadyNowNs（重编译耗时读数；rlbase 叶子，零设备依赖）
 import offgraph_sync;   // B2-4④′：attachmentSyncEdges / checkAttachmentSyncEdge（对账的表侧）
 
 namespace RGL {
@@ -63,6 +64,25 @@ std::string joinNames(const std::vector<std::string>& names) {
 	for (const auto& n : names)
 		out += (out.empty() ? "" : ",") + n;
 	return out;
+}
+
+/**
+ * usage 的报错标签（补丁找不到目标 usage 时的归因文案）。
+ *
+ * 为什么穷尽 switch 不写 default：加一档 RgUsage 而忘了给标签 = 编译期报错
+ * （`-Wcovered-switch-default` 已第一方启用；AGENTS 红线四「让错的东西编不过」）。
+ */
+std::string_view usageLabel(RgUsage usage) {
+	switch (usage) {
+	case RgUsage::colorWrite: return "colorWrite";
+	case RgUsage::depthWrite: return "depthWrite";
+	case RgUsage::sampleRead: return "sampleRead";
+	case RgUsage::transferRead: return "transferRead";
+	case RgUsage::transferWrite: return "transferWrite";
+	case RgUsage::storageRead: return "storageRead";
+	case RgUsage::storageWrite: return "storageWrite";
+	}
+	return "unknown";  // 不可达（穷尽），消 -Wreturn-type
 }
 
 /**
@@ -222,6 +242,256 @@ std::expected<void, Error> DynamicRenderGraph::declareBufferConsumptions(std::st
 	return {};
 }
 
+namespace {
+
+/**
+ * 按名字找一条申报在 desc 里的插入位置（`insertBefore` 为空 = 图末）。
+ *
+ * 🔴 按名字而不是按下标：动态插拔会让下标漂移（`RgPassDeclaration` 头注释那条）。
+ * @param trial 待查的 desc 副本
+ * @param decl  申报单
+ * @return 插入迭代器；`insertBefore` 指向的 pass 不在图里时 nullopt
+ */
+std::optional<std::vector<RgPassDesc>::iterator> insertPosOf(
+	std::vector<RgPassDesc>& passes, const RgPassDeclaration& decl) {
+	if (decl.insertBefore.empty())
+		return passes.end();
+	const auto it = std::ranges::find_if(passes,
+		[&](const RgPassDesc& p) { return p.name == decl.insertBefore; });
+	if (it == passes.end())
+		return std::nullopt;
+	return it;
+}
+
+/**
+ * 按名字找一条补丁的目标 usage（补丁的「按名字定位」红线在这里落地）。const/非 const 两份，
+ * 免得调用点为了写一个字段去 const_cast（那会把「这里在改图」这件事藏起来）。
+ * @param passes 图里的 pass 序列
+ * @param patch  补丁
+ * @return 可空指针；找不到 = nullptr
+ */
+RgPassAttachment* findUsage(std::vector<RgPassDesc>& passes, const RgStoreOpPatch& patch) {
+	for (auto& pass : passes) {
+		if (pass.name != patch.passName)
+			continue;
+		for (auto& out : pass.outputs)
+			if (out.attachment == patch.attachment && out.usage == patch.usage)
+				return &out;
+	}
+	return nullptr;
+}
+
+/** 上面那条的只读版（`checkDeclaration` 拿它比对申报的补丁与图上的当前值）。 */
+const RgPassAttachment* findUsage(const std::vector<RgPassDesc>& passes,
+	const RgStoreOpPatch& patch) {
+	for (const auto& pass : passes) {
+		if (pass.name != patch.passName)
+			continue;
+		for (const auto& out : pass.outputs)
+			if (out.attachment == patch.attachment && out.usage == patch.usage)
+				return &out;
+	}
+	return nullptr;
+}
+
+/** storeOp 的报错标签（穷尽 switch 不写 default：加档忘给标签 = 编译期报错）。 */
+std::string_view storeOpLabel(RgStoreOp storeOp) {
+	switch (storeOp) {
+	case RgStoreOp::store: return "store";
+	case RgStoreOp::dontCare: return "dontCare";
+	}
+	return "unknown";  // 不可达（穷尽），消 -Wreturn-type
+}
+
+}  // namespace
+
+std::expected<void, Error> DynamicRenderGraph::declarePass(RgPassDeclaration decl) {
+	// ① 在册 = 幂等 / 指路判定（键 = pass 名）
+	if (const auto* record = findRecord(decl.pass.name)) {
+		if (record->inserted)
+			return {};  // 幂等：已在图里（不标脏、不重编译）
+		return std::unexpected(dgError(fmt::format(
+			"dynamic graph: declarePass 拒绝——pass '{}' 已在册但已撤回，重插请走 redeclarePass"
+			"（它吃在册那份申报；这里若接受新 desc，「两边都拼错」也会被读成往返一致）",
+			decl.pass.name)));
+	}
+	// ② 首次申报：名字不能被启动期 pass 占了（占了 = 图里两个同名 pass，而插入点与补丁都按
+	//    名字定位 ⟹ 指错 pass 不报错）
+	if (hasPass(decl.pass.name))
+		return std::unexpected(dgError(fmt::format(
+			"dynamic graph: declarePass 拒绝——pass '{}' 已在图里但不是动态申报的"
+			"（启动期内建/装饰 pass 要能撤，请在装配期调 adoptPass 登记，不是同名再插一个）",
+			decl.pass.name)));
+	if (auto r = checkDeclaration(decl, /*expectPresent =*/ false); !r)
+		return r;
+	DynamicPassRecord record { .decl = std::move(decl) };
+	RgGraphDesc trial = graphDesc;
+	if (auto r = applyRecordTo(trial, record); !r)
+		return r;
+	if (auto compiled = compileRenderGraph(trial); !compiled)
+		return std::unexpected(dgError(fmt::format(
+			"dynamic graph: declarePass 试编译失败（pass '{}' 排在 '{}' 之前）：{}",
+			record.decl.pass.name, record.decl.insertBefore, compiled.error().describe())));
+	graphDesc = std::move(trial);
+	record.inserted = true;
+	dynamicPasses.push_back(std::move(record));
+	markDirty();
+	return {};
+}
+
+std::expected<void, Error> DynamicRenderGraph::redeclarePass(std::string_view passName) {
+	auto* record = findRecord(passName);
+	if (!record)
+		return std::unexpected(dgError(fmt::format(
+			"dynamic graph: redeclarePass 拒绝——pass '{}' 不在动态申报册里"
+			"（首次进图要走 declarePass 带申报单，这里只重插已在册的那一份）", passName)));
+	if (record->inserted)
+		return {};  // 幂等：已在场
+	if (auto r = checkDeclaration(record->decl, /*expectPresent =*/ false); !r)
+		return r;
+	RgGraphDesc trial = graphDesc;
+	if (auto r = applyRecordTo(trial, *record); !r)
+		return r;
+	if (auto compiled = compileRenderGraph(trial); !compiled)
+		return std::unexpected(dgError(fmt::format(
+			"dynamic graph: redeclarePass 试编译失败（重插在册 pass '{}'）：{}",
+			passName, compiled.error().describe())));
+	graphDesc = std::move(trial);
+	record->inserted = true;
+	markDirty();
+	return {};
+}
+
+std::expected<void, Error> DynamicRenderGraph::adoptPass(RgPassDeclaration decl) {
+	if (findRecord(decl.pass.name))
+		return {};  // 幂等：已登记过
+	// expectPresent = true：申报的 pass 必须已在图里，且每条补丁必须**已经生效**
+	// （启动期装饰已经把它落图了，登记只是承认它可撤）。
+	if (auto r = checkDeclaration(decl, /*expectPresent =*/ true); !r)
+		return r;
+	dynamicPasses.push_back(DynamicPassRecord { .decl = std::move(decl), .inserted = true });
+	return {};
+}
+
+std::expected<void, Error> DynamicRenderGraph::withdrawPass(std::string_view passName) {
+	auto* record = findRecord(passName);
+	if (!record)
+		return std::unexpected(dgError(fmt::format(
+			"dynamic graph: withdrawPass 拒绝——pass '{}' 不在动态申报册里{}。"
+			"启动期 pass 不接受动态撤（要能撤就在装配期 adoptPass 登记），拼错的名字也必须出声",
+			passName,
+			hasPass(passName) ? "（图里有这个名字 = 它是启动期内建/装饰 pass）"
+			                  : "（图里也没有这个名字 = 拼错了）")));
+	if (!record->inserted)
+		return {};  // 幂等：已经撤过了（复合事务重放同一意图不该炸）
+	RgGraphDesc trial = graphDesc;
+	if (auto r = revertRecordFrom(trial, *record); !r)
+		return r;
+	if (auto compiled = compileRenderGraph(trial); !compiled)
+		return std::unexpected(dgError(fmt::format(
+			"dynamic graph: withdrawPass 试编译失败（撤掉 pass '{}' 后的图编译不过）：{}",
+			passName, compiled.error().describe())));
+	graphDesc = std::move(trial);
+	record->inserted = false;
+	markDirty();
+	return {};
+}
+
+bool DynamicRenderGraph::hasPass(std::string_view passName) const {
+	return std::ranges::any_of(graphDesc.passes,
+		[&](const RgPassDesc& p) { return p.name == passName; });
+}
+
+bool DynamicRenderGraph::isDynamic(std::string_view passName) const {
+	return std::ranges::any_of(dynamicPasses,
+		[&](const DynamicPassRecord& r) { return r.decl.pass.name == passName; });
+}
+
+std::vector<std::string> DynamicRenderGraph::dynamicPassNames() const {
+	std::vector<std::string> names;
+	names.reserve(dynamicPasses.size());
+	for (const auto& record : dynamicPasses)
+		names.push_back(record.decl.pass.name);
+	return names;
+}
+
+DynamicRenderGraph::DynamicPassRecord* DynamicRenderGraph::findRecord(std::string_view passName) {
+	const auto it = std::ranges::find_if(dynamicPasses,
+		[&](const DynamicPassRecord& r) { return r.decl.pass.name == passName; });
+	return it == dynamicPasses.end() ? nullptr : &*it;
+}
+
+std::expected<void, Error> DynamicRenderGraph::checkDeclaration(
+	const RgPassDeclaration& decl, bool expectPresent) const {
+	if (hasPass(decl.pass.name) != expectPresent)
+		return std::unexpected(dgError(fmt::format(
+			"dynamic graph: 申报单与图不一致——pass '{}' {}（{} 口径要求相反）",
+			decl.pass.name, hasPass(decl.pass.name) ? "在图里" : "不在图里",
+			expectPresent ? "adoptPass" : "declarePass")));
+	if (!decl.insertBefore.empty() && !hasPass(decl.insertBefore))
+		return std::unexpected(dgError(fmt::format(
+			"dynamic graph: 申报单与图不一致——pass '{}' 要排在 '{}' 之前，而图里没有这个名字"
+			"（插入点按名字定位：图被改过就重算申报，不要拿旧单子硬插）",
+			decl.pass.name, decl.insertBefore)));
+	for (const auto& patch : decl.patches) {
+		const auto* usage = findUsage(graphDesc.passes, patch);
+		if (!usage)
+			return std::unexpected(dgError(fmt::format(
+				"dynamic graph: 申报单的补丁找不到目标——pass '{}' 上没有 attachment '{}' 的 {} usage",
+				patch.passName, patch.attachment, usageLabel(patch.usage))));
+		const auto want = expectPresent ? patch.newStoreOp : patch.originalStoreOp;
+		if (usage->storeOp != want)
+			return std::unexpected(dgError(fmt::format(
+				"dynamic graph: 申报单的补丁与图不一致——pass '{}' 的 {}.{} 现在是 {}，申报的是 {}"
+				"（补丁声称的原值对不上 = 图在算申报与落申报之间被人改过，宁可拒落也不静默打错）",
+				patch.passName, patch.attachment, usageLabel(patch.usage),
+				storeOpLabel(usage->storeOp), storeOpLabel(want))));
+	}
+	return {};
+}
+
+std::expected<void, Error> DynamicRenderGraph::applyRecordTo(
+	RgGraphDesc& trial, const DynamicPassRecord& record) const {
+	const auto& decl = record.decl;
+	const auto pos = insertPosOf(trial.passes, decl);
+	if (!pos)
+		return std::unexpected(dgError(fmt::format(
+			"dynamic graph: 插入失败——pass '{}' 要排在 '{}' 之前，而副本里找不到它"
+			"（图在 checkDeclaration 之后被改过？这是内部不一致）",
+			decl.pass.name, decl.insertBefore)));
+	trial.passes.insert(*pos, decl.pass);
+	for (const auto& patch : decl.patches) {
+		auto* usage = findUsage(trial.passes, patch);
+		if (!usage)
+			return std::unexpected(dgError(fmt::format(
+				"dynamic graph: 插入失败——补丁找不到目标 pass '{}' 的 attachment '{}'（{} usage）",
+				patch.passName, patch.attachment, usageLabel(patch.usage))));
+		usage->storeOp = patch.newStoreOp;
+	}
+	return {};
+}
+
+std::expected<void, Error> DynamicRenderGraph::revertRecordFrom(
+	RgGraphDesc& trial, const DynamicPassRecord& record) const {
+	const auto pass = std::ranges::find_if(trial.passes,
+		[&](const RgPassDesc& p) { return p.name == record.decl.pass.name; });
+	if (pass == trial.passes.end())
+		return std::unexpected(dgError(fmt::format(
+			"dynamic graph: withdrawPass 内部不一致——在册 pass '{}' 在图里找不到"
+			"（有人绕过 declare*/withdraw* 直接改了 desc？图与册子已经对不上）",
+			record.decl.pass.name)));
+	trial.passes.erase(pass);
+	// 还原成**申报单上的 originalStoreOp**（不是常量 dontCare；理由见 RgStoreOpPatch）。
+	// 目标 pass 已不在图里时跳过 = 别人撤了它，还原无意义（不是错）。
+	for (const auto& patch : record.decl.patches) {
+		auto* usage = findUsage(trial.passes, patch);
+		if (!usage)
+			continue;
+		usage->storeOp = patch.originalStoreOp;
+	}
+	return {};
+}
+
 std::expected<void, Error> reconcileAttachmentSyncEdges(const RgGraphDesc& desc) {
 	// 两条规则各拆一个 helper（认知复杂度红线；规则本体与已知限制的注释在接口声明处）。
 	if (auto r = checkSharedAttachmentsHaveEdge(desc); !r)
@@ -230,6 +500,9 @@ std::expected<void, Error> reconcileAttachmentSyncEdges(const RgGraphDesc& desc)
 }
 
 std::expected<CompiledRenderGraph, Error> DynamicRenderGraph::recompile() {
+	// 重编译耗时从「安全点进来」量到「编译产物到手」（含双源对账 + 编译，不含调用方的
+	// 逐 slot 结转与 RT 重装配——那部分成本在 Renderer 侧，口径写在这里是为了读数可复现）。
+	const auto compileStartNs = steadyNowNs();
 	if (!dirty)
 		return std::unexpected(dgError(
 			"dynamic graph: recompile 前没有脏位（调用方应先查 isDirty；这不是错误路径）"));
@@ -242,18 +515,23 @@ std::expected<CompiledRenderGraph, Error> DynamicRenderGraph::recompile() {
 		return std::unexpected(dgError(fmt::format(
 			"dynamic graph: 重编译失败（脏位保留，下帧安全点重试）：{}",
 			compiled.error().describe())));
+	const auto compileEndNs = steadyNowNs();
 	++recompiles;
 	dirty = false;
+	lastRecompileDurationNs = compileEndNs > compileStartNs ? compileEndNs - compileStartNs : 0;
 	// 机器可观测的日志行：逐 buffer 附件打印**注册字节**（判据 5 的观测面——
 	// 「重编译吃到了新尺寸」必须能从日志里读出来，而不是靠人相信注册表）。
+	// B2-5 起附带本次耗时（µs）：「逐帧 = 测试模态不是 SLA」这条裁决要有读数才裁决得动，
+	// 口径 = 本函数内「对账 + 编译」的墙钟，`just smoke` 的台账按它算中位数。
 	if (auto* logger = RLLogger::getInstance()) {
 		std::string bytesDump;
 		for (const auto& att : compiled->attachments)
 			if (att.kind == RgAttachmentKind::buffer)
 				bytesDump += fmt::format(" {}={}B", att.name,
 					bufferAttachmentBytes(att.name).value_or(0));
-		logger->info("DynamicGraph: recompiled (count={}) buffer attachments:{}",
-			recompiles, bytesDump.empty() ? " <none>" : bytesDump);
+		logger->info("DynamicGraph: recompiled (count={}, {:.1f}us) buffer attachments:{}",
+			recompiles, static_cast<double>(lastRecompileDurationNs) / 1000.0,
+			bytesDump.empty() ? " <none>" : bytesDump);
 	}
 	return compiled;
 }

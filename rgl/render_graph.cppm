@@ -460,6 +460,73 @@ export struct RgPassDesc {
 };
 
 /**
+ * 跨 pass 补丁（B2-5）：「改**已存在** pass 的某条 usage 的 storeOp」这件事的数据化。
+ *
+ * 为什么存在：`decorateHighlightPass` 要在 depth 消费者之前插一个 load+store 的 pass，
+ * 于是**前一个写 depth 的 pass** 的 storeOp 必须从 `dontCare` 改成 `store`——那是跨 pass
+ * 的补丁，不是新 pass 自己的属性。B2-5 之前它只活在启动期装饰里（一次性、不可撤）；要能在
+ * 安全点动态插拔 highlight，补丁就得是**可申报、可记录、可还原**的数据，于是抽出来。
+ *
+ * 🔴 `originalStoreOp` 是这条数据化的**承重字段**，不是备注：撤回要还原成「申报前它是什么」，
+ * 而那个值只有在** pristine desc 上**才问得到（补丁一旦落下就再也问不到原值）。所以它由
+ * `planHighlightDecoration` 在算计划时读出、随补丁一起携带，并由两处的试落盘**核对**：
+ * 落盘时目标当前值 ≠ 申报的原值 = 图在算计划与落计划之间被人改过 ⟹ 拒落（不是照改）。
+ * 还原成常量 `dontCare` 在 deferred/forward 图上**恰好也对**（那里本来就是 store）——
+ * 恰好对 = 判据抓不到写错的那一种。
+ *
+ * ⚠ **按名字定位，绝不按下标**：动态插拔会让 pass 下标漂移，而名字不会——与
+ * `OffGraphWorkDecl::anchorPass` 同一条教训（见 `offgraph_contract.cppm`）。
+ *
+ * ⚠ 指定初始化（AGENTS 红线二）。
+ */
+export struct RgStoreOpPatch {
+	std::string passName;                              ///< 被改的 pass 名
+	std::string attachment;                            ///< 该 pass 上的 attachment 名
+	RgUsage usage = RgUsage::depthWrite;               ///< 改该 pass 上哪条 usage
+	RgStoreOp newStoreOp = RgStoreOp::store;           ///< 改成什么
+	RgStoreOp originalStoreOp = RgStoreOp::store;      ///< 申报时的原值（撤回还原吃它）
+};
+
+/**
+ * pass 级动态插拔的**申报单**（B2-5）：「插哪个 pass、排在谁之前、随它生效哪些补丁」。
+ *
+ * 为什么「插哪」是**名字**（`insertBefore`）而不是下标：动态插拔会让下标漂移，而「排在谁之前」
+ * 不会。这是 `RgStoreOpPatch` 那条「按名字定位」的同一个教训用在插入点上——用下标的话，
+ * 「先撤 A 再插 B」会按 A 存在时的下标插 B，**插对了没人知道，插错了也没人报错**。
+ * 空串 = 追加到图末。
+ *
+ * 为什么补丁与插入在**同一张单子**上：插拔必须是一次事务（要么 pass 与补丁一起进图、要么都不进）。
+ * 分两步调的话，第一步成功第二步失败 = 图里留下一个 load 未定义内容的 pass，而它**编译得过**
+ * （编译器只在前驱声明 dontCare 而后续有人 load 时拒绝——正好是这里想抓的形态，但错误会漂到
+ * 别处报）。单子形态下试编译跑在整张单子上，失败整张不落账。
+ *
+ * ⚠ 指定初始化（AGENTS 红线二）。
+ */
+export struct RgPassDeclaration {
+	RgPassDesc pass;  ///< 要插入的 pass（name 同时是撤回的键）
+	std::string insertBefore;  ///< 排在这个 pass 之前（空 = 图末）
+	std::vector<RgStoreOpPatch> patches;  ///< 随本 pass 一起生效的跨 pass 补丁
+};
+
+/**
+ * highlight pass 的**装饰计划**（B2-5）= 「一张申报单 + 本图能不能插」。
+ *
+ * 为什么把装饰拆成 plan + apply：启动期装饰与运行期 `DynamicRenderGraph::declarePass` 吃的是
+ * **同一份计划**（同一个纯函数），于是「出厂图」与「运行期插回同一 pass」逐字段同源——
+ * A→B→A 往返逐位相同的判据才不是自证（若运行期自己拼一份 desc，拼错也照样「往返一致」，
+ * 因为两边都错）。计划是**纯函数**产物：只读 desc（角色查表），不写、不抛
+ * （不适用时 `applicable = false`）。
+ *
+ * 启动期装饰落图后，计划本体**不丢**：它随 `CompiledGraphResult` 交给
+ * `DynamicRenderGraph::adoptPass` 登记为「可撤」——撤回要还原的原值就在这张单子上，
+ * 装饰落图之后再也问不到（见 `RgStoreOpPatch::originalStoreOp`）。
+ */
+export struct RgHighlightPlan {
+	bool applicable = false;  ///< 本图有没有 highlight 可插的位置（无颜色消费者 ⇒ false）
+	RgPassDeclaration decl;   ///< 申报单（applicable=false 时无意义）
+};
+
+/**
  * 渲染意图的完整声明：attachments 下标 = 编译产物中的 slot；passes 线性序 = 执行序
  *（骨架版不做拓扑排序/死 pass 消除，脚本序即 GPU 序）。
  */
@@ -669,6 +736,21 @@ export bool decoratePickingPass(RgGraphDesc& desc);
  * @return true = 已装饰；false = 图形态不支持（desc 未被修改）
  */
 export bool decorateHighlightPass(RgGraphDesc& desc);
+
+/**
+ * 算 highlight 的装饰计划（B2-5；类型与"为什么拆 plan/apply"见 `RgHighlightPlan`）。
+ *
+ * 消费方 = `decorateHighlightPass`（启动期装饰）+ `DynamicRenderGraph::declarePass`
+ * （运行期插回）。两者必须同源，否则 A→B→A 往返逐位相同的判据自证。
+ * 纯函数：不改 desc、不抛（不适用 ⇒ `applicable == false`）。
+ */
+export RgHighlightPlan planHighlightDecoration(const RgGraphDesc& desc);
+
+/**
+ * 把装饰计划落到 desc 上（B2-5；唯一写路径）。
+ * @return true = 已落；false = 计划不适用，或插入点相对本 desc 已失效（desc 未被修改）
+ */
+export bool applyHighlightPlan(RgGraphDesc& desc, const RgHighlightPlan& plan);
 
 /**
  * 阴影深度图附件契约（单一真相源，Phase 11 批 11.2 基建）——shadow pass 写的
