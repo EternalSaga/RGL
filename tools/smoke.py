@@ -70,6 +70,7 @@ import socket
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -96,9 +97,13 @@ def set_targets() -> tuple[str, ...]:
     return names
 
 
-def fail(msg: str) -> None:
-    """响亮失败——本工具的价值就在"没跑成要说清为什么"，绝不静默返回 0。"""
-    print(f"[smoke] FAIL: {msg}")
+def fail(msg: str, *, say=print) -> None:
+    """响亮失败——本工具的价值就在"没跑成要说清为什么"，绝不静默返回 0。
+
+    `say` 只换**输出通道**（`verdicts` 把它接到注入的 sink 上，selftest 才不会拿一堆
+    FAIL 刷屏），判定语义一个字不动：**首条失败即 `exit(1)`**。
+    """
+    say(f"[smoke] FAIL: {msg}")
     sys.exit(1)
 
 
@@ -545,7 +550,7 @@ def parse_size(text: str | None) -> tuple[int, int] | None:
 
 
 def guard_flags(clip: int | None, aa: str | None, fsr_temporal: bool,
-                fsr_jitter: bool, aa_eff: str | None = None) -> None:
+                fsr_jitter: bool, aa_eff: str | None = None, *, say=print) -> None:
     """旗标守卫（批 14.6 三态化后从三条收成两条）。
 
     单独成函数是为了 `tools/regress.py` 复用同一组守卫：守卫只在一处生效的话，
@@ -555,31 +560,315 @@ def guard_flags(clip: int | None, aa: str | None, fsr_temporal: bool,
     （regress.py 的旧调用逐字不变）。不并这一条的话，`--set aa=fsr --fsr-temporal`
     这条**合法**组合会被守卫判成"空开关"拒掉——护栏反过来挡住了合法入口（同批修掉的
     四条反向判据是同一个病：只看具名旗标，认不出 `--set` 这条等价来路）。
+
+    `say` 与 `verdicts` 同口径（只换输出通道、不改判定），selftest 才敢直接驱动它。
     """
     aa = aa_eff if aa_eff is not None else aa
     if clip is not None and aa != "taa":
         fail("--clip 必须配 --aa taa：TAA 不在图时 taa 段整个不进图，clip_mode 不被任何 "
-             "shader 消费 ⟹ 这条旗标会静默量到一张与默认逐位相同的图，却报成「档位生效了」")
+             "shader 消费 ⟹ 这条旗标会静默量到一张与默认逐位相同的图，却报成「档位生效了」",
+             say=say)
     if (fsr_temporal or fsr_jitter) and aa != "fsr":
         fail("--fsr-temporal/--fsr-jitter 是 aa=fsr 的子选项：其余态下 fsr 块调参没有"
              "消费者（引擎只在 aa=fsr 时才接 FSR），只开子选项 = 空开关（配置里写了、"
-             "什么都没发生）")
+             "什么都没发生）", say=say)
     if fsr_jitter and not fsr_temporal:
         fail("--fsr-jitter 必须配 --fsr-temporal：时域档关着 ⟹ 没有历史重投影去抵消抖动"
              " ⟹ 量到的只是一张整体亚像素平移过的纯空间图（configs/runtime.lua fsr 块注释"
-             "早写过这个坑）")
+             "早写过这个坑）", say=say)
 
 
-def report(log: str) -> tuple[list[str], list[str]]:
+def report(log: str, *, say=print) -> tuple[list[str], list[str]]:
     """打印设备/选路现场，返回 (error 行, warning 行)。"""
     errors, warnings = count_severities(log)
     dgc = re.search(r"DGC path: device='[^']*'.*?-> (.+)", log)
-    print(f"GPU    : {gpu_of(log)}")
-    print(f"设备规格: {caps_of(log)}")
-    print(f"DGC 路 : {dgc.group(1).strip() if dgc else '未取到'}")
+    say(f"GPU    : {gpu_of(log)}")
+    say(f"设备规格: {caps_of(log)}")
+    say(f"DGC 路 : {dgc.group(1).strip() if dgc else '未取到'}")
     # 阳性锚点：headless 真生效了吗——否则本次跑的是一次交互窗，判据全废
     if "headless 模式" not in log:
         errors.append("[self-check] 日志缺 'headless 模式' 行——本次没跑在 headless 上")
+    return errors, warnings
+
+
+@dataclass
+class VerdictCfg:
+    """`verdicts` 的输入面：main 从命令行派生后传入，selftest 直接构造合成档。
+
+    🔴 刻意**不含** Path / 磁盘 / 时钟：截图在不在磁盘上、PNG 真实宽高由 main 读好后以
+    `shot_exists` / `dims` 传进来——判据函数一碰磁盘，selftest 就得去造真图（更糟是造真引擎）。
+    默认值 = 「默认档 + 全好」那份合成现场，用例只写它要改的那一两个字段；不这样写，
+    26 条判据的用例会长成 26 份参数表，而参数表本身没人校验。
+    """
+
+    expect_file: str = ".smoke/probe.png"     # 该出现在磁盘上的出图名（相对 build/rgl）
+    shot_exists: bool = True                  # 那张图真在磁盘上吗（main 读）
+    dims: tuple[int, int] | None = None       # PNG 头里的真实宽高（读不到 = None）
+    size: tuple[int, int] | None = None       # --size 请求值
+    render_scale: float | None = None         # --render-scale 请求值
+    velocity_field: bool = False              # --velocity-field
+    ssr: bool = False                         # --ssr
+    fsr_temporal: bool = False                # --fsr-temporal
+    fsr_jitter: bool = False                  # --fsr-jitter
+    clip: int | None = None                   # --clip（只进 TAA 读数行）
+    sync: bool = False                        # --sync
+    aa_eff: str | None = None                 # 含 `--set aa=…` 之后的**实际** aa
+    overrides: list[str] | None = None        # --set 原样：反向判据要认这条等价来路
+    gbuf: int | None = None                   # --set diagnostics:dump_gbuf=N（None = 普通档）
+    log_rel: str = str(LOG_PATH.relative_to(ROOT))  # 报错里指的日志路径（常量，非输入）
+
+
+def verdicts(code: int, log: str, cfg: VerdictCfg, *,
+             say=print) -> tuple[list[str], list[str]]:
+    """读引擎退出码 + 日志做 PASS/FAIL 判定；任一判据不过 → `fail()` 当场退出。
+
+    **为什么拆出来**（债-130①）：判据唯一的资产是「它还能不能看见东西」，而长在 main() 里的
+    判据没有任何东西能驱动它——selftest 一度对它零条断言，「这 26 条 fail() 到底会不会红」
+    只能靠读代码推理。拆成纯函数后 selftest 用合成日志逐条钉住（见 selftest 的判据段用例）。
+
+    三条不变量，改判据前先读：
+      1. **首条失败即退出**（fail = 说 + exit(1)）。🔴 不许改成「收集全部失败再一次性报」：
+         后面的判据依赖前面的判据已经退出（`eff` / `saved` 都是正则命中后才 `.group()`）。
+      2. 全部输入走 `cfg` 与参数——函数体不读 args / argv / 磁盘 / 时钟（可测性的全部来源）。
+      3. 读数行经 `say` 输出（默认 print）；selftest 传 sink，免得污染回归输出。
+
+    返回 (error 行, warning 行)：`errors` 非空本身就是**最后一条判据**（main 据此打
+    `结果 : FAIL` 并返回 1），它不走 fail()，所以不能在这里丢掉。
+
+    改判据要**两个方向**都留下证据：判据失效（改成不匹配 / 恒假）要有用例红，判据被放宽
+    （削掉字面量 ⟹ 错误日志也打 ✓）也要有用例红——后者是假绿，只有近邻行能抓，见 selftest ⑭。
+    """
+    gbuf = cfg.gbuf  # dump_gbuf 通道号（None = 普通档，出图名走 llm_shot.file）
+    size = cfg.size  # --size 请求值（None = 随配置）
+
+    errors, warnings = report(log, say=say)
+    # 同步验证档的**生效**核对（同 render_scale/velocity 的纪律：请求 ≠ 生效）。这里能廉价
+    # 抓到的静默失效只有一种，但恰好是最贵的一种：diagnostics.no_vvl = true 时引擎根本不
+    # 启用验证层 ⟹ syncval env 再对也一条不报，errors=0 会被读成"同步干净"。启动日志的
+    # "diagnostics:" 行只列非默认值（见 diagnostics_impl.cppm），故出现 no_vvl 即为 true。
+    if cfg.sync:
+        if re.search(r"diagnostics:.*no_vvl", log):
+            fail("--sync 档下 no_vvl = true ⟹ 验证层没启用，syncval 等于没跑"
+                 "（本档的 errors=0 不作数，改回 no_vvl = false 再测）", say=say)
+        hazards = [ln for ln in log.splitlines() if "hazard detected" in ln]
+        say(f"同步验证: hazard {len(hazards)} 条"
+            + (f"（{hazards[0].split('hazard detected')[0].split('] ')[-1].strip()} …）"
+               if hazards else ""))
+
+    if code != 0:
+        say(f"[smoke] 引擎退出码 {code}，日志尾部：\n{tail(log)}")
+        fail("引擎非零退出", say=say)
+    if "截图已保存" not in log or not cfg.shot_exists:
+        say(f"[smoke] 日志尾部：\n{tail(log)}")
+        fail(f"没拿到截图 {cfg.expect_file}——llm_debug 链路没通，见 {cfg.log_rel}", say=say)
+    # dump_gbuf 档的**出图名核对**：光"磁盘上有张 gbuffer_N.png"不够——它可能是上一次别的
+    # 通道/别的尺寸留下的。核对引擎自己报的路径（ecs_frame_diag 的「截图已保存 (<路径>)」行）
+    # 与按通道号推出的名字一致，才算这次注入真的落到了这张图上。
+    if gbuf is not None:
+        saved = re.search(r"截图已保存 \(([^)]*)\)", log)
+        want = f"gbuffer_{gbuf}.png"
+        if not saved or not saved.group(1).endswith(want):
+            fail(f"dump_gbuf={gbuf} 档下引擎报的出图路径不是 {want}"
+                 f"（日志：{saved.group(1) if saved else '没有「截图已保存」行'}）"
+                 " ⟹ 出图名口径变了，本工具的核对与 diffstruct 的 --gbuf 都会认错图", say=say)
+        say(f"出图名 : {saved.group(1)} ✓（与 dump_gbuf={gbuf} 一致）")
+
+    for ln in errors[:5]:
+        say(f"[smoke] ERROR 行: {ln.strip()}")
+    if len(errors) > 5:
+        say(f"[smoke] ...（其余 {len(errors) - 5} 条见日志）")
+    grid = re.search(r"Swapchain extent: (\d+)x(\d+)", log)
+    dims = cfg.dims  # PNG 真实尺寸：main 读好后传入（判据函数不碰磁盘）
+    # 后缓冲核对（普通档）：回读链路与交换链对不上 ⟹ 这张图不能当判据。
+    # dump_gbuf 档**跳过这一条**：它直读的是渲染网格上的 G-buffer RT，与后缓冲网格本来就
+    # 可以不同（render_scale < 1 时必然不同），拿后缓冲判它 = 在合法档上误杀。改与渲染网格比，
+    # 见下面 render_grid 处的核对。
+    if gbuf is None and grid and dims and dims != (int(grid.group(1)), int(grid.group(2))):
+        fail(f"截图尺寸 {dims[0]}x{dims[1]} ≠ 后缓冲 {grid.group(1)}x{grid.group(2)}"
+             f"——回读链路与交换链对不上，这张图不能当判据", say=say)
+
+    # render_scale 生效核对（批 14.3）。**必须核对而不是只打补丁**：patch_lua 只保证
+    # "配置文件里改了"，不保证"引擎按它算了"（键名漂了 / 引擎读错表 / 被钳制）。一个
+    # 静默跑在默认档上的 --render-scale 会把"0.5 档回归"做成"1.0 档回归"，而两者都绿。
+    eff = re.search(r"render scale = (\S+) → render (\d+)x(\d+) \(swapchain (\d+)x(\d+)\)", log)
+    if not eff:
+        fail("日志里没有 `render scale = ... → render WxH (swapchain WxH)` 行"
+             "——引擎的口径日志被删了或文案改了，批 14.3 的判据失去出处", say=say)
+    if cfg.render_scale is not None:
+        got = float(eff.group(1))
+        if abs(got - cfg.render_scale) > 1e-6:
+            fail(f"请求 --render-scale {cfg.render_scale} 引擎实际生效 {got}"
+                 f"（合法区间 [0.25, 1.0]，越界会被钳制；非有限值回落 1.0）", say=say)
+    render_grid = (int(eff.group(2)), int(eff.group(3)))
+    # dump_gbuf 档的尺寸判据换基准（上面跳过后缓冲核对的对应另一半）：G-buffer RT 与深度
+    # **同网格**（渲染网格），diffstruct 的 --gbuf 又要求它与 A/B 两图同尺寸，所以这里必须
+    # 真的等于渲染网格——不等就是采集错档（比如 render_scale 不是 1 的那一档）。
+    if gbuf is not None and dims and dims != render_grid:
+        fail(f"gbuf 出图 {dims[0]}x{dims[1]} ≠ 渲染网格 {render_grid[0]}x{render_grid[1]}"
+             "——dump_gbuf 直读的是渲染分辨率上的 G-buffer RT；要与差分对同尺寸请配 render_scale=1", say=say)
+    # --size 在 dump_gbuf 档**不是不核**，而是换个对象核：那张图量不到"后缓冲是不是这个尺寸"
+    # （它不经过后缓冲），但渲染网格必须等于请求尺寸，否则 --size 被静默忽略也会一路绿。
+    if gbuf is not None and size and render_grid != size:
+        fail(f"请求 --size {size[0]}x{size[1]}，dump_gbuf 档的渲染网格却是 "
+             f"{render_grid[0]}x{render_grid[1]}——--size 没生效（llm_shot.size 被别处盖掉？）", say=say)
+    # velocity_field 生效核对（批 14.4）。同 render_scale 的纪律：patch 只保证"配置里写了"，
+    # 不保证"引擎按它建了 RT"。**反向同样要核**：默认档不该出现 velocity RT 行——出现了就说明
+    # 门关不拢（图里多了一个 pass，而逐位不变红线单看截图未必抓得住）。
+    # ── 「这扇门到底开没开」的统一口径 ──────────────────────────────────────────
+    # 🔴 三条来路必须并成一条，否则下面的**反向**判据（门关不拢）会拿「门关」的假设去判
+    # 一门其实开着的图，把正确行为报成缺陷：
+    #   ① 具名旗标：--ssr / --velocity-field / --aa taa|fsr
+    #   ② `--set [runtime:]KEY=VALUE` 这条**等价**来路（低频/一次性臂的唯一入口）
+    #   ③ 引擎解析期的**隐含依赖**：aa=fsr 隐含 velocity_field（单一来源在 applyAaKey）
+    # aa_eff 在 main 开头算（guard_flags 也要它），这里只派生其余三态。
+    taaRequested = cfg.aa_eff == "taa"
+    fsrRequested = cfg.aa_eff == "fsr"
+    ssrRequested = cfg.ssr or set_switch_on(cfg.overrides, "runtime", "ssr.enabled")
+    velRequested = (cfg.velocity_field or fsrRequested
+                    or set_switch_on(cfg.overrides, "runtime", "velocity_field"))
+    vel = re.search(r"velocity \(RGBA16F[^)]*\): (\d+)x(\d+) slot (\d+)", log)
+    velUnsupported = "velocity: 图形态不支持" in log
+    if velRequested and not vel:
+        # 区分两种"没建 RT"：**图形态不支持**（装饰器 warn 后正常跳过，offscreen 变体用
+        # blit 上屏，无"写 swapchain 且采色"的 pass = 与 decorateTaaPass 同判据）与
+        # **静默没落图**（键名漂了 / 日志文案改了 / 装饰器漏调）。前者是正确行为，
+        # 一律 FAIL 会把"正确不支持"报成缺陷，反过来也不许它拿"不支持"当遮羞布：
+        # 必须真的看到那条 warn 才算数。
+        if not velUnsupported:
+            fail("请求 velocity_field（--velocity-field 或 --set velocity_field=true 或 aa=fsr "
+                 "隐含）但日志里既没有 velocity RT 行、也没有"
+                 "「velocity: 图形态不支持」告警 ⟹ 装饰器静默没落图"
+                 "（配置键名漂了 / 启动日志文案改了 / 装饰调用被删）", say=say)
+        say("速度场: 本图变体不支持（装饰器已 warn 并跳过）✓ 非错误")
+    if not velRequested and vel:
+        fail(f"默认档（velocity_field 关）却建了 velocity RT：{vel.group(0)}"
+             " ⟹ 门关不拢，「图里没有这个 pass」的逐位不变红线失效", say=say)
+    # ssr 生效核对（批 15.1 前半；批 15.3 子步 B 起 = **两 RT 两 pass**）。同 velocity 的
+    # 双向纪律：正向 = 门开必须 **trace 与 apply 两行都在**（只缺一行 = 半条链，图能跑但
+    # 结果错，单行判据抓不住）；反向 = 门关一行都不许有——本判据的本体仍是「门开 = 门关
+    # 逐位相同」，它依赖「门关 = 图里根本没有这两个 pass」，门关不拢时截图恰好也可能相同，
+    # 画面判据抓不住，只有日志能抓。尺寸判据分档：apply RT = 渲染网格（消费者全在渲染
+    # 网格上工作）、trace RT = 渲染网格 × 0.5 向下取整（口径 = C++ scaleRtExtent）。
+    ssrRt = re.search(r"ssr \(RGBA16F[^)]*\): (\d+)x(\d+) slot (\d+)", log)
+    ssrTraceRt = re.search(r"ssr_trace \(RGBA16F[^)]*\): (\d+)x(\d+) slot (\d+)", log)
+    ssrUnsupported = "ssr: 图形态不支持" in log
+    if ssrRequested and not (ssrRt and ssrTraceRt):
+        if not ssrUnsupported:
+            fail("请求 ssr（--ssr 或 --set ssr.enabled=true）但日志里 trace/apply 两行 RT 不齐"
+                 f"（trace={'有' if ssrTraceRt else '无'}, apply={'有' if ssrRt else '无'}），"
+                 "也没有「ssr: 图形态不支持」告警 ⟹ 装饰器静默没落图或只落了一半"
+                 "（配置键名漂了 / 启动日志文案改了 / 装饰调用被删）", say=say)
+        say("SSR    : 本图变体不支持（装饰器已 warn 并跳过）✓ 非错误")
+    if not ssrRequested and (ssrRt or ssrTraceRt):
+        fail(f"默认档（ssr.enabled 关）却建了 ssr RT：{(ssrRt or ssrTraceRt).group(0)}"
+             " ⟹ 门关不拢，「门开 = 门关逐位相同」红线的前提失效", say=say)
+    if ssrRt and (int(ssrRt.group(1)), int(ssrRt.group(2))) != render_grid:
+        fail(f"ssr(apply) RT {ssrRt.group(1)}x{ssrRt.group(2)} ≠ 渲染网格 "
+             f"{render_grid[0]}x{render_grid[1]}——apply 的消费者（tonemap/taa/ao_apply）"
+             "都在渲染网格上工作", say=say)
+    traceGrid = (max(1, render_grid[0] // 2), max(1, render_grid[1] // 2))
+    if ssrTraceRt and (int(ssrTraceRt.group(1)), int(ssrTraceRt.group(2))) != traceGrid:
+        fail(f"ssr_trace RT {ssrTraceRt.group(1)}x{ssrTraceRt.group(2)} ≠ 半渲染网格 "
+             f"{traceGrid[0]}x{traceGrid[1]}（floor，口径 = scaleRtExtent）"
+             "——march 成本随像素数走，缩放口径错 = 成本账整个不对", say=say)
+    if ssrRt and ssrTraceRt:
+        say(f"SSR    : apply {ssrRt.group(1)}x{ssrRt.group(2)} = 渲染网格 ✓ / "
+            f"trace {ssrTraceRt.group(1)}x{ssrTraceRt.group(2)} = 半网格 ✓")
+    # aa=fsr 生效核对（批 14.5 的门 + 批 14.6 的槽位）。同 velocity 的纪律：双向都要核。
+    # 正向 = 门开必须看到 vendor context 构造行；反向 = 门关**一行都不许有**——FSR 是
+    # 图外 compute，门关不拢时截图未必变（本批它的输出尚无消费者），只看画面会漏。
+    fsr = re.search(r"FsrUpscaler: context 就绪[^\n]*?render=(\d+)x(\d+) upscale=(\d+)x(\d+)", log)
+    # 引擎自己的「开门但接不起来」降级（computeFsrUsable，main_scene）：图形态不支持
+    # （offscreen 图无 scene_hdr/velocity/tonemap，或缺 shader16）时 warn **点名原因位**
+    # 并正常不接 = 正确行为。与 velocity/SSR 的「图形态不支持」放行同判据：必须真看到
+    # 那条 warn 才算数，不许拿"不支持"当遮羞布。（原 `fsr: 输入附件不齐` 分支是死码：
+    # 引擎无此文案，且"输入不齐"现行设计就是这条降级 warn，不是失败。）
+    fsrDegraded = re.search(r'aa="fsr" 开门但接不起来[^\n]*', log)
+    if fsrRequested and not fsr:
+        if fsrDegraded:
+            say(f"FSR    : 本图变体接不起来，引擎已 warn 点名原因位 ✓ 非错误"
+                f"（{fsrDegraded.group(0).split('] ')[-1].strip()}）")
+        else:
+            fail("请求 --aa fsr 但日志里没有「FsrUpscaler: context 就绪」行，"
+                 "也没有「aa=\"fsr\" 开门但接不起来」降级告警"
+                 " ⟹ 装饰/门链路静默没落图（配置键名漂了 / 生效判据被改 / 构造日志文案改了）", say=say)
+    if not fsrRequested and fsr:
+        fail(f"默认档（aa 不是 fsr）却构造了 FSR context：{fsr.group(0)}"
+             " ⟹ 门关不拢，「零构造零命令」的逐位不变红线失效", say=say)
+    if fsr:
+        # FSR 的两个尺寸必须是**实际**渲染网格与后缓冲网格：vendor 的内部共享图按
+        # maxRenderSize 定尺寸，填错 = dispatch 硬失败（FFX_ERROR_OUT_OF_RANGE）。
+        if (int(fsr.group(1)), int(fsr.group(2))) != render_grid:
+            fail(f"FSR render={fsr.group(1)}x{fsr.group(2)} ≠ 渲染网格 "
+                 f"{render_grid[0]}x{render_grid[1]}", say=say)
+        say(f"FSR: context 就绪 render={fsr.group(1)}x{fsr.group(2)} "
+            f"upscale={fsr.group(3)}x{fsr.group(4)} ✓")
+    # aa=taa 生效核对。同 velocity/FSR 的纪律：双向都要核。
+    # 反向这条尤其值钱：**出厂默认是 aa="off"**（`configs/runtime.lua`），
+    # 而红线 A（`fdece9d0…`）就是那张图。若哪天门关不拢、taa pass 悄悄进了图，红线 A 的
+    # 含义就变了 —— 而单看截图未必发现（TAA 开也可能只改时域不改这一帧）。
+    # taaRequested 的口径见上面「这扇门到底开没开」的统一口径（`--set aa="taa"` 也算开）。
+    taaRt = re.search(r"taa \(RGBA16F\)[^\n]*out slot (\d+)", log)
+    if taaRequested and not taaRt:
+        fail("请求 --aa taa 但日志里没有「taa (RGBA16F): … out slot …」行"
+             " ⟹ TAA pass 静默没进图（runtime.lua 键名漂了 / decorateTaaPass 的图形态判据"
+             "变了 / 启动日志文案改了）", say=say)
+    if not taaRequested and taaRt:
+        fail(f"默认档（aa 不是 taa）却建了 taa RT：{taaRt.group(0)}"
+             " ⟹ 门关不拢，红线 A（出厂默认图）的含义已失效", say=say)
+    if taaRt:
+        say(f"TAA  : {taaRt.group(0)} ✓"
+            + (f"  clip_mode={cfg.clip}" if cfg.clip is not None else ""))
+    # fsr 时域调参生效核对。**必须读「生效」而不是「请求」**：日志行报的是引擎实际接上的
+    # 档位，而配置里写的可能是另一回事（"静默换臂"的引擎侧版本就藏在这个差里）。
+    # 批 14.6 三态之后「TAA 在图 = true 且 temporal 请求开」已不可能同时成立（aa 一个槽位），
+    # 所以这里判关只可能是：velocity 没进图 ⟹ fsrUsable 假 / 图形态不支持 / 本来就没请求。
+    fsrTemp = re.search(r"fsr temporal: (开|关).*?fsr_temporal = (\w+)，TAA 在图 = (\w+)", log)
+    # 🔴 两条判据的口径**故意不对称**，别"顺手统一"：
+    #   正向只认具名旗标 `--fsr-temporal`（guard_flags 已保证它必须配 aa=fsr，请求了就必须看到）；
+    #   反向认两条来路（`--set fsr.temporal=true` 也是合法开法）。反向若只看具名旗标，
+    #   `--set aa=fsr --set fsr.temporal=true` 会被判成"门关不拢"——而门是开着的。
+    fsrTempRequested = (cfg.fsr_temporal
+                        or set_switch_on(cfg.overrides, "runtime", "fsr.temporal"))
+    if cfg.fsr_temporal and not (fsrTemp and fsrTemp.group(1) == "开"):
+        detail = (f"引擎判关（配置键 = {fsrTemp.group(2)}，TAA 在图 = {fsrTemp.group(3)}）"
+                  if fsrTemp else "日志里没有「fsr temporal:」行（fsrUsable 为假 = FSR 根本没接进图）")
+        fail(f"请求 --fsr-temporal 但 vendor 时域没开：{detail}"
+             " ⟹ 这条读数会是「纯空间升频」却被记成时域档", say=say)
+    if not fsrTempRequested and fsrTemp and fsrTemp.group(1) == "开":
+        fail("默认档（fsr_temporal 关）却开着 vendor 时域 ⟹ 门关不拢，"
+             "「FSR 关 = 逐位不变」的红线含义已失效。⚠ 若这一档是用 `--set aa=fsr` 进来的：\n"
+             "     fsr 块出厂值是 temporal=true / jitter=true（= vendor 设计点），而工具的每个臂\n"
+             "     必须是**自己写出来的那个配置**（不写键 = 静默换臂）——显式补\n"
+             "     `--set fsr.temporal=false --set fsr.jitter=false` 才是 --aa fsr 的纯空间臂", say=say)
+    # fsr_jitter 生效核对（正向 = 必须看到接入行并读出相位数；反向 = 门关一行不许有）。
+    # 反向的口径与 fsr_temporal 同：`--set fsr.jitter=true` 也是一条合法开法。
+    jit = re.search(r"fsr_jitter: 抖动已接入投影[^\n]*?相位 (\d+)", log)
+    if cfg.fsr_jitter and not jit:
+        fail("请求 --fsr-jitter 但日志里没有「fsr_jitter: 抖动已接入投影」行"
+             " ⟹ 抖动静默没接（键名漂了 / 生效判据被改 / 日志文案改了）", say=say)
+    if not (cfg.fsr_jitter or set_switch_on(cfg.overrides, "runtime", "fsr.jitter")) and jit:
+        fail(f"默认档（fsr_jitter 关）却把抖动接进了投影：{jit.group(0)} ⟹ 门关不拢"
+             "（`--set aa=fsr` 进来的话要显式 `--set fsr.jitter=false`，理由见上面 temporal 那条）", say=say)
+    if fsrTemp or jit:
+        bits = []
+        if fsrTemp:
+            bits.append("时域=vendor累积历史" if fsrTemp.group(1) == "开" else "时域=纯空间")
+        if jit:
+            bits.append(f"抖动相位 {jit.group(1)}")
+        say(f"FSR档: {' · '.join(bits)} ✓")
+    if vel:
+        # 速度场必须与深度**同网格**：它的输出单位是"渲染分辨率像素"，网格不同则单位错。
+        if (int(vel.group(1)), int(vel.group(2))) != render_grid:
+            fail(f"velocity RT {vel.group(1)}x{vel.group(2)} ≠ 渲染网格 "
+                 f"{render_grid[0]}x{render_grid[1]}——速度场必须与深度同网格", say=say)
+        say(f"速度场: {vel.group(0)} = 渲染网格 ✓")
+    if size and dims and gbuf is None and dims != size:
+        fail(f"请求 --size {size[0]}x{size[1]} 实得 {dims[0]}x{dims[1]}"
+             f"（headless 下 llm_shot.size 应当直接生效；启动行：{grid.group(0) if grid else '无 Swapchain extent 日志'}）", say=say)
+    say(f"网格   : 后缓冲 {dims[0]}x{dims[1]}  渲染 {render_grid[0]}x{render_grid[1]}"
+        f"  render_scale={eff.group(1)}"
+        if dims else "网格   : 未取到（PNG 头异常？）")
     return errors, warnings
 
 
@@ -714,235 +1003,23 @@ def main() -> int:
 
     code, log, secs = run_engine(exe, args.timeout, args.sync)
     LOG_PATH.write_text(log, encoding="utf-8")
-    errors, warnings = report(log)
-    # 同步验证档的**生效**核对（同 render_scale/velocity 的纪律：请求 ≠ 生效）。这里能廉价
-    # 抓到的静默失效只有一种，但恰好是最贵的一种：diagnostics.no_vvl = true 时引擎根本不
-    # 启用验证层 ⟹ syncval env 再对也一条不报，errors=0 会被读成"同步干净"。启动日志的
-    # "diagnostics:" 行只列非默认值（见 diagnostics_impl.cppm），故出现 no_vvl 即为 true。
-    if args.sync:
-        if re.search(r"diagnostics:.*no_vvl", log):
-            fail("--sync 档下 no_vvl = true ⟹ 验证层没启用，syncval 等于没跑"
-                 "（本档的 errors=0 不作数，改回 no_vvl = false 再测）")
-        hazards = [ln for ln in log.splitlines() if "hazard detected" in ln]
-        print(f"同步验证: hazard {len(hazards)} 条"
-              + (f"（{hazards[0].split('hazard detected')[0].split('] ')[-1].strip()} …）"
-                 if hazards else ""))
-
     shot_path = BUILD_RGL / expect_file
-    if code != 0:
-        print(f"[smoke] 引擎退出码 {code}，日志尾部：\n{tail(log)}")
-        fail("引擎非零退出")
-    if "截图已保存" not in log or not shot_path.is_file():
-        print(f"[smoke] 日志尾部：\n{tail(log)}")
-        fail(f"没拿到截图 {expect_file}——llm_debug 链路没通，见 {LOG_PATH.relative_to(ROOT)}")
-    # dump_gbuf 档的**出图名核对**：光"磁盘上有张 gbuffer_N.png"不够——它可能是上一次别的
-    # 通道/别的尺寸留下的。核对引擎自己报的路径（ecs_frame_diag 的「截图已保存 (<路径>)」行）
-    # 与按通道号推出的名字一致，才算这次注入真的落到了这张图上。
-    if gbuf is not None:
-        saved = re.search(r"截图已保存 \(([^)]*)\)", log)
-        want = f"gbuffer_{gbuf}.png"
-        if not saved or not saved.group(1).endswith(want):
-            fail(f"dump_gbuf={gbuf} 档下引擎报的出图路径不是 {want}"
-                 f"（日志：{saved.group(1) if saved else '没有「截图已保存」行'}）"
-                 " ⟹ 出图名口径变了，本工具的核对与 diffstruct 的 --gbuf 都会认错图")
-        print(f"出图名 : {saved.group(1)} ✓（与 dump_gbuf={gbuf} 一致）")
-
-    for ln in errors[:5]:
-        print(f"[smoke] ERROR 行: {ln.strip()}")
-    if len(errors) > 5:
-        print(f"[smoke] ...（其余 {len(errors) - 5} 条见日志）")
-    grid = re.search(r"Swapchain extent: (\d+)x(\d+)", log)
-    dims = png_size(shot_path)
-    # 后缓冲核对（普通档）：回读链路与交换链对不上 ⟹ 这张图不能当判据。
-    # dump_gbuf 档**跳过这一条**：它直读的是渲染网格上的 G-buffer RT，与后缓冲网格本来就
-    # 可以不同（render_scale < 1 时必然不同），拿后缓冲判它 = 在合法档上误杀。改与渲染网格比，
-    # 见下面 render_grid 处的核对。
-    if gbuf is None and grid and dims and dims != (int(grid.group(1)), int(grid.group(2))):
-        fail(f"截图尺寸 {dims[0]}x{dims[1]} ≠ 后缓冲 {grid.group(1)}x{grid.group(2)}"
-             f"——回读链路与交换链对不上，这张图不能当判据")
-
-    # render_scale 生效核对（批 14.3）。**必须核对而不是只打补丁**：patch_lua 只保证
-    # "配置文件里改了"，不保证"引擎按它算了"（键名漂了 / 引擎读错表 / 被钳制）。一个
-    # 静默跑在默认档上的 --render-scale 会把"0.5 档回归"做成"1.0 档回归"，而两者都绿。
-    eff = re.search(r"render scale = (\S+) → render (\d+)x(\d+) \(swapchain (\d+)x(\d+)\)", log)
-    if not eff:
-        fail("日志里没有 `render scale = ... → render WxH (swapchain WxH)` 行"
-             "——引擎的口径日志被删了或文案改了，批 14.3 的判据失去出处")
-    if args.render_scale is not None:
-        got = float(eff.group(1))
-        if abs(got - args.render_scale) > 1e-6:
-            fail(f"请求 --render-scale {args.render_scale} 引擎实际生效 {got}"
-                 f"（合法区间 [0.25, 1.0]，越界会被钳制；非有限值回落 1.0）")
-    render_grid = (int(eff.group(2)), int(eff.group(3)))
-    # dump_gbuf 档的尺寸判据换基准（上面跳过后缓冲核对的对应另一半）：G-buffer RT 与深度
-    # **同网格**（渲染网格），diffstruct 的 --gbuf 又要求它与 A/B 两图同尺寸，所以这里必须
-    # 真的等于渲染网格——不等就是采集错档（比如 render_scale 不是 1 的那一档）。
-    if gbuf is not None and dims and dims != render_grid:
-        fail(f"gbuf 出图 {dims[0]}x{dims[1]} ≠ 渲染网格 {render_grid[0]}x{render_grid[1]}"
-             "——dump_gbuf 直读的是渲染分辨率上的 G-buffer RT；要与差分对同尺寸请配 render_scale=1")
-    # --size 在 dump_gbuf 档**不是不核**，而是换个对象核：那张图量不到"后缓冲是不是这个尺寸"
-    # （它不经过后缓冲），但渲染网格必须等于请求尺寸，否则 --size 被静默忽略也会一路绿。
-    if gbuf is not None and size and render_grid != size:
-        fail(f"请求 --size {size[0]}x{size[1]}，dump_gbuf 档的渲染网格却是 "
-             f"{render_grid[0]}x{render_grid[1]}——--size 没生效（llm_shot.size 被别处盖掉？）")
-    # velocity_field 生效核对（批 14.4）。同 render_scale 的纪律：patch 只保证"配置里写了"，
-    # 不保证"引擎按它建了 RT"。**反向同样要核**：默认档不该出现 velocity RT 行——出现了就说明
-    # 门关不拢（图里多了一个 pass，而逐位不变红线单看截图未必抓得住）。
-    # ── 「这扇门到底开没开」的统一口径 ──────────────────────────────────────────
-    # 🔴 三条来路必须并成一条，否则下面的**反向**判据（门关不拢）会拿「门关」的假设去判
-    # 一门其实开着的图，把正确行为报成缺陷：
-    #   ① 具名旗标：--ssr / --velocity-field / --aa taa|fsr
-    #   ② `--set [runtime:]KEY=VALUE` 这条**等价**来路（低频/一次性臂的唯一入口）
-    #   ③ 引擎解析期的**隐含依赖**：aa=fsr 隐含 velocity_field（单一来源在 applyAaKey）
-    # aaEff 在 main 开头算（guard_flags 也要它），这里只派生其余三态。
-    taaRequested = aaEff == "taa"
-    fsrRequested = aaEff == "fsr"
-    ssrRequested = args.ssr or set_switch_on(args.overrides, "runtime", "ssr.enabled")
-    velRequested = (args.velocity_field or fsrRequested
-                    or set_switch_on(args.overrides, "runtime", "velocity_field"))
-    vel = re.search(r"velocity \(RGBA16F[^)]*\): (\d+)x(\d+) slot (\d+)", log)
-    velUnsupported = "velocity: 图形态不支持" in log
-    if velRequested and not vel:
-        # 区分两种"没建 RT"：**图形态不支持**（装饰器 warn 后正常跳过，offscreen 变体用
-        # blit 上屏，无"写 swapchain 且采色"的 pass = 与 decorateTaaPass 同判据）与
-        # **静默没落图**（键名漂了 / 日志文案改了 / 装饰器漏调）。前者是正确行为，
-        # 一律 FAIL 会把"正确不支持"报成缺陷，反过来也不许它拿"不支持"当遮羞布：
-        # 必须真的看到那条 warn 才算数。
-        if not velUnsupported:
-            fail("请求 velocity_field（--velocity-field 或 --set velocity_field=true 或 aa=fsr "
-                 "隐含）但日志里既没有 velocity RT 行、也没有"
-                 "「velocity: 图形态不支持」告警 ⟹ 装饰器静默没落图"
-                 "（配置键名漂了 / 启动日志文案改了 / 装饰调用被删）")
-        print("速度场: 本图变体不支持（装饰器已 warn 并跳过）✓ 非错误")
-    if not velRequested and vel:
-        fail(f"默认档（velocity_field 关）却建了 velocity RT：{vel.group(0)}"
-             " ⟹ 门关不拢，「图里没有这个 pass」的逐位不变红线失效")
-    # ssr 生效核对（批 15.1 前半；批 15.3 子步 B 起 = **两 RT 两 pass**）。同 velocity 的
-    # 双向纪律：正向 = 门开必须 **trace 与 apply 两行都在**（只缺一行 = 半条链，图能跑但
-    # 结果错，单行判据抓不住）；反向 = 门关一行都不许有——本判据的本体仍是「门开 = 门关
-    # 逐位相同」，它依赖「门关 = 图里根本没有这两个 pass」，门关不拢时截图恰好也可能相同，
-    # 画面判据抓不住，只有日志能抓。尺寸判据分档：apply RT = 渲染网格（消费者全在渲染
-    # 网格上工作）、trace RT = 渲染网格 × 0.5 向下取整（口径 = C++ scaleRtExtent）。
-    ssrRt = re.search(r"ssr \(RGBA16F[^)]*\): (\d+)x(\d+) slot (\d+)", log)
-    ssrTraceRt = re.search(r"ssr_trace \(RGBA16F[^)]*\): (\d+)x(\d+) slot (\d+)", log)
-    ssrUnsupported = "ssr: 图形态不支持" in log
-    if ssrRequested and not (ssrRt and ssrTraceRt):
-        if not ssrUnsupported:
-            fail("请求 ssr（--ssr 或 --set ssr.enabled=true）但日志里 trace/apply 两行 RT 不齐"
-                 f"（trace={'有' if ssrTraceRt else '无'}, apply={'有' if ssrRt else '无'}），"
-                 "也没有「ssr: 图形态不支持」告警 ⟹ 装饰器静默没落图或只落了一半"
-                 "（配置键名漂了 / 启动日志文案改了 / 装饰调用被删）")
-        print("SSR    : 本图变体不支持（装饰器已 warn 并跳过）✓ 非错误")
-    if not ssrRequested and (ssrRt or ssrTraceRt):
-        fail(f"默认档（ssr.enabled 关）却建了 ssr RT：{(ssrRt or ssrTraceRt).group(0)}"
-             " ⟹ 门关不拢，「门开 = 门关逐位相同」红线的前提失效")
-    if ssrRt and (int(ssrRt.group(1)), int(ssrRt.group(2))) != render_grid:
-        fail(f"ssr(apply) RT {ssrRt.group(1)}x{ssrRt.group(2)} ≠ 渲染网格 "
-             f"{render_grid[0]}x{render_grid[1]}——apply 的消费者（tonemap/taa/ao_apply）"
-             "都在渲染网格上工作")
-    traceGrid = (max(1, render_grid[0] // 2), max(1, render_grid[1] // 2))
-    if ssrTraceRt and (int(ssrTraceRt.group(1)), int(ssrTraceRt.group(2))) != traceGrid:
-        fail(f"ssr_trace RT {ssrTraceRt.group(1)}x{ssrTraceRt.group(2)} ≠ 半渲染网格 "
-             f"{traceGrid[0]}x{traceGrid[1]}（floor，口径 = scaleRtExtent）"
-             "——march 成本随像素数走，缩放口径错 = 成本账整个不对")
-    if ssrRt and ssrTraceRt:
-        print(f"SSR    : apply {ssrRt.group(1)}x{ssrRt.group(2)} = 渲染网格 ✓ / "
-              f"trace {ssrTraceRt.group(1)}x{ssrTraceRt.group(2)} = 半网格 ✓")
-    # aa=fsr 生效核对（批 14.5 的门 + 批 14.6 的槽位）。同 velocity 的纪律：双向都要核。
-    # 正向 = 门开必须看到 vendor context 构造行；反向 = 门关**一行都不许有**——FSR 是
-    # 图外 compute，门关不拢时截图未必变（本批它的输出尚无消费者），只看画面会漏。
-    fsr = re.search(r"FsrUpscaler: context 就绪[^\n]*?render=(\d+)x(\d+) upscale=(\d+)x(\d+)", log)
-    # 引擎自己的「开门但接不起来」降级（computeFsrUsable，main_scene）：图形态不支持
-    # （offscreen 图无 scene_hdr/velocity/tonemap，或缺 shader16）时 warn **点名原因位**
-    # 并正常不接 = 正确行为。与 velocity/SSR 的「图形态不支持」放行同判据：必须真看到
-    # 那条 warn 才算数，不许拿"不支持"当遮羞布。（原 `fsr: 输入附件不齐` 分支是死码：
-    # 引擎无此文案，且"输入不齐"现行设计就是这条降级 warn，不是失败。）
-    fsrDegraded = re.search(r'aa="fsr" 开门但接不起来[^\n]*', log)
-    if fsrRequested and not fsr:
-        if fsrDegraded:
-            print(f"FSR    : 本图变体接不起来，引擎已 warn 点名原因位 ✓ 非错误"
-                  f"（{fsrDegraded.group(0).split('] ')[-1].strip()}）")
-        else:
-            fail("请求 --aa fsr 但日志里没有「FsrUpscaler: context 就绪」行，"
-                 "也没有「aa=\"fsr\" 开门但接不起来」降级告警"
-                 " ⟹ 装饰/门链路静默没落图（配置键名漂了 / 生效判据被改 / 构造日志文案改了）")
-    if not fsrRequested and fsr:
-        fail(f"默认档（aa 不是 fsr）却构造了 FSR context：{fsr.group(0)}"
-             " ⟹ 门关不拢，「零构造零命令」的逐位不变红线失效")
-    if fsr:
-        # FSR 的两个尺寸必须是**实际**渲染网格与后缓冲网格：vendor 的内部共享图按
-        # maxRenderSize 定尺寸，填错 = dispatch 硬失败（FFX_ERROR_OUT_OF_RANGE）。
-        if (int(fsr.group(1)), int(fsr.group(2))) != render_grid:
-            fail(f"FSR render={fsr.group(1)}x{fsr.group(2)} ≠ 渲染网格 "
-                 f"{render_grid[0]}x{render_grid[1]}")
-        print(f"FSR: context 就绪 render={fsr.group(1)}x{fsr.group(2)} "
-              f"upscale={fsr.group(3)}x{fsr.group(4)} ✓")
-    # aa=taa 生效核对。同 velocity/FSR 的纪律：双向都要核。
-    # 反向这条尤其值钱：**出厂默认是 aa="off"**（`configs/runtime.lua`），
-    # 而红线 A（`fdece9d0…`）就是那张图。若哪天门关不拢、taa pass 悄悄进了图，红线 A 的
-    # 含义就变了 —— 而单看截图未必发现（TAA 开也可能只改时域不改这一帧）。
-    # taaRequested 的口径见上面「这扇门到底开没开」的统一口径（`--set aa="taa"` 也算开）。
-    taaRt = re.search(r"taa \(RGBA16F\)[^\n]*out slot (\d+)", log)
-    if taaRequested and not taaRt:
-        fail("请求 --aa taa 但日志里没有「taa (RGBA16F): … out slot …」行"
-             " ⟹ TAA pass 静默没进图（runtime.lua 键名漂了 / decorateTaaPass 的图形态判据"
-             "变了 / 启动日志文案改了）")
-    if not taaRequested and taaRt:
-        fail(f"默认档（aa 不是 taa）却建了 taa RT：{taaRt.group(0)}"
-             " ⟹ 门关不拢，红线 A（出厂默认图）的含义已失效")
-    if taaRt:
-        print(f"TAA  : {taaRt.group(0)} ✓"
-              + (f"  clip_mode={args.clip}" if args.clip is not None else ""))
-    # fsr 时域调参生效核对。**必须读「生效」而不是「请求」**：日志行报的是引擎实际接上的
-    # 档位，而配置里写的可能是另一回事（"静默换臂"的引擎侧版本就藏在这个差里）。
-    # 批 14.6 三态之后「TAA 在图 = true 且 temporal 请求开」已不可能同时成立（aa 一个槽位），
-    # 所以这里判关只可能是：velocity 没进图 ⟹ fsrUsable 假 / 图形态不支持 / 本来就没请求。
-    fsrTemp = re.search(r"fsr temporal: (开|关).*?fsr_temporal = (\w+)，TAA 在图 = (\w+)", log)
-    # 🔴 两条判据的口径**故意不对称**，别"顺手统一"：
-    #   正向只认具名旗标 `--fsr-temporal`（guard_flags 已保证它必须配 aa=fsr，请求了就必须看到）；
-    #   反向认两条来路（`--set fsr.temporal=true` 也是合法开法）。反向若只看具名旗标，
-    #   `--set aa=fsr --set fsr.temporal=true` 会被判成"门关不拢"——而门是开着的。
-    fsrTempRequested = (args.fsr_temporal
-                        or set_switch_on(args.overrides, "runtime", "fsr.temporal"))
-    if args.fsr_temporal and not (fsrTemp and fsrTemp.group(1) == "开"):
-        detail = (f"引擎判关（配置键 = {fsrTemp.group(2)}，TAA 在图 = {fsrTemp.group(3)}）"
-                  if fsrTemp else "日志里没有「fsr temporal:」行（fsrUsable 为假 = FSR 根本没接进图）")
-        fail(f"请求 --fsr-temporal 但 vendor 时域没开：{detail}"
-             " ⟹ 这条读数会是「纯空间升频」却被记成时域档")
-    if not fsrTempRequested and fsrTemp and fsrTemp.group(1) == "开":
-        fail("默认档（fsr_temporal 关）却开着 vendor 时域 ⟹ 门关不拢，"
-             "「FSR 关 = 逐位不变」的红线含义已失效。⚠ 若这一档是用 `--set aa=fsr` 进来的：\n"
-             "     fsr 块出厂值是 temporal=true / jitter=true（= vendor 设计点），而工具的每个臂\n"
-             "     必须是**自己写出来的那个配置**（不写键 = 静默换臂）——显式补\n"
-             "     `--set fsr.temporal=false --set fsr.jitter=false` 才是 --aa fsr 的纯空间臂")
-    # fsr_jitter 生效核对（正向 = 必须看到接入行并读出相位数；反向 = 门关一行不许有）。
-    # 反向的口径与 fsr_temporal 同：`--set fsr.jitter=true` 也是一条合法开法。
-    jit = re.search(r"fsr_jitter: 抖动已接入投影[^\n]*?相位 (\d+)", log)
-    if args.fsr_jitter and not jit:
-        fail("请求 --fsr-jitter 但日志里没有「fsr_jitter: 抖动已接入投影」行"
-             " ⟹ 抖动静默没接（键名漂了 / 生效判据被改 / 日志文案改了）")
-    if not (args.fsr_jitter or set_switch_on(args.overrides, "runtime", "fsr.jitter")) and jit:
-        fail(f"默认档（fsr_jitter 关）却把抖动接进了投影：{jit.group(0)} ⟹ 门关不拢"
-             "（`--set aa=fsr` 进来的话要显式 `--set fsr.jitter=false`，理由见上面 temporal 那条）")
-    if fsrTemp or jit:
-        bits = []
-        if fsrTemp:
-            bits.append("时域=vendor累积历史" if fsrTemp.group(1) == "开" else "时域=纯空间")
-        if jit:
-            bits.append(f"抖动相位 {jit.group(1)}")
-        print(f"FSR档: {' · '.join(bits)} ✓")
-    if vel:
-        # 速度场必须与深度**同网格**：它的输出单位是"渲染分辨率像素"，网格不同则单位错。
-        if (int(vel.group(1)), int(vel.group(2))) != render_grid:
-            fail(f"velocity RT {vel.group(1)}x{vel.group(2)} ≠ 渲染网格 "
-                 f"{render_grid[0]}x{render_grid[1]}——速度场必须与深度同网格")
-        print(f"速度场: {vel.group(0)} = 渲染网格 ✓")
-    if size and dims and gbuf is None and dims != size:
-        fail(f"请求 --size {size[0]}x{size[1]} 实得 {dims[0]}x{dims[1]}"
-             f"（headless 下 llm_shot.size 应当直接生效；启动行：{grid.group(0) if grid else '无 Swapchain extent 日志'}）")
-    print(f"网格   : 后缓冲 {dims[0]}x{dims[1]}  渲染 {render_grid[0]}x{render_grid[1]}"
-          f"  render_scale={eff.group(1)}"
-          if dims else "网格   : 未取到（PNG 头异常？）")
+    # 判据段整体住进 verdicts()（债-130①），它自己不碰磁盘 ⟹ 图在不在、PNG 多大由这里读好传进
+    # 去。🔴 **顺序是隐式契约，别把这两行挪进 verdicts 之后再算**：
+    #   · 为什么必须先读：verdicts 里「没拿到截图」那条判据要在缺图时干净红掉，而 `png_size`
+    #     对不存在的文件会抛 FileNotFoundError。`is_file()` 先判 = 缺图走判据、不走异常。
+    #   · 残余差异窗口（重构前 png_size 在 code!=0 判据**之后**才跑）：只剩「引擎非零退出 且
+    #     截图文件存在但 open() 抛 OSError（权限/IO 错）」这一种组合——原来是干净 FAIL，现在会
+    #     抛 traceback。它不出现在任何正常路径上（文件在且可读才可能进 open），不值得为它把
+    #     判据函数重新绑上磁盘；真要收，就把这两行做成 verdicts 的惰性入参（Callable）。
+    exists = shot_path.is_file()
+    errors, warnings = verdicts(code, log, VerdictCfg(
+        expect_file=expect_file, shot_exists=exists,
+        dims=png_size(shot_path) if exists else None, size=size,
+        render_scale=args.render_scale, velocity_field=args.velocity_field,
+        ssr=args.ssr, fsr_temporal=args.fsr_temporal, fsr_jitter=args.fsr_jitter,
+        clip=args.clip, sync=args.sync, aa_eff=aaEff, overrides=args.overrides,
+        gbuf=gbuf))
     kb = shot_path.stat().st_size // 1024
     if args.mode == "smoke" and gbuf is None:
         print(f"截图   : {kb} KB（冒烟探针，随 staging 丢弃）")
@@ -960,13 +1037,21 @@ def main() -> int:
 
 
 def selftest(quiet: bool = False) -> list[str]:
-    """`patch_lua` 的自检（无引擎、毫秒级；由 `regress selftest` 调用）。
+    """量具自检（无引擎、毫秒级；由 `regress selftest` 调用）。两半，各钉一类静默失效：
 
-    **为什么必须有它**：单行子表那个 bug 的失效形态是**静默改坏配置**——护栏全绿、smoke 报
-    PASS errors=0，而量的是默认档（`--set shadow:izb.on=true` 曾把同块的 `grid`/`dump_frame`
-    一起吃掉）。"看起来在工作其实没有"这类错，靠下一次人肉跑发现不了，只能靠一条每次都跑的
-    自检。断言全部打在**真配置的临时副本**上 ⟹ 配置格式变了（比如 izb 块改成多行）也会在这里
-    红，而不是在某次判据里静默失效。
+    **① `patch_lua` 文本补丁器**——单行子表那个 bug 的失效形态是**静默改坏配置**：护栏全绿、
+    smoke 报 PASS errors=0，而量的是默认档（`--set shadow:izb.on=true` 曾把同块的 `grid`/
+    `dump_frame` 一起吃掉）。断言全部打在**真配置的临时副本**上 ⟹ 配置格式变了（比如 izb 块
+    改成多行）也会在这里红，而不是在某次判据里静默失效。
+
+    **② 判据段 `verdicts`（债-130①）**——"看起来在工作其实没有"这类错靠下一次人肉跑发现不了，
+    而判据唯一的资产就是「它还能不能看见东西」。每条判据要**两个方向**都有用例：判据被改坏
+    （失效）要红，判据被**放宽**（正向核对的字面量被削掉 ⟹ 在错误日志上也打 ✓）也要红。
+    后者只有"近似但不等于"的行能抓，而它恰恰是假绿——2026-10-16 实测：42 条"改成不可能匹配"
+    的变异全被抓，21 条"放宽"的变异首轮只抓到 5 条。
+
+    🔴 两半都不许加"要引擎"的用例：selftest 被 regress 在**每次判定前**调用，慢一秒 = 每次
+    回归慢一秒。
     """
     import tempfile
 
@@ -1022,8 +1107,353 @@ def selftest(quiet: bool = False) -> list[str]:
     ok(exits(shadow, "mode", "pcss"), "漏引号（原值是字符串而给的是裸值）必须红")
     ok(exits(shadow, "izb.nope", "1"), "拼错键必须红")
 
+    # ── 判据段（verdicts）的合成现场 —— 债-130① ──────────────────────────────
+    # 为什么这一组必须存在：上面那些用例只保证"配置里写了"，判据段才回答"引擎到底有没有
+    # 按配置跑"。它长在 main() 里时 selftest 对它**零条断言**，26 条 fail() 会不会红只能
+    # 靠读代码推理。判据唯一的资产是「它还能不能看见东西」，所以这里的写法是：每条判据造
+    # 一份**只坏在它身上**的合成日志，断言"红"且"红在它那一条"（needle）。
+    # 骨架那 7 行的形态取自引擎的日志格式串（main_impl.cppm / utils.cppm / vkswapchain.cppm
+    # / main_scene.cppm / render_graph_rtslot.cppm / fsr_upscaler_impl.cppm /
+    # ecs_frame_diag.cppm），不是凭记忆编的——编出来的形态会验出一条根本不存在的判据。
+    vcase = 0
+
+    def vok(cond: bool, detail: str) -> None:
+        """判据段用例的断言。红/不红要精确到判据，但**不逐条挂号**进 done：regress 会把
+        done 逐行打印，四十行合成日志用例会把真正的读数淹掉。"""
+        nonlocal vcase
+        vcase += 1
+        if not cond:
+            raise RuntimeError(f"smoke 自检失败：{detail}")
+
+    def vlog(*extra: str, drop: str = "") -> str:
+        """「全好」启动日志骨架；extra 追加行，drop 按子串删行（造"引擎没打这行"的现场）。"""
+        base = [
+            "[0] [info] [main_impl.cppm:169] headless 模式：脱离 SDL/compositor（1280x720）",
+            "[0] [info] [utils.cppm:333] Selected rendering GPU: Test GPU (score=1)",
+            "[0] [info] [utils.cppm:284] Mesh/task device caps: maxMeshWorkGroupInvocations=256",
+            "[0] [info] [vkswapchain.cppm:464] Swapchain extent: 1280x720 (headless, size config)",
+            "[0] [info] [main_impl.cppm:277] render scale = 1 → render 1280x720 (swapchain 1280x720)",
+            "[0] [info] [main_scene.cppm:828] DGC path: device='Test GPU' graphicsIndirect=false "
+            "computeIndirect=true static=true -> 读回重放 (CPU 回退) [cull_replay=cpu]",
+            "[0] [info] [ecs_frame_diag.cppm:89] llm_debug: 截图已保存 (/abs/.smoke/probe.png) "
+            "— render 1280x720 / swapchain 1280x720 (scale 1)",
+        ]
+        if drop:
+            base = [ln for ln in base if drop not in ln]
+        return "\n".join([*base, *extra])
+
+    def vcfg(**kw) -> VerdictCfg:
+        """合成 cfg：默认 = 「默认档 + 全好」（图在盘上、1280x720、aa/ssr/velocity 全关），
+        用例只写它要改的那一两个字段。"""
+        base = dict(expect_file=".smoke/probe.png", shot_exists=True, dims=(1280, 720))
+        base.update(kw)
+        return VerdictCfg(**base)
+
+    def shot_line(name: str) -> str:
+        """引擎的出图行（dump_gbuf 档引擎忽略 llm_shot.file、名字写死 gbuffer_N.png）。"""
+        return ("[0] [info] [ecs_frame_diag.cppm:89] llm_debug: 截图已保存 (/abs/screenshots/"
+                + name + ") — render 1280x720 / swapchain 1280x720 (scale 1)")
+
+    # 各档的"生效"行（判据正则吃的就是这些形态）
+    VEL = "[0] [info] [render_graph_rtslot.cppm:148] velocity (RGBA16F, 像素单位 prev−cur): 1280x720 slot 5"
+    VEL_SMALL = VEL.replace("1280x720", "640x360")
+    VEL_NO = "[0] [warning] [main_impl.cppm:404] velocity: 图形态不支持速度场装饰（锚点略）"
+    SSR = "[0] [info] [render_graph_rtslot.cppm:195] ssr (RGBA16F, 成片+屏幕空间反射): 1280x720 slot 6"
+    SSR_SMALL = SSR.replace("1280x720", "640x360")
+    SSR_TRACE = ("[0] [info] [render_graph_rtslot.cppm:221] ssr_trace (RGBA16F, premultiplied "
+                 "反射贡献, ×0.5 渲染网格): 640x360 slot 7")
+    SSR_TRACE_FULL = SSR_TRACE.replace("640x360", "1280x720")
+    SSR_NO = "[0] [warning] [main_impl.cppm:463] ssr: 图形态不支持 SSR 装饰（锚点略）"
+    FSR = "[0] [info] [fsr_upscaler_impl.cppm:309] FsrUpscaler: context 就绪（输出槽 8）render=1280x720 upscale=1280x720 vram=12 MiB"
+    FSR_SMALL = FSR.replace("render=1280x720", "render=640x360")
+    FSR_DEGRADED = ('[0] [warning] [main_scene.cppm:646] aa="fsr" 开门但接不起来'
+                    '（velocityDecorated=0 shader16=0 输入齐备=1) ⟹ 不接 FSR，'
+                    'tonemap 色输入保持 scene_hdr')
+    TAA = "[0] [info] [render_graph_rtslot.cppm:123] taa (RGBA16F): 1280x720 out slot 3 / hist slot 4"
+    TEMP_ON = "[0] [info] [main_scene.cppm:687] fsr temporal: 开（配置键 fsr_temporal = true，TAA 在图 = false）"
+    TEMP_OFF = TEMP_ON.replace("temporal: 开", "temporal: 关")
+    JIT = "[0] [info] [main_scene.cppm:139] fsr_jitter: 抖动已接入投影并申报给 FSR（相位 14 = 渲染 1280 / 上屏 720）"
+    NO_VVL = "[0] [warning] [diagnostics_impl.cppm:120] diagnostics: no_vvl = true"
+    HAZARD = "[0] [error] [utils.cppm:210] Sync validation: WRITE_AFTER_WRITE hazard detected"
+    VVL_ERR = "[0] [error] [utils.cppm:210] VUID-VkCmdPipelineBarrier 01133 违规"
+    # 「近似但不等于」的近邻行（⑭ 组用；全部取自引擎真实格式串，行号 = 出处）
+    SHOT_FAIL = "[0] [error] [ecs_frame_diag.cppm:93] llm_debug: 截图失败 (回读超时)"
+    DIAG_OTHER = "[0] [warning] [diagnostics_impl.cppm:62] diagnostics: rpc_port=0 越界（1..65535），回落 8788"
+    HAZARD_EDGE = "[0] [info] [shader_impl.cppm:405] compute hazard: a ↔ b（heap 槽 3）由边 'x' 覆盖"
+    SCALE_PARTIAL = "[0] [info] [main_impl.cppm:277] render scale = 1 → render 1280x720"
+    VEL_OTHER_FMT = VEL.replace("RGBA16F", "R32F")
+    SSR_TRACE_OTHER_FMT = SSR_TRACE.replace("RGBA16F", "R32F")
+    FSR_DISPATCH_FAIL = "[0] [error] [fsr_upscaler_impl.cppm:402] FsrUpscaler: dispatch 失败 (7) —— render=1280x720 upscale=1280x720"
+    FSR_AA_ECHO = '[0] [info] [main_scene.cppm:640] aa="fsr" 已按请求接入（文案改了的那一行）'
+    TAA_HIST_ONLY = "[0] [info] [render_graph_rtslot.cppm:123] taa (RGBA16F): 1280x720 hist slot 4"
+    JIT_NOT_WIRED = "[0] [info] [main_scene.cppm:139] fsr_jitter: 抖动未接入投影（相位 0 = 关）"
+    VEL_NO_SLOT = VEL.replace(" slot 5", "")
+    TAA_OTHER_FMT = TAA.replace("RGBA16F", "RGBA32F")
+    #     taa 判据的**名字锚**：`\(RGBA16F\)[^\n]*out slot` 在删掉 `taa ` 之后会去认任何一张
+    #     RGBA16F 且带 out slot 的行。velocity / ssr / ssr_trace 三张 RT 行今天都不写 "out slot"，
+    #     所以这条在纯引擎输出上是**等价**的——它钉的是「比较对象必须锚在 taa 那一行」，不是某条
+    #     现存文案（同 `surface extent:` 那条占位的口径）。
+    TAA_OTHER_NAME = TAA.replace("] taa (", "] scene_hdr (")
+    SSR_OTHER_FMT = SSR.replace("RGBA16F", "R32F")
+    SSR_TRACE_NO_SLOT = SSR_TRACE.replace(" slot 7", "")
+    SHOT_GBUF_TAILORED = ("[0] [info] [ecs_frame_diag.cppm:89] llm_debug: 截图已保存 "
+                          "(/abs/screenshots/gbuffer_3.png — 1280x720) — render 1280x720")
+    GATE_NO_VVL = "[0] [warning] [gate_lint_impl.cppm:354] gate_lint[no_vvl]: 本门 inert（验证层被关）"
+    DEGRADE_OTHER = "[0] [warning] [main_impl.cppm:463] ssr: 图形态接不起来（forward 图，文案改了）"
+
+    def vrun(code: int, log: str, cfg: VerdictCfg) -> tuple[str, list[str], list[str]]:
+        """跑一遍判据（读数全接进内存），返回 (FAIL 消息, error 行, warning 行)。
+
+        没红 = FAIL 消息为空串。判据段自己崩了（正则没命中还去 `.group()`）也算红，但报成
+        "抛异常"而不是甩裸 traceback——自检的红要说清红在哪。
+        """
+        out: list[str] = []
+        errors: list[str] = []
+        warnings: list[str] = []
+        try:
+            errors, warnings = verdicts(code, log, cfg, say=out.append)
+        except SystemExit:
+            pass
+        except Exception as err:  # noqa: BLE001（判据崩了要报成用例红，不是 traceback）
+            out.append(f"[smoke] FAIL: 判据段抛 {type(err).__name__}: {err}")
+        msg = next((ln[len("[smoke] FAIL: "):] for ln in out
+                    if ln.startswith("[smoke] FAIL: ")), "")
+        return msg, errors, warnings
+
+    def vsay(code: int, log: str, cfg: VerdictCfg) -> list[str]:
+        """跑判据并返回它**打出来的读数行**——读数也会被当权威读，计数口径同样要钉。"""
+        out: list[str] = []
+        try:
+            verdicts(code, log, cfg, say=out.append)
+        except SystemExit:
+            pass
+        return out
+
+    def must_fail(what: str, needle: str, code: int, log: str, cfg: VerdictCfg) -> None:
+        """断言这份合成数据**会红**，且红在 needle 点名的那条判据上。
+
+        🔴 needle 不可省：首条失败即退出，某条判据被改坏后完全可能是**别的**判据先红，
+        只断言"红了"就是假绿。
+        """
+        msg, _, _ = vrun(code, log, cfg)
+        vok(needle in msg, f"{what}：应红在 {needle!r}，实得 {msg[:80]!r}")
+
+    def must_pass(what: str, code: int, log: str, cfg: VerdictCfg) -> None:
+        """断言这份合成数据**不该红**（阳性锚点 / 各条"正确放行"的档）。"""
+        msg, _, _ = vrun(code, log, cfg)
+        vok(not msg, f"{what}：不该红，却红在 {msg[:80]!r}")
+
+    # ① 阳性锚点：先证明"全好"不红。没有它，下面全部"会红"的用例都是廉价满足的
+    #    （判据被改成恒真时，只有这条会红）。
+    msg, errs, warns = vrun(0, vlog(), vcfg())
+    vok(not msg and not errs and not warns,
+        f"阳性锚点不成立：全好的默认档日志被判红（FAIL={msg[:60]!r} errors={errs} warnings={warns}）")
+
+    # ② 引擎非零退出。拆函数之前这条只是**推理**（fail 的位置早于 fsr 那段 ⟹ 引擎拒启动时
+    #    工具必红），推理不是防线，测过才是。
+    must_fail("引擎非零退出必须红", "引擎非零退出", 1, vlog(), vcfg())
+    #    顺序契约：非零退出要**先于**"没拿到截图"报出（引擎崩了的时候缺图是果不是因）
+    must_fail("非零退出优先于缺图", "引擎非零退出", 1, vlog(drop="截图已保存"), vcfg())
+
+    # ③ errors 通道（不走 fail() 的最后一条判据：main 据 errors 非空打 FAIL 并返回 1）
+    msg, errs, _ = vrun(0, vlog(drop="headless 模式"), vcfg())
+    vok(not msg and any("headless" in e for e in errs),
+        "缺 headless 行必须计入 errors——那是「本次没跑在 headless 上」的唯一判据")
+    msg, errs, _ = vrun(0, vlog(VVL_ERR), vcfg())
+    vok(not msg and len(errs) == 1, f"[error] 级日志行必须计入 errors（实得 {errs}）")
+    must_pass("--sync 档 hazard 不 fail，只计入 errors", 0, vlog(HAZARD), vcfg(sync=True))
+
+    # ④ 同步验证档的**生效**核对：no_vvl = true 时 errors=0 是假的干净
+    must_fail("--sync 撞 no_vvl 必须红", "验证层没启用", 0, vlog(NO_VVL), vcfg(sync=True))
+    must_pass("no_vvl 只在 --sync 档算红（默认档不核）", 0, vlog(NO_VVL), vcfg())
+
+    # ⑤ 出图：日志说存了 + 磁盘上真有，两者缺一都算没出图
+    must_fail("日志缺「截图已保存」行必须红", "没拿到截图", 0, vlog(drop="截图已保存"), vcfg())
+    must_fail("磁盘上没有那张图必须红", "没拿到截图", 0, vlog(), vcfg(shot_exists=False))
+    must_fail("截图尺寸 ≠ 后缓冲必须红", "回读链路与交换链对不上", 0, vlog(), vcfg(dims=(800, 600)))
+    must_fail("--size 请求了实得却是别的", "实得 1280x720", 0, vlog(), vcfg(size=(800, 600)))
+
+    # ⑥ dump_gbuf 注入档：出图名与尺寸基准都换（引擎忽略 llm_shot.file）
+    must_pass("gbuf 档出图名对上就不红", 0, vlog(shot_line("gbuffer_3.png"), drop="截图已保存"),
+              vcfg(gbuf=3, expect_file="screenshots/gbuffer_3.png"))
+    must_fail("gbuf 档引擎报的出图名不是推出的那个", "出图路径不是 gbuffer_3.png",
+              0, vlog(), vcfg(gbuf=3, expect_file="screenshots/gbuffer_3.png"))
+    #    gbuf 档的尺寸判据基准是**渲染网格**，拿后缓冲判它 = 在合法档上误杀（needle 换掉
+    #    就证明它红在 gbuf 那条而不是后缓冲那条 = 两条判据的分档确实生效）
+    must_fail("gbuf 出图 ≠ 渲染网格必须红", "dump_gbuf 直读的是渲染分辨率",
+              0, vlog(shot_line("gbuffer_3.png"), drop="截图已保存"),
+              vcfg(gbuf=3, expect_file="screenshots/gbuffer_3.png", dims=(640, 360)))
+    must_fail("gbuf 档 --size 没落到渲染网格必须红", "--size 没生效",
+              0, vlog(shot_line("gbuffer_1.png"), drop="截图已保存"),
+              vcfg(gbuf=1, expect_file="screenshots/gbuffer_1.png", size=(800, 600)))
+
+    # ⑦ render_scale：请求 ≠ 生效（patch 只保证"配置里写了"）
+    must_fail("缺 render scale 口径行必须红", "批 14.3 的判据失去出处",
+              0, vlog(drop="render scale ="), vcfg())
+    must_fail("请求 0.5 生效 1.0 必须红", "引擎实际生效 1.0", 0, vlog(), vcfg(render_scale=0.5))
+    must_pass("请求 1.0 生效 1.0 不红（上一条的红不是恒真）", 0, vlog(), vcfg(render_scale=1.0))
+
+    # ⑧ velocity_field：双向核对（门开必须有行、门关一行不许有）
+    must_fail("请求 velocity 但没建 RT 也没 warn", "请求 velocity_field",
+              0, vlog(), vcfg(velocity_field=True))
+    must_pass("图形态不支持 = 正确行为，放行", 0, vlog(VEL_NO), vcfg(velocity_field=True))
+    must_fail("门关不拢：默认档却建了 velocity RT", "却建了 velocity RT", 0, vlog(VEL), vcfg())
+    must_fail("velocity RT ≠ 渲染网格必须红", "速度场必须与深度同网格",
+              0, vlog(VEL_SMALL), vcfg(velocity_field=True))
+    #    `--set velocity_field=true` 是与具名旗标**等价**的来路：不认它，反向判据就会拿
+    #    「门关」的假设去判一门开着的图（批 N+1 实测四条全中招）
+    must_pass("--set 开 velocity 也算门开", 0, vlog(VEL), vcfg(overrides=["velocity_field=true"]))
+
+    # ⑨ ssr：门开必须 trace + apply **两行都在**（只缺一行 = 半条链，单行判据抓不住）
+    must_fail("请求 ssr 只建了一半必须红", "请求 ssr（", 0, vlog(SSR), vcfg(ssr=True))
+    must_pass("ssr 图形态不支持 = 正确行为，放行", 0, vlog(SSR_NO), vcfg(ssr=True))
+    must_fail("门关不拢：默认档却建了 ssr RT", "却建了 ssr RT", 0, vlog(SSR), vcfg())
+    must_fail("ssr(apply) ≠ 渲染网格必须红", "apply 的消费者",
+              0, vlog(SSR_SMALL, SSR_TRACE), vcfg(ssr=True))
+    must_fail("ssr_trace ≠ 半渲染网格必须红", "半渲染网格",
+              0, vlog(SSR, SSR_TRACE_FULL), vcfg(ssr=True))
+    must_pass("ssr 两行齐且尺寸对就不红", 0, vlog(SSR, SSR_TRACE), vcfg(ssr=True))
+    must_pass("--set 开 ssr.enabled 也算门开", 0, vlog(SSR, SSR_TRACE),
+              vcfg(overrides=["ssr.enabled=true"]))
+
+    # ⑩ aa=fsr：正向看 context 行，降级要真看到 warn 才算数
+    must_fail("请求 --aa fsr 既无 context 行也无降级 warn", "请求 --aa fsr 但日志里没有",
+              0, vlog(VEL), vcfg(aa_eff="fsr"))
+    must_pass("引擎「开门但接不起来」降级 = 正确行为，放行", 0, vlog(VEL, FSR_DEGRADED),
+              vcfg(aa_eff="fsr"))
+    must_fail("门关不拢：默认档却构造了 FSR context", "却构造了 FSR context", 0, vlog(FSR), vcfg())
+    must_fail("FSR render ≠ 渲染网格必须红", "FSR render=640x360",
+              0, vlog(VEL, FSR_SMALL), vcfg(aa_eff="fsr"))
+    must_pass("aa=fsr 纯空间臂全好就不红", 0, vlog(VEL, FSR), vcfg(aa_eff="fsr"))
+    must_pass("aa=fsr 时域+抖动臂全好就不红", 0, vlog(VEL, FSR, TEMP_ON, JIT),
+              vcfg(aa_eff="fsr", fsr_temporal=True, fsr_jitter=True))
+
+    # ⑪ aa=taa：出厂默认是 aa="off"，门关不拢时红线 A 的含义就变了
+    must_fail("请求 --aa taa 但没建 taa RT", "TAA pass 静默没进图", 0, vlog(), vcfg(aa_eff="taa"))
+    must_fail("门关不拢：默认档却建了 taa RT", "却建了 taa RT", 0, vlog(TAA), vcfg())
+    must_pass("aa=taa + clip 建了就不红", 0, vlog(TAA), vcfg(aa_eff="taa", clip=13))
+    must_pass('--set aa="taa" 也算门开', 0, vlog(TAA), vcfg(aa_eff="taa", overrides=['aa="taa"']))
+
+    # ⑫ fsr 时域/抖动调参：读**生效**而不是读请求；两条判据的口径故意不对称
+    must_fail("请求 --fsr-temporal 但引擎判关", "vendor 时域没开",
+              0, vlog(VEL, FSR, TEMP_OFF), vcfg(aa_eff="fsr", fsr_temporal=True))
+    must_fail("门关不拢：默认档却开着 vendor 时域", "却开着 vendor 时域",
+              0, vlog(TEMP_ON), vcfg())
+    must_pass("--set fsr.temporal=true 是合法开法（反向认两条来路）", 0,
+              vlog(VEL, FSR, TEMP_ON),
+              vcfg(aa_eff="fsr", overrides=['aa="fsr"', "fsr.temporal=true"]))
+    must_fail("请求 --fsr-jitter 但抖动没接进投影", "抖动静默没接",
+              0, vlog(VEL, FSR, TEMP_ON), vcfg(aa_eff="fsr", fsr_temporal=True, fsr_jitter=True))
+    must_fail("门关不拢：默认档却把抖动接进投影", "却把抖动接进了投影", 0, vlog(JIT), vcfg())
+    must_pass("--set fsr.jitter=true 是合法开法（反向认两条来路）", 0, vlog(VEL, FSR, JIT),
+              vcfg(aa_eff="fsr", overrides=['aa="fsr"', "fsr.jitter=true"]))
+
+    # ⑬ 旗标守卫（不在判据段里，但同为 fail() 判据；拆出来之前同样零条断言）
+    def guard_msg(**kw) -> str:
+        out: list[str] = []
+        try:
+            guard_flags(kw.get("clip"), kw.get("aa"), kw.get("temporal", False),
+                        kw.get("jitter", False), aa_eff=kw.get("aa_eff"), say=out.append)
+        except SystemExit:
+            pass
+        return next((ln[len("[smoke] FAIL: "):] for ln in out
+                     if ln.startswith("[smoke] FAIL: ")), "")
+
+    def guard_fail(what: str, needle: str, **kw) -> None:
+        msg = guard_msg(**kw)
+        vok(needle in msg, f"{what}：应红在 {needle!r}，实得 {msg[:80]!r}")
+
+    def guard_ok(what: str, **kw) -> None:
+        msg = guard_msg(**kw)
+        vok(not msg, f"{what}：不该红，却红在 {msg[:80]!r}")
+
+    guard_fail("--clip 不配 --aa taa 必须红", "--clip 必须配 --aa taa", clip=13)
+    guard_fail("--fsr-temporal 不配 --aa fsr 必须红", "是 aa=fsr 的子选项", temporal=True)
+    guard_fail("--fsr-jitter 不配 --fsr-temporal 必须红", "--fsr-jitter 必须配 --fsr-temporal",
+               aa="fsr", jitter=True)
+    guard_ok("--clip 配 aa=taa 放行", clip=13, aa="taa")
+    guard_ok('aa_eff 来自 --set 时 --fsr-temporal 合法（护栏不挡等价来路）',
+             temporal=True, aa=None, aa_eff="fsr")
+
+    # ⑭ 放宽类：正则**变松** = 正向判据在错误的日志上也放行（假绿）。
+    #     ⑤–⑫ 的变异方向全是"改成不可能匹配"，那验的是判据**会不会失效**；这一组验反方向：
+    #     判据的字面量区分度本身还在不在。近邻行全部取自引擎真实格式串（文件:行号见各行），
+    #     不是编出来凑数的形态——编出来的形态只会验出一条根本不存在的判据。
+    #     每条 must_fail 的"真形态放行档"就在 ⑤–⑫ 对应组里（证明新用例不是恒真）。
+    must_fail("「截图失败」行不能当成出图成功（磁盘上还留着上一次的图）", "没拿到截图",
+              0, vlog(SHOT_FAIL, drop="截图已保存"), vcfg())
+    must_pass("--sync 档下非 no_vvl 的 diagnostics 行不该红", 0, vlog(DIAG_OTHER), vcfg(sync=True))
+    must_fail("口径行缺 (swapchain WxH) 尾段 = 文案改了，判据失去出处", "批 14.3 的判据失去出处",
+              0, vlog(SCALE_PARTIAL, drop="render scale ="), vcfg())
+    must_pass("--size 请求且实得一致就不红（丢掉不等号必须红在这里）", 0, vlog(), vcfg(size=(1280, 720)))
+    must_pass("gbuf 档 --size 落到渲染网格就不红（丢掉不等号必须红在这里）", 0,
+              vlog(shot_line("gbuffer_1.png"), drop="截图已保存"),
+              vcfg(gbuf=1, expect_file="screenshots/gbuffer_1.png", size=(1280, 720)))
+    must_fail("velocity 行不是 RGBA16F 格式 = 不是那张 RT", "请求 velocity_field",
+              0, vlog(VEL_OTHER_FMT), vcfg(velocity_field=True))
+    #     三条"图形态不支持"逃生门各自只认自己那一条 warn：不认前缀的话，ssr 的 warn
+    #     会替 velocity 开门（反之同理）——逃生门变成通用遮羞布
+    must_fail("velocity 请求了、日志里只有 ssr 的不支持 warn", "请求 velocity_field",
+              0, vlog(SSR_NO), vcfg(velocity_field=True))
+    must_fail("ssr 请求了、日志里只有 velocity 的不支持 warn", "请求 ssr（",
+              0, vlog(VEL_NO), vcfg(ssr=True))
+    must_fail("ssr 只建了 trace 一行（apply 缺）必须红", "请求 ssr（", 0, vlog(SSR_TRACE), vcfg(ssr=True))
+    must_fail("ssr_trace 行不是 RGBA16F 格式 = 不是那张 RT", "请求 ssr（",
+              0, vlog(SSR, SSR_TRACE_OTHER_FMT), vcfg(ssr=True))
+    #     ★ FSR：引擎真有一行「FsrUpscaler: dispatch 失败 (…) —— render=WxH upscale=WxH」，
+    #     它同时带 render= 与 upscale= 两个数字 ⟹ 正则只要松掉「context 就绪」四个字，
+    #     dispatch 硬失败的跑会打出「FSR: context 就绪 … ✓」= 本条债立项的那类假绿
+    must_fail("FsrUpscaler dispatch 失败行不能当成 context 就绪", "请求 --aa fsr 但日志里没有",
+              0, vlog(VEL, FSR_DISPATCH_FAIL), vcfg(aa_eff="fsr"))
+    must_fail('提到 aa="fsr" 但没点名降级的行不许开逃生门', "请求 --aa fsr 但日志里没有",
+              0, vlog(VEL, FSR_AA_ECHO), vcfg(aa_eff="fsr"))
+    must_fail("taa 行只有 hist slot（没有 out slot）必须红", "TAA pass 静默没进图",
+              0, vlog(TAA_HIST_ONLY), vcfg(aa_eff="taa"))
+    must_fail("fsr_jitter 行说未接入（仍带相位数字）必须红", "抖动静默没接",
+              0, vlog(VEL, FSR, TEMP_ON, JIT_NOT_WIRED),
+              vcfg(aa_eff="fsr", fsr_temporal=True, fsr_jitter=True))
+    #     后缓冲核对必须**锚在交换链那一行**：run_engine 把 stdout+stderr 合并进 log，驱动与
+    #     VVL 的行也在里面，`extent:` 放宽掉 Swapchain 前缀就会让比较对象换人（下面这行是
+    #     外部输出形态的占位——引擎自己不发它，钉的是锚定，不是某条引擎文案）
+    must_pass("后缓冲核对只认 Swapchain 那一行（别的 extent: 行不得顶替）", 0,
+              "[0] [info] [driver] surface extent: 640x360 (当前模式)\n" + vlog(), vcfg())
+    must_fail("velocity 行没申报 slot = 不是那张 RT 行", "请求 velocity_field",
+              0, vlog(VEL_NO_SLOT), vcfg(velocity_field=True))
+    must_fail("taa 行不是 RGBA16F 格式 = 不是那张 RT", "TAA pass 静默没进图",
+              0, vlog(TAA_OTHER_FMT), vcfg(aa_eff="taa"))
+    must_fail("别的 RGBA16F 行带 out slot，不许顶掉 taa 的名字锚", "TAA pass 静默没进图",
+              0, vlog(TAA_OTHER_NAME), vcfg(aa_eff="taa"))
+    must_fail("ssr(apply) 行不是 RGBA16F 格式 = 不是那张 RT", "请求 ssr（",
+              0, vlog(SSR_OTHER_FMT, SSR_TRACE), vcfg(ssr=True))
+    must_fail("ssr_trace 行没申报 slot = 不是那张 RT 行", "请求 ssr（",
+              0, vlog(SSR, SSR_TRACE_NO_SLOT), vcfg(ssr=True))
+    must_fail("出图名后面多挂了字（口径形态变了）必须红", "出图路径不是 gbuffer_3.png",
+              0, vlog(SHOT_GBUF_TAILORED, drop="截图已保存"),
+              vcfg(gbuf=3, expect_file="screenshots/gbuffer_3.png"))
+    must_pass("gate_lint 提到 no_vvl 不算「验证层没启用」（判据锚在 diagnostics: 行）", 0,
+              vlog(GATE_NO_VVL), vcfg(sync=True))
+    #     逃生门的锚是「aa="fsr" 开门但接不起来」整串：只留「接不起来」的话，别的门改了文案
+    #     也会替 FSR 开门（引擎今天只有一行含「接不起来」，这条钉的是锚不许被削薄）
+    must_fail("别条 warn 说「接不起来」不许开 fsr 的逃生门", "请求 --aa fsr 但日志里没有",
+              0, vlog(VEL, DEGRADE_OTHER), vcfg(aa_eff="fsr"))
+    must_pass("默认档看到「fsr temporal: 关」不该红（门关着就是关着，反向只抓真开着）", 0,
+              vlog(TEMP_OFF), vcfg())
+    #     ×0.5 的口径是 **floor**（= C++ scaleRtExtent）：偶数网格上 floor 与 ceil 相同，
+    #     只有奇数网格能区分二者 ⟹ 骨架那份 1280x720 验不出 ceil 被换成 floor 的变异
+    must_pass("ssr_trace 的 ×0.5 是 floor 不是 ceil（奇数网格上才分得出）", 0,
+              vlog(SSR, SSR_TRACE).replace("1280x720", "1279x719").replace("640x360", "639x359"),
+              vcfg(ssr=True, dims=(1279, 719)))
+    #     hazard 计数是 --sync 档的核心读数，放宽成数 "hazard" 子串就会被"已覆盖的边"那行喂饱
+    readout = vsay(0, vlog(HAZARD, HAZARD_EDGE), vcfg(sync=True))
+    vok(any(ln.startswith("同步验证: hazard 1 条") for ln in readout),
+        f"hazard 计数只准数真 hazard（引擎另有一行 'compute hazard: … 由边 … 覆盖' 不是 hazard）：{readout}")
+
+    done.append(f"判据段 verdicts：{vcase} 个合成用例逐条钉住（阳性锚点 + 每条 fail() 会红、"
+                "每条放行档不红、每条正则变松也会被近邻行抓到）")
+
     if not quiet:
-        print(f"[smoke] 自检 {len(done)} 项通过（patch_lua：单行子表 / 多行块 / 两条护栏）")
+        print(f"[smoke] 自检 {len(done)} 项通过（patch_lua 单行子表/多行块/两条护栏 + "
+              "判据段 verdicts 逐条会红）")
     return done
 
 
