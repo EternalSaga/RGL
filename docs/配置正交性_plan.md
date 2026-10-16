@@ -1,0 +1,677 @@
+# 渲染能力配置 × 渲染图 —— 正交化设计与施工顺序
+
+> **状态**：`现行`（2026-10-16 立）。**设计已定稿、拍板点未拍**——§7 是 A–E 五个二选一，
+> §8.2 是四阶段施工顺序。开工前先读 §8，再读 §7；**§8 取代初稿的「只做一件事」结论**（理由在 §8 开头）。
+> 一句话：配置层的依赖图 ≠ 能力本身的依赖图，中间差的那截是**实现细节泄漏**；
+> 治法是「一个事实只在它的提供方那里申报」（§5.2 裁决句），不是往 gate_lint 加行。
+> 与 债-127 同根因（§5.1），与 `docs/compute_调研.md` §6 D6 的 plan-only 红线**不冲突**（§4）。
+
+任务：为「渲染能力的配置，不正交」做一次设计推演（推演阶段不写代码、不改仓库）。
+事实基础 = 同轮只读调研清单（临时产物，**其耐久内容已全部吸收进本文 §1 / §2.2 / 附录 A / 附录 C**，
+原始清单不再保留）。**本文所有数字均逐条 grep/read 复算**，复算与清单不一致处
+在 §1.2 与附录 A 点名。行号以 2026-10-16 工作区为准。
+
+---
+
+## 0. 问题陈述（项目主人原话，未改写）
+
+> 「渲染能力的配置，不正交。有些很明显互斥的，各种散落，有些不应该依赖的，反而成了依赖。」
+> 「之前三种阴影散落的时候我就发现了，但是没想到那么严重。」
+> 「我建议基于现有渲染图形状，结合设计下配置。渲染图已经提供了基础能力了，所以利用起来。」
+> 「说到底，和 127 也是一个症状。」
+> 「plan only 的出厂设置，纳入动态渲染图是否有必要。」
+
+---
+
+## 1. 基线盘点（全部复算，复算方法见附录 B）
+
+### 1.1 现状数字
+
+| 事实 | 数 | 复算方法 |
+|---|---|---|
+| gate_lint 申报表 | **60 行 / 53 门**（diagnostics 30 行 30 门 + shadow 16 行 13 门 + runtime.meshlet 块 14 行 10 门） | `awk '/const GateRule kGateRules\[\]/,/^};/' rgl/gate_lint_impl.cppm \| grep -c '{"'` → 60；去重门名 → 53 |
+| 装饰包装层出声点 | **7 处**（velocity/taa/ssr warn + ao_apply **debug** + picking-object_id warn + highlight warn + shadow 无条件 INFO），全在 `main_impl.cppm` 的 `compileGraphOrThrow`（:398-511） | 清单写「6 处」——picking 与 highlight 是两个独立 warn 点（:483-487、:498-501），按 7 处计；若「picking 一枚键控两个 pass」算一处则 6，口径歧义 |
+| meshlet 装配层 warn 点 | **≥10 处**（配对表 11 个根因，其中 meshlet 块占 7 个） | `rgl/main_meshlets.cppm` 十个 wire*/bake* 函数逐数（:105-110 / :216-221 / :225-231 / :240-242 / :246-250 / :278-284 / :421-429 / :499-506 / :566-573 / :695-714） |
+| 工具层「参数无宿主」守卫 | **4 处**（`tools/smoke.py:560-566` ×3：--clip 要 aa=taa / fsr 子选项要 aa=fsr / jitter 要 temporal；`tools/imgqa/engine_profile.cpp:357-363` ×1：checkFsrOpts） | 逐处读 |
+| 「图里有没有 X」现查点 | **6 处代码位置**（initFsr 内 **5** 个调用点，清单写 4——见 §1.2 差异 ①） | `main_scene.cppm:634-639`（has() lambda）；`vkrenderer_offgraph.cppm:299-307`（findAttachmentSlot×5）；`vkrenderer_offgraph.cppm:100-101`（izbPreFrame depth find_if）；`picking_impl.cppm:22`（object_id）；`frame_capture_impl.cppm:51-52`（swapchain kind）+ `:90-91`（slotOfName） |
+| **两处判据对（条件集不同、无测试对账）** | **1 对**：`computeFsrUsable`（main_scene.cppm:632-649，**4 条件**：门+velocityDecorated+shader16+inputsReady）× `initFsr`（vkrenderer_offgraph.cppm:289-317，**3 条件**：只查三个输入附件） | 注释自认「两处判据必须一致，漂移的代价是垃圾画面且不指名」（:625-627）；`grep -rn computeFsrUsable tests/` 无对账用例（仅 smoke.py 正则读引擎日志行做工具侧核对） |
+| 图外同步 | **29 处 `.emit(` 全在模块侧**（evssm 3 + gpu_cull 8 + izb 14 + meshlet_cull 4）；边表 **28 条 / 7 道门** | `grep -rn "\.emit(" rgl/*.cppm \| wc -l` → 29；`rgl/offgraph_sync.cppm:148` kSyncGateCount=7；RgSyncEdgeId 枚举 3+13+8+4=28 |
+| buffer 附件 | 注册 **4 个名字**（meshletVisibleFlags/meshletCullItems/izb_head/izb_nodes），**进图 3 个**（meshletCullItems 只在注册表），图内真消费者 **1 个**（kAttachmentSyncEdges 恰 1 条 = meshletVisibleFlags） | `grep -rn "registerBufferAttachment(" rgl/`（4 调用点）；`offgraph_sync_impl.cppm:488` `std::array<RgAttachmentSyncEdge, 1>` |
+| 图对 buffer 附件零发射 | `UsageInfo::layout = nullopt` 结构性早退（render_graph_usage.cppm:87-90，storageRead/Write 两档） | 读 + 注释 :29-35（planBarrier/planBeginRenderingEntry 拿 nullopt 必须早退 = plan-only 红线做成类型） |
+| 图事实谓词（导出面） | `graphHasDeferredLight` 是 render_graph **唯一**导出的图事实谓词（render_graph.cppm:650），生产侧问者 **3 个**（gate_lint_impl.cppm:318、vkrenderer_offgraph.cppm:99 izbPreFrame、:246 evssmPreFrame）；`OffGraphSchedule::isSchedulable`（offgraph_contract_impl.cppm:183）**生产侧零调用者**（只有 tests/test_offgraph_contract.cppm 调） | `grep -rn graphHasDeferredLight rgl/`；`grep -rn isSchedulable rgl/ tests/` |
+| RT 槽 | **9 个 ensure 函数**（render_graph_rtslot.cppm 7 个 + vkresources.cppm 的 ensureDepthSampleSlot/ensureFsrSampleSlot），名字与格式吃 render_graph.cppm 的 constexpr 契约常量 | `grep -c "std::expected<uint32_t, Error> ensure" rgl/render_graph_rtslot.cppm` → 7 |
+| 校验面 | 附件级 **8 条**（空名/重名/swapchain 计数/格式/尺寸/缩放/历史/buffer 注册，render_graph_impl.cppm:179 注释）+ pass 级 **5 个** precheck 函数（precheckReadUsages/precheckDrawPass/precheckFullscreenPass/precheckBlitPass/precheckPass） | 读 render_graph_impl.cppm:179-316 |
+| 动态面 | `DynamicRenderGraph` = markDirty/isDirty/recompile + declareBufferProductions/Consumptions + declarePass/redeclarePass/adoptPass/withdrawPass（dynamic_render_graph.cppm:143-237）；B2-5 单次重编译实测中位数 **4.5µs**（compute_调研.md:338-341，AMD 8060S） | 读 |
+| 出厂空开关（宿主门关闭且文件里显式写着的键） | **31 枚**（清单口径复算恰好 31；加 `ui_font`、`meshlet.coplanar` 则 33——见 §1.2 差异 ③） | 组成：fsr×2 + ssr 系数×6 + pcss×3/evssm×4 + izb.grid + rpc_port + ui_font_size + llm_shot×3 + headless_size + scene.taa×9（scene_config_impl.cppm:106-114 九键）= 31 |
+| 注释/文档漂移 | 清单 10 条**全部证实**（§1.2 逐条），另新发现 **3 条**（§1.2 差异 ⑥） | 见 §1.2 |
+
+### 1.2 复算发现的差异（清单 → 实测）
+
+① **initFsr 的 findAttachmentSlot 调用点是 5 个不是 4 个**（vkrenderer_offgraph.cppm:299-307：
+taaOut / aoApplied / sceneHdr / velocity / depth）。「6 处现查」的总数按「initFsr 算 1 处」仍自洽，子计数差 1。
+
+② **装饰包装层出声点是 7 处不是 6 处**（picking object_id 与 highlight 是两个独立 warn，
+main_impl.cppm:483-487 与 :498-501）。清单「6 处」若把 picking 一枚键控两 pass 算一处则成立——口径歧义，本文按 7。
+
+③ **「≥31 枚」复算恰好 31**（清单口径）。两个边界案例清单未计入：`ui_font`（imgui 关时无消费者，
+与 ui_font_size 同形）和 `meshlet.coplanar`（overlay 关时无消费者，但 wireMeshletOverlayDepthCompare
+每次启动仍打一行 INFO「生效档 = off」——出厂日志里**有一行**关于无消费者档的陈述）。计入则 33。
+
+④ **meshlet.cull 的「编码泄漏」定性不准确**。消费者 `wireMeshletCull` 读的是**生效事实**
+（`ctx.contains<MeshletSwitchOn>()`，main_meshlets.cppm:709；:701-708 注释明确论证「读生效事实
+而不是配置意图」——switch 的三条回落路不写配置，读配置会让剔除在回落档下照跑）。这是**正确形态**，
+不是泄漏。真正的泄漏在 `switch` 键本身：它的三条回落路（设备规格 / 非 cpu cull 档 / 逐资产对账失败，
+:210-232）使「配置说 switch 开」≠「switch 生效」。本文把 cull 改归 ③（正确申报 + lint），泄漏记在 switch。
+
+⑤ **meshlet.debug/tint 的漂移比清单说的更严重一层**。清单：gate_lint 消息说「或 enable=false ⟹
+强制归 base」而 pickMeshletMeshVariant 只判 overlay（main_meshlets.cppm:136-144）——**证实**。
+复算补充：lint **谓词** `meshletDebug && (!meshletEnable || !meshletOverlay)`（gate_lint_impl.cppm:237-238）
+的 `!enable` 半边同样不是消费者的判据。`enable=false × overlay=true × debug=true` 组合下：lint 喊
+「强制归 base」，代码实际烘 debugOffset 变体——但条目烘焙在 `!slots` 处早退（:440-441），所以
+**孤立结论（键无消费者）对、机制描述（谁把它归 base）错**：归 base 的不是 pickMeshletMeshVariant，
+是烘焙早退。lint 申报了一个消费者不存在的机制。
+
+⑥ **新发现的漂移 3 条**（清单 10 条之外）：
+ - `main_impl.cppm:412`：decorateAoApplyOrWarn 注释「门 = **FSR 门开**（`runtime.fsr_upscaler`）」
+   ——旧键名（14.6 已删，现在是 aa=fsr）。
+ - `runtime_config.cppm:480-482`：meshletSwitch 三态语义注释「`enable && !switch` → α 形态：旧路径
+   照画 + **共面影子叠加**」——债-105 后叠加段有独立门 overlay（默认关），此描述过期（同文件
+   :378-381 的 meshletEnable 注释已更正，switch 注释没跟到）。
+ - `configs/runtime.lua` meshlet 块头注释：「★1-a1ii-α 起 enable 开 = 恒 L0 簇**影子叠加**
+   （同 objectIndex 重画一遍……）」——同样过期于债-105（「叠加段现在有自己独立的门，默认关」）。
+
+（清单原 10 条全部证实，从略；其中第 5 条 diagnostics.lua:49-52 的 dgc_static「静默回落 false」
+注释与 meshlet 块 readStrictBoolKey 的严格纪律并存 = 同一份配置面两种布尔纪律，属实。）
+
+### 1.3 一个清单没写、但推演要用的事实
+
+**「出厂 0 findings」是谓词推断，不是运行结果**（清单自己注明；本文同样未运行程序——见 §6）。
+出厂态下逐行过 60 行表：唯一 true 的门是 meshlet.enable（nullptr 谓词）与 shadow.mode=csm
+（非 evssm/none），variant 交叉校验 variant=deferred × deferredLight=true 不触发 ⟹ 0 findings。
+
+---
+
+## 2. Q1 尺子：一枚配置键分到四类之一
+
+### 2.1 判据（可复用、可落到代码）
+
+对键 K，**先找它的消费者函数**（读它的 wireXxx / decorateXxx / fillXxx / 解析期推导点），然后按序问：
+
+**问 1：消费者的早退/门控条件读的是什么？**（看函数体前几行 + 调用链上的条件）
+
+| 读到 | 前置属于 | 归类 |
+|---|---|---|
+| 另一枚**配置键的值**，且组合存在**非法形态**（互斥/让位/无宿主子键） | 编码 | **①** 类型/枚举消灭（非法组合写不出来；先例 = shadow.mode 四值、aa 三值——「让位链不是被修好，是被消掉」shadow_config.cppm:109-110） |
+| 另一枚配置键的值，且组合**全合法**、只是某些子组合**无消费者** | 能力定义 | **③** 留在配置层 + gate_lint 申报（前置 = 能力本身的定义，如 fsr.temporal 要 aa=fsr——「FSR 子档」是 FSR 的定义，不是泄漏） |
+| `graph.attachments` / `graph.passes`（按名/kind 现查）或「已装饰」标志（taaDecorated 等） | **图形态事实** | **②** 该由**图**回答（谓词面；先例 = graphHasDeferredLight 3 问者、「已装饰」标志 = 图事实的合法投影） |
+| **装配期产物**（slots/entries/载体 != nullptr、registry ctx 生效标记） | 资源分配 | **④** 从配置层消失（键名若是「总门」实为资源宿主 → 位置错了：宿主条件归装配层事实，配置层只申报「要不要这个能力」） |
+| 设备能力（shader16Supported / staticGraphicsIndirect） | 设备事实 | **③** 的设备半边（GateEnv 先例，lint 入参） |
+
+**问 2：键的申报（字段注释/设计记录）与消费者的真实门控是否一致？**（注释与消费者代码逐行对）
+不一致 → 归类以**代码**为准（本仓纪律「照源码写，不照注释写」）；注释进漂移清单。
+典型：`velocity_field` 申报「非 FSR 消费者——TAA 逐像素重投影线要它」（runtime_config.cppm:304-307、
+configs/runtime.lua:28-30），消费者事实 = TAA 重投影是**解析的**（taa.frag.slang:783 自陈「本项目没有
+velocity buffer 是因为不需要」），引擎内真消费者只有 FSR（+ RPC 按名回读）⟹ 「独立键」裁决建立在
+**假前提**上 ⟹ **④**（独立性应撤并，见 §7 拍板 C）。
+
+**问 3：键是不是实现未完的细节**（路没接 / 载体零消费者）？
+是 → **④**（删或降级，「宁删不留假能力」D3 先例），不是挂号。
+
+**判据冲突时的让位**：① > ② > ③ > ④。能枚举消灭的不许 lint 申报（申报一个写不出来的形态 =
+假护栏，phase14_plan.md:1380-1381「枚举比守卫强」）；前置是图事实的不许在配置组合谓词里重述
+（= 6 处现查的漂移源）；只有纯能力定义进申报表。
+
+### 2.2 六块逐枚分类结果
+
+**meshlet（10 键）**
+
+| 键（出厂值） | 类 | 依据（消费者 file:line） | 处置 |
+|---|---|---|---|
+| enable (true) | **④** | 本体 = 资源分配：4 段簇 buffer + 描述符槽 + 条目烘焙宿主（wireMeshletBindings main_meshlets.cppm:269-319）；块内 9 键的宿主条件**不统一含它**（overlay/mdi_shadow 不含、debug/tint 经条目间接含）= 「总门」是假象 | 从「总门」位降级为资源门（改名或改注释 + 逐键宿主条件注释修正）；拍板点 A |
+| overlay (false) | **①** | 与 switch 互斥，现靠运行期抑制 + 两层各喊一次（lint gate_lint_impl.cppm:265-270 要 overlay=true；装配 :246-250 switch 生效就喊——**出厂 overlay=false 开 switch 时只有装配层喊，lint 沉默**，配对表证实） | 与 switch 合一枚 `meshlet.mode` 三值（off/overlay/switch） |
+| debug (false) | **①** | 两枚布尔表达 base/debug/tint 三选一（pickMeshletMeshVariant :136-144 只判 overlay） | 与 tint 合一枚三值键 |
+| tint (false) | **①** | 同上 + 让位规则（lint :244-248「tint 优先、debug 让位」——让位是两布尔的产物，三值后消失） | 同上 |
+| coplanar ("off") | **③** | 已是三值枚举 ✓；前置 = overlay 有消费者 = 纯配置组合（lint :249-255 在表） | 不动 |
+| switch (false) | **①**+**③**+**④** | ① 互斥 → mode；③ 前置 cull_replay==cpu（配置组合）+ 设备规格（设备事实）（lint :256-270 在表）；④ 三条回落路（:210-232）使声明≠生效 = 装配事实——**读 ctx 生效标记（:234）是正确形态，别改成读配置** | mode 三值；回落路保留在装配层 |
+| cull (false) | **③**（清单「编码泄漏」定性改） | 消费者读**生效事实** ctx MeshletSwitchOn（:709）= 正确形态（:701-708 论证）；lint 2 行在表（:271-281） | 不动 |
+| shadow_lod (5) | **④**+**③** | 宿主 = enable 的 slots = 资源（:400-404、:487）；D≥0 档 = 能力定义 | 键保留；「宿主缺失」申报（lint :282-286）在 O3/O4 形态下由图/装配层接管后退役 |
+| shadow_lod_fallback ("deepest") | **③** | 前置 = shadow_lod≥0（配置组合）；lint inertNote 在表（:287-291） | 不动 |
+| mdi_shadow (false) | **③**+**④** | 键本身 = MDI draw 形态开关（能力定义，生效条件**不含本键** = 正确，:460-467）；④ 在**载体**：出厂也建 MeshletShadowArgsService（GPU buffer，零消费者）= 资源分配泄漏在载体构造条件，不在键 | 键保留；载体构造条件是否收进门 = 拍板点（§7，代价很小：sliceRows×24B×2 ≈ 数百 KB） |
+
+**shadow（回显表 13 键）**
+
+| 键（出厂值） | 类 | 依据 | 处置 |
+|---|---|---|---|
+| mode ("csm") | **①** 已完 + **②** | 四值枚举（N6b，shadow_routes_plan.md:186-190）；evssm 档要 deferred = 图事实，lint 行**已经读 graphHasDeferredLight**（gate_lint_impl.cppm:131-133）= **已正确的形态样板** | 不动（O2 只是把谓词源统一） |
+| izb (false) | **②**+**③** | 要 deferred 图（lint :116-118 读图事实 ✓）；izb×mode="none" = 声明组合无内容（:119-122 error ✓）——注意 mode=none 时 shadow0 段**仍在图里**（decorateShadowPass 无条件，main_impl.cppm:507），只是段内零 draw ⟹ 这是**申报**不是图形态，留在 lint 是对的 | 不动 |
+| izb.grid (512) | **④** | 宿主 = IZB 构造（网格随构造才存在）；已嵌套块 ✓；lint inertNote 在表（:162-164） | 不动 |
+| izb.dump_frame (0) | **④** | 同上；lint warn 在表（:154-156） | 不动 |
+| pcss.*×3 / evssm.*×4 | **①** 已完 | 按档分立 = 「两门同开」表达不出来 ✓；死值申报 = 7 行 inertNote 在表 ✓ —— **O1 推广的模板**（shadow.lua 已是正交化的完成形态） | 不动 |
+| csm ({}) | **③** | 预留空块（nullptr 谓词 ✓） | 不动 |
+
+**fsr（2 键）**
+
+| 键（出厂值） | 类 | 依据 | 处置 |
+|---|---|---|---|
+| fsr.temporal (true) | **③**+**②** | 能力定义：FSR 子档；前置 aa=fsr = 纯配置组合，**现不在 lint 射程**（readSsrBlock:315-327 的「其余 runtime.lua 键不在表里，本批没有欠账」裁决覆盖 fsr.*）→ 出厂零引擎出声，只有工具层 2 处守（smoke.py:563-566、imgqa:357-363）；更深的「FSR 接得起来」= velocity 在图 = 图事实，现 ad-hoc 现查（computeFsrUsable:634-639），warn 在（:641-647） | 键保留；宿主申报归拍板点 D；「接得起来」归 O2 谓词 |
+| fsr.jitter (true) | 同上 | wireFsrJitter main_scene.cppm:132 `env.fsrJitter = fsrUsable && fsrJitter` | 同上 |
+
+**ssr（7 键）**
+
+| 键（出厂值） | 类 | 依据 | 处置 |
+|---|---|---|---|
+| ssr.enabled (false) | **②** | 装饰四判据全是图形态：锚点（写 swapchain 且采色）/ G-buffer 契约表**全通道**（deferred-only 的真实形态）/ 借可 store 的 depth / 次序（taa、ao_apply 不在图）（decorateSsrPass render_graph_decorate.cppm:513-557）；包装层 warn（main_impl.cppm:462-466） | O3 形态 = 需求声明进图、compile 期拒 |
+| ssr.*×6 | **③** | 前置 = enabled（配置组合）；**无条件写进 scene data** 是设计决定（尾区纪律：不按门分支、无消费者不改像素，fillSsrParams render_list_impl.cppm:497-501 + 注释 :495-496）——参数本身不需要前置校验；「enabled=off ⟹ 6 枚死值」的申报 = **刻意不挂号**（readSsrBlock:315-327 裁决，理由成立：不造第三张回显表） | 键保留；死值申报归拍板点 D |
+
+**wet（6 键）**
+
+| 键（出厂值） | 类 | 依据 | 处置 |
+|---|---|---|---|
+| wet.*×6（strength 出厂 1.0 = 开） | **②**/**③** 混合 | 消费者住 deferred_geometry frag ⟹ **只有 variant==deferred 时被选中** = 图形态事实；**现无人申报**（无 lint 行、无引擎 warn、不在 readSsrBlock 同款裁决的显式名单里——裁决文字只点了「本块」，wet 块是同款理由但没写）= 六块里**真正的申报缺口** | 加 1 行 lint（variant≠deferred × wet 偏离默认）或归 O2 谓词；见拍板点 D 的范围 |
+
+**taa（9 键）**
+
+| 键（出厂值） | 类 | 依据 | 处置 |
+|---|---|---|---|
+| taa.*×9（clip_mode=13 等） | **③** | 前置 = aa==taa（配置组合）+ 装饰成功（图事实，taaDecorated 标志 = 合法投影，main_scene.cppm:707）；scene.lua:288-291 自陈「本键不是交付默认」；引擎内零出声，只有 smoke.py:560-562 守 --clip | 键保留（跨文件所有权：taa 块在 scene.lua、mode 在 runtime.lua——形态弱点，见 §3 O1-1.3）；死值申报归拍板点 D |
+
+---
+
+## 3. Q2 方案对比（O0–O4）
+
+### 3.0 每个方案的「能消掉什么」（具体数字，基线见 §1.1）
+
+| 消掉的对象 | O0 不动 | O1 纯配置正交 | O2 +图谓词面 | O3 +需求进图 | O4 开关=图操作 |
+|---|---|---|---|---|---|
+| gate_lint 行 | 0 | **−3**（tint 让位行、switch×overlay 互斥行、debug+tint 两行并一行）；**+6~31**（31 枚死值申报，拍板点 D：块级 6 行需扩护栏口径 / 逐键 31 行现有口径 / 不补 0 行） | 0 | **−3**（izb×非deferred、evssm×非deferred、dump_gbuf×deferred 三行图形态行 = 编译期已拒 ⟹ 死代码删除；门数 53→50） | 同 O3 |
+| 包装层出声点（7 处） | 0 | 0 | 0 | **−7**（warn/debug/INFO → 图 compile 期诊断；消息形态变 ⟹ smoke.py 正则同步） | 同 O3 |
+| meshlet 装配层 warn（≥10 处） | 0 | **−1**（switch×overlay 互斥 warn main_meshlets.cppm:246-250，含 coplanar 第二句） | 0 | 0 | 0 |
+| 工具层守卫（4 处） | 0 | 0（守的是 CLI 旗标不是配置键） | 0 | 0（但消息形态变 ⟹ 工具同步改） | 0 |
+| 图事实现查点（6 处） | 0 | 0 | **−6**（全部改吃 render_graph 谓词面） | −6 | −6 |
+| 两处判据对（1 对，条件集 4 vs 3 不同、无测试对账） | 0 | 0 | **−1**（统一成一个 `fsrInputsReady(graph)` 函数） | −1 | −1 |
+| **可写出的非法形态** | 0 | **−2**（tint×debug 让位、overlay×switch 互斥 = 写不出来） | −2 | −2 | −2 |
+| 出厂空开关（31 枚）的引擎零出声 | 维持 | 视拍板 D：+6 行（块级，debug 级，出厂不可见）/ +31 行 / 0 | 同 O1 | 同 O1 | 同 O1 |
+
+### 3.1 O0：什么都不动（基线）
+
+只继续往申报表加行（每加一枚键加一行，覆盖率护栏逼着回答前置）。
+
+- **消掉**：无。
+- **新增的税**（诚实记）：60 行表继续长；配对表 11 个根因继续「同根因多层各喊一次」
+  （出厂 overlay=false 开 switch 时 lint 沉默、装配层喊——判据不同 = 两层各说各话）；
+  31 枚出厂空开关继续引擎零出声（唯一守卫 = 工具层 2 处，第四层出声点未查清 = 再出现再守一遍）；
+  两处判据对（4 vs 3 条件、无对账）留在热路径；漂移 13 条（10+3 新）继续累积。
+- **与 D6 三条坚持理由**：不碰。
+- **迁移代价**：0。
+- **验收判据**：无（基线）。
+
+### 3.2 O1：纯配置层正交化（图不动）
+
+形态 = 把 **shadow.lua 已是完成态的形状**（mode 枚举 + 按档参数块 + lint inertNote 申报）
+推广到 runtime.lua / scene.lua：
+
+1. **O1-1.1** `meshlet.debug` + `meshlet.tint` → 一枚三值 `meshlet.variant ∈ base|debug|tint`
+   （aa 三值先例的复刻）。让位规则（tint 优先）结构性消失。
+2. **O1-1.2** `meshlet.overlay` + `meshlet.switch` → 一枚三值 `meshlet.mode ∈ off|overlay|switch`。
+   互斥结构性消失；switch 的三条回落路（装配事实）原样保留。
+3. **O1-1.3** 参数嵌进所属模式块。fsr 块现是 `aa` 的**平级**块（runtime.lua 内 `fsr = {...}` 与
+   `aa = "off"` 并列）→ 激进形 = `aa = { mode = "fsr", temporal = true, jitter = true }` 表形态
+   （mode=off 的表里没有 temporal 字段可写 = 「键在但模式关」形态消灭）；taa 块在 scene.lua、
+   mode 在 runtime.lua = **跨文件所有权**，保守形 = 块不动、只加死值申报；ssr 块已含 enabled
+   （模式在块内）= 只差死值申报。
+4. **O1-1.4** `meshlet.enable` 拆「总门」名（拍板点 A）。
+
+- **消掉**：lint −3 行；装配 warn −1；非法形态 −2（上表）。
+- **新增的税**（诚实记）：**配置面破坏性** = 键名变更，下游引用面 = tools/smoke.py（--set 语法、
+  正则）、imgqa profile、`qa/configs/**`、docs——本仓纪律「无扁平键双读兼容」= 硬切，无迁移期
+  缓冲；aa 表形态若做 = 更大的破坏（解析器 + 工具 + 锚点配置全动）。**锚不动**：95edc8cc（出厂
+  = variant=base + mode=off = 全默认）与 54e40665（门关 = enable=false + shadow_lod=-1）的图形状
+  都不变 ⟹ 两锚逐位不变是构造性的。启动时序：不变（解析期 + 装配期）。Lua 词表 / kind 加档税：0。
+- **与 D6**：不碰（纯配置层 / 申报层）。
+- **分阶段路径与独立验收**：
+  - 1.1 variant 三值：验收 = 出厂锚 95edc8cc 逐位 + 四臂判据（coplanar off/equal/ne）绿 +
+    lint meshlet 段 3 行→2 行 + `tests/test_gate_lint.cppm` 覆盖率绿（键名变 ⟹ knownKeys 表同步）+ `just gates`。
+  - 1.2 mode 三值：验收 = 95edc8cc 与 54e40665 两锚逐位 + switch 三条回落 warn 逐字保留 +
+    lint 互斥行删 + smoke/imgqa 引用同步 + `just regress selftest`。
+  - 1.3 aa 表形态（含 taa 死值申报）：验收 = aa 三档锚逐位（fdece9d0 出厂 / 360ce0d2 红线 B / 95edc8cc）
+    + smoke `--set aa=…` 工具同步 + 解析期「mode=off + 子字段在文件里出现」出声（inertNote，见 §5.3）。
+  - 1.4 enable 改名：验收 = 两锚逐位 + tools/qa/docs 引用零残留（`grep -rn "meshlet.enable" tools/ qa/ docs/`
+    只命中历史记录）+ 覆盖率护栏绿。
+
+### 3.3 O2：O1 + 图作为图事实的唯一提供者
+
+把 6 处「图里有没有 X」现查收进 render_graph 的谓词面（现成先例 = graphHasDeferredLight
+（3 问者）与 swapchainColorConsumerIndex（4 装饰器共用，render_graph_decorate.cppm:88-101））：
+新增 `hasAttachment(name)` / `hasPassName(name)` / `hasPassState(kind, state)`（或同等形态），
+装饰包装层、computeFsrUsable、initFsr、izbPreFrame、picking、frame_capture 全改吃它。
+
+- **消掉**：6 处现查 → 谓词面；**两处判据对合一**（fsrInputsReady(graph) = 4 条件全部变成
+  谓词调用，initFsr 与 computeFsrUsable 共享同一函数 ⟹ 「漂移」结构性不可能）。
+- **新增的税**（诚实记）：谓词面 API **常驻**——isSchedulable 是现成的反面教材（查询面建了、
+  生产侧零调用者 = 机制常驻收益悬空，offgraph_contract_impl.cppm:183 只有测试在调）⟹ 验收必须
+  钉「每个谓词切走时都有调用者」，不许「先建后找」。render_graph 模块职责扩大（仍零发射、
+  纯查询——不碰 plan-only）。lint 侧：签名不变（已吃 `std::span<const RgPassPlan> passes`），
+  Ctx.deferredLight 的计算源从调用方换成谓词函数 = 零行为变化。
+- **与 D6 三条坚持理由**：逐条不碰——谓词是只读查询；「模块拥有录制」不变（查询不产生命令）；
+  「半发」不变（图对 buffer 附件仍一条命令不发，nullopt 早退不动）；「layoutDrift」不变
+  （模块仍返回真实离开布局，图不代发不代报）。
+- **迁移代价**：配置面 0；锚 0（纯查询，图形状不动，逐位不变是构造性的）；启动时序 0；
+  Lua 词表 0；kind 加档税 0。**这是五个方案里唯一迁移代价全零的。**
+- **分阶段路径与独立验收**：
+  - 2.1 谓词面 + 单测：验收 = 每谓词一正一反用例（无设备毫秒级，进 `just test`）+ `just gates` 绿。
+  - 2.2 切走 6 处现查：验收 = 原 6 处 grep 命中 0（谓词函数是唯一读 `graph.attachments` 做
+    「存在性」判定的地方，`grep -rn "find_if(renderGraph.attachments" rgl/` 只剩谓词本体）+
+    三锚（95edc8cc/54e40665/fdece9d0）逐位 + `just regress selftest`。
+  - 2.3 两处判据对合一：验收 = 变异红线——把 fsrInputsReady 的一个条件删掉 ⟹ 启动期行为必须变
+    （fsrUsable 假 + warn 行出现，smoke.py:899-909 的核对看见），或结构性共享同一函数 = 变异写不出来。
+
+### 3.4 O3：O2 + 能力开关的前置申报进图
+
+装饰请求携带「我要什么图形态」（RgDecorationRequirement：锚点角色 / 必需附件 / 「不得在图里」
+名单 / 借用 depth 需求），图 compile 期校验，非法形态 **compile 期拒**（error，不是 warn）。
+图级需求（「本图必须有 deferredLight」）与 pass 级需求（装饰）两档。
+
+- **消掉**：包装层 7 处出声点 → compile 期诊断；lint 3 行图形态行（izb×非deferred / evssm×非deferred /
+  dump_gbuf×deferred）死代码化删除（组合在 compile 期就过不了 ⟹ lint 永远收不到该输入）；
+  现查 6 处 + 判据对 1 处（同 O2）。
+- **新增的税**（诚实记）：需求面是**类型**——每次新增装饰要写一份需求（加档税，与 kind 加档税
+  同族）；compile 校验面扩大 = 新校验 = 新测试 + 新变异红线（本仓纪律：写不出反向断言的护栏
+  不配进门）；**消息形态迁移** = smoke.py 的正则钉着引擎消息（resolveFsrTemporal 注释自认
+  「文本格式被 smoke.py 的正则钉住」，main_scene.cppm:677）——warn→error 的迁移要工具层同步，
+  漏一处 = 工具静默失配。
+- **与 D6 三条坚持理由**：逐条不碰，且 O3 正是 AGENTS 哲学 3（「申报 ≠ 发射权：申报面只拿
+  计划 + 校验，barrier 与真实布局仍由模块给」）的**既有形态强化**：(1) 模块拥有录制不可约——
+  申报只改「图何时拒」，录制仍归模块；(2) 半发——图仍零 buffer barrier（nullopt 早退不动）；
+  (3) layoutDrift——模块仍申报真实布局，图不代报。⚠ 但 O3 会**碰到 127 的射程**：前置申报
+  若扩到 buffer 附件的「依赖可见性」= 127 到期判据的触发（§5.4 拍板 E）——**O3 的射程必须
+  只取 image 侧（装饰需求），不碰 buffer 附件注册面**，这条写进裁决句。
+- **迁移代价**：配置面 0（键不变，需求在 C++ 装饰请求里）；锚 0（合法路径逐位不变；非法组合的
+  启动报错消息变）；启动时序：装饰的 skip 条件从「装饰函数返回 false」挪到「compile 校验拒」
+  （同一时期、同样无设备、同样 fail-fast，时序语义不变）；Lua 词表 0（O3 不要求 Lua 表达条件
+  pass；将来要表达 = 另一次词表加档）；kind 加档税 0。
+- **分阶段路径与独立验收**（在 O2 之上）：
+  - 3.1 需求类型 + 单测：验收 = 需求×图形态矩阵用例（deferred/forward/offscreen × 7 装饰器）。
+  - 3.2 7 个装饰器的 skip 条件 → compile 校验：验收 = 非法形态 = compile error 点名需求项
+    （变异：把 ssr 需求里删一个 G-buffer 通道 → 装饰被拒且消息点名该通道）+ 包装层 7 处出声点
+    删除 + smoke.py 正则同步 + 三锚逐位。
+  - 3.3 lint 3 行删除：验收 = 变异「构造非 deferred 图 + evssm 配置」→ compile 拒（lint 不可达）
+    + 覆盖率护栏门集合同步（53→50）+ `just gates`。
+
+### 3.5 O4：开关本身 = 动态渲染图操作（出厂设置纳入动态图）
+
+feature gate → `declarePass`/`adoptPass`/`withdrawPass`（B2-5 已落地的 API，dynamic_render_graph.cppm:170-237）；
+出厂设置 = 动态图的首次编译。
+
+- **消掉**：O3 的全部 + `CompiledGraphResult` 的 4 个「已装饰」标志（taaDecorated/velocityDecorated/
+  aoApplyDecorated/ssrDecorated，main.cppm:87-102）→ 图自己知道（谓词查询）；装饰顺序契约
+  （「TAA 必须最后」「velocity 先于 TAA」「SSR 在 shadow 后、velocity/taa/ao_apply 前」，
+  现只活在 main_impl.cppm:512-536 的注释与调用序里，代码接管的只有 ssr/ao_apply 两条 skip）
+  → 声明序 + compile 校验（结构性）。
+- **新增的税**（诚实记）：**启动时序契约变更** = 当前 compileGraphOrThrow 是启动期纯函数
+  fail-fast（Renderer 构造之前）；O4 = 出厂设置走动态图，启动预编译要**统一两个编译入口**
+  （静态 compile + 动态 recompile 并存 = 双源，本仓最忌的形态）；重编译成本已实测（单次中位数
+  4.5µs，D5 落地读数 compute_调研.md:338-341）= 低频开关可接受，但「逐帧」是能力不是承诺
+  （D5 定案第 5 条）。**诱惑管理**：D5 定案原文警告「图现在什么都知道了，顺手代发 barrier 吧」
+  的复发概率**上升**——O4 把「开关生效」与「barrier 发射」放进同一个 API 家族，只隔一个方法名
+  的距离。
+- **与 D6 三条坚持理由**：发射权不搬则三条不变（pass 级 declare/withdraw 不产生任何命令——
+  图 compile，模块录制）；但 O4 是**离红线最近**的方案，验收必须含：「动态面不新增任何发射
+  入口」红线 + 判据 6 变异（模块谎报真实离开布局 → 帧末对账必须炸；测不出红 = 红线已破 =
+  回退形态，compute_调研.md:400-401）。
+- **迁移代价**：配置面 0（开关仍在 Lua，C++ 接线变）；锚 0（出厂图形状不变 = 动态图首编译，
+  95edc8cc/54e40665 逐位）；启动时序：**变**（上面已述）；Lua 词表：0（出厂设置 = C++ declarePass；
+  若要把出厂设置写进 Lua 图配置 = 词表加档，而 extent/extentScale/history/viewport/buffer 字节数
+  今天都表达不了（render_graph_config_impl.cppm 只读 name/kind/format + pass 的 name/kind/
+  state/draws + 引用 7 种 usage）——**Lua 半边扩词表是 O4 独有的潜在税**，O3 之前不触发）；
+  kind 加档税 0。
+- **分阶段路径与独立验收**（在 O3 之上）：
+  - 4.1 出厂设置 = 动态图首编译（统一编译入口）：验收 = 启动 fail-fast 语义不变（非法形态启动
+    即错，不是首帧）+ 两锚逐位 + `just cpu` 启动时序读数不漂（口径 → cpu_perf_plan.md）。
+  - 4.2 开关 → declarePass/withdrawPass（aa/ssr/velocity/picking）：验收 = A→B→A′ 往返逐位
+    （B2-5 既有判据）+ RPC /param 开关可用 + 判据 6 变异红。
+  - 4.3 开关前置 = 重编译拒：验收 = 变异「切到非法组合」→ 重编译失败 + 脏位保留 + 本帧继续
+    用旧图（B2-4③′ 失败形态 vkrenderer_impl.cppm:230-234 不变）+ 下一安全点重试语义不变。
+
+### 3.6 五方案一句话总评
+
+- O0：税照付，漂移照积，唯一「收益」是不动。
+- O1：消灭 2 个可写非法形态（哲学上最对），但付配置面破坏性，且 31 枚空开关的处置被它
+  推成「表 +6 或 +31 行」——**正交化做了一半（形态消灭）、另一半（申报）转嫁给拍板点 D**。
+- O2：迁移代价全零，消灭唯一一处「无对账、无外部兜底」的热路径漂移风险（两处判据对），
+  且是 O3/O4 的地基。
+- O3：形态最强（非法组合 compile 期拒），税 = 需求类型 + 消息迁移 + 127 射程边界要写清。
+- O4：出厂设置入动态图 = D5 定案的顺理成章延伸，但启动时序统一与诱惑管理是**新**税，
+  且其增量收益（4 个标志消掉 + 顺序契约结构化）在 O3 之后已经不大。
+
+---
+
+## 4. Q3 直接回答：plan-only 的出厂设置，纳入动态渲染图是否有必要
+
+**结论：部分必要。**
+
+把问题拆成两件事（清单里的事实正好用在这里）：
+
+**(a) 把「能力清单 / 前置判定」交给图——图当注册表 + 校验器，零发射权：必要。**
+判据 = **凡是编译图的纯函数（零设备、零副作用、可由 RgPassPlan/RgAttachmentDesc 序列算出）
+的事实，归图；需要知道「模块实际发了什么 / 离开时布局是什么」的判定，归模块，图不拿。**
+证据（全部复算）：
+- 图**已经**是 compute 参与者的校验器 + 类型化注册表，不是调度器：registerBufferAttachment /
+  declareBufferProductions/Consumptions / reconcileAttachmentSyncEdges（缺边 = 启动期/声明期/
+  重编译期点名抛错）——机制已付过建的成本；
+- `isSchedulable`（offgraph_contract_impl.cppm:183）**生产侧零调用者** = 注册表的查询面建了
+  没人用——缺的不是机制，是「让消费者消费它」这一步（O2 就是这一步；isSchedulable 同时是
+  反面教材：查询面不许无消费者地常驻）；
+- `UsageInfo::layout = nullopt` 结构性早退（render_graph_usage.cppm:87-90）证明「零发射权」
+  是**类型层事实**——把前置判定交给图，不触碰这个类型事实，D6 红线原样成立；
+- 6 处现查 = 注册表的事实没有以谓词暴露 ⟹ 每个消费者自己写一份 = 「申报点 ≠ 提供方」
+  （与 127 同根因，§5）。
+
+**(b) 把「开关生效」交给图——图当调度器：不必要，且碰红线。**
+D6 三条坚持理由（compute_调研.md:359-368）逐条对照：
+1. **模块拥有录制不可约**——IZB 的 13 条边夹在它自己的 beginRendering/dispatch/readback 之间
+   （izb_shadow_impl.cppm 的 beginMaskPass 自己开 render pass），FSR 是 vendor 黑盒一次调用
+   录完全部 job ⟹ 图代发 = 图拥有整段录制（把模块改写成图的回调），不是「顺手发一条 barrier」；
+2. **半发 = 两套发射模型**——图唯一发得出来的是 meshletVisibleFlags（prologue 写→opaque 读）；
+   IZB/EVSSM/FSR 发不出来 ⟹ 「给 buffer 发 barrier」落地必然一半图发一半模块发，比现状差；
+3. **撤掉的是唯一有牙的对账**——layoutDrift 的输入是「模块真实离开时的布局」；图代发 ⟹ 模块
+   返回的就是图自己算的数 ⟹ 判据恒真；这条线抓到的三个真 bug（resize 描述符链 / 相位表吃旧图 /
+   门位说谎）全部依赖两侧来源独立。
+
+**代价（必要的这半）**：谓词面 API 常驻（isSchedulable 教训：每个谓词必须有调用者才准常驻）；
+需求类型是 O3 的新税；启动时序统一是 O4 的新税；判据 6 的维护（每次动态面扩张，谎报布局变异
+必须红——红线护栏不免费）。**不付的代价**（(b) 不做）：发射权不动、layoutDrift 的牙不动、
+buffer 附件层维持 127 现状（到期判据在 127 自己手里）。
+
+---
+
+## 5. Q4 与 127 的关系
+
+### 5.1 是不是同一症状？是——同一根因，两个症状
+
+根因 = **「一个事实被申报在不是它提供方的层」**。
+- 127 的形态（还债总账.md 债-127 行）：buffer 附件的「依赖可见性」申报在图里（注册表 4 名 /
+  进图 3 个 / 真消费者 1 个；29 处 emit 全在模块侧；图一条命令都不发）⟹ 机制常驻、收益悬空；
+- 配置侧的形态：「velocity 在图里」这个事实被 6 处各自申报（§1.1），提供方（图）没有暴露谓词
+  ⟹ 每层各写一份，漂移无人对账（两处判据对的条件集已经不同：4 vs 3）。
+两者是同一句话的两种读法：**申报点 ≠ 提供方 ⟹ 要么多源漂移，要么机制悬空。**
+
+### 5.2 一次裁决能不能同时收掉？能。裁决句（措辞）：
+
+> **「一个事实只在它的提供方那里申报：图形态事实由 render_graph 谓词面唯一提供（配置层 /
+> 装配层 / 工具层是消费者，不是申报点）；无消费者的机制（谓词无问者 / 图内附件无消费者）
+> 删除或降级，不挂号。图提供的是「图长什么样」，不是「发什么命令」——发射权不在此句射程内。
+> 本裁决的 O3 射程只取 image 侧（装饰需求），不碰 buffer 附件注册面（那是 127 的到期判据）。」**
+
+收法分两条路径：配置侧 = O2 谓词面（现在就能做）；127 = 等触发（到期判据已在 127：下一次动
+阴影或材质时，frag 采样 / 拷贝读回两类仍不接进图 ⟹ buffer 附件降级成独立注册表；接了 ⟹ 结案）。
+**边界**：若有人把「图提供事实」读成「图顺手把 barrier 也发了」= B3 形态（已否决；D5 定案第 5
+条明写诱惑复发概率上升）——裁决句第三句就是钉这条的。
+
+### 5.3 试金石：`aa = "off"` 出厂时，`fsr.temporal` 这枚键该不该存在？
+
+三种答法，各把方案推向一条路：
+
+| 答法 | 内容 | 推向 | 后果 |
+|---|---|---|---|
+| **A「该存在，且允许它继续沉默」** | 维持现状：键在、宿主关、引擎零出声 | **O0** | 31 枚空开关永久零引擎出声；唯一守卫 = 工具层（今天 2 处，smoke.py + imgqa profile）；第四层出声点未查清 = 每出现一层再守一遍（配对表「fsr.temporal/jitter 要 aa=fsr」行的现状） |
+| **B「该存在，但死值状态要申报」** | 键保留，「宿主关 ⟹ 块死值」按 shadow 先例申报（inertNote，debug 级） | **O1** | 配置形态不动；+6 行（块级口径，需扩覆盖率护栏口径）或 +31 行（逐键口径，现有口径，表肿半倍）——拍板点 D；出厂零**可见**噪音（inertNote = debug 级，默认 info 日志不打） |
+| **C「不该存在（作为顶层独立键）」** | fsr 块归属 aa=fsr 模式（模式表形态：mode=off 的表里没有 temporal 字段可写）；「FSR 接得起来」前置（velocity 在图）由图谓词回答 | **O2/O3** | 配置面破坏（aa 字符串→表，工具 --set 语法同步）；谓词面是前置；「键在但模式关」的形态**结构性消灭**（正交化的正解） |
+
+**本文裁决：C 的形态 + B 的兜底。**
+- C 消形态：模式表形态下「aa=off 而 fsr.temporal 存在」写不出来（= 用户要的「非法组合写不出来」，
+  shadow.lua 的 mode+按档块已是同款完成态，推广即可，不是新机制）；
+- B 兜残留：表形态仍写得出来「mode=off 的表里塞了 temporal 字段」⟹ 解析期 dead-key inertNote
+  接住（复用 lintUnknownRuntimeKeys 机制——该 lint 今天只管顶层键（runtime_config.cppm:18-22
+  「lint 只看顶层」），扩展到模式块内 = 小改，0 新护栏、0 新表）；
+- 「FSR 接得起来」（velocity 在图 + shader16 + 输入齐）= ② 图事实 + 设备事实，由 O2 谓词 +
+  GateEnv 回答（computeFsrUsable 的 warn 保留——那是**可用性**申报，不是前置申报，两者不冲突）。
+这个裁决**不依赖**拍板点 D（31 枚的申报口径）——试金石答的是「该不该存在」，D 答的是
+「死值状态怎么出声」，两件事。
+
+### 5.4 ≥31 枚「出厂即空开关」的处置（不新增噪音）
+
+先纠正清单的一个**高估**（§5.5 详述）：31 枚里 29 枚的零出声**是既有裁决**，不是缺口——
+readSsrBlock 头注释（runtime_config_impl.cppm:315-327）明确裁决「configs/runtime.lua 的**其余**
+键（含 aa / render_scale / fsr.* 这些既有键）不在 gate_lint 表里，本批因此没有欠账」，理由成立
+（硬塞 = 造第三张回显表 = 与 RuntimeConfig 字段并存的第二真相源，或把 runtime 键混进 diagnostics
+的回显语义）。清单把它们标 🔴 并断言「deviated() 口径结构上碰不到」——机制描述对（deviated 只
+在偏离默认时谈，出厂生效值=默认值 ⟹ 恒沉默；且 31 枚中 fsr/ssr/taa/llm_shot/headless/ui_font 各
+**根本没有行**，谈不上「碰不到」，是「没挂号」——两种机制被一句话混了），**问题规模**错。
+
+处置（三件，按序）：
+1. **裁决记录补全**（0 机制）：readSsrBlock 的同款理由显式覆盖 wet 块（现只写了「本块」）与
+   scene.lua 的 taa 块（跨文件，无任何裁决记录）——写进当前任务文档，可改写纪律。
+2. **shadow 先例推广**（debug 级，0 可见噪音）：对「模式是块的属主」的两类块（aa 表形态 / ssr 块）
+   加**块级** dead-key inertNote——触发 = **文件显式写了死参数**（不是生效值≠默认 ⟹ 出厂配置
+   全量显式写值也**不**在 info 级出声；inertNote = debug 级，默认日志不可见 ⟹ 出厂零噪音成立）。
+   行数 = 拍板点 D（块级 6 行需扩护栏口径 vs 逐键 31 行现有口径 vs 不补）。
+3. **两枚「最危险」的归 ④ 不归 ③**（它们不是死值申报问题）：
+   - `velocity_field`：真全屏 pass + 真 RT 每帧跑、零消费者（aa=off 时 velocity pass 照装饰照跑，
+     tonemap 不读它），且「独立键」裁决建立在假前提上（drift ①，§1.2）⟹ **撤并进 aa 块**
+     （拍板点 C）——这是 31 枚里唯一「空开关有 GPU 代价」的；
+   - `mdi_shadow` 的载体：出厂建 MeshletShadowArgsService（GPU buffer，sliceRows×24B×2 ≈ 数百 KB，
+     零消费者）——刻意裁决（§19.6：生效条件不含本键，main_meshlets.cppm:460-467）⟹ 裁决本身
+     站得住（载体≠draw 门），但「出厂 GPU 资源零消费者」应在 §1.1 基线里挂号（本文已挂），
+     是否收进门 = 拍板点（代价：wireMeshletShadowArgs 早退条件 +1 项，§19.6 的裁决文字要改）。
+
+---
+
+## 6. 我不知道的（不推测填）
+
+1. **未运行任何程序**。本文所有数字读自源码；「出厂 0 findings」是谓词推断（§1.3），与清单同口径。
+   若运行：`just smoke` + grep 启动日志可验 findings=0；`just regress selftest` 可验三锚。
+2. `docs/compute_调研.md` §7 未逐节读（kind 加档「10 处静默点」的逐处、B2-4③′ 裁决全文——
+   本文只复核了引用的数字：4.5µs / 29 emit / nullopt 早退）。
+3. `qa/configs/**` 与 `tools/qa_scenes.py` 是否有**第四层出声点**（清单同未查）——O1 的迁移
+   验收面因此不完整，动手前要补查（`grep -rln "fsr\|taa\.\|meshlet\." qa/ tools/qa_scenes.py`）。
+4. `tools/checks/` 是否有静态规则守配置组合（清单同未查）——若有，O1 迁移要把该规则纳入验收。
+5. imgqa 其余子命令的组合守卫（只复核了 engine_profile.cpp:357-363 的 checkFsrOpts）。
+6. `meshletCullItems`「只注册不进图」是刻意还是迁移半成品：事实已核（注册于
+   meshlet_cull_service_impl.cppm:192；图内无声明；kAttachmentSyncEdges 恰 1 条只有
+   meshletVisibleFlags），定性不能——它恰是 127 到期判据清单上的样本，等 127 触发时一并裁。
+7. izb/evssm 懒构造首帧时序对帧末对账的全部影响（清单同未查）。
+8. 两处判据对（computeFsrUsable × initFsr）漂移的**实际后果分布**：initFsr 缺输入 = 构造 throw
+   （可见）；shader16 半边的漂移 = FsrUpscaler 构造期 vendor SPIR-V 能力检查失败（形态是启动
+   报错还是垃圾画面，未实机验——注释说「垃圾画面且不指名」，按注释记，未复现）。
+
+## 7. 需要项目主人拍板的（二选一 + 各自后果）
+
+**拍板 A：`meshlet.enable` 的处置**
+- (a) 改名成资源门（如 `meshlet.assets`）+ 块内 9 键的宿主条件注释逐键修正。
+  后果：配置面破坏（tools/smoke.py、imgqa、`qa/configs/**`、docs 的引用一次同步，一次性成本）；
+  「总门」假象消除，块内新键不再继承谎言。
+- (b) 保留键名，只修注释（含 §1.2 差异 ⑥ 的两条过期注释）。
+  后果：零破坏；「总门」谎言保留，meshlet 块再加新键时继续借语义（本文 Q1 分类里 enable 的
+  ④ 定性留在文档里，不落在代码里）。
+
+**拍板 B：图作图事实提供者的射程**
+- (a) 只出查询（O2）。后果：启动期 warn 保留（形态不变），漂移风险消除，消息形态 0 迁移；
+  O3 的「compile 期拒」留待下一次。
+- (b) 含需求申报（O3）。后果：warn → compile error（消息形态变 ⟹ smoke.py 正则等工具同步，
+  漏一处 = 工具静默失配）；形态更强（非法组合启动即拒）；127 射程边界（§5.2 裁决句第三句）
+  要写进验收。
+
+**拍板 C：`velocity_field` 的处置**
+- (a) 撤并进 aa 块（删独立键；aa=fsr 隐含打开——applyAaKey 现成那一行 runtime_config_impl.cppm:263
+  就是全部隐含逻辑，删键 = 「velocity 不能单独开」的形态）。后果：配置面破坏（键删除，
+  tools/qa/docs 引用同步）；「空开关有 GPU 代价」形态（aa=off × velocity=true = 每帧白付全屏
+  pass + RT）结构性消灭；假前提（drift ①）连裁决带注释一起删。
+- (b) 保留独立键，重写「非 FSR 消费者」注释为「无独立消费者，aa=fsr 时隐含打开」。
+  后果：假前提裁决保留（独立性没有事实支撑但保留）；velocity_field=true × aa=off 的每帧 GPU
+  代价保留（只多一条 lint inertNote 或 0 申报）。
+
+**拍板 D：31 枚死值申报的护栏口径**
+- (a) 扩口径到「块级门」（每块 1 行，≈6 行；新门名种类 ⟹ tests/test_gate_lint.cppm 覆盖率
+  断言同步改）。后果：表不长，口径多一种（块级 vs 键级，两种门的判据不同 = 维护面 +1）。
+- (b) 逐键行（31 行，现有口径不动）。后果：护栏口径零变化；表从 60 行涨到 ≈90 行（「加行」
+  路径的税，用户原话「没想到那么严重」的另一种严重）。
+- (c) 不补（维持 readSsrBlock 裁决，0 行）。后果：零出声状态保留（§5.4 的 3 件处置里第 2 件
+  也不做）；只有拍板 C 的 velocity 撤并消掉最危险那一枚。
+
+**拍板 E（确认，不是新拍板）：O3 是否触发 127 到期判据**
+127 的到期判据 = 「下一次动阴影或材质时」检查 frag 采样/拷贝读回是否接进图。O3 的「前置申报
+进图」若被理解为「动图附件面」= 触发 ⟹ 按 127 现状（两类仍不接）buffer 附件应**降级**成独立
+注册表——与 O3「申报进图」方向**直接冲突**。所以本文裁决句已把 O3 射程钉死在 image 侧
+（装饰需求），不碰 buffer 附件注册面。需要确认的是：**这个钉法你认不认**（认 = O3 与 127 可以
+并行排期；不认 = O3 排在 127 结案之后）。
+
+## 8. 目标形态与施工顺序（主 agent 定稿，2026-10-16）
+
+⚠ **本节取代初稿的「如果只能做一件事」一节**，原结论（只做 O2 谓词面）作废。
+项目主人的批评是：「我总觉得就是最小阻力原则，更好的设计都被否决了。」——**这条成立**，
+而且错在方法层：那个提问（"只能做一件"）**按成本排序，答案必然是地板**。
+把被提问方式约束出来的最小答案当成设计结论推荐，是本篇初稿的缺陷。逐条复核见 §8.0。
+
+### 8.0 三项被"成本理由"推迟、而成本理由站不住的
+
+| 项 | 当初的推迟理由 | 为什么站不住 |
+|---|---|---|
+| **O1 枚举化**（`meshlet.mode` / `instrument` 三值 / `fsr` 归 `aa` 模式表） | 配置面破坏性 | 本仓为**同样的**破坏性付过两次钱、两次都赢：`aa` 三态化（`docs/phase14_plan.md:1337-1352`，动机原话"三布尔 8 种写法只有 3 种有意义"）、`shadow.mode` 换轨（`docs/shadow_routes_plan.md:186-190`，"让位链不是被修好，是被消掉"）。两次都是**删规则**不是加规则 ⟹ 这是已验证打法，不是新冒险 |
+| **拍板 C：`velocity_field` 撤并** | 删键要同步工具/qa/docs | 它的独立性**没有事实支撑**（`shaders/taa.frag.slang:783` 自陈"本项目没有 velocity buffer 是因为不需要：重投影是解析的"，而 `configs/runtime.lua:28-30` 与 `runtime_config.cppm:304-305` 仍写"TAA 要它"）。留着 = 给一个假前提持续交维护税；且 `velocity_field=true × aa=off` 是**每帧白付一个全屏 pass + 一张 RT** 的空开关（有 GPU 代价，不是零代价的沉默） |
+| **拍板 A：`meshlet.enable` 改名** | 改名要同步一片引用 | "总门"是假象这件事**正是**块内 9 键宿主条件不统一的成因（§2.2：overlay/mdi_shadow 不含它、debug/tint 只经条目间接含）。不改名，下一个新键继续继承这个谎言。同步是一次性 grep 成本，不是持续税 |
+
+**仍然按原则否决的只有一项：O4**（开关 = 动态渲染图操作）。理由**不是成本**，是 D6 三条坚持理由
+逐条命中、且 layoutDrift 会被撤成恒真（§3.5 / §4(b)）。**这条是设计结论，不是最小阻力**——
+把它和上面三项混在"以后再说"里，正是初稿的错。
+
+### 8.1 目标形态（一句话）
+
+> **一枚能力 = 一枚模式（或一个从属该模式的参数块）；它需要什么图形态由图回答；
+> 资源分配不出现在配置面。**
+
+在这个形态下 gate_lint 申报表是**变短**的。申报表的存在意义只是"记录还没被类型消灭的合法组合"
+⟹ **它的行数是要往下掉的指标，不是往上加的**（这条也是判"某次改动方向对不对"的试纸）。
+
+### 8.2 施工顺序（四阶段，每阶段独立可验收、可回退）
+
+**S1 图事实谓词面**（O2 的谓词半）——排第一**不是因为它最小**，而是因为 O1/O3 都要吃它：
+
+- 交付：`hasAttachment` / `hasPassName` / `hasPassState`（先例 = `graphHasDeferredLight`，
+  它是 `render_graph` 今天**唯一**导出的图事实谓词）+ 把 `computeFsrUsable` 与 `Renderer::initFsr`
+  两份条件集不同的判据统一成一个 `fsrInputsReady(graph)`。
+- 验收：6 处现查 grep 命中 0（只剩谓词本体）+ 每谓词一正一反单测进 `just test` + 三锚逐位 +
+  🔴 **每谓词必须有调用者**（`OffGraphSchedule::isSchedulable` 生产侧零调用者 = 查询面建了没人用
+  的反面教材；无调用者的谓词不落地）。
+
+**S2 配置层类型消灭**（O1 + 拍板 A + 拍板 C）：
+
+- `meshlet.mode`（off/overlay/switch）+ `meshlet.instrument`（none/offset/tint）；
+  `fsr` 块从属 `aa` 模式表（§5.3 试金石的 C 形态）；`velocity_field` 撤并进 aa 块；
+  `meshlet.enable` 降级改名为资源门 + 块内逐键宿主条件注释修正。
+- 验收：**申报表行数下降**（目标 ≥ −6 行）+ 装配层"让位/互斥"warn 删除 + 三锚逐位 +
+  §8.3 的 grep 面全同步。
+
+**S3 需求申报进图**（O3，**只取 image 侧装饰需求**）：装饰请求携带"我要什么图形态"，
+非法形态 compile 期拒；gate_lint 的图形态类前置降级为"图已保证"（目标再 −3 行）。
+🔴 射程边界：**不碰 buffer 附件注册面**——那是 债-127 的到期判据（§5.2 裁决句第四句），
+碰了就会把 127 的"降级"结论反向触发。
+
+**S4 死值申报口径**（拍板 D）——**排最后，且默认不做**：S1–S3 做完后重数"出厂即空开关"，
+剩下的才决定块级 / 逐键 / 不报。理由：S2 会直接消灭其中一部分，**先加行再删行是纯浪费**。
+
+### 8.3 每阶段都要付的三件小事（别漏）
+
+1. 配置面改名的 grep 面：`configs/*.lua`、`tools/smoke.py`、`tools/imgqa/engine_profile.cpp`、
+   `tools/regress.py`、`qa/configs/**`、`tools/qa_scenes.py`、docs（附录 A 那 13 条漂移顺手一起收）。
+2. 锚点：出厂 `95edc8cc…` / 门关红线 A `54e40665…` / aa 出厂 `fdece9d0…`——引用处必须同时写明
+   是哪一态（`docs/mdi_plan.md` §18.11 的口径）。
+3. 覆盖率护栏：S2 改门名 ⟹ `tests/test_gate_lint.cppm` 的三方对账钉子数字同步；
+   🔴 不许把键名清单抄进测试（抄了等于没抄来源，见该用例注释）。
+
+---
+
+## 附录 A：漂移清单（10 条证实 + 3 条新发现）
+
+| # | 位置 | 漂移 | 状态 |
+|---|---|---|---|
+| 1 | configs/runtime.lua:28-30 + runtime_config.cppm:304-305 | velocity_field 称有非 FSR 消费者（TAA 重投影要它）；taa.frag.slang:783 自陈重投影是解析的、不需要 velocity buffer | 证实 |
+| 2 | main_meshlets.cppm:387 | 「-1 = 出厂默认」；实为 5（runtime_config.cppm:529） | 证实 |
+| 3 | gate_lint_impl.cppm:233-243 | debug/tint 消息「或 enable=false ⟹ 强制归 base」；pickMeshletMeshVariant 只判 overlay（main_meshlets.cppm:136-144）——**本文补充**：谓词的 `!enable` 半边同样不是消费者判据（§1.2 差异 ⑤） | 证实 + 加重 |
+| 4 | gate_lint_impl.cppm:107 | picking inertNote「任何可装饰图都行」；highlight 在 offscreen 内建图必失败（firstColorConsumerIndex 要求 sampleRead 色输入，offscreen 图只有 blit 上屏，render_graph_builtin.cppm:108-145） | 证实 |
+| 5 | configs/diagnostics.lua:49-52 | dgc_static 非布尔「静默回落 false」；meshlet 块走 readStrictBoolKey（类型错 = 启动失败）——同一配置面两种布尔纪律 | 证实 |
+| 6 | render_graph_usage.cppm:128 | 段标题「三个 kind 谓词」，其下四个（同文件 :7、:20 写四个） | 证实 |
+| 7 | docs/技术概念.md（gate_lint 行） | 「43 门」；实际 60 行 / 53 门 | 证实（实测侧复算） |
+| 8 | docs/技术概念.md（offgraph_sync 行） | 「边表 24 条 / 门 6 道」；实际 28 条 / 7 道（B2-4② meshlet 加 4 边 1 门没跟到） | 证实 |
+| 9 | docs/gate_lint_plan.md :106/:108/:163/:204 | 「46 行 43 门」「45 个门」「覆盖率 38 门」「阴影 13 行 11 门」；实际 60 行 / 53 门 / 阴影 16 行 13 门 | 证实 |
+| 10 | docs/shadow_routes_plan.md:186-190 | 「阴影 13 行 11 门」（旧读数） | 证实 |
+| 11（新） | main_impl.cppm:412 | 「门 = FSR 门开（`runtime.fsr_upscaler`）」——旧键名（14.6 已删，现为 aa=fsr） | 新发现 |
+| 12（新） | runtime_config.cppm:480-482 | meshletSwitch 三态注释「enable && !switch → α 形态：旧路径照画 + 共面影子叠加」——债-105 后叠加段有独立门 overlay（默认关），描述过期 | 新发现 |
+| 13（新） | configs/runtime.lua meshlet 块头注释 | 「★1-a1ii-α 起 enable 开 = 恒 L0 簇影子叠加」——同样过期于债-105 | 新发现 |
+
+## 附录 B：关键数字复算公式
+
+```bash
+# gate_lint 60 行 / 53 门
+awk '/const GateRule kGateRules\[\]/,/^};/' rgl/gate_lint_impl.cppm | grep -c '{"'          # 60
+awk '/const GateRule kGateRules\[\]/,/^};/' rgl/gate_lint_impl.cppm | grep -oP '\{"[^"]+"' | sort -u | wc -l  # 53
+# meshlet 段 14 行
+awk '/const GateRule kGateRules\[\]/,/^};/' rgl/gate_lint_impl.cppm | grep -c 'meshlet\.'   # 17（14 行门名 + 3 行消息内提及）
+
+# 29 处 emit（债-127 复算口径）
+grep -rn "\.emit(" rgl/*.cppm | wc -l                                                        # 29
+# 边表 28 / 门 7
+sed -n '151,189p' rgl/offgraph_sync.cppm   # RgSyncEdgeId 枚举：evssm 3 + izb 13 + cull 8 + meshlet 4
+grep -n "kSyncGateCount = " rgl/offgraph_sync.cppm                                           # 7
+
+# buffer 附件：注册 4 / 进图 3 / 真消费者 1
+grep -rn "registerBufferAttachment(" rgl/ --include=*.cppm | grep -v "void register"          # 4 调用点
+sed -n '488,495p' rgl/offgraph_sync_impl.cppm                                                # kAttachmentSyncEdges = 1 条
+# 进图 3 个 = declareBufferProductions 客户：izb_head/izb_nodes（vkrenderer_offgraph.cppm:141,166）
+#   + meshletVisibleFlags（vkrenderer.cppm:371-372 注释 + syncIzbGraphAttachments 同款调用）；meshletCullItems 无声明
+
+# 图事实谓词唯一导出 + 3 问者
+grep -rn "graphHasDeferredLight" rgl/ --include=*.cppm                                       # 声明 :650 + 3 生产调用
+# isSchedulable 生产侧零调用者
+grep -rn "isSchedulable" rgl/ tests/ --include=*.cppm                                        # 只有 tests 调
+
+# 6 处现查（含 initFsr 5 调用点）
+sed -n '632,649p' rgl/main_scene.cppm        # computeFsrUsable has() lambda
+sed -n '299,307p' rgl/vkrenderer_offgraph.cppm   # findAttachmentSlot ×5
+sed -n '100,101p' rgl/vkrenderer_offgraph.cppm   # izbPreFrame depth find_if
+sed -n '22,24p' rgl/picking_impl.cppm      # object_id
+sed -n '51,52p;90,91p' rgl/frame_capture_impl.cppm  # swapchain kind + slotOfName
+
+# 31 枚出厂空开关（清单口径）
+grep -n "taa\." rgl/scene_config_impl.cppm | head -10      # taa 9 键（:106-114）
+cat configs/runtime.lua    # fsr×2 / ssr 系数×6 / llm_shot×3 / headless_size / ui_font_size
+cat configs/shadow.lua     # pcss×3 / evssm×4 / izb.grid / rpc_port 在 diagnostics.lua
+
+# 9 个 ensure
+grep -c "std::expected<uint32_t, Error> ensure" rgl/render_graph_rtslot.cppm   # 7
+grep -n "ensureDepthSampleSlot\|ensureFsrSampleSlot" rgl/vkresources.cppm      # +2 = 9
+
+# 7 个 decorateXxxPass + 装饰函数本体零 logger
+grep -c "^bool decorate.*Pass" rgl/render_graph_decorate.cppm                  # 7
+grep -c "RLLogger\|logger" rgl/render_graph_decorate.cppm                      # 0
+
+# 8 附件级校验 + 5 pass 级 precheck
+sed -n '179p' rgl/render_graph_impl.cppm        # 注释列 8 条
+grep -c "precheck" rgl/render_graph_impl.cppm   # 5 函数（ReadUsages/Draw/Fullscreen/Blit/Pass）
+```
+
+（完）
+
+---
+
+## 附录 C：同一根因多层各喊一次（配对表，11 个根因）
+
+「申报点 ≠ 提供方」的可数证据。**读法**：同一行里各层的判据**是否同一条**决定它是不是重复申报——
+"不同"往往意味着**出厂态下有一层结构性沉默**（最危险的是 switch×overlay 那一行）。
+
+| 根因 | 各层位置 | 判据是否相同 |
+|---|---|---|
+| `meshlet.switch` × `cull_replay ≠ cpu` | lint `gate_lint_impl.cppm:259-264` / 装配 `main_meshlets.cppm:216-221` | 不同（装配排在设备规格闸门之后） |
+| `meshlet.switch` × `overlay` 互斥 | lint `:265-270`（要 `overlay=true`）/ 装配 `main_meshlets.cppm:246-250`（switch 生效就喊） | **不同 ⟹ 出厂 `overlay=false` 时开 switch，只有装配层喊，lint 沉默** |
+| `meshlet.coplanar` 无消费者 | lint `:249-255` / INFO orphan 尾巴 `main_meshlets.cppm:674-677` / switch 互斥 warn 第二句 `:244-250` | 三条各不同 |
+| `meshlet.overlay` 无条目可采 | lint `:228-232` / 装配按 `hosts==0` 事实 `main_meshlets.cppm:105-110` | 不同层（配置组合 vs 事实） |
+| `meshlet.cull` 无消费者 | lint `:271-281`（两条）/ 装配 `main_meshlets.cppm:697,711` / 建表侧 `main_meshlet_tables.cppm:532` | 三处 |
+| `meshlet.shadow_lod` × `enable` | lint `:282-286` / 装配按"零条目" `main_meshlets.cppm:426` | 不同（lint 判 enable，装配判产物命中） |
+| `meshlet.mdi_shadow` 宿主不在 | lint `:292-297` / 装配 `main_meshlets.cppm:568` / 载体未建 `:503` | 三处 |
+| `dump_gbuf` 需 `llm_debug` + deferred | lint error `:113-115` / `frame_capture_impl.cppm:139` / `diagnostics_impl.cppm:272`（越界） | 三层 |
+| `izb` × 非 deferred / × `mode=none` | lint error `:116-122` / 运行期**刻意不喊**的静默早退 `vkrenderer_offgraph.cppm:104-105` / izb 空段 warn `:542` | 分工明确（lint 喊配置、运行期喊场景）——**本表里唯一一处"各层判据本就不同且都该如此"** |
+| `fsr.temporal` / `fsr.jitter` 要 `aa=fsr` | 引擎内**零出声** / `tools/smoke.py:563-566` / `tools/imgqa/engine_profile.cpp:357-363` | 工具两处同谓词；**引擎内没有守卫**（S2 的 C 形态要收的就是这一格） |
+| `--clip`（`scene.taa.clip_mode`）要 `aa=taa` | 引擎内**零出声** / `tools/smoke.py:560-562` | 只有工具层守 |
+| `velocity_field` 与 `aa=fsr` | 方向是 **fsr 要 velocity**（`main_scene.cppm:640`）；`aa=fsr` 解析期隐含打开 velocity（`runtime_config_impl.cppm:258-263`） | 反向（velocity 单独开）**无人守**，且其"非 FSR 消费者"理由已漂（附录 A 第 1 条） |
+
+**这张表怎么用**：S2 每消灭一格，就在本文勾掉一行；如果某次改动让表**变长**（新根因又跨层了），
+说明它在加申报点而不是在收提供方。
