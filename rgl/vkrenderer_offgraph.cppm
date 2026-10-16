@@ -97,13 +97,14 @@ void Renderer::izbPreFrame() {
 	if (!shadowFormPlan(shadowConfig()).consumeIzbMask)
 		return;
 	const bool deferred = graphHasDeferredLight(renderGraph.passes);
-	const auto depthIt = std::ranges::find_if(renderGraph.attachments,
-		[](const auto& a) { return a.kind == RgAttachmentKind::depth; });
+	// 深度按 **kind** 查（IZB 要的是「那张深度附件」，与它叫什么无关）——与 FSR 的按名查
+	// 是两条不同轴，理由见 `kDepthName` 头注释。债-129 S1a：现查收进图事实查询面。
+	const auto depthAtt = graphAttachmentSlotByKind(renderGraph.attachments, RgAttachmentKind::depth);
 	// 非 deferred 在此静默早退是**合法运行期形态**（图判定不该在录制路径打日志）；
 	// 「izb 配了却必然无效」由 gate_lint 启动期 error 喊（规则按门名 `izb` 登记，2026-10-02）。
-	if (!deferred || depthIt == renderGraph.attachments.end())
+	if (!deferred || !depthAtt)
 		return;
-	depthAttSlot = static_cast<int32_t>(depthIt - renderGraph.attachments.begin());
+	depthAttSlot = static_cast<int32_t>(*depthAtt);
 	const auto extent = swapchain->getRenderExtent();  // 批 14.3：IZB mask 与颜色附件同网格
 	if (!izbShadow || izbShadow->getExtent() != extent) {
 		vkDevice.getDevice().waitIdle();
@@ -266,15 +267,6 @@ void Renderer::evssmPreFrame() {
 
 
 // ── 批 14.5 FSR ────────────────────────────────────────────────────────────────
-// 按名字现查图附件 slot（**不缓存下标**，同 TAA 锚点「现搜」的纪律：装饰器插入顺序变了
-// 不会让这里认错附件）。FSR 的三个输入全部来自编译图本体 = 单一真相源。
-int32_t Renderer::findAttachmentSlot(std::string_view name) const {
-	const auto it = std::ranges::find_if(renderGraph.attachments,
-		[name](const auto& a) { return a.name == name; });
-	return it == renderGraph.attachments.end() ? -1
-	                                           : static_cast<int32_t>(it - renderGraph.attachments.begin());
-}
-
 // 批 14.5：FSR 的构造（Renderer ctor 调用；抽成方法是为了不把 ctor 的认知复杂度推过红线）。
 // 判据与装配层 `assembleBackEnd` 的 fsrUsable **必须一致**——不一致的后果是「tonemap 的色
 // 输入槽已烘进管线条目却没人写描述符」= 读到未初始化描述符，画面出垃圾且不指名，
@@ -283,33 +275,24 @@ void Renderer::initFsr() {
 	const auto slot = resources->ensureFsrSampleSlot();
 	if (!slot)
 		throw std::runtime_error("Renderer: FSR 采样槽领取失败");
-	// 三个输入按**编译图里的附件名**现查 slot（同 TAA 锚点「现搜不缓存下标」的纪律）。
-	// 色输入优先级 **ao_applied > taa_out > scene_hdr**：
-	//  · ao_applied（批 14.5 第三批）= 「成片 × AO 可见度」。AO 必须乘在时域滤波**之前**
-	//    （批 13.6 实测：乘在之后 = 噪声零平均，占残余 shimmer 62%），而 FSR 就是时域
-	//    滤波器 ⟹ 必须接这张，否则 AO 只能落回 tonemap = 时域之后，13.6 的收益整条丢掉。
-	//  · taa_out：TAA 在图里时 AO 已乘在它里面（批 13.6），接它 = 不旁路 TAA。
-	//  · scene_hdr：两者都不在（此时 ao_apply 也不会插，见 decorateAoApplyPass 跳过条件）。
-	// 批 14.5 第七批：**申报与「色输入在哪个空间」绑死**——这条不变量的唯一来源。
-	// `taa_out` 自批 13.5 起已在**基空间**（TAA 自己 un-jitter 过），`ao_applied` /
-	// `scene_hdr` 则带抖动。FSR 的 `jitterOffset` 必须恰好等于「色输入实际带的内容位移」，
-	// 色输入是 taa_out 时那份位移就是 **0**——照投影抖动申报会让 FSR 再 un-jitter 一次。
-	// 此前申报走**另一条独立链路**，与这里选中哪个分支毫无耦合 ⟹ 三个分支两个恰好对、
-	// 一个必错，且错了不报错、VVL 不抓、症状只是糊。先例 = AO 施加点取「实际图形态」。
-	const int32_t taaOutSlot = findAttachmentSlot(kTaaOutName);
-	fsrColorSlot = findAttachmentSlot(kAoAppliedName);
-	if (fsrColorSlot < 0)
-		fsrColorSlot = taaOutSlot;
-	if (fsrColorSlot < 0)
-		fsrColorSlot = findAttachmentSlot(kSceneHdrName);
-	fsrColorBaseSpace = (taaOutSlot >= 0 && fsrColorSlot == taaOutSlot);
-	fsrVelocitySlot = findAttachmentSlot(kVelocityName);
-	fsrDepthSlot = findAttachmentSlot("depth");
-	if (fsrColorSlot < 0 || fsrVelocitySlot < 0 || fsrDepthSlot < 0)
+	// 三个输入 = 图事实，唯一来源 = `render_graph` 的查询面（债-129 S1a）。色输入优先级链
+	// `ao_applied > taa_out > scene_hdr` 与「选 taa_out ⟹ 已在基空间 ⟹ jitterOffset 必须取
+	// 0」这条不变量**整段搬进 `graphFsrColorInput`**（链与它的理由都在那儿，本处不重述）。
+	// 收口前这里是三次现查 + 两次比较，而装配层 `computeFsrUsable` 另写一份**漏了
+	// ao_applied 档**的条件集（4 条 vs 3 条）——两份判据各说各话正是这次正交化的病本体。
+	// 🔴 判齐备只准用 `complete()`：那才是与装配层共享的**判据本体**，不是共享函数名。
+	const auto inputs = graphFsrInputs(renderGraph.attachments);
+	if (!inputs.complete())
 		throw std::runtime_error(fmt::format(
 			"Renderer: fsrEnabled 但编译图里缺 FSR 输入附件（color={} velocity={} depth={}）"
 			"——装配层的 fsrUsable 判据与本处不一致 = 两处判据漂移",
-			fsrColorSlot, fsrVelocitySlot, fsrDepthSlot));
+			inputs.color ? static_cast<int32_t>(inputs.color->slot) : -1,
+			inputs.velocity ? static_cast<int32_t>(*inputs.velocity) : -1,
+			inputs.depth ? static_cast<int32_t>(*inputs.depth) : -1));
+	fsrColorSlot = static_cast<int32_t>(inputs.color->slot);
+	fsrColorBaseSpace = inputs.color->baseSpace;
+	fsrVelocitySlot = static_cast<int32_t>(*inputs.velocity);
+	fsrDepthSlot = static_cast<int32_t>(*inputs.depth);
 	fsr = std::make_unique<RGL::FsrUpscaler>(vkDevice, *resources,
 		swapchain->getRenderExtent(), swapchain->getExtent(), *slot, fsrTemporal);
 }

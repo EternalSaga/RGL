@@ -26,6 +26,8 @@ from config import (ALLOWED_CPP, AGENTS_DOC_INDEX_SECTION, AGENTS_FILE,
                     GENERATED_INIT_BASELINE_COMMENT, GENERATED_INIT_BASELINE_FILE,
                     GENERATED_INIT_SCAN_DIRS, GENERATED_INIT_UPDATE_CMD,
                     GENERATED_STRUCT_RE, GENERATED_TRUTH_DIR,
+                    GRAPH_FACT_PREDICATE_RE, GRAPH_FACT_PREDICATE_SOURCE_FILE,
+                    GRAPH_FACT_PROVIDER_FILES,
                     IMGQA_SELFTEST_CALL_RE, IMGQA_SELFTEST_CHK_TOKEN,
                     IMGQA_SELFTEST_DECL_COUNT_RE, IMGQA_SELFTEST_EXPECT_RE,
                     IMGQA_SELFTEST_HEADER, IMGQA_SELFTEST_ROUTINE,
@@ -1758,3 +1760,133 @@ def imgqa_selftest_checks() -> list[Warning]:
                 "处置：改这一行的数字（**先确认** B 的三方集合本来就相等——别拿改数字掩盖缺项）",
                 "error"))
     return warnings
+
+
+# ─── 图事实谓词「无问者即红」（债-129 S1a，§14）─────────────────────────────────
+
+SCAN_GRAPH_FACT_PREDICATES: dict[str, int] = {}
+SCAN_GRAPH_FACT_DEAD: list[str] = []
+
+
+def _balanced_bodies(src: str, names) -> dict[str, str]:
+    """取每个名字的**函数体**（花括号配对），供「谓词调谓词」的存活闭包用。
+
+    只认 `name(<不含分号的实参表>) [const] {` 形态 = 定义（声明以 `;` 收尾，`[^;]*?` 吃不过去）。
+    取不到体 = 该名字不进闭包（保守：宁可漏判存活、多报一条死谓词让人回答，不可反过来假绿）。
+    """
+    out: dict[str, str] = {}
+    for n in names:
+        m = re.search(rf"\b{n}\s*\([^;]*?\)\s*(?:const\s*)?\{{", src)
+        if not m:
+            continue
+        start = src.index("{", m.start())
+        depth = 0
+        for j in range(start, len(src)):
+            if src[j] == "{":
+                depth += 1
+            elif src[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    out[n] = src[start:j + 1]
+                    break
+    return out
+
+
+def graph_fact_predicate_readout() -> str:
+    """谓词条数与存活分布读数；没跑过 = 空串（main.py 读数段据此打「未执行」）。"""
+    if not SCAN_GRAPH_FACT_PREDICATES:
+        return ""
+    return (f"谓词 {len(SCAN_GRAPH_FACT_PREDICATES)} 条 / 生产问者最少 "
+            f"{min(SCAN_GRAPH_FACT_PREDICATES.values())} 条 / 不在存活链 "
+            f"{len(SCAN_GRAPH_FACT_DEAD)} 条")
+
+
+def graph_fact_predicate_checks() -> list[Warning]:
+    """`render_graph` 图事实查询面的每条谓词必须有**生产侧**调用者（债-129 S1a）。
+
+    ## 病根
+    查询面建了没人用 = 「机制常驻、收益悬空」。现成反面教材 = `OffGraphSchedule::isSchedulable`：
+    接口 + 实现 + 十几条单测都在，生产侧零调用者 ⟹「有查询面」被读成「已收口」，而「图能不能
+    调度这个 pass」这件事仍然没人问。本规则要防的正是 S1a 自己变成第二个它——所以判据落成
+    护栏而不是文档里一句「必须有调用者」（文档只记录不阻止）。
+
+    ## 判据
+    - 谓词名单的真相源 = `render_graph.cppm` 的**命名约定**（`export <返回类型> graph<大写>(`）。
+      🔴 名单不抄进任何地方（含 config.py）：抄一份「哪些是谓词」正是本规则要防的副本。
+    - 问者 = `rgl/` 下除提供方两文件（接口 + impl 分区）外，**剥注释后**出现 `name(` 的文件。
+      剥注释是必须的：接口注释里满是在解释这些谓词的名字，不剥 = 每条都自带一个假问者。
+    - 🔴 **tests/ 不在问者扫描面**：测试调用者不算消费者（isSchedulable 的调用者全在 tests，
+      一条生产路径也没守住）。
+    - **传递存活**：被「已存活的谓词」在**函数体内**调用的谓词算活（`graphHasPassState` 的唯一
+      问者是同模块的 `graphHasDeferredLight`，而后者有生产问者）。体边界用花括号配对取，
+      不按文件粗算——按文件算会让两条**互相引用而都无人问**的死谓词彼此点亮 = 假绿。
+    - 零问者 = ERROR，处置二选一：接上问者，或删掉它（裁决句 → docs/配置正交性_plan.md §5.2
+      「无消费者的机制删除或降级，不挂号」）。**不是**来登记额度——本规则没有基线文件。
+      （本规则落地当天就抓到两条自建的零问者谓词 `graphHasAttachment` / `graphPassIndex`
+      ——「先建后找」正是它要拦的动作，S1b/S3 有问者了再长回来。）
+
+    ## 失效必须出声
+    源文件读不到 / 解析出 0 条谓词 / 问者面 0 个文件 ⟹ ERROR（"没数"不是"都干净"，
+    同 §10 RPC 路由对账的纪律）。命名约定改了（比如全改成 `hasXxx`）会让解析掉到 0 而红——
+    那是**期望行为**，不是误报。
+
+    ## 盲区（写下来不装没看见）
+    - **只判「有没有」不判「够不够」**：只被一处调用的谓词也过。改成「每条 ≥N 问者」会把
+      「先切一处、下一刀再切其余」的正常分阶段施工判红。
+    - 经函数指针 / 宏 / 模板间接调用的形态扫不到（本仓当前无此形态）。
+    - 名字出现在**字符串字面量**里会被当成问者（`strip_comments` 不剥字面量）——当前无此形态，
+      出现即误报，届时收紧而不是放宽本规则。
+    """
+    src = read_text(Path(ROOT) / GRAPH_FACT_PREDICATE_SOURCE_FILE)
+    if src is None:
+        return [Warning("tools/checks/config.py", 0,
+            f"图事实谓词对账**本次未做任何对账**：{GRAPH_FACT_PREDICATE_SOURCE_FILE} 读不到"
+            "（改名 / 搬走了？同步改 tools/checks/config.py 的 GRAPH_FACT_PREDICATE_SOURCE_FILE）"
+            "——「零警告」不是「每条谓词都有人问」", "error")]
+    names = sorted(set(re.findall(GRAPH_FACT_PREDICATE_RE, strip_comments(src), re.M)))
+    if not names:
+        return [Warning(GRAPH_FACT_PREDICATE_SOURCE_FILE, 0,
+            "图事实谓词对账**本次未做任何对账**：解析出 0 条 "
+            f"`export … graph<大写>(` 声明（命名约定改了？同步改 tools/checks/config.py 的 "
+            "GRAPH_FACT_PREDICATE_RE，别让这条规则静默空跑）", "error")]
+    callers: dict[str, list[str]] = {n: [] for n in names}
+    provider_src = ""
+    scanned = 0
+    for rel in rgl_cppm_files():
+        text = strip_comments(read_text(Path(ROOT) / rel) or "")
+        if Path(rel).name in GRAPH_FACT_PROVIDER_FILES:
+            provider_src += text + "\n"  # 提供方内部引用走下面的「函数体」判据，不算问者
+            continue
+        scanned += 1
+        for n in names:
+            if re.search(rf"\b{n}\s*\(", text):
+                callers[n].append(rel)
+    if scanned == 0:
+        return [Warning("tools/checks/config.py", 0,
+            "图事实谓词对账**本次未做任何对账**：问者扫描面（rgl/ 的 .cppm）解析出 0 个文件"
+            "——「零警告」不是「每条谓词都有人问」", "error")]
+    # 传递存活：从「有生产问者」的谓词出发，沿**调用边的反方向**做闭包——
+    # 「活的 m 调用了 n」才让 n 活（方向写反 = 被调用者点亮调用者，一条死谓词只要调用了
+    # 任何活谓词就永久假绿）。边只在**提供方函数体**内取，不按文件粗算：按文件算会让两条
+    # 互相引用、而都无人问的死谓词彼此点亮。
+    bodies = _balanced_bodies(provider_src, names)
+    live = {n for n in names if callers[n]}
+    grew = True
+    while grew:
+        grew = False
+        for n in names:
+            if n in live:
+                continue
+            if any(m in live and m != n and re.search(rf"\b{n}\s*\(", bodies.get(m, ""))
+                   for m in names):
+                live.add(n)
+                grew = True
+    SCAN_GRAPH_FACT_PREDICATES.clear()
+    SCAN_GRAPH_FACT_PREDICATES.update({n: len(callers[n]) for n in names})
+    SCAN_GRAPH_FACT_DEAD[:] = [n for n in names if n not in live]
+    return [Warning(GRAPH_FACT_PREDICATE_SOURCE_FILE, 0,
+        f"图事实谓词 `{n}` 生产侧零问者、也不在任何存活谓词的调用链上 = 机制常驻、收益悬空"
+        "（反面教材 = `OffGraphSchedule::isSchedulable`：接口 + 实现 + 单测都在、生产侧没人问）。"
+        "处置二选一：接上问者，或删掉它（→ docs/配置正交性_plan.md §5.2「无消费者的机制"
+        "删除或降级，不挂号」）。🔴 本规则没有基线可登记——「先建后找」就是本条要防的形态。",
+        "error") for n in SCAN_GRAPH_FACT_DEAD]

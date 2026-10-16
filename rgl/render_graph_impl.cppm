@@ -630,12 +630,7 @@ vk::ImageMemoryBarrier2 materializeBarrier(const RgBarrierPlan& plan, VkImage im
 		plan.srcStage, plan.dstStage, plan.srcAccess, plan.dstAccess);
 }
 
-/** graphHasDeferredLight 定义（接口注释见 render_graph.cppm：图事实层判据，收口原
- *  IZB / EVSSM 两处逐字相同的 any_of）。 */
-bool graphHasDeferredLight(std::span<const RgPassPlan> passes) {
-	return std::ranges::any_of(passes, [](const RgPassPlan& p) {
-		return p.kind == RgPassKind::drawLight && p.state == kDeferredLightState;
-	});
-}
+// 图事实查询面（graphHasDeferredLight / graphAttachmentSlot* / graphFsr*）在
+// render_graph_facts.cppm（:facts 分区，债-129 S1a 拆出解本文件 500 代码行红线）。
 
 }  // namespace RGL

@@ -618,25 +618,28 @@ void assembleHdrAoChain(Swapchain& swapchain, Resources& resources,
 
 /** 批 14.5 第二批：FSR 生效判据（装配层一次算完，**不懒**）。四条全真才接：门 + velocity
  *  真的进了图（FSR 的 motionVectors 输入就是那张图）+ 设备有 shaderFloat16/Int16（FSR 的
- *  SPIR-V 声明了这两个 capability，见 vkdevice.cppm 同批注释）+ 三个输入附件都在图里
- *  （色 = `kTaaOutName` 或 `kSceneHdrName`、速度场 = `kVelocityName`、深度；名字全部取
- *  `render_graph.cppm` 的具名常量，不写字面量）。
+ *  SPIR-V 声明了这两个 capability，见 vkdevice.cppm 同批注释）+ 三个输入附件齐备。
+ *
+ *  🔴 **第三条（齐备）的唯一来源 = `render_graph` 的图事实查询面 `graphFsrInputs`**
+ *  （债-129 S1a 收口）。收口前这里自己写一份 `(has(taa_out) || has(scene_hdr)) && …`，
+ *  **色输入那一档漏了 `ao_applied`**，与 `Renderer::initFsr` 的三分支链条件集不同
+ *  （4 条 vs 3 条）——两处判据各写一份策略，就是这次正交化要治的病本体。
+ *
+ *  🔴 **第一条与第二条不在查询面里**，且不是偷懒：velocity 附件在图里 ≠ 有人在写它
+ *  （装饰落图才是），而「装饰落没落」今天只有装饰器知道 → S1b 把它变成图带出的来源记录。
+ *  设备能力是设备事实（GateEnv 那一档）。
  *
  *  之所以不能留到运行期再判：装配层要把 FSR 的输出采样槽**烘进 tonemap 管线条目**，烘了却
- *  没人写描述符 = 读到未初始化描述符。`Renderer::initFsr` 是同一判据的另一半（它只查后两条，
- *  不满足即抛）——**两处判据必须一致**，漂移的代价是垃圾画面且不指名。
+ *  没人写描述符 = 读到未初始化描述符。`Renderer::initFsr` 是同一判据的另一半（它只查齐备
+ *  那一条，不满足即抛）——两半现在共享同一个 `graphFsrInputs`，漂移在**共享的那一半**上
+ *  结构性不可能；剩下的两半本来就该只有一处判。
  *
  *  抽成函数而不是内联在 `assembleBackEnd` 里，是因为内联版把该函数的认知复杂度推到 20、
  *  函数体推到 101 行，双双超 style 红线。
  */
 bool computeFsrUsable(DeviceContext& device, const CompiledRenderGraph& graph,
 	bool fsrEnabled, bool velocityDecorated, bool taaDecorated) {
-	const auto has = [&graph](std::string_view name) {
-		return std::ranges::any_of(graph.attachments,
-			[&](const auto& a) { return a.name == name; });
-	};
-	const bool inputsReady = (has(kTaaOutName) || has(kSceneHdrName))
-		&& has(kVelocityName) && has("depth");
+	const bool inputsReady = graphFsrInputs(graph.attachments).complete();
 	const bool usable = fsrEnabled && velocityDecorated && device.shader16Supported() && inputsReady;
 	if (fsrEnabled && !usable) {
 		if (auto* lg = RLLogger::getInstance())

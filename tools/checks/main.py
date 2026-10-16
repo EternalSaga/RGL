@@ -77,6 +77,7 @@ from rules_text import (agents_doc_index_checks, agents_index_status_checks,
                         doc_pointer_counts, doc_pointer_readout,
                         generated_init_checks, generated_init_counts,
                         generated_init_readout,
+                        graph_fact_predicate_checks, graph_fact_predicate_readout,
                         imgqa_selftest_checks, imgqa_selftest_readout,
                         judgments_pointer_checks,
                         docs_status_checks, forbidden_vulkan_checks,
@@ -355,6 +356,8 @@ def main() -> None:
         warnings.extend(rpc_route_checks())
         # 渲染图 Lua 词表对账（债-122 另一半）：枚举加了档、词表没挂号 = 配置面写不出来。
         warnings.extend(rg_enum_vocab_checks())
+        # 图事实谓词「无问者即红」（债-129 S1a）：查询面建了没人用 = isSchedulable 第二。
+        warnings.extend(graph_fact_predicate_checks())
         # 生成物聚合初始化棘轮收账（债-118）：先扫一遍拿计数 → 重写基线 → 下面正式跑时与
         # **新**基线比对（形态同 R-EC4：重写必然持平，不会自己喊自己上升）。
         if args.update_generated_init_baseline:
@@ -480,6 +483,11 @@ def main() -> None:
         vocab_readout = rg_enum_vocab_readout()
         print("[style-check] 渲染图词表对账: "
               + (vocab_readout if vocab_readout else "**本次未执行**（规则没跑到）"))
+        # 图事实谓词对账的读数（债-129 S1a）：条数 + 问者分布每次构建都印——「每条都有人问」
+        # 这个判据只有在「确实数到了 N 条谓词」时才成立（同 §7 / §10 的读数纪律）。
+        gfp_readout = graph_fact_predicate_readout()
+        print("[style-check] 图事实谓词对账: "
+              + (gfp_readout if gfp_readout else "**本次未执行**（规则没跑到）"))
         # 生成物聚合初始化的读数（债-118）：名单条数 + 命中数 + 位置初始化数 + 基线——
         # 「没有位置初始化」与「名单解析出 0 个类型所以什么都没对」必须一眼可分。
         gen_readout = generated_init_readout()

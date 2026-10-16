@@ -322,6 +322,7 @@ set(RGL_SCENE_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/dynamic_render_graph.cppm"  # B2-4③′：脏驱动的图派生件（D5 第一刀，纯逻辑可 just test）
     "${CMAKE_CURRENT_SOURCE_DIR}/dynamic_render_graph_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/render_graph_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/render_graph_facts.cppm"  # 债-129 S1a：图事实查询面（:facts 分区，解 impl 的 500 代码行红线）
     "${CMAKE_CURRENT_SOURCE_DIR}/render_graph_formats.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/render_graph_usage.cppm"  # B2-3：usage 推导表 + 四个 kind 谓词（解 impl 的 500 代码行红线）
     "${CMAKE_CURRENT_SOURCE_DIR}/render_graph_buffers.cppm"  # B2-3 本体：buffer 附件的按名注册表（拒绝面 + 写上界对账的数据面）

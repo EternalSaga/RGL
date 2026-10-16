@@ -18,9 +18,9 @@ namespace RGL {
 PickingService::PickingService(RGL::Resources& vkResources, RGL::RenderTargetCache& vkRts,
 	const RGL::CompiledRenderGraph& compiledGraph)
 	: resources(vkResources), rts(vkRts), graph(compiledGraph) {
-	for (uint32_t s = 0; s < graph.attachments.size(); ++s)
-		if (graph.attachments[s].name == kObjectIdAttachmentName)
-			objectIdSlot = s;
+	// 债-129 S1a：「图里有没有 object_id」是图事实，唯一来源 = render_graph 查询面。
+	objectIdSlot = graphAttachmentSlot(graph.attachments, kObjectIdAttachmentName)
+		.value_or(kRgNoAttachment);
 }
 
 bool PickingService::ensureStaging() {

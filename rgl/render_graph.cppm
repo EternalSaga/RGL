@@ -342,6 +342,17 @@ export enum class RgPassKind : uint8_t {
 // 图会放行到执行器深处）——理由与红线写在那张表的头注释里。
 
 /**
+ * 内建图给**深度附件**起的名字（债-129 S1a 收口：此前 FSR 的两处深度输入查名各写一份
+ * `"depth"` 字面量，而其余附件名全吃本文件的 constexpr 常量）。
+ *
+ * ⚠ **与 `RgAttachmentKind::depth` 不是一件事**：kind 回答「这一档附件的语义」，本常量回答
+ * 「内建图把那张深度附件叫什么」。内建图里两者同名，但**手写 Lua 图可以让 kind=depth 的附件
+ * 叫别的名字** ⟹ 按名查（FSR 读哪张深度）与按 kind 查（IZB 的 mask 锚点）是**两条不同轴**的
+ * 判据，本模块两个都提供且刻意不合并——合并会在自定义图上悄悄改变 FSR 的可用性。
+ */
+export inline constexpr std::string_view kDepthName = "depth";
+
+/**
  * Phase 8 批次 ①：HDR 累加链附件契约（单一真相源）——forward/deferred 图的颜色目标
  * scene_hdr（rgba16_sfloat offscreen RT），tonemap pass 采样后写 swapchain。
  * 消费方 = render_graph_builtin 三图描述 + Resources::ensureSceneHdrSlot（启动期建
@@ -648,6 +659,117 @@ export struct CompiledRenderGraph {
  * @return true = 图里有 deferred 光照 pass
  */
 export bool graphHasDeferredLight(std::span<const RgPassPlan> passes);
+
+// ── 图事实查询面（债-129 S1a）──────────────────────────────────────────────────
+// 「图里有没有 X」「X 的槽位是几」由本面**唯一**提供：配置层 / 装配层 / 工具层是消费者，
+// 不是申报点（裁决句 → `docs/配置正交性_plan.md` §5.2）。此前 6 处消费者各写一份
+// `find_if(attachments, name==…)`，两份 FSR 判据的条件集已经漂到不同（4 条 vs 3 条）。
+// 🔴 收口的是**编译图**上的现查；本模块自己的分区（`decorate` / `dynamic_render_graph`）另有
+// 吃 `RgAttachmentDesc` 的同族扫描——那是提供方看自己的数据，不是重复申报（要收得先把谓词
+// 模板化到两个附件类型，→ 债-129 S1b）。
+//
+// 🔴 **每条都必须有生产侧调用者**：无问者的查询面 = `OffGraphSchedule::isSchedulable` 第二
+// （机制常驻、收益悬空，测试调用者不算消费者）。护栏 = source_checks 的图事实谓词对账
+// （`graph_fact_predicate_checks`，按 `graph` 前缀扫本面导出项）。🔴 **别在这里"预留"谓词**：
+// 本面落地当天，护栏就删掉了两条当时零问者的候选（存在性投影、按名查 pass 下标）——
+// 它们会在 S1b 带着自己的问者一起回来。
+//
+// 🔴 **粒度取消费者需要的形状**（§8.2.0）：6 处现查里 5 处要**下标**、只有 1 处要真假，
+// 所以底层返回 `optional<slot>` 而不是 bool——只出 bool 会被逼成「先判存在再自己扫下标」；
+// 而「FSR 该读哪张色输入」是**策略**，住 L2（`graphFsrColorInput`），不许消费者各写一份链。
+// 本面零发射、零设备、纯只读——plan-only 红线不在本面射程内（§4(a)）。
+
+/**
+ * 按名定位编译图附件（L1）。
+ * @param attachments 编译图附件表（`CompiledRenderGraph::attachments`）
+ * @param name 附件名（优先取本文件的 `kXxxName` 常量，不写字面量）
+ * @return 槽位；nullopt = 图里没有这个名字的附件
+ */
+export std::optional<RgAttachmentSlot> graphAttachmentSlot(
+	std::span<const RgCompiledAttachment> attachments, std::string_view name);
+
+/**
+ * 按 kind 定位编译图附件（L1）——与按名查**不同轴**，理由见 `kDepthName` 头注释。
+ * @param attachments 编译图附件表
+ * @param kind 附件种类
+ * @return 槽位；nullopt = 图里没有该 kind 的附件（多条同 kind = 取第一条，与收口前的
+ *         `izbPreFrame` 的 `find_if` 逐位同）
+ */
+export std::optional<RgAttachmentSlot> graphAttachmentSlotByKind(
+	std::span<const RgCompiledAttachment> attachments, RgAttachmentKind kind);
+
+/**
+ * 图里是否有 (`kind`, `state`) 这一档 pass（L1；`graphHasDeferredLight` 的泛化）。
+ * @param passes 编译图 pass 序列
+ * @param kind pass 种类
+ * @param state 动态状态名
+ * @return true = 至少一个
+ */
+export bool graphHasPassState(std::span<const RgPassPlan> passes, RgPassKind kind,
+	std::string_view state);
+
+/**
+ * FSR 色输入的角色解析结果（L2）。
+ * @see graphFsrColorInput
+ */
+export struct RgFsrColorInput {
+	RgAttachmentSlot slot = kRgNoAttachment;
+	/// 选中的是 `taa_out` ⟹ 该图内容位移为 0（TAA 自己 un-jitter 过），FSR 的
+	/// `jitterOffset` **必须取 0**，否则 FSR 再 un-jitter 一次 = 只糊不报错。
+	/// 这条不变量此前只活在 `Renderer::initFsr` 的分支注释里。
+	bool baseSpace = false;
+};
+
+/**
+ * FSR 色输入优先级链 `ao_applied > taa_out > scene_hdr` 的**唯一来源**（L2）。
+ *
+ * 为什么这是「一个事实」而不是三枚布尔：AO 必须乘在时域滤波**之前**（批 13.6 实测：乘在之后
+ * = 噪声零平均，占残余 shimmer 62%，而 FSR 就是时域滤波器 ⟹ 不接 `ao_applied` 就等于把 13.6
+ * 的收益整条丢掉），而 `taa_out` 自批 13.5 起已在**基空间**（TAA 自己 un-jitter 过）、
+ * `ao_applied` / `scene_hdr` 带抖动 ⟹ 「接哪张」与「`jitterOffset` 怎么申报」是同一件事的两面，
+ * 分成两处写就必然出现「三个分支两个恰好对、一个必错，且错了不报错、VVL 不抓、症状只是糊」
+ * （`Renderer::initFsr` 收口前注释的原话）。
+ * 收口前它有两份：`initFsr` 的三分支 + `computeFsrUsable` 的 `(has(taa_out) || has(scene_hdr))`
+ * ——后者**漏了 `ao_applied` 这一档**，两份条件集因此已经不同（4 条 vs 3 条）。
+ * 第三档的兜底条件本身也有出处：`scene_hdr` 被选中时 `ao_apply` 也不会插
+ * （见 `decorateAoApplyPass` 跳过条件），所以「三档全无」与「只有 scene_hdr」不会同时出现。
+ *
+ * @param attachments 编译图附件表
+ * @return 色输入；nullopt = 三档都不在图里（= FSR 没有色输入可接）
+ */
+export std::optional<RgFsrColorInput> graphFsrColorInput(
+	std::span<const RgCompiledAttachment> attachments);
+
+/**
+ * FSR 三个输入附件的解析结果（L2）——「FSR 接得起来」里**纯图事实**的那一半。
+ *
+ * 🔴 `complete()` 是装配层 `computeFsrUsable` 与 `Renderer::initFsr` **唯一共享的判据**：
+ * 收口前两处各写一份条件集（4 条 vs 3 条，且色输入那半漏了 `ao_applied` 档），
+ * 漂移的代价按原注释是「垃圾画面且不指名」。现在共享的不是函数名而是**判据本体**。
+ *
+ * 🔴 不含设备能力（`shaderFloat16`）与「velocity 装饰是否落图」：前者是设备事实（GateEnv
+ * 那一档），后者在 S1b 之前只有装饰器知道（**附件在图里 ≠ 有人在写它**）。本面只回答
+ * 「图长什么样」。
+ *
+ * @see graphFsrInputs
+ */
+export struct RgFsrInputs {
+	std::optional<RgFsrColorInput> color;      ///< 色输入（优先级链结果，含基空间判定）
+	std::optional<RgAttachmentSlot> velocity;  ///< 逐像素速度场（`kVelocityName`）
+	std::optional<RgAttachmentSlot> depth;     ///< 深度（按名查，`kDepthName`）
+	/** @return true = 三个输入都在图里 */
+	bool complete() const {
+		return color.has_value() && velocity.has_value() && depth.has_value();
+	}
+};
+
+/**
+ * 解析 FSR 的三个输入附件（L2）。缺位不报错、只留空 optional——装配层据此**不接**，
+ * Renderer 据此**抛**（两处都要能指名缺的是哪一个，所以判据带内容而不只是一个 bool）。
+ * @param attachments 编译图附件表
+ * @return 三个输入的解析结果（用 `complete()` 判齐备）
+ */
+export RgFsrInputs graphFsrInputs(std::span<const RgCompiledAttachment> attachments);
 
 /**
  * 物化：语义计划 + 执行器解析出的 image/oldLayout → ImageMemoryBarrier2

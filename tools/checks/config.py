@@ -451,3 +451,16 @@ IMGQA_SELFTEST_ROUTINE = "cmdSelftest"
 # 头注释里「N 条…声明」的计数标记（跨行形态：第 3 行「46 条」+ 第 4 行「testXxx 声明」，
 # 所以 `条` 与「声明」之间允许 ≤24 个任意字符含换行；判据 C 逐处与实数对账）
 IMGQA_SELFTEST_DECL_COUNT_RE = r"(\d+)\s*条[\s\S]{0,24}?(?:testXxx 声明|测试的声明)"
+
+# ─── 图事实谓词「无问者即红」（债-129 S1a；规则 = rules_text.graph_fact_predicate_checks，§14）──
+# 谓词名单的真相源 = `render_graph.cppm` 的**命名约定**（导出自由函数 `graph<大写>(`）。
+# 🔴 名单不在本文件抄（抄名单反模式，AGENTS 明文）：抄一份「哪些是谓词」正是本规则要防的副本。
+# 反面教材 = `OffGraphSchedule::isSchedulable`：接口 + 实现 + 十几条单测都在，生产侧零调用者
+# ⟹「有查询面」被读成「已收口」。裁决句 → docs/配置正交性_plan.md §5.2。
+GRAPH_FACT_PREDICATE_SOURCE_FILE = "rgl/render_graph.cppm"
+# 声明式（跨行）：`export <返回类型> graph<大写>(`。返回类型段不许吃 `;{}` ⟹ 防跨语句过匹配。
+GRAPH_FACT_PREDICATE_RE = r"^export\s+[^;{}]*?\b(graph[A-Z]\w*)\s*\("
+# 提供方自己的文件不算问者（接口声明、impl 分区、:facts 分区的定义都在里面）。
+# 🔴 漏掉 `render_graph_facts.cppm` 会让谓词**自己给自己发问者**（`graphFsrColorInput` 调
+# `graphAttachmentSlot` 就在它里面）——传递存活那一半会整个失效。
+GRAPH_FACT_PROVIDER_FILES = ("render_graph.cppm", "render_graph_impl.cppm", "render_graph_facts.cppm")

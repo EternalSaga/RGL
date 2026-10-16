@@ -498,9 +498,6 @@ export class Renderer {
 	 */
 	void fsrTonemapPassPre(vk::raii::CommandBuffer& cmd, const RgPassPlan& pass,
 		const FrameDrawList& list);
-	/** 批 14.5：按名字找图附件 slot（FSR 的三个输入都从编译图现查，**不缓存下标**，
-	 *  同 TAA 锚点「现搜不缓存」的纪律）。 @return 未找到 = -1 */
-	int32_t findAttachmentSlot(std::string_view name) const;
 	/**
 	 * 簇化轴 ★1-a2-i：帧首录一次**逐簇视锥剔除** compute（图外 compute，定义在 :offgraph）。
 	 *

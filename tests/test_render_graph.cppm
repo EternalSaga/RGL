@@ -1893,4 +1893,208 @@ TEST_CASE("decorateSsrPass 与 taa / ao_apply 可复合：装配序下链自动�
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// 组 10：图事实查询面（债-129 S1a）——「图里有没有 X / X 的槽位是几」的唯一提供者
+// ═══════════════════════════════════════════════════════════════════════════
+/*
+ * ## 为什么值得钉
+ *
+ * 收口前 6 处消费者各写一份 `find_if(attachments, name==…)`，两份 FSR 判据的条件集已经
+ * 漂到不同（装配层 4 条 vs Renderer 3 条，且色输入那半漏了 `ao_applied` 档）。这类代码
+ * 坏了不崩、VVL 不抓，症状是「FSR 静默没接」或「画面只是糊」——正是毫秒级纯函数该钉的形状。
+ *
+ * ## 阳性锚点（变异红线，逐条对应）
+ *
+ *  - `graphAttachmentSlot` 的 `it == end` 分支改成 `return 0` → 「查不到」用例红；
+ *    下标算成常量 0 → 「slot = 声明序」里第 2、3 个附件的断言红（**所以必须查多个不同
+ *    下标**，只查第 0 个的测试对这条变异是瞎的）。
+ *  - 名字比较改成 `contains` 式前缀匹配 → 「名字是前缀的附件不得命中」红。
+ *  - `graphHasPassState` 删掉 `state` 半边比较 → 「同 kind 不同 state = false」红；
+ *    删掉 `kind` 半边 → 「同 state 不同 kind = false」红（🔴 对称判据两半边各一条，
+ *    只钉一半会被后来人读成"整条已验"）。
+ *  - `graphFsrColorInput` 的优先级链去掉 `ao_applied` 档 → 「三档全在取 ao」红
+ *    （**这一格就是收口前 `computeFsrUsable` 漏掉的那一档**，变异即历史故障）。
+ *  - `baseSpace` 恒写 false → 「选 taa_out ⟹ 基空间」红；恒写 true → 另两格红。
+ *  - `RgFsrInputs::complete()` 删掉任一半检查 → 对应那条「缺一个输入」用例红
+ *    （🔴 三个输入各一条缺位用例，缺一条就是给"删掉那半边"留的空位）。
+ *  - 把 FSR 的深度改成按 kind 查 → 「按名查与按 kind 查不同轴」红，逼改的人回答
+ *    自定义图上 FSR 可用性变了没有。
+ *
+ * ## 与测试侧 `slotOf` / `passIndexOf` 的关系（别合并）
+ *
+ * 本文件早先的 helper `slotOf` 自己扫一遍 attachments，注释明写「不依赖被测代码的查找函数
+ * ——否则查找函数坏了就一起瞎」。本组**不**用它做期望值：期望下标全部是声明序字面量。
+ */
+
+namespace {
+
+RgCompiledAttachment ca(std::string name, RgAttachmentKind kind) {
+	return RgCompiledAttachment{.name = std::move(name), .kind = kind};
+}
+
+std::vector<RgCompiledAttachment> attTable(
+	std::initializer_list<std::pair<std::string, RgAttachmentKind>> in) {
+	std::vector<RgCompiledAttachment> v;
+	v.reserve(in.size());
+	for (const auto& [name, kind] : in)
+		v.push_back(RgCompiledAttachment{.name = name, .kind = kind});
+	return v;
+}
+
+RgPassPlan compiledPass(std::string name, RgPassKind kind, std::string state) {
+	return RgPassPlan{.name = std::move(name), .kind = kind, .state = std::move(state)};
+}
+
+}  // namespace
+
+TEST_CASE("graphAttachmentSlot：命中返回声明序下标，未命中返回 nullopt") {
+	const auto atts = attTable({{"swapchain", RgAttachmentKind::swapchain},
+		{"depth", RgAttachmentKind::depth}, {"scene_hdr", RgAttachmentKind::offscreen},
+		{"velocity", RgAttachmentKind::offscreen}});
+
+	// 期望下标 = 声明序字面量（不来自被测码）。查**四个不同下标**：只查 0 号对
+	// 「下标算成常量 0」这种变异是瞎的。
+	CHECK(graphAttachmentSlot(atts, "swapchain") == 0u);
+	CHECK(graphAttachmentSlot(atts, "depth") == 1u);
+	CHECK(graphAttachmentSlot(atts, "scene_hdr") == 2u);
+	CHECK(graphAttachmentSlot(atts, "velocity") == 3u);
+
+	// 反向：不存在 = nullopt（不是 0，0 是合法槽位）。
+	CHECK_FALSE(graphAttachmentSlot(atts, "taa_out").has_value());
+	// 反向：前缀命中**不算**命中（钉住整串相等，不是 contains 式实现）。
+	CHECK_FALSE(graphAttachmentSlot(atts, "scene").has_value());
+	CHECK_FALSE(graphAttachmentSlot(atts, "scene_hdr2").has_value());
+	// 反向：空表查什么都空（空集合上的 any_of 恒真是假绿温床，这里显式钉住）。
+	const std::vector<RgCompiledAttachment> empty;
+	CHECK_FALSE(graphAttachmentSlot(empty, "depth").has_value());
+}
+
+TEST_CASE("graphAttachmentSlotByKind：按 kind 命中，多条同 kind 取第一条（与收口前 find_if 逐位同）") {
+	const auto atts = attTable({{"swapchain", RgAttachmentKind::swapchain},
+		{"depth", RgAttachmentKind::depth}, {"shadow_map", RgAttachmentKind::depthOffscreen},
+		{"depth2", RgAttachmentKind::depth}});
+	CHECK(graphAttachmentSlotByKind(atts, RgAttachmentKind::swapchain) == 0u);
+	CHECK(graphAttachmentSlotByKind(atts, RgAttachmentKind::depth) == 1u);
+	// 同 kind 第二条存在，但取**第一条**（收口前 izbPreFrame 的 find_if 就是这个语义）。
+	CHECK(graphAttachmentSlotByKind(atts, RgAttachmentKind::depth) != 3u);
+	CHECK(graphAttachmentSlotByKind(atts, RgAttachmentKind::depthOffscreen) == 2u);
+	// 反向：图里没有的 kind = nullopt。
+	CHECK_FALSE(graphAttachmentSlotByKind(atts, RgAttachmentKind::buffer).has_value());
+}
+
+TEST_CASE("graphHasPassState：kind 与 state 两半边各钉一条（对称判据）") {
+	const std::vector<RgPassPlan> passes = {
+		compiledPass("opaque", RgPassKind::drawMesh, "opaque"),
+		compiledPass("light", RgPassKind::drawLight, std::string{kDeferredLightState}),
+		compiledPass("tonemap", RgPassKind::drawLight, "tonemap")};
+
+	CHECK(graphHasPassState(passes, RgPassKind::drawLight, kDeferredLightState));
+	// 🔴 半边一：kind 对、state 不对 → false（删掉 state 比较就红）。
+	CHECK_FALSE(graphHasPassState(passes, RgPassKind::drawLight, "no_such_state"));
+	// 🔴 半边二：state 对、kind 不对 → false（删掉 kind 比较就红）。
+	CHECK_FALSE(graphHasPassState(passes, RgPassKind::drawMesh, kDeferredLightState));
+
+	// graphHasDeferredLight 现在是 graphHasPassState 的薄封装：正/反都要还在。
+	CHECK(graphHasDeferredLight(passes));
+	const std::vector<RgPassPlan> noLight = {
+		compiledPass("opaque", RgPassKind::drawMesh, "opaque")};
+	CHECK_FALSE(graphHasDeferredLight(noLight));
+	// 同 state 名但 kind 不是 drawLight 的图：不算 deferred 光照（收口前的 any_of 就如此）。
+	const std::vector<RgPassPlan> fakeKind = {
+		compiledPass("fake", RgPassKind::drawMesh, std::string{kDeferredLightState})};
+	CHECK_FALSE(graphHasDeferredLight(fakeKind));
+}
+
+TEST_CASE("graphFsrColorInput：ao_applied > taa_out > scene_hdr 四态 + 基空间判定") {
+	// 态 1：三档全在 → 取 ao_applied，且**不是**基空间（AO 施加点带抖动）。
+	// 🔴 这一格就是收口前 computeFsrUsable 漏掉的那一档（它只判 taa_out || scene_hdr）。
+	const auto allThree = attTable({{"swapchain", RgAttachmentKind::swapchain},
+		{"scene_hdr", RgAttachmentKind::offscreen}, {"taa_out", RgAttachmentKind::offscreen},
+		{"ao_applied", RgAttachmentKind::offscreen}});
+	const auto c1 = graphFsrColorInput(allThree);
+	REQUIRE(c1.has_value());
+	CHECK(c1->slot == 3u);
+	CHECK_FALSE(c1->baseSpace);
+
+	// 态 2：无 ao_applied、有 taa_out → 取 taa_out，且**必须**报基空间（FSR 的
+	// jitterOffset 取 0 的唯一依据；写错不报错，症状只是糊）。
+	const auto taaOnly = attTable({{"scene_hdr", RgAttachmentKind::offscreen},
+		{"taa_out", RgAttachmentKind::offscreen}});
+	const auto c2 = graphFsrColorInput(taaOnly);
+	REQUIRE(c2.has_value());
+	CHECK(c2->slot == 1u);
+	CHECK(c2->baseSpace);
+
+	// 态 3：只有 scene_hdr → 取它，非基空间。
+	const auto hdrOnly = attTable({{"swapchain", RgAttachmentKind::swapchain},
+		{"scene_hdr", RgAttachmentKind::offscreen}});
+	const auto c3 = graphFsrColorInput(hdrOnly);
+	REQUIRE(c3.has_value());
+	CHECK(c3->slot == 1u);
+	CHECK_FALSE(c3->baseSpace);
+
+	// 态 4（反向）：三档全无 → nullopt（= FSR 没有色输入可接）。
+	const auto none = attTable({{"swapchain", RgAttachmentKind::swapchain},
+		{"depth", RgAttachmentKind::depth}});
+	CHECK_FALSE(graphFsrColorInput(none).has_value());
+}
+
+TEST_CASE("graphFsrInputs().complete()：三个输入各配一条「缺它一个」用例（对称判据三半边）") {
+	const auto make = [](bool color, bool velocity, bool depth) {
+		std::vector<RgCompiledAttachment> a{ca("swapchain", RgAttachmentKind::swapchain)};
+		if (color)
+			a.push_back(ca("scene_hdr", RgAttachmentKind::offscreen));
+		if (velocity)
+			a.push_back(ca(std::string{kVelocityName}, RgAttachmentKind::offscreen));
+		if (depth)
+			a.push_back(ca(std::string{kDepthName}, RgAttachmentKind::depth));
+		return a;
+	};
+	CHECK(graphFsrInputs(make(true, true, true)).complete());
+	// 🔴 三半边各一条：删掉 complete() 里任一半检查，对应这条必须红。
+	CHECK_FALSE(graphFsrInputs(make(false, true, true)).complete());
+	CHECK_FALSE(graphFsrInputs(make(true, false, true)).complete());
+	CHECK_FALSE(graphFsrInputs(make(true, true, false)).complete());
+
+	// 齐备时三个槽位都带内容（initFsr 的报错要能指名缺哪个，所以判据带内容不只 bool）。
+	const auto full = graphFsrInputs(make(true, true, true));
+	REQUIRE(full.complete());
+	CHECK(full.color->slot == 1u);
+	CHECK(full.velocity == 2u);
+	CHECK(full.depth == 3u);
+}
+
+TEST_CASE("FSR 深度按**名**查、IZB 深度按 **kind** 查：两条轴刻意不合并") {
+	// 手写图里 kind=depth 的附件可以叫别的名字（`kDepthName` 头注释的裁决）。
+	const auto atts = attTable({{"swapchain", RgAttachmentKind::swapchain},
+		{"zbuf", RgAttachmentKind::depth}, {"scene_hdr", RgAttachmentKind::offscreen},
+		{"velocity", RgAttachmentKind::offscreen}});
+	// 按 kind 查得到（IZB 那条路走得通）……
+	CHECK(graphAttachmentSlotByKind(atts, RgAttachmentKind::depth) == 1u);
+	// ……按名查不到（FSR 因此不接）——把 FSR 改成按 kind 查就会让这条红。
+	CHECK_FALSE(graphFsrInputs(atts).complete());
+	CHECK_FALSE(graphAttachmentSlot(atts, kDepthName).has_value());
+}
+
+TEST_CASE("真图对账：出厂 forward 图不接 FSR（缺 velocity），装饰速度场后接、色输入 = scene_hdr") {
+	// 出厂 forward 图：有色输入（scene_hdr）、有深度，**没有** velocity pass/附件
+	// ⟹ complete() 假。这条把「出厂不接 FSR」从"日志里没那行"变成毫秒级判据。
+	const CompiledRenderGraph& factory = defaultRenderGraph();
+	const auto fi = graphFsrInputs(factory.attachments);
+	REQUIRE(fi.color.has_value());
+	CHECK_FALSE(fi.color->baseSpace);  // 出厂没有 taa_out
+	CHECK_FALSE(fi.complete());
+
+	// 装饰速度场后重编：齐备，且色输入仍是 scene_hdr（速度场不换色输入）。
+	RgGraphDesc d = defaultRenderGraphDesc();
+	REQUIRE(decorateVelocityPass(d));
+	const auto g = compileRenderGraph(d);
+	INFO(errOf(g));
+	REQUIRE(g.has_value());
+	const auto vi = graphFsrInputs(g->attachments);
+	CHECK(vi.complete());
+	CHECK(vi.color->slot == slotOf(*g, "scene_hdr"));
+	CHECK_FALSE(vi.color->baseSpace);
+}
+
 }  // namespace RGL

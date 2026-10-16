@@ -47,10 +47,10 @@ uint32_t captureBpp(vk::Format f) {
 FrameCapturer::FrameCapturer(RGL::Resources& vkResources, RGL::RenderTargetCache& vkRts,
 		const RGL::CompiledRenderGraph& renderGraph)
 	: resources(vkResources), rts(vkRts), graph(renderGraph) {
-	// 帧内捕获：定位 swapchain attachment slot（捕获时读写其布局追踪值）
-	for (uint32_t s = 0; s < graph.attachments.size(); ++s)
-		if (graph.attachments[s].kind == RgAttachmentKind::swapchain)
-			swapchainSlot = s;
+	// 帧内捕获：定位 swapchain attachment slot（捕获时读写其布局追踪值）。
+	// 债-129 S1a：按 kind 现查收进图事实查询面（本文件另一处按名查见 record 内）。
+	swapchainSlot = graphAttachmentSlotByKind(graph.attachments, RgAttachmentKind::swapchain)
+		.value_or(kRgNoAttachment);
 }
 
 bool FrameCapturer::ensureCaptureStaging(VkDeviceSize bytes) {
@@ -86,12 +86,6 @@ void FrameCapturer::record(vk::raii::CommandBuffer& cmd, VkImage swapchainImage,
 	auto z = zone("drawFrame.capture");  // 批 9.5 观测：无请求帧 = 首行早退，≈ 0
 	if (captureRequest == -2 && captureRequestName.empty())
 		return;
-	auto slotOfName = [&](const std::string& n) -> RgAttachmentSlot {
-		for (uint32_t s = 0; s < graph.attachments.size(); ++s)
-			if (graph.attachments[s].name == n)
-				return s;
-		return kRgNoAttachment;
-	};
 	auto barrier = [&](VkImage image, vk::ImageLayout from, vk::ImageLayout to,
 		vk::PipelineStageFlags2 srcStage, vk::AccessFlags2 srcAccess,
 		vk::PipelineStageFlags2 dstStage, vk::AccessFlags2 dstAccess) {
@@ -124,7 +118,8 @@ void FrameCapturer::record(vk::raii::CommandBuffer& cmd, VkImage swapchainImage,
 		// GB 直读：deferred 图专属（前向图无 gbuffer_* 附件 / RT 未建 = 跳过并留观测）
 		if (captureRequest < static_cast<int>(kGBufferAttachments.size())) {
 			const std::string name{kGBufferAttachments[captureRequest].name};
-			const auto slot = slotOfName(name);
+			const auto slot = graphAttachmentSlot(graph.attachments, name)
+				.value_or(kRgNoAttachment);
 			if (auto* rt = slot != kRgNoAttachment ? rts.find(name) : nullptr) {
 				const auto from = layouts[slot];  // deferred 帧末 = SRO（light 采样后）
 				barrier(rt->image.image, from, vk::ImageLayout::eTransferSrcOptimal,
@@ -162,7 +157,8 @@ void FrameCapturer::record(vk::raii::CommandBuffer& cmd, VkImage swapchainImage,
 	// 追踪表原值进出（转回 from）——本路径不接管布局，下游按追踪值继续推导。
 	auto recordNamedAttachment = [&] {
 		const std::string name = captureRequestName;
-		const auto slot = slotOfName(name);
+		const auto slot = graphAttachmentSlot(graph.attachments, name)
+			.value_or(kRgNoAttachment);
 		if (auto* rt = slot != kRgNoAttachment ? rts.find(name) : nullptr) {
 			const auto from = layouts[slot];
 			barrier(rt->image.image, from, vk::ImageLayout::eTransferSrcOptimal,
