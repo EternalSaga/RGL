@@ -165,7 +165,7 @@ velocity buffer 是因为不需要」），引擎内真消费者只有 FSR（+ R
 
 | 键（出厂值） | 类 | 依据 | 处置 |
 |---|---|---|---|
-| ssr.enabled (false) | **②** | 装饰四判据全是图形态：锚点（写 swapchain 且采色）/ G-buffer 契约表**全通道**（deferred-only 的真实形态）/ 借可 store 的 depth / 次序（taa、ao_apply 不在图）（decorateSsrPass render_graph_decorate.cppm:513-557）；包装层 warn（main_impl.cppm:462-466） | O3 形态 = 需求声明进图、compile 期拒 |
+| ssr.enabled (false) | **②** | 装饰判据全是图形态：锚点（写 swapchain 且采色）/ G-buffer 契约表**全通道**（deferred-only 的真实形态）/ 次序（taa、ao_apply 不在图）（`decorateSsrPass`）。🔴 原有第四条「借不到可 store 的 depth」已随 **S3-A** 删除——缺 depth 现在照插、由 compile 硬拒（本文 §3.4.3 的 A 类）；包装层 warn（`main_impl.cppm` 的 `decorateSsrOrWarn`） | O3 形态 = 需求声明进图、compile 期拒 |
 | ssr.*×6 | **③** | 前置 = enabled（配置组合）；**无条件写进 scene data** 是设计决定（尾区纪律：不按门分支、无消费者不改像素，fillSsrParams render_list_impl.cppm:497-501 + 注释 :495-496）——参数本身不需要前置校验；「enabled=off ⟹ 6 枚死值」的申报 = **刻意不挂号**（readSsrBlock:315-327 裁决，理由成立：不造第三张回显表） | 键保留；死值申报归拍板点 D |
 
 **wet（6 键）**
@@ -851,6 +851,8 @@ constexpr，**谓词面自己不能成为新的抄写点**（哲学 1：访问�
   解析期「mode=off 的表里塞子字段」出声（复用 S2 已建的嵌套死键 lint）。
 
 #### S3 需求申报进图（O3，**只取 image 侧装饰需求**）✅ 已定案要做（拍板 B 裁 (b)）
+
+✅ **S3-A 已落地（2026-10-16）= §3.4.3 的 A 类 4 条**：删掉「怕编译错误」的自我审查 skip，判定交回 `compileRenderGraph`。**逐位不变**（内建图走不到这 4 条）。剩余 = B 类 2 条 + D 类 1 条（真新代码）、C 类 5 条（搬 `smoke.py` 已有的判断）、包装层出声点与工具层三副本删除。🔴 连带：`graphFsrColorInput` 的 `ssr_applied` 档因此**不可达**（论证在该函数注释，**不删档**）。
 
 装饰请求携带"我要什么图形态"，非法形态 compile 期拒；gate_lint 的图形态类前置降级为"图已保证"
 （目标再 −3 行）。🔴 **前置 = S1a，不是 S1b**（S1b 已取消，§8.2.0）：需求校验吃的是**compile 期的

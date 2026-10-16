@@ -402,7 +402,7 @@ bool decorateVelocityOrWarn(RgGraphDesc& desc, bool velocityEnabled) {
 		return true;
 	if (auto* logger = RLLogger::getInstance())
 		logger->warn("velocity: 图形态不支持速度场装饰（锚点 = 写 swapchain 且采样场景色的 "
-			"pass，且其前须有可 store 的 depth 写者），本次运行无逐像素速度场");
+			"pass），本次运行无逐像素速度场");
 	return false;
 }
 
@@ -415,7 +415,9 @@ bool decorateVelocityOrWarn(RgGraphDesc& desc, bool velocityEnabled) {
  * FSR 最终没接」= AO 由本 pass 施加、tonemap 跳过，画面只是比 tonemap 路径多一次 RGBA16F
  * 量化，不会双施也不会零施。
  *
- * 装饰器自己还会查「taa 不在图里」与「有 ao 附件」，任一不满足返回 false = 图逐位不变。
+ * 装饰器自己还会查「taa 不在图里」（互斥）与「有采色上屏的消费者」（锚点），任一不满足返回
+ * false = 图逐位不变。🔴 债-129 S3-A：原第三条「本图有 ao 附件」**已删** —— 缺 ao 时照插、
+ * 由 `compileRenderGraph` 硬拒（进程起不来），不再走本处的降级出声。
  */
 bool decorateAoApplyOrWarn(RgGraphDesc& desc, bool fsrEnabled) {
 	if (!fsrEnabled)
@@ -424,7 +426,7 @@ bool decorateAoApplyOrWarn(RgGraphDesc& desc, bool fsrEnabled) {
 		return true;
 	if (auto* logger = RLLogger::getInstance())
 		logger->debug("ao_apply: 未插 AO 施加 pass（taa 已在图里 = 施加点在它里面，"
-			"或本图无 ao 附件），AO 施加点保持现状");
+			"或找不到「写 swapchain 且采样场景色」的 pass = 无消费者可换输入），AO 施加点保持现状");
 	return false;
 }
 
@@ -450,8 +452,9 @@ bool decorateTaaOrWarn(RgGraphDesc& desc, bool taaEnabled) {
  * 批 15.1 前半：SSR 图装饰（与 decorateVelocityOrWarn 同构；抽函数控复杂度）。
  * 关（默认）= 不调 decorateSsrPass = 图里根本没有这个 pass（**结构性**逐位不变，
  * 不是"有但旁路"）。开但图形态不支持（offscreen 变体无采色上屏消费者 / 图缺 G-buffer
- * 契约表通道（forward 图 = D1 豁免）/ 借不到可 store 的 depth）= warn + false，
- * 装配层据 false 整套不建。
+ * 契约表通道（forward 图 = D1 豁免）/ taa 或 ao_apply 已在图里 = 装饰太晚）= warn + false，
+ * 装配层据 false 整套不建。🔴 债-129 S3-A：原第四条「借不到可 store 的 depth」**已删** ——
+ * 借不到时引用规范名照插、由 `compileRenderGraph` 硬拒（进程起不来），不再走本处的降级出声。
  * @return 是否真正装饰落图
  */
 bool decorateSsrOrWarn(RgGraphDesc& desc, bool ssrEnabled) {
@@ -461,9 +464,9 @@ bool decorateSsrOrWarn(RgGraphDesc& desc, bool ssrEnabled) {
 		return true;
 	if (auto* logger = RLLogger::getInstance())
 		logger->warn("ssr: 图形态不支持 SSR 装饰（锚点 = 写 swapchain 且采样场景色的 pass，"
-			"且图里须有 G-buffer 契约表全部通道 = deferred 图，且锚点前须有可 store 的 depth "
-			"写者；forward 不跟 = D1 对等豁免，docs/phase15_plan.md §0.1；或 taa/ao_apply "
-			"已在图里 = 装饰太晚，见 decorateSsrPass 跳过条件 1），本次运行无屏幕空间反射");
+			"且图里须有 G-buffer 契约表全部通道 = deferred 图；forward 不跟 = D1 对等豁免，"
+			"docs/phase15_plan.md §0.1；或 taa/ao_apply 已在图里 = 装饰太晚，见 decorateSsrPass "
+			"跳过条件 1），本次运行无屏幕空间反射");
 	return false;
 }
 

@@ -1480,7 +1480,8 @@ TEST_CASE("decorateAoApplyPass 产物形状：ao_applied 附件 + pass 插在 to
     CHECK(bApplied->newLayout == vk::ImageLayout::eShaderReadOnlyOptimal);
 }
 
-TEST_CASE("decorateAoApplyPass 三条跳过条件：taa 在图里 / 无 ao 附件 / 无采色上屏 pass → false 且不动图") {
+TEST_CASE("decorateAoApplyPass 两条跳过条件（债-129 S3-A：原「无 ao 附件」一档已换成「照插」）"
+          "：taa 在图里 / 无采色上屏 pass → false 且不动图") {
     auto build = [](bool withAo) {
         RgGraphDesc d;
         d.attachments = {swapchainAtt(), depthAtt(),
@@ -1517,17 +1518,22 @@ TEST_CASE("decorateAoApplyPass 三条跳过条件：taa 在图里 / 无 ao 附�
         unchanged(d, a, p);
     }
 
-    // ② 无 ao 附件（无 SSAO 的图形态）⟹ 没有可见度可乘，不插。
-    //   变异红线：把 hasAo 判据删掉 → 本行红（真机 = 装饰出一个采不存在附件的 pass，
-    //   编译期即报"未知附件"，图起不来）
+    // ② 🔴 债-129 S3-A **换契约**（原「无 ao 附件 ⟹ 不插」的 A 类自我审查已删）：
+    //   图里没有 ao 附件时装饰器**照插**，判定交回 compileRenderGraph —— 它会报
+    //   `references unknown attachment 'ao'`（正确的硬失败），而不是旧行为「warn + AO 施加
+    //   点静默退回 tonemap 内」。compile 侧的硬失败判据（含消息点名附件名 + 三档存在性）
+    //   由下面「债-129 S3-A 新契约」那组用例逐条钉；本档只钉装饰器这一半：照插 + 真动了图。
+    //   变异红线：把删掉的 hasAo skip 原样加回 → 本行红（装饰器退回 warn + 静默不生效）。
     {
         RgGraphDesc d = build(/*withAo=*/false);
         const size_t a = d.attachments.size(), p = d.passes.size();
-        CHECK_FALSE(decorateAoApplyPass(d));
-        unchanged(d, a, p);
+        CHECK(decorateAoApplyPass(d));
+        CHECK(d.attachments.size() == a + 1);  // 照插 = 多一张 ao_applied
+        CHECK(d.passes.size() == p + 1);       //      + 一个 ao_apply pass
     }
 
     // ③ 没有「写 swapchain 且采色」的 pass（offscreen DIAG 变体走 blit）⟹ 无锚点，不插。
+    //   ⚠ 本档与 ① 都是**本次不动**的跳过条件（C 类锚点 / B 类互斥），断言原样保留。
     {
         RgGraphDesc d;
         d.attachments = {swapchainAtt(), depthAtt(), offscreenAtt("scene_rt", "rgba16_sfloat"),
@@ -1544,7 +1550,8 @@ TEST_CASE("decorateAoApplyPass 三条跳过条件：taa 在图里 / 无 ao 附�
         unchanged(d, a, p);
     }
 
-    // ④ 阳性配对：三条都不命中时必须插得成（防上面三条门槛被写成"恒 false"）
+    // ④ 阳性配对：两条跳过条件（①互斥 / ③锚点）都不命中时必须插得成
+    //   （防上面两条门槛被写成"恒 false"）
     {
         RgGraphDesc d = build(/*withAo=*/true);
         CHECK(decorateAoApplyPass(d));
@@ -1893,6 +1900,186 @@ TEST_CASE("decorateSsrPass 与 taa / ao_apply 可复合：装配序下链自动�
     }
 }
 
+// ============================================================================
+// 债-129 S3-A：装饰器不再自查「缺输入附件」（A 类跳过条件已删）
+// ============================================================================
+//
+// 【本刀改的契约】decorateTaaPass / decorateVelocityPass / decorateSsrPass 原来各有一条
+// `if (!depthAtt) return false;`、decorateAoApplyPass 原来有一条 `if (!hasAo) return false;`。
+// 四条全删：装饰器不再替 compile 做它本来就会做的判断。
+//
+// 【为什么删】旧 skip 自述的理由是「怕装饰出引用不存在附件的 pass（编译期错误，图起不来）
+// ⟹ 跳过比悬空引用保守」。但**编译错误正是本项目要的**（AGENTS §项目哲学 4：让错的东西
+// 编不过 > 让错的东西被看见），而 skip 的实际行为 = main_impl 打一条 warn 然后**降级继续跑**
+// = 该能力静默不生效 = 债-129 的病本体。「怕编译错误」不该成为不申报的理由。
+//
+// 【新契约】缺附件时装饰器**照插**，判定交回 compileRenderGraph（rgl/render_graph_impl.cppm
+// 的 `validatePassRef`）。它对「引用了不该引用的东西」有**两条**独立拒绝路径，本组逐条钉：
+//  ① 名不在附件表 → `references unknown attachment 'X'`；
+//  ② 名在表里、但本 pass 之前无人写过它 → `reads 'X' before any write in the frame`。
+// 两档都测是因为只测 ① 会漏掉一类变异：把回落名改成图里**恰好存在但插入点前没人写**的名字
+// ——它躲得过 ①，躲不过 ②。
+//
+// 【每条判据都配阳性锚点】同一张骨架把附件与写者补齐后 compileRenderGraph **必须成功**。
+// 没有它，失败侧可能只是因为骨架图本来就编译不过而"绿"（本文件头 ① 类反向用例的纪律）。
+
+namespace {
+
+/** 缺输入附件的三档存在性（段头 ① / ② / 阳性锚点）。 */
+enum class MissingAtt {
+	missing,   // 附件名根本不在表里 → 拒绝路径 ①
+	unwritten, // 名在表里但插入点之前无人写 → 拒绝路径 ②
+	present,   // 附件 + 写者齐备 → compile 必须成功（阳性锚点）
+};
+
+/**
+ * 「借 depth」的三个装饰器（taa / velocity / ssr）共用骨架：opaque 写 scene_hdr（+ 按档写
+ * depth），tonemap 采 scene_hdr 写 swapchain（= 三个装饰器共用的锚点判据命中点）。
+ *
+ * ⚠ `withGBuffer` = ssr 那组必须为真：它的跳过条件 3（G-buffer 契约表全体存在 = D 类）按
+ * 裁决**原样保留**，不给全表则装饰器根本走不到 depth 那一步，本组判据会空转。G-buffer 五
+ * 通道由 opaque 全写 —— trace pass 的 inputs 里 G-buffer **排在 depth 之前**，它们若先报
+ * 「读前置」就会遮住本组要钉的 depth 那条消息。
+ */
+RgGraphDesc depthPresenceGraph(MissingAtt mode, bool withGBuffer) {
+	RgGraphDesc d;
+	d.attachments = {swapchainAtt(), offscreenAtt("scene_hdr", "rgba16_sfloat")};
+	if (mode != MissingAtt::missing)
+		d.attachments.push_back(depthAtt());
+	RgPassDesc opaque{.name = "opaque", .kind = RgPassKind::drawMesh, .state = "opaque",
+		.drawSource = "opaque", .outputs = {colorOut("scene_hdr")}};
+	if (mode == MissingAtt::present)
+		opaque.outputs.push_back(depthOut("depth"));
+	auto addGBuffer = [&](std::string name, std::string format) {
+		d.attachments.push_back(offscreenAtt(name, std::move(format)));
+		opaque.outputs.push_back(colorOut(std::move(name)));
+	};
+	if (withGBuffer) {
+		addGBuffer("gbuffer_albedo", "rgba8_srgb");
+		addGBuffer("gbuffer_normal", "rg16_snorm");
+		addGBuffer("gbuffer_position", "rgba32_sfloat");
+		addGBuffer("gbuffer_metalrough", "rgba8_unorm");
+		addGBuffer("gbuffer_emissive", "rgba16_sfloat");
+	}
+	d.passes = {std::move(opaque),
+		RgPassDesc{.name = "tonemap", .kind = RgPassKind::drawLight, .state = "tonemap",
+			.outputs = {colorOut("swapchain")}, .inputs = {sampleIn("scene_hdr")}}};
+	return d;
+}
+
+/**
+ * decorateAoApplyPass 的骨架：depth 恒备（本装饰器不借 depth，但它引用的 ao pass 要读 depth；
+ * 且缺 depth 会让骨架图先报别的错，遮住 ao 那条消息），只切 ao 的三档存在性。
+ */
+RgGraphDesc aoPresenceGraph(MissingAtt mode) {
+	RgGraphDesc d;
+	d.attachments = {swapchainAtt(), depthAtt(), offscreenAtt("scene_hdr", "rgba16_sfloat")};
+	if (mode != MissingAtt::missing)
+		d.attachments.push_back(offscreenAtt("ao"));  // r8_unorm = kAoFormat
+	d.passes = {RgPassDesc{.name = "opaque", .kind = RgPassKind::drawMesh, .state = "opaque",
+		.drawSource = "opaque", .outputs = {colorOut("scene_hdr"), depthOut("depth")}}};
+	if (mode == MissingAtt::present)
+		d.passes.push_back(RgPassDesc{.name = "ao", .kind = RgPassKind::drawLight,
+			.state = "ao", .outputs = {colorOut("ao")}, .inputs = {sampleIn("depth")}});
+	d.passes.push_back(RgPassDesc{.name = "tonemap", .kind = RgPassKind::drawLight,
+		.state = "tonemap", .outputs = {colorOut("swapchain")},
+		.inputs = {sampleIn("scene_hdr")}});
+	return d;
+}
+
+/**
+ * compile 必须失败，且消息**点名到位**：哪个 pass + 哪条拒绝路径带上哪张附件。
+ *
+ * 🔴 附件名一律带**单引号**搜（`'ao'` 而不是 `ao`）：不带引号时 "ao" 会被同一条消息里的
+ *    `ao_apply` / `ao_applied` 命中 ⟹ needle 恒真、变异自证第 3 条验不出东西。
+ * 🔴 两条 needle 都不可省成「失败了」：骨架图本来就编译不过时，只断言失败的那条判据也绿。
+ */
+void expectCompileFailNaming(const RgGraphDesc& d, std::string_view passNeedle,
+	std::string_view attNeedle) {
+	const auto g = compileRenderGraph(d);
+	// ⚠ 用文件既有惯例 INFO(errOf(g))：本构建的 doctest 在 modules 下把 std::string 打成
+	//    字节数组、把 .c_str() 打成野指针，只有前者**保内容**（排变异时按 ASCII 解码消息）。
+	INFO(errOf(g));
+	CHECK_FALSE(g.has_value());
+	if (!g.has_value()) {
+		const std::string& msg = g.error().message;
+		CHECK(msg.find(passNeedle) != std::string::npos);
+		CHECK(msg.find(attNeedle) != std::string::npos);
+	}
+}
+
+/** 阳性锚点：同一骨架补齐后 compile 必须成功（否则失败侧的判据是恒真的）。 */
+void expectCompileOk(const RgGraphDesc& d) {
+	const auto g = compileRenderGraph(d);
+	INFO(errOf(g));
+	CHECK(g.has_value());
+}
+
+}  // namespace
+
+TEST_CASE("债-129 S3-A 新契约（taa）：缺 depth 照插，compile 硬失败且消息点名 'depth'；补齐则成功") {
+	// ① 附件名不在表里 → 装饰器照插（旧行为 = return false + main_impl warn + TAA 静默不生效）
+	auto d = depthPresenceGraph(MissingAtt::missing, /*withGBuffer=*/false);
+	REQUIRE(decorateTaaPass(d));
+	expectCompileFailNaming(d, "pass 'taa'", "unknown attachment 'depth'");
+	// ② 名在表里但插入点前无人写 → 走第二条拒绝路径（同样是硬失败，不是降级）
+	auto d2 = depthPresenceGraph(MissingAtt::unwritten, /*withGBuffer=*/false);
+	REQUIRE(decorateTaaPass(d2));
+	expectCompileFailNaming(d2, "pass 'taa'", "reads 'depth' before any write in the frame");
+	// ③ 阳性锚点：附件 + 写者齐备 → compile 必须成功
+	auto d3 = depthPresenceGraph(MissingAtt::present, /*withGBuffer=*/false);
+	REQUIRE(decorateTaaPass(d3));
+	expectCompileOk(d3);
+}
+
+TEST_CASE("债-129 S3-A 新契约（velocity）：缺 depth 照插，compile 硬失败且消息点名 'depth'") {
+	auto d = depthPresenceGraph(MissingAtt::missing, /*withGBuffer=*/false);
+	REQUIRE(decorateVelocityPass(d));
+	expectCompileFailNaming(d, "pass 'velocity'", "unknown attachment 'depth'");
+	auto d2 = depthPresenceGraph(MissingAtt::unwritten, /*withGBuffer=*/false);
+	REQUIRE(decorateVelocityPass(d2));
+	expectCompileFailNaming(d2, "pass 'velocity'",
+		"reads 'depth' before any write in the frame");
+	// ③ 阳性锚点：附件 + 写者齐备 → compile 必须成功
+	auto d3 = depthPresenceGraph(MissingAtt::present, /*withGBuffer=*/false);
+	REQUIRE(decorateVelocityPass(d3));
+	expectCompileOk(d3);
+}
+
+TEST_CASE("债-129 S3-A 新契约（ssr）：缺 depth 照插，compile 硬失败点名 'depth'（报错落在 ssr_trace）") {
+	// withGBuffer = true：ssr 的跳过条件 3（契约表全体存在 = D 类）按裁决保留，不给全表则
+	// 装饰器在 depth 之前就 return false 了，本组判据空转。
+	// ⚠ 报错的 pass 是 **ssr_trace**（trace 才读 depth，apply 不读）——needle 写错成 'ssr'
+	//   会一直红，别以为是判据坏了。
+	auto d = depthPresenceGraph(MissingAtt::missing, /*withGBuffer=*/true);
+	REQUIRE(decorateSsrPass(d));
+	expectCompileFailNaming(d, "pass 'ssr_trace'", "unknown attachment 'depth'");
+	auto d2 = depthPresenceGraph(MissingAtt::unwritten, /*withGBuffer=*/true);
+	REQUIRE(decorateSsrPass(d2));
+	expectCompileFailNaming(d2, "pass 'ssr_trace'",
+		"reads 'depth' before any write in the frame");
+	// ③ 阳性锚点：契约表 + depth 附件 + depth 写者齐备 → compile 必须成功
+	auto d3 = depthPresenceGraph(MissingAtt::present, /*withGBuffer=*/true);
+	REQUIRE(decorateSsrPass(d3));
+	expectCompileOk(d3);
+}
+
+TEST_CASE("债-129 S3-A 新契约（ao_apply）：缺 ao 照插，compile 硬失败且消息点名 'ao'（非 ao_applied）") {
+	// ① 缺附件 → 照插（本装饰器引用的本来就是常量名 kAoName，判定交回 compile）
+	auto d = aoPresenceGraph(MissingAtt::missing);
+	REQUIRE(decorateAoApplyPass(d));
+	expectCompileFailNaming(d, "pass 'ao_apply'", "unknown attachment 'ao'");
+	// ② 有 ao 附件但无人写（无 ao pass 的图形态）→ 第二条拒绝路径
+	auto d2 = aoPresenceGraph(MissingAtt::unwritten);
+	REQUIRE(decorateAoApplyPass(d2));
+	expectCompileFailNaming(d2, "pass 'ao_apply'",
+		"reads 'ao' before any write in the frame");
+	// ③ 阳性锚点：ao 附件 + ao pass 齐备 → compile 必须成功
+	auto d3 = aoPresenceGraph(MissingAtt::present);
+	REQUIRE(decorateAoApplyPass(d3));
+	expectCompileOk(d3);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // 组 10：图事实查询面（债-129 S1a）——「图里有没有 X / X 的槽位是几」的唯一提供者
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1915,8 +2102,10 @@ TEST_CASE("decorateSsrPass 与 taa / ao_apply 可复合：装配序下链自动�
  *  - `graphFsrColorInput` 的优先级链去掉 `ao_applied` 档 → 「三档全在取 ao」红
  *    （**这一格就是收口前 `computeFsrUsable` 漏掉的那一档**，变异即历史故障）。
  *  - 去掉 `ssr_applied` 档 → 态 3b 与 16 组合表里含 ssr 的格红（**这一格是 2026-10-16 实测
- *    补上的真漏档**：`initFsr` 原始三档链没有 ssr_applied，装配层四档链有 ⟹ `ssr + aa=fsr
- *    + 无 ao 附件` 时 FSR 读未经 SSR 的成片，静默丢反射）。
+ *    补上的真漏档**：`initFsr` 原始三档链没有 ssr_applied，装配层四档链有 ⟹ 链头落不到
+ *    ssr_applied 时 FSR 读未经 SSR 的成片，静默丢反射。⚠ 该形态作为真实配置已于债-129 S3-A
+ *    不可达 —— ao_apply 那时会照插、缺 ao 附件直接被 compile 拒；本档按**纯函数契约**测，
+ *    理由与不可达论证见 `render_graph_facts.cppm`）。
  *  - 16 组合表的附件表**按优先级从低到高铺** ⟹ 实现退化成「取第一个存在的附件」时整片红。
  *  - `baseSpace` 恒写 false → 「选 taa_out ⟹ 基空间」红；恒写 true → 另几格红。
  *  - `RgFsrInputs::complete()` 删掉任一半检查 → 对应那条「缺一个输入」用例红
@@ -2037,9 +2226,15 @@ TEST_CASE("graphFsrColorInput：ao_applied > taa_out > ssr_applied > scene_hdr �
 	CHECK(c3->slot == 1u);
 	CHECK_FALSE(c3->baseSpace);
 
-	// 态 3b（🔴 2026-10-16 漏档修复的专例）：ssr_applied + scene_hdr，无 ao_applied / taa_out
-	// = `ssr + aa=fsr + 图无 ao 附件`（decorateAoApplyPass 跳过条件 2）的真实形态。修复前这里
-	// 返回 scene_hdr ⟹ FSR 读**未经 SSR 的成片**，SSR 整条静默丢掉（不崩、不报错、VVL 不抓）。
+	// 态 3b（🔴 2026-10-16 漏档修复的专例）：ssr_applied + scene_hdr，无 ao_applied / taa_out。
+	// 修复前这里返回 scene_hdr ⟹ FSR 读**未经 SSR 的成片**，SSR 整条静默丢掉（不崩、不报错、
+	// VVL 不抓）。
+	// ⚠ **这个组合作为「引擎真实可达形态」已随债-129 S3-A 消失**（原注释写的「= decorateAoApplyPass
+	//   跳过条件 2 的真实形态」已失效，那条跳过条件被删了）：同样的配置下 ao_apply 现在**照插**
+	//   ao 引用，图里没有 ao 附件 ⟹ `compileRenderGraph` 直接拒、**进程起不来**，走不到问 FSR
+	//   色输入这一步。论证与「为什么这一档仍然保留」见 `render_graph_facts.cppm` 的实现注释。
+	// ⟹ 本用例因此是**纯函数契约**用例（链的相对次序不依赖可达性），不是形态用例；别因为它
+	//   "测不到真实配置"就删档 —— 装配层 tonemap 链是四档，两条链必须结构同序。
 	const auto ssrOnly = attTable({{"swapchain", RgAttachmentKind::swapchain},
 		{"scene_hdr", RgAttachmentKind::offscreen}, {"ssr_applied", RgAttachmentKind::offscreen}});
 	const auto c3b = graphFsrColorInput(ssrOnly);

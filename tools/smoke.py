@@ -1154,7 +1154,9 @@ def selftest(quiet: bool = False) -> list[str]:
         return ("[0] [info] [ecs_frame_diag.cppm:89] llm_debug: 截图已保存 (/abs/screenshots/"
                 + name + ") — render 1280x720 / swapchain 1280x720 (scale 1)")
 
-    # 各档的"生效"行（判据正则吃的就是这些形态）
+    # 各档的"生效"行（判据正则吃的就是这些形态）。⚠ 行内的 文件.cppm:NNN 是**格式占位**：判据只吃
+    # 消息前缀与数字，不认出处，所以这些行号**不随源码同步**——别照它去翻代码（本文件里这类夹具
+    # 有十几处，逐个追行号只会制造"改了一处、其余照旧漂"的假象，故在此一次性声明）。
     VEL = "[0] [info] [render_graph_rtslot.cppm:148] velocity (RGBA16F, 像素单位 prev−cur): 1280x720 slot 5"
     VEL_SMALL = VEL.replace("1280x720", "640x360")
     VEL_NO = "[0] [warning] [main_impl.cppm:404] velocity: 图形态不支持速度场装饰（锚点略）"

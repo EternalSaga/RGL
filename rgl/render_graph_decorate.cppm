@@ -358,8 +358,14 @@ bool decorateTaaPass(RgGraphDesc& desc) {
 		return false;
 	auto colorAtt = sampledColorName(desc, desc.passes[*consumerIdx]);  // 上一步已保证有值
 	auto depthAtt = borrowDepthFromPriorWriter(desc, *consumerIdx);
-	if (!depthAtt)
-		return false;  // 无可重投影的深度 = TAA 无从谈起
+	// 🔴 债-129 S3-A：这里原来有一条 `if (!depthAtt) return false;` 的自我审查——删了。
+	//    没有前驱 depth 写者时引用规范名，把判定交回 compile：图里没这张附件 →
+	//    `references unknown attachment 'depth'`；有附件但插入点之前没人写 → 「读前置」拒。
+	//    两种都是**正确的硬失败**（旧行为是 warn + 该能力静默不生效 = 本债的病）。
+	// ⚠ 残余：若图把深度附件起了别的名字（如 `g_depth`）**且**写者在插入点之后，报错会点名
+	//    `depth` 而非 `g_depth`——消息不如「read before write」精确，但拒得对。
+	//    按 usage 查到的名字仍然优先（上面那行），所以内建图与「改名但写者在前」的图**行为不变**。
+	const std::string depthName = depthAtt.value_or(std::string{kDepthName});
 
 	desc.attachments.push_back(RgAttachmentDesc{
 		.name = std::string{kTaaOutName}, .kind = RgAttachmentKind::offscreen,
@@ -380,7 +386,7 @@ bool decorateTaaPass(RgGraphDesc& desc) {
 		// 最后历史（帧首跨帧读）
 		.inputs = {
 			RgPassAttachment{.attachment = *colorAtt, .usage = RgUsage::sampleRead},
-			RgPassAttachment{.attachment = *depthAtt, .usage = RgUsage::sampleRead}}};
+			RgPassAttachment{.attachment = depthName, .usage = RgUsage::sampleRead}}};
 	// 批 13.6：AO 施加点搬进 taa pass ⟹ 本 pass 现在**采样** ao 附件，必须声明 sampleRead
 	// 输入——否则编译器不为它生成 ColorAttachmentOptimal → ShaderReadOnly 的布局转换，
 	// 采样端直接报 VVL（同 decorateShadowPass 里阴影图那条教训）。
@@ -416,10 +422,14 @@ bool decorateTaaPass(RgGraphDesc& desc) {
 }
 
 /**
- * decorateAoApplyPass 定义（契约见 render_graph.cppm 接口注释：跳过两条 + 次序契约）。
+ * decorateAoApplyPass 定义（契约见 render_graph.cppm 接口注释：次序契约 + 互斥跳过）。
+ *
+ * 🔴 债-129 S3-A 起本函数只剩**一条**自我审查（「taa 在图里 = AO 施加点已被它占」= 互斥）；
+ *    原第二条「图里没有 ao 附件」已删（理由见函数体内注释）。接口注释里那份「跳过条件
+ *    （两条）」的编号清单已同步成现行形态（2026-10-16 收账）。
  */
 bool decorateAoApplyPass(RgGraphDesc& desc) {
-	// 跳过条件 1：taa pass 在图里 ⟹ AO 施加点已经在那儿了（批 13.6），插本 pass = 双施。
+	// 互斥跳过：taa pass 在图里 ⟹ AO 施加点已经在那儿了（批 13.6），插本 pass = 双施。
 	for (const auto& p : desc.passes)
 		if (p.name == std::string{kTaaPassName})
 			return false;
@@ -428,12 +438,13 @@ bool decorateAoApplyPass(RgGraphDesc& desc) {
 	if (!consumerIdx)
 		return false;
 	auto colorAtt = sampledColorName(desc, desc.passes[*consumerIdx]);  // 上一步已保证有值
-	// 跳过条件 2：没有 ao 附件（无 SSAO 的图形态）= 没有可见度可乘。按**存在性**判，
-	// 不假设变体（同 decorateTaaPass 里挂 ao 输入那条判据）。
-	const bool hasAo = std::ranges::any_of(desc.attachments,
-		[](const auto& a) { return a.name == std::string{kAoName}; });
-	if (!hasAo)
-		return false;
+	// 🔴 债-129 S3-A：这里原来有一条「图里没有 ao 附件就跳过」（`hasAo`）的自我审查——删了。
+	//    本装饰器引用的本来就是常量名 kAoName，图里没这张附件 ⟹ 交回 compile 报
+	//    `references unknown attachment 'ao'`（**正确的硬失败**）。旧行为是 warn + AO 施加
+	//    点静默退回 tonemap 内 = 本债的病；而「怕装饰出引用不存在附件的 pass 所以先 skip」
+	//    恰恰把我们要的编译期错误给藏掉了（§项目哲学 4：让错的东西编不过 > 让错的东西被看见）。
+	//    内建 forward / deferred 两图都**无条件**声明 ao（render_graph_builtin.cppm），
+	//    offscreen 变体走不到这里（上面锚点判据先 false）⟹ 出厂形态逐位不变。
 
 	desc.attachments.push_back(RgAttachmentDesc{
 		.name = std::string{kAoAppliedName}, .kind = RgAttachmentKind::offscreen,
@@ -483,8 +494,12 @@ bool decorateVelocityPass(RgGraphDesc& desc) {
 	// 无人用"声明 dontCare，本 pass 读到未定义内容，且编译期"后续使用的写必须 store"校验
 	// 会直接失败（同 ao 批 11.4 那条教训，见 configs/render_graph.lua:57 的硬警告）。
 	auto depthAtt = borrowDepthFromPriorWriter(desc, *consumerIdx);
-	if (!depthAtt)
-		return false;  // 插入点之前无人写 depth = 速度场无从算起
+	// 🔴 债-129 S3-A：这里原来有一条 `if (!depthAtt) return false;`（插入点之前无人写 depth
+	//    = 速度场无从算起）的自我审查——删了。没有前驱 depth 写者时引用规范名，把判定交回
+	//    compile：图里没这张附件 → `references unknown attachment 'depth'`；有附件但插入点
+	//    之前没人写 → 「读前置」拒。两种都是**正确的硬失败**（旧行为是 warn + 无速度场）。
+	// ⚠ 残余与「按 usage 查到的名字优先」同 decorateTaaPass，那边注释为准。
+	const std::string depthName = depthAtt.value_or(std::string{kDepthName});
 
 	desc.attachments.push_back(RgAttachmentDesc{
 		.name = std::string{kVelocityName}, .kind = RgAttachmentKind::offscreen,
@@ -494,12 +509,16 @@ bool decorateVelocityPass(RgGraphDesc& desc) {
 		.state = "velocity",
 		.outputs = {RgPassAttachment{.attachment = std::string{kVelocityName},
 			.usage = RgUsage::colorWrite, .loadOp = RgLoadOp::clear, .storeOp = RgStoreOp::store}},
-		.inputs = {RgPassAttachment{.attachment = *depthAtt, .usage = RgUsage::sampleRead}}});
+		.inputs = {RgPassAttachment{.attachment = depthName, .usage = RgUsage::sampleRead}}});
 	return true;
 }
 
 /**
- * decorateSsrPass 定义（契约见 render_graph.cppm 接口注释：跳过四条 + 次序契约）。
+ * decorateSsrPass 定义（契约见 render_graph.cppm 接口注释：次序契约 + 跳过条件）。
+ *
+ * 🔴 债-129 S3-A：原「跳过条件 4 = 借不到可 store 的 depth」已删（现剩三条：时序互斥、
+ *    锚点、G-buffer 契约表）。接口注释里那份「跳过条件（四条）」编号清单已同步（2026-10-16
+ *    收账），条件 3 那条与 S3-A 口径相反的理由也一并改写成了独立成立的那条。
  *
  * 批 15.3 子步 B = **双 pass**（trace 半分辨率 march + apply 全分辨率模糊加法；拆分论证 →
  * shaders/ssr_trace.frag.slang 文件头）。形状 = decorateAoApplyPass 的同构三件套的加倍版：
@@ -532,13 +551,17 @@ bool decorateSsrPass(RgGraphDesc& desc) {
 	if (!consumerIdx)
 		return false;
 	auto colorAtt = sampledColorName(desc, desc.passes[*consumerIdx]);  // 上一步已保证有值
-	// 跳过条件 3 = **SSR 的 deferred-only 边界 + 附件存在性判据**（D1 对等豁免已拍板，
-	// forward 不跟，出处 `docs/phase15_plan.md` §0.1）。判据 = 「图里**逐一**有
-	// kGBufferAttachments 契约表的全部通道」，不再是前半的「有 position 即可」：本 pass
-	// 的 inputs 引用四个 G-buffer 通道，半张契约表（如只有 position）会装饰出引用不存在
-	// 附件的 pass（编译期「未知附件」错误，图起不来）。查**全表**而非只查消费的四个：
-	// 表就是契约，缺任何一通道 = 这不是 deferredRenderGraphDesc 产出的图，跳过比装饰出
-	// 悬空引用保守；emissive 虽不被采样，也是契约表成员，存在性上不豁免。
+	// 跳过条件 3 = **SSR 的 deferred-only 边界**（D1 对等豁免已拍板，forward 不跟，出处
+	// `docs/phase15_plan.md` §0.1）。判据 = 「图里**逐一**有 kGBufferAttachments 契约表的全部
+	// 通道」，不再是前半的「有 position 即可」。
+	// 🔴 查**全表**而非只查 trace 真正引用的那四个，唯一站得住的理由是「表就是契约」：缺任何
+	//    一通道 = 这张图**不是 deferredRenderGraphDesc 产出的那张**，本装饰就不该往上贴。
+	//    `emissive` 虽不被任何 pass 采样，也是契约表成员，存在性上不豁免 —— 而正因为它不被引用，
+	//    缺了它 `compileRenderGraph` **照样放行**，所以这条**不是**在防编译错误。
+	// ⚠ 与债-129 S3-A 删掉的四条 A 类 skip **不同类**：本条拦的是「compile 放过的不完整契约」，
+	//    不是「compile 会拒的形态」。旧文案在这里写的理由是「半张契约表会装饰出引用不存在附件的
+	//    pass（编译期「未知附件」错误，图起不来）……跳过比装饰出悬空引用**保守**」——那条与
+	//    S3-A 的口径正好相反，已删（2026-10-16 收账）；留着它后来者会拿本条当「A 类也该留」的依据。
 	const bool gBufferContractHeld = std::ranges::all_of(kGBufferAttachments,
 		[&](const RgGBufferDesc& gb) {
 			return std::ranges::any_of(desc.attachments,
@@ -546,15 +569,20 @@ bool decorateSsrPass(RgGraphDesc& desc) {
 		});
 	if (!gBufferContractHeld)
 		return false;
-	// 跳过条件 4 = 借不到可 store 的 depth。深度附件名从「插入点之前最后一个写 depth 的
-	// pass」反查（本文件头部「认角色不认名字」纪律，同 decorateVelocityPass），而**不是**
-	// 照 aoPass 硬编码 "depth"——那是内建图描述，"depth" 在同函数里定义；装饰器硬编码
-	// 违本文件纪律，且反查顺手把它的 storeOp 修成 store：depth 按「后续无人用」声明
-	// dontCare 的图会让本 pass 读到未定义内容、且编译期「后续使用的写必须 store」校验直接
-	// 失败（velocity 记过的教训）。usage 三件套（sampleRead/load/store）仍照 aoPass。
+	// 深度附件名从「插入点之前最后一个写 depth 的 pass」反查（本文件头部「认角色不认名字」
+	// 纪律，同 decorateVelocityPass），而**不是**照 aoPass 硬编码 "depth"——那是内建图描述，
+	// "depth" 在同函数里定义；装饰器硬编码违本文件纪律，且反查顺手把它的 storeOp 修成
+	// store：depth 按「后续无人用」声明 dontCare 的图会让本 pass 读到未定义内容、且编译期
+	// 「后续使用的写必须 store」校验直接失败（velocity 记过的教训）。usage 三件套
+	// （sampleRead/load/store）仍照 aoPass。
 	auto depthAtt = borrowDepthFromPriorWriter(desc, *consumerIdx);
-	if (!depthAtt)
-		return false;
+	// 🔴 债-129 S3-A：这里原来有一条 `if (!depthAtt) return false;`（原「跳过条件 4 = 借不到
+	//    可 store 的 depth」）的自我审查——删了。反查不到时引用规范名，把判定交回 compile：
+	//    图里没这张附件 → `references unknown attachment 'depth'`；有附件但插入点之前没人写
+	//    → 「读前置」拒。⚠ 上面「跳过条件 3」（G-buffer 契约表全体存在）**判据原样保留**：它
+	//    拦的是 compile **放过**的不完整契约（`emissive` 不被引用 ⟹ 缺了也不报错），与本条不同类，
+	//    论证见那里的段头。
+	const std::string depthName = depthAtt.value_or(std::string{kDepthName});
 
 	desc.attachments.push_back(RgAttachmentDesc{
 		.name = std::string{kSsrTraceName}, .kind = RgAttachmentKind::offscreen,
@@ -588,7 +616,7 @@ bool decorateSsrPass(RgGraphDesc& desc) {
 		if (gb.name != kGBufferEmissiveName)  // emissive 不被 SSR 消费，不声明读边
 			trace.inputs.push_back(RgPassAttachment{.attachment = std::string{gb.name},
 				.usage = RgUsage::sampleRead});
-	trace.inputs.push_back(RgPassAttachment{.attachment = *depthAtt, .usage = RgUsage::sampleRead,
+	trace.inputs.push_back(RgPassAttachment{.attachment = depthName, .usage = RgUsage::sampleRead,
 		.loadOp = RgLoadOp::load, .storeOp = RgStoreOp::store});
 
 	// ── apply pass（全分辨率，粗糙度感知螺旋模糊 + 加法，写 ssr_applied）──

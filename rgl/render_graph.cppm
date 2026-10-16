@@ -734,10 +734,16 @@ export struct RgFsrColorInput {
  * 问题（「HDR 累加 → 各施加点这条链的**链头产物**是哪张附件」）。收口前它有两份，而两份**各漏过
  * 一档，且漏的不是同一档**：
  *  - `computeFsrUsable` 漏 `ao_applied`（S1a 随两处合一消掉）；
- *  - `initFsr` 漏 `ssr_applied`（🔴 **2026-10-16 实测补上**）：`ssr + aa=fsr + 图无 ao 附件`
- *    （= `decorateAoApplyPass` 跳过条件 2）时，tonemap 读 `ssr_applied` 而 FSR 读 `scene_hdr`
- *    ⟹ **SSR 整条静默丢掉**。两档格式与分辨率同为 `rgba16_sfloat` 渲染网格 ⟹ 不崩、不报错、
- *    VVL 不抓，症状只是「SSR 开了但画面没反射」。
+ *  - `initFsr` 漏 `ssr_applied`（🔴 **2026-10-16 实测补上**）：图里有 `ssr_applied` 而链头落不
+ *    到它时，tonemap 读 `ssr_applied` 而 FSR 读 `scene_hdr` ⟹ **SSR 整条静默丢掉**。两档格式与
+ *    分辨率同为 `rgba16_sfloat` 渲染网格 ⟹ 不崩、不报错、VVL 不抓，症状只是「SSR 开了但画面
+ *    没反射」。
+ *    ⚠ 补它当时的触发形态写的是「`ssr + aa=fsr + 图无 ao 附件`（= `decorateAoApplyPass` 跳过
+ *    条件 2）」——**那条跳过条件已随债-129 S3-A 删除，这个形态今天到不了了**：同配置下 ao_apply
+ *    会照插 ao 引用，缺附件直接被 `compileRenderGraph` 拒掉、进程起不来。论证与「为什么仍然
+ *    保留这一档」逐条记在 `render_graph_facts.cppm` 的实现处，本处不重述。
+ *    ⟹ 本档现在是**门控性质**造成的不可达，不是链本身错了：门控一变它就可能重新可达，而两条链
+ *    的结构同序是硬要求（删档 = 重新打开上面那个洞）。
  * ⟹ 单测以「四枚附件在/不在的 **16 种组合**」钉住两链同解（期望值按装配层那条链的**顺序覆盖**
  * 写法独立算出，不抄本函数）。🔴 **加第五档时必须同步两处**：`assembleHdrAoChain` 要按档**条件
  * 领建 RT 堆槽**（门关 = 堆槽零变化，那是逐位性质），所以它吃不了本函数，16 组合表是当前形态下
@@ -993,10 +999,19 @@ export bool decorateTaaPass(RgGraphDesc& desc);
  * 读成片与 ao 写 ao_applied）+ 把「写 swapchain 且采色」那个 pass（tonemap）的色输入
  * 换成 `ao_applied`。**没有**帧末 copy（不跨帧）。
  *
- * **跳过条件（两条，缺一即不插，返回 false）**：
+ * **跳过条件（一条，命中即不插、返回 false）**：
  *  1. 图里已有 `taa` pass —— AO 施加点就在它里面（批 13.6），再插本 pass = **双施**。
  *     Phase 13 已冻结，taa.frag 一字不动，所以解耦靠"谁在图里谁负责"而不是改 taa。
- *  2. 图里没有 `ao` 附件（无 SSAO 的图形态）—— 没有可见度可乘。
+ * （另有一条与 taa / velocity / ssr **共用**的锚点判据：找不到「写 swapchain 且 sampleRead
+ *  色附件」的 pass 也不插 —— DIAG offscreen 变体用 blit 上屏，`transferRead ≠ sampleRead`。）
+ *
+ * 🔴 **债-129 S3-A 换契约**：原第 2 条「图里没有 `ao` 附件 ⟹ 没有可见度可乘 ⟹ 跳过」**已删**。
+ *  缺输入附件**不再**返回 false（旧行为 = 包装层打一条 debug 然后降级继续跑 = AO 施加点静默
+ *  退回 tonemap 内 = 能力静默不生效，正是本债的病），而是**照插**，判定交回
+ *  `compileRenderGraph`，由它硬拒：名不在附件表 → `references unknown attachment 'ao'`；名在
+ *  表里但插入点之前无人写过它 → `reads 'ao' before any write in the frame`。两种都是**正确的
+ *  启动失败**（§项目哲学 4：让错的东西编不过 > 让错的东西被看见；旧 skip 自述的「怕装饰出引用
+ *  不存在附件的 pass」恰恰是要的编译错误，不该成为不申报的理由）。
  * ⟹ 门关（TAA 关 + FSR 关）时本装饰**不插**，AO 仍由 tonemap 施加 = **图逐位不变**（红线）。
  *
  * **次序契约**：必须在 picking / highlight / taa 三个装饰**之后**调。本 pass 是真正的
@@ -1004,7 +1019,8 @@ export bool decorateTaaPass(RgGraphDesc& desc);
  * 装饰器那条纪律，只是 velocity 靠"不采色"天然免疫，本 pass 采色、免疫不了）。
  *
  * @param desc 图声明（原地修改）
- * @return true = 已装饰；false = 按上面两条跳过（图不变）
+ * @return true = 已装饰；false = 上面那条互斥命中，或找不到锚点（两种都不动图）。
+ *         🔴 缺 `ao` 附件**不在**其列 —— 见上面的换契约说明，照插后由 compile 硬拒。
  */
 export bool decorateAoApplyPass(RgGraphDesc& desc);
 
@@ -1021,17 +1037,29 @@ export bool decorateAoApplyPass(RgGraphDesc& desc);
  * 插入次序 = light → **trace → apply** → [taa | ao_applied] → tonemap（两 pass 一起插在
  * 消费者之前，trace 紧邻 apply 之前）。没有帧末 copy（不跨帧）。
  *
- * **跳过条件（四条，任一命中即不插、返回 false，图不变）**：
+ * **跳过条件（三条，任一命中即不插、返回 false，图不变）**：
  *  1. 图里已有 `taa` 或 `ao_apply` pass —— **装饰太晚**（调用序不变量的结构性护栏：症状
  *     从不可观测的「SSR 建在时域滤波之后」变成可观测的「SSR 消失」）。与 ao_apply 的
  *     「taa 在图里就跳过」**语义不同**：那条是互斥（施加点唯一），本条是时序（串联）。
  *  2. 找不到「写 swapchain 且 sampleRead 色附件」的消费者（offscreen DIAG 变体用 blit
  *     上屏，transferRead ≠ sampleRead）——与 taa / velocity / ao_apply 同一锚点判据。
  *  3. 图里没有 **kGBufferAttachments 契约表的全部通道**（缺一即跳过）。**这就是 SSR 的
- *     deferred-only 边界**：D1 对等豁免已拍板（forward 不跟，`docs/phase15_plan.md` §0.1）；
- *     查全表而非只查 position = trace pass 的 inputs 引用四个 G-buffer 通道，半张契约表会
- *     装饰出引用不存在附件的 pass（编译期即错）。
- *  4. 插入点之前没有可 store 的 depth 写者（trace pass 以 sampleRead 读深度图）。
+ *     deferred-only 边界**：D1 对等豁免已拍板（forward 不跟，`docs/phase15_plan.md` §0.1）。
+ *     🔴 **查全表（含不被采样的 `emissive`）而不是只查 trace 真正引用的那四个**，理由是
+ *     「契约表就是契约」：缺任何一通道 ⟹ 这张图**不是 `deferredRenderGraphDesc` 产出的那张**，
+ *     本装饰就不该往上贴。注意它**不是**在防编译错误 —— `emissive` 不被任何 pass 引用，
+ *     缺了它 `compileRenderGraph` 照样放行。
+ *     ⚠ 本判据与债-129 S3-A 删掉的那四条 A 类 skip **不同类**：它拦的不是「compile 会拒的
+ *     形态」，而是「compile 放过的不完整契约」。拿它当「A 类也该留」的依据是误读。
+ *     （旧文案在此处写的理由是「半张契约表会装饰出引用不存在附件的 pass，跳过比装饰出悬空
+ *     引用**保守**」——那条与 S3-A 的口径正好相反，已删；见 `decorateSsrPass` 实现段头。）
+ *
+ * 🔴 **债-129 S3-A 换契约**：原第 4 条「插入点之前没有可 store 的 depth 写者 ⟹ 跳过」**已删**。
+ *  借不到 depth 时不再返回 false，而是引用规范名 `kDepthName` 照插，判定交回
+ *  `compileRenderGraph`：图里没这张附件 → `references unknown attachment 'depth'`（报错落在
+ *  `ssr_trace`，depth 只有 trace 读）；有附件但插入点之前没人写 → `reads 'depth' before any
+ *  write in the frame`。旧行为是 warn + 本次运行无 SSR = 能力静默不生效。按 usage 反查到的
+ *  名字仍然优先，所以内建 deferred 图**行为不变**（逐位实测五档全等）。
  * ⟹ 门关（`runtime.ssr.enabled = false`，默认）= 根本不调本函数 = 图里没有这两个 pass，
  *    **结构性**逐位不变（不是"有但旁路"——运行时分支挡不住 slang 的浮点重排，教训原文在
  *    `shaders/light.frag.slang` 的 IZB_CONSUME 注释）。
@@ -1044,7 +1072,8 @@ export bool decorateAoApplyPass(RgGraphDesc& desc);
  * 滤波该滤最终画面），那条只是把"调用序挪错"变成可观测失败，不改变正确顺序下的行为。
  *
  * @param desc 图声明（原地修改）
- * @return true = 已装饰；false = 按上面四条跳过（图不变）
+ * @return true = 已装饰；false = 按上面三条跳过（图不变）。🔴 缺 depth 附件**不在**其列 ——
+ *         见上面的换契约说明，照插后由 compile 硬拒。
  */
 export bool decorateSsrPass(RgGraphDesc& desc);
 
@@ -1057,7 +1086,12 @@ export bool decorateSsrPass(RgGraphDesc& desc);
  * 纪律）。落点顺序 = `[velocity, taa, tonemap]`——两者都只 sampleRead depth，彼此无依赖，
  * 而 TAA 的锚点搜索是**现搜**的（不缓存下标），故 velocity 先插不会让 TAA 认错消费者。
  * @param desc 图声明（原地修改）
- * @return true = 已装饰；false = 图形态不支持（无 swapchain 消费者 / 借不到可 store 的 depth）
+ * @return true = 已装饰；false = 找不到「写 swapchain 且 sampleRead 色附件」的 pass
+ *         （DIAG offscreen 变体用 blit 上屏，`transferRead ≠ sampleRead`）。
+ *         🔴 债-129 S3-A：原第二条「借不到可 store 的 depth ⟹ 返回 false」**已删** —— 借不到时
+ *         引用规范名 `kDepthName` 照插，交 `compileRenderGraph` 硬拒（`references unknown
+ *         attachment 'depth'` / `reads 'depth' before any write in the frame`）。理由同
+ *         `decorateAoApplyPass` 那条换契约说明，不重述。
  */
 export bool decorateVelocityPass(RgGraphDesc& desc);
 

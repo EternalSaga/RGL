@@ -475,7 +475,7 @@ ssr_applied > scene_hdr`**（FSR 仍整条顶掉）。装饰器**可复合性**�
 | 变异 | 结果 | 含义 |
 |---|---|---|
 | `ssr` pass 的 `kind` 改成 `drawMesh`（kind 与 state 串味） | **红**（2 例） | 图校验承认可复合性 |
-| 跳过条件 2 的谓词取反（forward 边界） | **红**（1 例） | deferred-only 边界有护栏 |
+| 跳过条件 2 的谓词取反（forward 边界） | **红**（1 例） | deferred-only 边界有护栏。⚠ 编号是**当时**的：债-129 S3-A 删掉「借可 store 的 depth」那条后，forward 边界现为跳过条件 **3**（历史变异记录不改写，只加此注） |
 | `main_scene` 里 **taa 条目的色输入退回 `hdrSlot`** | **绿**（275 例全过） | ⚠ 缺口 1 |
 | **`decorateSsrOrWarn` 调用挪到装饰序列最后** | **绿**（275 例 + 冒烟 + syncval 全过） | ⚠ 缺口 2 |
 
