@@ -429,3 +429,25 @@ GENERATED_INIT_BASELINE_COMMENT = (
     "只准降不准升：新增一条 = 有人把调用点写回位置初始化，shader 改字段名/同类型换序都不红"
     "（§7.14 实测），处置是改成 `.字段 =`，不是来这里登记额度。"
     f"确实清掉一批后用 `{GENERATED_INIT_UPDATE_CMD}` 收账。判据与盲区 → docs/风格检查规则.md §12。")
+
+# ─── imgqa selftest 断言条数三口径 + testXxx 三方对账（债-123；规则 = rules_text.imgqa_selftest_checks，§13）──
+# 🔴 **断言条数的期望值不在本文件抄**——口径命令与其 `# = N` 的唯一真相源 =
+# `IMGQA_SELFTEST_HEADER` 头注释（规则每次跑现读；抄数字 = 造第二条会漂的副本，
+# 抄 config 也一样）。本文件只钉「扫哪些文件、用什么式子数」——改名/搬走必须红。
+# ⚠ 设计红线（挂号原文 → docs/mdi_plan.md §11.5）：判据是**静态调用点口径**，
+#   别改成「运行期计数 vs 写死常量」——运行期计数把循环内断言按执行次数计，循环上界
+#   随数据变（表长、机位数）时护栏就在合法改动下变红；静态口径**与激励无关**。
+IMGQA_SELFTEST_HEADER = "tools/imgqa/selftest.h"
+IMGQA_SELFTEST_TU_GLOB = "tools/imgqa/selftest*.cpp"
+# 断言调用点 token（= 头注释口径命令 `grep -cE 'c\.chk\('` 的模式本体，字面量匹配）
+IMGQA_SELFTEST_CHK_TOKEN = "c.chk("
+# 头注释里定位口径命令行的式子：`grep -cE … # = N`，N = 人写的期望值（`.` 不吃换行 ⟹ 行内匹配）
+IMGQA_SELFTEST_EXPECT_RE = r"grep -cE.*#\s*=\s*(\d+)"
+# testXxx 三方集合：声明（.h）与定义（.cpp）同式子（两侧都先 strip_comments——注释里的不算）
+IMGQA_SELFTEST_TEST_RE = r"void\s+(test\w+)\s*\(\s*Checker"
+# 调用 = cmdSelftest 函数体内的 `testXxx(c);`（体外用不算路由——本仓实测调用只写在体内）
+IMGQA_SELFTEST_CALL_RE = r"\b(test\w+)\s*\(\s*c\s*\)\s*;"
+IMGQA_SELFTEST_ROUTINE = "cmdSelftest"
+# 头注释里「N 条…声明」的计数标记（跨行形态：第 3 行「46 条」+ 第 4 行「testXxx 声明」，
+# 所以 `条` 与「声明」之间允许 ≤24 个任意字符含换行；判据 C 逐处与实数对账）
+IMGQA_SELFTEST_DECL_COUNT_RE = r"(\d+)\s*条[\s\S]{0,24}?(?:testXxx 声明|测试的声明)"

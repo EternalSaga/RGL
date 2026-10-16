@@ -77,6 +77,7 @@ from rules_text import (agents_doc_index_checks, agents_index_status_checks,
                         doc_pointer_counts, doc_pointer_readout,
                         generated_init_checks, generated_init_counts,
                         generated_init_readout,
+                        imgqa_selftest_checks, imgqa_selftest_readout,
                         judgments_pointer_checks,
                         docs_status_checks, forbidden_vulkan_checks,
                         rg_enum_vocab_checks, rg_enum_vocab_readout,
@@ -372,6 +373,9 @@ def main() -> None:
                   f"{len(merged)} 个文件 → {path}")
         # 生成物聚合初始化护栏（债-118）：位置初始化 = 改字段名/换序都不红，生成物单源白单。
         warnings.extend(generated_init_checks())
+        # imgqa selftest 对账（债-123）：断言三口径相等 + testXxx 声明/定义/调用三方集合相等。
+        # 定义了没被 cmdSelftest 路由 = 整条测试静默不跑而 selftest 仍「0 条失败」——只有本条抓。
+        warnings.extend(imgqa_selftest_checks())
 
     # 工具侧基线（只准降不准升）：--update-tool-baseline 先重写再比对（必然持平）。
     # 未解析的 TU 不参与比对，其基线条数原样保留（否则 clean 后一跑就把基线清零）。
@@ -481,6 +485,11 @@ def main() -> None:
         gen_readout = generated_init_readout()
         print("[style-check] 生成物聚合初始化: "
               + (gen_readout if gen_readout else "**本次未执行**（规则没跑到）"))
+        # imgqa selftest 对账的读数（债-123）：三口径三个数 + 三方三个数——「断言一条没丢」
+        # 与「口径标记没了所以什么都没数」必须一眼可分（同 §7 / §10–§12 的读数纪律）。
+        selftest_readout = imgqa_selftest_readout()
+        print("[style-check] imgqa selftest 对账: "
+              + (selftest_readout if selftest_readout else "**本次未执行**（规则没跑到）"))
         if rgl_notready:
             print("[style-check] 提示: 跳过 = modmap/BMI 构建产物缺失（clean 后首次构建属正常，"
                   "与编译并行时尚未生成）；本次仅跑纯文本规则，编译完成后重跑即全量生效")

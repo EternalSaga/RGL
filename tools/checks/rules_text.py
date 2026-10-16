@@ -26,6 +26,10 @@ from config import (ALLOWED_CPP, AGENTS_DOC_INDEX_SECTION, AGENTS_FILE,
                     GENERATED_INIT_BASELINE_COMMENT, GENERATED_INIT_BASELINE_FILE,
                     GENERATED_INIT_SCAN_DIRS, GENERATED_INIT_UPDATE_CMD,
                     GENERATED_STRUCT_RE, GENERATED_TRUTH_DIR,
+                    IMGQA_SELFTEST_CALL_RE, IMGQA_SELFTEST_CHK_TOKEN,
+                    IMGQA_SELFTEST_DECL_COUNT_RE, IMGQA_SELFTEST_EXPECT_RE,
+                    IMGQA_SELFTEST_HEADER, IMGQA_SELFTEST_ROUTINE,
+                    IMGQA_SELFTEST_TEST_RE, IMGQA_SELFTEST_TU_GLOB,
                      MODERN_BANNED,
                     NEW_DELETE_EXEMPT, RETIRED_DOC_NAMES, ROOT,
                     RG_ENUM_VOCAB_ENUMS, RG_ENUM_VOCAB_SOURCE_FILE,
@@ -1544,4 +1548,213 @@ def generated_init_checks() -> list[Warning]:
             warnings.append(Warning(rel, 0,
                 f"生成物聚合初始化可下调 {cur} < {base}——用 `{GENERATED_INIT_UPDATE_CMD}` "
                 "收账（悄悄漂移等于没有基线）"))
+    return warnings
+
+
+# ─── imgqa selftest 断言条数三口径 + testXxx 三方对账（债-123，§13）──────────────
+
+# 覆盖面读数（断言三口径 + testXxx 三方条数）。🔴 SCAN_IMGQA_SELFTEST **只由本规则写**
+# （同 SCAN_GENERATED_INIT 纪律：main.py 读数段拿空/非空判「本条跑没跑过」，没数打「未执行」）。
+SCAN_IMGQA_SELFTEST: dict[str, str] = {}
+
+
+def imgqa_selftest_readout() -> str:
+    """imgqa selftest 对账的覆盖面读数；没跑过 = 空串（main.py 据此打「未执行」）。"""
+    if not SCAN_IMGQA_SELFTEST:
+        return ""
+    s = SCAN_IMGQA_SELFTEST
+    return (f"断言 {s['实跑']}（grep {s['grep']} / 剥注释 {s['剥注释']} / 注释 {s['注释']}）"
+            f" · 测试 声明 {s['声明']} · 定义 {s['定义']} · 调用 {s['调用']}")
+
+
+def imgqa_selftest_checks() -> list[Warning]:
+    """`imgqa selftest` 的断言条数三口径相等 + testXxx 声明/定义/调用三方集合相等（债-123）。
+
+    ## 病根（挂号原文 → docs/mdi_plan.md §11.5；总账 债-123）
+    断言条数此前**只是 `selftest.h` 头注释里的文档约定，没有机器执行**：`chk` 只在失败时
+    打印 ⟹ 全绿时 stdout 只有一句「0 条失败」，**丢一条断言不会让任何东西变红**，它只会让
+    那句汇总少守一件事。2026-10-12 当天就被加断言改漂过一次（口径还没记录时两个人数出三个数）。
+
+    🔴 testXxx 三方对账的真实病根（这条最有价值的一半）：**定义了却没被 `cmdSelftest`
+    路由 = 这条测试静默不跑**，而 `imgqa selftest` 仍然「0 条失败」——与「丢一条断言什么都
+    不红」是同一类缺口，只是发生在**整条测试的粒度**上。声明缺 = 编译/链接期就红（本条把它
+    提前到构建期）；**调用缺只有本条能抓**（编译链接都看不见，运行期也没有任何信号）。
+
+    ## 设计红线（为什么是静态调用点口径，不是运行期计数——挂号原文的理由，别翻案）
+    「运行期计数 vs 写死常量」看着最省，但运行期计数把**循环内断言按执行次数计**，而循环
+    上界一旦随数据变（表长、机位数），护栏就在**合法改动**下变红；静态调用点口径虽然土，
+    但它**与激励无关**。本条因此全部走文本口径：期望值从 `selftest.h` 头注释的口径命令行
+    现读（`# = N`），**数字不抄进规则也不抄进 config**（抄数字 = 造第二条会漂的副本）。
+
+    ## 判据形态
+    - **A 三口径相等**：① 逐文件数**含 `c.chk(` 的行数**（= 头注释口径命令 `grep -cE` 的
+      语义，**不剥注释**）；② 先 `strip_comments` 再数 `c.chk(` **出现次数**；③ 头注释
+      写死的 `# = N`。① ≠ ② ⟹ 「有 `c.chk(` 被注释掉（死断言，grep 口径会算它但它不会跑）
+      或一行写了两条」，处置 = 删死断言/拆行，**不是**改注释数字；① == ② ≠ ③ ⟹
+      「加/删了断言没更新头注释」，处置 = 更新那一行的 `# = N`。两条文案分开，ERROR 都打全三个数。
+    - **B 三方集合相等**（声明 / 定义 / 调用，**双向**，不是单向 ⊆）：声明 = `selftest.h`
+      里的 `void testXxx(Checker`；定义 = 九个 `selftest*.cpp` 里的同式子；调用 =
+      `cmdSelftest` 函数体内的 `testXxx(c);`（先剥注释——注释掉的声明/定义/调用都不算数，
+      注释掉的调用正是「静默不跑」的形态之一）。缺哪侧点名哪侧 + 函数名 + 三处位置。
+    - **C 头注释的「N 条…声明」计数标记**（现两处 46）与实数声明条数逐处对账，行号点名。
+
+    ## 失效必须出声（「没数不是零警告」）
+    头注释读不到 / glob 出 0 个 TU / 任一 TU 读不到 / 口径命令行解析不出 `# = N`（口径标记
+    没了）/ 三口径任一为 0 / `cmdSelftest` 定义找不到 / 声明或定义或调用集合为 0 ⟹ ERROR
+    「本次未做任何对账」，并点名要同步改的 config 常量。覆盖面读数每次构建印一行，
+    规则没跑到打「未执行」。
+
+    ## 盲区（写下来不装没看见）
+    - 字符串字面量不剥（`strip_comments` 只剥注释）⟹ 字符串里写 `c.chk(` 会被 ② 多算——
+      当前实测 0 处；① 口径本来就数含 token 的行，与 grep 语义一致，不算漂移。
+    - 声明/定义只认 `void testXxx(Checker` 形态、调用只认 `testXxx(c);`：签名大改或经函数
+      指针表/循环注册调用会扫不到——但扫不到的表现是**集合不等而红**（点名缺侧），不是静默。
+    - 同名函数在两个 TU 各定义一份（ODR 违规）本条看不见（defs 字典后写覆盖）——链接器管。
+    - 本条不编译 C++，判不了「声明了但定义在 `#if 0` 里」——selftest TU 无条件编译形态。
+    """
+    def fail(why: str) -> list[Warning]:
+        return [Warning("tools/checks/config.py", 0,
+            f"imgqa selftest 对账（债-123）**本次未做任何对账**：{why}"
+            "——「零警告」不是「断言条数与测试路由都对上了」", "error")]
+
+    SCAN_IMGQA_SELFTEST.clear()
+    hdr = read_text(Path(ROOT) / IMGQA_SELFTEST_HEADER)
+    if hdr is None:
+        return fail(f"扫描面 {IMGQA_SELFTEST_HEADER} 读不到（改名 / 搬走了？"
+                    "同步改 tools/checks/config.py 的 IMGQA_SELFTEST_HEADER）")
+    tus = sorted(Path(ROOT).glob(IMGQA_SELFTEST_TU_GLOB))
+    if not tus:
+        return fail(f"glob `{IMGQA_SELFTEST_TU_GLOB}` 匹配到 0 个 TU（selftest*.cpp 改名 / "
+                    "搬走了？同步改 tools/checks/config.py 的 IMGQA_SELFTEST_TU_GLOB，"
+                    "别让这条规则静默空跑）")
+    bodies: dict[str, str] = {}
+    for p in tus:
+        rel = rel_posix(p)
+        src = read_text(p)
+        if src is None:
+            return fail(f"扫描面 {rel} 读不到（读不出来 = 本条少数一个文件，不是少一条警告）")
+        bodies[rel] = src
+
+    # 期望值 ③：口径命令行的唯一真相源 = 头注释（数字不许抄进规则/config，见 docstring 设计红线）
+    em = re.search(IMGQA_SELFTEST_EXPECT_RE, hdr)
+    if em is None:
+        return [Warning(IMGQA_SELFTEST_HEADER, 0,
+            f"imgqa selftest 对账（债-123）**本次未做任何对账**：{IMGQA_SELFTEST_HEADER} "
+            "头注释里解析不出口径命令行的 `# = N` 期望值（**口径标记没了**——恢复 "
+            "`grep -cE 'c\\.chk\\(' … # = N` 那一行。期望值的唯一真相源就是它，"
+            "别把数字抄进 tools/checks/ 的任何文件）"
+            "——「零警告」不是「断言条数与测试路由都对上了」", "error")]
+    expect_n = int(em.group(1))
+    expect_line = hdr[:em.start()].count("\n") + 1
+
+    # 口径 ①：grep -c 语义（逐文件数含 token 的**行数**，不剥注释）；②：剥注释后数**出现次数**
+    grep_n = sum(sum(1 for ln in src.splitlines() if IMGQA_SELFTEST_CHK_TOKEN in ln)
+                 for src in bodies.values())
+    stripped = {rel: strip_comments(src) for rel, src in bodies.items()}
+    live_n = sum(src.count(IMGQA_SELFTEST_CHK_TOKEN) for src in stripped.values())
+    if grep_n == 0 or live_n == 0 or expect_n == 0:
+        return fail(f"三口径出现 0（grep {grep_n} / 剥注释 {live_n} / 注释 {expect_n}）——"
+                    f"断言 token `{IMGQA_SELFTEST_CHK_TOKEN}` 或口径标记的形态变了，"
+                    "本条什么都没数到")
+
+    hdr_stripped = strip_comments(hdr)
+    decls: dict[str, int] = {m.group(1): hdr_stripped[:m.start()].count("\n") + 1
+                             for m in re.finditer(IMGQA_SELFTEST_TEST_RE, hdr_stripped)}
+    defs: dict[str, tuple[str, int]] = {}
+    calls: dict[str, tuple[str, int]] = {}
+    for rel, src in stripped.items():
+        for m in re.finditer(IMGQA_SELFTEST_TEST_RE, src):
+            defs[m.group(1)] = (rel, src[:m.start()].count("\n") + 1)
+        rm = re.search(rf"\b{IMGQA_SELFTEST_ROUTINE}\s*\([^)]*\)\s*\{{", src)
+        if rm is None:
+            continue
+        body = _brace_body(src, rm.end() - 1)
+        brace_line = src[:rm.end() - 1].count("\n") + 1
+        for cm in re.finditer(IMGQA_SELFTEST_CALL_RE, body):
+            calls[cm.group(1)] = (rel, brace_line + body[:cm.start()].count("\n"))
+    if not calls:
+        return fail(f"在 `{IMGQA_SELFTEST_TU_GLOB}` 里找不到 {IMGQA_SELFTEST_ROUTINE} 的"
+                    f"函数体或体内解析出 0 条 `testXxx(c);` 调用（汇总路由改名 / 调用形态变了？"
+                    "同步改 tools/checks/config.py 的 IMGQA_SELFTEST_ROUTINE / _CALL_RE）")
+    if not decls:
+        return fail(f"{IMGQA_SELFTEST_HEADER} 里解析出 0 条 `void testXxx(Checker` 声明"
+                    "（声明形态变了？同步改 tools/checks/config.py 的 IMGQA_SELFTEST_TEST_RE）")
+    if not defs:
+        return fail(f"九个 TU 里解析出 0 条 testXxx 定义（定义形态变了？同步改 "
+                    "tools/checks/config.py 的 IMGQA_SELFTEST_TEST_RE）")
+
+    SCAN_IMGQA_SELFTEST.update({
+        "实跑": str(live_n), "grep": str(grep_n), "剥注释": str(live_n),
+        "注释": str(expect_n), "声明": str(len(decls)), "定义": str(len(defs)),
+        "调用": str(len(calls))})
+    warnings: list[Warning] = []
+
+    # ── A：三口径相等（① ≠ ② 与 ③ 漂是两种病因，文案必须分开——混写成一条会教人改错地方）──
+    if grep_n != live_n:
+        warnings.append(Warning(IMGQA_SELFTEST_HEADER, expect_line,
+            f"断言三口径分叉：grep 行数 {grep_n} / 剥注释出现次数 {live_n} / 头注释写死 "
+            f"{expect_n}。① ≠ ② ⟹ 有 `c.chk(` 被**注释掉了**（死断言：grep 口径会算它，"
+            "但它不会跑）或**一行写了两条**（grep 一行只数 1）。处置 = 删掉死断言 / 把两条"
+            f"拆成两行，**不是**把 {IMGQA_SELFTEST_HEADER} 的 `# = N` 改成实跑数"
+            "——那等于把死断言合法化", "error"))
+    elif expect_n != grep_n:
+        warnings.append(Warning(IMGQA_SELFTEST_HEADER, expect_line,
+            f"断言三口径分叉：grep 行数 {grep_n} = 剥注释出现次数 {live_n} ≠ 头注释写死 "
+            f"{expect_n}。③ 与实跑不等 ⟹ 加/删了断言没更新头注释。处置：把 "
+            f"{IMGQA_SELFTEST_HEADER}:{expect_line} 的 `# = {expect_n}` 改成 `# = {grep_n}`"
+            "（先确认新增断言逐条可红，别拿计数给摆设断言背书）", "error"))
+
+    # ── B：三方集合相等（双向；缺哪侧点名哪侧）──
+    for name in sorted(set(decls) | set(defs) | set(calls)):
+        missing = [side for side, table in (("声明", decls), ("定义", defs), ("调用", calls))
+                   if name not in table]
+        if not missing:
+            continue
+        found = []
+        if name in decls:
+            found.append(f"声明 {IMGQA_SELFTEST_HEADER}:{decls[name]}")
+        if name in defs:
+            found.append(f"定义 {defs[name][0]}:{defs[name][1]}")
+        if name in calls:
+            found.append(f"调用 {calls[name][0]}:{calls[name][1]}")
+        why: list[str] = []
+        if "调用" in missing:
+            why.append(f"但 {IMGQA_SELFTEST_ROUTINE} 没调用它 = **这条测试静默不跑**，而 "
+                       "`imgqa selftest` 仍然「0 条失败」（债-123「丢一条断言什么都不红」"
+                       f"的同类缺口，只是发生在整条测试的粒度上；编译链接都正常，**调用缺"
+                       "只有本条能抓**）。处置：在 selftest.cpp 的 "
+                       f"{IMGQA_SELFTEST_ROUTINE} 里补 `{name}(c);`（调用顺序 = 打印顺序）")
+        if "定义" in missing:
+            why.append(f"但 `{IMGQA_SELFTEST_TU_GLOB}` 里没有它的定义 = 链接期才红"
+                       "（本条提前到构建期）。处置：补定义，或确认定义被搬出了扫描面并同步 "
+                       "tools/checks/config.py 的 IMGQA_SELFTEST_TU_GLOB")
+        if "声明" in missing:
+            why.append(f"但 {IMGQA_SELFTEST_HEADER} 里没有它的声明 = cmdSelftest 调不到它"
+                       "（编译期就红，本条提前到构建期）。处置：把声明补进头文件的声明块")
+        if name in defs:
+            loc, line = defs[name]
+        elif name in decls:
+            loc, line = IMGQA_SELFTEST_HEADER, decls[name]
+        else:
+            loc, line = calls[name]
+        warnings.append(Warning(loc, line,
+            f"testXxx 三方集合不等：'{name}' 缺{'与'.join(missing)}侧。已在：{'；'.join(found)}。"
+            + "；".join(why), "error"))
+
+    # ── C：头注释的「N 条…声明」计数标记与实数声明条数逐处对账 ──
+    occ = [(hdr[:m.start()].count("\n") + 1, int(m.group(1)))
+           for m in re.finditer(IMGQA_SELFTEST_DECL_COUNT_RE, hdr)]
+    if not occ:
+        warnings.append(Warning(IMGQA_SELFTEST_HEADER, 0,
+            "imgqa selftest 对账判据 C **本次未执行**：头注释里解析出 0 处「N 条…声明」"
+            f"计数标记（{IMGQA_SELFTEST_HEADER} 第 3 行与声明块分隔行的措辞变了？同步改 "
+            "tools/checks/config.py 的 IMGQA_SELFTEST_DECL_COUNT_RE，别让这条判据静默空跑）",
+            "error"))
+    for line, n in occ:
+        if n != len(decls):
+            warnings.append(Warning(IMGQA_SELFTEST_HEADER, line,
+                f"头注释写「{n} 条…声明」，实际 {IMGQA_SELFTEST_HEADER} 里 "
+                f"`void testXxx(Checker` 声明有 {len(decls)} 条 ⟹ 加/删了测试没更新这处计数。"
+                "处置：改这一行的数字（**先确认** B 的三方集合本来就相等——别拿改数字掩盖缺项）",
+                "error"))
     return warnings
