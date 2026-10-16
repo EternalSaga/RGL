@@ -383,7 +383,8 @@ export struct RuntimeConfig {
 	 * 逐资产门不在本键 = 「该资产有没有簇产物」（§7.8 拍板 3：产物缺失 → 回落现行路径，
 	 * 未打包资产零风险）。形态先例 = readSsrBlock（嵌套块，无扁平键双读兼容——两个真相源是
 	 * 本项目反复登记的反模式）；★1-a1ii-β-1 起本块布尔走 readStrictBoolKey（类型错 = 启动失败，
-	 * 理由 → 该函数注释）。gate_lint 不挂号的理由 → §18.10 欠账 ③。
+	 * 理由 → 该函数注释）。债-106 已挂号：gate_lint 整块接管本块 10 枚键（「子键开了而总门关」
+	 * 的孤立组合启动期申报，规则表 → `gate_lint_impl.cppm` 的 meshlet 段）。
 	 */
 	bool meshletEnable = true;
 	/**
@@ -402,11 +403,14 @@ export struct RuntimeConfig {
 	 * 不该再绑在产品路径的开关上。
 	 *
 	 * ⚠ `overlay = true` 而 `enable = false` 时确实**没有条目可采**（`slots = nullopt` = 烘焙整段
-	 * 早退）——这种孤立组合装配层**出声**（`wireMeshletOverlay`），不静默空开关。
+	 * 早退）——这种孤立组合自债-106 起由 **gate_lint** 启动期申报（meshlet.overlay 规则），装配层
+	 * `wireMeshletOverlayActivation` 另按「有没有条目可采」的**事实**出声（同因不同层：无产物 /
+	 * 多产物回落只有装配期看得见），不静默空开关。
 	 *
 	 * 🔴 本键关 ⟹ `meshlet.debug` / `meshlet.tint` 这两枚**条目级 SPV 变体位**一律取 base
 	 * （它们烘进的是 `switch` 也要用的那批条目，让叠加仪器改条目 = 诊断渗进产品取代路；
-	 * 偏离默认时装配层 warn 出声，口径 → `wireMeshletOverlay` 变体选档注释）。
+	 * 偏离默认时由 gate_lint warn 出声，meshlet.debug / meshlet.tint 规则——原装配层就近 warn
+	 * `warnMeshletVariantInstruments` 判据是纯配置组合，已随债-106 迁入申报表并删除）。
 	 */
 	bool meshletOverlay = false;
 	/**
@@ -418,8 +422,8 @@ export struct RuntimeConfig {
 	 * 不是运行时 flag 分支（2026-10-02 slang fp 重排教训，同 IZB/PCSS/EVSSM 纪律）。
 	 * 默认关；enable 关时本键无意义（条目根本不建）。
 	 * 🔴 **overlay 关时本键被强制归 base**（债-105）——变体烘进的是 `switch` 原位取代共用的那批
-	 * 条目，让叠加仪器改条目 = 把「clip.z 拉向相机」的几何错位带进产品路。偏离默认时装配层 warn
-	 * 出声（`wireMeshletOverlay` 的变体选档）。
+	 * 条目，让叠加仪器改条目 = 把「clip.z 拉向相机」的几何错位带进产品路。偏离默认时由
+	 * gate_lint warn 出声（meshlet.debug 规则；原装配层就近 warn 已随债-106 迁入申报表）。
 	 */
 	bool meshletDebug = false;
 	/**
@@ -439,7 +443,9 @@ export struct RuntimeConfig {
 	 * 逐 bit 不变（A1 判据的构造性保证）。未知值 = 启动 fail-fast（`aa` 三态键同纪律：
 	 * 静默回落会让「四臂哈希全同」的主判据整批假绿）。仅 `meshletEnable` 为真时有意义。
 	 * 🔴 **债-105 起还要 `meshlet.overlay` 为真才有消费者**：叠加段关 = 双臂没有任何 draw 可作用，
-	 * 生效档 INFO 会当场点出这件事（不点出来会被读成「双臂还在跑」）。
+	 * 这种孤立组合由 gate_lint 启动期申报（meshlet.coplanar 规则，债-106；生效档 INFO 在
+	 * `wireMeshletOverlayDepthCompare` 照打 = 「setter 真的设了」的生效证据，同因不同层——
+	 * 不点出来会被读成「双臂还在跑」）。
 	 */
 	MeshletCoplanarMode meshletCoplanar = MeshletCoplanarMode::off;
 	/**
@@ -513,8 +519,9 @@ export struct RuntimeConfig {
 	 * 与 `meshletEnable` 的关系：本键是**独立档**（阴影段的杠杆与主 pass 的取代档正交），但
 	 * 簇四段 buffer 的描述符槽由 `meshlet.enable` 的 wireMeshletBindings 提供 ⟹ 生效需要
 	 * `enable = true` 且本键 ≥ 0。🔴 两键**同时**给默认（`enable = true` + `shadow_lod = 5`）
-	 * 正是为了不把本键放进「开了但不生效」的形态；只给本键不给 enable 时装配层出声
-	 * （→ `warnIfShadowLodOrphaned`）。画质/成本对照表（D → diff 像素）→ §18.9 末。
+	 * 正是为了不把本键放进「开了但不生效」的形态；只给本键不给 enable 时由 gate_lint 启动期
+	 * 申报（meshlet.shadow_lod 规则，债-106 迁自 ★18-C 的就近 WARNING `warnIfShadowLodOrphaned`）。
+	 * 画质/成本对照表（D → diff 像素）→ §18.9 末。
 	 * 🔴 类型必须是整数（走 readStrictIntKey，写成字符串/浮点 = 启动失败点名键，理由 →
 	 * readStrictBoolKey 注释那条实测纪律）。负数除 -1 以外的值不当非法（本键只把 `< 0` 当
 	 * 「关」这一件事读），但装配层不会为它们建条目以外的任何行为。
@@ -533,14 +540,18 @@ export struct RuntimeConfig {
 	 * 开 = 阴影段 c1..c3 的簇路径 draw 由「逐候选一条 draw」换成「每级联一次
 	 * `drawMeshTasksIndirectEXT`」（行表 = `mdi_rows.cppm` 的 24B 行数组）。
 	 *
-	 * 🔴 **本批（★M-0）零消费者**：行表构建器已落地但没有任何人调用它，本键被读到也不改变
-	 * 任何一帧的行为（出厂默认态截图锚 `95edc8cc…` 必须逐位不变 = 本批的判据之一）。消费者 =
-	 * ★M-1（GPU 载体 `MeshletShadowArgsService` + `MDI_SHADOW` SPV 变体 + 执行器分支）。
+	 * 🔴 **消费者 = ★M-1b 已落地**（★M-0 当时的「本批零消费者」已过期）：行表 GPU 载体
+	 * `MeshletShadowArgsService` + MDI 条目烘焙与回填 + 生效标记（`wireMeshletMdiShadowActivation`）
+	 * + 采集侧（`renderListSystem` 经 ctx 读 `MeshletMdiShadowActivation`）。宿主成立条件 =
+	 * `meshlet.enable` + `shadow_lod ≥ 0` + 选级表非零（`wireMeshletShadowArgs` 第①步；
+	 * §19.6：生效条件**不含**本键自身 ⟹ 出厂默认也建载体但零条目零 ctx，图像逐位不变）。
+	 * 键开而宿主不在的孤立组合由 gate_lint 启动期申报（meshlet.mdi_shadow 规则，债-106），
+	 * 装配层 `wireMeshletMdiShadowActivation` 另按「载体在不在」的事实出声（同因不同层）。
 	 *
 	 * 形态与 `meshletSwitch` / `meshletCull` 同款：**门 = 选 SPV 变体 / 选管线条目**，不是运行时
 	 * flag（§12/§13 的 2026-10-02 slang fp 重排教训）⟹ 门关用的还是今天那份 SPV 与那条条目，
-	 * 一字节不动 = P5 硬护栏的构造性成立。本键落进 `meshlet` 块 ⟹ 债-106（gate_lint 的 `Ctx`
-	 * 不认整块）射程内，**不为它做特例**。
+	 * 一字节不动 = P5 硬护栏的构造性成立。本键落进 `meshlet` 块 ⟹ 已随债-106 整块挂号
+	 * （gate_lint 的 meshlet 段），**不为它做特例**。
 	 */
 	bool meshletMdiShadow = false;
 

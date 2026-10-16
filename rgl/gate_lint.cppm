@@ -3,6 +3,7 @@ export module gate_lint;
 import rlstd;
 import diagnostics;
 import shadow_config;          // ShadowConfig（N6b：阴影门与 diagnostics 门同表申报）
+import runtime_config;         // RuntimeConfig（债-106：runtime.lua 的 meshlet 块整块 10 枚键）
 import render_graph;         // RgPassPlan / graphHasDeferredLight
 import render_graph_config;  // RgGraphVariant
 
@@ -39,7 +40,8 @@ export struct GateEnv {
 	bool staticGraphicsIndirect = false;    ///< 设备能力（dgc_static 的门槛）
 };
 
-/** 一条 lint 结论（gate = 两份回显表的键名拼写，含 shadow.lua 的 `表.字段` 形态）。 */
+/** 一条 lint 结论（gate = 三个配置来源的键名拼写：diagnostics / shadow 回显表键名 +
+ *  runtime.lua meshlet 块键名，均为 `表.字段` 形态；`variant` = 意图/图事实交叉校验）。 */
 export struct GateFinding {
 	std::string_view gate;                    ///< 涉事门（"variant" = 意图/图事实交叉校验）
 	GateSeverity severity = GateSeverity::warn;
@@ -47,16 +49,21 @@ export struct GateFinding {
 };
 
 /**
- * 跑全量规则表（43 门 = diagnostics 侧 30 + shadow 侧 13，一门可多条规则——两个根因各
- * 一行消息；覆盖率钉去重门数 + variant 交叉校验）。
+ * 跑全量规则表（53 门 = diagnostics 侧 30 + shadow 侧 13 + runtime.lua **meshlet 块** 10
+ * （债-106，整块接管不挑键），一门可多条规则——两个根因各一行消息；覆盖率钉去重门数 +
+ * variant 交叉校验）。第三个来源的射程裁决：meshlet 块有「子键开而总门 `enable` 关」的
+ * 孤立形态且前置全是纯配置组合；runtime.lua 其余块刻意不在射程 →
+ * `runtime_config_impl.cppm` 的 readSsrBlock 头注释。
  * 判据基准：bool 门 = true 才参与判定；数值/字符串门 = **偏离 defaults** 才参与
  * （configs/diagnostics.lua 显式写着 ~30 个默认值键，按「写了」喊就是噪音）。
- * 依赖方向：lint 不读单例（`diagnostics()` / `shadowConfig()`）——两份配置与各自的
+ * 依赖方向：lint 不读单例（`diagnostics()` / `shadowConfig()`）——三份配置与各自的
  * 默认值都是入参，测试可任意构造「假的世界」。
  * @param cfg 生效的 diagnostics 配置
  * @param defaults diagnostics 比较基准（正常调用方传 `DiagnosticsConfig{}`）
  * @param shadow 生效的阴影配置（configs/shadow.lua）
  * @param shadowDefaults 阴影比较基准（正常调用方传 `ShadowConfig{}`）
+ * @param runtime 生效的运行配置（configs/runtime.lua；本表只吃其 meshlet 块）
+ * @param runtimeDefaults 运行配置比较基准（正常调用方传 `RuntimeConfig{}` = 出厂态）
  * @param passes 编译图 pass 序列（deferred 判据 = graphHasDeferredLight，图事实层）
  * @param variant 配置层路线意图（与图事实的**分歧**在此交叉校验，不互相抹平）
  * @param env 设备/模式事实
@@ -64,13 +71,14 @@ export struct GateFinding {
  */
 export std::vector<GateFinding> lintDiagnosticsGates(const DiagnosticsConfig& cfg,
 	const DiagnosticsConfig& defaults, const ShadowConfig& shadow,
-	const ShadowConfig& shadowDefaults, std::span<const RgPassPlan> passes,
+	const ShadowConfig& shadowDefaults, const RuntimeConfig& runtime,
+	const RuntimeConfig& runtimeDefaults, std::span<const RgPassPlan> passes,
 	RgGraphVariant variant, const GateEnv& env);
 
 /**
  * 规则表覆盖的门名（= 覆盖率护栏输入；单测断言其与 `diagnosticsEchoKeys()` +
- * `shadowConfigEchoKeys()` 的并集相等——加门不答「生效前置是什么」，`just test` 红，
- * 同 pass_vocabulary 的收口范式）。
+ * `shadowConfigEchoKeys()` + `runtimeConfigKnownKeys()` 的 `meshlet.` 前缀键三方并集
+ * 相等——加门不答「生效前置是什么」，`just test` 红，同 pass_vocabulary 的收口范式）。
  * @return 门名列表（顺序 = 表序）
  */
 export std::vector<std::string> gateLintRuleGates();

@@ -549,7 +549,7 @@ CompiledGraphResult compileGraphOrThrow(const char* path, const RuntimeConfig& r
  * 门在进程内不可变（setDiagnostics 全仓仅此一处运行期调用）→ 结论对全程权威。
  * 时序契约 = compileGraphOrThrow 之后（要图事实）、GPU 大对象装配之前（findings
  * 早于一切渲染日志，先于问题现场）。lint **不阻止启动**（诊断门不该让程序起不来）。
- * @param runtime runtime.lua 产物（headless / llm_debug 两个消费前提）
+ * @param runtime runtime.lua 产物（headless / llm_debug 两个消费前提 + meshlet 块生效值，债-106）
  * @param device 设备上下文（staticGraphicsIndirect 能力事实）
  * @param graphResult 编译图产物（passes = 图事实；variant = 配置意图，交叉校验）
  */
@@ -559,10 +559,11 @@ void runGateLint(const RuntimeConfig& runtime, const DeviceContext& device,
 	gateEnv.headless = runtime.headless;
 	gateEnv.llmCapture = runtime.llm.enabled;
 	gateEnv.staticGraphicsIndirect = device.getDgcSupport().staticGraphicsIndirect;
-	// 两份配置各带一份出厂默认（第二份 = 「只报偏离出厂值的门」的比对基准）；
-	// shadow 侧与 diagnostics 侧同为「启动期单例」口径（loadAllConfigs 已回灌）。
+	// 三份配置各带一份出厂默认（第二份 = 「只报偏离出厂值的门」的比对基准）；
+	// shadow 侧与 diagnostics 侧同为「启动期单例」口径（loadAllConfigs 已回灌），
+	// runtime 侧的基准 = `RuntimeConfig{}`（meshlet 块出厂态 enable + shadow_lod = 5，债-106）。
 	const auto findings = lintDiagnosticsGates(diagnostics(), DiagnosticsConfig{},
-		shadowConfig(), ShadowConfig{},
+		shadowConfig(), ShadowConfig{}, runtime, RuntimeConfig{},
 		graphResult.graph.passes, graphResult.variant, gateEnv);
 	const uint32_t errors = logGateFindings(findings);
 	if (auto* logger = RLLogger::getInstance())

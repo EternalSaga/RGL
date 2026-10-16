@@ -123,7 +123,10 @@ void wireMeshletOverlayActivation(entt::registry& registry, const AssetTable& as
  * `bakeMeshletEntries` 的 `variant` 烘进**条目**），而那批条目同时是 β-1 原位取代的宿主
  * （`makeOpaqueCall` 读 `asset.meshletPipelineIndex`）⟹ 叠加段关着也能改产品路的几何
  * （DEBUG_OFFSET 把 clip.z 拉向相机 = 取代段整体错位；TINT 把着色输入写死 = 产品路变平色块）。
- * 这不是「仪器没宿主」而是「仪器渗进产品」。孤立组合的出声 = `warnMeshletVariantInstruments`。
+ * 这不是「仪器没宿主」而是「仪器渗进产品」。孤立组合（debug/tint 开了但被强制归 base、
+ * tint 与 debug 同真的让位）的出声自债-106 起在 **gate_lint**（meshlet.debug / meshlet.tint
+ * 三条规则）——原就近 warn `warnMeshletVariantInstruments` 的判据是纯配置组合，同一根因
+ * 不许多处各喊一条（影子真相源），随迁移删除。
  *
  * 优先级与 ★0.5-b2 一致：tint 与 debug 同真 = **tint 优先**（判据 3 只用 tint、判据 4 只用
  * offset，从不同时用 ⟹ 不建第 4 个组合变体）。
@@ -138,41 +141,6 @@ MeshletMeshVariant pickMeshletMeshVariant(const RuntimeConfig& cfg) {
 	if (cfg.meshletDebug)
 		return MeshletMeshVariant::debugOffset;
 	return MeshletMeshVariant::base;
-}
-
-/** 哪几枚叠加仪器被打开（只用于告警文案点名键，不决定任何行为）。 */
-std::string_view meshletInstrumentNames(const RuntimeConfig& cfg) {
-	if (!cfg.meshletTint)
-		return "debug";
-	return cfg.meshletDebug ? "debug 与 tint" : "tint";
-}
-
-/**
- * 叠加仪器（`debug` / `tint`）的**孤立组合**告警：只在**门开**且**偏离默认**时喊。
- *
- * 门关（`meshlet.enable = false`）时条目根本不烘、变体不被读 ⟹ 喊出来会破「门关
- * `grep -ci meshlet` = 0」的护栏（同 `warnIfShadowLodOrphaned` 的纪律，只在偏离默认时出声）。
- * 为什么必须喊：本批把「overlay 关」的变体强制归 base 之后，「overlay 关 + debug/tint 开」跑出来
- * 就是**出厂那张图**（A6b），不点出来会被读成「仪器坏了」；而「tint 与 debug 同真」则是
- * ★0.5-b2 的老一条（tint 优先，从不同时用）。
- * @param cfg 运行配置（读 enable / overlay / debug / tint 四字段）
- */
-void warnMeshletVariantInstruments(const RuntimeConfig& cfg) {
-	if (!cfg.meshletEnable || (!cfg.meshletDebug && !cfg.meshletTint))
-		return;  // 门关 / 两枚都默认 = 无话可说
-	auto* logger = RLLogger::getInstance();
-	if (logger == nullptr)
-		return;
-	if (!cfg.meshletOverlay) {
-		logger->warn("meshlet: overlay 关而 meshlet.{} 非默认 —— 叠加仪器是**条目级** SPV 变体位，而条目"
-					 "是 switch 原位取代的宿主 ⟹ 本跑把变体强制归 base（否则诊断会改掉产品路几何）。"
-					 "要么开 meshlet.overlay 让仪器有消费者，要么把它们归零",
-			meshletInstrumentNames(cfg));
-		return;
-	}
-	if (cfg.meshletTint && cfg.meshletDebug)
-		logger->warn("meshlet: tint 与 debug 同真 ⟹ tint 优先（不建组合 SPV 变体；判据 3 只用 "
-					 "tint、判据 4 只用 debug，从不同时用）—— 本跑走 TINT 变体");
 }
 
 /** 原位取代对账的两个计数（口径 → auditMeshletSwitch）。 */
@@ -639,12 +607,14 @@ void wireMeshletMdiShadowActivation(entt::registry& registry, ShaderRegistry& pi
  * 簇化轴 ★1-a1ii-α 装配总入口（main.cppm 声明）：描述符接线 + 条目烘焙两步的顺序
  * 契约内聚在此（bake 依赖 wire 的槽号），main() 只留一次调用（装配层行数预算）。
  *
- * ★0.5-b2 起 mesh SPV 变体三档（base/debug/tint）：tint 与 debug 同真时 **tint 优先 +
- * warn**（判据 3 只用 tint、判据 4 只用 offset，从不同时用，故不建第 4 个组合变体；
- * warn 只在门开时出——门关 grep meshlet = 0 的护栏）。
+ * ★0.5-b2 起 mesh SPV 变体三档（base/debug/tint）：tint 与 debug 同真时 **tint 优先**
+ * （判据 3 只用 tint、判据 4 只用 offset，从不同时用，故不建第 4 个组合变体；让位与孤立
+ * 组合的 warn 自债-106 起在 gate_lint 启动期申报，原就近 warnMeshletVariantInstruments 已
+ * 随迁移删除——门关 grep meshlet = 0 的护栏由「门关默认档无偏离」保证）。
  *
- * 🔴 债-105 起变体位**归叠加段所有**：`meshlet.overlay` 关 = 变体一律 base + 偏离默认时 warn
- * （变体烘进条目、条目是 β-1 取代的宿主 ⟹ 不归位会让关掉叠加段的跑仍然被诊断改掉产品路几何）。
+ * 🔴 债-105 起变体位**归叠加段所有**：`meshlet.overlay` 关 = 变体一律 base（变体烘进条目、
+ * 条目是 β-1 取代的宿主 ⟹ 不归位会让关掉叠加段的跑仍然被诊断改掉产品路几何；偏离默认时
+ * 由 gate_lint meshlet.debug / meshlet.tint 规则 warn）。
  * 本函数**不**因为 overlay 关而少烘一条条目——见 `bakeMeshletEntries` 的宿主契约注释。
  */
 MeshletAssembly wireMeshletOverlay(Resources& resources,
@@ -659,11 +629,10 @@ MeshletAssembly wireMeshletOverlay(Resources& resources,
 	// ★M-1b：槽位快照进 assembly（第⑤步 `wireMeshletMdiShadowActivation` 烘 MDI 条目要复用
 	// binding 17-20；此刻是本函数局部的 nullopt/值，nullopt 原样传下去 = 与早退判据同一事实）。
 	assembly.bindingSlots = slots;
-	// mesh SPV 变体选档（门关 = bakeMeshletEntries 首行早退，variant 不被读；warn 也必须门开
-	// 才出声——门关 grep meshlet = 0 的护栏）。一件事一个函数：选档 = pickMeshletMeshVariant，
-	// 孤立组合出声 = warnMeshletVariantInstruments。
+	// mesh SPV 变体选档（门关 = bakeMeshletEntries 首行早退，variant 不被读；孤立组合的 warn
+	// 自债-106 起归 gate_lint 启动期申报——门关 grep meshlet = 0 的护栏由「门关默认档无偏离」
+	// 保证，见 meshlet.debug / meshlet.tint 规则）。一件事一个函数：选档 = pickMeshletMeshVariant。
 	const MeshletMeshVariant variant = pickMeshletMeshVariant(cfg);
-	warnMeshletVariantInstruments(cfg);
 	bakeMeshletEntries(uploaded, scene, deferredMode, pipelines, assets, resources, samplers,
 		rtCache, meshletGeometry, slots, variant);
 	// ★18-B1：阴影段簇路径条目（**只建条目不接 draw**，接线归 B2）。放在 bakeMeshletEntries

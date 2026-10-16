@@ -315,11 +315,14 @@ static void readFsrBlock(const sol::table& root, RuntimeConfig& cfg, RuntimeKeyT
  * ## 为什么**不**往 gate_lint 挂号（判断结论，防后来者"顺手补上"）
  *
  * gate_lint 的覆盖率护栏 = 单测断言 `gateLintRuleGates()` 与 `diagnosticsEchoKeys() ∪
- * shadowConfigEchoKeys()` 相等 ⟹ 它的管辖范围**只有** `configs/diagnostics.lua` 与
- * `configs/shadow.lua` 两份配置。`configs/runtime.lua` 的键（含本块的 `enabled`，也含
- * `aa` / `render_scale` / `fsr.*` 这些既有键）从来不在那张表里，本批因此**没有欠账**：
- * 硬塞进去要么给 runtime.lua 造第三张回显表（= 与 `RuntimeConfig` 字段并存的第二真相源），
- * 要么把 runtime.lua 键混进 diagnostics 的回显语义（那张表按"诊断门"组织，画质系数不是）。
+ * shadowConfigEchoKeys() ∪ runtimeConfigKnownKeys() 的 meshlet. 前缀键` 三方相等 ⟹ 它的
+ * 管辖范围 = `configs/diagnostics.lua` 与 `configs/shadow.lua` 两份配置，外加
+ * `configs/runtime.lua` 的 **meshlet 块**（债-106 整块接管，不挑键——那块有「子键开了而
+ * 总门 `enable` 关」的孤立形态，且前置全是纯配置组合，lint 判得了）。`configs/runtime.lua`
+ * 的**其余**键（含本块的 `enabled`，也含 `aa` / `render_scale` / `fsr.*` 这些既有键）
+ * 不在那张表里，本批因此**没有欠账**：硬塞进去要么给 runtime.lua 造第三张回显表（= 与
+ * `RuntimeConfig` 字段并存的第二真相源），要么把 runtime.lua 键混进 diagnostics 的回显
+ * 语义（那张表按"诊断门"组织，画质系数不是）。
  * 本块键的"生效前置"本来也不依赖设备/图形态（`enabled` 的前置 = 渲染图支持 ssr，那条已由
  * `decorateSsrPass` 自己出 warn），lint 无话可说。
  * 键轨迹在块入口**无条件**记全七枚键（覆盖率护栏输入，同 shadow applyTuningBlock 口径）。
@@ -518,13 +521,15 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg, RuntimeKeyT
  * α 叠加段不采 draw（债-105，出厂不再白付 1.59ms）；`meshletDebug = false` =
  * 正常叠加档；`meshletCoplanar = off` = 不碰动态状态；`meshletTint = false` = 不选 tint 变体；
  * `meshletSwitch = false` = 不取代；`shadow_lod_fallback = deepest`；`meshletMdiShadow = false`
- * = 不走 MDI（★M-0 起本键**零消费者**，读到也不改变任何一帧行为）。
+ * = 不走 MDI（★M-1b 起本键**有消费者**：键开则烘 MDI 条目并回填，宿主条件 → 字段注释）。
  * 形态先例 = readFsrBlock（嵌套块，无扁平键双读兼容）；coplanar / shadow_lod_fallback 两枚
  * 三态键先例 = applyAaKey（未知值 fail-fast，错误经返回值上抛给调用方）。六枚布尔走
  * readStrictBoolKey、shadow_lod 走 readStrictIntKey（类型错 = 启动失败，理由 → 各自注释）。
- * gate_lint 不挂号的理由 → docs/mdi_plan.md §18.10 欠账 ③（其 Ctx 不含 RuntimeConfig，
- * 整块孤立组合静默；本批只就近堵了 shadow_lod 那一枚 → main_meshlet_tables.cppm 的
- * warnIfShadowLodOrphaned）。★M-0 的 mdi_shadow 同处债-106 射程，**不为单个键做特例**。
+ * 债-106 已挂号：gate_lint 的 `Ctx` 现含 `RuntimeConfig` 与它的出厂默认，整块 10 枚键逐枚
+ * 申报（规则表 → `gate_lint_impl.cppm` 的 meshlet 段；判据出处 = 各字段注释 + `wireMeshlet*`
+ * 消费者）。★18-C 的就近 WARNING（`warnIfShadowLodOrphaned`）与叠加仪器的就近 warn
+ * （`warnMeshletVariantInstruments`）判据是纯配置组合，已随迁移删除（同一根因两条喊 =
+ * 影子真相源）；其余装配层 warn 依赖装配期事实（条目数 / 载体在不在），保留。
  * @param root runtime.lua 顶层表
  * @param cfg  写入目标
  * @param path 仅用于错误消息

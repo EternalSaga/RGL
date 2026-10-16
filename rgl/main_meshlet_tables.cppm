@@ -455,29 +455,6 @@ bool warnIfMeshletDeviceUnfit(const DeviceContext& device) {
 	return false;
 }
 
-namespace {
-
-/**
- * 孤立门告警（★18-B2）：`meshlet.shadow_lod` 是**独立配置键**且只被 `wireClusterRangeTable`
- * 消费，而该函数在 `meshlet.enable = false` 时一行都不走 ⟹ 「`shadow_lod = 5` + `enable = false`」
- * 此前是 **errors=0 / warnings=0 / 日志零行的静默空开关**（2026-10-12 实测）。同文件
- * `activateShadowLodTable` 的「零槽可切」检查是同一条纪律：配置说开了而实际没跑，必须在日志里看得见。
- *
- * 只在**偏离默认**（`>= 0`）时喊 ⟹ 门关默认档仍一行不出（不破「门关 `grep -ci meshlet` = 0」护栏）。
- * 系统性修法 = 让 gate_lint 接管 runtime.lua 的 meshlet 块（其 `Ctx` 目前只有 Diagnostics +
- * Shadow，只接管一个键会成特例）→ `docs/mdi_plan.md` §18 欠账 ③。
- */
-void warnIfShadowLodOrphaned(const RuntimeConfig& cfg) {
-	if (cfg.meshletShadowLod < 0)
-		return;
-	if (auto* logger = RLLogger::getInstance())
-		logger->warn("meshlet: meshlet.shadow_lod = {} 但 meshlet.enable = false —— 阴影远级联 LOD "
-					 "**不会生效**（簇产物总门关着）；要开它请同时置 meshlet.enable = true",
-			cfg.meshletShadowLod);
-}
-
-}  // namespace
-
 /**
  * 接口声明与完整口径 → main.cppm `wireClusterRangeTable`。本定义做五步：
  * 门早退 → 逐模型扫描（scanModelRanges）→ ★18-B2 阴影 LOD 前置（设备规格闸门 + 同一份扫描
@@ -493,10 +470,11 @@ void wireClusterRangeTable(entt::registry& registry, const UploadedAssets& asset
                            const MeshletAssetStore& meshlets, bool meshletEnable, bool meshletCull,
                            MeshletCullService* cullService, const AssetTable& assetTable,
                            const RuntimeConfig& cfg, const DeviceContext& device) {
-	if (!meshletEnable) {
-		warnIfShadowLodOrphaned(cfg);
-		return;  // 门关 = 除上面那条孤立门告警外一行都不走（逐位不变构造性成立；表不建 ⟹ scene data 该区全 0）
-	}
+	if (!meshletEnable)
+		return;  // 门关 = 一行都不走（逐位不变构造性成立；表不建 ⟹ scene data 该区全 0）。
+		         // 「shadow_lod ≥ 0 而 enable 关」的孤立组合自债-106 起由 gate_lint 启动期申报
+		         // （meshlet.shadow_lod 规则）——原就近 warnIfShadowLodOrphaned 的判据是纯配置
+		         // 组合，同一根因不许多处各喊一条（影子真相源），故随迁移删除。
 	std::map<std::string, MeshletRangeScan> scans;
 	std::unordered_map<uint32_t, const MeshletPrimRange*> rangeOfAsset;
 	RangeTotals totals;

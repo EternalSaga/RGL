@@ -6,6 +6,7 @@ import rlstd;
 import rllogger;
 import diagnostics;
 import shadow_config;
+import runtime_config;  // 债-106：meshlet 块十枚键的申报规则（RuntimeConfig 成员指针取字段）
 import render_graph;
 import render_graph_config;
 
@@ -19,6 +20,8 @@ struct Ctx {
 	const DiagnosticsConfig& defaults;
 	const ShadowConfig& shadow;        ///< N6b：阴影门（configs/shadow.lua）与它自己的默认值
 	const ShadowConfig& shadowDefaults;
+	const RuntimeConfig& runtime;      ///< 债-106：runtime.lua 的 meshlet 块与它自己的默认值
+	const RuntimeConfig& runtimeDefaults;
 	bool deferredLight;       ///< 图事实（graphHasDeferredLight，非 variant 意图）
 	const GateEnv& env;
 };
@@ -35,7 +38,7 @@ struct GateRule {
 	bool (*violated)(const Ctx&);
 };
 
-/** 偏离默认值判定缩写（46 行表里少写 60 处三元噪声）。 */
+/** 偏离默认值判定缩写（60 行表里少写 80 处三元噪声）。 */
 template <typename T>
 constexpr bool deviated(const Ctx& c, const T DiagnosticsConfig::* field) {
 	return c.cfg.*field != c.defaults.*field;
@@ -45,6 +48,16 @@ constexpr bool deviated(const Ctx& c, const T DiagnosticsConfig::* field) {
 template <typename T>
 constexpr bool deviated(const Ctx& c, const T ShadowConfig::* field) {
 	return c.shadow.*field != c.shadowDefaults.*field;
+}
+
+/**
+ * runtime.lua 侧同款（债-106，meshlet 块）：指针所属类不同 ⟹ 重载按实参分辨。
+ * 两枚枚举字段（MeshletCoplanarMode / MeshletLodFallbackMode）是 scoped enum，
+ * `!=` 是内建比较，无需像 `ShadowTuning` 那样逐字段写（那是聚合体没有 operator!=）。
+ */
+template <typename T>
+constexpr bool deviated(const Ctx& c, const T RuntimeConfig::* field) {
+	return c.runtime.*field != c.runtimeDefaults.*field;
 }
 
 /**
@@ -58,8 +71,10 @@ constexpr bool deviated(const Ctx& c, const ShadowTuning ShadowConfig::* block,
 }
 
 /**
- * 43 行申报表 = diagnostics 侧 30 行 + shadow 侧 13 行（N6b）。与两份配置结构体 /
- * 两份回显表一一对应，覆盖率由 tests/test_gate_lint.cppm 钉死（去重后 43 门）。
+ * 60 行申报表 = diagnostics 侧 30 行 + shadow 侧 16 行 + runtime.lua **meshlet 块** 14 行
+ * （债-106，整块 10 枚键逐枚挂号，不挑键；一门可多行：tint/switch 各两条根因）。与三份配置
+ * 结构体 / 两份回显表 + 一份键表一一对应，覆盖率由 tests/test_gate_lint.cppm 钉死
+ * （去重后 53 门）。
  * 级别判据 = 计划 §4：error 只留给「必然完全无效且无其他信号」，拿不准一律 warn / inertNote。
  * **行数 ≠ 门数**：一门可以有多条规则（`izb` 两条 = 非 deferred 图 / mode="none"，
  * 两个根因各自一条消息，合并会丢归因）；覆盖率护栏钉的是**去重后的门数** == 两份回显表键数之和。
@@ -67,6 +82,11 @@ constexpr bool deviated(const Ctx& c, const ShadowTuning ShadowConfig::* block,
  * 阴影侧的**枚举口径**（N6b 换轨要点）：旧表按"三个独立布尔怎么组合"写判据，于是长出
  * 「PCSS 让位 EVSSM」这类**只在旧门形下才存在**的规则。枚举下两门同开表达不出来 ⟹
  * 让位规则整条删除，剩下的判据一律写成 `mode == X` / `mode != X`。
+ *
+ * meshlet 侧（债-106）判据出处 = `runtime_config.cppm` 的逐字段注释 + 消费者代码
+ * （`wireMeshlet*` / `wireClusterRangeTable`）。**本块不用 error**：§4 的 error 要求
+ * 「没有其他任何信号」，而本块多数键在装配层另有按**运行期事实**（条目数 / 载体在不在 /
+ * 产物存在性）出声的 warn——lint 只接管其中纯配置的那部分，拿不准一律 warn / inertNote。
  */
 // ⚠ 原生数组（尺寸自动推导）——同 kShadowEcho：显式 N 写错会零填充出**空谓词**，
 // 而本表**允许** nullptr 谓词（预留空块），所以连"空"都看不出来，只会静默少门。
@@ -201,6 +221,80 @@ const GateRule kGateRules[]{
 		"camera_probe.frame=0（探针关）：保持帧数是死值",
 		[](const Ctx& c) { return deviated(c, &DiagnosticsConfig::cameraProbeHold)
 			&& c.cfg.cameraProbeFrame == 0; }},
+
+	// ———— runtime.lua 的 meshlet 块（债-106：整块 10 枚键，「子键开了但总门关」从装配层
+	//      就近告警升级成启动期申报式护栏；判据出处 = 字段注释 + wireMeshlet* 消费者）————
+	{"meshlet.enable", GateSeverity::inertNote, "", nullptr},  // 总门本身：无生效前置（其余 9 枚键的宿主挂在它或它的派生档上）
+	{"meshlet.overlay", GateSeverity::warn,
+		"overlay 的生效条件**不含** enable（它的宿主是叠加段自己），但 enable = false ⟹ slots = nullopt = "
+		"条目烘焙整段早退 ⟹ 没有条目可采（零 draw）。装配层 wireMeshletOverlayActivation 还按「有没有条目可采」"
+		"的**事实**出声（同因不同层：无产物 / 多产物回落 / 零模型命中只有装配期看得见）",
+		[](const Ctx& c) { return c.runtime.meshletOverlay && !c.runtime.meshletEnable; }},
+	{"meshlet.debug", GateSeverity::warn,
+		"debug 是叠加段的**条目级** SPV 变体位：overlay = false 或 enable = false ⟹ pickMeshletMeshVariant "
+		"强制归 base（变体烘进的是 switch 原位取代共用的那批条目，让叠加仪器改条目 = 诊断渗进产品路）。"
+		"要么开 meshlet.overlay 让仪器有消费者，要么把它归零（原就近 warn = warnMeshletVariantInstruments，债-106 迁入）",
+		[](const Ctx& c) { return c.runtime.meshletDebug
+			&& (!c.runtime.meshletEnable || !c.runtime.meshletOverlay); }},
+	{"meshlet.tint", GateSeverity::warn,
+		"tint 是叠加段的**条目级** SPV 变体位：overlay = false 或 enable = false ⟹ pickMeshletMeshVariant "
+		"强制归 base（判据同 meshlet.debug；原就近 warn 同迁本表）",
+		[](const Ctx& c) { return c.runtime.meshletTint
+			&& (!c.runtime.meshletEnable || !c.runtime.meshletOverlay); }},
+	{"meshlet.tint", GateSeverity::warn,
+		"tint 与 debug 同真 ⟹ tint 优先、debug 让位（不建组合 SPV 变体：判据 3 只用 tint、判据 4 只用 "
+		"debug，从不同时用）—— 本跑走 TINT 变体（原就近 warn = warnMeshletVariantInstruments，债-106 迁入）",
+		[](const Ctx& c) { return c.runtime.meshletEnable && c.runtime.meshletOverlay
+			&& c.runtime.meshletTint && c.runtime.meshletDebug; }},
+	{"meshlet.coplanar", GateSeverity::warn,
+		"coplanar 双臂只作用**叠加段**那批 draw：enable = false（无条目）或 overlay = false（零采集）⟹ "
+		"没有作用对象。生效档 INFO 在 wireMeshletOverlayDepthCompare（同因不同层：那条是「setter 真的设了」"
+		"的生效证据）。⚠ 第三条死路（switch 生效清空叠加段）不在本判据里——switch 有设备规格 / cull 档 / "
+		"对账三条回落路，那是装配期事实，判不了",
+		[](const Ctx& c) { return deviated(c, &RuntimeConfig::meshletCoplanar)
+			&& (!c.runtime.meshletEnable || !c.runtime.meshletOverlay); }},
+	{"meshlet.switch", GateSeverity::warn,
+		"switch 需 enable：簇条目根本没烘（makeOpaqueCall 读 asset.meshletPipelineIndex）⟹ 无 draw 可原位取代",
+		[](const Ctx& c) { return c.runtime.meshletSwitch && !c.runtime.meshletEnable; }},
+	{"meshlet.switch", GateSeverity::warn,
+		"switch 只在 diagnostics.cull_replay = \"cpu\" 生效：非默认档的 opaque 段由 cullDriver 按候选表重放"
+		"（DGC 的 push 与 task 数按旧 mesh 管线烘），段内换管线不在那条路上。装配层 wireMeshletSwitch 真走到"
+		"那一档被 cull 档挡下时也 warn（同因不同层：它排在设备规格闸门之后）",
+		[](const Ctx& c) { return c.runtime.meshletSwitch && c.runtime.meshletEnable
+			&& c.cfg.cullReplay != CullReplayMode::cpu; }},
+	{"meshlet.switch", GateSeverity::warn,
+		"switch 与 overlay 互斥：cpu 档下 switch 生效时 α 影子叠加段整段清空（同一批几何不画两遍）⟹ 同开的"
+		"代价 = overlay 白采。装配层 wireMeshletSwitch 在**真的生效**时再 warn 一次（同因不同层：switch 有"
+		"设备规格 / 对账回落，overlay 是否被清空是装配期事实）",
+		[](const Ctx& c) { return c.runtime.meshletSwitch && c.runtime.meshletEnable
+			&& c.runtime.meshletOverlay && c.cfg.cullReplay == CullReplayMode::cpu; }},
+	{"meshlet.cull", GateSeverity::warn,
+		"cull 只作用于**已被簇路径接管**的 draw（旧 mesh 管线读不到标志数组）⟹ 需 enable && switch，"
+		"单独开 = 无消费者。装配层 wireMeshletCull 还按「switch 是否生效」的事实出声（同因不同层：switch "
+		"的回落路不写配置）",
+		[](const Ctx& c) { return c.runtime.meshletCull
+			&& !(c.runtime.meshletEnable && c.runtime.meshletSwitch); }},
+	{"meshlet.cull", GateSeverity::warn,
+		"cull 与 switch 同款限制：只在 diagnostics.cull_replay = \"cpu\" 生效（它挂在取代档上，"
+		"非默认档下 switch 本身就不生效）",
+		[](const Ctx& c) { return c.runtime.meshletCull && c.runtime.meshletEnable
+			&& c.runtime.meshletSwitch && c.cfg.cullReplay != CullReplayMode::cpu; }},
+	{"meshlet.shadow_lod", GateSeverity::warn,
+		"shadow_lod ≥ 0 但 enable = false：簇四段 buffer 的描述符槽由 wireMeshletBindings 提供（宿主 = "
+		"enable）⟹ 槽没人给，阴影段 LOD 整体无效（债-106 把 ★18-C 的就近 WARNING 迁到此处）。"
+		"门关档 shadow_lod = -1 不满足「≥ 0」⟹ 不喊 = 「门关 grep meshlet = 0」护栏保留",
+		[](const Ctx& c) { return c.runtime.meshletShadowLod >= 0 && !c.runtime.meshletEnable; }},
+	{"meshlet.shadow_lod_fallback", GateSeverity::inertNote,
+		"shadow_lod_fallback 仅当 shadow_lod ≥ 0 且 enable 开时才有消费者（逐模型选级住在 "
+		"wireClusterRangeTable）—— 本组合下是死值（调参残留，同 izb.grid 形态）",
+		[](const Ctx& c) { return deviated(c, &RuntimeConfig::meshletShadowLodFallback)
+			&& (c.runtime.meshletShadowLod < 0 || !c.runtime.meshletEnable); }},
+	{"meshlet.mdi_shadow", GateSeverity::warn,
+		"mdi_shadow 的宿主（★M-1b：行表载体 + 簇 buffer 槽）的成立条件 = meshlet.enable + shadow_lod ≥ 0"
+		"（wireMeshletShadowArgs 第①步）⟹ 本组合下条目必然烘不出来。装配层 wireMeshletMdiShadowActivation "
+		"还按「载体在不在」的**事实**出声（同因不同层：选级表全零 / 无产物回落只有装配期看得见）",
+		[](const Ctx& c) { return c.runtime.meshletMdiShadow
+			&& (!c.runtime.meshletEnable || c.runtime.meshletShadowLod < 0); }},
 };
 
 }  // namespace
@@ -217,9 +311,11 @@ std::vector<std::string> gateLintRuleGates() {
 /** lintDiagnosticsGates 定义（接口注释见 gate_lint.cppm）。 */
 std::vector<GateFinding> lintDiagnosticsGates(const DiagnosticsConfig& cfg,
 	const DiagnosticsConfig& defaults, const ShadowConfig& shadow,
-	const ShadowConfig& shadowDefaults, std::span<const RgPassPlan> passes,
+	const ShadowConfig& shadowDefaults, const RuntimeConfig& runtime,
+	const RuntimeConfig& runtimeDefaults, std::span<const RgPassPlan> passes,
 	RgGraphVariant variant, const GateEnv& env) {
-	const Ctx ctx{cfg, defaults, shadow, shadowDefaults, graphHasDeferredLight(passes), env};
+	const Ctx ctx{cfg, defaults, shadow, shadowDefaults, runtime, runtimeDefaults,
+		graphHasDeferredLight(passes), env};
 	std::vector<GateFinding> findings;
 	for (const auto& r : kGateRules)
 		if (r.violated && r.violated(ctx))
