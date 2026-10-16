@@ -407,3 +407,25 @@ RPC_ROUTE_DISPATCH_RE = r'request\.path\s*(?:==|!=)\s*"([^"]+)"'
 RG_ENUM_VOCAB_SOURCE_FILE = "rgl/render_graph.cppm"
 RG_ENUM_VOCAB_TABLE_FILE = "rgl/render_graph_config_impl.cppm"
 RG_ENUM_VOCAB_ENUMS = ("RgAttachmentKind", "RgUsage", "RgLoadOp", "RgStoreOp", "RgPassKind")
+
+# ─── 生成物聚合初始化必须写指定初始化器（债-118；规则 = rules_text.generated_init_checks，§12）──
+# 🔴 **类型名单不在本文件抄**（抄名单反模式，AGENTS 明文；且本条的名单有 34 个、随反射管线长）：
+# 真相源 = `GENERATED_TRUTH_DIR` 下生成物里的 `export struct` 声明本身，规则每次跑现读。
+# 目录常量在此，是为了「目录改名/搬走 ⟹ 规则必须红」而不是静默扫空。
+GENERATED_TRUTH_DIR = "rgl/generated"
+# 名单解析式（顺带取到 `{` 的位置——字段声明序要从体里读，打进 ERROR 让人不用翻生成物）。
+GENERATED_STRUCT_RE = r"export struct\s+(\w+)\s*\{"
+# 扫描面：真相源目录**之外**的这两棵树（`tools/` 不在内 = 生成器模板字符串里就写着
+# `export struct RgComputeBinding {`，`strip_comments` 不剥字符串字面量 ⟹ 必然误报）。
+GENERATED_INIT_SCAN_DIRS = ("rgl", "tests")
+
+# 存量棘轮基线（机制先例 = §9 R-EC4 / §1.7；只准降不准升）。新增一条位置初始化的处置是
+# 改成 `.字段 =`，**不是**来这里登记额度。
+GENERATED_INIT_BASELINE_FILE = "tools/checks/generated_init_baseline.json"
+GENERATED_INIT_UPDATE_CMD = "python3 tools/checks/main.py --update-generated-init-baseline"
+GENERATED_INIT_BASELINE_COMMENT = (
+    "生成物聚合初始化棘轮基线（§12：扫描面里对 `rgl/generated/` 的 `export struct` 类型"
+    "（含其 `using` 别名）做**位置**聚合初始化的条数，按文件记）。存量 = 早期迁移留下的调用点。"
+    "只准降不准升：新增一条 = 有人把调用点写回位置初始化，shader 改字段名/同类型换序都不红"
+    "（§7.14 实测），处置是改成 `.字段 =`，不是来这里登记额度。"
+    f"确实清掉一批后用 `{GENERATED_INIT_UPDATE_CMD}` 收账。判据与盲区 → docs/风格检查规则.md §12。")

@@ -23,6 +23,9 @@ from config import (ALLOWED_CPP, AGENTS_DOC_INDEX_SECTION, AGENTS_FILE,
                     DOCS_STATUS_MAX_LINES, EXCLUDE_FILES,
                     EXPORT_NAMESPACE_EXEMPT, FORBIDDEN_EDGES,
                     FORBIDDEN_VULKAN_APIS, FORBIDDEN_VULKAN_MSG, JUDGMENTS_TABLE_GLOB,
+                    GENERATED_INIT_BASELINE_COMMENT, GENERATED_INIT_BASELINE_FILE,
+                    GENERATED_INIT_SCAN_DIRS, GENERATED_INIT_UPDATE_CMD,
+                    GENERATED_STRUCT_RE, GENERATED_TRUTH_DIR,
                      MODERN_BANNED,
                     NEW_DELETE_EXEMPT, RETIRED_DOC_NAMES, ROOT,
                     RG_ENUM_VOCAB_ENUMS, RG_ENUM_VOCAB_SOURCE_FILE,
@@ -1269,4 +1272,276 @@ def rg_enum_vocab_checks() -> list[Warning]:
                 f"而内建图用同一个值跑得好好的 = 两条路只通了一条（债-122 的 "
                 f"depthOffscreen 就住在这里）。词表已覆盖："
                 f"{'、'.join(covered) if covered else '（空）'}", "error"))
+    return warnings
+
+
+# ─── 生成物聚合初始化必须写指定初始化器（债-118，§12）─────────────────────────
+
+# 覆盖面读数（`struct 34 / 别名 1 / 命中 56 / 位置初始化 24 / 基线 24`）与逐文件命中条数。
+# 🔴 SCAN_GENERATED_INIT **只由本规则写**：main.py 的 --update-generated-init-baseline 拿它的
+# 空/非空判「本条跑没跑过」，别的规则混进来会让收账命令把「没数」写进基线（护栏变瞎）。
+SCAN_GENERATED_INIT: dict[str, str] = {}
+LAST_GENERATED_INIT_COUNTS: dict[str, int] = {}
+
+# 别名形态：`using 别名 = <生成物类型>;`（真实形态 = `export using CullFrameInput = CullPush;`）
+GENERATED_ALIAS_RE = re.compile(r"\busing\s+([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)\s*;")
+# 生成物 struct 体里的字段声明（`std::array<glm::vec4, 6> planes` / `bool x = false` 都吃）
+GENERATED_FIELD_RE = re.compile(r"([A-Za-z_]\w*)\s*(?:\[[^\]]*\])?\s*(?:=[\s\S]*)?$")
+
+
+def generated_init_readout() -> str:
+    """生成物聚合初始化护栏的覆盖面读数；没跑过 = 空串（收账命令据此拒绝落笔）。"""
+    if not SCAN_GENERATED_INIT:
+        return ""
+    return " / ".join(f"{k} {v}" for k, v in SCAN_GENERATED_INIT.items())
+
+
+def generated_init_counts() -> dict[str, int]:
+    """最近一次逐文件「位置初始化」条数（收账命令的输入；未跑过 = 空表）。"""
+    return dict(LAST_GENERATED_INIT_COUNTS)
+
+
+def load_generated_init_baseline() -> tuple[dict[str, int], str | None]:
+    """读棘轮基线 → ({rel: 允许条数}, 不可用原因)。
+
+    🔴 空表会被下游读成「零位置初始化」⟹ 缺失 / 坏 JSON / 格式不符一律返回原因串
+    （同 §9 R-EC4 / §1.7 的纪律，不走 tool_baseline 的「缺失→空表按未登记」）。
+    """
+    path = Path(ROOT) / GENERATED_INIT_BASELINE_FILE
+    if not path.is_file():
+        return {}, f"基线文件不存在：{GENERATED_INIT_BASELINE_FILE}"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        return {}, f"基线文件读不出来：{GENERATED_INIT_BASELINE_FILE}（{type(e).__name__}: {e}）"
+    if not isinstance(data, dict):
+        return {}, f"基线顶层不是 JSON 对象：{GENERATED_INIT_BASELINE_FILE}"
+    files = data.get("files")
+    if not isinstance(files, dict):
+        return {}, f"基线缺 `files` 对象（格式不符）：{GENERATED_INIT_BASELINE_FILE}"
+    bad = sorted(str(k) for k, v in files.items()
+                 if isinstance(v, bool) or not isinstance(v, int))
+    if bad:
+        return {}, f"基线 `files` 有非整数条数：{GENERATED_INIT_BASELINE_FILE} 的 {bad[:3]}"
+    return {str(k): int(v) for k, v in files.items()}, None
+
+
+def write_generated_init_baseline(counts: dict[str, int]) -> str:
+    """按当前条数重写棘轮基线（收账）；返回写入路径。"""
+    files = {k: int(v) for k, v in sorted(counts.items())}
+    path = Path(ROOT) / GENERATED_INIT_BASELINE_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(
+        {"_comment": GENERATED_INIT_BASELINE_COMMENT,
+         "total": sum(files.values()), "files": files},
+        ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return GENERATED_INIT_BASELINE_FILE
+
+
+def _brace_body(src: str, open_idx: int) -> str:
+    """src[open_idx] == '{' → 返回**不含**外层花括号的体（找不到闭合 = 到文件尾）。"""
+    depth = 0
+    for i in range(open_idx, len(src)):
+        if src[i] == "{":
+            depth += 1
+        elif src[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return src[open_idx + 1:i]
+    return src[open_idx + 1:]
+
+
+def _generated_struct_fields() -> tuple[dict[str, list[str]], str | None]:
+    """类型名单真相源 = **生成物本体** → ({struct 名: 字段声明序}, 失效原因)。
+
+    名单不抄进 config 也不抄进规则（抄名单反模式：34 个名字抄一份 = 反射管线加一个 struct
+    就静默漏一个）。`types_generated.cppm` 是债-26 的空模块（0 个 struct）——**按目录聚合**，
+    只要整个目录解析出 ≥1 个就不出声，单文件 0 个不是失效形态。
+    """
+    base = Path(ROOT) / GENERATED_TRUTH_DIR
+    if not base.is_dir():
+        return {}, (f"生成物目录 {GENERATED_TRUTH_DIR}/ 读不到（改名 / 搬走了？"
+                    "同步改 tools/checks/config.py 的 GENERATED_TRUTH_DIR）")
+    fields: dict[str, list[str]] = {}
+    for path in sorted(base.glob("*.cppm")):
+        src = read_text(path)
+        if src is None:
+            continue
+        src = strip_comments(src)
+        for m in re.finditer(GENERATED_STRUCT_RE, src):
+            body = _brace_body(src, m.end() - 1)
+            names: list[str] = []
+            for stmt in body.split(";"):
+                fm = GENERATED_FIELD_RE.search(stmt.strip())
+                if fm:
+                    names.append(fm.group(1))
+            fields[m.group(1)] = names
+    if not fields:
+        return {}, (f"{GENERATED_TRUTH_DIR}/*.cppm 里解析出 **0 个** `export struct`"
+                    f"（生成物形态变了？同步改 tools/checks/config.py 的 GENERATED_STRUCT_RE，"
+                    "别让它静默空跑）")
+    return fields, None
+
+
+def _generated_init_scan_files() -> tuple[list[str], str | None]:
+    """扫描面 = `GENERATED_INIT_SCAN_DIRS` 下全部 .cppm，排除生成物目录本身。
+
+    `tools/` **不在扫描面**（盲区，见 generated_init_checks 的 docstring）。
+    """
+    out: list[str] = []
+    for d in GENERATED_INIT_SCAN_DIRS:
+        base = Path(ROOT) / d
+        if not base.is_dir():
+            continue
+        for p in base.rglob("*.cppm"):
+            if not p.is_file():
+                continue
+            rel = rel_posix(p)
+            if rel.startswith(GENERATED_TRUTH_DIR + "/"):
+                continue
+            out.append(rel)
+    if not out:
+        return [], ("扫描面为空：" + "、".join(GENERATED_INIT_SCAN_DIRS)
+                    + " 下一个 .cppm 都没读到（目录搬走 / 后缀改了？）")
+    return sorted(out), None
+
+
+def generated_init_checks() -> list[Warning]:
+    """对反射生成物类型的聚合初始化**必须写指定初始化器**（债-118；存量走棘轮基线）。
+
+    ## 病根（§7.14 实测，这条不是"风格洁癖"）
+    把布局换成反射生成物**本身不带来编译期保护**。`docs/compute_调研.md` §7.14 的对照表：
+    调用点写 `EnvPrefilterPush{level, mipLevels, levelFs}`（位置形态）时，shader 改字段名
+    `just build` **退出码 0**、同类型字段换序**也不红**；改成 `.level = …` 后两条都编译失败
+    并点名调用点（C++20 要求指定初始化按声明序 ⟹ **一个约定同时堵「改名」与「换序」两个洞**）。
+    于是「八枚 push 已全生成物」被读成「布局错配有机器拦」——拦它的是**约定**不是生成物，
+    而这条约定此前**没有任何护栏**：新代码写回位置初始化不会有人响，布局仍然单源、生成物
+    自带的 static_assert 仍然绿、`just test` 只在字段恰好被测试引用时才红。
+    🔴 编译器给不了这条（clang 唯一近邻旗 `-Wmissing-designated-field-initializers` 报的是
+    部分 designated init，位置初始化它不报），只能走文本判据。
+
+    ## 判据形态
+    - **类型名单真相源 = 生成物本体**（`GENERATED_TRUTH_DIR` 里的 `export struct`），
+      外加扫描面里的 `using 别名 = <生成物类型>;`（真实形态 = `CullFrameInput = CullPush`）。
+      🔴 别名不收 = 规则漏掉本仓唯一的**重命名**形态，而它恰恰是最需要护栏的那枚
+      （BIT-IDENTICAL 的 CPU 读回重放路）。
+    - 命中 = `<Type>` + 可选变量名 + `{`（先 `strip_comments`，行号不漂）。
+    - **违规** = 花括号后首个非空白字符既不是 `.` 也不是 `}`。`T{}` 空初始化 + 随后逐字段
+      赋值是**合法**风格（`izb_shadow_impl.cppm:290` / `meshlet_cull_service_impl.cppm:238`
+      就是这个形态），不许报。
+    - 存量走棘轮基线（只准降不准升，照 §9 R-EC4）：新增一条 = ERROR，处置是改成 `.字段 =`，
+      **不是**来基线登记额度；ERROR 点名文件:行号 + 类型名 + **该类型的字段声明序**（从生成物
+      现读，让人不用翻文件）+ 症状句。
+
+    ## 失效必须出声（"没数不是零警告"）
+    - 生成物目录读不到 / 整个目录解析出 **0 个 struct** ⟹ ERROR「本次未做任何对账」。
+      （单文件 0 个不算失效：`types_generated.cppm` 是债-26 的空模块。）
+    - 扫描面为空 ⟹ 同上。
+    - 基线文件缺失 / 顶层或 `files` 不是对象 / 值非整数 ⟹ ERROR 点名基线文件。
+    - 覆盖面读数每次构建印一行（`struct N / 别名 M / 命中 K / 位置初始化 P / 基线 B`），
+      规则没跑到打「未执行」。
+
+    ## 盲区（写下来不装没看见）
+    - **只认字面类型名**：经模板实参（`f<T>()`）、两跳以上的别名链（本规则只收
+      `using X = <生成物 struct>;` 一跳）间接出现的类型看不见；`std::array<T, N>{{{…}}}`
+      的**内层**花括号（内层不写类型名）看不见；`T v = { … }` 这种**等号形态**也看不见
+      （`{` 前面是 `=` 不是类型名）——本条判的是「写了类型名的聚合初始化」这一种最主流形态。
+    - **字符串字面量不剥**（`strip_comments` 只剥注释）⟹ `tools/reflection_tool.cpp:163` 的生成器
+      模板字符串里就写着 `export struct RgComputeBinding {`，故 `tools/` **不在扫描面**。
+      扫描面内的字符串里写出生成物类型名 + `{` 会误报——当前实测 0 条。
+    - 注释里提一嘴 `FanoutPush{` 不误报（先剥注释），这也是债挂号时担心的那条脆点，实测不成立。
+    - 外层 push data 包装（`MipGenPushData` / `EnvPrefilterPushData`）**不归本条**：它们不是
+      生成物类型，不在名单里（§7.14 的裁决）。
+    - 基线按**文件**记条数（照 R-EC4）⟹ 同一文件内「删一条位置初始化 + 新写一条」互相抵消、
+      不红。换成 `文件::变量名` 那种键（§6.4 R7 形态）能堵，代价是挪代码就得收账。
+    """
+    fields, bad_truth = _generated_struct_fields()
+    if bad_truth:
+        SCAN_GENERATED_INIT.clear()
+        return [Warning("tools/checks/config.py", 0,
+            f"生成物聚合初始化护栏（债-118）**本次未做任何对账**：{bad_truth}"
+            "——「零警告」不是「调用点都写了指定初始化器」", "error")]
+    rels, bad_scan = _generated_init_scan_files()
+    if bad_scan:
+        SCAN_GENERATED_INIT.clear()
+        return [Warning("tools/checks/config.py", 0,
+            f"生成物聚合初始化护栏（债-118）**本次未做任何对账**：{bad_scan}"
+            "——「零警告」不是「调用点都写了指定初始化器」", "error")]
+
+    # 别名要收进名单：先扫一遍建 别名 → 生成物类型 的映射（名单 = 生成物 struct ∪ 别名）
+    alias_of: dict[str, str] = {}
+    bodies: dict[str, str] = {}
+    for rel in rels:
+        src = read_text(Path(ROOT) / rel)
+        if src is None:
+            continue
+        stripped = strip_comments(src)
+        bodies[rel] = stripped
+        for am in GENERATED_ALIAS_RE.finditer(stripped):
+            alias, target = am.group(1), am.group(2)
+            if target in fields and alias not in fields:
+                alias_of[alias] = target
+
+    names = sorted(set(fields) | set(alias_of), key=lambda x: (-len(x), x))
+    hit_re = re.compile(r"(?<![A-Za-z0-9_])(?P<type>" + "|".join(re.escape(n) for n in names)
+                        + r")(?![A-Za-z0-9_])\s*(?:[A-Za-z_]\w*\s*)?\{")
+    hits: dict[str, list[tuple[int, str]]] = {}
+    total_hits = 0
+    for rel, stripped in bodies.items():
+        for m in hit_re.finditer(stripped):
+            total_hits += 1
+            if stripped[m.end():].lstrip()[:1] in (".", "}"):
+                continue  # 指定初始化 / 空初始化 = 合法
+            hits.setdefault(rel, []).append((stripped[:m.start()].count("\n") + 1,
+                                             m.group("type")))
+
+    counts = {rel: len(v) for rel, v in hits.items()}
+    LAST_GENERATED_INIT_COUNTS.clear()
+    LAST_GENERATED_INIT_COUNTS.update(counts)
+    baseline, bad_base = load_generated_init_baseline()
+    SCAN_GENERATED_INIT.clear()
+    SCAN_GENERATED_INIT.update({
+        "struct": str(len(fields)), "别名": str(len(alias_of)), "命中": str(total_hits),
+        "位置初始化": str(sum(counts.values())),
+        "基线": str(sum(baseline.values())) if not bad_base else "0"})
+    if bad_base:
+        return [Warning(GENERATED_INIT_BASELINE_FILE, 0,
+            f"生成物聚合初始化棘轮**本次未做任何对账**：{bad_base}"
+            f"（当前位置初始化 {sum(counts.values())} 条未比对）——先修基线文件", "error")]
+
+    def msg(tname: str) -> str:
+        target = alias_of.get(tname, tname)
+        order = "、".join(fields.get(target, [])) or "（生成物里没解析出字段）"
+        who = f"{tname}（= 生成物 {target} 的别名）" if tname in alias_of else tname
+        return (f"对反射生成物 {who} 写的是**位置**聚合初始化——字段声明序：{order}。"
+                "位置聚合初始化 ⟹ shader 改字段名/同类型换序都不红，生成物单源白单"
+                "（§7.14 实测）。处置：改成 `.字段 =` 指定初始化器（C++20 还要求按声明序书写 "
+                f"⟹ 换序一起红），**不是**来 {GENERATED_INIT_BASELINE_FILE} 登记额度")
+
+    warnings: list[Warning] = []
+    for rel in sorted(set(counts) | set(baseline)):
+        cur, base = counts.get(rel, 0), baseline.get(rel, 0)
+        if rel not in counts:
+            if base > 0:
+                warnings.append(Warning(rel, 0,
+                    f"生成物聚合初始化基线仍记 {base} 条但该文件已清零/不在扫描面——"
+                    f"用 `{GENERATED_INIT_UPDATE_CMD}` 收账"))
+            continue
+        if cur > base:
+            for line, tname in hits[rel]:
+                warnings.append(Warning(rel, line, msg(tname), "error"))
+            if rel not in baseline:
+                warnings.append(Warning(rel, 0,
+                    f"生成物聚合初始化基线未登记：当前 {cur} 条（新文件必须显式登记进 "
+                    f"{GENERATED_INIT_BASELINE_FILE}——但**先确认**它是生成物类型而不是同名"
+                    "的手写结构体，且真的没法改成指定初始化器）", "error"))
+            else:
+                warnings.append(Warning(rel, 0,
+                    f"生成物聚合初始化基线上升 {cur} > {base}——处置是把调用点改成 `.字段 =`，"
+                    f"**不是**改基线（基线只准降；确实清了才用 `{GENERATED_INIT_UPDATE_CMD}`）",
+                    "error"))
+        elif cur < base:
+            warnings.append(Warning(rel, 0,
+                f"生成物聚合初始化可下调 {cur} < {base}——用 `{GENERATED_INIT_UPDATE_CMD}` "
+                "收账（悄悄漂移等于没有基线）"))
     return warnings

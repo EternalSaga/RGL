@@ -75,13 +75,15 @@ from rules_reflection import reflection_contract_checks, scan_readout
 from rules_text import (agents_doc_index_checks, agents_index_status_checks,
                         doc_pointer_checks,
                         doc_pointer_counts, doc_pointer_readout,
+                        generated_init_checks, generated_init_counts,
+                        generated_init_readout,
                         judgments_pointer_checks,
                         docs_status_checks, forbidden_vulkan_checks,
                         rg_enum_vocab_checks, rg_enum_vocab_readout,
                         rpc_route_checks, rpc_route_readout,
                         slang_load_bitcast_checks, meshlet_spec_checks,
                         modern_cpp_checks, text_checks, load_doc_pointer_baseline,
-                        write_doc_pointer_baseline)
+                        write_doc_pointer_baseline, write_generated_init_baseline)
 from models import Thresholds, Warning
 from tool_baseline import compare as compare_baseline
 from tool_baseline import load_baseline, write_baseline
@@ -183,6 +185,10 @@ def parse_args() -> argparse.Namespace:
                     help="用当前 namespace 作用域可变全局条数重写 ecs_global_baseline.json"
                          "（§9 R-EC4 的存量棘轮收账；上升时**不要**用它，"
                          "处置是把全局搬进 context/参数/成员）")
+    ap.add_argument("--update-generated-init-baseline", action="store_true",
+                    help="用当前「对反射生成物的位置聚合初始化」条数重写 "
+                         "generated_init_baseline.json（§12 债-118 的存量棘轮收账；上升时"
+                         "**不要**用它，处置是把调用点改成 `.字段 =` 指定初始化器）")
     return ap.parse_args()
 
 
@@ -348,6 +354,24 @@ def main() -> None:
         warnings.extend(rpc_route_checks())
         # 渲染图 Lua 词表对账（债-122 另一半）：枚举加了档、词表没挂号 = 配置面写不出来。
         warnings.extend(rg_enum_vocab_checks())
+        # 生成物聚合初始化棘轮收账（债-118）：先扫一遍拿计数 → 重写基线 → 下面正式跑时与
+        # **新**基线比对（形态同 R-EC4：重写必然持平，不会自己喊自己上升）。
+        if args.update_generated_init_baseline:
+            generated_init_checks()
+            # 🔴 扫描面没跑起来就**拒绝落笔**：把"没数"写进基线 = 之后每次跑都零命中 =
+            # 护栏永久变瞎而"零警告"照旧（同本规则"失效必须出声"的纪律）。
+            if not generated_init_readout():
+                print("[style-check-ERROR] 生成物聚合初始化基线**未重写**：本次扫描面未运行"
+                      "（覆盖面读数为空）——先修规则，别把「没数」写进基线", file=sys.stderr)
+                sys.exit(2)
+            # 🔴 基线 = **本次命中**，不是"旧基线 ∪ 本次命中"（并集写法会让清零的文件永远
+            # 留在基线里 = 收账命令自己造出一个它要求你去收的账，见 main.py 反引号那段的教训）。
+            merged = {k: v for k, v in generated_init_counts().items() if v > 0}
+            path = write_generated_init_baseline(merged)
+            print(f"[style-check] 生成物聚合初始化基线已重写: {sum(merged.values())} 条 / "
+                  f"{len(merged)} 个文件 → {path}")
+        # 生成物聚合初始化护栏（债-118）：位置初始化 = 改字段名/换序都不红，生成物单源白单。
+        warnings.extend(generated_init_checks())
 
     # 工具侧基线（只准降不准升）：--update-tool-baseline 先重写再比对（必然持平）。
     # 未解析的 TU 不参与比对，其基线条数原样保留（否则 clean 后一跑就把基线清零）。
@@ -452,6 +476,11 @@ def main() -> None:
         vocab_readout = rg_enum_vocab_readout()
         print("[style-check] 渲染图词表对账: "
               + (vocab_readout if vocab_readout else "**本次未执行**（规则没跑到）"))
+        # 生成物聚合初始化的读数（债-118）：名单条数 + 命中数 + 位置初始化数 + 基线——
+        # 「没有位置初始化」与「名单解析出 0 个类型所以什么都没对」必须一眼可分。
+        gen_readout = generated_init_readout()
+        print("[style-check] 生成物聚合初始化: "
+              + (gen_readout if gen_readout else "**本次未执行**（规则没跑到）"))
         if rgl_notready:
             print("[style-check] 提示: 跳过 = modmap/BMI 构建产物缺失（clean 后首次构建属正常，"
                   "与编译并行时尚未生成）；本次仅跑纯文本规则，编译完成后重跑即全量生效")

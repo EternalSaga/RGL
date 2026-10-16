@@ -1,0 +1,13 @@
+{
+  "_comment": "生成物聚合初始化棘轮基线（§12：扫描面里对 `rgl/generated/` 的 `export struct` 类型（含其 `using` 别名）做**位置**聚合初始化的条数，按文件记）。存量 = 早期迁移留下的调用点。只准降不准升：新增一条 = 有人把调用点写回位置初始化，shader 改字段名/同类型换序都不红（§7.14 实测），处置是改成 `.字段 =`，不是来这里登记额度。确实清掉一批后用 `python3 tools/checks/main.py --update-generated-init-baseline` 收账。判据与盲区 → docs/风格检查规则.md §12。",
+  "total": 24,
+  "files": {
+    "rgl/meshlet_ranges_impl.cppm": 1,
+    "rgl/render_list_impl.cppm": 1,
+    "rgl/vkrenderer_impl.cppm": 4,
+    "tests/test_compute_bindings.cppm": 1,
+    "tests/test_meshlet_ranges.cppm": 15,
+    "tests/test_scene_sentinel.cppm": 1,
+    "tests/test_ssr_viewproj.cppm": 1
+  }
+}
