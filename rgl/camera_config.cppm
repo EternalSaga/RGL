@@ -46,7 +46,11 @@ export std::vector<std::string> cameraConfigKnownKeys();
  * fovDegrees 为角度，加载时转弧度；keys 字段可选，缺省 WASD，
  * 未知键名 → 报错退出。llm_debug/llm_shot 不在本模块（2026-09-08 迁至 runtime_config）。
  * 文件缺失 → 返回默认 CameraConfig + warn；脚本/类型错误 → std::unexpected。
- * 沙箱限制与 tools/schema_loader 一致：禁用 dofile/loadfile/package/require。
+ * 配置加载口径（其余 4 份 configs 下的 lua 同此，只在这里写全）：禁 dofile/loadfile/package/require，
+ * 与 tools/schema_loader 一致。🔴 它买的是**被加载文件自足 + 是纯数据**——工具的单文件文本补丁与
+ * 「改了没生效要响亮失败」那一类护栏靠这条前提；**它不是安全边界**（`base` 里的 `load`/`pcall`
+ * 没禁 ⟹ chunk 内任意计算本来就能做，真正关掉的只有文件与模块可达性）。要组合走**生成器**
+ * （tools/ 铺目录），不要在 Lua 里 require → 裁决全文 `docs/配置正交性_plan.md` §3.7。
  * @param path 配置文件路径
  * @param trace 可选出参：键轨迹（覆盖率护栏与未知键 lint 的输入；传 nullptr = 不记录）
  * @return 解析好的 CameraConfig；失败返回 ConfigLoadFailed

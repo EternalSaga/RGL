@@ -183,7 +183,8 @@ bug 的受害者，而 §5.2 的 EVSSM 终局裁决拿它当**分母** → 该�
 3. **`consumeIzbMask` 刻意不掺 `drawAtlas`**：IZB 的构造判据今天就只有 izb 一个
    （`IzbShadow::recordFrame` 无条件清零 = 债-32 的收口，掺上 drawAtlas 就把它拆了）。
    「izb × mode=none 必然一帧阴影也不产」是 gate_lint 的 **error**，不是运行期早退。
-4. **gate_lint 阴影规则按枚举重写**（13 行 / 11 门）：`izb × mode="none"`(error)、
+4. **gate_lint 阴影规则按枚举重写**（N6b 当批形态；🔴 现行条数 / 门数看 `kGateRules` 阴影段，
+   本文不抄——债-106 之后已不是下面这九条）：`izb × mode="none"`(error)、
    `izb × 非 deferred`(error)、`mode="evssm" × 非 deferred`(error)、`izb.dump_frame × izb 关`
    (warn)、`izb.grid × izb 关`(inertNote)、`pcss.* × mode≠pcss` ×3、`evssm.* × mode≠evssm` ×3
    (inertNote)、`csm`(nullptr)。**「PCSS 让位 EVSSM」那条 warn 整条删除**——枚举下两门同开
