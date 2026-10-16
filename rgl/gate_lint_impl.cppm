@@ -231,14 +231,17 @@ const GateRule kGateRules[]{
 		"的**事实**出声（同因不同层：无产物 / 多产物回落 / 零模型命中只有装配期看得见）",
 		[](const Ctx& c) { return c.runtime.meshletOverlay && !c.runtime.meshletEnable; }},
 	{"meshlet.debug", GateSeverity::warn,
-		"debug 是叠加段的**条目级** SPV 变体位：overlay = false 或 enable = false ⟹ pickMeshletMeshVariant "
-		"强制归 base（变体烘进的是 switch 原位取代共用的那批条目，让叠加仪器改条目 = 诊断渗进产品路）。"
-		"要么开 meshlet.overlay 让仪器有消费者，要么把它归零（原就近 warn = warnMeshletVariantInstruments，债-106 迁入）",
+		"debug 是叠加段的**条目级** SPV 变体位，两条独立机制都会让它落空（判据按消费者写，不按本表口径写）："
+		"① overlay = false ⟹ `pickMeshletMeshVariant` 直接返回 base（它**只看 overlay**，不看 enable）；"
+		"② enable = false ⟹ `bakeMeshletEntries` 吃 `slots = nullopt` 整段早退 = **一条条目都不建**，"
+		"变体位没有条目可烘。变体烘进的是 switch 原位取代共用的那批条目（让叠加仪器改条目 = 诊断渗进产品路）"
+		"⟹ 要么开 meshlet.overlay 让仪器有消费者，要么把它归零"
+		"（原就近 warn = warnMeshletVariantInstruments，债-106 迁入）",
 		[](const Ctx& c) { return c.runtime.meshletDebug
 			&& (!c.runtime.meshletEnable || !c.runtime.meshletOverlay); }},
 	{"meshlet.tint", GateSeverity::warn,
-		"tint 是叠加段的**条目级** SPV 变体位：overlay = false 或 enable = false ⟹ pickMeshletMeshVariant "
-		"强制归 base（判据同 meshlet.debug；原就近 warn 同迁本表）",
+		"tint 是叠加段的**条目级** SPV 变体位，落空机制同 meshlet.debug 两条（overlay 关 = 变体选择器返回 "
+		"base；enable 关 = 条目整段不建），判据同 meshlet.debug；原就近 warn 同迁本表",
 		[](const Ctx& c) { return c.runtime.meshletTint
 			&& (!c.runtime.meshletEnable || !c.runtime.meshletOverlay); }},
 	{"meshlet.tint", GateSeverity::warn,
