@@ -497,8 +497,10 @@ readSsrBlock 头注释（runtime_config_impl.cppm:315-327）明确裁决「confi
 
 ## 6. 我不知道的（不推测填）
 
-1. **未运行任何程序**。本文所有数字读自源码；「出厂 0 findings」是谓词推断（§1.3），与清单同口径。
-   若运行：`just smoke` + grep 启动日志可验 findings=0；`just regress selftest` 可验两锚。
+1. ~~**未运行任何程序**~~ → **S1a 落地时已运行（2026-10-16，本机 AMD 8060S / RADV STRIX_HALO）**：
+   `just smoke` = `PASS errors=0 warnings=0` ⟹ §1.3 那条「出厂 0 findings」由**谓词推断**升级为
+   **实测**（出厂态连 warn 级都没有）；`regress floor --runs 3` 两锚各 3/3 命中（出厂
+   `95edc8cc…` / 门关红线 A `54e40665…`）。本文其余数字仍读自源码。
 2. `docs/compute_调研.md` §7 未逐节读（kind 加档「10 处静默点」的逐处、B2-4③′ 裁决全文——
    本文只复核了引用的数字：4.5µs / 29 emit / nullopt 早退）。
 3. ~~`qa/configs/**` 与 `tools/qa_scenes.py` 是否有**第四层出声点**~~ —— **已查（2026-10-16，
@@ -636,6 +638,18 @@ constexpr，**谓词面自己不能成为新的抄写点**（哲学 1：访问�
   ⟹ 本批**不删**（删了会把"锚点命中的唯一 accessor"和它的 债-128 归因消息一起弄没），
   改记 债-129 的一条待裁项：**S1b 时一并裁**——要么让录制侧改问它（消掉重算），要么连 债-128
   的哨兵一起降级。→ 已挂 `docs/还债总账.md` 债-129 行。
+- **验收读数（2026-10-16 本机 8060S，commit `0ebfcba`）**：
+  ① 编译图现查 **6 → 0**（`render_graph*` 之外对 `attachments` 的手写 `find_if` 命中 0；
+  `Renderer::findAttachmentSlot` 已删）；② `just test` 555/555，新增组 10 共 7 例；
+  ③ 🔴 **13 条变异全部验红**且各红在预期用例上（M4/M6 第一版变异自身编译不过——`std::find_if`
+  未声明 / `-Werror=unused-parameter`，按 skill「谓词类变异要保留参数使用」改写成**弱化**形态后
+  重跑才有效）；④ 新护栏 `graph_fact_predicate_checks` 进门，读数 `谓词 6 条 / 不在存活链 0 条`，
+  自身 7 条内存注入全达期望（其中一条专钉「传递存活方向写反 = 死谓词调用活谓词即永久假绿」)；
+  ⑤ `just gates` 全绿；⑥ 逐位四档对拍 `--ref HEAD^` 全**逐位相同**（默认 / `aa=fsr`+`temporal=false`
+  8×8 / `shadow:izb=true` / `diagnostics:picking=true`）——`dump_gbuf` 档**比不了**：它会把截图
+  输出文件名改掉，regress 找不到自己的 shot（工具限制，非代码问题；该档引擎跑通出图）。
+  ⚠ 期间撞见 债-88 的第四次漂移读数 + `regress.py` 归因的**循环**（`max(floor_a, floor_b)`
+  让被怀疑的一方自己提供豁免额度）→ 两条都记在 债-88，**不随本刀夹带修**。
 
 #### S1b 装饰落图结果（L3）——**S3 的前置，不是 S1 的尾巴**
 
