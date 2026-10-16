@@ -721,21 +721,30 @@ export struct RgFsrColorInput {
 };
 
 /**
- * FSR 色输入优先级链 `ao_applied > taa_out > scene_hdr` 的**唯一来源**（L2）。
+ * FSR 色输入优先级链 `ao_applied > taa_out > ssr_applied > scene_hdr` 的**唯一来源**（L2）。
  *
  * 为什么这是「一个事实」而不是三枚布尔：AO 必须乘在时域滤波**之前**（批 13.6 实测：乘在之后
  * = 噪声零平均，占残余 shimmer 62%，而 FSR 就是时域滤波器 ⟹ 不接 `ao_applied` 就等于把 13.6
  * 的收益整条丢掉），而 `taa_out` 自批 13.5 起已在**基空间**（TAA 自己 un-jitter 过）、
- * `ao_applied` / `scene_hdr` 带抖动 ⟹ 「接哪张」与「`jitterOffset` 怎么申报」是同一件事的两面，
- * 分成两处写就必然出现「三个分支两个恰好对、一个必错，且错了不报错、VVL 不抓、症状只是糊」
- * （`Renderer::initFsr` 收口前注释的原话）。
- * 收口前它有两份：`initFsr` 的三分支 + `computeFsrUsable` 的 `(has(taa_out) || has(scene_hdr))`
- * ——后者**漏了 `ao_applied` 这一档**，两份条件集因此已经不同（4 条 vs 3 条）。
- * 第三档的兜底条件本身也有出处：`scene_hdr` 被选中时 `ao_apply` 也不会插
- * （见 `decorateAoApplyPass` 跳过条件），所以「三档全无」与「只有 scene_hdr」不会同时出现。
+ * `ao_applied` / `ssr_applied` / `scene_hdr` 带抖动 ⟹ 「接哪张」与「`jitterOffset` 怎么申报」
+ * 是同一件事的两面，分成两处写就必然出现「三个分支两个恰好对、一个必错，且错了不报错、VVL 不抓、
+ * 症状只是糊」（`Renderer::initFsr` 收口前注释的原话——**这句原话今天读来还保守了**，见下）。
+ *
+ * 🔴 **本链必须与装配层 `assembleHdrAoChain` 的 tonemap 色输入链逐档同序**：两者回答的是同一个
+ * 问题（「HDR 累加 → 各施加点这条链的**链头产物**是哪张附件」）。收口前它有两份，而两份**各漏过
+ * 一档，且漏的不是同一档**：
+ *  - `computeFsrUsable` 漏 `ao_applied`（S1a 随两处合一消掉）；
+ *  - `initFsr` 漏 `ssr_applied`（🔴 **2026-10-16 实测补上**）：`ssr + aa=fsr + 图无 ao 附件`
+ *    （= `decorateAoApplyPass` 跳过条件 2）时，tonemap 读 `ssr_applied` 而 FSR 读 `scene_hdr`
+ *    ⟹ **SSR 整条静默丢掉**。两档格式与分辨率同为 `rgba16_sfloat` 渲染网格 ⟹ 不崩、不报错、
+ *    VVL 不抓，症状只是「SSR 开了但画面没反射」。
+ * ⟹ 单测以「四枚附件在/不在的 **16 种组合**」钉住两链同解（期望值按装配层那条链的**顺序覆盖**
+ * 写法独立算出，不抄本函数）。🔴 **加第五档时必须同步两处**：`assembleHdrAoChain` 要按档**条件
+ * 领建 RT 堆槽**（门关 = 堆槽零变化，那是逐位性质），所以它吃不了本函数，16 组合表是当前形态下
+ * 能做到的最强判据——把两处真正合一（链只问一次、槽按答案领）是 S1b 的候选收口对象。
  *
  * @param attachments 编译图附件表
- * @return 色输入；nullopt = 三档都不在图里（= FSR 没有色输入可接）
+ * @return 色输入；nullopt = 四档都不在图里（= FSR 没有色输入可接）
  */
 export std::optional<RgFsrColorInput> graphFsrColorInput(
 	std::span<const RgCompiledAttachment> attachments);

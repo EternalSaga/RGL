@@ -1914,7 +1914,11 @@ TEST_CASE("decorateSsrPass 与 taa / ao_apply 可复合：装配序下链自动�
  *    只钉一半会被后来人读成"整条已验"）。
  *  - `graphFsrColorInput` 的优先级链去掉 `ao_applied` 档 → 「三档全在取 ao」红
  *    （**这一格就是收口前 `computeFsrUsable` 漏掉的那一档**，变异即历史故障）。
- *  - `baseSpace` 恒写 false → 「选 taa_out ⟹ 基空间」红；恒写 true → 另两格红。
+ *  - 去掉 `ssr_applied` 档 → 态 3b 与 16 组合表里含 ssr 的格红（**这一格是 2026-10-16 实测
+ *    补上的真漏档**：`initFsr` 原始三档链没有 ssr_applied，装配层四档链有 ⟹ `ssr + aa=fsr
+ *    + 无 ao 附件` 时 FSR 读未经 SSR 的成片，静默丢反射）。
+ *  - 16 组合表的附件表**按优先级从低到高铺** ⟹ 实现退化成「取第一个存在的附件」时整片红。
+ *  - `baseSpace` 恒写 false → 「选 taa_out ⟹ 基空间」红；恒写 true → 另几格红。
  *  - `RgFsrInputs::complete()` 删掉任一半检查 → 对应那条「缺一个输入」用例红
  *    （🔴 三个输入各一条缺位用例，缺一条就是给"删掉那半边"留的空位）。
  *  - 把 FSR 的深度改成按 kind 查 → 「按名查与按 kind 查不同轴」红，逼改的人回答
@@ -2005,7 +2009,7 @@ TEST_CASE("graphHasPassState：kind 与 state 两半边各钉一条（对称判�
 	CHECK_FALSE(graphHasDeferredLight(fakeKind));
 }
 
-TEST_CASE("graphFsrColorInput：ao_applied > taa_out > scene_hdr 四态 + 基空间判定") {
+TEST_CASE("graphFsrColorInput：ao_applied > taa_out > ssr_applied > scene_hdr 逐档例 + 基空间判定") {
 	// 态 1：三档全在 → 取 ao_applied，且**不是**基空间（AO 施加点带抖动）。
 	// 🔴 这一格就是收口前 computeFsrUsable 漏掉的那一档（它只判 taa_out || scene_hdr）。
 	const auto allThree = attTable({{"swapchain", RgAttachmentKind::swapchain},
@@ -2033,10 +2037,57 @@ TEST_CASE("graphFsrColorInput：ao_applied > taa_out > scene_hdr 四态 + 基空
 	CHECK(c3->slot == 1u);
 	CHECK_FALSE(c3->baseSpace);
 
-	// 态 4（反向）：三档全无 → nullopt（= FSR 没有色输入可接）。
+	// 态 3b（🔴 2026-10-16 漏档修复的专例）：ssr_applied + scene_hdr，无 ao_applied / taa_out
+	// = `ssr + aa=fsr + 图无 ao 附件`（decorateAoApplyPass 跳过条件 2）的真实形态。修复前这里
+	// 返回 scene_hdr ⟹ FSR 读**未经 SSR 的成片**，SSR 整条静默丢掉（不崩、不报错、VVL 不抓）。
+	const auto ssrOnly = attTable({{"swapchain", RgAttachmentKind::swapchain},
+		{"scene_hdr", RgAttachmentKind::offscreen}, {"ssr_applied", RgAttachmentKind::offscreen}});
+	const auto c3b = graphFsrColorInput(ssrOnly);
+	REQUIRE(c3b.has_value());
+	CHECK(c3b->slot == 2u);
+	CHECK_FALSE(c3b->baseSpace);  // ssr_applied 由 scene_hdr 合成而来，抖动还在
+
+	// 态 4（反向）：四档全无 → nullopt（= FSR 没有色输入可接）。
 	const auto none = attTable({{"swapchain", RgAttachmentKind::swapchain},
 		{"depth", RgAttachmentKind::depth}});
 	CHECK_FALSE(graphFsrColorInput(none).has_value());
+}
+
+TEST_CASE("色输入链 16 组合对账：graphFsrColorInput 必须与装配层 tonemap 链同解") {
+	/*
+	 * 期望值出处 = 装配层 `assembleHdrAoChain`（main_scene.cppm）那条链的**顺序覆盖**写法
+	 * （低优先级先赋、高优先级后覆盖）——那是被测码之外的第二判据，不是抄本函数。
+	 *
+	 * 🔴 为什么用表而不是让装配层直接吃本函数：那条链要按档**条件领建 RT 堆槽**（门关 =
+	 * 堆槽零变化，是逐位性质），改成「先问链头再领对应槽」会动到领建序。所以本表是当前形态下
+	 * 能做到的最强判据；真正合一 = S1b 候选收口对象（论证 → render_graph.cppm 接口注释）。
+	 *
+	 * 变异红线：① 删掉 ssr_applied 档 → mask 含 ssr 而不含 ao/taa 的那些格红；
+	 * ② 实现退化成「取表里第一个存在的附件」→ **全部含更高优先级档的格红**（附件表故意按
+	 *    优先级**从低到高**铺，见下）；③ baseSpace 恒真/恒假 → 对应格红。
+	 */
+	const std::string_view tiers[4] = {std::string_view{kAoAppliedName},
+		std::string_view{kTaaOutName}, std::string_view{kSsrAppliedName},
+		std::string_view{kSceneHdrName}};  // 序 = 优先级高 → 低
+	for (int mask = 0; mask < (1 << 4); ++mask) {
+		std::vector<RgCompiledAttachment> atts{ca("swapchain", RgAttachmentKind::swapchain)};
+		for (size_t t = 4; t-- > 0;)  // 按优先级**从低到高**铺 ⟹ 表序与优先级相反
+			if (mask & (1 << t))
+				atts.push_back(ca(std::string{tiers[t]}, RgAttachmentKind::offscreen));
+		// 期望 = 优先级最高的存在档（= 装配层顺序覆盖的终值）。
+		int expected = -1;
+		for (size_t t = 0; t < 4; ++t)
+			if (mask & (1 << t)) { expected = static_cast<int>(t); break; }
+		INFO("mask = " << mask << "（bit0=ao bit1=taa bit2=ssr bit3=hdr）");
+		const auto got = graphFsrColorInput(atts);
+		if (expected < 0) {
+			CHECK_FALSE(got.has_value());
+			continue;
+		}
+		REQUIRE(got.has_value());
+		CHECK(atts[got->slot].name == tiers[expected]);
+		CHECK(got->baseSpace == (expected == 1));  // 只有 taa_out 在基空间
+	}
 }
 
 TEST_CASE("graphFsrInputs().complete()：三个输入各配一条「缺它一个」用例（对称判据三半边）") {

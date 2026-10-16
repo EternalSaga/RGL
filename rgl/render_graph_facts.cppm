@@ -54,16 +54,24 @@ bool graphHasPassState(std::span<const RgPassPlan> passes, RgPassKind kind, std:
 		[&](const RgPassPlan& p) { return p.kind == kind && p.state == state; });
 }
 
-/** FSR 色输入优先级链（实现；链的语义与它的历史事故 → render_graph.cppm 接口注释）。 */
+/** FSR 色输入优先级链（实现；链的语义与它的历史事故 → render_graph.cppm 接口注释）。
+ *  🔴 四档序 = `assembleHdrAoChain` 的 tonemap 色输入链**逐档同序**，两处必须一致；
+ *  单测以「四枚附件在/不在的 16 种组合」钉住两者同解（见 tests/test_render_graph 组 10）。 */
 std::optional<RgFsrColorInput> graphFsrColorInput(
 	std::span<const RgCompiledAttachment> attachments) {
 	// 优先级链本体（收口前在 `Renderer::initFsr` 里是三次按名现查 + 两次比较）。
 	// 逐位不变式：ao_applied 在 → 取它且 baseSpace=false；否则 taa_out 在 → 取它且
-	// baseSpace=true（taa_out 自批 13.5 起已在基空间）；否则 scene_hdr → baseSpace=false。
+	// baseSpace=true（taa_out 自批 13.5 起已在基空间）；否则 ssr_applied → baseSpace=false
+	// （它由 scene_hdr 合成而来，抖动还在）；否则 scene_hdr → baseSpace=false。
 	if (const auto ao = graphAttachmentSlot(attachments, kAoAppliedName))
 		return RgFsrColorInput{.slot = *ao, .baseSpace = false};
 	if (const auto taa = graphAttachmentSlot(attachments, kTaaOutName))
 		return RgFsrColorInput{.slot = *taa, .baseSpace = true};
+	// 🔴 这一档是 2026-10-16 补的**漏档修复**：`initFsr` 的原始三档链没有 `ssr_applied`，
+	// 而装配层的四档链有 ⟹ `ssr + aa=fsr + 无 ao 附件`（ao_apply 跳过条件 2）时 FSR 会去读
+	// `scene_hdr` = **SSR 整条静默丢掉**（不报错、VVL 不抓、症状只是"SSR 没生效"）。
+	if (const auto ssr = graphAttachmentSlot(attachments, kSsrAppliedName))
+		return RgFsrColorInput{.slot = *ssr, .baseSpace = false};
 	if (const auto hdr = graphAttachmentSlot(attachments, kSceneHdrName))
 		return RgFsrColorInput{.slot = *hdr, .baseSpace = false};
 	return std::nullopt;
