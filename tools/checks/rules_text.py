@@ -35,7 +35,12 @@ from config import (ALLOWED_CPP, AGENTS_DOC_INDEX_SECTION, AGENTS_FILE,
                     IMGQA_SELFTEST_DECL_COUNT_RE, IMGQA_SELFTEST_EXPECT_RE,
                     IMGQA_SELFTEST_HEADER, IMGQA_SELFTEST_ROUTINE,
                     IMGQA_SELFTEST_TEST_RE, IMGQA_SELFTEST_TU_GLOB,
-                     MODERN_BANNED,
+                    JARGON_BASELINE_COMMENT, JARGON_BASELINE_FILE,
+                    JARGON_DISPOSITIONS, JARGON_DISPOSITION_REPLACE,
+                    JARGON_GLOSSARY_FILE, JARGON_SCAN_DIRS, JARGON_SCAN_EXCLUDE,
+                    JARGON_SCAN_FILES, JARGON_SCAN_SUFFIXES, JARGON_TABLE_HEAD,
+                    JARGON_UPDATE_CMD,
+                    MODERN_BANNED,
                     NEW_DELETE_EXEMPT, RETIRED_DOC_NAMES, ROOT,
                     RG_ENUM_VOCAB_ENUMS, RG_ENUM_VOCAB_SOURCE_FILE,
                     RG_ENUM_VOCAB_TABLE_FILE,
@@ -2007,3 +2012,182 @@ def decoration_order_predicate_checks() -> list[Warning]:
         f"② 本装饰器就是「必须最后装饰」的那一个 ⟹ 把它插入的 pass 的 `kXxxPassName` 加进 "
         f"`{DECORATION_ORDER_PREDICATE}` 的函数体（豁免名单由那里唯一决定）。🔴 本规则没有基线"
         "可登记。", "error") for n in missing]
+
+
+# ─── 对话黑话冻结（§16；对照表 = skill rgl-glossary）─────────────────────────────
+
+JARGON_SCAN_NOTES: dict[str, str] = {}
+
+_JARGON_ROW_RE = re.compile(r"^\|(.+)\|\s*$")
+
+
+def jargon_terms() -> tuple[dict[str, str], str | None]:
+    """解析 skill `rgl-glossary` 的对照表 → ({术语: 处置}, 失效原因)。
+
+    🔴 **表就是名单的唯一真相源**，config 里不抄词表——抄一份就得再写一条规则去对账两份副本，
+    而那正是本项目反复红过的「抄名单」形态（`rgl-doc-placement` §反模式）。表第一列 = 术语
+    （` / ` 分隔同义写法，各自独立成条），第三列 = 处置（`config.JARGON_DISPOSITIONS`）。
+
+    失效一律带原因返回：表读不到 / 找不到 `## 对照表` / 解析出 0 条 / 处置不在词表里。本规则的
+    判定是**数数**，名单空了不会少一条警告，而是整条规则静默变瞎——而"零警告"会被读成
+    "方言没再长大"（同 §1.6 / §10 / §14 的取向）。
+    """
+    src = read_text(Path(ROOT) / JARGON_GLOSSARY_FILE)
+    if src is None:
+        return {}, f"读不到 {JARGON_GLOSSARY_FILE}"
+    lines = src.splitlines()
+    try:
+        start = lines.index(JARGON_TABLE_HEAD)
+    except ValueError:
+        return {}, f"{JARGON_GLOSSARY_FILE} 里找不到「{JARGON_TABLE_HEAD}」小节（改名会让本规则静默变瞎）"
+    terms: dict[str, str] = {}
+    for line in lines[start + 1:]:
+        if line.startswith("##"):
+            break
+        m = _JARGON_ROW_RE.match(line)
+        if not m:
+            continue
+        cells = [c.strip().strip("`") for c in m.group(1).split("|")]
+        if len(cells) < 3 or cells[0] in ("术语", "") or set(cells[0]) <= {"-", ":", " "}:
+            continue  # 表头 / 分隔行
+        if cells[2] not in JARGON_DISPOSITIONS:
+            return {}, (f"「{JARGON_TABLE_HEAD}」表里「{cells[0]}」的处置是 {cells[2]!r}，"
+                        f"不在 {JARGON_DISPOSITIONS} 之内（处置写错 = 棘轮面静默变化）")
+        for term in (t.strip().strip("`") for t in cells[0].split("/")):
+            if term:
+                terms[term] = cells[2]
+    if not terms:
+        return {}, f"「{JARGON_TABLE_HEAD}」解析出 0 条术语（表格式变了而本规则没跟上 = 空跑）"
+    return terms, None
+
+
+def jargon_scan_files() -> tuple[list[str], str | None]:
+    """棘轮扫描面 = **驱动对话文体的那一层**（AGENTS + docs + skills 的 .md）。
+
+    不含 `rgl/` 与 `tools/` 的源码注释：那边这套词有局部上下文、单条读得懂，一次性清洗是纯
+    churn；而对话文体只由每次开工都进上下文的那一层决定，钉那里才命中成因。
+    对照表本体排除——它必须把这些词写出来才能翻译它们（否则它自己就是最大的"违规"文件）。
+    """
+    if missing := [f for f in JARGON_SCAN_FILES if not (Path(ROOT) / f).is_file()]:
+        return [], f"扫描面白名单文件不存在：{missing}"
+    out = list(JARGON_SCAN_FILES)
+    for d in JARGON_SCAN_DIRS:
+        base = Path(ROOT) / d
+        if not base.is_dir():
+            return [], f"扫描面目录不存在：{d}/"
+        out += [rel_posix(p) for p in base.rglob("*")
+                if p.is_file() and p.suffix in JARGON_SCAN_SUFFIXES]
+    if not (out := sorted(set(out) - set(JARGON_SCAN_EXCLUDE))):
+        return [], "扫描面为空"
+    return out, None
+
+
+def jargon_scan() -> tuple[dict[str, str], dict[str, str], str | None]:
+    """跑一遍扫描面 → ({术语: 处置}, {文件: 文本}, 失效原因)；顺带记读数供收账命令自检。"""
+    JARGON_SCAN_NOTES.clear()
+    terms, err = jargon_terms()
+    if err:
+        return {}, {}, err
+    files, err = jargon_scan_files()
+    if err:
+        return {}, {}, err
+    texts: dict[str, str] = {}
+    for rel in files:
+        if (src := read_text(Path(ROOT) / rel)) is None:
+            return {}, {}, f"扫描面文件读不到：{rel}"
+        texts[rel] = src
+    ratchet = sorted(t for t, d in terms.items() if d == JARGON_DISPOSITION_REPLACE)
+    JARGON_SCAN_NOTES["scan"] = (f"{len(texts)} 个文件 / 棘轮词 {len(ratchet)} 条")
+    return terms, texts, None
+
+
+def jargon_readout() -> str:
+    """最近一次扫描的覆盖面读数（空 = 扫描面没跑起来，收账命令据此**拒绝落笔**）。"""
+    return JARGON_SCAN_NOTES.get("scan", "")
+
+
+def jargon_counts() -> dict[str, int]:
+    """逐文件计数 → `{"文件::词": 次数}`（只数处置为「换掉」的词，零次不登记）。"""
+    terms, texts, _ = jargon_scan()
+    ratchet = {t for t, d in terms.items() if d == JARGON_DISPOSITION_REPLACE}
+    return {f"{rel}::{t}": n for rel, src in texts.items() for t in ratchet if (n := src.count(t))}
+
+
+def load_jargon_baseline() -> tuple[dict[str, int], str | None]:
+    """读黑话棘轮基线 → ({`文件::词`: 允许条数}, 不可用原因)。
+
+    空表 / 坏格式一律返回原因串而不是当"零额度"用——同 `load_doc_pointer_baseline`：
+    把"没数"读成"干净"就是假绿。
+    """
+    path = Path(ROOT) / JARGON_BASELINE_FILE
+    if not path.is_file():
+        return {}, f"基线文件不存在：{JARGON_BASELINE_FILE}"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        return {}, f"基线文件读不出来：{JARGON_BASELINE_FILE}（{type(e).__name__}: {e}）"
+    if not isinstance(data, dict) or not isinstance(data.get("files"), dict):
+        return {}, f"基线顶层或缺 `files` 对象（格式不符）：{JARGON_BASELINE_FILE}"
+    files = data["files"]
+    if bad := sorted(str(k) for k, v in files.items()
+                     if isinstance(v, bool) or not isinstance(v, int)):
+        return {}, f"基线 `files` 有非整数条数：{JARGON_BASELINE_FILE} 的 {bad[:3]}"
+    return {str(k): int(v) for k, v in files.items()}, None
+
+
+def write_jargon_baseline(counts: dict[str, int]) -> str:
+    """按当前条数重写棘轮基线（收账）；返回写入路径。"""
+    files = {k: int(v) for k, v in sorted(counts.items())}
+    path = Path(ROOT) / JARGON_BASELINE_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(
+        {"_comment": JARGON_BASELINE_COMMENT,
+         "total": sum(files.values()), "files": files},
+        ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return JARGON_BASELINE_FILE
+
+
+def jargon_ratchet_checks() -> list[Warning]:
+    """冻结本项目自造隐喻的增长（warning 级）+ 护栏自己失效（error 级）。
+
+    **立论**：这套方言不是"模型爱装"。AGENTS.md + skills 每次开工都进上下文，模型照那个文体
+    回话 ⟹ **文档是方言的生成器**；而 AGENTS 的预算制（"写结论 + 指针不写论证"）让一个已付过
+    钱的隐喻比一句白话便宜 ⟹ 激励正好在造词：写文档省下的力气，全部转成用户**每一次对话**的解码
+    成本，且没有任何规则给这笔账定价。本条把这笔账的**增量**挂回写文档的人身上。
+
+    **判定**（warning 级，两条）：
+    ① **棘轮**：处置为「换掉」的词（纯隐喻、无代码 / 命令 / 配置锚点）在某文件的出现次数
+       **> 基线** → 点名。存量钉死只准降不准升，所以今天不必清洗 866 处「红线」，但**谁也别再加**。
+    ② **死词**：对照表登记了、扫描面里却 0 次 → 点名。表里留一条没人用的词 = 下一个会话照旧
+       拿它当权威解释，而它解释的东西可能已经不存在（同 §1.9「副本必然漂」）。
+
+    **失效出声**（error 级）：对照表读不到 / 小节改名 / 解析出 0 条 / 处置写错 / 扫描面起不来 /
+    基线不可用——本规则是数数的，"没数"必须区别于"零新增"。
+
+    **不判什么**：对话里的用词（回复不是仓库文件，写不出断言）。那条住全局
+    `~/.config/opencode/AGENTS.md`，是注释不是防线，本条不假装它能管到对话。
+    """
+    terms, texts, err = jargon_scan()
+    if err:
+        return [Warning(JARGON_GLOSSARY_FILE, 1,
+            f"黑话冻结**无法执行**（{err}）——这不是「方言没再长大」", "error")]
+    warnings: list[Warning] = []
+    for term, disp in sorted(terms.items()):
+        if not any(term in src for src in texts.values()):
+            warnings.append(Warning(JARGON_GLOSSARY_FILE, 1,
+                f"对照表登记「{term}」（处置 {disp}），但扫描面 0 次——这个词已没人用（删这条）"
+                "或写法变了（改表）；表里留一条没人用的词，下一个会话仍会拿它当权威解释"))
+    baseline, err = load_jargon_baseline()
+    if err:
+        warnings.append(Warning(JARGON_GLOSSARY_FILE, 1,
+            f"黑话棘轮基线不可用（{err}）——此时「零警告」不代表没新增黑话；"
+            f"用 `{JARGON_UPDATE_CMD}` 重建", "error"))
+        return warnings
+    for rel, src in sorted(texts.items()):
+        for term in sorted(t for t, d in terms.items() if d == JARGON_DISPOSITION_REPLACE):
+            if (n := src.count(term)) > (allowed := baseline.get(f"{rel}::{term}", 0)):
+                warnings.append(Warning(rel, 1,
+                    f"新增对话黑话「{term}」：{allowed} → {n} 次。这个词在对照表里的处置是「换掉」"
+                    "（纯隐喻、无代码锚点，删掉不丢信息）——**改写成本句的白话**，不是来基线里"
+                    f"登记额度；白话写法 → skill rgl-glossary（真清掉一批后 `{JARGON_UPDATE_CMD}` 收账）"))
+    return warnings

@@ -36,6 +36,8 @@ Vulkan 现代特性学习项目。Mesh shader 渲染管线，使用 ShaderObject
 - **`rgl-new-module`** — 新建/拆分 `.cppm`、rlstd/GMF 细则、impl partition 分层原则
 - **`rgl-test-discipline`** — 写测试硬纪律（阳性锚点/变异红线/沉淀地址/modules 坑；写单测、加用例、收账教训前必读）
 - **`rgl-doc-placement`** — 改 AGENTS.md 前的归宿裁决五问 + **抄名单反模式**（**拟向 AGENTS 增删任何段落前必读**）
+- **`rgl-glossary`** — 项目自造简写的白话对照表；**向用户解释任何项目概念前先查它**，命中就用
+  表里的白话说法（术语名单以那张表为唯一真相源，本行不抄；对话语域 → 全局 AGENTS）
 
 ## 构建
 

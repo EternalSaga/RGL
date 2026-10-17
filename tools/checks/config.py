@@ -482,3 +482,37 @@ DECORATION_ORDER_PREDICATE = "graphDecoratedTooLate"
 DECORATION_ORDER_DECORATOR_RE = r"^[A-Za-z_][A-Za-z0-9_:<>&* ]* (decorate[A-Z]\w*Pass)\s*\("
 # 从次序谓词函数体反推豁免名单用的式子（`k` + PascalCase 段 + `PassName`）。
 DECORATION_ORDER_LATE_NAME_RE = r"\bk([A-Z]\w*)PassName\b"
+
+# ─── 对话黑话冻结（规则 = rules_text.jargon_ratchet_checks，§16）───
+# 病根不是"模型爱装"：AGENTS.md + skills 每次开工都进上下文，模型照那个文体回话 ⟹ **文档是这套
+# 方言的生成器**。而 AGENTS 的预算制（"写结论 + 指针不写论证"）让一个已付过钱的隐喻比一句白话更
+# 便宜 ⟹ 激励正好在造词：写文档省下的力气全部转成用户每次对话的解码成本，且没有任何规则给这笔账
+# 定价。本规则管两件能机器判的事：① 方言**不再长大**（处置=换掉的词，逐文件只准降不准升）
+# ② 表里的词全仓没人用 = 表漂了 → 点名。外加"护栏自己失效必须出声"（表读不到 / 小节改名 /
+# 解析出 0 条 / 处置写错 / 扫描面起不来 / 基线不可用 → error）。对话语域本身写不出断言，
+# 那条住全局 `~/.config/opencode/AGENTS.md`（注释，不是防线，本规则不假装它是）。
+JARGON_GLOSSARY_FILE = ".opencode/skills/rgl-glossary/SKILL.md"
+# 🔴 术语名单与"哪些词该换掉"**都不在这里抄一份**——抄一份就得再写一条规则去对账两份副本，
+# 而那正是本项目反复红过的「抄名单」形态。唯一真相源 = 对照表的 markdown 表格本身：
+# 第一列 = 术语（` / ` 分隔同义写法），第三列 = 处置（下面三个标记之一）。config 只拿判据参数。
+JARGON_TABLE_HEAD = "## 对照表"
+JARGON_DISPOSITION_REPLACE = "换掉"   # → 进棘轮：扫描面里该词次数只准降不准升
+JARGON_DISPOSITION_KEEP = "保留"      # → 不棘轮，但仍受死词检查（表里有、全仓没人用 = 表漂了）
+JARGON_DISPOSITION_AMBIGUOUS = "两义"  # → 一词指两件事，同 保留；表里必须写清是哪两件
+JARGON_DISPOSITIONS = (JARGON_DISPOSITION_REPLACE, JARGON_DISPOSITION_KEEP,
+                       JARGON_DISPOSITION_AMBIGUOUS)
+# 棘轮扫描面 = **驱动对话文体的那一层**（AGENTS + skills + docs），不含 rgl/ 与 tools/ 源码注释：
+# 那边 判据 1713 / 门 1438 次，一次性清洗是纯 churn，且注释里的用法有局部上下文、读得懂。
+JARGON_SCAN_FILES = ("AGENTS.md",)
+JARGON_SCAN_DIRS = ("docs", ".opencode/skills")
+JARGON_SCAN_SUFFIXES = (".md",)
+# 对照表本体与**规则全景文档**必须把这些词点出来才能治理它们 ⟹ 从扫描面排除（否则它们自己就是
+# 最大的违规文件）。边界：只有「以这套词为对象」的文档可进这里；写正文时想用某个词，改用白话。
+JARGON_SCAN_EXCLUDE = (JARGON_GLOSSARY_FILE, "docs/风格检查规则.md")
+JARGON_BASELINE_FILE = "tools/checks/jargon_baseline.json"
+JARGON_UPDATE_CMD = "python3 tools/checks/main.py --update-jargon-baseline"
+JARGON_BASELINE_COMMENT = (
+    "对话黑话棘轮基线（§16：对照表里处置为「换掉」的词在 AGENTS / docs / skills 的出现次数，"
+    "按 文件×词 记）。这些是**存量**，只准降不准升：新增一条 = 有人用隐喻省掉了一句白话，"
+    "而这句话的成本改由下一个读它的人付。处置是改写，不是来这里登记额度；确实清掉一批后用 "
+    "`python3 tools/checks/main.py --update-jargon-baseline` 收账。白话写法 → skill rgl-glossary。")

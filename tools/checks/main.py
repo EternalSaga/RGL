@@ -80,12 +80,14 @@ from rules_text import (agents_doc_index_checks, agents_index_status_checks,
                         generated_init_readout,
                         graph_fact_predicate_checks, graph_fact_predicate_readout,
                         imgqa_selftest_checks, imgqa_selftest_readout,
+                        jargon_counts, jargon_ratchet_checks, jargon_readout,
                         judgments_pointer_checks,
                         docs_status_checks, forbidden_vulkan_checks,
                         rg_enum_vocab_checks, rg_enum_vocab_readout,
                         rpc_route_checks, rpc_route_readout,
                         slang_load_bitcast_checks, meshlet_spec_checks,
                         modern_cpp_checks, text_checks, load_doc_pointer_baseline,
+                        load_jargon_baseline, write_jargon_baseline,
                         write_doc_pointer_baseline, write_generated_init_baseline)
 from models import Thresholds, Warning
 from tool_baseline import compare as compare_baseline
@@ -192,6 +194,9 @@ def parse_args() -> argparse.Namespace:
                     help="用当前「对反射生成物的位置聚合初始化」条数重写 "
                          "generated_init_baseline.json（§12 债-118 的存量棘轮收账；上升时"
                          "**不要**用它，处置是把调用点改成 `.字段 =` 指定初始化器）")
+    ap.add_argument("--update-jargon-baseline", action="store_true",
+                    help="用当前「对话黑话」条数重写 jargon_baseline.json（§16 存量棘轮收账；"
+                         "上升时**不要**用它，处置是把那句隐喻改写成白话 → skill rgl-glossary）")
     return ap.parse_args()
 
 
@@ -312,6 +317,21 @@ def main() -> None:
         warnings.extend(docs_status_checks())
         warnings.extend(agents_doc_index_checks())
         warnings.extend(agents_index_status_checks())
+        # 对话黑话棘轮收账（§16）：先扫一遍拿计数 → 重写基线 → 下面正式跑时与**新**基线比对。
+        # 🔴 同样「扫描面没跑起来就拒绝落笔」：把"没数"写进基线 = 之后每次跑都零命中 = 护栏
+        # 永久变瞎而"零警告"照旧（同 §1.7 的收账纪律）。
+        if args.update_jargon_baseline:
+            jargon_counts()
+            if not jargon_readout():
+                print("[style-check-ERROR] 黑话棘轮基线**未重写**：本次扫描面未运行"
+                      "（覆盖面读数为空）——先修规则，别把「没数」写进基线", file=sys.stderr)
+                sys.exit(2)
+            old_jargon = load_jargon_baseline()[0]
+            merged = {k: v for k, v in jargon_counts().items() if v > 0}
+            path = write_jargon_baseline(merged)
+            print(f"[style-check] 黑话棘轮基线已重写: {sum(old_jargon.values())} → "
+                  f"{sum(merged.values())} 条 / {len(old_jargon)} → {len(merged)} 个键 → {path}")
+        warnings.extend(jargon_ratchet_checks())
         # 反引号指针棘轮收账（先扫一遍拿计数 → 重写基线 → 下面正式跑时与**新**基线比对，
         # 形态同 --update-tool-baseline：重写必然持平，不会自己喊自己上升）
         if args.update_doc_pointer_baseline:
@@ -507,6 +527,12 @@ def main() -> None:
         selftest_readout = imgqa_selftest_readout()
         print("[style-check] imgqa selftest 对账: "
               + (selftest_readout if selftest_readout else "**本次未执行**（规则没跑到）"))
+        # 对话黑话棘轮的读数（§16）：覆盖面 + 棘轮词数 + 基线存量。「0 警告」既可能是"没人再
+        # 新增黑话"也可能是"表解析出 0 条所以没词可数"——两个数一起印，一眼可分（同 §10–§13）。
+        jargon_note = jargon_readout()
+        print("[style-check] 对话黑话棘轮: "
+              + (f"{jargon_note} / 基线存量 {sum(load_jargon_baseline()[0].values())} 条"
+                 if jargon_note else "**本次未执行**（规则没跑到）"))
         if rgl_notready:
             print("[style-check] 提示: 跳过 = modmap/BMI 构建产物缺失（clean 后首次构建属正常，"
                   "与编译并行时尚未生成）；本次仅跑纯文本规则，编译完成后重跑即全量生效")
