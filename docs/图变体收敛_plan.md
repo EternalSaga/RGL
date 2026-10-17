@@ -1,112 +1,103 @@
 # 图变体收敛（forward / deferred / offscreen）
 
-> **状态：调研**（2026-10-17）。本文只出**事实与模型**，不含已拍板的施工承诺。
+> **状态：调研**（2026-10-17，同日二改：用户回答否掉了初稿的主结论，见 §3）。
+> 本文只出**事实与模型**，不含已拍板的施工承诺。
 > 上游：`docs/配置正交性_plan.md`（债-129）；MDI 侧定案：`docs/mdi_plan.md` §19.20。
 
-## 0. 一句话结论
+## 0. 结论
 
-**该砍的是 `RgGraphVariant` 这枚枚举，不是 forward 这个渲染器。**
-光照路径（forward / deferred）与呈现方式（采样上屏 / 离屏 + blit）是**两条正交轴**，
-今天被压成一枚三值枚举。拆开之后，"要不要留 forward"才第一次变成一个**纯成本问题**，
-而不是一个背着"模式"包袱的问题。
+**该砍的是 `RgGraphVariant` 这枚枚举，而 `offscreen` 这一档可以直接删——不是改造、不是补格。**
+工具依赖的是**离屏能力**（离屏 RT + 回读），它与 variant 无关且每个图都具备；
+`variant = "offscreen"` 这张 blit 呈现图**全仓零使用者**。
 
-## 1. 设计种子（用户 2026-10-17 原话）
+删完之后 `variant` 只剩光照路径一轴，而"配置面不该有这一轴"是另一刀（§6 级联末端）。
+
+## 1. 设计种子（用户 2026-10-17 两句）
 
 > 「offscreen 是固有能力，讲道理和渲染模式没有任何关系。」
+> 「offscreen is needed by llm visual mode and imgqa test. **not needed by user**.
+> so **the config is not needed** unless you prefer to use the config to launch offscreen mode.」
 
-这句话本身就是判据：`offscreen` 今天住在 `RgGraphVariant{forward, deferred, offscreen}` 里，
-等于把"怎么把画面弄上屏"当成"用哪条光照路径"的一种。
+两句合起来是完整裁决：offscreen 是**工具侧需求**，所以它**不该出现在配置面**——
+既不该是 `variant` 的一个值，也不该新设一个键。
 
-## 2. 两轴模型：摊开是 4 格，今天只有 3 格
+## 2. 关键区分：`kind = offscreen`（承重）vs `variant = offscreen`（零使用）
 
-| 光照路径 ＼ 呈现方式 | 采样上屏（pass 直接写 swapchain） | 离屏 + blit（渲到 RT 再 composite） |
-|---|---|---|
-| **forward**（直接光，画在 opaque 段） | ✅ 今天的 `forward` | ✅ 今天的 `offscreen` |
-| **deferred**（G-buffer + light pass） | ✅ 今天的 `deferred` | ❌ **不存在** |
+| | 是什么 | 谁在用 | 判定 |
+|---|---|---|---|
+| `RgAttachmentKind::offscreen` | 「渲到一张不是 swapchain 的图」 | `render_graph_builtin.cppm` 里 **13 处**：`scene_hdr` / `ao` / `gbuffer_*` / `scene_rt` 全是离屏 RT；`RenderTargetCache` 整个就是离屏 RT 缓存 | 🔴 **固有能力， pervasive，动不得** |
+| `RgGraphVariant::offscreen` | 一张「三段渲 `scene_rt` + composite **blit** 上屏」的具体图 | **零**：`configs/` 与 `qa/configs/` 零命中、`tools/imgqa/` 零命中、llm_debug 与 `frame_capture` 的截图/回读路**根本不引用 variant**（实测 grep 空） | ✅ **只有 CLI 的 `choices` 名单里还挂着它** |
 
-⟹ 🔴 **"砍 offscreen" 不是删代码，是补上缺的第 4 格。** 把 offscreen 从变体降级成呈现属性之后，
-`deferred + 离屏` 必须能跑——否则只是把一格的实现换个名字。
+⟹ 用户那句「固有能力」在代码里就是 `kind = offscreen`；而 `variant = offscreen` 是把它
+错误地实例化成了一种"渲染模式"。
 
-## 3. 🔴 核心发现：这枚枚举是**没有消费者的真相源**
+## 3. 初稿错在哪（记一条，防后来者重犯）
 
-`rgl/render_graph.cppm:649-657` 的接口注释（2026-10-02 收口时写下的裁决原文）：
+初稿按「光照路径 × 呈现方式 = 两轴 4 格」推出**缺 `deferred + 离屏` 那一格、砍 offscreen 要先补它**。
+**这条被用户的回答直接否掉**：工具要的是离屏 RT 与回读（每格都有），不是"blit 呈现"这个模式。
+
+教训：**两轴模型是"什么值得存在"的判据，不是"什么该被实现"的判据。** 空格子不一定要填——
+先问那格有没有人站。这次是我拿模型的整齐度当了需求。
+
+## 4. 🔴 `variant` 是一枚**没有消费者的真相源**
+
+`render_graph.cppm:649-657` 的裁决原文（2026-10-02 写下）：
 
 > 它与配置层的 `RgGraphVariant::deferred` **是两件事**……消费方要的是"有没有人在跑 deferred
 > 光照 / 有没有 G-buffer 可消费"，不是"配置里 variant 写了什么"——**自定义 Lua 图可以在
 > forward 变体下手写 light pass**。两个真相源的分歧交给 gate_lint 交叉校验，**不在这里抹平**。
 
-实测支持这句话：`deferredLight`（图事实）的全部生产消费者只有 **3 个**
-（`izbPreFrame` / `evssmPreFrame` 早退 + `gate_lint` 算 `Ctx`），**没有一个消费者用 variant 意图**。
-`CompiledGraphResult::variant` 在生产侧的唯一消费者就是**那条交叉校验本身**
-（`gate_lint_impl.cppm:330-337`：`variant==deferred && !deferredLight` → error，反向 → warn）。
+实测支持：图事实 `deferredLight` 有 3 个生产消费者（`izbPreFrame` / `evssmPreFrame` 早退 +
+`gate_lint` 算 `Ctx`）；而 `CompiledGraphResult::variant` 在生产侧的**唯一**消费者就是那条
+交叉校验本身（`gate_lint_impl.cppm:330-337`）。
 
-⟹ 这正是本项目哲学第 1 条点名的形态：**两个真相源 + 一条对账判据**，而对账判据的存在本身
-就在为那个**本该删掉的第二真相源**交维护税。删掉枚举，交叉校验整条消失（不是搬家）。
+⟹ 本项目哲学第 1 条点名的形态：**两个真相源 + 一条对账判据**，而对账判据的存在本身就在为那个
+本该删掉的第二真相源交维护税。删枚举 ⟹ 交叉校验整条消失，不是搬家。
 
-⚠ 另有一条**活雷**（同因）：配置文件找不到 → `warn "using default 3-pass graph"` + 返回 **forward**，
+⚠ 同因的**活雷**：配置文件找不到 → `warn "using default 3-pass graph"` + 返回 **forward**，
 而**出厂默认是 deferred**（`configs/render_graph.lua:31`）⟹ 路径写错就静默换一个渲染器，
-且那句 warn 的 pass 数还是错的（forward 是 5 pass）。代码缺省 = forward、配置缺省 = deferred，
-两个缺省不一致。
+且 warn 里的 pass 数还是错的（forward 是 5 pass）。代码缺省 = forward、配置缺省 = deferred。
 
-## 4. 缺的第 4 格成本：低
+## 5. 删除级联（这才是"更好维护"的实际内容）
 
-`offscreenRenderGraphDesc`（`render_graph_builtin.cppm:107-140`）的结构是
-三段渲 `scene_rt` + 一枚 `composite` **blit**（`transferRead → transferWrite`），
-`scene_rt` 格式留 `inherit` 由执行器解析成 swapchain 格式以满足 LINEAR blit 前提。
+不是"少一个 if"，是一串**只服务于被删形态的判据与装饰**跟着消失：
 
-⟹ `deferred + 离屏` 的改动是：**把 deferred 链尾 `tonemap` 的输出附件从 `swapchain` 改成 `scene_rt`，
-再追加一枚 composite blit**。HDR→SDR 仍在 tonemap 里做完，`scene_rt` 本来就是 LDR，
-blit 兼容前提自动满足。**没有渲染难题，只有图描述今天是一张整块而不是两个可组合维度。**
+| 步 | 删什么 | 连带消失 | 证据 |
+|---|---|---|---|
+| ① | `variant = "offscreen"` 那张图 | `composite` blit pass、`scene_rt` 附件、`--variant offscreen` CLI 档 | 零使用者（§2） |
+| ② | `variant = "forward"` | **6 个 forward-only frag + 12 条 CMake 目标**；`styleMap` 分支（含与 deferred **不一致的 throw**）；D1 对等这条决定的 **18 处 / 12 文件**注释副本 | `CMakeLists.txt:30-67`、`main_scene.cppm:293-300` |
+| ② | 同上 | **Lua 数据驱动写图整条路**：`readRoleList` 18 + `readAttachments` 40 + `readPass` 35 + `readPasses` 15 = **108 行**失去唯一调用者（`resolveVariantConfig` 对 preset 提前 return，只有 forward 落到解析） | `render_graph_config_impl.cppm:305-319` / `:367-368` |
+| ③ | ①+② 之后 | 🔴 **装饰器锚点的 nullopt 分支不可达** ⟹ S3-C 那 **4 条 `!consumerIdx` 硬失败 + 1 条 D 类 G-buffer 契约**（forward 才有）连同其用例一起删。原因：forward 与 deferred 的 `tonemap` 都「写 swapchain 且 sampleRead 场景色」，锚点必命中；而唯一能造出"无采样上屏消费者"的图正是已删的 offscreen 与自定义 Lua 图 | `render_graph_decorate.cppm:88-99` |
+| ④ | 只剩 deferred 之后 | `graphHasDeferredLight` 变成**恒真** ⟹ 3 条 `deferredLight` lint error + 2 处运行期早退 + `izb_mask`/`evssm_moments` 的 `mayBeAbsent` 全删。⚠ 恒真的判据**比没有判据更坏**（它让"绿"看起来像结论） | `gate_lint_impl.cppm:113-133` |
+| ⑤ | 级联末端 | 🔴 **`configs/render_graph.lua` 整份文件消失**——实测它的顶层键只有 `variant` / `attachments` / `passes`，即"选一张 preset 或自己写一张图"；两者都没了，这文件就没有内容可表达 | 实测顶层键 |
 
-## 5. 锚点泛化：C 类 5 条硬失败的存在理由是**锚点过窄**
+**保留**：B 类次序守卫（「TAA 必须最后」那类）——它与变体无关，是 S3 的真·剩余。
+**保留**：动态渲染图（`declarePass` / `withdrawPass`）——运行期图派生不受影响，死的只是**文件**写图。
 
-装饰器找落点用的判据（`render_graph_decorate.cppm:88-99`）：
+## 6. forward 的成本表（拆轴后它只剩成本，没有模式包袱）
 
-```cpp
-const bool writesSwapchain = any_of(p.outputs, attachment == "swapchain");
-if (writesSwapchain && sampledColorName(desc, p)) return i;   // 要求「采样一个色附件」
-```
+| 项 | 读数 |
+|---|---|
+| 🔴 **闭式解探针绑 forward** | `qa/configs/analytic/render_graph.lua:31 = "forward"` + `scene.lua:21` 的 forward 规格。它是五层判据里**唯一不吃基线图像**的那层 |
+| forward 的逐位锚点 | **0 条** ⟹ 今天只被"必须能起跑"覆盖，像素正确性全靠上面那层钉 |
+| 二相性漏进错误处理 | 同一种"规格缺失"：deferred **静默回落** `deferred_geometry`，forward **throw**（`main_scene.cppm:293-300`） |
+| 三套 qa 冻结靶 | `analytic` / `nm_rig` / `env_band` 用 `variant = "forward"`；实测它们的附件/pass 名集合与出厂 forward 图**逐字相同**（只是"选 forward"，不是自定义图） |
 
-其注释自陈：「（transferRead 不是 sampleRead）⟹ 返回 nullopt，两个装饰器都自动不参与该图形态」。
+🔴 **唯一硬前置：闭式解探针重立到 deferred。** 它要额外建模 G-buffer 编码（量化），是真活。
+**探针没重立之前不许删 forward**——那是拆掉自己唯一的无基线判据去换维护面。
 
-⟹ 它真正要找的**不是"采样上屏的消费者"，而是"呈现色的终端生产者"**——后者在 4 格里都存在：
-采样上屏时是那个写 swapchain 的 pass；blit 上屏时是写 blit 源 RT 的那个 pass。
-锚点按后者重写后，**债-129 S3-C 那 5 条「无落点」硬失败的大部分触发面自己消失**
-（它们拒的从来不是"离屏"，是"呈现方式与装饰器的接线假设不匹配"）。
+## 7. 排序
 
-## 6. forward 是**独立**问题，且拆轴后只剩成本
+1. **债-129 剩余项先做完**（嵌套键护栏 → 拍板 A）。它们只碰配置面与 lint 表，不依赖变体存废；
+   且 D 刀已把 A 要动的行塌成块条目（`142f7c2`），现在改只碰块声明。
+2. **然后单独立项做闭式解探针重立**（§6 硬前置，要单独估一次成本）。
+3. **最后走 §5 的级联**，按 ①→⑤ 逐刀，每刀独立可验收（逐位锚 + `just gates`）。
+   ⚠ ① 可以**立刻单独做**（零前置、零使用者），且它一动，S3-C 的 4 条 C 类硬失败就只剩
+   "自定义 Lua 图"一个触发面——这本身就是"① 值不值得先做"的读数。
 
-拆轴之后"要不要留 forward"不再涉及模式，只剩这张成本表（2026-10-17 实测）：
+## 8. 待决
 
-| 项 | 读数 | 证据 |
-|---|---|---|
-| 闭式解探针绑 forward | 🔴 **唯一不吃基线图像**的判据层，`variant = "forward"` | `qa/configs/analytic/render_graph.lua:31` + `scene.lua:21` 的 forward 规格 |
-| Lua 数据驱动写图 | forward 是**唯一入口**（deferred/offscreen 命中 preset 即 return、文件 passes 忽略） | `render_graph_config_impl.cppm:305-319` / `:367-368` |
-| 该路的解析代码 | 四个函数 **108 行**（`readRoleList` 18 / `readAttachments` 40 / `readPass` 35 / `readPasses` 15）失去唯一调用者 | 实测行号 |
-| 配置里只有 forward 才读的块 | **46 行**（`attachments` 32–40 + `passes` 41–77） | `configs/render_graph.lua` |
-| forward-only 着色器 | **6 个 frag** + 12 条 CMake 目标 | `rgl/shaders/model*.frag.slang`、`rgl/CMakeLists.txt:30-67` |
-| D1 对等这条决定的副本 | **18 处 / 12 个文件**（代码 + 配置 + shader 注释），其中 2 份已过期且方向误导 | 实测 grep |
-| forward 的逐位锚点 | **0 条** ⟹ 它今天只被"必须能起跑"覆盖，像素正确性全靠闭式解探针一家钉 | `docs/还债总账.md` 锚点小节 |
-| 二相性漏进错误处理 | 同一种"规格缺失"：deferred **静默回落** `deferred_geometry`，forward **throw** | `main_scene.cppm:293-300` |
-
-🔴 **红线：闭式解探针没重立到 deferred 之前，不许删 forward。** 那是拆掉自己唯一的无基线判据去换维护面。
-
-## 7. 与在飞的债-129 的关系
-
-- **不冲突**：D 刀塌缩的块条目全是 owner 行，**一条 variant 行都没有**（已落地，`142f7c2`）；
-  S3 剩余的「装饰次序契约」也不依赖变体存废。
-- **会被本文改写的**：① 拍板 A 的 `meshlet.enable` 改名（要动的 lint 行刚被 D 塌成块条目，
-  现在改只碰块声明——**D 先做已兑现这个收益**）；② S3-C 那 5 条硬失败的**消息文案**（锚点泛化后
-  "offscreen 变体用 blit 上屏"那句要改成呈现方式口径）；③ 交叉校验整条删除。
-- **顺序建议**：本文的**拆轴**（§4 + §5）应排在债-129 剩余项（嵌套键护栏 → 拍板 A）**之后**，
-  因为它改的是图描述形态，而剩余项只碰配置面与 lint 表；反过来先拆轴会让剩余项踩在流沙上。
-
-## 8. 待决（我不替项目主人拍的）
-
-1. **图描述住哪里**：拆轴后 `deferred` / `offscreen` 还是 C++ 硬编码 preset，还是全部下沉成
-   Lua 数据（那 §6 的"108 行解析路"就从成本变成**唯一路径**，删 forward 的账要重算）？
-2. **第 4 格要不要真做**：`deferred + 离屏` 有消费者吗？今天 `offscreen` 的全部用途是 DIAG 截图，
-   而**源配置无一使用 offscreen**（`configs/`、`qa/configs/` 零命中）⟹ 若第 4 格无人要，
-   那"拆轴"的收益就只剩"删掉一枚枚举 + 一条交叉校验"，值不值要看 §3 那条活雷你多在意。
-3. **闭式解探针重立的代价**：deferred 上要做闭式解，得额外建模 G-buffer 编码（量化）。
-   这是删 forward 的**唯一硬前置**，值得单独估一次。
+1. §5 的 ② 之后，**还要不要保留"用文件写图"这个能力**？保留 = 那 108 行解析路与 46 行配置块留着，
+   且 C 类锚点仍可达（自定义图能造出无采样上屏消费者）；不保留 = 级联继续走到 ⑤。
+   本项目是学习项目，"图是数据"这件事有教学价值——**这条我不替你拍**。
+2. 闭式解探针重立的代价（§6）——要不要做、什么时候做。
