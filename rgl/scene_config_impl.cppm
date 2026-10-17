@@ -90,8 +90,10 @@ namespace {
 /**
  * 键表 = 「解析器认识哪些键」的单一真相源（diagnostics 的 kGateEcho 同角色，债-11）：
  * ① 未知键 lint 的判据表；② tests 里「读过的键集合 == 键表键集合」双向覆盖率断言的输入。
- * 子表字段用 `表名.字段`；map 段（styles/deferred_styles）键名任意只记表名，
- * 数组段（entities/pipelines/lights）按条目字段记 `表名.字段`（条目内字段名固定）。
+ * 子表字段用 `表名.字段`；map 段（styles/deferred_styles）键名任意只记表名——债-129
+ * 第三刀起这同时是**下钻豁免声明**（未知键 lint 只钻键表声明了 `块.` 点分前缀的块，
+ * 裸表名 = 不钻，见 declaresNestedKeys）；数组段（entities/pipelines/lights）按条目
+ * 字段记 `表名.字段`（条目内字段名固定）。
  * ⚠ **原生数组**（尺寸自动推导）不是 `std::array<T, N>`——shadow_config_impl 同款教训：
  * N 写错时 std::array 不报错而是零填充。
  */
@@ -143,39 +145,79 @@ constexpr std::string_view kSceneKeys[]{
 };
 
 /**
- * 「文件里实际出现的顶层键」采集（diagnostics 的 collectPresentKeys 同构，未知键 lint
- * 的输入；子表只记表名——present 来自文件本体不来自读取动作）。
+ * 键表是否声明了 `块.` 前缀的点分键（= 该块是**固定字段块**，可下钻；债-129 第三刀，
+ * runtime_config_impl 同构）。🔴 本 loader 是这条前缀条件存在的理由：scene.lua 的
+ * styles/deferred_styles 是**开放 map**（子键 = 用户自起的材质名，键表里没有），
+ * 键表只有裸表名 ⟹ false ⟹ 不钻——无条件下钻会把 `styles.pbr` 报成未知键。
+ * 数组段（entities/pipelines/material_styles）虽声明了点分前缀，但条目子键是数字
+ * 不是字符串键 ⟹ 下钻天然不贡献。
+ * @param block 顶层键名（候选块名）
+ */
+bool declaresNestedKeys(std::string_view block) {
+	for (const auto& k : kSceneKeys) {
+		const auto dot = k.find('.');
+		if (dot != std::string_view::npos && k.substr(0, dot) == block)
+			return true;
+	}
+	return false;
+}
+
+/**
+ * 「文件里实际出现的键」采集（diagnostics 的 collectPresentKeys 同构，未知键 lint
+ * 的输入；present 来自文件本体不来自读取动作）。顶层键照旧记；债-129 第三刀：键表声明了
+ * `块.` 点分前缀的块（ao/taa/entities/pipelines/light/lights/environment/material_styles）
+ * **下钻一层**，字符串子键以 `块.子键` 追加；开放 map（styles/deferred_styles）不钻
+ * （判据见 declaresNestedKeys）。
  * @param root 配置根表
  * @param trace 键轨迹（present 追加目标）
  */
 void collectPresentKeys(const sol::table& root, SceneKeyTrace& trace) {
 	for (auto&& kv : root) {
-		if (sol::optional<std::string> k = kv.first.as<sol::optional<std::string>>())
-			trace.present.push_back(*k);
+		sol::optional<std::string> k = kv.first.as<sol::optional<std::string>>();
+		if (!k)
+			continue;
+		trace.present.push_back(*k);
+		if (!declaresNestedKeys(*k) || kv.second.get_type() != sol::type::table)
+			continue;
+		const sol::table sub = kv.second.as<sol::table>();
+		for (auto&& child : sub)
+			if (sol::optional<std::string> ck = child.first.as<sol::optional<std::string>>())
+				trace.present.push_back(fmt::format("{}.{}", *k, *ck));
 	}
 }
 
 /**
- * 未知键 lint（lintUnknownDiagnosticsKeys 同判据，债-11）：文件里出现的顶层键，凡键表
- * 键名的「`.` 前缀」都不等于它 = 解析器没人读它（拼错的键，此前完全静默）。判据来自
- * 键表本身（= 解析器键名真相源），不另立名单——覆盖率护栏（测试）保证键表 ⊥ 解析器
- * 不会漂移，本函数因此只需查一张表。
+ * 单键已知判据（lintUnknownSceneKeys 的判据本体，债-11 + 债-129 第三刀）：**含 `.`**
+ * 的键（下钻采集的 `块.子键`）🔴 必须是键表的**精确成员**；**不含 `.`** 的键保持原判据
+ * （键表任一键名的「`.` 前缀」等于它即已知——map 段裸表名走这条）。抽成函数是认知
+ * 复杂度红线（先例 applyAaKey）。
+ * @param key present 里的键名
+ */
+bool isKnownSceneKey(std::string_view key) {
+	const bool dotted = key.find('.') != std::string::npos;
+	for (const auto& k : kSceneKeys) {
+		const bool hit = dotted ? (k == key)                      // 点分名 = 精确成员
+		                        : (k.substr(0, k.find('.')) == key);  // 无 `.` 时 = 全名比对
+		if (hit)
+			return true;
+	}
+	return false;
+}
+
+/**
+ * 未知键 lint（lintUnknownDiagnosticsKeys 同判据，债-11 + 债-129 第三刀）：present 里
+ * 每个键过 isKnownSceneKey（顶层 = 前缀判据、点分名 = 精确成员，判据本体见该函数）。
+ * 判据来自键表本身（= 解析器键名真相源），不另立名单——覆盖率护栏（测试）保证键表 ⊥
+ * 解析器不会漂移，本函数因此只需查一张表。
  * @param trace 解析期键轨迹
  */
 void lintUnknownSceneKeys(const SceneKeyTrace& trace) {
 	auto* logger = RLLogger::getInstance();
 	if (!logger)
 		return;
-	for (const auto& key : trace.present) {
-		bool known = false;
-		for (const auto& k : kSceneKeys)
-			if (k.substr(0, k.find('.')) == key) {  // 无 `.` 时 = 全名比对
-				known = true;
-				break;
-			}
-		if (!known)
+	for (const auto& key : trace.present)
+		if (!isKnownSceneKey(key))
 			logger->warn("scene: 未知键 '{}'（解析器不读它，拼错？已忽略）", key);
-	}
 }
 
 /**

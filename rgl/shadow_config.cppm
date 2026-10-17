@@ -88,7 +88,7 @@ export struct ShadowTuning {
  * 关掉是**测出来的选择**，不是妥协：CSM 单独一档已被 `imgqa swim` 证明影场世界不变（零位移失配
  * 0/63835），且 `light.frag.slang` 头注记着「同一太阳下 IZB 遮挡集 ⊆ CSM 遮挡集」⟹ 拿 CSM 单独
  * 作源不丢遮挡（它遮的是超集），只丢那条缝。**IZB 代码路径一律保留**（`mode` 与 `izb` 正交，
- * 开回来仍可用），gate_lint 对 `izb = true` 出 **warn** 把上面两个读数带在消息里，防止被随手打开。
+ * 开回来仍可用），gate_lint 对 `izb.on = true` 出 **warn** 把上面两个读数带在消息里，防止被随手打开。
  */
 export struct ShadowConfig {
 	ShadowMode mode = ShadowMode::csm;  ///< 软影滤波轴（四值互斥）
@@ -153,7 +153,7 @@ export void setShadowConfig(const ShadowConfig& cfg);
  */
 export struct ShadowKeyTrace {
 	std::vector<std::string> read;     ///< 解析器读过的键（解析器总是全量问一遍）
-	std::vector<std::string> present;  ///< 文件里实际出现的顶层键名（子表只记表名）
+	std::vector<std::string> present;  ///< 文件里实际出现的键名：顶层 + 固定字段块下钻一层的 `块.子键`（债-129 第三刀；开放 map 只记表名）
 };
 
 /**

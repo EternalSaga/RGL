@@ -2,7 +2,7 @@
 --
 -- ⚠ 阴影键已迁出（批 N6b，docs/shadow_routes_plan.md §2）：shadow_pass / shadow_pcss /
 --   shadow_evssm / izb_shadow / izb_grid / izb_dump_frame 在本文件**出现即启动失败**，
---   新落点 = 同目录 shadow.lua（mode = "none" + izb = false）。analytic 探针踩过的键名坑
+--   新落点 = 同目录 shadow.lua（mode = "none" + izb = { on = false }）。analytic 探针踩过的键名坑
 --   还在：写错键 = 解析器不认 = 静默回落默认，所以旧键的 fail-fast 永久保留。
 --
 -- 关阴影 + 关 IZB 的理由见同目录 shadow.lua 头注（本 rig 直射光强度已是 0，阴影因子

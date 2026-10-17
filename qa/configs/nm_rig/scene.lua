@@ -22,7 +22,7 @@
 --   skybox = false      → 本靶画幅里本来就没有天穹像素（俯角 25° 把地平线推到画外），
 --                         这条只是与 env_band 保持同一形态；deferred 不读它，也不受影响
 --   exposure = 1.0      → ACES 前中性倍率
---   shadow.lua 的 mode = "none" + izb = false（同目录 shadow.lua，批 N6b 起阴影键在此）
+--   shadow.lua 的 mode = "none" + izb = { on = false }（同目录 shadow.lua，批 N6b 起阴影键在此）
 --   metallic = 1（在 glb 里）→ 漫反射项天然为 0 ⟹ 画面里**每一个亮像素都来自 env 镜面项**
 --
 -- ## 亮度纪律（本轮实测教训，违反即测量无效）

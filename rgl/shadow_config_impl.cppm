@@ -47,8 +47,9 @@ ShadowFormPlan shadowFormPlan(const ShadowConfig& cfg) {
 
 /**
  * shadowConfig 定义：单例存储（进程级，main setShadowConfig 一次，此后只读）。
- * 默认构造 = 交付形态（mode=csm、izb=true）⟹ 未接线的调用方（如 `just test` 里不加载
- * 配置的用例）拿到的就是出厂形态，与改造前 `diagnostics()` 的旧字段默认值同形。
+ * 默认构造 = 交付形态（mode=csm、izb=false，2026-10-10 换红线）⟹ 未接线的调用方（如
+ * `just test` 里不加载配置的用例）拿到的就是出厂形态，与改造前 `diagnostics()` 的旧字段
+ * 默认值同形。
  */
 ShadowConfig& shadowConfig() {
 	static ShadowConfig instance;
@@ -157,30 +158,27 @@ std::optional<std::string> checkTableOrAbsent(const sol::table& root, std::strin
 }
 
 /**
- * `izb` 正交修饰读取：两形态都合法（docs/shadow_routes_plan.md §2 的布尔形状 + N6a
- * 收编的 izb_grid/izb_dump_frame 两键 ⟹ 子表形态）：
- *   `izb = true|false`                    = 只开关，grid/dump_frame 保默认；
+ * `izb` 正交修饰读取：**只收子表形态**（债-129 第三刀护栏照出扁平布尔 = 「扁平键双读
+ * 兼容 = 两个真相源」红线的活体违反，2026-10-17 主 agent 裁硬切；docs/shadow_routes_plan.md
+ * §2 的布尔形状与 N6a 收编的子表形态不再并存）：
  *   `izb = { on = true, grid = 512, dump_frame = 0 }` = 三键各可选回落默认。
- * 其他类型 = 报错（不静默）。grid clamp [64, 2048]、dump_frame 负数 = 0（沿用旧键口径）。
+ * 扁平布尔与其他非表类型 = 报错（不静默）。grid clamp [64, 2048]、dump_frame 负数 = 0
+ * （沿用旧键口径）。
  * @param root 配置根表
  * @param cfg 写入目标（izb / izbGrid / izbDumpFrame）
- * @param trace 键轨迹（izb / izb.grid / izb.dump_frame 总是记录）
+ * @param trace 键轨迹（izb.on / izb.grid / izb.dump_frame 总是记录）
  * @return 合法 = nullopt；有值 = 错误消息
  */
 std::optional<std::string> applyIzbKey(sol::table& root, ShadowConfig& cfg,
 	ShadowKeyTrace& trace) {
-	trace.read.emplace_back("izb");
+	trace.read.emplace_back("izb.on");
 	trace.read.emplace_back("izb.grid");
 	trace.read.emplace_back("izb.dump_frame");
 	sol::object o = root["izb"];
 	if (!o.valid() || o.get_type() == sol::type::lua_nil)
 		return std::nullopt;
-	if (o.get_type() == sol::type::boolean) {
-		cfg.izb = o.as<bool>();
-		return std::nullopt;
-	}
 	if (o.get_type() != sol::type::table)
-		return fmt::format("izb must be a boolean or a table {{ on, grid, dump_frame }}, got {}",
+		return fmt::format("izb must be a table {{ on, grid, dump_frame }}, got {}",
 			solTypeName(o.get_type()));
 	const sol::table t = o.as<sol::table>();
 	if (sol::optional<bool> on = t["on"])
@@ -213,7 +211,7 @@ struct ShadowGateEcho {
 // 调参键忘改 N，症状是测试段错误而不是编译错，排查成本远高于本行注释）。
 const ShadowGateEcho kShadowEcho[]{
 	{"mode", [](const ShadowConfig& c) { return std::string(shadowModeName(c.mode)); }},
-	{"izb", [](const ShadowConfig& c) { return fmt::format("{}", c.izb); }},
+	{"izb.on", [](const ShadowConfig& c) { return fmt::format("{}", c.izb); }},
 	{"izb.grid", [](const ShadowConfig& c) { return fmt::format("{}", c.izbGrid); }},
 	{"izb.dump_frame", [](const ShadowConfig& c) { return fmt::format("{}", c.izbDumpFrame); }},
 	{"csm", [](const ShadowConfig&) { return std::string("reserved"); }},
@@ -230,24 +228,54 @@ const ShadowGateEcho kShadowEcho[]{
 };
 
 /**
- * 未知键 lint（lintUnknownDiagnosticsKeys 同判据）：文件里出现的顶层键，凡回显表键名的
- * 「`.` 前缀」都不等于它 = 解析器没人读它（拼错的键）。判据来自回显表本身，不另立名单。
+ * 回显表是否声明了 `块.` 前缀的点分键（= 该块是**固定字段块**，可下钻；债-129 第三刀，
+ * runtime_config_impl 同构）。izb 块的 `on` 子键自硬切起**就是**回显成员（回显/门名 =
+ * `izb.on`，扁平布尔双读已删——「扁平键双读 = 两个真相源」红线的活体违反，2026-10-17
+ * 主 agent 裁）。`csm` 是预留空块（键表无 `csm.` 声明）⟹ 不钻。已知存量：`scene.lua`
+ * 的 `taa.enabled`（键随批 14.6 已删，env_band / nm_rig 两靶残留）会被本护栏 warn——
+ * 已知存量，待裁决，见 docs/配置正交性_plan.md；为凑「存量零告警」删靶或改 `aa` 是禁手。
+ * @param block 顶层键名（候选块名）
+ */
+bool declaresNestedKeys(std::string_view block) {
+	for (const auto& e : kShadowEcho) {
+		const auto dot = e.key.find('.');
+		if (dot != std::string_view::npos && e.key.substr(0, dot) == block)
+			return true;
+	}
+	return false;
+}
+
+/**
+ * 单键已知判据（lintUnknownShadowKeys 的判据本体，债-129 第三刀）：**含 `.`** 的键
+ * （下钻采集的 `块.子键`）🔴 必须是回显表的**精确成员**；**不含 `.`** 的键保持原判据
+ * （回显表任一键名的「`.` 前缀」等于它即已知）。抽成函数是认知复杂度红线（先例 applyAaKey）。
+ * @param key present 里的键名
+ */
+bool isKnownShadowKey(std::string_view key) {
+	const bool dotted = key.find('.') != std::string::npos;
+	for (const auto& e : kShadowEcho) {
+		const bool hit = dotted
+			? (e.key == key)                               // 点分名 = 精确成员
+			: (e.key.substr(0, e.key.find('.')) == key);   // 无 `.` 时 = 全名比对
+		if (hit)
+			return true;
+	}
+	return false;
+}
+
+/**
+ * 未知键 lint（lintUnknownDiagnosticsKeys 同判据 + 债-129 第三刀）：present 里每个键过
+ * isKnownShadowKey（顶层 = 前缀判据、点分名 = 精确成员，判据本体见该函数）。判据来自
+ * 回显表本身，不另立名单。
  * @param trace 解析期键轨迹
  */
 void lintUnknownShadowKeys(const ShadowKeyTrace& trace) {
 	auto* logger = RLLogger::getInstance();
 	if (!logger)
 		return;
-	for (const auto& key : trace.present) {
-		bool known = false;
-		for (const auto& e : kShadowEcho)
-			if (e.key.substr(0, e.key.find('.')) == key) {  // 无 `.` 时 = 全名比对
-				known = true;
-				break;
-			}
-		if (!known)
+	for (const auto& key : trace.present)
+		if (!isKnownShadowKey(key))
 			logger->warn("shadow: 未知键 '{}'（解析器不读它，拼错？已忽略）", key);
-	}
 }
 
 /**
@@ -269,14 +297,25 @@ void lintUnknownShadowKeys(const ShadowKeyTrace& trace) {
 }
 
 /**
- * 「文件里实际出现的顶层键」采集（diagnostics 同构；未知键 lint 的输入，子表只记表名）。
+ * 「文件里实际出现的键」采集（diagnostics 同构；未知键 lint 的输入）。顶层键照旧记；
+ * 债-129 第三刀：回显表声明了 `块.` 点分前缀的块（izb/pcss/evssm）**下钻一层**，
+ * 子键以 `块.子键` 追加；非表值不钻（izb 扁平布尔由 applyIzbKey 的类型闸门报错）、
+ * csm 预留块不钻（判据见 declaresNestedKeys）。
  * @param root 配置根表
  * @param trace 键轨迹（present 追加目标）
  */
 void collectPresentKeys(const sol::table& root, ShadowKeyTrace& trace) {
 	for (auto&& kv : root) {
-		if (sol::optional<std::string> k = kv.first.as<sol::optional<std::string>>())
-			trace.present.push_back(*k);
+		sol::optional<std::string> k = kv.first.as<sol::optional<std::string>>();
+		if (!k)
+			continue;
+		trace.present.push_back(*k);
+		if (!declaresNestedKeys(*k) || kv.second.get_type() != sol::type::table)
+			continue;
+		const sol::table sub = kv.second.as<sol::table>();
+		for (auto&& child : sub)
+			if (sol::optional<std::string> ck = child.first.as<sol::optional<std::string>>())
+				trace.present.push_back(fmt::format("{}.{}", *k, *ck));
 	}
 }
 
@@ -289,7 +328,7 @@ void logShadowGateEcho(const ShadowConfig& cfg) {
 	auto* lg = RLLogger::getInstance();
 	if (!lg)
 		return;
-	lg->info("shadow: mode={} izb={}", shadowModeName(cfg.mode), cfg.izb);
+	lg->info("shadow: mode={} izb.on={}", shadowModeName(cfg.mode), cfg.izb);
 	if (const std::string changed = describeShadowGates(cfg, ShadowConfig{}); !changed.empty())
 		lg->info("shadow: {}", changed);
 	lg->debug("shadow all gates: {}", describeAllShadowGates(cfg));
@@ -329,7 +368,7 @@ std::string describeAllShadowGates(const ShadowConfig& cfg) {
 	return out;
 }
 
-/** loadShadowConfig 定义（接口注释见 shadow_config.cppm）。要点：缺文件 = 交付默认 + warn；`mode` 非法值 = fail-fast 并列出合法值；izb 两形态；解析完成后打回显（路线行 info 恒打 + 差集 info + 全量 debug）。 */
+/** loadShadowConfig 定义（接口注释见 shadow_config.cppm）。要点：缺文件 = 交付默认 + warn；`mode` 非法值 = fail-fast 并列出合法值；izb 只收子表形态（扁平布尔 = 报错，硬切 2026-10-17）；解析完成后打回显（路线行 info 恒打 + 差集 info + 全量 debug）。 */
 [[nodiscard]] std::expected<ShadowConfig, Error> loadShadowConfig(
 	std::string_view path, ShadowKeyTrace* trace) {
 	auto* logger = RLLogger::getInstance();
@@ -344,7 +383,7 @@ std::string describeAllShadowGates(const ShadowConfig& cfg) {
 		std::ifstream probe{std::string(path)};
 		if (!probe.is_open()) {
 			if (logger)
-				logger->warn("Shadow config not found ({}), defaults mode=csm izb=true",
+				logger->warn("Shadow config not found ({}), defaults mode=csm izb.on=false",
 					std::string(path));
 			return cfg;
 		}

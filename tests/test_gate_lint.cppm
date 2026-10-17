@@ -115,7 +115,7 @@ TEST_CASE("gate_lint 覆盖率护栏：块条目 ∪ 独立行 == 三方来源�
 	// 🔴 新口径的真收益：每一枚来源键必须被「块条目」或「独立行」至少一个覆盖，两者都没有
 	//   = 断言失败并**点名**；且命中块前缀的键必须是块条目或该块宿主——「往块里加一枚键而
 	//   不声明宿主」（配一行 nullptr 就能躲的旧形态）绕不过去。
-	// ⚠ 钉的是**去重后的门数**：一门可有多条规则（`izb` 三条 = 非 deferred 图 / mode="none" /
+	// ⚠ 钉的是**去重后的门数**：一门可有多条规则（`izb.on` 三条 = 非 deferred 图 / mode="none" /
 	//   交付已关 warn，各自一条消息），行数只作"表没被整段删空"的下界哨兵。
 	const auto rules = gateLintRuleGates();
 	const auto blocks = gateLintBlockCoverage();
@@ -208,7 +208,7 @@ TEST_CASE("gate_lint 基线：全默认配置（任何图/任何世界）零 fin
 	// 反向锚点：把 izb 显式开回来 ⟹ forward 上 izb 恰有 **2** 条（一条 error = 非 deferred
 	// 图、一条 warn = 交付已关的近场 v1）。这条在，"izb 关"才不是把规则删掉才绿的。
 	const ShadowConfig onIzb{.izb = true};
-	CHECK(std::ranges::count(lint(d, fwd, RgGraphVariant::forward, {}, onIzb), "izb",
+	CHECK(std::ranges::count(lint(d, fwd, RgGraphVariant::forward, {}, onIzb), "izb.on",
 		&GateFinding::gate) == 2);
 	// 全默认 + headless/llm关/static关 也零（门全关时环境事实不参与判定）
 	const GateEnv dark{.headless = true, .llmCapture = false, .staticGraphicsIndirect = false};
@@ -221,11 +221,11 @@ TEST_CASE("gate_lint error 组：izb × {非 deferred 图, mode=none} / mode=evs
 	{  // 正例：IZB × forward = error（此前静默早退）
 		const auto fs = lint(DiagnosticsConfig{}, fwd, RgGraphVariant::forward, kHappyEnv,
 			ShadowConfig{.izb = true});
-		REQUIRE(find(fs, "izb") != nullptr);
-		CHECK(find(fs, "izb")->severity == GateSeverity::error);
+		REQUIRE(find(fs, "izb.on") != nullptr);
+		CHECK(find(fs, "izb.on")->severity == GateSeverity::error);
 	}
 	{  // 反向：IZB × deferred 合法组合不喊（mode=csm 出厂档也不喊）
-		CHECK(find(lint(DiagnosticsConfig{}, def, RgGraphVariant::deferred, kHappyEnv), "izb")
+		CHECK(find(lint(DiagnosticsConfig{}, def, RgGraphVariant::deferred, kHappyEnv), "izb.on")
 			== nullptr);
 	}
 	{  // 正例：mode="evssm" × forward = error（EvssmShadow 不构造 = 该档整体无效）
@@ -244,12 +244,12 @@ TEST_CASE("gate_lint error 组：izb × {非 deferred 图, mode=none} / mode=evs
 	   // 图集不画 ⟹ 段必空 ⟹ mask 无内容 ⟹ IZB 一帧阴影也不产
 		const ShadowConfig noneIzb{.mode = ShadowMode::none, .izb = true};
 		const auto fs = lint(DiagnosticsConfig{}, def, RgGraphVariant::deferred, kHappyEnv, noneIzb);
-		REQUIRE(find(fs, "izb") != nullptr);
-		CHECK(find(fs, "izb")->severity == GateSeverity::error);
+		REQUIRE(find(fs, "izb.on") != nullptr);
+		CHECK(find(fs, "izb.on")->severity == GateSeverity::error);
 	}
 	{  // 反向（configs/shadow.lua 现值即此组合）：**交付默认 izb 关** + mode=csm + deferred
 	   // ⟹ izb 零 findings（常错的 lint = 被静音的 lint，防腐条款 2）
-		CHECK(find(lint(DiagnosticsConfig{}, def, RgGraphVariant::deferred, kHappyEnv), "izb")
+		CHECK(find(lint(DiagnosticsConfig{}, def, RgGraphVariant::deferred, kHappyEnv), "izb.on")
 			== nullptr);
 	}
 	{  // 两条 izb **error** 规则各自独立（非 deferred 图 + mode=none = 两个根因同时成立
@@ -260,7 +260,7 @@ TEST_CASE("gate_lint error 组：izb × {非 deferred 图, mode=none} / mode=evs
 		// 两条 **error** 各自独立（第三条 izb finding 是"交付已关"的 warn，与本断言的归因无关，
 		// 故按 severity 计数而不是按 gate 计数——按 gate 计会把 warn 混进来变成"3 条 error"的假象）
 		CHECK(std::ranges::count_if(fs, [](const GateFinding& f) {
-			return f.gate == "izb" && f.severity == GateSeverity::error;
+			return f.gate == "izb.on" && f.severity == GateSeverity::error;
 		}) == 2);
 	}
 }
@@ -373,12 +373,12 @@ TEST_CASE("gate_lint warn 组（shadow）：izb 开 = warn（交付默认已关�
 	// 所以只有这条）。消息里必须带两个实测读数——warn 不带上游为什么关掉的数，就会被当噪声读。
 	const ShadowConfig s{.izb = true};
 	const auto fs = lint(DiagnosticsConfig{}, def, RgGraphVariant::deferred, kHappyEnv, s);
-	REQUIRE(find(fs, "izb") != nullptr);
-	CHECK(find(fs, "izb")->severity == GateSeverity::warn);
-	CHECK(find(fs, "izb")->message.find("405048") != std::string::npos);
-	CHECK(find(fs, "izb")->message.find("cascade-0") != std::string::npos);
+	REQUIRE(find(fs, "izb.on") != nullptr);
+	CHECK(find(fs, "izb.on")->severity == GateSeverity::warn);
+	CHECK(find(fs, "izb.on")->message.find("405048") != std::string::npos);
+	CHECK(find(fs, "izb.on")->message.find("cascade-0") != std::string::npos);
 	// 反向：交付默认（izb 关）零 findings —— 变异红线：谓词写成恒真即红
-	CHECK(find(lint(DiagnosticsConfig{}, def, RgGraphVariant::deferred, kHappyEnv), "izb")
+	CHECK(find(lint(DiagnosticsConfig{}, def, RgGraphVariant::deferred, kHappyEnv), "izb.on")
 		== nullptr);
 }
 

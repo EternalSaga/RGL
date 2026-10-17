@@ -7,5 +7,5 @@
 -- 两件事都要写：mode="none"（图首 shadow0..3 零 draw + 采样端恒全亮）、izb=false。
 return {
     mode = "none",
-    izb = false,
+    izb = { on = false },
 }

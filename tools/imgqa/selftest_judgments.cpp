@@ -164,13 +164,13 @@ void testKeyValidation(Checker& c)
         content.find("picking = true") != std::string::npos
             && content.find("rpc = true") != std::string::npos);
     // N6b：阴影门不在 diagnostics.lua 了（旧键出现 = 引擎启动失败），改由同目录
-    // shadow.lua 承载。默认 opts（shadowPass=false）→ mode="none" + izb=false；
-    // izb 若写成 True 就是 nil 回落**代码默认 true** = 静默开 IZB（真实事故的形状）。
+    // shadow.lua 承载。默认 opts（shadowPass=false）→ mode="none" + izb = { on = false }；
+    // izb 若写成 True 就是 nil 回落**代码默认**（2026-10-10 起为 false）= 静默换臂（真实事故的形状）。
     std::ifstream s(tmp + "/shadow.lua");
     const std::string shadow{std::istreambuf_iterator<char>{s}, {}};
-    c.chk("shadow.lua：门关 = mode=\"none\" + 小写 izb=false",
+    c.chk("shadow.lua：门关 = mode=\"none\" + 小写 izb = { on = false }",
         shadow.find("mode = \"none\"") != std::string::npos
-            && shadow.find("izb = false") != std::string::npos);
+            && shadow.find("izb = { on = false }") != std::string::npos);
     // 阳性锚点：三档 mode 各自写对（枚举塌缩方向写错 = 判据跑在另一条阴影路上）。
     // 变异红线：engine.cpp 的 shadowMode 三元塌错一档 → 本断言红。
     {

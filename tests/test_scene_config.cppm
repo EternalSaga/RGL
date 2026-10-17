@@ -1445,21 +1445,28 @@ TEST_CASE("diagnostics 未知键：拼错的顶层键被记录且不在读集（
 	CHECK(r->noVvl == true);
 }
 
-TEST_CASE("diagnostics 未知键（探针子表）：探针表名不算未知键——前缀判据的正向对照") {
+TEST_CASE("diagnostics 未知键（探针子表）：探针表名不算未知键——前缀判据的正向对照；债-129 第三刀下钻后子键走精确成员") {
 	// 若判据写成「回显键名全名 == 顶层键」，三张探针表名会全被误报（子表字段的
-	// 回显拼写是 `表名.字段`）。本用例钉住「表名 → 前缀命中 → 不喊」。
+	// 回显拼写是 `表名.字段`）。本用例钉住「表名 → 前缀命中 → 不喊」。债-129 第三刀：
+	// picking_probe 被下钻，present 多出 `picking_probe.frame`（合法子键 = 精确成员，
+	// 不喊）。变异红线：下钻段删掉 → present.size() 红；精确成员判据写成前缀 → 本用例
+	// 仍绿但「探针子表内拼错」用例（见下方第三刀 diagnostics 嵌套阳性锚点）红。
 	TempLua f("dg_probetab", "return { picking_probe = { frame = 5 }, rpc_port = 9999 }\n");
 	DiagnosticsKeyTrace trace;
 	auto r = loadDiagnosticsConfig(f.pathStr(), &trace);
 	REQUIRE(r.has_value());
-	REQUIRE(trace.present.size() == 2u);
+	REQUIRE(trace.present.size() == 3u);  // picking_probe / picking_probe.frame / rpc_port
+	CHECK(containsKey(trace.present, "picking_probe.frame"));
 	for (const auto& key : trace.present) {
-		// 与 lintUnknownDiagnosticsKeys 同判据：任一回显键名的 `.` 前缀 == 键 → 已知
-		// （判据的表 = 回显表本身，不另立名单）
+		// 与 lintUnknownDiagnosticsKeys 同判据（债-129 第三刀口径）：含 `.` = 回显表
+		// 精确成员；不含 `.` = 任一回显键名的 `.` 前缀等于它（判据的表 = 回显表本身）
+		const bool dotted = key.find('.') != std::string::npos;
 		bool known = false;
-		for (const auto& e : diagnosticsEchoKeys())
-			if (std::string_view{e}.substr(0, std::string_view{e}.find('.')) == key)
+		for (const auto& e : diagnosticsEchoKeys()) {
+			std::string_view ev{e};
+			if (dotted ? (ev == key) : (ev.substr(0, ev.find('.')) == key))
 				known = true;
+		}
 		CHECK(known);  // known = false 会被解析器 warn，但 warn 测不到——这里测判据本体
 	}
 	CHECK(r->rpcPort == 9999u);  // 合法值照常生效（lint 不改解析结果）
@@ -1527,7 +1534,7 @@ TEST_CASE("shadow_config：mode 四值各自解析正确 + 缺键回落交付默
 		return loadShadowConfig(f.pathStr());
 	};
 	// 回落断言的基准 = ShadowConfig{} 符号本身（不把默认值抄第二遍当断言）；
-	// 「默认 = 交付形态（mode=csm、izb=true）」由结构体定义承载（shadow_config.cppm）。
+	// 「默认 = 交付形态（mode=csm、izb=false，2026-10-10 换红线）」由结构体定义承载（shadow_config.cppm）。
 	const ShadowConfig def;
 	{
 		auto r = load("return {}\n");
@@ -1629,14 +1636,16 @@ TEST_CASE("shadow_config：数值键 clamp 边界（sun_degrees [0,5]、两半�
 	}
 }
 
-TEST_CASE("shadow_config：izb 两形态（布尔简写 / 子表 on+grid+dump_frame；grid clamp [64,2048]、类型错 fail-fast）") {
-	{  // 布尔简写 = 只开关，grid/dump_frame 保默认
-		TempLua f("sh_izb_off", "return { izb = false }\n");
+TEST_CASE("shadow_config：izb 子表形态（on+grid+dump_frame；grid clamp [64,2048]、类型错与扁平布尔 fail-fast）") {
+	{  // 扁平布尔 = 报错（硬切 2026-10-17：布尔/表双读 = 「扁平键双读兼容 = 两个真相源」
+	   // 红线的活体违反，被债-129 第三刀嵌套键护栏照出后主 agent 裁删）。两向都要钉：
+	   // 变异红线：applyIzbKey 的 boolean 分支加回来 → 本块两条红。
+		TempLua f("sh_izb_flat0", "return { izb = false }\n");
 		auto r = loadShadowConfig(f.pathStr());
-		REQUIRE(r.has_value());
-		CHECK(r->izb == false);
-		CHECK(r->izbGrid == ShadowConfig{}.izbGrid);
-		CHECK(r->izbDumpFrame == ShadowConfig{}.izbDumpFrame);
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().message.find("izb must be a table") != std::string::npos);
+		TempLua g("sh_izb_flat1", "return { izb = true }\n");
+		CHECK_FALSE(loadShadowConfig(g.pathStr()).has_value());
 	}
 	{  // 子表三键各命中
 		TempLua f("sh_izb_tab", "return { izb = { on = false, grid = 1024, dump_frame = 7 } }\n");
@@ -1666,7 +1675,7 @@ TEST_CASE("shadow_config：izb 两形态（布尔简写 / 子表 on+grid+dump_fr
 TEST_CASE("shadow_config 回显覆盖率护栏：解析器读过的键集合 == 回显表键集合（双向）+ 未知键判据") {
 	// diagnostics 同形护栏（docs/gate_lint_plan.md §3-B）：回显表删一行 / 解析器漏记一键 /
 	// 两处任一侧改拼写 → set 相等立刻红。变异红线：kShadowEcho 删任一条目 → 本用例红。
-	TempLua f("sh_keys", "return { mode = \"csm\", izb = true, csm = { }, pcss = { }, evssm = { } }\n");
+	TempLua f("sh_keys", "return { mode = \"csm\", izb = { on = true }, csm = { }, pcss = { }, evssm = { } }\n");
 	ShadowKeyTrace trace;
 	auto r = loadShadowConfig(f.pathStr(), &trace);
 	REQUIRE(r.has_value());
@@ -1702,13 +1711,13 @@ TEST_CASE("shadow_config 回显 describe：全默认 = 空串；改动只列改�
 	c.evssm.searchRadius = 48.0;
 	const std::string s = describeShadowGates(c, d);
 	CHECK(s.find("mode=evssm") != std::string::npos);
-	CHECK(s.find("izb=true") != std::string::npos);
+	CHECK(s.find("izb.on=true") != std::string::npos);
 	CHECK(s.find("evssm.search_radius=48") != std::string::npos);
 	CHECK(s.find("pcss.sun_degrees") == std::string::npos);  // 未动的键不出现
 	const std::string all = describeAllShadowGates(d);
-	CHECK(std::ranges::count(all, '=') == 13);  // 全量 = 15 段 k=v（空格分隔）
+	CHECK(std::ranges::count(all, '=') == 13);  // 全量 = 13 段 k=v（空格分隔）
 	CHECK(all.find("mode=csm") != std::string::npos);
-	CHECK(all.find("izb=false") != std::string::npos);
+	CHECK(all.find("izb.on=false") != std::string::npos);
 	CHECK(all.find("csm=reserved") != std::string::npos);  // 预留块出可读文本（差集永不喊）
 }
 
@@ -1820,8 +1829,9 @@ TEST_CASE("债-11 scene 未知键阳性锚点：拼错的键**真的打出 warn*
 	CHECK(containsKey(trace.read, "spin"));
 }
 
-TEST_CASE("债-11 runtime 未知键阳性锚点：拼错的键**真的打出 warn**；meshlet 块内字段拼错不在射程（顶层口径）") {
+TEST_CASE("债-11 runtime 未知键阳性锚点：拼错的键**真的打出 warn**；未声明点分前缀的表名不钻只喊顶层（债-129 第三刀口径）") {
 	// 变异红线：lintUnknownRuntimeKeys 函数体删空 / loadRuntimeConfig 里的调用删掉 → 红。
+	// meshlet2_g5 键表里没有 `meshlet2_g5.` 点分名 ⟹ 不钻（present 不增子键），顶层名照喊。
 	LogTailer log;
 	TempLua f("rt_typo", "return { velocity_feeld_g5 = true, meshlet2_g5 = { enable = true }, headless = true }\n");
 	RuntimeKeyTrace trace;
@@ -1838,7 +1848,8 @@ TEST_CASE("债-11 runtime 未知键阳性锚点：拼错的键**真的打出 war
 TEST_CASE("债-11 camera 未知键阳性锚点：拼错的键**真的打出 warn**；keys 表名本身不算未知键") {
 	// 变异红线：lintUnknownCameraKeys 函数体删空 / loadCameraConfig 里的调用删掉 → 红。
 	// keys/trackball/fps 是 `表名.字段` 键名的表名前缀 → 前缀判据的正向对照（探针表名
-	// 同款，diagnostics 的 probetab 用例同形）。
+	// 同款，diagnostics 的 probetab 用例同形）。债-129 第三刀：两表被下钻，present 各
+	// 多一枚合法子键（keys.forward / trackball.sensitivity，精确成员不喊）。
 	LogTailer log;
 	TempLua f("cm_typo", "return { fovvDegrees_g5 = 60.0, keys = { forward = \"W\" }, trackball = { sensitivity = 0.01 } }\n");
 	CameraKeyTrace trace;
@@ -1848,7 +1859,9 @@ TEST_CASE("债-11 camera 未知键阳性锚点：拼错的键**真的打出 warn
 	CHECK(hasUnknownKeyWarn(delta, "camera", "fovvDegrees_g5"));
 	CHECK(delta.find("未知键 'keys'") == std::string::npos);       // 表名 = 前缀命中，不喊
 	CHECK(delta.find("未知键 'trackball'") == std::string::npos);  // 同上
-	CHECK(trace.present.size() == 3u);
+	CHECK(trace.present.size() == 5u);  // 顶层 3 + 下钻合法子键 2
+	CHECK(containsKey(trace.present, "keys.forward"));
+	CHECK(containsKey(trace.present, "trackball.sensitivity"));
 }
 
 TEST_CASE("债-11 扫描面非空 + 交付 configs 零 warn：configs/{scene,runtime,camera}.lua 实文件实测") {
@@ -1892,6 +1905,142 @@ TEST_CASE("债-11 扫描面非空 + 交付 configs 零 warn：configs/{scene,run
 		// ② 交付配置上未知键 warn **零条**（warn 走日志，这里读的就是日志增量本体）
 		CHECK(log.delta().find("未知键") == std::string::npos);
 	}
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 债-129 第三刀：嵌套未知键护栏（拍板 A「meshlet.enable 改名」的硬前置）
+// collectPresentKeys 对**键表声明了 `块.` 点分前缀**的块下钻一层记 `块.子键`；
+// lint 对点分名走键表精确成员、无点名保持顶层前缀语义。五个 loader 同治。
+// 🔴 变异红线（整组）：① 下钻段注释掉 → 五条阳性锚点全红；② 前缀条件去掉（无条件钻）
+// → 「开放 map 不钻」用例红（styles.pbr 被喊）；③ 精确成员判据弱化回前缀 → 五条
+// 阳性锚点全红（meshlet.ovrelay 会被 meshlet.overlay 的前缀命中而漏喊）。
+// ═══════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("债-129 runtime 嵌套阳性锚点：meshlet 块内拼错 → warn 点名 meshlet.ovrelay 全名；合法嵌套键零 warn") {
+	// 断言钉**完整点分名**（hasUnknownKeyWarn 带闭引号）——只钉 "ovrelay" 子串会被
+	// 「只报了顶层块名 meshlet」假通过。反向用例先跑：合法 meshlet.overlay 零 warn。
+	LogTailer log;
+	{  // 反向：合法嵌套键不得产生任何未知键 warn
+		TempLua ok("rt_nested_ok", "return { meshlet = { overlay = true } }\n");
+		auto r = loadRuntimeConfig(ok.pathStr(), nullptr);
+		REQUIRE(r.has_value());
+		CHECK(r->meshletOverlay == true);  // 键真的被解析（否则"不 warn"是假绿）
+		CHECK(log.delta().find("未知键") == std::string::npos);
+	}
+	{  // 阳性：块内拼错点名全名
+		TempLua f("rt_nested_typo", "return { meshlet = { ovrelay = true, overlay = true } }\n");
+		RuntimeKeyTrace trace;
+		auto r = loadRuntimeConfig(f.pathStr(), &trace);
+		REQUIRE(r.has_value());
+		CHECK(hasUnknownKeyWarn(log.delta(), "runtime", "meshlet.ovrelay"));
+		CHECK(log.delta().find("未知键 'meshlet.overlay'") == std::string::npos);  // 合法子键不喊
+		CHECK(containsKey(trace.present, "meshlet.ovrelay"));  // 判据本体：下钻采集到点分名
+		CHECK(r->meshletOverlay == true);  // lint 不改解析：同块合法键照常生效
+	}
+}
+
+TEST_CASE("债-129 camera 嵌套阳性锚点：keys 块内拼错 → warn 点名 keys.forwarwd 全名；合法嵌套键零 warn") {
+	LogTailer log;
+	{  // 反向：trackball.sensitivity 合法 → 零 warn 且生效
+		TempLua ok("cm_nested_ok", "return { trackball = { sensitivity = 0.02 } }\n");
+		auto r = loadCameraConfig(ok.pathStr(), nullptr);
+		REQUIRE(r.has_value());
+		expectNear(r->camera.trackballSensitivity, 0.02, 0.0, 1e-6);
+		CHECK(log.delta().find("未知键") == std::string::npos);
+	}
+	{  // 阳性：keys 块内拼错点名全名
+		TempLua f("cm_nested_typo", "return { keys = { forwarwd = \"W\", forward = \"W\" } }\n");
+		CameraKeyTrace trace;
+		auto r = loadCameraConfig(f.pathStr(), &trace);
+		REQUIRE(r.has_value());
+		CHECK(hasUnknownKeyWarn(log.delta(), "camera", "keys.forwarwd"));
+		CHECK(log.delta().find("未知键 'keys.forward'") == std::string::npos);
+		CHECK(containsKey(trace.present, "keys.forwarwd"));
+	}
+}
+
+TEST_CASE("债-129 diagnostics 嵌套阳性锚点：探针子表拼错 → warn 点名 picking_probe.frmae 全名；合法嵌套键零 warn") {
+	LogTailer log;
+	{  // 反向：picking_probe.frame 合法 → 零 warn 且生效
+		TempLua ok("dg_nested_ok", "return { picking_probe = { frame = 7 } }\n");
+		auto r = loadDiagnosticsConfig(ok.pathStr(), nullptr);
+		REQUIRE(r.has_value());
+		CHECK(r->pickingProbeFrame == 7u);
+		CHECK(log.delta().find("未知键") == std::string::npos);
+	}
+	{  // 阳性：探针子表内拼错点名全名
+		TempLua f("dg_nested_typo", "return { picking_probe = { frmae = 5, frame = 7 } }\n");
+		DiagnosticsKeyTrace trace;
+		auto r = loadDiagnosticsConfig(f.pathStr(), &trace);
+		REQUIRE(r.has_value());
+		CHECK(hasUnknownKeyWarn(log.delta(), "diagnostics", "picking_probe.frmae"));
+		CHECK(log.delta().find("未知键 'picking_probe.frame'") == std::string::npos);
+		CHECK(containsKey(trace.present, "picking_probe.frmae"));
+	}
+}
+
+TEST_CASE("债-129 scene 嵌套阳性锚点：environment 块内拼错 → warn 点名 environment.intensy 全名；合法嵌套键零 warn") {
+	LogTailer log;
+	{  // 反向：environment.intensity 合法 → 零 warn 且生效
+		TempLua ok("sc_nested_ok", "return { environment = { intensity = 2.0 } }\n");
+		auto r = loadSceneConfig(ok.pathStr(), nullptr);
+		REQUIRE(r.has_value());
+		expectNear(r->environment.intensity, 2.0, 0.0, 1e-6);
+		CHECK(log.delta().find("未知键") == std::string::npos);
+	}
+	{  // 阳性：environment 块内拼错点名全名
+		TempLua f("sc_nested_typo", "return { environment = { intensy = 1.0, intensity = 2.0 } }\n");
+		SceneKeyTrace trace;
+		auto r = loadSceneConfig(f.pathStr(), &trace);
+		REQUIRE(r.has_value());
+		CHECK(hasUnknownKeyWarn(log.delta(), "scene", "environment.intensy"));
+		CHECK(log.delta().find("未知键 'environment.intensity'") == std::string::npos);
+		CHECK(containsKey(trace.present, "environment.intensy"));
+	}
+}
+
+TEST_CASE("债-129 shadow 嵌套阳性锚点：pcss 块内拼错 → warn 点名 pcss.sun_degreess 全名；合法嵌套键零 warn") {
+	LogTailer log;
+	{  // 反向：pcss.sun_degrees 合法 → 零 warn 且生效
+		TempLua ok("sh_nested_ok", "return { pcss = { sun_degrees = 0.7 } }\n");
+		auto r = loadShadowConfig(ok.pathStr(), nullptr);
+		REQUIRE(r.has_value());
+		expectNear(r->pcss.sunDegrees, 0.7, 0.0, 1e-6);
+		CHECK(log.delta().find("未知键") == std::string::npos);
+	}
+	{  // 阳性：pcss 块内拼错点名全名
+		TempLua f("sh_nested_typo", "return { pcss = { sun_degreess = 1.0, sun_degrees = 0.7 } }\n");
+		ShadowKeyTrace trace;
+		auto r = loadShadowConfig(f.pathStr(), &trace);
+		REQUIRE(r.has_value());
+		CHECK(hasUnknownKeyWarn(log.delta(), "shadow", "pcss.sun_degreess"));
+		CHECK(log.delta().find("未知键 'pcss.sun_degrees'") == std::string::npos);
+		CHECK(containsKey(trace.present, "pcss.sun_degreess"));
+	}
+}
+
+TEST_CASE("债-129 开放 map 不钻（前缀条件的判据本体）：scene styles/deferred_styles 用户自起子键**不得** warn") {
+	// 🔴 本用例 = declaresNestedKeys 前缀条件存在的理由：styles/deferred_styles 的键表
+	// 条目是**裸表名**（无 `styles.` 点分名）⟹ 不钻。变异红线：前缀条件去掉（无条件钻）
+	// → styles.pbr / styles.my_style_z1 / deferred_styles.whatever_z1 全被喊 → 红。
+	LogTailer log;
+	TempLua f("sc_openmap",
+		"return { styles = { pbr = \"model_pbr_ibl\", my_style_z1 = \"model\" }, "
+		"deferred_styles = { whatever_z1 = \"deferred_geometry\" } }\n");
+	SceneKeyTrace trace;
+	auto r = loadSceneConfig(f.pathStr(), &trace);
+	REQUIRE(r.has_value());
+	// 零 warn 断言在**全 delta** 上（不只钉"没喊 styles.pbr"——任何一条未知键 warn 都算违反红线）
+	CHECK(log.delta().find("未知键") == std::string::npos);
+	// 解析照常：开放 map 的子键真的被吃进映射（否则"不 warn"是假绿）
+	CHECK(r->styleMap.size() == 2u);
+	CHECK(r->styleMap.at("my_style_z1") == "model");
+	CHECK(r->deferredStyleMap.size() == 1u);
+	// 判据本体：present 里只有裸表名，没有任何 styles.* 点分名
+	CHECK(containsKey(trace.present, "styles"));
+	CHECK_FALSE(containsKey(trace.present, "styles.pbr"));
+	CHECK_FALSE(containsKey(trace.present, "styles.my_style_z1"));
+	CHECK_FALSE(containsKey(trace.present, "deferred_styles.whatever_z1"));
 }
 
 }  // namespace RGL

@@ -237,7 +237,8 @@ void insertAfterKey(std::string& text, const std::string& file, const std::strin
 // 里唯一的表"）：
 //  ① `izb = { on = true, grid = 512, dump_frame = 0 }` 的**值里有逗号**，
 //     `replaceValue` 按第一个 `,` 收尾 ⟹ 截在 `{ on = true` 后面 = 留下 `grid = 512 }`
-//     = Lua 语法错。引擎两种 izb 形态都收（布尔简写 = 只开关），覆写器两种都得能吃。
+//     = Lua 语法错。引擎硬切后只收子表形态（扁平布尔 = 启动报错），但覆写器是文本层，
+//     两种跨度都得能吃（标量分支防旧形态残留，见 selftest_shadow 面 C）。
 //  ② `pcss  = {` 在 configs/shadow.lua 里是**两个空格**（对齐排版），
 //     `replaceValueInBlock` 找字面 `"pcss = {"` 直接抛「没有表 pcss」——排版改一个空格
 //     就让覆写器打偏，而打偏的方向是"抛"，看起来还像是配置的问题。

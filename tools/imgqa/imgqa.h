@@ -152,8 +152,9 @@ struct ProfileOpts {
     /// 为什么 `izb` 必须被强制成 false（不是"顺手"）：IZB 是乘在软影之上的**光空间硬影 mask**，
     /// 开着它测半影等于让硬影吞掉软影——实测带核比 0.097（开）vs 0.185（关）（§4.1）。
     /// 交付形态（izb 开）的读数是 `izb` 命令的事，本判据测的是滤波轴本身。
-    /// `izb` 在交付配置里是**子表形态**（`{ on = true, grid = 512, dump_frame = 0 }`），
-    /// 引擎两种形态都收（布尔简写 = 只开关）⟹ 覆写器两种都要能吃，见 `overrideTopLevelValue`。
+    /// `izb` 在交付配置里是**子表形态**（`{ on = false, grid = 512, dump_frame = 0 }`），
+    /// 引擎硬切后只收这一种（扁平布尔 = 启动报错）⟹ 覆写整值换成 `{ on = false }`；
+    /// 覆写器两种文本跨度都吃（标量分支防旧形态残留），见 `overrideTopLevelValue`。
     bool overrideShadowRoute = false;
     std::string shadowRouteMode;  ///< "none"|"csm"|"pcss"|"evssm"（门开时必填，其余值抛）
     /// `shadowRouteSunDegrees` ≥ 0 = 把它写进**本档**的 `sun_degrees`（pcss 档写 pcss 块、

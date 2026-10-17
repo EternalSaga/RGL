@@ -171,9 +171,9 @@ void applyShadowRouteGate(const std::string& dir, const ProfileOpts& o)
             + "' 不是 none|csm|pcss|evssm 之一（拼错的档名引擎只在启动期喊，本工具在生成期就拒）");
     std::string sh = readFile(dir + "/shadow.lua");
     overrideTopLevelValue(sh, "shadow.lua", "mode", "\"" + mode + "\"");
-    // izb 强制关：交付配置写的是**子表形态**，这里整值换成布尔简写 `false`
-    // （引擎两形态都收）。留着它 = 硬影 mask 乘在软影之上 = 测的不是滤波轴（§4.1）。
-    overrideTopLevelValue(sh, "shadow.lua", "izb", "false");
+    // izb 强制关：整值换成**最小子表** `{ on = false }`（引擎硬切后只收子表形态，扁平
+    // 布尔 = 启动报错）。留着它 = 硬影 mask 乘在软影之上 = 测的不是滤波轴（§4.1）。
+    overrideTopLevelValue(sh, "shadow.lua", "izb", "{ on = false }");
     if (o.shadowRouteSunDegrees >= 0.0) {
         if (mode != "pcss" && mode != "evssm")
             throw std::runtime_error("shadowRouteSunDegrees="
@@ -189,10 +189,10 @@ void applyShadowRouteGate(const std::string& dir, const ProfileOpts& o)
     //   **全文**（含注释）——configs/shadow.lua 的注释块正在讲子表形态怎么写，哪天补一行
     //   `-- izB = { on = true, ... }` 示例，旧搜法就抛一句看不懂的"自检失败"。
     const bool modeOk = topLevelValueOf(sh, "mode", "shadow.lua") == "\"" + mode + "\"";
-    const bool izbOk = topLevelValueOf(sh, "izb", "shadow.lua") == "false";
+    const bool izbOk = topLevelValueOf(sh, "izb", "shadow.lua") == "{ on = false }";
     if (!modeOk || !izbOk)
         throw std::runtime_error("shadow.lua 覆写后自检失败（mode=" + mode
-            + " / izb=false 之一没真正落上，读回值 = \"" + topLevelValueOf(sh, "mode", "shadow.lua")
+            + " / izb = { on = false } 之一没真正落上，读回值 = \"" + topLevelValueOf(sh, "mode", "shadow.lua")
             + "\" / \"" + topLevelValueOf(sh, "izb", "shadow.lua")
             + "\"）——拒绝在旧值上下判据");
     writeFile(dir + "/shadow.lua", sh);
@@ -254,17 +254,14 @@ void writeSyntheticShadowLua(const std::string& outDir, const ProfileOpts& o)
     // izb 与 mode 正交（旧 izb_shadow）。izb 开而 mode=none 是 gate_lint 的启动期 error
     // （mask 无内容 = 一帧阴影也不产，债-32），这里同样不写出去。
     const bool izb = o.izbShadow && o.shadowPass;
-    // izb 子表只在需要 dump_frame 时展开（布尔简写 = 只开关，grid/dump 保默认）。
+    // izb 子表是**唯一形态**（硬切 2026-10-17：扁平布尔 = 引擎启动报错），dump_frame 才按需写。
     // ⚠ 只校验两个顶层键：izb 子表的 on/grid/dump_frame 在解析器里是 `t["…"]` 形态，
     //   knownRootKeys 的 `root["…"]` 正则抽不到，写进校验集会把校验器自己变成假阳性源。
     assertKeys("shadow.lua", {"mode", "izb"}, knownRootKeys("rgl/shadow_config_impl.cppm"));
     writeFile(outDir + "/shadow.lua",
-        "return { mode = \"" + shadowMode + "\", izb = "
-        + (o.izbDumpFrame > 0
-               ? std::string("{ on = ") + lb(izb) + ", dump_frame = "
-                     + std::to_string(o.izbDumpFrame) + " }"
-               : std::string(lb(izb)))
-        + " }\n");
+        "return { mode = \"" + shadowMode + "\", izb = { on = " + lb(izb)
+        + (o.izbDumpFrame > 0 ? ", dump_frame = " + std::to_string(o.izbDumpFrame) : "")
+        + " } }\n");
 }
 
 }  // namespace

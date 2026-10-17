@@ -95,12 +95,12 @@ ARMS: dict[str, tuple[str, list[tuple[str, str, str]]]] = {
     "shadow-off": (
         "关 4 级阴影（izb 必须一起关：gate_lint 对 `izb × mode=\"none\"` 报 error，"
         "债-32 收口时加的）→ 债-20 的配置轴。批 N6b 起两键都在 shadow.lua（izb 是整键替换：子表 "
-        "{ on, grid, dump_frame } 换成布尔 false，解析器两形态都收）",
-        [("shadow.lua", "mode", '"none"'), ("shadow.lua", "izb", "false")],
+        "{ on, grid, dump_frame } 换成最小子表 { on = false }；硬切 2026-10-17 起解析器只收子表形态）",
+        [("shadow.lua", "mode", '"none"'), ("shadow.lua", "izb", "{ on = false }")],
     ),
     "izb-off": (
         "只关 IZB（与 default 之差 = IZB 的 CPU 录制增量，债-05 的复核位）",
-        [("shadow.lua", "izb", "false")],
+        [("shadow.lua", "izb", "{ on = false }")],
     ),
     "scale-half": (
         "render_scale=0.5：GPU 工作量 ÷4、CPU 录制量几乎不变（draw 数一条不少）"

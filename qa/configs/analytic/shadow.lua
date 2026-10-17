@@ -17,5 +17,5 @@
 -- 里都会立刻报错或告警，不再静默。
 return {
     mode = "none",
-    izb = false,
+    izb = { on = false },
 }

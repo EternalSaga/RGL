@@ -15,5 +15,5 @@
 --   静默换臂）。键名写错同理——本项目最怕"配置写了、什么都没发生"。
 return {
     mode = "none",
-    izb = false,
+    izb = { on = false },
 }

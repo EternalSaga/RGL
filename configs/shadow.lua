@@ -1,10 +1,10 @@
 -- configs/shadow.lua — 阴影路线选择与逐档调参（批 N6a，定案 = docs/shadow_routes_plan.md §2）
 -- 全字段可选：缺文件/缺段/缺键 = 回落代码默认（= 本文件写着的这套值 = 交付形态，
--- 解析器 = rgl/shadow_config.cppm，回显见启动日志 "shadow: mode=... izb=..."）。
+-- 解析器 = rgl/shadow_config.cppm，回显见启动日志 "shadow: mode=... izb.on=..."）。
 --
 -- 为什么 izb 是**正交布尔**而不是 mode 枚举的第五值（shadow_routes_plan.md §2 红线 1）：
 -- 「IZB 近场细影 + 远场软影」混接（evssm_plan.md 11.6e）要求两者共存 ⟹ 枚举管**软影滤波轴**
--- （none/csm/pcss/evssm 互斥），izb 管**硬影 mask**，两条轴正交。izb=true × mode="none" 的组合
+-- （none/csm/pcss/evssm 互斥），izb 管**硬影 mask**，两条轴正交。izb.on=true × mode="none" 的组合
 -- 无意义，由 gate_lint 在启动期报 error（N6b 已接管），不在这里造第五个枚举值。
 -- ⚠ 正交是**形状**上的判断，不代表交付该同时开：izb 现在默认 **false**，理由见下方 izb 块。
 --
@@ -25,7 +25,9 @@ return {
     mode = "csm",
 
     -- 正交修饰：光空间硬影 mask（旧 izb_shadow；要求 mode ~= "none"，仅 deferred light pass 消费）。
-    -- 布尔简写 = 只开关；子表形态收编旧 izb_grid / izb_dump_frame 两键（语义原样）：
+    -- **只收子表形态**（硬切 2026-10-17：扁平布尔 = 启动报错——布尔/表双读 = 「扁平键双读
+    -- 兼容 = 两个真相源」这条配置纪律登记的反模式，被嵌套未知键护栏照出后裁决删除）；
+    -- 子表收编旧 izb_grid / izb_dump_frame 两键（语义原样）：
     --   on         = 开关（缺省 **false**）
     --   grid       = 光空间网格边长 G（旧 izb_grid；clamp [64, 2048]，防手滑建巨型缓冲）
     --   dump_frame = 第 N 帧（1 起）起每 30 帧回读 head 直方图打日志 + 覆盖写 izb_mask.ppm

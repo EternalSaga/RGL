@@ -119,10 +119,10 @@ struct Arm {
 const std::vector<Arm>& arms()
 {
     static const std::vector<Arm> kArms = {
-        {"none", "none", nullptr, "return { mode = \"none\", izb = false }\n"},
-        {"csm", "csm", nullptr, "return { mode = \"csm\", izb = false }\n"},
+        {"none", "none", nullptr, "return { mode = \"none\", izb = { on = false } }\n"},
+        {"csm", "csm", nullptr, "return { mode = \"csm\", izb = { on = false } }\n"},
         {"pcss5", "pcss", "pcss.sun_degrees=5",
-            "return { mode = \"pcss\", izb = false, pcss = { sun_degrees = 5.0, "
+            "return { mode = \"pcss\", izb = { on = false }, pcss = { sun_degrees = 5.0, "
             "search_radius = 16.0, max_penumbra = 32.0 } }\n"},
     };
     return kArms;

@@ -338,25 +338,52 @@ const std::array<GateEcho, 30> kGateEcho{{
 }};
 
 /**
- * 未知键 lint：文件里出现的顶层键，凡回显表键名的「`.` 前缀」都不等于它 = 解析器没人读它
- * （拼错的键，今天完全静默）。判据来自回显表本身（= 解析器键名真相源），不另立名单——
- * 覆盖率护栏（测试）保证回显表 ⊥ 解析器不会漂移，本函数因此只需查一张表。
+ * 回显表是否声明了 `块.` 前缀的点分键（= 该块是**固定字段块**，可下钻；债-129 第三刀，
+ * runtime_config_impl 同构）。三张探针表（picking_probe/ui_click_probe/camera_probe）
+ * 全部子键都在回显表里 ⟹ 下钻安全；开放 map 段键表只有裸表名 ⟹ 不钻——护栏不许喊错。
+ * @param block 顶层键名（候选块名）
+ */
+bool declaresNestedKeys(std::string_view block) {
+	for (const auto& e : kGateEcho) {
+		const auto dot = e.key.find('.');
+		if (dot != std::string_view::npos && e.key.substr(0, dot) == block)
+			return true;
+	}
+	return false;
+}
+
+/**
+ * 单键已知判据（lintUnknownDiagnosticsKeys 的判据本体，债-11 + 债-129 第三刀）：
+ * **含 `.`** 的键（下钻采集的 `块.子键`）🔴 必须是回显表的**精确成员**；**不含 `.`**
+ * 的键保持原判据（回显表任一键名的「`.` 前缀」等于它即已知——探针表名 = 前缀命中）。
+ * 抽成函数是认知复杂度红线（先例 applyAaKey）。
+ * @param key present 里的键名
+ */
+bool isKnownDiagnosticsKey(std::string_view key) {
+	const bool dotted = key.find('.') != std::string::npos;
+	for (const auto& e : kGateEcho) {
+		const bool hit = dotted
+			? (e.key == key)                               // 点分名 = 精确成员
+			: (e.key.substr(0, e.key.find('.')) == key);   // 无 `.` 时 = 全名比对
+		if (hit)
+			return true;
+	}
+	return false;
+}
+
+/**
+ * 未知键 lint（债-11 + 债-129 第三刀）：present 里每个键过 isKnownDiagnosticsKey
+ * （顶层 = 前缀判据、点分名 = 精确成员，判据本体见该函数）。判据来自回显表本身
+ * （= 解析器键名真相源），不另立名单——覆盖率护栏（测试）保证回显表 ⊥ 解析器不会漂移。
  * @param trace 解析期键轨迹
  */
 void lintUnknownDiagnosticsKeys(const DiagnosticsKeyTrace& trace) {
 	auto* logger = RLLogger::getInstance();
 	if (!logger)
 		return;
-	for (const auto& key : trace.present) {
-		bool known = false;
-		for (const auto& e : kGateEcho)
-			if (e.key.substr(0, e.key.find('.')) == key) {  // 无 `.` 时 = 全名比对
-				known = true;
-				break;
-			}
-		if (!known)
+	for (const auto& key : trace.present)
+		if (!isKnownDiagnosticsKey(key))
 			logger->warn("diagnostics: 未知键 '{}'（解析器不读它，拼错？已忽略）", key);
-	}
 }
 
 }  // namespace
@@ -416,15 +443,24 @@ std::string describeAllDiagnosticsGates(const DiagnosticsConfig& cfg) {
 }
 
 /**
- * 「文件里实际出现的顶层键」采集（未知键 lint 的输入；子表只记表名——present 来自文件
- * 本体不来自读取动作。从 loadDiagnosticsConfig 拆出，守认知复杂度阈值）。
+ * 「文件里实际出现的键」采集（未知键 lint 的输入；present 来自文件本体不来自读取动作。
+ * 从 loadDiagnosticsConfig 拆出，守认知复杂度阈值）。顶层键照旧记；债-129 第三刀：
+ * 回显表声明了 `块.` 点分前缀的块（三张探针表）**下钻一层**，子键以 `块.子键` 追加。
  * @param root 配置根表
  * @param trace 键轨迹（present 追加目标）
  */
 static void collectPresentKeys(const sol::table& root, DiagnosticsKeyTrace& trace) {
 	for (auto&& kv : root) {
-		if (sol::optional<std::string> k = kv.first.as<sol::optional<std::string>>())
-			trace.present.push_back(*k);
+		sol::optional<std::string> k = kv.first.as<sol::optional<std::string>>();
+		if (!k)
+			continue;
+		trace.present.push_back(*k);
+		if (!declaresNestedKeys(*k) || kv.second.get_type() != sol::type::table)
+			continue;
+		const sol::table sub = kv.second.as<sol::table>();
+		for (auto&& child : sub)
+			if (sol::optional<std::string> ck = child.first.as<sol::optional<std::string>>())
+				trace.present.push_back(fmt::format("{}.{}", *k, *ck));
 	}
 }
 

@@ -5,7 +5,7 @@
 // 文件只会把「漏改一处」变成静默漂移。
 //   · profile 生成面（`testShadowSoftnessArms` / `…IzbForm` / `…CommentTrap` /
 //     `testShadowKernelScaleInstrument`）—— 测 `makeProfile` 的 lua 覆写门：臂塌缩、矛盾
-//     组合拒绝、izb 的两种形态、注释陷阱、截图门、以及「门关态逐位不变」。
+//     组合拒绝、izb 的覆写形态（引擎只收子表；覆写器两种文本跨度都吃）、注释陷阱、截图门、以及「门关态逐位不变」。
 //   · 度量算子面（`testShadowSoftnessMetrics` / `testShadowKernelScale` / `…Sampling`）——
 //     期望全部来自闭式（阈值交叉位置是解析的、覆盖率是整数比），不吃截图。
 // 实机数字只能证明「与上次一样」，闭式才能证明「算子算的是我说的那个量」（同 testAoMetrics）。
@@ -131,11 +131,11 @@ void testShadowSoftnessArms(Checker& c)
     };
     const auto countOf = softnessCount;
 
-    // ① 出厂档（sun 不写键）：mode 换对、izb 子表整值塌成布尔简写、两档 sun_degrees 原封不动
+    // ① 出厂档（sun 不写键）：mode 换对、izb 子表整值换成最小子表、两档 sun_degrees 原封不动
     const std::string def = shadowOf("evssm", -1.0);
     c.chk("softness 臂塌缩：mode=\"evssm\" 写对", def.find("mode = \"evssm\"") != std::string::npos);
-    c.chk("softness 臂塌缩：izb 子表整值换成布尔简写 false（旧子表键必须离场）",
-        def.find("izb = false") != std::string::npos && def.find("on = true") == std::string::npos,
+    c.chk("softness 臂塌缩：izb 子表整值换成 { on = false }（旧子表键必须离场）",
+        def.find("izb = { on = false }") != std::string::npos && def.find("on = true") == std::string::npos,
         "留 `grid = 512` = Lua 语法错；留 on = true = 硬影 mask 吞掉半影");
     c.chk("softness 臂塌缩：sun 不写键 = 两档都还是出厂 0.53",
         countOf(def, "sun_degrees = 0.53") == 2, std::to_string(countOf(def, "sun_degrees")));
@@ -201,10 +201,12 @@ void testShadowSoftnessArms(Checker& c)
 
 }
 
-/// 面 C：`izb` 的**两种形态**都要能覆写（主 agent 的硬要求：两种都要能写，或明确拒绝一种）。
-/// 交付配置今天是子表形态（`{ on = true, grid = 512, dump_frame = 0 }`），面 A 已覆盖；
-/// 这里造一份布尔形态的临时交付目录——`izb = true` 改成 `false` 走的是**标量值跨度**那条分支
-/// （子表走的是配对 `}` 分支）。只测一条 = 交付配置哪天改成布尔简写时覆写器静默打偏。
+/// 面 C：`izb` 的**两种文本跨度**都要能覆写（主 agent 的硬要求：两种都要能写，或明确拒绝一种）。
+/// 引擎硬切后只收子表形态（扁平布尔 = 启动报错），但覆写器是**文本层**——交付目录哪天残留
+/// 布尔形态（旧副本 / 手改），标量跨度分支仍要能整值换掉，打偏的方向必须是"抛"而不是静默。
+/// 交付配置今天是子表形态（`{ on = false, grid = 512, dump_frame = 0 }`），面 A 已覆盖；
+/// 这里造一份布尔形态的临时交付目录——`izb = true` 改成 `{ on = false }` 走的是**标量值跨度**
+/// 那条分支（子表走的是配对 `}` 分支）。只测一条 = 覆写器哪天静默打偏。
 void testShadowSoftnessIzbForm(Checker& c)
 {
     namespace fs = std::filesystem;
@@ -219,7 +221,8 @@ void testShadowSoftnessIzbForm(Checker& c)
         fs::copy_file(e.path(), dst + "/" + e.path().filename().string(),
             fs::copy_options::overwrite_existing);
     }
-    // 把交付的 izb 子表整行换成布尔形态 true（引擎两形态都收：布尔简写 = 只开关）
+    // 把交付的 izb 子表整行换成布尔形态 true（引擎硬切后不收这种 = 本靶只喂给**覆写器**，
+    // 测它的标量跨度分支；覆写落上后产物是合法子表形态，引擎吃）
     std::ifstream in(dst + "/shadow.lua");
     std::string sh { std::istreambuf_iterator<char>{in}, {} };
     const size_t at = sh.find("izb = {");
@@ -239,8 +242,8 @@ void testShadowSoftnessIzbForm(Checker& c)
     softnessGen(c, dst + "/profile", o);
     std::ifstream f(dst + "/profile/shadow.lua");
     const std::string got { std::istreambuf_iterator<char>{f}, {} };
-    c.chk("softness 布尔形态：izb = true 被覆写成 false（标量分支）",
-        got.find("izb = false") != std::string::npos && got.find("mode = \"evssm\"") != std::string::npos,
+    c.chk("softness 布尔形态：izb = true 被覆写成 { on = false }（标量分支）",
+        got.find("izb = { on = false }") != std::string::npos && got.find("mode = \"evssm\"") != std::string::npos,
         "覆写器只吃子表分支的话，这里会留下 izb = true = 硬影 mask 吞掉半影");
 }
 
@@ -282,8 +285,8 @@ void testShadowSoftnessCommentTrap(Checker& c)
     softnessGen(c, dst + "/profile", o);  // 门内自检若被注释骗到 → 这里抛，chk 记红
     std::ifstream f(dst + "/profile/shadow.lua");
     const std::string got { std::istreambuf_iterator<char>{f}, {} };
-    c.chk("softness 注释陷阱：注释含 `on = true` 时覆写仍成功且 izb = false",
-        got.find("izb = false") != std::string::npos && got.find("mode = \"csm\"") != std::string::npos,
+    c.chk("softness 注释陷阱：注释含 `on = true` 时覆写仍成功且 izb = { on = false }",
+        got.find("izb = { on = false }") != std::string::npos && got.find("mode = \"csm\"") != std::string::npos,
         "自检若在全文搜 `on = true`，会因这行注释抛「覆写后自检失败」= 配置没错、工具自己错");
 }
 
@@ -491,7 +494,7 @@ void testShadowKernelScaleInstrument(Checker& c)
         ProfileOpts o;
         o.glb = "penumbra_ladder.glb";
         o.variant = "deferred";
-        o.shadowLuaOverride = "return { mode = \"pcss\", izb = false, pcss = { sun_degrees = 5.0 } }\n";
+        o.shadowLuaOverride = "return { mode = \"pcss\", izb = { on = false }, pcss = { sun_degrees = 5.0 } }\n";
         o.overrideLlmShot = true;
         o.llmShotFile = "screenshots/selftest_kernelscale.png";
         o.llmShotDelayFrames = 13;  // ≠ 模板默认 8，否则「覆写真的落上」这条测不到

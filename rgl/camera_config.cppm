@@ -30,7 +30,7 @@ export struct CameraConfig {
  */
 export struct CameraKeyTrace {
 	std::vector<std::string> read;     ///< 解析器读过的键（解析器总是全量问一遍 = 与文件内容无关）
-	std::vector<std::string> present;  ///< 文件里实际出现的顶层键名（子表只记表名）
+	std::vector<std::string> present;  ///< 文件里实际出现的键名：顶层 + 固定字段块下钻一层的 `块.子键`（债-129 第三刀；开放 map 只记表名）
 };
 
 /**

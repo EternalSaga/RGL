@@ -16,7 +16,7 @@
 --   light.ambient       = 0      → 平环境光项归零
 --   ao.strength         = 0      → AO 已三次排除，逐位旁路（lerp(1,ao,0)≡1.0），减少干扰
 --   exposure            = 1.0    → ACES 前中性倍率
---   shadow.lua 的 mode = "none" + izb = false（见同目录 shadow.lua，批 N6b 起阴影键在此）
+--   shadow.lua 的 mode = "none" + izb = { on = false }（见同目录 shadow.lua，批 N6b 起阴影键在此）
 --   metallic = 1（在 glb 里）    → 漫反射项天然为 0 ⟹ 画面里**每一个亮像素都来自 env 镜面项**
 --
 -- 于是剩下的着色链只有一句：color = envSpec(R, roughness·mipRange) × envBrdfFactor × intensity

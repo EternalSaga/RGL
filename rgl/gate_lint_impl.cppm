@@ -176,14 +176,14 @@ const GateRule kGateRules[]{
 	{"dump_gbuf", GateSeverity::error,
 		"dump_gbuf 需 runtime.lua llm_debug 开且图为 deferred（G-buffer 通道只在 deferred 截图路径存在）",
 		[](const Ctx& c) { return c.cfg.dumpGbuf >= 0 && (!c.env.llmCapture || !c.deferredLight); }},
-	{"izb", GateSeverity::error,
+	{"izb.on", GateSeverity::error,
 		"IZB 只接 deferred 光照 pass：非 deferred 图下 izbPreFrame 零命令（此前静默，EVSSM 同条件却喊——不对称收口）",
 		[](const Ctx& c) { return c.shadow.izb && !c.deferredLight; }},
-	{"izb", GateSeverity::error,
+	{"izb.on", GateSeverity::error,
 		"IZB 的 mask 由 shadow0 段重放填充：shadow.lua 的 mode = \"none\" 时段必空 ⟹ mask 无内容、"
 		"IZB 一帧阴影也不产（mask 每帧清零 = 全不遮挡，债-32 收口；与 mode = \"evssm\" 的 deferred 判据同形）",
 		[](const Ctx& c) { return c.shadow.izb && c.shadow.mode == ShadowMode::none; }},
-	{"izb", GateSeverity::warn,
+	{"izb.on", GateSeverity::warn,
 		"IZB 是**近场 v1 spike**，交付默认已关（2026-10-10 换红线）。两个结构性缺陷："
 		"① 只覆盖 cascade-0 光空间盒、盒外回落 CSM ⟹ 盒边界是一条**随相机在世界表面爬行的接缝**"
 		"（默认机位实测 1.76% 屏幕判反、亮度差中位 16 LSB / 最高 160 LSB）；"
