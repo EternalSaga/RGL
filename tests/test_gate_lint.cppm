@@ -2,10 +2,10 @@ module;
 /**
  * test_gate_lint —— 门组合自检（gate_lint 立项批，docs/gate_lint_plan.md）
  *
- * 被测 = rgl/gate_lint.cppm（rlscene 成员）：51 门申报规则表（diagnostics 侧 30 +
- * shadow.lua 侧 13 + runtime.lua **meshlet 块** 8，债-106 整块接管、债-129 S2 把
- * debug+tint 两枚布尔门合并成 instrument 一枚、overlay+switch 两枚布尔门合并成 mode 一枚）
- * + variant 交叉校验。
+ * 被测 = rgl/gate_lint.cppm（rlscene 成员）：申报式规则表（三方来源 = diagnostics 回显表 +
+ * shadow 回显表 + runtime.lua **meshlet 块**，债-106 整块接管；债-129 S2 把 debug+tint 两枚
+ * 布尔门合并成 instrument 一枚、overlay+switch 两枚布尔门合并成 mode 一枚）+ variant 交叉校验。
+ * 🔴 门数 / 行数不在本注释抄写——真相源 = 本文件「覆盖率护栏」用例里的钉数 CHECK。
  * 纯函数（一切事实入参），无 GPU 无窗口，`just test` 毫秒级。
  *
  * ## 判据纪律（本文件比别处更严的原因）
@@ -109,8 +109,8 @@ std::vector<GateFinding> lint(const DiagnosticsConfig& cfg, std::span<const RgPa
 
 TEST_CASE("gate_lint 覆盖率护栏：块条目 ∪ 独立行 == 三方来源键集合（双向 + 钉数 + 块前缀宿主判据）") {
 	// 变异红线（债-129 第二刀 D 换口径后）：
-	//   · kGateRules 删任一行 / 改任一门名拼写 → 行数钉 42 + 双向 hasGate 红；
-	//   · kGateBlocks 删任一枚块条目 → 键数钉 20 + 该键「块条目 ∪ 独立行」双落空红（点名）；
+	//   · kGateRules 删任一行 / 改任一门名拼写 → 本用例的 `rules.size()` 钉 + 双向 hasGate 红；
+	//   · kGateBlocks 删任一枚块条目 → `blockKeys.size()` 钉 + 该键「块条目 ∪ 独立行」双落空红（点名）；
 	//   · 任一配置结构体加字段不更新两侧 → 回显表/键表的键数钉先红；
 	//   · 把下面的 meshlet 前缀过滤改成扫不到的前缀（如 "meshlett."）→ meshletKeys.size() == 8
 	//     的钉先红（对账面缩小不会静默通过）。
@@ -128,7 +128,7 @@ TEST_CASE("gate_lint 覆盖率护栏：块条目 ∪ 独立行 == 三方来源�
 	const auto echo = diagnosticsEchoKeys();
 	const auto shadowEcho = shadowConfigEchoKeys();
 	// 第三个来源 = runtime.lua 的 meshlet 块。前缀过滤**写死**在这里并吃 runtimeConfigKnownKeys()
-	// （🔴 不许把 9 枚键名抄进测试当清单——抄了键名就等于没抄来源，键表改名会静默漏对）。
+	// （🔴 不许把这几枚键名抄进测试当清单——抄了键名就等于没抄来源，键表改名会静默漏对）。
 	// 为什么目前只有 meshlet 块：见 runtime_config_impl.cppm 的 readSsrBlock 头注释
 	// 「为什么**暂**未往 gate_lint 挂号」段（债-106 整块接管，不挑键）。
 	// 🔴 2026-10-17 纠正：原在此处写的「其余块没有『子键开而总门关』的孤立形态」是**假的**——
@@ -501,8 +501,9 @@ TEST_CASE("gate_lint variant 交叉校验：意图与图事实的分歧两个方
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 债-106：runtime.lua 的 meshlet 块（整块 10 枚键逐枚挂号）。判据出处 = runtime_config.cppm
-// 的逐字段注释 + 消费者代码（wireMeshlet* / wireClusterRangeTable），级别判据 = 计划 §4。
+// 债-106：runtime.lua 的 meshlet 块（整块挂号不挑键，键数以本文件 meshletKeys 的钉数为准）。
+// 判据出处 = runtime_config.cppm 的逐字段注释 + 消费者代码（wireMeshlet* /
+// wireClusterRangeTable），级别判据 = 计划 §4。
 // 每条规则：正例（该喊的喊了）+ 反向（合法组合不得喊）——防腐条款 2。
 // ═══════════════════════════════════════════════════════════════════════════
 

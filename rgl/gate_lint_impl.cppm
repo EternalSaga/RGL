@@ -61,7 +61,7 @@ struct GateBlock {
 	std::span<const BlockKey> keys;
 };
 
-/** 偏离默认值判定缩写（60 行表里少写 80 处三元噪声）。 */
+/** 偏离默认值判定缩写（省掉表里成片的 `x != defaults.x ? … : …` 三元噪声）。 */
 template <typename T>
 constexpr bool deviated(const Ctx& c, const T DiagnosticsConfig::* field) {
 	return c.cfg.*field != c.defaults.*field;
@@ -134,17 +134,17 @@ constexpr std::string_view kMsgMeshletMdiShadow{
 	"还按「载体在不在」的**事实**出声（同因不同层：选级表全零 / 无产物回落只有装配期看得见）"};
 
 /**
- * 41 行独立申报 = diagnostics 侧 24 行 + shadow 侧 9 行 + runtime.lua **meshlet 块** 8 行
- * （债-106 整块挂号；债-129 第二刀 D 后其中 6 枚「宿主 = assets」的键塌进 kGateBlocks，
+ * 独立申报行（按来源分三段：diagnostics / shadow / runtime.lua **meshlet 块**）。
+ * 🔴 行数与门数不在本注释抄写（抄一次漂一次）——覆盖率护栏 = `tests/test_gate_lint.cppm`，
+ * 它钉「本表行 ∪ 块条目 == 三方来源键表」+ 逐表计数，本表动而护栏不红 = 判据失效。
+ * 债-106 整块挂号不挑键；债-129 第二刀 D 后「宿主 = assets」的键塌进 kGateBlocks，
  * 本表只留跨档前置 / 链式前置 / 结构性错位的行；债-129 S2 把 meshlet.debug/tint 三条
  * ——两条残留 + 一条让位——合并成 meshlet.instrument 一条，meshlet.overlay + meshlet.switch
- * 合并成 meshlet.mode 一条——其中**互斥申报行整删**，「同真」态在三值键下写不出来）。
- * 与三份配置结构体 / 两份回显表 + 一份键表一一对应，覆盖率由 tests/test_gate_lint.cppm
- * 钉死（去重后 51 门，
- * 覆盖 = 本表行 ∪ 块条目）。
+ * 合并成 meshlet.mode 一条——其中**互斥申报行整删**，「同真」态在三值键下写不出来。
+ * 与三份配置结构体 / 两份回显表 + 一份键表一一对应。
  * 级别判据 = 计划 §4：error 只留给「必然完全无效且无其他信号」，拿不准一律 warn / inertNote。
  * **行数 ≠ 门数**：一门可以有多条规则（`izb` 两条 = 非 deferred 图 / mode="none"，
- * 两个根因各自一条消息，合并会丢归因）；覆盖率护栏钉的是**去重后的门数** == 两份回显表键数之和。
+ * 两个根因各自一条消息，合并会丢归因）；覆盖率护栏钉的是**去重后的门数** == 三方来源键数之和。
  *
  * 阴影侧的**枚举口径**（N6b 换轨要点）：旧表按"三个独立布尔怎么组合"写判据，于是长出
  * 「PCSS 让位 EVSSM」这类**只在旧门形下才存在**的规则。枚举下两门同开表达不出来 ⟹

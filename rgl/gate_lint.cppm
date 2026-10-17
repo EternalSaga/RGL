@@ -3,7 +3,7 @@ export module gate_lint;
 import rlstd;
 import diagnostics;
 import shadow_config;          // ShadowConfig（N6b：阴影门与 diagnostics 门同表申报）
-import runtime_config;         // RuntimeConfig（债-106：runtime.lua 的 meshlet 块整块 10 枚键）
+import runtime_config;         // RuntimeConfig（债-106：runtime.lua 的 meshlet 块整块接管不挑键）
 import render_graph;         // RgPassPlan / graphHasDeferredLight
 import render_graph_config;  // RgGraphVariant
 
@@ -49,10 +49,12 @@ export struct GateFinding {
 };
 
 /**
- * 跑全量规则表（44 行独立申报 + 6 个块级宿主声明（21 枚块内键）= 去重后 53 门：
- * diagnostics 侧 30 + shadow 侧 13 + runtime.lua **meshlet 块** 10（债-106 整块接管不挑键；
- * 债-129 第二刀 D：「子键配了但宿主不成立」的关系每块声明一份 owner，一门可多条规则——
- * 两个根因各一行消息；覆盖率钉去重门数 + variant 交叉校验）。第三个来源的射程裁决：
+ * 跑全量规则表（两张表：独立申报行 + 块级宿主声明。块 = 债-129 第二刀 D——「子键配了但宿主
+ * 不成立」这条关系每块声明一份 owner，取代逐键手抄；一门可多条规则，两个根因各一行消息）。
+ * 三个来源 = diagnostics 回显表 + shadow 回显表 + runtime.lua **meshlet 块**（债-106 整块接管
+ * 不挑键）。🔴 **行数 / 键数 / 门数一律不在本注释抄写**（抄一次漂一次，且没有东西替它把关）：
+ * 真相源 = `tests/test_gate_lint.cppm` 的覆盖率护栏，它钉「独立行 ∪ 块条目 == 三方来源键表」
+ * + 逐表计数 + variant 交叉校验，表动了而这里没跟上时红的是测试。第三个来源的射程裁决：
  * meshlet 块有「子键开而资源门 `assets` 关」的孤立形态且前置全是纯配置组合；runtime.lua
  * 其余块刻意不在射程 → `runtime_config_impl.cppm` 的 readSsrBlock 头注释。
  * 判据基准：bool 门 = true 才参与判定；数值/字符串门 = **偏离 defaults** 才参与
