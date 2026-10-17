@@ -27,9 +27,10 @@ module;
  *   3. depthWrite 的目标布局是 **DepthStencilAttachmentOptimal**、stage 是
  *      **Early|Late 两段并集**（load 写在 Early、store 写与深度测试在 Late）——
  *      不是「跟 colorWrite 一样的 ColorAttachmentOptimal」，也不是只给 Early。
- *   4. `decorateShadowPass` **无条件返回 true**（不校验 mapSize），且 extent 用**入参**
- *      mapSize、分块尺寸却用**常量** kShadowMapSize 推 —— 两者只在 mapSize ==
- *      kShadowMapSize 时自洽（见组 8，那条断言钉的就是这个耦合）。
+ *   4. `decorateShadowPass` **没有任何失败分支**（不校验 mapSize；债-129 S1c 起返回类型
+ *      就是 `void`——原来那个恒真的 `bool` 会让 selfCheck 误以为自己在断一条真判据），
+ *      且 extent 用**入参** mapSize、分块尺寸却用**常量** kShadowMapSize 推 —— 两者只在
+ *      mapSize == kShadowMapSize 时自洽（见组 8，那条断言钉的就是这个耦合）。
  *   5. 全屏规则（恰一 colorWrite、无 depth 输出）按 **kind == drawLight** 判，不按
  *      state 名判。写 state="light" 但 kind=drawMesh 的 pass 走的是普通 draw pass 规则。
  *   6. 高亮装饰不只是插图：它还会**就地改写**被借 depth 的那个输出的 storeOp
@@ -943,7 +944,7 @@ TEST_CASE("反向用例：decoratePickingPass 对无 depth 输出的图返回 fa
     // 而「点不中」的排查方向有一堆，成本远高于这里返回 false 后打一条日志）。
 }
 
-TEST_CASE("decorateHighlightPass：插在采样成片的 pass **之前**，写既有颜色附件（load）") {
+TEST_CASE("highlight 装饰：插在采样成片的 pass **之前**，写既有颜色附件（load）") {
     RgGraphDesc d;
     d.attachments = {swapchainAtt(), depthAtt(), offscreenAtt("scene", "rgba16_sfloat")};
     d.passes = {
@@ -954,7 +955,7 @@ TEST_CASE("decorateHighlightPass：插在采样成片的 pass **之前**，写�
             .outputs = {colorOut("swapchain")}, .inputs = {sampleIn("scene")}},
     };
     const size_t before = d.passes.size();
-    CHECK(decorateHighlightPass(d));
+    CHECK(applyHighlightPlan(d, planHighlightDecoration(d)));
     REQUIRE(d.passes.size() == before + 1);
     // 插在 tonemap 之前：插图末 = 落在 tonemap 之后，盖不到上屏内容
     CHECK(d.passes[1].name == "highlight");
@@ -967,7 +968,7 @@ TEST_CASE("decorateHighlightPass：插在采样成片的 pass **之前**，写�
     CHECK(d.passes[1].outputs[1].attachment == "depth");
 }
 
-TEST_CASE("decorateHighlightPass 会**改写**被借 depth 的那个输出的 storeOp（装饰不是纯函数）") {
+TEST_CASE("highlight 装饰会**改写**被借 depth 的那个输出的 storeOp（装饰不是纯函数）") {
     // opaque 段按「depth 后续无人用」把 depth 声明成 dontCare；高亮要读它，装饰必须
     // 就地改成 store，否则读到未定义内容。这条测的就是这次**入参副作用**。
     RgGraphDesc d;
@@ -981,15 +982,15 @@ TEST_CASE("decorateHighlightPass 会**改写**被借 depth 的那个输出的 st
     };
     // 前置条件：装饰前那个 depth 输出确实是 dontCare
     REQUIRE(d.passes[0].outputs[1].storeOp == RgStoreOp::dontCare);
-    REQUIRE(decorateHighlightPass(d));
+    REQUIRE(applyHighlightPlan(d, planHighlightDecoration(d)));
     CHECK(d.passes[0].outputs[1].storeOp == RgStoreOp::store);
     // 门关 = 不调用 = 图逐位不变（这个副作用只发生在装饰被调用时）
 }
 
-TEST_CASE("反向用例：decorateHighlightPass 两种不支持形态都返回 false 且不改图") {
+TEST_CASE("反向用例：highlight 装饰两种不支持形态都返回 false 且不改图") {
     {  // 无「采样色附件」的消费 pass ⟹ 无成片可叠加
         RgGraphDesc d = minimalGraph();
-        CHECK_FALSE(decorateHighlightPass(d));
+        CHECK_FALSE(applyHighlightPlan(d, planHighlightDecoration(d)));
         CHECK(d.passes.size() == 1);
     }
     {  // 有消费者，但插入点之前没人写 depth ⟹ 高亮会糊成一片
@@ -1002,12 +1003,12 @@ TEST_CASE("反向用例：decorateHighlightPass 两种不支持形态都返回 f
                 .outputs = {colorOut("swapchain", RgLoadOp::load)},
                 .inputs = {sampleIn("scene")}}};
         const size_t before = d.passes.size();
-        CHECK_FALSE(decorateHighlightPass(d));
+        CHECK_FALSE(applyHighlightPlan(d, planHighlightDecoration(d)));
         CHECK(d.passes.size() == before);
     }
 }
 
-TEST_CASE("decorateHighlightPass：采样**深度**的全屏 pass（ao 形态）不算色消费者（批 12.3d · B4）") {
+TEST_CASE("highlight 装饰：采样**深度**的全屏 pass（ao 形态）不算色消费者（批 12.3d · B4）") {
     // sampledColorName（render_graph_decorate.cppm:41-46）必须排除 kind=depth 的 sampleRead：
     // ao pass（Phase 11 批 11.4）也以 sampleRead 读 depth，若只看 usage 会把它误当"成片消费
     // 者" → highlight 的 colorAtt 与借来的 depthAtt 同为 "depth" → 同 pass 引用同一附件两次，
@@ -1027,7 +1028,7 @@ TEST_CASE("decorateHighlightPass：采样**深度**的全屏 pass（ao 形态）
         RgPassDesc{.name = "tonemap", .kind = RgPassKind::drawLight, .state = "tonemap",
             .outputs = {colorOut("swapchain")}, .inputs = {sampleIn("scene")}},
     };
-    REQUIRE(decorateHighlightPass(d));
+    REQUIRE(applyHighlightPlan(d, planHighlightDecoration(d)));
     REQUIRE(d.passes.size() == 4);
     // 插入点 = **首个色消费者 tonemap 之前**，与"无 ao pass"的基线图一致：只读 depth 的
     // ao 不得把插入点提前到它之前（变异红线：sampledColorName 去掉 depth 排除 →
@@ -1053,7 +1054,7 @@ TEST_CASE("decorateHighlightPass：采样**深度**的全屏 pass（ao 形态）
 TEST_CASE("decorateShadowPass：图首插 kActiveShadowCascades 个 pass + 阴影图附件") {
     RgGraphDesc d = minimalGraph();
     const size_t before = d.passes.size();
-    CHECK(decorateShadowPass(d, kShadowMapSize));
+    decorateShadowPass(d, kShadowMapSize);  // 返回 void：它没有「图形态不支持」的失败分支
     // 一级一个 pass，各渲染图集里自己那一块；前插（阴影深度不依赖相机深度 ⟹ barrier 链最短）
     REQUIRE(d.passes.size() == before + kActiveShadowCascades);
     CHECK(d.passes[0].name == "shadow");
@@ -1109,7 +1110,7 @@ TEST_CASE("decorateShadowPass 的一条**隐式耦合**：extent 用入参 mapSi
     CHECK(tile * cols == kShadowMapSize);                    // 分块 × 列数 = 图集整幅
 
     RgGraphDesc d = minimalGraph();
-    REQUIRE(decorateShadowPass(d, kShadowMapSize));
+    decorateShadowPass(d, kShadowMapSize);  // 返回 void（同上）；下面按实际形状断
     const auto g = compileRenderGraph(d);
     REQUIRE(g.has_value());
     const auto slot = slotOf(*g, std::string{kShadowMapName});
@@ -1297,7 +1298,7 @@ TEST_CASE("批 13.6：AO 施加点搬进 taa pass ⟹ 必须声明 ao 输入，�
     // 这条边 = 编译器不生成 ColorAttachmentOptimal → ShaderReadOnly 的布局转换 ⟹ 症状只在
     // 真机 VVL 上出现（无设备单测子集抓不到），所以这条边得由单测钉住。
     // 【另一半风险更阴】ao 附件也是**色**附件，而 picking / highlight / taa 三处装饰都按
-    // 「首个 sampleRead 色附件」反查场景色（decorateHighlightPass::sampledColorName）
+    // 「首个 sampleRead 色附件」反查场景色（render_graph_decorate.cppm 的 sampledColorName）
     // ⟹ ao 一旦排到 scene_hdr 前面，高亮 pass 会把 AO 图当场景色去写 = 画面直接花掉。
     auto build = [](bool withAo) {
         RgGraphDesc d;

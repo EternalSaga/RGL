@@ -1501,8 +1501,9 @@ EVSSM `865fd1aa`、IZB `2316b566`，全部 A×B 逐位相同）；重编译读�
    那个位置已经是新值 ⟹ 记录里不留第二份拷贝，撤回读申报单。为什么不能还原成常量 → 见「等价变异」那条。
 2. **插队点按名字**（`RgPassDeclaration::insertBefore`，空 = 图尾）。下标在插拔下会漂，名字不会；
    补丁目标同样按名字定位（`passName + attachment + usage` 三元组）。
-3. **启动期装饰与运行期申报同吃一份计划**：`decorateHighlightPass` = `planHighlightDecoration`
-   （纯函数）+ `applyHighlightPlan`（落图）的薄壳。计划无条件算出（纯函数无副作用），只在
+3. **启动期装饰与运行期申报同吃一份计划**：`planHighlightDecoration`（纯函数）+
+   `applyHighlightPlan`（落图）两步（原 `decorateHighlightPass` 薄壳已随 债-129 S1c 删除——
+   生产侧零调用点，tests 改吃这两个真入口）。计划无条件算出（纯函数无副作用），只在
    `diagnostics.picking` 为真时落图；落过的走 `adoptPass` 登记成可撤，没落过的留作「从零插上它」的
    配方（`passRecipes`）。**这是 A→B→A′ 判据不被自证的前提**：两边都吃同一份字节，才谈得上比。
 4. **开关 = 一笔复合事务**（`Renderer::applyPassToggles`，与 `recompileGraphIfNeeded` 同一个安全点

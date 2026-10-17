@@ -542,10 +542,7 @@ void selfCheckShadowCompiled(const CompiledRenderGraph& graph,
 /** selfCheck 驱动：装饰 → 编译 → 两侧断言（拆两半是为守住单函数认知复杂度红线）。 */
 void selfCheckShadowPass(std::vector<std::string>& failures) {
 	auto desc = defaultRenderGraphDesc();
-	if (!decorateShadowPass(desc, kSelfCheckShadowSize)) {
-		failures.push_back("shadow: decorateShadowPass returned false");
-		return;
-	}
+	decorateShadowPass(desc, kSelfCheckShadowSize);  // 无失败分支（返回 void，见其接口注释）
 	if (!selfCheckShadowDecorate(desc, failures))
 		return;
 	auto compiled = compileRenderGraph(desc);

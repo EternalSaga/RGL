@@ -951,6 +951,23 @@ constexpr，**谓词面自己不能成为新的抄写点**（哲学 1：访问�
   全仓无定义（唯一定义是 `(const char*, const RuntimeConfig&)`），Doxygen 还在逐条解释那四个
   不存在的形参 ⟹ 声明与注释一起删。
 
+> ✅ **S1c 已落地（2026-10-17，子 agent 执行 + 主 agent 独立验）**：①② 两项做完，净删 18 行。
+> ① `decorateHighlightPass` 薄壳删除（定义 + 声明 + 5 处 tests 改吃 `planHighlightDecoration` +
+> `applyHighlightPlan` 真入口）——🔴 **两条 `CHECK_FALSE` 负例原样保留并做变异证明它仍咬得住**
+> （在 `applyHighlightPlan` 顶插 `return true` ⟹ 恰红在那两条）。
+> ② `decorateShadowPass` `bool`→`void`（体内唯一 `return` 是 `return true`，恒真成立；我起初 awk
+> 越界数到 2 条 `return false` 是下一个函数 `decorateTaaPass` 的，已澄清）。消费者 3 处同步。
+> 🔴 **两条读数实测已过期，就地纠正**：(a) 原文「只有 tests 在调这个薄壳」——tests 确实在调，
+> 但**生产侧零调用点**成立，故删除正确；(b) 原文「连带删测试里『无条件返回 true（不校验 mapSize）』
+> 那条断言」——**不存在这样一条独立断言**，它只是 `tests/test_render_graph.cppm` 文件头注释的措辞；
+> 执行者一条独立断言都没删（**宁可留冗余断言，也不借清理之名削判据**）。断言净减 2 条 = 被 `void`
+> 签名强制降级的两处布尔断言，逐条归因后由紧邻的真判据覆盖。
+> ⚠ **执行者留的一条对 S3 直接有用的读数**：那两条 `CHECK_FALSE` 是**冗余守卫**——只删
+> `applyHighlightPlan` 的 `if (!plan.applicable) return false` 不会让它们红（下一道 `insertBefore`
+> 名字守卫对这两种形态同样返回 false）⟹ 它们钉的是「plan+apply 这一对拒绝且不动 desc」，
+> **不是某一道具体守卫**；S3 动那两道守卫时别指望这两条用例区分是哪道在生效。
+> ③ 原第三项（悬空声明）实测**先于本刀已消失**。
+
 **顺序契约 → 归 S3，不归本刀**。原案「把顺序契约从注释挪进落图结果里的声明序」有个更好的归宿：
 `RgDecorationRequirement` 的「**不得在图里**名单」正是这条契约的类型（§3.4 原文就列了它）。
 而且裁 (b) 之后它的语义也跟着变准了：**装饰次序是 C++ 写死的，不是用户配置** ⟹ 错序 = 装配错 =

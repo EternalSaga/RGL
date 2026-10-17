@@ -21,7 +21,7 @@ namespace {
 /**
  * 按名查附件是否算"色附件"（本判据的语义 = **不是主深度图**，不是"aspect 是颜色面"：
  * depthOffscreen（阴影图那类）在这里按色处理，既有语义见 tests/test_render_graph.cppm
- * 「decorateHighlightPass：采样深度的全屏 pass（ao 形态）不算色消费者」的精确语义注记。
+ * 「highlight 装饰：采样深度的全屏 pass（ao 形态）不算色消费者」的精确语义注记。
  * 名不在表内 = 未知，按色处理（原语义，未改）。
  *
  * 🔴 为什么写成穷尽 switch 而不是 `kind != depth`：本判据**没有上游穷尽闸门**——它能
@@ -251,17 +251,6 @@ bool applyHighlightPlan(RgGraphDesc& desc, const RgHighlightPlan& plan) {
 }
 
 /**
- * decorateHighlightPass 定义（契约见 render_graph.cppm 接口注释）。
- *
- * B2-5 起 = `planHighlightDecoration` + `applyHighlightPlan` 的薄壳（行为与拆壳前逐位相同）。
- * 拆壳不是为了好看：运行期动态插拔（`DynamicRenderGraph::declarePass`）必须吃**同一份**计划，
- * 否则「出厂图」与「运行期插回同一 pass」各自拼一份 desc，A→B→A 往返判据就成了自证。
- */
-bool decorateHighlightPass(RgGraphDesc& desc) {
-	return applyHighlightPlan(desc, planHighlightDecoration(desc));
-}
-
-/**
  * decoratePickingPass 定义（契约见 render_graph.cppm 接口注释）。depth 附件名从锚点
  * pass 的 depthWrite 输出取（不硬编码 "depth"，deferred/offscreen 变体名同约定但零
  * 假设）；object_id clear 全零（VkClearValue union：float 0.0 与 uint32 0 同表示，
@@ -302,9 +291,11 @@ bool decoratePickingPass(RgGraphDesc& desc) {
  * decorateShadowPass 定义（契约见 render_graph.cppm 接口注释，含"当前段内零 draw、
  * 画面逐位不变"的诚实声明）。与 picking / highlight 两个装饰的关键差别：**不需要**
  * 按角色反查——阴影 pass 自为一体（自带专属深度附件），既不读既有拓扑也不借既有附件，
- * 故任何图形态（forward / deferred / offscreen）都直接适用，前插即可。
+ * 故任何图形态（forward / deferred / offscreen）都直接适用，前插即可；也正因它没有任何
+ * 「图形态不支持」的失败分支，返回类型是 void（债-129 S1c：原 `bool` 恒真、唯一生产
+ * 调用点把返回值丢掉，留着会让 selfCheck 误以为自己在断一条真判据）。
  */
-bool decorateShadowPass(RgGraphDesc& desc, uint32_t mapSize) {
+void decorateShadowPass(RgGraphDesc& desc, uint32_t mapSize) {
 	const uint32_t cols = shadowAtlasColumns(kActiveShadowCascades);
 	const uint32_t tile = shadowTileSize(cols);
 	desc.attachments.push_back(RgAttachmentDesc{
@@ -343,7 +334,6 @@ bool decorateShadowPass(RgGraphDesc& desc, uint32_t mapSize) {
 		if (std::ranges::any_of(kShadowLitStates, [&](std::string_view s) { return pass.state == s; }))
 			pass.inputs.push_back(RgPassAttachment{.attachment = std::string{kShadowMapName},
 				.usage = RgUsage::sampleRead, .loadOp = RgLoadOp::load, .storeOp = RgStoreOp::store});
-	return true;
 }
 
 /**

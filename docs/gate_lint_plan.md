@@ -142,8 +142,8 @@ export std::vector<GateFinding> lintDiagnosticsGates(const DiagnosticsConfig& cf
 ## 5. 摩擦审计与三条防腐条款
 
 TAA 视角（立项时按它演算过）：TAA 必然插一个**采样场景色附件**的 pass，而
-`decorateHighlightPass` 的锚点正是"首个采样场景色附件的 pass 之前"
-（`render_graph_decorate.cppm:36-48`）——**今天它抢锚点不会有任何检查变红**。
+`planHighlightDecoration` 的锚点正是"首个采样场景色附件的 pass 之前"
+（`render_graph_decorate.cppm` 的锚点求解段）——**今天它抢锚点不会有任何检查变红**。
 所以"检查"对 TAA 是净收益，前提是检查的是契约而不是实现细节。三条防腐：
 
 1. **判据来自申报，不来自枚举组合，也不来自字符串猜测**。

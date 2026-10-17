@@ -473,7 +473,7 @@ export struct RgPassDesc {
 /**
  * 跨 pass 补丁（B2-5）：「改**已存在** pass 的某条 usage 的 storeOp」这件事的数据化。
  *
- * 为什么存在：`decorateHighlightPass` 要在 depth 消费者之前插一个 load+store 的 pass，
+ * 为什么存在：highlight 装饰要在 depth 消费者之前插一个 load+store 的 pass，
  * 于是**前一个写 depth 的 pass** 的 storeOp 必须从 `dontCare` 改成 `store`——那是跨 pass
  * 的补丁，不是新 pass 自己的属性。B2-5 之前它只活在启动期装饰里（一次性、不可撤）；要能在
  * 安全点动态插拔 highlight，补丁就得是**可申报、可记录、可还原**的数据，于是抽出来。
@@ -857,7 +857,7 @@ export const RgGraphDesc& deferredRenderGraphDesc();
 export bool decoratePickingPass(RgGraphDesc& desc);
 
 /**
- * 高亮 pass 装饰（Phase 10 批 10.7）：给图追加一个 highlight drawMesh pass
+ * 高亮装饰（Phase 10 批 10.7）：往图里加一个 highlight drawMesh pass
  * （state="highlight"、drawSource="opaque" —— 执行器以克隆管线重放并**按材质过滤**
  * opaque 段，只画选中材质的 draw，见 vkrenderer）。
  *
@@ -871,18 +871,11 @@ export bool decoratePickingPass(RgGraphDesc& desc);
  *  3. 借 depth 前把上一个写 depth 的 pass 的 storeOp 从 dontCare 改成 store（forward 图
  *     transparent 段按「depth 后续无人用」声明 dontCare）——否则高亮读到未定义内容。
  *
- * 调用点 = main 装配层且 `diagnostics.picking` 门控（与 picking 同门：默认关 =
- * 不调用 = 图逐位同，维持 D10 的 BIT-IDENTICAL 基线）。
- * @param desc 图声明（原地修改：追加 pass + 修正前一 pass 的 depth storeOp）
- * @return true = 已装饰；false = 图形态不支持（desc 未被修改）
- */
-export bool decorateHighlightPass(RgGraphDesc& desc);
-
-/**
- * 算 highlight 的装饰计划（B2-5；类型与"为什么拆 plan/apply"见 `RgHighlightPlan`）。
- *
- * 消费方 = `decorateHighlightPass`（启动期装饰）+ `DynamicRenderGraph::declarePass`
- * （运行期插回）。两者必须同源，否则 A→B→A 往返逐位相同的判据自证。
+ * 本函数算计划、`applyHighlightPlan` 落图（B2-5 拆两步；类型与"为什么拆 plan/apply"见
+ * `RgHighlightPlan`）。消费方 = main_impl::compileGraphOrThrow（启动期装饰，且
+ * `diagnostics.picking` 门控：默认关 = 不调用 = 图逐位同，维持 D10 的 BIT-IDENTICAL 基线）
+ * + `DynamicRenderGraph::declarePass`（运行期插回）。两条路必须同源，否则 A→B→A 往返
+ * 逐位相同的判据就成了自证。
  * 纯函数：不改 desc、不抛（不适用 ⇒ `applicable == false`）。
  */
 export RgHighlightPlan planHighlightDecoration(const RgGraphDesc& desc);
@@ -967,9 +960,10 @@ export std::array<uint32_t, 4> shadowTile(uint32_t c, uint32_t tileSize, uint32_
  * @param mapSize 阴影图边长（调用方传入 scene_data::kShadowMapSize —— 图模块不认识
  *        scene data 契约，故不做隐式依赖；1 级 cascade = 整幅，将来 4 级走 2×2 tile
  *        时本值是图集整幅边长、每 tile = 本值/2）
- * @return true = 已装饰（任何图形态均支持：不读既有拓扑，只前插）
+ *        ⚠ 本函数**不校验它**：extent 用这个入参、分块尺寸却用常量 kShadowMapSize 推，
+ *        两者只在 mapSize == kShadowMapSize 时自洽（判据 = tests 组 8 的隐式耦合用例）。
  */
-export bool decorateShadowPass(RgGraphDesc& desc, uint32_t mapSize);
+export void decorateShadowPass(RgGraphDesc& desc, uint32_t mapSize);
 
 /**
  * **TAA 图装饰（批 12.6）**：往图里插入时域历史链的三件套，返回 false = 图形态不支持。
